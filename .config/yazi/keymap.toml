@@ -1,0 +1,35 @@
+
+[mgr]
+prepend_keymap = [
+  { on = "<Enter>", run = "plugin bypass --args=smart_enter", desc = "Open a file, or recursively enter child directory, skipping children with only a single subdirectory" },
+  { on = "<C-Space>", run = 'shell -- qlmanage -p "$@"', desc = "Preview file with Quick Look" },
+  { on = "<C-d>", run = "seek 5" },
+  { on = "<C-u>", run = "seek -5" },
+  { on = "<C-f>", run = "seek 10" },
+  { on = "<C-b>", run = "seek -10" },
+
+  { on = "!", run = 'shell "$SHELL" --block', desc = "Open shell here" },
+  { on = "2", run = "plugin smart-tab-switch 1", desc = "Switch or create tab 2" },
+  { on = "3", run = "plugin smart-tab-switch 2", desc = "Switch or create tab 3" },
+  { on = "4", run = "plugin smart-tab-switch 3", desc = "Switch or create tab 4" },
+  { on = "5", run = "plugin smart-tab-switch 4", desc = "Switch or create tab 5" },
+  { on = "6", run = "plugin smart-tab-switch 5", desc = "Switch or create tab 6" },
+  { on = "7", run = "plugin smart-tab-switch 6", desc = "Switch or create tab 7" },
+  { on = "8", run = "plugin smart-tab-switch 7", desc = "Switch or create tab 8" },
+  { on = "9", run = "plugin smart-tab-switch 8", desc = "Switch or create tab 9" },
+  { on = "C", run = "plugin ouch --args=zip", desc = "Compress with ouch" },
+  { on = "H", run = "plugin bypass --args=reverse", desc = "Recursively enter parent directory, skipping parents with only a single subdirectory" },
+  { on = "K", run = "plugin parent-arrow -1", desc = "Navigate parent directory up" },
+  { on = "J", run = "plugin parent-arrow 1", desc = "Navigate parent directory down" },
+  { on = "L", run = "plugin bypass", desc = "Recursively enter child directory, skipping children with only a single subdirectory" },
+  { on = "q", run = "plugin confirm-quit", desc = "Quit Yazi file manager" },
+  { on = "t", run = "plugin smart-tab-switch", desc = "Create a tab and enter the hovered directory" },
+  { on = "Z", run = "plugin toggle-pane min-preview", desc = "Show or hide the preview pane" },
+  { on = "z", run = "plugin toggle-pane max-preview", desc = "Maximize or restore the preview pane" },
+
+  { on = [ "b", "a", ], run = "plugin mactag add", desc = "Tag selected files" },
+  { on = [ "b", "r", ], run = "plugin mactag remove", desc = "Untag selected files" },
+]
+
+[input]
+prepend_keymap = [{ on = "<Esc>", run = "close", desc = "Cancel input" }]
