@@ -4,3 +4,4 @@
 .config/git/config.d/amazon.config
 .config/git/templates/crux-commit-message.md
 .config/git/templates/crux-description.md
+.ssh/config.d/work.config
