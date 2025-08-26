@@ -1,0 +1,189 @@
+[user]
+  name = Thiago Alves
+  email = thiago@rapinialves.com
+  signingKey = A9C4A3D8CA995D91
+
+#    delta = {
+#      enable = true;
+#      options = {
+#        features = "unobtrusive-line-numbers side-by-side decorations";
+#        zero-style = "syntax";
+#        plus-style = "syntax #053f1f";
+#        plus-emph-style = "#2bfa84 #00703e";
+#        minus-style = "syntax #3e151d";
+#        minus-emph-style = "#ff878a #9e1125";
+#
+#        unobtrusive-line-numbers = {
+#          line-numbers = "true";
+#          line-numbers-minus-style = "#ff2e43 #26141a";
+#          line-numbers-zero-style = "normal";
+#          line-numbers-plus-style = "#00be49 #04211b";
+#          line-numbers-left-format = "{nm:>4} ";
+#          line-numbers-right-format = "{np:>4} ";
+#          line-numbers-left-style = "#26141a #26141a";
+#          line-numbers-right-style = "#04211b #04211b";
+#        };
+#
+#        decorations = {
+#          commit-decoration-style = "bold yellow box ul";
+#          file-style = "bold yellow";
+#          file-decoration-style = "bold yellow ol ul";
+#          hunk-header-decoration-style = "yellow box";
+#        };
+#      };
+#    };
+
+[core]
+  whitespace = trailing-space,space-before-tab
+  autocrlf = "input"
+  commentchar = ";"
+
+[init]
+  defaultBranch = mainline
+
+[commit]
+  status = 1
+  template = ~/.config/git/templates/commit-message.md
+  gpgsign = true
+
+[push]
+  default = "simple"
+
+[apply]
+  whitespace = nowarn
+
+[diff]
+  tool = nvimdiff
+
+[diff "lisp"]
+  xfuncname = ^(((;;;+ )|\\(|([ 	]+\\(((cl-|el-patch-)?def(un|var|macro|method|custom)|gb/))).*)$
+
+[diff "org"]
+  xfuncname = ^(\\*+ +.*)$
+
+[diff "markdown"]
+  xfuncname = ^([#]+ +.*)$
+
+[difftool]
+  prompt = false
+
+; [difftool "nvimdiff"]
+;   cmd = "nvim -d \"$LOCAL\" \"$REMOTE\""
+
+[merge]
+  ff = only
+  tool = nvimdiff
+
+; [mergetool "nvimdiff"]
+;   layout = "LOCAL,BASE,REMOTE / MERGED"
+
+[pull]
+  rebase = true
+
+[rebase]
+  autoSquash = true
+
+[github]
+  user = Townk
+
+[rerere]
+  enabled = true
+
+[status]
+  submodule = 1
+
+[tag]
+  forceSignAnnotated = true
+
+[color]
+  ui = true
+  branch = auto
+  status = auto
+  review = auto
+
+[color "diff"]
+  meta = 11
+  frag = magenta bold
+  commit = yellow bold
+  old = red bold
+  new = green bold
+  whitespace = red reverse
+
+[color "diff-highlight"]
+  oldNormal = red bold
+  oldHighlight = red bold 52
+  newNormal = green bold
+  newHighlight = green bold 22
+
+[help]
+  autocorrect = 1
+
+[credentials]
+  helper = osxkeychain
+
+[lfs]
+  skipSmudge = true
+
+[url "https://github.com/"]
+  insteadOf = gh:
+
+[url "git@github.com:"]
+  insteadOf = ssh+gh:
+
+[url "git@github.com:Townk/"]
+  insteadOf = gh:/
+
+[url "https://gist.github.com/"]
+  insteadOf = gist:
+
+[include]
+    path = ~/.config/git/config.d/work.config
+
+[alias]
+  changes = log --pretty=oneline --abbrev-commit --graph --decorate mainline@{1}..HEAD
+  ## Show the current branch
+  current-branch = !git symbolic-ref -q HEAD | sed -e 's|^refs/heads/||'
+  ## List all files that are ignoring changes (this is not the same as
+  ## .gitignore; this is when you ignore changes on a trakced file.)
+  ignored = !git ls-files -v | grep '^[[:lower:]]'
+  ## Show all git aliases
+  sa = config --get-regexp 'alias.*'
+  ## Show all the changes that are staged
+  staged = diff --cached
+  ## Show all the changes that are NOT staged
+  unstaged = diff
+
+  # Logs
+  dag = log --graph --format='format:%C(yellow)%h%C(reset) %C(blue)"%an" <%ae>%C(reset) %C(magenta)%cr%C(reset)%C(auto)%d%C(reset)%n%s' --date-order
+  l = log --graph --pretty=format':%C(bold)%C(yellow)%h%C(bold)%C(blue)%d%C(reset) %s %C(bold)%C(white) %an, %C(bold)%C(red)%ar%C(reset)'
+  lol = log --pretty=oneline --abbrev-commit --graph --decorate
+
+  # Commands
+  co = checkout
+  dt = difftool
+  ## Stop tracking changes on a tracked file (all files marked with
+  ## --assume-unchanged)
+  new-ignore = !gi() { curl -L -s https://www.gitignore.io/api/$@ ;}; gi
+  ## Remove everything that is not checked-in and belongs to the repository
+  nuke = clean -xfd
+  ## Rollback any changes in the repository
+  rb = reset --hard HEAD
+  ## nuke + rb
+  fresh = !git nuke && git  rb
+  ## Checkout and track a remote branch
+  ## Usage: git track origin/feature-123-login-form
+  track = checkout -t
+  ## Mark files to not have changes tracked. This is to allow users to mark
+  ## personal and custom changes to not be commited, even if the file is
+  ## actually being tracked.
+  unignore = "update-index --no-assume-unchanged"
+  ## Remove files from stage
+  unstage = "reset HEAD"
+  unadd = "reset HEAD"
+
+  # Data analysis
+  rank = "fame --enum -e --format tabulate"
+  emails = ''!git log --format="%aE" | sort -u''
+  email-domains = ''!git log --format="%aE" | awk -F'@' '{print $2}' | sort -u''
+
+# vim:ft=gitconfig

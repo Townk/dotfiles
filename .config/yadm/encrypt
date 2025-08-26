@@ -1,2 +1,6 @@
 .config/wezterm/quick-launch-targets.yaml
 .config/zsh/aliases.d/work.sh
+.config/git/config.d/work.config
+.config/git/config.d/amazon.config
+.config/git/templates/crux-commit-message.md
+.config/git/templates/crux-description.md
