@@ -60,6 +60,13 @@ alias gba="git branch -av"
 alias grv="git remote -v"
 alias gl="git log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)'"
 
+## YADM aliases
+alias yst="yadm status --short"
+alias yb="yadm branch -v"
+alias yba="yadm branch -av"
+alias yrv="yadm remote -v"
+alias yl="yadm log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)'"
+
 # ssh helper
 alias ssh-x="ssh -o CompressionLevel=9 -c arcfour,blowfish-cbc -YC"
 
