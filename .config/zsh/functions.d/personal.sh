@@ -222,3 +222,22 @@ function fzf-preview {
     (bat --theme=OneHalfDark --style=numbers,changes --color=always "$1" || highlight -O ansi -l "$1" || coderay "$1" || rougify "$1" || cat "$1") 2> /dev/null | head -200
   fi
 }
+
+function update-system {
+    print -P -- "\n${C_BLU}System Update
+-------------${C_RES}"
+  print -P -- "\n  Updating Homebrew sources...\n"
+  brew update || die "${C_RED}Error${C_RES}: Failed to update Homebrew!" || return
+  print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
+  cat ~/.config/brewfile/Brewfile* | brew bundle install --cleanup --upgrade --file=-
+  [[ $? -eq 0 ]] || die "${C_RED}Error${C_RES}: Failed to upgrade Homebrew Bundle!" || return
+  print -P -- "\n🍺 Upgrade Homebrew casks...\n"
+  brew upgrade --cask --greedy-auto-updates --no-quarantine || die "${C_RED}Error${C_RES}: Failed to upgrade Homebrew casks!" || return
+  print -P -- "\n🧹 Cleanning up Homebrew artifacts...\n"
+  brew cleanup --prune=all || die "${C_RED}Error${C_RES}: Failed to clean up Homebrew files!" || return
+  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
+
+  if command -v update-work-system >/dev/null; then
+    update-work-system
+  fi
+}

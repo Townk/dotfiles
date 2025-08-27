@@ -15,3 +15,9 @@ typeset -g C_PUR="%F{#875fff}"
 typeset -g C_BLA="%F{#1f2329}"
 typeset -g C_RES="%f"
 
+function die {
+  if [[ $# -ne 0 ]]; then
+    print -P -- "\n$*\n" >&2
+  fi
+  return 1
+}

@@ -78,6 +78,12 @@ zstyle ':z4h:*' fzf-flags \
   --marker='✔' \
   --preview 'fzf-preview {}' \
   --preview-window=right:60%:hidden
+
+export GOPATH=~/.local/share/go
+export GOPROXY=direct
+
+export HOMEBREW_NO_ENV_HINTS=1
+
 # Clone additional Git repositories from GitHub.
 #
 # This doesn't do anything apart from cloning the repository and keeping it
@@ -91,7 +97,6 @@ zstyle ':z4h:*' fzf-flags \
 # perform network I/O must be done above. Everything else is best done below.
 z4h init || return
 
-#. "$HOME/.atuin/bin/env"
 command -v atuin >/dev/null && eval "$(atuin init zsh)"
 command -v thefuck >/dev/null && eval "$(thefuck --alias)"
 command -v mise >/dev/null && eval "$(mise activate zsh)"
