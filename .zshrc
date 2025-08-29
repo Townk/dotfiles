@@ -84,6 +84,8 @@ export GOPROXY=direct
 
 export HOMEBREW_NO_ENV_HINTS=1
 
+export GNUPGHOME=~/.config/gnupg
+
 # Clone additional Git repositories from GitHub.
 #
 # This doesn't do anything apart from cloning the repository and keeping it
