@@ -1,0 +1,244 @@
+# https://github.com/Homebrew/homebrew-bundle
+
+tap "homebrew/bundle"
+tap "homebrew/services"
+tap "1password/tap"
+
+# specify a directory to install
+cask_args appdir: '/Applications'
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# MacOS Cask Applications
+# -----------------------
+# These entries are entries for apps that we usually download, and drag them to
+# the Applications folder.
+
+# MacOS Improvements
+cask 'bartender'          # Organize menu bar
+cask 'espanso'            # Text expansion / snippets
+cask 'hazel'              # File system automation
+cask 'keyboard-maestro'   # Keyboard shortcuts in steroids
+cask 'macfuse'            # R/W ext3 partitions
+cask 'monitorcontrol'     # OSD for external devices (sound, brightness, etc.)
+cask 'paragon-extfs'      # ext3 FS manager
+cask 'rar'                # Extran archive type on terminal
+cask 'raycast'            # System Launcher
+cask 'gpg-suite@nightly'  # Security Tools
+
+# Coding
+cask 'balenaetcher'       # Flash SDs
+cask 'jetbrains-toolbox'  # IDEs
+cask 'openmtp'            # Android file transfer
+cask 'visual-studio-code' # IDE
+cask 'wezterm@nightly', args: { no_quarantine: true, greedy_latest: true }  # Terminal eulator
+
+# Podcast
+cask 'audio-hijack'       # Recording
+cask 'farrago'            # Sound FX
+cask 'fission'            # Editing
+cask 'loopback'           # Virtual mixer
+cask 'soundsource'        # Virtual devices
+
+# Streaming
+cask 'elgato-stream-deck' # Controller
+cask 'elgato-wave-link'   # Mixer
+cask 'keycastr'           # Key press overlays
+cask 'obs'                # Studio
+
+# Other Apps
+cask '1password-cli', args: { no_quarantine: true }      # Security CLI
+cask 'arc', args: { no_quarantine: true }                # Browser
+cask 'autodesk-fusion', args: { no_quarantine: true }    # 3D modeling
+cask 'discord', args: { no_quarantine: true }            # Chat (a more open Slack)
+cask 'firefox', args: { no_quarantine: true }            # Browser
+cask 'google-chrome', args: { no_quarantine: true }      # Browser
+cask 'mactex', args: { no_quarantine: true }             # Academic writing
+cask 'microsoft-teams', args: { no_quarantine: true }    # Meetings
+cask 'obsidian', args: { no_quarantine: true }           # Note taking
+cask 'openemu', args: { no_quarantine: true }            # Retro gaming
+cask 'proton-mail', args: { no_quarantine: true }        # Secure Email
+cask 'shottr', args: { no_quarantine: true }             # Better screenshots
+cask 'slack', args: { no_quarantine: true }              # Meetings
+cask 'zen', args: { no_quarantine: true }                # Browser
+cask 'zoom', args: { no_quarantine: true }               # Meetings
+cask 'vial', args: { no_quarantine: true }               # Keyboard keymaps
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# MacOS AppStore Applications
+# ---------------------------
+# These entries are entries for apps that I download from the Mac AppStore..
+
+# I'm  a PlantUML guy, but when I need a graphical tool to draw a diagram,
+# OmniGraffle is my number 1 choice.
+mas "OmniGraffle 7", id: 1142578753
+
+# I have a hate and love relationship with vector drawing apps. The first
+# application that I decided to deeply know in my life was the Corel Draw
+# for Windows 95 (which also helped me get my first ever job on a computer).
+# Since than, I always have a need for a tool like that from time to time.
+# Looks like the cool kids all use Adobe products these days, but I have
+# this "thing" about small companies that create really good products to
+# compete with the Goliases on their field. So... this is my current Corel
+# Draw for Mac :).
+mas "Affinity Designer 2", id: 1616831348
+mas "Affinity Photo 2", id: 1616822987
+
+# This app is one of those tools that I though that, as a programmer, I
+# would rarely would have use for, but by far, is the most used app in my
+# collection. Yep, who would know I needed a color grabber?
+mas "ColorSlurp", id: 1287239339
+
+# This is an app to scan and present your hard drive in a way to show you
+# what is occupying space on it. It also allows you to remove unwanted
+# items. I don't even remember when I met this app, and I certainly have
+# other methods and apps to do the same thing, but DaisyDisk has one of the
+# coolest UIs I know.
+mas "DaisyDisk", id: 411643860
+
+# I need to install the Safari extension for 1Password from the AppStore,
+# so... let's do it here!
+mas "1Password for Safari", id: 1569813296
+
+# I use Languagetool for help with my English grammar, so like to have it as
+# a Safari plugin as well.
+mas "LanguageTool - Grammar Checker", id: 1534275760
+
+# For the love of god Apple, make Ctrl+Tab on Safari to switch to the last
+# "VISITED" tab.
+mas "TabBack for Safari", id: 1660506599
+
+# This is, by far, the best dictionary app I ever used.
+mas "LookUp Dictionary: Learn Daily", id: 872564448
+
+# One of the best multi-purpose ci
+mas "PCalc", id: 403504866
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Homebrew packages
+# ---------------------------
+# These entries are entries for apps that I download from the Mac AppStore..
+
+# MacOS Essentials
+brew 'mas' # MacOS Apple Store CLI
+brew 'env-improvement' # Amazon dev shells
+
+# GNU tools (a.k.a. basic terminal surviving kit)
+brew 'aspell' # Spell checking
+brew 'binutils' # GNU binary file utilities (usually use with compiled code)
+brew 'coreutils' # Standard POSIX utilities
+brew 'findutils'
+brew 'fmt' # Format text in the terminal
+brew 'gawk' # GNU AWK programming language
+brew 'gnu-getopt' # Process args in shell scripts
+brew 'gnu-sed' # Line-oriented text processing utility
+brew 'gnu-tar' # Archiving tool
+brew 'gnupg'
+brew 'grep' # Print lines that match patterns
+brew 'gzip' # Compression tool
+brew 'less' # Paginate the output of commands (`more` but better)
+brew 'make' # Help you to make stuff
+brew 'stow' # Symlink farm for personal configurations
+brew 'wget2' # Download utility (like `curl`)
+
+# Other Unix tools (terminal surviving kit continued)
+brew 'curl' # Tool to transfer data from or to a server
+brew 'figlet' # Print large texts on the terminal
+brew 'file' # Identify file types
+brew 'gptfdisk' # Disk partition tool (fdisk on mac)
+brew 'hunspell' # Spell checking
+brew 'ispell' # Spell checking
+brew 'lolcat' # Apply the rainbow to any terminal output
+brew 'openssl' # Remote connections using the SSH protocol
+brew 'rsync' # Keep to directories (remote or local) synchronized
+brew 'zsh'
+brew 'zsh-completions'
+
+# Development
+brew 'cmake' # Project builder that wants to rule them all
+brew 'composer' # Package manager for PHP
+brew 'kcov' # Native coverage report
+brew 'lcov' # Native coverage report
+brew 'mise' # Programming tool installer
+brew 'ninja' # A faster Make
+brew 'php' # Personal Home Pages
+brew 'python' # I rather use Python from Mise, but work has some scripts depending on the brew version
+
+# Dependency utilities (tools required by other tools)
+brew 'chafa' # Terminal image viewer (for: yazi)
+brew 'editorconfig' # Support for EditoConfig (for: nvim, JetBrains IDEs)
+brew 'exiftool' # Media file information (for: yazi)
+brew 'ffmpeg' # Audio and video manipulation utility (for: yazi)
+brew 'ffmpegthumbnailer' # Generate thumbnails for videos (for: yazi)
+brew 'git-cliff' # Changelog generator (for: git)
+brew 'git-delta' # A viewer for git and diff output (`diff` but better) (for: git)
+brew 'git-extras' # Tons of extra commands for Git (for: git)
+brew 'git-lfs' # Helper to allow one to commit large files on Git (for: git)
+brew 'git-sizer' # Show metrics of your repository (for: git)
+brew 'glow' # Render Markdown Commonmark files (for: yazi)
+brew 'graphviz' # Support for DOT language (draw graphs) (for: plantuml)
+brew 'gum' # Terminal UI Toolkit for shell scripts (for: shell)
+brew 'hexyl' # Binary files viewer (for: yazi)
+brew 'luajit' # Lua package manager (for: nvim)
+brew 'media-info' # Media files information (for: yazi)
+brew 'onefetch' # Git repo terminal statistics like GitHub (for: git)
+brew 'ouch' # Univeral compressor wrapper (for: yazi)
+brew 'pandoc' # Convert files from one format to another (for: emacs, nvim)
+brew 'pngpaste' # Support to drop image files into Emacs buffers (for: nvim)
+brew 'poppler' # PDF previewer (for: yazi)
+brew 'resvg' # SVG renderer (for: yazi)
+brew 'sdcv' # StarDict dictionaries (for: emacs)
+brew 'tag' # MacOS tag on Yazi (for: yazi)
+brew 'tectonic' # LaTeX in Rust (for: nvim)
+brew 'tree-sitter' # Tree Sitter CLI (for: emacs, nvim)
+brew 'tree-sitter-cli' # Tree Sitter CLI (for: emacs, nvim)
+
+# Miscellaneous CLI tools
+brew '7zip' # Compressor of 7z files
+brew 'ast-grep' # Grep that knows source code AST
+brew 'atuin' # Improved shell history
+brew 'bandwhich' # Network traffic analyser (must run as sudo on macOS)
+brew 'bat' # A better cat
+brew 'bottom' # Graphical process/system (`top` monitor but better: `/bin/btm`)
+brew 'choose' # Better `cut`
+brew 'direnv' # Automation when changing directories in the terminal
+brew 'doggo' # DNS lookup tool
+brew 'duf' # Better `du`
+brew 'eva' # Terminal calculator
+brew 'eza' # List directory contents (`ls` but better)
+brew 'fd' # Find entries in the file system (`find` but better)
+brew 'fend' # Terminal unit conversion
+brew 'fzf' # Fuzzy Finder for CLI
+brew 'gdu' # go Disk Usage
+brew 'gh' # GitHub CLI
+brew 'gpg-tui' # Manage GPG keys on terminal
+brew 'gping' # ping, but with graph
+brew 'grex' # RegEx generator from targets
+brew 'gron' # JSON to lists
+brew 'hyperfine' # Terminal benchmark
+brew 'imagemagick' # Image conversion utility
+brew 'jless' # JSON visualizer
+brew 'jq' # The JSON CLI processor
+brew 'lazygit' # Git TUA
+brew 'macchina' # Environment summary when open a shell
+brew 'mosh' # Intermittent connectivity remote connection (`ssh` but better[-ish])
+brew 'multimarkdown' # Markdown renderer
+brew 'neovim' # Editor
+brew 'pinentry-mac' # Password entry application for Mac
+brew 'plantuml' # UML in text
+brew 'procs' # Process status (`ps` but better)
+brew 'ripgrep' # Recursive lines matching a pattern (`grep` but better: `/bin/rg`)
+brew 'ripgrep-all' # `rg` but for PDF, E-Books, zip, tar.gz, ... (`/bin/rga`)
+brew 'rmlint' # Search files to remove
+brew 't-rec' # Terminal recorder
+brew 'tealdeer' # A conciser and more pragmatic `man` (command: tldr)
+brew 'terminal-notifier' # Send notifications from the terminal
+brew 'thefuck' # For when I forget the `sudo` in a command
+brew 'tidy-viewer' # CSV viewer
+brew 'tokei' # Source code metrics
+brew 'trippy' # A network diagnostic tool
+brew 'unar' # Preview compressed files
+brew 'xq' # CLI XML/HTML processor (`jq` but for .xml and .html files)
+brew 'yadm' # Yet Another Dotfiles Manager
+brew 'yazi', args: ["HEAD"] # Terminal File Manager
+brew 'yq' # CLI YAML processor (`jq` but for .yaml files)
+brew 'zoxide' # Remember previously navigated directories in the shell

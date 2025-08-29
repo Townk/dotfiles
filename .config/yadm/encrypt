@@ -1,9 +1,10 @@
+.config/brewfile/Brewfile.work
+.config/git/config.d/amazon.config
+.config/git/config.d/work.config
+.config/git/templates/crux-commit-message.md
+.config/git/templates/crux-description.md
 .config/wezterm/quick-launch-targets.yaml
 .config/zsh/aliases.d/work.sh
 .config/zsh/functions.d/work.sh
-.config/git/config.d/work.config
-.config/git/config.d/amazon.config
-.config/git/templates/crux-commit-message.md
-.config/git/templates/crux-description.md
 .ssh/config.d/work.config
 Library/Preferences/espanso/match/work.yml
