@@ -229,12 +229,14 @@ function update-system {
   print -P -- "\n  Updating Homebrew sources...\n"
   brew update || die "${C_RED}Error${C_RES}: Failed to update Homebrew!" || return
   print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
-  cat ~/.config/brewfile/Brewfile* | brew bundle install --cleanup --upgrade --file=-
+  cat ~/.config/brewfile/Brewfile* | brew bundle install -q --cleanup --upgrade --file=-
   [[ $? -eq 0 ]] || die "${C_RED}Error${C_RES}: Failed to upgrade Homebrew Bundle!" || return
   print -P -- "\n🍺 Upgrade Homebrew casks...\n"
   brew upgrade --cask --greedy-auto-updates --no-quarantine || die "${C_RED}Error${C_RES}: Failed to upgrade Homebrew casks!" || return
   print -P -- "\n🧹 Cleanning up Homebrew artifacts...\n"
   brew cleanup --prune=all || die "${C_RED}Error${C_RES}: Failed to clean up Homebrew files!" || return
+  print -P -- "\n🦆 Upgrade Yazi plugins...\n"
+  ya pkg upgrade || die "${C_RED}Error${C_RES}: Failed to upgrade Yazi plugins!" || return
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
 
   if command -v update-work-system >/dev/null; then
