@@ -46,8 +46,8 @@ zstyle ':z4h:ssh:*' enable 'no'
 # Send these files over to the remote host when connecting over SSH to the
 # enabled hosts.
 zstyle ':z4h:ssh:*' send-extra-files '~/.config/zsh/functions'
-zstyle ':z4h:ssh:*' send-extra-files  "~/.atuin/bin/env"
-zstyle ':z4h:ssh:*' send-extra-files  "~/.config/nvim"
+zstyle ':z4h:ssh:*' send-extra-files "~/.atuin/bin/env"
+zstyle ':z4h:ssh:*' send-extra-files "~/.config/nvim"
 
 export FZF_DEFAULT_COMMAND="fd --type f"
 zstyle ':z4h:*' fzf-flags \
@@ -96,11 +96,11 @@ export GNUPGHOME=~/.config/gnupg
 # perform network I/O must be done above. Everything else is best done below.
 z4h init || return
 
-command -v atuin >/dev/null && eval "$(atuin init zsh)"
-command -v thefuck >/dev/null && eval "$(thefuck --alias)"
-command -v mise >/dev/null && eval "$(mise activate zsh)"
-command -v wezterm >/dev/null && eval "$(wezterm shell-completion --shell zsh)"
-
+[[ -x "$HOMEBREW_PREFIX/bin/atuin" ]] && eval "$($HOMEBREW_PREFIX/bin/atuin init zsh)"
+[[ -x "$HOMEBREW_PREFIX/bin/thefuck" ]] && eval "$($HOMEBREW_PREFIX/bin/thefuck --alias)"
+[[ -x "$HOMEBREW_PREFIX/bin/mise" ]] && eval "$($HOMEBREW_PREFIX/bin/mise activate zsh)"
+[[ -x "$HOMEBREW_PREFIX/bin/wezterm" ]] && eval "$($HOMEBREW_PREFIX/bin/wezterm shell-completion --shell zsh)"
+[[ -x "$HOMEBREW_PREFIX/bin/zoxide" ]] && eval "$($HOMEBREW_PREFIX/bin/zoxide init zsh)"
 
 # Extend PATH.
 # path=(~/.local/bin /opt/homebrew/opt/binutils/bin $path)
@@ -125,42 +125,39 @@ z4h bindkey magic-space Space                # Expand abbreviation
 z4h bindkey abbr-expand-and-insert Alt+Space # undo the last command line change
 
 # Define key bindings.
-z4h bindkey undo                           Ctrl+/       # undo the last command line change
-z4h bindkey undo                           Shift+Tab    # undo the last command line change
-z4h bindkey redo                           Option+/     # redo the last undone command line change
+z4h bindkey undo Ctrl+/    # undo the last command line change
+z4h bindkey undo Shift+Tab # undo the last command line change
+z4h bindkey redo Option+/  # redo the last undone command line change
 
-z4h bindkey z4h-cd-back                    Shift+Left   # cd into the previous directory
-z4h bindkey z4h-cd-forward                 Shift+Right  # cd into the next directory
-z4h bindkey z4h-cd-up                      Shift+Up     # cd into the parent directory
-z4h bindkey z4h-cd-down                    Shift+Down   # cd into a child directory
+z4h bindkey z4h-cd-back Shift+Left     # cd into the previous directory
+z4h bindkey z4h-cd-forward Shift+Right # cd into the next directory
+z4h bindkey z4h-cd-up Shift+Up         # cd into the parent directory
+z4h bindkey z4h-cd-down Shift+Down     # cd into a child directory
 
-z4h bindkey autosuggest-accept             Ctrl+Space   # accept autosuggestion
-z4h bindkey autosuggest-accept             Ctrl+Y       # accept autosuggestion
-z4h bindkey autosuggest-clear              Ctrl+E       # cancel current autosuggestion
+z4h bindkey autosuggest-accept Ctrl+Space # accept autosuggestion
+z4h bindkey autosuggest-accept Ctrl+Y     # accept autosuggestion
+z4h bindkey autosuggest-clear Ctrl+E      # cancel current autosuggestion
 
-z4h bindkey fzf-file-widget                Ctrl+T       # find files with fzf
+z4h bindkey fzf-file-widget Ctrl+T # find files with fzf
 
-z4h bindkey _atuin_search_widget           Ctrl+R       # shell history with atuin
-z4h bindkey history-substring-search-up    Up           # history search previous cmd line
-z4h bindkey history-substring-search-down  Down         # history search next cmd line
-z4h bindkey history-substring-search-up    Ctrl+P       # history search previous cmd line
-z4h bindkey history-substring-search-down  Ctrl+N       # history search next cmd line
+z4h bindkey history-substring-search-up Up       # history search previous cmd line
+z4h bindkey history-substring-search-down Down   # history search next cmd line
+z4h bindkey history-substring-search-up Ctrl+P   # history search previous cmd line
+z4h bindkey history-substring-search-down Ctrl+N # history search next cmd line
+
+[[ -x "$HOMEBREW_PREFIX/bin/atuin" ]] && z4h bindkey _atuin_search_widget Ctrl+R # shell history with atuin
 
 # Autoload functions.
 autoload -Uz zmv
 
 typeset -g POWERLEVEL9K_INSTANT_PROMPT=quiet
 
-# Define named directories: ~w <=> Windows home directory on WSL.
-[[ -z $z4h_win_home ]] || hash -d w=$z4h_win_home
-
 # Define aliases.
 z4h source ~/.config/zsh/aliases
 
 # Set shell options: http://zsh.sourceforge.net/Doc/Release/Options.html.
-setopt glob_dots    # no special treatment for file names with a leading dot
+setopt glob_dots # no special treatment for file names with a leading dot
 setopt auto_menu # require an extra TAB press to open the completion menu
-
 
 HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_FOUND="bg=none,fg=yellow,bold"
 HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_NOT_FOUND="bg=none,fg=red,bold"

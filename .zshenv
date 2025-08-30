@@ -7,7 +7,7 @@
 # environment variables in ~/.zshenv, do it where indicated by comments below.
 
 if [ -n "${ZSH_VERSION-}" ]; then
- # If you are certain that you must export some environment variables
+  # If you are certain that you must export some environment variables
   # in ~/.zshenv (see comments at the top!), do it here:
   #
   #   export GOPATH=$HOME/go
@@ -32,7 +32,7 @@ if [ ! -e "$Z4H"/z4h.zsh ]; then
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL -- "$Z4H_URL"/z4h.zsh >"$Z4H"/z4h.zsh.$$ || return
   elif command -v wget >/dev/null 2>&1; then
-    wget -O-   -- "$Z4H_URL"/z4h.zsh >"$Z4H"/z4h.zsh.$$ || return
+    wget -O- -- "$Z4H_URL"/z4h.zsh >"$Z4H"/z4h.zsh.$$ || return
   else
     >&2 printf '\033[33mz4h\033[0m: please install \033[32mcurl\033[0m or \033[32mwget\033[0m\n'
     return 1
