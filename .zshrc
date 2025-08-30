@@ -86,12 +86,9 @@ export HOMEBREW_NO_ENV_HINTS=1
 
 export GNUPGHOME=~/.config/gnupg
 
-# Clone additional Git repositories from GitHub.
-#
-# This doesn't do anything apart from cloning the repository and keeping it
-# up-to-date. Cloned files can be used after `z4h init`. This is just an
-# example. If you don't plan to use Oh My Zsh, delete this line.
-# z4h install ohmyzsh/ohmyzsh || return
+# Install plugins by clonning additional Git repositories from GitHub.
+# We still need to load these plugins later, after `z4h init`
+# z4h install jeffreytse/zsh-vi-mode
 
 # Install or update core components (fzf, zsh-autosuggestions, etc.) and
 # initialize Zsh. After this point console I/O is unavailable until Zsh
@@ -109,6 +106,9 @@ command -v wezterm >/dev/null && eval "$(wezterm shell-completion --shell zsh)"
 # path=(~/.local/bin /opt/homebrew/opt/binutils/bin $path)
 path=(~/.local/bin $path)
 
+# Extend FPATH.
+[[ -n $HOMEBREW_PREFIX ]] && fpath=("$HOMEBREW_PREFIX/share/zsh-abbr" $fpath)
+
 # Export environment variables.
 export GPG_TTY=$TTY
 export EDITOR=nvim
@@ -118,10 +118,11 @@ export USERNAME='Thiago Alves'
 z4h source ~/.config/zsh/functions
 
 # Use additional Git repositories pulled in with `z4h install`.
-#
-# This is just an example that you should delete. It does nothing useful.
-# z4h source ohmyzsh/ohmyzsh/lib/diagnostics.zsh  # source an individual file
-# z4h load   ohmyzsh/ohmyzsh/plugins/emoji-clock  # load a plugin
+# z4h load jeffreytse/zsh-vi-mode
+[[ -n $HOMEBREW_PREFIX ]] && z4h source "$HOMEBREW_PREFIX/share/zsh-abbr/zsh-abbr.zsh"
+
+z4h bindkey magic-space Space                # Expand abbreviation
+z4h bindkey abbr-expand-and-insert Alt+Space # undo the last command line change
 
 # Define key bindings.
 z4h bindkey undo                           Ctrl+/       # undo the last command line change

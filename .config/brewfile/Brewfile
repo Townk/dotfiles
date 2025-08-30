@@ -3,6 +3,7 @@
 tap "homebrew/bundle"
 tap "homebrew/services"
 tap "1password/tap"
+tap "olets/tap"
 
 # specify a directory to install
 cask_args appdir: '/Applications'
@@ -152,6 +153,7 @@ brew 'openssl' # Remote connections using the SSH protocol
 brew 'rsync' # Keep to directories (remote or local) synchronized
 brew 'zsh'
 brew 'zsh-completions'
+brew 'zsh-abbr'
 
 # Development
 brew 'cmake' # Project builder that wants to rule them all
