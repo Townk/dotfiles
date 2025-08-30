@@ -6,6 +6,14 @@ prepend_fetchers = [
   { id = "mactag", name = "*/", run = "mactag" },
 ]
 
+prepend_preloaders = [
+  # Replace magick, image, video with mediainfo
+  { mime = "{audio,video,image}/*", run = "mediainfo" },
+  { mime = "application/subrip", run = "mediainfo" },
+  # Adobe Illustrator, Adobe Photoshop is image/adobe.photoshop, already handled above
+  { mime = "application/postscript", run = "mediainfo" },
+]
+
 prepend_previewers = [
   # Archive previewer
   { mime = "application/*zip", run = "ouch" },
@@ -14,9 +22,16 @@ prepend_previewers = [
   { mime = "application/x-7z-compressed", run = "ouch" },
   { mime = "application/x-rar", run = "ouch" },
   { mime = "application/x-xz", run = "ouch" },
-
-  # Markdown
-  { name = "*.md", run = "glow" },
+  # Replace magick, image, video with mediainfo
+  { mime = "{audio,video,image}/*", run = "mediainfo" },
+  { mime = "application/subrip", run = "mediainfo" },
+  # Adobe Illustrator, Adobe Photoshop is image/adobe.photoshop, already handled above
+  { mime = "application/postscript", run = "mediainfo" },
+  { name = "*.csv", run = 'piper -- rich -w $w -j --left --panel=rounded --guides --line-numbers --force-terminal "$1"' },
+  { name = "*.md", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
+  { name = "*.rst", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
+  { name = "*.ipynb", run = 'piper -- rich -w $w -j --left --panel=rounded --guides --line-numbers --force-terminal "$1"' },
+  { name = "*.json", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
 ]
 
 append_previewers = [{ name = "*", run = "hexyl" }]

@@ -37,7 +37,6 @@ alias mv="mv -i"
 alias pgrep="pgrep -lf" # long output, match against full args lis
 alias rm="rm -i"
 alias wget="wget -c"
-alias y="yazi"
 alias zcp="zmv -C"
 alias zln="zmv -L"
 alias zprofile-next="touch $XDG_RUNTIME_DIR/_zsh_profile.lock"

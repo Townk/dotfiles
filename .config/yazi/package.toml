@@ -29,14 +29,19 @@ rev = "0742fff"
 hash = "2bd799b42b8e42b8ef100310be71f8d1"
 
 [[plugin.deps]]
-use = "Reledia/glow"
-rev = "bd3eaa5"
-hash = "92b5c58159a51c567f82b618cee2b78"
-
-[[plugin.deps]]
 use = "Rolv-Apneseth/bypass"
 rev = "c1e5fcf"
 hash = "208e77480824f62558a5b037c8569d61"
+
+[[plugin.deps]]
+use = "boydaihungst/mediainfo"
+rev = "2093ab7"
+hash = "16a10359fc2a3cd8cc8bcfbe00f744d3"
+
+[[plugin.deps]]
+use = "yazi-rs/plugins:piper"
+rev = "d7588f6"
+hash = "2143a53182dbbe935a1abd1623424aa5"
 
 [[flavor.deps]]
 use = "yazi-rs/flavors:catppuccin-mocha"
