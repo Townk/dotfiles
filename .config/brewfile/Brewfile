@@ -4,6 +4,7 @@ tap "homebrew/bundle"
 tap "homebrew/services"
 tap "1password/tap"
 tap "olets/tap"
+tap "homebrew/command-not-found"
 
 # specify a directory to install
 cask_args appdir: '/Applications'

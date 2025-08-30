@@ -116,6 +116,8 @@ export USERNAME='Thiago Alves'
 
 # Source additional local files if they exist.
 z4h source ~/.config/zsh/functions
+[[ -f "$HOMEBREW_PREFIX/Library/Taps/homebrew/homebrew-command-not-found/handler.sh" ]] \
+  && z4h source "$HOMEBREW_PREFIX/Library/Taps/homebrew/homebrew-command-not-found/handler.sh"
 
 # Use additional Git repositories pulled in with `z4h install`.
 # z4h load jeffreytse/zsh-vi-mode
