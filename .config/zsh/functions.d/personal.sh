@@ -207,8 +207,10 @@ function super-cd {
     elif [[ ${#all_dots} -gt 2 ]] && [[ ${#1} -eq ${#all_dots} ]]; then
         local next_dir=$(printf '../%.0s' {2..${#1}})
         \builtin cd $next_dir
-    else
+    elif [[ -d "$PWD/$1" ]]; then
         \builtin cd $@
+    else
+        result="$(\command zoxide query --exclude "$(\builtin pwd -L)" -- "$@")" && \builtin cd "${result}"
     fi
 }
 compdef _directories super-cd
