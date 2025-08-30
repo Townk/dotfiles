@@ -1,4 +1,5 @@
 .config/brewfile/Brewfile.work
+.config/espanso/match/work.yml
 .config/git/config.d/amazon.config
 .config/git/config.d/work.config
 .config/git/templates/crux-commit-message.md
@@ -7,4 +8,3 @@
 .config/zsh/aliases.d/work.sh
 .config/zsh/functions.d/work.sh
 .ssh/config.d/work.config
-Library/Preferences/espanso/match/work.yml
