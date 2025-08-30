@@ -231,9 +231,8 @@ function fzf-preview {
   fi
 }
 
-function update-system {
-  print -P -- "\n${C_BLU}System Update
-  -------------${C_RES}"
+function system-update {
+  print -P -- "\n${C_BLU}System Update\n-------------${C_RES}"
   print -P -- "\n  Updating Homebrew sources...\n"
   brew update || die "${C_RED}Error${C_RES}: Failed to update Homebrew!" || return
   print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
@@ -247,9 +246,12 @@ function update-system {
   ya pkg upgrade || die "${C_RED}Error${C_RES}: Failed to upgrade Yazi plugins!" || return
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
 
-  if command -v update-work-system >/dev/null; then
-    update-work-system
+  if command -v system-update-work >/dev/null; then
+    system-update-work
   fi
+
+  print -P -- "\n🐚 Updating zsh4humans...\n"
+  z4h update || die "${C_RED}Error${C_RES}: Failed to upgrade zsh4humans!" || return
 }
 
 function y() {
