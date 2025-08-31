@@ -19,14 +19,17 @@ zstyle ':z4h:' start-tmux no
 # Mark up shell's output with semantic information.
 zstyle ':z4h:' term-shell-integration 'yes'
 
+# Prevent terminal resize to break scrollback
+zstyle ':z4h:' term-vresize top
+
 # Right-arrow key accepts one character ('partial-accept') from
 # command autosuggestions or the whole thing ('accept')?
 zstyle ':z4h:autosuggestions' forward-char 'accept'
 
 # Recursively traverse directories when TAB-completing files.
-zstyle ':z4h:fzf-complete' recurse-dirs 'no'
+zstyle ':z4h:fzf-complete' recurse-dirs 'yes'
 zstyle ':z4h:fzf-complete' fzf-bindings 'tab:repeat'
-zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-space:toggle-preview'
+zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-v:toggle-preview'
 zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-j:down'
 zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-h:up'
 
@@ -37,7 +40,6 @@ zstyle ':z4h:direnv:success' notify 'yes'
 
 # Enable ('yes') or disable ('no') automatic teleportation of z4h over
 # SSH when connecting to these hosts.
-zstyle ':z4h:ssh:thiagoa-cloud-desktop.aka.corp.amazon.com' enable 'yes'
 zstyle ':z4h:ssh:cloud-desktop' enable 'yes'
 # zstyle ':z4h:ssh:*.example-hostname2' enable 'no'
 # The default value if none of the overrides above match the hostname.
@@ -142,8 +144,6 @@ z4h bindkey z4h-cd-down Shift+Down     # cd into a child directory
 z4h bindkey autosuggest-accept Ctrl+Space # accept autosuggestion
 z4h bindkey autosuggest-accept Ctrl+Y     # accept autosuggestion
 z4h bindkey autosuggest-clear Ctrl+E      # cancel current autosuggestion
-
-z4h bindkey fzf-file-widget Ctrl+T # find files with fzf
 
 z4h bindkey history-substring-search-up Up       # history search previous cmd line
 z4h bindkey history-substring-search-down Down   # history search next cmd line
