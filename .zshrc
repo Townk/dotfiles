@@ -45,7 +45,10 @@ zstyle ':z4h:ssh:*' enable 'no'
 
 # Send these files over to the remote host when connecting over SSH to the
 # enabled hosts.
-zstyle ':z4h:ssh:*' send-extra-files '~/.config/zsh/functions'
+zstyle ':z4h:ssh:*' send-extra-files '~/.config/zsh/aliases.sh'
+zstyle ':z4h:ssh:*' send-extra-files '~/.config/zsh/aliases.d'
+zstyle ':z4h:ssh:*' send-extra-files '~/.config/zsh/functions.sh'
+zstyle ':z4h:ssh:*' send-extra-files '~/.config/zsh/functions.d'
 zstyle ':z4h:ssh:*' send-extra-files "~/.atuin/bin/env"
 zstyle ':z4h:ssh:*' send-extra-files "~/.config/nvim"
 
@@ -115,7 +118,7 @@ export EDITOR=nvim
 export USERNAME='Thiago Alves'
 
 # Source additional local files if they exist.
-z4h source ~/.config/zsh/functions
+z4h source ~/.config/zsh/functions.sh
 [[ -f "$HOMEBREW_PREFIX/Library/Taps/homebrew/homebrew-command-not-found/handler.sh" ]] \
   && z4h source "$HOMEBREW_PREFIX/Library/Taps/homebrew/homebrew-command-not-found/handler.sh"
 
@@ -155,7 +158,7 @@ autoload -Uz zmv
 typeset -g POWERLEVEL9K_INSTANT_PROMPT=quiet
 
 # Define aliases.
-z4h source ~/.config/zsh/aliases
+z4h source ~/.config/zsh/aliases.sh
 
 # Set shell options: http://zsh.sourceforge.net/Doc/Release/Options.html.
 setopt glob_dots # no special treatment for file names with a leading dot

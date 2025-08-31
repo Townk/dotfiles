@@ -17,7 +17,7 @@ typeset -g C_RES="%f"
 
 function die {
   if [[ $# -ne 0 ]]; then
-    print -P -- "\n$*\n" >&2
+    print -P -- "$*" >&2
   fi
   return 1
 }

@@ -1,43 +1,34 @@
 source "${0:A:h}/_lib.sh"
 
+# This is the main function to update my system.
+# It is idempotent and it cleans up after itself.
+# I usually run this function every day before starting my work.
+function system-update {
+  print -P -- "\n${C_BLU}System Update\n-------------${C_RES}"
+  print -P -- "\n  Updating Homebrew sources...\n"
+  brew update || die "\n${C_RED}Error${C_RES}: Failed to update Homebrew!" || return
+  print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
+  cat ~/.config/brewfile/Brewfile* | brew bundle install -q --cleanup --upgrade --file=- || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew Bundle!" || return
+  print -P -- "\n🍺 Upgrade Homebrew casks...\n"
+  brew upgrade --cask --greedy-auto-updates --no-quarantine || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew casks!" || return
+  print -P -- "\n🧹 Cleanning up Homebrew artifacts...\n"
+  brew cleanup -q --prune=all || die "\n${C_RED}Error${C_RES}: Failed to clean up Homebrew files!" || return
+  print -P -- "\n🦆 Upgrade Yazi plugins...\n"
+  ya pkg upgrade || die "\n${C_RED}Error${C_RES}: Failed to upgrade Yazi plugins!" || return
+  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
+
+  if command -v system-update-work >/dev/null; then
+    system-update-work
+  fi
+
+  print -P -- "\n🐚 Updating zsh4humans...\n"
+  z4h update || die "\n${C_RED}Error${C_RES}: Failed to upgrade zsh4humans!" || return
+}
+
 # I decide to make my MOTD screen a function to allow me to call it
 # arbitrarially if I wanted.
 function motd() {
-  case $OSTYPE in
-    darwin*)
-      PWD_LAST_CHANGE=$(dscl -q . read $HOME SMBPasswordLastSet 2> /dev/null | grep -v ':$' | awk '{ sub(/^(.*:)? +/, ""); print $0 }')
-      if [ -n "$PWD_LAST_CHANGE" ] && [ "$PWD_LAST_CHANGE" -eq "$PWD_LAST_CHANGE" ] 2>/dev/null; then
-        PWD_LAST_CHANGE=$(( $(date +%s) - ($PWD_LAST_CHANGE / 10000000 - 11644473600) ))
-      else
-        PWD_LAST_CHANGE=$(( $(date +%s) - $(dscl -q . readpl $HOME accountPolicyData passwordLastSetTime | awk '{ sub(/^(.*:)? +/, ""); print $0 }') ))
-      fi
-      PWD_REMAINING_DAYS=$(LC_ALL=C /usr/bin/printf "%.*f\n" "0" $((365 - ($PWD_LAST_CHANGE / 86400))) )
-      ;;
-    *)
-      PWD_REMAINING_DAYS=$(( ($(date -d "`chage -l $USER | grep "Last password change" | awk -F: '{ print $2; }'` + 90 days" +%s) - $(date -d "now" +%s)) / 86400 ))
-      ;;
-  esac
-  PWD_REMAINING_SUFFIX="days"
-  PWD_SEP="   "
-  if [ $PWD_REMAINING_DAYS -gt 99 ]; then
-    PWD_SEP=" "
-    PWD_COLOR="\e[0;32m"
-  elif [ $PWD_REMAINING_DAYS -gt 9 ]; then
-    PWD_SEP="  "
-    PWD_COLOR="\e[0;32m"
-  elif [ $PWD_REMAINING_DAYS -gt 7 ]; then
-    PWD_COLOR="\e[0;32m"
-  elif [ $PWD_REMAINING_DAYS -gt 2 ]; then
-    PWD_COLOR="\e[6;33m"
-  else
-    PWD_COLOR="\e[6;31m"
-    if [ $PWD_REMAINING_DAYS -eq 1 ]; then
-      PWD_REMAINING_SUFFIX="day"
-    fi
-  fi
-
   macchina
-  echo -ne "  \e[0;34mPassword expires in:$PWD_SEP$PWD_COLOR"; echo "$PWD_REMAINING_DAYS $PWD_REMAINING_SUFFIX \e[0;0m\n"
 }
 
 # Quick function to print my outstanding additions to my terminal
@@ -81,76 +72,94 @@ function terminal_commands() {
   "
 }
 
-# This function will update my current system derivation with the changes on my
-# nix config repository.
-function nixswitch() {
-  print -P -- "\n${C_BLU}Nix System Switch\n-----------------${C_RES}\n"
-  local _TARGET_DIR="$HOME/workplace/personal/config/dotfiles"
-  local _OLD_DIR=$PWD
-  local _SUCCESS=1
-  [[ "$_TARGET_DIR" != "$_OLD_DIR" ]] && pushd ~/workplace/personal/config/dotfiles > /dev/null
-  if darwin-rebuild switch --flake ~/workplace/personal/config/dotfiles; then
-    _SUCCESS=0
-  fi
-  [[ "$PWD" != "$_OLD_DIR" ]] && popd > /dev/null
-  if [[ $_SUCCESS -eq 0 ]]; then
-    print -P -- "\nNew Nix derivation switched ${C_BWH}successfully${C_RES}!\n"
-    print -P -- "Changes won't be in effect until you ${C_BWH}restart${C_RES} your ZSH session.\n"
-    true
-  else
-    print -P -- "\n${C_RED}Error while switching to the new derivation!${C_RES}\n"
-    print -P -- "It's recommended that you fix the issue and re-run '${C_BWH}nixswitch${C_RES}' in\n${C_BWH}this ZSH session${C_RES} before open a new one.\n"
-    false
-  fi
-}
-
-# This function will update my config flake sources, rebuild the necessary
-# packages, and update the current system derivation with all the new packages.
-function nixup() {
-  print -P -- "\n${C_BLU}Nix System Update
-  -----------------${C_RES}
-
-  This command will update ${C_BWH}Homebrew${C_RES} and the configuration ${C_BWH}Flake${C_RES},
-  and then, it will switch to the new system derivation.
-
-  Is recommended that you check the configuration repo for changes, and
-  ${C_BWH}commit${C_RES} then to guarantee configuration persistence.\n
-  "
-  local _TARGET_DIR="$HOME/workplace/personal/config/dotfiles";
-  local _OLD_DIR=$PWD;
-  local _SUCCESS=1
-  [[ "$_TARGET_DIR" != "$_OLD_DIR" ]] && pushd ~/workplace/personal/config/dotfiles > /dev/null
-  if brew upgrade && nix flake update; then
-    _SUCCESS=0
-  fi
-  [[ "$PWD" != "$_OLD_DIR" ]] && popd > /dev/null
-  if [[ $_SUCCESS -eq 0 ]]; then
-    if nixswitch; then
-      print -P -- "\nSystem updated ${C_BWH}successfully${C_RES}!\n"
-      print -P -- "Is recommended that you check the configuration repo for changes, and" \
-        "${C_BWH}commit${C_RES}\nthen to guarantee configuration persistence.\n"
-      true
-    else
-      print -P -- "\n${C_RED}The flake update worked, but we got an error while switching" \
-        "to\bthe new system!${C_RES}\n"
-      false
-    fi
-  else
-    print -P -- "\n${C_RED}Error while updating the Nix system!${C_RES}\n"
-    false
-  fi
-}
-
+# Helper utility to print a big and noticeable banner in the terminal.
+# This function is useful whel you're running a series of long-running commands
+# and want to have a good way to visually distinguish between them.
 function lolbanner {
-  figlet -d "$XDG_DATA_HOME"/fonts/figlet -w $(stty size|awk '{ print $2 }') "$@" | lolcat
+  figlet -d "$XDG_DATA_HOME"/fonts/figlet -w "$(stty size | awk '{ print $2 }')" "$@" | lolcat
 }
+
+# The function that rule all the change-directory functions.
+# It uses common-sense and Zoxide to do its job and make my life navigating
+# directories easier!
+function super-cd {
+  local all_dots=${1//[^.]/}
+  local next_dir=""
+  if [[ $# -eq 0 ]]; then
+    # cd with no parameter should change to $HOME dir
+    \builtin cd ~ || die "${C_RED}Error${C_RES}: Failed to change current directory to '$HOME'" || return
+  elif [[ "$1" == "-/" ]]; then
+    # cd with a '-' parameter plus a '/' at the end skips the "super-cd
+    # previous dir" mechanism
+    \builtin cd - || die "${C_RED}Error${C_RES}: Failed to change current directory to the previous one" || return
+  elif [[ "$1" == "-" ]]; then
+    # cd with a '-' parameter allows the user to select the previous directory
+    # among the dirstack plus the zoxide last accessed
+    typeset -a prev_stack
+    [[ -n "$dirstack" ]] || declare -a dirstack
+    prev_stack+=("${dirstack[@]}")
+    # shellcheck disable=SC2296
+    prev_stack+=("${(@f)$(\command zoxide query --list --exclude "$PWD" 2> /dev/null)}")
+    if [[ "${#prev_stack[@]}" -gt 1 ]]; then
+      next_dir=$(print -l -- "${prev_stack[@]}" | fzf --no-sort)
+      next_dir="${next_dir#$'\n'}"
+    elif [[ "${#prev_stack[@]}" -eq 1 ]]; then
+      next_dir="${prev_stack[0]}"
+    fi
+    if [[ -n "$next_dir" ]]; then
+      \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
+    fi
+  elif [[ "$1" == ".." ]]; then
+    # cd with a '..' parameter allows the user to select anyone of the parent
+    # directories to go
+    typeset -a dir_stack
+    local _cur_dir
+    _cur_dir=${PWD%/*}
+    while [[ -n "$_cur_dir" ]]; do
+      dir_stack+=("$_cur_dir")
+      _cur_dir="${_cur_dir%/*}"
+    done
+    next_dir=$(print -l -- "${dir_stack[@]}" | fzf)
+    if [[ -n "$next_dir" ]]; then
+      \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
+    fi
+  elif [[ ${#all_dots} -gt 2 ]] && [[ ${#1} -eq ${#all_dots} ]]; then
+    # cd with 3 or more consecutive '.' characters as parameter will traverse
+    # the directory hierarchy N times, where N is the number of '.' characters
+    # minus 1.
+    next_dir="../"
+    for ((i = 2; i < ${#1}; i++)); do
+      next_dir="${next_dir}../"
+    done
+    # next_dir=$(\builtin printf '../%.0s' {2..${#1}})
+    \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
+  elif [[ -d "$*" ]]; then
+    # when the parameter given to `super-cd` is a known directory, we use the
+    # builtin `cd` command to go there
+    \builtin cd "$@" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$*'" || return
+  else
+    # when the given parameter was not match by any of the previous criterias,
+    # we fallback to use Zoxide to try to change directories
+    next_dir="$(\command zoxide query --exclude "$PWD" -- "$@" 2>/dev/null)"
+    if [[ -n "$next_dir" ]]; then
+      \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
+    else
+      die "${C_RED}Error${C_RES}: Failed to change current directory to '$*'"
+      return 1
+    fi
+  fi
+}
+compdef _directories super-cd
 
 # Helper function to create a directory and enter on it with one command
 function take() {
-  [[ $# == 1 ]] && mkdir -p -- "$1" && cd -- "$1"
+  [[ $# == 1 ]] && mkdir -p -- "$1" && cd -- "$1" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$1'" || return
 }
 compdef _directories take
 
+# The short-form of git.
+# If this function is run without parameters, it runs a `git status` on the
+# current project.
 function g {
   if [[ $# = 0 ]]; then
     git status --short .
@@ -160,6 +169,9 @@ function g {
 }
 compdef g=git
 
+# A Gradle wrapper that gives preference to run `gradle` from the local
+# project, unless the current project did not defined one. In that case, it
+# runs the `gradle` command installed in the system.
 function gg {
   if [[ -x "./gradlew" ]]; then
     ./gradlew "$@"
@@ -169,95 +181,32 @@ function gg {
 }
 compdef gg=gradle
 
-function yy() {
-  local tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
-  yazi "$@" --cwd-file="$tmp"
-  if cwd="$(cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
-    cd -- "$cwd"
-  fi
-  rm -f -- "$tmp"
-}
-
-function super-cd {
-  local all_dots=${1//[^.]}
-  if [[ $# -eq 0 ]]; then
-    \builtin cd ~
-  elif [[ "$1" == "-/" ]]; then
-    \builtin cd -
-  elif [[ "$1" == "-" ]]; then
-    typeset -a prev_stack
-    typeset -a zoxi_stack
-    local next_dir=""
-    prev_stack=(${dirstack[@]})
-    zoxi_stack=($(zoxide query --list --exclude=$PWD))
-    for ((i=0; i < ${#zoxi_stack[@]} && ${#prev_stack[@]} < 20; i++)); do
-      if ! ((${dirstack[(Ie)${zoxi_stack[$i]}]})); then
-        prev_stack=(${prev_stack[@]} ${zoxi_stack[$i]})
-      fi
-    done
-    if [[ ${#prev_stack[@]} -gt 1 ]]; then
-      next_dir="$(printf "%s\n" "${prev_stack[@]}" | -z4h-fzf --no-sort)"
-      next_dir="${next_dir#$'\n'}"
-    elif [[ ${#prev_stack[@]} -eq 1 ]]; then
-      next_dir="${prev_stack[0]}"
-    fi
-    if [[ ! -z "$next_dir" ]]; then
-      \builtin cd "$next_dir"
-    fi
-  elif [[ "$1" == ".." ]]; then
-    local next_dir=$(for d in $(_CUR_DIR=${PWD%/*}; while [[ "${_CUR_DIR}" != "" ]]; do echo $_CUR_DIR; _CUR_DIR=${_CUR_DIR%/*}; done; echo "/"); do echo $d; done | -z4h-fzf)
-    next_dir="${next_dir#$'\n'}"
-    if [[ ! -z "$next_dir" ]]; then
-      \builtin cd "$next_dir"
-    fi
-  elif [[ ${#all_dots} -gt 2 ]] && [[ ${#1} -eq ${#all_dots} ]]; then
-    local next_dir=$(printf '../%.0s' {2..${#1}})
-      \builtin cd $next_dir
-    elif [[ -d "$PWD/$1" ]]; then
-      \builtin cd "$@"
-    else
-      result="$(\command zoxide query --exclude "$(\builtin pwd -L)" -- "$@")" && \builtin cd "${result}"
-  fi
-}
-compdef _directories super-cd
-
+# A helper function to be used as an `fzf` previewer.
 function fzf-preview {
   if [[ -d "$1" ]]; then
     eza -F -h --group-directories-first --icons --hyperlink --tree --color=always "$1" | head -200
   elif [[ ! -f "$1" ]]; then
     echo "Nothing to preview"
   else
-    (bat --theme=OneHalfDark --style=numbers,changes --color=always "$1" || highlight -O ansi -l "$1" || coderay "$1" || rougify "$1" || cat "$1") 2> /dev/null | head -200
+    (bat --theme=OneHalfDark --style=numbers,changes --color=always "$1" ||
+      highlight -O ansi -l "$1" ||
+      \cat "$1") 2>/dev/null | head -200
   fi
 }
 
-function system-update {
-  print -P -- "\n${C_BLU}System Update\n-------------${C_RES}"
-  print -P -- "\n  Updating Homebrew sources...\n"
-  brew update || die "${C_RED}Error${C_RES}: Failed to update Homebrew!" || return
-  print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
-  cat ~/.config/brewfile/Brewfile* | brew bundle install -q --cleanup --upgrade --file=-
-  [[ $? -eq 0 ]] || die "${C_RED}Error${C_RES}: Failed to upgrade Homebrew Bundle!" || return
-  print -P -- "\n🍺 Upgrade Homebrew casks...\n"
-  brew upgrade --cask --greedy-auto-updates --no-quarantine || die "${C_RED}Error${C_RES}: Failed to upgrade Homebrew casks!" || return
-  print -P -- "\n🧹 Cleanning up Homebrew artifacts...\n"
-  brew cleanup -q --prune=all || die "${C_RED}Error${C_RES}: Failed to clean up Homebrew files!" || return
-  print -P -- "\n🦆 Upgrade Yazi plugins...\n"
-  ya pkg upgrade || die "${C_RED}Error${C_RES}: Failed to upgrade Yazi plugins!" || return
-  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
-
-  if command -v system-update-work >/dev/null; then
-    system-update-work
-  fi
-
-  print -P -- "\n🐚 Updating zsh4humans...\n"
-  z4h update || die "${C_RED}Error${C_RES}: Failed to upgrade zsh4humans!" || return
-}
-
+# A Yazi wrapper that allows me to chage the current working directory to where
+# I was in Yazi before I quit.
+# Usually, one would press `Q` to exit Yazi without changing directories, and
+# `q` to change the current working dir. However, in my Yazi configuration,
+# these keybindings are inverted.
 function y() {
-  local tmp="$(mktemp -t "yazi-cwd.XXXXXX")" cwd
+  local tmp
+  tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
   yazi "$@" --cwd-file="$tmp"
-  IFS= read -r -d '' cwd < "$tmp"
-  [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] && builtin cd -- "$cwd"
+  IFS= read -r -d '' cwd <"$tmp"
   rm -f -- "$tmp"
+  [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] &&
+    \builtin cd -- "$cwd" ||
+    die "${C_RED}Error${C_RES}: Failed to change current directory to '$cwd'" ||
+    return
 }
