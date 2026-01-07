@@ -42,7 +42,6 @@ alias zln="zmv -L"
 alias zprofile-next="touch $XDG_RUNTIME_DIR/_zsh_profile.lock"
 alias vim="nvim"
 alias vi="nvim"
-alias claude="/Users/thiagoa/.claude/local/claude"
 
 ## git aliases
 alias git="noglob git"
@@ -71,7 +70,6 @@ alias ssh-x="ssh -o CompressionLevel=9 -c arcfour,blowfish-cbc -YC"
 
 # Other helpers
 alias isotime="date -u +'%Y-%m-%dT%H:%M:%S+0000'"
-
 
 # Global aliases
 alias -g -- /h='-h 2>&1 | bat --language=help --style=plain'

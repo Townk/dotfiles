@@ -1,9 +1,10 @@
 [tools]
-python = "3.12"
+python = "3.14"
 node = "20"
 ruby = "3.1"
-java = "corretto-22"
 rust = "latest"
-go = "1.22"
+go = "1.25"
 lua = "5.1"
 julia = "latest"
+java = "openjdk-21"
+kotlin = "latest"

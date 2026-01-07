@@ -8,7 +8,7 @@ function system-update {
   print -P -- "\n  Updating Homebrew sources...\n"
   brew update || die "\n${C_RED}Error${C_RES}: Failed to update Homebrew!" || return
   print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
-  cat ~/.config/brewfile/Brewfile* | brew bundle install -q --cleanup --upgrade --file=- || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew Bundle!" || return
+  cat ~/.config/brewfile/Brewfile | brew bundle install -q --cleanup --upgrade --file=- || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew Bundle!" || return
   print -P -- "\n🍺 Upgrade Homebrew casks...\n"
   brew upgrade --cask --greedy-auto-updates --no-quarantine || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew casks!" || return
   print -P -- "\n🧹 Cleanning up Homebrew artifacts...\n"
@@ -17,9 +17,9 @@ function system-update {
   ya pkg upgrade || die "\n${C_RED}Error${C_RES}: Failed to upgrade Yazi plugins!" || return
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
 
-  if command -v system-update-work >/dev/null; then
-    system-update-work
-  fi
+  #if command -v system-update-work >/dev/null; then
+  #  system-update-work
+  #fi
 
   print -P -- "\n🐚 Updating zsh4humans...\n"
   z4h update || die "\n${C_RED}Error${C_RES}: Failed to upgrade zsh4humans!" || return
@@ -120,6 +120,7 @@ function super-cd {
       _cur_dir="${_cur_dir%/*}"
     done
     next_dir=$(print -l -- "${dir_stack[@]}" | fzf)
+    next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
     if [[ -n "$next_dir" ]]; then
       \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
     fi
@@ -205,8 +206,9 @@ function y() {
   yazi "$@" --cwd-file="$tmp"
   IFS= read -r -d '' cwd <"$tmp"
   rm -f -- "$tmp"
-  [ -n "$cwd" ] && [ "$cwd" != "$PWD" ] &&
+  if [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
     \builtin cd -- "$cwd" ||
-    die "${C_RED}Error${C_RES}: Failed to change current directory to '$cwd'" ||
-    return
+      die "${C_RED}Error${C_RES}: Failed to change current directory to '$cwd'" ||
+      return
+  fi
 }

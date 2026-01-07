@@ -62,7 +62,7 @@
   xfuncname = ^(\\*+ +.*)$
 
 [diff "markdown"]
-  xfuncname = ^([#]+ +.*)$
+  xfuncname = "^#+.*"
 
 [difftool]
   prompt = false

@@ -1,22 +1,22 @@
 [[plugin.deps]]
 use = "yazi-rs/plugins:full-border"
-rev = "d7588f6"
+rev = "68f7d48"
 hash = "3996fc74044bc44144b323686f887e1"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:toggle-pane"
-rev = "d7588f6"
-hash = "d6f60c24d8c0cf57a855bf46115b2502"
+rev = "68f7d48"
+hash = "8a7c58225816a163a6e8730c0adafbc8"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:git"
-rev = "d7588f6"
-hash = "63b6c222bf2103b3023389dde5e2ecfe"
+rev = "68f7d48"
+hash = "36a484acf6a0a0219c543ccb4cee218f"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:mactag"
-rev = "d7588f6"
-hash = "72dfb25e9d0c015365827431e28df322"
+rev = "68f7d48"
+hash = "1f75c3efbba45c1289f06676145c0d98"
 
 [[plugin.deps]]
 use = "Reledia/hexyl"
@@ -25,8 +25,8 @@ hash = "50da29476e744dba37d77fb209328fd1"
 
 [[plugin.deps]]
 use = "ndtoan96/ouch"
-rev = "0742fff"
-hash = "2bd799b42b8e42b8ef100310be71f8d1"
+rev = "cfb9140"
+hash = "b5067143415bd2d46c0dfa57319ddcef"
 
 [[plugin.deps]]
 use = "Rolv-Apneseth/bypass"
@@ -35,15 +35,15 @@ hash = "208e77480824f62558a5b037c8569d61"
 
 [[plugin.deps]]
 use = "boydaihungst/mediainfo"
-rev = "2093ab7"
-hash = "16a10359fc2a3cd8cc8bcfbe00f744d3"
+rev = "90a1652"
+hash = "7a83bfab51d1d2ba6558cc56bd52539a"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:piper"
-rev = "d7588f6"
-hash = "2143a53182dbbe935a1abd1623424aa5"
+rev = "68f7d48"
+hash = "2dd68af59418b631b9703a03f606b31f"
 
 [[flavor.deps]]
 use = "yazi-rs/flavors:catppuccin-mocha"
-rev = "9cd2ac4"
-hash = "f54b45bdd33f607ddde47f0afad96142"
+rev = "4a1802a"
+hash = "b951d27afe197d154f6da9683b46c5f8"
