@@ -23,7 +23,7 @@
 # timezone = "local"
 
 ## enable or disable automatic sync
-auto_sync = false
+auto_sync = true
 
 ## enable or disable automatic update checks
 update_check = false
@@ -43,7 +43,7 @@ update_check = false
 ## which filter mode to use by default
 ## possible values: "global", "host", "session", "directory", "workspace"
 ## consider using search.filters to customize the enablement and order of filter modes
-# filter_mode = "global"
+filter_mode = "workspace"
 
 ## With workspace filtering enabled, Atuin will filter for commands executed
 ## in any directory within a git repository tree (default: false).
@@ -51,7 +51,7 @@ update_check = false
 ## To use workspace mode by default when available, set this to true and
 ## set filter_mode to "workspace" or leave it unspecified and 
 ## set search.filters to include "workspace" before other filter modes.
-# workspaces = false
+workspaces = true
 
 ## which filter mode to use when atuin is invoked from a shell up-key binding
 ## the accepted values are identical to those of "filter_mode"
@@ -89,7 +89,7 @@ update_check = false
 # word_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 ## number of context lines to show when scrolling by pages
-# scroll_context_lines = 1
+scroll_context_lines = 5
 
 ## use ctrl instead of alt as the shortcut modifier key for numerical UI shortcuts
 ## alt-0 .. alt-9
@@ -125,7 +125,7 @@ update_check = false
 ## Configure whether or not to show the help row, which includes the current Atuin
 ## version (and whether an update is available), a keymap hint, and the total
 ## amount of commands in your history.
-# show_help = true
+show_help = true
 
 ## Configure whether or not to show tabs for search and inspect
 # show_tabs = true
@@ -176,6 +176,7 @@ enter_accept = true
 ## Set commands where we should consider the subcommand for statistics. Eg, kubectl get vs just kubectl
 common_subcommands = [
   "apt",
+  "brew",
   "cargo",
   "composer",
   "dnf",
@@ -184,6 +185,7 @@ common_subcommands = [
   "go",
   "ip",
   "kubectl",
+  "mise",
   "nix",
   "nmcli",
   "npm",
@@ -191,6 +193,7 @@ common_subcommands = [
   "pnpm",
   "podman",
   "port",
+  "qmk",
   "systemctl",
   "tmux",
   "yarn",
@@ -203,6 +206,9 @@ common_prefix = ["sudo"]
 ignored_commands = [
   "cd",
   "ls",
+  "eza",
+  "zoxide",
+  "y",
 ]
 
 [keys]
@@ -263,4 +269,4 @@ records = true
 ## The list of enabled filter modes, in order of priority.
 ## The "workspace" mode is skipped when not in a workspace or workspaces = false.
 ## Default filter mode can be overridden with the filter_mode setting.
-# filters = [ "global", "host", "session", "workspace", "directory" ]
+filters = [ "workspace", "directory", "session", "host", "global" ]

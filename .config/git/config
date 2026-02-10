@@ -39,7 +39,7 @@
   commentchar = ";"
 
 [init]
-  defaultBranch = mainline
+  defaultBranch = master
 
 [commit]
   status = 1

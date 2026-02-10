@@ -9,12 +9,17 @@ function system-update {
   brew update || die "\n${C_RED}Error${C_RES}: Failed to update Homebrew!" || return
   print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
   cat ~/.config/brewfile/Brewfile | brew bundle install -q --cleanup --upgrade --file=- || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew Bundle!" || return
+  print -P -- "\n🍺 Upgrade Homebrew formulas...\n"
+  brew upgrade || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew formulas!" || return
   print -P -- "\n🍺 Upgrade Homebrew casks...\n"
-  brew upgrade --cask --greedy-auto-updates --no-quarantine || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew casks!" || return
+  brew upgrade --cask --greedy-latest || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew casks!" || return
   print -P -- "\n🧹 Cleanning up Homebrew artifacts...\n"
   brew cleanup -q --prune=all || die "\n${C_RED}Error${C_RES}: Failed to clean up Homebrew files!" || return
   print -P -- "\n🦆 Upgrade Yazi plugins...\n"
   ya pkg upgrade || die "\n${C_RED}Error${C_RES}: Failed to upgrade Yazi plugins!" || return
+  print -P -- "\n🔧 Upgrade Mise tools...\n"
+  mise upgrade
+  mise prune -y
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
 
   #if command -v system-update-work >/dev/null; then

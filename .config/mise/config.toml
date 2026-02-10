@@ -1,10 +1,23 @@
 [tools]
-python = "3.14"
-node = "20"
-ruby = "3.1"
-rust = "latest"
-go = "1.25"
-lua = "5.1"
+# Programming languages
+deno = "latest"
+go = "latest"
+java = "latest"
 julia = "latest"
-java = "openjdk-21"
+just = "latest"
 kotlin = "latest"
+lua = "5.1"
+node = "latest"
+python = "latest"
+ruby = "latest"
+rust = "latest"
+
+# Tools
+uv = "latest"
+cmake = "latest"
+ninja = "latest"
+
+[settings]
+
+[settings.python]
+uv_venv_auto = true

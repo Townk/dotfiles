@@ -3,9 +3,22 @@
 ---@diagnostic disable:assign-type-mismatch
 ---@type Wezterm
 local wezterm = require("wezterm")
+
+local plugins_dir = wezterm.home_dir .. "/Projects/wezterm"
+
+function get_plugin_path(plugin_name, github_repo)
+	local local_path = plugins_dir .. "/" .. plugin_name
+	local success = io.open(local_path .. "/plugin/init.lua", "r")
+	if success then
+		success:close()
+		return "file://" .. local_path
+	end
+	return "https://github.com/" .. (github_repo or ("Townk/" .. plugin_name))
+end
+
 local smart_splits = wezterm.plugin.require("https://github.com/mrjones2014/smart-splits.nvim")
-local statusbar = wezterm.plugin.require("https://github.com/Townk/statusbar.wezterm")
-local quick_launch = wezterm.plugin.require("https://github.com/Townk/quicklaunch.wezterm")
+local statusbar = wezterm.plugin.require(get_plugin_path("statusbar.wezterm"))
+local quick_launch = wezterm.plugin.require(get_plugin_path("quicklaunch.wezterm"))
 
 ---------------------------------------------------------------
 -- Config initialization
@@ -77,7 +90,7 @@ smart_splits.apply_to_config(config, {
 	-- modifier keys to combine with direction_keys
 	modifiers = {
 		move = "CTRL", -- modifier to use for pane movement, e.g. CTRL+h to move left
-		resize = "CTRL|META", -- modifier to use for pane resize, e.g. META+h to resize to the left
+		resize = "CTRL|SHIFT", -- modifier to use for pane resize, e.g. META+h to resize to the left
 	},
 })
 
@@ -87,7 +100,7 @@ smart_splits.apply_to_config(config, {
 	-- modifier keys to combine with direction_keys
 	modifiers = {
 		move = "CTRL", -- modifier to use for pane movement, e.g. CTRL+h to move left
-		resize = "CTRL|META", -- modifier to use for pane resize, e.g. META+h to resize to the left
+		resize = "CTRL|SHIFT", -- modifier to use for pane resize, e.g. META+h to resize to the left
 	},
 })
 
@@ -462,8 +475,13 @@ map_keys(config, {
 		key = "f",
 		action = wezterm.action.Search("CurrentSelectionOrEmptyString"),
 	},
-	{ key = "UpArrow", mods = "CTRL|SHIFT", action = wezterm.action.ScrollToPrompt(-1) },
-	{ key = "DownArrow", mods = "CTRL|SHIFT", action = wezterm.action.ScrollToPrompt(1) },
+	{
+		mods = "CTRL|SHIFT",
+		key = "f",
+		action = wezterm.action.DisableDefaultAssignment,
+	},
+	{ key = "UpArrow", mods = "META|SHIFT", action = wezterm.action.ScrollToPrompt(-1) },
+	{ key = "DownArrow", mods = "META|SHIFT", action = wezterm.action.ScrollToPrompt(1) },
 })
 
 -- Defines the keys that are active in our resize-pane mode.

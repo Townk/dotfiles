@@ -13,6 +13,12 @@ if [ -n "${ZSH_VERSION-}" ]; then
   #   export GOPATH=$HOME/go
   #
   # Do not change anything else in this file.
+  XDG_CONFIG_HOME="${HOME}/.config"
+  XDG_CACHE_HOME="${HOME}/.cache"
+  XDG_DATA_HOME="${HOME}/.local/share"
+  XDG_STATE_HOME="${HOME}/.local/state"
+  XDG_BIN_HOME="${HOME}/.local/bin"
+  export XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_BIN_HOME
 
   : ${ZDOTDIR:=~}
   setopt no_global_rcs

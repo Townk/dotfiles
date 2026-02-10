@@ -1,4 +1,4 @@
-Subject (keep lest than 50 characters)
+Subject (keep less than 50 characters)
 
 ;<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
 ;<!--          Subject text up do this column  -->
@@ -30,4 +30,4 @@ Subject (keep lest than 50 characters)
 ;<!--    wrap the text, and use dangling space to indicate a text    -->
 ;<!--    continuation;                                               -->
 ;<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
-;<!-- LTeX: enabled=false                                            -->
+;<!-- LaTeX: enabled=false                                           -->

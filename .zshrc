@@ -91,6 +91,8 @@ export HOMEBREW_NO_ENV_HINTS=1
 
 export GNUPGHOME=~/.config/gnupg
 
+export MANPAGER="less -R --use-color -Dd+r -Du+b"
+
 # Install plugins by clonning additional Git repositories from GitHub.
 # We still need to load these plugins later, after `z4h init`
 # z4h install jeffreytse/zsh-vi-mode
@@ -112,7 +114,15 @@ z4h init || return
 path=(~/.local/bin $path)
 
 # Extend FPATH.
-[[ -n $HOMEBREW_PREFIX ]] && fpath=("$HOMEBREW_PREFIX/share/zsh-abbr" $fpath)
+if [[ -d "$HOMEBREW_PREFIX/share/zsh-abbr" ]] then
+  # typeset -gaU fpath=("$HOMEBREW_PREFIX/share/zsh-abbr" $fpath)
+  fpath=("$HOMEBREW_PREFIX/share/zsh-abbr" $fpath)
+fi
+
+if [[ -d "$HOME/.local/share/zsh/site-functions" ]] then
+  # typeset -gaU fpath=("~/.local/share/zsh/site-functions" $fpath)
+  fpath=("$HOME/.local/share/zsh/site-functions" $fpath)
+fi
 
 # Export environment variables.
 export GPG_TTY=$TTY
@@ -189,4 +199,16 @@ if [[ -n "$WEZTERM_UNIX_SOCKET" ]] || [[ -n "$ALACRITTY_SOCKET" ]] || [[ -n "$KI
     print -P -- "                                        %F{#5c6370}━━━━━━━━ ❖ ━━━━━━━━%f\n"
     type terminal_commands >/dev/null 2>&1 && terminal_commands
   fi
+fi
+
+# bun completions
+[ -s "/Users/thiago/.bun/_bun" ] && source "/Users/thiago/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+# Run unalias -a when starting a shell session within OpenCode
+if [[ -n "$OPENCODE" ]]; then
+  unalias -a
 fi
