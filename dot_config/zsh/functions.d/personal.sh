@@ -147,16 +147,31 @@ function super-cd {
   elif [[ "$1" == "-" ]]; then
     # cd with a '-' parameter allows the user to select the previous directory
     # among the dirstack plus the zoxide last accessed
+    if ! command -v fzf >/dev/null 2>&1; then
+      die "${C_RED}Error${C_RES}: fzf is required for this operation"
+      return 1
+    fi
     typeset -a prev_stack
     [[ -n "$dirstack" ]] || declare -a dirstack
     prev_stack+=("${dirstack[@]}")
     # shellcheck disable=SC2296
-    prev_stack+=("${(@f)$(\command zoxide query --list --exclude "$PWD" 2> /dev/null)}")
-    if [[ "${#prev_stack[@]}" -gt 1 ]]; then
-      next_dir=$(print -l -- "${prev_stack[@]}" | fzf --no-sort)
+    prev_stack+=("${(@f)$(\\command zoxide query --list --exclude "$PWD" 2>/dev/null | head -50)}")
+    # shellcheck disable=SC2296,SC2206
+    prev_stack=(${(u)prev_stack[@]})
+
+    if [[ "${#prev_stack[@]}" -eq 0 ]]; then
+      die "${C_YEL}No previous directories available${C_RES}"
+      return 1
+    elif [[ "${#prev_stack[@]}" -gt 1 ]]; then
+      next_dir=$(print -l -- "${prev_stack[@]}" | fzf \
+        --no-sort \
+        --prompt="Previous directories > " \
+        --preview='fzf-preview {}' \
+        --preview-window=right:50% \
+        --height=40%)
       next_dir="${next_dir#$'\n'}"
-    elif [[ "${#prev_stack[@]}" -eq 1 ]]; then
-      next_dir="${prev_stack[0]}"
+    else
+      next_dir="${prev_stack[1]}"
     fi
     if [[ -n "$next_dir" ]]; then
       \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
@@ -164,6 +179,14 @@ function super-cd {
   elif [[ "$1" == ".." ]]; then
     # cd with a '..' parameter allows the user to select anyone of the parent
     # directories to go
+    if [[ "$PWD" == "/" ]]; then
+      die "${C_YEL}Already at root directory${C_RES}"
+      return 0
+    fi
+    if ! command -v fzf >/dev/null 2>&1; then
+      die "${C_RED}Error${C_RES}: fzf is required for this operation"
+      return 1
+    fi
     typeset -a dir_stack
     local _cur_dir
     _cur_dir=${PWD%/*}
@@ -171,8 +194,11 @@ function super-cd {
       dir_stack+=("$_cur_dir")
       _cur_dir="${_cur_dir%/*}"
     done
-    next_dir=$(print -l -- "${dir_stack[@]}" | fzf)
-    next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
+    next_dir=$(print -l -- "${dir_stack[@]}" | fzf \
+      --prompt="Parent directories > " \
+      --preview='fzf-preview {}' \
+      --preview-window=right:50% \
+      --height=40%)
     if [[ -n "$next_dir" ]]; then
       \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
     fi
@@ -184,7 +210,6 @@ function super-cd {
     for ((i = 2; i < ${#1}; i++)); do
       next_dir="${next_dir}../"
     done
-    # next_dir=$(\builtin printf '../%.0s' {2..${#1}})
     \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
   elif [[ -d "$*" ]]; then
     # when the parameter given to `super-cd` is a known directory, we use the
@@ -193,7 +218,7 @@ function super-cd {
   else
     # when the given parameter was not match by any of the previous criterias,
     # we fallback to use Zoxide to try to change directories
-    next_dir="$(\command zoxide query --exclude "$PWD" -- "$@" 2>/dev/null)"
+    next_dir="$(\\command zoxide query --exclude "$PWD" -- "$@" 2>/dev/null)"
     if [[ -n "$next_dir" ]]; then
       \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
     else
