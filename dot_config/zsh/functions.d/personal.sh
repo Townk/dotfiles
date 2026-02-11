@@ -81,7 +81,54 @@ function terminal_commands() {
 # This function is useful whel you're running a series of long-running commands
 # and want to have a good way to visually distinguish between them.
 function lolbanner {
-  figlet -d "$XDG_DATA_HOME"/fonts/figlet -w "$(stty size | awk '{ print $2 }')" "$@" | lolcat
+  local font_name=""
+  local user_specified_dir=false
+  local figlet_args=()
+  local terminal_width
+
+  terminal_width="$(stty size | awk '{ print $2 }')"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -f)
+      if [[ $# -gt 1 ]]; then
+        font_name="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    -d)
+      user_specified_dir=true
+      figlet_args+=("$1")
+      if [[ $# -gt 1 ]]; then
+        figlet_args+=("$2")
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    *)
+      figlet_args+=("$1")
+      shift
+      ;;
+    esac
+  done
+
+  if [[ -n "$font_name" ]] && [[ "$user_specified_dir" == false ]]; then
+    local figlet_font_dir
+    local font_file
+    figlet_font_dir="$(figlet -I 2)"
+    font_file=$(fd -1 -e flf -e flf.gz -e tlf -e tlf.gz -a "$font_name" "$XDG_DATA_HOME/fonts" "$figlet_font_dir" 2>/dev/null)
+    if [[ -n "$font_file" ]]; then
+      figlet -d "${font_file%/*}" -f "$font_name" -w "$terminal_width" "${figlet_args[@]}" | lolcat
+    else
+      figlet -w "$terminal_width" "${figlet_args[@]}" | lolcat
+    fi
+  else
+    [[ -n "$font_name" ]] && figlet_args=("-f" "$font_name" "${figlet_args[@]}")
+    figlet -w "$terminal_width" "${figlet_args[@]}" | lolcat
+  fi
 }
 
 # The function that rule all the change-directory functions.
