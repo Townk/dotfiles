@@ -29,7 +29,7 @@ zstyle ':z4h:autosuggestions' forward-char 'accept'
 # Recursively traverse directories when TAB-completing files.
 zstyle ':z4h:fzf-complete' recurse-dirs 'yes'
 zstyle ':z4h:fzf-complete' fzf-bindings 'tab:repeat'
-zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-v:toggle-preview'
+zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-w:toggle-preview-wrap'
 zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-j:down'
 zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-h:up'
 

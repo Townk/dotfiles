@@ -262,7 +262,7 @@ compdef gg=gradle
 # A helper function to be used as an `fzf` previewer.
 function fzf-preview {
   if [[ -d "$1" ]]; then
-    eza -F -h --group-directories-first --icons --hyperlink --tree --color=always "$1" | head -200
+    eza -F -h --group-directories-first --icons --hyperlink --tree --color=always --level=2 "$1" | head -200
   elif [[ ! -f "$1" ]]; then
     echo "Nothing to preview"
   else
