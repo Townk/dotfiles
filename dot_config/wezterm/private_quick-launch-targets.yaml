@@ -1,0 +1,181 @@
+workspaces:
+  - id: "default"
+    name: "Default Workspace"
+
+  - id: "qmk"
+    name: "QMK Firmware"
+    icon: " "
+    tabs:
+      - id: "qmk-firmware"
+        name: "Firmware"
+        action:
+          type: "Shell"
+          label: " Open terminal on the QMK Firmware repository directory"
+          cwd: "~/Projects/hardware/qmk"
+      - id: "qmk-userspace"
+        name: "Svalboard Keymap"
+        action:
+          type: "Shell"
+          label: " Open terminal on my custom QMK userspace Keymap directory"
+          cwd: "~/Projects/hardware/qmk-config"
+
+  - id: "wezterm-plugins"
+    name: "Wezterm Plugins"
+    icon: " "
+    tabs:
+      - id: "wezterm-config"
+        name: "Wezterm Config"
+        icon: " "
+        action:
+          type: "Edit"
+          description: "Edit Wezterm configuration"
+          cwd: "~/.config/wezterm"
+          args: [ "wezterm.lua" ]
+      - id: "statusbar-plugin"
+        name: "Status Bar Plugin"
+        icon: " "
+        action:
+          type: "Edit"
+          description: "Edit Status Bar Plugin"
+          cwd: "~/Projects/wezterm/statusbar.wezterm"
+          args: [ "plugin/init.lua" ]
+      - id: "quicklaunch-plugin"
+        name: "Quick Launch Plugin"
+        icon: "󱓟 "
+        action:
+          type: "Edit"
+          description: "Edit Quick Launch Plugin"
+          cwd: "~/Projects/wezterm/quicklaunch.wezterm"
+          args: [ "plugin/init.lua" ]
+      - id: "wezterm-logs"
+        name: "Wezterm Logs"
+        icon: "󱓟 "
+        action:
+          type: "Run"
+          label: "Open Wezterm Logs"
+          cwd: "~/.local/share/wezterm"
+          args:
+            - tail -n 50 -f wezterm-gui-log-%PID%.txt
+
+    panes:
+      - id: "qmk-compile"
+        name: "QMK Build"
+        icon: " "
+        direction: "Bottom"
+        size: 0.40
+        optional: true
+        action:
+          type: "Run"
+          label: "Build Svalboard Lightly Firmware"
+          cwd: "~/Projects/hardware/qmk-config"
+          args: 
+            - printf '┏━━━━━━━━━━━━━━━━━┓\n┃ Left side build ┃\n┻━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+            - qmk compile -kb svalboard/trackball/pmw3389/left -km townk
+            - printf '\n┏━━━━━━━━━━━━━━━━━━┓\n┃ Right side build ┃\n┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+            - qmk compile -kb svalboard/trackball/pmw3389/right -km townk
+            - printf '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPress any key to close the pane'
+            - sleep 5
+
+      - id: "qmk-flash-right"
+        name: "QMK Flash Right"
+        icon: "󱊟 "
+        direction: "Bottom"
+        size: 0.40
+        optional: true
+        action:
+          type: "Run"
+          label: "Flash the Svalboard Lightly right half firmware"
+          cwd: "~/Projects/hardware/qmk-config"
+          args: 
+            - qmk flash -kb svalboard/trackball/pmw3389/right -km townk
+
+tabs:
+  - id: "launcher-items"
+    name: "Launcher Items"
+    icon: "󱓞 "
+    action:
+      type: "Edit"
+      label: "Edit Wezterm QuickLaunch items"
+      cwd: "~/.config/wezterm"
+      args: [ "quick-launch-targets.yaml" ]
+
+  - id: "brew-pkgs"
+    name: "Homebrew Packages"
+    icon: " "
+    action:
+      type: "Edit"
+      label: "Edit Brewbundle file"
+      cwd: "~/.config/brewfile"
+      args: [ "Brewfile" ]
+
+  - id: "wezterm-config"
+    name: "Wezterm Config"
+    icon: " "
+    action:
+      type: "Edit"
+      description: "Edit Wezterm configuration"
+      cwd: "~/.config/wezterm"
+      args: [ "wezterm.lua" ]
+
+  - id: "zsh-config"
+    name: "Zsh Config"
+    icon: " "
+    action:
+      type: "Edit"
+      label: "Edit Zsh configuration"
+      cwd: "~"
+      args: [ ".zshrc" ]
+
+  - id: "neovim-config"
+    name: "NeoVim Config"
+    icon: " "
+    action:
+      type: "Edit"
+      label: "Edit NeoVim configuration"
+      cwd: "~/.config/nvim"
+      args: [ "init.lua" ]
+
+  - id: "system-resources"
+    name: "System Resources"
+    icon: " "
+    action:
+      type: "Run"
+      label: "Open System Resources"
+      args:
+        - btm --battery
+
+  - id: "network-activity"
+    name: "Network activity"
+    icon: "󰈀 "
+    action:
+      type: "Run"
+      label: "Open Network activity"
+      args:
+        - sudo bandwhich --total-utilization
+
+panes:
+  - id: "git-log"
+    name: "Git Log"
+    icon: " "
+    direction: "Right"
+    size: 0.65
+    moveFocus: true
+    optional: true
+    action:
+      type: "Run"
+      label: "Git Log on current directory"
+      args:
+        - git log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)' --all
+
+  - id: "lazy-git"
+    name: "LazyGit"
+    icon: "󰊢 "
+    direction: "Right"
+    size: 0.65
+    moveFocus: true
+    optional: true
+    action:
+      type: "Run"
+      label: "Open LazyGit on current directory"
+      args:
+        - lazygit

@@ -1,0 +1,17 @@
+GSSAPIAuthentication yes
+IgnoreUnknown UseKeychain,AddKeysToAgent
+Match all
+
+Host *
+  User thiago
+  UserKnownHostsFile ~/.ssh/known_hosts
+  IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+  ForwardAgent yes
+  Compression yes
+  ServerAliveInterval 60
+  ServerAliveCountMax 3
+  HashKnownHosts yes
+  ControlMaster auto
+  ControlPersist 1800
+  AddKeysToAgent yes
+  UseKeychain yes

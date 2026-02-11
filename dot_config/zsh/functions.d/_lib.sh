@@ -1,0 +1,23 @@
+# These are the colors I can use to respect my palette
+typeset -g C_GRE="%F{#98c379}"
+typeset -g C_RED="%F{#e06c75}"
+typeset -g C_YEL="%F{#e5bf7b}"
+typeset -g C_BLU="%F{#61afef}"
+typeset -g C_BBL="%F{#a0cff5}"
+typeset -g C_CYA="%F{#56b6c2}"
+typeset -g C_MAG="%F{#c678dd}"
+typeset -g C_WHI="%F{#abb2bf}"
+typeset -g C_GRA="%F{#5c6370}"
+typeset -g C_BWH="%F{#ffffff}"
+typeset -g C_ORA="%F{#ff8700}"
+typeset -g C_PIN="%F{#fecfe7}"
+typeset -g C_PUR="%F{#875fff}"
+typeset -g C_BLA="%F{#1f2329}"
+typeset -g C_RES="%f"
+
+function die {
+  if [[ $# -ne 0 ]]; then
+    print -P -- "$*" >&2
+  fi
+  return 1
+}

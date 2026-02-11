@@ -1,0 +1,15 @@
+{
+    "default_path": "/Users/thiago/.local/bin",
+    "bins": {
+        "/Users/thiago/.local/bin/bin": {
+            "path": "/Users/thiago/.local/bin/bin",
+            "remote_name": "bin_0.24.2_darwin_arm64",
+            "version": "v0.24.2",
+            "hash": "e49ac70cab086e95e4d7ee447ad7f9167888f80a95ad0a6869a22852b133ab8b",
+            "url": "github.com/marcosnils/bin",
+            "provider": "github",
+            "package_path": "",
+            "pinned": false
+        }
+    }
+}

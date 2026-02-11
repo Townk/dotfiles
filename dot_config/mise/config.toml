@@ -1,0 +1,23 @@
+[tools]
+# Programming languages
+deno = "latest"
+go = "latest"
+java = "latest"
+julia = "latest"
+just = "latest"
+kotlin = "latest"
+lua = "5.1"
+node = "latest"
+python = "latest"
+ruby = "latest"
+rust = "latest"
+
+# Tools
+uv = "latest"
+cmake = "latest"
+ninja = "latest"
+
+[settings]
+
+[settings.python]
+uv_venv_auto = true
