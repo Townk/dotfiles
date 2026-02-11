@@ -47,7 +47,7 @@ function motd() {
 #  SYSTEM                         󰇺 PROCESSORS                      UTILITIES
 #   ------                           ----------                       ---------
 #   tldr      - Extra help           jq      - JSON processor         7zz       - 7-Zip cli
-#   btm       - 'top' (bottom)       gron    - JSON to list assign   eva       - Calculator
+#   btm       - 'top' (bottom)       gron    - JSON to list assign    eva       - Calculator
 #   procs     - Processes 'ps'       xq      - XML processor          fd        - 'find'
 #   duf       - Disk usage           yq      - YAML processor         fend      - Unit conversion
 #   y         - Files (yazi)         pandoc  - Any text processor     gh        - GitHub cli
@@ -68,8 +68,8 @@ function terminal_commands() {
   ${C_BWH}y${C_RES}         - Files (yazi)         ${C_BWH}gron${C_RES}    - JSON to list assign    ${C_BWH}fd${C_RES}        - 'find'
   ${C_BWH}procs${C_RES}     - Processes 'ps'       ${C_BWH}xq${C_RES}      - XML processor          ${C_BWH}fend${C_RES}      - Unit conversion
   ${C_BWH}tldr${C_RES}      - Extra help           ${C_BWH}yq${C_RES}      - YAML processor         ${C_BWH}gh${C_RES}        - GitHub cli
-  ${C_BWH}git${C_RES}       - Version control
-  ${C_YEL} NETWORK                        ${C_YEL}󰊪 VISUALIZERS                      ${C_BWH}grex${C_RES}      - RegEx generator
+                                                                    ${C_BWH}git${C_RES}       - Version control
+  ${C_YEL} NETWORK                        ${C_YEL}󰊪 VISUALIZERS                    ${C_BWH}grex${C_RES}      - RegEx generator
   ${C_YEL}-------                          ${C_YEL}-----------                      ${C_BWH}hyperfine${C_RES} - Benchmark
   ${C_BWH}bandwhich${C_RES} - Network use          ${C_BWH}jless${C_RES}   - JSON tree              ${C_BWH}rg${C_RES}        - 'grep' (ripgrep)
   ${C_BWH}doggo${C_RES}     - DNS look-up          ${C_BWH}tokei${C_RES}   - Code metrics           ${C_BWH}t-rec${C_RES}     - Terminal recorder
