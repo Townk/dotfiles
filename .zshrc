@@ -90,6 +90,7 @@ export GOPROXY=direct
 export HOMEBREW_NO_ENV_HINTS=1
 
 export GNUPGHOME=~/.config/gnupg
+export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
 
 export MANPAGER="less -R --use-color -Dd+r -Du+b"
 
