@@ -1,0 +1,111 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+  background: transparent;
+}
+
+body {
+  background: transparent;
+  overflow: hidden;
+}
+
+.panel {
+  background: rgba(30, 30, 36, 0.88);
+  border: 1px solid rgba(217, 217, 217, 1);
+  border-radius: 12px;
+  padding: %%PADDING_V%%px 14px;
+  display: inline-block;
+}
+
+.breadcrumb {
+  font-family: 'Symbols Nerd Font Mono', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  color: rgba(128, 128, 128, 1);
+  white-space: nowrap;
+  padding: 4px 0 2px 0;
+}
+
+hr.separator {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin: 4px 0 2px 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: auto;
+}
+
+tr {
+  line-height: 1.5;
+}
+
+td {
+  padding: %%ENTRY_GAP%%px 0;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+td.key {
+  font-family: 'Symbols Nerd Font Mono', Monaco, monospace;
+  font-size: 13px;
+  color: rgba(130, 170, 255, 1);
+  text-align: right;
+  padding-right: 6px;
+}
+
+td.icon {
+  font-family: Symbols Nerd Font Mono;
+  font-size: 13px;
+  color: rgba(191, 191, 191, 1);
+  text-align: center;
+  width: 24px;
+  padding-right: 6px;
+}
+
+td.desc {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: %%FONT_SIZE%%px;
+  color: rgba(224, 224, 224, 1);
+  text-align: left;
+}
+
+td.desc-group       { color: rgba(173, 217, 140, 1); }
+td.desc-sticky      { color: rgba(255, 199, 89, 1); }
+
+.table-wrap {
+  position: relative;
+  margin-right: 18px;
+}
+
+.scroll-indicator {
+  position: absolute;
+  right: -16px;
+  font-family: 'Symbols Nerd Font Mono', Monaco, monospace;
+  font-size: 12px;
+  color: rgba(102, 102, 102, 1);
+  line-height: 1;
+  pointer-events: none;
+}
+
+.scroll-indicator-top {
+  top: 0;
+}
+
+.scroll-indicator-bottom {
+  bottom: 0;
+}
+
+.footer {
+  font-family: 'Symbols Nerd Font Mono', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  color: rgba(102, 102, 102, 1);
+  white-space: nowrap;
+  padding: 4px 0 0 0;
+  display: flex;
+  gap: 12px;
+}
+
+.footer-key {
+  color: rgba(191, 191, 191, 1);
+}

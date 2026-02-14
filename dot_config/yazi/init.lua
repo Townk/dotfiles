@@ -27,6 +27,12 @@ if os.getenv("NVIM") then
 	require("toggle-pane"):entry("min-preview")
 end
 
+Status = Status
+---@type th.Status
+
+Header = Header
+---@type TS.Heading
+
 Status:children_add(function(self)
 	local h = self._current.hovered
 	if h and h.link_to then

@@ -1,0 +1,87 @@
+#!/bin/bash
+set -eufo pipefail
+
+{{- if eq .chezmoi.os "darwin" }}
+echo "🍏  Setting macOS defaults"
+
+osascript -e 'tell application "System Preferences" to quit'
+
+# Keyboard
+echo "⌨️  Set AppleEnabledInputSources (US Keyboard Layout)"
+defaults write com.apple.HIToolbox AppleEnabledInputSources -array \
+  '<dict>
+    <key>InputSourceKind</key><string>Keyboard Layout</string>
+    <key>KeyboardLayout ID</key><integer>0</integer>
+    <key>KeyboardLayout Name</key><string>U.S.</string>
+  </dict>' \
+  '<dict>
+    <key>InputSourceKind</key><string>Keyboard Layout</string>
+    <key>KeyboardLayout ID</key><integer>15000</integer>
+    <key>KeyboardLayout Name</key><string>USInternational-PC</string>
+  </dict>'
+
+echo "⌨️  Set AppleSelectedInputSources (US Keyboard Layout)"
+defaults write com.apple.HIToolbox AppleSelectedInputSources -array \
+  '<dict>
+    <key>InputSourceKind</key><string>Keyboard Layout</string>
+    <key>KeyboardLayout ID</key><integer>0</integer>
+    <key>KeyboardLayout Name</key><string>U.S.</string>
+  </dict>'
+
+echo "⌨️  Set AppleCurrentKeyboardLayoutInputSourceID to ABC"
+defaults write com.apple.HIToolbox AppleCurrentKeyboardLayoutInputSourceID -string "com.apple.keylayout.US"
+
+echo "⌨️  Enable keyboard navigation"
+defaults write NSGlobalDomain AppleKeyboardUIMode -int 2
+
+echo "⌨️  Make keyboard repeat-rate as fast as it can be"
+defaults write -g KeyRepeat -int 1
+defaults write -g InitialKeyRepeat -int 10
+
+# Trackpad
+echo "🖱️  Enable trackpad tap to click"
+defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Clicking -bool true
+defaults write com.apple.AppleMultitouchTrackpad Clicking -bool true
+
+# Dock
+echo "💈  Automatically hide and show the dock"
+defaults write com.apple.dock autohide -bool true
+
+# Finder
+echo "📁  Sort Finder icons by name"
+/usr/libexec/PlistBuddy -c "Set :DesktopViewSettings:IconViewSettings:arrangeBy name" ~/Library/Preferences/com.apple.finder.plist
+/usr/libexec/PlistBuddy -c "Set :FK_StandardViewSettings:IconViewSettings:arrangeBy name" ~/Library/Preferences/com.apple.finder.plist
+/usr/libexec/PlistBuddy -c "Set :StandardViewSettings:IconViewSettings:arrangeBy name" ~/Library/Preferences/com.apple.finder.plist
+
+echo "📁  Set Finder icons size"
+/usr/libexec/PlistBuddy -c "Set :DesktopViewSettings:IconViewSettings:iconSize 64" ~/Library/Preferences/com.apple.finder.plist
+/usr/libexec/PlistBuddy -c "Set :FK_StandardViewSettings:IconViewSettings:iconSize 64" ~/Library/Preferences/com.apple.finder.plist
+/usr/libexec/PlistBuddy -c "Set :StandardViewSettings:IconViewSettings:iconSize 64" ~/Library/Preferences/com.apple.finder.plist
+
+echo "📁  Set Finder preferred view style to columns"
+defaults write com.apple.finder FXPreferredViewStyle -string "clmv"
+defaults write com.apple.finder FXPreferredGroupBy -string "Name"
+defaults write com.apple.finder _FXSortFoldersFirst -bool true
+
+echo "📱  Set 'Open at login' applications"
+
+loginItems=(
+  "Dropbox"
+  "Hammerspoon"
+  "Raycast"
+  "SoundSource"
+)
+
+for app in "${loginItems[@]}"; do
+  if [ -d "/Applications/$app.app" ]; then
+    osascript -e "tell application \"System Events\" to make login item at end with properties {name: \"$app\", path: \"/Applications/$app.app\", hidden:true}"
+    echo "✅  $app added to login items"
+  else
+    echo "❌  $app not found in /Applications"
+  fi
+done
+
+echo "🔨  Making Hammerspoon use XDG config directories"
+defaults write org.hammerspoon.Hammerspoon MJConfigFile "~/.config/hammerspoon/init.lua"
+
+{{ end -}}

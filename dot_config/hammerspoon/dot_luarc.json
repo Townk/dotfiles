@@ -1,0 +1,15 @@
+{
+	"workspace.library": [
+		"modules"
+	],
+  "workspace.ignoreDir": [
+    "Assets"
+  ],
+	"runtime.path": [
+		"?.lua",
+		"?/init.lua",
+		"modules/?.lua",
+		"modules/?/init.lua"
+	],
+	"runtime.pathStrict": false
+}

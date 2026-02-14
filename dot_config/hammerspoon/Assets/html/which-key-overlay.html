@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="%%WHICH_KEY_CSS_FILE%%">
+  </head>
+  <body>
+    <div class="panel">
+      <div class="breadcrumb">%%BREADCRUMB_CONTENT%%</div>
+      <hr class="separator">
+      <div class="table-wrap">
+        <table>
+          %%BINDING_TABLE_ROWS%%
+        </table>
+        %%SCROLL_TOP_CONTENT%%
+        %%SCROLL_BOTTOM_CONTENT%%
+      </div>
+      <hr class="separator">
+      <div class="footer">%%FOOTER_CONTENT%%</div>
+    </div>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      var panel = document.querySelector('.panel');
+      var rect = panel.getBoundingClientRect();
+      try {
+        webkit.messageHandlers.sizeReport.postMessage({
+          w: Math.ceil(rect.width),
+          h: Math.ceil(rect.height)
+        });
+      } catch(e) {}
+    });
+    </script>
+  </body>
+</html>

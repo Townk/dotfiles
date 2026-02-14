@@ -1,0 +1,26 @@
+#!/bin/bash
+set -eufo pipefail
+
+echo "🛠️  Bootstrap Mise-En-Place tools..."
+mise upgrade
+
+if [ -d "$HOME/.config/nvim/.git" ]; then
+  echo "ℹ️  NeoVim Config already initialized, pulling latest changes..."
+  \cd ~/.config/nvim
+  git pull
+  echo "✅  NeoVim Config updated"
+else
+  gh repo clone Townk/nvim-config "$HOME/.config/nvim"
+  \cd ~/.config/nvim
+fi
+mise install rust@nightly -q
+if [ -d "$HOME/.local/share/nvim/lazy/LazyVim/.git" ]; then
+  echo "ℹ️  NeoVim Config already bootstrapped, updating latest plugins..."
+  nvim --headless "+Lazy! update" "+Lazy load mason-tool-installer.nvim" "+MasonToolsInstallSync" "+quitall"
+else
+  nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall"
+fi
+\cd -
+echo "✅  NeoVim plugins updated"
+
+

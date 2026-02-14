@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:www.rightpoint.com)",
+      "WebFetch(domain:ryanmo.co)",
+      "WebFetch(domain:ss64.com)",
+      "WebFetch(domain:cocoadev.github.io)",
+      "Bash(defaults read:*)",
+      "WebFetch(domain:www.hoboes.com)",
+      "Bash(plutil:*)",
+      "Bash(luac:*)",
+      "Bash(/Applications/Hammerspoon.app/Contents/Frameworks/LuaSkin.framework/Versions/A/Resources/lua:*)",
+      "Bash(/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u)",
+      "Bash(echo:*)",
+      "Bash(pgrep:*)",
+      "Bash(ls:*)",
+      "WebFetch(domain:luals.github.io)",
+      "Bash(/Users/thiago/.local/share/nvim/mason/bin/lua-language-server:*)",
+      "Bash(xxd:*)",
+      "Bash(python3:*)",
+      "Bash(printf:*)",
+      "WebFetch(domain:talk.automators.fm)",
+      "WebFetch(domain:mskelton.dev)",
+      "WebFetch(domain:www.brunerd.com)",
+      "WebFetch(domain:www.hammerspoon.org)",
+      "Bash(sw_vers:*)",
+      "Bash(defaults domains:*)",
+      "Bash(osascript:*)",
+      "WebFetch(domain:focuscuts.com)",
+      "Bash(jq:*)",
+      "Bash(/opt/homebrew/bin/jq:*)",
+      "Bash(find:*)",
+      "Bash(/usr/bin/shortcuts help:*)",
+      "Bash(/usr/bin/shortcuts export:*)",
+      "Bash(/Users/thiago/.local/share/nvim/mason/packages/lua-language-server/lua-language-server:*)",
+      "Bash(wc:*)"
+    ]
+  }
+}

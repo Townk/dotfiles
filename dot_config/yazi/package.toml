@@ -35,13 +35,18 @@ hash = "208e77480824f62558a5b037c8569d61"
 
 [[plugin.deps]]
 use = "boydaihungst/mediainfo"
-rev = "dc61636"
-hash = "2fa34959353b6f1a1c33659f50e098fd"
+rev = "8ab04b2"
+hash = "bdd196f71aa3e6aa02d1b1d6cad22424"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:piper"
 rev = "88990a6"
 hash = "25aee698dd1081001008ce0cb1cc4da3"
+
+[[plugin.deps]]
+use = "yazi-rs/plugins:types"
+rev = "88990a6"
+hash = "83b5b82b595c39a660bf2b170987e5e7"
 
 [[flavor.deps]]
 use = "yazi-rs/flavors:catppuccin-mocha"

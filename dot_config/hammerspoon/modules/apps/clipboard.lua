@@ -1,0 +1,54 @@
+--- apps/clipboard.lua
+--- NeoVim-aware clipboard operations and dictionary lookup.
+--- Copies the current selection (adapting to NeoVim when focused) and
+--- feeds it to a macOS Shortcut for word definition.
+---
+--- Usage:
+---   local clipboard = require("apps.clipboard")
+---   clipboard.defineSelection()
+
+local M = {}
+
+--- Check whether the focused window belongs to a NeoVim instance.
+--- @return boolean
+--- @private
+local function isNeovimFocused()
+  local win = hs.window.focusedWindow()
+  if not win then return false end
+  local title = win:title() or ""
+  return title:find("vim") ~= nil
+end
+
+--- Copy the current selection to the system clipboard.
+--- In NeoVim, sends `"+y` keystrokes to yank to the `+` register;
+--- otherwise sends ⌘C.
+--- @private
+function M.copySelection()
+  if isNeovimFocused() then
+    -- In NeoVim, send `"+y` to yank the visual selection to the system clipboard.
+    hs.eventtap.keyStroke({ "shift" }, "'")  -- "
+    hs.eventtap.keyStroke({ "shift" }, "=")  -- +
+    hs.eventtap.keyStroke({}, "y")
+  else
+    hs.eventtap.keyStroke({ "cmd" }, "c")
+  end
+end
+
+--- Copy the current selection and look it up via the "Word LookUp" macOS Shortcut.
+--- Preserves the previous clipboard contents and restores them after copying.
+function M.defineSelection()
+  local oldClipboard = hs.pasteboard.getContents()
+  M.copySelection()
+
+  hs.timer.doAfter(0.2, function()
+    local selectedText = hs.pasteboard.getContents()
+    hs.pasteboard.setContents(oldClipboard)
+    if selectedText and selectedText ~= "" then
+      hs.execute("echo '" .. selectedText .. "' | /usr/bin/shortcuts run 'Word LookUp'")
+    else
+      hs.printf("No text was selected")
+    end
+  end)
+end
+
+return M

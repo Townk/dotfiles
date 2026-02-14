@@ -17,16 +17,18 @@ function system-update {
   brew cleanup -q --prune=all || die "\n${C_RED}Error${C_RES}: Failed to clean up Homebrew files!" || return
   print -P -- "\n🦆 Upgrade Yazi plugins...\n"
   ya pkg upgrade || die "\n${C_RED}Error${C_RES}: Failed to upgrade Yazi plugins!" || return
-  print -P -- "\n🔧 Upgrade Mise tools...\n"
+  print -P -- "\n🛠️ Upgrade Mise tools...\n"
   mise upgrade
   mise prune -y
+  print -P -- "\n🛠️ Upgrade bin tools...\n"
+  bin update -a -y
+  bin prune -f
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
 
-  #if command -v system-update-work >/dev/null; then
-  #  system-update-work
-  #fi
+  print -P -- "\n📝 Upgrade NeoVim plugins...\n"
+  nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" || die "\n${C_RED}Error${C_RES}: Failed to upgrade NeoVim plugins!" || return
 
-  print -P -- "\n🐚 Updating zsh4humans...\n"
+  print -P -- "\n🐚 Upgrade zsh4humans...\n"
   z4h update || die "\n${C_RED}Error${C_RES}: Failed to upgrade zsh4humans!" || return
 }
 

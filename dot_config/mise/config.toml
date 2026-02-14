@@ -1,23 +1,19 @@
 [tools]
 # Programming languages
-deno = "latest"
 go = "latest"
 java = "latest"
-julia = "latest"
-just = "latest"
 kotlin = "latest"
 lua = "5.1"
 node = "latest"
 python = "latest"
-ruby = "latest"
 rust = "latest"
 
 # Tools
-uv = "latest"
 cmake = "latest"
+just = "latest"
 ninja = "latest"
+uv = "latest"
 
 [settings]
-
 [settings.python]
 uv_venv_auto = true

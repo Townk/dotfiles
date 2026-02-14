@@ -13,6 +13,9 @@ cask_args appdir: '/Applications'
 # ---------------------------
 # These entries are entries for apps that I download from the Mac AppStore..
 
+# XCode
+mas "Xcode", id: 497799835
+
 # Apple Office Suite
 mas "Keynote: Design Presentations", id: 361285480
 mas "Pages: Create Documents", id: 361309726
@@ -58,12 +61,12 @@ mas "TabBack for Safari", id: 1660506599
 
 # MacOS Improvements
 cask 'espanso'                      # Text expansion / snippets
+cask 'gpg-suite@nightly'            # Security Tools (gnupg desktop app)
+cask 'hammerspoon'                  # Keybindings controller (Keyboard Maestro but better)
 cask 'macfuse'                      # R/W ext3 partitions
-cask 'monitorcontrol'               # OSD for external devices (sound, brightness, etc.)
 cask 'paragon-extfs'                # ext3 FS manager
 cask 'rar'                          # Extran archive type on terminal
 cask 'raycast'                      # System Launcher
-cask 'gpg-suite@nightly'            # Security Tools (gnupg desktop app)
 
 # Coding
 cask 'android-studio'               # Android IDE
@@ -172,6 +175,7 @@ brew 'gum'                          # Terminal UI Toolkit for shell scripts (for
 brew 'hexyl'                        # Binary files viewer (for: yazi)
 brew 'libyaml'                      # Library dependency for ruby
 brew 'luajit'                       # Lua package manager (for: nvim)
+brew 'm1ddc'                        # Utility used by HammerSpoon to detect external display brightnes
 brew 'media-info'                   # Media files information (for: yazi)
 brew 'onefetch'                     # Git repo terminal statistics like GitHub (for: git)
 brew 'ouch'                         # Univeral compressor wrapper (for: yazi)
