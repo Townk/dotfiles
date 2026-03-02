@@ -25,48 +25,23 @@ alias fzf='-z4h-fzf'
 alias grep='grep --color=auto --exclude-dir={.bzr,CVS,.git,.hg,.svn}'
 alias h="history -1" # full histor
 alias history="fc -il 1"
-alias lg="lazygit"
-alias lsg="ls --git --git-ignore"
-alias l="ls -1"
-alias la="ls -a"
-alias ll="ls -l"
-alias lla="ls -la"
-alias lt="ls --tree"
+alias ls="eza -F --group-directories-first --icons --hyperlink"
 alias mkdir="mkdir -pv"
 alias mv="mv -i"
 alias pgrep="pgrep -lf" # long output, match against full args lis
 alias rm="rm -i"
 alias wget="wget2 -c"
-alias zcp="zmv -C"
-alias zln="zmv -L"
-alias zprofile-next="touch $XDG_RUNTIME_DIR/_zsh_profile.lock"
+alias zmv="noglob zmv -M"
+alias zcp="noglob zmv -C"
+alias zln="noglob zmv -L"
+alias zprofile-next='touch $XDG_RUNTIME_DIR/_zsh_profile.lock'
 alias vim="nvim"
 alias vi="nvim"
 
 ## git aliases
 alias git="noglob git"
 alias cdg='cd `git rev-parse --show-toplevel`'
-alias gst="git status --short"
-alias gu="git pull"
-alias gp="git push"
-alias gd="git vimdiff"
-alias gdf="git diff --name-only"
-alias gc="git commit -v"
-alias gca="git commit -v -a"
-alias gb="git branch -v"
-alias gba="git branch -av"
-alias grv="git remote -v"
 alias gl="git log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)'"
-
-## YADM aliases
-alias yst="yadm status --short"
-alias yb="yadm branch -v"
-alias yba="yadm branch -av"
-alias yrv="yadm remote -v"
-alias yl="yadm log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)'"
-
-# ssh helper
-alias ssh-x="ssh -o CompressionLevel=9 -c arcfour,blowfish-cbc -YC"
 
 # Other helpers
 alias isotime="date -u +'%Y-%m-%dT%H:%M:%S+0000'"

@@ -36,7 +36,7 @@ defaults write NSGlobalDomain AppleKeyboardUIMode -int 2
 
 echo "⌨️  Make keyboard repeat-rate as fast as it can be"
 defaults write -g KeyRepeat -int 1
-defaults write -g InitialKeyRepeat -int 10
+defaults write -g InitialKeyRepeat -int 30
 
 # Trackpad
 echo "🖱️  Enable trackpad tap to click"
@@ -45,7 +45,9 @@ defaults write com.apple.AppleMultitouchTrackpad Clicking -bool true
 
 # Dock
 echo "💈  Automatically hide and show the dock"
-defaults write com.apple.dock autohide -bool true
+defaults write com.apple.dock autohide -bool false
+defaults write com.apple.dock show-recents -bool false
+
 
 # Finder
 echo "📁  Sort Finder icons by name"
@@ -69,6 +71,7 @@ loginItems=(
   "Dropbox"
   "Hammerspoon"
   "Raycast"
+  "Shottr"
   "SoundSource"
 )
 

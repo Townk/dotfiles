@@ -1,6 +1,11 @@
 #!/bin/bash
 set -eufo pipefail
 
+echo "🔧  Creating user directory for system sockets..."
+RUNTIME_DIR="$TMPDIR/runtime-$UID"
+\mkdir "$RUNTIME_DIR"
+\chmod 0700 "$RUNTIME_DIR"
+
 echo "🛠️  Bootstrap Mise-En-Place tools..."
 mise upgrade
 

@@ -154,10 +154,9 @@ function super-cd {
       return 1
     fi
     typeset -a prev_stack
-    [[ -n "$dirstack" ]] || declare -a dirstack
     prev_stack+=("${dirstack[@]}")
     # shellcheck disable=SC2296
-    prev_stack+=("${(@f)$(\\command zoxide query --list --exclude "$PWD" 2>/dev/null | head -50)}")
+    prev_stack+=("${(@f)$(\command zoxide query --list --exclude "$PWD" 2>/dev/null | head -50)}")
     # shellcheck disable=SC2296,SC2206
     prev_stack=(${(u)prev_stack[@]})
 
@@ -171,7 +170,7 @@ function super-cd {
         --preview='fzf-preview {}' \
         --preview-window=right:50% \
         --height=40%)
-      next_dir="${next_dir#$'\n'}"
+      next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
     else
       next_dir="${prev_stack[1]}"
     fi
@@ -201,6 +200,7 @@ function super-cd {
       --preview='fzf-preview {}' \
       --preview-window=right:50% \
       --height=40%)
+    next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
     if [[ -n "$next_dir" ]]; then
       \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
     fi
@@ -220,7 +220,7 @@ function super-cd {
   else
     # when the given parameter was not match by any of the previous criterias,
     # we fallback to use Zoxide to try to change directories
-    next_dir="$(\\command zoxide query --exclude "$PWD" -- "$@" 2>/dev/null)"
+    next_dir="$(\command zoxide query --exclude "$PWD" -- "$@" 2>/dev/null)"
     if [[ -n "$next_dir" ]]; then
       \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
     else

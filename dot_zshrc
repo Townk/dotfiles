@@ -33,11 +33,6 @@ zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl+v:toggle-preview'
 zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-j:down'
 zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-h:up'
 
-# Enable direnv to automatically source .envrc files.
-# zstyle ':z4h:direnv' enable 'yes'
-# Show "loading" and "unloading" notifications from direnv.
-# zstyle ':z4h:direnv:success' notify 'yes'
-
 # Enable ('yes') or disable ('no') automatic teleportation of z4h over
 # SSH when connecting to these hosts.
 zstyle ':z4h:ssh:cloud-desktop' enable 'yes'
@@ -84,7 +79,11 @@ zstyle ':z4h:*' fzf-flags \
   --preview 'fzf-preview {}' \
   --preview-window=right:60%:hidden
 
-export GOPATH=~/.local/share/go
+# Core Go paths
+export GOPATH="$XDG_DATA_HOME/go"
+export GOMODCACHE="$XDG_CACHE_HOME/go-mod"
+export GOCACHE="$XDG_CACHE_HOME/go-build"
+export GOBIN="$XDG_BIN_HOME"
 export GOPROXY=direct
 
 export HOMEBREW_NO_ENV_HINTS=1
@@ -131,16 +130,17 @@ export EDITOR=nvim
 export USERNAME='Thiago Alves'
 
 # Source additional local files if they exist.
+z4h source -- ${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/Library/Taps/homebrew/homebrew-command-not-found/handler.sh}
+# Configure zsh-abbr to use the user-abbreviations file from my zsh config dir
+ABBR_USER_ABBREVIATIONS_FILE="${HOME}/.config/zsh/user-abbreviations.sh"
+ABBR_DEFAULT_BINDINGS=0
+z4h source -- ${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/share/zsh-abbr/zsh-abbr.zsh}
+# I load my own functions at the end so it can use everything that was sourced
+# here to work
 z4h source ~/.config/zsh/functions.sh
-[[ -f "$HOMEBREW_PREFIX/Library/Taps/homebrew/homebrew-command-not-found/handler.sh" ]] \
-  && z4h source "$HOMEBREW_PREFIX/Library/Taps/homebrew/homebrew-command-not-found/handler.sh"
 
-# Use additional Git repositories pulled in with `z4h install`.
-# z4h load jeffreytse/zsh-vi-mode
-[[ -n $HOMEBREW_PREFIX ]] && z4h source "$HOMEBREW_PREFIX/share/zsh-abbr/zsh-abbr.zsh"
-
-z4h bindkey magic-space Space                # Expand abbreviation
-z4h bindkey abbr-expand-and-insert Alt+Space # undo the last command line change
+# Make Space expand more than just history!
+z4h bindkey smart-space-expansion Space # undo the last command line change
 
 # Define key bindings.
 z4h bindkey undo Ctrl+/    # undo the last command line change
@@ -169,6 +169,12 @@ autoload -Uz zmv
 typeset -g POWERLEVEL9K_INSTANT_PROMPT=quiet
 
 # Define aliases.
+# First we re-export all our abbreviations as normal alias. This takes care of
+# syntax highlight an abbreviation usage in other places that is not the first
+# thing in the command line.
+eval "$(abbr export-aliases)"
+# Then we load our own aliases that may or may not override anything from the
+# abbreviations.
 z4h source ~/.config/zsh/aliases.sh
 
 # Set shell options: http://zsh.sourceforge.net/Doc/Release/Options.html.
@@ -180,8 +186,9 @@ HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_NOT_FOUND="bg=none,fg=red,bold"
 HISTORY_SUBSTRING_SEARCH_GLOBBING_FLAGS="l"
 
 # The next snippet should only be executed if I'm opening a terminal.
-# Currently, the 3 possible terminal emulators I use are:
+# Currently, the 4 possible terminal emulators I use are:
 #
+# - WezTerm
 # - Kitty
 # - Alacritty
 # - iTerm2
@@ -201,13 +208,6 @@ if [[ -n "$WEZTERM_UNIX_SOCKET" ]] || [[ -n "$ALACRITTY_SOCKET" ]] || [[ -n "$KI
     type terminal_commands >/dev/null 2>&1 && terminal_commands
   fi
 fi
-
-# bun completions
-[ -s "/Users/thiago/.bun/_bun" ] && source "/Users/thiago/.bun/_bun"
-
-# bun
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
 
 # Run unalias -a when starting a shell session within OpenCode
 if [[ -n "$OPENCODE" ]]; then
