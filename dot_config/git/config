@@ -67,9 +67,6 @@
 [difftool]
   prompt = false
 
-; [difftool "nvimdiff"]
-;   cmd = "nvim -d \"$LOCAL\" \"$REMOTE\""
-
 [merge]
   ff = only
   tool = nvimdiff
@@ -185,5 +182,7 @@
   rank = "fame --enum -e --format tabulate"
   emails = ''!git log --format="%aE" | sort -u''
   email-domains = ''!git log --format="%aE" | awk -F'@' '{print $2}' | sort -u''
+
+  dv = "!f() { nvim -f -c \"DiffviewOpen $*\" -c 'autocmd TabClosed * qa'; }; f"
 
 # vim:ft=gitconfig

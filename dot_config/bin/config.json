@@ -3,12 +3,32 @@
     "bins": {
         "/Users/thiago/.local/bin/bin": {
             "path": "/Users/thiago/.local/bin/bin",
-            "remote_name": "bin_0.24.2_darwin_arm64",
-            "version": "v0.24.2",
-            "hash": "e49ac70cab086e95e4d7ee447ad7f9167888f80a95ad0a6869a22852b133ab8b",
-            "url": "github.com/marcosnils/bin",
+            "remote_name": "bin_0.25.5_darwin_arm64",
+            "version": "v0.25.5",
+            "hash": "ab875ee6b2526e515c09d2b0b272682ded5eec36f225984a50d74cfe7ad5190d",
+            "url": "https://github.com/marcosnils/bin/releases/tag/v0.25.5",
             "provider": "github",
             "package_path": "",
+            "pinned": false
+        },
+        "/Users/thiago/.local/bin/ollama-cli": {
+            "path": "/Users/thiago/.local/bin/ollama-cli",
+            "remote_name": "ollama-cli-darwin-arm64",
+            "version": "v0.1.4",
+            "hash": "ff68aaf27a1a767ff34712bed3be7d2a946ecaa9dc80f38cdf5d6c1bae36f984",
+            "url": "https://github.com/masgari/ollama-cli/releases/tag/v0.1.4",
+            "provider": "github",
+            "package_path": "",
+            "pinned": false
+        },
+        "/Users/thiago/.local/bin/restman": {
+            "path": "/Users/thiago/.local/bin/restman",
+            "remote_name": "restman",
+            "version": "v0.4.9",
+            "hash": "7a753edcf15d33abfada220fb42f8a82bd0d2d09f5f8d736b5c9e7dba2f76567",
+            "url": "https://github.com/jackMort/Restman",
+            "provider": "github",
+            "package_path": "restman",
             "pinned": false
         }
     }

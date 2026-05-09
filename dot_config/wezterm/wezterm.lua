@@ -81,7 +81,10 @@ statusbar.apply_to_config(config, {
 
 quick_launch.apply_to_config(config, {
 	cache = statusbar.naming_cache,
-	editor = "/opt/homebrew/bin/nvim",
+	tools = {
+		editor = "/opt/homebrew/bin/nvim",
+    mise = "/opt/homebrew/bin/mise",
+	},
 })
 
 smart_splits.apply_to_config(config, {

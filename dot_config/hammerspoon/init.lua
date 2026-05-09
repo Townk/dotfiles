@@ -88,8 +88,9 @@ kb.setup({
 				{
 					key = "a", icon = "", desc = "Apps",
 					group = {
+            { key = "c", icon = "󰈊", desc = "Color picker (ColorSlurp)", action = apps.colorSlurpPickColor },
 						{ key = "p", icon = "󰩷", desc = "Screen measurements (PixelSnap)", action = apps.pixelSnapFindDimensions },
-						{ key = "c", icon = "󰈊", desc = "Color picker (ColorSlurp)", action = apps.colorSlurpPickColor },
+						{ key = "s", icon = "", desc = "Screenshot (CleanShot X)", action = apps.cleanshotCaptureArea },
 					},
 				},
         {

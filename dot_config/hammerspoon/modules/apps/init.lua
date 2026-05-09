@@ -28,33 +28,29 @@ function M.pixelSnapFindDimensions()
 	end
 end
 
-function M.xScopeMeasurements()
-	hs.urlevent.openURL("xscope://x-callback-url/Dimensions")
-end
-
 --- Open the ColorSlurp color picker magnifier via URL scheme.
 function M.colorSlurpPickColor()
 	hs.urlevent.openURL("colorslurp://x-callback-url/show-magnifier")
 end
 
 --- Capture the full screen with Shottr via URL scheme.
-function M.shottrCaptureScreen()
-	hs.urlevent.openURL("shottr://grab/fullscreen")
+function M.cleanshotCaptureScreen()
+	hs.urlevent.openURL("cleanshot://capture-fullscreen")
 end
 
 --- Capture a selected area with Shottr via URL scheme.
-function M.shottrCaptureArea()
-	hs.urlevent.openURL("shottr://grab/area")
+function M.cleanshotCaptureArea()
+	hs.urlevent.openURL("cleanshot://capture-area")
 end
 
 --- Capture a scrolling screenshot with Shottr via URL scheme.
-function M.shottrCaptureScrolling()
-	hs.urlevent.openURL("shottr://grab/scrolling")
+function M.cleanshotCaptureScrolling()
+	hs.urlevent.openURL("cleanshot://scrolling-capture")
 end
 
 --- Capture text via OCR with Shottr via URL scheme.
-function M.shottrCaptureOCR()
-	hs.urlevent.openURL("shottr://ocr")
+function M.cleanshotCaptureOCR()
+	hs.urlevent.openURL("cleanshot://capture-text")
 end
 
 function M.raycastSearchSVG()

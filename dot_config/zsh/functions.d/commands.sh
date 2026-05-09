@@ -23,6 +23,8 @@ function system-update {
   print -P -- "\n🛠️ Upgrade bin tools...\n"
   bin update -a -y
   bin prune -f
+  print -P -- "\n🛠️ Upgrade uv tools...\n"
+  uv tool upgrade --all
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
 
   print -P -- "\n📝 Upgrade NeoVim plugins...\n"

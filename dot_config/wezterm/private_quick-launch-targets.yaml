@@ -18,6 +18,39 @@ workspaces:
           type: "Shell"
           label: " Open terminal on my custom QMK userspace Keymap directory"
           cwd: "~/Projects/hardware/qmk-config"
+    panes:
+      - id: "qmk-compile"
+        name: "QMK Build"
+        icon: " "
+        direction: "Bottom"
+        size: 0.40
+        optional: true
+        action:
+          type: "Run"
+          label: "Build Svalboard Lightly Firmware"
+          cwd: "~/Projects/hardware/qmk-config"
+          python_venv: auto
+          args:
+            - printf '┏━━━━━━━━━━━━━━━━━┓\n┃ Left side build ┃\n┻━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+            - qmk compile -kb svalboard/trackball/pmw3389/left -km townk
+            - printf '\n┏━━━━━━━━━━━━━━━━━━┓\n┃ Right side build ┃\n┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+            - qmk compile -kb svalboard/trackball/pmw3389/right -km townk
+            - printf '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPress any key to close the pane'
+            - sleep 5
+
+      - id: "qmk-flash-right"
+        name: "QMK Flash Right"
+        icon: "󱊟 "
+        direction: "Bottom"
+        size: 0.40
+        optional: true
+        action:
+          type: "Run"
+          label: "Flash the Svalboard Lightly right half firmware"
+          cwd: "~/Projects/hardware/qmk-config"
+          python_venv: auto
+          args:
+            - qmk flash -kb svalboard/trackball/pmw3389/right -km townk
 
   - id: "wezterm-plugins"
     name: "Wezterm Plugins"
@@ -56,38 +89,6 @@ workspaces:
           cwd: "~/.local/share/wezterm"
           args:
             - tail -n 50 -f wezterm-gui-log-%PID%.txt
-
-    panes:
-      - id: "qmk-compile"
-        name: "QMK Build"
-        icon: " "
-        direction: "Bottom"
-        size: 0.40
-        optional: true
-        action:
-          type: "Run"
-          label: "Build Svalboard Lightly Firmware"
-          cwd: "~/Projects/hardware/qmk-config"
-          args: 
-            - printf '┏━━━━━━━━━━━━━━━━━┓\n┃ Left side build ┃\n┻━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
-            - qmk compile -kb svalboard/trackball/pmw3389/left -km townk
-            - printf '\n┏━━━━━━━━━━━━━━━━━━┓\n┃ Right side build ┃\n┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
-            - qmk compile -kb svalboard/trackball/pmw3389/right -km townk
-            - printf '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPress any key to close the pane'
-            - sleep 5
-
-      - id: "qmk-flash-right"
-        name: "QMK Flash Right"
-        icon: "󱊟 "
-        direction: "Bottom"
-        size: 0.40
-        optional: true
-        action:
-          type: "Run"
-          label: "Flash the Svalboard Lightly right half firmware"
-          cwd: "~/Projects/hardware/qmk-config"
-          args: 
-            - qmk flash -kb svalboard/trackball/pmw3389/right -km townk
 
 tabs:
   - id: "launcher-items"
@@ -135,6 +136,15 @@ tabs:
       cwd: "~/.config/nvim"
       args: [ "init.lua" ]
 
+  - id: "hammerspoon-config"
+    name: "Hammerspoon Config"
+    icon: "󰣪 "
+    action:
+      type: "Edit"
+      label: "Edit Hammerspoon configuration"
+      cwd: "~/.config/hammerspoon"
+      args: [ "init.lua" ]
+
   - id: "system-resources"
     name: "System Resources"
     icon: " "
@@ -142,7 +152,7 @@ tabs:
       type: "Run"
       label: "Open System Resources"
       args:
-        - btm --battery
+        - /opt/homebrew/bin/btm --battery
 
   - id: "network-activity"
     name: "Network activity"
@@ -151,7 +161,7 @@ tabs:
       type: "Run"
       label: "Open Network activity"
       args:
-        - sudo bandwhich --total-utilization
+        - sudo /opt/homebrew/bin/bandwhich --total-utilization
 
 panes:
   - id: "git-log"
@@ -165,7 +175,7 @@ panes:
       type: "Run"
       label: "Git Log on current directory"
       args:
-        - git log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)' --all
+        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && LESS='-RSX' /opt/homebrew/bin/git log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)' --all } || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key }"
 
   - id: "lazy-git"
     name: "LazyGit"
@@ -178,4 +188,4 @@ panes:
       type: "Run"
       label: "Open LazyGit on current directory"
       args:
-        - lazygit
+        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && /opt/homebrew/bin/lazygit }  || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key }"

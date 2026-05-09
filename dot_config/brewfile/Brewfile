@@ -72,6 +72,7 @@ cask 'raycast'                      # System Launcher
 cask 'android-studio'               # Android IDE
 cask 'visual-studio-code'           # Everything Editor/IDE
 cask 'pycharm'                      # Python IDE
+cask 'clion'                        # C++ IDE
 cask 'wezterm@nightly'              # Terminal emulator
 
 # Podcast
@@ -96,12 +97,14 @@ cask 'claude-code'                  # AI for developers CLI
 cask 'discord'                      # Chat (a more open Slack)
 cask 'dropbox'                      # Cloud storage
 cask 'google-chrome'                # Browser
+cask 'microsoft-teams'              # Meetings
 cask 'obsidian'                     # Note taking
 cask 'pixelsnap'                    # Measure pixels in the screen
 cask 'proton-mail'                  # Secure Email
+cask 'proton-mail-bridge'           # Allow other mail clients access proton mails
 cask 'rustdesk'                     # Better remote desktop for macOS
-cask 'shottr'                       # Better screenshots
-cask 'slack'                        # Meetings
+cask 'cleanshot'                    # Better screenshots
+cask 'steam'                        # Gaming
 cask 'zen'                          # Browser
 cask 'zoom'                         # Meetings
 
@@ -155,7 +158,9 @@ brew 'zsh-abbr'                     # Commnad abbreviations for ZSH
 
 # Development
 # -----------
+brew 'caddy'                        # Reverse proxy for locally running apps
 brew 'mise'                         # Programming tool installer
+brew 'container'                    # Apple version of docker
 
 # Dependency utilities (tools required by other tools)
 # ----------------------------------------------------
@@ -221,9 +226,11 @@ brew 'jq'                           # The JSON CLI processor
 brew 'lazygit'                      # Git TUA
 brew 'lazysql'                      # DB TUA
 brew 'macchina'                     # Environment summary when open a shell
+brew 'mole'                         # Clean up tool
 brew 'mosh'                         # Intermittent connectivity remote connection (`ssh` but better[-ish])
 brew 'neovim'                       # Editor
 brew 'anomalyco/tap/opencode'       # AI CLI agent
+brew 'ollama'                       # Local AI models
 brew 'pinentry-mac'                 # Password entry application for Mac
 brew 'pipx'                         # python scripts globaly available
 brew 'plantuml'                     # UML in text

@@ -9,22 +9,17 @@
         <string>sh</string>
         <string>-c</string>
         <string>
-            # 1. Capture the true system values
-            USER_HOME=$(dscl . -read "/Users/$USER" NFSHomeDirectory | cut -d' ' -f2);
-            USER_ID=$(id -u);
-            TEMP_DIR=$(getconf DARWIN_USER_TEMP_DIR);
+            # Source of truth: ~/.config/zsh/environment.sh
+            # ~/.zshenv sources the same file, so shells and GUI apps see
+            # identical XDG values without duplicating definitions.
+            . "$HOME/.config/zsh/environment.sh"
 
-            # 2. Set the environment variables
-            launchctl setenv XDG_RUNTIME_DIR "${TEMP_DIR%/}/runtime-$USER_ID";
-            launchctl setenv XDG_CONFIG_HOME "$USER_HOME/.config";
-            launchctl setenv XDG_CACHE_HOME "$USER_HOME/.cache";
-            launchctl setenv XDG_DATA_HOME "$USER_HOME/.local/share";
-            launchctl setenv XDG_STATE_HOME "$USER_HOME/.local/state";
-            launchctl setenv XDG_BIN_HOME "$USER_HOME/.local/bin";
+            for v in XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_BIN_HOME XDG_RUNTIME_DIR; do
+                eval "launchctl setenv $v \"\$$v\""
+            done
 
-            # 3. Optional: Create the runtime directory if it doesn't exist
-            mkdir -p "${TEMP_DIR%/}/runtime-$USER_ID";
-            chmod 700 "${TEMP_DIR%/}/runtime-$USER_ID";
+            mkdir -p "$XDG_RUNTIME_DIR"
+            chmod 700 "$XDG_RUNTIME_DIR"
         </string>
     </array>
     <key>RunAtLoad</key>
