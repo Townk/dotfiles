@@ -1,38 +1,9 @@
 source "${0:A:h}/_lib.sh"
 
-# This is the main function to update my system.
-# It is idempotent and it cleans up after itself.
-# I usually run this function every day before starting my work.
-function system-update {
-  print -P -- "\n${C_BLU}System Update\n-------------${C_RES}"
-  print -P -- "\n  Updating Homebrew sources...\n"
-  brew update || die "\n${C_RED}Error${C_RES}: Failed to update Homebrew!" || return
-  print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
-  cat ~/.config/brewfile/Brewfile | brew bundle install -q --cleanup --upgrade --file=- || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew Bundle!" || return
-  print -P -- "\n🍺 Upgrade Homebrew formulas...\n"
-  brew upgrade || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew formulas!" || return
-  print -P -- "\n🍺 Upgrade Homebrew casks...\n"
-  brew upgrade --cask --greedy-latest || die "\n${C_RED}Error${C_RES}: Failed to upgrade Homebrew casks!" || return
-  print -P -- "\n🧹 Cleanning up Homebrew artifacts...\n"
-  brew cleanup -q --prune=all || die "\n${C_RED}Error${C_RES}: Failed to clean up Homebrew files!" || return
-  print -P -- "\n🦆 Upgrade Yazi plugins...\n"
-  ya pkg upgrade || die "\n${C_RED}Error${C_RES}: Failed to upgrade Yazi plugins!" || return
-  print -P -- "\n🛠️ Upgrade Mise tools...\n"
-  mise upgrade
-  mise prune -y
-  print -P -- "\n🛠️ Upgrade bin tools...\n"
-  bin update -a -y
-  bin prune -f
-  print -P -- "\n🛠️ Upgrade uv tools...\n"
-  uv tool upgrade --all
-  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
-
-  print -P -- "\n📝 Upgrade NeoVim plugins...\n"
-  nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" || die "\n${C_RED}Error${C_RES}: Failed to upgrade NeoVim plugins!" || return
-
-  print -P -- "\n🐚 Upgrade zsh4humans...\n"
-  z4h update || die "\n${C_RED}Error${C_RES}: Failed to upgrade zsh4humans!" || return
-}
+# `system-update` lives as a script at ~/.local/bin/system-update so the
+# chezmoi bootstrap (run_once_after_setup-bootstrap-tools.sh.tmpl) can
+# invoke it without entering an interactive shell. The bare command name
+# still works from the prompt because ~/.local/bin is on $PATH.
 
 # I decide to make my MOTD screen a function to allow me to call it
 # arbitrarially if I wanted.
@@ -46,9 +17,9 @@ function motd() {
 #
 # 0                                                                                               98
 # --------------------------------------------------------------------------------------------------
-#  Available Commands%f
+#  Available Commands%f
 #
-#  SYSTEM                         󰇺 PROCESSORS                      UTILITIES
+#  SYSTEM                         󰇺 PROCESSORS                      UTILITIES
 #   ------                           ----------                       ---------
 #   tldr      - Extra help           jq      - JSON processor         7zz       - 7-Zip cli
 #   btm       - 'top' (bottom)       gron    - JSON to list assign    eva       - Calculator
@@ -56,16 +27,16 @@ function motd() {
 #   duf       - Disk usage           yq      - YAML processor         fend      - Unit conversion
 #   y         - Files (yazi)         pandoc  - Any text processor     gh        - GitHub cli
 #                                                                     git       - Version control
-#  NETWORK                        󰊪 VISUALIZERS                      grex      - RegEx generator
+#  NETWORK                        󰊪 VISUALIZERS                      grex      - RegEx generator
 #   -------                          -----------                      hyperfine - Benchmark
 #   bandwhich - Network use          jless   - JSON tree              rg        - 'grep' (ripgrep)
 #   doggo     - DNS look-up          tokei   - Code metrics           t-rec     - Terminal recorder
 #   gping     - Latency graph        tv      - csv (tidy-viewer)      unrar     - Handle .rar format
 # --------------------------------------------------------------------------------------------------
 function terminal_commands() {
-  print -P -- "$C_BLU Available Commands$C_RES
+  print -P -- "$C_BLU Available Commands$C_RES
 
-  ${C_YEL} SYSTEM${C_RES}                         ${C_YEL}󰇺 PROCESSORS${C_RES}                     ${C_YEL} UTILITIES${C_RES}
+  ${C_YEL} SYSTEM${C_RES}                         ${C_YEL}󰇺 PROCESSORS${C_RES}                     ${C_YEL} UTILITIES${C_RES}
   ${C_YEL}------${C_RES}                           ${C_YEL}----------${C_RES}                       ${C_YEL}---------${C_RES}
   ${C_BWH}btm${C_RES}       - 'top' (bottom)       ${C_BWH}jq${C_RES}      - JSON processor         ${C_BWH}7zz${C_RES}       - 7-Zip cli
   ${C_BWH}duf${C_RES}       - Disk usage 'du'      ${C_BWH}pandoc${C_RES}  - Any text processor     ${C_BWH}eva${C_RES}       - Calculator
@@ -73,7 +44,7 @@ function terminal_commands() {
   ${C_BWH}procs${C_RES}     - Processes 'ps'       ${C_BWH}xq${C_RES}      - XML processor          ${C_BWH}fend${C_RES}      - Unit conversion
   ${C_BWH}tldr${C_RES}      - Extra help           ${C_BWH}yq${C_RES}      - YAML processor         ${C_BWH}gh${C_RES}        - GitHub cli
                                                                     ${C_BWH}git${C_RES}       - Version control
-  ${C_YEL} NETWORK                        ${C_YEL}󰊪 VISUALIZERS                    ${C_BWH}grex${C_RES}      - RegEx generator
+  ${C_YEL} NETWORK                        ${C_YEL}󰊪 VISUALIZERS                    ${C_BWH}grex${C_RES}      - RegEx generator
   ${C_YEL}-------                          ${C_YEL}-----------                      ${C_BWH}hyperfine${C_RES} - Benchmark
   ${C_BWH}bandwhich${C_RES} - Network use          ${C_BWH}jless${C_RES}   - JSON tree              ${C_BWH}rg${C_RES}        - 'grep' (ripgrep)
   ${C_BWH}doggo${C_RES}     - DNS look-up          ${C_BWH}tokei${C_RES}   - Code metrics           ${C_BWH}t-rec${C_RES}     - Terminal recorder

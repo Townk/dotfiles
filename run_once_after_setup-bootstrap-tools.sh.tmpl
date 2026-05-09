@@ -1,31 +1,36 @@
 #!/bin/bash
 set -eufo pipefail
 
-echo "🔧  Creating user directory for system sockets..."
+echo "🔧  Ensuring user directory for system sockets exists..."
 RUNTIME_DIR="$TMPDIR/runtime-$UID"
-\mkdir "$RUNTIME_DIR"
+\mkdir -p "$RUNTIME_DIR"
 \chmod 0700 "$RUNTIME_DIR"
 
-echo "🛠️  Bootstrap Mise-En-Place tools..."
-mise upgrade
-
-if [ -d "$HOME/.config/nvim/.git" ]; then
-  echo "ℹ️  NeoVim Config already initialized, pulling latest changes..."
-  \cd ~/.config/nvim
-  git pull
-  echo "✅  NeoVim Config updated"
+# NeoVim config repo. Cloned with plain `git` rather than `gh repo clone`
+# because gh is installed by the brew bundle inside system-update below,
+# so it isn't yet available on a truly fresh machine. Subsequent runs
+# fast-forward instead of re-cloning.
+if [ ! -d "$HOME/.config/nvim/.git" ]; then
+  echo "🚀  Cloning NeoVim config..."
+  git clone https://github.com/Townk/nvim-config.git "$HOME/.config/nvim"
 else
-  gh repo clone Townk/nvim-config "$HOME/.config/nvim"
-  \cd ~/.config/nvim
+  echo "ℹ️  NeoVim config already cloned, fast-forwarding..."
+  git -C "$HOME/.config/nvim" pull --ff-only
 fi
+
+# system-update is the canonical "everything at latest" implementation
+# (also exposed as the user-facing `system-update` command). On a fresh
+# machine it installs Brewfile contents + mise tools + Yazi plugins +
+# NeoVim plugins + z4h. On an already-bootstrapped machine, it brings
+# everything to latest. Either way the post-state is identical, which
+# closes the gap where this script previously assumed mise/gh/nvim/etc.
+# were already installed.
+echo "♻️  Running system-update to converge tools to latest..."
+"$HOME/.local/bin/system-update"
+
+# Rust nightly isn't pinned in any tool manifest, so `mise upgrade` inside
+# system-update doesn't catch it. Add it once mise itself is installed.
+echo "🦀  Installing Rust nightly..."
 mise install rust@nightly -q
-if [ -d "$HOME/.local/share/nvim/lazy/LazyVim/.git" ]; then
-  echo "ℹ️  NeoVim Config already bootstrapped, updating latest plugins..."
-  nvim --headless "+Lazy! update" "+Lazy load mason-tool-installer.nvim" "+MasonToolsInstallSync" "+quitall"
-else
-  nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall"
-fi
-\cd -
-echo "✅  NeoVim plugins updated"
 
-
+# vim:ft=sh
