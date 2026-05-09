@@ -1,9 +1,9 @@
 [plugin]
 prepend_fetchers = [
-  { id = "git", name = "*", run = "git" },
-  { id = "git", name = "*/", run = "git" },
-  { id = "mactag", name = "*", run = "mactag" },
-  { id = "mactag", name = "*/", run = "mactag" },
+  { url = "*", run = "git", group = "git" },
+  { url = "*/", run = "git", group = "git" },
+  { url = "*", run = "mactag", group = "mactag" },
+  { url = "*/", run = "mactag", group = "mactag" },
 ]
 
 prepend_preloaders = [
@@ -27,11 +27,11 @@ prepend_previewers = [
   { mime = "application/subrip", run = "mediainfo" },
   # Adobe Illustrator, Adobe Photoshop is image/adobe.photoshop, already handled above
   { mime = "application/postscript", run = "mediainfo" },
-  { name = "*.csv", run = 'piper -- rich -w $w -j --left --panel=rounded --guides --line-numbers --force-terminal "$1"' },
-  { name = "*.md", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
-  { name = "*.rst", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
-  { name = "*.ipynb", run = 'piper -- rich -w $w -j --left --panel=rounded --guides --line-numbers --force-terminal "$1"' },
-  { name = "*.json", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
+  { url = "*.csv", run = 'piper -- rich -w $w -j --left --panel=rounded --guides --line-numbers --force-terminal "$1"' },
+  { url = "*.md", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
+  { url = "*.rst", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
+  { url = "*.ipynb", run = 'piper -- rich -w $w -j --left --panel=rounded --guides --line-numbers --force-terminal "$1"' },
+  { url = "*.json", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
 ]
 
-append_previewers = [{ name = "*", run = "hexyl" }]
+append_previewers = [{ url = "*", run = "hexyl" }]
