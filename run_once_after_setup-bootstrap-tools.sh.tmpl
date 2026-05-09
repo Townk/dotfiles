@@ -6,18 +6,6 @@ RUNTIME_DIR="$TMPDIR/runtime-$UID"
 \mkdir -p "$RUNTIME_DIR"
 \chmod 0700 "$RUNTIME_DIR"
 
-# NeoVim config repo. Cloned with plain `git` rather than `gh repo clone`
-# because gh is installed by the brew bundle inside system-update below,
-# so it isn't yet available on a truly fresh machine. Subsequent runs
-# fast-forward instead of re-cloning.
-if [ ! -d "$HOME/.config/nvim/.git" ]; then
-  echo "🚀  Cloning NeoVim config..."
-  git clone https://github.com/Townk/nvim-config.git "$HOME/.config/nvim"
-else
-  echo "ℹ️  NeoVim config already cloned, fast-forwarding..."
-  git -C "$HOME/.config/nvim" pull --ff-only
-fi
-
 # system-update is the canonical "everything at latest" implementation
 # (also exposed as the user-facing `system-update` command). On a fresh
 # machine it installs Brewfile contents + mise tools + Yazi plugins +

@@ -25,7 +25,7 @@ source can later coexist with a Linux machine without polluting it.
 | `dot_local/bin/nvim-wez.sh` | Engine behind the macOS "Open in NeoVim" Shortcuts droplet. |
 | `dot_local/share/shortcuts/` | Exported macOS Shortcuts (`.shortcut` files). |
 | `Library/private_Application Support/` | macOS symlinks to XDG paths (e.g. tealdeer's config). |
-| `run_once_after_setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, clone nvim-config, run `system-update`, install `rust@nightly`. |
+| `run_once_after_setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, run `system-update`, install `rust@nightly`. |
 | `run_once_after_setup-system-settings.sh.tmpl` | macOS `defaults`, Finder, Dock, login items. |
 | `run_onchange_after_install-macos-shortcut.sh.tmpl` | Re-imports `Open in NeoVim.shortcut` whenever its content hash changes. |
 
@@ -51,12 +51,11 @@ End to end, the script:
 5. Runs `chezmoi init Townk` + `chezmoi apply`. This clones the repo into
    chezmoi's source path, deploys every tracked file, and fires the
    bootstrap scripts:
-   - `setup-bootstrap-tools.sh.tmpl` clones the NeoVim config repo (plain
-     `git clone` — `gh` isn't installed yet), then calls
-     `~/.local/bin/system-update` which installs `Brewfile.bootstrap` +
-     `Brewfile`, upgrades formulas/casks, runs `mise upgrade`, syncs Yazi
-     plugins, runs Lazy/Mason for NeoVim, and updates zsh4humans. Finally
-     it installs `rust@nightly` via mise.
+   - `setup-bootstrap-tools.sh.tmpl` calls `~/.local/bin/system-update`
+     which installs `Brewfile.bootstrap` + `Brewfile`, upgrades
+     formulas/casks, runs `mise upgrade`, syncs Yazi plugins, runs
+     Lazy/Mason for NeoVim, and updates zsh4humans. Finally it installs
+     `rust@nightly` via mise.
    - `setup-system-settings.sh.tmpl` writes macOS `defaults` (keyboard,
      trackpad, dock, finder), and registers `Dropbox` / `Hammerspoon` /
      `Raycast` / `SoundSource` as login items.
