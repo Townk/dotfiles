@@ -1,0 +1,36 @@
+# Catppuccin Mocha
+# https://github.com/catppuccin/catppuccin
+
+[style.description]
+# Subtext0
+foreground = { rgb = { r = 166, g = 173, b = 200 } }
+
+[style.command_name]
+# Mauve
+foreground = { rgb = { r = 203, g = 166, b = 247 } }
+bold = true
+
+[style.example_text]
+# Text
+foreground = { rgb = { r = 205, g = 214, b = 244 } }
+italic = true
+
+[style.example_code]
+# Blue
+foreground = { rgb = { r = 137, g = 180, b = 250 } }
+
+[style.example_variable]
+# Peach
+foreground = { rgb = { r = 250, g = 179, b = 135 } }
+italic = true
+
+[display]
+show_title = true
+
+[updates]
+auto_update = true
+auto_update_interval_hours = 168
+
+[directories]
+cache_dir = "{{ .chezmoi.homeDir }}/.cache/tealdeer"
+custom_pages_dir = "{{ .chezmoi.homeDir }}/.local/share/tealdeer/pages"
