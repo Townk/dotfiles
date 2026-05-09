@@ -16,7 +16,7 @@ source can later coexist with a Linux machine without polluting it.
 | `dot_config/git/` | Git config, ignore, attributes, message templates, delta integration. |
 | `dot_config/wezterm/` | WezTerm config + custom quick-launch and statusbar plugin configs. |
 | `dot_config/hammerspoon/` | Stream Deck+ integration, system controls, MOTD overlays. |
-| `dot_config/nvim/` | **Not stored here** — cloned from [`Townk/nvim-config`](https://github.com/Townk/nvim-config) by the bootstrap script. |
+| `dot_config/nvim/` | LazyVim-based NeoVim config (`init.lua`, plugins, snippets, spell, lockfile). |
 | `dot_config/yazi/` | Yazi file manager config + plugins. |
 | `dot_config/tealdeer/` | tldr client (Catppuccin Mocha theme, templated). |
 | `dot_config/atuin/`, `mise/`, `bin/`, `espanso/` | CLI tool configs. |

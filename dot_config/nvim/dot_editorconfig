@@ -1,0 +1,33 @@
+# Example .editorconfig with comments_width support
+# The smart-comment-wrap.lua plugin reads this custom property
+
+root = true
+
+[*]
+# indent_style = space
+# indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# Code wraps at 100, but comments wrap at 80
+max_line_length = 100
+comments_width = 80
+
+[*.{c,cpp,h,hpp}]
+indent_size = 4
+max_line_length = 120
+comments_width = 80
+
+[*.py]
+indent_size = 4
+max_line_length = 100
+comments_width = 72
+
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = 100
+
+[Makefile]
+indent_style = tab
