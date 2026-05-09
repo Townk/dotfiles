@@ -2,8 +2,8 @@
 
 Personal dotfiles for macOS (Apple Silicon), managed by
 [chezmoi](https://www.chezmoi.io). macOS-specific artifacts are gated to
-`darwin` via `.chezmoiignore.tmpl` and per-script template guards so the
-same source can later coexist with a Linux machine without polluting it.
+`darwin` via `.chezmoiignore.tmpl` and per-script template guards so the same
+source can later coexist with a Linux machine without polluting it.
 
 ## What's inside
 
@@ -31,42 +31,55 @@ same source can later coexist with a Linux machine without polluting it.
 
 ## Bootstrap on a fresh Mac
 
-```sh
-# 1. Clone the source repo into chezmoi's source path.
-git clone https://github.com/Townk/dotfiles.git ~/.local/share/chezmoi
+Prereqs: `curl` and `bash` — both ship with macOS by default. That's it.
 
-# 2. Run the entry-point bootstrap script.
-~/.local/share/chezmoi/.setup.sh
+```sh
+curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash
 ```
 
-What `.setup.sh` does, end to end:
+`.setup.sh` is self-bootstrapping: it installs Xcode Command Line Tools,
+Homebrew, and chezmoi; uses `chezmoi init Townk` to clone this repo into
+`~/.local/share/chezmoi/`; runs `chezmoi apply`; and finishes with the
+1Password / GitHub auth gates that need a human.
+
+End to end, the script:
 
 1. Creates the XDG directories (`~/.config`, `~/.cache`, `~/.local/{bin,share,state}`).
-2. Installs Xcode Command Line Tools.
-3. Installs Homebrew.
+2. Installs Xcode Command Line Tools (gates on `xcode-select --install`).
+3. Installs Homebrew (curl-piped from `Homebrew/install`).
 4. Installs `chezmoi` (via brew).
-5. Runs `chezmoi init` + `chezmoi apply`. This deploys every tracked file
-   and fires the bootstrap scripts:
-   - `setup-bootstrap-tools.sh.tmpl` clones the NeoVim config repo, then
-     calls `~/.local/bin/system-update` which installs `Brewfile.bootstrap` +
-     `Brewfile`, upgrades all formulas/casks, runs `mise upgrade`, syncs
-     Yazi plugins, runs Lazy/Mason for NeoVim, and updates zsh4humans.
-     Finally it installs `rust@nightly` via mise.
+5. Runs `chezmoi init Townk` + `chezmoi apply`. This clones the repo into
+   chezmoi's source path, deploys every tracked file, and fires the
+   bootstrap scripts:
+   - `setup-bootstrap-tools.sh.tmpl` clones the NeoVim config repo (plain
+     `git clone` — `gh` isn't installed yet), then calls
+     `~/.local/bin/system-update` which installs `Brewfile.bootstrap` +
+     `Brewfile`, upgrades formulas/casks, runs `mise upgrade`, syncs Yazi
+     plugins, runs Lazy/Mason for NeoVim, and updates zsh4humans. Finally
+     it installs `rust@nightly` via mise.
    - `setup-system-settings.sh.tmpl` writes macOS `defaults` (keyboard,
-     trackpad, dock, finder), and registers `Dropbox`/`Hammerspoon`/
-     `Raycast`/`SoundSource` as login items.
-   - `install-macos-shortcut.sh.tmpl` opens the `Open in NeoVim.shortcut`
-     in Shortcuts.app (one-click confirmation needed).
+     trackpad, dock, finder), and registers `Dropbox` / `Hammerspoon` /
+     `Raycast` / `SoundSource` as login items.
+   - `install-macos-shortcut.sh.tmpl` opens `Open in NeoVim.shortcut` in
+     Shortcuts.app (one-click confirmation needed).
 6. Re-installs `Brewfile.bootstrap` directly (idempotent — typically a
-   no-op since step 5 already did it).
-7. Pauses for manual 1Password CLI integration (you enable it in
-   1Password's Developer settings; the script polls `op account list`).
+   no-op since step 5 already did it; kept as a fail-safe in case the
+   bootstrap aborted partway).
+7. Pauses for manual 1Password CLI integration (enable it in 1Password's
+   Developer settings; the script polls `op account list`).
 8. Runs `gh auth login`.
 9. Downloads and installs [`bin`](https://github.com/marcosnils/bin) via
    `gh release download`.
 
 After it returns, the machine is fully provisioned. **Reboot recommended**
 so login items and macOS defaults take effect.
+
+`chezmoi init` clones via HTTPS. To switch to SSH afterwards (once your
+1Password SSH agent is configured):
+
+```sh
+git -C ~/.local/share/chezmoi remote set-url origin git@github.com:Townk/dotfiles.git
+```
 
 ## Day-to-day workflow
 

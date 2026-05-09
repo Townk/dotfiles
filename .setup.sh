@@ -29,6 +29,15 @@ else
   echo "✅  Homebrew installed successfully."
 fi
 
+# Make brew available on PATH for the current shell. The Homebrew installer
+# only configures future shells; without this, the next `brew install` line
+# would error on a truly fresh machine.
+if [ -x "/opt/homebrew/bin/brew" ]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [ -x "/usr/local/bin/brew" ]; then
+  eval "$(/usr/local/bin/brew shellenv)"
+fi
+
 if which -s "chezmoi"; then
   echo "✅  Chezmoi is already installed."
 else
@@ -41,7 +50,10 @@ if [ -d "$HOME/.local/share/chezmoi/.git" ]; then
   chezmoi update
   echo "✅  Chezmoi updated"
 else
-  chezmoi init carloscuesta
+  # `chezmoi init <user>` clones https://github.com/<user>/dotfiles.git
+  # into ~/.local/share/chezmoi/, which is the source path the rest of
+  # this script (and the run_once bootstrap inside chezmoi apply) assumes.
+  chezmoi init Townk
   chezmoi apply
   echo "✅  Chezmoi initialized"
 fi
