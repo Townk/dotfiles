@@ -88,7 +88,7 @@ cask 'obs'                          # Studio
 
 # Other Apps
 cask '1password'                    # Password manager
-cask '1password-cli'                # Security CLI
+# `1password-cli` lives in Brewfile.bootstrap (needed by .setup.sh)
 cask 'affinity'                     # Vector and Image editor
 cask 'autodesk-fusion'              # 3D modeling
 cask 'bambu-studio'                 # 3D Printing
@@ -214,7 +214,7 @@ brew 'fd'                           # Find entries in the file system (`find` bu
 brew 'fend'                         # Terminal unit conversion
 brew 'fzf'                          # Fuzzy Finder for CLI
 brew 'gemini-cli'                   # Claude-code from Google
-brew 'gh'                           # GitHub CLI
+# `gh` lives in Brewfile.bootstrap (needed by .setup.sh)
 brew 'gpg-tui'                      # Manage GPG keys on terminal
 brew 'gping'                        # ping, but with graph
 brew 'grex'                         # RegEx generator from targets

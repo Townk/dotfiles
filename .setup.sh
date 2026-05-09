@@ -46,6 +46,15 @@ else
   echo "✅  Chezmoi initialized"
 fi
 
+# Install the bootstrap Brewfile (gh, 1password-cli, tap). These are the
+# tools the rest of `.setup.sh` itself needs — `gh` to download `bin`, and
+# `op` to gate on 1Password CLI integration. Read from the chezmoi source
+# location since the deployed copy at ~/.config/brewfile/ may already be
+# in place by now (after the `chezmoi apply` above), but referencing the
+# source makes this robust to the deploy-order changing.
+echo "🍻  Installing bootstrap Brewfile..."
+brew bundle install --file="$HOME/.local/share/chezmoi/dot_config/brewfile/Brewfile.bootstrap"
+
 while ! op account list &>/dev/null; do
   echo "--------------------------------------------------------"
   echo "⚠️  ACTION REQUIRED: Manual Step Needed"
