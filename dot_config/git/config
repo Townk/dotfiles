@@ -3,40 +3,38 @@
   email = thiago@rapinialves.com
   signingKey = A9C4A3D8CA995D91
 
-#    delta = {
-#      enable = true;
-#      options = {
-#        features = "unobtrusive-line-numbers side-by-side decorations";
-#        zero-style = "syntax";
-#        plus-style = "syntax #053f1f";
-#        plus-emph-style = "#2bfa84 #00703e";
-#        minus-style = "syntax #3e151d";
-#        minus-emph-style = "#ff878a #9e1125";
-#
-#        unobtrusive-line-numbers = {
-#          line-numbers = "true";
-#          line-numbers-minus-style = "#ff2e43 #26141a";
-#          line-numbers-zero-style = "normal";
-#          line-numbers-plus-style = "#00be49 #04211b";
-#          line-numbers-left-format = "{nm:>4} ";
-#          line-numbers-right-format = "{np:>4} ";
-#          line-numbers-left-style = "#26141a #26141a";
-#          line-numbers-right-style = "#04211b #04211b";
-#        };
-#
-#        decorations = {
-#          commit-decoration-style = "bold yellow box ul";
-#          file-style = "bold yellow";
-#          file-decoration-style = "bold yellow ol ul";
-#          hunk-header-decoration-style = "yellow box";
-#        };
-#      };
-#    };
-
 [core]
   whitespace = trailing-space,space-before-tab
   autocrlf = "input"
   commentchar = ";"
+  pager = delta
+
+[interactive]
+  diffFilter = delta --color-only
+
+[delta]
+  features = unobtrusive-line-numbers side-by-side decorations
+  zero-style = syntax
+  plus-style = "syntax #053f1f"
+  plus-emph-style = "#2bfa84 #00703e"
+  minus-style = "syntax #3e151d"
+  minus-emph-style = "#ff878a #9e1125"
+
+[delta "unobtrusive-line-numbers"]
+  line-numbers = true
+  line-numbers-minus-style = "#ff2e43 #26141a"
+  line-numbers-zero-style = normal
+  line-numbers-plus-style = "#00be49 #04211b"
+  line-numbers-left-format = "{nm:>4} "
+  line-numbers-right-format = "{np:>4} "
+  line-numbers-left-style = "#26141a #26141a"
+  line-numbers-right-style = "#04211b #04211b"
+
+[delta "decorations"]
+  commit-decoration-style = bold yellow box ul
+  file-style = bold yellow
+  file-decoration-style = bold yellow ol ul
+  hunk-header-decoration-style = yellow box
 
 [init]
   defaultBranch = master
@@ -45,24 +43,38 @@
   status = 1
   template = ~/.config/git/templates/commit-message.md
   gpgsign = true
+  verbose = true
 
 [push]
-  default = "simple"
+  autoSetupRemote = true
+
+[fetch]
+  prune = true
+  prunetags = true
 
 [apply]
   whitespace = nowarn
 
 [diff]
   tool = nvimdiff
+  algorithm = histogram
+  colorMoved = default
+  colorMovedWS = allow-indentation-change
 
 [diff "lisp"]
-  xfuncname = ^(((;;;+ )|\\(|([ 	]+\\(((cl-|el-patch-)?def(un|var|macro|method|custom)|gb/))).*)$
+  xfuncname = "^(((;;;+ )|\\(|([ \t]+\\(((cl-|el-patch-)?def(un|var|macro|method|custom)|gb/))).*)$"
 
 [diff "org"]
-  xfuncname = ^(\\*+ +.*)$
+  xfuncname = "^(\\*+ +.*)$"
 
 [diff "markdown"]
-  xfuncname = "^#+.*"
+  xfuncname = "^#{1,6} +.+$"
+
+[diff "toml"]
+  xfuncname = "^\\[\\[?[^]]+\\]\\]?"
+
+[diff "gitconfig"]
+  xfuncname = "^\\[.*\\]"
 
 [difftool]
   prompt = false
@@ -70,6 +82,7 @@
 [merge]
   ff = only
   tool = nvimdiff
+  conflictStyle = zdiff3
 
 ; [mergetool "nvimdiff"]
 ;   layout = "LOCAL,BASE,REMOTE / MERGED"
@@ -79,18 +92,27 @@
 
 [rebase]
   autoSquash = true
+  updateRefs = true
+
+[branch]
+  sort = -committerdate
 
 [github]
   user = Townk
 
 [rerere]
   enabled = true
+  autoupdate = true
 
 [status]
   submodule = 1
 
 [tag]
   forceSignAnnotated = true
+  sort = version:refname
+
+[column]
+  ui = auto
 
 [color]
   ui = true
@@ -115,7 +137,7 @@
 [help]
   autocorrect = 1
 
-[credentials]
+[credential]
   helper = osxkeychain
 
 [lfs]
@@ -137,7 +159,7 @@
     path = ~/.config/git/config.d/work.config
 
 [alias]
-  changes = log --pretty=oneline --abbrev-commit --graph --decorate mainline@{1}..HEAD
+  changes = log --pretty=oneline --abbrev-commit --graph --decorate @{u}..HEAD
   ## Show the current branch
   current-branch = !git symbolic-ref -q HEAD | sed -e 's|^refs/heads/||'
   ## List all files that are ignoring changes (this is not the same as
@@ -149,6 +171,9 @@
   staged = diff --cached
   ## Show all the changes that are NOT staged
   unstaged = diff
+  ## Diff with smaller context — useful for sectioned files (gitconfig, toml, etc.)
+  ## so each section becomes its own hunk instead of coalescing
+  ds = diff -U1
 
   # Logs
   dag = log --graph --format='format:%C(yellow)%h%C(reset) %C(blue)"%an" <%ae>%C(reset) %C(magenta)%cr%C(reset)%C(auto)%d%C(reset)%n%s' --date-order
@@ -166,7 +191,7 @@
   ## Rollback any changes in the repository
   rb = reset --hard HEAD
   ## nuke + rb
-  fresh = !git nuke && git  rb
+  fresh = !git nuke && git rb
   ## Checkout and track a remote branch
   ## Usage: git track origin/feature-123-login-form
   track = checkout -t
@@ -180,8 +205,8 @@
 
   # Data analysis
   rank = "fame --enum -e --format tabulate"
-  emails = ''!git log --format="%aE" | sort -u''
-  email-domains = ''!git log --format="%aE" | awk -F'@' '{print $2}' | sort -u''
+  emails = !git log --format=%aE | sort -u
+  email-domains = !git log --format=%aE | awk -F'@' '{print $2}' | sort -u
 
   dv = "!f() { nvim -f -c \"DiffviewOpen $*\" -c 'autocmd TabClosed * qa'; }; f"
 

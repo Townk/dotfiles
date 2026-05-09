@@ -1,5 +1,38 @@
-*.lisp diff=lisp
-*.el   diff=lisp
-*.org  diff=org
-*.md   diff=markdown
+# Custom drivers (configured in ~/.config/git/config)
+*.lisp      diff=lisp
+*.el        diff=lisp
+*.org       diff=org
+*.md        diff=markdown
+*.toml      diff=toml
+*.gitconfig diff=gitconfig
+.gitconfig  diff=gitconfig
+gitconfig   diff=gitconfig
 
+# Builtin drivers
+*.sh        diff=bash
+*.bash      diff=bash
+*.zsh       diff=bash
+
+*.c         diff=cpp
+*.h         diff=cpp
+*.cc        diff=cpp
+*.cpp       diff=cpp
+*.cxx       diff=cpp
+*.hh        diff=cpp
+*.hpp       diff=cpp
+
+*.java      diff=java
+*.kt        diff=kotlin
+*.kts       diff=kotlin
+
+*.cs        diff=csharp
+*.go        diff=golang
+*.rs        diff=rust
+
+*.py        diff=python
+*.rb        diff=ruby
+
+*.css       diff=css
+*.scss      diff=css
+*.html      diff=html
+*.htm       diff=html
