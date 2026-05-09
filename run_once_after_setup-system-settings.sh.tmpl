@@ -50,15 +50,27 @@ defaults write com.apple.dock show-recents -bool false
 
 
 # Finder
+# PlistBuddy `Set` errors when the key is missing (which crashes under
+# `set -e` on a fresh user account). Try `Set` first, fall back to `Add`
+# so the command works whether or not the key already exists.
+plist=~/Library/Preferences/com.apple.finder.plist
+
+set_or_add() {
+  local cmd_path="$1" type="$2" value="$3"
+  if ! /usr/libexec/PlistBuddy -c "Set ${cmd_path} ${value}" "$plist" 2>/dev/null; then
+    /usr/libexec/PlistBuddy -c "Add ${cmd_path} ${type} ${value}" "$plist"
+  fi
+}
+
 echo "📁  Sort Finder icons by name"
-/usr/libexec/PlistBuddy -c "Set :DesktopViewSettings:IconViewSettings:arrangeBy name" ~/Library/Preferences/com.apple.finder.plist
-/usr/libexec/PlistBuddy -c "Set :FK_StandardViewSettings:IconViewSettings:arrangeBy name" ~/Library/Preferences/com.apple.finder.plist
-/usr/libexec/PlistBuddy -c "Set :StandardViewSettings:IconViewSettings:arrangeBy name" ~/Library/Preferences/com.apple.finder.plist
+set_or_add ":DesktopViewSettings:IconViewSettings:arrangeBy"      string  name
+set_or_add ":FK_StandardViewSettings:IconViewSettings:arrangeBy"  string  name
+set_or_add ":StandardViewSettings:IconViewSettings:arrangeBy"     string  name
 
 echo "📁  Set Finder icons size"
-/usr/libexec/PlistBuddy -c "Set :DesktopViewSettings:IconViewSettings:iconSize 64" ~/Library/Preferences/com.apple.finder.plist
-/usr/libexec/PlistBuddy -c "Set :FK_StandardViewSettings:IconViewSettings:iconSize 64" ~/Library/Preferences/com.apple.finder.plist
-/usr/libexec/PlistBuddy -c "Set :StandardViewSettings:IconViewSettings:iconSize 64" ~/Library/Preferences/com.apple.finder.plist
+set_or_add ":DesktopViewSettings:IconViewSettings:iconSize"       integer 64
+set_or_add ":FK_StandardViewSettings:IconViewSettings:iconSize"   integer 64
+set_or_add ":StandardViewSettings:IconViewSettings:iconSize"      integer 64
 
 echo "📁  Set Finder preferred view style to columns"
 defaults write com.apple.finder FXPreferredViewStyle -string "clmv"
@@ -67,16 +79,21 @@ defaults write com.apple.finder _FXSortFoldersFirst -bool true
 
 echo "📱  Set 'Open at login' applications"
 
+# `make login item` blindly duplicates entries on each run. Fetch the
+# current list once and skip apps that are already registered.
+existingLoginItems=$(osascript -e 'tell application "System Events" to get name of every login item' 2>/dev/null || echo "")
+
 loginItems=(
   "Dropbox"
   "Hammerspoon"
   "Raycast"
-  "Shottr"
   "SoundSource"
 )
 
 for app in "${loginItems[@]}"; do
-  if [ -d "/Applications/$app.app" ]; then
+  if printf '%s\n' "$existingLoginItems" | tr ',' '\n' | grep -qx " *$app *"; then
+    echo "ℹ️  $app already in login items"
+  elif [ -d "/Applications/$app.app" ]; then
     osascript -e "tell application \"System Events\" to make login item at end with properties {name: \"$app\", path: \"/Applications/$app.app\", hidden:true}"
     echo "✅  $app added to login items"
   else
@@ -88,3 +105,5 @@ echo "🔨  Making Hammerspoon use XDG config directories"
 defaults write org.hammerspoon.Hammerspoon MJConfigFile "~/.config/hammerspoon/init.lua"
 
 {{ end -}}
+
+# vim:ft=sh
