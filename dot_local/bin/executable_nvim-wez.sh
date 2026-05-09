@@ -1,4 +1,35 @@
 #!/bin/bash
+#
+# nvim-wez.sh — Open file(s) in Neovim inside WezTerm (multiplexer-aware)
+#
+# WHAT
+#   Smart launcher that opens its file arguments in nvim, attached to the
+#   running WezTerm GUI multiplexer when one is alive, or cold-starting
+#   WezTerm + nvim when nothing is running. Tab title is derived from the
+#   arguments: bare → "NeoVim", one file → its basename, many → "<first> +N".
+#
+# HOW
+#   Cold start: `open -a WezTerm --args start -- nvim "$@"`, then resolve
+#   the new GUI socket at ~/.local/share/wezterm/gui-sock-<pid> and set the
+#   tab title via `wezterm cli`.
+#   Attach:  point WEZTERM_UNIX_SOCKET at the running pid's socket, raise
+#   the app via osascript, `wezterm cli spawn -- nvim "$@"`, capture the
+#   spawned PANE_ID, and `wezterm cli set-tab-title --pane-id <id>`.
+#
+# WHERE IT'S USED
+#   Invoked by the macOS Shortcut "Open in NeoVim"
+#   (UUID 5D2A5F00-9445-4F8A-B8D9-3A4BFDCB961C), exported as a droplet at
+#   ~/Applications/Open in NeoVim.app. The droplet surfaces in Finder's
+#   right-click → Open With menu and accepts drag-and-drop, so this script
+#   is the engine behind the "Open in nvim/WezTerm" macOS-native action.
+#   The .shortcut export is tracked in chezmoi at
+#   ~/.local/share/shortcuts/Open in NeoVim.shortcut and reinstalled on
+#   fresh Macs by run_onchange_after_install-macos-shortcut.sh.tmpl.
+#
+# PLATFORM
+#   macOS-only: relies on `open -a`, AppleScript activation, and the
+#   WezTerm GUI socket layout. Excluded from non-darwin targets via
+#   .chezmoiignore.tmpl.
 
 # 1. SET PATHS
 WEZTERM_BIN="/opt/homebrew/bin/wezterm"

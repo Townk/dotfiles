@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eufo pipefail
+
+{{ if eq .chezmoi.os "darwin" -}}
+# Re-import the "Open in NeoVim" macOS Shortcut whenever the exported
+# .shortcut file changes. The embedded hash below makes this script's
+# rendered content change with the file, so chezmoi's run_onchange
+# semantics retrigger us; the `shortcuts list` guard makes the import
+# idempotent (no spam on first apply when nothing has changed).
+#
+# shortcut content hash: {{ include "dot_local/share/shortcuts/private_Open in NeoVim.shortcut" | sha256sum }}
+
+shortcut="$HOME/.local/share/shortcuts/Open in NeoVim.shortcut"
+
+if /usr/bin/shortcuts list 2>/dev/null | grep -qx "Open in NeoVim"; then
+  # Already installed and content-hash matches the version we exported.
+  # If you've intentionally edited the shortcut on this machine and want
+  # to overwrite it from the chezmoi-tracked copy, delete it from
+  # Shortcuts.app first, then run `chezmoi apply`.
+  exit 0
+fi
+
+# `shortcuts` CLI has no headless import; opening the .shortcut file
+# launches Shortcuts.app and prompts you to add it. One click on a
+# fresh machine.
+open "$shortcut"
+{{- else }}
+# macOS-only; no-op on this platform.
+exit 0
+{{- end }}
+
+# vim:ft=sh
