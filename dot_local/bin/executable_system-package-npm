@@ -75,11 +75,14 @@ do_sync() {
   pkg_manifest_read "$NPMFILE" > "$declared"
   npm_list_installed > "$installed"
 
-  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
-    [[ -n "$pkg" ]] && npm install -g "$pkg"
-  done
+  # Uninstall extras BEFORE installing missing — if a swap puts two
+  # packages on the same binary path (e.g. both ship `bin/pi`), npm
+  # install would fail with EEXIST.
   pkg_diff_only_in "$installed" "$declared" | while IFS= read -r pkg; do
     [[ -n "$pkg" ]] && npm uninstall -g "$pkg"
+  done
+  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
+    [[ -n "$pkg" ]] && npm install -g "$pkg"
   done
 
   npm update -g || true

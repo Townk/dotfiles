@@ -92,11 +92,13 @@ do_sync() {
   pkg_manifest_read "$UVFILE" > "$declared"
   uv_list_installed > "$installed"
 
-  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r tool; do
-    [[ -n "$tool" ]] && uv tool install "$tool"
-  done
+  # Uninstall extras BEFORE installing missing — if a swap puts two tools
+  # on the same shim path, uv tool install can refuse to overwrite.
   pkg_diff_only_in "$installed" "$declared" | while IFS= read -r tool; do
     [[ -n "$tool" ]] && uv tool uninstall "$tool"
+  done
+  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r tool; do
+    [[ -n "$tool" ]] && uv tool install "$tool"
   done
 
   uv tool upgrade --all || true

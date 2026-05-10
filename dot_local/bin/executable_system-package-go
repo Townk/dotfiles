@@ -92,19 +92,20 @@ do_sync() {
   go_installed_pairs > "$pairs"
   awk -F'\t' '{print $1}' "$pairs" > "$installed"
 
-  # Install missing
-  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
-    [[ -z "$pkg" ]] && continue
-    go install "$pkg@latest" || pkg_warn "failed to install $pkg"
-  done
-
-  # Uninstall extras: look up the binary basename via $pairs
+  # Uninstall extras BEFORE installing missing — keeps swaps that share a
+  # binary basename (e.g. v1→v2 path migrations) from colliding on disk.
   local bin_dir; bin_dir=$(go_bin_dir)
   pkg_diff_only_in "$installed" "$declared" | while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     local bin=""
     bin=$(awk -F'\t' -v p="$pkg" '$1==p {print $2; exit}' "$pairs")
     [[ -n "$bin" && -f "$bin_dir/$bin" ]] && rm -v "$bin_dir/$bin"
+  done
+
+  # Install missing
+  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
+    [[ -z "$pkg" ]] && continue
+    go install "$pkg@latest" || pkg_warn "failed to install $pkg"
   done
 
   # Upgrade everything still declared (re-running go install fetches latest)
