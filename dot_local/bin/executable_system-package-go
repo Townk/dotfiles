@@ -48,7 +48,8 @@ do_sync() {
 
   # Install missing
   pkg_diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
-    [[ -n "$pkg" ]] && go install "$pkg@latest"
+    [[ -z "$pkg" ]] && continue
+    go install "$pkg@latest" || pkg_warn "failed to install $pkg"
   done
 
   # Uninstall extras: look up the binary basename via $pairs
@@ -62,7 +63,8 @@ do_sync() {
 
   # Upgrade everything still declared (re-running go install fetches latest)
   while IFS= read -r pkg; do
-    [[ -n "$pkg" ]] && go install "$pkg@latest"
+    [[ -z "$pkg" ]] && continue
+    go install "$pkg@latest" || pkg_warn "failed to upgrade $pkg"
   done < "$declared"
 }
 
