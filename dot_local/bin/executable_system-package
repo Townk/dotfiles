@@ -1,0 +1,65 @@
+#!/usr/bin/env zsh
+# system-package — dispatcher for system-package-<ecosystem> workers.
+#
+# Usage:
+#   system-package <ecosystem> <subcommand>
+#   system-package --all <subcommand>
+#
+# Ecosystems: brew, uv, npm, go
+# Subcommands: list, sync
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-package-common.sh"
+
+ECOSYSTEMS=(brew uv npm go)
+SUBCOMMANDS=(list sync)
+
+usage() {
+  cat <<EOF
+Usage:
+  system-package <ecosystem> <subcommand>
+  system-package --all <subcommand>
+
+Ecosystems:  ${ECOSYSTEMS[*]}
+Subcommands: ${SUBCOMMANDS[*]}
+EOF
+}
+
+is_in() {
+  local needle="$1"; shift
+  local item
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+run_one() {
+  local eco="$1" cmd="$2"
+  is_in "$cmd" "${SUBCOMMANDS[@]}" \
+    || { usage; pkg_die "unknown subcommand: $cmd"; }
+  command -v "system-package-$eco" >/dev/null \
+    || pkg_die "worker not found: system-package-$eco"
+  "system-package-$eco" "$cmd"
+}
+
+main() {
+  [[ $# -ge 2 ]] || { usage; exit 1; }
+
+  if [[ "$1" == "--all" ]]; then
+    local cmd="$2"; shift 2
+    local eco
+    for eco in "${ECOSYSTEMS[@]}"; do
+      pkg_info "${PKG_C_BWH}── $eco ──${PKG_C_RES}"
+      run_one "$eco" "$cmd"
+    done
+  else
+    local eco="$1" cmd="$2"
+    is_in "$eco" "${ECOSYSTEMS[@]}" \
+      || { usage; pkg_die "unknown ecosystem: $eco"; }
+    run_one "$eco" "$cmd"
+  fi
+}
+
+main "$@"
