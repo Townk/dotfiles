@@ -40,23 +40,62 @@ pkg_diff_only_in() {
 }
 
 # pkg_table_print <header>
-# Read tab-separated rows from stdin, prepend the (also tab-separated) header,
-# align via `column -t`, then post-process the output:
-#   - colorize the header line (bold white) and add an underline of ─ chars
-#     beneath it that mirrors the column layout
-#   - leave row content untouched (workers wrap "update available" themselves)
+# Read tab-separated rows from stdin and emit a formatted table:
+#   - header (bold white), padded to each column's full width
+#   - underline (bold white ─), spanning each column's full width
+#   - rows, with cells padded to the column width
+# Column width is the max visible width across the header label and all row
+# cells; ANSI escape sequences in cells (e.g. the yellow "update available"
+# annotation) are stripped for width calculation but preserved on output.
 # Header is one string with tabs between column labels, e.g. $'Package\tVersion'.
 pkg_table_print() {
   local header="$1"
-  local first=1 line sep
-  { printf '%s\n' "$header"; cat; } | column -t -s $'\t' | while IFS= read -r line; do
-    if (( first )); then
-      first=0
-      printf '%s%s%s\n' "$PKG_C_BWH" "$line" "$PKG_C_RES"
-      sep=$(printf '%s' "$line" | sed 's/[^[:space:]]/─/g')
-      printf '%s%s%s\n' "$PKG_C_BWH" "$sep" "$PKG_C_RES"
-    else
-      printf '%s\n' "$line"
-    fi
-  done
+  awk -F'\t' \
+      -v header="$header" \
+      -v bwh="$PKG_C_BWH" \
+      -v reset="$PKG_C_RES" '
+    function visual_width(s,   t) {
+      t = s; gsub(/\033\[[0-9;]*m/, "", t); return length(t)
+    }
+    BEGIN {
+      n = split(header, hdrs, "\t")
+      for (i = 1; i <= n; i++) widths[i] = visual_width(hdrs[i])
+    }
+    {
+      rn++
+      for (i = 1; i <= NF; i++) {
+        cells[rn, i] = $i
+        w = visual_width($i)
+        if (w > widths[i]) widths[i] = w
+      }
+      cols[rn] = NF
+    }
+    END {
+      gap = "  "
+      # Header row
+      printf "%s", bwh
+      for (i = 1; i <= n; i++) {
+        printf "%s%*s", hdrs[i], widths[i] - visual_width(hdrs[i]), ""
+        if (i < n) printf "%s", gap
+      }
+      printf "%s\n", reset
+      # Underline row
+      printf "%s", bwh
+      for (i = 1; i <= n; i++) {
+        sep = ""; for (j = 1; j <= widths[i]; j++) sep = sep "─"
+        printf "%s", sep
+        if (i < n) printf "%s", gap
+      }
+      printf "%s\n", reset
+      # Data rows
+      for (r = 1; r <= rn; r++) {
+        nc = cols[r]
+        for (i = 1; i <= nc; i++) {
+          printf "%s%*s", cells[r, i], widths[i] - visual_width(cells[r, i]), ""
+          if (i < nc) printf "%s", gap
+        }
+        printf "\n"
+      }
+    }
+  '
 }
