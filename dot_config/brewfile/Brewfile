@@ -203,6 +203,7 @@ brew 'ast-grep'                     # Grep that knows source code AST
 brew 'atuin'                        # Improved shell history
 brew 'bandwhich'                    # Network traffic analyser (must run as sudo on macOS)
 brew 'bat'                          # A better cat
+brew 'bats-core'                    # Bash Automated Testing System (for: system-package tests)
 brew 'bottom'                       # Graphical process/system (`top` monitor but better: `/bin/btm`)
 brew 'chezmoi'                      # Modern dot-files manager
 brew 'choose'                       # Better `cut`
