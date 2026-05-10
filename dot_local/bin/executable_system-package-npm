@@ -1,0 +1,49 @@
+#!/usr/bin/env zsh
+# system-package-npm — sync globally-installed npm packages against
+# ~/.config/packages/Npmfile.
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-package-common.sh"
+
+NPMFILE="$PKG_DIR/Npmfile"
+
+# Packages npm itself manages as part of its runtime. Always filtered out.
+NPM_RUNTIME=(npm corepack node-gyp)
+
+npm_list_installed() {
+  npm ls -g --depth=0 --json 2>/dev/null \
+    | jq -r '(.dependencies // {}) | keys[]' \
+    | grep -vxF -e "${(j:
+:)NPM_RUNTIME}" || true
+}
+
+do_list() {
+  npm_list_installed
+}
+
+do_sync() {
+  pkg_info "Syncing npm globals..."
+
+  local declared installed
+  declared=$(mktemp); installed=$(mktemp)
+  trap "rm -f '$declared' '$installed'" EXIT
+
+  pkg_manifest_read "$NPMFILE" > "$declared"
+  npm_list_installed > "$installed"
+
+  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
+    [[ -n "$pkg" ]] && npm install -g "$pkg"
+  done
+  pkg_diff_only_in "$installed" "$declared" | while IFS= read -r pkg; do
+    [[ -n "$pkg" ]] && npm uninstall -g "$pkg"
+  done
+
+  npm update -g || true
+}
+
+case "${1:-}" in
+  list) do_list ;;
+  sync) do_sync ;;
+  *)    pkg_die "usage: system-package-npm {list|sync}" ;;
+esac
