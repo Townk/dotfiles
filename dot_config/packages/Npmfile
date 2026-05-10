@@ -1,0 +1,5 @@
+# Npmfile — globally-installed npm packages.
+# Synced by `system-package npm sync`. Strict cleanup: removing a
+# line uninstalls the package on next sync.
+
+pi-glance

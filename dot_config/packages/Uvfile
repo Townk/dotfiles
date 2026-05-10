@@ -1,0 +1,5 @@
+# Uvfile — Python tools managed via `uv tool install`.
+# Synced by `system-package uv sync`. Strict cleanup: removing a
+# line uninstalls the tool on next sync.
+
+qmk-skim
