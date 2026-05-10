@@ -12,7 +12,7 @@ PYTHON_STAMP="$PKG_STATE_DIR/uv.python"
 uv_list_installed() {
   # `uv tool list` prints one tool name per "block"; the tool name is the
   # first column on lines that don't begin with whitespace and aren't headers.
-  uv tool list 2>/dev/null | awk '/^[^[:space:]]/ && !/^No tools/ {print $1}'
+  uv tool list 2>/dev/null | awk '/^[a-zA-Z0-9_]/ && !/^No tools/ {print $1}'
 }
 
 uv_current_python() {
