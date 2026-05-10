@@ -189,7 +189,6 @@ brew 'pandoc'                       # Convert files from one format to another (
 brew 'pngpaste'                     # Support to drop image files into Emacs buffers (for: nvim)
 brew 'poppler'                      # PDF previewer (for: yazi)
 brew 'resvg'                        # SVG renderer (for: yazi)
-brew 'rich'                         # Render Markdown Commonmark files and other text-formatted files (for: yazi)
 brew 'sdcv'                         # StarDict dictionaries (for: emacs)
 brew 'tag'                          # MacOS tag on Yazi (for: yazi)
 brew 'tectonic'                     # LaTeX in Rust (for: nvim)
@@ -232,7 +231,6 @@ brew 'neovim'                       # Editor
 brew 'anomalyco/tap/opencode'       # AI CLI agent
 brew 'omlx'                         # Local AI models
 brew 'python@3.11'                  # Pinned runtime for omlx (declared so `brew bundle --cleanup` keeps it)
-brew 'pi-coding-agent'              # Coding Agent Harness
 brew 'pinentry-mac'                 # Password entry application for Mac
 brew 'plantuml'                     # UML in text
 brew 'procs'                        # Process status (`ps` but better)
@@ -242,7 +240,6 @@ brew 'rmlint'                       # Search files to remove
 brew 't-rec'                        # Terminal recorder
 brew 'tealdeer'                     # A conciser and more pragmatic `man` (command: tldr)
 brew 'terminal-notifier'            # Send notifications from the terminal
-brew 'thefuck'                      # For when I forget the `sudo` in a command
 brew 'tidy-viewer'                  # CSV viewer
 brew 'tokei'                        # Source code metrics
 brew 'trippy'                       # A network diagnostic tool

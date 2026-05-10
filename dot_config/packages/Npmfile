@@ -3,3 +3,4 @@
 # line uninstalls the package on next sync.
 
 pi-glance
+@mariozechner/pi-coding-agent

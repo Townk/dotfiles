@@ -3,3 +3,5 @@
 # line uninstalls the tool on next sync.
 
 qmk-skim
+rich-cli
+thefuck
