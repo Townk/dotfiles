@@ -40,14 +40,16 @@ pkg_diff_only_in() {
   comm -23 <(sort -u "$1") <(sort -u "$2")
 }
 
-# pkg_table_print <header>
+# pkg_table_print <header> [group_col]
 # Read tab-separated rows from stdin and emit a formatted table:
 #   - header (bright blue), padded to each column's full width
 #   - underline (bright blue ─), spanning each column's full width
 #   - rows, with cells padded to the column width
 # A row whose only cell is the literal string "__SEP__" is treated as a
-# request to emit an inline separator row at that position (same width as
-# the header underline). Useful for grouping related rows in a merged table.
+# request to emit an inline separator at that position. If group_col (1-based
+# column index) is set and > 0, the function auto-emits a separator whenever
+# that column's value changes between consecutive rows. Consecutive separators
+# (e.g. an explicit __SEP__ followed by an auto-separator) are deduped.
 # Column width is the max visible width across the header label and all
 # non-sentinel row cells; ANSI escape sequences in cells (e.g. the yellow
 # "update available" annotation) are stripped for width calculation but
@@ -55,8 +57,10 @@ pkg_diff_only_in() {
 # Header is one string with tabs between column labels, e.g. $'Package\tVersion'.
 pkg_table_print() {
   local header="$1"
+  local group_col="${2:-0}"
   awk -F'\t' \
       -v header="$header" \
+      -v group_col="$group_col" \
       -v bbl="$PKG_C_BBL" \
       -v reset="$PKG_C_RES" '
     function visual_width(s,   t) {
@@ -65,6 +69,7 @@ pkg_table_print() {
     BEGIN {
       n = split(header, hdrs, "\t")
       for (i = 1; i <= n; i++) widths[i] = visual_width(hdrs[i])
+      prev_data = 0
     }
     {
       rn++
@@ -78,6 +83,11 @@ pkg_table_print() {
           if (w > widths[i]) widths[i] = w
         }
         cols[rn] = NF
+        if (group_col > 0 && prev_data > 0 \
+            && cells[prev_data, group_col] != $group_col) {
+          auto_sep[rn] = 1
+        }
+        prev_data = rn
       }
     }
     END {
@@ -101,22 +111,27 @@ pkg_table_print() {
         if (i < n) printf "%s", gap
       }
       printf "%s\n", reset
-      # Data rows (and __SEP__ inline separators)
+      # Data rows, with explicit __SEP__ and auto-group separators interleaved.
+      # last_sep dedupes consecutive separator emissions.
+      last_sep = 0
       for (r = 1; r <= rn; r++) {
-        if (is_sep[r]) {
+        if ((is_sep[r] || auto_sep[r]) && !last_sep) {
           printf "%s", bbl
           for (i = 1; i <= n; i++) {
             printf "%s", sep_cell[i]
             if (i < n) printf "%s", gap
           }
           printf "%s\n", reset
-        } else {
+          last_sep = 1
+        }
+        if (!is_sep[r]) {
           nc = cols[r]
           for (i = 1; i <= nc; i++) {
             printf "%s%*s", cells[r, i], widths[i] - visual_width(cells[r, i]), ""
             if (i < nc) printf "%s", gap
           }
           printf "\n"
+          last_sep = 0
         }
       }
     }

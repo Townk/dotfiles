@@ -46,12 +46,13 @@ worker_check() {
 
 # list_one <eco> [args...]
 # Format one ecosystem's raw TSV output as a table. brew emits 3-column
-# rows (type/name/version); other ecosystems emit 2-column rows (name/version).
+# rows (type/name/version) and groups by Type; other ecosystems emit 2-column
+# rows (name/version) with no grouping.
 list_one() {
   local eco="$1"; shift
   worker_check "$eco"
   if [[ "$eco" == "brew" ]]; then
-    "system-package-$eco" list "$@" | pkg_table_print $'Type\tPackage\tVersion'
+    "system-package-$eco" list "$@" | pkg_table_print $'Type\tPackage\tVersion' 1
   else
     "system-package-$eco" list "$@" | pkg_table_print $'Package\tVersion'
   fi
@@ -59,14 +60,14 @@ list_one() {
 
 # list_all [args...]
 # Merge every ecosystem's raw TSV output into a single Tool/Package/Version
-# table, with an inline separator between groups. Empty ecosystems are
-# skipped (no separator emitted for them). brew rows already carry a type
-# (formula/cask/mas) as their first cell; we fold that into the Tool column
-# as "brew:formula" / "brew:cask" / "brew:mas".
+# table, grouped by Tool. brew rows already carry a type (formula/dep/cask/mas)
+# as their first cell; we fold that into the Tool column as "brew:formula" /
+# "brew:dep" / "brew:cask" / "brew:mas". pkg_table_print's group-by-column
+# feature emits separators automatically wherever the Tool value changes.
 list_all() {
   local args=("$@")
   {
-    local first=1 eco rows
+    local eco rows
     for eco in "${ECOSYSTEMS[@]}"; do
       worker_check "$eco"
       if [[ "$eco" == "brew" ]]; then
@@ -74,12 +75,9 @@ list_all() {
       else
         rows=$("system-package-$eco" list "${args[@]}" | awk -v t="$eco" '{print t "\t" $0}')
       fi
-      [[ -z "$rows" ]] && continue
-      (( first )) || printf '__SEP__\n'
-      first=0
-      printf '%s\n' "$rows"
+      [[ -n "$rows" ]] && printf '%s\n' "$rows"
     done
-  } | pkg_table_print $'Tool\tPackage\tVersion'
+  } | pkg_table_print $'Tool\tPackage\tVersion' 1
 }
 
 # sync_one <eco> [args...]
