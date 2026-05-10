@@ -39,8 +39,36 @@ uv_write_stamp() {
   uv_current_python > "$PYTHON_STAMP"
 }
 
+# uv_list_rows <outdated:true|false>
+# Output one "name\tversion[annotation]" TSV row per installed tool.
+uv_list_rows() {
+  local outdated="${1:-false}"
+
+  uv tool list 2>/dev/null \
+    | awk '/^[a-zA-Z0-9_]/ && !/^No tools/ {
+        name=$1
+        ver=$2
+        # strip leading "v"
+        sub(/^v/, "", ver)
+        print name "\t" ver
+      }' \
+    | while IFS=$'\t' read -r name ver; do
+        if [[ "$outdated" == true ]]; then
+          local latest=""
+          latest=$(curl -fsSL "https://pypi.org/pypi/${name}/json" 2>/dev/null \
+                   | jq -r '.info.version // empty' 2>/dev/null || true)
+          if [[ -n "$latest" && "$latest" != "$ver" ]]; then
+            ver="${ver} (update available: ${latest})"
+          fi
+        fi
+        printf '%s\t%s\n' "$name" "$ver"
+      done
+}
+
 do_list() {
-  uv_list_installed
+  local outdated=false
+  [[ "${1:-}" == "-u" ]] && outdated=true
+  uv_list_rows "$outdated" | pkg_table_print $'Package\tVersion'
 }
 
 do_sync() {
@@ -71,7 +99,7 @@ do_sync() {
 }
 
 case "${1:-}" in
-  list) do_list ;;
+  list) shift; do_list "$@" ;;
   sync) do_sync ;;
-  *)    pkg_die "usage: system-package-uv {list|sync}" ;;
+  *)    pkg_die "usage: system-package-uv {list [-u]|sync}" ;;
 esac

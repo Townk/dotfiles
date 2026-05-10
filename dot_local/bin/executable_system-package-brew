@@ -9,10 +9,89 @@ source "$HOME/.local/lib/system-package-common.sh"
 BREWFILE_BOOT="$PKG_DIR/Brewfile.bootstrap"
 BREWFILE_MAIN="$PKG_DIR/Brewfile"
 
+# brew_list_rows <outdated:true|false>
+# Output one "name\tversion[annotation]" TSV row per installed package.
+brew_list_rows() {
+  local outdated="${1:-false}"
+  local -A outdated_map
+  local -A pkg_map
+
+  # Build outdated map (only if -u)
+  if [[ "$outdated" == true ]]; then
+    local formula_json="" cask_json=""
+    formula_json=$(brew outdated --json --formula 2>/dev/null || printf '[]')
+    cask_json=$(brew outdated --json --cask 2>/dev/null || printf '[]')
+
+    # Parse formulas
+    local name="" ver=""
+    while IFS=$'\t' read -r name ver; do
+      [[ -n "$name" ]] && outdated_map[$name]="$ver"
+    done < <(printf '%s' "$formula_json" \
+             | jq -r '.[] | "\(.name)\t\(.current_version)"' 2>/dev/null || true)
+
+    # Parse casks
+    while IFS=$'\t' read -r name ver; do
+      [[ -n "$name" ]] && outdated_map[$name]="$ver"
+    done < <(printf '%s' "$cask_json" \
+             | jq -r '.[] | "\(.name)\t\(.current_version)"' 2>/dev/null || true)
+
+    # MAS outdated: lines like "id name (oldver -> newver)"
+    if command -v mas >/dev/null 2>&1; then
+      local line="" mas_name="" mas_newver=""
+      while IFS= read -r line; do
+        mas_name=$(printf '%s' "$line" \
+                   | sed 's/^[[:space:]]*[0-9][0-9 ]*//' \
+                   | sed 's/ ([^)]*->[ ]*[^)]*) *$//')
+        mas_newver=$(printf '%s' "$line" \
+                     | grep -oE '\(.*->[ ]*([^)]+)\)$' \
+                     | grep -oE '[^> ]+\)$' \
+                     | tr -d ')' || true)
+        [[ -n "$mas_name" && -n "$mas_newver" ]] && outdated_map[$mas_name]="$mas_newver"
+      done < <(mas outdated 2>/dev/null || true)
+    fi
+  fi
+
+  # Collect installed packages
+  # Formulas
+  local name="" ver=""
+  while IFS=' ' read -r name ver; do
+    [[ -n "$name" && -n "$ver" ]] && pkg_map[$name]="$ver"
+  done < <(brew list --versions --formula 2>/dev/null || true)
+
+  # Casks
+  while IFS=' ' read -r name ver; do
+    [[ -n "$name" && -n "$ver" ]] && pkg_map[$name]="$ver"
+  done < <(brew list --versions --cask 2>/dev/null || true)
+
+  # MAS apps: "id name (version)"
+  if command -v mas >/dev/null 2>&1; then
+    local line="" mas_name="" mas_ver=""
+    while IFS= read -r line; do
+      mas_name=$(printf '%s' "$line" \
+                 | sed 's/^[[:space:]]*[0-9][0-9 ]*//' \
+                 | sed 's/ ([^)]*) *$//')
+      mas_ver=$(printf '%s' "$line" \
+                | grep -oE '\([^)]+\)$' \
+                | tr -d '()')
+      [[ -n "$mas_name" && -n "$mas_ver" ]] && pkg_map[$mas_name]="$mas_ver"
+    done < <(mas list 2>/dev/null || true)
+  fi
+
+  # Emit sorted rows
+  local k=""
+  for k in "${(@ko)pkg_map}"; do
+    local v="${pkg_map[$k]}"
+    if [[ "$outdated" == true && -n "${outdated_map[$k]:-}" ]]; then
+      v="${v} (update available: ${outdated_map[$k]})"
+    fi
+    printf '%s\t%s\n' "$k" "$v"
+  done
+}
+
 do_list() {
-  brew leaves
-  brew list --cask 2>/dev/null
-  command -v mas >/dev/null && mas list | awk '{$1=""; sub(/^ /, ""); sub(/ \([^)]*\)$/, ""); print}'
+  local outdated=false
+  [[ "${1:-}" == "-u" ]] && outdated=true
+  brew_list_rows "$outdated" | pkg_table_print $'Package\tVersion'
 }
 
 do_sync() {
@@ -23,7 +102,7 @@ do_sync() {
 }
 
 case "${1:-}" in
-  list) do_list ;;
+  list) shift; do_list "$@" ;;
   sync) do_sync ;;
-  *)    pkg_die "usage: system-package-brew {list|sync}" ;;
+  *)    pkg_die "usage: system-package-brew {list [-u]|sync}" ;;
 esac

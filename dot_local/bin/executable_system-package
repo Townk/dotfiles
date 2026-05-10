@@ -18,11 +18,13 @@ SUBCOMMANDS=(list sync)
 usage() {
   cat <<EOF
 Usage:
-  system-package <subcommand>              # run for every ecosystem
-  system-package <ecosystem> <subcommand>  # run for one ecosystem
+  system-package <subcommand> [args...]              # run for every ecosystem
+  system-package <ecosystem> <subcommand> [args...]  # run for one ecosystem
 
 Ecosystems:  ${ECOSYSTEMS[*]}
 Subcommands: ${SUBCOMMANDS[*]}
+
+list supports -u (show update available)
 EOF
 }
 
@@ -36,31 +38,32 @@ is_in() {
 }
 
 run_one() {
-  local eco="$1" cmd="$2"
+  local eco="$1" cmd="$2"; shift 2
   is_in "$cmd" "${SUBCOMMANDS[@]}" \
     || { usage; pkg_die "unknown subcommand: $cmd"; }
   command -v "system-package-$eco" >/dev/null \
     || pkg_die "worker not found: system-package-$eco"
-  "system-package-$eco" "$cmd"
+  "system-package-$eco" "$cmd" "$@"
 }
 
 main() {
   [[ $# -ge 1 ]] || { usage; exit 1; }
 
-  if [[ $# -eq 1 ]]; then
-    local cmd="$1"
-    is_in "$cmd" "${SUBCOMMANDS[@]}" \
-      || { usage; pkg_die "unknown subcommand: $cmd"; }
+  if is_in "$1" "${SUBCOMMANDS[@]}"; then
+    local cmd="$1"; shift
     local eco
     for eco in "${ECOSYSTEMS[@]}"; do
       pkg_info "${PKG_C_BWH}── $eco ──${PKG_C_RES}"
-      run_one "$eco" "$cmd"
+      run_one "$eco" "$cmd" "$@"
     done
+  elif is_in "$1" "${ECOSYSTEMS[@]}"; then
+    local eco="$1"; shift
+    [[ $# -ge 1 ]] || { usage; pkg_die "missing subcommand"; }
+    local cmd="$1"; shift
+    run_one "$eco" "$cmd" "$@"
   else
-    local eco="$1" cmd="$2"
-    is_in "$eco" "${ECOSYSTEMS[@]}" \
-      || { usage; pkg_die "unknown ecosystem: $eco"; }
-    run_one "$eco" "$cmd"
+    usage
+    pkg_die "unknown argument: $1"
   fi
 }
 

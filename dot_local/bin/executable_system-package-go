@@ -18,7 +18,7 @@ go_bin_dir() {
 go_installed_pairs() {
   local bin_dir; bin_dir=$(go_bin_dir)
   [[ -d "$bin_dir" ]] || return 0
-  local f pkg_path
+  local f="" pkg_path=""
   for f in "$bin_dir"/*(N); do
     [[ -x "$f" && -f "$f" ]] || continue
     pkg_path=$( { go version -m "$f" 2>/dev/null || true; } \
@@ -31,8 +31,48 @@ go_list_installed() {
   go_installed_pairs | awk -F'\t' '{print $1}'
 }
 
+# go_installed_triples
+# Output one "<mod_path>\t<binary_name>\t<mod_version>" row per installed binary.
+# mod_path is the MODULE path (from the "mod" line), suitable for go list -m -versions.
+go_installed_triples() {
+  local bin_dir; bin_dir=$(go_bin_dir)
+  [[ -d "$bin_dir" ]] || return 0
+  local f="" pkg_path="" mod_path="" mod_ver="" vout=""
+  for f in "$bin_dir"/*(N); do
+    [[ -x "$f" && -f "$f" ]] || continue
+    vout=$( { go version -m "$f" 2>/dev/null || true; } )
+    pkg_path=$(printf '%s' "$vout" | awk '$1=="path" {print $2; exit}')
+    mod_path=$(printf '%s' "$vout" | awk '$1=="mod"  {print $2; exit}')
+    mod_ver=$(printf '%s' "$vout"  | awk '$1=="mod"  {print $3; exit}')
+    [[ -n "$pkg_path" ]] && printf '%s\t%s\t%s\n' \
+      "${mod_path:-$pkg_path}" "${f:t}" "${mod_ver:-unknown}" || true
+  done
+}
+
+# go_list_rows <outdated:true|false>
+# Output one "binary_name\tversion[annotation]" TSV row per installed binary.
+go_list_rows() {
+  local outdated="${1:-false}"
+  local mod_path="" bin_name="" ver="" latest=""
+
+  go_installed_triples | while IFS=$'\t' read -r mod_path bin_name ver; do
+    latest=""
+    if [[ "$outdated" == true ]]; then
+      latest=$(go list -m -versions "$mod_path" 2>/dev/null \
+               | awk '{print $NF}' || true)
+      # When there are no tagged versions, $NF is just the module path — skip it
+      if [[ -n "$latest" && "$latest" != "$mod_path" && "$latest" != "$ver" ]]; then
+        ver="${ver} (update available: ${latest})"
+      fi
+    fi
+    printf '%s\t%s\n' "$bin_name" "$ver"
+  done | sort
+}
+
 do_list() {
-  go_list_installed
+  local outdated=false
+  [[ "${1:-}" == "-u" ]] && outdated=true
+  go_list_rows "$outdated" | pkg_table_print $'Package\tVersion'
 }
 
 do_sync() {
@@ -56,7 +96,7 @@ do_sync() {
   local bin_dir; bin_dir=$(go_bin_dir)
   pkg_diff_only_in "$installed" "$declared" | while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
-    local bin
+    local bin=""
     bin=$(awk -F'\t' -v p="$pkg" '$1==p {print $2; exit}' "$pairs")
     [[ -n "$bin" && -f "$bin_dir/$bin" ]] && rm -v "$bin_dir/$bin"
   done
@@ -69,7 +109,7 @@ do_sync() {
 }
 
 case "${1:-}" in
-  list) do_list ;;
+  list) shift; do_list "$@" ;;
   sync) do_sync ;;
-  *)    pkg_die "usage: system-package-go {list|sync}" ;;
+  *)    pkg_die "usage: system-package-go {list [-u]|sync}" ;;
 esac

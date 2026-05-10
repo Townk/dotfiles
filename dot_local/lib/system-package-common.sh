@@ -38,3 +38,12 @@ pkg_manifest_read() {
 pkg_diff_only_in() {
   comm -23 <(sort -u "$1") <(sort -u "$2")
 }
+
+# pkg_table_print <header>
+# Read tab-separated rows from stdin, prepend the (also tab-separated) header,
+# and pipe through `column -t` for alignment. Header is one string with tabs
+# between column labels (e.g. $'Package\tVersion').
+pkg_table_print() {
+  local header="$1"
+  { printf '%s\n' "$header"; cat; } | column -t -s $'\t'
+}

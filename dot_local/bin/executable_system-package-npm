@@ -18,8 +18,45 @@ npm_list_installed() {
 :)NPM_RUNTIME}" || true
 }
 
+# npm_list_rows <outdated:true|false>
+# Output one "name\tversion[annotation]" TSV row per installed global package.
+npm_list_rows() {
+  local outdated="${1:-false}"
+
+  # Get installed packages with versions, filtering runtime packages
+  local installed_json=""
+  installed_json=$(npm ls -g --depth=0 --json 2>/dev/null || printf '{}')
+
+  # Get outdated map if needed
+  local -A outdated_map
+  if [[ "$outdated" == true ]]; then
+    local outdated_json=""
+    outdated_json=$(npm outdated -g --json 2>/dev/null || true)
+    if [[ -n "$outdated_json" ]]; then
+      while IFS=$'\t' read -r name ver; do
+        [[ -n "$name" ]] && outdated_map[$name]="$ver"
+      done < <(printf '%s' "$outdated_json" \
+               | jq -r 'to_entries[] | "\(.key)\t\(.value.latest)"' 2>/dev/null || true)
+    fi
+  fi
+
+  # Emit rows, filtering out runtime packages via jq
+  printf '%s' "$installed_json" \
+    | jq -r '(.dependencies // {}) | to_entries[]
+             | select(.key as $k | ["npm", "corepack", "node-gyp"] | index($k) | not)
+             | "\(.key)\t\(.value.version)"' 2>/dev/null \
+    | while IFS=$'\t' read -r name ver; do
+        if [[ "$outdated" == true && -n "${outdated_map[$name]:-}" ]]; then
+          ver="${ver} (update available: ${outdated_map[$name]})"
+        fi
+        printf '%s\t%s\n' "$name" "$ver"
+      done
+}
+
 do_list() {
-  npm_list_installed
+  local outdated=false
+  [[ "${1:-}" == "-u" ]] && outdated=true
+  npm_list_rows "$outdated" | pkg_table_print $'Package\tVersion'
 }
 
 do_sync() {
@@ -43,7 +80,7 @@ do_sync() {
 }
 
 case "${1:-}" in
-  list) do_list ;;
+  list) shift; do_list "$@" ;;
   sync) do_sync ;;
-  *)    pkg_die "usage: system-package-npm {list|sync}" ;;
+  *)    pkg_die "usage: system-package-npm {list [-u]|sync}" ;;
 esac
