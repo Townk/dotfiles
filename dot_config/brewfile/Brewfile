@@ -4,6 +4,7 @@ tap "1password/tap"
 tap "olets/tap"
 tap "anomalyco/tap"
 tap "rafaelgarrido/caveats"
+tap "jundot/omlx", "https://github.com/jundot/omlx"
 
 # specify a directory to install
 cask_args appdir: '/Applications'
@@ -230,7 +231,9 @@ brew 'mole'                         # Clean up tool
 brew 'mosh'                         # Intermittent connectivity remote connection (`ssh` but better[-ish])
 brew 'neovim'                       # Editor
 brew 'anomalyco/tap/opencode'       # AI CLI agent
-brew 'ollama'                       # Local AI models
+brew 'omlx'                         # Local AI models
+brew 'python@3.11'                  # Pinned runtime for omlx (declared so `brew bundle --cleanup` keeps it)
+brew 'pi-coding-agent'              # Coding Agent Harness
 brew 'pinentry-mac'                 # Password entry application for Mac
 brew 'pipx'                         # python scripts globaly available
 brew 'plantuml'                     # UML in text
