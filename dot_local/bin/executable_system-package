@@ -24,7 +24,9 @@ Usage:
 Ecosystems:  ${ECOSYSTEMS[*]}
 Subcommands: ${SUBCOMMANDS[*]}
 
-list supports -u (show update available)
+list flags:
+  -u, --update   show available updates
+  -a, --all      include brew transient dependencies (no-op for other tools)
 EOF
 }
 

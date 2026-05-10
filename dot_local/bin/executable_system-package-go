@@ -71,7 +71,13 @@ go_list_rows() {
 
 do_list() {
   local outdated=false
-  [[ "${1:-}" == "-u" ]] && outdated=true
+  while (( $# > 0 )); do
+    case "$1" in
+      -u|--update) outdated=true; shift ;;
+      -a|--all)    shift ;;  # no-op: go has no transient-dep concept here
+      *) pkg_die "unknown flag for list: $1" ;;
+    esac
+  done
   go_list_rows "$outdated"
 }
 
@@ -111,5 +117,5 @@ do_sync() {
 case "${1:-}" in
   list) shift; do_list "$@" ;;
   sync) do_sync ;;
-  *)    pkg_die "usage: system-package-go {list [-u]|sync}" ;;
+  *)    pkg_die "usage: system-package-go {list [-u|--update]|sync}" ;;
 esac
