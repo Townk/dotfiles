@@ -4,5 +4,3 @@
 # line uninstalls the binary on next sync.
 
 github.com/bscott/pm-cli/cmd/pm-cli
-github.com/marcosnils/bin
-github.com/masgari/ollama-cli

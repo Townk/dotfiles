@@ -83,7 +83,7 @@ zstyle ':z4h:*' fzf-flags \
 export GOPATH="$XDG_DATA_HOME/go"
 export GOMODCACHE="$XDG_CACHE_HOME/go-mod"
 export GOCACHE="$XDG_CACHE_HOME/go-build"
-export GOBIN="$XDG_BIN_HOME"
+export GOBIN="$GOPATH/bin"
 export GOPROXY=direct
 
 export HOMEBREW_NO_ENV_HINTS=1
@@ -111,7 +111,7 @@ z4h init || return
 
 # Extend PATH.
 # path=(~/.local/bin /opt/homebrew/opt/binutils/bin $path)
-path=(~/.local/bin /Applications/Obsidian.app/Contents/MacOS $path)
+path=(~/.local/bin "$GOPATH/bin" /Applications/Obsidian.app/Contents/MacOS $path)
 
 # Extend FPATH.
 if [[ -d "$HOMEBREW_PREFIX/share/zsh-abbr" ]] then
