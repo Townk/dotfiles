@@ -12,7 +12,7 @@ source can later coexist with a Linux machine without polluting it.
 | `.setup.sh` | Top-level fresh-machine bootstrap (Xcode CLT → Homebrew → chezmoi → apply → 1Password/gh auth → `bin`). |
 | `dot_zshrc`, `dot_zshenv`, `dot_p10k.zsh` | Zsh + [zsh4humans](https://github.com/romkatv/zsh4humans) + Powerlevel10k. |
 | `dot_config/zsh/` | Functions, abbreviations, color/lib helpers. |
-| `dot_config/brewfile/` | `Brewfile.bootstrap` (minimal subset `.setup.sh` itself needs) and `Brewfile` (everything else). |
+| `dot_config/packages/` | `Brewfile.bootstrap` (minimal subset `.setup.sh` itself needs) and `Brewfile` (everything else). |
 | `dot_config/git/` | Git config, ignore, attributes, message templates, delta integration. |
 | `dot_config/wezterm/` | WezTerm config + custom quick-launch and statusbar plugin configs. |
 | `dot_config/hammerspoon/` | Stream Deck+ integration, system controls, MOTD overlays. |

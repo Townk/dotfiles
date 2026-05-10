@@ -106,7 +106,7 @@ tabs:
     action:
       type: "Edit"
       label: "Edit Brewbundle file"
-      cwd: "~/.config/brewfile"
+      cwd: "~/.config/packages"
       args: [ "Brewfile" ]
 
   - id: "wezterm-config"

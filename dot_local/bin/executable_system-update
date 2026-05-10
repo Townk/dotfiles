@@ -38,7 +38,7 @@ print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
 # their union. Running them separately would make the cleanup pass on the
 # first file treat all packages from the second as "extra" and uninstall
 # them.
-cat ~/.config/brewfile/Brewfile.bootstrap ~/.config/brewfile/Brewfile \
+cat ~/.config/packages/Brewfile.bootstrap ~/.config/packages/Brewfile \
   | brew bundle install -q --cleanup --upgrade --file=- \
   || die "Failed to upgrade Homebrew Bundle!"
 
