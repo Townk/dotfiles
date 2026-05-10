@@ -206,7 +206,6 @@ brew 'bat'                          # A better cat
 brew 'bats-core'                    # Bash Automated Testing System (for: system-package tests)
 brew 'bottom'                       # Graphical process/system (`top` monitor but better: `/bin/btm`)
 brew 'chezmoi'                      # Modern dot-files manager
-brew 'choose'                       # Better `cut`
 brew 'direnv'                       # Automation when changing directories in the terminal
 brew 'doggo'                        # DNS lookup tool
 brew 'duf'                          # Better `du`
@@ -215,7 +214,6 @@ brew 'eza'                          # List directory contents (`ls` but better)
 brew 'fd'                           # Find entries in the file system (`find` but better)
 brew 'fend'                         # Terminal unit conversion
 brew 'fzf'                          # Fuzzy Finder for CLI
-brew 'gemini-cli'                   # Claude-code from Google
 # `gh` lives in Brewfile.bootstrap (needed by .setup.sh)
 brew 'gpg-tui'                      # Manage GPG keys on terminal
 brew 'gping'                        # ping, but with graph
@@ -236,7 +234,6 @@ brew 'omlx'                         # Local AI models
 brew 'python@3.11'                  # Pinned runtime for omlx (declared so `brew bundle --cleanup` keeps it)
 brew 'pi-coding-agent'              # Coding Agent Harness
 brew 'pinentry-mac'                 # Password entry application for Mac
-brew 'pipx'                         # python scripts globaly available
 brew 'plantuml'                     # UML in text
 brew 'procs'                        # Process status (`ps` but better)
 brew 'ripgrep'                      # Recursive lines matching a pattern (`grep` but better: `/bin/rg`)
