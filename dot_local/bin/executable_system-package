@@ -2,8 +2,8 @@
 # system-package — dispatcher for system-package-<ecosystem> workers.
 #
 # Usage:
-#   system-package <ecosystem> <subcommand>
-#   system-package --all <subcommand>
+#   system-package <subcommand>              # run for every ecosystem
+#   system-package <ecosystem> <subcommand>  # run for one ecosystem
 #
 # Ecosystems: brew, uv, npm, go
 # Subcommands: list, sync
@@ -18,8 +18,8 @@ SUBCOMMANDS=(list sync)
 usage() {
   cat <<EOF
 Usage:
-  system-package <ecosystem> <subcommand>
-  system-package --all <subcommand>
+  system-package <subcommand>              # run for every ecosystem
+  system-package <ecosystem> <subcommand>  # run for one ecosystem
 
 Ecosystems:  ${ECOSYSTEMS[*]}
 Subcommands: ${SUBCOMMANDS[*]}
@@ -45,10 +45,12 @@ run_one() {
 }
 
 main() {
-  [[ $# -ge 2 ]] || { usage; exit 1; }
+  [[ $# -ge 1 ]] || { usage; exit 1; }
 
-  if [[ "$1" == "--all" ]]; then
-    local cmd="$2"; shift 2
+  if [[ $# -eq 1 ]]; then
+    local cmd="$1"
+    is_in "$cmd" "${SUBCOMMANDS[@]}" \
+      || { usage; pkg_die "unknown subcommand: $cmd"; }
     local eco
     for eco in "${ECOSYSTEMS[@]}"; do
       pkg_info "${PKG_C_BWH}── $eco ──${PKG_C_RES}"

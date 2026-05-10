@@ -41,7 +41,7 @@ mise upgrade
 mise prune -y
 
 print -P -- "\n📦 Sync system packages...\n"
-system-package --all sync || die "Failed to sync system packages!"
+system-package sync || die "Failed to sync system packages!"
 
 print -P -- "\n🧹 Cleaning up Homebrew artifacts...\n"
 brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
