@@ -33,24 +33,6 @@ print -P -- "\n${C_BLU}System Update\n-------------${C_RES}"
 print -P -- "\n  Updating Homebrew sources...\n"
 brew update || die "Failed to update Homebrew!"
 
-print -P -- "\n🍻 Upgrade Homebrew Bundle...\n"
-# Concatenate Brewfile.bootstrap and the main Brewfile so `--cleanup` sees
-# their union. Running them separately would make the cleanup pass on the
-# first file treat all packages from the second as "extra" and uninstall
-# them.
-cat ~/.config/packages/Brewfile.bootstrap ~/.config/packages/Brewfile \
-  | brew bundle install -q --cleanup --upgrade --file=- \
-  || die "Failed to upgrade Homebrew Bundle!"
-
-print -P -- "\n🍺 Upgrade Homebrew formulas...\n"
-brew upgrade || die "Failed to upgrade Homebrew formulas!"
-
-print -P -- "\n🍺 Upgrade Homebrew casks...\n"
-brew upgrade --cask --greedy-latest || die "Failed to upgrade Homebrew casks!"
-
-print -P -- "\n🧹 Cleanning up Homebrew artifacts...\n"
-brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
-
 print -P -- "\n🦆 Upgrade Yazi plugins...\n"
 ya pkg upgrade || die "Failed to upgrade Yazi plugins!"
 
@@ -58,12 +40,15 @@ print -P -- "\n🛠️ Upgrade Mise tools...\n"
 mise upgrade
 mise prune -y
 
+print -P -- "\n📦 Sync system packages...\n"
+system-package --all sync || die "Failed to sync system packages!"
+
+print -P -- "\n🧹 Cleaning up Homebrew artifacts...\n"
+brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
+
 print -P -- "\n🛠️ Upgrade bin tools...\n"
 bin update -a -y
 bin prune -f
-
-print -P -- "\n🛠️ Upgrade uv tools...\n"
-mise exec -- uv tool upgrade --all
 
 print -P -- "\n📝 Upgrade NeoVim plugins...\n"
 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" \
