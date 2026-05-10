@@ -43,24 +43,35 @@ worker_check() {
 }
 
 # list_one <eco> [args...]
-# Format one ecosystem's raw TSV output as a Package/Version table.
+# Format one ecosystem's raw TSV output as a table. brew emits 3-column
+# rows (type/name/version); other ecosystems emit 2-column rows (name/version).
 list_one() {
   local eco="$1"; shift
   worker_check "$eco"
-  "system-package-$eco" list "$@" | pkg_table_print $'Package\tVersion'
+  if [[ "$eco" == "brew" ]]; then
+    "system-package-$eco" list "$@" | pkg_table_print $'Type\tPackage\tVersion'
+  else
+    "system-package-$eco" list "$@" | pkg_table_print $'Package\tVersion'
+  fi
 }
 
 # list_all [args...]
 # Merge every ecosystem's raw TSV output into a single Tool/Package/Version
 # table, with an inline separator between groups. Empty ecosystems are
-# skipped (no separator emitted for them).
+# skipped (no separator emitted for them). brew rows already carry a type
+# (formula/cask/mas) as their first cell; we fold that into the Tool column
+# as "brew:formula" / "brew:cask" / "brew:mas".
 list_all() {
   local args=("$@")
   {
     local first=1 eco rows
     for eco in "${ECOSYSTEMS[@]}"; do
       worker_check "$eco"
-      rows=$("system-package-$eco" list "${args[@]}" | awk -v t="$eco" '{print t "\t" $0}')
+      if [[ "$eco" == "brew" ]]; then
+        rows=$("system-package-$eco" list "${args[@]}" | sed 's/^/brew:/')
+      else
+        rows=$("system-package-$eco" list "${args[@]}" | awk -v t="$eco" '{print t "\t" $0}')
+      fi
       [[ -z "$rows" ]] && continue
       (( first )) || printf '__SEP__\n'
       first=0

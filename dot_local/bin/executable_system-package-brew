@@ -10,11 +10,14 @@ BREWFILE_BOOT="$PKG_DIR/Brewfile.bootstrap"
 BREWFILE_MAIN="$PKG_DIR/Brewfile"
 
 # brew_list_rows <outdated:true|false>
-# Output one "name\tversion[annotation]" TSV row per installed package.
+# Output one "type\tname\tversion[annotation]" TSV row per installed package.
+# Type is one of: formula, cask, mas.  Rows are sorted by (type, name) with
+# type ordered formula → cask → mas.
 brew_list_rows() {
   local outdated="${1:-false}"
   local -A outdated_map
   local -A pkg_map
+  local -A type_map
 
   # Build outdated map (only if -u)
   if [[ "$outdated" == true ]]; then
@@ -51,16 +54,22 @@ brew_list_rows() {
     fi
   fi
 
-  # Collect installed packages
+  # Collect installed packages with their type
   # Formulas
   local name="" ver=""
   while IFS=' ' read -r name ver; do
-    [[ -n "$name" && -n "$ver" ]] && pkg_map[$name]="$ver"
+    [[ -n "$name" && -n "$ver" ]] && {
+      pkg_map[$name]="$ver"
+      type_map[$name]="formula"
+    }
   done < <(brew list --versions --formula 2>/dev/null || true)
 
   # Casks
   while IFS=' ' read -r name ver; do
-    [[ -n "$name" && -n "$ver" ]] && pkg_map[$name]="$ver"
+    [[ -n "$name" && -n "$ver" ]] && {
+      pkg_map[$name]="$ver"
+      type_map[$name]="cask"
+    }
   done < <(brew list --versions --cask 2>/dev/null || true)
 
   # MAS apps: "id name (version)"
@@ -73,19 +82,32 @@ brew_list_rows() {
       mas_ver=$(printf '%s' "$line" \
                 | grep -oE '\([^)]+\)$' \
                 | tr -d '()')
-      [[ -n "$mas_name" && -n "$mas_ver" ]] && pkg_map[$mas_name]="$mas_ver"
+      [[ -n "$mas_name" && -n "$mas_ver" ]] && {
+        pkg_map[$mas_name]="$mas_ver"
+        type_map[$mas_name]="mas"
+      }
     done < <(mas list 2>/dev/null || true)
   fi
 
-  # Emit sorted rows
-  local k=""
-  for k in "${(@ko)pkg_map}"; do
-    local v="${pkg_map[$k]}"
-    if [[ "$outdated" == true && -n "${outdated_map[$k]:-}" ]]; then
-      v="${v} ${PKG_C_YEL}(update available: ${outdated_map[$k]})${PKG_C_RES}"
-    fi
-    printf '%s\t%s\n' "$k" "$v"
-  done
+  # Emit rows sorted by (type rank, name). Type rank: formula=1, cask=2, mas=3
+  # so formulas appear first, then casks, then App Store apps.
+  local k="" v="" t="" rank=0
+  {
+    for k in "${(@k)pkg_map}"; do
+      v="${pkg_map[$k]}"
+      t="${type_map[$k]}"
+      if [[ "$outdated" == true && -n "${outdated_map[$k]:-}" ]]; then
+        v="${v} ${PKG_C_YEL}(update available: ${outdated_map[$k]})${PKG_C_RES}"
+      fi
+      case "$t" in
+        formula) rank=1 ;;
+        cask)    rank=2 ;;
+        mas)     rank=3 ;;
+        *)       rank=9 ;;
+      esac
+      printf '%d\t%s\t%s\t%s\n' "$rank" "$t" "$k" "$v"
+    done
+  } | sort -t$'\t' -k1,1n -k3,3 | cut -f2-
 }
 
 do_list() {
