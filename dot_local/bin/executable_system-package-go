@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# system-package-go - sync `go install`-installed binaries against
+# system-package-go — sync `go install`-installed binaries against
 # ~/.config/packages/Gofile. Manifest entries are full module paths.
 
 set -eu -o pipefail
@@ -13,26 +13,22 @@ go_bin_dir() {
 }
 
 # Print one "<package_path>\t<binary_basename>" per line for everything in
-# $GOBIN that go can identify.
+# $GOBIN that go can identify. Skips files that aren't Go binaries (where
+# `go version -m` fails).
 go_installed_pairs() {
   local bin_dir; bin_dir=$(go_bin_dir)
   [[ -d "$bin_dir" ]] || return 0
-  local f line path
+  local f pkg_path
   for f in "$bin_dir"/*(N); do
     [[ -x "$f" && -f "$f" ]] || continue
-    while IFS= read -r line; do
-      [[ "$line" =~ ^path[[:space:]]+(.*) ]] && path="${BASH_REMATCH[1]}"
-    done < <(go version -m "$f" 2>/dev/null)
-    [[ -n "$path" ]] && printf '%s\t%s\n' "$path" "${f:t}"
-    path=""
+    pkg_path=$( { go version -m "$f" 2>/dev/null || true; } \
+              | awk '$1=="path" {print $2; exit}')
+    [[ -n "$pkg_path" ]] && printf '%s\t%s\n' "$pkg_path" "${f:t}" || true
   done
 }
 
 go_list_installed() {
-  local line pkg
-  go_installed_pairs | while IFS=$'\t' read -r pkg rest; do
-    [[ -n "$pkg" ]] && printf '%s\n' "$pkg"
-  done
+  go_installed_pairs | awk -F'\t' '{print $1}'
 }
 
 do_list() {
