@@ -1,0 +1,77 @@
+#!/usr/bin/env zsh
+# system-package-uv — sync Python tools (via uv tool) against
+# ~/.config/packages/Uvfile, with Python-version drift detection.
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-package-common.sh"
+
+UVFILE="$PKG_DIR/Uvfile"
+PYTHON_STAMP="$PKG_STATE_DIR/uv.python"
+
+uv_list_installed() {
+  # `uv tool list` prints one tool name per "block"; the tool name is the
+  # first column on lines that don't begin with whitespace and aren't headers.
+  uv tool list 2>/dev/null | awk '/^[^[:space:]]/ && !/^No tools/ {print $1}'
+}
+
+uv_current_python() {
+  if command -v mise >/dev/null 2>&1; then
+    mise current python 2>/dev/null
+  else
+    python --version 2>&1 | awk '{print $2}'
+  fi
+}
+
+uv_python_drifted() {
+  local current; current=$(uv_current_python)
+  [[ -z "$current" ]] && return 1
+  if [[ -f "$PYTHON_STAMP" ]]; then
+    local last; last=$(<"$PYTHON_STAMP")
+    [[ "$current" != "$last" ]]
+  else
+    return 0
+  fi
+}
+
+uv_write_stamp() {
+  mkdir -p "$PKG_STATE_DIR"
+  uv_current_python > "$PYTHON_STAMP"
+}
+
+do_list() {
+  uv_list_installed
+}
+
+do_sync() {
+  pkg_info "Syncing uv tools..."
+
+  local declared installed
+  declared=$(mktemp); installed=$(mktemp)
+  trap "rm -f '$declared' '$installed'" EXIT
+
+  if uv_python_drifted; then
+    pkg_warn "Python version changed since last sync — rebuilding uv tool venvs"
+    uv tool upgrade --all --reinstall || true
+  fi
+
+  pkg_manifest_read "$UVFILE" > "$declared"
+  uv_list_installed > "$installed"
+
+  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r tool; do
+    [[ -n "$tool" ]] && uv tool install "$tool"
+  done
+  pkg_diff_only_in "$installed" "$declared" | while IFS= read -r tool; do
+    [[ -n "$tool" ]] && uv tool uninstall "$tool"
+  done
+
+  uv tool upgrade --all || true
+
+  uv_write_stamp
+}
+
+case "${1:-}" in
+  list) do_list ;;
+  sync) do_sync ;;
+  *)    pkg_die "usage: system-package-uv {list|sync}" ;;
+esac
