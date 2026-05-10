@@ -1,0 +1,29 @@
+#!/usr/bin/env zsh
+# system-package-brew — sync Homebrew formulas, casks, and MAS apps
+# against ~/.config/packages/Brewfile.bootstrap + Brewfile.
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-package-common.sh"
+
+BREWFILE_BOOT="$PKG_DIR/Brewfile.bootstrap"
+BREWFILE_MAIN="$PKG_DIR/Brewfile"
+
+do_list() {
+  brew leaves
+  brew list --cask 2>/dev/null
+  command -v mas >/dev/null && mas list | awk '{$1=""; sub(/^ /, ""); sub(/ \([^)]*\)$/, ""); print}'
+}
+
+do_sync() {
+  pkg_info "Syncing Homebrew packages..."
+  cat "$BREWFILE_BOOT" "$BREWFILE_MAIN" \
+    | brew bundle install -q --cleanup --upgrade --file=- \
+    || pkg_die "brew bundle install failed"
+}
+
+case "${1:-}" in
+  list) do_list ;;
+  sync) do_sync ;;
+  *)    pkg_die "usage: system-package-brew {list|sync}" ;;
+esac
