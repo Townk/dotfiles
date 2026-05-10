@@ -63,13 +63,15 @@ bin update -a -y
 bin prune -f
 
 print -P -- "\n🛠️ Upgrade uv tools...\n"
-uv tool upgrade --all
+mise exec -- uv tool upgrade --all
 
 print -P -- "\n📝 Upgrade NeoVim plugins...\n"
 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" \
   || die "Failed to upgrade NeoVim plugins!"
 
 print -P -- "\n🐚 Upgrade zsh4humans...\n"
-z4h update || die "Failed to upgrade zsh4humans!"
+# z4h is a shell function defined by .zshrc, not a binary on PATH.
+# Run via interactive zsh so .zshrc is sourced and the function is loaded.
+zsh -ic 'z4h update' || die "Failed to upgrade zsh4humans!"
 
 print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
