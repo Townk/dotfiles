@@ -11,13 +11,33 @@ BREWFILE_MAIN="$PKG_DIR/Brewfile"
 
 # brew_list_rows <outdated:true|false>
 # Output one "type\tname\tversion[annotation]" TSV row per installed package.
-# Type is one of: formula, cask, mas.  Rows are sorted by (type, name) with
-# type ordered formula → cask → mas.
+# Type is one of: formula (user-installed), dep (transient dependency),
+# cask, mas. Rows are sorted by (type, name) with type ordered
+# formula → dep → cask → mas.
 brew_list_rows() {
   local outdated="${1:-false}"
   local -A outdated_map
   local -A pkg_map
   local -A type_map
+  local -A direct_set
+
+  # Set of formulas where installed_on_request:true — i.e. the user (or a
+  # Brewfile) explicitly installed them. Anything not in this set is a
+  # transient dependency. Reading INSTALL_RECEIPT.json directly is ~100x
+  # faster than `brew info --json=v2 --installed` for the same data.
+  local cellar=""
+  cellar=$(brew --cellar 2>/dev/null) || cellar=""
+  if [[ -n "$cellar" ]]; then
+    local receipts=("$cellar"/*/*/INSTALL_RECEIPT.json(N))
+    if (( ${#receipts[@]} > 0 )); then
+      local n=""
+      while IFS= read -r n; do
+        [[ -n "$n" ]] && direct_set[$n]=1
+      done < <(jq -r 'select(.installed_on_request)
+                      | input_filename | split("/")[-3]' \
+                "${receipts[@]}" 2>/dev/null | sort -u || true)
+    fi
+  fi
 
   # Build outdated map (only if -u)
   if [[ "$outdated" == true ]]; then
@@ -55,12 +75,17 @@ brew_list_rows() {
   fi
 
   # Collect installed packages with their type
-  # Formulas
+  # Formulas — split into "formula" (direct) vs "dep" (transient) using
+  # the direct_set computed above.
   local name="" ver=""
   while IFS=' ' read -r name ver; do
     [[ -n "$name" && -n "$ver" ]] && {
       pkg_map[$name]="$ver"
-      type_map[$name]="formula"
+      if [[ -n "${direct_set[$name]:-}" ]]; then
+        type_map[$name]="formula"
+      else
+        type_map[$name]="dep"
+      fi
     }
   done < <(brew list --versions --formula 2>/dev/null || true)
 
@@ -101,8 +126,9 @@ brew_list_rows() {
       fi
       case "$t" in
         formula) rank=1 ;;
-        cask)    rank=2 ;;
-        mas)     rank=3 ;;
+        dep)     rank=2 ;;
+        cask)    rank=3 ;;
+        mas)     rank=4 ;;
         *)       rank=9 ;;
       esac
       printf '%d\t%s\t%s\t%s\n' "$rank" "$t" "$k" "$v"
