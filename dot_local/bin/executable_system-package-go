@@ -72,7 +72,7 @@ go_list_rows() {
 do_list() {
   local outdated=false
   [[ "${1:-}" == "-u" ]] && outdated=true
-  go_list_rows "$outdated" | pkg_table_print $'Package\tVersion'
+  go_list_rows "$outdated"
 }
 
 do_sync() {

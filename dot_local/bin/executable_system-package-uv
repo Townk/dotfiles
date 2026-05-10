@@ -68,7 +68,7 @@ uv_list_rows() {
 do_list() {
   local outdated=false
   [[ "${1:-}" == "-u" ]] && outdated=true
-  uv_list_rows "$outdated" | pkg_table_print $'Package\tVersion'
+  uv_list_rows "$outdated"
 }
 
 do_sync() {

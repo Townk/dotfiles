@@ -37,13 +37,54 @@ is_in() {
   return 1
 }
 
-run_one() {
-  local eco="$1" cmd="$2"; shift 2
-  is_in "$cmd" "${SUBCOMMANDS[@]}" \
-    || { usage; pkg_die "unknown subcommand: $cmd"; }
-  command -v "system-package-$eco" >/dev/null \
-    || pkg_die "worker not found: system-package-$eco"
-  "system-package-$eco" "$cmd" "$@"
+worker_check() {
+  command -v "system-package-$1" >/dev/null \
+    || pkg_die "worker not found: system-package-$1"
+}
+
+# list_one <eco> [args...]
+# Format one ecosystem's raw TSV output as a Package/Version table.
+list_one() {
+  local eco="$1"; shift
+  worker_check "$eco"
+  "system-package-$eco" list "$@" | pkg_table_print $'Package\tVersion'
+}
+
+# list_all [args...]
+# Merge every ecosystem's raw TSV output into a single Tool/Package/Version
+# table, with an inline separator between groups. Empty ecosystems are
+# skipped (no separator emitted for them).
+list_all() {
+  local args=("$@")
+  {
+    local first=1 eco rows
+    for eco in "${ECOSYSTEMS[@]}"; do
+      worker_check "$eco"
+      rows=$("system-package-$eco" list "${args[@]}" | awk -v t="$eco" '{print t "\t" $0}')
+      [[ -z "$rows" ]] && continue
+      (( first )) || printf '__SEP__\n'
+      first=0
+      printf '%s\n' "$rows"
+    done
+  } | pkg_table_print $'Tool\tPackage\tVersion'
+}
+
+# sync_one <eco> [args...]
+sync_one() {
+  local eco="$1"; shift
+  worker_check "$eco"
+  "system-package-$eco" sync "$@"
+}
+
+# sync_all [args...]
+# Run sync for every ecosystem, with a banner before each one. Banners stay
+# in the merged-output flow because sync emits log-style output, not a table.
+sync_all() {
+  local eco
+  for eco in "${ECOSYSTEMS[@]}"; do
+    pkg_info "${PKG_C_BWH}── $eco ──${PKG_C_RES}"
+    sync_one "$eco" "$@"
+  done
 }
 
 main() {
@@ -51,16 +92,20 @@ main() {
 
   if is_in "$1" "${SUBCOMMANDS[@]}"; then
     local cmd="$1"; shift
-    local eco
-    for eco in "${ECOSYSTEMS[@]}"; do
-      pkg_info "${PKG_C_BWH}── $eco ──${PKG_C_RES}"
-      run_one "$eco" "$cmd" "$@"
-    done
+    case "$cmd" in
+      list) list_all "$@" ;;
+      sync) sync_all "$@" ;;
+    esac
   elif is_in "$1" "${ECOSYSTEMS[@]}"; then
     local eco="$1"; shift
     [[ $# -ge 1 ]] || { usage; pkg_die "missing subcommand"; }
     local cmd="$1"; shift
-    run_one "$eco" "$cmd" "$@"
+    is_in "$cmd" "${SUBCOMMANDS[@]}" \
+      || { usage; pkg_die "unknown subcommand: $cmd"; }
+    case "$cmd" in
+      list) list_one "$eco" "$@" ;;
+      sync) sync_one "$eco" "$@" ;;
+    esac
   else
     usage
     pkg_die "unknown argument: $1"
