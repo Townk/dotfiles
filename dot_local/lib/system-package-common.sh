@@ -41,9 +41,22 @@ pkg_diff_only_in() {
 
 # pkg_table_print <header>
 # Read tab-separated rows from stdin, prepend the (also tab-separated) header,
-# and pipe through `column -t` for alignment. Header is one string with tabs
-# between column labels (e.g. $'Package\tVersion').
+# align via `column -t`, then post-process the output:
+#   - colorize the header line (bold white) and add an underline of ─ chars
+#     beneath it that mirrors the column layout
+#   - leave row content untouched (workers wrap "update available" themselves)
+# Header is one string with tabs between column labels, e.g. $'Package\tVersion'.
 pkg_table_print() {
   local header="$1"
-  { printf '%s\n' "$header"; cat; } | column -t -s $'\t'
+  local first=1 line sep
+  { printf '%s\n' "$header"; cat; } | column -t -s $'\t' | while IFS= read -r line; do
+    if (( first )); then
+      first=0
+      printf '%s%s%s\n' "$PKG_C_BWH" "$line" "$PKG_C_RES"
+      sep=$(printf '%s' "$line" | sed 's/[^[:space:]]/─/g')
+      printf '%s%s%s\n' "$PKG_C_BWH" "$sep" "$PKG_C_RES"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
 }

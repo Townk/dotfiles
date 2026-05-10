@@ -58,7 +58,7 @@ uv_list_rows() {
           latest=$(curl -fsSL "https://pypi.org/pypi/${name}/json" 2>/dev/null \
                    | jq -r '.info.version // empty' 2>/dev/null || true)
           if [[ -n "$latest" && "$latest" != "$ver" ]]; then
-            ver="${ver} (update available: ${latest})"
+            ver="${ver} ${PKG_C_YEL}(update available: ${latest})${PKG_C_RES}"
           fi
         fi
         printf '%s\t%s\n' "$name" "$ver"

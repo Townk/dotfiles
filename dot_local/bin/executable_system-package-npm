@@ -47,7 +47,7 @@ npm_list_rows() {
              | "\(.key)\t\(.value.version)"' 2>/dev/null \
     | while IFS=$'\t' read -r name ver; do
         if [[ "$outdated" == true && -n "${outdated_map[$name]:-}" ]]; then
-          ver="${ver} (update available: ${outdated_map[$name]})"
+          ver="${ver} ${PKG_C_YEL}(update available: ${outdated_map[$name]})${PKG_C_RES}"
         fi
         printf '%s\t%s\n' "$name" "$ver"
       done

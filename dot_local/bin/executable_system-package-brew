@@ -82,7 +82,7 @@ brew_list_rows() {
   for k in "${(@ko)pkg_map}"; do
     local v="${pkg_map[$k]}"
     if [[ "$outdated" == true && -n "${outdated_map[$k]:-}" ]]; then
-      v="${v} (update available: ${outdated_map[$k]})"
+      v="${v} ${PKG_C_YEL}(update available: ${outdated_map[$k]})${PKG_C_RES}"
     fi
     printf '%s\t%s\n' "$k" "$v"
   done

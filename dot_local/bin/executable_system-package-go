@@ -62,7 +62,7 @@ go_list_rows() {
                | awk '{print $NF}' || true)
       # When there are no tagged versions, $NF is just the module path — skip it
       if [[ -n "$latest" && "$latest" != "$mod_path" && "$latest" != "$ver" ]]; then
-        ver="${ver} (update available: ${latest})"
+        ver="${ver} ${PKG_C_YEL}(update available: ${latest})${PKG_C_RES}"
       fi
     fi
     printf '%s\t%s\n' "$bin_name" "$ver"
