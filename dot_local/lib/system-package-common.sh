@@ -4,12 +4,13 @@
 # Color/format helpers; respect non-tty stdout.
 if [[ -t 1 ]]; then
   PKG_C_BLU=$'\e[34m'
+  PKG_C_BBL=$'\e[94m'
   PKG_C_RED=$'\e[31m'
   PKG_C_YEL=$'\e[33m'
   PKG_C_BWH=$'\e[1;37m'
   PKG_C_RES=$'\e[0m'
 else
-  PKG_C_BLU=""; PKG_C_RED=""; PKG_C_YEL=""; PKG_C_BWH=""; PKG_C_RES=""
+  PKG_C_BLU=""; PKG_C_BBL=""; PKG_C_RED=""; PKG_C_YEL=""; PKG_C_BWH=""; PKG_C_RES=""
 fi
 
 PKG_DIR="${PKG_DIR:-$HOME/.config/packages}"
@@ -52,7 +53,7 @@ pkg_table_print() {
   local header="$1"
   awk -F'\t' \
       -v header="$header" \
-      -v bwh="$PKG_C_BWH" \
+      -v bwh="$PKG_C_BBL" \
       -v reset="$PKG_C_RES" '
     function visual_width(s,   t) {
       t = s; gsub(/\033\[[0-9;]*m/, "", t); return length(t)
