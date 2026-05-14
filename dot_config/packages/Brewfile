@@ -94,7 +94,7 @@ cask 'affinity'                     # Vector and Image editor
 cask 'autodesk-fusion'              # 3D modeling
 cask 'bambu-studio'                 # 3D Printing
 cask 'claude'                       # AI for developers desktop app
-cask 'claude-code'                  # AI for developers CLI
+# cask 'claude-code'                  # AI for developers CLI
 cask 'discord'                      # Chat (a more open Slack)
 cask 'dropbox'                      # Cloud storage
 cask 'google-chrome'                # Browser
