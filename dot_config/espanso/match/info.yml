@@ -8,8 +8,6 @@ matches:
     replace: thiago@rapinialves.com
   - trigger: ";pem"
     replace: paypal@thiagoalves.com.br
-  - trigger: ";wem"
-    replace: thiagoa@amazon.com
   - trigger: ";tem"
     replace: talk@thiagoalves.com.br
   - trigger: ";gem"
@@ -18,12 +16,6 @@ matches:
     replace: thiago.salves@ymail.com
   - trigger: ";ph"
     replace: (763) 607-1536
-  - trigger: ";hclib"
-    replace: 21972077039415
-  - trigger: ";sclib"
-    replace: 25119004991336
-  - trigger: ";achip"
-    replace: 985121009665447
   - trigger: ";blog"
     replace: "http://www.thiagoalves.com.br"
   - trigger: ";url"
