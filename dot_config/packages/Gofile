@@ -4,3 +4,4 @@
 # line uninstalls the binary on next sync.
 
 github.com/bscott/pm-cli/cmd/pm-cli
+github.com/isaacphi/mcp-language-server

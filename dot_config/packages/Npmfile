@@ -5,10 +5,8 @@
 # Apps
 @anthropic-ai/claude-code
 @earendil-works/pi-coding-agent
-repomix
 
-# Pi.dev extensions and packages
-glimpseui
-pi-context-zone
-pi-subagents
-pi-web-access
+# LSP packages
+typescript
+typescript-language-server
+basedpyright

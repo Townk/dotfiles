@@ -94,7 +94,6 @@ cask 'affinity'                     # Vector and Image editor
 cask 'autodesk-fusion'              # 3D modeling
 cask 'bambu-studio'                 # 3D Printing
 cask 'claude'                       # AI for developers desktop app
-# cask 'claude-code'                  # AI for developers CLI
 cask 'discord'                      # Chat (a more open Slack)
 cask 'dropbox'                      # Cloud storage
 cask 'google-chrome'                # Browser
@@ -162,9 +161,12 @@ brew 'zsh-abbr'                     # Commnad abbreviations for ZSH
 brew 'caddy'                        # Reverse proxy for locally running apps
 # `mise` lives in Brewfile.bootstrap (needed by run_once before system-update)
 brew 'container'                    # Apple version of docker
+brew 'ccls'                         # C/C++ development
+brew 'lua-language-server'          # Lua development
 
 # Dependency utilities (tools required by other tools)
 # ----------------------------------------------------
+brew '1broseidon/tap/cymbal'        # Code AST navigation for agents (for: pi.dev)
 brew 'cairo'                        # Open source rendering engine
 brew 'chafa'                        # Terminal image viewer (for: yazi)
 brew 'editorconfig'                 # Support for EditoConfig (for: nvim, JetBrains IDEs)
@@ -189,6 +191,7 @@ brew 'pandoc'                       # Convert files from one format to another (
 brew 'pngpaste'                     # Support to drop image files into Emacs buffers (for: nvim)
 brew 'poppler'                      # PDF previewer (for: yazi)
 brew 'resvg'                        # SVG renderer (for: yazi)
+brew 'rtk'                          # Shell proxy for AI (for: pi.dev)
 brew 'sdcv'                         # StarDict dictionaries (for: emacs)
 brew 'tag'                          # MacOS tag on Yazi (for: yazi)
 brew 'tectonic'                     # LaTeX in Rust (for: nvim)
