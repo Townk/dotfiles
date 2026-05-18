@@ -21,3 +21,5 @@ brew "mise"          # needed by run_once_after_setup-bootstrap-tools.sh.tmpl
                      # before system-update's uv/npm/go syncs run.
 brew "gh"            # used by .setup.sh once GitHub auth is wired up.
 cask "1password-cli" # used by .setup.sh to wait for `op account list`
+
+# vim:ft=ruby
