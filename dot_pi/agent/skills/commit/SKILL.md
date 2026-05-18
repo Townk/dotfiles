@@ -1,6 +1,6 @@
 ---
 name: commit
-description: This skill MUST be invoked when the user requests a git commit or wants to stage changes.
+description: You MUST use the read tool to read this file before performing ANY git commits or staging changes. It contains mandatory project-specific commit formats.
 ---
 
 # Code Commit
