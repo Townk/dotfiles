@@ -11,5 +11,7 @@
 		"modules/?.lua",
 		"modules/?/init.lua"
 	],
-	"runtime.pathStrict": false
+	"runtime.pathStrict": false,
+	"runtime.version": "Lua 5.4",
+	"diagnostics.globals": ["hs", "spoon"]
 }
