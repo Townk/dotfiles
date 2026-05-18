@@ -15,6 +15,7 @@
         "**/*.mjs"
       ],
       "rootMarkers": ["tsconfig.json", "jsconfig.json", "package.json"],
+      "single_file_support": false,
       "bin": "typescript-language-server",
       "args": ["--stdio"],
       "cwd": "{root}",
@@ -46,6 +47,7 @@
         "Pipfile",
         ".venv"
       ],
+      "single_file_support": false,
       "bin": "basedpyright-langserver",
       "args": ["--stdio"],
       "cwd": "{root}",
@@ -72,6 +74,7 @@
         "**/*.mm"
       ],
       "rootMarkers": ["compile_commands.json", ".clangd"],
+      "single_file_support": false,
       "bin": "/opt/homebrew/opt/llvm/bin/clangd",
       "args": ["--background-index"],
       "cwd": "{root}",
@@ -100,6 +103,7 @@
         "stylua.toml",
         ".stylua.toml"
       ],
+      "single_file_support": false,
       "bin": "lua-language-server",
       "args": [],
       "cwd": "{root}",

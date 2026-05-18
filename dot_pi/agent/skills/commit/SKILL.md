@@ -1,9 +1,6 @@
 ---
 name: commit
-description:
-  "Use when creating a git commit, drafting a commit message, or staging and
-  committing changes. Produces a Conventional Commits subject with a Markdown
-  body (Changes Description / Testing / Related items)."
+description: Use whenever the user requests a git commit, staging files, or drafting a commit message.
 ---
 
 # Code Commit
