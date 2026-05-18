@@ -20,13 +20,16 @@ source can later coexist with a Linux machine without polluting it.
 | `dot_config/yazi/` | Yazi file manager config + plugins. |
 | `dot_config/tealdeer/` | tldr client (Catppuccin Mocha theme, templated). |
 | `dot_config/atuin/`, `mise/`, `bin/`, `espanso/` | CLI tool configs. |
+| `dot_config/zsh/environment.sh` | Shared shell/GUI environment source, including XDG paths and `GNUPGHOME`. |
 | `private_dot_ssh/`, `dot_config/private_gnupg/` | SSH and GnuPG configs (chezmoi-private permissions). |
 | `dot_local/bin/system-update` | Canonical "bring all tools to latest" script. Used both as a daily command and inside the bootstrap. |
 | `dot_local/bin/nvim-wez.sh` | Engine behind the macOS "Open in NeoVim" Shortcuts droplet. |
 | `dot_local/share/shortcuts/` | Exported macOS Shortcuts (`.shortcut` files). |
 | `Library/private_Application Support/` | macOS symlinks to XDG paths (e.g. tealdeer's config). |
 | `run_once_after_setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, `mise install`, install `rust@nightly`, then run `system-update`. |
+| `run_once_after_setup-gpg-key.sh.tmpl` | Imports OpenPGP keys from 1Password if they are missing locally. |
 | `run_once_after_setup-system-settings.sh.tmpl` | macOS `defaults`, Finder, Dock, login items. |
+| `run_onchange_after_reload-environment-launchagent.sh.tmpl` | Reloads the GUI environment LaunchAgent when env definitions change. |
 | `run_onchange_after_install-macos-shortcut.sh.tmpl` | Re-imports `Open in NeoVim.shortcut` whenever its content hash changes. |
 
 ## Bootstrap on a fresh Mac
@@ -46,8 +49,8 @@ curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | b
 
 `.setup.sh` is self-bootstrapping: it installs Xcode Command Line Tools,
 Homebrew, and chezmoi; uses `chezmoi init Townk` to clone this repo into
-`~/.local/share/chezmoi/`; runs `chezmoi apply`; and finishes with the
-1Password / GitHub auth gates that need a human.
+`~/.local/share/chezmoi/`; clears the 1Password / GitHub auth gates that need
+a human; then runs `chezmoi apply`.
 
 ### Profile
 
@@ -93,6 +96,9 @@ End to end, the script:
       `~/.config/mise/config.toml` is on disk) to provision
       Python/Node/Go/Rust/uv, installs `rust@nightly`, then calls
       `~/.local/bin/system-update` to converge everything else.
+    - `setup-gpg-key.sh.tmpl` imports OpenPGP keys from 1Password Documents
+      when they are not already present in `~/.config/gnupg`, then applies
+      each document's configured ownertrust and enabled/disabled state.
     - `setup-system-settings.sh.tmpl` writes macOS `defaults` (keyboard,
       trackpad, dock, finder), and registers `Dropbox` / `Hammerspoon` /
       `Raycast` / `SoundSource` as login items.
@@ -102,6 +108,19 @@ End to end, the script:
 The interactive gates (1Password, `gh auth`) are deliberately front-loaded
 so the user clears them while their attention is on the install. After
 that, `chezmoi apply` can run unattended.
+
+Before bootstrapping a new machine, make sure the `rapinialves` 1Password
+account has these Documents in the `Private` vault:
+
+```text
+Personal - Thiago Alves (CA995D91)
+Personal - Thiago Alves (F403C88D)
+```
+
+The import hook reads them with `op document get --account rapinialves --vault
+Private`. Each document declares its ownertrust level and whether the imported
+keys should be left enabled or marked disabled, which keeps legacy keys
+available for decrypting old mail without making them active for new use.
 
 After it returns, the machine is fully provisioned. **Reboot recommended**
 so login items and macOS defaults take effect.

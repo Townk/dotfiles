@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+{{ if eq .chezmoi.os "darwin" -}}
+# Reload the LaunchAgent whenever either the agent plist or the shared
+# environment source changes.
+#
+# plist content hash: {{ include "Library/LaunchAgents/my.environment.variables.plist" | sha256sum }}
+# environment content hash: {{ include "dot_config/zsh/environment.sh" | sha256sum }}
+
+agent="$HOME/Library/LaunchAgents/my.environment.variables.plist"
+domain="gui/$(id -u)"
+label="my.environment.variables"
+
+if [ ! -f "$agent" ]; then
+  echo "❌  LaunchAgent not found: $agent" >&2
+  exit 1
+fi
+
+launchctl bootout "$domain" "$agent" >/dev/null 2>&1 || true
+launchctl bootstrap "$domain" "$agent"
+launchctl kickstart -k "$domain/$label" >/dev/null 2>&1 || true
+{{- else }}
+# macOS-only; no-op on this platform.
+exit 0
+{{- end }}
+
+# vim:ft=sh

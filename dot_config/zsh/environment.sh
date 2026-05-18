@@ -13,6 +13,7 @@ export XDG_CACHE_HOME="$HOME/.cache"
 export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_STATE_HOME="$HOME/.local/state"
 export XDG_BIN_HOME="$HOME/.local/bin"
+export GNUPGHOME="$XDG_CONFIG_HOME/gnupg"
 
 # $UID is a zsh builtin (no fork); falls back to `id -u` under sh.
 # $TMPDIR is set by launchd for user processes; defaults to /tmp elsewhere.

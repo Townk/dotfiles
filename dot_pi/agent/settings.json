@@ -24,10 +24,11 @@
     "npm:pi-cymbal",
     "npm:pi-lsp",
     "npm:glimpseui",
-    "git:github.com/Michaelliv/pi-generative-ui"
+    "git:github.com/Michaelliv/pi-generative-ui",
+    "npm:pi-cursor-provider"
   ],
-  "defaultProvider": "opencode-go",
-  "defaultModel": "kimi-k2.6",
+  "defaultProvider": "cursor",
+  "defaultModel": "gpt-5.5",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "terminal": {
