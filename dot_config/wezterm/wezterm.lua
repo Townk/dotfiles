@@ -394,6 +394,12 @@ map_keys(config, {
 		key = "d",
 		action = wezterm.action.ShowDebugOverlay,
 	},
+	-- LEADER-p activates the command palette
+  {
+      mods = "LEADER",
+      key = "p",
+      action = wezterm.action.ActivateCommandPalette,
+  },
 	-- Show tab navigator
 	{
 		mods = "LEADER",
