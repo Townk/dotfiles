@@ -20,6 +20,17 @@
 {{- end -}}
 {{- $profile = lower $profile -}}
 
+{{- /*
+  Auto-detect pi-cockpit dev mode by checking for the working tree.
+  If present, the symlink template uses this path and the consumer-mode
+  `pi install` in the run_once bootstrap is skipped. Empty otherwise.
+*/ -}}
+{{- $piCockpitDev := "" -}}
+{{- $piCockpitDevCandidate := joinPath .chezmoi.homeDir "Projects/apps/pi/pi-cockpit" -}}
+{{- if stat $piCockpitDevCandidate -}}
+  {{- $piCockpitDev = $piCockpitDevCandidate -}}
+{{- end -}}
+
 encryption = "gpg"
 
 [gpg]
@@ -30,5 +41,8 @@ encryption = "gpg"
 
 [data]
     profile = {{ $profile | quote }}
+    [data.pi]
+        [data.pi.devExtensions]
+            pi-cockpit = {{ $piCockpitDev | quote }}
 
 # vim:ft=toml

@@ -10,4 +10,23 @@
 .local/share/shortcuts
 {{- end }}
 
+# pi-coding-agent: paths managed by pi itself at runtime, or sensitive.
+# We track specific configs under ~/.pi/agent/ but never these dirs.
+.pi/.DS_Store
+.pi/depot
+.pi/prompt-history
+.pi/review-enhanced-input.md
+.pi/agent/auth.json
+.pi/agent/git
+.pi/agent/npm
+.pi/agent/sessions
+
+# pi-cockpit symlink is only deployed when the dev working tree exists
+# (data.pi.devExtensions["pi-cockpit"] is non-empty in chezmoi.toml).
+# On consumer machines the symlink is suppressed and a run_once script
+# runs `pi install git:github.com/Townk/pi-cockpit` instead.
+{{ if not (index .pi.devExtensions "pi-cockpit") -}}
+.pi/agent/extensions/pi-cockpit
+{{- end }}
+
 # vim:ft=gitignore

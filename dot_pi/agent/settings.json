@@ -1,0 +1,36 @@
+{
+  "defaultThinkingLevel": "high",
+  "theme": "catppuccin-mocha",
+  "editorPaddingX": 1,
+  "collapseChangelog": true,
+  "npmCommand": [
+    "mise",
+    "exec",
+    "node@latest",
+    "--",
+    "npm"
+  ],
+  "extensions": [
+    "~/.pi/agent/extensions/pi-cockpit/src/index.ts"
+  ],
+  "skills": [
+    "~/.pi/agent/skills",
+    "~/Projects/AI/Skills"
+  ],
+  "lastChangelogVersion": "0.75.3",
+  "packages": [
+    "npm:pi-web-access",
+    "npm:pi-rtk-optimizer",
+    "npm:pi-cymbal",
+    "npm:pi-lsp",
+    "npm:glimpseui",
+    "git:github.com/Michaelliv/pi-generative-ui"
+  ],
+  "defaultProvider": "opencode-go",
+  "defaultModel": "kimi-k2.6",
+  "hideThinkingBlock": false,
+  "quietStartup": true,
+  "terminal": {
+    "showTerminalProgress": true
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "providers": {
+{{- if eq .profile "personal" }}
+    "omlx": {
+      "api": "openai-completions",
+      "apiKey": "xnu3zny!PGW!hrq!hyq",
+      "baseUrl": "http://localhost:8000/v1",
+      "models": [
+        {
+          "id": "Qwen3.6-27B-6bit",
+          "name": "Qwen 3.6 27B Dense (6-bit)",
+          "contextWindow": 131072,
+          "maxTokens": 16384,
+          "description": "Primary multi-file reasoning model. Best architectural mapping across Python and TypeScript repositories.",
+          "supportsToolCalling": true
+        },
+        {
+          "id": "Qwen3.6-35B-A3B-4bit",
+          "name": "Qwen 3.6 35B MoE (4-bit)",
+          "contextWindow": 131072,
+          "maxTokens": 16384,
+          "description": "Primary multi-file reasoning model. Best architectural mapping across Python and TypeScript repositories.",
+          "supportsToolCalling": true
+        },
+        {
+          "id": "Qwen3.6-35B-A3B-6bit",
+          "name": "Qwen 3.6 35B MoE (6-bit)",
+          "contextWindow": 131072,
+          "maxTokens": 16384,
+          "description": "Primary multi-file reasoning model. Best architectural mapping across Python and TypeScript repositories.",
+          "supportsToolCalling": true
+        },
+        {
+          "id": "gemma-4-26b-a4b-it-8bit",
+          "name": "Gemma 4 26B (8-bit)",
+          "contextWindow": 131072,
+          "maxTokens": 8192,
+          "description": "High context option for Gemma. Use when reviewing larger file trees simultaneously.",
+          "supportsToolCalling": true
+        }
+      ]
+    },
+    "mtplx": {
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "api": "openai-completions",
+      "apiKey": "mtplx-local",
+      "authHeader": true,
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "mtplx-qwen36-27b-optimized-speed",
+          "name": "MTPLX mtplx-qwen36-27b-optimized-speed",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 131072,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    },
+    "llama-cpp-local": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "not-needed",
+      "models": [
+        {
+          "id": "qwen3.6-27b-mtp",
+          "name": "Qwen 3.6 27B MTP (Local)",
+          "reasoning": true,
+          "compat": {
+            "thinkingFormat": "qwen-chat-template"
+          }
+        }
+      ]
+    }
+{{- end }}
+  }
+}

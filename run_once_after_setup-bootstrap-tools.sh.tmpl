@@ -34,4 +34,22 @@ mise install rust@nightly -q
 echo "♻️  Running system-update to converge tools to latest..."
 "$HOME/.local/bin/system-update"
 
+{{- if not (index .pi.devExtensions "pi-cockpit") }}
+
+# Install pi-cockpit from GitHub on consumer machines (machines without
+# the dev working tree at ~/Projects/apps/pi/pi-cockpit). On dev
+# machines this block is omitted entirely; the symlink template under
+# dot_pi/agent/extensions/ points pi at the live working tree instead.
+echo "🧩  Installing pi-cockpit from GitHub..."
+if command -v pi >/dev/null 2>&1; then
+  if ! pi list 2>/dev/null | grep -q pi-cockpit; then
+    pi install git:github.com/Townk/pi-cockpit
+  else
+    echo "✅  pi-cockpit already installed"
+  fi
+else
+  echo "⚠️   pi CLI not on PATH; skipping pi-cockpit install (run \`pi install git:github.com/Townk/pi-cockpit\` manually)"
+fi
+{{- end }}
+
 # vim:ft=sh
