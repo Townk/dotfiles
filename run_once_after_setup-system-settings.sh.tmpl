@@ -49,7 +49,27 @@ defaults write com.apple.dock autohide -bool false
 defaults write com.apple.dock show-recents -bool false
 
 
-# Finder + global filesystem behavior
+# Finder, desktopservices, and screencapture writes follow.
+#
+# Finder caches its preferences in memory and writes them back to disk
+# whenever it saves view state — which means PlistBuddy edits to its
+# plist can be silently clobbered if Finder is alive during the edit.
+# Quit Finder (and flush cfprefsd's preference cache) BEFORE writing,
+# then open Finder again at the end so the new state sticks.
+#
+# NOTE on the Desktop folder specifically: macOS stores the active
+# Desktop's view settings inside ~/Desktop/.DS_Store, which overrides
+# DesktopViewSettings in com.apple.finder.plist. On a fresh user with
+# no ~/Desktop/.DS_Store, the globals below take effect; on a machine
+# that's been used, the existing .DS_Store wins. There's no clean,
+# permission-friendly way to delete that file from a script under
+# Tahoe's TCC (~/Desktop is protected), so re-runs on a populated
+# machine may leave the Desktop's icon size unchanged.
+echo "🔄  Quitting Finder + flushing cfprefsd before plist edits..."
+killall Finder 2>/dev/null || true
+killall cfprefsd 2>/dev/null || true
+sleep 2
+
 echo "📁  Show all file extensions in Finder"
 defaults write NSGlobalDomain AppleShowAllExtensions -bool true
 
@@ -94,6 +114,11 @@ mkdir -p "$HOME/Pictures/Screenshots"
 defaults write com.apple.screencapture location -string "$HOME/Pictures/Screenshots"
 defaults write com.apple.screencapture type -string "png"
 defaults write com.apple.screencapture disable-shadow -bool true
+
+echo "🔄  Relaunching Finder + nudging UI daemons..."
+open -a Finder
+killall SystemUIServer 2>/dev/null || true
+killall Dock 2>/dev/null || true
 
 echo "📱  Set 'Open at login' applications"
 
