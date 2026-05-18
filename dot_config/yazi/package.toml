@@ -1,0 +1,59 @@
+[[plugin.deps]]
+use = "yazi-rs/plugins:full-border"
+rev = "5d5c480"
+hash = "7b625412411be411153886894d9acaf"
+
+[[plugin.deps]]
+use = "yazi-rs/plugins:toggle-pane"
+rev = "5d5c480"
+hash = "9c7987da2d2a2120dac33abb64132004"
+
+[[plugin.deps]]
+use = "yazi-rs/plugins:git"
+rev = "5d5c480"
+hash = "88e56a64b7ce7c4314427452343fef17"
+
+[[plugin.deps]]
+use = "yazi-rs/plugins:mactag"
+rev = "5d5c480"
+hash = "235256b396f4da77ff8f5b8eacd7c113"
+
+[[plugin.deps]]
+use = "Reledia/hexyl"
+rev = "016a09b"
+hash = "50da29476e744dba37d77fb209328fd1"
+
+[[plugin.deps]]
+use = "ndtoan96/ouch"
+rev = "406ce6c"
+hash = "f5afc904d5106ee368c8aa2ded43bd74"
+
+[[plugin.deps]]
+use = "Rolv-Apneseth/bypass"
+rev = "4a0c70e"
+hash = "3c66d95bf63fa16178e98967fbae9429"
+
+[[plugin.deps]]
+use = "boydaihungst/mediainfo"
+rev = "aa4804b"
+hash = "59d9ecb4774b28a4fb7ccd2c25973993"
+
+[[plugin.deps]]
+use = "yazi-rs/plugins:piper"
+rev = "5d5c480"
+hash = "384464b6df8cb807425c521f8cd790f3"
+
+[[plugin.deps]]
+use = "yazi-rs/plugins:types"
+rev = "5d5c480"
+hash = "9105494e98299f392aee95340066da9f"
+
+[[plugin.deps]]
+use = "DaBuddhalint/smart-switch"
+rev = "b497bf8"
+hash = "ec0cf1ebe4e27261b8df4523c2f3d273"
+
+[[flavor.deps]]
+use = "yazi-rs/flavors:catppuccin-mocha"
+rev = "54ab389"
+hash = "7dfe41c9c3d9be76da8a844263d0bbed"

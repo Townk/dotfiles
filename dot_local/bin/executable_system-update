@@ -1,7 +1,7 @@
 #!/bin/zsh
 #
 # system-update — Bring all tools managed outside of chezmoi to their
-# latest versions.
+# latest versions, and keep the chezmoi repo in sync across machines.
 #
 # Idempotent — safe to run periodically. Also called by chezmoi's bootstrap
 # (run_once_after_setup-bootstrap-tools.sh.tmpl) so that fresh-machine
@@ -14,24 +14,55 @@
 # safe to upgrade. Steady-state runs see the same end state because
 # `system-package sync` uses brew bundle's `--upgrade` and the
 # uv/npm/go workers re-run their upgrade commands.
+#
+# When tools rewrite chezmoi-tracked lockfiles (currently just
+# yazi's package.toml), this script re-adds them into chezmoi source
+# and commits/pushes the bumped state so the next `chezmoi update` on
+# another machine reproduces them.
 
 set -eu -o pipefail
 
 if [[ -t 1 ]]; then
   C_BLU=$'\e[34m'
+  C_YEL=$'\e[33m'
   C_RED=$'\e[31m'
   C_BWH=$'\e[1;37m'
   C_RES=$'\e[0m'
 else
-  C_BLU=""; C_RED=""; C_BWH=""; C_RES=""
+  C_BLU=""; C_YEL=""; C_RED=""; C_BWH=""; C_RES=""
 fi
 
-die() {
-  print -P -- "\n${C_RED}Error${C_RES}: $*"
-  exit 1
-}
+die()  { print -P -- "\n${C_RED}Error${C_RES}: $*"; exit 1; }
+warn() { print -P -- "${C_YEL}⚠${C_RES}  $*" >&2; }
+
+# Resolve chezmoi source dir once. Returns "" if chezmoi isn't installed
+# or the source dir isn't a git repo (so the sync hooks no-op safely).
+chezmoi_repo=""
+if command -v chezmoi >/dev/null 2>&1; then
+  _path=$(chezmoi source-path 2>/dev/null || true)
+  [[ -d "${_path}/.git" ]] && chezmoi_repo="$_path"
+fi
+
+# Detect re-entrancy: when this script is invoked from a chezmoi run_once
+# script, CHEZMOI=1 is set in the env. In that case we skip the pull/apply
+# (would deadlock on chezmoi's own lock) and the push (the source state
+# is whatever chezmoi just deployed — nothing to publish yet).
+running_under_chezmoi=0
+[[ -n "${CHEZMOI:-}" ]] && running_under_chezmoi=1
 
 print -P -- "\n${C_BLU}System Update\n-------------${C_RES}"
+
+# Pull latest chezmoi source from origin and apply, so cross-machine
+# updates (e.g. another machine bumped a tracked lockfile) land BEFORE
+# the package syncs decide what to install.
+if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
+  print -P -- "\n📥 Sync chezmoi source from origin...\n"
+  if (cd "$chezmoi_repo" && git pull --rebase --autostash); then
+    chezmoi apply || warn "chezmoi apply failed after pull (continuing)"
+  else
+    warn "Failed to pull chezmoi source from origin (continuing)"
+  fi
+fi
 
 print -P -- "\n  Updating Homebrew sources...\n"
 brew update || die "Failed to update Homebrew!"
@@ -48,6 +79,13 @@ brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
 if command -v ya >/dev/null 2>&1; then
   print -P -- "\n🦆 Upgrade Yazi plugins...\n"
   ya pkg upgrade || die "Failed to upgrade Yazi plugins!"
+
+  # Re-add yazi's package.toml so any rev/hash bumps land in the
+  # chezmoi source. Commit + push happens at the bottom.
+  if [[ -n "$chezmoi_repo" && -f "$HOME/.config/yazi/package.toml" ]]; then
+    chezmoi re-add --force "$HOME/.config/yazi/package.toml" 2>/dev/null \
+      || warn "chezmoi re-add failed for yazi/package.toml"
+  fi
 fi
 
 if command -v mise >/dev/null 2>&1; then
@@ -72,5 +110,24 @@ print -P -- "\n🐚 Upgrade zsh4humans...\n"
 # z4h is a shell function defined by .zshrc, not a binary on PATH.
 # Run via interactive zsh so .zshrc is sourced and the function is loaded.
 zsh -ic 'z4h update' || die "Failed to upgrade zsh4humans!"
+
+# Commit + push any tracked-lockfile bumps that landed in the chezmoi
+# source during this run. Scoped explicitly to the lockfile paths so
+# unrelated WIP edits in the chezmoi source dir stay untouched.
+#
+# Skipped under chezmoi (CHEZMOI=1): there's nothing for us to publish
+# while chezmoi is mid-apply, and `chezmoi apply` holds a lock anyway.
+if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
+  yazi_pkg='dot_config/yazi/package.toml'
+  (
+    cd "$chezmoi_repo"
+    if ! git diff --quiet HEAD -- "$yazi_pkg" 2>/dev/null; then
+      print -P -- "\n📤 Publishing yazi package state...\n"
+      git commit -m "chore(yazi): update dependencies" -- "$yazi_pkg" \
+        || { warn "Failed to commit yazi/package.toml"; exit 0; }
+      git push 2>/dev/null || warn "Push failed (commit kept locally)"
+    fi
+  )
+fi
 
 print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
