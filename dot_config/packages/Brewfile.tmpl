@@ -2,7 +2,6 @@
 
 tap "1password/tap"
 tap "olets/tap"
-tap "anomalyco/tap"
 tap "rafaelgarrido/caveats"
 tap "jundot/omlx", "https://github.com/jundot/omlx"
 
@@ -71,18 +70,26 @@ mas "TabBack for Safari", id: 1660506599
 cask 'espanso'                      # Text expansion / snippets
 cask 'gpg-suite@nightly'            # Security Tools (gnupg desktop app)
 cask 'hammerspoon'                  # Keybindings controller (Keyboard Maestro but better)
+
+{{ if eq .profile "personal" -}}
 cask 'macfuse'                      # R/W ext3 partitions
 cask 'paragon-extfs'                # ext3 FS manager
+{{- end }}
+
 cask 'rar'                          # Extran archive type on terminal
 cask 'raycast'                      # System Launcher
 
 # Coding
+{{ if eq .profile "personal" -}}
 cask 'android-studio'               # Android IDE
-cask 'visual-studio-code'           # Everything Editor/IDE
 cask 'pycharm'                      # Python IDE
 cask 'clion'                        # C++ IDE
+{{- end }}
+
+cask 'visual-studio-code'           # Everything Editor/IDE
 cask 'wezterm@nightly'              # Terminal emulator
 
+{{ if eq .profile "personal" -}}
 # Podcast
 cask 'audio-hijack'                 # Recording
 cask 'farrago'                      # Sound FX
@@ -95,8 +102,6 @@ cask 'keycastr'                     # Key press overlays
 cask 'obs'                          # Studio
 
 # Other Apps
-cask '1password'                    # Password manager
-# `1password-cli` lives in Brewfile.bootstrap (needed by .setup.sh)
 cask 'affinity'                     # Vector and Image editor
 cask 'autodesk-fusion'              # 3D modeling
 cask 'bambu-studio'                 # 3D Printing
@@ -105,7 +110,6 @@ cask 'discord'                      # Chat (a more open Slack)
 cask 'dropbox'                      # Cloud storage
 cask 'google-chrome'                # Browser
 cask 'microsoft-teams'              # Meetings
-cask 'obsidian'                     # Note taking
 cask 'pixelsnap'                    # Measure pixels in the screen
 cask 'proton-mail'                  # Secure Email
 cask 'proton-mail-bridge'           # Allow other mail clients access proton mails
@@ -114,6 +118,11 @@ cask 'cleanshot'                    # Better screenshots
 cask 'steam'                        # Gaming
 cask 'zen'                          # Browser
 cask 'zoom'                         # Meetings
+{{- end }}
+
+cask '1password'                    # Password manager
+# `1password-cli` lives in Brewfile.bootstrap (needed by .setup.sh)
+cask 'obsidian'                     # Note taking
 
 # Fonts
 cask 'font-fontawesome'             # Font for extra symbols
@@ -125,9 +134,11 @@ cask 'font-symbols-only-nerd-font'  # The ultimate symbols font
 # -----------------
 # This section are for standart Homebrew "packages" (a.k.a. Formulas).
 
+{{ if eq .profile "personal" -}}
 # MacOS Essentials
 # ----------------
 brew 'mas'                          # MacOS Apple Store CLI
+{{- end }}
 
 # GNU tools (a.k.a. basic terminal surviving kit)
 # -----------------------------------------------
@@ -165,11 +176,9 @@ brew 'zsh-abbr'                     # Commnad abbreviations for ZSH
 
 # Development
 # -----------
-brew 'caddy'                        # Reverse proxy for locally running apps
 # `mise` lives in Brewfile.bootstrap (needed by run_once before system-update)
-brew 'container'                    # Apple version of docker
-brew 'ccls'                         # C/C++ development
 brew 'lua-language-server'          # Lua development
+brew 'git'
 
 # Dependency utilities (tools required by other tools)
 # ----------------------------------------------------
@@ -186,9 +195,7 @@ brew 'git-extras'                   # Tons of extra commands for Git (for: git)
 brew 'git-lfs'                      # Helper to allow one to commit large files on Git (for: git)
 brew 'git-sizer'                    # Show metrics of your repository (for: git)
 brew 'graphviz'                     # Support for DOT language (draw graphs) (for: plantuml)
-brew 'gum'                          # Terminal UI Toolkit for shell scripts (for: shell)
 brew 'hexyl'                        # Binary files viewer (for: yazi)
-brew 'libyaml'                      # Library dependency for ruby
 brew 'luajit'                       # Lua package manager (for: nvim)
 brew 'm1ddc'                        # Utility used by HammerSpoon to detect external display brightnes
 brew 'media-info'                   # Media files information (for: yazi)
@@ -199,7 +206,6 @@ brew 'pngpaste'                     # Support to drop image files into Emacs buf
 brew 'poppler'                      # PDF previewer (for: yazi)
 brew 'resvg'                        # SVG renderer (for: yazi)
 brew 'rtk'                          # Shell proxy for AI (for: pi.dev)
-brew 'sdcv'                         # StarDict dictionaries (for: emacs)
 brew 'tag'                          # MacOS tag on Yazi (for: yazi)
 brew 'tectonic'                     # LaTeX in Rust (for: nvim)
 brew 'tree-sitter'                  # Tree Sitter CLI (for: emacs, nvim)
@@ -215,7 +221,6 @@ brew 'bat'                          # A better cat
 brew 'bats-core'                    # Bash Automated Testing System (for: system-package tests)
 brew 'bottom'                       # Graphical process/system (`top` monitor but better: `/bin/btm`)
 # `chezmoi` lives in Brewfile.bootstrap (installed by .setup.sh before init)
-brew 'direnv'                       # Automation when changing directories in the terminal
 brew 'doggo'                        # DNS lookup tool
 brew 'duf'                          # Better `du`
 brew 'eva'                          # Terminal calculator
@@ -238,7 +243,6 @@ brew 'macchina'                     # Environment summary when open a shell
 brew 'mole'                         # Clean up tool
 brew 'mosh'                         # Intermittent connectivity remote connection (`ssh` but better[-ish])
 brew 'neovim'                       # Editor
-brew 'anomalyco/tap/opencode'       # AI CLI agent
 brew 'omlx'                         # Local AI models
 brew 'python@3.11'                  # Pinned runtime for omlx (declared so `brew bundle --cleanup` keeps it)
 brew 'pinentry-mac'                 # Password entry application for Mac
@@ -255,20 +259,20 @@ brew 'tokei'                        # Source code metrics
 brew 'trippy'                       # A network diagnostic tool
 brew 'unar'                         # Preview compressed files
 brew 'xq'                           # CLI XML/HTML processor (`jq` but for .xml and .html files)
-brew 'yadm'                         # Yet Another Dotfiles Manager
 brew 'yazi', args: ["HEAD"]         # Terminal File Manager
 brew 'yq'                           # CLI YAML processor (`jq` but for .yaml files)
 brew 'zoxide'                       # Remember previously navigated directories in the shell
 
+{{ if eq .profile "personal" -}}
 # QMK dependencies
 # ----------------
 brew 'clang-format'
 brew 'dos2unix'
-brew 'git'
 brew 'hidapi'
 brew 'libiconv'
 brew 'libusb'
 brew 'make'
 brew 'zstd'
+{{- end }}
 
 # vim:ft=ruby

@@ -3,7 +3,10 @@
 # line uninstalls the package on next sync.
 
 # Apps
+{{ if eq .profile "personal" -}}
 @anthropic-ai/claude-code
+{{- end }}
+
 @earendil-works/pi-coding-agent
 
 # LSP packages

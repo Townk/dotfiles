@@ -2,7 +2,9 @@
 # Synced by `system-package uv sync`. Strict cleanup: removing a
 # line uninstalls the tool on next sync.
 
+{{ if eq .profile "personal" -}}
 qmk-skim
 rich-cli
+{{- end }}
 
 # vim:ft=conf
