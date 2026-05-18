@@ -116,7 +116,9 @@ defaults write com.apple.screencapture type -string "png"
 defaults write com.apple.screencapture disable-shadow -bool true
 
 echo "🔄  Relaunching Finder + nudging UI daemons..."
-open -a Finder
+# `osascript ... to launch` starts Finder WITHOUT opening a window
+# (unlike `open -a Finder`, which always pops a new Finder window).
+osascript -e 'tell application "Finder" to launch' 2>/dev/null || true
 killall SystemUIServer 2>/dev/null || true
 killall Dock 2>/dev/null || true
 
