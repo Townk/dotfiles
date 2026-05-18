@@ -1,0 +1,27 @@
+# Belt-and-suspenders against accidentally committing secrets.
+#
+# `.chezmoiignore` prevents `chezmoi apply` from touching these paths
+# in the destination, but it doesn't stop `chezmoi add` from copying
+# the file into the chezmoi source. Git itself ignores the path here
+# so the file can't be committed even if it ends up in the source.
+
+# pi-coding-agent credentials (mode 600)
+dot_pi/agent/auth.json
+
+# Generic credential file patterns. Match anywhere in the tree.
+**/.env
+**/.env.local
+**/.env.*.local
+**/*.pem
+**/*.key
+**/*.p12
+**/secrets.json
+**/credentials.json
+
+# macOS noise (only emitted in some chezmoi-source directories)
+**/.DS_Store
+
+# Editor backups / swap files
+*.swp
+*.swo
+*~
