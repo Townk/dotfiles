@@ -4,7 +4,7 @@ set -eufo pipefail
 {{- if eq .chezmoi.os "darwin" }}
 echo "🍏  Setting macOS defaults"
 
-osascript -e 'tell application "System Preferences" to quit'
+osascript -e 'tell application "System Settings" to quit'
 
 # Keyboard
 echo "⌨️  Set AppleEnabledInputSources (US Keyboard Layout)"
@@ -36,7 +36,7 @@ defaults write NSGlobalDomain AppleKeyboardUIMode -int 2
 
 echo "⌨️  Make keyboard repeat-rate as fast as it can be"
 defaults write -g KeyRepeat -int 1
-defaults write -g InitialKeyRepeat -int 30
+defaults write -g InitialKeyRepeat -int 20
 
 # Trackpad
 echo "🖱️  Enable trackpad tap to click"
@@ -44,12 +44,23 @@ defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Clicking -bool
 defaults write com.apple.AppleMultitouchTrackpad Clicking -bool true
 
 # Dock
-echo "💈  Automatically hide and show the dock"
+echo "💈  Keep the dock always visible (no auto-hide)"
 defaults write com.apple.dock autohide -bool false
 defaults write com.apple.dock show-recents -bool false
 
 
-# Finder
+# Finder + global filesystem behavior
+echo "📁  Show all file extensions in Finder"
+defaults write NSGlobalDomain AppleShowAllExtensions -bool true
+
+echo "📁  Show Finder pathbar and statusbar"
+defaults write com.apple.finder ShowPathbar -bool true
+defaults write com.apple.finder ShowStatusBar -bool true
+
+echo "📁  Suppress .DS_Store on network shares and USB volumes"
+defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true
+defaults write com.apple.desktopservices DSDontWriteUSBStores -bool true
+
 # PlistBuddy `Set` errors when the key is missing (which crashes under
 # `set -e` on a fresh user account). Try `Set` first, fall back to `Add`
 # so the command works whether or not the key already exists.
@@ -76,6 +87,13 @@ echo "📁  Set Finder preferred view style to columns"
 defaults write com.apple.finder FXPreferredViewStyle -string "clmv"
 defaults write com.apple.finder FXPreferredGroupBy -string "Name"
 defaults write com.apple.finder _FXSortFoldersFirst -bool true
+
+# Screenshots
+echo "📸  Route screenshots to ~/Pictures/Screenshots"
+mkdir -p "$HOME/Pictures/Screenshots"
+defaults write com.apple.screencapture location -string "$HOME/Pictures/Screenshots"
+defaults write com.apple.screencapture type -string "png"
+defaults write com.apple.screencapture disable-shadow -bool true
 
 echo "📱  Set 'Open at login' applications"
 
