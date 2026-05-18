@@ -12,7 +12,13 @@ cask_args appdir: '/Applications'
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # MacOS AppStore Applications
 # ---------------------------
-# These entries are entries for apps that I download from the Mac AppStore..
+# These entries are entries for apps that I download from the Mac AppStore.
+#
+# `mas` installs require the user to be signed into the App Store on the
+# target machine. Work Macs typically aren't signed into a personal
+# Apple ID, so the whole block is gated on the personal profile. Move
+# specific lines OUT of the if/end block if you need them on work too.
+{{ if eq .profile "personal" -}}
 
 # XCode
 mas "Xcode", id: 497799835
@@ -53,6 +59,7 @@ mas "1Password for Safari", id: 1569813296
 # For the love of god Apple, make Ctrl+Tab on Safari to switch to the last
 # "VISITED" tab.
 mas "TabBack for Safari", id: 1660506599
+{{- end }}
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # MacOS Cask Applications

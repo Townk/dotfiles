@@ -1,6 +1,36 @@
 #!/bin/bash
 set -eufo pipefail
 
+# Parse profile selection from CLI:
+#   --work       → chezmoi `.profile` data set to "work"
+#   --personal   → chezmoi `.profile` data set to "personal"
+#   (no flag)    → prompt the user via chezmoi's init template
+#                  (or default to personal when no TTY is available)
+#
+# The chezmoi init template reads CHEZMOI_PROFILE; setting it here
+# is what bypasses the prompt for explicit invocations like:
+#   curl … | bash -s -- --work
+PROFILE=""
+for arg in "$@"; do
+  case "$arg" in
+    --work)     PROFILE="work" ;;
+    --personal) PROFILE="personal" ;;
+    *)          echo "⚠️  Ignoring unknown argument: $arg" >&2 ;;
+  esac
+done
+
+if [[ -n "$PROFILE" ]]; then
+  export CHEZMOI_PROFILE="$PROFILE"
+  echo "🎯  Profile: $PROFILE (from CLI)"
+elif [[ ! -t 0 ]]; then
+  # No TTY for an interactive prompt; default to personal so a
+  # `curl … | bash` invocation doesn't fail on an unanswerable prompt.
+  export CHEZMOI_PROFILE="personal"
+  echo "🎯  Profile: personal (default; no --work/--personal flag and no TTY)"
+else
+  echo "🎯  Profile: (chezmoi init will prompt)"
+fi
+
 echo "🚀  Setting up @thiagoalves dotfiles."
 
 echo "⚙️  Preparing user directories..."
@@ -48,15 +78,21 @@ else
   brew install chezmoi
 fi
 
+# `chezmoi init <user>` does two things:
+#   - First run: clones the dotfiles repo into ~/.local/share/chezmoi/.
+#   - Subsequent runs: re-renders the init template (which is how a
+#     profile change via --work / --personal takes effect).
+# On re-runs we explicitly `chezmoi update` first to pull origin.
+#
+# We deliberately stop short of `apply` here — apply needs to fire
+# AFTER the bootstrap Brewfile is installed, `bin` is on disk, and the
+# interactive auth gates are cleared.
 if [ -d "$HOME/.local/share/chezmoi/.git" ]; then
   echo "ℹ️  Chezmoi already initialized, pulling latest changes..."
   chezmoi update --apply=false
-  echo "✅  Chezmoi updated"
+  chezmoi init Townk
+  echo "✅  Chezmoi source updated and config regenerated"
 else
-  # `chezmoi init <user>` clones https://github.com/<user>/dotfiles.git
-  # into ~/.local/share/chezmoi/. We deliberately stop short of `apply`
-  # here — apply needs to fire AFTER the bootstrap Brewfile is installed,
-  # `bin` is on disk, and the interactive auth gates are cleared.
   chezmoi init Townk
   echo "✅  Chezmoi initialized"
 fi

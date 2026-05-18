@@ -1,0 +1,32 @@
+{{- /*
+  Init template. Runs on `chezmoi init` to generate
+  ~/.config/chezmoi/chezmoi.toml. Templates elsewhere branch on the
+  `.profile` data value via:
+
+      {{`{{ if eq .profile "personal" }}…{{ end }}`}}
+
+  Profile is resolved in this order:
+    1. CHEZMOI_PROFILE env var (set by `.setup.sh` from --work/--personal).
+    2. Interactive prompt (TTY required), defaulting to "personal".
+
+  Profile is NOT cached in chezmoi state — each `chezmoi init` either
+  uses the env var or prompts. setup.sh handles non-TTY contexts
+  (curl | bash without a flag) by exporting CHEZMOI_PROFILE=personal
+  itself, so the template never hits an unanswerable prompt.
+*/ -}}
+{{- $profile := env "CHEZMOI_PROFILE" -}}
+{{- if eq $profile "" -}}
+  {{- $profile = promptString "Profile (personal|work)" "personal" -}}
+{{- end -}}
+{{- $profile = lower $profile -}}
+
+encryption = "gpg"
+
+[gpg]
+    recipient = "A9C4A3D8CA995D91"
+
+[onepassword]
+    prompt = false
+
+[data]
+    profile = {{ $profile | quote }}

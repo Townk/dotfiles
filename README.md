@@ -34,13 +34,41 @@ source can later coexist with a Linux machine without polluting it.
 Prereqs: `curl` and `bash` — both ship with macOS by default. That's it.
 
 ```sh
+# Personal Mac (default; chezmoi will prompt if no flag and a TTY is available)
 curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash
+
+# Work Mac (skip the App Store apps and personal-only packages)
+curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash -s -- --work
+
+# Explicit personal
+curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash -s -- --personal
 ```
 
 `.setup.sh` is self-bootstrapping: it installs Xcode Command Line Tools,
 Homebrew, and chezmoi; uses `chezmoi init Townk` to clone this repo into
 `~/.local/share/chezmoi/`; runs `chezmoi apply`; and finishes with the
 1Password / GitHub auth gates that need a human.
+
+### Profile
+
+This repo uses a single `profile` data value (`personal` or `work`) to gate
+profile-specific entries. The `.chezmoi.toml.tmpl` init template reads the
+profile from the `CHEZMOI_PROFILE` env var; `.setup.sh` sets it based on the
+`--work` / `--personal` flag. When no flag is given and a TTY is available,
+chezmoi prompts. When no flag is given and there's no TTY (e.g. `curl | bash`
+without args), the script defaults to `personal`.
+
+To change profile on an already-bootstrapped machine, re-run setup.sh with the
+opposite flag, then `chezmoi apply`. Templates that branch on profile look like:
+
+```
+{{ if eq .profile "personal" -}}
+mas "DaisyDisk", id: 411643860
+{{- end }}
+```
+
+Currently the App Store (`mas`) entries are gated to `personal`. Brews, casks,
+and the bootstrap Brewfile are shared.
 
 End to end, the script:
 
