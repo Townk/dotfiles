@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Use whenever the user requests a git commit, staging files, or drafting a commit message.
+description: This skill MUST be invoked when the user requests a git commit or wants to stage changes.
 ---
 
 # Code Commit
