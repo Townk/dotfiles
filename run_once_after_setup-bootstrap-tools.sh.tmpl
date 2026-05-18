@@ -6,19 +6,32 @@ RUNTIME_DIR="$TMPDIR/runtime-$UID"
 \mkdir -p "$RUNTIME_DIR"
 \chmod 0700 "$RUNTIME_DIR"
 
-# system-update is the canonical "everything at latest" implementation
-# (also exposed as the user-facing `system-update` command). On a fresh
-# machine it installs Brewfile contents + mise tools + Yazi plugins +
-# NeoVim plugins + z4h. On an already-bootstrapped machine, it brings
-# everything to latest. Either way the post-state is identical, which
-# closes the gap where this script previously assumed mise/gh/nvim/etc.
-# were already installed.
-echo "♻️  Running system-update to converge tools to latest..."
-"$HOME/.local/bin/system-update"
+# Provision the runtimes declared in ~/.config/mise/config.toml (now
+# deployed by chezmoi). This puts python/node/go/rust/uv on disk so
+# that system-update's uv/npm/go syncs have working interpreters.
+# `mise install` (no args) installs everything in the active config;
+# it's idempotent on re-runs.
+echo "🛠️  Installing mise-managed runtimes..."
+mise install
 
-# Rust nightly isn't pinned in any tool manifest, so `mise upgrade` inside
-# system-update doesn't catch it. Add it once mise itself is installed.
+# Make the just-installed mise shims discoverable by subsequent
+# commands in this script. `eval mise activate` covers it for bash
+# subshells; the durable PATH addition for zsh scripts lives in
+# environment.sh.
+eval "$(mise activate bash --shims)"
+
+# Rust nightly isn't pinned in any tool manifest, so `mise install`
+# above (which reads config.toml) doesn't catch it. Install it
+# explicitly once mise itself is installed.
 echo "🦀  Installing Rust nightly..."
 mise install rust@nightly -q
+
+# system-update is the canonical "everything at latest" implementation
+# (also exposed as the user-facing `system-update` command). On a fresh
+# machine it installs Brewfile contents + Yazi plugins + NeoVim plugins
+# + z4h, and converges everything else. On an already-bootstrapped
+# machine it brings everything to latest.
+echo "♻️  Running system-update to converge tools to latest..."
+"$HOME/.local/bin/system-update"
 
 # vim:ft=sh

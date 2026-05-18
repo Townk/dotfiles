@@ -160,7 +160,7 @@ brew 'zsh-abbr'                     # Commnad abbreviations for ZSH
 # Development
 # -----------
 brew 'caddy'                        # Reverse proxy for locally running apps
-brew 'mise'                         # Programming tool installer
+# `mise` lives in Brewfile.bootstrap (needed by run_once before system-update)
 brew 'container'                    # Apple version of docker
 
 # Dependency utilities (tools required by other tools)
@@ -204,7 +204,7 @@ brew 'bandwhich'                    # Network traffic analyser (must run as sudo
 brew 'bat'                          # A better cat
 brew 'bats-core'                    # Bash Automated Testing System (for: system-package tests)
 brew 'bottom'                       # Graphical process/system (`top` monitor but better: `/bin/btm`)
-brew 'chezmoi'                      # Modern dot-files manager
+# `chezmoi` lives in Brewfile.bootstrap (installed by .setup.sh before init)
 brew 'direnv'                       # Automation when changing directories in the terminal
 brew 'doggo'                        # DNS lookup tool
 brew 'duf'                          # Better `du`

@@ -14,7 +14,7 @@ if xcode-select -p &> /dev/null; then
 else
   echo "🔧  Installing Xcode command line tools..."
   xcode-select --install &> /dev/null
-  
+
   while ! xcode-select -p &> /dev/null; do
     sleep 5
   done
@@ -38,6 +38,9 @@ elif [ -x "/usr/local/bin/brew" ]; then
   eval "$(/usr/local/bin/brew shellenv)"
 fi
 
+# chezmoi is also declared in Brewfile.bootstrap for idempotency, but it
+# needs to exist before that file is reachable — `chezmoi init` is what
+# clones this repo into ~/.local/share/chezmoi/ (where the Brewfile lives).
 if which -s "chezmoi"; then
   echo "✅  Chezmoi is already installed."
 else
@@ -47,26 +50,58 @@ fi
 
 if [ -d "$HOME/.local/share/chezmoi/.git" ]; then
   echo "ℹ️  Chezmoi already initialized, pulling latest changes..."
-  chezmoi update
+  chezmoi update --apply=false
   echo "✅  Chezmoi updated"
 else
   # `chezmoi init <user>` clones https://github.com/<user>/dotfiles.git
-  # into ~/.local/share/chezmoi/, which is the source path the rest of
-  # this script (and the run_once bootstrap inside chezmoi apply) assumes.
+  # into ~/.local/share/chezmoi/. We deliberately stop short of `apply`
+  # here — apply needs to fire AFTER the bootstrap Brewfile is installed,
+  # `bin` is on disk, and the interactive auth gates are cleared.
   chezmoi init Townk
-  chezmoi apply
   echo "✅  Chezmoi initialized"
 fi
 
-# Install the bootstrap Brewfile (gh, 1password-cli, tap). These are the
-# tools the rest of `.setup.sh` itself needs — `gh` to download `bin`, and
-# `op` to gate on 1Password CLI integration. Read from the chezmoi source
-# location since the deployed copy at ~/.config/packages/ may already be
-# in place by now (after the `chezmoi apply` above), but referencing the
-# source makes this robust to the deploy-order changing.
+# Install the bootstrap Brewfile (chezmoi, mise, gh, 1password-cli, tap).
+# These are the tools the rest of `.setup.sh` itself needs PLUS the
+# minimal set the chezmoi run_once bootstrap depends on (`mise` so
+# `mise install` can provision Python/Node/Go/Rust/uv before
+# system-update's ecosystem syncs run). Read from the chezmoi source
+# location since `chezmoi apply` hasn't deployed files yet.
 echo "🍻  Installing bootstrap Brewfile..."
 brew bundle install --file="$HOME/.local/share/chezmoi/dot_config/packages/Brewfile.bootstrap"
 
+# Install `bin` (https://github.com/marcosnils/bin). Done before
+# `chezmoi apply` so that `system-update`'s `bin update` step (invoked
+# from the run_once bootstrap) sees `bin` on PATH. Fetched via the
+# anonymous GitHub releases API to avoid a hard dependency on
+# `gh auth login` running first.
+if [ -x "$HOME/.local/bin/bin" ]; then
+  echo "✅  bin is already installed"
+else
+  echo "⚪️  Installing 'bin'"
+  arch=$(uname -m)
+  case "$arch" in
+    arm64)  asset_suffix="darwin_arm64" ;;
+    x86_64) asset_suffix="darwin_amd64" ;;
+    *)      echo "❌  Unsupported architecture for bin: $arch" >&2; exit 1 ;;
+  esac
+  asset_url=$(
+    curl -fsSL https://api.github.com/repos/marcosnils/bin/releases/latest \
+      | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+'"$asset_suffix"'"' \
+      | sed -E 's/.*"([^"]+)"$/\1/' \
+      | head -1
+  )
+  [ -n "$asset_url" ] || { echo "❌  Could not resolve bin release asset URL" >&2; exit 1; }
+  tmp_bin=$(mktemp)
+  curl -fsSL "$asset_url" -o "$tmp_bin"
+  chmod +x "$tmp_bin"
+  "$tmp_bin" install github.com/marcosnils/bin
+  rm -f "$tmp_bin"
+fi
+
+# Interactive auth gates. Front-loaded so the user clears them while
+# their attention is on the install. After these, the run_once
+# bootstrap can run unattended.
 while ! op account list &>/dev/null; do
   echo "--------------------------------------------------------"
   echo "⚠️  ACTION REQUIRED: Manual Step Needed"
@@ -85,12 +120,8 @@ while ! gh auth token &>/dev/null; do
 done
 echo "✅  GitHub CLI is authenticated and ready to use."
 
-if [ -x "$HOME/.local/bin/bin" ]; then
-  echo "✅  bin is already installed"
-else
-  echo "⚪️  Installing 'bin'"
-  gh release download --repo marcosnils/bin --pattern '*darwin_arm64' -O bin_darwin_arm64
-  chmod +x bin_darwin_arm64
-  ./bin_darwin_arm64 install github.com/marcosnils/bin
-  rm -rf ./bin_darwin_arm64
-fi
+# Now that all prereqs are in place, deploy files and fire the run_once
+# bootstrap script (mise install → system-update → rust@nightly).
+echo "📂  Applying chezmoi configuration..."
+chezmoi apply
+echo "✅  Chezmoi applied"

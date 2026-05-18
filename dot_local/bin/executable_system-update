@@ -8,9 +8,12 @@
 # setup and "everything-already-installed" applies converge to the same
 # end state.
 #
-# Previously lived as a zsh function in ~/.config/zsh/functions.d/commands.sh.
-# Promoted to a standalone script so the bootstrap can invoke it without
-# having to enter an interactive shell.
+# Step order matters on fresh installs: `system-package sync` runs FIRST
+# to install everything in the Brewfiles / Uvfile / Npmfile / Gofile;
+# only after that do tools like `ya`, `nvim`, `bin` exist and become
+# safe to upgrade. Steady-state runs see the same end state because
+# `system-package sync` uses brew bundle's `--upgrade` and the
+# uv/npm/go workers re-run their upgrade commands.
 
 set -eu -o pipefail
 
@@ -33,26 +36,37 @@ print -P -- "\n${C_BLU}System Update\n-------------${C_RES}"
 print -P -- "\n  Updating Homebrew sources...\n"
 brew update || die "Failed to update Homebrew!"
 
-print -P -- "\n🦆 Upgrade Yazi plugins...\n"
-ya pkg upgrade || die "Failed to upgrade Yazi plugins!"
-
-print -P -- "\n🛠️ Upgrade Mise tools...\n"
-mise upgrade
-mise prune -y
-
+# Install/upgrade declared packages across every ecosystem. This is the
+# only step that turns a fresh machine into a populated one. Everything
+# below assumes the binaries it touches now exist on PATH.
 print -P -- "\n📦 Sync system packages...\n"
 system-package sync || die "Failed to sync system packages!"
 
 print -P -- "\n🧹 Cleaning up Homebrew artifacts...\n"
 brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
 
-print -P -- "\n🛠️ Upgrade bin tools...\n"
-bin update -a -y
-bin prune -f
+if command -v ya >/dev/null 2>&1; then
+  print -P -- "\n🦆 Upgrade Yazi plugins...\n"
+  ya pkg upgrade || die "Failed to upgrade Yazi plugins!"
+fi
 
-print -P -- "\n📝 Upgrade NeoVim plugins...\n"
-nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" \
-  || die "Failed to upgrade NeoVim plugins!"
+if command -v mise >/dev/null 2>&1; then
+  print -P -- "\n🛠️ Upgrade Mise tools...\n"
+  mise upgrade
+  mise prune -y
+fi
+
+if command -v bin >/dev/null 2>&1; then
+  print -P -- "\n🛠️ Upgrade bin tools...\n"
+  bin update -a -y
+  bin prune -f
+fi
+
+if command -v nvim >/dev/null 2>&1; then
+  print -P -- "\n📝 Upgrade NeoVim plugins...\n"
+  nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" \
+    || die "Failed to upgrade NeoVim plugins!"
+fi
 
 print -P -- "\n🐚 Upgrade zsh4humans...\n"
 # z4h is a shell function defined by .zshrc, not a binary on PATH.

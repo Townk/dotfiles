@@ -13,5 +13,11 @@
 
 tap "1password/tap"
 
-brew "gh"            # used by .setup.sh to download `bin` from GitHub releases
+brew "chezmoi"       # listed here for idempotency; .setup.sh installs it first
+                     # so that `chezmoi init` can clone this repo before any
+                     # Brewfile-driven install can happen.
+brew "mise"          # needed by run_once_after_setup-bootstrap-tools.sh.tmpl
+                     # so `mise install` can provision Python/Node/Go/Rust/uv
+                     # before system-update's uv/npm/go syncs run.
+brew "gh"            # used by .setup.sh once GitHub auth is wired up.
 cask "1password-cli" # used by .setup.sh to wait for `op account list`
