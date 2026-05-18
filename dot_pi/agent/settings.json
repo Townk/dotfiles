@@ -25,11 +25,11 @@
     "npm:pi-lsp",
     "npm:glimpseui",
     "git:github.com/Michaelliv/pi-generative-ui",
-    "npm:pi-cursor-provider",
-    "npm:@tintinweb/pi-subagents"
+    "npm:@tintinweb/pi-subagents",
+    "npm:pi-cursor-sdk"
   ],
   "defaultProvider": "cursor",
-  "defaultModel": "claude-4.6-opus-thinking",
+  "defaultModel": "gemini-3.1-pro",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "terminal": {
