@@ -216,6 +216,20 @@ vim.api.nvim_create_autocmd("BufReadPre", {
       return
     end
 
+    -- Reconcile external drift for non-templated sources. If a tool (e.g.
+    -- `pi install`) mutated the target since the last `chezmoi apply`, pull
+    -- those changes into the source so we don't open a stale version.
+    if not vim.endswith(source, ".tmpl") then
+      local status = vim.fn.system({ "chezmoi", "status", "--", target })
+      if vim.v.shell_error == 0 and status ~= "" then
+        vim.fn.system({ "chezmoi", "re-add", "--force", "--", target })
+        vim.notify(
+          ("chezmoi: reconciled external changes\n%s"):format(vim.fn.fnamemodify(target, ":~")),
+          vim.log.levels.INFO
+        )
+      end
+    end
+
     local buf = args.buf
     vim.schedule(function()
       vim.cmd.edit(vim.fn.fnameescape(source))

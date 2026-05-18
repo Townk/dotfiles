@@ -25,10 +25,11 @@
     "npm:pi-lsp",
     "npm:glimpseui",
     "git:github.com/Michaelliv/pi-generative-ui",
-    "npm:pi-cursor-provider"
+    "npm:pi-cursor-provider",
+    "npm:@tintinweb/pi-subagents"
   ],
   "defaultProvider": "cursor",
-  "defaultModel": "gpt-5.5",
+  "defaultModel": "claude-4.6-opus-thinking",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "terminal": {
