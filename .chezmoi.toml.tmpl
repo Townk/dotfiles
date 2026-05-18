@@ -14,9 +14,18 @@
   (curl | bash without a flag) by exporting CHEZMOI_PROFILE=personal
   itself, so the template never hits an unanswerable prompt.
 */ -}}
+{{- /*
+  Profile resolution order:
+    1. CHEZMOI_PROFILE env var (set by .setup.sh from --work/--personal).
+    2. `chezmoi init --promptString profile=<value>` flag (when invoking
+       chezmoi init by hand). The prompt key is the literal text
+       "profile" — `--promptString` matches against the prompt text,
+       so keep it short and unique.
+    3. Interactive prompt (TTY required), defaulting to "personal".
+*/ -}}
 {{- $profile := env "CHEZMOI_PROFILE" -}}
 {{- if eq $profile "" -}}
-  {{- $profile = promptString "Profile (personal|work)" "personal" -}}
+  {{- $profile = promptString "profile" "personal" -}}
 {{- end -}}
 {{- $profile = lower $profile -}}
 
