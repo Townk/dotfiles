@@ -159,6 +159,21 @@ any other entry point — yazi, fzf-lua, telescope) transparently swaps the
 buffer to the source `.tmpl`, and saving runs `chezmoi apply` for you. The
 toggle is `<leader>uM`. See `~/.config/nvim/lua/config/autocmds.lua`.
 
+## `chezmoi-reverse`
+
+Propagate edits made to a chezmoi-managed destination file back into its
+source template.
+
+```sh
+chezmoi-reverse ~/.foo
+```
+
+For each file it prints one of `clean`, `applied`, `merged`, `skipped`, or
+`failed`. Changes that fall entirely on literal lines are auto-patched into
+the `.tmpl` source. Changes that touch a `{{ ... }}` directive route through
+`chezmoi merge` for manual three-way merging — make sure `merge.command` is
+configured in your chezmoi config.
+
 ## Conventions used in this repo
 
 - **Templates (`*.tmpl`)** are rendered through chezmoi's Go templates.
