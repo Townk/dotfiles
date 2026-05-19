@@ -111,3 +111,27 @@ EOF
   [[ "$output" == *"literal CHANGED"* ]]
   [ ! -f "$TEST_TMP/merge-invoked" ]
 }
+
+@test "multi: clean + applied across two files exits 0 with both statuses" {
+  printf 'unchanged\n' > "$TEST_TMP/src/dot_a.tmpl"
+  printf 'before\n' > "$TEST_TMP/src/dot_b.tmpl"
+  chezmoi apply
+  printf 'after\n' > "$HOME/.b"
+
+  run "$SCRIPT" "$HOME/.a" "$HOME/.b"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"clean"* ]]
+  [[ "$output" == *"applied"* ]]
+  [[ "$output" == *".a"* ]]
+  [[ "$output" == *".b"* ]]
+}
+
+@test "multi: unmanaged file causes non-zero exit but other files still process" {
+  printf 'x\n' > "$TEST_TMP/src/dot_a.tmpl"
+  chezmoi apply
+
+  run "$SCRIPT" "$HOME/does-not-exist" "$HOME/.a"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"failed"* ]]
+  [[ "$output" == *"clean"* ]]
+}
