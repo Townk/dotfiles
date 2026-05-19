@@ -32,10 +32,11 @@ reverse_one() {
     emit applied "$file"
     return 0
   fi
-  # Restore and fall through to merge in the next task.
   cp "$src.bak" "$src"
   rm -f "$src.bak" "$src.rej" "$src.orig"
-  emit failed "$file"; return 1
+  chezmoi merge "$file" || true
+  emit merged "$file"
+  return 0
 }
 
 rc=0

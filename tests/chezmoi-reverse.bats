@@ -67,3 +67,33 @@ EOF
   [[ "$output" == *"role = {{ .role }}"* ]]
   [ ! -e "$TEST_TMP/merge-invoked" ]
 }
+
+@test "merged: change to a templated line restores template and invokes merge" {
+  cat > "$TEST_TMP/src/dot_foo.tmpl" <<'EOF'
+name = thiago
+role = {{ .role }}
+EOF
+  chezmoi apply
+  # Capture template byte-for-byte before the edit.
+  cp "$TEST_TMP/src/dot_foo.tmpl" "$TEST_TMP/template-before"
+
+  # Edit the rendered form of the templated line in the destination.
+  sed -i.bak 's/^role = engineer$/role = manager/' "$HOME/.foo"; rm "$HOME/.foo.bak"
+
+  run "$SCRIPT" "$HOME/.foo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"merged"* ]]
+
+  # Merge stub must have been invoked.
+  [ -f "$TEST_TMP/merge-invoked" ]
+
+  # Template must be byte-identical to its pre-run state (the merge stub is a
+  # no-op; we only verify our backup-and-restore worked).
+  run diff "$TEST_TMP/template-before" "$TEST_TMP/src/dot_foo.tmpl"
+  [ "$status" -eq 0 ]
+
+  # No stray reject or backup files left behind in the source dir.
+  [ ! -e "$TEST_TMP/src/dot_foo.tmpl.rej" ]
+  [ ! -e "$TEST_TMP/src/dot_foo.tmpl.orig" ]
+  [ ! -e "$TEST_TMP/src/dot_foo.tmpl.bak" ]
+}
