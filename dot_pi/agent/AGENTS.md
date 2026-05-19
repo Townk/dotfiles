@@ -57,8 +57,8 @@ Definitive answer in one command. Saves the round-trip.
 ## Sub-agents
 
 Sub-agents (via `pi-subagents`) give you specialized workers — `Explore`,
-`Plan`, `Reviewer`, `Librarian`, plus background spawning, worktree
-isolation, and parallelism. Use them. Delegating well is a force
+`Plan`, `Architect`, `Reviewer`, `Librarian`, plus background spawning,
+worktree isolation, and parallelism. Use them. Delegating well is a force
 multiplier; doing everything in the main context isn't.
 
 ### When to delegate
@@ -71,9 +71,10 @@ Default to a sub-agent when any of these is true:
 - **The task would consume large amounts of context.** A broad codebase
   survey, a multi-file behavioral trace, or a long doc fetch returns a
   summary instead of polluting your main context.
-- **A specialist exists for it.** Code review goes to `Reviewer`.
-  External / library docs go to `Librarian`. Multi-step plan design goes
-  to `Plan`. Don't reinvent their disciplines inline.
+- **A specialist exists for it.** Design work that needs plannotator
+  review goes to `Architect`. Code review goes to `Reviewer`. External /
+  library docs go to `Librarian`. Quick inline planning without a formal
+  review loop goes to `Plan`. Don't reinvent their disciplines inline.
 - **The work is naturally async.** Spawn in the background, keep working
   on something else, pick up the result when it lands.
 - **The change needs isolation.** Set `isolation: worktree` so a risky
@@ -114,12 +115,47 @@ complete. The single rule applies to its output too.
 | Agent             | Use for                                              |
 | ----------------- | ---------------------------------------------------- |
 | `Explore`         | Read-only codebase search (file lookup, symbol hunt) |
-| `Plan`            | Implementation planning for a multi-step task        |
+| `Plan`            | Quick inline planning, no formal review loop         |
+| `Architect`       | Formal design with plannotator review and revisions  |
 | `general-purpose` | Parent twin — anything else, with your rules         |
 | `Reviewer`        | Strict code review with evidence discipline          |
 | `Librarian`       | Current docs, library / API behavior, CVEs           |
 
 For custom agents not on this list, check `~/.pi/agent/agents/`.
+
+### Architect → plannotator workflow
+
+When you delegate design to `Architect`, the plan it produces is meant
+for human review via plannotator. Wire this up:
+
+1. **Pick the plan file path.** Use the plannotator plan-mode plan
+   file if the session is in plan mode; otherwise
+   `docs/plans/YYYY-MM-DD-<slug>.md`. Pass the path to the Architect
+   in the prompt.
+2. **Surface the plan via plannotator** when the Architect returns:
+   - Call `plannotator_request_review(plan_path)` (from the bridge
+     extension) if available.
+   - Otherwise fall back to `/plannotator-annotate <plan_path>` and
+     ask the user to trigger it.
+3. **Persist the Architect's `agent_id` and the plan file path**
+   across the review loop — you'll need both for revisions.
+4. **On denial with feedback**, dispatch again with
+   `resume: <agent_id>` and the same plan file path. The Architect
+   retains its prior reasoning context and rewrites the file in
+   place; plannotator's Plan Diff highlights the changes.
+5. **Fall back to a fresh dispatch** only when the prior session
+   errored, hit `max_turns`, or the feedback fundamentally
+   restructures scope.
+6. **On approval**, execute the plan. Run `Reviewer` on the resulting
+   diff before merge.
+
+### Sub-agent clarifications
+
+For 1–4 quick clarification questions, sub-agents use the
+`ask_user_question` tool (from `pi-askuserquestion`). Batch questions,
+prefer single-select over free-text, and continue work around
+unanswered items where possible. Don't let a sub-agent block on a
+chain of single questions.
 
 ## Engineering
 
