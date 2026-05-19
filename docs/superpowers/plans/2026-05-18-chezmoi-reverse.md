@@ -1,10 +1,20 @@
 # chezmoi-reverse Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or
+> superpowers:executing-plans to implement this plan task-by-task. Steps use
+> checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build `chezmoi-reverse`, a bash CLI that propagates edits made to a chezmoi-managed destination file back into its source `.tmpl`, auto-patching when safe and falling back to `chezmoi merge` when not.
+**Goal:** Build `chezmoi-reverse`, a bash CLI that propagates edits made to a
+chezmoi-managed destination file back into its source `.tmpl`, auto-patching
+when safe and falling back to `chezmoi merge` when not.
 
-**Architecture:** Single bash script invoked as `chezmoi-reverse <file>...`. For each file: resolve the source via `chezmoi source-path`, classify by source filename, then either (a) `chezmoi re-add` for non-templates, (b) render → `diff` → `patch --fuzz=0` for templates (with restore + `chezmoi merge` on rejection), or (c) `chezmoi merge` directly for encrypted files. Tested via bats with an isolated `$HOME` and a stub merge tool.
+**Architecture:** Single bash script invoked as `chezmoi-reverse <file>...`. For
+each file: resolve the source via `chezmoi source-path`, classify by source
+filename, then either (a) `chezmoi re-add` for non-templates, (b) render →
+`diff` → `patch --fuzz=0` for templates (with restore + `chezmoi merge` on
+rejection), or (c) `chezmoi merge` directly for encrypted files. Tested via bats
+with an isolated `$HOME` and a stub merge tool.
 
 **Tech Stack:** bash 5, `chezmoi`, `diff`, `patch`, `bats` 1.x.
 
@@ -14,16 +24,22 @@
 
 ## File Structure
 
-- **Create** `dot_local/bin/executable_chezmoi-reverse` — the script. The `executable_` prefix tells chezmoi to set the executable bit at apply time; no `.tmpl` because the script has no per-host variation.
-- **Create** `tests/chezmoi-reverse.bats` — bats tests. Sets up an isolated `$HOME` + a stub merge tool per test, then invokes the script by absolute path.
+- **Create** `dot_local/bin/executable_chezmoi-reverse` — the script. The
+  `executable_` prefix tells chezmoi to set the executable bit at apply time; no
+  `.tmpl` because the script has no per-host variation.
+- **Create** `tests/chezmoi-reverse.bats` — bats tests. Sets up an isolated
+  `$HOME` + a stub merge tool per test, then invokes the script by absolute
+  path.
 
-No shared helper library: the test setup is small enough to inline. The script itself is self-contained.
+No shared helper library: the test setup is small enough to inline. The script
+itself is self-contained.
 
 ---
 
 ### Task 1: Skeleton script and usage-error test
 
 **Files:**
+
 - Create: `dot_local/bin/executable_chezmoi-reverse`
 - Create: `tests/chezmoi-reverse.bats`
 
@@ -74,12 +90,13 @@ teardown() {
 }
 ```
 
-Note: bats `run` captures stdout into `$output` by default; the `||` fallback handles both bats configurations (with or without `--separate-stderr`).
+Note: bats `run` captures stdout into `$output` by default; the `||` fallback
+handles both bats configurations (with or without `--separate-stderr`).
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bats tests/chezmoi-reverse.bats`
-Expected: FAIL — script does not exist yet.
+Run: `bats tests/chezmoi-reverse.bats` Expected: FAIL — script does not exist
+yet.
 
 - [ ] **Step 3: Create the script skeleton**
 
@@ -100,7 +117,8 @@ echo "not yet implemented" >&2
 exit 1
 ```
 
-Set executable bit (chezmoi will do this on apply, but the source file must be executable too so tests can run it directly):
+Set executable bit (chezmoi will do this on apply, but the source file must be
+executable too so tests can run it directly):
 
 ```bash
 chmod +x dot_local/bin/executable_chezmoi-reverse
@@ -108,8 +126,7 @@ chmod +x dot_local/bin/executable_chezmoi-reverse
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `bats tests/chezmoi-reverse.bats`
-Expected: PASS — one test passing.
+Run: `bats tests/chezmoi-reverse.bats` Expected: PASS — one test passing.
 
 - [ ] **Step 5: Commit**
 
@@ -123,6 +140,7 @@ git commit -m "feat(chezmoi-reverse): add script skeleton with usage error"
 ### Task 2: Clean case (no diff between rendered and destination)
 
 **Files:**
+
 - Modify: `dot_local/bin/executable_chezmoi-reverse`
 - Modify: `tests/chezmoi-reverse.bats`
 
@@ -143,12 +161,13 @@ Append to `tests/chezmoi-reverse.bats`:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bats tests/chezmoi-reverse.bats -f clean`
-Expected: FAIL — script exits 1 with "not yet implemented".
+Run: `bats tests/chezmoi-reverse.bats -f clean` Expected: FAIL — script exits 1
+with "not yet implemented".
 
 - [ ] **Step 3: Implement the clean path**
 
-Replace the body of `dot_local/bin/executable_chezmoi-reverse` (keep the usage check):
+Replace the body of `dot_local/bin/executable_chezmoi-reverse` (keep the usage
+check):
 
 ```bash
 #!/usr/bin/env bash
@@ -190,8 +209,7 @@ exit "$rc"
 
 - [ ] **Step 4: Run tests to verify both pass**
 
-Run: `bats tests/chezmoi-reverse.bats`
-Expected: 2 of 2 passing.
+Run: `bats tests/chezmoi-reverse.bats` Expected: 2 of 2 passing.
 
 - [ ] **Step 5: Commit**
 
@@ -205,6 +223,7 @@ git commit -m "feat(chezmoi-reverse): handle the clean (no-diff) case"
 ### Task 3: Literal-only change is auto-patched
 
 **Files:**
+
 - Modify: `dot_local/bin/executable_chezmoi-reverse`
 - Modify: `tests/chezmoi-reverse.bats`
 
@@ -236,12 +255,13 @@ EOF
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bats tests/chezmoi-reverse.bats -f applied`
-Expected: FAIL — current code emits `failed` for any non-clean file.
+Run: `bats tests/chezmoi-reverse.bats -f applied` Expected: FAIL — current code
+emits `failed` for any non-clean file.
 
 - [ ] **Step 3: Implement the patch path**
 
-Replace the `reverse_one` function in `dot_local/bin/executable_chezmoi-reverse`:
+Replace the `reverse_one` function in
+`dot_local/bin/executable_chezmoi-reverse`:
 
 ```bash
 reverse_one() {
@@ -272,8 +292,7 @@ reverse_one() {
 
 - [ ] **Step 4: Run tests to verify all pass**
 
-Run: `bats tests/chezmoi-reverse.bats`
-Expected: 3 of 3 passing.
+Run: `bats tests/chezmoi-reverse.bats` Expected: 3 of 3 passing.
 
 - [ ] **Step 5: Commit**
 
@@ -287,6 +306,7 @@ git commit -m "feat(chezmoi-reverse): auto-patch literal-region changes with fuz
 ### Task 4: Templated-region change falls back to `chezmoi merge`
 
 **Files:**
+
 - Modify: `dot_local/bin/executable_chezmoi-reverse`
 - Modify: `tests/chezmoi-reverse.bats`
 
@@ -328,12 +348,14 @@ EOF
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bats tests/chezmoi-reverse.bats -f merged`
-Expected: FAIL — patch path rejects the hunk (good) but current code emits `failed` instead of invoking merge.
+Run: `bats tests/chezmoi-reverse.bats -f merged` Expected: FAIL — patch path
+rejects the hunk (good) but current code emits `failed` instead of invoking
+merge.
 
 - [ ] **Step 3: Implement the merge fallback**
 
-In `dot_local/bin/executable_chezmoi-reverse`, replace the final two lines of `reverse_one` (the `emit failed` after the restore) with:
+In `dot_local/bin/executable_chezmoi-reverse`, replace the final two lines of
+`reverse_one` (the `emit failed` after the restore) with:
 
 ```bash
   chezmoi merge "$file" || true
@@ -360,12 +382,14 @@ So the tail of `reverse_one` now reads:
 }
 ```
 
-`|| true` is intentional: `chezmoi merge`'s exit code reflects the merge tool's exit, which the user may legitimately use to signal "I bailed out." We still report `merged` so the user sees the file was routed correctly; if they want to know whether they completed the merge, they look at the source dir.
+`|| true` is intentional: `chezmoi merge`'s exit code reflects the merge tool's
+exit, which the user may legitimately use to signal "I bailed out." We still
+report `merged` so the user sees the file was routed correctly; if they want to
+know whether they completed the merge, they look at the source dir.
 
 - [ ] **Step 4: Run tests to verify all pass**
 
-Run: `bats tests/chezmoi-reverse.bats`
-Expected: 4 of 4 passing.
+Run: `bats tests/chezmoi-reverse.bats` Expected: 4 of 4 passing.
 
 - [ ] **Step 5: Commit**
 
@@ -379,6 +403,7 @@ git commit -m "feat(chezmoi-reverse): fall back to chezmoi merge on patch reject
 ### Task 5: Non-template files use `chezmoi re-add`
 
 **Files:**
+
 - Modify: `dot_local/bin/executable_chezmoi-reverse`
 - Modify: `tests/chezmoi-reverse.bats`
 
@@ -404,12 +429,17 @@ Append to `tests/chezmoi-reverse.bats`:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bats tests/chezmoi-reverse.bats -f "non-template"`
-Expected: FAIL — current code treats every file as a template; `chezmoi cat` works for a non-template (returns its content), `diff` shows the change, patch path runs, and since the source has no `.tmpl` directives the patch will (incorrectly) succeed. We want explicit handling so the contract is `applied` via `re-add`, not coincidence.
+Run: `bats tests/chezmoi-reverse.bats -f "non-template"` Expected: FAIL —
+current code treats every file as a template; `chezmoi cat` works for a
+non-template (returns its content), `diff` shows the change, patch path runs,
+and since the source has no `.tmpl` directives the patch will (incorrectly)
+succeed. We want explicit handling so the contract is `applied` via `re-add`,
+not coincidence.
 
 - [ ] **Step 3: Add the non-template branch**
 
-In `reverse_one`, immediately after the `source-path` resolution, before the rendering step, insert:
+In `reverse_one`, immediately after the `source-path` resolution, before the
+rendering step, insert:
 
 ```bash
   local base
@@ -483,8 +513,7 @@ reverse_one() {
 
 - [ ] **Step 4: Run tests to verify all pass**
 
-Run: `bats tests/chezmoi-reverse.bats`
-Expected: 5 of 5 passing.
+Run: `bats tests/chezmoi-reverse.bats` Expected: 5 of 5 passing.
 
 - [ ] **Step 5: Commit**
 
@@ -498,9 +527,11 @@ git commit -m "feat(chezmoi-reverse): route plain files through chezmoi re-add"
 ### Task 6: Multi-file invocation and aggregate exit code
 
 **Files:**
+
 - Modify: `tests/chezmoi-reverse.bats`
 
-The loop and exit-code aggregation are already implemented (Task 2). This task adds explicit test coverage so the contract is enforced going forward.
+The loop and exit-code aggregation are already implemented (Task 2). This task
+adds explicit test coverage so the contract is enforced going forward.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -534,10 +565,13 @@ Append to `tests/chezmoi-reverse.bats`:
 
 - [ ] **Step 2: Run tests to verify both pass**
 
-Run: `bats tests/chezmoi-reverse.bats`
-Expected: 7 of 7 passing. (Both new tests should already pass with the current implementation; they exist to lock the behavior in.)
+Run: `bats tests/chezmoi-reverse.bats` Expected: 7 of 7 passing. (Both new tests
+should already pass with the current implementation; they exist to lock the
+behavior in.)
 
-If either fails, the loop or exit-code logic in `main` regressed at some point — re-inspect the `for f in "$@"; do reverse_one "$f" || rc=1; done; exit "$rc"` block at the bottom of the script.
+If either fails, the loop or exit-code logic in `main` regressed at some point —
+re-inspect the `for f in "$@"; do reverse_one "$f" || rc=1; done; exit "$rc"`
+block at the bottom of the script.
 
 - [ ] **Step 3: Commit**
 
@@ -551,41 +585,45 @@ git commit -m "test(chezmoi-reverse): lock multi-file invocation and exit-code c
 ### Task 7: README note for end users
 
 **Files:**
+
 - Modify: `README.md`
 
 - [ ] **Step 1: Read the current README**
 
 Run: `cat README.md`
 
-Identify a natural section to extend (likely a "Tools" or "Scripts" section). If no such section exists, add a new top-level section near the bottom.
+Identify a natural section to extend (likely a "Tools" or "Scripts" section). If
+no such section exists, add a new top-level section near the bottom.
 
 - [ ] **Step 2: Add a short blurb**
 
 Append (or insert into an existing scripts section):
 
-```markdown
+````markdown
 ## `chezmoi-reverse`
 
-Propagate edits made to a chezmoi-managed destination file back into its
-source template.
+Propagate edits made to a chezmoi-managed destination file back into its source
+template.
 
 ```sh
 chezmoi-reverse ~/.foo
 ```
+````
 
 For each file it prints one of `clean`, `applied`, `merged`, `skipped`, or
-`failed`. Changes that fall entirely on literal lines are auto-patched into
-the `.tmpl` source. Changes that touch a `{{ ... }}` directive route through
+`failed`. Changes that fall entirely on literal lines are auto-patched into the
+`.tmpl` source. Changes that touch a `{{ ... }}` directive route through
 `chezmoi merge` for manual three-way merging — make sure `merge.command` is
 configured in your chezmoi config.
-```
+
+````
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add README.md
 git commit -m "docs: document chezmoi-reverse"
-```
+````
 
 ---
 
@@ -597,32 +635,47 @@ This is a smoke test against the real user environment, not a unit test.
 
 - [ ] **Step 1: Apply chezmoi so the script lands on $PATH**
 
-Run: `chezmoi apply ~/.local/bin/chezmoi-reverse`
-Expected: file appears at `~/.local/bin/chezmoi-reverse` with executable bit set.
+Run: `chezmoi apply ~/.local/bin/chezmoi-reverse` Expected: file appears at
+`~/.local/bin/chezmoi-reverse` with executable bit set.
 
 Verify: `ls -l ~/.local/bin/chezmoi-reverse` shows `x` bits.
 
 - [ ] **Step 2: Pick a low-stakes managed file and dry-run**
 
-Pick any small managed file you can mentally diff, e.g. a config file with at least one literal line. Make a no-op invocation:
+Pick any small managed file you can mentally diff, e.g. a config file with at
+least one literal line. Make a no-op invocation:
 
-Run: `chezmoi-reverse <that-file>`
-Expected: `clean<TAB><file>` and exit 0. No source files changed.
+Run: `chezmoi-reverse <that-file>` Expected: `clean<TAB><file>` and exit 0. No
+source files changed.
 
-Verify: `git -C ~/.local/share/chezmoi status --short` shows no new changes from the script.
+Verify: `git -C ~/.local/share/chezmoi status --short` shows no new changes from
+the script.
 
 - [ ] **Step 3: Done**
 
-No commit. If anything in Steps 1–2 misbehaves, the relevant failure mode should be reproducible as a bats test — add it and loop back through the affected task.
+No commit. If anything in Steps 1–2 misbehaves, the relevant failure mode should
+be reproducible as a bats test — add it and loop back through the affected task.
 
 ---
 
 ## Self-Review Notes
 
-- **Spec coverage:** Tasks 1–4 cover the spec's core algorithm (clean / applied / merged paths). Task 5 covers the non-template branch. The `encrypted_*` and `run_*.tmpl` branches are implemented in Task 5's code drop but not test-covered, matching the spec's "edge cases noted, deferred" section. Task 6 locks the multi-file contract. Task 7 is the README mention. Task 8 is the live smoke test.
+- **Spec coverage:** Tasks 1–4 cover the spec's core algorithm (clean / applied
+  / merged paths). Task 5 covers the non-template branch. The `encrypted_*` and
+  `run_*.tmpl` branches are implemented in Task 5's code drop but not
+  test-covered, matching the spec's "edge cases noted, deferred" section. Task 6
+  locks the multi-file contract. Task 7 is the README mention. Task 8 is the
+  live smoke test.
 
-- **Placeholder scan:** Every code block contains complete, runnable code. No "TBD" / "TODO" / "handle edge cases" placeholders.
+- **Placeholder scan:** Every code block contains complete, runnable code. No
+  "TBD" / "TODO" / "handle edge cases" placeholders.
 
-- **Type consistency:** Function names (`emit`, `reverse_one`), variable names (`work`, `src`, `rendered`, `patch`, `base`), and the status vocabulary (`clean`, `applied`, `merged`, `skipped`, `failed`) are identical across all tasks.
+- **Type consistency:** Function names (`emit`, `reverse_one`), variable names
+  (`work`, `src`, `rendered`, `patch`, `base`), and the status vocabulary
+  (`clean`, `applied`, `merged`, `skipped`, `failed`) are identical across all
+  tasks.
 
-- **Known coverage gap:** No automated test exercises the `encrypted_*` or `run_*.tmpl` branches. Both are simple filename-prefix dispatches and visible on inspection. If a future change makes that dispatch non-trivial, add tests at that point.
+- **Known coverage gap:** No automated test exercises the `encrypted_*` or
+  `run_*.tmpl` branches. Both are simple filename-prefix dispatches and visible
+  on inspection. If a future change makes that dispatch non-trivial, add tests
+  at that point.
