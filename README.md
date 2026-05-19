@@ -172,7 +172,9 @@ For each file it prints one of `clean`, `applied`, `merged`, `skipped`, or
 `failed`. Changes that fall entirely on literal lines are auto-patched into
 the `.tmpl` source. Changes that touch a `{{ ... }}` directive route through
 `chezmoi merge` for manual three-way merging — make sure `merge.command` is
-configured in your chezmoi config.
+configured in your chezmoi config. `skipped` is emitted when there is no
+destination to read back from — chezmoi run-scripts (`run_*.tmpl`) and
+symlink templates (`symlink_*.tmpl`).
 
 ## Conventions used in this repo
 

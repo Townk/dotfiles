@@ -27,7 +27,7 @@ reverse_one() {
       emit merged "$file"
       return 0
       ;;
-    run_*.tmpl)
+    run_*.tmpl | symlink_*.tmpl | symlink_*)
       emit skipped "$file"
       return 1
       ;;

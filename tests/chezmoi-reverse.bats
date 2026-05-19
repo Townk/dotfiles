@@ -146,3 +146,20 @@ EOF
   [[ "$output" == *"failed"* ]] || false
   [[ "$output" == *"clean"* ]] || false
 }
+
+@test "skipped: symlink template is skipped without touching source" {
+  # Source content is the symlink target; chezmoi apply creates ~/.mylink
+  # pointing there. Reverse-propagating an edit to a symlink target string
+  # isn't meaningful, so the script should refuse with 'skipped'.
+  printf '/tmp/some-target\n' > "$TEST_TMP/src/symlink_dot_mylink"
+  chezmoi apply
+  cp "$TEST_TMP/src/symlink_dot_mylink" "$TEST_TMP/source-before"
+
+  run "$SCRIPT" "$HOME/.mylink"
+  [ "$status" -ne 0 ] || false
+  [[ "$output" == *"skipped"* ]] || false
+  [[ "$output" == *".mylink"* ]] || false
+
+  run diff "$TEST_TMP/source-before" "$TEST_TMP/src/symlink_dot_mylink"
+  [ "$status" -eq 0 ] || false
+}
