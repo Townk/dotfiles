@@ -35,12 +35,27 @@ fi
 die()  { print -P -- "\n${C_RED}Error${C_RES}: $*"; exit 1; }
 warn() { print -P -- "${C_YEL}⚠${C_RES}  $*" >&2; }
 
-# Resolve chezmoi source dir once. Returns "" if chezmoi isn't installed
-# or the source dir isn't a git repo (so the sync hooks no-op safely).
+# Resolve chezmoi source dir once. Returns "" only when neither chezmoi
+# nor the standard layout produces a git repo (so the sync hooks no-op
+# safely on truly-unmanaged machines).
+#
+# We try `chezmoi source-path` first, but DON'T trust it as the sole
+# signal — when the config template has changed (a `chezmoi init` is
+# pending), the command may exit non-zero or smear warnings into its
+# output, leaving `_path` empty or invalid. Past incident: the new
+# yazi cp+commit block was silently skipped under exactly that
+# condition. Fallback to `$HOME/.local/share/chezmoi` (chezmoi's
+# default source dir on macOS/Linux) keeps the script working through
+# stale-config windows.
 chezmoi_repo=""
+_default_src="$HOME/.local/share/chezmoi"
 if command -v chezmoi >/dev/null 2>&1; then
   _path=$(chezmoi source-path 2>/dev/null || true)
-  [[ -d "${_path}/.git" ]] && chezmoi_repo="$_path"
+  if [[ -n "$_path" && -d "${_path}/.git" ]]; then
+    chezmoi_repo="$_path"
+  elif [[ -d "${_default_src}/.git" ]]; then
+    chezmoi_repo="$_default_src"
+  fi
 fi
 
 # Detect re-entrancy: when this script is invoked from a chezmoi run_once
@@ -80,11 +95,36 @@ if command -v ya >/dev/null 2>&1; then
   print -P -- "\n🦆 Upgrade Yazi plugins...\n"
   ya pkg upgrade || die "Failed to upgrade Yazi plugins!"
 
-  # Re-add yazi's package.toml so any rev/hash bumps land in the
-  # chezmoi source. Commit + push happens at the bottom.
-  if [[ -n "$chezmoi_repo" && -f "$HOME/.config/yazi/package.toml" ]]; then
-    chezmoi re-add --force "$HOME/.config/yazi/package.toml" 2>/dev/null \
-      || warn "chezmoi re-add failed for yazi/package.toml"
+  # Capture any rev/hash bumps `ya pkg upgrade` just wrote into the
+  # live package.toml back into the chezmoi source, then commit and
+  # push as the very next step so the bump never lingers as drift.
+  #
+  # Implementation note: we `cp` directly into the source rather than
+  # calling `chezmoi re-add` because re-add takes chezmoi's apply
+  # lock — and when this script is invoked from chezmoi's own
+  # run_once bootstrap, that lock is already held by the parent
+  # process. Pre-fix, the nested chezmoi call failed, the
+  # `2>/dev/null` swallowed the error, and the warn scrolled by in
+  # the bootstrap noise; the source silently drifted. `cp` bypasses
+  # chezmoi entirely. The dot_*/package.toml mapping is 1:1 because
+  # the file is non-encrypted and non-templated, so a plain copy is
+  # equivalent to what re-add would write.
+  yazi_pkg_target="$HOME/.config/yazi/package.toml"
+  yazi_pkg_source_rel="dot_config/yazi/package.toml"
+  if [[ -n "$chezmoi_repo" && -f "$yazi_pkg_target" ]]; then
+    if cp "$yazi_pkg_target" "$chezmoi_repo/$yazi_pkg_source_rel"; then
+      (
+        cd "$chezmoi_repo"
+        if ! git diff --quiet HEAD -- "$yazi_pkg_source_rel" 2>/dev/null; then
+          print -P -- "\n📤 Publishing yazi package state...\n"
+          git commit -m "chore(yazi): update dependencies" -- "$yazi_pkg_source_rel" \
+            || warn "Failed to commit yazi/package.toml"
+          git push 2>/dev/null || warn "Push failed (commit kept locally)"
+        fi
+      )
+    else
+      warn "Failed to copy yazi/package.toml into chezmoi source"
+    fi
   fi
 fi
 
@@ -106,28 +146,32 @@ if command -v nvim >/dev/null 2>&1; then
     || die "Failed to upgrade NeoVim plugins!"
 fi
 
-print -P -- "\n🐚 Upgrade zsh4humans...\n"
-# z4h is a shell function defined by .zshrc, not a binary on PATH.
-# Run via interactive zsh so .zshrc is sourced and the function is loaded.
-zsh -ic 'z4h update' || die "Failed to upgrade zsh4humans!"
-
-# Commit + push any tracked-lockfile bumps that landed in the chezmoi
-# source during this run. Scoped explicitly to the lockfile paths so
-# unrelated WIP edits in the chezmoi source dir stay untouched.
+# z4h update is intentionally the LAST step. It internally runs
+# `exec zsh` to load the freshly-fetched z4h code — a process-replacing
+# shell reload. That semantic only makes sense at the end of a script,
+# and it only makes sense when there's an interactive terminal to hand
+# the new shell off to.
 #
-# Skipped under chezmoi (CHEZMOI=1): there's nothing for us to publish
-# while chezmoi is mid-apply, and `chezmoi apply` holds a lock anyway.
-if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
-  yazi_pkg='dot_config/yazi/package.toml'
-  (
-    cd "$chezmoi_repo"
-    if ! git diff --quiet HEAD -- "$yazi_pkg" 2>/dev/null; then
-      print -P -- "\n📤 Publishing yazi package state...\n"
-      git commit -m "chore(yazi): update dependencies" -- "$yazi_pkg" \
-        || { warn "Failed to commit yazi/package.toml"; exit 0; }
-      git push 2>/dev/null || warn "Push failed (commit kept locally)"
-    fi
-  )
+# Branch behavior:
+#   - Under chezmoi (CHEZMOI=1) or any non-interactive invocation:
+#     SKIP z4h update entirely. We tried suppressing the interactive
+#     prompt with `< /dev/null` (z4h re-opens `/dev/tty` directly,
+#     ignoring the inherited stdin) and the shell-reload still blocked
+#     the parent apply. The right semantic for a non-interactive run
+#     is "leave the shell alone" — z4h gets refreshed on the next
+#     direct `system-update` invocation, which is a daily-driver
+#     anyway.
+#   - Interactive direct invocation: print the success line first
+#     (the user won't see anything else from this script after the
+#     exec), then `exec` system-update itself into the z4h-update
+#     pipeline so the terminal becomes the new z4h-managed shell
+#     when z4h finishes its own exec.
+if [[ "$running_under_chezmoi" -eq 1 || ! -t 0 ]]; then
+  print -P -- "\n🐚 Skipping zsh4humans update (running under chezmoi or non-interactive)."
+  print -P -- "   Run \`system-update\` directly to refresh z4h.\n"
+  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
+else
+  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!"
+  print -P -- "   Reloading your shell to pick up the updated zsh4humans...\n"
+  exec zsh -ic 'z4h update'
 fi
-
-print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
