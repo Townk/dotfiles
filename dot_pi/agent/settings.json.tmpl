@@ -19,17 +19,26 @@
   ],
   "lastChangelogVersion": "0.75.3",
   "packages": [
+{{- if eq .profile "personal" }}
     "npm:pi-web-access",
-    "npm:pi-rtk-optimizer",
     "npm:pi-cymbal",
     "npm:pi-lsp",
     "npm:glimpseui",
     "git:github.com/Michaelliv/pi-generative-ui",
     "npm:@tintinweb/pi-subagents",
-    "npm:pi-cursor-sdk"
+{{- end }}
+{{- if eq .profile "work" }}
+    "npm:pi-cursor-sdk",
+{{- end }}
+    "npm:pi-rtk-optimizer"
   ],
+{{- if eq .profile "work" }}
   "defaultProvider": "cursor",
   "defaultModel": "gemini-3.1-pro",
+{{- else }}
+  "defaultProvider": "opencode-go",
+  "defaultModel": "kimi-k2.6",
+{{- end }}
   "hideThinkingBlock": false,
   "quietStartup": true,
   "terminal": {
