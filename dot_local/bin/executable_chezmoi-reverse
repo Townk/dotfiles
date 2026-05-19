@@ -8,5 +8,28 @@ if [ $# -eq 0 ]; then
   exit 2
 fi
 
-echo "not yet implemented" >&2
-exit 1
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+emit() { printf '%s\t%s\n' "$1" "$2"; }
+
+reverse_one() {
+  local file="$1" src rendered patch
+  if ! src=$(chezmoi source-path "$file" 2>/dev/null); then
+    emit failed "$file"; return 1
+  fi
+  rendered="$work/rendered"; patch="$work/patch"
+  if ! chezmoi cat "$file" > "$rendered" 2>/dev/null; then
+    emit failed "$file"; return 1
+  fi
+  if diff -u "$rendered" "$file" > "$patch"; then
+    emit clean "$file"; return 0
+  fi
+  emit failed "$file"; return 1   # placeholder; later tasks add patch + merge paths
+}
+
+rc=0
+for f in "$@"; do
+  reverse_one "$f" || rc=1
+done
+exit "$rc"

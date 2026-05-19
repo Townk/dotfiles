@@ -38,3 +38,12 @@ teardown() {
   [ "$status" -eq 2 ]
   [[ "$stderr" == *"usage: chezmoi-reverse"* ]] || [[ "$output" == *"usage: chezmoi-reverse"* ]]
 }
+
+@test "clean: unchanged destination reports clean and exits 0" {
+  printf 'name = thiago\n' > "$TEST_TMP/src/dot_foo.tmpl"
+  chezmoi apply
+  run "$SCRIPT" "$HOME/.foo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"clean"* ]]
+  [[ "$output" == *".foo"* ]]
+}
