@@ -14,8 +14,10 @@ trap 'rm -rf "$work"' EXIT
 emit() { printf '%s\t%s\n' "$1" "$2"; }
 
 reverse_one() {
-  local file="$1" src rendered patch base is_template
-  if ! src=$(chezmoi source-path "$file" 2>/dev/null); then
+  local file="$1" src rendered patch err base is_template
+  err="$work/err"
+  if ! src=$(chezmoi source-path "$file" 2>"$err"); then
+    cat "$err" >&2
     emit failed "$file"; return 1
   fi
   base=$(basename "$src")
@@ -36,16 +38,18 @@ reverse_one() {
     is_template=0
   fi
   rendered="$work/rendered"; patch="$work/patch"
-  if ! chezmoi cat "$file" > "$rendered" 2>/dev/null; then
+  if ! chezmoi cat "$file" > "$rendered" 2>"$err"; then
+    cat "$err" >&2
     emit failed "$file"; return 1
   fi
   if diff -U0 "$rendered" "$file" > "$patch"; then
     emit clean "$file"; return 0
   fi
   if [ "$is_template" -eq 0 ]; then
-    if chezmoi re-add "$file" >/dev/null 2>&1; then
+    if chezmoi re-add "$file" >/dev/null 2>"$err"; then
       emit applied "$file"; return 0
     fi
+    cat "$err" >&2
     emit failed "$file"; return 1
   fi
   cp "$src" "$src.bak"
