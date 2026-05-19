@@ -126,6 +126,17 @@ EOF
   [[ "$output" == *".b"* ]]
 }
 
+@test "clean: unchanged non-template destination reports clean" {
+  printf 'literal one\nliteral two\n' > "$TEST_TMP/src/dot_baz"
+  chezmoi apply
+  # No edit; destination should be byte-identical to source.
+
+  run "$SCRIPT" "$HOME/.baz"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *".baz"* ]]
+  [[ "$output" == *"clean"* ]]
+}
+
 @test "multi: unmanaged file causes non-zero exit but other files still process" {
   printf 'x\n' > "$TEST_TMP/src/dot_a.tmpl"
   chezmoi apply
