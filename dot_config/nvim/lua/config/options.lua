@@ -121,3 +121,21 @@ vim.treesitter.language.register("gotmpl", {
   "markdown.gotmpl",
 })
 
+-- Inject the inner language of compound filetypes (json.gotmpl, yaml.gotmpl,
+-- toml.gotmpl, ...) into the gotmpl parser's literal `(text)` nodes so the
+-- surrounding JSON/YAML/TOML is highlighted underneath the template directives.
+-- Without this, gotmpl is the only parser running and the inner format renders
+-- as plain text. The `(text)` nodes are exactly the non-`{{...}}` regions of
+-- the buffer, so combining them yields one continuous virtual document in the
+-- inner language. The companion query lives at
+-- `after/queries/gotmpl/injections.scm`.
+vim.treesitter.query.add_directive("inject-inner-ft!", function(_, _, source, _, metadata)
+  if type(source) == "number" then
+    local ft = vim.bo[source].filetype or ""
+    local inner = ft:match("^(.-)%.gotmpl$")
+    if inner and inner ~= "" then
+      metadata["injection.language"] = inner
+    end
+  end
+end, {})
+
