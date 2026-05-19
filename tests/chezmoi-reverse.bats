@@ -97,3 +97,17 @@ EOF
   [ ! -e "$TEST_TMP/src/dot_foo.tmpl.orig" ]
   [ ! -e "$TEST_TMP/src/dot_foo.tmpl.bak" ]
 }
+
+@test "applied: non-template file is re-added via chezmoi re-add" {
+  printf 'literal one\nliteral two\n' > "$TEST_TMP/src/dot_bar"
+  chezmoi apply
+  printf 'literal one\nliteral CHANGED\n' > "$HOME/.bar"
+
+  run "$SCRIPT" "$HOME/.bar"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"applied"* ]]
+
+  run cat "$TEST_TMP/src/dot_bar"
+  [[ "$output" == *"literal CHANGED"* ]]
+  [ ! -f "$TEST_TMP/merge-invoked" ]
+}
