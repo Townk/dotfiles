@@ -3,7 +3,7 @@
 setup() {
   TEST_TMP=$(mktemp -d)
   export HOME="$TEST_TMP/home"
-  unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME CHEZMOI_CONFIG_FILE
+  unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME CHEZMOI_CONFIG_FILE CHEZMOI_SOURCE_DIR CHEZMOI_HOME_DIR
   mkdir -p "$HOME" "$HOME/.config/chezmoi" "$TEST_TMP/src"
 
   # Stub merge tool that records its arguments to a sentinel file.
