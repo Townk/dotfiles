@@ -54,6 +54,73 @@ ffmpeg -version
 
 Definitive answer in one command. Saves the round-trip.
 
+## Sub-agents
+
+Sub-agents (via `pi-subagents`) give you specialized workers — `Explore`,
+`Plan`, `Reviewer`, `Librarian`, plus background spawning, worktree
+isolation, and parallelism. Use them. Delegating well is a force
+multiplier; doing everything in the main context isn't.
+
+### When to delegate
+
+Default to a sub-agent when any of these is true:
+
+- **Independent searches you can parallelize.** Two or three `Explore`
+  spawns in one message finish faster than three sequential greps. If
+  there are no dependencies between the lookups, dispatch them at once.
+- **The task would consume large amounts of context.** A broad codebase
+  survey, a multi-file behavioral trace, or a long doc fetch returns a
+  summary instead of polluting your main context.
+- **A specialist exists for it.** Code review goes to `Reviewer`.
+  External / library docs go to `Librarian`. Multi-step plan design goes
+  to `Plan`. Don't reinvent their disciplines inline.
+- **The work is naturally async.** Spawn in the background, keep working
+  on something else, pick up the result when it lands.
+- **The change needs isolation.** Set `isolation: worktree` so a risky
+  refactor or experiment doesn't touch the user's working tree until you
+  decide to land it.
+
+### When not to delegate
+
+- The task is one or two tool calls — overhead beats the benefit.
+- It needs back-and-forth with the user. Sub-agents can't ask the user
+  clarifying questions; they run on the prompt they're given.
+- The full conversation context matters more than isolation. If you do
+  fork context, prefer `inherit_context: true` on a `general-purpose`
+  agent — it's a parent twin that already follows these rules.
+
+### Brief well
+
+A sub-agent walked in cold. It hasn't seen your conversation, doesn't
+know what you've tried, doesn't know what matters.
+
+- State the goal and *why*.
+- Describe what you've ruled out.
+- Give file paths and surrounding context — not just "find the bug".
+- For lookups, hand over the exact query. For investigations, hand over
+  the question — prescribed steps go stale when the premise is wrong.
+- Cap response length when you want a short report ("under 200 words").
+
+Terse command-style prompts produce shallow, generic work.
+
+### Verify their work
+
+A sub-agent's reply describes what it intended, not necessarily what it
+did. If it edited files, read the diff before claiming the task is
+complete. The single rule applies to its output too.
+
+### Specialist menu
+
+| Agent             | Use for                                              |
+| ----------------- | ---------------------------------------------------- |
+| `Explore`         | Read-only codebase search (file lookup, symbol hunt) |
+| `Plan`            | Implementation planning for a multi-step task        |
+| `general-purpose` | Parent twin — anything else, with your rules         |
+| `Reviewer`        | Strict code review with evidence discipline          |
+| `Librarian`       | Current docs, library / API behavior, CVEs           |
+
+For custom agents not on this list, check `~/.pi/agent/agents/`.
+
 ## Engineering
 
 ### Minimum code for the task
