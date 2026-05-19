@@ -30,7 +30,7 @@
 {{- $profile = lower $profile -}}
 
 {{- /*
-  Auto-detect pi-cockpit dev mode by checking for the working tree.
+  Auto-detect pi extension dev mode by checking for the working tree.
   If present, the symlink template uses this path and the consumer-mode
   `pi install` in the run_once bootstrap is skipped. Empty otherwise.
 */ -}}
@@ -38,6 +38,11 @@
 {{- $piCockpitDevCandidate := joinPath .chezmoi.homeDir "Projects/apps/pi/pi-cockpit" -}}
 {{- if stat $piCockpitDevCandidate -}}
   {{- $piCockpitDev = $piCockpitDevCandidate -}}
+{{- end -}}
+{{- $piPlannotatorBridgeDev := "" -}}
+{{- $piPlannotatorBridgeDevCandidate := joinPath .chezmoi.homeDir "Projects/apps/pi/pi-plannotator-bridge" -}}
+{{- if stat $piPlannotatorBridgeDevCandidate -}}
+  {{- $piPlannotatorBridgeDev = $piPlannotatorBridgeDevCandidate -}}
 {{- end -}}
 
 encryption = "gpg"
@@ -53,5 +58,6 @@ encryption = "gpg"
     [data.pi]
         [data.pi.devExtensions]
             pi-cockpit = {{ $piCockpitDev | quote }}
+            pi-plannotator-bridge = {{ $piPlannotatorBridgeDev | quote }}
 
 # vim:ft=toml

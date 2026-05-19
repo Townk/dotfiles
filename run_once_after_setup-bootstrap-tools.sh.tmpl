@@ -52,4 +52,21 @@ else
 fi
 {{- end }}
 
+{{- if not (index .pi.devExtensions "pi-plannotator-bridge") }}
+
+# Install pi-plannotator-bridge from GitHub on consumer machines.
+# Same dev-vs-consumer pattern as pi-cockpit above. Update the
+# `pi install` URL once the GitHub repo is published.
+echo "🧩  Installing pi-plannotator-bridge from GitHub..."
+if command -v pi >/dev/null 2>&1; then
+  if ! pi list 2>/dev/null | grep -q pi-plannotator-bridge; then
+    pi install git:github.com/Townk/pi-plannotator-bridge
+  else
+    echo "✅  pi-plannotator-bridge already installed"
+  fi
+else
+  echo "⚠️   pi CLI not on PATH; skipping pi-plannotator-bridge install (run \`pi install git:github.com/Townk/pi-plannotator-bridge\` manually)"
+fi
+{{- end }}
+
 # vim:ft=sh

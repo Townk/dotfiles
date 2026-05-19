@@ -29,4 +29,11 @@
 .pi/agent/extensions/pi-cockpit
 {{- end }}
 
+# pi-plannotator-bridge follows the same dev-vs-consumer pattern as
+# pi-cockpit. Symlinked when the working tree is present; installed
+# from GitHub by the run_once bootstrap otherwise.
+{{ if not (index .pi.devExtensions "pi-plannotator-bridge") -}}
+.pi/agent/extensions/pi-plannotator-bridge
+{{- end }}
+
 # vim:ft=gitignore

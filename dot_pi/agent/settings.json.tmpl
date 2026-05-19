@@ -11,7 +11,8 @@
     "npm"
   ],
   "extensions": [
-    "~/.pi/agent/extensions/pi-cockpit/src/index.ts"
+    "~/.pi/agent/extensions/pi-cockpit/src/index.ts",
+    "~/.pi/agent/extensions/pi-plannotator-bridge/src/index.ts"
   ],
   "skills": [
     "~/.pi/agent/skills",
@@ -24,10 +25,10 @@
     "npm:pi-cymbal",
     "npm:pi-lsp",
     "npm:glimpseui",
-    "git:github.com/Michaelliv/pi-generative-ui",
     "npm:@tintinweb/pi-subagents",
-    "npm:pi-observational-memory",
     "npm:@mario-gc/pi-context7",
+    "npm:@plannotator/pi-extension",
+    "git:github.com/ghoseb/pi-askuserquestion",
 {{- end }}
 {{- if eq .profile "work" }}
     "npm:pi-cursor-sdk",
