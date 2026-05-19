@@ -140,7 +140,11 @@ local function chezmoi_clear_apply_timer()
 end
 
 local function chezmoi_run_apply()
-  vim.fn.jobstart({ "chezmoi", "apply" }, { detach = true })
+  -- --force: source edit wins over any destination drift accumulated since
+  -- BufReadPre's chezmoi-reverse reconcile. Otherwise chezmoi would skip
+  -- (or prompt for) targets it sees as modified, leaving the live file
+  -- silently out of sync with the source we just saved.
+  vim.fn.jobstart({ "chezmoi", "apply", "--force" }, { detach = true })
 end
 
 local function chezmoi_schedule_apply()
