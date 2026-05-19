@@ -146,32 +146,17 @@ if command -v nvim >/dev/null 2>&1; then
     || die "Failed to upgrade NeoVim plugins!"
 fi
 
-# z4h update is intentionally the LAST step. It internally runs
-# `exec zsh` to load the freshly-fetched z4h code — a process-replacing
-# shell reload. That semantic only makes sense at the end of a script,
-# and it only makes sense when there's an interactive terminal to hand
-# the new shell off to.
+# z4h update is intentionally NOT handled here. It internally runs
+# `exec zsh` to load the freshly-fetched z4h code, and `exec` from a
+# script can only replace the script's own child shell — never the
+# user's interactive shell that invoked it. Doing it here would leave
+# an extra interactive shell stacked on top of the user's terminal.
 #
-# Branch behavior:
-#   - Under chezmoi (CHEZMOI=1) or any non-interactive invocation:
-#     SKIP z4h update entirely. We tried suppressing the interactive
-#     prompt with `< /dev/null` (z4h re-opens `/dev/tty` directly,
-#     ignoring the inherited stdin) and the shell-reload still blocked
-#     the parent apply. The right semantic for a non-interactive run
-#     is "leave the shell alone" — z4h gets refreshed on the next
-#     direct `system-update` invocation, which is a daily-driver
-#     anyway.
-#   - Interactive direct invocation: print the success line first
-#     (the user won't see anything else from this script after the
-#     exec), then `exec` system-update itself into the z4h-update
-#     pipeline so the terminal becomes the new z4h-managed shell
-#     when z4h finishes its own exec.
-if [[ "$running_under_chezmoi" -eq 1 || ! -t 0 ]]; then
-  print -P -- "\n🐚 Skipping zsh4humans update (running under chezmoi or non-interactive)."
-  print -P -- "   Run \`system-update\` directly to refresh z4h.\n"
-  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
-else
-  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!"
-  print -P -- "   Reloading your shell to pick up the updated zsh4humans...\n"
-  exec zsh -ic 'z4h update'
-fi
+# Instead, the `system-update` zsh function (defined in
+# ~/.config/zsh/functions.d/commands.sh) calls this script and then
+# runs `z4h update` directly in the interactive shell, so the exec
+# lands on the user's real shell. The chezmoi bootstrap and any other
+# non-interactive caller invoke this script via PATH and bypass the
+# function entirely, which is the right semantic for them — z4h gets
+# refreshed on the next interactive `system-update`.
+print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"

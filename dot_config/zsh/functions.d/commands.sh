@@ -4,6 +4,18 @@ source "${0:A:h}/_lib.sh"
 # chezmoi bootstrap (run_once_after_setup-bootstrap-tools.sh.tmpl) can
 # invoke it without entering an interactive shell. The bare command name
 # still works from the prompt because ~/.local/bin is on $PATH.
+#
+# This wrapper runs the script, then chains `z4h update` in the
+# *current* (interactive) shell. z4h update ends with `exec zsh`, which
+# only replaces the shell that called it — if the exec happened inside
+# the script, it would replace the script's own child shell and leave
+# an extra interactive shell stacked on top of the user's terminal.
+# Doing it here means the exec lands on the user's real shell, so we
+# end with exactly one shell.
+function system-update() {
+  command system-update "$@" || return
+  z4h update
+}
 
 # I decide to make my MOTD screen a function to allow me to call it
 # arbitrarially if I wanted.
