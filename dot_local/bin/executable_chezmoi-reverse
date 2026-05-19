@@ -1,10 +1,28 @@
 #!/usr/bin/env bash
 # chezmoi-reverse: propagate destination edits back to chezmoi source templates.
-# Usage: chezmoi-reverse <file> [<file>...]
+# Usage: chezmoi-reverse [--no-merge] [--] <file> [<file>...]
+#
+# --no-merge: when a hunk would require an interactive three-way merge,
+# leave the source untouched and emit `needs-merge` instead of invoking
+# `chezmoi merge`. Useful from non-interactive callers (e.g. editor hooks)
+# that want to detect drift without blocking on a merge tool.
 set -euo pipefail
 
+no_merge=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-merge) no_merge=1; shift ;;
+    --) shift; break ;;
+    -*)
+      echo "usage: chezmoi-reverse [--no-merge] [--] <file> [<file>...]" >&2
+      exit 2
+      ;;
+    *) break ;;
+  esac
+done
+
 if [ $# -eq 0 ]; then
-  echo "usage: chezmoi-reverse <file> [<file>...]" >&2
+  echo "usage: chezmoi-reverse [--no-merge] [--] <file> [<file>...]" >&2
   exit 2
 fi
 
@@ -61,6 +79,10 @@ reverse_one() {
   fi
   cp "$src.bak" "$src"
   rm -f "$src.bak" "$src.rej" "$src.orig"
+  if [ "$no_merge" -eq 1 ]; then
+    emit needs-merge "$file"
+    return 1
+  fi
   chezmoi merge "$file" || true
   emit merged "$file"
   return 0

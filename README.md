@@ -168,13 +168,17 @@ source template.
 chezmoi-reverse ~/.foo
 ```
 
-For each file it prints one of `clean`, `applied`, `merged`, `skipped`, or
-`failed`. Changes that fall entirely on literal lines are auto-patched into
-the `.tmpl` source. Changes that touch a `{{ ... }}` directive route through
-`chezmoi merge` for manual three-way merging — make sure `merge.command` is
-configured in your chezmoi config. `skipped` is emitted when there is no
-destination to read back from — chezmoi run-scripts (`run_*.tmpl`) and
-symlink templates (`symlink_*.tmpl`).
+For each file it prints one of `clean`, `applied`, `merged`, `needs-merge`,
+`skipped`, or `failed`. Changes that fall entirely on literal lines are
+auto-patched into the `.tmpl` source. Changes that touch a `{{ ... }}`
+directive route through `chezmoi merge` for manual three-way merging — make
+sure `merge.command` is configured in your chezmoi config. `skipped` is
+emitted when there is no destination to read back from — chezmoi run-scripts
+(`run_*.tmpl`) and symlink templates (`symlink_*.tmpl`).
+
+Pass `--no-merge` (e.g. from editor hooks or other non-interactive callers)
+to suppress the merge fallback: rejected hunks emit `needs-merge` instead
+of invoking the merge tool, leaving the source byte-identical to before.
 
 ## Conventions used in this repo
 

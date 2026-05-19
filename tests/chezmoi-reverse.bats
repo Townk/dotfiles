@@ -147,6 +147,34 @@ EOF
   [[ "$output" == *"clean"* ]] || false
 }
 
+@test "needs-merge: --no-merge skips the merge tool and reports needs-merge" {
+  cat > "$TEST_TMP/src/dot_foo.tmpl" <<'EOF'
+name = thiago
+role = {{ .role }}
+EOF
+  chezmoi apply
+  cp "$TEST_TMP/src/dot_foo.tmpl" "$TEST_TMP/template-before"
+  # Edit the rendered form of a templated line so patch will reject.
+  sed -i.bak 's/^role = engineer$/role = manager/' "$HOME/.foo"; rm "$HOME/.foo.bak"
+
+  run "$SCRIPT" --no-merge "$HOME/.foo"
+  [ "$status" -ne 0 ] || false
+  [[ "$output" == *"needs-merge"* ]] || false
+
+  # Merge stub must NOT have been invoked.
+  [ ! -f "$TEST_TMP/merge-invoked" ] || false
+
+  # Source must be byte-identical to its pre-run state (backup-and-restore
+  # still ran, but the interactive merge tool did not).
+  run diff "$TEST_TMP/template-before" "$TEST_TMP/src/dot_foo.tmpl"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "usage: unknown flag exits 2" {
+  run "$SCRIPT" --bogus "$HOME/.foo"
+  [ "$status" -eq 2 ] || false
+}
+
 @test "skipped: symlink template is skipped without touching source" {
   # Source content is the symlink target; chezmoi apply creates ~/.mylink
   # pointing there. Reverse-propagating an edit to a symlink target string
