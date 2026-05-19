@@ -68,3 +68,47 @@ end
 add_to_path(homebrew_bin)
 add_to_path(mise_shims)
 
+--------------------------------------------------------------------------------
+-- Chezmoi / Go-template filetype detection
+--------------------------------------------------------------------------------
+-- WHY: Chezmoi source files end in `.tmpl` and use Go's text/template syntax
+-- (`{{ if eq .profile "personal" }}…{{ end }}`) wrapped around an inner format
+-- (JSON, TOML, shell, etc.). Without help, nvim treats them as a single
+-- opaque filetype, losing JSON/TOML highlighting, indent, folds, and LSP.
+--
+-- We set a compound filetype like `json.gotmpl` so vim runs both ftplugins,
+-- and register the `gotmpl` treesitter parser to handle these compound types
+-- so template directives get their own highlighting while the surrounding
+-- text inherits its native parser via gotmpl's injection queries.
+--
+-- Templates without a recognizable inner-language suffix (e.g. Brewfile.tmpl,
+-- symlink_*.tmpl, .chezmoiignore.tmpl) fall back to plain `gotmpl`.
+--------------------------------------------------------------------------------
+vim.filetype.add({
+  pattern = {
+    [".*%.json%.tmpl$"] = "json.gotmpl",
+    [".*%.jsonc%.tmpl$"] = "jsonc.gotmpl",
+    [".*%.ya?ml%.tmpl$"] = "yaml.gotmpl",
+    [".*%.toml%.tmpl$"] = "toml.gotmpl",
+    [".*%.sh%.tmpl$"] = "bash.gotmpl",
+    [".*%.bash%.tmpl$"] = "bash.gotmpl",
+    [".*%.zsh%.tmpl$"] = "zsh.gotmpl",
+    [".*%.lua%.tmpl$"] = "lua.gotmpl",
+    [".*%.py%.tmpl$"] = "python.gotmpl",
+    [".*%.md%.tmpl$"] = "markdown.gotmpl",
+    [".*%.tmpl$"] = "gotmpl",
+  },
+})
+
+vim.treesitter.language.register("gotmpl", {
+  "json.gotmpl",
+  "jsonc.gotmpl",
+  "yaml.gotmpl",
+  "toml.gotmpl",
+  "bash.gotmpl",
+  "zsh.gotmpl",
+  "lua.gotmpl",
+  "python.gotmpl",
+  "markdown.gotmpl",
+})
+

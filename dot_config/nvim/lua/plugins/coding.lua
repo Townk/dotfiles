@@ -128,6 +128,7 @@ return {
     opts = {
       ensure_installed = {
         "bash",
+        "gotmpl",
         "html",
         "javascript",
         "json",
@@ -137,6 +138,7 @@ return {
         "python",
         "query",
         "regex",
+        "toml",
         "tsx",
         "typescript",
         "vim",
