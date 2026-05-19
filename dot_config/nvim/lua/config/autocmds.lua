@@ -216,18 +216,32 @@ vim.api.nvim_create_autocmd("BufReadPre", {
       return
     end
 
-    -- Reconcile external drift for non-templated sources. If a tool (e.g.
-    -- `pi install`) mutated the target since the last `chezmoi apply`, pull
-    -- those changes into the source so we don't open a stale version.
-    if not vim.endswith(source, ".tmpl") then
-      local status = vim.fn.system({ "chezmoi", "status", "--", target })
-      if vim.v.shell_error == 0 and status ~= "" then
-        vim.fn.system({ "chezmoi", "re-add", "--force", "--", target })
-        vim.notify(
-          ("chezmoi: reconciled external changes\n%s"):format(vim.fn.fnamemodify(target, ":~")),
-          vim.log.levels.INFO
-        )
-      end
+    -- Reconcile external drift before redirecting to the source. If a tool
+    -- (e.g. `pi install`, `gh auth login`) mutated the target since the last
+    -- `chezmoi apply`, propagate that change back into the source so we
+    -- don't open a stale version.
+    --
+    -- chezmoi-reverse handles both templated and non-templated sources.
+    -- --no-merge keeps us from blocking on a TTY merge tool inside an
+    -- autocmd; if the drift touches a `{{ ... }}` directive, the source is
+    -- left intact and we warn the user to run the merge by hand.
+    local out = vim.fn.system({ "chezmoi-reverse", "--no-merge", target })
+    local pretty = vim.fn.fnamemodify(target, ":~")
+    if out:find("applied", 1, true) then
+      vim.notify(
+        ("chezmoi: reconciled external changes\n%s"):format(pretty),
+        vim.log.levels.INFO
+      )
+    elseif out:find("needs-merge", 1, true) then
+      vim.notify(
+        ("chezmoi: drift in a templated region; run\n  chezmoi-reverse %s"):format(pretty),
+        vim.log.levels.WARN
+      )
+    elseif out:find("failed", 1, true) then
+      vim.notify(
+        ("chezmoi-reverse failed\n%s\n%s"):format(pretty, vim.trim(out)),
+        vim.log.levels.WARN
+      )
     end
 
     local buf = args.buf
