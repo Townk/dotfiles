@@ -47,3 +47,23 @@ teardown() {
   [[ "$output" == *"clean"* ]]
   [[ "$output" == *".foo"* ]]
 }
+
+@test "applied: change to a literal line is patched into the template" {
+  cat > "$TEST_TMP/src/dot_foo.tmpl" <<'EOF'
+name = thiago
+role = {{ .role }}
+EOF
+  chezmoi apply
+  # Edit only the literal first line in the destination.
+  sed -i.bak 's/^name = thiago$/name = alice/' "$HOME/.foo"; rm "$HOME/.foo.bak"
+
+  run "$SCRIPT" "$HOME/.foo"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"applied"* ]]
+
+  # The templated line must still be in template form, the literal line updated.
+  run cat "$TEST_TMP/src/dot_foo.tmpl"
+  [[ "$output" == *"name = alice"* ]]
+  [[ "$output" == *"role = {{ .role }}"* ]]
+  [ ! -e "$TEST_TMP/merge-invoked" ]
+}
