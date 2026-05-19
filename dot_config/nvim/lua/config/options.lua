@@ -84,19 +84,28 @@ add_to_path(mise_shims)
 -- Templates without a recognizable inner-language suffix (e.g. Brewfile.tmpl,
 -- symlink_*.tmpl, .chezmoiignore.tmpl) fall back to plain `gotmpl`.
 --------------------------------------------------------------------------------
+-- Two non-obvious things about these patterns:
+--   1) Don't include `$` at the end — vim.filetype.add wraps each user
+--      pattern with `^...$` internally (see runtime/lua/vim/filetype.lua),
+--      so a trailing `$` becomes a *literal* dollar character and never
+--      matches a real filename.
+--   2) Inner-language patterns need an explicit `priority` above 0 so the
+--      specific match (`.json.tmpl` -> json.gotmpl) wins over the catch-all
+--      (`.tmpl` -> gotmpl). Default priority is 0, ties are resolved by
+--      table iteration order (i.e. unstable).
 vim.filetype.add({
   pattern = {
-    [".*%.json%.tmpl$"] = "json.gotmpl",
-    [".*%.jsonc%.tmpl$"] = "jsonc.gotmpl",
-    [".*%.ya?ml%.tmpl$"] = "yaml.gotmpl",
-    [".*%.toml%.tmpl$"] = "toml.gotmpl",
-    [".*%.sh%.tmpl$"] = "bash.gotmpl",
-    [".*%.bash%.tmpl$"] = "bash.gotmpl",
-    [".*%.zsh%.tmpl$"] = "zsh.gotmpl",
-    [".*%.lua%.tmpl$"] = "lua.gotmpl",
-    [".*%.py%.tmpl$"] = "python.gotmpl",
-    [".*%.md%.tmpl$"] = "markdown.gotmpl",
-    [".*%.tmpl$"] = "gotmpl",
+    [".*%.json%.tmpl"]  = { "json.gotmpl",     { priority = 10 } },
+    [".*%.jsonc%.tmpl"] = { "jsonc.gotmpl",    { priority = 10 } },
+    [".*%.ya?ml%.tmpl"] = { "yaml.gotmpl",     { priority = 10 } },
+    [".*%.toml%.tmpl"]  = { "toml.gotmpl",     { priority = 10 } },
+    [".*%.sh%.tmpl"]    = { "bash.gotmpl",     { priority = 10 } },
+    [".*%.bash%.tmpl"]  = { "bash.gotmpl",     { priority = 10 } },
+    [".*%.zsh%.tmpl"]   = { "zsh.gotmpl",      { priority = 10 } },
+    [".*%.lua%.tmpl"]   = { "lua.gotmpl",      { priority = 10 } },
+    [".*%.py%.tmpl"]    = { "python.gotmpl",   { priority = 10 } },
+    [".*%.md%.tmpl"]    = { "markdown.gotmpl", { priority = 10 } },
+    [".*%.tmpl"]        = "gotmpl",
   },
 })
 
