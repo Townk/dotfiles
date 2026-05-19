@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# chezmoi-reverse: propagate destination edits back to chezmoi source templates.
+# Usage: chezmoi-reverse <file> [<file>...]
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+  echo "usage: chezmoi-reverse <file> [<file>...]" >&2
+  exit 2
+fi
+
+echo "not yet implemented" >&2
+exit 1
