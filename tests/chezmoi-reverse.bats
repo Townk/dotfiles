@@ -35,17 +35,17 @@ teardown() {
 
 @test "usage: no args exits 2 with usage line on stderr" {
   run "$SCRIPT"
-  [ "$status" -eq 2 ]
-  [[ "$stderr" == *"usage: chezmoi-reverse"* ]] || [[ "$output" == *"usage: chezmoi-reverse"* ]]
+  [ "$status" -eq 2 ] || false
+  { [[ "$stderr" == *"usage: chezmoi-reverse"* ]] || [[ "$output" == *"usage: chezmoi-reverse"* ]]; } || false
 }
 
 @test "clean: unchanged destination reports clean and exits 0" {
   printf 'name = thiago\n' > "$TEST_TMP/src/dot_foo.tmpl"
   chezmoi apply
   run "$SCRIPT" "$HOME/.foo"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"clean"* ]]
-  [[ "$output" == *".foo"* ]]
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"clean"* ]] || false
+  [[ "$output" == *".foo"* ]] || false
 }
 
 @test "applied: change to a literal line is patched into the template" {
@@ -58,14 +58,14 @@ EOF
   sed -i.bak 's/^name = thiago$/name = alice/' "$HOME/.foo"; rm "$HOME/.foo.bak"
 
   run "$SCRIPT" "$HOME/.foo"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"applied"* ]]
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"applied"* ]] || false
 
   # The templated line must still be in template form, the literal line updated.
   run cat "$TEST_TMP/src/dot_foo.tmpl"
-  [[ "$output" == *"name = alice"* ]]
-  [[ "$output" == *"role = {{ .role }}"* ]]
-  [ ! -e "$TEST_TMP/merge-invoked" ]
+  [[ "$output" == *"name = alice"* ]] || false
+  [[ "$output" == *"role = {{ .role }}"* ]] || false
+  [ ! -e "$TEST_TMP/merge-invoked" ] || false
 }
 
 @test "merged: change to a templated line restores template and invokes merge" {
@@ -81,21 +81,21 @@ EOF
   sed -i.bak 's/^role = engineer$/role = manager/' "$HOME/.foo"; rm "$HOME/.foo.bak"
 
   run "$SCRIPT" "$HOME/.foo"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"merged"* ]]
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"merged"* ]] || false
 
   # Merge stub must have been invoked.
-  [ -f "$TEST_TMP/merge-invoked" ]
+  [ -f "$TEST_TMP/merge-invoked" ] || false
 
   # Template must be byte-identical to its pre-run state (the merge stub is a
   # no-op; we only verify our backup-and-restore worked).
   run diff "$TEST_TMP/template-before" "$TEST_TMP/src/dot_foo.tmpl"
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 0 ] || false
 
   # No stray reject or backup files left behind in the source dir.
-  [ ! -e "$TEST_TMP/src/dot_foo.tmpl.rej" ]
-  [ ! -e "$TEST_TMP/src/dot_foo.tmpl.orig" ]
-  [ ! -e "$TEST_TMP/src/dot_foo.tmpl.bak" ]
+  [ ! -e "$TEST_TMP/src/dot_foo.tmpl.rej" ] || false
+  [ ! -e "$TEST_TMP/src/dot_foo.tmpl.orig" ] || false
+  [ ! -e "$TEST_TMP/src/dot_foo.tmpl.bak" ] || false
 }
 
 @test "applied: non-template file is re-added via chezmoi re-add" {
@@ -104,12 +104,12 @@ EOF
   printf 'literal one\nliteral CHANGED\n' > "$HOME/.bar"
 
   run "$SCRIPT" "$HOME/.bar"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"applied"* ]]
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"applied"* ]] || false
 
   run cat "$TEST_TMP/src/dot_bar"
-  [[ "$output" == *"literal CHANGED"* ]]
-  [ ! -f "$TEST_TMP/merge-invoked" ]
+  [[ "$output" == *"literal CHANGED"* ]] || false
+  [ ! -f "$TEST_TMP/merge-invoked" ] || false
 }
 
 @test "multi: clean + applied across two files exits 0 with both statuses" {
@@ -119,11 +119,11 @@ EOF
   printf 'after\n' > "$HOME/.b"
 
   run "$SCRIPT" "$HOME/.a" "$HOME/.b"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"clean"* ]]
-  [[ "$output" == *"applied"* ]]
-  [[ "$output" == *".a"* ]]
-  [[ "$output" == *".b"* ]]
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"clean"* ]] || false
+  [[ "$output" == *"applied"* ]] || false
+  [[ "$output" == *".a"* ]] || false
+  [[ "$output" == *".b"* ]] || false
 }
 
 @test "clean: unchanged non-template destination reports clean" {
@@ -132,9 +132,9 @@ EOF
   # No edit; destination should be byte-identical to source.
 
   run "$SCRIPT" "$HOME/.baz"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *".baz"* ]]
-  [[ "$output" == *"clean"* ]]
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *".baz"* ]] || false
+  [[ "$output" == *"clean"* ]] || false
 }
 
 @test "multi: unmanaged file causes non-zero exit but other files still process" {
@@ -142,7 +142,7 @@ EOF
   chezmoi apply
 
   run "$SCRIPT" "$HOME/does-not-exist" "$HOME/.a"
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"failed"* ]]
-  [[ "$output" == *"clean"* ]]
+  [ "$status" -ne 0 ] || false
+  [[ "$output" == *"failed"* ]] || false
+  [[ "$output" == *"clean"* ]] || false
 }
