@@ -34,7 +34,7 @@ Provide `chezmoi-reverse <file> [<file>...]` that, for each destination file:
    - `run_*.tmpl` (script template) → no destination state to read; report `skipped` with a message.
    - Otherwise (regular `.tmpl`) → continue.
 3. **Render** the current template: `chezmoi cat "$file" > "$rendered"`.
-4. **Diff** the rendered output against the current destination: `diff -u "$rendered" "$file" > "$patch"`. If empty, report `clean` and continue.
+4. **Diff** the rendered output against the current destination with **zero context lines**: `diff -U0 "$rendered" "$file" > "$patch"`. If empty, report `clean` and continue. The `-U0` is deliberate — see the rationale section below.
 5. **Back up** the source: `cp "$src" "$src.bak"`.
 6. **Attempt patch** on the source: `patch --fuzz=0 --no-backup-if-mismatch "$src" < "$patch"`.
 7. **Verify.** If `patch` exited 0 **and** `$src.rej` does not exist → remove `$src.bak`, report `applied`.
@@ -42,16 +42,21 @@ Provide `chezmoi-reverse <file> [<file>...]` that, for each destination file:
 
 Note on diff/patch wiring: `diff -u "$rendered" "$file"` produces headers referencing those paths, but the patch is applied to `$src` because `$src` is given explicitly on `patch`'s command line. The headers are advisory only in this mode.
 
-## Why `--fuzz=0` is load-bearing
+## Why `-U0` and `--fuzz=0` are both load-bearing
 
-The patch's context lines are taken from the rendered output. The source template is identical to the rendered output **on literal lines** and different **on templated lines** (`{{ .name }}` in the template renders to `thiago` in the output, for example).
+The diff is computed against rendered output; the patch is applied to the template. The two files agree on literal lines and disagree on templated lines (`{{ .name }}` in the template renders to `thiago` in the output, for example).
 
-With `--fuzz=0`:
+**Why `-U0` (zero context lines).** With the default `-u` (three lines of context), each hunk includes up to three surrounding lines pulled from the rendered output. If any of those context lines happens to be the rendered form of a templated line, `patch --fuzz=0` will reject the hunk because the context cannot match the template. That rejection happens even when the *changed* region is purely literal — meaning safe literal edits adjacent to a templated line would always fall through to merge unnecessarily. `-U0` removes context entirely; the only anchors are the line number and the old-line content itself.
 
-- A hunk that touches only literal lines has literal context, which matches the template exactly, so the hunk applies.
-- A hunk whose context or changed region falls on a templated line cannot match the template (which still contains `{{ ... }}`), so `patch` rejects the hunk into a `.rej` file. We detect this and fall back to merge.
+**Why `--fuzz=0`.** With zero context but default fuzz, `patch` would try the specified line and then search nearby lines to find the old-line content. That search can find a different occurrence of the same literal further away in the template — a silent misapply. `--fuzz=0` confines patching to the exact line indicated by the hunk header.
 
-With the default `--fuzz=2`, `patch` may match a different region with two non-matching context lines, silently writing the change to the wrong place in the template. That is the failure mode we are designed to prevent. Fuzz=0 turns the "fail loudly and fall back" property into a hard guarantee for single-line edits and a very strong heuristic for multi-line edits.
+**Combined safety properties.** For each kind of change, `-U0 | --fuzz=0` behaves as follows:
+
+- *Literal change at a position not shifted by template directives.* Old-line content (e.g. `name = thiago`) appears literally at the same line number in the template → applies.
+- *Literal change at a position shifted by a multi-line directive* (`{{ if … }} … {{ end }}` blocks that expand or contract the rendered output). Template line at the hunk's line number is different from the rendered old-line → rejected → falls back to merge.
+- *Change to a rendered templated line.* Rendered old-line (e.g. `role = engineer`) does not appear in the template at all (template has `role = {{ .role }}`) → rejected → falls back to merge.
+
+The pathological case `-U0` does not fully prevent is: a literal change at a line that happens to drift to a different template line whose content *also* equals the rendered old-line by coincidence. This requires a multi-line directive earlier in the template, plus duplicate literal content at the drifted position. Unlikely in practice; if it occurs, the cost is silent misapply of one literal line, which the user can catch via the `chezmoi diff` they would run before applying.
 
 ## Output and exit codes
 
