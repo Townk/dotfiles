@@ -246,18 +246,13 @@ function gg {
 }
 compdef gg=gradle
 
-# A helper function to be used as an `fzf` previewer.
-function fzf-preview {
-  if [[ -d "$1" ]]; then
-    eza -F -h --group-directories-first --icons --hyperlink --tree --color=always --level=2 "$1" | head -200
-  elif [[ ! -f "$1" ]]; then
-    echo "Nothing to preview"
-  else
-    (bat --theme=OneHalfDark --style=numbers,changes --color=always "$1" ||
-      highlight -O ansi -l "$1" ||
-      \cat "$1") 2>/dev/null | head -200
-  fi
-}
+# `fzf-preview` lives at ~/.local/bin/fzf-preview as a standalone
+# script. fzf invokes previews via `$SHELL -c '<cmd>'` in a
+# non-interactive subshell that doesn't source this file, so a zsh
+# function here wouldn't be visible to fzf. (zsh's `typeset -fx` does
+# not propagate function definitions to child zsh shells the way
+# bash's `export -f` does.) The script is found via PATH and works
+# everywhere.
 
 # A Yazi wrapper that allows me to chage the current working directory to where
 # I was in Yazi before I quit.

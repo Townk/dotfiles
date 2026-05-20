@@ -28,10 +28,44 @@ zstyle ':z4h:autosuggestions' forward-char 'accept'
 
 # Recursively traverse directories when TAB-completing files.
 zstyle ':z4h:fzf-complete' recurse-dirs 'yes'
-zstyle ':z4h:fzf-complete' fzf-bindings 'tab:repeat'
-zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl+v:toggle-preview'
-zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-j:down'
-zstyle ':z4h:fzf-complete' fzf-bindings 'ctrl-h:up'
+# All bindings must go in a single `zstyle` call — each invocation
+# replaces the previous values for the same (pattern, style) pair, so
+# four separate lines would leave only the last one in effect. fzf
+# also wants `ctrl-X`, not `ctrl+X`, or it rejects the whole --bind.
+#
+# `:z4h:*` covers super-cd, fzf-history, fzf-dir-history, etc.
+# `:z4h:fzf-complete` is more specific and takes precedence for TAB
+# (where we also want `tab:repeat`). zstyle returns values from only
+# the most specific match, so the bindings must be repeated.
+zstyle ':z4h:*' fzf-bindings \
+  'ctrl-space:toggle-preview' \
+  'ctrl-j:down' \
+  'ctrl-k:up' \
+  'shift-up:preview-up' \
+  'shift-down:preview-down' \
+  'alt-up:preview-page-up' \
+  'alt-down:preview-page-down' \
+  'alt-page-up:preview-page-up' \
+  'alt-page-down:preview-page-down' \
+  'alt-home:preview-top' \
+  'alt-end:preview-bottom' \
+  'ctrl-f:change-preview(FZF_PREVIEW_FULL=1 fzf-preview {-1} | sed "s/^/ /")' \
+  'ctrl-alt-f:change-preview(fzf-preview {-1} | sed "s/^/ /")'
+zstyle ':z4h:fzf-complete' fzf-bindings \
+  'tab:repeat' \
+  'ctrl-space:toggle-preview' \
+  'ctrl-j:down' \
+  'ctrl-k:up' \
+  'shift-up:preview-up' \
+  'shift-down:preview-down' \
+  'alt-up:preview-page-up' \
+  'alt-down:preview-page-down' \
+  'alt-page-up:preview-page-up' \
+  'alt-page-down:preview-page-down' \
+  'alt-home:preview-top' \
+  'alt-end:preview-bottom' \
+  'ctrl-f:change-preview(FZF_PREVIEW_FULL=1 fzf-preview {-1} | sed "s/^/ /")' \
+  'ctrl-alt-f:change-preview(fzf-preview {-1} | sed "s/^/ /")'
 
 # Enable ('yes') or disable ('no') automatic teleportation of z4h over
 # SSH when connecting to these hosts.
@@ -72,12 +106,12 @@ zstyle ':z4h:*' fzf-flags \
   --info=default \
   --exit-0 \
   --select-1 \
-  --padding='0,2,1,0' \
+  --padding='0,2,0,0' \
   --prompt='    ' \
   --pointer='➔' \
   --marker='✔' \
-  --preview 'fzf-preview {}' \
-  --preview-window=right:60%:hidden
+  --preview 'fzf-preview {-1} | sed "s/^/ /"' \
+  --preview-window=right:60%:hidden,border-line,noinfo
 
 # Core Go paths
 export GOPATH="$XDG_DATA_HOME/go"
@@ -95,6 +129,23 @@ export MANPAGER="less -R --use-color -Dd+r -Du+b"
 # Install plugins by clonning additional Git repositories from GitHub.
 # We still need to load these plugins later, after `z4h init`
 # z4h install jeffreytse/zsh-vi-mode
+
+# z4h's bundled fzf binary is hard-coded to 0.25.1 (2021) for Darwin
+# arm64 inside `-z4h-postinstall-fzf`. Override the postinstall to
+# symlink the Homebrew fzf instead — installed via our Brewfile and
+# kept current by `system-update`. The override runs during each
+# `z4h update`, which rebuilds $Z4H from scratch in a fresh shell that
+# re-sources this file before any postinstall fires.
+function -z4h-postinstall-fzf() {
+  emulate -L zsh
+  local fzf_bin="${HOMEBREW_PREFIX:-/opt/homebrew}/bin/fzf"
+  [[ -x $fzf_bin ]] || {
+    print -Pru2 -- "%F{3}z4h%f: %F{1}fzf not found at ${fzf_bin}; install via Brewfile%f"
+    return 1
+  }
+  command mkdir -p -- $Z4H_PACKAGE_DIR/bin || return
+  command ln -sf -- "$fzf_bin" "$Z4H_PACKAGE_DIR/bin/fzf" || return
+}
 
 # Install or update core components (fzf, zsh-autosuggestions, etc.) and
 # initialize Zsh. After this point console I/O is unavailable until Zsh
