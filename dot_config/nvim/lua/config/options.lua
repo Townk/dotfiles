@@ -94,6 +94,19 @@ add_to_path(mise_shims)
 --      (`.tmpl` -> gotmpl). Default priority is 0, ties are resolved by
 --      table iteration order (i.e. unstable).
 vim.filetype.add({
+  -- Exact-basename matches go in the `filename` table; they win over
+  -- the `pattern` table below without needing a priority. Use these
+  -- for Ruby DSL files chezmoi templates (Brewfile, Gemfile, …) that
+  -- have no extension before `.tmpl` to pattern-match on.
+  filename = {
+    ["Brewfile.tmpl"] = "ruby.gotmpl",
+    -- Plain-text package manifests with `# comments` and bare lines.
+    -- `conf` has no treesitter parser, so the inner content falls back
+    -- to classical vim syntax — fine for these formats.
+    ["Gofile.tmpl"]   = "conf.gotmpl",
+    ["Npmfile.tmpl"]  = "conf.gotmpl",
+    ["Uvfile.tmpl"]   = "conf.gotmpl",
+  },
   pattern = {
     [".*%.json%.tmpl"]  = { "json.gotmpl",     { priority = 10 } },
     [".*%.jsonc%.tmpl"] = { "jsonc.gotmpl",    { priority = 10 } },
@@ -104,6 +117,7 @@ vim.filetype.add({
     [".*%.zsh%.tmpl"]   = { "zsh.gotmpl",      { priority = 10 } },
     [".*%.lua%.tmpl"]   = { "lua.gotmpl",      { priority = 10 } },
     [".*%.py%.tmpl"]    = { "python.gotmpl",   { priority = 10 } },
+    [".*%.rb%.tmpl"]    = { "ruby.gotmpl",     { priority = 10 } },
     [".*%.md%.tmpl"]    = { "markdown.gotmpl", { priority = 10 } },
     [".*%.tmpl"]        = "gotmpl",
   },
@@ -118,7 +132,13 @@ vim.treesitter.language.register("gotmpl", {
   "zsh.gotmpl",
   "lua.gotmpl",
   "python.gotmpl",
+  "ruby.gotmpl",
   "markdown.gotmpl",
+  -- `conf` has no treesitter parser; this register makes treesitter
+  -- enable the gotmpl parser for the compound filetype so `{{...}}`
+  -- directives still get highlighted. The literal regions fall back
+  -- to classical vim syntax.
+  "conf.gotmpl",
 })
 
 -- Inject the inner language of compound filetypes (json.gotmpl, yaml.gotmpl,

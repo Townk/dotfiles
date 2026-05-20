@@ -86,6 +86,19 @@ return {
             },
           },
         },
+        gopls = {
+          -- Restrict gopls to real Go sources. nvim-lspconfig's default
+          -- gopls filetypes include `gotmpl`, and our filetype.add maps
+          -- every `*.tmpl` file to that filetype (see
+          -- lua/config/options.lua) — including chezmoi templates like
+          -- Brewfile.tmpl with no Go context. gopls then starts in
+          -- single-file mode with no go.mod, errors on InlayHint
+          -- requests ("no package metadata for file"), and LazyVim's
+          -- setup hook (extras/lang/go.lua:60) crashes trying to copy
+          -- semanticTokens from a client whose
+          -- `client.config.capabilities.textDocument` is nil.
+          filetypes = { "go", "gomod", "gowork" },
+        },
       },
     },
   },
@@ -138,6 +151,7 @@ return {
         "python",
         "query",
         "regex",
+        "ruby",
         "toml",
         "tsx",
         "typescript",

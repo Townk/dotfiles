@@ -320,3 +320,29 @@ vim.api.nvim_create_autocmd("User", {
     }):map("<leader>uM")
   end,
 })
+
+--------------------------------------------------------------------------------
+-- Force classical conf syntax for `conf.gotmpl` buffers
+--------------------------------------------------------------------------------
+-- WHY: gotmpl directives in `conf.gotmpl` buffers are highlighted by the
+-- gotmpl treesitter parser, but `conf` has no treesitter parser of its own.
+-- nvim-treesitter's `additional_vim_regex_highlighting` is supposed to keep
+-- vim's classical syntax engine alive alongside the treesitter parser, but
+-- in practice (here at least) treesitter still clears `bo.syntax` for the
+-- compound filetype, so the inner content renders unstyled.
+--
+-- This autocmd explicitly sets the buffer-local `syntax` to `conf` AFTER
+-- treesitter has finished setting up (via `vim.schedule`), which sources
+-- `syntax/conf.vim` and gives us the `#` comments, key/value, and bare-word
+-- highlighting we want underneath the gotmpl directives.
+vim.api.nvim_create_autocmd("FileType", {
+  group = vim.api.nvim_create_augroup("ConfGotmplSyntax", { clear = true }),
+  pattern = "conf.gotmpl",
+  callback = function(args)
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(args.buf) then
+        vim.bo[args.buf].syntax = "conf"
+      end
+    end)
+  end,
+})
