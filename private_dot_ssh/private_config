@@ -4,6 +4,7 @@ Match all
 
 Host *
   User thiago
+  IdentityFile ~/.ssh/id_ecdsa
   UserKnownHostsFile ~/.ssh/known_hosts
   ForwardAgent yes
   Compression yes
@@ -13,3 +14,5 @@ Host *
   ControlMaster auto
   ControlPersist 1800
   UseKeychain yes
+
+Include ~/.ssh/config.d/*
