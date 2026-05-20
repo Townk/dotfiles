@@ -1,0 +1,351 @@
+#!/usr/bin/env zsh
+#
+# commit-ai — AI-driven git commits via pi-coding-agent's commit skill.
+#
+# Asks pi to analyze the working tree, group changes into logical commits,
+# and produce Conventional Commits-format messages. The script owns every
+# git operation, so --dry-run and --no-commit reuse the same plan that
+# default mode executes — there is no second code path that could drift.
+#
+# Agent contract: pi reads the diff, writes a JSON plan to a tempfile,
+# then exits. It never runs `git add` or `git commit`. The script reads
+# the plan and stages + commits one group at a time.
+
+set -eu -o pipefail
+
+# ────────────────────────────────────────────────────────────────────
+# Defaults — overridable via env or flags
+# ────────────────────────────────────────────────────────────────────
+: "${COMMIT_AI_MODEL:=opencode-go/deepseek-v4-flash}"
+: "${COMMIT_AI_THINKING:=medium}"
+
+# ────────────────────────────────────────────────────────────────────
+# Colors / helpers (match the rest of dot_local/bin)
+# ────────────────────────────────────────────────────────────────────
+if [[ -t 1 ]]; then
+  C_BLU=$'\e[34m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'
+  C_RED=$'\e[31m'; C_DIM=$'\e[2m'; C_BWH=$'\e[1;37m'; C_RES=$'\e[0m'
+else
+  C_BLU=""; C_GRN=""; C_YEL=""; C_RED=""; C_DIM=""; C_BWH=""; C_RES=""
+fi
+
+die()  { print -P -- "\n${C_RED}Error${C_RES}: $*" >&2; exit 1; }
+warn() { print -P -- "${C_YEL}⚠${C_RES}  $*" >&2; }
+info() { print -P -- "${C_BLU}→${C_RES} $*"; }
+ok()   { print -P -- "${C_GRN}✓${C_RES} $*"; }
+
+usage() {
+  cat <<EOF
+Usage: commit-ai [options] [-- extra-guidance...]
+
+Use pi-coding-agent to group the working tree's changes into one or more
+logical commits and create them using the project's commit skill.
+
+Options:
+  -u, --untracked     Also include untracked files in the commits.
+  -d, --dry-run       Print the plan (groupings + messages) without
+                      staging or committing anything.
+  -n, --no-commit     For each planned commit: stage the files, open
+                      \$EDITOR with the message, then prompt to commit.
+                      Saying No aborts without creating the commit.
+  -m, --model <id>    Override model (default: \$COMMIT_AI_MODEL or
+                      opencode-go/deepseek-v4-flash). Supports pi's
+                      provider/id and fuzzy patterns.
+      --thinking <l>  Override thinking level: off|minimal|low|medium|
+                      high|xhigh (default: \$COMMIT_AI_THINKING or medium).
+  -v, --verbose       Show pi-coding-agent output as it plans.
+  -h, --help          Show this help.
+
+Extra positional args (after \`--\`) are passed to the agent as
+additional commit guidance — file globs to scope to, scope hints,
+JIRA references, etc.
+
+Environment:
+  COMMIT_AI_MODEL     Default model.
+  COMMIT_AI_THINKING  Default thinking level.
+
+Logs:
+  pi-coding-agent's stdout+stderr (which pi's TUI clears from the
+  terminal on exit) is appended to
+  \${XDG_STATE_HOME:-\$HOME/.local/state}/commit-ai/errors.log
+EOF
+}
+
+# ────────────────────────────────────────────────────────────────────
+# Parse args
+# ────────────────────────────────────────────────────────────────────
+include_untracked=0
+dry_run=0
+no_commit=0
+verbose=0
+model="$COMMIT_AI_MODEL"
+thinking="$COMMIT_AI_THINKING"
+extra_guidance=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -u|--untracked) include_untracked=1; shift ;;
+    -d|--dry-run)   dry_run=1; shift ;;
+    -n|--no-commit) no_commit=1; shift ;;
+    -m|--model)     [[ $# -ge 2 ]] || die "--model needs a value"; model="$2"; shift 2 ;;
+    --thinking)     [[ $# -ge 2 ]] || die "--thinking needs a value"; thinking="$2"; shift 2 ;;
+    -v|--verbose)   verbose=1; shift ;;
+    -h|--help)      usage; exit 0 ;;
+    --)             shift; extra_guidance=("$@"); break ;;
+    -*)             usage >&2; die "unknown flag: $1" ;;
+    *)              extra_guidance=("$@"); break ;;
+  esac
+done
+
+[[ "$dry_run" -eq 1 && "$no_commit" -eq 1 ]] \
+  && die "--dry-run and --no-commit are mutually exclusive"
+
+# ────────────────────────────────────────────────────────────────────
+# Pre-flight
+# ────────────────────────────────────────────────────────────────────
+command -v pi  >/dev/null 2>&1 || die "pi-coding-agent (pi) not on PATH"
+command -v git >/dev/null 2>&1 || die "git not on PATH"
+command -v jq  >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
+
+git rev-parse --git-dir >/dev/null 2>&1 \
+  || die "not inside a git repository"
+
+# Refuse pre-existing staged changes — keeps dry-run / no-commit / default
+# modes from getting tangled with whatever the user had half-staged. The
+# user can `git reset` (to unstage) or `git commit` (to commit them) first.
+if ! git diff --cached --quiet; then
+  die "you already have staged changes; \`git reset\` to unstage (or commit them) first"
+fi
+
+have_modified=0
+git diff --quiet || have_modified=1
+
+have_untracked=0
+[[ -n "$(git ls-files --others --exclude-standard)" ]] && have_untracked=1
+
+if [[ "$have_modified" -eq 0 && "$have_untracked" -eq 0 ]]; then
+  ok "nothing to commit, working tree clean"
+  exit 0
+fi
+if [[ "$have_modified" -eq 0 && "$include_untracked" -eq 0 ]]; then
+  warn "only untracked files present; pass -u/--untracked to include them"
+  exit 0
+fi
+
+# ────────────────────────────────────────────────────────────────────
+# Build prompt
+# ────────────────────────────────────────────────────────────────────
+tmpdir="$(mktemp -d -t commit-ai.XXXXXX)"
+pi_pid=""
+cleanup() {
+  [[ -n "$pi_pid" ]] && kill "$pi_pid" 2>/dev/null
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT INT TERM
+
+plan_file="$tmpdir/plan.json"
+
+scope_clause="modified (tracked) files only"
+[[ "$include_untracked" -eq 1 ]] && scope_clause="modified files AND untracked files"
+
+extra_block=""
+if [[ ${#extra_guidance[@]} -gt 0 ]]; then
+  extra_block=$'\n\nAdditional guidance from the caller:\n'"${extra_guidance[*]}"
+fi
+
+prompt=$(cat <<EOF
+You are PLANNING a series of git commits. Use the project's **commit**
+skill for message-format conventions (Conventional Commits subject,
+optional Markdown body, comment-character preflight, etc.), but DO NOT
+execute any \`git add\` or \`git commit\` — the calling script does that.
+
+Workflow:
+
+1. Inspect the working tree with \`git status\` and \`git diff\`
+   (per-file as needed). Scope: ${scope_clause}.
+2. Group the changes into one or more logical commits. Prefer ONE
+   commit when changes are coherent; only split when topics are
+   clearly independent.
+3. For each group, draft a polished message per the commit skill
+   (subject + Markdown body sized to the change).
+4. Use the **Write** tool to save the plan as JSON at the absolute path
+   \`${plan_file}\`. Do not just describe the plan in your reply — the
+   calling script reads it from disk. The file MUST exist when you
+   finish. Shape MUST be EXACTLY:
+
+\`\`\`json
+{
+  "commits": [
+    {
+      "files": ["relative/path/one", "relative/path/two"],
+      "message": "feat(scope): subject\\n\\n## Changes Description\\n\\n..."
+    }
+  ]
+}
+\`\`\`
+
+Rules:
+- File paths must be repo-relative, exactly as \`git status\` prints them.
+- Every in-scope changed file must appear in exactly one commit's
+  \`files\` array. No duplicates, no omissions.
+- \`message\` is the full commit message (subject + blank line + body
+  when warranted); use JSON \`\\n\` for newlines.
+- Do NOT stage. Do NOT commit. Do NOT push.
+- When you are done, reply with the literal text \`PLAN_WRITTEN\` and
+  nothing else.${extra_block}
+EOF
+)
+
+# ────────────────────────────────────────────────────────────────────
+# Run agent
+# ────────────────────────────────────────────────────────────────────
+# Always capture pi's stdout+stderr to a persistent log. pi runs a TUI
+# in text mode and clears the screen on exit, so any error it printed
+# would otherwise be gone before the user could read it — even with
+# --verbose.
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/commit-ai"
+mkdir -p "$state_dir"
+log_file="$state_dir/errors.log"
+
+{
+  print -- ""
+  print -- "─── $(date '+%Y-%m-%d %H:%M:%S') ─────────────────────────"
+  print -- "model=$model thinking=$thinking untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit"
+} >> "$log_file"
+
+info "Planning commits with ${C_BWH}${model}${C_RES} (thinking: ${thinking})…"
+
+pi_args=(
+  --print
+  --mode json
+  --no-session
+  --model "$model"
+  --thinking "$thinking"
+)
+
+if [[ "$verbose" -eq 1 ]]; then
+  pi "${pi_args[@]}" "$prompt" 2>&1 | tee -a "$log_file"
+  rc=${pipestatus[1]}
+else
+  pi "${pi_args[@]}" "$prompt" >>"$log_file" 2>&1 &
+  pi_pid=$!
+
+  # Spinner with elapsed seconds so the user knows the model is still
+  # thinking. Skipped when stderr isn't a TTY (piped / non-interactive).
+  if [[ -t 2 ]]; then
+    spinner=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    start=$SECONDS
+    s=1
+    while kill -0 "$pi_pid" 2>/dev/null; do
+      elapsed=$((SECONDS - start))
+      print -nu2 -- "\r  ${C_BLU}${spinner[s]}${C_RES} ${elapsed}s  "
+      sleep 0.1
+      s=$(( s % 10 + 1 ))
+    done
+    print -nu2 -- "\r\e[K"
+  fi
+
+  wait "$pi_pid"
+  rc=$?
+  pi_pid=""
+fi
+
+[[ "$rc" -eq 0 ]] || die "pi-coding-agent failed (see $log_file)"
+
+if [[ ! -s "$plan_file" ]]; then
+  warn "the model returned a reply but did not call the Write tool to"
+  warn "create $plan_file. Try a stricter model:"
+  warn "  COMMIT_AI_MODEL=anthropic/claude-sonnet-4.6 commit-ai $*"
+  die "no plan written (see $log_file)"
+fi
+
+if ! jq -e '.commits | type == "array" and length > 0' "$plan_file" >/dev/null 2>&1; then
+  die "agent produced an invalid plan (see $log_file and $plan_file)"
+fi
+
+total_files=$(jq '[.commits[].files[]] | length' "$plan_file")
+[[ "$total_files" -gt 0 ]] || die "plan groups have no files"
+
+commit_count=$(jq -r '.commits | length' "$plan_file")
+
+# ────────────────────────────────────────────────────────────────────
+# Plan summary
+# ────────────────────────────────────────────────────────────────────
+print -P -- "\n${C_BWH}Planned ${commit_count} commit(s)${C_RES}\n"
+
+jq -r '
+  .commits | to_entries[] |
+  "── #\(.key + 1) ──\n" +
+  (.value.message | split("\n")[0]) + "\n" +
+  (.value.files | map("  " + .) | join("\n")) + "\n"
+' "$plan_file"
+
+# ────────────────────────────────────────────────────────────────────
+# Execute
+# ────────────────────────────────────────────────────────────────────
+if [[ "$dry_run" -eq 1 ]]; then
+  print -P -- "${C_DIM}(dry run — no commits created)${C_RES}\n"
+  jq -r '
+    .commits | to_entries[] |
+    "──────────── commit #\(.key + 1) ────────────\n" +
+    "Files (\(.value.files | length)):\n" +
+    (.value.files | map("  " + .) | join("\n")) + "\n\n" +
+    "Message:\n" +
+    .value.message + "\n"
+  ' "$plan_file"
+  exit 0
+fi
+
+unstage_all() { git reset --quiet 2>/dev/null || true; }
+
+stage_commit() {
+  local idx="$1"
+  local files
+  files=("${(@f)$(jq -r ".commits[$idx].files[]" "$plan_file")}")
+  [[ ${#files[@]} -gt 0 ]] || { warn "commit $((idx + 1)) has no files; skipping"; return 1; }
+  git add -- "${files[@]}"
+}
+
+i=0
+while [[ "$i" -lt "$commit_count" ]]; do
+  msg_file="$tmpdir/msg-$i.txt"
+  jq -r ".commits[$i].message" "$plan_file" > "$msg_file"
+
+  print -P -- "${C_BLU}── commit $((i + 1)) of ${commit_count} ──${C_RES}"
+
+  stage_commit "$i" || { unstage_all; die "failed to stage files for commit $((i + 1))"; }
+
+  if [[ "$no_commit" -eq 1 ]]; then
+    "${EDITOR:-vi}" "$msg_file"
+
+    # Re-empty check: if the editor leaves a blank file, abort that commit.
+    if ! grep -q '[^[:space:]]' "$msg_file"; then
+      warn "empty commit message; aborting"
+      unstage_all
+      exit 0
+    fi
+
+    print -nP -- "${C_BWH}Create this commit?${C_RES} [y/N] "
+    read -r answer
+    case "${answer:l}" in
+      y|yes)
+        git commit --quiet -F "$msg_file" \
+          || { unstage_all; die "git commit failed"; }
+        ok "committed: $(git log -1 --pretty=%s)"
+        ;;
+      *)
+        unstage_all
+        info "aborted at commit $((i + 1)); no further commits will be created"
+        exit 0
+        ;;
+    esac
+  else
+    git commit --quiet -F "$msg_file" \
+      || { unstage_all; die "git commit failed"; }
+    ok "committed: $(git log -1 --pretty=%s)"
+  fi
+
+  i=$((i + 1))
+done
+
+print -P -- "\n${C_GRN}Done.${C_RES} Created ${commit_count} commit(s)."
