@@ -207,6 +207,57 @@ of invoking the merge tool, leaving the source byte-identical to before.
   `{{ include "<.shortcut>" | sha256sum }}` in a comment so its rendered
   hash also changes when the referenced binary file does.
 
+## Secrets (API keys, tokens)
+
+Source of truth for secret env vars is the **`rapinialves` 1Password
+account**, vault **`Private`** by default. Workflow:
+
+1. **Store the value in 1Password** under
+   `op://Private/<Item>/<field>` (or another vault if appropriate).
+2. **Reference it from `dot_config/zsh/private_secrets.sh.tmpl`** with
+   chezmoi's `onepasswordRead` template function:
+
+   ```sh
+   export FOO_API_KEY="{{ onepasswordRead "op://Private/Foo/api_key" }}"
+   ```
+
+   Quote the export value — `op` field contents can include spaces or
+   shell metacharacters.
+3. **`chezmoi apply`** — resolves the `op://` references via `op read`
+   and writes `~/.config/zsh/secrets.sh` (mode 0600).
+4. The rendered file is sourced by `~/.config/zsh/environment.sh`,
+   which is sourced by `~/.zshenv`, which means every shell and every
+   subprocess spawned from one (pi extensions, GUI apps launched from
+   the shell, …) sees the env var.
+
+### Rotation
+
+Update the value in 1Password, then `chezmoi apply`. Open a new shell
+to pick up the new env.
+
+### Bootstrap on a fresh machine
+
+`Brewfile.bootstrap` already installs `1password-cli`. After the
+top-level setup pauses for 1Password integration, run `op signin`
+once for the `rapinialves` account; from then on `chezmoi apply`
+resolves all `op://` references automatically.
+
+### What ends up where
+
+- *In this git repo*: only `op://VAULT/ITEM/FIELD` references in
+  `private_secrets.sh.tmpl`. No secret material.
+- *On the local disk after apply*: `~/.config/zsh/secrets.sh` with
+  resolved values, mode 0600.
+- *In the shell environment*: the env vars exported by that file.
+
+If a secret can't fit in 1Password (CI keys, machine-local tokens,
+etc.) chezmoi's native age encryption is the fallback — drop an
+`encrypted_` prefix on the source filename and chezmoi
+encrypts/decrypts at the repo boundary. The `.chezmoi.toml.tmpl`
+`age` section is already scaffolded; you'd just need to generate a
+keypair and tell chezmoi where the private key lives (typically
+`~/.config/chezmoi/key.txt`, **not** in the repo).
+
 ## Linux portability
 
 This repo targets macOS. macOS-only artifacts are gated either by

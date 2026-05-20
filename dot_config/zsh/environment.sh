@@ -33,3 +33,10 @@ case ":$PATH:" in
   *) PATH="$HOME/.local/share/mise/shims:$PATH" ;;
 esac
 export PATH
+
+# Secret env vars (API keys, tokens). Resolved from 1Password by chezmoi
+# at apply time and written to ~/.config/zsh/secrets.sh (mode 0600,
+# never committed). The template lives at
+# dot_config/zsh/private_secrets.sh.tmpl. Sourced here so every shell
+# AND every launchd-spawned subprocess gets the same env.
+[ -r "$HOME/.config/zsh/secrets.sh" ] && . "$HOME/.config/zsh/secrets.sh"
