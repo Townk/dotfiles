@@ -80,16 +80,22 @@ do_list() {
 do_sync() {
   pkg_info "Syncing uv tools..."
 
-  local declared installed
-  declared=$(mktemp); installed=$(mktemp)
-  trap "rm -f '$declared' '$installed'" EXIT
+  local declared_full declared installed
+  declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
+  trap "rm -f '$declared_full' '$declared' '$installed'" EXIT
 
   if uv_python_drifted; then
     pkg_warn "Python version changed since last sync — rebuilding uv tool venvs"
     uv tool upgrade --all --reinstall || true
   fi
 
-  pkg_manifest_read "$UVFILE" > "$declared"
+  # Each Uvfile line is `<tool> [uv-tool-install-args...]`. The first
+  # word is the canonical tool name (matched against `uv tool list` for
+  # install/uninstall diff); the rest of the line is passed straight to
+  # `uv tool install`, which is how extras like `--with catppuccin-pygments`
+  # get added to a tool's environment.
+  pkg_manifest_read "$UVFILE" > "$declared_full"
+  awk '{print $1}' "$declared_full" > "$declared"
   uv_list_installed > "$installed"
 
   # Uninstall extras BEFORE installing missing — if a swap puts two tools
@@ -98,8 +104,23 @@ do_sync() {
     [[ -n "$tool" ]] && uv tool uninstall "$tool"
   done
   pkg_diff_only_in "$declared" "$installed" | while IFS= read -r tool; do
-    [[ -n "$tool" ]] && uv tool install "$tool"
+    [[ -z "$tool" ]] && continue
+    local line; line=$(awk -v t="$tool" '$1 == t {print; exit}' "$declared_full")
+    local -a args=( ${(z)line} )
+    uv tool install "${args[@]}"
   done
+
+  # Tools with extra args (e.g. `--with extra-pkg`) get reinstalled
+  # every sync so that changes to those args land. Plain tool entries
+  # are left alone — `uv tool upgrade --all` below handles version
+  # drift for them. Reinstall is a no-op when args haven't actually
+  # changed, so the cost is one fast metadata check per tool.
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" == "${line%% *}" ]] && continue  # no extras → skip
+    local -a args=( ${(z)line} )
+    uv tool install --reinstall "${args[@]}"
+  done < "$declared_full"
 
   uv tool upgrade --all || true
 

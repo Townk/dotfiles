@@ -1,10 +1,13 @@
 # Uvfile — Python tools managed via `uv tool install`.
 # Synced by `system-package uv sync`. Strict cleanup: removing a
 # line uninstalls the tool on next sync.
+#
+# Lines may include `uv tool install` flags after the tool name;
+# `--with <pkg>` adds a library to the tool's environment.
 
 {{ if eq .profile "personal" -}}
 qmk-skim
 {{- end }}
-rich-cli
+rich-cli --with catppuccin[pygments]
 
 # vim:ft=conf.gotmpl

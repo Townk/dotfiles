@@ -88,6 +88,7 @@ cask 'clion'                        # C++ IDE
 
 cask 'visual-studio-code'           # Everything Editor/IDE
 cask 'wezterm@nightly'              # Terminal emulator
+cask 'ghostty'                      # Terminal emulator
 
 {{ if eq .profile "personal" -}}
 # Podcast
@@ -230,10 +231,12 @@ brew 'fd'                           # Find entries in the file system (`find` bu
 brew 'fend'                         # Terminal unit conversion
 brew 'fzf'                          # Fuzzy Finder for CLI
 # `gh` lives in Brewfile.bootstrap (needed by .setup.sh)
+brew 'glow'                         # fast terminal markdown viewer
 brew 'gpg-tui'                      # Manage GPG keys on terminal
 brew 'gping'                        # ping, but with graph
 brew 'grex'                         # RegEx generator from targets
 brew 'gron'                         # JSON to lists
+brew 'gum'                          # Shell script UI library
 brew 'hyperfine'                    # Terminal benchmark
 brew 'imagemagick'                  # Image conversion utility
 brew 'jless'                        # JSON visualizer
@@ -262,6 +265,7 @@ brew 'unar'                         # Preview compressed files
 brew 'xq'                           # CLI XML/HTML processor (`jq` but for .xml and .html files)
 brew 'yazi', args: ["HEAD"]         # Terminal File Manager
 brew 'yq'                           # CLI YAML processor (`jq` but for .yaml files)
+brew 'zellij'                       # Terminal multiplexer
 brew 'zoxide'                       # Remember previously navigated directories in the shell
 
 {{ if eq .profile "personal" -}}
