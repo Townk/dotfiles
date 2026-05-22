@@ -29,6 +29,8 @@
     "npm:@mario-gc/pi-context7",
     "npm:@plannotator/pi-extension",
     "git:github.com/ghoseb/pi-askuserquestion",
+    "npm:pi-memctx",
+    "npm:pi-observational-memory",
 {{- end }}
 {{- if eq .profile "work" }}
     "npm:pi-cursor-sdk",
@@ -47,4 +49,9 @@
   "terminal": {
     "showTerminalProgress": true
   }
+{{- if eq .profile "personal" }},
+  "observational-memory": {
+    "compactAfterTokens": 204800
+  }
+{{- end }}
 }
