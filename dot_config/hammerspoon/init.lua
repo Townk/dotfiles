@@ -12,12 +12,18 @@ local lifecycle = require("system.lifecycle")
 local osd = require("osd")
 local sd = require("streamdeck")
 local windows = require("windows")
+local windowDrag = require("windows.drag")
 
 lifecycle.setup()
 lifecycle.registerCleanup(audio.cleanup)
 lifecycle.registerCleanup(osd.cleanup)
 lifecycle.registerCleanup(sd.cleanup)
 lifecycle.registerCleanup(images.clearCache)
+lifecycle.registerCleanup(windowDrag.cleanup)
+
+-- Cmd+drag anywhere on a window to move it; plain Cmd+click is preserved
+-- via replay so apps that use it (Ghostty URL opening, etc.) keep working.
+windowDrag.setup({ mods = { "cmd" }, threshold = 5, debug = true })
 
 kb.setup({
 	leader = { mods = kb.keys.mods.OG, key = "space" },
