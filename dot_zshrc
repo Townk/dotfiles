@@ -4,6 +4,36 @@
 #
 # Documentation: https://github.com/romkatv/zsh4humans/blob/v5/README.md.
 
+# Auto-attach Zellij when this zsh was launched from Ghostty or via SSH.
+# Done before z4h init so the outer shell doesn't pay for setup twice —
+# the shell spawned inside Zellij will run .zshrc again with $ZELLIJ set,
+# skipping this block.
+#   - TERM_PROGRAM=ghostty   → local Ghostty session
+#   - $SSH_TTY               → inbound SSH connection (sshd sets it)
+#
+# "Main" session reuse:
+#   - doesn't exist (or only as EXITED) → wipe stale record, create+attach
+#   - live, no clients                  → reattach (resume the existing one)
+#   - live, has a client                → spawn a fresh anonymous session
+#                                         (so Cmd+N etc. get their own mux)
+if [[ -z "$ZELLIJ" && ( "$TERM_PROGRAM" == "ghostty" || -n "$SSH_TTY" ) ]]; then
+  for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij; do
+    [[ -x "$_zellij" ]] || continue
+    if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
+      if "$_zellij" --session Main action list-clients 2>/dev/null \
+           | tail -n +2 | grep -q .; then
+        exec "$_zellij"                     # Main is busy → fresh session
+      else
+        exec "$_zellij" attach Main         # Main is idle → reattach
+      fi
+    else
+      "$_zellij" delete-session Main -f &>/dev/null
+      exec "$_zellij" attach -c Main        # create fresh Main
+    fi
+  done
+  unset _zellij
+fi
+
 # Periodic auto-update on Zsh startup: 'ask' or 'no'.
 # You can manually run `z4h update` to update everything.
 zstyle ':z4h:' auto-update 'no'
@@ -49,8 +79,8 @@ zstyle ':z4h:*' fzf-bindings \
   'alt-page-down:preview-page-down' \
   'alt-home:preview-top' \
   'alt-end:preview-bottom' \
-  'ctrl-f:change-preview(FZF_PREVIEW_FULL=1 fzf-preview {-1} | sed "s/^/ /")' \
-  'ctrl-alt-f:change-preview(fzf-preview {-1} | sed "s/^/ /")'
+  'ctrl-f:change-preview(FZF_PREVIEW_FULL=1 preview {} | sed "s/^/ /")' \
+  'ctrl-alt-f:change-preview(preview {} | sed "s/^/ /")'
 zstyle ':z4h:fzf-complete' fzf-bindings \
   'tab:repeat' \
   'ctrl-space:toggle-preview' \
@@ -64,8 +94,8 @@ zstyle ':z4h:fzf-complete' fzf-bindings \
   'alt-page-down:preview-page-down' \
   'alt-home:preview-top' \
   'alt-end:preview-bottom' \
-  'ctrl-f:change-preview(FZF_PREVIEW_FULL=1 fzf-preview {-1} | sed "s/^/ /")' \
-  'ctrl-alt-f:change-preview(fzf-preview {-1} | sed "s/^/ /")'
+  'ctrl-f:change-preview(FZF_PREVIEW_FULL=1 preview {-1} | sed "s/^/ /")' \
+  'ctrl-alt-f:change-preview(preview {-1} | sed "s/^/ /")'
 
 # Enable ('yes') or disable ('no') automatic teleportation of z4h over
 # SSH when connecting to these hosts.
@@ -84,34 +114,65 @@ zstyle ':z4h:ssh:*' send-extra-files "~/.atuin/bin/env"
 zstyle ':z4h:ssh:*' send-extra-files "~/.config/nvim"
 
 export FZF_DEFAULT_COMMAND="fd --type f"
-zstyle ':z4h:*' fzf-flags \
-  --color=bg+:"#31353F" \
-  --color=fg+:"#abb2bf" \
-  --color=hl+:"#ddaeeb" \
-  --color=bg:"#1f2329" \
-  --color=fg:"#abb2bf" \
-  --color=hl:"#a0cff5" \
-  --color=prompt:"#ffffff" \
-  --color=pointer:"#efd9b0" \
-  --color=marker:"#c1dbaf" \
-  --color=info:"#a0cff5" \
-  --color=gutter:"#1f2329" \
-  --color=header:"#a0cff5" \
-  --color=spinner:"#9ad3da" \
-  --color=border:"#e5bf7b" \
-  --filepath-word \
-  --border \
-  --height=45% \
-  --layout=reverse \
-  --info=default \
-  --exit-0 \
-  --select-1 \
-  --padding='0,2,0,0' \
-  --prompt='    ' \
-  --pointer='➔' \
-  --marker='✔' \
-  --preview 'fzf-preview {-1} | sed "s/^/ /"' \
+# Shared between :z4h:* and :z4h:fzf-complete fzf-flags. Pulled out
+# because zstyle returns only the most-specific match's value (no
+# accumulation across patterns), so without this we'd have to
+# duplicate the entire flag list whenever we override any single
+# flag. The only thing that actually differs between bare fzf and
+# tab-complete is the preview command's placeholder — see below.
+typeset -ga _z4h_fzf_common_flags=(
+  # Catppuccin Mocha palette — official mapping from catppuccin/fzf.
+  --color=bg:"#1e1e2e"
+  --color=bg+:"#313244"
+  --color=fg:"#cdd6f4"
+  --color=fg+:"#cdd6f4"
+  --color=hl:"#f38ba8"
+  --color=hl+:"#f38ba8"
+  --color=prompt:"#cba6f7"
+  --color=pointer:"#f5e0dc"
+  --color=marker:"#b4befe"
+  --color=info:"#cba6f7"
+  --color=gutter:"#1e1e2e"
+  --color=header:"#f38ba8"
+  --color=spinner:"#f5e0dc"
+  --color=border:"#313244"
+  --filepath-word
+  --border
+  --height=45%
+  --layout=reverse
+  --info=default
+  --exit-0
+  --select-1
+  --padding='0,2,0,0'
+  --prompt='    '
+  --pointer='➔'
+  --marker='✔'
   --preview-window=right:60%:hidden,border-line,noinfo
+)
+
+# Bare fzf, super-cd, history, etc.: each input line is the whole
+# path with whitespace as fzf's default field delimiter. `{}` is
+# the entire selection — works for paths with spaces. `{-1}` here
+# would slice at whitespace and lose everything before the last
+# token.
+zstyle ':z4h:*' fzf-flags \
+  "${_z4h_fzf_common_flags[@]}" \
+  --preview 'preview {} | sed "s/^/ /"'
+
+# z4h tab-complete (-z4h-comp-files / -z4h-comp-words) feeds fzf
+# NUL-separated records like `<raw-path>\0<display>` via
+# `--delimiter=NUL`. `{-1}` resolves to the last NUL-field = the
+# display (shell-quoted), which the preview script ${(Q)}-unquotes.
+# `{}` does *not* work here: fzf replaces embedded NULs with
+# spaces during substitution, yielding a bogus "rawpath display"
+# arg.
+#
+# zstyle returns only the most-specific match's value, so this
+# stanza must include every flag tab-complete needs — hence the
+# shared array.
+zstyle ':z4h:fzf-complete' fzf-flags \
+  "${_z4h_fzf_common_flags[@]}" \
+  --preview 'preview {-1} | sed "s/^/ /"'
 
 # Core Go paths
 export GOPATH="$XDG_DATA_HOME/go"
@@ -178,6 +239,9 @@ fi
 export GPG_TTY=$TTY
 export EDITOR=nvim
 export USERNAME='Thiago Alves'
+
+# pi-memctx: auto-persist durable memory candidates without /memctx-review
+export MEMCTX_AUTOSAVE=auto
 
 # Source additional local files if they exist.
 z4h source -- ${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/Library/Taps/homebrew/homebrew-command-not-found/handler.sh}
