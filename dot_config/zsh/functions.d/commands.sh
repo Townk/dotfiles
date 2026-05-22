@@ -152,7 +152,7 @@ function super-cd {
       next_dir=$(print -l -- "${prev_stack[@]}" | fzf \
         --no-sort \
         --prompt="Previous directories > " \
-        --preview='fzf-preview {}' \
+        --preview='preview {}' \
         --preview-window=right:50% \
         --height=40%)
       next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
@@ -182,7 +182,7 @@ function super-cd {
     done
     next_dir=$(print -l -- "${dir_stack[@]}" | fzf \
       --prompt="Parent directories > " \
-      --preview='fzf-preview {}' \
+      --preview='preview {}' \
       --preview-window=right:50% \
       --height=40%)
     next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
@@ -246,7 +246,7 @@ function gg {
 }
 compdef gg=gradle
 
-# `fzf-preview` lives at ~/.local/bin/fzf-preview as a standalone
+# `preview` lives at ~/.local/bin/preview as a standalone
 # script. fzf invokes previews via `$SHELL -c '<cmd>'` in a
 # non-interactive subshell that doesn't source this file, so a zsh
 # function here wouldn't be visible to fzf. (zsh's `typeset -fx` does

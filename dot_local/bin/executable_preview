@@ -1,0 +1,398 @@
+#!/bin/zsh
+#
+# preview — render a preview for fzf's `--preview` hook, Yazi's shell
+# previewer, and any other terminal tool that calls it with a file path.
+#
+# Dispatch (top-down, first match wins):
+#
+#   1. Pre-dispatch guards: empty arg, directory, missing/unreadable
+#      file, zero-byte file — each one short-circuits to a banner or
+#      a directory listing before any expensive work runs.
+#   2. By-extension routing: extensions encode user intent that MIME
+#      alone can't (e.g. `.ipynb` is `application/json` but wants
+#      notebook-specific rendering). Most-specific wins.
+#   3. By-MIME routing: handles content where the extension is missing
+#      or insufficient — images, archives, audio/video, PDFs.
+#   4. Encoding fallback: `binary` → hex dump.
+#   5. Default: syntax-highlighted text via bat.
+#
+# Each handler is a `preview-*` function. Add a new file type by
+# writing the handler and dropping a case arm into `main()`. Handlers
+# read pane geometry from globals `w`, `h`, `max_lines` set by
+# `geometry()`, and return non-zero when their required tool isn't
+# installed so the dispatcher can fall through to a more generic path.
+#
+# Lives as a script (not a zsh function) so fzf's preview subshell —
+# spawned via `$SHELL -c '<cmd>'`, non-interactive, no ~/.zshrc — can
+# find it via PATH.
+
+set -u
+
+# === Helpers ===
+
+# Render a centered, bannered status message inside the preview pane.
+# Used for placeholder text like "Nothing to preview" or "<Empty File>"
+# — single-line strings that look out of place rendered raw at column 0.
+#
+# Tries figlet first with the user's `phm-minecraft.flf` font, then
+# falls back to plain text if (a) figlet isn't on PATH or (b) the
+# rendered banner would overflow `box_w`. Either way the output is
+# centered horizontally and vertically inside the requested box.
+#
+# Args:
+#   $1   text to render (single line; figlet handles word art)
+#   $2   box width in columns (default 80)
+#   $3   box height in lines  (default 24)
+function stamp-msg() {
+  local text="$1"
+  local box_w="${2:-80}"
+  local box_h="${3:-24}"
+
+  local figlet_fonts_dir="$XDG_DATA_HOME/fonts/figlet/FIGfonts/fonts"
+  local figlet_font="phm-minecraft.flf"
+
+  local use_fallback=0
+  local text_w=0
+  local text_h=0
+  local final_output=""
+
+  if command -v figlet >/dev/null 2>&1; then
+    # 1. Force figlet to render with massive limits to prevent premature wrapping
+    local raw_figlet
+    raw_figlet=$(figlet -d "$figlet_fonts_dir" -f "$figlet_font" -w 9999 "$text")
+
+    # Measure figlet's true footprint. Split into a line array with
+    # zsh's (f) flag, then take ${#first_line} for width and $#array
+    # for height — no subprocess overhead vs. the previous wc pipes.
+    local -a raw_lines=( ${(f)raw_figlet} )
+    local figlet_true_w=${#raw_lines[1]}
+
+    # 2. Check if the banner breaks out of your boundaries
+    if (( figlet_true_w > box_w )); then
+      use_fallback=1
+    else
+      # If it fits perfectly, commit the cached output
+      final_output="$raw_figlet"
+      text_h=$#raw_lines
+      text_w=$figlet_true_w
+    fi
+  else
+    use_fallback=1
+  fi
+
+  # 3. Fallback logic (Plain text configuration)
+  if (( use_fallback )); then
+    # Re-measure raw single-line text width
+    text_w=${#text}
+
+    # If even the standard text is too wide for box_w, truncate or clamp width
+    if (( text_w > box_w )); then
+        text_w=$box_w
+    fi
+    local -a text_lines=( ${(f)text} )
+    text_h=$#text_lines
+    final_output="$text"
+  fi
+
+  # 4. Geometry Centering Calculations
+  local pad_top=$(( (box_h - text_h) / 2 ))
+  local pad_left=$(( (box_w - text_w) / 2 ))
+
+  (( pad_top < 0 )) && pad_top=0
+  (( pad_left < 0 )) && pad_left=0
+
+  # Print layout vertical padding. Guard against pad_top=0: `printf` runs
+  # its format string once even with zero args, which would emit a stray
+  # newline.
+  (( pad_top > 0 )) && printf '\n%.0s' $(seq 1 "$pad_top")
+
+  # Generate spacing padding matching the offset
+  local left_space=$(printf '%*s' "$pad_left" "")
+
+  # 5. Output rendering loop
+  printf '%s\n' "$final_output" | while IFS= read -r line; do
+      # If line truncation is needed for plain text overflowing box_w:
+      if (( use_fallback && ${#line} > box_w )); then
+          printf '%s%s\n' "$left_space" "${line:0:$box_w}"
+      else
+          printf '%s%s\n' "$left_space" "$line"
+      fi
+  done
+}
+
+# Run a command as if it were attached to an interactive TTY, even
+# though fzf has handed us pipe stdio. Some tools (notably `ouch list
+# -t` and other tree/colorized renderers) detect "stdout is not a tty"
+# and silently downgrade to a plain, scriptable format that strips
+# colors and structure — useless for a fancy preview. Wrapping them
+# through `unbuffer(1)` or `script(1)` allocates a pseudo-tty so the
+# tool produces its full output, which fzf can then render.
+#
+# Prefers `unbuffer` (from the `expect` package) when available.
+# Otherwise falls back to `script(1)`, using BSD-style invocation on
+# macOS and GNU-style on Linux (the two flavors take different args).
+#
+# Args:
+#   $1   command to run
+#   $2+  arguments to pass to the command
+function force-tty() {
+  if (( $# < 1 )); then
+    echo "Usage: force-tty <command> [args...]" >&2
+    return 2
+  fi
+
+  local cmd="$1"
+  shift
+
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "force-tty: command not found: $cmd" >&2
+    return 127
+  fi
+
+  if command -v unbuffer >/dev/null 2>&1; then
+    unbuffer "$cmd" "$@"
+  elif [[ "$(uname -s)" = "Darwin" ]]; then
+    script -q /dev/null "$cmd" "$@"
+  else
+    local quoted
+    printf -v quoted '%q ' "$cmd" "$@"
+    script -q -c "$quoted" /dev/null
+  fi
+}
+
+# === Handlers ===
+#
+# Convention:
+#   - Take the target path as $1.
+#   - Read pane geometry from globals `w`, `h`, `max_lines`.
+#   - `command -v` guard up front; return 1 when the tool isn't
+#     installed so the dispatcher can try a more generic handler.
+#   - Cap text output at $max_lines lines.
+
+function preview-dir() {
+  eza -F -h --group-directories-first --icons --hyperlink --tree \
+      --color=always --level=2 "$1" | head -200
+}
+
+function preview-csv() {
+  command -v tv >/dev/null 2>&1 || return 1
+  tv -a --no-streaming -f -j -D "$1" | head -"$max_lines"
+}
+
+function preview-md() {
+  command -v glow >/dev/null 2>&1 || return 1
+  # Catppuccin Mocha glamour theme — see ~/.config/glow/catppuccin-mocha.json.
+  # The theme JSON is honoured even when stdout isn't a TTY; the colors just
+  # don't render in fzf's preview pane since glow's renderer downgrades there.
+  glow -s "${XDG_CONFIG_HOME:-$HOME/.config}/glow/catppuccin-mocha.json" \
+    -w "$w" "$1" | head -"$max_lines"
+}
+
+function preview-rich() {
+  command -v rich >/dev/null 2>&1 || return 1
+  # `--theme catppuccin-mocha` requires the catppuccin-pygments package
+  # in rich-cli's uv venv (declared via `--with` in dot_config/packages/Uvfile.tmpl).
+  rich -w "$w" -j --left --guides --line-numbers --theme catppuccin-mocha \
+    --force-terminal "$1" | head -"$max_lines"
+}
+
+function preview-json() {
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -C --indent 2 < "$1" | head -"$max_lines"
+}
+
+function preview-yaml() {
+  command -v yq >/dev/null 2>&1 || return 1
+  yq -C --indent 2 < "$1" | head -"$max_lines"
+}
+
+function preview-xml() {
+  command -v xq >/dev/null 2>&1 || return 1
+  xq -c --indent 2 < "$1" | head -"$max_lines"
+}
+
+function preview-dmg() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 1
+  command -v dmg-info >/dev/null 2>&1 || return 1
+  dmg-info "$1" "$w" | head -"$max_lines"
+}
+
+function preview-ics() {
+  command -v ics-view >/dev/null 2>&1 || return 1
+  ics-view "$1" -W "$w" | head -"$max_lines"
+}
+
+function preview-archive() {
+  command -v ouch >/dev/null 2>&1 || return 1
+  force-tty ouch list -q -y -t "$1" 2>&1 | head -"$max_lines"
+}
+
+function preview-pdf() {
+  command -v chafa >/dev/null 2>&1 || return 1
+  command -v pdftocairo >/dev/null 2>&1 || return 1
+  pdftocairo -png -singlefile "$1" - 2>/dev/null \
+    | chafa -s "${w}x${h}" - 2>/dev/null
+}
+
+function preview-image() {
+  command -v chafa >/dev/null 2>&1 || return 1
+  chafa -s "${w}x${h}" "$1" 2>/dev/null
+
+  # Append mediainfo metadata footer when available. Mirrors Yazi's
+  # boydaihungst/mediainfo plugin, which renders the image and then
+  # tacks formatted metadata below it.
+  if command -v mediainfo >/dev/null 2>&1; then
+    preview-mediainfo "$1"
+  fi
+  return 0
+}
+
+# mediainfo's raw output is plain `key : value` lines under bare
+# section headers — parses as YAML-ish, so bat's YAML grammar gives
+# colored headers, dim colons, and key/value differentiation with no
+# custom logic. Approximates the styled output of Yazi's mediainfo
+# plugin without parsing the output ourselves.
+function preview-mediainfo() {
+  command -v mediainfo >/dev/null 2>&1 || return 1
+  mediainfo "$1" \
+    | bat --language=yaml --style=plain --color=always \
+          --theme="Catppuccin Mocha" --terminal-width="$w" \
+    | head -"$max_lines"
+}
+
+function preview-binary() {
+  if ! command -v hexyl >/dev/null 2>&1; then
+    stamp-msg "Binary file" "$w" "$h"
+    return
+  fi
+  # `--terminal-width` alone expands hexyl to as many byte-panels as
+  # fit (2 panels ~76 cols, 3 panels ~100 cols, 4 panels ~125 cols);
+  # `--panels=auto` is mutually exclusive with it and not needed.
+  hexyl --color=always --terminal-width="$w" "$1" 2>/dev/null \
+    | head -"$max_lines"
+}
+
+function preview-text() {
+  bat --theme="Catppuccin Mocha" --style=numbers,changes --color=always \
+      --terminal-width="$w" "$1" 2>/dev/null | head -"$max_lines"
+}
+
+# === Dispatch ===
+
+# Width/height/cap globals consumed by every handler.
+#
+# fzf exports FZF_PREVIEW_{COLUMNS,LINES} for each preview invocation.
+# Subtract 1 from columns so fzf's overlaid scrollbar (rightmost
+# column once content exceeds the viewport) doesn't clip real content.
+#
+# FZF_PREVIEW_FULL is the toggle wired up via ctrl-f in zshrc — set,
+# it lifts the height cap so the whole file flows into the buffer.
+# Unset, max_lines is `h * 3` (one viewport + two screens of scroll).
+function geometry() {
+  h=${FZF_PREVIEW_LINES:-40}
+  w=${FZF_PREVIEW_COLUMNS:-80}
+  (( w > 4 )) && (( w-- ))
+
+  if [[ -n ${FZF_PREVIEW_FULL:-} ]]; then
+    max_lines=999999
+  else
+    max_lines=$((h * 3))
+  fi
+}
+
+function main() {
+  # z4h's tab-complete sends fzf two different formats depending on the
+  # code path:
+  #   -z4h-comp-files  →  <raw-path>\0<colored-or-quoted-display>
+  #   -z4h-comp-words  →  <numeric-index>\0<shell-quoted-name>
+  # Both put the *display* form in the last field, which is what `{-1}`
+  # in the preview command resolves to. The display form is shell-quoted
+  # (e.g. `2\ color\ sign\ .2mm.3mf`), so $1 inherits those backslashes
+  # verbatim. `${(Q)var}` strips one level of shell quoting — converting
+  # `2\ color\ sign\ .2mm.3mf` back to `2 color sign .2mm.3mf` — which
+  # lets the subsequent stat checks find the actual file.
+  local target=${(Q)${1:-}}
+
+  geometry
+
+  # --- Pre-dispatch guards ---
+  # Each guard rules out a class of failure mode before committing to
+  # a handler. All are cheap stat checks — no forks — so doing them
+  # up front saves running a tool that would just produce empty output.
+
+  if [[ -z $target ]]; then
+    stamp-msg "Nothing to preview" "$w" "$h"
+    return
+  fi
+  if [[ -d $target ]]; then
+    preview-dir "$target"
+    return
+  fi
+  if [[ ! -f $target ]]; then
+    # Broken symlink, device, socket, etc.
+    stamp-msg "Nothing to preview" "$w" "$h"
+    return
+  fi
+  if [[ ! -r $target ]]; then
+    stamp-msg "Permission denied" "$w" "$h"
+    return
+  fi
+  if [[ ! -s $target ]]; then
+    stamp-msg "<Empty File>" "$w" "$h"
+    return
+  fi
+
+  # --- By-extension dispatch ---
+  # Extensions encode user intent. `.ipynb` is `application/json` by
+  # MIME but you want notebook-specific rendering; same for `.vil`/
+  # `.kbi` (custom JSON variants). Handlers return non-zero when the
+  # required tool isn't installed, letting dispatch fall through to
+  # the MIME pass (and ultimately to bat).
+  #
+  # Keep in sync with `prepend_previewers` in ~/.config/yazi/yazi.toml.
+  case "${target:l}" in
+    *.csv)              preview-csv  "$target" && return ;;
+    *.md)               preview-md   "$target" && return ;;
+    *.rst|*.ipynb)      preview-rich "$target" && return ;;
+    *.json|*.vil|*.kbi) preview-json "$target" && return ;;
+    *.yml|*.yaml)       preview-yaml "$target" && return ;;
+    *.xml)              preview-xml  "$target" && return ;;
+    *.dmg)              preview-dmg  "$target" && return ;;
+    *.ics)              preview-ics  "$target" && return ;;
+  esac
+
+  # --- By-MIME dispatch ---
+  # Fallback for files where the extension was missing or insufficient.
+  # Image/archive/AV identification works regardless of filename.
+  local mime encoding
+  mime=$(file --mime-type --brief --dereference "$target" 2>/dev/null)
+  encoding=$(file --mime-encoding --brief --dereference "$target" 2>/dev/null)
+
+  case "$mime" in
+    application/zip | application/*zip* | \
+    application/x-tar | application/x-bzip2 | \
+    application/x-7z-compressed | application/x-rar | application/x-xz)
+      preview-archive "$target" && return
+      ;;
+    application/pdf)
+      preview-pdf "$target" && return
+      ;;
+    image/*)
+      preview-image "$target" && return
+      ;;
+    audio/* | video/* | application/subrip | application/postscript)
+      preview-mediainfo "$target" && return
+      ;;
+  esac
+
+  # Binary files that didn't match a media/archive rule: hex dump.
+  if [[ $encoding == binary ]]; then
+    preview-binary "$target"
+    return
+  fi
+
+  # Default: syntax-highlighted text via bat.
+  preview-text "$target"
+}
+
+main "$@"
