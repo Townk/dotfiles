@@ -181,11 +181,25 @@ function preview-csv() {
 
 function preview-md() {
   command -v glow >/dev/null 2>&1 || return 1
-  # Catppuccin Mocha glamour theme — see ~/.config/glow/catppuccin-mocha.json.
-  # The theme JSON is honoured even when stdout isn't a TTY; the colors just
-  # don't render in fzf's preview pane since glow's renderer downgrades there.
-  glow -s "${XDG_CONFIG_HOME:-$HOME/.config}/glow/catppuccin-mocha.json" \
-    -w "$w" "$1" | head -"$max_lines"
+  command -v expect >/dev/null 2>&1 || return 1
+  local style="${XDG_CONFIG_HOME:-$HOME/.config}/glow/catppuccin-mocha.json"
+  # glow 2.x (termenv v0.16) only emits 16-color ANSI on a pipe even with
+  # CLICOLOR_FORCE, and hangs on a pseudo-TTY because lipgloss sends terminal
+  # queries (OSC 10/11, DSR 6n) and blocks waiting for responses. We use
+  # expect to spawn glow on a real pty, answer those queries, and relay the
+  # TrueColor output.
+  GW_STYLE="$style" GW_WIDTH="$w" GW_FILE="$1" expect -c '
+    log_user 0
+    set timeout 3
+    spawn glow -s $env(GW_STYLE) -w $env(GW_WIDTH) $env(GW_FILE)
+    expect {
+      -re "\033\\]11;\\?" { send "\033\]11;rgb:1e1e/2e2e/2e2e\033\\" ; exp_continue }
+      -re "\033\\]10;\\?" { send "\033\]10;rgb:cdcd/d6d6/f4f4\033\\" ; exp_continue }
+      -re "\033\\\[6n"    { send "\033\[1;1R" ; exp_continue }
+      -re ".+"            { puts -nonewline $expect_out(0,string) ; exp_continue }
+      eof
+    }
+  ' 2>/dev/null | tr -d '\r' | head -"$max_lines"
 }
 
 function preview-rich() {
