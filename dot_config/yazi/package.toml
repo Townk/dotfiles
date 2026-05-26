@@ -1,21 +1,21 @@
 [[plugin.deps]]
 use = "yazi-rs/plugins:full-border"
-rev = "5d5c480"
+rev = "be524fb"
 hash = "7b625412411be411153886894d9acaf"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:toggle-pane"
-rev = "5d5c480"
+rev = "be524fb"
 hash = "9c7987da2d2a2120dac33abb64132004"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:git"
-rev = "5d5c480"
+rev = "be524fb"
 hash = "88e56a64b7ce7c4314427452343fef17"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:mactag"
-rev = "5d5c480"
+rev = "be524fb"
 hash = "235256b396f4da77ff8f5b8eacd7c113"
 
 [[plugin.deps]]
@@ -40,12 +40,12 @@ hash = "daf12bd7eb26044a8a5f41eeb369c27a"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:piper"
-rev = "5d5c480"
+rev = "be524fb"
 hash = "384464b6df8cb807425c521f8cd790f3"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:types"
-rev = "5d5c480"
+rev = "be524fb"
 hash = "9105494e98299f392aee95340066da9f"
 
 [[plugin.deps]]
@@ -55,5 +55,5 @@ hash = "ec0cf1ebe4e27261b8df4523c2f3d273"
 
 [[flavor.deps]]
 use = "yazi-rs/flavors:catppuccin-mocha"
-rev = "54ab389"
+rev = "36c49ac"
 hash = "7dfe41c9c3d9be76da8a844263d0bbed"
