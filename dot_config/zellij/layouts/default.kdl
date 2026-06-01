@@ -1,0 +1,220 @@
+// zj-statusbar layout — WezTerm-inspired Zellij status bar
+// Source: /Users/thiago/Projects/apps/zellij/zj-statusbar
+// Previous plugin: zj-status.wasm (swap back by changing the location line)
+
+layout {
+    pane_template name="zj-statusbar-pane" borderless=true {
+            plugin location="status-bar" {
+                fullscreen_min_cols "100"
+                default_session_name "main"
+
+                // Wasm to spawn for the floating "visual search" dialog
+                // (Alt+/). Must point at the same binary the bar itself loads
+                // — here the local release build (matches the `status-bar`
+                // alias resolution in config.kdl.tmpl while this repo is
+                // checked out). Swap to the published release URL alongside
+                // that alias if you ever drop the local checkout.
+                search_plugin_url "file:/Users/user/Projects/apps/zellij/zj-statusbar/target/wasm32-wasip1/release/zj-statusbar.wasm"
+
+                tabs {
+                    max_width 40
+                    min_shrink_width 20
+                    truncation_point 0.4
+                    hide_single false
+                }
+
+                // Mode styles (WezTerm palette)
+                modes {
+                    locked color="#fab387" label="Locked" icon="\u{F033E}"
+                    resize color="#c678dd" label="Resize" icon="\u{F0A68}"
+                    pane color="#89b4fa" label="Pane" icon="\u{EBC8}"
+                    tab color="#a6e3a1" label="Tab" icon="\u{F04E9}"
+                    move color="#f9e2af" label="Move" icon="\u{F01BE}"
+                    search color="#61afef" label="Search" icon="\u{F002}"
+                    scroll color="#7b5bd6" label="Scroll" icon="\u{F0A64}"
+                    rename_tab color="#e5bf7b" label="Rename Tab" icon="\u{F090C}"
+                    rename_pane color="#e5bf7b" label="Rename Pane" icon="\u{F090C}"
+                    prompt color="#e06c75" label="Prompt" icon="\u{F120}"
+                    session color="#e06c75" label="Session" icon="\u{F0640}"
+                    tmux color="#e06c75" label="Command" icon="\u{F0633}"
+                }
+
+                // which-key panel options. Authored here once (single source of
+                // truth) and forwarded to the per-tab `role "whichkey"` floating
+                // pane via shared state — the panel needs no config of its own.
+                // The mode glyphs/colors/labels come from the `modes` block
+                // above; the resting modes (Normal/Locked) are hardcoded. Every
+                // value below is the built-in default — tweak freely.
+                which_key {
+                    sort_by "row"          // row | column
+                    max_height 20          // max entry rows per page before paging
+                    width "single"         // single | fill | 0.1..0.99 (fraction) | <int> (cols)
+                    anchor "bottom+right"  // <vertical>+<horizontal> e.g. top+left, bottom+center
+                    margin "1,2,2,6"       // outer gap (screen edge -> frame): top,right,bottom,left
+                    padding "0,1,0,1"      // inner gap (frame -> text): top,right,bottom,left
+                    binding_separator "\u{279C}" // glyph between a binding's keys and its description (➜)
+
+                    // Footer hint glyphs for piped actions. No default: pipe
+                    // bindings aren't in the keymap, so set these to surface the
+                    // affordances in the footer. These MUST match the chords
+                    // bound to the matching pipes in config.kdl.tmpl (the
+                    // `shared_among` which-key-panel-controls block).
+                    next_page_key "Ctrl d"
+                    prev_page_key "Ctrl u"
+                    toggle_key "Alt ."
+                    back_key "Backspace"
+
+                    // Custom binding labels: override an auto-generated
+                    // description, attach an icon, or surface a pipe binding.
+                    // Optional `mode=` scopes a label to one mode. Empty by
+                    // default.
+                    labels {
+                        // wk binding="Ctrl h" desc="focus left" icon="\u{F0312}"
+                        // wk binding="Alt y"  desc="copy pwd"    mode="pane"
+                    }
+
+                    // Binding groups rendered contiguously, optionally scoped to
+                    // modes (`mode="pane tab"`, `mode="search"`). Empty by
+                    // default.
+                    groups {
+                        // focus "Ctrl up" "Ctrl down" "Ctrl left" "Ctrl right"
+                        // edits mode="pane" "r" "n" "x"
+                    }
+                }
+
+                // visual-search dialog placement. Authored here once and
+                // forwarded to the `role "search"` floating instance via shared
+                // state, mirroring `which_key` above. Only placement is
+                // configurable; the dialog's height is fixed (single input row)
+                // and its internal layout scales with `width`. Values below are
+                // the built-in defaults (reproduce the original bottom-right
+                // dialog one column in from the edge, one row above the bar).
+                search {
+                    anchor "bottom+right" // <vertical>+<horizontal>, e.g. top+left, bottom+center
+                    width 40              // dialog width in columns (min 20)
+                    margin "0,1,1,0"      // gap from the screen edges: top,right,bottom,left
+
+                    // In-field search-option toggle chords (modifier + letter).
+                    // These act *inside* the floating dialog, not in native
+                    // Search mode. Defaults below; whole-word is Alt+b
+                    // ("boundaries") to avoid clashing with the move-tab chord.
+                    case_key "Alt c"      // toggle case-sensitive matching
+                    word_key "Alt b"      // toggle whole-word matching
+                }
+
+                // User-defined info widgets. The plugin no longer ships
+                // built-in battery/wifi segments, so we recreate them here
+                // with shell commands.
+                //
+                // A widget whose command produces no output (or whose
+                // resolved symbol is empty) is silently skipped — that lets
+                // `power` and `battery` below remain mutually exclusive
+                // without collapsing the whole segment.
+                status {
+                    system_info {
+                        separator "  "
+
+                        // Plug glyph + percentage when on AC power. At 100%
+                        // we show *only* the plug glyph. On battery the
+                        // command outputs nothing, so this widget is hidden.
+                        info "power" {
+                            type "number"
+                            command "pmset -g batt | grep -q 'AC Power' && pmset -g batt | grep -Eo '[0-9]+%' | head -1 | tr -d '%'"
+                            interval "10s"
+                            default ""
+                            match val=100 "󰂄"
+                            match to=5           "󰢟 {value}%"
+                            match from=6  to=39  "󱊤 {value}%"
+                            match from=40 to=89  "󱊥 {value}%"
+                            match from=90        "󱊦 {value}%"
+                        }
+
+                        // Battery percentage with a charge-level glyph,
+                        // *only* while running on battery. On AC power the
+                        // command outputs nothing and the widget is hidden.
+                        info "battery" {
+                            type "number"
+                            command "pmset -g batt | grep -q 'Battery Power' && pmset -g batt | grep -Eo '[0-9]+%' | head -1 | tr -d '%'"
+                            interval "10s"
+                            default ""
+                            match to=5           "\u{F008E} {value}%"
+                            match from=6  to=39  "\u{F12A1} {value}%"
+                            match from=40 to=89  "\u{F12A2} {value}%"
+                            match from=90        "\u{F12A3} {value}%"
+                        }
+
+                        // Wi-Fi power state (en0). Outputs 1 when on, 0 when off.
+                        info "wifi" {
+                            type "number"
+                            command "networksetup -getairportpower en0 | grep -qi 'on$' && echo 1 || echo 0"
+                            interval "10s"
+                            default "\u{F092E}"
+                            match val=0 "\u{F092E}"
+                            match val=1 "\u{F05A9}"
+                        }
+                    }
+                }
+            }
+    }
+
+    default_tab_template {
+        children
+        zj-statusbar-pane size=1
+
+        // which-key panel — the *same* zj-statusbar plugin (the `status-bar`
+        // alias) in its `role "whichkey"` instance. No separate alias and no
+        // config of its own: the active bar publishes the mode palette and the
+        // `which_key { … }` options (above) through the shared state, and this
+        // instance adopts them. The resting modes (Normal/Locked) where the
+        // panel hides are hardcoded in the plugin.
+        //
+        // Spawned per-tab as a tiny parked floating pane; it reveals a pinned,
+        // non-selectable hint panel only while its own tab is active and the
+        // mode is not a resting mode. The plugin makes itself borderless and
+        // reparks/resizes at runtime, so the 1x1 rect just minimizes flash.
+        //
+        // The visual-search dialog (`role "search"`) is spawned the same way:
+        // per-tab, because a floating pane belongs to exactly one tab, so a
+        // single shared instance could only ever appear on the tab it was first
+        // revealed on. Each instance parks itself offscreen and only the active
+        // tab's instance reveals + grabs the keyboard on `EnterSearch` (Alt+/).
+        // Its placement comes from the bar's `search { … }` block via shared
+        // state (above).
+        //
+        // NB: inlined here (not a `pane_template`) — Zellij always classifies a
+        // `pane_template` as tiled and rejects it inside `floating_panes`, and a
+        // floating pane may not contain child panes. Hence the small repeat in
+        // `new_tab_template` below.
+        floating_panes {
+            pane x=0 y=0 width=1 height=1 {
+                plugin location="status-bar" {
+                    role "whichkey"
+                }
+            }
+            pane x=0 y=0 width=1 height=1 {
+                plugin location="status-bar" {
+                    role "search"
+                }
+            }
+        }
+    }
+
+    new_tab_template {
+        pane
+        zj-statusbar-pane size=1
+
+        // See the note in `default_tab_template`; kept in sync with it.
+        floating_panes {
+            pane x=0 y=0 width=1 height=1 {
+                plugin location="status-bar" {
+                    role "whichkey"
+                }
+            }
+            pane x=0 y=0 width=1 height=1 {
+                plugin location="status-bar" {
+                    role "search"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# pick-glyph-zellij — feature adapter for the Glyph picker modal.
+#
+# The floating-pane scaffolding (catppuccin title block, originating-
+# pane discovery, stdout capture + inject-into-tile) lives in
+# zellij-modal, which spawns this script as its `--inject` target via
+# the "Ctrl Shift u" keybind in ~/.config/zellij/config.kdl. All this
+# adapter does is configure the floating-pane fzf geometry and exec the
+# general-purpose ~/.local/bin/pick-glyph; its stdout (the chosen glyph)
+# is what zellij-modal captures and injects into the pane you came from.
+#
+# Twin of pick-gitmoji-zellij — identical shape, only the picker binary
+# and PICK_GLYPH_* env prefix differ.
+#
+# Env-var overrides:
+#   PICK_GLYPH_BIN      Absolute path to pick-glyph
+#                       (default: $HOME/.local/bin/pick-glyph)
+#   PICK_GLYPH_HEIGHT   fzf height inside the pane. Default -4: zellij-
+#                       modal prints a 3-row title block, so fzf fills
+#                       the pane height minus that block (plus the
+#                       bottom frame row).
+#   PICK_GLYPH_MARGIN   fzf --margin (T,R,B,L). Default 0 on every side:
+#                       the title block separates fzf from the top frame
+#                       and the pane frame handles the rest. Keeping the
+#                       left/right margin at 0 also dodges the
+#                       --input-border × horizontal-margin phantom-border
+#                       glitch under zellij+ghostty.
+#   PICK_GLYPH_PADDING  fzf --padding (T,R,B,L). Default 0,2,0,2 for a
+#                       little left/right breathing room inside the frame.
+#
+# Any positional args are forwarded to pick-glyph, so a future binding
+# could call this with `-q EMOJI` etc.
+
+set -euo pipefail
+
+PICK_GLYPH_BIN="${PICK_GLYPH_BIN:-$HOME/.local/bin/pick-glyph}"
+[[ -x "$PICK_GLYPH_BIN" ]] || { echo "pick-glyph-zellij: missing or non-executable: $PICK_GLYPH_BIN" >&2; exit 1; }
+
+export PICK_GLYPH_HEIGHT="${PICK_GLYPH_HEIGHT:--4}"
+export PICK_GLYPH_MARGIN="${PICK_GLYPH_MARGIN:-0,0,0,0}"
+export PICK_GLYPH_PADDING="${PICK_GLYPH_PADDING:-0,2,0,2}"
+
+# --no-border: the floating pane already draws its own frame; a second
+# fzf border would just shave columns off the usable width.
+exec "$PICK_GLYPH_BIN" --no-border "$@"

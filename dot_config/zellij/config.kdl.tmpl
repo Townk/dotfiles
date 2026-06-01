@@ -1,0 +1,949 @@
+{{/*
+  zellijModalRun — render the floating-pane `Run` block for one of our
+  standardized "modal dialogs". Every modal is spawned through the
+  shared scaffolding script ~/.config/zellij/scripts/zellij-modal, which
+  prints the catppuccin title block and (in picker mode) captures the
+  target's stdout and injects it into the originating tiled pane. This
+  template keeps the pane geometry/flags identical across modals so they
+  all look and behave the same; callers only vary the title, target
+  script, inject mode, and size.
+
+  Params (passed as a dict):
+    home    .chezmoi.homeDir
+    title   Header text shown in the modal's title block.
+    inject  true  → picker mode  (capture stdout, inject into the tile)
+            false → action mode  (target owns its outcome, e.g. quit)
+    script  Basename of the target under ~/.config/zellij/scripts/.
+    width   Floating-pane width  (e.g. "70%" or a cell count like "50").
+    height  Floating-pane height (e.g. "60%" or a cell count like "14").
+    args    OPTIONAL extra args passed to the target script, already
+            KDL-quoted and space-separated (e.g. `"--resume"`). Used by
+            the "resume picker" binds. Omit for none.
+
+  `name ""` suppresses the frame title text; `borderless false`
+  overrides the global `pane_frames false` so the modal still gets a
+  rounded frame; `pinned true` keeps it on top of other floats;
+  `close_on_exit true` disposes of the pane when the target returns.
+*/ -}}
+{{- define "zellijModalRun" -}}
+            Run "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }} "--" "{{ joinPath .home ".config/zellij/scripts" .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
+                name ""
+                close_on_exit true
+                floating true
+                pinned true
+                borderless false
+                width "{{ .width }}"
+                height "{{ .height }}"
+            }
+{{- end -}}
+keybinds clear-defaults=true {
+    locked {
+        // Locked mode is the maximum-passthrough mode — every keypress,
+        // including bare `esc` and `Alt+w`, flows to the underlying app.
+        // The single exit is `Alt+Esc`, a combo uncommon enough that no
+        // shell or TUI claims it.
+        bind "Alt esc" { SwitchToMode "normal"; }
+    }
+    pane {
+        // Move focus around
+        bind "left" { MoveFocus "left"; }
+        bind "down" { MoveFocus "down"; }
+        bind "up" { MoveFocus "up"; }
+        bind "right" { MoveFocus "right"; }
+        bind "h" { MoveFocus "left"; }
+        bind "j" { MoveFocus "down"; }
+        bind "k" { MoveFocus "up"; }
+        bind "l" { MoveFocus "right"; }
+
+        bind "n" { SwitchToMode "renamepane"; PaneNameInput 0; }
+
+        bind "tab" { SwitchFocus; } // Cycle through panes
+
+        // Pane creation (mode-ending bindings)
+        bind "N" { NewPane; SwitchToMode "normal"; }
+        bind "H" { NewPane "left"; SwitchToMode "normal"; }
+        bind "J" { NewPane "down"; SwitchToMode "normal"; }
+        bind "K" { NewPane "up"; SwitchToMode "normal"; }
+        bind "L" { NewPane "right"; SwitchToMode "normal"; }
+        bind "S" { NewPane "stacked"; SwitchToMode "normal"; }
+
+        // Pane manipulation (mode-ending binding)
+        bind "p" { TogglePanePinned; SwitchToMode "normal"; }
+        bind "e" { TogglePaneEmbedOrFloating; SwitchToMode "normal"; }
+        bind "z" { ToggleFocusFullscreen; SwitchToMode "normal"; }
+        bind "t" { ToggleFloatingPanes; SwitchToMode "normal"; }
+        bind "f" { TogglePaneFrames; SwitchToMode "normal"; }
+    }
+    tab {
+        bind "left" { GoToPreviousTab; }
+        bind "down" { GoToNextTab; }
+        bind "up" { GoToPreviousTab; }
+        bind "right" { GoToNextTab; }
+        bind "1" { SwitchToMode "normal"; GoToTab 1; }
+        bind "2" { SwitchToMode "normal"; GoToTab 2; }
+        bind "3" { SwitchToMode "normal"; GoToTab 3; }
+        bind "4" { SwitchToMode "normal"; GoToTab 4; }
+        bind "5" { SwitchToMode "normal"; GoToTab 5; }
+        bind "6" { SwitchToMode "normal"; GoToTab 6; }
+        bind "7" { SwitchToMode "normal"; GoToTab 7; }
+        bind "8" { SwitchToMode "normal"; GoToTab 8; }
+        bind "9" { SwitchToMode "normal"; GoToTab 9; }
+        bind "[" { SwitchToMode "normal"; BreakPaneLeft; }
+        bind "]" { SwitchToMode "normal"; BreakPaneRight; }
+        bind "b" { SwitchToMode "normal"; BreakPane; }
+        bind "h" { GoToPreviousTab; }
+        bind "j" { GoToNextTab; }
+        bind "k" { GoToPreviousTab; }
+        bind "l" { GoToNextTab; }
+        bind "n" { SwitchToMode "normal"; NewTab; }
+        bind "r" { SwitchToMode "renametab"; TabNameInput 0; }
+        bind "s" { ToggleActiveSyncTab; SwitchToMode "normal"; }
+        bind "x" { SwitchToMode "normal"; CloseTab; }
+        bind "tab" { ToggleTab; }
+    }
+    resize {
+        bind "left" { Resize "Increase left"; }
+        bind "down" { Resize "Increase down"; }
+        bind "up" { Resize "Increase up"; }
+        bind "right" { Resize "Increase right"; }
+        bind "+" { Resize "Increase"; }
+        bind "-" { Resize "Decrease"; }
+        bind "=" { Resize "Increase"; }
+        bind "H" { Resize "Decrease left"; }
+        bind "J" { Resize "Decrease down"; }
+        bind "K" { Resize "Decrease up"; }
+        bind "L" { Resize "Decrease right"; }
+        bind "h" { Resize "Increase left"; }
+        bind "j" { Resize "Increase down"; }
+        bind "k" { Resize "Increase up"; }
+        bind "l" { Resize "Increase right"; }
+    }
+    move {
+        bind "left" { MovePane "left"; }
+        bind "down" { MovePane "down"; }
+        bind "up" { MovePane "up"; }
+        bind "right" { MovePane "right"; }
+        bind "h" { MovePane "left"; }
+        bind "j" { MovePane "down"; }
+        bind "k" { MovePane "up"; }
+        bind "l" { MovePane "right"; }
+        bind "n" { MovePane; }
+        bind "p" { MovePaneBackwards; }
+        bind "tab" { MovePane; }
+    }
+    scroll {
+        bind "e" { EditScrollback; SwitchToMode "normal"; }
+        // Open the floating "visual search" dialog. The dialog is the
+        // `status-bar` plugin in its per-tab `role "search"` instance (spawned
+        // by the layout, parked until needed); the active tab's instance reveals
+        // itself when the client enters `EnterSearch` and flips to `Search`.
+        bind "/" { SwitchToMode "EnterSearch"; }
+
+        // vi-style buffer ends. Only in scroll mode (not search) so `g`
+        // doesn't interfere with search navigation.
+        bind "g" { ScrollToTop; }
+        bind "G" { ScrollToBottom; }
+
+        // Jump prompt-by-prompt. Ghostty's native Cmd+Up/Cmd+Down maps to
+        // `jump_to_prompt` but those markers don't survive zellij's VTE,
+        // so we ship a small plugin (zj-promptjump) that scans scrollback
+        // for the p10k prompt prefix and re-aligns the viewport. Mirrors
+        // the `n`/`p` convention already used in `search` mode for next/
+        // previous result. The plugin places the target prompt at the top
+        // of the viewport.
+        bind "n" {
+            MessagePlugin "prompt-jumper" {
+                name "next"
+            }
+        }
+        bind "p" {
+            MessagePlugin "prompt-jumper" {
+                name "prev"
+            }
+        }
+    }
+    search {
+        bind "n" { Search "down"; }
+        bind "N" { Search "up"; }
+        bind "c" { SearchToggleOption "CaseSensitivity"; }
+        bind "b" { SearchToggleOption "WholeWord"; }
+        bind "w" { SearchToggleOption "Wrap"; }
+        // Reopen the floating search dialog to edit the term: re-enter
+        // `EnterSearch`, which the `role "search"` instance turns back into the
+        // (pre-filled) dialog. `backspace` is free here — the which-key
+        // `wk_go_back` binding deliberately excludes `search` for exactly this.
+        // (`esc` → normal and `enter` → normal come from the `shared_except`
+        // blocks below; native `n`/`N` above navigate matches.)
+        bind "backspace" { SwitchToMode "EnterSearch"; }
+    }
+    session {
+        bind "a" {
+            LaunchOrFocusPlugin "zellij:about" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "c" {
+            LaunchOrFocusPlugin "configuration" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "l" {
+            LaunchOrFocusPlugin "zellij:layout-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "p" {
+            LaunchOrFocusPlugin "plugin-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "s" {
+            LaunchOrFocusPlugin "zellij:share" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "w" {
+            LaunchOrFocusPlugin "session-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+    }
+    shared_except "locked" {
+        // Pane focus: Ctrl + hjkl / arrows. Exception to the "no Ctrl in
+        // zellij" rule, kept for muscle-memory consistency with vim/
+        // smart-splits.nvim. See user-modifier-binding-model memory.
+        // Plugin: vim-navigator (alias defined in `plugins {}` below).
+        // The alias supplies `move_mod "ctrl"`; we only set what differs
+        // per binding: the message name, payload (direction), and whether
+        // this binding was triggered by an arrow key or by hjkl.
+        bind "Ctrl h" {
+            MessagePlugin "vim-navigator" {
+                name "move_focus"
+                payload "left"
+                use_arrow_keys "false"
+            }
+        }
+        bind "Ctrl left" {
+            MessagePlugin "vim-navigator" {
+                name "move_focus"
+                payload "left"
+                use_arrow_keys "true"
+            }
+        }
+
+        bind "Ctrl l" {
+            MessagePlugin "context-keys" {
+                name "ctrl+l"
+                payload "default: pipe vim-navigator name=move_focus payload=right use_arrow_keys=false; when pi: $source"
+            }
+        }
+        bind "Ctrl right" {
+            MessagePlugin "vim-navigator" {
+                name "move_focus"
+                payload "right"
+                use_arrow_keys "true"
+            }
+        }
+
+        // Ctrl+j / Ctrl+k: routed through zj-ctxkeys. By default the
+        // keystroke is re-piped into vim-zellij-navigator (matching Ctrl+h/l
+        // above) so focus moves vim-aware. When fzf is anywhere in the
+        // focused pane's process tree, the raw byte (^J / ^K) is forwarded
+        // instead so fzf's item navigation keeps working.
+        // See Projects/apps/zellij/zj-ctxkeys.
+        bind "Ctrl j" {
+            MessagePlugin "context-keys" {
+                name "ctrl+j"
+                payload "default: pipe vim-navigator name=move_focus payload=down use_arrow_keys=false; when fzf: $source; when agent,cursor-agent: key down"
+            }
+        }
+        bind "Ctrl down" {
+            MessagePlugin "vim-navigator" {
+                name "move_focus"
+                payload "down"
+                use_arrow_keys "true"
+            }
+        }
+
+        bind "Ctrl k" {
+            MessagePlugin "context-keys" {
+                name "ctrl+k"
+                payload "default: pipe vim-navigator name=move_focus payload=up use_arrow_keys=false; when fzf: $source; when agent,cursor-agent: key up"
+            }
+        }
+        bind "Ctrl up" {
+            MessagePlugin "vim-navigator" {
+                name "move_focus"
+                payload "up"
+                use_arrow_keys "true"
+            }
+        }
+
+        // Resize: Ctrl+Shift + hjkl / arrows. Increases in the direction
+        // pressed. Uses the same vim-navigator alias as the focus bindings;
+        // `resize_mod "ctrl+shift"` is supplied by the alias.
+        bind "Ctrl Shift h" {
+            MessagePlugin "vim-navigator" {
+                name "resize"
+                payload "left"
+                use_arrow_keys "false"
+            }
+        }
+        bind "Ctrl Shift left" {
+            MessagePlugin "vim-navigator" {
+                name "resize"
+                payload "left"
+                use_arrow_keys "true"
+            }
+        }
+
+        bind "Ctrl Shift l" {
+            MessagePlugin "vim-navigator" {
+                name "resize"
+                payload "right"
+                use_arrow_keys "false"
+            }
+        }
+        bind "Ctrl Shift right" {
+            MessagePlugin "vim-navigator" {
+                name "resize"
+                payload "right"
+                use_arrow_keys "true"
+            }
+        }
+
+        bind "Ctrl Shift j" {
+            MessagePlugin "vim-navigator" {
+                name "resize"
+                payload "down"
+                use_arrow_keys "false"
+            }
+        }
+        bind "Ctrl Shift down" {
+            MessagePlugin "vim-navigator" {
+                name "resize"
+                payload "down"
+                use_arrow_keys "true"
+            }
+        }
+
+        bind "Ctrl Shift k" {
+            MessagePlugin "vim-navigator" {
+                name "resize"
+                payload "up"
+                use_arrow_keys "false"
+            }
+        }
+        bind "Ctrl Shift up" {
+            MessagePlugin "vim-navigator" {
+                name "resize"
+                payload "up"
+                use_arrow_keys "true"
+            }
+        }
+
+        // Shift+Enter: forward as Shift+Enter (CR) everywhere, except in
+        // cursor-agent where it sends Alt+Enter (ESC+CR) so the CLI inserts
+        // a newline in the prompt instead of submitting.
+        bind "Shift Enter" {
+            MessagePlugin "context-keys" {
+                name "shift+enter"
+                payload "default: $source; when agent,cursor-agent: key alt+enter"
+            }
+        }
+
+        // Ctrl+Shift+u — Unicode / Nerd Font / Emoji glyph picker.
+        // Spawns ~/.config/zellij/scripts/pick-glyph-zellij in a
+        // floating, pinned pane. The wrapper runs the general-purpose
+        // `pick-glyph` from ~/.local/bin/, captures the chosen glyph,
+        // and `write-chars --pane-id <originating-tile>`s it back into
+        // the pane the user came from. `close_on_exit true` disposes
+        // of the floating pane when the wrapper returns. `pinned true`
+        // keeps the picker on top if you toggle other floating panes
+        // while it's open. `borderless false` overrides the global
+        // `pane_frames false` so we still get a (rounded) frame around
+        // this single floating pane — pick-glyph runs with --no-border
+        // so the inner fzf border doesn't double up. `name ""`
+        // suppresses the title text in the frame (matches the quit
+        // dialog) — pick-glyph-zellij prints its own catppuccin-mocha
+        // title block on the first interior row instead.
+        bind "Ctrl Shift u" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Glyph Picker"
+                     "inject" true
+                     "script" "pick-glyph-zellij"
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+
+        // Ctrl+Shift+g — Gitmoji picker. Spawns
+        // ~/.config/zellij/scripts/pick-gitmoji-zellij in a
+        // floating, pinned pane with the same shape, frame, and
+        // title-block contract as the Ctrl+Shift+u glyph picker.
+        // The wrapper runs the general-purpose `pick-gitmoji` from
+        // ~/.local/bin/ (which fetches & caches the gitmoji.dev
+        // catalog at $XDG_CACHE_HOME/pick-gitmoji/), captures the
+        // chosen emoji or :code:, and `write-chars --pane-id
+        // <originating-tile>` injects it back into the pane the
+        // user came from. Same `name ""` + `borderless false`
+        // combo as the glyph picker so the floating frame is
+        // present but title-less.
+        bind "Ctrl Shift g" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Gitmoji Picker"
+                     "inject" true
+                     "script" "pick-gitmoji-zellij"
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+
+
+        // Other Alt direct bindings
+        bind "Alt +" { Resize "Increase"; }
+        bind "Alt -" { Resize "Decrease"; }
+        bind "Alt =" { Resize "Increase"; }
+        bind "Alt [" { PreviousSwapLayout; }
+        bind "Alt ]" { NextSwapLayout; }
+        bind "Alt f" { ToggleFloatingPanes; }
+        bind "Alt i" { MoveTab "left"; }
+        bind "Alt n" { NewPane; }
+        bind "Alt o" { MoveTab "right"; }
+        bind "Alt p" { TogglePaneInGroup; }
+        bind "Alt Shift p" { ToggleGroupMarking; }
+    }
+    shared_except "locked" "scroll" "search" "tmux" {
+        // Wezterm-style leader. The "tmux" mode block below is repurposed
+        // to host all the leader chords. Scroll mode is excluded so that
+        // holding Cmd+Up/Down doesn't repeatedly flap the mode (and the
+        // statusbar) between scroll and tmux on every key-repeat. Trade-off:
+        // other Cmd+<key> chords don't reach zellij while you're in scroll
+        // mode — press Esc/Enter to leave scroll first.
+        bind "Alt w" { SwitchToMode "tmux"; }
+    }
+    shared_except "locked" {
+        // Cmd+F (Ghostty emits `ESC /` = Alt+/) → open the floating "visual
+        // search" dialog. The dialog is the `status-bar` plugin in its per-tab
+        // `role "search"` instance (spawned by the layout, parked until needed);
+        // switching to `EnterSearch` is all that's needed — the active tab's
+        // instance reacts to the ModeUpdate, reveals itself, flips to `Search`,
+        // and intercepts keystrokes.
+        bind "Alt /" { SwitchToMode "EnterSearch"; }
+    }
+    shared_except "normal" "locked" "entersearch" {
+        bind "enter" { SwitchToMode "normal"; }
+    }
+    shared_except "normal" "locked" "entersearch" "renametab" "renamepane" {
+        bind "esc" { SwitchToMode "normal"; }
+    }
+    shared_among "pane" "tmux" {
+        bind "x" { SwitchToMode "normal"; CloseFocus; }
+    }
+    shared_among "scroll" "search" {
+        bind "PageDown" { PageScrollDown; }
+        bind "PageUp" { PageScrollUp; }
+        bind "left" { PageScrollUp; }
+        bind "down" { ScrollDown; }
+        bind "up" { ScrollUp; }
+        bind "right" { PageScrollDown; }
+        bind "d" { HalfPageScrollDown; }
+        bind "j" { ScrollDown; }
+        bind "k" { ScrollUp; }
+        bind "u" { HalfPageScrollUp; }
+        // vi/less-style page back/forward.
+        bind "b" { PageScrollUp; }
+        bind "f" { PageScrollDown; }
+        // Note: `h` and `l` are intentionally unbound here so that Ghostty's
+        // Cmd+Up/Down chord (`Alt+w l k` / `Alt+w l j`) stays re-entrant when
+        // already in scroll mode — the `l` in the chord no longer triggers
+        // PageScrollDown. Use arrows or `b`/`f` for page nav.
+    }
+    entersearch {
+        // Both Ctrl+c and Esc bail straight to normal rather than scroll,
+        // because the common entry point now is `Alt+/` (Ghostty's Cmd+F)
+        // which skips scroll mode entirely.
+        bind "esc"    { SwitchToMode "normal"; }
+        bind "enter"  { SwitchToMode "search"; }
+    }
+    renametab {
+        // esc cancels the rename and returns straight to normal mode,
+        // matching the project-wide "esc always exits to normal" rule.
+        bind "esc" { UndoRenameTab; SwitchToMode "normal"; }
+    }
+    shared_among "renametab" "renamepane" {
+    }
+    renamepane {
+        // esc cancels the rename and returns straight to normal mode,
+        // matching the project-wide "esc always exits to normal" rule.
+        bind "esc" { UndoRenamePane; SwitchToMode "normal"; }
+    }
+    shared_among "session" "tmux" {
+        bind "d" { Detach; }
+    }
+    // which-key panel controls. The hint panel is the zj-statusbar plugin in
+    // its `role "whichkey"` instance (it shares the `status-bar` alias but is
+    // launched per-tab by the layout with `role "whichkey"` config). A pipe is
+    // matched to a running plugin by URL **and configuration**, so we MUST
+    // repeat `role "whichkey"` here — otherwise the bare alias doesn't match any
+    // running instance and Zellij launches a brand-new bar in a split pane.
+    // With the matching config the pipe reaches every per-tab which-key instance
+    // (only the active one acts). Bound only in the navigation modes where the
+    // panel is shown (resting Normal/Locked are excluded; text-input modes like
+    // rename*/entersearch are skipped so Ctrl-keys don't shadow typing).
+    //
+    // The chords mirror the footer hint glyphs set in the layout's
+    // `which_key { … }` block (next_page_key/prev_page_key/toggle_key/back_key):
+    //   Alt+.  → show/hide the panel               (wk_toggle_pane)
+    //   Ctrl+d / Ctrl+u → next / previous page when entries overflow (vim-style)
+    //   Backspace → step back one mode along the trail (wk_go_back)
+    shared_among "pane" "tab" "resize" "move" "scroll" "search" "tmux" "session" {
+        bind "Alt ." { MessagePlugin "status-bar" { name "wk_toggle_pane"; role "whichkey"; }; }
+        bind "Ctrl d" { MessagePlugin "status-bar" { name "wk_next_page"; role "whichkey"; }; }
+        bind "Ctrl u" { MessagePlugin "status-bar" { name "wk_prev_page"; role "whichkey"; }; }
+    }
+    // `go_back` on Backspace, but NOT in `search`: there the floating search
+    // dialog owns Backspace to delete a character in the query, so binding it
+    // here would shadow that. The other panel controls above are modified
+    // chords that don't collide with typing, so they stay shared with search.
+    shared_among "pane" "tab" "resize" "move" "scroll" "tmux" "session" {
+        bind "backspace" { MessagePlugin "status-bar" { name "wk_go_back"; role "whichkey"; }; }
+    }
+    // Repurposed as the wezterm-style LEADER mode. Entered via `Alt w`.
+    // Each chord switches back to normal mode after executing, mirroring
+    // wezterm's `config.leader` immediate-action behavior.
+    tmux {
+        // Splits (wezterm: SplitHorizontal → right, SplitVertical → down)
+        bind "v" { NewPane "right"; SwitchToMode "normal"; }
+        bind "s" { NewPane "down";  SwitchToMode "normal"; }
+
+        // Toggle zoom (wezterm LEADER+z)
+        bind "z" { ToggleFocusFullscreen; SwitchToMode "normal"; }
+
+        // Rename tab (wezterm LEADER+n PromptInputLine)
+        bind "n" { SwitchToMode "renametab"; TabNameInput 0; }
+
+        // Modes reachable via leader (wezterm LEADER+r/l/t/W)
+        bind "L" { SwitchToMode "locked"; }
+        bind "l" { SwitchToMode "scroll"; }
+        bind "m" { SwitchToMode "move"; }
+        bind "o" { SwitchToMode "session"; }
+        bind "p" { SwitchToMode "pane"; }
+        bind "r" { SwitchToMode "resize"; }
+        bind "t" { SwitchToMode "tab"; }
+
+        // Session manager — closest available match to wezterm's
+        // `LEADER+w` (which prompted to rename the current workspace).
+        // zellij has no inline-rename for sessions; rename happens
+        // inside the session-manager UI.
+        bind "w" {
+            LaunchOrFocusPlugin "session-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+
+        // Tab activation 1..9 (wezterm LEADER+<digit>). `0` is added for
+        // Ghostty's Cmd+0 → tab 10, matching macOS app-tab convention.
+        bind "1" { SwitchToMode "normal"; GoToTab 1; }
+        bind "2" { SwitchToMode "normal"; GoToTab 2; }
+        bind "3" { SwitchToMode "normal"; GoToTab 3; }
+        bind "4" { SwitchToMode "normal"; GoToTab 4; }
+        bind "5" { SwitchToMode "normal"; GoToTab 5; }
+        bind "6" { SwitchToMode "normal"; GoToTab 6; }
+        bind "7" { SwitchToMode "normal"; GoToTab 7; }
+        bind "8" { SwitchToMode "normal"; GoToTab 8; }
+        bind "9" { SwitchToMode "normal"; GoToTab 9; }
+        bind "0" { SwitchToMode "normal"; GoToTab 10; }
+
+        // Toggle pane frames manually (workaround for the frame
+        // flicker bug — see project memory).
+        bind "f" { TogglePaneFrames; }
+
+        // Alt+w u / Alt+w g — RESUME the glyph / gitmoji picker: reopen
+        // it with the previous query AND cursor position restored (see
+        // pick-glyph / pick-gitmoji `--resume`). The plain Ctrl+Shift+u/g
+        // binds always open fresh; these leader chords are the explicit
+        // "get back where I was" entrypoints — handy for grabbing several
+        // neighbouring symbols across separate edits. Same floating-pane
+        // shape and title block as the fresh pickers; the only difference
+        // is `--resume` appended to the target via the template's `args`.
+        bind "u" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Glyph Picker (resumed)"
+                     "inject" true
+                     "script" "pick-glyph-zellij"
+                     "args" "\"--resume\""
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+        bind "g" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Gitmoji Picker (resumed)"
+                     "inject" true
+                     "script" "pick-gitmoji-zellij"
+                     "args" "\"--resume\""
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+
+        // Quit zellij — Catppuccin Mocha-themed `gum confirm` dialog
+        // (see scripts/zellij-quit-confirm) drawn inside a compact,
+        // pinned floating pane with a (rounded) frame but no title
+        // text (`name ""`). The script defaults to Cancel, so
+        // Enter/Esc are safe; only the affirmative button (or `y`)
+        // calls `zellij kill-session "$ZELLIJ_SESSION_NAME"` (NOT
+        // `action quit`, which only quits the current client in
+        // some setups). `close_on_exit true` disposes of the pane
+        // on the cancel path; on the quit path the pane dies along
+        // with the session.
+        //
+        // Pane geometry is fixed in cells rather than percentages so
+        // the dialog renders identically across terminal sizes. See
+        // scripts/zellij-quit-confirm for the line-by-line layout
+        // breakdown.
+        //   width   50  — 2 frame cols + 2 left-padding cells (set
+        //                 in gum via --padding) + 46 cells of usable
+        //                 content area. Rule is intentionally 44
+        //                 cells (2 short of the content area) for a
+        //                 tucked-in look.
+        //   height  14  — 2 frame rows + 12 content rows: top pad,
+        //                 title, rule, separator blank, three-line
+        //                 gum prompt (question, blank, "Session:
+        //                 <name>"), gum blank, buttons, gum blank,
+        //                 gum help, bottom pad. The session name on
+        //                 its own line means long ZELLIJ_SESSION_NAME
+        //                 values degrade by wrapping into the bottom
+        //                 pad instead of corrupting the dialog.
+        bind "q" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Quit Session"
+                     "inject" false
+                     "script" "zellij-quit-confirm"
+                     "width" "50"
+                     "height" "14") }}
+        }
+
+        // Yank — copy the active pane's cwd to the system clipboard, with a
+        // macOS notification + sound. Two variants:
+        //   Shift+y      → $HOME-relative path (e.g. ~/Projects/foo).
+        //                  From Ghostty's Cmd+Shift+C, which forwards `Alt+w Y`.
+        //   Alt+y        → absolute path (e.g. /Users/me/Projects/foo).
+        //                  From Ghostty's Cmd+Shift+Alt+C, which forwards
+        //                  `Alt+w` then Alt+y (ESC y = \x1by).
+        //
+        // Dispatched into the headless context-keys (zj-ctxkeys) plugin
+        // rather than a `Run {}` block: a Run pane — even floating +
+        // close_on_exit — renders for a frame and produces a visible flash.
+        // The plugin's `run` action executes the command through Zellij's
+        // host run_command API with no pane at all, so there's zero flash.
+        //
+        // The `{pid}` placeholder is substituted by the plugin with the
+        // focused terminal pane's root process PID; scripts/copy-pwd resolves
+        // that PID's cwd via lsof (no ZELLIJ_* env needed) and handles the
+        // path-mode flag + pbcopy + terminal-notifier banner/sound.
+        bind "Y" {
+            MessagePlugin "context-keys" {
+                name "copy-pwd"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/copy-pwd" }} --relative {pid}"
+            }
+            SwitchToMode "normal"
+        }
+        bind "Alt y" {
+            MessagePlugin "context-keys" {
+                name "copy-pwd-abs"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/copy-pwd" }} --absolute {pid}"
+            }
+            SwitchToMode "normal"
+        }
+
+        // Open Ghostty's config in nvim in a new tab. Triggered from
+        // Ghostty's Cmd+, (which forwards the leader chord `Alt+w ,`).
+        //
+        // Implemented as a floating Run pane that shells out to the zellij
+        // CLI rather than NewTab+layout, because a custom layout file
+        // *replaces* the session's `default_tab_template` (zjstatus bar
+        // disappears). The CLI's `action new-tab -- <command>` uses the
+        // running session's template and inherits the status bar.
+        //
+        // Focus-or-create: if a tab named "Ghostty Config" already exists,
+        // jump to it instead of spawning another nvim (avoids swap-file
+        // conflicts and tab clutter on repeated Cmd+,).
+        bind "," {
+            Run "/bin/bash" "-c" "if /opt/homebrew/bin/zellij action query-tab-names | grep -Fxq 'Ghostty Config'; then /opt/homebrew/bin/zellij action go-to-tab-name 'Ghostty Config'; else /opt/homebrew/bin/zellij action new-tab --name 'Ghostty Config' --close-on-exit -- /opt/homebrew/bin/nvim ~/.config/ghostty/config; fi" {
+                close_on_exit true
+                floating true
+            }
+            SwitchToMode "normal"
+        }
+
+        // Pressing the leader again exits the mode.
+        bind "Alt w" { SwitchToMode "normal"; }
+    }
+}
+
+// Plugin aliases - can be used to change the implementation of Zellij
+// changing these requires a restart to take effect
+plugins {
+    about location="zellij:about"
+    compact-bar location="zellij:compact-bar"
+    configuration location="zellij:configuration"
+    filepicker location="zellij:strider" {
+        cwd "/"
+    }
+    plugin-manager location="zellij:plugin-manager"
+    session-manager location="zellij:session-manager"
+    strider location="zellij:strider"
+    welcome-screen location="zellij:session-manager" {
+        welcome_screen true
+    }
+
+{{/*
+  Custom plugin sources.
+
+  For each entry below:
+    - alias:   the alias used in this `plugins {}` block (and in
+               keybinds above as `MessagePlugin "<alias>"`).
+    - name:    the repo / wasm basename. The build output lives at
+               ~/Projects/apps/zellij/<name>/target/wasm32-wasip1/release/<name>.wasm
+               and the published artifact at
+               https://github.com/Townk/<name>/releases/download/<version>/<name>.wasm
+    - version: the GitHub release tag to fall back to when the repo
+               isn't checked out locally. Bump per release.
+
+  Resolution policy at `chezmoi apply` time:
+    1. If ~/Projects/apps/zellij/<name>/ exists on disk, the rendered
+       config points at the local debug/release build (file://). The
+       theory is "I have this checked out" ⇒ "I'm iterating on it and
+       want my local build, not the published wasm". You're responsible
+       for `cargo build --release --target wasm32-wasip1` in that repo.
+    2. Otherwise, the rendered config pulls the pinned release wasm
+       straight from GitHub — zellij downloads & caches on first load.
+
+  Re-running `chezmoi apply` after cloning (or removing) a repo flips
+  the rendered config between the two — that's the intended workflow.
+
+  Whitespace handling: this comment block uses the no-dash form of
+  Go template comment delimiters so the blank line preceding it
+  survives. All other template directives in this block trim
+  aggressively, and each rendered plugin line carries its own
+  indent + trailing newline inside printf, so the block matches the
+  surrounding 4-space-indented KDL.
+*/}}
+{{- $plugins := list
+    (dict "alias" "context-keys"  "name" "zj-ctxkeys"    "version" "v0.1.0")
+    (dict "alias" "prompt-jumper" "name" "zj-promptjump" "version" "v0.1.0")
+    (dict "alias" "status-bar"    "name" "zj-statusbar"  "version" "v0.1.0")
+-}}
+{{- $lines := list -}}
+{{- range $plugins -}}
+{{- $localRepo := joinPath $.chezmoi.homeDir "Projects/apps/zellij" .name -}}
+{{- if stat $localRepo -}}
+{{- $lines = append $lines (printf "    %s location=\"file:%s\"" .alias (joinPath $localRepo "target/wasm32-wasip1/release" (printf "%s.wasm" .name))) -}}
+{{- else -}}
+{{- $lines = append $lines (printf "    %s location=\"https://github.com/Townk/%s/releases/download/%s/%s.wasm\"" .alias .name .version .name) -}}
+{{- end -}}
+{{- end -}}
+{{ join "\n" $lines }}
+
+    // NB: neither the which-key panel nor the search dialog gets its own alias.
+    // All three roles (bar / search / which-key) are the *same* zj-statusbar
+    // wasm, distinguished only by their `role` config, so they share one URL
+    // and one per-URL permission grant. Each role just references the
+    // `status-bar` alias with the matching `role`:
+    //   - which-key: the layout spawns it per-tab as a floating pane
+    //                (`plugin location="status-bar" { role "whichkey" }`).
+    //   - search:    the layout *also* spawns it per-tab the same way
+    //                (`plugin location="status-bar" { role "search" }`); a
+    //                floating pane belongs to one tab, so one instance per tab.
+    // The bar publishes its mode palette + which_key/search config blocks
+    // through the shared state, so neither panel needs duplicate config here.
+
+    // hiasr/vim-zellij-navigator — focus and resize that DTRT inside vim/nvim.
+    // `move_mod` / `resize_mod` are the same for every binding, so set them
+    // once here; per-binding nodes still set `name`, `payload`, and
+    // `use_arrow_keys`. Unused keys are ignored by the plugin per call.
+    vim-navigator location="https://github.com/hiasr/vim-zellij-navigator/releases/download/0.3.0/vim-zellij-navigator.wasm" {
+        move_mod "ctrl"
+        resize_mod "ctrl+shift"
+    }
+
+}
+
+// Plugins to load in the background when a new session starts
+// eg. "file:/path/to/my-plugin.wasm"
+// eg. "https://example.com/my-plugin.wasm"
+load_plugins {
+    zellij:link
+    context-keys
+    prompt-jumper
+    vim-navigator
+    // NB: the "visual search" dialog (`role "search"`) is NOT preloaded here.
+    // Like the which-key panel it is spawned per-tab by the layout's
+    // `floating_panes` (a floating pane belongs to one tab, so a single shared
+    // instance could only ever show on one tab). Each instance parks itself
+    // until Alt+/ (SwitchToMode "EnterSearch") reveals the active tab's one.
+}
+web_client {
+    font "monospace"
+}
+ 
+ 
+// Choose the theme that is specified in the themes section.
+// Default: default
+// 
+theme "catppuccin-mocha"
+ 
+// Theme to use when the host terminal reports a dark color palette.
+// Requires `theme_light` to also be set; otherwise `theme` is used.
+// 
+// theme_dark "dracula"
+ 
+// Theme to use when the host terminal reports a light color palette.
+// Requires `theme_dark` to also be set; otherwise `theme` is used.
+// 
+// theme_light "solarized-light"
+ 
+// The name of the default layout to load on startup
+// Default: "default"
+// 
+// default_layout "compact"
+ 
+// The folder in which Zellij will look for layouts
+// (Requires restart)
+// 
+// layout_dir "/tmp"
+ 
+// The folder in which Zellij will look for themes
+// (Requires restart)
+// 
+// theme_dir "/tmp"
+ 
+// Disable frames globally. zjstatus's `hide_frame_for_single_pane` is
+// also off in layouts/default.kdl. Any combination where either side
+// tries to dynamically toggle frames flickers indefinitely on this setup,
+// so we just keep them off.
+pane_frames false
+
+// Frame corner style. zellij has no per-pane rounded-corners control —
+// it's this global UI setting only. But since `pane_frames false` above
+// keeps every tiled pane frameless, the ONLY panes that actually draw a
+// frame are our `zellijModalRun` modals (they set `borderless false` to
+// opt back in), so in practice this rounds just the modal dialogs — and
+// makes the "(rounded) frame" notes on those binds literally true.
+ui {
+    pane_frames {
+        rounded_corners true
+    }
+}
+ 
+// Configure the scroll back buffer size
+// This is the number of lines zellij stores for each pane in the scroll back
+// buffer. Excess number of lines are discarded in a FIFO fashion.
+// (Requires restart)
+// Valid values: positive integers
+// Default value: 10000
+// 
+scroll_buffer_size 1000000
+ 
+// Provide a command to execute when copying text. The text will be piped to
+// the stdin of the program to perform the copy. This can be used with
+// terminal emulators which do not support the OSC 52 ANSI control sequence
+// that will be used by default if this option is not set.
+// Examples:
+//
+// copy_command "xclip -selection clipboard" // x11
+// copy_command "wl-copy"                    // wayland
+// copy_command "pbcopy"                     // osx
+//
+copy_command "pbcopy"
+ 
+// Enable automatic copying (and clearing) of selection when releasing mouse
+// Default: true
+// 
+// copy_on_select true
+ 
+// Path to the default editor to use to edit pane scrollbuffer
+// Default: $EDITOR or $VISUAL
+// scrollback_editor "/opt/homebrew/bin/nvim"
+ 
+// When `session_name` is provided, attaches to that session
+// if it is already running or creates it otherwise.
+// Default: false
+// 
+attach_to_session true
+ 
+// Whether sessions should be serialized to the cache folder (including their tabs/panes, cwds and running commands) so that they can later be resurrected
+// Options:
+//   - true (default)
+//   - false
+// 
+// Disabled because cached layouts override edits to layouts/default.kdl —
+// every new session should start from the current layout file.
+session_serialization false
+
+// Whether to show tips on startup
+// Default: true
+// 
+show_startup_tips false
+ 
+// Whether to show release notes on first version run
+// Default: true
+// 
+show_release_notes false
+ 
+// Whether to enable mouse hover effects and pane grouping functionality
+// default is true
+// advanced_mouse_actions false
+ 
+// Whether to enable mouse hover visual effects (frame highlight and help text)
+// default is true
+//
+// Disabled here because the auto-rendered "scroll / resize" hints
+// zellij overlays on hover were noisy in the LEADER+q quit-confirm
+// floating pane (see the `bind "q"` block in the tmux mode above).
+// The hint suppression is global — there's no per-pane override —
+// but with leader chords memorized the hover affordance was never
+// actually useful in tiled panes either. Frame-highlight on hover
+// is collateral damage of the same flag.
+mouse_hover_effects false
+ 
+// Whether to show visual bell indicators (pane/tab frame flash and [!] suffix)
+// default is true
+// visual_bell true
+ 
+// Whether to focus panes on mouse hover
+// default is false
+// focus_follows_mouse false
+ 
+// Whether clicking a pane to focus it also sends the click into the pane
+// default is false
+// mouse_click_through false
+ 
+// A command to run (will be wrapped with sh -c and provided the RESURRECT_COMMAND env variable) 
+// after Zellij attempts to discover a command inside a pane when resurrecting sessions, the STDOUT
+// of this command will be used instead of the discovered RESURRECT_COMMAND
+// can be useful for removing wrappers around commands
+// Note: be sure to escape backslashes and similar characters properly
+// post_command_discovery_hook "echo $RESURRECT_COMMAND | sed <your_regex_here>"

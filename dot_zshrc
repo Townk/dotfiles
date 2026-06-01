@@ -22,13 +22,18 @@ if [[ -z "$ZELLIJ" && ( "$TERM_PROGRAM" == "ghostty" || -n "$SSH_TTY" ) ]]; then
     if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
       if "$_zellij" --session Main action list-clients 2>/dev/null \
            | tail -n +2 | grep -q .; then
-        exec "$_zellij"                     # Main is busy → fresh session
+        exec "$_zellij" --new-session-with-layout default
       else
-        exec "$_zellij" attach Main         # Main is idle → reattach
+        # Main is idle → reattach. If the session record is stale, discard it
+        # and create a fresh Main with the configured default layout.
+        exec "$_zellij" attach Main || {
+          "$_zellij" delete-session Main -f &>/dev/null
+          exec "$_zellij" --session Main --new-session-with-layout default
+        }
       fi
     else
       "$_zellij" delete-session Main -f &>/dev/null
-      exec "$_zellij" attach -c Main        # create fresh Main
+      exec "$_zellij" --session Main --new-session-with-layout default
     fi
   done
   unset _zellij
@@ -300,12 +305,15 @@ HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_NOT_FOUND="bg=none,fg=red,bold"
 HISTORY_SUBSTRING_SEARCH_GLOBBING_FLAGS="l"
 
 # The next snippet should only be executed if I'm opening a terminal.
-# Currently, the 4 possible terminal emulators I use are:
+# Currently, the 5 possible terminal emulators, and one terminal multiplexer I
+# use are:
 #
 # - WezTerm
 # - Kitty
 # - Alacritty
 # - iTerm2
+# - Ghostty
+# - Zellij
 #
 # If I can't identify one of these running this ZSH session, I'll skip the
 # "welcome screen".

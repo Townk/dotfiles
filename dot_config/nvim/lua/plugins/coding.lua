@@ -99,6 +99,15 @@ return {
           -- `client.config.capabilities.textDocument` is nil.
           filetypes = { "go", "gomod", "gowork" },
         },
+        -- kdl-lsp (https://github.com/kdl-org/kdl-rs/tree/main/tools/kdl-lsp)
+        -- has no entry in nvim-lspconfig's lsp/ directory and isn't in the
+        -- Mason registry, so we define the config inline. The binary is
+        -- provisioned by `system-package cargo sync` (see Cargofile).
+        kdl_lsp = {
+          cmd = { "kdl-lsp" },
+          filetypes = { "kdl" },
+          root_markers = { ".git" },
+        },
       },
     },
   },
@@ -145,6 +154,7 @@ return {
         "html",
         "javascript",
         "json",
+        "kdl",
         "lua",
         "markdown",
         "markdown_inline",
@@ -188,6 +198,7 @@ return {
           "js-debug-adapter",
           "json-lsp",
           "just-lsp",
+          "kdlfmt",
           "kotlin-debug-adapter",
           "kotlin-language-server",
           "kotlin-lsp",
@@ -220,6 +231,7 @@ return {
         kotlin = { "ktfmt" },
         json = { "biome" },
         jsonc = { "biome" },
+        kdl = { "kdlfmt" },
         -- Swap LazyVim's `prettier` for `prettierd` (daemon mode, ~10x faster
         -- startup). markdownlint-cli2 / markdown-toc still run after, gated by
         -- their own conditions.

@@ -1,0 +1,280 @@
+# Ghostty config — ported from ~/.config/wezterm/wezterm.lua
+# Plugins (statusbar, quicklaunch, smart-splits, mux/unix-domain) are not
+# portable; the look-and-feel + keybindings below cover the rest.
+
+# ---------------------------------------------------------------
+# Appearance
+# ---------------------------------------------------------------
+theme = Catppuccin Mocha
+
+# Font: JetBrains Mono DemiBold @ 19pt, 15% extra line height.
+# Ghostty has no `stretch = Expanded` knob — falls back to whatever
+# the font provides.
+#
+# Chain order (highest priority first; ghostty stops at the first
+# font that claims a given codepoint):
+#   1. JetBrains Mono     — primary text + ligatures
+#   2. Symbols Nerd Font  — nerd-font icons (PUA). Colour-emoji
+#                           codepoints (U+2600-U+27BF and
+#                           U+1F300-U+1FFFF) have been stripped from
+#                           this font's cmap by step 7/9 of
+#                           ../custom-builds/nerd-fonts/
+#                           build-updated-font.sh, so it no longer
+#                           competes with Apple Color Emoji on those
+#                           ranges.
+#   3. Apple Color Emoji  — colour emoji glyphs. Wins the lookup for
+#                           every codepoint Symbols Nerd Font no
+#                           longer claims, AND for every codepoint
+#                           in the font-codepoint-map block below.
+#   4. Menlo              — last-resort latin/CJK fallback (ghostty
+#                           also adds it implicitly, even when not
+#                           declared, as a system fallback).
+font-family = JetBrains Mono
+font-family = Symbols Nerd Font
+font-family = "Apple Color Emoji"
+font-family = Menlo
+font-style = SemiBold
+font-style-bold = Bold
+font-size = 19
+adjust-cell-height = 15%
+
+# Force ghostty to use Apple Color Emoji for codepoints that the
+# strip step (above) can NOT redirect on its own. Ranges to know:
+#
+#   U+2600-U+27BF — Misc Symbols + Dingbats. Default Unicode
+#       presentation is TEXT for many entries here (♻ ✏ ⚗ ✈ ⚰).
+#       Without a map, ghostty's grapheme-aware lookup classifies
+#       them as text and skips ALL emoji fonts in the chain — even
+#       when VS16 (U+FE0F) follows. The implicit-fallback Menlo
+#       wins, painting these as monochrome line-art glyphs.
+#       Confirmed via `ghostty +show-face --cp=0x267B` returning
+#       Menlo. Mapping fixes this.
+#
+#   U+2B00-U+2BFF — Misc Symbols & Arrows (⬆ ⬇ ⬅ ➡ etc). Same
+#       text-default issue as above. Symbols Nerd Font never had
+#       these (verified), so without a map ghostty falls through
+#       to Hiragino Sans (mono, awkward sizing). Apple Color Emoji
+#       has the colourful arrow glyphs that gitmoji and most other
+#       UIs expect.
+#
+#   U+200D — Zero-Width Joiner. Maps it to Apple Color Emoji so that
+#       ZWJ emoji sequences like :technologist: (U+1F9D1 + ZWJ +
+#       U+1F4BB → 🧑‍💻) shape into one glyph. CAVEAT: this only
+#       helps bare ghostty. Under zellij (our normal setup) it is
+#       INERT — zellij 0.44.3 drops every zero-width codepoint from
+#       its grid (U+200D is category Cf), so the joiner never reaches
+#       ghostty and the sequence always paints as 🧑 + 💻 side by
+#       side. The proper fix lives in unmerged zellij PRs #4800 /
+#       #4920 (grapheme segmentation); revisit when a zellij release
+#       ships it. The picker still INSERTS the correct bytes either
+#       way — `zellij action write-chars` forwards the raw ZWJ to the
+#       target pane's PTY; only zellij's own rendering is split.
+#       Kept here so it Just Works the day zellij stops eating ZWJ,
+#       and for any non-zellij ghostty use.
+#
+#   U+FE0F — Variation Selector 16 (force emoji presentation).
+#       Already routes to Apple Color Emoji by default, but listed
+#       explicitly as belt-and-suspenders.
+#
+# We do NOT map U+1F300-U+1FFFF — the strip removes those from
+# Symbols Nerd Font's cmap and the natural chain order then picks
+# Apple Color Emoji.
+font-codepoint-map = U+2600-U+27BF=Apple Color Emoji
+font-codepoint-map = U+2B00-U+2BFF=Apple Color Emoji
+font-codepoint-map = U+200D=Apple Color Emoji
+font-codepoint-map = U+FE0F=Apple Color Emoji
+
+# Caveat on emoji *width*: this whole chain is purely about which
+# font paints the glyph. Ghostty's grapheme width pipeline reports
+# cursor-advance = 1 cell for any base codepoint with Unicode
+# `Emoji_Presentation = No`, even when VS16 (U+FE0F) follows — so
+# emojis like ♻ ✏ ⚗ ⚰ paint as 2-cell colourful glyphs but only
+# advance the cursor by 1 cell. The gitmoji picker compensates with
+# a per-:code: width override map in `~/.local/bin/pick-gitmoji`,
+# see the `EMOJI_WIDTHS` block there.
+
+# Match wezterm.lua harfbuzz_features (calt/clig/liga are on by default but
+# being explicit doesn't hurt).
+font-feature = calt
+font-feature = clig
+font-feature = liga
+
+# ---------------------------------------------------------------
+# Window
+# ---------------------------------------------------------------
+window-width = 130
+window-height = 30
+window-padding-x = 10
+window-padding-y = 0
+window-padding-balance = true
+# Paint leftover padding with the nearest row's bg so the bar looks flush.
+# `extend-always` skips the heuristic that disables extension when the
+# nearest row uses the default bg (our zjstatus bar does — #1E1E2E).
+window-padding-color = extend
+
+# Hide the native scrollbar; zellij has scroll mode for scrollback.
+#scrollbar = never
+window-decoration = true
+window-save-state = always
+# Resize in whole-cell steps (one column / one row) instead of pixels.
+window-step-resize = true
+
+background-opacity = 1.0
+# background-blur = 20
+
+# Wezterm had inactive_pane_hsb { brightness = 0.8 }
+unfocused-split-opacity = 0.8
+
+# macOS chrome — wezterm.lua used native_macos_fullscreen_mode = false and
+# RESIZE-only decorations; closest match is non-native fullscreen + tabs
+# integrated into the titlebar.
+#
+# `padded-notch` keeps the fast, animation-free non-native fullscreen but pads
+# the top of the window so terminal content is never drawn under the MacBook
+# camera notch. On notch-less displays the window still uses the full height.
+macos-non-native-fullscreen = true
+macos-titlebar-style = hidden
+macos-option-as-alt = true
+
+# ---------------------------------------------------------------
+# Cursor (wezterm: BlinkingBar, 2px)
+# ---------------------------------------------------------------
+cursor-style = bar
+cursor-style-blink = true
+adjust-cursor-thickness = 1
+
+# ---------------------------------------------------------------
+# Behavior
+# ---------------------------------------------------------------
+copy-on-select = clipboard
+focus-follows-mouse = true
+mouse-hide-while-typing = true
+confirm-close-surface = false
+scrollback-limit = 10000000
+link-url = true
+
+# Quit Ghostty entirely when the last window is closed, instead of leaving
+# the app running in the background with only the menu bar.
+quit-after-last-window-closed = true
+
+# ---------------------------------------------------------------
+# Keybindings
+# ---------------------------------------------------------------
+# Pane/tab/split bindings live in zellij (~/.config/zellij/config.kdl).
+# Only Ghostty-specific shortcuts stay here so they don't get swallowed
+# before reaching the multiplexer.
+
+# Cmd+F triggers zellij's search. We send ESC + / (`Alt+/`), which is bound
+# in zellij to SwitchToMode("entersearch"). Done this way because zellij's
+# scrollback is the relevant buffer when zellij is running.
+keybind = cmd+f=text:\x1b/
+
+# App-level shortcuts forwarded into zellij as chord sequences starting with
+# the leader (`Alt w` = `\x1bw`), then the existing mode keys. This reuses
+# zellij's current chord vocabulary — no new bindings needed on that side.
+#
+# Chord map (leader → mode → action):
+#   Cmd+t        → leader, tab,    n   → NewTab
+#   Cmd+w        → leader, x           → CloseFocus    (shared_among pane/tmux)
+#   Cmd+Shift+w  → leader, tab,    x   → CloseTab
+#   Cmd+Shift+f  → leader, scroll, e   → EditScrollback
+#   Cmd+1..9     → leader, <digit>     → GoToTab N
+#   Cmd+0        → leader, 0           → GoToTab 10    (needs new bind, see kdl)
+keybind = cmd+t=text:\x1bwtn
+keybind = cmd+w=text:\x1bwx
+keybind = cmd+shift+w=text:\x1bwtx
+keybind = cmd+shift+f=text:\x1bwle
+
+# Cmd+Shift+C → leader, Y (yank). Copies the focused zellij pane's cwd to
+# the clipboard as a $HOME-relative path (~/…), with a notification + sound.
+# Cmd+Shift+Alt+C → leader, Alt+y (ESC y): same, but the ABSOLUTE path.
+# Both route to the headless context-keys plugin (see the `bind "Y"` /
+# `bind "Alt y"` blocks in zellij's tmux mode) — no pane, no flash.
+# We rebind Cmd+Shift+C (not Cmd+C) so Ghostty's own copy_to_clipboard on
+# Cmd+C — plus `copy-on-select = clipboard` above — keep working for
+# selected text.
+keybind = cmd+shift+c=text:\x1bwY
+keybind = cmd+shift+alt+c=text:\x1bw\x1by
+# Ghostty's defaults register `super+N=goto_tab:N` and `super+digit_N=goto_tab:N`
+# for digits 1..8 (super+9=last_tab, super+0=reset_font_size). Both must be
+# overridden — physical key bindings take precedence over codepoint bindings,
+# so a codepoint-only override leaves the physical default firing first.
+#
+# `performable:` prefix is critical here: without it, the override would still
+# register as a macOS menu shortcut, which fires BEFORE user keybinds on
+# system-level handling. Performable keybinds are excluded from the menu,
+# letting the keypress go through Ghostty's normal keybind dispatch and
+# reach our `text:` action.
+keybind = performable:cmd+1=text:\x1bw1
+keybind = performable:cmd+2=text:\x1bw2
+keybind = performable:cmd+3=text:\x1bw3
+keybind = performable:cmd+4=text:\x1bw4
+keybind = performable:cmd+5=text:\x1bw5
+keybind = performable:cmd+6=text:\x1bw6
+keybind = performable:cmd+7=text:\x1bw7
+keybind = performable:cmd+8=text:\x1bw8
+keybind = performable:cmd+9=text:\x1bw9
+keybind = performable:cmd+0=text:\x1bw0
+keybind = performable:cmd+digit_1=text:\x1bw1
+keybind = performable:cmd+digit_2=text:\x1bw2
+keybind = performable:cmd+digit_3=text:\x1bw3
+keybind = performable:cmd+digit_4=text:\x1bw4
+keybind = performable:cmd+digit_5=text:\x1bw5
+keybind = performable:cmd+digit_6=text:\x1bw6
+keybind = performable:cmd+digit_7=text:\x1bw7
+keybind = performable:cmd+digit_8=text:\x1bw8
+keybind = performable:cmd+digit_9=text:\x1bw9
+keybind = performable:cmd+digit_0=text:\x1bw0
+
+# Cmd+Up/Down (and vim-style aliases Cmd+K/J): enter scroll mode and scroll
+# one line, using zellij's existing scroll-mode `k`/`j` bindings.
+# Arrow keys must use `arrow_up`/`arrow_down` (physical) — Ghostty's
+# defaults bind `super+arrow_up=jump_to_prompt:-1` and physical takes
+# precedence over the `up`/`down` codepoint form. Letter keys can stay
+# logical; they override the default `super+k=clear_screen` /
+# `super+j=scroll_to_selection`.
+keybind = cmd+arrow_up=text:\x1bwlk
+keybind = cmd+arrow_down=text:\x1bwlj
+keybind = cmd+k=text:\x1bwlk
+keybind = cmd+j=text:\x1bwlj
+
+# Cmd+Shift+Up/Down: jump to previous/next shell prompt. The chord is the
+# same shape as Cmd+Up/Down — leader (`Alt+w`) → scroll mode (`l`) →
+# action (`p`/`n`). In zellij those last two letters are bound to the
+# zj-promptjump plugin (see ~/.config/zellij/config.kdl scroll block).
+#
+# Re-entrant by design: in scroll mode `Alt+w` is intentionally not bound
+# (see the `shared_except … "scroll" …` block in zellij config) and `l`
+# is unbound there too, so a second press of Cmd+Shift+Up doesn't flap
+# the mode — it just re-fires the plugin from inside scroll mode and
+# walks one prompt further.
+keybind = cmd+shift+arrow_up=text:\x1bwlp
+keybind = cmd+shift+arrow_down=text:\x1bwln
+
+# Cmd+N opens a fresh Ghostty window. Because zellij's config sets
+# `attach_to_session true` without a `session_name`, each new shell that
+# launches zellij gets its own random-named session — exactly what we want.
+keybind = cmd+n=new_window
+
+# Reload Ghostty config from disk without restarting.
+keybind = cmd+r=reload_config
+
+# Toggle fullscreen (matches wezterm's Alt+Enter). Honors
+# `macos-non-native-fullscreen = true` above, so this gives the non-native
+# (no-animation, no-space-switch) fullscreen.
+keybind = alt+enter=toggle_fullscreen
+
+# Open Ghostty's config in nvim in a new zellij tab of the current session.
+# Forwarded as the leader chord `Alt+w ,`; zellij's `,` chord uses the
+# edit-ghostty-config.kdl layout (a single nvim pane). Must use `,` (the
+# codepoint form) to override the default `super+,=open_config` — the
+# named form `cmd+comma` is a different trigger that doesn't shadow it.
+keybind = cmd+,=text:\x1bw,
+
+# NOTE on jump_to_prompt: Ghostty's native `jump_to_prompt` action is
+# unusable while zellij is multiplexing — zellij's VTE parser has no
+# OSC 133 dispatcher (only OSC 7), so the markers are silently dropped
+# at parse time and never reach Ghostty's scrollback. The Cmd+Shift+
+# Up/Down chords above route to zellij's zj-promptjump plugin instead,
+# which scans the pane's scrollback for the printable prompt prefix
+# (default `❯ ` / `❮ ` from p10k) and re-aligns the viewport.

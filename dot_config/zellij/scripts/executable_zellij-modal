@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# zellij-modal — shared scaffolding for our floating "modal dialog" panes.
+#
+# Lives under ~/.config/zellij/scripts/ — zellij-internal helper, not a
+# shell command. It is the single entry point every floating-pane modal
+# is spawned through (see the `zellijModalRun` template in
+# ~/.config/zellij/config.kdl, which renders the matching `Run` block).
+#
+# The idea: each dialog used to re-implement the same scaffolding —
+# resolve/validate the zellij binary, assert we're inside a session,
+# print a Catppuccin Mocha title block sized to the live pane width, and
+# (for the pickers) discover the originating tiled pane, capture the
+# tool's stdout, and inject the result back. That boilerplate now lives
+# here exactly once. A modal is reduced to its *target script*: the
+# feature-specific bit (which picker to run, the gum prompt to show),
+# passed to this scaffolding after `--`.
+#
+# Usage:
+#   zellij-modal --title TEXT [--inject] -- CMD [ARGS...]
+#
+#   --title TEXT  Title shown in the catppuccin header block. The block
+#                 is three interior rows (blank, "▓▓▓ <title>", rule).
+#                 Omit/empty to skip the header entirely.
+#   --inject      Picker mode. Capture CMD's stdout, strip the single
+#                 trailing newline, and `write-chars` it into the tiled
+#                 pane that was focused before the modal opened (with a
+#                 focus-previous-pane fallback). Without it ("action"
+#                 mode) CMD runs in the foreground and owns its own
+#                 outcome — e.g. zellij-quit-confirm calls kill-session.
+#   -- CMD ...    The target command. Everything after `--` is run
+#                 verbatim. In picker mode CMD's stdout is the payload;
+#                 fzf/gum keep /dev/tty for their interactive UI.
+#
+# Title-block contract for picker targets: this script prints three
+# interior rows above the target, so a picker filling the pane should
+# size its fzf `--height` to `-4` (pane height minus the block plus the
+# bottom frame row). The picker adapters set that via their PICK_*_HEIGHT
+# env defaults.
+#
+# Env-var overrides:
+#   ZELLIJ_BIN  Absolute path to the zellij binary
+#               (default: /opt/homebrew/bin/zellij)
+
+set -euo pipefail
+
+ZELLIJ_BIN="${ZELLIJ_BIN:-/opt/homebrew/bin/zellij}"
+
+title=""
+inject=0
+cmd=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --title)   title="${2-}"; shift 2 ;;
+    --title=*) title="${1#*=}"; shift ;;
+    --inject)  inject=1; shift ;;
+    --)        shift; cmd=( "$@" ); break ;;
+    *)         echo "zellij-modal: unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+[[ ${#cmd[@]} -gt 0 ]] || { echo "zellij-modal: no target command (expected '-- CMD ...')" >&2; exit 2; }
+[[ -x "$ZELLIJ_BIN"  ]] || { echo "zellij-modal: missing or non-executable: $ZELLIJ_BIN"    >&2; exit 1; }
+[[ -n "${ZELLIJ:-}"  ]] || { echo "zellij-modal: not running inside a zellij session"       >&2; exit 1; }
+
+focus_self() {
+  [[ -n "${ZELLIJ_PANE_ID:-}" ]] || return 0
+  "$ZELLIJ_BIN" action focus-pane-id "terminal_${ZELLIJ_PANE_ID}" 2>/dev/null || true
+}
+
+# Capture the originating tiled pane BEFORE we run the target. We can't
+# infer it from env vars (zellij doesn't export "previously focused"),
+# so we query `list-panes -a` and pick the most plausible candidate.
+# Columns are double-space separated. The candidate must be a live tiled
+# terminal pane other than ourselves; among those we prefer one still
+# flagged FOCUSED=true (zellij tracks tiled focus independently of
+# floating focus, so the originating tile stays "focused" in the tiled
+# axis), falling back to the first matching row. We also filter by the
+# active TAB_ID so we never write into a pane on a different tab. Only
+# needed in --inject mode.
+discover_target_pane() {
+  local active_tab_id self_pane
+  active_tab_id=$(
+    "$ZELLIJ_BIN" action list-tabs -s 2>/dev/null \
+      | awk -F'  ' '
+          NR == 1 { next }
+          $4 == "true" { print $1; exit }
+        '
+  )
+  self_pane="terminal_${ZELLIJ_PANE_ID:-x}"
+  "$ZELLIJ_BIN" action list-panes -a 2>/dev/null \
+    | awk -F'  ' -v self="$self_pane" -v active_tab="$active_tab_id" '
+        NR == 1            { next }
+        (active_tab != "" && $1 != active_tab) { next }
+        $5  != "terminal"  { next }
+        $10 != "false"     { next }   # FLOATING — skip floating panes
+        $11 != "false"     { next }   # EXITED   — skip dead panes
+        $4  == self        { next }   # us
+        $9 == "true" && focused == "" { focused = $4 }
+        first == ""                   { first   = $4 }
+        END { print (focused != "" ? focused : first) }
+      '
+}
+
+# Catppuccin Mocha SGR helpers — 24-bit truecolor. Inlined (not sourced
+# from themes.sh) because this runs outside any login shell and we want
+# zero environmental coupling. Shared by every modal so they all match.
+SGR_TITLE=$'\e[1;38;2;203;166;247m'   # mauve, bold (h1 accent)
+SGR_RULE=$'\e[38;2;49;50;68m'         # overlay0 (glow hr)
+SGR_RESET=$'\e[0m'
+
+# Title block — blank row, "▓▓▓ <title>", full-width rule — flush to the
+# left frame with a 2-cell inset, no trailing separator. The rule width
+# is read from the live pane via /dev/tty's TIOCGWINSZ (stty): zellij
+# doesn't reliably export $COLUMNS into the spawned pane and `tput cols`
+# can fall back to terminfo's 80, leaving the rule short of the frame.
+if [[ -n "$title" ]]; then
+  # Group-redirect so the shell's own "/dev/tty: Device not configured"
+  # error (raised before stty even runs, when there's no controlling
+  # tty) is swallowed too; `|| true` keeps `set -e` from aborting.
+  cols=$( { stty size </dev/tty; } 2>/dev/null | awk '{print $2}') || true
+  [[ -z "$cols" ]] && cols="${COLUMNS:-80}"
+  cols=$((cols - 4))
+  (( cols < 1 )) && cols=1
+  rule=$(printf '━%.0s' $(seq 1 "$cols"))
+  printf '\n  %s▓▓▓ %s%s\n' "$SGR_TITLE" "$title" "$SGR_RESET"
+  printf '  %s%s%s\n'       "$SGR_RULE"  "$rule"  "$SGR_RESET"
+fi
+
+if (( ! inject )); then
+  # Action mode: hand the pane to the target and let it own the outcome
+  # (exit status, kill-session, etc). `exec` so the target becomes PID 1
+  # of the pane and `close_on_exit` disposes of it when it returns.
+  focus_self
+  exec "${cmd[@]}"
+fi
+
+# Picker mode: discover where to inject before running the target.
+target_pane="$(discover_target_pane)" || target_pane=""
+focus_self
+
+# Run the target, redirecting stdout into a tempfile so its interactive
+# UI still owns /dev/tty. A non-zero exit (ESC = 130, no match = 1) is a
+# user cancel here, not a failure.
+#
+# When we have a concrete target pane, export it (plus our zellij bin)
+# so a picker can offer "insert without dismissing": its fzf binds
+# write directly into this pane mid-session via `zellij write-chars`,
+# independent of the stdout we capture below for the final Enter. The
+# picker only enables those binds when both vars are present, so this
+# stays a no-op for non-picker targets.
+tmp=$(mktemp -t zellijmodal)
+trap 'rm -f "$tmp"' EXIT
+if [[ -n "$target_pane" ]]; then
+  PICK_INJECT_PANE="$target_pane" PICK_INJECT_ZELLIJ="$ZELLIJ_BIN" \
+    "${cmd[@]}" >"$tmp" || true
+else
+  "${cmd[@]}" >"$tmp" || true
+fi
+
+# Strip the single trailing newline so we don't auto-submit at a shell
+# prompt. Embedded newlines (multi-select concatenation) are preserved.
+result=$(cat "$tmp")
+result="${result%$'\n'}"
+
+[[ -n "$result" ]] || exit 0
+
+if [[ -n "$target_pane" ]]; then
+  "$ZELLIJ_BIN" action write-chars --pane-id "$target_pane" -- "$result"
+else
+  # Last-ditch fallback if list-panes couldn't identify a target (e.g.
+  # the modal was opened with zero tiled terminal panes in the tab).
+  "$ZELLIJ_BIN" action focus-previous-pane
+  "$ZELLIJ_BIN" action write-chars -- "$result"
+fi

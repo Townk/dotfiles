@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# pick-gitmoji-zellij — feature adapter for the Gitmoji picker modal.
+#
+# The floating-pane scaffolding (catppuccin title block, originating-
+# pane discovery, stdout capture + inject-into-tile) lives in
+# zellij-modal, which spawns this script as its `--inject` target via
+# the "Ctrl Shift g" keybind in ~/.config/zellij/config.kdl. All this
+# adapter does is configure the floating-pane fzf geometry and exec the
+# general-purpose ~/.local/bin/pick-gitmoji (which fetches & caches the
+# gitmoji.dev catalog under $XDG_CACHE_HOME/pick-gitmoji/); its stdout
+# (the chosen emoji / :code:) is what zellij-modal captures and injects
+# into the pane you came from.
+#
+# Twin of pick-glyph-zellij — identical shape, only the picker binary
+# and PICK_GITMOJI_* env prefix differ.
+#
+# Env-var overrides:
+#   PICK_GITMOJI_BIN     Absolute path to pick-gitmoji
+#                        (default: $HOME/.local/bin/pick-gitmoji)
+#   PICK_GITMOJI_HEIGHT  fzf height inside the pane. Default -4: zellij-
+#                        modal prints a 3-row title block, so fzf fills
+#                        the pane height minus that block (plus the
+#                        bottom frame row).
+#   PICK_GITMOJI_MARGIN  fzf --margin (T,R,B,L). Default 0 on every side
+#                        (see pick-glyph-zellij for the rationale).
+#   PICK_GITMOJI_PADDING fzf --padding (T,R,B,L). Default 0,2,0,2.
+#
+# Any positional args are forwarded to pick-gitmoji, so a future binding
+# could call this with `--mode name` etc.
+
+set -euo pipefail
+
+PICK_GITMOJI_BIN="${PICK_GITMOJI_BIN:-$HOME/.local/bin/pick-gitmoji}"
+[[ -x "$PICK_GITMOJI_BIN" ]] || { echo "pick-gitmoji-zellij: missing or non-executable: $PICK_GITMOJI_BIN" >&2; exit 1; }
+
+export PICK_GITMOJI_HEIGHT="${PICK_GITMOJI_HEIGHT:--4}"
+export PICK_GITMOJI_MARGIN="${PICK_GITMOJI_MARGIN:-0,0,0,0}"
+export PICK_GITMOJI_PADDING="${PICK_GITMOJI_PADDING:-0,2,0,2}"
+
+# --no-border: the floating pane already draws its own frame; a second
+# fzf border would just shave columns off the usable width.
+exec "$PICK_GITMOJI_BIN" --no-border "$@"

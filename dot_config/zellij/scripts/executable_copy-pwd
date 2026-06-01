@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# copy-pwd — copy the focused zellij pane's working directory to the macOS
+#            clipboard, then show a notification (and play a short sound).
+#
+# Lives under ~/.config/zellij/scripts/ — it's a zellij-internal helper,
+# not a shell command. It is invoked *headlessly* by the zj-ctxkeys
+# ("context-keys") plugin via its `run` action, wired to the `Alt+w Y`
+# (and `Alt+w Ctrl+y`) leader chords in ~/.config/zellij/config.kdl.
+# Because the plugin runs the command through Zellij's host `run_command`
+# API, NO pane is spawned — so there's none of the visual flash a
+# `Run {}` keybind block produces.
+#
+# Why a PID argument instead of querying zellij:
+#   Commands launched by `run_command` do NOT reliably inherit the
+#   ZELLIJ / ZELLIJ_SESSION_NAME environment, so `zellij action
+#   list-panes` from here could fail or target the wrong session. The
+#   plugin instead passes the focused pane's ROOT PROCESS PID (its
+#   `{pid}` placeholder). We resolve that PID's current working directory
+#   straight from the kernel via `lsof`, which needs no zellij context.
+#   For a normal shell pane the root process IS the shell, so its cwd is
+#   exactly the pane's $PWD (and tracks every `cd`).
+#
+# Usage:  copy-pwd [--relative|--absolute] <pid>
+#
+#   --relative  (default) Copy a $HOME-relative path: when the cwd is under
+#               $HOME it's collapsed to `~/…` (or bare `~` at $HOME itself).
+#               Outside $HOME it's identical to --absolute.
+#   --absolute  Copy the full, literal absolute path.
+#
+# Env overrides:
+#   COPY_PWD_SOUND   Notification sound name (as shown in System Settings →
+#                    Sound, e.g. Frog/Glass/Tink, or `default`). Default: Frog.
+#                    Set empty to show the notification silently.
+#   COPY_PWD_TITLE   Notification title (default: "Path copied").
+
+set -euo pipefail
+
+LSOF="/usr/sbin/lsof"
+PBCOPY="/usr/bin/pbcopy"
+NOTIFIER="/opt/homebrew/bin/terminal-notifier"
+
+COPY_PWD_SOUND="${COPY_PWD_SOUND-Frog}"
+COPY_PWD_TITLE="${COPY_PWD_TITLE:-Copy PWD}"
+
+# Parse an optional path-mode flag in any position; the lone positional is
+# the PID. Default mode is $HOME-relative.
+mode="relative"
+pid=""
+for arg in "$@"; do
+  case "$arg" in
+    -r|--relative) mode="relative" ;;
+    -a|--absolute) mode="absolute" ;;
+    *) pid="$arg" ;;
+  esac
+done
+
+[[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || {
+  echo "copy-pwd: expected a numeric PID argument, got '${pid}'" >&2
+  exit 1
+}
+
+# Pull the process's cwd from lsof's field output. `-Fn` emits one field
+# per line; the cwd's path is the `n`-prefixed line of the `cwd` fd row.
+cwd=$(
+  "$LSOF" -a -p "$pid" -d cwd -Fn 2>/dev/null \
+    | awk '/^n/ { print substr($0, 2); exit }'
+)
+
+[[ -n "$cwd" ]] || {
+  echo "copy-pwd: could not resolve cwd for pid $pid" >&2
+  exit 1
+}
+
+# Resolve the path in the requested form. In --relative mode, collapse a
+# $HOME prefix to `~` (exact $HOME → bare `~`); otherwise keep it absolute.
+path="$cwd"
+if [[ "$mode" == "relative" ]]; then
+  if [[ "$cwd" == "$HOME" ]]; then
+    path="~"
+  elif [[ "$cwd" == "$HOME"/* ]]; then
+    path="~${cwd#"$HOME"}"
+  fi
+fi
+
+# Clipboard gets the chosen path with no trailing newline (so it doesn't
+# auto-execute if pasted at a shell prompt).
+printf '%s' "$path" | "$PBCOPY"
+
+# Notification body shows exactly what landed on the clipboard.
+display="Path '$path' copied to clipboard"
+
+# terminal-notifier handles both the banner and the sound in a single fast
+# exec — no AppleScript compile (osascript) and no separate afplay process.
+# `-group` coalesces repeats so hammering the chord replaces the banner
+# instead of stacking. `-sound` is omitted when COPY_PWD_SOUND is empty for
+# a silent notification. Backgrounded + `|| true` so a notification hiccup
+# never delays or fails the clipboard copy (the actual payload).
+if [[ -x "$NOTIFIER" ]]; then
+  args=(-title "$COPY_PWD_TITLE" -message "$display" -group copy-pwd)
+  [[ -n "$COPY_PWD_SOUND" ]] && args+=(-sound "$COPY_PWD_SOUND")
+  "$NOTIFIER" "${args[@]}" >/dev/null 2>&1 || true &
+fi
+
+exit 0

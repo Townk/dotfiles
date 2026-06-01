@@ -99,13 +99,14 @@ vim.filetype.add({
   -- for Ruby DSL files chezmoi templates (Brewfile, Gemfile, …) that
   -- have no extension before `.tmpl` to pattern-match on.
   filename = {
-    ["Brewfile.tmpl"] = "ruby.gotmpl",
+    ["Brewfile.tmpl"]  = "ruby.gotmpl",
     -- Plain-text package manifests with `# comments` and bare lines.
     -- `conf` has no treesitter parser, so the inner content falls back
     -- to classical vim syntax — fine for these formats.
-    ["Gofile.tmpl"]   = "conf.gotmpl",
-    ["Npmfile.tmpl"]  = "conf.gotmpl",
-    ["Uvfile.tmpl"]   = "conf.gotmpl",
+    ["Cargofile.tmpl"] = "conf.gotmpl",
+    ["Gofile.tmpl"]    = "conf.gotmpl",
+    ["Npmfile.tmpl"]   = "conf.gotmpl",
+    ["Uvfile.tmpl"]    = "conf.gotmpl",
   },
   pattern = {
     [".*%.json%.tmpl"]  = { "json.gotmpl",     { priority = 10 } },
@@ -119,6 +120,7 @@ vim.filetype.add({
     [".*%.py%.tmpl"]    = { "python.gotmpl",   { priority = 10 } },
     [".*%.rb%.tmpl"]    = { "ruby.gotmpl",     { priority = 10 } },
     [".*%.md%.tmpl"]    = { "markdown.gotmpl", { priority = 10 } },
+    [".*%.kdl%.tmpl"]   = { "kdl.gotmpl",      { priority = 10 } },
     [".*%.tmpl"]        = "gotmpl",
   },
 })
@@ -134,6 +136,7 @@ vim.treesitter.language.register("gotmpl", {
   "python.gotmpl",
   "ruby.gotmpl",
   "markdown.gotmpl",
+  "kdl.gotmpl",
   -- `conf` has no treesitter parser; this register makes treesitter
   -- enable the gotmpl parser for the compound filetype so `{{...}}`
   -- directives still get highlighted. The literal regions fall back
