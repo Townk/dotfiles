@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""pick-gitmoji-measure-widths — print the actual cursor-advance width
+of each gitmoji emoji as reported by the controlling terminal.
+
+The script uses the DSR ("Device Status Report") sequence \033[6n,
+which makes the terminal echo back its cursor position as
+\033[<row>;<col>R. By querying once before and once after writing
+each emoji, we observe exactly how many cells the terminal moves
+the cursor — that's the number we have to pad against in the
+gitmoji picker, regardless of how many cells the glyph paints
+visually.
+
+Run this in a real interactive shell (not piped, not under tee).
+A typical session looks like:
+
+    $ pick-gitmoji-measure-widths
+    2c   '🎨'                 art (control)
+    1c   '⬇\u00fe\u000f'      arrow_down
+    1c   '⬆\u00fe\u000f'      arrow_up
+    1c   '♻\u00fe\u000f'      recycle
+    ...
+
+Width 1c next to a default-text-presentation+VS16 sequence means
+ghostty is ignoring VS16 for width purposes; the picker has to
+keep that :code: in its EMOJI_WIDTHS override map at width 1.
+Width 2c means VS16 was honored and the entry can come out of
+the override map (or stay at the default of 2). Width 4c next to
+:technologist: means the ZWJ ligature isn't engaging.
+"""
+
+import os
+import select
+import sys
+import termios
+import time
+import tty
+
+# Same emoji set the picker uses, in the order the user reported as
+# misaligned. The "control" entry at the bottom is a well-behaved
+# 2-cell emoji — if this comes back as anything other than 2, the
+# whole measurement is suspect (terminal echo broken, etc.).
+EMOJIS = [
+    ("\u2B07\uFE0F",          "arrow_down"),
+    ("\u2B06\uFE0F",          "arrow_up"),
+    ("\u267B\uFE0F",          "recycle"),
+    ("\u270F\uFE0F",          "pencil2"),
+    ("\U0001F5C3\uFE0F",      "card_file_box"),
+    ("\U0001F3D7\uFE0F",      "building_construction"),
+    ("\u2697\uFE0F",          "alembic"),
+    ("\U0001F3F7\uFE0F",      "label"),
+    ("\U0001F5D1\uFE0F",      "wastebasket"),
+    ("\u26B0\uFE0F",          "coffin"),
+    ("\u2708\uFE0F",          "airplane"),
+    ("\U0001F9D1\u200D\U0001F4BB", "technologist"),
+    ("\U0001F3A8",            "art (control: should be 2c)"),
+]
+
+
+def get_cursor_col(fd, timeout=0.5):
+    """Issue \033[6n and parse the column out of the reply."""
+    os.write(fd, b"\x1b[6n")
+    buf = b""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not select.select([fd], [], [], 0.05)[0]:
+            continue
+        ch = os.read(fd, 1)
+        buf += ch
+        if ch == b"R":
+            break
+    s = buf.decode("latin-1", "replace")
+    if not (s.startswith("\x1b[") and s.endswith("R")):
+        raise RuntimeError(f"unexpected DSR reply: {s!r}")
+    parts = s[2:-1].split(";")
+    return int(parts[1])
+
+
+def main():
+    fd = os.open("/dev/tty", os.O_RDWR)
+    old_attr = termios.tcgetattr(fd)
+    tty.setraw(fd)
+    try:
+        # Park us at column 1 with a clean line so the first measurement
+        # has nothing leftover to its right.
+        os.write(fd, b"\r\x1b[K")
+        results = []
+        for emoji, label in EMOJIS:
+            os.write(fd, b"\r\x1b[K")
+            c1 = get_cursor_col(fd)
+            os.write(fd, emoji.encode("utf-8"))
+            c2 = get_cursor_col(fd)
+            results.append((c2 - c1, emoji, label))
+        os.write(fd, b"\r\x1b[K")
+    finally:
+        termios.tcsetattr(fd, termios.TCSANOW, old_attr)
+        os.close(fd)
+
+    # Print after restoring the tty so output goes through normal stdio.
+    sys.stdout.write("\n")
+    for width, emoji, label in results:
+        sys.stdout.write(f"  {width}c   '{emoji}'   {label}\n")
+
+
+if __name__ == "__main__":
+    main()

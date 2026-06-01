@@ -1,0 +1,24 @@
+{
+  "_comment": "Sidecar metadata for the local custom SVG icons in this directory. Keyed by icon name = the SVG filename without its .svg extension (cursor-ai.svg -> 'cursor-ai' -> fa-cursor-ai in glyphs.json). Every field is optional; anything omitted falls back to a value derived from the file name. Recognised fields: 'label' (human title shown in the picker), 'terms' (extra fuzzy-search keywords), 'aliases' (alternate names), 'comment' (free-form note, carried into glyphs.json), and 'code' (hex codepoint to PIN this icon to, e.g. \"10fb00\", so it stays put across rebuilds and is safe to hard-code in a TUI). Without 'code' the icon is auto-assigned from CUSTOM_START (0x10fb00+) in sorted-filename order, which can shift when files are added/renamed. Pin codepoints in the custom block (>= 0x10fb00, <= 0x10fffd); avoid the relocated FA range (0x100000..0x10f8ff). Keys starting with _ or $ are ignored, so this header is safe. An 'icons' wrapper object is also accepted if you prefer.",
+  "cursor-ai": {
+    "code": "10fb00",
+    "label": "Cursor",
+    "terms": ["cursor", "ai", "cube", "editor", "ide", "anysphere", "code", "agent", "cursor-agent"],
+    "aliases": ["cursor-editor", "anysphere"],
+    "comment": "Cursor (the AI code editor) brand cube logo"
+  },
+  "gm": {
+    "code": "10fb01",
+    "label": "General Motors",
+    "terms": ["gm", "general", "motors", "car", "vehicle", "automaker", "automotive"],
+    "aliases": ["general-motors"],
+    "comment": "General Motors corporate symbol"
+  },
+  "pi": {
+    "code": "10fb02",
+    "label": "Pi Coding Agent",
+    "terms": ["pi", "ai", "agent", "harness"],
+    "aliases": ["pi-coding-agent"],
+    "comment": "Pi coding agent logo"
+  }
+}

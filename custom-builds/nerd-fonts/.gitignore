@@ -1,0 +1,4 @@
+# Everything the build pipeline creates at runtime (shallow clone of
+# ryanoasis/nerd-fonts, work tree, output TTFs, fonttools venv). All
+# of this can be recreated by re-running ./build-updated-font.sh.
+build/

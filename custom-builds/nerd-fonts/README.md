@@ -1,0 +1,281 @@
+# custom-builds / nerd-fonts
+
+This directory builds a personal copy of the **Symbols Nerd Font** family
+(Mono + Propo variants) that bundles the latest Font Awesome icons on top
+of the latest Nerd Fonts symbol collections.
+
+It exists because the upstream Homebrew cask
+`font-symbols-only-nerd-font` is pinned to the slow-moving Nerd Fonts
+release cadence (currently FA 6.5.1 inside Nerd Fonts v3.4.0), so it lags
+the FA cask (`font-fontawesome`) by entire major versions.
+
+## Layout
+
+```
+custom-builds/nerd-fonts/
+├── README.md                ← you are here
+├── build-updated-font.sh    ← self-contained builder
+├── recalibrate-fa.sh        ← fast re-bake of the relocated/custom upscale
+├── custom-icons/            ← local *.svg icons baked into the font
+│   ├── metadata.json        ←   optional labels/terms/aliases/comments
+│   ├── cursor-ai.svg        ←   -> fa-cursor-ai
+│   └── gm.svg               ←   -> fa-gm
+└── build/                   ← created at runtime, gitignored
+    ├── nerd-fonts/          ← shallow clone of ryanoasis/nerd-fonts
+    ├── work/                ← merged FA OTF, build logs
+    ├── output/              ← the produced TTFs
+    └── .venv/               ← fonttools venv for verification
+```
+
+The whole `custom-builds/` tree is listed in the chezmoi-root
+`.chezmoiignore`, so **chezmoi never renders any of it into `$HOME`**.
+It lives in the source repo purely so git tracks the script and this
+README; everything under `build/` is .gitignored.
+
+## How it gets invoked
+
+Two paths, both end up running the same `build-updated-font.sh`:
+
+1. **Automatically, change-driven** — via
+   `~/.local/share/chezmoi/run_onchange_after_symbols-nerd-font.sh.tmpl`.
+   That template bakes two fingerprints into the rendered script:
+   - the installed version of the `font-fontawesome` cask
+     (`brew list --versions --cask font-fontawesome`)
+   - the SHA256 of `build-updated-font.sh`
+
+   chezmoi hashes the rendered script and re-fires it whenever either
+   fingerprint changes. So a `brew upgrade` that bumps FA, or an edit
+   to the builder itself, will offer a fresh rebuild on the next
+   `chezmoi apply`. The hook is a no-op on non-macOS or non-interactive
+   contexts; in interactive contexts it prompts before launching the
+   build. Declining is sticky — chezmoi commits the new hash so the
+   prompt doesn't keep firing until the next genuine change.
+
+2. **Manually, any time you want** — just invoke the script directly:
+
+   ```bash
+   ~/.local/share/chezmoi/custom-builds/nerd-fonts/build-updated-font.sh --install
+   ```
+
+   The script auto-detects the FA OTFs from the `font-fontawesome`
+   cask's Caskroom, so re-running picks up whatever version brew last
+   synced. It also fast-forwards the shallow `build/nerd-fonts/`
+   clone to the latest `master`.
+
+   To force the chezmoi hook to re-fire on the next apply (e.g. after
+   wiping `~/Library/Fonts/Symbols*.ttf` and wanting the prompt back):
+
+   ```bash
+   chezmoi state delete-bucket --bucket=scriptState
+   ```
+
+## What it produces
+
+```
+build/output/SymbolsNerdFont-Regular.ttf      (variable-width / "Propo")
+build/output/SymbolsNerdFontMono-Regular.ttf  (monospaced)
+~/.local/share/fonts/nerd-font/glyphs.json    (glyph index, for pickers)
+```
+
+With `--install`, the two `.ttf` files are copied into `~/Library/Fonts/`
+(replacing whatever the upstream cask put there, if anything). The
+`glyphs.json` file always lands in `~/.local/share/fonts/nerd-font/`
+regardless of `--install`. Override with `JSON_OUT_DIR=/some/where`,
+or disable with `JSON_OUT_DIR=""`.
+
+### `glyphs.json`
+
+A single index of every glyph in the built font, with searchable
+natural-language metadata. Top-level shape:
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-28T...",
+  "font_family": "Symbols Nerd Font",
+  "sources": { "nerd_fonts_commit": "...", "font_awesome_version": "7.2.0", ... },
+  "stats":   { "total_named_entries": 13115, "by_source": { ... } },
+  "glyphs":  { "<name>": { "code": "f015", "char": "", ... } }
+}
+```
+
+Each entry always has `code`, `char`, and `source`; optional fields
+depend on the source:
+
+| key prefix | source             | extra fields                                  |
+|------------|--------------------|-----------------------------------------------|
+| `nf-*`     | curated NF glyph   | `collection`, sometimes FA tags, `unicode_name` |
+| `fa-*`     | FA 7 native add-in | `collection`, `label`, `styles`, `terms`, `aliases`, sometimes `relocated_from` |
+| `fa-*`     | local custom SVG   | `source: custom-svg`, `collection: custom`, `label`, `terms` |
+| `u-*`      | unicode fallback   | `unicode_name`                                |
+
+The `fa-*` prefix is deliberate so FA 7 native additions never collide
+with the curated `nf-fa-*` set even when both reference the same
+codepoint. Local custom SVGs (see below) reuse the same `fa-` prefix —
+their names are chosen by file name so they don't collide with real FA
+icons (e.g. `fa-cursor-ai`, `fa-gm`).
+
+## Custom SVG icons
+
+Drop any `.svg` into `custom-icons/` and the build bakes it into the font
+as a Plane-16 PUA glyph, keyed `fa-<filename>` in `glyphs.json`:
+
+```
+custom-icons/cursor-ai.svg   ->  fa-cursor-ai
+custom-icons/gm.svg          ->  fa-gm
+```
+
+Each outline is normalised to the same box the Font Awesome icons occupy
+(em-tall, sitting on the FA descent), preserving aspect ratio and centred,
+then run through the patcher's `--custom` path. Because they land in
+Plane-16 PUA — outside every range Ghostty constrains — they pick up the
+same `FA_RELOCATED_SCALE` upscale / `FA_RELOCATED_DY` lift as the relocated
+FA icons (step 7b), so they line up with their neighbours. They are tagged
+`"source": "custom-svg"`, `"collection": "custom"`.
+
+### `metadata.json` (optional)
+
+Drop a `custom-icons/metadata.json` next to the SVGs to give each icon proper
+search metadata instead of the auto-derived filename guess (this is the
+custom-icon analogue of FA's `icons.json`). It is keyed by icon name (the SVG
+filename minus `.svg`), and every field is optional:
+
+```json
+{
+  "_comment": "this header key is ignored (starts with _)",
+  "cursor-ai": {
+    "label": "Cursor",
+    "terms": ["cursor", "ai", "cube", "editor", "anysphere"],
+    "aliases": ["cursor-editor"],
+    "comment": "Cursor brand cube logo — 2D light variant."
+  }
+}
+```
+
+| field     | effect                                                          |
+|-----------|-----------------------------------------------------------------|
+| `label`   | human title shown in the picker (falls back to title-cased name)|
+| `terms`   | extra fuzzy-search keywords (falls back to name split on `-`)    |
+| `aliases` | alternate names, searchable                                     |
+| `comment` | free-form note, carried verbatim into `glyphs.json`             |
+| `code`    | hex codepoint to **pin** this icon to (e.g. `"10fb00"`)          |
+
+Keys beginning with `_` or `$` are ignored (handy for a file header), and an
+`{"icons": { … }}` wrapper is accepted if you prefer. Icons with no entry —
+or SVGs added without touching this file — still build fine on the fallback
+defaults.
+
+## Codepoint stability (read before hard-coding in a TUI)
+
+The stable identifier is always the `glyphs.json` **name** (`fa-house`,
+`fa-cursor-ai`); resolve name → codepoint at build time if you can. If you must
+hard-code a raw codepoint:
+
+- **Native `fa-*`** (no `relocated_from`): FA's official PUA codepoint. Stable
+  unless FA itself reassigns it, or a nerd-fonts update newly claims that
+  codepoint for a curated glyph (which would push it into the relocated set).
+- **Relocated `fa-*`** (`U+100000`+, has `relocated_from`): **stable.** The
+  slot is `0x100000 + native_codepoint` — a pure function of the icon's own FA
+  codepoint, independent of which *other* icons collide. So `fa-house` (`f015`)
+  is always `U+10F015`. (Before 2026-06 these used a running counter and *did*
+  shift on FA/NF updates — that's fixed.)
+- **Custom** (`U+10fb00`+): **stable if pinned** with a `code` in
+  `metadata.json`. Unpinned icons are auto-assigned in sorted-filename order,
+  so adding/renaming a file can shift the unpinned ones. Pin anything a TUI
+  depends on.
+
+Auto-assigned custom codepoints start at `CUSTOM_START` (default `0x10fb00`),
+which sits above the relocation landing zone (relocated FA icons use
+`0x100000 + native`, i.e. up to ~`0x10f8ff`), so the two blocks never overlap.
+Pinned `code` values share the same custom block. Override the source dir with
+`CUSTOM_ICON_DIR=/path` or skip the step entirely with `CUSTOM_ICON_DIR=""`.
+
+Caveats:
+- A custom icon lives only in this font (like every PUA nerd icon); it is
+  not portable as a raw codepoint — fine for a picker that copies the glyph.
+- Multi-colour SVGs are flattened to a single monochrome outline (font
+  glyphs have no colour). The fill / holes are derived from the path
+  geometry, so a clean single-path logo works best.
+- Codepoint stability: pin a `code` in `metadata.json` for anything you hard-
+  code. Unpinned icons are auto-assigned in sorted-filename order, so adding
+  or renaming a file can shift the unpinned ones (their `fa-<name>` keys stay
+  stable regardless). See "Codepoint stability" above.
+
+**All free FA icons are included.** Roughly 1000 of FA Free's 1970 icons
+have a native codepoint already owned by another Nerd Fonts collection;
+the patcher's careful mode would drop them. The build relocates those to
+a reserved **Plane-16 PUA** block (U+100000+) so they survive — such
+entries carry a `relocated_from` field pointing at FA's original
+codepoint. A relocated icon renders only via this font (like any PUA
+nerd icon), which is exactly what a glyph picker needs.
+
+**FA glyph sizing.** There's a subtlety with the relocated icons. Ghostty
+sizes Nerd-Font icons *by codepoint*: any glyph in a range it recognises
+(from `nerd_font_attributes.zig`) gets upscaled to `icon_height_single` at
+render time. Native-codepoint FA glyphs (and the curated `nf-fa-*`) live in
+those ranges, so they all line up. The **relocated** FA icons live in
+Plane-16 PUA, outside every recognised range, so Ghostty never upscales them
+— left alone they render visibly smaller than their curated neighbours.
+
+Ghostty also vertically *centers* the icons it constrains (`center1`), but
+leaves the relocated PUA glyphs on the baseline, so they also sit lower. Step
+7b therefore bakes, into **the relocated glyphs and the custom SVG icons**,
+both a uniform upscale (`FA_RELOCATED_SCALE`, default `1.30`) and an upward
+shift (`FA_RELOCATED_DY`, default `0.22`em) about each glyph's centre, advance
+untouched; native FA glyphs stay at `FA_SCALE=1.0`. Both relocated values are
+perceptual (they depend on your primary font and line-height), so tune them
+without a full rebuild:
+
+```sh
+./recalibrate-fa.sh 1.30 0.22 --install   # scale, lift, install, restart term
+```
+
+Once it looks right, set those numbers as the `FA_RELOCATED_SCALE` /
+`FA_RELOCATED_DY` defaults in `build-updated-font.sh` so a clean rebuild
+reproduces them.
+
+Wired for fzf via the example printed at the end of every build (and
+shown again at the bottom of this README).
+
+## Caveats worth remembering
+
+1. `font-symbols-only-nerd-font` (the upstream Symbols cask) must **not**
+   be in the chezmoi Brewfile. If it stays, `brew bundle` / `brew upgrade`
+   will silently overwrite this script's output with the cask's stale
+   bytes the next time the cask version moves.
+2. `font-fontawesome` (the upstream FA cask) **should stay** — it's the
+   default icon source for this builder.
+3. FontForge is installed on demand via Homebrew during the build and is
+   intentionally **not** in the chezmoi Brewfile (so it gets cleaned up
+   on the next `system-package brew sync`).
+4. macOS-only. The build pipeline assumes Homebrew. Pull requests
+   welcome if you'd like to teach it about Linux/apt.
+
+See the comment block at the top of `build-updated-font.sh` for the
+full set of overrides (`WORK_ROOT`, `FA_SRC_DIR`, `NERDFONTS_REF`,
+`ASSUME_YES`, `INSTALL`, `JSON_OUT_DIR`).
+
+## Picker starter
+
+A no-frills fzf wrapper that searches by glyph name, label, FA terms,
+and aliases, and copies the chosen glyph to the clipboard:
+
+```bash
+jq -r '
+  .glyphs | to_entries[]
+  | [ .key,
+      .value.char,
+      (.value.label // .value.unicode_name // ""),
+      ((.value.terms   // []) | join(" ")),
+      ((.value.aliases // []) | join(" "))
+    ] | @tsv
+' ~/.local/share/fonts/nerd-font/glyphs.json \
+| fzf --delimiter=$'\t' --with-nth=1,2,3 \
+| awk -F'\t' '{print $2}' \
+| tee /dev/tty | pbcopy   # Linux: xclip -selection clipboard
+```
+
+`--with-nth=1,2,3` shows the name, the glyph itself, and the
+label/unicode name, while fzf still searches across all columns
+(including the FA `terms` and `aliases`). Drop the `tee /dev/tty`
+if you want the glyph copied silently.

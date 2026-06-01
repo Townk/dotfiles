@@ -1,0 +1,149 @@
+{{- /*
+
+  Symbols Nerd Font — auto-rebuild hook.
+
+  Strategy:
+    - run_onchange_after_*: chezmoi hashes this template's rendered
+      output and re-runs the script whenever the hash changes.
+    - We bake three fingerprints into the rendered script as comments:
+        1. The installed version of the Homebrew cask `font-fontawesome`.
+           When `brew upgrade` bumps that cask, the next `chezmoi apply`
+           sees a different hash and re-fires the build prompt.
+        2. The SHA256 of build-updated-font.sh itself. Editing the
+           builder also triggers a rebuild on next apply.
+        3. A digest of the custom-icons/ directory (every *.svg plus
+           metadata.json). Adding, removing, or editing a custom icon —
+           or just retagging it in metadata.json — re-fires the prompt
+           too, so the baked-in font + glyphs.json stay in sync.
+
+  On Linux (no brew), we render an empty version string and the
+  whole script short-circuits to `exit 0` early anyway.
+*/ -}}
+{{- $faVersion := "" -}}
+{{- $customIcons := "" -}}
+{{- if eq .chezmoi.os "darwin" -}}
+  {{- $faVersion = output "sh" "-c" "brew list --versions --cask font-fontawesome 2>/dev/null || true" | trim -}}
+  {{- $customIcons = output "sh" "-c" (printf "find %q -type f \\( -name '*.svg' -o -name '*.json' \\) 2>/dev/null | LC_ALL=C sort | while read -r f; do shasum -a 256 \"$f\"; done | shasum -a 256 | cut -c1-16" (joinPath .chezmoi.sourceDir "custom-builds/nerd-fonts/custom-icons")) | trim -}}
+{{- end -}}
+#!/bin/bash
+# Symbols Nerd Font (custom build) — change-driven rebuild hook.
+#
+# Re-runs automatically when any of the fingerprints below changes:
+#   font-fontawesome cask : {{ if $faVersion }}{{ $faVersion }}{{ else }}(not installed / not macOS){{ end }}
+#   builder script SHA256 : {{ include "custom-builds/nerd-fonts/build-updated-font.sh" | sha256sum }}
+#   custom-icons digest   : {{ if $customIcons }}{{ $customIcons }}{{ else }}(none / not macOS){{ end }}
+#
+# The actual build pipeline lives at
+#   {{ .chezmoi.sourceDir }}/custom-builds/nerd-fonts/build-updated-font.sh
+# and the directory is `.chezmoiignore`'d so it's never rendered into
+# $HOME — see custom-builds/nerd-fonts/README.md for the full design.
+#
+# To force a rebuild without changing anything else, you can either:
+#   - just invoke the builder directly:
+#       ~/.local/share/chezmoi/custom-builds/nerd-fonts/build-updated-font.sh --install
+#   - or wipe chezmoi's recorded hash so this hook re-fires next apply:
+#       chezmoi state delete-bucket --bucket=scriptState
+
+set -eu
+
+{{- if ne .chezmoi.os "darwin" }}
+# Builder relies on Homebrew + the `font-fontawesome` cask. macOS-only
+# for now. Exit cleanly so chezmoi apply succeeds on Linux/WSL.
+exit 0
+{{- end }}
+
+SCRIPT="{{ .chezmoi.sourceDir }}/custom-builds/nerd-fonts/build-updated-font.sh"
+FA_VERSION="{{ $faVersion }}"
+
+if [ ! -x "$SCRIPT" ]; then
+  echo "[symbols-nerd-font] builder missing at $SCRIPT — skipping." >&2
+  exit 0
+fi
+
+# Detect a usable controlling terminal.
+#
+# chezmoi runs run_* scripts WITHOUT wiring your terminal to their stdin/stdout
+# (fd 0 and 1 are not ttys under `chezmoi apply`). So `test -t 0` / `test -t 1`
+# always report "non-interactive" here, which made this hook silently take the
+# skip branch on every apply — firing the trigger, committing the new hash, and
+# never reaching the prompt below. Probe the controlling terminal (/dev/tty)
+# instead: it is openable whenever you launch `chezmoi apply` from a real
+# terminal, even though fd 0/1 are redirected. Genuinely headless contexts
+# (CI, cron, ssh batch) have no controlling terminal, so the open fails.
+HAVE_TTY=0
+if { : </dev/tty; } 2>/dev/null; then HAVE_TTY=1; fi
+
+# Building takes ~2 minutes and may need `brew install fontforge`; never
+# surprise CI / ssh-batch / cron.
+if [ "$HAVE_TTY" -ne 1 ] || [ -n "${CI:-}" ] || [ -n "${CHEZMOI_NONINTERACTIVE:-}" ]; then
+  cat <<EOF >&2
+[symbols-nerd-font] non-interactive chezmoi run; skipping build.
+[symbols-nerd-font] Re-run later interactively with:
+                    $SCRIPT --install
+EOF
+  # IMPORTANT: we still want chezmoi to remember the hash so the prompt
+  # doesn't keep firing on every subsequent non-interactive apply.
+  # Exiting 0 here causes chezmoi to commit the new hash to its state.
+  exit 0
+fi
+
+if [ -z "$FA_VERSION" ]; then
+  fa_caption="(font-fontawesome cask not installed)"
+else
+  fa_caption="$FA_VERSION"
+fi
+
+# Route the banner + prompt to the controlling terminal directly: chezmoi may
+# capture this script's stdout, but /dev/tty is the terminal we just probed.
+cat >/dev/tty <<EOF
+
+──────────────────────────────────────────────────────────────────────
+  Symbols Nerd Font — custom builder
+
+  A trigger fired: the Font Awesome cask was upgraded, the builder
+  script changed, or a custom icon (custom-icons/*.svg or
+  metadata.json) was added/edited. Rebuilding will produce a fresh
+  Symbols Nerd Font with whatever the cask currently has installed.
+
+  Source feeds:
+    • ryanoasis/nerd-fonts master      (shallow clone, fast-forwarded)
+    • font-fontawesome cask            $fa_caption
+    • custom-icons/                    (local *.svg + metadata.json)
+  Output:
+    • ~/Library/Fonts/SymbolsNerdFont*-Regular.ttf
+
+  Cost: ~2 minutes total. Installs \`fontforge\` from Homebrew on
+  demand (not pinned in your Brewfile, so it gets cleaned up on the
+  next \`system-package brew sync\`).
+──────────────────────────────────────────────────────────────────────
+EOF
+
+printf '[symbols-nerd-font] Run the build now? [y/N] ' >/dev/tty
+read -r ans </dev/tty || ans=""
+
+case "$ans" in
+  y|Y|yes|YES)
+    echo "[symbols-nerd-font] launching builder..."
+    # --yes auto-confirms internal prompts (clone, brew install, venv).
+    # --install copies the resulting TTFs into ~/Library/Fonts/.
+    # A builder failure must NOT abort chezmoi apply.
+    if "$SCRIPT" --yes --install; then
+      echo "[symbols-nerd-font] done."
+    else
+      rc=$?
+      echo "[symbols-nerd-font] builder exited $rc; not failing chezmoi apply." >&2
+      echo "[symbols-nerd-font] inspect the log at:" >&2
+      echo "  {{ .chezmoi.sourceDir }}/custom-builds/nerd-fonts/build/work/build.log" >&2
+      exit 0
+    fi
+    ;;
+  *)
+    echo "[symbols-nerd-font] skipped. Re-run later with:"
+    echo "  $SCRIPT --install"
+    # Exiting 0 commits the new hash to chezmoi state, so we won't
+    # re-prompt on the next apply for the same fingerprints. Decline
+    # is sticky until either fingerprint changes again.
+    ;;
+esac
+
+# vim:ft=sh
