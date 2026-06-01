@@ -21,6 +21,31 @@ pkg_warn()  { printf '%s=>%s %s\n' "$PKG_C_YEL" "$PKG_C_RES" "$*" >&2; }
 pkg_error() { printf '%serror:%s %s\n' "$PKG_C_RED" "$PKG_C_RES" "$*" >&2; }
 pkg_die()   { pkg_error "$*"; exit 1; }
 
+# pkg_is_help <arg>
+# Return 0 iff <arg> is one of -h, --help, help. Used by every dispatch
+# layer to short-circuit help requests BEFORE any side-effecting work
+# (a stray --help must never trigger a real sync or service restart).
+pkg_is_help() {
+  case "${1:-}" in
+    -h|--help|help) return 0 ;;
+    *)              return 1 ;;
+  esac
+}
+
+# pkg_args_contain_help <arg>...
+# Return 0 iff any of the supplied args looks like a help request. Used at
+# positional-argument dispatch points (e.g. `system-service info --help`)
+# where the help token isn't necessarily the first remaining arg.
+pkg_args_contain_help() {
+  local a=""
+  for a in "$@"; do
+    case "$a" in
+      -h|--help) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # pkg_manifest_read <file>
 # Print one tool per line: strips #-comments (full-line and inline trailing),
 # trims leading/trailing whitespace, skips blank lines.
@@ -38,6 +63,35 @@ pkg_manifest_read() {
 # Print sorted lines that appear in file_a but not in file_b.
 pkg_diff_only_in() {
   comm -23 <(sort -u "$1") <(sort -u "$2")
+}
+
+# pkg_changed_versions <before_file> <after_file>
+# Both files are "name\tversion" TSV (one row per package). Print one
+# package name per line where the version differs between before/after,
+# including packages that are new in <after_file>. Packages removed from
+# <after_file> are intentionally NOT emitted — uninstalled binaries don't
+# need a service restart (the orphan service is handled at sync time).
+pkg_changed_versions() {
+  local before="$1" after="$2"
+  awk -F'\t' '
+    NR==FNR { v[$1] = $2; next }
+    { if (!($1 in v) || v[$1] != $2) print $1 }
+  ' "$before" "$after"
+}
+
+# pkg_restart_services_for <pkg>...
+# Hook called by each system-package-<eco> worker after a sync to restart
+# any system service (launchd or brew) whose backing package was just
+# upgraded. Delegates the matching/status logic to `system-service
+# restart-for`, which knows how to map a package name to its service(s)
+# and only restarts ones that are currently running.
+#
+# Soft-fails: if `system-service` isn't on PATH (e.g. partial install on
+# a fresh machine) we silently skip — package sync should still succeed.
+pkg_restart_services_for() {
+  (( $# > 0 )) || return 0
+  command -v system-service >/dev/null 2>&1 || return 0
+  system-service restart-for "$@" || true
 }
 
 # pkg_table_print <header> [group_col]

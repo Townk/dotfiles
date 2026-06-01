@@ -1,0 +1,44 @@
+#compdef system-package-brew system-package-uv system-package-cargo system-package-go system-package-npm
+#
+# Shared completion for every system-package-<eco> worker. Each worker exposes
+# the same surface — list / sync — so a single file (multi-#compdef) covers
+# them all. If a worker grows a unique subcommand later, split it into its own
+# completion file rather than special-casing here.
+
+_system-package-eco() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a help_flag list_flags
+  help_flag=(
+    '(- *)'{-h,--help}'[show help and exit]'
+  )
+  list_flags=(
+    '(-u --update)'{-u,--update}'[annotate packages with available updates]'
+    # brew uses -a/--all to surface transient deps; the other workers accept
+    # the flag as a no-op so the unified `system-package list -a` still works.
+    '(-a --all)'{-a,--all}'[include transient deps (brew only; no-op elsewhere)]'
+  )
+
+  _arguments -C \
+    $help_flag \
+    '1: :->sub' \
+    '*:: :->subarg'
+
+  case "$state" in
+    sub)
+      _values 'subcommand' \
+        'list[show installed packages]' \
+        'sync[reconcile installed packages with manifest]' \
+        'help[show help]'
+      ;;
+    subarg)
+      case "$words[1]" in
+        list) _arguments $help_flag $list_flags ;;
+        sync) _arguments $help_flag ;;
+      esac
+      ;;
+  esac
+}
+
+_system-package-eco "$@"

@@ -31,6 +31,14 @@ go_list_installed() {
   go_installed_pairs | awk -F'\t' '{print $1}'
 }
 
+# go_snapshot_versions — TSV "binary_name\tversion" rows. Keys on the
+# binary's basename (not the module path) because service cmd[0] resolves
+# to a binary on PATH, so binary-name is what `system-service restart-for`
+# will look up.
+go_snapshot_versions() {
+  go_installed_triples | awk -F'\t' '{print $2 "\t" $3}'
+}
+
 # go_installed_triples
 # Output one "<mod_path>\t<binary_name>\t<mod_version>" row per installed binary.
 # mod_path is the MODULE path (from the "mod" line), suitable for go list -m -versions.
@@ -84,9 +92,12 @@ do_list() {
 do_sync() {
   pkg_info "Syncing go binaries..."
 
-  local declared installed pairs
+  local declared installed pairs before_snap after_snap
   declared=$(mktemp); installed=$(mktemp); pairs=$(mktemp)
-  trap "rm -f '$declared' '$installed' '$pairs'" EXIT
+  before_snap=$(mktemp); after_snap=$(mktemp)
+  trap "rm -f '$declared' '$installed' '$pairs' '$before_snap' '$after_snap'" EXIT
+
+  go_snapshot_versions > "$before_snap"
 
   pkg_manifest_read "$GOFILE" > "$declared"
   go_installed_pairs > "$pairs"
@@ -113,10 +124,81 @@ do_sync() {
     [[ -z "$pkg" ]] && continue
     go install "$pkg@latest" || pkg_warn "failed to upgrade $pkg"
   done < "$declared"
+
+  # Restart services whose backing binary changed version. Keyed on binary
+  # basename (matches what `system-service restart-for` resolves cmd[0] to).
+  go_snapshot_versions > "$after_snap"
+  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
 }
 
-case "${1:-}" in
-  list) shift; do_list "$@" ;;
-  sync) do_sync ;;
-  *)    pkg_die "usage: system-package-go {list [-u|--update]|sync}" ;;
-esac
+usage() {
+  cat <<EOF
+Usage:
+  system-package-go list [-u|--update]
+  system-package-go sync
+  system-package-go -h | --help | help
+
+Syncs \`go install\`-managed binaries against ~/.config/packages/Gofile.
+
+Manifest entries are full module paths (e.g. \`github.com/x/y/cmd/foo\`);
+binaries land in \$GOBIN (\`go env GOPATH\`/bin by default).
+
+list flags:
+  -u, --update   annotate packages with available updates (queries the module proxy)
+  -a, --all      no-op (go has no transient-dep concept here)
+
+After sync, services whose backing binary changed version and are currently
+running are restarted. Matching is by binary basename, since that is what
+service cmd[0] resolves to on PATH.
+EOF
+}
+
+usage_list() {
+  cat <<EOF
+Usage:
+  system-package-go list [-u|--update]
+
+Emits TSV "<binary_name>\t<version>" rows for every \`go install\`-installed
+binary in \$GOBIN.
+
+Flags:
+  -u, --update   annotate each row with the latest module version
+                 (queried via \`go list -m -versions <mod>\`)
+  -a, --all      no-op (go has no transient-dep concept)
+EOF
+}
+
+usage_sync() {
+  cat <<EOF
+Usage:
+  system-package-go sync
+
+Reconciles ~/.config/packages/Gofile against the installed binaries in
+\$GOBIN. Every declared module is re-installed at \`@latest\`; any binary
+in \$GOBIN whose module path no longer appears in the manifest is removed.
+
+After sync, services whose backing binary changed version and are
+currently running are restarted.
+EOF
+}
+
+main() {
+  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+    usage; exit 0
+  fi
+  local cmd="$1"; shift
+  case "$cmd" in
+    list)
+      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      do_list "$@"
+      ;;
+    sync)
+      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      do_sync
+      ;;
+    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+  esac
+}
+
+main "$@"

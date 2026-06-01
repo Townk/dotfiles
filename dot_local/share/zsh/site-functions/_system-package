@@ -1,0 +1,81 @@
+#compdef system-package
+#
+# Completion for system-package, a 3-level dispatcher:
+#   system-package <subcommand>                    list|sync (every ecosystem)
+#   system-package <ecosystem>                     defer to worker help
+#   system-package <ecosystem> <subcommand> ...    list|sync (one ecosystem)
+#
+# The structure mirrors the dispatch tree in dot_local/bin/executable_system-package
+# so any new subcommand/ecosystem added there only needs the matching entry here.
+
+_system-package() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a help_flag list_flags
+  # `(- *)` makes -h/--help mutually exclusive with the rest of the command —
+  # zsh will stop offering anything else once one of them is present.
+  help_flag=(
+    '(- *)'{-h,--help}'[show help and exit]'
+  )
+  list_flags=(
+    '(-u --update)'{-u,--update}'[annotate packages with available updates]'
+    '(-a --all)'{-a,--all}'[include brew transient deps (no-op for other ecosystems)]'
+  )
+
+  _arguments -C \
+    $help_flag \
+    '1: :->level1' \
+    '*:: :->level2'
+
+  case "$state" in
+    level1)
+      # Both subcommands and ecosystems are valid here; _alternative lets the
+      # user filter by either group.
+      _alternative \
+        'subcommands:subcommand:((
+            list\:"list installed packages across every ecosystem"
+            sync\:"sync every ecosystem against its manifest"
+            help\:"show help"
+        ))' \
+        'ecosystems:ecosystem:((
+            brew\:"Homebrew formulas, casks, MAS apps"
+            uv\:"uv-managed Python tools"
+            npm\:"global npm packages"
+            go\:"go install binaries"
+            cargo\:"cargo install crates"
+        ))'
+      ;;
+    level2)
+      case "$words[1]" in
+        list|sync)
+          # `system-package list|sync ...` — only flags from here on.
+          _arguments $help_flag $list_flags
+          ;;
+        brew|uv|npm|go|cargo)
+          # `system-package <eco> ...` — descend one more level.
+          _arguments -C \
+            $help_flag \
+            '1: :->ecosub' \
+            '*:: :->ecosubarg'
+          case "$state" in
+            ecosub)
+              _values 'subcommand' \
+                'list[show installed packages]' \
+                'sync[reconcile installed packages with manifest]' \
+                'help[show help for this ecosystem]'
+              ;;
+            ecosubarg)
+              case "$words[1]" in
+                list) _arguments $help_flag $list_flags ;;
+                sync) _arguments $help_flag ;;
+              esac
+              ;;
+          esac
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_system-package "$@"

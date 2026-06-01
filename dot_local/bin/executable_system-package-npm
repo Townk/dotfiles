@@ -18,6 +18,16 @@ npm_list_installed() {
 :)NPM_RUNTIME}" || true
 }
 
+# npm_snapshot_versions — TSV "name\tversion" rows for global packages
+# (excluding the npm runtime trio). Used to detect which globals changed
+# across a sync so services tied to them get restarted.
+npm_snapshot_versions() {
+  npm ls -g --depth=0 --json 2>/dev/null \
+    | jq -r '(.dependencies // {}) | to_entries[]
+             | select(.key as $k | ["npm", "corepack", "node-gyp"] | index($k) | not)
+             | "\(.key)\t\(.value.version)"' 2>/dev/null || true
+}
+
 # npm_list_rows <outdated:true|false>
 # Output one "name\tversion[annotation]" TSV row per installed global package.
 npm_list_rows() {
@@ -68,9 +78,12 @@ do_list() {
 do_sync() {
   pkg_info "Syncing npm globals..."
 
-  local declared installed
+  local declared installed before_snap after_snap
   declared=$(mktemp); installed=$(mktemp)
-  trap "rm -f '$declared' '$installed'" EXIT
+  before_snap=$(mktemp); after_snap=$(mktemp)
+  trap "rm -f '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
+
+  npm_snapshot_versions > "$before_snap"
 
   pkg_manifest_read "$NPMFILE" > "$declared"
   npm_list_installed > "$installed"
@@ -86,10 +99,83 @@ do_sync() {
   done
 
   npm update -g || true
+
+  # Restart services whose backing global package changed version.
+  npm_snapshot_versions > "$after_snap"
+  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
 }
 
-case "${1:-}" in
-  list) shift; do_list "$@" ;;
-  sync) do_sync ;;
-  *)    pkg_die "usage: system-package-npm {list [-u|--update]|sync}" ;;
-esac
+usage() {
+  cat <<EOF
+Usage:
+  system-package-npm list [-u|--update]
+  system-package-npm sync
+  system-package-npm -h | --help | help
+
+Syncs globally-installed npm packages against ~/.config/packages/Npmfile.
+
+The npm runtime packages (npm, corepack, node-gyp) are always filtered out
+of both the list output and the install/uninstall diff.
+
+list flags:
+  -u, --update   annotate packages with available updates
+  -a, --all      no-op (npm has no transient-dep concept here)
+
+After sync, services whose backing global package changed version and are
+currently running are restarted.
+EOF
+}
+
+usage_list() {
+  cat <<EOF
+Usage:
+  system-package-npm list [-u|--update]
+
+Emits TSV "<name>\t<version>" rows for every globally-installed npm package
+(excluding the npm runtime trio: npm, corepack, node-gyp).
+
+Flags:
+  -u, --update   annotate each row with the latest available version
+                 (queried via \`npm outdated -g --json\`)
+  -a, --all      no-op (npm has no transient-dep concept)
+EOF
+}
+
+usage_sync() {
+  cat <<EOF
+Usage:
+  system-package-npm sync
+
+Reconciles ~/.config/packages/Npmfile against \`npm ls -g\`:
+
+  • Globals in the manifest but not installed → \`npm install -g\`
+  • Globals installed but not in the manifest → \`npm uninstall -g\`
+    (runtime packages are exempt from removal)
+  • Finally runs \`npm update -g\` to bump everything to the latest matching
+    semver range.
+
+After sync, services whose backing global package was just upgraded and
+are currently running are restarted.
+EOF
+}
+
+main() {
+  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+    usage; exit 0
+  fi
+  local cmd="$1"; shift
+  case "$cmd" in
+    list)
+      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      do_list "$@"
+      ;;
+    sync)
+      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      do_sync
+      ;;
+    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,201 @@
+#!/usr/bin/env zsh
+# system-package-cargo — sync `cargo install`-managed binaries against
+# ~/.config/packages/Cargofile. Lines are `<crate> [cargo-install-args...]`;
+# the first word is the canonical crate name (matched against
+# `cargo install --list`), the rest is passed straight to `cargo install`,
+# so flags like `--locked`, `--features=...`, or `--git=...` land verbatim.
+#
+# Cargo (and rust toolchain) is provided by mise so this worker has nothing
+# to do with brew. Binaries land in $CARGO_HOME/bin (~/.cargo/bin by default).
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-package-common.sh"
+
+CARGOFILE="$PKG_DIR/Cargofile"
+
+# cargo_installed_crates
+# Print one crate name per line. Parses the canonical `cargo install --list`
+# format:
+#
+#   <name> v<version>[ (<source>)]:
+#       <bin1>
+#       <bin2>
+#
+# Each crate header is at column 0 and ends with `:`. Indented lines are
+# binary names — ignored. The trailing source annotation (e.g. `(git+...)`,
+# `(/local/path)`) is also ignored; the leading word is always the crate name.
+cargo_installed_crates() {
+  cargo install --list 2>/dev/null \
+    | awk '/^[^[:space:]].*:$/ {print $1}'
+}
+
+# cargo_installed_versions
+# Print `name\tversion` for every installed crate. Strips the leading `v`
+# from the version (cargo prints `v6.5.0`, we want `6.5.0`) and the trailing
+# `:` that's glued to $2 when the crate has no source annotation (the line
+# is `name vX.Y.Z:` instead of `name vX.Y.Z (source):`).
+cargo_installed_versions() {
+  cargo install --list 2>/dev/null \
+    | awk '/^[^[:space:]].*:$/ {
+        name = $1
+        ver = $2
+        sub(/^v/, "", ver)
+        sub(/:$/, "", ver)
+        print name "\t" ver
+      }'
+}
+
+# cargo_list_rows <outdated:true|false>
+# Output one "name\tversion[annotation]" TSV row per installed crate.
+# Outdated check hits the crates.io v1 API; crates installed from git or
+# a local path won't be on crates.io and silently skip the annotation.
+cargo_list_rows() {
+  local outdated="${1:-false}"
+  cargo_installed_versions \
+    | while IFS=$'\t' read -r name ver; do
+        if [[ "$outdated" == true ]]; then
+          local latest=""
+          latest=$(curl -fsSL "https://crates.io/api/v1/crates/${name}" 2>/dev/null \
+                   | jq -r '.crate.max_stable_version // empty' 2>/dev/null || true)
+          if [[ -n "$latest" && "$latest" != "$ver" ]]; then
+            ver="${ver} ${PKG_C_YEL}(update available: ${latest})${PKG_C_RES}"
+          fi
+        fi
+        printf '%s\t%s\n' "$name" "$ver"
+      done | sort
+}
+
+do_list() {
+  local outdated=false
+  while (( $# > 0 )); do
+    case "$1" in
+      -u|--update) outdated=true; shift ;;
+      -a|--all)    shift ;;  # no-op: cargo has no transient-dep concept here
+      *) pkg_die "unknown flag for list: $1" ;;
+    esac
+  done
+  cargo_list_rows "$outdated"
+}
+
+do_sync() {
+  pkg_info "Syncing cargo crates..."
+
+  local declared_full declared installed before_snap after_snap
+  declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
+  before_snap=$(mktemp); after_snap=$(mktemp)
+  trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
+
+  cargo_installed_versions > "$before_snap"
+
+  pkg_manifest_read "$CARGOFILE" > "$declared_full"
+  awk '{print $1}' "$declared_full" > "$declared"
+  cargo_installed_crates > "$installed"
+
+  # Uninstall extras BEFORE installing missing — same swap-collision
+  # rationale as the uv/npm workers (two crates that ship a binary of the
+  # same name would otherwise refuse to overwrite each other).
+  pkg_diff_only_in "$installed" "$declared" | while IFS= read -r crate; do
+    [[ -n "$crate" ]] && cargo uninstall "$crate"
+  done
+
+  # Install missing
+  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r crate; do
+    [[ -z "$crate" ]] && continue
+    local line; line=$(awk -v c="$crate" '$1 == c {print; exit}' "$declared_full")
+    local -a args=( ${(z)line} )
+    cargo install "${args[@]}" || pkg_warn "failed to install $crate"
+  done
+
+  # Upgrade everything still declared. Re-running `cargo install` is the
+  # canonical upgrade path; cargo short-circuits with "already installed"
+  # when the version matches, so the cost is one fast registry check per
+  # crate. Crates carrying extra flags get reinstalled with `--force` so
+  # flag changes (e.g. flipped features) actually re-apply — `cargo install`
+  # without --force refuses to touch a crate it considers up-to-date.
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local -a args=( ${(z)line} )
+    if [[ "$line" == "${line%% *}" ]]; then
+      cargo install "${args[@]}" || pkg_warn "failed to upgrade ${args[1]}"
+    else
+      cargo install --force "${args[@]}" || pkg_warn "failed to upgrade ${args[1]}"
+    fi
+  done < "$declared_full"
+
+  # Restart services whose backing crate changed version.
+  cargo_installed_versions > "$after_snap"
+  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
+}
+
+usage() {
+  cat <<EOF
+Usage:
+  system-package-cargo list [-u|--update]
+  system-package-cargo sync
+  system-package-cargo -h | --help | help
+
+Syncs \`cargo install\`-managed binaries against ~/.config/packages/Cargofile.
+
+list flags:
+  -u, --update   annotate packages with available updates (queries crates.io)
+  -a, --all      no-op (cargo has no transient-dep concept here)
+
+After sync, any system service whose backing crate changed version and is
+currently running is restarted.
+EOF
+}
+
+usage_list() {
+  cat <<EOF
+Usage:
+  system-package-cargo list [-u|--update]
+
+Emits TSV "<name>\t<version>" rows for every \`cargo install\`-installed crate.
+
+Flags:
+  -u, --update   annotate each row with the latest stable version
+                 (queried from crates.io's v1 API; git/local crates skip)
+  -a, --all      no-op (cargo has no transient-dep concept)
+EOF
+}
+
+usage_sync() {
+  cat <<EOF
+Usage:
+  system-package-cargo sync
+
+Reconciles ~/.config/packages/Cargofile against \`cargo install --list\`:
+
+  • Lines are \`<crate> [cargo-install-args...]\`. The first word is the
+    canonical crate name; the rest is forwarded to \`cargo install\` (works
+    with \`--locked\`, \`--features=...\`, \`--git=...\`, etc.).
+  • Crates with extra args are reinstalled with \`--force\` so flag changes
+    take effect; bare entries get a regular \`cargo install\` (no-op when
+    already up-to-date).
+
+After sync, services whose backing crate was just upgraded and are
+currently running are restarted.
+EOF
+}
+
+main() {
+  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+    usage; exit 0
+  fi
+  local cmd="$1"; shift
+  case "$cmd" in
+    list)
+      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      do_list "$@"
+      ;;
+    sync)
+      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      do_sync
+      ;;
+    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+  esac
+}
+
+main "$@"

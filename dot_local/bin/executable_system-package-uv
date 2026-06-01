@@ -15,6 +15,17 @@ uv_list_installed() {
   uv tool list 2>/dev/null | awk '/^[a-zA-Z0-9_]/ && !/^No tools/ {print $1}'
 }
 
+# uv_snapshot_versions — TSV "name\tversion" rows. Used to detect which
+# tools changed across a sync so we can restart any services that wrap them.
+uv_snapshot_versions() {
+  uv tool list 2>/dev/null \
+    | awk '/^[a-zA-Z0-9_]/ && !/^No tools/ {
+        name=$1; ver=$2
+        sub(/^v/, "", ver)
+        print name "\t" ver
+      }'
+}
+
 uv_current_python() {
   if command -v mise >/dev/null 2>&1; then
     mise current python 2>/dev/null
@@ -80,9 +91,12 @@ do_list() {
 do_sync() {
   pkg_info "Syncing uv tools..."
 
-  local declared_full declared installed
+  local declared_full declared installed before_snap after_snap
   declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
-  trap "rm -f '$declared_full' '$declared' '$installed'" EXIT
+  before_snap=$(mktemp); after_snap=$(mktemp)
+  trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
+
+  uv_snapshot_versions > "$before_snap"
 
   if uv_python_drifted; then
     pkg_warn "Python version changed since last sync — rebuilding uv tool venvs"
@@ -94,6 +108,16 @@ do_sync() {
   # install/uninstall diff); the rest of the line is passed straight to
   # `uv tool install`, which is how extras like `--with catppuccin-pygments`
   # get added to a tool's environment.
+  #
+  # When the line contains a literal `--` token as the second word, the
+  # syntax shifts to `<tool> -- <package-spec> [flags...]`: the canonical
+  # name is still tracked via the first word, but the `<PACKAGE>` arg sent
+  # to `uv tool install` comes from after the `--`. This is what makes git
+  # / local-path / editable installs work, since uv tool install takes
+  # exactly one positional <PACKAGE> arg (you can't pass `omlx
+  # git+https://...` together — uv rejects multi-positional). Example:
+  #
+  #   omlx -- git+https://github.com/jundot/omlx --python 3.11
   pkg_manifest_read "$UVFILE" > "$declared_full"
   awk '{print $1}' "$declared_full" > "$declared"
   uv_list_installed > "$installed"
@@ -107,28 +131,115 @@ do_sync() {
     [[ -z "$tool" ]] && continue
     local line; line=$(awk -v t="$tool" '$1 == t {print; exit}' "$declared_full")
     local -a args=( ${(z)line} )
+    # `--` form: drop the canonical name AND the separator; everything
+    # after is the install spec. Falls through to the default (full line)
+    # otherwise, preserving the legacy `tool --with extra` shape.
+    if [[ "${args[2]:-}" == "--" ]]; then
+      args=( "${args[@]:2}" )
+    fi
     uv tool install "${args[@]}"
   done
 
-  # Tools with extra args (e.g. `--with extra-pkg`) get reinstalled
-  # every sync so that changes to those args land. Plain tool entries
-  # are left alone — `uv tool upgrade --all` below handles version
-  # drift for them. Reinstall is a no-op when args haven't actually
-  # changed, so the cost is one fast metadata check per tool.
+  # Tools with extra args (e.g. `--with extra-pkg`) get reinstalled every
+  # sync so that changes to those args land. Reinstall is a no-op when args
+  # haven't actually changed, so the cost is one fast metadata check per
+  # tool.
+  #
+  # `--`-form entries (git / local / editable installs) are deliberately
+  # SKIPPED here — re-resolving a git source every sync is expensive (think
+  # omlx pulling MLX/transformers), and `uv tool upgrade --all` below
+  # already handles drift for those.
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     [[ "$line" == "${line%% *}" ]] && continue  # no extras → skip
     local -a args=( ${(z)line} )
+    [[ "${args[2]:-}" == "--" ]] && continue    # `--` form → skip
     uv tool install --reinstall "${args[@]}"
   done < "$declared_full"
 
   uv tool upgrade --all || true
 
   uv_write_stamp
+
+  # Restart services whose backing uv tool changed version (or was newly
+  # installed). Skipped on first-run no-changes since the diff is empty.
+  uv_snapshot_versions > "$after_snap"
+  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
 }
 
-case "${1:-}" in
-  list) shift; do_list "$@" ;;
-  sync) do_sync ;;
-  *)    pkg_die "usage: system-package-uv {list [-u|--update]|sync}" ;;
-esac
+usage() {
+  cat <<EOF
+Usage:
+  system-package-uv list [-u|--update]
+  system-package-uv sync
+  system-package-uv -h | --help | help
+
+Syncs uv-tool-installed Python tools against ~/.config/packages/Uvfile.
+
+list flags:
+  -u, --update   annotate packages with available updates (queries pypi.org)
+  -a, --all      no-op (uv has no transient-dep concept here)
+
+When the active Python version drifts since the last sync, all uv tool
+venvs are rebuilt before the install/upgrade pass. After sync, any system
+service whose backing uv tool changed version and is currently running is
+restarted.
+EOF
+}
+
+usage_list() {
+  cat <<EOF
+Usage:
+  system-package-uv list [-u|--update]
+
+Emits TSV "<name>\t<version>" rows for every installed uv tool.
+
+Flags:
+  -u, --update   annotate each row with the latest available version
+                 (queried from pypi.org/pypi/<name>/json)
+  -a, --all      no-op (uv has no transient-dep concept)
+EOF
+}
+
+usage_sync() {
+  cat <<EOF
+Usage:
+  system-package-uv sync
+
+Reconciles ~/.config/packages/Uvfile against \`uv tool list\`:
+
+  • Entries on a single line are passed straight to \`uv tool install\`,
+    so flags like \`--with extra-pkg\` land verbatim.
+  • Entries containing a \`--\` separator (e.g. \`omlx -- git+https://...\`)
+    use everything after \`--\` as the install spec, enabling git / local /
+    editable installs that don't fit \`uv tool install\`'s one-positional rule.
+
+If the active Python version differs from the last-recorded one (state file
+\$PKG_DIR/.state/uv.python), all uv tool venvs are rebuilt before the
+install/upgrade pass.
+
+After sync, services declared in services.toml whose backing uv tool was
+just upgraded and are currently running are restarted.
+EOF
+}
+
+main() {
+  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+    usage; exit 0
+  fi
+  local cmd="$1"; shift
+  case "$cmd" in
+    list)
+      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      do_list "$@"
+      ;;
+    sync)
+      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      do_sync
+      ;;
+    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+  esac
+}
+
+main "$@"

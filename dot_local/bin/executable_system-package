@@ -5,21 +5,22 @@
 #   system-package <subcommand>              # run for every ecosystem
 #   system-package <ecosystem> <subcommand>  # run for one ecosystem
 #
-# Ecosystems: brew, uv, npm, go
+# Ecosystems: brew, uv, npm, go, cargo
 # Subcommands: list, sync
 
 set -eu -o pipefail
 
 source "$HOME/.local/lib/system-package-common.sh"
 
-ECOSYSTEMS=(brew uv npm go)
+ECOSYSTEMS=(brew uv npm go cargo)
 SUBCOMMANDS=(list sync)
 
 usage() {
   cat <<EOF
 Usage:
-  system-package <subcommand> [args...]              # run for every ecosystem
-  system-package <ecosystem> <subcommand> [args...]  # run for one ecosystem
+  system-package <subcommand> [args...]              run for every ecosystem
+  system-package <ecosystem> [<subcommand> [args...]] run for one ecosystem
+  system-package -h | --help | help                  show this help
 
 Ecosystems:  ${ECOSYSTEMS[*]}
 Subcommands: ${SUBCOMMANDS[*]}
@@ -27,6 +28,51 @@ Subcommands: ${SUBCOMMANDS[*]}
 list flags:
   -u, --update   show available updates
   -a, --all      include brew transient dependencies (no-op for other tools)
+
+Per-form help:
+  system-package <subcommand>  --help    aggregated subcommand help
+  system-package <ecosystem>   --help    ecosystem-specific help
+  system-package <ecosystem> <subcommand> --help
+                                          ecosystem-specific subcommand help
+EOF
+}
+
+usage_list() {
+  cat <<EOF
+Usage:
+  system-package list [-u|--update] [-a|--all]              all ecosystems
+  system-package <ecosystem> list [-u|--update] [-a|--all]  one ecosystem
+
+Lists installed packages as a Tool/Package/Version table, grouped by Tool.
+brew rows fold the type (formula/dep/cask/mas) into the Tool column.
+
+Flags:
+  -u, --update   annotate each row with the latest available version
+  -a, --all      include brew transient (non-direct) dependencies;
+                 no-op for non-brew ecosystems
+
+Ecosystems: ${ECOSYSTEMS[*]}
+EOF
+}
+
+usage_sync() {
+  cat <<EOF
+Usage:
+  system-package sync                       sync every ecosystem
+  system-package <ecosystem> sync           sync one ecosystem
+
+Reconciles installed packages against the manifest in ~/.config/packages/:
+  brew  → Brewfile.bootstrap + Brewfile (\`brew bundle install --upgrade\`)
+  uv    → Uvfile
+  npm   → Npmfile
+  go    → Gofile
+  cargo → Cargofile
+
+After each ecosystem sync, any system service (launchd or brew) whose
+backing package was just upgraded and is currently running is restarted.
+See \`system-service --help\` for the service side.
+
+Ecosystems: ${ECOSYSTEMS[*]}
 EOF
 }
 
@@ -99,20 +145,46 @@ sync_all() {
 }
 
 main() {
-  [[ $# -ge 1 ]] || { usage; exit 1; }
+  # No args at all → top-level help (exit 0; this isn't an error).
+  [[ $# -ge 1 ]] || { usage; exit 0; }
+
+  # Top-level help: `-h`, `--help`, or `help`.
+  if pkg_is_help "$1"; then
+    usage; exit 0
+  fi
 
   if is_in "$1" "${SUBCOMMANDS[@]}"; then
     local cmd="$1"; shift
+    # `system-package <subcommand> --help` → subcommand help, no side effects.
+    if pkg_args_contain_help "$@"; then
+      case "$cmd" in
+        list) usage_list ;;
+        sync) usage_sync ;;
+      esac
+      exit 0
+    fi
     case "$cmd" in
       list) list_all "$@" ;;
       sync) sync_all "$@" ;;
     esac
   elif is_in "$1" "${ECOSYSTEMS[@]}"; then
     local eco="$1"; shift
-    [[ $# -ge 1 ]] || { usage; pkg_die "missing subcommand"; }
+    worker_check "$eco"
+    # `system-package <eco>` (no subcommand) or `system-package <eco> --help`
+    # → defer to worker's top-level help. Same for the subcommand layer.
+    if [[ $# -eq 0 ]] || pkg_is_help "$1"; then
+      "system-package-$eco" --help
+      exit 0
+    fi
     local cmd="$1"; shift
     is_in "$cmd" "${SUBCOMMANDS[@]}" \
       || { usage; pkg_die "unknown subcommand: $cmd"; }
+    # `system-package <eco> <cmd> --help` → forward to worker so the user
+    # sees ecosystem-specific flag semantics rather than the aggregated text.
+    if pkg_args_contain_help "$@"; then
+      "system-package-$eco" "$cmd" --help
+      exit 0
+    fi
     case "$cmd" in
       list) list_one "$eco" "$@" ;;
       sync) sync_one "$eco" "$@" ;;

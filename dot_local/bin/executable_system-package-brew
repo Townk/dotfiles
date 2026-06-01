@@ -9,6 +9,65 @@ source "$HOME/.local/lib/system-package-common.sh"
 BREWFILE_BOOT="$PKG_DIR/Brewfile.bootstrap"
 BREWFILE_MAIN="$PKG_DIR/Brewfile"
 
+# Dev-tool runtimes that should be owned by mise, not brew. Matches direct
+# installs (installed_on_request:true) only — transient deps pulled in by
+# other formulas are out of scope (PATH precedence keeps mise's copy live).
+# Pattern intentionally includes versioned variants (`python@3.11`,
+# `openjdk@21`) since those are the most common shapes brew ships.
+BREW_MISE_PATTERN='^(go|python|node|ruby|perl|rust|kotlin|java|openjdk|lua|luajit|cmake|ninja|just|uv|bun|deno|zig)(@[0-9.]+)?$'
+
+# Direct-installed formulas that are intentionally provisioned via brew.
+# Add new entries here together with a documented reason in the Brewfile.
+BREW_MISE_ALLOWED=(
+  # NeoVim links against LuaJIT and mise-plugins/mise-luaJIT fails to
+  # build on macOS 26 (bundled luarocks 3.13.0 rockspec is rejected by
+  # the modern lua parser). Revisit when the plugin is fixed.
+  "luajit"
+)
+
+# brew_direct_formulas
+# Print one name per line for every formula installed with
+# installed_on_request:true (i.e. user/Brewfile-driven, not a transient dep).
+# Sources from INSTALL_RECEIPT.json directly because `brew info --json=v2
+# --installed` is ~100x slower for the same data.
+brew_direct_formulas() {
+  local cellar=""
+  cellar=$(brew --cellar 2>/dev/null) || cellar=""
+  [[ -z "$cellar" ]] && return 0
+  local receipts=("$cellar"/*/*/INSTALL_RECEIPT.json(N))
+  (( ${#receipts[@]} > 0 )) || return 0
+  jq -r 'select(.installed_on_request)
+         | input_filename | split("/")[-3]' \
+    "${receipts[@]}" 2>/dev/null | sort -u || true
+}
+
+# brew_check_dev_leakage
+# Emit a loud warning for every direct-installed formula that matches
+# BREW_MISE_PATTERN and isn't in BREW_MISE_ALLOWED. Soft warning by design
+# (rc 0) — the goal is to surface drift, not break sync runs that the user
+# can't immediately fix.
+brew_check_dev_leakage() {
+  local -a leaked=()
+  local f=""
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    [[ "$f" =~ $BREW_MISE_PATTERN ]] || continue
+    local allowed=0 a=""
+    for a in "${BREW_MISE_ALLOWED[@]}"; do
+      [[ "$a" == "$f" ]] && { allowed=1; break }
+    done
+    (( allowed )) || leaked+=("$f")
+  done < <(brew_direct_formulas)
+
+  (( ${#leaked[@]} == 0 )) && return 0
+
+  pkg_warn "${PKG_C_BWH}brew is provisioning dev-tool runtimes that mise should own:${PKG_C_RES}"
+  for f in "${leaked[@]}"; do
+    pkg_warn "  • ${f}"
+  done
+  pkg_warn "Move these to dot_config/mise/config.toml, or add to BREW_MISE_ALLOWED with a reason."
+}
+
 # brew_list_rows <outdated:true|false>
 # Output one "type\tname\tversion[annotation]" TSV row per installed package.
 # Type is one of: formula (user-installed), dep (transient dependency),
@@ -149,15 +208,106 @@ do_list() {
   brew_list_rows "$outdated" "$show_all"
 }
 
+# brew_snapshot_versions — TSV "name\tversion" rows for installed formulas.
+# Casks and MAS apps are intentionally excluded: only formulas can ship a
+# `brew services` plist, so they're the only ecosystem entries that can map
+# to a service we'd want to restart.
+brew_snapshot_versions() {
+  brew list --versions --formula 2>/dev/null | awk '{print $1 "\t" $2}'
+}
+
 do_sync() {
   pkg_info "Syncing Homebrew packages..."
+
+  local before_snap after_snap
+  before_snap=$(mktemp); after_snap=$(mktemp)
+  trap "rm -f '$before_snap' '$after_snap'" EXIT
+
+  brew_snapshot_versions > "$before_snap"
+
   cat "$BREWFILE_BOOT" "$BREWFILE_MAIN" \
     | brew bundle install -q --cleanup --upgrade --file=- \
     || pkg_die "brew bundle install failed"
+
+  # Tripwire: warn if any direct-installed formula matches a tool mise should
+  # own. Runs after install so it observes the post-sync truth (`brew bundle
+  # --cleanup` already removed anything not in the manifest).
+  brew_check_dev_leakage
+
+  # Restart any brew/launchd service whose backing formula changed version.
+  # `brew bundle install --upgrade` does NOT restart formula-provided
+  # services on its own, so a freshly-upgraded daemon keeps running the
+  # old binary until we kick it.
+  brew_snapshot_versions > "$after_snap"
+  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
 }
 
-case "${1:-}" in
-  list) shift; do_list "$@" ;;
-  sync) do_sync ;;
-  *)    pkg_die "usage: system-package-brew {list [-u|--update] [-a|--all]|sync}" ;;
-esac
+usage() {
+  cat <<EOF
+Usage:
+  system-package-brew list [-u|--update] [-a|--all]
+  system-package-brew sync
+  system-package-brew -h | --help | help
+
+Syncs Homebrew formulas, casks, and MAS apps against:
+  ~/.config/packages/Brewfile.bootstrap
+  ~/.config/packages/Brewfile
+
+list flags:
+  -u, --update   annotate packages with available updates
+  -a, --all      include transient (non-direct) dependencies
+
+After sync, any brew service whose formula version changed and is currently
+running is restarted.
+EOF
+}
+
+usage_list() {
+  cat <<EOF
+Usage:
+  system-package-brew list [-u|--update] [-a|--all]
+
+Emits TSV "<type>\t<name>\t<version>" rows for every installed brew package.
+Type is one of: formula (user-installed), dep (transient dependency), cask, mas.
+
+Flags:
+  -u, --update   annotate each row with the latest available version
+  -a, --all      include transient (non-direct) dependencies in the output
+EOF
+}
+
+usage_sync() {
+  cat <<EOF
+Usage:
+  system-package-brew sync
+
+Runs \`brew bundle install --upgrade --cleanup\` against the concatenation of
+~/.config/packages/Brewfile.bootstrap and ~/.config/packages/Brewfile, then
+warns about any direct-installed formula that should be owned by mise.
+
+After install, any brew service whose formula version changed AND is
+currently running is restarted (\`brew bundle install --upgrade\` does NOT
+restart formula-provided services on its own).
+EOF
+}
+
+main() {
+  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+    usage; exit 0
+  fi
+  local cmd="$1"; shift
+  case "$cmd" in
+    list)
+      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      do_list "$@"
+      ;;
+    sync)
+      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      do_sync
+      ;;
+    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+  esac
+}
+
+main "$@"

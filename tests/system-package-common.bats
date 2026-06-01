@@ -73,3 +73,58 @@ EOF
   result=$(pkg_diff_only_in "$TEST_TMP/a" "$TEST_TMP/b")
   [ -z "$result" ]
 }
+
+@test "pkg_changed_versions returns empty when versions match" {
+  printf 'ruff\t0.5.0\nblack\t24.1.0\n' > "$TEST_TMP/before"
+  printf 'ruff\t0.5.0\nblack\t24.1.0\n' > "$TEST_TMP/after"
+  result=$(pkg_changed_versions "$TEST_TMP/before" "$TEST_TMP/after")
+  [ -z "$result" ]
+}
+
+@test "pkg_changed_versions emits packages whose version changed" {
+  printf 'ruff\t0.5.0\nblack\t24.1.0\n' > "$TEST_TMP/before"
+  printf 'ruff\t0.6.0\nblack\t24.1.0\n' > "$TEST_TMP/after"
+  result=$(pkg_changed_versions "$TEST_TMP/before" "$TEST_TMP/after")
+  [ "$result" = "ruff" ]
+}
+
+@test "pkg_changed_versions emits newly-installed packages" {
+  printf 'ruff\t0.5.0\n' > "$TEST_TMP/before"
+  printf 'ruff\t0.5.0\nmypy\t1.10.0\n' > "$TEST_TMP/after"
+  result=$(pkg_changed_versions "$TEST_TMP/before" "$TEST_TMP/after")
+  [ "$result" = "mypy" ]
+}
+
+@test "pkg_changed_versions does NOT emit packages that were removed" {
+  printf 'ruff\t0.5.0\nblack\t24.1.0\n' > "$TEST_TMP/before"
+  printf 'ruff\t0.5.0\n' > "$TEST_TMP/after"
+  result=$(pkg_changed_versions "$TEST_TMP/before" "$TEST_TMP/after")
+  [ -z "$result" ]
+}
+
+@test "pkg_is_help recognizes -h, --help, and help" {
+  pkg_is_help -h
+  pkg_is_help --help
+  pkg_is_help help
+}
+
+@test "pkg_is_help rejects other tokens" {
+  ! pkg_is_help list
+  ! pkg_is_help sync
+  ! pkg_is_help --update
+  ! pkg_is_help ""
+}
+
+@test "pkg_args_contain_help finds --help among trailing args" {
+  pkg_args_contain_help --update --help
+  pkg_args_contain_help -h
+  pkg_args_contain_help --all -h --update
+}
+
+@test "pkg_args_contain_help returns false when no help flag is present" {
+  ! pkg_args_contain_help
+  ! pkg_args_contain_help --update --all
+  # Bare `help` is intentionally NOT a help flag at the args-list level —
+  # it would collide with valid positional values (service names, etc.).
+  ! pkg_args_contain_help help
+}
