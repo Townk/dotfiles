@@ -12,7 +12,15 @@ source "${0:A:h}/_lib.sh"
 # an extra interactive shell stacked on top of the user's terminal.
 # Doing it here means the exec lands on the user's real shell, so we
 # end with exactly one shell.
+#
+# Help short-circuit: when the user only asks for help (-h, --help, help)
+# we forward to the script and stop. Running z4h update after a help
+# request is surprising and emits noise (the `exec zsh` ends up reloading
+# the shell when the user just wanted to read text).
 function system-update() {
+  case "${1:-}" in
+    -h|--help|help) command system-update "$@"; return $? ;;
+  esac
   command system-update "$@" || return
   z4h update
 }
@@ -48,7 +56,7 @@ function motd() {
 function terminal_commands() {
   print -P -- "$C_BLU Available Commands$C_RES
 
-  ${C_YEL} SYSTEM${C_RES}                         ${C_YEL}󰇺 PROCESSORS${C_RES}                     ${C_YEL} UTILITIES${C_RES}
+  ${C_YEL} SYSTEM${C_RES}                         ${C_YEL}󰇺 PROCESSORS${C_RES}                     ${C_YEL} UTILITIES${C_RES}
   ${C_YEL}------${C_RES}                           ${C_YEL}----------${C_RES}                       ${C_YEL}---------${C_RES}
   ${C_BWH}btm${C_RES}       - 'top' (bottom)       ${C_BWH}jq${C_RES}      - JSON processor         ${C_BWH}7zz${C_RES}       - 7-Zip cli
   ${C_BWH}duf${C_RES}       - Disk usage 'du'      ${C_BWH}pandoc${C_RES}  - Any text processor     ${C_BWH}eva${C_RES}       - Calculator
@@ -56,7 +64,7 @@ function terminal_commands() {
   ${C_BWH}procs${C_RES}     - Processes 'ps'       ${C_BWH}xq${C_RES}      - XML processor          ${C_BWH}fend${C_RES}      - Unit conversion
   ${C_BWH}tldr${C_RES}      - Extra help           ${C_BWH}yq${C_RES}      - YAML processor         ${C_BWH}gh${C_RES}        - GitHub cli
                                                                     ${C_BWH}git${C_RES}       - Version control
-  ${C_YEL} NETWORK                        ${C_YEL}󰊪 VISUALIZERS                    ${C_BWH}grex${C_RES}      - RegEx generator
+  ${C_YEL} NETWORK                        ${C_YEL}󰊪 VISUALIZERS                    ${C_BWH}grex${C_RES}      - RegEx generator
   ${C_YEL}-------                          ${C_YEL}-----------                      ${C_BWH}hyperfine${C_RES} - Benchmark
   ${C_BWH}bandwhich${C_RES} - Network use          ${C_BWH}jless${C_RES}   - JSON tree              ${C_BWH}rg${C_RES}        - 'grep' (ripgrep)
   ${C_BWH}doggo${C_RES}     - DNS look-up          ${C_BWH}tokei${C_RES}   - Code metrics           ${C_BWH}t-rec${C_RES}     - Terminal recorder

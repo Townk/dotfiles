@@ -1,0 +1,58 @@
+#!/usr/bin/env zsh
+# system-service-brew — thin wrapper around `brew services` so the
+# unified `system-service` CLI can address brew-provisioned services
+# (atuin, unbound, …) the same way it addresses launchd-managed ones.
+#
+# `brew services` already manages plist generation, bootstrapping, and
+# the formula's `service do … end` block. We just normalise its output
+# into the dispatcher's table shape and pass through lifecycle verbs.
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-package-common.sh"
+
+command -v brew >/dev/null || pkg_die "brew not found"
+
+# brew_list_json — `brew services list --json` raw JSON, or `[]` if brew
+# has no services at all (older brew versions return empty in that case).
+brew_list_json() {
+  brew services list --json 2>/dev/null || printf '[]'
+}
+
+# do_list — TSV rows: Service\tStatus\tUser\tFile. Status is normalised to
+# the same vocabulary the launchd worker uses (running/stopped/error/none)
+# so the unified table stays consistent.
+do_list() {
+  brew_list_json | jq -r '
+    .[] | [
+      .name,
+      (if .status == "started"   then "running"
+       elif .status == "scheduled" then "stopped"
+       else .status end),
+      (.user // ""),
+      .file
+    ] | @tsv'
+}
+
+# do_names — internal: print the set of brew-known service names. Used by
+# the dispatcher to decide whether to route start/stop/etc. here vs the
+# launchd worker.
+do_names() {
+  brew_list_json | jq -r '.[].name'
+}
+
+# Pass-through lifecycle verbs. brew handles plist regen + bootstrap.
+do_start()   { [[ $# -eq 1 ]] || pkg_die "usage: start <name>";   brew services start   "$1"; }
+do_stop()    { [[ $# -eq 1 ]] || pkg_die "usage: stop <name>";    brew services stop    "$1"; }
+do_restart() { [[ $# -eq 1 ]] || pkg_die "usage: restart <name>"; brew services restart "$1"; }
+do_info()    { [[ $# -eq 1 ]] || pkg_die "usage: info <name>";    brew services info    "$1"; }
+
+case "${1:-}" in
+  list)    shift; do_list    "$@" ;;
+  start)   shift; do_start   "$@" ;;
+  stop)    shift; do_stop    "$@" ;;
+  restart) shift; do_restart "$@" ;;
+  info)    shift; do_info    "$@" ;;
+  names)   shift; do_names ;;        # internal: used by the dispatcher
+  *) pkg_die "usage: system-service-brew {list|start|stop|restart|info|names} [name]" ;;
+esac

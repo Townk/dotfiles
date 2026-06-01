@@ -1,0 +1,40 @@
+#compdef system-service-brew
+#
+# Completion for system-service-brew. Thin wrapper around `brew services`;
+# we just complete the subcommand set and the brew-known service names.
+
+__system-service-brew-names() {
+  local -a names
+  names=( ${(f)"$(system-service-brew names 2>/dev/null)"} )
+  (( ${#names} )) && _describe -t services 'brew service' names
+}
+
+_system-service-brew() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  _arguments -C \
+    '1: :->cmd' \
+    '*:: :->cmdargs'
+
+  case "$state" in
+    cmd)
+      _values 'subcommand' \
+        'list[show brew services as TSV rows]' \
+        'start[start a brew service]' \
+        'stop[stop a brew service]' \
+        'restart[restart a brew service]' \
+        'info[brew services info <name>]' \
+        'names[print known brew service names]'
+      ;;
+    cmdargs)
+      case "$words[1]" in
+        start|stop|restart|info)
+          _arguments ':service:__system-service-brew-names'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_system-service-brew "$@"

@@ -1,0 +1,10 @@
+#compdef system-update
+#
+# Completion for system-update. The script takes no arguments other than help
+# flags; running it bare kicks off the full update pass. We surface -h/--help
+# as exclusive options. The bare `help` positional is supported by the script
+# too but isn't offered here — completion menus for it would be confusing
+# alongside the flag forms.
+
+_arguments \
+  '(- *)'{-h,--help}'[show help and exit]'

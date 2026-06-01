@@ -22,6 +22,45 @@
 
 set -eu -o pipefail
 
+usage() {
+  cat <<'EOF'
+Usage:
+  system-update                    run a full update pass
+  system-update -h | --help | help show this help
+
+Brings every externally-managed tool to its latest version and keeps the
+chezmoi source repo in sync across machines. Idempotent and safe to run
+periodically. Also invoked by chezmoi's run_once bootstrap so a fresh
+machine converges to the same end state as a steady-state run.
+
+Update order (each step is best-effort; failures are reported but never
+block later steps unless explicitly fatal):
+  1. git pull --rebase the chezmoi source, then `chezmoi apply`
+     (skipped under chezmoi's own run_once to avoid lock contention)
+  2. `brew update`            refresh formula metadata
+  3. `system-package sync`    install/upgrade across every ecosystem,
+                              then restart services tied to upgraded
+                              packages (see `system-service --help`)
+  4. `brew cleanup --prune=all`
+  5. `system-service sync`    reconcile launchd plists with services.toml
+  6. `ya pkg upgrade`         + commit any package.toml bumps to chezmoi
+  7. `mise upgrade && mise prune -y`
+  8. `bin update -a -y && bin prune -f`
+  9. NeoVim: `Lazy! sync` + `MasonToolsUpdateSync`
+
+z4h's own self-update is intentionally NOT handled here (it would exec
+inside this script's shell, not the user's). The `system-update` zsh
+function in dot_config/zsh/functions.d/commands.sh runs z4h update
+directly in the interactive shell after calling this script.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help|help) usage; exit 0 ;;
+  '') : ;;
+  *) usage >&2; printf 'error: unknown argument: %s\n' "$1" >&2; exit 1 ;;
+esac
+
 if [[ -t 1 ]]; then
   C_BLU=$'\e[34m'
   C_YEL=$'\e[33m'
@@ -90,6 +129,16 @@ system-package sync || die "Failed to sync system packages!"
 
 print -P -- "\n🧹 Cleaning up Homebrew artifacts...\n"
 brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
+
+# Reconcile launchd-managed services with ~/.config/packages/services.toml.
+# Soft failure — a misconfigured service shouldn't block the rest of
+# system-update. Note: services tied to packages just upgraded by the
+# preceding `system-package sync` have already been restarted by the
+# worker that owns them (see pkg_restart_services_for in common.sh).
+if command -v system-service >/dev/null 2>&1; then
+  print -P -- "\n📡 Sync system services...\n"
+  system-service sync || warn "system-service sync had failures"
+fi
 
 if command -v ya >/dev/null 2>&1; then
   print -P -- "\n🦆 Upgrade Yazi plugins...\n"

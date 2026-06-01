@@ -1,0 +1,47 @@
+# Servicefile — declarative manifest for launchd-managed user agents.
+# Synced by `system-service sync`. Strict cleanup: removing a section
+# boots-out the service and deletes its plist on the next sync.
+#
+# Schema (per `[<name>]` section, all keys optional except `cmd`):
+#   cmd            = ["bin", "args..."]      → ProgramArguments
+#   keep_alive     = true|false              → KeepAlive
+#   run_at_load    = true|false              → RunAtLoad
+#   working_dir    = "~/path"                → WorkingDirectory
+#   log_path       = "~/path/out.log"        → StandardOutPath
+#   error_log_path = "~/path/err.log"        → StandardErrorPath
+#   description    = "human-friendly text"   (info / list only — not in plist)
+#
+#   [<name>.env]                             → EnvironmentVariables
+#   KEY = "value"
+#
+# Paths support a leading `~` (expanded by the worker at plist-gen time, NOT
+# by chezmoi). cmd[0] is resolved via `command -v` so the rendered plist
+# carries an absolute path — launchd cannot resolve unqualified names.
+#
+# Brew-installed services live under `brew services` and stay declared in
+# the formula; they are NOT listed here. `system-service list` aggregates
+# both sources.
+
+{{ if eq .profile "personal" -}}
+# Add personal-only services
+{{- end }}
+
+# omlx — LLM inference server (Apple Silicon). Parameters mirror what
+# `brew services` generated from the formula before we migrated the
+# binary to the Uvfile (`uv tool install`). The binary now lives at
+# ~/.local/bin/omlx instead of /opt/homebrew/opt/omlx/bin/omlx.
+[omlx]
+description    = "Local LLM inference server for Apple Silicon"
+cmd            = ["omlx", "serve"]
+keep_alive     = true
+run_at_load    = true
+working_dir    = "~/.omlx"
+log_path       = "~/.omlx/log/omlx.log"
+error_log_path = "~/.omlx/log/omlx.log"
+
+[omlx.env]
+# launchd doesn't inherit interactive shell PATH; bake in the dirs omlx
+# might shell out into. ~/.local/bin is where uv installs the omlx shim.
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+# vim:ft=toml.gotmpl

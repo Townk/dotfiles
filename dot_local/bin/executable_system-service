@@ -1,0 +1,261 @@
+#!/usr/bin/env zsh
+# system-service — unified launchd service dispatcher.
+#
+# Routes lifecycle verbs to the appropriate worker:
+#   • services declared in ~/.config/packages/services.toml → system-service-launchd
+#   • services known to `brew services list`                → system-service-brew
+#
+# `list` aggregates both sources into a single table with a Source column.
+# `sync` only touches the launchd side; brew's reconcile model is its own
+# (`brew bundle install --cleanup`) and isn't ours to coordinate.
+#
+# `restart-for <pkg>` is an internal hook called by `system-package-* sync`
+# after a package version bump: it finds any service (launchd or brew)
+# associated with <pkg> and restarts it iff it's currently running. Manually
+# stopped services stay stopped.
+#
+# Usage:
+#   system-service                 # alias for `list`
+#   system-service list
+#   system-service start   <name>
+#   system-service stop    <name>
+#   system-service restart <name>
+#   system-service info    <name>
+#   system-service sync
+#   system-service restart-for <pkg>...   # internal — see above
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-package-common.sh"
+
+SUBCOMMANDS=(list start stop restart info sync)
+
+usage() {
+  cat <<EOF
+Usage:
+  system-service                       alias for \`list\`
+  system-service list                  show all services (launchd + brew)
+  system-service start   <name>        start a service
+  system-service stop    <name>        stop a service
+  system-service restart <name>        restart a service
+  system-service info    <name>        show plist + launchctl/brew detail
+  system-service sync                  reconcile launchd plists with services.toml
+  system-service restart-for <pkg>...  internal: restart services tied to <pkg>
+  system-service -h | --help | help    show this help
+
+Run \`system-service <command> --help\` for per-command details.
+EOF
+}
+
+usage_for() {
+  case "$1" in
+    list)
+      cat <<EOF
+Usage:
+  system-service list
+
+Aggregates launchd-managed services (declared in
+~/.config/packages/services.toml) and brew-managed services
+(\`brew services list\`) into a single Source/Service/Status/User/File table.
+
+Status vocabulary: running | stopped | error | none.
+EOF
+      ;;
+    start|stop|restart)
+      cat <<EOF
+Usage:
+  system-service $1 <name>
+
+Routes to the worker that owns <name>:
+  • launchd (services.toml entry) → system-service-launchd $1 <name>
+  • brew    (brew services)       → system-service-brew    $1 <name>
+
+For launchd services, \`start\` writes the plist (re-rendered from the TOML
+entry), bootstraps it into gui/\$(id -u), and ensures any working_dir /
+log_path / error_log_path directories exist. \`stop\` boots-out the agent.
+\`restart\` is \`stop\` + \`start\`.
+EOF
+      ;;
+    info)
+      cat <<EOF
+Usage:
+  system-service info <name>
+
+Prints the resolved manifest entry / plist path / normalized status, plus
+the full \`launchctl print\` (launchd) or \`brew services info\` (brew) output.
+EOF
+      ;;
+    sync)
+      cat <<EOF
+Usage:
+  system-service sync
+
+Reconciles launchd-managed services with ~/.config/packages/services.toml:
+  • declared but not bootstrapped → write plist + bootstrap
+  • declared with drifted plist   → write plist + bootout + bootstrap
+  • bootstrapped but not declared → bootout + remove plist
+
+Does NOT touch brew services — brew's reconcile model is \`brew bundle
+install --cleanup\` (run via \`system-package brew sync\`).
+EOF
+      ;;
+    restart-for)
+      cat <<EOF
+Usage:
+  system-service restart-for <pkg>...
+
+Internal hook called by \`system-package-* sync\` after a version bump.
+For each <pkg>:
+  • launchd: restart services whose top-level key OR cmd[0] basename
+    equals <pkg>, but only if currently running.
+  • brew:    restart the brew service named <pkg>, but only if started.
+
+Manually-stopped services stay stopped — an upgrade never auto-resurrects
+a daemon the user had taken down.
+EOF
+      ;;
+    *)
+      usage
+      ;;
+  esac
+}
+
+worker_check() {
+  command -v "system-service-$1" >/dev/null \
+    || pkg_die "worker not found: system-service-$1"
+}
+
+# is_launchd_service <name> — declared in services.toml?
+is_launchd_service() {
+  worker_check launchd
+  system-service-launchd declared | grep -Fxq "$1"
+}
+
+# is_brew_service <name> — listed by brew services list?
+is_brew_service() {
+  worker_check brew
+  system-service-brew names | grep -Fxq "$1"
+}
+
+# route <verb> <name> — dispatch a lifecycle verb to the right worker
+route() {
+  local verb="$1" name="$2"
+  local in_launchd=0 in_brew=0
+  is_launchd_service "$name" && in_launchd=1
+  is_brew_service    "$name" && in_brew=1
+
+  if (( in_launchd && in_brew )); then
+    pkg_die "service '$name' is declared in BOTH services.toml AND brew services. Remove one."
+  elif (( in_launchd )); then
+    system-service-launchd "$verb" "$name"
+  elif (( in_brew )); then
+    system-service-brew "$verb" "$name"
+  else
+    pkg_die "unknown service: $name"
+  fi
+}
+
+# do_list — merge launchd + brew rows into one Source/Service/Status/User/File table
+do_list() {
+  worker_check launchd
+  worker_check brew
+  {
+    system-service-launchd list | awk -F'\t' '{print "launchd\t" $0}'
+    system-service-brew    list | awk -F'\t' '{print "brew\t"    $0}'
+  } | pkg_table_print $'Source\tService\tStatus\tUser\tFile' 1
+}
+
+# do_sync — only the launchd worker reconciles. brew's bundle handles its
+# side at `system-package brew sync` time.
+do_sync() {
+  worker_check launchd
+  system-service-launchd sync
+}
+
+# brew_service_status <name> — normalised status for a brew-managed service.
+# Mirrors the vocabulary used by system-service-launchd: running/stopped/none.
+brew_service_status() {
+  local name="$1"
+  brew services list --json 2>/dev/null \
+    | jq -r --arg n "$name" '
+        (.[] | select(.name == $n) | .status) // "none"
+        | if . == "started"   then "running"
+          elif . == "scheduled" then "stopped"
+          else . end' 2>/dev/null
+}
+
+# do_restart_for <pkg>...
+# Triggered by `system-package-* sync` after a version bump. For each pkg:
+#   • launchd: find services whose top-level key or cmd[0] basename == pkg,
+#     restart any that are currently running (status=running).
+#   • brew:    if a brew service named <pkg> exists and is started, restart it.
+# Services that are stopped/none/error are intentionally left alone so a
+# manually-stopped daemon isn't auto-resurrected by an upgrade.
+do_restart_for() {
+  (( $# > 0 )) || return 0
+  worker_check launchd
+  worker_check brew
+
+  local pkg=""
+  for pkg in "$@"; do
+    [[ -z "$pkg" ]] && continue
+
+    # Launchd side — a pkg can map to >1 service (rare, but possible if
+    # the user declared multiple [section]s wrapping the same binary).
+    # NB: `status` is a read-only special parameter in zsh (alias for $?),
+    # so we use svc_state / brew_state locals instead.
+    local svc="" svc_state=""
+    while IFS= read -r svc; do
+      [[ -z "$svc" ]] && continue
+      svc_state=$(system-service-launchd status "$svc" 2>/dev/null || true)
+      if [[ "$svc_state" == "running" ]]; then
+        pkg_info "restarting launchd service '$svc' (package '$pkg' upgraded)"
+        system-service-launchd restart "$svc" \
+          || pkg_warn "failed to restart launchd service '$svc'"
+      fi
+    done < <(system-service-launchd matching "$pkg" 2>/dev/null || true)
+
+    # Brew side — service name == formula name by convention. If brew
+    # doesn't know about pkg as a service, the names-list check short-circuits.
+    if system-service-brew names 2>/dev/null | grep -Fxq "$pkg"; then
+      local brew_state; brew_state=$(brew_service_status "$pkg")
+      if [[ "$brew_state" == "running" ]]; then
+        pkg_info "restarting brew service '$pkg' (formula upgraded)"
+        system-service-brew restart "$pkg" \
+          || pkg_warn "failed to restart brew service '$pkg'"
+      fi
+    fi
+  done
+}
+
+main() {
+  local cmd="${1:-list}"
+  shift 2>/dev/null || true
+
+  case "$cmd" in
+    -h|--help|help) usage; exit 0 ;;
+    list)
+      pkg_args_contain_help "$@" && { usage_for list; exit 0; }
+      do_list
+      ;;
+    sync)
+      pkg_args_contain_help "$@" && { usage_for sync; exit 0; }
+      do_sync
+      ;;
+    start|stop|restart|info)
+      # Critical: catch --help BEFORE route(), or `route info --help` would
+      # try (and fail noisily) to look up a service literally named `--help`.
+      pkg_args_contain_help "$@" && { usage_for "$cmd"; exit 0; }
+      [[ $# -eq 1 ]] || { usage_for "$cmd" >&2; pkg_die "$cmd requires exactly one service name"; }
+      route "$cmd" "$1"
+      ;;
+    restart-for)
+      pkg_args_contain_help "$@" && { usage_for restart-for; exit 0; }
+      [[ $# -ge 1 ]] || { usage_for restart-for >&2; pkg_die "restart-for requires at least one package name"; }
+      do_restart_for "$@"
+      ;;
+    *) usage; pkg_die "unknown subcommand: $cmd" ;;
+  esac
+}
+
+main "$@"
