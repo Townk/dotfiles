@@ -28,6 +28,8 @@
 
 set -u
 
+. ~/.local/lib/image-protocol-support
+
 # === Helpers ===
 
 # Render a centered, bannered status message inside the preview pane.
@@ -160,6 +162,24 @@ function force-tty() {
   fi
 }
 
+function get_chafa_format_args() {
+    local protocols
+
+    if protocols=$(get_terminal_image_protocol 2>/dev/null); then
+        if [[ " $protocols " == *" Sixel "* ]]; then
+            echo "-f sixel"
+        elif [[ " $protocols " == *" iTerm2 "* ]]; then
+            echo "-f iterm"
+        elif [[ " $protocols " == *" Kitty "* ]]; then
+          echo "-f kitty"
+        else
+            echo "-f symbols"
+        fi
+    else
+        echo "-f symbols"
+    fi
+}
+
 # === Handlers ===
 #
 # Convention:
@@ -242,23 +262,37 @@ function preview-archive() {
 }
 
 function preview-pdf() {
-  command -v chafa >/dev/null 2>&1 || return 1
-  command -v pdftocairo >/dev/null 2>&1 || return 1
-  pdftocairo -png -singlefile "$1" - 2>/dev/null \
-    | chafa -s "${w}x${h}" - 2>/dev/null
+    command -v chafa >/dev/null 2>&1 || return 1
+    command -v pdftocairo >/dev/null 2>&1 || return 1
+
+    # Fallback to defaults if dimensions $w or $h are empty
+    local width="${w:-80}"
+    local height="${h:-24}"
+
+    # Generate the dynamic format flags as a Zsh-safe array
+    local chafa_format
+    chafa_format=(${(z)$(get_chafa_format_args)})
+
+    # Pipe the single-page rendered PNG stream into Chafa
+    pdftocairo -png -singlefile "$1" - 2>/dev/null \
+        | chafa "${chafa_format[@]}" -s "${width}x${height}" - 2>/dev/null
 }
 
 function preview-image() {
-  command -v chafa >/dev/null 2>&1 || return 1
-  chafa -s "${w}x${h}" "$1" 2>/dev/null
+    command -v chafa >/dev/null 2>&1 || return 1
 
-  # Append mediainfo metadata footer when available. Mirrors Yazi's
-  # boydaihungst/mediainfo plugin, which renders the image and then
-  # tacks formatted metadata below it.
-  if command -v mediainfo >/dev/null 2>&1; then
-    preview-mediainfo "$1"
-  fi
-  return 0
+    local width="${w:-80}"
+    local height="${h:-24}"
+    local chafa_format
+    chafa_format=(${(z)$(get_chafa_format_args)})
+
+    chafa "${chafa_format[@]}" -s "${width}x${height}" "$1" 2>/dev/null
+
+    if command -v mediainfo >/dev/null 2>&1; then
+        preview-mediainfo "$1"
+    fi
+
+    return 0
 }
 
 # mediainfo's raw output is plain `key : value` lines under bare
@@ -392,6 +426,7 @@ function main() {
       preview-pdf "$target" && return
       ;;
     image/*)
+      h=$(( (h * 6) / 10 ))
       preview-image "$target" && return
       ;;
     audio/* | video/* | application/subrip | application/postscript)
