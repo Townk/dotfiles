@@ -495,7 +495,7 @@ keybinds clear-defaults=true {
     shared_among "session" "tmux" {
         bind "d" { Detach; }
     }
-    // which-key panel controls. The hint panel is the zj-statusbar plugin in
+    // which-key panel controls. The hint panel is the zj-hud plugin in
     // its `role "whichkey"` instance (it shares the `status-bar` alias but is
     // launched per-tab by the layout with `role "whichkey"` config). A pipe is
     // matched to a running plugin by URL **and configuration**, so we MUST
@@ -754,7 +754,7 @@ plugins {
 {{- $plugins := list
     (dict "alias" "context-keys"  "name" "zj-ctxkeys"    "version" "v0.1.0")
     (dict "alias" "prompt-jumper" "name" "zj-promptjump" "version" "v0.1.0")
-    (dict "alias" "status-bar"    "name" "zj-statusbar"  "version" "v0.1.0")
+    (dict "alias" "status-bar"    "name" "zj-hud"  "version" "v0.1.0")
 -}}
 {{- $lines := list -}}
 {{- range $plugins -}}
@@ -768,7 +768,7 @@ plugins {
 {{ join "\n" $lines }}
 
     // NB: neither the which-key panel nor the search dialog gets its own alias.
-    // All three roles (bar / search / which-key) are the *same* zj-statusbar
+    // All three roles (bar / search / which-key) are the *same* zj-hud
     // wasm, distinguished only by their `role` config, so they share one URL
     // and one per-URL permission grant. Each role just references the
     // `status-bar` alias with the matching `role`:

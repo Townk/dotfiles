@@ -1,9 +1,9 @@
-// zj-statusbar layout — WezTerm-inspired Zellij status bar
-// Source: /Users/thiago/Projects/apps/zellij/zj-statusbar
+// zj-hud layout — WezTerm-inspired Zellij HUD
+// Source: /Users/user/Projects/apps/zellij/zj-hud
 // Previous plugin: zj-status.wasm (swap back by changing the location line)
 
 layout {
-    pane_template name="zj-statusbar-pane" borderless=true {
+    pane_template name="zj-hud-pane" borderless=true {
             plugin location="status-bar" {
                 fullscreen_min_cols "100"
                 default_session_name "main"
@@ -14,7 +14,7 @@ layout {
                 // alias resolution in config.kdl.tmpl while this repo is
                 // checked out). Swap to the published release URL alongside
                 // that alias if you ever drop the local checkout.
-                search_plugin_url "file:/Users/user/Projects/apps/zellij/zj-statusbar/target/wasm32-wasip1/release/zj-statusbar.wasm"
+                search_plugin_url "file:/Users/user/Projects/apps/zellij/zj-hud/target/wasm32-wasip1/release/zj-hud.wasm"
 
                 tabs {
                     max_width 40
@@ -159,9 +159,9 @@ layout {
 
     default_tab_template {
         children
-        zj-statusbar-pane size=1
+        zj-hud-pane size=1
 
-        // which-key panel — the *same* zj-statusbar plugin (the `status-bar`
+        // which-key panel — the *same* zj-hud plugin (the `status-bar`
         // alias) in its `role "whichkey"` instance. No separate alias and no
         // config of its own: the active bar publishes the mode palette and the
         // `which_key { … }` options (above) through the shared state, and this
@@ -201,7 +201,7 @@ layout {
 
     new_tab_template {
         pane
-        zj-statusbar-pane size=1
+        zj-hud-pane size=1
 
         // See the note in `default_tab_template`; kept in sync with it.
         floating_panes {
