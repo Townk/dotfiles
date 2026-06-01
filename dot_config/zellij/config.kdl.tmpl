@@ -257,12 +257,12 @@ keybinds clear-defaults=true {
             }
         }
 
-        // Ctrl+j / Ctrl+k: routed through zj-ctxkeys. By default the
+        // Ctrl+j / Ctrl+k: routed through zj-context-keys. By default the
         // keystroke is re-piped into vim-zellij-navigator (matching Ctrl+h/l
         // above) so focus moves vim-aware. When fzf is anywhere in the
         // focused pane's process tree, the raw byte (^J / ^K) is forwarded
         // instead so fzf's item navigation keeps working.
-        // See Projects/apps/zellij/zj-ctxkeys.
+        // See Projects/apps/zellij/zj-context-keys.
         bind "Ctrl j" {
             MessagePlugin "context-keys" {
                 name "ctrl+j"
@@ -653,7 +653,7 @@ keybinds clear-defaults=true {
         //                  From Ghostty's Cmd+Shift+Alt+C, which forwards
         //                  `Alt+w` then Alt+y (ESC y = \x1by).
         //
-        // Dispatched into the headless context-keys (zj-ctxkeys) plugin
+        // Dispatched into the headless context-keys (zj-context-keys) plugin
         // rather than a `Run {}` block: a Run pane — even floating +
         // close_on_exit — renders for a frame and produces a visible flash.
         // The plugin's `run` action executes the command through Zellij's
@@ -752,7 +752,7 @@ plugins {
   surrounding 4-space-indented KDL.
 */}}
 {{- $plugins := list
-    (dict "alias" "context-keys"  "name" "zj-ctxkeys"    "version" "v0.1.0")
+    (dict "alias" "context-keys"  "name" "zj-context-keys" "version" "v0.1.0")
     (dict "alias" "prompt-jumper" "name" "zj-promptjump" "version" "v0.1.0")
     (dict "alias" "status-bar"    "name" "zj-hud"  "version" "v0.1.0")
 -}}

@@ -3,7 +3,7 @@
 #            clipboard, then show a notification (and play a short sound).
 #
 # Lives under ~/.config/zellij/scripts/ — it's a zellij-internal helper,
-# not a shell command. It is invoked *headlessly* by the zj-ctxkeys
+# not a shell command. It is invoked *headlessly* by the zj-context-keys
 # ("context-keys") plugin via its `run` action, wired to the `Alt+w Y`
 # (and `Alt+w Ctrl+y`) leader chords in ~/.config/zellij/config.kdl.
 # Because the plugin runs the command through Zellij's host `run_command`
