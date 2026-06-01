@@ -2,12 +2,23 @@
 # Synced by `system-package uv sync`. Strict cleanup: removing a
 # line uninstalls the tool on next sync.
 #
-# Lines may include `uv tool install` flags after the tool name;
-# `--with <pkg>` adds a library to the tool's environment.
+# Default form (PyPI):
+#   <tool> [uv-tool-install-flags...]
+#   e.g.  rich-cli --with catppuccin[pygments]
+#
+# Alternate form (non-PyPI install spec — git / local / editable):
+#   <canonical-name> -- <package-spec> [flags...]
+#   e.g.  omlx -- git+https://github.com/jundot/omlx --python 3.11
+# The `--` token separates the canonical name (used to diff against
+# `uv tool list`) from the install spec sent to `uv tool install`.
 
 {{ if eq .profile "personal" -}}
 qmk-skim
 {{- end }}
+# omlx is a Python package (LLM inference server for Apple Silicon).
+# Pinned to Python 3.11 because mlx/transformers wheel coverage is
+# strongest there; uv auto-downloads the interpreter if missing.
+omlx -- git+https://github.com/jundot/omlx --python 3.11
 rich-cli --with catppuccin[pygments]
 
 # vim:ft=conf.gotmpl

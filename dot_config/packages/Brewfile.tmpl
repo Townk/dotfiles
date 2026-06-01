@@ -3,8 +3,6 @@
 tap "1password/tap"
 tap "olets/tap"
 tap "rafaelgarrido/caveats"
-tap "jundot/omlx", "https://github.com/jundot/omlx"
-
 # specify a directory to install
 cask_args appdir: '/Applications'
 
@@ -128,7 +126,6 @@ cask 'obsidian'                     # Note taking
 # Fonts
 cask 'font-fontawesome'             # Font for extra symbols
 cask 'font-jetbrains-mono'          # Font for coding
-cask 'font-symbols-only-nerd-font'  # The ultimate symbols font
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # Homebrew packages
@@ -184,11 +181,11 @@ brew 'git'
 # Dependency utilities (tools required by other tools)
 # ----------------------------------------------------
 brew '1broseidon/tap/cymbal'        # Code AST navigation for agents (for: pi.dev)
-brew 'cairo'                        # Open source rendering engine
+brew 'cairo'                        # Open source rendering engine (for: SKIM)
 brew 'chafa'                        # Terminal image viewer (for: yazi)
 brew 'editorconfig'                 # Support for EditoConfig (for: nvim, JetBrains IDEs)
 brew 'exiftool'                     # Media file information (for: yazi)
-brew 'expect'                       # Tool to manipulate and automate terminal applications
+brew 'expect'                       # Tool to manipulate and automate terminal applications (for: preview)
 brew 'ffmpeg'                       # Audio and video manipulation utility (for: yazi)
 brew 'ffmpegthumbnailer'            # Generate thumbnails for videos (for: yazi)
 brew 'git-cliff'                    # Changelog generator (for: git)
@@ -198,8 +195,12 @@ brew 'git-lfs'                      # Helper to allow one to commit large files 
 brew 'git-sizer'                    # Show metrics of your repository (for: git)
 brew 'graphviz'                     # Support for DOT language (draw graphs) (for: plantuml)
 brew 'hexyl'                        # Binary files viewer (for: yazi)
-brew 'luajit'                       # Lua package manager (for: nvim)
-brew 'm1ddc'                        # Utility used by HammerSpoon to detect external display brightnes
+# luajit stays under brew (not mise) because mise-plugins/mise-luaJIT fails
+# to build on macOS 26.x — its bundled luarocks 3.13.0 ships a rockspec
+# the lua parser rejects. NeoVim links against this. Allowlisted in
+# system-package-brew so the mise-leakage tripwire stays silent.
+brew 'luajit'                       # Lua JIT runtime (for: nvim)
+brew 'm1ddc'                        # Utility used by HammerSpoon to detect external display brightnes (for: hammerspoon)
 brew 'media-info'                   # Media files information (for: yazi)
 brew 'onefetch'                     # Git repo terminal statistics like GitHub (for: git)
 brew 'ouch'                         # Univeral compressor wrapper (for: yazi)
@@ -247,8 +248,9 @@ brew 'macchina'                     # Environment summary when open a shell
 brew 'mole'                         # Clean up tool
 brew 'mosh'                         # Intermittent connectivity remote connection (`ssh` but better[-ish])
 brew 'neovim'                       # Editor
-brew 'omlx'                         # Local AI models
-brew 'python@3.11'                  # Pinned runtime for omlx (declared so `brew bundle --cleanup` keeps it)
+# omlx (Local AI models, Apple Silicon) is provisioned via Uvfile.
+# python@3.11 used to be declared here as omlx's pinned runtime under
+# brew; now uv-managed since the venv is owned by `uv tool install`.
 brew 'pinentry-mac'                 # Password entry application for Mac
 brew 'plantuml'                     # UML in text
 brew 'procs'                        # Process status (`ps` but better)

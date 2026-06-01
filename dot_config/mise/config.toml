@@ -6,13 +6,21 @@ kotlin = "latest"
 lua = "5.1"
 node = "latest"
 python = "latest"
-rust = "latest"
+rust = { version = "latest", components = "rust-analyzer,rust-src,rustfmt,clippy" }
 
 # Tools
 cmake = "latest"
 just = "latest"
 ninja = "latest"
 uv = "latest"
+
+# Note on `luajit`: NeoVim links against LuaJIT (not Lua 5.1), so we still
+# need a luajit runtime on the system. The available mise plugin
+# (mise-plugins/mise-luaJIT, an asdf compat plugin) fails to build on
+# macOS Sequoia / Tahoe because its bundled luarocks 3.13.0 ships a
+# rockspec that the modern lua parser rejects. Until that's fixed
+# upstream, luajit stays declared in Brewfile.tmpl and is allowlisted in
+# system-package-brew's BREW_MISE_ALLOWED.
 
 [settings]
 [settings.python]
