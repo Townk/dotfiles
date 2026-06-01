@@ -67,6 +67,21 @@ focus_self() {
   "$ZELLIJ_BIN" action focus-pane-id "terminal_${ZELLIJ_PANE_ID}" 2>/dev/null || true
 }
 
+# Re-assert focus on our own floating pane shortly after it finishes opening.
+# When the modal is spawned over a pane running a fullscreen TUI (e.g. an
+# editor), zellij can leave keyboard focus on that underlying tiled pane — a
+# known quirk where the float is visible but keystrokes still go to the pane
+# below (zellij-org/zellij#2116, #4656). The eager focus_self above runs
+# before our UI starts, so a late focus event can still steal it back; this
+# deferred re-focus lands once the float is fully registered and pulls the
+# keyboard into it. Backgrounded so it survives the `exec` in action mode.
+focus_self_deferred() {
+  [[ -n "${ZELLIJ_PANE_ID:-}" ]] || return 0
+  ( sleep 0.2
+    "$ZELLIJ_BIN" action focus-pane-id "terminal_${ZELLIJ_PANE_ID}" 2>/dev/null || true
+  ) &
+}
+
 # Capture the originating tiled pane BEFORE we run the target. We can't
 # infer it from env vars (zellij doesn't export "previously focused"),
 # so we query `list-panes -a` and pick the most plausible candidate.
@@ -131,12 +146,14 @@ if (( ! inject )); then
   # (exit status, kill-session, etc). `exec` so the target becomes PID 1
   # of the pane and `close_on_exit` disposes of it when it returns.
   focus_self
+  focus_self_deferred
   exec "${cmd[@]}"
 fi
 
 # Picker mode: discover where to inject before running the target.
 target_pane="$(discover_target_pane)" || target_pane=""
 focus_self
+focus_self_deferred
 
 # Run the target, redirecting stdout into a tempfile so its interactive
 # UI still owns /dev/tty. A non-zero exit (ESC = 130, no match = 1) is a
