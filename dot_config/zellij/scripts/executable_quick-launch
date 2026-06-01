@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# quick-launch — define quick-launch actions as "panes", "tabs", or
+# "workspaces" for Zellij. A CLI port of the quicklaunch.wezterm plugin.
+#
+#   quick-launch menu  pane|tab|workspace      # fuzzy-pick, then open
+#   quick-launch open   pane|tab|workspace ID  # open a target directly
+#   quick-launch layout pane|tab|workspace ID  # print the generated KDL (debug)
+#   quick-launch list  [pane|tab|workspace]    # list defined targets
+#
+# Targets are read from $QUICK_LAUNCH_TARGETS (default
+# ~/.config/zellij/quick-launch-targets.yaml). YAML/JSON/TOML are accepted.
+#
+# The fuzzy picker is plain `fzf`; inside Zellij it is meant to run in a
+# floating modal pane (see the quick-launch-zellij adapter), but it works
+# standalone too. Geometry is taken from QUICK_LAUNCH_HEIGHT / _MARGIN /
+# _PADDING and a presence flag QUICK_LAUNCH_NO_BORDER, mirroring the
+# pick-glyph / pick-gitmoji convention.
+
+set -euo pipefail
+
+# Resolve our own real directory (following symlinks just in case) so we can
+# source lib/ and find the sibling quick-launch-pick regardless of how we were
+# invoked. We live in ~/.config/zellij/scripts/ alongside the picker, with the
+# shell libraries under lib/.
+_src="${BASH_SOURCE[0]}"
+while [[ -h "$_src" ]]; do
+  _dir="$(cd -P "$(dirname "$_src")" >/dev/null 2>&1 && pwd)"
+  _src="$(readlink "$_src")"
+  [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$_src")" >/dev/null 2>&1 && pwd)"
+LIB_DIR="$SCRIPT_DIR/lib"
+
+# shellcheck source=/dev/null
+. "$LIB_DIR/config.sh"
+# shellcheck source=/dev/null
+. "$LIB_DIR/command.sh"
+# shellcheck source=/dev/null
+. "$LIB_DIR/dispatch.sh"
+
+ql_die() {
+  echo "quick-launch: $*" >&2
+  exit 1
+}
+
+# Show the fuzzy picker for a kind and dispatch the chosen target. The
+# picker itself is quick-launch-pick (zsh), built on the shared
+# pick-common.zsh facility so it matches pick-glyph / pick-gitmoji; it
+# prints the selected id (or exits 130 on cancel). Geometry / no-border are
+# inherited from the environment (set by the quick-launch-zellij adapter).
+ql_menu() {
+  local kind="$1"
+  case "$kind" in
+    pane | tab | workspace) ;;
+    *) ql_die "unknown kind '$kind' (want pane|tab|workspace)" ;;
+  esac
+
+  # Make sure the picker reads the same targets file we dispatch from.
+  export QUICK_LAUNCH_TARGETS
+  QUICK_LAUNCH_TARGETS="$(ql_config_path)"
+
+  local chosen
+  chosen="$("$SCRIPT_DIR/quick-launch-pick" "$kind")" || return 0
+  [[ -n "$chosen" ]] || return 0
+  ql_dispatch "$kind" "$chosen"
+}
+
+ql_print_layout() {
+  local kind="$1" id="$2" el
+  el="$(ql_get_element "$kind" "$id")" || true
+  [[ -n "$el" ]] || ql_die "no $kind target with id '$id'"
+  case "$kind" in
+    tab) ql_build_tab_layout "$el" ;;
+    workspace) ql_build_workspace_layout "$el" ;;
+    pane) ql_action_command "$(jq -c '.action // {}' <<<"$el")"; echo ;;
+    *) ql_die "unknown kind '$kind'" ;;
+  esac
+}
+
+ql_list() {
+  local kind="${1:-}"
+  local kinds=("$kind")
+  [[ -z "$kind" ]] && kinds=(workspace tab pane)
+  local k key
+  for k in "${kinds[@]}"; do
+    case "$k" in
+      pane) key="panes" ;;
+      tab) key="tabs" ;;
+      workspace) key="workspaces" ;;
+      *) ql_die "unknown kind '$k'" ;;
+    esac
+    jq -r --arg k "$key" --arg label "$k" '
+      .[$k][]? | "\($label)\t\(.id)\t\(.action.label // .name // .id)"
+    ' <<<"$QL_JSON"
+  done | column -t -s$'\t' 2>/dev/null || true
+}
+
+usage() {
+  sed -n '2,20p' "$_src" | sed 's/^# \{0,1\}//'
+}
+
+main() {
+  if [[ $# -eq 0 ]]; then
+    usage
+    exit 2
+  fi
+  local cmd="$1"
+  shift || true
+  case "$cmd" in
+    menu)
+      [[ $# -ge 1 ]] || ql_die "usage: quick-launch menu pane|tab|workspace"
+      ql_load
+      ql_menu "$1"
+      ;;
+    open)
+      [[ $# -ge 2 ]] || ql_die "usage: quick-launch open pane|tab|workspace ID"
+      ql_load
+      ql_dispatch "$1" "$2"
+      ;;
+    layout)
+      [[ $# -ge 2 ]] || ql_die "usage: quick-launch layout pane|tab|workspace ID"
+      ql_load
+      ql_print_layout "$1" "$2"
+      ;;
+    list)
+      ql_load
+      ql_list "${1:-}"
+      ;;
+    -h | --help | help)
+      usage
+      ;;
+    *)
+      ql_die "unknown command '$cmd' (want menu|open|layout|list)"
+      ;;
+  esac
+}
+
+main "$@"

@@ -360,7 +360,7 @@ keybinds clear-defaults=true {
         bind "Shift Enter" {
             MessagePlugin "context-keys" {
                 name "shift+enter"
-                payload "default: $source; when agent,cursor-agent: key alt+enter"
+                payload "default: $source; when agent,cursor-agent: key alt+enter; when pi: kitty:$source"
             }
         }
 
@@ -696,6 +696,52 @@ keybinds clear-defaults=true {
                 floating true
             }
             SwitchToMode "normal"
+        }
+
+        // Quick Launch (port of quicklaunch.wezterm) — fuzzy-pick a
+        // pane / tab / workspace target from ~/.config/zellij/
+        // quick-launch-targets.yaml and open-or-focus it. Each bind opens
+        // the quick-launch-zellij adapter in a floating modal via the shared
+        // zellijModalRun scaffolding, in ACTION mode (inject=false): the fzf
+        // menu doesn't inject text, it runs the zellij action itself
+        // (switch-session / new-tab / new-pane). Same floating-pane shape
+        // and title block as the glyph/gitmoji pickers. Logic lives in
+        // ~/.config/zellij/scripts/quick-launch (+ scripts/lib/).
+        //   Alt+w P → split-pane targets
+        //   Alt+w T → tab targets
+        //   Alt+w W → workspace (session) targets
+        bind "P" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Quick Launch — Pane"
+                     "inject" false
+                     "script" "quick-launch-zellij"
+                     "args" "\"pane\""
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+        bind "T" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Quick Launch — Tab"
+                     "inject" false
+                     "script" "quick-launch-zellij"
+                     "args" "\"tab\""
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+        bind "W" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Quick Launch — Workspace"
+                     "inject" false
+                     "script" "quick-launch-zellij"
+                     "args" "\"workspace\""
+                     "width" "70%"
+                     "height" "60%") }}
         }
 
         // Pressing the leader again exits the mode.

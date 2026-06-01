@@ -1,0 +1,203 @@
+# quick-launch-targets.yaml — Quick Launch targets for Zellij.
+#
+# Ported from ~/.config/wezterm/quick-launch-targets.yaml. Consumed by
+# ~/.config/zellij/scripts/quick-launch via the Alt+w P/T/W leader binds.
+# Every target is focus-or-create.
+# Schema: ~/.config/zellij/quick-launch-schema.md
+#
+# Port notes vs the WezTerm file:
+#   * directions: WezTerm Bottom/Top/Right/Left -> zellij down/up/right/left.
+#   * sizes: fractional (0.40) -> percent ("40%").
+#   * `optional: true` panes are NOT auto-opened with their tab/workspace;
+#     launch them on demand from the pane menu (Alt+w P). They are listed
+#     even when nested inside a workspace.
+#   * `description` was folded into `label` (the menu display field).
+#   * the WezTerm-only `wezterm-logs` tail (used %PID%) was dropped — there
+#     is no per-GUI log file under zellij.
+
+tools:
+  editor: /opt/homebrew/bin/nvim
+  mise: /opt/homebrew/bin/mise
+
+workspaces:
+  - id: default
+    name: Default Workspace
+
+  - id: qmk
+    name: QMK Firmware
+    icon: " "
+    tabs:
+      - id: qmk-firmware
+        name: Firmware
+        action:
+          type: Shell
+          label: " Open terminal on the QMK Firmware repository directory"
+          cwd: ~/Projects/hardware/qmk
+      - id: qmk-userspace
+        name: Svalboard Keymap
+        action:
+          type: Shell
+          label: " Open terminal on my custom QMK userspace Keymap directory"
+          cwd: ~/Projects/hardware/qmk-config
+    panes:
+      - id: qmk-compile
+        name: QMK Build
+        icon: " "
+        direction: down
+        size: 40%
+        optional: true
+        action:
+          type: Run
+          label: Build Svalboard Lightly Firmware
+          cwd: ~/Projects/hardware/qmk-config
+          python_venv: auto
+          args:
+            - printf '┏━━━━━━━━━━━━━━━━━┓\n┃ Left side build ┃\n┻━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+            - qmk compile -kb svalboard/trackball/pmw3389/left -km townk
+            - printf '\n┏━━━━━━━━━━━━━━━━━━┓\n┃ Right side build ┃\n┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+            - qmk compile -kb svalboard/trackball/pmw3389/right -km townk
+            - printf '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPress any key to close the pane'
+            - sleep 5
+
+      - id: qmk-flash-right
+        name: QMK Flash Right
+        icon: "󱊟 "
+        direction: down
+        size: 40%
+        optional: true
+        action:
+          type: Run
+          label: Flash the Svalboard Lightly right half firmware
+          cwd: ~/Projects/hardware/qmk-config
+          python_venv: auto
+          args:
+            - qmk flash -kb svalboard/trackball/pmw3389/right -km townk
+
+  - id: wezterm-plugins
+    name: Wezterm Plugins
+    icon: " "
+    tabs:
+      - id: wezterm-config
+        name: Wezterm Config
+        icon: " "
+        action:
+          type: Edit
+          label: Edit Wezterm configuration
+          cwd: ~/.config/wezterm
+          args: ["wezterm.lua"]
+      - id: statusbar-plugin
+        name: Status Bar Plugin
+        icon: " "
+        action:
+          type: Edit
+          label: Edit Status Bar Plugin
+          cwd: ~/Projects/wezterm/statusbar.wezterm
+          args: ["plugin/init.lua"]
+      - id: quicklaunch-plugin
+        name: Quick Launch Plugin
+        icon: "󱓟 "
+        action:
+          type: Edit
+          label: Edit Quick Launch Plugin
+          cwd: ~/Projects/wezterm/quicklaunch.wezterm
+          args: ["plugin/init.lua"]
+
+tabs:
+  - id: launcher-items
+    name: Launcher Items
+    icon: "󱓞 "
+    action:
+      type: Edit
+      label: Edit Zellij QuickLaunch items
+      cwd: ~/.config/zellij
+      args: ["quick-launch-targets.yaml"]
+
+  - id: brew-pkgs
+    name: Homebrew Packages
+    icon: " "
+    action:
+      type: Edit
+      label: Edit Brewbundle file
+      cwd: ~/.config/packages
+      args: ["Brewfile"]
+
+  - id: wezterm-config
+    name: Wezterm Config
+    icon: " "
+    action:
+      type: Edit
+      label: Edit Wezterm configuration
+      cwd: ~/.config/wezterm
+      args: ["wezterm.lua"]
+
+  - id: zsh-config
+    name: Zsh Config
+    icon: " "
+    action:
+      type: Edit
+      label: Edit Zsh configuration
+      cwd: ~
+      args: [".zshrc"]
+
+  - id: neovim-config
+    name: NeoVim Config
+    icon: " "
+    action:
+      type: Edit
+      label: Edit NeoVim configuration
+      cwd: ~/.config/nvim
+      args: ["init.lua"]
+
+  - id: hammerspoon-config
+    name: Hammerspoon Config
+    icon: "󰣪 "
+    action:
+      type: Edit
+      label: Edit Hammerspoon configuration
+      cwd: ~/.config/hammerspoon
+      args: ["init.lua"]
+
+  - id: system-resources
+    name: System Resources
+    icon: " "
+    action:
+      type: Run
+      label: Open System Resources
+      args:
+        - /opt/homebrew/bin/btm --battery
+
+  - id: network-activity
+    name: Network activity
+    icon: "󰈀 "
+    action:
+      type: Run
+      label: Open Network activity
+      args:
+        - sudo /opt/homebrew/bin/bandwhich --total-utilization
+
+panes:
+  - id: git-log
+    name: Git Log
+    icon: " "
+    direction: right
+    size: 65%
+    moveFocus: true
+    optional: true
+    action:
+      type: Run
+      label: Git Log on current directory
+      args:
+        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && LESS='-RSX' /opt/homebrew/bin/git log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)' --all } || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key }"
+
+  - id: lazy-git
+    name: LazyGit
+    icon: "󰊢 "
+    direction: right
+    size: 65%
+    moveFocus: true
+    optional: true
+    action:
+      type: Run
+      label: Open LazyGit on current directory
+      args:
+        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && /opt/homebrew/bin/lazygit }  || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key }"

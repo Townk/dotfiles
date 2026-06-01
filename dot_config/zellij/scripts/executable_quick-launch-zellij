@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# quick-launch-zellij — feature adapter for the Quick Launch modal.
+#
+# The floating-pane scaffolding (catppuccin title block, originating-pane
+# discovery) lives in zellij-modal, which spawns this script as its target
+# via the "Alt w P/T/W" leader binds in ~/.config/zellij/config.kdl. Unlike
+# the glyph/gitmoji pickers this runs in zellij-modal's *action* mode (no
+# --inject): the fuzzy menu doesn't inject text, it performs the zellij
+# action itself (switch-session / new-tab / new-pane), so the modal just
+# hands the pane over and disposes of it (`close_on_exit`) when we return.
+#
+# All this adapter does is set the floating-pane fzf geometry and exec the
+# `quick-launch` dispatcher that lives next to it in this same scripts/ dir.
+# The single positional arg is the target kind (pane | tab | workspace),
+# forwarded to `quick-launch menu`.
+#
+# Twin of pick-gitmoji-zellij — identical shape, only the target binary and
+# the QUICK_LAUNCH_* env prefix differ.
+#
+# Env-var overrides:
+#   QUICK_LAUNCH_BIN      Absolute path to quick-launch
+#                         (default: the sibling in this scripts/ dir)
+#   QUICK_LAUNCH_HEIGHT   fzf height inside the pane. Default -4: zellij-modal
+#                         prints a 3-row title block, so fzf fills the pane
+#                         height minus that block (plus the bottom frame row).
+#   QUICK_LAUNCH_MARGIN   fzf --margin (T,R,B,L). Default 0 on every side.
+#   QUICK_LAUNCH_PADDING  fzf --padding (T,R,B,L). Default 0,2,0,2.
+
+set -euo pipefail
+
+QUICK_LAUNCH_BIN="${QUICK_LAUNCH_BIN:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/quick-launch}"
+[[ -x "$QUICK_LAUNCH_BIN" ]] || { echo "quick-launch-zellij: missing or non-executable: $QUICK_LAUNCH_BIN" >&2; exit 1; }
+
+export QUICK_LAUNCH_HEIGHT="${QUICK_LAUNCH_HEIGHT:--4}"
+export QUICK_LAUNCH_MARGIN="${QUICK_LAUNCH_MARGIN:-0,0,0,0}"
+export QUICK_LAUNCH_PADDING="${QUICK_LAUNCH_PADDING:-0,2,0,2}"
+# --no-border: the floating pane already draws its own frame; a second fzf
+# border would just shave columns off the usable width.
+export QUICK_LAUNCH_NO_BORDER=1
+
+exec "$QUICK_LAUNCH_BIN" menu "$@"

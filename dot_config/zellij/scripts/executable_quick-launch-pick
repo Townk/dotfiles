@@ -1,0 +1,184 @@
+#!/usr/bin/env zsh
+# quick-launch-pick — fzf picker for quick-launch targets, built on the
+# shared pick-common.zsh facility (the same one pick-glyph / pick-gitmoji
+# use). It inherits the catppuccin-mocha palette, border/input-border
+# handling, the NBSP-terminated header, the standard prompt/pointer/marker
+# glyphs, and recency sorting — so the Quick Launch menu looks and behaves
+# identically to the other pickers.
+#
+#   quick-launch-pick <pane|tab|workspace> [--no-border]
+#
+# It prints the chosen target's `id` to stdout (one line); `quick-launch`
+# captures that and performs the actual zellij action. On cancel it exits
+# 130 with no output (pick-common's clean-cancel convention).
+#
+# Targets are read from $QUICK_LAUNCH_TARGETS (default
+# ~/.config/zellij/quick-launch-targets.yaml; yaml/json/toml accepted).
+# Floating-pane geometry comes from QUICK_LAUNCH_HEIGHT / _MARGIN /
+# _PADDING / _INPUT_BORDER, and --no-border (or QUICK_LAUNCH_NO_BORDER=1)
+# suppresses fzf's frame for embedders that draw their own.
+
+set -eu -o pipefail
+
+# Shared picker scaffolding + jq wire-format/colour module (off-PATH libs
+# in ~/.local/lib; override with PICK_LIB_DIR / PICK_COMMON_LIB for tests).
+PICK_NAME=quick-launch-pick
+PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
+PICK_JQ="$PICK_LIB_DIR/pick.jq"
+source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" \
+  || { print -ru2 -- "quick-launch-pick: cannot source pick-common.zsh from $PICK_LIB_DIR"; exit 1; }
+die() { pick::die "$@"; }
+
+kind=""
+no_border="${QUICK_LAUNCH_NO_BORDER:+1}"
+no_border="${no_border:-0}"
+while (( $# > 0 )); do
+  case "$1" in
+    pane|tab|workspace) kind="$1"; shift ;;
+    --no-border)        no_border=1; shift ;;
+    -h|--help)          print -r -- "usage: quick-launch-pick <pane|tab|workspace> [--no-border]"; exit 0 ;;
+    --)                 shift; break ;;
+    *) die "unknown arg: $1 (want pane|tab|workspace)" ;;
+  esac
+done
+[[ -n "$kind" ]] || die "missing kind (pane|tab|workspace)"
+
+pick::need yq
+pick::need jq
+pick::need fzf
+
+TARGETS="${QUICK_LAUNCH_TARGETS:-$HOME/.config/zellij/quick-launch-targets.yaml}"
+[[ -r "$TARGETS" ]] || die "cannot read targets file: $TARGETS"
+
+case "$kind" in
+  pane)      key="panes" ;;
+  tab)       key="tabs" ;;
+  workspace) key="workspaces" ;;
+esac
+
+# Active scope (panes only). Wezterm's make_panes_choices offers the active
+# tab's panes + the active workspace's panes + the global top-level panes — so
+# a pane nested under a workspace is reachable only while that workspace is
+# live. A zellij workspace == a session, so the active workspace name is
+# $ZELLIJ_SESSION_NAME; the active tab title comes from current-tab-info. When
+# we're not inside zellij (e.g. standalone testing) both stay empty and only
+# the global panes are offered.
+active_ws="${ZELLIJ_SESSION_NAME:-}"
+active_tab=""
+if [[ -n "${ZELLIJ:-}${ZELLIJ_SESSION_NAME:-}" ]]; then
+  active_tab="$(zellij action current-tab-info 2>/dev/null | sed -n 's/^name: //p' | head -n1)"
+fi
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch"
+mkdir -p "$CACHE_DIR"
+# The pane list depends on the live workspace/tab, so its cache key must too;
+# otherwise switching workspaces would serve another scope's stale list.
+if [[ "$kind" == pane ]]; then
+  scope_ws="${active_ws//[^A-Za-z0-9._-]/_}"
+  scope_tab="${active_tab//[^A-Za-z0-9._-]/_}"
+  LINES_CACHE="$CACHE_DIR/lines-$kind-${scope_ws}-${scope_tab}.txt"
+else
+  LINES_CACHE="$CACHE_DIR/lines-$kind.txt"
+fi
+SCRIPT_PATH="${(%):-%x}"
+
+# Assemble the fzf lines cache when stale (the targets file, this script, or
+# the shared pick.jq being newer). Each line is
+#
+#   <icon>  <label>\x1f<id>
+#
+# with the icon + label colour-wrapped via pick.jq's palette (so it matches
+# the other pickers) and the bare `id` hidden behind \x1f as the only tail
+# field — fzf shows just the visible portion (--with-nth=1) but still
+# searches the id, and pick-common reads the id back for recency + output.
+if pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH" "$PICK_JQ"; then
+  local ql_json
+  case "$TARGETS" in
+    *.json) ql_json="$(yq -p=json -o=json -I=0 '.' "$TARGETS")" ;;
+    *.toml) ql_json="$(yq -p=toml -o=json -I=0 '.' "$TARGETS")" ;;
+    *)      ql_json="$(yq -p=yaml -o=json -I=0 '.' "$TARGETS")" ;;
+  esac
+
+  local tmp
+  tmp=$(mktemp "${LINES_CACHE}.XXXXXX") || die "could not create temp cache"
+  trap 'rm -f "$tmp"' EXIT INT TERM
+
+  # Nerd-font icons embedded as literal glyphs (jq's \u escapes are BMP-only,
+  # and several of these live in the supplementary PUA), matching the icon
+  # map in the Lua plugin's make_element_menu_item.
+  print -r -- "$ql_json" | jq -r -L "$PICK_LIB_DIR" \
+    --arg k "$key" --arg ws "$active_ws" --arg tab "$active_tab" '
+    include "pick";
+    def icon($t):
+      if   $t == "Shell"  then "\uf07c"
+      elif $t == "Edit"   then "󱇧"
+      elif $t == "Remote" then "󰢹"
+      elif $t == "Run"    then "󱤶"
+      else "󰙀" end;
+    # Pane choices mirror the wezterm plugin: the active tab is panes +
+    # the active workspace is panes + the global top-level panes, deduped
+    # first-id-wins. A workspace==a zellij session, so a pane nested under a
+    # workspace surfaces only while that workspace is the live one ($ws); a
+    # pane nested under a tab surfaces only while that tab is active ($tab).
+    # Tabs/workspaces themselves are listed at the top level only.
+    def collect:
+      if $k == "panes" then
+        ( (.workspaces // []) | map(select(.id == $ws or .name == $ws)) | (.[0] // null) ) as $aws
+        | ( ( (.tabs // []) | map(select(.name == $tab or .id == $tab)) | .[0] )
+            // ( ($aws.tabs // []) | map(select(.name == $tab or .id == $tab)) | .[0] )
+          ) as $atab
+        | [ ($atab.panes // [])[], ($aws.panes // [])[], (.panes // [])[] ]
+        | reduce .[] as $p ([]; if any(.[]; .id == $p.id) then . else . + [$p] end)
+        | .[]
+      else
+        .[$k][]?
+      end;
+    collect
+    | (.action.type // "") as $t
+    # Prefer the element icon field (trailing space trimmed); otherwise fall
+    # back to the per-action-type glyph. Mirrors the Lua plugin, which honours
+    # an explicit element icon before the type default.
+    | ((.icon // "") | sub("\\s+$"; "")) as $cfg_icon
+    | (if ($cfg_icon | length) > 0 then $cfg_icon else icon($t) end) as $ic
+    | (.action.label // .name // .id) as $label
+    | emit_line(
+        ($ic | paint(c_glyph)) + "  " + ($label | paint(c_key));
+        [ .id ]
+      )
+  ' > "$tmp" || die "failed to assemble $kind list (jq error)"
+  mv "$tmp" "$LINES_CACHE"
+  trap - EXIT INT TERM
+fi
+
+[[ -s "$LINES_CACHE" ]] || die "no $kind targets defined in $TARGETS"
+
+# Shared fzf palette/layout via pick::build_fzf_args; we only set what varies
+# through pick_ui. Single submit key (Enter) so no --expect.
+header_top=$'󰌑 : open  ·  esc: cancel'
+typeset -A pick_ui
+pick_ui=(
+  height       "${QUICK_LAUNCH_HEIGHT:-45%}"
+  margin       "${QUICK_LAUNCH_MARGIN:-0,0,0,0}"
+  padding      "${QUICK_LAUNCH_PADDING:-0,0,0,0}"
+  input_border "${QUICK_LAUNCH_INPUT_BORDER:-1}"
+  no_border    "$no_border"
+  header       "$header_top"
+  # Single submit key. We still declare it via --expect so fzf always emits
+  # the key line pick::run expects (query / key / selection); the key value
+  # itself is unused (there's only one action: open).
+  expect       "enter"
+)
+
+# Recency: recently-launched targets float to the top (id is the tail's only
+# field). No resume / stay-insert binds — launching isn't a text-insert flow.
+pick_id_field=1
+pick_usage_file="$CACHE_DIR/usage-$kind"
+
+pick::build_fzf_args
+pick_input=( cat )
+pick::run "$LINES_CACHE"
+
+# Output: print the chosen id (tail field 1). pick::emit_selection also
+# records recency for the selection.
+pick_emit_one() { pick::split_tail "$1"; result+="${pick_fields[1]:-}"; }
+pick::emit_selection
