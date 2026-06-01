@@ -146,7 +146,7 @@ keybinds clear-defaults=true {
 
         // Jump prompt-by-prompt. Ghostty's native Cmd+Up/Cmd+Down maps to
         // `jump_to_prompt` but those markers don't survive zellij's VTE,
-        // so we ship a small plugin (zj-promptjump) that scans scrollback
+        // so we ship a small plugin (zj-prompt-jumper) that scans scrollback
         // for the p10k prompt prefix and re-aligns the viewport. Mirrors
         // the `n`/`p` convention already used in `search` mode for next/
         // previous result. The plugin places the target prompt at the top
@@ -753,7 +753,7 @@ plugins {
 */}}
 {{- $plugins := list
     (dict "alias" "context-keys"  "name" "zj-context-keys" "version" "v0.1.0")
-    (dict "alias" "prompt-jumper" "name" "zj-promptjump" "version" "v0.1.0")
+    (dict "alias" "prompt-jumper" "name" "zj-prompt-jumper" "version" "v0.1.0")
     (dict "alias" "status-bar"    "name" "zj-hud"  "version" "v0.1.0")
 -}}
 {{- $lines := list -}}
