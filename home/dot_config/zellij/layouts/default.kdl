@@ -135,7 +135,7 @@ layout {
                         wk mode="search"  binding="n"        desc="next match"              icon=""  icon_color="#CBA6F7"
                         wk mode="search"  binding="Alt c"    desc="toggle case sensitive"   icon=""  icon_color="#F9E2AF"
                         wk mode="search"  binding="Alt b"    desc="toggle word boundaries"  icon=""  icon_color="#F9E2AF"
-                        wk mode="search"  binding="Alt p"    desc="toggle line wrap"        icon=""  icon_color="#F9E2AF"
+                        wk mode="search"  binding="Alt p"    desc="toggle line wrap"        icon="󰕇"  icon_color="#F9E2AF"
 
                         wk mode="scroll,search"  binding="k"         desc="scroll up"              icon="󰅃"  icon_color="#93E2D5"
                         wk mode="scroll,search"  binding="j"         desc="scroll down"            icon="󰅀"  icon_color="#93E2D5"

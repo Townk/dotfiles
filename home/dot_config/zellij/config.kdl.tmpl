@@ -622,9 +622,17 @@ keybinds clear-defaults=true {
     search {
         bind "n" { Search "down"; }
         bind "N" { Search "up"; }
-        bind "Alt c" { SearchToggleOption "CaseSensitivity"; }
-        bind "Alt b" { SearchToggleOption "WholeWord"; }
-        bind "Alt p" { SearchToggleOption "Wrap"; }
+        // Search-option toggles. Routed through the zj-hud `role "search"`
+        // instance rather than a bare `SearchToggleOption` so the bar's
+        // Search-mode hint glyphs stay in sync: a plugin can't observe native
+        // `SearchToggleOption`, so the search role is the single source of truth
+        // — it runs the toggle against the focused pane *and* publishes the
+        // option state the bar renders. `role "search"` is the search instance's
+        // *exact* config (pipes match by url+configuration), so the message lands
+        // there instead of spawning a fresh pane; the active tab's instance acts.
+        bind "Alt c" { MessagePlugin "status-bar" { name "zj_hud_search_toggle"; payload "case"; role "search"; }; }
+        bind "Alt b" { MessagePlugin "status-bar" { name "zj_hud_search_toggle"; payload "word"; role "search"; }; }
+        bind "Alt p" { MessagePlugin "status-bar" { name "zj_hud_search_toggle"; payload "wrap"; role "search"; }; }
         // `backspace` here steps back along the which-key trail (the shared
         // `wk_go_back` binding below now includes `search`). Because the floating
         // dialog's `EnterSearch` excursion is frozen out of the mode-trail, the
