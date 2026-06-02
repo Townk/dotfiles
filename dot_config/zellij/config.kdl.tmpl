@@ -37,190 +37,15 @@
             }
 {{- end -}}
 keybinds clear-defaults=true {
-    locked {
-        // Locked mode is the maximum-passthrough mode — every keypress,
-        // including bare `esc` and `Alt+w`, flows to the underlying app.
-        // The single exit is `Alt+Esc`, a combo uncommon enough that no
-        // shell or TUI claims it.
-        bind "Alt esc" { SwitchToMode "normal"; }
-    }
-    pane {
-        // Move focus around
-        bind "left" { MoveFocus "left"; }
-        bind "down" { MoveFocus "down"; }
-        bind "up" { MoveFocus "up"; }
-        bind "right" { MoveFocus "right"; }
-        bind "h" { MoveFocus "left"; }
-        bind "j" { MoveFocus "down"; }
-        bind "k" { MoveFocus "up"; }
-        bind "l" { MoveFocus "right"; }
+    normal {
+        // Wezterm-style leader. The "tmux" mode block below is repurposed
+        // to host all the leader chords. Scroll mode is excluded so that
+        // holding Cmd+Up/Down doesn't repeatedly flap the mode (and the
+        // statusbar) between scroll and tmux on every key-repeat. Trade-off:
+        // other Cmd+<key> chords don't reach zellij while you're in scroll
+        // mode — press Esc/Enter to leave scroll first.
+        bind "Alt w" { SwitchToMode "tmux"; }
 
-        bind "n" { SwitchToMode "renamepane"; PaneNameInput 0; }
-
-        bind "tab" { SwitchFocus; } // Cycle through panes
-
-        // Pane creation (mode-ending bindings)
-        bind "N" { NewPane; SwitchToMode "normal"; }
-        bind "H" { NewPane "left"; SwitchToMode "normal"; }
-        bind "J" { NewPane "down"; SwitchToMode "normal"; }
-        bind "K" { NewPane "up"; SwitchToMode "normal"; }
-        bind "L" { NewPane "right"; SwitchToMode "normal"; }
-        bind "S" { NewPane "stacked"; SwitchToMode "normal"; }
-
-        // Pane manipulation (mode-ending binding)
-        bind "p" { TogglePanePinned; SwitchToMode "normal"; }
-        bind "e" { TogglePaneEmbedOrFloating; SwitchToMode "normal"; }
-        bind "z" { ToggleFocusFullscreen; SwitchToMode "normal"; }
-        bind "t" { ToggleFloatingPanes; SwitchToMode "normal"; }
-        bind "f" { TogglePaneFrames; SwitchToMode "normal"; }
-    }
-    tab {
-        bind "left" { GoToPreviousTab; }
-        bind "down" { GoToNextTab; }
-        bind "up" { GoToPreviousTab; }
-        bind "right" { GoToNextTab; }
-        bind "1" { SwitchToMode "normal"; GoToTab 1; }
-        bind "2" { SwitchToMode "normal"; GoToTab 2; }
-        bind "3" { SwitchToMode "normal"; GoToTab 3; }
-        bind "4" { SwitchToMode "normal"; GoToTab 4; }
-        bind "5" { SwitchToMode "normal"; GoToTab 5; }
-        bind "6" { SwitchToMode "normal"; GoToTab 6; }
-        bind "7" { SwitchToMode "normal"; GoToTab 7; }
-        bind "8" { SwitchToMode "normal"; GoToTab 8; }
-        bind "9" { SwitchToMode "normal"; GoToTab 9; }
-        bind "[" { SwitchToMode "normal"; BreakPaneLeft; }
-        bind "]" { SwitchToMode "normal"; BreakPaneRight; }
-        bind "b" { SwitchToMode "normal"; BreakPane; }
-        bind "h" { GoToPreviousTab; }
-        bind "j" { GoToNextTab; }
-        bind "k" { GoToPreviousTab; }
-        bind "l" { GoToNextTab; }
-        bind "n" { SwitchToMode "normal"; NewTab; }
-        bind "r" { SwitchToMode "renametab"; TabNameInput 0; }
-        bind "s" { ToggleActiveSyncTab; SwitchToMode "normal"; }
-        bind "x" { SwitchToMode "normal"; CloseTab; }
-        bind "tab" { ToggleTab; }
-    }
-    resize {
-        bind "left" { Resize "Increase left"; }
-        bind "down" { Resize "Increase down"; }
-        bind "up" { Resize "Increase up"; }
-        bind "right" { Resize "Increase right"; }
-        bind "+" { Resize "Increase"; }
-        bind "-" { Resize "Decrease"; }
-        bind "=" { Resize "Increase"; }
-        bind "H" { Resize "Decrease left"; }
-        bind "J" { Resize "Decrease down"; }
-        bind "K" { Resize "Decrease up"; }
-        bind "L" { Resize "Decrease right"; }
-        bind "h" { Resize "Increase left"; }
-        bind "j" { Resize "Increase down"; }
-        bind "k" { Resize "Increase up"; }
-        bind "l" { Resize "Increase right"; }
-    }
-    move {
-        bind "left" { MovePane "left"; }
-        bind "down" { MovePane "down"; }
-        bind "up" { MovePane "up"; }
-        bind "right" { MovePane "right"; }
-        bind "h" { MovePane "left"; }
-        bind "j" { MovePane "down"; }
-        bind "k" { MovePane "up"; }
-        bind "l" { MovePane "right"; }
-        bind "n" { MovePane; }
-        bind "p" { MovePaneBackwards; }
-        bind "tab" { MovePane; }
-    }
-    scroll {
-        bind "e" { EditScrollback; SwitchToMode "normal"; }
-        // Open the floating "visual search" dialog. The dialog is the
-        // `status-bar` plugin in its per-tab `role "search"` instance (spawned
-        // by the layout, parked until needed); the active tab's instance reveals
-        // itself when the client enters `EnterSearch` and flips to `Search`.
-        bind "/" { SwitchToMode "EnterSearch"; }
-
-        // vi-style buffer ends. Only in scroll mode (not search) so `g`
-        // doesn't interfere with search navigation.
-        bind "g" { ScrollToTop; }
-        bind "G" { ScrollToBottom; }
-
-        // Jump prompt-by-prompt. Ghostty's native Cmd+Up/Cmd+Down maps to
-        // `jump_to_prompt` but those markers don't survive zellij's VTE,
-        // so we ship a small plugin (zj-prompt-jumper) that scans scrollback
-        // for the p10k prompt prefix and re-aligns the viewport. Mirrors
-        // the `n`/`p` convention already used in `search` mode for next/
-        // previous result. The plugin places the target prompt at the top
-        // of the viewport.
-        bind "n" {
-            MessagePlugin "prompt-jumper" {
-                name "next"
-            }
-        }
-        bind "p" {
-            MessagePlugin "prompt-jumper" {
-                name "prev"
-            }
-        }
-    }
-    search {
-        bind "n" { Search "down"; }
-        bind "N" { Search "up"; }
-        bind "c" { SearchToggleOption "CaseSensitivity"; }
-        bind "b" { SearchToggleOption "WholeWord"; }
-        bind "w" { SearchToggleOption "Wrap"; }
-        // Reopen the floating search dialog to edit the term: re-enter
-        // `EnterSearch`, which the `role "search"` instance turns back into the
-        // (pre-filled) dialog. `backspace` is free here — the which-key
-        // `wk_go_back` binding deliberately excludes `search` for exactly this.
-        // (`esc` → normal and `enter` → normal come from the `shared_except`
-        // blocks below; native `n`/`N` above navigate matches.)
-        bind "backspace" { SwitchToMode "EnterSearch"; }
-    }
-    session {
-        bind "a" {
-            LaunchOrFocusPlugin "zellij:about" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "c" {
-            LaunchOrFocusPlugin "configuration" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "l" {
-            LaunchOrFocusPlugin "zellij:layout-manager" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "p" {
-            LaunchOrFocusPlugin "plugin-manager" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "s" {
-            LaunchOrFocusPlugin "zellij:share" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "w" {
-            LaunchOrFocusPlugin "session-manager" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-    }
-    shared_except "locked" {
         // Pane focus: Ctrl + hjkl / arrows. Exception to the "no Ctrl in
         // zellij" rule, kept for muscle-memory consistency with vim/
         // smart-splits.nvim. See user-modifier-binding-model memory.
@@ -413,30 +238,6 @@ keybinds clear-defaults=true {
                      "height" "60%") }}
         }
 
-
-        // Other Alt direct bindings
-        bind "Alt +" { Resize "Increase"; }
-        bind "Alt -" { Resize "Decrease"; }
-        bind "Alt =" { Resize "Increase"; }
-        bind "Alt [" { PreviousSwapLayout; }
-        bind "Alt ]" { NextSwapLayout; }
-        bind "Alt f" { ToggleFloatingPanes; }
-        bind "Alt i" { MoveTab "left"; }
-        bind "Alt n" { NewPane; }
-        bind "Alt o" { MoveTab "right"; }
-        bind "Alt p" { TogglePaneInGroup; }
-        bind "Alt Shift p" { ToggleGroupMarking; }
-    }
-    shared_except "locked" "scroll" "search" "tmux" {
-        // Wezterm-style leader. The "tmux" mode block below is repurposed
-        // to host all the leader chords. Scroll mode is excluded so that
-        // holding Cmd+Up/Down doesn't repeatedly flap the mode (and the
-        // statusbar) between scroll and tmux on every key-repeat. Trade-off:
-        // other Cmd+<key> chords don't reach zellij while you're in scroll
-        // mode — press Esc/Enter to leave scroll first.
-        bind "Alt w" { SwitchToMode "tmux"; }
-    }
-    shared_except "locked" {
         // Cmd+F (Ghostty emits `ESC /` = Alt+/) → open the floating "visual
         // search" dialog. The dialog is the `status-bar` plugin in its per-tab
         // `role "search"` instance (spawned by the layout, parked until needed);
@@ -444,84 +245,6 @@ keybinds clear-defaults=true {
         // instance reacts to the ModeUpdate, reveals itself, flips to `Search`,
         // and intercepts keystrokes.
         bind "Alt /" { SwitchToMode "EnterSearch"; }
-    }
-    shared_except "normal" "locked" "entersearch" {
-        bind "enter" { SwitchToMode "normal"; }
-    }
-    shared_except "normal" "locked" "entersearch" "renametab" "renamepane" {
-        bind "esc" { SwitchToMode "normal"; }
-    }
-    shared_among "pane" "tmux" {
-        bind "x" { SwitchToMode "normal"; CloseFocus; }
-    }
-    shared_among "scroll" "search" {
-        bind "PageDown" { PageScrollDown; }
-        bind "PageUp" { PageScrollUp; }
-        bind "left" { PageScrollUp; }
-        bind "down" { ScrollDown; }
-        bind "up" { ScrollUp; }
-        bind "right" { PageScrollDown; }
-        bind "d" { HalfPageScrollDown; }
-        bind "j" { ScrollDown; }
-        bind "k" { ScrollUp; }
-        bind "u" { HalfPageScrollUp; }
-        // vi/less-style page back/forward.
-        bind "b" { PageScrollUp; }
-        bind "f" { PageScrollDown; }
-        // Note: `h` and `l` are intentionally unbound here so that Ghostty's
-        // Cmd+Up/Down chord (`Alt+w l k` / `Alt+w l j`) stays re-entrant when
-        // already in scroll mode — the `l` in the chord no longer triggers
-        // PageScrollDown. Use arrows or `b`/`f` for page nav.
-    }
-    entersearch {
-        // Both Ctrl+c and Esc bail straight to normal rather than scroll,
-        // because the common entry point now is `Alt+/` (Ghostty's Cmd+F)
-        // which skips scroll mode entirely.
-        bind "esc"    { SwitchToMode "normal"; }
-        bind "enter"  { SwitchToMode "search"; }
-    }
-    renametab {
-        // esc cancels the rename and returns straight to normal mode,
-        // matching the project-wide "esc always exits to normal" rule.
-        bind "esc" { UndoRenameTab; SwitchToMode "normal"; }
-    }
-    shared_among "renametab" "renamepane" {
-    }
-    renamepane {
-        // esc cancels the rename and returns straight to normal mode,
-        // matching the project-wide "esc always exits to normal" rule.
-        bind "esc" { UndoRenamePane; SwitchToMode "normal"; }
-    }
-    shared_among "session" "tmux" {
-        bind "d" { Detach; }
-    }
-    // which-key panel controls. The hint panel is the zj-hud plugin in
-    // its `role "whichkey"` instance (it shares the `status-bar` alias but is
-    // launched per-tab by the layout with `role "whichkey"` config). A pipe is
-    // matched to a running plugin by URL **and configuration**, so we MUST
-    // repeat `role "whichkey"` here — otherwise the bare alias doesn't match any
-    // running instance and Zellij launches a brand-new bar in a split pane.
-    // With the matching config the pipe reaches every per-tab which-key instance
-    // (only the active one acts). Bound only in the navigation modes where the
-    // panel is shown (resting Normal/Locked are excluded; text-input modes like
-    // rename*/entersearch are skipped so Ctrl-keys don't shadow typing).
-    //
-    // The chords mirror the footer hint glyphs set in the layout's
-    // `which_key { … }` block (next_page_key/prev_page_key/toggle_key/back_key):
-    //   Alt+.  → show/hide the panel               (wk_toggle_pane)
-    //   Ctrl+d / Ctrl+u → next / previous page when entries overflow (vim-style)
-    //   Backspace → step back one mode along the trail (wk_go_back)
-    shared_among "pane" "tab" "resize" "move" "scroll" "search" "tmux" "session" {
-        bind "Alt ." { MessagePlugin "status-bar" { name "wk_toggle_pane"; role "whichkey"; }; }
-        bind "Ctrl d" { MessagePlugin "status-bar" { name "wk_next_page"; role "whichkey"; }; }
-        bind "Ctrl u" { MessagePlugin "status-bar" { name "wk_prev_page"; role "whichkey"; }; }
-    }
-    // `go_back` on Backspace, but NOT in `search`: there the floating search
-    // dialog owns Backspace to delete a character in the query, so binding it
-    // here would shadow that. The other panel controls above are modified
-    // chords that don't collide with typing, so they stay shared with search.
-    shared_among "pane" "tab" "resize" "move" "scroll" "tmux" "session" {
-        bind "backspace" { MessagePlugin "status-bar" { name "wk_go_back"; role "whichkey"; }; }
     }
     // Repurposed as the wezterm-style LEADER mode. Entered via `Alt w`.
     // Each chord switches back to normal mode after executing, mirroring
@@ -534,42 +257,12 @@ keybinds clear-defaults=true {
         // Toggle zoom (wezterm LEADER+z)
         bind "z" { ToggleFocusFullscreen; SwitchToMode "normal"; }
 
-        // Rename tab (wezterm LEADER+n PromptInputLine)
-        bind "n" { SwitchToMode "renametab"; TabNameInput 0; }
-
         // Modes reachable via leader (wezterm LEADER+r/l/t/W)
         bind "L" { SwitchToMode "locked"; }
         bind "l" { SwitchToMode "scroll"; }
-        bind "m" { SwitchToMode "move"; }
         bind "o" { SwitchToMode "session"; }
         bind "p" { SwitchToMode "pane"; }
-        bind "r" { SwitchToMode "resize"; }
         bind "t" { SwitchToMode "tab"; }
-
-        // Session manager — closest available match to wezterm's
-        // `LEADER+w` (which prompted to rename the current workspace).
-        // zellij has no inline-rename for sessions; rename happens
-        // inside the session-manager UI.
-        bind "w" {
-            LaunchOrFocusPlugin "session-manager" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-
-        // Tab activation 1..9 (wezterm LEADER+<digit>). `0` is added for
-        // Ghostty's Cmd+0 → tab 10, matching macOS app-tab convention.
-        bind "1" { SwitchToMode "normal"; GoToTab 1; }
-        bind "2" { SwitchToMode "normal"; GoToTab 2; }
-        bind "3" { SwitchToMode "normal"; GoToTab 3; }
-        bind "4" { SwitchToMode "normal"; GoToTab 4; }
-        bind "5" { SwitchToMode "normal"; GoToTab 5; }
-        bind "6" { SwitchToMode "normal"; GoToTab 6; }
-        bind "7" { SwitchToMode "normal"; GoToTab 7; }
-        bind "8" { SwitchToMode "normal"; GoToTab 8; }
-        bind "9" { SwitchToMode "normal"; GoToTab 9; }
-        bind "0" { SwitchToMode "normal"; GoToTab 10; }
 
         // Toggle pane frames manually (workaround for the frame
         // flicker bug — see project memory).
@@ -583,7 +276,7 @@ keybinds clear-defaults=true {
         // neighbouring symbols across separate edits. Same floating-pane
         // shape and title block as the fresh pickers; the only difference
         // is `--resume` appended to the target via the template's `args`.
-        bind "u" {
+        bind "U" {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
                (dict "home" .chezmoi.homeDir
@@ -594,7 +287,7 @@ keybinds clear-defaults=true {
                      "width" "70%"
                      "height" "60%") }}
         }
-        bind "g" {
+        bind "G" {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
                (dict "home" .chezmoi.homeDir
@@ -698,18 +391,42 @@ keybinds clear-defaults=true {
             SwitchToMode "normal"
         }
 
-        // Quick Launch (port of quicklaunch.wezterm) — fuzzy-pick a
-        // pane / tab / workspace target from ~/.config/zellij/
-        // quick-launch-targets.yaml and open-or-focus it. Each bind opens
-        // the quick-launch-zellij adapter in a floating modal via the shared
-        // zellijModalRun scaffolding, in ACTION mode (inject=false): the fzf
-        // menu doesn't inject text, it runs the zellij action itself
-        // (switch-session / new-tab / new-pane). Same floating-pane shape
-        // and title block as the glyph/gitmoji pickers. Logic lives in
-        // ~/.config/zellij/scripts/quick-launch (+ scripts/lib/).
-        //   Alt+w P → split-pane targets
-        //   Alt+w T → tab targets
-        //   Alt+w W → workspace (session) targets
+        // Pressing the leader again exits the mode.
+        bind "Alt w" { SwitchToMode "normal"; }
+    }
+    locked {
+        // Locked mode is the maximum-passthrough mode — every keypress,
+        // including bare `esc` and `Alt+w`, flows to the underlying app.
+        // The single exit is `Alt+Esc`, a combo uncommon enough that no
+        // shell or TUI claims it.
+        bind "Alt esc" { SwitchToMode "normal"; }
+    }
+    pane {
+        bind "m" { SwitchToMode "move"; }
+        bind "r" { SwitchToMode "resize"; }
+
+        // Pane manipulation (rename)
+        bind "n" { SwitchToMode "renamepane"; PaneNameInput 0; }
+
+        // Move focus around
+        bind "left" { MoveFocus "left"; }
+        bind "down" { MoveFocus "down"; }
+        bind "up" { MoveFocus "up"; }
+        bind "right" { MoveFocus "right"; }
+        bind "h" { MoveFocus "left"; }
+        bind "j" { MoveFocus "down"; }
+        bind "k" { MoveFocus "up"; }
+        bind "l" { MoveFocus "right"; }
+
+        bind "tab" { SwitchFocus; } // Cycle through panes
+
+        // Pane creation (mode-ending bindings)
+        bind "N" { NewPane; SwitchToMode "normal"; }
+        bind "H" { NewPane "left"; SwitchToMode "normal"; }
+        bind "J" { NewPane "down"; SwitchToMode "normal"; }
+        bind "K" { NewPane "up"; SwitchToMode "normal"; }
+        bind "L" { NewPane "right"; SwitchToMode "normal"; }
+        bind "S" { NewPane "stacked"; SwitchToMode "normal"; }
         bind "P" {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
@@ -719,8 +436,83 @@ keybinds clear-defaults=true {
                      "script" "quick-launch-zellij"
                      "args" "\"pane\""
                      "width" "70%"
-                     "height" "60%") }}
+                     "height" "70%") }}
         }
+
+        // Pane manipulation (mode-ending binding)
+        bind "p" { TogglePanePinned; SwitchToMode "normal"; }
+        bind "e" { TogglePaneEmbedOrFloating; SwitchToMode "normal"; }
+        bind "z" { ToggleFocusFullscreen; SwitchToMode "normal"; }
+        bind "t" { ToggleFloatingPanes; SwitchToMode "normal"; }
+        bind "f" { TogglePaneFrames; SwitchToMode "normal"; }
+        bind "x" { CloseFocus; SwitchToMode "normal"; }
+
+        // Pane manipulation (non-mode-ending binding)
+        bind "Alt t" { ToggleFloatingPanes; }
+    }
+    move {
+        bind "left" { MovePane "left"; }
+        bind "down" { MovePane "down"; }
+        bind "up" { MovePane "up"; }
+        bind "right" { MovePane "right"; }
+        bind "h" { MovePane "left"; }
+        bind "j" { MovePane "down"; }
+        bind "k" { MovePane "up"; }
+        bind "l" { MovePane "right"; }
+
+        bind "tab" { MovePane; }
+        bind "Shift tab" { MovePaneBackwards; }
+    }
+    resize {
+        bind "left" { Resize "Increase left"; }
+        bind "down" { Resize "Increase down"; }
+        bind "up" { Resize "Increase up"; }
+        bind "right" { Resize "Increase right"; }
+        bind "h" { Resize "Increase left"; }
+        bind "j" { Resize "Increase down"; }
+        bind "k" { Resize "Increase up"; }
+        bind "l" { Resize "Increase right"; }
+
+        bind "H" { Resize "Decrease left"; }
+        bind "J" { Resize "Decrease down"; }
+        bind "K" { Resize "Decrease up"; }
+        bind "L" { Resize "Decrease right"; }
+        bind "Shift left" { Resize "Decrease left"; }
+        bind "Shift down" { Resize "Decrease down"; }
+        bind "Shift up" { Resize "Decrease up"; }
+        bind "Shift right" { Resize "Decrease right"; }
+
+        bind "-" { Resize "Decrease"; }
+        bind "+" { Resize "Increase"; }
+        bind "=" { Resize "Increase"; }
+    }
+    tab {
+        // Move focus around
+        bind "left" { GoToPreviousTab; }
+        bind "right" { GoToNextTab; }
+        bind "h" { GoToPreviousTab; }
+        bind "l" { GoToNextTab; }
+
+        bind "tab" { ToggleTab; } // last used tab
+
+        // Jump to tabs
+        bind "1" { SwitchToMode "normal"; GoToTab 1; }
+        bind "2" { SwitchToMode "normal"; GoToTab 2; }
+        bind "3" { SwitchToMode "normal"; GoToTab 3; }
+        bind "4" { SwitchToMode "normal"; GoToTab 4; }
+        bind "5" { SwitchToMode "normal"; GoToTab 5; }
+        bind "6" { SwitchToMode "normal"; GoToTab 6; }
+        bind "7" { SwitchToMode "normal"; GoToTab 7; }
+        bind "8" { SwitchToMode "normal"; GoToTab 8; }
+        bind "9" { SwitchToMode "normal"; GoToTab 9; }
+        bind "0" { SwitchToMode "normal"; GoToTab 10; }
+
+        // Tab manipulation (rename)
+        bind "n" { SwitchToMode "renametab"; TabNameInput 0; }
+
+        // Tab manipulation (create)
+        bind "P" { SwitchToMode "normal"; BreakPane; }  // make a pane become a tab
+        bind "N" { SwitchToMode "normal"; NewTab; }     // new tab
         bind "T" {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
@@ -732,7 +524,93 @@ keybinds clear-defaults=true {
                      "width" "70%"
                      "height" "60%") }}
         }
-        bind "W" {
+
+        // Tab manipulation (closing)
+        bind "x" { SwitchToMode "normal"; CloseTab; }
+        bind "[" { SwitchToMode "normal"; BreakPaneLeft; }  // make tab become a pane on the left tab
+        bind "]" { SwitchToMode "normal"; BreakPaneRight; } // make a tab become a pane on the right tab
+
+        // Tab manipulation (mode)
+        bind "s" { ToggleActiveSyncTab; SwitchToMode "normal"; } // all panes of the tab get the same input
+    }
+    scroll {
+        bind "V" { EditScrollback; SwitchToMode "normal"; }
+        // Open the floating "visual search" dialog. The dialog is the
+        // `status-bar` plugin in its per-tab `role "search"` instance (spawned
+        // by the layout, parked until needed); the active tab's instance reveals
+        // itself when the client enters `EnterSearch` and flips to `Search`.
+        bind "/" { SwitchToMode "EnterSearch"; }
+
+        // Jump prompt-by-prompt. Ghostty's native Cmd+Up/Cmd+Down maps to
+        // `jump_to_prompt` but those markers don't survive zellij's VTE,
+        // so we ship a small plugin (zj-prompt-jumper) that scans scrollback
+        // for the p10k prompt prefix and re-aligns the viewport. Mirrors
+        // the `n`/`p` convention already used in `search` mode for next/
+        // previous result. The plugin places the target prompt at the top
+        // of the viewport.
+        bind "n" {
+            MessagePlugin "prompt-jumper" {
+                name "next"
+            }
+        }
+        bind "p" {
+            MessagePlugin "prompt-jumper" {
+                name "prev"
+            }
+        }
+    }
+    search {
+        bind "n" { Search "down"; }
+        bind "N" { Search "up"; }
+        bind "Alt c" { SearchToggleOption "CaseSensitivity"; }
+        bind "Alt b" { SearchToggleOption "WholeWord"; }
+        bind "Alt p" { SearchToggleOption "Wrap"; }
+        // `backspace` here steps back along the which-key trail (the shared
+        // `wk_go_back` binding below now includes `search`). Because the floating
+        // dialog's `EnterSearch` excursion is frozen out of the mode-trail, the
+        // top of the trail in `Search` is the mode we searched *from* (e.g.
+        // `scroll`), so back returns there rather than reopening the editor.
+        // (`esc` → normal and `enter` → normal come from the `shared_except`
+        // blocks below; native `n`/`N` above navigate matches.)
+    }
+    session {
+        bind "a" {
+            LaunchOrFocusPlugin "zellij:about" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "c" {
+            LaunchOrFocusPlugin "configuration" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "d" { Detach; }
+        bind "l" {
+            LaunchOrFocusPlugin "zellij:layout-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "p" {
+            LaunchOrFocusPlugin "plugin-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "s" {
+            LaunchOrFocusPlugin "zellij:share" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "S" {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
                (dict "home" .chezmoi.homeDir
@@ -743,9 +621,81 @@ keybinds clear-defaults=true {
                      "width" "70%"
                      "height" "60%") }}
         }
-
-        // Pressing the leader again exits the mode.
-        bind "Alt w" { SwitchToMode "normal"; }
+        bind "w" {
+            LaunchOrFocusPlugin "session-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+    }
+    shared_except "normal" "locked" "entersearch" "renametab" "renamepane" {
+        bind "esc" { SwitchToMode "normal"; }
+    }
+    shared_among "scroll" "search" {
+        bind "PageDown" { PageScrollDown; }
+        bind "f" { PageScrollDown; }
+        bind "PageUp" { PageScrollUp; }
+        bind "b" { PageScrollUp; }
+        bind "down" { ScrollDown; }
+        bind "j" { ScrollDown; }
+        bind "up" { ScrollUp; }
+        bind "k" { ScrollUp; }
+        bind "d" { HalfPageScrollDown; }
+        bind "u" { HalfPageScrollUp; }
+        bind "home" { ScrollToTop; }
+        bind "g" { ScrollToTop; }
+        bind "end" { ScrollToBottom; }
+        bind "G" { ScrollToBottom; }
+        // Cmd+Up/Down chord (`Alt+w l k` / `Alt+w l j`) stays re-entrant when
+        // already in scroll mode — the `l` in the chord no longer triggers
+        // PageScrollDown. Use `PgUp`/`PgDown` or `b`/`f` for page nav.
+    }
+    entersearch {
+        // Both Ctrl+c and Esc bail straight to normal rather than scroll,
+        // because the common entry point now is `Alt+/` (Ghostty's Cmd+F)
+        // which skips scroll mode entirely.
+        bind "esc"    { SwitchToMode "normal"; }
+        bind "enter"  { SwitchToMode "search"; }
+    }
+    renametab {
+        // esc cancels the rename and returns straight to normal mode,
+        // matching the project-wide "esc always exits to normal" rule.
+        bind "esc" { UndoRenameTab; SwitchToMode "tab"; }
+    }
+    renamepane {
+        // esc cancels the rename and returns straight to normal mode,
+        // matching the project-wide "esc always exits to normal" rule.
+        bind "esc" { UndoRenamePane; SwitchToMode "pane"; }
+    }
+    // which-key panel controls. The hint panel is the zj-hud plugin in
+    // its `role "whichkey"` instance (it shares the `status-bar` alias but is
+    // launched per-tab by the layout with `role "whichkey"` config). A pipe is
+    // matched to a running plugin by URL **and configuration**, so we MUST
+    // repeat `role "whichkey"` here — otherwise the bare alias doesn't match any
+    // running instance and Zellij launches a brand-new bar in a split pane.
+    // With the matching config the pipe reaches every per-tab which-key instance
+    // (only the active one acts). Bound only in the navigation modes where the
+    // panel is shown (resting Normal/Locked are excluded; text-input modes like
+    // rename*/entersearch are skipped so Ctrl-keys don't shadow typing).
+    //
+    // The chords mirror the footer hint glyphs set in the layout's
+    // `which_key { … }` block (next_page_key/prev_page_key/toggle_key/back_key):
+    //   Alt+.  → show/hide the panel               (wk_toggle_pane)
+    //   Ctrl+d / Ctrl+u → next / previous page when entries overflow (vim-style)
+    //   Backspace → step back one mode along the trail (wk_go_back)
+    shared_among "pane" "tab" "resize" "move" "scroll" "search" "tmux" "session" {
+        bind "Alt ." { MessagePlugin "status-bar" { name "wk_toggle_pane"; role "whichkey"; }; }
+        bind "Ctrl d" { MessagePlugin "status-bar" { name "wk_next_page"; role "whichkey"; }; }
+        bind "Ctrl u" { MessagePlugin "status-bar" { name "wk_prev_page"; role "whichkey"; }; }
+    }
+    // `go_back` on Backspace. `search` is included: while the floating search
+    // dialog is up the client is parked in `Normal` (not `Search`) and the
+    // mode-trail is frozen, so this binding is inert during query typing and
+    // can't shadow the dialog's own Backspace. It only acts once you're in
+    // `Search` (navigating matches), where it steps back to the originating mode.
+    shared_among "pane" "tab" "resize" "move" "scroll" "search" "tmux" "session" {
+        bind "backspace" { MessagePlugin "status-bar" { name "wk_go_back"; role "whichkey"; }; }
     }
 }
 
