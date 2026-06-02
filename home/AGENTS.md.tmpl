@@ -1,0 +1,25 @@
+# AGENTS.md — $HOME
+
+## chezmoi-managed files
+
+Many dotfiles under this home directory are managed by
+[chezmoi](https://www.chezmoi.io). The live files are **rendered output** —
+editing them directly is lost on the next `chezmoi apply`.
+
+Before editing any file, resolve it to its chezmoi **source** (this falls
+back to the path itself when the file is not managed):
+
+```bash
+src=$(chezmoi source-path "${file}" 2>/dev/null || printf '%s' "${file}")
+```
+
+Edit `${src}`, not `${file}` — that guarantees you always edit the source.
+(If `${src}` is a `*.tmpl` or an encrypted source, you're editing chezmoi
+template/ciphertext, not the final rendered text.)
+
+After finishing the edit of ANY file, sync it back to `$HOME`. The guard
+uses the original target path, so it's a no-op for unmanaged files:
+
+```bash
+chezmoi source-path "${file}" >/dev/null 2>&1 && chezmoi apply "${file}"
+```

@@ -1,2 +1,2 @@
-dot_config/git/config            diff=gitconfig
-dot_config/git/config.d/*.config diff=gitconfig
+home/dot_config/git/config            diff=gitconfig
+home/dot_config/git/config.d/*.config diff=gitconfig

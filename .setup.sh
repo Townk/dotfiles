@@ -104,7 +104,7 @@ fi
 # system-update's ecosystem syncs run). Read from the chezmoi source
 # location since `chezmoi apply` hasn't deployed files yet.
 echo "🍻  Installing bootstrap Brewfile..."
-brew bundle install --file="$HOME/.local/share/chezmoi/dot_config/packages/Brewfile.bootstrap"
+brew bundle install --file="$HOME/.local/share/chezmoi/home/dot_config/packages/Brewfile.bootstrap"
 
 # Install `bin` (https://github.com/marcosnils/bin). Done before
 # `chezmoi apply` so that `system-update`'s `bin update` step (invoked

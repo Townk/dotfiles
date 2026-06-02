@@ -6,7 +6,7 @@
 # so the file can't be committed even if it ends up in the source.
 
 # pi-coding-agent credentials (mode 600)
-dot_pi/agent/auth.json
+home/dot_pi/agent/auth.json
 
 # Generic credential file patterns. Match anywhere in the tree.
 **/.env
