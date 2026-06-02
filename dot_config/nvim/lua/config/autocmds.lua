@@ -346,3 +346,95 @@ vim.api.nvim_create_autocmd("FileType", {
     end)
   end,
 })
+
+--------------------------------------------------------------------------------
+-- Unicode Code-Point Hints: show the glyph inline next to detected escapes
+--------------------------------------------------------------------------------
+-- WHY: Mirrors LSP inlay hints, but for textual code-point escapes. When a
+-- line contains `\u{1F600}`, `U+1F600`, or `\u00E9`, the resolved glyph is
+-- shown right after the token as dimmed virtual text (e.g. `\u{1F600} 😀`).
+-- Pairs with the `<leader>cu` keymaps that rewrite the escape into the glyph;
+-- both recognize the same formats via `utils.unicode`.
+--
+-- IMPLEMENTATION: persistent extmarks refreshed on buffer/edit events, not a
+-- decoration provider. Decoration providers only support *ephemeral* marks,
+-- and ephemeral `virt_text_pos = "inline"` does not render (only "eol"/"overlay"
+-- do) -- verified empirically. Persistent inline marks render correctly, at the
+-- cost of an explicit refresh and a buffer rescan on change.
+--------------------------------------------------------------------------------
+local unicode = require("utils.unicode")
+local unicode_hints_ns = vim.api.nvim_create_namespace("UnicodeCodepointHints")
+local unicode_hints_enabled = true
+
+-- Dim style matching the theme's inlay hints; `default` lets a colorscheme or
+-- the user override it without this clobbering their choice.
+vim.api.nvim_set_hl(0, "UnicodeCodepointHint", { link = "LspInlayHint", default = true })
+
+-- Re-place all hints for `bufnr` (0/nil = current). Clears first so stale marks
+-- never accumulate; skips disabled state and special buffers.
+local function unicode_hints_refresh(bufnr)
+  if bufnr == nil or bufnr == 0 then
+    bufnr = vim.api.nvim_get_current_buf()
+  end
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  vim.api.nvim_buf_clear_namespace(bufnr, unicode_hints_ns, 0, -1)
+  if not unicode_hints_enabled or vim.bo[bufnr].buftype ~= "" then
+    return
+  end
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  for i, line in ipairs(lines) do
+    unicode.each_match(line, function(_, stop, hex)
+      -- `stop` is the 0-indexed byte just past the token; inline virtual text
+      -- there renders immediately after the escape.
+      vim.api.nvim_buf_set_extmark(bufnr, unicode_hints_ns, i - 1, stop, {
+        virt_text = { { " " .. unicode.glyph(hex) .. " ", "UnicodeCodepointHint" } },
+        virt_text_pos = "inline",
+      })
+    end)
+  end
+end
+
+-- Update on display and on edits. TextChangedI is intentionally omitted so the
+-- hints don't shuffle while you type mid-line; they settle on InsertLeave.
+vim.api.nvim_create_autocmd({ "BufWinEnter", "TextChanged", "InsertLeave" }, {
+  group = vim.api.nvim_create_augroup("UnicodeCodepointHints", { clear = true }),
+  callback = function(args)
+    unicode_hints_refresh(args.buf)
+  end,
+  desc = "Refresh inline Unicode code-point hints",
+})
+
+-- This file loads on VeryLazy, after the first buffer is already shown, so do
+-- an initial pass over loaded buffers (their BufWinEnter has already fired).
+for _, b in ipairs(vim.api.nvim_list_bufs()) do
+  if vim.api.nvim_buf_is_loaded(b) then
+    unicode_hints_refresh(b)
+  end
+end
+
+-- Snacks toggle (registered after Snacks loads), mapped to <leader>uU.
+vim.api.nvim_create_autocmd("User", {
+  pattern = "VeryLazy",
+  once = true,
+  callback = function()
+    if type(_G.Snacks) ~= "table" or type(Snacks.toggle) ~= "table" then
+      return
+    end
+    Snacks.toggle.new({
+      name = "Unicode Code-Point Hints",
+      get = function()
+        return unicode_hints_enabled
+      end,
+      set = function(state)
+        unicode_hints_enabled = state
+        for _, b in ipairs(vim.api.nvim_list_bufs()) do
+          if vim.api.nvim_buf_is_loaded(b) then
+            unicode_hints_refresh(b)
+          end
+        end
+      end,
+    }):map("<leader>uU")
+  end,
+})
