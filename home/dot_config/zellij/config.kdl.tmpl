@@ -401,6 +401,109 @@ keybinds clear-defaults=true {
         // shell or TUI claims it.
         bind "Alt esc" { SwitchToMode "normal"; }
     }
+    session {
+        bind "a" {
+            LaunchOrFocusPlugin "zellij:about" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "c" {
+            LaunchOrFocusPlugin "configuration" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "d" { Detach; }
+        bind "l" {
+            LaunchOrFocusPlugin "zellij:layout-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "p" {
+            LaunchOrFocusPlugin "plugin-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "s" {
+            LaunchOrFocusPlugin "zellij:share" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "S" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Quick Launch — Workspace"
+                     "inject" false
+                     "script" "quick-launch-zellij"
+                     "args" "\"workspace\""
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+        bind "w" {
+            LaunchOrFocusPlugin "session-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+    }
+    tab {
+        // Move focus around
+        bind "left" { GoToPreviousTab; }
+        bind "right" { GoToNextTab; }
+        bind "h" { GoToPreviousTab; }
+        bind "l" { GoToNextTab; }
+
+        bind "tab" { ToggleTab; } // last used tab
+
+        // Jump to tabs
+        bind "1" { SwitchToMode "normal"; GoToTab 1; }
+        bind "2" { SwitchToMode "normal"; GoToTab 2; }
+        bind "3" { SwitchToMode "normal"; GoToTab 3; }
+        bind "4" { SwitchToMode "normal"; GoToTab 4; }
+        bind "5" { SwitchToMode "normal"; GoToTab 5; }
+        bind "6" { SwitchToMode "normal"; GoToTab 6; }
+        bind "7" { SwitchToMode "normal"; GoToTab 7; }
+        bind "8" { SwitchToMode "normal"; GoToTab 8; }
+        bind "9" { SwitchToMode "normal"; GoToTab 9; }
+        bind "0" { SwitchToMode "normal"; GoToTab 10; }
+
+        // Tab manipulation (rename)
+        bind "n" { SwitchToMode "renametab"; TabNameInput 0; }
+
+        // Tab manipulation (create)
+        bind "P" { SwitchToMode "normal"; BreakPane; }  // make a pane become a tab
+        bind "N" { SwitchToMode "normal"; NewTab; }     // new tab
+        bind "T" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Quick Launch — Tab"
+                     "inject" false
+                     "script" "quick-launch-zellij"
+                     "args" "\"tab\""
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+
+        // Tab manipulation (closing)
+        bind "x" { SwitchToMode "normal"; CloseTab; }
+        bind "[" { SwitchToMode "normal"; BreakPaneLeft; }  // make tab become a pane on the left tab
+        bind "]" { SwitchToMode "normal"; BreakPaneRight; } // make a tab become a pane on the right tab
+
+        // Tab manipulation (mode)
+        bind "s" { ToggleActiveSyncTab; SwitchToMode "normal"; } // all panes of the tab get the same input
+    }
     pane {
         bind "m" { SwitchToMode "move"; }
         bind "r" { SwitchToMode "resize"; }
@@ -490,53 +593,6 @@ keybinds clear-defaults=true {
         bind "+" { Resize "Increase"; }
         bind "=" { Resize "Increase"; }
     }
-    tab {
-        // Move focus around
-        bind "left" { GoToPreviousTab; }
-        bind "right" { GoToNextTab; }
-        bind "h" { GoToPreviousTab; }
-        bind "l" { GoToNextTab; }
-
-        bind "tab" { ToggleTab; } // last used tab
-
-        // Jump to tabs
-        bind "1" { SwitchToMode "normal"; GoToTab 1; }
-        bind "2" { SwitchToMode "normal"; GoToTab 2; }
-        bind "3" { SwitchToMode "normal"; GoToTab 3; }
-        bind "4" { SwitchToMode "normal"; GoToTab 4; }
-        bind "5" { SwitchToMode "normal"; GoToTab 5; }
-        bind "6" { SwitchToMode "normal"; GoToTab 6; }
-        bind "7" { SwitchToMode "normal"; GoToTab 7; }
-        bind "8" { SwitchToMode "normal"; GoToTab 8; }
-        bind "9" { SwitchToMode "normal"; GoToTab 9; }
-        bind "0" { SwitchToMode "normal"; GoToTab 10; }
-
-        // Tab manipulation (rename)
-        bind "n" { SwitchToMode "renametab"; TabNameInput 0; }
-
-        // Tab manipulation (create)
-        bind "P" { SwitchToMode "normal"; BreakPane; }  // make a pane become a tab
-        bind "N" { SwitchToMode "normal"; NewTab; }     // new tab
-        bind "T" {
-            SwitchToMode "normal"
-            {{ template "zellijModalRun"
-               (dict "home" .chezmoi.homeDir
-                     "title" "Quick Launch — Tab"
-                     "inject" false
-                     "script" "quick-launch-zellij"
-                     "args" "\"tab\""
-                     "width" "70%"
-                     "height" "60%") }}
-        }
-
-        // Tab manipulation (closing)
-        bind "x" { SwitchToMode "normal"; CloseTab; }
-        bind "[" { SwitchToMode "normal"; BreakPaneLeft; }  // make tab become a pane on the left tab
-        bind "]" { SwitchToMode "normal"; BreakPaneRight; } // make a tab become a pane on the right tab
-
-        // Tab manipulation (mode)
-        bind "s" { ToggleActiveSyncTab; SwitchToMode "normal"; } // all panes of the tab get the same input
-    }
     scroll {
         bind "V" { EditScrollback; SwitchToMode "normal"; }
         // Open the floating "visual search" dialog. The dialog is the
@@ -576,62 +632,6 @@ keybinds clear-defaults=true {
         // `scroll`), so back returns there rather than reopening the editor.
         // (`esc` → normal and `enter` → normal come from the `shared_except`
         // blocks below; native `n`/`N` above navigate matches.)
-    }
-    session {
-        bind "a" {
-            LaunchOrFocusPlugin "zellij:about" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "c" {
-            LaunchOrFocusPlugin "configuration" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "d" { Detach; }
-        bind "l" {
-            LaunchOrFocusPlugin "zellij:layout-manager" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "p" {
-            LaunchOrFocusPlugin "plugin-manager" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "s" {
-            LaunchOrFocusPlugin "zellij:share" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
-        bind "S" {
-            SwitchToMode "normal"
-            {{ template "zellijModalRun"
-               (dict "home" .chezmoi.homeDir
-                     "title" "Quick Launch — Workspace"
-                     "inject" false
-                     "script" "quick-launch-zellij"
-                     "args" "\"workspace\""
-                     "width" "70%"
-                     "height" "60%") }}
-        }
-        bind "w" {
-            LaunchOrFocusPlugin "session-manager" {
-                floating true
-                move_to_focused_tab true
-            }
-            SwitchToMode "normal"
-        }
     }
     shared_except "normal" "locked" "entersearch" "renametab" "renamepane" {
         bind "esc" { SwitchToMode "normal"; }
