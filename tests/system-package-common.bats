@@ -2,7 +2,7 @@
 
 setup() {
   TEST_TMP=$(mktemp -d)
-  source "$BATS_TEST_DIRNAME/../dot_local/lib/system-package-common.sh"
+  source "$BATS_TEST_DIRNAME/../home/dot_local/lib/system-package-common.sh"
 }
 
 teardown() {

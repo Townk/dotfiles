@@ -27,17 +27,16 @@ custom-builds/nerd-fonts/
     └── .venv/               ← fonttools venv for verification
 ```
 
-The whole `custom-builds/` tree is listed in the chezmoi-root
-`.chezmoiignore`, so **chezmoi never renders any of it into `$HOME`**.
-It lives in the source repo purely so git tracks the script and this
-README; everything under `build/` is .gitignored.
+`custom-builds/` lives at the **repo root** (outside chezmoi's `home/`
+source dir), so **chezmoi never touches it**. Git tracks the scripts and
+this README; everything under `build/` is .gitignored.
 
 ## How it gets invoked
 
 Two paths, both end up running the same `build-updated-font.sh`:
 
 1. **Automatically, change-driven** — via
-   `~/.local/share/chezmoi/run_onchange_after_symbols-nerd-font.sh.tmpl`.
+   `~/.local/share/chezmoi/home/run_onchange_after_symbols-nerd-font.sh.tmpl`.
    That template bakes two fingerprints into the rendered script:
    - the installed version of the `font-fontawesome` cask
      (`brew list --versions --cask font-fontawesome`)
@@ -55,6 +54,7 @@ Two paths, both end up running the same `build-updated-font.sh`:
 
    ```bash
    ~/.local/share/chezmoi/custom-builds/nerd-fonts/build-updated-font.sh --install
+   # (custom-builds/ is at the repo root, not under home/)
    ```
 
    The script auto-detects the FA OTFs from the `font-fontawesome`

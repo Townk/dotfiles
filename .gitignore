@@ -21,6 +21,9 @@ home/dot_pi/agent/auth.json
 # macOS noise (only emitted in some chezmoi-source directories)
 **/.DS_Store
 
+# Agent hand-off notes (ephemeral context docs, not for the repo)
+HAND-OFF.md
+
 # Editor backups / swap files
 *.swp
 *.swo

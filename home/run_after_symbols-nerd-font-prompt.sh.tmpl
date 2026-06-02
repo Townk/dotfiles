@@ -1,0 +1,112 @@
+{{- /*
+
+  Symbols Nerd Font — interactive build prompter.
+
+  Runs on EVERY `chezmoi apply`. Checks for the marker file written by
+  run_onchange_after_symbols-nerd-font.sh when a change was detected.
+  If the marker exists and a controlling TTY is available, shows the
+  build prompt and clears the marker on accept or decline.
+
+  Non-interactive applies (CI, editor hooks, cron) skip the prompt and
+  leave the marker in place so it fires on the next interactive apply.
+
+*/ -}}
+#!/bin/bash
+# Symbols Nerd Font (custom build) — interactive build prompter.
+#
+# Runs on every `chezmoi apply`. Only prompts when:
+#   1. A pending-build marker exists  (~/.local/state/chezmoi/nerd-font-build-pending)
+#   2. A controlling terminal is available  (/dev/tty is openable)
+#   3. Not running in CI or CHEZMOI_NONINTERACTIVE
+
+set -eu
+
+{{- if ne .chezmoi.os "darwin" }}
+exit 0
+{{- end }}
+
+MARKER="${HOME}/.local/state/chezmoi/nerd-font-build-pending"
+SCRIPT="{{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/build-updated-font.sh"
+
+# Fast exit when nothing is pending.
+[ -f "$MARKER" ] || exit 0
+
+if [ ! -x "$SCRIPT" ]; then
+  echo "[symbols-nerd-font] builder missing at $SCRIPT — clearing marker." >&2
+  rm -f "$MARKER"
+  exit 0
+fi
+
+# Probe the controlling terminal. chezmoi does not wire fd 0/1 to the
+# terminal, so `test -t 0` is always false here; /dev/tty is the right check.
+HAVE_TTY=0
+if { : </dev/tty; } 2>/dev/null; then HAVE_TTY=1; fi
+
+if [ "$HAVE_TTY" -ne 1 ] || [ -n "${CI:-}" ] || [ -n "${CHEZMOI_NONINTERACTIVE:-}" ]; then
+  cat <<EOF >&2
+[symbols-nerd-font] build pending — re-run chezmoi apply interactively to be prompted.
+[symbols-nerd-font] Or invoke the builder directly:
+                    $SCRIPT --install
+EOF
+  exit 0
+fi
+
+FA_VERSION="$(cat "$MARKER" 2>/dev/null || true)"
+if [ -z "$FA_VERSION" ] || [ "$FA_VERSION" = "(unknown)" ]; then
+  fa_caption="(font-fontawesome cask not installed)"
+else
+  fa_caption="$FA_VERSION"
+fi
+
+cat >/dev/tty <<EOF
+
+──────────────────────────────────────────────────────────────────────
+  Symbols Nerd Font — custom builder
+
+  A trigger fired: the Font Awesome cask was upgraded, the builder
+  script changed, or a custom icon (custom-icons/*.svg or
+  metadata.json) was added/edited. Rebuilding will produce a fresh
+  Symbols Nerd Font with whatever the cask currently has installed.
+
+  Source feeds:
+    • ryanoasis/nerd-fonts master      (shallow clone, fast-forwarded)
+    • font-fontawesome cask            $fa_caption
+    • custom-icons/                    (local *.svg + metadata.json)
+  Output:
+    • ~/Library/Fonts/SymbolsNerdFont*-Regular.ttf
+
+  Cost: ~2 minutes total. Installs \`fontforge\` from Homebrew on
+  demand (not pinned in your Brewfile, so it gets cleaned up on the
+  next \`system-package brew sync\`).
+──────────────────────────────────────────────────────────────────────
+EOF
+
+printf '[symbols-nerd-font] Run the build now? [y/N] ' >/dev/tty
+read -r ans </dev/tty || ans=""
+
+case "$ans" in
+  y|Y|yes|YES)
+    rm -f "$MARKER"
+    echo "[symbols-nerd-font] launching builder..."
+    # --yes auto-confirms internal prompts (clone, brew install, venv).
+    # --install copies the resulting TTFs into ~/Library/Fonts/.
+    # A builder failure must NOT abort chezmoi apply.
+    if "$SCRIPT" --yes --install; then
+      echo "[symbols-nerd-font] done."
+    else
+      rc=$?
+      echo "[symbols-nerd-font] builder exited $rc; not failing chezmoi apply." >&2
+      echo "[symbols-nerd-font] inspect the log at:" >&2
+      echo "  {{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/build/work/build.log" >&2
+    fi
+    ;;
+  *)
+    rm -f "$MARKER"
+    echo "[symbols-nerd-font] skipped. Re-run later with:"
+    echo "  $SCRIPT --install"
+    echo "Or touch the marker to be prompted again on next apply:"
+    echo "  touch $MARKER"
+    ;;
+esac
+
+# vim:ft=sh

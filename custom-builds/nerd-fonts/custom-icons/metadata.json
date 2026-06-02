@@ -20,5 +20,12 @@
     "terms": ["pi", "ai", "agent", "harness"],
     "aliases": ["pi-coding-agent"],
     "comment": "Pi coding agent logo"
+  },
+  "layout_panel_up": {
+    "code": "10fb03",
+    "label": "Top Panel",
+    "terms": ["split", "top", "pane", "panel"],
+    "aliases": ["nf-cod-layout_panel_up"],
+    "comment": "Icon to represent a split panel on top of the screen"
   }
 }

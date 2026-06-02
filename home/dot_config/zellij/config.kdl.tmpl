@@ -422,6 +422,10 @@ keybinds clear-defaults=true {
 
         // Pane creation (mode-ending bindings)
         bind "N" { NewPane; SwitchToMode "normal"; }
+        bind "Shift left" { NewPane "left"; SwitchToMode "normal"; }
+        bind "Shift down" { NewPane "down"; SwitchToMode "normal"; }
+        bind "Shift up" { NewPane "up"; SwitchToMode "normal"; }
+        bind "Shift right" { NewPane "right"; SwitchToMode "normal"; }
         bind "H" { NewPane "left"; SwitchToMode "normal"; }
         bind "J" { NewPane "down"; SwitchToMode "normal"; }
         bind "K" { NewPane "up"; SwitchToMode "normal"; }

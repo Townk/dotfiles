@@ -109,19 +109,31 @@ layout {
                         wk mode="scroll,search"  binding="Shift g"   desc="scroll to bottom"       icon="󱥧"  icon_color="#93E2D5"
                         wk mode="scroll,search"  binding="end"       desc="scroll to bottom"       icon="󱥧"  icon_color="#93E2D5"
 
-                        wk mode="tab"  binding="n"        desc="Rename Tab …"             icon=""  icon_color="#e5bf7b"
-                        wk mode="tab"  binding="s"        desc="sync input all panes"     icon=""  icon_color="#61afef"
-                        wk mode="tab"  binding="["        desc="to pane on tab at left"   icon="󰮵"  icon_color="#a6e3a1"
-                        wk mode="tab"  binding="]"        desc="to pane on tab at right"  icon="󰮶"  icon_color="#a6e3a1"
-                        wk mode="tab"  binding="Shift p"  desc="pane to tab"              icon=""  icon_color="#a6e3a1"
-                        wk mode="tab"  binding="Shift n"  desc="new tab"                  icon="󰝜"  icon_color="#CBA6F7"
-                        wk mode="tab"  binding="Shift t"  desc="quick launch new tab"     icon="󱓞"  icon_color="#CBA6F7"
-                        wk mode="tab"  binding="x"        desc="close tab"                icon="󰱞"  icon_color="#F38BA8"
+                        wk mode="tab"  binding="n"        desc="Rename Tab …"          icon=""  icon_color="#e5bf7b"
+                        wk mode="tab"  binding="s"        desc="sync input all panes"  icon=""  icon_color="#61afef"
+                        wk mode="tab"  binding="["        desc="tab to pane at left"   icon="󰮹"  icon_color="#a6e3a1"
+                        wk mode="tab"  binding="]"        desc="tab to pane at right"  icon="󰮺"  icon_color="#a6e3a1"
+                        wk mode="tab"  binding="Shift p"  desc="pane to tab"           icon=""  icon_color="#a6e3a1"
+                        wk mode="tab"  binding="Shift n"  desc="new tab"               icon="󰝜"  icon_color="#CBA6F7"
+                        wk mode="tab"  binding="Shift t"  desc="quick launch new tab"  icon="󱓞"  icon_color="#CBA6F7"
+                        wk mode="tab"  binding="x"        desc="close tab"             icon="󰱞"  icon_color="#F38BA8"
                         wk mode="tab"  binding="left"     desc="previous tab"
                         wk mode="tab"  binding="h"        desc="previous tab"
                         wk mode="tab"  binding="right"    desc="next tab"
                         wk mode="tab"  binding="l"        desc="next tab"
                         wk mode="tab"  binding="tab"      desc="last focused tab"
+
+                        wk mode="pane"  binding="m"        desc="Move Pane …"          icon="󰆾"  icon_color="#f9e2af"
+                        wk mode="pane"  binding="r"        desc="Resize Pane …"        icon="󰩨"  icon_color="#c678dd"
+                        wk mode="pane"  binding="n"        desc="Rename Pane …"        icon=""  icon_color="#e5bf7b"
+                        wk mode="pane"  binding="f"        desc="toggle pane borders"  icon="󰃇"  icon_color="#89B4FA"
+                        wk mode="pane"  binding="p"        desc="toggle pinned pane"   icon="󰤱"  icon_color="#CBA6F7"
+                        wk mode="pane"  binding="x"        desc="close pane"           icon="󰅘"  icon_color="#F38BA8"
+                        wk mode="pane"  binding="z"        desc="zoom pane"            icon="󱀅"  icon_color="#89b4fa"
+                        wk mode="pane"  binding="Shift H"  desc="split pane left"      icon=""  icon_color="#89b4fa"
+                        wk mode="pane"  binding="Shift J"  desc="split pane down"      icon=""  icon_color="#89b4fa"
+                        wk mode="pane"  binding="Shift K"  desc="split pane up"        icon=""  icon_color="#89b4fa"
+                        wk mode="pane"  binding="Shift L"  desc="split pane right"     icon=""  icon_color="#89b4fa"
                     }
 
 
@@ -138,6 +150,7 @@ layout {
                         wk mode="search"  "n" "Shift n"
                         wk mode="search"  "Alt c" "Alt b" "Alt p"
                         wk mode="tab" "[" "]" "Shift p"
+                        wk mode="tab" "1" "2" "3" "4" "5" "6" "7" "8" "9" "0"
                     }
                 }
 

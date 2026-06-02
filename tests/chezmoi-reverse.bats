@@ -26,7 +26,7 @@ sourceDir = "$TEST_TMP/src"
   role = "engineer"
 EOF
 
-  SCRIPT="$BATS_TEST_DIRNAME/../dot_local/bin/executable_chezmoi-reverse"
+  SCRIPT="$BATS_TEST_DIRNAME/../home/dot_local/bin/executable_chezmoi-reverse"
 }
 
 teardown() {

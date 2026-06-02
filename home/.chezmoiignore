@@ -1,8 +1,0 @@
-.config/nvim/lazy-lock.json
-.config/bin/config.json
-
-# Personal build pipelines (e.g. the Symbols-Nerd-Font custom builder).
-# Lives in the source repo for git tracking, but is never rendered into
-# $HOME. Invoked from run_once_after_symbols-nerd-font.sh.tmpl or run
-# directly out of the chezmoi source dir.
-custom-builds
