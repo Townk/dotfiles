@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "wezterm": {
+      "command": "wezterm-mcp"
+    },
+    "zellij": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "exec node \"$(npm root -g)/zellij-mcp-server/dist/index.js\""
+      ]
+    },
+    "ghostty": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "ROOT=\"$(npm root -g)/ghostty-mcp\"; test -f \"$ROOT/dist/index.js\" || (cd \"$ROOT\" && npm run build --silent); exec node \"$ROOT/dist/index.js\""
+      ]
+    }
+  }
+}

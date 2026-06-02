@@ -1,14 +1,23 @@
 # Npmfile — globally-installed npm packages.
 # Synced by `system-package npm sync`. Strict cleanup: removing a
 # line uninstalls the package on next sync.
+#
+# Non-registry installs (git / tarball):
+#   <canonical-name> -- <install-spec>
+# The canonical name is matched against `npm ls -g`; the spec is passed
+# to `npm install -g`. Prefer GitHub tarball URLs over github: URLs.
 
 # Apps
 {{ if eq .profile "personal" -}}
 @anthropic-ai/claude-code
 @tobilu/qmd
 {{- end }}
-
 @earendil-works/pi-coding-agent
+
+# MCP servers (Cursor ~/.cursor/mcp.json)
+wezterm-mcp
+zellij-mcp-server -- https://github.com/GitJuhb/zellij-mcp-server/tarball/main
+ghostty-mcp -- https://github.com/GitJuhb/ghostty-mcp/tarball/main
 
 # LSP packages
 typescript

@@ -8,6 +8,9 @@ source "$HOME/.local/lib/system-package-common.sh"
 
 NPMFILE="$PKG_DIR/Npmfile"
 
+# Flags passed to sync-time `npm install -g` / `npm update -g` (not uninstall).
+NPM_SYNC_FLAGS=(--no-fund)
+
 # Packages npm itself manages as part of its runtime. Always filtered out.
 NPM_RUNTIME=(npm corepack node-gyp)
 
@@ -75,17 +78,62 @@ do_list() {
   npm_list_rows "$outdated"
 }
 
+# npm_line_canonical <manifest-line>
+# First word when the line uses the `--` install-spec form; otherwise the
+# whole line (PyPI / registry package name).
+npm_line_canonical() {
+  local -a words=(${=1})
+  print -r -- "${words[1]}"
+}
+
+# npm_line_install_spec <manifest-line>
+# Spec passed to `npm install -g`. For `name -- <spec>` lines, everything
+# after the `--` token; otherwise the bare package name.
+npm_line_install_spec() {
+  local line="$1"
+  local -a words=(${=line})
+  if [[ ${words[2]:-} == -- ]]; then
+    print -r -- "${line#*-- }"
+  else
+    print -r -- "${words[1]}"
+  fi
+}
+
+# npm_build_global_if_needed <canonical-name>
+# Tarball/git MCP servers may ship source-only with main=dist/index.js.
+npm_build_global_if_needed() {
+  local name="$1" root dir main
+  root="$(npm root -g 2>/dev/null)" || return 0
+  dir="$root/$name"
+  [[ -d "$dir" && -f "$dir/package.json" ]] || return 0
+  main=$(command jq -r '.main // empty' "$dir/package.json" 2>/dev/null)
+  [[ "$main" == dist/index.js && ! -f "$dir/$main" ]] || return 0
+  command jq -e '.scripts.build' "$dir/package.json" >/dev/null 2>&1 || return 0
+  pkg_info "Building global npm package: $name"
+  (cd "$dir" && npm run build) || pkg_warn "build failed for $name"
+}
+
+# npm_line_uses_install_spec <manifest-line>
+# True when the line uses `<name> -- <spec>` (non-registry install).
+npm_line_uses_install_spec() {
+  local -a words=(${=1})
+  [[ ${words[2]:-} == -- ]]
+}
+
 do_sync() {
   pkg_info "Syncing npm globals..."
 
-  local declared installed before_snap after_snap
-  declared=$(mktemp); installed=$(mktemp)
+  local declared_full declared installed before_snap after_snap line
+  declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
   before_snap=$(mktemp); after_snap=$(mktemp)
-  trap "rm -f '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
+  trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
 
   npm_snapshot_versions > "$before_snap"
 
-  pkg_manifest_read "$NPMFILE" > "$declared"
+  pkg_manifest_read "$NPMFILE" > "$declared_full"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && npm_line_canonical "$line"
+  done < "$declared_full" > "$declared"
   npm_list_installed > "$installed"
 
   # Uninstall extras BEFORE installing missing — if a swap puts two
@@ -95,10 +143,23 @@ do_sync() {
     [[ -n "$pkg" ]] && npm uninstall -g "$pkg"
   done
   pkg_diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
-    [[ -n "$pkg" ]] && npm install -g "$pkg"
+    [[ -z "$pkg" ]] && continue
+    while IFS= read -r line; do
+      [[ "$(npm_line_canonical "$line")" == "$pkg" ]] || continue
+      npm install -g "${NPM_SYNC_FLAGS[@]}" "$(npm_line_install_spec "$line")"
+      npm_build_global_if_needed "$pkg"
+      break
+    done < "$declared_full"
   done
 
-  npm update -g || true
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if npm_line_uses_install_spec "$line"; then
+      npm_build_global_if_needed "$(npm_line_canonical "$line")"
+    else
+      npm update -g "${NPM_SYNC_FLAGS[@]}" "$(npm_line_canonical "$line")" || true
+    fi
+  done < "$declared_full"
 
   # Restart services whose backing global package changed version.
   npm_snapshot_versions > "$after_snap"
@@ -114,6 +175,10 @@ Usage:
   system-package-npm -h | --help | help
 
 Syncs globally-installed npm packages against ~/.config/packages/Npmfile.
+
+Manifest lines may use \`<name> -- <install-spec>\` for non-registry installs;
+the canonical \`<name>\` is diffed against \`npm ls -g\`, and the spec after
+\`--\` is passed to \`npm install -g\`.
 
 The npm runtime packages (npm, corepack, node-gyp) are always filtered out
 of both the list output and the install/uninstall diff.
@@ -152,8 +217,8 @@ Reconciles ~/.config/packages/Npmfile against \`npm ls -g\`:
   • Globals in the manifest but not installed → \`npm install -g\`
   • Globals installed but not in the manifest → \`npm uninstall -g\`
     (runtime packages are exempt from removal)
-  • Finally runs \`npm update -g\` to bump everything to the latest matching
-    semver range.
+  • Registry packages are updated individually via \`npm update -g <name>\`;
+    \`--\` install-spec lines are not passed to \`npm update\` (no registry).
 
 After sync, services whose backing global package was just upgraded and
 are currently running are restarted.

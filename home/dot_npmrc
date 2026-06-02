@@ -1,0 +1,6 @@
+# Per-user npm config (~/.npmrc). See: npm help npmrc
+#
+# npm 11+ advisory allowScripts policy for global installs. Transitive deps of
+# @earendil-works/pi-coding-agent; scripts are reviewed once here.
+# Repeat keys overwrite in ini files — use one line or allow-scripts[] entries.
+allow-scripts=protobufjs,@google/genai
