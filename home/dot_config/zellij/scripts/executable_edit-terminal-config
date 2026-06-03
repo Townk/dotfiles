@@ -1,0 +1,48 @@
+#!/usr/bin/env zsh
+
+set -eu -o pipefail
+
+# 1. Dynamic path lookups for cross-platform compatibility
+ZELLIJ=${commands[zellij]:-/opt/homebrew/bin/zellij}
+NVIM=${commands[nvim]:-${commands[vim]:-vi}}
+
+# 2. Environment Detection Logic
+if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
+  ENV_TYPE="SSH"
+elif [[ "${TERM_PROGRAM:-}" == "Ghostty" ]]; then
+  ENV_TYPE="GHOSTTY"
+elif [[ "${TERM_PROGRAM:-}" == "WezTerm" || -n "${WEZTERM_UNIX_SOCKET:-}" ]]; then
+  ENV_TYPE="WEZTERM"
+else
+  ENV_TYPE="UNKNOWN"
+fi
+
+# 3. Environment Configuration Logic (Sets Variables Only)
+case "$ENV_TYPE" in
+  "SSH")
+    TAB_NAME="Remote SSH Config"
+    TARGET_FILE="$HOME/.ssh/config"
+    ;;
+
+  "GHOSTTY")
+    TAB_NAME="Ghostty Config"
+    TARGET_FILE="$HOME/.config/ghostty/config"
+    ;;
+
+  "WEZTERM")
+    TAB_NAME="Wezterm Config"
+    TARGET_FILE="$HOME/.config/wezterm/wezterm.lua"
+    ;;
+
+  "UNKNOWN"|*)
+    print "Error: Unsupported environment. Script must be run inside Ghostty, Wezterm, or an SSH session." >&2
+    exit 1
+    ;;
+esac
+
+# 4. Shared Zellij Action Logic (Runs globally for all terminal environments)
+if "$ZELLIJ" action query-tab-names 2>/dev/null | grep -Fxq "$TAB_NAME"; then
+  "$ZELLIJ" action go-to-tab-name "$TAB_NAME"
+else
+  "$ZELLIJ" action new-tab --name "$TAB_NAME" --close-on-exit -- "$NVIM" "$TARGET_FILE"
+fi

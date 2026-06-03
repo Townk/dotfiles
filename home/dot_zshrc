@@ -16,7 +16,7 @@
 #   - live, no clients                  → reattach (resume the existing one)
 #   - live, has a client                → spawn a fresh anonymous session
 #                                         (so Cmd+N etc. get their own mux)
-if [[ -z "$ZELLIJ" && ( "$TERM_PROGRAM" == "ghostty" || -n "$SSH_TTY" ) ]]; then
+if [[ -z "$ZELLIJ" ]]; then
   for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij; do
     [[ -x "$_zellij" ]] || continue
     if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then

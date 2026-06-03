@@ -1,0 +1,94 @@
+#!/usr/bin/env zsh
+
+set -eu -o pipefail
+
+fail() {
+  print "terminal-toggle-fullscreen: $*" >&2
+  exit 1
+}
+
+detect_terminal() {
+  local term_program="${TERM_PROGRAM:-}"
+  local term_program_lower="${term_program:l}"
+
+  if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
+    print "ssh"
+  elif [[ "$term_program_lower" == "ghostty" || -n "${GHOSTTY_RESOURCES_DIR:-}" ]]; then
+    print "ghostty"
+  elif [[ "$term_program_lower" == "wezterm" || -n "${WEZTERM_UNIX_SOCKET:-}" || -n "${WEZTERM_PANE:-}" ]]; then
+    print "wezterm"
+  else
+    print "unknown"
+  fi
+}
+
+toggle_wezterm_fullscreen() {
+  local wezterm_bin="${commands[wezterm]:-wezterm}"
+  "$wezterm_bin" cli rename-workspace "__TOGGLE_FULLSCREEN__"
+}
+
+toggle_ghostty_macos_fullscreen() {
+  osascript <<'APPLESCRIPT'
+tell application "System Events"
+    set candidates to {"Ghostty", "ghostty"}
+    repeat with candidate in candidates
+        set process_name to candidate as text
+        if exists process process_name then
+            tell first process whose name is process_name
+                if (count of windows) = 0 then error "Ghostty has no windows"
+                tell window 1
+                    set current_state to value of attribute "AXFullScreen"
+                    set value of attribute "AXFullScreen" to not current_state
+                end tell
+            end tell
+            return
+        end if
+    end repeat
+    error "Ghostty process not found"
+end tell
+APPLESCRIPT
+}
+
+toggle_ghostty_linux_fullscreen() {
+  if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && (( $+commands[hyprctl] )); then
+    hyprctl dispatch fullscreen 0 >/dev/null
+    return
+  fi
+
+  if [[ -n "${SWAYSOCK:-}" ]] && (( $+commands[swaymsg] )); then
+    swaymsg fullscreen toggle >/dev/null
+    return
+  fi
+
+  if [[ -n "${DISPLAY:-}" ]] && (( $+commands[wmctrl] )); then
+    wmctrl -r :ACTIVE: -b toggle,fullscreen
+    return
+  fi
+
+  fail "Ghostty fullscreen toggle on Linux requires hyprctl, swaymsg, or wmctrl"
+}
+
+case "$(detect_terminal)" in
+  wezterm)
+    toggle_wezterm_fullscreen
+    ;;
+  ghostty)
+    case "$(uname -s)" in
+      Darwin)
+        toggle_ghostty_macos_fullscreen
+        ;;
+      Linux)
+        toggle_ghostty_linux_fullscreen
+        ;;
+      *)
+        fail "Ghostty fullscreen toggle is unsupported on $(uname -s)"
+        ;;
+    esac
+    ;;
+  ssh)
+    fail "cannot control the local terminal from an SSH-hosted Zellij session"
+    ;;
+  *)
+    fail "unsupported terminal: TERM_PROGRAM=${TERM_PROGRAM:-unset}"
+    ;;
+esac

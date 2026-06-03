@@ -45,6 +45,7 @@ keybinds clear-defaults=true {
         // other Cmd+<key> chords don't reach zellij while you're in scroll
         // mode — press Esc/Enter to leave scroll first.
         bind "Alt w" { SwitchToMode "tmux"; }
+        bind "Alt Enter" { MessagePlugin { name "terminal-fullscreen-toggle"; }; }
 
         // Pane focus: Ctrl + hjkl / arrows. Exception to the "no Ctrl in
         // zellij" rule, kept for muscle-memory consistency with vim/
@@ -394,11 +395,11 @@ keybinds clear-defaults=true {
         // jump to it instead of spawning another nvim (avoids swap-file
         // conflicts and tab clutter on repeated Cmd+,).
         bind "," {
-            Run "/bin/bash" "-c" "if /opt/homebrew/bin/zellij action query-tab-names | grep -Fxq 'Ghostty Config'; then /opt/homebrew/bin/zellij action go-to-tab-name 'Ghostty Config'; else /opt/homebrew/bin/zellij action new-tab --name 'Ghostty Config' --close-on-exit -- /opt/homebrew/bin/nvim ~/.config/ghostty/config; fi" {
-                close_on_exit true
-                floating true
-            }
             SwitchToMode "normal"
+            MessagePlugin "context-keys" {
+                name "open-terminal-config"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/edit-terminal-config" }}"
+            }
         }
 
         // Pressing the leader again exits the mode.

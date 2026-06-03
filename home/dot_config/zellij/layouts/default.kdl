@@ -6,6 +6,8 @@ layout {
     pane_template name="zj-hud-pane" borderless=true {
             plugin location="status-bar" {
                 fullscreen_min_cols "100"
+                fullscreen_command "$HOME/.config/zellij/scripts/terminal-toggle-fullscreen"
+                fullscreen_initial_state "false"
                 default_session_name "main"
 
                 // Wasm to spawn for the floating "visual search" dialog
@@ -206,12 +208,14 @@ layout {
                 // without collapsing the whole segment.
                 status {
                     system_info {
+                        visibility "always"
                         separator "  "
 
                         // Plug glyph + percentage when on AC power. At 100%
                         // we show *only* the plug glyph. On battery the
                         // command outputs nothing, so this widget is hidden.
                         info "power" {
+                            visibility "!ssh|fullscreen"
                             type "number"
                             command "pmset -g batt | grep -q 'AC Power' && pmset -g batt | grep -Eo '[0-9]+%' | head -1 | tr -d '%'"
                             interval "10s"
@@ -227,6 +231,7 @@ layout {
                         // *only* while running on battery. On AC power the
                         // command outputs nothing and the widget is hidden.
                         info "battery" {
+                            visibility "!ssh|fullscreen"
                             type "number"
                             command "pmset -g batt | grep -q 'Battery Power' && pmset -g batt | grep -Eo '[0-9]+%' | head -1 | tr -d '%'"
                             interval "10s"
@@ -239,12 +244,22 @@ layout {
 
                         // Wi-Fi power state (en0). Outputs 1 when on, 0 when off.
                         info "wifi" {
+                            visibility "!ssh|fullscreen"
                             type "number"
                             command "networksetup -getairportpower en0 | grep -qi 'on$' && echo 1 || echo 0"
                             interval "10s"
                             default "\u{F092E}"
                             match val=0 "\u{F092E}"
                             match val=1 "\u{F05A9}"
+                        }
+
+                        // Hostname on remote sessions
+                        info "host" {
+                            visibility "ssh"
+                            type "string"
+                            command "hostname -s"
+                            interval "60s"
+                            default "󰒍 {value}"
                         }
                     }
                 }
