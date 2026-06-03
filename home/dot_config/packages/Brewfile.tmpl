@@ -3,6 +3,11 @@
 tap "1password/tap"
 tap "olets/tap"
 tap "rafaelgarrido/caveats"
+
+{{ if eq .profile "work" -}}
+tap "atlassian/homebrew-acli"
+{{- end }}
+
 # specify a directory to install
 cask_args appdir: '/Applications'
 
@@ -280,6 +285,12 @@ brew 'libiconv'
 brew 'libusb'
 brew 'make'
 brew 'zstd'
+{{- end }}
+
+{{ if eq .profile "work" -}}
+# Work-related formulas
+# ---------------------
+brew 'acli'
 {{- end }}
 
 # vim:ft=ruby.gotmpl
