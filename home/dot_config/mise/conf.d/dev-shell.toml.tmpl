@@ -15,6 +15,10 @@
 */ -}}
 {{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
 [tools]
+# NOTE: neovim and zellij are intentionally NOT here — they come from
+# snap via ~/.config/packages/Snapfile (the .zshrc zellij auto-attach
+# probes /snap/bin, and NeoVim is pinned to the snap build).
+#
 # Registry-resolved (prebuilt binaries)
 "bat" = "latest"
 "eza" = "latest"
@@ -33,8 +37,6 @@
 "grex" = "latest"
 "gron" = "latest"
 "zoxide" = "latest"
-"zellij" = "latest"
-"neovim" = "latest"
 "yazi" = "latest"
 "lazygit" = "latest"
 "glow" = "latest"
