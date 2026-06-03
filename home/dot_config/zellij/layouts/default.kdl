@@ -267,13 +267,14 @@ layout {
         // mode is not a resting mode. The plugin makes itself borderless and
         // reparks/resizes at runtime, so the 1x1 rect just minimizes flash.
         //
-        // The visual-search dialog (`role "search"`) is spawned the same way:
+        // The visual-search dialog (`role "search"`) and rename dialog
+        // (`role "rename"`) are spawned the same way:
         // per-tab, because a floating pane belongs to exactly one tab, so a
         // single shared instance could only ever appear on the tab it was first
         // revealed on. Each instance parks itself offscreen and only the active
-        // tab's instance reveals + grabs the keyboard on `EnterSearch` (Alt+/).
-        // Its placement comes from the bar's `search { … }` block via shared
-        // state (above).
+        // tab's instance reveals + grabs the keyboard on its matching mode
+        // (`EnterSearch`, `RenameTab`, or `RenamePane`). Placement comes from
+        // the bar's `search { … }` block via shared state (above).
         //
         // NB: inlined here (not a `pane_template`) — Zellij always classifies a
         // `pane_template` as tiled and rejects it inside `floating_panes`, and a
@@ -288,6 +289,11 @@ layout {
             pane x=0 y=0 width=1 height=1 {
                 plugin location="status-bar" {
                     role "search"
+                }
+            }
+            pane x=0 y=0 width=1 height=1 {
+                plugin location="status-bar" {
+                    role "rename"
                 }
             }
         }
@@ -307,6 +313,11 @@ layout {
             pane x=0 y=0 width=1 height=1 {
                 plugin location="status-bar" {
                     role "search"
+                }
+            }
+            pane x=0 y=0 width=1 height=1 {
+                plugin location="status-bar" {
+                    role "rename"
                 }
             }
         }
