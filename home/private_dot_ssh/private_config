@@ -1,6 +1,34 @@
+
+# Start of stanza added by work
+# First obtained value for each parameter is used, so values in the Include(d) file has precedence
+# over values after this Include in this file. If you want to override work provided value(s),
+# create a stanza above this Include. Or to not use work config file at all, comment out the lines
+# below (but don't delete them, otherwise work will just add them back in)
+Host work work-shell
+Include /Users/user/.ssh/work_ssh_config
+# End of stanza added by work
+
 GSSAPIAuthentication yes
 IgnoreUnknown UseKeychain,AddKeysToAgent
 Match all
+
+Host devshell-zj
+  HostName work
+  User [redacted]
+  StrictHostKeyChecking yes
+  UpdateHostKeys no
+  UserKnownHostsFile ~/.ssh/work_known_hosts
+  ProxyCommand /usr/local/bin/work ssh-proxy
+  ConnectTimeout 300
+  AddKeysToAgent yes
+  ForwardAgent yes
+  RequestTTY force
+  RemoteCommand zellij attach -c Main
+  ControlMaster auto
+  ControlPath ~/.ssh/controlmasters/%r@%h:%p
+  ControlPersist 10m
+  ServerAliveInterval 30
+  ServerAliveCountMax 3
 
 Host *
   User thiago
