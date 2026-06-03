@@ -1,5 +1,12 @@
 #!/bin/bash
 set -eufo pipefail
+{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
+
+# The Linux dev-shell profile provisions tools via
+# run_once_after_setup-dev-shell-tools (mise + apt). The brew-based
+# `system-update` path below does not apply here, so stop early.
+exit 0
+{{- end }}
 
 echo "🔧  Ensuring user directory for system sockets exists..."
 RUNTIME_DIR="$TMPDIR/runtime-$UID"

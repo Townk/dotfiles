@@ -1,0 +1,86 @@
+{{ if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+#!/bin/bash
+# Pre-grant Zellij plugin permissions.
+#
+# Plugins loaded headlessly via `load_plugins` (our zj-context-keys and
+# zj-prompt-jumper, plus the zj-hud status bar spawned by the layout) can
+# never be granted permissions interactively: Zellij's permission dialog
+# only works for plugins that own a visible pane (upstream issue #4982).
+# Without a grant they silently fail. The supported workaround is to
+# pre-populate the permission cache, which the loader checks first.
+#
+# On macOS this is skipped — permissions are granted interactively there
+# and that cache is already populated; rewriting it risks clobbering a
+# working setup. This is only needed on headless boxes (the dev-shell).
+#
+# URLs are read from the rendered config so this tracks version bumps and
+# local-build (file:) overrides automatically. The hash below makes the
+# script re-run whenever the zellij config template changes.
+#
+# config.kdl source: {{ include "dot_config/zellij/config.kdl.tmpl" | sha256sum }}
+set -euo pipefail
+
+config="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/config.kdl"
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/zellij"
+perms="$cache_dir/permissions.kdl"
+
+[ -f "$config" ] || exit 0
+
+# Real plugin locations from the rendered config. Only downloadable/file
+# schemes are kept: built-in `zellij:` plugins are pre-trusted, and bare
+# aliases (e.g. `location="status-bar"` inside comments) must be ignored.
+#
+# zellij keys the permission cache by the *resolved* plugin path: HTTP(S)
+# plugins keep their full URL, but `file:` plugins are keyed by their bare
+# absolute path (the `file:` prefix is stripped). Match that here, or the
+# grants silently miss and headless plugins re-prompt.
+urls=$(grep -oE 'location="[^"]+"' "$config" \
+  | sed -E 's/^location="//; s/"$//' \
+  | grep -E '^(https?://|file:)' \
+  | sed -E 's#^file:##' \
+  | sort -u)
+
+[ -n "$urls" ] || exit 0
+
+mkdir -p "$cache_dir"
+
+# Grant the full permission set (all 17 PermissionType variants) so a future
+# plugin version that requests an extra permission doesn't reintroduce the
+# un-acceptable prompt.
+grant_block() {
+  cat <<'PERMS'
+    ReadApplicationState
+    ChangeApplicationState
+    OpenFiles
+    RunCommands
+    OpenTerminalsOrPlugins
+    WriteToStdin
+    WebAccess
+    ReadCliPipes
+    MessageAndLaunchOtherPlugins
+    Reconfigure
+    FullHdAccess
+    StartWebServer
+    InterceptInput
+    ReadPaneContents
+    RunActionsAsUser
+    WriteToClipboard
+    ReadSessionEnvironmentVariables
+PERMS
+}
+
+count=0
+{
+  while IFS= read -r url; do
+    [ -n "$url" ] || continue
+    printf '"%s" {\n' "$url"
+    grant_block
+    printf '}\n'
+    count=$((count + 1))
+  done <<EOF
+$urls
+EOF
+} > "$perms"
+
+echo "zellij: pre-granted permissions for $(printf '%s\n' "$urls" | grep -c .) plugin(s)"
+{{ end -}}

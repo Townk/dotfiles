@@ -54,12 +54,12 @@ a human; then runs `chezmoi apply`.
 
 ### Profile
 
-This repo uses a single `profile` data value (`personal` or `work`) to gate
-profile-specific entries. The `.chezmoi.toml.tmpl` init template reads the
-profile from the `CHEZMOI_PROFILE` env var; `.setup.sh` sets it based on the
-`--work` / `--personal` flag. When no flag is given and a TTY is available,
-chezmoi prompts. When no flag is given and there's no TTY (e.g. `curl | bash`
-without args), the script defaults to `personal`.
+This repo uses a single `profile` data value (`personal`, `work`, or
+`dev-shell`) to gate profile-specific entries. The `.chezmoi.toml.tmpl` init
+template reads the `CHEZMOI_PROFILE` env var; `.setup.sh` sets it based on the
+`--work` / `--personal` flag for Macs. When no flag is given and a TTY is
+available, chezmoi prompts. When no flag is given and there's no TTY (e.g.
+`curl | bash` without args), the script defaults to `personal`.
 
 To change profile on an already-bootstrapped machine, re-run setup.sh with the
 opposite flag, then `chezmoi apply`. Templates that branch on profile look like:
@@ -72,6 +72,10 @@ mas "DaisyDisk", id: 411643860
 
 Currently the App Store (`mas`) entries are gated to `personal`. Brews, casks,
 and the bootstrap Brewfile are shared.
+
+The `dev-shell` profile is for Linux Work-style shells, not `.setup.sh`.
+Initialize it with `CHEZMOI_PROFILE=dev-shell` or an equivalent chezmoi config,
+then run `chezmoi apply` on the Linux host.
 
 End to end, the script:
 

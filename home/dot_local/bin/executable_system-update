@@ -118,6 +118,34 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
   fi
 fi
 
+# Homebrew-less hosts (e.g. the Linux dev-shell profile) have no brew /
+# Brewfile pipeline. Converge what we can — mise, bin, NeoVim — and skip
+# the brew/launchd steps instead of dying on the first `brew` call.
+if ! command -v brew >/dev/null 2>&1; then
+  warn "Homebrew not found — running the Homebrew-less update path."
+  if command -v mise >/dev/null 2>&1; then
+    print -P -- "\n🛠️ Upgrade Mise tools...\n"
+    mise upgrade && mise prune -y || warn "mise upgrade had failures"
+  fi
+  if command -v bin >/dev/null 2>&1; then
+    print -P -- "\n🛠️ Upgrade bin tools...\n"
+    bin update -a -y && bin prune -f || warn "bin upgrade had failures"
+  fi
+  if command -v snap >/dev/null 2>&1; then
+    print -P -- "\n📦 Refresh snap packages...\n"
+    sudo snap refresh || warn "snap refresh had failures"
+  fi
+  if command -v nvim >/dev/null 2>&1; then
+    print -P -- "\n📝 Upgrade NeoVim plugins...\n"
+    # Bounded with `timeout`: headless plugin sync can hang indefinitely
+    # if a background task (e.g. a treesitter parser build) never settles.
+    timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" \
+      || warn "NeoVim plugin upgrade timed out or had failures"
+  fi
+  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
+  exit 0
+fi
+
 print -P -- "\n  Updating Homebrew sources...\n"
 brew update || die "Failed to update Homebrew!"
 
