@@ -17,7 +17,7 @@
 #   - live, has a client                → spawn a fresh anonymous session
 #                                         (so Cmd+N etc. get their own mux)
 if [[ -z "$ZELLIJ" && ( "$TERM_PROGRAM" == "ghostty" || -n "$SSH_TTY" ) ]]; then
-  for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij; do
+  for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij ~/.local/bin/zellij; do
     [[ -x "$_zellij" ]] || continue
     if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
       if "$_zellij" --session Main action list-clients 2>/dev/null \
@@ -204,7 +204,11 @@ export MANPAGER="less -R --use-color -Dd+r -Du+b"
 # re-sources this file before any postinstall fires.
 function -z4h-postinstall-fzf() {
   emulate -L zsh
-  local fzf_bin="${HOMEBREW_PREFIX:-/opt/homebrew}/bin/fzf"
+  # ${commands[fzf]} is zsh's external-command hash: it resolves the
+  # real fzf binary on $PATH, bypassing the `fzf` alias, and works on
+  # both Homebrew (macOS) and mise/bin (Linux). Fall back to the
+  # Homebrew path for the bootstrap window before $PATH is populated.
+  local fzf_bin="${commands[fzf]:-${HOMEBREW_PREFIX:-/opt/homebrew}/bin/fzf}"
   [[ -x $fzf_bin ]] || {
     print -Pru2 -- "%F{3}z4h%f: %F{1}fzf not found at ${fzf_bin}; install via Brewfile%f"
     return 1
@@ -219,11 +223,18 @@ function -z4h-postinstall-fzf() {
 # perform network I/O must be done above. Everything else is best done below.
 z4h init || return
 
-[[ -x "$HOMEBREW_PREFIX/bin/atuin" ]] && eval "$($HOMEBREW_PREFIX/bin/atuin init zsh)"
-[[ -x "$HOMEBREW_PREFIX/bin/thefuck" ]] && eval "$($HOMEBREW_PREFIX/bin/thefuck --alias)"
-[[ -x "$HOMEBREW_PREFIX/bin/mise" ]] && eval "$($HOMEBREW_PREFIX/bin/mise activate zsh)"
-[[ -x "$HOMEBREW_PREFIX/bin/wezterm" ]] && eval "$($HOMEBREW_PREFIX/bin/wezterm shell-completion --shell zsh)"
-[[ -x "$HOMEBREW_PREFIX/bin/zoxide" ]] && eval "$($HOMEBREW_PREFIX/bin/zoxide init zsh)"
+# Resolve tools via PATH (`command -v`) rather than a hard-coded
+# $HOMEBREW_PREFIX so these init hooks fire regardless of how the
+# binary was installed (Homebrew on macOS, mise/bin/snap on Linux).
+#
+# mise must activate first: it injects the mise-managed tool dirs onto
+# $PATH, and on Linux atuin/zoxide/etc. live there. (On macOS they're
+# always on $PATH via Homebrew, so order is irrelevant there.)
+command -v mise    >/dev/null && eval "$(mise activate zsh)"
+command -v atuin   >/dev/null && eval "$(atuin init zsh)"
+command -v thefuck >/dev/null && eval "$(thefuck --alias)"
+command -v wezterm >/dev/null && eval "$(wezterm shell-completion --shell zsh)"
+command -v zoxide  >/dev/null && eval "$(zoxide init zsh)"
 
 # Extend PATH.
 # path=(~/.local/bin /opt/homebrew/opt/binutils/bin $path)
@@ -253,7 +264,15 @@ z4h source -- ${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/Library/Taps/homebrew/homebrew
 # Configure zsh-abbr to use the user-abbreviations file from my zsh config dir
 ABBR_USER_ABBREVIATIONS_FILE="${HOME}/.config/zsh/user-abbreviations.sh"
 ABBR_DEFAULT_BINDINGS=0
-z4h source -- ${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/share/zsh-abbr/zsh-abbr.zsh}
+# zsh-abbr ships via Homebrew on macOS and a local clone on Linux
+# (~/.local/opt/zsh-abbr, provisioned by the dev-shell run_once).
+# Source whichever is present.
+for _abbr_src in \
+  ${HOMEBREW_PREFIX:+$HOMEBREW_PREFIX/share/zsh-abbr/zsh-abbr.zsh} \
+  "$HOME/.local/opt/zsh-abbr/zsh-abbr.zsh"; do
+  [[ -r $_abbr_src ]] && { z4h source -- "$_abbr_src"; break; }
+done
+unset _abbr_src
 # I load my own functions at the end so it can use everything that was sourced
 # here to work
 z4h source ~/.config/zsh/functions.sh
@@ -280,7 +299,7 @@ z4h bindkey history-substring-search-down Down   # history search next cmd line
 z4h bindkey history-substring-search-up Ctrl+P   # history search previous cmd line
 z4h bindkey history-substring-search-down Ctrl+N # history search next cmd line
 
-[[ -x "$HOMEBREW_PREFIX/bin/atuin" ]] && z4h bindkey _atuin_search_widget Ctrl+R # shell history with atuin
+command -v atuin >/dev/null && z4h bindkey _atuin_search_widget Ctrl+R # shell history with atuin
 
 # Autoload functions.
 autoload -Uz zmv

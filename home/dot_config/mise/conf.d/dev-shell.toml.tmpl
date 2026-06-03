@@ -1,0 +1,65 @@
+{{- /*
+  dev-shell toolbox — extra mise-managed CLI tools for the Linux
+  `dev-shell` profile (headless SSH dev boxes, e.g. Work Shells).
+
+  mise loads every ~/.config/mise/conf.d/*.toml in addition to the main
+  config.toml, so these tools install alongside the language runtimes
+  without touching that file (no `mise use -g` drift).
+
+  Only emitted on linux + dev-shell. On macOS / other profiles these
+  tools come from Brewfile.tmpl, so the file renders empty there.
+
+  Names that resolve in mise's registry are used bare; the rest pin an
+  explicit ubi:/aqua: backend. `[exe=...]` overrides the installed
+  binary name when it differs from the repo name.
+*/ -}}
+{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
+[tools]
+# Registry-resolved (prebuilt binaries)
+"bat" = "latest"
+"eza" = "latest"
+"fd" = "latest"
+"fzf" = "latest"
+"jq" = "latest"
+"yq" = "latest"
+"ripgrep" = "latest"
+"delta" = "latest"
+"bottom" = "latest"
+"duf" = "latest"
+"hyperfine" = "latest"
+"jless" = "latest"
+"tokei" = "latest"
+"gping" = "latest"
+"grex" = "latest"
+"gron" = "latest"
+"zoxide" = "latest"
+"zellij" = "latest"
+"neovim" = "latest"
+"yazi" = "latest"
+"lazygit" = "latest"
+"glow" = "latest"
+"gum" = "latest"
+"doggo" = "latest"
+"atuin" = "latest"
+"git-cliff" = "latest"
+"ast-grep" = "latest"
+"hexyl" = "latest"
+
+# Not in the registry — pinned to a GitHub-release backend.
+"aqua:dalance/procs" = "latest"
+"aqua:o2sh/onefetch" = "latest"
+"aqua:ouch-org/ouch" = "latest"
+"aqua:imsnif/bandwhich" = "latest"
+"aqua:fujiapple852/trippy" = "latest"
+"ubi:printfn/fend" = "latest"
+"ubi:NerdyPepper/eva" = "latest"
+"ubi:Macchina-CLI/macchina" = "latest"
+"ubi:sibprogrammer/xq" = "latest"
+"ubi:tldr-pages/tlrc[exe=tldr]" = "latest"
+# tidy-viewer's GitHub release tarball isn't OS/arch-tagged, so ubi
+# can't pick an asset; build it from crates.io instead (pure Rust).
+"cargo:tidy-viewer" = "latest"
+# NOTE: t-rec (terminal recorder) was dropped — the upstream repo
+# sassman/t-rec no longer exists (404), and screen recording is of
+# little use on a headless SSH box.
+{{- end }}

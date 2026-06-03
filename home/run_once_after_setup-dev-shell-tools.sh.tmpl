@@ -1,0 +1,96 @@
+{{- /*
+  dev-shell tool provisioning (Linux only).
+
+  Owns everything `run_once_after_setup-bootstrap-tools` does on macOS,
+  minus the Homebrew/`system-update` path which doesn't exist here:
+
+    1. mise install  — language runtimes (config.toml) + the CLI toolbox
+                       declared in conf.d/dev-shell.toml.
+    2. apt-get       — system libraries that aren't single Go/Rust
+                       binaries (media/doc tooling many CLIs and the
+                       `preview` script depend on).
+
+  Every install step is best-effort: a single unavailable package must
+  never abort the run (and thus block later chezmoi scripts). Failures
+  are collected and reported at the end.
+
+  Only runs on linux + dev-shell.
+*/ -}}
+{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+#!/bin/bash
+set -uo pipefail
+
+echo "🧰  Provisioning dev-shell tools..."
+
+# chezmoi may run this with a minimal PATH; make sure the bootstrap
+# binaries are reachable.
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/snap/bin:$PATH"
+
+failures=()
+
+# 1. mise: language runtimes + conf.d CLI toolbox. Best-effort — mise
+#    installs every tool it can and reports the rest; we don't let a
+#    single failure abort provisioning.
+if command -v mise >/dev/null 2>&1; then
+  echo "🛠️  Installing mise-managed runtimes and CLI toolbox..."
+  mise install -y || failures+=("mise install (some tools failed; rerun 'mise install')")
+else
+  failures+=("mise not found on PATH")
+fi
+
+# 2. System libraries via apt. These back the media/document handlers in
+#    the `preview` script, yazi previews, and assorted CLI tools that
+#    aren't distributed as standalone Go/Rust binaries.
+APT_PACKAGES=(
+  figlet                 # lolbanner
+  lolcat                 # lolbanner
+  pandoc                 # universal document converter
+  ffmpeg                 # yazi media
+  ffmpegthumbnailer      # yazi video thumbnails
+  poppler-utils          # pdftocairo (preview-pdf)
+  mediainfo              # preview-mediainfo
+  libimage-exiftool-perl # exiftool (yazi)
+  imagemagick            # image conversion
+  chafa                  # terminal image rendering (preview-image)
+  p7zip-full             # 7z archives
+  unar                   # rar/other archive extraction
+  graphviz               # dot/plantuml
+  expect                 # unbuffer (preview force-tty / glow)
+  aspell                 # spell checking
+  hunspell               # spell checking
+  rsync                  # file sync
+  file                   # mime detection (preview dispatch)
+  git-lfs                # large files in git
+)
+
+if command -v apt-get >/dev/null 2>&1; then
+  echo "📦  Installing system libraries via apt..."
+  sudo apt-get update -qq || failures+=("apt-get update")
+  for pkg in "${APT_PACKAGES[@]}"; do
+    if ! sudo apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
+      failures+=("apt: $pkg")
+    fi
+  done
+else
+  failures+=("apt-get not found (skipped system libraries)")
+fi
+
+# 3. zsh-abbr — no mise/apt package; clone it (with its zsh-job-queue
+#    submodule) where dot_zshrc expects it. macOS gets this via Homebrew.
+ABBR_DIR="$HOME/.local/opt/zsh-abbr"
+if [ ! -e "$ABBR_DIR/zsh-abbr.zsh" ]; then
+  echo "🔤  Installing zsh-abbr..."
+  git clone --depth 1 --recurse-submodules https://github.com/olets/zsh-abbr "$ABBR_DIR" \
+    || failures+=("git clone zsh-abbr")
+fi
+
+if (( ${#failures[@]} )); then
+  echo "⚠️  dev-shell provisioning finished with some skipped items:"
+  printf '   - %s\n' "${failures[@]}"
+  echo "   (these are best-effort; the shell is still usable)"
+else
+  echo "👍  dev-shell tools provisioned successfully!"
+fi
+
+# vim:ft=sh
+{{- end }}
