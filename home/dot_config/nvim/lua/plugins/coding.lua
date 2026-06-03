@@ -172,6 +172,16 @@ return {
   },
 
   {
+    "mason-org/mason.nvim",
+    opts = function(_, opts)
+      local ok, chezmoi = pcall(require, "config.chezmoi")
+      if ok and chezmoi.os == "linux" and chezmoi.profile == "dev-shell" then
+        opts.PATH = "append"
+      end
+    end,
+  },
+
+  {
     "WhoIsSethDaniel/mason-tool-installer.nvim",
     dependencies = { "mason-org/mason.nvim" },
     config = function()

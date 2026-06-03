@@ -32,6 +32,10 @@ case ":$PATH:" in
   *":$HOME/.local/share/mise/shims:"*) ;;
   *) PATH="$HOME/.local/share/mise/shims:$PATH" ;;
 esac
+case ":$PATH:" in
+  *":$HOME/.cargo/bin:"*) ;;
+  *) PATH="$PATH:$HOME/.cargo/bin" ;;
+esac
 export PATH
 
 # Secret env vars (API keys, tokens). Resolved from 1Password by chezmoi
