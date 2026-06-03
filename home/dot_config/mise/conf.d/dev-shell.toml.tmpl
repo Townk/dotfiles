@@ -26,7 +26,6 @@
 "bat" = "latest"
 "eza" = "latest"
 "fd" = "latest"
-"fzf" = "latest"
 "jq" = "latest"
 "yq" = "latest"
 "ripgrep" = "latest"
@@ -49,6 +48,12 @@
 "git-cliff" = "latest"
 "ast-grep" = "latest"
 "hexyl" = "latest"
+
+# fzf straight from GitHub releases. The registry/apt fzf is too old
+# (0.29) for the modern --bind keys z4h's completion widgets use (e.g.
+# alt-page-up), which made TAB-completion error out. Pin the backend so
+# we always get current upstream.
+"github:junegunn/fzf" = "latest"
 
 # Not in the registry — pinned to a GitHub-release backend.
 "aqua:dalance/procs" = "latest"

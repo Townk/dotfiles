@@ -102,6 +102,17 @@ zstyle ':z4h:fzf-complete' fzf-bindings \
   'ctrl-f:change-preview(FZF_PREVIEW_FULL=1 preview {-1} | sed "s/^/ /")' \
   'ctrl-alt-f:change-preview(preview {-1} | sed "s/^/ /")'
 
+# Use the fzf on PATH (mise's github build on the dev-shell, Homebrew on
+# macOS) for z4h's fzf widgets instead of z4h's bundled binary. The
+# bundled one can be ancient (apt's 0.29 on Linux, 0.25 on macOS) and
+# rejects the modern --bind keys above (e.g. alt-page-up), which broke
+# TAB-completion. Guard on $commands so an absent fzf falls back to the
+# z4h default rather than an empty command.
+[[ -n ${commands[fzf]} ]] && {
+  zstyle ':z4h:*' fzf-command ${commands[fzf]}
+  zstyle ':z4h:fzf-complete' fzf-command ${commands[fzf]}
+}
+
 # Enable ('yes') or disable ('no') automatic teleportation of z4h over
 # SSH when connecting to these hosts.
 zstyle ':z4h:ssh:cloud-desktop' enable 'yes'
