@@ -156,6 +156,22 @@ ql_open_workspace() {
   "${cli[@]}"
 }
 
+# --- external commands ------------------------------------------------------
+
+ql_open_external() {
+  local el="$1" action
+  action="$(jq -c '.action // {}' <<<"$el")"
+
+  local args
+  ql_read_args args "$action"
+  if (( ${#args[@]} == 0 )); then
+    echo "quick-launch: External action has no command args" >&2
+    return 1
+  fi
+  args[0]="$(ql_expand_tilde "${args[0]}")"
+  "${args[@]}"
+}
+
 # --- entry -----------------------------------------------------------------
 
 ql_dispatch() {
@@ -164,6 +180,10 @@ ql_dispatch() {
   if [[ -z "$el" ]]; then
     echo "quick-launch: no $kind target with id '$id'" >&2
     return 1
+  fi
+  if [[ "$(jq -r '.action.type // empty' <<<"$el")" == "External" ]]; then
+    ql_open_external "$el"
+    return
   fi
   case "$kind" in
     pane) ql_open_pane "$el" ;;

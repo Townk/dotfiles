@@ -113,6 +113,7 @@ if pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH" "$PICK_JQ"; then
       if   $t == "Shell"  then "\uf07c"
       elif $t == "Edit"   then "󱇧"
       elif $t == "Remote" then "󰢹"
+      elif $t == "External" then "󰍹"
       elif $t == "Run"    then "󱤶"
       else "󰙀" end;
     # Pane choices mirror the wezterm plugin: the active tab is panes +

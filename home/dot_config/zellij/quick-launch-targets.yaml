@@ -23,6 +23,18 @@ workspaces:
   - id: default
     name: Default Workspace
 
+  - id: devshell-main
+    name: Work Dev Shell Main
+    icon: "󰢹 "
+    action:
+      type: External
+      label: Work Shell Dev Environment
+      args:
+        - ~/.config/zellij/scripts/quick-launch-external
+        - /usr/local/bin/work
+        - ssh
+        - "Work Shell Dev Environment"
+
   - id: qmk
     name: QMK Firmware
     icon: " "

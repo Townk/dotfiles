@@ -32,6 +32,20 @@ ql_join() {
   printf '%s' "$out"
 }
 
+ql_shell_join() {
+  local out="" first=1 a q
+  for a in "$@"; do
+    printf -v q '%q' "$a"
+    if (( first )); then
+      out="$q"
+      first=0
+    else
+      out+=" $q"
+    fi
+  done
+  printf '%s' "$out"
+}
+
 # Build the command prefix: `cd <cwd>; <python_venv>; <mise_env>; `.
 # Order matches the spec (cd, then venv, then mise) so both environments are
 # live for the actual command.
@@ -112,6 +126,14 @@ ql_action_command() {
         printf 'ssh %s' "$(ql_join ' ' "${args[@]}")"
       else
         echo "quick-launch: Remote action has no host args" >&2
+        printf ''
+      fi
+      ;;
+    External)
+      if (( ${#args[@]} > 0 )); then
+        ql_shell_join "${args[@]}"
+      else
+        echo "quick-launch: External action has no command args" >&2
         printf ''
       fi
       ;;

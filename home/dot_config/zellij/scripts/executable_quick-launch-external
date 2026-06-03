@@ -1,0 +1,64 @@
+#!/usr/bin/env zsh
+
+set -eu -o pipefail
+
+# 1. Enforce required script positional arguments
+if [[ $# -lt 3 ]]; then
+  print "Usage: $0 <binary_path_or_command> <connection_argument> <window_title>" >&2
+  print "Example: $0 /usr/bin/ssh work \"Work Session\"" >&2
+  exit 1
+fi
+
+WORK=$1
+CONN_ARG=$2
+WINDOW_TITLE=$3
+
+# 2. Dynamic path lookups for cross-platform compatibility
+WEZTERM=${commands[wezterm]:-/opt/homebrew/bin/wezterm}
+GHOSTTY=${commands[ghostty]:-/Applications/Ghostty.app/Contents/MacOS/ghostty}
+WEZTERM_CLASS=${WEZTERM_CLASS:-org.wezfurlong.wezterm}
+
+wezterm_cli() {
+  env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE \
+    "$WEZTERM" cli --no-auto-start --class "$WEZTERM_CLASS" "$@"
+}
+
+# 3. Environment Detection Logic
+if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
+  ENV_TYPE="UNSUPPORTED"
+elif [[ "${TERM_PROGRAM:-}" == "Ghostty" || -n "${GHOSTTY_RESOURCES_DIR:-}" ]]; then
+  ENV_TYPE="GHOSTTY"
+elif [[ "${TERM_PROGRAM:-}" == "WezTerm" || -n "${WEZTERM_UNIX_SOCKET:-}" ]]; then
+  ENV_TYPE="WEZTERM"
+else
+  ENV_TYPE="UNSUPPORTED"
+fi
+
+# 4. Action Logic based on environment
+case "$ENV_TYPE" in
+  "GHOSTTY")
+    # Native Ghostty cross-platform CLI window spawn using the passed arguments
+    "$GHOSTTY" +open "$WORK" "$CONN_ARG"
+    ;;
+
+  "WEZTERM")
+    # Cross-platform window matching. If a window with the passed title exists, focus it.
+    PANE_ID=$(wezterm_cli list --format json | jq -r --arg title "$WINDOW_TITLE" '
+      map(select(.window_title == $title)) | .[0].pane_id // empty
+    ')
+    if [[ -n "$PANE_ID" ]]; then
+      wezterm_cli activate-pane --pane-id "$PANE_ID"
+    else
+      # 1. Spawn the new window and capture its generated Pane ID
+      NEW_PANE_ID=$(wezterm_cli spawn --new-window -- "$WORK" "$CONN_ARG")
+      
+      # 2. Set the window title explicitly using the new pane as a reference pointer
+      wezterm_cli set-window-title --pane-id "$NEW_PANE_ID" "$WINDOW_TITLE"
+    fi
+    ;;
+
+  "UNSUPPORTED"|*)
+    print "Error: Unsupported environment. Script must be run inside Ghostty, Wezterm, and NOT be in an SSH session." >&2
+    exit 1
+    ;;
+esac
