@@ -85,6 +85,9 @@ layout {
                         wk mode="tmux"  binding="f"        desc="toggle pane borders"      icon="󰃇"  icon_color="#89B4FA"
                         wk mode="tmux"  binding="Shift u"  desc="glyph picker (repeat)"    icon="󰥸"  icon_color="#CBA6F7"
                         wk mode="tmux"  binding="Shift g"  desc="gitmoji picker (repeat)"  icon="󰥸"  icon_color="#CBA6F7"
+                        wk mode="tmux"  binding="u"        desc="alarm on updated"         icon="󰂞"  icon_color="#e5bf7b"
+                        wk mode="tmux"  binding="i"        desc="alarm on idle"            icon="󰂠"  icon_color="#e5bf7b"
+                        wk mode="tmux"  binding="k"        desc="cancel all alarms"        icon="󰂛"  icon_color="#e5bf7b"
                         wk mode="tmux"  binding="q"        desc="kill current session"     icon="󰈆"  icon_color="#F38BA8"
 
                         wk mode="session"  binding="a"        desc="about Zellij"          icon=""  icon_color="#e5bf7b"
@@ -160,6 +163,7 @@ layout {
                         // edits mode="pane" "r" "n" "x"
                         wk mode="tmux"  "Shift l" "o" "t" "p" "l"
                         wk mode="tmux"  "s" "v" "f" "z"
+                        wk mode="tmux"  "u" "i" "k"
                         wk mode="tmux"  "Shift y" "Alt y"
                         wk mode="tmux"  "Shift u" "Shift g"
                         wk mode="tab" "[" "]" "Shift p"

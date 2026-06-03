@@ -371,6 +371,16 @@ keybinds clear-defaults=true {
             SwitchToMode "normal"
         }
 
+        // Background-tab alarms on the active tab's focused pane, handled by the
+        // bar (status-bar default role). Broadcast (no destination): the bar
+        // carries the full config block, so it can't be addressed by a partial
+        // config the way the `role`-scoped search/whichkey instances are — a
+        // targeted message would spawn a fresh bar instead. Every plugin gets
+        // the pipe; the active bar acts on `name`, the rest ignore it.
+        bind "i" { MessagePlugin { name "zj_hud_alarm"; payload "idle"; }; SwitchToMode "normal"; }
+        bind "u" { MessagePlugin { name "zj_hud_alarm"; payload "activity"; }; SwitchToMode "normal"; }
+        bind "k" { MessagePlugin { name "zj_hud_alarm"; payload "clear"; }; SwitchToMode "normal"; }
+
         // Open Ghostty's config in nvim in a new tab. Triggered from
         // Ghostty's Cmd+, (which forwards the leader chord `Alt+w ,`).
         //
