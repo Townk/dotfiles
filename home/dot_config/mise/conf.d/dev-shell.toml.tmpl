@@ -10,8 +10,11 @@
   tools come from Brewfile.tmpl, so the file renders empty there.
 
   Names that resolve in mise's registry are used bare; the rest pin an
-  explicit ubi:/aqua: backend. `[exe=...]` overrides the installed
-  binary name when it differs from the repo name.
+  explicit backend — aqua: (curated registry) for tools it covers, else
+  github: (the successor to the now-deprecated ubi backend) straight off
+  GitHub releases, or cargo: when there's no usable release asset.
+  `[exe=...]` overrides the installed binary name when it differs from
+  the repo name.
 */ -}}
 {{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
 [tools]
@@ -53,11 +56,11 @@
 "aqua:ouch-org/ouch" = "latest"
 "aqua:imsnif/bandwhich" = "latest"
 "aqua:fujiapple852/trippy" = "latest"
-"ubi:printfn/fend" = "latest"
-"ubi:NerdyPepper/eva" = "latest"
-"ubi:Macchina-CLI/macchina" = "latest"
-"ubi:sibprogrammer/xq" = "latest"
-"ubi:tldr-pages/tlrc[exe=tldr]" = "latest"
+"github:printfn/fend" = "latest"
+"github:NerdyPepper/eva" = "latest"
+"github:Macchina-CLI/macchina" = "latest"
+"github:sibprogrammer/xq" = "latest"
+"github:tldr-pages/tlrc[exe=tldr]" = "latest"
 # tidy-viewer's GitHub release tarball isn't OS/arch-tagged, so ubi
 # can't pick an asset; build it from crates.io instead (pure Rust).
 "cargo:tidy-viewer" = "latest"
