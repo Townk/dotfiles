@@ -880,8 +880,8 @@ fi
 log "step 7b/9 size Font Awesome glyphs"
 
 FA_SCALE="${FA_SCALE:-1.0}"
-FA_RELOCATED_SCALE="${FA_RELOCATED_SCALE:-1.30}"
-FA_RELOCATED_DY="${FA_RELOCATED_DY:-0.22}"
+FA_RELOCATED_SCALE="${FA_RELOCATED_SCALE:-0.90}"
+FA_RELOCATED_DY="${FA_RELOCATED_DY:-0.0}"
 if [[ -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" && -f "${FA_MAP}" ]]; then
   # Stash pristine (native-size) copies so recalibrate-fa.sh can re-derive
   # any scale without re-running the patcher.
