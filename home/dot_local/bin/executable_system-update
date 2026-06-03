@@ -106,15 +106,48 @@ running_under_chezmoi=0
 
 print -P -- "\n${C_BLU}System Update\n-------------${C_RES}"
 
-# Pull latest chezmoi source from origin and apply, so cross-machine
-# updates (e.g. another machine bumped a tracked lockfile) land BEFORE
-# the package syncs decide what to install.
+# Fetch latest chezmoi source and apply, so cross-machine updates (e.g.
+# another machine bumped a tracked lockfile) land BEFORE the package syncs
+# decide what to install.
+#
+# Do not auto-rebase here: this repo commonly carries local commits/merges
+# before they are pushed. `git pull --rebase` would flatten merge commits and
+# can replay already-merged profile branches, reintroducing conflicts during a
+# routine system update.
 if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
   print -P -- "\n📥 Sync chezmoi source from origin...\n"
-  if (cd "$chezmoi_repo" && git pull --rebase --autostash); then
+  if (
+    cd "$chezmoi_repo" || exit 1
+
+    branch=$(git branch --show-current)
+    remote=$(git config --get "branch.${branch}.remote" || true)
+    upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)
+    if [[ -z "$remote" || -z "$upstream" ]]; then
+      print -P -- "No upstream configured for ${branch}; skipping source sync." >&2
+      exit 0
+    fi
+
+    git fetch --prune "$remote" || exit 1
+
+    local_rev=$(git rev-parse HEAD)
+    upstream_rev=$(git rev-parse "$upstream")
+    base_rev=$(git merge-base HEAD "$upstream")
+
+    if [[ "$local_rev" == "$upstream_rev" ]]; then
+      exit 0
+    elif [[ "$base_rev" == "$local_rev" ]]; then
+      git merge --ff-only "$upstream"
+    elif [[ "$base_rev" == "$upstream_rev" ]]; then
+      print -P -- "chezmoi source is ahead of ${upstream}; skipping pull/rebase."
+      exit 0
+    else
+      print -P -- "chezmoi source has diverged from ${upstream}; resolve manually." >&2
+      exit 1
+    fi
+  ); then
     chezmoi apply || warn "chezmoi apply failed after pull (continuing)"
   else
-    warn "Failed to pull chezmoi source from origin (continuing)"
+    warn "Failed to sync chezmoi source from origin (continuing)"
   fi
 fi
 

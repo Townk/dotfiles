@@ -226,7 +226,7 @@ do_sync() {
   brew_snapshot_versions > "$before_snap"
 
   cat "$BREWFILE_BOOT" "$BREWFILE_MAIN" \
-    | brew bundle install -q --cleanup --upgrade --file=- \
+    | brew bundle install -q --cleanup --force-cleanup --upgrade --file=- \
     || pkg_die "brew bundle install failed"
 
   # Tripwire: warn if any direct-installed formula matches a tool mise should
@@ -241,6 +241,7 @@ do_sync() {
   brew_snapshot_versions > "$after_snap"
   local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
   (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
+  return 0
 }
 
 usage() {

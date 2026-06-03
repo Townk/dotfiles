@@ -1,21 +1,21 @@
 [[plugin.deps]]
 use = "yazi-rs/plugins:full-border"
-rev = "c2c16c8"
+rev = "598cdb6"
 hash = "7b625412411be411153886894d9acaf"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:toggle-pane"
-rev = "c2c16c8"
+rev = "598cdb6"
 hash = "9c7987da2d2a2120dac33abb64132004"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:git"
-rev = "c2c16c8"
+rev = "598cdb6"
 hash = "88e56a64b7ce7c4314427452343fef17"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:mactag"
-rev = "c2c16c8"
+rev = "598cdb6"
 hash = "235256b396f4da77ff8f5b8eacd7c113"
 
 [[plugin.deps]]
@@ -35,17 +35,17 @@ hash = "3c66d95bf63fa16178e98967fbae9429"
 
 [[plugin.deps]]
 use = "boydaihungst/mediainfo"
-rev = "4f80288"
-hash = "daf12bd7eb26044a8a5f41eeb369c27a"
+rev = "ef8105a"
+hash = "9586d7a4098dbe3e36dbd9d5d86f63bc"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:piper"
-rev = "c2c16c8"
+rev = "598cdb6"
 hash = "d99cfbc3812e7738505f9e4bedb759cd"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:types"
-rev = "c2c16c8"
+rev = "598cdb6"
 hash = "9105494e98299f392aee95340066da9f"
 
 [[plugin.deps]]
@@ -55,5 +55,5 @@ hash = "ec0cf1ebe4e27261b8df4523c2f3d273"
 
 [[flavor.deps]]
 use = "yazi-rs/flavors:catppuccin-mocha"
-rev = "36c49ac"
+rev = "0f9204b"
 hash = "7dfe41c9c3d9be76da8a844263d0bbed"

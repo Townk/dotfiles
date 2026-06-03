@@ -130,6 +130,7 @@ do_sync() {
   go_snapshot_versions > "$after_snap"
   local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
   (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
+  return 0
 }
 
 usage() {
