@@ -382,6 +382,14 @@ keybinds clear-defaults=true {
         bind "u" { MessagePlugin { name "zj_hud_alarm"; payload "activity"; }; SwitchToMode "normal"; }
         bind "k" { MessagePlugin { name "zj_hud_alarm"; payload "clear"; }; SwitchToMode "normal"; }
 
+        // In-terminal notifications, handled by zj-hud's per-tab `role
+        // "notify"` pane. Broadcast because the active notify instance owns the
+        // session notification store; inactive instances ignore the pipe.
+        bind "d" { MessagePlugin { name "zj_hud_notify_dismiss"; }; SwitchToMode "normal"; }
+        bind "D" { MessagePlugin { name "zj_hud_notify_dismiss_all"; }; SwitchToMode "normal"; }
+        bind "h" { MessagePlugin { name "zj_hud_notify_history"; }; SwitchToMode "normal"; }
+        bind "c" { MessagePlugin { name "zj_hud_notify_clear_history"; }; SwitchToMode "normal"; }
+
         // Open Ghostty's config in nvim in a new tab. Triggered from
         // Ghostty's Cmd+, (which forwards the leader chord `Alt+w ,`).
         //
@@ -818,11 +826,12 @@ load_plugins {
     context-keys
     prompt-jumper
     vim-navigator
-    // NB: the "visual search" dialog (`role "search"`) is NOT preloaded here.
-    // Like the which-key panel it is spawned per-tab by the layout's
+    // NB: the visual search dialog (`role "search"`) and notification stack
+    // (`role "notify"`) are NOT preloaded here. Like the which-key panel they
+    // are spawned per-tab by the layout's
     // `floating_panes` (a floating pane belongs to one tab, so a single shared
     // instance could only ever show on one tab). Each instance parks itself
-    // until Alt+/ (SwitchToMode "EnterSearch") reveals the active tab's one.
+    // until its trigger reveals the active tab's one.
 }
 web_client {
     font "monospace"

@@ -91,13 +91,15 @@ function M:update_status()
     -- OPTIMIZATION: Removed { recompute = 1 } to avoid expensive buffer scan on every redraw.
     -- The search count will update when n/N is pressed or search changes naturally.
     local ok, search = pcall(vim.fn.searchcount, { maxcount = 999, timeout = 100 })
-    if ok and search.total > 0 then
+    local current = ok and tonumber(search.current) or 0
+    local total = ok and tonumber(search.total) or 0
+    if total > 0 then
       -- Use the pre-generated inverted highlight
       left_part = string.format(
         "%s %d/%d %s ",
         self:format_hl(active_hl.inverted),
-        search.current,
-        search.total,
+        current,
+        total,
         self:format_hl(active_hl.standard)
       )
     else
