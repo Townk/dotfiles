@@ -98,7 +98,7 @@ layout {
                         wk mode="session"  binding="p"        desc="plugin manager"        icon="󱐥"  icon_color="#89B4FA"
                         wk mode="session"  binding="w"        desc="session manager"       icon="󰧨"  icon_color="#e06c75"
                         wk mode="session"  binding="s"        desc="share"                 icon=""  icon_color="#e06c75"
-                        wk mode="session"  binding="Shift s"  desc="quick launch session"  icon="󱓞"  icon_color="#e06c75"
+                        wk mode="session"  binding="Shift s"  desc="quick launch session"  icon="󱓟"  icon_color="#e06c75"
                         wk mode="session"  binding="d"        desc="detach"                icon="󱟃"  icon_color="#F38BA8"
 
                         wk mode="tab"  binding="n"        desc="Rename Tab …"          icon=""  icon_color="#e5bf7b"

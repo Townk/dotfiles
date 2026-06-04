@@ -27,5 +27,19 @@
     "terms": ["split", "top", "pane", "panel"],
     "aliases": ["nf-cod-layout_panel_up"],
     "comment": "Icon to represent a split panel on top of the screen"
+  },
+  "wezterm": {
+    "code": "10fb04",
+    "label": "WezTerm",
+    "terms": ["wezterm", "terminal"],
+    "aliases": ["nf-fa-wezterm"],
+    "comment": "WezTerm terminal emulator logo"
+  },
+  "zsh": {
+    "code": "10fb05",
+    "label": "Zsh",
+    "terms": ["zsh", "z-shell", "terminal"],
+    "aliases": ["nf-fa-zsh"],
+    "comment": "Zsh (Z Shell) logo"
   }
 }

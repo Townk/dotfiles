@@ -15,7 +15,7 @@ the FA cask (`font-fontawesome`) by entire major versions.
 custom-builds/nerd-fonts/
 ├── README.md                ← you are here
 ├── build-updated-font.sh    ← self-contained builder
-├── recalibrate-fa.sh        ← fast re-bake of the relocated/custom upscale
+├── recalibrate-fa.sh        ← fast re-bake of icon sizing (no patcher rerun)
 ├── custom-icons/            ← local *.svg icons baked into the font
 │   ├── metadata.json        ←   optional labels/terms/aliases/comments
 │   ├── cursor-ai.svg        ←   -> fa-cursor-ai
@@ -125,13 +125,17 @@ custom-icons/cursor-ai.svg   ->  fa-cursor-ai
 custom-icons/gm.svg          ->  fa-gm
 ```
 
-Each outline is normalised to the same box the Font Awesome icons occupy
-(em-tall, sitting on the FA descent), preserving aspect ratio and centred,
-then run through the patcher's `--custom` path. Because they land in
-Plane-16 PUA — outside every range Ghostty constrains — they pick up the
-same `FA_RELOCATED_SCALE` upscale / `FA_RELOCATED_DY` lift as the relocated
-FA icons (step 7b), so they line up with their neighbours. They are tagged
-`"source": "custom-svg"`, `"collection": "custom"`.
+Each SVG is first normalized with [`usvg`](https://github.com/linebender/resvg)
+(resolves CSS `<style>` fills, converts shapes to paths, bakes transforms,
+resolves clips/masks) so it imports faithfully no matter where the source SVG
+came from — you rarely control that. It's then imported and, like every other
+icon, normalized in step 7b to the curated **md/oct box** (aspect preserved,
+centred), so it lines up with its neighbours at one consistent size. Custom
+icons are tagged `"source": "custom-svg"`, `"collection": "custom"`.
+
+`usvg` is declared in `~/.config/packages/Cargofile` (`system-package cargo
+sync`); the build also installs it on demand if missing. Without it, SVGs
+import raw (less robust to source quirks).
 
 ### `metadata.json` (optional)
 
@@ -195,7 +199,9 @@ Caveats:
   not portable as a raw codepoint — fine for a picker that copies the glyph.
 - Multi-colour SVGs are flattened to a single monochrome outline (font
   glyphs have no colour). The fill / holes are derived from the path
-  geometry, so a clean single-path logo works best.
+  geometry, so a clean single-path logo works best. The `usvg` pre-pass
+  resolves CSS fills, shapes, clips and transforms first, so messy exports
+  (Illustrator, Figma) usually still import cleanly.
 - Codepoint stability: pin a `code` in `metadata.json` for anything you hard-
   code. Unpinned icons are auto-assigned in sorted-filename order, so adding
   or renaming a file can shift the unpinned ones (their `fa-<name>` keys stay
@@ -209,30 +215,33 @@ entries carry a `relocated_from` field pointing at FA's original
 codepoint. A relocated icon renders only via this font (like any PUA
 nerd icon), which is exactly what a glyph picker needs.
 
-**FA glyph sizing.** There's a subtlety with the relocated icons. Ghostty
-sizes Nerd-Font icons *by codepoint*: any glyph in a range it recognises
-(from `nerd_font_attributes.zig`) gets upscaled to `icon_height_single` at
-render time. Native-codepoint FA glyphs (and the curated `nf-fa-*`) live in
-those ranges, so they all line up. The **relocated** FA icons live in
-Plane-16 PUA, outside every recognised range, so Ghostty never upscales them
-— left alone they render visibly smaller than their curated neighbours.
+**Icon sizing (step 7b).** Every icon is normalized to one consistent size so
+nothing renders too big or bleeds out of the cell — and crucially this is baked
+*into the font*, not left to the terminal. Ghostty re-sizes Nerd-Font icons by
+codepoint at render time, but WezTerm does not, so a font tuned only for
+Ghostty's render-time scaling looked wrong (oversized, bleeding) in WezTerm.
 
-Ghostty also vertically *centers* the icons it constrains (`center1`), but
-leaves the relocated PUA glyphs on the baseline, so they also sit lower. Step
-7b therefore bakes, into **the relocated glyphs and the custom SVG icons**,
-both a uniform upscale (`FA_RELOCATED_SCALE`, default `1.30`) and an upward
-shift (`FA_RELOCATED_DY`, default `0.22`em) about each glyph's centre, advance
-untouched; native FA glyphs stay at `FA_SCALE=1.0`. Both relocated values are
-perceptual (they depend on your primary font and line-height), so tune them
-without a full rebuild:
+Step 7b measures the curated **Material-Design + Octicons** glyphs already in
+the built font (their median box and vertical centre) and scales every Font
+Awesome glyph — native *and* relocated — plus every custom SVG icon to that
+box, aspect preserved, about its own centre, then drops it onto that centre.
+Advance widths are untouched (with the Propo variant the only spill is harmless
+horizontal right-overflow). Curated glyphs are the reference and are left
+alone. md/oct is measured per-variant, so the Propo build lands at ≈0.83em and
+the Mono build at ≈1.0em, each matching its own curated glyphs.
+
+The fill fraction is a matter of taste, so tune it without a full rebuild:
 
 ```sh
-./recalibrate-fa.sh 1.30 0.22 --install   # scale, lift, install, restart term
+./recalibrate-fa.sh 1.0 0.0 --install   # 1.0 = match md/oct exactly; install
+./recalibrate-fa.sh 0.95 --install      # inset to 95% of the md/oct box
 ```
 
-Once it looks right, set those numbers as the `FA_RELOCATED_SCALE` /
-`FA_RELOCATED_DY` defaults in `build-updated-font.sh` so a clean rebuild
-reproduces them.
+Once it looks right, set those numbers as the `ICON_FILL` / `ICON_DY` defaults
+in `build-updated-font.sh` so a clean rebuild reproduces them. (Note for
+Ghostty users: it still re-fits the curated + native-FA populations to its own
+`icon_height` at render time — harmless — while showing the baked size for the
+relocated + custom PUA glyphs.)
 
 Wired for fzf via the example printed at the end of every build (and
 shown again at the bottom of this README).
@@ -248,7 +257,11 @@ shown again at the bottom of this README).
 3. FontForge is installed on demand via Homebrew during the build and is
    intentionally **not** in the chezmoi Brewfile (so it gets cleaned up
    on the next `system-package brew sync`).
-4. macOS-only. The build pipeline assumes Homebrew. Pull requests
+4. `usvg` (custom-SVG normalizer) **is** declared in the chezmoi
+   `Cargofile` — it's tiny and generally useful, unlike the heavyweight
+   FontForge. The build also installs it on demand if missing, so a
+   standalone run still works.
+5. macOS-only. The build pipeline assumes Homebrew. Pull requests
    welcome if you'd like to teach it about Linux/apt.
 
 See the comment block at the top of `build-updated-font.sh` for the

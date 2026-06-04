@@ -65,8 +65,24 @@ config.font = wezterm.font_with_fallback({
 		weight = "DemiBold",
 		stretch = "Expanded",
 	},
+	-- Propo (variable-width) variant: icon sizing/centering is baked into the
+	-- font (build step 7b normalizes every icon to the curated md/oct box), so
+	-- no WezTerm-side overflow clamp is needed — the only spill is harmless
+	-- horizontal right-overflow.
 	"Symbols Nerd Font",
+	-- Emoji-presentation codepoints (🚀, VS16 sequences) resolve here:
+	-- WezTerm's first shaping pass matches Apple Color Emoji as the
+	-- emoji-presentation font.
 	"Apple Color Emoji",
+	-- Text-default emoji (♻ ✏ ❤ — Emoji_Presentation=No). WezTerm's first
+	-- pass looks for a *text*-presentation font that has the glyph; without
+	-- this entry it lands on Menlo below and paints them monochrome. Listing
+	-- Apple Color Emoji again as a text-presentation font, ahead of Menlo,
+	-- routes those to the colour Apple glyph too. Genuine symbols that
+	-- Symbols Nerd Font carries (e.g. ⌘) still win — it's earlier, and the
+	-- emoji codepoints were stripped from it at build time. (WezTerm has no
+	-- per-codepoint font map, so this presentation override is the lever.)
+	{ family = "Apple Color Emoji", assume_emoji_presentation = false },
 	"Menlo",
 	"DengXian",
 })
@@ -76,8 +92,7 @@ config.line_height = 1.15
 config.command_palette_rows = 25
 config.command_palette_font_size = 18
 config.char_select_font_size = 18
-config.use_cap_height_to_scale_fallback_fonts = true
-config.unicode_version = 4
+config.unicode_version = 17
 
 config.initial_rows = 30
 config.initial_cols = 130

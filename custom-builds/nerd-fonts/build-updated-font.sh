@@ -23,12 +23,12 @@
 #      the Mono and Propo variants of "Symbols Nerd Font", with the merged
 #      FA file layered in via --custom (additive, careful: it never replaces
 #      curated NF glyphs).
-#   7b. Re-size the FA glyphs. NATIVE-codepoint FA glyphs are left alone
-#      (Ghostty applies its own icon constraint to them, like nf-fa-*).
-#      RELOCATED FA glyphs (Plane-16 PUA) sit outside Ghostty's recognised
-#      ranges, so Ghostty never upscales them and they render small; we bake
-#      an upscale (FA_RELOCATED_SCALE) into ONLY those, about their centre,
-#      via fontTools. See the long comment on the step itself.
+#   7b. Normalize icon sizing. Measure the curated md/oct box in the built
+#      font, then scale every FA glyph (native + relocated) and every custom
+#      SVG icon to that box (aspect preserved, centred on the md/oct centre),
+#      advance untouched, via fontTools. Renderer-agnostic: no terminal has to
+#      re-size icons at render time, and nothing bleeds out of the cell. See
+#      the long comment on the step itself.
 #   7. Strip out codepoints that belong to the colour-emoji domain (Misc
 #      Symbols + Dingbats U+2600-U+27BF and the SMP emoji planes
 #      U+1F300-U+1FFFF) so terminal font lookups for ♻ ✏ 🚀 etc. fall
@@ -67,12 +67,18 @@
 #   JSON_OUT_DIR     Where glyphs.json should land.
 #                    Default: ~/.local/share/fonts/nerd-font
 #                    Pass JSON_OUT_DIR="" to skip the JSON step entirely.
-#   FA_RELOCATED_SCALE  Upscale baked into the Plane-16 relocated FA icons AND
-#                    the local custom SVG icons in step 7b. Default: 1.30.
-#                    These live outside Ghostty's Nerd-Font ranges so Ghostty
-#                    won't size them up to match curated/native icons; this
-#                    knob compensates. Tunable — recalibrate fast with
-#                    ./recalibrate-fa.sh <scale> -i.
+#   ICON_FILL        Multiplier on the measured curated md/oct box that every
+#                    FA + custom icon is normalized to in step 7b. Default: 1.0
+#                    (match md/oct exactly; ≈0.83em in the Propo variant).
+#                    Lower insets the icons; higher fills more of the cell.
+#                    Tunable — recalibrate fast with
+#                    ./recalibrate-fa.sh <fill> [dy] -i.
+#   ICON_DY          Extra vertical nudge (em, +=up) on top of the measured
+#                    md/oct centre, for ALL icons, in step 7b. Default: 0.0.
+#   CUSTOM_DY        Extra vertical nudge (em, +=up) for the custom SVG icons
+#                    ONLY, on top of ICON_DY. Brand logos read optically low at
+#                    the bbox centre; lift just them. Default: 0.0. Tunable
+#                    with ./recalibrate-fa.sh <fill> [dy] [custom_dy] -i.
 #   CUSTOM_ICON_DIR  Directory of local *.svg icons to bake into Plane-16 PUA
 #                    glyphs at CUSTOM_START+. The filename (minus .svg) becomes
 #                    the glyphs.json key `fa-<name>` (cursor-ai.svg ->
@@ -86,9 +92,6 @@
 #   CUSTOM_START     First auto-assigned codepoint of the custom-icon block
 #                    (hex). Default: 10fb00 — above the relocation zone, whose
 #                    icons now use the stable slot native+0x100000 (<=0x10f8ff).
-#   FA_SCALE         Scale factor applied to the NATIVE-codepoint Font Awesome
-#                    glyphs in step 7b. Default: 1.0 (no-op; Ghostty already
-#                    constrains these to match the curated nf-fa-* size).
 #
 # Conflict with Homebrew cask `font-symbols-only-nerd-font`:
 #   That cask installs the upstream-shipped variants under the same filenames
@@ -360,6 +363,8 @@ cat >"${MERGER_PY}" <<'PYEOF'
 # Run inside FontForge: merge Brands/Regular/Solid into one OTF.
 # Solid wins overlaps, then Regular, then Brands.
 import os, sys
+import subprocess
+import tempfile
 import fontforge
 
 PRIORITY = ["Solid", "Regular", "Brands"]
@@ -444,7 +449,36 @@ def load_custom_meta(path):
     }
 
 
-def import_custom_svgs(dest, custom_dir, start_cp, meta, used):
+def normalize_svg(src_path, usvg_bin):
+    """Return a path to a cleaned-up copy of src_path for FontForge to import.
+
+    Runs the SVG through `usvg` (the resvg project's SVG simplifier), which
+    resolves CSS `<style>` fills, converts basic shapes to paths, bakes/
+    flattens references, and resolves clips/masks into a minimal, well-defined
+    SVG. FontForge's own SVG importer is unreliable on those features, so this
+    makes the import faithful regardless of where the source SVG came from.
+
+    usvg does NOT crop the canvas, and it doesn't need to: the downstream
+    bounding-box normalization (here and in step 7b) trims to the real drawing
+    extent from the imported contours. Returns a temp path the caller must
+    delete; falls back to src_path (and prints a note) if usvg is unavailable
+    or fails."""
+    if not usvg_bin:
+        return src_path, False
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".svg", prefix="usvg_")
+        os.close(fd)
+        subprocess.run([usvg_bin, src_path, tmp],
+                       check=True, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        return tmp, True
+    except Exception as exc:
+        sys.stderr.write("  usvg failed for %s (%s); importing raw\n"
+                         % (os.path.basename(src_path), exc))
+        return src_path, False
+
+
+def import_custom_svgs(dest, custom_dir, start_cp, meta, used, usvg_bin=""):
     """Import every *.svg under custom_dir into a Plane-16 PUA glyph and
     return {icon-name: codepoint}.
 
@@ -457,12 +491,16 @@ def import_custom_svgs(dest, custom_dir, start_cp, meta, used):
         mutated in place. Pins are reserved BEFORE any auto-assignment so an
         unpinned icon can never squat on a pinned slot.
 
+    Each SVG is first run through usvg (see normalize_svg) so the import is
+    faithful regardless of source quirks (CSS fills, shapes, clips, transforms).
+
     The icon name is the filename without extension (cursor-ai.svg ->
-    fa-cursor-ai in glyphs.json). Each outline is normalised to the box the
-    FA icons occupy in this combined OTF (em-tall, on the FA descent),
-    aspect preserved, centred, advance = one em, so the patcher treats it
-    like every other FA glyph; living in Plane-16 it also picks up the
-    FA_RELOCATED_SCALE upscale in step 7b."""
+    fa-cursor-ai in glyphs.json). Each outline is normalised to roughly the box
+    the FA icons occupy in this combined OTF (em-tall, on the FA descent),
+    aspect preserved, centred, advance = one em, so the patcher treats it like
+    every other FA glyph. Final sizing is set uniformly for all icons in step
+    7b (normalized to the curated md/oct box), so this placement only needs to
+    be sane, not exact."""
     out = {}
     try:
         names = sorted(n for n in os.listdir(custom_dir)
@@ -511,11 +549,18 @@ def import_custom_svgs(dest, custom_dir, start_cp, meta, used):
         cp = pinned[name] if was_pinned else alloc()
         g = dest.createChar(cp, "customsvg_%05x" % cp)
         g.clear()
+        norm_path, is_tmp = normalize_svg(path, usvg_bin)
         try:
-            g.importOutlines(path)
+            g.importOutlines(norm_path)
         except Exception as exc:
             sys.stderr.write("  custom SVG import failed for %s: %s\n" % (fn, exc))
             continue
+        finally:
+            if is_tmp:
+                try:
+                    os.unlink(norm_path)
+                except OSError:
+                    pass
         bb = g.boundingBox()
         if not bb or (bb[2] - bb[0]) <= 0 or (bb[3] - bb[1]) <= 0:
             sys.stderr.write("  custom SVG produced an empty glyph: %s\n" % fn)
@@ -543,7 +588,7 @@ def main(argv):
         sys.stderr.write(
             "usage: <srcdir> <output_otf> "
             "[icons_json] [curated_ttf] [fa_map_out] [reserved_start_hex] "
-            "[custom_svg_dir] [custom_start_hex] [custom_meta_json]\n")
+            "[custom_svg_dir] [custom_start_hex] [custom_meta_json] [usvg_bin]\n")
         return 2
     srcdir, outpath = argv[1], argv[2]
     icons_json       = argv[3] if len(argv) > 3 else ""
@@ -553,6 +598,7 @@ def main(argv):
     custom_dir       = argv[7] if len(argv) > 7 else ""
     custom_start     = int(argv[8], 16) if len(argv) > 8 and argv[8] else 0
     custom_meta_file = argv[9] if len(argv) > 9 else ""
+    usvg_bin         = argv[10] if len(argv) > 10 else ""
     files = find_fa_files(srcdir)
     for label in PRIORITY:
         if label not in files:
@@ -639,16 +685,15 @@ def main(argv):
               % (len(relocations), reserved_start, len(fa_cps) - len(relocations)))
 
     # -- Import local custom SVG icons (Plane-16 PUA) --
-    # Treated exactly like relocated FA icons downstream: they go through the
-    # patcher's --custom path and pick up the FA_RELOCATED_SCALE upscale in
-    # step 7b (they live outside the ranges Ghostty constrains). Codepoints
-    # are pinnable via metadata.json so a TUI can hard-code them.
+    # Each SVG is normalized with usvg first, then imported and (in step 7b)
+    # sized to the curated md/oct box like every other icon. Codepoints are
+    # pinnable via metadata.json so a TUI can hard-code them.
     customs = {}
     if custom_dir and custom_start and os.path.isdir(custom_dir):
         used = set(g.unicode for g in dest.glyphs()
                    if g.unicode is not None and g.unicode >= 0)
         meta = load_custom_meta(custom_meta_file)
-        customs = import_custom_svgs(dest, custom_dir, custom_start, meta, used)
+        customs = import_custom_svgs(dest, custom_dir, custom_start, meta, used, usvg_bin)
         for c in customs.values():
             fa_cps.append(c)
         print("  imported %d custom SVG icon(s)" % len(customs))
@@ -705,10 +750,27 @@ else
   CUSTOM_ICON_DIR=""
 fi
 
+# usvg normalizes each custom SVG (resolves CSS fills, shapes, clips,
+# transforms) before FontForge imports it, so arbitrary source SVGs import
+# faithfully. Declared canonically in ~/.config/packages/Cargofile (synced by
+# `system-package cargo sync`); installed on-demand here if missing so this
+# script stays self-contained. Only needed when there are custom icons; if it
+# can't be provided, the import falls back to the raw SVG (with a note).
+USVG_BIN="$( command -v usvg || true )"
+if [[ -z "${USVG_BIN}" && -n "${CUSTOM_ICON_DIR}" ]]; then
+  if command -v cargo >/dev/null 2>&1 && ask "usvg not found; run 'cargo install usvg' to normalize custom SVGs?"; then
+    cargo install usvg || warn "cargo install usvg failed; custom SVGs will import raw."
+    USVG_BIN="$( command -v usvg || true )"
+  else
+    warn "usvg unavailable; custom SVGs will import raw (less robust to source quirks)."
+  fi
+fi
+[[ -n "${USVG_BIN}" ]] && info "usvg: ${USVG_BIN}"
+
 "${FONTFORGE_BIN}" -lang=py -script "${MERGER_PY}" \
   "${FA_SRC_DIR}" "${FA_MERGED}" \
   "${FA_ICONS_JSON}" "${SHIPPED_REGULAR}" "${FA_MAP}" "${RESERVED_START}" \
-  "${CUSTOM_ICON_DIR}" "${CUSTOM_START}" "${CUSTOM_META}" \
+  "${CUSTOM_ICON_DIR}" "${CUSTOM_START}" "${CUSTOM_META}" "${USVG_BIN}" \
   2>&1 | tee "${LOG_FILE}"
 [[ -f "${FA_MERGED}" ]] || die "FA merge produced no output."
 done_ "merged FA -> ${FA_MERGED}"
@@ -726,6 +788,7 @@ run_patcher() {
       --debug 1 \
       --no-progressbars \
       -c \
+      --careful \
       --custom "${FA_MERGED}" \
       --ext ttf \
       --outputdir "${OUT_DIR}" \
@@ -840,48 +903,49 @@ else
 fi
 
 # ===========================================================================
-# Step 7b — Re-size Font Awesome glyphs (relocated icons need an upscale).
+# Step 7b — Normalize icon sizing (FA + custom) to the curated md/oct box.
 # ===========================================================================
-# There are two distinct populations of FA glyphs, and they need DIFFERENT
-# treatment because of how Ghostty sizes Nerd-Font icons:
+# Goal: every icon glyph renders at one consistent size and vertical position
+# in ANY terminal, with nothing spilling above the ascent or below the descent
+# (vertical "bleed"). This has to hold WITHOUT a renderer re-sizing glyphs at
+# render time: WezTerm, unlike Ghostty, does not re-scale Nerd-Font icons, so
+# the size must already be correct *in the font*.
 #
-#   * NATIVE-codepoint FA glyphs (kept at their upstream FA codepoint).
-#     These land inside the Nerd-Fonts codepoint ranges that Ghostty
-#     recognises, so Ghostty applies its own per-glyph icon constraint
-#     (src/font/nerd_font_attributes.zig: size=.cover/.fit_cover1,
-#     height=.icon) and scales them to icon_height_single at render time —
-#     exactly like the curated nf-fa-* glyphs. They must be left at native
-#     size (FA_SCALE=1.0); anything we bake in just fights Ghostty.
+# Approach (absolute normalization, via fontTools — never by editing the
+# patcher): measure the curated Material-Design + Octicons glyphs already in
+# THIS font (their median box and vertical centre), then scale every Font
+# Awesome glyph (native AND relocated) and every custom SVG icon to that box,
+# aspect preserved, about its own centre, and move it onto that centre. Advance
+# widths are left untouched so cell alignment holds; with the Propo variant the
+# only overflow that remains is horizontal (right), which is harmless.
 #
-#   * RELOCATED FA glyphs (the colliding free icons the merge step moved
-#     into the Plane-16 PUA at U+100000+, see fa-map.json "relocations").
-#     Plane-16 is OUTSIDE every range in Ghostty's table, so Ghostty never
-#     applies the icon constraint to them. Per its PUA rule it only scales
-#     such glyphs DOWN to fit the cell, never UP — so they render at their
-#     raw size while their curated/native neighbours get enlarged to
-#     icon_height_single. The visible result: relocated icons look smaller.
-#     We compensate by baking an upscale into ONLY these glyphs.
+# md/oct is the reference because it's the largest, most uniform curated family
+# and defines the visual "icon size" of the font. It is measured per-variant,
+# so the Propo build (icons ~0.83em) and the Mono build (~1.0em) each match
+# their own curated glyphs automatically. Curated glyphs are the reference and
+# are NOT modified.
 #
-# Both scales transform the outline about its own bounding-box centre and
-# leave the advance width untouched, so monospace cell alignment holds.
-# Done via fontTools, never by editing font-patcher.
+# Ghostty interaction: it re-fits the populations it recognises (curated +
+# native FA) to its own icon_height at render time, so baking native FA here is
+# harmless there (Ghostty overrides it) and necessary for WezTerm. The
+# relocated + custom PUA glyphs Ghostty leaves alone, so the size baked here is
+# also what Ghostty shows for them.
 #
-#   FA_RELOCATED_SCALE  upscale for the Plane-16 relocated icons. This is a
-#                       perceptual match to Ghostty's icon_height_single and
-#                       can drift with the primary font / line-height, so it
-#                       is a tunable. Recalibrate quickly (no full rebuild)
-#                       with ./recalibrate-fa.sh <scale> [dy] --install.
-#   FA_RELOCATED_DY     vertical shift (em, +=up) for the relocated icons.
-#                       Ghostty centres the icons it constrains (center1) but
-#                       leaves relocated PUA glyphs on the baseline, so they
-#                       render lower; this lifts them to match. Tunable.
-#   FA_SCALE            global scale for the NATIVE FA glyphs (default 1.0;
-#                       normally leave alone — Ghostty already sizes these).
-log "step 7b/9 size Font Awesome glyphs"
+#   ICON_FILL  multiplier on the measured md/oct box. 1.0 = match md/oct
+#              exactly (≈0.83em in Propo, i.e. the "~0.85" target). Lower
+#              insets the icons; higher fills more of the cell. Tunable —
+#              recalibrate fast (no rebuild) with
+#              ./recalibrate-fa.sh <fill> [dy] --install.
+#   ICON_DY    extra vertical nudge in em (+=up) on top of the measured md/oct
+#              centre, for ALL icons. Normally 0.0; the measured centre matches.
+#   CUSTOM_DY  extra vertical nudge in em (+=up) for the custom SVG icons ONLY,
+#              on top of ICON_DY. Brand logos tend to read optically low at the
+#              bbox centre, so a small positive value lifts just them.
+log "step 7b/9 normalize icon sizing (FA + custom -> md/oct box)"
 
-FA_SCALE="${FA_SCALE:-1.0}"
-FA_RELOCATED_SCALE="${FA_RELOCATED_SCALE:-0.90}"
-FA_RELOCATED_DY="${FA_RELOCATED_DY:-0.0}"
+ICON_FILL="${ICON_FILL:-1.05}"
+ICON_DY="${ICON_DY:-0.0}"
+CUSTOM_DY="${CUSTOM_DY:-0.07}"
 if [[ -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" && -f "${FA_MAP}" ]]; then
   # Stash pristine (native-size) copies so recalibrate-fa.sh can re-derive
   # any scale without re-running the patcher.
@@ -892,26 +956,28 @@ if [[ -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" && -f "${FA_MAP}" ]]; then
 
   SCALE_PY="${WORK_DIR}/_scale_fa.py"
   cat >"${SCALE_PY}" <<'PYEOF'
-"""Re-size and re-position Font Awesome glyphs about their own bounding-box
-centre, leaving advance widths untouched so the monospace cell stays aligned.
-Composite glyphs are decomposed to simple contours.
+"""Normalize icon glyph sizing to the curated md/oct box (see step 7b).
 
-Applied to two disjoint codepoint sets (see step 7b in build-updated-font.sh):
+Measures the curated Material-Design + Octicons glyphs in each font (median
+max-dimension and median vertical centre), then scales every Font Awesome
+glyph (native + relocated) and every custom SVG icon to ICON_FILL x that box,
+aspect preserved, about its own bbox centre, and moves it onto that centre +
+ICON_DY. Advance widths are untouched; composite glyphs are decomposed.
 
-  argv[2] fa_scale     -> NATIVE FA codepoints (everything in fa_cps that is
-                          NOT a relocation target). Ghostty constrains these,
-                          so this is normally 1.0 (no-op).
-  argv[3] reloc_scale  -> RELOCATED codepoints (the Plane-16 values of the
-                          "relocations" map). Ghostty does NOT constrain
-                          these, so we bake the upscale here.
-  argv[4] reloc_dy_em  -> vertical shift, in em, applied to the RELOCATED
-                          glyphs only (positive = up). Ghostty vertically
-                          centres the icons it constrains (center1) but leaves
-                          relocated PUA glyphs on the baseline, so they sit
-                          lower; this lifts them to match.
-  argv[5:] paths       -> TTFs to edit in place.
+argv:
+  1  fa_map.json   relocations / custom / fa_cps written by _merge_fa.py
+  2  repo_dir      nerd-fonts checkout (glyphnames.json -> md/oct codepoints)
+  3  icon_fill     multiplier on the md/oct median box (1.0 = match md/oct)
+  4  icon_dy_em    extra vertical nudge in em (+=up) on the md/oct centre, all
+                   icons
+  5  custom_dy_em  extra vertical nudge in em (+=up) for the custom SVG icons
+                   ONLY, on top of icon_dy_em. Their optical centre tends to sit
+                   below the bbox centre (brand logos etc.), so at dy=0 they
+                   read a touch low next to md/oct; this lifts just them.
+  6: paths         TTFs to edit in place
 """
 import json
+import statistics
 import sys
 
 from fontTools.ttLib import TTFont
@@ -921,19 +987,57 @@ from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 
 fa_map = json.load(open(sys.argv[1]))
-fa_scale = float(sys.argv[2])
-reloc_scale = float(sys.argv[3])
-reloc_dy_em = float(sys.argv[4])
-paths = sys.argv[5:]
+repo_dir = sys.argv[2]
+icon_fill = float(sys.argv[3])
+icon_dy_em = float(sys.argv[4])
+custom_dy_em = float(sys.argv[5])
+paths = sys.argv[6:]
 
-# Relocated FA icons AND local custom SVG icons both live in Plane-16 PUA,
-# outside the ranges Ghostty constrains, so both need the reloc upscale/lift.
-relocated = {int(h, 16) for h in fa_map.get("relocations", {}).values()}
-relocated |= {int(h, 16) for h in fa_map.get("custom", {}).values()}
-all_fa = [int(h, 16) for h in fa_map.get("fa_cps", [])]
+# Every FA-origin glyph (native + relocated) plus the custom SVG icons.
+targets = [int(h, 16) for h in fa_map.get("fa_cps", [])]
+# Custom SVG icons get an extra vertical nudge on top of the shared centre.
+custom_cps = {int(h, 16) for h in fa_map.get("custom", {}).values()}
+
+# Curated reference family: Material Design + Octicons. glyphnames.json keys
+# are unprefixed (e.g. "md-account", "oct-x"); the font carries them as nf-*.
+glyphnames = json.load(open(repo_dir + "/glyphnames.json"))
+ref_cps = set()
+for _name, _info in glyphnames.items():
+    if _name == "METADATA" or not isinstance(_info, dict):
+        continue
+    if _name.startswith(("md-", "oct-")):
+        try:
+            ref_cps.add(int(_info["code"], 16))
+        except (KeyError, ValueError, TypeError):
+            pass
 
 
-def transform_one(glyf, glyph_set, gname, factor, dy_units):
+def _bbox(glyf, gname):
+    g = glyf[gname]
+    g.recalcBounds(glyf)
+    if g.numberOfContours == 0:
+        return None
+    return g.xMin, g.yMin, g.xMax, g.yMax
+
+
+def measure_ref(glyf, cmap):
+    centers, sizes = [], []
+    for cp in ref_cps:
+        gname = cmap.get(cp)
+        if not gname:
+            continue
+        b = _bbox(glyf, gname)
+        if not b:
+            continue
+        xmin, ymin, xmax, ymax = b
+        centers.append((ymin + ymax) / 2.0)
+        sizes.append(max(xmax - xmin, ymax - ymin))
+    if not sizes:
+        raise SystemExit("no md/oct reference glyphs found in font")
+    return statistics.median(centers), statistics.median(sizes)
+
+
+def transform_one(glyf, glyph_set, gname, factor, target_cy):
     glyph = glyf[gname]
     glyph.recalcBounds(glyf)
     if glyph.numberOfContours == 0:
@@ -943,45 +1047,65 @@ def transform_one(glyf, glyph_set, gname, factor, dy_units):
     rec = DecomposingRecordingPen(glyph_set)
     glyph.draw(rec, glyf)
     pen = TTGlyphPen(glyph_set)
-    # Scale about the bbox centre, then lift by dy_units.
-    t = Identity.translate(0, dy_units).translate(cx, cy).scale(factor).translate(-cx, -cy)
+    # Scale about the bbox centre, then move that centre to target_cy.
+    t = (Identity
+         .translate(0, target_cy - cy)
+         .translate(cx, cy).scale(factor).translate(-cx, -cy))
     rec.replay(TransformPen(pen, t))
-    new_glyph = pen.glyph()
-    new_glyph.recalcBounds(glyf)
-    glyf[gname] = new_glyph
+    ng = pen.glyph()
+    ng.recalcBounds(glyf)
+    glyf[gname] = ng
     return True
 
 
 for path in paths:
     font = TTFont(path)
     upm = font["head"].unitsPerEm
-    dy_units = reloc_dy_em * upm
     glyf = font["glyf"]
     cmap = font.getBestCmap()
     gs = font.getGlyphSet()
-    n_native = n_reloc = 0
-    for cp in all_fa:
+
+    ref_cy, ref_size = measure_ref(glyf, cmap)
+    target_size = icon_fill * ref_size
+    base_cy = ref_cy + icon_dy_em * upm
+    custom_offset = custom_dy_em * upm
+
+    n = 0
+    tops, bots = [], []
+    for cp in targets:
         gname = cmap.get(cp)
         if not gname:
             continue
-        if cp in relocated:
-            factor, dy = reloc_scale, dy_units
-        else:
-            factor, dy = fa_scale, 0.0
-        if factor == 1.0 and dy == 0.0:
+        b = _bbox(glyf, gname)
+        if not b:
             continue
-        if transform_one(glyf, gs, gname, factor, dy):
-            if cp in relocated:
-                n_reloc += 1
-            else:
-                n_native += 1
+        cur = max(b[2] - b[0], b[3] - b[1])
+        if cur <= 0:
+            continue
+        cy = base_cy + (custom_offset if cp in custom_cps else 0)
+        if transform_one(glyf, gs, gname, target_size / cur, cy):
+            n += 1
+            g = glyf[gname]
+            tops.append(g.yMax)
+            bots.append(g.yMin)
+
+    asc = font["hhea"].ascent
+    desc = font["hhea"].descent
+    bleed = bool(tops) and (max(tops) > asc or min(bots) < desc)
     font.save(path)
-    print("  %s: native x%.3f (%d), relocated x%.3f dy=%+.3fem (%d)"
-          % (path.rsplit('/', 1)[-1], fa_scale, n_native, reloc_scale, reloc_dy_em, n_reloc))
+    print("  %s: md/oct box=%.3fem center=%+.3f -> %d icons @ %.3fem%s%s"
+          % (path.rsplit('/', 1)[-1], ref_size / upm, ref_cy / upm, n,
+             target_size / upm,
+             (" dy=%+.2fem" % icon_dy_em) if icon_dy_em else "",
+             (" custom_dy=%+.2fem" % custom_dy_em) if custom_dy_em else ""))
+    if tops:
+        span = ("  top<=%.3f bot>=%.3f (cell %.3f..%.3f)"
+                % (max(tops) / upm, min(bots) / upm, desc / upm, asc / upm))
+        print(("  WARNING: vertical bleed!" + span) if bleed else ("  ok," + span))
 PYEOF
-  "${PY_VENV_BIN}" "${SCALE_PY}" "${FA_MAP}" "${FA_SCALE}" "${FA_RELOCATED_SCALE}" "${FA_RELOCATED_DY}" "${BUILT[@]}" \
+  "${PY_VENV_BIN}" "${SCALE_PY}" "${FA_MAP}" "${REPO_DIR}" "${ICON_FILL}" "${ICON_DY}" "${CUSTOM_DY}" "${BUILT[@]}" \
     2>&1 | tee -a "${LOG_FILE}"
-  done_ "FA sized (native x${FA_SCALE}, relocated x${FA_RELOCATED_SCALE} dy=${FA_RELOCATED_DY}em)"
+  done_ "icons normalized to md/oct box (fill x${ICON_FILL}, dy ${ICON_DY}em, custom_dy ${CUSTOM_DY}em)"
 else
   warn "skipped: needs fonttools venv + fa-map.json -> FA glyphs left at full size"
 fi

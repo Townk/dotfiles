@@ -87,11 +87,11 @@ workspaces:
 
   - id: wezterm-plugins
     name: Wezterm Plugins
-    icon: " "
+    icon: "􏬄 "
     tabs:
       - id: wezterm-config
         name: Wezterm Config
-        icon: " "
+        icon: "􏬄 "
         action:
           type: Edit
           label: Edit Wezterm configuration
@@ -135,7 +135,7 @@ tabs:
 
   - id: wezterm-config
     name: Wezterm Config
-    icon: " "
+    icon: "􏬄 "
     action:
       type: Edit
       label: Edit Wezterm configuration
@@ -144,7 +144,7 @@ tabs:
 
   - id: zsh-config
     name: Zsh Config
-    icon: " "
+    icon: "􏬅 "
     action:
       type: Edit
       label: Edit Zsh configuration
