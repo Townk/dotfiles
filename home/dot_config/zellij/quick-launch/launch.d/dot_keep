@@ -1,0 +1,4 @@
+# Drop host-local quick-launch target files here (*.yaml / *.yml / *.json /
+# *.toml). They are merged over default.yaml by ~/.config/zellij/scripts/
+# quick-launch; an entry whose `id` matches a default overrides that default.
+# This .keep only ensures the directory exists — the loader ignores it.

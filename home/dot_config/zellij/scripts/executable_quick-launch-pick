@@ -3,8 +3,9 @@
 # shared pick-common.zsh facility (the same one pick-glyph / pick-gitmoji
 # use). It inherits the catppuccin-mocha palette, border/input-border
 # handling, the NBSP-terminated header, the standard prompt/pointer/marker
-# glyphs, and recency sorting — so the Quick Launch menu looks and behaves
-# identically to the other pickers.
+# glyphs — so the Quick Launch menu looks and behaves like the other pickers,
+# except it deliberately does NOT recency-sort: entries stay in their defined
+# (file) order.
 #
 #   quick-launch-pick <pane|tab|workspace> [--no-border]
 #
@@ -13,7 +14,10 @@
 # 130 with no output (pick-common's clean-cancel convention).
 #
 # Targets are read from $QUICK_LAUNCH_TARGETS (default
-# ~/.config/zellij/quick-launch-targets.yaml; yaml/json/toml accepted).
+# ~/.config/zellij/quick-launch/default.yaml; yaml/json/toml accepted). When
+# launched via `quick-launch menu` this points at a pre-merged JSON cache
+# (default.yaml + launch.d/*), so the picker shows the same merged set the
+# dispatcher acts on.
 # Floating-pane geometry comes from QUICK_LAUNCH_HEIGHT / _MARGIN /
 # _PADDING / _INPUT_BORDER, and --no-border (or QUICK_LAUNCH_NO_BORDER=1)
 # suppresses fzf's frame for embedders that draw their own.
@@ -47,7 +51,7 @@ pick::need yq
 pick::need jq
 pick::need fzf
 
-TARGETS="${QUICK_LAUNCH_TARGETS:-$HOME/.config/zellij/quick-launch-targets.yaml}"
+TARGETS="${QUICK_LAUNCH_TARGETS:-$HOME/.config/zellij/quick-launch/default.yaml}"
 [[ -r "$TARGETS" ]] || die "cannot read targets file: $TARGETS"
 
 case "$kind" in
@@ -170,10 +174,10 @@ pick_ui=(
   expect       "enter"
 )
 
-# Recency: recently-launched targets float to the top (id is the tail's only
-# field). No resume / stay-insert binds — launching isn't a text-insert flow.
-pick_id_field=1
-pick_usage_file="$CACHE_DIR/usage-$kind"
+# No recency sort: quick-launch entries stay in their defined (file) order.
+# `pick_usage_file` is intentionally left unset, so pick::ordered_cache passes
+# the list through unchanged and pick::record skips usage tracking. No resume /
+# stay-insert binds either — launching isn't a text-insert flow.
 
 pick::build_fzf_args
 pick_input=( cat )

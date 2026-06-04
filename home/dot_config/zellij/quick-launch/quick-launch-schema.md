@@ -1,9 +1,12 @@
 # Quick-Launch Targets Schema
 
-The targets file (`~/.config/zellij/quick-launch-targets.yaml` by default,
-override via `$QUICK_LAUNCH_TARGETS`) has three top-level lists plus an
-optional `tools` table. YAML is the default; `.json` and `.toml` files are also
-accepted (parsed via `yq`).
+Targets live in a directory (`~/.config/zellij/quick-launch` by default,
+override via `$QUICK_LAUNCH_DIR`): the chezmoi-managed `default.yaml` plus any
+host-local fragments under `launch.d/`. Each file has three top-level lists plus
+an optional `tools` table. YAML is the default; `.json` and `.toml` files are
+also accepted (parsed via `yq`). A single file can be forced with
+`$QUICK_LAUNCH_TARGETS`, which bypasses directory discovery (used by tests and
+by the picker's pre-merged cache).
 
 ## Top Level
 
@@ -80,6 +83,28 @@ closes when that command exits; a `Shell` tab is a plain interactive shell. An
 - A `tab` may contain `panes` (a split chain).
 - A `workspace` may contain `tabs` (each becomes a session tab) and/or `panes`
   (appended to the first tab).
+
+## Sources & Merge
+
+The loader reads `default.yaml` first, then every `launch.d/*.{yaml,yml,json,toml}`
+fragment in C-collation (filename) order, and merges them:
+
+- `tools` — shallow-merged, last file wins per key.
+- `workspaces` / `tabs` / `panes` — concatenated then deduped by `id`. A later
+  file's entry **overrides** an earlier one with the same `id` in place (so a
+  `launch.d` fragment can shadow or customize a managed default). Entries
+  without an `id` are always kept.
+
+Drop unmanaged, machine-specific targets into `launch.d/` — they are never
+tracked by chezmoi and survive `chezmoi apply`.
+
+### Apply-time gating (`default.yaml.tmpl`)
+
+`default.yaml` is rendered from a chezmoi template. Machine-specific workspaces
+are wrapped in `{{ if and (stat …) (stat …) }}` guards keyed on their project
+directories, so an entry is **baked out** at `chezmoi apply` time on a machine
+that lacks the project. Adding the project later requires re-running
+`chezmoi apply` to surface the entry. Runtime presence is not re-checked.
 
 ## CLI
 

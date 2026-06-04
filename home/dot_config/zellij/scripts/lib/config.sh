@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# lib/config.sh — read & normalize the quick-launch targets file.
+# lib/config.sh — read, merge & normalize the quick-launch targets
+# (default.yaml + launch.d/* under the targets directory).
 #
 # Port of quicklaunch.wezterm's plugin/quick-launch/config.lua.
 #
@@ -11,28 +12,86 @@
 # "read any of yaml/json/toml" behavior the Lua plugin had via
 # wezterm.serde.*_decode.
 
-# Absolute path to the targets file. Mirrors the Lua default of
-# `<config_dir>/quick-launch-targets.yaml`, overridable via env so the
-# zellij adapter (or tests) can point elsewhere.
-ql_config_path() {
-  echo "${QUICK_LAUNCH_TARGETS:-$HOME/.config/zellij/quick-launch-targets.yaml}"
+# Targets directory (default ~/.config/zellij/quick-launch), overridable via
+# $QUICK_LAUNCH_DIR. Holds the managed `default.yaml` plus an optional
+# `launch.d/` of host-local fragments.
+ql_config_dir() {
+  echo "${QUICK_LAUNCH_DIR:-$HOME/.config/zellij/quick-launch}"
 }
 
-# Load the targets file into $QL_JSON (compact, single-line JSON). The input
-# parser is chosen from the file extension, matching the Lua plugin's
-# extension switch.
+# A single-file override (used by the picker's merged cache and by tests). When
+# set it bypasses directory discovery entirely; empty otherwise.
+ql_config_path() {
+  echo "${QUICK_LAUNCH_TARGETS:-}"
+}
+
+# Convert one targets file to compact JSON; parser chosen by extension. Mirrors
+# the Lua plugin's "read any of yaml/json/toml" behavior.
+ql_file_to_json() {
+  case "$1" in
+    *.json) yq -p=json -o=json -I=0 '.' "$1" ;;
+    *.toml) yq -p=toml -o=json -I=0 '.' "$1" ;;
+    *)      yq -p=yaml -o=json -I=0 '.' "$1" ;;
+  esac
+}
+
+# Ordered list of source files: default.yaml first, then every launch.d
+# fragment in C-collation order. Later files win on `id` collisions.
+ql_source_files() {
+  local dir def
+  dir="$(ql_config_dir)"
+  def="$dir/default.yaml"
+  [[ -r "$def" ]] && printf '%s\n' "$def"
+  if [[ -d "$dir/launch.d" ]]; then
+    find "$dir/launch.d" -maxdepth 1 -type f \
+      \( -name '*.yaml' -o -name '*.yml' -o -name '*.json' -o -name '*.toml' \) \
+      2>/dev/null | LC_ALL=C sort
+  fi
+}
+
+# Load targets into $QL_JSON (compact, single-line JSON). With a single-file
+# override we read just that file; otherwise we merge default.yaml + launch.d/*:
+# `tools` is shallow-merged (last wins) and the workspaces/tabs/panes lists are
+# concatenated then deduped by `id`, with later files overriding earlier ones
+# in place (entries without an `id` are always kept).
 ql_load() {
-  local path
-  path="$(ql_config_path)"
-  if [[ ! -r "$path" ]]; then
-    echo "quick-launch: cannot read targets file: $path" >&2
+  local single
+  single="$(ql_config_path)"
+  if [[ -n "$single" ]]; then
+    if [[ ! -r "$single" ]]; then
+      echo "quick-launch: cannot read targets file: $single" >&2
+      return 1
+    fi
+    QL_JSON="$(ql_file_to_json "$single")"
+    return
+  fi
+
+  local -a files=()
+  local f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && files+=("$f")
+  done < <(ql_source_files)
+  if (( ${#files[@]} == 0 )); then
+    echo "quick-launch: no targets found in $(ql_config_dir)" >&2
     return 1
   fi
-  case "$path" in
-    *.json) QL_JSON="$(yq -p=json -o=json -I=0 '.' "$path")" ;;
-    *.toml) QL_JSON="$(yq -p=toml -o=json -I=0 '.' "$path")" ;;
-    *) QL_JSON="$(yq -p=yaml -o=json -I=0 '.' "$path")" ;;
-  esac
+
+  QL_JSON="$(
+    for f in "${files[@]}"; do ql_file_to_json "$f"; done | jq -sc '
+      def merge_list($docs; $k):
+        reduce ($docs[] | (.[$k] // [])[]) as $e ([];
+          if ($e.id // null) == null then . + [$e]
+          elif any(.[]; .id == $e.id) then map(if .id == $e.id then $e else . end)
+          else . + [$e] end);
+      . as $docs
+      | {
+          tools:      (reduce $docs[] as $d ({}; . * ($d.tools // {}))),
+          workspaces: merge_list($docs; "workspaces"),
+          tabs:       merge_list($docs; "tabs"),
+          panes:      merge_list($docs; "panes")
+        }
+    '
+  )" || { echo "quick-launch: failed to merge targets in $(ql_config_dir)" >&2; return 1; }
 }
 
 # Editor resolution: tools.editor -> $EDITOR -> nvim. Mirrors the Lua

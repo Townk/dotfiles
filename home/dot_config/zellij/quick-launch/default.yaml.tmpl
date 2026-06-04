@@ -1,19 +1,16 @@
-# quick-launch-targets.yaml — Quick Launch targets for Zellij.
+{{- $hasQmk := and (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk")) (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk-config")) -}}
+{{- $hasWeztermPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/quicklaunch.wezterm")) (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/statusbar.wezterm")) -}}
+# default.yaml — managed quick-launch targets for Zellij.
 #
-# Ported from ~/.config/wezterm/quick-launch-targets.yaml. Consumed by
-# ~/.config/zellij/scripts/quick-launch via the Alt+w P/T/W leader binds.
-# Every target is focus-or-create.
-# Schema: ~/.config/zellij/quick-launch-schema.md
+# Consumed by ~/.config/zellij/scripts/quick-launch via the Alt+w P/T/W leader
+# binds. Every target is focus-or-create. Schema + merge rules:
+#   ~/.config/zellij/quick-launch/quick-launch-schema.md
 #
-# Port notes vs the WezTerm file:
-#   * directions: WezTerm Bottom/Top/Right/Left -> zellij down/up/right/left.
-#   * sizes: fractional (0.40) -> percent ("40%").
-#   * `optional: true` panes are NOT auto-opened with their tab/workspace;
-#     launch them on demand from the pane menu (Alt+w P). They are listed
-#     even when nested inside a workspace.
-#   * `description` was folded into `label` (the menu display field).
-#   * the WezTerm-only `wezterm-logs` tail (used %PID%) was dropped — there
-#     is no per-GUI log file under zellij.
+# This file is a chezmoi template: machine-specific workspaces are gated on the
+# existence (at `chezmoi apply` time) of their project directories, so an entry
+# only renders on a machine that actually has the project checked out. Drop
+# unmanaged, host-local targets into ~/.config/zellij/quick-launch/launch.d/;
+# they are merged over these defaults (matching `id`s in launch.d win).
 
 tools:
   editor: /opt/homebrew/bin/nvim
@@ -22,46 +19,34 @@ tools:
 workspaces:
   - id: default
     name: Default Workspace
-
-  - id: devshell-main
-    name: Work Dev Shell Main
-    icon: "󰢹 "
-    action:
-      type: External
-      label: Work Shell Dev Environment
-      args:
-        - ~/.config/zellij/scripts/quick-launch-external
-        - /usr/local/bin/work
-        - ssh
-        - "Work Shell Dev Environment"
-
+{{ if $hasQmk }}
   - id: qmk
     name: QMK Firmware
-    icon: " "
+    icon: " "
     tabs:
       - id: qmk-firmware
         name: Firmware
         action:
           type: Shell
           label: " Open terminal on the QMK Firmware repository directory"
-          cwd: ~/Projects/hardware/qmk
+          cwd: ~/Projects/platforms/keyboards/qmk
       - id: qmk-userspace
         name: Svalboard Keymap
         action:
           type: Shell
           label: " Open terminal on my custom QMK userspace Keymap directory"
-          cwd: ~/Projects/hardware/qmk-config
+          cwd: ~/Projects/platforms/keyboards/qmk-config
     panes:
       - id: qmk-compile
         name: QMK Build
-        icon: " "
+        icon: " "
         direction: down
         size: 40%
         optional: true
         action:
           type: Run
           label: Build Svalboard Lightly Firmware
-          cwd: ~/Projects/hardware/qmk-config
+          cwd: ~/Projects/platforms/keyboards/qmk-config
           python_venv: auto
           args:
             - printf '┏━━━━━━━━━━━━━━━━━┓\n┃ Left side build ┃\n┻━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
@@ -80,11 +65,12 @@ workspaces:
         action:
           type: Run
           label: Flash the Svalboard Lightly right half firmware
-          cwd: ~/Projects/hardware/qmk-config
+          cwd: ~/Projects/platforms/keyboards/qmk-config
           python_venv: auto
           args:
             - qmk flash -kb svalboard/trackball/pmw3389/right -km townk
-
+{{ end }}
+{{ if $hasWeztermPlugins }}
   - id: wezterm-plugins
     name: Wezterm Plugins
     icon: "􏬄 "
@@ -99,11 +85,11 @@ workspaces:
           args: ["wezterm.lua"]
       - id: statusbar-plugin
         name: Status Bar Plugin
-        icon: " "
+        icon: " "
         action:
           type: Edit
           label: Edit Status Bar Plugin
-          cwd: ~/Projects/wezterm/statusbar.wezterm
+          cwd: ~/Projects/apps/wezterm/statusbar.wezterm
           args: ["plugin/init.lua"]
       - id: quicklaunch-plugin
         name: Quick Launch Plugin
@@ -111,8 +97,9 @@ workspaces:
         action:
           type: Edit
           label: Edit Quick Launch Plugin
-          cwd: ~/Projects/wezterm/quicklaunch.wezterm
+          cwd: ~/Projects/apps/wezterm/quicklaunch.wezterm
           args: ["plugin/init.lua"]
+{{ end }}
 
 tabs:
   - id: launcher-items
@@ -121,12 +108,12 @@ tabs:
     action:
       type: Edit
       label: Edit Zellij QuickLaunch items
-      cwd: ~/.config/zellij
-      args: ["quick-launch-targets.yaml"]
+      cwd: ~/.config/zellij/quick-launch
+      args: ["default.yaml"]
 
   - id: brew-pkgs
     name: Homebrew Packages
-    icon: " "
+    icon: " "
     action:
       type: Edit
       label: Edit Brewbundle file
@@ -153,7 +140,7 @@ tabs:
 
   - id: neovim-config
     name: NeoVim Config
-    icon: " "
+    icon: " "
     action:
       type: Edit
       label: Edit NeoVim configuration
@@ -171,7 +158,7 @@ tabs:
 
   - id: system-resources
     name: System Resources
-    icon: " "
+    icon: " "
     action:
       type: Run
       label: Open System Resources
@@ -190,7 +177,7 @@ tabs:
 panes:
   - id: git-log
     name: Git Log
-    icon: " "
+    icon: " "
     direction: right
     size: 65%
     moveFocus: true

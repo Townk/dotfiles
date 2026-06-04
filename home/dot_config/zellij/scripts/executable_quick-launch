@@ -7,8 +7,10 @@
 #   quick-launch layout pane|tab|workspace ID  # print the generated KDL (debug)
 #   quick-launch list  [pane|tab|workspace]    # list defined targets
 #
-# Targets are read from $QUICK_LAUNCH_TARGETS (default
-# ~/.config/zellij/quick-launch-targets.yaml). YAML/JSON/TOML are accepted.
+# Targets are read from a directory ($QUICK_LAUNCH_DIR, default
+# ~/.config/zellij/quick-launch): the managed default.yaml plus optional
+# host-local fragments under launch.d/. A single file can be forced via
+# $QUICK_LAUNCH_TARGETS. YAML/JSON/TOML are accepted.
 #
 # The fuzzy picker is plain `fzf`; inside Zellij it is meant to run in a
 # floating modal pane (see the quick-launch-zellij adapter), but it works
@@ -43,6 +45,20 @@ ql_die() {
   exit 1
 }
 
+# Persist the already-merged $QL_JSON to a cache file and echo its path. Only
+# rewrites when the content actually changed, so the file mtime (and thus the
+# picker's line cache, which keys off it) stays stable across launches. This is
+# how the picker consumes the directory/launch.d merge without re-implementing
+# it: we hand it a single pre-merged .json file.
+ql_write_merged_cache() {
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/merged.json"
+  mkdir -p "${cache%/*}"
+  if [[ ! -f "$cache" ]] || [[ "$(cat "$cache" 2>/dev/null)" != "$QL_JSON" ]]; then
+    printf '%s\n' "$QL_JSON" >|"$cache"
+  fi
+  printf '%s\n' "$cache"
+}
+
 # Show the fuzzy picker for a kind and dispatch the chosen target. The
 # picker itself is quick-launch-pick (zsh), built on the shared
 # pick-common.zsh facility so it matches pick-glyph / pick-gitmoji; it
@@ -55,9 +71,10 @@ ql_menu() {
     *) ql_die "unknown kind '$kind' (want pane|tab|workspace)" ;;
   esac
 
-  # Make sure the picker reads the same targets file we dispatch from.
+  # Hand the picker a single merged JSON view (default.yaml + launch.d/*) so it
+  # reads exactly what we dispatch from, without re-implementing the merge.
   export QUICK_LAUNCH_TARGETS
-  QUICK_LAUNCH_TARGETS="$(ql_config_path)"
+  QUICK_LAUNCH_TARGETS="$(ql_write_merged_cache)"
 
   local chosen
   chosen="$("$SCRIPT_DIR/quick-launch-pick" "$kind")" || return 0
