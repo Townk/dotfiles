@@ -1,0 +1,31 @@
+# ~/.ssh/config — LOCAL-ONLY, intentionally NOT managed by chezmoi.
+#
+# Why: work SSH tooling rewrites ~/.ssh/config on every run, re-inserting its
+# own configuration block at the top of the file. Letting chezmoi manage this
+# file would fight that tooling forever and leak the work configuration (host
+# names, absolute paths) into this public repo. So ~/.ssh/config stays local
+# and everything managed is pulled in through the Include below.
+#
+# Bootstrap on a new machine:
+#
+#   - Personal (non-work) machine: copy this file to ~/.ssh/config
+#         cp ~/.ssh/config.example ~/.ssh/config
+#
+#   - Work machine: first run your work SSH tooling so it generates
+#     ~/.ssh/config with its own block, then append the two lines at the bottom
+#     of this file (Match all + Include) BELOW that work-managed block.
+#
+# IMPORTANT — the `Match all` before the Include is required. The work tooling
+# writes its block as a host-specific `Host <work-hosts>` section, and an
+# `Include` that sits inside a non-matching Host block is skipped entirely.
+# Without this reset to global scope, the personal config under config.d/*
+# would only apply when connecting to those work hosts. (Verified with
+# `ssh -G`.)
+#
+# The work-managed block lands above these lines, e.g.:
+#
+#   Host <work-hosts>
+#   Include /path/to/work_ssh_config
+
+Match all
+Include ~/.ssh/config.d/*
