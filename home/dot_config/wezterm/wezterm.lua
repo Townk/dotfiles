@@ -470,11 +470,13 @@ config.mouse_bindings = {
 		mods = "NONE",
 		action = wezterm.action.Nop,
 	},
-	-- This forces a middle-click to bypass WezTerm and go straight to the terminal/Zellij
+	-- Middle-click pastes the system clipboard (select-to-copy fills it: pbcopy
+	-- locally, OSC 52 → WezTerm from a remote Zellij over ssh). Injects the bytes
+	-- into the focused pane, so it works through ssh too.
 	{
 		event = { Down = { streak = 1, button = "Middle" } },
 		mods = "NONE",
-		action = wezterm.action.Nop,
+		action = wezterm.action.PasteFrom("Clipboard"),
 	},
 }
 
