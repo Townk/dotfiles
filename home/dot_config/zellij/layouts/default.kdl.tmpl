@@ -1,5 +1,5 @@
 // zj-hud layout — WezTerm-inspired Zellij HUD
-// Source: /Users/user/Projects/apps/zellij/zj-hud
+// Source: {{ .chezmoi.homeDir }}/Projects/apps/zellij/zj-hud
 // Previous plugin: zj-status.wasm (swap back by changing the location line)
 
 layout {
@@ -16,7 +16,7 @@ layout {
                 // alias resolution in config.kdl.tmpl while this repo is
                 // checked out). Swap to the published release URL alongside
                 // that alias if you ever drop the local checkout.
-                search_plugin_url "file:/Users/user/Projects/apps/zellij/zj-hud/target/wasm32-wasip1/release/zj-hud.wasm"
+                search_plugin_url "file:{{ .chezmoi.homeDir }}/Projects/apps/zellij/zj-hud/target/wasm32-wasip1/release/zj-hud.wasm"
 
                 tabs {
                     max_width 40
