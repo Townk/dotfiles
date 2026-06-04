@@ -897,7 +897,7 @@ scroll_buffer_size 1000000
 // copy_command "pbcopy"                     // osx
 //
 // Gated to macOS only. On a remote (Linux) host reached over ssh — e.g. the
-// Work/work devshell, which renders this same chezmoi source — `pbcopy`
+// work dev-shell, which renders this same chezmoi source — `pbcopy`
 // doesn't exist, so leaving copy_command unset there makes zellij fall back to
 // OSC 52. That sequence travels up the ssh stream straight to WezTerm, which
 // writes the host (Mac) clipboard. (Paste back in is a WezTerm paste, not OSC 52

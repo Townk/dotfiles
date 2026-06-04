@@ -5,11 +5,11 @@ set -eu -o pipefail
 # 1. Enforce required script positional arguments
 if [[ $# -lt 3 ]]; then
   print "Usage: $0 <binary_path_or_command> <connection_argument> <window_title>" >&2
-  print "Example: $0 /usr/bin/ssh work \"Work Session\"" >&2
+  print "Example: $0 /usr/bin/ssh myhost \"Dev Session\"" >&2
   exit 1
 fi
 
-WORK=$1
+LAUNCH_CMD=$1
 CONN_ARG=$2
 WINDOW_TITLE=$3
 
@@ -38,7 +38,7 @@ fi
 case "$ENV_TYPE" in
   "GHOSTTY")
     # Native Ghostty cross-platform CLI window spawn using the passed arguments
-    "$GHOSTTY" +open "$WORK" "$CONN_ARG"
+    "$GHOSTTY" +open "$LAUNCH_CMD" "$CONN_ARG"
     ;;
 
   "WEZTERM")
@@ -50,7 +50,7 @@ case "$ENV_TYPE" in
       wezterm_cli activate-pane --pane-id "$PANE_ID"
     else
       # 1. Spawn the new window and capture its generated Pane ID
-      NEW_PANE_ID=$(wezterm_cli spawn --new-window -- "$WORK" "$CONN_ARG")
+      NEW_PANE_ID=$(wezterm_cli spawn --new-window -- "$LAUNCH_CMD" "$CONN_ARG")
       
       # 2. Set the window title explicitly using the new pane as a reference pointer
       wezterm_cli set-window-title --pane-id "$NEW_PANE_ID" "$WINDOW_TITLE"

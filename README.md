@@ -73,7 +73,7 @@ mas "DaisyDisk", id: 411643860
 Currently the App Store (`mas`) entries are gated to `personal`. Brews, casks,
 and the bootstrap Brewfile are shared.
 
-The `dev-shell` profile is for Linux Work-style shells, not `.setup.sh`.
+The `dev-shell` profile is for headless Linux dev shells, not `.setup.sh`.
 Initialize it with `CHEZMOI_PROFILE=dev-shell` or an equivalent chezmoi config,
 then run `chezmoi apply` on the Linux host.
 
