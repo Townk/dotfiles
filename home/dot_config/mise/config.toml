@@ -9,6 +9,7 @@ python = "latest"
 rust = { version = "latest", components = "rust-analyzer,rust-src,rustfmt,clippy" }
 
 # Tools
+cargo-binstall = "latest"  # prebuilt-binary installer; lets the Cargofile worker skip source builds
 cmake = "latest"
 just = "latest"
 ninja = "latest"

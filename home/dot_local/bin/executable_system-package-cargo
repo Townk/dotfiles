@@ -78,8 +78,40 @@ do_list() {
   cargo_list_rows "$outdated"
 }
 
+# cargo_provision <cargofile-line>
+# Install or upgrade one Cargofile entry, preferring a prebuilt binary.
+#
+# Bare entries (crate name only) go through `cargo binstall` when it's
+# available: binstall's default strategy order (crate-meta-data, quick-install,
+# compile) grabs a prebuilt artifact when one exists and compiles from source
+# otherwise — a faster drop-in for `cargo install`. It records installs in the
+# same $CARGO_HOME/.crates2.json that `cargo install --list` reads, so the
+# detection logic above stays correct. Without cargo-binstall it falls back to
+# plain `cargo install`. binstall skips crates already at the latest version,
+# so it is safe on the upgrade pass too.
+#
+# Entries carrying extra args (--features, --git, --locked, …) always use
+# `cargo install --force`: those flags express a source-build intent the
+# prebuilt path can't honor, and --force re-applies flag changes.
+cargo_provision() {
+  local line="$1"
+  local -a args=( ${(z)line} )
+  if [[ "$line" != "${line%% *}" ]]; then
+    cargo install --force "${args[@]}"
+  elif (( HAVE_BINSTALL )); then
+    cargo binstall --no-confirm "${args[@]}"
+  else
+    cargo install "${args[@]}"
+  fi
+}
+
 do_sync() {
   pkg_info "Syncing cargo crates..."
+
+  # Prefer prebuilt binaries for bare crates when cargo-binstall is present
+  # (see cargo_provision); detected once, falls back to `cargo install`.
+  HAVE_BINSTALL=0
+  command -v cargo-binstall >/dev/null 2>&1 && HAVE_BINSTALL=1
 
   local declared_full declared installed before_snap after_snap
   declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
@@ -103,24 +135,15 @@ do_sync() {
   pkg_diff_only_in "$declared" "$installed" | while IFS= read -r crate; do
     [[ -z "$crate" ]] && continue
     local line; line=$(awk -v c="$crate" '$1 == c {print; exit}' "$declared_full")
-    local -a args=( ${(z)line} )
-    cargo install "${args[@]}" || pkg_warn "failed to install $crate"
+    cargo_provision "$line" || pkg_warn "failed to install $crate"
   done
 
-  # Upgrade everything still declared. Re-running `cargo install` is the
-  # canonical upgrade path; cargo short-circuits with "already installed"
-  # when the version matches, so the cost is one fast registry check per
-  # crate. Crates carrying extra flags get reinstalled with `--force` so
-  # flag changes (e.g. flipped features) actually re-apply — `cargo install`
-  # without --force refuses to touch a crate it considers up-to-date.
+  # Upgrade everything still declared. cargo_provision is the canonical
+  # upgrade path: cargo / binstall short-circuit when a crate is already at
+  # the latest version, so the cost is one fast registry check per crate.
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    local -a args=( ${(z)line} )
-    if [[ "$line" == "${line%% *}" ]]; then
-      cargo install "${args[@]}" || pkg_warn "failed to upgrade ${args[1]}"
-    else
-      cargo install --force "${args[@]}" || pkg_warn "failed to upgrade ${args[1]}"
-    fi
+    cargo_provision "$line" || pkg_warn "failed to upgrade ${line%% *}"
   done < "$declared_full"
 
   # Restart services whose backing crate changed version.
