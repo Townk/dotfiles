@@ -17,7 +17,9 @@
 # MCP servers (Cursor ~/.cursor/mcp.json)
 wezterm-mcp
 zellij-mcp-server -- https://github.com/GitJuhb/zellij-mcp-server/tarball/main
+{{- if not (and (eq .chezmoi.os "linux") (eq .profile "dev-shell")) }}
 ghostty-mcp -- https://github.com/GitJuhb/ghostty-mcp/tarball/main
+{{- end }}
 
 # LSP packages
 typescript

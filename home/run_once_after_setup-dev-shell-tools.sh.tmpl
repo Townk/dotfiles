@@ -61,6 +61,8 @@ APT_PACKAGES=(
   rsync                  # file sync
   file                   # mime detection (preview dispatch)
   git-lfs                # large files in git
+  clang                  # bindgen/libclang headers for Rust crates (tree-sitter-cli)
+  libclang-dev           # libclang development files for bindgen
 )
 
 if command -v apt-get >/dev/null 2>&1; then

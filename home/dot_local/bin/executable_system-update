@@ -152,13 +152,17 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
 fi
 
 # Homebrew-less hosts (e.g. the Linux dev-shell profile) have no brew /
-# Brewfile pipeline. Converge what we can — mise, bin, NeoVim — and skip
-# the brew/launchd steps instead of dying on the first `brew` call.
+# Brewfile pipeline. Converge the package ecosystems rendered for this
+# host, then skip the brew/launchd-specific steps.
 if ! command -v brew >/dev/null 2>&1; then
   warn "Homebrew not found — running the Homebrew-less update path."
   if command -v mise >/dev/null 2>&1; then
     print -P -- "\n🛠️ Upgrade Mise tools...\n"
     mise upgrade && mise prune -y || warn "mise upgrade had failures"
+  fi
+  if command -v system-package >/dev/null 2>&1; then
+    print -P -- "\n📦 Sync system packages...\n"
+    system-package sync || die "Failed to sync system packages!"
   fi
   if command -v bin >/dev/null 2>&1; then
     print -P -- "\n🛠️ Upgrade bin tools...\n"

@@ -5,14 +5,27 @@
 #   system-package <subcommand>              # run for every ecosystem
 #   system-package <ecosystem> <subcommand>  # run for one ecosystem
 #
-# Ecosystems: brew, uv, npm, go, cargo
+# Ecosystems are discovered from executable system-package-* workers next to
+# this dispatcher.
 # Subcommands: list, sync
 
 set -eu -o pipefail
 
 source "$HOME/.local/lib/system-package-common.sh"
 
-ECOSYSTEMS=(brew uv npm go cargo)
+script_path="$0"
+if [[ "$script_path" != */* ]]; then
+  script_path="$(command -v -- "$script_path")" \
+    || pkg_die "cannot resolve dispatcher path: $0"
+fi
+SCRIPT_DIR="${script_path:A:h}"
+
+ECOSYSTEMS=()
+for worker in "$SCRIPT_DIR"/system-package-*(N-.); do
+  [[ -x "$worker" ]] || continue
+  worker="${worker:t}"
+  ECOSYSTEMS+=("${worker#system-package-}")
+done
 SUBCOMMANDS=(list sync)
 
 usage() {
@@ -61,12 +74,9 @@ Usage:
   system-package sync                       sync every ecosystem
   system-package <ecosystem> sync           sync one ecosystem
 
-Reconciles installed packages against the manifest in ~/.config/packages/:
-  brew  → Brewfile.bootstrap + Brewfile (\`brew bundle install --upgrade\`)
-  uv    → Uvfile
-  npm   → Npmfile
-  go    → Gofile
-  cargo → Cargofile
+Reconciles installed packages by running every discovered
+\`system-package-<ecosystem>\` worker next to this dispatcher. Each worker owns
+its manifest under ~/.config/packages/.
 
 After each ecosystem sync, any system service (launchd or brew) whose
 backing package was just upgraded and is currently running is restarted.
@@ -85,8 +95,12 @@ is_in() {
   return 1
 }
 
+worker_path() {
+  print -r -- "$SCRIPT_DIR/system-package-$1"
+}
+
 worker_check() {
-  command -v "system-package-$1" >/dev/null \
+  [[ -x "$(worker_path "$1")" ]] \
     || pkg_die "worker not found: system-package-$1"
 }
 
@@ -97,10 +111,11 @@ worker_check() {
 list_one() {
   local eco="$1"; shift
   worker_check "$eco"
+  local worker="$(worker_path "$eco")"
   if [[ "$eco" == "brew" ]]; then
-    "system-package-$eco" list "$@" | pkg_table_print $'Type\tPackage\tVersion' 1
+    "$worker" list "$@" | pkg_table_print $'Type\tPackage\tVersion' 1
   else
-    "system-package-$eco" list "$@" | pkg_table_print $'Package\tVersion'
+    "$worker" list "$@" | pkg_table_print $'Package\tVersion'
   fi
 }
 
@@ -116,13 +131,15 @@ list_all() {
     local eco rows
     for eco in "${ECOSYSTEMS[@]}"; do
       worker_check "$eco"
+      local worker="$(worker_path "$eco")"
       if [[ "$eco" == "brew" ]]; then
-        rows=$("system-package-$eco" list "${args[@]}" | sed 's/^/brew:/')
+        rows=$("$worker" list "${args[@]}" | sed 's/^/brew:/')
       else
-        rows=$("system-package-$eco" list "${args[@]}" | awk -v t="$eco" '{print t "\t" $0}')
+        rows=$("$worker" list "${args[@]}" | awk -v t="$eco" '{print t "\t" $0}')
       fi
       [[ -n "$rows" ]] && printf '%s\n' "$rows"
     done
+    true
   } | pkg_table_print $'Tool\tPackage\tVersion' 1
 }
 
@@ -130,7 +147,8 @@ list_all() {
 sync_one() {
   local eco="$1"; shift
   worker_check "$eco"
-  "system-package-$eco" sync "$@"
+  local worker="$(worker_path "$eco")"
+  "$worker" sync "$@"
 }
 
 # sync_all [args...]
@@ -173,7 +191,7 @@ main() {
     # `system-package <eco>` (no subcommand) or `system-package <eco> --help`
     # → defer to worker's top-level help. Same for the subcommand layer.
     if [[ $# -eq 0 ]] || pkg_is_help "$1"; then
-      "system-package-$eco" --help
+      "$(worker_path "$eco")" --help
       exit 0
     fi
     local cmd="$1"; shift
@@ -182,7 +200,7 @@ main() {
     # `system-package <eco> <cmd> --help` → forward to worker so the user
     # sees ecosystem-specific flag semantics rather than the aggregated text.
     if pkg_args_contain_help "$@"; then
-      "system-package-$eco" "$cmd" --help
+      "$(worker_path "$eco")" "$cmd" --help
       exit 0
     fi
     case "$cmd" in

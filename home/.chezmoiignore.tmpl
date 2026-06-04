@@ -31,6 +31,11 @@ setup-dev-shell-tools.sh
 grant-zellij-plugin-permissions.sh
 install-snaps.sh
 {{- end }}
+{{ if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+{{/* Homebrew is not available in the dev-shell profile. Omit the worker so
+     system-package discovers only ecosystems this host can run. */}}
+.local/bin/system-package-brew
+{{- end }}
 
 # pi-coding-agent: paths managed by pi itself at runtime, or sensitive.
 # We track specific configs under ~/.pi/agent/ but never these dirs.
