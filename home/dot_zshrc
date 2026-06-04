@@ -337,31 +337,17 @@ HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_FOUND="bg=none,fg=yellow,bold"
 HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_NOT_FOUND="bg=none,fg=red,bold"
 HISTORY_SUBSTRING_SEARCH_GLOBBING_FLAGS="l"
 
-# The next snippet should only be executed if I'm opening a terminal.
-# Currently, the 5 possible terminal emulators, and one terminal multiplexer I
-# use are:
-#
-# - WezTerm
-# - Kitty
-# - Alacritty
-# - iTerm2
-# - Ghostty
-# - Zellij
-#
-# If I can't identify one of these running this ZSH session, I'll skip the
-# "welcome screen".
-if [[ -n "$WEZTERM_UNIX_SOCKET" ]] || [[ -n "$ALACRITTY_SOCKET" ]] || [[ -n "$KITTY_PID" ]] || [[ -n "$ITERM_PROFILE" ]]; then
-  # I like to show a "welcome screen" when I open a terminal, and ONLY when I
-  # open a terminal, but I don't like to waste time on it if I already open a
-  # terminal once.
-  # This next line will count how many different `tty???` we have open, so we
-  # can be selective about when to display the welcome screen.
-  if ! ps | rg 'ttys[\d]*[1-9]' >/dev/null 2>&1; then
-    # Only display the welcome message if this is the first terminal open
-    type motd >/dev/null 2>&1 && motd
-    print -P -- "                                        %F{#5c6370}━━━━━━━━ ❖ ━━━━━━━━%f\n"
-    type terminal_commands >/dev/null 2>&1 && terminal_commands
-  fi
+# Welcome screen — shown only when this is the lone pane of the current Zellij
+# session (i.e. just opened a terminal). Summing every tab's selectable tiled +
+# floating panes ignores the HUD/which-key/notify plugin panes, so the count is
+# 1 only on a fresh session; new tabs, new panes, and reattaches all read > 1
+# and stay quiet. A new window (Cmd+N) is a new session, so it shows again.
+if [[ -n "$ZELLIJ" ]] && \
+   [[ "$(zellij action list-tabs -p --json 2>/dev/null \
+         | jq 'map(.selectable_tiled_panes_count + .selectable_floating_panes_count) | add' 2>/dev/null)" -eq 1 ]]; then
+  type motd >/dev/null 2>&1 && motd
+  print -P -- "                                        %F{#5c6370}━━━━━━━━ ❖ ━━━━━━━━%f\n"
+  type terminal_commands >/dev/null 2>&1 && terminal_commands
 fi
 
 # Run unalias -a when starting a shell session within OpenCode
