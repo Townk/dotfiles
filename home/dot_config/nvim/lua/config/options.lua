@@ -47,6 +47,35 @@ vim.g.lazyvim_python_lsp = "basedpyright"
 -- linting + formatting in one tool, simplifying the toolchain.
 vim.g.lazyvim_python_ruff = "ruff"
 
+--------------------------------------------------------------------------------
+-- Clipboard over SSH (write-only OSC 52)
+--------------------------------------------------------------------------------
+-- WHY: LazyVim disables system-clipboard sync when SSH_CONNECTION is set
+-- (`opt.clipboard = ""`) to avoid Neovim's built-in OSC 52 provider, whose
+-- *paste* half queries the terminal and then hangs ("Waiting for OSC 52
+-- response...") because Zellij deliberately refuses OSC 52 reads. The fallout:
+-- plain `y` never reached the host clipboard, and `"*y` froze until Ctrl-C.
+--
+-- Instead, on SSH we re-enable `unnamedplus` and install a *write-only* OSC 52
+-- provider: yanks are copied to the host (Mac) clipboard via OSC 52 — straight
+-- through WezTerm — while paste returns the unnamed register instead of probing
+-- the terminal, so there's no query and no hang. Reading the Mac clipboard into
+-- a remote buffer isn't possible through Zellij anyway; paste Mac → remote with
+-- a WezTerm paste (Cmd+V or middle-click). Gated to SSH so local Neovim keeps
+-- pbcopy's full read/write behavior.
+if vim.env.SSH_CONNECTION or vim.env.SSH_CLIENT or vim.env.SSH_TTY then
+    vim.opt.clipboard = "unnamedplus"
+    local osc52 = require("vim.ui.clipboard.osc52")
+    local function paste()
+        return { vim.fn.split(vim.fn.getreg(""), "\n"), vim.fn.getregtype("") }
+    end
+    vim.g.clipboard = {
+        name = "osc52-write",
+        copy = { ["+"] = osc52.copy("+"), ["*"] = osc52.copy("*") },
+        paste = { ["+"] = paste, ["*"] = paste },
+    }
+end
+
 -- Define the paths to add. Adjust the Homebrew path if necessary (e.g., to /usr/local/bin for Intel Macs).
 local homebrew_bin = "/opt/homebrew/bin"
 -- The default mise shims directory.
