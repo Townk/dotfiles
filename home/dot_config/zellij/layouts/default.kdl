@@ -259,13 +259,13 @@ layout {
                             type "string"
                             command "hostname -s"
                             interval "60s"
-                            default "󰒍 {value} "
+                            default "󰒍 {value}"
                         }
                     }
                     date_time {
                         visibility "!ssh|fullscreen"
                         symbol "U+F00F0"
-                        format "%a %b %-e %-l:%M%P "
+                        format "%a %b %-e %-l:%M%P"
                         // min_cols 100
                         // on_click "date"
                     }
