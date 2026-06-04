@@ -15,6 +15,11 @@
 #   - live, has a client                → spawn a fresh anonymous session
 #                                         (so Cmd+N etc. get their own mux)
 if [[ -z "$ZELLIJ" ]]; then
+  # Remote logins print a full-screen MOTD (pam_motd) before Zellij grabs the
+  # alternate screen. Wipe the primary buffer + scrollback first so it doesn't
+  # flash on attach, nor reappear when Zellij restores the primary buffer on
+  # exit. SSH-scoped so local startup is untouched.
+  [[ -n "$SSH_CONNECTION" ]] && printf '\e[H\e[2J\e[3J'
   for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij ~/.local/bin/zellij; do
     [[ -x "$_zellij" ]] || continue
     if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
