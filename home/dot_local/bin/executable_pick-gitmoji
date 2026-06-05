@@ -164,7 +164,6 @@ if [[ -n "$emit_mode" ]]; then
 fi
 
 pick::need jq
-pick::need fzf
 
 mkdir -p "$CACHE_DIR"
 
@@ -329,7 +328,7 @@ fi
 # pick-glyph, so the two pickers look identical from their zellij
 # wrappers); below we only set what varies via pick_ui. `header_top` is
 # the static mode-indicator hint under the prompt.
-header_top=$'󰌑 : emoji  ·  ⌃N: :name:'
+header_top=$'󰌑 : emoji  ·  󰘴 N: :name:'
 typeset -A pick_ui
 pick_ui=(
   # Height/margin/padding/input-border are overridable by embedders
@@ -373,12 +372,13 @@ fi
 
 pick::build_fzf_args
 
+# No --source filter for gitmoji; stream the whole cache into fzf.
+pick_input=( cat )
+
 if (( resume )); then
   pick::resume_pos "$LINES_CACHE"
 fi
 
-# No --source filter for gitmoji; stream the whole cache into fzf.
-pick_input=( cat )
 pick::run "$LINES_CACHE"
 
 # Resolve the output mode. --mode (CLI flag) wins over the submit key.

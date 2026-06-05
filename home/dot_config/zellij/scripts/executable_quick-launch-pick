@@ -49,7 +49,6 @@ done
 
 pick::need yq
 pick::need jq
-pick::need fzf
 
 TARGETS="${QUICK_LAUNCH_TARGETS:-$HOME/.config/zellij/quick-launch/default.yaml}"
 [[ -r "$TARGETS" ]] || die "cannot read targets file: $TARGETS"
@@ -93,8 +92,8 @@ SCRIPT_PATH="${(%):-%x}"
 #
 # with the icon + label colour-wrapped via pick.jq's palette (so it matches
 # the other pickers) and the bare `id` hidden behind \x1f as the only tail
-# field — fzf shows just the visible portion (--with-nth=1) but still
-# searches the id, and pick-common reads the id back for recency + output.
+# field. Selector-mode numbering/search-display swaps are added by
+# pick-common when enabled below; the cache keeps the normal picker contract.
 if pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH" "$PICK_JQ"; then
   local ql_json
   case "$TARGETS" in
@@ -157,33 +156,21 @@ fi
 
 [[ -s "$LINES_CACHE" ]] || die "no $kind targets defined in $TARGETS"
 
-# Shared fzf palette/layout via pick::build_fzf_args; we only set what varies
-# through pick_ui. Single submit key (Enter) so no --expect.
-header_top=$'󰌑 : open  ·  esc: cancel'
-typeset -A pick_ui
-pick_ui=(
-  height       "${QUICK_LAUNCH_HEIGHT:-45%}"
-  margin       "${QUICK_LAUNCH_MARGIN:-0,0,0,0}"
-  padding      "${QUICK_LAUNCH_PADDING:-0,0,0,0}"
-  input_border "${QUICK_LAUNCH_INPUT_BORDER:-1}"
-  no_border    "$no_border"
-  header       "$header_top"
-  # Single submit key. We still declare it via --expect so fzf always emits
-  # the key line pick::run expects (query / key / selection); the key value
-  # itself is unused (there's only one action: open).
-  expect       "enter"
-)
-
 # No recency sort: quick-launch entries stay in their defined (file) order.
 # `pick_usage_file` is intentionally left unset, so pick::ordered_cache passes
 # the list through unchanged and pick::record skips usage tracking. No resume /
 # stay-insert binds either — launching isn't a text-insert flow.
 
-pick::build_fzf_args
-pick_input=( cat )
-pick::run "$LINES_CACHE"
+pick_start_args=(
+  --height "${QUICK_LAUNCH_HEIGHT:-45%}"
+  --margin "${QUICK_LAUNCH_MARGIN:-0,0,0,0}"
+  --padding "${QUICK_LAUNCH_PADDING:-0,0,0,0}"
+  --input-border "${QUICK_LAUNCH_INPUT_BORDER:-1}"
+  --selector
+  --selector-shortcuts
+  --selector-nav
+  --output field:1
+)
+(( no_border )) && pick_start_args+=( --no-border )
 
-# Output: print the chosen id (tail field 1). pick::emit_selection also
-# records recency for the selection.
-pick_emit_one() { pick::split_tail "$1"; result+="${pick_fields[1]:-}"; }
-pick::emit_selection
+pick::start "${pick_start_args[@]}" "$LINES_CACHE"

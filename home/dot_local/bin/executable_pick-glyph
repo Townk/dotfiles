@@ -44,14 +44,15 @@
 #
 # Three output modes, each bound to a key via fzf's --expect:
 #
-#   Enter (default) → raw glyph(s)               e.g. ❤
+#   Enter (default)
+#   ctrl+g          → raw glyph(s)               e.g. ❤
 #   ctrl-n          → canonical name(s)
 #                       nerd-fonts-curated → nf-<key>   (nf-cod-account)
 #                       font-awesome-7     → <key>      (fa-rocket)
 #                       unicode-*          → Unicode name
 #                                            (BOX DRAWINGS LIGHT HORIZONTAL)
 #                                            or U+<HEX> if unnamed
-#   ctrl-u          → \u{HEX} escape sequence    e.g. \u{2764}
+#   ctrl-p          → \u{HEX} escape sequence    e.g. \u{2764}
 #
 # The selected mode is indicated in the static header beneath the
 # prompt. With --multi, every selected glyph is rendered in the
@@ -93,14 +94,14 @@ Usage:
 Interactively pick a Nerd Font / Unicode glyph via fzf and print it.
 
 Inside the picker:
-  Enter           output the raw glyph (default)
-  Ctrl-N          output the canonical name (nf-..., fa-..., or
-                  the Unicode name)
-  Ctrl-U          output \u{HEX} escape syntax
-  Alt-Enter       insert the glyph WITHOUT closing the picker
-  Alt-N / Alt-U   same, but insert the name / code-point
-                  (sink: the originating zellij pane when embedded,
-                   else the system clipboard)
+  Enter / Ctrl-G     output the raw glyph (default)
+  Ctrl-N             output the canonical name (nf-..., fa-...,
+                    or the Unicode name)
+  Ctrl-P             output \u{HEX} escape syntax
+  Alt-Enter / Alt-G  insert the glyph WITHOUT closing the picker
+  Alt-N / Alt-P      same, but insert the name / code-point
+                     (sink: the originating zellij pane when
+                      embedded, else the system clipboard)
 
 Recently-picked glyphs float to the top of the list. Use --resume to
 reopen with the previous query and cursor position restored.
@@ -118,7 +119,7 @@ Options:
                           (tip: type 'EMOJI' to narrow to emoji,
                                 'UNICODE' to narrow to non-nerd-font Unicode)
       --mode MODE         skip the interactive submit-key prompt and force
-                          glyph | name | unicode (same as Enter / Ctrl-N / Ctrl-U)
+                          glyph | name | unicode (same as Enter / Ctrl-N / Ctrl-P)
       --resume            reopen with the previous query + cursor restored
   -j, --json FILE         override the glyphs.json path
                           (default: \$PICK_GLYPH_JSON or
@@ -187,10 +188,9 @@ esac
 # emitter below):
 #   [1]=key [2]=source [3]=code [4]=uniname [5]=name [6]=searchblob [-1]=char
 #
-# `name` mode emits field 5 verbatim — the exact string shown in the
-# NAME column (EMOJI-/UNICODE-<hex> for synthetic codepoints, nf-<key>
-# / fa-<key> for curated). The whole name policy now lives in the jq
-# emitter, so display and ^N output can never disagree.
+# `name` mode emits the canonical identifier for curated icons and the
+# actual Unicode name for synthetic entries, falling back to U+HEX when
+# the Unicode name is unavailable.
 pick_emit_one() {
   pick::split_tail "$1"
   # `:-` guards keep `set -u` from aborting on a tail-less line (e.g. an
@@ -198,7 +198,16 @@ pick_emit_one() {
   case "$mode" in
     glyph)   result+="${pick_fields[-1]:-}" ;;        # raw char
     unicode) result+="\\u{${pick_fields[3]:-}}" ;;    # \u{HEX} escape
-    name)    result+="${pick_fields[5]:-}" ;;         # NAME column verbatim
+    name)
+      case "${pick_fields[2]:-}" in
+        unicode-only|unicode-stdlib)
+          result+="${pick_fields[4]:-U+${pick_fields[3]:-}}"
+          ;;
+        *)
+          result+="${pick_fields[5]:-}"
+          ;;
+      esac
+      ;;
   esac
 }
 
@@ -215,7 +224,6 @@ if [[ -n "$emit_mode" ]]; then
 fi
 
 pick::need jq
-pick::need fzf
 pick::need python3 "needed to build the Unicode supplement"
 [[ -r "$GLYPHS_JSON" ]] || die "glyph index not readable: $GLYPHS_JSON
 Build it with: ~/.local/share/chezmoi/custom-builds/nerd-fonts/build-updated-font.sh"
@@ -255,7 +263,7 @@ SCRIPT_PATH="${(%):-%x}"
 # Cache layout: one line per glyph, source-agnostic, three visible
 # columns then the hidden \x1f-delimited tail:
 #
-#   <glyph>  <NAME (U+CODE)>  <DESCRIPTION>\x1f<key>\x1e<source>\x1e<CODE>\x1e<uniname>\x1e<name>\x1e<searchblob>
+#   <glyph>  <NAME (U-CODE)>  <DESCRIPTION>\x1f<key>\x1e<source>\x1e<CODE>\x1e<uniname>\x1e<name>\x1e<searchblob>
 #
 # The glyph column is padded to a fixed 2 cells (per-codepoint cell
 # width from the supplement; font glyphs default to 1) so NAME starts
@@ -350,10 +358,9 @@ if pick::cache_stale "$LINES_CACHE" "$GLYPHS_JSON" "$SUPPL_CACHE" "$SCRIPT_PATH"
     | (($v.code | is_emoji_cp)
         or $source == "unicode-only"
         or $source == "unicode-stdlib") as $synth
-    # Canonical name = the NAME column = what ^N emits. Synthetic
-    # codepoints surface as EMOJI-/UNICODE-<hex>; curated keep their
-    # usable class name. Copied into the tail (field 5) so the shell
-    # emitter outputs exactly what is displayed.
+    # NAME column. Synthetic codepoints surface as EMOJI-/UNICODE-<hex>;
+    # curated keep their usable class name. The actual Unicode name still
+    # rides in tail field 4 for ^N output on unicode-only entries.
     | (if   ($v.code | is_emoji_cp) then "EMOJI-" + $code
        elif $source == "unicode-only" or $source == "unicode-stdlib" then "UNICODE-" + $code
        elif $source == "nerd-fonts-curated" then "nf-" + $key
@@ -403,8 +410,8 @@ esac
 # The shared fzf palette/layout (matching the user's bare-fzf UI) lives
 # in pick::build_fzf_args; below we only set what varies via pick_ui.
 # `header_top` is the static mode-indicator hint rendered under the
-# prompt (the 󰌑/⌃N/⌃U keys mirror the --expect submit keys).
-header_top=$'󰌑 : glyph  ·  ⌃N: name  ·  ⌃U: code-point'
+# prompt (the Ctrl-G/Ctrl-N/Ctrl-P keys mirror the --expect submit keys).
+header_top=$'󰘴 G : glyph  ·  󰘴 N: name  ·  󰘴 P: code-point'
 typeset -A pick_ui
 pick_ui=(
   # Height/margin/padding/input-border are overridable by embedders
@@ -421,21 +428,21 @@ pick_ui=(
   header       "$header_top"
   # Three submit-with-format keys; fzf prepends the pressed key as
   # line 1 of its output (empty for plain Enter, mapped to glyph).
-  expect       "ctrl-u,ctrl-n"
+  expect       "ctrl-g,ctrl-p,ctrl-n"
 )
 
 # Opt into the shared UX features (all keyed off these globals):
 #   * recency sort   — pick_usage_file (recently-picked float to top)
 #   * resume         — pick_state_file (save/restore query + cursor)
 #   * insert & stay  — pick_stay_binds + pick_self (inject the current
-#                      item without dismissing; alt-enter=glyph,
-#                      alt-n=name, alt-u=code-point, mirroring --expect)
+#                      item without dismissing; alt-enter/alt-g=glyph,
+#                      alt-n=name, alt-p=code-point, mirroring --expect)
 # pick_id_field=1 → the recency/cursor id is the hidden `key` field.
 pick_id_field=1
 pick_usage_file="$SUPPL_DIR/usage"
 pick_state_file="$SUPPL_DIR/laststate"
 pick_self="$SCRIPT_PATH"
-pick_stay_binds=( "alt-enter:glyph" "alt-n:name" "alt-u:unicode" )
+pick_stay_binds=( "alt-enter:glyph" "alt-g:glyph" "alt-n:name" "alt-p:unicode" )
 
 # --resume: restore the last query (via pick_ui[query]) before building
 # the args, then position the cursor on the last item afterwards (it
@@ -463,7 +470,7 @@ pick::run "$LINES_CACHE"
 # so callers can script around the interactive picker.
 mode="glyph"
 case "$pick_key" in
-  ctrl-u)    mode="unicode" ;;
+  ctrl-p)    mode="unicode" ;;
   ctrl-n)    mode="name"    ;;
   "")        mode="glyph"   ;;
 esac
