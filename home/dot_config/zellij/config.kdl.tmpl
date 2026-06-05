@@ -898,15 +898,27 @@ scroll_buffer_size 1000000
 // copy_command "wl-copy"                    // wayland
 // copy_command "pbcopy"                     // osx
 //
-// Gated to macOS only. On a remote (Linux) host reached over ssh — e.g. the
-// work dev-shell, which renders this same chezmoi source — `pbcopy`
-// doesn't exist, so leaving copy_command unset there makes zellij fall back to
-// OSC 52. That sequence travels up the ssh stream straight to WezTerm, which
-// writes the host (Mac) clipboard. (Paste back in is a WezTerm paste, not OSC 52
-// — zellij intentionally refuses OSC 52 clipboard reads.)
-{{ if eq .chezmoi.os "darwin" -}}
-copy_command "pbcopy"
-{{ end -}}
+// Intentionally left UNSET on every platform. Zellij intercepts an
+// application's OSC 52 copy and never passes it to the outer terminal; with no
+// copy_command it instead re-emits OSC 52 to the focused client's terminal
+// (WezTerm), which has no payload-size cap and writes the clipboard. That makes
+// copy *origin-relative*:
+//   - sitting locally  → WezTerm writes this machine's clipboard;
+//   - reached over ssh → the sequence rides the ssh stream up to the laptop's
+//                        WezTerm and writes the *laptop's* clipboard.
+// So a Mac reached over ssh behaves exactly like the Linux dev-shell (yanks and
+// terminal selections land on the machine you're typing at), instead of the
+// `copy_command "pbcopy"` we used to set on macOS, which captured copies to the
+// *remote* Mac's own clipboard and broke that symmetry.
+//
+// Trade-off: a multi-MB local selection is shipped as inline base64 rather than
+// piped to pbcopy — marginally slower, never truncated (Zellij dropped its 1 KB
+// OSC cap in 0.11.0; WezTerm sets the clipboard unbounded). Local nvim is
+// unaffected: it drives pbcopy/pbpaste as subprocesses, bypassing Zellij.
+//
+// Paste back in is a WezTerm paste (Cmd+V / middle-click), not OSC 52 — Zellij
+// refuses OSC 52 clipboard *reads*. Register paste in remote nvim instead reads
+// the reverse SSH tunnel (see options.lua + ~/.ssh/config.d/clipboard.config).
  
 // Re-emit OSC 8 hyperlinks to the outer terminal so file:// / URL links stay
 // clickable through Zellij (default is false, which strips them). WezTerm then
