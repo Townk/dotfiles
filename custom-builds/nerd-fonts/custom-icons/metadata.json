@@ -41,5 +41,12 @@
     "terms": ["zsh", "z-shell", "terminal"],
     "aliases": ["nf-fa-zsh"],
     "comment": "Zsh (Z Shell) logo"
+  },
+  "zellij": {
+    "code": "10fb06",
+    "label": "Zellij",
+    "terms": ["zellij", "multiplexer", "terminal"],
+    "aliases": ["nf-fa-zellij"],
+    "comment": "Terminal Workspace with Batteries Included"
   }
 }
