@@ -48,7 +48,7 @@ vim.g.lazyvim_python_lsp = "basedpyright"
 vim.g.lazyvim_python_ruff = "ruff"
 
 --------------------------------------------------------------------------------
--- Clipboard over SSH (write-only OSC 52)
+-- Clipboard over SSH (OSC 52 copy out, reverse-tunnel paste in)
 --------------------------------------------------------------------------------
 -- WHY: LazyVim disables system-clipboard sync when SSH_CONNECTION is set
 -- (`opt.clipboard = ""`) to avoid Neovim's built-in OSC 52 provider, whose
@@ -56,21 +56,33 @@ vim.g.lazyvim_python_ruff = "ruff"
 -- response...") because Zellij deliberately refuses OSC 52 reads. The fallout:
 -- plain `y` never reached the host clipboard, and `"*y` froze until Ctrl-C.
 --
--- Instead, on SSH we re-enable `unnamedplus` and install a *write-only* OSC 52
--- provider: yanks are copied to the host (Mac) clipboard via OSC 52 — straight
--- through WezTerm — while paste returns the unnamed register instead of probing
--- the terminal, so there's no query and no hang. Reading the Mac clipboard into
--- a remote buffer isn't possible through Zellij anyway; paste Mac → remote with
--- a WezTerm paste (Cmd+V or middle-click). Gated to SSH so local Neovim keeps
--- pbcopy's full read/write behavior.
+-- On SSH we re-enable `unnamedplus` and supply both halves explicitly:
+--   copy  → write-only OSC 52: yanks travel up through WezTerm to the host
+--           (Mac) clipboard. No terminal query, so no hang.
+--   paste → read the host clipboard back through a reverse SSH tunnel instead
+--           of OSC 52 (which Zellij refuses). The Mac runs a tiny listener
+--           (clipboard-bridge launchd service) that serves `pbpaste`; SSH
+--           reverse-forwards it to a user-only unix socket on this host (see
+--           ~/.ssh/config.d/clipboard.config), and we read it with `nc -U`.
+--           When the tunnel is down (socket missing, no nc, or a non-tunnelled
+--           SSH session) we fall back to the unnamed register, preserving the
+--           old no-hang behavior. Gated to SSH so local Neovim keeps pbcopy.
 if vim.env.SSH_CONNECTION or vim.env.SSH_CLIENT or vim.env.SSH_TTY then
     vim.opt.clipboard = "unnamedplus"
     local osc52 = require("vim.ui.clipboard.osc52")
+    local sock = (vim.env.HOME or "") .. "/.clipboard-bridge.sock"
+    local uv = vim.uv or vim.loop
     local function paste()
+        if vim.fn.executable("nc") == 1 and uv.fs_stat(sock) then
+            local out = vim.fn.systemlist({ "nc", "-U", "-w", "1", sock })
+            if vim.v.shell_error == 0 then
+                return { out, "v" }
+            end
+        end
         return { vim.fn.split(vim.fn.getreg(""), "\n"), vim.fn.getregtype("") }
     end
     vim.g.clipboard = {
-        name = "osc52-write",
+        name = "osc52-write-tunnel-read",
         copy = { ["+"] = osc52.copy("+"), ["*"] = osc52.copy("*") },
         paste = { ["+"] = paste, ["*"] = paste },
     }

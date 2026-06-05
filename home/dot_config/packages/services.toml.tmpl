@@ -26,6 +26,27 @@
 # Add personal-only services
 {{- end }}
 
+{{ if eq .chezmoi.os "darwin" -}}
+# clipboard-bridge — serve the Mac clipboard to remote nvim over an SSH
+# reverse tunnel. Closes the one clipboard gap left by Zellij refusing OSC 52
+# reads: a remote `"+p` can't pull the Mac clipboard otherwise.
+#
+# socat listens on loopback TCP 2489 and, on every accepted connection, EXECs
+# a fresh `pbpaste` — so the *live* clipboard is served (a `pbpaste | nc -l`
+# loop snapshots at listen time and serves stale text). `fork` handles
+# concurrent/repeated pastes; the remote reaches it through a user-only unix
+# socket forwarded by SSH (see ~/.ssh/config.d/clipboard.config) and reads it
+# with `nc -U`. macOS only: pbpaste is the source of truth off-host there's
+# nothing to serve.
+[clipboard-bridge]
+description    = "Serve the Mac clipboard to remote nvim over an SSH reverse tunnel"
+cmd            = ["socat", "TCP-LISTEN:2489,bind=127.0.0.1,fork,reuseaddr", "EXEC:/usr/bin/pbpaste"]
+keep_alive     = true
+run_at_load    = true
+log_path       = "~/.cache/clipboard-bridge/listener.log"
+error_log_path = "~/.cache/clipboard-bridge/listener.log"
+{{ end }}
+
 # omlx — LLM inference server (Apple Silicon). Parameters mirror what
 # `brew services` generated from the formula before we migrated the
 # binary to the Uvfile (`uv tool install`). The binary now lives at
