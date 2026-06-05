@@ -8,6 +8,21 @@
 ---     leader = { mods = kb.keys.mods.OG, key = "space" },
 ---     overlay = { maxHeight = "30%" },
 ---     disableSystemShortcuts = { kb.keys.sym.SCREENSHOT_SAVE },
+---     keyEvents = {
+---       {
+---         app = "Google Chrome",
+---         name = "Recent tab selector",
+---         state = { selectorOpen = false },
+---         rules = {
+---           {
+---             match = { event = "keyDown", modifiers = kb.keys.mods.C, key = "tab" },
+---             keyStroke = { modifiers = kb.keys.mods.GS, key = "a" },
+---             setState = { selectorOpen = true },
+---             swallow = true,
+---           },
+---         },
+---       },
+---     },
 ---     bindings = {
 ---       { key = "up", mods = kb.keys.mods.CG, desc = "Mission Control",
 ---         action = kb.keys.sym.MISSION_CONTROL },
@@ -21,6 +36,7 @@
 
 local BindingTree      = require("keybindings.tree")
 local Overlay          = require("keybindings.overlay")
+local KeyEventsRouter  = require("keybindings.key_events_router")
 local template         = require("keybindings.template")
 local Dispatcher       = require("keybindings.dispatcher")
 local systemShortcuts  = require("keybindings.system_shortcuts")
@@ -553,12 +569,14 @@ function Keybindings.setup(config)
 		)
 	end
 
-	if config.bindings then
-		Keybindings.register(config.bindings)
+	if state.config.bindings then
+		Keybindings.register(state.config.bindings)
 	end
 
+	KeyEventsRouter.setup(state.config.keyEvents)
+
 	-- Apply macOS system shortcuts (numeric actions + disabled shortcuts)
-	applySystemShortcuts(state.root, config.disableSystemShortcuts)
+	applySystemShortcuts(state.root, state.config.disableSystemShortcuts)
 end
 
 --- Register keybindings into the tree.
@@ -646,6 +664,7 @@ end
 --- Release all resources: overlay, dispatcher, hotkeys, timers, and state.
 function Keybindings.cleanup()
 	Keybindings.hide()
+	KeyEventsRouter.cleanup()
 
 	if state.keyHandler then
 		state.keyHandler:cleanup()

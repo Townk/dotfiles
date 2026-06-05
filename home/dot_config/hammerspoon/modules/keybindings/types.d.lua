@@ -105,6 +105,60 @@
 --- @field sticky?        boolean             Keep overlay open after action (default: false)
 
 ---------------------------------------------------------------------------
+-- Key event router specification
+---------------------------------------------------------------------------
+
+--- Simple key stroke specification.
+--- @class KeyStrokeSpec
+--- @field key        string    Key name (e.g. "tab", "down", "return")
+--- @field modifiers? string[]  Modifier keys (e.g. {"cmd","shift"})
+
+--- Declarative predicate for a key event rule or action.
+--- @class KeyEventPredicate
+--- @field state?     table<string, any>      Required route-local state values
+--- @field modifiers? table<string, boolean>  Required modifier states after the event
+
+--- Match criteria for an incoming key/modifier event.
+--- @class KeyEventMatch
+--- @field event      "keyDown"|"modifiersChanged"  Public event name
+--- @field key?       string                         Key name for key events
+--- @field modifiers? string[]                       Exact modifiers required for keyDown; nil means none
+
+--- Context passed to function predicates and handlers.
+--- @class KeyEventContext
+--- @field event      hs.eventtap.event
+--- @field eventType  "keyDown"|"modifiersChanged"
+--- @field key        string|nil
+--- @field modifiers  table<string, boolean>
+--- @field state      table<string, any>
+--- @field appName    fun(self: KeyEventContext): string|nil
+--- @field keyStroke  fun(self: KeyEventContext, stroke: KeyStrokeSpec)
+--- @field resetState fun(self: KeyEventContext)
+
+--- A single action executed by a key event rule.
+--- @class KeyEventAction
+--- @field when?       KeyEventPredicate|fun(ctx: KeyEventContext): boolean
+--- @field keyStroke?  KeyStrokeSpec
+--- @field setState?   table<string, any>
+--- @field resetState? boolean
+--- @field handler?    fun(ctx: KeyEventContext): boolean|nil
+
+--- A rule in a key event route. The first matching rule handles the event.
+--- @class KeyEventRule : KeyEventAction
+--- @field match    KeyEventMatch
+--- @field when?    KeyEventPredicate|fun(ctx: KeyEventContext): boolean
+--- @field actions? KeyEventAction[]
+--- @field swallow? boolean  Whether to delete the original event when no handler returns a boolean
+
+--- A group of key event rules, optionally scoped to one or more apps.
+--- @class KeyEventRoute
+--- @field app?     string|string[] App name(s) from hs.application:name(); nil means global
+--- @field name?    string          Human-readable name for logs/docs
+--- @field state?   table<string, any> Initial route-local state
+--- @field resetOn? string[]        App watcher events that reset state (e.g. "deactivated")
+--- @field rules    KeyEventRule[]
+
+---------------------------------------------------------------------------
 -- Keybindings engine
 ---------------------------------------------------------------------------
 
@@ -119,6 +173,7 @@
 --- @field overlay                 OverlayConfigOverrides|nil  Overlay styling overrides
 --- @field timeout                 number|nil               Auto-dismiss seconds (nil = no timeout)
 --- @field bindings                KeyBindingSpec[]|nil     The bindings table to register
+--- @field keyEvents               KeyEventRoute[]|nil      Generic key/modifier event routes
 --- @field disableSystemShortcuts  number[]|nil             Symbolic hotkey IDs to disable
 
 ---------------------------------------------------------------------------

@@ -46,6 +46,71 @@ kb.setup({
 		kb.keys.sym.SWITCH_TO_DESKTOP_3,
 		kb.keys.sym.SWITCH_TO_DESKTOP_4,
 	},
+	keyEvents = {
+		{
+			app = "Google Chrome",
+			name = "Recent tab selector",
+			state = { selectorOpen = false },
+			resetOn = { "deactivated" },
+			rules = {
+				{
+					match = { event = "keyDown", modifiers = kb.keys.mods.C, key = "tab" },
+					when = { state = { selectorOpen = false } },
+					actions = {
+						{ keyStroke = { modifiers = kb.keys.mods.GS, key = "a" } },
+						{ setState = { selectorOpen = true } },
+					},
+					swallow = true,
+				},
+				{
+					match = { event = "keyDown", modifiers = kb.keys.mods.C, key = "tab" },
+					when = { state = { selectorOpen = true } },
+					keyStroke = { key = "down" },
+					swallow = true,
+				},
+				{
+					match = { event = "keyDown", modifiers = kb.keys.mods.CS, key = "tab" },
+					when = { state = { selectorOpen = false } },
+					actions = {
+						{ keyStroke = { modifiers = kb.keys.mods.GS, key = "a" } },
+						{ setState = { selectorOpen = true } },
+						{ keyStroke = { key = "up" } },
+					},
+					swallow = true,
+				},
+				{
+					match = { event = "keyDown", modifiers = kb.keys.mods.CS, key = "tab" },
+					when = { state = { selectorOpen = true } },
+					keyStroke = { key = "up" },
+					swallow = true,
+				},
+				{
+					match = { event = "keyDown", key = "tab" },
+					when = { state = { selectorOpen = true } },
+					keyStroke = { key = "down" },
+					swallow = true,
+				},
+				{
+					match = { event = "keyDown", modifiers = kb.keys.mods.S, key = "tab" },
+					when = { state = { selectorOpen = true } },
+					keyStroke = { key = "up" },
+					swallow = true,
+				},
+				{
+					match = { event = "modifiersChanged" },
+					when = {
+						state = { selectorOpen = true },
+						modifiers = { ctrl = false },
+					},
+					actions = {
+						{ setState = { selectorOpen = false } },
+						{ keyStroke = { key = "return" } },
+					},
+					swallow = false,
+				},
+			},
+		},
+	},
 	bindings = {
 		{
 			leader = true, key = "space", desc = "Leader Bindings",
