@@ -1,0 +1,27 @@
+#!/bin/zsh
+#
+# zellij-preview-image — show an image in a floating Zellij pane, then wait for
+# a single keypress before exiting (the pane is launched with --close-on-exit,
+# so quitting closes it).
+#
+# Reuses the `preview` script's image handler, which sizes its output from
+# FZF_PREVIEW_{COLUMNS,LINES}; we set those to the live pane geometry.
+
+emulate -L zsh
+set -u
+
+# NB: don't name this `path` — in zsh that's the array tied to $PATH.
+img="${1:-}"
+[[ -n "$img" && -e "$img" ]] || exit 0
+
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# Render the image at the floating pane's full size, image only (no metadata).
+export FZF_PREVIEW_COLUMNS="$(tput cols 2>/dev/null || echo 80)"
+export FZF_PREVIEW_LINES="$(tput lines 2>/dev/null || echo 40)"
+export PREVIEW_IMAGE_ONLY=1
+
+preview "$img"
+
+print -n -- $'\n\e[2mpress any key to close\e[0m'
+read -k1 -s

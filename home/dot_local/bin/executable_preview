@@ -288,7 +288,9 @@ function preview-image() {
 
     chafa "${chafa_format[@]}" -s "${width}x${height}" "$1" 2>/dev/null
 
-    if command -v mediainfo >/dev/null 2>&1; then
+    # PREVIEW_IMAGE_ONLY (set by the zellij click-to-open image pane): show just
+    # the image, no metadata, so it fills the pane without needing a scroll.
+    if [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && command -v mediainfo >/dev/null 2>&1; then
         preview-mediainfo "$1"
     fi
 
@@ -426,7 +428,8 @@ function main() {
       preview-pdf "$target" && return
       ;;
     image/*)
-      h=$(( (h * 6) / 10 ))
+      # Reserve room below for mediainfo, unless we only want the image.
+      [[ -n ${PREVIEW_IMAGE_ONLY:-} ]] || h=$(( (h * 6) / 10 ))
       preview-image "$target" && return
       ;;
     audio/* | video/* | application/subrip | application/postscript)

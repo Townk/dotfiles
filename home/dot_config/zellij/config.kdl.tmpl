@@ -749,7 +749,9 @@ plugins {
                and the published artifact at
                https://github.com/Townk/<name>/releases/download/<version>/<name>.wasm
     - version: the GitHub release tag to fall back to when the repo
-               isn't checked out locally. Bump per release.
+               isn't checked out locally. `latest` tracks the rolling
+               build (refreshed on every push to master); pin a `vX.Y.Z`
+               tag instead for a reproducible build.
 
   Resolution policy at `chezmoi apply` time:
     1. If ~/Projects/apps/zellij/<name>/ exists on disk, the rendered
@@ -757,8 +759,8 @@ plugins {
        theory is "I have this checked out" ⇒ "I'm iterating on it and
        want my local build, not the published wasm". You're responsible
        for `cargo build --release --target wasm32-wasip1` in that repo.
-    2. Otherwise, the rendered config pulls the pinned release wasm
-       straight from GitHub — zellij downloads & caches on first load.
+    2. Otherwise, the rendered config pulls the release wasm straight
+       from GitHub — zellij downloads & caches on first load.
 
   Re-running `chezmoi apply` after cloning (or removing) a repo flips
   the rendered config between the two — that's the intended workflow.
@@ -771,9 +773,9 @@ plugins {
   surrounding 4-space-indented KDL.
 */}}
 {{- $plugins := list
-    (dict "alias" "context-keys"  "name" "zj-context-keys" "version" "v0.1.0")
-    (dict "alias" "prompt-jumper" "name" "zj-prompt-jumper" "version" "v0.1.0")
-    (dict "alias" "status-bar"    "name" "zj-hud"  "version" "v0.1.0")
+    (dict "alias" "context-keys"  "name" "zj-context-keys" "version" "latest")
+    (dict "alias" "prompt-jumper" "name" "zj-prompt-jumper" "version" "latest")
+    (dict "alias" "status-bar"    "name" "zj-hud"  "version" "latest")
 -}}
 {{- $lines := list -}}
 {{- range $plugins -}}
@@ -905,6 +907,11 @@ scroll_buffer_size 1000000
 {{ if eq .chezmoi.os "darwin" -}}
 copy_command "pbcopy"
 {{ end -}}
+ 
+// Re-emit OSC 8 hyperlinks to the outer terminal so file:// / URL links stay
+// clickable through Zellij (default is false, which strips them). WezTerm then
+// resolves the link under the cursor and fires its `open-uri` handler on click.
+osc8_hyperlinks true
  
 // Enable automatic copying (and clearing) of selection when releasing mouse
 // Default: true

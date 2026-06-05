@@ -165,6 +165,33 @@ wezterm.on("window-config-reloaded", function(window, _)
 	window:toast_notification("wezterm", "Configuration reloaded!", nil, 4000)
 end)
 
+-- CMD+click on a file:// link inside Zellij opens it locally: directories in a
+-- Yazi tab, images in a floating preview pane, text/code in an nvim tab (see
+-- ~/.config/zellij/scripts/zellij-open). The clicked pane's foreground process is the Zellij
+-- client; zellij-open resolves which session it's attached to and dispatches
+-- there. Non-file links (and panes not running Zellij) fall through to WezTerm's
+-- default open. Requires `osc8_hyperlinks true` in the Zellij config so file://
+-- links survive to WezTerm.
+wezterm.on("open-uri", function(_, pane, uri)
+	if not uri:find("^file://") then
+		return true
+	end
+	local info = pane and pane:get_foreground_process_info()
+	local exe = info and info.argv and info.argv[1] or ""
+	if not exe:find("zellij") then
+		return true
+	end
+	local dims = pane:get_dimensions()
+	wezterm.background_child_process({
+		os.getenv("HOME") .. "/.config/zellij/scripts/zellij-open",
+		tostring(info.pid),
+		uri,
+		tostring(dims and dims.cols or 0),
+		tostring(dims and dims.viewport_rows or 0),
+	})
+	return false
+end)
+
 local toggle_fullscreen_workspace = "__TOGGLE_FULLSCREEN__"
 local ok, active_workspace = pcall(wezterm.mux.get_active_workspace)
 local last_real_workspace = nil
@@ -471,27 +498,54 @@ config.keys = {
 	},
 }
 
--- Add a mouse binding to pass clicks directly to Zellij
+-- Mouse bindings. Left/right clicks are intentionally left to WezTerm's
+-- defaults: when Zellij has mouse reporting on, WezTerm forwards them to Zellij
+-- automatically, and when it's off (scrollback, bare shell) the defaults give
+-- native text selection plus the SHIFT+drag selection escape hatch.
 config.mouse_bindings = {
-	-- This forces a left-click to bypass WezTerm and go straight to the terminal/Zellij
-	{
-		event = { Down = { streak = 1, button = "Left" } },
-		mods = "NONE",
-		action = wezterm.action.Nop,
-	},
-	-- This forces a right-click to bypass WezTerm and go straight to the terminal/Zellij
-	{
-		event = { Down = { streak = 1, button = "Right" } },
-		mods = "NONE",
-		action = wezterm.action.Nop,
-	},
 	-- Middle-click pastes the system clipboard (select-to-copy fills it: pbcopy
 	-- locally, OSC 52 → WezTerm from a remote Zellij over ssh). Injects the bytes
 	-- into the focused pane, so it works through ssh too.
+	--
+	-- Zellij keeps SGR mouse reporting on, so WezTerm normally forwards the
+	-- middle-click straight to Zellij and never matches this assignment. The
+	-- `mouse_reporting = true` entry is what lets the paste fire while the app is
+	-- capturing the mouse; the second entry covers panes where reporting is off
+	-- (bare shell, scrollback). See https://wezterm.org/config/mouse.html.
+	{
+		event = { Down = { streak = 1, button = "Middle" } },
+		mods = "NONE",
+		mouse_reporting = true,
+		action = wezterm.action.PasteFrom("Clipboard"),
+	},
 	{
 		event = { Down = { streak = 1, button = "Middle" } },
 		mods = "NONE",
 		action = wezterm.action.PasteFrom("Clipboard"),
+	},
+	-- CMD+click opens the URL under the cursor. Same Zellij problem as the paste
+	-- above: with mouse reporting on, the click goes to Zellij and WezTerm never
+	-- sees it, so opening a link otherwise needs the SHIFT bypass. The
+	-- `mouse_reporting = true` Up entry lets a plain CMD+click open the link while
+	-- Zellij captures the mouse; the matching Down entry is Nop'd so Zellij never
+	-- receives a stray CMD+down (the "bind Up only" gotcha in the WezTerm docs).
+	-- The last entry covers panes where reporting is off (bare shell, scrollback).
+	{
+		event = { Up = { streak = 1, button = "Left" } },
+		mods = "CMD",
+		mouse_reporting = true,
+		action = wezterm.action.OpenLinkAtMouseCursor,
+	},
+	{
+		event = { Down = { streak = 1, button = "Left" } },
+		mods = "CMD",
+		mouse_reporting = true,
+		action = wezterm.action.Nop,
+	},
+	{
+		event = { Up = { streak = 1, button = "Left" } },
+		mods = "CMD",
+		action = wezterm.action.OpenLinkAtMouseCursor,
 	},
 }
 
