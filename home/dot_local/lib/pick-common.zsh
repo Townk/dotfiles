@@ -19,6 +19,9 @@
 #                      floated to the top of the list (then the normal
 #                      order). `--tiebreak=index` makes input order the
 #                      tiebreak, so this just reorders the fed lines.
+#                      Optional `pick_ordered_cache_file` materializes
+#                      that order so large pickers avoid sorting on
+#                      every launch.
 #   * Resume         — set `pick_state_file`: the final query + cursor
 #                      item are saved on exit; a `--resume` launch
 #                      restores both (query via --query, cursor via
@@ -61,8 +64,25 @@
 #   # 4. Configure common UI directly on pick::start.
 #   pick::start --header "Pick a host" --hints "󰌑 : open  ·  󱊷 : cancel"
 #
+#   # 5. Emit a different column per accept key. Enter uses --output; the
+#   #    mapped keys emit their own spec; unmapped keys are ignored so the
+#   #    picker stays open. --copy also puts the result on the clipboard.
+#   pick::line "$host  $ip" "$host" "$ip" \
+#     | pick::start --output field:1 \
+#         --key-output ctrl-n:field:2 --copy
+#
+#   # Recency, resume, and insert-and-stay also work through pick::start:
+#   # set pick_usage_file (recency float + write-back), pick_state_file with
+#   # --resume (restore query + cursor, save on exit), or pick_stay_binds +
+#   # pick_self (insert-without-dismiss) before calling pick::start.
+#
 #   # Supported pick::start options:
 #   #   --output raw|visible|tail|field:N
+#   #   --key-output KEY:SPEC (repeatable; SPEC uses the --output grammar; the
+#   #     key resolves to SPEC on accept, Enter to --output)
+#   #   --copy (copy the emitted result), --join SEP (separator for --copy,
+#   #     default newline; e.g. --join '' to concatenate)
+#   #   --resume (restore saved query + cursor from pick_state_file)
 #   #   --header TEXT, --hints TEXT, --multi, --query TEXT, --height N, --margin SPEC,
 #   #   --padding SPEC, --input-border LABEL, --no-border, --no-hints
 #   #   --selector, --selector-shortcuts, --selector-nav,
@@ -142,30 +162,74 @@ pick::clipboard() {
 
 # --- recency sort --------------------------------------------------
 
-# Stream the lines cache to stdout, floating recently-used items to the
-# top (in recency order) when `pick_usage_file` is set and non-empty;
-# otherwise pass the cache through unchanged. The recency id is tail
-# field `pick_id_field` (default 1). The remaining ("cold") lines keep
-# their original order, so the underlying sort is preserved as the
-# fallback once fzf's --tiebreak=index kicks in.
+# Stream the lines cache to stdout, floating recently-used items to the top
+# (in recency order). The recency id is tail field `pick_id_field` (default 1).
+# The remaining ("cold") lines keep their original order, so the underlying
+# sort is preserved as the fallback once fzf's --tiebreak=index kicks in.
+pick::recency_order_cache() {
+  local cache=$1
+  awk -v idf="${pick_id_field:-1}" '
+    FNR==NR { rank[$0]=FNR; nu=FNR; next }   # usage file: 1 id per line, most-recent first
+    {
+      p = index($0, "\037"); tail = substr($0, p + 1);
+      split(tail, a, "\036"); id = a[idf];
+      if (id in rank) recents[rank[id]] = $0; else rest[++r] = $0;
+    }
+    END {
+      for (i = 1; i <= nu; i++) if (i in recents) print recents[i];
+      for (i = 1; i <= r;  i++) print rest[i];
+    }
+  ' "$pick_usage_file" "$cache"
+}
+
+pick::materialize_ordered_cache() {
+  local cache=$1 ordered=$2
+  [[ -n "${pick_usage_file:-}" && -s "${pick_usage_file}" ]] || return 1
+
+  mkdir -p -- "${ordered:h}" || return 1
+  local tmp
+  tmp=$(mktemp "${ordered}.XXXXXX") || return 1
+  pick::recency_order_cache "$cache" > "$tmp" || {
+    rm -f -- "$tmp"
+    return 1
+  }
+  mv "$tmp" "$ordered"
+}
+
+pick::materialize_ordered_cache_async() {
+  local cache=$1 ordered=$2 usage_file="${pick_usage_file:-}" id_field="${pick_id_field:-1}"
+  [[ -n "$usage_file" && -n "$cache" && -n "$ordered" ]] || return 0
+  (
+    pick_usage_file="$usage_file"
+    pick_id_field="$id_field"
+    pick::materialize_ordered_cache "$cache" "$ordered"
+  ) </dev/null >/dev/null 2>&1 &!
+}
+
+# Stream the lines cache to stdout. When `pick_usage_file` is set and non-empty,
+# recently-used items float to the top. Large pickers can set
+# `pick_ordered_cache_file` to cache that recency ordering between launches.
 pick::ordered_cache() {
   local cache=$1
-  if [[ -n "${pick_usage_file:-}" && -s "${pick_usage_file}" ]]; then
-    awk -v idf="${pick_id_field:-1}" '
-      FNR==NR { rank[$0]=FNR; nu=FNR; next }   # usage file: 1 id per line, most-recent first
-      {
-        p = index($0, "\037"); tail = substr($0, p + 1);
-        split(tail, a, "\036"); id = a[idf];
-        if (id in rank) recents[rank[id]] = $0; else rest[++r] = $0;
-      }
-      END {
-        for (i = 1; i <= nu; i++) if (i in recents) print recents[i];
-        for (i = 1; i <= r;  i++) print rest[i];
-      }
-    ' "$pick_usage_file" "$cache"
-  else
+  [[ -n "${pick_usage_file:-}" && -s "${pick_usage_file}" ]] || {
     cat -- "$cache"
+    return 0
+  }
+
+  if [[ -n "${pick_ordered_cache_file:-}" ]]; then
+    if [[ ! -s "$pick_ordered_cache_file"
+          || "$cache" -nt "$pick_ordered_cache_file"
+          || "$pick_usage_file" -nt "$pick_ordered_cache_file" ]]; then
+      pick::materialize_ordered_cache "$cache" "$pick_ordered_cache_file" || {
+        pick::recency_order_cache "$cache"
+        return 0
+      }
+    fi
+    cat -- "$pick_ordered_cache_file"
+    return 0
   fi
+
+  pick::recency_order_cache "$cache"
 }
 
 # Prefix each line with a selector-mode display field when 1-9 shortcuts
@@ -466,6 +530,7 @@ pick::resume_pos() {
 pick::run() {
   local cache=$1
   local out
+  pick_current_cache="$cache"
   out=$(pick::feed "$cache" | fzf "${fzf_args[@]}") || exit 130
 
   # Output layout: line 1 = query (--print-query), line 2 = --expect
@@ -538,21 +603,48 @@ pick::start_missing_arg() {
   pick::die "missing arg for $1"
 }
 
+# Parse one `KEY:OUTPUT` pair for --key-output into the caller's `key_output`
+# assoc + `expect_keys` array (zsh dynamic scope makes pick::start's locals
+# visible here). Split on the FIRST colon so `ctrl-n:field:2` -> KEY=ctrl-n,
+# SPEC=field:2. OUTPUT uses the same grammar as --output.
+pick::start_add_key_output() {
+  local pair="$1"
+  local k="${pair%%:*}" spec="${pair#*:}"
+  [[ -n "$k" && "$k" != "$pair" ]] || \
+    pick::die "invalid --key-output: $pair (expected KEY:OUTPUT)"
+  case "$spec" in
+    raw|visible|tail|field:<->) ;;
+    *) pick::die "invalid --key-output spec: $spec (expected raw, visible, tail, or field:N)" ;;
+  esac
+  key_output[$k]="$spec"
+  expect_keys+=( "$k" )
+}
+
 pick::selector_shortcut_count() {
   local source="$1"
   pick::feed "$source" | awk '
-    NR >= 9 { print 9; exit }
-    END { if (NR < 9) print NR }
+    NR >= 9 { n = 9; next }
+    { n = NR }
+    END { print n + 0 }
   '
 }
 
 # High-level picker entrypoint for simple scripts. It builds default UI,
 # accepts either stdin or one file argument as input, runs fzf, and prints the
-# selected line exactly as fzf returned it unless --output requests US/RS parsing.
+# selected line exactly as fzf returned it unless --output requests US/RS
+# parsing. --key-output maps accept keys to their own output spec; --copy/--join
+# also place the result on the clipboard. Recency (pick_usage_file), resume
+# (pick_state_file + --resume), and stay-binds (pick_stay_binds) work when their
+# globals are set before the call.
 pick::start() {
   local output="raw"
   local source="/dev/stdin"
   local tmp_source=""
+  local do_copy="${pick_copy:-0}"
+  local do_resume=0
+  local join=$'\n'
+  local -A key_output
+  local -a expect_keys
   typeset -gA pick_ui
 
   while (( $# > 0 )); do
@@ -659,6 +751,26 @@ pick::start() {
       --selector-back-key=*)
         pick_ui[selector_back_key]="${1#--selector-back-key=}"; shift
         ;;
+      --key-output)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        pick::start_add_key_output "$2"; shift 2
+        ;;
+      --key-output=*)
+        pick::start_add_key_output "${1#--key-output=}"; shift
+        ;;
+      --copy)
+        do_copy=1; shift
+        ;;
+      --join)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        join="$2"; shift 2
+        ;;
+      --join=*)
+        join="${1#--join=}"; shift
+        ;;
+      --resume)
+        do_resume=1; shift
+        ;;
       --)
         shift
         if (( $# > 0 )); then
@@ -686,7 +798,25 @@ pick::start() {
     pick_ui[selector_hints]="$selector_hints_default"
   fi
   [[ -n "${pick_ui[search_hints]:-}" ]] || pick_ui[search_hints]=$'󰌑 : open  ·  󱊷 : cancel  ·  󰘴 U: clear/back'
-  [[ -n "${pick_ui[expect]:-}" ]] || pick_ui[expect]="enter"
+
+  case "$output" in
+    raw|visible|tail|field:<->) ;;
+    *) pick::die "invalid --output: $output (expected raw, visible, tail, or field:N)" ;;
+  esac
+
+  # `enter` always rides in --expect so pick::run's 3-line parse (query, key,
+  # selection) stays valid. Enter then resolves to the default --output;
+  # each --key-output key adds to the list and resolves to its own spec.
+  local -a _expect; _expect=( enter "${(@)expect_keys:#enter}" )
+  pick_ui[expect]="${(j:,:)_expect}"
+
+  # --resume: restore the saved query before building args (cursor position is
+  # restored after the source is materialized, via pick::resume_pos).
+  if (( do_resume )); then
+    pick::load_state
+    [[ -z "${pick_ui[query]:-}" && -n "${pick_resume_query:-}" ]] && \
+      pick_ui[query]="$pick_resume_query"
+  fi
 
   pick_input=( cat )
 
@@ -702,12 +832,42 @@ pick::start() {
   fi
 
   pick::build_fzf_args
+  if (( do_resume )); then
+    pick::resume_pos "$source"
+  fi
   pick::run "$source"
 
-  local line
+  # Resolve the output spec for this acceptance: a mapped --key-output key
+  # uses its spec; Enter (key "enter") or any unmapped key uses --output.
+  local sel_output="$output"
+  if [[ -n "${pick_key:-}" && "$pick_key" != enter && -n "${key_output[$pick_key]:-}" ]]; then
+    sel_output="${key_output[$pick_key]}"
+  fi
+
+  local line formatted result="" first=1
+  local -a sel_ids
+  local record_usage=0
+  [[ -n "${pick_usage_file:-}" || -n "${pick_state_file:-}" ]] && record_usage=1
   while IFS= read -r line || [[ -n "$line" ]]; do
-    pick::start_format_line "$line" "$output"
+    formatted="$(pick::start_format_line "$line" "$sel_output")"
+    print -r -- "$formatted"
+    if (( first )); then
+      result="$formatted"; first=0
+    else
+      result+="${join}${formatted}"
+    fi
+    if (( record_usage )); then
+      pick::split_tail "$line"
+      sel_ids+=( "${pick_fields[${pick_id_field:-1}]:-}" )
+    fi
   done <<< "$pick_selection"
+
+  if (( do_copy )); then
+    pick::clipboard "$result"
+  fi
+  if (( record_usage )); then
+    pick::record "${pick_query:-}" "${sel_ids[@]}"
+  fi
 
   if [[ -n "$tmp_source" ]]; then
     rm -f -- "$tmp_source"
@@ -782,5 +942,8 @@ pick::record() {
     seen[$id]=1; out+=( "$id" )
   done
   print -rl -- "${out[@]:0:50}" >| "$pick_usage_file"
+  if [[ -n "${pick_ordered_cache_file:-}" && -n "${pick_current_cache:-}" ]]; then
+    pick::materialize_ordered_cache_async "$pick_current_cache" "$pick_ordered_cache_file"
+  fi
   return 0
 }
