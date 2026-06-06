@@ -13,7 +13,7 @@
 # colour-formatted LINES_CACHE (via a jq emitter that uses pick.jq's
 # emit_line contract).
 #
-# Three optional UX features live here too, enabled by the picker
+# Four optional UX features live here too, enabled by the picker
 # setting a few globals (all opt-in, so a bare picker still works):
 #   * Recency sort   — set `pick_usage_file`: recently-chosen items are
 #                      floated to the top of the list (then the normal
@@ -66,24 +66,39 @@
 #
 #   # 5. Emit a different column per accept key. Enter uses --output; the
 #   #    mapped keys emit their own spec; unmapped keys are ignored so the
-#   #    picker stays open. --copy also puts the result on the clipboard.
+#   #    picker stays open. --copy-only sends the result to the clipboard
+#   #    instead of stdout.
 #   pick::line "$host  $ip" "$host" "$ip" \
 #     | pick::start --output field:1 \
-#         --key-output ctrl-n:field:2 --copy
+#         --key-output ctrl-n:field:2 --copy-only
 #
-#   # Recency, resume, and insert-and-stay also work through pick::start:
-#   # set pick_usage_file (recency float + write-back), pick_state_file with
-#   # --resume (restore query + cursor, save on exit), or pick_stay_binds +
-#   # pick_self (insert-without-dismiss) before calling pick::start.
+#   # Statefulness is opt-in. File-based recency/resume (for pickers with no
+#   # backing store) come from the --cache-* flags; DB-backed pickers instead
+#   # use --on-items-picked to record recency themselves (e.g. UPDATE last_used):
+#   #   ... | pick::start --output field:1 \
+#   #           --on-items-picked record_recency   # record_recency "$@" = ids
+#   # Insert-and-stay still uses pick_stay_binds + pick_self set before the call.
 #
 #   # Supported pick::start options:
 #   #   --output raw|visible|tail|field:N
 #   #   --key-output KEY:SPEC (repeatable; SPEC uses the --output grammar; the
 #   #     key resolves to SPEC on accept, Enter to --output)
-#   #   --copy (copy the emitted result), --join SEP (separator for --copy,
-#   #     default newline; e.g. --join '' to concatenate)
-#   #   --resume (restore saved query + cursor from pick_state_file)
-#   #   --header TEXT, --hints TEXT, --multi, --query TEXT, --height N, --margin SPEC,
+#   #   --multi[=SEP] (allow selecting multiple; SEP joins them on output,
+#   #     default newline; e.g. --multi='' to concatenate, --multi=', ' for CSV)
+#   #   --copy-only (send the joined result to the clipboard INSTEAD of stdout)
+#   #   --field-id=N (which hidden tail field is the recency/cursor id; default 1)
+#   #   --cache-usage[=PATH] (opt-in file recency: float recents + record
+#   #     picks; default ${XDG_CACHE_HOME}/pick/<PICK_NAME>/usage)
+#   #   --cache-state[=PATH] (opt-in resume state, restored by --resume;
+#   #     default ${XDG_CACHE_HOME}/pick/<PICK_NAME>/laststate)
+#   #   --resume (restore saved query + cursor; needs --cache-state)
+#   #   --on-items-picked CMD (after accept, run `CMD id...` with the picked ids;
+#   #     hook for DB recency and other side effects)
+#   #   --key-background KEY:SPEC (repeatable; on KEY, emit SPEC of the current
+#   #     row to the sink WITHOUT dismissing the picker — insert-and-stay)
+#   #   --on-key-background FUNC (in-process zsh function run with each background
+#   #     emission; default sink injects into the zellij pane / clipboard)
+#   #   --header TEXT, --hints TEXT, --query TEXT, --height N, --margin SPEC,
 #   #   --padding SPEC, --input-border LABEL, --no-border, --no-hints
 #   #   --selector, --selector-shortcuts, --selector-nav,
 #   #   --selector-hints TEXT, --search-hints TEXT,
@@ -340,13 +355,12 @@ pick::add_selector_mode_binds() {
 #                            the input-border gutter, even when input_border=0.
 #   no_border               1 → --no-border, else --border
 #   input_border            0/none disables; 1 = rounded; else passthrough
-#   multi                   1 → --multi + select-all + 2-line hints
+#   multi                   1 → --multi + select-all/toggle binds + green check marker
 #   query                   seed query (omitted when empty)
 #   header                  border title
 #   hints                   keybind-hint line (required for a useful UI)
 #   selector_hints          selector-mode keybind-hint line
 #   search_hints            search-mode keybind-hint line
-#   multi_help              2nd hint line w/ multi (has a default)
 #   expect                  comma-separated --expect keys
 #
 # The palette and structural flags are identical across pickers and
@@ -425,16 +439,22 @@ pick::build_fzf_args() {
   if (( ${pick_ui[selector_mode]:-0} )); then
     hints="${pick_ui[selector_hints]:-$hints}"
   fi
-  local multi_help="${pick_ui[multi_help]:-tab: mark  ·  ^A: select-all}"
   if (( ${pick_ui[multi]:-0} )); then
     fzf_args+=(
       --multi
       --bind 'ctrl-a:select-all'
+      # Toggle the marker in place (Tab also moves down; this doesn't).
+      --bind 'ctrl-space:toggle'
+      # Marked rows get a green check; unmarked rows stay blank in the marker
+      # column (fzf has no "unselected marker"). These override the base
+      # --marker/--color above since fzf honours the last occurrence.
+      --marker=$'\u2713 '
+      --color=marker:'#a6e3a1'
     )
-    (( ${pick_ui[no_hints]:-0} )) || fzf_args+=( --header="$hints"$'\n'"$multi_help"$'\n'"$NBSP" )
-  elif (( ! ${pick_ui[no_hints]:-0} )); then
-    fzf_args+=( --header="$hints"$'\n'"$NBSP" )
   fi
+  # Single hint line for every mode; --multi folds its keys into the hints
+  # (see pick::start's default), so fzf never adds a second header row.
+  (( ${pick_ui[no_hints]:-0} )) || fzf_args+=( --header="$hints"$'\n'"$NBSP" )
 
   pick::add_stay_binds
   pick::add_selector_mode_binds
@@ -620,6 +640,76 @@ pick::start_add_key_output() {
   expect_keys+=( "$k" )
 }
 
+# --- key-background (insert-without-dismiss via a FIFO broker) -------
+#
+# fzf's execute-silent runs in a fresh child shell that has none of our
+# functions, so a background keypress can't call an in-process hook directly.
+# Instead we fork a broker FROM THIS shell (it inherits pick::* + the user's
+# hook), and the bind's child only writes "SPEC\tLINE" to a FIFO. The broker
+# formats the line with pick::start_format_line and calls the hook — all while
+# fzf stays open. Globals pick_background_fifo / pick_background_broker drive teardown.
+
+# Default sink when --on-key-background is omitted: inject the formatted text
+# into the originating zellij pane (embed mode) or, failing that, the clipboard.
+pick::background_sink() {
+  local text=$1
+  if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_ZELLIJ:-}" ]]; then
+    ${(z)PICK_INJECT_ZELLIJ} action write-chars --pane-id "$PICK_INJECT_PANE" -- "$text"
+    return 0
+  fi
+  local clip; clip="$(pick::detect_clip)"
+  [[ -n "$clip" ]] && printf '%s' "$text" | ${(z)clip}
+  return 0
+}
+
+# Stand up the FIFO + reader broker and append one execute-silent bind per
+# KEY:SPEC. `hook` is the in-process function to run with each formatted line.
+pick::background_setup() {
+  local hook="$1"; shift
+  local -a binds=( "$@" )
+  (( ${#binds[@]} )) || return 0
+
+  pick_background_fifo="$(mktemp -u "${TMPDIR:-/tmp}/pick-background.XXXXXX")"
+  mkfifo -m 600 "$pick_background_fifo" || pick::die "could not create background FIFO"
+
+  # The broker is a background subshell of THIS process, so it sees pick::* and
+  # $hook. Holding the FIFO open read-write keeps the read loop alive across the
+  # transient open/close of each keypress writer (otherwise it would hit EOF).
+  {
+    local bfd spec line
+    exec {bfd}<>"$pick_background_fifo"
+    while IFS=$'\t' read -r spec line <&$bfd; do
+      "$hook" "$(pick::start_format_line "$line" "$spec")"
+    done
+  } &!
+  pick_background_broker=$!
+
+  local b key spec
+  for b in "${binds[@]}"; do
+    key="${b%%:*}"; spec="${b#*:}"
+    [[ -n "$key" && "$key" != "$b" ]] || \
+      pick::die "invalid --key-background: $b (expected KEY:SPEC)"
+    case "$spec" in
+      raw|visible|tail|field:<->) ;;
+      *) pick::die "invalid --key-background spec: $spec (expected raw, visible, tail, or field:N)" ;;
+    esac
+    # The child only writes; one small printf is an atomic FIFO write. The FIFO
+    # path is single-quoted so a TMPDIR with spaces can't word-split the
+    # redirection target in fzf's child shell ({} is already fzf-quoted; spec is
+    # a validated token). fzf input is newline-delimited, so {} is always one
+    # line and each printf is exactly one broker record.
+    fzf_args+=( --bind "${key}:execute-silent(printf '%s\t%s\n' ${spec} {} >> '${pick_background_fifo}')" )
+  done
+  return 0
+}
+
+pick::background_teardown() {
+  [[ -n "${pick_background_broker:-}" ]] && kill "$pick_background_broker" 2>/dev/null
+  [[ -n "${pick_background_fifo:-}" ]] && rm -f -- "$pick_background_fifo"
+  pick_background_broker=""; pick_background_fifo=""
+  return 0
+}
+
 pick::selector_shortcut_count() {
   local source="$1"
   pick::feed "$source" | awk '
@@ -632,20 +722,31 @@ pick::selector_shortcut_count() {
 # High-level picker entrypoint for simple scripts. It builds default UI,
 # accepts either stdin or one file argument as input, runs fzf, and prints the
 # selected line exactly as fzf returned it unless --output requests US/RS
-# parsing. --key-output maps accept keys to their own output spec; --copy/--join
-# also place the result on the clipboard. Recency (pick_usage_file), resume
-# (pick_state_file + --resume), and stay-binds (pick_stay_binds) work when their
-# globals are set before the call.
+# parsing. --key-output maps accept keys to their own output spec; --multi[=SEP]
+# joins a multi-selection (default newline); --copy-only sends the result to the
+# clipboard instead of stdout. Statefulness is opt-in:
+# --cache-usage (file recency), --cache-state + --resume (resume), and
+# --on-items-picked CMD (a post-accept hook for DB recency etc.). --key-background
+# KEY:SPEC + --on-key-background FUNC add insert-without-dismiss (a FIFO broker
+# bridges fzf's child-shell binds back to an in-process hook).
 pick::start() {
   local output="raw"
   local source="/dev/stdin"
   local tmp_source=""
   local do_copy="${pick_copy:-0}"
   local do_resume=0
-  local join=$'\n'
+  local join_sep=$'\n'
+  local on_picked=""
+  local on_background=""
+  local pick_cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/pick/${PICK_NAME:-pick}"
   local -A key_output
   local -a expect_keys
+  local -a background_binds
+  # pick_ui is the global UI scratch read by pick::build_fzf_args et al. Clear it
+  # so each pick::start call is self-contained (flags-only): no UI state leaks in
+  # from a prior call in the same process.
   typeset -gA pick_ui
+  pick_ui=()
 
   while (( $# > 0 )); do
     case "$1" in
@@ -672,6 +773,9 @@ pick::start() {
         ;;
       --multi)
         pick_ui[multi]=1; shift
+        ;;
+      --multi=*)
+        pick_ui[multi]=1; join_sep="${1#--multi=}"; shift
         ;;
       --query)
         [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
@@ -758,18 +862,51 @@ pick::start() {
       --key-output=*)
         pick::start_add_key_output "${1#--key-output=}"; shift
         ;;
-      --copy)
+      --copy-only)
         do_copy=1; shift
-        ;;
-      --join)
-        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
-        join="$2"; shift 2
-        ;;
-      --join=*)
-        join="${1#--join=}"; shift
         ;;
       --resume)
         do_resume=1; shift
+        ;;
+      --field-id)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        pick_id_field="$2"; shift 2
+        ;;
+      --field-id=*)
+        pick_id_field="${1#--field-id=}"; shift
+        ;;
+      --cache-usage)
+        pick_usage_file="$pick_cache_dir/usage"; shift
+        ;;
+      --cache-usage=*)
+        pick_usage_file="${1#--cache-usage=}"; shift
+        ;;
+      --cache-state)
+        pick_state_file="$pick_cache_dir/laststate"; shift
+        ;;
+      --cache-state=*)
+        pick_state_file="${1#--cache-state=}"; shift
+        ;;
+      --on-items-picked)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        on_picked="$2"; shift 2
+        ;;
+      --on-items-picked=*)
+        on_picked="${1#--on-items-picked=}"; shift
+        ;;
+      --key-background)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        background_binds+=( "$2" ); shift 2
+        ;;
+      --key-background=*)
+        background_binds+=( "${1#--key-background=}" ); shift
+        ;;
+      --on-key-background)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        on_background="$2"; shift 2
+        ;;
+      --on-key-background=*)
+        on_background="${1#--on-key-background=}"; shift
         ;;
       --)
         shift
@@ -789,7 +926,16 @@ pick::start() {
   done
   (( $# == 0 )) || pick::die "pick::start accepts at most one input file"
 
-  [[ -n "${pick_ui[hints]:-}" ]] || pick_ui[hints]=$'󰌑 : open  ·  󱊷 : cancel  ·  󰘴 U: clear'
+  # Opt-in statefulness: --cache-* enables file-based recency/resume; make sure
+  # the parent dir exists so pick::record can write it.
+  if [[ -n "${pick_usage_file:-}" ]]; then mkdir -p -- "${pick_usage_file:h}" 2>/dev/null || true; fi
+  if [[ -n "${pick_state_file:-}" ]]; then mkdir -p -- "${pick_state_file:h}" 2>/dev/null || true; fi
+
+  if [[ -z "${pick_ui[hints]:-}" ]]; then
+    local hints_default=$'󰌑 : open  ·  󱊷 : cancel  ·  󰘴 U: clear'
+    (( ${pick_ui[multi]:-0} )) && hints_default+=$'  ·  󰘴 󱁐 : select  ·  ⭾ : select-and-next  ·  󰘴 A: select-all'
+    pick_ui[hints]="$hints_default"
+  fi
   if [[ -z "${pick_ui[selector_hints]:-}" ]]; then
     local selector_hints_default=$'󰌑 : open  ·  󱊷 : cancel'
     (( ${pick_ui[selector_shortcuts]:-0} )) && selector_hints_default+=$'  ·  1-9: open'
@@ -835,6 +981,16 @@ pick::start() {
   if (( do_resume )); then
     pick::resume_pos "$source"
   fi
+
+  # --key-background: stand up the FIFO broker + binds, and ensure the broker and
+  # FIFO are reaped on cancel (pick::run does `exit 130`) as well as normal
+  # return. The trap also preserves the tmp_source cleanup.
+  if (( ${#background_binds[@]} )); then
+    [[ -n "$on_background" ]] || on_background="pick::background_sink"
+    pick::background_setup "$on_background" "${background_binds[@]}"
+    trap 'pick::background_teardown; [[ -n "${tmp_source:-}" ]] && rm -f -- "${tmp_source}"' EXIT INT TERM
+  fi
+
   pick::run "$source"
 
   # Resolve the output spec for this acceptance: a mapped --key-output key
@@ -844,35 +1000,52 @@ pick::start() {
     sel_output="${key_output[$pick_key]}"
   fi
 
+  # A multi-selection is joined with join_sep (the --multi[=SEP] separator,
+  # default newline) into a single result. --copy-only then sends that result to
+  # the clipboard INSTEAD of stdout; otherwise it's printed (with one trailing
+  # newline). Either way, the picked ids are recorded (file recency/resume and/or
+  # the on-items-picked hook).
   local line formatted result="" first=1
   local -a sel_ids
-  local record_usage=0
-  [[ -n "${pick_usage_file:-}" || -n "${pick_state_file:-}" ]] && record_usage=1
+  # Harvest the id field (field --field-id) when any consumer wants it: the
+  # file-based recorder or the on-items-picked hook.
+  local collect_ids=0
+  if [[ -n "${pick_usage_file:-}" || -n "${pick_state_file:-}" || -n "$on_picked" ]]; then
+    collect_ids=1
+  fi
   while IFS= read -r line || [[ -n "$line" ]]; do
     formatted="$(pick::start_format_line "$line" "$sel_output")"
-    print -r -- "$formatted"
     if (( first )); then
       result="$formatted"; first=0
     else
-      result+="${join}${formatted}"
+      result+="${join_sep}${formatted}"
     fi
-    if (( record_usage )); then
+    if (( collect_ids )); then
       pick::split_tail "$line"
       sel_ids+=( "${pick_fields[${pick_id_field:-1}]:-}" )
     fi
   done <<< "$pick_selection"
 
   if (( do_copy )); then
-    pick::clipboard "$result"
+    pick::clipboard "$result"   # printf %s — no trailing newline
+  else
+    print -r -- "$result"       # one trailing newline
   fi
-  if (( record_usage )); then
+  # File-based recency/resume write-back (non-DB pickers; --cache-* flags).
+  if [[ -n "${pick_usage_file:-}" || -n "${pick_state_file:-}" ]]; then
     pick::record "${pick_query:-}" "${sel_ids[@]}"
   fi
+  # on-items-picked hook: hand the picked ids to the caller (e.g. a DB picker
+  # recording recency via UPDATE last_used). Runs once with all picked ids.
+  if [[ -n "$on_picked" ]]; then
+    "$on_picked" "${sel_ids[@]}"
+  fi
 
+  pick::background_teardown
   if [[ -n "$tmp_source" ]]; then
     rm -f -- "$tmp_source"
-    trap - EXIT INT TERM
   fi
+  trap - EXIT INT TERM
 }
 
 # --- output --------------------------------------------------------
@@ -884,8 +1057,8 @@ pick::start() {
 pick::split_tail() {
   local tail="${1#*$'\x1f'}"
   local extra_fields=$(( ${pick_display_fields:-1} - 1 ))
-  # If a selector-wrapped line is parsed in a fresh process (for example a
-  # future --emit helper), pick_display_fields may still be unset. The extra
+  # If a selector-wrapped line is parsed in a fresh process (e.g. a picker's
+  # --emit subcommand), pick_display_fields may still be unset. The extra
   # display field is the only place another US separator appears before the
   # RS-delimited tail, so skip it opportunistically.
   if (( extra_fields <= 0 )) && [[ "$tail" == *$'\x1f'* ]]; then
