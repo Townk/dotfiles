@@ -1,5 +1,6 @@
 {{- $hasQmk := and (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk")) (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk-config")) -}}
 {{- $hasWeztermPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/quicklaunch.wezterm")) (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/statusbar.wezterm")) -}}
+{{- $hasZellijPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-context-keys/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-prompt-jumper/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-hud")) -}}
 # default.yaml — managed quick-launch targets for Zellij.
 #
 # Consumed by ~/.config/zellij/scripts/quick-launch via the Alt+w P/T/W leader
@@ -22,7 +23,7 @@ workspaces:
 {{ if $hasQmk }}
   - id: qmk
     name: QMK Firmware
-    icon: " "
+    icon: " "
     tabs:
       - id: qmk-firmware
         name: Firmware
@@ -39,7 +40,7 @@ workspaces:
     panes:
       - id: qmk-compile
         name: QMK Build
-        icon: " "
+        icon: "􏂭 "
         direction: down
         size: 40%
         optional: true
@@ -100,11 +101,49 @@ workspaces:
           cwd: ~/Projects/apps/wezterm/quicklaunch.wezterm
           args: ["plugin/init.lua"]
 {{ end }}
+{{ if $hasZellijPlugins }}
+  - id: zellij-plugins
+    name: Zellij Plugins
+    icon: "􏬆 "
+    tabs:
+      - id: zellij-config
+        name: Zellij Config
+        icon: "􏬆 "
+        action:
+          type: Edit
+          label: Edit Zellij configuration
+          cwd: ~/.config/zellij
+          args: ["config.kdl"]
+      - id: zj-context-keys-plugin
+        name: Context Keys Plugin
+        icon: "󰌏 "
+        action:
+          type: Edit
+          label: Edit Context Keys Plugin
+          cwd: ~/Projects/apps/zellij/zj-context-keys
+          args: ["src/main.rs"]
+      - id: zj-prompt-jumper-plugin
+        name: Prompt Jumper Plugin
+        icon: "󱕘 "
+        action:
+          type: Edit
+          label: Edit Prompt Jumper Plugin
+          cwd: ~/Projects/apps/zellij/zj-prompt-jumper
+          args: ["src/main.rs"]
+      - id: zj-hud-plugin
+        name: Shell Hud Plugin
+        icon: " "
+        action:
+          type: Edit
+          label: Edit Shell Hud Plugin
+          cwd: ~/Projects/apps/zellij/zj-hud
+          args: ["src/main.rs"]
+{{ end }}
 
 tabs:
   - id: launcher-items
     name: Launcher Items
-    icon: "󱓞 "
+    icon: "󱓟 "
     action:
       type: Edit
       label: Edit Zellij QuickLaunch items
@@ -113,12 +152,21 @@ tabs:
 
   - id: brew-pkgs
     name: Homebrew Packages
-    icon: " "
+    icon: "􏃼 "
     action:
       type: Edit
       label: Edit Brewbundle file
       cwd: ~/.config/packages
       args: ["Brewfile"]
+
+  - id: zellij-config
+    name: Zellij Config
+    icon: "􏬆 "
+    action:
+      type: Edit
+      label: Edit Zellij configuration
+      cwd: ~/.config/zellij
+      args: ["config.kdl"]
 
   - id: wezterm-config
     name: Wezterm Config
@@ -140,7 +188,7 @@ tabs:
 
   - id: neovim-config
     name: NeoVim Config
-    icon: " "
+    icon: " "
     action:
       type: Edit
       label: Edit NeoVim configuration
@@ -149,7 +197,7 @@ tabs:
 
   - id: hammerspoon-config
     name: Hammerspoon Config
-    icon: "󰣪 "
+    icon: " "
     action:
       type: Edit
       label: Edit Hammerspoon configuration
@@ -158,7 +206,7 @@ tabs:
 
   - id: system-resources
     name: System Resources
-    icon: " "
+    icon: " "
     action:
       type: Run
       label: Open System Resources
@@ -177,7 +225,7 @@ tabs:
 panes:
   - id: git-log
     name: Git Log
-    icon: " "
+    icon: " "
     direction: right
     size: 65%
     moveFocus: true
