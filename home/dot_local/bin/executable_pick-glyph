@@ -74,6 +74,10 @@ BUILD_SUPPL_BIN="${PICK_GLYPH_BUILD_SUPPL:-$HOME/.local/lib/pick-glyph-build-sup
 # source-agnostic line set and apply --source filtering downstream in
 # awk, so a single cache covers all picker invocations.
 LINES_CACHE="$SUPPL_DIR/picker-lines.txt"
+# Materialized recency view of LINES_CACHE. The canonical cache stays
+# source-ordered; this derived file lets warm launches avoid re-sorting
+# the 8+ MB cache by usage on every run.
+ORDERED_LINES_CACHE="$SUPPL_DIR/picker-lines.ordered.txt"
 
 # Shared picker scaffolding (fzf UI, output + clipboard, cache
 # staleness) and the jq wire-format/colour module. Both are off-PATH
@@ -230,10 +234,9 @@ Build it with: ~/.local/share/chezmoi/custom-builds/nerd-fonts/build-updated-fon
 
 # Build (or refresh) the supplement cache. The builder lives in
 # ~/.local/lib/ (off-PATH internal helper) and emits an idempotent
-# JSON of every named codepoint outside the font itself; we run it
-# whenever the cache file is missing or stale. `--rebuild-suppl`
-# forces a rebuild and exits, useful when the builder script itself
-# has been updated.
+# JSON of every named codepoint outside the font itself. The warm path
+# skips the builder entirely; it runs only when the supplement is missing,
+# older than the builder, or explicitly requested with --rebuild-suppl.
 mkdir -p "$SUPPL_DIR"
 [[ -x "$BUILD_SUPPL_BIN" ]] \
   || die "supplement builder not executable: $BUILD_SUPPL_BIN
@@ -242,7 +245,9 @@ if (( rebuild_suppl )); then
   "$BUILD_SUPPL_BIN" --force "$SUPPL_CACHE"
   exit 0
 fi
-"$BUILD_SUPPL_BIN" "$SUPPL_CACHE"
+if [[ ! -s "$SUPPL_CACHE" || "$BUILD_SUPPL_BIN" -nt "$SUPPL_CACHE" ]]; then
+  "$BUILD_SUPPL_BIN" "$SUPPL_CACHE"
+fi
 
 # --source flag validation. The actual filter is applied downstream
 # (after the cache, before fzf) as a streaming awk predicate on the
@@ -440,6 +445,7 @@ pick_ui=(
 # pick_id_field=1 → the recency/cursor id is the hidden `key` field.
 pick_id_field=1
 pick_usage_file="$SUPPL_DIR/usage"
+pick_ordered_cache_file="$ORDERED_LINES_CACHE"
 pick_state_file="$SUPPL_DIR/laststate"
 pick_self="$SCRIPT_PATH"
 pick_stay_binds=( "alt-enter:glyph" "alt-g:glyph" "alt-n:name" "alt-p:unicode" )
