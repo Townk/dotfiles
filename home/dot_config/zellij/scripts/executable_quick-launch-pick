@@ -156,10 +156,8 @@ fi
 
 [[ -s "$LINES_CACHE" ]] || die "no $kind targets defined in $TARGETS"
 
-# No recency sort: quick-launch entries stay in their defined (file) order.
-# `pick_usage_file` is intentionally left unset, so pick::ordered_cache passes
-# the list through unchanged and pick::record skips usage tracking. No resume /
-# stay-insert binds either — launching isn't a text-insert flow.
+# Quick-launch entries stay in their defined (file) order: no recency, resume,
+# or insert-and-stay flags — launching a target isn't a text-insert flow.
 
 pick_start_args=(
   --height "${QUICK_LAUNCH_HEIGHT:-45%}"

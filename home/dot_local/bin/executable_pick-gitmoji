@@ -1,396 +1,170 @@
 #!/usr/bin/env zsh
-# pick-gitmoji — fzf-based picker for the gitmoji.dev catalog.
+# pick-gitmoji — fzf-based picker for the gitmoji catalog.
 #
-# Mirrors pick-glyph's UX (catppuccin-mocha colors, --expect submit
-# keys, optional clipboard, --no-border for embedders) but for the
-# 75-ish gitmoji entries published at https://gitmoji.dev/api/gitmojis.
-# Each picker line is:
+# Backed by the gitmoji rows of the symbols database built by the custom
+# Symbols Nerd Font pipeline at
+#   ${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/symbols.db
+# (the rows whose `tags` include 'gitmoji'). The build's renderability probe
+# guarantees every emoji here draws in the terminal, and emoji-presentation
+# width is taken from the DB's display_width column — so no per-glyph width
+# overrides and no ZWJ-sequence special-casing are needed here. One fzf line
+# is streamed per row straight out of SQLite — no jq, no network fetch.
 #
-#   <emoji>  :name:  <description>
+# Each line shows:
+#   <emoji>  :name:  <description>      e.g. 🎨  :art:  Improve structure / format
 #
-# Search blob (hidden behind \x1f) carries the bare `name` and the
-# `semver` field too, so typing `tada`, `art`, `patch`, or `minor`
-# narrows the picker the way you'd expect even though those tokens
-# don't appear in the visible portion.
+# Output modes (each bound to a key via the pick::start API):
+#   Enter    raw emoji        (e.g. 🎨)
+#   Ctrl-N   :name:           (e.g. :art:)
+# The Alt- twins (Alt-Enter = emoji, Alt-N = :name:) insert WITHOUT closing
+# the picker: the value goes to the originating zellij pane when embedded
+# (PICK_INJECT_PANE / PICK_INJECT_ZELLIJ, set by zellij-modal), otherwise to
+# the system clipboard.
 #
-# Two output modes, each bound to a key via fzf's --expect:
-#
-#   Enter (default)  → raw emoji        (e.g. 🎨)
-#   ctrl-n           → :name:           (e.g. :art:)
-#
-# (No \u{HEX} mode like pick-glyph: gitmoji users want either the
-#  glyph for direct insertion or the :code: for git-commit
-#  interpolation. The codepoint isn't a useful third output here.)
-#
-# Data freshness: the gitmoji catalog is fetched once and cached at
-#   $XDG_CACHE_HOME/pick-gitmoji/gitmojis.json
-# It is re-fetched automatically when the cache is missing, empty, or
-# older than $MAX_AGE_DAYS (30 days). `--refresh` forces a re-fetch.
-# A user-supplied `--json FILE` is never auto-refreshed.
-#
-# If a refresh is needed but the network call fails AND we already
-# have a cached copy, we keep using the stale cache rather than
-# erroring out — offline use beats hard-failing on a flaky DNS.
+# Recently-picked gitmojis float to the top: each pick stamps `last_used` in
+# the DB and the query orders by it. --resume reopens with the previous query
+# and cursor position restored.
 
 set -eu -o pipefail
 
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/pick-gitmoji"
-GITMOJIS_JSON="${PICK_GITMOJI_JSON:-$CACHE_DIR/gitmojis.json}"
-LINES_CACHE="$CACHE_DIR/picker-lines.txt"
-GITMOJI_URL="${PICK_GITMOJI_URL:-https://gitmoji.dev/api/gitmojis}"
-MAX_AGE_DAYS=30
-
-# Shared picker scaffolding (fzf UI, output + clipboard, cache
-# staleness) and the jq wire-format/colour module — off-PATH internal
-# libs in ~/.local/lib; override the dir with PICK_LIB_DIR for tests.
-# pick.jq is included by the emitter below and also feeds cache
-# invalidation (editing the wire contract rebuilds the cache).
 PICK_NAME=pick-gitmoji
 PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
-PICK_JQ="$PICK_LIB_DIR/pick.jq"
 source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" \
   || { print -ru2 -- "pick-gitmoji: cannot source pick-common.zsh from $PICK_LIB_DIR"; exit 1; }
+
+DB_FILE="${PICK_GITMOJI_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/symbols.db}"
+
+# Thin alias to the shared error helper (prefixes $PICK_NAME and exits).
+die() { pick::die "$@"; }
 
 usage() {
   cat <<EOF
 Usage:
   pick-gitmoji [OPTIONS]
 
-Interactively pick a gitmoji from the gitmoji.dev catalog via fzf
-and print it.
+Interactively pick a gitmoji via fzf and print it.
 
 Inside the picker:
-  Enter           output the raw emoji (default)
-  Ctrl-N          output the :name: code (e.g. :tada:)
-  Alt-Enter       insert the emoji WITHOUT closing the picker
-  Alt-N           same, but insert the :name: code
-                  (sink: the originating zellij pane when embedded,
-                   else the system clipboard)
+  Enter            output the raw emoji (default)
+  Ctrl-N           output the :name: code (e.g. :tada:)
+  Alt-Enter        insert the emoji WITHOUT closing the picker
+  Alt-N            same, but insert the :name: code
+                   (sink: the originating zellij pane when embedded,
+                    else the system clipboard)
+  Tab / Ctrl-A     (with --multi) mark / select-all
 
-Recently-picked gitmojis float to the top of the list. Use --resume to
-reopen with the previous query and cursor position restored.
+Recently-picked gitmojis float to the top. Type a name or words from a
+gitmoji's description to narrow the list.
 
 Options:
-  -m, --multi             allow selecting multiple gitmojis
-                          (concatenated on output)
-  -c, --copy              also copy the result to the system clipboard
-  -q, --query QUERY       seed fzf with an initial query string
-                          (search hits the bare name and semver
-                          values too — try \`patch\` or \`minor\`)
-      --mode MODE         skip the interactive submit-key prompt and force
-                          emoji | name (same as Enter / Ctrl-N)
-      --resume            reopen with the previous query + cursor restored
-  -j, --json FILE         override the gitmojis.json path
-                          (default: \$PICK_GITMOJI_JSON or
-                           \$XDG_CACHE_HOME/pick-gitmoji/gitmojis.json)
-      --refresh           force a re-fetch of the gitmoji catalog and
-                          rebuild the assembled-lines cache
-      --no-border         suppress fzf's rounded border (useful when
-                          embedding inside a zellij/tmux floating pane
-                          that already draws its own border)
-  -h, --help              show this help
+  -m, --multi      select multiple gitmojis (concatenated on output)
+  -c, --copy       copy the result to the clipboard instead of stdout
+  -q, --query Q    seed fzf with an initial query string
+      --resume     reopen with the previous query + cursor restored
+      --no-border  suppress fzf's border (for embedding in a bordered pane)
+      --db FILE    override the symbols.db path
+  -h, --help       show this help
 
 Examples:
-  pick-gitmoji                     # interactive picker, print emoji
-  pick-gitmoji -c -q rocket        # find the rocket gitmoji, copy
-  pick-gitmoji --mode name -q tada # print :tada: non-interactively
-  pick-gitmoji -q patch            # narrow to patch-bump gitmojis
+  pick-gitmoji                # interactive picker, print the emoji
+  pick-gitmoji -c -q rocket   # find the rocket gitmoji, copy to clipboard
+  pick-gitmoji -q test        # narrow to test-related gitmojis
 EOF
 }
 
-# Thin alias to the shared error helper (prefixes $PICK_NAME and exits).
-die() { pick::die "$@"; }
-
 multi=0
-pick_copy=0
+copy=0
 query=""
-refresh=0
-forced_mode=""
-no_border=0
 resume=0
-emit_mode=""
+no_border=0
 
 while (( $# > 0 )); do
   case "$1" in
-    -m|--multi)        multi=1; shift ;;
-    -c|--copy)         pick_copy=1; shift ;;
-    -q|--query)        [[ $# -ge 2 ]] || die "missing arg for $1"; query="$2";          shift 2 ;;
-    -j|--json)         [[ $# -ge 2 ]] || die "missing arg for $1"; GITMOJIS_JSON="$2";  shift 2 ;;
-    --mode)            [[ $# -ge 2 ]] || die "missing arg for $1"; forced_mode="$2";    shift 2 ;;
-    --emit)            [[ $# -ge 2 ]] || die "missing arg for $1"; emit_mode="$2";      shift 2 ;;
-    --resume)          resume=1; shift ;;
-    --refresh)         refresh=1; shift ;;
-    --no-border)       no_border=1; shift ;;
-    -h|--help)         usage; exit 0 ;;
-    --)                shift; break ;;
+    -m|--multi)   multi=1; shift ;;
+    -c|--copy)    copy=1; shift ;;
+    -q|--query)   [[ $# -ge 2 ]] || die "missing arg for $1"; query="$2"; shift 2 ;;
+    --db)         [[ $# -ge 2 ]] || die "missing arg for $1"; DB_FILE="$2"; shift 2 ;;
+    --resume)     resume=1; shift ;;
+    --no-border)  no_border=1; shift ;;
+    -h|--help)    usage; exit 0 ;;
+    --)           shift; break ;;
     *) die "unknown arg: $1 (try --help)" ;;
   esac
 done
 
-case "$forced_mode" in
-  ""|emoji|name) ;;
-  *) die "invalid --mode: $forced_mode (expected emoji|name)" ;;
-esac
-case "$emit_mode" in
-  ""|emoji|name) ;;
-  *) die "invalid --emit: $emit_mode (expected emoji|name)" ;;
-esac
+pick::need sqlite3
+[[ -f "$DB_FILE" ]] || die "symbols DB not found: $DB_FILE
+Build it with: chezmoi apply (runs the symbols-db hook)"
 
-# Per-line output. pick::split_tail fills pick_fields from the hidden
-# tail; reading the raw emoji from the tail (not the visible portion)
-# keeps ANSI colour out of stdout. Defined early so the `--emit`
-# subcommand (below) and the interactive emit loop share one renderer.
-# Tail layout (kept in sync with the jq emitter below):
-#   [1]=code [2]=name [3]=description [4]=semver [-1]=emoji
-pick_emit_one() {
-  pick::split_tail "$1"
-  # `:-` guards keep `set -u` from aborting on a tail-less line.
-  case "$mode" in
-    emoji) result+="${pick_fields[-1]:-}" ;;
-    name)  result+="${pick_fields[1]:-}"  ;;
-  esac
+# Recency in the DB: stamp last_used on every picked gitmoji so the next
+# launch floats it up. Field 1 of the hidden tail is the emoji itself, which
+# is the symbols-table primary key.
+record_gitmoji_recency() {
+  (( $# )) || return 0
+  local now sym vals=""
+  now=$(date +%s)
+  for sym in "$@"; do
+    [[ -z "$sym" ]] && continue
+    sym=${sym//\'/\'\'}   # SQL-escape single quotes
+    vals+="'${sym}',"
+  done
+  [[ -z "$vals" ]] && return 0
+  sqlite3 "$DB_FILE" "UPDATE symbols SET last_used=$now WHERE symbol IN (${vals%,});"
 }
 
-# Hidden subcommand: `pick-gitmoji --emit MODE -- <line>` renders a
-# single cache line and prints it WITHOUT a trailing newline (so a
-# zellij write-chars / clipboard paste doesn't auto-submit), then exits.
-# This is what the insert-without-dismiss fzf binds call on the current
-# line; it needs neither the catalog nor fzf, so it returns first.
-if [[ -n "$emit_mode" ]]; then
-  mode="$emit_mode"; result=""
-  pick_emit_one "${1:-}"
-  printf '%s' "$result"
-  exit 0
+hints=$'󰌑 : emoji  ·  󰘴 N: :name:  ·  ⌥ ⏎/N: insert & stay'
+if (( multi )); then
+  hints+=$'  ·  ⭾ : select  ·  󰘴 A: select-all'
 fi
 
-pick::need jq
-
-mkdir -p "$CACHE_DIR"
-
-# Fetch / refresh policy.
-#   * --refresh       → always re-fetch
-#   * empty / missing → must fetch (no fallback)
-#   * user --json X   → never auto-fetch (treat as authoritative)
-#   * older than MAX_AGE_DAYS → try to fetch; tolerate failure (use stale)
-needs_fetch=0
-fetch_required=0
-if (( refresh )); then
-  needs_fetch=1
-  fetch_required=1
-elif [[ ! -s "$GITMOJIS_JSON" ]]; then
-  needs_fetch=1
-  fetch_required=1
-elif [[ "$GITMOJIS_JSON" != "$CACHE_DIR/gitmojis.json" ]]; then
-  : # user-supplied; never refresh
-elif find "$GITMOJIS_JSON" -mtime "+${MAX_AGE_DAYS}" -print 2>/dev/null | grep -q .; then
-  needs_fetch=1
-fi
-
-if (( needs_fetch )); then
-  pick::need curl "needed to fetch the gitmoji catalog"
-  tmp_json=$(mktemp "${GITMOJIS_JSON}.XXXXXX") || die "could not create temp file in $CACHE_DIR"
-  cleanup_tmp_json() { rm -f "$tmp_json"; }
-  trap cleanup_tmp_json EXIT INT TERM
-  if curl -fsSL --max-time 10 "$GITMOJI_URL" -o "$tmp_json" \
-     && jq -e '.gitmojis | length > 0' "$tmp_json" >/dev/null 2>&1; then
-    mv "$tmp_json" "$GITMOJIS_JSON"
-    trap - EXIT INT TERM
-  else
-    rm -f "$tmp_json"
-    trap - EXIT INT TERM
-    if (( fetch_required )); then
-      die "could not fetch gitmoji catalog from $GITMOJI_URL (no usable cache to fall back to)"
-    fi
-    # Stale-cache-tolerated path: fall through with the existing JSON.
-    print -ru2 -- "pick-gitmoji: refresh failed; using cached copy at $GITMOJIS_JSON"
-  fi
-fi
-
-[[ -s "$GITMOJIS_JSON" ]] || die "no gitmoji catalog available at $GITMOJIS_JSON"
-
-# Determine whether the assembled-lines cache needs rebuilding. The
-# source JSON is tiny (~20 KB / 75 entries) so a full rebuild is
-# cheap; we still gate on mtime to keep the warm path snappy. We
-# invalidate on the source JSON, this script, or the shared pick.jq
-# (colour/wire contract) being newer than the cache.
-SCRIPT_PATH="${(%):-%x}"
-
-# Cache layout: one line per gitmoji, format
-#
-#   <emoji>  :code:  <description>\x1f<code>\x1e<name>\x1e<description>\x1e<semver>\x1e<emoji>
-#
-# fzf uses \x1f as its --delimiter and --with-nth=1 cuts the display
-# there. \x1e separates the structured tail (code, bare name, desc,
-# semver, emoji). Search is NOT restricted via --nth, so the bare
-# name and the semver bucket stay matchable — type `tada` to find
-# `:tada:` even though only `:tada:` appears on screen, or `minor`
-# to narrow to gitmojis flagged for minor-version bumps.
-if pick::cache_stale "$LINES_CACHE" "$GITMOJIS_JSON" "$SCRIPT_PATH" "$PICK_JQ"; then
-  tmp_cache=$(mktemp "${LINES_CACHE}.XXXXXX") || die "could not create temp cache"
-  cleanup_tmp_cache() { rm -f "$tmp_cache"; }
-  trap cleanup_tmp_cache EXIT INT TERM
-
-  # Per-:code: display-width override map. The values are the
-  # measured cursor-advance widths (NOT the visual cell widths) as
-  # reported by `~/.local/lib/pick-gitmoji-measure-widths` running
-  # inside the same zellij+ghostty pane the picker launches in.
-  # Source-of-truth measurement, not heuristic.
-  #
-  # Why the two diverge for some entries: every codepoint in this
-  # map is a default-text-presentation emoji that requires VS16
-  # (U+FE0F) for emoji rendering. Ghostty's font-codepoint-map in
-  # ~/.config/ghostty/config makes them PAINT as colourful Apple
-  # Color Emoji glyphs (visually 2 cells), but ghostty still uses
-  # the base codepoint's Unicode default-width (1 cell) for cursor
-  # advance — VS16 doesn't promote the width in this version of
-  # ghostty + zellij. So we pad in software here to keep columns
-  # aligned. Trade-off: when an emoji paints 2 cells visually but
-  # cursor-advances 1, the trailing pad-space lands on top of the
-  # emoji's right-half cell. Whether that visually corrupts the
-  # glyph depends on ghostty's wide-cell handling — eyeball it.
-  #
-  # ZWJ-sequence emoji (those containing U+200D, e.g.
-  # :technologist: 🧑‍💻) are NOT in this map and never appear in the
-  # picker at all — the jq `select` below filters them out. Reason:
-  # zellij 0.44.3 drops every zero-width codepoint from its grid
-  # (U+200D is category Cf), so the joiner never reaches ghostty and
-  # such sequences always render split (🧑 + 💻) with broken column
-  # width. Rather than mis-render them, we drop them. The proper fix
-  # is in unmerged zellij PRs #4800 / #4920 (grapheme segmentation);
-  # once a zellij release preserves ZWJ, delete the `select` filter
-  # and these emoji return automatically.
-  #
-  # Anything not in this map defaults to 2. The padding step below
-  # right-pads every emoji to max(widths) = 2 (the surviving entries
-  # are all 1 or 2), so 1-cell entries get one extra trailing space.
-  #
-  # Re-measure after a ghostty / zellij upgrade — VS16 width
-  # honouring is the kind of thing terminal emulators eventually
-  # fix. If new measurements come back as 2c for these entries,
-  # they can be deleted from this map and the column will shrink
-  # to 2 cells of emoji-area.
-  EMOJI_WIDTHS='{
-    ":arrow_down:":            1,
-    ":arrow_up:":              1,
-    ":recycle:":               1,
-    ":pencil2:":               1,
-    ":card_file_box:":         1,
-    ":building_construction:": 1,
-    ":alembic:":               1,
-    ":label:":                 1,
-    ":wastebasket:":           1,
-    ":coffin:":                1,
-    ":airplane:":              1
-  }'
-
-  jq -r -L "$PICK_LIB_DIR" --argjson widths "$EMOJI_WIDTHS" '
-    include "pick";   # c_* colours, paint, emit_line (wire contract)
-
-    # Colour helpers (c_*), paint, and emit_line come from pick.jq
-    # (included above). The hidden \x1f tail stays uncoloured — the
-    # shell parser pulls $emoji and $code from there, never from the
-    # coloured visible portion, so colour cannot leak into output.
-
-    # Pre-compute the column geometry once. The emoji column is
-    # padded to the widest cursor-advance in the override map (2 for
-    # the surviving entries); the :code: column is padded to the
-    # longest gitmoji code so the description column starts at a
-    # fixed x-coordinate too.
-    ([$widths[]] + [2] | max) as $emoji_col_w
-    | (.gitmojis | map(.code | length) | max) as $code_col_w
-    | .gitmojis[]
-    # Drop ZWJ-sequence emoji (contain U+200D): zellij 0.44.3 strips
-    # the joiner so they render split with broken width. See the
-    # EMOJI_WIDTHS comment above. Remove this select once a zellij
-    # release preserves zero-width codepoints (PRs #4800 / #4920).
-    | select((.emoji | contains("\u200d")) | not)
-    | .emoji       as $emoji
-    | .code        as $code
-    | .name        as $name
-    | .description as $desc
-    | (.semver // "") as $sv
-    | ($widths[.code] // 2) as $this_emoji_w
-    | (" " * ($emoji_col_w - $this_emoji_w)) as $emoji_pad
-    | ($code + (" " * ($code_col_w - ($code | length)))) as $code_pad
-    | emit_line(
-        ($emoji | paint(c_glyph)) + $emoji_pad + "  "
-        + ($code_pad | paint(c_key)) + "  "
-        + ($desc | paint(c_desc));
-        [$code, $name, $desc, $sv, $emoji]
-      )
-  ' "$GITMOJIS_JSON" > "$tmp_cache" \
-    || die "failed to assemble gitmoji list (jq error)"
-  mv "$tmp_cache" "$LINES_CACHE"
-  trap - EXIT INT TERM
-fi
-
-# The shared fzf palette/layout lives in pick::build_fzf_args (same as
-# pick-glyph, so the two pickers look identical from their zellij
-# wrappers); below we only set what varies via pick_ui. `header_top` is
-# the static mode-indicator hint under the prompt.
-header_top=$'󰌑 : emoji  ·  󰘴 N: :name:'
-typeset -A pick_ui
-pick_ui=(
-  # Height/margin/padding/input-border are overridable by embedders
-  # (pick-gitmoji-zellij sets a tall --height + padding for its
-  # floating pane). The input-border caveat under zellij+ghostty is
-  # documented in pick::build_fzf_args.
-  height       "${PICK_GITMOJI_HEIGHT:-45%}"
-  margin       "${PICK_GITMOJI_MARGIN:-0,0,0,0}"
-  padding      "${PICK_GITMOJI_PADDING:-0,0,0,0}"
-  input_border "${PICK_GITMOJI_INPUT_BORDER:-1}"
-  no_border    "$no_border"
-  multi        "$multi"
-  query        "$query"
-  header       "$header_top"
-  # Two submit keys: Enter -> emoji, Ctrl-N -> :name: (fzf prepends the
-  # pressed key as output line 1; empty = plain Enter = emoji).
-  expect       "ctrl-n"
+pick_args=(
+  --header "Pick a gitmoji"
+  --hints "$hints"
+  --height       "${PICK_GITMOJI_HEIGHT:-45%}"
+  --margin       "${PICK_GITMOJI_MARGIN:-0,0,0,0}"
+  --padding      "${PICK_GITMOJI_PADDING:-0,0,0,0}"
+  --input-border "${PICK_GITMOJI_INPUT_BORDER:-1}"
+  --output field:1               # Enter -> emoji
+  --key-output ctrl-n:field:2    # Ctrl-N -> :name:
+  --key-background alt-enter:field:1
+  --key-background alt-n:field:2
+  --on-items-picked record_gitmoji_recency
+  --cache-state
 )
+if (( multi ));     then pick_args+=( --multi='' ); fi
+if (( copy ));      then pick_args+=( --copy-only ); fi
+if (( resume ));    then pick_args+=( --resume ); fi
+if (( no_border )); then pick_args+=( --no-border ); fi
+if [[ -n "$query" ]]; then pick_args+=( --query "$query" ); fi
 
-# Opt into the shared UX features (all keyed off these globals):
-#   * recency sort   — pick_usage_file (recently-picked float to top)
-#   * resume         — pick_state_file (save/restore query + cursor)
-#   * insert & stay  — pick_stay_binds + pick_self (inject the current
-#                      item without dismissing; alt-enter=emoji,
-#                      alt-n=:name:, mirroring --expect)
-# pick_id_field=1 → the recency/cursor id is the hidden `code` field.
-pick_id_field=1
-pick_usage_file="$CACHE_DIR/usage"
-pick_state_file="$CACHE_DIR/laststate"
-pick_self="$SCRIPT_PATH"
-pick_stay_binds=( "alt-enter:emoji" "alt-n:name" )
-
-# --resume: restore last query before building args; position the
-# cursor afterwards (needs the built feed). No-op without saved state.
-if (( resume )); then
-  pick::load_state
-  if [[ -n "$pick_resume_query" ]]; then
-    pick_ui[query]="$pick_resume_query"
-  fi
-fi
-
-pick::build_fzf_args
-
-# No --source filter for gitmoji; stream the whole cache into fzf.
-pick_input=( cat )
-
-if (( resume )); then
-  pick::resume_pos "$LINES_CACHE"
-fi
-
-pick::run "$LINES_CACHE"
-
-# Resolve the output mode. --mode (CLI flag) wins over the submit key.
-mode="emoji"
-case "$pick_key" in
-  ctrl-n)    mode="name"  ;;
-  "")        mode="emoji" ;;
-esac
-[[ -n "$forced_mode" ]] && mode="$forced_mode"
-
-# pick::emit_selection loops the selection, calls pick_emit_one per line
-# (appending to `result`), prints it, copies when pick_copy is set, and
-# records recency + resume state. pick_emit_one is defined near the top
-# so the --emit subcommand can share it.
-pick::emit_selection
+# Stream the gitmoji rows. The :name: column is padded to the widest code so
+# descriptions line up. Visible columns are colour-coded; the hidden tail
+# (after CHAR(31), fields split on CHAR(30)) carries clean OUTPUT values:
+#   1=emoji  2=:name:
+sqlite3 -escape off "$DB_FILE" "
+  WITH palette AS (
+    SELECT
+      CHAR(27) || '[0m'                AS reset,
+      CHAR(27) || '[38;2;255;255;255m' AS glyph_color,
+      CHAR(27) || '[38;2;137;180;250m' AS name_color,
+      CHAR(27) || '[38;2;127;132;156m' AS meta_color
+  ),
+  geom AS (
+    SELECT MAX(length(shortcode) + 2) AS code_w
+    FROM symbols WHERE tags LIKE '%gitmoji%'
+  )
+  SELECT
+      glyph_color || symbol || reset
+      || IFNULL(printf('%*s', MAX(0, 2 - display_width), ''), '')
+      || '  '
+      || name_color
+      || printf('%-' || code_w || 's', ':' || shortcode || ':')
+      || reset
+      || '  ' || meta_color || description || reset
+      || CHAR(31)
+      || symbol || CHAR(30)
+      || ':' || shortcode || ':'
+  FROM symbols, palette, geom
+  WHERE tags LIKE '%gitmoji%'
+  ORDER BY last_used DESC, shortcode ASC;
+" | pick::start "${pick_args[@]}"

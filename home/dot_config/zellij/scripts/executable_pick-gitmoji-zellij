@@ -6,10 +6,11 @@
 # zellij-modal, which spawns this script as its `--inject` target via
 # the "Ctrl Shift g" keybind in ~/.config/zellij/config.kdl. All this
 # adapter does is configure the floating-pane fzf geometry and exec the
-# general-purpose ~/.local/bin/pick-gitmoji (which fetches & caches the
-# gitmoji.dev catalog under $XDG_CACHE_HOME/pick-gitmoji/); its stdout
-# (the chosen emoji / :code:) is what zellij-modal captures and injects
-# into the pane you came from.
+# general-purpose ~/.local/bin/pick-gitmoji (which reads the gitmoji rows
+# of the symbols database under
+# $XDG_DATA_HOME/fonts/nerd-font/symbols.db); its stdout (the chosen
+# emoji / :code:) is what zellij-modal captures and injects into the pane
+# you came from.
 #
 # Twin of pick-glyph-zellij — identical shape, only the picker binary
 # and PICK_GITMOJI_* env prefix differ.

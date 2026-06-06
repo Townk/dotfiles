@@ -562,7 +562,7 @@ def load_emoji_data(offline: bool, refresh: bool) -> None:
 # sequence ligates into one glyph. So for the uncertain set -- anything with the
 # Emoji property, a variation selector, or more than one (non-VS) scalar -- we
 # print the glyph and read the cursor's column before and after via DSR
-# (ESC [ 6 n -> ESC [ row ; col R), exactly like pick-gitmoji-measure-widths.
+# (ESC [ 6 n -> ESC [ row ; col R).
 
 
 def needs_measure(symbol: str, cp: int) -> bool:

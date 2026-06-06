@@ -1,94 +1,47 @@
 #!/usr/bin/env zsh
 # pick-glyph — fzf-based glyph picker for Nerd Fonts + Unicode symbols.
 #
-# Modeled on wezterm's "Emoji / Character selection" mode. Reads the
-# glyph index produced by the custom Symbols Nerd Font builder at
-#   ${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/glyphs.json
-# (see ~/.local/share/chezmoi/custom-builds/nerd-fonts/HAND-OFF.md)
-# and renders one fzf line per codepoint in the format:
+# Backed by the symbols database built by the custom Symbols Nerd Font
+# pipeline at
+#   ${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/symbols.db
+# (see ~/.local/share/chezmoi/custom-builds/nerd-fonts/symbols-db/). Every
+# row in that DB is a glyph the terminal can actually render (the build runs
+# a renderability probe), so the picker never shows tofu. One fzf line is
+# streamed per row straight out of SQLite — no jq, no assembled-lines cache.
 #
-#   <glyph>  <name> (U+XXXX)  <description if available>
+# Each line shows:
+#   <glyph>  U+XXXX  <name>   :shortcode: :extras: #tags @groups <desc> <kw>
+# The trailing metadata after the name is dark-grey and exists mainly to be
+# searched: the visible string is what fzf matches against (--with-nth=1), so
+# typing a shortcode, a '#tag' (e.g. #emoji), an '@group' (@md/@fa/@usr), a
+# keyword, or words from the description all narrow the list. The name column
+# is fixed at 40 cells (long names truncate with '…') to keep things aligned.
 #
-# Coverage is widened beyond the Symbols Nerd Font's own cmap by
-# merging in a supplementary cache of every codepoint that Python's
-# unicodedata module knows by name — built on demand by the helper
-# `~/.local/lib/pick-glyph-build-suppl` (intentionally off-PATH; it
-# is an internal build step, not a user-facing command) and stored
-# under $XDG_CACHE_HOME. That brings in Box Drawing, IPA, Mathematical
-# Operators, Geometric Shapes, Currency, etc. — anything the font
-# itself doesn't ship.
+# Output modes (each bound to a key via the pick::start API):
+#   Enter / Ctrl-G   raw glyph                    e.g. ❤
+#   Ctrl-N           the primary :shortcode: if the glyph has one, else its
+#                    name                         e.g. :heart:
+#   Ctrl-P           \u{HEX} escape sequence      e.g. \u{2764}
+# The Alt- twins (Alt-Enter/G = glyph, Alt-N = shortcode, Alt-P = code-point)
+# insert WITHOUT closing the picker: the value goes to the originating zellij
+# pane when embedded (PICK_INJECT_PANE / PICK_INJECT_ZELLIJ, set by
+# zellij-modal), otherwise to the system clipboard.
 #
-# Display-name policy mirrors wezterm's character classifier:
-#   * Codepoints in the emoji blocks (SMP 0x1F000–0x1FFFF and BMP
-#     0x2600–0x27BF) display as `EMOJI-<HEXCODE>` — type `EMOJI` to
-#     narrow the picker to just emoji.
-#   * Other plain Unicode entries (anything from the `unicode-only`
-#     or `unicode-stdlib` sources, e.g. Box Drawing, IPA, math
-#     operators) display as `UNICODE-<HEXCODE>` — type `UNICODE`
-#     to narrow to those.
-#   * Curated entries (`nerd-fonts-curated`, `font-awesome-7`)
-#     keep their JSON key (`cod-account`, `fa-rocket`, `md-foo`).
-# The original key is always present in the hidden search field
-# below so `u-2500` still matches.
-#
-# Hidden tail of each line, after a US (\x1f) separator, carries
-# structured per-glyph metadata in RS-delimited (\x1e) subfields:
-#
-#   <visible>\x1f<key>\x1e<source>\x1e<code>\x1e<uniname>\x1e<terms>\n
-#
-# fzf only sees `\x1f` as its delimiter and `--with-nth=1` cuts the
-# display at it. Search isn't restricted via `--nth`, so the hidden
-# subfields (FA terms, the raw u-XXXX key, source name) stay
-# matchable — type `blastoff` to find the rocket icon, or
-# `unicode-stdlib` to limit to the supplement.
-#
-# Three output modes, each bound to a key via fzf's --expect:
-#
-#   Enter (default)
-#   ctrl+g          → raw glyph(s)               e.g. ❤
-#   ctrl-n          → canonical name(s)
-#                       nerd-fonts-curated → nf-<key>   (nf-cod-account)
-#                       font-awesome-7     → <key>      (fa-rocket)
-#                       unicode-*          → Unicode name
-#                                            (BOX DRAWINGS LIGHT HORIZONTAL)
-#                                            or U+<HEX> if unnamed
-#   ctrl-p          → \u{HEX} escape sequence    e.g. \u{2764}
-#
-# The selected mode is indicated in the static header beneath the
-# prompt. With --multi, every selected glyph is rendered in the
-# chosen mode and concatenated on output. --copy still pipes the
-# final string to pbcopy / wl-copy / xclip.
+# Recently-picked glyphs float to the top: each pick stamps `last_used` in the
+# DB and the query orders by it. --resume reopens with the previous query and
+# cursor position restored.
 
 set -eu -o pipefail
 
-GLYPHS_JSON="${PICK_GLYPH_JSON:-${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/glyphs.json}"
-SUPPL_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/pick-glyph"
-SUPPL_CACHE="$SUPPL_DIR/unicode-suppl.json"
-# Absolute path to the supplement builder. Lives in ~/.local/lib/
-# rather than ~/.local/bin/ because it's an internal build step
-# (called only from this script) and we don't want it cluttering
-# the user's $PATH. Override with PICK_GLYPH_BUILD_SUPPL for tests.
-BUILD_SUPPL_BIN="${PICK_GLYPH_BUILD_SUPPL:-$HOME/.local/lib/pick-glyph-build-suppl}"
-# Assembled-lines cache. Rebuilding from jq takes ~600ms on a 46k-line
-# index; cat'ing the same file is ~30ms. We persist the entire
-# source-agnostic line set and apply --source filtering downstream in
-# awk, so a single cache covers all picker invocations.
-LINES_CACHE="$SUPPL_DIR/picker-lines.txt"
-# Materialized recency view of LINES_CACHE. The canonical cache stays
-# source-ordered; this derived file lets warm launches avoid re-sorting
-# the 8+ MB cache by usage on every run.
-ORDERED_LINES_CACHE="$SUPPL_DIR/picker-lines.ordered.txt"
-
-# Shared picker scaffolding (fzf UI, output + clipboard, cache
-# staleness) and the jq wire-format/colour module. Both are off-PATH
-# internal libs in ~/.local/lib; override the dir with PICK_LIB_DIR for
-# tests. The jq module is included by the emitter below and also feeds
-# cache invalidation (editing the wire contract rebuilds the cache).
 PICK_NAME=pick-glyph
 PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
-PICK_JQ="$PICK_LIB_DIR/pick.jq"
 source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" \
   || { print -ru2 -- "pick-glyph: cannot source pick-common.zsh from $PICK_LIB_DIR"; exit 1; }
+
+DB_FILE="${PICK_GLYPH_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/symbols.db}"
+
+# Thin alias to the shared error helper (prefixes $PICK_NAME and exits).
+die() { pick::die "$@"; }
 
 usage() {
   cat <<EOF
@@ -99,391 +52,149 @@ Interactively pick a Nerd Font / Unicode glyph via fzf and print it.
 
 Inside the picker:
   Enter / Ctrl-G     output the raw glyph (default)
-  Ctrl-N             output the canonical name (nf-..., fa-...,
-                    or the Unicode name)
+  Ctrl-N             output the primary name (or the :shortcode:)
   Ctrl-P             output \u{HEX} escape syntax
   Alt-Enter / Alt-G  insert the glyph WITHOUT closing the picker
-  Alt-N / Alt-P      same, but insert the name / code-point
-                     (sink: the originating zellij pane when
-                      embedded, else the system clipboard)
+  Alt-N / Alt-P      same, but insert the :shortcode: / code-point
+                     (sink: the originating zellij pane when embedded,
+                      else the system clipboard)
+  Tab / Ctrl-A       (with --multi) mark / select-all
 
-Recently-picked glyphs float to the top of the list. Use --resume to
-reopen with the previous query and cursor position restored.
+Recently-picked glyphs float to the top. Narrow the list by typing a
+shortcode, a #tag (#emoji, #unicode, ...), an @group (@md, @fa, @usr, ...),
+a keyword, or words from a glyph's description.
 
 Options:
-  -m, --multi             allow selecting multiple glyphs (concatenated on output)
-  -c, --copy              also copy the result to the system clipboard
-  -s, --source SOURCE     restrict the picker to one source. One of:
-                            all          everything (default)
-                            nerd         nerd-fonts-curated + font-awesome-7
-                            fa           font-awesome-7 only
-                            nf-curated   nerd-fonts-curated only
-                            unicode      unicode-only + unicode-stdlib supplement
-  -q, --query QUERY       seed fzf with an initial query string
-                          (tip: type 'EMOJI' to narrow to emoji,
-                                'UNICODE' to narrow to non-nerd-font Unicode)
-      --mode MODE         skip the interactive submit-key prompt and force
-                          glyph | name | unicode (same as Enter / Ctrl-N / Ctrl-P)
-      --resume            reopen with the previous query + cursor restored
-  -j, --json FILE         override the glyphs.json path
-                          (default: \$PICK_GLYPH_JSON or
-                           \$XDG_DATA_HOME/fonts/nerd-font/glyphs.json)
-      --no-border         suppress fzf's rounded border (useful when
-                          embedding inside a zellij/tmux floating pane
-                          that already draws its own border)
-      --rebuild-suppl     force-regenerate the Unicode supplement cache and exit
-                          ($SUPPL_CACHE)
-  -h, --help              show this help
+  -m, --multi      select multiple glyphs (concatenated on output)
+  -c, --copy       copy the result to the clipboard instead of stdout
+  -q, --query Q    seed fzf with an initial query string
+      --resume     reopen with the previous query + cursor restored
+      --no-border  suppress fzf's border (for embedding in a bordered pane)
+      --db FILE    override the symbols.db path
+  -h, --help       show this help
 
 Examples:
-  pick-glyph                       # interactive picker, print glyph to stdout
-  pick-glyph -c -q rocket          # find rocket icons, copy to clipboard
-  pick-glyph -s fa -m -c           # multi-select from FA 7, copy concatenated
-  pick-glyph -q EMOJI              # filter the picker to emoji codepoints
-  pick-glyph -q '2500'             # jump to BOX DRAWINGS LIGHT HORIZONTAL
+  pick-glyph                  # interactive picker, print the glyph
+  pick-glyph -c -q rocket     # find rocket icons, copy to clipboard
+  pick-glyph -m -q '#fa'      # multi-select from Font Awesome
 EOF
 }
 
-# Thin alias to the shared error helper (prefixes $PICK_NAME and exits).
-die() { pick::die "$@"; }
-
 multi=0
-pick_copy=0
-src=all
+copy=0
 query=""
-rebuild_suppl=0
-forced_mode=""
-no_border=0
 resume=0
-emit_mode=""
+no_border=0
 
 while (( $# > 0 )); do
   case "$1" in
-    -m|--multi)        multi=1; shift ;;
-    -c|--copy)         pick_copy=1; shift ;;
-    -s|--source)       [[ $# -ge 2 ]] || die "missing arg for $1"; src="$2";          shift 2 ;;
-    -q|--query)        [[ $# -ge 2 ]] || die "missing arg for $1"; query="$2";        shift 2 ;;
-    -j|--json)         [[ $# -ge 2 ]] || die "missing arg for $1"; GLYPHS_JSON="$2";  shift 2 ;;
-    --mode)            [[ $# -ge 2 ]] || die "missing arg for $1"; forced_mode="$2";  shift 2 ;;
-    --emit)            [[ $# -ge 2 ]] || die "missing arg for $1"; emit_mode="$2";    shift 2 ;;
-    --resume)          resume=1; shift ;;
-    --no-border)       no_border=1; shift ;;
-    --rebuild-suppl)   rebuild_suppl=1; shift ;;
-    -h|--help)         usage; exit 0 ;;
-    --)                shift; break ;;
+    -m|--multi)   multi=1; shift ;;
+    -c|--copy)    copy=1; shift ;;
+    -q|--query)   [[ $# -ge 2 ]] || die "missing arg for $1"; query="$2"; shift 2 ;;
+    --db)         [[ $# -ge 2 ]] || die "missing arg for $1"; DB_FILE="$2"; shift 2 ;;
+    --resume)     resume=1; shift ;;
+    --no-border)  no_border=1; shift ;;
+    -h|--help)    usage; exit 0 ;;
+    --)           shift; break ;;
     *) die "unknown arg: $1 (try --help)" ;;
   esac
 done
 
-case "$forced_mode" in
-  ""|glyph|name|unicode) ;;
-  *) die "invalid --mode: $forced_mode (expected glyph|name|unicode)" ;;
-esac
-case "$emit_mode" in
-  ""|glyph|name|unicode) ;;
-  *) die "invalid --emit: $emit_mode (expected glyph|name|unicode)" ;;
-esac
+pick::need sqlite3
+[[ -f "$DB_FILE" ]] || die "symbols DB not found: $DB_FILE
+Build it with: chezmoi apply (runs the symbols-db hook)"
 
-# Per-line output. pick::split_tail fills pick_fields from the hidden
-# tail; we ignore the ANSI-coloured visible portion and pull every
-# output-bound field from the plain tail so colour can never leak.
-# Defined early so the `--emit` subcommand (below) and the interactive
-# emit loop share one renderer. Tail layout (kept in sync with the jq
-# emitter below):
-#   [1]=key [2]=source [3]=code [4]=uniname [5]=name [6]=searchblob [-1]=char
-#
-# `name` mode emits the canonical identifier for curated icons and the
-# actual Unicode name for synthetic entries, falling back to U+HEX when
-# the Unicode name is unavailable.
-pick_emit_one() {
-  pick::split_tail "$1"
-  # `:-` guards keep `set -u` from aborting on a tail-less line (e.g. an
-  # insert-and-stay keypress over an empty result set).
-  case "$mode" in
-    glyph)   result+="${pick_fields[-1]:-}" ;;        # raw char
-    unicode) result+="\\u{${pick_fields[3]:-}}" ;;    # \u{HEX} escape
-    name)
-      case "${pick_fields[2]:-}" in
-        unicode-only|unicode-stdlib)
-          result+="${pick_fields[4]:-U+${pick_fields[3]:-}}"
-          ;;
-        *)
-          result+="${pick_fields[5]:-}"
-          ;;
-      esac
-      ;;
-  esac
+# Recency lives in the DB, not a scratch file: the --on-items-picked hook
+# stamps last_used on every picked glyph so the next launch floats it up (the
+# query orders by last_used DESC). Field 1 of the hidden tail is the glyph
+# itself, which is the symbols-table primary key.
+record_glyph_recency() {
+  (( $# )) || return 0
+  local now sym vals=""
+  now=$(date +%s)
+  for sym in "$@"; do
+    [[ -z "$sym" ]] && continue
+    sym=${sym//\'/\'\'}   # SQL-escape single quotes
+    vals+="'${sym}',"
+  done
+  [[ -z "$vals" ]] && return 0
+  sqlite3 "$DB_FILE" "UPDATE symbols SET last_used=$now WHERE symbol IN (${vals%,});"
 }
 
-# Hidden subcommand: `pick-glyph --emit MODE -- <line>` renders a single
-# cache line and prints it WITHOUT a trailing newline (so a zellij
-# write-chars / clipboard paste doesn't auto-submit), then exits. This
-# is what the insert-without-dismiss fzf binds call on the current line;
-# it needs neither the cache nor fzf, so it returns before all that.
-if [[ -n "$emit_mode" ]]; then
-  mode="$emit_mode"; result=""
-  pick_emit_one "${1:-}"
-  printf '%s' "$result"
-  exit 0
+# Geometry/UI is overridable by embedders (pick-glyph-zellij sets a tall
+# height + side padding for its floating pane). The hint line shows the submit
+# keys, the insert-and-stay (Alt) keys, and — only with --multi — the marking
+# keys (so fzf never adds a second header row).
+hints=$'󰘴 G: glyph  ·  󰘴 N: name  ·  󰘴 P: code-point  ·  󰘵 G/N/P: insert'
+if (( multi )); then
+  hints+=$'  ·  ⭾ : select  ·  󰘴 A: select-all'
 fi
 
-pick::need jq
-pick::need python3 "needed to build the Unicode supplement"
-[[ -r "$GLYPHS_JSON" ]] || die "glyph index not readable: $GLYPHS_JSON
-Build it with: ~/.local/share/chezmoi/custom-builds/nerd-fonts/build-updated-font.sh"
-
-# Build (or refresh) the supplement cache. The builder lives in
-# ~/.local/lib/ (off-PATH internal helper) and emits an idempotent
-# JSON of every named codepoint outside the font itself. The warm path
-# skips the builder entirely; it runs only when the supplement is missing,
-# older than the builder, or explicitly requested with --rebuild-suppl.
-mkdir -p "$SUPPL_DIR"
-[[ -x "$BUILD_SUPPL_BIN" ]] \
-  || die "supplement builder not executable: $BUILD_SUPPL_BIN
-(set PICK_GLYPH_BUILD_SUPPL or run \`chezmoi apply\`)"
-if (( rebuild_suppl )); then
-  "$BUILD_SUPPL_BIN" --force "$SUPPL_CACHE"
-  exit 0
-fi
-if [[ ! -s "$SUPPL_CACHE" || "$BUILD_SUPPL_BIN" -nt "$SUPPL_CACHE" ]]; then
-  "$BUILD_SUPPL_BIN" "$SUPPL_CACHE"
-fi
-
-# --source flag validation. The actual filter is applied downstream
-# (after the cache, before fzf) as a streaming awk predicate on the
-# hidden `source` field — that way a single cache covers all sources.
-case "$src" in
-  all|nerd|fa|nf-curated|unicode) ;;
-  *) die "unknown --source: $src (try --help)" ;;
-esac
-
-# Determine whether the assembled-lines cache needs rebuilding. We
-# invalidate on a missing/empty cache or on any of these being newer:
-#   * the input JSON (font index) or the unicode supplement
-#   * this script (the jq emitter / line format may have changed)
-#   * the shared pick.jq (the colour/wire contract may have changed)
-# so the cached line layout always matches the parser that reads it.
-SCRIPT_PATH="${(%):-%x}"
-
-# Cache layout: one line per glyph, source-agnostic, three visible
-# columns then the hidden \x1f-delimited tail:
-#
-#   <glyph>  <NAME (U-CODE)>  <DESCRIPTION>\x1f<key>\x1e<source>\x1e<CODE>\x1e<uniname>\x1e<name>\x1e<searchblob>
-#
-# The glyph column is padded to a fixed 2 cells (per-codepoint cell
-# width from the supplement; font glyphs default to 1) so NAME starts
-# at a consistent column. NAME and the code-point ride together as a
-# single unit padded to a layout constant ($name_col in the jq) so the
-# DESCRIPTION column lines up; the code-point itself is NOT aligned
-# (name lengths vary too much). Rows whose name+code-point overrun the
-# constant overflow (description starts later) and --no-hscroll cuts
-# them on the right. Description-less curated rows get no padding. NAME
-# is the canonical identifier shown AND emitted by ^N — see the $name
-# policy in the jq below; it's duplicated into the tail (field 5) so
-# the shell emitter reads exactly what's displayed.
-#
-# fzf uses \x1f as its --delimiter and --with-nth=1 cuts the display
-# there. \x1e separates the structured tail's subfields (key, source,
-# code, unicode-name, name, search blob). Search is NOT restricted via
-# --nth, so queries hit the tail too — type `blastoff` to find the
-# rocket icon, `unicode-stdlib` to limit to the supplement.
-if pick::cache_stale "$LINES_CACHE" "$GLYPHS_JSON" "$SUPPL_CACHE" "$SCRIPT_PATH" "$PICK_JQ"; then
-  tmp_cache=$(mktemp "${LINES_CACHE}.XXXXXX") || die "could not create temp cache"
-  # Best-effort cleanup if jq fails mid-write.
-  cleanup_tmp_cache() { rm -f "$tmp_cache"; }
-  trap cleanup_tmp_cache EXIT INT TERM
-
-  # The supplement is merged in via --slurpfile; we union the two
-  # glyph dicts with the font-derived primary winning on codepoint
-  # collisions (font already has its own glyph for them). No filter
-  # is applied at jq level — --source is handled downstream.
-  jq -r -L "$PICK_LIB_DIR" --slurpfile suppl "$SUPPL_CACHE" '
-    include "pick";   # c_* colours, paint, emit_line (wire contract)
-
-    # --- helpers ---
-    def hex_to_int:
-      ascii_downcase
-      | reduce (explode[]) as $c (0;
-          . * 16 +
-            (if   $c >= 97 then $c - 87       # a-f
-             elif $c >= 48 then $c - 48       # 0-9
-             else 0 end));
-
-    def is_emoji_cp:
-      hex_to_int as $n
-      | ($n >= 126976 and $n <= 131071)   # 0x1F000-0x1FFFF (SMP emoji blocks)
-        or ($n >= 9728 and $n <= 10175);   # 0x2600-0x27BF  (misc symbols + dingbats)
-
-    # Right-pad helper: n spaces, or "" for n<=0. jq returns null for
-    # `" " * 0`, which would poison the surrounding string concat, so
-    # we guard explicitly.
-    def sp($n): if $n > 0 then " " * $n else "" end;
-
-    # Width of the "NAME (U+CODE)" block, in cells. The description
-    # column is aligned to start right after it. This is a LAYOUT
-    # CONSTANT, not a data max: the true max name (~48) belongs to
-    # curated icons that carry NO description, so aligning to it would
-    # only add dead gap to the rows that do have one. Rows whose
-    # name+code-point exceed this overflow (their description starts
-    # later); --no-hscroll truncates those on the right. Tune to taste.
-    43 as $name_col
-
-    # Colour helpers (c_*), paint, and emit_line are provided by
-    # pick.jq (included above). The hidden structured tail stays
-    # uncoloured — the shell parser pulls $char and metadata from
-    # there, never from the coloured visible portion, so colour can
-    # never leak into script output.
-
-    # --- merge font + supplement, font wins on codepoint collisions ---
-    | .glyphs as $primary
-    | ($suppl[0].glyphs // {}) as $extra
-    | ([$primary | to_entries[] | .value.code | ascii_downcase]
-       | reduce .[] as $c ({}; .[$c] = true)) as $seen
-    | ($primary | to_entries)
-      + ($extra
-          | to_entries
-          | map(select(($seen[(.value.code | ascii_downcase)] // false) | not)))
-
-    # --- emit picker lines in ONE streaming pass (no per-row object
-    #     array or width scans — that two-pass form was the cache-build
-    #     slowdown). Three visible columns:
-    #       <glyph>  <NAME (U+CODE)>  <DESCRIPTION>
-    #     The glyph is padded to a fixed 2 cells (via its width) so NAME
-    #     starts at a consistent column; NAME and the code-point ride
-    #     together as one unit, padded to $name_col so the DESCRIPTION
-    #     column lines up. Padding is applied only when a description is
-    #     present, so the (description-less) curated icon rows stay free
-    #     of trailing whitespace. ---
-    | .[]
-    | .key as $key
-    | .value as $v
-    | ($v.code | ascii_upcase) as $code
-    | ($v.source // "") as $source
-    | ($v.unicode_name // "") as $uniname
-    | (($v.code | is_emoji_cp)
-        or $source == "unicode-only"
-        or $source == "unicode-stdlib") as $synth
-    # NAME column. Synthetic codepoints surface as EMOJI-/UNICODE-<hex>;
-    # curated keep their usable class name. The actual Unicode name still
-    # rides in tail field 4 for ^N output on unicode-only entries.
-    | (if   ($v.code | is_emoji_cp) then "EMOJI-" + $code
-       elif $source == "unicode-only" or $source == "unicode-stdlib" then "UNICODE-" + $code
-       elif $source == "nerd-fonts-curated" then "nf-" + $key
-       else $key end) as $name
-    | (if $synth then c_auto else c_key end) as $cname
-    | ([$v.description, $uniname]
-        | map(select(. != null and . != ""))
-        | unique | join(" — ")) as $desc
-    | ([$key,
-        ($v.terms      // [] | join(" ")),
-        ($v.styles     // [] | join(" ")),
-        ($v.collection // "")]
-        | map(select(. != "")) | join(" ")) as $blob
-    | ("(U+" + $code + ")") as $codedisp
-    # Cells used by "NAME (U+CODE)" = name + one space + code-point.
-    | (($name | length) + 1 + ($codedisp | length)) as $seg_len
-    | emit_line(
-        ($v.char | paint(c_glyph)) + sp(2 - ($v.width // 1)) + "  "
-        + ($name | paint($cname))
-        + " " + ($codedisp | paint(c_code))
-        + (if $desc != ""
-           then sp($name_col - $seg_len) + "  " + ($desc | paint(c_desc))
-           else "" end);
-        [$key, $source, $code, $uniname, $name, $blob, $v.char]
-      )
-  ' "$GLYPHS_JSON" > "$tmp_cache" \
-    || die "failed to assemble glyph list (jq error)"
-  mv "$tmp_cache" "$LINES_CACHE"
-  trap - EXIT INT TERM
-fi
-
-# Source filter applied as a streaming awk predicate on the hidden
-# `source` field (column 2 when splitting on \x1e — column 1 is
-# everything up to and including the key, since the first separator
-# in the line is \x1f, not \x1e).
-RS_FS=$'\x1e'
-# `pick_input` is the command pick::run streams the cache through into
-# fzf — here, the --source predicate (or a no-op `cat` for "all").
-case "$src" in
-  all)         pick_input=( cat ) ;;
-  nerd)        pick_input=( awk -F "$RS_FS" '$2 == "nerd-fonts-curated" || $2 == "font-awesome-7"' ) ;;
-  fa)          pick_input=( awk -F "$RS_FS" '$2 == "font-awesome-7"' ) ;;
-  nf-curated)  pick_input=( awk -F "$RS_FS" '$2 == "nerd-fonts-curated"' ) ;;
-  unicode)     pick_input=( awk -F "$RS_FS" '$2 == "unicode-only" || $2 == "unicode-stdlib"' ) ;;
-esac
-
-# The shared fzf palette/layout (matching the user's bare-fzf UI) lives
-# in pick::build_fzf_args; below we only set what varies via pick_ui.
-# `header_top` is the static mode-indicator hint rendered under the
-# prompt (the Ctrl-G/Ctrl-N/Ctrl-P keys mirror the --expect submit keys).
-header_top=$'󰘴 G : glyph  ·  󰘴 N: name  ·  󰘴 P: code-point'
-typeset -A pick_ui
-pick_ui=(
-  # Height/margin/padding/input-border are overridable by embedders
-  # (e.g. pick-glyph-zellij sets a tall --height and adds padding for
-  # its floating pane). The input-border × horizontal-margin caveat
-  # under zellij+ghostty is documented in pick::build_fzf_args.
-  height       "${PICK_GLYPH_HEIGHT:-45%}"
-  margin       "${PICK_GLYPH_MARGIN:-0,0,0,0}"
-  padding      "${PICK_GLYPH_PADDING:-0,0,0,0}"
-  input_border "${PICK_GLYPH_INPUT_BORDER:-1}"
-  no_border    "$no_border"
-  multi        "$multi"
-  query        "$query"
-  header       "$header_top"
-  # Three submit-with-format keys; fzf prepends the pressed key as
-  # line 1 of its output (empty for plain Enter, mapped to glyph).
-  expect       "ctrl-g,ctrl-p,ctrl-n"
+pick_args=(
+  --header "Pick a glyph"
+  --hints "$hints"
+  --height       "${PICK_GLYPH_HEIGHT:-35%}"
+  --margin       "${PICK_GLYPH_MARGIN:-0,0,0,0}"
+  --padding      "${PICK_GLYPH_PADDING:-1,1,1,1}"
+  --input-border "${PICK_GLYPH_INPUT_BORDER:-1}"
+  --output field:1                 # Enter -> glyph
+  --key-output ctrl-g:field:1      # Ctrl-G -> glyph
+  --key-output ctrl-n:field:7      # Ctrl-N -> name or :shortcode:
+  --key-output ctrl-p:field:3      # Ctrl-P -> \u{HEX}
+  --key-background alt-enter:field:1
+  --key-background alt-g:field:1
+  --key-background alt-n:field:7
+  --key-background alt-p:field:3
+  --on-items-picked record_glyph_recency
+  --cache-state
 )
+if (( multi ));     then pick_args+=( --multi='' ); fi
+if (( copy ));      then pick_args+=( --copy-only ); fi
+if (( resume ));    then pick_args+=( --resume ); fi
+if (( no_border )); then pick_args+=( --no-border ); fi
+if [[ -n "$query" ]]; then pick_args+=( --query "$query" ); fi
 
-# Opt into the shared UX features (all keyed off these globals):
-#   * recency sort   — pick_usage_file (recently-picked float to top)
-#   * resume         — pick_state_file (save/restore query + cursor)
-#   * insert & stay  — pick_stay_binds + pick_self (inject the current
-#                      item without dismissing; alt-enter/alt-g=glyph,
-#                      alt-n=name, alt-p=code-point, mirroring --expect)
-# pick_id_field=1 → the recency/cursor id is the hidden `key` field.
-pick_id_field=1
-pick_usage_file="$SUPPL_DIR/usage"
-pick_ordered_cache_file="$ORDERED_LINES_CACHE"
-pick_state_file="$SUPPL_DIR/laststate"
-pick_self="$SCRIPT_PATH"
-pick_stay_binds=( "alt-enter:glyph" "alt-g:glyph" "alt-n:name" "alt-p:unicode" )
-
-# --resume: restore the last query (via pick_ui[query]) before building
-# the args, then position the cursor on the last item afterwards (it
-# needs the built feed). Skip if there's no saved state.
-if (( resume )); then
-  pick::load_state
-  if [[ -n "$pick_resume_query" ]]; then
-    pick_ui[query]="$pick_resume_query"
-  fi
-fi
-
-pick::build_fzf_args
-
-if (( resume )); then
-  pick::resume_pos "$LINES_CACHE"
-fi
-
-# Run fzf over the (source-filtered) cache. pick::run streams the cache
-# through pick_input asynchronously, handles the 130 cancel path, and
-# splits --print-query / --expect, leaving pick_query / pick_key /
-# pick_selection set on success.
-pick::run "$LINES_CACHE"
-
-# Resolve the output mode. --mode (CLI flag) wins over the submit key,
-# so callers can script around the interactive picker.
-mode="glyph"
-case "$pick_key" in
-  ctrl-p)    mode="unicode" ;;
-  ctrl-n)    mode="name"    ;;
-  "")        mode="glyph"   ;;
-esac
-[[ -n "$forced_mode" ]] && mode="$forced_mode"
-
-# pick::emit_selection loops the selection, calls pick_emit_one per line
-# (each appends to `result`), prints the result, copies it when
-# pick_copy is set, and records recency + resume state. pick_emit_one
-# is defined near the top so the --emit subcommand can share it.
-pick::emit_selection
+# Stream straight off idx_symbols_recency. Visible columns are colour-coded;
+# the hidden tail (after CHAR(31), fields split on CHAR(30)) carries clean,
+# uncoloured OUTPUT values so ANSI never leaks into stdout:
+#   1=glyph  2=name  3=\u{HEX}  4=tags  5=description  6=search-blob
+#   7=:shortcode: (or name)
+sqlite3 -escape off "$DB_FILE" "
+  WITH palette AS (
+    SELECT
+      CHAR(27) || '[0m'                AS reset,
+      CHAR(27) || '[38;2;255;255;255m' AS glyph_color,
+      CHAR(27) || '[38;2;147;153;178m' AS text_color,
+      CHAR(27) || '[38;2;137;180;250m' AS name_color,
+      CHAR(27) || '[38;2;127;132;156m' AS meta_color
+  )
+  SELECT
+      glyph_color || symbol || reset
+      || IFNULL(printf('%*s', MAX(0, 2 - display_width), ''), '')
+      || '  '
+      || text_color || printf('%-8s', printf('U+%04X', code_point))
+      || '  '
+      || name_color
+      || CASE WHEN length(name) > 40 THEN substr(name, 1, 39) || '…'
+              ELSE printf('%-40s', name) END
+      || reset
+      || ' ' || meta_color
+      || CASE WHEN shortcode <> '' THEN ' :' || shortcode || ':' ELSE '' END
+      || CASE WHEN extra_shortcodes <> '' THEN
+             ' :' || REPLACE(extra_shortcodes, ' ', ': :') || ':' ELSE '' END
+      || CASE WHEN tags <> '' THEN ' #' || REPLACE(tags, ' ', ' #') ELSE '' END
+      || CASE WHEN source_keys <> '' THEN ' @' || REPLACE(source_keys, ' ', ' @') ELSE '' END
+      || CASE WHEN description <> '' THEN ' ' || description ELSE '' END
+      || CASE WHEN keywords <> '' THEN ' ' || keywords ELSE '' END
+      || reset
+      || CHAR(31)
+      || symbol || CHAR(30)
+      || name || CHAR(30)
+      || '\u{' || printf('%X', code_point) || '}' || CHAR(30)
+      || tags || CHAR(30)
+      || description || CHAR(30)
+      || shortcode || ' ' || extra_shortcodes || ' ' || source_keys || ' ' || keywords || CHAR(30)
+      || CASE WHEN shortcode <> '' THEN ':' || shortcode || ':' ELSE name END
+  FROM symbols, palette
+  ORDER BY last_used DESC, name ASC;
+" | pick::start "${pick_args[@]}"

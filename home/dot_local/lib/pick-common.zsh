@@ -9,35 +9,25 @@
 # cache onward — the fzf flag/palette block, border handling, the
 # NBSP-terminated key-hint line, running fzf, the --expect key split, the
 # cancel (exit 130) path, and the per-selection emit + clipboard loop.
-# Each picker keeps "layer 1": acquiring its data and assembling its
-# colour-formatted LINES_CACHE (via a jq emitter that uses pick.jq's
-# emit_line contract).
+# Each picker keeps "layer 1": acquiring its data and producing its
+# colour-formatted lines (via a jq emitter that uses pick.jq's emit_line
+# contract, or by streaming straight from SQLite).
 #
-# Four optional UX features live here too, enabled by the picker
-# setting a few globals (all opt-in, so a bare picker still works):
-#   * Recency sort   — set `pick_usage_file`: recently-chosen items are
-#                      floated to the top of the list (then the normal
-#                      order). `--tiebreak=index` makes input order the
-#                      tiebreak, so this just reorders the fed lines.
-#                      Optional `pick_ordered_cache_file` materializes
-#                      that order so large pickers avoid sorting on
-#                      every launch.
-#   * Resume         — set `pick_state_file`: the final query + cursor
-#                      item are saved on exit; a `--resume` launch
-#                      restores both (query via --query, cursor via
-#                      `start:pos(N)` computed with a `fzf --filter`
-#                      pass so it's robust to recency reordering).
-#   * Selector mode  — set `pick_ui[selector_mode]=1` to start in a
-#                      browse-only UI. Optional `selector_shortcuts`
-#                      adds 1-9 row shortcuts and `selector_nav` adds
-#                      j/k movement; slash enters search and ctrl-u
-#                      clears/hides search by default.
-#   * Insert & stay  — set `pick_stay_binds` (+ `pick_self`): bind keys
-#                      that inject the current item without dismissing
-#                      the picker, via fzf `execute-silent`. The sink is
-#                      the originating zellij pane when PICK_INJECT_PANE
-#                      / PICK_INJECT_ZELLIJ are exported (the zellij-
-#                      modal embed), else the system clipboard.
+# Two optional UX features are wired through pick::start flags:
+#   * Resume         — `--cache-state` saves the final query + cursor
+#                      item on exit; a `--resume` launch restores both
+#                      (query via --query, cursor via `start:pos(N)`
+#                      computed with a `fzf --filter` pass so it's robust
+#                      to reordering).
+#   * Selector mode  — `--selector` starts in a browse-only UI.
+#                      `--selector-shortcuts` adds 1-9 row shortcuts and
+#                      `--selector-nav` adds j/k movement; slash enters
+#                      search and ctrl-u clears/hides search by default.
+#
+# Insert-without-dismiss is wired through `--key-background` (see the
+# option list below): the sink is the originating zellij pane when
+# PICK_INJECT_PANE / PICK_INJECT_ZELLIJ are exported (the zellij-modal
+# embed), else the system clipboard.
 #
 # Simple picker API:
 #   PICK_NAME=pick-host source "$HOME/.local/lib/pick-common.zsh"
@@ -72,12 +62,11 @@
 #     | pick::start --output field:1 \
 #         --key-output ctrl-n:field:2 --copy-only
 #
-#   # Statefulness is opt-in. File-based recency/resume (for pickers with no
-#   # backing store) come from the --cache-* flags; DB-backed pickers instead
-#   # use --on-items-picked to record recency themselves (e.g. UPDATE last_used):
+#   # Statefulness is opt-in. File-based resume (for pickers with no backing
+#   # store) comes from --cache-state/--resume; DB-backed pickers record recency
+#   # themselves via --on-items-picked (e.g. UPDATE last_used):
 #   #   ... | pick::start --output field:1 \
 #   #           --on-items-picked record_recency   # record_recency "$@" = ids
-#   # Insert-and-stay still uses pick_stay_binds + pick_self set before the call.
 #
 #   # Supported pick::start options:
 #   #   --output raw|visible|tail|field:N
@@ -87,8 +76,6 @@
 #   #     default newline; e.g. --multi='' to concatenate, --multi=', ' for CSV)
 #   #   --copy-only (send the joined result to the clipboard INSTEAD of stdout)
 #   #   --field-id=N (which hidden tail field is the recency/cursor id; default 1)
-#   #   --cache-usage[=PATH] (opt-in file recency: float recents + record
-#   #     picks; default ${XDG_CACHE_HOME}/pick/<PICK_NAME>/usage)
 #   #   --cache-state[=PATH] (opt-in resume state, restored by --resume;
 #   #     default ${XDG_CACHE_HOME}/pick/<PICK_NAME>/laststate)
 #   #   --resume (restore saved query + cursor; needs --cache-state)
@@ -108,14 +95,9 @@
 #   # one extra cell on each side to leave room for the input-border gutter;
 #   # this remains true when --input-border is 0/none.
 #
-# Advanced picker contract:
-#   * Set PICK_NAME before first use (pick::die prefix).
-#   * Fill `pick_ui`, call pick::build_fzf_args → global `fzf_args`.
-#   * Set `pick_input` to the cache→fzf stream filter (`( cat )`, or an
-#     awk source-filter), then pick::run "$LINES_CACHE" sets pick_query
-#     / pick_key / pick_selection.
-#   * Set `mode` (resolved from pick_key) and define `pick_emit_one
-#     <line>` (appends to global `result`); then pick::emit_selection.
+# Layer-1 helpers for pickers that assemble a cached lines file:
+# pick::cache_stale tells the picker whether to rebuild its LINES_CACHE,
+# and pick::line emits one structured line in the wire format below.
 #
 # Wire format is defined in pick.jq — see pick::split_tail for the
 # shell side of the same contract.
@@ -155,8 +137,8 @@ pick::cache_stale() {
 
 # --- clipboard -----------------------------------------------------
 
-# Echo the first available clipboard-copy command (for the bare-mode
-# stay-insert sink), or nothing if none is found.
+# Echo the first available clipboard-copy command (for the key-background
+# clipboard sink), or nothing if none is found.
 pick::detect_clip() {
   if   command -v pbcopy  >/dev/null 2>&1; then print -r -- "pbcopy"
   elif command -v wl-copy >/dev/null 2>&1; then print -r -- "wl-copy"
@@ -173,78 +155,6 @@ pick::clipboard() {
   elif command -v xclip   >/dev/null 2>&1; then printf '%s' "$s" | xclip -selection clipboard
   else pick::die "no clipboard helper found (pbcopy / wl-copy / xclip)"
   fi
-}
-
-# --- recency sort --------------------------------------------------
-
-# Stream the lines cache to stdout, floating recently-used items to the top
-# (in recency order). The recency id is tail field `pick_id_field` (default 1).
-# The remaining ("cold") lines keep their original order, so the underlying
-# sort is preserved as the fallback once fzf's --tiebreak=index kicks in.
-pick::recency_order_cache() {
-  local cache=$1
-  awk -v idf="${pick_id_field:-1}" '
-    FNR==NR { rank[$0]=FNR; nu=FNR; next }   # usage file: 1 id per line, most-recent first
-    {
-      p = index($0, "\037"); tail = substr($0, p + 1);
-      split(tail, a, "\036"); id = a[idf];
-      if (id in rank) recents[rank[id]] = $0; else rest[++r] = $0;
-    }
-    END {
-      for (i = 1; i <= nu; i++) if (i in recents) print recents[i];
-      for (i = 1; i <= r;  i++) print rest[i];
-    }
-  ' "$pick_usage_file" "$cache"
-}
-
-pick::materialize_ordered_cache() {
-  local cache=$1 ordered=$2
-  [[ -n "${pick_usage_file:-}" && -s "${pick_usage_file}" ]] || return 1
-
-  mkdir -p -- "${ordered:h}" || return 1
-  local tmp
-  tmp=$(mktemp "${ordered}.XXXXXX") || return 1
-  pick::recency_order_cache "$cache" > "$tmp" || {
-    rm -f -- "$tmp"
-    return 1
-  }
-  mv "$tmp" "$ordered"
-}
-
-pick::materialize_ordered_cache_async() {
-  local cache=$1 ordered=$2 usage_file="${pick_usage_file:-}" id_field="${pick_id_field:-1}"
-  [[ -n "$usage_file" && -n "$cache" && -n "$ordered" ]] || return 0
-  (
-    pick_usage_file="$usage_file"
-    pick_id_field="$id_field"
-    pick::materialize_ordered_cache "$cache" "$ordered"
-  ) </dev/null >/dev/null 2>&1 &!
-}
-
-# Stream the lines cache to stdout. When `pick_usage_file` is set and non-empty,
-# recently-used items float to the top. Large pickers can set
-# `pick_ordered_cache_file` to cache that recency ordering between launches.
-pick::ordered_cache() {
-  local cache=$1
-  [[ -n "${pick_usage_file:-}" && -s "${pick_usage_file}" ]] || {
-    cat -- "$cache"
-    return 0
-  }
-
-  if [[ -n "${pick_ordered_cache_file:-}" ]]; then
-    if [[ ! -s "$pick_ordered_cache_file"
-          || "$cache" -nt "$pick_ordered_cache_file"
-          || "$pick_usage_file" -nt "$pick_ordered_cache_file" ]]; then
-      pick::materialize_ordered_cache "$cache" "$pick_ordered_cache_file" || {
-        pick::recency_order_cache "$cache"
-        return 0
-      }
-    fi
-    cat -- "$pick_ordered_cache_file"
-    return 0
-  fi
-
-  pick::recency_order_cache "$cache"
 }
 
 # Prefix each line with a selector-mode display field when 1-9 shortcuts
@@ -281,12 +191,12 @@ pick::selector_wrap() {
   '
 }
 
-# The full producer side of the fzf pipeline: recency-ordered cache
-# piped through the picker's input filter (source filter, or cat), with
+# The full producer side of the fzf pipeline: the lines cache piped
+# through the picker's input filter (source filter, or cat), with
 # optional selector-mode display decoration at the end.
 pick::feed() {
   local -a input; input=( "${pick_input[@]}" ); (( ${#input} )) || input=( cat )
-  pick::ordered_cache "$1" | "${input[@]}" | pick::selector_wrap
+  "${input[@]}" < "$1" | pick::selector_wrap
 }
 
 # Append selector-mode fzf options. This is opt-in so the default picker
@@ -366,8 +276,7 @@ pick::add_selector_mode_binds() {
 # The palette and structural flags are identical across pickers and
 # baked in. --print-query is always set so pick::run can capture the
 # final query for the resume feature; it's consumed internally and
-# never leaks to the picker's stdout. Stay-insert binds (pick_stay_binds)
-# are appended last.
+# never leaks to the picker's stdout.
 pick::build_fzf_args() {
   local NBSP=$'\u00a0'
   typeset -gA pick_ui
@@ -456,7 +365,6 @@ pick::build_fzf_args() {
   # (see pick::start's default), so fzf never adds a second header row.
   (( ${pick_ui[no_hints]:-0} )) || fzf_args+=( --header="$hints"$'\n'"$NBSP" )
 
-  pick::add_stay_binds
   pick::add_selector_mode_binds
 
   # `if` (not `&&`) so an empty query doesn't make a failing test the
@@ -464,40 +372,6 @@ pick::build_fzf_args() {
   if [[ -n "${pick_ui[query]:-}" ]]; then
     fzf_args+=( --query "${pick_ui[query]}" )
   fi
-  return 0
-}
-
-# Append "insert without dismissing" binds. For each "key:mode" in
-# `pick_stay_binds`, bind <key> to an fzf execute-silent that formats
-# the current line in <mode> (reusing the picker's own `--emit MODE`
-# subcommand) and writes it to the sink WITHOUT closing the picker:
-#   * embed (PICK_INJECT_PANE + PICK_INJECT_ZELLIJ set): zellij
-#     write-chars into the originating pane.
-#   * else, if a clipboard helper exists: copy.
-# `pick_self` must be the picker's own path. No-op if neither sink is
-# available or pick_stay_binds is empty.
-pick::add_stay_binds() {
-  (( ${#pick_stay_binds[@]:-0} )) || return 0
-  local self="${pick_self:-}"
-  [[ -n "$self" ]] || return 0
-
-  local embed=0
-  [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_ZELLIJ:-}" ]] && embed=1
-
-  local clip; clip="$(pick::detect_clip)"
-  (( embed )) || [[ -n "$clip" ]] || return 0   # no sink → no stay binds
-
-  local b key m
-  for b in "${pick_stay_binds[@]}"; do
-    key="${b%%:*}"; m="${b#*:}"
-    if (( embed )); then
-      # {} is the current line (fzf shell-quotes it at keypress); the
-      # \$(…) runs the picker's emitter then; --pane-id/path expand now.
-      fzf_args+=( --bind "${key}:execute-silent(${PICK_INJECT_ZELLIJ} action write-chars --pane-id ${PICK_INJECT_PANE} -- \"\$(${self} --emit ${m} -- {})\")" )
-    else
-      fzf_args+=( --bind "${key}:execute-silent(${self} --emit ${m} -- {} | ${clip})" )
-    fi
-  done
   return 0
 }
 
@@ -550,7 +424,6 @@ pick::resume_pos() {
 pick::run() {
   local cache=$1
   local out
-  pick_current_cache="$cache"
   out=$(pick::feed "$cache" | fzf "${fzf_args[@]}") || exit 130
 
   # Output layout: line 1 = query (--print-query), line 2 = --expect
@@ -725,8 +598,8 @@ pick::selector_shortcut_count() {
 # parsing. --key-output maps accept keys to their own output spec; --multi[=SEP]
 # joins a multi-selection (default newline); --copy-only sends the result to the
 # clipboard instead of stdout. Statefulness is opt-in:
-# --cache-usage (file recency), --cache-state + --resume (resume), and
-# --on-items-picked CMD (a post-accept hook for DB recency etc.). --key-background
+# --cache-state + --resume (file resume) and --on-items-picked CMD (a
+# post-accept hook for DB recency etc.). --key-background
 # KEY:SPEC + --on-key-background FUNC add insert-without-dismiss (a FIFO broker
 # bridges fzf's child-shell binds back to an in-process hook).
 pick::start() {
@@ -875,12 +748,6 @@ pick::start() {
       --field-id=*)
         pick_id_field="${1#--field-id=}"; shift
         ;;
-      --cache-usage)
-        pick_usage_file="$pick_cache_dir/usage"; shift
-        ;;
-      --cache-usage=*)
-        pick_usage_file="${1#--cache-usage=}"; shift
-        ;;
       --cache-state)
         pick_state_file="$pick_cache_dir/laststate"; shift
         ;;
@@ -926,9 +793,8 @@ pick::start() {
   done
   (( $# == 0 )) || pick::die "pick::start accepts at most one input file"
 
-  # Opt-in statefulness: --cache-* enables file-based recency/resume; make sure
-  # the parent dir exists so pick::record can write it.
-  if [[ -n "${pick_usage_file:-}" ]]; then mkdir -p -- "${pick_usage_file:h}" 2>/dev/null || true; fi
+  # Opt-in resume: --cache-state saves query+cursor; make sure the parent dir
+  # exists so pick::record can write it.
   if [[ -n "${pick_state_file:-}" ]]; then mkdir -p -- "${pick_state_file:h}" 2>/dev/null || true; fi
 
   if [[ -z "${pick_ui[hints]:-}" ]]; then
@@ -1008,9 +874,9 @@ pick::start() {
   local line formatted result="" first=1
   local -a sel_ids
   # Harvest the id field (field --field-id) when any consumer wants it: the
-  # file-based recorder or the on-items-picked hook.
+  # resume-state recorder or the on-items-picked hook.
   local collect_ids=0
-  if [[ -n "${pick_usage_file:-}" || -n "${pick_state_file:-}" || -n "$on_picked" ]]; then
+  if [[ -n "${pick_state_file:-}" || -n "$on_picked" ]]; then
     collect_ids=1
   fi
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -1031,8 +897,8 @@ pick::start() {
   else
     print -r -- "$result"       # one trailing newline
   fi
-  # File-based recency/resume write-back (non-DB pickers; --cache-* flags).
-  if [[ -n "${pick_usage_file:-}" || -n "${pick_state_file:-}" ]]; then
+  # Resume-state write-back (non-DB pickers; --cache-state flag).
+  if [[ -n "${pick_state_file:-}" ]]; then
     pick::record "${pick_query:-}" "${sel_ids[@]}"
   fi
   # on-items-picked hook: hand the picked ids to the caller (e.g. a DB picker
@@ -1057,10 +923,9 @@ pick::start() {
 pick::split_tail() {
   local tail="${1#*$'\x1f'}"
   local extra_fields=$(( ${pick_display_fields:-1} - 1 ))
-  # If a selector-wrapped line is parsed in a fresh process (e.g. a picker's
-  # --emit subcommand), pick_display_fields may still be unset. The extra
-  # display field is the only place another US separator appears before the
-  # RS-delimited tail, so skip it opportunistically.
+  # If a selector-wrapped line is parsed where pick_display_fields is still
+  # unset, the extra display field is the only place another US separator
+  # appears before the RS-delimited tail, so skip it opportunistically.
   if (( extra_fields <= 0 )) && [[ "$tail" == *$'\x1f'* ]]; then
     extra_fields=1
   fi
@@ -1071,31 +936,8 @@ pick::split_tail() {
   pick_fields=( "${(@ps:\x1e:)tail}" )
 }
 
-# Iterate the selection, calling the picker's `pick_emit_one <line>`
-# (which appends to global `result`). Print the result, optionally copy
-# it, and record usage (recency) + state (resume) for the selection.
-pick::emit_selection() {
-  result=""
-  local -a sel_ids; sel_ids=()
-  local line
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    pick_emit_one "$line"
-    pick::split_tail "$line"
-    sel_ids+=( "$pick_fields[${pick_id_field:-1}]" )
-  done <<< "$pick_selection"
-
-  printf '%s\n' "$result"
-  if (( ${pick_copy:-0} )); then
-    pick::clipboard "$result"
-  fi
-  pick::record "${pick_query:-}" "${sel_ids[@]}"
-  return 0
-}
-
-# Persist resume state (query + first selected id) and update the
-# recency list (selected ids prepended, deduped, capped). No-ops for
-# whichever of pick_state_file / pick_usage_file is unset.
+# Persist resume state (query + first selected id). No-op when
+# pick_state_file is unset.
 pick::record() {
   emulate -L zsh
   local q=$1; shift
@@ -1103,20 +945,6 @@ pick::record() {
 
   if [[ -n "${pick_state_file:-}" ]]; then
     { print -r -- "$q"; print -r -- "${sel[1]:-}" } >| "$pick_state_file"
-  fi
-
-  [[ -n "${pick_usage_file:-}" ]] || return 0
-  local -a old new out; local id; local -A seen
-  [[ -s "$pick_usage_file" ]] && old=( ${(f)"$(<$pick_usage_file)"} )
-  new=( "${sel[@]}" "${old[@]}" )
-  for id in "${new[@]}"; do
-    [[ -z "$id" ]] && continue
-    (( ${+seen[$id]} )) && continue
-    seen[$id]=1; out+=( "$id" )
-  done
-  print -rl -- "${out[@]:0:50}" >| "$pick_usage_file"
-  if [[ -n "${pick_ordered_cache_file:-}" && -n "${pick_current_cache:-}" ]]; then
-    pick::materialize_ordered_cache_async "$pick_current_cache" "$pick_ordered_cache_file"
   fi
   return 0
 }
