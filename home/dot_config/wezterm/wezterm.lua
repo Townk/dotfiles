@@ -83,8 +83,31 @@ config.font = wezterm.font_with_fallback({
 	-- emoji codepoints were stripped from it at build time. (WezTerm has no
 	-- per-codepoint font map, so this presentation override is the lever.)
 	{ family = "Apple Color Emoji", assume_emoji_presentation = false },
+	-- Menlo: kept as the broad text fallback — it uniquely carries ~177
+	-- glyphs none of the fonts below have (Georgian Mtavruli, modifier
+	-- letters, some Latin extended).
 	"Menlo",
-	"DengXian",
+	-- Broad-coverage fillers for the glyph picker (symbols.db). WezTerm uses
+	-- the FIRST fallback that has the glyph, so these sit after the curated
+	-- fonts above (Nerd Font / emoji still win) with the universal Arial
+	-- Unicode MS last. (Replaces the old "DengXian" entry, which wasn't
+	-- installed and silently resolved to Helvetica — the reason CJK/Bopomofo
+	-- rendered as tofu.)
+	"Apple Symbols", -- technical / runic / misc symbols
+	"STIX Two Math", -- 𝐀 math alphanumerics (bold/italic/script/fraktur/…)
+	"Songti SC", -- CJK, Bopomofo, CJK/Kangxi radicals (DengXian replacement)
+	"Euphemia UCAS", -- Canadian Aboriginal Syllabics
+	"Hiragino Sans", -- Japanese kana extras
+	"Noto Music", -- musical + Byzantine musical symbols (via font-noto-music)
+	"Noto Sans Symbols 2", -- misc pictographic symbols
+	"Noto Sans Math", -- remaining mathematical symbols
+	"Arial Unicode MS", -- universal catch-all
+	-- Iosevka: final backstop for the Unicode 16 "Symbols for Legacy Computing"
+	-- box-drawings / circle fragments (1FBD0–1FBEF) that WezTerm doesn't draw
+	-- natively and nothing earlier here covers. Last, so it only fills gaps
+	-- (the 1FBCB cross-mark / 1FBCD chevron remain uncovered — Iosevka lacks
+	-- those two; they stay dropped from the picker).
+	"Iosevka",
 })
 config.font_size = 19
 config.line_height = 1.15
