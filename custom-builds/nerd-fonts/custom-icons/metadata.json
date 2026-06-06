@@ -1,8 +1,7 @@
 {
-  "_comment": "Sidecar metadata for the local custom SVG icons in this directory. Keyed by icon name = the SVG filename without its .svg extension (cursor-ai.svg -> 'cursor-ai' -> usr-cursor-ai in glyphs.json; the 'usr-' namespace marks these as your own, distinct from FA 7's 'fa-*'). Every field is optional; anything omitted falls back to a value derived from the file name. Each field maps 1:1 to a column in the final symbols DB. Recognised fields: 'label' (human title -> the symbol's `name`), 'keywords' (fuzzy-search terms -> `keywords`), 'shortcode' (the SINGLE primary shortcode, rendered :like-this: -> the `shortcode` column), 'aliases' (the EXTRA shortcodes, also :like-this: -> `extra_shortcodes`), 'description' (a rich, human-written sentence -> the rich-only `description` column), and 'code' (hex codepoint to PIN this icon to, e.g. \"10fb00\", so it stays put across rebuilds and is safe to hard-code in a TUI). Without 'code' the icon is auto-assigned from CUSTOM_START (0x10fb00+) in sorted-filename order, which can shift when files are added/renamed. Pin codepoints in the custom block (>= 0x10fb00, <= 0x10fffd); avoid the relocated FA range (0x100000..0x10f8ff). Keys starting with _ or $ are ignored, so this header is safe. An 'icons' wrapper object is also accepted if you prefer.",
+  "_comment": "Sidecar metadata for the local custom SVG icons in this directory. Keyed by icon name = the SVG filename without its .svg extension (cursor-ai.svg -> 'cursor-ai' -> usr-cursor-ai in glyphs.json; the 'usr-' namespace marks these as your own, distinct from FA 7's 'fa-*'). The symbol's `name` IS exactly this key (usr-cursor-ai) -- there is no separate title field -- and in a picker the icons group under the '@usr' source anchor (alongside @fa, @md, @cod, ...). Every field is optional; anything omitted falls back to a value derived from the file name. Each field maps 1:1 to a column in the final symbols DB. Recognised fields: 'keywords' (fuzzy-search terms -> `keywords`), 'shortcode' (the SINGLE primary shortcode, rendered :like-this: -> the `shortcode` column), 'aliases' (the EXTRA shortcodes, also :like-this: -> `extra_shortcodes`), 'description' (a rich, human-written sentence -> the rich-only `description` column), and 'code' (hex codepoint to PIN this icon to, e.g. \"10fb00\", so it stays put across rebuilds and is safe to hard-code in a TUI). Without 'code' the icon is auto-assigned from CUSTOM_START (0x10fb00+) in sorted-filename order, which can shift when files are added/renamed. Pin codepoints in the custom block (>= 0x10fb00, <= 0x10fffd); avoid the relocated FA range (0x100000..0x10f8ff). Keys starting with _ or $ are ignored, so this header is safe. An 'icons' wrapper object is also accepted if you prefer.",
   "cursor-ai": {
     "code": "10fb00",
-    "label": "Cursor",
     "keywords": ["cursor", "ai", "cube", "editor", "ide", "anysphere", "code", "agent", "cursor-agent"],
     "shortcode": "cursor-editor",
     "aliases": [],
@@ -10,7 +9,6 @@
   },
   "gm": {
     "code": "10fb01",
-    "label": "General Motors",
     "keywords": ["gm", "general", "motors", "car", "vehicle", "automaker", "automotive"],
     "shortcode": "general-motors",
     "aliases": [],
@@ -18,7 +16,6 @@
   },
   "pi": {
     "code": "10fb02",
-    "label": "Pi Coding Agent",
     "keywords": ["pi", "ai", "agent", "harness"],
     "shortcode": "pi-code",
     "aliases": ["pi-coding-agent"],
@@ -26,7 +23,6 @@
   },
   "layout_panel_up": {
     "code": "10fb03",
-    "label": "Top Panel",
     "keywords": ["split", "top", "pane", "panel"],
     "shortcode": "",
     "aliases": [],
@@ -34,7 +30,6 @@
   },
   "wezterm": {
     "code": "10fb04",
-    "label": "WezTerm",
     "keywords": ["wezterm", "terminal"],
     "shortcode": "wezterm",
     "aliases": [],
@@ -42,7 +37,6 @@
   },
   "zsh": {
     "code": "10fb05",
-    "label": "Zsh",
     "keywords": ["zsh", "z-shell", "terminal"],
     "shortcode": "zsh",
     "aliases": [],
@@ -50,7 +44,6 @@
   },
   "zellij": {
     "code": "10fb06",
-    "label": "Zellij",
     "keywords": ["zellij", "multiplexer", "terminal"],
     "shortcode": "zellij",
     "aliases": [],

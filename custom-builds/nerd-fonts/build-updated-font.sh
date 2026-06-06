@@ -84,7 +84,7 @@
 #                    the glyphs.json key `usr-<name>` (cursor-ai.svg ->
 #                    usr-cursor-ai). Default: <script-dir>/custom-icons.
 #                    Set CUSTOM_ICON_DIR="" to skip. An optional
-#                    <dir>/metadata.json supplies per-icon label/keywords/
+#                    <dir>/metadata.json supplies per-icon keywords/
 #                    shortcode/aliases/description for glyphs.json (the custom-icon analogue of FA's
 #                    icons.json) AND an optional "code" hex codepoint to PIN an
 #                    icon to a fixed slot; missing entries fall back to the file
@@ -1434,9 +1434,6 @@ def main():
         if cp not in font_codepoints or cp in used:
             continue
         meta = custom_meta.get(custom_name, {})
-        label = meta.get("label")
-        if not isinstance(label, str) or not label:
-            label = custom_name.replace("-", " ").replace("_", " ").title()
         keywords = meta.get("keywords")
         if not isinstance(keywords, list) or not keywords:
             keywords = meta.get("terms")  # accept the older field name
@@ -1449,7 +1446,6 @@ def main():
             "char": chr(cp),
             "source": "custom-svg",
             "collection": "custom",
-            "label": label,
             "keywords": keywords,
         }
         shortcode = meta.get("shortcode")

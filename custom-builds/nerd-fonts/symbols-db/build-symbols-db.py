@@ -263,10 +263,10 @@ GLYPHS_TAG = {
     "unicode-only": "unicode",
 }
 
-# Sources whose `source_key` is a human-meaningful glyph key worth surfacing as
-# an `@`-anchor (cod-account, fa-rocket, iec-power, usr-cursor-ai). Excludes
-# unicode-stdlib (key is just `u-<hex>`, i.e. the code point) and the emoji
-# sources (their keys are shortcodes, already surfaced via
+# Sources whose `source_key` carries a meaningful sub-namespace prefix worth
+# surfacing as an `@`-group anchor (cod-, fa-, iec-, usr- -> @cod/@fa/@iec/@usr).
+# Excludes unicode-stdlib (key is just `u-<hex>`, i.e. the code point) and the
+# emoji sources (their keys are shortcodes, already surfaced via
 # `shortcode`/`extra_shortcodes`).
 ICON_KEY_SOURCES = {"nerd-fonts-curated", "font-awesome-7", "custom-svg"}
 
@@ -314,7 +314,9 @@ def ingest_glyphs_json(path: str, custom_meta: dict | None = None) -> list:
             # overlay (and old `fa-`-keyed builds keep matching).
             name = key.split("-", 1)[1] if "-" in key else key
             m = custom_meta.get(name, {})
-            label = m.get("label") or v.get("label")
+            # No title field: the display name falls back to the source_key
+            # (the `usr-<name>` glyph key) via display_name(), exactly like the
+            # other icon-font sources (cod-account, fa-house).
             # Explicit 1:1 field mapping: `shortcode` -> the primary `shortcode`
             # column (platform "custom" leads SHORTCODE_PRIORITY); `aliases` ->
             # `extra_shortcodes`. Either may be omitted/empty.
@@ -330,7 +332,7 @@ def ingest_glyphs_json(path: str, custom_meta: dict | None = None) -> list:
                 symbol=char,
                 source=source,
                 source_key=key,
-                official_name=label,
+                official_name=None,
                 description=str(m.get("description")
                                 or v.get("description") or v.get("comment") or ""),
                 tags=[tag] if tag else [],
@@ -962,10 +964,13 @@ def build_db(db_path, contributions_by_source, measure=True, remeasure=False):
         all_shortcodes = dict.fromkeys(
             code for c in contribs for (_, code, _) in c.shortcodes if code)
         extra_shortcodes = " ".join(c for c in all_shortcodes if c != shortcode)
-        # `@`-anchored glyph keys: the meaningful icon-font keys only (the raw
-        # `u-<hex>` and emoji keys are excluded -- see ICON_KEY_SOURCES).
+        # `@`-anchored source groups: the icon-font sub-namespace each glyph
+        # key belongs to (cod-account -> cod, fa-house -> fa, usr-cursor-ai ->
+        # usr). One token per group so `@md`/`@usr`/... narrow a search to a
+        # whole family; the per-glyph key is the `name`, not a search anchor.
+        # (Raw `u-<hex>` and emoji keys are excluded -- see ICON_KEY_SOURCES.)
         source_keys = " ".join(dict.fromkeys(
-            c.source_key for c in contribs
+            c.source_key.split("-", 1)[0] for c in contribs
             if c.source in ICON_KEY_SOURCES and c.source_key))
         tags = " ".join(dict.fromkeys(t for c in contribs for t in c.tags))
         # Everything else: upstream terms/categories PLUS the non-rich source

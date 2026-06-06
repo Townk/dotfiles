@@ -371,7 +371,7 @@ if pick::cache_stale "$LINES_CACHE" "$GLYPHS_JSON" "$SUPPL_CACHE" "$SCRIPT_PATH"
        elif $source == "nerd-fonts-curated" then "nf-" + $key
        else $key end) as $name
     | (if $synth then c_auto else c_key end) as $cname
-    | ([$v.label, $uniname]
+    | ([$v.description, $uniname]
         | map(select(. != null and . != ""))
         | unique | join(" — ")) as $desc
     | ([$key,
