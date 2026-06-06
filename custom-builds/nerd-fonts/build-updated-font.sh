@@ -81,11 +81,11 @@
 #                    with ./recalibrate-fa.sh <fill> [dy] [custom_dy] -i.
 #   CUSTOM_ICON_DIR  Directory of local *.svg icons to bake into Plane-16 PUA
 #                    glyphs at CUSTOM_START+. The filename (minus .svg) becomes
-#                    the glyphs.json key `fa-<name>` (cursor-ai.svg ->
-#                    fa-cursor-ai). Default: <script-dir>/custom-icons.
+#                    the glyphs.json key `usr-<name>` (cursor-ai.svg ->
+#                    usr-cursor-ai). Default: <script-dir>/custom-icons.
 #                    Set CUSTOM_ICON_DIR="" to skip. An optional
-#                    <dir>/metadata.json supplies per-icon label/terms/aliases/
-#                    comment for glyphs.json (the custom-icon analogue of FA's
+#                    <dir>/metadata.json supplies per-icon label/keywords/
+#                    shortcode/aliases/description for glyphs.json (the custom-icon analogue of FA's
 #                    icons.json) AND an optional "code" hex codepoint to PIN an
 #                    icon to a fixed slot; missing entries fall back to the file
 #                    name and auto-assignment.
@@ -495,7 +495,7 @@ def import_custom_svgs(dest, custom_dir, start_cp, meta, used, usvg_bin=""):
     faithful regardless of source quirks (CSS fills, shapes, clips, transforms).
 
     The icon name is the filename without extension (cursor-ai.svg ->
-    fa-cursor-ai in glyphs.json). Each outline is normalised to roughly the box
+    usr-cursor-ai in glyphs.json). Each outline is normalised to roughly the box
     the FA icons occupy in this combined OTF (em-tall, on the FA descent),
     aspect preserved, centred, advance = one em, so the patcher treats it like
     every other FA glyph. Final sizing is set uniformly for all icons in step
@@ -733,8 +733,8 @@ fi
 [[ -n "${FA_ICONS_JSON}" ]]   || warn "FA icons.json not found; relocation will be a no-op."
 
 # Local custom SVG icons. Every *.svg under CUSTOM_ICON_DIR is imported into a
-# Plane-16 PUA glyph and keyed `fa-<filename>` in glyphs.json (e.g.
-# cursor-ai.svg -> fa-cursor-ai). Codepoints are STABLE: pin one with a "code"
+# Plane-16 PUA glyph and keyed `usr-<filename>` in glyphs.json (e.g.
+# cursor-ai.svg -> usr-cursor-ai). Codepoints are STABLE: pin one with a "code"
 # field in CUSTOM_ICON_DIR/metadata.json, otherwise it is auto-assigned from
 # CUSTOM_START. CUSTOM_START sits above the relocation landing zone — those use
 # native+RESERVED_START (=0x100000), i.e. up to ~0x10F8FF for FA's BMP-PUA
@@ -1422,10 +1422,10 @@ def main():
         used.add(cp)
         by_source["font-awesome-7"] += 1
 
-    # Local custom SVG icons, keyed `fa-<filename>` so they sit alongside the
-    # FA 7 additions in a picker (cursor-ai.svg -> fa-cursor-ai). Per-icon
-    # metadata comes from custom-icons/metadata.json when present, otherwise
-    # falls back to hints derived from the file name.
+    # Local custom SVG icons, keyed `usr-<filename>` (the `usr-` namespace keeps
+    # them distinct from FA 7's `fa-*` additions in a picker; cursor-ai.svg ->
+    # usr-cursor-ai). Per-icon metadata comes from custom-icons/metadata.json
+    # when present, otherwise falls back to hints derived from the file name.
     for custom_name, custom_hex in customs.items():
         try:
             cp = int(custom_hex, 16)
@@ -1437,26 +1437,31 @@ def main():
         label = meta.get("label")
         if not isinstance(label, str) or not label:
             label = custom_name.replace("-", " ").replace("_", " ").title()
-        terms = meta.get("terms")
-        if not isinstance(terms, list) or not terms:
-            terms = [t for t in custom_name.replace("_", "-").split("-") if t]
+        keywords = meta.get("keywords")
+        if not isinstance(keywords, list) or not keywords:
+            keywords = meta.get("terms")  # accept the older field name
+        if not isinstance(keywords, list) or not keywords:
+            keywords = [t for t in custom_name.replace("_", "-").split("-") if t]
         else:
-            terms = [str(t) for t in terms]
+            keywords = [str(t) for t in keywords]
         entry = {
             "code": format(cp, "04x"),
             "char": chr(cp),
             "source": "custom-svg",
             "collection": "custom",
             "label": label,
-            "terms": terms,
+            "keywords": keywords,
         }
+        shortcode = meta.get("shortcode")
+        if isinstance(shortcode, str) and shortcode:
+            entry["shortcode"] = shortcode
         aliases = meta.get("aliases")
         if isinstance(aliases, list) and aliases:
             entry["aliases"] = [str(a) for a in aliases]
-        comment = meta.get("comment") or meta.get("notes")
-        if isinstance(comment, str) and comment:
-            entry["comment"] = comment
-        glyphs["fa-" + custom_name] = entry
+        description = meta.get("description") or meta.get("comment") or meta.get("notes")
+        if isinstance(description, str) and description:
+            entry["description"] = description
+        glyphs["usr-" + custom_name] = entry
         used.add(cp)
         by_source["custom-svg"] += 1
 

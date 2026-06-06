@@ -5,7 +5,7 @@
   Strategy:
     - run_onchange_after_*: chezmoi hashes this template's rendered
       output and re-runs the script whenever the hash changes.
-    - We bake three fingerprints into the rendered script as comments:
+    - We bake three FONT fingerprints into the rendered script as comments:
         1. The installed version of the Homebrew cask `font-fontawesome`.
            When `brew upgrade` bumps that cask, the next `chezmoi apply`
            sees a different hash and re-fires the build prompt.
@@ -15,6 +15,14 @@
            metadata.json). Adding, removing, or editing a custom icon —
            or just retagging it in metadata.json — re-fires the prompt
            too, so the baked-in font + glyphs.json stay in sync.
+
+  This hook tracks only inputs that change the FONT (and therefore
+  glyphs.json). DB-only inputs — the WezTerm font fallback and
+  build-symbols-db.py itself — live in the sibling hook
+  run_onchange_after_symbols-db.sh.tmpl so that, e.g., editing your
+  terminal fallback re-probes the DB WITHOUT a needless font rebuild.
+  (Accepting a font rebuild here still rebuilds the DB afterwards, since
+  new glyphs.json must be re-ingested.)
 
   This script's only job is DETECTION: when a trigger fires it writes a
   marker file and exits 0.  The companion run_after_symbols-nerd-font-
@@ -42,10 +50,13 @@
 #!/bin/bash
 # Symbols Nerd Font (custom build) — change-detection hook.
 #
-# Re-runs automatically when any of the fingerprints below changes:
+# Re-runs automatically when any of the FONT fingerprints below changes:
 #   font-fontawesome cask : {{ if $faVersion }}{{ $faVersion }}{{ else }}(not installed / not macOS){{ end }}
 #   builder script SHA256 : {{ if $builderSHA }}{{ $builderSHA }}{{ else }}(not macOS){{ end }}
 #   custom-icons digest   : {{ if $customIcons }}{{ $customIcons }}{{ else }}(none / not macOS){{ end }}
+#
+# (WezTerm fallback + build-symbols-db.py are tracked separately by
+#  run_onchange_after_symbols-db.sh — they rebuild the DB, not the font.)
 #
 # When a change is detected this script writes a marker file so that the
 # companion run_after_symbols-nerd-font-prompt.sh can show the build

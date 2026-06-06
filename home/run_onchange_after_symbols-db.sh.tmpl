@@ -1,0 +1,76 @@
+{{- /*
+
+  Symbols DB — change detection hook.
+
+  Sibling of run_onchange_after_symbols-nerd-font.sh, but for inputs that
+  affect ONLY the symbols database (not the font / glyphs.json):
+
+    - run_onchange_after_*: chezmoi hashes this template's rendered output
+      and re-runs the script whenever the hash changes.
+    - We bake two DB fingerprints into the rendered script as comments:
+        1. A fingerprint of WezTerm's version + resolved font fallback
+           (`wezterm --version` + `wezterm ls-fonts`). This is byte-for-byte
+           the same digest build-symbols-db.py's render probe stores in its
+           cache, so editing the fallback in wezterm.lua (or upgrading
+           WezTerm) re-fires the prompt; accepting it re-probes the DB
+           against the new fallback. Empty when wezterm isn't on PATH.
+        2. The SHA256 of build-symbols-db.py itself. Editing the ingester
+           re-fires the prompt too.
+
+  Why a separate hook: a fallback edit needs only a DB re-probe, not a
+  ~2-minute font rebuild. The font hook owns FONT inputs (FA cask, builder
+  script, custom icons); this one owns DB-only inputs. A font rebuild still
+  rebuilds the DB inline (new glyphs.json), so the two never get stale
+  relative to each other.
+
+  This script's only job is DETECTION: it writes a marker and exits 0. The
+  companion run_after_symbols-nerd-font-prompt.sh (which runs on EVERY
+  chezmoi apply) reads the marker and shows the interactive prompt when a
+  TTY is available, so a non-interactive apply never loops or blocks on the
+  ~4-minute re-probe.
+
+  macOS-only for now (the DB ingests the darwin-only glyphs.json); exits
+  cleanly elsewhere.
+*/ -}}
+{{- $weztermSig := "" -}}
+{{- $dbScriptSHA := "" -}}
+{{- if eq .chezmoi.os "darwin" -}}
+  {{- $weztermSig = output "sh" "-c" "command -v wezterm >/dev/null 2>&1 || exit 0; t=$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true); { ${t:+$t 30} wezterm --version; ${t:+$t 30} wezterm ls-fonts; } 2>/dev/null | tr -d '\\000' | shasum -a 256 | cut -c1-16" | trim -}}
+  {{- $dbScriptSHA = output "shasum" "-a" "256" (joinPath .chezmoi.workingTree "custom-builds/nerd-fonts/symbols-db/build-symbols-db.py") | trim -}}
+{{- end -}}
+#!/bin/bash
+# Symbols DB — change-detection hook.
+#
+# Re-runs automatically when any of the DB fingerprints below changes:
+#   wezterm font fallback : {{ if $weztermSig }}{{ $weztermSig }}{{ else }}(wezterm not on PATH / not macOS){{ end }}
+#   db ingester SHA256    : {{ if $dbScriptSHA }}{{ $dbScriptSHA }}{{ else }}(not macOS){{ end }}
+#
+# On change it writes a marker so run_after_symbols-nerd-font-prompt.sh can
+# offer a DB-only re-probe on the next interactive `chezmoi apply`.
+#
+# To force a DB re-probe without changing anything else:
+#   touch ~/.local/state/chezmoi/symbols-db-build-pending
+#   chezmoi apply   # (interactively)
+# or invoke the ingester directly:
+#   python3 ~/.local/share/chezmoi/custom-builds/nerd-fonts/symbols-db/build-symbols-db.py
+
+set -eu
+
+{{- if ne .chezmoi.os "darwin" }}
+# DB ingests the darwin-only glyphs.json; nothing to do elsewhere.
+exit 0
+{{- end }}
+
+DB_SCRIPT="{{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/symbols-db/build-symbols-db.py"
+MARKER="${HOME}/.local/state/chezmoi/symbols-db-build-pending"
+
+if [ ! -f "$DB_SCRIPT" ]; then
+  echo "[symbols-db] ingester missing at $DB_SCRIPT — skipping." >&2
+  exit 0
+fi
+
+mkdir -p "$(dirname "$MARKER")"
+printf '%s\n' "{{ if $weztermSig }}{{ $weztermSig }}{{ else }}(unknown){{ end }}" > "$MARKER"
+echo "[symbols-db] change detected; DB re-probe pending (marker written)."
+
+# vim:ft=sh

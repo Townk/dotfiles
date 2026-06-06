@@ -17,9 +17,9 @@ custom-builds/nerd-fonts/
 ├── build-updated-font.sh    ← self-contained builder
 ├── recalibrate-fa.sh        ← fast re-bake of icon sizing (no patcher rerun)
 ├── custom-icons/            ← local *.svg icons baked into the font
-│   ├── metadata.json        ←   optional labels/terms/aliases/comments
-│   ├── cursor-ai.svg        ←   -> fa-cursor-ai
-│   └── gm.svg               ←   -> fa-gm
+│   ├── metadata.json        ←   optional labels/keywords/shortcode/aliases/descriptions
+│   ├── cursor-ai.svg        ←   -> usr-cursor-ai
+│   └── gm.svg               ←   -> usr-gm
 └── build/                   ← created at runtime, gitignored
     ├── nerd-fonts/          ← shallow clone of ryanoasis/nerd-fonts
     ├── work/                ← merged FA OTF, build logs
@@ -106,23 +106,23 @@ depend on the source:
 |------------|--------------------|-----------------------------------------------|
 | `nf-*`     | curated NF glyph   | `collection`, sometimes FA tags, `unicode_name` |
 | `fa-*`     | FA 7 native add-in | `collection`, `label`, `styles`, `terms`, `aliases`, sometimes `relocated_from` |
-| `fa-*`     | local custom SVG   | `source: custom-svg`, `collection: custom`, `label`, `terms` |
+| `usr-*`    | local custom SVG   | `source: custom-svg`, `collection: custom`, `label`, `keywords`, `shortcode`, `aliases`, `description` |
 | `u-*`      | unicode fallback   | `unicode_name`                                |
 
 The `fa-*` prefix is deliberate so FA 7 native additions never collide
 with the curated `nf-fa-*` set even when both reference the same
-codepoint. Local custom SVGs (see below) reuse the same `fa-` prefix —
-their names are chosen by file name so they don't collide with real FA
-icons (e.g. `fa-cursor-ai`, `fa-gm`).
+codepoint. Local custom SVGs (see below) get their own `usr-*` namespace
+so they're instantly distinguishable from the official FA / NF glyphs
+(e.g. `usr-cursor-ai`, `usr-gm`).
 
 ## Custom SVG icons
 
 Drop any `.svg` into `custom-icons/` and the build bakes it into the font
-as a Plane-16 PUA glyph, keyed `fa-<filename>` in `glyphs.json`:
+as a Plane-16 PUA glyph, keyed `usr-<filename>` in `glyphs.json`:
 
 ```
-custom-icons/cursor-ai.svg   ->  fa-cursor-ai
-custom-icons/gm.svg          ->  fa-gm
+custom-icons/cursor-ai.svg   ->  usr-cursor-ai
+custom-icons/gm.svg          ->  usr-gm
 ```
 
 Each SVG is first normalized with [`usvg`](https://github.com/linebender/resvg)
@@ -149,20 +149,28 @@ filename minus `.svg`), and every field is optional:
   "_comment": "this header key is ignored (starts with _)",
   "cursor-ai": {
     "label": "Cursor",
-    "terms": ["cursor", "ai", "cube", "editor", "anysphere"],
-    "aliases": ["cursor-editor"],
-    "comment": "Cursor brand cube logo — 2D light variant."
+    "keywords": ["cursor", "ai", "cube", "editor"],
+    "shortcode": "cursor-editor",
+    "aliases": ["anysphere"],
+    "description": "Cursor (the AI code editor) brand cube logo"
   }
 }
 ```
 
-| field     | effect                                                          |
-|-----------|-----------------------------------------------------------------|
-| `label`   | human title shown in the picker (falls back to title-cased name)|
-| `terms`   | extra fuzzy-search keywords (falls back to name split on `-`)    |
-| `aliases` | alternate names, searchable                                     |
-| `comment` | free-form note, carried verbatim into `glyphs.json`             |
-| `code`    | hex codepoint to **pin** this icon to (e.g. `"10fb00"`)          |
+Every field maps 1:1 to a column in the final symbols DB, so it's obvious what
+to add and where it lands:
+
+| field         | effect                                                          |
+|---------------|-----------------------------------------------------------------|
+| `label`       | human title → the symbol's `name` (falls back to title-cased name)|
+| `keywords`    | extra fuzzy-search terms → `keywords` (falls back to name split on `-`)|
+| `shortcode`   | the single primary shortcode (`:like-this:`) → the `shortcode` column|
+| `aliases`     | the extra shortcodes (`:like-this:`) → `extra_shortcodes`        |
+| `description` | rich, human-written sentence → the rich-only `description` column|
+| `code`        | hex codepoint to **pin** this icon to (e.g. `"10fb00"`)          |
+
+The symbols-db build reads this file directly as the authoritative overlay for
+custom glyphs, so editing it only needs a DB rebuild — not a full font rebuild.
 
 Keys beginning with `_` or `$` are ignored (handy for a file header), and an
 `{"icons": { … }}` wrapper is accepted if you prefer. Icons with no entry —
@@ -172,7 +180,7 @@ defaults.
 ## Codepoint stability (read before hard-coding in a TUI)
 
 The stable identifier is always the `glyphs.json` **name** (`fa-house`,
-`fa-cursor-ai`); resolve name → codepoint at build time if you can. If you must
+`usr-cursor-ai`); resolve name → codepoint at build time if you can. If you must
 hard-code a raw codepoint:
 
 - **Native `fa-*`** (no `relocated_from`): FA's official PUA codepoint. Stable
@@ -204,7 +212,7 @@ Caveats:
   (Illustrator, Figma) usually still import cleanly.
 - Codepoint stability: pin a `code` in `metadata.json` for anything you hard-
   code. Unpinned icons are auto-assigned in sorted-filename order, so adding
-  or renaming a file can shift the unpinned ones (their `fa-<name>` keys stay
+  or renaming a file can shift the unpinned ones (their `usr-<name>` keys stay
   stable regardless). See "Codepoint stability" above.
 
 **All free FA icons are included.** Roughly 1000 of FA Free's 1970 icons
@@ -279,8 +287,9 @@ jq -r '
   | [ .key,
       .value.char,
       (.value.label // .value.unicode_name // ""),
-      ((.value.terms   // []) | join(" ")),
-      ((.value.aliases // []) | join(" "))
+      (((.value.terms // []) + (.value.keywords // [])) | join(" ")),
+      ((.value.aliases // []) | join(" ")),
+      (.value.description // "")
     ] | @tsv
 ' ~/.local/share/fonts/nerd-font/glyphs.json \
 | fzf --delimiter=$'\t' --with-nth=1,2,3 \

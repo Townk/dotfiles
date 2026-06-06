@@ -1,23 +1,31 @@
 {{- /*
 
-  Symbols Nerd Font — interactive build prompter.
+  Symbols Nerd Font / DB — interactive build prompter.
 
-  Runs on EVERY `chezmoi apply`. Checks for the marker file written by
-  run_onchange_after_symbols-nerd-font.sh when a change was detected.
-  If the marker exists and a controlling TTY is available, shows the
-  build prompt and clears the marker on accept or decline.
+  Runs on EVERY `chezmoi apply`. Handles the two markers written by the
+  detection hooks:
 
-  Non-interactive applies (CI, editor hooks, cron) skip the prompt and
-  leave the marker in place so it fires on the next interactive apply.
+    * nerd-font-build-pending   (run_onchange_after_symbols-nerd-font.sh)
+        A FONT input changed (FA cask, builder script, custom icons).
+        Accepting rebuilds the font AND the DB (new glyphs.json must be
+        re-ingested), which also satisfies any pending DB marker.
+
+    * symbols-db-build-pending  (run_onchange_after_symbols-db.sh)
+        A DB-only input changed (WezTerm fallback/version, or the
+        ingester). Accepting re-probes the DB only — no font rebuild.
+
+  When both are pending, the font path runs first and clears both. A
+  non-interactive apply (CI, editor hook, cron) prints a hint and leaves
+  the markers for the next interactive apply — it never loops or blocks on
+  the slow re-probe.
 
 */ -}}
 #!/bin/bash
-# Symbols Nerd Font (custom build) — interactive build prompter.
+# Symbols Nerd Font / DB — interactive build prompter.
 #
-# Runs on every `chezmoi apply`. Only prompts when:
-#   1. A pending-build marker exists  (~/.local/state/chezmoi/nerd-font-build-pending)
-#   2. A controlling terminal is available  (/dev/tty is openable)
-#   3. Not running in CI or CHEZMOI_NONINTERACTIVE
+# Runs on every `chezmoi apply`. Prompts only when a pending marker exists,
+# a controlling terminal is available (/dev/tty openable), and not in CI or
+# CHEZMOI_NONINTERACTIVE.
 
 set -eu
 
@@ -25,17 +33,14 @@ set -eu
 exit 0
 {{- end }}
 
-MARKER="${HOME}/.local/state/chezmoi/nerd-font-build-pending"
+STATE_DIR="${HOME}/.local/state/chezmoi"
+FONT_MARKER="${STATE_DIR}/nerd-font-build-pending"
+DB_MARKER="${STATE_DIR}/symbols-db-build-pending"
 SCRIPT="{{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/build-updated-font.sh"
+DB_SCRIPT="{{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/symbols-db/build-symbols-db.py"
 
 # Fast exit when nothing is pending.
-[ -f "$MARKER" ] || exit 0
-
-if [ ! -x "$SCRIPT" ]; then
-  echo "[symbols-nerd-font] builder missing at $SCRIPT — clearing marker." >&2
-  rm -f "$MARKER"
-  exit 0
-fi
+[ -f "$FONT_MARKER" ] || [ -f "$DB_MARKER" ] || exit 0
 
 # Probe the controlling terminal. chezmoi does not wire fd 0/1 to the
 # terminal, so `test -t 0` is always false here; /dev/tty is the right check.
@@ -43,30 +48,48 @@ HAVE_TTY=0
 if { : </dev/tty; } 2>/dev/null; then HAVE_TTY=1; fi
 
 if [ "$HAVE_TTY" -ne 1 ] || [ -n "${CI:-}" ] || [ -n "${CHEZMOI_NONINTERACTIVE:-}" ]; then
-  cat <<EOF >&2
-[symbols-nerd-font] build pending — re-run chezmoi apply interactively to be prompted.
-[symbols-nerd-font] Or invoke the builder directly:
-                    $SCRIPT --install
-EOF
+  if [ -f "$FONT_MARKER" ]; then
+    echo "[symbols-nerd-font] font build pending — re-run chezmoi apply interactively, or: $SCRIPT --install" >&2
+  fi
+  if [ -f "$DB_MARKER" ]; then
+    echo "[symbols-db] DB re-probe pending — re-run chezmoi apply interactively, or: python3 $DB_SCRIPT" >&2
+  fi
   exit 0
 fi
 
-FA_VERSION="$(cat "$MARKER" 2>/dev/null || true)"
-if [ -z "$FA_VERSION" ] || [ "$FA_VERSION" = "(unknown)" ]; then
-  fa_caption="(font-fontawesome cask not installed)"
-else
-  fa_caption="$FA_VERSION"
-fi
+# Rebuild the symbols DB. Shared by the font-accept path (after a fresh
+# glyphs.json) and the DB-only path. A failure must NOT abort chezmoi apply.
+run_db_build() {
+  if [ -f "$DB_SCRIPT" ]; then
+    echo "[symbols-db] rebuilding symbols DB..."
+    python3 "$DB_SCRIPT" \
+      || echo "[symbols-db] rebuild failed; keeping old DB." >&2
+  fi
+}
 
-cat >/dev/tty <<EOF
+# ── FONT path ────────────────────────────────────────────────────────
+if [ -f "$FONT_MARKER" ]; then
+  if [ ! -x "$SCRIPT" ]; then
+    echo "[symbols-nerd-font] builder missing at $SCRIPT — clearing marker." >&2
+    rm -f "$FONT_MARKER"
+  else
+    FA_VERSION="$(cat "$FONT_MARKER" 2>/dev/null || true)"
+    if [ -z "$FA_VERSION" ] || [ "$FA_VERSION" = "(unknown)" ]; then
+      fa_caption="(font-fontawesome cask not installed)"
+    else
+      fa_caption="$FA_VERSION"
+    fi
+
+    cat >/dev/tty <<EOF
 
 ──────────────────────────────────────────────────────────────────────
   Symbols Nerd Font — custom builder
 
-  A trigger fired: the Font Awesome cask was upgraded, the builder
-  script changed, or a custom icon (custom-icons/*.svg or
-  metadata.json) was added/edited. Rebuilding will produce a fresh
-  Symbols Nerd Font with whatever the cask currently has installed.
+  A FONT trigger fired: the Font Awesome cask was upgraded, the builder
+  script changed, or a custom icon (custom-icons/*.svg or metadata.json)
+  was added/edited. Rebuilding produces a fresh Symbols Nerd Font from
+  whatever the cask currently has, then rebuilds the symbols DB so the
+  picker reflects the new glyphs.json.
 
   Source feeds:
     • ryanoasis/nerd-fonts master      (shallow clone, fast-forwarded)
@@ -75,38 +98,80 @@ cat >/dev/tty <<EOF
   Output:
     • ~/Library/Fonts/SymbolsNerdFont*-Regular.ttf
 
-  Cost: ~2 minutes total. Installs \`fontforge\` from Homebrew on
-  demand (not pinned in your Brewfile, so it gets cleaned up on the
-  next \`system-package brew sync\`).
+  Cost: ~2 min font build + DB rebuild. Installs \`fontforge\` from
+  Homebrew on demand (not pinned in your Brewfile, so it gets cleaned up
+  on the next \`system-package brew sync\`).
 ──────────────────────────────────────────────────────────────────────
 EOF
 
-printf '[symbols-nerd-font] Run the build now? [y/N] ' >/dev/tty
-read -r ans </dev/tty || ans=""
+    printf '[symbols-nerd-font] Run the font build now? [y/N] ' >/dev/tty
+    read -r ans </dev/tty || ans=""
+    case "$ans" in
+      y|Y|yes|YES)
+        rm -f "$FONT_MARKER"
+        echo "[symbols-nerd-font] launching builder..."
+        # --yes auto-confirms internal prompts (clone, brew install, venv).
+        # --install copies the resulting TTFs into ~/Library/Fonts/.
+        if "$SCRIPT" --yes --install; then
+          echo "[symbols-nerd-font] done."
+          run_db_build
+          # The font rebuild regenerated glyphs.json and the DB rebuild above
+          # re-probed against the current fallback, so any pending DB-only
+          # marker is now satisfied.
+          rm -f "$DB_MARKER"
+        else
+          rc=$?
+          echo "[symbols-nerd-font] builder exited $rc; not failing chezmoi apply." >&2
+          echo "[symbols-nerd-font] inspect the log at:" >&2
+          echo "  {{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/build/work/build.log" >&2
+        fi
+        ;;
+      *)
+        rm -f "$FONT_MARKER"
+        echo "[symbols-nerd-font] skipped. Re-run later with:"
+        echo "  $SCRIPT --install"
+        ;;
+    esac
+  fi
+fi
 
-case "$ans" in
-  y|Y|yes|YES)
-    rm -f "$MARKER"
-    echo "[symbols-nerd-font] launching builder..."
-    # --yes auto-confirms internal prompts (clone, brew install, venv).
-    # --install copies the resulting TTFs into ~/Library/Fonts/.
-    # A builder failure must NOT abort chezmoi apply.
-    if "$SCRIPT" --yes --install; then
-      echo "[symbols-nerd-font] done."
-    else
-      rc=$?
-      echo "[symbols-nerd-font] builder exited $rc; not failing chezmoi apply." >&2
-      echo "[symbols-nerd-font] inspect the log at:" >&2
-      echo "  {{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/build/work/build.log" >&2
-    fi
-    ;;
-  *)
-    rm -f "$MARKER"
-    echo "[symbols-nerd-font] skipped. Re-run later with:"
-    echo "  $SCRIPT --install"
-    echo "Or touch the marker to be prompted again on next apply:"
-    echo "  touch $MARKER"
-    ;;
-esac
+# ── DB-only path ─────────────────────────────────────────────────────
+# Reached when a DB input changed on its own (font marker absent, or the
+# font path was declined). A font-accept above clears DB_MARKER, so this
+# won't double-build.
+if [ -f "$DB_MARKER" ]; then
+  cat >/dev/tty <<EOF
+
+──────────────────────────────────────────────────────────────────────
+  Symbols DB — re-probe
+
+  A DB trigger fired: your WezTerm font fallback / version changed, or
+  build-symbols-db.py was edited. Re-probing re-checks every Unicode
+  codepoint against your CURRENT terminal font stack and rewrites the
+  picker database. It does not touch the font.
+
+  Output:
+    • ~/.local/share/fonts/nerd-font/symbols.db
+
+  Cost: up to ~4 min (a full re-probe runs when the fallback changed;
+  otherwise it's a fast incremental rebuild).
+──────────────────────────────────────────────────────────────────────
+EOF
+
+  printf '[symbols-db] Re-probe the symbols DB now? [y/N] ' >/dev/tty
+  read -r ans </dev/tty || ans=""
+  case "$ans" in
+    y|Y|yes|YES)
+      rm -f "$DB_MARKER"
+      run_db_build
+      echo "[symbols-db] done."
+      ;;
+    *)
+      rm -f "$DB_MARKER"
+      echo "[symbols-db] skipped. Re-run later with:"
+      echo "  python3 $DB_SCRIPT"
+      ;;
+  esac
+fi
 
 # vim:ft=sh
