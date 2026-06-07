@@ -1,6 +1,6 @@
 {{- /*
 
-  Non-unicode9 zsh — build hook (macOS only).
+  Non-unicode9 zsh — build hook (Macs only: profiles work + personal).
 
   Builds a zsh WITHOUT --enable-unicode9 so the line editor uses macOS's
   (current) wcwidth() for emoji widths instead of zsh's frozen Unicode 9.0
@@ -10,37 +10,39 @@
 
   run_onchange_after_*: chezmoi re-runs this whenever the rendered output
   changes. We bake the SHA256 of build-zsh.sh into the script below, so editing
-  the builder (including bumping the pinned zsh version inside it) re-fires the
-  build. The builder is otherwise idempotent — a no-op fast path when the
-  correct binary is already installed — so routine applies don't rebuild.
+  the builder re-fires it. The builder is otherwise idempotent — a no-op fast
+  path when the installed binary already matches the clone's commit — so
+  routine applies don't rebuild, and upstream updates are pulled on demand
+  (ZSH_UPDATE=1 bash build-zsh.sh).
 
   This only builds/links the binary. Making it the interactive shell needs a
   one-time `chsh -s ~/.local/bin/zsh` (see custom-builds/zsh/README.md): z4h
   keeps a healthy 5.9.x login shell and re-execs into that same binary rather
   than searching PATH, so the login shell itself must be the new zsh.
 
-  macOS-only: the unicode9 problem was diagnosed there and the recipe is
-  macOS-tuned; exits cleanly elsewhere.
+  Scope: macOS with the work or personal profile (the unicode9 problem is
+  macOS-specific and the recipe is macOS-tuned). Exits cleanly elsewhere.
 */ -}}
+{{- $target := and (eq .chezmoi.os "darwin") (or (eq .profile "work") (eq .profile "personal")) -}}
 {{- $buildSHA := "" -}}
-{{- if eq .chezmoi.os "darwin" -}}
+{{- if $target -}}
   {{- $buildSHA = output "shasum" "-a" "256" (joinPath .chezmoi.workingTree "custom-builds/zsh/build-zsh.sh") | trim -}}
 {{- end -}}
 #!/bin/bash
 # Non-unicode9 zsh — build hook.
 #
 # Re-runs whenever the builder changes:
-#   build-zsh.sh sha256 : {{ if $buildSHA }}{{ $buildSHA }}{{ else }}(not macOS){{ end }}
+#   build-zsh.sh sha256 : {{ if $buildSHA }}{{ $buildSHA }}{{ else }}(out of scope){{ end }}
 #
-# To force a rebuild without editing anything:
-#   rm -rf ~/.local/opt/zsh-nounicode9 && chezmoi apply
-# or run the builder directly:
-#   bash ~/.local/share/chezmoi/custom-builds/zsh/build-zsh.sh
+# To pull upstream + rebuild:
+#   ZSH_UPDATE=1 bash ~/.local/share/chezmoi/custom-builds/zsh/build-zsh.sh
+# To force a clean rebuild:
+#   rm -rf ~/.local/opt/zsh && chezmoi apply
 
 set -eu
 
-{{- if ne .chezmoi.os "darwin" }}
-# unicode9 width fix is macOS-specific here; nothing to do elsewhere.
+{{- if not $target }}
+# Only built on macOS work/personal profiles; nothing to do here.
 exit 0
 {{- end }}
 

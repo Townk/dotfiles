@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-zsh.sh — compile a zsh WITHOUT --enable-unicode9.
+# build-zsh.sh — compile zsh from a git clone WITHOUT --enable-unicode9.
 #
 # Why this exists
 # ---------------
@@ -9,10 +9,21 @@
 # its own frozen Unicode 9.0 (2016) width tables. Emoji added after that — 🧮
 # (U+1F9EE, Unicode 11), 🫀 (U+1FAC0, Unicode 13), 🫠 (U+1FAE0, Unicode 14), … —
 # are unknown to those tables, so zsh assigns them width 0 and ZLE renders the
-# placeholder escape `<0001fac0>` instead of the glyph.
+# placeholder escape `<0001fac0>` instead of the glyph. (That table is frozen
+# even on zsh master, so a newer release / `brew --HEAD` would not fix it.)
 #
 # macOS's libc `wcwidth()` is actually CORRECT for these (returns 2). So a zsh
 # built WITHOUT --enable-unicode9 defers to the OS and renders them properly.
+#
+# Source of truth
+# ---------------
+# A shallow clone of the upstream zsh repo, kept under ./build/zsh so updates
+# are a cheap fetch (run with ZSH_UPDATE=1, or `git pull` by hand). Building
+# from git rather than a release tarball means:
+#   * we regenerate `configure` with autoconf via Util/preconfig; and
+#   * we track the ZSH_REF branch — default `master` (development code), with
+#     git as the trust anchor instead of a pinned tarball checksum.
+# Pin ZSH_REF to a release tag (e.g. ZSH_REF=zsh-5.9.1) for a stable point.
 #
 # Making it the interactive shell needs a one-time `chsh` (see README): z4h
 # only searches for a "better" zsh when the *starting* shell is older than 5.8
@@ -33,13 +44,16 @@
 
 set -euo pipefail
 
-ZSH_VER="5.9.1"
-ZSH_SHA256="5d20bec03f981dc4e9a09ec245e7415388ff641f79c5c5c416b5042e58d8280d"
-ZSH_URL="https://downloads.sourceforge.net/project/zsh/zsh/${ZSH_VER}/zsh-${ZSH_VER}.tar.xz"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+BUILD_ROOT="${ZSH_BUILD_ROOT:-$SCRIPT_DIR/build}"
+REPO="$BUILD_ROOT/zsh"
+ZSH_URL="${ZSH_URL:-https://github.com/zsh-users/zsh.git}"
+ZSH_REF="${ZSH_REF:-master}"
 
-PREFIX="${ZSH_BUILD_PREFIX:-$HOME/.local/opt/zsh-nounicode9/$ZSH_VER}"
+PREFIX="${ZSH_BUILD_PREFIX:-$HOME/.local/opt/zsh}"
 BINLINK="${ZSH_BUILD_BINLINK:-$HOME/.local/bin/zsh}"
 ZSH_BIN="$PREFIX/bin/zsh"
+STAMP="$PREFIX/.source-commit"
 
 log() { printf '[zsh-build] %s\n' "$*"; }
 die() { printf '[zsh-build] error: %s\n' "$*" >&2; exit 1; }
@@ -49,39 +63,61 @@ die() { printf '[zsh-build] error: %s\n' "$*" >&2; exit 1; }
 width_ok()   { [[ "$("$1" -fc 's=${(#):-0x1FAC0}; print -rn -- ${(m)#s}' 2>/dev/null)" == 2 ]]; }
 # z4h's exec-zsh-i refuses any zsh that can't load these two modules.
 modules_ok() { "$1" -fc 'zmodload -s zsh/terminfo zsh/zselect' 2>/dev/null; }
+relink()     { mkdir -p -- "$(dirname "$BINLINK")"; ln -sfn "$ZSH_BIN" "$BINLINK"; }
+repo_commit() { git -C "$REPO" rev-parse --short HEAD 2>/dev/null; }
 
-relink() {
-  mkdir -p -- "$(dirname "$BINLINK")"
-  ln -sfn "$ZSH_BIN" "$BINLINK"
-}
-
-# Idempotent fast path: already built, correct, and linked.
-if [[ -x "$ZSH_BIN" ]] && width_ok "$ZSH_BIN" && modules_ok "$ZSH_BIN"; then
+# 1. Fast path: healthy install built from the clone's current commit, and not
+#    explicitly updating. rev-parse is local/offline; we only hit the network
+#    to clone or when ZSH_UPDATE is set.
+if [[ -z "${ZSH_UPDATE:-}" && -x "$ZSH_BIN" && -d "$REPO/.git" \
+      && "$(cat "$STAMP" 2>/dev/null)" == "$(repo_commit)" ]] \
+   && width_ok "$ZSH_BIN" && modules_ok "$ZSH_BIN"; then
   [[ "$(readlink "$BINLINK" 2>/dev/null)" == "$ZSH_BIN" ]] || { relink; log "relinked $BINLINK"; }
-  log "up-to-date: zsh $ZSH_VER (non-unicode9) at $ZSH_BIN"
+  log "up-to-date: zsh @ $(repo_commit) (non-unicode9) at $ZSH_BIN"
   exit 0
 fi
 
+# 2. Ensure the shallow clone exists; update it when ZSH_UPDATE is set.
+command -v git >/dev/null 2>&1 || die "git not found on PATH"
+if [[ -d "$REPO/.git" ]]; then
+  if [[ -n "${ZSH_UPDATE:-}" ]]; then
+    log "updating clone to latest $ZSH_REF"
+    # Shallow clones choke on `git pull` (it backfills history); fetch + reset
+    # is the safe pattern.
+    git -C "$REPO" fetch --depth 1 --quiet origin "$ZSH_REF"
+    git -C "$REPO" reset --hard --quiet FETCH_HEAD
+  fi
+else
+  log "shallow-cloning zsh ($ZSH_REF) into $REPO"
+  mkdir -p -- "$BUILD_ROOT"
+  git clone --depth 1 --branch "$ZSH_REF" --quiet "$ZSH_URL" "$REPO" || die "git clone failed"
+fi
+commit="$(repo_commit)"
+
+# 3. Toolchain. Building from git needs autoconf (Util/preconfig regenerates
+#    ./configure, which a release tarball would already ship). autoconf has no
+#    mise equivalent, so it is declared in the Brewfile (provisioned by the
+#    bootstrap/system-package-brew step) rather than installed ad-hoc here.
 command -v clang >/dev/null 2>&1 || die "clang not found (install Xcode Command Line Tools)"
+command -v autoconf >/dev/null 2>&1 \
+  || die "autoconf not found — it's declared in the Brewfile; run 'system-package-brew' (or 'brew install autoconf')"
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/zsh-build.XXXXXX")"
-trap 'rm -rf "$work"' EXIT
-cd "$work"
+cd "$REPO"
 
-log "downloading zsh $ZSH_VER"
-curl -fsSL -o zsh.tar.xz "$ZSH_URL" || die "download failed: $ZSH_URL"
-printf '%s  zsh.tar.xz\n' "$ZSH_SHA256" | shasum -a 256 -c - >/dev/null 2>&1 \
-  || die "checksum mismatch for zsh.tar.xz"
-tar xf zsh.tar.xz
-cd "zsh-$ZSH_VER"
+# -O3 + tune for the building host. On AArch64, -mcpu=native selects this Mac's
+# core (M-series) for both ISA extensions and scheduling; that's the correct
+# single knob (see README). The binary is built per-machine, so "native" is safe.
+cflags="-O3 -Wno-implicit-int -Wno-implicit-function-declaration"
+[[ "$(uname -m)" == arm64 ]] && cflags="-O3 -mcpu=native -Wno-implicit-int -Wno-implicit-function-declaration"
 
-cflags="-O2 -Wno-implicit-int -Wno-implicit-function-declaration"
-[[ "$(uname -m)" == arm64 ]] && cflags="-O2 -mcpu=native -Wno-implicit-int -Wno-implicit-function-declaration"
+log "regenerating configure (autoconf)"
+./Util/preconfig >"$BUILD_ROOT/preconfig.log" 2>&1 \
+  || { tail -25 "$BUILD_ROOT/preconfig.log" >&2; die "preconfig failed"; }
 
-# zsh 5.9.1's zsh/pcre module uses PCRE2 (legacy PCRE1 was dropped). Enable it
-# only when pcre2-config is present, so a machine without it still builds.
-# Note: this links zsh/pcre against the pcre2 lib (e.g. Homebrew's), a runtime
-# dependency that only matters when you `zmodload zsh/pcre`.
+# zsh master's zsh/pcre module uses PCRE2 (legacy PCRE1 was dropped). Enable it
+# only when pcre2-config is present, so a machine without it still builds. This
+# links zsh/pcre against the pcre2 lib (e.g. Homebrew's), a runtime dependency
+# that only matters when you `zmodload zsh/pcre`.
 configure_args=(--prefix="$PREFIX" --enable-multibyte --with-tcsetpgrp)
 if command -v pcre2-config >/dev/null 2>&1; then
   configure_args+=(--enable-pcre)
@@ -92,26 +128,29 @@ fi
 
 log "configuring (prefix=$PREFIX)"
 CFLAGS="$cflags" ./configure "${configure_args[@]}" \
-  >"$work/configure.log" 2>&1 || { tail -25 "$work/configure.log" >&2; die "configure failed"; }
+  >"$BUILD_ROOT/configure.log" 2>&1 || { tail -25 "$BUILD_ROOT/configure.log" >&2; die "configure failed"; }
 
 # Guard against the silent-static-fallback footgun above.
 grep -q '#define DYNAMIC 1' config.h \
-  || { tail -25 "$work/configure.log" >&2; die "dynamic module loading was NOT enabled"; }
+  || { tail -25 "$BUILD_ROOT/configure.log" >&2; die "dynamic module loading was NOT enabled"; }
 
 log "compiling (this takes ~1 min)"
-make -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)" >"$work/make.log" 2>&1 \
-  || { tail -25 "$work/make.log" >&2; die "make failed"; }
+make -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)" >"$BUILD_ROOT/make.log" 2>&1 \
+  || { tail -25 "$BUILD_ROOT/make.log" >&2; die "make failed"; }
 
+# Install only binary + modules + shell functions. Docs need yodl (not a build
+# dep) and the system already ships zsh man pages.
 rm -rf "$PREFIX"
-make install >"$work/install.log" 2>&1 \
-  || { tail -25 "$work/install.log" >&2; die "make install failed"; }
+make install.bin install.modules install.fns >"$BUILD_ROOT/install.log" 2>&1 \
+  || { tail -25 "$BUILD_ROOT/install.log" >&2; die "make install failed"; }
+printf '%s\n' "$commit" > "$STAMP"
 
 relink
 
 width_ok   "$ZSH_BIN" || die "post-build width self-test failed (expected width 2 for U+1FAC0)"
 modules_ok "$ZSH_BIN" || die "post-build module self-test failed (zsh/terminfo + zsh/zselect)"
 
-log "installed $("$ZSH_BIN" --version)"
+log "installed $("$ZSH_BIN" --version) @ $commit"
 log "linked $BINLINK -> $ZSH_BIN"
 if [[ "$(dscl . -read "/Users/$USER" UserShell 2>/dev/null)" != *"$BINLINK"* ]]; then
   log "to use it, set it as your login shell (one-time):"

@@ -1,0 +1,4 @@
+# Everything the build pipeline creates at runtime (shallow clone of the
+# upstream zsh repo, build artifacts, logs). All of it can be recreated by
+# re-running ./build-zsh.sh.
+build/

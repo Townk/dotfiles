@@ -29,12 +29,24 @@ are a *combining* problem fixed separately by `setopt COMBINING_CHARS` in
 
 ## How it's wired
 
-- `build-zsh.sh` downloads, verifies, configures, builds, and installs zsh to
-  `~/.local/opt/zsh-nounicode9/<ver>` and symlinks `~/.local/bin/zsh` to it. It
-  is idempotent (fast no-op when the correct binary is already installed).
+- `build-zsh.sh` keeps a **shallow clone** of upstream zsh under `build/zsh`
+  (gitignored), regenerates `configure` (autoconf), builds, and installs to
+  `~/.local/opt/zsh`, then symlinks `~/.local/bin/zsh` to it. It is idempotent:
+  a no-op fast path when the installed binary already matches the clone's
+  commit.
 - `home/run_onchange_after_zsh-nounicode9.sh.tmpl` runs the builder on
-  `chezmoi apply`, re-firing when `build-zsh.sh` changes (its SHA is baked into
-  the rendered hook).
+  `chezmoi apply` for **macOS** with the **work** or **personal** profile,
+  re-firing when `build-zsh.sh` changes (its SHA is baked into the rendered
+  hook).
+- **Source / updates.** The clone tracks `ZSH_REF` (default `master` — i.e.
+  development zsh; set `ZSH_REF=zsh-5.9.1` to pin a release). Update on demand:
+
+  ```bash
+  ZSH_UPDATE=1 bash build-zsh.sh   # shallow fetch latest ZSH_REF + rebuild
+  ```
+
+  (`git pull` is avoided in-script — shallow clones backfill history and stall;
+  the builder uses `git fetch --depth 1` + `git reset --hard`.)
 - **A one-time `chsh` is required** to make the terminal *start* this zsh:
 
   ```bash
@@ -50,10 +62,36 @@ are a *combining* problem fixed separately by `setopt COMBINING_CHARS` in
 
 ## Build recipe notes
 
-See the header of `build-zsh.sh`. The non-obvious bits: relax clang's
-implicit-int / implicit-function-declaration errors (else configure silently
-disables dynamic modules that z4h requires), and pass `--with-tcsetpgrp` (the
-runtime probe needs a controlling tty the hook lacks).
+See the header of `build-zsh.sh`. The non-obvious bits: regenerate `configure`
+with `autoconf` (a git clone, unlike a release tarball, ships none); relax
+clang's implicit-int / implicit-function-declaration errors (else configure
+silently disables dynamic modules that z4h requires); and pass
+`--with-tcsetpgrp` (the runtime probe needs a controlling tty the hook lacks).
+
+### Dependencies
+
+This repo's convention is to source tools from `mise`; brew is used only when
+there's no mise equivalent. The build's two non-toolchain deps have none, so
+both are declared in `home/dot_config/packages/Brewfile.tmpl`:
+
+- `autoconf` — regenerates `configure` from the git clone (not in mise's
+  registry / no asdf/aqua/ubi backend);
+- `pcre2` — the PCRE2 library the `zsh/pcre` module links against (a C library,
+  not a runtime mise manages).
+
+`clang`/`make` come from the Xcode Command Line Tools, and `git`/`make` are
+already in the Brewfile. There is intentionally **no `mise.toml`** here —
+nothing in the build is mise-installable.
+
+Compiled with `-O3 -mcpu=native`. On AArch64, **`-mcpu` is the single correct
+knob** — it sets both the instruction-set extensions and the scheduling model
+for a specific core. `-mcpu=native` detects this Mac's actual chip (M-series),
+so a per-machine build is tuned to that machine. Do **not** use
+`-march=native -mcpu=apple-m1`: on AArch64 `-march` only selects the
+architecture level (not microarchitecture tuning), and `-mcpu=apple-m1` pins
+codegen to the M1 core — wrong for a newer chip and contradictory with
+`native`. (For a shell the perf delta is negligible regardless; this just
+avoids leaving correctness on the floor.)
 
 ## Optional modules
 
@@ -61,9 +99,9 @@ All optional modules that don't need an external library build by default
 (`zpty`, `mathfunc`, `attr`, `net/tcp`, `net/socket`, `zprof`, `zftp`, `stat`,
 `mapfile`, …). The two that need libraries:
 
-- `zsh/pcre` — built when `pcre2-config` is present (`--enable-pcre`). zsh 5.9.1
-  uses **PCRE2** (legacy PCRE1 was dropped upstream in 2023), so it links
-  against Homebrew's `pcre2` — a runtime dependency that only matters when you
-  `zmodload zsh/pcre`.
+- `zsh/pcre` — built when `pcre2-config` is present (`--enable-pcre`). zsh
+  master uses **PCRE2** (legacy PCRE1 was dropped upstream in 2023), so it
+  links against Homebrew's `pcre2` — a runtime dependency that only matters
+  when you `zmodload zsh/pcre`.
 - `zsh/db/gdbm` — needs `gdbm`; not enabled (niche: persistent hashes via
   `ztie`). Add `gdbm` + `--enable-gdbm` if ever wanted.
