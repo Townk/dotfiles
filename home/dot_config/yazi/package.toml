@@ -35,8 +35,8 @@ hash = "3c66d95bf63fa16178e98967fbae9429"
 
 [[plugin.deps]]
 use = "boydaihungst/mediainfo"
-rev = "ef8105a"
-hash = "9586d7a4098dbe3e36dbd9d5d86f63bc"
+rev = "a6d30a1"
+hash = "7d4dd1afcb7ecbd3609c29a82d6dbc5c"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:piper"

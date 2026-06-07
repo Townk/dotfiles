@@ -224,7 +224,14 @@ if command -v ya >/dev/null 2>&1; then
   # the file is non-encrypted and non-templated, so a plain copy is
   # equivalent to what re-add would write.
   yazi_pkg_target="$HOME/.config/yazi/package.toml"
+  # Honor .chezmoiroot: when present, the source tree is rooted at that
+  # subdir (here "home/"), so the file lives at <root>/dot_config/... .
+  # Hardcoding "dot_config/..." pointed cp at a directory that doesn't
+  # exist and the copy silently failed.
   yazi_pkg_source_rel="dot_config/yazi/package.toml"
+  if [[ -f "$chezmoi_repo/.chezmoiroot" ]]; then
+    yazi_pkg_source_rel="$(<"$chezmoi_repo/.chezmoiroot")/$yazi_pkg_source_rel"
+  fi
   if [[ -n "$chezmoi_repo" && -f "$yazi_pkg_target" ]]; then
     if cp "$yazi_pkg_target" "$chezmoi_repo/$yazi_pkg_source_rel"; then
       (
