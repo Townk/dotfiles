@@ -332,6 +332,7 @@ z4h source ~/.config/zsh/aliases.sh
 # Set shell options: http://zsh.sourceforge.net/Doc/Release/Options.html.
 setopt glob_dots # no special treatment for file names with a leading dot
 setopt auto_menu # require an extra TAB press to open the completion menu
+setopt combining_chars # let ZLE combine zero-width marks (e.g. emoji VS-16) onto the base char instead of showing <fe0f>
 
 HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_FOUND="bg=none,fg=yellow,bold"
 HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_NOT_FOUND="bg=none,fg=red,bold"
