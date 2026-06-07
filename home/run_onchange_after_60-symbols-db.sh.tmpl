@@ -2,7 +2,7 @@
 
   Symbols DB — change detection hook.
 
-  Sibling of run_onchange_after_symbols-nerd-font.sh, but for inputs that
+  Sibling of run_onchange_after_70-symbols-nerd-font.sh, but for inputs that
   affect ONLY the symbols database (not the font / glyphs.json):
 
     - run_onchange_after_*: chezmoi hashes this template's rendered output
@@ -24,7 +24,7 @@
   relative to each other.
 
   This script's only job is DETECTION: it writes a marker and exits 0. The
-  companion run_after_symbols-nerd-font-prompt.sh (which runs on EVERY
+  companion run_after_80-symbols-nerd-font-prompt.sh (which runs on EVERY
   chezmoi apply) reads the marker and shows the interactive prompt when a
   TTY is available, so a non-interactive apply never loops or blocks on the
   ~4-minute re-probe.
@@ -45,7 +45,7 @@
 #   wezterm font fallback : {{ if $weztermSig }}{{ $weztermSig }}{{ else }}(wezterm not on PATH / not macOS){{ end }}
 #   db ingester SHA256    : {{ if $dbScriptSHA }}{{ $dbScriptSHA }}{{ else }}(not macOS){{ end }}
 #
-# On change it writes a marker so run_after_symbols-nerd-font-prompt.sh can
+# On change it writes a marker so run_after_80-symbols-nerd-font-prompt.sh can
 # offer a DB-only re-probe on the next interactive `chezmoi apply`.
 #
 # To force a DB re-probe without changing anything else:

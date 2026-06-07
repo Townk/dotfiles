@@ -4,7 +4,7 @@
 # latest versions, and keep the chezmoi repo in sync across machines.
 #
 # Idempotent — safe to run periodically. Also called by chezmoi's bootstrap
-# (run_once_after_setup-bootstrap-tools.sh.tmpl) so that fresh-machine
+# (run_once_after_10-setup-bootstrap-tools.sh.tmpl) so that fresh-machine
 # setup and "everything-already-installed" applies converge to the same
 # end state.
 #

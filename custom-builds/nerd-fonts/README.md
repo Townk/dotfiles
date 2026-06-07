@@ -36,7 +36,7 @@ this README; everything under `build/` is .gitignored.
 Two paths, both end up running the same `build-updated-font.sh`:
 
 1. **Automatically, change-driven** — via
-   `~/.local/share/chezmoi/home/run_onchange_after_symbols-nerd-font.sh.tmpl`.
+   `~/.local/share/chezmoi/home/run_onchange_after_70-symbols-nerd-font.sh.tmpl`.
    That template bakes two fingerprints into the rendered script:
    - the installed version of the `font-fontawesome` cask
      (`brew list --versions --cask font-fontawesome`)

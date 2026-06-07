@@ -26,11 +26,17 @@ source can later coexist with a Linux machine without polluting it.
 | `dot_local/bin/nvim-wez.sh` | Engine behind the macOS "Open in NeoVim" Shortcuts droplet. |
 | `dot_local/share/shortcuts/` | Exported macOS Shortcuts (`.shortcut` files). |
 | `Library/private_Application Support/` | macOS symlinks to XDG paths (e.g. tealdeer's config). |
-| `run_once_after_setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, `mise install`, install `rust@nightly`, then run `system-update`. |
-| `run_once_after_setup-gpg-key.sh.tmpl` | Imports OpenPGP keys from 1Password if they are missing locally. |
-| `run_once_after_setup-system-settings.sh.tmpl` | macOS `defaults`, Finder, Dock, login items. |
-| `run_onchange_after_reload-environment-launchagent.sh.tmpl` | Reloads the GUI environment LaunchAgent when env definitions change. |
-| `run_onchange_after_install-macos-shortcut.sh.tmpl` | Re-imports `Open in NeoVim.shortcut` whenever its content hash changes. |
+| `run_once_after_10-setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, `mise install`, install `rust@nightly`, then run `system-update`. |
+| `run_once_after_25-setup-gpg-key.sh.tmpl` | Imports OpenPGP keys from 1Password if they are missing locally. |
+| `run_once_after_20-setup-system-settings.sh.tmpl` | macOS `defaults`, Finder, Dock, login items. |
+| `run_onchange_after_30-reload-environment-launchagent.sh.tmpl` | Reloads the GUI environment LaunchAgent when env definitions change. |
+| `run_onchange_after_35-install-macos-shortcut.sh.tmpl` | Re-imports `Open in NeoVim.shortcut` whenever its content hash changes. |
+| `run_onchange_after_50-custom-build-zsh.sh.tmpl` | Builds the non-unicode9 zsh from source (macOS work/personal) and sets it as the login shell. |
+
+The numeric prefix on `run_*` hooks fixes their execution order: chezmoi runs
+`after` scripts in alphabetical order of name, so the prefix makes ordering
+explicit (e.g. the zsh build at `50` must run after bootstrap at `10`, which
+installs its `autoconf`/`pcre2` deps).
 
 ## Bootstrap on a fresh Mac
 

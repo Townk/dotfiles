@@ -19,14 +19,14 @@
   This hook tracks only inputs that change the FONT (and therefore
   glyphs.json). DB-only inputs — the WezTerm font fallback and
   build-symbols-db.py itself — live in the sibling hook
-  run_onchange_after_symbols-db.sh.tmpl so that, e.g., editing your
+  run_onchange_after_60-symbols-db.sh.tmpl so that, e.g., editing your
   terminal fallback re-probes the DB WITHOUT a needless font rebuild.
   (Accepting a font rebuild here still rebuilds the DB afterwards, since
   new glyphs.json must be re-ingested.)
 
   This script's only job is DETECTION: when a trigger fires it writes a
-  marker file and exits 0.  The companion run_after_symbols-nerd-font-
-  prompt.sh.tmpl (which runs on EVERY chezmoi apply) reads the marker
+  marker file and exits 0.  The companion run_after_80-symbols-nerd-
+  font-prompt.sh.tmpl (which runs on EVERY chezmoi apply) reads the marker
   and shows the interactive build prompt when a TTY is available.
 
   Separating detection from prompting means:
@@ -56,10 +56,10 @@
 #   custom-icons digest   : {{ if $customIcons }}{{ $customIcons }}{{ else }}(none / not macOS){{ end }}
 #
 # (WezTerm fallback + build-symbols-db.py are tracked separately by
-#  run_onchange_after_symbols-db.sh — they rebuild the DB, not the font.)
+#  run_onchange_after_60-symbols-db.sh — they rebuild the DB, not the font.)
 #
 # When a change is detected this script writes a marker file so that the
-# companion run_after_symbols-nerd-font-prompt.sh can show the build
+# companion run_after_80-symbols-nerd-font-prompt.sh can show the build
 # prompt on the next interactive `chezmoi apply`, regardless of whether
 # this detection script was run interactively or not.
 #

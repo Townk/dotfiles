@@ -3,7 +3,7 @@ set -eufo pipefail
 {{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
 
 # The Linux dev-shell profile provisions tools via
-# run_once_after_setup-dev-shell-tools (mise + apt). The brew-based
+# run_once_after_15-setup-dev-shell-tools (mise + apt). The brew-based
 # `system-update` path below does not apply here, so stop early.
 exit 0
 {{- end }}

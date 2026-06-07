@@ -1,7 +1,7 @@
 source "${0:A:h}/_lib.sh"
 
 # `system-update` lives as a script at ~/.local/bin/system-update so the
-# chezmoi bootstrap (run_once_after_setup-bootstrap-tools.sh.tmpl) can
+# chezmoi bootstrap (run_once_after_10-setup-bootstrap-tools.sh.tmpl) can
 # invoke it without entering an interactive shell. The bare command name
 # still works from the prompt because ~/.local/bin is on $PATH.
 #

@@ -5,12 +5,12 @@
   Runs on EVERY `chezmoi apply`. Handles the two markers written by the
   detection hooks:
 
-    * nerd-font-build-pending   (run_onchange_after_symbols-nerd-font.sh)
+    * nerd-font-build-pending   (run_onchange_after_70-symbols-nerd-font.sh)
         A FONT input changed (FA cask, builder script, custom icons).
         Accepting rebuilds the font AND the DB (new glyphs.json must be
         re-ingested), which also satisfies any pending DB marker.
 
-    * symbols-db-build-pending  (run_onchange_after_symbols-db.sh)
+    * symbols-db-build-pending  (run_onchange_after_60-symbols-db.sh)
         A DB-only input changed (WezTerm fallback/version, or the
         ingester). Accepting re-probes the DB only — no font rebuild.
 

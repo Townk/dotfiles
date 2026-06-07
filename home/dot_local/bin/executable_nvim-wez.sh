@@ -24,7 +24,7 @@
 #   is the engine behind the "Open in nvim/WezTerm" macOS-native action.
 #   The .shortcut export is tracked in chezmoi at
 #   ~/.local/share/shortcuts/Open in NeoVim.shortcut and reinstalled on
-#   fresh Macs by run_onchange_after_install-macos-shortcut.sh.tmpl.
+#   fresh Macs by run_onchange_after_35-install-macos-shortcut.sh.tmpl.
 #
 # PLATFORM
 #   macOS-only: relies on `open -a`, AppleScript activation, and the

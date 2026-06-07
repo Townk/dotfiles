@@ -1,7 +1,7 @@
 # ~/.config/packages/Snapfile — snap packages for the Linux dev-shell.
 #
 # Format: one snap per line, "<name> [snap flags]". '#' starts a comment.
-# Consumed by run_onchange_after_install-snaps (re-runs when this file
+# Consumed by run_onchange_after_40-install-snaps (re-runs when this file
 # changes) and refreshed by `system-update`.
 #
 # Reserve this for classic-confined apps that are better as snaps than as
