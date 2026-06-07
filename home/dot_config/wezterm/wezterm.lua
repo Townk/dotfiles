@@ -102,12 +102,6 @@ config.font = wezterm.font_with_fallback({
 	"Noto Sans Symbols 2", -- misc pictographic symbols
 	"Noto Sans Math", -- remaining mathematical symbols
 	"Arial Unicode MS", -- universal catch-all
-	-- Iosevka: final backstop for the Unicode 16 "Symbols for Legacy Computing"
-	-- box-drawings / circle fragments (1FBD0–1FBEF) that WezTerm doesn't draw
-	-- natively and nothing earlier here covers. Last, so it only fills gaps
-	-- (the 1FBCB cross-mark / 1FBCD chevron remain uncovered — Iosevka lacks
-	-- those two; they stay dropped from the picker).
-	"Iosevka",
 })
 config.font_size = 19
 config.line_height = 1.15
