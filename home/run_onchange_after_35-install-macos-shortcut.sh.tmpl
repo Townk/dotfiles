@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eufo pipefail
+set -eu
 
 {{ if eq .chezmoi.os "darwin" -}}
 # Re-import the "Open in NeoVim" macOS Shortcut whenever the exported
