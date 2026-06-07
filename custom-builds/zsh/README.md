@@ -47,18 +47,20 @@ are a *combining* problem fixed separately by `setopt COMBINING_CHARS` in
 
   (`git pull` is avoided in-script — shallow clones backfill history and stall;
   the builder uses `git fetch --depth 1` + `git reset --hard`.)
-- **A one-time `chsh` is required** to make the terminal *start* this zsh:
+- **Login shell.** The builder also makes this zsh the login shell
+  (`ensure_login_shell`): z4h does **not** auto-switch — its candidate search
+  only runs when the *starting* zsh is older than 5.8 or can't load its
+  modules, so a healthy 5.x login shell is kept and z4h re-execs *that same
+  binary*. Registering it (`/etc/shells` + `chsh`) prompts for a password, so
+  the builder only does it with a tty (e.g. interactive `chezmoi apply` during
+  bootstrap). Non-interactively it prints the one-liner instead:
 
   ```bash
   echo "$HOME/.local/bin/zsh" | sudo tee -a /etc/shells
   chsh -s "$HOME/.local/bin/zsh"
   ```
 
-  z4h does **not** auto-switch on its own: its candidate search
-  (`exec-zsh-i`) only runs when the *starting* zsh is older than 5.8 or can't
-  load its modules. A healthy 5.9.x login shell is kept as-is, and z4h re-execs
-  into *that same binary* — so the login shell itself must be the new zsh.
-  (This `chsh` is per-machine and not chezmoi-managed; only the binary is.)
+  It's idempotent — a no-op once the login shell already points here.
 
 ## Build recipe notes
 

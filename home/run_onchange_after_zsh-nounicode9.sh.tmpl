@@ -15,10 +15,11 @@
   routine applies don't rebuild, and upstream updates are pulled on demand
   (ZSH_UPDATE=1 bash build-zsh.sh).
 
-  This only builds/links the binary. Making it the interactive shell needs a
-  one-time `chsh -s ~/.local/bin/zsh` (see custom-builds/zsh/README.md): z4h
-  keeps a healthy 5.9.x login shell and re-execs into that same binary rather
-  than searching PATH, so the login shell itself must be the new zsh.
+  The builder also makes this zsh the login shell (z4h keeps a healthy 5.x
+  starting shell and re-execs that same binary rather than searching PATH).
+  Registering it (/etc/shells + chsh) prompts for a password, so it only runs
+  with a tty — i.e. an interactive `chezmoi apply` during bootstrap; otherwise
+  it prints the one-liner. See custom-builds/zsh/README.md.
 
   Scope: macOS with the work or personal profile (the unicode9 problem is
   macOS-specific and the recipe is macOS-tuned). Exits cleanly elsewhere.

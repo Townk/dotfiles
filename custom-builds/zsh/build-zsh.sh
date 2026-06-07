@@ -25,10 +25,12 @@
 #     git as the trust anchor instead of a pinned tarball checksum.
 # Pin ZSH_REF to a release tag (e.g. ZSH_REF=zsh-5.9.1) for a stable point.
 #
-# Making it the interactive shell needs a one-time `chsh` (see README): z4h
-# only searches for a "better" zsh when the *starting* shell is older than 5.8
-# or can't load its modules. A healthy 5.9.x login shell is kept, and z4h
-# re-execs into that same binary — so the login shell itself must be this zsh:
+# This also makes it the login shell (ensure_login_shell, below): z4h only
+# searches for a "better" zsh when the *starting* shell is older than 5.8 or
+# can't load its modules. A healthy 5.x login shell is kept, and z4h re-execs
+# into that same binary — so the login shell itself must be this zsh. The chsh
+# + /etc/shells edit prompt for a password, so it runs only with a tty (e.g.
+# interactive `chezmoi apply` during bootstrap); otherwise it prints:
 #   echo "$HOME/.local/bin/zsh" | sudo tee -a /etc/shells
 #   chsh -s "$HOME/.local/bin/zsh"
 #
@@ -66,6 +68,32 @@ modules_ok() { "$1" -fc 'zmodload -s zsh/terminfo zsh/zselect' 2>/dev/null; }
 relink()     { mkdir -p -- "$(dirname "$BINLINK")"; ln -sfn "$ZSH_BIN" "$BINLINK"; }
 repo_commit() { git -C "$REPO" rev-parse --short HEAD 2>/dev/null; }
 
+# Make this zsh the login shell (idempotent). z4h won't switch on its own for a
+# healthy 5.x shell — it re-execs the *starting* binary — so the login shell
+# itself must be this zsh. Registering it needs /etc/shells (sudo) + chsh, both
+# of which prompt for a password; only attempt with a tty (e.g. interactive
+# `chezmoi apply` during bootstrap), otherwise print the one-liner.
+ensure_login_shell() {
+  [[ "$(uname -s)" == Darwin ]] || return 0
+  local current
+  current="$(dscl . -read "/Users/$USER" UserShell 2>/dev/null | awk '{print $NF}')"
+  [[ "$current" == "$BINLINK" ]] && return 0
+
+  if [[ ! -t 0 && ! -t 1 ]]; then
+    log "login shell is $current; to switch (run once, interactive):"
+    log "  echo \"$BINLINK\" | sudo tee -a /etc/shells && chsh -s \"$BINLINK\""
+    return 0
+  fi
+
+  if ! grep -qxF -- "$BINLINK" /etc/shells 2>/dev/null; then
+    log "registering $BINLINK in /etc/shells (sudo)"
+    printf '%s\n' "$BINLINK" | sudo tee -a /etc/shells >/dev/null \
+      || { log "could not update /etc/shells; set manually: chsh -s $BINLINK"; return 0; }
+  fi
+  log "setting login shell -> $BINLINK (chsh)"
+  chsh -s "$BINLINK" || log "chsh failed; set manually: chsh -s $BINLINK"
+}
+
 # 1. Fast path: healthy install built from the clone's current commit, and not
 #    explicitly updating. rev-parse is local/offline; we only hit the network
 #    to clone or when ZSH_UPDATE is set.
@@ -73,6 +101,7 @@ if [[ -z "${ZSH_UPDATE:-}" && -x "$ZSH_BIN" && -d "$REPO/.git" \
       && "$(cat "$STAMP" 2>/dev/null)" == "$(repo_commit)" ]] \
    && width_ok "$ZSH_BIN" && modules_ok "$ZSH_BIN"; then
   [[ "$(readlink "$BINLINK" 2>/dev/null)" == "$ZSH_BIN" ]] || { relink; log "relinked $BINLINK"; }
+  ensure_login_shell
   log "up-to-date: zsh @ $(repo_commit) (non-unicode9) at $ZSH_BIN"
   exit 0
 fi
@@ -152,7 +181,4 @@ modules_ok "$ZSH_BIN" || die "post-build module self-test failed (zsh/terminfo +
 
 log "installed $("$ZSH_BIN" --version) @ $commit"
 log "linked $BINLINK -> $ZSH_BIN"
-if [[ "$(dscl . -read "/Users/$USER" UserShell 2>/dev/null)" != *"$BINLINK"* ]]; then
-  log "to use it, set it as your login shell (one-time):"
-  log "  echo \"\$HOME/.local/bin/zsh\" | sudo tee -a /etc/shells && chsh -s \"\$HOME/.local/bin/zsh\""
-fi
+ensure_login_shell
