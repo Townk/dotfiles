@@ -5,9 +5,13 @@
 layout {
     pane_template name="zj-hud-pane" borderless=true {
             plugin location="status-bar" {
+                // No fullscreen_command: the bar must self-detect fullscreen via
+                // its built-in WezTerm probe (reads ~/.local/state/wezterm/
+                // fullscreen_state, written by wezterm.lua). Setting
+                // fullscreen_command would seed terminal_fullscreen and
+                // short-circuit that probe, leaving the bar's state frozen since
+                // the Alt+Enter toggle runs through zj-context-keys, not the bar.
                 fullscreen_min_cols "100"
-                fullscreen_command "$HOME/.config/zellij/scripts/terminal-toggle-fullscreen"
-                fullscreen_initial_state "false"
                 default_session_name "main"
 
                 // Wasm to spawn for the floating "visual search" dialog

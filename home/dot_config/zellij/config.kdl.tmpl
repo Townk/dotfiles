@@ -45,7 +45,19 @@ keybinds clear-defaults=true {
         // other Cmd+<key> chords don't reach zellij while you're in scroll
         // mode — press Esc/Enter to leave scroll first.
         bind "Alt w" { SwitchToMode "tmux"; }
-        bind "Alt Enter" { MessagePlugin { name "terminal-fullscreen-toggle"; }; }
+
+        // Alt+Enter toggles the host terminal's native fullscreen. Routed
+        // through the headless context-keys (zj-context-keys) plugin's `run`
+        // action — same flash-free host run_command path as the copy-pwd /
+        // open-terminal-config binds below — rather than a bare MessagePlugin
+        // broadcast (which addressed no plugin and ran nothing). The script
+        // detects Ghostty/WezTerm from the inherited env; no {pid} needed.
+        bind "Alt Enter" {
+            MessagePlugin "context-keys" {
+                name "terminal-toggle-fullscreen"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/terminal-toggle-fullscreen" }}"
+            }
+        }
 
         // Pane focus: Ctrl + hjkl / arrows. Exception to the "no Ctrl in
         // zellij" rule, kept for muscle-memory consistency with vim/

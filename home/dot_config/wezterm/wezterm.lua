@@ -222,6 +222,29 @@ if ok and active_workspace ~= "" and active_workspace ~= toggle_fullscreen_works
 	last_real_workspace = active_workspace
 end
 
+-- Mirror the window's fullscreen state to a file the zj-hud status bar polls
+-- (zj-hud's WEZTERM_FULLSCREEN_SCRIPT reads it). The bar reveals its chrome
+-- only in fullscreen, where WezTerm's own tab bar is hidden. The keybinding
+-- toggles fullscreen via the workspace trick above and never tells the bar, so
+-- this file is how the bar observes the real state. Written on change only.
+local fullscreen_state_path = (os.getenv("XDG_STATE_HOME") or (os.getenv("HOME") .. "/.local/state"))
+	.. "/wezterm/fullscreen_state"
+wezterm.background_child_process({ "mkdir", "-p", fullscreen_state_path:match("(.*)/") })
+local last_fullscreen_written = nil
+
+local function write_fullscreen_state(window)
+	local is_fullscreen = window:get_dimensions().is_full_screen
+	if is_fullscreen == last_fullscreen_written then
+		return
+	end
+	local file = io.open(fullscreen_state_path, "w")
+	if file then
+		file:write(is_fullscreen and "true\n" or "false\n")
+		file:close()
+		last_fullscreen_written = is_fullscreen
+	end
+end
+
 wezterm.on("update-status", function(window, pane)
 	local workspace = window:active_workspace()
 	if workspace == toggle_fullscreen_workspace then
@@ -233,6 +256,12 @@ wezterm.on("update-status", function(window, pane)
 	if workspace ~= "" then
 		last_real_workspace = workspace
 	end
+
+	write_fullscreen_state(window)
+end)
+
+wezterm.on("window-resized", function(window, _pane)
+	write_fullscreen_state(window)
 end)
 
 local function send_zellij_keys(keys)
