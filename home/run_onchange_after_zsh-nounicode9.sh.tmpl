@@ -1,0 +1,56 @@
+{{- /*
+
+  Non-unicode9 zsh — build hook (macOS only).
+
+  Builds a zsh WITHOUT --enable-unicode9 so the line editor uses macOS's
+  (current) wcwidth() for emoji widths instead of zsh's frozen Unicode 9.0
+  tables. Without it, post-2016 emoji (🧮 U+1F9EE, 🫀 U+1FAC0, 🫠 U+1FAE0, …)
+  render as the ZLE placeholder escape `<0001fac0>` at the prompt. See
+  custom-builds/zsh/build-zsh.sh for the full rationale and build recipe.
+
+  run_onchange_after_*: chezmoi re-runs this whenever the rendered output
+  changes. We bake the SHA256 of build-zsh.sh into the script below, so editing
+  the builder (including bumping the pinned zsh version inside it) re-fires the
+  build. The builder is otherwise idempotent — a no-op fast path when the
+  correct binary is already installed — so routine applies don't rebuild.
+
+  This only builds/links the binary. Making it the interactive shell needs a
+  one-time `chsh -s ~/.local/bin/zsh` (see custom-builds/zsh/README.md): z4h
+  keeps a healthy 5.9.x login shell and re-execs into that same binary rather
+  than searching PATH, so the login shell itself must be the new zsh.
+
+  macOS-only: the unicode9 problem was diagnosed there and the recipe is
+  macOS-tuned; exits cleanly elsewhere.
+*/ -}}
+{{- $buildSHA := "" -}}
+{{- if eq .chezmoi.os "darwin" -}}
+  {{- $buildSHA = output "shasum" "-a" "256" (joinPath .chezmoi.workingTree "custom-builds/zsh/build-zsh.sh") | trim -}}
+{{- end -}}
+#!/bin/bash
+# Non-unicode9 zsh — build hook.
+#
+# Re-runs whenever the builder changes:
+#   build-zsh.sh sha256 : {{ if $buildSHA }}{{ $buildSHA }}{{ else }}(not macOS){{ end }}
+#
+# To force a rebuild without editing anything:
+#   rm -rf ~/.local/opt/zsh-nounicode9 && chezmoi apply
+# or run the builder directly:
+#   bash ~/.local/share/chezmoi/custom-builds/zsh/build-zsh.sh
+
+set -eu
+
+{{- if ne .chezmoi.os "darwin" }}
+# unicode9 width fix is macOS-specific here; nothing to do elsewhere.
+exit 0
+{{- end }}
+
+BUILD="{{ .chezmoi.workingTree }}/custom-builds/zsh/build-zsh.sh"
+
+if [ ! -f "$BUILD" ]; then
+  echo "[zsh-build] builder missing at $BUILD — skipping." >&2
+  exit 0
+fi
+
+exec bash "$BUILD"
+
+# vim:ft=sh
