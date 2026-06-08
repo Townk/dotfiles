@@ -761,51 +761,38 @@ plugins {
     }
 
 {{/*
-  Custom plugin sources.
+  Custom plugin sources — driven by the shared manifest in
+  .chezmoidata/zellij-plugins.yaml (`.zellijPlugins`). Each entry:
+    - alias:    the alias used here and in keybinds (`MessagePlugin "<alias>"`).
+    - wasm:     basename under the managed plugin dir.
+    - repoName: the dev checkout / wasm basename under ~/Projects/apps/zellij.
+    - dev:      whether a local dev checkout is expected.
+    - url:      the release asset (used only by ensure-plugins to fetch it).
 
-  For each entry below:
-    - alias:   the alias used in this `plugins {}` block (and in
-               keybinds above as `MessagePlugin "<alias>"`).
-    - name:    the repo / wasm basename. The build output lives at
-               ~/Projects/apps/zellij/<name>/target/wasm32-wasip1/release/<name>.wasm
-               and the published artifact at
-               https://github.com/Townk/<name>/releases/download/<version>/<name>.wasm
-    - version: the GitHub release tag to fall back to when the repo
-               isn't checked out locally. `latest` tracks the rolling
-               build (refreshed on every push to master); pin a `vX.Y.Z`
-               tag instead for a reproducible build.
+  Resolution policy (mirrored by ensure-plugins and the permission
+  pre-grant): if `dev` and ~/Projects/apps/zellij/<repoName> exists, load the
+  local release build; otherwise load ~/.local/share/zellij/plugins/<wasm>,
+  which ~/.config/zellij/ensure-plugins downloads before Zellij starts. Every
+  location is `file:` — we never let Zellij's http downloader fetch a plugin,
+  because it caches transient gateway/CDN errors (404/504 HTML) as the wasm
+  and never retries, silently breaking the plugin.
 
-  Resolution policy at `chezmoi apply` time:
-    1. If ~/Projects/apps/zellij/<name>/ exists on disk, the rendered
-       config points at the local debug/release build (file://). The
-       theory is "I have this checked out" ⇒ "I'm iterating on it and
-       want my local build, not the published wasm". You're responsible
-       for `cargo build --release --target wasm32-wasip1` in that repo.
-    2. Otherwise, the rendered config pulls the release wasm straight
-       from GitHub — zellij downloads & caches on first load.
-
-  Re-running `chezmoi apply` after cloning (or removing) a repo flips
-  the rendered config between the two — that's the intended workflow.
-
-  Whitespace handling: this comment block uses the no-dash form of
-  Go template comment delimiters so the blank line preceding it
-  survives. All other template directives in this block trim
-  aggressively, and each rendered plugin line carries its own
-  indent + trailing newline inside printf, so the block matches the
-  surrounding 4-space-indented KDL.
+  Whitespace: the no-dash comment form preserves the preceding blank line;
+  the directives below trim aggressively and each printed line carries its
+  own 4-space indent + newline, matching the surrounding KDL.
 */}}
-{{- $plugins := list
-    (dict "alias" "context-keys"  "name" "zj-context-keys" "version" "v0.1.1")
-    (dict "alias" "prompt-jumper" "name" "zj-prompt-jumper" "version" "v0.1.1")
-    (dict "alias" "status-bar"    "name" "zj-hud"  "version" "v0.1.0")
--}}
+{{- $pluginsDir := joinPath $.chezmoi.homeDir ".local/share/zellij/plugins" -}}
 {{- $lines := list -}}
-{{- range $plugins -}}
-{{- $localRepo := joinPath $.chezmoi.homeDir "Projects/apps/zellij" .name -}}
-{{- if stat $localRepo -}}
-{{- $lines = append $lines (printf "    %s location=\"file:%s\"" .alias (joinPath $localRepo "target/wasm32-wasip1/release" (printf "%s.wasm" .name))) -}}
+{{- range .zellijPlugins -}}
+{{- $repo := joinPath $.chezmoi.homeDir "Projects/apps/zellij" .repoName -}}
+{{- $loc := printf "file:%s" (joinPath $pluginsDir .wasm) -}}
+{{- if and .dev (stat $repo) -}}
+{{- $loc = printf "file:%s" (joinPath $repo "target/wasm32-wasip1/release" (printf "%s.wasm" .repoName)) -}}
+{{- end -}}
+{{- if eq .alias "vim-navigator" -}}
+{{- $lines = append $lines (printf "    %s location=\"%s\" {\n        move_mod \"ctrl\"\n        resize_mod \"ctrl+shift\"\n    }" .alias $loc) -}}
 {{- else -}}
-{{- $lines = append $lines (printf "    %s location=\"https://github.com/Townk/%s/releases/download/%s/%s.wasm\"" .alias .name .version .name) -}}
+{{- $lines = append $lines (printf "    %s location=\"%s\"" .alias $loc) -}}
 {{- end -}}
 {{- end -}}
 {{ join "\n" $lines }}
@@ -823,14 +810,10 @@ plugins {
     // The bar publishes its mode palette + which_key/search config blocks
     // through the shared state, so neither panel needs duplicate config here.
 
-    // hiasr/vim-zellij-navigator — focus and resize that DTRT inside vim/nvim.
-    // `move_mod` / `resize_mod` are the same for every binding, so set them
-    // once here; per-binding nodes still set `name`, `payload`, and
-    // `use_arrow_keys`. Unused keys are ignored by the plugin per call.
-    vim-navigator location="https://github.com/hiasr/vim-zellij-navigator/releases/download/0.3.0/vim-zellij-navigator.wasm" {
-        move_mod "ctrl"
-        resize_mod "ctrl+shift"
-    }
+    // vim-navigator (hiasr/vim-zellij-navigator) is rendered by the manifest
+    // loop above with its `move_mod "ctrl"` / `resize_mod "ctrl+shift"` block —
+    // those mods are constant across binds, so per-bind nodes only set `name`,
+    // `payload`, and `use_arrow_keys`.
 
 }
 

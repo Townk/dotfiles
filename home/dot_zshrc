@@ -37,6 +37,11 @@ if [[ -z "$ZELLIJ" ]]; then
   }
   for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij ~/.local/bin/zellij; do
     [[ -x "$_zellij" ]] || continue
+    # Make sure the managed plugin wasms exist before launch. We fetch them
+    # ourselves (config.kdl loads them via file:) instead of trusting Zellij's
+    # downloader, which caches transient 404/504 error pages as the plugin and
+    # never retries. No-op once the wasms are present.
+    [[ -x ~/.config/zellij/ensure-plugins ]] && ~/.config/zellij/ensure-plugins
     if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
       if "$_zellij" --session Main action list-clients 2>/dev/null \
            | tail -n +2 | grep -q .; then

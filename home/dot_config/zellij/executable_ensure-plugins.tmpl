@@ -1,0 +1,48 @@
+#!/bin/bash
+# Ensure the managed Zellij plugin wasms exist before Zellij starts.
+#
+# Called from .zshrc right before the shell execs Zellij. We fetch the wasms
+# ourselves — sequential, redirect-following, retried, magic-validated — into
+# ~/.local/share/zellij/plugins/ and let config.kdl load them via `file:`.
+# Zellij's own http downloader is deliberately bypassed: it caches whatever a
+# transient failure returns (a GitHub 404 body, a corporate-gateway 504 HTML
+# page) as the plugin and never retries, which silently breaks the plugin
+# (e.g. an empty status bar that never recovers).
+#
+# Resolution mirrors config.kdl (.chezmoidata/zellij-plugins.yaml): a `dev`
+# plugin with its repo checked out at ~/Projects/apps/zellij/<repoName> loads
+# from that local build and is skipped here; everything else is fetched to the
+# managed dir. Fast on the hot path — a present, valid wasm is left untouched.
+set -uo pipefail
+
+plugins_dir="$HOME/.local/share/zellij/plugins"
+mkdir -p "$plugins_dir"
+
+# True when the file starts with the wasm magic `\0asm` (00 61 73 6d).
+is_wasm() {
+  [ -f "$1" ] || return 1
+  [ "$(head -c4 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "0061736d" ]
+}
+
+# Fetch url -> dest atomically, only accepting a real wasm. Leaves any existing
+# good file in place on failure (better a stale-but-working plugin than none).
+fetch() {
+  local url=$1 dest=$2 tmp
+  tmp="$dest.part"
+  if curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 2 \
+       -o "$tmp" "$url" && is_wasm "$tmp"; then
+    mv -f "$tmp" "$dest"
+    return 0
+  fi
+  rm -f "$tmp"
+  echo "ensure-plugins: failed to fetch $(basename "$dest") from $url" >&2
+  return 1
+}
+
+{{ range .zellijPlugins -}}
+{{ if and .dev (stat (joinPath $.chezmoi.homeDir "Projects/apps/zellij" .repoName)) -}}
+# {{ .wasm }} — dev repo checked out; config loads the local build, skip.
+{{ else -}}
+is_wasm "$plugins_dir/{{ .wasm }}" || fetch "{{ .url }}" "$plugins_dir/{{ .wasm }}"
+{{ end -}}
+{{ end -}}
