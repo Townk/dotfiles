@@ -1,15 +1,15 @@
 # Brewfile.bootstrap — Tools needed by `.setup.sh` BEFORE `chezmoi apply`
 # runs. Each package lives in exactly one Brewfile (this one or the main
-# Brewfile, never both); `system-update` concatenates the two so they're
-# applied together with cleanup operating on the union.
+# Brewfile, never both); `system-package brew sync` reconciles the
+# concatenated union so cleanup does not treat the other file as extra.
 #
 # Keeping the bootstrap subset small means `.setup.sh` only installs what
-# it needs to function (gh to download `bin`, op to gate on 1Password CLI
+# it needs to function (gh for authentication, op to gate on 1Password CLI
 # integration), instead of waiting on the full Brewfile to install before
 # the rest of the script can continue.
 #
-# Don't run --cleanup against this file alone — it would treat the entire
-# main Brewfile as "extra" and uninstall it.
+# Don't reconcile this file alone — cleanup would treat the entire main
+# Brewfile as "extra" and uninstall it.
 
 tap "1password/tap"
 

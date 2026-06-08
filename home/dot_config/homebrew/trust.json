@@ -1,6 +1,10 @@
 {
   "trustedtaps": [
+    "1broseidon/tap",
+    "1password/tap",
+    "atlassian/acli",
     "jorgelbg/tap",
+    "olets/tap",
     "rafaelgarrido/caveats"
   ]
 }

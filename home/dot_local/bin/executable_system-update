@@ -10,8 +10,8 @@
 #
 # Step order matters on fresh installs: `system-package sync` runs FIRST
 # to install everything in the Brewfiles / Uvfile / Npmfile / Gofile;
-# only after that do tools like `ya`, `nvim`, `bin` exist and become
-# safe to upgrade. Steady-state runs see the same end state because
+# only after that do tools like `ya` and `nvim` exist and become safe
+# to upgrade. Steady-state runs see the same end state because
 # `system-package sync` uses brew bundle's `--upgrade` and the
 # uv/npm/go workers re-run their upgrade commands.
 #
@@ -45,8 +45,7 @@ block later steps unless explicitly fatal):
   5. `system-service sync`    reconcile launchd plists with services.toml
   6. `ya pkg upgrade`         + commit any package.toml bumps to chezmoi
   7. `mise upgrade && mise prune -y`
-  8. `bin update -a -y && bin prune -f`
-  9. NeoVim: `Lazy! sync` + `MasonToolsUpdateSync`
+  8. NeoVim: `Lazy! sync` + `MasonToolsUpdateSync`
 
 z4h's own self-update is intentionally NOT handled here (it would exec
 inside this script's shell, not the user's). The `system-update` zsh
@@ -164,10 +163,6 @@ if ! command -v brew >/dev/null 2>&1; then
     print -P -- "\n📦 Sync system packages...\n"
     system-package sync || die "Failed to sync system packages!"
   fi
-  if command -v bin >/dev/null 2>&1; then
-    print -P -- "\n🛠️ Upgrade bin tools...\n"
-    bin update -a -y && bin prune -f || warn "bin upgrade had failures"
-  fi
   if command -v snap >/dev/null 2>&1; then
     print -P -- "\n📦 Refresh snap packages...\n"
     sudo snap refresh || warn "snap refresh had failures"
@@ -262,12 +257,6 @@ if command -v mise >/dev/null 2>&1; then
   print -P -- "\n🛠️ Upgrade Mise tools...\n"
   mise upgrade
   mise prune -y
-fi
-
-if command -v bin >/dev/null 2>&1; then
-  print -P -- "\n🛠️ Upgrade bin tools...\n"
-  bin update -a -y
-  bin prune -f
 fi
 
 if command -v nvim >/dev/null 2>&1; then

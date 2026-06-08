@@ -9,7 +9,7 @@ source can later coexist with a Linux machine without polluting it.
 
 | Path | Purpose |
 | ---- | ------- |
-| `.setup.sh` | Top-level fresh-machine bootstrap (Xcode CLT → Homebrew → chezmoi → init → bootstrap Brewfile → `bin` → 1Password/gh auth → apply). |
+| `.setup.sh` | Top-level fresh-machine bootstrap (Xcode CLT → Homebrew → chezmoi → init → bootstrap Brewfile → 1Password/gh auth → apply). |
 | `dot_zshrc`, `dot_zshenv`, `dot_p10k.zsh` | Zsh + [zsh4humans](https://github.com/romkatv/zsh4humans) + Powerlevel10k. |
 | `dot_config/zsh/` | Functions, abbreviations, color/lib helpers. |
 | `dot_config/packages/` | `Brewfile.bootstrap` (tools needed before `chezmoi apply` runs: `chezmoi`, `mise`, `gh`, `1password-cli`) and `Brewfile` (everything else). |
@@ -19,7 +19,7 @@ source can later coexist with a Linux machine without polluting it.
 | `dot_config/nvim/` | LazyVim-based NeoVim config (`init.lua`, plugins, snippets, spell, lockfile). |
 | `dot_config/yazi/` | Yazi file manager config + plugins. |
 | `dot_config/tealdeer/` | tldr client (Catppuccin Mocha theme, templated). |
-| `dot_config/atuin/`, `mise/`, `bin/`, `espanso/` | CLI tool configs. |
+| `dot_config/atuin/`, `mise/`, `espanso/` | CLI tool configs. |
 | `dot_config/zsh/environment.sh` | Shared shell/GUI environment source, including XDG paths and `GNUPGHOME`. |
 | `private_dot_ssh/`, `dot_config/private_gnupg/` | SSH and GnuPG configs (chezmoi-private permissions). |
 | `dot_local/bin/system-update` | Canonical "bring all tools to latest" script. Used both as a daily command and inside the bootstrap. |
@@ -94,13 +94,10 @@ End to end, the script:
 6. Installs `Brewfile.bootstrap` — `chezmoi`, `mise`, `gh`, `1password-cli`,
    `1password/tap`. These are the tools needed before `chezmoi apply` can
    safely fire.
-7. Installs [`bin`](https://github.com/marcosnils/bin) by fetching the
-   latest darwin release asset via the anonymous GitHub releases API
-   (no `gh auth` required at this point).
-8. Pauses for manual 1Password CLI integration (enable it in 1Password's
+7. Pauses for manual 1Password CLI integration (enable it in 1Password's
    Developer settings; the script polls `op account list`).
-9. Runs `gh auth login` if GitHub isn't yet authenticated.
-10. Finally runs `chezmoi apply`, which deploys every tracked file and
+8. Runs `gh auth login` if GitHub isn't yet authenticated.
+9. Finally runs `chezmoi apply`, which deploys every tracked file and
     fires the bootstrap scripts:
     - `setup-bootstrap-tools.sh.tmpl` runs `mise install` (now that
       `~/.config/mise/config.toml` is on disk) to provision
@@ -201,9 +198,9 @@ of invoking the merge tool, leaving the source byte-identical to before.
 - **Brewfile split**: `Brewfile.bootstrap` holds everything that must
   exist before `chezmoi apply` fires (`chezmoi` + `mise` + `gh` +
   `1password-cli` + `1password/tap`). `Brewfile` is everything else.
-  `system-update` concatenates them so `--cleanup` operates on their
-  union; running `--cleanup` against either alone would treat the
-  other's contents as "extra" and uninstall them.
+  `system-package brew sync` reconciles the concatenated union; cleaning
+  against either file alone would treat the other's contents as "extra"
+  and uninstall them.
 - **`system-update` is the convergence point.** Both the bootstrap path
   (fresh machine) and the user-driven path (running `system-update`
   manually) reach the same end state: everything at latest. This closes

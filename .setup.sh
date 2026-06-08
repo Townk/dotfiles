@@ -85,8 +85,8 @@ fi
 # On re-runs we explicitly `chezmoi update` first to pull origin.
 #
 # We deliberately stop short of `apply` here — apply needs to fire
-# AFTER the bootstrap Brewfile is installed, `bin` is on disk, and the
-# interactive auth gates are cleared.
+# AFTER the bootstrap Brewfile is installed and the interactive auth
+# gates are cleared.
 if [ -d "$HOME/.local/share/chezmoi/.git" ]; then
   echo "ℹ️  Chezmoi already initialized, pulling latest changes..."
   chezmoi update --apply=false
@@ -105,35 +105,6 @@ fi
 # location since `chezmoi apply` hasn't deployed files yet.
 echo "🍻  Installing bootstrap Brewfile..."
 brew bundle install --file="$HOME/.local/share/chezmoi/home/dot_config/packages/Brewfile.bootstrap"
-
-# Install `bin` (https://github.com/marcosnils/bin). Done before
-# `chezmoi apply` so that `system-update`'s `bin update` step (invoked
-# from the run_once bootstrap) sees `bin` on PATH. Fetched via the
-# anonymous GitHub releases API to avoid a hard dependency on
-# `gh auth login` running first.
-if [ -x "$HOME/.local/bin/bin" ]; then
-  echo "✅  bin is already installed"
-else
-  echo "⚪️  Installing 'bin'"
-  arch=$(uname -m)
-  case "$arch" in
-    arm64)  asset_suffix="darwin_arm64" ;;
-    x86_64) asset_suffix="darwin_amd64" ;;
-    *)      echo "❌  Unsupported architecture for bin: $arch" >&2; exit 1 ;;
-  esac
-  asset_url=$(
-    curl -fsSL https://api.github.com/repos/marcosnils/bin/releases/latest \
-      | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+'"$asset_suffix"'"' \
-      | sed -E 's/.*"([^"]+)"$/\1/' \
-      | head -1
-  )
-  [ -n "$asset_url" ] || { echo "❌  Could not resolve bin release asset URL" >&2; exit 1; }
-  tmp_bin=$(mktemp)
-  curl -fsSL "$asset_url" -o "$tmp_bin"
-  chmod +x "$tmp_bin"
-  "$tmp_bin" install github.com/marcosnils/bin
-  rm -f "$tmp_bin"
-fi
 
 # Interactive auth gates. Front-loaded so the user clears them while
 # their attention is on the install. After these, the run_once

@@ -6,8 +6,8 @@
 #   • services known to `brew services list`                → system-service-brew
 #
 # `list` aggregates both sources into a single table with a Source column.
-# `sync` only touches the launchd side; brew's reconcile model is its own
-# (`brew bundle install --cleanup`) and isn't ours to coordinate.
+# `sync` only touches the launchd side; brew package reconciliation happens in
+# `system-package brew sync` and isn't ours to coordinate.
 #
 # `restart-for <pkg>` is an internal hook called by `system-package-* sync`
 # after a package version bump: it finds any service (launchd or brew)
@@ -95,8 +95,8 @@ Reconciles launchd-managed services with ~/.config/packages/services.toml:
   • declared with drifted plist   → write plist + bootout + bootstrap
   • bootstrapped but not declared → bootout + remove plist
 
-Does NOT touch brew services — brew's reconcile model is \`brew bundle
-install --cleanup\` (run via \`system-package brew sync\`).
+Does NOT touch brew services — brew package reconciliation is run by
+\`system-package brew sync\`.
 EOF
       ;;
     restart-for)

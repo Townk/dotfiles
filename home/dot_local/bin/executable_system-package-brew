@@ -9,6 +9,8 @@ source "$HOME/.local/lib/system-package-common.sh"
 BREWFILE_BOOT="$PKG_DIR/Brewfile.bootstrap"
 BREWFILE_MAIN="$PKG_DIR/Brewfile"
 
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+
 # Dev-tool runtimes that should be owned by mise, not brew. Matches direct
 # installs (installed_on_request:true) only — transient deps pulled in by
 # other formulas are out of scope (PATH precedence keeps mise's copy live).
@@ -24,6 +26,176 @@ BREW_MISE_ALLOWED=(
   # the modern lua parser). Revisit when the plugin is fixed.
   "luajit"
 )
+
+brew_write_bundle_file() {
+  local bundle_file="$1"
+  command cat "$BREWFILE_BOOT" "$BREWFILE_MAIN" > "$bundle_file"
+}
+
+brew_bundle_list_entries() {
+  local kind="$1" bundle_file="$2"
+  HOMEBREW_NO_AUTO_UPDATE=1 brew bundle list "--$kind" --file="$bundle_file" 2>/dev/null \
+    | awk 'NF && $0 !~ /^==>/ {print}'
+}
+
+brew_short_name() {
+  local name="$1"
+  if [[ "$name" == */*/* ]]; then
+    print -r -- "${name:t}"
+  else
+    print -r -- "$name"
+  fi
+}
+
+brew_tap_from_full_name() {
+  local name="$1"
+  [[ "$name" == */*/* ]] && print -r -- "${name:h}"
+  return 0
+}
+
+brew_declared_taps() {
+  local bundle_file="$1"
+  {
+    brew_bundle_list_entries tap "$bundle_file"
+    local kind="" entry="" tap=""
+    for kind in formula cask; do
+      while IFS= read -r entry; do
+        tap=$(brew_tap_from_full_name "$entry")
+        [[ -n "$tap" ]] && print -r -- "$tap"
+      done < <(brew_bundle_list_entries "$kind" "$bundle_file")
+    done
+  } | sort -u || true
+}
+
+brew_declared_short_names() {
+  local kind="$1" bundle_file="$2"
+  local entry=""
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] && brew_short_name "$entry"
+  done < <(brew_bundle_list_entries "$kind" "$bundle_file") | sort -u || true
+}
+
+brew_declared_formula_names() {
+  local bundle_file="$1"
+  local -a formulae=()
+  local entry=""
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] && formulae+=("$(brew_short_name "$entry")")
+  done < <(brew_bundle_list_entries formula "$bundle_file")
+
+  (( ${#formulae[@]} > 0 )) || return 0
+
+  local json=""
+  if json=$(HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v1 --formula "${formulae[@]}" 2>/dev/null); then
+    printf '%s' "$json" | jq -r '.[].name' | sort -u
+  else
+    printf '%s\n' "${formulae[@]}" | sort -u
+  fi
+}
+
+brew_trust_file() {
+  if [[ -n "${HOMEBREW_USER_CONFIG_HOME:-}" ]]; then
+    print -r -- "$HOMEBREW_USER_CONFIG_HOME/trust.json"
+  elif [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+    print -r -- "$XDG_CONFIG_HOME/homebrew/trust.json"
+  else
+    print -r -- "$HOME/.homebrew/trust.json"
+  fi
+}
+
+brew_trusted_taps() {
+  local trust_file
+  trust_file=$(brew_trust_file)
+  [[ -f "$trust_file" ]] || return 0
+  jq -r '.trustedtaps[]? | ascii_downcase' "$trust_file" 2>/dev/null | sort -u || true
+}
+
+brew_check_trusted_taps() {
+  local bundle_file="$1"
+  local -A trusted_set
+  local tap="" trust_file=""
+  trust_file=$(brew_trust_file)
+
+  while IFS= read -r tap; do
+    [[ -n "$tap" ]] && trusted_set[${tap:l}]=1
+  done < <(brew_trusted_taps)
+
+  local -a missing=()
+  while IFS= read -r tap; do
+    [[ -n "$tap" ]] || continue
+    [[ "$tap" == homebrew/* ]] && continue
+    [[ -n "${trusted_set[${tap:l}]:-}" ]] || missing+=("$tap")
+  done < <(brew_declared_taps "$bundle_file")
+
+  (( ${#missing[@]} == 0 )) && return 0
+
+  pkg_error "Homebrew taps are declared but not trusted in $trust_file:"
+  for tap in "${missing[@]}"; do
+    pkg_error "  $tap"
+  done
+  pkg_die "add missing taps to ~/.config/homebrew/trust.json before syncing"
+}
+
+brew_installed_casks() {
+  brew list --cask 2>/dev/null | awk 'NF {print $1}' | sort -u
+}
+
+brew_installed_taps() {
+  brew tap 2>/dev/null | sort -u
+}
+
+brew_formula_has_installed_dependents() {
+  local formula="$1"
+  [[ -n "$(brew uses --installed "$formula" 2>/dev/null)" ]]
+}
+
+brew_cleanup_packages() {
+  local bundle_file="$1"
+  pkg_info "Cleaning Homebrew packages missing from Brewfile..."
+
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  {
+    local declared_formulae="$tmpdir/declared-formulae"
+    local installed_formulae="$tmpdir/installed-formulae"
+    local declared_casks="$tmpdir/declared-casks"
+    local installed_casks="$tmpdir/installed-casks"
+    local declared_taps="$tmpdir/declared-taps"
+    local installed_taps="$tmpdir/installed-taps"
+
+    brew_declared_formula_names "$bundle_file" > "$declared_formulae"
+    brew_direct_formulas > "$installed_formulae"
+    brew_declared_short_names cask "$bundle_file" > "$declared_casks"
+    brew_installed_casks > "$installed_casks"
+    brew_declared_taps "$bundle_file" > "$declared_taps"
+    brew_installed_taps > "$installed_taps"
+
+    local cask="" formula="" tap=""
+    pkg_diff_only_in "$installed_casks" "$declared_casks" | while IFS= read -r cask; do
+      [[ -n "$cask" ]] || continue
+      brew uninstall --cask --force "$cask" \
+        || pkg_warn "skipped extra cask that could not be uninstalled: $cask"
+    done
+
+    pkg_diff_only_in "$installed_formulae" "$declared_formulae" | while IFS= read -r formula; do
+      [[ -z "$formula" ]] && continue
+      if brew_formula_has_installed_dependents "$formula"; then
+        pkg_warn "skipped extra formula still required by another package: $formula"
+        continue
+      fi
+      brew uninstall --formula --force "$formula" \
+        || pkg_warn "skipped extra formula that could not be uninstalled: $formula"
+    done
+    brew autoremove || pkg_warn "brew autoremove failed"
+
+    pkg_diff_only_in "$installed_taps" "$declared_taps" | while IFS= read -r tap; do
+      [[ -z "$tap" || "$tap" == "homebrew/core" ]] && continue
+      brew untap "$tap" || pkg_warn "skipped tap still in use: $tap"
+    done
+  } always {
+    rm -rf "$tmpdir"
+  }
+}
 
 # brew_direct_formulas
 # Print one name per line for every formula installed with
@@ -219,19 +391,21 @@ brew_snapshot_versions() {
 do_sync() {
   pkg_info "Syncing Homebrew packages..."
 
-  local before_snap after_snap
-  before_snap=$(mktemp); after_snap=$(mktemp)
-  trap "rm -f '$before_snap' '$after_snap'" EXIT
+  local before_snap after_snap bundle_file
+  before_snap=$(mktemp); after_snap=$(mktemp); bundle_file=$(mktemp)
+  trap "rm -f '$before_snap' '$after_snap' '$bundle_file'" EXIT
 
   brew_snapshot_versions > "$before_snap"
 
-  cat "$BREWFILE_BOOT" "$BREWFILE_MAIN" \
-    | brew bundle install -q --cleanup --force-cleanup --upgrade --file=- \
+  brew_write_bundle_file "$bundle_file"
+  brew_check_trusted_taps "$bundle_file"
+
+  HOMEBREW_NO_AUTO_UPDATE=1 brew bundle install -q --upgrade --file="$bundle_file" \
     || pkg_die "brew bundle install failed"
+  brew_cleanup_packages "$bundle_file"
 
   # Tripwire: warn if any direct-installed formula matches a tool mise should
-  # own. Runs after install so it observes the post-sync truth (`brew bundle
-  # --cleanup` already removed anything not in the manifest).
+  # own. Runs after cleanup so it observes the post-sync truth.
   brew_check_dev_leakage
 
   # Restart any brew/launchd service whose backing formula changed version.
@@ -283,9 +457,10 @@ usage_sync() {
 Usage:
   system-package-brew sync
 
-Runs \`brew bundle install --upgrade --cleanup\` against the concatenation of
-~/.config/packages/Brewfile.bootstrap and ~/.config/packages/Brewfile, then
-warns about any direct-installed formula that should be owned by mise.
+Runs \`brew bundle install --upgrade\` against the concatenation of
+~/.config/packages/Brewfile.bootstrap and ~/.config/packages/Brewfile, cleans
+up Homebrew packages that are no longer declared, then warns about any
+direct-installed formula that should be owned by mise.
 
 After install, any brew service whose formula version changed AND is
 currently running is restarted (\`brew bundle install --upgrade\` does NOT
