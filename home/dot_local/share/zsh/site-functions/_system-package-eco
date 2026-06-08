@@ -1,4 +1,4 @@
-#compdef system-package-brew system-package-uv system-package-cargo system-package-go system-package-npm
+#compdef system-package-brew system-package-uv system-package-cargo system-package-go system-package-npm system-package-snap
 #
 # Shared completion for every system-package-<eco> worker. Each worker exposes
 # the same surface — list / sync — so a single file (multi-#compdef) covers

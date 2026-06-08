@@ -2,7 +2,8 @@
 #
 # Format: one snap per line, "<name> [snap flags]". '#' starts a comment.
 # Consumed by run_onchange_after_40-install-snaps (re-runs when this file
-# changes) and refreshed by `system-update`.
+# changes), reconciled by `system-package snap sync` (install + refresh of
+# declared snaps), and system-wide refreshed by `system-update`.
 #
 # Reserve this for classic-confined apps that are better as snaps than as
 # mise binaries. Do NOT list mise or atuin here:

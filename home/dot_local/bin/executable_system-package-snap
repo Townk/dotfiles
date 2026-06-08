@@ -1,0 +1,192 @@
+#!/usr/bin/env zsh
+# system-package-snap — sync snap packages against ~/.config/packages/Snapfile.
+#
+# Linux dev-shell only: the dispatcher discovers a worker only where it's
+# deployed, and .chezmoiignore keeps this off every non-(linux + dev-shell)
+# host (mirroring how system-package-brew is kept off the dev-shell).
+#
+# Manifest lines are `<name> [snap flags]` (e.g. `nvim --classic`). The first
+# word is the canonical snap name (matched against `snap list`); the rest is
+# forwarded verbatim to `snap install`, so flags like `--classic`,
+# `--channel=latest/edge`, or `--edge` land as-is.
+#
+# Unlike the other workers, sync does NOT remove undeclared snaps. snapd
+# auto-installs base/platform snaps (core*, snapd, gnome-*, …) as transient
+# dependencies and exposes no reliable "installed on request" signal to tell
+# those apart from user installs, so removing extras would risk tearing out a
+# dependency the system needs. Removal is therefore out of scope — matching
+# the install-only behavior of run_onchange_after_40-install-snaps.
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-package-common.sh"
+
+SNAPFILE="$PKG_DIR/Snapfile"
+
+# snap_installed_names — one snap name per line (drops the `snap list` header).
+snap_installed_names() {
+  command -v snap >/dev/null 2>&1 || return 0
+  snap list 2>/dev/null | awk 'NR>1 {print $1}'
+}
+
+# snap_snapshot_versions — TSV "name\tversion" rows for installed snaps. Keyed
+# on the snap name, which for the snaps we manage equals the app's binary
+# basename — what `system-service restart-for` resolves a service's cmd[0] to.
+snap_snapshot_versions() {
+  command -v snap >/dev/null 2>&1 || return 0
+  snap list 2>/dev/null | awk 'NR>1 {print $1 "\t" $2}'
+}
+
+# snap_list_rows <outdated:true|false>
+# Output one "name\tversion[annotation]" TSV row per installed snap. The
+# outdated map comes from `snap refresh --list`, which prints only snaps with
+# a pending refresh (and a bare "All snaps up to date." line when none — its
+# single line is skipped by the NR>1 guard along with the column header).
+snap_list_rows() {
+  local outdated="${1:-false}"
+  local -A avail
+  if [[ "$outdated" == true ]]; then
+    local n="" v=""
+    while IFS=$'\t' read -r n v; do
+      [[ -n "$n" ]] && avail[$n]="$v"
+    done < <(snap refresh --list 2>/dev/null | awk 'NR>1 {print $1 "\t" $2}')
+  fi
+  snap_snapshot_versions \
+    | while IFS=$'\t' read -r name ver; do
+        if [[ "$outdated" == true && -n "${avail[$name]:-}" ]]; then
+          ver="${ver} ${PKG_C_YEL}(update available: ${avail[$name]})${PKG_C_RES}"
+        fi
+        printf '%s\t%s\n' "$name" "$ver"
+      done | sort
+}
+
+do_list() {
+  local outdated=false
+  while (( $# > 0 )); do
+    case "$1" in
+      -u|--update) outdated=true; shift ;;
+      -a|--all)    shift ;;  # no-op: snap has no transient-dep concept here
+      *) pkg_die "unknown flag for list: $1" ;;
+    esac
+  done
+  snap_list_rows "$outdated"
+}
+
+do_sync() {
+  pkg_info "Syncing snap packages..."
+
+  if ! command -v snap >/dev/null 2>&1; then
+    pkg_warn "snap not available; skipping."
+    return 0
+  fi
+
+  local declared_full declared installed before_snap after_snap
+  declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
+  before_snap=$(mktemp); after_snap=$(mktemp)
+  trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
+
+  snap_snapshot_versions > "$before_snap"
+
+  pkg_manifest_read "$SNAPFILE" > "$declared_full"
+  awk '{print $1}' "$declared_full" > "$declared"
+  snap_installed_names > "$installed"
+
+  # Install missing (declared but not installed). The full manifest line is
+  # forwarded to `snap install` so per-snap flags (--classic, --channel=…)
+  # apply on first install.
+  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    local line; line=$(awk -v n="$name" '$1 == n {print; exit}' "$declared_full")
+    local -a args=( ${(z)line} )
+    sudo snap install "${args[@]}" || pkg_warn "failed to install $name"
+  done
+
+  # Refresh everything still declared. `snap refresh <name>` is a no-op when
+  # the snap is already current, so the cost is one fast check per declared
+  # snap. Scoped to the manifest (not a bare `snap refresh` of every snap on
+  # the box) to stay consistent with the other ecosystem workers.
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    sudo snap refresh "$name" || pkg_warn "failed to refresh $name"
+  done < "$declared"
+
+  # Restart services whose backing snap changed version.
+  snap_snapshot_versions > "$after_snap"
+  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
+  return 0
+}
+
+usage() {
+  cat <<EOF
+Usage:
+  system-package-snap list [-u|--update]
+  system-package-snap sync
+  system-package-snap -h | --help | help
+
+Syncs snap packages against ~/.config/packages/Snapfile (linux dev-shell only).
+
+Manifest lines are \`<name> [snap flags]\`; the first word is the canonical
+snap name, the rest is forwarded to \`snap install\` (\`--classic\`, etc.).
+
+list flags:
+  -u, --update   annotate packages with available updates (\`snap refresh --list\`)
+  -a, --all      no-op (snap has no transient-dep concept here)
+
+sync installs declared-but-missing snaps and refreshes declared snaps; it does
+NOT remove undeclared snaps (base/platform snaps are dependencies snapd owns).
+After sync, any system service whose backing snap changed version and is
+currently running is restarted.
+EOF
+}
+
+usage_list() {
+  cat <<EOF
+Usage:
+  system-package-snap list [-u|--update]
+
+Emits TSV "<name>\t<version>" rows for every installed snap.
+
+Flags:
+  -u, --update   annotate each row with the available version
+                 (queried via \`snap refresh --list\`)
+  -a, --all      no-op (snap has no transient-dep concept)
+EOF
+}
+
+usage_sync() {
+  cat <<EOF
+Usage:
+  system-package-snap sync
+
+Reconciles ~/.config/packages/Snapfile against \`snap list\`:
+
+  • Snaps in the manifest but not installed → \`snap install <name> [flags]\`
+  • Every declared snap is refreshed (\`snap refresh <name>\`; no-op when current)
+  • Undeclared snaps are left alone — snapd's base/platform snaps are
+    dependencies and have no reliable installed-on-request signal to diff on.
+
+After sync, services whose backing snap was just upgraded and are currently
+running are restarted.
+EOF
+}
+
+main() {
+  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+    usage; exit 0
+  fi
+  local cmd="$1"; shift
+  case "$cmd" in
+    list)
+      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      do_list "$@"
+      ;;
+    sync)
+      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      do_sync
+      ;;
+    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+  esac
+}
+
+main "$@"

@@ -33,6 +33,10 @@ setup-system-settings.sh
 .config/packages/Snapfile
 setup-dev-shell-tools.sh
 install-snaps.sh
+{{/* snap only exists on the dev-shell; omit the worker elsewhere so the
+     system-package dispatcher discovers only ecosystems this host can run
+     (the inverse of the system-package-brew exclusion below). */}}
+.local/bin/system-package-snap
 {{- end }}
 {{ if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
 {{/* Homebrew is not available in the dev-shell profile. Omit the worker so
