@@ -1,6 +1,7 @@
 # https://github.com/Homebrew/homebrew-bundle
 
 tap "1password/tap"
+tap "jorgelbg/tap"
 tap "olets/tap"
 tap "rafaelgarrido/caveats"
 
@@ -263,7 +264,9 @@ brew 'neovim'                       # Editor
 # omlx (Local AI models, Apple Silicon) is provisioned via Uvfile.
 # python@3.11 used to be declared here as omlx's pinned runtime under
 # brew; now uv-managed since the venv is owned by `uv tool install`.
-brew 'pinentry-mac'                 # Password entry application for Mac
+brew 'pinentry'                     # Terminal pinentry (curses/tty) — used over SSH by pinentry-auto
+brew 'pinentry-mac'                 # GUI passphrase entry; pinentry-touchid's fallback
+brew 'pinentry-touchid'             # Touch ID for GPG passphrases (wraps pinentry-mac); needs jorgelbg/tap
 brew 'plantuml'                     # UML in text
 brew 'procs'                        # Process status (`ps` but better)
 brew 'ripgrep'                      # Recursive lines matching a pattern (`grep` but better: `/bin/rg`)

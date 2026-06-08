@@ -17,6 +17,10 @@
 {{ if ne .chezmoi.os "darwin" -}}
 .local/bin/nvim-wez.sh
 .local/share/shortcuts
+{{/* pinentry-auto routes to Touch ID / pinentry-mac (macOS-only binaries);
+     trust.json is Homebrew tap-trust state. Neither is meaningful off a Mac. */}}
+.local/bin/pinentry-auto
+.config/homebrew/trust.json
 {{/* macOS-only run scripts: these `set -o pipefail` before their own
      darwin guard, which breaks under Linux's dash. Skip them entirely
      off macOS (the dev-shell toolbox is handled by its own run_once).

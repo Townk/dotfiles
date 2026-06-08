@@ -195,6 +195,15 @@ system-package sync || die "Failed to sync system packages!"
 print -P -- "\n🧹 Cleaning up Homebrew artifacts...\n"
 brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
 
+# Re-assert pinentry-touchid's pinentry-mac fallback. `brew upgrade pinentry`
+# recreates that keg and reverts the `pinentry` → pinentry-mac symlink that
+# `pinentry-touchid -fix` installs, so the GUI fallback (closed lid / no
+# Touch ID) would otherwise silently degrade to pinentry-curses. Guarded on
+# the binary so it no-ops on hosts without it. Cheap and idempotent.
+if command -v pinentry-touchid >/dev/null 2>&1; then
+  pinentry-touchid -check >/dev/null 2>&1 || pinentry-touchid -fix || warn "pinentry-touchid -fix failed"
+fi
+
 # Reconcile launchd-managed services with ~/.config/packages/services.toml.
 # Soft failure — a misconfigured service shouldn't block the rest of
 # system-update. Note: services tied to packages just upgraded by the

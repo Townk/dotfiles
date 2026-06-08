@@ -44,3 +44,12 @@ export PATH
 # dot_config/zsh/private_secrets.sh.tmpl. Sourced here so every shell
 # AND every launchd-spawned subprocess gets the same env.
 [ -r "$HOME/.config/zsh/secrets.sh" ] && . "$HOME/.config/zsh/secrets.sh"
+
+# Over SSH/mosh, steer gpg-agent's pinentry to the terminal. gpg forwards this
+# to the agent, which hands it to our pinentry-auto dispatcher; USE_CURSES is
+# the value pinentry-mac honors too. Unset locally so Touch ID stays the
+# default. Empty in launchd/GUI shells (no SSH_CONNECTION), so GUI apps are
+# unaffected.
+if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ]; then
+  export PINENTRY_USER_DATA="USE_CURSES=1"
+fi

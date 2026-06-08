@@ -1,0 +1,19 @@
+#!/bin/sh
+# pinentry-auto — gpg-agent's `pinentry-program` dispatcher.
+#
+# gpg forwards $PINENTRY_USER_DATA from the client into this process via the
+# agent. Interactive shells export USE_CURSES=1 when remote (see
+# dot_config/zsh/environment.sh), so GPG passphrase prompts raised during an
+# SSH/mosh session land on the session tty instead of an invisible GUI dialog
+# on the (locked, possibly headless) Mac.
+#
+# Locally PINENTRY_USER_DATA is unset, so we hand off to pinentry-touchid: it
+# unlocks the keychain entry with Touch ID and, when Touch ID isn't usable
+# (lid closed, no Touch ID keyboard) or the key isn't cached yet, falls back to
+# the pinentry-mac GUI on its own. pinentry-touchid does NOT honor USE_CURSES
+# (jorgelbg/pinentry-touchid#26), which is exactly why this dispatcher has to
+# route the remote case before ever reaching it.
+case "${PINENTRY_USER_DATA:-}" in
+  *USE_CURSES*) exec /opt/homebrew/bin/pinentry-curses "$@" ;;
+esac
+exec /opt/homebrew/bin/pinentry-touchid "$@"
