@@ -16,6 +16,7 @@ custom-builds/nerd-fonts/
 ├── README.md                ← you are here
 ├── build-updated-font.sh    ← self-contained builder
 ├── recalibrate-fa.sh        ← fast re-bake of icon sizing (no patcher rerun)
+├── unicode-donor-glyphs.txt ← small OFL donor-glyph allowlist
 ├── custom-icons/            ← local *.svg icons baked into the font
 │   ├── metadata.json        ←   optional labels/keywords/shortcode/aliases/descriptions
 │   ├── cursor-ai.svg        ←   -> usr-cursor-ai
@@ -37,18 +38,20 @@ Two paths, both end up running the same `build-updated-font.sh`:
 
 1. **Automatically, change-driven** — via
    `~/.local/share/chezmoi/home/run_onchange_after_70-symbols-nerd-font.sh.tmpl`.
-   That template bakes two fingerprints into the rendered script:
+   That template bakes four fingerprints into the rendered script:
    - the installed version of the `font-fontawesome` cask
      (`brew list --versions --cask font-fontawesome`)
    - the SHA256 of `build-updated-font.sh`
+   - a digest of `custom-icons/`
+   - the SHA256 of `unicode-donor-glyphs.txt`
 
-   chezmoi hashes the rendered script and re-fires it whenever either
-   fingerprint changes. So a `brew upgrade` that bumps FA, or an edit
-   to the builder itself, will offer a fresh rebuild on the next
-   `chezmoi apply`. The hook is a no-op on non-macOS or non-interactive
-   contexts; in interactive contexts it prompts before launching the
-   build. Declining is sticky — chezmoi commits the new hash so the
-   prompt doesn't keep firing until the next genuine change.
+   chezmoi hashes the rendered script and re-fires it whenever any
+   fingerprint changes. So a `brew upgrade` that bumps FA, an edit to the
+   builder, or a donor/custom icon change will offer a fresh rebuild on the next
+   `chezmoi apply`. The hook is a no-op on non-macOS or non-interactive contexts;
+   in interactive contexts it prompts before launching the build. Declining is
+   sticky — chezmoi commits the new hash so the prompt doesn't keep firing until
+   the next genuine change.
 
 2. **Manually, any time you want** — just invoke the script directly:
 
@@ -82,6 +85,45 @@ With `--install`, the two `.ttf` files are copied into `~/Library/Fonts/`
 `glyphs.json` file always lands in `~/.local/share/fonts/nerd-font/`
 regardless of `--install`. Override with `JSON_OUT_DIR=/some/where`,
 or disable with `JSON_OUT_DIR=""`.
+
+### Unicode donor glyphs
+
+After the Nerd Fonts patcher runs, the build imports an explicit allowlist of
+real Unicode symbols from OFL-licensed donor fonts into both Symbols variants.
+This exists for keyboard/media/power glyphs, the exact Iosevka fallback delta,
+and the current STIX/Noto runtime fallback rows that were useful in the terminal
+but not worth keeping as broad runtime fallbacks in WezTerm's startup path.
+
+Default donor order:
+
+```
+STIX Two Math
+Noto Music
+Noto Sans Symbols 2
+Noto Sans Math
+Iosevka
+```
+
+The imported codepoints live in `unicode-donor-glyphs.txt`. Codepoints already
+present in Symbols Nerd Font are skipped. The Iosevka section was generated from
+a fresh WezTerm render probe: `30,975` picker rows without Iosevka versus
+`31,827` with Iosevka as the final fallback, for an exact `852` row delta. The
+STIX/Noto section was generated from the current WezTerm resolver before pruning
+those runtime fallbacks: `STIX Two Math` (`1,276` rows), `Noto Music` (`478`),
+`Noto Sans Symbols 2` (`954`), and `Noto Sans Math` (`206`). Step 7 still strips
+normal colour-emoji mappings so Apple Color Emoji can win, but it preserves
+explicit donor entries from this file; that matters for non-emoji symbols in
+`U+1Fxxx` blocks. Override with `DONOR_GLYPH_FILE=/path/to/list`, add temporary
+build-only fonts with `DONOR_FONT_PATHS=/path/font.ttf:/path/font.otf`, or
+disable the step with `DONOR_GLYPH_FILE=""`.
+
+Missing Homebrew donor casks are installed non-interactively for the build by
+default, then the script uninstalls only the casks it installed itself. Existing
+user-installed fonts are left alone, whether they came from Homebrew or are just
+present on disk. Set `DONOR_INSTALL=0` to use only fonts already present or
+explicitly named in `DONOR_FONT_PATHS`. Iosevka is last on purpose, matching the
+old fallback order: STIX/Noto win where they cover a glyph, and Iosevka fills
+only the remaining gaps.
 
 ### `glyphs.json`
 
@@ -274,7 +316,8 @@ shown again at the bottom of this README).
 
 See the comment block at the top of `build-updated-font.sh` for the
 full set of overrides (`WORK_ROOT`, `FA_SRC_DIR`, `NERDFONTS_REF`,
-`ASSUME_YES`, `INSTALL`, `JSON_OUT_DIR`).
+`ASSUME_YES`, `INSTALL`, `JSON_OUT_DIR`, `DONOR_GLYPH_FILE`,
+`DONOR_FONT_FAMILIES`, `DONOR_FONT_PATHS`, `DONOR_INSTALL`).
 
 ## Picker starter
 

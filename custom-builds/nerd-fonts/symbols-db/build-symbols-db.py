@@ -662,15 +662,38 @@ def measure_widths(symbols, remeasure: bool):
 
 # --- renderability probe (cached) -----------------------------------------
 
+_WEZTERM_FONT_PATH = re.compile(r"-- (/.*?\.(?:ttf|otf|ttc|otc))(?:\s+index=\d+)?(?:\s+variation=\d+)?,")
+
+
+def _wezterm_font_file_fingerprint(ls_fonts: str) -> str:
+    """Stable-ish metadata for resolved font files.
+
+    `wezterm ls-fonts` shows the resolved paths, but not whether a same-path
+    font file was replaced. Hash size + mtime so rebuilding SymbolsNerdFont*.ttf
+    invalidates the renderability cache without reading every font byte.
+    """
+    rows = []
+    for path in sorted(set(_WEZTERM_FONT_PATH.findall(ls_fonts))):
+        try:
+            st = os.stat(path)
+        except OSError:
+            rows.append(f"{path}\0missing")
+            continue
+        rows.append(f"{path}\0{st.st_size}\0{st.st_mtime_ns}")
+    return "\n".join(rows)
+
+
 def _wezterm_probe_signature():
     """Fingerprint of everything that can flip the wezterm probe's verdict: the
     WezTerm version (its built-in block/box renderer evolves between releases)
     and the live resolved font fallback (`ls-fonts` lists every family + the
-    file it resolved to). Editing the fallback in wezterm.lua, adding/removing
-    a font, or upgrading WezTerm all shift this hash -- so the render cache
-    auto-invalidates and the next build re-probes, with no manual
-    --refresh-render. The probe never keeps a font list of its own: it asks the
-    live `wezterm` binary, so the two can't drift. Returns None when the
+    file it resolved to). The fallback text alone is not enough for custom fonts
+    because rebuilds replace the same path; include each resolved font file's
+    size + mtime too. Editing the fallback in wezterm.lua, adding/removing a
+    font, rebuilding Symbols Nerd Font, or upgrading WezTerm all shift this hash
+    -- so the render cache auto-invalidates and the next build re-probes, with no
+    manual --refresh-render. The probe never keeps a font list of its own: it
+    asks the live `wezterm` binary, so the two can't drift. Returns None when the
     fingerprint can't be taken (cache is then reused as-is, old behaviour)."""
     try:
         ver = subprocess.run(["wezterm", "--version"],
@@ -681,7 +704,14 @@ def _wezterm_probe_signature():
         return None
     if ver.returncode != 0 or fonts.returncode != 0:
         return None
-    payload = ver.stdout.strip() + "\n" + fonts.stdout.replace("\x00", "")
+    fonts_stdout = fonts.stdout.replace("\x00", "")
+    payload = (
+        ver.stdout.strip()
+        + "\n"
+        + fonts_stdout
+        + "\n"
+        + _wezterm_font_file_fingerprint(fonts_stdout)
+    )
     return hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()[:16]
 
 

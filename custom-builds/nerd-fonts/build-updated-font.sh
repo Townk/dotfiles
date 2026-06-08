@@ -23,6 +23,9 @@
 #      the Mono and Propo variants of "Symbols Nerd Font", with the merged
 #      FA file layered in via --custom (additive, careful: it never replaces
 #      curated NF glyphs).
+#   6b. Copy a tiny allowlist of real Unicode keyboard/symbol glyphs from
+#      OFL-licensed donor fonts into the finished Symbols variants. This keeps
+#      slow broad-coverage fonts out of the terminal fallback path.
 #   7b. Normalize icon sizing. Measure the curated md/oct box in the built
 #      font, then scale every FA glyph (native + relocated) and every custom
 #      SVG icon to that box (aspect preserved, centred on the md/oct centre),
@@ -33,8 +36,9 @@
 #      Symbols + Dingbats U+2600-U+27BF and the SMP emoji planes
 #      U+1F300-U+1FFFF) so terminal font lookups for ♻ ✏ 🚀 etc. fall
 #      through to the system colour-emoji font (Apple Color Emoji on
-#      macOS, Noto Emoji on Linux). See the long comment on the step
-#      itself for the full rationale.
+#      macOS, Noto Emoji on Linux), while preserving explicitly imported
+#      donor symbols. See the long comment on the step itself for the full
+#      rationale.
 #   8. Use `fonttools` to verify the result and print a glyph-count diff
 #      against the upstream-shipped TTFs in patched-fonts/NerdFontsSymbolsOnly.
 #   9. Emit a glyphs.json index of every codepoint in the built font, with
@@ -92,6 +96,17 @@
 #   CUSTOM_START     First auto-assigned codepoint of the custom-icon block
 #                    (hex). Default: 10fb00 — above the relocation zone, whose
 #                    icons now use the stable slot native+0x100000 (<=0x10f8ff).
+#   DONOR_GLYPH_FILE Allowlist of Unicode codepoints to copy from donor fonts.
+#                    Default: <script-dir>/unicode-donor-glyphs.txt
+#                    Set DONOR_GLYPH_FILE="" to skip.
+#   DONOR_FONT_FAMILIES
+#                    Comma-separated donor family preference order.
+#                    Default: STIX Two Math,Noto Music,Noto Sans Symbols 2,
+#                    Noto Sans Math,Iosevka
+#   DONOR_FONT_PATHS Optional colon-separated explicit donor font files. Useful
+#                    for temporary build-only fonts that are not installed.
+#   DONOR_INSTALL    Install missing donor casks for the build, then uninstall
+#                    only those this script installed. Default: 1.
 #
 # Conflict with Homebrew cask `font-symbols-only-nerd-font`:
 #   That cask installs the upstream-shipped variants under the same filenames
@@ -811,6 +826,435 @@ for f in "${BUILT[@]}"; do
 done
 
 # ===========================================================================
+# Step 6b — Import selected Unicode glyphs from OFL donor fonts.
+# ===========================================================================
+# The terminal fallback list used to include broad text fonts just to cover a
+# comparatively small set of glyphs. Loading those fonts in WezTerm was
+# expensive, so this step copies only the explicitly allowlisted codepoints into
+# Symbols Nerd Font and leaves the broad fonts out of the runtime fallback path.
+log "step 6b/9  import selected Unicode glyphs from donor fonts"
+
+DONOR_GLYPH_FILE="${DONOR_GLYPH_FILE-${SCRIPT_DIR}/unicode-donor-glyphs.txt}"
+DONOR_FONT_FAMILIES="${DONOR_FONT_FAMILIES:-STIX Two Math,Noto Music,Noto Sans Symbols 2,Noto Sans Math,Iosevka}"
+DONOR_FONT_PATHS="${DONOR_FONT_PATHS:-}"
+DONOR_INSTALL="${DONOR_INSTALL:-1}"
+DONOR_TEMP_CASKS=()
+
+donor_family_cask() {
+  case "$1" in
+    "Iosevka")             printf '%s\n' "font-iosevka" ;;
+    "Noto Music")          printf '%s\n' "font-noto-music" ;;
+    "Noto Sans Symbols 2") printf '%s\n' "font-noto-sans-symbols-2" ;;
+    "Noto Sans Math")      printf '%s\n' "font-noto-sans-math" ;;
+    "STIX Two Math")       printf '%s\n' "font-stix-two-math" ;;
+    *)                     return 1 ;;
+  esac
+}
+
+donor_family_has_font_file() {
+  case "$1" in
+    "Iosevka")
+      [[ -f "${HOME}/Library/Fonts/Iosevka.ttc" \
+        || -f "/Library/Fonts/Iosevka.ttc" \
+        || -f "/opt/homebrew/share/fonts/Iosevka.ttc" \
+        || -f "/usr/local/share/fonts/Iosevka.ttc" ]]
+      ;;
+    "Noto Music")
+      [[ -f "${HOME}/Library/Fonts/NotoMusic-Regular.ttf" \
+        || -f "/Library/Fonts/NotoMusic-Regular.ttf" \
+        || -f "/opt/homebrew/share/fonts/NotoMusic-Regular.ttf" \
+        || -f "/usr/local/share/fonts/NotoMusic-Regular.ttf" ]]
+      ;;
+    "Noto Sans Symbols 2")
+      [[ -f "${HOME}/Library/Fonts/NotoSansSymbols2-Regular.ttf" \
+        || -f "/Library/Fonts/NotoSansSymbols2-Regular.ttf" \
+        || -f "/opt/homebrew/share/fonts/NotoSansSymbols2-Regular.ttf" \
+        || -f "/usr/local/share/fonts/NotoSansSymbols2-Regular.ttf" ]]
+      ;;
+    "Noto Sans Math")
+      [[ -f "${HOME}/Library/Fonts/NotoSansMath-Regular.ttf" \
+        || -f "/Library/Fonts/NotoSansMath-Regular.ttf" \
+        || -f "/opt/homebrew/share/fonts/NotoSansMath-Regular.ttf" \
+        || -f "/usr/local/share/fonts/NotoSansMath-Regular.ttf" ]]
+      ;;
+    "STIX Two Math")
+      [[ -f "/System/Library/Fonts/Supplemental/STIXTwoMath.otf" \
+        || -f "${HOME}/Library/Fonts/STIXTwoMath-Regular.otf" \
+        || -f "/Library/Fonts/STIXTwoMath-Regular.otf" \
+        || -f "/opt/homebrew/share/fonts/STIXTwoMath-Regular.otf" \
+        || -f "/usr/local/share/fonts/STIXTwoMath-Regular.otf" ]]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+cleanup_donor_casks() {
+  local i cask
+  if [[ ${#DONOR_TEMP_CASKS[@]} -eq 0 ]]; then
+    return 0
+  fi
+  log "cleanup  uninstall temporary donor font casks"
+  for (( i=${#DONOR_TEMP_CASKS[@]}-1; i>=0; i-- )); do
+    cask="${DONOR_TEMP_CASKS[$i]}"
+    if brew list --cask "$cask" >/dev/null 2>&1; then
+      brew uninstall --cask "$cask" >/dev/null 2>&1 \
+        && info "uninstalled temporary donor cask: ${cask}" \
+        || warn "could not uninstall temporary donor cask: ${cask}"
+    fi
+  done
+}
+trap cleanup_donor_casks EXIT
+
+install_donor_casks() {
+  if [[ "${DONOR_INSTALL}" != "1" ]]; then
+    info "donor cask install disabled (DONOR_INSTALL=${DONOR_INSTALL})"
+    return 0
+  fi
+  if ! command -v brew >/dev/null 2>&1; then
+    warn "brew unavailable; cannot install missing donor fonts"
+    return 0
+  fi
+
+  local family cask old_ifs
+  old_ifs="${IFS}"
+  IFS=","
+  for family in ${DONOR_FONT_FAMILIES}; do
+    IFS="${old_ifs}"
+    family="$(printf '%s' "$family" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    [[ -n "$family" ]] || continue
+    cask="$(donor_family_cask "$family" || true)"
+    [[ -n "$cask" ]] || continue
+    if brew list --cask "$cask" >/dev/null 2>&1; then
+      info "donor cask already installed: ${cask}"
+    elif donor_family_has_font_file "$family"; then
+      info "donor font already present outside Homebrew cask: ${family}"
+    else
+      info "installing temporary donor cask: ${cask}"
+      brew install --cask --force "$cask" </dev/null \
+        || die "brew install --cask --force ${cask} failed."
+      DONOR_TEMP_CASKS+=("$cask")
+      info "will uninstall temporary donor cask at exit: ${cask}"
+    fi
+    IFS=","
+  done
+  IFS="${old_ifs}"
+}
+
+if [[ -z "${DONOR_GLYPH_FILE}" ]]; then
+  info "skipped: DONOR_GLYPH_FILE is empty (explicitly disabled)."
+elif [[ ! -f "${DONOR_GLYPH_FILE}" ]]; then
+  warn "skipped: donor glyph allowlist missing at ${DONOR_GLYPH_FILE}"
+else
+  install_donor_casks
+  DONOR_IMPORT_PY="${WORK_DIR}/_import_donor_glyphs.py"
+  cat >"${DONOR_IMPORT_PY}" <<'PYEOF'
+"""Copy a small Unicode allowlist from OFL donor fonts into Symbols Nerd Font.
+
+Uses fontTools instead of FontForge so the donor step copies only glyph outlines,
+metrics, and cmap entries. That avoids FontForge's expensive GPOS validation path
+("Bad pair position" floods) while keeping the generated font tiny and simple.
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+from pathlib import Path
+
+from fontTools.misc.transform import Identity
+from fontTools.pens.cu2quPen import Cu2QuPen
+from fontTools.pens.recordingPen import DecomposingRecordingPen
+from fontTools.pens.transformPen import TransformPen
+from fontTools.pens.ttGlyphPen import TTGlyphPen
+from fontTools.ttLib import TTCollection, TTFont
+
+
+DEFAULT_DIRS = [
+    "~/Library/Fonts",
+    "/Library/Fonts",
+    "/System/Library/Fonts",
+    "/System/Library/Fonts/Supplemental",
+    "/opt/homebrew/share/fonts",
+    "/usr/local/share/fonts",
+    "~/.local/share/fonts",
+    "/usr/share/fonts",
+]
+
+KNOWN_PATHS = {
+    "Iosevka": [
+        "~/Library/Fonts/Iosevka.ttc",
+        "/Library/Fonts/Iosevka.ttc",
+        "/opt/homebrew/share/fonts/Iosevka.ttc",
+        "/usr/local/share/fonts/Iosevka.ttc",
+    ],
+    "Noto Sans Symbols 2": [
+        "~/Library/Fonts/NotoSansSymbols2-Regular.ttf",
+        "/Library/Fonts/NotoSansSymbols2-Regular.ttf",
+        "/opt/homebrew/share/fonts/NotoSansSymbols2-Regular.ttf",
+        "/usr/local/share/fonts/NotoSansSymbols2-Regular.ttf",
+    ],
+    "Noto Sans Math": [
+        "~/Library/Fonts/NotoSansMath-Regular.ttf",
+        "/Library/Fonts/NotoSansMath-Regular.ttf",
+        "/opt/homebrew/share/fonts/NotoSansMath-Regular.ttf",
+        "/usr/local/share/fonts/NotoSansMath-Regular.ttf",
+    ],
+    "Noto Music": [
+        "~/Library/Fonts/NotoMusic-Regular.ttf",
+        "/Library/Fonts/NotoMusic-Regular.ttf",
+        "/opt/homebrew/share/fonts/NotoMusic-Regular.ttf",
+        "/usr/local/share/fonts/NotoMusic-Regular.ttf",
+    ],
+    "STIX Two Math": [
+        "/System/Library/Fonts/Supplemental/STIXTwoMath.otf",
+        "~/Library/Fonts/STIXTwoMath-Regular.otf",
+        "/Library/Fonts/STIXTwoMath-Regular.otf",
+        "/opt/homebrew/share/fonts/STIXTwoMath-Regular.otf",
+        "/usr/local/share/fonts/STIXTwoMath-Regular.otf",
+    ],
+}
+
+
+def expand(path: str) -> str:
+    return os.path.abspath(os.path.expanduser(path))
+
+
+def load_codepoints(path: str) -> list[int]:
+    cps: list[int] = []
+    seen: set[int] = set()
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.split("#", 1)[0]
+            for match in re.finditer(r"(?:U\+)?([0-9A-Fa-f]{4,6})\b", line):
+                cp = int(match.group(1), 16)
+                if cp in (0xFE0E, 0xFE0F) or cp in seen:
+                    continue
+                seen.add(cp)
+                cps.append(cp)
+    return cps
+
+
+def name_records(font: TTFont, name_id: int) -> list[str]:
+    out: list[str] = []
+    for rec in font["name"].names:
+        if rec.nameID != name_id:
+            continue
+        try:
+            value = rec.toUnicode().strip()
+        except Exception:
+            continue
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+def family_matches(font: TTFont, family: str, path: str) -> bool:
+    wanted = family.casefold()
+    for name_id in (1, 4, 6):
+        for name in name_records(font, name_id):
+            folded = name.casefold()
+            if folded == wanted or folded.startswith(wanted + " "):
+                return True
+    basename = os.path.basename(path).casefold().replace("-", "").replace("_", "")
+    return wanted.replace(" ", "") in basename
+
+
+def font_cmap(font: TTFont) -> dict[int, str]:
+    best = font.getBestCmap() or {}
+    out = {int(cp): name for cp, name in best.items()}
+    for table in font["cmap"].tables:
+        if not table.isUnicode():
+            continue
+        for cp, name in table.cmap.items():
+            out.setdefault(int(cp), name)
+    return out
+
+
+def open_font_faces(path: str) -> list[TTFont]:
+    suffix = Path(path).suffix.lower()
+    if suffix in {".ttc", ".otc"}:
+        return list(TTCollection(path).fonts)
+    return [TTFont(path)]
+
+
+def candidate_paths(family: str, explicit_paths: list[str]) -> list[str]:
+    paths: list[str] = []
+    paths.extend(expand(path) for path in explicit_paths)
+    paths.extend(expand(path) for path in KNOWN_PATHS.get(family, []))
+
+    suffixes = (".ttf", ".otf", ".ttc", ".otc")
+    for root in DEFAULT_DIRS:
+        root = expand(root)
+        if not os.path.isdir(root):
+            continue
+        try:
+            entries = os.listdir(root)
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.lower().endswith(suffixes):
+                paths.append(os.path.join(root, entry))
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        if path in seen or not os.path.exists(path):
+            continue
+        seen.add(path)
+        out.append(path)
+    return out
+
+
+def open_donor(family: str, needed: set[int], explicit_paths: list[str]):
+    for path in candidate_paths(family, explicit_paths):
+        try:
+            faces = open_font_faces(path)
+        except Exception:
+            continue
+        for font in faces:
+            if not family_matches(font, family, path):
+                continue
+            cmap = font_cmap(font)
+            if any(cp in cmap for cp in needed):
+                return path, font, cmap
+    return None, None, {}
+
+
+def cmap_accepts_cp(table, cp: int) -> bool:
+    if not table.isUnicode():
+        return False
+    if table.format in {0, 6}:
+        return cp <= 0xFF
+    if table.format == 4:
+        return cp <= 0xFFFF
+    return True
+
+
+def unique_glyph_name(order: set[str], cp: int) -> str:
+    base = "u%04X" % cp if cp <= 0xFFFF else "u%06X" % cp
+    name = base
+    i = 1
+    while name in order:
+        i += 1
+        name = f"{base}.{i}"
+    return name
+
+
+def draw_donor_glyph(donor: TTFont, donor_gname: str, scale: float):
+    donor_set = donor.getGlyphSet()
+    rec = DecomposingRecordingPen(donor_set)
+    donor_set[donor_gname].draw(rec)
+
+    tt_pen = TTGlyphPen(None)
+    cu2qu_pen = Cu2QuPen(tt_pen, max_err=max(1.0, scale))
+    rec.replay(TransformPen(cu2qu_pen, Identity.scale(scale)))
+    return tt_pen.glyph()
+
+
+def import_one(dest: TTFont, donor: TTFont, donor_cmap: dict[int, str], cp: int) -> str:
+    if "glyf" not in dest:
+        raise SystemExit("destination font is not TrueType/glyf-based")
+
+    donor_gname = donor_cmap[cp]
+    dest_upm = dest["head"].unitsPerEm
+    donor_upm = donor["head"].unitsPerEm
+    scale = dest_upm / donor_upm
+
+    order = dest.getGlyphOrder()
+    order_set = set(order)
+    new_name = unique_glyph_name(order_set, cp)
+    order.append(new_name)
+    dest.setGlyphOrder(order)
+
+    glyph = draw_donor_glyph(donor, donor_gname, scale)
+    dest["glyf"][new_name] = glyph
+
+    advance, lsb = donor["hmtx"].metrics.get(donor_gname, (donor_upm, 0))
+    dest["hmtx"].metrics[new_name] = (int(round(advance * scale)),
+                                       int(round(lsb * scale)))
+
+    for table in dest["cmap"].tables:
+        if cmap_accepts_cp(table, cp):
+            table.cmap[cp] = new_name
+
+    dest["maxp"].numGlyphs = len(order)
+    return new_name
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 5:
+        sys.stderr.write(
+            "usage: <glyph-file> <family-csv> <path-list> <ttf> [<ttf> ...]\n")
+        return 2
+
+    glyph_file, family_csv, path_list = argv[1], argv[2], argv[3]
+    built_paths = argv[4:]
+    cps = load_codepoints(glyph_file)
+    families = [f.strip() for f in family_csv.split(",") if f.strip()]
+    explicit_paths = [p for p in path_list.split(os.pathsep) if p]
+
+    if not cps:
+        print("  no donor codepoints listed")
+        return 0
+    if not families:
+        print("  no donor font families configured")
+        return 0
+
+    donors = []
+    unresolved = set(cps)
+    for family in families:
+        path, font, cmap = open_donor(family, unresolved, explicit_paths)
+        if not font:
+            print("  donor missing or unused: %s" % family)
+            continue
+        covered = sorted(cp for cp in unresolved if cp in cmap)
+        donors.append((family, path, font, cmap, covered))
+        unresolved.difference_update(covered)
+        print("  donor: %-20s %3d glyph(s)  %s" %
+              (family, len(covered), path))
+        if not unresolved:
+            break
+
+    for dest_path in built_paths:
+        dest = TTFont(dest_path)
+        present = set(dest.getBestCmap() or {})
+        imported = 0
+        already = 0
+        for _family, _path, donor, cmap, covered in donors:
+            for cp in covered:
+                if cp in present:
+                    already += 1
+                    continue
+                import_one(dest, donor, cmap, cp)
+                present.add(cp)
+                imported += 1
+        dest.save(dest_path)
+        print("  %s: imported %d glyph(s), skipped %d already present" %
+              (os.path.basename(dest_path), imported, already))
+
+    if unresolved:
+        print("  unresolved donor glyph(s): " +
+              ", ".join("U+%04X" % cp for cp in sorted(unresolved)))
+    return 0
+
+
+sys.exit(main(sys.argv))
+
+PYEOF
+  if [[ -z "${PY_VENV_BIN}" || ! -x "${PY_VENV_BIN}" ]]; then
+    warn "skipped: donor Unicode import requires the fonttools venv"
+  else
+    "${PY_VENV_BIN}" "${DONOR_IMPORT_PY}" \
+      "${DONOR_GLYPH_FILE}" \
+      "${DONOR_FONT_FAMILIES}" \
+      "${DONOR_FONT_PATHS}" \
+      "${BUILT[@]}" \
+      2>&1 | tee -a "${LOG_FILE}"
+  fi
+  done_ "donor Unicode glyph import complete"
+fi
+
+# ===========================================================================
 # Step 7 — Strip colour-emoji codepoints from the built TTFs.
 # ===========================================================================
 # Why we do this:
@@ -846,6 +1290,12 @@ done
 #                   Emoji renders these uncomfortably small inside the
 #                   cell, so we prefer Symbols Nerd Font's text-style
 #                   monochrome arrows here).
+#   * Explicit DONOR_GLYPH_FILE entries. Some Iosevka delta symbols live in
+#                   U+1Fxxx blocks that are not emoji; if we intentionally
+#                   imported them in step 6b, do not strip them here.
+#   * U+1FB00-U+1FBFF Symbols for Legacy Computing (box drawing / terminal
+#                   graphics pieces; not emoji despite living in the broad
+#                   U+1F300-U+1FFFF strip range below).
 #   * U+E000-U+F8FF + U+F0000-U+10FFFD Private Use Areas (the actual
 #                   nerd-font icons live here; nothing else competes).
 log "step 7/9  strip colour-emoji codepoints from built TTFs"
@@ -866,6 +1316,7 @@ the chain gets asked.
 Idempotent: running twice on the same file has no effect after the
 first pass (already-stripped codepoints are simply not present).
 """
+import re
 import sys
 from fontTools.ttLib import TTFont
 
@@ -875,12 +1326,35 @@ EMOJI_RANGES = [
     (0x2600,  0x27BF),    # Miscellaneous Symbols + Dingbats
     (0x1F300, 0x1FFFF),   # SMP emoji planes
 ]
+KEEP_RANGES = [
+    (0x1FB00, 0x1FBFF),   # Symbols for Legacy Computing, not emoji
+]
+
+def load_keep_codepoints(path):
+    if not path:
+        return set()
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return set()
+    keep = set()
+    for match in re.finditer(r"U\+([0-9A-Fa-f]{4,6})\b", text):
+        keep.add(int(match.group(1), 16))
+    return keep
+
+EXPLICIT_KEEP = load_keep_codepoints(sys.argv[1] if len(sys.argv) > 1 else "")
 
 def in_strip_range(cp):
+    if cp in EXPLICIT_KEEP:
+        return False
+    if any(lo <= cp <= hi for lo, hi in KEEP_RANGES):
+        return False
     return any(lo <= cp <= hi for lo, hi in EMOJI_RANGES)
 
 removed_total = 0
-for path in sys.argv[1:]:
+if EXPLICIT_KEEP:
+    print("  preserving %d explicit donor codepoint(s)" % len(EXPLICIT_KEEP))
+for path in sys.argv[2:]:
     font = TTFont(path)
     removed_in_file = 0
     for table in font["cmap"].tables:
@@ -896,7 +1370,7 @@ for path in sys.argv[1:]:
 
 print("  total removed: %d codepoint→glyph mappings" % removed_total)
 PYEOF
-  "${PY_VENV_BIN}" "${STRIP_PY}" "${BUILT[@]}" 2>&1 | tee -a "${LOG_FILE}"
+  "${PY_VENV_BIN}" "${STRIP_PY}" "${DONOR_GLYPH_FILE:-}" "${BUILT[@]}" 2>&1 | tee -a "${LOG_FILE}"
   done_ "emoji codepoints stripped"
 else
   warn "skipped: no fonttools venv -> emoji codepoints remain in the cmap"

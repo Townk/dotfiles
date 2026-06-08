@@ -41,10 +41,12 @@
 */ -}}
 {{- $faVersion := "" -}}
 {{- $customIcons := "" -}}
+{{- $donorGlyphs := "" -}}
 {{- $builderSHA := "" -}}
 {{- if eq .chezmoi.os "darwin" -}}
   {{- $faVersion = output "sh" "-c" "brew list --versions --cask font-fontawesome 2>/dev/null || true" | trim -}}
   {{- $customIcons = output "sh" "-c" (printf "find %q -type f \\( -name '*.svg' -o -name '*.json' \\) 2>/dev/null | LC_ALL=C sort | while read -r f; do shasum -a 256 \"$f\"; done | shasum -a 256 | cut -c1-16" (joinPath .chezmoi.workingTree "custom-builds/nerd-fonts/custom-icons")) | trim -}}
+  {{- $donorGlyphs = output "shasum" "-a" "256" (joinPath .chezmoi.workingTree "custom-builds/nerd-fonts/unicode-donor-glyphs.txt") | trim -}}
   {{- $builderSHA = output "shasum" "-a" "256" (joinPath .chezmoi.workingTree "custom-builds/nerd-fonts/build-updated-font.sh") | trim -}}
 {{- end -}}
 #!/bin/bash
@@ -54,6 +56,7 @@
 #   font-fontawesome cask : {{ if $faVersion }}{{ $faVersion }}{{ else }}(not installed / not macOS){{ end }}
 #   builder script SHA256 : {{ if $builderSHA }}{{ $builderSHA }}{{ else }}(not macOS){{ end }}
 #   custom-icons digest   : {{ if $customIcons }}{{ $customIcons }}{{ else }}(none / not macOS){{ end }}
+#   donor glyphs SHA256   : {{ if $donorGlyphs }}{{ $donorGlyphs }}{{ else }}(none / not macOS){{ end }}
 #
 # (WezTerm fallback + build-symbols-db.py are tracked separately by
 #  run_onchange_after_60-symbols-db.sh — they rebuild the DB, not the font.)

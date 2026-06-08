@@ -102,20 +102,16 @@ config.font = wezterm.font_with_fallback({
 	-- glyphs none of the fonts below have (Georgian Mtavruli, modifier
 	-- letters, some Latin extended).
 	"Menlo",
-	-- Broad-coverage fillers for the glyph picker (symbols.db). WezTerm uses
-	-- the FIRST fallback that has the glyph, so these sit after the curated
-	-- fonts above (Nerd Font / emoji still win) with the universal Arial
-	-- Unicode MS last. (Replaces the old "DengXian" entry, which wasn't
-	-- installed and silently resolved to Helvetica — the reason CJK/Bopomofo
-	-- rendered as tofu.)
+	-- Remaining broad-coverage fillers for the glyph picker (symbols.db).
+	-- STIX/Noto donor rows are baked into Symbols Nerd Font; keep only the
+	-- runtime fallbacks that still provide broad platform/script coverage.
+	-- WezTerm uses the FIRST fallback that has the glyph, so these sit after
+	-- the curated fonts above (Nerd Font / emoji still win) with the universal
+	-- Arial Unicode MS last.
 	"Apple Symbols", -- technical / runic / misc symbols
-	"STIX Two Math", -- 𝐀 math alphanumerics (bold/italic/script/fraktur/…)
 	"Songti SC", -- CJK, Bopomofo, CJK/Kangxi radicals (DengXian replacement)
 	"Euphemia UCAS", -- Canadian Aboriginal Syllabics
 	"Hiragino Sans", -- Japanese kana extras
-	"Noto Music", -- musical + Byzantine musical symbols (via font-noto-music)
-	"Noto Sans Symbols 2", -- misc pictographic symbols
-	"Noto Sans Math", -- remaining mathematical symbols
 	"Arial Unicode MS", -- universal catch-all
 })
 config.font_size = 19
