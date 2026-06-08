@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+
+{{- if eq .chezmoi.os "darwin" }}
+pam_sudo=/etc/pam.d/sudo
+pam_local=/etc/pam.d/sudo_local
+pam_template=/etc/pam.d/sudo_local.template
+
+has_touchid_line() {
+  /usr/bin/grep -Eq '^[[:space:]]*auth[[:space:]]+sufficient[[:space:]]+pam_tid\.so([[:space:]]|$)' "$1"
+}
+
+if ! /usr/bin/grep -Eq '^[[:space:]]*auth[[:space:]]+include[[:space:]]+sudo_local([[:space:]]|$)' "$pam_sudo"; then
+  echo "sudo Touch ID: $pam_sudo does not include sudo_local; skipping" >&2
+  exit 0
+fi
+
+if [ -f "$pam_local" ] && has_touchid_line "$pam_local"; then
+  exit 0
+fi
+
+tmp="${TMPDIR:-/tmp}/sudo_local.$$"
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+if [ -f "$pam_template" ]; then
+  /usr/bin/awk '
+    /^[[:space:]]*#[[:space:]]*auth[[:space:]]+sufficient[[:space:]]+pam_tid\.so([[:space:]]|$)/ {
+      sub(/^[[:space:]]*#[[:space:]]*/, "")
+    }
+    { print }
+  ' "$pam_template" > "$tmp"
+else
+  {
+    echo "# sudo_local: local config file which survives system update and is included for sudo"
+    echo "auth       sufficient     pam_tid.so"
+  } > "$tmp"
+fi
+
+if ! has_touchid_line "$tmp"; then
+  echo "sudo Touch ID: failed to render a valid $pam_local" >&2
+  exit 1
+fi
+
+if /usr/bin/sudo -n /usr/bin/install -m 0644 -o root -g wheel "$tmp" "$pam_local" 2>/dev/null; then
+  echo "sudo Touch ID: enabled via $pam_local"
+elif [ -t 0 ]; then
+  echo "sudo Touch ID: enabling via $pam_local (sudo authentication required)"
+  /usr/bin/sudo /usr/bin/install -m 0644 -o root -g wheel "$tmp" "$pam_local"
+else
+  echo "sudo Touch ID: sudo credentials unavailable; run 'chezmoi apply' from an interactive terminal to enable" >&2
+fi
+{{- end }}
+
+# vim:ft=sh
