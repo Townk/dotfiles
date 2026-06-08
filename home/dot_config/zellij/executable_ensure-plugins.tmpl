@@ -29,7 +29,11 @@ is_wasm() {
 fetch() {
   local url=$1 dest=$2 tmp
   tmp="$dest.part"
-  if curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 2 \
+  # --retry-all-errors so flaky 504s from a corporate gateway are retried too
+  # (plain --retry skips some 5xx). Missing-but-clean beats poisoned: on a
+  # total failure we leave no file, and the next shell launch retries.
+  if curl -fsSL --connect-timeout 10 --max-time 120 \
+       --retry 5 --retry-delay 2 --retry-all-errors \
        -o "$tmp" "$url" && is_wasm "$tmp"; then
     mv -f "$tmp" "$dest"
     return 0
