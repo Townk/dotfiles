@@ -17,6 +17,12 @@
   the repo name.
 */ -}}
 {{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
+[settings]
+# The hosted mise-versions API currently returns 403 for several aqua-backed
+# GitHub release lookups on the dev shell. Disable it here so mise queries the
+# backend directly instead of warning and falling back on every update.
+use_versions_host = false
+
 [tools]
 # NOTE: neovim and zellij are intentionally NOT here — they come from
 # snap via ~/.config/packages/Snapfile (the .zshrc zellij auto-attach
