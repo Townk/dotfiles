@@ -23,14 +23,14 @@ source can later coexist with a Linux machine without polluting it.
 | `dot_config/zsh/environment.sh` | Shared shell/GUI environment source, including XDG paths and `GNUPGHOME`. |
 | `private_dot_ssh/`, `dot_config/private_gnupg/` | SSH and GnuPG configs (chezmoi-private permissions). |
 | `dot_local/bin/system-update` | Canonical "bring all tools to latest" script. Used both as a daily command and inside the bootstrap. |
-| `dot_local/bin/nvim-wez.sh` | Engine behind the macOS "Open in NeoVim" Shortcuts droplet. |
-| `dot_local/share/shortcuts/` | Exported macOS Shortcuts (`.shortcut` files). |
+| `dot_local/bin/nvim-wez.sh` | Engine behind the macOS "Open in NeoVim" Finder droplet. |
+| `../assets/open-in-neovim/` | Icons used by the generated "Open in NeoVim" Finder app. |
 | `Library/private_Application Support/` | macOS symlinks to XDG paths (e.g. tealdeer's config). |
 | `run_once_after_10-setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, `mise install`, install `rust@nightly`, then run `system-update`. |
 | `run_once_after_25-setup-gpg-key.sh.tmpl` | Imports OpenPGP keys from 1Password if they are missing locally. |
 | `run_once_after_20-setup-system-settings.sh.tmpl` | macOS `defaults`, Finder, Dock, login items. |
 | `run_onchange_after_30-reload-environment-launchagent.sh.tmpl` | Reloads the GUI environment LaunchAgent when env definitions change. |
-| `run_onchange_after_35-install-macos-shortcut.sh.tmpl` | Re-imports `Open in NeoVim.shortcut` whenever its content hash changes. |
+| `run_onchange_after_35-generate-open-in-neovim-app.sh.tmpl` | Generates and registers the `Open in NeoVim.app` Finder droplet. |
 | `run_onchange_after_50-custom-build-zsh.sh.tmpl` | Builds the non-unicode9 zsh from source (macOS work/personal) and sets it as the login shell. |
 
 The numeric prefix on `run_*` hooks fixes their execution order: chezmoi runs
@@ -109,8 +109,8 @@ End to end, the script:
     - `setup-system-settings.sh.tmpl` writes macOS `defaults` (keyboard,
       trackpad, dock, finder), and registers `Dropbox` / `Hammerspoon` /
       `Raycast` / `SoundSource` as login items.
-    - `install-macos-shortcut.sh.tmpl` opens `Open in NeoVim.shortcut` in
-      Shortcuts.app (one-click confirmation needed).
+    - `generate-open-in-neovim-app.sh.tmpl` generates and registers
+      `~/Applications/Open in NeoVim.app`.
 
 The interactive gates (1Password, `gh auth`) are deliberately front-loaded
 so the user clears them while their attention is on the install. After
@@ -192,9 +192,9 @@ of invoking the merge tool, leaving the source byte-identical to before.
 - **Templates (`*.tmpl`)** are rendered through chezmoi's Go templates.
   Used here for OS-gating (`{{ if eq .chezmoi.os "darwin" }}`) and for
   `{{ .chezmoi.homeDir }}` so paths stay portable across users.
-- **`.chezmoiignore.tmpl`** skips `.local/bin/nvim-wez.sh` and
-  `.local/share/shortcuts/` on non-darwin targets — they depend on
-  `open -a`, AppleScript, and the WezTerm GUI socket layout.
+- **`.chezmoiignore.tmpl`** skips `.local/bin/nvim-wez.sh` on non-darwin
+  targets — it depends on `open -a`, AppleScript, and the WezTerm GUI socket
+  layout.
 - **Brewfile split**: `Brewfile.bootstrap` holds everything that must
   exist before `chezmoi apply` fires (`chezmoi` + `mise` + `gh` +
   `1password-cli` + `1password/tap`). `Brewfile` is everything else.

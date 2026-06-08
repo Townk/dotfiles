@@ -1,0 +1,153 @@
+#!/bin/sh
+set -eu
+
+{{ if eq .chezmoi.os "darwin" -}}
+# Generate the "Open in NeoVim" Finder droplet. The app is built directly with
+# AppleScript so it can resolve the current user's home directory at runtime.
+#
+# icon content hash: {{ include "../assets/open-in-neovim/neovim-hicontrast.icns" | sha256sum }}
+
+app="$HOME/Applications/Open in NeoVim.app"
+icon='{{ joinPath .chezmoi.workingTree "assets/open-in-neovim/neovim-hicontrast.icns" }}'
+tmpdir="$(mktemp -d)"
+script="$tmpdir/OpenInNeoVim.applescript"
+
+cleanup() {
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT INT TERM
+
+cat > "$script" <<'APPLESCRIPT'
+on open droppedItems
+  set commandText to quoted form of (POSIX path of (path to home folder) & ".local/bin/nvim-wez.sh")
+  repeat with droppedItem in droppedItems
+    set commandText to commandText & " " & quoted form of (POSIX path of droppedItem)
+  end repeat
+  do shell script commandText
+end open
+
+on run
+  do shell script quoted form of (POSIX path of (path to home folder) & ".local/bin/nvim-wez.sh")
+end run
+APPLESCRIPT
+
+rm -rf "$app"
+mkdir -p "$HOME/Applications"
+/usr/bin/osacompile -o "$app" "$script"
+
+plist="$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleName Open in NeoVim' "$plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c 'Add :CFBundleName string Open in NeoVim' "$plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName Open in NeoVim' "$plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c 'Add :CFBundleDisplayName string Open in NeoVim' "$plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.townk.open-in-neovim' "$plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c 'Add :CFBundleIdentifier string com.townk.open-in-neovim' "$plist"
+/usr/libexec/PlistBuddy -c 'Set :LSUIElement true' "$plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c 'Add :LSUIElement bool true' "$plist"
+
+if [ -f "$icon" ]; then
+  cp "$icon" "$app/Contents/Resources/OpenInNeoVim.icns"
+  /usr/libexec/PlistBuddy -c 'Set :CFBundleIconFile OpenInNeoVim' "$plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c 'Add :CFBundleIconFile string OpenInNeoVim' "$plist"
+  /usr/libexec/PlistBuddy -c 'Delete :CFBundleIconName' "$plist" 2>/dev/null || true
+fi
+
+add_array_items() {
+  path="$1"
+  shift
+  i=0
+  for value in "$@"; do
+    /usr/libexec/PlistBuddy -c "Add ${path}:${i} string ${value}" "$plist"
+    i=$((i + 1))
+  done
+}
+
+content_type_index=0
+content_types_seen=" "
+add_content_type() {
+  value="$1"
+  case "$content_types_seen" in
+    *" $value "*) return 0 ;;
+  esac
+  /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:LSItemContentTypes:${content_type_index} string ${value}" "$plist"
+  content_type_index=$((content_type_index + 1))
+  content_types_seen="${content_types_seen}${value} "
+}
+
+source_extensions="
+  sh zsh bash fish command tool
+  py pyw
+  md markdown mdown mkdn rst
+  lua js jsx ts tsx mjs cjs
+  json jsonc yaml yml toml xml
+  html htm css scss sass less
+  rb erb go rs java kt kts scala
+  c cc cpp cxx h hpp hh m mm
+  cs php pl pm r sql swift vim el
+  clj cljs edn ex exs erl hrl fs fsx
+  hs lhs jl nim zig dart vue svelte astro
+"
+
+/usr/libexec/PlistBuddy -c 'Delete :CFBundleDocumentTypes' "$plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes array' "$plist"
+/usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes:0 dict' "$plist"
+/usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes:0:CFBundleTypeName string Source and Text Files' "$plist"
+/usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes:0:CFBundleTypeRole string Editor' "$plist"
+/usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes:0:LSHandlerRank string Alternate' "$plist"
+/usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes:0:LSItemContentTypes array' "$plist"
+for uti in \
+  public.shell-script \
+  public.zsh-script \
+  public.bash-script \
+  com.apple.terminal.shell-script \
+  public.python-script \
+  net.daringfireball.markdown \
+  public.ruby-script \
+  public.perl-script \
+  public.php-script \
+  com.netscape.javascript-source \
+  public.json \
+  public.yaml \
+  public.xml \
+  public.html \
+  public.css \
+  public.c-source \
+  public.c-header \
+  public.c-plus-plus-source \
+  public.c-plus-plus-header \
+  public.objective-c-source \
+  public.objective-c-plus-plus-source \
+  public.swift-source \
+  com.sun.java-source; do
+  add_content_type "$uti"
+done
+
+for ext in $source_extensions; do
+  probe="$tmpdir/open-in-neovim-uti.$ext"
+  : > "$probe"
+  uti="$(/usr/bin/mdls -raw -name kMDItemContentType "$probe" 2>/dev/null || true)"
+  case "$uti" in
+    "" | "(null)" | public.mpeg-2-transport-stream | com.apple.logic.exs | com.apple.rez-source) ;;
+    *) add_content_type "$uti" ;;
+  esac
+done
+
+/usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions array' "$plist"
+add_array_items ':CFBundleDocumentTypes:0:CFBundleTypeExtensions' $source_extensions
+
+/usr/bin/codesign --force --deep --sign - "$app" >/dev/null 2>&1 || true
+
+old="$HOME/.Trash/Open in NeoVim.app"
+if [ -d "$old" ]; then
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$old" 2>/dev/null || true
+  rm -rf "$old"
+fi
+
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app" 2>/dev/null || true
+/usr/bin/killall Finder 2>/dev/null || true
+{{- else }}
+# macOS-only; no-op on this platform.
+exit 0
+{{- end }}
+
+# vim:ft=sh
