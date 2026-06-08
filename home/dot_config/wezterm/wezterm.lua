@@ -19,18 +19,19 @@ if wezterm.config_builder then
 end
 
 ---------------------------------------------------------------
--- TODO(ssh-auth-sock): wezterm is hijacking SSH_AUTH_SOCK.
+-- SSH agent: don't let wezterm hijack SSH_AUTH_SOCK
 ---------------------------------------------------------------
--- We never configured an ssh agent here, yet panes inherit
--- SSH_AUTH_SOCK=~/.local/share/wezterm/agent.<pid> — wezterm's mux
--- starts its own built-in ssh agent and exports it by default. Stale
--- agent.<pid> sockets (from exited mux servers) then break ssh from
--- non-interactive/detached shells: e.g. [redacted] ssh failed with
--- "[redacted] can't verify ssh certificate" + "dial unix .../agent.NNNN:
--- no such file" because SSH_AUTH_SOCK pointed at a dead socket.
--- Look into `config.mux_enable_ssh_agent = false` so the work
--- [redacted]/Vault agent (or 1Password) owns SSH_AUTH_SOCK instead.
--- Not changing behavior yet — investigate first.
+-- wezterm's multiplexer is always present (the GUI is a mux client; it
+-- can't be turned off), and `mux_enable_ssh_agent` defaults to true.
+-- That makes wezterm point SSH_AUTH_SOCK at a wezterm-managed symlink
+-- (~/.local/share/wezterm/agent.<pid>) which tracks the most recently
+-- active mux client. When that client exits the symlink goes stale and
+-- ssh from detached/non-interactive shells breaks — seen reaching the
+-- [redacted] dev shell: [redacted] "can't verify ssh certificate" against a
+-- dead socket. Disabling it leaves SSH_AUTH_SOCK untouched, so panes
+-- inherit the launchd/system agent the GUI was started with — the same
+-- one [redacted]/Vault (and 1Password) register their keys with.
+config.mux_enable_ssh_agent = false
 
 ---------------------------------------------------------------
 -- Appearances
