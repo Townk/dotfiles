@@ -125,11 +125,20 @@ commit="$(repo_commit)"
 
 # 3. Toolchain. Building from git needs autoconf (Util/preconfig regenerates
 #    ./configure, which a release tarball would already ship). autoconf has no
-#    mise equivalent, so it is declared in the Brewfile (provisioned by the
-#    bootstrap/system-package-brew step) rather than installed ad-hoc here.
+#    mise equivalent, so the Brewfile is its source of truth. But this hook can
+#    run BEFORE the package sync that installs it: `system-update` does
+#    `chezmoi apply` (which fires this builder) before `system-package sync`,
+#    and on an already-bootstrapped machine run_once_after_10 won't re-run to
+#    install it first. So provision the build-only dep on demand here rather
+#    than failing — brew is guaranteed present on the macOS profiles we target.
 command -v clang >/dev/null 2>&1 || die "clang not found (install Xcode Command Line Tools)"
-command -v autoconf >/dev/null 2>&1 \
-  || die "autoconf not found — it's declared in the Brewfile; run 'system-package-brew' (or 'brew install autoconf')"
+if ! command -v autoconf >/dev/null 2>&1; then
+  command -v brew >/dev/null 2>&1 \
+    || die "autoconf not found and brew unavailable — run 'system-package-brew' (or 'brew install autoconf')"
+  log "autoconf missing; installing via brew (declared in Brewfile)"
+  brew install autoconf >"$BUILD_ROOT/autoconf-install.log" 2>&1 \
+    || { tail -25 "$BUILD_ROOT/autoconf-install.log" >&2; die "autoconf install failed"; }
+fi
 
 cd "$REPO"
 

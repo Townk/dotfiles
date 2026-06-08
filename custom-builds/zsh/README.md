@@ -77,7 +77,10 @@ there's no mise equivalent. The build's two non-toolchain deps have none, so
 both are declared in `home/dot_config/packages/Brewfile.tmpl`:
 
 - `autoconf` — regenerates `configure` from the git clone (not in mise's
-  registry / no asdf/aqua/ubi backend);
+  registry / no asdf/aqua/ubi backend). The Brewfile is its source of truth,
+  but the builder also installs it on demand if missing: this hook can run
+  before the package sync (`system-update` does `chezmoi apply` before
+  `system-package sync`), so the build self-provisions rather than failing;
 - `pcre2` — the PCRE2 library the `zsh/pcre` module links against (a C library,
   not a runtime mise manages).
 
