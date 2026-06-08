@@ -26,12 +26,21 @@ source can later coexist with a Linux machine without polluting it.
 | `dot_local/bin/nvim-wez.sh` | Engine behind the macOS "Open in NeoVim" Finder droplet. |
 | `../assets/open-in-neovim/` | Icons used by the generated "Open in NeoVim" Finder app. |
 | `Library/private_Application Support/` | macOS symlinks to XDG paths (e.g. tealdeer's config). |
-| `run_once_after_10-setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, `mise install`, install `rust@nightly`, then run `system-update`. |
-| `run_once_after_25-setup-gpg-key.sh.tmpl` | Imports OpenPGP keys from 1Password if they are missing locally. |
-| `run_once_after_20-setup-system-settings.sh.tmpl` | macOS `defaults`, Finder, Dock, login items. |
-| `run_onchange_after_30-reload-environment-launchagent.sh.tmpl` | Reloads the GUI environment LaunchAgent when env definitions change. |
-| `run_onchange_after_35-generate-open-in-neovim-app.sh.tmpl` | Generates and registers the `Open in NeoVim.app` Finder droplet. |
-| `run_onchange_after_50-custom-build-zsh.sh.tmpl` | Builds the non-unicode9 zsh from source (macOS work/personal) and sets it as the login shell. |
+| `home/.chezmoiscripts/` | Chezmoi run scripts, kept out of `$HOME` while still participating in script ordering. |
+| `home/.chezmoiscripts/run_once_after_10-setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, `mise install`, install `rust@nightly`, then run `system-update`. |
+| `home/.chezmoiscripts/run_once_after_15-setup-dev-shell-tools.sh.tmpl` | Linux dev-shell: mise toolbox, apt libraries, runtime dir, and convergence. |
+| `home/.chezmoiscripts/run_once_after_20-setup-system-settings.sh.tmpl` | macOS `defaults`, Finder, Dock, login items. |
+| `home/.chezmoiscripts/run_once_after_25-setup-gpg-key.sh.tmpl` | Imports OpenPGP keys from 1Password if they are missing locally. |
+| `home/.chezmoiscripts/run_onchange_after_30-reload-environment-launchagent.sh.tmpl` | Reloads the GUI environment LaunchAgent when env definitions change. |
+| `home/.chezmoiscripts/run_after_34-enable-sudo-touchid.sh.tmpl` | Enables Touch ID for `sudo` via `/etc/pam.d/sudo_local`. |
+| `home/.chezmoiscripts/run_onchange_after_35-generate-open-in-neovim-app.sh.tmpl` | Generates and registers the `Open in NeoVim.app` Finder droplet. |
+| `home/.chezmoiscripts/run_after_35-install-dev-shell-sudo-tool-links.sh.tmpl` | Linux dev-shell: exposes selected mise binaries through `/usr/local/bin` for `sudo`. |
+| `home/.chezmoiscripts/run_onchange_after_40-install-snaps.sh.tmpl` | Linux dev-shell: syncs snaps declared in `Snapfile`. |
+| `home/.chezmoiscripts/run_after_45-grant-zellij-plugin-permissions.sh.tmpl` | Pre-grants Zellij plugin permissions for managed plugin paths. |
+| `home/.chezmoiscripts/run_onchange_after_50-custom-build-zsh.sh.tmpl` | Builds the non-unicode9 zsh from source (macOS work/personal) and sets it as the login shell. |
+| `home/.chezmoiscripts/run_onchange_after_60-symbols-db.sh.tmpl` | Marks symbols database rebuilds when static DB inputs change. |
+| `home/.chezmoiscripts/run_onchange_after_70-symbols-nerd-font.sh.tmpl` | Marks Symbols Nerd Font rebuilds when static font inputs change. |
+| `home/.chezmoiscripts/run_after_80-symbols-nerd-font-prompt.sh.tmpl` | Prompts for pending font/DB rebuilds on interactive applies. |
 
 The numeric prefix on `run_*` hooks fixes their execution order: chezmoi runs
 `after` scripts in alphabetical order of name, so the prefix makes ordering
@@ -81,7 +90,10 @@ and the bootstrap Brewfile are shared.
 
 The `dev-shell` profile is for headless Linux dev shells, not `.setup.sh`.
 Initialize it with `CHEZMOI_PROFILE=dev-shell` or an equivalent chezmoi config,
-then run `chezmoi apply` on the Linux host.
+then run `chezmoi apply` on the Linux host. The dev-shell bootstrap script
+installs the mise toolbox, apt libraries, Rust nightly, creates
+`XDG_RUNTIME_DIR`, then calls the Homebrew-less `system-update` path to sync
+package manifests and Neovim plugins.
 
 End to end, the script:
 
@@ -122,12 +134,15 @@ account has these Documents in the `Private` vault:
 ```text
 Personal - Thiago Alves (CA995D91)
 Personal - Thiago Alves (F403C88D)
+Personal - Thiago Alves (D36D4260)
 ```
 
 The import hook reads them with `op document get --account rapinialves --vault
 Private`. Each document declares its ownertrust level and whether the imported
 keys should be left enabled or marked disabled, which keeps legacy keys
-available for decrypting old mail without making them active for new use.
+available for decrypting old mail without making them active for new use. The
+disabled legacy documents are best-effort; the active `CA995D91` document is
+required.
 
 After it returns, the machine is fully provisioned. **Reboot recommended**
 so login items and macOS defaults take effect.
@@ -209,10 +224,13 @@ of invoking the merge tool, leaving the source byte-identical to before.
 - **`run_once_*` scripts** fire when their content hash changes. The
   setup scripts are deliberately idempotent so re-running them after a
   content edit is safe.
-- **`run_onchange_*` scripts** for situations where you want re-fire on
-  any change. The macOS-shortcut script embeds
-  `{{ include "<.shortcut>" | sha256sum }}` in a comment so its rendered
-  hash also changes when the referenced binary file does.
+- **Run scripts live in `home/.chezmoiscripts/`**, which is chezmoi's
+  special script directory under this repo's source root (`home/`). They
+  execute normally but do not create target files in `$HOME`.
+- **`run_onchange_*` scripts** are used for static input fingerprints.
+  Static repo files are hashed into the rendered script; slow host/runtime
+  checks write state under `~/.local/state/chezmoi` from `run_after_*`
+  scripts instead of running during every template render.
 
 ## Secrets (API keys, tokens)
 

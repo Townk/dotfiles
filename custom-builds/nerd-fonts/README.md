@@ -36,22 +36,22 @@ this README; everything under `build/` is .gitignored.
 
 Two paths, both end up running the same `build-updated-font.sh`:
 
-1. **Automatically, change-driven** — via
-   `~/.local/share/chezmoi/home/run_onchange_after_70-symbols-nerd-font.sh.tmpl`.
-   That template bakes four fingerprints into the rendered script:
-   - the installed version of the `font-fontawesome` cask
-     (`brew list --versions --cask font-fontawesome`)
-   - the SHA256 of `build-updated-font.sh`
-   - a digest of `custom-icons/`
-   - the SHA256 of `unicode-donor-glyphs.txt`
+1. **Automatically, change-driven** — via the chezmoi hooks under
+   `~/.local/share/chezmoi/home/.chezmoiscripts/`:
+   - `run_onchange_after_70-symbols-nerd-font.sh.tmpl` tracks static font
+     inputs: `build-updated-font.sh`, `unicode-donor-glyphs.txt`, custom SVGs,
+     and custom metadata `code` pins.
+   - `run_onchange_after_60-symbols-db.sh.tmpl` tracks static DB inputs:
+     `build-symbols-db.py` and the full custom metadata file.
+   - `run_after_80-symbols-nerd-font-prompt.sh.tmpl` runs on every apply,
+     detects host/runtime changes (`font-fontawesome` cask version and the
+     shared WezTerm render signature), and prompts only when a marker is
+     pending and a TTY is available.
 
-   chezmoi hashes the rendered script and re-fires it whenever any
-   fingerprint changes. So a `brew upgrade` that bumps FA, an edit to the
-   builder, or a donor/custom icon change will offer a fresh rebuild on the next
-   `chezmoi apply`. The hook is a no-op on non-macOS or non-interactive contexts;
-   in interactive contexts it prompts before launching the build. Declining is
-   sticky — chezmoi commits the new hash so the prompt doesn't keep firing until
-   the next genuine change.
+   Metadata-only search edits rebuild the DB, not the font. Font rebuilds also
+   rebuild the DB afterwards because `glyphs.json` changed. Declining a prompt
+   clears the marker intentionally; build failures keep the marker so the next
+   interactive apply can retry.
 
 2. **Manually, any time you want** — just invoke the script directly:
 

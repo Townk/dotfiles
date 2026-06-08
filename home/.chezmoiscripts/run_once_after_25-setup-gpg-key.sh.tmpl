@@ -90,6 +90,7 @@ import_gpg_document() {
   local document_name="$1"
   local trust_level="$2"
   local disabled_status
+  local required="${4:-1}"
   local key_file fingerprints missing_key fingerprint
 
   validate_trust_level "$trust_level"
@@ -100,12 +101,19 @@ import_gpg_document() {
   chmod 0600 "$key_file"
 
   echo "🔐  Reading OpenPGP keys from 1Password document '$document_name'..."
-  op document get "$document_name" \
-    --vault "$onepassword_vault" \
-    --account "$onepassword_account" \
-    --out-file "$key_file" \
-    --force \
-    >/dev/null
+  if ! op document get "$document_name" \
+      --vault "$onepassword_vault" \
+      --account "$onepassword_account" \
+      --out-file "$key_file" \
+      --force \
+      >/dev/null; then
+    if [ "$required" -eq 0 ]; then
+      echo "⚠️  Optional legacy GPG document '$document_name' not available; skipping." >&2
+      return 0
+    fi
+    echo "❌  Required GPG document '$document_name' could not be read from 1Password" >&2
+    exit 1
+  fi
 
   fingerprints=$(primary_key_fingerprints "$key_file")
   if [ -z "$fingerprints" ]; then
@@ -136,9 +144,9 @@ import_gpg_document() {
   trap - RETURN
 }
 
-import_gpg_document "Personal - Thiago Alves (D36D4260)" "$NONE" "disabled"
-import_gpg_document "Personal - Thiago Alves (F403C88D)" "$ULTIMATE" "disabled"
-import_gpg_document "Personal - Thiago Alves (CA995D91)" "$ULTIMATE" "enabled"
+import_gpg_document "Personal - Thiago Alves (D36D4260)" "$NONE" "disabled" 0
+import_gpg_document "Personal - Thiago Alves (F403C88D)" "$ULTIMATE" "disabled" 0
+import_gpg_document "Personal - Thiago Alves (CA995D91)" "$ULTIMATE" "enabled" 1
 {{- end }}
 
 # vim:ft=sh

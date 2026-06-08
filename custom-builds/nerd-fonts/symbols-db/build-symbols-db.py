@@ -1070,6 +1070,8 @@ def main():
                     help="keep all codepoints (skip CoreText probe)")
     ap.add_argument("--refresh-render", action="store_true",
                     help="re-probe renderability (ignore the render cache)")
+    ap.add_argument("--print-wezterm-signature", action="store_true",
+                    help="print the current WezTerm render-probe signature and exit")
     ap.add_argument("--no-measure", action="store_true",
                     help="skip terminal DSR width measurement (keep heuristic "
                          "widths; don't prune broken-ligature emoji)")
@@ -1078,6 +1080,12 @@ def main():
     ap.add_argument("--sources", default="all",
                     help="comma list: glyphs,unicode,gemoji,iamcal,gitmoji (default: all)")
     args = ap.parse_args()
+
+    if args.print_wezterm_signature:
+        signature = _wezterm_probe_signature()
+        if signature:
+            print(signature)
+        return
 
     selected = ({"glyphs", "unicode", "gemoji", "iamcal", "gitmoji"}
                 if args.sources == "all"

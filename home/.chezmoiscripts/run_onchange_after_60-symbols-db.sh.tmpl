@@ -1,0 +1,69 @@
+{{- /*
+
+  Symbols DB — static change detection hook.
+
+  This run_onchange hook tracks repo inputs that affect only the symbols
+  database: the DB ingester and custom icon metadata. Host/runtime inputs
+  (WezTerm version, fallback, and resolved font files) are detected at runtime
+  by run_after_80 so `chezmoi status`/`diff` do not run WezTerm probes.
+
+  The hook records the last static fingerprint in ~/.local/state/chezmoi and
+  writes a DB marker only when a previous fingerprint exists and changed. That
+  prevents script-only edits or first deployment in a new path from creating a
+  false rebuild prompt.
+*/ -}}
+{{- $dbScriptSHA := "" -}}
+{{- $customMetaSHA := "" -}}
+{{- $dbStaticSig := "" -}}
+{{- if eq .chezmoi.os "darwin" -}}
+  {{- $dbScriptSHA = include "../custom-builds/nerd-fonts/symbols-db/build-symbols-db.py" | sha256sum -}}
+  {{- $customMetaSHA = include "../custom-builds/nerd-fonts/custom-icons/metadata.json" | sha256sum -}}
+  {{- $dbStaticSig = printf "db-script:%s\ncustom-meta:%s\n" $dbScriptSHA $customMetaSHA | sha256sum -}}
+{{- end -}}
+#!/bin/bash
+# Symbols DB — change-detection hook.
+#
+# Re-runs automatically when any static DB fingerprint below changes:
+#   db ingester SHA256    : {{ if $dbScriptSHA }}{{ $dbScriptSHA }}{{ else }}(not macOS){{ end }}
+#   custom metadata SHA   : {{ if $customMetaSHA }}{{ $customMetaSHA }}{{ else }}(not macOS){{ end }}
+#   combined static sig   : {{ if $dbStaticSig }}{{ $dbStaticSig }}{{ else }}(not macOS){{ end }}
+#
+# On change it writes a marker so run_after_80-symbols-nerd-font-prompt.sh can
+# offer a DB-only re-probe on the next interactive `chezmoi apply`.
+#
+# To force a DB re-probe without changing anything else:
+#   touch ~/.local/state/chezmoi/symbols-db-build-pending
+#   chezmoi apply   # (interactively)
+# or invoke the ingester directly:
+#   python3 ~/.local/share/chezmoi/custom-builds/nerd-fonts/symbols-db/build-symbols-db.py
+
+set -eu
+
+{{- if ne .chezmoi.os "darwin" }}
+# DB ingests the darwin-only glyphs.json; nothing to do elsewhere.
+exit 0
+{{- end }}
+
+DB_SCRIPT="{{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/symbols-db/build-symbols-db.py"
+MARKER="${HOME}/.local/state/chezmoi/symbols-db-build-pending"
+STATE="${HOME}/.local/state/chezmoi/symbols-db-static.sig"
+STATIC_SIG="{{ $dbStaticSig }}"
+
+if [ ! -f "$DB_SCRIPT" ]; then
+  echo "[symbols-db] ingester missing at $DB_SCRIPT — skipping." >&2
+  exit 0
+fi
+
+mkdir -p "$(dirname "$MARKER")"
+previous=""
+[ -f "$STATE" ] && previous="$(cat "$STATE" 2>/dev/null || true)"
+printf '%s\n' "$STATIC_SIG" > "$STATE"
+
+if [ -n "$previous" ] && [ "$previous" != "$STATIC_SIG" ]; then
+  printf '%s\n' "static DB inputs changed" > "$MARKER"
+  echo "[symbols-db] static input change detected; DB re-probe pending (marker written)."
+else
+  echo "[symbols-db] static fingerprint initialized/unchanged."
+fi
+
+# vim:ft=sh

@@ -36,6 +36,12 @@ case ":$PATH:" in
   *":$HOME/.cargo/bin:"*) ;;
   *) PATH="$PATH:$HOME/.cargo/bin" ;;
 esac
+if [ -d /snap/bin ]; then
+  case ":$PATH:" in
+    *":/snap/bin:"*) ;;
+    *) PATH="$PATH:/snap/bin" ;;
+  esac
+fi
 export PATH
 
 # Secret env vars (API keys, tokens). Resolved from 1Password by chezmoi

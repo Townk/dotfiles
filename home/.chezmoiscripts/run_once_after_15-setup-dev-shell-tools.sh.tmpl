@@ -1,14 +1,16 @@
 {{- /*
   dev-shell tool provisioning (Linux only).
 
-  Owns everything `run_once_after_10-setup-bootstrap-tools` does on macOS,
-  minus the Homebrew/`system-update` path which doesn't exist here:
+  Owns the Linux dev-shell equivalent of
+  run_once_after_10-setup-bootstrap-tools:
 
     1. mise install  — language runtimes (config.toml) + the CLI toolbox
                        declared in conf.d/dev-shell.toml.
     2. apt-get       — system libraries that aren't single Go/Rust
                        binaries (media/doc tooling many CLIs and the
                        `preview` script depend on).
+    3. system-update — Homebrew-less convergence for package manifests,
+                       Neovim plugins, and refreshable ecosystems.
 
   Every install step is best-effort: a single unavailable package must
   never abort the run (and thus block later chezmoi scripts). Failures
@@ -28,12 +30,18 @@ export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/snap/bin:$PATH"
 
 failures=()
 
+RUNTIME_DIR="${TMPDIR:-/tmp}/runtime-${UID:-$(id -u)}"
+mkdir -p "$RUNTIME_DIR"
+chmod 0700 "$RUNTIME_DIR"
+
 # 1. mise: language runtimes + conf.d CLI toolbox. Best-effort — mise
 #    installs every tool it can and reports the rest; we don't let a
 #    single failure abort provisioning.
 if command -v mise >/dev/null 2>&1; then
   echo "🛠️  Installing mise-managed runtimes and CLI toolbox..."
   mise install -y || failures+=("mise install (some tools failed; rerun 'mise install')")
+  echo "🦀  Installing Rust nightly..."
+  mise install rust@nightly -q || failures+=("mise install rust@nightly")
 else
   failures+=("mise not found on PATH")
 fi
@@ -68,11 +76,15 @@ APT_PACKAGES=(
 if command -v apt-get >/dev/null 2>&1; then
   echo "📦  Installing system libraries via apt..."
   sudo apt-get update -qq || failures+=("apt-get update")
-  for pkg in "${APT_PACKAGES[@]}"; do
-    if ! sudo apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
-      failures+=("apt: $pkg")
-    fi
-  done
+  if ! sudo apt-get install -y -qq "${APT_PACKAGES[@]}"; then
+    failures+=("apt: batch install")
+    echo "📦  apt batch install failed; retrying packages individually..."
+    for pkg in "${APT_PACKAGES[@]}"; do
+      if ! sudo apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
+        failures+=("apt: $pkg")
+      fi
+    done
+  fi
 else
   failures+=("apt-get not found (skipped system libraries)")
 fi
@@ -82,8 +94,18 @@ fi
 ABBR_DIR="$HOME/.local/opt/zsh-abbr"
 if [ ! -e "$ABBR_DIR/zsh-abbr.zsh" ]; then
   echo "🔤  Installing zsh-abbr..."
+  mkdir -p "$(dirname "$ABBR_DIR")"
   git clone --depth 1 --recurse-submodules https://github.com/olets/zsh-abbr "$ABBR_DIR" \
     || failures+=("git clone zsh-abbr")
+fi
+
+# 4. Run the same Homebrew-less convergence path the user gets from
+#    `system-update`. CHEZMOI=1 prevents source pull/apply recursion.
+if command -v system-update >/dev/null 2>&1; then
+  echo "♻️  Running system-update to converge dev-shell tools..."
+  CHEZMOI=1 system-update || failures+=("system-update")
+else
+  failures+=("system-update not found on PATH")
 fi
 
 if (( ${#failures[@]} )); then

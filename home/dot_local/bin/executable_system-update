@@ -155,6 +155,7 @@ fi
 # host, then skip the brew/launchd-specific steps.
 if ! command -v brew >/dev/null 2>&1; then
   warn "Homebrew not found — running the Homebrew-less update path."
+  system_package_synced=0
   if command -v mise >/dev/null 2>&1; then
     print -P -- "\n🛠️ Upgrade Mise tools...\n"
     mise upgrade && mise prune -y || warn "mise upgrade had failures"
@@ -162,8 +163,9 @@ if ! command -v brew >/dev/null 2>&1; then
   if command -v system-package >/dev/null 2>&1; then
     print -P -- "\n📦 Sync system packages...\n"
     system-package sync || die "Failed to sync system packages!"
+    system_package_synced=1
   fi
-  if command -v snap >/dev/null 2>&1; then
+  if [[ "$system_package_synced" -ne 1 ]] && command -v snap >/dev/null 2>&1; then
     print -P -- "\n📦 Refresh snap packages...\n"
     sudo snap refresh || warn "snap refresh had failures"
   fi

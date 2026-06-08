@@ -1,11 +1,12 @@
 # Zellij custom plugin manifest — single source of truth shared by:
 #   - dot_config/zellij/config.kdl.tmpl            (the `location=` each alias resolves to)
 #   - dot_config/zellij/executable_ensure-plugins.tmpl  (downloads the managed wasms)
-#   - run_after_45-grant-zellij-plugin-permissions.sh.tmpl (grants by resolved path)
+#   - .chezmoiscripts/run_after_45-grant-zellij-plugin-permissions.sh.tmpl (grants by resolved path)
 #
-# Resolution policy (identical in all three): if `dev` is true AND the repo is
-# checked out at ~/Projects/apps/zellij/<repoName>, the plugin loads from that
-# local release build; otherwise it loads from ~/.local/share/zellij/plugins/
+# Resolution policy lives in .chezmoitemplates/zellij-plugin-path.tmpl. If
+# `dev` is true AND a local release wasm exists under
+# ~/Projects/apps/zellij/<repoName>/target/wasm32-wasip1/release/, the plugin
+# loads from that build; otherwise it loads from ~/.local/share/zellij/plugins/
 # <wasm>, which ensure-plugins fetches from `url`. Nothing uses Zellij's own
 # http downloader anymore — it caches transient gateway/CDN errors (404 / 504
 # HTML) as the wasm and never retries, which silently breaks the plugin.

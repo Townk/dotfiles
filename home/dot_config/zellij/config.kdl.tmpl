@@ -769,26 +769,19 @@ plugins {
     - dev:      whether a local dev checkout is expected.
     - url:      the release asset (used only by ensure-plugins to fetch it).
 
-  Resolution policy (mirrored by ensure-plugins and the permission
-  pre-grant): if `dev` and ~/Projects/apps/zellij/<repoName> exists, load the
-  local release build; otherwise load ~/.local/share/zellij/plugins/<wasm>,
-  which ~/.config/zellij/ensure-plugins downloads before Zellij starts. Every
-  location is `file:` — we never let Zellij's http downloader fetch a plugin,
-  because it caches transient gateway/CDN errors (404/504 HTML) as the wasm
-  and never retries, silently breaking the plugin.
+  Resolution policy lives in .chezmoitemplates/zellij-plugin-path.tmpl and is
+  shared by ensure-plugins and the permission pre-grant. Every location is
+  `file:` — we never let Zellij's http downloader fetch a plugin, because it
+  caches transient gateway/CDN errors (404/504 HTML) as the wasm and never
+  retries, silently breaking the plugin.
 
   Whitespace: the no-dash comment form preserves the preceding blank line;
   the directives below trim aggressively and each printed line carries its
   own 4-space indent + newline, matching the surrounding KDL.
 */}}
-{{- $pluginsDir := joinPath $.chezmoi.homeDir ".local/share/zellij/plugins" -}}
 {{- $lines := list -}}
 {{- range .zellijPlugins -}}
-{{- $repo := joinPath $.chezmoi.homeDir "Projects/apps/zellij" .repoName -}}
-{{- $loc := printf "file:%s" (joinPath $pluginsDir .wasm) -}}
-{{- if and .dev (stat $repo) -}}
-{{- $loc = printf "file:%s" (joinPath $repo "target/wasm32-wasip1/release" (printf "%s.wasm" .repoName)) -}}
-{{- end -}}
+{{- $loc := includeTemplate "zellij-plugin-path.tmpl" (dict "root" $ "plugin" . "filePrefix" true) | trim -}}
 {{- if eq .alias "vim-navigator" -}}
 {{- $lines = append $lines (printf "    %s location=\"%s\" {\n        move_mod \"ctrl\"\n        resize_mod \"ctrl+shift\"\n    }" .alias $loc) -}}
 {{- else -}}

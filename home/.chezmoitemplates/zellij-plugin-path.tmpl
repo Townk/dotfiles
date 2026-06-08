@@ -1,0 +1,24 @@
+{{- /*
+  Resolve one managed Zellij plugin load path.
+
+  Context:
+    root       the caller's root template context (`$`)
+    plugin     one entry from .zellijPlugins
+    filePrefix optional bool; when true, prefix the path with `file:`
+
+  Dev plugins load from ~/Projects/apps/zellij/<repoName>/target/... only
+  when the repo is enabled AND the release wasm exists. Otherwise every
+  consumer falls back to the managed wasm under ~/.local/share/zellij/plugins.
+*/ -}}
+{{- $root := .root -}}
+{{- $plugin := .plugin -}}
+{{- $pluginsDir := joinPath $root.chezmoi.homeDir ".local/share/zellij/plugins" -}}
+{{- $path := joinPath $pluginsDir $plugin.wasm -}}
+{{- if and $plugin.dev $plugin.repoName -}}
+  {{- $repo := joinPath $root.chezmoi.homeDir "Projects/apps/zellij" $plugin.repoName -}}
+  {{- $devWasm := joinPath $repo "target/wasm32-wasip1/release" (printf "%s.wasm" $plugin.repoName) -}}
+  {{- if stat $devWasm -}}
+    {{- $path = $devWasm -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (hasKey . "filePrefix") .filePrefix -}}file:{{- end -}}{{- $path -}}

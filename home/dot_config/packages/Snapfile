@@ -1,9 +1,10 @@
 # ~/.config/packages/Snapfile — snap packages for the Linux dev-shell.
 #
 # Format: one snap per line, "<name> [snap flags]". '#' starts a comment.
-# Consumed by run_onchange_after_40-install-snaps (re-runs when this file
-# changes), reconciled by `system-package snap sync` (install + refresh of
-# declared snaps), and system-wide refreshed by `system-update`.
+# `run_onchange_after_40-install-snaps` re-runs when this file changes and
+# delegates to `system-package snap sync`, the same worker used by
+# `system-update`. That worker installs missing declared snaps and refreshes
+# declared snaps without trying to remove snapd-managed base/platform snaps.
 #
 # Reserve this for classic-confined apps that are better as snaps than as
 # mise binaries. Do NOT list mise or atuin here:

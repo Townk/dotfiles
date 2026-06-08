@@ -80,7 +80,7 @@ do_sync() {
     return 0
   fi
 
-  local declared_full declared installed before_snap after_snap
+  local declared_full declared installed before_snap after_snap failed=0
   declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
   before_snap=$(mktemp); after_snap=$(mktemp)
   trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
@@ -98,7 +98,7 @@ do_sync() {
     [[ -z "$name" ]] && continue
     local line; line=$(awk -v n="$name" '$1 == n {print; exit}' "$declared_full")
     local -a args=( ${(z)line} )
-    sudo snap install "${args[@]}" || pkg_warn "failed to install $name"
+    sudo snap install "${args[@]}" || { pkg_warn "failed to install $name"; failed=1; }
   done
 
   # Refresh everything still declared. `snap refresh <name>` is a no-op when
@@ -114,7 +114,7 @@ do_sync() {
   snap_snapshot_versions > "$after_snap"
   local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
   (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
-  return 0
+  return "$failed"
 }
 
 usage() {

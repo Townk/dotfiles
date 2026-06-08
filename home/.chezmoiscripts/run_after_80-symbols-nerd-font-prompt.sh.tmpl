@@ -6,7 +6,8 @@
   detection hooks:
 
     * nerd-font-build-pending   (run_onchange_after_70-symbols-nerd-font.sh)
-        A FONT input changed (FA cask, builder script, custom icons).
+        A FONT input changed (FA cask, builder, donor glyphs, custom SVGs,
+        or custom metadata code pins).
         Accepting rebuilds the font AND the DB (new glyphs.json must be
         re-ingested), which also satisfies any pending DB marker.
 
@@ -36,8 +37,63 @@ exit 0
 STATE_DIR="${HOME}/.local/state/chezmoi"
 FONT_MARKER="${STATE_DIR}/nerd-font-build-pending"
 DB_MARKER="${STATE_DIR}/symbols-db-build-pending"
+FONT_DYNAMIC_STATE="${STATE_DIR}/nerd-font-dynamic.sig"
+DB_DYNAMIC_STATE="${STATE_DIR}/symbols-db-dynamic.sig"
 SCRIPT="{{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/build-updated-font.sh"
 DB_SCRIPT="{{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/symbols-db/build-symbols-db.py"
+
+current_fa_version() {
+  command -v brew >/dev/null 2>&1 || return 0
+  brew list --versions --cask font-fontawesome 2>/dev/null || true
+}
+
+current_wezterm_signature() {
+  command -v wezterm >/dev/null 2>&1 || return 0
+  [ -f "$DB_SCRIPT" ] || return 0
+  python3 "$DB_SCRIPT" --print-wezterm-signature 2>/dev/null || true
+}
+
+mark_runtime_change() {
+  state="$1"
+  sig="$2"
+  marker="$3"
+  payload="$4"
+  label="$5"
+
+  [ -n "$sig" ] || return 0
+
+  previous=""
+  [ -f "$state" ] && previous="$(cat "$state" 2>/dev/null || true)"
+  printf '%s\n' "$sig" > "$state"
+
+  # First observation initializes state only. Future changes write markers.
+  if [ -n "$previous" ] && [ "$previous" != "$sig" ]; then
+    printf '%s\n' "$payload" > "$marker"
+    echo "$label"
+  fi
+}
+
+detect_runtime_triggers() {
+  mkdir -p "$STATE_DIR"
+
+  fa_version="$(current_fa_version | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  mark_runtime_change \
+    "$FONT_DYNAMIC_STATE" \
+    "$fa_version" \
+    "$FONT_MARKER" \
+    "font-fontawesome changed: ${fa_version:-unknown}" \
+    "[symbols-nerd-font] Font Awesome cask change detected; build pending (marker written)."
+
+  wezterm_sig="$(current_wezterm_signature)"
+  mark_runtime_change \
+    "$DB_DYNAMIC_STATE" \
+    "$wezterm_sig" \
+    "$DB_MARKER" \
+    "wezterm signature changed: ${wezterm_sig:-unknown}" \
+    "[symbols-db] WezTerm/font fallback change detected; DB re-probe pending (marker written)."
+}
+
+detect_runtime_triggers
 
 # Fast exit when nothing is pending.
 [ -f "$FONT_MARKER" ] || [ -f "$DB_MARKER" ] || exit 0
@@ -60,20 +116,23 @@ fi
 # Rebuild the symbols DB. Shared by the font-accept path (after a fresh
 # glyphs.json) and the DB-only path. A failure must NOT abort chezmoi apply.
 run_db_build() {
-  if [ -f "$DB_SCRIPT" ]; then
-    echo "[symbols-db] rebuilding symbols DB..."
-    python3 "$DB_SCRIPT" \
-      || echo "[symbols-db] rebuild failed; keeping old DB." >&2
+  if [ ! -f "$DB_SCRIPT" ]; then
+    echo "[symbols-db] ingester missing at $DB_SCRIPT; keeping DB marker." >&2
+    return 1
   fi
+
+  echo "[symbols-db] rebuilding symbols DB..."
+  python3 "$DB_SCRIPT"
 }
 
 # ── FONT path ────────────────────────────────────────────────────────
 if [ -f "$FONT_MARKER" ]; then
   if [ ! -x "$SCRIPT" ]; then
-    echo "[symbols-nerd-font] builder missing at $SCRIPT — clearing marker." >&2
-    rm -f "$FONT_MARKER"
+    echo "[symbols-nerd-font] builder missing at $SCRIPT; keeping font marker." >&2
   else
-    FA_VERSION="$(cat "$FONT_MARKER" 2>/dev/null || true)"
+    FONT_REASON="$(cat "$FONT_MARKER" 2>/dev/null || true)"
+    FA_VERSION="$(current_fa_version | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+    [ -n "$FONT_REASON" ] || FONT_REASON="font inputs changed"
     if [ -z "$FA_VERSION" ] || [ "$FA_VERSION" = "(unknown)" ]; then
       fa_caption="(font-fontawesome cask not installed)"
     else
@@ -85,16 +144,16 @@ if [ -f "$FONT_MARKER" ]; then
 ──────────────────────────────────────────────────────────────────────
   Symbols Nerd Font — custom builder
 
-  A FONT trigger fired: the Font Awesome cask was upgraded, the builder
-  script changed, or a custom icon (custom-icons/*.svg or metadata.json)
-  was added/edited. Rebuilding produces a fresh Symbols Nerd Font from
-  whatever the cask currently has, then rebuilds the symbols DB so the
-  picker reflects the new glyphs.json.
+  A FONT trigger fired: $FONT_REASON.
+  Rebuilding produces a fresh Symbols Nerd Font from whatever the cask
+  currently has, then rebuilds the symbols DB so the picker reflects the
+  new glyphs.json.
 
   Source feeds:
     • ryanoasis/nerd-fonts master      (shallow clone, fast-forwarded)
     • font-fontawesome cask            $fa_caption
-    • custom-icons/                    (local *.svg + metadata.json)
+    • custom-icons/                    (local *.svg + metadata code pins)
+    • unicode-donor-glyphs.txt         (selected donor glyphs)
   Output:
     • ~/Library/Fonts/SymbolsNerdFont*-Regular.ttf
 
@@ -108,20 +167,24 @@ EOF
     read -r ans </dev/tty || ans=""
     case "$ans" in
       y|Y|yes|YES)
-        rm -f "$FONT_MARKER"
         echo "[symbols-nerd-font] launching builder..."
         # --yes auto-confirms internal prompts (clone, brew install, venv).
         # --install copies the resulting TTFs into ~/Library/Fonts/.
         if "$SCRIPT" --yes --install; then
           echo "[symbols-nerd-font] done."
-          run_db_build
-          # The font rebuild regenerated glyphs.json and the DB rebuild above
-          # re-probed against the current fallback, so any pending DB-only
-          # marker is now satisfied.
-          rm -f "$DB_MARKER"
+          rm -f "$FONT_MARKER"
+          if run_db_build; then
+            # The font rebuild regenerated glyphs.json and the DB rebuild above
+            # re-probed against the current fallback, so any pending DB-only
+            # marker is now satisfied.
+            rm -f "$DB_MARKER"
+          else
+            echo "[symbols-db] rebuild failed after font build; keeping DB marker." >&2
+          fi
         else
           rc=$?
           echo "[symbols-nerd-font] builder exited $rc; not failing chezmoi apply." >&2
+          echo "[symbols-nerd-font] keeping font marker for the next interactive apply." >&2
           echo "[symbols-nerd-font] inspect the log at:" >&2
           echo "  {{ .chezmoi.workingTree }}/custom-builds/nerd-fonts/build/work/build.log" >&2
         fi
@@ -162,9 +225,12 @@ EOF
   read -r ans </dev/tty || ans=""
   case "$ans" in
     y|Y|yes|YES)
-      rm -f "$DB_MARKER"
-      run_db_build
-      echo "[symbols-db] done."
+      if run_db_build; then
+        rm -f "$DB_MARKER"
+        echo "[symbols-db] done."
+      else
+        echo "[symbols-db] rebuild failed; keeping DB marker for the next interactive apply." >&2
+      fi
       ;;
     *)
       rm -f "$DB_MARKER"

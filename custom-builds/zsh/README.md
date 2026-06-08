@@ -34,7 +34,7 @@ are a *combining* problem fixed separately by `setopt COMBINING_CHARS` in
   `~/.local/opt/zsh`, then symlinks `~/.local/bin/zsh` to it. It is idempotent:
   a no-op fast path when the installed binary already matches the clone's
   commit.
-- `home/run_onchange_after_50-custom-build-zsh.sh.tmpl` runs the builder on
+- `home/.chezmoiscripts/run_onchange_after_50-custom-build-zsh.sh.tmpl` runs the builder on
   `chezmoi apply` for **macOS** with the **work** or **personal** profile,
   re-firing when `build-zsh.sh` changes (its SHA is baked into the rendered
   hook).

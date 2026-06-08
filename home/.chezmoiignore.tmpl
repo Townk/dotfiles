@@ -16,23 +16,24 @@
      trust.json is Homebrew tap-trust state. Neither is meaningful off a Mac. */}}
 .local/bin/pinentry-auto
 .config/homebrew/trust.json
-{{/* macOS-only run scripts: these `set -o pipefail` before their own
-     darwin guard, which breaks under Linux's dash. Skip them entirely
-     off macOS (the dev-shell toolbox is handled by its own run_once).
-     chezmoi strips the run_* attributes, so match the bare script name. */}}
-symbols-nerd-font-prompt.sh
-generate-open-in-neovim-app.sh
-reload-environment-launchagent.sh
-enable-sudo-touchid.sh
-symbols-nerd-font.sh
-setup-system-settings.sh
+{{/* macOS-only run scripts. Scripts live under .chezmoiscripts/ in the
+     source root, and chezmoi strips run_* attributes in the managed name. */}}
+.chezmoiscripts/*-symbols-nerd-font-prompt.sh
+.chezmoiscripts/*-generate-open-in-neovim-app.sh
+.chezmoiscripts/*-reload-environment-launchagent.sh
+.chezmoiscripts/*-enable-sudo-touchid.sh
+.chezmoiscripts/*-symbols-db.sh
+.chezmoiscripts/*-symbols-nerd-font.sh
+.chezmoiscripts/*-setup-system-settings.sh
+.chezmoiscripts/*-setup-gpg-key.sh
 {{- end }}
 {{ if not (and (eq .chezmoi.os "linux") (eq .profile "dev-shell")) -}}
 {{/* Linux dev-shell artifacts. Keep these off Macs and other profiles. */}}
 .config/mise/conf.d/dev-shell.toml
 .config/packages/Snapfile
-setup-dev-shell-tools.sh
-install-snaps.sh
+.chezmoiscripts/*-setup-dev-shell-tools.sh
+.chezmoiscripts/*-install-dev-shell-sudo-tool-links.sh
+.chezmoiscripts/*-install-snaps.sh
 {{/* snap only exists on the dev-shell; omit the worker elsewhere so the
      system-package dispatcher discovers only ecosystems this host can run
      (the inverse of the system-package-brew exclusion below). */}}

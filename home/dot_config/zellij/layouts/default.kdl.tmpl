@@ -1,3 +1,9 @@
+{{- $hudSearchPluginURL := "" -}}
+{{- range .zellijPlugins -}}
+{{- if eq .alias "status-bar" -}}
+{{- $hudSearchPluginURL = includeTemplate "zellij-plugin-path.tmpl" (dict "root" $ "plugin" . "filePrefix" true) | trim -}}
+{{- end -}}
+{{- end -}}
 // zj-hud layout — WezTerm-inspired Zellij HUD
 // Source: {{ .chezmoi.homeDir }}/Projects/apps/zellij/zj-hud
 // Previous plugin: zj-status.wasm (swap back by changing the location line)
@@ -16,12 +22,8 @@ layout {
 
                 // Wasm to spawn for the floating "visual search" dialog
                 // (Alt+/). Must point at the same binary the bar itself loads,
-                // so it mirrors the `status-bar` alias resolution policy in
-                // config.kdl.tmpl: the local release build when this repo is
-                // checked out, else the GitHub release so a fresh chezmoi
-                // sync still works. Keep the release tag in sync with the
-                // `status-bar` entry in config.kdl.tmpl ($plugins).
-                search_plugin_url "{{ $hudRepo := joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-hud" }}{{ if stat $hudRepo }}file:{{ joinPath $hudRepo "target/wasm32-wasip1/release/zj-hud.wasm" }}{{ else }}https://github.com/Townk/zj-hud/releases/download/latest/zj-hud.wasm{{ end }}"
+                // so it mirrors the shared `status-bar` alias resolver.
+                search_plugin_url "{{ $hudSearchPluginURL }}"
 
                 tabs {
                     max_width 40

@@ -1,3 +1,7 @@
+{{- $nvimConfigSig := "" -}}
+{{- if eq .chezmoi.os "darwin" -}}
+  {{- $nvimConfigSig = output "sh" "-c" (printf "find %q -type f \\( -name '*.lua' -o -name '*.vim' -o -name '*.json' \\) 2>/dev/null | LC_ALL=C sort | while read -r f; do shasum -a 256 \"$f\"; done | shasum -a 256 | cut -c1-16" (joinPath .chezmoi.sourceDir "dot_config/nvim")) | trim -}}
+{{- end -}}
 #!/bin/sh
 set -eu
 
@@ -6,6 +10,7 @@ set -eu
 # AppleScript so it can resolve the current user's home directory at runtime.
 #
 # icon content hash: {{ include "../assets/open-in-neovim/neovim-hicontrast.icns" | sha256sum }}
+# nvim config hash: {{ if $nvimConfigSig }}{{ $nvimConfigSig }}{{ else }}(not macOS){{ end }}
 
 app="$HOME/Applications/Open in NeoVim.app"
 icon='{{ joinPath .chezmoi.workingTree "assets/open-in-neovim/neovim-hicontrast.icns" }}'

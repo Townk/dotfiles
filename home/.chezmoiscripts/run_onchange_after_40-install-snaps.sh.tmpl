@@ -1,0 +1,24 @@
+{{- /*
+  Sync snap packages declared in ~/.config/packages/Snapfile.
+
+  This is run_onchange and embeds the Snapfile's hash below, so chezmoi
+  re-runs it whenever the Snapfile changes (the manifest-sync pattern,
+  mirroring Brewfile -> system-package on macOS). The actual parser and
+  installer live in system-package-snap so first-apply and day-to-day
+  convergence cannot drift.
+
+  Linux + dev-shell only.
+*/ -}}
+{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+#!/bin/bash
+# Snapfile hash: {{ include "dot_config/packages/Snapfile" | sha256sum }}
+# (changing the Snapfile changes this line, so chezmoi re-runs the script)
+set -eu
+
+if ! command -v system-package-snap >/dev/null 2>&1; then
+  echo "system-package-snap is required to sync Snapfile; retrying on next apply." >&2
+  exit 1
+fi
+
+system-package-snap sync
+{{- end }}
