@@ -339,6 +339,17 @@ config.keys = {
 		mods = "ALT",
 		action = wezterm.action.DisableDefaultAssignment,
 	},
+	-- Ctrl+Shift+hjkl / arrows belong to Zellij (vim-navigator resize). WezTerm's
+	-- defaults otherwise swallow them before they reach the terminal: h=HideApplication,
+	-- k=ClearScrollback, l=ShowDebugOverlay, arrows=ActivatePaneDirection. Disabling
+	-- lets them fall through. (Ctrl+Shift+j has no WezTerm default, so it already does.)
+	{ key = "h", mods = "CTRL|SHIFT", action = wezterm.action.DisableDefaultAssignment },
+	{ key = "k", mods = "CTRL|SHIFT", action = wezterm.action.DisableDefaultAssignment },
+	{ key = "l", mods = "CTRL|SHIFT", action = wezterm.action.DisableDefaultAssignment },
+	{ key = "LeftArrow", mods = "CTRL|SHIFT", action = wezterm.action.DisableDefaultAssignment },
+	{ key = "RightArrow", mods = "CTRL|SHIFT", action = wezterm.action.DisableDefaultAssignment },
+	{ key = "UpArrow", mods = "CTRL|SHIFT", action = wezterm.action.DisableDefaultAssignment },
+	{ key = "DownArrow", mods = "CTRL|SHIFT", action = wezterm.action.DisableDefaultAssignment },
 	-- `⌘,`: Open terminal emulator config file => `⌥w ,`
 	{
 		key = ",",
