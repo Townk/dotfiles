@@ -74,19 +74,79 @@ add_content_type() {
   content_types_seen="${content_types_seen}${value} "
 }
 
-source_extensions="
+fallback_source_extensions="
   sh zsh bash fish command tool
   py pyw
   md markdown mdown mkdn rst
-  lua js jsx ts tsx mjs cjs
-  json jsonc yaml yml toml xml
+  lua js jsx ts tsx mjs cjs bzl
+  json jsonc json5 jsonl ndjson geojson yaml yml toml xml kdl
   html htm css scss sass less
   rb erb go rs java kt kts scala
   c cc cpp cxx h hpp hh m mm
   cs php pl pm r sql swift vim el
   clj cljs edn ex exs erl hrl fs fsx
   hs lhs jl nim zig dart vue svelte astro
+  txt
 "
+
+extra_source_extensions="
+  ndjson
+  tmpl
+"
+
+nvim_source_extensions() {
+  nvim_bin=""
+  if [ -n "${NVIM_BIN:-}" ] && [ -x "$NVIM_BIN" ]; then
+    nvim_bin="$NVIM_BIN"
+  elif [ -x /opt/homebrew/bin/nvim ]; then
+    nvim_bin=/opt/homebrew/bin/nvim
+  elif [ -x /usr/local/bin/nvim ]; then
+    nvim_bin=/usr/local/bin/nvim
+  elif command -v nvim >/dev/null 2>&1; then
+    nvim_bin="$(command -v nvim)"
+  fi
+  [ -n "$nvim_bin" ] || return 0
+
+  extractor="$tmpdir/neovim-filetype-extensions.lua"
+  cat > "$extractor" <<'LUA'
+vim.cmd("filetype on")
+local registry = vim.filetype.inspect()
+
+for ext in pairs(registry.extension or {}) do
+  if type(ext) == "string" and ext:match("^[A-Za-z0-9][A-Za-z0-9_.+%-]*$") then
+    print("NVIM_EXT\t" .. ext)
+  end
+end
+LUA
+
+  timeout_bin=""
+  if command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="$(command -v gtimeout)"
+  elif command -v timeout >/dev/null 2>&1; then
+    timeout_bin="$(command -v timeout)"
+  fi
+
+  if [ -n "$timeout_bin" ]; then
+    "$timeout_bin" 15 "$nvim_bin" --headless +"luafile $extractor" +qa 2>&1 || true
+  else
+    "$nvim_bin" --headless +"luafile $extractor" +qa 2>&1 || true
+  fi | awk -F '\t' '$1 == "NVIM_EXT" { print $2 }'
+}
+
+source_extensions="$(
+  {
+    printf '%s\n' $fallback_source_extensions
+    printf '%s\n' $extra_source_extensions
+    nvim_source_extensions
+  } | awk '
+    /^[A-Za-z0-9][A-Za-z0-9_.+-]*$/ {
+      key = tolower($0)
+      # Neovim can edit anything, but these mappings make poor Finder entries.
+      if (key == "app" || key == "pdf") next
+      if (!seen[key]++) print
+    }
+  '
+)"
 
 /usr/libexec/PlistBuddy -c 'Delete :CFBundleDocumentTypes' "$plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes array' "$plist"
@@ -96,6 +156,10 @@ source_extensions="
 /usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes:0:LSHandlerRank string Alternate' "$plist"
 /usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes:0:LSItemContentTypes array' "$plist"
 for uti in \
+  public.data \
+  public.text \
+  public.plain-text \
+  public.source-code \
   public.shell-script \
   public.zsh-script \
   public.bash-script \
@@ -118,6 +182,7 @@ for uti in \
   public.objective-c-source \
   public.objective-c-plus-plus-source \
   public.swift-source \
+  public.make-source \
   com.sun.java-source; do
   add_content_type "$uti"
 done
@@ -133,7 +198,9 @@ for ext in $source_extensions; do
 done
 
 /usr/libexec/PlistBuddy -c 'Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions array' "$plist"
-add_array_items ':CFBundleDocumentTypes:0:CFBundleTypeExtensions' $source_extensions
+# The wildcard keeps extensionless text files like Doxyfile available from
+# Finder's Open With menu. LSHandlerRank=Alternate prevents default takeover.
+add_array_items ':CFBundleDocumentTypes:0:CFBundleTypeExtensions' $source_extensions Doxyfile Makefile '*'
 
 /usr/bin/codesign --force --deep --sign - "$app" >/dev/null 2>&1 || true
 
