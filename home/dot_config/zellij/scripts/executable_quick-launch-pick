@@ -3,9 +3,10 @@
 # shared pick-common.zsh facility (the same one pick-glyph / pick-gitmoji
 # use). It inherits the catppuccin-mocha palette, border/input-border
 # handling, the NBSP-terminated header, the standard prompt/pointer/marker
-# glyphs — so the Quick Launch menu looks and behaves like the other pickers,
-# except it deliberately does NOT recency-sort: entries stay in their defined
-# (file) order.
+# glyphs — so the Quick Launch menu looks and behaves like the other pickers.
+# Panes/tabs stay in their defined (file) order; workspaces opt into the
+# library's `--cache-usage` recency so the most-recently-used session floats to
+# the top for a quick "flip back".
 #
 #   quick-launch-pick <pane|tab|workspace> [--no-border]
 #
@@ -74,12 +75,35 @@ fi
 
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch"
 mkdir -p "$CACHE_DIR"
-# The pane list depends on the live workspace/tab, so its cache key must too;
-# otherwise switching workspaces would serve another scope's stale list.
+# Workspaces are filtered/ordered/annotated by LIVE session state — which
+# sessions exist right now (a session is named after the workspace id) minus
+# the one we're in — so their list can't use the static mtime cache; rebuild it
+# every launch. Panes likewise depend on the live workspace/tab, so their cache
+# key encodes the scope; otherwise switching workspaces would serve a stale list.
+force_build=0
+live_json='[]'
+windowed_json='[]'
+current_ws="${active_ws}"
 if [[ "$kind" == pane ]]; then
   scope_ws="${active_ws//[^A-Za-z0-9._-]/_}"
   scope_tab="${active_tab//[^A-Za-z0-9._-]/_}"
   LINES_CACHE="$CACHE_DIR/lines-$kind-${scope_ws}-${scope_tab}.txt"
+elif [[ "$kind" == workspace ]]; then
+  # Fixed path, but force_build=1 rebuilds it every launch (the assembler
+  # writes atomically via a temp + mv), so it always reflects current live
+  # session state without leaking per-launch temp files.
+  LINES_CACHE="$CACHE_DIR/lines-$kind.txt"
+  force_build=1
+  live_json="$(zellij list-sessions -s 2>/dev/null | sed '/^$/d' | jq -R . | jq -s -c . 2>/dev/null)"
+  [[ -n "$live_json" ]] || live_json='[]'
+  # Which live sessions are attached to their own OS window right now (resolved
+  # from each WezTerm pane's client socket). Such workspaces are tagged "(other
+  # window)" instead of "(detached)", and selecting one raises that window. On
+  # Ghostty / when WezTerm isn't reachable this is empty → all live workspaces
+  # read as "(detached)", matching what we can act on there.
+  source "${0:A:h}/lib/zellij-session.sh" 2>/dev/null || true
+  windowed_json="$( { zellij_wezterm_sessions 2>/dev/null | cut -f1 | sed '/^$/d' | jq -R . | jq -s -c . ; } 2>/dev/null || true)"
+  [[ -n "$windowed_json" ]] || windowed_json='[]'
 else
   LINES_CACHE="$CACHE_DIR/lines-$kind.txt"
 fi
@@ -94,7 +118,7 @@ SCRIPT_PATH="${(%):-%x}"
 # the other pickers) and the bare `id` hidden behind \x1f as the only tail
 # field. Selector-mode numbering/search-display swaps are added by
 # pick-common when enabled below; the cache keeps the normal picker contract.
-if pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH" "$PICK_JQ"; then
+if (( force_build )) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH" "$PICK_JQ"; then
   local ql_json
   case "$TARGETS" in
     *.json) ql_json="$(yq -p=json -o=json -I=0 '.' "$TARGETS")" ;;
@@ -110,13 +134,13 @@ if pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH" "$PICK_JQ"; then
   # and several of these live in the supplementary PUA), matching the icon
   # map in the Lua plugin's make_element_menu_item.
   print -r -- "$ql_json" | jq -r -L "$PICK_LIB_DIR" \
-    --arg k "$key" --arg ws "$active_ws" --arg tab "$active_tab" '
+    --arg k "$key" --arg ws "$active_ws" --arg tab "$active_tab" \
+    --arg cur "$current_ws" --argjson live "$live_json" --argjson windowed "$windowed_json" '
     include "pick";
     def icon($t):
       if   $t == "Shell"  then "\uf07c"
       elif $t == "Edit"   then "󱇧"
       elif $t == "Remote" then "󰢹"
-      elif $t == "External" then "󰍹"
       elif $t == "Run"    then "󱤶"
       else "󰙀" end;
     # Pane choices mirror the wezterm plugin: the active tab is panes +
@@ -137,18 +161,52 @@ if pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH" "$PICK_JQ"; then
       else
         .[$k][]?
       end;
-    collect
-    | (.action.type // "") as $t
-    # Prefer the element icon field (trailing space trimmed); otherwise fall
-    # back to the per-action-type glyph. Mirrors the Lua plugin, which honours
-    # an explicit element icon before the type default.
-    | ((.icon // "") | sub("\\s+$"; "")) as $cfg_icon
-    | (if ($cfg_icon | length) > 0 then $cfg_icon else icon($t) end) as $ic
-    | (.action.label // .name // .id) as $label
-    | emit_line(
-        ($ic | paint(c_glyph)) + "  " + ($label | paint(c_key));
-        [ .id ]
-      )
+    # One picker line for an element, with an optional trailing $suffix
+    # (already colour-wrapped) appended to the visible label and an explicit
+    # hidden-tail $fields array. Prefers the element icon field (trailing space
+    # trimmed), else the per-action-type glyph — mirroring the Lua plugin, which
+    # honours an explicit icon first. Field 1 is always the id (the --output and
+    # recency key); workspaces add a field 2 for the Alt+Enter new-window path.
+    def entry_line($suffix; $fields):
+      (.action.type // "") as $t
+      | ((.icon // "") | sub("\\s+$"; "")) as $cfg_icon
+      | (if ($cfg_icon | length) > 0 then $cfg_icon else icon($t) end) as $ic
+      | (.action.label // .name // .id) as $label
+      | emit_line(
+          ($ic | paint(c_glyph)) + "  " + ($label | paint(c_key)) + $suffix;
+          $fields
+        );
+    # The Zellij session name is the workspace `name` (default `id`) — the same
+    # join key dispatch and the .zshrc boot session use; `id` is only the
+    # dedup/CLI key. A workspace is "live" when a session of that name exists
+    # ($live is the running session names). Capture the workspace before piping
+    # into $live so the fields resolve against it.
+    def sname: .name // .id;
+    def is_live: . as $w | ($live | index($w.name // $w.id)) != null;
+    def in_window: . as $w | ($windowed | index($w.name // $w.id)) != null;
+    if $k == "workspaces" then
+      # Drop the session we are in (matched on session name, the key dispatch
+      # uses to create/switch sessions), then list the live workspaces first —
+      # each tagged "(other window)" when it owns a separate OS window, else
+      # "(detached)" — followed by the not-yet-created ones, both in file order.
+      # The --cache-usage recency in pick-common then floats the most-recently-
+      # picked rows above this baseline (and since a picked workspace becomes
+      # live, recents stay within the live group).
+      ( [ .workspaces[]? | select(sname != $cur) ] ) as $wss
+      | ( ( $wss | map(select(is_live)) )
+          + ( $wss | map(select(is_live | not)) ) )
+      | .[]
+      # Field 2 (@window:<id>) is what Alt+Enter (--key-output) emits so the
+      # caller can route the pick to the separate-window path.
+      | entry_line(
+          (if is_live
+             then "  " + ((if in_window then "(other window)" else "(detached)" end) | paint(c_code))
+             else "" end);
+          [ .id, "@window:" + .id ]
+        )
+    else
+      collect | entry_line(""; [ .id ])
+    end
   ' > "$tmp" || die "failed to assemble $kind list (jq error)"
   mv "$tmp" "$LINES_CACHE"
   trap - EXIT INT TERM
@@ -156,8 +214,12 @@ fi
 
 [[ -s "$LINES_CACHE" ]] || die "no $kind targets defined in $TARGETS"
 
-# Quick-launch entries stay in their defined (file) order: no recency, resume,
-# or insert-and-stay flags — launching a target isn't a text-insert flow.
+# Panes/tabs stay in their defined (file) order — no recency/resume flags, since
+# launching a target isn't a text-insert flow. Workspaces opt into the library's
+# file recency (--cache-usage): pick::record floats the most-recently-picked
+# session to the top on the next launch, so the previous session is row 1 / 
+# pre-selected for a quick flip. The usage file is workspace-scoped so pane/tab
+# picks never perturb the session order.
 
 pick_start_args=(
   --height "${QUICK_LAUNCH_HEIGHT:-45%}"
@@ -169,6 +231,26 @@ pick_start_args=(
   --selector-nav
   --output field:1
 )
+# Workspaces: opt into file recency, and add the Alt+Enter "open in a separate
+# window" accept action. Enter emits field 1 (the id); Alt+Enter emits field 2
+# (@window:<id>), which `quick-launch` routes to the new-window dispatch. Both
+# hint lines mirror pick-common's defaults (selector adds 1-9/j-k because the
+# picker enables --selector-shortcuts/--selector-nav; search adds clear/back)
+# with the new-window action spliced in next to plain open (󰘵 = Alt/Option,
+# 󰌑 = Enter). Alt+Enter works in either mode, so advertise it in both. Keep in
+# sync with pick-common's *_hints_default if they change.
+if [[ "$kind" == workspace ]]; then
+  # Selector hints are the longest line, so they use a tight separator; the
+  # shorter search hints can afford the wider default spacing.
+  ws_sep=" · "
+  ws_sep_wide="  ·  "
+  pick_start_args+=(
+    --cache-usage="$CACHE_DIR/usage-workspace"
+    --key-output "alt-enter:field:2"
+    --selector-hints "󰌑 : open${ws_sep}󰘵 󰌑 : new window${ws_sep}󱊷 : cancel${ws_sep}1-9: open${ws_sep}j/k: move${ws_sep}/: search"
+    --search-hints "󰌑 : open${ws_sep_wide}󰘵 󰌑 : new window${ws_sep_wide}󱊷 : cancel${ws_sep_wide}󰘴 U: clear/back"
+  )
+fi
 (( no_border )) && pick_start_args+=( --no-border )
 
 pick::start "${pick_start_args[@]}" "$LINES_CACHE"

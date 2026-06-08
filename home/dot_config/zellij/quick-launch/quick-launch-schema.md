@@ -41,7 +41,7 @@ no child panes).
 
 | key                         | type            | description                                           |
 | --------------------------- | --------------- | ----------------------------------------------------- |
-| `type`                      | enum            | `Shell` \| `Edit` \| `Run` \| `Remote` \| `External`  |
+| `type`                      | enum            | `Shell` \| `Edit` \| `Run` \| `Remote`                |
 | `cwd`                       | string          | Working directory (`~` expanded)                      |
 | `args`                      | list of strings | Meaning depends on `type` (see below)                 |
 | `label`                     | string          | Overrides `name` in the fuzzy menu                    |
@@ -57,8 +57,6 @@ no child panes).
 - `Run` — `args` joined with `&&`.
 - `Remote` — `ssh <args...>` (note: no `cd`/`venv`/`mise` prefix, matching the
   original plugin).
-- `External` — execute `args` directly as a local command array outside Zellij.
-  This is for targets that must not be wrapped in a local tab/pane/session.
 
 The command prefix is assembled as
 `cd <cwd>; <python_venv>; <mise_env>; <command>`.
@@ -66,8 +64,13 @@ The command prefix is assembled as
 When opened as a **tab**, the target inherits the default `new_tab_template` (so
 the `zj-hud` bar and floating which-key/search panes are present). A command
 target (`Edit`/`Run`/`Remote`) runs as the tab's initial command and the tab
-closes when that command exits; a `Shell` tab is a plain interactive shell. An
-`External` target bypasses local Zellij creation entirely.
+closes when that command exits; a `Shell` tab is a plain interactive shell.
+
+To run a target that hosts its **own** Zellij (e.g. a remote machine over SSH),
+make it a `workspace` with `nested_zellij: true` and a `Run`/`Remote` action —
+the bar-less, key-passthrough session avoids a doubled status bar and lets the
+remote's keybinds work, while staying a real, swappable session. Open it in a
+separate OS window with the picker's Alt+Enter.
 
 ## Pane-Only Fields
 
@@ -77,6 +80,12 @@ closes when that command exits; a `Shell` tab is a plain interactive shell. An
 | `size`      | string (e.g. `30%`)           | Size of this pane (layouts only)                                                                                                                    |
 | `moveFocus` | bool                          | Reserved (not yet applied)                                                                                                                          |
 | `optional`  | bool                          | When true, not auto-opened with its tab/workspace; stays launchable from the pane menu, offered there only while its parent workspace/tab is active |
+
+## Workspace-Only Fields
+
+| key             | type | description                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nested_zellij` | bool | When true, the session is built for hosting another full Zellij (e.g. a remote over SSH). It launches from a generated bar-less layout — the workspace's `Run`/`Remote` action runs directly as the sole pane's command (no login-shell tab, so no MOTD flash) — in plain `normal` mode with `clear-defaults=true` keybinds, so every key is forwarded verbatim to the inner Zellij. (Locked mode is unreachable for a custom-layout session in Zellij 0.44, so passthrough is achieved by clearing bindings instead.) The one local binding is `Ctrl+Alt+Space`, which summons the workspace picker (also reachable via WezTerm `Cmd+Shift+P`). |
 
 ## Nesting
 

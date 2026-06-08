@@ -216,6 +216,15 @@ if ok and active_workspace ~= "" and active_workspace ~= toggle_fullscreen_works
 	last_real_workspace = active_workspace
 end
 
+-- Quick-launch "bring an existing session's window to the front". wezterm has
+-- no CLI to raise a window, but the GUI's window:focus() does. quick-launch-
+-- window passes the target WezTerm window id by renaming its workspace to
+-- "__QL_FOCUS__=<id>"; the update-status handler below matches that prefix,
+-- focuses the matching GUI window, and renames the workspace back. Same
+-- osascript-free trick as the fullscreen bind, with the id carried in the
+-- workspace name itself — no sidecar file to keep in sync.
+local quick_launch_focus_pattern = "^__QL_FOCUS__=(%d+)$"
+
 -- Mirror the window's fullscreen state to a file the zj-hud status bar polls
 -- (zj-hud's WEZTERM_FULLSCREEN_SCRIPT reads it). The bar reveals its chrome
 -- only in fullscreen, where WezTerm's own tab bar is hidden. The keybinding
@@ -247,6 +256,18 @@ wezterm.on("update-status", function(window, pane)
 		return
 	end
 
+	local focus_target = workspace:match(quick_launch_focus_pattern)
+	if focus_target then
+		for _, w in ipairs(wezterm.gui.gui_windows()) do
+			if w:window_id() == tonumber(focus_target) then
+				w:focus()
+				break
+			end
+		end
+		pcall(wezterm.mux.rename_workspace, workspace, last_real_workspace or "default")
+		return
+	end
+
 	if workspace ~= "" then
 		last_real_workspace = workspace
 	end
@@ -258,19 +279,40 @@ wezterm.on("window-resized", function(window, _pane)
 	write_fullscreen_state(window)
 end)
 
+local function perform_zellij_keys(window, pane, keys)
+	for i, key in ipairs(keys) do
+		local action = wezterm.action.SendKey(key)
+		if i == 1 then
+			window:perform_action(action, pane)
+		else
+			wezterm.time.call_after((i - 1) * 0.02, function()
+				window:perform_action(action, pane)
+			end)
+		end
+	end
+end
+
 local function send_zellij_keys(keys)
 	return wezterm.action_callback(function(window, pane)
-		for i, key in ipairs(keys) do
-			local action = wezterm.action.SendKey(key)
-			if i == 1 then
-				window:perform_action(action, pane)
-			else
-				wezterm.time.call_after((i - 1) * 0.02, function()
-					window:perform_action(action, pane)
-				end)
-			end
-		end
+		perform_zellij_keys(window, pane, keys)
 	end)
+end
+
+-- True when the focused pane is a Zellij client attached to a nested_zellij
+-- session. The pane's foreground process is the Zellij client; nested-session-check
+-- resolves which session it is on (live, so it tracks in-place swaps) and tests it
+-- against the registry quick-launch maintains. Drives the Cmd+Shift+P /
+-- Cmd+Shift+Alt+P split: inside a nested session those reach the local picker and
+-- the remote picker respectively; elsewhere only Cmd+Shift+P is meaningful.
+local function pane_session_is_nested(pane)
+	local info = pane and pane:get_foreground_process_info()
+	local exe = info and info.argv and info.argv[1] or ""
+	if not exe:find("zellij") then
+		return false
+	end
+	local helper = os.getenv("HOME") .. "/.config/zellij/scripts/nested-session-check"
+	local call_ok, success = pcall(wezterm.run_child_process, { helper, tostring(info.pid) })
+	return call_ok and success
 end
 
 ---------------------------------------------------------------
@@ -512,15 +554,44 @@ config.keys = {
 		mods = "CMD",
 		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "9" } }),
 	},
-	-- `⌘⇧P`: Show Project picker => `⌥w o S`
+	-- `⌘⇧P`: Show the workspace/project picker. In a normal session that's the
+	-- `⌥w o S` chord. In a nested session those keys are cleared and pass through
+	-- to the remote, so instead send the kitty-protocol bytes for the local
+	-- `Ctrl+Alt+Space` summon bound in the generated nested layout. We send the
+	-- raw CSI-u sequence (`ESC [ 32;7 u`) rather than SendKey because WezTerm's
+	-- SendKey mis-encodes the `Ctrl+Alt`+Space combination (Ctrl+Space collapses
+	-- to NUL), so the synthesized keypress never matches Zellij's bind.
 	{
 		key = "p",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "o" },
-			{ key = "S" },
-		}),
+		action = wezterm.action_callback(function(window, pane)
+			if pane_session_is_nested(pane) then
+				window:perform_action(wezterm.action.SendString("\x1b[32;7u"), pane)
+			else
+				perform_zellij_keys(window, pane, {
+					{ key = "w", mods = "ALT" },
+					{ key = "o" },
+					{ key = "S" },
+				})
+			end
+		end),
+	},
+	-- `⌘⇧⌥P`: Only meaningful in a nested session — forward the *normal* picker
+	-- chord (`⌥w o S`). Since the nested layout clears its own binds, those keys
+	-- pass straight through to the REMOTE Zellij, opening the remote's own
+	-- quick-launch. In a non-nested session there's no remote, so it's a no-op.
+	{
+		key = "p",
+		mods = "CMD|SHIFT|ALT",
+		action = wezterm.action_callback(function(window, pane)
+			if pane_session_is_nested(pane) then
+				perform_zellij_keys(window, pane, {
+					{ key = "w", mods = "ALT" },
+					{ key = "o" },
+					{ key = "S" },
+				})
+			end
+		end),
 	},
 	-- `⌘⇧T`: Show new tab picker => `⌥w t T`
 	{

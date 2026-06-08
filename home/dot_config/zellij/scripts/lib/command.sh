@@ -32,20 +32,6 @@ ql_join() {
   printf '%s' "$out"
 }
 
-ql_shell_join() {
-  local out="" first=1 a q
-  for a in "$@"; do
-    printf -v q '%q' "$a"
-    if (( first )); then
-      out="$q"
-      first=0
-    else
-      out+=" $q"
-    fi
-  done
-  printf '%s' "$out"
-}
-
 # Build the command prefix: `cd <cwd>; <python_venv>; <mise_env>; `.
 # Order matches the spec (cd, then venv, then mise) so both environments are
 # live for the actual command.
@@ -129,14 +115,6 @@ ql_action_command() {
         printf ''
       fi
       ;;
-    External)
-      if (( ${#args[@]} > 0 )); then
-        ql_shell_join "${args[@]}"
-      else
-        echo "quick-launch: External action has no command args" >&2
-        printf ''
-      fi
-      ;;
     Run)
       if (( ${#args[@]} > 0 )); then
         printf '%s%s' "$prefix" "$(ql_join ' && ' "${args[@]}")"
@@ -178,7 +156,12 @@ ql_pane_leaf() {
   if [[ -z "$cmd" ]]; then
     printf '%spane%s%s%s\n' "$indent" "$nameattr" "$cwdattr" "$sizeattr"
   else
-    printf '%spane command="sh"%s%s%s {\n' "$indent" "$nameattr" "$cwdattr" "$sizeattr"
+    # close_on_exit mirrors the standalone-tab path (`new-tab --close-on-exit`):
+    # the pane *is* the program, so when it exits (e.g. you quit the editor) the
+    # tab closes instead of parking on a "press <Enter> to re-run" prompt. The
+    # bar + floating plugin panes from default_tab_template don't keep the tab
+    # alive once the command pane is gone.
+    printf '%spane command="sh" close_on_exit=true%s%s%s {\n' "$indent" "$nameattr" "$cwdattr" "$sizeattr"
     printf '%s    args "-c" "%s"\n' "$indent" "$(ql_kdl_escape "$cmd")"
     printf '%s}\n' "$indent"
   fi
@@ -259,9 +242,11 @@ ql_build_tab_layout() {
   printf '}\n'
 }
 
-# Build a full multi-tab `layout { ... }` string for a workspace target
-# (consumed by `zellij action switch-session --layout-string`). Workspace-
-# level panes are appended to the first tab, matching the Lua plugin.
+# Build a full multi-tab `layout { ... }` string for a workspace target.
+# Used by the `quick-launch layout workspace ID` debug command to show the
+# workspace as a single conceptual layout; the launcher itself builds the
+# session tab-by-tab (see ql_open_workspace). Workspace-level panes are
+# appended to the first tab, matching the Lua plugin.
 ql_build_workspace_layout() {
   local ws="$1"
   local tabs ws_panes tcount
@@ -277,6 +262,11 @@ ql_build_workspace_layout() {
     printf '    tab name="%s" {\n' "$(ql_kdl_escape "$name")"
     if [[ "$(jq 'length' <<<"$ws_panes")" -gt 0 ]]; then
       ql_pane_tree "$ws_panes" 0 "        " ""
+    elif [[ "$(jq -r 'has("action") and ((.action.type // "") != "")' <<<"$ws")" == true ]]; then
+      # A bare workspace action (e.g. an SSH target) becomes the single pane.
+      local synth
+      synth="$(jq -c '{action: .action, name: (.name // .id)}' <<<"$ws")"
+      ql_pane_leaf "$synth" "        " ""
     else
       printf '        pane\n'
     fi
@@ -292,4 +282,49 @@ ql_build_workspace_layout() {
     done
   fi
   printf '}\n'
+}
+
+# Build a full "layout with config" for a nested_zellij workspace: the bar-less
+# workspace layout (its command pane runs the SSH/Run target directly, so no
+# throwaway login-shell tab flashes the MOTD), plus an embedded `keybinds` block
+# that makes the session a TRUE passthrough for the remote's own Zellij.
+#
+# Locked mode is unreachable for a custom-layout session: Zellij starts it in
+# `normal` regardless of any `default_mode` (verified 0.44 quirk — a layout flag
+# resets the mode), and there's no CLI to lock an already-attached client
+# (`action switch-mode` only touches the ephemeral client it spawns). So we stay
+# in `normal` — where unbound keys are forwarded verbatim — and `clear-defaults`
+# drops every inherited binding so the leader (Alt+w etc.) reaches the remote's
+# own Zellij. Two keys are kept local: `Ctrl+Alt+Space` summons the workspace
+# picker (also how WezTerm's Cmd+Shift+P reaches it when nested), and `Alt+Enter`
+# toggles the local terminal fullscreen (meaningless if forwarded to the remote)
+# while still deferring to a local fzf picker via context-keys' `when fzf`.
+# Consumed via `zellij ... options --default-layout <file>`.
+# $2 is the home dir (the picker Run needs absolute script paths).
+ql_build_nested_layout() {
+  local ws="$1" home="$2"
+  ql_build_workspace_layout "$ws"
+  cat <<EOF
+keybinds clear-defaults=true {
+    normal {
+        bind "Ctrl Alt Space" {
+            Run "$home/.config/zellij/scripts/zellij-modal" "--title" "Quick Launch — Workspace" "--" "$home/.config/zellij/scripts/quick-launch-zellij" "workspace" {
+                name ""
+                close_on_exit true
+                floating true
+                pinned true
+                borderless false
+                width "70%"
+                height "60%"
+            }
+        }
+        bind "Alt Enter" {
+            MessagePlugin "context-keys" {
+                name "alt+enter"
+                payload "default: run $home/.config/zellij/scripts/terminal-toggle-fullscreen; when fzf: \$source"
+            }
+        }
+    }
+}
+EOF
 }

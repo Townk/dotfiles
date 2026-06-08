@@ -52,10 +52,20 @@ keybinds clear-defaults=true {
         // open-terminal-config binds below — rather than a bare MessagePlugin
         // broadcast (which addressed no plugin and ran nothing). The script
         // detects Ghostty/WezTerm from the inherited env; no {pid} needed.
+        //
+        // `when fzf: $source` forwards the raw key to the pane whenever fzf is
+        // in the focused pane's process tree (same passthrough as Ctrl+j/k), so
+        // a picker can bind Alt+Enter itself instead of it being swallowed by
+        // the fullscreen toggle — e.g. the quick-launch workspace picker's
+        // "open in a separate window" accept key.
+        //
+        // `name` MUST be the key spec ("alt+enter") because `$source` forwards
+        // the key read from `name` (→ \x1b\r); a descriptive name would make
+        // `$source` a silent no-op. The `run` default ignores `name`.
         bind "Alt Enter" {
             MessagePlugin "context-keys" {
-                name "terminal-toggle-fullscreen"
-                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/terminal-toggle-fullscreen" }}"
+                name "alt+enter"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/terminal-toggle-fullscreen" }}; when fzf: $source"
             }
         }
 

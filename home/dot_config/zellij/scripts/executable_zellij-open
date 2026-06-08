@@ -35,28 +35,11 @@ path="${path#localhost}"
 [ -e "$path" ] || exit 0
 
 # --- Resolve the session the client PID is currently attached to ----------
-# A Zellij client holds a unix-socket connection to its session's server, whose
-# listening socket is bound to .../<contract>/<session_name>; lsof prints that
-# path in the NAME column. Find the client's one external socket peer (skip its
-# self-pairs) and read the owning server's bound path. Tracks live session
-# switches and needs no --session in argv (so cute auto-names keep working).
-resolve_session() {
-	local client_pid="$1" pids lsof_out cl locals peers external e spath
-	pids=$(ps -axww -o pid=,command= | awk '/\/zellij( |$)/ {print $1}' | paste -sd, -)
-	[ -n "$pids" ] || return 1
-	lsof_out=$(lsof -nP -U -a -p "$pids" 2>/dev/null | grep "unix" || true)
-	cl=$(printf '%s\n' "$lsof_out" | awk -v p="$client_pid" '$2==p')
-	[ -n "$cl" ] || return 1
-	locals=$(printf '%s\n' "$cl" | awk '{print $6}' | grep '^0x' | sort -u)
-	peers=$(printf '%s\n' "$cl" | grep -oE '\->0x[0-9a-f]+' | sed 's/->//' | sort -u)
-	external=$(comm -23 <(printf '%s\n' "$peers") <(printf '%s\n' "$locals"))
-	for e in $external; do
-		spath=$(printf '%s\n' "$lsof_out" \
-			| awk -v p="$client_pid" -v a="$e" '$2!=p && $6==a && $NF ~ /\// {print $NF; exit}')
-		[ -n "$spath" ] && { printf '%s\n' "${spath##*/}"; return 0; }
-	done
-	return 1
-}
+# resolve_session lives in lib/zellij-session.sh (shared with quick-launch-window):
+# a Zellij client holds a unix-socket connection to its session's server, whose
+# listening socket is bound to .../<contract>/<session_name>; we read that path.
+# Tracks live session switches and needs no --session in argv.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/zellij-session.sh"
 
 session="$(resolve_session "$pid")" || exit 0
 [ -n "$session" ] || exit 0

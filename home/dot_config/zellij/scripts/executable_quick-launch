@@ -79,6 +79,13 @@ ql_menu() {
   local chosen
   chosen="$("$SCRIPT_DIR/quick-launch-pick" "$kind")" || return 0
   [[ -n "$chosen" ]] || return 0
+  # Alt+Enter in the workspace picker emits "@window:<id>" (field 2) to request
+  # opening the workspace in a separate OS window instead of switching the
+  # current client; plain Enter emits the bare id and switches as usual.
+  if [[ "$chosen" == @window:* ]]; then
+    ql_dispatch_window "${chosen#@window:}"
+    return
+  fi
   ql_dispatch "$kind" "$chosen"
 }
 
@@ -86,11 +93,6 @@ ql_print_layout() {
   local kind="$1" id="$2" el
   el="$(ql_get_element "$kind" "$id")" || true
   [[ -n "$el" ]] || ql_die "no $kind target with id '$id'"
-  if [[ "$(jq -r '.action.type // empty' <<<"$el")" == "External" ]]; then
-    ql_action_command "$(jq -c '.action // {}' <<<"$el")"
-    echo
-    return
-  fi
   case "$kind" in
     tab) ql_build_tab_layout "$el" ;;
     workspace) ql_build_workspace_layout "$el" ;;

@@ -20,6 +20,21 @@ if [[ -z "$ZELLIJ" ]]; then
   # flash on attach, nor reappear when Zellij restores the primary buffer on
   # exit. SSH-scoped so local startup is untouched.
   [[ -n "$SSH_CONNECTION" ]] && printf '\e[H\e[2J\e[3J'
+  # Record "Main" as the most-recently-used workspace in the quick-launch
+  # picker's recency cache, so after switching to another workspace you can
+  # flip straight back to Main (it sorts to the top of the picker). This boot
+  # path doesn't go through quick-launch — which is what normally records a
+  # pick — so we prepend it by hand (dedupe, cap at 50, like pick::record).
+  # "default" is the workspace *id* whose session name is "Main"
+  # (~/.config/zellij/quick-launch/default.yaml); the recency file keys on id.
+  _ql_seed_main() {
+    local f="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/usage-workspace"
+    mkdir -p "${f:h}" 2>/dev/null || return 0
+    local tmp="$f.$$"
+    { print -r -- default; [[ -f "$f" ]] && grep -vFx default "$f"; } 2>/dev/null \
+      | head -n 50 >| "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null
+    return 0
+  }
   for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij ~/.local/bin/zellij; do
     [[ -x "$_zellij" ]] || continue
     if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
@@ -29,6 +44,7 @@ if [[ -z "$ZELLIJ" ]]; then
       else
         # Main is idle → reattach. If the session record is stale, discard it
         # and create a fresh Main with the configured default layout.
+        _ql_seed_main
         exec "$_zellij" attach Main || {
           "$_zellij" delete-session Main -f &>/dev/null
           exec "$_zellij" --session Main --new-session-with-layout default
@@ -36,10 +52,12 @@ if [[ -z "$ZELLIJ" ]]; then
       fi
     else
       "$_zellij" delete-session Main -f &>/dev/null
+      _ql_seed_main
       exec "$_zellij" --session Main --new-session-with-layout default
     fi
   done
   unset _zellij
+  unset -f _ql_seed_main 2>/dev/null
 fi
 
 # Periodic auto-update on Zsh startup: 'ask' or 'no'.

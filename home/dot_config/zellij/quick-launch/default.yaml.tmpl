@@ -19,7 +19,7 @@ tools:
 
 workspaces:
   - id: default
-    name: Default Workspace
+    name: Main
 {{ if $hasQmk }}
   - id: qmk
     name: QMK Firmware
@@ -149,6 +149,15 @@ tabs:
       label: Edit Zellij QuickLaunch items
       cwd: ~/.config/zellij/quick-launch
       args: ["default.yaml"]
+
+  - id: launcher-local-items
+    name: Launcher Local Items
+    icon: "󱓟 "
+    action:
+      type: Edit
+      label: Edit Zellij QuickLaunch local items
+      cwd: ~/.config/zellij/quick-launch/launch.d
+      args: ["home.yaml"]
 
   - id: brew-pkgs
     name: Homebrew Packages

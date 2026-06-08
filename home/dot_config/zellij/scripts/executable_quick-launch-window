@@ -1,0 +1,107 @@
+#!/usr/bin/env zsh
+# quick-launch-window — open or focus a separate OS terminal window for a
+# quick-launch workspace's Zellij session.
+#
+#   quick-launch-window <session> -- <cmd> [args...]
+#       Open: if a WezTerm window is already attached to <session>, focus it;
+#       else spawn a new window running <cmd…>.
+#   quick-launch-window --focus <session>
+#       Focus only: focus the window attached to <session> (exit 0), else exit
+#       3 so the caller can fall back (e.g. switch the session in place).
+#
+# Which window hosts a session is resolved LIVE from the unix sockets the
+# Zellij client holds (lib/zellij-session.sh — the same file-socket trick
+# zellij-open uses): for each WezTerm pane we find the zellij client on its tty
+# and ask which session that client is attached to, yielding the WezTerm
+# window id.
+#
+# Raising the window is done WezTerm-natively, with no osascript: we hand the
+# target window id to the GUI through the same channel the fullscreen bind uses
+# — `wezterm cli rename-workspace "__QL_FOCUS__=<id>"`. wezterm.lua's
+# update-status handler matches that prefix and calls `window:focus()` on the
+# matching GUI window. The id rides in the workspace name itself (no sidecar
+# file). `wezterm cli activate-pane` is a no-op across windows, hence the GUI.
+#
+# Ghostty has no window-query CLI, so --focus is a no-op there and open always
+# spawns. Host only (not SSH).
+
+set -eu -o pipefail
+
+source "${0:A:h}/lib/zellij-session.sh"
+
+WEZTERM=${commands[wezterm]:-/opt/homebrew/bin/wezterm}
+GHOSTTY=${commands[ghostty]:-/Applications/Ghostty.app/Contents/MacOS/ghostty}
+export WEZTERM_BIN="$WEZTERM"
+FOCUS_WORKSPACE_PREFIX="__QL_FOCUS__="
+
+# Echo the WezTerm window id hosting <session>, or nothing (see lib helper).
+# Capture the (expensive) enumeration once, then match over a here-string — a
+# `… | awk '…exit'` pipe would SIGPIPE the producer mid-write, and with
+# pipefail+errexit that would abort the whole script before we ever focus.
+wezterm_window_id_for_session() {
+  local out s wid rest
+  out=$(zellij_wezterm_sessions) || true
+  while IFS=$'\t' read -r s wid rest; do
+    [[ "$s" == "$1" ]] && { print -r -- "$wid"; return 0; }
+  done <<< "$out"
+  return 0
+}
+
+# Focus the WezTerm window with id <wid> via the GUI (no osascript): rename our
+# workspace to "__QL_FOCUS__=<wid>". wezterm.lua's update-status handler matches
+# the prefix, focuses the matching window, and renames back — mirroring
+# terminal-toggle-fullscreen's workspace-rename trigger.
+wezterm_focus_window() {
+  "$WEZTERM" cli rename-workspace "${FOCUS_WORKSPACE_PREFIX}$1" >/dev/null 2>&1 || true
+}
+
+# Argument parsing → MODE (open|focus), KEY (session), and (open) the cmd array.
+if [[ "${1:-}" == "--focus" ]]; then
+  MODE=focus; KEY="${2:-}"
+  [[ -n "$KEY" ]] || { print -ru2 -- "usage: $0 --focus <session>"; exit 2; }
+else
+  MODE=open
+  if [[ $# -lt 3 || "$2" != "--" ]]; then
+    print -ru2 -- "usage: $0 <session> -- <cmd> [args...]"
+    exit 2
+  fi
+  KEY=$1; shift 2; cmd=( "$@" )
+  (( ${#cmd} )) || { print -ru2 -- "$0: no command after --"; exit 2; }
+fi
+
+# Environment detection. An SSH session can't drive the host GUI.
+if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
+  ENV_TYPE="UNSUPPORTED"
+elif [[ "${TERM_PROGRAM:-}" == "Ghostty" || -n "${GHOSTTY_RESOURCES_DIR:-}" ]]; then
+  ENV_TYPE="GHOSTTY"
+elif [[ "${TERM_PROGRAM:-}" == "WezTerm" || -n "${WEZTERM_UNIX_SOCKET:-}" ]]; then
+  ENV_TYPE="WEZTERM"
+else
+  ENV_TYPE="UNSUPPORTED"
+fi
+
+case "$ENV_TYPE" in
+  WEZTERM)
+    wid=$(wezterm_window_id_for_session "$KEY")
+    if [[ -n "$wid" ]]; then
+      wezterm_focus_window "$wid"
+      exit 0
+    fi
+    [[ "$MODE" == focus ]] && exit 3
+    env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE \
+      "$WEZTERM" cli --no-auto-start spawn --new-window -- "${cmd[@]}" >/dev/null
+    ;;
+
+  GHOSTTY)
+    # No window-query CLI: can't focus, so --focus is a no-op and open always
+    # spawns a fresh window running the command.
+    [[ "$MODE" == focus ]] && exit 3
+    exec "$GHOSTTY" +open "${cmd[@]}"
+    ;;
+
+  UNSUPPORTED | *)
+    [[ "$MODE" == focus ]] && exit 3
+    print -ru2 -- "quick-launch-window: unsupported environment (need Ghostty or WezTerm on the host, not SSH)."
+    exit 1
+    ;;
+esac
