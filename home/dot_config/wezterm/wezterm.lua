@@ -26,11 +26,12 @@ end
 -- That makes wezterm point SSH_AUTH_SOCK at a wezterm-managed symlink
 -- (~/.local/share/wezterm/agent.<pid>) which tracks the most recently
 -- active mux client. When that client exits the symlink goes stale and
--- ssh from detached/non-interactive shells breaks — seen reaching the
--- [redacted] dev shell: [redacted] "can't verify ssh certificate" against a
--- dead socket. Disabling it leaves SSH_AUTH_SOCK untouched, so panes
--- inherit the launchd/system agent the GUI was started with — the same
--- one [redacted]/Vault (and 1Password) register their keys with.
+-- ssh from detached/non-interactive shells breaks — seen reaching a
+-- remote dev shell behind an SSH-certificate auth agent ("can't verify
+-- ssh certificate" against a dead socket). Disabling it leaves
+-- SSH_AUTH_SOCK untouched, so panes inherit the launchd/system agent the
+-- GUI was started with — the same one the cert/secrets agents (and
+-- 1Password) register their keys with.
 config.mux_enable_ssh_agent = false
 
 ---------------------------------------------------------------
