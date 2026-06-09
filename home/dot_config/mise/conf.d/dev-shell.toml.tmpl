@@ -55,6 +55,12 @@ use_versions_host = false
 "ast-grep" = "latest"
 "hexyl" = "latest"
 
+# Secret decryption at chezmoi apply. A headless host's secrets fragment runs
+# `output sops --decrypt` against its SOPS+age blob; age covers key rotation.
+# See `system-onboard` / `system-secrets`.
+"sops" = "latest"
+"age" = "latest"
+
 # fzf straight from GitHub releases. The registry/apt fzf is too old
 # (0.29) for the modern --bind keys z4h's completion widgets use (e.g.
 # alt-page-up), which made TAB-completion error out. Pin the backend so

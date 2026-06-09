@@ -71,4 +71,21 @@
 .pi/agent/extensions/pi-plannotator-bridge
 {{- end }}
 
+{{/* Per-machine secret fragments. Each committed fragment
+     dot_config/zsh/secrets.d/private_<slot>.sh.tmpl renders to
+     ~/.config/zsh/secrets.d/<slot>.sh, but only THIS host's slot may
+     materialize: foreign fragments carry `output sops` / `onepasswordRead`
+     calls that must never run here, so we ignore (don't render) them rather
+     than empty them. When secretsSlot is unset (machine not yet onboarded
+     with `system-onboard`), every fragment is ignored. Slot ids are opaque,
+     so emitting them here leaks nothing. */}}
+{{- $slot := "" -}}
+{{- if hasKey . "secretsSlot" -}}{{ $slot = .secretsSlot -}}{{- end -}}
+{{- range $f := (glob (joinPath .chezmoi.sourceDir "dot_config/zsh/private_secrets.d/private_*.sh.tmpl")) -}}
+{{-   $name := base $f | trimSuffix ".tmpl" | trimPrefix "private_" -}}
+{{-   if ne $name (printf "%s.sh" $slot) }}
+.config/zsh/secrets.d/{{ $name }}
+{{-   end -}}
+{{- end }}
+
 # vim:ft=gitignore

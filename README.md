@@ -234,54 +234,78 @@ of invoking the merge tool, leaving the source byte-identical to before.
 
 ## Secrets (API keys, tokens)
 
-Source of truth for secret env vars is the **`rapinialves` 1Password
-account**, vault **`Private`** by default. Workflow:
+Secret env vars are declared once in the manifest
+`home/.chezmoidata/secrets.yaml` (env var **names**, prompts, and which
+profiles need them — never values) and materialized per-machine by two
+backends, chosen by machine kind:
 
-1. **Store the value in 1Password** under
-   `op://Private/<Item>/<field>` (or another vault if appropriate).
-2. **Reference it from `dot_config/zsh/private_secrets.sh.tmpl`** with
-   chezmoi's `onepasswordRead` template function:
+- **Human machines** (`personal`/`work` Macs): chezmoi templates using
+  `onepasswordRead`. The committed fragment holds only `op://…` references;
+  values resolve from 1Password at apply.
+- **Headless machines** (`dev-shell`): **SOPS + age**. There is no interactive
+  `op signin`, so values are encrypted at rest to the box's own age recipient
+  and decrypted **once at apply** by the `output "sops" "--decrypt"` template.
 
-   ```sh
-   export FOO_API_KEY="{{ onepasswordRead "op://Private/Foo/api_key" }}"
-   ```
+Either way the per-machine fragment lands at `~/.config/zsh/secrets.d/<slot>.sh`
+(mode 0600) and is sourced by the non-secret loader `~/.config/zsh/secrets.sh`
+→ `environment.sh` → `~/.zshenv`, so every shell and every subprocess spawned
+from one sees the env var.
 
-   Quote the export value — `op` field contents can include spaces or
-   shell metacharacters.
-3. **`chezmoi apply`** — resolves the `op://` references via `op read`
-   and writes `~/.config/zsh/secrets.sh` (mode 0600).
-4. The rendered file is sourced by `~/.config/zsh/environment.sh`,
-   which is sourced by `~/.zshenv`, which means every shell and every
-   subprocess spawned from one (pi extensions, GUI apps launched from
-   the shell, …) sees the env var.
+### The leak-safe boundary (this repo is PUBLIC)
 
-### Rotation
+Committed artifacts identify a machine only by an **opaque slot id** (e.g.
+`slot-7f3a9c`) — never an alias, hostname, username, or work tool name. Real
+endpoints and the alias↔slot map live only in the loose, unmanaged layer. See
+`.cursor/rules/no-company-info.mdc` and the local `pre-commit` leak guard.
 
-Update the value in 1Password, then `chezmoi apply`. Open a new shell
-to pick up the new env.
+| Fact | Lives in |
+| ---- | -------- |
+| Real SSH endpoint | `~/.ssh/config.d/<alias>.conf` (loose, never committed) |
+| alias ↔ slot ↔ host map | `~/.config/chezmoi/onboard-map.yaml` (loose, never committed) |
+| Which slot is *this host's* | `~/.config/chezmoi/chezmoi.toml` `[data].secretsSlot` (generated at init, local) |
+| slot id → age recipient | `.sops.yaml` (committed — opaque slot + age **public** key only) |
+| Encrypted values | `secrets/<slot>.sops.sh` (committed — ciphertext, opaque name; outside the chezmoi source root) |
+| Env var names + prompts | `home/.chezmoidata/secrets.yaml` (committed — no values) |
 
-### Bootstrap on a fresh machine
+### Onboarding a machine
 
-`Brewfile.bootstrap` already installs `1password-cli`. After the
-top-level setup pauses for 1Password integration, run `op signin`
-once for the `rapinialves` account; from then on `chezmoi apply`
-resolves all `op://` references automatically.
+From a trusted operator host (with this repo and push access) that can already
+SSH to the target:
 
-### What ends up where
+```sh
+system-onboard --alias <ssh-alias> --hostname <ssh-host> --profile <profile>
+# kind is inferred: dev-shell → headless, else human
+```
 
-- *In this git repo*: only `op://VAULT/ITEM/FIELD` references in
-  `private_secrets.sh.tmpl`. No secret material.
-- *On the local disk after apply*: `~/.config/zsh/secrets.sh` with
-  resolved values, mode 0600.
-- *In the shell environment*: the env vars exported by that file.
+It reconciles SSH access (loose), the remote `chezmoi init`, an opaque secrets
+slot, the encrypted/1Password-backed fragment, the commit (opaque only), and
+the remote `chezmoi update --apply`. Idempotent — safe to rerun.
 
-If a secret can't fit in 1Password (CI keys, machine-local tokens,
-etc.) chezmoi's native age encryption is the fallback — drop an
-`encrypted_` prefix on the source filename and chezmoi
-encrypts/decrypts at the repo boundary. The `.chezmoi.toml.tmpl`
-`age` section is already scaffolded; you'd just need to generate a
-keypair and tell chezmoi where the private key lives (typically
-`~/.config/chezmoi/key.txt`, **not** in the repo).
+### Managing secrets
+
+```sh
+system-secrets list                       # manifest + known slots
+system-secrets add <NAME>                 # declare a new secret in the manifest
+system-secrets rotate <NAME> [--slot S]   # re-collect the secret(s) on a slot
+system-secrets reconcile [--slot S]       # rebuild a slot to match the manifest
+```
+
+Both commands share `~/.local/lib/system-secrets-common.sh` so onboarding and
+later edits cannot drift. A headless blob is encrypted only to its box's
+recipient (per-machine isolation — a compromised box can't read peers'
+secrets), and the operator holds only the public key, so rotating a headless
+slot re-collects its full required set rather than patching in place.
+
+### Key custody
+
+- **Headless:** the age **private** identity lives only on the box at
+  `~/.local/state/chezmoi/secrets/key.txt` (0600), off git. chezmoi's `[env]`
+  exports `SOPS_AGE_KEY_FILE` to it so `output sops` decrypts at apply.
+- **Human:** no age key — 1Password resolves references at apply.
+
+GPG/commit-signing is independent of all of this: chezmoi's `encryption = "gpg"`
+remains for any `encrypted_` files, while SOPS runs via the `output` template
+function. The two do not interact and there is no migration.
 
 ## Linux portability
 

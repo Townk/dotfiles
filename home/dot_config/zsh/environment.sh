@@ -44,11 +44,12 @@ if [ -d /snap/bin ]; then
 fi
 export PATH
 
-# Secret env vars (API keys, tokens). Resolved from 1Password by chezmoi
-# at apply time and written to ~/.config/zsh/secrets.sh (mode 0600,
-# never committed). The template lives at
-# dot_config/zsh/private_secrets.sh.tmpl. Sourced here so every shell
-# AND every launchd-spawned subprocess gets the same env.
+# Secret env vars (API keys, tokens). ~/.config/zsh/secrets.sh is a non-secret
+# loader that sources this machine's per-slot fragment(s) under
+# ~/.config/zsh/secrets.d/ (mode 0600). Fragments are materialized by chezmoi
+# at apply: SOPS+age decryption on headless hosts, 1Password resolution on
+# human hosts. Sourced here so every shell AND every launchd-spawned
+# subprocess gets the same env. See `system-onboard`/`system-secrets`.
 [ -r "$HOME/.config/zsh/secrets.sh" ] && . "$HOME/.config/zsh/secrets.sh"
 
 # Over SSH/mosh, steer gpg-agent's pinentry to the terminal. gpg forwards this

@@ -1,0 +1,17 @@
+# SOPS creation rules — maps each encrypted secrets blob to the age recipient
+# (public key) allowed to decrypt it. COMMITTED and world-readable.
+#
+# Leak-safe by construction: the only identifiers here are OPAQUE SLOT IDS
+# (e.g. slot-7f3a9c) and age PUBLIC keys. Neither identifies a machine, host,
+# user, or employer. Never add a machine alias, hostname, or comment that does.
+#
+# Each headless machine owns exactly one slot and one recipient; a blob is
+# encrypted only to its own slot's recipient, so a compromised box cannot
+# decrypt a peer's secrets.
+#
+# Managed by `system-onboard` / `system-secrets`, which append a rule per slot
+# and run `sops updatekeys` when a recipient rotates. The blobs themselves live
+# under secrets/<slot>.sops.sh (binary store; auto-detected by sops). This file
+# and that directory sit OUTSIDE the chezmoi source root (home/), so chezmoi
+# never renders them into $HOME.
+creation_rules: []

@@ -1,0 +1,306 @@
+#!/usr/bin/env zsh
+# system-onboard — reconcile a machine into this dotfiles system.
+#
+# Usage:
+#   system-onboard --alias <ssh-alias> --hostname <ssh-host> \
+#                  --profile <personal|work|dev-shell> [--kind human|headless]
+#
+# Idempotent and safe to rerun after partial failure. With no args on a TTY it
+# runs an interactive form. Run from an already-trusted operator host that has
+# this repo checked out and can commit/push, and that can already SSH to the
+# target (password, temp key, or provider console — onboarding can make access
+# persistent but cannot create trust from nothing).
+#
+# LEAK-SAFE BOUNDARY (this repo is PUBLIC): the alias and real endpoint are
+# written ONLY to the loose, unmanaged layer (~/.ssh/config.d/<alias>.conf and
+# the operator map ~/.config/chezmoi/onboard-map.yaml). Committed artifacts use
+# the machine's OPAQUE SLOT ID only. Every commit runs the leak audit.
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-secrets-common.sh"
+
+# --- arguments ---------------------------------------------------------------
+ALIAS="" HOSTNAME="" PROFILE="" KIND=""
+DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0
+VALID_PROFILES=(personal work dev-shell)
+
+usage() {
+  cat <<EOF
+Usage:
+  system-onboard --alias <ssh-alias> --hostname <ssh-host> \\
+                 --profile <personal|work|dev-shell> [--kind human|headless]
+
+Flags:
+  --alias <name>       local SSH alias (loose only; never committed)
+  --hostname <host>    real SSH endpoint (loose only; never committed)
+  --profile <p>        personal | work | dev-shell
+  --kind <k>           human | headless (default: dev-shell→headless, else human)
+  --rotate-secrets     re-collect this slot's secrets even if its fragment exists
+  --no-commit          do everything except git commit/push
+  --no-push            commit but do not push
+  --dry-run            print the plan; make no local or remote changes
+  -h | --help | help   show this help
+
+Reconciles SSH access, the target's chezmoi init, a per-machine opaque secrets
+slot, the encrypted/1Password-backed secret fragment, the commit, and the
+remote apply. Safe to rerun.
+EOF
+}
+
+# ssh wrapper — `command` bypasses the interactive z4h `ssh` shell function,
+# which is not loaded in non-interactive shells.
+rexec() { command ssh "$ALIAS" "$@"; }
+
+# --- argument parsing --------------------------------------------------------
+parse_args() {
+  while (( $# )); do
+    case "$1" in
+      --alias)          ALIAS="${2:-}"; shift 2 ;;
+      --hostname)       HOSTNAME="${2:-}"; shift 2 ;;
+      --profile)        PROFILE="${2:-}"; shift 2 ;;
+      --kind)           KIND="${2:-}"; shift 2 ;;
+      --rotate-secrets) ROTATE_SECRETS=1; shift ;;
+      --no-commit)      NO_COMMIT=1; shift ;;
+      --no-push)        NO_PUSH=1; shift ;;
+      --dry-run)        DRY_RUN=1; shift ;;
+      -h|--help|help)   usage; exit 0 ;;
+      *)                usage >&2; sec_die "unknown argument: $1" ;;
+    esac
+  done
+}
+
+is_valid_profile() {
+  local p; for p in "${VALID_PROFILES[@]}"; do [[ "$1" == "$p" ]] && return 0; done
+  return 1
+}
+
+# Interactive form when invoked bare on a TTY.
+interactive_form() {
+  sec_have_tty || { usage >&2; sec_die "no arguments and no TTY"; }
+  sec_info "Interactive onboarding (Ctrl-C to abort)"
+  prompt_required ALIAS    "SSH alias (local only):"
+  prompt_required HOSTNAME "SSH hostname / endpoint (local only):"
+  prompt_choice   PROFILE  "Profile" "${VALID_PROFILES[@]}"
+}
+
+validate_inputs() {
+  [[ -n "$ALIAS" && -n "$HOSTNAME" && -n "$PROFILE" ]] \
+    || { usage >&2; sec_die "--alias, --hostname, and --profile are required"; }
+  [[ "$ALIAS" =~ '^[A-Za-z0-9._-]+$' ]] \
+    || sec_die "alias must be filename-safe ([A-Za-z0-9._-]): $ALIAS"
+  is_valid_profile "$PROFILE" || sec_die "invalid profile: $PROFILE"
+  if [[ -z "$KIND" ]]; then
+    [[ "$PROFILE" == "dev-shell" ]] && KIND="headless" || KIND="human"
+  fi
+  [[ "$KIND" == human || "$KIND" == headless ]] \
+    || sec_die "invalid kind: $KIND (human|headless)"
+}
+
+# Refuse to commit on top of unrelated local changes (the commit would sweep
+# them in). Allowed when --no-commit.
+check_working_tree() {
+  (( NO_COMMIT || DRY_RUN )) && return 0
+  if ! git -C "$REPO_ROOT" diff --quiet || ! git -C "$REPO_ROOT" diff --cached --quiet; then
+    sec_die "working tree has unrelated changes; commit/stash them or pass --no-commit"
+  fi
+}
+
+# --- step 2: SSH (loose) -----------------------------------------------------
+reconcile_ssh() {
+  local confdir="$HOME/.ssh/config.d" conf="$HOME/.ssh/config.d/$ALIAS.conf"
+  local sshcfg="$HOME/.ssh/config"
+  if (( DRY_RUN )); then
+    sec_info "[dry-run] would ensure $conf (Host $ALIAS → $HOSTNAME) and the Include in $sshcfg"
+    return 0
+  fi
+  mkdir -p "$confdir"; chmod 0700 "$confdir"
+  if [[ -f "$conf" ]]; then
+    local cur
+    cur="$(awk 'tolower($1)=="hostname"{print $2; exit}' "$conf")"
+    if [[ -n "$cur" && "$cur" != "$HOSTNAME" ]]; then
+      confirm "$conf maps $ALIAS to '$cur', not '$HOSTNAME'. Overwrite?" \
+        || sec_die "refusing to overwrite conflicting SSH config for $ALIAS"
+    fi
+  fi
+  cat >"$conf" <<EOF
+# Written by system-onboard. LOOSE — never committed (holds the real endpoint).
+Host $ALIAS
+    HostName $HOSTNAME
+EOF
+  chmod 0600 "$conf"
+  sec_ok "ssh config.d entry for $ALIAS"
+
+  if [[ ! -f "$sshcfg" ]] || ! grep -Eq '^\s*Include\s+~?/?.*\.ssh/config\.d/\*' "$sshcfg"; then
+    sec_warn "$sshcfg lacks an Include for ~/.ssh/config.d/* — appending (Match all + Include)"
+    { printf '\nMatch all\nInclude ~/.ssh/config.d/*\n'; } >>"$sshcfg"
+    [[ -f "$sshcfg" ]] && chmod 0600 "$sshcfg"
+  fi
+}
+
+# --- step 3: access ----------------------------------------------------------
+verify_access() {
+  if (( DRY_RUN )); then
+    sec_info "[dry-run] would verify: ssh $ALIAS true"
+    return 0
+  fi
+  sec_info "verifying SSH access to $ALIAS …"
+  rexec true 2>/dev/null \
+    || sec_die "cannot ssh to '$ALIAS'. Establish first-contact access (password/temp key/console) and rerun."
+  sec_ok "ssh access to $ALIAS"
+}
+
+# --- step 4: remote basics ---------------------------------------------------
+reconcile_remote_basics() {
+  if (( DRY_RUN )); then
+    sec_info "[dry-run] would ensure XDG dirs and chezmoi on $ALIAS"
+    return 0
+  fi
+  rexec 'mkdir -p ~/.config ~/.cache ~/.local/bin ~/.local/share ~/.local/state' \
+    || sec_die "failed to create XDG dirs on $ALIAS"
+  if ! rexec 'command -v chezmoi >/dev/null 2>&1'; then
+    sec_die "chezmoi is not installed on $ALIAS. Install it there (see README bootstrap) and rerun."
+  fi
+  sec_ok "remote XDG dirs + chezmoi present"
+}
+
+# --- step 5: age identity (headless) ----------------------------------------
+RECIPIENT=""
+reconcile_age_identity() {
+  [[ "$KIND" == headless ]] || return 0
+  local keypath="\$HOME/$AGE_KEY_REL"
+  if (( DRY_RUN )); then
+    sec_info "[dry-run] would ensure age identity at ~/$AGE_KEY_REL on $ALIAS and read its recipient"
+    RECIPIENT="age1dryrun000000000000000000000000000000000000000000000000000"
+    return 0
+  fi
+  if ! rexec "test -f $keypath"; then
+    sec_info "generating age identity on $ALIAS …"
+    rexec "mkdir -p \"\$(dirname $keypath)\" && chmod 700 \"\$(dirname $keypath)\" && chezmoi age-keygen -o $keypath >/dev/null && chmod 600 $keypath" \
+      || sec_die "failed to generate age identity on $ALIAS"
+  fi
+  RECIPIENT="$(rexec "chezmoi age-keygen -y $keypath" | tr -d '[:space:]')" \
+    || sec_die "failed to read age recipient from $ALIAS"
+  [[ "$RECIPIENT" == age1* ]] || sec_die "unexpected age recipient from $ALIAS: $RECIPIENT"
+  sec_ok "age recipient: $RECIPIENT"
+}
+
+# --- step 6: slot assignment -------------------------------------------------
+SLOT=""
+assign_slot() {
+  SLOT="$(sec_map_slot_for_alias "$ALIAS")"
+  if [[ -n "$SLOT" ]]; then
+    # Existing mapping: enforce no silent profile/recipient change.
+    local mapped_profile mapped_recipient
+    mapped_profile="$(sec_map_get "$SLOT" profile)"
+    [[ "$mapped_profile" == "$PROFILE" ]] \
+      || sec_die "alias '$ALIAS' is slot $SLOT with profile '$mapped_profile', not '$PROFILE' (hard stop)"
+    if [[ "$KIND" == headless ]]; then
+      mapped_recipient="$(sec_map_get "$SLOT" recipient)"
+      if [[ -n "$mapped_recipient" && -n "$RECIPIENT" && "$mapped_recipient" != "$RECIPIENT" ]]; then
+        sec_die "slot $SLOT recipient changed ($mapped_recipient → $RECIPIENT); use a rotate flow (hard stop)"
+      fi
+    fi
+    sec_info "reusing slot $SLOT for $ALIAS"
+  else
+    # Allocate a fresh, collision-free opaque slot.
+    while :; do
+      SLOT="$(sec_gen_slot)"
+      [[ -z "$(sec_map_get "$SLOT" kind)" ]] && break
+    done
+    sec_info "assigned new slot $SLOT for $ALIAS"
+  fi
+  if (( DRY_RUN )); then
+    sec_info "[dry-run] would record $SLOT → (alias $ALIAS, $PROFILE, $KIND) in the operator map"
+    return 0
+  fi
+  sec_map_set "$SLOT" "$ALIAS" "$PROFILE" "$KIND" "$RECIPIENT"
+  if [[ "$KIND" == headless ]]; then
+    sec_sops_rule_set "$SLOT" "$RECIPIENT"
+  fi
+}
+
+# --- step 7: secrets ---------------------------------------------------------
+reconcile_secrets() {
+  local frag; frag="$(sec_fragment_path "$SLOT")"
+  if [[ -f "$frag" ]] && (( ! ROTATE_SECRETS )); then
+    sec_info "fragment for $SLOT exists; skipping secret entry (use --rotate-secrets to re-collect)"
+    return 0
+  fi
+  if (( DRY_RUN )); then
+    sec_info "[dry-run] would collect $PROFILE secrets and write the $KIND fragment for $SLOT"
+    return 0
+  fi
+  sec_rebuild_slot "$SLOT"
+}
+
+# --- step 8: commit & push ---------------------------------------------------
+commit_and_push() {
+  if (( NO_COMMIT )); then
+    sec_info "--no-commit: leaving changes uncommitted"
+    return 0
+  fi
+  if (( DRY_RUN )); then
+    sec_info "[dry-run] would commit opaque artifacts for $SLOT and push"
+    return 0
+  fi
+  local paths
+  paths=("${(@f)$(sec_commit_paths_for_slot "$SLOT")}")
+  sec_git_commit "feat(secrets): onboard $SLOT" "${paths[@]}"
+  if (( NO_PUSH )); then
+    sec_info "--no-push: not pushing"
+    return 0
+  fi
+  git -C "$REPO_ROOT" push >/dev/null 2>&1 \
+    && sec_ok "pushed" \
+    || sec_warn "git push failed (push manually before the remote applies)"
+}
+
+# --- step 9: converge remote -------------------------------------------------
+converge_remote() {
+  if (( DRY_RUN )); then
+    sec_info "[dry-run] would: ssh $ALIAS chezmoi init (profile=$PROFILE, slot=$SLOT) + chezmoi update --apply"
+    return 0
+  fi
+  sec_info "initializing chezmoi on $ALIAS (profile=$PROFILE, slot=$SLOT) …"
+  rexec "CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init" \
+    || sec_die "remote chezmoi init failed on $ALIAS"
+  sec_info "applying on $ALIAS …"
+  rexec "chezmoi update --apply" \
+    || sec_die "remote chezmoi update --apply failed on $ALIAS"
+  if rexec "test -r ~/.config/zsh/secrets.d/$SLOT.sh"; then
+    sec_ok "secret fragment materialized on $ALIAS"
+  else
+    sec_warn "secret fragment not found on $ALIAS after apply — check the remote age key and SOPS_AGE_KEY_FILE"
+  fi
+  sec_info "remote status:"
+  rexec "chezmoi status --exclude scripts" || true
+}
+
+main() {
+  parse_args "$@"
+  sec_repo_paths
+  sec_require_cmd chezmoi git yq ssh
+
+  if [[ -z "$ALIAS$HOSTNAME$PROFILE" ]]; then
+    interactive_form
+  fi
+  validate_inputs
+  # Headless onboarding encrypts locally, so it needs sops/age here. Human
+  # onboarding uses 1Password references only — don't require them.
+  [[ "$KIND" == headless ]] && sec_require_cmd sops age
+
+  sec_info "${SEC_C_BWH}Onboarding $ALIAS ($PROFILE/$KIND)${SEC_C_RES}"
+  check_working_tree
+  reconcile_ssh
+  verify_access
+  reconcile_remote_basics
+  reconcile_age_identity
+  assign_slot
+  reconcile_secrets
+  commit_and_push
+  converge_remote
+  sec_ok "onboarding complete for $ALIAS (slot $SLOT)"
+}
+
+main "$@"

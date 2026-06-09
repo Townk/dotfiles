@@ -30,6 +30,14 @@
 {{- $profile = lower $profile -}}
 
 {{- /*
+  Per-machine secrets slot. Opaque, non-identifying token (e.g. slot-7f3a9c)
+  that names this host's secret fragment + SOPS blob. Passed at onboarding via
+  CHEZMOI_SECRETS_SLOT and persisted here (local, never committed). Empty until
+  the machine is onboarded with `system-onboard`; templates guard on that.
+*/ -}}
+{{- $slot := env "CHEZMOI_SECRETS_SLOT" -}}
+
+{{- /*
   Auto-detect pi extension dev mode by checking for the working tree.
   If present, the symlink template uses this path and the consumer-mode
   `pi install` in the run_once bootstrap is skipped. Empty otherwise.
@@ -52,9 +60,19 @@ encryption = "gpg"
 
 [onepassword]
     prompt = false
-
+{{ if eq $profile "dev-shell" }}
+{{- /*
+  Headless hosts decrypt their SOPS+age secret fragment at apply via the
+  `output "sops"` template function. SOPS finds the age identity through
+  SOPS_AGE_KEY_FILE; chezmoi's [env] makes it available to that command.
+  The identity lives off git, 0600, under ~/.local/state/chezmoi/secrets/.
+*/ -}}
+[env]
+    SOPS_AGE_KEY_FILE = {{ (joinPath .chezmoi.homeDir ".local/state/chezmoi/secrets/key.txt") | quote }}
+{{ end }}
 [data]
     profile = {{ $profile | quote }}
+    secretsSlot = {{ $slot | quote }}
     [data.pi]
         [data.pi.devExtensions]
             pi-cockpit = {{ $piCockpitDev | quote }}
