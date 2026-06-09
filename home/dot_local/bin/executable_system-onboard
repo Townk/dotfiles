@@ -335,31 +335,35 @@ converge_remote() {
 # --- step 8.5: 1Password service-account token (human) ----------------------
 # Human machines resolve op:// references at apply via `op`, which can't
 # authorize interactively over SSH. A service-account token makes `op` fully
-# non-interactive. It is a per-machine LOOSE secret — NEVER committed: write it
-# to ~/.config/zsh/secrets.d/00-op-service-account.sh (0600). It sits beside the
-# slot fragment but is NOT the slot fragment (that file is rendered BY resolving
-# op, so it cannot carry the token needed to render itself; committing it would
-# leak it). The shell loader sources it, so OP_SERVICE_ACCOUNT_TOKEN is in the
-# env for the operator's own `chezmoi apply`; converge sources it for the remote
-# apply. The token never appears in argv — it is piped to the remote over stdin.
+# non-interactive. The operator already holds it as a raw string at
+# $OP_SA_TOKEN_FILE (the same token the onboarding op calls use); copy that to
+# the new machine instead of re-typing it — prompt+store only if absent.
+#
+# The remote copy is a per-machine LOOSE secret — NEVER committed: write it to
+# ~/.config/zsh/secrets.d/00-op-service-account.sh (0600) as a sourceable
+# `export` line (the POSIX loader sources it, so OP_SERVICE_ACCOUNT_TOKEN is in
+# the env, and .chezmoi.toml.tmpl flips that machine to onepassword mode=service).
+# It is NOT the slot fragment (that file is rendered BY resolving op, so it can't
+# carry the token needed to render itself). The token never appears in argv — it
+# is piped to the remote over stdin.
 OP_TOKEN_REL=".config/zsh/secrets.d/00-op-service-account.sh"
 reconcile_op_token() {
   [[ "$KIND" == human ]] || return 0
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would ensure OP_SERVICE_ACCOUNT_TOKEN on $ALIAS at ~/$OP_TOKEN_REL"
+    sec_info "[dry-run] would copy OP_SERVICE_ACCOUNT_TOKEN to $ALIAS at ~/$OP_TOKEN_REL"
     return 0
   fi
   if rexec "test -s ~/$OP_TOKEN_REL" && (( ! ROTATE_SECRETS )); then
     sec_info "service-account token already present on $ALIAS (use --rotate-secrets to replace)"
     return 0
   fi
-  local token=""
-  prompt_secret token "1Password service-account token for $ALIAS (OP_SERVICE_ACCOUNT_TOKEN):"
+  sec_op_ensure_token
+  local token; token="$(cat "$OP_SA_TOKEN_FILE")"
   printf 'export OP_SERVICE_ACCOUNT_TOKEN=%s\n' "${(qq)token}" \
     | rexec "umask 077; mkdir -p ~/.config/zsh/secrets.d && cat > ~/$OP_TOKEN_REL && chmod 600 ~/$OP_TOKEN_REL" \
     || sec_die "failed to write service-account token to $ALIAS"
   token=""
-  sec_ok "stored service-account token on $ALIAS (~/$OP_TOKEN_REL, loose, 0600)"
+  sec_ok "copied service-account token to $ALIAS (~/$OP_TOKEN_REL, loose, 0600)"
 }
 
 main() {

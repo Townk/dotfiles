@@ -379,31 +379,55 @@ sec_write_human_fragment() {
 }
 
 # ---------------------------------------------------------------------------
-# 1Password helpers (human machines). Optional convenience so the operator can
-# CREATE the backing item from a masked value instead of pre-staging it by
-# hand, and have its op:// reference derived automatically. API keys live in
-# the "API Credential" category; the secret is its CONCEALED `credential`
-# field, so references are op://<vault>/<item>/credential.
+# 1Password helpers (human machines). The operator's service-account token is
+# the single mechanism: `system-onboard`/`system-secrets` run `op` in
+# SERVICE-ACCOUNT mode by prefixing each call with the token, so there is no
+# desktop-app authorization and no account picker (a service account is bound to
+# one account; its vault list is already scoped). This lets the tooling CREATE
+# the backing item from a masked value and derive its op:// reference, and it is
+# the same token copied to each new machine for apply-time resolution.
 #
-# The secret never passes through argv (process args / shell history are
-# world-visible to the local user): jq reads it from the environment and
-# streams the JSON straight into `op item create -`.
+# Source of truth: a RAW token string at $OP_SA_TOKEN_FILE — loose, 0600, NEVER
+# committed, and deliberately NOT under ~/.config/zsh/secrets.d so it does not
+# flip the operator's OWN `chezmoi apply` into service mode (that would resolve
+# the operator's secrets through a service account that can't read its Private
+# vault). The token is passed as a one-shot ENV assignment (env, not argv — not
+# visible in process args). API keys use the "API Credential" category; the
+# secret is its CONCEALED `credential` field, so refs are op://<vault>/<item>/credential.
 # ---------------------------------------------------------------------------
+OP_SA_TOKEN_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/op/service-account"
+
 sec_op_available() { command -v op >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; }
+sec_op_have_token() { [[ -s "$OP_SA_TOKEN_FILE" ]]; }
 
-# sec_op_item_exists <account> <vault> <title>
-sec_op_item_exists() { op item get "$3" --vault "$2" --account "$1" >/dev/null 2>&1; }
+# sec_op <args…> — run op in service-account mode using the loose token.
+sec_op() { OP_SERVICE_ACCOUNT_TOKEN="$(cat "$OP_SA_TOKEN_FILE")" op "$@"; }
 
-# sec_op_create_api_credential <account> <vault> <title> <value> <username>
+# sec_op_ensure_token — guarantee the loose token exists; prompt once + store if not.
+sec_op_ensure_token() {
+  sec_op_have_token && return 0
+  local __tok=""
+  prompt_secret __tok "1Password service-account token (stored at $OP_SA_TOKEN_FILE):"
+  ( umask 077; mkdir -p "${OP_SA_TOKEN_FILE:h}" && printf '%s' "$__tok" >"$OP_SA_TOKEN_FILE" ) \
+    || sec_die "could not write $OP_SA_TOKEN_FILE"
+  chmod 600 "$OP_SA_TOKEN_FILE"
+  __tok=""
+  sec_ok "stored service-account token (loose, 0600) at $OP_SA_TOKEN_FILE"
+}
+
+# sec_op_item_exists <vault> <title>
+sec_op_item_exists() { sec_op item get "$2" --vault "$1" >/dev/null 2>&1; }
+
+# sec_op_create_api_credential <vault> <title> <value> <username>
 # Create an API Credential item; echo its op:// reference on success.
 sec_op_create_api_credential() {
-  local acct="$1" vault="$2" title="$3"
-  __OP_VAL="$4" __OP_USER="$5" jq -n --arg t "$title" '
+  local vault="$1" title="$2"
+  __OP_VAL="$3" __OP_USER="$4" jq -n --arg t "$title" '
     {title: $t, category: "API_CREDENTIAL",
      fields: ([ {id:"credential", type:"CONCEALED", label:"credential", value: $ENV.__OP_VAL} ]
        + (if ($ENV.__OP_USER // "") == "" then []
           else [ {id:"username", type:"STRING", label:"username", value: $ENV.__OP_USER} ] end))}' \
-    | op item create --account "$acct" --vault "$vault" - >/dev/null 2>&1 \
+    | sec_op item create --vault "$vault" - >/dev/null 2>&1 \
     || return 1
   printf 'op://%s/%s/credential\n' "$vault" "$title"
 }
@@ -484,23 +508,20 @@ sec_rebuild_slot() {
     sec_ok "encrypted ${#names[@]} secret(s) for slot $slot"
   else
     # Human: each secret resolves from 1Password at apply via onepasswordRead.
-    # If op + jq are available, offer to pick an account+vault once and then,
-    # per secret, either reference an existing item or CREATE one from a masked
-    # value. Otherwise fall back to entering op:// references by hand.
-    local pairs=() acct="" vault="" desc mode val uname
+    # With op + jq, drive everything through the service-account token (SA mode):
+    # no account picker, vault list scoped to the SA. Per secret, reference an
+    # existing item or CREATE one from a masked value. Without op/jq, fall back
+    # to entering op:// references by hand.
+    local pairs=() vault="" desc mode uname
     if sec_op_available; then
-      local -a accts vaults
-      accts=("${(@f)$(op account list --format=json 2>/dev/null | jq -r '.[].url')}")
-      accts=(${accts:#})
-      if (( ${#accts[@]} > 1 )); then
-        prompt_choice acct "1Password account" "${accts[@]}"
-      elif (( ${#accts[@]} == 1 )); then
-        acct="${accts[1]}"
-      fi
-      if [[ -n "$acct" ]]; then
-        vaults=("${(@f)$(op vault list --account "$acct" --format=json 2>/dev/null | jq -r '.[].name')}")
-        vaults=(${vaults:#})
-        (( ${#vaults[@]} )) && prompt_choice vault "Vault in $acct" "${vaults[@]}"
+      sec_op_ensure_token
+      local -a vaults
+      vaults=("${(@f)$(sec_op vault list --format=json 2>/dev/null | jq -r '.[].name')}")
+      vaults=(${vaults:#})
+      if (( ${#vaults[@]} > 1 )); then
+        prompt_choice vault "1Password vault" "${vaults[@]}"
+      elif (( ${#vaults[@]} == 1 )); then
+        vault="${vaults[1]}"
       fi
     fi
     sec_info "1Password setup for the '$profile' secrets (human slot $slot)."
@@ -508,15 +529,15 @@ sec_rebuild_slot() {
       && sec_warn "op:// references are committed to this PUBLIC repo — keep vault/item names non-identifying."
     for n in "${names[@]}"; do
       desc="$(sec_manifest_prompt "$n")"
-      if [[ -n "$vault" ]] && sec_op_item_exists "$acct" "$vault" "$n"; then
+      if [[ -n "$vault" ]] && sec_op_item_exists "$vault" "$n"; then
         prompt_default ref "  $n ($desc) — op:// reference" "op://$vault/$n/credential"
       elif [[ -n "$vault" ]]; then
         prompt_choice mode "  $n ($desc) — create item in '$vault' or use an existing ref?" create existing
         if [[ "$mode" == create ]]; then
           prompt_secret val "    value for $n (masked):"
           prompt_default uname "    username/label (optional):" ""
-          ref="$(sec_op_create_api_credential "$acct" "$vault" "$n" "$val" "$uname")" \
-            || sec_die "1Password item creation failed for $n"
+          ref="$(sec_op_create_api_credential "$vault" "$n" "$val" "$uname")" \
+            || sec_die "1Password item creation failed for $n (does the service account have write access to '$vault'?)"
           val=""
           sec_ok "    created op://$vault/$n/credential"
         else
