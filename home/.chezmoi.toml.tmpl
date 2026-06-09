@@ -38,6 +38,20 @@
 {{- $slot := env "CHEZMOI_SECRETS_SLOT" -}}
 
 {{- /*
+  1Password resolution mode. A service-account token (written by
+  `system-onboard` to the loose ~/.config/zsh/secrets.d/00-op-service-account.sh)
+  makes `op` fully non-interactive — needed on machines where the desktop app
+  can't authorize (e.g. a remote apply over SSH). chezmoi refuses to use a SA
+  token under the default "account" mode ("mode is account, but
+  OP_SERVICE_ACCOUNT_TOKEN is set"), so switch to "service" whenever that token
+  is present; otherwise keep interactive "account" mode.
+*/ -}}
+{{- $opMode := "account" -}}
+{{- if stat (joinPath .chezmoi.homeDir ".config/zsh/secrets.d/00-op-service-account.sh") -}}
+  {{- $opMode = "service" -}}
+{{- end -}}
+
+{{- /*
   Auto-detect pi extension dev mode by checking for the working tree.
   If present, the symlink template uses this path and the consumer-mode
   `pi install` in the run_once bootstrap is skipped. Empty otherwise.
@@ -60,6 +74,7 @@ encryption = "gpg"
 
 [onepassword]
     prompt = false
+    mode = {{ $opMode | quote }}
 {{ if eq $profile "dev-shell" }}
 {{- /*
   Headless hosts decrypt their SOPS+age secret fragment at apply via the
