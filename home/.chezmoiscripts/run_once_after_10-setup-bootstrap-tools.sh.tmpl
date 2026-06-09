@@ -8,6 +8,12 @@ set -eufo pipefail
 exit 0
 {{- end }}
 
+# Pull in this machine's secret env (MISE_GITHUB_TOKEN, HOMEBREW_GITHUB_API_TOKEN)
+# so the GitHub-heavy `mise install` below is authenticated. The zsh
+# `system-update` self-sources this via .zshenv, but this bash script does not,
+# and the fragment exists here when self-onboard ran before the first apply.
+[ -r "$HOME/.config/zsh/secrets.sh" ] && . "$HOME/.config/zsh/secrets.sh"
+
 echo "🔧  Ensuring user directory for system sockets exists..."
 RUNTIME_DIR="$TMPDIR/runtime-$UID"
 \mkdir -p "$RUNTIME_DIR"

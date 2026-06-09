@@ -127,6 +127,32 @@ while ! gh auth token &>/dev/null; do
 done
 echo "✅  GitHub CLI is authenticated and ready to use."
 
+# Self-onboard this machine's secrets BEFORE the heavy apply. The first
+# run_once install (mise install → system-update) hits GitHub hard and wants
+# MISE_GITHUB_TOKEN / HOMEBREW_GITHUB_API_TOKEN, which are delivered only via
+# the rendered secrets.d fragment. system-onboard --local provisions the
+# per-machine slot + 1Password fragment, sets secretsSlot (chezmoi init), and
+# makes this machine an operator; --no-apply leaves the single heavy apply
+# below to render the fragment with the tokens live.
+#
+# system-onboard and its shared lib aren't on disk until chezmoi applies them,
+# so deploy just those first (a targeted apply runs no run_* scripts). It's
+# interactive (SA token / op:// prompts); under `curl | bash` there's no TTY,
+# so skip with a hint. Never block bootstrap on its outcome.
+chezmoi apply "$HOME/.local/lib/system-secrets-common.sh" \
+              "$HOME/.local/bin/system-onboard" 2>/dev/null || true
+if [ -t 0 ] && [ -x "$HOME/.local/bin/system-onboard" ]; then
+  echo "🔑  Self-onboarding this machine's secrets..."
+  if "$HOME/.local/bin/system-onboard" --local --no-apply; then
+    echo "✅  Secrets provisioned"
+  else
+    echo "⚠️  Self-onboarding did not complete; finish later with: system-onboard --local"
+  fi
+else
+  echo "ℹ️  No TTY (or tooling missing): skipping secrets self-onboard."
+  echo "    After setup, run: system-onboard --local"
+fi
+
 # Now that all prereqs are in place, deploy files and fire the run_once
 # bootstrap script (mise install → system-update → rust@nightly).
 echo "📂  Applying chezmoi configuration..."

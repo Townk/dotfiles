@@ -22,7 +22,7 @@ source "$HOME/.local/lib/system-secrets-common.sh"
 
 # --- arguments ---------------------------------------------------------------
 ALIAS="" HOSTNAME="" PROFILE="" KIND=""
-DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0
+DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0 LOCAL=0 NO_APPLY=0
 VALID_PROFILES=(personal work dev-shell)
 
 usage() {
@@ -30,13 +30,21 @@ usage() {
 Usage:
   system-onboard --alias <ssh-alias> --hostname <ssh-host> \\
                  --profile <personal|work|dev-shell> [--kind human|headless]
+  system-onboard --local [--alias <name>] [--profile <p>] [--no-apply]
 
 Flags:
-  --alias <name>       local SSH alias (loose only; never committed)
+  --local              self-onboard THIS machine (human only; no SSH). Assigns a
+                       slot, builds the 1Password fragment, sets secretsSlot, and
+                       applies. Makes this machine an operator (stores the SA token).
+  --alias <name>       SSH alias for a remote target, or (with --local) the friendly
+                       operator-map key (default: this host's short name). Loose only.
   --hostname <host>    real SSH endpoint (loose only; never committed)
-  --profile <p>        personal | work | dev-shell
+  --profile <p>        personal | work | dev-shell (with --local, defaults to this
+                       machine's configured chezmoi profile)
   --kind <k>           human | headless (default: dev-shell→headless, else human)
   --rotate-secrets     re-collect this slot's secrets even if its fragment exists
+  --no-apply           (with --local) provision + set secretsSlot but skip the final
+                       chezmoi apply (the bootstrap runs the heavy apply itself)
   --no-commit          do everything except git commit/push
   --no-push            commit but do not push
   --dry-run            print the plan; make no local or remote changes
@@ -44,7 +52,8 @@ Flags:
 
 Reconciles SSH access, the target's chezmoi init, a per-machine opaque secrets
 slot, the encrypted/1Password-backed secret fragment, the commit, and the
-remote apply. Safe to rerun.
+remote apply. A self-onboarded human target is detected over SSH and only its
+connectivity is reconciled. Safe to rerun.
 EOF
 }
 
@@ -67,6 +76,8 @@ parse_args() {
       --profile)        PROFILE="${2:-}"; shift 2 ;;
       --kind)           KIND="${2:-}"; shift 2 ;;
       --rotate-secrets) ROTATE_SECRETS=1; shift ;;
+      --local)          LOCAL=1; shift ;;
+      --no-apply)       NO_APPLY=1; shift ;;
       --no-commit)      NO_COMMIT=1; shift ;;
       --no-push)        NO_PUSH=1; shift ;;
       --dry-run)        DRY_RUN=1; shift ;;
@@ -90,7 +101,37 @@ interactive_form() {
   prompt_choice   PROFILE  "Profile" "${VALID_PROFILES[@]}"
 }
 
+# Self (local) onboarding has no SSH: --hostname is unused, --alias is just the
+# operator-map key (defaults to this host's short name), and the profile comes
+# from the machine's own chezmoi config unless overridden. Macs only (human).
+validate_local_inputs() {
+  [[ -z "$HOSTNAME" ]] \
+    || sec_die "--hostname is not used with --local (self onboarding has no SSH)"
+  [[ -n "$ALIAS" ]] || ALIAS="$(hostname -s)"
+  [[ "$ALIAS" =~ '^[A-Za-z0-9._-]+$' ]] \
+    || sec_die "alias must be filename-safe ([A-Za-z0-9._-]): $ALIAS"
+  local configured
+  configured="$(chezmoi data | yq -r '.profile // ""')" \
+    || sec_die "could not read this machine's chezmoi profile"
+  if [[ -n "$PROFILE" ]]; then
+    [[ -z "$configured" || "$PROFILE" == "$configured" ]] \
+      || sec_die "--profile '$PROFILE' != this machine's configured profile '$configured' (run 'chezmoi init' to change it)"
+  else
+    [[ -n "$configured" ]] \
+      || sec_die "no chezmoi profile configured; run 'chezmoi init' first or pass --profile"
+    PROFILE="$configured"
+  fi
+  is_valid_profile "$PROFILE" || sec_die "invalid profile: $PROFILE"
+  KIND="human"
+  [[ "$PROFILE" != "dev-shell" ]] \
+    || sec_die "--local is human-only; a dev-shell/headless box is onboarded by an operator over SSH"
+}
+
 validate_inputs() {
+  if (( LOCAL )); then
+    validate_local_inputs
+    return 0
+  fi
   [[ -n "$ALIAS" && -n "$HOSTNAME" && -n "$PROFILE" ]] \
     || { usage >&2; sec_die "--alias, --hostname, and --profile are required"; }
   [[ "$ALIAS" =~ '^[A-Za-z0-9._-]+$' ]] \
@@ -347,6 +388,55 @@ converge_remote() {
   fi
 }
 
+# --- step 9 (local): converge this machine -----------------------------------
+# Self path. `chezmoi init` writes secretsSlot into THIS machine's config so
+# .chezmoiignore stops ignoring the slot's fragment; then apply renders it.
+# No token is injected: account (desktop-app) mode resolves op:// (incl. the
+# Private vault for GPG). With --no-apply we set the slot but leave the heavy
+# apply to the caller (the .setup.sh bootstrap runs a single apply itself).
+converge_local() {
+  if (( DRY_RUN )); then
+    if (( NO_APPLY )); then
+      sec_info "[dry-run] would: chezmoi init (profile=$PROFILE, slot=$SLOT); skip apply (--no-apply)"
+    else
+      sec_info "[dry-run] would: chezmoi init (profile=$PROFILE, slot=$SLOT) then chezmoi apply"
+    fi
+    return 0
+  fi
+  sec_info "setting secretsSlot=$SLOT (profile=$PROFILE) in this machine's chezmoi config …"
+  CHEZMOI_PROFILE="$PROFILE" CHEZMOI_SECRETS_SLOT="$SLOT" chezmoi init \
+    || sec_die "chezmoi init failed (could not set secretsSlot)"
+  if (( NO_APPLY )); then
+    sec_info "--no-apply: secretsSlot set; the bootstrap apply will render the fragment"
+    return 0
+  fi
+  sec_info "applying on this machine …"
+  chezmoi apply || sec_die "chezmoi apply failed"
+  if [[ -r "$HOME/.config/zsh/secrets.d/$SLOT.sh" ]]; then
+    sec_ok "secret fragment materialized at ~/.config/zsh/secrets.d/$SLOT.sh"
+  else
+    sec_warn "secret fragment not found after apply — check the op:// references and the 1Password app"
+  fi
+}
+
+# --- remote self-onboard detection (human) -----------------------------------
+# A human Mac owns its slot via `--local`. Read the target's own chezmoi config
+# over SSH: a non-empty secretsSlot means it already self-onboarded, so the
+# operator must NOT mint/rebuild a slot — only reconcile connectivity. An empty
+# slot (or a headless target) falls back to today's operator-driven flow.
+REMOTE_SELF_SLOT="" REMOTE_SELF_PROFILE=""
+detect_remote_self_onboard() {
+  [[ "$KIND" == human ]] || return 0
+  if (( DRY_RUN )); then
+    sec_info "[dry-run] would read $ALIAS's chezmoi secretsSlot to detect self-onboarding"
+    return 0
+  fi
+  local data
+  data="$(rexec 'chezmoi data' 2>/dev/null)" || return 0
+  REMOTE_SELF_SLOT="$(printf '%s' "$data" | yq -r '.secretsSlot // ""' 2>/dev/null)"
+  REMOTE_SELF_PROFILE="$(printf '%s' "$data" | yq -r '.profile // ""' 2>/dev/null)"
+}
+
 # --- step 8.5: 1Password service-account token (human) ----------------------
 # Every onboarded Mac is ALSO made an operator: it gets the same raw service-
 # account token the operator holds, at the SAME loose path
@@ -383,8 +473,28 @@ reconcile_op_token() {
 main() {
   parse_args "$@"
   sec_repo_paths
-  sec_require_cmd chezmoi git yq ssh
+  sec_require_cmd chezmoi git yq
 
+  # --- self (local) onboarding ---------------------------------------------
+  if (( LOCAL )); then
+    validate_inputs
+    sec_require_cmd op
+    sec_info "${SEC_C_BWH}Self-onboarding this machine as $ALIAS ($PROFILE/$KIND)${SEC_C_RES}"
+    check_working_tree
+    if (( DRY_RUN )); then
+      sec_info "[dry-run] would ensure the SA token (operator status) at $OP_SA_TOKEN_FILE"
+    else
+      sec_op_ensure_token          # also makes this machine an operator
+    fi
+    assign_slot
+    reconcile_secrets
+    commit_and_push
+    converge_local
+    sec_ok "self-onboarding complete for $ALIAS (slot $SLOT)"
+    return 0
+  fi
+
+  sec_require_cmd ssh
   if [[ -z "$ALIAS$HOSTNAME$PROFILE" ]]; then
     interactive_form
   fi
@@ -398,6 +508,26 @@ main() {
   reconcile_ssh
   verify_access
   reconcile_remote_basics
+
+  # If a human target already self-onboarded, it owns its slot: reconcile
+  # connectivity + bring it current, but never mint/rebuild secrets.
+  detect_remote_self_onboard
+  if [[ -n "$REMOTE_SELF_SLOT" ]]; then
+    [[ -z "$REMOTE_SELF_PROFILE" || "$PROFILE" == "$REMOTE_SELF_PROFILE" ]] \
+      || sec_die "$ALIAS self-onboarded with profile '$REMOTE_SELF_PROFILE', not '$PROFILE' (hard stop)"
+    SLOT="$REMOTE_SELF_SLOT"
+    sec_info "$ALIAS already self-onboarded (slot $SLOT); reconciling connectivity only"
+    if (( DRY_RUN )); then
+      sec_info "[dry-run] would record $SLOT → (alias $ALIAS, $PROFILE, $KIND) in the operator map"
+    else
+      sec_map_set "$SLOT" "$ALIAS" "$PROFILE" "$KIND" ""
+    fi
+    converge_remote
+    sec_ok "connectivity reconciled for $ALIAS (self-onboarded slot $SLOT)"
+    return 0
+  fi
+
+  # Operator-driven: target not self-onboarded, or headless.
   reconcile_age_identity
   assign_slot
   reconcile_secrets

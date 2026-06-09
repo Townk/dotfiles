@@ -392,8 +392,10 @@ sec_write_human_fragment() {
 # flip the operator's OWN `chezmoi apply` into service mode (that would resolve
 # the operator's secrets through a service account that can't read its Private
 # vault). The token is passed as a one-shot ENV assignment (env, not argv — not
-# visible in process args). API keys use the "API Credential" category; the
-# secret is its CONCEALED `credential` field, so refs are op://<vault>/<item>/credential.
+# visible in process args). Items use the "API Credential" category; values are
+# stored ONE PER MACHINE as a CONCEALED field labeled with the slot hash, so refs
+# are deterministic: op://<vault>/<NAME>/<slot-hash> (one item per variable, one
+# field per machine — per-machine values and per-machine rotation).
 # ---------------------------------------------------------------------------
 OP_SA_TOKEN_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/op/service-account"
 
@@ -403,33 +405,90 @@ sec_op_have_token() { [[ -s "$OP_SA_TOKEN_FILE" ]]; }
 # sec_op <args…> — run op in service-account mode using the loose token.
 sec_op() { OP_SERVICE_ACCOUNT_TOKEN="$(cat "$OP_SA_TOKEN_FILE")" op "$@"; }
 
-# sec_op_ensure_token — guarantee the loose token exists; prompt once + store if not.
-sec_op_ensure_token() {
-  sec_op_have_token && return 0
-  local __tok=""
-  prompt_secret __tok "1Password service-account token (stored at $OP_SA_TOKEN_FILE):"
-  ( umask 077; mkdir -p "${OP_SA_TOKEN_FILE:h}" && printf '%s' "$__tok" >"$OP_SA_TOKEN_FILE" ) \
+# sec_op_store_token <token> — write the raw token loose at 0600.
+sec_op_store_token() {
+  ( umask 077; mkdir -p "${OP_SA_TOKEN_FILE:h}" && printf '%s' "$1" >"$OP_SA_TOKEN_FILE" ) \
     || sec_die "could not write $OP_SA_TOKEN_FILE"
   chmod 600 "$OP_SA_TOKEN_FILE"
-  __tok=""
+}
+
+# sec_op_read_ref <op://ref> — read a value via the 1Password app in ACCOUNT
+# mode (env -u OP_SERVICE_ACCOUNT_TOKEN, so a half-set token can't force the SA
+# and loop). Echoes the value; empty + nonzero on failure.
+sec_op_read_ref() { env -u OP_SERVICE_ACCOUNT_TOKEN op read "$1" 2>/dev/null; }
+
+# sec_op_ensure_token — guarantee the loose token exists. In order:
+#   1. token file already present                        -> done
+#   2. a remembered op:// ref ($OP_SA_TOKEN_FILE.ref) read via the desktop app
+#   3. prompt for the op:// ref, read it via the desktop app, then remember it
+#   4. masked paste of the raw token
+# Reads always go through the desktop app (account mode), since the service
+# account itself can't be expected to store its own token.
+sec_op_ensure_token() {
+  sec_op_have_token && return 0
+  local ref_file="$OP_SA_TOKEN_FILE.ref" __tok="" __ref=""
+
+  # 2. remembered ref (non-interactive; just needs the app authed)
+  if command -v op >/dev/null 2>&1 && [[ -s "$ref_file" ]]; then
+    __ref="$(cat "$ref_file")"
+    if __tok="$(sec_op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
+      sec_op_store_token "$__tok"; __tok=""
+      sec_ok "loaded service-account token from $__ref (account mode) at $OP_SA_TOKEN_FILE"
+      return 0
+    fi
+    sec_warn "could not read $__ref via the 1Password app; will prompt"
+  fi
+
+  # 3. prompt for a ref and read it via the desktop app
+  if command -v op >/dev/null 2>&1 && sec_have_tty; then
+    prompt_default __ref \
+      "1Password op:// ref for the service-account token (e.g. op://<vault>/<item>/credential; blank to paste)" \
+      ""
+    if [[ -n "$__ref" ]]; then
+      if __tok="$(sec_op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
+        sec_op_store_token "$__tok"; __tok=""
+        ( umask 077; printf '%s' "$__ref" >"$ref_file" ) && chmod 600 "$ref_file"
+        sec_ok "stored service-account token from $__ref (loose, 0600) at $OP_SA_TOKEN_FILE"
+        return 0
+      fi
+      sec_warn "could not read $__ref; falling back to paste"
+    fi
+  fi
+
+  # 4. masked paste
+  prompt_secret __tok "1Password service-account token (stored at $OP_SA_TOKEN_FILE):"
+  sec_op_store_token "$__tok"; __tok=""
   sec_ok "stored service-account token (loose, 0600) at $OP_SA_TOKEN_FILE"
 }
 
 # sec_op_item_exists <vault> <title>
 sec_op_item_exists() { sec_op item get "$2" --vault "$1" >/dev/null 2>&1; }
 
-# sec_op_create_api_credential <vault> <title> <value> <username>
-# Create an API Credential item; echo its op:// reference on success.
-sec_op_create_api_credential() {
-  local vault="$1" title="$2"
-  __OP_VAL="$3" __OP_USER="$4" jq -n --arg t "$title" '
-    {title: $t, category: "API_CREDENTIAL",
-     fields: ([ {id:"credential", type:"CONCEALED", label:"credential", value: $ENV.__OP_VAL} ]
-       + (if ($ENV.__OP_USER // "") == "" then []
-          else [ {id:"username", type:"STRING", label:"username", value: $ENV.__OP_USER} ] end))}' \
-    | sec_op item create --vault "$vault" - >/dev/null 2>&1 \
-    || return 1
-  printf 'op://%s/%s/credential\n' "$vault" "$title"
+# sec_op_field_exists <vault> <item> <field-label> — 0 iff the field already
+# resolves to a value (the item exists and carries that slot's field).
+sec_op_field_exists() { sec_op read "op://$1/$2/$3" >/dev/null 2>&1; }
+
+# sec_op_upsert_field <vault> <item> <field-label> <value>
+# Store <value> as a CONCEALED field labeled <field-label> on the item (one item
+# per variable; one field per machine, keyed by the slot hash). Creates the item
+# (API Credential category) if absent, else edits it in place. The value is fed
+# via a JSON template on STDIN, never argv (so it is not visible to `ps`). Echoes
+# the resulting op:// reference.
+sec_op_upsert_field() {
+  local vault="$1" item="$2" field="$3" value="$4"
+  if sec_op_item_exists "$vault" "$item"; then
+    __OP_VAL="$value" jq -n --arg f "$field" \
+      '{fields: [{label: $f, type: "CONCEALED", value: $ENV.__OP_VAL}]}' \
+      | sec_op item edit "$item" --vault "$vault" - >/dev/null 2>&1 \
+      || return 1
+  else
+    __OP_VAL="$value" jq -n --arg t "$item" --arg f "$field" \
+      '{title: $t, category: "API_CREDENTIAL",
+        fields: [{label: $f, type: "CONCEALED", value: $ENV.__OP_VAL}]}' \
+      | sec_op item create --vault "$vault" - >/dev/null 2>&1 \
+      || return 1
+  fi
+  printf 'op://%s/%s/%s\n' "$vault" "$item" "$field"
 }
 
 # ---------------------------------------------------------------------------
@@ -508,11 +567,11 @@ sec_rebuild_slot() {
     sec_ok "encrypted ${#names[@]} secret(s) for slot $slot"
   else
     # Human: each secret resolves from 1Password at apply via onepasswordRead.
-    # With op + jq, drive everything through the service-account token (SA mode):
-    # no account picker, vault list scoped to the SA. Per secret, reference an
-    # existing item or CREATE one from a masked value. Without op/jq, fall back
-    # to entering op:// references by hand.
-    local pairs=() vault="" desc mode uname
+    # Schema: ONE item per variable; ONE concealed field per machine, labeled
+    # with the slot hash — so the ref is deterministic op://<vault>/<NAME>/<hash>.
+    # With op + jq we read/write those fields through the service-account token
+    # (SA mode). Without op/jq, fall back to entering op:// references by hand.
+    local pairs=() vault="" desc hash="${slot#slot-}"
     if sec_op_available; then
       sec_op_ensure_token
       local -a vaults
@@ -524,24 +583,27 @@ sec_rebuild_slot() {
         vault="${vaults[1]}"
       fi
     fi
-    sec_info "1Password setup for the '$profile' secrets (human slot $slot)."
+    sec_info "1Password setup for the '$profile' secrets (human slot $slot, field $hash)."
     [[ -n "$vault" ]] \
       && sec_warn "op:// references are committed to this PUBLIC repo — keep vault/item names non-identifying."
     for n in "${names[@]}"; do
       desc="$(sec_manifest_prompt "$n")"
-      if [[ -n "$vault" ]] && sec_op_item_exists "$vault" "$n"; then
-        prompt_default ref "  $n ($desc) — op:// reference" "op://$vault/$n/credential"
-      elif [[ -n "$vault" ]]; then
-        prompt_choice mode "  $n ($desc) — create item in '$vault' or use an existing ref?" create existing
-        if [[ "$mode" == create ]]; then
-          prompt_secret val "    value for $n (masked):"
-          prompt_default uname "    username/label (optional):" ""
-          ref="$(sec_op_create_api_credential "$vault" "$n" "$val" "$uname")" \
-            || sec_die "1Password item creation failed for $n (does the service account have write access to '$vault'?)"
-          val=""
-          sec_ok "    created op://$vault/$n/credential"
+      if [[ -n "$vault" ]]; then
+        ref="op://$vault/$n/$hash"
+        if sec_op_field_exists "$vault" "$n" "$hash"; then
+          if confirm "  $n ($desc): field $hash already set — replace its value?"; then
+            prompt_secret val "    new value for $n (masked):"
+            sec_op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
+              || sec_die "could not update $ref (does the service account have write access to '$vault'?)"
+            val=""; sec_ok "    updated $ref"
+          else
+            sec_info "    keeping existing $ref"
+          fi
         else
-          prompt_required ref "    op:// reference for $n:"
+          prompt_secret val "  $n ($desc) — value for field $hash (masked):"
+          sec_op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
+            || sec_die "could not write $ref (does the service account have write access to '$vault'?)"
+          val=""; sec_ok "    wrote $ref"
         fi
       else
         prompt_required ref "  $n — op:// reference ($desc):"

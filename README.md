@@ -241,7 +241,10 @@ backends, chosen by machine kind:
 
 - **Human machines** (`personal`/`work` Macs): chezmoi templates using
   `onepasswordRead`. The committed fragment holds only `op://…` references;
-  values resolve from 1Password at apply.
+  values resolve from 1Password at apply. Each variable is a single 1Password
+  item; the per-machine value is a concealed field labeled with the slot hash,
+  so refs are deterministic: `op://<vault>/<NAME>/<slot-hash>` (per-machine
+  values + per-machine rotation, one item per variable).
 - **Headless machines** (`dev-shell`): **SOPS + age**. There is no interactive
   `op signin`, so values are encrypted at rest to the box's own age recipient
   and decrypted **once at apply** by the `output "sops" "--decrypt"` template.
@@ -266,11 +269,33 @@ endpoints and the alias↔slot map live only in the loose, unmanaged layer. See
 | slot id → age recipient | `.sops.yaml` (committed — opaque slot + age **public** key only) |
 | Encrypted values | `secrets/<slot>.sops.sh` (committed — ciphertext, opaque name; outside the chezmoi source root) |
 | Env var names + prompts | `home/.chezmoidata/secrets.yaml` (committed — no values) |
+| 1Password service-account token | `~/.local/share/op/service-account` (loose, 0600, never committed; not under `secrets.d/` so interactive shells stay in account mode) |
 
 ### Onboarding a machine
 
-From a trusted operator host (with this repo and push access) that can already
-SSH to the target:
+The **slot** is the only shared (committed) identity. An **alias** is just an
+operator-local SSH/map name (loose, never committed); the same machine can be
+dialed under different aliases from different operators while everyone agrees on
+its slot. There are two onboarding paths:
+
+**Self (this Mac).** A human Mac onboards itself — this is what `.setup.sh` runs
+during bootstrap, and you can rerun it anytime:
+
+```sh
+system-onboard --local [--alias <friendly-name>] [--profile <profile>]
+# human only; alias defaults to this host's short name; profile defaults to the
+# machine's configured chezmoi profile
+```
+
+It assigns the machine's own slot, builds its 1Password fragment, sets
+`secretsSlot`, applies, and stores the 1Password **service-account token** loose
+at `~/.local/share/op/service-account` — so **every Mac is also an operator**
+and can drive `op` non-interactively for its own `system-secrets`/onboarding.
+The token is fetched from a 1Password item via the desktop app (it remembers the
+`op://` ref at `…/service-account.ref`) or pasted once.
+
+**Operator-driven (remote).** From a trusted operator host (this repo + push
+access) that can already SSH to the target:
 
 ```sh
 system-onboard --alias <ssh-alias> --hostname <ssh-host> --profile <profile>
@@ -278,8 +303,12 @@ system-onboard --alias <ssh-alias> --hostname <ssh-host> --profile <profile>
 ```
 
 It reconciles SSH access (loose), the remote `chezmoi init`, an opaque secrets
-slot, the encrypted/1Password-backed fragment, the commit (opaque only), and
-the remote `chezmoi update --apply`. Idempotent — safe to rerun.
+slot, the encrypted/1Password-backed fragment, the commit (opaque only), and the
+remote apply. If a **human target has already self-onboarded** (it has its own
+`secretsSlot`), the operator detects that over SSH, records `alias → slot`, and
+only reconciles connectivity + brings it current — it never mints or rebuilds
+that machine's secrets. Headless boxes can't self-onboard and stay fully
+operator-driven. Idempotent — safe to rerun.
 
 ### Managing secrets
 

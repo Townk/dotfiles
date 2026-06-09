@@ -21,5 +21,10 @@ brew "mise"          # needed by run_once_after_10-setup-bootstrap-tools.sh.tmpl
                      # before system-update's uv/npm/go syncs run.
 brew "gh"            # used by .setup.sh once GitHub auth is wired up.
 cask "1password-cli" # used by .setup.sh to wait for `op account list`
+brew "jq"            # needed by system-onboard --local (the 1Password item
+brew "yq"            # helpers + chezmoi-data parsing) which .setup.sh runs to
+                     # provision secrets BEFORE the heavy `chezmoi apply`, so
+                     # the first install (mise/system-update) is GitHub-token
+                     # authenticated. Lives here, not in Brewfile.tmpl.
 
 # vim:ft=ruby
