@@ -379,6 +379,36 @@ sec_write_human_fragment() {
 }
 
 # ---------------------------------------------------------------------------
+# 1Password helpers (human machines). Optional convenience so the operator can
+# CREATE the backing item from a masked value instead of pre-staging it by
+# hand, and have its op:// reference derived automatically. API keys live in
+# the "API Credential" category; the secret is its CONCEALED `credential`
+# field, so references are op://<vault>/<item>/credential.
+#
+# The secret never passes through argv (process args / shell history are
+# world-visible to the local user): jq reads it from the environment and
+# streams the JSON straight into `op item create -`.
+# ---------------------------------------------------------------------------
+sec_op_available() { command -v op >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; }
+
+# sec_op_item_exists <account> <vault> <title>
+sec_op_item_exists() { op item get "$3" --vault "$2" --account "$1" >/dev/null 2>&1; }
+
+# sec_op_create_api_credential <account> <vault> <title> <value> <username>
+# Create an API Credential item; echo its op:// reference on success.
+sec_op_create_api_credential() {
+  local acct="$1" vault="$2" title="$3"
+  __OP_VAL="$4" __OP_USER="$5" jq -n --arg t "$title" '
+    {title: $t, category: "API_CREDENTIAL",
+     fields: ([ {id:"credential", type:"CONCEALED", label:"credential", value: $ENV.__OP_VAL} ]
+       + (if ($ENV.__OP_USER // "") == "" then []
+          else [ {id:"username", type:"STRING", label:"username", value: $ENV.__OP_USER} ] end))}' \
+    | op item create --account "$acct" --vault "$vault" - >/dev/null 2>&1 \
+    || return 1
+  printf 'op://%s/%s/credential\n' "$vault" "$title"
+}
+
+# ---------------------------------------------------------------------------
 # Leak audit. Mirrors the local pre-commit hook: scan STAGED added lines and
 # staged file names against the gitignored .leak-patterns. Run this in-tool
 # right before committing so a leak fails early with a clear message instead of
@@ -453,14 +483,52 @@ sec_rebuild_slot() {
     sec_write_headless_fragment "$slot"
     sec_ok "encrypted ${#names[@]} secret(s) for slot $slot"
   else
-    local pairs=()
-    sec_info "Enter 1Password references for the '$profile' secrets. Human slot $slot:"
+    # Human: each secret resolves from 1Password at apply via onepasswordRead.
+    # If op + jq are available, offer to pick an account+vault once and then,
+    # per secret, either reference an existing item or CREATE one from a masked
+    # value. Otherwise fall back to entering op:// references by hand.
+    local pairs=() acct="" vault="" desc mode val uname
+    if sec_op_available; then
+      local -a accts vaults
+      accts=("${(@f)$(op account list --format=json 2>/dev/null | jq -r '.[].url')}")
+      accts=(${accts:#})
+      if (( ${#accts[@]} > 1 )); then
+        prompt_choice acct "1Password account" "${accts[@]}"
+      elif (( ${#accts[@]} == 1 )); then
+        acct="${accts[1]}"
+      fi
+      if [[ -n "$acct" ]]; then
+        vaults=("${(@f)$(op vault list --account "$acct" --format=json 2>/dev/null | jq -r '.[].name')}")
+        vaults=(${vaults:#})
+        (( ${#vaults[@]} )) && prompt_choice vault "Vault in $acct" "${vaults[@]}"
+      fi
+    fi
+    sec_info "1Password setup for the '$profile' secrets (human slot $slot)."
+    [[ -n "$vault" ]] \
+      && sec_warn "op:// references are committed to this PUBLIC repo — keep vault/item names non-identifying."
     for n in "${names[@]}"; do
-      prompt_required ref "  $n — op:// reference ($(sec_manifest_prompt "$n")):"
+      desc="$(sec_manifest_prompt "$n")"
+      if [[ -n "$vault" ]] && sec_op_item_exists "$acct" "$vault" "$n"; then
+        prompt_default ref "  $n ($desc) — op:// reference" "op://$vault/$n/credential"
+      elif [[ -n "$vault" ]]; then
+        prompt_choice mode "  $n ($desc) — create item in '$vault' or use an existing ref?" create existing
+        if [[ "$mode" == create ]]; then
+          prompt_secret val "    value for $n (masked):"
+          prompt_default uname "    username/label (optional):" ""
+          ref="$(sec_op_create_api_credential "$acct" "$vault" "$n" "$val" "$uname")" \
+            || sec_die "1Password item creation failed for $n"
+          val=""
+          sec_ok "    created op://$vault/$n/credential"
+        else
+          prompt_required ref "    op:// reference for $n:"
+        fi
+      else
+        prompt_required ref "  $n — op:// reference ($desc):"
+      fi
       pairs+=("$n=$ref")
     done
     sec_write_human_fragment "$slot" "${pairs[@]}"
-    sec_ok "wrote ${#names[@]} 1Password reference(s) for slot $slot"
+    sec_ok "wrote ${#pairs[@]} 1Password reference(s) for slot $slot"
   fi
 }
 
