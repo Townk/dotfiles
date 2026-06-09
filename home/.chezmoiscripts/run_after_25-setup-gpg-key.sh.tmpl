@@ -1,0 +1,199 @@
+{{- /*
+
+  GPG key import — idempotent and defer-friendly.
+
+  Runs on EVERY `chezmoi apply` (NOT run_once): the keyring itself is the
+  state, so this short-circuits instantly when the keys are already present and
+  otherwise retries the import on the next apply. A run_once variant would be
+  marked done after the first (deferred) SSH apply and never retry.
+
+  The keys live as documents in the 1Password *Private* vault. A service
+  account can never read Private (1Password hard limit), and the desktop app
+  can't authorize over a non-interactive SSH apply. So:
+
+    * key already in the keyring                -> nothing to do (common case);
+    * key missing, no controlling terminal      -> DEFER: warn and exit 0 so a
+      (SSH/headless converge apply)                remote apply doesn't fail;
+                                                   the import happens the next
+                                                   time apply is run physically
+                                                   on the machine;
+    * key missing, interactive terminal         -> read from 1Password in
+                                                   ACCOUNT mode and import.
+
+  `env -u OP_SERVICE_ACCOUNT_TOKEN` forces op into account (desktop-app) mode
+  even when the loose service-account token is exported in this shell — that
+  token can't see Private. This script never exits non-zero for a missing or
+  unreadable key: a fresh machine simply finishes provisioning without signing
+  keys until the next interactive apply.
+*/ -}}
+#!/bin/bash
+set -eufo pipefail
+
+{{- if eq .chezmoi.os "darwin" }}
+onepassword_account="rapinialves"
+onepassword_vault="Private"
+export GNUPGHOME="${GNUPGHOME:-{{ .chezmoi.homeDir }}/.config/gnupg}"
+
+# GPG ownertrust levels for `gpg --import-ownertrust`.
+NONE=0
+UNKNOWN=1
+NEVER=2
+MARGINAL=3
+FULL=4
+ULTIMATE=6
+
+if ! command -v gpg >/dev/null 2>&1; then
+  echo "❌  gpg is required to import GPG keys" >&2
+  exit 1
+fi
+
+mkdir -p "$GNUPGHOME"
+chmod 0700 "$GNUPGHOME"
+
+GPG_IMPORT_DEFERRED=0
+
+primary_key_fingerprints() {
+  gpg --batch --with-colons --import-options show-only --import "$1" \
+    | awk -F: '
+        $1 == "pub" || $1 == "sec" { want_fingerprint = 1; next }
+        want_fingerprint && $1 == "fpr" { print $10; want_fingerprint = 0 }
+      '
+}
+
+normalize_disabled_status() {
+  case "$1" in
+    disabled|disable|true|yes|1) echo "disabled" ;;
+    enabled|enable|false|no|0) echo "enabled" ;;
+    *)
+      echo "❌  Invalid GPG disabled status '$1'. Use 'enabled' or 'disabled'." >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_trust_level() {
+  case "$1" in
+    none|skip|0|1|2|3|4|5|6) ;;
+    *)
+      echo "❌  Invalid GPG trust level '$1'. Use 1-6, 0, or 'none'." >&2
+      exit 1
+      ;;
+  esac
+}
+
+set_ownertrust() {
+  local fingerprint="$1"
+  local trust_level="$2"
+
+  case "$trust_level" in
+    none|skip|0)
+      echo "ℹ️  Skipping ownertrust for GPG key $fingerprint"
+      return 0
+      ;;
+  esac
+
+  printf '%s:%s:\n' "$fingerprint" "$trust_level" | gpg --batch --import-ownertrust
+  echo "✅  Set GPG ownertrust for $fingerprint to $trust_level"
+}
+
+set_disabled_status() {
+  local fingerprint="$1"
+  local disabled_status="$2"
+  local edit_command
+
+  case "$disabled_status" in
+    disabled) edit_command="disable" ;;
+    enabled) edit_command="enable" ;;
+  esac
+
+  printf '%s\nsave\n' "$edit_command" \
+    | gpg --batch --yes --no-tty --command-fd 0 --edit-key "$fingerprint" >/dev/null
+  echo "✅  Marked GPG key $fingerprint as $disabled_status"
+}
+
+# have_tty — a controlling terminal is required so the 1Password desktop app
+# can authorize reading the Private vault. chezmoi does not wire fd 0/1 to the
+# terminal, so /dev/tty is the right probe (not `test -t 0`).
+have_tty() { { : </dev/tty; } 2>/dev/null; }
+
+import_gpg_document() {
+  local document_name="$1"
+  local trust_level="$2"
+  local required="${4:-1}"
+  local disabled_status key_id key_file fingerprints fingerprint
+
+  validate_trust_level "$trust_level"
+  disabled_status=$(normalize_disabled_status "$3")
+
+  # The key id is embedded in the document title, e.g. "… (CA995D91)".
+  key_id="$(printf '%s' "$document_name" | sed -n 's/.*(\([0-9A-Fa-f]\{8,\}\)).*/\1/p')"
+
+  # Already in the keyring? Never touch 1Password — this is the steady state.
+  if [ -n "$key_id" ] && gpg --batch --list-keys "$key_id" >/dev/null 2>&1; then
+    echo "✅  OpenPGP key $key_id ('$document_name') already in keyring"
+    return 0
+  fi
+
+  # Missing. Reading it needs the Private vault (account mode) and thus an
+  # interactive desktop-app authorization — impossible over SSH. Defer instead
+  # of failing.
+  if ! command -v op >/dev/null 2>&1 || ! have_tty; then
+    if [ "$required" -eq 0 ]; then
+      echo "⏭️  Optional GPG document '$document_name' not present and not importable now; skipping." >&2
+      return 0
+    fi
+    echo "⏭️  GPG key ${key_id:-?} ('$document_name') needs interactive 1Password (Private vault) — deferred until apply runs in a terminal on this machine." >&2
+    GPG_IMPORT_DEFERRED=1
+    return 0
+  fi
+
+  key_file=$(mktemp "${TMPDIR:-/tmp}/chezmoi-gpg-key.XXXXXX")
+  trap 'rm -f "$key_file"' RETURN
+  chmod 0600 "$key_file"
+
+  echo "🔐  Reading OpenPGP keys from 1Password document '$document_name'..."
+  # Force ACCOUNT mode: a service-account token exported in this shell would put
+  # op in service mode, which can't see the Private vault.
+  if ! env -u OP_SERVICE_ACCOUNT_TOKEN op document get "$document_name" \
+      --vault "$onepassword_vault" \
+      --account "$onepassword_account" \
+      --out-file "$key_file" \
+      --force \
+      >/dev/null; then
+    if [ "$required" -eq 0 ]; then
+      echo "⚠️  Optional legacy GPG document '$document_name' not available; skipping." >&2
+      return 0
+    fi
+    echo "⏭️  Could not read required GPG document '$document_name' from 1Password — deferring import to the next apply." >&2
+    GPG_IMPORT_DEFERRED=1
+    return 0
+  fi
+
+  fingerprints=$(primary_key_fingerprints "$key_file")
+  if [ -z "$fingerprints" ]; then
+    echo "❌  1Password document '$document_name' did not contain any OpenPGP keys" >&2
+    exit 1
+  fi
+
+  echo "🔐  Importing OpenPGP keys from '$document_name'..."
+  gpg --batch --import "$key_file"
+
+  while IFS= read -r fingerprint; do
+    set_ownertrust "$fingerprint" "$trust_level"
+    set_disabled_status "$fingerprint" "$disabled_status"
+  done <<<"$fingerprints"
+
+  rm -f "$key_file"
+  trap - RETURN
+}
+
+import_gpg_document "Personal - Thiago Alves (D36D4260)" "$NONE" "disabled" 0
+import_gpg_document "Personal - Thiago Alves (F403C88D)" "$ULTIMATE" "disabled" 0
+import_gpg_document "Personal - Thiago Alves (CA995D91)" "$ULTIMATE" "enabled" 1
+
+if [ "$GPG_IMPORT_DEFERRED" -ne 0 ]; then
+  echo "ℹ️  One or more GPG keys are pending import. Run \`chezmoi apply\` in a terminal directly on this machine, with 1Password unlocked, to finish." >&2
+fi
+{{- end }}
+
+# vim:ft=sh
