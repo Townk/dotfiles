@@ -257,17 +257,45 @@ commit_and_push() {
 }
 
 # --- step 9: converge remote -------------------------------------------------
+# Ordering matters: the target must PULL the just-pushed source BEFORE we
+# (re)init, so the config is regenerated from the NEW .chezmoi.toml.tmpl (with
+# secretsSlot + the SOPS_AGE_KEY_FILE [env]); only then apply. apply runs with
+# --force because the session has no TTY — chezmoi must never try to prompt
+# (e.g. "X changed since chezmoi last wrote it") over SSH.
 converge_remote() {
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would: ssh $ALIAS chezmoi init (profile=$PROFILE, slot=$SLOT) + chezmoi update --apply"
+    sec_info "[dry-run] would: ssh $ALIAS — pull source, chezmoi init (profile=$PROFILE, slot=$SLOT), chezmoi apply --force"
     return 0
   fi
+
+  local repo_remote src_git
+  repo_remote="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)"
+  src_git='${XDG_DATA_HOME:-$HOME/.local/share}/chezmoi/.git'
+
+  # 1. Bring the source to the pushed commit: pull if already cloned, else clone.
+  if rexec "test -d \"$src_git\""; then
+    sec_info "pulling latest source on $ALIAS …"
+    rexec "chezmoi git pull" \
+      || sec_die "remote source pull failed on $ALIAS (resolve its git state and rerun)"
+  else
+    [[ -n "$repo_remote" ]] \
+      || sec_die "$ALIAS has no chezmoi source and this host has no 'origin' remote to clone from"
+    sec_info "cloning source on $ALIAS from $repo_remote …"
+    rexec "CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init $repo_remote" \
+      || sec_die "remote chezmoi clone/init failed on $ALIAS"
+  fi
+
+  # 2. Regenerate the target's config from the NOW-updated template so
+  #    secretsSlot and SOPS_AGE_KEY_FILE are set before apply.
   sec_info "initializing chezmoi on $ALIAS (profile=$PROFILE, slot=$SLOT) …"
   rexec "CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init" \
     || sec_die "remote chezmoi init failed on $ALIAS"
+
+  # 3. Apply non-interactively.
   sec_info "applying on $ALIAS …"
-  rexec "chezmoi update --apply" \
-    || sec_die "remote chezmoi update --apply failed on $ALIAS"
+  rexec "chezmoi apply --force" \
+    || sec_die "remote chezmoi apply failed on $ALIAS"
+
   if rexec "test -r ~/.config/zsh/secrets.d/$SLOT.sh"; then
     sec_ok "secret fragment materialized on $ALIAS"
   else
