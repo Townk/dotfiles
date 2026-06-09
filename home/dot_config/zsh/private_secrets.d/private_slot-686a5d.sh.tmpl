@@ -1,0 +1,7 @@
+{{- /* headless slot slot-686a5d: SOPS+age secrets, decrypted ONCE per apply into
+       a 0600 file (the private_ source prefix). The ciphertext blob lives at
+       repo-root secrets/slot-686a5d.sops.sh, outside the chezmoi source root, so
+       it is read by path and never rendered into $HOME. sops finds the age
+       identity through SOPS_AGE_KEY_FILE, set in chezmoi's [env] on headless
+       hosts. The decrypted bytes are already `export NAME=value` lines. */ -}}
+{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d.sops.sh") }}
