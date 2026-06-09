@@ -539,7 +539,12 @@ sec_commit_paths_for_slot() {
     "$(sec_fragment_path "$slot")" \
     "$SOPS_YAML" \
     "$MANIFEST"
-  [[ -f "$(sec_blob_path "$slot")" ]] && printf '%s\n' "$(sec_blob_path "$slot")"
+  # Human slots have no SOPS blob; guard with `if` (not a trailing `&&`, whose
+  # false result would make this function return 1 and trip the caller's `set
+  # -e` during `paths=("$(...)")`).
+  if [[ -f "$(sec_blob_path "$slot")" ]]; then
+    printf '%s\n' "$(sec_blob_path "$slot")"
+  fi
 }
 
 # sec_git_commit <message> <path>... — stage paths (relative to repo root),
