@@ -28,6 +28,11 @@ HAND-OFF.md
 # Kept on disk so the agent still picks them up, but never committed.
 .cursor/rules/dev-shell-sync.mdc
 
+# Local-only pattern list for the pre-commit leak guard (.git/hooks/pre-commit).
+# Holds the actual work/company identifiers to block — must NEVER be committed,
+# or it would re-leak the very strings it exists to catch.
+/.leak-patterns
+
 # Editor backups / swap files
 *.swp
 *.swo

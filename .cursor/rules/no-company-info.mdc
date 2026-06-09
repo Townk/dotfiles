@@ -1,0 +1,46 @@
+---
+description: Hard guard against leaking company/work information into this PUBLIC dotfiles repo. Applies to every Agent session.
+alwaysApply: true
+---
+
+# No company information in committed files
+
+This repo is **PUBLIC**. Anything committed — including `private_`-prefixed
+and chezmoi-managed files under `home/`, plus docs, comments, and example
+snippets — is world-readable forever, and git history persists even after a
+later deletion. Treat every commit as a permanent publication.
+
+## Never put work/company information in tracked content
+
+This includes file contents, comments, example snippets, and **commit
+messages**:
+
+- Employer or product names, and internal **project codenames**.
+- Internal/work **hostnames, domains, IPs**, or SSH aliases for work boxes.
+- **Corporate usernames** (e.g. `first.last` work accounts) and work home paths.
+- Internal **tool / CLI / service names** (auth agents, secret stores, etc.).
+- Anything copied from work-tooling-generated config.
+
+Personal identity (the author's own name, personal email/domains, personal
+GPG keys) is intentional and allowed — this is a personal dotfiles repo. The
+line is **company/work** info, not personal info.
+
+## Where work-specific config goes instead
+
+The **loose, unmanaged layer** — never tracked by chezmoi or git:
+
+- SSH: `~/.ssh/config.d/<name>.conf`, and work includes inside the local
+  `~/.ssh/config` (which is itself chezmoiignored). See
+  `home/private_dot_ssh/config.example` for the rationale.
+- Secrets: per-machine fragments named/keyed by **opaque slot ids**, never by
+  alias or host (see the secrets-management plan).
+
+## Before staging or committing
+
+1. Run `git diff --cached` and scan **added** lines for the categories above.
+2. Prefer opaque, non-identifying names. If unsure whether a string is work
+   info, assume it is and keep it in the loose/local layer.
+3. A local `pre-commit` hook blocks known patterns. **Never** bypass it with
+   `--no-verify` without explicit user approval.
+4. If you discover already-committed company info, treat it as a leak: scrub
+   HEAD *and* rewrite history (it is already public).
