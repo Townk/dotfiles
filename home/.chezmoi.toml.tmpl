@@ -38,16 +38,21 @@
 {{- $slot := env "CHEZMOI_SECRETS_SLOT" -}}
 
 {{- /*
-  1Password resolution mode. A service-account token (written by
-  `system-onboard` to the loose ~/.config/zsh/secrets.d/00-op-service-account.sh)
-  makes `op` fully non-interactive — needed on machines where the desktop app
-  can't authorize (e.g. a remote apply over SSH). chezmoi refuses to use a SA
-  token under the default "account" mode ("mode is account, but
-  OP_SERVICE_ACCOUNT_TOKEN is set"), so switch to "service" whenever that token
-  is present; otherwise keep interactive "account" mode.
+  1Password resolution mode, keyed off the ENVIRONMENT, not a file. chezmoi
+  errors if the two disagree ("mode is account, but OP_SERVICE_ACCOUNT_TOKEN is
+  set", and vice-versa), so mode must mirror whether OP_SERVICE_ACCOUNT_TOKEN is
+  exported when chezmoi reads this config.
+
+  The service-account token is a LOOSE operator secret at
+  ~/.local/share/op/service-account (NOT sourced by any shell), so interactive
+  sessions stay in "account" mode with full desktop-app / Private-vault access.
+  Only an SSH apply that can't authorize the desktop app injects the token for
+  that invocation (system-onboard's converge does `export …; chezmoi init`),
+  which renders "service" here just for that pass and is reset to "account"
+  afterward. Default everywhere: "account".
 */ -}}
 {{- $opMode := "account" -}}
-{{- if stat (joinPath .chezmoi.homeDir ".config/zsh/secrets.d/00-op-service-account.sh") -}}
+{{- if env "OP_SERVICE_ACCOUNT_TOKEN" -}}
   {{- $opMode = "service" -}}
 {{- end -}}
 

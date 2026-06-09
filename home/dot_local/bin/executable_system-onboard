@@ -291,10 +291,18 @@ converge_remote() {
       || sec_die "remote chezmoi clone/init failed on $ALIAS"
   fi
 
-  # 2. Regenerate the target's config from the NOW-updated template so
-  #    secretsSlot and SOPS_AGE_KEY_FILE are set before apply.
+  # 2. Regenerate the target's config from the NOW-updated template. For human
+  #    (1Password) targets the SA token must be in the env at init AND apply so
+  #    chezmoi renders and uses onepassword mode=service; account mode is
+  #    restored afterward (step 4). The token is read from the loose operator
+  #    path and injected only for these invocations — never exported into a
+  #    shell, so interactive sessions keep account/desktop-app + Private access.
+  local pre=""
+  [[ "$KIND" == human ]] \
+    && pre="export OP_SERVICE_ACCOUNT_TOKEN=\"\$(cat ~/$OP_TOKEN_REL 2>/dev/null)\"; "
+
   sec_info "initializing chezmoi on $ALIAS (profile=$PROFILE, slot=$SLOT) …"
-  rexec "CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init" \
+  rexec "${pre}CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init" \
     || sec_die "remote chezmoi init failed on $ALIAS"
 
   # 3. Apply non-interactively. The fragment is rendered DURING apply, so each
@@ -302,19 +310,15 @@ converge_remote() {
   #    - headless: `output sops` decrypts the blob. sops/age (the mise toolbox)
   #      may not be installed yet on a box provisioned before they were added,
   #      so prime them (apply the mise config, then install).
-  #    - human: `onepasswordRead` shells out to `op`, which can't authorize
-  #      interactively over SSH — source the loose service-account token so
-  #      OP_SERVICE_ACCOUNT_TOKEN makes `op` fully non-interactive.
+  #    - human: `onepasswordRead` shells out to `op` in service mode via the
+  #      injected token ($pre) — fully non-interactive over SSH.
   #    (PATH is normalized by rexec so both resolvers are found.)
-  local pre=""
   if [[ "$KIND" == headless ]]; then
     sec_info "ensuring decrypt toolchain (sops, age) on $ALIAS …"
     rexec "chezmoi apply --force ~/.config/mise/conf.d/dev-shell.toml" \
       || sec_warn "could not pre-apply mise toolbox config on $ALIAS"
     rexec "command -v mise >/dev/null 2>&1 && mise install sops age -y" \
       || sec_warn "could not install sops/age via mise on $ALIAS — decrypt will fail until 'mise install' runs there"
-  else
-    pre=". ~/$OP_TOKEN_REL 2>/dev/null; "
   fi
 
   sec_info "applying on $ALIAS …"
@@ -326,31 +330,41 @@ converge_remote() {
   elif [[ "$KIND" == headless ]]; then
     sec_warn "secret fragment not found on $ALIAS after apply — check the remote age key and SOPS_AGE_KEY_FILE"
   else
-    sec_warn "secret fragment not found on $ALIAS after apply — check the service-account token (~/$OP_TOKEN_REL) and the op:// references"
+    sec_warn "secret fragment not found on $ALIAS after apply — check the SA token (~/$OP_TOKEN_REL) and the op:// references"
   fi
+
   sec_info "remote status:"
-  rexec "chezmoi status --exclude scripts" || true
+  rexec "${pre}chezmoi status --exclude scripts" || true
+
+  # 4. Reset human targets to account (desktop-app) mode: re-init WITHOUT the
+  #    token so the persistent config doesn't demand it for local applies and
+  #    interactive `op` keeps full Private access. The SA token stays on disk at
+  #    the loose operator path for the machine's own onboarding/converge use.
+  if [[ "$KIND" == human ]]; then
+    sec_info "restoring account (desktop-app) mode on $ALIAS …"
+    rexec "env -u OP_SERVICE_ACCOUNT_TOKEN CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init" \
+      || sec_warn "could not restore account-mode config on $ALIAS (run 'chezmoi init' there)"
+  fi
 }
 
 # --- step 8.5: 1Password service-account token (human) ----------------------
-# Human machines resolve op:// references at apply via `op`, which can't
-# authorize interactively over SSH. A service-account token makes `op` fully
-# non-interactive. The operator already holds it as a raw string at
-# $OP_SA_TOKEN_FILE (the same token the onboarding op calls use); copy that to
-# the new machine instead of re-typing it — prompt+store only if absent.
+# Every onboarded Mac is ALSO made an operator: it gets the same raw service-
+# account token the operator holds, at the SAME loose path
+# (~/.local/share/op/service-account), so its own system-onboard/system-secrets
+# (and a converge's SSH apply) can drive `op` non-interactively.
 #
-# The remote copy is a per-machine LOOSE secret — NEVER committed: write it to
-# ~/.config/zsh/secrets.d/00-op-service-account.sh (0600) as a sourceable
-# `export` line (the POSIX loader sources it, so OP_SERVICE_ACCOUNT_TOKEN is in
-# the env, and .chezmoi.toml.tmpl flips that machine to onepassword mode=service).
-# It is NOT the slot fragment (that file is rendered BY resolving op, so it can't
-# carry the token needed to render itself). The token never appears in argv — it
-# is piped to the remote over stdin.
-OP_TOKEN_REL=".config/zsh/secrets.d/00-op-service-account.sh"
+# This file is a LOOSE per-machine secret — NEVER committed, and deliberately
+# NOT under ~/.config/zsh/secrets.d, so no shell sources it: interactive
+# sessions stay in 1Password "account" (desktop-app) mode with full Private
+# access. The token is injected into the environment only when needed (the SSH
+# apply), never globally exported. It is the raw token string (what `sec_op`
+# cats), not a sourceable `export` line. Piped to the remote over stdin so it
+# never appears in argv.
+OP_TOKEN_REL=".local/share/op/service-account"
 reconcile_op_token() {
   [[ "$KIND" == human ]] || return 0
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would copy OP_SERVICE_ACCOUNT_TOKEN to $ALIAS at ~/$OP_TOKEN_REL"
+    sec_info "[dry-run] would copy the SA token to $ALIAS at ~/$OP_TOKEN_REL (make it an operator)"
     return 0
   fi
   if rexec "test -s ~/$OP_TOKEN_REL" && (( ! ROTATE_SECRETS )); then
@@ -359,11 +373,11 @@ reconcile_op_token() {
   fi
   sec_op_ensure_token
   local token; token="$(cat "$OP_SA_TOKEN_FILE")"
-  printf 'export OP_SERVICE_ACCOUNT_TOKEN=%s\n' "${(qq)token}" \
-    | rexec "umask 077; mkdir -p ~/.config/zsh/secrets.d && cat > ~/$OP_TOKEN_REL && chmod 600 ~/$OP_TOKEN_REL" \
+  printf '%s' "$token" \
+    | rexec "umask 077; mkdir -p ~/.local/share/op && cat > ~/$OP_TOKEN_REL && chmod 600 ~/$OP_TOKEN_REL" \
     || sec_die "failed to write service-account token to $ALIAS"
   token=""
-  sec_ok "copied service-account token to $ALIAS (~/$OP_TOKEN_REL, loose, 0600)"
+  sec_ok "configured $ALIAS as an operator (SA token at ~/$OP_TOKEN_REL, loose, 0600)"
 }
 
 main() {
