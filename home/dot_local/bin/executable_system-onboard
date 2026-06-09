@@ -49,8 +49,14 @@ EOF
 }
 
 # ssh wrapper — `command` bypasses the interactive z4h `ssh` shell function,
-# which is not loaded in non-interactive shells.
-rexec() { command ssh "$ALIAS" "$@"; }
+# which is not loaded in non-interactive shells. A non-interactive ssh session
+# also gets a minimal PATH (no Homebrew, ~/.local/bin, mise shims or snap), so
+# chezmoi — and the tools it shells out to at apply (op for onepasswordRead,
+# sops/age for the headless decrypt) — would not be found. Normalize PATH on
+# every remote command so tool resolution is consistent across macOS and Linux.
+# REMOTE_PATH keeps $HOME/$PATH literal for the remote shell to expand.
+REMOTE_PATH='$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/share/mise/shims:/snap/bin'
+rexec() { command ssh "$ALIAS" "export PATH=\"$REMOTE_PATH:\$PATH\"; $*"; }
 
 # --- argument parsing --------------------------------------------------------
 parse_args() {
@@ -293,22 +299,20 @@ converge_remote() {
 
   # 3. Apply non-interactively. For headless hosts the secrets fragment
   #    decrypts via `output sops` DURING apply, so the decrypt toolchain must
-  #    exist and be reachable by chezmoi. A non-interactive ssh shell carries
-  #    neither ~/.local/bin nor mise's shims on PATH, and sops/age (the mise
-  #    toolbox) may not be installed yet — so prime both before the full apply:
-  #    apply just the mise toolbox config, install sops/age, then apply with the
-  #    shim dir on PATH so chezmoi's `output sops` lookup succeeds.
-  local rpath='export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH";'
+  #    exist first: sops/age (the mise toolbox) may not be installed yet on a
+  #    box provisioned before they were added. Prime them — apply just the mise
+  #    toolbox config, then install sops/age — before the full apply. (PATH is
+  #    normalized by rexec, so chezmoi's `output sops` lookup resolves.)
   if [[ "$KIND" == headless ]]; then
     sec_info "ensuring decrypt toolchain (sops, age) on $ALIAS …"
-    rexec "$rpath chezmoi apply --force ~/.config/mise/conf.d/dev-shell.toml" \
+    rexec "chezmoi apply --force ~/.config/mise/conf.d/dev-shell.toml" \
       || sec_warn "could not pre-apply mise toolbox config on $ALIAS"
-    rexec "$rpath command -v mise >/dev/null 2>&1 && mise install sops age -y" \
+    rexec "command -v mise >/dev/null 2>&1 && mise install sops age -y" \
       || sec_warn "could not install sops/age via mise on $ALIAS — decrypt will fail until 'mise install' runs there"
   fi
 
   sec_info "applying on $ALIAS …"
-  rexec "$rpath chezmoi apply --force" \
+  rexec "chezmoi apply --force" \
     || sec_die "remote chezmoi apply failed on $ALIAS"
 
   if rexec "test -r ~/.config/zsh/secrets.d/$SLOT.sh"; then
