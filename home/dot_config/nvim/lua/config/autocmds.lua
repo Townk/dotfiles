@@ -125,6 +125,22 @@ local chezmoi_cache = nil
 local chezmoi_apply_timer = nil
 local chezmoi_redirect_enabled = true
 
+-- Targets accumulated during a debounce burst. Scoping the apply to just the
+-- saved files (rather than a blanket `chezmoi apply`) matters because a full
+-- apply re-renders EVERY managed template — including the 1Password-backed
+-- secrets fragment, whose `op read` pops a Touch ID prompt on each apply.
+-- Editing an unrelated config file must never trigger that. Saves that don't
+-- map to a known managed FILE target (a script, .chezmoidata, .chezmoiignore,
+-- a symlink/dir) set the `full` flag, since those can affect many targets and
+-- should still drive a complete apply.
+local chezmoi_pending = {}
+local chezmoi_pending_full = false
+
+local function chezmoi_reset_pending()
+  chezmoi_pending = {}
+  chezmoi_pending_full = false
+end
+
 -- Debounce for `chezmoi apply` after saving a chezmoi-source buffer.
 -- AutoSave plugins fire BufWritePost rapidly; running apply on each save
 -- is wasteful. The trailing-edge debounce coalesces a burst of saves into
@@ -144,7 +160,15 @@ local function chezmoi_run_apply()
   -- BufReadPre's chezmoi-reverse reconcile. Otherwise chezmoi would skip
   -- (or prompt for) targets it sees as modified, leaving the live file
   -- silently out of sync with the source we just saved.
-  vim.fn.jobstart({ "chezmoi", "apply", "--force" }, { detach = true })
+  --
+  -- Scope to the saved targets when we have them; otherwise (a `full` save, or
+  -- nothing pending — e.g. a bare :ChezmoiApplyNow) apply everything.
+  local cmd = { "chezmoi", "apply", "--force" }
+  if not chezmoi_pending_full then
+    vim.list_extend(cmd, vim.tbl_keys(chezmoi_pending))
+  end
+  chezmoi_reset_pending()
+  vim.fn.jobstart(cmd, { detach = true })
 end
 
 local function chezmoi_schedule_apply()
@@ -275,6 +299,16 @@ vim.api.nvim_create_autocmd("BufWritePost", {
     if not vim.startswith(file, s.source_dir) then
       return
     end
+    -- Map the saved SOURCE to its destination and scope the apply to it, but
+    -- only when it's a known managed FILE target (so editing a plain config
+    -- never re-renders the op-backed secrets fragment). Anything else forces a
+    -- full apply, matching the prior behavior for scripts/data/symlinks.
+    local target = vim.trim(vim.fn.system({ "chezmoi", "target-path", "--", file }))
+    if vim.v.shell_error == 0 and target ~= "" and s.managed[target] then
+      chezmoi_pending[target] = true
+    else
+      chezmoi_pending_full = true
+    end
     chezmoi_schedule_apply()
   end,
   desc = "Schedule a debounced `chezmoi apply` after saving in the chezmoi source dir",
@@ -295,6 +329,9 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 
 vim.api.nvim_create_user_command("ChezmoiApplyNow", function()
   chezmoi_clear_apply_timer()
+  -- Explicit "apply everything now" escape hatch (also the way to run scripts /
+  -- propagate data edits), so force a full apply regardless of what's pending.
+  chezmoi_pending_full = true
   chezmoi_run_apply()
   vim.notify("chezmoi apply triggered", vim.log.levels.INFO)
 end, { desc = "Run `chezmoi apply` immediately, bypassing the BufWritePost debounce" })
