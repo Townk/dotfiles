@@ -311,7 +311,7 @@ commit_and_push() {
 # (e.g. "X changed since chezmoi last wrote it") over SSH.
 converge_remote() {
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would: ssh $ALIAS — pull source, chezmoi init (profile=$PROFILE, slot=$SLOT), chezmoi apply --force"
+    sec_info "[dry-run] would: ssh $ALIAS — pull source, chezmoi init (profile=$PROFILE, slot=$SLOT), chezmoi apply --force, record slot $SLOT in $ALIAS's own operator map"
     return 0
   fi
 
@@ -374,6 +374,29 @@ converge_remote() {
 
   sec_info "remote status:"
   rexec "${pre}chezmoi status --exclude scripts" || true
+
+  reconcile_remote_map
+}
+
+# --- step 9.5: record the target's OWN map entry ----------------------------
+# A remotely-onboarded machine gets the SA token (operator-capable) but, unlike
+# a --local self-onboard, never recorded its own slot in ITS operator map — so
+# its local `system-secrets list/rotate/reconcile` couldn't see its own slot.
+# Upsert just THIS machine's entry into the target's loose map (a deep merge, so
+# any peers it may already manage are preserved). Values mirror sec_map_set;
+# idempotent. yq is resolved via rexec's normalized REMOTE_PATH. Runs from
+# converge_remote, so it covers both the operator-driven and self-onboarded
+# branches. Best-effort: a failure only costs the target its self-management.
+reconcile_remote_map() {
+  local entry
+  entry="$(slot="$SLOT" al="$ALIAS" pr="$PROFILE" kd="$KIND" rc="$RECIPIENT" \
+    yq -n -o=json -I=0 \
+    '{strenv(slot): {"alias": strenv(al), "profile": strenv(pr), "kind": strenv(kd), "recipient": strenv(rc)}}')" \
+    || { sec_warn "could not build the operator-map entry for $ALIAS"; return 0; }
+  printf '%s' "$entry" \
+    | rexec 'f="$HOME/.config/chezmoi/onboard-map.yaml"; mkdir -p "$HOME/.config/chezmoi"; [ -f "$f" ] || { printf "{}\n" > "$f"; chmod 600 "$f"; }; m="$(yq ea "select(fileIndex==0) * select(fileIndex==1)" "$f" -)" && printf "%s\n" "$m" > "$f" && chmod 600 "$f"' \
+    && sec_ok "recorded slot $SLOT in $ALIAS's own operator map (it can self-manage)" \
+    || sec_warn "could not record $SLOT in $ALIAS's operator map (its local system-secrets won't list the slot)"
 }
 
 # --- step 9 (local): converge this machine -----------------------------------
