@@ -63,6 +63,8 @@ layout {
                     padding "0,1,0,1"      // inner gap (frame -> text): top,right,bottom,left
                     binding_separator "\u{279C}" // glyph between a binding's keys and its description (➜)
 
+                    start_hidden "scroll"  // In scroll mode the which-key does not show by default
+
                     // Footer hint glyphs for piped actions. No default: pipe
                     // bindings aren't in the keymap, so set these to surface the
                     // affordances in the footer. These MUST match the chords

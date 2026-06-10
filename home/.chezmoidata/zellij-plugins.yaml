@@ -29,7 +29,7 @@ zellijPlugins:
     wasm: zj-hud.wasm
     repoName: zj-hud
     dev: true
-    url: https://github.com/Townk/zj-hud/releases/download/v0.1.0/zj-hud.wasm
+    url: https://github.com/Townk/zj-hud/releases/download/v0.1.1/zj-hud.wasm
   - alias: vim-navigator
     wasm: vim-zellij-navigator.wasm
     repoName: ""
