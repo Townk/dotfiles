@@ -30,6 +30,12 @@ local images = require("images")
 
 local M = {}
 
+local GLYPH_DB_PATH = os.getenv("HOME") .. "/.local/share/fonts/nerd-font/symbols.db"
+local NERD_FONT_NAME = "Symbols Nerd Font Mono"
+local NERD_FONT_ICON_SIZE = 40
+local SWATCH_SIZE = 44
+local SWATCH_RADIUS = 9
+
 ---------------------------------------------------------------------------
 -- Configuration
 ---------------------------------------------------------------------------
@@ -90,8 +96,14 @@ local fading = false
 --- @type hs.sound|nil  Lazily loaded volume-tick sound.
 local tickSound = nil
 
+--- @type table<string, hs.sound|false>
+local notificationSoundCache = {}
+
 --- @type boolean  Whether we already attempted to load the tick sound.
 local tickSoundLoaded = false
+
+--- @type table<string, table|false>
+local glyphIconCache = {}
 
 ---------------------------------------------------------------------------
 -- Volume tick sound (lazy)
@@ -121,6 +133,42 @@ function M.playTick(level)
 	snd:play()
 end
 
+local function systemSoundName(soundName)
+	return tostring(soundName)
+		:gsub("%.aiff$", "")
+		:gsub("%.AIF$", "")
+		:gsub("%.AIFF$", "")
+		:gsub("%.caf$", "")
+		:gsub("%.CAF$", "")
+end
+
+local function playNotificationSound(soundName)
+	if not soundName or soundName == "" then
+		return
+	end
+
+	local normalizedName = systemSoundName(soundName)
+	local cached = notificationSoundCache[normalizedName]
+	if cached == false then
+		return
+	end
+
+	local snd = cached
+	if not snd then
+		snd = hs.sound.getByName(normalizedName)
+			or hs.sound.getByFile("/System/Library/Sounds/" .. normalizedName .. ".aiff")
+		if not snd then
+			hs.printf("OSD notification sound does not exist: %s", tostring(soundName))
+			notificationSoundCache[normalizedName] = false
+			return
+		end
+		notificationSoundCache[normalizedName] = snd
+	end
+
+	snd:stop()
+	snd:play()
+end
+
 ---------------------------------------------------------------------------
 -- Internal helpers
 ---------------------------------------------------------------------------
@@ -138,15 +186,113 @@ local function cancelTimers()
 	fading = false
 end
 
+local function sqlString(value)
+	return "'" .. value:gsub("'", "''") .. "'"
+end
+
+local function queryGlyphSymbol(symbolName)
+	local file = io.open(GLYPH_DB_PATH, "r")
+	if not file then
+		hs.printf("OSD glyph symbols DB does not exist: %s", GLYPH_DB_PATH)
+		return nil
+	end
+	file:close()
+
+	local sqlite3 = require("hs.sqlite3")
+	local db = sqlite3.open(GLYPH_DB_PATH)
+	if not db then
+		hs.printf("OSD glyph symbols DB does not exist: %s", GLYPH_DB_PATH)
+		return nil
+	end
+
+	local query = "SELECT symbol FROM symbols WHERE name = " .. sqlString(symbolName) .. " LIMIT 1"
+	local symbol = nil
+	for row in db:nrows(query) do
+		symbol = row.symbol
+		break
+	end
+	db:close()
+	return symbol
+end
+
+local function resolveGlyphIcon(name)
+	local symbolName = name:match("^glyph:(.+)$")
+	if not symbolName then
+		return nil
+	end
+
+	local cached = glyphIconCache[symbolName]
+	if cached ~= nil then
+		return cached or nil
+	end
+
+	local symbol = queryGlyphSymbol(symbolName)
+	if not symbol or symbol == "" then
+		hs.printf("OSD glyph symbol does not exist: %s", name)
+		glyphIconCache[symbolName] = false
+		return nil
+	end
+
+	local icon = { type = "glyphIcon", char = symbol }
+	glyphIconCache[symbolName] = icon
+	return icon
+end
+
+local function parseHexColor(hex)
+	if #hex == 3 then
+		hex = hex:gsub(".", "%0%0")
+	elseif #hex ~= 6 then
+		return nil
+	end
+
+	local r = tonumber(hex:sub(1, 2), 16)
+	local g = tonumber(hex:sub(3, 4), 16)
+	local b = tonumber(hex:sub(5, 6), 16)
+	if not r or not g or not b then
+		return nil
+	end
+
+	return {
+		red = r / 255,
+		green = g / 255,
+		blue = b / 255,
+		alpha = 1,
+	}
+end
+
+local function resolveSwatchIcon(name)
+	local hex = name:match("^swatch:#([%x]+)$")
+	if not hex then
+		return nil
+	end
+
+	local color = parseHexColor(hex)
+	if not color then
+		hs.printf("OSD swatch color is invalid: %s", name)
+		return nil
+	end
+
+	return { type = "swatchIcon", color = color }
+end
+
+local function resolveNamedIcon(name)
+	if name:match("^glyph:") then
+		return resolveGlyphIcon(name)
+	elseif name:match("^swatch:") then
+		return resolveSwatchIcon(name)
+	end
+	return images.getIcon(name)
+end
+
 --- Resolve a single icon from the various accepted formats.
 --- @param iconOrIcons OsdIconSpec|nil
 --- @param percent     number          Clamped 0–100
 --- @param direction   OsdDirection|nil
---- @return hs.image|nil
+--- @return hs.image|table|nil
 local function resolveIcon(iconOrIcons, percent, direction)
 	if type(iconOrIcons) ~= "table" then
     if type(iconOrIcons) == "string" then
-      return images.getIcon(iconOrIcons)
+      return resolveNamedIcon(iconOrIcons)
     end
 		return iconOrIcons --[[@as hs.image|nil]]
 	end
@@ -175,13 +321,13 @@ local function resolveIcon(iconOrIcons, percent, direction)
     icon = tbl[idx]
 	end
   if type(icon) == "string" then
-    return images.getIcon(icon)
+    return resolveNamedIcon(icon)
   end
   return icon
 end
 
 --- Build the ordered list of canvas element tables for the current OSD state.
---- @param icon    hs.image|nil
+--- @param icon    hs.image|table|nil
 --- @param percent number
 --- @param text    string|nil
 --- @return table[]
@@ -206,18 +352,65 @@ local function buildElements(icon, percent, text)
 
 	-- Icon (centered above bar)
 	if icon then
-		elements[#elements + 1] = {
-			type = "image",
-			image = icon,
-			frame = {
-				x = (OSD_WIDTH - ICON_SIZE) / 2,
-				y = topY,
-				w = ICON_SIZE,
-				h = ICON_SIZE,
-			},
-			imageScaling = "shrinkToFit",
-			imageAlignment = "center",
+		local iconFrame = {
+			x = (OSD_WIDTH - ICON_SIZE) / 2,
+			y = topY,
+			w = ICON_SIZE,
+			h = ICON_SIZE,
 		}
+		if type(icon) == "table" and icon.type == "glyphIcon" then
+			elements[#elements + 1] = {
+				type = "text",
+				frame = {
+					x = iconFrame.x,
+					y = iconFrame.y + (ICON_SIZE - NERD_FONT_ICON_SIZE) / 2,
+					w = iconFrame.w,
+					h = NERD_FONT_ICON_SIZE,
+				},
+				text = hs.styledtext.new(icon.char, {
+					font = { name = NERD_FONT_NAME, size = NERD_FONT_ICON_SIZE },
+					color = BAR_ON,
+					paragraphStyle = { alignment = "center" },
+				}),
+			}
+		elseif type(icon) == "table" and icon.type == "swatchIcon" then
+			local swatchFrame = {
+				x = iconFrame.x + (ICON_SIZE - SWATCH_SIZE) / 2,
+				y = iconFrame.y + (ICON_SIZE - SWATCH_SIZE) / 2,
+				w = SWATCH_SIZE,
+				h = SWATCH_SIZE,
+			}
+			elements[#elements + 1] = {
+				type = "rectangle",
+				action = "strokeAndFill",
+				frame = swatchFrame,
+				fillColor = icon.color,
+				strokeColor = { white = 1, alpha = 0.65 },
+				strokeWidth = 1.5,
+				roundedRectRadii = { xRadius = SWATCH_RADIUS, yRadius = SWATCH_RADIUS },
+			}
+			elements[#elements + 1] = {
+				type = "rectangle",
+				action = "stroke",
+				frame = {
+					x = swatchFrame.x + 1.5,
+					y = swatchFrame.y + 1.5,
+					w = swatchFrame.w - 3,
+					h = swatchFrame.h - 3,
+				},
+				strokeColor = { white = 0, alpha = 0.20 },
+				strokeWidth = 1,
+				roundedRectRadii = { xRadius = SWATCH_RADIUS - 1.5, yRadius = SWATCH_RADIUS - 1.5 },
+			}
+		else
+			elements[#elements + 1] = {
+				type = "image",
+				image = icon,
+				frame = iconFrame,
+				imageScaling = "shrinkToFit",
+				imageAlignment = "center",
+			}
+		end
 	end
 
 	-- Bottom area: text label or segmented progress bar
@@ -370,6 +563,16 @@ function M.show(iconOrIcons, percentOrText, direction)
 	end)
 end
 
+--- Show an OSD notification, optionally playing a named system sound.
+--- Suitable for external IPC calls via the global `notify(...)` helper.
+--- @param icon string|nil       SVG icon name, glyph:<name>, or swatch:#RRGGBB
+--- @param text string|nil       Text to display below the icon
+--- @param soundName string|nil  System sound name, e.g. "Glass" or "Ping"
+function M.notify(icon, text, soundName)
+	M.show(icon, text or "")
+	playNotificationSound(soundName)
+end
+
 --- Immediately hide the OSD without animation.
 function M.hide()
 	cancelTimers()
@@ -390,6 +593,12 @@ function M.cleanup()
 		tickSound:stop()
 		tickSound = nil
 	end
+	for _, snd in pairs(notificationSoundCache) do
+		if snd then
+			snd:stop()
+		end
+	end
+	notificationSoundCache = {}
 	tickSoundLoaded = false
 end
 

@@ -1,4 +1,5 @@
 hs.printf("Hammerspoon loading…")
+require("hs.ipc")
 require("modules.system.bootstrap").init()
 
 local actions = require("system.actions")
@@ -22,6 +23,10 @@ lifecycle.registerCleanup(sd.cleanup)
 lifecycle.registerCleanup(images.clearCache)
 lifecycle.registerCleanup(windowDrag.cleanup)
 lifecycle.registerCleanup(dock.cleanup)
+
+function notify(icon, text, soundName)
+	osd.notify(icon, text, soundName)
+end
 
 dock.setup()
 
