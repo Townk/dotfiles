@@ -28,6 +28,10 @@ function notify(icon, text, soundName)
 	osd.notify(icon, text, soundName)
 end
 
+function notifyAnsi(icon, text, soundName)
+	osd.notifyAnsi(icon, text, soundName)
+end
+
 dock.setup()
 
 -- Cmd+drag anywhere on a window to move it; plain Cmd+click is preserved

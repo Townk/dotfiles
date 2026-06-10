@@ -362,7 +362,7 @@ keybinds clear-defaults=true {
         }
 
         // Yank — copy the active pane's cwd to the system clipboard, with a
-        // macOS notification + sound. Two variants:
+        // Hammerspoon OSD + sound. Two variants:
         //   Shift+y      → $HOME-relative path (e.g. ~/Projects/foo).
         //                  From Ghostty's Cmd+Shift+C, which forwards `Alt+w Y`.
         //   Alt+y        → absolute path (e.g. /Users/me/Projects/foo).
@@ -378,7 +378,7 @@ keybinds clear-defaults=true {
         // The `{pid}` placeholder is substituted by the plugin with the
         // focused terminal pane's root process PID; scripts/copy-pwd resolves
         // that PID's cwd via lsof (no ZELLIJ_* env needed) and handles the
-        // path-mode flag + pbcopy + terminal-notifier banner/sound.
+        // path-mode flag + pbcopy + Hammerspoon OSD/sound.
         bind "Y" {
             MessagePlugin "context-keys" {
                 name "copy-pwd"

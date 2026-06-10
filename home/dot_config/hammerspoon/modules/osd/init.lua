@@ -58,6 +58,8 @@ M.fadeSteps = 15
 
 local OSD_WIDTH    = 210
 local OSD_HEIGHT   = 130
+local TEXT_CHAR_WIDTH = 7.2
+local TEXT_MAX_SCREEN_RATIO = 0.75
 local CORNER_RADIUS = 16
 local ICON_SIZE    = 68
 local ICON_BAR_GAP = 8
@@ -330,8 +332,9 @@ end
 --- @param icon    hs.image|table|nil
 --- @param percent number
 --- @param text    string|nil
+--- @param width   number
 --- @return table[]
-local function buildElements(icon, percent, text)
+local function buildElements(icon, percent, text, width)
 	local elements = {}
 
 	-- Background with rounded rect and subtle border
@@ -339,7 +342,7 @@ local function buildElements(icon, percent, text)
 	elements[#elements + 1] = {
 		type = "rectangle",
 		action = "strokeAndFill",
-		frame = { x = bw2, y = bw2, w = OSD_WIDTH - BORDER_W, h = OSD_HEIGHT - BORDER_W },
+		frame = { x = bw2, y = bw2, w = width - BORDER_W, h = OSD_HEIGHT - BORDER_W },
 		fillColor = BG_COLOR,
 		strokeColor = BORDER_COLOR,
 		strokeWidth = BORDER_W,
@@ -353,7 +356,7 @@ local function buildElements(icon, percent, text)
 	-- Icon (centered above bar)
 	if icon then
 		local iconFrame = {
-			x = (OSD_WIDTH - ICON_SIZE) / 2,
+			x = (width - ICON_SIZE) / 2,
 			y = topY,
 			w = ICON_SIZE,
 			h = ICON_SIZE,
@@ -417,17 +420,24 @@ local function buildElements(icon, percent, text)
 	local barY = topY + ICON_SIZE + ICON_BAR_GAP
 
 	if text then
-		elements[#elements + 1] = {
-			type = "text",
-			frame = { x = PADDING_H, y = barY, w = OSD_WIDTH - 2 * PADDING_H, h = BAR_HEIGHT },
-			text = hs.styledtext.new(text, {
+		local textValue = (type(text) == "table" and text.type == "ansiText")
+			and hs.styledtext.ansi(text.value, {
 				font = { name = ".AppleSystemUIFont", size = 14 },
 				color = BAR_ON,
 				paragraphStyle = { alignment = "center" },
-			}),
+			})
+			or hs.styledtext.new(text, {
+				font = { name = ".AppleSystemUIFont", size = 14 },
+				color = BAR_ON,
+				paragraphStyle = { alignment = "center" },
+			})
+		elements[#elements + 1] = {
+			type = "text",
+			frame = { x = PADDING_H, y = barY, w = width - 2 * PADDING_H, h = BAR_HEIGHT },
+			text = textValue,
 		}
 	else
-		local barAreaW = OSD_WIDTH - 2 * PADDING_H
+		local barAreaW = width - 2 * PADDING_H
 		local segW = (barAreaW - (BAR_SEGMENTS - 1) * BAR_GAP) / BAR_SEGMENTS
 
 		for i = 1, BAR_SEGMENTS do
@@ -448,6 +458,18 @@ local function buildElements(icon, percent, text)
 	end
 
 	return elements
+end
+
+local function osdWidthForText(text, screenFrame)
+	if not text then
+		return OSD_WIDTH
+	end
+
+	local maxWidth = math.floor(screenFrame.w * TEXT_MAX_SCREEN_RATIO)
+	local rawText = (type(text) == "table" and text.value) or text
+	rawText = rawText:gsub("\27%[[%d;]*m", "")
+	local estimated = math.ceil(PADDING_H * 2 + #rawText * TEXT_CHAR_WIDTH)
+	return math.max(OSD_WIDTH, math.min(maxWidth, estimated))
 end
 
 --- Get the screen that should display the OSD.
@@ -511,7 +533,7 @@ function M.show(iconOrIcons, percentOrText, direction)
 	--- @type string|nil
 	local text
 
-	if type(percentOrText) == "string" then
+	if type(percentOrText) == "string" or (type(percentOrText) == "table" and percentOrText.type == "ansiText") then
 		percent = 0
 		text = percentOrText
 	else
@@ -527,11 +549,12 @@ function M.show(iconOrIcons, percentOrText, direction)
 	-- Position: centered horizontally, 3/4 down the target screen.
 	local screen = targetScreen()
 	local frame = screen:fullFrame()
-	local x = frame.x + (frame.w - OSD_WIDTH) / 2
+	local width = osdWidthForText(text, frame)
+	local x = frame.x + (frame.w - width) / 2
 	local y = frame.y + frame.h * 0.75 - OSD_HEIGHT / 2
 
 	if not canvas then
-		canvas = hs.canvas.new({ x = x, y = y, w = OSD_WIDTH, h = OSD_HEIGHT })
+		canvas = hs.canvas.new({ x = x, y = y, w = width, h = OSD_HEIGHT })
 		if not canvas then return end
 		canvas:behavior( ---@diagnostic disable-line: undefined-field
 			hs.canvas.windowBehaviors.canJoinAllSpaces
@@ -540,11 +563,11 @@ function M.show(iconOrIcons, percentOrText, direction)
 		canvas:level(hs.canvas.windowLevels.overlay) ---@diagnostic disable-line: undefined-field
 	else
 		canvas:topLeft({ x = x, y = y })
-		canvas:size({ w = OSD_WIDTH, h = OSD_HEIGHT })
+		canvas:size({ w = width, h = OSD_HEIGHT })
 	end
 
 	-- Build and apply elements one-by-one (avoids table.unpack stack limit).
-	local elements = buildElements(icon, percent, text)
+	local elements = buildElements(icon, percent, text, width)
 	-- Clear existing elements, then insert new ones.
 	while canvas:elementCount() > 0 do
 		canvas:removeElement(1)
@@ -570,6 +593,15 @@ end
 --- @param soundName string|nil  System sound name, e.g. "Glass" or "Ping"
 function M.notify(icon, text, soundName)
 	M.show(icon, text or "")
+	playNotificationSound(soundName)
+end
+
+--- Show an OSD notification whose text may include ANSI SGR styles.
+--- @param icon string|nil
+--- @param text string|nil
+--- @param soundName string|nil
+function M.notifyAnsi(icon, text, soundName)
+	M.show(icon, { type = "ansiText", value = text or "" })
 	playNotificationSound(soundName)
 end
 

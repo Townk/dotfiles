@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # copy-pwd — copy the focused zellij pane's working directory to the macOS
-#            clipboard, then show a notification (and play a short sound).
+#            clipboard, then show a Hammerspoon OSD (and play a short sound).
 #
 # Lives under ~/.config/zellij/scripts/ — it's a zellij-internal helper,
 # not a shell command. It is invoked *headlessly* by the zj-context-keys
@@ -28,19 +28,20 @@
 #   --absolute  Copy the full, literal absolute path.
 #
 # Env overrides:
+#   COPY_PWD_ICON    OSD icon spec (SVG name, glyph:<name>, or swatch:#RRGGBB).
+#                    Default: glyph:cod-folder.
 #   COPY_PWD_SOUND   Notification sound name (as shown in System Settings →
 #                    Sound, e.g. Frog/Glass/Tink, or `default`). Default: Frog.
 #                    Set empty to show the notification silently.
-#   COPY_PWD_TITLE   Notification title (default: "Path copied").
 
 set -euo pipefail
 
 LSOF="/usr/sbin/lsof"
 PBCOPY="/usr/bin/pbcopy"
-NOTIFIER="/opt/homebrew/bin/terminal-notifier"
+HS="${HS:-/opt/homebrew/bin/hs}"
 
+COPY_PWD_ICON="${COPY_PWD_ICON:-glyph:cod-folder}"
 COPY_PWD_SOUND="${COPY_PWD_SOUND-Frog}"
-COPY_PWD_TITLE="${COPY_PWD_TITLE:-Copy PWD}"
 
 # Parse an optional path-mode flag in any position; the lone positional is
 # the PID. Default mode is $HOME-relative.
@@ -86,19 +87,37 @@ fi
 # auto-execute if pasted at a shell prompt).
 printf '%s' "$path" | "$PBCOPY"
 
-# Notification body shows exactly what landed on the clipboard.
-display="Path '$path' copied to clipboard"
+# Keep the OSD focused on the action; the clipboard already carries the path.
+if [[ "$mode" == "absolute" ]]; then
+  display="Absolute path copied to clipboard"
+else
+  display="Path copied to clipboard"
+fi
 
-# terminal-notifier handles both the banner and the sound in a single fast
-# exec — no AppleScript compile (osascript) and no separate afplay process.
-# `-group` coalesces repeats so hammering the chord replaces the banner
-# instead of stacking. `-sound` is omitted when COPY_PWD_SOUND is empty for
-# a silent notification. Backgrounded + `|| true` so a notification hiccup
-# never delays or fails the clipboard copy (the actual payload).
-if [[ -x "$NOTIFIER" ]]; then
-  args=(-title "$COPY_PWD_TITLE" -message "$display" -group copy-pwd)
-  [[ -n "$COPY_PWD_SOUND" ]] && args+=(-sound "$COPY_PWD_SOUND")
-  "$NOTIFIER" "${args[@]}" >/dev/null 2>&1 || true &
+# Quote a shell string as a Lua double-quoted string literal.
+lua_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\033'/\\27}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '"%s"' "$value"
+}
+
+# Hammerspoon owns the custom OSD. `hs -c` runs inside the already-running
+# Hammerspoon process, so client environment variables are not visible there;
+# pass arguments as Lua string literals instead.
+# Backgrounded so OSD hiccups never delay or fail the clipboard copy.
+if [[ ! -x "$HS" ]]; then
+  HS="$(command -v hs 2>/dev/null || true)"
+fi
+
+if [[ -n "$HS" && -x "$HS" ]]; then
+  (
+    "$HS" -c "notify($(lua_string "$COPY_PWD_ICON"), $(lua_string "$display"), $(lua_string "$COPY_PWD_SOUND"))"
+  ) >/dev/null 2>&1 &
 fi
 
 exit 0
