@@ -4,6 +4,19 @@
 #
 # Documentation: https://github.com/romkatv/zsh4humans/blob/v5/README.md.
 
+_zsh_should_autoattach_zellij() {
+  [[ -z "$ZELLIJ" ]] || return 1
+
+  # GUI helpers can launch interactive zsh at login without a real terminal.
+  # Only auto-attach when the shell is backed by a terminal emulator or SSH.
+  [[ -n "${TERM_PROGRAM:-}" ]] && return 0
+  [[ -n "${WEZTERM_PANE:-}" || -n "${WEZTERM_UNIX_SOCKET:-}" ]] && return 0
+  [[ -n "${GHOSTTY_RESOURCES_DIR:-}" ]] && return 0
+  [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]] && return 0
+
+  return 1
+}
+
 # Auto-attach Zellij for interactive shells.
 # Done before z4h init so the outer shell doesn't pay for setup twice —
 # the shell spawned inside Zellij will run .zshrc again with $ZELLIJ set,
@@ -14,7 +27,7 @@
 #   - live, no clients                  → reattach (resume the existing one)
 #   - live, has a client                → spawn a fresh anonymous session
 #                                         (so Cmd+N etc. get their own mux)
-if [[ -z "$ZELLIJ" ]]; then
+if _zsh_should_autoattach_zellij; then
   # Remote logins print a full-screen MOTD (pam_motd) before Zellij grabs the
   # alternate screen. Wipe the primary buffer + scrollback first so it doesn't
   # flash on attach, nor reappear when Zellij restores the primary buffer on
@@ -64,6 +77,7 @@ if [[ -z "$ZELLIJ" ]]; then
   unset _zellij
   unset -f _ql_seed_main 2>/dev/null
 fi
+unset -f _zsh_should_autoattach_zellij 2>/dev/null
 
 # Periodic auto-update on Zsh startup: 'ask' or 'no'.
 # You can manually run `z4h update` to update everything.

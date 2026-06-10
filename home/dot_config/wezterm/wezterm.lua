@@ -190,7 +190,12 @@ config.hyperlink_rules = {
 	},
 }
 
+local write_fullscreen_state
+
 wezterm.on("window-config-reloaded", function(window, _)
+	if write_fullscreen_state then
+		write_fullscreen_state(window)
+	end
 	window:toast_notification("wezterm", "Configuration reloaded!", nil, 4000)
 end)
 
@@ -242,28 +247,49 @@ local quick_launch_focus_pattern = "^__QL_FOCUS__=(%d+)$"
 -- only in fullscreen, where WezTerm's own tab bar is hidden. The keybinding
 -- toggles fullscreen via the workspace trick above and never tells the bar, so
 -- this file is how the bar observes the real state. Written on change only.
-local fullscreen_state_path = (os.getenv("XDG_STATE_HOME") or (os.getenv("HOME") .. "/.local/state"))
-	.. "/wezterm/fullscreen_state"
-wezterm.background_child_process({ "mkdir", "-p", fullscreen_state_path:match("(.*)/") })
+local fullscreen_state_dir = (os.getenv("XDG_STATE_HOME") or (os.getenv("HOME") .. "/.local/state")) .. "/wezterm"
+local fullscreen_state_path = fullscreen_state_dir .. "/fullscreen_state"
+wezterm.background_child_process({ "mkdir", "-p", fullscreen_state_dir })
 local last_fullscreen_written = nil
 
-local function write_fullscreen_state(window)
-	local is_fullscreen = window:get_dimensions().is_full_screen
-	if is_fullscreen == last_fullscreen_written then
+local function write_fullscreen_value(is_fullscreen)
+	local value = is_fullscreen and "true\n" or "false\n"
+	if value == last_fullscreen_written then
 		return
 	end
-	local file = io.open(fullscreen_state_path, "w")
+	local tmp_path = fullscreen_state_path .. ".tmp"
+	local file = io.open(tmp_path, "w")
 	if file then
-		file:write(is_fullscreen and "true\n" or "false\n")
+		file:write(value)
 		file:close()
-		last_fullscreen_written = is_fullscreen
+		if os.rename(tmp_path, fullscreen_state_path) then
+			last_fullscreen_written = value
+		end
 	end
 end
+
+write_fullscreen_state = function(window)
+	write_fullscreen_value(window:get_dimensions().is_full_screen)
+end
+
+local function write_fullscreen_state_later(window)
+	for _, delay in ipairs({ 0.05, 0.2, 0.5 }) do
+		wezterm.time.call_after(delay, function()
+			write_fullscreen_state(window)
+		end)
+	end
+end
+
+-- Config can be loaded before a GUI window object is safely available. Seed the
+-- persisted value pessimistically; window events below overwrite it with the
+-- real state as soon as WezTerm has a window to inspect.
+write_fullscreen_value(false)
 
 wezterm.on("update-status", function(window, pane)
 	local workspace = window:active_workspace()
 	if workspace == toggle_fullscreen_workspace then
 		window:toggle_fullscreen()
+		write_fullscreen_state_later(window)
 		pcall(wezterm.mux.rename_workspace, toggle_fullscreen_workspace, last_real_workspace or "default")
 		return
 	end
@@ -288,6 +314,10 @@ wezterm.on("update-status", function(window, pane)
 end)
 
 wezterm.on("window-resized", function(window, _pane)
+	write_fullscreen_state(window)
+end)
+
+wezterm.on("window-focus-changed", function(window, _pane)
 	write_fullscreen_state(window)
 end)
 
