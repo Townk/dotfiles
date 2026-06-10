@@ -2,14 +2,15 @@
 set -eu
 
 {{- if eq .chezmoi.os "darwin" }}
-# Reap a STALE 1Password CLI daemon BEFORE chezmoi renders the op-backed
-# secrets fragment (run_before_, so it precedes every file update this apply).
+# Reap a STALE 1Password CLI daemon before an explicit op-backed secrets
+# refresh. Steady-state applies use the rendered fragment cache and never call
+# `op`, but first materialization or CHEZMOI_REFRESH_SECRETS=1 still does.
 #
 # WHY: the `op daemon` caches the biometric-unlocked session so the several
-# `op read`s an apply performs don't each pop Touch ID. Observed failure: a
+# `op read`s a refresh performs don't each pop Touch ID. Observed failure: a
 # daemon that has lived across a system SLEEP/WAKE can wedge — it keeps its
 # socket but no longer serves a cached session, so every `op read` re-authorizes
-# => a Touch ID prompt on every `chezmoi apply`. (macOS clears the per-user
+# => repeated Touch ID prompts during a refresh. (macOS clears the per-user
 # TMPDIR, hence XDG_RUNTIME_DIR, on reboot, so this only bites within a boot.)
 #
 # SIGNAL: reap when the daemon started before the system's last wake

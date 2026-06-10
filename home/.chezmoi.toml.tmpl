@@ -38,13 +38,14 @@
 {{- $slot := env "CHEZMOI_SECRETS_SLOT" -}}
 
 {{- /*
-  No [onepassword] block: human slots resolve op:// references with a direct
-  `op read` via the `output` template function, NOT chezmoi's `onepasswordRead`.
-  That keeps chezmoi's static onepassword.mode out of the loop — `op` chooses its
-  own mode from the environment: OP_SERVICE_ACCOUNT_TOKEN present → service (set
-  only over SSH by environment.sh), absent → account (local / Touch ID). So the
-  same machine uses Touch ID when you're physically there and the service-account
-  token when you're over SSH, with no config to flip.
+  No [onepassword] block: human slots cache their rendered secret fragment and
+  resolve op:// references with direct `op read` calls only on first materialize,
+  when the committed reference set changes, or when CHEZMOI_REFRESH_SECRETS=1.
+  That keeps chezmoi's static onepassword.mode out of the loop — on refresh, `op`
+  chooses its own mode from the environment: OP_SERVICE_ACCOUNT_TOKEN present →
+  service (set only over SSH by environment.sh), absent → account (local /
+  Touch ID). So the same machine uses Touch ID when you're physically there and
+  the service-account token when you're over SSH, with no config to flip.
 */ -}}
 
 {{- /*

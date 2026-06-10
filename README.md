@@ -30,7 +30,7 @@ source can later coexist with a Linux machine without polluting it.
 | `home/.chezmoiscripts/run_once_after_10-setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, `mise install`, install `rust@nightly`, then run `system-update`. |
 | `home/.chezmoiscripts/run_once_after_15-setup-dev-shell-tools.sh.tmpl` | Linux dev-shell: mise toolbox, apt libraries, runtime dir, and convergence. |
 | `home/.chezmoiscripts/run_once_after_20-setup-system-settings.sh.tmpl` | macOS `defaults`, Finder, Dock, login items. |
-| `home/.chezmoiscripts/run_once_after_25-setup-gpg-key.sh.tmpl` | Imports OpenPGP keys from 1Password if they are missing locally. |
+| `home/.chezmoiscripts/run_after_25-setup-gpg-key.sh.tmpl` | Imports OpenPGP keys from 1Password if they are missing locally; exits from a local completion marker on steady-state applies. |
 | `home/.chezmoiscripts/run_onchange_after_30-reload-environment-launchagent.sh.tmpl` | Reloads the GUI environment LaunchAgent when env definitions change. |
 | `home/.chezmoiscripts/run_after_34-enable-sudo-touchid.sh.tmpl` | Enables Touch ID for `sudo` via `/etc/pam.d/sudo_local`. |
 | `home/.chezmoiscripts/run_onchange_after_35-generate-open-in-neovim-app.sh.tmpl` | Generates and registers the `Open in NeoVim.app` Finder droplet. |
@@ -117,7 +117,9 @@ End to end, the script:
       `~/.local/bin/system-update` to converge everything else.
     - `setup-gpg-key.sh.tmpl` imports OpenPGP keys from 1Password Documents
       when they are not already present in `~/.config/gnupg`, then applies
-      each document's configured ownertrust and enabled/disabled state.
+      each document's configured ownertrust and enabled/disabled state. After
+      a successful check/import, later applies use a local completion marker
+      unless the expected key spec or keyring metadata changes.
     - `setup-system-settings.sh.tmpl` writes macOS `defaults` (keyboard,
       trackpad, dock, finder), and registers `Dropbox` / `Hammerspoon` /
       `Raycast` / `SoundSource` as login items.
@@ -240,11 +242,14 @@ profiles need them — never values) and materialized per-machine by two
 backends, chosen by machine kind:
 
 - **Human machines** (`personal`/`work` Macs): the committed fragment holds only
-  `op://…` references, resolved at apply by a direct `op read` via the `output`
-  template (not `onepasswordRead`). That keeps chezmoi's static `onepassword.mode`
-  out of the loop, so `op` picks its mode from the environment: **local apply →
-  account mode (Touch ID)**, **SSH apply → service-account token** (exported only
-  over SSH by `environment.sh`). Each variable is a single 1Password item; the
+  `op://…` references, resolved by direct `op read` via the `output` template
+  (not `onepasswordRead`) only when the live fragment is missing, the committed
+  reference set changes, or `CHEZMOI_REFRESH_SECRETS=1` is set. Steady-state
+  applies reuse the already-rendered 0600 fragment, so normal `chezmoi apply`
+  does not ask Touch ID just to compare secrets. When a refresh is needed, `op`
+  picks its mode from the environment: **local refresh → account mode
+  (Touch ID)**, **SSH refresh → service-account token** (exported only over SSH
+  by `environment.sh`). Each variable is a single 1Password item; the
   per-machine value is a concealed field labeled with the slot hash, so refs are
   deterministic: `op://<vault>/<NAME>/<slot-hash>` (per-machine values +
   per-machine rotation, one item per variable).

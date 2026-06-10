@@ -1,6 +1,15 @@
-{{- /* human slot slot-1c8e4d: 1Password references resolved at apply (no SOPS). */ -}}
+{{- /* human slot slot-1c8e4d: cached after first materialization; set CHEZMOI_REFRESH_SECRETS=1 to force 1Password resolution. */ -}}
+{{- $target := joinPath .chezmoi.homeDir ".config" "zsh" "secrets.d" "slot-1c8e4d.sh" -}}
+{{- $cacheHeader := "# chezmoi: op-cache-v1 87f6daf6461861e8353f5de49d3f4a8546dcff44c9b0d9d0234783a3762a8ec8" -}}
+{{- $cachedHeader := "" -}}
+{{- if stat $target -}}{{ $cachedHeader = output "sh" "-c" (printf "sed -n '1p' %q" $target) | trim }}{{- end -}}
+{{- if and (ne (env "CHEZMOI_REFRESH_SECRETS") "1") (eq $cachedHeader $cacheHeader) -}}
+{{ output "cat" $target -}}
+{{- else -}}
+# chezmoi: op-cache-v1 87f6daf6461861e8353f5de49d3f4a8546dcff44c9b0d9d0234783a3762a8ec8
 export MISE_GITHUB_TOKEN="{{ output "op" "read" "--no-newline" "op://Tokens/MISE_GITHUB_TOKEN/1c8e4d" }}"
 export HOMEBREW_GITHUB_API_TOKEN="{{ output "op" "read" "--no-newline" "op://Tokens/HOMEBREW_GITHUB_API_TOKEN/1c8e4d" }}"
 export OPENCODE_GO_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/OPENCODE_GO_API_KEY/1c8e4d" }}"
 export OPENROUTER_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/OPENROUTER_API_KEY/1c8e4d" }}"
 export CONTEXT7_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/CONTEXT7_API_KEY/1c8e4d" }}"
+{{ end -}}

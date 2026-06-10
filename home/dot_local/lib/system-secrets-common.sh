@@ -360,25 +360,35 @@ sec_write_headless_fragment() {
 EOF
 }
 
-# sec_write_human_fragment <slot> <NAME=op://ref>... — direct `op read` lines.
-# References are op:// only (no SOPS, no ciphertext). We resolve via the `output`
-# template (a direct `op read`) rather than `onepasswordRead`, so chezmoi's static
-# [onepassword].mode is bypassed: `op` picks its own mode from the environment —
-# OP_SERVICE_ACCOUNT_TOKEN present → service (SSH), absent → account (local /
-# TouchID). The rc snippet exports that token only over SSH. Each value is rendered
-# inside double quotes; op field contents may contain spaces/metacharacters.
+# sec_write_human_fragment <slot> <NAME=op://ref>... — cache after materializing.
+# References are op:// only (no SOPS, no ciphertext). On first materialization, or
+# when the reference set changes, the template resolves refs with direct `op read`
+# calls. Steady-state applies reuse the already-rendered 0600 fragment so routine
+# chezmoi operations do not cross the Touch ID boundary.
 sec_write_human_fragment() {
   local slot="$1"; shift
-  local frag pair name ref
+  local frag pair name ref sig
   frag="$(sec_fragment_path "$slot")"
+  sig="$(printf '%s\n' "$@" | shasum -a 256 | cut -d ' ' -f 1)"
   mkdir -p "${frag:h}"
   {
-    printf '%s\n' "{{- /* human slot ${slot}: 1Password references resolved at apply (no SOPS). */ -}}"
+    cat <<EOF
+{{- /* human slot ${slot}: cached after first materialization; set CHEZMOI_REFRESH_SECRETS=1 to force 1Password resolution. */ -}}
+{{- \$target := joinPath .chezmoi.homeDir ".config" "zsh" "secrets.d" "${slot}.sh" -}}
+{{- \$cacheHeader := "# chezmoi: op-cache-v1 ${sig}" -}}
+{{- \$cachedHeader := "" -}}
+{{- if stat \$target -}}{{ \$cachedHeader = output "sh" "-c" (printf "sed -n '1p' %q" \$target) | trim }}{{- end -}}
+{{- if and (ne (env "CHEZMOI_REFRESH_SECRETS") "1") (eq \$cachedHeader \$cacheHeader) -}}
+{{ output "cat" \$target -}}
+{{- else -}}
+# chezmoi: op-cache-v1 ${sig}
+EOF
     for pair in "$@"; do
       name="${pair%%=*}"
       ref="${pair#*=}"
       printf 'export %s="{{ output "op" "read" "--no-newline" "%s" }}"\n' "$name" "$ref"
     done
+    printf '%s\n' "{{ end -}}"
   } >"$frag"
 }
 

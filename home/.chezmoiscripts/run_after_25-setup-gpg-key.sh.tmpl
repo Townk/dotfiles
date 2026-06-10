@@ -2,10 +2,11 @@
 
   GPG key import — idempotent and defer-friendly.
 
-  Runs on EVERY `chezmoi apply` (NOT run_once): the keyring itself is the
-  state, so this short-circuits instantly when the keys are already present and
-  otherwise retries the import on the next apply. A run_once variant would be
-  marked done after the first (deferred) SSH apply and never retry.
+  Runs as a `run_after` hook (NOT run_once) so a deferred non-interactive apply
+  can retry later, but records a local completion marker once the expected keys
+  are present. Steady-state applies exit before calling gpg, unless the expected
+  key spec or keyring metadata changes. A run_once variant would be marked done
+  after the first deferred SSH apply and never retry.
 
   The keys live as documents in the 1Password *Private* vault. A service
   account can never read Private (1Password hard limit), and the desktop app
@@ -33,6 +34,11 @@ set -eufo pipefail
 onepassword_account="rapinialves"
 onepassword_vault="Private"
 export GNUPGHOME="${GNUPGHOME:-{{ .chezmoi.homeDir }}/.config/gnupg}"
+state_dir="${XDG_STATE_HOME:-{{ .chezmoi.homeDir }}/.local/state}/chezmoi"
+completion_marker="$state_dir/gpg-import.ok"
+expected_key_spec='Personal - Thiago Alves (D36D4260)|0|disabled|0
+Personal - Thiago Alves (F403C88D)|6|disabled|0
+Personal - Thiago Alves (CA995D91)|6|enabled|1'
 
 # GPG ownertrust levels for `gpg --import-ownertrust`.
 NONE=0
@@ -51,6 +57,24 @@ mkdir -p "$GNUPGHOME"
 chmod 0700 "$GNUPGHOME"
 
 GPG_IMPORT_DEFERRED=0
+
+sha256() {
+  shasum -a 256 | awk '{ print $1 }'
+}
+
+keyring_stamp() {
+  (
+    for path in "$GNUPGHOME/pubring.kbx" "$GNUPGHOME/trustdb.gpg" "$GNUPGHOME/private-keys-v1.d"; do
+      [ -e "$path" ] && stat -f '%m:%z:%N' "$path" 2>/dev/null || true
+    done
+  ) | sha256
+}
+
+expected_stamp="$(printf '%s\n' "$expected_key_spec" | sha256):$(keyring_stamp)"
+
+if [ -r "$completion_marker" ] && [ "$(cat "$completion_marker" 2>/dev/null || true)" = "$expected_stamp" ]; then
+  exit 0
+fi
 
 primary_key_fingerprints() {
   gpg --batch --with-colons --import-options show-only --import "$1" \
@@ -192,7 +216,13 @@ import_gpg_document "Personal - Thiago Alves (F403C88D)" "$ULTIMATE" "disabled" 
 import_gpg_document "Personal - Thiago Alves (CA995D91)" "$ULTIMATE" "enabled" 1
 
 if [ "$GPG_IMPORT_DEFERRED" -ne 0 ]; then
+  rm -f "$completion_marker" 2>/dev/null || true
   echo "ℹ️  One or more GPG keys are pending import. Run \`chezmoi apply\` in a terminal directly on this machine, with 1Password unlocked, to finish." >&2
+else
+  mkdir -p "$state_dir"
+  chmod 0700 "$state_dir"
+  printf '%s\n' "$(printf '%s\n' "$expected_key_spec" | sha256):$(keyring_stamp)" >"$completion_marker"
+  chmod 0600 "$completion_marker"
 fi
 {{- end }}
 

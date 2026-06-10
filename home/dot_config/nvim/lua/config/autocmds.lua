@@ -126,10 +126,8 @@ local chezmoi_apply_timer = nil
 local chezmoi_redirect_enabled = true
 
 -- Targets accumulated during a debounce burst. Scoping the apply to just the
--- saved files (rather than a blanket `chezmoi apply`) matters because a full
--- apply re-renders EVERY managed template — including the 1Password-backed
--- secrets fragment, whose `op read` pops a Touch ID prompt on each apply.
--- Editing an unrelated config file must never trigger that. Saves that don't
+-- saved files (rather than a blanket `chezmoi apply`) keeps saves cheap by
+-- avoiding unrelated template renders and run hooks. Saves that don't
 -- map to a known managed FILE target (a script, .chezmoidata, .chezmoiignore,
 -- a symlink/dir) set the `full` flag, since those can affect many targets and
 -- should still drive a complete apply.

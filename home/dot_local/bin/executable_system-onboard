@@ -22,7 +22,7 @@ source "$HOME/.local/lib/system-secrets-common.sh"
 
 # --- arguments ---------------------------------------------------------------
 ALIAS="" HOSTNAME="" PROFILE="" KIND=""
-DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0 LOCAL=0 NO_APPLY=0
+DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0 LOCAL=0 NO_APPLY=0 SECRETS_REBUILT=0
 VALID_PROFILES=(personal work dev-shell)
 
 usage() {
@@ -279,6 +279,7 @@ reconcile_secrets() {
     return 0
   fi
   sec_rebuild_slot "$SLOT"
+  SECRETS_REBUILT=1
 }
 
 # --- step 8: commit & push ---------------------------------------------------
@@ -344,13 +345,16 @@ converge_remote() {
   #    - headless: `output "sops"` decrypts the blob. sops/age (the mise toolbox)
   #      may not be installed yet on a box provisioned before they were added,
   #      so prime them (apply the mise config, then install).
-  #    - human: `output "op" read` resolves each ref. Over SSH the desktop app
-  #      can't authorize op, so inject the loose service-account token for this
+  #    - human: the secret fragment normally reuses its rendered cache. When this
+  #      run rebuilt secrets, force one refresh. Over SSH the desktop app can't
+  #      authorize op, so inject the loose service-account token for this
   #      invocation → op runs in service mode. Never exported into a shell.
   #    (PATH is normalized by rexec so both resolvers are found.)
   local pre=""
   [[ "$KIND" == human ]] \
     && pre="export OP_SERVICE_ACCOUNT_TOKEN=\"\$(cat ~/$OP_TOKEN_REL 2>/dev/null)\"; "
+  [[ "$KIND" == human && "$SECRETS_REBUILT" == 1 ]] \
+    && pre="${pre}export CHEZMOI_REFRESH_SECRETS=1; "
 
   if [[ "$KIND" == headless ]]; then
     sec_info "ensuring decrypt toolchain (sops, age) on $ALIAS …"
@@ -422,7 +426,11 @@ converge_local() {
     return 0
   fi
   sec_info "applying on this machine …"
-  chezmoi apply || sec_die "chezmoi apply failed"
+  if (( SECRETS_REBUILT )); then
+    CHEZMOI_REFRESH_SECRETS=1 chezmoi apply || sec_die "chezmoi apply failed"
+  else
+    chezmoi apply || sec_die "chezmoi apply failed"
+  fi
   if [[ -r "$HOME/.config/zsh/secrets.d/$SLOT.sh" ]]; then
     sec_ok "secret fragment materialized at ~/.config/zsh/secrets.d/$SLOT.sh"
   else
