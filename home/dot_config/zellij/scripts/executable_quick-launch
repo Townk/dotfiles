@@ -73,11 +73,9 @@ ql_menu() {
 
   # Hand the picker a single merged JSON view (default.yaml + launch.d/*) so it
   # reads exactly what we dispatch from, without re-implementing the merge.
-  export QUICK_LAUNCH_TARGETS
-  QUICK_LAUNCH_TARGETS="$(ql_write_merged_cache)"
-
-  local chosen
-  chosen="$("$SCRIPT_DIR/quick-launch-pick" "$kind")" || return 0
+  local chosen targets
+  targets="$(ql_write_merged_cache)"
+  chosen="$(QUICK_LAUNCH_TARGETS="$targets" "$SCRIPT_DIR/quick-launch-pick" "$kind")" || return 0
   [[ -n "$chosen" ]] || return 0
   # Alt+Enter in the workspace picker emits "@window:<id>" (field 2) to request
   # opening the workspace in a separate OS window instead of switching the

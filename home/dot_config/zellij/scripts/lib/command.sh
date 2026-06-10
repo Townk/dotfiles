@@ -138,30 +138,130 @@ ql_kdl_escape() {
   printf '%s' "$s"
 }
 
+ql_is_floating_direction() {
+  local dir="$1"
+  dir="$(printf '%s' "$dir" | tr '[:upper:]' '[:lower:]')"
+  [[ "$dir" == "float" || "$dir" == "floating" ]]
+}
+
+ql_terminal_size() {
+  local zj="${ZELLIJ_BIN:-/opt/homebrew/bin/zellij}" tab_id size
+  if [[ -x "$zj" ]]; then
+    tab_id="$("$zj" action list-tabs -s 2>/dev/null | awk -F'  +' 'NR > 1 && $4 == "true" { print $1; exit }')" || tab_id=""
+    size="$(
+      "$zj" action list-panes -a 2>/dev/null | awk -F'  +' -v tab="$tab_id" '
+        NR == 1 { next }
+        tab != "" && $1 != tab { next }
+        $5 != "terminal" || $10 != "false" || $11 != "false" { next }
+        { right = $12 + $15; bottom = $13 + $14 }
+        right > cols { cols = right }
+        bottom > rows { rows = bottom }
+        END { if (cols > 0 && rows > 0) print cols, rows }
+      '
+    )" || size=""
+    if [[ -n "$size" ]]; then
+      printf '%s\n' "$size"
+      return
+    fi
+  fi
+  { stty size </dev/tty 2>/dev/null || printf '24 80\n'; } | awk '{ print $2, $1 }'
+}
+
+ql_trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+ql_float_axis_geometry() {
+  local value="$1" total="$2" span pos pct
+  if [[ "$value" == *% ]]; then
+    pct="${value%?}"
+    if [[ "$pct" =~ ^[0-9]+$ ]]; then
+      span="$pct%"
+      pos="$(( (100 - pct) / 2 ))%"
+    fi
+  elif [[ "$value" =~ ^[0-9]+$ ]]; then
+    span="$value"
+    pos=$(( (total - value) / 2 ))
+    (( pos < 0 )) && pos=0
+  fi
+
+  if [[ -z "${span:-}" ]]; then
+    span="80%"
+    pos="10%"
+  fi
+  printf '%s %s\n' "$span" "$pos"
+}
+
+ql_float_geometry() {
+  local size width_spec height_spec width height x y cols rows
+  size="$(ql_trim "${1:-80%}")"
+  if [[ "$size" =~ ^(.+)[[:space:]]*[xX][[:space:]]*(.+)$ ]]; then
+    width_spec="$(ql_trim "${BASH_REMATCH[1]}")"
+    height_spec="$(ql_trim "${BASH_REMATCH[2]}")"
+  else
+    width_spec="$size"
+    height_spec="$size"
+  fi
+
+  read -r cols rows < <(ql_terminal_size)
+  read -r width x < <(ql_float_axis_geometry "$width_spec" "$cols")
+  read -r height y < <(ql_float_axis_geometry "$height_spec" "$rows")
+  printf '%s %s %s %s\n' "$width" "$height" "$x" "$y"
+}
+
+ql_kdl_value() {
+  local v="$1"
+  if [[ "$v" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$v"
+  else
+    printf '"%s"' "$(ql_kdl_escape "$v")"
+  fi
+}
+
+ql_float_kdl_attrs() {
+  local width height x y
+  read -r width height x y < <(ql_float_geometry "$1")
+  printf ' floating=true width=%s height=%s x=%s y=%s' \
+    "$(ql_kdl_value "$width")" \
+    "$(ql_kdl_value "$height")" \
+    "$(ql_kdl_value "$x")" \
+    "$(ql_kdl_value "$y")"
+}
+
 # Emit a single leaf `pane` KDL node for a pane JSON object.
 # Args: pane_json, indent, size(optional)
 ql_pane_leaf() {
   local pane="$1" indent="$2" size="${3:-}"
-  local action name cwd cmd sizeattr nameattr cwdattr
+  local action name cwd cmd sizeattr nameattr cwdattr floatattr dir
   action="$(jq -c '.action // {}' <<<"$pane")"
   name="$(jq -r '.name // .id // empty' <<<"$pane")"
+  dir="$(jq -r '.direction // empty' <<<"$pane")"
   cwd="$(jq -r '.action.cwd // empty' <<<"$pane")"
   [[ -n "$cwd" ]] && cwd="$(ql_expand_tilde "$cwd")"
   cmd="$(ql_action_command "$action")"
 
-  [[ -n "$size" ]] && sizeattr=" size=\"$size\"" || sizeattr=""
+  if ql_is_floating_direction "$dir"; then
+    floatattr="$(ql_float_kdl_attrs "$(jq -r '.size // "80%"' <<<"$pane")")"
+    sizeattr=""
+  else
+    [[ -n "$size" ]] && sizeattr=" size=\"$size\"" || sizeattr=""
+    floatattr=""
+  fi
   [[ -n "$name" ]] && nameattr=" name=\"$(ql_kdl_escape "$name")\"" || nameattr=""
   [[ -n "$cwd" ]] && cwdattr=" cwd=\"$(ql_kdl_escape "$cwd")\"" || cwdattr=""
 
   if [[ -z "$cmd" ]]; then
-    printf '%spane%s%s%s\n' "$indent" "$nameattr" "$cwdattr" "$sizeattr"
+    printf '%spane%s%s%s%s\n' "$indent" "$nameattr" "$cwdattr" "$sizeattr" "$floatattr"
   else
     # close_on_exit mirrors the standalone-tab path (`new-tab --close-on-exit`):
     # the pane *is* the program, so when it exits (e.g. you quit the editor) the
     # tab closes instead of parking on a "press <Enter> to re-run" prompt. The
     # bar + floating plugin panes from default_tab_template don't keep the tab
     # alive once the command pane is gone.
-    printf '%spane command="sh" close_on_exit=true%s%s%s {\n' "$indent" "$nameattr" "$cwdattr" "$sizeattr"
+    printf '%spane command="/bin/bash" close_on_exit=true%s%s%s%s {\n' "$indent" "$nameattr" "$cwdattr" "$sizeattr" "$floatattr"
     printf '%s    args "-c" "%s"\n' "$indent" "$(ql_kdl_escape "$cmd")"
     printf '%s}\n' "$indent"
   fi
@@ -206,13 +306,16 @@ ql_pane_tree() {
 # Emit a `tab name="..." { ... }` KDL node for a tab JSON object.
 ql_tab_kdl() {
   local tab="$1" indent="${2:-}"
-  local name panes count
+  local name panes tiled_panes floating_panes count float_count
   name="$(jq -r '.name // .id // empty' <<<"$tab")"
   # `optional: true` panes are excluded from the auto-layout (matching the
   # Lua plugin's split_all_panes `if not ql_pane.optional`); they remain
   # launchable on demand from the pane menu.
   panes="$(jq -c '[ (.panes // [])[] | select(.optional != true) ]' <<<"$tab")"
-  count="$(jq 'length' <<<"$panes")"
+  tiled_panes="$(jq -c '[ .[] | select((.direction // "" | ascii_downcase) as $d | ($d != "float" and $d != "floating")) ]' <<<"$panes")"
+  floating_panes="$(jq -c '[ .[] | select((.direction // "" | ascii_downcase) as $d | ($d == "float" or $d == "floating")) ]' <<<"$panes")"
+  count="$(jq 'length' <<<"$tiled_panes")"
+  float_count="$(jq 'length' <<<"$floating_panes")"
 
   printf '%stab name="%s" {\n' "$indent" "$(ql_kdl_escape "$name")"
   if (( count == 0 )); then
@@ -228,7 +331,14 @@ ql_tab_kdl() {
       printf '%s    pane\n' "$indent"
     fi
   else
-    ql_pane_tree "$panes" 0 "$indent    " ""
+    ql_pane_tree "$tiled_panes" 0 "$indent    " ""
+  fi
+  if (( float_count > 0 )); then
+    local i fp
+    for (( i = 0; i < float_count; i++ )); do
+      fp="$(jq -c ".[$i]" <<<"$floating_panes")"
+      ql_pane_leaf "$fp" "$indent    " ""
+    done
   fi
   printf '%s}\n' "$indent"
 }
@@ -257,20 +367,16 @@ ql_build_workspace_layout() {
 
   printf 'layout {\n'
   if (( tcount == 0 )); then
-    local name
-    name="$(jq -r '.name // .id' <<<"$ws")"
-    printf '    tab name="%s" {\n' "$(ql_kdl_escape "$name")"
+    local synth
     if [[ "$(jq 'length' <<<"$ws_panes")" -gt 0 ]]; then
-      ql_pane_tree "$ws_panes" 0 "        " ""
+      synth="$(jq -c --argjson p "$ws_panes" '{name: (.name // .id), panes: $p}' <<<"$ws")"
     elif [[ "$(jq -r 'has("action") and ((.action.type // "") != "")' <<<"$ws")" == true ]]; then
       # A bare workspace action (e.g. an SSH target) becomes the single pane.
-      local synth
-      synth="$(jq -c '{action: .action, name: (.name // .id)}' <<<"$ws")"
-      ql_pane_leaf "$synth" "        " ""
+      synth="$(jq -c '{name: (.name // .id), action: .action}' <<<"$ws")"
     else
-      printf '        pane\n'
+      synth="$(jq -c '{name: (.name // .id)}' <<<"$ws")"
     fi
-    printf '    }\n'
+    ql_tab_kdl "$synth" "    "
   else
     local t tab
     for (( t = 0; t < tcount; t++ )); do

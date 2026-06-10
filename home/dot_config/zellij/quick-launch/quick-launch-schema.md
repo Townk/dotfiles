@@ -76,8 +76,8 @@ separate OS window with the picker's Alt+Enter.
 
 | key         | type                          | description                                                                                                                                         |
 | ----------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `direction` | `down`\|`up`\|`left`\|`right` | Split direction off the previous pane                                                                                                               |
-| `size`      | string (e.g. `30%`)           | Size of this pane (layouts only)                                                                                                                    |
+| `direction` | `down`\|`up`\|`left`\|`right`\|`floating` | Split direction off the previous pane. `floating`/`float` opens a centered floating pane.                                                           |
+| `size`      | string (e.g. `30%`, `80% x 60%`, `100x30`, `100 x 30`) | Tiled split size in layouts, or floating pane dimensions. A single percent applies to both width and height; `WIDTH x HEIGHT` supports percent or terminal-cell dimensions. |
 | `moveFocus` | bool                          | Reserved (not yet applied)                                                                                                                          |
 | `optional`  | bool                          | When true, not auto-opened with its tab/workspace; stays launchable from the pane menu, offered there only while its parent workspace/tab is active |
 

@@ -44,23 +44,31 @@ ql_pane_id_by_name() {
 # focus-or-create dedup is skipped — a new session always starts empty.
 ql_open_pane() {
   local pane="$1" session="${2:-}"
-  local name dir zdir action cwd cmd
+  local name dir zdir action cwd cmd floating=false
   name="$(jq -r '.name // .id' <<<"$pane")"
   dir="$(jq -r '.direction // "down"' <<<"$pane" | tr '[:upper:]' '[:lower:]')"
   # `zellij action new-pane -d` only accepts right|down; up/left fall back to
   # the nearest supported axis. (Exact sizing/up/left fidelity is available
   # through tab/workspace layouts.)
-  case "$dir" in
-    up | down) zdir="down" ;;
-    left | right) zdir="right" ;;
-    *) zdir="down" ;;
-  esac
+  if ql_is_floating_direction "$dir"; then
+    floating=true
+    zdir=""
+  else
+    case "$dir" in
+      up | down) zdir="down" ;;
+      left | right) zdir="right" ;;
+      *) zdir="down" ;;
+    esac
+  fi
 
   if [[ -z "$session" ]]; then
     local pid
     pid="$(ql_pane_id_by_name "$name")"
     if [[ -n "$pid" ]]; then
       "$ZJ" action focus-pane-id "$pid" && return 0
+    fi
+    if [[ -n "${ZELLIJ_MODAL_TARGET_PANE:-}" ]]; then
+      "$ZJ" action focus-pane-id "$ZELLIJ_MODAL_TARGET_PANE" 2>/dev/null || true
     fi
   fi
 
@@ -71,11 +79,16 @@ ql_open_pane() {
 
   local cli=("$ZJ")
   [[ -n "$session" ]] && cli+=(--session "$session")
-  cli+=(action new-pane -d "$zdir" --name "$name")
-  [[ -n "$cwd" ]] && cli+=(--cwd "$cwd")
-  if [[ -n "$cmd" ]]; then
-    cli+=(-- sh -c "$cmd")
+  cli+=(action new-pane --name "$name")
+  if [[ "$floating" == true ]]; then
+    local width height x y
+    read -r width height x y < <(ql_float_geometry "$(jq -r '.size // "80%"' <<<"$pane")")
+    cli+=(--floating --width "$width" --height "$height" --x "$x" --y "$y")
+  else
+    cli+=(-d "$zdir")
   fi
+  [[ -n "$cwd" ]] && cli+=(--cwd "$cwd")
+  [[ -n "$cmd" ]] && cli+=(--close-on-exit -- /bin/bash -c "$cmd")
   "${cli[@]}"
 }
 
@@ -96,15 +109,18 @@ ql_open_tab() {
   fi
 
   # Non-optional panes (same selection the layout builder uses).
-  local panes count
+  local panes tiled_panes floating_panes count float_count
   panes="$(jq -c '[ (.panes // [])[] | select(.optional != true) ]' <<<"$tab")"
-  count="$(jq 'length' <<<"$panes")"
+  tiled_panes="$(jq -c '[ .[] | select((.direction // "" | ascii_downcase) as $d | ($d != "float" and $d != "floating")) ]' <<<"$panes")"
+  floating_panes="$(jq -c '[ .[] | select((.direction // "" | ascii_downcase) as $d | ($d == "float" or $d == "floating")) ]' <<<"$panes")"
+  count="$(jq 'length' <<<"$tiled_panes")"
+  float_count="$(jq 'length' <<<"$floating_panes")"
 
   # The element whose action seeds the tab's initial pane: the first pane if
   # the tab declares panes, otherwise the tab's own action.
   local primary action cwd cmd
   if (( count > 0 )); then
-    primary="$(jq -c '.[0]' <<<"$panes")"
+    primary="$(jq -c '.[0]' <<<"$tiled_panes")"
   else
     primary="$(jq -c '{action: (.action // {}), name: (.name // .id)}' <<<"$tab")"
   fi
@@ -129,7 +145,7 @@ ql_open_tab() {
   [[ -n "$session" ]] && cli+=(--session "$session")
   cli+=(action new-tab --name "$name")
   [[ -n "$cwd" ]] && cli+=(--cwd "$cwd")
-  [[ -n "$cmd" ]] && cli+=(--close-on-exit -- sh -c "$cmd")
+  [[ -n "$cmd" ]] && cli+=(--close-on-exit -- /bin/bash -c "$cmd")
   "${cli[@]}"
 
   # Multi-pane tab: split the remaining panes off inside the freshly created
@@ -137,7 +153,14 @@ ql_open_tab() {
   if (( count > 1 )); then
     local i p
     for (( i = 1; i < count; i++ )); do
-      p="$(jq -c ".[$i]" <<<"$panes")"
+      p="$(jq -c ".[$i]" <<<"$tiled_panes")"
+      ql_open_pane "$p" "$session"
+    done
+  fi
+  if (( float_count > 0 )); then
+    local i p
+    for (( i = 0; i < float_count; i++ )); do
+      p="$(jq -c ".[$i]" <<<"$floating_panes")"
       ql_open_pane "$p" "$session"
     done
   fi

@@ -243,17 +243,17 @@ panes:
       type: Run
       label: Git Log on current directory
       args:
-        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && LESS='-RSX' /opt/homebrew/bin/git log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)' --all } || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key }"
+        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && LESS='-RSX' /opt/homebrew/bin/git log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)' --all; } || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key; }"
 
   - id: lazy-git
     name: LazyGit
     icon: "󰊢 "
-    direction: right
-    size: 65%
+    direction: floating
+    size: 85% x 80%
     moveFocus: true
     optional: true
     action:
       type: Run
       label: Open LazyGit on current directory
       args:
-        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && /opt/homebrew/bin/lazygit }  || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key }"
+        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && /opt/homebrew/bin/lazygit; }  || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key; }"

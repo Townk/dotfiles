@@ -22,7 +22,10 @@ ql_config_dir() {
 # A single-file override (used by the picker's merged cache and by tests). When
 # set it bypasses directory discovery entirely; empty otherwise.
 ql_config_path() {
-  echo "${QUICK_LAUNCH_TARGETS:-}"
+  local single="${QUICK_LAUNCH_TARGETS:-}"
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/merged.json"
+  [[ "$single" == "$cache" ]] && single=""
+  echo "$single"
 }
 
 # Convert one targets file to compact JSON; parser chosen by extension. Mirrors
