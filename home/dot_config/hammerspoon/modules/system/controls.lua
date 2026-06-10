@@ -405,7 +405,13 @@ local function writeBrightness(target, callback)
 		target
 	)
 	local task = hs.task.new("/bin/sh", function(exitCode, _stdOut, _stdErr)
-		callback(exitCode == 0)
+		if exitCode == 0 then
+			callback(true)
+			return
+		end
+
+		local ok, result = pcall(hs.brightness.set, target)
+		callback(ok and result ~= false)
 	end, { "-c", cmd })
 	task:start()
 	return task

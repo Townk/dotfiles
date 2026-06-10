@@ -15,6 +15,14 @@ local M = {}
 --- @type hs.eventtap|nil
 local mediaKeyTap = nil
 
+local mediaKeyHandlers = {
+	SOUND_UP = controls.outputVolumeUp,
+	SOUND_DOWN = controls.outputVolumeDown,
+	MUTE = controls.toggleOutputMute,
+	BRIGHTNESS_UP = controls.brightnessUp,
+	BRIGHTNESS_DOWN = controls.brightnessDown,
+}
+
 -- ============================================================
 -- CONFIG FILE WATCHER
 -- ============================================================
@@ -99,24 +107,18 @@ function M.setup()
 			return false
 		end
 
-		if data.key == "SOUND_UP" then
-			controls.outputVolumeUp()
-			return true
-		elseif data.key == "SOUND_DOWN" then
-			controls.outputVolumeDown()
-			return true
-		elseif data.key == "MUTE" then
-			controls.toggleMute()
-			return true
-		elseif data.key == "BRIGHTNESS_UP" then
-			controls.brightnessUp()
-			return true
-		elseif data.key == "BRIGHTNESS_DOWN" then
-			controls.brightnessDown()
-			return true
+		local handler = mediaKeyHandlers[data.key]
+		if not handler then
+			return false
 		end
 
-		return false
+		local ok, err = pcall(handler)
+		if not ok then
+			hs.printf("media key handler failed for %s: %s", tostring(data.key), tostring(err))
+			return false
+		end
+
+		return true
 	end)
 	mediaKeyTap:start()
 
