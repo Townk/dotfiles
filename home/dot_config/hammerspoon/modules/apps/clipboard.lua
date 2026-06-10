@@ -51,4 +51,20 @@ function M.defineSelection()
   end)
 end
 
+--- Copy Google Chrome's active tab URL to the system clipboard.
+function M.copyChromeCurrentTabUrl()
+  local ok, url = hs.osascript.applescript([[
+    tell application "Google Chrome"
+      if not (exists front window) then return ""
+      return URL of active tab of front window
+    end tell
+  ]])
+
+  if ok and url and url ~= "" then
+    hs.pasteboard.setContents(url)
+  else
+    hs.printf("Chrome active tab URL was not available")
+  end
+end
+
 return M

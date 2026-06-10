@@ -58,6 +58,11 @@ kb.setup({
 			resetOn = { "deactivated" },
 			rules = {
 				{
+					match = { event = "keyDown", modifiers = kb.keys.mods.GS, key = "c" },
+					handler = clipboard.copyChromeCurrentTabUrl,
+					swallow = true,
+				},
+				{
 					match = { event = "keyDown", modifiers = kb.keys.mods.C, key = "tab" },
 					when = { state = { selectorOpen = false } },
 					actions = {
