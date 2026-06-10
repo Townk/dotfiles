@@ -360,8 +360,12 @@ sec_write_headless_fragment() {
 EOF
 }
 
-# sec_write_human_fragment <slot> <NAME=op://ref>... — onepasswordRead lines.
-# References are op:// only (no SOPS, no ciphertext). Each value is rendered
+# sec_write_human_fragment <slot> <NAME=op://ref>... — direct `op read` lines.
+# References are op:// only (no SOPS, no ciphertext). We resolve via the `output`
+# template (a direct `op read`) rather than `onepasswordRead`, so chezmoi's static
+# [onepassword].mode is bypassed: `op` picks its own mode from the environment —
+# OP_SERVICE_ACCOUNT_TOKEN present → service (SSH), absent → account (local /
+# TouchID). The rc snippet exports that token only over SSH. Each value is rendered
 # inside double quotes; op field contents may contain spaces/metacharacters.
 sec_write_human_fragment() {
   local slot="$1"; shift
@@ -373,7 +377,7 @@ sec_write_human_fragment() {
     for pair in "$@"; do
       name="${pair%%=*}"
       ref="${pair#*=}"
-      printf 'export %s="{{ onepasswordRead "%s" }}"\n' "$name" "$ref"
+      printf 'export %s="{{ output "op" "read" "--no-newline" "%s" }}"\n' "$name" "$ref"
     done
   } >"$frag"
 }
@@ -388,10 +392,11 @@ sec_write_human_fragment() {
 # the same token copied to each new machine for apply-time resolution.
 #
 # Source of truth: a RAW token string at $OP_SA_TOKEN_FILE — loose, 0600, NEVER
-# committed, and deliberately NOT under ~/.config/zsh/secrets.d so it does not
-# flip the operator's OWN `chezmoi apply` into service mode (that would resolve
-# the operator's secrets through a service account that can't read its Private
-# vault). The token is passed as a one-shot ENV assignment (env, not argv — not
+# committed, and deliberately NOT under ~/.config/zsh/secrets.d (which every shell
+# sources). environment.sh exports it ONLY over SSH, so a LOCAL `chezmoi apply`
+# has no token and resolves op:// in account mode (Touch ID, full Private-vault
+# access for the GPG import), while an SSH apply gets the token and uses service
+# mode. The token is passed as a one-shot ENV assignment (env, not argv — not
 # visible in process args). Items use the "API Credential" category; values are
 # stored ONE PER MACHINE as a CONCEALED field labeled with the slot hash, so refs
 # are deterministic: op://<vault>/<NAME>/<slot-hash> (one item per variable, one
@@ -475,11 +480,16 @@ sec_op_field_exists() { sec_op read "op://$1/$2/$3" >/dev/null 2>&1; }
 # via a JSON template on STDIN, never argv (so it is not visible to `ps`). Echoes
 # the resulting op:// reference.
 sec_op_upsert_field() {
-  local vault="$1" item="$2" field="$3" value="$4"
+  local vault="$1" item="$2" field="$3" value="$4" cur merged
   if sec_op_item_exists "$vault" "$item"; then
-    __OP_VAL="$value" jq -n --arg f "$field" \
-      '{fields: [{label: $f, type: "CONCEALED", value: $ENV.__OP_VAL}]}' \
-      | sec_op item edit "$item" --vault "$vault" - >/dev/null 2>&1 \
+    # Merge into the FULL current item. A partial {fields:[…]} template makes
+    # `op item edit` REPLACE the field set (wiping other machines' fields), so
+    # fetch the item, drop any same-labeled field, append ours, and write it back.
+    cur="$(sec_op item get "$item" --vault "$vault" --format json 2>/dev/null)" || return 1
+    merged="$(printf '%s' "$cur" | __OP_VAL="$value" jq --arg f "$field" \
+      '.fields = ((.fields // [] | map(select(.label != $f and .id != $f)))
+                  + [{label: $f, type: "CONCEALED", value: $ENV.__OP_VAL}])')" || return 1
+    printf '%s' "$merged" | sec_op item edit "$item" --vault "$vault" - >/dev/null 2>&1 \
       || return 1
   else
     __OP_VAL="$value" jq -n --arg t "$item" --arg f "$field" \
@@ -566,7 +576,7 @@ sec_rebuild_slot() {
     sec_write_headless_fragment "$slot"
     sec_ok "encrypted ${#names[@]} secret(s) for slot $slot"
   else
-    # Human: each secret resolves from 1Password at apply via onepasswordRead.
+    # Human: each secret resolves from 1Password at apply via `output "op" read`.
     # Schema: ONE item per variable; ONE concealed field per machine, labeled
     # with the slot hash — so the ref is deterministic op://<vault>/<NAME>/<hash>.
     # With op + jq we read/write those fields through the service-account token

@@ -38,23 +38,14 @@
 {{- $slot := env "CHEZMOI_SECRETS_SLOT" -}}
 
 {{- /*
-  1Password resolution mode, keyed off the ENVIRONMENT, not a file. chezmoi
-  errors if the two disagree ("mode is account, but OP_SERVICE_ACCOUNT_TOKEN is
-  set", and vice-versa), so mode must mirror whether OP_SERVICE_ACCOUNT_TOKEN is
-  exported when chezmoi reads this config.
-
-  The service-account token is a LOOSE operator secret at
-  ~/.local/share/op/service-account (NOT sourced by any shell), so interactive
-  sessions stay in "account" mode with full desktop-app / Private-vault access.
-  Only an SSH apply that can't authorize the desktop app injects the token for
-  that invocation (system-onboard's converge does `export …; chezmoi init`),
-  which renders "service" here just for that pass and is reset to "account"
-  afterward. Default everywhere: "account".
+  No [onepassword] block: human slots resolve op:// references with a direct
+  `op read` via the `output` template function, NOT chezmoi's `onepasswordRead`.
+  That keeps chezmoi's static onepassword.mode out of the loop — `op` chooses its
+  own mode from the environment: OP_SERVICE_ACCOUNT_TOKEN present → service (set
+  only over SSH by environment.sh), absent → account (local / Touch ID). So the
+  same machine uses Touch ID when you're physically there and the service-account
+  token when you're over SSH, with no config to flip.
 */ -}}
-{{- $opMode := "account" -}}
-{{- if env "OP_SERVICE_ACCOUNT_TOKEN" -}}
-  {{- $opMode = "service" -}}
-{{- end -}}
 
 {{- /*
   Auto-detect pi extension dev mode by checking for the working tree.
@@ -76,10 +67,6 @@ encryption = "gpg"
 
 [gpg]
     recipient = "A9C4A3D8CA995D91"
-
-[onepassword]
-    prompt = false
-    mode = {{ $opMode | quote }}
 {{ if eq $profile "dev-shell" }}
 {{- /*
   Headless hosts decrypt their SOPS+age secret fragment at apply via the

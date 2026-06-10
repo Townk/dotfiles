@@ -74,7 +74,7 @@
 {{/* Per-machine secret fragments. Each committed fragment
      dot_config/zsh/secrets.d/private_<slot>.sh.tmpl renders to
      ~/.config/zsh/secrets.d/<slot>.sh, but only THIS host's slot may
-     materialize: foreign fragments carry `output sops` / `onepasswordRead`
+     materialize: foreign fragments carry `output "sops"` / `output "op"`
      calls that must never run here, so we ignore (don't render) them rather
      than empty them. When secretsSlot is unset (machine not yet onboarded
      with `system-onboard`), every fragment is ignored. Slot ids are opaque,

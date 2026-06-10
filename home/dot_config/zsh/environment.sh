@@ -52,11 +52,21 @@ export PATH
 # subprocess gets the same env. See `system-onboard`/`system-secrets`.
 [ -r "$HOME/.config/zsh/secrets.sh" ] && . "$HOME/.config/zsh/secrets.sh"
 
-# Over SSH/mosh, steer gpg-agent's pinentry to the terminal. gpg forwards this
-# to the agent, which hands it to our pinentry-auto dispatcher; USE_CURSES is
-# the value pinentry-mac honors too. Unset locally so Touch ID stays the
-# default. Empty in launchd/GUI shells (no SSH_CONNECTION), so GUI apps are
-# unaffected.
+# Over-SSH adjustments. Empty in launchd/GUI shells (no SSH_CONNECTION), so GUI
+# apps and local sessions are unaffected.
 if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ]; then
+  # Steer gpg-agent's pinentry to the terminal. gpg forwards this to the agent,
+  # which hands it to our pinentry-auto dispatcher; USE_CURSES is the value
+  # pinentry-mac honors too. Unset locally so Touch ID stays the default.
   export PINENTRY_USER_DATA="USE_CURSES=1"
+
+  # The 1Password desktop app can't authorize `op` over SSH (no GUI / Touch ID),
+  # so use the loose service-account token: `op` — and chezmoi's `output "op"
+  # read` secret resolution at apply — runs in service mode. Local sessions skip
+  # this and stay in account mode (Touch ID, full Private-vault access). The
+  # token is loose, 0600, never committed; see system-onboard.
+  if [ -r "$XDG_DATA_HOME/op/service-account" ]; then
+    OP_SERVICE_ACCOUNT_TOKEN="$(cat "$XDG_DATA_HOME/op/service-account")"
+    export OP_SERVICE_ACCOUNT_TOKEN
+  fi
 fi

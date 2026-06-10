@@ -239,12 +239,15 @@ Secret env vars are declared once in the manifest
 profiles need them — never values) and materialized per-machine by two
 backends, chosen by machine kind:
 
-- **Human machines** (`personal`/`work` Macs): chezmoi templates using
-  `onepasswordRead`. The committed fragment holds only `op://…` references;
-  values resolve from 1Password at apply. Each variable is a single 1Password
-  item; the per-machine value is a concealed field labeled with the slot hash,
-  so refs are deterministic: `op://<vault>/<NAME>/<slot-hash>` (per-machine
-  values + per-machine rotation, one item per variable).
+- **Human machines** (`personal`/`work` Macs): the committed fragment holds only
+  `op://…` references, resolved at apply by a direct `op read` via the `output`
+  template (not `onepasswordRead`). That keeps chezmoi's static `onepassword.mode`
+  out of the loop, so `op` picks its mode from the environment: **local apply →
+  account mode (Touch ID)**, **SSH apply → service-account token** (exported only
+  over SSH by `environment.sh`). Each variable is a single 1Password item; the
+  per-machine value is a concealed field labeled with the slot hash, so refs are
+  deterministic: `op://<vault>/<NAME>/<slot-hash>` (per-machine values +
+  per-machine rotation, one item per variable).
 - **Headless machines** (`dev-shell`): **SOPS + age**. There is no interactive
   `op signin`, so values are encrypted at rest to the box's own age recipient
   and decrypted **once at apply** by the `output "sops" "--decrypt"` template.
@@ -269,7 +272,7 @@ endpoints and the alias↔slot map live only in the loose, unmanaged layer. See
 | slot id → age recipient | `.sops.yaml` (committed — opaque slot + age **public** key only) |
 | Encrypted values | `secrets/<slot>.sops.sh` (committed — ciphertext, opaque name; outside the chezmoi source root) |
 | Env var names + prompts | `home/.chezmoidata/secrets.yaml` (committed — no values) |
-| 1Password service-account token | `~/.local/share/op/service-account` (loose, 0600, never committed; not under `secrets.d/` so interactive shells stay in account mode) |
+| 1Password service-account token | `~/.local/share/op/service-account` (loose, 0600, never committed; exported by `environment.sh` only over SSH, so local sessions stay in account mode / Touch ID) |
 
 ### Onboarding a machine
 

@@ -60,7 +60,7 @@ EOF
 # ssh wrapper — `command` bypasses the interactive z4h `ssh` shell function,
 # which is not loaded in non-interactive shells. A non-interactive ssh session
 # also gets a minimal PATH (no Homebrew, ~/.local/bin, mise shims or snap), so
-# chezmoi — and the tools it shells out to at apply (op for onepasswordRead,
+# chezmoi — and the tools it shells out to at apply (op for op:// references,
 # sops/age for the headless decrypt) — would not be found. Normalize PATH on
 # every remote command so tool resolution is consistent across macOS and Linux.
 # REMOTE_PATH keeps $HOME/$PATH literal for the remote shell to expand.
@@ -332,28 +332,26 @@ converge_remote() {
       || sec_die "remote chezmoi clone/init failed on $ALIAS"
   fi
 
-  # 2. Regenerate the target's config from the NOW-updated template. For human
-  #    (1Password) targets the SA token must be in the env at init AND apply so
-  #    chezmoi renders and uses onepassword mode=service; account mode is
-  #    restored afterward (step 4). The token is read from the loose operator
-  #    path and injected only for these invocations — never exported into a
-  #    shell, so interactive sessions keep account/desktop-app + Private access.
-  local pre=""
-  [[ "$KIND" == human ]] \
-    && pre="export OP_SERVICE_ACCOUNT_TOKEN=\"\$(cat ~/$OP_TOKEN_REL 2>/dev/null)\"; "
-
+  # 2. Regenerate the target's config from the NOW-updated template (secretsSlot
+  #    + the headless SOPS_AGE_KEY_FILE [env]). No token needed: there is no
+  #    [onepassword] mode to render — human slots resolve op:// via `output "op"`.
   sec_info "initializing chezmoi on $ALIAS (profile=$PROFILE, slot=$SLOT) …"
-  rexec "${pre}CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init" \
+  rexec "CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init" \
     || sec_die "remote chezmoi init failed on $ALIAS"
 
   # 3. Apply non-interactively. The fragment is rendered DURING apply, so each
   #    kind needs its resolver reachable first:
-  #    - headless: `output sops` decrypts the blob. sops/age (the mise toolbox)
+  #    - headless: `output "sops"` decrypts the blob. sops/age (the mise toolbox)
   #      may not be installed yet on a box provisioned before they were added,
   #      so prime them (apply the mise config, then install).
-  #    - human: `onepasswordRead` shells out to `op` in service mode via the
-  #      injected token ($pre) — fully non-interactive over SSH.
+  #    - human: `output "op" read` resolves each ref. Over SSH the desktop app
+  #      can't authorize op, so inject the loose service-account token for this
+  #      invocation → op runs in service mode. Never exported into a shell.
   #    (PATH is normalized by rexec so both resolvers are found.)
+  local pre=""
+  [[ "$KIND" == human ]] \
+    && pre="export OP_SERVICE_ACCOUNT_TOKEN=\"\$(cat ~/$OP_TOKEN_REL 2>/dev/null)\"; "
+
   if [[ "$KIND" == headless ]]; then
     sec_info "ensuring decrypt toolchain (sops, age) on $ALIAS …"
     rexec "chezmoi apply --force ~/.config/mise/conf.d/dev-shell.toml" \
@@ -376,16 +374,6 @@ converge_remote() {
 
   sec_info "remote status:"
   rexec "${pre}chezmoi status --exclude scripts" || true
-
-  # 4. Reset human targets to account (desktop-app) mode: re-init WITHOUT the
-  #    token so the persistent config doesn't demand it for local applies and
-  #    interactive `op` keeps full Private access. The SA token stays on disk at
-  #    the loose operator path for the machine's own onboarding/converge use.
-  if [[ "$KIND" == human ]]; then
-    sec_info "restoring account (desktop-app) mode on $ALIAS …"
-    rexec "env -u OP_SERVICE_ACCOUNT_TOKEN CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init" \
-      || sec_warn "could not restore account-mode config on $ALIAS (run 'chezmoi init' there)"
-  fi
 }
 
 # --- step 9 (local): converge this machine -----------------------------------
