@@ -1,6 +1,6 @@
 {{- /* human slot slot-1c8e4d: 1Password references resolved at apply (no SOPS). */ -}}
-export MISE_GITHUB_TOKEN="{{ onepasswordRead "op://Tokens/MISE_GITHUB_TOKEN/1c8e4d" }}"
-export HOMEBREW_GITHUB_API_TOKEN="{{ onepasswordRead "op://Tokens/HOMEBREW_GITHUB_API_TOKEN/1c8e4d" }}"
-export OPENCODE_GO_API_KEY="{{ onepasswordRead "op://Tokens/OPENCODE_GO_API_KEY/1c8e4d" }}"
-export OPENROUTER_API_KEY="{{ onepasswordRead "op://Tokens/OPENROUTER_API_KEY/1c8e4d" }}"
-export CONTEXT7_API_KEY="{{ onepasswordRead "op://Tokens/CONTEXT7_API_KEY/1c8e4d" }}"
+export MISE_GITHUB_TOKEN="{{ output "op" "read" "--no-newline" "op://Tokens/MISE_GITHUB_TOKEN/1c8e4d" }}"
+export HOMEBREW_GITHUB_API_TOKEN="{{ output "op" "read" "--no-newline" "op://Tokens/HOMEBREW_GITHUB_API_TOKEN/1c8e4d" }}"
+export OPENCODE_GO_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/OPENCODE_GO_API_KEY/1c8e4d" }}"
+export OPENROUTER_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/OPENROUTER_API_KEY/1c8e4d" }}"
+export CONTEXT7_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/CONTEXT7_API_KEY/1c8e4d" }}"
