@@ -6,6 +6,7 @@ local apps = require("apps")
 local audio = require("audio")
 local clipboard = require("apps.clipboard")
 local controls = require("system.controls")
+local dock = require("system.dock")
 local images = require("images")
 local kb = require("keybindings")
 local lifecycle = require("system.lifecycle")
@@ -20,6 +21,9 @@ lifecycle.registerCleanup(osd.cleanup)
 lifecycle.registerCleanup(sd.cleanup)
 lifecycle.registerCleanup(images.clearCache)
 lifecycle.registerCleanup(windowDrag.cleanup)
+lifecycle.registerCleanup(dock.cleanup)
+
+dock.setup()
 
 -- Cmd+drag anywhere on a window to move it; plain Cmd+click is preserved
 -- via replay so apps that use it (Ghostty URL opening, etc.) keep working.

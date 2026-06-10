@@ -18,7 +18,7 @@ body {
 }
 
 .breadcrumb {
-  font-family: 'Symbols Nerd Font Mono', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Symbols Nerd Font Mono', sans-serif;
   font-size: 14px;
   color: rgba(128, 128, 128, 1);
   white-space: nowrap;
@@ -47,7 +47,7 @@ td {
 }
 
 td.key {
-  font-family: 'Symbols Nerd Font Mono', Monaco, monospace;
+  font-family: -apple-system, BlinkMacSystemFont, 'Symbols Nerd Font Mono', Monaco, monospace;
   font-size: 13px;
   color: rgba(130, 170, 255, 1);
   text-align: right;
@@ -97,7 +97,7 @@ td.desc-sticky      { color: rgba(255, 199, 89, 1); }
 }
 
 .footer {
-  font-family: 'Symbols Nerd Font Mono', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Symbols Nerd Font Mono', sans-serif;
   font-size: 14px;
   color: rgba(102, 102, 102, 1);
   white-space: nowrap;
@@ -107,5 +107,6 @@ td.desc-sticky      { color: rgba(255, 199, 89, 1); }
 }
 
 .footer-key {
+  font-family: 'Symbols Nerd Font Mono', -apple-system, BlinkMacSystemFont, sans-serif;
   color: rgba(191, 191, 191, 1);
 }
