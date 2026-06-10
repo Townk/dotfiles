@@ -21,6 +21,13 @@ install_sudo_link() {
     return 0
   fi
 
+  # Idempotent + quiet: this run_after fires on EVERY `chezmoi apply`. If the
+  # link already resolves to $target there's nothing to do — return without
+  # printing (the old code echoed unconditionally, so it was noise every run).
+  if [ "$(readlink "/usr/local/bin/$name" 2>/dev/null || true)" = "$target" ]; then
+    return 0
+  fi
+
   if sudo -n mkdir -p /usr/local/bin 2>/dev/null &&
      sudo -n ln -sfn "$target" "/usr/local/bin/$name" 2>/dev/null; then
     echo "sudo tool link: /usr/local/bin/$name -> $target"
