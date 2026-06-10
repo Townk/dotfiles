@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+{{- if eq .chezmoi.os "darwin" }}
+# Reap a STALE 1Password CLI daemon BEFORE chezmoi renders the op-backed
+# secrets fragment (run_before_, so it precedes every file update this apply).
+#
+# WHY: the `op daemon` caches the biometric-unlocked session so the several
+# `op read`s an apply performs don't each pop Touch ID. Observed failure: a
+# daemon that has lived across a system SLEEP/WAKE can wedge — it keeps its
+# socket but no longer serves a cached session, so every `op read` re-authorizes
+# => a Touch ID prompt on every `chezmoi apply`. (macOS clears the per-user
+# TMPDIR, hence XDG_RUNTIME_DIR, on reboot, so this only bites within a boot.)
+#
+# SIGNAL: reap when the daemon started before the system's last wake
+# (kern.waketime). Such a daemon outlived a sleep and is the wedge candidate.
+# This is never worse than doing nothing: after a wake the first `op` re-auths
+# regardless; reaping just guarantees the FRESH daemon then caches for the rest
+# of the wake cycle. It self-limits — the respawned daemon is newer than
+# waketime, so it won't be reaped again until the next sleep. Best-effort:
+# never fail the apply.
+#
+# Skipped in service-account mode (OP_SERVICE_ACCOUNT_TOKEN, e.g. an SSH apply):
+# that path resolves op:// via the token, not the app/daemon — nothing to reap.
+
+[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ] && exit 0
+command -v op >/dev/null 2>&1 || exit 0
+
+rt="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}/runtime-$(/usr/bin/id -u)}"
+pidfile="$rt/op-daemon.pid"
+[ -r "$pidfile" ] || exit 0            # no daemon recorded; op will start fresh
+
+dpid="$(/bin/cat "$pidfile" 2>/dev/null || true)"
+case "$dpid" in ''|*[!0-9]*) exit 0 ;; esac
+
+# The pid must still BE an `op daemon` (guard against a recycled pid number).
+/bin/ps -o command= -p "$dpid" 2>/dev/null | /usr/bin/grep -q 'op daemon' || exit 0
+
+# Last system wake, epoch seconds (sysctl prints "{ sec = N, usec = U }").
+wake="$(/usr/sbin/sysctl -n kern.waketime 2>/dev/null \
+  | /usr/bin/sed -n 's/^[{] sec = \([0-9][0-9]*\).*/\1/p')"
+case "$wake" in ''|*[!0-9]*) exit 0 ;; esac
+
+# Daemon start time -> epoch (trim ps's trailing pad; ignore date -j's warning).
+started="$(/bin/ps -o lstart= -p "$dpid" 2>/dev/null | /usr/bin/sed 's/[[:space:]]*$//')"
+[ -n "$started" ] || exit 0
+de="$(/bin/date -j -f "%a %b %e %T %Y" "$started" "+%s" 2>/dev/null || true)"
+case "$de" in ''|*[!0-9]*) exit 0 ;; esac
+
+# Daemon outlived a sleep/wake => reap it so op respawns a clean, caching one.
+if [ "$de" -lt "$wake" ]; then
+  /bin/kill "$dpid" 2>/dev/null || true
+  /bin/rm -f "$pidfile" "$rt/op-daemon.sock" 2>/dev/null || true
+  echo "op: reaped CLI daemon that outlived a sleep/wake (it would re-prompt every read)"
+fi
+{{- end }}
+
+# vim:ft=sh
