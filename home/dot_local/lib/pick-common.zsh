@@ -479,6 +479,11 @@ pick::run() {
   # key, remaining lines = selection.
   pick_query="${out%%$'\n'*}";     out="${out#*$'\n'}"
   pick_key="${out%%$'\n'*}";       pick_selection="${out#*$'\n'}"
+  # Selector digit shortcuts use fzf's `print()+accept` to move to row N and
+  # accept it in one keystroke. With --print-query/--expect, fzf emits one extra
+  # empty record before the printed row; drop that transport blank so downstream
+  # output parsing sees the selected item itself.
+  pick_selection="${pick_selection#$'\n'}"
   [[ -n "$pick_selection" ]] || exit 130
 }
 
