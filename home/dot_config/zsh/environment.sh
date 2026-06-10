@@ -19,6 +19,11 @@ export GNUPGHOME="$XDG_CONFIG_HOME/gnupg"
 # $TMPDIR is set by launchd for user processes; defaults to /tmp elsewhere.
 export XDG_RUNTIME_DIR="${TMPDIR:-/tmp}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/runtime-${UID:-$(id -u)}"
+# Create it (0700): apps that use it — notably 1Password's `op` session daemon,
+# which writes op-daemon.pid/socket here — fail to start when it's missing (op
+# logs "couldn't start daemon" and falls back to a slower, uncached path that
+# re-prompts). mkdir -p is idempotent; never let it break sourcing.
+[ -d "$XDG_RUNTIME_DIR" ] || mkdir -m 700 -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
 
 # PATH for non-interactive shells. `.zshrc`'s `path=(~/.local/bin …)` only
 # runs in interactive zsh, which means `#!/bin/zsh` scripts (system-update,
