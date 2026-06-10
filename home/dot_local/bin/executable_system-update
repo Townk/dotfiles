@@ -197,7 +197,13 @@ brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
 # `pinentry-touchid -fix` installs, so the GUI fallback (closed lid / no
 # Touch ID) would otherwise silently degrade to pinentry-curses. Guarded on
 # the binary so it no-ops on hosts without it. Cheap and idempotent.
-if command -v pinentry-touchid >/dev/null 2>&1; then
+#
+# SKIP over SSH: both `-check` and `-fix` can spawn pinentry-mac — a GUI
+# dialog that can never complete on a remote/notty session and hangs the
+# whole update (no display, no Touch ID). The fallback only matters for a
+# LOCAL GUI session anyway, so leave it to the next interactive run.
+if [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] \
+   && command -v pinentry-touchid >/dev/null 2>&1; then
   pinentry-touchid -check >/dev/null 2>&1 || pinentry-touchid -fix || warn "pinentry-touchid -fix failed"
 fi
 
