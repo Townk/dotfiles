@@ -1,0 +1,25 @@
+#compdef notify
+#
+# Completion for notify, the Hammerspoon OSD front-end. The script forwards its
+# args straight to the `notify` library function in common.sh, so it accepts
+# the short -i/-s forms too (not just the --icon/--sound the help advertises).
+# System-sound names are sourced LIVE from the macOS sound directories, where
+# the `--sound` values (Frog, Glass, …) actually come from.
+
+# __notify-sounds — installed system sounds (basenames, no extension).
+__notify-sounds() {
+  local -a sounds
+  sounds=( /System/Library/Sounds/*.aiff(N:t:r) "$HOME"/Library/Sounds/*.aiff(N:t:r) )
+  (( ${#sounds} )) && _describe -t sounds 'system sound' sounds
+}
+
+_notify() {
+  _arguments -s \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '(-i --icon)'{-i,--icon}'[OSD icon: SVG name, glyph:<nerd-font-name>, or swatch:#RRGGBB]:icon spec:' \
+    '(-s --sound)'{-s,--sound}'[system sound to play (omitted = silent)]:sound:__notify-sounds' \
+    '--ansi[MESSAGE may carry ANSI SGR colour escapes]' \
+    '*:message:'
+}
+
+_notify "$@"
