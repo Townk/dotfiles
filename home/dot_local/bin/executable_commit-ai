@@ -20,11 +20,10 @@ set -eu -o pipefail
 : "${COMMIT_AI_THINKING:=medium}"
 
 # ────────────────────────────────────────────────────────────────────
-# Colors / logging from the shared base (C_*, log_info/log_ok/log_warn/die);
-# prompt::confirm from the prompt module.
+# Shared commit-agent engine: pulls in the base (C_*, log_*, die), the prompt
+# module (prompt::confirm), and the cagent:: plan/spinner/commit helpers.
 # ────────────────────────────────────────────────────────────────────
-source "$HOME/.local/lib/common.sh"
-source "$HOME/.local/lib/prompt-common.zsh"
+source "$HOME/.local/lib/commit-agent-common.zsh"
 
 usage() {
   cat <<EOF
@@ -221,22 +220,7 @@ if [[ "$verbose" -eq 1 ]]; then
 else
   pi "${pi_args[@]}" "$prompt" >>"$log_file" 2>&1 &
   pi_pid=$!
-
-  # Spinner with elapsed seconds so the user knows the model is still
-  # thinking. Skipped when stderr isn't a TTY (piped / non-interactive).
-  if [[ -t 2 ]]; then
-    spinner=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    start=$SECONDS
-    s=1
-    while kill -0 "$pi_pid" 2>/dev/null; do
-      elapsed=$((SECONDS - start))
-      print -nu2 -- "\r  ${C_BLU}${spinner[s]}${C_RES} ${elapsed}s  "
-      sleep 0.1
-      s=$(( s % 10 + 1 ))
-    done
-    print -nu2 -- "\r\e[K"
-  fi
-
+  cagent::spinner "$pi_pid"
   wait "$pi_pid"
   rc=$?
   pi_pid=""
@@ -263,77 +247,14 @@ commit_count=$(jq -r '.commits | length' "$plan_file")
 # ────────────────────────────────────────────────────────────────────
 # Plan summary
 # ────────────────────────────────────────────────────────────────────
-print -P -- "\n${C_BWH}Planned ${commit_count} commit(s)${C_RES}\n"
-
-jq -r '
-  .commits | to_entries[] |
-  "── #\(.key + 1) ──\n" +
-  (.value.message | split("\n")[0]) + "\n" +
-  (.value.files | map("  " + .) | join("\n")) + "\n"
-' "$plan_file"
+cagent::print_plan_summary "$plan_file" "$commit_count"
 
 # ────────────────────────────────────────────────────────────────────
 # Execute
 # ────────────────────────────────────────────────────────────────────
 if [[ "$dry_run" -eq 1 ]]; then
-  print -P -- "${C_DIM}(dry run — no commits created)${C_RES}\n"
-  jq -r '
-    .commits | to_entries[] |
-    "──────────── commit #\(.key + 1) ────────────\n" +
-    "Files (\(.value.files | length)):\n" +
-    (.value.files | map("  " + .) | join("\n")) + "\n\n" +
-    "Message:\n" +
-    .value.message + "\n"
-  ' "$plan_file"
+  cagent::print_dry_run "$plan_file"
   exit 0
 fi
 
-unstage_all() { git reset --quiet 2>/dev/null || true; }
-
-stage_commit() {
-  local idx="$1"
-  local files
-  files=("${(@f)$(jq -r ".commits[$idx].files[]" "$plan_file")}")
-  files=(${files:#})   # drop empty elements (a zero-file group splits to one "")
-  [[ ${#files[@]} -gt 0 ]] || { log_warn "commit $((idx + 1)) has no files; skipping"; return 1; }
-  git add -- "${files[@]}"
-}
-
-i=0
-while [[ "$i" -lt "$commit_count" ]]; do
-  msg_file="$tmpdir/msg-$i.txt"
-  jq -r ".commits[$i].message" "$plan_file" > "$msg_file"
-
-  print -P -- "${C_BLU}── commit $((i + 1)) of ${commit_count} ──${C_RES}"
-
-  stage_commit "$i" || { unstage_all; die "failed to stage files for commit $((i + 1))"; }
-
-  if [[ "$no_commit" -eq 1 ]]; then
-    "${EDITOR:-vi}" "$msg_file"
-
-    # Re-empty check: if the editor leaves a blank file, abort that commit.
-    if ! grep -q '[^[:space:]]' "$msg_file"; then
-      log_warn "empty commit message; aborting"
-      unstage_all
-      exit 0
-    fi
-
-    if prompt::confirm "Create this commit?"; then
-      git commit --quiet -F "$msg_file" \
-        || { unstage_all; die "git commit failed"; }
-      log_ok "committed: $(git log -1 --pretty=%s)"
-    else
-      unstage_all
-      log_info "aborted at commit $((i + 1)); no further commits will be created"
-      exit 0
-    fi
-  else
-    git commit --quiet -F "$msg_file" \
-      || { unstage_all; die "git commit failed"; }
-    log_ok "committed: $(git log -1 --pretty=%s)"
-  fi
-
-  i=$((i + 1))
-done
-
-print -P -- "\n${C_GRN}Done.${C_RES} Created ${commit_count} commit(s)."
+cagent::execute_plan "$plan_file" "$commit_count" "$tmpdir" "$no_commit"
