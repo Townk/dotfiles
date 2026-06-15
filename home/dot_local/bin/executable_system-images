@@ -1,0 +1,366 @@
+#!/usr/bin/env zsh
+# system-images — declarative manager for case-sensitive sparse disk images.
+#
+# Images are declared in ~/.config/packages/images.toml (loose, per-machine —
+# never tracked by chezmoi, since a mountpoint/name can name work resources).
+# Each top-level key is the single source of truth for THREE things:
+#   [work]  →  image file  $IMG_DIR/work.sparseimage
+#           →  volume name  (hdiutil -volname work)
+#           →  mount dir    <mountpoint>/work
+# so `mountpoint` in the TOML is the PARENT directory and the leaf is the key.
+#
+# Reconciliation (`sync`) only ever CREATES and MOUNTS — it never deletes an
+# image, because images hold real data. Deletion is the separate, interactively
+# confirmed `remove`. Login-time mounting is handled out-of-band by a generic
+# launchd agent (the `[images-automount]` entry in services.toml runs
+# `system-images mount --all`); this tool owns no launchd state of its own.
+#
+# Subcommands: list | status <name> | create <name> | mount <name>|--all |
+#              unmount <name> | sync | remove <name>
+# Internal:    names   (declared keys, used by completion)
+#
+# macOS only (hdiutil / diskutil); excluded elsewhere via .chezmoiignore.tmpl.
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/system-package-common.sh"
+
+require_cmd yq jq hdiutil
+
+# images.toml lives in $PKG_DIR (~/.config/packages) alongside the other
+# system-* manifests. The images themselves live in XDG state.
+IMGFILE="${IMGFILE:-$PKG_DIR/images.toml}"
+IMG_DIR="${IMG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/images}"
+
+usage() {
+  cat <<EOF
+Usage:
+  system-images                       alias for \`list\`
+  system-images list                  show declared + on-disk images
+  system-images status  <name>        show one image's resolved config + state
+  system-images create  <name>        create the sparse image (from images.toml)
+  system-images mount   <name>        mount one image
+  system-images mount   --all         mount every automount image
+  system-images unmount <name>        detach one image
+  system-images sync                  create missing + mount automount (never deletes)
+  system-images remove  <name>        delete an image file (interactive, destructive)
+  system-images -h | --help | help    show this help
+
+Manifest: $IMGFILE
+Images:   $IMG_DIR
+
+Run \`system-images <command> --help\` for per-command details.
+EOF
+}
+
+usage_for() {
+  case "$1" in
+    create)
+      cat <<EOF
+Usage:
+  system-images create <name>
+
+Creates \$IMG_DIR/<name>.sparseimage from the images.toml entry:
+  hdiutil create -type SPARSE -fs 'Case-sensitive APFS' \\
+    -size <size|max> -volname <name> ...
+
+\`size\` defaults to "max" → the host root volume's total capacity (a sparse
+image only consumes real space as written, so this is just a ceiling).
+Refuses if the image file already exists.
+EOF
+      ;;
+    mount)
+      cat <<EOF
+Usage:
+  system-images mount <name>
+  system-images mount --all
+
+Attaches the image at <mountpoint>/<name> with -nobrowse (hidden from Finder).
+\`--all\` mounts every image whose entry sets \`automount = true\`; images whose
+file does not yet exist are skipped (so the login agent is a clean no-op on a
+machine with no images.toml).
+EOF
+      ;;
+    sync)
+      cat <<EOF
+Usage:
+  system-images sync
+
+For each declared image: create it if the file is missing, ensure the mount
+directory, and mount it if \`automount\` is set and it isn't already mounted.
+Never deletes — removing an image is the separate \`remove\` command.
+EOF
+      ;;
+    remove)
+      cat <<EOF
+Usage:
+  system-images remove <name>
+
+Permanently deletes \$IMG_DIR/<name>.sparseimage (unmounting it first). Refuses
+without an interactive terminal and requires typing the image name to confirm.
+EOF
+      ;;
+    *)
+      usage
+      ;;
+  esac
+}
+
+# img::toml_json — cached-free JSON view of images.toml. Empty `{}` if the
+# manifest doesn't exist (it's loose; a machine may have none).
+img::toml_json() {
+  if [[ -f "$IMGFILE" ]]; then
+    yq -p toml -o json '.' "$IMGFILE"
+  else
+    printf '{}\n'
+  fi
+}
+
+# img::names — top-level keys, one per line
+img::names() {
+  img::toml_json | jq -r 'keys[]' 2>/dev/null || true
+}
+
+# img::declared <name> → 0 iff <name> exists in images.toml
+img::declared() {
+  img::toml_json | jq -e --arg n "$1" 'has($n)' >/dev/null 2>&1
+}
+
+# img::field <name> <field> → raw value or empty
+img::field() {
+  img::toml_json | jq -r --arg n "$1" --arg f "$2" '.[$n][$f] // empty'
+}
+
+# img::imgpath <name> → absolute path of the sparseimage file
+img::imgpath() { printf '%s/%s.sparseimage\n' "$IMG_DIR" "$1"; }
+
+# img::mountdir <name> → <mountpoint>/<name>, with ~ expanded to $HOME
+img::mountdir() {
+  local name="$1" mp
+  mp=$(img::field "$name" mountpoint)
+  [[ -n "$mp" ]] || die "image '$name' has no mountpoint in $IMGFILE"
+  mp="${mp/#\~/$HOME}"
+  printf '%s/%s\n' "${mp%/}" "$name"
+}
+
+# img::automount <name> → 0 iff automount = true
+img::automount() {
+  [[ "$(img::field "$1" automount)" == "true" ]]
+}
+
+# img::is_mounted <name> → 0 iff the mount dir is a live mount point.
+# Compares the dir's device id to its parent's: a mount root sits on a
+# different device than the directory it's mounted over. Robust to path
+# symlinks (e.g. /tmp → /private/tmp) that defeat matching `mount` text.
+img::is_mounted() {
+  local dir d_dev p_dev
+  dir=$(img::mountdir "$1")
+  [[ -d "$dir" ]] || return 1
+  d_dev=$(stat -f '%d' "$dir" 2>/dev/null)    || return 1
+  p_dev=$(stat -f '%d' "$dir/.." 2>/dev/null) || return 1
+  [[ "$d_dev" != "$p_dev" ]]
+}
+
+# img::du <file> → human-readable real on-disk usage
+img::du() { du -h "$1" 2>/dev/null | awk '{print $1; exit}'; }
+
+# img::disk_total → root volume total capacity as an hdiutil size (e.g. "994g")
+img::disk_total() {
+  local kb
+  kb=$(df -k / | awk 'NR==2 {print $2}')
+  [[ -n "$kb" ]] || die "could not determine root volume capacity"
+  printf '%sg\n' "$(( kb / 1024 / 1024 ))"
+}
+
+# img::size_arg <name> → the -size value (declared size, or disk total for max)
+img::size_arg() {
+  local s; s=$(img::field "$1" size)
+  if [[ -n "$s" && "$s" != "max" ]]; then
+    printf '%s\n' "$s"
+  else
+    img::disk_total
+  fi
+}
+
+# img::fs_arg <name> → the hdiutil -fs string (only case-sensitive-apfs for now)
+img::fs_arg() {
+  case "$(img::field "$1" filesystem)" in
+    ""|case-sensitive-apfs) printf 'Case-sensitive APFS\n' ;;
+    *) die "unsupported filesystem for '$1' (only 'case-sensitive-apfs')" ;;
+  esac
+}
+
+# --- subcommands ------------------------------------------------------------
+
+img::create_one() {
+  local name="$1"
+  img::declared "$name" || die "no such image in $IMGFILE: $name"
+  local img; img=$(img::imgpath "$name")
+  [[ -e "$img" ]] && die "image already exists: $img"
+  local fs size
+  fs=$(img::fs_arg "$name")
+  size=$(img::size_arg "$name")
+  mkdir -p "$IMG_DIR"
+  log_info "creating $name.sparseimage (fs='$fs', size=$size, volname=$name)"
+  # Pass the path without the extension; hdiutil appends .sparseimage for SPARSE.
+  hdiutil create -type SPARSE -fs "$fs" -size "$size" -volname "$name" "$IMG_DIR/$name"
+  log_ok "created $img"
+}
+
+img::mount_one() {
+  local name="$1"
+  img::declared "$name" || die "no such image in $IMGFILE: $name"
+  local img; img=$(img::imgpath "$name")
+  [[ -e "$img" ]] || die "image file missing (run 'system-images create $name' or 'sync'): $img"
+  if img::is_mounted "$name"; then
+    log_info "$name already mounted at $(img::mountdir "$name")"
+    return 0
+  fi
+  local dir; dir=$(img::mountdir "$name")
+  mkdir -p "$dir"
+  hdiutil attach "$img" -mountpoint "$dir" -nobrowse >/dev/null
+  log_ok "mounted $name at $dir"
+}
+
+img::mount_all() {
+  local name=""
+  for name in ${(f)"$(img::names)"}; do
+    [[ -z "$name" ]] && continue
+    img::automount "$name" || continue
+    local img; img=$(img::imgpath "$name")
+    [[ -e "$img" ]] || { log_warn "skip $name: image file missing ($img)"; continue; }
+    img::is_mounted "$name" && continue
+    local dir; dir=$(img::mountdir "$name")
+    mkdir -p "$dir"
+    if hdiutil attach "$img" -mountpoint "$dir" -nobrowse >/dev/null; then
+      log_ok "mounted $name at $dir"
+    else
+      log_warn "failed to mount $name"
+    fi
+  done
+}
+
+do_mount() {
+  if [[ "${1:-}" == "--all" ]]; then
+    img::mount_all
+  else
+    [[ $# -eq 1 ]] || { usage_for mount >&2; die "mount requires one image name or --all"; }
+    img::mount_one "$1"
+  fi
+}
+
+do_unmount() {
+  [[ $# -eq 1 ]] || die "usage: unmount <name>"
+  local name="$1"
+  img::declared "$name" || die "no such image in $IMGFILE: $name"
+  if ! img::is_mounted "$name"; then
+    log_info "$name not mounted"
+    return 0
+  fi
+  local dir; dir=$(img::mountdir "$name")
+  hdiutil detach "$dir" >/dev/null
+  log_ok "unmounted $name ($dir)"
+}
+
+do_sync() {
+  log_info "Syncing sparse images..."
+  local name=""
+  for name in ${(f)"$(img::names)"}; do
+    [[ -z "$name" ]] && continue
+    [[ -e "$(img::imgpath "$name")" ]] || img::create_one "$name"
+    img::automount "$name" && img::mount_one "$name"
+  done
+  log_ok "image sync complete"
+}
+
+do_status() {
+  [[ $# -eq 1 ]] || die "usage: status <name>"
+  local name="$1"
+  img::declared "$name" || die "no such image in $IMGFILE: $name"
+  local img; img=$(img::imgpath "$name")
+  printf '%s%s%s\n' "$C_BWH" "$name" "$C_RES"
+  printf '  image:      %s%s\n' "$img" "$([[ -e "$img" ]] && printf '' || printf '  (missing)')"
+  printf '  volname:    %s\n' "$name"
+  printf '  mountpoint: %s\n' "$(img::mountdir "$name")"
+  printf '  mounted:    %s\n' "$(img::is_mounted "$name" && printf 'yes' || printf 'no')"
+  printf '  automount:  %s\n' "$(img::automount "$name" && printf 'yes' || printf 'no')"
+  printf '  manifest entry:\n'
+  img::toml_json | jq --arg n "$name" '.[$n]' | sed 's/^/    /'
+}
+
+# do_list — emit TSV rows: Image\tState\tSize\tMountpoint (piped to
+# pkg::table_print by the caller). State: mounted | unmounted | missing
+# (declared, no file) | undeclared (file on disk but not in images.toml).
+do_list() {
+  local name img dir state size f base
+  for name in ${(f)"$(img::names)"}; do
+    [[ -z "$name" ]] && continue
+    img=$(img::imgpath "$name")
+    dir=$(img::mountdir "$name")
+    if [[ ! -e "$img" ]]; then
+      state="missing"; size="-"
+    elif img::is_mounted "$name"; then
+      state="mounted"; size=$(img::du "$img")
+    else
+      state="unmounted"; size=$(img::du "$img")
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$name" "$state" "$size" "$dir"
+  done
+  for f in "$IMG_DIR"/*.sparseimage(N); do
+    base="${f:t:r}"
+    img::declared "$base" && continue
+    printf '%s\t%s\t%s\t%s\n' "$base" "undeclared" "$(img::du "$f")" "-"
+  done
+}
+
+do_remove() {
+  [[ $# -eq 1 ]] || die "usage: remove <name>"
+  local name="$1"
+  img::declared "$name" || die "no such image in $IMGFILE: $name"
+  local img; img=$(img::imgpath "$name")
+  [[ -e "$img" ]] || die "image file does not exist: $img"
+  have_tty || die "remove needs an interactive terminal (it is destructive)"
+  printf '%s⚠ this permanently deletes %s and ALL its contents.%s\n' "$C_YEL" "$img" "$C_RES" >&2
+  printf 'Type the image name (%s) to confirm: ' "$name" >&2
+  local ans=""
+  IFS= read -r ans </dev/tty || true
+  [[ "$ans" == "$name" ]] || die "aborted (got '$ans')"
+  img::is_mounted "$name" && hdiutil detach "$(img::mountdir "$name")" >/dev/null
+  rm -f "$img"
+  log_ok "removed $img"
+}
+
+main() {
+  local cmd="${1:-list}"
+  shift 2>/dev/null || true
+
+  case "$cmd" in
+    -h|--help|help) usage; exit 0 ;;
+    list)
+      args_contain_help "$@" && { usage_for list; exit 0; }
+      do_list | pkg::table_print $'Image\tState\tSize\tMountpoint'
+      ;;
+    sync)
+      args_contain_help "$@" && { usage_for sync; exit 0; }
+      do_sync
+      ;;
+    mount)
+      args_contain_help "$@" && { usage_for mount; exit 0; }
+      do_mount "$@"
+      ;;
+    status|create|unmount|remove)
+      args_contain_help "$@" && { usage_for "$cmd"; exit 0; }
+      [[ $# -eq 1 ]] || { usage_for "$cmd" >&2; die "$cmd requires exactly one image name"; }
+      case "$cmd" in
+        status)  do_status  "$1" ;;
+        create)  img::create_one "$1" ;;
+        unmount) do_unmount "$1" ;;
+        remove)  do_remove  "$1" ;;
+      esac
+      ;;
+    names) img::names ;;
+    *) usage; die "unknown subcommand: $cmd" ;;
+  esac
+}
+
+main "$@"

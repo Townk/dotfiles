@@ -1,0 +1,47 @@
+# images.toml — declarative sparse disk images, managed by `system-images`.
+#
+# This is an EXAMPLE. The real manifest lives at ~/.config/packages/images.toml
+# and is LOCAL-ONLY: it is chezmoiignored and never committed, because an image
+# name or mountpoint can name a work resource (and this repo is public). Same
+# loose-layer pattern as ~/.ssh/config (see ~/.ssh/config.example).
+#
+# Bootstrap on a new Mac:
+#   cp ~/.config/packages/images.toml.example ~/.config/packages/images.toml
+#   $EDITOR ~/.config/packages/images.toml      # declare your images
+#   system-images sync                          # create + mount them
+#
+# How a section maps to reality — the key is the single source of truth:
+#
+#   [work]                          (section key = "work")
+#     → image file   ~/.local/state/images/work.sparseimage
+#     → volume name  "work"         (hdiutil -volname)
+#     → mount dir    <mountpoint>/work
+#
+# So `mountpoint` below is the PARENT directory; the leaf dir is the key. This
+# keeps the on-disk volume name aligned with the directory you cd into.
+#
+# Fields (all optional except mountpoint):
+#   filesystem  only "case-sensitive-apfs" is supported (the default).
+#   size        max ceiling of the sparse image. A sparse image only consumes
+#               real space as written, so this just caps growth.
+#               Grammar: "<n><unit>" (e.g. "60g", "500m", "1t"). Omit it (or
+#               set "max") to use the host root volume's total capacity.
+#   mountpoint  parent directory; the image mounts at <mountpoint>/<key>.
+#   automount   true → mounted at login by the `images-automount` launchd agent
+#               (declared generically in services.toml) and by `mount --all`.
+#               Defaults to false.
+#
+# `system-images sync` only CREATES and MOUNTS — it never deletes an image
+# (they hold real data). Removing one is the separate, confirmation-gated
+# `system-images remove <name>`.
+
+[example]
+filesystem = "case-sensitive-apfs"
+mountpoint = "~/Projects"   # mounts at ~/Projects/example
+automount  = true
+# size omitted → grows up to the disk's total capacity
+
+# [scratch]
+# size       = "20g"
+# mountpoint = "~/Scratch"  # mounts at ~/Scratch/scratch
+# automount  = false

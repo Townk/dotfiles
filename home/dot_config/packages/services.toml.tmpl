@@ -45,6 +45,24 @@ keep_alive     = true
 run_at_load    = true
 log_path       = "~/.cache/clipboard-bridge/listener.log"
 error_log_path = "~/.cache/clipboard-bridge/listener.log"
+
+# images-automount — mount declared sparse images at login. Generic, one-shot
+# (keep_alive=false): runs `system-images mount --all`, which mounts every
+# image with automount=true in the loose ~/.config/packages/images.toml. With
+# no images.toml it's a clean no-op, so this entry is harmless on any Mac.
+# Replaces the old hand-rolled com.user.mountlocalrepos agent.
+[images-automount]
+description = "Mount declared sparse images at login"
+cmd         = ["system-images", "mount", "--all"]
+run_at_load = true
+keep_alive  = false
+log_path    = "~/.cache/system-images/automount.log"
+error_log_path = "~/.cache/system-images/automount.log"
+
+[images-automount.env]
+# launchd agents don't inherit an interactive PATH; system-images shells out to
+# yq/jq/hdiutil/diskutil. Mirror the dirs the omlx agent bakes in.
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 {{ end }}
 
 # omlx — LLM inference server (Apple Silicon). Parameters mirror what

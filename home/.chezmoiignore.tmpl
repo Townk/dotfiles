@@ -15,11 +15,21 @@
      it stays unmanaged. Managed fragments are pulled in via the file's
      `Include ~/.ssh/config.d/*` (see ~/.ssh/config.example). */}}
 .ssh/config
+{{/* ~/.config/packages/images.toml is the loose, per-machine sparse-image
+     manifest for `system-images`. An image name/mountpoint can name a work
+     resource, so it stays local and is never tracked (the committed
+     images.toml.example documents the format). */}}
+.config/packages/images.toml
 {{ if ne .chezmoi.os "darwin" -}}
 {{/* pinentry-auto routes to Touch ID / pinentry-mac (macOS-only binaries);
      trust.json is Homebrew tap-trust state. Neither is meaningful off a Mac. */}}
 .local/bin/pinentry-auto
 .config/homebrew/trust.json
+{{/* system-images manages macOS sparse disk images (hdiutil/diskutil); the
+     tool, its completion, and the example manifest are meaningless off a Mac. */}}
+.local/bin/system-images
+.local/share/zsh/site-functions/_system-images
+.config/packages/images.toml.example
 {{/* macOS-only run scripts. Scripts live under .chezmoiscripts/ in the
      source root, and chezmoi strips run_* attributes in the managed name. */}}
 .chezmoiscripts/*-symbols-nerd-font-prompt.sh

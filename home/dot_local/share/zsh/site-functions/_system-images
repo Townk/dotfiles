@@ -1,0 +1,60 @@
+#compdef system-images
+#
+# Completion for system-images, the declarative sparse-image manager.
+# Image-name completions are sourced LIVE from the tool (a cheap TOML key read).
+
+# __system-images-names — declared image keys from images.toml
+__system-images-names() {
+  local -a names
+  names=( ${(f)"$(system-images names 2>/dev/null)"} )
+  (( ${#names} )) && _describe -t images 'image' names
+}
+
+_system-images() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a help_flag
+  help_flag=(
+    '(- *)'{-h,--help}'[show help and exit]'
+  )
+
+  _arguments -C \
+    $help_flag \
+    '1: :->cmd' \
+    '*:: :->cmdargs'
+
+  case "$state" in
+    cmd)
+      _values 'subcommand' \
+        'list[show declared + on-disk images]' \
+        'status[show one image'\''s resolved config + state]' \
+        'create[create the sparse image from images.toml]' \
+        'mount[mount one image, or --all]' \
+        'unmount[detach one image]' \
+        'sync[create missing + mount automount images]' \
+        'remove[delete an image file (destructive)]' \
+        'help[show help]'
+      ;;
+    cmdargs)
+      case "$words[1]" in
+        mount)
+          # Per-subcommand --help short-circuits in the script before the name
+          # is looked up, so offer the help flag and --all alongside names.
+          _arguments $help_flag \
+            '--all[mount every automount image]' \
+            ':image:__system-images-names'
+          ;;
+        status|create|unmount|remove)
+          _arguments $help_flag \
+            ':image:__system-images-names'
+          ;;
+        list|sync)
+          _arguments $help_flag
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_system-images "$@"

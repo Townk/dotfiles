@@ -57,6 +57,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | chezmoi tooling | `chezmoi-reverse` | — |
 | Package management | `system-package` + `system-package-{brew,cargo,go,npm,snap,uv}` | `system-package-common.sh` |
 | Service management | `system-service`, `system-service-{launchd,brew}` | `system-package-common.sh` |
+| Disk images | `system-images`¹ | `system-package-common.sh` |
 | Secrets & onboarding | `system-secrets`, `system-onboard` | `system-secrets-common.sh` |
 | Orchestration | `system-update` | — |
 | Utility | `wait-until` | — (standalone POSIX `sh`) |
