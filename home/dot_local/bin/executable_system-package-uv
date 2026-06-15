@@ -51,29 +51,19 @@ uv_write_stamp() {
 }
 
 # uv_list_rows <outdated:true|false>
-# Output one "name\tversion[annotation]" TSV row per installed tool.
+# Output one "name\tversion[annotation]" TSV row per installed tool. The
+# outdated check hits pypi.org in parallel via pkg::outdated_rows (and sorts,
+# since parallel output isn't ordered).
 uv_list_rows() {
   local outdated="${1:-false}"
-
-  uv tool list 2>/dev/null \
-    | awk '/^[a-zA-Z0-9_]/ && !/^No tools/ {
-        name=$1
-        ver=$2
-        # strip leading "v"
-        sub(/^v/, "", ver)
-        print name "\t" ver
-      }' \
-    | while IFS=$'\t' read -r name ver; do
-        if [[ "$outdated" == true ]]; then
-          local latest=""
-          latest=$(curl -fsSL "https://pypi.org/pypi/${name}/json" 2>/dev/null \
-                   | jq -r '.info.version // empty' 2>/dev/null || true)
-          if [[ -n "$latest" && "$latest" != "$ver" ]]; then
-            ver="${ver} ${C_YEL}(update available: ${latest})${C_RES}"
-          fi
-        fi
-        printf '%s\t%s\n' "$name" "$ver"
-      done
+  if [[ "$outdated" == true ]]; then
+    uv_snapshot_versions \
+      | pkg::outdated_rows \
+          'curl -fsSL "https://pypi.org/pypi/$1/json" 2>/dev/null | jq -r ".info.version // empty"' \
+      | sort
+  else
+    uv_snapshot_versions
+  fi
 }
 
 do_list() {
