@@ -60,6 +60,31 @@ setup() {
   [[ "$output" == *"definitely_missing_xyz"* ]]
 }
 
+@test "for_each runs the action per non-empty line and returns 0 when all pass" {
+  ok_one() { return 0; }
+  run bash -c 'source "'"$BATS_TEST_DIRNAME"'/../home/dot_local/lib/common.sh"
+    ok_one() { return 0; }
+    printf "a\n\nb\nc\n" | for_each demo ok_one < /dev/stdin
+    echo "rc=$?"'
+  [[ "$output" == *"rc=0"* ]]
+}
+
+@test "for_each tallies failures, warns, and returns the failure count" {
+  run bash -c 'source "'"$BATS_TEST_DIRNAME"'/../home/dot_local/lib/common.sh"
+    act() { [ "$1" = bad ] && return 1; return 0; }
+    printf "good\nbad\ngood\nbad\n" | { for_each demo act < /dev/stdin; echo "rc=$?"; }'
+  [[ "$output" == *"demo: 2 of 4 failed"* ]]
+  [[ "$output" == *"rc=2"* ]]
+}
+
+@test "for_each action sees the caller's locals via dynamic scope" {
+  run bash -c 'source "'"$BATS_TEST_DIRNAME"'/../home/dot_local/lib/common.sh"
+    act() { [ "$PREFIX" = "ctx" ] || return 1; return 0; }
+    outer() { local PREFIX=ctx; printf "x\n" | for_each demo act < /dev/stdin; }
+    outer; echo "rc=$?"'
+  [[ "$output" == *"rc=0"* ]]
+}
+
 @test "have_tty is callable and returns a boolean status" {
   # Under bats stdin is not a tty; /dev/tty may or may not exist, so we only
   # assert the function runs and yields a 0/1 status (never an error).

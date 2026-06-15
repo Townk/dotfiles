@@ -72,6 +72,18 @@ do_list() {
   snap_list_rows "$outdated"
 }
 
+# Per-snap actions for the for_each loops in do_sync; read declared_full via
+# dynamic scope and return non-zero on failure so for_each can tally.
+_snap_install_one() {
+  local name="$1" line
+  line=$(awk -v n="$name" '$1 == n {print; exit}' "$declared_full")
+  local -a args=( ${(z)line} )
+  sudo snap install "${args[@]}" || { log_warn "failed to install $name"; return 1; }
+}
+_snap_refresh_one() {
+  sudo snap refresh "$1" || { log_warn "failed to refresh $1"; return 1; }
+}
+
 do_sync() {
   log_info "Syncing snap packages..."
 
@@ -94,21 +106,14 @@ do_sync() {
   # Install missing (declared but not installed). The full manifest line is
   # forwarded to `snap install` so per-snap flags (--classic, --channel=…)
   # apply on first install.
-  pkg::diff_only_in "$declared" "$installed" | while IFS= read -r name; do
-    [[ -z "$name" ]] && continue
-    local line; line=$(awk -v n="$name" '$1 == n {print; exit}' "$declared_full")
-    local -a args=( ${(z)line} )
-    sudo snap install "${args[@]}" || { log_warn "failed to install $name"; failed=1; }
-  done
+  for_each "snap install" _snap_install_one \
+    < <(pkg::diff_only_in "$declared" "$installed") || failed=1
 
   # Refresh everything still declared. `snap refresh <name>` is a no-op when
   # the snap is already current, so the cost is one fast check per declared
-  # snap. Scoped to the manifest (not a bare `snap refresh` of every snap on
-  # the box) to stay consistent with the other ecosystem workers.
-  while IFS= read -r name; do
-    [[ -z "$name" ]] && continue
-    sudo snap refresh "$name" || log_warn "failed to refresh $name"
-  done < "$declared"
+  # snap. Refresh failures only warn (they don't fail the sync), matching the
+  # previous behavior — hence `|| true` on the tally.
+  for_each "snap refresh" _snap_refresh_one < "$declared" || true
 
   # Restart services whose backing snap changed version.
   snap_snapshot_versions > "$after_snap"
