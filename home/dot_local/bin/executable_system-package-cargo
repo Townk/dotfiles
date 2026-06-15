@@ -49,22 +49,19 @@ cargo_installed_versions() {
 
 # cargo_list_rows <outdated:true|false>
 # Output one "name\tversion[annotation]" TSV row per installed crate.
-# Outdated check hits the crates.io v1 API; crates installed from git or
-# a local path won't be on crates.io and silently skip the annotation.
+# Outdated check hits the crates.io v1 API (in parallel via pkg::outdated_rows);
+# crates installed from git or a local path won't be on crates.io and silently
+# skip the annotation.
 cargo_list_rows() {
   local outdated="${1:-false}"
-  cargo_installed_versions \
-    | while IFS=$'\t' read -r name ver; do
-        if [[ "$outdated" == true ]]; then
-          local latest=""
-          latest=$(curl -fsSL "https://crates.io/api/v1/crates/${name}" 2>/dev/null \
-                   | jq -r '.crate.max_stable_version // empty' 2>/dev/null || true)
-          if [[ -n "$latest" && "$latest" != "$ver" ]]; then
-            ver="${ver} ${C_YEL}(update available: ${latest})${C_RES}"
-          fi
-        fi
-        printf '%s\t%s\n' "$name" "$ver"
-      done | sort
+  if [[ "$outdated" == true ]]; then
+    cargo_installed_versions \
+      | pkg::outdated_rows \
+          'curl -fsSL "https://crates.io/api/v1/crates/$1" 2>/dev/null | jq -r ".crate.max_stable_version // empty"' \
+      | sort
+  else
+    cargo_installed_versions | sort
+  fi
 }
 
 do_list() {

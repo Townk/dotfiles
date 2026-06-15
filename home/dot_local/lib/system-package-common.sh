@@ -80,6 +80,28 @@ pkg::restart_changed() {
   return 0
 }
 
+# pkg::outdated_rows <fetcher_sh> [jobs]
+# stdin: "name<TAB>version" rows. <fetcher_sh> is a /bin/sh snippet that, given
+# a package name in $1, prints its latest version on stdout (empty = unknown).
+# Emits "name<TAB>version[ (update available: X)]" rows, running up to <jobs>
+# fetches concurrently (default 8) — a big speedup over a serial per-package
+# HTTP loop for `list --update`. Output order is NOT preserved; pipe to `sort`.
+# The $1 guard makes empty input a clean no-op on both GNU xargs (which would
+# otherwise run once with no args) and BSD xargs.
+pkg::outdated_rows() {
+  local jobs="${2:-8}"
+  PKG_FETCHER="$1" C_YEL="$C_YEL" C_RES="$C_RES" \
+  xargs -P "$jobs" -L 1 sh -c '
+    [ -n "$1" ] || exit 0
+    latest=$(sh -c "$PKG_FETCHER" _ "$1" 2>/dev/null || true)
+    if [ -n "$latest" ] && [ "$latest" != "$2" ]; then
+      printf "%s\t%s %s(update available: %s)%s\n" "$1" "$2" "$C_YEL" "$latest" "$C_RES"
+    else
+      printf "%s\t%s\n" "$1" "$2"
+    fi
+  ' _
+}
+
 # pkg::table_print <header> [group_col]
 # Read tab-separated rows from stdin and emit a formatted table:
 #   - header (bright blue), padded to each column's full width
