@@ -346,8 +346,8 @@ brew_list_rows() {
     done < <(mas list 2>/dev/null || true)
   fi
 
-  # Emit rows sorted by (type rank, name). Type rank: formula=1, cask=2, mas=3
-  # so formulas appear first, then casks, then App Store apps.
+  # Emit rows sorted by (type rank, name). Type rank: formula=1, dep=2, cask=3,
+  # mas=4 — so formulas appear first, then transient deps, casks, App Store apps.
   local k="" v="" t="" rank=0
   {
     for k in "${(@k)pkg_map}"; do
