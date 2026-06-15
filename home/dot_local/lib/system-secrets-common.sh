@@ -85,109 +85,16 @@ sec::manifest_has() {
 }
 
 # ---------------------------------------------------------------------------
-# Interactive prompt helpers. Raw read/read -s for v1 (no gum dependency in a
-# bootstrap-adjacent tool; predictable over SSH for secret entry). Isolated
-# here so a future gum backend can drop in. All read from /dev/tty so prompts
-# work even when stdin is a pipe.
+# Interactive prompt helpers (prompt::required / ::default / ::secret /
+# ::choice / ::confirm) live in the shared prompt-common.zsh module.
 # ---------------------------------------------------------------------------
-sec::have_tty() { [[ -t 0 || -e /dev/tty ]]; }
-
-# prompt_required <varname> <prompt> — loop until non-empty; sets the named var.
-prompt_required() {
-  local __var="$1" __prompt="$2" __val=""
-  while :; do
-    printf '%s%s%s ' "$C_BWH" "$__prompt" "$C_RES" >/dev/tty
-    IFS= read -r __val </dev/tty || die "input aborted"
-    [[ -n "$__val" ]] && break
-    log_warn "a value is required"
-  done
-  printf -v "$__var" '%s' "$__val"
-}
-
-# prompt_default <varname> <prompt> <default> — empty input keeps the default.
-prompt_default() {
-  local __var="$1" __prompt="$2" __default="$3" __val=""
-  printf '%s%s%s [%s] ' "$C_BWH" "$__prompt" "$C_RES" "$__default" >/dev/tty
-  IFS= read -r __val </dev/tty || die "input aborted"
-  [[ -n "$__val" ]] || __val="$__default"
-  printf -v "$__var" '%s' "$__val"
-}
-
-# prompt_secret <varname> <prompt> — masked entry: echoes a '*' per keystroke
-# instead of the usual blind no-echo read, so there's visual feedback while
-# typing/pasting a secret. Supports Backspace and ^U (clear). Reads raw, one
-# char at a time, with the tty put in -echo -icanon; the terminal is always
-# restored, including on ^C. Falls back to a plain no-echo read when there is
-# no controlling terminal (pipelines/tests). Loops until non-empty.
-prompt_secret() {
-  local __var="$1" __prompt="$2" __val=""
-
-  if ! sec::have_tty; then
-    IFS= read -rs __val </dev/tty 2>/dev/null || IFS= read -rs __val \
-      || die "input aborted"
-    printf -v "$__var" '%s' "$__val"
-    return 0
-  fi
-
-  local __saved __ch
-  # If we can't capture/drive the tty (no controlling terminal, restricted
-  # environment), fall back to a blind no-echo read rather than spin.
-  if ! __saved="$(stty -g </dev/tty 2>/dev/null)" || [[ -z "$__saved" ]]; then
-    while :; do
-      printf '%s%s%s ' "$C_BWH" "$__prompt" "$C_RES" >/dev/tty
-      IFS= read -rs __val </dev/tty || die "input aborted"
-      printf '\n' >/dev/tty
-      [[ -n "$__val" ]] && break
-      log_warn "a value is required"
-    done
-    printf -v "$__var" '%s' "$__val"
-    return 0
-  fi
-  trap 'stty "$__saved" </dev/tty 2>/dev/null; printf "\n" >/dev/tty; die "input aborted"' INT
-  while :; do
-    printf '%s%s%s ' "$C_BWH" "$__prompt" "$C_RES" >/dev/tty
-    __val=""
-    stty -echo -icanon min 1 time 0 </dev/tty
-    while IFS= read -rk 1 __ch </dev/tty; do
-      case "$__ch" in
-        $'\n'|$'\r') break ;;
-        $'\177'|$'\b')                       # Backspace / Delete
-          (( ${#__val} )) && { __val="${__val[1,-2]}"; printf '\b \b' >/dev/tty; } ;;
-        $'\025')                             # ^U — clear the whole entry
-          while (( ${#__val} )); do __val="${__val[1,-2]}"; printf '\b \b' >/dev/tty; done ;;
-        *) __val+="$__ch"; printf '*' >/dev/tty ;;
-      esac
-    done
-    stty "$__saved" </dev/tty
-    printf '\n' >/dev/tty
-    [[ -n "$__val" ]] && break
-    log_warn "a value is required"
-  done
-  trap - INT
-  printf -v "$__var" '%s' "$__val"
-}
-
-# prompt_choice <varname> <prompt> <opt>... — accept only a listed option.
-prompt_choice() {
-  local __var="$1" __prompt="$2"; shift 2
-  local __opts=("$@") __val="" __o=""
-  while :; do
-    printf '%s%s%s (%s) ' "$C_BWH" "$__prompt" "$C_RES" "${(j:/:)__opts}" >/dev/tty
-    IFS= read -r __val </dev/tty || die "input aborted"
-    for __o in "${__opts[@]}"; do
-      [[ "$__val" == "$__o" ]] && { printf -v "$__var" '%s' "$__val"; return 0; }
-    done
-    log_warn "choose one of: ${(j:, :)__opts}"
-  done
-}
-
-# confirm <prompt> — return 0 on yes, 1 on no (default no).
-confirm() {
-  local __ans=""
-  printf '%s%s%s [y/N] ' "$C_BWH" "$1" "$C_RES" >/dev/tty
-  IFS= read -r __ans </dev/tty || return 1
-  [[ "$__ans" == [yY] || "$__ans" == [yY][eE][sS] ]]
-}
+if [ -n "${BASH_SOURCE:-}" ]; then
+  _sec_prompt_self="${BASH_SOURCE[0]}"
+else
+  _sec_prompt_self="${(%):-%x}"
+fi
+source "$(dirname "$_sec_prompt_self")/prompt-common.zsh"
+unset _sec_prompt_self
 
 # ---------------------------------------------------------------------------
 # Slot ids and slot-derived paths.
@@ -425,8 +332,8 @@ sec::op_ensure_token() {
   fi
 
   # 3. prompt for a ref and read it via the desktop app
-  if command -v op >/dev/null 2>&1 && sec::have_tty; then
-    prompt_default __ref \
+  if command -v op >/dev/null 2>&1 && have_tty; then
+    prompt::default __ref \
       "1Password op:// ref for the service-account token (e.g. op://<vault>/<item>/credential; blank to paste)" \
       ""
     if [[ -n "$__ref" ]]; then
@@ -441,7 +348,7 @@ sec::op_ensure_token() {
   fi
 
   # 4. masked paste
-  prompt_secret __tok "1Password service-account token (stored at $OP_SA_TOKEN_FILE):"
+  prompt::secret __tok "1Password service-account token (stored at $OP_SA_TOKEN_FILE):"
   sec::op_store_token "$__tok"; __tok=""
   log_ok "stored service-account token (loose, 0600) at $OP_SA_TOKEN_FILE"
 }
@@ -546,7 +453,7 @@ sec::rebuild_slot() {
     trap 'rm -f "$plain"' EXIT
     log_info "Enter values for the '$profile' secrets (hidden). Headless slot $slot:"
     for n in "${names[@]}"; do
-      prompt_secret val "  $n — $(sec::manifest_prompt "$n"):"
+      prompt::secret val "  $n — $(sec::manifest_prompt "$n"):"
       printf 'export %s=%s\n' "$n" "${(qq)val}" >>"$plain"
     done
     mkdir -p "$SECRETS_BLOB_DIR"
@@ -568,7 +475,7 @@ sec::rebuild_slot() {
       vaults=("${(@f)$(sec::op vault list --format=json 2>/dev/null | jq -r '.[].name')}")
       vaults=(${vaults:#})
       if (( ${#vaults[@]} > 1 )); then
-        prompt_choice vault "1Password vault" "${vaults[@]}"
+        prompt::choice vault "1Password vault" "${vaults[@]}"
       elif (( ${#vaults[@]} == 1 )); then
         vault="${vaults[1]}"
       fi
@@ -581,8 +488,8 @@ sec::rebuild_slot() {
       if [[ -n "$vault" ]]; then
         ref="op://$vault/$n/$hash"
         if sec::op_field_exists "$vault" "$n" "$hash"; then
-          if confirm "  $n ($desc): field $hash already set — replace its value?"; then
-            prompt_secret val "    new value for $n (masked):"
+          if prompt::confirm "  $n ($desc): field $hash already set — replace its value?"; then
+            prompt::secret val "    new value for $n (masked):"
             sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
               || die "could not update $ref (does the service account have write access to '$vault'?)"
             val=""; log_ok "    updated $ref"
@@ -590,13 +497,13 @@ sec::rebuild_slot() {
             log_info "    keeping existing $ref"
           fi
         else
-          prompt_secret val "  $n ($desc) — value for field $hash (masked):"
+          prompt::secret val "  $n ($desc) — value for field $hash (masked):"
           sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
             || die "could not write $ref (does the service account have write access to '$vault'?)"
           val=""; log_ok "    wrote $ref"
         fi
       else
-        prompt_required ref "  $n — op:// reference ($desc):"
+        prompt::required ref "  $n — op:// reference ($desc):"
       fi
       pairs+=("$n=$ref")
     done
