@@ -78,24 +78,15 @@ do_list() {
   npm_list_rows "$outdated"
 }
 
-# npm_line_canonical <manifest-line>
-# First word when the line uses the `--` install-spec form; otherwise the
-# whole line (PyPI / registry package name).
-npm_line_canonical() {
-  local -a words=(${=1})
-  print -r -- "${words[1]}"
-}
-
 # npm_line_install_spec <manifest-line>
 # Spec passed to `npm install -g`. For `name -- <spec>` lines, everything
-# after the `--` token; otherwise the bare package name.
+# after the `--` token; otherwise the bare package name (pkg::line_canonical).
 npm_line_install_spec() {
   local line="$1"
-  local -a words=(${=line})
-  if [[ ${words[2]:-} == -- ]]; then
+  if pkg::line_has_spec "$line"; then
     print -r -- "${line#*-- }"
   else
-    print -r -- "${words[1]}"
+    pkg::line_canonical "$line"
   fi
 }
 
@@ -113,13 +104,6 @@ npm_build_global_if_needed() {
   (cd "$dir" && npm run build) || log_warn "build failed for $name"
 }
 
-# npm_line_uses_install_spec <manifest-line>
-# True when the line uses `<name> -- <spec>` (non-registry install).
-npm_line_uses_install_spec() {
-  local -a words=(${=1})
-  [[ ${words[2]:-} == -- ]]
-}
-
 do_sync() {
   log_info "Syncing npm globals..."
 
@@ -132,7 +116,7 @@ do_sync() {
 
   pkg::manifest_read "$NPMFILE" > "$declared_full"
   while IFS= read -r line; do
-    [[ -n "$line" ]] && npm_line_canonical "$line"
+    [[ -n "$line" ]] && pkg::line_canonical "$line"
   done < "$declared_full" > "$declared"
   npm_list_installed > "$installed"
 
@@ -145,7 +129,7 @@ do_sync() {
   pkg::diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     while IFS= read -r line; do
-      [[ "$(npm_line_canonical "$line")" == "$pkg" ]] || continue
+      [[ "$(pkg::line_canonical "$line")" == "$pkg" ]] || continue
       npm install -g "${NPM_SYNC_FLAGS[@]}" "$(npm_line_install_spec "$line")"
       npm_build_global_if_needed "$pkg"
       break
@@ -154,10 +138,10 @@ do_sync() {
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    if npm_line_uses_install_spec "$line"; then
-      npm_build_global_if_needed "$(npm_line_canonical "$line")"
+    if pkg::line_has_spec "$line"; then
+      npm_build_global_if_needed "$(pkg::line_canonical "$line")"
     else
-      npm update -g "${NPM_SYNC_FLAGS[@]}" "$(npm_line_canonical "$line")" || true
+      npm update -g "${NPM_SYNC_FLAGS[@]}" "$(pkg::line_canonical "$line")" || true
     fi
   done < "$declared_full"
 

@@ -30,6 +30,25 @@ pkg::manifest_read() {
   ' "$file"
 }
 
+# pkg::line_canonical <manifest-line>
+# The canonical package name: the first shell-token of the line. zsh's ${(z)}
+# tokenizer (quote-aware) is the shared dialect — workers used to diverge here
+# (npm split on $IFS, others shell-tokenized; equivalent for unquoted names,
+# but ${(z)} is the correct one).
+pkg::line_canonical() {
+  local -a words=( ${(z)1} )
+  print -r -- "${words[1]:-}"
+}
+
+# pkg::line_has_spec <manifest-line>
+# True when the line uses the `<name> -- <install-spec>` form — a non-registry
+# install (git / local path / editable) where the spec after `--` is the
+# package argument rather than the bare name.
+pkg::line_has_spec() {
+  local -a words=( ${(z)1} )
+  [[ "${words[2]:-}" == "--" ]]
+}
+
 # pkg::diff_only_in <file_a> <file_b>
 # Print sorted lines that appear in file_a but not in file_b.
 pkg::diff_only_in() {
