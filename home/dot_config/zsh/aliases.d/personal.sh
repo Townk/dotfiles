@@ -13,7 +13,6 @@ if command -v eza >/dev/null; then
 else
   alias ls="ls -F -h --color=always"
 fi
-command -v terminal-notifier >/dev/null && alias notify="terminal-notifier"
 
 ## basic commands
 alias cmds="terminal_commands"

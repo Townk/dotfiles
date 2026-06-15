@@ -1,0 +1,59 @@
+#!/usr/bin/env zsh
+# notify — show a transient on-screen notification via Hammerspoon's OSD.
+#
+# A standalone front-end over the `notify` primitive in ~/.local/lib/common.sh.
+# It replaces terminal-notifier — whose cross-app posting and custom icons
+# stopped working on recent macOS — with our own Hammerspoon OSD: an ephemeral,
+# centered widget carrying a chosen icon and an optional system sound.
+#
+# Usage:
+#   notify [--icon SPEC] [--sound NAME] [--ansi] MESSAGE...
+#
+#   --icon  SPEC   OSD icon: an SVG name, `glyph:<nerd-font-name>`, or
+#                  `swatch:#RRGGBB`. Omitted → no icon.
+#   --sound NAME   System sound (System Settings → Sound), e.g. Frog/Glass.
+#                  Omitted → silent.
+#   --ansi         MESSAGE may carry ANSI SGR colour escapes.
+#   -h, --help     show this help
+#
+# The OSD is drawn by the running Hammerspoon; if Hammerspoon (its `hs` CLI) is
+# unavailable this exits non-zero with an error. The notification work itself
+# lives in the shared `notify` library function so other scripts can source it
+# and skip this intermediary process.
+set -eu -o pipefail
+
+source "$HOME/.local/lib/common.sh" \
+  || { print -ru2 -- "notify: cannot source common.sh"; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  notify [--icon SPEC] [--sound NAME] [--ansi] MESSAGE...
+
+Show a transient on-screen notification via Hammerspoon's OSD.
+
+  --icon  SPEC   OSD icon: an SVG name, glyph:<nerd-font-name>, or
+                 swatch:#RRGGBB. Omitted shows no icon.
+  --sound NAME   System sound (System Settings → Sound), e.g. Frog or Glass.
+                 Omitted is silent.
+  --ansi         MESSAGE may carry ANSI SGR colour escapes.
+  -h, --help     show this help
+
+Examples:
+  notify "Build finished"
+  notify --icon glyph:cod-check --sound Glass "Deploy complete"
+  notify --icon swatch:#ff5f87 --sound Frog "Path copied to clipboard"
+EOF
+}
+
+is_help "${1:-}" && { usage; exit 0; }
+
+# `notify` here resolves to the sourced library function (a shell function
+# shadows the same-named external command), so this never recurses.
+rc=0
+notify "$@" || rc=$?
+case "$rc" in
+  0) ;;
+  2) log_error "nothing to show — provide a MESSAGE (and/or --icon)"; usage >&2; exit 2 ;;
+  *) die "Hammerspoon not available (the 'hs' CLI). Is Hammerspoon running?" ;;
+esac

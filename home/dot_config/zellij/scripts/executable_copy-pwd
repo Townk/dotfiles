@@ -38,7 +38,6 @@ set -euo pipefail
 
 LSOF="/usr/sbin/lsof"
 PBCOPY="/usr/bin/pbcopy"
-HS="${HS:-/opt/homebrew/bin/hs}"
 
 COPY_PWD_ICON="${COPY_PWD_ICON:-glyph:cod-folder}"
 COPY_PWD_SOUND="${COPY_PWD_SOUND-Frog}"
@@ -94,30 +93,12 @@ else
   display="Path copied to clipboard"
 fi
 
-# Quote a shell string as a Lua double-quoted string literal.
-lua_string() {
-  local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  value="${value//$'\033'/\\27}"
-  value="${value//$'\n'/\\n}"
-  value="${value//$'\r'/\\r}"
-  value="${value//$'\t'/\\t}"
-  printf '"%s"' "$value"
-}
-
-# Hammerspoon owns the custom OSD. `hs -c` runs inside the already-running
-# Hammerspoon process, so client environment variables are not visible there;
-# pass arguments as Lua string literals instead.
-# Backgrounded so OSD hiccups never delay or fail the clipboard copy.
-if [[ ! -x "$HS" ]]; then
-  HS="$(command -v hs 2>/dev/null || true)"
-fi
-
-if [[ -n "$HS" && -x "$HS" ]]; then
-  (
-    "$HS" -c "notify($(lua_string "$COPY_PWD_ICON"), $(lua_string "$display"), $(lua_string "$COPY_PWD_SOUND"))"
-  ) >/dev/null 2>&1 &
+# Hammerspoon owns the custom OSD, driven by the shared `notify` helper (it
+# resolves `hs` and quotes the Lua call). Sourced AFTER the clipboard write
+# above so the copy itself never depends on the library being present.
+# Backgrounded so any OSD hiccup never delays or fails the clipboard copy.
+if source "$HOME/.local/lib/common.sh" 2>/dev/null; then
+  notify --icon "$COPY_PWD_ICON" --sound "$COPY_PWD_SOUND" "$display" >/dev/null 2>&1 &
 fi
 
 exit 0

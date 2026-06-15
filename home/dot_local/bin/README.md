@@ -64,12 +64,31 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | Disk images | `system-images`¹ | `system-package-common.sh` |
 | Secrets & onboarding | `system-secrets`, `system-onboard` | `system-secrets-common.sh` |
 | Orchestration | `system-update` | — |
+| Notifications | `notify` | `common.sh` (the `notify` primitive) |
 | Utility | `wait-until` | — (standalone POSIX `sh`) |
 
 ¹ macOS-only; excluded from other hosts via `.chezmoiignore.tmpl`.
 ² macOS + graphical Linux; excluded from the headless dev-shell and other
 non-GUI hosts via `.chezmoiignore.tmpl`. On Linux a `run_onchange` generates a
 `tab-edit.desktop` handler (see `.chezmoiscripts/`).
+
+## `notify`
+
+Our replacement for `terminal-notifier` (whose cross-app posting and custom
+icons broke on recent macOS). It shows a transient notification through the
+running Hammerspoon's custom OSD:
+
+```sh
+notify [--icon SPEC] [--sound NAME] [--ansi] MESSAGE...
+```
+
+The actual work lives in the `notify` primitive in `common.sh`, so any script
+that already sources the library can call `notify …` directly — no extra
+process between it and Hammerspoon's `hs` CLI. The bin is the standalone
+front-end (help text, argument handling, and a hard error when Hammerspoon
+isn't running). The library function is best-effort instead: it returns
+non-zero quietly so hot paths (e.g. the zellij `copy-pwd` helper) can ignore a
+missing OSD.
 
 ## `wait-until`
 

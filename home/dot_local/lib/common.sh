@@ -108,3 +108,80 @@ for_each() {
   [ "$failures" -gt 0 ] && log_warn "$label: $failures of $total failed"
   return "$failures"
 }
+
+# --- notifications ----------------------------------------------------------
+# notify [--icon SPEC] [--sound NAME] [--ansi] MESSAGE...
+#
+# Show a transient on-screen notification through the already-running
+# Hammerspoon's custom OSD (the same widget used for volume/brightness), via
+# the global `notify`/`notifyAnsi` Lua helpers it exposes. This is our
+# replacement for terminal-notifier: ephemeral, consistent, with a chosen icon
+# and system sound — and it actually honours both on current macOS.
+#
+#   --icon  SPEC   OSD icon: an SVG name, `glyph:<nerd-font-name>`, or
+#                  `swatch:#RRGGBB`. Omitted → no icon.
+#   --sound NAME   System sound (System Settings → Sound), e.g. Frog/Glass.
+#                  Omitted/empty → silent.
+#   --ansi         MESSAGE may carry ANSI SGR colour escapes (routes to the
+#                  `notifyAnsi` helper instead of `notify`).
+#
+# Best-effort by design: it drives the running Hammerspoon through its `hs`
+# CLI (path overridable via $HS). Returns 1 (quietly) when `hs` is unavailable
+# and 2 when there is nothing to show, so callers on hot paths can ignore the
+# result. Synchronous — background it (`notify ... &`) where a stray OSD hiccup
+# must never delay the caller.
+notify() {
+  local icon="" sound="" fn="notify"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -i|--icon)
+        if [ $# -ge 2 ]; then icon="$2"; shift 2; else shift; fi ;;
+      --icon=*)    icon="${1#--icon=}"; shift ;;
+      -s|--sound)
+        if [ $# -ge 2 ]; then sound="$2"; shift 2; else shift; fi ;;
+      --sound=*)   sound="${1#--sound=}"; shift ;;
+      --ansi)      fn="notifyAnsi"; shift ;;
+      --)          shift; break ;;
+      *)           break ;;
+    esac
+  done
+
+  local text="$*"
+  [ -n "$text" ] || [ -n "$icon" ] || return 2
+
+  local hs="${HS:-/opt/homebrew/bin/hs}"
+  [ -x "$hs" ] || hs="$(command -v hs 2>/dev/null || true)"
+  [ -n "$hs" ] && [ -x "$hs" ] || return 1
+
+  # `hs -c` runs inside the already-running Hammerspoon process, so client
+  # environment variables are invisible there; pass every argument as a Lua
+  # string literal (or bare `nil` when empty).
+  local cmd
+  cmd="$fn($(_notify_lua_arg "$icon"), $(_notify_lua_arg "$text"), $(_notify_lua_arg "$sound"))"
+
+  # The `hs` CLI blocks on its Mach-port lookup when it can't reach the running
+  # Hammerspoon (it's not running, or we're in a different launch context), and
+  # its own `-t` timeout does not bound that wait. Cap it with timeout(1) so a
+  # stuck lookup can never wedge the caller; on its own this stays synchronous.
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout 5 "$hs" -t 4 -c "$cmd"
+  elif command -v timeout >/dev/null 2>&1; then
+    timeout 5 "$hs" -t 4 -c "$cmd"
+  else
+    "$hs" -t 4 -c "$cmd"
+  fi
+}
+
+# _notify_lua_arg VALUE — emit a Lua literal on stdout: a double-quoted,
+# escaped string, or bare `nil` when VALUE is empty. Private to notify().
+_notify_lua_arg() {
+  [ -n "$1" ] || { printf 'nil'; return 0; }
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\"/\\\"}"
+  v="${v//$'\033'/\\27}"
+  v="${v//$'\n'/\\n}"
+  v="${v//$'\r'/\\r}"
+  v="${v//$'\t'/\\t}"
+  printf '"%s"' "$v"
+}
