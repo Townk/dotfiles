@@ -119,12 +119,17 @@ open_in_wezterm() {
     # CASE: COLD START
     open -a WezTerm --args start "${WEZTERM_CWD_ARGS[@]}" -- "$NVIM_BIN" "$@"
 
-    # Wait for socket and apply title to the active tab of the new PID
-    sleep 1.2
+    # Wait (bounded) for the GUI process, then its control socket, instead of a
+    # fixed sleep that is either too short on a slow launch or wasteful on a fast
+    # one. wait-until returns the instant each condition holds; `|| true` keeps
+    # the original best-effort behavior if it is unavailable.
+    wait-until --timeout 6s --interval 0.1 -- \
+      sh -c 'pgrep -x wezterm-gui >/dev/null 2>&1 || pgrep -x wezterm >/dev/null 2>&1' || true
     NEW_PID=$(pgrep -x "wezterm-gui" | sed -n '1p')
     [ -n "$NEW_PID" ] || NEW_PID=$(pgrep -x "wezterm" | sed -n '1p')
     if [ -n "$NEW_PID" ]; then
       export WEZTERM_UNIX_SOCKET="$HOME/.local/share/wezterm/gui-sock-$NEW_PID"
+      wait-until --timeout 4s --interval 0.1 -- test -S "$WEZTERM_UNIX_SOCKET" || true
       "$WEZTERM_BIN" cli set-tab-title "$TAB_TITLE" 2>/dev/null
     fi
   else

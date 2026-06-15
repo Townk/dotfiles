@@ -406,6 +406,7 @@ stage_commit() {
   local idx="$1"
   local files
   files=("${(@f)$(jq -r ".commits[$idx].files[]" "$plan_file")}")
+  files=(${files:#})   # drop empty elements (a zero-file group splits to one "")
   [[ ${#files[@]} -gt 0 ]] || { log_warn "commit $((idx + 1)) has no files; skipping"; return 1; }
   git add -- "${files[@]}"
 }
