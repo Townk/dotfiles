@@ -22,8 +22,9 @@
 .config/packages/images.toml
 {{ if ne .chezmoi.os "darwin" -}}
 {{/* pinentry-auto routes to Touch ID / pinentry-mac (macOS-only binaries);
-     trust.json is Homebrew tap-trust state. Neither is meaningful off a Mac. */}}
-.local/bin/pinentry-auto
+     trust.json is Homebrew tap-trust state. Neither is meaningful off a Mac.
+     It lives in libexec (gpg-agent calls it by absolute path; never on PATH). */}}
+.local/libexec/pinentry-auto
 .config/homebrew/trust.json
 {{/* system-images manages macOS sparse disk images (hdiutil/diskutil); the
      tool, its completion, and the example manifest are meaningless off a Mac. */}}

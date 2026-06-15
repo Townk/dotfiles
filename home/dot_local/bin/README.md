@@ -8,6 +8,10 @@ The scripts are thin front-ends over a small set of **sourced libraries** in
 `~/.local/lib`. The goal: no primitive is implemented twice, and each script is
 mostly its own unique logic.
 
+Backend helpers that are invoked by *other programs* (never typed by the user,
+never on `PATH`) live in `~/.local/libexec/` instead — currently
+`pinentry-auto`, gpg-agent's `pinentry-program`, which it calls by absolute path.
+
 ## Library layering
 
 Everything bottoms out at one bash-and-zsh-compatible base; the rest are
@@ -53,7 +57,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh` |
 | Symbol pickers (fzf) | `pick-glyph`, `pick-gitmoji` | `pick-symbols-common.zsh` → `pick-common.zsh` |
 | File preview (fzf/yazi) | `preview` | — |
-| Editor/terminal glue | `tab-edit`², `pinentry-auto`¹ | `platform.sh` (tab-edit) |
+| Editor/terminal glue | `tab-edit`² | `platform.sh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |
 | Package management | `system-package` + `system-package-{brew,cargo,go,npm,snap,uv}` | `system-package-common.sh` |
 | Service management | `system-service`, `system-service-{launchd,brew}` | `system-package-common.sh` |

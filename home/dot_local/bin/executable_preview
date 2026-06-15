@@ -28,7 +28,7 @@
 
 set -u
 
-. ~/.local/lib/image-protocol-support
+. ~/.local/lib/image-protocol-support.sh
 
 # === Helpers ===
 
