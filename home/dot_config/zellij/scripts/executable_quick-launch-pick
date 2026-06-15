@@ -32,7 +32,6 @@ PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
 PICK_JQ="$PICK_LIB_DIR/pick.jq"
 source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" \
   || { print -ru2 -- "quick-launch-pick: cannot source pick-common.zsh from $PICK_LIB_DIR"; exit 1; }
-die() { pick::die "$@"; }
 
 kind=""
 no_border="${QUICK_LAUNCH_NO_BORDER:+1}"
@@ -48,8 +47,8 @@ while (( $# > 0 )); do
 done
 [[ -n "$kind" ]] || die "missing kind (pane|tab|workspace)"
 
-pick::need yq
-pick::need jq
+require_cmd yq
+require_cmd jq
 
 TARGETS="${QUICK_LAUNCH_TARGETS:-$HOME/.config/zellij/quick-launch/default.yaml}"
 [[ -r "$TARGETS" ]] || die "cannot read targets file: $TARGETS"

@@ -114,22 +114,17 @@
 # shell side of the same contract.
 
 # --- diagnostics ---------------------------------------------------
+# Logging (die), help-token dispatch, and require_cmd come from the shared
+# base. Source it relative to THIS file. BASH_SOURCE under bash; %x under zsh.
+if [ -n "${BASH_SOURCE:-}" ]; then
+  _pick_common_self="${BASH_SOURCE[0]}"
+else
+  _pick_common_self="${(%):-%x}"
+fi
+source "$(dirname "$_pick_common_self")/common.sh"
+unset _pick_common_self
 
-pick::default_name() {
-  local origin="${funcfiletrace[-1]:-${functrace[-1]:-${ZSH_ARGZERO:-$0}}}"
-  origin="${origin%:*}"
-  print -r -- "pick::${origin:t:r}"
-}
-
-typeset -g __pick_name="${PICK_NAME:-$(pick::default_name)}"
-
-pick::die() { print -ru2 -- "${__pick_name:-pick}: $*"; exit 1; }
-
-pick::need() {
-  command -v "$1" >/dev/null 2>&1 || pick::die "$1 not found in PATH${2:+ ($2)}"
-}
-
-pick::need fzf
+require_cmd fzf
 
 # --- cache staleness ----------------------------------------------
 
@@ -164,7 +159,7 @@ pick::clipboard() {
   if   command -v pbcopy  >/dev/null 2>&1; then printf '%s' "$s" | pbcopy
   elif command -v wl-copy >/dev/null 2>&1; then printf '%s' "$s" | wl-copy
   elif command -v xclip   >/dev/null 2>&1; then printf '%s' "$s" | xclip -selection clipboard
-  else pick::die "no clipboard helper found (pbcopy / wl-copy / xclip)"
+  else die "no clipboard helper found (pbcopy / wl-copy / xclip)"
   fi
 }
 
@@ -531,7 +526,7 @@ pick::start_format_line() {
       fi
       ;;
     *)
-      pick::die "invalid --output: $output (expected visible, tail, or field:N)"
+      die "invalid --output: $output (expected visible, tail, or field:N)"
       ;;
   esac
 }
@@ -547,7 +542,7 @@ pick::line() {
 }
 
 pick::start_missing_arg() {
-  pick::die "missing arg for $1"
+  die "missing arg for $1"
 }
 
 # Parse one `KEY:OUTPUT` pair for --key-output into the caller's `key_output`
@@ -558,10 +553,10 @@ pick::start_add_key_output() {
   local pair="$1"
   local k="${pair%%:*}" spec="${pair#*:}"
   [[ -n "$k" && "$k" != "$pair" ]] || \
-    pick::die "invalid --key-output: $pair (expected KEY:OUTPUT)"
+    die "invalid --key-output: $pair (expected KEY:OUTPUT)"
   case "$spec" in
     raw|visible|tail|field:<->) ;;
-    *) pick::die "invalid --key-output spec: $spec (expected raw, visible, tail, or field:N)" ;;
+    *) die "invalid --key-output spec: $spec (expected raw, visible, tail, or field:N)" ;;
   esac
   key_output[$k]="$spec"
   expect_keys+=( "$k" )
@@ -597,7 +592,7 @@ pick::background_setup() {
   (( ${#binds[@]} )) || return 0
 
   pick_background_fifo="$(mktemp -u "${TMPDIR:-/tmp}/pick-background.XXXXXX")"
-  mkfifo -m 600 "$pick_background_fifo" || pick::die "could not create background FIFO"
+  mkfifo -m 600 "$pick_background_fifo" || die "could not create background FIFO"
 
   # The broker is a background subshell of THIS process, so it sees pick::* and
   # $hook. Holding the FIFO open read-write keeps the read loop alive across the
@@ -615,10 +610,10 @@ pick::background_setup() {
   for b in "${binds[@]}"; do
     key="${b%%:*}"; spec="${b#*:}"
     [[ -n "$key" && "$key" != "$b" ]] || \
-      pick::die "invalid --key-background: $b (expected KEY:SPEC)"
+      die "invalid --key-background: $b (expected KEY:SPEC)"
     case "$spec" in
       raw|visible|tail|field:<->) ;;
-      *) pick::die "invalid --key-background spec: $spec (expected raw, visible, tail, or field:N)" ;;
+      *) die "invalid --key-background spec: $spec (expected raw, visible, tail, or field:N)" ;;
     esac
     # The child only writes; one small printf is an atomic FIFO write. The FIFO
     # path is single-quoted so a TMPDIR with spaces can't word-split the
@@ -843,7 +838,7 @@ pick::start() {
         break
         ;;
       -*)
-        pick::die "unknown arg for pick::start: $1"
+        die "unknown arg for pick::start: $1"
         ;;
       *)
         source="$1"; shift
@@ -851,7 +846,7 @@ pick::start() {
         ;;
     esac
   done
-  (( $# == 0 )) || pick::die "pick::start accepts at most one input file"
+  (( $# == 0 )) || die "pick::start accepts at most one input file"
 
   # Opt-in file state: --cache-state (resume) and --cache-usage (recency) are
   # written by pick::record; make sure their parent dirs exist first.
@@ -874,7 +869,7 @@ pick::start() {
 
   case "$output" in
     raw|visible|tail|field:<->) ;;
-    *) pick::die "invalid --output: $output (expected raw, visible, tail, or field:N)" ;;
+    *) die "invalid --output: $output (expected raw, visible, tail, or field:N)" ;;
   esac
 
   # `enter` always rides in --expect so pick::run's 3-line parse (query, key,
@@ -894,7 +889,7 @@ pick::start() {
   pick_input=( cat )
 
   if [[ "$source" == "/dev/stdin" ]]; then
-    tmp_source="$(mktemp "${TMPDIR:-/tmp}/pick-start.XXXXXX")" || pick::die "could not create temp input"
+    tmp_source="$(mktemp "${TMPDIR:-/tmp}/pick-start.XXXXXX")" || die "could not create temp input"
     trap '[[ -n "${tmp_source:-}" ]] && rm -f -- "$tmp_source"' EXIT INT TERM
     cat > "$tmp_source"
     source="$tmp_source"

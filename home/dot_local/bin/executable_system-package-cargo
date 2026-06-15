@@ -60,7 +60,7 @@ cargo_list_rows() {
           latest=$(curl -fsSL "https://crates.io/api/v1/crates/${name}" 2>/dev/null \
                    | jq -r '.crate.max_stable_version // empty' 2>/dev/null || true)
           if [[ -n "$latest" && "$latest" != "$ver" ]]; then
-            ver="${ver} ${PKG_C_YEL}(update available: ${latest})${PKG_C_RES}"
+            ver="${ver} ${C_YEL}(update available: ${latest})${C_RES}"
           fi
         fi
         printf '%s\t%s\n' "$name" "$ver"
@@ -73,7 +73,7 @@ do_list() {
     case "$1" in
       -u|--update) outdated=true; shift ;;
       -a|--all)    shift ;;  # no-op: cargo has no transient-dep concept here
-      *) pkg_die "unknown flag for list: $1" ;;
+      *) die "unknown flag for list: $1" ;;
     esac
   done
   cargo_list_rows "$outdated"
@@ -129,7 +129,7 @@ cargo_write_manifest_stamp() {
 }
 
 do_sync() {
-  pkg_info "Syncing cargo crates..."
+  log_info "Syncing cargo crates..."
 
   # Prefer prebuilt binaries for bare crates when cargo-binstall is present
   # (see cargo_provision); detected once, falls back to `cargo install`.
@@ -159,7 +159,7 @@ do_sync() {
   pkg_diff_only_in "$declared" "$installed" | while IFS= read -r crate; do
     [[ -z "$crate" ]] && continue
     local line; line=$(awk -v c="$crate" '$1 == c {print; exit}' "$declared_full")
-    cargo_provision "$line" || { had_failures=1; pkg_warn "failed to install $crate"; }
+    cargo_provision "$line" || { had_failures=1; log_warn "failed to install $crate"; }
   done
 
   # Upgrade everything still declared. cargo_provision is the canonical
@@ -170,7 +170,7 @@ do_sync() {
     local crate="${line%% *}"
     local force=false
     cargo_manifest_line_changed "$crate" "$line" && force=true
-    cargo_provision "$line" "$force" || { had_failures=1; pkg_warn "failed to upgrade $crate"; }
+    cargo_provision "$line" "$force" || { had_failures=1; log_warn "failed to upgrade $crate"; }
   done < "$declared_full"
 
   (( had_failures == 0 )) && cargo_write_manifest_stamp "$declared_full"
@@ -234,20 +234,20 @@ EOF
 }
 
 main() {
-  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+  if [[ $# -eq 0 ]] || is_help "${1:-}"; then
     usage; exit 0
   fi
   local cmd="$1"; shift
   case "$cmd" in
     list)
-      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      args_contain_help "$@" && { usage_list; exit 0; }
       do_list "$@"
       ;;
     sync)
-      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      args_contain_help "$@" && { usage_sync; exit 0; }
       do_sync
       ;;
-    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+    *) usage >&2; die "unknown subcommand: $cmd" ;;
   esac
 }
 

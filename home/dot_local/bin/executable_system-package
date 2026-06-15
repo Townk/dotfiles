@@ -16,7 +16,7 @@ source "$HOME/.local/lib/system-package-common.sh"
 script_path="$0"
 if [[ "$script_path" != */* ]]; then
   script_path="$(command -v -- "$script_path")" \
-    || pkg_die "cannot resolve dispatcher path: $0"
+    || die "cannot resolve dispatcher path: $0"
 fi
 SCRIPT_DIR="${script_path:A:h}"
 
@@ -101,7 +101,7 @@ worker_path() {
 
 worker_check() {
   [[ -x "$(worker_path "$1")" ]] \
-    || pkg_die "worker not found: system-package-$1"
+    || die "worker not found: system-package-$1"
 }
 
 # list_one <eco> [args...]
@@ -157,7 +157,7 @@ sync_one() {
 sync_all() {
   local eco
   for eco in "${ECOSYSTEMS[@]}"; do
-    pkg_info "${PKG_C_BWH}── $eco ──${PKG_C_RES}"
+    log_info "${C_BWH}── $eco ──${C_RES}"
     sync_one "$eco" "$@"
   done
 }
@@ -167,14 +167,14 @@ main() {
   [[ $# -ge 1 ]] || { usage; exit 0; }
 
   # Top-level help: `-h`, `--help`, or `help`.
-  if pkg_is_help "$1"; then
+  if is_help "$1"; then
     usage; exit 0
   fi
 
   if is_in "$1" "${SUBCOMMANDS[@]}"; then
     local cmd="$1"; shift
     # `system-package <subcommand> --help` → subcommand help, no side effects.
-    if pkg_args_contain_help "$@"; then
+    if args_contain_help "$@"; then
       case "$cmd" in
         list) usage_list ;;
         sync) usage_sync ;;
@@ -190,16 +190,16 @@ main() {
     worker_check "$eco"
     # `system-package <eco>` (no subcommand) or `system-package <eco> --help`
     # → defer to worker's top-level help. Same for the subcommand layer.
-    if [[ $# -eq 0 ]] || pkg_is_help "$1"; then
+    if [[ $# -eq 0 ]] || is_help "$1"; then
       "$(worker_path "$eco")" --help
       exit 0
     fi
     local cmd="$1"; shift
     is_in "$cmd" "${SUBCOMMANDS[@]}" \
-      || { usage; pkg_die "unknown subcommand: $cmd"; }
+      || { usage; die "unknown subcommand: $cmd"; }
     # `system-package <eco> <cmd> --help` → forward to worker so the user
     # sees ecosystem-specific flag semantics rather than the aggregated text.
-    if pkg_args_contain_help "$@"; then
+    if args_contain_help "$@"; then
       "$(worker_path "$eco")" "$cmd" --help
       exit 0
     fi
@@ -209,7 +209,7 @@ main() {
     esac
   else
     usage
-    pkg_die "unknown argument: $1"
+    die "unknown argument: $1"
   fi
 }
 

@@ -60,18 +60,8 @@ case "${1:-}" in
   *) usage >&2; printf 'error: unknown argument: %s\n' "$1" >&2; exit 1 ;;
 esac
 
-if [[ -t 1 ]]; then
-  C_BLU=$'\e[34m'
-  C_YEL=$'\e[33m'
-  C_RED=$'\e[31m'
-  C_BWH=$'\e[1;37m'
-  C_RES=$'\e[0m'
-else
-  C_BLU=""; C_YEL=""; C_RED=""; C_BWH=""; C_RES=""
-fi
-
-die()  { print -P -- "\n${C_RED}Error${C_RES}: $*"; exit 1; }
-warn() { print -P -- "${C_YEL}⚠${C_RES}  $*" >&2; }
+# Colors / logging come from the shared base (C_*, log_warn/die).
+source "$HOME/.local/lib/common.sh"
 
 # Resolve chezmoi source dir once. Returns "" only when neither chezmoi
 # nor the standard layout produces a git repo (so the sync hooks no-op
@@ -145,7 +135,7 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
       exit 1
     fi
   ); then
-    chezmoi apply || warn "chezmoi apply failed after pull (continuing)"
+    chezmoi apply || log_warn "chezmoi apply failed after pull (continuing)"
 
     # Hand off to the freshly-applied script when the source actually
     # advanced. A running shell keeps executing the code it loaded at
@@ -163,7 +153,7 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
       exec "$HOME/.local/bin/system-update" "$@"
     fi
   else
-    warn "Failed to sync chezmoi source from origin (continuing)"
+    log_warn "Failed to sync chezmoi source from origin (continuing)"
   fi
 fi
 
@@ -171,13 +161,13 @@ fi
 # Brewfile pipeline. Converge the package ecosystems rendered for this
 # host, then skip the brew/launchd-specific steps.
 if ! command -v brew >/dev/null 2>&1; then
-  warn "Homebrew not found — running the Homebrew-less update path."
+  log_warn "Homebrew not found — running the Homebrew-less update path."
   system_package_synced=0
   if command -v mise >/dev/null 2>&1; then
     print -P -- "\n🛠️ Sync Mise tools...\n"
     # install first so a declared-but-missing toolchain (e.g. `go`, needed by
     # the package workers below) exists before `system-package sync` runs.
-    mise install && mise upgrade && mise prune -y || warn "mise sync had failures"
+    mise install && mise upgrade && mise prune -y || log_warn "mise sync had failures"
   fi
   if command -v system-package >/dev/null 2>&1; then
     print -P -- "\n📦 Sync system packages...\n"
@@ -186,14 +176,14 @@ if ! command -v brew >/dev/null 2>&1; then
   fi
   if [[ "$system_package_synced" -ne 1 ]] && command -v snap >/dev/null 2>&1; then
     print -P -- "\n📦 Refresh snap packages...\n"
-    sudo snap refresh || warn "snap refresh had failures"
+    sudo snap refresh || log_warn "snap refresh had failures"
   fi
   if command -v nvim >/dev/null 2>&1; then
     print -P -- "\n📝 Upgrade NeoVim plugins...\n"
     # Bounded with `timeout`: headless plugin sync can hang indefinitely
     # if a background task (e.g. a treesitter parser build) never settles.
     timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" \
-      || warn "NeoVim plugin upgrade timed out or had failures"
+      || log_warn "NeoVim plugin upgrade timed out or had failures"
   fi
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
   exit 0
@@ -210,7 +200,7 @@ brew update || die "Failed to update Homebrew!"
 # handles version bumps.
 if command -v mise >/dev/null 2>&1; then
   print -P -- "\n🛠️ Installing mise toolchains...\n"
-  mise install || warn "mise install had failures"
+  mise install || log_warn "mise install had failures"
 fi
 
 # Install/upgrade declared packages across every ecosystem. This is the
@@ -234,7 +224,7 @@ brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
 # LOCAL GUI session anyway, so leave it to the next interactive run.
 if [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] \
    && command -v pinentry-touchid >/dev/null 2>&1; then
-  pinentry-touchid -check >/dev/null 2>&1 || pinentry-touchid -fix || warn "pinentry-touchid -fix failed"
+  pinentry-touchid -check >/dev/null 2>&1 || pinentry-touchid -fix || log_warn "pinentry-touchid -fix failed"
 fi
 
 # Reconcile launchd-managed services with ~/.config/packages/services.toml.
@@ -244,7 +234,7 @@ fi
 # worker that owns them (see pkg_restart_services_for in common.sh).
 if command -v system-service >/dev/null 2>&1; then
   print -P -- "\n📡 Sync system services...\n"
-  system-service sync || warn "system-service sync had failures"
+  system-service sync || log_warn "system-service sync had failures"
 fi
 
 if command -v ya >/dev/null 2>&1; then
@@ -281,12 +271,12 @@ if command -v ya >/dev/null 2>&1; then
         if ! git diff --quiet HEAD -- "$yazi_pkg_source_rel" 2>/dev/null; then
           print -P -- "\n📤 Publishing yazi package state...\n"
           git commit -m "chore(yazi): update dependencies" -- "$yazi_pkg_source_rel" \
-            || warn "Failed to commit yazi/package.toml"
-          git push 2>/dev/null || warn "Push failed (commit kept locally)"
+            || log_warn "Failed to commit yazi/package.toml"
+          git push 2>/dev/null || log_warn "Push failed (commit kept locally)"
         fi
       )
     else
-      warn "Failed to copy yazi/package.toml into chezmoi source"
+      log_warn "Failed to copy yazi/package.toml into chezmoi source"
     fi
   fi
 fi

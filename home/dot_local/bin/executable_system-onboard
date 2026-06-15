@@ -82,7 +82,7 @@ parse_args() {
       --no-push)        NO_PUSH=1; shift ;;
       --dry-run)        DRY_RUN=1; shift ;;
       -h|--help|help)   usage; exit 0 ;;
-      *)                usage >&2; sec_die "unknown argument: $1" ;;
+      *)                usage >&2; die "unknown argument: $1" ;;
     esac
   done
 }
@@ -94,8 +94,8 @@ is_valid_profile() {
 
 # Interactive form when invoked bare on a TTY.
 interactive_form() {
-  sec_have_tty || { usage >&2; sec_die "no arguments and no TTY"; }
-  sec_info "Interactive onboarding (Ctrl-C to abort)"
+  sec_have_tty || { usage >&2; die "no arguments and no TTY"; }
+  log_info "Interactive onboarding (Ctrl-C to abort)"
   prompt_required ALIAS    "SSH alias (local only):"
   prompt_required HOSTNAME "SSH hostname / endpoint (local only):"
   prompt_choice   PROFILE  "Profile" "${VALID_PROFILES[@]}"
@@ -106,25 +106,25 @@ interactive_form() {
 # from the machine's own chezmoi config unless overridden. Macs only (human).
 validate_local_inputs() {
   [[ -z "$HOSTNAME" ]] \
-    || sec_die "--hostname is not used with --local (self onboarding has no SSH)"
+    || die "--hostname is not used with --local (self onboarding has no SSH)"
   [[ -n "$ALIAS" ]] || ALIAS="$(hostname -s)"
   [[ "$ALIAS" =~ '^[A-Za-z0-9._-]+$' ]] \
-    || sec_die "alias must be filename-safe ([A-Za-z0-9._-]): $ALIAS"
+    || die "alias must be filename-safe ([A-Za-z0-9._-]): $ALIAS"
   local configured
   configured="$(chezmoi data | yq -r '.profile // ""')" \
-    || sec_die "could not read this machine's chezmoi profile"
+    || die "could not read this machine's chezmoi profile"
   if [[ -n "$PROFILE" ]]; then
     [[ -z "$configured" || "$PROFILE" == "$configured" ]] \
-      || sec_die "--profile '$PROFILE' != this machine's configured profile '$configured' (run 'chezmoi init' to change it)"
+      || die "--profile '$PROFILE' != this machine's configured profile '$configured' (run 'chezmoi init' to change it)"
   else
     [[ -n "$configured" ]] \
-      || sec_die "no chezmoi profile configured; run 'chezmoi init' first or pass --profile"
+      || die "no chezmoi profile configured; run 'chezmoi init' first or pass --profile"
     PROFILE="$configured"
   fi
-  is_valid_profile "$PROFILE" || sec_die "invalid profile: $PROFILE"
+  is_valid_profile "$PROFILE" || die "invalid profile: $PROFILE"
   KIND="human"
   [[ "$PROFILE" != "dev-shell" ]] \
-    || sec_die "--local is human-only; a dev-shell/headless box is onboarded by an operator over SSH"
+    || die "--local is human-only; a dev-shell/headless box is onboarded by an operator over SSH"
 }
 
 validate_inputs() {
@@ -133,15 +133,15 @@ validate_inputs() {
     return 0
   fi
   [[ -n "$ALIAS" && -n "$HOSTNAME" && -n "$PROFILE" ]] \
-    || { usage >&2; sec_die "--alias, --hostname, and --profile are required"; }
+    || { usage >&2; die "--alias, --hostname, and --profile are required"; }
   [[ "$ALIAS" =~ '^[A-Za-z0-9._-]+$' ]] \
-    || sec_die "alias must be filename-safe ([A-Za-z0-9._-]): $ALIAS"
-  is_valid_profile "$PROFILE" || sec_die "invalid profile: $PROFILE"
+    || die "alias must be filename-safe ([A-Za-z0-9._-]): $ALIAS"
+  is_valid_profile "$PROFILE" || die "invalid profile: $PROFILE"
   if [[ -z "$KIND" ]]; then
     [[ "$PROFILE" == "dev-shell" ]] && KIND="headless" || KIND="human"
   fi
   [[ "$KIND" == human || "$KIND" == headless ]] \
-    || sec_die "invalid kind: $KIND (human|headless)"
+    || die "invalid kind: $KIND (human|headless)"
 }
 
 # Refuse to commit on top of unrelated local changes (the commit would sweep
@@ -149,7 +149,7 @@ validate_inputs() {
 check_working_tree() {
   (( NO_COMMIT || DRY_RUN )) && return 0
   if ! git -C "$REPO_ROOT" diff --quiet || ! git -C "$REPO_ROOT" diff --cached --quiet; then
-    sec_die "working tree has unrelated changes; commit/stash them or pass --no-commit"
+    die "working tree has unrelated changes; commit/stash them or pass --no-commit"
   fi
 }
 
@@ -158,7 +158,7 @@ reconcile_ssh() {
   local confdir="$HOME/.ssh/config.d" conf="$HOME/.ssh/config.d/$ALIAS.conf"
   local sshcfg="$HOME/.ssh/config"
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would ensure $conf (Host $ALIAS → $HOSTNAME) and the Include in $sshcfg"
+    log_info "[dry-run] would ensure $conf (Host $ALIAS → $HOSTNAME) and the Include in $sshcfg"
     return 0
   fi
   mkdir -p "$confdir"; chmod 0700 "$confdir"
@@ -167,7 +167,7 @@ reconcile_ssh() {
     cur="$(awk 'tolower($1)=="hostname"{print $2; exit}' "$conf")"
     if [[ -n "$cur" && "$cur" != "$HOSTNAME" ]]; then
       confirm "$conf maps $ALIAS to '$cur', not '$HOSTNAME'. Overwrite?" \
-        || sec_die "refusing to overwrite conflicting SSH config for $ALIAS"
+        || die "refusing to overwrite conflicting SSH config for $ALIAS"
     fi
   fi
   cat >"$conf" <<EOF
@@ -176,10 +176,10 @@ Host $ALIAS
     HostName $HOSTNAME
 EOF
   chmod 0600 "$conf"
-  sec_ok "ssh config.d entry for $ALIAS"
+  log_ok "ssh config.d entry for $ALIAS"
 
   if [[ ! -f "$sshcfg" ]] || ! grep -Eq '^\s*Include\s+~?/?.*\.ssh/config\.d/\*' "$sshcfg"; then
-    sec_warn "$sshcfg lacks an Include for ~/.ssh/config.d/* — appending (Match all + Include)"
+    log_warn "$sshcfg lacks an Include for ~/.ssh/config.d/* — appending (Match all + Include)"
     { printf '\nMatch all\nInclude ~/.ssh/config.d/*\n'; } >>"$sshcfg"
     [[ -f "$sshcfg" ]] && chmod 0600 "$sshcfg"
   fi
@@ -188,27 +188,27 @@ EOF
 # --- step 3: access ----------------------------------------------------------
 verify_access() {
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would verify: ssh $ALIAS true"
+    log_info "[dry-run] would verify: ssh $ALIAS true"
     return 0
   fi
-  sec_info "verifying SSH access to $ALIAS …"
+  log_info "verifying SSH access to $ALIAS …"
   rexec true 2>/dev/null \
-    || sec_die "cannot ssh to '$ALIAS'. Establish first-contact access (password/temp key/console) and rerun."
-  sec_ok "ssh access to $ALIAS"
+    || die "cannot ssh to '$ALIAS'. Establish first-contact access (password/temp key/console) and rerun."
+  log_ok "ssh access to $ALIAS"
 }
 
 # --- step 4: remote basics ---------------------------------------------------
 reconcile_remote_basics() {
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would ensure XDG dirs and chezmoi on $ALIAS"
+    log_info "[dry-run] would ensure XDG dirs and chezmoi on $ALIAS"
     return 0
   fi
   rexec 'mkdir -p ~/.config ~/.cache ~/.local/bin ~/.local/share ~/.local/state' \
-    || sec_die "failed to create XDG dirs on $ALIAS"
+    || die "failed to create XDG dirs on $ALIAS"
   if ! rexec 'command -v chezmoi >/dev/null 2>&1'; then
-    sec_die "chezmoi is not installed on $ALIAS. Install it there (see README bootstrap) and rerun."
+    die "chezmoi is not installed on $ALIAS. Install it there (see README bootstrap) and rerun."
   fi
-  sec_ok "remote XDG dirs + chezmoi present"
+  log_ok "remote XDG dirs + chezmoi present"
 }
 
 # --- step 5: age identity (headless) ----------------------------------------
@@ -217,19 +217,19 @@ reconcile_age_identity() {
   [[ "$KIND" == headless ]] || return 0
   local keypath="\$HOME/$AGE_KEY_REL"
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would ensure age identity at ~/$AGE_KEY_REL on $ALIAS and read its recipient"
+    log_info "[dry-run] would ensure age identity at ~/$AGE_KEY_REL on $ALIAS and read its recipient"
     RECIPIENT="age1dryrun000000000000000000000000000000000000000000000000000"
     return 0
   fi
   if ! rexec "test -f $keypath"; then
-    sec_info "generating age identity on $ALIAS …"
+    log_info "generating age identity on $ALIAS …"
     rexec "mkdir -p \"\$(dirname $keypath)\" && chmod 700 \"\$(dirname $keypath)\" && chezmoi age-keygen -o $keypath >/dev/null && chmod 600 $keypath" \
-      || sec_die "failed to generate age identity on $ALIAS"
+      || die "failed to generate age identity on $ALIAS"
   fi
   RECIPIENT="$(rexec "chezmoi age-keygen -y $keypath" | tr -d '[:space:]')" \
-    || sec_die "failed to read age recipient from $ALIAS"
-  [[ "$RECIPIENT" == age1* ]] || sec_die "unexpected age recipient from $ALIAS: $RECIPIENT"
-  sec_ok "age recipient: $RECIPIENT"
+    || die "failed to read age recipient from $ALIAS"
+  [[ "$RECIPIENT" == age1* ]] || die "unexpected age recipient from $ALIAS: $RECIPIENT"
+  log_ok "age recipient: $RECIPIENT"
 }
 
 # --- step 6: slot assignment -------------------------------------------------
@@ -241,24 +241,24 @@ assign_slot() {
     local mapped_profile mapped_recipient
     mapped_profile="$(sec_map_get "$SLOT" profile)"
     [[ "$mapped_profile" == "$PROFILE" ]] \
-      || sec_die "alias '$ALIAS' is slot $SLOT with profile '$mapped_profile', not '$PROFILE' (hard stop)"
+      || die "alias '$ALIAS' is slot $SLOT with profile '$mapped_profile', not '$PROFILE' (hard stop)"
     if [[ "$KIND" == headless ]]; then
       mapped_recipient="$(sec_map_get "$SLOT" recipient)"
       if [[ -n "$mapped_recipient" && -n "$RECIPIENT" && "$mapped_recipient" != "$RECIPIENT" ]]; then
-        sec_die "slot $SLOT recipient changed ($mapped_recipient → $RECIPIENT); use a rotate flow (hard stop)"
+        die "slot $SLOT recipient changed ($mapped_recipient → $RECIPIENT); use a rotate flow (hard stop)"
       fi
     fi
-    sec_info "reusing slot $SLOT for $ALIAS"
+    log_info "reusing slot $SLOT for $ALIAS"
   else
     # Allocate a fresh, collision-free opaque slot.
     while :; do
       SLOT="$(sec_gen_slot)"
       [[ -z "$(sec_map_get "$SLOT" kind)" ]] && break
     done
-    sec_info "assigned new slot $SLOT for $ALIAS"
+    log_info "assigned new slot $SLOT for $ALIAS"
   fi
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would record $SLOT → (alias $ALIAS, $PROFILE, $KIND) in the operator map"
+    log_info "[dry-run] would record $SLOT → (alias $ALIAS, $PROFILE, $KIND) in the operator map"
     return 0
   fi
   sec_map_set "$SLOT" "$ALIAS" "$PROFILE" "$KIND" "$RECIPIENT"
@@ -271,11 +271,11 @@ assign_slot() {
 reconcile_secrets() {
   local frag; frag="$(sec_fragment_path "$SLOT")"
   if [[ -f "$frag" ]] && (( ! ROTATE_SECRETS )); then
-    sec_info "fragment for $SLOT exists; skipping secret entry (use --rotate-secrets to re-collect)"
+    log_info "fragment for $SLOT exists; skipping secret entry (use --rotate-secrets to re-collect)"
     return 0
   fi
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would collect $PROFILE secrets and write the $KIND fragment for $SLOT"
+    log_info "[dry-run] would collect $PROFILE secrets and write the $KIND fragment for $SLOT"
     return 0
   fi
   sec_rebuild_slot "$SLOT"
@@ -285,23 +285,23 @@ reconcile_secrets() {
 # --- step 8: commit & push ---------------------------------------------------
 commit_and_push() {
   if (( NO_COMMIT )); then
-    sec_info "--no-commit: leaving changes uncommitted"
+    log_info "--no-commit: leaving changes uncommitted"
     return 0
   fi
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would commit opaque artifacts for $SLOT and push"
+    log_info "[dry-run] would commit opaque artifacts for $SLOT and push"
     return 0
   fi
   local paths
   paths=("${(@f)$(sec_commit_paths_for_slot "$SLOT")}")
   sec_git_commit "feat(secrets): onboard $SLOT" "${paths[@]}"
   if (( NO_PUSH )); then
-    sec_info "--no-push: not pushing"
+    log_info "--no-push: not pushing"
     return 0
   fi
   git -C "$REPO_ROOT" push >/dev/null 2>&1 \
-    && sec_ok "pushed" \
-    || sec_warn "git push failed (push manually before the remote applies)"
+    && log_ok "pushed" \
+    || log_warn "git push failed (push manually before the remote applies)"
 }
 
 # --- step 9: converge remote -------------------------------------------------
@@ -312,7 +312,7 @@ commit_and_push() {
 # (e.g. "X changed since chezmoi last wrote it") over SSH.
 converge_remote() {
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would: ssh $ALIAS — pull source, chezmoi init (profile=$PROFILE, slot=$SLOT), chezmoi apply --force, record slot $SLOT in $ALIAS's own operator map"
+    log_info "[dry-run] would: ssh $ALIAS — pull source, chezmoi init (profile=$PROFILE, slot=$SLOT), chezmoi apply --force, record slot $SLOT in $ALIAS's own operator map"
     return 0
   fi
 
@@ -322,23 +322,23 @@ converge_remote() {
 
   # 1. Bring the source to the pushed commit: pull if already cloned, else clone.
   if rexec "test -d \"$src_git\""; then
-    sec_info "pulling latest source on $ALIAS …"
+    log_info "pulling latest source on $ALIAS …"
     rexec "chezmoi git pull" \
-      || sec_die "remote source pull failed on $ALIAS (resolve its git state and rerun)"
+      || die "remote source pull failed on $ALIAS (resolve its git state and rerun)"
   else
     [[ -n "$repo_remote" ]] \
-      || sec_die "$ALIAS has no chezmoi source and this host has no 'origin' remote to clone from"
-    sec_info "cloning source on $ALIAS from $repo_remote …"
+      || die "$ALIAS has no chezmoi source and this host has no 'origin' remote to clone from"
+    log_info "cloning source on $ALIAS from $repo_remote …"
     rexec "CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init $repo_remote" \
-      || sec_die "remote chezmoi clone/init failed on $ALIAS"
+      || die "remote chezmoi clone/init failed on $ALIAS"
   fi
 
   # 2. Regenerate the target's config from the NOW-updated template (secretsSlot
   #    + the headless SOPS_AGE_KEY_FILE [env]). No token needed: there is no
   #    [onepassword] mode to render — human slots resolve op:// via `output "op"`.
-  sec_info "initializing chezmoi on $ALIAS (profile=$PROFILE, slot=$SLOT) …"
+  log_info "initializing chezmoi on $ALIAS (profile=$PROFILE, slot=$SLOT) …"
   rexec "CHEZMOI_PROFILE=$PROFILE CHEZMOI_SECRETS_SLOT=$SLOT chezmoi init" \
-    || sec_die "remote chezmoi init failed on $ALIAS"
+    || die "remote chezmoi init failed on $ALIAS"
 
   # 3. Apply non-interactively. The fragment is rendered DURING apply, so each
   #    kind needs its resolver reachable first:
@@ -357,26 +357,26 @@ converge_remote() {
     && pre="${pre}export CHEZMOI_REFRESH_SECRETS=1; "
 
   if [[ "$KIND" == headless ]]; then
-    sec_info "ensuring decrypt toolchain (sops, age) on $ALIAS …"
+    log_info "ensuring decrypt toolchain (sops, age) on $ALIAS …"
     rexec "chezmoi apply --force ~/.config/mise/conf.d/dev-shell.toml" \
-      || sec_warn "could not pre-apply mise toolbox config on $ALIAS"
+      || log_warn "could not pre-apply mise toolbox config on $ALIAS"
     rexec "command -v mise >/dev/null 2>&1 && mise install sops age -y" \
-      || sec_warn "could not install sops/age via mise on $ALIAS — decrypt will fail until 'mise install' runs there"
+      || log_warn "could not install sops/age via mise on $ALIAS — decrypt will fail until 'mise install' runs there"
   fi
 
-  sec_info "applying on $ALIAS …"
+  log_info "applying on $ALIAS …"
   rexec "${pre}chezmoi apply --force" \
-    || sec_die "remote chezmoi apply failed on $ALIAS"
+    || die "remote chezmoi apply failed on $ALIAS"
 
   if rexec "test -r ~/.config/zsh/secrets.d/$SLOT.sh"; then
-    sec_ok "secret fragment materialized on $ALIAS"
+    log_ok "secret fragment materialized on $ALIAS"
   elif [[ "$KIND" == headless ]]; then
-    sec_warn "secret fragment not found on $ALIAS after apply — check the remote age key and SOPS_AGE_KEY_FILE"
+    log_warn "secret fragment not found on $ALIAS after apply — check the remote age key and SOPS_AGE_KEY_FILE"
   else
-    sec_warn "secret fragment not found on $ALIAS after apply — check the SA token (~/$OP_TOKEN_REL) and the op:// references"
+    log_warn "secret fragment not found on $ALIAS after apply — check the SA token (~/$OP_TOKEN_REL) and the op:// references"
   fi
 
-  sec_info "remote status:"
+  log_info "remote status:"
   rexec "${pre}chezmoi status --exclude scripts" || true
 
   reconcile_remote_map
@@ -396,11 +396,11 @@ reconcile_remote_map() {
   entry="$(slot="$SLOT" al="$ALIAS" pr="$PROFILE" kd="$KIND" rc="$RECIPIENT" \
     yq -n -o=json -I=0 \
     '{strenv(slot): {"alias": strenv(al), "profile": strenv(pr), "kind": strenv(kd), "recipient": strenv(rc)}}')" \
-    || { sec_warn "could not build the operator-map entry for $ALIAS"; return 0; }
+    || { log_warn "could not build the operator-map entry for $ALIAS"; return 0; }
   printf '%s' "$entry" \
     | rexec 'f="$HOME/.config/chezmoi/onboard-map.yaml"; mkdir -p "$HOME/.config/chezmoi"; [ -f "$f" ] || { printf "{}\n" > "$f"; chmod 600 "$f"; }; m="$(yq ea "select(fileIndex==0) * select(fileIndex==1)" "$f" -)" && printf "%s\n" "$m" > "$f" && chmod 600 "$f"' \
-    && sec_ok "recorded slot $SLOT in $ALIAS's own operator map (it can self-manage)" \
-    || sec_warn "could not record $SLOT in $ALIAS's operator map (its local system-secrets won't list the slot)"
+    && log_ok "recorded slot $SLOT in $ALIAS's own operator map (it can self-manage)" \
+    || log_warn "could not record $SLOT in $ALIAS's operator map (its local system-secrets won't list the slot)"
 }
 
 # --- step 9 (local): converge this machine -----------------------------------
@@ -412,29 +412,29 @@ reconcile_remote_map() {
 converge_local() {
   if (( DRY_RUN )); then
     if (( NO_APPLY )); then
-      sec_info "[dry-run] would: chezmoi init (profile=$PROFILE, slot=$SLOT); skip apply (--no-apply)"
+      log_info "[dry-run] would: chezmoi init (profile=$PROFILE, slot=$SLOT); skip apply (--no-apply)"
     else
-      sec_info "[dry-run] would: chezmoi init (profile=$PROFILE, slot=$SLOT) then chezmoi apply"
+      log_info "[dry-run] would: chezmoi init (profile=$PROFILE, slot=$SLOT) then chezmoi apply"
     fi
     return 0
   fi
-  sec_info "setting secretsSlot=$SLOT (profile=$PROFILE) in this machine's chezmoi config …"
+  log_info "setting secretsSlot=$SLOT (profile=$PROFILE) in this machine's chezmoi config …"
   CHEZMOI_PROFILE="$PROFILE" CHEZMOI_SECRETS_SLOT="$SLOT" chezmoi init \
-    || sec_die "chezmoi init failed (could not set secretsSlot)"
+    || die "chezmoi init failed (could not set secretsSlot)"
   if (( NO_APPLY )); then
-    sec_info "--no-apply: secretsSlot set; the bootstrap apply will render the fragment"
+    log_info "--no-apply: secretsSlot set; the bootstrap apply will render the fragment"
     return 0
   fi
-  sec_info "applying on this machine …"
+  log_info "applying on this machine …"
   if (( SECRETS_REBUILT )); then
-    CHEZMOI_REFRESH_SECRETS=1 chezmoi apply || sec_die "chezmoi apply failed"
+    CHEZMOI_REFRESH_SECRETS=1 chezmoi apply || die "chezmoi apply failed"
   else
-    chezmoi apply || sec_die "chezmoi apply failed"
+    chezmoi apply || die "chezmoi apply failed"
   fi
   if [[ -r "$HOME/.config/zsh/secrets.d/$SLOT.sh" ]]; then
-    sec_ok "secret fragment materialized at ~/.config/zsh/secrets.d/$SLOT.sh"
+    log_ok "secret fragment materialized at ~/.config/zsh/secrets.d/$SLOT.sh"
   else
-    sec_warn "secret fragment not found after apply — check the op:// references and the 1Password app"
+    log_warn "secret fragment not found after apply — check the op:// references and the 1Password app"
   fi
 }
 
@@ -447,7 +447,7 @@ REMOTE_SELF_SLOT="" REMOTE_SELF_PROFILE=""
 detect_remote_self_onboard() {
   [[ "$KIND" == human ]] || return 0
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would read $ALIAS's chezmoi secretsSlot to detect self-onboarding"
+    log_info "[dry-run] would read $ALIAS's chezmoi secretsSlot to detect self-onboarding"
     return 0
   fi
   local data
@@ -473,35 +473,35 @@ OP_TOKEN_REL=".local/share/op/service-account"
 reconcile_op_token() {
   [[ "$KIND" == human ]] || return 0
   if (( DRY_RUN )); then
-    sec_info "[dry-run] would copy the SA token to $ALIAS at ~/$OP_TOKEN_REL (make it an operator)"
+    log_info "[dry-run] would copy the SA token to $ALIAS at ~/$OP_TOKEN_REL (make it an operator)"
     return 0
   fi
   if rexec "test -s ~/$OP_TOKEN_REL" && (( ! ROTATE_SECRETS )); then
-    sec_info "service-account token already present on $ALIAS (use --rotate-secrets to replace)"
+    log_info "service-account token already present on $ALIAS (use --rotate-secrets to replace)"
     return 0
   fi
   sec_op_ensure_token
   local token; token="$(cat "$OP_SA_TOKEN_FILE")"
   printf '%s' "$token" \
     | rexec "umask 077; mkdir -p ~/.local/share/op && cat > ~/$OP_TOKEN_REL && chmod 600 ~/$OP_TOKEN_REL" \
-    || sec_die "failed to write service-account token to $ALIAS"
+    || die "failed to write service-account token to $ALIAS"
   token=""
-  sec_ok "configured $ALIAS as an operator (SA token at ~/$OP_TOKEN_REL, loose, 0600)"
+  log_ok "configured $ALIAS as an operator (SA token at ~/$OP_TOKEN_REL, loose, 0600)"
 }
 
 main() {
   parse_args "$@"
   sec_repo_paths
-  sec_require_cmd chezmoi git yq
+  require_cmd chezmoi git yq
 
   # --- self (local) onboarding ---------------------------------------------
   if (( LOCAL )); then
     validate_inputs
-    sec_require_cmd op
-    sec_info "${SEC_C_BWH}Self-onboarding this machine as $ALIAS ($PROFILE/$KIND)${SEC_C_RES}"
+    require_cmd op
+    log_info "${C_BWH}Self-onboarding this machine as $ALIAS ($PROFILE/$KIND)${C_RES}"
     check_working_tree
     if (( DRY_RUN )); then
-      sec_info "[dry-run] would ensure the SA token (operator status) at $OP_SA_TOKEN_FILE"
+      log_info "[dry-run] would ensure the SA token (operator status) at $OP_SA_TOKEN_FILE"
     else
       sec_op_ensure_token          # also makes this machine an operator
     fi
@@ -509,20 +509,20 @@ main() {
     reconcile_secrets
     commit_and_push
     converge_local
-    sec_ok "self-onboarding complete for $ALIAS (slot $SLOT)"
+    log_ok "self-onboarding complete for $ALIAS (slot $SLOT)"
     return 0
   fi
 
-  sec_require_cmd ssh
+  require_cmd ssh
   if [[ -z "$ALIAS$HOSTNAME$PROFILE" ]]; then
     interactive_form
   fi
   validate_inputs
   # Headless onboarding encrypts locally, so it needs sops/age here. Human
   # onboarding uses 1Password references only — don't require them.
-  [[ "$KIND" == headless ]] && sec_require_cmd sops age
+  [[ "$KIND" == headless ]] && require_cmd sops age
 
-  sec_info "${SEC_C_BWH}Onboarding $ALIAS ($PROFILE/$KIND)${SEC_C_RES}"
+  log_info "${C_BWH}Onboarding $ALIAS ($PROFILE/$KIND)${C_RES}"
   check_working_tree
   reconcile_ssh
   verify_access
@@ -533,16 +533,16 @@ main() {
   detect_remote_self_onboard
   if [[ -n "$REMOTE_SELF_SLOT" ]]; then
     [[ -z "$REMOTE_SELF_PROFILE" || "$PROFILE" == "$REMOTE_SELF_PROFILE" ]] \
-      || sec_die "$ALIAS self-onboarded with profile '$REMOTE_SELF_PROFILE', not '$PROFILE' (hard stop)"
+      || die "$ALIAS self-onboarded with profile '$REMOTE_SELF_PROFILE', not '$PROFILE' (hard stop)"
     SLOT="$REMOTE_SELF_SLOT"
-    sec_info "$ALIAS already self-onboarded (slot $SLOT); reconciling connectivity only"
+    log_info "$ALIAS already self-onboarded (slot $SLOT); reconciling connectivity only"
     if (( DRY_RUN )); then
-      sec_info "[dry-run] would record $SLOT → (alias $ALIAS, $PROFILE, $KIND) in the operator map"
+      log_info "[dry-run] would record $SLOT → (alias $ALIAS, $PROFILE, $KIND) in the operator map"
     else
       sec_map_set "$SLOT" "$ALIAS" "$PROFILE" "$KIND" ""
     fi
     converge_remote
-    sec_ok "connectivity reconciled for $ALIAS (self-onboarded slot $SLOT)"
+    log_ok "connectivity reconciled for $ALIAS (self-onboarded slot $SLOT)"
     return 0
   fi
 
@@ -553,7 +553,7 @@ main() {
   commit_and_push
   reconcile_op_token
   converge_remote
-  sec_ok "onboarding complete for $ALIAS (slot $SLOT)"
+  log_ok "onboarding complete for $ALIAS (slot $SLOT)"
 }
 
 main "$@"

@@ -81,7 +81,7 @@ svc_render_json() {
   local name="$1"
   local json; json=$(svc_toml_json)
   local cmd0; cmd0=$(printf '%s' "$json" | jq -r --arg n "$name" '.[$n].cmd[0] // empty')
-  [[ -n "$cmd0" ]] || pkg_die "service '$name' has no cmd"
+  [[ -n "$cmd0" ]] || die "service '$name' has no cmd"
   local cmd0_abs; cmd0_abs=$(svc_resolve_cmd0 "$cmd0")
   local label; label=$(svc_label "$name")
 
@@ -189,7 +189,7 @@ svc_status() {
 svc_bootstrap() {
   local name="$1"
   if svc_is_bootstrapped "$name"; then
-    pkg_info "launchd: $(svc_label "$name") already bootstrapped"
+    log_info "launchd: $(svc_label "$name") already bootstrapped"
     return 0
   fi
   launchctl bootstrap "$DOMAIN" "$(svc_plist_path "$name")"
@@ -207,15 +207,15 @@ svc_bootout() {
 # --- subcommands ------------------------------------------------------------
 
 do_render() {
-  [[ $# -eq 1 ]] || pkg_die "usage: render <name>"
-  svc_declared "$1" || pkg_die "no such service in $SVCFILE: $1"
+  [[ $# -eq 1 ]] || die "usage: render <name>"
+  svc_declared "$1" || die "no such service in $SVCFILE: $1"
   svc_render_plist "$1"
 }
 
 do_start() {
-  [[ $# -eq 1 ]] || pkg_die "usage: start <name>"
+  [[ $# -eq 1 ]] || die "usage: start <name>"
   local name="$1"
-  svc_declared "$name" || pkg_die "no such service in $SVCFILE: $name"
+  svc_declared "$name" || die "no such service in $SVCFILE: $name"
   svc_ensure_dirs "$name"
   local changed; changed=$(svc_write_plist "$name")
   if [[ "$changed" == "wrote" ]]; then
@@ -224,26 +224,26 @@ do_start() {
     svc_bootout "$name"
   fi
   svc_bootstrap "$name"
-  pkg_info "started $(svc_label "$name")"
+  log_info "started $(svc_label "$name")"
 }
 
 do_stop() {
-  [[ $# -eq 1 ]] || pkg_die "usage: stop <name>"
+  [[ $# -eq 1 ]] || die "usage: stop <name>"
   svc_bootout "$1"
-  pkg_info "stopped $(svc_label "$1")"
+  log_info "stopped $(svc_label "$1")"
 }
 
 do_restart() {
-  [[ $# -eq 1 ]] || pkg_die "usage: restart <name>"
+  [[ $# -eq 1 ]] || die "usage: restart <name>"
   do_stop "$1"
   do_start "$1"
 }
 
 do_info() {
-  [[ $# -eq 1 ]] || pkg_die "usage: info <name>"
+  [[ $# -eq 1 ]] || die "usage: info <name>"
   local name="$1"
-  svc_declared "$name" || pkg_die "no such service in $SVCFILE: $name"
-  printf '%s%s%s\n' "$PKG_C_BWH" "$(svc_label "$name")" "$PKG_C_RES"
+  svc_declared "$name" || die "no such service in $SVCFILE: $name"
+  printf '%s%s%s\n' "$C_BWH" "$(svc_label "$name")" "$C_RES"
   printf '  status:   %s\n' "$(svc_status "$name")"
   printf '  plist:    %s\n' "$(svc_plist_path "$name")"
   printf '  manifest entry:\n'
@@ -269,7 +269,7 @@ do_list() {
 #   declared, plist drifted    → write plist + bootout + bootstrap
 #   not declared, plist exists → bootout + rm plist
 do_sync() {
-  pkg_info "Syncing launchd services..."
+  log_info "Syncing launchd services..."
 
   local -a declared
   declared=( ${(f)"$(svc_names)"} )
@@ -283,7 +283,7 @@ do_sync() {
     if [[ "$changed" == "wrote" ]] && svc_is_bootstrapped "$name"; then
       svc_bootout "$name"
     fi
-    svc_bootstrap "$name" || pkg_warn "failed to bootstrap $(svc_label "$name")"
+    svc_bootstrap "$name" || log_warn "failed to bootstrap $(svc_label "$name")"
   done
 
   # Remove orphans: any com.system-service.*.plist no longer in TOML.
@@ -294,7 +294,7 @@ do_sync() {
     local found=0 d=""
     for d in "${declared[@]}"; do [[ "$d" == "$name" ]] && { found=1; break } done
     (( found )) && continue
-    pkg_info "removing orphan $(svc_label "$name")"
+    log_info "removing orphan $(svc_label "$name")"
     svc_bootout "$name"
     rm -f "$plist"
   done
@@ -305,7 +305,7 @@ do_sync() {
 # basename matches <pkg>. Used by `system-service restart-for` to map an
 # upgraded package name back to the services it owns.
 do_matching() {
-  [[ $# -eq 1 ]] || pkg_die "usage: matching <pkg>"
+  [[ $# -eq 1 ]] || die "usage: matching <pkg>"
   local pkg="$1"
   svc_toml_json | jq -r --arg p "$pkg" '
     to_entries[]
@@ -321,7 +321,7 @@ do_matching() {
 # exposed as a subcommand so external callers (system-service) don't have
 # to source this script.
 do_status() {
-  [[ $# -eq 1 ]] || pkg_die "usage: status <name>"
+  [[ $# -eq 1 ]] || die "usage: status <name>"
   svc_status "$1"
 }
 
@@ -336,5 +336,5 @@ case "${1:-}" in
   declared) shift; svc_names ;;            # internal: used by the dispatcher
   matching) shift; do_matching "$@" ;;     # internal: used by restart-for
   status)   shift; do_status   "$@" ;;     # internal: used by restart-for
-  *) pkg_die "usage: system-service-launchd {list|start|stop|restart|info|sync|render|declared|matching|status} [args]" ;;
+  *) die "usage: system-service-launchd {list|start|stop|restart|info|sync|render|declared|matching|status} [args]" ;;
 esac

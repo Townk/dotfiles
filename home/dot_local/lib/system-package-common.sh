@@ -1,57 +1,28 @@
 # system-package-common.sh — shared helpers for system-package-* scripts.
 # This file is intended to be sourced; it does not run on its own.
 
-# Color/format helpers; respect non-tty stdout.
-if [[ -t 1 ]]; then
-  PKG_C_BLU=$'\e[34m'
-  PKG_C_BBL=$'\e[94m'
-  PKG_C_RED=$'\e[31m'
-  PKG_C_YEL=$'\e[33m'
-  PKG_C_BWH=$'\e[1;37m'
-  PKG_C_RES=$'\e[0m'
+# Logging, the ANSI palette (C_*), help-token dispatch (is_help /
+# args_contain_help), and require_cmd come from the shared base. Source it
+# relative to THIS file so it resolves both at ~/.local/lib (production) and at
+# the repo path (the bats suite sources us directly). BASH_SOURCE under bash;
+# %x under zsh.
+if [ -n "${BASH_SOURCE:-}" ]; then
+  _pkg_common_self="${BASH_SOURCE[0]}"
 else
-  PKG_C_BLU=""; PKG_C_BBL=""; PKG_C_RED=""; PKG_C_YEL=""; PKG_C_BWH=""; PKG_C_RES=""
+  _pkg_common_self="${(%):-%x}"
 fi
+source "$(dirname "$_pkg_common_self")/common.sh"
+unset _pkg_common_self
 
 PKG_DIR="${PKG_DIR:-$HOME/.config/packages}"
 PKG_STATE_DIR="$PKG_DIR/.state"
-
-pkg_info()  { printf '%s=>%s %s\n' "$PKG_C_BLU" "$PKG_C_RES" "$*"; }
-pkg_warn()  { printf '%s=>%s %s\n' "$PKG_C_YEL" "$PKG_C_RES" "$*" >&2; }
-pkg_error() { printf '%serror:%s %s\n' "$PKG_C_RED" "$PKG_C_RES" "$*" >&2; }
-pkg_die()   { pkg_error "$*"; exit 1; }
-
-# pkg_is_help <arg>
-# Return 0 iff <arg> is one of -h, --help, help. Used by every dispatch
-# layer to short-circuit help requests BEFORE any side-effecting work
-# (a stray --help must never trigger a real sync or service restart).
-pkg_is_help() {
-  case "${1:-}" in
-    -h|--help|help) return 0 ;;
-    *)              return 1 ;;
-  esac
-}
-
-# pkg_args_contain_help <arg>...
-# Return 0 iff any of the supplied args looks like a help request. Used at
-# positional-argument dispatch points (e.g. `system-service info --help`)
-# where the help token isn't necessarily the first remaining arg.
-pkg_args_contain_help() {
-  local a=""
-  for a in "$@"; do
-    case "$a" in
-      -h|--help) return 0 ;;
-    esac
-  done
-  return 1
-}
 
 # pkg_manifest_read <file>
 # Print one tool per line: strips #-comments (full-line and inline trailing),
 # trims leading/trailing whitespace, skips blank lines.
 pkg_manifest_read() {
   local file="$1"
-  [[ -f "$file" ]] || { pkg_error "manifest not found: $file"; return 1; }
+  [[ -f "$file" ]] || { log_error "manifest not found: $file"; return 1; }
   awk '
     { sub(/#.*$/, "") }
     { gsub(/^[[:space:]]+|[[:space:]]+$/, "") }
@@ -115,8 +86,8 @@ pkg_table_print() {
   awk -F'\t' \
       -v header="$header" \
       -v group_col="$group_col" \
-      -v bbl="$PKG_C_BBL" \
-      -v reset="$PKG_C_RES" '
+      -v bbl="$C_BBL" \
+      -v reset="$C_RES" '
     function visual_width(s,   t) {
       t = s; gsub(/\033\[[0-9;]*m/, "", t); return length(t)
     }

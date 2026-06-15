@@ -22,19 +22,10 @@ set -eu -o pipefail
 : "${COMMIT_CURSOR_SANDBOX:=}"
 
 # ────────────────────────────────────────────────────────────────────
-# Colors / helpers (match the rest of dot_local/bin)
+# Colors / logging come from the shared base (C_*, log_info/log_ok/
+# log_warn/die).
 # ────────────────────────────────────────────────────────────────────
-if [[ -t 1 ]]; then
-  C_BLU=$'\e[34m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'
-  C_RED=$'\e[31m'; C_DIM=$'\e[2m'; C_BWH=$'\e[1;37m'; C_RES=$'\e[0m'
-else
-  C_BLU=""; C_GRN=""; C_YEL=""; C_RED=""; C_DIM=""; C_BWH=""; C_RES=""
-fi
-
-die()  { print -P -- "\n${C_RED}Error${C_RES}: $*" >&2; exit 1; }
-warn() { print -P -- "${C_YEL}⚠${C_RES}  $*" >&2; }
-info() { print -P -- "${C_BLU}→${C_RES} $*"; }
-ok()   { print -P -- "${C_GRN}✓${C_RES} $*"; }
+source "$HOME/.local/lib/common.sh"
 
 usage() {
   cat <<EOF
@@ -156,11 +147,11 @@ have_untracked=0
 
 if [[ "$have_modified" -eq 0 && "$have_untracked" -eq 0 ]]; then
   [[ -e "$cache_file" ]] && rm -f "$cache_file"
-  ok "nothing to commit, working tree clean"
+  log_ok "nothing to commit, working tree clean"
   exit 0
 fi
 if [[ "$have_modified" -eq 0 && "$include_untracked" -eq 0 && "$use_cached_plan" -eq 0 ]]; then
-  warn "only untracked files present; pass -u/--untracked to include them"
+  log_warn "only untracked files present; pass -u/--untracked to include them"
   exit 0
 fi
 
@@ -189,7 +180,7 @@ validate_plan() {
 save_plan_cache() {
   mkdir -p "${cache_file:h}"
   cp "$plan_file" "$cache_file"
-  ok "saved commit plan cache: $cache_file"
+  log_ok "saved commit plan cache: $cache_file"
 }
 
 clear_plan_cache() {
@@ -210,7 +201,7 @@ save_remaining_plan_cache() {
   tmp_cache="${cache_file}.$$"
   jq --argjson start "$next_idx" '{commits: .commits[$start:]}' "$plan_file" > "$tmp_cache"
   mv "$tmp_cache" "$cache_file"
-  info "updated commit plan cache with ${remaining} remaining commit(s)"
+  log_info "updated commit plan cache with ${remaining} remaining commit(s)"
 }
 
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/commit-cursor"
@@ -227,7 +218,7 @@ fi
 
 if [[ "$use_cached_plan" -eq 1 ]]; then
   cp "$cache_file" "$plan_file"
-  info "Using cached commit plan: $cache_file"
+  log_info "Using cached commit plan: $cache_file"
 else
   command -v "$COMMIT_CURSOR_BIN" >/dev/null 2>&1 || die "Cursor Agent ($COMMIT_CURSOR_BIN) not on PATH"
   [[ -r "$COMMIT_CURSOR_SKILL_PATH" ]] \
@@ -305,9 +296,9 @@ log_file="$state_dir/errors.log"
 } >> "$log_file"
 
 if [[ -n "$model" ]]; then
-  info "Planning commits with Cursor Agent ${C_BWH}${model}${C_RES}…"
+  log_info "Planning commits with Cursor Agent ${C_BWH}${model}${C_RES}…"
 else
-  info "Planning commits with Cursor Agent's configured model…"
+  log_info "Planning commits with Cursor Agent's configured model…"
 fi
 
 cursor_args=(
@@ -353,13 +344,13 @@ fi
 
 if [[ ! -s "$plan_file" ]]; then
   if [[ "$use_cached_plan" -eq 1 ]]; then
-    warn "the cached commit plan disappeared or is empty: $cache_file"
-    warn "Regenerate it with:"
-    warn "  commit-cursor --force-refresh $*"
+    log_warn "the cached commit plan disappeared or is empty: $cache_file"
+    log_warn "Regenerate it with:"
+    log_warn "  commit-cursor --force-refresh $*"
   else
-    warn "Cursor Agent returned a reply but did not create $plan_file."
-    warn "Try a stronger model or verbose mode:"
-    warn "  commit-cursor --model gpt-5 --verbose $*"
+    log_warn "Cursor Agent returned a reply but did not create $plan_file."
+    log_warn "Try a stronger model or verbose mode:"
+    log_warn "  commit-cursor --model gpt-5 --verbose $*"
   fi
   die "no plan written (see $log_file)"
 fi
@@ -414,7 +405,7 @@ stage_commit() {
   local idx="$1"
   local files
   files=("${(@f)$(jq -r ".commits[$idx].files[]" "$plan_file")}")
-  [[ ${#files[@]} -gt 0 ]] || { warn "commit $((idx + 1)) has no files; skipping"; return 1; }
+  [[ ${#files[@]} -gt 0 ]] || { log_warn "commit $((idx + 1)) has no files; skipping"; return 1; }
   git add -- "${files[@]}"
 }
 
@@ -432,7 +423,7 @@ while [[ "$i" -lt "$commit_count" ]]; do
 
     # Re-empty check: if the editor leaves a blank file, abort that commit.
     if ! grep -q '[^[:space:]]' "$msg_file"; then
-      warn "empty commit message; aborting"
+      log_warn "empty commit message; aborting"
       unstage_all
       exit 0
     fi
@@ -444,11 +435,11 @@ while [[ "$i" -lt "$commit_count" ]]; do
         git commit --quiet -F "$msg_file" \
           || { unstage_all; die "git commit failed"; }
         save_remaining_plan_cache $((i + 1))
-        ok "committed: $(git log -1 --pretty=%s)"
+        log_ok "committed: $(git log -1 --pretty=%s)"
         ;;
       *)
         unstage_all
-        info "aborted at commit $((i + 1)); no further commits will be created"
+        log_info "aborted at commit $((i + 1)); no further commits will be created"
         exit 0
         ;;
     esac
@@ -456,7 +447,7 @@ while [[ "$i" -lt "$commit_count" ]]; do
     git commit --quiet -F "$msg_file" \
       || { unstage_all; die "git commit failed"; }
     save_remaining_plan_cache $((i + 1))
-    ok "committed: $(git log -1 --pretty=%s)"
+    log_ok "committed: $(git log -1 --pretty=%s)"
   fi
 
   i=$((i + 1))

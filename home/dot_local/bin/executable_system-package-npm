@@ -60,7 +60,7 @@ npm_list_rows() {
              | "\(.key)\t\(.value.version)"' 2>/dev/null \
     | while IFS=$'\t' read -r name ver; do
         if [[ "$outdated" == true && -n "${outdated_map[$name]:-}" ]]; then
-          ver="${ver} ${PKG_C_YEL}(update available: ${outdated_map[$name]})${PKG_C_RES}"
+          ver="${ver} ${C_YEL}(update available: ${outdated_map[$name]})${C_RES}"
         fi
         printf '%s\t%s\n' "$name" "$ver"
       done
@@ -72,7 +72,7 @@ do_list() {
     case "$1" in
       -u|--update) outdated=true; shift ;;
       -a|--all)    shift ;;  # no-op: npm has no transient-dep concept here
-      *) pkg_die "unknown flag for list: $1" ;;
+      *) die "unknown flag for list: $1" ;;
     esac
   done
   npm_list_rows "$outdated"
@@ -109,8 +109,8 @@ npm_build_global_if_needed() {
   main=$(command jq -r '.main // empty' "$dir/package.json" 2>/dev/null)
   [[ "$main" == dist/index.js && ! -f "$dir/$main" ]] || return 0
   command jq -e '.scripts.build' "$dir/package.json" >/dev/null 2>&1 || return 0
-  pkg_info "Building global npm package: $name"
-  (cd "$dir" && npm run build) || pkg_warn "build failed for $name"
+  log_info "Building global npm package: $name"
+  (cd "$dir" && npm run build) || log_warn "build failed for $name"
 }
 
 # npm_line_uses_install_spec <manifest-line>
@@ -121,7 +121,7 @@ npm_line_uses_install_spec() {
 }
 
 do_sync() {
-  pkg_info "Syncing npm globals..."
+  log_info "Syncing npm globals..."
 
   local declared_full declared installed before_snap after_snap line
   declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
@@ -227,20 +227,20 @@ EOF
 }
 
 main() {
-  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+  if [[ $# -eq 0 ]] || is_help "${1:-}"; then
     usage; exit 0
   fi
   local cmd="$1"; shift
   case "$cmd" in
     list)
-      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      args_contain_help "$@" && { usage_list; exit 0; }
       do_list "$@"
       ;;
     sync)
-      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      args_contain_help "$@" && { usage_sync; exit 0; }
       do_sync
       ;;
-    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+    *) usage >&2; die "unknown subcommand: $cmd" ;;
   esac
 }
 

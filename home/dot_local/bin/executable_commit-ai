@@ -20,19 +20,10 @@ set -eu -o pipefail
 : "${COMMIT_AI_THINKING:=medium}"
 
 # ────────────────────────────────────────────────────────────────────
-# Colors / helpers (match the rest of dot_local/bin)
+# Colors / logging come from the shared base (C_*, log_info/log_ok/
+# log_warn/die).
 # ────────────────────────────────────────────────────────────────────
-if [[ -t 1 ]]; then
-  C_BLU=$'\e[34m'; C_GRN=$'\e[32m'; C_YEL=$'\e[33m'
-  C_RED=$'\e[31m'; C_DIM=$'\e[2m'; C_BWH=$'\e[1;37m'; C_RES=$'\e[0m'
-else
-  C_BLU=""; C_GRN=""; C_YEL=""; C_RED=""; C_DIM=""; C_BWH=""; C_RES=""
-fi
-
-die()  { print -P -- "\n${C_RED}Error${C_RES}: $*" >&2; exit 1; }
-warn() { print -P -- "${C_YEL}⚠${C_RES}  $*" >&2; }
-info() { print -P -- "${C_BLU}→${C_RES} $*"; }
-ok()   { print -P -- "${C_GRN}✓${C_RES} $*"; }
+source "$HOME/.local/lib/common.sh"
 
 usage() {
   cat <<EOF
@@ -124,11 +115,11 @@ have_untracked=0
 [[ -n "$(git ls-files --others --exclude-standard)" ]] && have_untracked=1
 
 if [[ "$have_modified" -eq 0 && "$have_untracked" -eq 0 ]]; then
-  ok "nothing to commit, working tree clean"
+  log_ok "nothing to commit, working tree clean"
   exit 0
 fi
 if [[ "$have_modified" -eq 0 && "$include_untracked" -eq 0 ]]; then
-  warn "only untracked files present; pass -u/--untracked to include them"
+  log_warn "only untracked files present; pass -u/--untracked to include them"
   exit 0
 fi
 
@@ -213,7 +204,7 @@ log_file="$state_dir/errors.log"
   print -- "model=$model thinking=$thinking untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit"
 } >> "$log_file"
 
-info "Planning commits with ${C_BWH}${model}${C_RES} (thinking: ${thinking})…"
+log_info "Planning commits with ${C_BWH}${model}${C_RES} (thinking: ${thinking})…"
 
 pi_args=(
   --print
@@ -253,9 +244,9 @@ fi
 [[ "$rc" -eq 0 ]] || die "pi-coding-agent failed (see $log_file)"
 
 if [[ ! -s "$plan_file" ]]; then
-  warn "the model returned a reply but did not call the Write tool to"
-  warn "create $plan_file. Try a stricter model:"
-  warn "  COMMIT_AI_MODEL=anthropic/claude-sonnet-4.6 commit-ai $*"
+  log_warn "the model returned a reply but did not call the Write tool to"
+  log_warn "create $plan_file. Try a stricter model:"
+  log_warn "  COMMIT_AI_MODEL=anthropic/claude-sonnet-4.6 commit-ai $*"
   die "no plan written (see $log_file)"
 fi
 
@@ -302,7 +293,7 @@ stage_commit() {
   local idx="$1"
   local files
   files=("${(@f)$(jq -r ".commits[$idx].files[]" "$plan_file")}")
-  [[ ${#files[@]} -gt 0 ]] || { warn "commit $((idx + 1)) has no files; skipping"; return 1; }
+  [[ ${#files[@]} -gt 0 ]] || { log_warn "commit $((idx + 1)) has no files; skipping"; return 1; }
   git add -- "${files[@]}"
 }
 
@@ -320,7 +311,7 @@ while [[ "$i" -lt "$commit_count" ]]; do
 
     # Re-empty check: if the editor leaves a blank file, abort that commit.
     if ! grep -q '[^[:space:]]' "$msg_file"; then
-      warn "empty commit message; aborting"
+      log_warn "empty commit message; aborting"
       unstage_all
       exit 0
     fi
@@ -331,18 +322,18 @@ while [[ "$i" -lt "$commit_count" ]]; do
       y|yes)
         git commit --quiet -F "$msg_file" \
           || { unstage_all; die "git commit failed"; }
-        ok "committed: $(git log -1 --pretty=%s)"
+        log_ok "committed: $(git log -1 --pretty=%s)"
         ;;
       *)
         unstage_all
-        info "aborted at commit $((i + 1)); no further commits will be created"
+        log_info "aborted at commit $((i + 1)); no further commits will be created"
         exit 0
         ;;
     esac
   else
     git commit --quiet -F "$msg_file" \
       || { unstage_all; die "git commit failed"; }
-    ok "committed: $(git log -1 --pretty=%s)"
+    log_ok "committed: $(git log -1 --pretty=%s)"
   fi
 
   i=$((i + 1))
