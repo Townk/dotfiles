@@ -128,6 +128,20 @@ cargo_write_manifest_stamp() {
   cp "$manifest" "$CARGO_MANIFEST_STAMP"
 }
 
+# Per-crate actions for the for_each loops in do_sync. They read do_sync's
+# locals (declared_full) and HAVE_BINSTALL via dynamic scope at call time, and
+# return non-zero on failure so for_each can tally.
+_cargo_install_one() {
+  local crate="$1" line
+  line=$(awk -v c="$crate" '$1 == c {print; exit}' "$declared_full")
+  cargo_provision "$line" || { log_warn "failed to install $crate"; return 1; }
+}
+_cargo_upgrade_one() {
+  local line="$1" crate="${1%% *}" force=false
+  cargo_manifest_line_changed "$crate" "$line" && force=true
+  cargo_provision "$line" "$force" || { log_warn "failed to upgrade $crate"; return 1; }
+}
+
 do_sync() {
   log_info "Syncing cargo crates..."
 
@@ -155,23 +169,14 @@ do_sync() {
     [[ -n "$crate" ]] && cargo uninstall "$crate"
   done
 
-  # Install missing
-  pkg::diff_only_in "$declared" "$installed" | while IFS= read -r crate; do
-    [[ -z "$crate" ]] && continue
-    local line; line=$(awk -v c="$crate" '$1 == c {print; exit}' "$declared_full")
-    cargo_provision "$line" || { had_failures=1; log_warn "failed to install $crate"; }
-  done
+  # Install missing. for_each runs the action per crate and tallies failures.
+  for_each "cargo install" _cargo_install_one \
+    < <(pkg::diff_only_in "$declared" "$installed") || had_failures=1
 
   # Upgrade everything still declared. cargo_provision is the canonical
   # upgrade path: cargo / binstall short-circuit when a crate is already at
   # the latest version, so the cost is one fast registry check per crate.
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    local crate="${line%% *}"
-    local force=false
-    cargo_manifest_line_changed "$crate" "$line" && force=true
-    cargo_provision "$line" "$force" || { had_failures=1; log_warn "failed to upgrade $crate"; }
-  done < "$declared_full"
+  for_each "cargo upgrade" _cargo_upgrade_one < "$declared_full" || had_failures=1
 
   (( had_failures == 0 )) && cargo_write_manifest_stamp "$declared_full"
 

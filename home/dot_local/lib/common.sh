@@ -89,3 +89,22 @@ require_cmd() {
 # stdin is a tty, or /dev/tty is openable even when stdin is a pipe. Used by
 # the prompt helpers and any tool deciding whether to show interactive UI.
 have_tty() { [ -t 0 ] || [ -e /dev/tty ]; }
+
+# --- iteration with a failure tally -----------------------------------------
+# for_each <label> <fn>   (items on stdin, one per line)
+# Run <fn> "<item>" for each non-empty line, counting the ones that return
+# non-zero. <fn> is responsible for any per-item message; for_each emits a
+# "<label>: N of M failed" summary when any failed and returns the failure
+# count (0 = all succeeded). The loop runs in the caller's shell — feed it with
+# `for_each ... < <(producer)` rather than a pipe so the tally is reliable in
+# both bash and zsh (a piped last stage is a subshell in bash).
+for_each() {
+  local label="$1" fn="$2" item total=0 failures=0
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    total=$((total + 1))
+    "$fn" "$item" || failures=$((failures + 1))
+  done
+  [ "$failures" -gt 0 ] && log_warn "$label: $failures of $total failed"
+  return "$failures"
+}
