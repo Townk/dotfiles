@@ -130,7 +130,7 @@ do_sync() {
 
   npm_snapshot_versions > "$before_snap"
 
-  pkg_manifest_read "$NPMFILE" > "$declared_full"
+  pkg::manifest_read "$NPMFILE" > "$declared_full"
   while IFS= read -r line; do
     [[ -n "$line" ]] && npm_line_canonical "$line"
   done < "$declared_full" > "$declared"
@@ -139,10 +139,10 @@ do_sync() {
   # Uninstall extras BEFORE installing missing — if a swap puts two
   # packages on the same binary path (e.g. both ship `bin/pi`), npm
   # install would fail with EEXIST.
-  pkg_diff_only_in "$installed" "$declared" | while IFS= read -r pkg; do
+  pkg::diff_only_in "$installed" "$declared" | while IFS= read -r pkg; do
     [[ -n "$pkg" ]] && npm uninstall -g "$pkg"
   done
-  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
+  pkg::diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     while IFS= read -r line; do
       [[ "$(npm_line_canonical "$line")" == "$pkg" ]] || continue
@@ -163,8 +163,8 @@ do_sync() {
 
   # Restart services whose backing global package changed version.
   npm_snapshot_versions > "$after_snap"
-  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
-  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
+  local -a changed=( ${(f)"$(pkg::changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg::restart_services_for "${changed[@]}"
   return 0
 }
 

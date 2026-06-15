@@ -171,13 +171,13 @@ brew_cleanup_packages() {
     brew_installed_taps > "$installed_taps"
 
     local cask="" formula="" tap=""
-    pkg_diff_only_in "$installed_casks" "$declared_casks" | while IFS= read -r cask; do
+    pkg::diff_only_in "$installed_casks" "$declared_casks" | while IFS= read -r cask; do
       [[ -n "$cask" ]] || continue
       brew uninstall --cask --force "$cask" \
         || log_warn "skipped extra cask that could not be uninstalled: $cask"
     done
 
-    pkg_diff_only_in "$installed_formulae" "$declared_formulae" | while IFS= read -r formula; do
+    pkg::diff_only_in "$installed_formulae" "$declared_formulae" | while IFS= read -r formula; do
       [[ -z "$formula" ]] && continue
       if brew_formula_has_installed_dependents "$formula"; then
         log_warn "skipped extra formula still required by another package: $formula"
@@ -188,7 +188,7 @@ brew_cleanup_packages() {
     done
     brew autoremove || log_warn "brew autoremove failed"
 
-    pkg_diff_only_in "$installed_taps" "$declared_taps" | while IFS= read -r tap; do
+    pkg::diff_only_in "$installed_taps" "$declared_taps" | while IFS= read -r tap; do
       [[ -z "$tap" || "$tap" == "homebrew/core" ]] && continue
       brew untap "$tap" || log_warn "skipped tap still in use: $tap"
     done
@@ -413,8 +413,8 @@ do_sync() {
   # services on its own, so a freshly-upgraded daemon keeps running the
   # old binary until we kick it.
   brew_snapshot_versions > "$after_snap"
-  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
-  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
+  local -a changed=( ${(f)"$(pkg::changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg::restart_services_for "${changed[@]}"
   return 0
 }
 

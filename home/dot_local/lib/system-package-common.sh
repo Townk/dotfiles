@@ -17,10 +17,10 @@ unset _pkg_common_self
 PKG_DIR="${PKG_DIR:-$HOME/.config/packages}"
 PKG_STATE_DIR="$PKG_DIR/.state"
 
-# pkg_manifest_read <file>
+# pkg::manifest_read <file>
 # Print one tool per line: strips #-comments (full-line and inline trailing),
 # trims leading/trailing whitespace, skips blank lines.
-pkg_manifest_read() {
+pkg::manifest_read() {
   local file="$1"
   [[ -f "$file" ]] || { log_error "manifest not found: $file"; return 1; }
   awk '
@@ -30,19 +30,19 @@ pkg_manifest_read() {
   ' "$file"
 }
 
-# pkg_diff_only_in <file_a> <file_b>
+# pkg::diff_only_in <file_a> <file_b>
 # Print sorted lines that appear in file_a but not in file_b.
-pkg_diff_only_in() {
+pkg::diff_only_in() {
   comm -23 <(sort -u "$1") <(sort -u "$2")
 }
 
-# pkg_changed_versions <before_file> <after_file>
+# pkg::changed_versions <before_file> <after_file>
 # Both files are "name\tversion" TSV (one row per package). Print one
 # package name per line where the version differs between before/after,
 # including packages that are new in <after_file>. Packages removed from
 # <after_file> are intentionally NOT emitted — uninstalled binaries don't
 # need a service restart (the orphan service is handled at sync time).
-pkg_changed_versions() {
+pkg::changed_versions() {
   local before="$1" after="$2"
   awk -F'\t' '
     NR==FNR { v[$1] = $2; next }
@@ -50,7 +50,7 @@ pkg_changed_versions() {
   ' "$before" "$after"
 }
 
-# pkg_restart_services_for <pkg>...
+# pkg::restart_services_for <pkg>...
 # Hook called by each system-package-<eco> worker after a sync to restart
 # any system service (launchd or brew) whose backing package was just
 # upgraded. Delegates the matching/status logic to `system-service
@@ -59,13 +59,13 @@ pkg_changed_versions() {
 #
 # Soft-fails: if `system-service` isn't on PATH (e.g. partial install on
 # a fresh machine) we silently skip — package sync should still succeed.
-pkg_restart_services_for() {
+pkg::restart_services_for() {
   (( $# > 0 )) || return 0
   command -v system-service >/dev/null 2>&1 || return 0
   system-service restart-for "$@" || true
 }
 
-# pkg_table_print <header> [group_col]
+# pkg::table_print <header> [group_col]
 # Read tab-separated rows from stdin and emit a formatted table:
 #   - header (bright blue), padded to each column's full width
 #   - underline (bright blue ─), spanning each column's full width
@@ -80,7 +80,7 @@ pkg_restart_services_for() {
 # "update available" annotation) are stripped for width calculation but
 # preserved on output.
 # Header is one string with tabs between column labels, e.g. $'Package\tVersion'.
-pkg_table_print() {
+pkg::table_print() {
   local header="$1"
   local group_col="${2:-0}"
   awk -F'\t' \

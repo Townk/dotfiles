@@ -94,7 +94,7 @@ is_valid_profile() {
 
 # Interactive form when invoked bare on a TTY.
 interactive_form() {
-  sec_have_tty || { usage >&2; die "no arguments and no TTY"; }
+  sec::have_tty || { usage >&2; die "no arguments and no TTY"; }
   log_info "Interactive onboarding (Ctrl-C to abort)"
   prompt_required ALIAS    "SSH alias (local only):"
   prompt_required HOSTNAME "SSH hostname / endpoint (local only):"
@@ -235,15 +235,15 @@ reconcile_age_identity() {
 # --- step 6: slot assignment -------------------------------------------------
 SLOT=""
 assign_slot() {
-  SLOT="$(sec_map_slot_for_alias "$ALIAS")"
+  SLOT="$(sec::map_slot_for_alias "$ALIAS")"
   if [[ -n "$SLOT" ]]; then
     # Existing mapping: enforce no silent profile/recipient change.
     local mapped_profile mapped_recipient
-    mapped_profile="$(sec_map_get "$SLOT" profile)"
+    mapped_profile="$(sec::map_get "$SLOT" profile)"
     [[ "$mapped_profile" == "$PROFILE" ]] \
       || die "alias '$ALIAS' is slot $SLOT with profile '$mapped_profile', not '$PROFILE' (hard stop)"
     if [[ "$KIND" == headless ]]; then
-      mapped_recipient="$(sec_map_get "$SLOT" recipient)"
+      mapped_recipient="$(sec::map_get "$SLOT" recipient)"
       if [[ -n "$mapped_recipient" && -n "$RECIPIENT" && "$mapped_recipient" != "$RECIPIENT" ]]; then
         die "slot $SLOT recipient changed ($mapped_recipient → $RECIPIENT); use a rotate flow (hard stop)"
       fi
@@ -252,8 +252,8 @@ assign_slot() {
   else
     # Allocate a fresh, collision-free opaque slot.
     while :; do
-      SLOT="$(sec_gen_slot)"
-      [[ -z "$(sec_map_get "$SLOT" kind)" ]] && break
+      SLOT="$(sec::gen_slot)"
+      [[ -z "$(sec::map_get "$SLOT" kind)" ]] && break
     done
     log_info "assigned new slot $SLOT for $ALIAS"
   fi
@@ -261,15 +261,15 @@ assign_slot() {
     log_info "[dry-run] would record $SLOT → (alias $ALIAS, $PROFILE, $KIND) in the operator map"
     return 0
   fi
-  sec_map_set "$SLOT" "$ALIAS" "$PROFILE" "$KIND" "$RECIPIENT"
+  sec::map_set "$SLOT" "$ALIAS" "$PROFILE" "$KIND" "$RECIPIENT"
   if [[ "$KIND" == headless ]]; then
-    sec_sops_rule_set "$SLOT" "$RECIPIENT"
+    sec::sops_rule_set "$SLOT" "$RECIPIENT"
   fi
 }
 
 # --- step 7: secrets ---------------------------------------------------------
 reconcile_secrets() {
-  local frag; frag="$(sec_fragment_path "$SLOT")"
+  local frag; frag="$(sec::fragment_path "$SLOT")"
   if [[ -f "$frag" ]] && (( ! ROTATE_SECRETS )); then
     log_info "fragment for $SLOT exists; skipping secret entry (use --rotate-secrets to re-collect)"
     return 0
@@ -278,7 +278,7 @@ reconcile_secrets() {
     log_info "[dry-run] would collect $PROFILE secrets and write the $KIND fragment for $SLOT"
     return 0
   fi
-  sec_rebuild_slot "$SLOT"
+  sec::rebuild_slot "$SLOT"
   SECRETS_REBUILT=1
 }
 
@@ -293,8 +293,8 @@ commit_and_push() {
     return 0
   fi
   local paths
-  paths=("${(@f)$(sec_commit_paths_for_slot "$SLOT")}")
-  sec_git_commit "feat(secrets): onboard $SLOT" "${paths[@]}"
+  paths=("${(@f)$(sec::commit_paths_for_slot "$SLOT")}")
+  sec::git_commit "feat(secrets): onboard $SLOT" "${paths[@]}"
   if (( NO_PUSH )); then
     log_info "--no-push: not pushing"
     return 0
@@ -387,7 +387,7 @@ converge_remote() {
 # a --local self-onboard, never recorded its own slot in ITS operator map — so
 # its local `system-secrets list/rotate/reconcile` couldn't see its own slot.
 # Upsert just THIS machine's entry into the target's loose map (a deep merge, so
-# any peers it may already manage are preserved). Values mirror sec_map_set;
+# any peers it may already manage are preserved). Values mirror sec::map_set;
 # idempotent. yq is resolved via rexec's normalized REMOTE_PATH. Runs from
 # converge_remote, so it covers both the operator-driven and self-onboarded
 # branches. Best-effort: a failure only costs the target its self-management.
@@ -466,7 +466,7 @@ detect_remote_self_onboard() {
 # NOT under ~/.config/zsh/secrets.d, so no shell sources it: interactive
 # sessions stay in 1Password "account" (desktop-app) mode with full Private
 # access. The token is injected into the environment only when needed (the SSH
-# apply), never globally exported. It is the raw token string (what `sec_op`
+# apply), never globally exported. It is the raw token string (what `sec::op`
 # cats), not a sourceable `export` line. Piped to the remote over stdin so it
 # never appears in argv.
 OP_TOKEN_REL=".local/share/op/service-account"
@@ -480,7 +480,7 @@ reconcile_op_token() {
     log_info "service-account token already present on $ALIAS (use --rotate-secrets to replace)"
     return 0
   fi
-  sec_op_ensure_token
+  sec::op_ensure_token
   local token; token="$(cat "$OP_SA_TOKEN_FILE")"
   printf '%s' "$token" \
     | rexec "umask 077; mkdir -p ~/.local/share/op && cat > ~/$OP_TOKEN_REL && chmod 600 ~/$OP_TOKEN_REL" \
@@ -491,7 +491,7 @@ reconcile_op_token() {
 
 main() {
   parse_args "$@"
-  sec_repo_paths
+  sec::repo_paths
   require_cmd chezmoi git yq
 
   # --- self (local) onboarding ---------------------------------------------
@@ -503,7 +503,7 @@ main() {
     if (( DRY_RUN )); then
       log_info "[dry-run] would ensure the SA token (operator status) at $OP_SA_TOKEN_FILE"
     else
-      sec_op_ensure_token          # also makes this machine an operator
+      sec::op_ensure_token          # also makes this machine an operator
     fi
     assign_slot
     reconcile_secrets
@@ -539,7 +539,7 @@ main() {
     if (( DRY_RUN )); then
       log_info "[dry-run] would record $SLOT → (alias $ALIAS, $PROFILE, $KIND) in the operator map"
     else
-      sec_map_set "$SLOT" "$ALIAS" "$PROFILE" "$KIND" ""
+      sec::map_set "$SLOT" "$ALIAS" "$PROFILE" "$KIND" ""
     fi
     converge_remote
     log_ok "connectivity reconciled for $ALIAS (self-onboarded slot $SLOT)"

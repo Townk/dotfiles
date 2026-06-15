@@ -10,9 +10,12 @@
 #   * help-token dispatch: is_help / args_contain_help
 #   * command presence: require_cmd
 #
-# Domain libraries keep their OWN prefixed helpers (pkg_manifest_read,
-# sec_rebuild_slot, pick::start, svc_*); only these neutral primitives live
-# here, under one canonical name each.
+# Domain libraries keep their OWN namespaced helpers (pkg::manifest_read,
+# sec::rebuild_slot, pick::start, svc::*); only these neutral primitives live
+# here, under one canonical name each. Convention: library functions are
+# namespaced with `::`; this shared base stays bare (it is the stdlib, not a
+# module); module constants stay UPPER_SNAKE (PKG_DIR, LAUNCH_AGENTS, …) since
+# `::` is not valid in shell variable names.
 #
 # Written to work under BOTH zsh (the scripts) and bash (the bats suite sources
 # system-package-common.sh, which sources this). Avoid zsh-only syntax here.
