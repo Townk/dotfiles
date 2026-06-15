@@ -1,0 +1,93 @@
+#!/bin/sh
+# wait-until — run a test command repeatedly until it succeeds or a timeout
+# elapses. A tighter alternative to a fixed `sleep`: it returns the instant the
+# condition holds instead of always paying the worst-case wait.
+#
+# Usage:
+#   wait-until [--timeout DURATION] [--interval SECONDS] [--quiet] -- CMD [ARG...]
+#
+# DURATION accepts `2s` (seconds), `500ms` (milliseconds), or a bare number
+# (seconds). CMD is the condition — exit 0 means satisfied. CMD is checked ONCE
+# before the first sleep, so an already-true condition returns immediately.
+#
+# Exit status: 0 when CMD succeeds within the budget; 1 on timeout; 2 on a
+# usage error.
+#
+# A standalone POSIX-sh bin (not a sourced function) on purpose: its callers
+# span sh/bash (nvim-wez.sh) and zsh, and it only ever tests EXTERNAL commands,
+# so a single bin on PATH serves every shell. The "wait on a known background
+# PID while drawing a spinner" case is deliberately NOT covered here — that is a
+# separate UI concern (see the commit-* spinners / run_with_spinner).
+#
+# Examples:
+#   wait-until --timeout 5s -- test -S "$sock"
+#   wait-until --timeout 2s --interval 0.05 -- pgrep -x wezterm-gui
+set -eu
+
+prog=wait-until
+timeout=2
+interval=0.1
+quiet=0
+
+usage() {
+  cat <<EOF
+Usage: $prog [--timeout DURATION] [--interval SECONDS] [--quiet] -- CMD [ARG...]
+
+Poll CMD until it exits 0 or the timeout elapses. CMD is checked once before
+the first sleep. DURATION: '2s', '500ms', or a bare number of seconds.
+
+  --timeout DURATION   total time budget (default 2s)
+  --interval SECONDS   delay between attempts (default 0.1)
+  --quiet              do not print the timeout message to stderr
+  -h, --help           show this help
+EOF
+}
+
+# to_seconds DURATION -> float seconds on stdout.
+to_seconds() {
+  case "$1" in
+    *ms) printf '%s\n' "$1" | awk '{ sub(/ms$/, ""); printf "%f\n", $1 / 1000 }' ;;
+    *s)  printf '%s\n' "$1" | awk '{ sub(/s$/, "");  printf "%f\n", $1 }' ;;
+    *)   printf '%s\n' "$1" | awk '{ printf "%f\n", $1 }' ;;
+  esac
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --timeout)    [ $# -ge 2 ] || { usage >&2; exit 2; }; timeout=$2; shift 2 ;;
+    --timeout=*)  timeout=${1#--timeout=}; shift ;;
+    --interval)   [ $# -ge 2 ] || { usage >&2; exit 2; }; interval=$2; shift 2 ;;
+    --interval=*) interval=${1#--interval=}; shift ;;
+    --quiet)      quiet=1; shift ;;
+    -h|--help)    usage; exit 0 ;;
+    --)           shift; break ;;
+    -*)           printf '%s: unknown option: %s\n' "$prog" "$1" >&2; usage >&2; exit 2 ;;
+    *)            break ;;
+  esac
+done
+
+[ $# -gt 0 ] || { printf '%s: no command given\n' "$prog" >&2; usage >&2; exit 2; }
+
+timeout_s=$(to_seconds "$timeout")
+interval_s=$(to_seconds "$interval")
+
+# attempts = ceil(timeout / interval) + 1. The +1 is the immediate pre-sleep
+# check; a zero/negative interval collapses to a single attempt.
+attempts=$(awk -v t="$timeout_s" -v i="$interval_s" 'BEGIN {
+  if (i <= 0) { print 1; exit }
+  n = t / i
+  print (n == int(n) ? n : int(n) + 1) + 1
+}')
+
+n=0
+while :; do
+  if "$@"; then
+    exit 0
+  fi
+  n=$((n + 1))
+  [ "$n" -ge "$attempts" ] && break
+  sleep "$interval_s"
+done
+
+[ "$quiet" -eq 1 ] || printf '%s: timed out after %s waiting for: %s\n' "$prog" "$timeout" "$*" >&2
+exit 1
