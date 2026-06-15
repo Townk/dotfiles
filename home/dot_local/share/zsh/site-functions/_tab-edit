@@ -1,0 +1,6 @@
+#compdef tab-edit
+#
+# Completion for tab-edit, which opens its file arguments in nvim inside a new
+# WezTerm/Zellij tab. The arguments are just paths to open.
+
+_arguments '*:file:_files'

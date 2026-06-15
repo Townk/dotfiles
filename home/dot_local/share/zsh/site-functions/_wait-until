@@ -1,0 +1,18 @@
+#compdef wait-until
+#
+# Completion for wait-until. Options precede the `--` separator; everything
+# after it is the test CMD and its args, so we complete a command name (once)
+# and then defer that command's own arguments to _normal — the precommand
+# pattern used by nice / nohup / timeout.
+
+_wait-until() {
+  _arguments -s \
+    '(-h --help)'{-h,--help}'[show help and exit]' \
+    '--timeout[total time budget (e.g. 2s, 500ms, or bare seconds)]:duration' \
+    '--interval[delay between attempts in seconds]:seconds' \
+    '--quiet[do not print the timeout message to stderr]' \
+    '(-)1:command:_command_names -e' \
+    '*::arguments:_normal'
+}
+
+_wait-until "$@"

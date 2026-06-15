@@ -1,0 +1,22 @@
+#compdef ai-commit-cursor
+#
+# Completion for ai-commit-cursor (also reached when `ai-commit cursor …`
+# defers here). --dry-run and --no-commit are mutually exclusive. --list-models
+# short-circuits before touching the repo, so it's exclusive with everything
+# else. Positionals after `--` are extra agent guidance (often file globs).
+
+_ai-commit-cursor() {
+  _arguments -s \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '(- *)'{-L,--list-models}'[list available Cursor models and exit]' \
+    '(-u --untracked)'{-u,--untracked}'[also include untracked files]' \
+    '(-d --dry-run -n --no-commit)'{-d,--dry-run}'[print the plan without staging or committing]' \
+    '(-n --no-commit -d --dry-run)'{-n,--no-commit}'[stage + open \$EDITOR + prompt per commit]' \
+    '(-f --force-refresh --replan)'{-f,--force-refresh,--replan}'[ignore any cached plan and replan]' \
+    '(-m --model)'{-m,--model}'[override Cursor model]:model' \
+    '--sandbox[Cursor sandbox mode]:mode:(enabled disabled)' \
+    '(-v --verbose)'{-v,--verbose}'[show cursor-agent output as it plans]' \
+    '*::extra guidance:_files'
+}
+
+_ai-commit-cursor "$@"

@@ -1,0 +1,8 @@
+#compdef chezmoi-reverse
+#
+# Completion for chezmoi-reverse, which propagates destination edits back into
+# the chezmoi source. Arguments are the destination files to reverse-apply.
+
+_arguments -s \
+  '--no-merge[on conflict, leave source untouched and emit needs-merge instead of merging]' \
+  '*:file:_files'

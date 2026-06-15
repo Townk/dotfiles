@@ -1,0 +1,7 @@
+#compdef preview
+#
+# Completion for preview, the fzf/Yazi previewer. Normally invoked by those
+# tools with a path, but it's useful to run by hand to test a file's preview —
+# it reads a single path argument.
+
+_arguments '1:file:_files'

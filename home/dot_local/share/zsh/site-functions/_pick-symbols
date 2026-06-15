@@ -1,0 +1,19 @@
+#compdef pick-glyph pick-gitmoji
+#
+# Shared completion for the symbols.db-backed fzf pickers. Both expose the same
+# option surface (parsed by pick_symbols::parse_args in pick-symbols-common.zsh),
+# so a single multi-#compdef file covers them. If one picker grows a unique flag
+# later, split it into its own completion file rather than special-casing here.
+
+_pick-symbols() {
+  _arguments -s \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '(-m --multi)'{-m,--multi}'[select multiple symbols (concatenated on output)]' \
+    '(-c --copy)'{-c,--copy}'[copy the result to the clipboard instead of stdout]' \
+    '(-q --query)'{-q,--query}'[seed fzf with an initial query string]:query' \
+    '--resume[reopen with the previous query + cursor restored]' \
+    '--no-border[suppress fzf'\''s border (for embedding in a bordered pane)]' \
+    '--db[override the symbols.db path]:db file:_files'
+}
+
+_pick-symbols "$@"

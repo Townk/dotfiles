@@ -1,0 +1,20 @@
+#compdef ai-commit-pi
+#
+# Completion for ai-commit-pi (also reached when `ai-commit pi …` defers here).
+# --dry-run and --no-commit are mutually exclusive; the exclusion lists encode
+# that. Positionals after `--` are extra agent guidance (often file globs), so
+# they complete as files.
+
+_ai-commit-pi() {
+  _arguments -s \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '(-u --untracked)'{-u,--untracked}'[also include untracked files]' \
+    '(-d --dry-run -n --no-commit)'{-d,--dry-run}'[print the plan without staging or committing]' \
+    '(-n --no-commit -d --dry-run)'{-n,--no-commit}'[stage + open \$EDITOR + prompt per commit]' \
+    '(-m --model)'{-m,--model}'[override model]:model' \
+    '--thinking[thinking level]:level:(off minimal low medium high xhigh)' \
+    '(-v --verbose)'{-v,--verbose}'[show pi-coding-agent output as it plans]' \
+    '*::extra guidance:_files'
+}
+
+_ai-commit-pi "$@"

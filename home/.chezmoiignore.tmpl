@@ -46,6 +46,7 @@
      other non-GUI host. */}}
 {{ if not (or (eq .chezmoi.os "darwin") $guiLinux) -}}
 .local/bin/tab-edit
+.local/share/zsh/site-functions/_tab-edit
 {{- end }}
 {{/* The Linux .desktop handler generator only makes sense on a graphical
      Linux: macOS uses the Finder droplet instead, and headless hosts have no
