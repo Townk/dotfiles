@@ -2,9 +2,8 @@
 
 Personal dotfiles for macOS (Apple Silicon), managed by
 [chezmoi](https://www.chezmoi.io). macOS-specific artifacts are gated to
-`darwin` via `.chezmoiignore.tmpl` and per-script template guards so the same
+`darwin` via `.chezmoiignore.tmpl` and per-script otherword guards so the same
 source can later coexist with a Linux machine without polluting it.
-
 ## What's inside
 
 | Path | Purpose |
