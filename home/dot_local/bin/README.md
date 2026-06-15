@@ -24,12 +24,17 @@ common.sh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
    │     (bash + zsh)              restart hook, outdated rows, table print)
    ├── system-secrets-common.sh .. sec::*  (slots, SOPS/age, 1Password, leak audit)
    │     └── (also sources prompt-common.zsh)
+   ├── platform.sh ............... platform::*  (OS shim → platform-macos.sh /
+   │     (bash + zsh)              platform-linux.sh: launch GUI app, raise window)
    └── commit-agent-common.zsh ... cagent::*  (spinner, plan summary/dry-run,
                                     stage/commit loop)
 ```
 
-`common.sh` and `system-package-common.sh` stay bash-sourceable because the
-bats suite sources them under bash; the others are zsh-only.
+`common.sh`, `system-package-common.sh`, and the `platform*.sh` files stay
+bash-sourceable (the bats suite — and nvim-wez.sh — source them under bash);
+the `*.zsh` modules are zsh-only. `platform.sh` dispatches on `$PLATFORM_OS`
+(default `uname -s`, overridable in tests) and only the active OS's
+implementation is deployed (see `.chezmoiignore.tmpl`).
 
 ## Naming conventions
 
@@ -48,7 +53,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | AI-driven git commits | `commit-ai`, `commit-cursor` | `commit-agent-common.zsh` |
 | Symbol pickers (fzf) | `pick-glyph`, `pick-gitmoji` | `pick-symbols-common.zsh` → `pick-common.zsh` |
 | File preview (fzf/yazi) | `preview` | — |
-| Editor/terminal glue | `nvim-wez.sh`¹, `pinentry-auto`¹ | — |
+| Editor/terminal glue | `nvim-wez.sh`¹, `pinentry-auto`¹ | `platform.sh` (nvim-wez) |
 | chezmoi tooling | `chezmoi-reverse` | — |
 | Package management | `system-package` + `system-package-{brew,cargo,go,npm,snap,uv}` | `system-package-common.sh` |
 | Service management | `system-service`, `system-service-{launchd,brew}` | `system-package-common.sh` |
