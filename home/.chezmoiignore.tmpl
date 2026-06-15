@@ -6,6 +6,9 @@
       AppleScript, and the WezTerm GUI socket)
 */ -}}
 .config/nvim/lazy-lock.json
+{{/* bin/README.md documents the scripts in-repo; it must never deploy to
+     ~/.local/bin (it's reference material, not a runtime artifact). */}}
+.local/bin/README.md
 {{/* ~/.ssh/config is local-only: work SSH tooling rewrites it on every run, so
      it stays unmanaged. Managed fragments are pulled in via the file's
      `Include ~/.ssh/config.d/*` (see ~/.ssh/config.example). */}}
