@@ -79,15 +79,30 @@ probe_available() {
   done
 }
 
-# pick_harness — fzf-pick among AVAILABLE, printing the chosen harness name.
-# pick-common is sourced lazily so an explicit-harness run never needs fzf.
+# pick_harness — pick among AVAILABLE, printing the chosen harness name.
+# zellij.zsh is sourced lazily (it pulls in pick-common.zsh for pick::line) so
+# an explicit-harness run never needs fzf. zj::pick is a drop-in for
+# pick::start that floats the picker in a Zellij pane when one is available,
+# and runs it inline otherwise. --selector opens in browse (selection) mode.
+#
+# Each row is "<icon>  <name>  <label>". Names are right-padded to the widest so
+# the labels line up in a column; ICONS maps known harnesses, with a generic
+# gear for any future one. Colors are the same truecolor SGR the glyph/gitmoji
+# pickers use (bright-white icon, blue #89b4fa name, grey #7f849c label); they
+# are hardcoded — not common.sh's C_* — because this loop's stdout is a pipe, so
+# common.sh blanks its palette, and fzf renders these via --ansi.
 pick_harness() {
-  source "$HOME/.local/lib/pick-common.zsh"
-  local h
+  source "$HOME/.local/lib/zellij.zsh"
+  local -A icons=( pi $'\U0010FB02' cursor $'\U0010FB00' )
+  local c_icon=$'\e[38;2;255;255;255m' c_name=$'\e[38;2;137;180;250m'
+  local c_desc=$'\e[38;2;127;132;156m' c_off=$'\e[0m'
+  local h w=0
+  for h in "${AVAILABLE[@]}"; do (( ${#h} > w )) && w=${#h}; done
   for h in "${AVAILABLE[@]}"; do
-    pick::line "${h}  ${C_DIM}${LABELS[$h]}${C_RES}" "$h"
-  done | PICK_NAME=ai-commit pick::start \
-      --output field:1 \
+    pick::line "${c_icon}${icons[$h]:-$'\uf013'}${c_off}  ${c_name}${(r:$w:)h}${c_off}  ${c_desc}${LABELS[$h]}${c_off}" "$h"
+  done | PICK_NAME=ai-commit zj::pick \
+      --pane-width 63 --pane-height 12 \
+      --output field:1 --selector --selector-nav \
       --header "Commit harness" \
       --hints $'\U000F0331 : run  \u00b7  \U000F12B7 : cancel'
 }

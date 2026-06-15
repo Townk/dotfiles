@@ -1,0 +1,26 @@
+#!/usr/bin/env zsh
+# pick-list — standalone front-end to the fzf picker engine (pick::start).
+#
+# Off-PATH backend helper (reached by absolute path, never typed), so it lives
+# in ~/.local/libexec/ beside pick-glyph / pick-gitmoji. Its sole purpose is to
+# give callers that do NOT source pick-common.zsh a way to run pick::start in a
+# fresh process — in particular the zj::pick floating-pane child (see
+# ~/.local/lib/zellij.zsh), which spawns a separate process inside a Zellij
+# float and so cannot reuse the parent's sourced functions.
+#
+# It sources the engine and forwards every argument straight through, so the
+# full pick::start option grammar is available. Rows come from a trailing file
+# argument or from stdin:
+#
+#   pick-list [pick::start opts...] -- LINES_FILE
+#   producer | pick-list [pick::start opts...]
+#
+# PICK_NAME (cache namespace) may be set by the caller; it defaults to
+# pick-list. The selection is printed on stdout; a cancel propagates through
+# pick::start's own exit 130.
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/pick-common.zsh"
+
+PICK_NAME="${PICK_NAME:-pick-list}" pick::start "$@"

@@ -16,6 +16,8 @@ absolute path from its caller, so it never needs to be on `PATH`:
 - `pick-glyph`, `pick-gitmoji` — the fzf symbol pickers, driven by the zellij
   `pick-{glyph,gitmoji}-zellij` adapters (`Ctrl+Shift+u` / `Ctrl+Shift+g`);
   backed by `pick-symbols-common.zsh` → `pick-common.zsh`.
+- `pick-list` — a generic standalone front-end to `pick::start`, used by
+  `zj::pick` (in `zellij.zsh`) to run a picker inside a Zellij floating pane.
 
 ## Library layering
 
@@ -28,7 +30,9 @@ common.sh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
                         have_tty, for_each
    ├── prompt-common.zsh ......... prompt::required/default/secret/choice/confirm
    ├── pick-common.zsh ........... pick::*  (the fzf picker engine)
-   │     └── pick-symbols-common.zsh   pick_symbols::*  (glyph/gitmoji shared bits)
+   │     ├── pick-symbols-common.zsh   pick_symbols::*  (glyph/gitmoji shared bits)
+   │     └── zellij.zsh ............ zj::*  (zj::pick: drop-in for pick::start
+   │                                 that floats the picker when zellij is present)
    ├── system-package-common.sh .. pkg::*  (manifest parsing, version diff,
    │     (bash + zsh)              restart hook, outdated rows, table print)
    ├── system-secrets-common.sh .. sec::*  (slots, SOPS/age, 1Password, leak audit)
@@ -59,7 +63,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 
 | Category | Scripts | Backing library |
 |---|---|---|
-| AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh` |
+| AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh`, `zellij.zsh` |
 | File preview (fzf/yazi) | `preview` | — |
 | Editor/terminal glue | `tab-edit`² | `platform.sh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |

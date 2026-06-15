@@ -16,7 +16,7 @@
 # passed to this scaffolding after `--`.
 #
 # Usage:
-#   zellij-modal --title TEXT [--inject] -- CMD [ARGS...]
+#   zellij-modal --title TEXT [--inject | --capture FILE] -- CMD [ARGS...]
 #
 #   --title TEXT  Title shown in the catppuccin header block. The block
 #                 is three interior rows (blank, "▓▓▓ <title>", rule).
@@ -27,9 +27,17 @@
 #                 focus-previous-pane fallback). Without it ("action"
 #                 mode) CMD runs in the foreground and owns its own
 #                 outcome — e.g. zellij-quit-confirm calls kill-session.
+#   --capture FILE  Capture mode. Like --inject, capture CMD's stdout and
+#                 strip the single trailing newline, but instead of
+#                 injecting it into a tile, write it to FILE — a FIFO the
+#                 spawning process blocks on (see zj::pick in
+#                 ~/.local/lib/zellij.zsh). The result is written via an
+#                 EXIT trap so the reader unblocks even on cancel/ESC.
+#                 No tile discovery: the originating pane is a blocked
+#                 process, not a shell prompt awaiting text.
 #   -- CMD ...    The target command. Everything after `--` is run
-#                 verbatim. In picker mode CMD's stdout is the payload;
-#                 fzf/gum keep /dev/tty for their interactive UI.
+#                 verbatim. In picker/capture mode CMD's stdout is the
+#                 payload; fzf/gum keep /dev/tty for their interactive UI.
 #
 # Title-block contract for picker targets: this script prints three
 # interior rows above the target, so a picker filling the pane should
@@ -47,14 +55,17 @@ ZELLIJ_BIN="${ZELLIJ_BIN:-/opt/homebrew/bin/zellij}"
 
 title=""
 inject=0
+capture=""
 cmd=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --title)   title="${2-}"; shift 2 ;;
-    --title=*) title="${1#*=}"; shift ;;
-    --inject)  inject=1; shift ;;
-    --)        shift; cmd=( "$@" ); break ;;
-    *)         echo "zellij-modal: unknown option: $1" >&2; exit 2 ;;
+    --title)     title="${2-}"; shift 2 ;;
+    --title=*)   title="${1#*=}"; shift ;;
+    --inject)    inject=1; shift ;;
+    --capture)   capture="${2-}"; shift 2 ;;
+    --capture=*) capture="${1#*=}"; shift ;;
+    --)          shift; cmd=( "$@" ); break ;;
+    *)           echo "zellij-modal: unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
@@ -139,6 +150,24 @@ if [[ -n "$title" ]]; then
   rule=$(printf '━%.0s' $(seq 1 "$cols"))
   printf '\n  %s▓▓▓ %s%s\n' "$SGR_TITLE" "$title" "$SGR_RESET"
   printf '  %s%s%s\n'       "$SGR_RULE"  "$rule"  "$SGR_RESET"
+fi
+
+if [[ -n "$capture" ]]; then
+  # Capture mode: run the target, capture its stdout, and hand the result back
+  # to the spawning process by writing it to $capture (a FIFO the caller blocks
+  # on). No tile discovery — the originating pane is a blocked process, not a
+  # shell prompt. The EXIT trap writes the result on every exit path (clean
+  # finish, ESC/cancel, or a non-zero target), so the reader always unblocks;
+  # opening the FIFO for write rendezvouses with the caller's read.
+  focus_self
+  focus_self_deferred
+  result=""
+  tmp=$(mktemp -t zellijmodal)
+  trap 'printf "%s" "$result" > "$capture"; rm -f -- "$tmp"' EXIT
+  "${cmd[@]}" >"$tmp" || true
+  result=$(cat "$tmp")
+  result="${result%$'\n'}"
+  exit 0
 fi
 
 if (( ! inject )); then

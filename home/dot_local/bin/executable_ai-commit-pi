@@ -29,7 +29,7 @@ set -eu -o pipefail
 # ────────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == --probe ]]; then
   command -v pi >/dev/null 2>&1 || exit 1
-  print -r -- "pi-coding-agent"
+  print -r -- "Pi Coding Agent"
   exit 0
 fi
 
