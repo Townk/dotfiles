@@ -7,7 +7,7 @@
   whitespace = trailing-space,space-before-tab
   autocrlf = "input"
   commentchar = ";"
-  pager = delta
+  pager = hunk pager
 
 [interactive]
   diffFilter = delta --color-only
@@ -209,5 +209,8 @@
   email-domains = !git log --format=%aE | awk -F'@' '{print $2}' | sort -u
 
   dv = "!f() { nvim -f -c \"DiffviewOpen $*\" -c 'autocmd TabClosed * qa'; }; f"
+
+  hdiff = "-c core.pager=\"hunk pager\" diff"
+  hshow = "-c core.pager=\"hunk pager\" show"
 
 # vim:ft=gitconfig
