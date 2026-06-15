@@ -25,6 +25,15 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/runtime-${UID:-$(id -u)}"
 # re-prompts). mkdir -p is idempotent; never let it break sourcing.
 [ -d "$XDG_RUNTIME_DIR" ] || mkdir -m 700 -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
 
+# Refuse bare `pip install`. A loose `pip install [--user]` against the mise
+# Python writes console-script shims straight into ~/.local/bin and dependency
+# trees into ~/.local/lib, polluting both (e.g. an accidental `matplotlib`/
+# `yfinance` install dragged in ~35 packages and 13 stray shims). This makes
+# pip error out unless a virtualenv is active. It does NOT affect `uv pip`
+# (uv ignores it) nor `pip` run from inside an explicit venv, so isolated tool
+# installs (uv tool, project venvs, the nerd-font build) keep working.
+export PIP_REQUIRE_VIRTUALENV=true
+
 # PATH for non-interactive shells. `.zshrc`'s `path=(~/.local/bin …)` only
 # runs in interactive zsh, which means `#!/bin/zsh` scripts (system-update,
 # system-package, …) can't find local/mise binaries. Prepend the two
