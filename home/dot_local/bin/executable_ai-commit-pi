@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 #
-# commit-ai — AI-driven git commits via pi-coding-agent's commit skill.
+# ai-commit-pi — AI-driven git commits via pi-coding-agent's commit skill.
 #
 # Asks pi to analyze the working tree, group changes into logical commits,
 # and produce Conventional Commits-format messages. The script owns every
@@ -10,14 +10,28 @@
 # Agent contract: pi reads the diff, writes a JSON plan to a tempfile,
 # then exits. It never runs `git add` or `git commit`. The script reads
 # the plan and stages + commits one group at a time.
+#
+# Usable standalone or as a harness behind the `ai-commit` dispatcher, which
+# discovers this script via the `ai-commit-*` naming and the --probe contract.
 
 set -eu -o pipefail
 
 # ────────────────────────────────────────────────────────────────────
 # Defaults — overridable via env or flags
 # ────────────────────────────────────────────────────────────────────
-: "${COMMIT_AI_MODEL:=opencode-go/deepseek-v4-flash}"
-: "${COMMIT_AI_THINKING:=medium}"
+: "${AI_COMMIT_MODEL:=opencode-go/deepseek-v4-flash}"
+: "${AI_COMMIT_THINKING:=medium}"
+
+# ────────────────────────────────────────────────────────────────────
+# Probe contract (used by the `ai-commit` dispatcher to detect available
+# harnesses): print a short label and exit 0 iff the backing CLI is present,
+# else exit 1 silently. Handled before anything heavier so it stays cheap.
+# ────────────────────────────────────────────────────────────────────
+if [[ "${1:-}" == --probe ]]; then
+  command -v pi >/dev/null 2>&1 || exit 1
+  print -r -- "pi-coding-agent"
+  exit 0
+fi
 
 # ────────────────────────────────────────────────────────────────────
 # Shared commit-agent engine: pulls in the base (C_*, log_*, die), the prompt
@@ -27,7 +41,7 @@ source "$HOME/.local/lib/commit-agent-common.zsh"
 
 usage() {
   cat <<EOF
-Usage: commit-ai [options] [-- extra-guidance...]
+Usage: ai-commit-pi [options] [-- extra-guidance...]
 
 Use pi-coding-agent to group the working tree's changes into one or more
 logical commits and create them using the project's commit skill.
@@ -39,11 +53,11 @@ Options:
   -n, --no-commit     For each planned commit: stage the files, open
                       \$EDITOR with the message, then prompt to commit.
                       Saying No aborts without creating the commit.
-  -m, --model <id>    Override model (default: \$COMMIT_AI_MODEL or
+  -m, --model <id>    Override model (default: \$AI_COMMIT_MODEL or
                       opencode-go/deepseek-v4-flash). Supports pi's
                       provider/id and fuzzy patterns.
       --thinking <l>  Override thinking level: off|minimal|low|medium|
-                      high|xhigh (default: \$COMMIT_AI_THINKING or medium).
+                      high|xhigh (default: \$AI_COMMIT_THINKING or medium).
   -v, --verbose       Show pi-coding-agent output as it plans.
   -h, --help          Show this help.
 
@@ -52,13 +66,13 @@ additional commit guidance — file globs to scope to, scope hints,
 JIRA references, etc.
 
 Environment:
-  COMMIT_AI_MODEL     Default model.
-  COMMIT_AI_THINKING  Default thinking level.
+  AI_COMMIT_MODEL     Default model.
+  AI_COMMIT_THINKING  Default thinking level.
 
 Logs:
   pi-coding-agent's stdout+stderr (which pi's TUI clears from the
   terminal on exit) is appended to
-  \${XDG_STATE_HOME:-\$HOME/.local/state}/commit-ai/errors.log
+  \${XDG_STATE_HOME:-\$HOME/.local/state}/ai-commit-pi/errors.log
 EOF
 }
 
@@ -69,8 +83,8 @@ include_untracked=0
 dry_run=0
 no_commit=0
 verbose=0
-model="$COMMIT_AI_MODEL"
-thinking="$COMMIT_AI_THINKING"
+model="$AI_COMMIT_MODEL"
+thinking="$AI_COMMIT_THINKING"
 extra_guidance=()
 
 while [[ $# -gt 0 ]]; do
@@ -126,7 +140,7 @@ fi
 # ────────────────────────────────────────────────────────────────────
 # Build prompt
 # ────────────────────────────────────────────────────────────────────
-tmpdir="$(mktemp -d -t commit-ai.XXXXXX)"
+tmpdir="$(mktemp -d -t ai-commit-pi.XXXXXX)"
 pi_pid=""
 cleanup() {
   [[ -n "$pi_pid" ]] && kill "$pi_pid" 2>/dev/null
@@ -194,7 +208,7 @@ EOF
 # in text mode and clears the screen on exit, so any error it printed
 # would otherwise be gone before the user could read it — even with
 # --verbose.
-state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/commit-ai"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ai-commit-pi"
 mkdir -p "$state_dir"
 log_file="$state_dir/errors.log"
 
@@ -231,7 +245,7 @@ fi
 if [[ ! -s "$plan_file" ]]; then
   log_warn "the model returned a reply but did not call the Write tool to"
   log_warn "create $plan_file. Try a stricter model:"
-  log_warn "  COMMIT_AI_MODEL=anthropic/claude-sonnet-4.6 commit-ai $*"
+  log_warn "  AI_COMMIT_MODEL=anthropic/claude-sonnet-4.6 ai-commit-pi $*"
   die "no plan written (see $log_file)"
 fi
 

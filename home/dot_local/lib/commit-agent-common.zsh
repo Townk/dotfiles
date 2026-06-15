@@ -1,9 +1,9 @@
 #!/usr/bin/env zsh
-# commit-agent-common.zsh — shared engine for the AI-driven commit front-ends
-# (commit-ai, commit-cursor). They differ in how they invoke their agent and
-# whether they cache the plan; everything from the plan onward — the thinking
-# spinner, the plan summary, the dry-run dump, and the stage/commit loop — was
-# duplicated and now lives here.
+# commit-agent-common.zsh — shared engine for the AI-driven commit harnesses
+# (ai-commit-pi, ai-commit-cursor) behind the `ai-commit` dispatcher. They
+# differ in how they invoke their agent and whether they cache the plan;
+# everything from the plan onward — the thinking spinner, the plan summary, the
+# dry-run dump, and the stage/commit loop — was duplicated and now lives here.
 #
 # SOURCED, never executed. Pulls in the base (C_*, log_*, die) and the prompt
 # module (prompt::confirm), so a front-end only needs to source THIS file.

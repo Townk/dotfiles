@@ -1,0 +1,128 @@
+#!/usr/bin/env zsh
+# ai-commit — dispatcher that runs an AI commit through a chosen harness.
+#
+# Harnesses are the sibling `ai-commit-<name>` workers (ai-commit-pi,
+# ai-commit-cursor). Each is a fully-featured standalone tool; this dispatcher
+# only selects one and hands the rest of the command line to it unchanged.
+#
+# Selecting a harness (in precedence order):
+#   ai-commit <harness> [worker args...]    explicit (e.g. `ai-commit pi -d`)
+#   AI_COMMIT_HARNESS=<harness> ai-commit    via the environment
+#   ai-commit [worker args...]              auto: the sole available harness,
+#                                           or an fzf picker when several are.
+#
+# "Available" means the worker's backing CLI is installed, detected via the
+# worker `--probe` contract: it prints a short label and exits 0 when usable,
+# else exits non-zero.
+
+set -eu -o pipefail
+
+source "$HOME/.local/lib/common.sh"
+
+# Resolve this script's directory so sibling workers are found even when we
+# were invoked by a bare PATH name (mirrors system-package).
+script_path="$0"
+if [[ "$script_path" != */* ]]; then
+  script_path="$(command -v -- "$script_path")" \
+    || die "cannot resolve dispatcher path: $0"
+fi
+SCRIPT_DIR="${script_path:A:h}"
+
+# Discover harnesses: every executable `ai-commit-*` sibling. The harness name
+# is the suffix after `ai-commit-` (e.g. ai-commit-pi → pi).
+HARNESSES=()
+for worker in "$SCRIPT_DIR"/ai-commit-*(N-.); do
+  [[ -x "$worker" ]] || continue
+  HARNESSES+=("${${worker:t}#ai-commit-}")
+done
+
+worker_path() { print -r -- "$SCRIPT_DIR/ai-commit-$1"; }
+
+is_harness() {
+  local needle="$1" h
+  for h in "${HARNESSES[@]}"; do
+    [[ "$h" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+usage() {
+  cat <<EOF
+Usage:
+  ai-commit <harness> [options...]    run a specific harness
+  ai-commit [options...]              auto-pick (sole harness) or fzf-pick
+  ai-commit -h | --help | help        show this help
+
+Harnesses: ${HARNESSES[*]:-<none discovered>}
+
+The harness is chosen from, in order: the first positional argument, the
+\$AI_COMMIT_HARNESS environment variable, then — when none is given — the
+only installed harness, or an fzf picker when several are installed.
+
+Every remaining argument is forwarded verbatim to the chosen
+\`ai-commit-<harness>\` worker; run \`ai-commit <harness> --help\` for its
+own options.
+EOF
+}
+
+# probe_available — populate AVAILABLE (names) and LABELS (probe descriptions)
+# by probing each discovered harness worker.
+typeset -gA LABELS
+AVAILABLE=()
+probe_available() {
+  local h label
+  for h in "${HARNESSES[@]}"; do
+    if label="$("$(worker_path "$h")" --probe 2>/dev/null)"; then
+      AVAILABLE+=("$h")
+      LABELS[$h]="$label"
+    fi
+  done
+}
+
+# pick_harness — fzf-pick among AVAILABLE, printing the chosen harness name.
+# pick-common is sourced lazily so an explicit-harness run never needs fzf.
+pick_harness() {
+  source "$HOME/.local/lib/pick-common.zsh"
+  local h
+  for h in "${AVAILABLE[@]}"; do
+    pick::line "${h}  ${C_DIM}${LABELS[$h]}${C_RES}" "$h"
+  done | PICK_NAME=ai-commit pick::start \
+      --output field:1 \
+      --header "Commit harness" \
+      --hints $'\U000F0331 : run  \u00b7  \U000F12B7 : cancel'
+}
+
+main() {
+  if [[ $# -ge 1 ]] && is_help "$1"; then
+    usage; exit 0
+  fi
+
+  (( ${#HARNESSES[@]} > 0 )) \
+    || die "no ai-commit-<harness> workers found next to $SCRIPT_DIR/ai-commit"
+
+  local harness=""
+  if [[ $# -ge 1 ]] && is_harness "$1"; then
+    harness="$1"; shift
+  elif [[ -n "${AI_COMMIT_HARNESS:-}" ]]; then
+    is_harness "$AI_COMMIT_HARNESS" \
+      || die "AI_COMMIT_HARNESS='$AI_COMMIT_HARNESS' is not a known harness (have: ${HARNESSES[*]})"
+    harness="$AI_COMMIT_HARNESS"
+  fi
+
+  if [[ -z "$harness" ]]; then
+    probe_available
+    case ${#AVAILABLE[@]} in
+      0) die "no harness available; install a backing agent for one of: ${HARNESSES[*]}" ;;
+      1) harness="${AVAILABLE[1]}"
+         log_info "Using the only available harness: ${C_BWH}${harness}${C_RES} (${LABELS[$harness]})" ;;
+      *) harness="$(pick_harness)" || exit $?
+         [[ -n "$harness" ]] || exit 130 ;;
+    esac
+  fi
+
+  local worker; worker="$(worker_path "$harness")"
+  [[ -x "$worker" ]] || die "harness worker not executable: ai-commit-$harness"
+  exec "$worker" "$@"
+}
+
+main "$@"

@@ -50,7 +50,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 
 | Category | Scripts | Backing library |
 |---|---|---|
-| AI-driven git commits | `commit-ai`, `commit-cursor` | `commit-agent-common.zsh` |
+| AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh` |
 | Symbol pickers (fzf) | `pick-glyph`, `pick-gitmoji` | `pick-symbols-common.zsh` → `pick-common.zsh` |
 | File preview (fzf/yazi) | `preview` | — |
 | Editor/terminal glue | `tab-edit`², `pinentry-auto`¹ | `platform.sh` (tab-edit) |
