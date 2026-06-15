@@ -30,18 +30,33 @@ set -eu -o pipefail
 PICK_NAME=quick-launch-pick
 PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
 PICK_JQ="$PICK_LIB_DIR/pick.jq"
-source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" \
-  || { print -ru2 -- "quick-launch-pick: cannot source pick-common.zsh from $PICK_LIB_DIR"; exit 1; }
+source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" ||
+  {
+    print -ru2 -- "quick-launch-pick: cannot source pick-common.zsh from $PICK_LIB_DIR"
+    exit 1
+  }
 
 kind=""
 no_border="${QUICK_LAUNCH_NO_BORDER:+1}"
 no_border="${no_border:-0}"
-while (( $# > 0 )); do
+while (($# > 0)); do
   case "$1" in
-    pane|tab|workspace) kind="$1"; shift ;;
-    --no-border)        no_border=1; shift ;;
-    -h|--help)          print -r -- "usage: quick-launch-pick <pane|tab|workspace> [--no-border]"; exit 0 ;;
-    --)                 shift; break ;;
+    pane | tab | workspace)
+      kind="$1"
+      shift
+      ;;
+    --no-border)
+      no_border=1
+      shift
+      ;;
+    -h | --help)
+      print -r -- "usage: quick-launch-pick <pane|tab|workspace> [--no-border]"
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
     *) die "unknown arg: $1 (want pane|tab|workspace)" ;;
   esac
 done
@@ -54,8 +69,8 @@ TARGETS="${QUICK_LAUNCH_TARGETS:-$HOME/.config/zellij/quick-launch/default.yaml}
 [[ -r "$TARGETS" ]] || die "cannot read targets file: $TARGETS"
 
 case "$kind" in
-  pane)      key="panes" ;;
-  tab)       key="tabs" ;;
+  pane) key="panes" ;;
+  tab) key="tabs" ;;
   workspace) key="workspaces" ;;
 esac
 
@@ -101,7 +116,7 @@ elif [[ "$kind" == workspace ]]; then
   # Ghostty / when WezTerm isn't reachable this is empty → all live workspaces
   # read as "(detached)", matching what we can act on there.
   source "${0:A:h}/lib/zellij-session.zsh" 2>/dev/null || true
-  windowed_json="$( { zellij_wezterm_sessions 2>/dev/null | cut -f1 | sed '/^$/d' | jq -R . | jq -s -c . ; } 2>/dev/null || true)"
+  windowed_json="$({ zellij_wezterm_sessions 2>/dev/null | cut -f1 | sed '/^$/d' | jq -R . | jq -s -c .; } 2>/dev/null || true)"
   [[ -n "$windowed_json" ]] || windowed_json='[]'
 else
   LINES_CACHE="$CACHE_DIR/lines-$kind.txt"
@@ -117,12 +132,12 @@ SCRIPT_PATH="${(%):-%x}"
 # the other pickers) and the bare `id` hidden behind \x1f as the only tail
 # field. Selector-mode numbering/search-display swaps are added by
 # pick-common when enabled below; the cache keeps the normal picker contract.
-if (( force_build )) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH" "$PICK_JQ"; then
+if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH" "$PICK_JQ"; then
   local ql_json
   case "$TARGETS" in
     *.json) ql_json="$(yq -p=json -o=json -I=0 '.' "$TARGETS")" ;;
     *.toml) ql_json="$(yq -p=toml -o=json -I=0 '.' "$TARGETS")" ;;
-    *)      ql_json="$(yq -p=yaml -o=json -I=0 '.' "$TARGETS")" ;;
+    *) ql_json="$(yq -p=yaml -o=json -I=0 '.' "$TARGETS")" ;;
   esac
 
   local tmp
@@ -206,7 +221,7 @@ if (( force_build )) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PAT
     else
       collect | entry_line(""; [ .id ])
     end
-  ' > "$tmp" || die "failed to assemble $kind list (jq error)"
+  ' >"$tmp" || die "failed to assemble $kind list (jq error)"
   mv "$tmp" "$LINES_CACHE"
   trap - EXIT INT TERM
 fi
@@ -216,7 +231,7 @@ fi
 # Panes/tabs stay in their defined (file) order — no recency/resume flags, since
 # launching a target isn't a text-insert flow. Workspaces opt into the library's
 # file recency (--cache-usage): pick::record floats the most-recently-picked
-# session to the top on the next launch, so the previous session is row 1 / 
+# session to the top on the next launch, so the previous session is row 1 /
 # pre-selected for a quick flip. The usage file is workspace-scoped so pane/tab
 # picks never perturb the session order.
 
@@ -250,6 +265,6 @@ if [[ "$kind" == workspace ]]; then
     --search-hints "󰌑 : open${ws_sep_wide}󰘵 󰌑 : new window${ws_sep_wide}󱊷 : cancel${ws_sep_wide}󰘴 U: clear/back"
   )
 fi
-(( no_border )) && pick_start_args+=( --no-border )
+((no_border)) && pick_start_args+=(--no-border)
 
 pick::start "${pick_start_args[@]}" "$LINES_CACHE"

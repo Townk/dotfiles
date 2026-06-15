@@ -25,12 +25,15 @@ resolve_session() {
   peers=$(printf '%s\n' "$cl" | grep -oE '\->0x[0-9a-f]+' | sed 's/->//' | sort -u)
   external=$(comm -23 <(printf '%s\n' "$peers") <(printf '%s\n' "$locals"))
   for e in ${(f)external}; do
-    spath=$(printf '%s\n' "$lsof_out" \
-      | awk -v p="$client_pid" -v a="$e" '$2!=p && $6==a {
+    spath=$(printf '%s\n' "$lsof_out" |
+      awk -v p="$client_pid" -v a="$e" '$2!=p && $6==a {
           path=""; for (i = 8; i <= NF; i++) path = path (i > 8 ? " " : "") $i
           if (path ~ /\//) { print path; exit }
         }')
-    [ -n "$spath" ] && { printf '%s\n' "${spath##*/}"; return 0; }
+    [ -n "$spath" ] && {
+      printf '%s\n' "${spath##*/}"
+      return 0
+    }
   done
   return 1
 }
@@ -47,13 +50,13 @@ zellij_wezterm_sessions() {
   local wez tty wid pane cpid s
   wez="${WEZTERM_BIN:-/opt/homebrew/bin/wezterm}"
   command -v "$wez" >/dev/null 2>&1 || wez=wezterm
-  env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE "$wez" cli --no-auto-start list --format json 2>/dev/null \
-    | jq -r '.[] | [(.tty_name // ""), (.window_id|tostring), (.pane_id|tostring)] | @tsv' 2>/dev/null \
-    | while IFS="$(printf '\t')" read -r tty wid pane; do
-        [ -n "$tty" ] && [ "$tty" != null ] || continue
-        cpid=$(ps -t "${tty#/dev/}" -o pid=,comm= 2>/dev/null | awk '$2 ~ /zellij/ {print $1; exit}')
-        [ -n "$cpid" ] || continue
-        s=$(resolve_session "$cpid" 2>/dev/null) || continue
-        printf '%s\t%s\t%s\n' "$s" "$wid" "$pane"
-      done
+  env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE "$wez" cli --no-auto-start list --format json 2>/dev/null |
+    jq -r '.[] | [(.tty_name // ""), (.window_id|tostring), (.pane_id|tostring)] | @tsv' 2>/dev/null |
+    while IFS="$(printf '\t')" read -r tty wid pane; do
+      [ -n "$tty" ] && [ "$tty" != null ] || continue
+      cpid=$(ps -t "${tty#/dev/}" -o pid=,comm= 2>/dev/null | awk '$2 ~ /zellij/ {print $1; exit}')
+      [ -n "$cpid" ] || continue
+      s=$(resolve_session "$cpid" 2>/dev/null) || continue
+      printf '%s\t%s\t%s\n' "$s" "$wid" "$pane"
+    done
 }

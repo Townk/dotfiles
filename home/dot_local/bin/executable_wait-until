@@ -49,26 +49,63 @@ EOF
 to_seconds() {
   case "$1" in
     *ms) printf '%s\n' "$1" | awk '{ sub(/ms$/, ""); printf "%f\n", $1 / 1000 }' ;;
-    *s)  printf '%s\n' "$1" | awk '{ sub(/s$/, "");  printf "%f\n", $1 }' ;;
-    *)   printf '%s\n' "$1" | awk '{ printf "%f\n", $1 }' ;;
+    *s) printf '%s\n' "$1" | awk '{ sub(/s$/, "");  printf "%f\n", $1 }' ;;
+    *) printf '%s\n' "$1" | awk '{ printf "%f\n", $1 }' ;;
   esac
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --timeout)    [ $# -ge 2 ] || { usage >&2; exit 2; }; timeout=$2; shift 2 ;;
-    --timeout=*)  timeout=${1#--timeout=}; shift ;;
-    --interval)   [ $# -ge 2 ] || { usage >&2; exit 2; }; interval=$2; shift 2 ;;
-    --interval=*) interval=${1#--interval=}; shift ;;
-    --quiet)      quiet=1; shift ;;
-    -h|--help)    usage; exit 0 ;;
-    --)           shift; break ;;
-    -*)           printf '%s: unknown option: %s\n' "$prog" "$1" >&2; usage >&2; exit 2 ;;
-    *)            break ;;
+    --timeout)
+      [ $# -ge 2 ] || {
+        usage >&2
+        exit 2
+      }
+      timeout=$2
+      shift 2
+      ;;
+    --timeout=*)
+      timeout=${1#--timeout=}
+      shift
+      ;;
+    --interval)
+      [ $# -ge 2 ] || {
+        usage >&2
+        exit 2
+      }
+      interval=$2
+      shift 2
+      ;;
+    --interval=*)
+      interval=${1#--interval=}
+      shift
+      ;;
+    --quiet)
+      quiet=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      printf '%s: unknown option: %s\n' "$prog" "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *) break ;;
   esac
 done
 
-[ $# -gt 0 ] || { printf '%s: no command given\n' "$prog" >&2; usage >&2; exit 2; }
+[ $# -gt 0 ] || {
+  printf '%s: no command given\n' "$prog" >&2
+  usage >&2
+  exit 2
+}
 
 timeout_s=$(to_seconds "$timeout")
 interval_s=$(to_seconds "$interval")

@@ -48,8 +48,8 @@ mode="relative"
 pid=""
 for arg in "$@"; do
   case "$arg" in
-    -r|--relative) mode="relative" ;;
-    -a|--absolute) mode="absolute" ;;
+    -r | --relative) mode="relative" ;;
+    -a | --absolute) mode="absolute" ;;
     *) pid="$arg" ;;
   esac
 done
@@ -62,8 +62,8 @@ done
 # Pull the process's cwd from lsof's field output. `-Fn` emits one field
 # per line; the cwd's path is the `n`-prefixed line of the `cwd` fd row.
 cwd=$(
-  "$LSOF" -a -p "$pid" -d cwd -Fn 2>/dev/null \
-    | awk '/^n/ { print substr($0, 2); exit }'
+  "$LSOF" -a -p "$pid" -d cwd -Fn 2>/dev/null |
+    awk '/^n/ { print substr($0, 2); exit }'
 )
 
 [[ -n "$cwd" ]] || {

@@ -51,21 +51,24 @@ snap_list_rows() {
       [[ -n "$n" ]] && avail[$n]="$v"
     done < <(snap refresh --list 2>/dev/null | awk 'NR>1 {print $1 "\t" $2}')
   fi
-  snap_snapshot_versions \
-    | while IFS=$'\t' read -r name ver; do
-        if [[ "$outdated" == true && -n "${avail[$name]:-}" ]]; then
-          ver="${ver} ${C_YEL}(update available: ${avail[$name]})${C_RES}"
-        fi
-        printf '%s\t%s\n' "$name" "$ver"
-      done | sort
+  snap_snapshot_versions |
+    while IFS=$'\t' read -r name ver; do
+      if [[ "$outdated" == true && -n "${avail[$name]:-}" ]]; then
+        ver="${ver} ${C_YEL}(update available: ${avail[$name]})${C_RES}"
+      fi
+      printf '%s\t%s\n' "$name" "$ver"
+    done | sort
 }
 
 do_list() {
   local outdated=false
-  while (( $# > 0 )); do
+  while (($# > 0)); do
     case "$1" in
-      -u|--update) outdated=true; shift ;;
-      -a|--all)    shift ;;  # no-op: snap has no transient-dep concept here
+      -u | --update)
+        outdated=true
+        shift
+        ;;
+      -a | --all) shift ;; # no-op: snap has no transient-dep concept here
       *) die "unknown flag for list: $1" ;;
     esac
   done
@@ -77,11 +80,17 @@ do_list() {
 _snap_install_one() {
   local name="$1" line
   line=$(awk -v n="$name" '$1 == n {print; exit}' "$declared_full")
-  local -a args=( ${(z)line} )
-  sudo snap install "${args[@]}" || { log_warn "failed to install $name"; return 1; }
+  local -a args=(${(z)line})
+  sudo snap install "${args[@]}" || {
+    log_warn "failed to install $name"
+    return 1
+  }
 }
 _snap_refresh_one() {
-  sudo snap refresh "$1" || { log_warn "failed to refresh $1"; return 1; }
+  sudo snap refresh "$1" || {
+    log_warn "failed to refresh $1"
+    return 1
+  }
 }
 
 do_sync() {
@@ -93,15 +102,18 @@ do_sync() {
   fi
 
   local declared_full declared installed before_snap after_snap failed=0
-  declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
-  before_snap=$(mktemp); after_snap=$(mktemp)
+  declared_full=$(mktemp)
+  declared=$(mktemp)
+  installed=$(mktemp)
+  before_snap=$(mktemp)
+  after_snap=$(mktemp)
   trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
 
-  snap_snapshot_versions > "$before_snap"
+  snap_snapshot_versions >"$before_snap"
 
-  pkg::manifest_read "$SNAPFILE" > "$declared_full"
-  awk '{print $1}' "$declared_full" > "$declared"
-  snap_installed_names > "$installed"
+  pkg::manifest_read "$SNAPFILE" >"$declared_full"
+  awk '{print $1}' "$declared_full" >"$declared"
+  snap_installed_names >"$installed"
 
   # Install missing (declared but not installed). The full manifest line is
   # forwarded to `snap install` so per-snap flags (--classic, --channel=…)
@@ -113,10 +125,10 @@ do_sync() {
   # the snap is already current, so the cost is one fast check per declared
   # snap. Refresh failures only warn (they don't fail the sync), matching the
   # previous behavior — hence `|| true` on the tally.
-  for_each "snap refresh" _snap_refresh_one < "$declared" || true
+  for_each "snap refresh" _snap_refresh_one <"$declared" || true
 
   # Restart services whose backing snap changed version.
-  snap_snapshot_versions > "$after_snap"
+  snap_snapshot_versions >"$after_snap"
   pkg::restart_changed "$before_snap" "$after_snap"
   return "$failed"
 }
@@ -177,19 +189,30 @@ EOF
 
 main() {
   if [[ $# -eq 0 ]] || is_help "${1:-}"; then
-    usage; exit 0
+    usage
+    exit 0
   fi
-  local cmd="$1"; shift
+  local cmd="$1"
+  shift
   case "$cmd" in
     list)
-      args_contain_help "$@" && { usage_list; exit 0; }
+      args_contain_help "$@" && {
+        usage_list
+        exit 0
+      }
       do_list "$@"
       ;;
     sync)
-      args_contain_help "$@" && { usage_sync; exit 0; }
+      args_contain_help "$@" && {
+        usage_sync
+        exit 0
+      }
       do_sync
       ;;
-    *) usage >&2; die "unknown subcommand: $cmd" ;;
+    *)
+      usage >&2
+      die "unknown subcommand: $cmd"
+      ;;
   esac
 }
 

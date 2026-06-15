@@ -59,19 +59,50 @@ capture=""
 cmd=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --title)     title="${2-}"; shift 2 ;;
-    --title=*)   title="${1#*=}"; shift ;;
-    --inject)    inject=1; shift ;;
-    --capture)   capture="${2-}"; shift 2 ;;
-    --capture=*) capture="${1#*=}"; shift ;;
-    --)          shift; cmd=( "$@" ); break ;;
-    *)           echo "zellij-modal: unknown option: $1" >&2; exit 2 ;;
+    --title)
+      title="${2-}"
+      shift 2
+      ;;
+    --title=*)
+      title="${1#*=}"
+      shift
+      ;;
+    --inject)
+      inject=1
+      shift
+      ;;
+    --capture)
+      capture="${2-}"
+      shift 2
+      ;;
+    --capture=*)
+      capture="${1#*=}"
+      shift
+      ;;
+    --)
+      shift
+      cmd=("$@")
+      break
+      ;;
+    *)
+      echo "zellij-modal: unknown option: $1" >&2
+      exit 2
+      ;;
   esac
 done
 
-[[ ${#cmd[@]} -gt 0 ]] || { echo "zellij-modal: no target command (expected '-- CMD ...')" >&2; exit 2; }
-[[ -x "$ZELLIJ_BIN"  ]] || { echo "zellij-modal: missing or non-executable: $ZELLIJ_BIN"    >&2; exit 1; }
-[[ -n "${ZELLIJ:-}"  ]] || { echo "zellij-modal: not running inside a zellij session"       >&2; exit 1; }
+[[ ${#cmd[@]} -gt 0 ]] || {
+  echo "zellij-modal: no target command (expected '-- CMD ...')" >&2
+  exit 2
+}
+[[ -x "$ZELLIJ_BIN" ]] || {
+  echo "zellij-modal: missing or non-executable: $ZELLIJ_BIN" >&2
+  exit 1
+}
+[[ -n "${ZELLIJ:-}" ]] || {
+  echo "zellij-modal: not running inside a zellij session" >&2
+  exit 1
+}
 
 focus_self() {
   [[ -n "${ZELLIJ_PANE_ID:-}" ]] || return 0
@@ -88,7 +119,8 @@ focus_self() {
 # keyboard into it. Backgrounded so it survives the `exec` in action mode.
 focus_self_deferred() {
   [[ -n "${ZELLIJ_PANE_ID:-}" ]] || return 0
-  ( sleep 0.2
+  (
+    sleep 0.2
     "$ZELLIJ_BIN" action focus-pane-id "terminal_${ZELLIJ_PANE_ID}" 2>/dev/null || true
   ) &
 }
@@ -106,15 +138,15 @@ focus_self_deferred() {
 discover_target_pane() {
   local active_tab_id self_pane
   active_tab_id=$(
-    "$ZELLIJ_BIN" action list-tabs -s 2>/dev/null \
-      | awk -F'  ' '
+    "$ZELLIJ_BIN" action list-tabs -s 2>/dev/null |
+      awk -F'  ' '
           NR == 1 { next }
           $4 == "true" { print $1; exit }
         '
   )
   self_pane="terminal_${ZELLIJ_PANE_ID:-x}"
-  "$ZELLIJ_BIN" action list-panes -a 2>/dev/null \
-    | awk -F'  ' -v self="$self_pane" -v active_tab="$active_tab_id" '
+  "$ZELLIJ_BIN" action list-panes -a 2>/dev/null |
+    awk -F'  ' -v self="$self_pane" -v active_tab="$active_tab_id" '
         NR == 1            { next }
         (active_tab != "" && $1 != active_tab) { next }
         $5  != "terminal"  { next }
@@ -130,8 +162,8 @@ discover_target_pane() {
 # Catppuccin Mocha SGR helpers — 24-bit truecolor. Inlined (not sourced
 # from themes.sh) because this runs outside any login shell and we want
 # zero environmental coupling. Shared by every modal so they all match.
-SGR_TITLE=$'\e[1;38;2;203;166;247m'   # mauve, bold (h1 accent)
-SGR_RULE=$'\e[38;2;49;50;68m'         # overlay0 (glow hr)
+SGR_TITLE=$'\e[1;38;2;203;166;247m' # mauve, bold (h1 accent)
+SGR_RULE=$'\e[38;2;49;50;68m'       # overlay0 (glow hr)
 SGR_RESET=$'\e[0m'
 
 # Title block — blank row, "▓▓▓ <title>", full-width rule — flush to the
@@ -143,13 +175,13 @@ if [[ -n "$title" ]]; then
   # Group-redirect so the shell's own "/dev/tty: Device not configured"
   # error (raised before stty even runs, when there's no controlling
   # tty) is swallowed too; `|| true` keeps `set -e` from aborting.
-  cols=$( { stty size </dev/tty; } 2>/dev/null | awk '{print $2}') || true
+  cols=$({ stty size </dev/tty; } 2>/dev/null | awk '{print $2}') || true
   [[ -z "$cols" ]] && cols="${COLUMNS:-80}"
   cols=$((cols - 4))
-  (( cols < 1 )) && cols=1
+  ((cols < 1)) && cols=1
   rule=$(printf '━%.0s' {1..$cols})
   printf '\n  %s▓▓▓ %s%s\n' "$SGR_TITLE" "$title" "$SGR_RESET"
-  printf '  %s%s%s\n'       "$SGR_RULE"  "$rule"  "$SGR_RESET"
+  printf '  %s%s%s\n' "$SGR_RULE" "$rule" "$SGR_RESET"
 fi
 
 if [[ -n "$capture" ]]; then
@@ -170,7 +202,7 @@ if [[ -n "$capture" ]]; then
   exit 0
 fi
 
-if (( ! inject )); then
+if ((!inject)); then
   # Action mode: hand the pane to the target and let it own the outcome
   # (exit status, kill-session, etc). Also pass the originating tiled pane so
   # action targets that split panes can move focus back before calling zellij.

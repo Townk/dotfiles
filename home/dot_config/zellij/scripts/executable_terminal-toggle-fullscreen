@@ -50,17 +50,17 @@ APPLESCRIPT
 }
 
 toggle_ghostty_linux_fullscreen() {
-  if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && (( $+commands[hyprctl] )); then
+  if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && (($+commands[hyprctl])); then
     hyprctl dispatch fullscreen 0 >/dev/null
     return
   fi
 
-  if [[ -n "${SWAYSOCK:-}" ]] && (( $+commands[swaymsg] )); then
+  if [[ -n "${SWAYSOCK:-}" ]] && (($+commands[swaymsg])); then
     swaymsg fullscreen toggle >/dev/null
     return
   fi
 
-  if [[ -n "${DISPLAY:-}" ]] && (( $+commands[wmctrl] )); then
+  if [[ -n "${DISPLAY:-}" ]] && (($+commands[wmctrl])); then
     wmctrl -r :ACTIVE: -b toggle,fullscreen
     return
   fi

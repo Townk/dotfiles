@@ -61,7 +61,7 @@ Aggregates launchd-managed services (declared in
 Status vocabulary: running | stopped | error | none.
 EOF
       ;;
-    start|stop|restart)
+    start | stop | restart)
       cat <<EOF
 Usage:
   system-service $1 <name>
@@ -121,8 +121,8 @@ EOF
 }
 
 worker_check() {
-  command -v "system-service-$1" >/dev/null \
-    || die "worker not found: system-service-$1"
+  command -v "system-service-$1" >/dev/null ||
+    die "worker not found: system-service-$1"
 }
 
 # is_launchd_service <name> — declared in services.toml?
@@ -142,13 +142,13 @@ route() {
   local verb="$1" name="$2"
   local in_launchd=0 in_brew=0
   is_launchd_service "$name" && in_launchd=1
-  is_brew_service    "$name" && in_brew=1
+  is_brew_service "$name" && in_brew=1
 
-  if (( in_launchd && in_brew )); then
+  if ((in_launchd && in_brew)); then
     die "service '$name' is declared in BOTH services.toml AND brew services. Remove one."
-  elif (( in_launchd )); then
+  elif ((in_launchd)); then
     system-service-launchd "$verb" "$name"
-  elif (( in_brew )); then
+  elif ((in_brew)); then
     system-service-brew "$verb" "$name"
   else
     die "unknown service: $name"
@@ -161,7 +161,7 @@ do_list() {
   worker_check brew
   {
     system-service-launchd list | awk -F'\t' '{print "launchd\t" $0}'
-    system-service-brew    list | awk -F'\t' '{print "brew\t"    $0}'
+    system-service-brew list | awk -F'\t' '{print "brew\t"    $0}'
   } | pkg::table_print $'Source\tService\tStatus\tUser\tFile' 1
 }
 
@@ -176,8 +176,8 @@ do_sync() {
 # Mirrors the vocabulary used by system-service-launchd: running/stopped/none.
 brew_service_status() {
   local name="$1"
-  brew services list --json 2>/dev/null \
-    | jq -r --arg n "$name" '
+  brew services list --json 2>/dev/null |
+    jq -r --arg n "$name" '
         (.[] | select(.name == $n) | .status) // "none"
         | if . == "started"   then "running"
           elif . == "scheduled" then "stopped"
@@ -192,7 +192,7 @@ brew_service_status() {
 # Services that are stopped/none/error are intentionally left alone so a
 # manually-stopped daemon isn't auto-resurrected by an upgrade.
 do_restart_for() {
-  (( $# > 0 )) || return 0
+  (($# > 0)) || return 0
   worker_check launchd
   worker_check brew
 
@@ -210,19 +210,20 @@ do_restart_for() {
       svc_state=$(system-service-launchd status "$svc" 2>/dev/null || true)
       if [[ "$svc_state" == "running" ]]; then
         log_info "restarting launchd service '$svc' (package '$pkg' upgraded)"
-        system-service-launchd restart "$svc" \
-          || log_warn "failed to restart launchd service '$svc'"
+        system-service-launchd restart "$svc" ||
+          log_warn "failed to restart launchd service '$svc'"
       fi
     done < <(system-service-launchd matching "$pkg" 2>/dev/null || true)
 
     # Brew side — service name == formula name by convention. If brew
     # doesn't know about pkg as a service, the names-list check short-circuits.
     if system-service-brew names 2>/dev/null | grep -Fxq "$pkg"; then
-      local brew_state; brew_state=$(brew_service_status "$pkg")
+      local brew_state
+      brew_state=$(brew_service_status "$pkg")
       if [[ "$brew_state" == "running" ]]; then
         log_info "restarting brew service '$pkg' (formula upgraded)"
-        system-service-brew restart "$pkg" \
-          || log_warn "failed to restart brew service '$pkg'"
+        system-service-brew restart "$pkg" ||
+          log_warn "failed to restart brew service '$pkg'"
       fi
     fi
   done
@@ -233,28 +234,52 @@ main() {
   shift 2>/dev/null || true
 
   case "$cmd" in
-    -h|--help|help) usage; exit 0 ;;
+    -h | --help | help)
+      usage
+      exit 0
+      ;;
     list)
-      args_contain_help "$@" && { usage_for list; exit 0; }
+      args_contain_help "$@" && {
+        usage_for list
+        exit 0
+      }
       do_list
       ;;
     sync)
-      args_contain_help "$@" && { usage_for sync; exit 0; }
+      args_contain_help "$@" && {
+        usage_for sync
+        exit 0
+      }
       do_sync
       ;;
-    start|stop|restart|info)
+    start | stop | restart | info)
       # Critical: catch --help BEFORE route(), or `route info --help` would
       # try (and fail noisily) to look up a service literally named `--help`.
-      args_contain_help "$@" && { usage_for "$cmd"; exit 0; }
-      [[ $# -eq 1 ]] || { usage_for "$cmd" >&2; die "$cmd requires exactly one service name"; }
+      args_contain_help "$@" && {
+        usage_for "$cmd"
+        exit 0
+      }
+      [[ $# -eq 1 ]] || {
+        usage_for "$cmd" >&2
+        die "$cmd requires exactly one service name"
+      }
       route "$cmd" "$1"
       ;;
     restart-for)
-      args_contain_help "$@" && { usage_for restart-for; exit 0; }
-      [[ $# -ge 1 ]] || { usage_for restart-for >&2; die "restart-for requires at least one package name"; }
+      args_contain_help "$@" && {
+        usage_for restart-for
+        exit 0
+      }
+      [[ $# -ge 1 ]] || {
+        usage_for restart-for >&2
+        die "restart-for requires at least one package name"
+      }
       do_restart_for "$@"
       ;;
-    *) usage; die "unknown subcommand: $cmd" ;;
+    *)
+      usage
+      die "unknown subcommand: $cmd"
+      ;;
   esac
 }
 

@@ -26,10 +26,10 @@ unset _sec_common_self
 # parent of the chezmoi source dir (.chezmoiroot = home).
 # ---------------------------------------------------------------------------
 sec::repo_paths() {
-  SECRETS_SRC_DIR="$(chezmoi source-path)" \
-    || die "cannot resolve chezmoi source path (is chezmoi installed?)"
-  REPO_ROOT="$(git -C "$SECRETS_SRC_DIR" rev-parse --show-toplevel)" \
-    || die "chezmoi source dir is not a git work tree: $SECRETS_SRC_DIR"
+  SECRETS_SRC_DIR="$(chezmoi source-path)" ||
+    die "cannot resolve chezmoi source path (is chezmoi installed?)"
+  REPO_ROOT="$(git -C "$SECRETS_SRC_DIR" rev-parse --show-toplevel)" ||
+    die "chezmoi source dir is not a git work tree: $SECRETS_SRC_DIR"
   MANIFEST="$SECRETS_SRC_DIR/.chezmoidata/secrets.yaml"
   FRAGMENT_DIR="$SECRETS_SRC_DIR/dot_config/zsh/private_secrets.d"
   SECRETS_BLOB_DIR="$REPO_ROOT/secrets"
@@ -96,7 +96,7 @@ unset _sec_prompt_self
 sec::gen_slot() {
   local hex
   hex="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | cut -c1-6)"
-  [[ ${#hex} -eq 6 ]] || hex="$(printf '%06x' $(( (RANDOM * 65536 + RANDOM) % 16777216 )))"
+  [[ ${#hex} -eq 6 ]] || hex="$(printf '%06x' $(((RANDOM * 65536 + RANDOM) % 16777216)))"
   printf 'slot-%s' "$hex"
 }
 
@@ -109,7 +109,7 @@ sec::valid_slot() {
 sec::valid_name() { [[ "$1" =~ '^[A-Z][A-Z0-9_]*$' ]]; }
 
 sec::fragment_path() { printf '%s/private_%s.sh.tmpl' "$FRAGMENT_DIR" "$1"; }
-sec::blob_path()     { printf '%s/%s.sops.sh' "$SECRETS_BLOB_DIR" "$1"; }
+sec::blob_path() { printf '%s/%s.sops.sh' "$SECRETS_BLOB_DIR" "$1"; }
 
 # ---------------------------------------------------------------------------
 # Operator map — LOOSE, NEVER COMMITTED. Lives under ~/.config/chezmoi/.
@@ -128,7 +128,10 @@ sec::map_init() {
 # sec::map_get <slot> <field> — print a field value (empty if unset). Read-only:
 # never creates the map (so --dry-run has no side effects).
 sec::map_get() {
-  [[ -f "$OPERATOR_MAP" ]] || { printf ''; return 0; }
+  [[ -f "$OPERATOR_MAP" ]] || {
+    printf ''
+    return 0
+  }
   slot="$1" field="$2" yq -r \
     '.[strenv(slot)][strenv(field)] // ""' "$OPERATOR_MAP"
 }
@@ -148,7 +151,10 @@ sec::map_set() {
 # sec::map_slot_for_alias <alias> — print the slot mapped to <alias> (or empty).
 # Read-only: never creates the map.
 sec::map_slot_for_alias() {
-  [[ -f "$OPERATOR_MAP" ]] || { printf ''; return 0; }
+  [[ -f "$OPERATOR_MAP" ]] || {
+    printf ''
+    return 0
+  }
   alias="$1" yq -r \
     'to_entries | map(select(.value.alias == strenv(alias))) | .[0].key // ""' \
     "$OPERATOR_MAP"
@@ -176,7 +182,10 @@ sec::sops_rule_set() {
 
 # sec::sops_recipient_for_slot <slot> — recipient from .sops.yaml (or empty).
 sec::sops_recipient_for_slot() {
-  [[ -f "$SOPS_YAML" ]] || { printf ''; return 0; }
+  [[ -f "$SOPS_YAML" ]] || {
+    printf ''
+    return 0
+  }
   re="secrets/${1}\\.sops\\.sh\$" yq -r \
     '(.creation_rules // [])[] | select(.path_regex == strenv(re)) | .age' \
     "$SOPS_YAML" 2>/dev/null | head -n1
@@ -192,7 +201,7 @@ sec::sops_encrypt() {
   # .sops.yaml (whose creation rules match the blob path, not this temp input).
   # .sops.yaml stays the committed mirror used by `sops updatekeys`/review.
   if ! sops --config /dev/null --encrypt --age "$recipient" \
-        --input-type binary --output-type binary "$plain" >"$tmp"; then
+    --input-type binary --output-type binary "$plain" >"$tmp"; then
     rm -f "$tmp"
     die "sops encryption failed for recipient $recipient"
   fi
@@ -202,8 +211,8 @@ sec::sops_encrypt() {
 # sec::sops_updatekeys <blob_path> — re-encrypt the data key to whatever
 # recipients .sops.yaml now lists (used after a recipient rotation).
 sec::sops_updatekeys() {
-  ( cd "$REPO_ROOT" && sops updatekeys --yes "$1" ) \
-    || die "sops updatekeys failed for $1"
+  (cd "$REPO_ROOT" && sops updatekeys --yes "$1") ||
+    die "sops updatekeys failed for $1"
 }
 
 # ---------------------------------------------------------------------------
@@ -234,7 +243,8 @@ EOF
 # calls. Steady-state applies reuse the already-rendered 0600 fragment so routine
 # chezmoi operations do not cross the Touch ID boundary.
 sec::write_human_fragment() {
-  local slot="$1"; shift
+  local slot="$1"
+  shift
   local frag pair name ref sig
   frag="$(sec::fragment_path "$slot")"
   sig="$(printf '%s\n' "$@" | shasum -a 256 | cut -d ' ' -f 1)"
@@ -290,8 +300,11 @@ sec::op() { OP_SERVICE_ACCOUNT_TOKEN="$(cat "$OP_SA_TOKEN_FILE")" op "$@"; }
 
 # sec::op_store_token <token> — write the raw token loose at 0600.
 sec::op_store_token() {
-  ( umask 077; mkdir -p "${OP_SA_TOKEN_FILE:h}" && printf '%s' "$1" >"$OP_SA_TOKEN_FILE" ) \
-    || die "could not write $OP_SA_TOKEN_FILE"
+  (
+    umask 077
+    mkdir -p "${OP_SA_TOKEN_FILE:h}" && printf '%s' "$1" >"$OP_SA_TOKEN_FILE"
+  ) ||
+    die "could not write $OP_SA_TOKEN_FILE"
   chmod 600 "$OP_SA_TOKEN_FILE"
 }
 
@@ -315,7 +328,8 @@ sec::op_ensure_token() {
   if command -v op >/dev/null 2>&1 && [[ -s "$ref_file" ]]; then
     __ref="$(cat "$ref_file")"
     if __tok="$(sec::op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
-      sec::op_store_token "$__tok"; __tok=""
+      sec::op_store_token "$__tok"
+      __tok=""
       log_ok "loaded service-account token from $__ref (account mode) at $OP_SA_TOKEN_FILE"
       return 0
     fi
@@ -329,8 +343,12 @@ sec::op_ensure_token() {
       ""
     if [[ -n "$__ref" ]]; then
       if __tok="$(sec::op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
-        sec::op_store_token "$__tok"; __tok=""
-        ( umask 077; printf '%s' "$__ref" >"$ref_file" ) && chmod 600 "$ref_file"
+        sec::op_store_token "$__tok"
+        __tok=""
+        (
+          umask 077
+          printf '%s' "$__ref" >"$ref_file"
+        ) && chmod 600 "$ref_file"
         log_ok "stored service-account token from $__ref (loose, 0600) at $OP_SA_TOKEN_FILE"
         return 0
       fi
@@ -340,7 +358,8 @@ sec::op_ensure_token() {
 
   # 4. masked paste
   prompt::secret __tok "1Password service-account token (stored at $OP_SA_TOKEN_FILE):"
-  sec::op_store_token "$__tok"; __tok=""
+  sec::op_store_token "$__tok"
+  __tok=""
   log_ok "stored service-account token (loose, 0600) at $OP_SA_TOKEN_FILE"
 }
 
@@ -367,14 +386,14 @@ sec::op_upsert_field() {
     merged="$(printf '%s' "$cur" | __OP_VAL="$value" jq --arg f "$field" \
       '.fields = ((.fields // [] | map(select(.label != $f and .id != $f)))
                   + [{label: $f, type: "CONCEALED", value: $ENV.__OP_VAL}])')" || return 1
-    printf '%s' "$merged" | sec::op item edit "$item" --vault "$vault" - >/dev/null 2>&1 \
-      || return 1
+    printf '%s' "$merged" | sec::op item edit "$item" --vault "$vault" - >/dev/null 2>&1 ||
+      return 1
   else
     __OP_VAL="$value" jq -n --arg t "$item" --arg f "$field" \
       '{title: $t, category: "API_CREDENTIAL",
-        fields: [{label: $f, type: "CONCEALED", value: $ENV.__OP_VAL}]}' \
-      | sec::op item create --vault "$vault" - >/dev/null 2>&1 \
-      || return 1
+        fields: [{label: $f, type: "CONCEALED", value: $ENV.__OP_VAL}]}' |
+      sec::op item create --vault "$vault" - >/dev/null 2>&1 ||
+      return 1
   fi
   printf 'op://%s/%s/%s\n' "$vault" "$item" "$field"
 }
@@ -388,14 +407,14 @@ sec::op_upsert_field() {
 sec::leak_audit() {
   [[ -r "$LEAK_PATTERNS" ]] || return 0
   local added names haystack pat hits=""
-  added="$(git -C "$REPO_ROOT" diff --cached -U0 --no-color --diff-filter=AM \
-    | grep '^+' | grep -v '^+++' || true)"
+  added="$(git -C "$REPO_ROOT" diff --cached -U0 --no-color --diff-filter=AM |
+    grep '^+' | grep -v '^+++' || true)"
   names="$(git -C "$REPO_ROOT" diff --cached --name-only --diff-filter=ACMR || true)"
   haystack="$added
 $names"
   [[ -n "${haystack//[[:space:]]/}" ]] || return 0
   while IFS= read -r pat; do
-    case "$pat" in ''|\#*) continue ;; esac
+    case "$pat" in '' | \#*) continue ;; esac
     if printf '%s\n' "$haystack" | grep -iEq -- "$pat"; then
       hits="$hits  - $pat"$'\n'
     fi
@@ -425,13 +444,16 @@ sec::rebuild_slot() {
   local slot="$1" kind profile recipient
   kind="$(sec::map_get "$slot" kind)"
   profile="$(sec::map_get "$slot" profile)"
-  [[ -n "$kind" && -n "$profile" ]] \
-    || die "slot $slot is not in the operator map (run system-onboard first)"
+  [[ -n "$kind" && -n "$profile" ]] ||
+    die "slot $slot is not in the operator map (run system-onboard first)"
 
   local names
   names=("${(@f)$(sec::manifest_names_for_profile "$profile")}")
   names=(${names:#})
-  (( ${#names[@]} )) || { log_warn "manifest lists no secrets for profile '$profile'"; return 0; }
+  ((${#names[@]})) || {
+    log_warn "manifest lists no secrets for profile '$profile'"
+    return 0
+  }
 
   local n val ref
   if [[ "$kind" == headless ]]; then
@@ -450,7 +472,8 @@ sec::rebuild_slot() {
     mkdir -p "$SECRETS_BLOB_DIR"
     sec::sops_rule_set "$slot" "$recipient"
     sec::sops_encrypt "$recipient" "$plain" "$(sec::blob_path "$slot")"
-    rm -f "$plain"; trap - EXIT
+    rm -f "$plain"
+    trap - EXIT
     sec::write_headless_fragment "$slot"
     log_ok "encrypted ${#names[@]} secret(s) for slot $slot"
   else
@@ -465,15 +488,15 @@ sec::rebuild_slot() {
       local -a vaults
       vaults=("${(@f)$(sec::op vault list --format=json 2>/dev/null | jq -r '.[].name')}")
       vaults=(${vaults:#})
-      if (( ${#vaults[@]} > 1 )); then
+      if ((${#vaults[@]} > 1)); then
         prompt::choice vault "1Password vault" "${vaults[@]}"
-      elif (( ${#vaults[@]} == 1 )); then
+      elif ((${#vaults[@]} == 1)); then
         vault="${vaults[1]}"
       fi
     fi
     log_info "1Password setup for the '$profile' secrets (human slot $slot, field $hash)."
-    [[ -n "$vault" ]] \
-      && log_warn "op:// references are committed to this PUBLIC repo — keep vault/item names non-identifying."
+    [[ -n "$vault" ]] &&
+      log_warn "op:// references are committed to this PUBLIC repo — keep vault/item names non-identifying."
     for n in "${names[@]}"; do
       desc="$(sec::manifest_prompt "$n")"
       if [[ -n "$vault" ]]; then
@@ -481,17 +504,19 @@ sec::rebuild_slot() {
         if sec::op_field_exists "$vault" "$n" "$hash"; then
           if prompt::confirm "  $n ($desc): field $hash already set — replace its value?"; then
             prompt::secret val "    new value for $n (masked):"
-            sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
-              || die "could not update $ref (does the service account have write access to '$vault'?)"
-            val=""; log_ok "    updated $ref"
+            sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null ||
+              die "could not update $ref (does the service account have write access to '$vault'?)"
+            val=""
+            log_ok "    updated $ref"
           else
             log_info "    keeping existing $ref"
           fi
         else
           prompt::secret val "  $n ($desc) — value for field $hash (masked):"
-          sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
-            || die "could not write $ref (does the service account have write access to '$vault'?)"
-          val=""; log_ok "    wrote $ref"
+          sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null ||
+            die "could not write $ref (does the service account have write access to '$vault'?)"
+          val=""
+          log_ok "    wrote $ref"
         fi
       else
         prompt::required ref "  $n — op:// reference ($desc):"
@@ -521,7 +546,8 @@ sec::commit_paths_for_slot() {
 # sec::git_commit <message> <path>... — stage paths (relative to repo root),
 # run the leak audit, then commit. Refuses if nothing staged.
 sec::git_commit() {
-  local msg="$1"; shift
+  local msg="$1"
+  shift
   local p
   for p in "$@"; do
     git -C "$REPO_ROOT" add -- "$p" 2>/dev/null || true
@@ -531,7 +557,7 @@ sec::git_commit() {
     return 0
   fi
   sec::leak_audit
-  git -C "$REPO_ROOT" commit -m "$msg" >/dev/null \
-    || die "git commit failed"
+  git -C "$REPO_ROOT" commit -m "$msg" >/dev/null ||
+    die "git commit failed"
   log_ok "committed: $msg"
 }

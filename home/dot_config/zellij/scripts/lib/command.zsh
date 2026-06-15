@@ -22,7 +22,7 @@ ql_join() {
   shift || true
   local out="" first=1 a
   for a in "$@"; do
-    if (( first )); then
+    if ((first)); then
       out="$a"
       first=0
     else
@@ -90,7 +90,7 @@ ql_action_command() {
       editor="$(ql_editor)"
       cwd="$(jq -r '.cwd // empty' <<<"$action")"
       local files=() f abs
-      if (( ${#args[@]} > 0 )); then
+      if ((${#args[@]} > 0)); then
         for f in "${args[@]}"; do
           case "$f" in
             /* | "~"* | \\*) abs="$f" ;;
@@ -99,7 +99,7 @@ ql_action_command() {
           files+=("$abs")
         done
       fi
-      if (( ${#files[@]} > 0 )); then
+      if ((${#files[@]} > 0)); then
         printf '%s%s %s' "$prefix" "$editor" "${files[*]}"
       else
         printf '%s%s' "$prefix" "$editor"
@@ -108,7 +108,7 @@ ql_action_command() {
     Remote)
       # Note: matches the Lua plugin — Remote does NOT get the cd/venv/mise
       # prefix, it is just `ssh <args>`.
-      if (( ${#args[@]} > 0 )); then
+      if ((${#args[@]} > 0)); then
         printf 'ssh %s' "$(ql_join ' ' "${args[@]}")"
       else
         echo "quick-launch: Remote action has no host args" >&2
@@ -116,7 +116,7 @@ ql_action_command() {
       fi
       ;;
     Run)
-      if (( ${#args[@]} > 0 )); then
+      if ((${#args[@]} > 0)); then
         printf '%s%s' "$prefix" "$(ql_join ' && ' "${args[@]}")"
       else
         echo "quick-launch: Run action has no args" >&2
@@ -180,12 +180,12 @@ ql_float_axis_geometry() {
     pct="${value%?}"
     if [[ "$pct" =~ ^[0-9]+$ ]]; then
       span="$pct%"
-      pos="$(( (100 - pct) / 2 ))%"
+      pos="$(((100 - pct) / 2))%"
     fi
   elif [[ "$value" =~ ^[0-9]+$ ]]; then
     span="$value"
-    pos=$(( (total - value) / 2 ))
-    (( pos < 0 )) && pos=0
+    pos=$(((total - value) / 2))
+    ((pos < 0)) && pos=0
   fi
 
   if [[ -z "${span:-}" ]]; then
@@ -277,7 +277,7 @@ ql_pane_tree() {
   n="$(jq 'length' <<<"$panes")"
   cur="$(jq -c ".[$i]" <<<"$panes")"
 
-  if (( i == n - 1 )); then
+  if ((i == n - 1)); then
     ql_pane_leaf "$cur" "$indent" "$size"
     return
   fi
@@ -318,7 +318,7 @@ ql_tab_kdl() {
   float_count="$(jq 'length' <<<"$floating_panes")"
 
   printf '%stab name="%s" {\n' "$indent" "$(ql_kdl_escape "$name")"
-  if (( count == 0 )); then
+  if ((count == 0)); then
     # A tab with no panes but its own action becomes a single pane running
     # that action; otherwise an empty default pane (interactive shell).
     local action
@@ -333,9 +333,9 @@ ql_tab_kdl() {
   else
     ql_pane_tree "$tiled_panes" 0 "$indent    " ""
   fi
-  if (( float_count > 0 )); then
+  if ((float_count > 0)); then
     local i fp
-    for (( i = 0; i < float_count; i++ )); do
+    for ((i = 0; i < float_count; i++)); do
       fp="$(jq -c ".[$i]" <<<"$floating_panes")"
       ql_pane_leaf "$fp" "$indent    " ""
     done
@@ -366,7 +366,7 @@ ql_build_workspace_layout() {
   tcount="$(jq 'length' <<<"$tabs")"
 
   printf 'layout {\n'
-  if (( tcount == 0 )); then
+  if ((tcount == 0)); then
     local synth
     if [[ "$(jq 'length' <<<"$ws_panes")" -gt 0 ]]; then
       synth="$(jq -c --argjson p "$ws_panes" '{name: (.name // .id), panes: $p}' <<<"$ws")"
@@ -379,9 +379,9 @@ ql_build_workspace_layout() {
     ql_tab_kdl "$synth" "    "
   else
     local t tab
-    for (( t = 0; t < tcount; t++ )); do
+    for ((t = 0; t < tcount; t++)); do
       tab="$(jq -c ".[$t]" <<<"$tabs")"
-      if (( t == 0 )) && [[ "$(jq 'length' <<<"$ws_panes")" -gt 0 ]]; then
+      if ((t == 0)) && [[ "$(jq 'length' <<<"$ws_panes")" -gt 0 ]]; then
         tab="$(jq -c --argjson wsp "$ws_panes" '.panes = ((.panes // []) + $wsp)' <<<"$tab")"
       fi
       ql_tab_kdl "$tab" "    "

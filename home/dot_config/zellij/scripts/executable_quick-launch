@@ -89,7 +89,10 @@ ql_print_layout() {
   case "$kind" in
     tab) ql_build_tab_layout "$el" ;;
     workspace) ql_build_workspace_layout "$el" ;;
-    pane) ql_action_command "$(jq -c '.action // {}' <<<"$el")"; echo ;;
+    pane)
+      ql_action_command "$(jq -c '.action // {}' <<<"$el")"
+      echo
+      ;;
     *) ql_die "unknown kind '$kind'" ;;
   esac
 }

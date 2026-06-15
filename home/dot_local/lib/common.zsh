@@ -36,25 +36,35 @@ if [ -t 1 ]; then
   C_BWH=$'\e[1;37m'
   C_RES=$'\e[0m'
 else
-  C_BLU=""; C_BBL=""; C_GRN=""; C_YEL=""; C_RED=""; C_DIM=""; C_BWH=""; C_RES=""
+  C_BLU=""
+  C_BBL=""
+  C_GRN=""
+  C_YEL=""
+  C_RED=""
+  C_DIM=""
+  C_BWH=""
+  C_RES=""
 fi
 
 # --- logging ----------------------------------------------------------------
 # One house style across every tool. info/ok go to stdout; warnings and errors
 # to stderr. The message rides in a %s arg, so a literal % is safe and no
 # backslash escapes are interpreted.
-log_info()  { printf '%s→%s %s\n'      "$C_BLU" "$C_RES" "$*"; }
-log_ok()    { printf '%s✓%s %s\n'      "$C_GRN" "$C_RES" "$*"; }
-log_warn()  { printf '%s⚠%s  %s\n'     "$C_YEL" "$C_RES" "$*" >&2; }
+log_info() { printf '%s→%s %s\n' "$C_BLU" "$C_RES" "$*"; }
+log_ok() { printf '%s✓%s %s\n' "$C_GRN" "$C_RES" "$*"; }
+log_warn() { printf '%s⚠%s  %s\n' "$C_YEL" "$C_RES" "$*" >&2; }
 log_error() { printf '%serror:%s %s\n' "$C_RED" "$C_RES" "$*" >&2; }
-die()       { log_error "$*"; exit 1; }
+die() {
+  log_error "$*"
+  exit 1
+}
 
 # --- help-token dispatch ----------------------------------------------------
 # is_help: the FIRST-arg help check, where a bare `help` subcommand counts.
 is_help() {
   case "${1:-}" in
-    -h|--help|help) return 0 ;;
-    *)              return 1 ;;
+    -h | --help | help) return 0 ;;
+    *) return 1 ;;
   esac
 }
 
@@ -65,7 +75,7 @@ args_contain_help() {
   local a
   for a in "$@"; do
     case "$a" in
-      -h|--help) return 0 ;;
+      -h | --help) return 0 ;;
     esac
   done
   return 1
@@ -81,7 +91,7 @@ require_cmd() {
   for c in "$@"; do
     command -v "$c" >/dev/null 2>&1 || missing+=("$c")
   done
-  (( ${#missing[@]} == 0 )) || die "missing required tool(s): ${missing[*]}"
+  ((${#missing[@]} == 0)) || die "missing required tool(s): ${missing[*]}"
 }
 
 # --- terminal --------------------------------------------------------------
@@ -134,15 +144,35 @@ notify() {
   local icon="" sound="" fn="notify"
   while [ $# -gt 0 ]; do
     case "$1" in
-      -i|--icon)
-        if [ $# -ge 2 ]; then icon="$2"; shift 2; else shift; fi ;;
-      --icon=*)    icon="${1#--icon=}"; shift ;;
-      -s|--sound)
-        if [ $# -ge 2 ]; then sound="$2"; shift 2; else shift; fi ;;
-      --sound=*)   sound="${1#--sound=}"; shift ;;
-      --ansi)      fn="notifyAnsi"; shift ;;
-      --)          shift; break ;;
-      *)           break ;;
+      -i | --icon)
+        if [ $# -ge 2 ]; then
+          icon="$2"
+          shift 2
+        else shift; fi
+        ;;
+      --icon=*)
+        icon="${1#--icon=}"
+        shift
+        ;;
+      -s | --sound)
+        if [ $# -ge 2 ]; then
+          sound="$2"
+          shift 2
+        else shift; fi
+        ;;
+      --sound=*)
+        sound="${1#--sound=}"
+        shift
+        ;;
+      --ansi)
+        fn="notifyAnsi"
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *) break ;;
     esac
   done
 
@@ -175,7 +205,10 @@ notify() {
 # _notify_lua_arg VALUE — emit a Lua literal on stdout: a double-quoted,
 # escaped string, or bare `nil` when VALUE is empty. Private to notify().
 _notify_lua_arg() {
-  [ -n "$1" ] || { printf 'nil'; return 0; }
+  [ -n "$1" ] || {
+    printf 'nil'
+    return 0
+  }
   local v="$1"
   v="${v//\\/\\\\}"
   v="${v//\"/\\\"}"

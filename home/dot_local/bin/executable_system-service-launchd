@@ -79,11 +79,15 @@ svc::resolve_cmd0() {
 # absolute path. The rest of cmd is passed through verbatim.
 svc::render_json() {
   local name="$1"
-  local json; json=$(svc::toml_json)
-  local cmd0; cmd0=$(printf '%s' "$json" | jq -r --arg n "$name" '.[$n].cmd[0] // empty')
+  local json
+  json=$(svc::toml_json)
+  local cmd0
+  cmd0=$(printf '%s' "$json" | jq -r --arg n "$name" '.[$n].cmd[0] // empty')
   [[ -n "$cmd0" ]] || die "service '$name' has no cmd"
-  local cmd0_abs; cmd0_abs=$(svc::resolve_cmd0 "$cmd0")
-  local label; label=$(svc::label "$name")
+  local cmd0_abs
+  cmd0_abs=$(svc::resolve_cmd0 "$cmd0")
+  local label
+  label=$(svc::label "$name")
 
   printf '%s' "$json" | jq \
     --arg n "$name" \
@@ -117,15 +121,18 @@ svc::render_plist() {
 # to bootout+bootstrap (config drift) vs leave the running service alone.
 svc::write_plist() {
   local name="$1"
-  local target; target=$(svc::plist_path "$name")
+  local target
+  target=$(svc::plist_path "$name")
   mkdir -p "$LAUNCH_AGENTS"
-  local rendered; rendered=$(svc::render_plist "$name")
+  local rendered
+  rendered=$(svc::render_plist "$name")
   if [[ -f "$target" ]] && diff -q <(printf '%s' "$rendered") "$target" >/dev/null 2>&1; then
     printf 'unchanged\n'
     return 0
   fi
-  local tmp; tmp=$(mktemp)
-  printf '%s' "$rendered" > "$tmp"
+  local tmp
+  tmp=$(mktemp)
+  printf '%s' "$rendered" >"$tmp"
   mv "$tmp" "$target"
   printf 'wrote\n'
 }
@@ -157,8 +164,8 @@ svc::is_bootstrapped() {
 
 # svc::pid <name> → PID of the running service, or empty if not running
 svc::pid() {
-  launchctl print "$DOMAIN/$(svc::label "$1")" 2>/dev/null \
-    | awk '/^[[:space:]]*pid =/ {print $3; exit}'
+  launchctl print "$DOMAIN/$(svc::label "$1")" 2>/dev/null |
+    awk '/^[[:space:]]*pid =/ {print $3; exit}'
 }
 
 # svc::status <name>
@@ -169,15 +176,20 @@ svc::pid() {
 #   none     — declared but never bootstrapped (or boot'd-out)
 svc::status() {
   local name="$1"
-  svc::is_bootstrapped "$name" || { printf 'none\n'; return; }
-  local pid; pid=$(svc::pid "$name")
+  svc::is_bootstrapped "$name" || {
+    printf 'none\n'
+    return
+  }
+  local pid
+  pid=$(svc::pid "$name")
   if [[ -n "$pid" && "$pid" != "0" ]]; then
-    printf 'running\n'; return
+    printf 'running\n'
+    return
   fi
   # Bootstrapped but no PID — check last exit code; non-zero = error
   local rc
-  rc=$(launchctl print "$DOMAIN/$(svc::label "$name")" 2>/dev/null \
-       | awk '/^[[:space:]]*last exit code =/ {print $5; exit}')
+  rc=$(launchctl print "$DOMAIN/$(svc::label "$name")" 2>/dev/null |
+    awk '/^[[:space:]]*last exit code =/ {print $5; exit}')
   if [[ -n "$rc" && "$rc" != "0" && "$rc" != "-" ]]; then
     printf 'error\n'
   else
@@ -217,7 +229,8 @@ do_start() {
   local name="$1"
   svc::declared "$name" || die "no such service in $SVCFILE: $name"
   svc::ensure_dirs "$name"
-  local changed; changed=$(svc::write_plist "$name")
+  local changed
+  changed=$(svc::write_plist "$name")
   if [[ "$changed" == "wrote" ]]; then
     # Plist content changed — bootout any existing instance so the new
     # plist actually takes effect on bootstrap.
@@ -257,7 +270,8 @@ do_info() {
 # do_list — TSV rows: Service\tStatus\tUser\tFile (Source is prepended
 # by the dispatcher).
 do_list() {
-  local user; user=$(id -un)
+  local user
+  user=$(id -un)
   svc::names | while IFS= read -r name; do
     [[ -z "$name" ]] && continue
     printf '%s\t%s\t%s\t%s\n' "$name" "$(svc::status "$name")" "$user" "$(svc::plist_path "$name")"
@@ -272,14 +286,15 @@ do_sync() {
   log_info "Syncing launchd services..."
 
   local -a declared
-  declared=( ${(f)"$(svc::names)"} )
+  declared=(${(f)"$(svc::names)"})
 
   # Apply declared entries
   local name=""
   for name in "${declared[@]}"; do
     [[ -z "$name" ]] && continue
     svc::ensure_dirs "$name"
-    local changed; changed=$(svc::write_plist "$name")
+    local changed
+    changed=$(svc::write_plist "$name")
     if [[ "$changed" == "wrote" ]] && svc::is_bootstrapped "$name"; then
       svc::bootout "$name"
     fi
@@ -290,10 +305,13 @@ do_sync() {
   local existing="" base="" plist=""
   for plist in "$LAUNCH_AGENTS"/${LABEL_PREFIX}.*.plist(N); do
     base="${plist:t:r}"             # com.system-service.foo
-    name="${base#${LABEL_PREFIX}.}"  # foo
+    name="${base#${LABEL_PREFIX}.}" # foo
     local found=0 d=""
-    for d in "${declared[@]}"; do [[ "$d" == "$name" ]] && { found=1; break } done
-    (( found )) && continue
+    for d in "${declared[@]}"; do [[ "$d" == "$name" ]] && {
+      found=1
+      break
+    }; done
+    ((found)) && continue
     log_info "removing orphan $(svc::label "$name")"
     svc::bootout "$name"
     rm -f "$plist"
@@ -326,15 +344,45 @@ do_status() {
 }
 
 case "${1:-}" in
-  list)     shift; do_list     "$@" ;;
-  start)    shift; do_start    "$@" ;;
-  stop)     shift; do_stop     "$@" ;;
-  restart)  shift; do_restart  "$@" ;;
-  info)     shift; do_info     "$@" ;;
-  sync)     shift; do_sync     "$@" ;;
-  render)   shift; do_render   "$@" ;;
-  declared) shift; svc::names ;;            # internal: used by the dispatcher
-  matching) shift; do_matching "$@" ;;     # internal: used by restart-for
-  status)   shift; do_status   "$@" ;;     # internal: used by restart-for
+  list)
+    shift
+    do_list "$@"
+    ;;
+  start)
+    shift
+    do_start "$@"
+    ;;
+  stop)
+    shift
+    do_stop "$@"
+    ;;
+  restart)
+    shift
+    do_restart "$@"
+    ;;
+  info)
+    shift
+    do_info "$@"
+    ;;
+  sync)
+    shift
+    do_sync "$@"
+    ;;
+  render)
+    shift
+    do_render "$@"
+    ;;
+  declared)
+    shift
+    svc::names
+    ;; # internal: used by the dispatcher
+  matching)
+    shift
+    do_matching "$@"
+    ;; # internal: used by restart-for
+  status)
+    shift
+    do_status "$@"
+    ;; # internal: used by restart-for
   *) die "usage: system-service-launchd {list|start|stop|restart|info|sync|render|declared|matching|status} [args]" ;;
 esac

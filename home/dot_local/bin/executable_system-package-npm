@@ -15,9 +15,9 @@ NPM_SYNC_FLAGS=(--no-fund)
 NPM_RUNTIME=(npm corepack node-gyp)
 
 npm_list_installed() {
-  npm ls -g --depth=0 --json 2>/dev/null \
-    | jq -r '(.dependencies // {}) | keys[]' \
-    | grep -vxF -e "${(j:
+  npm ls -g --depth=0 --json 2>/dev/null |
+    jq -r '(.dependencies // {}) | keys[]' |
+    grep -vxF -e "${(j:
 :)NPM_RUNTIME}" || true
 }
 
@@ -25,8 +25,8 @@ npm_list_installed() {
 # (excluding the npm runtime trio). Used to detect which globals changed
 # across a sync so services tied to them get restarted.
 npm_snapshot_versions() {
-  npm ls -g --depth=0 --json 2>/dev/null \
-    | jq -r '(.dependencies // {}) | to_entries[]
+  npm ls -g --depth=0 --json 2>/dev/null |
+    jq -r '(.dependencies // {}) | to_entries[]
              | select(.key as $k | ["npm", "corepack", "node-gyp"] | index($k) | not)
              | "\(.key)\t\(.value.version)"' 2>/dev/null || true
 }
@@ -48,30 +48,33 @@ npm_list_rows() {
     if [[ -n "$outdated_json" ]]; then
       while IFS=$'\t' read -r name ver; do
         [[ -n "$name" ]] && outdated_map[$name]="$ver"
-      done < <(printf '%s' "$outdated_json" \
-               | jq -r 'to_entries[] | "\(.key)\t\(.value.latest)"' 2>/dev/null || true)
+      done < <(printf '%s' "$outdated_json" |
+        jq -r 'to_entries[] | "\(.key)\t\(.value.latest)"' 2>/dev/null || true)
     fi
   fi
 
   # Emit rows, filtering out runtime packages via jq
-  printf '%s' "$installed_json" \
-    | jq -r '(.dependencies // {}) | to_entries[]
+  printf '%s' "$installed_json" |
+    jq -r '(.dependencies // {}) | to_entries[]
              | select(.key as $k | ["npm", "corepack", "node-gyp"] | index($k) | not)
-             | "\(.key)\t\(.value.version)"' 2>/dev/null \
-    | while IFS=$'\t' read -r name ver; do
-        if [[ "$outdated" == true && -n "${outdated_map[$name]:-}" ]]; then
-          ver="${ver} ${C_YEL}(update available: ${outdated_map[$name]})${C_RES}"
-        fi
-        printf '%s\t%s\n' "$name" "$ver"
-      done
+             | "\(.key)\t\(.value.version)"' 2>/dev/null |
+    while IFS=$'\t' read -r name ver; do
+      if [[ "$outdated" == true && -n "${outdated_map[$name]:-}" ]]; then
+        ver="${ver} ${C_YEL}(update available: ${outdated_map[$name]})${C_RES}"
+      fi
+      printf '%s\t%s\n' "$name" "$ver"
+    done
 }
 
 do_list() {
   local outdated=false
-  while (( $# > 0 )); do
+  while (($# > 0)); do
     case "$1" in
-      -u|--update) outdated=true; shift ;;
-      -a|--all)    shift ;;  # no-op: npm has no transient-dep concept here
+      -u | --update)
+        outdated=true
+        shift
+        ;;
+      -a | --all) shift ;; # no-op: npm has no transient-dep concept here
       *) die "unknown flag for list: $1" ;;
     esac
   done
@@ -108,17 +111,20 @@ do_sync() {
   log_info "Syncing npm globals..."
 
   local declared_full declared installed before_snap after_snap line
-  declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
-  before_snap=$(mktemp); after_snap=$(mktemp)
+  declared_full=$(mktemp)
+  declared=$(mktemp)
+  installed=$(mktemp)
+  before_snap=$(mktemp)
+  after_snap=$(mktemp)
   trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
 
-  npm_snapshot_versions > "$before_snap"
+  npm_snapshot_versions >"$before_snap"
 
-  pkg::manifest_read "$NPMFILE" > "$declared_full"
+  pkg::manifest_read "$NPMFILE" >"$declared_full"
   while IFS= read -r line; do
     [[ -n "$line" ]] && pkg::line_canonical "$line"
-  done < "$declared_full" > "$declared"
-  npm_list_installed > "$installed"
+  done <"$declared_full" >"$declared"
+  npm_list_installed >"$installed"
 
   # Uninstall extras BEFORE installing missing — if a swap puts two
   # packages on the same binary path (e.g. both ship `bin/pi`), npm
@@ -133,7 +139,7 @@ do_sync() {
       npm install -g "${NPM_SYNC_FLAGS[@]}" "$(npm_line_install_spec "$line")"
       npm_build_global_if_needed "$pkg"
       break
-    done < "$declared_full"
+    done <"$declared_full"
   done
 
   while IFS= read -r line; do
@@ -143,10 +149,10 @@ do_sync() {
     else
       npm update -g "${NPM_SYNC_FLAGS[@]}" "$(pkg::line_canonical "$line")" || true
     fi
-  done < "$declared_full"
+  done <"$declared_full"
 
   # Restart services whose backing global package changed version.
-  npm_snapshot_versions > "$after_snap"
+  npm_snapshot_versions >"$after_snap"
   pkg::restart_changed "$before_snap" "$after_snap"
   return 0
 }
@@ -211,19 +217,30 @@ EOF
 
 main() {
   if [[ $# -eq 0 ]] || is_help "${1:-}"; then
-    usage; exit 0
+    usage
+    exit 0
   fi
-  local cmd="$1"; shift
+  local cmd="$1"
+  shift
   case "$cmd" in
     list)
-      args_contain_help "$@" && { usage_list; exit 0; }
+      args_contain_help "$@" && {
+        usage_list
+        exit 0
+      }
       do_list "$@"
       ;;
     sync)
-      args_contain_help "$@" && { usage_sync; exit 0; }
+      args_contain_help "$@" && {
+        usage_sync
+        exit 0
+      }
       do_sync
       ;;
-    *) usage >&2; die "unknown subcommand: $cmd" ;;
+    *)
+      usage >&2
+      die "unknown subcommand: $cmd"
+      ;;
   esac
 }
 

@@ -44,8 +44,8 @@ prompt::secret() {
   local __var="$1" __prompt="$2" __val=""
 
   if ! have_tty; then
-    IFS= read -rs __val </dev/tty 2>/dev/null || IFS= read -rs __val \
-      || die "input aborted"
+    IFS= read -rs __val </dev/tty 2>/dev/null || IFS= read -rs __val ||
+      die "input aborted"
     printf -v "$__var" '%s' "$__val"
     return 0
   fi
@@ -71,12 +71,23 @@ prompt::secret() {
     stty -echo -icanon min 1 time 0 </dev/tty
     while IFS= read -rk 1 __ch </dev/tty; do
       case "$__ch" in
-        $'\n'|$'\r') break ;;
-        $'\177'|$'\b')                       # Backspace / Delete
-          (( ${#__val} )) && { __val="${__val[1,-2]}"; printf '\b \b' >/dev/tty; } ;;
-        $'\025')                             # ^U — clear the whole entry
-          while (( ${#__val} )); do __val="${__val[1,-2]}"; printf '\b \b' >/dev/tty; done ;;
-        *) __val+="$__ch"; printf '*' >/dev/tty ;;
+        $'\n' | $'\r') break ;;
+        $'\177' | $'\b') # Backspace / Delete
+          ((${#__val})) && {
+            __val="${__val[1,-2]}"
+            printf '\b \b' >/dev/tty
+          }
+          ;;
+        $'\025') # ^U — clear the whole entry
+          while ((${#__val})); do
+            __val="${__val[1,-2]}"
+            printf '\b \b' >/dev/tty
+          done
+          ;;
+        *)
+          __val+="$__ch"
+          printf '*' >/dev/tty
+          ;;
       esac
     done
     stty "$__saved" </dev/tty
@@ -90,13 +101,17 @@ prompt::secret() {
 
 # prompt::choice <varname> <prompt> <opt>... — accept only a listed option.
 prompt::choice() {
-  local __var="$1" __prompt="$2"; shift 2
+  local __var="$1" __prompt="$2"
+  shift 2
   local __opts=("$@") __val="" __o=""
   while :; do
     printf '%s%s%s (%s) ' "$C_BWH" "$__prompt" "$C_RES" "${(j:/:)__opts}" >/dev/tty
     IFS= read -r __val </dev/tty || die "input aborted"
     for __o in "${__opts[@]}"; do
-      [[ "$__val" == "$__o" ]] && { printf -v "$__var" '%s' "$__val"; return 0; }
+      [[ "$__val" == "$__o" ]] && {
+        printf -v "$__var" '%s' "$__val"
+        return 0
+      }
     done
     log_warn "choose one of: ${(j:, :)__opts}"
   done

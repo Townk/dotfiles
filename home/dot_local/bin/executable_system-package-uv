@@ -18,8 +18,8 @@ uv_list_installed() {
 # uv_snapshot_versions — TSV "name\tversion" rows. Used to detect which
 # tools changed across a sync so we can restart any services that wrap them.
 uv_snapshot_versions() {
-  uv tool list 2>/dev/null \
-    | awk '/^[a-zA-Z0-9_]/ && !/^No tools/ {
+  uv tool list 2>/dev/null |
+    awk '/^[a-zA-Z0-9_]/ && !/^No tools/ {
         name=$1; ver=$2
         sub(/^v/, "", ver)
         print name "\t" ver
@@ -35,10 +35,12 @@ uv_current_python() {
 }
 
 uv_python_drifted() {
-  local current; current=$(uv_current_python)
+  local current
+  current=$(uv_current_python)
   [[ -z "$current" ]] && return 1
   if [[ -f "$PYTHON_STAMP" ]]; then
-    local last; last=$(<"$PYTHON_STAMP")
+    local last
+    last=$(<"$PYTHON_STAMP")
     [[ "$current" != "$last" ]]
   else
     return 0
@@ -47,7 +49,7 @@ uv_python_drifted() {
 
 uv_write_stamp() {
   mkdir -p "$PKG_STATE_DIR"
-  uv_current_python > "$PYTHON_STAMP"
+  uv_current_python >"$PYTHON_STAMP"
 }
 
 # uv_list_rows <outdated:true|false>
@@ -57,10 +59,10 @@ uv_write_stamp() {
 uv_list_rows() {
   local outdated="${1:-false}"
   if [[ "$outdated" == true ]]; then
-    uv_snapshot_versions \
-      | pkg::outdated_rows \
-          'curl -fsSL "https://pypi.org/pypi/$1/json" 2>/dev/null | jq -r ".info.version // empty"' \
-      | sort
+    uv_snapshot_versions |
+      pkg::outdated_rows \
+        'curl -fsSL "https://pypi.org/pypi/$1/json" 2>/dev/null | jq -r ".info.version // empty"' |
+      sort
   else
     uv_snapshot_versions
   fi
@@ -68,10 +70,13 @@ uv_list_rows() {
 
 do_list() {
   local outdated=false
-  while (( $# > 0 )); do
+  while (($# > 0)); do
     case "$1" in
-      -u|--update) outdated=true; shift ;;
-      -a|--all)    shift ;;  # no-op: uv has no transient-dep concept
+      -u | --update)
+        outdated=true
+        shift
+        ;;
+      -a | --all) shift ;; # no-op: uv has no transient-dep concept
       *) die "unknown flag for list: $1" ;;
     esac
   done
@@ -82,11 +87,14 @@ do_sync() {
   log_info "Syncing uv tools..."
 
   local declared_full declared installed before_snap after_snap
-  declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
-  before_snap=$(mktemp); after_snap=$(mktemp)
+  declared_full=$(mktemp)
+  declared=$(mktemp)
+  installed=$(mktemp)
+  before_snap=$(mktemp)
+  after_snap=$(mktemp)
   trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
 
-  uv_snapshot_versions > "$before_snap"
+  uv_snapshot_versions >"$before_snap"
 
   if uv_python_drifted; then
     log_warn "Python version changed since last sync — rebuilding uv tool venvs"
@@ -108,9 +116,9 @@ do_sync() {
   # git+https://...` together — uv rejects multi-positional). Example:
   #
   #   omlx -- git+https://github.com/jundot/omlx --python 3.11
-  pkg::manifest_read "$UVFILE" > "$declared_full"
-  awk '{print $1}' "$declared_full" > "$declared"
-  uv_list_installed > "$installed"
+  pkg::manifest_read "$UVFILE" >"$declared_full"
+  awk '{print $1}' "$declared_full" >"$declared"
+  uv_list_installed >"$installed"
 
   # Uninstall extras BEFORE installing missing — if a swap puts two tools
   # on the same shim path, uv tool install can refuse to overwrite.
@@ -119,13 +127,14 @@ do_sync() {
   done
   pkg::diff_only_in "$declared" "$installed" | while IFS= read -r tool; do
     [[ -z "$tool" ]] && continue
-    local line; line=$(awk -v t="$tool" '$1 == t {print; exit}' "$declared_full")
-    local -a args=( ${(z)line} )
+    local line
+    line=$(awk -v t="$tool" '$1 == t {print; exit}' "$declared_full")
+    local -a args=(${(z)line})
     # `--` form: drop the canonical name AND the separator; everything
     # after is the install spec. Falls through to the default (full line)
     # otherwise, preserving the legacy `tool --with extra` shape.
     if pkg::line_has_spec "$line"; then
-      args=( "${args[@]:2}" )
+      args=("${args[@]:2}")
     fi
     uv tool install "${args[@]}"
   done
@@ -141,11 +150,11 @@ do_sync() {
   # already handles drift for those.
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    [[ "$line" == "${line%% *}" ]] && continue  # no extras → skip
-    local -a args=( ${(z)line} )
-    pkg::line_has_spec "$line" && continue    # `--` form → skip
+    [[ "$line" == "${line%% *}" ]] && continue # no extras → skip
+    local -a args=(${(z)line})
+    pkg::line_has_spec "$line" && continue # `--` form → skip
     uv tool install --reinstall "${args[@]}"
-  done < "$declared_full"
+  done <"$declared_full"
 
   uv tool upgrade --all || true
 
@@ -153,7 +162,7 @@ do_sync() {
 
   # Restart services whose backing uv tool changed version (or was newly
   # installed). Skipped on first-run no-changes since the diff is empty.
-  uv_snapshot_versions > "$after_snap"
+  uv_snapshot_versions >"$after_snap"
   pkg::restart_changed "$before_snap" "$after_snap"
   return 0
 }
@@ -216,19 +225,30 @@ EOF
 
 main() {
   if [[ $# -eq 0 ]] || is_help "${1:-}"; then
-    usage; exit 0
+    usage
+    exit 0
   fi
-  local cmd="$1"; shift
+  local cmd="$1"
+  shift
   case "$cmd" in
     list)
-      args_contain_help "$@" && { usage_list; exit 0; }
+      args_contain_help "$@" && {
+        usage_list
+        exit 0
+      }
       do_list "$@"
       ;;
     sync)
-      args_contain_help "$@" && { usage_sync; exit 0; }
+      args_contain_help "$@" && {
+        usage_sync
+        exit 0
+      }
       do_sync
       ;;
-    *) usage >&2; die "unknown subcommand: $cmd" ;;
+    *)
+      usage >&2
+      die "unknown subcommand: $cmd"
+      ;;
   esac
 }
 

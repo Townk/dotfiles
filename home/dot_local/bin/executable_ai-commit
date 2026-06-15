@@ -23,8 +23,8 @@ source "$HOME/.local/lib/common.zsh"
 # were invoked by a bare PATH name (mirrors system-package).
 script_path="$0"
 if [[ "$script_path" != */* ]]; then
-  script_path="$(command -v -- "$script_path")" \
-    || die "cannot resolve dispatcher path: $0"
+  script_path="$(command -v -- "$script_path")" ||
+    die "cannot resolve dispatcher path: $0"
 fi
 SCRIPT_DIR="${script_path:A:h}"
 
@@ -93,34 +93,36 @@ probe_available() {
 # common.zsh blanks its palette, and fzf renders these via --ansi.
 pick_harness() {
   source "$HOME/.local/lib/zellij.zsh"
-  local -A icons=( pi $'\U0010FB02' cursor $'\U0010FB00' )
+  local -A icons=(pi $'\U0010FB02' cursor $'\U0010FB00')
   local c_icon=$'\e[38;2;255;255;255m' c_name=$'\e[38;2;137;180;250m'
   local c_desc=$'\e[38;2;127;132;156m' c_off=$'\e[0m'
   local h w=0
-  for h in "${AVAILABLE[@]}"; do (( ${#h} > w )) && w=${#h}; done
+  for h in "${AVAILABLE[@]}"; do ((${#h} > w)) && w=${#h}; done
   for h in "${AVAILABLE[@]}"; do
     pick::line "${c_icon}${icons[$h]:-$'\uf013'}${c_off}  ${c_name}${(r:$w:)h}${c_off}  ${c_desc}${LABELS[$h]}${c_off}" "$h"
   done | PICK_NAME=ai-commit zj::pick \
-      --pane-width 63 --pane-height 12 \
-      --output field:1 --selector --selector-nav \
-      --header "Commit harness" \
-      --hints $'\U000F0331 : run  \u00b7  \U000F12B7 : cancel'
+    --pane-width 63 --pane-height 12 \
+    --output field:1 --selector --selector-nav \
+    --header "Commit harness" \
+    --hints $'\U000F0331 : run  \u00b7  \U000F12B7 : cancel'
 }
 
 main() {
   if [[ $# -ge 1 ]] && is_help "$1"; then
-    usage; exit 0
+    usage
+    exit 0
   fi
 
-  (( ${#HARNESSES[@]} > 0 )) \
-    || die "no ai-commit-<harness> workers found next to $SCRIPT_DIR/ai-commit"
+  ((${#HARNESSES[@]} > 0)) ||
+    die "no ai-commit-<harness> workers found next to $SCRIPT_DIR/ai-commit"
 
   local harness=""
   if [[ $# -ge 1 ]] && is_harness "$1"; then
-    harness="$1"; shift
+    harness="$1"
+    shift
   elif [[ -n "${AI_COMMIT_HARNESS:-}" ]]; then
-    is_harness "$AI_COMMIT_HARNESS" \
-      || die "AI_COMMIT_HARNESS='$AI_COMMIT_HARNESS' is not a known harness (have: ${HARNESSES[*]})"
+    is_harness "$AI_COMMIT_HARNESS" ||
+      die "AI_COMMIT_HARNESS='$AI_COMMIT_HARNESS' is not a known harness (have: ${HARNESSES[*]})"
     harness="$AI_COMMIT_HARNESS"
   fi
 
@@ -128,14 +130,19 @@ main() {
     probe_available
     case ${#AVAILABLE[@]} in
       0) die "no harness available; install a backing agent for one of: ${HARNESSES[*]}" ;;
-      1) harness="${AVAILABLE[1]}"
-         log_info "Using the only available harness: ${C_BWH}${harness}${C_RES} (${LABELS[$harness]})" ;;
-      *) harness="$(pick_harness)" || exit $?
-         [[ -n "$harness" ]] || exit 130 ;;
+      1)
+        harness="${AVAILABLE[1]}"
+        log_info "Using the only available harness: ${C_BWH}${harness}${C_RES} (${LABELS[$harness]})"
+        ;;
+      *)
+        harness="$(pick_harness)" || exit $?
+        [[ -n "$harness" ]] || exit 130
+        ;;
     esac
   fi
 
-  local worker; worker="$(worker_path "$harness")"
+  local worker
+  worker="$(worker_path "$harness")"
   [[ -x "$worker" ]] || die "harness worker not executable: ai-commit-$harness"
   exec "$worker" "$@"
 }

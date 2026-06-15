@@ -25,7 +25,10 @@ source "$_platform_dir/common.zsh"
 : "${PLATFORM_OS:=$(uname -s)}"
 case "$PLATFORM_OS" in
   Darwin) source "$_platform_dir/platform-macos.zsh" ;;
-  Linux)  source "$_platform_dir/platform-linux.zsh" ;;
-  *)      unset _platform_dir; die "platform.zsh: unsupported OS: $PLATFORM_OS" ;;
+  Linux) source "$_platform_dir/platform-linux.zsh" ;;
+  *)
+    unset _platform_dir
+    die "platform.zsh: unsupported OS: $PLATFORM_OS"
+    ;;
 esac
 unset _platform_dir

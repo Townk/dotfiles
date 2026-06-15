@@ -16,13 +16,14 @@ go_bin_dir() {
 # $GOBIN that go can identify. Skips files that aren't Go binaries (where
 # `go version -m` fails).
 go_installed_pairs() {
-  local bin_dir; bin_dir=$(go_bin_dir)
+  local bin_dir
+  bin_dir=$(go_bin_dir)
   [[ -d "$bin_dir" ]] || return 0
   local f="" pkg_path=""
   for f in "$bin_dir"/*(N); do
     [[ -x "$f" && -f "$f" ]] || continue
-    pkg_path=$( { go version -m "$f" 2>/dev/null || true; } \
-              | awk '$1=="path" {print $2; exit}')
+    pkg_path=$({ go version -m "$f" 2>/dev/null || true; } |
+      awk '$1=="path" {print $2; exit}')
     [[ -n "$pkg_path" ]] && printf '%s\t%s\n' "$pkg_path" "${f:t}" || true
   done
 }
@@ -43,15 +44,16 @@ go_snapshot_versions() {
 # Output one "<mod_path>\t<binary_name>\t<mod_version>" row per installed binary.
 # mod_path is the MODULE path (from the "mod" line), suitable for go list -m -versions.
 go_installed_triples() {
-  local bin_dir; bin_dir=$(go_bin_dir)
+  local bin_dir
+  bin_dir=$(go_bin_dir)
   [[ -d "$bin_dir" ]] || return 0
   local f="" pkg_path="" mod_path="" mod_ver="" vout=""
   for f in "$bin_dir"/*(N); do
     [[ -x "$f" && -f "$f" ]] || continue
-    vout=$( { go version -m "$f" 2>/dev/null || true; } )
+    vout=$({ go version -m "$f" 2>/dev/null || true; })
     pkg_path=$(printf '%s' "$vout" | awk '$1=="path" {print $2; exit}')
     mod_path=$(printf '%s' "$vout" | awk '$1=="mod"  {print $2; exit}')
-    mod_ver=$(printf '%s' "$vout"  | awk '$1=="mod"  {print $3; exit}')
+    mod_ver=$(printf '%s' "$vout" | awk '$1=="mod"  {print $3; exit}')
     [[ -n "$pkg_path" ]] && printf '%s\t%s\t%s\n' \
       "${mod_path:-$pkg_path}" "${f:t}" "${mod_ver:-unknown}" || true
   done
@@ -66,8 +68,8 @@ go_list_rows() {
   go_installed_triples | while IFS=$'\t' read -r mod_path bin_name ver; do
     latest=""
     if [[ "$outdated" == true ]]; then
-      latest=$(go list -m -versions "$mod_path" 2>/dev/null \
-               | awk '{print $NF}' || true)
+      latest=$(go list -m -versions "$mod_path" 2>/dev/null |
+        awk '{print $NF}' || true)
       # When there are no tagged versions, $NF is just the module path — skip it
       if [[ -n "$latest" && "$latest" != "$mod_path" && "$latest" != "$ver" ]]; then
         ver="${ver} ${C_YEL}(update available: ${latest})${C_RES}"
@@ -79,10 +81,13 @@ go_list_rows() {
 
 do_list() {
   local outdated=false
-  while (( $# > 0 )); do
+  while (($# > 0)); do
     case "$1" in
-      -u|--update) outdated=true; shift ;;
-      -a|--all)    shift ;;  # no-op: go has no transient-dep concept here
+      -u | --update)
+        outdated=true
+        shift
+        ;;
+      -a | --all) shift ;; # no-op: go has no transient-dep concept here
       *) die "unknown flag for list: $1" ;;
     esac
   done
@@ -93,19 +98,23 @@ do_sync() {
   log_info "Syncing go binaries..."
 
   local declared installed pairs before_snap after_snap
-  declared=$(mktemp); installed=$(mktemp); pairs=$(mktemp)
-  before_snap=$(mktemp); after_snap=$(mktemp)
+  declared=$(mktemp)
+  installed=$(mktemp)
+  pairs=$(mktemp)
+  before_snap=$(mktemp)
+  after_snap=$(mktemp)
   trap "rm -f '$declared' '$installed' '$pairs' '$before_snap' '$after_snap'" EXIT
 
-  go_snapshot_versions > "$before_snap"
+  go_snapshot_versions >"$before_snap"
 
-  pkg::manifest_read "$GOFILE" > "$declared"
-  go_installed_pairs > "$pairs"
-  awk -F'\t' '{print $1}' "$pairs" > "$installed"
+  pkg::manifest_read "$GOFILE" >"$declared"
+  go_installed_pairs >"$pairs"
+  awk -F'\t' '{print $1}' "$pairs" >"$installed"
 
   # Uninstall extras BEFORE installing missing — keeps swaps that share a
   # binary basename (e.g. v1→v2 path migrations) from colliding on disk.
-  local bin_dir; bin_dir=$(go_bin_dir)
+  local bin_dir
+  bin_dir=$(go_bin_dir)
   pkg::diff_only_in "$installed" "$declared" | while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     local bin=""
@@ -123,11 +132,11 @@ do_sync() {
   while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     go install "$pkg@latest" || log_warn "failed to upgrade $pkg"
-  done < "$declared"
+  done <"$declared"
 
   # Restart services whose backing binary changed version. Keyed on binary
   # basename (matches what `system-service restart-for` resolves cmd[0] to).
-  go_snapshot_versions > "$after_snap"
+  go_snapshot_versions >"$after_snap"
   pkg::restart_changed "$before_snap" "$after_snap"
   return 0
 }
@@ -185,19 +194,30 @@ EOF
 
 main() {
   if [[ $# -eq 0 ]] || is_help "${1:-}"; then
-    usage; exit 0
+    usage
+    exit 0
   fi
-  local cmd="$1"; shift
+  local cmd="$1"
+  shift
   case "$cmd" in
     list)
-      args_contain_help "$@" && { usage_list; exit 0; }
+      args_contain_help "$@" && {
+        usage_list
+        exit 0
+      }
       do_list "$@"
       ;;
     sync)
-      args_contain_help "$@" && { usage_sync; exit 0; }
+      args_contain_help "$@" && {
+        usage_sync
+        exit 0
+      }
       do_sync
       ;;
-    *) usage >&2; die "unknown subcommand: $cmd" ;;
+    *)
+      usage >&2
+      die "unknown subcommand: $cmd"
+      ;;
   esac
 }
 

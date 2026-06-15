@@ -42,8 +42,11 @@ wezterm_window_id_for_session() {
   local out s wid rest
   out=$(zellij_wezterm_sessions) || true
   while IFS=$'\t' read -r s wid rest; do
-    [[ "$s" == "$1" ]] && { print -r -- "$wid"; return 0; }
-  done <<< "$out"
+    [[ "$s" == "$1" ]] && {
+      print -r -- "$wid"
+      return 0
+    }
+  done <<<"$out"
   return 0
 }
 
@@ -57,16 +60,25 @@ wezterm_focus_window() {
 
 # Argument parsing → MODE (open|focus), KEY (session), and (open) the cmd array.
 if [[ "${1:-}" == "--focus" ]]; then
-  MODE=focus; KEY="${2:-}"
-  [[ -n "$KEY" ]] || { print -ru2 -- "usage: $0 --focus <session>"; exit 2; }
+  MODE=focus
+  KEY="${2:-}"
+  [[ -n "$KEY" ]] || {
+    print -ru2 -- "usage: $0 --focus <session>"
+    exit 2
+  }
 else
   MODE=open
   if [[ $# -lt 3 || "$2" != "--" ]]; then
     print -ru2 -- "usage: $0 <session> -- <cmd> [args...]"
     exit 2
   fi
-  KEY=$1; shift 2; cmd=( "$@" )
-  (( ${#cmd} )) || { print -ru2 -- "$0: no command after --"; exit 2; }
+  KEY=$1
+  shift 2
+  cmd=("$@")
+  ((${#cmd})) || {
+    print -ru2 -- "$0: no command after --"
+    exit 2
+  }
 fi
 
 # Environment detection. An SSH session can't drive the host GUI.

@@ -35,8 +35,11 @@ set -eu -o pipefail
 
 PICK_NAME=pick-glyph
 PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
-source "${PICK_SYMBOLS_LIB:-$PICK_LIB_DIR/pick-symbols-common.zsh}" \
-  || { print -ru2 -- "pick-glyph: cannot source pick-symbols-common.zsh from $PICK_LIB_DIR"; exit 1; }
+source "${PICK_SYMBOLS_LIB:-$PICK_LIB_DIR/pick-symbols-common.zsh}" ||
+  {
+    print -ru2 -- "pick-glyph: cannot source pick-symbols-common.zsh from $PICK_LIB_DIR"
+    exit 1
+  }
 
 DB_FILE="${PICK_GLYPH_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/symbols.db}"
 
@@ -85,21 +88,21 @@ pick_symbols::require_db
 # keys, the insert-and-stay (Alt) keys, and — only with --multi — the marking
 # keys (so fzf never adds a second header row).
 hints=$'󰘴 G: glyph  ·  󰘴 N: name  ·  󰘴 P: code-point  ·  󰘵 G/N/P: insert'
-if (( multi )); then
+if ((multi)); then
   hints+=$'  ·  ⭾ : select  ·  󰘴 A: select-all'
 fi
 
 pick_args=(
   --header "Pick a glyph"
   --hints "$hints"
-  --height       "${PICK_GLYPH_HEIGHT:-35%}"
-  --margin       "${PICK_GLYPH_MARGIN:-0,0,0,0}"
-  --padding      "${PICK_GLYPH_PADDING:-1,1,1,1}"
+  --height "${PICK_GLYPH_HEIGHT:-35%}"
+  --margin "${PICK_GLYPH_MARGIN:-0,0,0,0}"
+  --padding "${PICK_GLYPH_PADDING:-1,1,1,1}"
   --input-border "${PICK_GLYPH_INPUT_BORDER:-1}"
-  --output field:1                 # Enter -> glyph
-  --key-output ctrl-g:field:1      # Ctrl-G -> glyph
-  --key-output ctrl-n:field:7      # Ctrl-N -> name or :shortcode:
-  --key-output ctrl-p:field:3      # Ctrl-P -> \u{HEX}
+  --output field:1            # Enter -> glyph
+  --key-output ctrl-g:field:1 # Ctrl-G -> glyph
+  --key-output ctrl-n:field:7 # Ctrl-N -> name or :shortcode:
+  --key-output ctrl-p:field:3 # Ctrl-P -> \u{HEX}
   --key-background alt-enter:field:1
   --key-background alt-g:field:1
   --key-background alt-n:field:7
@@ -107,11 +110,11 @@ pick_args=(
   --on-items-picked pick_symbols::record_recency
   --cache-state
 )
-if (( multi ));     then pick_args+=( --multi='' ); fi
-if (( copy ));      then pick_args+=( --copy-only ); fi
-if (( resume ));    then pick_args+=( --resume ); fi
-if (( no_border )); then pick_args+=( --no-border ); fi
-if [[ -n "$query" ]]; then pick_args+=( --query "$query" ); fi
+if ((multi)); then pick_args+=(--multi=''); fi
+if ((copy)); then pick_args+=(--copy-only); fi
+if ((resume)); then pick_args+=(--resume); fi
+if ((no_border)); then pick_args+=(--no-border); fi
+if [[ -n "$query" ]]; then pick_args+=(--query "$query"); fi
 
 # Stream straight off idx_symbols_recency. Visible columns are colour-coded;
 # the hidden tail (after CHAR(31), fields split on CHAR(30)) carries clean,

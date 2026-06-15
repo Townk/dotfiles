@@ -8,7 +8,8 @@
 # outlives a file-manager launcher), running <argv...>. <macos-app> is ignored.
 # Prefers setsid (new session, no controlling tty); falls back to nohup.
 platform::launch_gui() {
-  local bin="$2"; shift 2          # drop the unused <macos-app> and <linux-bin>
+  local bin="$2"
+  shift 2 # drop the unused <macos-app> and <linux-bin>
   [ "${1:-}" = "--" ] && shift
   if command -v setsid >/dev/null 2>&1; then
     setsid "$bin" "$@" >/dev/null 2>&1 &

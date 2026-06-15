@@ -119,7 +119,7 @@ ql_open_tab() {
   # The element whose action seeds the tab's initial pane: the first pane if
   # the tab declares panes, otherwise the tab's own action.
   local primary action cwd cmd
-  if (( count > 0 )); then
+  if ((count > 0)); then
     primary="$(jq -c '.[0]' <<<"$tiled_panes")"
   else
     primary="$(jq -c '{action: (.action // {}), name: (.name // .id)}' <<<"$tab")"
@@ -150,16 +150,16 @@ ql_open_tab() {
 
   # Multi-pane tab: split the remaining panes off inside the freshly created
   # tab (zj-hud is already present from the template above).
-  if (( count > 1 )); then
+  if ((count > 1)); then
     local i p
-    for (( i = 1; i < count; i++ )); do
+    for ((i = 1; i < count; i++)); do
       p="$(jq -c ".[$i]" <<<"$tiled_panes")"
       ql_open_pane "$p" "$session"
     done
   fi
-  if (( float_count > 0 )); then
+  if ((float_count > 0)); then
     local i p
-    for (( i = 0; i < float_count; i++ )); do
+    for ((i = 0; i < float_count; i++)); do
       p="$(jq -c ".[$i]" <<<"$floating_panes")"
       ql_open_pane "$p" "$session"
     done
@@ -194,7 +194,7 @@ ql_nested_layout_file() {
   dir="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/layouts"
   file="$dir/${id}.kdl"
   mkdir -p "$dir"
-  ql_build_nested_layout "$ws" "$HOME" >| "$file"
+  ql_build_nested_layout "$ws" "$HOME" >|"$file"
   printf '%s' "$file"
 }
 
@@ -221,7 +221,7 @@ ql_workspace_build() {
   ws_panes="$(jq -c '[ (.panes // [])[] | select(.optional != true) ]' <<<"$ws")"
   tcount="$(jq 'length' <<<"$tabs")"
 
-  if (( tcount == 0 )); then
+  if ((tcount == 0)); then
     # No tabs: seed workspace-level panes into a single tab if there are any;
     # else, if the workspace carries its own action (a bare Run/Remote/etc.
     # target like an SSH session), seed a single tab from that action; else
@@ -237,9 +237,9 @@ ql_workspace_build() {
     fi
   else
     local t tab
-    for (( t = 0; t < tcount; t++ )); do
+    for ((t = 0; t < tcount; t++)); do
       tab="$(jq -c ".[$t]" <<<"$tabs")"
-      if (( t == 0 )) && [[ "$(jq 'length' <<<"$ws_panes")" -gt 0 ]]; then
+      if ((t == 0)) && [[ "$(jq 'length' <<<"$ws_panes")" -gt 0 ]]; then
         tab="$(jq -c --argjson wsp "$ws_panes" '.panes = ((.panes // []) + $wsp)' <<<"$tab")"
       fi
       ql_open_tab "$tab" "$sname" && created=1
@@ -247,7 +247,7 @@ ql_workspace_build() {
   fi
 
   # Remove the throwaway default tab (stable id 0) once real tabs exist.
-  if (( created )); then
+  if ((created)); then
     "$ZJ" --session "$sname" action close-tab-by-id 0 >/dev/null 2>&1 || true
   fi
 }
@@ -269,7 +269,10 @@ ql_open_workspace() {
   # live session instead of spawning an id-named duplicate.
   sname="$(jq -r '.name // .id' <<<"$ws")"
   win="${SCRIPT_DIR:-${${(%):-%x}:A:h:h}}/quick-launch-window"
-  ql_workspace_is_nested "$ws" && { nested=true; ql_register_nested "$sname"; }
+  ql_workspace_is_nested "$ws" && {
+    nested=true
+    ql_register_nested "$sname"
+  }
 
   # Already running → if a separate OS window is currently attached to it,
   # bring that window forward rather than mirroring the session into this one.
@@ -368,7 +371,10 @@ ql_dispatch() {
     pane) ql_open_pane "$el" ;;
     tab) ql_open_tab "$el" ;;
     workspace) ql_open_workspace "$el" ;;
-    *) echo "quick-launch: unknown kind '$kind'" >&2; return 2 ;;
+    *)
+      echo "quick-launch: unknown kind '$kind'" >&2
+      return 2
+      ;;
   esac
 }
 

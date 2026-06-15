@@ -156,7 +156,7 @@ img::is_mounted() {
   local dir d_dev p_dev
   dir=$(img::mountdir "$1")
   [[ -d "$dir" ]] || return 1
-  d_dev=$(stat -f '%d' "$dir" 2>/dev/null)    || return 1
+  d_dev=$(stat -f '%d' "$dir" 2>/dev/null) || return 1
   p_dev=$(stat -f '%d' "$dir/.." 2>/dev/null) || return 1
   [[ "$d_dev" != "$p_dev" ]]
 }
@@ -169,12 +169,13 @@ img::disk_total() {
   local kb
   kb=$(df -k / | awk 'NR==2 {print $2}')
   [[ -n "$kb" ]] || die "could not determine root volume capacity"
-  printf '%sg\n' "$(( kb / 1024 / 1024 ))"
+  printf '%sg\n' "$((kb / 1024 / 1024))"
 }
 
 # img::size_arg <name> → the -size value (declared size, or disk total for max)
 img::size_arg() {
-  local s; s=$(img::field "$1" size)
+  local s
+  s=$(img::field "$1" size)
   if [[ -n "$s" && "$s" != "max" ]]; then
     printf '%s\n' "$s"
   else
@@ -185,7 +186,7 @@ img::size_arg() {
 # img::fs_arg <name> → the hdiutil -fs string (only case-sensitive-apfs for now)
 img::fs_arg() {
   case "$(img::field "$1" filesystem)" in
-    ""|case-sensitive-apfs) printf 'Case-sensitive APFS\n' ;;
+    "" | case-sensitive-apfs) printf 'Case-sensitive APFS\n' ;;
     *) die "unsupported filesystem for '$1' (only 'case-sensitive-apfs')" ;;
   esac
 }
@@ -195,7 +196,8 @@ img::fs_arg() {
 img::create_one() {
   local name="$1"
   img::declared "$name" || die "no such image in $IMGFILE: $name"
-  local img; img=$(img::imgpath "$name")
+  local img
+  img=$(img::imgpath "$name")
   [[ -e "$img" ]] && die "image already exists: $img"
   local fs size
   fs=$(img::fs_arg "$name")
@@ -210,13 +212,15 @@ img::create_one() {
 img::mount_one() {
   local name="$1"
   img::declared "$name" || die "no such image in $IMGFILE: $name"
-  local img; img=$(img::imgpath "$name")
+  local img
+  img=$(img::imgpath "$name")
   [[ -e "$img" ]] || die "image file missing (run 'system-images create $name' or 'sync'): $img"
   if img::is_mounted "$name"; then
     log_info "$name already mounted at $(img::mountdir "$name")"
     return 0
   fi
-  local dir; dir=$(img::mountdir "$name")
+  local dir
+  dir=$(img::mountdir "$name")
   mkdir -p "$dir"
   hdiutil attach "$img" -mountpoint "$dir" -nobrowse >/dev/null
   log_ok "mounted $name at $dir"
@@ -227,10 +231,15 @@ img::mount_all() {
   for name in ${(f)"$(img::names)"}; do
     [[ -z "$name" ]] && continue
     img::automount "$name" || continue
-    local img; img=$(img::imgpath "$name")
-    [[ -e "$img" ]] || { log_warn "skip $name: image file missing ($img)"; continue; }
+    local img
+    img=$(img::imgpath "$name")
+    [[ -e "$img" ]] || {
+      log_warn "skip $name: image file missing ($img)"
+      continue
+    }
     img::is_mounted "$name" && continue
-    local dir; dir=$(img::mountdir "$name")
+    local dir
+    dir=$(img::mountdir "$name")
     mkdir -p "$dir"
     if hdiutil attach "$img" -mountpoint "$dir" -nobrowse >/dev/null; then
       log_ok "mounted $name at $dir"
@@ -244,7 +253,10 @@ do_mount() {
   if [[ "${1:-}" == "--all" ]]; then
     img::mount_all
   else
-    [[ $# -eq 1 ]] || { usage_for mount >&2; die "mount requires one image name or --all"; }
+    [[ $# -eq 1 ]] || {
+      usage_for mount >&2
+      die "mount requires one image name or --all"
+    }
     img::mount_one "$1"
   fi
 }
@@ -257,7 +269,8 @@ do_unmount() {
     log_info "$name not mounted"
     return 0
   fi
-  local dir; dir=$(img::mountdir "$name")
+  local dir
+  dir=$(img::mountdir "$name")
   hdiutil detach "$dir" >/dev/null
   log_ok "unmounted $name ($dir)"
 }
@@ -277,7 +290,8 @@ do_status() {
   [[ $# -eq 1 ]] || die "usage: status <name>"
   local name="$1"
   img::declared "$name" || die "no such image in $IMGFILE: $name"
-  local img; img=$(img::imgpath "$name")
+  local img
+  img=$(img::imgpath "$name")
   printf '%s%s%s\n' "$C_BWH" "$name" "$C_RES"
   printf '  image:      %s%s\n' "$img" "$([[ -e "$img" ]] && printf '' || printf '  (missing)')"
   printf '  volname:    %s\n' "$name"
@@ -298,11 +312,14 @@ do_list() {
     img=$(img::imgpath "$name")
     dir=$(img::mountdir "$name")
     if [[ ! -e "$img" ]]; then
-      state="missing"; size="-"
+      state="missing"
+      size="-"
     elif img::is_mounted "$name"; then
-      state="mounted"; size=$(img::du "$img")
+      state="mounted"
+      size=$(img::du "$img")
     else
-      state="unmounted"; size=$(img::du "$img")
+      state="unmounted"
+      size=$(img::du "$img")
     fi
     printf '%s\t%s\t%s\t%s\n' "$name" "$state" "$size" "$dir"
   done
@@ -317,7 +334,8 @@ do_remove() {
   [[ $# -eq 1 ]] || die "usage: remove <name>"
   local name="$1"
   img::declared "$name" || die "no such image in $IMGFILE: $name"
-  local img; img=$(img::imgpath "$name")
+  local img
+  img=$(img::imgpath "$name")
   [[ -e "$img" ]] || die "image file does not exist: $img"
   have_tty || die "remove needs an interactive terminal (it is destructive)"
   printf '%s⚠ this permanently deletes %s and ALL its contents.%s\n' "$C_YEL" "$img" "$C_RES" >&2
@@ -335,31 +353,52 @@ main() {
   shift 2>/dev/null || true
 
   case "$cmd" in
-    -h|--help|help) usage; exit 0 ;;
+    -h | --help | help)
+      usage
+      exit 0
+      ;;
     list)
-      args_contain_help "$@" && { usage_for list; exit 0; }
+      args_contain_help "$@" && {
+        usage_for list
+        exit 0
+      }
       do_list | pkg::table_print $'Image\tState\tSize\tMountpoint'
       ;;
     sync)
-      args_contain_help "$@" && { usage_for sync; exit 0; }
+      args_contain_help "$@" && {
+        usage_for sync
+        exit 0
+      }
       do_sync
       ;;
     mount)
-      args_contain_help "$@" && { usage_for mount; exit 0; }
+      args_contain_help "$@" && {
+        usage_for mount
+        exit 0
+      }
       do_mount "$@"
       ;;
-    status|create|unmount|remove)
-      args_contain_help "$@" && { usage_for "$cmd"; exit 0; }
-      [[ $# -eq 1 ]] || { usage_for "$cmd" >&2; die "$cmd requires exactly one image name"; }
+    status | create | unmount | remove)
+      args_contain_help "$@" && {
+        usage_for "$cmd"
+        exit 0
+      }
+      [[ $# -eq 1 ]] || {
+        usage_for "$cmd" >&2
+        die "$cmd requires exactly one image name"
+      }
       case "$cmd" in
-        status)  do_status  "$1" ;;
-        create)  img::create_one "$1" ;;
+        status) do_status "$1" ;;
+        create) img::create_one "$1" ;;
         unmount) do_unmount "$1" ;;
-        remove)  do_remove  "$1" ;;
+        remove) do_remove "$1" ;;
       esac
       ;;
     names) img::names ;;
-    *) usage; die "unknown subcommand: $cmd" ;;
+    *)
+      usage
+      die "unknown subcommand: $cmd"
+      ;;
   esac
 }
 

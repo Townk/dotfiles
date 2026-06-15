@@ -34,7 +34,7 @@ case "$ENV_TYPE" in
     TARGET_FILE="$HOME/.config/wezterm/wezterm.lua"
     ;;
 
-  "UNKNOWN"|*)
+  "UNKNOWN" | *)
     print "Error: Unsupported environment. Script must be run inside Ghostty, Wezterm, or an SSH session." >&2
     exit 1
     ;;

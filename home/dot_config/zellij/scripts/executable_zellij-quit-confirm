@@ -60,13 +60,19 @@ set -euo pipefail
 ZELLIJ_BIN="${ZELLIJ_BIN:-/opt/homebrew/bin/zellij}"
 GUM_BIN="${GUM_BIN:-/opt/homebrew/bin/gum}"
 
-[[ -x "$ZELLIJ_BIN" ]] || { echo "zellij-quit-confirm: missing or non-executable: $ZELLIJ_BIN" >&2; exit 1; }
-[[ -x "$GUM_BIN"    ]] || { echo "zellij-quit-confirm: missing or non-executable: $GUM_BIN"    >&2; exit 1; }
+[[ -x "$ZELLIJ_BIN" ]] || {
+  echo "zellij-quit-confirm: missing or non-executable: $ZELLIJ_BIN" >&2
+  exit 1
+}
+[[ -x "$GUM_BIN" ]] || {
+  echo "zellij-quit-confirm: missing or non-executable: $GUM_BIN" >&2
+  exit 1
+}
 
 # overlay0 for the muted "Session:" label; text to restore the value
 # color afterwards. (The title/rule colors live in zellij-modal.)
-SGR_LABEL=$'\e[38;2;108;112;134m'   # overlay0
-SGR_VALUE=$'\e[38;2;205;214;244m'   # text
+SGR_LABEL=$'\e[38;2;108;112;134m' # overlay0
+SGR_VALUE=$'\e[38;2;205;214;244m' # text
 
 # Blank row between zellij-modal's title rule and the gum prompt.
 printf '\n'

@@ -23,13 +23,19 @@ uri="${2:-}"
 # float in absolute cells. 0 when unknown -> percentage fallback below.
 term_cols="${3:-0}"
 term_rows="${4:-0}"
-[ -n "$pid" ] && [ -n "$uri" ] || { echo "usage: zellij-open <pid> <uri> [cols] [rows]" >&2; exit 2; }
+[ -n "$pid" ] && [ -n "$uri" ] || {
+  echo "usage: zellij-open <pid> <uri> [cols] [rows]" >&2
+  exit 2
+}
 
 # Only handle local file links; everything else is left to WezTerm/the browser.
 case "$uri" in file://*) ;; *) exit 0 ;; esac
 
 # file://[localhost]/path -> /path, then percent-decode (+ is a space in URLs).
-urldecode() { local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
+urldecode() {
+  local s="${1//+/ }"
+  printf '%b' "${s//%/\\x}"
+}
 path="$(urldecode "${uri#file://}")"
 path="${path#localhost}"
 [ -e "$path" ] || exit 0
@@ -48,39 +54,39 @@ name="$(basename -- "$path")"
 
 # --- Directory: Yazi in a new tab -----------------------------------------
 if [ -d "$path" ]; then
-	exec zellij --session "$session" action new-tab \
-		--cwd "$path" --name "$name" --close-on-exit -- yazi "$path"
+  exec zellij --session "$session" action new-tab \
+    --cwd "$path" --name "$name" --close-on-exit -- yazi "$path"
 fi
 
 # --- File: classify by MIME -----------------------------------------------
 mime=$(file -b --mime-type -L "$path" 2>/dev/null)
 case "$mime" in
-image/*)
-	# Big floating preview pane with a (rounded) frame but no title text and no
-	# pin decoration (--name "" + --borderless false overriding the global
-	# `pane_frames false`, --pinned false). Sized in absolute cells: 28 columns
-	# narrower and 5 rows shorter than the full display (falls back to 90% when
-	# the size isn't known). The wrapper renders the image at the pane size and
-	# waits for a keypress; --close-on-exit then tears it down.
-	if [ "$term_cols" -gt 28 ] 2>/dev/null && [ "$term_rows" -gt 5 ] 2>/dev/null; then
-		size=(--width "$((term_cols - 28))" --height "$((term_rows - 5))")
-	else
-		size=(--width 90% --height 90%)
-	fi
-	exec zellij --session "$session" action new-pane \
-		--floating --close-on-exit \
-		--name "" --borderless false --pinned false \
-		"${size[@]}" \
-		-- "$HOME/.config/zellij/scripts/zellij-preview-image" "$path"
-	;;
-*)
-	# Treat anything non-binary as editable text/code; ignore real binaries.
-	enc=$(file -b --mime-encoding -L "$path" 2>/dev/null)
-	[ "$enc" = "binary" ] && exit 0
-	dir="$(dirname -- "$path")"
-	root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root=""
-	[ -n "$root" ] || root="$dir"
-	exec zellij --session "$session" action new-tab \
-		--cwd "$root" --name "$name" --close-on-exit -- nvim "$path"
-	;;
+  image/*)
+    # Big floating preview pane with a (rounded) frame but no title text and no
+    # pin decoration (--name "" + --borderless false overriding the global
+    # `pane_frames false`, --pinned false). Sized in absolute cells: 28 columns
+    # narrower and 5 rows shorter than the full display (falls back to 90% when
+    # the size isn't known). The wrapper renders the image at the pane size and
+    # waits for a keypress; --close-on-exit then tears it down.
+    if [ "$term_cols" -gt 28 ] 2>/dev/null && [ "$term_rows" -gt 5 ] 2>/dev/null; then
+      size=(--width "$((term_cols - 28))" --height "$((term_rows - 5))")
+    else
+      size=(--width 90% --height 90%)
+    fi
+    exec zellij --session "$session" action new-pane \
+      --floating --close-on-exit \
+      --name "" --borderless false --pinned false \
+      "${size[@]}" \
+      -- "$HOME/.config/zellij/scripts/zellij-preview-image" "$path"
+    ;;
+  *)
+    # Treat anything non-binary as editable text/code; ignore real binaries.
+    enc=$(file -b --mime-encoding -L "$path" 2>/dev/null)
+    [ "$enc" = "binary" ] && exit 0
+    dir="$(dirname -- "$path")"
+    root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root=""
+    [ -n "$root" ] || root="$dir"
+    exec zellij --session "$session" action new-tab \
+      --cwd "$root" --name "$name" --close-on-exit -- nvim "$path"
+    ;;
 esac

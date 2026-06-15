@@ -86,9 +86,9 @@ fi
 
 active_wezterm_pane() {
   [ -x "$WEZTERM_BIN" ] && [ -x "$JQ_BIN" ] || return 1
-  "$WEZTERM_BIN" cli --no-auto-start list --format json 2>/dev/null \
-    | "$JQ_BIN" -r '.[] | select(.is_active) | [.pane_id, .window_id, .tty_name] | @tsv' 2>/dev/null \
-    | sed -n '1p'
+  "$WEZTERM_BIN" cli --no-auto-start list --format json 2>/dev/null |
+    "$JQ_BIN" -r '.[] | select(.is_active) | [.pane_id, .window_id, .tty_name] | @tsv' 2>/dev/null |
+    sed -n '1p'
 }
 
 active_zellij_session() {
@@ -102,8 +102,8 @@ $PANE_INFO
 EOF
   [ -n "$ACTIVE_TTY" ] || return 1
 
-  CLIENT_PID=$(ps -t "${ACTIVE_TTY#/dev/}" -o pid=,comm= 2>/dev/null \
-    | awk '$2 ~ /zellij/ {print $1; exit}')
+  CLIENT_PID=$(ps -t "${ACTIVE_TTY#/dev/}" -o pid=,comm= 2>/dev/null |
+    awk '$2 ~ /zellij/ {print $1; exit}')
   [ -n "$CLIENT_PID" ] || return 1
 
   # shellcheck source=/dev/null

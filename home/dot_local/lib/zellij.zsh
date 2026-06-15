@@ -55,15 +55,38 @@ zj::pick() {
   local pane_w="70%" pane_h="60%"
   local header=""
   local -a pick_args=()
-  while (( $# )); do
+  while (($#)); do
     case "$1" in
-      --pane-width)    pane_w="${2:-}"; shift 2 ;;
-      --pane-width=*)  pane_w="${1#*=}"; shift ;;
-      --pane-height)   pane_h="${2:-}"; shift 2 ;;
-      --pane-height=*) pane_h="${1#*=}"; shift ;;
-      --header)        header="${2:-}"; pick_args+=( "$1" "${2:-}" ); shift 2 ;;
-      --header=*)      header="${1#--header=}"; pick_args+=( "$1" ); shift ;;
-      *)               pick_args+=( "$1" ); shift ;;
+      --pane-width)
+        pane_w="${2:-}"
+        shift 2
+        ;;
+      --pane-width=*)
+        pane_w="${1#*=}"
+        shift
+        ;;
+      --pane-height)
+        pane_h="${2:-}"
+        shift 2
+        ;;
+      --pane-height=*)
+        pane_h="${1#*=}"
+        shift
+        ;;
+      --header)
+        header="${2:-}"
+        pick_args+=("$1" "${2:-}")
+        shift 2
+        ;;
+      --header=*)
+        header="${1#--header=}"
+        pick_args+=("$1")
+        shift
+        ;;
+      *)
+        pick_args+=("$1")
+        shift
+        ;;
     esac
   done
 
@@ -86,7 +109,7 @@ zj::pick() {
 
   # Stage the picker rows to a file: the float child is a separate process and
   # cannot read our stdin pipe, so it takes the rows as a file argument.
-  cat > "$tmp"
+  cat >"$tmp"
 
   "$bin" action new-pane --floating --close-on-exit \
     --name "" --borderless false --pinned true \

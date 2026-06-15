@@ -11,8 +11,14 @@ set -euo pipefail
 no_merge=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --no-merge) no_merge=1; shift ;;
-    --) shift; break ;;
+    --no-merge)
+      no_merge=1
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
     -*)
       echo "usage: chezmoi-reverse [--no-merge] [--] <file> [<file>...]" >&2
       exit 2
@@ -36,7 +42,8 @@ reverse_one() {
   err="$work/err"
   if ! src=$(chezmoi source-path "$file" 2>"$err"); then
     cat "$err" >&2
-    emit failed "$file"; return 1
+    emit failed "$file"
+    return 1
   fi
   base=$(basename "$src")
   case "$base" in
@@ -55,24 +62,29 @@ reverse_one() {
   else
     is_template=0
   fi
-  rendered="$work/rendered"; patch="$work/patch"
-  if ! chezmoi cat "$file" > "$rendered" 2>"$err"; then
+  rendered="$work/rendered"
+  patch="$work/patch"
+  if ! chezmoi cat "$file" >"$rendered" 2>"$err"; then
     cat "$err" >&2
-    emit failed "$file"; return 1
+    emit failed "$file"
+    return 1
   fi
-  if diff -U0 "$rendered" "$file" > "$patch"; then
-    emit clean "$file"; return 0
+  if diff -U0 "$rendered" "$file" >"$patch"; then
+    emit clean "$file"
+    return 0
   fi
   if [ "$is_template" -eq 0 ]; then
     if chezmoi re-add "$file" >/dev/null 2>"$err"; then
-      emit applied "$file"; return 0
+      emit applied "$file"
+      return 0
     fi
     cat "$err" >&2
-    emit failed "$file"; return 1
+    emit failed "$file"
+    return 1
   fi
   cp "$src" "$src.bak"
-  if patch --fuzz=0 --no-backup-if-mismatch "$src" < "$patch" >/dev/null 2>&1 \
-     && [ ! -e "$src.rej" ]; then
+  if patch --fuzz=0 --no-backup-if-mismatch "$src" <"$patch" >/dev/null 2>&1 &&
+    [ ! -e "$src.rej" ]; then
     rm -f "$src.bak"
     emit applied "$file"
     return 0

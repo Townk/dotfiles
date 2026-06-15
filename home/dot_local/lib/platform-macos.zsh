@@ -8,7 +8,8 @@
 # <linux-bin> is ignored here. `open` returns immediately (the app runs
 # detached from this process), which is what a Finder droplet needs.
 platform::launch_gui() {
-  local app="$1"; shift 2          # drop <macos-app> and the unused <linux-bin>
+  local app="$1"
+  shift 2 # drop <macos-app> and the unused <linux-bin>
   [ "${1:-}" = "--" ] && shift
   open -a "$app" --args "$@"
 }

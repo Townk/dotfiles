@@ -17,7 +17,10 @@ PKG_STATE_DIR="$PKG_DIR/.state"
 # trims leading/trailing whitespace, skips blank lines.
 pkg::manifest_read() {
   local file="$1"
-  [[ -f "$file" ]] || { log_error "manifest not found: $file"; return 1; }
+  [[ -f "$file" ]] || {
+    log_error "manifest not found: $file"
+    return 1
+  }
   awk '
     { sub(/#.*$/, "") }
     { gsub(/^[[:space:]]+|[[:space:]]+$/, "") }
@@ -31,7 +34,7 @@ pkg::manifest_read() {
 # (npm split on $IFS, others shell-tokenized; equivalent for unquoted names,
 # but ${(z)} is the correct one).
 pkg::line_canonical() {
-  local -a words=( ${(z)1} )
+  local -a words=(${(z)1})
   print -r -- "${words[1]:-}"
 }
 
@@ -40,7 +43,7 @@ pkg::line_canonical() {
 # install (git / local path / editable) where the spec after `--` is the
 # package argument rather than the bare name.
 pkg::line_has_spec() {
-  local -a words=( ${(z)1} )
+  local -a words=(${(z)1})
   [[ "${words[2]:-}" == "--" ]]
 }
 
@@ -74,7 +77,7 @@ pkg::changed_versions() {
 # Soft-fails: if `system-service` isn't on PATH (e.g. partial install on
 # a fresh machine) we silently skip — package sync should still succeed.
 pkg::restart_services_for() {
-  (( $# > 0 )) || return 0
+  (($# > 0)) || return 0
   command -v system-service >/dev/null 2>&1 || return 0
   system-service restart-for "$@" || true
 }
@@ -90,7 +93,7 @@ pkg::restart_changed() {
   while IFS= read -r pkg; do
     [ -n "$pkg" ] && changed+=("$pkg")
   done < <(pkg::changed_versions "$1" "$2")
-  (( ${#changed[@]} > 0 )) && pkg::restart_services_for "${changed[@]}"
+  ((${#changed[@]} > 0)) && pkg::restart_services_for "${changed[@]}"
   return 0
 }
 
@@ -105,7 +108,7 @@ pkg::restart_changed() {
 pkg::outdated_rows() {
   local jobs="${2:-8}"
   PKG_FETCHER="$1" C_YEL="$C_YEL" C_RES="$C_RES" \
-  xargs -P "$jobs" -L 1 sh -c '
+    xargs -P "$jobs" -L 1 sh -c '
     [ -n "$1" ] || exit 0
     latest=$(sh -c "$PKG_FETCHER" _ "$1" 2>/dev/null || true)
     if [ -n "$latest" ] && [ "$latest" != "$2" ]; then
@@ -135,10 +138,10 @@ pkg::table_print() {
   local header="$1"
   local group_col="${2:-0}"
   awk -F'\t' \
-      -v header="$header" \
-      -v group_col="$group_col" \
-      -v bbl="$C_BBL" \
-      -v reset="$C_RES" '
+    -v header="$header" \
+    -v group_col="$group_col" \
+    -v bbl="$C_BBL" \
+    -v reset="$C_RES" '
     function visual_width(s,   t) {
       t = s; gsub(/\033\[[0-9;]*m/, "", t); return length(t)
     }

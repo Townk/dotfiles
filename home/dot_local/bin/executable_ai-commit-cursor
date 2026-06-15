@@ -99,26 +99,65 @@ extra_guidance=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -u|--untracked) include_untracked=1; shift ;;
-    -d|--dry-run)   dry_run=1; shift ;;
-    -n|--no-commit) no_commit=1; shift ;;
-    -f|--force-refresh|--replan) force_refresh=1; shift ;;
-    -m|--model)     [[ $# -ge 2 ]] || die "--model needs a value"; model="$2"; shift 2 ;;
-    -L|--list-models) list_models=1; shift ;;
-    --sandbox)      [[ $# -ge 2 ]] || die "--sandbox needs a value"; sandbox="$2"; shift 2 ;;
-    -v|--verbose)   verbose=1; shift ;;
-    -h|--help)      usage; exit 0 ;;
-    --)             shift; extra_guidance=("$@"); break ;;
-    -*)             usage >&2; die "unknown flag: $1" ;;
-    *)              extra_guidance=("$@"); break ;;
+    -u | --untracked)
+      include_untracked=1
+      shift
+      ;;
+    -d | --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -n | --no-commit)
+      no_commit=1
+      shift
+      ;;
+    -f | --force-refresh | --replan)
+      force_refresh=1
+      shift
+      ;;
+    -m | --model)
+      [[ $# -ge 2 ]] || die "--model needs a value"
+      model="$2"
+      shift 2
+      ;;
+    -L | --list-models)
+      list_models=1
+      shift
+      ;;
+    --sandbox)
+      [[ $# -ge 2 ]] || die "--sandbox needs a value"
+      sandbox="$2"
+      shift 2
+      ;;
+    -v | --verbose)
+      verbose=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      extra_guidance=("$@")
+      break
+      ;;
+    -*)
+      usage >&2
+      die "unknown flag: $1"
+      ;;
+    *)
+      extra_guidance=("$@")
+      break
+      ;;
   esac
 done
 
-[[ "$dry_run" -eq 1 && "$no_commit" -eq 1 ]] \
-  && die "--dry-run and --no-commit are mutually exclusive"
+[[ "$dry_run" -eq 1 && "$no_commit" -eq 1 ]] &&
+  die "--dry-run and --no-commit are mutually exclusive"
 
 case "$sandbox" in
-  ""|enabled|disabled) ;;
+  "" | enabled | disabled) ;;
   *) die "--sandbox must be enabled or disabled" ;;
 esac
 
@@ -132,14 +171,14 @@ fi
 # Pre-flight
 # ────────────────────────────────────────────────────────────────────
 command -v git >/dev/null 2>&1 || die "git not on PATH"
-command -v jq  >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
+command -v jq >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
 
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" \
-  || die "not inside a git repository"
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+  die "not inside a git repository"
 builtin cd "$repo_root" || die "could not cd to repository root: $repo_root"
 
-cache_file="$(git rev-parse --git-path ai-commit-cursor-plan.json)" \
-  || die "could not resolve git cache path"
+cache_file="$(git rev-parse --git-path ai-commit-cursor-plan.json)" ||
+  die "could not resolve git cache path"
 cache_file="${cache_file:a}"
 use_cached_plan=0
 if [[ -s "$cache_file" && "$force_refresh" -eq 0 ]]; then
@@ -213,7 +252,7 @@ save_remaining_plan_cache() {
 
   mkdir -p "${cache_file:h}"
   tmp_cache="${cache_file}.$$"
-  jq --argjson start "$next_idx" '{commits: .commits[$start:]}' "$plan_file" > "$tmp_cache"
+  jq --argjson start "$next_idx" '{commits: .commits[$start:]}' "$plan_file" >"$tmp_cache"
   mv "$tmp_cache" "$cache_file"
   log_info "updated commit plan cache with ${remaining} remaining commit(s)"
 }
@@ -235,10 +274,11 @@ if [[ "$use_cached_plan" -eq 1 ]]; then
   log_info "Using cached commit plan: $cache_file"
 else
   command -v "$AI_COMMIT_CURSOR_BIN" >/dev/null 2>&1 || die "Cursor Agent ($AI_COMMIT_CURSOR_BIN) not on PATH"
-  [[ -r "$AI_COMMIT_CURSOR_SKILL_PATH" ]] \
-    || die "commit skill not readable: $AI_COMMIT_CURSOR_SKILL_PATH"
+  [[ -r "$AI_COMMIT_CURSOR_SKILL_PATH" ]] ||
+    die "commit skill not readable: $AI_COMMIT_CURSOR_SKILL_PATH"
 
-prompt=$(cat <<EOF
+  prompt=$(
+    cat <<EOF
 You are PLANNING a series of git commits for the repository at:
 
 \`${repo_root}\`
@@ -294,52 +334,52 @@ Rules:
 - When you are done, reply with the literal text \`PLAN_WRITTEN\` and
   nothing else.${extra_block}
 EOF
-)
+  )
 
-# ────────────────────────────────────────────────────────────────────
-# Run agent
-# ────────────────────────────────────────────────────────────────────
-state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ai-commit-cursor"
-mkdir -p "$state_dir"
-log_file="$state_dir/errors.log"
+  # ────────────────────────────────────────────────────────────────────
+  # Run agent
+  # ────────────────────────────────────────────────────────────────────
+  state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ai-commit-cursor"
+  mkdir -p "$state_dir"
+  log_file="$state_dir/errors.log"
 
-{
-  print -- ""
-  print -- "─── $(date '+%Y-%m-%d %H:%M:%S') ─────────────────────────"
-  print -- "bin=$AI_COMMIT_CURSOR_BIN model=${model:-<default>} sandbox=${sandbox:-<config>} untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit force_refresh=$force_refresh cache=$cache_file"
-} >> "$log_file"
+  {
+    print -- ""
+    print -- "─── $(date '+%Y-%m-%d %H:%M:%S') ─────────────────────────"
+    print -- "bin=$AI_COMMIT_CURSOR_BIN model=${model:-<default>} sandbox=${sandbox:-<config>} untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit force_refresh=$force_refresh cache=$cache_file"
+  } >>"$log_file"
 
-if [[ -n "$model" ]]; then
-  log_info "Planning commits with Cursor Agent ${C_BWH}${model}${C_RES}…"
-else
-  log_info "Planning commits with Cursor Agent's configured model…"
-fi
+  if [[ -n "$model" ]]; then
+    log_info "Planning commits with Cursor Agent ${C_BWH}${model}${C_RES}…"
+  else
+    log_info "Planning commits with Cursor Agent's configured model…"
+  fi
 
-cursor_args=(
-  --print
-  --output-format text
-  --trust
-  --force
-  --workspace "$repo_root"
-)
+  cursor_args=(
+    --print
+    --output-format text
+    --trust
+    --force
+    --workspace "$repo_root"
+  )
 
-[[ -n "$model" ]] && cursor_args+=(--model "$model")
-[[ -n "$sandbox" ]] && cursor_args+=(--sandbox "$sandbox")
+  [[ -n "$model" ]] && cursor_args+=(--model "$model")
+  [[ -n "$sandbox" ]] && cursor_args+=(--sandbox "$sandbox")
 
-if [[ "$verbose" -eq 1 ]]; then
-  "$AI_COMMIT_CURSOR_BIN" "${cursor_args[@]}" "$prompt" 2>&1 | tee -a "$log_file"
-  rc=${pipestatus[1]}
-else
-  "$AI_COMMIT_CURSOR_BIN" "${cursor_args[@]}" "$prompt" >>"$log_file" 2>&1 &
-  cursor_pid=$!
+  if [[ "$verbose" -eq 1 ]]; then
+    "$AI_COMMIT_CURSOR_BIN" "${cursor_args[@]}" "$prompt" 2>&1 | tee -a "$log_file"
+    rc=${pipestatus[1]}
+  else
+    "$AI_COMMIT_CURSOR_BIN" "${cursor_args[@]}" "$prompt" >>"$log_file" 2>&1 &
+    cursor_pid=$!
 
-  cagent::spinner "$cursor_pid"
-  wait "$cursor_pid"
-  rc=$?
-  cursor_pid=""
-fi
+    cagent::spinner "$cursor_pid"
+    wait "$cursor_pid"
+    rc=$?
+    cursor_pid=""
+  fi
 
-[[ "$rc" -eq 0 ]] || die "cursor-agent failed (see $log_file)"
+  [[ "$rc" -eq 0 ]] || die "cursor-agent failed (see $log_file)"
 fi
 
 if [[ ! -s "$plan_file" ]]; then

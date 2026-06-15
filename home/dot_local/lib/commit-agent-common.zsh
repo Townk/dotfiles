@@ -26,7 +26,7 @@ cagent::spinner() {
     elapsed=$((SECONDS - start))
     print -nu2 -- "\r  ${C_BLU}${spinner[s]}${C_RES} ${elapsed}s  "
     sleep 0.1
-    s=$(( s % 10 + 1 ))
+    s=$((s % 10 + 1))
   done
   print -nu2 -- "\r\e[K"
 }
@@ -71,7 +71,10 @@ cagent::stage_commit() {
   local files
   files=("${(@f)$(jq -r ".commits[$idx].files[]" "$plan_file")}")
   files=(${files:#})
-  [[ ${#files[@]} -gt 0 ]] || { log_warn "commit $((idx + 1)) has no files; skipping"; return 1; }
+  [[ ${#files[@]} -gt 0 ]] || {
+    log_warn "commit $((idx + 1)) has no files; skipping"
+    return 1
+  }
   git add -- "${files[@]}"
 }
 
@@ -86,12 +89,15 @@ cagent::execute_plan() {
   local i=0 msg_file
   while [[ "$i" -lt "$commit_count" ]]; do
     msg_file="$tmpdir/msg-$i.txt"
-    jq -r ".commits[$i].message" "$plan_file" > "$msg_file"
+    jq -r ".commits[$i].message" "$plan_file" >"$msg_file"
 
     print -P -- "${C_BLU}── commit $((i + 1)) of ${commit_count} ──${C_RES}"
 
-    cagent::stage_commit "$plan_file" "$i" \
-      || { cagent::unstage_all; die "failed to stage files for commit $((i + 1))"; }
+    cagent::stage_commit "$plan_file" "$i" ||
+      {
+        cagent::unstage_all
+        die "failed to stage files for commit $((i + 1))"
+      }
 
     if [[ "$no_commit" -eq 1 ]]; then
       "${EDITOR:-vi}" "$msg_file"
@@ -104,8 +110,11 @@ cagent::execute_plan() {
       fi
 
       if prompt::confirm "Create this commit?"; then
-        git commit --quiet -F "$msg_file" \
-          || { cagent::unstage_all; die "git commit failed"; }
+        git commit --quiet -F "$msg_file" ||
+          {
+            cagent::unstage_all
+            die "git commit failed"
+          }
         "$post_hook" $((i + 1))
         log_ok "committed: $(git log -1 --pretty=%s)"
       else
@@ -114,8 +123,11 @@ cagent::execute_plan() {
         return 0
       fi
     else
-      git commit --quiet -F "$msg_file" \
-        || { cagent::unstage_all; die "git commit failed"; }
+      git commit --quiet -F "$msg_file" ||
+        {
+          cagent::unstage_all
+          die "git commit failed"
+        }
       "$post_hook" $((i + 1))
       log_ok "committed: $(git log -1 --pretty=%s)"
     fi

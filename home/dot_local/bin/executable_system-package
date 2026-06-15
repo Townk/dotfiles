@@ -15,8 +15,8 @@ source "$HOME/.local/lib/system-package-common.zsh"
 
 script_path="$0"
 if [[ "$script_path" != */* ]]; then
-  script_path="$(command -v -- "$script_path")" \
-    || die "cannot resolve dispatcher path: $0"
+  script_path="$(command -v -- "$script_path")" ||
+    die "cannot resolve dispatcher path: $0"
 fi
 SCRIPT_DIR="${script_path:A:h}"
 
@@ -87,7 +87,8 @@ EOF
 }
 
 is_in() {
-  local needle="$1"; shift
+  local needle="$1"
+  shift
   local item
   for item in "$@"; do
     [[ "$item" == "$needle" ]] && return 0
@@ -100,8 +101,8 @@ worker_path() {
 }
 
 worker_check() {
-  [[ -x "$(worker_path "$1")" ]] \
-    || die "worker not found: system-package-$1"
+  [[ -x "$(worker_path "$1")" ]] ||
+    die "worker not found: system-package-$1"
 }
 
 # list_one <eco> [args...]
@@ -109,7 +110,8 @@ worker_check() {
 # rows (type/name/version) and groups by Type; other ecosystems emit 2-column
 # rows (name/version) with no grouping.
 list_one() {
-  local eco="$1"; shift
+  local eco="$1"
+  shift
   worker_check "$eco"
   local worker="$(worker_path "$eco")"
   if [[ "$eco" == "brew" ]]; then
@@ -145,7 +147,8 @@ list_all() {
 
 # sync_one <eco> [args...]
 sync_one() {
-  local eco="$1"; shift
+  local eco="$1"
+  shift
   worker_check "$eco"
   local worker="$(worker_path "$eco")"
   "$worker" sync "$@"
@@ -164,15 +167,20 @@ sync_all() {
 
 main() {
   # No args at all → top-level help (exit 0; this isn't an error).
-  [[ $# -ge 1 ]] || { usage; exit 0; }
+  [[ $# -ge 1 ]] || {
+    usage
+    exit 0
+  }
 
   # Top-level help: `-h`, `--help`, or `help`.
   if is_help "$1"; then
-    usage; exit 0
+    usage
+    exit 0
   fi
 
   if is_in "$1" "${SUBCOMMANDS[@]}"; then
-    local cmd="$1"; shift
+    local cmd="$1"
+    shift
     # `system-package <subcommand> --help` → subcommand help, no side effects.
     if args_contain_help "$@"; then
       case "$cmd" in
@@ -186,7 +194,8 @@ main() {
       sync) sync_all "$@" ;;
     esac
   elif is_in "$1" "${ECOSYSTEMS[@]}"; then
-    local eco="$1"; shift
+    local eco="$1"
+    shift
     worker_check "$eco"
     # `system-package <eco>` (no subcommand) or `system-package <eco> --help`
     # → defer to worker's top-level help. Same for the subcommand layer.
@@ -194,9 +203,13 @@ main() {
       "$(worker_path "$eco")" --help
       exit 0
     fi
-    local cmd="$1"; shift
-    is_in "$cmd" "${SUBCOMMANDS[@]}" \
-      || { usage; die "unknown subcommand: $cmd"; }
+    local cmd="$1"
+    shift
+    is_in "$cmd" "${SUBCOMMANDS[@]}" ||
+      {
+        usage
+        die "unknown subcommand: $cmd"
+      }
     # `system-package <eco> <cmd> --help` → forward to worker so the user
     # sees ecosystem-specific flag semantics rather than the aggregated text.
     if args_contain_help "$@"; then

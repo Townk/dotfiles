@@ -66,11 +66,11 @@ function stamp-msg() {
     # Measure figlet's true footprint. Split into a line array with
     # zsh's (f) flag, then take ${#first_line} for width and $#array
     # for height — no subprocess overhead vs. the previous wc pipes.
-    local -a raw_lines=( ${(f)raw_figlet} )
+    local -a raw_lines=(${(f)raw_figlet})
     local figlet_true_w=${#raw_lines[1]}
 
     # 2. Check if the banner breaks out of your boundaries
-    if (( figlet_true_w > box_w )); then
+    if ((figlet_true_w > box_w)); then
       use_fallback=1
     else
       # If it fits perfectly, commit the cached output
@@ -83,42 +83,42 @@ function stamp-msg() {
   fi
 
   # 3. Fallback logic (Plain text configuration)
-  if (( use_fallback )); then
+  if ((use_fallback)); then
     # Re-measure raw single-line text width
     text_w=${#text}
 
     # If even the standard text is too wide for box_w, truncate or clamp width
-    if (( text_w > box_w )); then
-        text_w=$box_w
+    if ((text_w > box_w)); then
+      text_w=$box_w
     fi
-    local -a text_lines=( ${(f)text} )
+    local -a text_lines=(${(f)text})
     text_h=$#text_lines
     final_output="$text"
   fi
 
   # 4. Geometry Centering Calculations
-  local pad_top=$(( (box_h - text_h) / 2 ))
-  local pad_left=$(( (box_w - text_w) / 2 ))
+  local pad_top=$(((box_h - text_h) / 2))
+  local pad_left=$(((box_w - text_w) / 2))
 
-  (( pad_top < 0 )) && pad_top=0
-  (( pad_left < 0 )) && pad_left=0
+  ((pad_top < 0)) && pad_top=0
+  ((pad_left < 0)) && pad_left=0
 
   # Print layout vertical padding. Guard against pad_top=0: `printf` runs
   # its format string once even with zero args, which would emit a stray
   # newline.
-  (( pad_top > 0 )) && printf '\n%.0s' $(seq 1 "$pad_top")
+  ((pad_top > 0)) && printf '\n%.0s' $(seq 1 "$pad_top")
 
   # Generate spacing padding matching the offset
   local left_space=$(printf '%*s' "$pad_left" "")
 
   # 5. Output rendering loop
   printf '%s\n' "$final_output" | while IFS= read -r line; do
-      # If line truncation is needed for plain text overflowing box_w:
-      if (( use_fallback && ${#line} > box_w )); then
-          printf '%s%s\n' "$left_space" "${line:0:$box_w}"
-      else
-          printf '%s%s\n' "$left_space" "$line"
-      fi
+    # If line truncation is needed for plain text overflowing box_w:
+    if ((use_fallback && ${#line} > box_w)); then
+      printf '%s%s\n' "$left_space" "${line:0:$box_w}"
+    else
+      printf '%s%s\n' "$left_space" "$line"
+    fi
   done
 }
 
@@ -138,7 +138,7 @@ function stamp-msg() {
 #   $1   command to run
 #   $2+  arguments to pass to the command
 function force-tty() {
-  if (( $# < 1 )); then
+  if (($# < 1)); then
     echo "Usage: force-tty <command> [args...]" >&2
     return 2
   fi
@@ -163,21 +163,21 @@ function force-tty() {
 }
 
 function get_chafa_format_args() {
-    local protocols
+  local protocols
 
-    if protocols=$(get_terminal_image_protocol 2>/dev/null); then
-        if [[ " $protocols " == *" Sixel "* ]]; then
-            echo "-f sixel"
-        elif [[ " $protocols " == *" iTerm2 "* ]]; then
-            echo "-f iterm"
-        elif [[ " $protocols " == *" Kitty "* ]]; then
-          echo "-f kitty"
-        else
-            echo "-f symbols"
-        fi
+  if protocols=$(get_terminal_image_protocol 2>/dev/null); then
+    if [[ " $protocols " == *" Sixel "* ]]; then
+      echo "-f sixel"
+    elif [[ " $protocols " == *" iTerm2 "* ]]; then
+      echo "-f iterm"
+    elif [[ " $protocols " == *" Kitty "* ]]; then
+      echo "-f kitty"
     else
-        echo "-f symbols"
+      echo "-f symbols"
     fi
+  else
+    echo "-f symbols"
+  fi
 }
 
 # === Handlers ===
@@ -191,7 +191,7 @@ function get_chafa_format_args() {
 
 function preview-dir() {
   eza -F -h --group-directories-first --icons --hyperlink --tree \
-      --color=always --level=2 "$1" | head -200
+    --color=always --level=2 "$1" | head -200
 }
 
 function preview-csv() {
@@ -232,17 +232,17 @@ function preview-rich() {
 
 function preview-json() {
   command -v jq >/dev/null 2>&1 || return 1
-  jq -C --indent 2 < "$1" | head -"$max_lines"
+  jq -C --indent 2 <"$1" | head -"$max_lines"
 }
 
 function preview-yaml() {
   command -v yq >/dev/null 2>&1 || return 1
-  yq -C --indent 2 < "$1" | head -"$max_lines"
+  yq -C --indent 2 <"$1" | head -"$max_lines"
 }
 
 function preview-xml() {
   command -v xq >/dev/null 2>&1 || return 1
-  xq -c --indent 2 < "$1" | head -"$max_lines"
+  xq -c --indent 2 <"$1" | head -"$max_lines"
 }
 
 function preview-dmg() {
@@ -262,39 +262,39 @@ function preview-archive() {
 }
 
 function preview-pdf() {
-    command -v chafa >/dev/null 2>&1 || return 1
-    command -v pdftocairo >/dev/null 2>&1 || return 1
+  command -v chafa >/dev/null 2>&1 || return 1
+  command -v pdftocairo >/dev/null 2>&1 || return 1
 
-    # Fallback to defaults if dimensions $w or $h are empty
-    local width="${w:-80}"
-    local height="${h:-24}"
+  # Fallback to defaults if dimensions $w or $h are empty
+  local width="${w:-80}"
+  local height="${h:-24}"
 
-    # Generate the dynamic format flags as a Zsh-safe array
-    local chafa_format
-    chafa_format=(${(z)$(get_chafa_format_args)})
+  # Generate the dynamic format flags as a Zsh-safe array
+  local chafa_format
+  chafa_format=(${(z)$(get_chafa_format_args)})
 
-    # Pipe the single-page rendered PNG stream into Chafa
-    pdftocairo -png -singlefile "$1" - 2>/dev/null \
-        | chafa "${chafa_format[@]}" -s "${width}x${height}" - 2>/dev/null
+  # Pipe the single-page rendered PNG stream into Chafa
+  pdftocairo -png -singlefile "$1" - 2>/dev/null |
+    chafa "${chafa_format[@]}" -s "${width}x${height}" - 2>/dev/null
 }
 
 function preview-image() {
-    command -v chafa >/dev/null 2>&1 || return 1
+  command -v chafa >/dev/null 2>&1 || return 1
 
-    local width="${w:-80}"
-    local height="${h:-24}"
-    local chafa_format
-    chafa_format=(${(z)$(get_chafa_format_args)})
+  local width="${w:-80}"
+  local height="${h:-24}"
+  local chafa_format
+  chafa_format=(${(z)$(get_chafa_format_args)})
 
-    chafa "${chafa_format[@]}" -s "${width}x${height}" "$1" 2>/dev/null
+  chafa "${chafa_format[@]}" -s "${width}x${height}" "$1" 2>/dev/null
 
-    # PREVIEW_IMAGE_ONLY (set by the zellij click-to-open image pane): show just
-    # the image, no metadata, so it fills the pane without needing a scroll.
-    if [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && command -v mediainfo >/dev/null 2>&1; then
-        preview-mediainfo "$1"
-    fi
+  # PREVIEW_IMAGE_ONLY (set by the zellij click-to-open image pane): show just
+  # the image, no metadata, so it fills the pane without needing a scroll.
+  if [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && command -v mediainfo >/dev/null 2>&1; then
+    preview-mediainfo "$1"
+  fi
 
-    return 0
+  return 0
 }
 
 # mediainfo's raw output is plain `key : value` lines under bare
@@ -304,10 +304,10 @@ function preview-image() {
 # plugin without parsing the output ourselves.
 function preview-mediainfo() {
   command -v mediainfo >/dev/null 2>&1 || return 1
-  mediainfo "$1" \
-    | bat --language=yaml --style=plain --color=always \
-          --theme="Catppuccin Mocha" --terminal-width="$w" \
-    | head -"$max_lines"
+  mediainfo "$1" |
+    bat --language=yaml --style=plain --color=always \
+      --theme="Catppuccin Mocha" --terminal-width="$w" |
+    head -"$max_lines"
 }
 
 function preview-binary() {
@@ -318,13 +318,13 @@ function preview-binary() {
   # `--terminal-width` alone expands hexyl to as many byte-panels as
   # fit (2 panels ~76 cols, 3 panels ~100 cols, 4 panels ~125 cols);
   # `--panels=auto` is mutually exclusive with it and not needed.
-  hexyl --color=always --terminal-width="$w" "$1" 2>/dev/null \
-    | head -"$max_lines"
+  hexyl --color=always --terminal-width="$w" "$1" 2>/dev/null |
+    head -"$max_lines"
 }
 
 function preview-text() {
   bat --theme="Catppuccin Mocha" --style=numbers,changes --color=always \
-      --terminal-width="$w" "$1" 2>/dev/null | head -"$max_lines"
+    --terminal-width="$w" "$1" 2>/dev/null | head -"$max_lines"
 }
 
 # === Dispatch ===
@@ -341,7 +341,7 @@ function preview-text() {
 function geometry() {
   h=${FZF_PREVIEW_LINES:-40}
   w=${FZF_PREVIEW_COLUMNS:-80}
-  (( w > 4 )) && (( w-- ))
+  ((w > 4)) && ((w--))
 
   if [[ -n ${FZF_PREVIEW_FULL:-} ]]; then
     max_lines=999999
@@ -401,14 +401,14 @@ function main() {
   #
   # Keep in sync with `prepend_previewers` in ~/.config/yazi/yazi.toml.
   case "${target:l}" in
-    *.csv)              preview-csv  "$target" && return ;;
-    *.md)               preview-md   "$target" && return ;;
-    *.rst|*.ipynb)      preview-rich "$target" && return ;;
-    *.json|*.vil|*.kbi) preview-json "$target" && return ;;
-    *.yml|*.yaml)       preview-yaml "$target" && return ;;
-    *.xml)              preview-xml  "$target" && return ;;
-    *.dmg)              preview-dmg  "$target" && return ;;
-    *.ics)              preview-ics  "$target" && return ;;
+    *.csv) preview-csv "$target" && return ;;
+    *.md) preview-md "$target" && return ;;
+    *.rst | *.ipynb) preview-rich "$target" && return ;;
+    *.json | *.vil | *.kbi) preview-json "$target" && return ;;
+    *.yml | *.yaml) preview-yaml "$target" && return ;;
+    *.xml) preview-xml "$target" && return ;;
+    *.dmg) preview-dmg "$target" && return ;;
+    *.ics) preview-ics "$target" && return ;;
   esac
 
   # --- By-MIME dispatch ---
@@ -420,8 +420,8 @@ function main() {
 
   case "$mime" in
     application/zip | application/*zip* | \
-    application/x-tar | application/x-bzip2 | \
-    application/x-7z-compressed | application/x-rar | application/x-xz)
+      application/x-tar | application/x-bzip2 | \
+      application/x-7z-compressed | application/x-rar | application/x-xz)
       preview-archive "$target" && return
       ;;
     application/pdf)
@@ -429,7 +429,7 @@ function main() {
       ;;
     image/*)
       # Reserve room below for mediainfo, unless we only want the image.
-      [[ -n ${PREVIEW_IMAGE_ONLY:-} ]] || h=$(( (h * 6) / 10 ))
+      [[ -n ${PREVIEW_IMAGE_ONLY:-} ]] || h=$(((h * 6) / 10))
       preview-image "$target" && return
       ;;
     audio/* | video/* | application/subrip | application/postscript)

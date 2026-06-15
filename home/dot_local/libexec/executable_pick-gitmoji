@@ -29,8 +29,11 @@ set -eu -o pipefail
 
 PICK_NAME=pick-gitmoji
 PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
-source "${PICK_SYMBOLS_LIB:-$PICK_LIB_DIR/pick-symbols-common.zsh}" \
-  || { print -ru2 -- "pick-gitmoji: cannot source pick-symbols-common.zsh from $PICK_LIB_DIR"; exit 1; }
+source "${PICK_SYMBOLS_LIB:-$PICK_LIB_DIR/pick-symbols-common.zsh}" ||
+  {
+    print -ru2 -- "pick-gitmoji: cannot source pick-symbols-common.zsh from $PICK_LIB_DIR"
+    exit 1
+  }
 
 DB_FILE="${PICK_GITMOJI_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/symbols.db}"
 
@@ -73,29 +76,29 @@ pick_symbols::parse_args "$@"
 pick_symbols::require_db
 
 hints=$'󰌑 : emoji  ·  󰘴 N: :name:  ·  ⌥ ⏎/N: insert & stay'
-if (( multi )); then
+if ((multi)); then
   hints+=$'  ·  ⭾ : select  ·  󰘴 A: select-all'
 fi
 
 pick_args=(
   --header "Pick a gitmoji"
   --hints "$hints"
-  --height       "${PICK_GITMOJI_HEIGHT:-45%}"
-  --margin       "${PICK_GITMOJI_MARGIN:-0,0,0,0}"
-  --padding      "${PICK_GITMOJI_PADDING:-0,0,0,0}"
+  --height "${PICK_GITMOJI_HEIGHT:-45%}"
+  --margin "${PICK_GITMOJI_MARGIN:-0,0,0,0}"
+  --padding "${PICK_GITMOJI_PADDING:-0,0,0,0}"
   --input-border "${PICK_GITMOJI_INPUT_BORDER:-1}"
-  --output field:1               # Enter -> emoji
-  --key-output ctrl-n:field:2    # Ctrl-N -> :name:
+  --output field:1            # Enter -> emoji
+  --key-output ctrl-n:field:2 # Ctrl-N -> :name:
   --key-background alt-enter:field:1
   --key-background alt-n:field:2
   --on-items-picked pick_symbols::record_recency
   --cache-state
 )
-if (( multi ));     then pick_args+=( --multi='' ); fi
-if (( copy ));      then pick_args+=( --copy-only ); fi
-if (( resume ));    then pick_args+=( --resume ); fi
-if (( no_border )); then pick_args+=( --no-border ); fi
-if [[ -n "$query" ]]; then pick_args+=( --query "$query" ); fi
+if ((multi)); then pick_args+=(--multi=''); fi
+if ((copy)); then pick_args+=(--copy-only); fi
+if ((resume)); then pick_args+=(--resume); fi
+if ((no_border)); then pick_args+=(--no-border); fi
+if [[ -n "$query" ]]; then pick_args+=(--query "$query"); fi
 
 # Stream the gitmoji rows. The :name: column is padded to the widest code so
 # descriptions line up. Visible columns are colour-coded; the hidden tail

@@ -55,9 +55,16 @@ EOF
 }
 
 case "${1:-}" in
-  -h|--help|help) usage; exit 0 ;;
+  -h | --help | help)
+    usage
+    exit 0
+    ;;
   '') : ;;
-  *) usage >&2; printf 'error: unknown argument: %s\n' "$1" >&2; exit 1 ;;
+  *)
+    usage >&2
+    printf 'error: unknown argument: %s\n' "$1" >&2
+    exit 1
+    ;;
 esac
 
 # Colors / logging come from the shared base (C_*, log_warn/die).
@@ -146,8 +153,8 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
     # SYSTEM_UPDATE_REEXECED guards against an exec loop (the re-run finds
     # itself up-to-date, but the sentinel makes that unconditional).
     _post_rev=$(git -C "$chezmoi_repo" rev-parse HEAD 2>/dev/null || true)
-    if [[ -z "${SYSTEM_UPDATE_REEXECED:-}" && -n "$_pre_rev" && -n "$_post_rev" \
-          && "$_pre_rev" != "$_post_rev" ]]; then
+    if [[ -z "${SYSTEM_UPDATE_REEXECED:-}" && -n "$_pre_rev" && -n "$_post_rev" &&
+      "$_pre_rev" != "$_post_rev" ]]; then
       print -P -- "\n♻️  Source advanced (${_pre_rev} → ${_post_rev}); re-running updated system-update...\n"
       export SYSTEM_UPDATE_REEXECED=1
       exec "$HOME/.local/bin/system-update" "$@"
@@ -182,8 +189,8 @@ if ! command -v brew >/dev/null 2>&1; then
     print -P -- "\n📝 Upgrade NeoVim plugins...\n"
     # Bounded with `timeout`: headless plugin sync can hang indefinitely
     # if a background task (e.g. a treesitter parser build) never settles.
-    timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" \
-      || log_warn "NeoVim plugin upgrade timed out or had failures"
+    timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
+      log_warn "NeoVim plugin upgrade timed out or had failures"
   fi
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
   exit 0
@@ -222,8 +229,8 @@ brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
 # dialog that can never complete on a remote/notty session and hangs the
 # whole update (no display, no Touch ID). The fallback only matters for a
 # LOCAL GUI session anyway, so leave it to the next interactive run.
-if [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] \
-   && command -v pinentry-touchid >/dev/null 2>&1; then
+if [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] &&
+  command -v pinentry-touchid >/dev/null 2>&1; then
   pinentry-touchid -check >/dev/null 2>&1 || pinentry-touchid -fix || log_warn "pinentry-touchid -fix failed"
 fi
 
@@ -270,8 +277,8 @@ if command -v ya >/dev/null 2>&1; then
         cd "$chezmoi_repo"
         if ! git diff --quiet HEAD -- "$yazi_pkg_source_rel" 2>/dev/null; then
           print -P -- "\n📤 Publishing yazi package state...\n"
-          git commit -m "chore(yazi): update dependencies" -- "$yazi_pkg_source_rel" \
-            || log_warn "Failed to commit yazi/package.toml"
+          git commit -m "chore(yazi): update dependencies" -- "$yazi_pkg_source_rel" ||
+            log_warn "Failed to commit yazi/package.toml"
           git push 2>/dev/null || log_warn "Push failed (commit kept locally)"
         fi
       )
@@ -289,8 +296,8 @@ fi
 
 if command -v nvim >/dev/null 2>&1; then
   print -P -- "\n📝 Upgrade NeoVim plugins...\n"
-  nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" \
-    || die "Failed to upgrade NeoVim plugins!"
+  nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
+    die "Failed to upgrade NeoVim plugins!"
 fi
 
 # z4h update is intentionally NOT handled here. It internally runs

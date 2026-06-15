@@ -34,7 +34,7 @@ ql_file_to_json() {
   case "$1" in
     *.json) yq -p=json -o=json -I=0 '.' "$1" ;;
     *.toml) yq -p=toml -o=json -I=0 '.' "$1" ;;
-    *)      yq -p=yaml -o=json -I=0 '.' "$1" ;;
+    *) yq -p=yaml -o=json -I=0 '.' "$1" ;;
   esac
 }
 
@@ -74,7 +74,7 @@ ql_load() {
   while IFS= read -r f; do
     [[ -n "$f" ]] && files+=("$f")
   done < <(ql_source_files)
-  if (( ${#files[@]} == 0 )); then
+  if ((${#files[@]} == 0)); then
     echo "quick-launch: no targets found in $(ql_config_dir)" >&2
     return 1
   fi
@@ -94,7 +94,10 @@ ql_load() {
           panes:      merge_list($docs; "panes")
         }
     '
-  )" || { echo "quick-launch: failed to merge targets in $(ql_config_dir)" >&2; return 1; }
+  )" || {
+    echo "quick-launch: failed to merge targets in $(ql_config_dir)" >&2
+    return 1
+  }
 }
 
 # Editor resolution: tools.editor -> $EDITOR -> nvim. Mirrors the Lua

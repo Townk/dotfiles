@@ -42,17 +42,47 @@ do_names() {
 }
 
 # Pass-through lifecycle verbs. brew handles plist regen + bootstrap.
-do_start()   { [[ $# -eq 1 ]] || die "usage: start <name>";   brew services start   "$1"; }
-do_stop()    { [[ $# -eq 1 ]] || die "usage: stop <name>";    brew services stop    "$1"; }
-do_restart() { [[ $# -eq 1 ]] || die "usage: restart <name>"; brew services restart "$1"; }
-do_info()    { [[ $# -eq 1 ]] || die "usage: info <name>";    brew services info    "$1"; }
+do_start() {
+  [[ $# -eq 1 ]] || die "usage: start <name>"
+  brew services start "$1"
+}
+do_stop() {
+  [[ $# -eq 1 ]] || die "usage: stop <name>"
+  brew services stop "$1"
+}
+do_restart() {
+  [[ $# -eq 1 ]] || die "usage: restart <name>"
+  brew services restart "$1"
+}
+do_info() {
+  [[ $# -eq 1 ]] || die "usage: info <name>"
+  brew services info "$1"
+}
 
 case "${1:-}" in
-  list)    shift; do_list    "$@" ;;
-  start)   shift; do_start   "$@" ;;
-  stop)    shift; do_stop    "$@" ;;
-  restart) shift; do_restart "$@" ;;
-  info)    shift; do_info    "$@" ;;
-  names)   shift; do_names ;;        # internal: used by the dispatcher
+  list)
+    shift
+    do_list "$@"
+    ;;
+  start)
+    shift
+    do_start "$@"
+    ;;
+  stop)
+    shift
+    do_stop "$@"
+    ;;
+  restart)
+    shift
+    do_restart "$@"
+    ;;
+  info)
+    shift
+    do_info "$@"
+    ;;
+  names)
+    shift
+    do_names
+    ;; # internal: used by the dispatcher
   *) die "usage: system-service-brew {list|start|stop|restart|info|names} [name]" ;;
 esac

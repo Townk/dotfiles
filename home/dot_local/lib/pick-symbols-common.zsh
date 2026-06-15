@@ -20,17 +20,47 @@ unset _pick_symbols_self
 # -h/--help it calls the caller's usage() and exits 0; unknown args die.
 # DB_FILE must already hold the picker's default before this is called.
 pick_symbols::parse_args() {
-  multi=0; copy=0; query=""; resume=0; no_border=0
-  while (( $# > 0 )); do
+  multi=0
+  copy=0
+  query=""
+  resume=0
+  no_border=0
+  while (($# > 0)); do
     case "$1" in
-      -m|--multi)   multi=1; shift ;;
-      -c|--copy)    copy=1; shift ;;
-      -q|--query)   [[ $# -ge 2 ]] || die "missing arg for $1"; query="$2"; shift 2 ;;
-      --db)         [[ $# -ge 2 ]] || die "missing arg for $1"; DB_FILE="$2"; shift 2 ;;
-      --resume)     resume=1; shift ;;
-      --no-border)  no_border=1; shift ;;
-      -h|--help)    usage; exit 0 ;;
-      --)           shift; break ;;
+      -m | --multi)
+        multi=1
+        shift
+        ;;
+      -c | --copy)
+        copy=1
+        shift
+        ;;
+      -q | --query)
+        [[ $# -ge 2 ]] || die "missing arg for $1"
+        query="$2"
+        shift 2
+        ;;
+      --db)
+        [[ $# -ge 2 ]] || die "missing arg for $1"
+        DB_FILE="$2"
+        shift 2
+        ;;
+      --resume)
+        resume=1
+        shift
+        ;;
+      --no-border)
+        no_border=1
+        shift
+        ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      --)
+        shift
+        break
+        ;;
       *) die "unknown arg: $1 (try --help)" ;;
     esac
   done
@@ -49,12 +79,12 @@ Build it with: chezmoi apply (runs the symbols-db hook)"
 # next launch floats it to the top (the streamed query orders by last_used).
 # The symbol is the symbols-table primary key.
 pick_symbols::record_recency() {
-  (( $# )) || return 0
+  (($#)) || return 0
   local now sym vals=""
   now=$(date +%s)
   for sym in "$@"; do
     [[ -z "$sym" ]] && continue
-    sym=${sym//\'/\'\'}   # SQL-escape single quotes
+    sym=${sym//\'/\'\'} # SQL-escape single quotes
     vals+="'${sym}',"
   done
   [[ -z "$vals" ]] && return 0

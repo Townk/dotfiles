@@ -89,31 +89,64 @@ extra_guidance=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -u|--untracked) include_untracked=1; shift ;;
-    -d|--dry-run)   dry_run=1; shift ;;
-    -n|--no-commit) no_commit=1; shift ;;
-    -m|--model)     [[ $# -ge 2 ]] || die "--model needs a value"; model="$2"; shift 2 ;;
-    --thinking)     [[ $# -ge 2 ]] || die "--thinking needs a value"; thinking="$2"; shift 2 ;;
-    -v|--verbose)   verbose=1; shift ;;
-    -h|--help)      usage; exit 0 ;;
-    --)             shift; extra_guidance=("$@"); break ;;
-    -*)             usage >&2; die "unknown flag: $1" ;;
-    *)              extra_guidance=("$@"); break ;;
+    -u | --untracked)
+      include_untracked=1
+      shift
+      ;;
+    -d | --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -n | --no-commit)
+      no_commit=1
+      shift
+      ;;
+    -m | --model)
+      [[ $# -ge 2 ]] || die "--model needs a value"
+      model="$2"
+      shift 2
+      ;;
+    --thinking)
+      [[ $# -ge 2 ]] || die "--thinking needs a value"
+      thinking="$2"
+      shift 2
+      ;;
+    -v | --verbose)
+      verbose=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      extra_guidance=("$@")
+      break
+      ;;
+    -*)
+      usage >&2
+      die "unknown flag: $1"
+      ;;
+    *)
+      extra_guidance=("$@")
+      break
+      ;;
   esac
 done
 
-[[ "$dry_run" -eq 1 && "$no_commit" -eq 1 ]] \
-  && die "--dry-run and --no-commit are mutually exclusive"
+[[ "$dry_run" -eq 1 && "$no_commit" -eq 1 ]] &&
+  die "--dry-run and --no-commit are mutually exclusive"
 
 # ────────────────────────────────────────────────────────────────────
 # Pre-flight
 # ────────────────────────────────────────────────────────────────────
-command -v pi  >/dev/null 2>&1 || die "pi-coding-agent (pi) not on PATH"
+command -v pi >/dev/null 2>&1 || die "pi-coding-agent (pi) not on PATH"
 command -v git >/dev/null 2>&1 || die "git not on PATH"
-command -v jq  >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
+command -v jq >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
 
-git rev-parse --git-dir >/dev/null 2>&1 \
-  || die "not inside a git repository"
+git rev-parse --git-dir >/dev/null 2>&1 ||
+  die "not inside a git repository"
 
 # Refuse pre-existing staged changes — keeps dry-run / no-commit / default
 # modes from getting tangled with whatever the user had half-staged. The
@@ -158,7 +191,8 @@ if [[ ${#extra_guidance[@]} -gt 0 ]]; then
   extra_block=$'\n\nAdditional guidance from the caller:\n'"${extra_guidance[*]}"
 fi
 
-prompt=$(cat <<EOF
+prompt=$(
+  cat <<EOF
 You are PLANNING a series of git commits. Use the project's **commit**
 skill for message-format conventions (Conventional Commits subject,
 optional Markdown body, comment-character preflight, etc.), but DO NOT
@@ -216,7 +250,7 @@ log_file="$state_dir/errors.log"
   print -- ""
   print -- "─── $(date '+%Y-%m-%d %H:%M:%S') ─────────────────────────"
   print -- "model=$model thinking=$thinking untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit"
-} >> "$log_file"
+} >>"$log_file"
 
 log_info "Planning commits with ${C_BWH}${model}${C_RES} (thinking: ${thinking})…"
 

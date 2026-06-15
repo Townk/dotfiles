@@ -29,7 +29,10 @@
 set -euo pipefail
 
 QUICK_LAUNCH_BIN="${QUICK_LAUNCH_BIN:-${0:A:h}/quick-launch}"
-[[ -x "$QUICK_LAUNCH_BIN" ]] || { echo "quick-launch-zellij: missing or non-executable: $QUICK_LAUNCH_BIN" >&2; exit 1; }
+[[ -x "$QUICK_LAUNCH_BIN" ]] || {
+  echo "quick-launch-zellij: missing or non-executable: $QUICK_LAUNCH_BIN" >&2
+  exit 1
+}
 
 export QUICK_LAUNCH_HEIGHT="${QUICK_LAUNCH_HEIGHT:--4}"
 export QUICK_LAUNCH_MARGIN="${QUICK_LAUNCH_MARGIN:-0,0,0,0}"

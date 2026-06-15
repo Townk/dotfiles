@@ -27,8 +27,8 @@ CARGO_MANIFEST_STAMP="$PKG_STATE_DIR/cargo.manifest"
 # binary names — ignored. The trailing source annotation (e.g. `(git+...)`,
 # `(/local/path)`) is also ignored; the leading word is always the crate name.
 cargo_installed_crates() {
-  cargo install --list 2>/dev/null \
-    | awk '/^[^[:space:]].*:$/ {print $1}'
+  cargo install --list 2>/dev/null |
+    awk '/^[^[:space:]].*:$/ {print $1}'
 }
 
 # cargo_installed_versions
@@ -37,8 +37,8 @@ cargo_installed_crates() {
 # `:` that's glued to $2 when the crate has no source annotation (the line
 # is `name vX.Y.Z:` instead of `name vX.Y.Z (source):`).
 cargo_installed_versions() {
-  cargo install --list 2>/dev/null \
-    | awk '/^[^[:space:]].*:$/ {
+  cargo install --list 2>/dev/null |
+    awk '/^[^[:space:]].*:$/ {
         name = $1
         ver = $2
         sub(/^v/, "", ver)
@@ -55,10 +55,10 @@ cargo_installed_versions() {
 cargo_list_rows() {
   local outdated="${1:-false}"
   if [[ "$outdated" == true ]]; then
-    cargo_installed_versions \
-      | pkg::outdated_rows \
-          'curl -fsSL "https://crates.io/api/v1/crates/$1" 2>/dev/null | jq -r ".crate.max_stable_version // empty"' \
-      | sort
+    cargo_installed_versions |
+      pkg::outdated_rows \
+        'curl -fsSL "https://crates.io/api/v1/crates/$1" 2>/dev/null | jq -r ".crate.max_stable_version // empty"' |
+      sort
   else
     cargo_installed_versions | sort
   fi
@@ -66,10 +66,13 @@ cargo_list_rows() {
 
 do_list() {
   local outdated=false
-  while (( $# > 0 )); do
+  while (($# > 0)); do
     case "$1" in
-      -u|--update) outdated=true; shift ;;
-      -a|--all)    shift ;;  # no-op: cargo has no transient-dep concept here
+      -u | --update)
+        outdated=true
+        shift
+        ;;
+      -a | --all) shift ;; # no-op: cargo has no transient-dep concept here
       *) die "unknown flag for list: $1" ;;
     esac
   done
@@ -96,14 +99,14 @@ do_list() {
 cargo_provision() {
   local line="$1"
   local force="${2:-false}"
-  local -a args=( ${(z)line} )
+  local -a args=(${(z)line})
   if [[ "$line" != "${line%% *}" ]]; then
     if [[ "$force" == true ]]; then
       cargo install --force "${args[@]}"
     else
       cargo install "${args[@]}"
     fi
-  elif (( HAVE_BINSTALL )); then
+  elif ((HAVE_BINSTALL)); then
     cargo binstall --no-confirm "${args[@]}"
   else
     cargo install "${args[@]}"
@@ -131,12 +134,18 @@ cargo_write_manifest_stamp() {
 _cargo_install_one() {
   local crate="$1" line
   line=$(awk -v c="$crate" '$1 == c {print; exit}' "$declared_full")
-  cargo_provision "$line" || { log_warn "failed to install $crate"; return 1; }
+  cargo_provision "$line" || {
+    log_warn "failed to install $crate"
+    return 1
+  }
 }
 _cargo_upgrade_one() {
   local line="$1" crate="${1%% *}" force=false
   cargo_manifest_line_changed "$crate" "$line" && force=true
-  cargo_provision "$line" "$force" || { log_warn "failed to upgrade $crate"; return 1; }
+  cargo_provision "$line" "$force" || {
+    log_warn "failed to upgrade $crate"
+    return 1
+  }
 }
 
 do_sync() {
@@ -148,15 +157,18 @@ do_sync() {
   command -v cargo-binstall >/dev/null 2>&1 && HAVE_BINSTALL=1
 
   local declared_full declared installed before_snap after_snap
-  declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
-  before_snap=$(mktemp); after_snap=$(mktemp)
+  declared_full=$(mktemp)
+  declared=$(mktemp)
+  installed=$(mktemp)
+  before_snap=$(mktemp)
+  after_snap=$(mktemp)
   trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
 
-  cargo_installed_versions > "$before_snap"
+  cargo_installed_versions >"$before_snap"
 
-  pkg::manifest_read "$CARGOFILE" > "$declared_full"
-  awk '{print $1}' "$declared_full" > "$declared"
-  cargo_installed_crates > "$installed"
+  pkg::manifest_read "$CARGOFILE" >"$declared_full"
+  awk '{print $1}' "$declared_full" >"$declared"
+  cargo_installed_crates >"$installed"
   local had_failures=0
 
   # Uninstall extras BEFORE installing missing — same swap-collision
@@ -173,12 +185,12 @@ do_sync() {
   # Upgrade everything still declared. cargo_provision is the canonical
   # upgrade path: cargo / binstall short-circuit when a crate is already at
   # the latest version, so the cost is one fast registry check per crate.
-  for_each "cargo upgrade" _cargo_upgrade_one < "$declared_full" || had_failures=1
+  for_each "cargo upgrade" _cargo_upgrade_one <"$declared_full" || had_failures=1
 
-  (( had_failures == 0 )) && cargo_write_manifest_stamp "$declared_full"
+  ((had_failures == 0)) && cargo_write_manifest_stamp "$declared_full"
 
   # Restart services whose backing crate changed version.
-  cargo_installed_versions > "$after_snap"
+  cargo_installed_versions >"$after_snap"
   pkg::restart_changed "$before_snap" "$after_snap"
   return 0
 }
@@ -236,19 +248,30 @@ EOF
 
 main() {
   if [[ $# -eq 0 ]] || is_help "${1:-}"; then
-    usage; exit 0
+    usage
+    exit 0
   fi
-  local cmd="$1"; shift
+  local cmd="$1"
+  shift
   case "$cmd" in
     list)
-      args_contain_help "$@" && { usage_list; exit 0; }
+      args_contain_help "$@" && {
+        usage_list
+        exit 0
+      }
       do_list "$@"
       ;;
     sync)
-      args_contain_help "$@" && { usage_sync; exit 0; }
+      args_contain_help "$@" && {
+        usage_sync
+        exit 0
+      }
       do_sync
       ;;
-    *) usage >&2; die "unknown subcommand: $cmd" ;;
+    *)
+      usage >&2
+      die "unknown subcommand: $cmd"
+      ;;
   esac
 }
 
