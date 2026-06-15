@@ -20,10 +20,11 @@ set -eu -o pipefail
 : "${COMMIT_AI_THINKING:=medium}"
 
 # ────────────────────────────────────────────────────────────────────
-# Colors / logging come from the shared base (C_*, log_info/log_ok/
-# log_warn/die).
+# Colors / logging from the shared base (C_*, log_info/log_ok/log_warn/die);
+# prompt::confirm from the prompt module.
 # ────────────────────────────────────────────────────────────────────
 source "$HOME/.local/lib/common.sh"
+source "$HOME/.local/lib/prompt-common.zsh"
 
 usage() {
   cat <<EOF
@@ -316,20 +317,15 @@ while [[ "$i" -lt "$commit_count" ]]; do
       exit 0
     fi
 
-    print -nP -- "${C_BWH}Create this commit?${C_RES} [y/N] "
-    read -r answer
-    case "${answer:l}" in
-      y|yes)
-        git commit --quiet -F "$msg_file" \
-          || { unstage_all; die "git commit failed"; }
-        log_ok "committed: $(git log -1 --pretty=%s)"
-        ;;
-      *)
-        unstage_all
-        log_info "aborted at commit $((i + 1)); no further commits will be created"
-        exit 0
-        ;;
-    esac
+    if prompt::confirm "Create this commit?"; then
+      git commit --quiet -F "$msg_file" \
+        || { unstage_all; die "git commit failed"; }
+      log_ok "committed: $(git log -1 --pretty=%s)"
+    else
+      unstage_all
+      log_info "aborted at commit $((i + 1)); no further commits will be created"
+      exit 0
+    fi
   else
     git commit --quiet -F "$msg_file" \
       || { unstage_all; die "git commit failed"; }

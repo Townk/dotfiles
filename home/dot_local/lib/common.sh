@@ -83,3 +83,9 @@ require_cmd() {
   done
   (( ${#missing[@]} == 0 )) || die "missing required tool(s): ${missing[*]}"
 }
+
+# --- terminal --------------------------------------------------------------
+# have_tty: true when we can reach a controlling terminal for interaction —
+# stdin is a tty, or /dev/tty is openable even when stdin is a pipe. Used by
+# the prompt helpers and any tool deciding whether to show interactive UI.
+have_tty() { [ -t 0 ] || [ -e /dev/tty ]; }

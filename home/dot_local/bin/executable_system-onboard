@@ -94,11 +94,11 @@ is_valid_profile() {
 
 # Interactive form when invoked bare on a TTY.
 interactive_form() {
-  sec::have_tty || { usage >&2; die "no arguments and no TTY"; }
+  have_tty || { usage >&2; die "no arguments and no TTY"; }
   log_info "Interactive onboarding (Ctrl-C to abort)"
-  prompt_required ALIAS    "SSH alias (local only):"
-  prompt_required HOSTNAME "SSH hostname / endpoint (local only):"
-  prompt_choice   PROFILE  "Profile" "${VALID_PROFILES[@]}"
+  prompt::required ALIAS    "SSH alias (local only):"
+  prompt::required HOSTNAME "SSH hostname / endpoint (local only):"
+  prompt::choice   PROFILE  "Profile" "${VALID_PROFILES[@]}"
 }
 
 # Self (local) onboarding has no SSH: --hostname is unused, --alias is just the
@@ -166,7 +166,7 @@ reconcile_ssh() {
     local cur
     cur="$(awk 'tolower($1)=="hostname"{print $2; exit}' "$conf")"
     if [[ -n "$cur" && "$cur" != "$HOSTNAME" ]]; then
-      confirm "$conf maps $ALIAS to '$cur', not '$HOSTNAME'. Overwrite?" \
+      prompt::confirm "$conf maps $ALIAS to '$cur', not '$HOSTNAME'. Overwrite?" \
         || die "refusing to overwrite conflicting SSH config for $ALIAS"
     fi
   fi
