@@ -139,7 +139,7 @@ echo "✅  GitHub CLI is authenticated and ready to use."
 # so deploy just those first (a targeted apply runs no run_* scripts). It's
 # interactive (SA token / op:// prompts); under `curl | bash` there's no TTY,
 # so skip with a hint. Never block bootstrap on its outcome.
-chezmoi apply "$HOME/.local/lib/system-secrets-common.sh" \
+chezmoi apply "$HOME/.local/lib/system-secrets-common.zsh" \
               "$HOME/.local/bin/system-onboard" 2>/dev/null || true
 if [ -t 0 ] && [ -x "$HOME/.local/bin/system-onboard" ]; then
   echo "🔑  Self-onboarding this machine's secrets..."

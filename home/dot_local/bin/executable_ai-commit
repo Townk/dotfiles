@@ -17,7 +17,7 @@
 
 set -eu -o pipefail
 
-source "$HOME/.local/lib/common.sh"
+source "$HOME/.local/lib/common.zsh"
 
 # Resolve this script's directory so sibling workers are found even when we
 # were invoked by a bare PATH name (mirrors system-package).
@@ -89,8 +89,8 @@ probe_available() {
 # the labels line up in a column; ICONS maps known harnesses, with a generic
 # gear for any future one. Colors are the same truecolor SGR the glyph/gitmoji
 # pickers use (bright-white icon, blue #89b4fa name, grey #7f849c label); they
-# are hardcoded — not common.sh's C_* — because this loop's stdout is a pipe, so
-# common.sh blanks its palette, and fzf renders these via --ansi.
+# are hardcoded — not common.zsh's C_* — because this loop's stdout is a pipe, so
+# common.zsh blanks its palette, and fzf renders these via --ansi.
 pick_harness() {
   source "$HOME/.local/lib/zellij.zsh"
   local -A icons=( pi $'\U0010FB02' cursor $'\U0010FB00' )

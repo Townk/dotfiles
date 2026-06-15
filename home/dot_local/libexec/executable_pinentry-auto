@@ -1,6 +1,10 @@
 #!/bin/sh
 # pinentry-auto — gpg-agent's `pinentry-program` dispatcher.
 #
+# Kept in POSIX sh on purpose (the rest of this repo is zsh): gpg-agent execs it
+# in a minimal, non-interactive environment, and all it does is branch and exec
+# another binary — there is nothing here that warrants a shell dependency.
+#
 # gpg forwards $PINENTRY_USER_DATA from the client into this process via the
 # agent. Interactive shells export USE_CURSES=1 when remote (see
 # dot_config/zsh/environment.sh), so GPG passphrase prompts raised during an

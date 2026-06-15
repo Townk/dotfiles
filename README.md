@@ -327,7 +327,7 @@ system-secrets rotate <NAME> [--slot S]   # re-collect the secret(s) on a slot
 system-secrets reconcile [--slot S]       # rebuild a slot to match the manifest
 ```
 
-Both commands share `~/.local/lib/system-secrets-common.sh` so onboarding and
+Both commands share `~/.local/lib/system-secrets-common.zsh` so onboarding and
 later edits cannot drift. A headless blob is encrypted only to its box's
 recipient (per-machine isolation — a compromised box can't read peers'
 secrets), and the operator holds only the public key, so rotating a headless

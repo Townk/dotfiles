@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # chezmoi-reverse: propagate destination edits back to chezmoi source templates.
 # Usage: chezmoi-reverse [--no-merge] [--] <file> [<file>...]
 #

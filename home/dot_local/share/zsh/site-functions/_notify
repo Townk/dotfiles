@@ -1,7 +1,7 @@
 #compdef notify
 #
 # Completion for notify, the Hammerspoon OSD front-end. The script forwards its
-# args straight to the `notify` library function in common.sh, so it accepts
+# args straight to the `notify` library function in common.zsh, so it accepts
 # the short -i/-s forms too (not just the --icon/--sound the help advertises).
 # System-sound names are sourced LIVE from the macOS sound directories, where
 # the `--sound` values (Frog, Glass, …) actually come from.

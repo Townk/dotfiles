@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # zellij-modal — shared scaffolding for our floating "modal dialog" panes.
 #
 # Lives under ~/.config/zellij/scripts/ — zellij-internal helper, not a
@@ -147,7 +147,7 @@ if [[ -n "$title" ]]; then
   [[ -z "$cols" ]] && cols="${COLUMNS:-80}"
   cols=$((cols - 4))
   (( cols < 1 )) && cols=1
-  rule=$(printf '━%.0s' $(seq 1 "$cols"))
+  rule=$(printf '━%.0s' {1..$cols})
   printf '\n  %s▓▓▓ %s%s\n' "$SGR_TITLE" "$title" "$SGR_RESET"
   printf '  %s%s%s\n'       "$SGR_RULE"  "$rule"  "$SGR_RESET"
 fi

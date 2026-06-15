@@ -22,7 +22,7 @@
 
 set -eu -o pipefail
 
-source "$HOME/.local/lib/system-package-common.sh"
+source "$HOME/.local/lib/system-package-common.zsh"
 
 # services.toml lives in $PKG_DIR (~/.config/packages by default) so all
 # system-package-* state stays in one directory.

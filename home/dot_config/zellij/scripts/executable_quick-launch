@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # quick-launch — define quick-launch actions as "panes", "tabs", or
 # "workspaces" for Zellij. A CLI port of the quicklaunch.wezterm plugin.
 #
@@ -24,21 +24,16 @@ set -euo pipefail
 # source lib/ and find the sibling quick-launch-pick regardless of how we were
 # invoked. We live in ~/.config/zellij/scripts/ alongside the picker, with the
 # shell libraries under lib/.
-_src="${BASH_SOURCE[0]}"
-while [[ -h "$_src" ]]; do
-  _dir="$(cd -P "$(dirname "$_src")" >/dev/null 2>&1 && pwd)"
-  _src="$(readlink "$_src")"
-  [[ "$_src" != /* ]] && _src="$_dir/$_src"
-done
-SCRIPT_DIR="$(cd -P "$(dirname "$_src")" >/dev/null 2>&1 && pwd)"
+_src="${0:A}"
+SCRIPT_DIR="${_src:h}"
 LIB_DIR="$SCRIPT_DIR/lib"
 
 # shellcheck source=/dev/null
-. "$LIB_DIR/config.sh"
+. "$LIB_DIR/config.zsh"
 # shellcheck source=/dev/null
-. "$LIB_DIR/command.sh"
+. "$LIB_DIR/command.zsh"
 # shellcheck source=/dev/null
-. "$LIB_DIR/dispatch.sh"
+. "$LIB_DIR/dispatch.zsh"
 
 ql_die() {
   echo "quick-launch: $*" >&2

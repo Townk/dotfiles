@@ -9,12 +9,8 @@
 # module (prompt::confirm), so a front-end only needs to source THIS file.
 
 # Source the base + prompt module relative to THIS file.
-if [ -n "${BASH_SOURCE:-}" ]; then
-  _cagent_self="${BASH_SOURCE[0]}"
-else
-  _cagent_self="${(%):-%x}"
-fi
-source "$(dirname "$_cagent_self")/common.sh"
+_cagent_self="${(%):-%x}"
+source "$(dirname "$_cagent_self")/common.zsh"
 source "$(dirname "$_cagent_self")/prompt-common.zsh"
 unset _cagent_self
 

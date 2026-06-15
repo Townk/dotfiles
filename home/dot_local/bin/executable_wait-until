@@ -13,11 +13,13 @@
 # Exit status: 0 when CMD succeeds within the budget; 1 on timeout; 2 on a
 # usage error.
 #
-# A standalone POSIX-sh bin (not a sourced function) on purpose: its callers
-# span sh/bash (tab-edit) and zsh, and it only ever tests EXTERNAL commands,
-# so a single bin on PATH serves every shell. The "wait on a known background
-# PID while drawing a spinner" case is deliberately NOT covered here — that is a
-# separate UI concern (see the commit-* spinners / run_with_spinner).
+# A standalone POSIX-sh bin (not a sourced function) on purpose: it only ever
+# tests EXTERNAL commands, so keeping it dependency-free POSIX sh lets any
+# caller exec it without caring about the caller's shell. (Everything else in
+# this repo is zsh; this stays sh precisely because it has no reason to bind to
+# one.) The "wait on a known background PID while drawing a spinner" case is
+# deliberately NOT covered here — that is a separate UI concern (see the
+# commit-* spinners / run_with_spinner).
 #
 # Examples:
 #   wait-until --timeout 5s -- test -S "$sock"

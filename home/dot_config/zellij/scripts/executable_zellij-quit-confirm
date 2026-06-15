@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # zellij-quit-confirm — feature adapter for the Quit modal: a Catppuccin
 #                       Mocha `gum confirm` y/N prompt that kills the
 #                       attached session on affirmative.

@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env zsh
 #
 # zellij-preview-image — show an image in a floating Zellij pane, then wait for
 # a single keypress before exiting (the pane is launched with --close-on-exit,

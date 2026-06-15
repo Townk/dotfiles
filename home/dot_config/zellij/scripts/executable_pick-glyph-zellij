@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # pick-glyph-zellij — feature adapter for the Glyph picker modal.
 #
 # The floating-pane scaffolding (catppuccin title block, originating-

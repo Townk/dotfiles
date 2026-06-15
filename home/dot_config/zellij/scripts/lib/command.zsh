@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# lib/command.sh — turn a target's `action` into a runnable shell command,
+#!/usr/bin/env zsh
+# lib/command.zsh — turn a target's `action` into a runnable shell command,
 # and turn a list of panes into a Zellij KDL layout string.
 #
 # Port of quicklaunch.wezterm's plugin/quick-launch/utils.lua
@@ -199,8 +199,8 @@ ql_float_geometry() {
   local size width_spec height_spec width height x y cols rows
   size="$(ql_trim "${1:-80%}")"
   if [[ "$size" =~ ^(.+)[[:space:]]*[xX][[:space:]]*(.+)$ ]]; then
-    width_spec="$(ql_trim "${BASH_REMATCH[1]}")"
-    height_spec="$(ql_trim "${BASH_REMATCH[2]}")"
+    width_spec="$(ql_trim "${match[1]}")"
+    height_spec="$(ql_trim "${match[2]}")"
   else
     width_spec="$size"
     height_spec="$size"
@@ -261,7 +261,7 @@ ql_pane_leaf() {
     # tab closes instead of parking on a "press <Enter> to re-run" prompt. The
     # bar + floating plugin panes from default_tab_template don't keep the tab
     # alive once the command pane is gone.
-    printf '%spane command="/bin/bash" close_on_exit=true%s%s%s%s {\n' "$indent" "$nameattr" "$cwdattr" "$sizeattr" "$floatattr"
+    printf '%spane command="%s" close_on_exit=true%s%s%s%s {\n' "$indent" "$SHELL" "$nameattr" "$cwdattr" "$sizeattr" "$floatattr"
     printf '%s    args "-c" "%s"\n' "$indent" "$(ql_kdl_escape "$cmd")"
     printf '%s}\n' "$indent"
   fi

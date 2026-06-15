@@ -18,7 +18,7 @@
 
 set -eu -o pipefail
 
-source "$HOME/.local/lib/system-secrets-common.sh"
+source "$HOME/.local/lib/system-secrets-common.zsh"
 
 # --- arguments ---------------------------------------------------------------
 ALIAS="" HOSTNAME="" PROFILE="" KIND=""

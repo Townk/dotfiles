@@ -1,17 +1,12 @@
-# system-package-common.sh — shared helpers for system-package-* scripts.
+# system-package-common.zsh — shared helpers for system-package-* scripts.
 # This file is intended to be sourced; it does not run on its own.
 
 # Logging, the ANSI palette (C_*), help-token dispatch (is_help /
 # args_contain_help), and require_cmd come from the shared base. Source it
 # relative to THIS file so it resolves both at ~/.local/lib (production) and at
-# the repo path (the bats suite sources us directly). BASH_SOURCE under bash;
-# %x under zsh.
-if [ -n "${BASH_SOURCE:-}" ]; then
-  _pkg_common_self="${BASH_SOURCE[0]}"
-else
-  _pkg_common_self="${(%):-%x}"
-fi
-source "$(dirname "$_pkg_common_self")/common.sh"
+# the repo path (the ShellSpec suite sources us directly).
+_pkg_common_self="${(%):-%x}"
+source "$(dirname "$_pkg_common_self")/common.zsh"
 unset _pkg_common_self
 
 PKG_DIR="${PKG_DIR:-$HOME/.config/packages}"

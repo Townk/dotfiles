@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
-# platform-linux.sh — Linux implementation of the `platform::` interface.
-# SOURCED by platform.sh on Linux. See platform.sh for the contract.
+# platform-linux.zsh — Linux implementation of the `platform::` interface.
+# SOURCED by platform.zsh on Linux. See platform.zsh for the contract.
 # Dual-shell (bash + zsh); no zsh-only runtime syntax.
 
 # platform::launch_gui <macos-app> <linux-bin> -- <argv...>

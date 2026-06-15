@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # pick-gitmoji-zellij — feature adapter for the Gitmoji picker modal.
 #
 # The floating-pane scaffolding (catppuccin title block, originating-

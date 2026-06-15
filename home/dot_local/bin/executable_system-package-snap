@@ -19,7 +19,7 @@
 
 set -eu -o pipefail
 
-source "$HOME/.local/lib/system-package-common.sh"
+source "$HOME/.local/lib/system-package-common.zsh"
 
 SNAPFILE="$PKG_DIR/Snapfile"
 

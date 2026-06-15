@@ -23,7 +23,7 @@
 
 set -eu -o pipefail
 
-source "$HOME/.local/lib/system-package-common.sh"
+source "$HOME/.local/lib/system-package-common.zsh"
 
 require_cmd yq jq hdiutil
 

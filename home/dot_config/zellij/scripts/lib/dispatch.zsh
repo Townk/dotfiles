@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# lib/dispatch.sh — focus-or-create a workspace / tab / pane via the zellij
+#!/usr/bin/env zsh
+# lib/dispatch.zsh — focus-or-create a workspace / tab / pane via the zellij
 # CLI. Port of quicklaunch.wezterm's plugin/quick-launch/actions.lua.
 
 # Absolute zellij binary (the modal scripts use the same default + override).
@@ -88,7 +88,7 @@ ql_open_pane() {
     cli+=(-d "$zdir")
   fi
   [[ -n "$cwd" ]] && cli+=(--cwd "$cwd")
-  [[ -n "$cmd" ]] && cli+=(--close-on-exit -- /bin/bash -c "$cmd")
+  [[ -n "$cmd" ]] && cli+=(--close-on-exit -- "$SHELL" -c "$cmd")
   "${cli[@]}"
 }
 
@@ -145,7 +145,7 @@ ql_open_tab() {
   [[ -n "$session" ]] && cli+=(--session "$session")
   cli+=(action new-tab --name "$name")
   [[ -n "$cwd" ]] && cli+=(--cwd "$cwd")
-  [[ -n "$cmd" ]] && cli+=(--close-on-exit -- /bin/bash -c "$cmd")
+  [[ -n "$cmd" ]] && cli+=(--close-on-exit -- "$SHELL" -c "$cmd")
   "${cli[@]}"
 
   # Multi-pane tab: split the remaining panes off inside the freshly created
@@ -268,7 +268,7 @@ ql_open_workspace() {
   # picker and the .zshrc boot session ("Main") use, so switching matches the
   # live session instead of spawning an id-named duplicate.
   sname="$(jq -r '.name // .id' <<<"$ws")"
-  win="${SCRIPT_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/quick-launch-window"
+  win="${SCRIPT_DIR:-${${(%):-%x}:A:h:h}}/quick-launch-window"
   ql_workspace_is_nested "$ws" && { nested=true; ql_register_nested "$sname"; }
 
   # Already running → if a separate OS window is currently attached to it,
@@ -323,7 +323,7 @@ ql_open_workspace() {
 ql_open_workspace_window() {
   local ws="$1" sname win lf
   sname="$(jq -r '.name // .id' <<<"$ws")"
-  win="${SCRIPT_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/quick-launch-window"
+  win="${SCRIPT_DIR:-${${(%):-%x}:A:h:h}}/quick-launch-window"
 
   if ql_workspace_is_nested "$ws"; then
     ql_register_nested "$sname"

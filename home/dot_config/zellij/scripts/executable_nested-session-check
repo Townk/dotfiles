@@ -9,13 +9,13 @@
 # `Alt+w o S` sequence (which would otherwise pass straight through to the
 # remote's own Zellij).
 #
-# The session is resolved LIVE from the client's socket (lib/zellij-session.sh),
+# The session is resolved LIVE from the client's socket (lib/zellij-session.zsh),
 # so it tracks switch-session in place. Membership is checked against the
 # registry quick-launch writes whenever it launches a nested workspace.
 emulate -L zsh
 set -u
 
-source "${0:A:h}/lib/zellij-session.sh"
+source "${0:A:h}/lib/zellij-session.zsh"
 
 name="$(resolve_session "${1:?usage: nested-session-check <client_pid>}" 2>/dev/null)" || exit 1
 reg="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/nested-sessions"

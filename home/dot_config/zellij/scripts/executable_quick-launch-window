@@ -10,7 +10,7 @@
 #       3 so the caller can fall back (e.g. switch the session in place).
 #
 # Which window hosts a session is resolved LIVE from the unix sockets the
-# Zellij client holds (lib/zellij-session.sh — the same file-socket trick
+# Zellij client holds (lib/zellij-session.zsh — the same file-socket trick
 # zellij-open uses): for each WezTerm pane we find the zellij client on its tty
 # and ask which session that client is attached to, yielding the WezTerm
 # window id.
@@ -27,7 +27,7 @@
 
 set -eu -o pipefail
 
-source "${0:A:h}/lib/zellij-session.sh"
+source "${0:A:h}/lib/zellij-session.zsh"
 
 WEZTERM=${commands[wezterm]:-/opt/homebrew/bin/wezterm}
 GHOSTTY=${commands[ghostty]:-/Applications/Ghostty.app/Contents/MacOS/ghostty}

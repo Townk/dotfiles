@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env zsh
 #
 # preview — render a preview for fzf's `--preview` hook, Yazi's shell
 # previewer, and any other terminal tool that calls it with a file path.
@@ -28,7 +28,7 @@
 
 set -u
 
-. ~/.local/lib/image-protocol-support.sh
+. ~/.local/lib/image-protocol-support.zsh
 
 # === Helpers ===
 

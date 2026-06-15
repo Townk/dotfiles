@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # notify — show a transient on-screen notification via Hammerspoon's OSD.
 #
-# A standalone front-end over the `notify` primitive in ~/.local/lib/common.sh.
+# A standalone front-end over the `notify` primitive in ~/.local/lib/common.zsh.
 # It replaces terminal-notifier — whose cross-app posting and custom icons
 # stopped working on recent macOS — with our own Hammerspoon OSD: an ephemeral,
 # centered widget carrying a chosen icon and an optional system sound.
@@ -22,8 +22,8 @@
 # and skip this intermediary process.
 set -eu -o pipefail
 
-source "$HOME/.local/lib/common.sh" \
-  || { print -ru2 -- "notify: cannot source common.sh"; exit 1; }
+source "$HOME/.local/lib/common.zsh" \
+  || { print -ru2 -- "notify: cannot source common.zsh"; exit 1; }
 
 usage() {
   cat <<'EOF'

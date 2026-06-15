@@ -21,33 +21,31 @@ absolute path from its caller, so it never needs to be on `PATH`:
 
 ## Library layering
 
-Everything bottoms out at one bash-and-zsh-compatible base; the rest are
-zsh-only modules that source it.
+Everything bottoms out at one base library; all of it is zsh.
 
 ```
-common.sh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
-   (bash + zsh)         log_error/die, is_help, args_contain_help, require_cmd,
+common.zsh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
+                        log_error/die, is_help, args_contain_help, require_cmd,
                         have_tty, for_each
    ├── prompt-common.zsh ......... prompt::required/default/secret/choice/confirm
    ├── pick-common.zsh ........... pick::*  (the fzf picker engine)
    │     ├── pick-symbols-common.zsh   pick_symbols::*  (glyph/gitmoji shared bits)
    │     └── zellij.zsh ............ zj::*  (zj::pick: drop-in for pick::start
    │                                 that floats the picker when zellij is present)
-   ├── system-package-common.sh .. pkg::*  (manifest parsing, version diff,
-   │     (bash + zsh)              restart hook, outdated rows, table print)
-   ├── system-secrets-common.sh .. sec::*  (slots, SOPS/age, 1Password, leak audit)
+   ├── system-package-common.zsh .. pkg::*  (manifest parsing, version diff,
+   │                              restart hook, outdated rows, table print)
+   ├── system-secrets-common.zsh .. sec::*  (slots, SOPS/age, 1Password, leak audit)
    │     └── (also sources prompt-common.zsh)
-   ├── platform.sh ............... platform::*  (OS shim → platform-macos.sh /
-   │     (bash + zsh)              platform-linux.sh: launch GUI app, raise window)
+   ├── platform.zsh ............... platform::*  (OS shim → platform-macos.zsh /
+   │                              platform-linux.zsh: launch GUI app, raise window)
    └── commit-agent-common.zsh ... cagent::*  (spinner, plan summary/dry-run,
                                     stage/commit loop)
 ```
 
-`common.sh`, `system-package-common.sh`, and the `platform*.sh` files stay
-bash-sourceable (the bats suite — and tab-edit — source them under bash);
-the `*.zsh` modules are zsh-only. `platform.sh` dispatches on `$PLATFORM_OS`
-(default `uname -s`, overridable in tests) and only the active OS's
-implementation is deployed (see `.chezmoiignore.tmpl`).
+Every library is zsh; the ShellSpec suite sources them under zsh.
+`platform.zsh` dispatches on `$PLATFORM_OS` (default `uname -s`, overridable in
+tests) and only the active OS's implementation is deployed (see
+`.chezmoiignore.tmpl`).
 
 ## Naming conventions
 
@@ -65,14 +63,14 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 |---|---|---|
 | AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh`, `zellij.zsh` |
 | File preview (fzf/yazi) | `preview` | — |
-| Editor/terminal glue | `tab-edit`² | `platform.sh` (tab-edit) |
+| Editor/terminal glue | `tab-edit`² | `platform.zsh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |
-| Package management | `system-package` + `system-package-{brew,cargo,go,npm,snap,uv}` | `system-package-common.sh` |
-| Service management | `system-service`, `system-service-{launchd,brew}` | `system-package-common.sh` |
-| Disk images | `system-images`¹ | `system-package-common.sh` |
-| Secrets & onboarding | `system-secrets`, `system-onboard` | `system-secrets-common.sh` |
+| Package management | `system-package` + `system-package-{brew,cargo,go,npm,snap,uv}` | `system-package-common.zsh` |
+| Service management | `system-service`, `system-service-{launchd,brew}` | `system-package-common.zsh` |
+| Disk images | `system-images`¹ | `system-package-common.zsh` |
+| Secrets & onboarding | `system-secrets`, `system-onboard` | `system-secrets-common.zsh` |
 | Orchestration | `system-update` | — |
-| Notifications | `notify` | `common.sh` (the `notify` primitive) |
+| Notifications | `notify` | `common.zsh` (the `notify` primitive) |
 | Utility | `wait-until` | — (standalone POSIX `sh`) |
 
 ¹ macOS-only; excluded from other hosts via `.chezmoiignore.tmpl`.
@@ -90,7 +88,7 @@ running Hammerspoon's custom OSD:
 notify [--icon SPEC] [--sound NAME] [--ansi] MESSAGE...
 ```
 
-The actual work lives in the `notify` primitive in `common.sh`, so any script
+The actual work lives in the `notify` primitive in `common.zsh`, so any script
 that already sources the library can call `notify …` directly — no extra
 process between it and Hammerspoon's `hs` CLI. The bin is the standalone
 front-end (help text, argument handling, and a hard error when Hammerspoon
@@ -107,17 +105,20 @@ wait-until [--timeout 2s] [--interval 0.1] [--quiet] -- CMD [ARG...]
 ```
 
 Runs `CMD` until it exits 0 or the timeout elapses, checking once before the
-first sleep (so an already-true condition returns immediately). It's a bin (not
-a sourced function) so `sh`/`bash`/`zsh` callers can all share it.
+first sleep (so an already-true condition returns immediately). It's a
+standalone bin kept in POSIX `sh` on purpose: a dependency-free polling
+primitive any caller can `exec`, regardless of the caller's shell.
 
 ## Tests
 
-`bats` suites live in `tests/` at the repo root (not deployed):
+[ShellSpec](https://shellspec.info/) suites live in `tests/` at the repo root
+(not deployed) and run under zsh (`.shellspec` pins `--shell zsh`):
 
 ```sh
-bats tests/common.bats tests/wait-until.bats tests/system-package-common.bats
+make test     # or: shellspec
 ```
 
-They source the libraries directly from the repo path under bash, so they cover
-the base primitives, `for_each`, `wait-until`, and the package-domain helpers.
-`tests/chezmoi-reverse.bats` additionally needs `chezmoi` on PATH.
+They source the libraries directly from the repo path under zsh, so they cover
+the base primitives, `for_each`, `wait-until`, `platform::*`, and the
+package-domain helpers. `tests/chezmoi-reverse_spec.sh` additionally needs
+`chezmoi` on PATH.

@@ -115,13 +115,9 @@
 
 # --- diagnostics ---------------------------------------------------
 # Logging (die), help-token dispatch, and require_cmd come from the shared
-# base. Source it relative to THIS file. BASH_SOURCE under bash; %x under zsh.
-if [ -n "${BASH_SOURCE:-}" ]; then
-  _pick_common_self="${BASH_SOURCE[0]}"
-else
-  _pick_common_self="${(%):-%x}"
-fi
-source "$(dirname "$_pick_common_self")/common.sh"
+# base. Source it relative to THIS file.
+_pick_common_self="${(%):-%x}"
+source "$(dirname "$_pick_common_self")/common.zsh"
 unset _pick_common_self
 
 require_cmd fzf

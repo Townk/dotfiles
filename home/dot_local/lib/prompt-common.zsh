@@ -1,21 +1,16 @@
 #!/usr/bin/env zsh
 # prompt-common.zsh — interactive prompt helpers shared by the tools that
 # collect input (system-secrets, system-onboard, commit-*). SOURCED, never
-# executed. zsh-only (masked entry uses `read -rk` and zsh slices), so it lives
-# apart from the bash-sourceable common.sh base, which it pulls in for C_*,
-# log_warn, die, and have_tty.
+# executed. Masked entry uses `read -rk` and zsh slices. Pulls in the common.zsh
+# base for C_*, log_warn, die, and have_tty.
 #
 # Raw read / read -s (no gum dependency in bootstrap-adjacent tools; predictable
 # over SSH for secret entry). All read from /dev/tty so prompts work even when
 # stdin is a pipe. A future gum backend can drop in behind these names.
 
-# Source the base relative to THIS file. BASH_SOURCE under bash; %x under zsh.
-if [ -n "${BASH_SOURCE:-}" ]; then
-  _prompt_common_self="${BASH_SOURCE[0]}"
-else
-  _prompt_common_self="${(%):-%x}"
-fi
-source "$(dirname "$_prompt_common_self")/common.sh"
+# Source the base relative to THIS file.
+_prompt_common_self="${(%):-%x}"
+source "$(dirname "$_prompt_common_self")/common.zsh"
 unset _prompt_common_self
 
 # prompt::required <varname> <prompt> — loop until non-empty; sets the named var.

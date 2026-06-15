@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # copy-pwd — copy the focused zellij pane's working directory to the macOS
 #            clipboard, then show a Hammerspoon OSD (and play a short sound).
 #
@@ -97,7 +97,7 @@ fi
 # resolves `hs` and quotes the Lua call). Sourced AFTER the clipboard write
 # above so the copy itself never depends on the library being present.
 # Backgrounded so any OSD hiccup never delays or fails the clipboard copy.
-if source "$HOME/.local/lib/common.sh" 2>/dev/null; then
+if source "$HOME/.local/lib/common.zsh" 2>/dev/null; then
   notify --icon "$COPY_PWD_ICON" --sound "$COPY_PWD_SOUND" "$display" >/dev/null 2>&1 &
 fi
 

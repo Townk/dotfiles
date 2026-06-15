@@ -1,9 +1,9 @@
 #!/usr/bin/env zsh
-# common.sh — base primitives shared by every ~/.local/lib/*-common library and
+# common.zsh — base primitives shared by every ~/.local/lib/*-common library and
 # the zsh scripts in ~/.local/bin. SOURCED, never executed.
 #
 # Provides the cross-cutting primitives that used to be copy-pasted (with minor
-# drift) into system-package-common.sh, system-secrets-common.sh, pick-common.zsh
+# drift) into system-package-common.zsh, system-secrets-common.zsh, pick-common.zsh
 # and the commit-* / system-update scripts:
 #   * the ANSI palette (C_*), gated on an interactive stdout
 #   * logging: log_info / log_ok / log_warn / log_error / die
@@ -17,8 +17,8 @@
 # module); module constants stay UPPER_SNAKE (PKG_DIR, LAUNCH_AGENTS, …) since
 # `::` is not valid in shell variable names.
 #
-# Written to work under BOTH zsh (the scripts) and bash (the bats suite sources
-# system-package-common.sh, which sources this). Avoid zsh-only syntax here.
+# Sourced under zsh by the ~/.local/bin scripts, the *-common libraries, and the
+# ShellSpec suite (which runs under zsh).
 
 # Idempotent: a script may pull this in more than once (e.g. transitively via a
 # *-common library and again directly) without redefining everything.
@@ -96,8 +96,8 @@ have_tty() { [ -t 0 ] || [ -e /dev/tty ]; }
 # non-zero. <fn> is responsible for any per-item message; for_each emits a
 # "<label>: N of M failed" summary when any failed and returns the failure
 # count (0 = all succeeded). The loop runs in the caller's shell — feed it with
-# `for_each ... < <(producer)` rather than a pipe so the tally is reliable in
-# both bash and zsh (a piped last stage is a subshell in bash).
+# `for_each ... < <(producer)` rather than a pipe so the tally is reliable
+# (a piped last stage runs in a subshell, which would lose the count).
 for_each() {
   local label="$1" fn="$2" item total=0 failures=0
   while IFS= read -r item; do

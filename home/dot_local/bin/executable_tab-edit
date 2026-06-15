@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env zsh
 #
 # tab-edit — Open file(s) in Neovim inside WezTerm/Zellij
 #
@@ -27,12 +27,11 @@
 #
 # PLATFORM
 #   The OS-specific bits — cold-launching the GUI and raising its window — live
-#   behind the platform:: module (lib/platform.sh → platform-macos.sh /
-#   platform-linux.sh). Binaries resolve via PATH and the WezTerm CLI
+#   behind the platform:: module (lib/platform.zsh → platform-macos.zsh /
+#   platform-linux.zsh). Binaries resolve via PATH and the WezTerm CLI
 #   auto-connects to the running GUI, so no Homebrew paths or GUI socket layout
-#   are assumed. This script stays bash because it sources zellij-session.sh,
-#   which relies on bash word splitting. DEPLOYED on macOS only for now — the
-#   Linux file-manager launcher isn't built yet; see .chezmoiignore.tmpl.
+#   are assumed. DEPLOYED on macOS only for now — the Linux file-manager
+#   launcher isn't built yet; see .chezmoiignore.tmpl.
 
 # 1. SET PATHS
 # A GUI launcher (Finder droplet / .desktop) hands us a bare PATH, so seed the
@@ -44,11 +43,11 @@ WEZTERM_BIN="${WEZTERM_BIN:-$(command -v wezterm)}"
 NVIM_BIN="${NVIM_BIN:-$(command -v nvim)}"
 ZELLIJ_BIN="${ZELLIJ_BIN:-$(command -v zellij)}"
 JQ_BIN="${JQ_BIN:-$(command -v jq)}"
-ZELLIJ_SESSION_LIB="${ZELLIJ_SESSION_LIB:-$HOME/.config/zellij/scripts/lib/zellij-session.sh}"
+ZELLIJ_SESSION_LIB="${ZELLIJ_SESSION_LIB:-$HOME/.config/zellij/scripts/lib/zellij-session.zsh}"
 
 # Shared base (die/log_*) + the platform:: module (launch_gui / raise_app).
-source "$HOME/.local/lib/common.sh"
-source "$HOME/.local/lib/platform.sh"
+source "$HOME/.local/lib/common.zsh"
+source "$HOME/.local/lib/platform.zsh"
 
 # 2. CALCULATE TAB TITLE
 COUNT=$#

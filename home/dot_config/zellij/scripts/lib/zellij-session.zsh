@@ -1,8 +1,9 @@
-# zellij-session.sh — resolve which Zellij session a client process is wired to
+#!/usr/bin/env zsh
+# zellij-session.zsh — resolve which Zellij session a client process is wired to
 # by reading the unix-domain sockets it holds. No `--session` needed, so it
 # tracks live session switches and cute auto-names. Sourced (not executed) by
 # both zellij-open (file:// link router) and quick-launch-window (session →
-# WezTerm window focus). Pure shell functions; safe to source in bash or zsh.
+# WezTerm window focus). Pure zsh functions.
 
 # resolve_session <client_pid>
 #   Echo the session name the given Zellij client PID is attached to, or return
@@ -23,7 +24,7 @@ resolve_session() {
   locals=$(printf '%s\n' "$cl" | awk '{print $6}' | grep '^0x' | sort -u)
   peers=$(printf '%s\n' "$cl" | grep -oE '\->0x[0-9a-f]+' | sed 's/->//' | sort -u)
   external=$(comm -23 <(printf '%s\n' "$peers") <(printf '%s\n' "$locals"))
-  for e in $external; do
+  for e in ${(f)external}; do
     spath=$(printf '%s\n' "$lsof_out" \
       | awk -v p="$client_pid" -v a="$e" '$2!=p && $6==a {
           path=""; for (i = 8; i <= NF; i++) path = path (i > 8 ? " " : "") $i

@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env zsh
 #
 # system-update — Bring all tools managed outside of chezmoi to their
 # latest versions, and keep the chezmoi repo in sync across machines.
@@ -61,7 +61,7 @@ case "${1:-}" in
 esac
 
 # Colors / logging come from the shared base (C_*, log_warn/die).
-source "$HOME/.local/lib/common.sh"
+source "$HOME/.local/lib/common.zsh"
 
 # Resolve chezmoi source dir once. Returns "" only when neither chezmoi
 # nor the standard layout produces a git repo (so the sync hooks no-op
@@ -231,7 +231,7 @@ fi
 # Soft failure — a misconfigured service shouldn't block the rest of
 # system-update. Note: services tied to packages just upgraded by the
 # preceding `system-package sync` have already been restarted by the
-# worker that owns them (see pkg::restart_services_for in common.sh).
+# worker that owns them (see pkg::restart_services_for in common.zsh).
 if command -v system-service >/dev/null 2>&1; then
   print -P -- "\n📡 Sync system services...\n"
   system-service sync || log_warn "system-service sync had failures"

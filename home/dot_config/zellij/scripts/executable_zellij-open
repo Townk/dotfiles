@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # zellij-open — open a clicked file:// link inside the right Zellij session.
 #
 # Invoked by WezTerm's `open-uri` handler (see ~/.config/wezterm/wezterm.lua)
@@ -35,11 +35,11 @@ path="${path#localhost}"
 [ -e "$path" ] || exit 0
 
 # --- Resolve the session the client PID is currently attached to ----------
-# resolve_session lives in lib/zellij-session.sh (shared with quick-launch-window):
+# resolve_session lives in lib/zellij-session.zsh (shared with quick-launch-window):
 # a Zellij client holds a unix-socket connection to its session's server, whose
 # listening socket is bound to .../<contract>/<session_name>; we read that path.
 # Tracks live session switches and needs no --session in argv.
-. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/zellij-session.sh"
+. "${0:A:h}/lib/zellij-session.zsh"
 
 session="$(resolve_session "$pid")" || exit 0
 [ -n "$session" ] || exit 0

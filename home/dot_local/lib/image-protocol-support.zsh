@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# image-protocol-support.sh — detect the terminal's usable image protocol.
+# image-protocol-support.zsh — detect the terminal's usable image protocol.
 # SOURCED, never executed: defines get_terminal_image_protocol(), called by the
 # `preview` script to choose a renderer (Kitty / iTerm2 / Sixel). Dual-shell
 # (bash + zsh); no zsh-only runtime syntax.

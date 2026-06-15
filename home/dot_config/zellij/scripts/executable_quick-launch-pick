@@ -100,7 +100,7 @@ elif [[ "$kind" == workspace ]]; then
   # window)" instead of "(detached)", and selecting one raises that window. On
   # Ghostty / when WezTerm isn't reachable this is empty → all live workspaces
   # read as "(detached)", matching what we can act on there.
-  source "${0:A:h}/lib/zellij-session.sh" 2>/dev/null || true
+  source "${0:A:h}/lib/zellij-session.zsh" 2>/dev/null || true
   windowed_json="$( { zellij_wezterm_sessions 2>/dev/null | cut -f1 | sed '/^$/d' | jq -R . | jq -s -c . ; } 2>/dev/null || true)"
   [[ -n "$windowed_json" ]] || windowed_json='[]'
 else

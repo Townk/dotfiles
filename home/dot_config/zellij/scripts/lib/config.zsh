@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# lib/config.sh — read, merge & normalize the quick-launch targets
+#!/usr/bin/env zsh
+# lib/config.zsh — read, merge & normalize the quick-launch targets
 # (default.yaml + launch.d/* under the targets directory).
 #
 # Port of quicklaunch.wezterm's plugin/quick-launch/config.lua.
@@ -128,9 +128,8 @@ ql_expand_tilde() {
   esac
 }
 
-# Capitalize the first character (portable; ${x^} is bash 4+ only and macOS
-# /usr/bin/bash is 3.2). Used for fzf prompts.
+# Capitalize the first character. Used for fzf prompts.
 ql_cap() {
   local s="$1"
-  printf '%s%s' "$(printf '%s' "${s:0:1}" | tr '[:lower:]' '[:upper:]')" "${s:1}"
+  printf '%s' "${(U)s[1,1]}${s[2,-1]}"
 }

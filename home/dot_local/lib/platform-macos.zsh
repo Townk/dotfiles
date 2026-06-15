@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
-# platform-macos.sh — macOS implementation of the `platform::` interface.
-# SOURCED by platform.sh on Darwin. See platform.sh for the contract.
+# platform-macos.zsh — macOS implementation of the `platform::` interface.
+# SOURCED by platform.zsh on Darwin. See platform.zsh for the contract.
 # Dual-shell (bash + zsh); no zsh-only runtime syntax.
 
 # platform::launch_gui <macos-app> <linux-bin> -- <argv...>

@@ -12,13 +12,9 @@
 # `pick::start` for `zj::pick`; nothing else about its call site changes.
 #
 # We source pick-common.zsh because the no-Zellij path IS pick::start; that in
-# turn pulls in the shared base (common.sh).
+# turn pulls in the shared base (common.zsh).
 
-if [ -n "${BASH_SOURCE:-}" ]; then
-  _zj_self="${BASH_SOURCE[0]}"
-else
-  _zj_self="${(%):-%x}"
-fi
+_zj_self="${(%):-%x}"
 source "$(dirname "$_zj_self")/pick-common.zsh"
 unset _zj_self
 

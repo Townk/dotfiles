@@ -5,16 +5,12 @@
 # and the recency recorder — lived identically in both and now lives here.
 #
 # SOURCED, never executed. Pulls in pick-common.zsh (and transitively the base
-# common.sh) for require_cmd / die / pick::start, so a picker only needs to
+# common.zsh) for require_cmd / die / pick::start, so a picker only needs to
 #   source "$PICK_LIB_DIR/pick-symbols-common.zsh"
 # instead of pick-common.zsh directly.
 
-# Source pick-common relative to THIS file. BASH_SOURCE under bash; %x under zsh.
-if [ -n "${BASH_SOURCE:-}" ]; then
-  _pick_symbols_self="${BASH_SOURCE[0]}"
-else
-  _pick_symbols_self="${(%):-%x}"
-fi
+# Source pick-common relative to THIS file.
+_pick_symbols_self="${(%):-%x}"
 source "${PICK_COMMON_LIB:-$(dirname "$_pick_symbols_self")/pick-common.zsh}"
 unset _pick_symbols_self
 

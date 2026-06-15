@@ -11,7 +11,7 @@
 
 set -eu -o pipefail
 
-source "$HOME/.local/lib/system-package-common.sh"
+source "$HOME/.local/lib/system-package-common.zsh"
 
 script_path="$0"
 if [[ "$script_path" != */* ]]; then

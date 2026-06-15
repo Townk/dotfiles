@@ -73,11 +73,11 @@
 .local/bin/system-package-brew
 {{- end }}
 {{/* platform:: module — deploy only the active OS's implementation; the
-     platform.sh shim (which dispatches to it) ships everywhere. */}}
+     platform.zsh shim (which dispatches to it) ships everywhere. */}}
 {{ if eq .chezmoi.os "darwin" -}}
-.local/lib/platform-linux.sh
+.local/lib/platform-linux.zsh
 {{- else -}}
-.local/lib/platform-macos.sh
+.local/lib/platform-macos.zsh
 {{- end }}
 
 # pi-coding-agent: paths managed by pi itself at runtime, or sensitive.

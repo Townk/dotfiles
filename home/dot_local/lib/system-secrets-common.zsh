@@ -1,9 +1,9 @@
-# system-secrets-common.sh — shared helpers for `system-onboard` and
+# system-secrets-common.zsh — shared helpers for `system-onboard` and
 # `system-secrets`. Intended to be sourced; does not run on its own.
 #
 # Both commands share this library so the onboarding path and the later
 # add/rotate path cannot drift in how they name slots, render fragments,
-# encrypt blobs, or audit for leaks. Mirrors the system-package-common.sh
+# encrypt blobs, or audit for leaks. Mirrors the system-package-common.zsh
 # pattern.
 #
 # HARD CONSTRAINT (this repo is PUBLIC): committed artifacts use OPAQUE SLOT
@@ -14,15 +14,10 @@
 # ---------------------------------------------------------------------------
 # Logging, the ANSI palette (C_*), help-token dispatch, and require_cmd come
 # from the shared base. Source it relative to THIS file so it resolves both at
-# ~/.local/lib (production) and at the repo path. BASH_SOURCE under bash;
-# %x under zsh.
+# ~/.local/lib (production) and at the repo path.
 # ---------------------------------------------------------------------------
-if [ -n "${BASH_SOURCE:-}" ]; then
-  _sec_common_self="${BASH_SOURCE[0]}"
-else
-  _sec_common_self="${(%):-%x}"
-fi
-source "$(dirname "$_sec_common_self")/common.sh"
+_sec_common_self="${(%):-%x}"
+source "$(dirname "$_sec_common_self")/common.zsh"
 unset _sec_common_self
 
 # ---------------------------------------------------------------------------
@@ -88,11 +83,7 @@ sec::manifest_has() {
 # Interactive prompt helpers (prompt::required / ::default / ::secret /
 # ::choice / ::confirm) live in the shared prompt-common.zsh module.
 # ---------------------------------------------------------------------------
-if [ -n "${BASH_SOURCE:-}" ]; then
-  _sec_prompt_self="${BASH_SOURCE[0]}"
-else
-  _sec_prompt_self="${(%):-%x}"
-fi
+_sec_prompt_self="${(%):-%x}"
 source "$(dirname "$_sec_prompt_self")/prompt-common.zsh"
 unset _sec_prompt_self
 

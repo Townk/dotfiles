@@ -10,7 +10,7 @@
 
 set -eu -o pipefail
 
-source "$HOME/.local/lib/system-package-common.sh"
+source "$HOME/.local/lib/system-package-common.zsh"
 
 CARGOFILE="$PKG_DIR/Cargofile"
 CARGO_MANIFEST_STAMP="$PKG_STATE_DIR/cargo.manifest"
