@@ -167,6 +167,26 @@ return {
         "typescript",
         "vim",
         "yaml",
+        -- zsh has a dedicated grammar (a rework of tree-sitter-bash that
+        -- understands zsh-only syntax: glob qualifiers, `${(f)...}` flags,
+        -- etc.). It is not in the registry, so it is declared in
+        -- `local_parsers` below and pulled in here so LazyVim auto-installs it.
+        "zsh",
+      },
+      -- The dedicated zsh parser is not in nvim-treesitter's registry. Declaring
+      -- it here (main-branch `local_parsers` API; LazyVim forwards opts straight
+      -- to `require("nvim-treesitter").setup`) lets `:TSInstall zsh` /
+      -- ensure_installed fetch and compile it. `self_contained` = the repo ships
+      -- its own queries (under nvim-queries/zsh) and a prebuilt src/parser.c.
+      local_parsers = {
+        zsh = {
+          source = {
+            type = "self_contained",
+            url = "https://github.com/georgeharker/tree-sitter-zsh",
+            queries_path = "nvim-queries/zsh",
+          },
+          filetypes = { "zsh" },
+        },
       },
     },
   },
@@ -221,7 +241,11 @@ return {
           "neocmakelsp",
           "prettierd",
           "ruff",
+          -- shellcheck stays: bash-language-server shells out to it for the
+          -- remaining POSIX `sh`/`bash` scripts. zsh is linted via `zsh -n`
+          -- (nvim-lint spec below) instead — shellcheck can't parse zsh.
           "shellcheck",
+          -- shfmt v3.13+ formats sh/bash/zsh (see conform formatters_by_ft).
           "shfmt",
           "stylua",
           "taplo",
@@ -242,6 +266,13 @@ return {
         json = { "biome" },
         jsonc = { "biome" },
         kdl = { "kdlfmt" },
+        -- shfmt (v3.13+) speaks zsh natively. LazyVim already maps sh->shfmt;
+        -- extend to bash/zsh so the whole, now zsh-dominant, shell tree uses one
+        -- formatter. shfmt has a real parser (unlike beautysh's line counter, it
+        -- doesn't choke/corrupt on inline `case`, `[[ ]]`, etc.) and detects the
+        -- dialect from the filename/shebang via conform's `-filename` arg.
+        bash = { "shfmt" },
+        zsh = { "shfmt" },
         -- Swap LazyVim's `prettier` for `prettierd` (daemon mode, ~10x faster
         -- startup). markdownlint-cli2 / markdown-toc still run after, gated by
         -- their own conditions.
@@ -252,6 +283,16 @@ return {
         ktfmt = {
           prepend_args = { "--kotlinlang-style" },
         },
+        -- 2-space indent + `-ci` (indent case items) matches our hand style and
+        -- gives the conventional case form (pattern on its own line, body one
+        -- level in). The ShellSpec specs are `.sh` but their Describe/It/End
+        -- DSL isn't shell syntax, so any shell formatter flattens them — skip.
+        shfmt = {
+          prepend_args = { "-i", "2", "-ci" },
+          condition = function(_, ctx)
+            return not ctx.filename:match("_spec%.sh$")
+          end,
+        },
         -- prettierd's CLI parses argv as `<filename> [prettier-options...]`,
         -- so flags MUST come after $FILENAME. `prepend_args` would put them
         -- before and prettierd would treat the flag itself as the filename.
@@ -261,6 +302,21 @@ return {
         prettierd = {
           args = { "$FILENAME", "--prose-wrap=always" },
         },
+      },
+    },
+  },
+
+  -- Native zsh syntax validation. There is no zsh language server, and
+  -- shellcheck/bash-language-server only understand POSIX/bash, so they choke
+  -- on zsh-only syntax. nvim-lint ships a built-in `zsh` linter that runs
+  -- `zsh --no-exec --no-rcs --no-globalrcs` (i.e. `zsh -n`) on the buffer and
+  -- surfaces parse errors as diagnostics. `linters_by_ft` deep-merges with
+  -- LazyVim's defaults, so this only adds zsh.
+  {
+    "mfussenegger/nvim-lint",
+    opts = {
+      linters_by_ft = {
+        zsh = { "zsh" },
       },
     },
   },
