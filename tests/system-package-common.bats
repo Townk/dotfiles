@@ -102,29 +102,13 @@ EOF
   [ -z "$result" ]
 }
 
-@test "is_help recognizes -h, --help, and help" {
-  is_help -h
-  is_help --help
-  is_help help
-}
+# is_help / args_contain_help now live in the base; see tests/common.bats.
 
-@test "is_help rejects other tokens" {
-  ! is_help list
-  ! is_help sync
-  ! is_help --update
-  ! is_help ""
-}
-
-@test "args_contain_help finds --help among trailing args" {
-  args_contain_help --update --help
-  args_contain_help -h
-  args_contain_help --all -h --update
-}
-
-@test "args_contain_help returns false when no help flag is present" {
-  ! args_contain_help
-  ! args_contain_help --update --all
-  # Bare `help` is intentionally NOT a help flag at the args-list level —
-  # it would collide with valid positional values (service names, etc.).
-  ! args_contain_help help
+@test "pkg::restart_changed is a no-op (exit 0) when system-service is absent" {
+  printf 'ruff\t1.0\n' > "$TEST_TMP/before"
+  printf 'ruff\t2.0\nmypy\t1.0\n' > "$TEST_TMP/after"
+  # system-service is not on PATH in the test env, so pkg::restart_services_for
+  # short-circuits; the helper must still complete cleanly.
+  run pkg::restart_changed "$TEST_TMP/before" "$TEST_TMP/after"
+  [ "$status" -eq 0 ]
 }
