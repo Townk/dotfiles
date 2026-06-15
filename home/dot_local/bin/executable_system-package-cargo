@@ -143,7 +143,7 @@ do_sync() {
 
   cargo_installed_versions > "$before_snap"
 
-  pkg_manifest_read "$CARGOFILE" > "$declared_full"
+  pkg::manifest_read "$CARGOFILE" > "$declared_full"
   awk '{print $1}' "$declared_full" > "$declared"
   cargo_installed_crates > "$installed"
   local had_failures=0
@@ -151,12 +151,12 @@ do_sync() {
   # Uninstall extras BEFORE installing missing — same swap-collision
   # rationale as the uv/npm workers (two crates that ship a binary of the
   # same name would otherwise refuse to overwrite each other).
-  pkg_diff_only_in "$installed" "$declared" | while IFS= read -r crate; do
+  pkg::diff_only_in "$installed" "$declared" | while IFS= read -r crate; do
     [[ -n "$crate" ]] && cargo uninstall "$crate"
   done
 
   # Install missing
-  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r crate; do
+  pkg::diff_only_in "$declared" "$installed" | while IFS= read -r crate; do
     [[ -z "$crate" ]] && continue
     local line; line=$(awk -v c="$crate" '$1 == c {print; exit}' "$declared_full")
     cargo_provision "$line" || { had_failures=1; log_warn "failed to install $crate"; }
@@ -177,8 +177,8 @@ do_sync() {
 
   # Restart services whose backing crate changed version.
   cargo_installed_versions > "$after_snap"
-  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
-  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
+  local -a changed=( ${(f)"$(pkg::changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg::restart_services_for "${changed[@]}"
   return 0
 }
 

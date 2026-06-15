@@ -9,7 +9,7 @@
 # HARD CONSTRAINT (this repo is PUBLIC): committed artifacts use OPAQUE SLOT
 # IDS only — never a machine alias, hostname, username, or work tool name.
 # Real endpoints and the alias<->slot map live in the loose, unmanaged layer
-# (~/.ssh/config.d/*, the operator map). Every commit path runs sec_leak_audit.
+# (~/.ssh/config.d/*, the operator map). Every commit path runs sec::leak_audit.
 
 # ---------------------------------------------------------------------------
 # Logging, the ANSI palette (C_*), help-token dispatch, and require_cmd come
@@ -30,7 +30,7 @@ unset _sec_common_self
 # root), and every secret-related path relative to them. The repo root is the
 # parent of the chezmoi source dir (.chezmoiroot = home).
 # ---------------------------------------------------------------------------
-sec_repo_paths() {
+sec::repo_paths() {
   SECRETS_SRC_DIR="$(chezmoi source-path)" \
     || die "cannot resolve chezmoi source path (is chezmoi installed?)"
   REPO_ROOT="$(git -C "$SECRETS_SRC_DIR" rev-parse --show-toplevel)" \
@@ -48,36 +48,36 @@ sec_repo_paths() {
 # ---------------------------------------------------------------------------
 # Manifest queries (env var names + prompts + requiredFor profiles).
 # ---------------------------------------------------------------------------
-sec_manifest_check() {
+sec::manifest_check() {
   [[ -r "$MANIFEST" ]] || die "secrets manifest not found: $MANIFEST"
 }
 
-# sec_manifest_names — every declared secret name, one per line.
-sec_manifest_names() {
-  sec_manifest_check
+# sec::manifest_names — every declared secret name, one per line.
+sec::manifest_names() {
+  sec::manifest_check
   yq -r '.secrets[].name' "$MANIFEST"
 }
 
-# sec_manifest_names_for_profile <profile> — names whose requiredFor includes
+# sec::manifest_names_for_profile <profile> — names whose requiredFor includes
 # <profile>, one per line.
-sec_manifest_names_for_profile() {
-  sec_manifest_check
+sec::manifest_names_for_profile() {
+  sec::manifest_check
   profile="$1" yq -r \
     '.secrets[] | select(.requiredFor[] == strenv(profile)) | .name' \
     "$MANIFEST"
 }
 
-# sec_manifest_prompt <name> — the human prompt for a secret.
-sec_manifest_prompt() {
-  sec_manifest_check
+# sec::manifest_prompt <name> — the human prompt for a secret.
+sec::manifest_prompt() {
+  sec::manifest_check
   name="$1" yq -r \
     '.secrets[] | select(.name == strenv(name)) | .prompt' \
     "$MANIFEST"
 }
 
-# sec_manifest_has <name> — return 0 iff the secret is declared.
-sec_manifest_has() {
-  sec_manifest_check
+# sec::manifest_has <name> — return 0 iff the secret is declared.
+sec::manifest_has() {
+  sec::manifest_check
   local hit
   hit="$(name="$1" yq -r \
     '[.secrets[] | select(.name == strenv(name))] | length' "$MANIFEST")"
@@ -90,7 +90,7 @@ sec_manifest_has() {
 # here so a future gum backend can drop in. All read from /dev/tty so prompts
 # work even when stdin is a pipe.
 # ---------------------------------------------------------------------------
-sec_have_tty() { [[ -t 0 || -e /dev/tty ]]; }
+sec::have_tty() { [[ -t 0 || -e /dev/tty ]]; }
 
 # prompt_required <varname> <prompt> — loop until non-empty; sets the named var.
 prompt_required() {
@@ -122,7 +122,7 @@ prompt_default() {
 prompt_secret() {
   local __var="$1" __prompt="$2" __val=""
 
-  if ! sec_have_tty; then
+  if ! sec::have_tty; then
     IFS= read -rs __val </dev/tty 2>/dev/null || IFS= read -rs __val \
       || die "input aborted"
     printf -v "$__var" '%s' "$__val"
@@ -192,26 +192,26 @@ confirm() {
 # ---------------------------------------------------------------------------
 # Slot ids and slot-derived paths.
 # ---------------------------------------------------------------------------
-# sec_gen_slot — emit a fresh opaque slot id: slot-<6 hex>. Non-identifying.
+# sec::gen_slot — emit a fresh opaque slot id: slot-<6 hex>. Non-identifying.
 # Reads a fixed 4 bytes (no producer-side SIGPIPE under pipefail) and keeps 6
 # hex chars. Not crypto-grade; collisions are caught against the operator map.
-sec_gen_slot() {
+sec::gen_slot() {
   local hex
   hex="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | cut -c1-6)"
   [[ ${#hex} -eq 6 ]] || hex="$(printf '%06x' $(( (RANDOM * 65536 + RANDOM) % 16777216 )))"
   printf 'slot-%s' "$hex"
 }
 
-# sec_valid_slot <slot> — return 0 iff slot matches the opaque-id shape.
-sec_valid_slot() {
+# sec::valid_slot <slot> — return 0 iff slot matches the opaque-id shape.
+sec::valid_slot() {
   [[ "$1" == slot-[a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9] ]]
 }
 
-# sec_valid_name <name> — return 0 iff <name> is a valid env var name.
-sec_valid_name() { [[ "$1" =~ '^[A-Z][A-Z0-9_]*$' ]]; }
+# sec::valid_name <name> — return 0 iff <name> is a valid env var name.
+sec::valid_name() { [[ "$1" =~ '^[A-Z][A-Z0-9_]*$' ]]; }
 
-sec_fragment_path() { printf '%s/private_%s.sh.tmpl' "$FRAGMENT_DIR" "$1"; }
-sec_blob_path()     { printf '%s/%s.sops.sh' "$SECRETS_BLOB_DIR" "$1"; }
+sec::fragment_path() { printf '%s/private_%s.sh.tmpl' "$FRAGMENT_DIR" "$1"; }
+sec::blob_path()     { printf '%s/%s.sops.sh' "$SECRETS_BLOB_DIR" "$1"; }
 
 # ---------------------------------------------------------------------------
 # Operator map — LOOSE, NEVER COMMITTED. Lives under ~/.config/chezmoi/.
@@ -219,7 +219,7 @@ sec_blob_path()     { printf '%s/%s.sops.sh' "$SECRETS_BLOB_DIR" "$1"; }
 #   <slot>: { alias, profile, kind, recipient }
 # alias/host are the leak-sensitive bits and stay here, off git.
 # ---------------------------------------------------------------------------
-sec_map_init() {
+sec::map_init() {
   if [[ ! -f "$OPERATOR_MAP" ]]; then
     mkdir -p "${OPERATOR_MAP:h}"
     printf '{}\n' >"$OPERATOR_MAP"
@@ -227,17 +227,17 @@ sec_map_init() {
   fi
 }
 
-# sec_map_get <slot> <field> — print a field value (empty if unset). Read-only:
+# sec::map_get <slot> <field> — print a field value (empty if unset). Read-only:
 # never creates the map (so --dry-run has no side effects).
-sec_map_get() {
+sec::map_get() {
   [[ -f "$OPERATOR_MAP" ]] || { printf ''; return 0; }
   slot="$1" field="$2" yq -r \
     '.[strenv(slot)][strenv(field)] // ""' "$OPERATOR_MAP"
 }
 
-# sec_map_set <slot> <alias> <profile> <kind> <recipient>
-sec_map_set() {
-  sec_map_init
+# sec::map_set <slot> <alias> <profile> <kind> <recipient>
+sec::map_set() {
+  sec::map_init
   slot="$1" alias="$2" profile="$3" kind="$4" recipient="$5" yq -i '
     .[strenv(slot)] = {
       "alias": strenv(alias),
@@ -247,9 +247,9 @@ sec_map_set() {
     }' "$OPERATOR_MAP"
 }
 
-# sec_map_slot_for_alias <alias> — print the slot mapped to <alias> (or empty).
+# sec::map_slot_for_alias <alias> — print the slot mapped to <alias> (or empty).
 # Read-only: never creates the map.
-sec_map_slot_for_alias() {
+sec::map_slot_for_alias() {
   [[ -f "$OPERATOR_MAP" ]] || { printf ''; return 0; }
   alias="$1" yq -r \
     'to_entries | map(select(.value.alias == strenv(alias))) | .[0].key // ""' \
@@ -265,8 +265,8 @@ sec_map_slot_for_alias() {
 # encrypt so it never depends on cwd.
 # ---------------------------------------------------------------------------
 
-# sec_sops_rule_set <slot> <recipient> — upsert the slot's creation rule.
-sec_sops_rule_set() {
+# sec::sops_rule_set <slot> <recipient> — upsert the slot's creation rule.
+sec::sops_rule_set() {
   local slot="$1" recipient="$2"
   [[ -f "$SOPS_YAML" ]] || printf 'creation_rules: []\n' >"$SOPS_YAML"
   re="secrets/${slot}\\.sops\\.sh\$" age="$recipient" yq -i '
@@ -276,18 +276,18 @@ sec_sops_rule_set() {
   ' "$SOPS_YAML"
 }
 
-# sec_sops_recipient_for_slot <slot> — recipient from .sops.yaml (or empty).
-sec_sops_recipient_for_slot() {
+# sec::sops_recipient_for_slot <slot> — recipient from .sops.yaml (or empty).
+sec::sops_recipient_for_slot() {
   [[ -f "$SOPS_YAML" ]] || { printf ''; return 0; }
   re="secrets/${1}\\.sops\\.sh\$" yq -r \
     '(.creation_rules // [])[] | select(.path_regex == strenv(re)) | .age' \
     "$SOPS_YAML" 2>/dev/null | head -n1
 }
 
-# sec_sops_encrypt <recipient> <plaintext_file> <blob_path>
+# sec::sops_encrypt <recipient> <plaintext_file> <blob_path>
 # Encrypt to a temp file first, then move into place, so a failure never leaves
 # a partial or plaintext blob at the destination.
-sec_sops_encrypt() {
+sec::sops_encrypt() {
   local recipient="$1" plain="$2" blob="$3" tmp
   tmp="$(mktemp "${TMPDIR:-/tmp}/sec-blob.XXXXXX")"
   # --config /dev/null: encrypt to the explicit recipient and ignore the repo
@@ -301,9 +301,9 @@ sec_sops_encrypt() {
   mv "$tmp" "$blob"
 }
 
-# sec_sops_updatekeys <blob_path> — re-encrypt the data key to whatever
+# sec::sops_updatekeys <blob_path> — re-encrypt the data key to whatever
 # recipients .sops.yaml now lists (used after a recipient rotation).
-sec_sops_updatekeys() {
+sec::sops_updatekeys() {
   ( cd "$REPO_ROOT" && sops updatekeys --yes "$1" ) \
     || die "sops updatekeys failed for $1"
 }
@@ -314,10 +314,10 @@ sec_sops_updatekeys() {
 # <slot>.sh (0600) only on the host whose secretsSlot matches (.chezmoiignore).
 # ---------------------------------------------------------------------------
 
-# sec_write_headless_fragment <slot> — body is a single SOPS decrypt call.
-sec_write_headless_fragment() {
+# sec::write_headless_fragment <slot> — body is a single SOPS decrypt call.
+sec::write_headless_fragment() {
   local slot="$1" frag
-  frag="$(sec_fragment_path "$slot")"
+  frag="$(sec::fragment_path "$slot")"
   mkdir -p "${frag:h}"
   cat >"$frag" <<EOF
 {{- /* headless slot ${slot}: SOPS+age secrets, decrypted ONCE per apply into
@@ -330,15 +330,15 @@ sec_write_headless_fragment() {
 EOF
 }
 
-# sec_write_human_fragment <slot> <NAME=op://ref>... — cache after materializing.
+# sec::write_human_fragment <slot> <NAME=op://ref>... — cache after materializing.
 # References are op:// only (no SOPS, no ciphertext). On first materialization, or
 # when the reference set changes, the template resolves refs with direct `op read`
 # calls. Steady-state applies reuse the already-rendered 0600 fragment so routine
 # chezmoi operations do not cross the Touch ID boundary.
-sec_write_human_fragment() {
+sec::write_human_fragment() {
   local slot="$1"; shift
   local frag pair name ref sig
-  frag="$(sec_fragment_path "$slot")"
+  frag="$(sec::fragment_path "$slot")"
   sig="$(printf '%s\n' "$@" | shasum -a 256 | cut -d ' ' -f 1)"
   mkdir -p "${frag:h}"
   {
@@ -384,40 +384,40 @@ EOF
 # ---------------------------------------------------------------------------
 OP_SA_TOKEN_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/op/service-account"
 
-sec_op_available() { command -v op >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; }
-sec_op_have_token() { [[ -s "$OP_SA_TOKEN_FILE" ]]; }
+sec::op_available() { command -v op >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; }
+sec::op_have_token() { [[ -s "$OP_SA_TOKEN_FILE" ]]; }
 
-# sec_op <args…> — run op in service-account mode using the loose token.
-sec_op() { OP_SERVICE_ACCOUNT_TOKEN="$(cat "$OP_SA_TOKEN_FILE")" op "$@"; }
+# sec::op <args…> — run op in service-account mode using the loose token.
+sec::op() { OP_SERVICE_ACCOUNT_TOKEN="$(cat "$OP_SA_TOKEN_FILE")" op "$@"; }
 
-# sec_op_store_token <token> — write the raw token loose at 0600.
-sec_op_store_token() {
+# sec::op_store_token <token> — write the raw token loose at 0600.
+sec::op_store_token() {
   ( umask 077; mkdir -p "${OP_SA_TOKEN_FILE:h}" && printf '%s' "$1" >"$OP_SA_TOKEN_FILE" ) \
     || die "could not write $OP_SA_TOKEN_FILE"
   chmod 600 "$OP_SA_TOKEN_FILE"
 }
 
-# sec_op_read_ref <op://ref> — read a value via the 1Password app in ACCOUNT
+# sec::op_read_ref <op://ref> — read a value via the 1Password app in ACCOUNT
 # mode (env -u OP_SERVICE_ACCOUNT_TOKEN, so a half-set token can't force the SA
 # and loop). Echoes the value; empty + nonzero on failure.
-sec_op_read_ref() { env -u OP_SERVICE_ACCOUNT_TOKEN op read "$1" 2>/dev/null; }
+sec::op_read_ref() { env -u OP_SERVICE_ACCOUNT_TOKEN op read "$1" 2>/dev/null; }
 
-# sec_op_ensure_token — guarantee the loose token exists. In order:
+# sec::op_ensure_token — guarantee the loose token exists. In order:
 #   1. token file already present                        -> done
 #   2. a remembered op:// ref ($OP_SA_TOKEN_FILE.ref) read via the desktop app
 #   3. prompt for the op:// ref, read it via the desktop app, then remember it
 #   4. masked paste of the raw token
 # Reads always go through the desktop app (account mode), since the service
 # account itself can't be expected to store its own token.
-sec_op_ensure_token() {
-  sec_op_have_token && return 0
+sec::op_ensure_token() {
+  sec::op_have_token && return 0
   local ref_file="$OP_SA_TOKEN_FILE.ref" __tok="" __ref=""
 
   # 2. remembered ref (non-interactive; just needs the app authed)
   if command -v op >/dev/null 2>&1 && [[ -s "$ref_file" ]]; then
     __ref="$(cat "$ref_file")"
-    if __tok="$(sec_op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
-      sec_op_store_token "$__tok"; __tok=""
+    if __tok="$(sec::op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
+      sec::op_store_token "$__tok"; __tok=""
       log_ok "loaded service-account token from $__ref (account mode) at $OP_SA_TOKEN_FILE"
       return 0
     fi
@@ -425,13 +425,13 @@ sec_op_ensure_token() {
   fi
 
   # 3. prompt for a ref and read it via the desktop app
-  if command -v op >/dev/null 2>&1 && sec_have_tty; then
+  if command -v op >/dev/null 2>&1 && sec::have_tty; then
     prompt_default __ref \
       "1Password op:// ref for the service-account token (e.g. op://<vault>/<item>/credential; blank to paste)" \
       ""
     if [[ -n "$__ref" ]]; then
-      if __tok="$(sec_op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
-        sec_op_store_token "$__tok"; __tok=""
+      if __tok="$(sec::op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
+        sec::op_store_token "$__tok"; __tok=""
         ( umask 077; printf '%s' "$__ref" >"$ref_file" ) && chmod 600 "$ref_file"
         log_ok "stored service-account token from $__ref (loose, 0600) at $OP_SA_TOKEN_FILE"
         return 0
@@ -442,40 +442,40 @@ sec_op_ensure_token() {
 
   # 4. masked paste
   prompt_secret __tok "1Password service-account token (stored at $OP_SA_TOKEN_FILE):"
-  sec_op_store_token "$__tok"; __tok=""
+  sec::op_store_token "$__tok"; __tok=""
   log_ok "stored service-account token (loose, 0600) at $OP_SA_TOKEN_FILE"
 }
 
-# sec_op_item_exists <vault> <title>
-sec_op_item_exists() { sec_op item get "$2" --vault "$1" >/dev/null 2>&1; }
+# sec::op_item_exists <vault> <title>
+sec::op_item_exists() { sec::op item get "$2" --vault "$1" >/dev/null 2>&1; }
 
-# sec_op_field_exists <vault> <item> <field-label> — 0 iff the field already
+# sec::op_field_exists <vault> <item> <field-label> — 0 iff the field already
 # resolves to a value (the item exists and carries that slot's field).
-sec_op_field_exists() { sec_op read "op://$1/$2/$3" >/dev/null 2>&1; }
+sec::op_field_exists() { sec::op read "op://$1/$2/$3" >/dev/null 2>&1; }
 
-# sec_op_upsert_field <vault> <item> <field-label> <value>
+# sec::op_upsert_field <vault> <item> <field-label> <value>
 # Store <value> as a CONCEALED field labeled <field-label> on the item (one item
 # per variable; one field per machine, keyed by the slot hash). Creates the item
 # (API Credential category) if absent, else edits it in place. The value is fed
 # via a JSON template on STDIN, never argv (so it is not visible to `ps`). Echoes
 # the resulting op:// reference.
-sec_op_upsert_field() {
+sec::op_upsert_field() {
   local vault="$1" item="$2" field="$3" value="$4" cur merged
-  if sec_op_item_exists "$vault" "$item"; then
+  if sec::op_item_exists "$vault" "$item"; then
     # Merge into the FULL current item. A partial {fields:[…]} template makes
     # `op item edit` REPLACE the field set (wiping other machines' fields), so
     # fetch the item, drop any same-labeled field, append ours, and write it back.
-    cur="$(sec_op item get "$item" --vault "$vault" --format json 2>/dev/null)" || return 1
+    cur="$(sec::op item get "$item" --vault "$vault" --format json 2>/dev/null)" || return 1
     merged="$(printf '%s' "$cur" | __OP_VAL="$value" jq --arg f "$field" \
       '.fields = ((.fields // [] | map(select(.label != $f and .id != $f)))
                   + [{label: $f, type: "CONCEALED", value: $ENV.__OP_VAL}])')" || return 1
-    printf '%s' "$merged" | sec_op item edit "$item" --vault "$vault" - >/dev/null 2>&1 \
+    printf '%s' "$merged" | sec::op item edit "$item" --vault "$vault" - >/dev/null 2>&1 \
       || return 1
   else
     __OP_VAL="$value" jq -n --arg t "$item" --arg f "$field" \
       '{title: $t, category: "API_CREDENTIAL",
         fields: [{label: $f, type: "CONCEALED", value: $ENV.__OP_VAL}]}' \
-      | sec_op item create --vault "$vault" - >/dev/null 2>&1 \
+      | sec::op item create --vault "$vault" - >/dev/null 2>&1 \
       || return 1
   fi
   printf 'op://%s/%s/%s\n' "$vault" "$item" "$field"
@@ -487,7 +487,7 @@ sec_op_upsert_field() {
 # right before committing so a leak fails early with a clear message instead of
 # being caught (more opaquely) by the hook. No patterns file -> allow.
 # ---------------------------------------------------------------------------
-sec_leak_audit() {
+sec::leak_audit() {
   [[ -r "$LEAK_PATTERNS" ]] || return 0
   local added names haystack pat hits=""
   added="$(git -C "$REPO_ROOT" diff --cached -U0 --no-color --diff-filter=AM \
@@ -521,24 +521,24 @@ $names"
 # per-machine-isolation tradeoff (a compromised box can't read peers' secrets).
 # ---------------------------------------------------------------------------
 
-# sec_rebuild_slot <slot> — regenerate fragment/blob from freshly prompted
+# sec::rebuild_slot <slot> — regenerate fragment/blob from freshly prompted
 # values. Reads kind/profile/recipient from the operator map.
-sec_rebuild_slot() {
+sec::rebuild_slot() {
   local slot="$1" kind profile recipient
-  kind="$(sec_map_get "$slot" kind)"
-  profile="$(sec_map_get "$slot" profile)"
+  kind="$(sec::map_get "$slot" kind)"
+  profile="$(sec::map_get "$slot" profile)"
   [[ -n "$kind" && -n "$profile" ]] \
     || die "slot $slot is not in the operator map (run system-onboard first)"
 
   local names
-  names=("${(@f)$(sec_manifest_names_for_profile "$profile")}")
+  names=("${(@f)$(sec::manifest_names_for_profile "$profile")}")
   names=(${names:#})
   (( ${#names[@]} )) || { log_warn "manifest lists no secrets for profile '$profile'"; return 0; }
 
   local n val ref
   if [[ "$kind" == headless ]]; then
-    recipient="$(sec_map_get "$slot" recipient)"
-    [[ -n "$recipient" ]] || recipient="$(sec_sops_recipient_for_slot "$slot")"
+    recipient="$(sec::map_get "$slot" recipient)"
+    [[ -n "$recipient" ]] || recipient="$(sec::sops_recipient_for_slot "$slot")"
     [[ -n "$recipient" ]] || die "no age recipient known for headless slot $slot"
     local plain
     plain="$(mktemp "${TMPDIR:-/tmp}/sec-plain.XXXXXX")"
@@ -546,14 +546,14 @@ sec_rebuild_slot() {
     trap 'rm -f "$plain"' EXIT
     log_info "Enter values for the '$profile' secrets (hidden). Headless slot $slot:"
     for n in "${names[@]}"; do
-      prompt_secret val "  $n — $(sec_manifest_prompt "$n"):"
+      prompt_secret val "  $n — $(sec::manifest_prompt "$n"):"
       printf 'export %s=%s\n' "$n" "${(qq)val}" >>"$plain"
     done
     mkdir -p "$SECRETS_BLOB_DIR"
-    sec_sops_rule_set "$slot" "$recipient"
-    sec_sops_encrypt "$recipient" "$plain" "$(sec_blob_path "$slot")"
+    sec::sops_rule_set "$slot" "$recipient"
+    sec::sops_encrypt "$recipient" "$plain" "$(sec::blob_path "$slot")"
     rm -f "$plain"; trap - EXIT
-    sec_write_headless_fragment "$slot"
+    sec::write_headless_fragment "$slot"
     log_ok "encrypted ${#names[@]} secret(s) for slot $slot"
   else
     # Human: each secret resolves from 1Password at apply via `output "op" read`.
@@ -562,10 +562,10 @@ sec_rebuild_slot() {
     # With op + jq we read/write those fields through the service-account token
     # (SA mode). Without op/jq, fall back to entering op:// references by hand.
     local pairs=() vault="" desc hash="${slot#slot-}"
-    if sec_op_available; then
-      sec_op_ensure_token
+    if sec::op_available; then
+      sec::op_ensure_token
       local -a vaults
-      vaults=("${(@f)$(sec_op vault list --format=json 2>/dev/null | jq -r '.[].name')}")
+      vaults=("${(@f)$(sec::op vault list --format=json 2>/dev/null | jq -r '.[].name')}")
       vaults=(${vaults:#})
       if (( ${#vaults[@]} > 1 )); then
         prompt_choice vault "1Password vault" "${vaults[@]}"
@@ -577,13 +577,13 @@ sec_rebuild_slot() {
     [[ -n "$vault" ]] \
       && log_warn "op:// references are committed to this PUBLIC repo — keep vault/item names non-identifying."
     for n in "${names[@]}"; do
-      desc="$(sec_manifest_prompt "$n")"
+      desc="$(sec::manifest_prompt "$n")"
       if [[ -n "$vault" ]]; then
         ref="op://$vault/$n/$hash"
-        if sec_op_field_exists "$vault" "$n" "$hash"; then
+        if sec::op_field_exists "$vault" "$n" "$hash"; then
           if confirm "  $n ($desc): field $hash already set — replace its value?"; then
             prompt_secret val "    new value for $n (masked):"
-            sec_op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
+            sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
               || die "could not update $ref (does the service account have write access to '$vault'?)"
             val=""; log_ok "    updated $ref"
           else
@@ -591,7 +591,7 @@ sec_rebuild_slot() {
           fi
         else
           prompt_secret val "  $n ($desc) — value for field $hash (masked):"
-          sec_op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
+          sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null \
             || die "could not write $ref (does the service account have write access to '$vault'?)"
           val=""; log_ok "    wrote $ref"
         fi
@@ -600,29 +600,29 @@ sec_rebuild_slot() {
       fi
       pairs+=("$n=$ref")
     done
-    sec_write_human_fragment "$slot" "${pairs[@]}"
+    sec::write_human_fragment "$slot" "${pairs[@]}"
     log_ok "wrote ${#pairs[@]} 1Password reference(s) for slot $slot"
   fi
 }
 
-# sec_commit_paths_for_slot <slot> — the committed paths a slot touches.
-sec_commit_paths_for_slot() {
+# sec::commit_paths_for_slot <slot> — the committed paths a slot touches.
+sec::commit_paths_for_slot() {
   local slot="$1"
   printf '%s\n' \
-    "$(sec_fragment_path "$slot")" \
+    "$(sec::fragment_path "$slot")" \
     "$SOPS_YAML" \
     "$MANIFEST"
   # Human slots have no SOPS blob; guard with `if` (not a trailing `&&`, whose
   # false result would make this function return 1 and trip the caller's `set
   # -e` during `paths=("$(...)")`).
-  if [[ -f "$(sec_blob_path "$slot")" ]]; then
-    printf '%s\n' "$(sec_blob_path "$slot")"
+  if [[ -f "$(sec::blob_path "$slot")" ]]; then
+    printf '%s\n' "$(sec::blob_path "$slot")"
   fi
 }
 
-# sec_git_commit <message> <path>... — stage paths (relative to repo root),
+# sec::git_commit <message> <path>... — stage paths (relative to repo root),
 # run the leak audit, then commit. Refuses if nothing staged.
-sec_git_commit() {
+sec::git_commit() {
   local msg="$1"; shift
   local p
   for p in "$@"; do
@@ -632,7 +632,7 @@ sec_git_commit() {
     log_info "nothing to commit"
     return 0
   fi
-  sec_leak_audit
+  sec::leak_audit
   git -C "$REPO_ROOT" commit -m "$msg" >/dev/null \
     || die "git commit failed"
   log_ok "committed: $msg"

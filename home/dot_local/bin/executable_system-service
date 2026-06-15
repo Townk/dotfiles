@@ -162,7 +162,7 @@ do_list() {
   {
     system-service-launchd list | awk -F'\t' '{print "launchd\t" $0}'
     system-service-brew    list | awk -F'\t' '{print "brew\t"    $0}'
-  } | pkg_table_print $'Source\tService\tStatus\tUser\tFile' 1
+  } | pkg::table_print $'Source\tService\tStatus\tUser\tFile' 1
 }
 
 # do_sync — only the launchd worker reconciles. brew's bundle handles its

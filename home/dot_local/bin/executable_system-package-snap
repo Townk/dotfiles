@@ -87,14 +87,14 @@ do_sync() {
 
   snap_snapshot_versions > "$before_snap"
 
-  pkg_manifest_read "$SNAPFILE" > "$declared_full"
+  pkg::manifest_read "$SNAPFILE" > "$declared_full"
   awk '{print $1}' "$declared_full" > "$declared"
   snap_installed_names > "$installed"
 
   # Install missing (declared but not installed). The full manifest line is
   # forwarded to `snap install` so per-snap flags (--classic, --channel=…)
   # apply on first install.
-  pkg_diff_only_in "$declared" "$installed" | while IFS= read -r name; do
+  pkg::diff_only_in "$declared" "$installed" | while IFS= read -r name; do
     [[ -z "$name" ]] && continue
     local line; line=$(awk -v n="$name" '$1 == n {print; exit}' "$declared_full")
     local -a args=( ${(z)line} )
@@ -112,8 +112,8 @@ do_sync() {
 
   # Restart services whose backing snap changed version.
   snap_snapshot_versions > "$after_snap"
-  local -a changed=( ${(f)"$(pkg_changed_versions "$before_snap" "$after_snap")"} )
-  (( ${#changed[@]} > 0 )) && pkg_restart_services_for "${changed[@]}"
+  local -a changed=( ${(f)"$(pkg::changed_versions "$before_snap" "$after_snap")"} )
+  (( ${#changed[@]} > 0 )) && pkg::restart_services_for "${changed[@]}"
   return "$failed"
 }
 

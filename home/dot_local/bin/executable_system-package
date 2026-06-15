@@ -113,9 +113,9 @@ list_one() {
   worker_check "$eco"
   local worker="$(worker_path "$eco")"
   if [[ "$eco" == "brew" ]]; then
-    "$worker" list "$@" | pkg_table_print $'Type\tPackage\tVersion' 1
+    "$worker" list "$@" | pkg::table_print $'Type\tPackage\tVersion' 1
   else
-    "$worker" list "$@" | pkg_table_print $'Package\tVersion'
+    "$worker" list "$@" | pkg::table_print $'Package\tVersion'
   fi
 }
 
@@ -123,7 +123,7 @@ list_one() {
 # Merge every ecosystem's raw TSV output into a single Tool/Package/Version
 # table, grouped by Tool. brew rows already carry a type (formula/dep/cask/mas)
 # as their first cell; we fold that into the Tool column as "brew:formula" /
-# "brew:dep" / "brew:cask" / "brew:mas". pkg_table_print's group-by-column
+# "brew:dep" / "brew:cask" / "brew:mas". pkg::table_print's group-by-column
 # feature emits separators automatically wherever the Tool value changes.
 list_all() {
   local args=("$@")
@@ -140,7 +140,7 @@ list_all() {
       [[ -n "$rows" ]] && printf '%s\n' "$rows"
     done
     true
-  } | pkg_table_print $'Tool\tPackage\tVersion' 1
+  } | pkg::table_print $'Tool\tPackage\tVersion' 1
 }
 
 # sync_one <eco> [args...]

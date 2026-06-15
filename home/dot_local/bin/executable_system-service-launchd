@@ -31,16 +31,16 @@ LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 LABEL_PREFIX="com.system-service"
 DOMAIN="gui/$(id -u)"
 
-# svc_label <name> → fully-qualified launchd label
-svc_label() { printf '%s.%s\n' "$LABEL_PREFIX" "$1"; }
+# svc::label <name> → fully-qualified launchd label
+svc::label() { printf '%s.%s\n' "$LABEL_PREFIX" "$1"; }
 
-# svc_plist_path <name> → absolute path to the plist for a service
-svc_plist_path() { printf '%s/%s.plist\n' "$LAUNCH_AGENTS" "$(svc_label "$1")"; }
+# svc::plist_path <name> → absolute path to the plist for a service
+svc::plist_path() { printf '%s/%s.plist\n' "$LAUNCH_AGENTS" "$(svc::label "$1")"; }
 
-# svc_toml_json — cached JSON view of services.toml. Empty `{}` if the
+# svc::toml_json — cached JSON view of services.toml. Empty `{}` if the
 # manifest doesn't exist (chezmoi may not have rendered it yet on a
 # fresh machine).
-svc_toml_json() {
+svc::toml_json() {
   if [[ -f "$SVCFILE" ]]; then
     yq -p toml -o json '.' "$SVCFILE"
   else
@@ -48,23 +48,23 @@ svc_toml_json() {
   fi
 }
 
-# svc_names — top-level keys of services.toml, one per line
-svc_names() {
-  svc_toml_json | jq -r 'keys[]' 2>/dev/null || true
+# svc::names — top-level keys of services.toml, one per line
+svc::names() {
+  svc::toml_json | jq -r 'keys[]' 2>/dev/null || true
 }
 
-# svc_declared <name> → returns 0 iff <name> exists in services.toml
-svc_declared() {
-  svc_toml_json | jq -e --arg n "$1" 'has($n)' >/dev/null 2>&1
+# svc::declared <name> → returns 0 iff <name> exists in services.toml
+svc::declared() {
+  svc::toml_json | jq -e --arg n "$1" 'has($n)' >/dev/null 2>&1
 }
 
-# svc_resolve_cmd0 <cmd0_token>
+# svc::resolve_cmd0 <cmd0_token>
 # Resolve the first cmd token (typically a bare binary name like "omlx") to
 # an absolute path. `launchctl` cannot search PATH; ProgramArguments[0]
 # must resolve as-given. Falls back to the literal value when `command -v`
 # can't find it — that error surfaces at bootstrap time rather than here
 # so the user gets a clean message.
-svc_resolve_cmd0() {
+svc::resolve_cmd0() {
   local cmd0="$1"
   if [[ "$cmd0" == /* ]]; then
     printf '%s\n' "$cmd0"
@@ -73,17 +73,17 @@ svc_resolve_cmd0() {
   fi
 }
 
-# svc_render_json <name>
+# svc::render_json <name>
 # Build the plist's JSON representation from the TOML entry. `~` prefixes
 # in paths and env values are expanded to $HOME; cmd[0] is resolved to an
 # absolute path. The rest of cmd is passed through verbatim.
-svc_render_json() {
+svc::render_json() {
   local name="$1"
-  local json; json=$(svc_toml_json)
+  local json; json=$(svc::toml_json)
   local cmd0; cmd0=$(printf '%s' "$json" | jq -r --arg n "$name" '.[$n].cmd[0] // empty')
   [[ -n "$cmd0" ]] || die "service '$name' has no cmd"
-  local cmd0_abs; cmd0_abs=$(svc_resolve_cmd0 "$cmd0")
-  local label; label=$(svc_label "$name")
+  local cmd0_abs; cmd0_abs=$(svc::resolve_cmd0 "$cmd0")
+  local label; label=$(svc::label "$name")
 
   printf '%s' "$json" | jq \
     --arg n "$name" \
@@ -106,20 +106,20 @@ svc_render_json() {
     '
 }
 
-# svc_render_plist <name> → emit the plist XML
-svc_render_plist() {
-  svc_render_json "$1" | plutil -convert xml1 -o - -- -
+# svc::render_plist <name> → emit the plist XML
+svc::render_plist() {
+  svc::render_json "$1" | plutil -convert xml1 -o - -- -
 }
 
-# svc_write_plist <name>
+# svc::write_plist <name>
 # Render the plist and write it atomically to ~/Library/LaunchAgents.
 # Returns "wrote" or "unchanged" on stdout so callers can decide whether
 # to bootout+bootstrap (config drift) vs leave the running service alone.
-svc_write_plist() {
+svc::write_plist() {
   local name="$1"
-  local target; target=$(svc_plist_path "$name")
+  local target; target=$(svc::plist_path "$name")
   mkdir -p "$LAUNCH_AGENTS"
-  local rendered; rendered=$(svc_render_plist "$name")
+  local rendered; rendered=$(svc::render_plist "$name")
   if [[ -f "$target" ]] && diff -q <(printf '%s' "$rendered") "$target" >/dev/null 2>&1; then
     printf 'unchanged\n'
     return 0
@@ -130,14 +130,14 @@ svc_write_plist() {
   printf 'wrote\n'
 }
 
-# svc_ensure_dirs <name>
+# svc::ensure_dirs <name>
 # Make sure WorkingDirectory and the parent dirs of StandardOut/ErrorPath
 # exist before bootstrapping — launchd errors out with EX_NOENT (78) when
 # these don't exist, and the error surfaces as a cryptic "spawn failed"
 # instead of "missing dir".
-svc_ensure_dirs() {
+svc::ensure_dirs() {
   local name="$1"
-  svc_toml_json | jq -r --arg n "$name" --arg home "$HOME" '
+  svc::toml_json | jq -r --arg n "$name" --arg home "$HOME" '
     .[$n] as $s
     | ($s.working_dir, $s.log_path, $s.error_log_path)
     | select(. != null)
@@ -150,33 +150,33 @@ svc_ensure_dirs() {
   done
 }
 
-# svc_is_bootstrapped <name>
-svc_is_bootstrapped() {
-  launchctl print "$DOMAIN/$(svc_label "$1")" >/dev/null 2>&1
+# svc::is_bootstrapped <name>
+svc::is_bootstrapped() {
+  launchctl print "$DOMAIN/$(svc::label "$1")" >/dev/null 2>&1
 }
 
-# svc_pid <name> → PID of the running service, or empty if not running
-svc_pid() {
-  launchctl print "$DOMAIN/$(svc_label "$1")" 2>/dev/null \
+# svc::pid <name> → PID of the running service, or empty if not running
+svc::pid() {
+  launchctl print "$DOMAIN/$(svc::label "$1")" 2>/dev/null \
     | awk '/^[[:space:]]*pid =/ {print $3; exit}'
 }
 
-# svc_status <name>
+# svc::status <name>
 # Normalised status string for the unified list table. Values:
 #   running  — bootstrapped with a live PID
 #   stopped  — bootstrapped, no PID (waiting for KeepAlive trigger / crashed)
 #   error    — bootstrapped, last_exit_code != 0
 #   none     — declared but never bootstrapped (or boot'd-out)
-svc_status() {
+svc::status() {
   local name="$1"
-  svc_is_bootstrapped "$name" || { printf 'none\n'; return; }
-  local pid; pid=$(svc_pid "$name")
+  svc::is_bootstrapped "$name" || { printf 'none\n'; return; }
+  local pid; pid=$(svc::pid "$name")
   if [[ -n "$pid" && "$pid" != "0" ]]; then
     printf 'running\n'; return
   fi
   # Bootstrapped but no PID — check last exit code; non-zero = error
   local rc
-  rc=$(launchctl print "$DOMAIN/$(svc_label "$name")" 2>/dev/null \
+  rc=$(launchctl print "$DOMAIN/$(svc::label "$name")" 2>/dev/null \
        | awk '/^[[:space:]]*last exit code =/ {print $5; exit}')
   if [[ -n "$rc" && "$rc" != "0" && "$rc" != "-" ]]; then
     printf 'error\n'
@@ -185,21 +185,21 @@ svc_status() {
   fi
 }
 
-# svc_bootstrap <name> → idempotent; no-op if already loaded
-svc_bootstrap() {
+# svc::bootstrap <name> → idempotent; no-op if already loaded
+svc::bootstrap() {
   local name="$1"
-  if svc_is_bootstrapped "$name"; then
-    log_info "launchd: $(svc_label "$name") already bootstrapped"
+  if svc::is_bootstrapped "$name"; then
+    log_info "launchd: $(svc::label "$name") already bootstrapped"
     return 0
   fi
-  launchctl bootstrap "$DOMAIN" "$(svc_plist_path "$name")"
+  launchctl bootstrap "$DOMAIN" "$(svc::plist_path "$name")"
 }
 
-# svc_bootout <name> → idempotent
-svc_bootout() {
+# svc::bootout <name> → idempotent
+svc::bootout() {
   local name="$1"
-  local target="$DOMAIN/$(svc_label "$name")"
-  if svc_is_bootstrapped "$name"; then
+  local target="$DOMAIN/$(svc::label "$name")"
+  if svc::is_bootstrapped "$name"; then
     launchctl bootout "$target"
   fi
 }
@@ -208,29 +208,29 @@ svc_bootout() {
 
 do_render() {
   [[ $# -eq 1 ]] || die "usage: render <name>"
-  svc_declared "$1" || die "no such service in $SVCFILE: $1"
-  svc_render_plist "$1"
+  svc::declared "$1" || die "no such service in $SVCFILE: $1"
+  svc::render_plist "$1"
 }
 
 do_start() {
   [[ $# -eq 1 ]] || die "usage: start <name>"
   local name="$1"
-  svc_declared "$name" || die "no such service in $SVCFILE: $name"
-  svc_ensure_dirs "$name"
-  local changed; changed=$(svc_write_plist "$name")
+  svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  svc::ensure_dirs "$name"
+  local changed; changed=$(svc::write_plist "$name")
   if [[ "$changed" == "wrote" ]]; then
     # Plist content changed — bootout any existing instance so the new
     # plist actually takes effect on bootstrap.
-    svc_bootout "$name"
+    svc::bootout "$name"
   fi
-  svc_bootstrap "$name"
-  log_info "started $(svc_label "$name")"
+  svc::bootstrap "$name"
+  log_info "started $(svc::label "$name")"
 }
 
 do_stop() {
   [[ $# -eq 1 ]] || die "usage: stop <name>"
-  svc_bootout "$1"
-  log_info "stopped $(svc_label "$1")"
+  svc::bootout "$1"
+  log_info "stopped $(svc::label "$1")"
 }
 
 do_restart() {
@@ -242,15 +242,15 @@ do_restart() {
 do_info() {
   [[ $# -eq 1 ]] || die "usage: info <name>"
   local name="$1"
-  svc_declared "$name" || die "no such service in $SVCFILE: $name"
-  printf '%s%s%s\n' "$C_BWH" "$(svc_label "$name")" "$C_RES"
-  printf '  status:   %s\n' "$(svc_status "$name")"
-  printf '  plist:    %s\n' "$(svc_plist_path "$name")"
+  svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  printf '%s%s%s\n' "$C_BWH" "$(svc::label "$name")" "$C_RES"
+  printf '  status:   %s\n' "$(svc::status "$name")"
+  printf '  plist:    %s\n' "$(svc::plist_path "$name")"
   printf '  manifest entry:\n'
-  svc_toml_json | jq --arg n "$name" '.[$n]' | sed 's/^/    /'
-  if svc_is_bootstrapped "$name"; then
+  svc::toml_json | jq --arg n "$name" '.[$n]' | sed 's/^/    /'
+  if svc::is_bootstrapped "$name"; then
     printf '\n  launchctl print:\n'
-    launchctl print "$DOMAIN/$(svc_label "$name")" 2>/dev/null | sed 's/^/    /'
+    launchctl print "$DOMAIN/$(svc::label "$name")" 2>/dev/null | sed 's/^/    /'
   fi
 }
 
@@ -258,9 +258,9 @@ do_info() {
 # by the dispatcher).
 do_list() {
   local user; user=$(id -un)
-  svc_names | while IFS= read -r name; do
+  svc::names | while IFS= read -r name; do
     [[ -z "$name" ]] && continue
-    printf '%s\t%s\t%s\t%s\n' "$name" "$(svc_status "$name")" "$user" "$(svc_plist_path "$name")"
+    printf '%s\t%s\t%s\t%s\n' "$name" "$(svc::status "$name")" "$user" "$(svc::plist_path "$name")"
   done
 }
 
@@ -272,18 +272,18 @@ do_sync() {
   log_info "Syncing launchd services..."
 
   local -a declared
-  declared=( ${(f)"$(svc_names)"} )
+  declared=( ${(f)"$(svc::names)"} )
 
   # Apply declared entries
   local name=""
   for name in "${declared[@]}"; do
     [[ -z "$name" ]] && continue
-    svc_ensure_dirs "$name"
-    local changed; changed=$(svc_write_plist "$name")
-    if [[ "$changed" == "wrote" ]] && svc_is_bootstrapped "$name"; then
-      svc_bootout "$name"
+    svc::ensure_dirs "$name"
+    local changed; changed=$(svc::write_plist "$name")
+    if [[ "$changed" == "wrote" ]] && svc::is_bootstrapped "$name"; then
+      svc::bootout "$name"
     fi
-    svc_bootstrap "$name" || log_warn "failed to bootstrap $(svc_label "$name")"
+    svc::bootstrap "$name" || log_warn "failed to bootstrap $(svc::label "$name")"
   done
 
   # Remove orphans: any com.system-service.*.plist no longer in TOML.
@@ -294,8 +294,8 @@ do_sync() {
     local found=0 d=""
     for d in "${declared[@]}"; do [[ "$d" == "$name" ]] && { found=1; break } done
     (( found )) && continue
-    log_info "removing orphan $(svc_label "$name")"
-    svc_bootout "$name"
+    log_info "removing orphan $(svc::label "$name")"
+    svc::bootout "$name"
     rm -f "$plist"
   done
 }
@@ -307,7 +307,7 @@ do_sync() {
 do_matching() {
   [[ $# -eq 1 ]] || die "usage: matching <pkg>"
   local pkg="$1"
-  svc_toml_json | jq -r --arg p "$pkg" '
+  svc::toml_json | jq -r --arg p "$pkg" '
     to_entries[]
     | select(
         .key == $p
@@ -317,12 +317,12 @@ do_matching() {
 }
 
 # do_status <name>
-# Internal: print the normalized status string. Wrapper around svc_status
+# Internal: print the normalized status string. Wrapper around svc::status
 # exposed as a subcommand so external callers (system-service) don't have
 # to source this script.
 do_status() {
   [[ $# -eq 1 ]] || die "usage: status <name>"
-  svc_status "$1"
+  svc::status "$1"
 }
 
 case "${1:-}" in
@@ -333,7 +333,7 @@ case "${1:-}" in
   info)     shift; do_info     "$@" ;;
   sync)     shift; do_sync     "$@" ;;
   render)   shift; do_render   "$@" ;;
-  declared) shift; svc_names ;;            # internal: used by the dispatcher
+  declared) shift; svc::names ;;            # internal: used by the dispatcher
   matching) shift; do_matching "$@" ;;     # internal: used by restart-for
   status)   shift; do_status   "$@" ;;     # internal: used by restart-for
   *) die "usage: system-service-launchd {list|start|stop|restart|info|sync|render|declared|matching|status} [args]" ;;

@@ -231,7 +231,7 @@ fi
 # Soft failure — a misconfigured service shouldn't block the rest of
 # system-update. Note: services tied to packages just upgraded by the
 # preceding `system-package sync` have already been restarted by the
-# worker that owns them (see pkg_restart_services_for in common.sh).
+# worker that owns them (see pkg::restart_services_for in common.sh).
 if command -v system-service >/dev/null 2>&1; then
   print -P -- "\n📡 Sync system services...\n"
   system-service sync || log_warn "system-service sync had failures"
