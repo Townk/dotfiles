@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# nvim-wez.sh — Open file(s) in Neovim inside WezTerm/Zellij
+# tab-edit — Open file(s) in Neovim inside WezTerm/Zellij
 #
 # WHAT
 #   Smart launcher that opens its file arguments in nvim inside the focused

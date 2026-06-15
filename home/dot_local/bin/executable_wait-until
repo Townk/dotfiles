@@ -14,7 +14,7 @@
 # usage error.
 #
 # A standalone POSIX-sh bin (not a sourced function) on purpose: its callers
-# span sh/bash (nvim-wez.sh) and zsh, and it only ever tests EXTERNAL commands,
+# span sh/bash (tab-edit) and zsh, and it only ever tests EXTERNAL commands,
 # so a single bin on PATH serves every shell. The "wait on a known background
 # PID while drawing a spinner" case is deliberately NOT covered here — that is a
 # separate UI concern (see the commit-* spinners / run_with_spinner).
