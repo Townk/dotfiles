@@ -102,29 +102,29 @@ EOF
   [ -z "$result" ]
 }
 
-@test "pkg_is_help recognizes -h, --help, and help" {
-  pkg_is_help -h
-  pkg_is_help --help
-  pkg_is_help help
+@test "is_help recognizes -h, --help, and help" {
+  is_help -h
+  is_help --help
+  is_help help
 }
 
-@test "pkg_is_help rejects other tokens" {
-  ! pkg_is_help list
-  ! pkg_is_help sync
-  ! pkg_is_help --update
-  ! pkg_is_help ""
+@test "is_help rejects other tokens" {
+  ! is_help list
+  ! is_help sync
+  ! is_help --update
+  ! is_help ""
 }
 
-@test "pkg_args_contain_help finds --help among trailing args" {
-  pkg_args_contain_help --update --help
-  pkg_args_contain_help -h
-  pkg_args_contain_help --all -h --update
+@test "args_contain_help finds --help among trailing args" {
+  args_contain_help --update --help
+  args_contain_help -h
+  args_contain_help --all -h --update
 }
 
-@test "pkg_args_contain_help returns false when no help flag is present" {
-  ! pkg_args_contain_help
-  ! pkg_args_contain_help --update --all
+@test "args_contain_help returns false when no help flag is present" {
+  ! args_contain_help
+  ! args_contain_help --update --all
   # Bare `help` is intentionally NOT a help flag at the args-list level —
   # it would collide with valid positional values (service names, etc.).
-  ! pkg_args_contain_help help
+  ! args_contain_help help
 }

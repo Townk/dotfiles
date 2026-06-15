@@ -122,7 +122,7 @@ EOF
 
 worker_check() {
   command -v "system-service-$1" >/dev/null \
-    || pkg_die "worker not found: system-service-$1"
+    || die "worker not found: system-service-$1"
 }
 
 # is_launchd_service <name> — declared in services.toml?
@@ -145,13 +145,13 @@ route() {
   is_brew_service    "$name" && in_brew=1
 
   if (( in_launchd && in_brew )); then
-    pkg_die "service '$name' is declared in BOTH services.toml AND brew services. Remove one."
+    die "service '$name' is declared in BOTH services.toml AND brew services. Remove one."
   elif (( in_launchd )); then
     system-service-launchd "$verb" "$name"
   elif (( in_brew )); then
     system-service-brew "$verb" "$name"
   else
-    pkg_die "unknown service: $name"
+    die "unknown service: $name"
   fi
 }
 
@@ -209,9 +209,9 @@ do_restart_for() {
       [[ -z "$svc" ]] && continue
       svc_state=$(system-service-launchd status "$svc" 2>/dev/null || true)
       if [[ "$svc_state" == "running" ]]; then
-        pkg_info "restarting launchd service '$svc' (package '$pkg' upgraded)"
+        log_info "restarting launchd service '$svc' (package '$pkg' upgraded)"
         system-service-launchd restart "$svc" \
-          || pkg_warn "failed to restart launchd service '$svc'"
+          || log_warn "failed to restart launchd service '$svc'"
       fi
     done < <(system-service-launchd matching "$pkg" 2>/dev/null || true)
 
@@ -220,9 +220,9 @@ do_restart_for() {
     if system-service-brew names 2>/dev/null | grep -Fxq "$pkg"; then
       local brew_state; brew_state=$(brew_service_status "$pkg")
       if [[ "$brew_state" == "running" ]]; then
-        pkg_info "restarting brew service '$pkg' (formula upgraded)"
+        log_info "restarting brew service '$pkg' (formula upgraded)"
         system-service-brew restart "$pkg" \
-          || pkg_warn "failed to restart brew service '$pkg'"
+          || log_warn "failed to restart brew service '$pkg'"
       fi
     fi
   done
@@ -235,26 +235,26 @@ main() {
   case "$cmd" in
     -h|--help|help) usage; exit 0 ;;
     list)
-      pkg_args_contain_help "$@" && { usage_for list; exit 0; }
+      args_contain_help "$@" && { usage_for list; exit 0; }
       do_list
       ;;
     sync)
-      pkg_args_contain_help "$@" && { usage_for sync; exit 0; }
+      args_contain_help "$@" && { usage_for sync; exit 0; }
       do_sync
       ;;
     start|stop|restart|info)
       # Critical: catch --help BEFORE route(), or `route info --help` would
       # try (and fail noisily) to look up a service literally named `--help`.
-      pkg_args_contain_help "$@" && { usage_for "$cmd"; exit 0; }
-      [[ $# -eq 1 ]] || { usage_for "$cmd" >&2; pkg_die "$cmd requires exactly one service name"; }
+      args_contain_help "$@" && { usage_for "$cmd"; exit 0; }
+      [[ $# -eq 1 ]] || { usage_for "$cmd" >&2; die "$cmd requires exactly one service name"; }
       route "$cmd" "$1"
       ;;
     restart-for)
-      pkg_args_contain_help "$@" && { usage_for restart-for; exit 0; }
-      [[ $# -ge 1 ]] || { usage_for restart-for >&2; pkg_die "restart-for requires at least one package name"; }
+      args_contain_help "$@" && { usage_for restart-for; exit 0; }
+      [[ $# -ge 1 ]] || { usage_for restart-for >&2; die "restart-for requires at least one package name"; }
       do_restart_for "$@"
       ;;
-    *) usage; pkg_die "unknown subcommand: $cmd" ;;
+    *) usage; die "unknown subcommand: $cmd" ;;
   esac
 }
 

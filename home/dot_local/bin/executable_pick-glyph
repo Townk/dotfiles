@@ -40,9 +40,6 @@ source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" \
 
 DB_FILE="${PICK_GLYPH_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/symbols.db}"
 
-# Thin alias to the shared error helper (prefixes $PICK_NAME and exits).
-die() { pick::die "$@"; }
-
 usage() {
   cat <<EOF
 Usage:
@@ -100,7 +97,7 @@ while (( $# > 0 )); do
   esac
 done
 
-pick::need sqlite3
+require_cmd sqlite3
 [[ -f "$DB_FILE" ]] || die "symbols DB not found: $DB_FILE
 Build it with: chezmoi apply (runs the symbols-db hook)"
 

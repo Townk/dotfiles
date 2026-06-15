@@ -69,7 +69,7 @@ uv_list_rows() {
           latest=$(curl -fsSL "https://pypi.org/pypi/${name}/json" 2>/dev/null \
                    | jq -r '.info.version // empty' 2>/dev/null || true)
           if [[ -n "$latest" && "$latest" != "$ver" ]]; then
-            ver="${ver} ${PKG_C_YEL}(update available: ${latest})${PKG_C_RES}"
+            ver="${ver} ${C_YEL}(update available: ${latest})${C_RES}"
           fi
         fi
         printf '%s\t%s\n' "$name" "$ver"
@@ -82,14 +82,14 @@ do_list() {
     case "$1" in
       -u|--update) outdated=true; shift ;;
       -a|--all)    shift ;;  # no-op: uv has no transient-dep concept
-      *) pkg_die "unknown flag for list: $1" ;;
+      *) die "unknown flag for list: $1" ;;
     esac
   done
   uv_list_rows "$outdated"
 }
 
 do_sync() {
-  pkg_info "Syncing uv tools..."
+  log_info "Syncing uv tools..."
 
   local declared_full declared installed before_snap after_snap
   declared_full=$(mktemp); declared=$(mktemp); installed=$(mktemp)
@@ -99,7 +99,7 @@ do_sync() {
   uv_snapshot_versions > "$before_snap"
 
   if uv_python_drifted; then
-    pkg_warn "Python version changed since last sync — rebuilding uv tool venvs"
+    log_warn "Python version changed since last sync — rebuilding uv tool venvs"
     uv tool upgrade --all --reinstall || true
   fi
 
@@ -226,20 +226,20 @@ EOF
 }
 
 main() {
-  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+  if [[ $# -eq 0 ]] || is_help "${1:-}"; then
     usage; exit 0
   fi
   local cmd="$1"; shift
   case "$cmd" in
     list)
-      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      args_contain_help "$@" && { usage_list; exit 0; }
       do_list "$@"
       ;;
     sync)
-      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      args_contain_help "$@" && { usage_sync; exit 0; }
       do_sync
       ;;
-    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+    *) usage >&2; die "unknown subcommand: $cmd" ;;
   esac
 }
 

@@ -11,7 +11,7 @@ set -eu -o pipefail
 
 source "$HOME/.local/lib/system-package-common.sh"
 
-command -v brew >/dev/null || pkg_die "brew not found"
+command -v brew >/dev/null || die "brew not found"
 
 # brew_list_json — `brew services list --json` raw JSON, or `[]` if brew
 # has no services at all (older brew versions return empty in that case).
@@ -42,10 +42,10 @@ do_names() {
 }
 
 # Pass-through lifecycle verbs. brew handles plist regen + bootstrap.
-do_start()   { [[ $# -eq 1 ]] || pkg_die "usage: start <name>";   brew services start   "$1"; }
-do_stop()    { [[ $# -eq 1 ]] || pkg_die "usage: stop <name>";    brew services stop    "$1"; }
-do_restart() { [[ $# -eq 1 ]] || pkg_die "usage: restart <name>"; brew services restart "$1"; }
-do_info()    { [[ $# -eq 1 ]] || pkg_die "usage: info <name>";    brew services info    "$1"; }
+do_start()   { [[ $# -eq 1 ]] || die "usage: start <name>";   brew services start   "$1"; }
+do_stop()    { [[ $# -eq 1 ]] || die "usage: stop <name>";    brew services stop    "$1"; }
+do_restart() { [[ $# -eq 1 ]] || die "usage: restart <name>"; brew services restart "$1"; }
+do_info()    { [[ $# -eq 1 ]] || die "usage: info <name>";    brew services info    "$1"; }
 
 case "${1:-}" in
   list)    shift; do_list    "$@" ;;
@@ -54,5 +54,5 @@ case "${1:-}" in
   restart) shift; do_restart "$@" ;;
   info)    shift; do_info    "$@" ;;
   names)   shift; do_names ;;        # internal: used by the dispatcher
-  *) pkg_die "usage: system-service-brew {list|start|stop|restart|info|names} [name]" ;;
+  *) die "usage: system-service-brew {list|start|stop|restart|info|names} [name]" ;;
 esac

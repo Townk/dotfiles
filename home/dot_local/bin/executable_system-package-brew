@@ -129,11 +129,11 @@ brew_check_trusted_taps() {
 
   (( ${#missing[@]} == 0 )) && return 0
 
-  pkg_error "Homebrew taps are declared but not trusted in $trust_file:"
+  log_error "Homebrew taps are declared but not trusted in $trust_file:"
   for tap in "${missing[@]}"; do
-    pkg_error "  $tap"
+    log_error "  $tap"
   done
-  pkg_die "add missing taps to ~/.config/homebrew/trust.json before syncing"
+  die "add missing taps to ~/.config/homebrew/trust.json before syncing"
 }
 
 brew_installed_casks() {
@@ -151,7 +151,7 @@ brew_formula_has_installed_dependents() {
 
 brew_cleanup_packages() {
   local bundle_file="$1"
-  pkg_info "Cleaning Homebrew packages missing from Brewfile..."
+  log_info "Cleaning Homebrew packages missing from Brewfile..."
 
   local tmpdir
   tmpdir=$(mktemp -d)
@@ -174,23 +174,23 @@ brew_cleanup_packages() {
     pkg_diff_only_in "$installed_casks" "$declared_casks" | while IFS= read -r cask; do
       [[ -n "$cask" ]] || continue
       brew uninstall --cask --force "$cask" \
-        || pkg_warn "skipped extra cask that could not be uninstalled: $cask"
+        || log_warn "skipped extra cask that could not be uninstalled: $cask"
     done
 
     pkg_diff_only_in "$installed_formulae" "$declared_formulae" | while IFS= read -r formula; do
       [[ -z "$formula" ]] && continue
       if brew_formula_has_installed_dependents "$formula"; then
-        pkg_warn "skipped extra formula still required by another package: $formula"
+        log_warn "skipped extra formula still required by another package: $formula"
         continue
       fi
       brew uninstall --formula --force "$formula" \
-        || pkg_warn "skipped extra formula that could not be uninstalled: $formula"
+        || log_warn "skipped extra formula that could not be uninstalled: $formula"
     done
-    brew autoremove || pkg_warn "brew autoremove failed"
+    brew autoremove || log_warn "brew autoremove failed"
 
     pkg_diff_only_in "$installed_taps" "$declared_taps" | while IFS= read -r tap; do
       [[ -z "$tap" || "$tap" == "homebrew/core" ]] && continue
-      brew untap "$tap" || pkg_warn "skipped tap still in use: $tap"
+      brew untap "$tap" || log_warn "skipped tap still in use: $tap"
     done
   } always {
     rm -rf "$tmpdir"
@@ -233,11 +233,11 @@ brew_check_dev_leakage() {
 
   (( ${#leaked[@]} == 0 )) && return 0
 
-  pkg_warn "${PKG_C_BWH}brew is provisioning dev-tool runtimes that mise should own:${PKG_C_RES}"
+  log_warn "${C_BWH}brew is provisioning dev-tool runtimes that mise should own:${C_RES}"
   for f in "${leaked[@]}"; do
-    pkg_warn "  • ${f}"
+    log_warn "  • ${f}"
   done
-  pkg_warn "Move these to dot_config/mise/config.toml, or add to BREW_MISE_ALLOWED with a reason."
+  log_warn "Move these to dot_config/mise/config.toml, or add to BREW_MISE_ALLOWED with a reason."
 }
 
 # brew_list_rows <outdated:true|false>
@@ -354,7 +354,7 @@ brew_list_rows() {
       v="${pkg_map[$k]}"
       t="${type_map[$k]}"
       if [[ "$outdated" == true && -n "${outdated_map[$k]:-}" ]]; then
-        v="${v} ${PKG_C_YEL}(update available: ${outdated_map[$k]})${PKG_C_RES}"
+        v="${v} ${C_YEL}(update available: ${outdated_map[$k]})${C_RES}"
       fi
       case "$t" in
         formula) rank=1 ;;
@@ -374,7 +374,7 @@ do_list() {
     case "$1" in
       -u|--update) outdated=true; shift ;;
       -a|--all)    show_all=true; shift ;;
-      *) pkg_die "unknown flag for list: $1" ;;
+      *) die "unknown flag for list: $1" ;;
     esac
   done
   brew_list_rows "$outdated" "$show_all"
@@ -389,7 +389,7 @@ brew_snapshot_versions() {
 }
 
 do_sync() {
-  pkg_info "Syncing Homebrew packages..."
+  log_info "Syncing Homebrew packages..."
 
   local before_snap after_snap bundle_file
   before_snap=$(mktemp); after_snap=$(mktemp); bundle_file=$(mktemp)
@@ -401,7 +401,7 @@ do_sync() {
   brew_check_trusted_taps "$bundle_file"
 
   HOMEBREW_NO_AUTO_UPDATE=1 brew bundle install -q --upgrade --file="$bundle_file" \
-    || pkg_die "brew bundle install failed"
+    || die "brew bundle install failed"
   brew_cleanup_packages "$bundle_file"
 
   # Tripwire: warn if any direct-installed formula matches a tool mise should
@@ -469,20 +469,20 @@ EOF
 }
 
 main() {
-  if [[ $# -eq 0 ]] || pkg_is_help "${1:-}"; then
+  if [[ $# -eq 0 ]] || is_help "${1:-}"; then
     usage; exit 0
   fi
   local cmd="$1"; shift
   case "$cmd" in
     list)
-      pkg_args_contain_help "$@" && { usage_list; exit 0; }
+      args_contain_help "$@" && { usage_list; exit 0; }
       do_list "$@"
       ;;
     sync)
-      pkg_args_contain_help "$@" && { usage_sync; exit 0; }
+      args_contain_help "$@" && { usage_sync; exit 0; }
       do_sync
       ;;
-    *) usage >&2; pkg_die "unknown subcommand: $cmd" ;;
+    *) usage >&2; die "unknown subcommand: $cmd" ;;
   esac
 }
 
