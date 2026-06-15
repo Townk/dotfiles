@@ -31,7 +31,7 @@ common.sh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
 ```
 
 `common.sh`, `system-package-common.sh`, and the `platform*.sh` files stay
-bash-sourceable (the bats suite — and nvim-wez.sh — source them under bash);
+bash-sourceable (the bats suite — and tab-edit — source them under bash);
 the `*.zsh` modules are zsh-only. `platform.sh` dispatches on `$PLATFORM_OS`
 (default `uname -s`, overridable in tests) and only the active OS's
 implementation is deployed (see `.chezmoiignore.tmpl`).
@@ -53,7 +53,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | AI-driven git commits | `commit-ai`, `commit-cursor` | `commit-agent-common.zsh` |
 | Symbol pickers (fzf) | `pick-glyph`, `pick-gitmoji` | `pick-symbols-common.zsh` → `pick-common.zsh` |
 | File preview (fzf/yazi) | `preview` | — |
-| Editor/terminal glue | `nvim-wez.sh`¹, `pinentry-auto`¹ | `platform.sh` (nvim-wez) |
+| Editor/terminal glue | `tab-edit`¹, `pinentry-auto`¹ | `platform.sh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |
 | Package management | `system-package` + `system-package-{brew,cargo,go,npm,snap,uv}` | `system-package-common.sh` |
 | Service management | `system-service`, `system-service-{launchd,brew}` | `system-package-common.sh` |

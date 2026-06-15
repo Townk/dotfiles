@@ -7,7 +7,7 @@
 # chezmoi template) so it is directly sourceable in tests and portable; the OS
 # can be forced with $PLATFORM_OS to exercise either branch.
 #
-# Dual-shell (bash + zsh) like common.sh — its only consumer, nvim-wez.sh,
+# Dual-shell (bash + zsh) like common.sh — its only consumer, tab-edit,
 # stays bash because the zellij-session.sh it sources relies on bash word
 # splitting. Keep this file and the platform-<os>.sh impls free of zsh-only
 # runtime syntax.
