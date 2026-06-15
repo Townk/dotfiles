@@ -124,7 +124,7 @@ do_sync() {
     # `--` form: drop the canonical name AND the separator; everything
     # after is the install spec. Falls through to the default (full line)
     # otherwise, preserving the legacy `tool --with extra` shape.
-    if [[ "${args[2]:-}" == "--" ]]; then
+    if pkg::line_has_spec "$line"; then
       args=( "${args[@]:2}" )
     fi
     uv tool install "${args[@]}"
@@ -143,7 +143,7 @@ do_sync() {
     [[ -z "$line" ]] && continue
     [[ "$line" == "${line%% *}" ]] && continue  # no extras → skip
     local -a args=( ${(z)line} )
-    [[ "${args[2]:-}" == "--" ]] && continue    # `--` form → skip
+    pkg::line_has_spec "$line" && continue    # `--` form → skip
     uv tool install --reinstall "${args[@]}"
   done < "$declared_full"
 
