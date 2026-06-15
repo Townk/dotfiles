@@ -65,6 +65,21 @@ pkg::restart_services_for() {
   system-service restart-for "$@" || true
 }
 
+# pkg::restart_changed <before_file> <after_file>
+# The standard post-sync tail every worker runs: diff two "name\tversion"
+# snapshots and restart any service tied to a package whose version changed.
+# Uses a read loop (not zsh's ${(f)}) so it stays valid wherever this base is
+# sourced.
+pkg::restart_changed() {
+  local -a changed=()
+  local pkg
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] && changed+=("$pkg")
+  done < <(pkg::changed_versions "$1" "$2")
+  (( ${#changed[@]} > 0 )) && pkg::restart_services_for "${changed[@]}"
+  return 0
+}
+
 # pkg::table_print <header> [group_col]
 # Read tab-separated rows from stdin and emit a formatted table:
 #   - header (bright blue), padded to each column's full width

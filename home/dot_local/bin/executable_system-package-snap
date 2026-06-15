@@ -112,8 +112,7 @@ do_sync() {
 
   # Restart services whose backing snap changed version.
   snap_snapshot_versions > "$after_snap"
-  local -a changed=( ${(f)"$(pkg::changed_versions "$before_snap" "$after_snap")"} )
-  (( ${#changed[@]} > 0 )) && pkg::restart_services_for "${changed[@]}"
+  pkg::restart_changed "$before_snap" "$after_snap"
   return "$failed"
 }
 
