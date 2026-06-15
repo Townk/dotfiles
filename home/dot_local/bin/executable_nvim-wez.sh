@@ -13,9 +13,9 @@
 #   Zellij path: ask WezTerm for the active pane TTY, find the Zellij client
 #   running there, resolve its session via ~/.config/zellij/scripts/lib, and
 #   run `zellij --session <name> action new-tab -- nvim "$@"`.
-#   Fallback path: point WEZTERM_UNIX_SOCKET at a running GUI socket, raise
-#   the app via osascript, `wezterm cli spawn -- nvim "$@"`, capture the
-#   spawned PANE_ID, and `wezterm cli set-tab-title --pane-id <id>`.
+#   Fallback path: raise the app via osascript, `wezterm cli spawn -- nvim
+#   "$@"` (which auto-connects to the running GUI), capture the spawned
+#   PANE_ID, and `wezterm cli set-tab-title --pane-id <id>`.
 #
 # WHERE IT'S USED
 #   Invoked by the generated macOS Finder droplet at
@@ -26,17 +26,22 @@
 #   run_onchange_after_35-generate-open-in-neovim-app.sh.tmpl.
 #
 # PLATFORM
-#   macOS-only: relies on `open -a`, AppleScript activation, and the
-#   WezTerm GUI socket layout. Excluded from non-darwin targets via
-#   .chezmoiignore.tmpl.
+#   macOS-only for now: the two remaining platform seams are `open -a` (cold
+#   launch) and AppleScript activation (raise the window). Binaries are
+#   resolved via PATH and the WezTerm CLI auto-connects to the running GUI, so
+#   neither Homebrew paths nor the GUI socket layout are assumed any more.
+#   Excluded from non-darwin targets via .chezmoiignore.tmpl.
 
 # 1. SET PATHS
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# A GUI launcher (Finder droplet / .desktop) hands us a bare PATH, so seed the
+# common bin locations for macOS (Homebrew) and Linux (system + snap), then
+# resolve each tool with `command -v`. Env vars override for unusual layouts.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin"
 
-WEZTERM_BIN="${WEZTERM_BIN:-/opt/homebrew/bin/wezterm}"
-NVIM_BIN="${NVIM_BIN:-/opt/homebrew/bin/nvim}"
-ZELLIJ_BIN="${ZELLIJ_BIN:-/opt/homebrew/bin/zellij}"
-JQ_BIN="${JQ_BIN:-/opt/homebrew/bin/jq}"
+WEZTERM_BIN="${WEZTERM_BIN:-$(command -v wezterm)}"
+NVIM_BIN="${NVIM_BIN:-$(command -v nvim)}"
+ZELLIJ_BIN="${ZELLIJ_BIN:-$(command -v zellij)}"
+JQ_BIN="${JQ_BIN:-$(command -v jq)}"
 ZELLIJ_SESSION_LIB="${ZELLIJ_SESSION_LIB:-$HOME/.config/zellij/scripts/lib/zellij-session.sh}"
 
 # 2. CALCULATE TAB TITLE
@@ -111,35 +116,27 @@ open_in_active_zellij() {
 }
 
 open_in_wezterm() {
-  # FIND ACTIVE PROCESS & SOCKET
+  # Decide cold-start vs already-running by looking for a GUI process.
   W_PID=$(pgrep -x "wezterm-gui" | sed -n '1p')
   [ -n "$W_PID" ] || W_PID=$(pgrep -x "wezterm" | sed -n '1p')
 
   if [ -z "$W_PID" ]; then
-    # CASE: COLD START
+    # CASE: COLD START — launch the GUI running nvim, then title the new tab.
     open -a WezTerm --args start "${WEZTERM_CWD_ARGS[@]}" -- "$NVIM_BIN" "$@"
 
-    # Wait (bounded) for the GUI process, then its control socket, instead of a
-    # fixed sleep that is either too short on a slow launch or wasteful on a fast
-    # one. wait-until returns the instant each condition holds; `|| true` keeps
-    # the original best-effort behavior if it is unavailable.
-    wait-until --timeout 6s --interval 0.1 -- \
-      sh -c 'pgrep -x wezterm-gui >/dev/null 2>&1 || pgrep -x wezterm >/dev/null 2>&1' || true
-    NEW_PID=$(pgrep -x "wezterm-gui" | sed -n '1p')
-    [ -n "$NEW_PID" ] || NEW_PID=$(pgrep -x "wezterm" | sed -n '1p')
-    if [ -n "$NEW_PID" ]; then
-      export WEZTERM_UNIX_SOCKET="$HOME/.local/share/wezterm/gui-sock-$NEW_PID"
-      wait-until --timeout 4s --interval 0.1 -- test -S "$WEZTERM_UNIX_SOCKET" || true
-      "$WEZTERM_BIN" cli set-tab-title "$TAB_TITLE" 2>/dev/null
+    # Wait until the CLI can actually reach the freshly-started GUI, then title
+    # its active (nvim) tab. `wezterm cli` auto-connects to the running GUI's
+    # socket, so we poll the CLI itself instead of assuming a socket path —
+    # that path differs by OS and launch context. Best-effort.
+    if wait-until --timeout 8s --interval 0.1 -- "$WEZTERM_BIN" cli list >/dev/null 2>&1; then
+      "$WEZTERM_BIN" cli set-tab-title "$TAB_TITLE" 2>/dev/null || true
     fi
   else
-    # CASE: ALREADY RUNNING
-    export WEZTERM_UNIX_SOCKET="$HOME/.local/share/wezterm/gui-sock-$W_PID"
-
-    # Bring to front
+    # CASE: ALREADY RUNNING — raise the window, spawn an nvim tab, title it.
     osascript -e 'tell application "WezTerm" to activate' >/dev/null 2>&1 || true
 
-    # SPAWN AND CAPTURE PANE ID
+    # Spawn nvim and capture its pane id; wezterm cli auto-connects to the
+    # running GUI. One retry covers a transient "not ready yet".
     PANE_ID=$("$WEZTERM_BIN" cli spawn "${WEZTERM_CWD_ARGS[@]}" -- "$NVIM_BIN" "$@" 2>/dev/null)
 
     if [ -z "$PANE_ID" ]; then
@@ -147,9 +144,8 @@ open_in_wezterm() {
       PANE_ID=$("$WEZTERM_BIN" cli spawn "${WEZTERM_CWD_ARGS[@]}" -- "$NVIM_BIN" "$@")
     fi
 
-    # SET TITLE VIA PANE CONTEXT
-    # Instead of --tab-id, we use --pane-id.
-    # WezTerm will resolve the tab that contains this pane.
+    # Title the tab containing the new pane (--pane-id; WezTerm resolves the
+    # enclosing tab). Socket-agnostic, so it needs no WEZTERM_UNIX_SOCKET.
     if [ -n "$PANE_ID" ]; then
       "$WEZTERM_BIN" cli set-tab-title "$TAB_TITLE" --pane-id "$PANE_ID"
     fi
