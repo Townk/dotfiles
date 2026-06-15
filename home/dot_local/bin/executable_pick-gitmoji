@@ -29,8 +29,8 @@ set -eu -o pipefail
 
 PICK_NAME=pick-gitmoji
 PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
-source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" \
-  || { print -ru2 -- "pick-gitmoji: cannot source pick-common.zsh from $PICK_LIB_DIR"; exit 1; }
+source "${PICK_SYMBOLS_LIB:-$PICK_LIB_DIR/pick-symbols-common.zsh}" \
+  || { print -ru2 -- "pick-gitmoji: cannot source pick-symbols-common.zsh from $PICK_LIB_DIR"; exit 1; }
 
 DB_FILE="${PICK_GITMOJI_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/fonts/nerd-font/symbols.db}"
 
@@ -69,45 +69,8 @@ Examples:
 EOF
 }
 
-multi=0
-copy=0
-query=""
-resume=0
-no_border=0
-
-while (( $# > 0 )); do
-  case "$1" in
-    -m|--multi)   multi=1; shift ;;
-    -c|--copy)    copy=1; shift ;;
-    -q|--query)   [[ $# -ge 2 ]] || die "missing arg for $1"; query="$2"; shift 2 ;;
-    --db)         [[ $# -ge 2 ]] || die "missing arg for $1"; DB_FILE="$2"; shift 2 ;;
-    --resume)     resume=1; shift ;;
-    --no-border)  no_border=1; shift ;;
-    -h|--help)    usage; exit 0 ;;
-    --)           shift; break ;;
-    *) die "unknown arg: $1 (try --help)" ;;
-  esac
-done
-
-require_cmd sqlite3
-[[ -f "$DB_FILE" ]] || die "symbols DB not found: $DB_FILE
-Build it with: chezmoi apply (runs the symbols-db hook)"
-
-# Recency in the DB: stamp last_used on every picked gitmoji so the next
-# launch floats it up. Field 1 of the hidden tail is the emoji itself, which
-# is the symbols-table primary key.
-record_gitmoji_recency() {
-  (( $# )) || return 0
-  local now sym vals=""
-  now=$(date +%s)
-  for sym in "$@"; do
-    [[ -z "$sym" ]] && continue
-    sym=${sym//\'/\'\'}   # SQL-escape single quotes
-    vals+="'${sym}',"
-  done
-  [[ -z "$vals" ]] && return 0
-  sqlite3 "$DB_FILE" "UPDATE symbols SET last_used=$now WHERE symbol IN (${vals%,});"
-}
+pick_symbols::parse_args "$@"
+pick_symbols::require_db
 
 hints=$'󰌑 : emoji  ·  󰘴 N: :name:  ·  ⌥ ⏎/N: insert & stay'
 if (( multi )); then
@@ -125,7 +88,7 @@ pick_args=(
   --key-output ctrl-n:field:2    # Ctrl-N -> :name:
   --key-background alt-enter:field:1
   --key-background alt-n:field:2
-  --on-items-picked record_gitmoji_recency
+  --on-items-picked pick_symbols::record_recency
   --cache-state
 )
 if (( multi ));     then pick_args+=( --multi='' ); fi
