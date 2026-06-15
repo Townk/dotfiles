@@ -13,8 +13,8 @@
 #   Zellij path: ask WezTerm for the active pane TTY, find the Zellij client
 #   running there, resolve its session via ~/.config/zellij/scripts/lib, and
 #   run `zellij --session <name> action new-tab -- nvim "$@"`.
-#   Fallback path: raise the app via osascript, `wezterm cli spawn -- nvim
-#   "$@"` (which auto-connects to the running GUI), capture the spawned
+#   Fallback path: raise the app (platform::raise_app), `wezterm cli spawn --
+#   nvim "$@"` (which auto-connects to the running GUI), capture the spawned
 #   PANE_ID, and `wezterm cli set-tab-title --pane-id <id>`.
 #
 # WHERE IT'S USED
@@ -26,11 +26,13 @@
 #   run_onchange_after_35-generate-open-in-neovim-app.sh.tmpl.
 #
 # PLATFORM
-#   macOS-only for now: the two remaining platform seams are `open -a` (cold
-#   launch) and AppleScript activation (raise the window). Binaries are
-#   resolved via PATH and the WezTerm CLI auto-connects to the running GUI, so
-#   neither Homebrew paths nor the GUI socket layout are assumed any more.
-#   Excluded from non-darwin targets via .chezmoiignore.tmpl.
+#   The OS-specific bits — cold-launching the GUI and raising its window — live
+#   behind the platform:: module (lib/platform.sh → platform-macos.sh /
+#   platform-linux.sh). Binaries resolve via PATH and the WezTerm CLI
+#   auto-connects to the running GUI, so no Homebrew paths or GUI socket layout
+#   are assumed. This script stays bash because it sources zellij-session.sh,
+#   which relies on bash word splitting. DEPLOYED on macOS only for now — the
+#   Linux file-manager launcher isn't built yet; see .chezmoiignore.tmpl.
 
 # 1. SET PATHS
 # A GUI launcher (Finder droplet / .desktop) hands us a bare PATH, so seed the
@@ -43,6 +45,10 @@ NVIM_BIN="${NVIM_BIN:-$(command -v nvim)}"
 ZELLIJ_BIN="${ZELLIJ_BIN:-$(command -v zellij)}"
 JQ_BIN="${JQ_BIN:-$(command -v jq)}"
 ZELLIJ_SESSION_LIB="${ZELLIJ_SESSION_LIB:-$HOME/.config/zellij/scripts/lib/zellij-session.sh}"
+
+# Shared base (die/log_*) + the platform:: module (launch_gui / raise_app).
+source "$HOME/.local/lib/common.sh"
+source "$HOME/.local/lib/platform.sh"
 
 # 2. CALCULATE TAB TITLE
 COUNT=$#
@@ -110,7 +116,7 @@ open_in_active_zellij() {
   SESSION=$(active_zellij_session) || return 1
   [ -n "$SESSION" ] || return 1
 
-  osascript -e 'tell application "WezTerm" to activate' >/dev/null 2>&1 || true
+  platform::raise_app WezTerm org.wezfurlong.wezterm
   "$ZELLIJ_BIN" --session "$SESSION" action new-tab \
     "${ZELLIJ_CWD_ARGS[@]}" --name "$TAB_TITLE" --close-on-exit -- "$NVIM_BIN" "$@"
 }
@@ -122,7 +128,7 @@ open_in_wezterm() {
 
   if [ -z "$W_PID" ]; then
     # CASE: COLD START — launch the GUI running nvim, then title the new tab.
-    open -a WezTerm --args start "${WEZTERM_CWD_ARGS[@]}" -- "$NVIM_BIN" "$@"
+    platform::launch_gui WezTerm "$WEZTERM_BIN" -- start "${WEZTERM_CWD_ARGS[@]}" -- "$NVIM_BIN" "$@"
 
     # Wait until the CLI can actually reach the freshly-started GUI, then title
     # its active (nvim) tab. `wezterm cli` auto-connects to the running GUI's
@@ -133,7 +139,7 @@ open_in_wezterm() {
     fi
   else
     # CASE: ALREADY RUNNING — raise the window, spawn an nvim tab, title it.
-    osascript -e 'tell application "WezTerm" to activate' >/dev/null 2>&1 || true
+    platform::raise_app WezTerm org.wezfurlong.wezterm
 
     # Spawn nvim and capture its pane id; wezterm cli auto-connects to the
     # running GUI. One retry covers a transient "not ready yet".

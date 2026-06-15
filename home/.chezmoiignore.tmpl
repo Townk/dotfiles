@@ -47,6 +47,13 @@
      system-package discovers only ecosystems this host can run. */}}
 .local/bin/system-package-brew
 {{- end }}
+{{/* platform:: module — deploy only the active OS's implementation; the
+     platform.sh shim (which dispatches to it) ships everywhere. */}}
+{{ if eq .chezmoi.os "darwin" -}}
+.local/lib/platform-linux.sh
+{{- else -}}
+.local/lib/platform-macos.sh
+{{- end }}
 
 # pi-coding-agent: paths managed by pi itself at runtime, or sensitive.
 # We track specific configs under ~/.pi/agent/ but never these dirs.
