@@ -23,7 +23,7 @@ source can later coexist with a Linux machine without polluting it.
 | `dot_config/zsh/environment.sh` | Shared shell/GUI environment source, including XDG paths and `GNUPGHOME`. |
 | `private_dot_ssh/`, `dot_config/private_gnupg/` | SSH and GnuPG configs (chezmoi-private permissions). |
 | `dot_local/bin/system-update` | Canonical "bring all tools to latest" script. Used both as a daily command and inside the bootstrap. |
-| `dot_local/bin/tab-edit` | Engine behind the macOS "Open in NeoVim" Finder droplet. |
+| `dot_local/bin/tab-edit` | Opens file(s) in a new WezTerm/Zellij tab. Engine behind the macOS "Open in NeoVim" Finder droplet and the Linux `tab-edit.desktop` handler. |
 | `../assets/open-in-neovim/` | Icons used by the generated "Open in NeoVim" Finder app. |
 | `Library/private_Application Support/` | macOS symlinks to XDG paths (e.g. tealdeer's config). |
 | `home/.chezmoiscripts/` | Chezmoi run scripts, kept out of `$HOME` while still participating in script ordering. |
@@ -209,9 +209,10 @@ of invoking the merge tool, leaving the source byte-identical to before.
 - **Templates (`*.tmpl`)** are rendered through chezmoi's Go templates.
   Used here for OS-gating (`{{ if eq .chezmoi.os "darwin" }}`) and for
   `{{ .chezmoi.homeDir }}` so paths stay portable across users.
-- **`.chezmoiignore.tmpl`** skips `.local/bin/tab-edit` on non-darwin
-  targets — it depends on `open -a`, AppleScript, and the WezTerm GUI socket
-  layout.
+- **`.chezmoiignore.tmpl`** ships `.local/bin/tab-edit` on macOS and graphical
+  Linux, but skips it on the headless dev-shell and other non-GUI hosts — it
+  needs a GUI WezTerm and a file manager to be useful. The OS-specific launch
+  logic lives behind the `platform::` module.
 - **Brewfile split**: `Brewfile.bootstrap` holds everything that must
   exist before `chezmoi apply` fires (`chezmoi` + `mise` + `gh` +
   `1password-cli` + `1password/tap`). `Brewfile` is everything else.

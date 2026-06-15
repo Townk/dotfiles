@@ -53,7 +53,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | AI-driven git commits | `commit-ai`, `commit-cursor` | `commit-agent-common.zsh` |
 | Symbol pickers (fzf) | `pick-glyph`, `pick-gitmoji` | `pick-symbols-common.zsh` → `pick-common.zsh` |
 | File preview (fzf/yazi) | `preview` | — |
-| Editor/terminal glue | `tab-edit`¹, `pinentry-auto`¹ | `platform.sh` (tab-edit) |
+| Editor/terminal glue | `tab-edit`², `pinentry-auto`¹ | `platform.sh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |
 | Package management | `system-package` + `system-package-{brew,cargo,go,npm,snap,uv}` | `system-package-common.sh` |
 | Service management | `system-service`, `system-service-{launchd,brew}` | `system-package-common.sh` |
@@ -62,6 +62,9 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | Utility | `wait-until` | — (standalone POSIX `sh`) |
 
 ¹ macOS-only; excluded from other hosts via `.chezmoiignore.tmpl`.
+² macOS + graphical Linux; excluded from the headless dev-shell and other
+non-GUI hosts via `.chezmoiignore.tmpl`. On Linux a `run_onchange` generates a
+`tab-edit.desktop` handler (see `.chezmoiscripts/`).
 
 ## `wait-until`
 

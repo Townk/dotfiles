@@ -1,0 +1,79 @@
+{{- $guiLinux := and (eq .chezmoi.os "linux") (ne .profile "dev-shell") -}}
+#!/bin/sh
+set -eu
+
+{{ if $guiLinux -}}
+# Generate the "Open in Neovim" desktop entry — the Linux counterpart to the
+# macOS Finder droplet. It registers tab-edit as a handler for text/source MIME
+# types so files can be opened in a new WezTerm/Zellij tab from the file
+# manager's "Open With" menu, and (per this host's choice) as their default.
+#
+# Generated at runtime rather than shipped as a managed file so $HOME resolves
+# for the current user and so update-desktop-database / xdg-mime registration
+# run as side effects. Re-runs whenever this script's content changes.
+
+apps_dir="$HOME/.local/share/applications"
+desktop="$apps_dir/tab-edit.desktop"
+exec_path="$HOME/.local/bin/tab-edit"
+
+# Text/source types tab-edit claims. The same list drives "Open With"
+# visibility (MimeType=) and the default-handler registration below. Browser
+# territory (text/html, application/xml) is deliberately left out so we never
+# hijack the web browser.
+mimes="\
+text/plain;\
+text/markdown;text/x-markdown;\
+text/x-shellscript;application/x-shellscript;\
+text/x-python;\
+text/x-lua;\
+text/x-csrc;text/x-chdr;text/x-c++src;text/x-c++hdr;\
+text/x-java;text/x-go;text/rust;\
+text/x-ruby;text/x-perl;text/x-php;\
+text/javascript;application/javascript;application/json;\
+application/x-yaml;text/x-yaml;application/toml;\
+text/x-sql;text/x-makefile;text/x-diff;\
+text/x-tex;text/csv;"
+
+mkdir -p "$apps_dir"
+
+# Unquoted heredoc: ${exec_path} and ${mimes} expand; %F is literal (the list
+# of dropped/selected files, per the Desktop Entry spec).
+cat > "$desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Open in Neovim
+GenericName=Text Editor
+Comment=Open file(s) in Neovim in a new WezTerm/Zellij tab
+Exec=${exec_path} %F
+Icon=nvim
+Terminal=false
+NoDisplay=false
+StartupNotify=false
+Categories=Utility;TextEditor;Development;
+Keywords=neovim;vim;editor;wezterm;zellij;
+MimeType=${mimes}
+EOF
+chmod 644 "$desktop"
+
+# Refresh the desktop database so the entry shows up immediately (best-effort).
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$apps_dir" 2>/dev/null || true
+fi
+
+# Register tab-edit as the DEFAULT handler for each text/source type
+# (best-effort — a missing xdg-mime just leaves the entry in "Open With").
+if command -v xdg-mime >/dev/null 2>&1; then
+  IFS=';'
+  for m in $mimes; do
+    [ -n "$m" ] || continue
+    xdg-mime default tab-edit.desktop "$m" 2>/dev/null || true
+  done
+  unset IFS
+fi
+{{- else }}
+# Graphical-Linux-only; no-op on this platform/profile.
+exit 0
+{{- end }}
+
+# vim:ft=sh
