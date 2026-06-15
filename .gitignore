@@ -24,6 +24,9 @@ home/dot_pi/agent/auth.json
 # Agent hand-off notes (ephemeral context docs, not for the repo)
 HAND-OFF.md
 
+# Superpowers planning/spec artifacts (agent working notes, kept on disk only)
+docs/superpowers/
+
 # Local-only Cursor rules that reference work-specific tooling/remotes.
 # Kept on disk so the agent still picks them up, but never committed.
 .cursor/rules/dev-shell-sync.mdc
