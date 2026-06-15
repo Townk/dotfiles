@@ -9,8 +9,13 @@ The scripts are thin front-ends over a small set of **sourced libraries** in
 mostly its own unique logic.
 
 Backend helpers that are invoked by *other programs* (never typed by the user,
-never on `PATH`) live in `~/.local/libexec/` instead — currently
-`pinentry-auto`, gpg-agent's `pinentry-program`, which it calls by absolute path.
+never on `PATH`) live in `~/.local/libexec/` instead. Each is reached by an
+absolute path from its caller, so it never needs to be on `PATH`:
+
+- `pinentry-auto` — gpg-agent's `pinentry-program` (set in `gpg-agent.conf`);
+- `pick-glyph`, `pick-gitmoji` — the fzf symbol pickers, driven by the zellij
+  `pick-{glyph,gitmoji}-zellij` adapters (`Ctrl+Shift+u` / `Ctrl+Shift+g`);
+  backed by `pick-symbols-common.zsh` → `pick-common.zsh`.
 
 ## Library layering
 
@@ -55,7 +60,6 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | Category | Scripts | Backing library |
 |---|---|---|
 | AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh` |
-| Symbol pickers (fzf) | `pick-glyph`, `pick-gitmoji` | `pick-symbols-common.zsh` → `pick-common.zsh` |
 | File preview (fzf/yazi) | `preview` | — |
 | Editor/terminal glue | `tab-edit`² | `platform.sh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |

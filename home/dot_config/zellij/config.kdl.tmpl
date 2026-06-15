@@ -215,7 +215,7 @@ keybinds clear-defaults=true {
         // Ctrl+Shift+u — Unicode / Nerd Font / Emoji glyph picker.
         // Spawns ~/.config/zellij/scripts/pick-glyph-zellij in a
         // floating, pinned pane. The wrapper runs the general-purpose
-        // `pick-glyph` from ~/.local/bin/, captures the chosen glyph,
+        // `pick-glyph` from ~/.local/libexec/, captures the chosen glyph,
         // and `write-chars --pane-id <originating-tile>`s it back into
         // the pane the user came from. `close_on_exit true` disposes
         // of the floating pane when the wrapper returns. `pinned true`
@@ -243,7 +243,7 @@ keybinds clear-defaults=true {
         // floating, pinned pane with the same shape, frame, and
         // title-block contract as the Ctrl+Shift+u glyph picker.
         // The wrapper runs the general-purpose `pick-gitmoji` from
-        // ~/.local/bin/ (which fetches & caches the gitmoji.dev
+        // ~/.local/libexec/ (which fetches & caches the gitmoji.dev
         // catalog at $XDG_CACHE_HOME/pick-gitmoji/), captures the
         // chosen emoji or :code:, and `write-chars --pane-id
         // <originating-tile>` injects it back into the pane the

@@ -6,7 +6,7 @@
 # zellij-modal, which spawns this script as its `--inject` target via
 # the "Ctrl Shift g" keybind in ~/.config/zellij/config.kdl. All this
 # adapter does is configure the floating-pane fzf geometry and exec the
-# general-purpose ~/.local/bin/pick-gitmoji (which reads the gitmoji rows
+# general-purpose ~/.local/libexec/pick-gitmoji (which reads the gitmoji rows
 # of the symbols database under
 # $XDG_DATA_HOME/fonts/nerd-font/symbols.db); its stdout (the chosen
 # emoji / :code:) is what zellij-modal captures and injects into the pane
@@ -17,7 +17,7 @@
 #
 # Env-var overrides:
 #   PICK_GITMOJI_BIN     Absolute path to pick-gitmoji
-#                        (default: $HOME/.local/bin/pick-gitmoji)
+#                        (default: $HOME/.local/libexec/pick-gitmoji)
 #   PICK_GITMOJI_HEIGHT  fzf height inside the pane. Default -4: zellij-
 #                        modal prints a 3-row title block, so fzf fills
 #                        the pane height minus that block (plus the
@@ -31,7 +31,7 @@
 
 set -euo pipefail
 
-PICK_GITMOJI_BIN="${PICK_GITMOJI_BIN:-$HOME/.local/bin/pick-gitmoji}"
+PICK_GITMOJI_BIN="${PICK_GITMOJI_BIN:-$HOME/.local/libexec/pick-gitmoji}"
 [[ -x "$PICK_GITMOJI_BIN" ]] || { echo "pick-gitmoji-zellij: missing or non-executable: $PICK_GITMOJI_BIN" >&2; exit 1; }
 
 export PICK_GITMOJI_HEIGHT="${PICK_GITMOJI_HEIGHT:--4}"

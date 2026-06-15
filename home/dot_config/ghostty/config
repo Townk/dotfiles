@@ -90,7 +90,7 @@ font-codepoint-map = U+FE0F=Apple Color Emoji
 # `Emoji_Presentation = No`, even when VS16 (U+FE0F) follows — so
 # emojis like ♻ ✏ ⚗ ⚰ paint as 2-cell colourful glyphs but only
 # advance the cursor by 1 cell. The gitmoji picker compensates with
-# a per-:code: width override map in `~/.local/bin/pick-gitmoji`,
+# a per-:code: width override map in `~/.local/libexec/pick-gitmoji`,
 # see the `EMOJI_WIDTHS` block there.
 
 # Match wezterm.lua harfbuzz_features (calt/clig/liga are on by default but
