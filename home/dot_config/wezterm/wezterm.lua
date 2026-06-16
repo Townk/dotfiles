@@ -192,11 +192,55 @@ config.hyperlink_rules = {
 
 local write_fullscreen_state
 
+-- `window-config-reloaded` fires on *every* config evaluation, including the
+-- initial one as each window is created — which previously toasted on every new
+-- window. We only want feedback when the config genuinely changed after a window
+-- was already open. So snapshot the config file's bytes in wezterm.GLOBAL (which
+-- persists across reloads, and is shared by every window/eval context in the GUI
+-- process) and notify only when the snapshot differs from what we last saw. The
+-- first evaluation of a fresh GUI process seeds the snapshot silently, so opening
+-- windows stays quiet; an edit (auto-reload) or a manual reload after an edit
+-- changes the bytes and fires exactly one notification — deduped across the
+-- multiple windows/contexts that reload together — through our Hammerspoon OSD.
+local notify_bin = os.getenv("HOME") .. "/.local/bin/notify"
+
+local function read_config_signature()
+	local file = io.open(wezterm.config_file, "r")
+	if not file then
+		return nil
+	end
+	local contents = file:read("*a")
+	file:close()
+	return contents
+end
+
+local function notify_config_reloaded()
+	local signature = read_config_signature()
+	if signature == nil then
+		return
+	end
+	local previous = wezterm.GLOBAL.wezterm_config_signature
+	wezterm.GLOBAL.wezterm_config_signature = signature
+	-- nil: first eval of this GUI process → seed silently. Equal: a new window
+	-- opening, or a redundant eval context for the same change → stay quiet.
+	if previous == nil or previous == signature then
+		return
+	end
+	wezterm.background_child_process({
+		notify_bin,
+		"--icon",
+		"glyph:usr-wezterm",
+		"--sound",
+		"Tink",
+		"WezTerm configuration reloaded",
+	})
+end
+
 wezterm.on("window-config-reloaded", function(window, _)
 	if write_fullscreen_state then
 		write_fullscreen_state(window)
 	end
-	window:toast_notification("wezterm", "Configuration reloaded!", nil, 4000)
+	notify_config_reloaded()
 end)
 
 -- CMD+click on a file:// link inside Zellij opens it locally: directories in a
