@@ -48,5 +48,12 @@
     "shortcode": "zellij",
     "aliases": [],
     "description": "Terminal Workspace with Batteries Included"
+  },
+  "hammerspoon": {
+    "code": "10fb07",
+    "keywords": ["hammerspoon", "key-bindings", "bindings", "shortcuts"],
+    "shortcode": "hammerspoon",
+    "aliases": [],
+    "description": "A powerful automation layer for macOS"
   }
 }
