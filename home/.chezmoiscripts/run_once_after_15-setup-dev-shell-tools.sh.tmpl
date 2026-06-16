@@ -89,15 +89,9 @@ else
   failures+=("apt-get not found (skipped system libraries)")
 fi
 
-# 3. zsh-abbr — no mise/apt package; clone it (with its zsh-job-queue
-#    submodule) where dot_zshrc expects it. macOS gets this via Homebrew.
-ABBR_DIR="$HOME/.local/opt/zsh-abbr"
-if [ ! -e "$ABBR_DIR/zsh-abbr.zsh" ]; then
-  echo "🔤  Installing zsh-abbr..."
-  mkdir -p "$(dirname "$ABBR_DIR")"
-  git clone --depth 1 --recurse-submodules https://github.com/olets/zsh-abbr "$ABBR_DIR" \
-    || failures+=("git clone zsh-abbr")
-fi
+# 3. Zsh plugins (zsh-abbr included) are cloned by the cross-platform
+#    run_onchange_after_20-setup-zsh-plugins script into
+#    ~/.local/share/zsh/plugins; nothing to do here.
 
 # 4. Run the same Homebrew-less convergence path the user gets from
 #    `system-update`. CHEZMOI=1 prevents source pull/apply recursion.

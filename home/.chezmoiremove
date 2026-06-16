@@ -1,0 +1,11 @@
+# One-time cleanup of files relocated under ~/.config/zsh during the 2026-06
+# de-z4h migration. Patterns are gitignore-style and ALL anchored with a
+# leading slash so they match ONLY the old $HOME copy — never the relocated
+# ~/.config/zsh/* equivalents (an unanchored ".zshrc" would match both).
+
+# p10k config → ~/.config/zsh/p10k.zsh (also drops its stale z4h-era wordcode).
+/.p10k.zsh
+/.p10k.zsh.zwc
+
+# .zshrc → ~/.config/zsh/.zshrc, reached via ZDOTDIR set in ~/.zshenv.
+/.zshrc

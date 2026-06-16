@@ -1,9 +1,4 @@
 # Conditional alias
-if command -v nix >/dev/null; then
-  alias nixrepl="nix repl '<nixpkgs>'"
-  alias sha-to-base32="nix to-base32 --type sha256"
-fi
-command -v emacsclient >/dev/null && alias em="emacsclient -n"
 command -v bandwhich >/dev/null && alias bandwhich="sudo bandwhich"
 command -v trip >/dev/null && alias trip="sudo trip"
 command -v tidy-viewer >/dev/null && alias tv="tidy-viewer"
@@ -20,7 +15,6 @@ alias commands="terminal_commands"
 alias cd="super-cd"
 alias cp="cp -i"
 alias diff='diff --color=auto'
-alias fzf='-z4h-fzf'
 alias grep='grep --color=auto --exclude-dir={.bzr,CVS,.git,.hg,.svn}'
 alias h="history -1" # full histor
 alias history="fc -il 1"
@@ -33,7 +27,6 @@ alias wget="wget2 -c"
 alias zmv="noglob zmv -M"
 alias zcp="noglob zmv -C"
 alias zln="noglob zmv -L"
-alias zprofile-next='touch $XDG_RUNTIME_DIR/_zsh_profile.lock'
 alias vim="nvim"
 alias vi="nvim"
 

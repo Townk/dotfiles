@@ -1,0 +1,67 @@
+{{- /*
+  Zsh plugin provisioning (macOS + Linux, every profile).
+
+  Clones the plugins that zsh4humans used to bundle into a single,
+  zsh-namespaced, XDG-correct directory:
+
+    $XDG_DATA_HOME/zsh/plugins/<name>/
+
+  This is the sibling of ~/.local/share/zsh/site-functions (already on
+  fpath). It is deliberately NOT under ~/.local/opt/zsh — that path is
+  the custom-build install PREFIX, and custom-builds/zsh/build-zsh.sh
+  does `rm -rf "$PREFIX"` on every rebuild, which would wipe plugins.
+
+  run_onchange: chezmoi re-runs this whenever the rendered text changes.
+  The plugin list lives inline below, so editing it (add/remove/rename a
+  plugin) re-fires the script. Each step is idempotent and best-effort —
+  a single clone failure never aborts the apply.
+*/ -}}
+#!/bin/bash
+set -uo pipefail
+
+# chezmoi may run with a minimal PATH; make sure git is reachable.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+command -v git >/dev/null 2>&1 || { echo "git not found; skipping zsh plugins" >&2; exit 0; }
+
+PLUGIN_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins"
+mkdir -p "$PLUGIN_DIR"
+
+echo "🔌  Provisioning zsh plugins in $PLUGIN_DIR ..."
+
+# name|url|extra-clone-flags
+PLUGINS=(
+  "powerlevel10k|https://github.com/romkatv/powerlevel10k|"
+  "zsh-defer|https://github.com/romkatv/zsh-defer|"
+  "zsh-syntax-highlighting|https://github.com/zsh-users/zsh-syntax-highlighting|"
+  "zsh-autosuggestions|https://github.com/zsh-users/zsh-autosuggestions|"
+  "zsh-history-substring-search|https://github.com/zsh-users/zsh-history-substring-search|"
+  "zsh-completions|https://github.com/zsh-users/zsh-completions|"
+  "zsh-abbr|https://github.com/olets/zsh-abbr|--recurse-submodules"
+  "fzf-tab|https://github.com/Aloxaf/fzf-tab|"
+)
+
+failures=()
+
+for entry in "${PLUGINS[@]}"; do
+  IFS='|' read -r name url flags <<<"$entry"
+  dest="$PLUGIN_DIR/$name"
+  if [ -d "$dest/.git" ]; then
+    # Pull latest; submodules (zsh-abbr's zsh-job-queue) kept in sync.
+    git -C "$dest" pull --ff-only --recurse-submodules --quiet \
+      || failures+=("pull $name")
+  else
+    # shellcheck disable=SC2086 -- $flags is an intentional word-split flag list
+    git clone --depth 1 $flags --quiet "$url" "$dest" \
+      || failures+=("clone $name")
+  fi
+done
+
+if (( ${#failures[@]} )); then
+  echo "⚠️  zsh plugin provisioning had issues (best-effort):" >&2
+  printf '   - %s\n' "${failures[@]}" >&2
+else
+  echo "👍  zsh plugins provisioned."
+fi
+
+# vim:ft=sh

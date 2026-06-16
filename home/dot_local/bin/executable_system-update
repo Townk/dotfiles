@@ -46,11 +46,7 @@ block later steps unless explicitly fatal):
   6. `ya pkg upgrade`         + commit any package.toml bumps to chezmoi
   7. `mise upgrade && mise prune -y`
   8. NeoVim: `Lazy! sync` + `MasonToolsUpdateSync`
-
-z4h's own self-update is intentionally NOT handled here (it would exec
-inside this script's shell, not the user's). The `system-update` zsh
-function in dot_config/zsh/functions.d/commands.sh runs z4h update
-directly in the interactive shell after calling this script.
+  9. `git pull` the zsh plugins in ~/.local/share/zsh/plugins
 EOF
 }
 
@@ -69,6 +65,22 @@ esac
 
 # Colors / logging come from the shared base (C_*, log_warn/die).
 source "$HOME/.local/lib/common.zsh"
+
+# Bring the git-cloned zsh plugins to latest. These live in
+# ~/.local/share/zsh/plugins (cloned by run_onchange_after_20-setup-zsh-plugins)
+# and replace what zsh4humans used to bundle + self-update via `z4h update`.
+# Best-effort: a single unreachable remote never blocks the rest of the update.
+update_zsh_plugins() {
+  local dir="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins"
+  [[ -d "$dir" ]] || return 0
+  print -P -- "\n🔌 Update zsh plugins...\n"
+  local p
+  for p in "$dir"/*(/N); do
+    [[ -d "$p/.git" ]] || continue
+    git -C "$p" pull --ff-only --recurse-submodules --quiet \
+      || log_warn "zsh plugin update failed: ${p:t}"
+  done
+}
 
 # Resolve chezmoi source dir once. Returns "" only when neither chezmoi
 # nor the standard layout produces a git repo (so the sync hooks no-op
@@ -192,6 +204,7 @@ if ! command -v brew >/dev/null 2>&1; then
     timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
       log_warn "NeoVim plugin upgrade timed out or had failures"
   fi
+  update_zsh_plugins
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
   exit 0
 fi
@@ -300,17 +313,5 @@ if command -v nvim >/dev/null 2>&1; then
     die "Failed to upgrade NeoVim plugins!"
 fi
 
-# z4h update is intentionally NOT handled here. It internally runs
-# `exec zsh` to load the freshly-fetched z4h code, and `exec` from a
-# script can only replace the script's own child shell — never the
-# user's interactive shell that invoked it. Doing it here would leave
-# an extra interactive shell stacked on top of the user's terminal.
-#
-# Instead, the `system-update` zsh function (defined in
-# ~/.config/zsh/functions.d/commands.sh) calls this script and then
-# runs `z4h update` directly in the interactive shell, so the exec
-# lands on the user's real shell. The chezmoi bootstrap and any other
-# non-interactive caller invoke this script via PATH and bypass the
-# function entirely, which is the right semantic for them — z4h gets
-# refreshed on the next interactive `system-update`.
+update_zsh_plugins
 print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"

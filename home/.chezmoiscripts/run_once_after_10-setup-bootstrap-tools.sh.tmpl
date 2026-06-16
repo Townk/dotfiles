@@ -41,9 +41,9 @@ mise install rust@nightly -q
 
 # system-update is the canonical "everything at latest" implementation
 # (also exposed as the user-facing `system-update` command). On a fresh
-# machine it installs Brewfile contents + Yazi plugins + NeoVim plugins
-# + z4h, and converges everything else. On an already-bootstrapped
-# machine it brings everything to latest.
+# machine it installs Brewfile contents + Yazi plugins + NeoVim plugins,
+# pulls the cloned zsh plugins, and converges everything else. On an
+# already-bootstrapped machine it brings everything to latest.
 echo "♻️  Running system-update to converge tools to latest..."
 "$HOME/.local/bin/system-update"
 

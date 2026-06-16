@@ -1,29 +1,8 @@
 source "${0:A:h}/_lib.sh"
 
-# `system-update` lives as a script at ~/.local/bin/system-update so the
-# chezmoi bootstrap (run_once_after_10-setup-bootstrap-tools.sh.tmpl) can
-# invoke it without entering an interactive shell. The bare command name
-# still works from the prompt because ~/.local/bin is on $PATH.
-#
-# This wrapper runs the script, then chains `z4h update` in the
-# *current* (interactive) shell. z4h update ends with `exec zsh`, which
-# only replaces the shell that called it — if the exec happened inside
-# the script, it would replace the script's own child shell and leave
-# an extra interactive shell stacked on top of the user's terminal.
-# Doing it here means the exec lands on the user's real shell, so we
-# end with exactly one shell.
-#
-# Help short-circuit: when the user only asks for help (-h, --help, help)
-# we forward to the script and stop. Running z4h update after a help
-# request is surprising and emits noise (the `exec zsh` ends up reloading
-# the shell when the user just wanted to read text).
-function system-update() {
-  case "${1:-}" in
-    -h|--help|help) command system-update "$@"; return $? ;;
-  esac
-  command system-update "$@" || return
-  z4h update
-}
+# `system-update` is a plain script at ~/.local/bin/system-update (on $PATH);
+# it now updates the git-cloned zsh plugins itself, so no interactive wrapper
+# is needed here anymore (the old wrapper only existed to chain `z4h update`).
 
 # I decide to make my MOTD screen a function to allow me to call it
 # arbitrarially if I wanted.
@@ -157,12 +136,10 @@ function super-cd {
       die "${C_YEL}No previous directories available${C_RES}"
       return 1
     elif [[ "${#prev_stack[@]}" -gt 1 ]]; then
-      next_dir=$(print -l -- "${prev_stack[@]}" | fzf \
-        --no-sort \
-        --prompt="Previous directories > " \
-        --preview='preview {}' \
-        --preview-window=right:50% \
-        --height=40%)
+      # No explicit fzf flags: inherit FZF_DEFAULT_OPTS (glyph prompt, visible
+      # `preview {}`, colours, binds) so this matches TAB and the other widgets.
+      # `--no-sort` is the one exception — keep the dirstack/zoxide order intact.
+      next_dir=$(print -l -- "${prev_stack[@]}" | fzf --no-sort)
       next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
     else
       next_dir="${prev_stack[1]}"
@@ -188,11 +165,8 @@ function super-cd {
       dir_stack+=("$_cur_dir")
       _cur_dir="${_cur_dir%/*}"
     done
-    next_dir=$(print -l -- "${dir_stack[@]}" | fzf \
-      --prompt="Parent directories > " \
-      --preview='preview {}' \
-      --preview-window=right:50% \
-      --height=40%)
+    # Inherit FZF_DEFAULT_OPTS (glyph prompt, visible preview, …) like above.
+    next_dir=$(print -l -- "${dir_stack[@]}" | fzf)
     next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
     if [[ -n "$next_dir" ]]; then
       \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return

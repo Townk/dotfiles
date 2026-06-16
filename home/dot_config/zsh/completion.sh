@@ -1,0 +1,129 @@
+# Completion system + fzf integration. Sourced (deferred) from ~/.config/zsh/.zshrc on the
+# first precmd, so the compinit cost stays off the path to the first prompt.
+#
+# This file owns what zsh4humans used to set implicitly: fpath for the cloned
+# completions, compinit (with a compiled, cached dump), completion zstyles,
+# and the fzf shell integration wired to the `preview` script.
+
+plugin_dir="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins"
+
+# Completion search path — set BEFORE compinit so the dump picks these up.
+fpath=(
+  "$plugin_dir/zsh-completions/src"
+  "$plugin_dir/zsh-abbr/completions"
+  "$HOME/.local/share/zsh/site-functions"
+  $fpath
+)
+
+# ── compinit (cached + compiled) ───────────────────────────────────────────
+autoload -Uz compinit
+ZSH_COMPDUMP="${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump-${ZSH_VERSION}"
+[[ -d "${ZSH_COMPDUMP:h}" ]] || mkdir -p "${ZSH_COMPDUMP:h}"
+# Skip the insecure-directory audit (-C) when the dump was refreshed in the
+# last 24h; do the full check (which can rebuild the dump) otherwise.
+if [[ -n ${ZSH_COMPDUMP}(#qNmh-24) ]]; then
+  compinit -C -d "$ZSH_COMPDUMP"
+else
+  compinit -d "$ZSH_COMPDUMP"
+fi
+# Compile the dump to wordcode for faster loads next time.
+if [[ -s "$ZSH_COMPDUMP" && ( ! -s "$ZSH_COMPDUMP.zwc" || "$ZSH_COMPDUMP" -nt "$ZSH_COMPDUMP.zwc" ) ]]; then
+  zcompile -R -- "$ZSH_COMPDUMP" 2>/dev/null
+fi
+
+# Replay compdef calls queued by the synchronous-load shim in ~/.config/zsh/.zshrc
+# (the real `compdef` is defined by compinit, which only just ran).
+if (( ${+_pending_compdefs} )); then
+  local _c
+  for _c in "${_pending_compdefs[@]}"; do compdef ${=_c}; done
+  unset _pending_compdefs
+fi
+
+# ── Completion styles ──────────────────────────────────────────────────────
+# `menu no`, not `menu select`: fzf-tab (below) replaces the selection menu, and
+# its docs require the native menu be off so it can intercept completion.
+zstyle ':completion:*' menu no
+# Case-insensitive, then partial-word, then substring matching.
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|=*' 'l:|=* r:|=*'
+zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
+zstyle ':completion:*' group-name ''
+zstyle ':completion:*:descriptions' format '%F{#e5bf7b}-- %d --%f'
+zstyle ':completion:*:warnings' format '%F{#e06c75}-- no matches --%f'
+zstyle ':completion:*' completer _complete _match _approximate
+zstyle ':completion:*' use-cache on
+zstyle ':completion:*' cache-path "${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompcache"
+zstyle ':completion:*' verbose yes
+# Never offer the current directory when completing `cd` — i.e. no pointless
+# `cd ../<this-dir>`. `pwd` drops the cwd from path completion. `cd` is aliased
+# to the `super-cd` function, so that — not `cd` — is the completion command.
+zstyle ':completion:*:super-cd:*' ignore-parents pwd
+
+# ── fzf ────────────────────────────────────────────────────────────────────
+export FZF_DEFAULT_COMMAND="fd --type f"
+
+# Catppuccin Mocha palette + layout + previews + key bindings. fzf parses this
+# value with its own quote/newline-aware tokenizer, so single-quoted tokens
+# (the ones containing spaces) are preserved as single arguments.
+export FZF_DEFAULT_OPTS="
+--color=bg:#1e1e2e --color=bg+:#313244
+--color=fg:#cdd6f4 --color=fg+:regular:#cdd6f4
+--color=hl:#f38ba8 --color=hl+:regular:#f38ba8
+--color=prompt:#cba6f7 --color=pointer:#f5e0dc --color=marker:#b4befe
+--color=info:#cba6f7 --color=gutter:#1e1e2e --color=header:#f38ba8
+--color=spinner:#f5e0dc --color=border:#313244
+--filepath-word --border --height=45% --layout=reverse --info=inline-right
+--exit-0 --select-1 --padding=0,2,0,0
+--prompt '    ' --pointer ➔ --marker ✔
+--preview-window=right:60%,border-line,noinfo
+--preview 'preview {}'
+--bind ctrl-space:toggle-preview
+--bind ctrl-j:down --bind ctrl-k:up
+--bind shift-up:preview-up --bind shift-down:preview-down
+--bind alt-up:preview-page-up --bind alt-down:preview-page-down
+--bind alt-page-up:preview-page-up --bind alt-page-down:preview-page-down
+--bind alt-home:preview-top --bind alt-end:preview-bottom
+--bind 'ctrl-f:change-preview(FZF_PREVIEW_FULL=1 preview {})'
+--bind 'ctrl-alt-f:change-preview(preview {})'
+"
+
+# fzf shell integration: completion (the `**<TAB>` fuzzy trigger) + key
+# bindings (Ctrl+T paste files, Alt+C cd). `command` bypasses any `fzf` alias.
+if command -v fzf >/dev/null; then
+  source <(command fzf --zsh)
+fi
+
+# Generators for the `**` fuzzy trigger — use fd (respects .gitignore).
+_fzf_compgen_path() { fd --hidden --follow --exclude .git . "$1" }
+_fzf_compgen_dir()  { fd --type d --hidden --follow --exclude .git . "$1" }
+
+# ── fzf-tab ────────────────────────────────────────────────────────────────
+# Restores zsh4humans' headline feature: TAB opens an fzf menu of completions
+# instead of zsh's native menu. Sourced AFTER compinit and AFTER `fzf --zsh`
+# (so fzf-tab wins the TAB binding — which also retires fzf's `**` trigger) and
+# BEFORE the deferred zsh-autosuggestions / zsh-syntax-highlighting (which wrap
+# ZLE widgets). CTRL-T / CTRL-R / ALT-C stay on their own keys, untouched.
+if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
+  source "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh"
+
+  # The menu inherits all of its chrome — rounded border, the search-glyph
+  # prompt, inline-right count, always-visible preview — from FZF_DEFAULT_OPTS,
+  # so every fzf surface matches. `use-fzf-default-opts` is what pulls that in.
+  zstyle ':fzf-tab:*' use-fzf-default-opts yes
+
+  # The one bit of chrome it must re-assert is ctrl-space: fzf-tab's own default
+  # binds (-ftb-fzf) rebind it to multi-select *after* FZF_DEFAULT_OPTS, so
+  # reclaim it here to keep ctrl-space on preview-toggle like every other surface.
+  zstyle ':fzf-tab:*' fzf-flags --bind=ctrl-space:toggle-preview
+
+  # TAB descends into the highlighted directory and re-opens the menu — the
+  # equivalent of z4h's `tab:repeat` (fzf-tab's continuous-trigger, default '/').
+  zstyle ':fzf-tab:*' continuous-trigger 'tab'
+
+  # Preview only when the candidate resolves to a real path (directories for
+  # `cd`, files for file arguments). Non-path completions — git refs, options,
+  # PIDs — resolve to nothing and get no preview, per the "cd/files only" scope.
+  zstyle ':fzf-tab:complete:*:*' fzf-preview \
+    '[[ -d $realpath || -f $realpath ]] && preview $realpath'
+fi
+
+unset plugin_dir

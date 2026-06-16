@@ -1,0 +1,218 @@
+# Personal Zsh configuration.
+#
+# Assembled explicitly (no framework): standalone powerlevel10k for the
+# prompt, git-cloned plugins under ~/.local/share/zsh/plugins, and
+# zsh-defer to push non-critical loads past the first prompt. Instant
+# prompt keeps the perceived startup at ~zero; the heavy work (compinit,
+# ZLE plugins, tool init) runs asynchronously right after.
+
+_zsh_should_autoattach_zellij() {
+  [[ -z "$ZELLIJ" ]] || return 1
+
+  # GUI helpers can launch interactive zsh at login without a real terminal.
+  # Only auto-attach when the shell is backed by a terminal emulator or SSH.
+  [[ -n "${TERM_PROGRAM:-}" ]] && return 0
+  [[ -n "${WEZTERM_PANE:-}" || -n "${WEZTERM_UNIX_SOCKET:-}" ]] && return 0
+  [[ -n "${GHOSTTY_RESOURCES_DIR:-}" ]] && return 0
+  [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]] && return 0
+
+  return 1
+}
+
+# Auto-attach Zellij for interactive shells.
+# Done before the rest of init so the outer shell doesn't pay for setup
+# twice — the shell spawned inside Zellij re-runs .zshrc with $ZELLIJ set,
+# skipping this block.
+#
+# "Main" session reuse:
+#   - doesn't exist (or only as EXITED) → wipe stale record, create+attach
+#   - live, no clients                  → reattach (resume the existing one)
+#   - live, has a client                → spawn a fresh anonymous session
+#                                         (so Cmd+N etc. get their own mux)
+if _zsh_should_autoattach_zellij; then
+  # Remote logins print a full-screen MOTD (pam_motd) before Zellij grabs the
+  # alternate screen. Wipe the primary buffer + scrollback first so it doesn't
+  # flash on attach, nor reappear when Zellij restores the primary buffer on
+  # exit. SSH-scoped so local startup is untouched.
+  [[ -n "$SSH_CONNECTION" ]] && printf '\e[H\e[2J\e[3J'
+  # Record "Main" as the most-recently-used workspace in the quick-launch
+  # picker's recency cache, so after switching to another workspace you can
+  # flip straight back to Main (it sorts to the top of the picker). This boot
+  # path doesn't go through quick-launch — which is what normally records a
+  # pick — so we prepend it by hand (dedupe, cap at 50, like pick::record).
+  # "default" is the workspace *id* whose session name is "Main"
+  # (~/.config/zellij/quick-launch/default.yaml); the recency file keys on id.
+  _ql_seed_main() {
+    local f="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/usage-workspace"
+    mkdir -p "${f:h}" 2>/dev/null || return 0
+    local tmp="$f.$$"
+    { print -r -- default; [[ -f "$f" ]] && grep -vFx default "$f"; } 2>/dev/null \
+      | head -n 50 >| "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null
+    return 0
+  }
+  for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij ~/.local/bin/zellij; do
+    [[ -x "$_zellij" ]] || continue
+    # Make sure the managed plugin wasms exist before launch. We fetch them
+    # ourselves (config.kdl loads them via file:) instead of trusting Zellij's
+    # downloader, which caches transient 404/504 error pages as the plugin and
+    # never retries. No-op once the wasms are present.
+    [[ -x ~/.config/zellij/ensure-plugins ]] && ~/.config/zellij/ensure-plugins
+    if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
+      if "$_zellij" --session Main action list-clients 2>/dev/null \
+           | tail -n +2 | grep -q .; then
+        exec "$_zellij" --new-session-with-layout default
+      else
+        # Main is idle → reattach. If the session record is stale, discard it
+        # and create a fresh Main with the configured default layout.
+        _ql_seed_main
+        exec "$_zellij" attach Main || {
+          "$_zellij" delete-session Main -f &>/dev/null
+          exec "$_zellij" --session Main --new-session-with-layout default
+        }
+      fi
+    else
+      "$_zellij" delete-session Main -f &>/dev/null
+      _ql_seed_main
+      exec "$_zellij" --session Main --new-session-with-layout default
+    fi
+  done
+  unset _zellij
+  unset -f _ql_seed_main 2>/dev/null
+fi
+unset -f _zsh_should_autoattach_zellij 2>/dev/null
+
+# Powerlevel10k instant prompt. Must stay near the top, before anything
+# that prints to the terminal, so the cached prompt can render immediately
+# while the rest of init runs. Quiet mode suppresses warnings about console
+# output during init. The cache is (re)generated on each prompt once p10k
+# is configured below.
+if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+fi
+
+# zsh-defer: queues commands to run on the first precmd (just before the
+# first real prompt), keeping them off the critical path to the prompt.
+ZSH_PLUGIN_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins"
+source "$ZSH_PLUGIN_DIR/zsh-defer/zsh-defer.plugin.zsh"
+
+# ── Environment ──────────────────────────────────────────────────────────
+# Core Go paths
+export GOPATH="$XDG_DATA_HOME/go"
+export GOMODCACHE="$XDG_CACHE_HOME/go-mod"
+export GOCACHE="$XDG_CACHE_HOME/go-build"
+export GOBIN="$GOPATH/bin"
+export GOPROXY=direct
+
+export HOMEBREW_NO_ENV_HINTS=1
+export MANPAGER="less -R --use-color -Dd+r -Du+b"
+export GPG_TTY=$TTY
+export EDITOR=nvim
+export USERNAME='Thiago Alves'
+
+# pi-memctx: auto-persist durable memory candidates without /memctx-review
+export MEMCTX_AUTOSAVE=auto
+
+# mise activates synchronously: it injects mise-managed tool dirs onto $PATH,
+# and on Linux atuin/zoxide/etc. live there. Keeping it on the critical path
+# guarantees PATH is correct before the first command. (The lighter tool
+# inits — atuin/zoxide/wezterm — are deferred below.)
+command -v mise >/dev/null && eval "$(mise activate zsh)"
+
+# Extend PATH.
+path=(~/.local/bin "$GOPATH/bin" /Applications/Obsidian.app/Contents/MacOS $path)
+
+# ── History ──────────────────────────────────────────────────────────────
+# atuin (deferred, below) owns interactive history search; this is the
+# plain on-disk history that atuin imports from and that backs the session.
+HISTFILE="${XDG_STATE_HOME:-$HOME/.local/state}/zsh/history"
+[[ -d "${HISTFILE:h}" ]] || mkdir -p "${HISTFILE:h}"
+HISTSIZE=100000
+SAVEHIST=100000
+setopt extended_history hist_expire_dups_first hist_ignore_dups \
+       hist_ignore_all_dups hist_ignore_space hist_find_no_dups \
+       hist_verify inc_append_history share_history
+
+# ── Shell options ─────────────────────────────────────────────────────────
+setopt extended_glob    # ^ # ~ globbing operators (used by functions.sh/aliases.sh loaders)
+setopt glob_dots        # no special treatment for file names with a leading dot
+setopt auto_menu         # require an extra TAB press to open the completion menu
+setopt combining_chars   # let ZLE combine zero-width marks onto the base char
+setopt interactive_comments  # allow `# comments` on the command line
+setopt auto_pushd pushd_ignore_dups pushd_silent  # cd builds $dirstack (super-cd `cd -`)
+
+# substring-search highlight + match config (read when the plugin loads below)
+HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_FOUND="bg=none,fg=yellow,bold"
+HISTORY_SUBSTRING_SEARCH_HIGHLIGHT_NOT_FOUND="bg=none,fg=red,bold"
+HISTORY_SUBSTRING_SEARCH_GLOBBING_FLAGS="l"
+
+# ── compdef shim ───────────────────────────────────────────────────────────
+# The real `compdef` is provided by `compinit`, which is deferred (see
+# completion.sh). Queue any compdef calls made during synchronous sourcing
+# (e.g. in functions.d/commands.sh) and replay them after compinit runs.
+typeset -ga _pending_compdefs
+compdef() { _pending_compdefs+=("${(j: :)@}") }
+
+# ── Synchronous config: abbreviations, functions, aliases ──────────────────
+# zsh-abbr — provides the abbreviation engine used by smart-space expansion.
+ABBR_USER_ABBREVIATIONS_FILE="${HOME}/.config/zsh/user-abbreviations.sh"
+ABBR_DEFAULT_BINDINGS=0
+source "$ZSH_PLUGIN_DIR/zsh-abbr/zsh-abbr.zsh"
+
+# Autoload functions.
+autoload -Uz zmv
+
+# My own functions (super-cd, take, g, widgets, …). Sourced before aliases so
+# the aliases that point at these functions resolve.
+source ~/.config/zsh/functions.sh
+
+# Re-export every abbreviation as a real alias so abbreviation usage is
+# syntax-highlighted even when it isn't the first word on the line.
+eval "$(abbr export-aliases)"
+# Then load my aliases, which may override anything from the abbreviations.
+source ~/.config/zsh/aliases.sh
+
+# ── Prompt ─────────────────────────────────────────────────────────────────
+typeset -g POWERLEVEL9K_INSTANT_PROMPT=quiet
+source "$ZSH_PLUGIN_DIR/powerlevel10k/powerlevel10k.zsh-theme"
+[[ -r ~/.config/zsh/p10k.zsh ]] && source ~/.config/zsh/p10k.zsh
+
+# ── Deferred: completion, ZLE plugins, tool init, keybindings ──────────────
+# Order matters and is preserved by zsh-defer's FIFO queue:
+#   1. completion system (compinit) + fzf completion  → defines `compdef`
+#   2. zsh-autosuggestions                            → before syntax-highlighting
+#   3. zsh-syntax-highlighting                        → after autosuggestions
+#   4. zsh-history-substring-search                   → MUST be after syntax-highlighting
+#   5. tool init (atuin/zoxide/wezterm)               → defines atuin widget
+#   6. keybindings                                    → binds widgets from all of the above
+zsh-defer source ~/.config/zsh/completion.sh
+zsh-defer source "$ZSH_PLUGIN_DIR/zsh-autosuggestions/zsh-autosuggestions.zsh"
+zsh-defer source "$ZSH_PLUGIN_DIR/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+zsh-defer source "$ZSH_PLUGIN_DIR/zsh-history-substring-search/zsh-history-substring-search.zsh"
+
+zsh-defer eval 'command -v atuin   >/dev/null && eval "$(atuin init zsh)"'
+zsh-defer eval 'command -v zoxide  >/dev/null && eval "$(zoxide init zsh)"'
+zsh-defer eval 'command -v wezterm >/dev/null && eval "$(wezterm shell-completion --shell zsh)"'
+
+# Homebrew's command-not-found handler (macOS only; no-op where absent).
+zsh-defer eval '[[ -r ${HOMEBREW_PREFIX:-/opt/homebrew}/Library/Taps/homebrew/homebrew-command-not-found/handler.sh ]] && source ${HOMEBREW_PREFIX:-/opt/homebrew}/Library/Taps/homebrew/homebrew-command-not-found/handler.sh'
+
+zsh-defer source ~/.config/zsh/keybindings.sh
+
+# ── Welcome screen ─────────────────────────────────────────────────────────
+# Shown only when this is the lone pane of the current Zellij session (i.e.
+# just opened a terminal). Summing every tab's selectable tiled + floating
+# panes ignores HUD/which-key/notify plugin panes, so the count is 1 only on a
+# fresh session; new tabs, panes, and reattaches read > 1 and stay quiet. A new
+# window (Cmd+N) is a new session, so it shows again.
+if [[ -n "$ZELLIJ" ]] && \
+   [[ "$(zellij action list-tabs -p --json 2>/dev/null \
+         | jq 'map(.selectable_tiled_panes_count + .selectable_floating_panes_count) | add' 2>/dev/null)" -eq 1 ]]; then
+  type motd >/dev/null 2>&1 && motd
+  print -P -- "                                        %F{#5c6370}━━━━━━━━ ❖ ━━━━━━━━%f\n"
+  type terminal_commands >/dev/null 2>&1 && terminal_commands
+fi
+
+# Run unalias -a when starting a shell session within OpenCode
+if [[ -n "$OPENCODE" ]]; then
+  unalias -a
+fi

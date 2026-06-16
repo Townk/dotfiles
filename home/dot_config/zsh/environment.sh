@@ -34,6 +34,24 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/runtime-${UID:-$(id -u)}"
 # installs (uv tool, project venvs, the nerd-font build) keep working.
 export PIP_REQUIRE_VIRTUALENV=true
 
+# Homebrew. The macOS GUI/launchd session PATH is the bare system one (no
+# /opt/homebrew), and we skip /etc/zprofile's path_helper (no_global_rcs in
+# ~/.zshenv), so nothing else puts Homebrew on PATH. A login shell that starts
+# a fresh process tree — e.g. a new Zellij *server* for a new window — would
+# otherwise see no brew-installed tools at all. Set it statically rather than
+# `eval "$(brew shellenv)"` to avoid forking brew on every shell startup.
+for _brew_prefix in /opt/homebrew /usr/local /home/linuxbrew/.linuxbrew; do
+  if [ -x "$_brew_prefix/bin/brew" ]; then
+    export HOMEBREW_PREFIX="$_brew_prefix"
+    case ":$PATH:" in
+      *":$_brew_prefix/bin:"*) ;;
+      *) PATH="$_brew_prefix/bin:$_brew_prefix/sbin:$PATH" ;;
+    esac
+    break
+  fi
+done
+unset _brew_prefix
+
 # PATH for non-interactive shells. `.zshrc`'s `path=(~/.local/bin …)` only
 # runs in interactive zsh, which means `#!/bin/zsh` scripts (system-update,
 # system-package, …) can't find local/mise binaries. Prepend the two

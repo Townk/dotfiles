@@ -1,0 +1,32 @@
+{{- /*
+  Compile ~/.config/zsh/p10k.zsh to zsh wordcode (.zwc).
+
+  The p10k config is ~1.7k lines and is sourced *synchronously* on the
+  shell's critical path (before the first prompt), so reading it from a
+  precompiled .zwc is a real startup win. zsh's `source` transparently
+  uses `<file>.zwc` when it exists and is not older than the source, and
+  silently falls back to the plain file otherwise — so a stale or missing
+  .zwc is never fatal.
+
+  z4h used to do this via `z4h compile`; that mechanism left with the
+  framework, so we own it here now.
+
+  run_onchange: chezmoi re-runs this whenever the rendered text changes.
+  The hash below embeds p10k.zsh's content, so editing the config (or
+  `p10k configure` regenerating it via chezmoi) re-fires the compile.
+
+  p10k.zsh hash: {{ include "dot_config/zsh/p10k.zsh" | sha256sum }}
+*/ -}}
+#!/bin/bash
+set -uo pipefail
+
+cfg="${XDG_CONFIG_HOME:-$HOME/.config}/zsh/p10k.zsh"
+[ -r "$cfg" ] || exit 0
+
+command -v zsh >/dev/null 2>&1 || { echo "zsh not found; skipping p10k compile" >&2; exit 0; }
+
+# -R: read the whole file into memory on load (best for a one-shot startup
+# source, and matches how the compdump is compiled in completion.sh).
+zsh -fc 'zcompile -R -- "$1"' _ "$cfg" \
+  && echo "⚡  Compiled $cfg → $cfg.zwc" \
+  || echo "p10k zcompile failed (non-fatal); source will use the plain file" >&2

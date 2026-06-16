@@ -23,7 +23,7 @@
 # installed so the dispatcher can fall through to a more generic path.
 #
 # Lives as a script (not a zsh function) so fzf's preview subshell —
-# spawned via `$SHELL -c '<cmd>'`, non-interactive, no ~/.zshrc — can
+# spawned via `$SHELL -c '<cmd>'`, non-interactive, no ~/.config/zsh/.zshrc — can
 # find it via PATH.
 
 set -u
@@ -351,16 +351,11 @@ function geometry() {
 }
 
 function main() {
-  # z4h's tab-complete sends fzf two different formats depending on the
-  # code path:
-  #   -z4h-comp-files  →  <raw-path>\0<colored-or-quoted-display>
-  #   -z4h-comp-words  →  <numeric-index>\0<shell-quoted-name>
-  # Both put the *display* form in the last field, which is what `{-1}`
-  # in the preview command resolves to. The display form is shell-quoted
-  # (e.g. `2\ color\ sign\ .2mm.3mf`), so $1 inherits those backslashes
-  # verbatim. `${(Q)var}` strips one level of shell quoting — converting
-  # `2\ color\ sign\ .2mm.3mf` back to `2 color sign .2mm.3mf` — which
-  # lets the subsequent stat checks find the actual file.
+  # fzf passes the selection as `{}` (bare fzf, super-cd, completion). The
+  # display form can be shell-quoted (e.g. `2\ color\ sign\ .2mm.3mf`), so
+  # $1 inherits those backslashes verbatim. `${(Q)var}` strips one level of
+  # shell quoting — converting `2\ color\ sign\ .2mm.3mf` back to
+  # `2 color sign .2mm.3mf` — so the subsequent stat checks find the file.
   local target=${(Q)${1:-}}
 
   geometry
