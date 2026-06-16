@@ -15,6 +15,19 @@ export XDG_STATE_HOME="$HOME/.local/state"
 export XDG_BIN_HOME="$HOME/.local/bin"
 export GNUPGHOME="$XDG_CONFIG_HOME/gnupg"
 
+# Force XDG compliance for tools that default to ~/.<dir>. Read here (not just
+# .zshrc) so launchd/GUI-spawned processes see the same paths. npm's cache stays
+# in the userconfig itself (cache=${XDG_CACHE_HOME}/npm).
+export NPM_CONFIG_USERCONFIG="$XDG_CONFIG_HOME/npm/npmrc"
+export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
+
+# Rust is managed by mise's rustup backend. mise reads MISE_*_HOME and then
+# re-exports CARGO_HOME/RUSTUP_HOME from them — setting CARGO_HOME directly here
+# wouldn't survive `mise activate`. The toolchain stays rustup-managed under
+# RUSTUP_HOME; $MISE_CARGO_HOME/bin is added to PATH below (cargo-installed bins).
+export MISE_CARGO_HOME="$XDG_DATA_HOME/cargo"
+export MISE_RUSTUP_HOME="$XDG_DATA_HOME/rustup"
+
 # $UID is a zsh builtin (no fork); falls back to `id -u` under sh.
 # $TMPDIR is set by launchd for user processes; defaults to /tmp elsewhere.
 export XDG_RUNTIME_DIR="${TMPDIR:-/tmp}"
@@ -65,8 +78,8 @@ case ":$PATH:" in
   *) PATH="$HOME/.local/share/mise/shims:$PATH" ;;
 esac
 case ":$PATH:" in
-  *":$HOME/.cargo/bin:"*) ;;
-  *) PATH="$PATH:$HOME/.cargo/bin" ;;
+  *":$MISE_CARGO_HOME/bin:"*) ;;
+  *) PATH="$PATH:$MISE_CARGO_HOME/bin" ;;
 esac
 if [ -d /snap/bin ]; then
   case ":$PATH:" in

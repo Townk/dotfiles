@@ -1,6 +1,9 @@
-# Per-user npm config (~/.npmrc). See: npm help npmrc
-#
+# Per-user npm config (~/.config/npm/npmrc). See: npm help npmrc
+
 # npm 11+ advisory allowScripts policy for global installs. Transitive deps of
 # @earendil-works/pi-coding-agent; scripts are reviewed once here.
 # Repeat keys overwrite in ini files — use one line or allow-scripts[] entries.
-allow-scripts=protobufjs,@google/genai
+allow-scripts=protobufjs,@google/genai,bun
+
+# XDG compliance. npm expands ${ENV}, so this stays portable across machines.
+cache=${XDG_CACHE_HOME}/npm
