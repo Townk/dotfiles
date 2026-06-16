@@ -1,0 +1,61 @@
+#!/usr/bin/env zsh
+#
+# fzf-tab-preview-open — open the highlighted fzf-tab candidate in a floating
+# Zellij preview pane.
+#
+# Called from an fzf `execute-silent(...)` binding with fzf-tab's field-2
+# display key. The helper resolves that key through fzf-tab's live compcap file.
+
+emulate -L zsh
+set -u
+
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+debug_log() {
+  [[ -n ${FZF_TAB_PREVIEW_OPEN_DEBUG:-} ]] || return 0
+  local log_dir="${XDG_CACHE_HOME:-$HOME/.cache}"
+  mkdir -p "$log_dir" 2>/dev/null
+  print -r -- "$*" >>"$log_dir/fzf-tab-preview-open.log"
+}
+
+resolve_fzf_tab_desc() {
+  local desc="$1"
+  local tmp_dir="${TMPPREFIX:-/tmp/zsh}-fzf-tab-$USER"
+  local bs=$'\2'
+  local file line
+  local -a files
+
+  files=("$tmp_dir"/compcap.*(N.om))
+  for file in "$files[@]"; do
+    for line in "${(@f)$(<"$file")}"; do
+      [[ ${line%%$bs*} == "$desc" ]] || continue
+      local -A v=("${(@0)${line#*$bs}}")
+      [[ -n ${v[realdir]-} ]] || return 1
+      print -r -- "${v[realdir]}${(Q)v[word]}"
+      return 0
+    done
+  done
+
+  return 1
+}
+
+target="${1:-}"
+if [[ "$target" == "--fzf-tab-desc" ]]; then
+  target="$(resolve_fzf_tab_desc "${2:-}")" || target=""
+fi
+
+debug_log "target=$target"
+[[ -n "$target" && -f "$target" ]] || { debug_log "skip=not-file"; exit 0; }
+[[ -n ${ZELLIJ:-} ]] || { debug_log "skip=not-zellij"; exit 0; }
+
+mime="$(file -b --mime-type -L "$target" 2>/dev/null)"
+debug_log "mime=$mime"
+[[ "$mime" == image/* ]] || { debug_log "skip=not-image"; exit 0; }
+
+zellij_cmd="${FZF_TAB_PREVIEW_OPEN_ZELLIJ:-zellij}"
+debug_log "open=$target"
+exec "$zellij_cmd" action new-pane \
+  --floating --close-on-exit \
+  --name "" --borderless false --pinned false \
+  --width 90% --height 90% \
+  -- "$HOME/.config/zellij/scripts/zellij-preview-image" "$target"

@@ -128,6 +128,8 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
 
   # TAB descends into the highlighted directory and re-opens the menu — the
   # equivalent of z4h's `tab:repeat` (fzf-tab's continuous-trigger, default '/').
+  # See the `_fzf-tab-apply` override below, which makes this descend-only: on a
+  # file or empty dir, TAB finishes instead of re-completing the next argument.
   zstyle ':fzf-tab:*' continuous-trigger 'tab'
 
   # Preview only when the candidate resolves to a real path (directories for
@@ -135,6 +137,44 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   # PIDs — resolve to nothing and get no preview, per the "cd/files only" scope.
   zstyle ':fzf-tab:complete:*:*' fzf-preview \
     '[[ -d $realpath || -f $realpath ]] && preview $realpath'
+
+  # CTRL-O: pop the highlighted file into a full-size floating Zellij pane for a
+  # larger image view — an escape hatch from cramped inline previews.
+  # fzf-tab's raw fzf row keeps the display key in field 2. The helper resolves
+  # it through fzf-tab's live compcap file to recover the real path, then opens
+  # images with the existing zellij-preview-image wrapper (renders at pane size,
+  # waits for a key) and --close-on-exit reaps the pane. `execute-silent` keeps
+  # the menu open and never tears fzf down, so there's no Sixel-teardown to fight.
+  zstyle ':fzf-tab:*' fzf-bindings \
+    'ctrl-o:execute-silent($HOME/.local/bin/fzf-tab-preview-open --fzf-tab-desc {2})'
+
+  # Make the `tab` continuous-trigger descend-only (z4h `tab:repeat` semantics).
+  # Out of the box, continuous-trigger means "accept then re-complete" with no
+  # file/dir distinction: accepting a *file* finishes its word, so zsh advances
+  # to the next argument and the menu stays open (e.g. `mv ~/Downloads/<file>`
+  # would jump to completing the destination). We want TAB to descend into a
+  # real directory but *finish* on a file or empty dir.
+  #
+  # fzf-tab sets `_ftb_continue` whenever the trigger is pressed; the loop in
+  # `fzf-tab-complete` honors it after `_fzf-tab-apply` inserts the choice. Wrap
+  # apply to cancel that pending continue unless the accepted candidate is a
+  # real directory. `realdir`+`word` is how fzf-tab itself derives `$realpath`
+  # for previews (see lib/-ftb-preview.tpl); non-path completions (git refs,
+  # options, PIDs) have no `realdir`, so they finish too.
+  functions[-ftb-apply-orig]=$functions[_fzf-tab-apply]
+  _fzf-tab-apply() {
+    -ftb-apply-orig "$@"
+    local r=$?
+    if (( _ftb_continue )) && (( $#_ftb_choices == 1 )); then
+      local bs=$'\2' choice=$_ftb_choices[1]
+      local match=${_ftb_compcap[(r)${(b)choice}$bs*]}
+      [[ -z $match ]] && match=${_ftb_compcap[(r)${(b)${(q)choice}}$bs*]}
+      local -A v=("${(@0)${match#*$bs}}")
+      [[ -n ${v[realdir]-} && -d ${v[realdir]}${(Q)v[word]} ]] || _ftb_continue=0
+    fi
+    return r
+  }
+
 fi
 
 unset plugin_dir
