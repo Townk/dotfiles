@@ -71,7 +71,7 @@ export FZF_DEFAULT_OPTS="
 --color=prompt:#cba6f7 --color=pointer:#f5e0dc --color=marker:#b4befe
 --color=info:#cba6f7 --color=gutter:#1e1e2e --color=header:#f38ba8
 --color=spinner:#f5e0dc --color=border:#313244
---filepath-word --border --height=45% --layout=reverse --info=inline-right
+--filepath-word --border --height=~40% --layout=reverse --info=inline-right
 --exit-0 --select-1 --padding=0,2,0,0
 --prompt '    ' --pointer ➔ --marker ✔
 --preview-window=right:60%,border-line,noinfo
@@ -110,10 +110,21 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   # so every fzf surface matches. `use-fzf-default-opts` is what pulls that in.
   zstyle ':fzf-tab:*' use-fzf-default-opts yes
 
-  # The one bit of chrome it must re-assert is ctrl-space: fzf-tab's own default
-  # binds (-ftb-fzf) rebind it to multi-select *after* FZF_DEFAULT_OPTS, so
-  # reclaim it here to keep ctrl-space on preview-toggle like every other surface.
-  zstyle ':fzf-tab:*' fzf-flags --bind=ctrl-space:toggle-preview
+  # fzf-flags is appended LAST on fzf-tab's own fzf command line (after its
+  # internally computed --height), so it's where we override two things:
+  #
+  #   --height=~40%  fzf-tab sizes the menu as `#candidates + fzf-pad(2) +
+  #                  headers` rows, budgeting only ~2 rows of chrome. But
+  #                  use-fzf-default-opts pulls in `--border`, which costs 2
+  #                  *more* rows (top+bottom) the formula never accounts for —
+  #                  so small menus get clipped (e.g. 5 items shown as 3). The
+  #                  README flags this exact `--border` breakage (Aloxaf/
+  #                  fzf-tab#455). `~40%` hands sizing back to fzf: it shrinks
+  #                  to fit the content (chrome included) and grows only up to
+  #                  40% of the pane — matching the other fzf surfaces.
+  #   ctrl-space     fzf-tab's defaults (-ftb-fzf) rebind it to multi-select
+  #                  *after* FZF_DEFAULT_OPTS; reclaim it for preview-toggle.
+  zstyle ':fzf-tab:*' fzf-flags --height=~40% --bind=ctrl-space:toggle-preview
 
   # TAB descends into the highlighted directory and re-opens the menu — the
   # equivalent of z4h's `tab:repeat` (fzf-tab's continuous-trigger, default '/').
