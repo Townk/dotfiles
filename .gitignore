@@ -21,8 +21,16 @@ home/dot_pi/agent/auth.json
 # macOS noise (only emitted in some chezmoi-source directories)
 **/.DS_Store
 
+# Python bytecode caches from local helper validation.
+**/__pycache__/
+
 # Agent hand-off notes (ephemeral context docs, not for the repo)
 HAND-OFF.md
+
+# Local agent runtime memory, CCR caches, and benchmark logs.
+home/dot_headroom/
+home/dot_local/state/headroom/
+home/dot_local/state/local-llm/
 
 # Superpowers planning/spec artifacts (agent working notes, kept on disk only)
 docs/superpowers/

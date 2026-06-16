@@ -25,4 +25,9 @@ mlx-vlm --python 3.13
 huggingface-hub
 rich-cli --with catppuccin[pygments]
 
+# Headroom — local context compression / CCR / memory proxy for agent traffic.
+# Managed as an explicit package spec so `uv tool list` tracks `headroom-ai`
+# while installing the proxy, MCP, memory, and Apple GPU embedder extras.
+headroom-ai -- headroom-ai[proxy,mcp,memory,pytorch-mps] --python 3.13
+
 # vim:ft=conf.gotmpl

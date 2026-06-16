@@ -87,4 +87,52 @@ error_log_path = "~/.local/state/llama-swap/llama-swap.log"
 # mlx_lm.server / mlx_vlm.server shims that llama-swap launches.
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
+# local-llm-gateway — OpenAI-compatible policy shim in front of llama-swap.
+# It adds the `local-agent-auto` alias, caps oversized local generations, and
+# routes auto requests using the latest local-llm-bench measurements.
+[local-llm-gateway]
+description    = "Local LLM policy gateway: adaptive routing and output caps"
+cmd            = ["{{ .chezmoi.homeDir }}/.local/libexec/local-llm-gateway", "--host", "127.0.0.1", "--port", "8100", "--target", "http://127.0.0.1:8000"]
+keep_alive     = true
+run_at_load    = true
+log_path       = "~/.local/state/local-llm/gateway.log"
+error_log_path = "~/.local/state/local-llm/gateway.log"
+
+[local-llm-gateway.env]
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+HOME = "{{ .chezmoi.homeDir }}"
+XDG_STATE_HOME = "{{ .chezmoi.homeDir }}/.local/state"
+LOCAL_LLM_FLOOR_TPS = "25"
+LOCAL_LLM_PREFERRED_MODEL = "Qwen3.6-35B-A3B-6bit"
+LOCAL_LLM_MAX_TOKENS = "2048"
+LOCAL_LLM_LONG_PROMPT_TOKENS = "6000"
+LOCAL_LLM_LONG_PROMPT_MAX_TOKENS = "512"
+
+# headroom — local compression and CCR retrieval proxy.
+# Failure learning is intentionally not enabled: this chezmoi repo is public,
+# and learned session content must not be written into tracked prompts.
+[headroom]
+description    = "Headroom local context compression and CCR proxy"
+cmd            = ["headroom", "proxy", "--port", "8787"]
+keep_alive     = true
+run_at_load    = true
+working_dir    = "~"
+log_path       = "~/.local/state/headroom/headroom.log"
+error_log_path = "~/.local/state/headroom/headroom.log"
+
+[headroom.env]
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+HOME = "{{ .chezmoi.homeDir }}"
+XDG_STATE_HOME = "{{ .chezmoi.homeDir }}/.local/state"
+XDG_CACHE_HOME = "{{ .chezmoi.homeDir }}/.cache"
+HEADROOM_TELEMETRY = "off"
+HEADROOM_WORKSPACE_DIR = "{{ .chezmoi.homeDir }}/.local/state/headroom"
+HEADROOM_CONFIG_DIR = "{{ .chezmoi.homeDir }}/.config/headroom"
+HEADROOM_MEMORY_DB_PATH = "{{ .chezmoi.homeDir }}/.local/state/headroom/memory.db"
+HEADROOM_MEMORY_INJECTION_MODE = "disabled"
+HEADROOM_HOST = "127.0.0.1"
+HEADROOM_PORT = "8787"
+HEADROOM_EMBEDDER_RUNTIME = "pytorch_mps"
+OPENAI_TARGET_API_URL = "http://127.0.0.1:8100/v1"
+
 # vim:ft=toml.gotmpl

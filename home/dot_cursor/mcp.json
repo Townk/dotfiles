@@ -3,6 +3,19 @@
     "context7": {
       "url": "https://mcp.context7.com/mcp"
     },
+    "headroom": {
+      "type": "stdio",
+      "command": "headroom",
+      "args": [
+        "mcp",
+        "serve",
+        "--proxy-url",
+        "http://127.0.0.1:8787"
+      ],
+      "env": {
+        "HEADROOM_TELEMETRY": "off"
+      }
+    },
     "wezterm": {
       "command": "wezterm-mcp"
     },

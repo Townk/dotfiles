@@ -91,6 +91,12 @@
 .pi/agent/npm
 .pi/agent/sessions
 
+# Local agent memory / benchmark state. These are runtime databases and logs,
+# not dotfiles; they may contain session-derived context.
+.headroom
+.local/state/headroom
+.local/state/local-llm
+
 # pi-cockpit symlink is only deployed when the dev working tree exists
 # (data.pi.devExtensions["pi-cockpit"] is non-empty in chezmoi.toml).
 # On consumer machines the symlink is suppressed and a run_once script

@@ -7,14 +7,6 @@
       "baseUrl": "http://localhost:8000/v1",
       "models": [
         {
-          "id": "Qwen3.6-27B-6bit",
-          "name": "Qwen 3.6 27B Dense (6-bit)",
-          "contextWindow": 131072,
-          "maxTokens": 16384,
-          "description": "Primary multi-file reasoning model. Best architectural mapping across Python and TypeScript repositories.",
-          "supportsToolCalling": true
-        },
-        {
           "id": "Qwen3.6-35B-A3B-4bit",
           "name": "Qwen 3.6 35B MoE (4-bit)",
           "contextWindow": 131072,
@@ -83,10 +75,10 @@
     }
 {{- else }}
     "mlx": {
-      "name": "MLX (local, llama-swap)",
-      "baseUrl": "http://localhost:8000/v1",
+      "name": "MLX (local, Headroom + gateway + llama-swap)",
+      "baseUrl": "http://localhost:8787/v1",
       "api": "openai-completions",
-      "apiKey": "llama-swap-local",
+      "apiKey": "local-headroom",
       "authHeader": true,
       "compat": {
         "supportsDeveloperRole": false,
@@ -94,13 +86,27 @@
       },
       "models": [
         {
-          "id": "Qwen3.6-27B-4bit",
-          "name": "Qwen3.6 27B (4-bit, MTP)",
+          "id": "local-agent-auto",
+          "name": "Local Agent Auto (adaptive Qwen MoE/Gemma)",
+          "reasoning": false,
+          "input": ["text", "image"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 32768,
+          "maxTokens": 2048,
+          "supportsToolCalling": true,
+          "compat": {
+            "maxTokensField": "max_tokens"
+          }
+        },
+        {
+          "id": "Qwen3.6-35B-A3B-6bit",
+          "name": "Qwen3.6 35B-A3B MoE (6-bit, mlx_lm)",
           "reasoning": true,
           "input": ["text"],
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
           "contextWindow": 32768,
-          "maxTokens": 32768,
+          "maxTokens": 2048,
+          "supportsToolCalling": true,
           "compat": {
             "thinkingFormat": "qwen-chat-template",
             "maxTokensField": "max_tokens"
@@ -113,7 +119,8 @@
           "input": ["text", "image"],
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
           "contextWindow": 32768,
-          "maxTokens": 32768,
+          "maxTokens": 2048,
+          "supportsToolCalling": true,
           "compat": {
             "maxTokensField": "max_tokens"
           }
