@@ -2,6 +2,7 @@
 
 tap "1password/tap"
 tap "jorgelbg/tap"
+tap "mostlygeek/llama-swap"
 tap "olets/tap"
 tap "rafaelgarrido/caveats"
 
@@ -258,13 +259,15 @@ brew 'imagemagick'                  # Image conversion utility
 brew 'jless'                        # JSON visualizer
 brew 'lazygit'                      # Git TUA
 brew 'lazysql'                      # DB TUA
+brew 'llama-swap'                    # Model-swapping proxy in front of mlx_lm/mlx_vlm servers (mostlygeek/llama-swap tap)
 brew 'macchina'                     # Environment summary when open a shell
 brew 'mole'                         # Clean up tool
 brew 'mosh'                         # Intermittent connectivity remote connection (`ssh` but better[-ish])
 brew 'neovim'                       # Editor
-# omlx (Local AI models, Apple Silicon) is provisioned via Uvfile.
-# python@3.11 used to be declared here as omlx's pinned runtime under
-# brew; now uv-managed since the venv is owned by `uv tool install`.
+# mlx-lm / mlx-vlm (local AI models, Apple Silicon) are provisioned via
+# Uvfile; llama-swap (above) is the brew-managed proxy that launches them.
+# python@3.11 is no longer declared here — the venvs are owned by `uv tool
+# install`.
 brew 'pinentry'                     # Terminal pinentry (curses/tty) — used over SSH by pinentry-auto
 brew 'pinentry-mac'                 # GUI passphrase entry; pinentry-touchid's fallback
 brew 'pinentry-touchid'             # Touch ID for GPG passphrases (wraps pinentry-mac); needs jorgelbg/tap

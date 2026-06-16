@@ -15,10 +15,14 @@
 {{ if eq .profile "personal" -}}
 qmk-skim
 {{- end }}
-# omlx is a Python package (LLM inference server for Apple Silicon).
-# Pinned to Python 3.11 because mlx/transformers wheel coverage is
-# strongest there; uv auto-downloads the interpreter if missing.
-omlx -- git+https://github.com/jundot/omlx --python 3.11
+# mlx-lm + mlx-vlm — Apple's MLX inference CLIs/servers: the sanctioned,
+# fastest path on Apple Silicon. Each model is served by its own
+# mlx_lm.server / mlx_vlm.server process (so each keeps its own MTP draft
+# config); llama-swap (brew) is the proxy that launches/hot-swaps them on
+# one port. Python 3.13 has full mlx wheel coverage; uv fetches it if missing.
+mlx-lm --python 3.13
+mlx-vlm --python 3.13
+huggingface-hub
 rich-cli --with catppuccin[pygments]
 
 # vim:ft=conf.gotmpl

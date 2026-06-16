@@ -82,16 +82,20 @@
       ]
     }
 {{- else }}
-    "omlx": {
-      "name": "oMLX (local)",
+    "mlx": {
+      "name": "MLX (local, llama-swap)",
       "baseUrl": "http://localhost:8000/v1",
       "api": "openai-completions",
-      "apiKey": "rdw.tba!VWR@dny7uzt",
+      "apiKey": "llama-swap-local",
       "authHeader": true,
+      "compat": {
+        "supportsDeveloperRole": false,
+        "maxTokensField": "max_tokens"
+      },
       "models": [
         {
-          "id": "Qwen3.6-27B-oQ4-mtp",
-          "name": "Qwen3.6 27B (oQ4, MTP)",
+          "id": "Qwen3.6-27B-4bit",
+          "name": "Qwen3.6 27B (4-bit, MTP)",
           "reasoning": true,
           "input": ["text"],
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -103,8 +107,8 @@
           }
         },
         {
-          "id": "gemma-4-26B-A4B-it-OptiQ-4bit",
-          "name": "Gemma 4 26B-A4B IT (OptiQ 4-bit)",
+          "id": "gemma-4-12B-it-8bit",
+          "name": "Gemma 4 12B IT (8-bit, assistant MTP)",
           "reasoning": false,
           "input": ["text", "image"],
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },

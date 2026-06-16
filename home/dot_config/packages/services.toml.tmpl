@@ -65,22 +65,26 @@ error_log_path = "~/.cache/system-images/automount.log"
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 {{ end }}
 
-# omlx — LLM inference server (Apple Silicon). Parameters mirror what
-# `brew services` generated from the formula before we migrated the
-# binary to the Uvfile (`uv tool install`). The binary now lives at
-# ~/.local/bin/omlx instead of /opt/homebrew/opt/omlx/bin/omlx.
-[omlx]
-description    = "Local LLM inference server for Apple Silicon"
-cmd            = ["omlx", "serve"]
+# llama-swap — single OpenAI-compatible endpoint on :8000 that hot-swaps
+# between per-model mlx_lm.server / mlx_vlm.server backends. Each model runs
+# as its own process so it keeps its own MTP draft config (Qwen native MTP /
+# Gemma assistant-drafter MTP); only one is resident at a time. Replaces the
+# old single-process omlx server. llama-swap is brew-managed; the backends
+# (mlx-lm, mlx-vlm) are uv-managed. The --config arg is rendered to an
+# absolute path because the worker passes cmd args verbatim (no ~ expansion).
+[llama-swap]
+description    = "Local LLM inference: llama-swap → mlx_lm/mlx_vlm (MTP, on-demand swap)"
+cmd            = ["llama-swap", "--config", "{{ .chezmoi.homeDir }}/.config/llama-swap/config.yaml", "--listen", "127.0.0.1:8000"]
 keep_alive     = true
 run_at_load    = true
-working_dir    = "~/.omlx"
-log_path       = "~/.omlx/log/omlx.log"
-error_log_path = "~/.omlx/log/omlx.log"
+working_dir    = "~/.local/share/mlx"
+log_path       = "~/.local/state/llama-swap/llama-swap.log"
+error_log_path = "~/.local/state/llama-swap/llama-swap.log"
 
-[omlx.env]
-# launchd doesn't inherit interactive shell PATH; bake in the dirs omlx
-# might shell out into. ~/.local/bin is where uv installs the omlx shim.
+[llama-swap.env]
+# launchd doesn't inherit interactive shell PATH; bake in the dirs the
+# backends shell out into. ~/.local/bin is where uv installs the
+# mlx_lm.server / mlx_vlm.server shims that llama-swap launches.
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 # vim:ft=toml.gotmpl
