@@ -5,6 +5,22 @@
 # Port of quicklaunch.wezterm's plugin/quick-launch/utils.lua
 # (cmd_prefix + make_spawn_command + the split/layout logic).
 
+ql_zellij_bin() {
+  local z
+  z="${ZELLIJ_BIN:-${commands[zellij]:-}}"
+  [[ -n "$z" && -x "$z" ]] && {
+    print -r -- "$z"
+    return 0
+  }
+  for z in /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij "$HOME/.local/bin/zellij"; do
+    [[ -x "$z" ]] && {
+      print -r -- "$z"
+      return 0
+    }
+  done
+  return 1
+}
+
 # Read a JSON array's `.args[]` into a bash array named by $1 (nameref-free
 # so it works on bash 3.2: we assign to the caller's variable via printf).
 # Usage: ql_read_args ARRVAR "$action_json"
@@ -145,7 +161,8 @@ ql_is_floating_direction() {
 }
 
 ql_terminal_size() {
-  local zj="${ZELLIJ_BIN:-/opt/homebrew/bin/zellij}" tab_id size
+  local zj tab_id size
+  zj="$(ql_zellij_bin || true)"
   if [[ -x "$zj" ]]; then
     tab_id="$("$zj" action list-tabs -s 2>/dev/null | awk -F'  +' 'NR > 1 && $4 == "true" { print $1; exit }')" || tab_id=""
     size="$(

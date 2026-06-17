@@ -3,7 +3,7 @@
 # CLI. Port of quicklaunch.wezterm's plugin/quick-launch/actions.lua.
 
 # Absolute zellij binary (the modal scripts use the same default + override).
-ZJ="${ZELLIJ_BIN:-/opt/homebrew/bin/zellij}"
+ZJ="${ZELLIJ_BIN:-$(ql_zellij_bin || true)}"
 
 # Look up a target by id. Echoes the element JSON or empty. Panes are
 # searched everywhere they can be defined (top-level + nested in tabs and

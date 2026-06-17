@@ -47,11 +47,27 @@
 #
 # Env-var overrides:
 #   ZELLIJ_BIN  Absolute path to the zellij binary
-#               (default: /opt/homebrew/bin/zellij)
+#               (default: first zellij found on PATH / known install paths)
 
 set -euo pipefail
 
-ZELLIJ_BIN="${ZELLIJ_BIN:-/opt/homebrew/bin/zellij}"
+resolve_zellij_bin() {
+  local z
+  z="${commands[zellij]:-}"
+  [[ -n "$z" && -x "$z" ]] && {
+    print -r -- "$z"
+    return 0
+  }
+  for z in /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij "$HOME/.local/bin/zellij"; do
+    [[ -x "$z" ]] && {
+      print -r -- "$z"
+      return 0
+    }
+  done
+  return 1
+}
+
+ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_zellij_bin || true)}"
 
 title=""
 inject=0

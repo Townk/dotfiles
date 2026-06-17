@@ -14,8 +14,8 @@
 # they are merged over these defaults (matching `id`s in launch.d win).
 
 tools:
-  editor: /opt/homebrew/bin/nvim
-  mise: /opt/homebrew/bin/mise
+  editor: nvim
+  mise: mise
 
 workspaces:
   - id: default
@@ -220,7 +220,7 @@ tabs:
       type: Run
       label: Open System Resources
       args:
-        - /opt/homebrew/bin/btm --battery
+        - btm --battery
 
   - id: network-activity
     name: Network activity
@@ -229,7 +229,7 @@ tabs:
       type: Run
       label: Open Network activity
       args:
-        - sudo /opt/homebrew/bin/bandwhich --total-utilization
+        - sudo bandwhich --total-utilization
 
 panes:
   - id: git-log
@@ -243,7 +243,7 @@ panes:
       type: Run
       label: Git Log on current directory
       args:
-        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && LESS='-RSX' /opt/homebrew/bin/git log --graph --pretty='format:%C(auto)%h %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)' --all; } || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key; }"
+        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && LESS='-RSX' git log --graph --pretty='format:%C(auto)%h %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)' --all; } || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key; }"
 
   - id: lazy-git
     name: LazyGit
@@ -256,4 +256,4 @@ panes:
       type: Run
       label: Open LazyGit on current directory
       args:
-        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && /opt/homebrew/bin/lazygit; }  || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key; }"
+        - "{ git rev-parse --show-toplevel >/dev/null 2>&1 && lazygit; }  || { echo 'Not a Git repo!'; echo 'Press any key to close the panel...'; read -s -n 1 -r key; }"

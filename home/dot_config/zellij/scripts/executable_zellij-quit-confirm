@@ -51,14 +51,31 @@
 #
 # Env-var overrides:
 #   ZELLIJ_BIN  Absolute path to the zellij binary
-#               (default: /opt/homebrew/bin/zellij)
+#               (default: first zellij found on PATH / known install paths)
 #   GUM_BIN     Absolute path to gum
-#               (default: /opt/homebrew/bin/gum)
+#               (default: first gum found on PATH / known install paths)
 
 set -euo pipefail
 
-ZELLIJ_BIN="${ZELLIJ_BIN:-/opt/homebrew/bin/zellij}"
-GUM_BIN="${GUM_BIN:-/opt/homebrew/bin/gum}"
+resolve_bin() {
+  local name="$1" p
+  shift
+  p="${commands[$name]:-}"
+  [[ -n "$p" && -x "$p" ]] && {
+    print -r -- "$p"
+    return 0
+  }
+  for p in "$@"; do
+    [[ -x "$p" ]] && {
+      print -r -- "$p"
+      return 0
+    }
+  done
+  return 1
+}
+
+ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_bin zellij /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij "$HOME/.local/bin/zellij" || true)}"
+GUM_BIN="${GUM_BIN:-$(resolve_bin gum /opt/homebrew/bin/gum /usr/local/bin/gum "$HOME/.local/share/mise/shims/gum" "$HOME/.local/bin/gum" || true)}"
 
 [[ -x "$ZELLIJ_BIN" ]] || {
   echo "zellij-quit-confirm: missing or non-executable: $ZELLIJ_BIN" >&2
