@@ -1,0 +1,19 @@
+#compdef ai-commit-claude
+#
+# Completion for ai-commit-claude (also reached when `ai-commit claude …`
+# defers here). --dry-run and --no-commit are mutually exclusive. Positionals
+# after `--` are extra agent guidance (often file globs).
+
+_ai-commit-claude() {
+  _arguments -s \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '(-u --untracked)'{-u,--untracked}'[also include untracked files]' \
+    '(-d --dry-run -n --no-commit)'{-d,--dry-run}'[print the plan without staging or committing]' \
+    '(-n --no-commit -d --dry-run)'{-n,--no-commit}'[stage + open \$EDITOR + prompt per commit]' \
+    '(-f --force-refresh --replan)'{-f,--force-refresh,--replan}'[ignore any cached plan and replan]' \
+    '(-m --model)'{-m,--model}'[override the model (default: sonnet)]:model' \
+    '(-v --verbose)'{-v,--verbose}'[show claude output as it plans]' \
+    '*::extra guidance:_files'
+}
+
+_ai-commit-claude "$@"

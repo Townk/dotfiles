@@ -1,0 +1,398 @@
+#!/usr/bin/env zsh
+#
+# ai-commit-claude — AI-driven git commits via Claude Code in headless mode.
+#
+# Asks `claude` to analyze the working tree, group changes into logical
+# commits, and produce Conventional Commits-format messages. The script owns
+# every git operation. Dry-runs and --no-commit save the plan in .git so a
+# later run can execute the same plan without asking the model again.
+#
+# Agent contract: claude reads the diff, writes a JSON plan to a tempfile,
+# then exits. It never runs `git add` or `git commit`. The script reads the
+# plan and stages + commits one group at a time.
+#
+# Usable standalone or as a harness behind the `ai-commit` dispatcher, which
+# discovers this script via the `ai-commit-*` naming and the --probe contract.
+
+set -eu -o pipefail
+
+# ────────────────────────────────────────────────────────────────────
+# Defaults — overridable via env or flags
+# ────────────────────────────────────────────────────────────────────
+: "${AI_COMMIT_CLAUDE_BIN:=claude}"
+# Sonnet is the default: commit planning is a short, well-scoped task that
+# doesn't need Opus-level reasoning. `sonnet` is a Claude Code model alias.
+: "${AI_COMMIT_MODEL:=sonnet}"
+# bypassPermissions lets claude use its tools (read-only git, Read, Write the
+# plan file) unattended — the headless equivalent of the cursor harness's
+# `--trust`. The prompt forbids any repo mutation; the script does all git work.
+: "${AI_COMMIT_CLAUDE_PERMISSION_MODE:=bypassPermissions}"
+
+# ────────────────────────────────────────────────────────────────────
+# Probe contract (used by the `ai-commit` dispatcher to detect available
+# harnesses): print a short label and exit 0 iff the backing CLI is present,
+# else exit 1 silently. Handled before anything heavier so it stays cheap.
+# ────────────────────────────────────────────────────────────────────
+if [[ "${1:-}" == --probe ]]; then
+  command -v "$AI_COMMIT_CLAUDE_BIN" >/dev/null 2>&1 || exit 1
+  print -r -- "Claude Code"
+  exit 0
+fi
+
+# ────────────────────────────────────────────────────────────────────
+# Shared commit-agent engine: pulls in the base (C_*, log_*, die), the prompt
+# module (prompt::confirm), and the cagent:: plan/spinner/commit helpers.
+# ────────────────────────────────────────────────────────────────────
+source "$HOME/.local/lib/commit-agent-common.zsh"
+
+usage() {
+  cat <<EOF
+Usage: ai-commit-claude [options] [-- extra-guidance...]
+
+Use Claude Code in headless mode to group the working tree's changes into one
+or more logical commits and create them following Conventional Commits.
+
+Options:
+  -u, --untracked     Also include untracked files in the commits.
+  -d, --dry-run       Print the plan (groupings + messages) without
+                      staging or committing anything.
+  -n, --no-commit     For each planned commit: stage the files, open
+                      \$EDITOR with the message, then prompt to commit.
+                      Saying No aborts without creating the commit.
+  -f, --force-refresh
+      --replan        Ignore any cached commit plan and ask Claude to
+                      analyze the current working tree again.
+  -m, --model <id>    Override the model (default: \$AI_COMMIT_MODEL or
+                      sonnet). Accepts Claude Code aliases (sonnet, opus,
+                      haiku) or a full model id.
+  -v, --verbose       Show claude output as it plans.
+  -h, --help          Show this help.
+
+Extra positional args (after \`--\`) are passed to the agent as
+additional commit guidance — file globs to scope to, scope hints,
+JIRA references, etc.
+
+Environment:
+  AI_COMMIT_CLAUDE_BIN             claude binary (default: claude).
+  AI_COMMIT_MODEL                  Default model (default: sonnet).
+  AI_COMMIT_CLAUDE_PERMISSION_MODE claude --permission-mode
+                                   (default: bypassPermissions).
+
+Logs:
+  claude's stdout+stderr is appended to
+  \${XDG_STATE_HOME:-\$HOME/.local/state}/ai-commit-claude/errors.log
+EOF
+}
+
+# ────────────────────────────────────────────────────────────────────
+# Parse args
+# ────────────────────────────────────────────────────────────────────
+include_untracked=0
+dry_run=0
+no_commit=0
+force_refresh=0
+verbose=0
+model="$AI_COMMIT_MODEL"
+extra_guidance=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -u | --untracked)
+      include_untracked=1
+      shift
+      ;;
+    -d | --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -n | --no-commit)
+      no_commit=1
+      shift
+      ;;
+    -f | --force-refresh | --replan)
+      force_refresh=1
+      shift
+      ;;
+    -m | --model)
+      [[ $# -ge 2 ]] || die "--model needs a value"
+      model="$2"
+      shift 2
+      ;;
+    -v | --verbose)
+      verbose=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      extra_guidance=("$@")
+      break
+      ;;
+    -*)
+      usage >&2
+      die "unknown flag: $1"
+      ;;
+    *)
+      extra_guidance=("$@")
+      break
+      ;;
+  esac
+done
+
+[[ "$dry_run" -eq 1 && "$no_commit" -eq 1 ]] &&
+  die "--dry-run and --no-commit are mutually exclusive"
+
+# ────────────────────────────────────────────────────────────────────
+# Pre-flight
+# ────────────────────────────────────────────────────────────────────
+command -v git >/dev/null 2>&1 || die "git not on PATH"
+command -v jq >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+  die "not inside a git repository"
+builtin cd "$repo_root" || die "could not cd to repository root: $repo_root"
+
+cache_file="$(git rev-parse --git-path ai-commit-claude-plan.json)" ||
+  die "could not resolve git cache path"
+cache_file="${cache_file:a}"
+use_cached_plan=0
+if [[ -s "$cache_file" && "$force_refresh" -eq 0 ]]; then
+  use_cached_plan=1
+fi
+
+# Refuse pre-existing staged changes — keeps dry-run / no-commit / default
+# modes from getting tangled with whatever the user had half-staged. The
+# user can `git reset` (to unstage) or `git commit` (to commit them) first.
+if ! git diff --cached --quiet; then
+  die "you already have staged changes; \`git reset\` to unstage (or commit them) first"
+fi
+
+have_modified=0
+git diff --quiet || have_modified=1
+
+have_untracked=0
+[[ -n "$(git ls-files --others --exclude-standard)" ]] && have_untracked=1
+
+if [[ "$have_modified" -eq 0 && "$have_untracked" -eq 0 ]]; then
+  [[ -e "$cache_file" ]] && rm -f "$cache_file"
+  log_ok "nothing to commit, working tree clean"
+  exit 0
+fi
+if [[ "$have_modified" -eq 0 && "$include_untracked" -eq 0 && "$use_cached_plan" -eq 0 ]]; then
+  log_warn "only untracked files present; pass -u/--untracked to include them"
+  exit 0
+fi
+
+# ────────────────────────────────────────────────────────────────────
+# Build prompt
+# ────────────────────────────────────────────────────────────────────
+tmpdir="$(mktemp -d -t ai-commit-claude.XXXXXX)"
+claude_pid=""
+cleanup() {
+  [[ -n "$claude_pid" ]] && kill "$claude_pid" 2>/dev/null
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT INT TERM
+
+plan_file="$tmpdir/plan.json"
+
+validate_plan() {
+  local file="$1"
+  jq -e '
+    .commits | type == "array" and length > 0 and
+    all(.[]; (.files | type == "array" and length > 0) and
+             (.message | type == "string" and length > 0))
+  ' "$file" >/dev/null 2>&1
+}
+
+save_plan_cache() {
+  mkdir -p "${cache_file:h}"
+  cp "$plan_file" "$cache_file"
+  log_ok "saved commit plan cache: $cache_file"
+}
+
+clear_plan_cache() {
+  [[ -e "$cache_file" ]] && rm -f "$cache_file"
+}
+
+save_remaining_plan_cache() {
+  local next_idx="$1"
+  local remaining=$((commit_count - next_idx))
+  local tmp_cache
+
+  if [[ "$remaining" -le 0 ]]; then
+    clear_plan_cache
+    return 0
+  fi
+
+  mkdir -p "${cache_file:h}"
+  tmp_cache="${cache_file}.$$"
+  jq --argjson start "$next_idx" '{commits: .commits[$start:]}' "$plan_file" >"$tmp_cache"
+  mv "$tmp_cache" "$cache_file"
+  log_info "updated commit plan cache with ${remaining} remaining commit(s)"
+}
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ai-commit-claude"
+mkdir -p "$state_dir"
+log_file="$state_dir/errors.log"
+
+scope_clause="modified (tracked) files only"
+[[ "$include_untracked" -eq 1 ]] && scope_clause="modified files AND untracked files"
+
+extra_block=""
+if [[ ${#extra_guidance[@]} -gt 0 ]]; then
+  extra_block=$'\n\nAdditional guidance from the caller:\n'"${extra_guidance[*]}"
+fi
+
+if [[ "$use_cached_plan" -eq 1 ]]; then
+  cp "$cache_file" "$plan_file"
+  log_info "Using cached commit plan: $cache_file"
+else
+  command -v "$AI_COMMIT_CLAUDE_BIN" >/dev/null 2>&1 || die "claude ($AI_COMMIT_CLAUDE_BIN) not on PATH"
+
+  prompt=$(
+    cat <<EOF
+You are PLANNING a series of git commits for the repository at:
+
+\`${repo_root}\`
+
+Follow Conventional Commits conventions for every message: a
+\`type(scope): subject\` subject line, an optional Markdown body sized to the
+change, and no sign-off/trailer lines. If this project defines a commit skill,
+use it for message-format conventions.
+
+Important: DO NOT execute any \`git add\`, \`git commit\`, \`git push\`,
+or other write operation in the repository. The calling script does all git
+operations after you finish. You may run read-only git commands and read files
+as needed. The only file you may create or modify is the JSON plan file below:
+
+\`${plan_file}\`
+
+Workflow:
+
+1. Inspect the working tree with \`git status\`, \`git diff\`,
+   \`git log\`, and per-file reads as needed. Scope: ${scope_clause}.
+2. Group the changes into one or more logical commits. Prefer ONE
+   commit when changes are coherent; only split when topics are
+   clearly independent.
+3. For each group, draft a polished message (subject + Markdown body
+   sized to the change).
+4. Use the Write tool to save the plan as JSON at the absolute path
+   \`${plan_file}\`. Do not just describe the plan in your reply — the
+   calling script reads it from disk. The file MUST exist when you
+   finish. Shape MUST be EXACTLY:
+
+\`\`\`json
+{
+  "commits": [
+    {
+      "files": ["relative/path/one", "relative/path/two"],
+      "message": "feat(scope): subject\\n\\n## Changes Description\\n\\n..."
+    }
+  ]
+}
+\`\`\`
+
+Rules:
+- File paths must be repo-relative, exactly as \`git status --short\` would
+  identify them when run from the repository root.
+- Every in-scope changed file must appear in exactly one commit's
+  \`files\` array. No duplicates, no omissions.
+- Do not include files outside the requested scope.
+- \`message\` is the full commit message (subject + blank line + body
+  when warranted); use JSON \`\\n\` for newlines.
+- Do NOT add a \`Co-Authored-By\`, \`Signed-off-by\`, or any AI/agent
+  attribution trailer to \`message\`. The repository owner is the sole
+  author and sole responsible party for every commit.
+- Do NOT stage. Do NOT commit. Do NOT push.
+- When you are done, reply with the literal text \`PLAN_WRITTEN\` and
+  nothing else.${extra_block}
+EOF
+  )
+
+  # ────────────────────────────────────────────────────────────────────
+  # Run agent
+  # ────────────────────────────────────────────────────────────────────
+  {
+    print -- ""
+    print -- "─── $(date '+%Y-%m-%d %H:%M:%S') ─────────────────────────"
+    print -- "bin=$AI_COMMIT_CLAUDE_BIN model=${model:-<default>} permission=$AI_COMMIT_CLAUDE_PERMISSION_MODE untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit force_refresh=$force_refresh cache=$cache_file"
+  } >>"$log_file"
+
+  if [[ -n "$model" ]]; then
+    log_info "Planning commits with Claude ${C_BWH}${model}${C_RES}…"
+  else
+    log_info "Planning commits with Claude's configured model…"
+  fi
+
+  claude_args=(
+    --print
+    --output-format text
+    --permission-mode "$AI_COMMIT_CLAUDE_PERMISSION_MODE"
+    --add-dir "$tmpdir"
+  )
+
+  [[ -n "$model" ]] && claude_args+=(--model "$model")
+
+  if [[ "$verbose" -eq 1 ]]; then
+    "$AI_COMMIT_CLAUDE_BIN" "${claude_args[@]}" "$prompt" 2>&1 | tee -a "$log_file"
+    rc=${pipestatus[1]}
+  else
+    "$AI_COMMIT_CLAUDE_BIN" "${claude_args[@]}" "$prompt" >>"$log_file" 2>&1 &
+    claude_pid=$!
+
+    cagent::spinner "$claude_pid"
+    wait "$claude_pid"
+    rc=$?
+    claude_pid=""
+  fi
+
+  [[ "$rc" -eq 0 ]] || die "claude failed (see $log_file)"
+fi
+
+if [[ ! -s "$plan_file" ]]; then
+  if [[ "$use_cached_plan" -eq 1 ]]; then
+    log_warn "the cached commit plan disappeared or is empty: $cache_file"
+    log_warn "Regenerate it with:"
+    log_warn "  ai-commit-claude --force-refresh $*"
+  else
+    log_warn "Claude returned a reply but did not create $plan_file."
+    log_warn "Try a stronger model or verbose mode:"
+    log_warn "  ai-commit-claude --model opus --verbose $*"
+  fi
+  die "no plan written (see $log_file)"
+fi
+
+if ! validate_plan "$plan_file"; then
+  if [[ "$use_cached_plan" -eq 1 ]]; then
+    die "cached commit plan is invalid; rerun with --force-refresh (cache: $cache_file)"
+  fi
+  die "agent produced an invalid plan (see $log_file and $plan_file)"
+fi
+
+total_files=$(jq '[.commits[].files[]] | length' "$plan_file")
+[[ "$total_files" -gt 0 ]] || die "plan groups have no files"
+
+commit_count=$(jq -r '.commits | length' "$plan_file")
+
+# ────────────────────────────────────────────────────────────────────
+# Plan summary
+# ────────────────────────────────────────────────────────────────────
+cagent::print_plan_summary "$plan_file" "$commit_count"
+
+if [[ "$dry_run" -eq 1 || "$no_commit" -eq 1 ]]; then
+  save_plan_cache
+fi
+
+# ────────────────────────────────────────────────────────────────────
+# Execute
+# ────────────────────────────────────────────────────────────────────
+if [[ "$dry_run" -eq 1 ]]; then
+  cagent::print_dry_run "$plan_file"
+  exit 0
+fi
+
+cagent::execute_plan "$plan_file" "$commit_count" "$tmpdir" "$no_commit" save_remaining_plan_cache

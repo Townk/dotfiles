@@ -93,7 +93,7 @@ probe_available() {
 # common.zsh blanks its palette, and fzf renders these via --ansi.
 pick_harness() {
   source "$HOME/.local/lib/zellij.zsh"
-  local -A icons=(pi $'\U0010FB02' cursor $'\U0010FB00')
+  local -A icons=(pi $'\U0010FB02' claude $'\U0010E861' cursor $'\U0010FB00')
   local c_icon=$'\e[38;2;255;255;255m' c_name=$'\e[38;2;137;180;250m'
   local c_desc=$'\e[38;2;127;132;156m' c_off=$'\e[0m'
   local h w=0
