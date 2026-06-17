@@ -1,0 +1,49 @@
+{
+  "defaultThinkingLevel": "low",
+  "theme": "catppuccin-mocha",
+  "editorPaddingX": 1,
+  "collapseChangelog": true,
+  "npmCommand": [
+    "mise",
+    "exec",
+    "node@latest",
+    "--",
+    "npm"
+  ],
+  "extensions": [
+    "~/.pi/agent/extensions/pi-cockpit/src/index.ts",
+    "~/.pi/agent/extensions/pi-plannotator-bridge/src/index.ts"
+  ],
+  "skills": [
+    "~/.pi/agent/skills",
+    "~/Projects/AI/Skills"
+  ],
+  "lastChangelogVersion": "0.79.5",
+  "packages": [
+    "npm:pi-web-access",
+    "npm:pi-cymbal",
+    "npm:pi-lsp",
+    "npm:glimpseui",
+    "npm:@tintinweb/pi-subagents",
+    "npm:@mario-gc/pi-context7",
+    "npm:@plannotator/pi-extension",
+    "git:github.com/ghoseb/pi-askuserquestion",
+    "npm:pi-memctx",
+    "npm:pi-observational-memory",
+{{- if eq .profile "work" }}
+    "npm:@offbynan/pi-cursor-provider",
+{{- end }}
+    "npm:pi-rtk-optimizer"
+  ],
+  "defaultProvider": "mlx",
+  "defaultModel": "local-agent-auto",
+  "hideThinkingBlock": false,
+  "quietStartup": true,
+  "terminal": {
+    "showTerminalProgress": true
+  },
+  "observational-memory": {
+    "passive": true,
+    "compactAfterTokens": 26000
+  }
+}

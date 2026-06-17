@@ -1,0 +1,50 @@
+{
+  "providers": {
+    "mlx": {
+      "name": "MLX (local, Headroom + gateway + llama-swap)",
+      "baseUrl": "http://localhost:8787/v1",
+      "api": "openai-completions",
+      "apiKey": "local-headroom",
+      "authHeader": true,
+      "compat": {
+        "supportsDeveloperRole": false,
+        "maxTokensField": "max_tokens"
+      },
+      "models": [
+        {
+          "id": "local-agent-auto",
+          "name": "Local Agent Auto (adaptive Qwen MoE/Gemma)",
+          "reasoning": false,
+          "input": ["text", "image"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 32768,
+          "maxTokens": 2048,
+          "supportsToolCalling": true,
+          "compat": { "maxTokensField": "max_tokens" }
+        },
+        {
+          "id": "Qwen3.6-35B-A3B-6bit",
+          "name": "Qwen3.6 35B-A3B MoE (6-bit, mlx_lm)",
+          "reasoning": true,
+          "input": ["text"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 32768,
+          "maxTokens": 2048,
+          "supportsToolCalling": true,
+          "compat": { "thinkingFormat": "qwen-chat-template", "maxTokensField": "max_tokens" }
+        },
+        {
+          "id": "gemma-4-12B-it-8bit",
+          "name": "Gemma 4 12B IT (8-bit, assistant MTP)",
+          "reasoning": false,
+          "input": ["text", "image"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 32768,
+          "maxTokens": 2048,
+          "supportsToolCalling": true,
+          "compat": { "maxTokensField": "max_tokens" }
+        }
+      ]
+    }
+  }
+}
