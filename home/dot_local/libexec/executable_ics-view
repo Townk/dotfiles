@@ -17,8 +17,9 @@ import argparse
 import re
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timezone
 from typing import Iterator
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 # ── Catppuccin Mocha Palette ──────────────────────────────────────
@@ -139,16 +140,22 @@ class Style:
 
 # ── Width Utilities ───────────────────────────────────────────────
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+_OSC8_RE = re.compile(r"\033]8;;.*?(?:\033\\|\a)")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove terminal escape sequences that do not consume columns."""
+    return _ANSI_RE.sub("", _OSC8_RE.sub("", text))
 
 
 def visual_width(text: str) -> int:
     """Visible width excluding ANSI escape sequences. Approximate but fast."""
-    return len(_ANSI_RE.sub("", text))
+    return len(strip_ansi(text))
 
 
 def truncate_visual(text: str, width: int, ellipsis: str = "…") -> str:
     """Truncate a string to a target visual width, accounting for ANSI codes."""
-    plain = _ANSI_RE.sub("", text)
+    plain = strip_ansi(text)
     if len(plain) <= width:
         return text
     # Strip ANSI, truncate, try to preserve any leading ANSI
@@ -177,10 +184,15 @@ def pad_visual(text: str, width: int, align: str = "left") -> str:
 _URL_RE = re.compile(r"https?://\S+|mailto:\S+|\S+\.\w{2,}/\S*")
 
 
+def osc8_link(url: str, label: str) -> str:
+    """Wrap label in an OSC 8 hyperlink pointing at url."""
+    return f"\033]8;;{url}\033\\{label}\033]8;;\033\\"
+
+
 def wrap_visual(text: str, width: int) -> list[str]:
     """Word-wrap plain or ANSI text to fit within `width`.
     Long URLs are broken mid-string; everything else wraps at word boundaries."""
-    plain = _ANSI_RE.sub("", text)
+    plain = strip_ansi(text)
     if not plain.strip():
         return []
 
@@ -217,12 +229,69 @@ def wrap_visual(text: str, width: int) -> list[str]:
     return lines
 
 
+def wrap_visual_links(text: str, width: int) -> list[str]:
+    """Word-wrap text, preserving full OSC 8 targets for URL chunks."""
+    plain = strip_ansi(text)
+    if not plain.strip():
+        return []
+
+    lines: list[list[tuple[str, str | None]]] = []
+    current: list[tuple[str, str | None]] = []
+    current_w = 0
+
+    def emit() -> None:
+        nonlocal current, current_w
+        if current:
+            lines.append(current)
+            current = []
+            current_w = 0
+
+    def add_token(label: str, url: str | None = None) -> None:
+        nonlocal current_w
+        token_w = len(label)
+        sep_w = 1 if current else 0
+        if current and current_w + sep_w + token_w > width:
+            emit()
+            sep_w = 0
+        if current:
+            current.append((" ", None))
+        current.append((label, url))
+        current_w += sep_w + token_w
+
+    for word in plain.split():
+        if _URL_RE.fullmatch(word):
+            url = word
+            if len(word) > width:
+                emit()
+                for i in range(0, len(word), width):
+                    chunk = word[i : i + width]
+                    lines.append([(chunk, url)])
+                continue
+            add_token(word, url)
+            continue
+
+        if len(word) > width:
+            emit()
+            for i in range(0, len(word), width):
+                lines.append([(word[i : i + width], None)])
+            continue
+        add_token(word)
+
+    emit()
+    return [
+        "".join(osc8_link(url, label) if url else label for label, url in line)
+        for line in lines
+    ]
+
+
 # ── iCalendar Parser ──────────────────────────────────────────────
 @dataclass
 class CalendarEvent:
     summary: str = "Untitled Event"
     dtstart: str = ""
     dtend: str = ""
+    dtstart_tz: str = ""
+    dtend_tz: str = ""
     location: str = ""
     description: str = ""
     organizer: str = ""
@@ -273,6 +342,48 @@ def prop_split(line: str) -> tuple[str, str, str]:
     return (name.upper(), params, value)
 
 
+def param_value(params: str, name: str) -> str:
+    """Extract a parameter value from a property parameter string."""
+    m = re.search(rf"(?:^|;){re.escape(name)}=(\"[^\"]*\"|[^;]*)", params, re.IGNORECASE)
+    if not m:
+        return ""
+    value = m.group(1).strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        value = value[1:-1]
+    return (
+        value.replace("\\n", "\n")
+        .replace("\\N", "\n")
+        .replace("\\,", ",")
+        .replace("\\;", ";")
+        .replace("\\\\", "\\")
+        .strip()
+    )
+
+
+def clean_text(text: str) -> str:
+    """Clean known producer-specific wrappers from display text."""
+    return re.sub(r"HeliumOptional\.of\(([^)]*)\)", r"\1", text)
+
+
+def display_person(params: str, value: str) -> str:
+    """Return a human display name for ORGANIZER/ATTENDEE properties."""
+    cn = param_value(params, "CN")
+    text = cn or (value[7:] if value.lower().startswith("mailto:") else value)
+    return " ".join(clean_text(text).split())
+
+
+def display_timezone(params: str, value: str) -> str:
+    """Return the timezone used to display a date/time property."""
+    if "VALUE=DATE" in params.upper() or re.fullmatch(r"\d{8}", value.strip()):
+        return ""
+    tzid = param_value(params, "TZID")
+    if tzid:
+        return tzid
+    if value.strip().upper().endswith("Z"):
+        return "UTC"
+    return "Local time"
+
+
 def parse_ics(text: str) -> list[CalendarEvent]:
     """Fast, minimal RFC 5545 parser. Returns list of VEVENTs."""
     events: list[CalendarEvent] = []
@@ -299,27 +410,23 @@ def parse_ics(text: str) -> list[CalendarEvent]:
             current.summary = value
         elif name == "DTSTART":
             current.dtstart = value
+            current.dtstart_tz = display_timezone(params, value)
         elif name == "DTEND":
             current.dtend = value
+            current.dtend_tz = display_timezone(params, value)
         elif name == "LOCATION":
             current.location = value
         elif name == "DESCRIPTION":
             # Unescape common RFC 5545 escape sequences
             current.description = (
-                value.replace("\\n", "\n")
+                clean_text(value)
+                .replace("\\n", "\n")
                 .replace("\\N", "\n")
                 .replace("\\,", ",")
                 .replace("\\\\", "\\")
             )
         elif name == "ORGANIZER":
-            # Extract CN from params if present, else use mailto value
-            cn_match = re.search(r"CN=([^;:]+)", params)
-            if cn_match:
-                current.organizer = cn_match.group(1)
-            elif value.startswith("mailto:"):
-                current.organizer = value[7:]
-            else:
-                current.organizer = value
+            current.organizer = display_person(params, value)
         elif name == "STATUS":
             current.status = value.upper()
         elif name == "RRULE":
@@ -327,13 +434,7 @@ def parse_ics(text: str) -> list[CalendarEvent]:
         elif name == "CATEGORIES":
             current.categories = [c.strip() for c in value.split(",")]
         elif name == "ATTENDEE":
-            cn_match = re.search(r"CN=([^;:]+)", params)
-            if cn_match:
-                current.attendees.append(cn_match.group(1))
-            elif value.startswith("mailto:"):
-                current.attendees.append(value[7:])
-            else:
-                current.attendees.append(value)
+            current.attendees.append(display_person(params, value))
         elif name == "PRIORITY":
             current.priority = value
         elif name == "UID":
@@ -347,7 +448,33 @@ def parse_ics(text: str) -> list[CalendarEvent]:
 
 
 # ── Date/Time Formatter ───────────────────────────────────────────
-def _parse_ics_datetime(value: str) -> tuple[datetime | date | None, bool]:
+def _to_local_datetime(dt: datetime, source_tz: str, is_utc: bool = False) -> datetime:
+    """Convert an ICS datetime into the system's current timezone."""
+    if is_utc or source_tz == "UTC":
+        return dt.replace(tzinfo=timezone.utc).astimezone()
+    if source_tz and source_tz not in {"UTC", "Local time"}:
+        try:
+            return dt.replace(tzinfo=ZoneInfo(source_tz)).astimezone()
+        except ZoneInfoNotFoundError:
+            pass
+    # Naive astimezone() treats dt as local wall time using system timezone rules.
+    return dt.astimezone()
+
+
+def _fmt_timezone(d: datetime) -> str:
+    name = d.tzname() or "Local time"
+    offset = d.utcoffset()
+    if offset is None:
+        return name
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    hours, minutes = divmod(total_minutes, 60)
+    offset_text = f"UTC{sign}{hours:02d}:{minutes:02d}"
+    return name if name == offset_text else f"{name}, {offset_text}"
+
+
+def _parse_ics_datetime(value: str, source_tz: str = "") -> tuple[datetime | date | None, bool]:
     """
     Parse ICS date/time strings.
     Returns (parsed, has_time_component).
@@ -362,16 +489,16 @@ def _parse_ics_datetime(value: str) -> tuple[datetime | date | None, bool]:
         return (None, False)
 
     # 20240115T090000Z
-    m = re.match(r"(\d{8})T(\d{6})Z?", value)
+    m = re.match(r"(\d{8})T(\d{6})(Z?)", value)
     if m:
         dt = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
-        return (dt, True)
+        return (_to_local_datetime(dt, source_tz, is_utc=bool(m.group(3))), True)
 
     # 20240115T090000 (local, ignore tz for display)
     m = re.match(r"(\d{8})T(\d{6})", value)
     if m:
         dt = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
-        return (dt, True)
+        return (_to_local_datetime(dt, source_tz), True)
 
     # Date only fallback
     m = re.match(r"(\d{8})", value)
@@ -392,10 +519,10 @@ def _fmt_time(d: datetime) -> str:
     return d.strftime("%I:%M %p").lstrip("0")
 
 
-def _fmt_datetime_range(start_raw: str, end_raw: str) -> str:
+def _fmt_datetime_range(start_raw: str, end_raw: str, start_tz: str = "", end_tz: str = "") -> str:
     """Human-friendly date/time range string."""
-    s, s_has_time = _parse_ics_datetime(start_raw)
-    e, e_has_time = _parse_ics_datetime(end_raw)
+    s, s_has_time = _parse_ics_datetime(start_raw, start_tz)
+    e, e_has_time = _parse_ics_datetime(end_raw, end_tz or start_tz)
 
     if s is None:
         return "Unknown time"
@@ -417,6 +544,13 @@ def _fmt_datetime_range(start_raw: str, end_raw: str) -> str:
         return start_str
 
     return _fmt_date(s)
+
+
+def _fmt_display_timezone(start_raw: str, start_tz: str) -> str:
+    parsed, has_time = _parse_ics_datetime(start_raw, start_tz)
+    if has_time and isinstance(parsed, datetime):
+        return _fmt_timezone(parsed)
+    return ""
 
 
 def _fmt_rrule(rrule: str) -> str:
@@ -449,10 +583,10 @@ def _fmt_rrule(rrule: str) -> str:
     return f"Every {freq_word}"
 
 
-def _fmt_duration_hint(start_raw: str, end_raw: str) -> str:
+def _fmt_duration_hint(start_raw: str, end_raw: str, start_tz: str = "", end_tz: str = "") -> str:
     """Return a compact duration like '1h 30m' or 'All day'."""
-    s, s_has_time = _parse_ics_datetime(start_raw)
-    e, e_has_time = _parse_ics_datetime(end_raw)
+    s, s_has_time = _parse_ics_datetime(start_raw, start_tz)
+    e, e_has_time = _parse_ics_datetime(end_raw, end_tz or start_tz)
     if not (s and e and isinstance(s, datetime) and isinstance(e, datetime)):
         if not s_has_time and not e_has_time:
             return "All day"
@@ -534,8 +668,8 @@ class CardRenderer:
                 + self._reset
             )
         # Build a line like: ├─ text ────────────┤
-        left_plain = _ANSI_RE.sub("", left)
-        right_plain = _ANSI_RE.sub("", right)
+        left_plain = strip_ansi(left)
+        right_plain = strip_ansi(right)
         inner_w = self.w - 2
         total_label = len(left_plain) + len(right_plain) + 2  # spaces
         if total_label >= inner_w:
@@ -581,7 +715,7 @@ class CardRenderer:
             inner_w -= prefix_vw + 1
             margin += prefix + " "
 
-        plain = _ANSI_RE.sub("", content)
+        plain = strip_ansi(content)
         if len(plain) <= inner_w:
             fill = " " * (inner_w - len(plain))
             return (
@@ -600,7 +734,7 @@ class CardRenderer:
         lines = wrap_visual(content, inner_w)
         out = []
         for i, ln in enumerate(lines):
-            fill = " " * (inner_w - len(_ANSI_RE.sub("", ln)))
+            fill = " " * (inner_w - visual_width(ln))
             pre = margin if i == 0 else " " * text_indent
             out.append(
                 self.s.primary + self.s.VERT + self._reset
@@ -673,11 +807,14 @@ class CardRenderer:
         # ── Date / Time ───────────────────────────────────────────
         has_datetime = bool(ev.dtstart)
         if has_datetime:
-            time_str = _fmt_datetime_range(ev.dtstart, ev.dtend)
-            duration = _fmt_duration_hint(ev.dtstart, ev.dtend)
+            time_str = _fmt_datetime_range(ev.dtstart, ev.dtend, ev.dtstart_tz, ev.dtend_tz)
+            duration = _fmt_duration_hint(ev.dtstart, ev.dtend, ev.dtstart_tz, ev.dtend_tz)
             peach = _fg(*CTP.PEACH)
             time_icon = f"{peach}{self.s.ICON_CALENDAR}{self._reset}"
             time_content = time_str
+            display_tz = _fmt_display_timezone(ev.dtstart, ev.dtstart_tz)
+            if display_tz:
+                time_content += f" {self.s.muted}({display_tz}){self._reset}"
             if duration:
                 time_content += f" {self.s.muted}({duration}){self._reset}"
             lines.append(self._row(time_content, prefix=time_icon + " ", indent=3))
@@ -688,8 +825,8 @@ class CardRenderer:
                 lines.append(self._row(rrule_text, prefix=rrule_icon + " ", indent=3))
 
             if ev.dtend and ev.dtstart:
-                s_parsed, _ = _parse_ics_datetime(ev.dtstart)
-                e_parsed, _ = _parse_ics_datetime(ev.dtend)
+                s_parsed, _ = _parse_ics_datetime(ev.dtstart, ev.dtstart_tz)
+                e_parsed, _ = _parse_ics_datetime(ev.dtend, ev.dtend_tz or ev.dtstart_tz)
                 if isinstance(s_parsed, datetime) and isinstance(e_parsed, datetime):
                     lines.append(self._blank_row())
                     bar_lines = self._timeline_bar(s_parsed, e_parsed)
@@ -714,6 +851,9 @@ class CardRenderer:
                 right_pad = "   "
 
                 def _pack_attendee_lines(names, max_lines):
+                    def _fit(text: str) -> str:
+                        return truncate_visual(text, text_w) if visual_width(text) > text_w else text
+
                     for n in range(len(names), 0, -1):
                         shown = names[:n]
                         remaining = len(names) - n
@@ -725,11 +865,11 @@ class CardRenderer:
                             unit = f"{self.s.secondary}{name}{self._reset}"
                             if not is_last_real:
                                 unit += f"{self.s.muted} ·{self._reset}"
-                            units.append(unit)
+                            units.append(_fit(unit))
 
                         suffix = ""
                         if remaining > 0:
-                            suffix = f"{self.s.muted}+{remaining} more{self._reset}"
+                            suffix = _fit(f"{self.s.muted}+{remaining} more{self._reset}")
 
                         # Greedy pack units into lines
                         packed: list[str] = []
@@ -738,18 +878,15 @@ class CardRenderer:
                         for unit in units:
                             uvw = visual_width(unit)
                             if not cur:
-                                if uvw <= text_w:
-                                    cur = unit
-                                    cvw = uvw
-                                else:
-                                    packed.append(unit)
+                                cur = unit
+                                cvw = uvw
                             elif cvw + 1 + uvw <= text_w:
                                 cur += " " + unit
                                 cvw += 1 + uvw
                             else:
                                 packed.append(cur)
                                 cur = unit
-                                cvw = uvw
+                                cvw = visual_width(cur)
 
                         if suffix:
                             svw = visual_width(suffix)
@@ -773,7 +910,8 @@ class CardRenderer:
                 if packed_lines:
                     icon_prefix = f"{self.s.secondary}{self.s.ICON_USERS}{self._reset}  "
                     for i, line in enumerate(packed_lines):
-                        fill = text_w - visual_width(line)
+                        line = truncate_visual(line, text_w)
+                        fill = max(0, text_w - visual_width(line))
                         pre = icon_indent + icon_prefix if i == 0 else text_indent
                         lines.append(
                             self.s.primary + self.s.VERT + self._reset
@@ -822,11 +960,11 @@ class CardRenderer:
                         last_was_blank = True
                     continue
                 last_was_blank = False
-                wrapped = wrap_visual(stripped, inner_w)
+                wrapped = wrap_visual_links(stripped, inner_w)
                 for wl in wrapped:
                     if line_count >= MAX_DESC_LINES:
                         break
-                    fill = inner_w - len(wl)
+                    fill = max(0, inner_w - visual_width(wl))
                     styled_wl = f"{self.s.subtle}{wl}{self._reset}"
                     if not first_icon_shown:
                         lines.append(
@@ -844,14 +982,14 @@ class CardRenderer:
                     line_count += 1
 
             total_wrapped = sum(
-                len(wrap_visual(line.strip(), inner_w))
+                len(wrap_visual_links(line.strip(), inner_w))
                 for line in raw_desc.split("\n")
                 if line.strip()
             )
             if total_wrapped > MAX_DESC_LINES:
                 lines.append(self._blank_row())
                 notice = f"{self.s.muted}… {total_wrapped - MAX_DESC_LINES} more lines{_reset()}"
-                fill = inner_w - len(_ANSI_RE.sub("", notice))
+                fill = max(0, inner_w - visual_width(notice))
                 lines.append(
                     self.s.primary + self.s.VERT + self._reset
                     + text_indent + notice + " " * fill + right_pad
@@ -919,9 +1057,7 @@ class CardRenderer:
                 bar[pos] = self.s.muted + "┊" + self._reset
 
         for i in range(left, right):
-            bar[i] = _fg(*CTP.PEACH) + "━" + self._reset
-        bar[left] = _fg(*CTP.PEACH) + "╾" + self._reset
-        bar[right - 1] = _fg(*CTP.PEACH) + "╼" + self._reset
+            bar[i] = _fg(*CTP.PEACH) + "\U0001cd33" + self._reset
         bar_line = "".join(bar)
         labels_line = self._timeline_labels(bar_w)
         return [bar_line, labels_line]
