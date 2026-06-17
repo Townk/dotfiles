@@ -1,9 +1,25 @@
 # Per-user npm config (~/.config/npm/npmrc). See: npm help npmrc
 
-# npm 11+ advisory allowScripts policy for global installs. Transitive deps of
-# @earendil-works/pi-coding-agent; scripts are reviewed once here.
-# Repeat keys overwrite in ini files — use one line or allow-scripts[] entries.
-allow-scripts=protobufjs,@google/genai,bun
+# npm 11+ advisory allowScripts policy for global installs. Each package's
+# install/postinstall script is reviewed once and allowlisted here. ini repeat
+# keys overwrite, so use the allow-scripts[] array form — one package per line,
+# which diffs cleanly as the global set grows.
+#
+# Transitive deps of @earendil-works/pi-coding-agent:
+allow-scripts[]=protobufjs
+allow-scripts[]=@google/genai
+allow-scripts[]=bun
+# Native builds pulled in by pi-coding-agent's local-LLM path (node-gyp /
+# prebuild-install / postinstall download):
+allow-scripts[]=node-llama-cpp
+allow-scripts[]=better-sqlite3
+allow-scripts[]=tree-sitter-go
+allow-scripts[]=tree-sitter-typescript
+allow-scripts[]=tree-sitter-rust
+allow-scripts[]=tree-sitter-python
+allow-scripts[]=tree-sitter-javascript
+# Anthropic CLI postinstall (node install.cjs):
+allow-scripts[]=@anthropic-ai/claude-code
 
 # XDG compliance. npm expands ${ENV}, so this stays portable across machines.
 cache=${XDG_CACHE_HOME}/npm

@@ -303,8 +303,13 @@ fi
 
 if command -v mise >/dev/null 2>&1; then
   print -P -- "\n🛠️ Upgrade Mise tools...\n"
-  mise upgrade
-  mise prune -y
+  # Best-effort, like every other step: a single tool whose upstream release
+  # is momentarily un-installable (e.g. a new "latest" tag published without
+  # its prebuilt asset yet) must not abort the whole update and skip the nvim
+  # / zsh-plugin steps below. Guard each independently so an upgrade failure
+  # still lets prune run.
+  mise upgrade || log_warn "mise upgrade had failures"
+  mise prune -y || log_warn "mise prune had failures"
 fi
 
 if command -v nvim >/dev/null 2>&1; then
