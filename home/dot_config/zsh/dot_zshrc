@@ -119,6 +119,9 @@ export HEADROOM_CONFIG_DIR="$XDG_CONFIG_HOME/headroom"
 export HEADROOM_MEMORY_DB_PATH="$XDG_STATE_HOME/headroom/memory.db"
 export HEADROOM_MEMORY_INJECTION_MODE=disabled
 
+# Make terminal emulators use truecolor if they can
+export COLORTERM=truecolor
+
 # mise activates synchronously: it injects mise-managed tool dirs onto $PATH,
 # and on Linux atuin/zoxide/etc. live there. Keeping it on the critical path
 # guarantees PATH is correct before the first command. (The lighter tool
