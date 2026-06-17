@@ -253,3 +253,12 @@ function y() {
       return
   fi
 }
+
+# `pi-local` runs the Pi coding agent against the local 32K-context config
+# home (~/.pi/agent-local) with an isolated session store, so local and cloud
+# sessions never resume into the wrong config. Plain `pi` stays cloud.
+function pi-local() {
+  PI_CODING_AGENT_DIR="$HOME/.pi/agent-local" \
+  PI_CODING_AGENT_SESSION_DIR="$HOME/.pi/agent-local/sessions" \
+    pi "$@"
+}
