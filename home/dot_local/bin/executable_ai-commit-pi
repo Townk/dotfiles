@@ -229,6 +229,9 @@ Rules:
   \`files\` array. No duplicates, no omissions.
 - \`message\` is the full commit message (subject + blank line + body
   when warranted); use JSON \`\\n\` for newlines.
+- Do NOT add a \`Co-Authored-By\`, \`Signed-off-by\`, or any AI/agent
+  attribution trailer to \`message\`. The repository owner is the sole
+  author and sole responsible party for every commit.
 - Do NOT stage. Do NOT commit. Do NOT push.
 - When you are done, reply with the literal text \`PLAN_WRITTEN\` and
   nothing else.${extra_block}
