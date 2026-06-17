@@ -1,0 +1,29 @@
+# ~/.zshenv — sourced for EVERY zsh (including non-interactive scripts).
+# Keep it cheap and POSIX-ish. Interactive setup lives in ~/.config/zsh/.zshrc.
+#
+# (Previously this file bootstrapped zsh4humans by fetching z4h.zsh from
+# GitHub at startup; that opaque network bootstrap is gone — the shell is
+# now assembled explicitly in ~/.config/zsh/.zshrc from locally-cloned plugins.)
+
+if [ -n "${ZSH_VERSION-}" ]; then
+  # Single source of truth for env vars + CLI tool themes. These files are
+  # sh-compatible because the launchd agent also sources environment.sh
+  # under /bin/sh. Loaded here so non-interactive shells and launchd-spawned
+  # subprocesses get the same environment.
+  [ -r ~/.config/zsh/environment.sh ] && . ~/.config/zsh/environment.sh
+  [ -r ~/.config/zsh/themes.sh ]      && . ~/.config/zsh/themes.sh
+
+  # Relocate the rest of zsh's startup files (.zshrc, .zprofile, .zlogin) to
+  # ~/.config/zsh. Deliberately NOT exported: ~/.zshenv is the one file zsh
+  # always reads from $HOME (before it knows ZDOTDIR), so it must stay here —
+  # and exporting ZDOTDIR would make child shells look for a non-existent
+  # ~/.config/zsh/.zshenv and skip this file (env setup, no_global_rcs) entirely.
+  ZDOTDIR="${XDG_CONFIG_HOME:-$HOME/.config}/zsh"
+
+  # Skip the global rc files (/etc/zprofile, /etc/zshrc, ...). On macOS
+  # /etc/zprofile runs path_helper, which reorders PATH and would undo the
+  # ordering established in environment.sh.
+  setopt no_global_rcs
+fi
+
+umask o-w
