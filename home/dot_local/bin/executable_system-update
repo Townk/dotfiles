@@ -48,6 +48,11 @@ block later steps unless explicitly fatal):
   8. NeoVim: `Lazy! sync` + `MasonToolsUpdateSync`
   9. Pi: `pi update --extensions` for the cloud + local config homes
  10. `git pull` the zsh plugins in ~/.local/share/zsh/plugins
+
+On an interactive run this finishes by replacing the current shell with
+`exec zsh`, so the session picks up the updated environment; it also reminds
+you to run `exec zsh` in any other open sessions. Skipped on non-interactive
+runs and under chezmoi's bootstrap.
 EOF
 }
 
@@ -122,6 +127,27 @@ update_pi_extensions() {
     PI_CODING_AGENT_DIR="$HOME/.pi/agent-local" pi update --extensions \
       || log_warn "pi extension upgrade (local home) had failures"
   fi
+}
+
+# Wrap up a successful run. Like z4h's `z4h update`, hand this interactive
+# session off to a fresh shell (`exec zsh`) so it picks up anything the update
+# changed in the environment — new PATH entries, tool shims, edited rc files —
+# and remind the user to do the same in their other open sessions, which won't
+# refresh until they re-exec.
+#
+# Guarded hard: NEVER exec when running under chezmoi's run_once bootstrap (we'd
+# replace the child process and hang the parent `chezmoi apply`), nor on a
+# non-interactive / non-TTY invocation (cron, CI, a pipe) where there is no
+# terminal to hand off to. In those cases just report success and return so the
+# caller continues normally.
+finalize_session() {
+  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
+  if [[ "$running_under_chezmoi" -eq 1 || ! -t 0 || ! -t 1 ]]; then
+    return 0
+  fi
+  print -P -- "${C_YEL}↻ Run ${C_BWH}exec zsh${C_RES}${C_YEL} in your other open sessions on this machine to pick up the update.${C_RES}"
+  print -P -- "${C_DIM}Refreshing this session now (exec zsh)…${C_RES}"
+  exec zsh
 }
 
 # Resolve chezmoi source dir once. Returns "" only when neither chezmoi
@@ -249,7 +275,7 @@ if ! command -v brew >/dev/null 2>&1; then
   fi
   update_pi_extensions
   update_zsh_plugins
-  print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
+  finalize_session
   exit 0
 fi
 
@@ -365,4 +391,4 @@ fi
 
 update_pi_extensions
 update_zsh_plugins
-print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
+finalize_session
