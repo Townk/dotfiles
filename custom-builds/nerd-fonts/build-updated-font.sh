@@ -12,7 +12,7 @@
 # What it does, in order:
 #   1. Locate (or `git clone`) the upstream ryanoasis/nerd-fonts repo.
 #   2. Locate (or `curl`) the latest Font Awesome Free *desktop* archive.
-#   3. Make sure FontForge is installed (asks before `brew install`).
+#   3. Make sure FontForge is installed (auto-`brew install` if missing).
 #   4. Make sure a Python venv with `fonttools` exists (asks first).
 #   5. Merge FA's three OTFs (Brands/Regular/Solid) into one via FontForge,
 #      then RELOCATE any free FA icon whose native codepoint collides with
@@ -46,7 +46,11 @@
 #      with the `nf-fa-*` curated set) and natural-language metadata
 #      (labels, search terms, aliases, Unicode names). Written to
 #      ~/.local/share/fonts/nerd-font/glyphs.json — handy for an fzf picker.
-#  10. Print the caveats below so you remember them next year.
+#  10. Emit two self-contained Blink Shell CSS files (JetBrains Mono + each
+#      Symbols variant, base64-embedded) to ~/.local/share/fonts/blink:
+#      jetbrains-custom-nerd-fonts.css (Propo) and -mono.css (Mono). Serve
+#      them for import with serve-blink-fonts.sh.
+#  11. Print the caveats below so you remember them next year.
 #
 # Overrides (export before running, or pass as `KEY=val ./build-updated-font.sh`):
 #   WORK_ROOT        Where to put the cloned repo + outputs.
@@ -71,6 +75,17 @@
 #   JSON_OUT_DIR     Where glyphs.json should land.
 #                    Default: ~/.local/share/fonts/nerd-font
 #                    Pass JSON_OUT_DIR="" to skip the JSON step entirely.
+#   BLINK_OUT_DIR    Where the self-contained Blink Shell CSS files land
+#                    (jetbrains-custom-nerd-fonts.css = Propo symbols,
+#                    jetbrains-custom-nerd-fonts-mono.css = Mono symbols).
+#                    Each embeds JetBrains Mono + one Symbols variant as
+#                    base64 data: URIs. Default: ~/.local/share/fonts/blink
+#                    Pass BLINK_OUT_DIR="" to skip the CSS step entirely.
+#                    Serve them for Blink import with ./serve-blink-fonts.sh.
+#   JETBRAINS_TTF    JetBrains Mono Regular TTF embedded as the text face in
+#                    the Blink CSS. Default: auto-detect (~/Library/Fonts ->
+#                    /Library/Fonts -> brew Caskroom font-jetbrains-mono ->
+#                    ~/.local/share/fonts). Override to pin a specific file.
 #   ICON_FILL        Multiplier on the measured curated md/oct box that every
 #                    FA + custom icon is normalized to in step 7b. Default: 1.0
 #                    (match md/oct exactly; ≈0.83em in the Propo variant).
@@ -192,6 +207,11 @@ VENV_DIR="${WORK_ROOT}/.venv"
 LOG_FILE="${WORK_DIR}/build.log"
 # Where the glyphs.json index lands. Set to "" to skip emission.
 JSON_OUT_DIR="${JSON_OUT_DIR-${HOME}/.local/share/fonts/nerd-font}"
+# Where the Blink Shell CSS files land. Set to "" to skip emission.
+BLINK_OUT_DIR="${BLINK_OUT_DIR-${HOME}/.local/share/fonts/blink}"
+# JetBrains Mono Regular TTF embedded as the primary face in the Blink CSS.
+# Empty -> auto-detect (see emit_blink_css). Override to pin a specific file.
+JETBRAINS_TTF="${JETBRAINS_TTF:-}"
 
 mkdir -p "${WORK_ROOT}" "${WORK_DIR}" "${OUT_DIR}"
 
@@ -330,9 +350,10 @@ binary; it is NOT installable via pip/uv/mise — there is no plugin).
 The cheapest path on macOS is Homebrew. Pulls in ~80 MB total.
 
 NOTE
-  if ! ask "Run 'brew install fontforge'?"; then
-    die "Need FontForge."
-  fi
+  # FontForge is a build-only dependency (see caveat 4 — not in the Brewfile,
+  # swept on the next brew sync). Install it without prompting, the same way
+  # the temporary donor casks below install automatically.
+  info "installing FontForge via Homebrew (temporary build dependency)"
   brew install fontforge || die "brew install fontforge failed."
   FONTFORGE_BIN="$( command -v fontforge )"
 fi
@@ -2056,6 +2077,132 @@ if [[ "${do_install}" == "1" && -n "${USER_FONT_DIR}" ]]; then
 fi
 
 # ===========================================================================
+# Step 10 — Emit Blink Shell CSS (self-contained, base64-embedded).
+# ===========================================================================
+# Blink Shell imports a font as a single CSS file containing @font-face rules.
+# We emit TWO variants, each embedding JetBrains Mono (text) plus one Symbols
+# Nerd Font variant (icons) as base64 data: URIs, so the file is fully
+# self-contained — nothing external to break on import. Both faces share the
+# family name "JetBrainsMono NF"; WebKit resolves per-character, falling back
+# to the Symbols face for the PUA / icon codepoints in unicode-range.
+#
+#   jetbrains-custom-nerd-fonts.css       -> Propo (variable-width) symbols
+#   jetbrains-custom-nerd-fonts-mono.css  -> Mono  symbols
+#
+# In Blink, import each file under the name "JetBrainsMono NF".
+log "step 10  emit Blink Shell CSS"
+
+emit_blink_css() {
+  # emit_blink_css <symbols-ttf> <output-css> <family-name>
+  # Streams base64 straight into the file (no multi-MB shell variables).
+  #
+  # <family-name> MUST be unique per file: Blink ties the name you save a font
+  # under to its font-family, so two imported fonts cannot share one family
+  # name — if they do, the second import's @font-face rules (including the icon
+  # fallback face) fail to bind and its glyphs render blank. Hence the Mono and
+  # Propo variants use distinct family names.
+  local sym_ttf="$1" out="$2" family="$3"
+  {
+    # NB: heredocs below are UNQUOTED so ${family} interpolates. The CSS body
+    # contains no other $, backtick, or backslash, so nothing else expands.
+    cat <<CSS_HEAD
+/* Blink Shell self-contained font: JetBrains Mono + Symbols Nerd Font fallback.
+   Fonts are embedded as base64 data: URIs so there are NO external file
+   references to break on import. Save this font in Blink under the EXACT name:
+       ${family}
+   Blink ties the saved name to the font-family below; each imported font needs
+   a unique name, which is why the Mono and Propo variants differ.
+   Generated by custom-builds/nerd-fonts/build-updated-font.sh. */
+
+/* Primary: JetBrains Mono covers all normal text (no unicode-range). */
+@font-face {
+  font-family: "${family}";
+  font-style: normal;
+  font-weight: normal;
+CSS_HEAD
+    # The base64 payload MUST sit on the same line as "base64," — a newline
+    # in the middle of an unquoted url() token can break CSS parsing. So the
+    # url( prefix is printf'd WITHOUT a trailing newline, the payload is
+    # appended (tr strips base64's own newlines), and the next heredoc opens
+    # with ");" to close the token on that same line.
+    printf '  src: url(data:font/ttf;charset=utf-8;base64,'
+    base64 < "${JETBRAINS_TTF}" | tr -d '\n'
+    cat <<CSS_MID
+) format("truetype");
+}
+
+/* Fallback: Symbols Nerd Font icon glyphs. Declared last so it wins for any
+   codepoint in these ranges (Private Use Areas + the few non-PUA symbols
+   Nerd Fonts place in standard Unicode blocks). */
+@font-face {
+  font-family: "${family}";
+  font-style: normal;
+  font-weight: normal;
+CSS_MID
+    printf '  src: url(data:font/ttf;charset=utf-8;base64,'
+    base64 < "${sym_ttf}" | tr -d '\n'
+    cat <<'CSS_TAIL'
+) format("truetype");
+  unicode-range:
+    U+23FB-23FE,   /* IEC power symbols */
+    U+2665,        /* Octicons heart */
+    U+26A1,        /* Octicons zap */
+    U+2B58,        /* IEC power on/off */
+    U+E000-F8FF,   /* BMP Private Use Area (Powerline, Devicons, FA, etc.) */
+    U+F0000-FFFFD, /* Plane 15 PUA-A (Material Design Icons, newer glyphs) */
+    U+100000-10FFFD; /* Plane 16 PUA-B */
+}
+CSS_TAIL
+  } > "${out}"
+}
+
+if [[ -z "${BLINK_OUT_DIR}" ]]; then
+  info "skipped: BLINK_OUT_DIR is empty (explicitly disabled)."
+else
+  # Resolve JetBrains Mono Regular. Honour an explicit override first, then
+  # probe the usual install locations (cask -> system -> brew Caskroom -> Linux).
+  if [[ -z "${JETBRAINS_TTF}" ]]; then
+    jb_candidates=(
+      "${HOME}/Library/Fonts/JetBrainsMono-Regular.ttf"
+      "/Library/Fonts/JetBrainsMono-Regular.ttf"
+      "${HOME}/.local/share/fonts/JetBrainsMono-Regular.ttf"
+    )
+    if command -v brew >/dev/null 2>&1; then
+      brew_prefix=$(brew --prefix 2>/dev/null || true)
+      if [[ -n "${brew_prefix}" ]]; then
+        cask_jb=$( { \
+            ls -1 "${brew_prefix}/Caskroom/font-jetbrains-mono/"*"/fonts/ttf/JetBrainsMono-Regular.ttf" \
+                  "${brew_prefix}/Caskroom/font-jetbrains-mono/"*"/JetBrainsMono-Regular.ttf" 2>/dev/null \
+            || true; } | sort -V | tail -n 1 || true )
+        [[ -n "${cask_jb}" ]] && jb_candidates+=("${cask_jb}")
+      fi
+    fi
+    for c in "${jb_candidates[@]}"; do
+      [[ -f "${c}" ]] && { JETBRAINS_TTF="${c}"; break; }
+    done
+  fi
+
+  PROPO_TTF="${OUT_DIR}/SymbolsNerdFont-Regular.ttf"
+  MONO_TTF="${OUT_DIR}/SymbolsNerdFontMono-Regular.ttf"
+
+  if [[ -z "${JETBRAINS_TTF}" || ! -f "${JETBRAINS_TTF}" ]]; then
+    warn "JetBrains Mono Regular not found; skipping Blink CSS.
+   Install the 'font-jetbrains-mono' cask or set JETBRAINS_TTF=/path/to/JetBrainsMono-Regular.ttf"
+  elif [[ ! -f "${PROPO_TTF}" || ! -f "${MONO_TTF}" ]]; then
+    warn "built Symbols TTFs missing in ${OUT_DIR}; skipping Blink CSS."
+  else
+    mkdir -p "${BLINK_OUT_DIR}"
+    info "JetBrains Mono : ${JETBRAINS_TTF}"
+    # Distinct family names: Blink cannot hold two fonts under one name.
+    emit_blink_css "${PROPO_TTF}" "${BLINK_OUT_DIR}/jetbrains-custom-nerd-fonts.css"      "JetBrainsMono NF"
+    info 'wrote jetbrains-custom-nerd-fonts.css      (Propo) -> save as "JetBrainsMono NF"'
+    emit_blink_css "${MONO_TTF}"  "${BLINK_OUT_DIR}/jetbrains-custom-nerd-fonts-mono.css" "JetBrainsMono NF Mono"
+    info 'wrote jetbrains-custom-nerd-fonts-mono.css (Mono)  -> save as "JetBrainsMono NF Mono"'
+    done_ "Blink CSS -> ${BLINK_OUT_DIR}"
+  fi
+fi
+
+# ===========================================================================
 # Done. Print caveats.
 # ===========================================================================
 cat <<EOF
@@ -2068,10 +2215,21 @@ ${C_GRN}Build complete.${C_RST}
     - SymbolsNerdFontMono-Regular.ttf   (monospaced)
   Glyph index:
     - ${JSON_OUT_DIR:-(disabled)}/glyphs.json
+  Blink Shell CSS (save each under its own EXACT name — names must be unique):
+    - ${BLINK_OUT_DIR:-(disabled)}/jetbrains-custom-nerd-fonts.css       (Propo) -> "JetBrainsMono NF"
+    - ${BLINK_OUT_DIR:-(disabled)}/jetbrains-custom-nerd-fonts-mono.css  (Mono)  -> "JetBrainsMono NF Mono"
 
 ${C_BLU}== Install manually if you skipped --install ==${C_RST}
   cp -f "${OUT_DIR}"/Symbols*.ttf ~/Library/Fonts/
   # Linux: cp ... ~/.local/share/fonts/ && fc-cache -fv
+
+${C_BLU}== Import the font into Blink Shell ==${C_RST}
+  # Serve the CSS dir over HTTP, then in Blink: Settings -> Appearance ->
+  # Add a new font -> point it at the printed URL. Save EACH font under the
+  # exact name shown above (the .css -> "JetBrainsMono NF", the -mono.css ->
+  # "JetBrainsMono NF Mono"). The saved name MUST match the font-family inside
+  # the file, and the two names MUST differ or the second import shows no icons.
+  ./serve-blink-fonts.sh        # serves ${BLINK_OUT_DIR:-~/.local/share/fonts/blink} on :8000
 
 ${C_BLU}== Feed the glyph index to fzf ==${C_RST}
   # Search by name, label, FA terms, FA aliases, or Unicode name.
