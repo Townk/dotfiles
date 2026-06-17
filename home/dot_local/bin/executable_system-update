@@ -46,7 +46,8 @@ block later steps unless explicitly fatal):
   6. `ya pkg upgrade`         + commit any package.toml bumps to chezmoi
   7. `mise upgrade && mise prune -y`
   8. NeoVim: `Lazy! sync` + `MasonToolsUpdateSync`
-  9. `git pull` the zsh plugins in ~/.local/share/zsh/plugins
+  9. Pi: `pi update --extensions` for the cloud + local config homes
+ 10. `git pull` the zsh plugins in ~/.local/share/zsh/plugins
 EOF
 }
 
@@ -103,6 +104,24 @@ update_zsh_plugins() {
     git -C "$p" pull --ff-only --recurse-submodules --quiet \
       || log_warn "zsh plugin update failed: ${p:t}"
   done
+}
+
+# Update Pi coding-agent extensions for both config homes — the cloud default
+# (~/.pi/agent) and the local 32K home (~/.pi/agent-local, normally reached via
+# the `pi-local` shell function; that function isn't loaded in this script, so
+# we set PI_CODING_AGENT_DIR directly, exactly as the launcher does). This
+# mirrors the NeoVim/Yazi "update the app's managed packages" steps. The pi
+# BINARY itself is updated by the npm worker in `system-package sync` (Npmfile
+# lists @earendil-works/pi-coding-agent), so we scope to --extensions only.
+# Best-effort: a network hiccup updating extensions never blocks the rest.
+update_pi_extensions() {
+  command -v pi >/dev/null 2>&1 || return 0
+  print -P -- "\n🥧 Upgrade Pi extensions...\n"
+  pi update --extensions || log_warn "pi extension upgrade (cloud home) had failures"
+  if [[ -d "$HOME/.pi/agent-local" ]]; then
+    PI_CODING_AGENT_DIR="$HOME/.pi/agent-local" pi update --extensions \
+      || log_warn "pi extension upgrade (local home) had failures"
+  fi
 }
 
 # Resolve chezmoi source dir once. Returns "" only when neither chezmoi
@@ -228,6 +247,7 @@ if ! command -v brew >/dev/null 2>&1; then
     timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
       log_warn "NeoVim plugin upgrade timed out or had failures"
   fi
+  update_pi_extensions
   update_zsh_plugins
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
   exit 0
@@ -343,5 +363,6 @@ if command -v nvim >/dev/null 2>&1; then
     die "Failed to upgrade NeoVim plugins!"
 fi
 
+update_pi_extensions
 update_zsh_plugins
 print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
