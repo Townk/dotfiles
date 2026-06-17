@@ -39,24 +39,15 @@
 {{- end }}
     "npm:pi-rtk-optimizer"
   ],
-{{- if eq .profile "work" }}
-  "defaultProvider": "mlx",
-  "defaultModel": "local-agent-auto",
-{{- else }}
   "defaultProvider": "opencode-go",
   "defaultModel": "kimi-k2.6",
-{{- end }}
   "hideThinkingBlock": false,
   "quietStartup": true,
   "terminal": {
     "showTerminalProgress": true
   },
   "observational-memory": {
-    "passive": true,
-{{- if eq .profile "personal" }}
+    "passive": false,
     "compactAfterTokens": 204800
-{{- else }}
-    "compactAfterTokens": 81000
-{{- end }}
   }
 }
