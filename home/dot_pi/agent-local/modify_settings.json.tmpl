@@ -1,9 +1,14 @@
+#!/bin/sh
+# chezmoi modify_ script — ~/.pi/agent-local/settings.json (local 32K home).
+# Pi rewrites settings.json at runtime (model/theme/thinking toggles, changelog
+# bumps, pi config). We declaratively OWN only the structural keys; Pi owns the
+# rest. Merge policy lives in .chezmoitemplates/pi-settings-merge.tmpl.
+set -eu
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+command -v jq >/dev/null 2>&1 || { cat; exit 0; }
+desired=$(cat <<'__PI_DESIRED__'
 {
-{{- if eq .profile "work" }}
-  "defaultThinkingLevel": "medium",
-{{- else }}
-  "defaultThinkingLevel": "high",
-{{- end }}
+  "defaultThinkingLevel": "low",
   "theme": "catppuccin-mocha",
   "editorPaddingX": 1,
   "collapseChangelog": true,
@@ -39,15 +44,18 @@
 {{- end }}
     "npm:pi-rtk-optimizer"
   ],
-  "defaultProvider": "opencode-go",
-  "defaultModel": "kimi-k2.6",
+  "defaultProvider": "mlx",
+  "defaultModel": "local-agent-auto",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "terminal": {
     "showTerminalProgress": true
   },
   "observational-memory": {
-    "passive": false,
-    "compactAfterTokens": 204800
+    "passive": true,
+    "compactAfterTokens": 26000
   }
 }
+__PI_DESIRED__
+)
+{{ includeTemplate "pi-settings-merge.tmpl" . }}

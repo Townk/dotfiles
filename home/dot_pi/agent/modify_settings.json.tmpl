@@ -1,5 +1,18 @@
+#!/bin/sh
+# chezmoi modify_ script — ~/.pi/agent/settings.json (cloud home).
+# Pi rewrites settings.json at runtime (model/theme/thinking toggles, changelog
+# bumps, pi config). We declaratively OWN only the structural keys; Pi owns the
+# rest. Merge policy lives in .chezmoitemplates/pi-settings-merge.tmpl.
+set -eu
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+command -v jq >/dev/null 2>&1 || { cat; exit 0; }
+desired=$(cat <<'__PI_DESIRED__'
 {
-  "defaultThinkingLevel": "low",
+{{- if eq .profile "work" }}
+  "defaultThinkingLevel": "medium",
+{{- else }}
+  "defaultThinkingLevel": "high",
+{{- end }}
   "theme": "catppuccin-mocha",
   "editorPaddingX": 1,
   "collapseChangelog": true,
@@ -18,7 +31,7 @@
     "~/.pi/agent/skills",
     "~/Projects/AI/Skills"
   ],
-  "lastChangelogVersion": "0.79.5",
+  "lastChangelogVersion": "0.79.6",
   "packages": [
     "npm:pi-web-access",
     "npm:pi-cymbal",
@@ -35,15 +48,18 @@
 {{- end }}
     "npm:pi-rtk-optimizer"
   ],
-  "defaultProvider": "mlx",
-  "defaultModel": "local-agent-auto",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "kimi-k2.7-code",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "terminal": {
     "showTerminalProgress": true
   },
   "observational-memory": {
-    "passive": true,
-    "compactAfterTokens": 26000
+    "passive": false,
+    "compactAfterTokens": 204800
   }
 }
+__PI_DESIRED__
+)
+{{ includeTemplate "pi-settings-merge.tmpl" . }}
