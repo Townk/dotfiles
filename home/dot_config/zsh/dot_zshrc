@@ -8,6 +8,7 @@
 
 _zsh_should_autoattach_zellij() {
   [[ -z "$ZELLIJ" ]] || return 1
+  [[ -t 0 && -t 1 ]] || return 1
 
   # GUI helpers can launch interactive zsh at login without a real terminal.
   # Only auto-attach when the shell is backed by a terminal emulator or SSH.

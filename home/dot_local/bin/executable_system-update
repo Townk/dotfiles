@@ -66,6 +66,29 @@ esac
 # Colors / logging come from the shared base (C_*, log_warn/die).
 source "$HOME/.local/lib/common.zsh"
 
+# The Rust XDG migration moved Cargo/Rustup state out of ~/.cargo. Machines that
+# had already installed mise-managed Rust can be left with install entries
+# symlinked to the old ~/.cargo/bin. Drop only those legacy links after
+# MISE_CARGO_HOME has moved; mise will recreate them against the current
+# MISE_* homes.
+repair_mise_rust_legacy_links() {
+  command -v mise >/dev/null 2>&1 || return 0
+  [[ "${MISE_CARGO_HOME:-}" != "$HOME/.cargo" ]] || return 0
+  local spec dir target repaired=0
+  for spec in rust rust@nightly; do
+    dir="$(mise where "$spec" 2>/dev/null || true)"
+    [[ -n "$dir" && -L "$dir" ]] || continue
+    target="$(readlink "$dir" 2>/dev/null || true)"
+    [[ "$target" == "$HOME/.cargo/bin" ]] || continue
+    rm -f "$dir" || {
+      log_warn "could not remove stale mise Rust link: $dir"
+      continue
+    }
+    repaired=1
+  done
+  ((repaired == 0)) || log_warn "Removed stale mise Rust link(s); reinstalling Rust with current XDG paths."
+}
+
 # Bring the git-cloned zsh plugins to latest. These live in
 # ~/.local/share/zsh/plugins (cloned by run_onchange_after_20-setup-zsh-plugins)
 # and replace what zsh4humans used to bundle + self-update via `z4h update`.
@@ -184,6 +207,7 @@ if ! command -v brew >/dev/null 2>&1; then
   system_package_synced=0
   if command -v mise >/dev/null 2>&1; then
     print -P -- "\n🛠️ Sync Mise tools...\n"
+    repair_mise_rust_legacy_links
     # install first so a declared-but-missing toolchain (e.g. `go`, needed by
     # the package workers below) exists before `system-package sync` runs.
     mise install && mise upgrade && mise prune -y || log_warn "mise sync had failures"
@@ -220,6 +244,7 @@ brew update || die "Failed to update Homebrew!"
 # handles version bumps.
 if command -v mise >/dev/null 2>&1; then
   print -P -- "\n🛠️ Installing mise toolchains...\n"
+  repair_mise_rust_legacy_links
   mise install || log_warn "mise install had failures"
 fi
 
