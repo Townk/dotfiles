@@ -80,6 +80,23 @@
 .local/lib/platform-macos.zsh
 {{- end }}
 
+{{/* Cursor is work-only: the cursor-agent CLI lives on the work machine, so its
+     whole footprint is isolated to the work profile and never deploys on
+     personal or dev-shell hosts —
+       .cursor                          agent config (agents, rules, skills, mcp.json)
+       .local/bin/ai-commit-cursor      cursor harness for the ai-commit dispatcher
+       …/_ai-commit-cursor              that harness's completion
+     ai-commit auto-discovers its `ai-commit-*` workers and probe-gates them, so
+     dropping the worker just leaves `pi` as the sole harness; the templated
+     _ai-commit completion likewise omits the cursor option off-work. Matching
+     prunes live in .chezmoiremove. */}}
+{{ if ne .profile "work" -}}
+.cursor
+.cursor/**
+.local/bin/ai-commit-cursor
+.local/share/zsh/site-functions/_ai-commit-cursor
+{{- end }}
+
 # pi-coding-agent: paths managed by pi itself at runtime, or sensitive.
 # We track specific configs under ~/.pi/agent/ but never these dirs.
 .pi/.DS_Store

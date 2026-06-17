@@ -1,10 +1,14 @@
 #compdef ai-commit
 #
 # Completion for ai-commit, the harness dispatcher. The first positional may
-# name a harness (pi, cursor); every remaining word is forwarded verbatim to
+# name a harness ({{ if eq .profile "work" }}pi, cursor{{ else }}pi{{ end }}); every remaining word is forwarded verbatim to
 # the matching `ai-commit-<harness>` worker, so once a harness is chosen we
 # defer to that worker's own completion (autoloaded by name). Running bare
 # auto-picks the sole installed harness (or fzf-picks among several).
+#
+# Off the work profile the cursor harness is not deployed (see
+# .chezmoiignore.tmpl), so this completion omits it — the offered harnesses
+# always match the `ai-commit-*` workers actually present on disk.
 
 _ai-commit() {
   local context state state_descr line
@@ -18,13 +22,15 @@ _ai-commit() {
   case "$state" in
     harness)
       _values 'harness' \
-        'pi[plan commits via pi-coding-agent]' \
-        'cursor[plan commits via Cursor Agent]'
+        'pi[plan commits via pi-coding-agent]'{{ if eq .profile "work" }} \
+        'cursor[plan commits via Cursor Agent]'{{ end }}
       ;;
     rest)
       case "$words[1]" in
         pi)     _ai-commit-pi ;;
+{{- if eq .profile "work" }}
         cursor) _ai-commit-cursor ;;
+{{- end }}
       esac
       ;;
   esac
