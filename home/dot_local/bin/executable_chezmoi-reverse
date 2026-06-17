@@ -52,7 +52,11 @@ reverse_one() {
       emit merged "$file"
       return 0
       ;;
-    run_*.tmpl | symlink_*.tmpl | symlink_*)
+    run_*.tmpl | symlink_*.tmpl | symlink_* | modify_*.tmpl | modify_*)
+      # These sources are not a simple render of the target: run_ scripts and
+      # symlinks have no file body to diff, and a modify_ target is the OUTPUT
+      # of a script run against the live file — so patching the source from
+      # target drift is unsound. Leave the source authoritative and skip.
       emit skipped "$file"
       return 1
       ;;
