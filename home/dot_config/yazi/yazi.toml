@@ -32,7 +32,9 @@ prepend_previewers = [
   { url = "*.rst", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
   { url = "*.ipynb", run = 'piper -- rich -w $w -j --left --panel=rounded --guides --line-numbers --force-terminal "$1"' },
   { url = "*.json", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
-  { url = "*.ics", run = 'piper -- ics-view -W $w "$1"' },
+  { url = "*.{dmg,sparseimage,sparsebundle,cdr,img,iso}", run = 'piper -- "$HOME/.local/libexec/disk-image-view" -W $w "$1"' },
+  { url = "*.ics", run = 'piper -- "$HOME/.local/libexec/ics-view" -W $w "$1"' },
+  { url = "*.{db,sqlite,sqlite3}", run = 'piper -- "$HOME/.local/libexec/sqlite-view" -W $w "$1"' },
 ]
 
 append_previewers = [{ url = "*", run = "hexyl" }]

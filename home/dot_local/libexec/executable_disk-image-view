@@ -1,0 +1,525 @@
+#!/usr/bin/env python3
+"""
+disk-image-view - terminal card previewer for macOS disk images.
+
+Standalone Python 3 with hdiutil. Designed for fzf, Yazi, and quick shell
+inspection, with a visual style matching ics-view and sqlite-view.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import plistlib
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+# -- Catppuccin Mocha Palette -----------------------------------------------
+class CTP:
+    BASE = (30, 30, 46)
+    SURFACE0 = (49, 50, 68)
+    OVERLAY1 = (127, 132, 156)
+    TEXT = (205, 214, 244)
+    SUBTEXT0 = (166, 173, 200)
+    LAVENDER = (180, 190, 254)
+    BLUE = (137, 180, 250)
+    SKY = (137, 220, 235)
+    GREEN = (166, 227, 161)
+    YELLOW = (249, 226, 175)
+    PEACH = (250, 179, 135)
+    RED = (243, 139, 168)
+    MAUVE = (203, 166, 247)
+
+
+def _fg(r: int, g: int, b: int) -> str:
+    return f"\033[38;2;{r};{g};{b}m"
+
+
+def _bg(r: int, g: int, b: int) -> str:
+    return f"\033[48;2;{r};{g};{b}m"
+
+
+def _bold() -> str:
+    return "\033[1m"
+
+
+def _reset() -> str:
+    return "\033[0m"
+
+
+class Style:
+    primary = _fg(*CTP.LAVENDER)
+    secondary = _fg(*CTP.BLUE)
+    accent = _fg(*CTP.MAUVE)
+    success = _fg(*CTP.GREEN)
+    warning = _fg(*CTP.YELLOW)
+    danger = _fg(*CTP.RED)
+    info = _fg(*CTP.SKY)
+    muted = _fg(*CTP.OVERLAY1)
+    subtle = _fg(*CTP.SUBTEXT0)
+    text = _fg(*CTP.TEXT)
+    bg_accent = _bg(*CTP.SURFACE0)
+
+    ICON_DMG = "\uf0a0"        # 
+    ICON_FILE = "\uf15b"       # 
+    ICON_ARCHIVE = "\uf1c6"    # 
+    ICON_CHECK = "\uf00c"      # 
+    ICON_LOCK = "\uf023"       # 
+    ICON_UNLOCK = "\uf09c"     # 
+    ICON_PARTITION = "\uf247"  # 
+    ICON_SEGMENT = "\uf0c8"    # 
+    ICON_SIZE = "\uf493"       # 
+    ICON_WARN = "\uf071"       # 
+    ICON_CODE = "\uf121"       # 
+
+    PILL_LEFT = "\ue0b6"
+    PILL_RIGHT = "\ue0b4"
+    CORNER_TL = "\u256d"
+    CORNER_TR = "\u256e"
+    CORNER_BL = "\u2570"
+    CORNER_BR = "\u256f"
+    HORIZ = "\u2500"
+    VERT = "\u2502"
+    T_LEFT = "\u251c"
+    T_RIGHT = "\u2524"
+    MIDDOT = "\u00b7"
+
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def visual_width(text: str) -> int:
+    return len(_ANSI_RE.sub("", text))
+
+
+def truncate_visual(text: str, width: int, ellipsis: str = "...") -> str:
+    plain = _ANSI_RE.sub("", text)
+    if len(plain) <= width:
+        return text
+    leading_ansi = ""
+    m = re.match(r"(\033\[[0-9;]*m)+", text)
+    if m:
+        leading_ansi = m.group(0)
+    return leading_ansi + plain[: max(0, width - len(ellipsis))] + ellipsis + _reset()
+
+
+def wrap_plain(text: str, width: int) -> list[str]:
+    if width <= 0:
+        return [""]
+    words = text.split()
+    if not words:
+        return []
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        while len(word) > width:
+            lines.append(word[:width])
+            word = word[width:]
+        current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def human_bytes(size: int | float | None) -> str:
+    if size is None:
+        return "?"
+    value = float(size)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+def percent(value: float | None) -> str:
+    if value is None:
+        return "?"
+    return f"{value * 100:.1f}%"
+
+
+def as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+@dataclass
+class PartitionInfo:
+    name: str
+    hint: str
+    length: int
+    start: int
+    synthesized: bool
+    filesystems: str
+
+
+@dataclass
+class DiskImageInfo:
+    path: Path
+    format: str
+    format_description: str
+    class_name: str
+    checksum_type: str
+    checksum_value: str
+    file_size: int
+    total_bytes: int | None
+    compressed_bytes: int | None
+    compressed_ratio: float | None
+    sector_count: int | None
+    block_size: int
+    partition_scheme: str
+    burnable: bool | None
+    properties: dict[str, Any]
+    partitions: list[PartitionInfo]
+    segments: list[str]
+
+
+class CardRenderer:
+    def __init__(self, width: int):
+        self.w = max(44, width)
+        self.s = Style()
+        self._reset = _reset()
+
+    def _top_border(self, title: str = "") -> str:
+        if title:
+            title = " " + truncate_visual(title, self.w - 4) + " "
+            fill = max(0, self.w - 2 - visual_width(title))
+            return (
+                self.s.primary
+                + self.s.CORNER_TL
+                + title
+                + self.s.primary
+                + self.s.HORIZ * fill
+                + self.s.CORNER_TR
+                + self._reset
+            )
+        return self.s.primary + self.s.CORNER_TL + self.s.HORIZ * (self.w - 2) + self.s.CORNER_TR + self._reset
+
+    def _mid_border(self, label: str = "") -> str:
+        if not label:
+            return self.s.primary + self.s.T_LEFT + self.s.HORIZ * (self.w - 2) + self.s.T_RIGHT + self._reset
+        label = truncate_visual(label.strip(), self.w - 8)
+        labeled = f"{self.s.HORIZ} {label} "
+        fill = max(0, self.w - 2 - visual_width(labeled))
+        return (
+            self.s.primary
+            + self.s.T_LEFT
+            + labeled
+            + self.s.HORIZ * fill
+            + self.s.T_RIGHT
+            + self._reset
+        )
+
+    def _section_divider(self, label: str) -> list[str]:
+        inner_w = self.w - 2
+        label = truncate_visual(label.strip(), max(1, inner_w - 5))
+        label_w = visual_width(label)
+        title_w = label_w + 2
+        divider = _fg(*CTP.OVERLAY1)
+        title = _fg(*CTP.BASE) + _bg(*CTP.OVERLAY1) + f" {label} " + self._reset
+
+        top_rule = "\u2581" * max(0, inner_w - 4)
+        bottom_rule = "\u2594" * min(max(1, title_w), inner_w - 2)
+
+        top = (
+            self.s.primary + self.s.VERT + self._reset
+            + "  " + divider + top_rule + self._reset
+            + "  " + self.s.primary + self.s.VERT + self._reset
+        )
+        middle = (
+            self.s.primary + self.s.VERT + self._reset
+            + "  " + title + " " * max(0, inner_w - 2 - title_w)
+            + self.s.primary + self.s.VERT + self._reset
+        )
+        bottom = (
+            self.s.primary + self.s.VERT + self._reset
+            + "  " + divider + bottom_rule + self._reset
+            + " " * max(0, inner_w - 2 - visual_width(bottom_rule))
+            + self.s.primary + self.s.VERT + self._reset
+        )
+        return [top, middle, bottom]
+
+    def _bottom_border(self) -> str:
+        return self.s.primary + self.s.CORNER_BL + self.s.HORIZ * (self.w - 2) + self.s.CORNER_BR + self._reset
+
+    def _blank_row(self) -> str:
+        return self.s.primary + self.s.VERT + " " * (self.w - 2) + self.s.VERT + self._reset
+
+    def _row(self, content: str, prefix: str = "", indent: int = 3, right_indent: int | None = None) -> str:
+        right_pad = right_indent if right_indent is not None else indent
+        margin = " " * indent
+        inner_w = self.w - 2 - indent - right_pad
+        if prefix:
+            prefix_w = visual_width(prefix)
+            margin += prefix + " "
+            inner_w -= prefix_w + 1
+
+        plain = _ANSI_RE.sub("", content)
+        if len(plain) <= inner_w:
+            return (
+                self.s.primary + self.s.VERT + self._reset
+                + margin + content + " " * (inner_w - len(plain)) + " " * right_pad
+                + self.s.primary + self.s.VERT + self._reset
+            )
+
+        lines = wrap_plain(plain, inner_w)
+        out = []
+        continuation_indent = indent + (visual_width(prefix) + 1 if prefix else 0)
+        for i, line in enumerate(lines):
+            pre = margin if i == 0 else " " * continuation_indent
+            out.append(
+                self.s.primary + self.s.VERT + self._reset
+                + pre + line + " " * (inner_w - len(line)) + " " * right_pad
+                + self.s.primary + self.s.VERT + self._reset
+            )
+        return "\n".join(out)
+
+    def _pill(self, text: str, rgb: tuple[int, int, int]) -> str:
+        r, g, b = rgb
+        br, bg, bb = CTP.BASE
+        left = f"\033[38;2;{r};{g};{b};49m{self.s.PILL_LEFT}\033[0m"
+        middle = f"\033[38;2;{br};{bg};{bb};48;2;{r};{g};{b}m {text} \033[0m"
+        right = f"\033[38;2;{r};{g};{b};49m{self.s.PILL_RIGHT}\033[0m"
+        return left + middle + right
+
+
+def run_imageinfo(path: Path) -> dict[str, Any]:
+    proc = subprocess.run(
+        ["/usr/bin/hdiutil", "imageinfo", "-plist", str(path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip() or "hdiutil imageinfo failed"
+        raise RuntimeError(err)
+    try:
+        return plistlib.loads(proc.stdout)
+    except plistlib.InvalidFileException as exc:
+        raise RuntimeError(f"hdiutil returned invalid plist: {exc}") from exc
+
+
+def partition_filesystems(partition: dict[str, Any]) -> str:
+    filesystems = as_dict(partition.get("partition-filesystems"))
+    if not filesystems:
+        return ""
+    return ", ".join(f"{key}: {value}" for key, value in sorted(filesystems.items()))
+
+
+def load_disk_image_info(path: Path) -> DiskImageInfo:
+    raw = run_imageinfo(path)
+    size_info = as_dict(raw.get("Size Information"))
+    properties = as_dict(raw.get("Properties"))
+    partitions_root = as_dict(raw.get("partitions"))
+    block_size = int(partitions_root.get("block-size") or 512)
+
+    partitions: list[PartitionInfo] = []
+    for item in as_list(partitions_root.get("partitions")):
+        part = as_dict(item)
+        partitions.append(
+            PartitionInfo(
+                name=str(part.get("partition-name") or ""),
+                hint=str(part.get("partition-hint") or ""),
+                length=int(part.get("partition-length") or 0),
+                start=int(part.get("partition-start") or 0),
+                synthesized=bool(part.get("partition-synthesized")),
+                filesystems=partition_filesystems(part),
+            )
+        )
+
+    return DiskImageInfo(
+        path=path,
+        format=str(raw.get("Format") or ""),
+        format_description=str(raw.get("Format Description") or ""),
+        class_name=str(raw.get("Class Name") or ""),
+        checksum_type=str(raw.get("Checksum Type") or ""),
+        checksum_value=str(raw.get("Checksum Value") or ""),
+        file_size=path.stat().st_size,
+        total_bytes=size_info.get("Total Bytes"),
+        compressed_bytes=size_info.get("Compressed Bytes"),
+        compressed_ratio=size_info.get("Compressed Ratio"),
+        sector_count=size_info.get("Sector Count"),
+        block_size=block_size,
+        partition_scheme=str(partitions_root.get("partition-scheme") or ""),
+        burnable=partitions_root.get("burnable"),
+        properties=properties,
+        partitions=partitions,
+        segments=[str(segment) for segment in as_list(raw.get("Segments"))],
+    )
+
+
+def prop_flag(info: DiskImageInfo, key: str) -> bool:
+    value = info.properties.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    if isinstance(value, int):
+        return value != 0
+    return bool(value)
+
+
+def render_overview(info: DiskImageInfo, width: int, all_partitions: bool, max_partitions: int) -> str:
+    r = CardRenderer(width)
+    s = r.s
+
+    lines = [
+        r._top_border(f"{s.ICON_DMG} Disk Image"),
+        r._blank_row(),
+        r._row(_bold() + s.text + info.path.name + _reset(), prefix=f"{s.info}{s.ICON_FILE}{_reset()}"),
+        r._row(str(info.path), prefix=f"{s.muted}{s.MIDDOT}{_reset()}"),
+        r._blank_row(),
+    ]
+
+    format_text = info.format or "unknown"
+    if info.format_description:
+        format_text += f" {s.muted}{s.MIDDOT}{_reset()} {s.subtle}{info.format_description}{_reset()}"
+    lines.append(r._row(format_text, prefix=f"{s.accent}{s.ICON_ARCHIVE}{_reset()}"))
+
+    pills = [r._pill(info.format or "disk image", CTP.MAUVE)]
+    if prop_flag(info, "Compressed"):
+        pills.append(r._pill("compressed", CTP.BLUE))
+    if prop_flag(info, "Checksummed"):
+        pills.append(r._pill("checksummed", CTP.GREEN))
+    if prop_flag(info, "Encrypted"):
+        pills.append(r._pill(f"{s.ICON_LOCK} encrypted", CTP.RED))
+    else:
+        pills.append(r._pill(f"{s.ICON_UNLOCK} not encrypted", CTP.SKY))
+    if prop_flag(info, "Software License Agreement"):
+        pills.append(r._pill("SLA", CTP.PEACH))
+    lines.append(r._row("  ".join(pills)))
+
+    lines.append(r._blank_row())
+    size_parts = [
+        f"{s.subtle}{human_bytes(info.file_size)} file{_reset()}",
+        f"{s.subtle}{human_bytes(info.total_bytes)} logical{_reset()}",
+    ]
+    if info.compressed_bytes is not None:
+        size_parts.append(f"{s.subtle}{human_bytes(info.compressed_bytes)} compressed{_reset()}")
+    if info.compressed_ratio is not None:
+        size_parts.append(f"{s.subtle}{percent(info.compressed_ratio)} ratio{_reset()}")
+    lines.append(r._row(f" {s.muted}{s.MIDDOT}{_reset()} ".join(size_parts), prefix=f"{s.warning}{s.ICON_SIZE}{_reset()}"))
+
+    detail_parts = []
+    if info.checksum_type or info.checksum_value:
+        detail_parts.append(f"{s.subtle}{info.checksum_type} {info.checksum_value}".strip() + _reset())
+    if info.sector_count is not None:
+        detail_parts.append(f"{s.subtle}{info.sector_count} sectors{_reset()}")
+    if info.partition_scheme:
+        detail_parts.append(f"{s.subtle}{info.partition_scheme}{_reset()}")
+    if info.burnable is not None:
+        detail_parts.append(f"{s.subtle}{'burnable' if info.burnable else 'not burnable'}{_reset()}")
+    if detail_parts:
+        lines.append(r._row(f" {s.muted}{s.MIDDOT}{_reset()} ".join(detail_parts), prefix=f"{s.success}{s.ICON_CHECK}{_reset()}"))
+
+    visible_partitions = info.partitions if all_partitions else [p for p in info.partitions if not p.synthesized]
+    if not visible_partitions and info.partitions:
+        visible_partitions = info.partitions
+
+    if visible_partitions:
+        lines.extend(r._section_divider("partitions"))
+        shown = visible_partitions[:max_partitions]
+        for part in shown:
+            name = part.name or "(unnamed)"
+            part_size = human_bytes(part.length * info.block_size)
+            parts = [
+                f"{s.text}{name}{_reset()}",
+                f"{s.subtle}{part.hint or 'unknown'}{_reset()}",
+                f"{s.subtle}{part_size}{_reset()}",
+                f"{s.muted}@ sector {part.start}{_reset()}",
+            ]
+            if part.filesystems:
+                parts.append(f"{s.info}{part.filesystems}{_reset()}")
+            if all_partitions and part.synthesized:
+                parts.append(f"{s.muted}synthesized{_reset()}")
+            lines.append(r._row(f" {s.muted}{s.MIDDOT}{_reset()} ".join(parts), prefix=f"{s.secondary}{s.ICON_PARTITION}{_reset()}"))
+
+        hidden = len(visible_partitions) - len(shown)
+        if hidden > 0:
+            lines.append(r._blank_row())
+            lines.append(r._row(f"{s.muted}... and {hidden} more partition(s){_reset()}"))
+
+    if len(info.segments) > 1:
+        lines.extend(r._section_divider("segments"))
+        for segment in info.segments[:6]:
+            lines.append(r._row(segment, prefix=f"{s.muted}{s.ICON_SEGMENT}{_reset()}"))
+        if len(info.segments) > 6:
+            lines.append(r._row(f"{s.muted}... and {len(info.segments) - 6} more segment(s){_reset()}"))
+
+    lines.extend([r._blank_row(), r._bottom_border()])
+    return "\n".join(lines)
+
+
+def render_error(message: str, width: int) -> str:
+    r = CardRenderer(width)
+    s = r.s
+    return "\n".join(
+        [
+            r._top_border(f"{s.ICON_WARN} Disk Image"),
+            r._blank_row(),
+            r._row(f"{s.danger}{message}{_reset()}", prefix=f"{s.danger}{s.ICON_WARN}{_reset()}"),
+            r._blank_row(),
+            r._bottom_border(),
+        ]
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Terminal card previewer for macOS disk images.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  disk-image-view installer.dmg
+  disk-image-view -W 120 work.sparseimage
+  disk-image-view --all-partitions backup.sparsebundle
+""",
+    )
+    parser.add_argument("file", help="Path to a macOS disk image")
+    parser.add_argument("-W", "--width", type=int, default=80, help="Terminal width (default: 80)")
+    parser.add_argument("--all-partitions", action="store_true", help="Include synthesized GPT/MBR partitions")
+    parser.add_argument("--max-partitions", type=int, default=8, help="Max partitions shown (default: 8)")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    width = max(44, args.width)
+    path = Path(os.path.expanduser(args.file))
+
+    if not path.exists():
+        print(render_error(f"File not found: {path}", width), file=sys.stderr)
+        sys.exit(1)
+    if not path.is_file() and path.suffix.lower() != ".sparsebundle":
+        print(render_error(f"Not a file or sparsebundle: {path}", width), file=sys.stderr)
+        sys.exit(1)
+    if not Path("/usr/bin/hdiutil").exists():
+        print(render_error("hdiutil is required on macOS to inspect disk images.", width), file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        info = load_disk_image_info(path)
+        print(render_overview(info, width, args.all_partitions, max(1, args.max_partitions)))
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(render_error(str(exc), width), file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,734 @@
+#!/usr/bin/env python3
+"""
+sqlite-view - terminal card previewer for SQLite databases.
+
+Standalone Python 3, stdlib only. Designed for fzf, Yazi, and quick shell
+inspection, with a visual style matching ics-view.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sqlite3
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import quote
+
+
+# -- Catppuccin Mocha Palette -----------------------------------------------
+class CTP:
+    BASE = (30, 30, 46)
+    SURFACE0 = (49, 50, 68)
+    OVERLAY0 = (108, 114, 134)
+    OVERLAY1 = (127, 132, 156)
+    TEXT = (205, 214, 244)
+    SUBTEXT0 = (166, 173, 200)
+    LAVENDER = (180, 190, 254)
+    BLUE = (137, 180, 250)
+    SKY = (137, 220, 235)
+    GREEN = (166, 227, 161)
+    YELLOW = (249, 226, 175)
+    PEACH = (250, 179, 135)
+    RED = (243, 139, 168)
+    MAUVE = (203, 166, 247)
+    PINK = (245, 194, 231)
+
+
+def _fg(r: int, g: int, b: int) -> str:
+    return f"\033[38;2;{r};{g};{b}m"
+
+
+def _bg(r: int, g: int, b: int) -> str:
+    return f"\033[48;2;{r};{g};{b}m"
+
+
+def _bold() -> str:
+    return "\033[1m"
+
+
+def _dim() -> str:
+    return "\033[2m"
+
+
+def _reset() -> str:
+    return "\033[0m"
+
+
+class Style:
+    primary = _fg(*CTP.LAVENDER)
+    secondary = _fg(*CTP.BLUE)
+    accent = _fg(*CTP.MAUVE)
+    success = _fg(*CTP.GREEN)
+    warning = _fg(*CTP.YELLOW)
+    danger = _fg(*CTP.RED)
+    info = _fg(*CTP.SKY)
+    muted = _fg(*CTP.OVERLAY1)
+    subtle = _fg(*CTP.SUBTEXT0)
+    text = _fg(*CTP.TEXT)
+    bg_accent = _bg(*CTP.SURFACE0)
+
+    ICON_DB = "\uf1c0"       # 
+    ICON_TABLE = "\uf0ce"    # 
+    ICON_VIEW = "\uf06e"     # 
+    ICON_INDEX = "\uf02e"    # 
+    ICON_TRIGGER = "\uf0e7"  # 
+    ICON_COLUMN = "\uf03a"   # 
+    ICON_KEY = "\uf084"      # 
+    ICON_LINK = "\uf0c1"     # 
+    ICON_ROWS = "\uf0ca"     # 
+    ICON_CODE = "\uf121"     # 
+    ICON_WARN = "\uf071"     # 
+    ICON_FILE = "\uf15b"     # 
+
+    PILL_LEFT = "\ue0b6"
+    PILL_RIGHT = "\ue0b4"
+    CORNER_TL = "\u256d"
+    CORNER_TR = "\u256e"
+    CORNER_BL = "\u2570"
+    CORNER_BR = "\u256f"
+    HORIZ = "\u2500"
+    VERT = "\u2502"
+    T_LEFT = "\u251c"
+    T_RIGHT = "\u2524"
+    MIDDOT = "\u00b7"
+
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def visual_width(text: str) -> int:
+    return len(_ANSI_RE.sub("", text))
+
+
+def truncate_visual(text: str, width: int, ellipsis: str = "...") -> str:
+    plain = _ANSI_RE.sub("", text)
+    if len(plain) <= width:
+        return text
+    leading_ansi = ""
+    m = re.match(r"(\033\[[0-9;]*m)+", text)
+    if m:
+        leading_ansi = m.group(0)
+    return leading_ansi + plain[: max(0, width - len(ellipsis))] + ellipsis + _reset()
+
+
+def pad_visual(text: str, width: int, align: str = "left") -> str:
+    text = truncate_visual(text, width)
+    gap = width - visual_width(text)
+    if align == "right":
+        return " " * gap + text
+    return text + " " * gap
+
+
+def wrap_plain(text: str, width: int) -> list[str]:
+    if width <= 0:
+        return [""]
+    words = text.split()
+    if not words:
+        return []
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) <= width:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+            while len(word) > width:
+                lines.append(word[:width])
+                word = word[width:]
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def human_bytes(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+def quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def fmt_value(value: object) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bytes):
+        return f"<blob {len(value)} B>"
+    text = str(value).replace("\n", "\\n").replace("\r", "\\r").replace("\t", " ")
+    return text if text else "''"
+
+
+@dataclass
+class ColumnInfo:
+    name: str
+    decl_type: str
+    notnull: bool
+    pk: int
+    hidden: int
+
+
+@dataclass
+class ObjectInfo:
+    name: str
+    kind: str
+    sql: str
+    columns: list[ColumnInfo]
+    row_count: str
+    foreign_keys: int
+    is_virtual: bool
+
+
+@dataclass
+class DatabaseInfo:
+    path: Path
+    size: int
+    page_count: int
+    page_size: int
+    freelist_count: int
+    user_version: int
+    encoding: str
+    schema_version: int
+    objects: list[ObjectInfo]
+    index_count: int
+    trigger_count: int
+
+
+class CardRenderer:
+    def __init__(self, width: int):
+        self.w = max(44, width)
+        self.s = Style()
+        self._reset = _reset()
+
+    def _top_border(self, title: str = "") -> str:
+        if title:
+            title = " " + truncate_visual(title, self.w - 4) + " "
+            fill = max(0, self.w - 2 - visual_width(title))
+            return (
+                self.s.primary
+                + self.s.CORNER_TL
+                + title
+                + self.s.primary
+                + self.s.HORIZ * fill
+                + self.s.CORNER_TR
+                + self._reset
+            )
+        return self.s.primary + self.s.CORNER_TL + self.s.HORIZ * (self.w - 2) + self.s.CORNER_TR + self._reset
+
+    def _mid_border(self, label: str = "") -> str:
+        if not label:
+            return self.s.primary + self.s.T_LEFT + self.s.HORIZ * (self.w - 2) + self.s.T_RIGHT + self._reset
+        label = truncate_visual(label.strip(), self.w - 8)
+        labeled = f"{self.s.HORIZ} {label} "
+        fill = max(0, self.w - 2 - visual_width(labeled))
+        return (
+            self.s.primary
+            + self.s.T_LEFT
+            + labeled
+            + self.s.HORIZ * fill
+            + self.s.T_RIGHT
+            + self._reset
+        )
+
+    def _section_divider(self, label: str) -> list[str]:
+        inner_w = self.w - 2
+        label = truncate_visual(label.strip(), max(1, inner_w - 5))
+        label_w = visual_width(label)
+        title_w = label_w + 2
+        divider = _fg(*CTP.OVERLAY1)
+        title = _fg(*CTP.BASE) + _bg(*CTP.OVERLAY1) + f" {label} " + self._reset
+
+        top_rule = "\u2581" * max(0, inner_w - 4)
+        bottom_rule = "\u2594" * min(max(1, title_w), inner_w - 2)
+
+        top = (
+            self.s.primary + self.s.VERT + self._reset
+            + "  " + divider + top_rule + self._reset
+            + "  " + self.s.primary + self.s.VERT + self._reset
+        )
+        middle = (
+            self.s.primary + self.s.VERT + self._reset
+            + "  " + title + " " * max(0, inner_w - 2 - title_w)
+            + self.s.primary + self.s.VERT + self._reset
+        )
+        bottom = (
+            self.s.primary + self.s.VERT + self._reset
+            + "  " + divider + bottom_rule + self._reset
+            + " " * max(0, inner_w - 2 - visual_width(bottom_rule))
+            + self.s.primary + self.s.VERT + self._reset
+        )
+        return [top, middle, bottom]
+
+    def _bottom_border(self) -> str:
+        return self.s.primary + self.s.CORNER_BL + self.s.HORIZ * (self.w - 2) + self.s.CORNER_BR + self._reset
+
+    def _blank_row(self) -> str:
+        return self.s.primary + self.s.VERT + " " * (self.w - 2) + self.s.VERT + self._reset
+
+    def _row(self, content: str, prefix: str = "", indent: int = 3, right_indent: int | None = None) -> str:
+        right_pad = right_indent if right_indent is not None else indent
+        margin = " " * indent
+        inner_w = self.w - 2 - indent - right_pad
+        if prefix:
+            prefix_w = visual_width(prefix)
+            margin += prefix + " "
+            inner_w -= prefix_w + 1
+
+        plain = _ANSI_RE.sub("", content)
+        if len(plain) <= inner_w:
+            return (
+                self.s.primary + self.s.VERT + self._reset
+                + margin + content + " " * (inner_w - len(plain)) + " " * right_pad
+                + self.s.primary + self.s.VERT + self._reset
+            )
+
+        lines = wrap_plain(plain, inner_w)
+        out = []
+        continuation_indent = indent + (visual_width(prefix) + 1 if prefix else 0)
+        for i, line in enumerate(lines):
+            pre = margin if i == 0 else " " * continuation_indent
+            out.append(
+                self.s.primary + self.s.VERT + self._reset
+                + pre + line + " " * (inner_w - len(line)) + " " * right_pad
+                + self.s.primary + self.s.VERT + self._reset
+            )
+        return "\n".join(out)
+
+    def _pill(self, text: str, rgb: tuple[int, int, int]) -> str:
+        r, g, b = rgb
+        br, bg, bb = CTP.BASE
+        left = f"\033[38;2;{r};{g};{b};49m{self.s.PILL_LEFT}\033[0m"
+        middle = f"\033[38;2;{br};{bg};{bb};48;2;{r};{g};{b}m {text} \033[0m"
+        right = f"\033[38;2;{r};{g};{b};49m{self.s.PILL_RIGHT}\033[0m"
+        return left + middle + right
+
+
+def open_readonly(path: Path) -> sqlite3.Connection:
+    uri = f"file:{quote(str(path.resolve()))}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only = ON")
+    return conn
+
+
+def scalar(conn: sqlite3.Connection, sql: str) -> object:
+    row = conn.execute(sql).fetchone()
+    return row[0] if row else None
+
+
+def quick_count(conn: sqlite3.Connection, table_name: str, budget: int) -> str:
+    calls = 0
+
+    def progress() -> int:
+        nonlocal calls
+        calls += 1
+        return 1 if calls > budget else 0
+
+    try:
+        conn.set_progress_handler(progress, 1000)
+        value = conn.execute(f"SELECT COUNT(*) FROM {quote_ident(table_name)}").fetchone()[0]
+        return str(value)
+    except sqlite3.Error:
+        return "?"
+    finally:
+        conn.set_progress_handler(None, 0)
+
+
+def load_columns(conn: sqlite3.Connection, object_name: str) -> list[ColumnInfo]:
+    rows = conn.execute(f"PRAGMA table_xinfo({quote_ident(object_name)})").fetchall()
+    return [
+        ColumnInfo(
+            name=str(row["name"]),
+            decl_type=str(row["type"] or ""),
+            notnull=bool(row["notnull"]),
+            pk=int(row["pk"] or 0),
+            hidden=int(row["hidden"] or 0),
+        )
+        for row in rows
+    ]
+
+
+def load_database_info(conn: sqlite3.Connection, path: Path, count_budget: int) -> DatabaseInfo:
+    schema_rows = conn.execute(
+        """
+        SELECT type, name, COALESCE(sql, '') AS sql
+        FROM sqlite_schema
+        WHERE type IN ('table', 'view', 'index', 'trigger')
+          AND name NOT LIKE 'sqlite_%'
+        ORDER BY
+          CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 WHEN 'index' THEN 2 ELSE 3 END,
+          name COLLATE NOCASE
+        """
+    ).fetchall()
+
+    objects: list[ObjectInfo] = []
+    index_count = 0
+    trigger_count = 0
+
+    for row in schema_rows:
+        kind = str(row["type"])
+        name = str(row["name"])
+        sql = str(row["sql"] or "")
+        if kind == "index":
+            index_count += 1
+            continue
+        if kind == "trigger":
+            trigger_count += 1
+            continue
+
+        columns = load_columns(conn, name)
+        is_virtual = kind == "table" and sql.upper().startswith("CREATE VIRTUAL TABLE")
+        row_count = "view" if kind == "view" else quick_count(conn, name, count_budget)
+        foreign_keys = 0
+        if kind == "table":
+            try:
+                foreign_keys = len(conn.execute(f"PRAGMA foreign_key_list({quote_ident(name)})").fetchall())
+            except sqlite3.Error:
+                foreign_keys = 0
+
+        objects.append(
+            ObjectInfo(
+                name=name,
+                kind=kind,
+                sql=sql,
+                columns=columns,
+                row_count=row_count,
+                foreign_keys=foreign_keys,
+                is_virtual=is_virtual,
+            )
+        )
+
+    return DatabaseInfo(
+        path=path,
+        size=path.stat().st_size,
+        page_count=int(scalar(conn, "PRAGMA page_count") or 0),
+        page_size=int(scalar(conn, "PRAGMA page_size") or 0),
+        freelist_count=int(scalar(conn, "PRAGMA freelist_count") or 0),
+        user_version=int(scalar(conn, "PRAGMA user_version") or 0),
+        encoding=str(scalar(conn, "PRAGMA encoding") or ""),
+        schema_version=int(scalar(conn, "PRAGMA schema_version") or 0),
+        objects=objects,
+        index_count=index_count,
+        trigger_count=trigger_count,
+    )
+
+
+def object_label(obj: ObjectInfo, s: Style) -> tuple[str, str]:
+    if obj.kind == "view":
+        return f"{s.info}{s.ICON_VIEW}{_reset()}", "view"
+    if obj.is_virtual:
+        return f"{s.accent}{s.ICON_TABLE}{_reset()}", "virtual table"
+    return f"{s.success}{s.ICON_TABLE}{_reset()}", "table"
+
+
+def find_object(info: DatabaseInfo, name: str) -> ObjectInfo | None:
+    lowered = name.lower()
+    for obj in info.objects:
+        if obj.name.lower() == lowered:
+            return obj
+    return None
+
+
+def render_overview(info: DatabaseInfo, width: int, max_objects: int) -> str:
+    r = CardRenderer(width)
+    s = r.s
+    tables = [obj for obj in info.objects if obj.kind == "table" and not obj.is_virtual]
+    views = [obj for obj in info.objects if obj.kind == "view"]
+    virtual_tables = [obj for obj in info.objects if obj.is_virtual]
+
+    lines = [
+        r._top_border(f"{s.ICON_DB} SQLite Database"),
+        r._blank_row(),
+        r._row(_bold() + s.text + info.path.name + _reset(), prefix=f"{s.info}{s.ICON_FILE}{_reset()}"),
+        r._row(str(info.path), prefix=f"{s.muted}{s.MIDDOT}{_reset()}"),
+        r._blank_row(),
+    ]
+
+    object_pills = [
+        r._pill(f"{len(tables)} tables", CTP.GREEN),
+        r._pill(f"{len(views)} views", CTP.SKY),
+        r._pill(f"{len(virtual_tables)} virtual", CTP.MAUVE),
+        r._pill(f"{info.index_count} indexes", CTP.BLUE),
+        r._pill(f"{info.trigger_count} triggers", CTP.PEACH),
+    ]
+    lines.append(r._row("  ".join(object_pills)))
+    lines.append(r._blank_row())
+
+    db_size = human_bytes(info.size)
+    pages_size = human_bytes(info.page_count * info.page_size)
+    meta = (
+        f"{s.subtle}{db_size}{_reset()} on disk"
+        f" {s.muted}{s.MIDDOT}{_reset()} "
+        f"{s.subtle}{info.page_count} pages x {human_bytes(info.page_size)}{_reset()}"
+        f" {s.muted}{s.MIDDOT}{_reset()} "
+        f"{s.subtle}{info.encoding}{_reset()}"
+    )
+    lines.append(r._row(meta, prefix=f"{s.warning}{s.ICON_DB}{_reset()}"))
+    lines.append(
+        r._row(
+            f"{s.subtle}schema v{info.schema_version}{_reset()}"
+            f" {s.muted}{s.MIDDOT}{_reset()} "
+            f"{s.subtle}user v{info.user_version}{_reset()}"
+            f" {s.muted}{s.MIDDOT}{_reset()} "
+            f"{s.subtle}{pages_size} logical{_reset()}",
+            prefix=f"{s.muted}{s.ICON_CODE}{_reset()}",
+        )
+    )
+
+    if info.objects:
+        lines.extend(r._section_divider("objects"))
+
+        shown = info.objects[:max_objects]
+        for obj in shown:
+            icon, label = object_label(obj, s)
+            pk_cols = [col.name for col in obj.columns if col.pk]
+            visible_cols = [col for col in obj.columns if col.hidden == 0]
+            parts = [
+                f"{s.text}{obj.name}{_reset()}",
+                f"{s.muted}{label}{_reset()}",
+                f"{s.subtle}{len(visible_cols)} cols{_reset()}",
+            ]
+            if obj.kind == "table":
+                parts.append(f"{s.subtle}{obj.row_count} rows{_reset()}")
+            if pk_cols:
+                parts.append(f"{s.warning}{s.ICON_KEY} {', '.join(pk_cols[:3])}{_reset()}")
+            if obj.foreign_keys:
+                parts.append(f"{s.info}{s.ICON_LINK} {obj.foreign_keys} fk{_reset()}")
+            lines.append(r._row(f" {s.muted}{s.MIDDOT}{_reset()} ".join(parts), prefix=icon))
+
+        hidden = len(info.objects) - len(shown)
+        if hidden > 0:
+            lines.append(r._blank_row())
+            lines.append(r._row(f"{s.muted}... and {hidden} more object(s){_reset()}"))
+    else:
+        lines.append(r._blank_row())
+        lines.append(r._row(f"{s.muted}No user tables or views found.{_reset()}"))
+
+    lines.extend([r._blank_row(), r._bottom_border()])
+    return "\n".join(lines)
+
+
+def format_columns(obj: ObjectInfo, width: int) -> list[str]:
+    s = Style()
+    lines: list[str] = []
+    for col in obj.columns:
+        if col.hidden:
+            continue
+        badges: list[str] = []
+        if col.pk:
+            badges.append(f"{s.warning}pk{_reset()}")
+        if col.notnull:
+            badges.append(f"{s.info}not null{_reset()}")
+        type_text = col.decl_type or "any"
+        suffix = f" {s.muted}({', '.join(badges)}){_reset()}" if badges else ""
+        lines.append(f"{s.text}{col.name}{_reset()} {s.subtle}{type_text}{_reset()}{suffix}")
+    return [truncate_visual(line, width) for line in lines]
+
+
+def build_grid(headers: list[str], rows: list[sqlite3.Row], width: int) -> tuple[list[str], int]:
+    if not headers:
+        return (["(no columns)"], 0)
+
+    formatted = [[fmt_value(row[h]) for h in headers] for row in rows]
+    selected = list(range(len(headers)))
+
+    def widths_for(cols: list[int]) -> list[int]:
+        widths: list[int] = []
+        for idx in cols:
+            samples = [headers[idx], *(row[idx] for row in formatted)]
+            widths.append(min(24, max(4, *(len(item) for item in samples))))
+        return widths
+
+    def total_width(widths: list[int]) -> int:
+        return sum(widths) + max(0, len(widths) - 1) * 3
+
+    widths = widths_for(selected)
+    while len(selected) > 1 and total_width(widths) > width:
+        selected.pop()
+        widths = widths_for(selected)
+
+    omitted = len(headers) - len(selected)
+    widths = widths_for(selected)
+    if total_width(widths) > width:
+        widths[0] = max(4, width)
+
+    sep = f" {Style().muted}\u2502{_reset()} "
+    header = sep.join(_bold() + pad_visual(headers[idx], widths[i]) + _reset() for i, idx in enumerate(selected))
+    rule = Style().muted + "\u2500" * min(width, visual_width(header)) + _reset()
+    out = [header, rule]
+    for row in formatted:
+        out.append(sep.join(pad_visual(row[idx], widths[i]) for i, idx in enumerate(selected)))
+    return (out, omitted)
+
+
+def render_table(conn: sqlite3.Connection, info: DatabaseInfo, obj: ObjectInfo, width: int, row_limit: int) -> str:
+    r = CardRenderer(width)
+    s = r.s
+    icon, label = object_label(obj, s)
+    pk_cols = [col.name for col in obj.columns if col.pk]
+    visible_cols = [col for col in obj.columns if col.hidden == 0]
+
+    lines = [
+        r._top_border(f"{icon} {obj.name}"),
+        r._blank_row(),
+        r._row(
+            f"{s.text}{label}{_reset()}"
+            f" {s.muted}{s.MIDDOT}{_reset()} "
+            f"{s.subtle}{len(visible_cols)} columns{_reset()}"
+            f" {s.muted}{s.MIDDOT}{_reset()} "
+            f"{s.subtle}{obj.row_count} rows{_reset()}",
+            prefix=icon,
+        ),
+    ]
+    if pk_cols:
+        lines.append(r._row(", ".join(pk_cols), prefix=f"{s.warning}{s.ICON_KEY}{_reset()}"))
+    if obj.foreign_keys:
+        lines.append(r._row(f"{obj.foreign_keys} foreign key reference(s)", prefix=f"{s.info}{s.ICON_LINK}{_reset()}"))
+
+    lines.extend(r._section_divider("columns"))
+    column_width = r.w - 10
+    for line in format_columns(obj, column_width)[:12]:
+        lines.append(r._row(line, prefix=f"{s.muted}{s.ICON_COLUMN}{_reset()}"))
+    if len(visible_cols) > 12:
+        lines.append(r._row(f"{s.muted}... and {len(visible_cols) - 12} more column(s){_reset()}"))
+
+    if obj.kind in {"table", "view"}:
+        try:
+            rows = conn.execute(f"SELECT * FROM {quote_ident(obj.name)} LIMIT ?", (row_limit,)).fetchall()
+        except sqlite3.Error as exc:
+            rows = []
+            lines.append(r._blank_row())
+            lines.append(r._row(f"{s.danger}Could not sample rows: {exc}{_reset()}", prefix=f"{s.danger}{s.ICON_WARN}{_reset()}"))
+
+        if rows:
+            lines.extend(r._section_divider(f"first {len(rows)} row(s)"))
+            headers = list(rows[0].keys())
+            grid_lines, omitted = build_grid(headers, rows, r.w - 8)
+            for line in grid_lines:
+                lines.append(r._row(line))
+            if omitted:
+                lines.append(r._blank_row())
+                lines.append(r._row(f"{s.muted}... {omitted} column(s) omitted to fit width{_reset()}"))
+        elif obj.kind == "table":
+            lines.append(r._blank_row())
+            lines.append(r._row(f"{s.muted}No sample rows found.{_reset()}", prefix=f"{s.muted}{s.ICON_ROWS}{_reset()}"))
+
+    lines.extend([r._blank_row(), r._bottom_border()])
+    return "\n".join(lines)
+
+
+def render_schema(info: DatabaseInfo, selected: ObjectInfo | None, width: int, max_objects: int) -> str:
+    r = CardRenderer(width)
+    s = r.s
+    objects = [selected] if selected else info.objects[:max_objects]
+    lines = [r._top_border(f"{s.ICON_CODE} Schema"), r._blank_row()]
+
+    if not objects:
+        lines.append(r._row(f"{s.muted}No schema objects to show.{_reset()}"))
+    for obj in objects:
+        icon, label = object_label(obj, s)
+        lines.append(r._row(f"{s.text}{obj.name}{_reset()} {s.muted}({label}){_reset()}", prefix=icon))
+        sql = obj.sql.strip() or f"-- no CREATE statement stored for {obj.name}"
+        for raw_line in sql.splitlines():
+            for wrapped in wrap_plain(raw_line.rstrip(), r.w - 8):
+                lines.append(r._row(f"{s.subtle}{wrapped}{_reset()}"))
+        lines.append(r._blank_row())
+
+    hidden = 0 if selected else max(0, len(info.objects) - len(objects))
+    if hidden:
+        lines.append(r._row(f"{s.muted}... and {hidden} more object(s){_reset()}"))
+        lines.append(r._blank_row())
+
+    lines.append(r._bottom_border())
+    return "\n".join(lines)
+
+
+def render_error(message: str, width: int) -> str:
+    r = CardRenderer(width)
+    s = r.s
+    return "\n".join(
+        [
+            r._top_border(f"{s.ICON_WARN} SQLite"),
+            r._blank_row(),
+            r._row(f"{s.danger}{message}{_reset()}", prefix=f"{s.danger}{s.ICON_WARN}{_reset()}"),
+            r._blank_row(),
+            r._bottom_border(),
+        ]
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Terminal card previewer for SQLite databases.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  sqlite-view app.db
+  sqlite-view -W 120 --table users app.db
+  sqlite-view --schema app.sqlite3
+""",
+    )
+    parser.add_argument("file", help="Path to a SQLite database")
+    parser.add_argument("-W", "--width", type=int, default=80, help="Terminal width (default: 80)")
+    parser.add_argument("-t", "--table", help="Show columns and sample rows for a table or view")
+    parser.add_argument("--rows", type=int, default=8, help="Sample rows for --table (default: 8)")
+    parser.add_argument("--schema", action="store_true", help="Show CREATE statements instead of the overview")
+    parser.add_argument("--max-objects", type=int, default=14, help="Max objects shown in overview/schema (default: 14)")
+    parser.add_argument(
+        "--count-budget",
+        type=int,
+        default=500,
+        help="SQLite progress budget for row counts; lower is faster (default: 500)",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    width = max(44, args.width)
+    path = Path(os.path.expanduser(args.file))
+
+    if not path.exists():
+        print(render_error(f"File not found: {path}", width), file=sys.stderr)
+        sys.exit(1)
+    if not path.is_file():
+        print(render_error(f"Not a file: {path}", width), file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        with open_readonly(path) as conn:
+            info = load_database_info(conn, path, max(1, args.count_budget))
+            selected = find_object(info, args.table) if args.table else None
+            if args.table and selected is None:
+                names = ", ".join(obj.name for obj in info.objects[:8])
+                hint = f" Known objects: {names}" if names else ""
+                print(render_error(f"No table or view named {args.table!r}.{hint}", width), file=sys.stderr)
+                sys.exit(1)
+
+            if args.schema:
+                print(render_schema(info, selected, width, max(1, args.max_objects)))
+            elif selected:
+                print(render_table(conn, info, selected, width, max(1, args.rows)))
+            else:
+                print(render_overview(info, width, max(1, args.max_objects)))
+    except sqlite3.Error as exc:
+        print(render_error(f"Could not read SQLite database: {exc}", width), file=sys.stderr)
+        sys.exit(1)
+    except OSError as exc:
+        print(render_error(f"Could not open file: {exc}", width), file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

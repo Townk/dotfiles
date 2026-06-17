@@ -22,6 +22,9 @@
 /.local/bin/pinentry-auto
 /.local/bin/local-llm-bench
 /.local/bin/local-llm-gateway
+/.local/bin/ics-view
+/.local/bin/sqlite-view
+/.local/bin/disk-image-view
 
 # ── ~/.local/lib: helpers renamed (.sh → .zsh) / removed ────────────────────
 /.local/lib/image-protocol-support

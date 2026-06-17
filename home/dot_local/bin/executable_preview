@@ -245,15 +245,23 @@ function preview-xml() {
   xq -c --indent 2 <"$1" | head -"$max_lines"
 }
 
-function preview-dmg() {
+function preview-disk-image() {
   [[ "$(uname -s)" == "Darwin" ]] || return 1
-  command -v dmg-info >/dev/null 2>&1 || return 1
-  dmg-info "$1" "$w" | head -"$max_lines"
+  local viewer="$HOME/.local/libexec/disk-image-view"
+  [[ -x $viewer ]] || return 1
+  "$viewer" "$1" -W "$w" | head -"$max_lines"
 }
 
 function preview-ics() {
-  command -v ics-view >/dev/null 2>&1 || return 1
-  ics-view "$1" -W "$w" | head -"$max_lines"
+  local viewer="$HOME/.local/libexec/ics-view"
+  [[ -x $viewer ]] || return 1
+  "$viewer" "$1" -W "$w" | head -"$max_lines"
+}
+
+function preview-sqlite() {
+  local viewer="$HOME/.local/libexec/sqlite-view"
+  [[ -x $viewer ]] || return 1
+  "$viewer" "$1" -W "$w" | head -"$max_lines"
 }
 
 function preview-archive() {
@@ -369,6 +377,9 @@ function main() {
     stamp-msg "Nothing to preview" "$w" "$h"
     return
   fi
+  if [[ -d $target && ${target:l} == *.sparsebundle ]]; then
+    preview-disk-image "$target" && return
+  fi
   if [[ -d $target ]]; then
     preview-dir "$target"
     return
@@ -402,8 +413,9 @@ function main() {
     *.json | *.vil | *.kbi) preview-json "$target" && return ;;
     *.yml | *.yaml) preview-yaml "$target" && return ;;
     *.xml) preview-xml "$target" && return ;;
-    *.dmg) preview-dmg "$target" && return ;;
+    *.dmg | *.sparseimage | *.cdr | *.img | *.iso) preview-disk-image "$target" && return ;;
     *.ics) preview-ics "$target" && return ;;
+    *.db | *.sqlite | *.sqlite3) preview-sqlite "$target" && return ;;
   esac
 
   # --- By-MIME dispatch ---

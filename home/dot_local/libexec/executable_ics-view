@@ -1,0 +1,1009 @@
+#!/usr/bin/env python3
+"""
+ics-preview — Gorgeous iCalendar visualizer for the terminal.
+Pure Python 3, zero dependencies. Designed for fzf, Yazi, etc.
+
+Design identity:
+  - Rounded card aesthetic with Unicode box-drawing
+  - Catppuccin Mocha color palette (truecolor)
+  - Nerd Font iconography for semantic richness
+  - Compact but breathable layout
+  - Replicable style system for .vcf / .vcard visualizers
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from typing import Iterator
+
+
+# ── Catppuccin Mocha Palette ──────────────────────────────────────
+class CTP:
+    """Catppuccin Mocha truecolor palette."""
+
+    BASE = (30, 30, 46)
+    SURFACE0 = (49, 50, 68)
+    SURFACE1 = (69, 71, 90)
+    OVERLAY0 = (108, 114, 134)
+    OVERLAY1 = (127, 132, 156)
+    TEXT = (205, 214, 244)
+    SUBTEXT1 = (186, 194, 222)
+    SUBTEXT0 = (166, 173, 200)
+    LAVENDER = (180, 190, 254)
+    BLUE = (137, 180, 250)
+    SAPPHIRE = (116, 199, 236)
+    SKY = (137, 220, 235)
+    TEAL = (148, 226, 213)
+    GREEN = (166, 227, 161)
+    YELLOW = (249, 226, 175)
+    PEACH = (250, 179, 135)
+    MAROON = (235, 160, 172)
+    RED = (243, 139, 168)
+    MAUVE = (203, 166, 247)
+    PINK = (245, 194, 231)
+    FLAMINGO = (242, 205, 205)
+    ROSEWATER = (245, 224, 220)
+
+
+# ── ANSI Helpers ──────────────────────────────────────────────────
+def _fg(r: int, g: int, b: int) -> str:
+    return f"\033[38;2;{r};{g};{b}m"
+
+
+def _bg(r: int, g: int, b: int) -> str:
+    return f"\033[48;2;{r};{g};{b}m"
+
+
+def _bold() -> str:
+    return "\033[1m"
+
+
+def _dim() -> str:
+    return "\033[2m"
+
+
+def _italic() -> str:
+    return "\033[3m"
+
+
+def _reset() -> str:
+    return "\033[0m"
+
+
+# ── Style System ──────────────────────────────────────────────────
+class Style:
+    """
+    Replicable design token system.
+    Extract this class + CTP + ANSI helpers to build .vcf / .vcard previewers.
+    """
+
+    # Semantic colors
+    primary = _fg(*CTP.LAVENDER)
+    secondary = _fg(*CTP.BLUE)
+    accent = _fg(*CTP.MAUVE)
+    success = _fg(*CTP.GREEN)
+    warning = _fg(*CTP.YELLOW)
+    danger = _fg(*CTP.RED)
+    info = _fg(*CTP.SKY)
+    muted = _fg(*CTP.OVERLAY1)
+    subtle = _fg(*CTP.SUBTEXT0)
+    text = _fg(*CTP.TEXT)
+    bg_accent = _bg(*CTP.SURFACE0)
+
+    # Icons (Nerd Font / Unicode)
+    ICON_CALENDAR = "\uf073"      # 
+    ICON_CLOCK = "\uf017"         # 
+    ICON_LOCATION = "\uf041"      # 
+    ICON_USER = "\uf007"          # 
+    ICON_USERS = "\uf0c0"         # 
+    ICON_REPEAT = "\uf01e"        # 
+    ICON_BELL = "\uf0f3"          # 
+    ICON_NOTE = "\uf249"          # 
+    ICON_TAG = "\uf02b"           # 
+    ICON_STAR = "\uf005"          # 
+    ICON_CHECK = "\uf00c"         # 
+    ICON_TIMES = "\uf00d"         # 
+    ICON_QUESTION = "\uf128"      # 
+    ICON_ARROW = "\uf061"         # 
+    ICON_ENVELOPE = "\uf0e0"      # 
+    ICON_PHONE = "\uf095"         # 
+    ICON_GLOBE = "\uf0ac"         # 
+    ICON_BOOKMARK = "\uf02e"      # 
+    ICON_CLIPBOARD = "\uf0ea"     # 
+    ICON_SPARKLE = "\ue63d"       #  (decorative)
+    ICON_RECURRENCE = "\U000f0456"  # 󰑖
+    PILL_LEFT = "\ue0b6"          # 
+    PILL_RIGHT = "\ue0b4"         # 
+
+    # Box drawing (rounded aesthetic)
+    CORNER_TL = "\u256d"  # ╭
+    CORNER_TR = "\u256e"  # ╮
+    CORNER_BL = "\u2570"  # ╰
+    CORNER_BR = "\u256f"  # ╯
+    HORIZ = "\u2500"      # ─
+    VERT = "\u2502"       # │
+    T_LEFT = "\u251c"     # ├
+    T_RIGHT = "\u2524"    # ┤
+    T_TOP = "\u252c"      # ┬
+    T_BOTTOM = "\u2534"   # ┴
+
+    # Dashes / bullets
+    MDASH = "\u2014"      # —
+    BULLET = "\u2022"     # •
+    MIDDOT = "\u00b7"     # ·
+
+
+# ── Width Utilities ───────────────────────────────────────────────
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def visual_width(text: str) -> int:
+    """Visible width excluding ANSI escape sequences. Approximate but fast."""
+    return len(_ANSI_RE.sub("", text))
+
+
+def truncate_visual(text: str, width: int, ellipsis: str = "…") -> str:
+    """Truncate a string to a target visual width, accounting for ANSI codes."""
+    plain = _ANSI_RE.sub("", text)
+    if len(plain) <= width:
+        return text
+    # Strip ANSI, truncate, try to preserve any leading ANSI
+    leading_ansi = ""
+    m = re.match(r"(\033\[[0-9;]*m)+", text)
+    if m:
+        leading_ansi = m.group(0)
+    trunc = plain[: max(0, width - len(ellipsis))] + ellipsis
+    return leading_ansi + trunc + _reset()
+
+
+def pad_visual(text: str, width: int, align: str = "left") -> str:
+    """Pad or truncate text to exactly `width` visible columns."""
+    v = visual_width(text)
+    if v > width:
+        return truncate_visual(text, width)
+    if align == "center":
+        left = (width - v) // 2
+        right = width - v - left
+        return " " * left + text + " " * right
+    if align == "right":
+        return " " * (width - v) + text
+    return text + " " * (width - v)
+
+
+_URL_RE = re.compile(r"https?://\S+|mailto:\S+|\S+\.\w{2,}/\S*")
+
+
+def wrap_visual(text: str, width: int) -> list[str]:
+    """Word-wrap plain or ANSI text to fit within `width`.
+    Long URLs are broken mid-string; everything else wraps at word boundaries."""
+    plain = _ANSI_RE.sub("", text)
+    if not plain.strip():
+        return []
+
+    words = plain.split()
+    lines: list[str] = []
+    current = ""
+
+    for w in words:
+        # Break long URLs mid-string
+        if len(w) > width and _URL_RE.match(w):
+            if current:
+                lines.append(current)
+                current = ""
+            for i in range(0, len(w), width):
+                chunk = w[i : i + width]
+                if current and len(current) + 1 + len(chunk) <= width:
+                    current += " " + chunk
+                elif current:
+                    lines.append(current)
+                    current = chunk
+                else:
+                    current = chunk
+            continue
+
+        test = (current + " " + w).strip() if current else w
+        if len(test) <= width:
+            current = test
+        else:
+            if current:
+                lines.append(current)
+            current = w
+    if current:
+        lines.append(current)
+    return lines
+
+
+# ── iCalendar Parser ──────────────────────────────────────────────
+@dataclass
+class CalendarEvent:
+    summary: str = "Untitled Event"
+    dtstart: str = ""
+    dtend: str = ""
+    location: str = ""
+    description: str = ""
+    organizer: str = ""
+    status: str = ""
+    rrule: str = ""
+    categories: list[str] = field(default_factory=list)
+    attendees: list[str] = field(default_factory=list)
+    priority: str = ""
+    uid: str = ""
+    transp: str = ""
+    url: str = ""
+
+
+def unfold_lines(raw: str) -> Iterator[str]:
+    """Handle RFC 5545 line folding (newline + space/tab -> nothing)."""
+    # Replace CRLF and bare LF with \n for uniformity
+    text = raw.replace("\r\n", "\n").replace("\r", "\n")
+    # Unfold: a line starting with space/tab continues the previous line
+    lines = text.split("\n")
+    buffer = ""
+    for line in lines:
+        if line.startswith(" ") or line.startswith("\t"):
+            buffer += line[1:]
+        else:
+            if buffer:
+                yield buffer
+            buffer = line
+    if buffer:
+        yield buffer
+
+
+def prop_split(line: str) -> tuple[str, str, str]:
+    """Split 'NAME;param1=val1:value' into (name, params, value)."""
+    # Find first unescaped colon
+    colon_idx = -1
+    for i, ch in enumerate(line):
+        if ch == ":":
+            colon_idx = i
+            break
+    if colon_idx == -1:
+        return (line, "", "")
+    head = line[:colon_idx]
+    value = line[colon_idx + 1 :]
+    if ";" in head:
+        name, params = head.split(";", 1)
+    else:
+        name, params = head, ""
+    return (name.upper(), params, value)
+
+
+def parse_ics(text: str) -> list[CalendarEvent]:
+    """Fast, minimal RFC 5545 parser. Returns list of VEVENTs."""
+    events: list[CalendarEvent] = []
+    current: CalendarEvent | None = None
+
+    for line in unfold_lines(text):
+        if not line:
+            continue
+        name, params, value = prop_split(line)
+
+        if name == "BEGIN" and value.upper() == "VEVENT":
+            current = CalendarEvent()
+            continue
+        if name == "END" and value.upper() == "VEVENT":
+            if current:
+                events.append(current)
+                current = None
+            continue
+        if current is None:
+            continue
+
+        # Store raw values; formatting happens at render time
+        if name == "SUMMARY":
+            current.summary = value
+        elif name == "DTSTART":
+            current.dtstart = value
+        elif name == "DTEND":
+            current.dtend = value
+        elif name == "LOCATION":
+            current.location = value
+        elif name == "DESCRIPTION":
+            # Unescape common RFC 5545 escape sequences
+            current.description = (
+                value.replace("\\n", "\n")
+                .replace("\\N", "\n")
+                .replace("\\,", ",")
+                .replace("\\\\", "\\")
+            )
+        elif name == "ORGANIZER":
+            # Extract CN from params if present, else use mailto value
+            cn_match = re.search(r"CN=([^;:]+)", params)
+            if cn_match:
+                current.organizer = cn_match.group(1)
+            elif value.startswith("mailto:"):
+                current.organizer = value[7:]
+            else:
+                current.organizer = value
+        elif name == "STATUS":
+            current.status = value.upper()
+        elif name == "RRULE":
+            current.rrule = value
+        elif name == "CATEGORIES":
+            current.categories = [c.strip() for c in value.split(",")]
+        elif name == "ATTENDEE":
+            cn_match = re.search(r"CN=([^;:]+)", params)
+            if cn_match:
+                current.attendees.append(cn_match.group(1))
+            elif value.startswith("mailto:"):
+                current.attendees.append(value[7:])
+            else:
+                current.attendees.append(value)
+        elif name == "PRIORITY":
+            current.priority = value
+        elif name == "UID":
+            current.uid = value
+        elif name == "TRANSP":
+            current.transp = value.upper()
+        elif name == "URL":
+            current.url = value
+
+    return events
+
+
+# ── Date/Time Formatter ───────────────────────────────────────────
+def _parse_ics_datetime(value: str) -> tuple[datetime | date | None, bool]:
+    """
+    Parse ICS date/time strings.
+    Returns (parsed, has_time_component).
+    """
+    value = value.strip()
+    # VALUE=DATE:20240115
+    if "VALUE=DATE" in value.upper():
+        m = re.search(r"(\d{8})", value)
+        if m:
+            d = datetime.strptime(m.group(1), "%Y%m%d").date()
+            return (d, False)
+        return (None, False)
+
+    # 20240115T090000Z
+    m = re.match(r"(\d{8})T(\d{6})Z?", value)
+    if m:
+        dt = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+        return (dt, True)
+
+    # 20240115T090000 (local, ignore tz for display)
+    m = re.match(r"(\d{8})T(\d{6})", value)
+    if m:
+        dt = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+        return (dt, True)
+
+    # Date only fallback
+    m = re.match(r"(\d{8})", value)
+    if m:
+        d = datetime.strptime(m.group(1), "%Y%m%d").date()
+        return (d, False)
+
+    return (None, False)
+
+
+def _fmt_date(d: date | datetime) -> str:
+    if isinstance(d, datetime):
+        return d.strftime("%a, %b %d, %Y")
+    return d.strftime("%a, %b %d, %Y")
+
+
+def _fmt_time(d: datetime) -> str:
+    return d.strftime("%I:%M %p").lstrip("0")
+
+
+def _fmt_datetime_range(start_raw: str, end_raw: str) -> str:
+    """Human-friendly date/time range string."""
+    s, s_has_time = _parse_ics_datetime(start_raw)
+    e, e_has_time = _parse_ics_datetime(end_raw)
+
+    if s is None:
+        return "Unknown time"
+
+    if isinstance(s, date) and not isinstance(s, datetime):
+        arr = f"{_fg(*CTP.OVERLAY1)} → {_reset()}"
+        if e and isinstance(e, date) and e != s:
+            return f"{_fmt_date(s)}{arr}{_fmt_date(e)}"
+        return _fmt_date(s)
+
+    if s_has_time:
+        dot = f"{_fg(*CTP.OVERLAY1)} · {_reset()}"
+        arr = f"{_fg(*CTP.OVERLAY1)} → {_reset()}"
+        start_str = f"{_fmt_date(s)}{dot}{_fmt_time(s)}"
+        if e and e_has_time:
+            if isinstance(e, datetime) and e.date() == s.date():
+                return f"{_fmt_date(s)}{dot}{_fmt_time(s)}{arr}{_fmt_time(e)}"
+            return f"{_fmt_date(s)}{dot}{_fmt_time(s)}{arr}{_fmt_date(e)}{dot}{_fmt_time(e)}"
+        return start_str
+
+    return _fmt_date(s)
+
+
+def _fmt_rrule(rrule: str) -> str:
+    """Format an RRULE string into a human-readable recurrence description."""
+    if not rrule:
+        return ""
+    freq_match = re.search(r"FREQ=([A-Z]+)", rrule)
+    freq = freq_match.group(1).lower() if freq_match else ""
+    freq_map = {
+        "daily": "day",
+        "weekly": "week",
+        "monthly": "month",
+        "yearly": "year",
+    }
+    freq_word = freq_map.get(freq, freq.lower() or "recurring")
+    byday_match = re.search(r"BYDAY=([A-Z,]+)", rrule)
+    if byday_match:
+        days_raw = byday_match.group(1).split(",")
+        day_names = []
+        for d in days_raw:
+            d = re.sub(r"^-?\d+", "", d.strip())
+            name_map = {
+                "MO": "Mon", "TU": "Tue", "WE": "Wed",
+                "TH": "Thu", "FR": "Fri", "SA": "Sat", "SU": "Sun",
+            }
+            if d in name_map:
+                day_names.append(name_map[d])
+        if day_names:
+            return f"Every {freq_word} on {', '.join(day_names)}"
+    return f"Every {freq_word}"
+
+
+def _fmt_duration_hint(start_raw: str, end_raw: str) -> str:
+    """Return a compact duration like '1h 30m' or 'All day'."""
+    s, s_has_time = _parse_ics_datetime(start_raw)
+    e, e_has_time = _parse_ics_datetime(end_raw)
+    if not (s and e and isinstance(s, datetime) and isinstance(e, datetime)):
+        if not s_has_time and not e_has_time:
+            return "All day"
+        return ""
+    delta = e - s
+    if delta.days == 0:
+        minutes = int(delta.total_seconds() // 60)
+        if minutes < 60:
+            return f"{minutes}m"
+        h = minutes // 60
+        m = minutes % 60
+        if m == 0:
+            return f"{h}h"
+        return f"{h}h {m}m"
+    else:
+        hours = delta.days * 24 + delta.seconds // 3600
+        return f"{hours}h"
+
+
+# ── Renderer ──────────────────────────────────────────────────────
+class CardRenderer:
+    """Renders a single event as a beautiful terminal card."""
+
+    def __init__(self, width: int):
+        self.w = width
+        self.s = Style()
+        self._reset = _reset()
+
+    def _rule(self, left: str = "", right: str = "", char: str = "") -> str:
+        """Draw a horizontal rule with optional left/right labels."""
+        c = char or self.s.HORIZ
+        if not left and not right:
+            return self.s.muted + c * self.w + self._reset
+
+        lw = visual_width(left)
+        rw = visual_width(right)
+        # Ensure we don't overflow
+        mid = self.w - lw - rw
+        if mid < 2:
+            return truncate_visual(left + " " + right, self.w)
+
+        # Fade the horizontal line: full chars near edges, dim in middle
+        line = c * mid
+        out = left + self.s.muted + line + self._reset + right
+        return out
+
+    def _top_border(self, title: str = "") -> str:
+        if title:
+            pad_l = 1
+            t = truncate_visual(title, self.w - 2 - pad_l)
+            tw = visual_width(t)
+            fill_l = self.w - 2 - pad_l - tw
+            return (
+                self.s.primary
+                + self.s.CORNER_TL
+                + self.s.HORIZ * pad_l
+                + t
+                + self.s.primary
+                + self.s.HORIZ * fill_l
+                + self.s.CORNER_TR
+                + self._reset
+            )
+        return (
+            self.s.primary
+            + self.s.CORNER_TL
+            + self.s.HORIZ * (self.w - 2)
+            + self.s.CORNER_TR
+            + self._reset
+        )
+
+    def _mid_border(self, left: str = "", right: str = "") -> str:
+        """A horizontal separator inside the card."""
+        if not left and not right:
+            return (
+                self.s.primary
+                + self.s.T_LEFT
+                + self.s.HORIZ * (self.w - 2)
+                + self.s.T_RIGHT
+                + self._reset
+            )
+        # Build a line like: ├─ text ────────────┤
+        left_plain = _ANSI_RE.sub("", left)
+        right_plain = _ANSI_RE.sub("", right)
+        inner_w = self.w - 2
+        total_label = len(left_plain) + len(right_plain) + 2  # spaces
+        if total_label >= inner_w:
+            # Fallback to simple
+            line = self.s.HORIZ * inner_w
+            return self.s.primary + self.s.T_LEFT + line + self.s.T_RIGHT + self._reset
+
+        pad = inner_w - total_label
+        line = (
+            self.s.primary
+            + self.s.T_LEFT
+            + self._reset
+            + left
+            + (" " if left else "")
+            + self.s.muted
+            + self.s.HORIZ * pad
+            + self._reset
+            + (" " if right else "")
+            + right
+            + self.s.primary
+            + self.s.T_RIGHT
+            + self._reset
+        )
+        return line
+
+    def _bottom_border(self) -> str:
+        return (
+            self.s.primary
+            + self.s.CORNER_BL
+            + self.s.HORIZ * (self.w - 2)
+            + self.s.CORNER_BR
+            + self._reset
+        )
+
+    def _row(self, content: str, prefix: str = "", indent: int = 3, right_indent: int | None = None) -> str:
+        """Render a content row inside the card with configurable left/right padding."""
+        right_pad = right_indent if right_indent is not None else indent
+        margin = " " * indent
+        inner_w = self.w - 2 - indent - right_pad
+        prefix_vw = 0
+        if prefix:
+            prefix_vw = visual_width(prefix)
+            inner_w -= prefix_vw + 1
+            margin += prefix + " "
+
+        plain = _ANSI_RE.sub("", content)
+        if len(plain) <= inner_w:
+            fill = " " * (inner_w - len(plain))
+            return (
+                self.s.primary + self.s.VERT + self._reset
+                + margin + content + fill + " " * right_pad
+                + self.s.primary + self.s.VERT + self._reset
+            )
+
+        # Need to wrap — preserve leading ANSI style on continuation lines
+        leading_ansi = ""
+        m = re.match(r"(\033\[[0-9;]*m)+", content)
+        if m:
+            leading_ansi = m.group(0)
+
+        text_indent = indent + (prefix_vw + 1 if prefix else 0)
+        lines = wrap_visual(content, inner_w)
+        out = []
+        for i, ln in enumerate(lines):
+            fill = " " * (inner_w - len(_ANSI_RE.sub("", ln)))
+            pre = margin if i == 0 else " " * text_indent
+            out.append(
+                self.s.primary + self.s.VERT + self._reset
+                + pre + leading_ansi + ln + self._reset + fill + " " * right_pad
+                + self.s.primary + self.s.VERT + self._reset
+            )
+        return "\n".join(out)
+
+    def _row_right(self, content: str, indent: int = 3) -> str:
+        """Right-align content inside the card with equal left/right indent."""
+        text_area = self.w - 2 - indent * 2
+        cw = visual_width(content)
+        left_pad = max(0, text_area - cw)
+        margin = " " * indent
+        return (
+            self.s.primary + self.s.VERT + self._reset
+            + margin + " " * left_pad + content + margin
+            + self.s.primary + self.s.VERT + self._reset
+        )
+
+    def _blank_row(self) -> str:
+        inner = " " * (self.w - 2)
+        return self.s.primary + self.s.VERT + inner + self.s.VERT + self._reset
+
+    def _spacer(self, height: int = 1) -> str:
+        return "\n".join([self._blank_row()] * height)
+
+    def _status_style(self, status: str) -> tuple[str, str, tuple[int, int, int]]:
+        """Return (icon, color, rgb) for a given STATUS value."""
+        st = status.upper()
+        if st == "CONFIRMED":
+            return (self.s.ICON_CHECK, self.s.success, CTP.GREEN)
+        if st == "TENTATIVE":
+            return (self.s.ICON_QUESTION, self.s.warning, CTP.YELLOW)
+        if st == "CANCELLED":
+            return (self.s.ICON_TIMES, self.s.danger, CTP.RED)
+        return (self.s.ICON_BULLET, self.s.muted, CTP.OVERLAY1)
+
+    def _pill(self, text: str, rgb: tuple[int, int, int]) -> str:
+        """Render text as a filled pill badge using powerline rounded separators."""
+        r, g, b = rgb
+        br, bg_, bb = CTP.BASE
+        left = f"\033[38;2;{r};{g};{b};49m{self.s.PILL_LEFT}\033[0m"
+        middle = f"\033[38;2;{br};{bg_};{bb};48;2;{r};{g};{b}m {text} \033[0m"
+        right = f"\033[38;2;{r};{g};{b};49m{self.s.PILL_RIGHT}\033[0m"
+        return left + middle + right
+
+    def render(self, ev: CalendarEvent, index: int = 0, total: int = 1) -> str:
+        lines: list[str] = []
+
+        # ── Header ────────────────────────────────────────────────
+        header_text = f" {self.s.ICON_CALENDAR}  Event "
+        if total > 1:
+            header_text += f"({index + 1}/{total}) "
+        lines.append(self._top_border(header_text))
+        lines.append(self._blank_row())
+
+        # ── Title ─────────────────────────────────────────────────
+        title = ev.summary.strip() or "Untitled Event"
+        title_styled = _bold() + self.s.text + title + self._reset
+        lines.append(self._row(title_styled, indent=3))
+        lines.append(self._blank_row())
+
+        # ── Title separator ─────────────────────────────────────
+        sep_w = self.w - 8
+        title_sep = self.s.muted + self.s.HORIZ * sep_w + self._reset
+        lines.append(self._row(title_sep, indent=3))
+        lines.append(self._blank_row())
+
+        # ── Date / Time ───────────────────────────────────────────
+        has_datetime = bool(ev.dtstart)
+        if has_datetime:
+            time_str = _fmt_datetime_range(ev.dtstart, ev.dtend)
+            duration = _fmt_duration_hint(ev.dtstart, ev.dtend)
+            peach = _fg(*CTP.PEACH)
+            time_icon = f"{peach}{self.s.ICON_CALENDAR}{self._reset}"
+            time_content = time_str
+            if duration:
+                time_content += f" {self.s.muted}({duration}){self._reset}"
+            lines.append(self._row(time_content, prefix=time_icon + " ", indent=3))
+
+            if ev.rrule:
+                rrule_text = _fmt_rrule(ev.rrule)
+                rrule_icon = f"{_fg(*CTP.RED)}{self.s.ICON_RECURRENCE}{self._reset}"
+                lines.append(self._row(rrule_text, prefix=rrule_icon + " ", indent=3))
+
+            if ev.dtend and ev.dtstart:
+                s_parsed, _ = _parse_ics_datetime(ev.dtstart)
+                e_parsed, _ = _parse_ics_datetime(ev.dtend)
+                if isinstance(s_parsed, datetime) and isinstance(e_parsed, datetime):
+                    lines.append(self._blank_row())
+                    bar_lines = self._timeline_bar(s_parsed, e_parsed)
+                    for bl in bar_lines:
+                        lines.append(self._row(bl, indent=3))
+            lines.append(self._blank_row())
+
+        # ── Metadata ──────────────────────────────────────────────
+        has_meta = any([ev.location, ev.organizer, ev.attendees, ev.url, ev.categories])
+        if has_meta:
+            if ev.location:
+                loc_icon = f"{self.s.warning}{self.s.ICON_LOCATION}{self._reset}"
+                lines.append(self._row(ev.location, prefix=loc_icon + " ", indent=3))
+            if ev.organizer:
+                org_text = f"{ev.organizer}{self.s.muted} (organizer){self._reset}"
+                org_icon = f"{self.s.accent}{self.s.ICON_USER}{self._reset}"
+                lines.append(self._row(org_text, prefix=org_icon + " ", indent=3))
+            if ev.attendees:
+                text_w = self.w - 11
+                icon_indent = "   "
+                text_indent = " " * 6
+                right_pad = "   "
+
+                def _pack_attendee_lines(names, max_lines):
+                    for n in range(len(names), 0, -1):
+                        shown = names[:n]
+                        remaining = len(names) - n
+
+                        # Build styled atomic units: <Name ·> for all but real last
+                        units = []
+                        for i, name in enumerate(shown):
+                            is_last_real = (i == len(names) - 1)
+                            unit = f"{self.s.secondary}{name}{self._reset}"
+                            if not is_last_real:
+                                unit += f"{self.s.muted} ·{self._reset}"
+                            units.append(unit)
+
+                        suffix = ""
+                        if remaining > 0:
+                            suffix = f"{self.s.muted}+{remaining} more{self._reset}"
+
+                        # Greedy pack units into lines
+                        packed: list[str] = []
+                        cur = ""
+                        cvw = 0
+                        for unit in units:
+                            uvw = visual_width(unit)
+                            if not cur:
+                                if uvw <= text_w:
+                                    cur = unit
+                                    cvw = uvw
+                                else:
+                                    packed.append(unit)
+                            elif cvw + 1 + uvw <= text_w:
+                                cur += " " + unit
+                                cvw += 1 + uvw
+                            else:
+                                packed.append(cur)
+                                cur = unit
+                                cvw = uvw
+
+                        if suffix:
+                            svw = visual_width(suffix)
+                            if cur and cvw + 1 + svw <= text_w:
+                                cur += " " + suffix
+                                cvw += 1 + svw
+                            else:
+                                if cur:
+                                    packed.append(cur)
+                                cur = suffix
+                                cvw = svw
+
+                        if cur:
+                            packed.append(cur)
+
+                        if len(packed) <= max_lines:
+                            return packed
+                    return []
+
+                packed_lines = _pack_attendee_lines(ev.attendees, 3)
+                if packed_lines:
+                    icon_prefix = f"{self.s.secondary}{self.s.ICON_USERS}{self._reset}  "
+                    for i, line in enumerate(packed_lines):
+                        fill = text_w - visual_width(line)
+                        pre = icon_indent + icon_prefix if i == 0 else text_indent
+                        lines.append(
+                            self.s.primary + self.s.VERT + self._reset
+                            + pre + line + " " * fill + right_pad
+                            + self.s.primary + self.s.VERT + self._reset
+                        )
+            if ev.url:
+                url_icon = f"{self.s.info}{self.s.ICON_GLOBE}{self._reset}"
+                lines.append(self._row(ev.url, prefix=url_icon + " ", indent=3))
+            if ev.categories:
+                cat_sep = f" {self.s.muted}{self.s.MIDDOT}{self._reset} "
+                cat_text = cat_sep.join(f"{_fg(*CTP.MAUVE)}{c}{self._reset}" for c in ev.categories)
+                cat_icon = f"{self.s.muted}{self.s.ICON_TAG}{self._reset}"
+                lines.append(self._row(cat_text, prefix=cat_icon + " ", indent=3))
+            lines.append(self._blank_row())
+
+        # ── Description ─────────────────────────────────────────
+        if ev.description:
+            # Separator before description
+            desc_sep_w = self.w - 8
+            desc_sep = self.s.muted + self.s.HORIZ * desc_sep_w + self._reset
+            lines.append(self._row(desc_sep, indent=3))
+            lines.append(self._blank_row())
+
+            raw_desc = ev.description.strip()
+            # Text area: 6 left (3 margin + ~3 icon prefix) + 3 right + 2 borders = 11
+            inner_w = self.w - 11
+
+            icon_prefix = f"{self.s.muted}{self.s.ICON_NOTE}{self._reset}  "
+            icon_indent = "   "
+            text_indent = "      "
+            right_pad = "   "
+
+            first_icon_shown = False
+            line_count = 0
+            MAX_DESC_LINES = 20
+            last_was_blank = False
+
+            for raw_line in raw_desc.split("\n"):
+                if line_count >= MAX_DESC_LINES:
+                    break
+                stripped = raw_line.strip()
+                if not stripped:
+                    if not last_was_blank:
+                        lines.append(self._blank_row())
+                        last_was_blank = True
+                    continue
+                last_was_blank = False
+                wrapped = wrap_visual(stripped, inner_w)
+                for wl in wrapped:
+                    if line_count >= MAX_DESC_LINES:
+                        break
+                    fill = inner_w - len(wl)
+                    styled_wl = f"{self.s.subtle}{wl}{self._reset}"
+                    if not first_icon_shown:
+                        lines.append(
+                            self.s.primary + self.s.VERT + self._reset
+                            + icon_indent + icon_prefix + styled_wl + " " * fill + right_pad
+                            + self.s.primary + self.s.VERT + self._reset
+                        )
+                        first_icon_shown = True
+                    else:
+                        lines.append(
+                            self.s.primary + self.s.VERT + self._reset
+                            + text_indent + styled_wl + " " * fill + right_pad
+                            + self.s.primary + self.s.VERT + self._reset
+                        )
+                    line_count += 1
+
+            total_wrapped = sum(
+                len(wrap_visual(line.strip(), inner_w))
+                for line in raw_desc.split("\n")
+                if line.strip()
+            )
+            if total_wrapped > MAX_DESC_LINES:
+                lines.append(self._blank_row())
+                notice = f"{self.s.muted}… {total_wrapped - MAX_DESC_LINES} more lines{_reset()}"
+                fill = inner_w - len(_ANSI_RE.sub("", notice))
+                lines.append(
+                    self.s.primary + self.s.VERT + self._reset
+                    + text_indent + notice + " " * fill + right_pad
+                    + self.s.primary + self.s.VERT + self._reset
+                )
+
+            lines.append(self._blank_row())
+
+        # ── Footer ────────────────────────────────────────────────
+        footer_parts: list[str] = []
+        if ev.status:
+            icon, _color, rgb = self._status_style(ev.status)
+            footer_parts.append(self._pill(f"{icon} {ev.status.title()}", rgb))
+        if ev.transp == "TRANSPARENT":
+            footer_parts.append(self._pill(f"{self.s.ICON_SPARKLE} Free", CTP.SKY))
+        if ev.priority:
+            p = int(ev.priority)
+            if p <= 3:
+                footer_parts.append(self._pill(f"{self.s.ICON_STAR} High priority", CTP.RED))
+            elif p <= 6:
+                footer_parts.append(self._pill(f"{self.s.ICON_STAR} Medium priority", CTP.YELLOW))
+
+        if footer_parts:
+            footer_text = "  ".join(footer_parts)
+            lines.append(self._row_right(footer_text, indent=3))
+
+        lines.append(self._bottom_border())
+        return "\n".join(lines)
+
+    def _timeline_labels(self, bar_w: int) -> str:
+        """Build time labels aligned with timeline ticks (6am, 12pm, 6pm)."""
+        ticks = [
+            (bar_w // 4, "6am"),
+            (bar_w // 2, "12pm"),
+            (3 * bar_w // 4, "6pm"),
+        ]
+        row = [" "] * bar_w
+        for pos, time_str in ticks:
+            label_len = len(time_str)
+            start = pos - label_len // 2
+            start = max(0, min(start, bar_w - label_len))
+            for i, ch in enumerate(time_str):
+                if start + i < bar_w:
+                    row[start + i] = ch
+        return self.s.muted + "".join(row) + self._reset
+
+    def _timeline_bar(self, start: datetime, end: datetime) -> list[str]:
+        """Draw a small ASCII timeline bar + labels for the event duration."""
+        bar_w = max(10, self.w - 8)
+        start_min = start.hour * 60 + start.minute
+        end_min = end.hour * 60 + end.minute
+        day_min = 24 * 60
+
+        if end_min < start_min:
+            end_min = day_min
+
+        left = int((start_min / day_min) * bar_w)
+        right = int((end_min / day_min) * bar_w)
+        left = max(0, min(left, bar_w - 1))
+        right = max(left + 1, min(right, bar_w))
+
+        bar = [self.s.muted + "·" + self._reset] * bar_w
+        for pos in [0, bar_w // 4, bar_w // 2, 3 * bar_w // 4, bar_w - 1]:
+            if 0 <= pos < bar_w:
+                bar[pos] = self.s.muted + "┊" + self._reset
+
+        for i in range(left, right):
+            bar[i] = _fg(*CTP.PEACH) + "━" + self._reset
+        bar[left] = _fg(*CTP.PEACH) + "╾" + self._reset
+        bar[right - 1] = _fg(*CTP.PEACH) + "╼" + self._reset
+        bar_line = "".join(bar)
+        labels_line = self._timeline_labels(bar_w)
+        return [bar_line, labels_line]
+
+
+# ── Main Orchestrator ─────────────────────────────────────────────
+def render_calendar(text: str, width: int) -> str:
+    events = parse_ics(text)
+    if not events:
+        r = CardRenderer(width)
+        s = Style()
+        lines = [
+            r._top_border(f" {s.ICON_CALENDAR}  Calendar "),
+            r._blank_row(),
+            r._row(f"{s.muted}No events found in this file.{_reset()}", indent=3),
+            r._blank_row(),
+            r._bottom_border(),
+        ]
+        return "\n".join(lines)
+
+    # Limit for preview speed: show first 8 events, summarize rest
+    MAX_EVENTS = 8
+    shown = events[:MAX_EVENTS]
+    hidden = len(events) - MAX_EVENTS
+
+    renderer = CardRenderer(width)
+    cards: list[str] = []
+    for i, ev in enumerate(shown):
+        cards.append(renderer.render(ev, index=i, total=len(events)))
+
+    output = "\n\n".join(cards)
+
+    if hidden > 0:
+        s = Style()
+        lines = [
+            renderer._top_border(),
+            renderer._blank_row(),
+            renderer._row(f"{s.muted}… and {hidden} more event(s){_reset()}", indent=3),
+            renderer._blank_row(),
+            renderer._bottom_border(),
+        ]
+        output += "\n\n" + "\n".join(lines)
+
+    return output
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Gorgeous iCalendar visualizer for the terminal.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  ics-preview meeting.ics
+  ics-preview -W 120 invitation.ics
+  cat invite.ics | ics-preview
+""",
+    )
+    parser.add_argument("file", nargs="?", help="Path to .ics file (or stdin if omitted)")
+    parser.add_argument(
+        "-W", "--width", type=int, default=80, help="Terminal width (default: 80)"
+    )
+    args = parser.parse_args()
+
+    width = max(40, args.width)
+
+    if args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError as e:
+            print(f"Error reading file: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        text = sys.stdin.read()
+
+    if not text.strip():
+        print("No input provided.", file=sys.stderr)
+        sys.exit(1)
+
+    output = render_calendar(text, width)
+    print(output)
+
+
+if __name__ == "__main__":
+    main()

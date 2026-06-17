@@ -21,6 +21,9 @@ absolute path from its caller, so it never needs to be on `PATH`:
   backed by `pick-symbols-common.zsh` → `pick-common.zsh`.
 - `pick-list` — a generic standalone front-end to `pick::start`, used by
   `zj::pick` (in `zellij.zsh`) to run a picker inside a Zellij floating pane.
+- `ics-view`, `sqlite-view`, `disk-image-view` — rich file preview renderers
+  driven by `preview` and Yazi; they are implementation details, not general
+  shell commands.
 
 ## Library layering
 
