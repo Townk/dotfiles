@@ -33,7 +33,7 @@ alias vi="nvim"
 ## git aliases
 alias git="noglob git"
 alias cdg='cd `git rev-parse --show-toplevel`'
-alias gl="git log --graph --pretty='format:%C(auto)%h %C(red)%G?%Creset %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)'"
+alias gl="git log --graph --pretty='format:%C(auto)%h %<(50,trunc)%s %C(magenta)(%cr)%Creset by %C(bold blue)%an <@%al> %C(auto)%d %C(8)%(trailers:valueonly,key=cr,separator=%x2C)'"
 
 # Other helpers
 alias isotime="date -u +'%Y-%m-%dT%H:%M:%S+0000'"
