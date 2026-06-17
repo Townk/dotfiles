@@ -202,13 +202,15 @@ keybinds clear-defaults=true {
             }
         }
 
-        // Shift+Enter: forward as Shift+Enter (CR) everywhere, except in
-        // cursor-agent where it sends Alt+Enter (ESC+CR) so the CLI inserts
-        // a newline in the prompt instead of submitting.
+        // Shift+Enter: forward as Shift+Enter (CR) by default. cursor-agent
+        // (and `agent`) want Alt+Enter (ESC+CR) to insert a newline instead
+        // of submitting. Pi and Claude Code speak the kitty keyboard protocol,
+        // so they get the CSI-u encoding (\e[13;2u) which they map to a
+        // newline — a plain CR would submit the prompt.
         bind "Shift Enter" {
             MessagePlugin "context-keys" {
                 name "shift+enter"
-                payload "default: $source; when agent,cursor-agent: key alt+enter; when pi: kitty:$source"
+                payload "default: $source; when agent,cursor-agent: key alt+enter; when pi,claude: kitty:$source"
             }
         }
 
