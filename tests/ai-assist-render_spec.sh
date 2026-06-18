@@ -38,7 +38,9 @@ Describe 'ai-assist-render'
   End
 
   It 'falls back to a reflow when neither pager nor glow is available'
-    BeforeRun 'export PATH=/usr/bin:/bin'
+    # Point the pager at a non-existent path so the absolute-path resolution is
+    # bypassed, and strip glow from PATH, forcing the fold reflow.
+    BeforeRun 'export PATH=/usr/bin:/bin' 'export AI_ASSIST_PAGER_BIN=/nonexistent/ai-assist-pager'
     When run script "$SCRIPT" --harness X -- printf 'plain output line\n'
     The status should be success
     The output should include "plain output line"

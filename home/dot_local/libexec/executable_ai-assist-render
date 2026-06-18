@@ -60,11 +60,22 @@ printf '\r\e[K' # clear the spinner line
 # the binary lives. If the pager isn't installed yet, fall back to glow (then a
 # width-aware fold) so the feature degrades gracefully. Not exec'd, so the tempfile
 # trap still fires and the pane parks on the pager's final static render.
-pager="${AI_ASSIST_PAGER_BIN:-ai-assist-pager}"
-if command -v -- "$pager" >/dev/null 2>&1; then
-  pager="$(command -v -- "$pager")"
+# The docked pane inherits the zellij daemon's PATH, which does NOT include GOBIN
+# (~/.local/share/go/bin where `go install` puts the binary) — so a bare PATH
+# lookup fails there. Try PATH first, then the known go-install locations by
+# absolute path. AI_ASSIST_PAGER_BIN overrides (and is honoured even if missing,
+# so tests can force the glow fallback).
+pager="${AI_ASSIST_PAGER_BIN:-}"
+if [[ -z "$pager" ]]; then
+  for cand in \
+    "$(command -v -- ai-assist-pager 2>/dev/null)" \
+    "${GOBIN:+$GOBIN/ai-assist-pager}" \
+    "$HOME/.local/share/go/bin/ai-assist-pager" \
+    "$HOME/go/bin/ai-assist-pager"; do
+    [[ -n "$cand" && -x "$cand" ]] && { pager="$cand"; break; }
+  done
 fi
-if [[ -x "$pager" ]]; then
+if [[ -n "$pager" && -x "$pager" ]]; then
   "$pager" --harness "$harness" "$out"
 else
   theme="$HOME/.config/glow/catppuccin-mocha.json"
