@@ -158,7 +158,7 @@ JSON
         echo 'if [[ "$1 $2" == "action dump-screen" ]]; then'
         echo '  print -r -- "~/proj % make all"'
         echo '  print -r -- "make: *** No rule to make target \`all'\''.  Stop."'
-        echo '  print -r -- "~/proj % "'
+        echo '  print -r -- "~/proj % TRAILING_PROMPT"'
         echo '  exit 0'
         echo 'fi'
       } > "$CAP_TMP/zellij"; chmod +x "$CAP_TMP/zellij"
@@ -176,12 +176,13 @@ JSON
       The variable CAP_DIR should equal "/tmp/proj"
     End
 
-    It 'capture_scrollback slices from the command line to just before the new prompt'
+    It 'capture_scrollback slices from the command line and drops the trailing prompt'
       result="$(assist::capture_scrollback "make all")"
       When call printf '%s' "$result"
       The output should include "make all"
       The output should include "No rule to make target"
-      The output should not include "~/proj % $"
+      # The trailing (just-rendered) prompt line must be dropped.
+      The output should not include "TRAILING_PROMPT"
     End
 
     It 'prefill_template builds a diagnosis line for an error'
@@ -201,9 +202,15 @@ JSON
     It 'build_request writes a schema the Phase A reader accepts'
       CAP_CMD="make all"; CAP_EXIT="2"; CAP_KIND="error"; CAP_DIR="/tmp/proj"
       CAP_DURATION="40ms"; CAP_PROJECT="proj"; CAP_SCROLLBACK="No rule to make target"
-      assist::build_request "fix my build" "$CAP_TMP/req.json"
-      assist::request_read "$CAP_TMP/req.json"
-      When call printf '%s|%s|%s' "$REQ_KIND" "$REQ_COMMAND_TEXT" "$REQ_USER_REQUEST"
+      # Round-trip inside the subject so a silent jq/build/read failure fails the
+      # test (status-checked), not just produces empty fields.
+      roundtrip() {
+        assist::build_request "fix my build" "$CAP_TMP/req.json" || return 1
+        assist::request_read "$CAP_TMP/req.json" || return 1
+        printf '%s|%s|%s' "$REQ_KIND" "$REQ_COMMAND_TEXT" "$REQ_USER_REQUEST"
+      }
+      When call roundtrip
+      The status should be success
       The output should equal "error|make all|fix my build"
     End
   End
