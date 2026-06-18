@@ -40,6 +40,7 @@ bindkey '^N'   history-substring-search-down
 # Atuin owns Ctrl+R (overrides fzf's and the plugin defaults).
 command -v atuin >/dev/null && bindkey '^R' atuin-search
 
-# Ctrl+Shift+/ — summon ai-assist. Delivered as kitty CSI 47;6u by zj-context-keys
-# (see config.kdl); plain Ctrl+/ is ^_ (undo), so the shifted chord needs CSI-u.
-bindkey '\e[47;6u' ai-assist-trigger
+# Ctrl+? (Ctrl+Shift+/) — summon ai-assist. zj-context-keys delivers it as the
+# kitty CSI-u form \e[63;5u (`?`=63, ctrl=5); see config.kdl's "Ctrl ?" bind.
+# (Plain Ctrl+/ is ^_ = undo, so the chord needs this distinct sequence.)
+bindkey '\e[63;5u' ai-assist-trigger
