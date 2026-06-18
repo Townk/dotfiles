@@ -210,7 +210,17 @@ keybinds clear-defaults=true {
         bind "Shift Enter" {
             MessagePlugin "context-keys" {
                 name "shift+enter"
-                payload "default: $source; when agent,cursor-agent: key alt+enter; when pi,claude: kitty:$source"
+                payload "default: $source; when agent,cursor-agent: key alt+enter; when pi,claude,ai-assist-input: kitty:$source"
+            }
+        }
+
+        // Ctrl+Shift+/ — summon ai-assist from the shell. Emits kitty CSI 47;6u
+        // so the zsh ZLE widget (bindkey '\e[47;6u') fires; only when a shell is
+        // foreground (so it never disrupts an editor/agent).
+        bind "Ctrl Shift /" {
+            MessagePlugin "context-keys" {
+                name "ctrl+shift+/"
+                payload "when zsh,bash,fish: write \"\e[47;6u\""
             }
         }
 

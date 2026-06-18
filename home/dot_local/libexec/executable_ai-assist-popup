@@ -1,0 +1,25 @@
+#!/usr/bin/env zsh
+# ai-assist-popup — floating prompt for the user's request. Runs ai-assist-input
+# (Enter submit / Shift+Enter newline) inside a zellij-modal capture pane and
+# prints the submitted text on stdout (empty + exit 130 on cancel).
+set -euo pipefail
+prefill=""
+[[ "${1:-}" == "--prefill" ]] && { prefill="${2:-}"; shift 2; }
+
+input_bin="${AI_ASSIST_INPUT_BIN:-ai-assist-input}"
+
+if [[ -z "${ZELLIJ:-}" ]]; then
+  # No Zellij → inline fallback (used in tests / bare shells).
+  exec "$input_bin" --value "$prefill" --header "ai-assist"
+fi
+
+modal="$HOME/.config/zellij/scripts/zellij-modal"
+fifo="$(mktemp -u "${TMPDIR:-/tmp}/aiask-fifo.XXXXXX")"
+mkfifo -m 600 "$fifo"
+"${ZELLIJ_BIN:-zellij}" action new-pane --floating --close-on-exit \
+  --name "" --borderless false --pinned true --width 70% --height 40% --cwd "$PWD" \
+  -- "$modal" --title "ai-assist" --capture "$fifo" \
+  -- "$input_bin" --value "$prefill" >/dev/null
+local result; result="$(cat "$fifo")"; rm -f "$fifo"
+[[ -n "$result" ]] || exit 130
+print -r -- "$result"

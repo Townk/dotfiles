@@ -63,3 +63,20 @@ zle -N cd-back
 zle -N cd-forward
 zle -N cd-up
 zle -N cd-down
+
+# ── ai-assist trigger (Ctrl+Shift+/ via CSI 47;6u) ─────────────────────────
+ai-assist-trigger() {
+  source "$HOME/.local/lib/assist-agent-common.zsh"
+  assist::capture_command
+  CAP_PROJECT="${${CAP_DIR:-$PWD}:t}"
+  CAP_BRANCH="$(git -C "${CAP_DIR:-$PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  [[ "$CAP_KIND" == error ]] && CAP_SCROLLBACK="$(assist::capture_scrollback "$CAP_CMD")"
+  local user_request
+  user_request="$(ai-assist-popup --prefill "$(assist::prefill_template)")" || { zle reset-prompt; return 0; }
+  [[ -n "$user_request" ]] || { zle reset-prompt; return 0; }
+  local req; req="$(assist::session_dir)/request.json"; mkdir -p "${req:h}"
+  assist::build_request "$user_request" "$req"
+  zle reset-prompt
+  ai-assist --request "$req"
+}
+zle -N ai-assist-trigger
