@@ -44,8 +44,11 @@ common.zsh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
    │     └── (also sources prompt-common.zsh)
    ├── platform.zsh ............... platform::*  (OS shim → platform-macos.zsh /
    │                              platform-linux.zsh: launch GUI app, raise window)
-   └── commit-agent-common.zsh ... cagent::*  (spinner, plan summary/dry-run,
+   ├── commit-agent-common.zsh ... cagent::*  (spinner, plan summary/dry-run,
                                     stage/commit loop)
+   └── assist-agent-common.zsh ... assist::*  (session pin, request parsing,
+                                    KB paths, system prompt, docked-pane spawn,
+                                    worker engine)
 ```
 
 Every library is zsh; the ShellSpec suite sources them under zsh.
@@ -68,6 +71,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | Category | Scripts | Backing library |
 |---|---|---|
 | AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh`, `zellij.zsh` |
+| AI terminal assistant | `ai-assist` + `ai-assist-{claude,pi,cursor}` | `assist-agent-common.zsh`, `zellij.zsh` |
 | File preview (fzf/yazi) | `preview` | — |
 | Editor/terminal glue | `tab-edit`² | `platform.zsh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |
