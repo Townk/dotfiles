@@ -1,0 +1,81 @@
+#!/usr/bin/env zsh
+# ai-assist-render — beautify the ai-assist docked pane.
+#
+# The agent harness runs headless, so its stdout is raw markdown text: mid-word
+# wraps, no headings/bold/code rendering. This wrapper becomes the docked pane's
+# command (the workers spawn `ai-assist-render --harness <name> -- <harness cmd>`
+# instead of the harness directly). It prints a Catppuccin title block, runs the
+# harness with output BUFFERED while a spinner shows progress, then renders the
+# captured markdown through `glow` sized to the pane width. The pane parks on
+# exit (the workers spawn it without --close-on-exit), so the rendered reply
+# stays for review.
+#
+# Reached by absolute path from the workers (~/.local/libexec is not on PATH,
+# and the docked pane's PATH is the non-interactive one). Self-contained: no
+# library sourcing, so it runs cleanly in a bare zellij pane.
+set -uo pipefail
+
+harness="agent"
+while (($#)); do
+  case "$1" in
+    --harness) harness="${2:-agent}"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+cmd=("$@")
+[[ ${#cmd[@]} -gt 0 ]] || { print -u2 -- "ai-assist-render: no command after --"; exit 2; }
+
+# Pane width (fall back to 100 if we can't query the tty).
+typeset -i cols
+cols=$(tput cols 2>/dev/null) || cols=0
+((cols > 0)) || cols=100
+typeset -i body=$((cols > 6 ? cols - 2 : 80))
+typeset -i rulen=$((cols > 4 ? cols - 4 : 1))
+
+# Catppuccin Mocha SGR (inline — no theme sourcing).
+mauve=$'\e[1;38;2;203;166;247m'
+overlay=$'\e[38;2;49;50;68m'
+blue=$'\e[38;2;137;180;250m'
+reset=$'\e[0m'
+
+# Title block: blank, "▬▬▬ ai-assist — <harness>", rule, blank. (_pad is an
+# explicit empty base so `set -u` doesn't reject the padded expansion.)
+_pad=""
+printf '\n  %s▬▬▬ ai-assist — %s%s\n' "$mauve" "$harness" "$reset"
+printf '  %s%s%s\n\n' "$overlay" "${(pl:rulen::─:)_pad}" "$reset"
+
+# Run the harness, buffering stdout+stderr; spinner while it works.
+out=$(mktemp -t ai-assist-render) || exit 1
+trap 'rm -f -- "$out"' EXIT INT TERM
+"${cmd[@]}" >"$out" 2>&1 &
+pid=$!
+
+spin=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+typeset -i i=1 start=$SECONDS
+while kill -0 "$pid" 2>/dev/null; do
+  printf '\r  %s%s%s working… %ds  ' "$blue" "${spin[i]}" "$reset" "$((SECONDS - start))"
+  sleep 0.1
+  i=$((i % 10 + 1))
+done
+wait "$pid"; rc=$?
+printf '\r\e[K' # clear the spinner line
+
+# Render the captured markdown through glow with the Catppuccin theme. Passing
+# --style explicitly forces full rendering (glow's "auto" style only renders on a
+# TTY, and matches the user's palette). glow degrades gracefully on plain text;
+# if glow is missing, fall back to a width-aware reflow so nothing wraps mid-word.
+theme="$HOME/.config/glow/catppuccin-mocha.json"
+# Feed glow via STDIN, not a file argument: `glow FILE` opens its pager (it would
+# hang the docked pane), whereas reading stdin renders straight to stdout.
+if command -v glow >/dev/null 2>&1; then
+  if [[ -r "$theme" ]]; then
+    glow --style "$theme" --width "$body" < "$out"
+  else
+    glow --width "$body" < "$out"
+  fi
+else
+  fold -s -w "$body" < "$out"
+fi
+
+exit "$rc"

@@ -243,6 +243,15 @@ assist::worker_main() {
   "$build_fn"
   [[ ${#ASSIST_PANE_CMD[@]} -gt 0 ]] || die "worker '$label' produced no command"
 
-  assist::spawn_pane "${ASSIST_PANE_CMD[@]}"
+  # Wrap the harness in ai-assist-render so the docked pane shows a title block +
+  # spinner and renders the reply through glow (Phase B-render). Reached by
+  # absolute path — the docked pane's PATH lacks ~/.local/libexec. Set
+  # AI_ASSIST_RENDER=0 to run the harness bare (raw output, for debugging).
+  local render="$HOME/.local/libexec/ai-assist-render"
+  if [[ "${AI_ASSIST_RENDER:-1}" == 1 && -x "$render" ]]; then
+    assist::spawn_pane "$render" --harness "$label" -- "${ASSIST_PANE_CMD[@]}"
+  else
+    assist::spawn_pane "${ASSIST_PANE_CMD[@]}"
+  fi
   log_ok "ai-assist (${label}) working in a docked pane"
 }
