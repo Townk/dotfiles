@@ -1,0 +1,130 @@
+#!/usr/bin/env zsh
+# ai-assist — dispatcher that launches an AI terminal-assist session through a
+# chosen harness. Sibling `ai-assist-<harness>` workers do the work; this only
+# selects one and forwards the rest of the command line unchanged.
+#
+# Harness selection (precedence):
+#   ai-assist <harness> [args...]       explicit (e.g. `ai-assist claude ...`)
+#   AI_ASSIST_HARNESS=<h> ai-assist     via the environment
+#   ai-assist [args...]                 session pin, then sole-available, then
+#                                       an fzf picker when several are present.
+# A probed/picked choice is pinned for the Zellij session; `ai-assist --forget`
+# clears it.
+set -eu -o pipefail
+
+source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
+
+# Resolve this script's directory so sibling workers are found even via a bare
+# PATH name (mirrors ai-commit).
+script_path="$0"
+if [[ "$script_path" != */* ]]; then
+  script_path="$(command -v -- "$script_path")" || die "cannot resolve dispatcher path: $0"
+fi
+SCRIPT_DIR="${script_path:A:h}"
+
+HARNESSES=()
+for worker in "$SCRIPT_DIR"/ai-assist-*(N-.); do
+  [[ -x "$worker" ]] || continue
+  HARNESSES+=("${${worker:t}#ai-assist-}")
+done
+
+worker_path() { print -r -- "$SCRIPT_DIR/ai-assist-$1"; }
+
+is_harness() {
+  local needle="$1" h
+  for h in "${HARNESSES[@]}"; do [[ "$h" == "$needle" ]] && return 0; done
+  return 1
+}
+
+usage() {
+  cat <<EOF
+Usage:
+  ai-assist <harness> [args...]   run a specific harness
+  ai-assist [args...]             session pin, sole-available, or fzf-pick
+  ai-assist --forget              clear this session's harness pin
+  ai-assist -h | --help | help    show this help
+
+Harnesses: ${HARNESSES[*]:-<none discovered>}
+
+The harness is chosen from, in order: the first positional argument, the
+\$AI_ASSIST_HARNESS environment variable, this session's saved pin, then — when
+none is given — the only installed harness, or an fzf picker when several are.
+A probed or picked choice is saved for the session and reused; clear it with
+\`ai-assist --forget\`. Remaining arguments are forwarded to the chosen
+\`ai-assist-<harness>\` worker.
+EOF
+}
+
+typeset -gA LABELS
+AVAILABLE=()
+probe_available() {
+  local h label
+  for h in "${HARNESSES[@]}"; do
+    if label="$("$(worker_path "$h")" --probe 2>/dev/null)"; then
+      AVAILABLE+=("$h")
+      LABELS[$h]="$label"
+    fi
+  done
+}
+
+pick_harness() {
+  source "$HOME/.local/lib/zellij.zsh"
+  local -A icons=(pi $'\U0010FB02' claude $'\U0010E861' cursor $'\U0010FB00')
+  local c_icon=$'\e[38;2;255;255;255m' c_name=$'\e[38;2;137;180;250m'
+  local c_desc=$'\e[38;2;127;132;156m' c_off=$'\e[0m'
+  local h w=0
+  for h in "${AVAILABLE[@]}"; do ((${#h} > w)) && w=${#h}; done
+  for h in "${AVAILABLE[@]}"; do
+    pick::line "${c_icon}${icons[$h]:-$''}${c_off}  ${c_name}${(r:$w:)h}${c_off}  ${c_desc}${LABELS[$h]}${c_off}" "$h"
+  done | PICK_NAME=ai-assist zj::pick \
+    --pane-width 63 --pane-height 12 \
+    --output field:1 --selector --selector-nav \
+    --header "Assist harness" \
+    --hints $'\U000F0331 : run  ·  \U000F12B7 : cancel'
+}
+
+main() {
+  if [[ $# -ge 1 ]] && is_help "$1"; then usage; exit 0; fi
+
+  if [[ "${1:-}" == "--forget" ]]; then
+    assist::pin_clear
+    log_ok "cleared harness pin for session $(assist::session_name)"
+    exit 0
+  fi
+
+  ((${#HARNESSES[@]} > 0)) || die "no ai-assist-<harness> workers found next to $SCRIPT_DIR/ai-assist"
+
+  local harness="" persist=0
+  if [[ $# -ge 1 ]] && is_harness "$1"; then
+    harness="$1"; shift
+  elif [[ -n "${AI_ASSIST_HARNESS:-}" ]]; then
+    is_harness "$AI_ASSIST_HARNESS" || die "AI_ASSIST_HARNESS='$AI_ASSIST_HARNESS' is not a known harness (have: ${HARNESSES[*]})"
+    harness="$AI_ASSIST_HARNESS"
+  else
+    local pinned; pinned="$(assist::pin_read)"
+    if [[ -n "$pinned" ]] && is_harness "$pinned"; then
+      harness="$pinned"
+      log_info "Using session-pinned harness: ${C_BWH}${harness}${C_RES}" >&2
+    fi
+  fi
+
+  if [[ -z "$harness" ]]; then
+    probe_available
+    case ${#AVAILABLE[@]} in
+      0) die "no harness available; install a backing agent for one of: ${HARNESSES[*]}" ;;
+      1) harness="${AVAILABLE[1]}"; persist=1
+         log_info "Using the only available harness: ${C_BWH}${harness}${C_RES} (${LABELS[$harness]})" >&2 ;;
+      *) harness="$(pick_harness)" || exit $?
+         [[ -n "$harness" ]] || exit 130
+         persist=1 ;;
+    esac
+  fi
+
+  [[ "$persist" -eq 1 ]] && assist::pin_write "$harness"
+
+  local worker; worker="$(worker_path "$harness")"
+  [[ -x "$worker" ]] || die "harness worker not executable: ai-assist-$harness"
+  exec "$worker" "$@"
+}
+
+main "$@"
