@@ -135,3 +135,44 @@ assist::spawn_pane() {
   "$zj" action new-pane --direction right --name "ai-assist" \
     --cwd "${REQ_PROJECT_ROOT:-$PWD}" -- "$@"
 }
+
+# ── Triage (Phase A stub) ──────────────────────────────────────────────────
+# Returns 0 = "escalate to the chosen harness". The real KB-aware classifier
+# lands in Phase D; until then every request escalates.
+assist::triage() { return 0; }
+
+# ── Worker engine ──────────────────────────────────────────────────────────
+# assist::worker_main <label> <build_fn> [--request FILE] [-- guidance...]
+# Shared flow for every ai-assist-<harness> worker. <build_fn> is a function
+# the worker defines; it must populate the array ASSIST_PANE_CMD with the
+# harness command to run in the docked pane, reading ASSIST_PROMPT / ASSIST_MODEL
+# and the REQ_* globals.
+assist::worker_main() {
+  local label="$1" build_fn="$2"; shift 2
+  local request_file=""
+  ASSIST_GUIDANCE=""
+  while (($#)); do
+    case "$1" in
+      --request) request_file="${2:-}"; shift 2 ;;
+      --request=*) request_file="${1#*=}"; shift ;;
+      -h|--help) print -r -- "Usage: ai-assist-<harness> --request <file> [-- guidance...]"; return 0 ;;
+      --) shift; ASSIST_GUIDANCE="$*"; break ;;
+      *) ASSIST_GUIDANCE="$*"; break ;;
+    esac
+  done
+  [[ -n "$request_file" ]] || die "missing --request <file>"
+
+  assist::request_read "$request_file"
+  local kb; kb="$(assist::kb_ensure "${REQ_PROJECT_ROOT:-$PWD}")"
+  ASSIST_PROMPT="$(assist::system_prompt "$kb")"
+  [[ -n "$ASSIST_GUIDANCE" ]] && ASSIST_PROMPT+=$'\n\nAdditional guidance from the caller:\n'"$ASSIST_GUIDANCE"
+
+  assist::triage || true   # Phase A: always escalates
+
+  ASSIST_PANE_CMD=()
+  "$build_fn"
+  [[ ${#ASSIST_PANE_CMD[@]} -gt 0 ]] || die "worker '$label' produced no command"
+
+  assist::spawn_pane "${ASSIST_PANE_CMD[@]}"
+  log_ok "ai-assist (${label}) working in a docked pane"
+}

@@ -1,0 +1,75 @@
+# Tests for the ai-assist-<harness> workers. Each worker is run as a subprocess
+# with a stub harness binary and a stub zellij; the library is pointed at the
+# repo via AI_ASSIST_LIB_DIR.
+Describe 'ai-assist workers'
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    export HOME="$TEST_TMP/home"
+    export XDG_STATE_HOME="$TEST_TMP/state"
+    export XDG_DATA_HOME="$TEST_TMP/data"
+    export AI_ASSIST_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+    export ZELLIJ=1
+    mkdir -p "$HOME"
+
+    # Stub zellij: record the full argument vector.
+    zjstub="$TEST_TMP/zjstub"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo "printf '%s\\n' \"\$*\" > \"$TEST_TMP/zj-args\""
+    } > "$zjstub"; chmod +x "$zjstub"
+    export ZELLIJ_BIN="$zjstub"
+
+    # A request fixture.
+    cat > "$TEST_TMP/req.json" <<'JSON'
+{
+  "version": 1,
+  "kind": "error",
+  "origin": {"cwd":"/tmp/proj","project_root":"/tmp/proj"},
+  "command": {"text":"make","exit":2},
+  "scrollback":"No rule to make target 'all'.",
+  "user_request":"Diagnose why make failed",
+  "project":{"name":"proj","branch":"main"}
+}
+JSON
+  }
+  cleanup() { rm -rf "$TEST_TMP"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  Describe 'ai-assist-claude'
+    SCRIPT() { echo "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_ai-assist-claude"; }
+
+    It 'probe succeeds when claude is on PATH'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      printf '#!/bin/sh\n' > "$stubdir/claude"; chmod +x "$stubdir/claude"
+      export PATH="$stubdir:$PATH"
+      When run script "$(SCRIPT)" --probe
+      The status should be success
+      The output should include "Claude Code"
+    End
+
+    It 'probe fails when claude is absent'
+      export AI_ASSIST_CLAUDE_BIN="definitely-not-a-real-binary-xyz"
+      When run script "$(SCRIPT)" --probe
+      The status should be failure
+    End
+
+    It 'spawns a docked pane running claude with the model and the prompt'
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      When run script "$(SCRIPT)" --request "$TEST_TMP/req.json"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "action new-pane"
+      The contents of file "$TEST_TMP/zj-args" should include "--cwd /tmp/proj"
+      The contents of file "$TEST_TMP/zj-args" should include "claude --print"
+      The contents of file "$TEST_TMP/zj-args" should include "--model sonnet"
+      The contents of file "$TEST_TMP/zj-args" should include "Diagnose why make failed"
+    End
+
+    It 'dies without a --request file'
+      When run script "$(SCRIPT)"
+      The status should be failure
+      The stderr should include "request"
+    End
+  End
+End

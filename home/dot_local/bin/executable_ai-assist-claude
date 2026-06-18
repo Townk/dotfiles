@@ -1,0 +1,35 @@
+#!/usr/bin/env zsh
+# ai-assist-claude — terminal-assist harness backed by Claude Code (headless).
+# Launches `claude` in a docked pane to diagnose the request. Usable standalone
+# or behind the `ai-assist` dispatcher (discovered via the ai-assist-* naming
+# and the --probe contract).
+set -eu -o pipefail
+
+: "${AI_ASSIST_CLAUDE_BIN:=claude}"
+
+# Probe contract: print a label + exit 0 iff the backing CLI is present.
+if [[ "${1:-}" == --probe ]]; then
+  command -v "$AI_ASSIST_CLAUDE_BIN" >/dev/null 2>&1 || exit 1
+  print -r -- "Claude Code"
+  exit 0
+fi
+
+source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
+
+# Capable model by design — never a cheap one. AI_ASSIST_MODEL (cross-harness)
+# overrides; else sonnet.
+: "${ASSIST_MODEL:=${AI_ASSIST_MODEL:-sonnet}}"
+# Non-interactive permission posture so the headless pane never blocks on a
+# prompt. Phase A is read + diagnose; later phases can tighten this.
+: "${AI_ASSIST_CLAUDE_PERMISSION_MODE:=bypassPermissions}"
+
+assist_build_cmd() {
+  ASSIST_PANE_CMD=(
+    "$AI_ASSIST_CLAUDE_BIN" --print --output-format text
+    --permission-mode "$AI_ASSIST_CLAUDE_PERMISSION_MODE"
+    --model "$ASSIST_MODEL"
+    "$ASSIST_PROMPT"
+  )
+}
+
+assist::worker_main "Claude Code" assist_build_cmd "$@"
