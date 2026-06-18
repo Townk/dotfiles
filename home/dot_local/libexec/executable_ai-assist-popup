@@ -8,6 +8,16 @@ prefill=""
 
 input_bin="${AI_ASSIST_INPUT_BIN:-ai-assist-input}"
 
+# Resolve to an absolute path while we still have the interactive PATH (inherited
+# from the trigger widget's shell). The floating pane's command runs under a
+# non-login, non-interactive zsh (zellij-modal) that loads ~/.zshenv but NOT
+# ~/.zshrc — where GOBIN (~/.local/share/go/bin, where ai-assist-input lives) is
+# added to PATH. Passing a bare name into the float would fail to resolve there
+# (the pane would just blink shut). Resolve here so the float gets the full path.
+if command -v -- "$input_bin" >/dev/null 2>&1; then
+  input_bin="$(command -v -- "$input_bin")"
+fi
+
 if [[ -z "${ZELLIJ:-}" ]]; then
   # No Zellij → inline fallback (used in tests / bare shells).
   exec "$input_bin" --value "$prefill"
