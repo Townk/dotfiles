@@ -1,13 +1,15 @@
 #!/usr/bin/env zsh
 # ai-assist-render — beautify the ai-assist docked pane.
 #
-# The agent harness runs headless, so its stdout is raw markdown text: mid-word
-# wraps, no headings/bold/code rendering. This wrapper becomes the docked pane's
-# command (the workers spawn `ai-assist-render --harness <name> -- <harness cmd>`
-# instead of the harness directly). It prints a Catppuccin title block, runs the
-# harness with output BUFFERED while a spinner shows progress, then renders the
-# captured markdown through `glow` sized to the pane width. The pane parks on
-# exit (the workers spawn it without --close-on-exit), so the rendered reply
+# The agent harness runs headless, so its stdout is raw markdown text. This
+# wrapper becomes the docked pane's command (the workers spawn
+# `ai-assist-render --harness <name> -- <harness cmd>` instead of the harness
+# directly): it runs the harness with output BUFFERED while a braille spinner
+# shows progress, then hands the captured markdown to `ai-assist-pager` — an
+# interactive TUI viewer (per-element no-wrap + horizontal scroll for code and
+# tables, full-width bands, vertical scroll) which also draws the header. If the
+# pager isn't installed it falls back to `glow`, then a width-aware `fold`. The
+# pane parks on exit (workers spawn it without --close-on-exit) so the reply
 # stays for review.
 #
 # Reached by absolute path from the workers (~/.local/libexec is not on PATH,
@@ -31,19 +33,10 @@ typeset -i cols
 cols=$(tput cols 2>/dev/null) || cols=0
 ((cols > 0)) || cols=100
 typeset -i body=$((cols > 6 ? cols - 2 : 80))
-typeset -i rulen=$((cols > 4 ? cols - 4 : 1))
 
-# Catppuccin Mocha SGR (inline — no theme sourcing).
-mauve=$'\e[1;38;2;203;166;247m'
-overlay=$'\e[38;2;49;50;68m'
+# Spinner SGR (inline — no theme sourcing). The pager draws the header itself.
 blue=$'\e[38;2;137;180;250m'
 reset=$'\e[0m'
-
-# Title block: blank, "▬▬▬ ai-assist — <harness>", rule, blank. (_pad is an
-# explicit empty base so `set -u` doesn't reject the padded expansion.)
-_pad=""
-printf '\n  %s▬▬▬ ai-assist — %s%s\n' "$mauve" "$harness" "$reset"
-printf '  %s%s%s\n\n' "$overlay" "${(pl:rulen::─:)_pad}" "$reset"
 
 # Run the harness, buffering stdout+stderr; spinner while it works.
 out=$(mktemp -t ai-assist-render) || exit 1
@@ -61,21 +54,31 @@ done
 wait "$pid"; rc=$?
 printf '\r\e[K' # clear the spinner line
 
-# Render the captured markdown through glow with the Catppuccin theme. Passing
-# --style explicitly forces full rendering (glow's "auto" style only renders on a
-# TTY, and matches the user's palette). glow degrades gracefully on plain text;
-# if glow is missing, fall back to a width-aware reflow so nothing wraps mid-word.
-theme="$HOME/.config/glow/catppuccin-mocha.json"
-# Feed glow via STDIN, not a file argument: `glow FILE` opens its pager (it would
-# hang the docked pane), whereas reading stdin renders straight to stdout.
-if command -v glow >/dev/null 2>&1; then
-  if [[ -r "$theme" ]]; then
-    glow --style "$theme" --width "$body" < "$out"
-  else
-    glow --width "$body" < "$out"
-  fi
+# Hand the captured markdown to ai-assist-pager (interactive: per-element no-wrap
+# + horizontal scroll for code/tables, full-width bands, vertical scroll; it draws
+# the header). Resolve by absolute path — the docked pane's PATH lacks GOBIN where
+# the binary lives. If the pager isn't installed yet, fall back to glow (then a
+# width-aware fold) so the feature degrades gracefully. Not exec'd, so the tempfile
+# trap still fires and the pane parks on the pager's final static render.
+pager="${AI_ASSIST_PAGER_BIN:-ai-assist-pager}"
+if command -v -- "$pager" >/dev/null 2>&1; then
+  pager="$(command -v -- "$pager")"
+fi
+if [[ -x "$pager" ]]; then
+  "$pager" --harness "$harness" "$out"
 else
-  fold -s -w "$body" < "$out"
+  theme="$HOME/.config/glow/catppuccin-mocha.json"
+  # Feed glow via STDIN, not a file argument: `glow FILE` opens its pager (it
+  # would hang the docked pane); reading stdin renders straight to stdout.
+  if command -v glow >/dev/null 2>&1; then
+    if [[ -r "$theme" ]]; then
+      glow --style "$theme" --width "$body" < "$out"
+    else
+      glow --width "$body" < "$out"
+    fi
+  else
+    fold -s -w "$body" < "$out"
+  fi
 fi
 
 exit "$rc"
