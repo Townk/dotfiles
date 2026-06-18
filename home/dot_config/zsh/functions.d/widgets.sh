@@ -66,7 +66,7 @@ zle -N cd-down
 
 # ── ai-assist trigger (Ctrl+Shift+/ via CSI 47;6u) ─────────────────────────
 ai-assist-trigger() {
-  source "$HOME/.local/lib/assist-agent-common.zsh"
+  (( ${+functions[assist::capture_command]} )) || source "$HOME/.local/lib/assist-agent-common.zsh"
   assist::capture_command
   CAP_PROJECT="${${CAP_DIR:-$PWD}:t}"
   CAP_BRANCH="$(git -C "${CAP_DIR:-$PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null)"

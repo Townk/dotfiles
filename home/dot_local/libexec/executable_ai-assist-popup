@@ -16,10 +16,11 @@ fi
 modal="$HOME/.config/zellij/scripts/zellij-modal"
 fifo="$(mktemp -u "${TMPDIR:-/tmp}/aiask-fifo.XXXXXX")"
 mkfifo -m 600 "$fifo"
+trap 'rm -f "$fifo"' EXIT INT TERM
 "${ZELLIJ_BIN:-zellij}" action new-pane --floating --close-on-exit \
   --name "" --borderless false --pinned true --width 70% --height 40% --cwd "$PWD" \
   -- "$modal" --title "ai-assist" --capture "$fifo" \
   -- "$input_bin" --value "$prefill" >/dev/null
-local result; result="$(cat "$fifo")"; rm -f "$fifo"
+result="$(cat "$fifo")"; rm -f "$fifo"
 [[ -n "$result" ]] || exit 130
 print -r -- "$result"
