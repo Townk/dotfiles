@@ -70,7 +70,11 @@ zle -N cd-down
 # context, which parse-errors in the live interactive shell; it sources cleanly
 # in a normal subprocess. The widget only owns the prompt redraw.
 ai-assist-trigger() {
-  "$HOME/.local/libexec/ai-assist-summon"
+  # Redirect all stdio: a ZLE widget must not let its subprocess write to the
+  # main pane (the dispatcher's status logs would corrupt the line editor and
+  # land on the command line). The popup is its own float and the answer is the
+  # docked pane, so nothing here needs the main pane's terminal.
+  "$HOME/.local/libexec/ai-assist-summon" </dev/null >/dev/null 2>&1
   zle reset-prompt
 }
 zle -N ai-assist-trigger

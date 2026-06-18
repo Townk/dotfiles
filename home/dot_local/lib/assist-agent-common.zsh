@@ -139,11 +139,13 @@ assist::spawn_pane() {
 # ── Context capture (Phase B) ──────────────────────────────────────────────
 : "${ATUIN_BIN:=atuin}"
 
-# assist::capture_command — last command of THIS shell's atuin session →
-# CAP_CMD / CAP_EXIT / CAP_DIR / CAP_DURATION / CAP_KIND.
+# assist::capture_command — the last command run → CAP_CMD / CAP_EXIT /
+# CAP_DIR / CAP_DURATION / CAP_KIND. (`atuin history last` is global and does
+# NOT accept --session; the last global command is the one just run in this
+# pane, so that's what we want anyway.)
 assist::capture_command() {
   local row
-  row="$("$ATUIN_BIN" history last ${ATUIN_SESSION:+--session "$ATUIN_SESSION"} \
+  row="$("$ATUIN_BIN" history last \
         --format '{command}	{exit}	{directory}	{duration}' 2>/dev/null)" || row=""
   CAP_CMD="${row%%	*}"; row="${row#*	}"
   CAP_EXIT="${row%%	*}"; row="${row#*	}"
