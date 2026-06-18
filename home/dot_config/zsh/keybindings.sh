@@ -40,7 +40,8 @@ bindkey '^N'   history-substring-search-down
 # Atuin owns Ctrl+R (overrides fzf's and the plugin defaults).
 command -v atuin >/dev/null && bindkey '^R' atuin-search
 
-# Ctrl+? (Ctrl+Shift+/) — summon ai-assist. zj-context-keys delivers it as the
-# kitty CSI-u form \e[63;5u (`?`=63, ctrl=5); see config.kdl's "Ctrl ?" bind.
-# (Plain Ctrl+/ is ^_ = undo, so the chord needs this distinct sequence.)
-bindkey '\e[63;5u' ai-assist-trigger
+# ai-assist trigger (ai-assist-trigger widget, defined in functions.d/widgets.sh).
+# TODO: add the bindkey once the terminal is configured to send a DISTINCT,
+# pass-through byte sequence for the chosen chord. Blocked on terminal key config
+# (Blink/SSH currently collapses Ctrl+Shift+/ to ^_, colliding with undo). Once a
+# `cat -v` capture shows the real bytes, bind that single sequence here.
