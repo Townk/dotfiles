@@ -111,11 +111,15 @@ zj::pick() {
   # cannot read our stdin pipe, so it takes the rows as a file argument.
   cat >"$tmp"
 
+  # NB: `zellij action new-pane` prints the created pane id ("terminal_<n>") to
+  # stdout. zj::pick's stdout IS its return channel (a caller does
+  # `sel=$(zj::pick ...)`), so that id must be discarded here — otherwise it is
+  # prepended to the FIFO selection and the caller receives "terminal_<n>\n<sel>".
   "$bin" action new-pane --floating --close-on-exit \
     --name "" --borderless false --pinned true \
     --width "$pane_w" --height "$pane_h" --cwd "$PWD" \
     -- "$modal" --title "$header" --capture "$fifo" \
-    -- "$picklist" "${pick_args[@]}" --no-border --height -4 --margin 0,0,0,0 --padding 0,2,0,2 -- "$tmp"
+    -- "$picklist" "${pick_args[@]}" --no-border --height -4 --margin 0,0,0,0 --padding 0,2,0,2 -- "$tmp" >/dev/null
 
   # Block until the modal writes the captured selection (exactly as long as the
   # user browses); empty means the user cancelled.
