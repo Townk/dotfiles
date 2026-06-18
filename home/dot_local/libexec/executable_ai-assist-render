@@ -17,6 +17,13 @@
 # library sourcing, so it runs cleanly in a bare zellij pane.
 set -uo pipefail
 
+# Force narrow (1-cell) width for East-Asian-ambiguous characters (em-dash,
+# ellipsis, smart quotes, nerd-font icons). The pager's width library reads this
+# at process start; the docked pane inherits the zellij daemon env where LANG may
+# be unset, which otherwise makes those chars count as 2 cells and the pager's
+# background fills come up short. WezTerm renders them as 1 cell, so narrow matches.
+export RUNEWIDTH_EASTASIAN=0
+
 harness="agent"
 while (($#)); do
   case "$1" in
