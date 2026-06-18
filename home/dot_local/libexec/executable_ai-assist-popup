@@ -10,7 +10,7 @@ input_bin="${AI_ASSIST_INPUT_BIN:-ai-assist-input}"
 
 if [[ -z "${ZELLIJ:-}" ]]; then
   # No Zellij → inline fallback (used in tests / bare shells).
-  exec "$input_bin" --value "$prefill" --header "ai-assist"
+  exec "$input_bin" --value "$prefill"
 fi
 
 modal="$HOME/.config/zellij/scripts/zellij-modal"
