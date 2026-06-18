@@ -40,9 +40,9 @@ bindkey '^N'   history-substring-search-down
 # Atuin owns Ctrl+R (overrides fzf's and the plugin defaults).
 command -v atuin >/dev/null && bindkey '^R' atuin-search
 
-# Ctrl+Shift+A — summon ai-assist. zj-context-keys (see config.kdl's
-# "Ctrl Shift a" bind) writes the kitty CSI-u form \e[97;6u (`a`=97, ctrl+shift=6)
-# into the pane; this binds the ai-assist-trigger widget to it. A letter is used
-# because zsh can't receive Ctrl+Shift+/ distinctly and Zellij can't bind
-# Ctrl+punctuation (it can bind Ctrl+Shift+<letter>, like the glyph picker).
-bindkey '\e[97;6u' ai-assist-trigger
+# Ctrl+Alt+A — summon ai-assist. The chord arrives as the legacy sequence
+# ESC Ctrl-A (\e^A) and passes straight through WezTerm → SSH → Zellij to the
+# pane (verified via `cat -v`), so no Zellij bind / plugin routing is needed —
+# just this bindkey. (Ctrl+Shift+/ was unusable: no distinct legacy encoding for
+# zsh, and Zellij can't bind Ctrl+punctuation.)
+bindkey '\e^A' ai-assist-trigger

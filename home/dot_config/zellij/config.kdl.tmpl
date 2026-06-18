@@ -214,20 +214,10 @@ keybinds clear-defaults=true {
             }
         }
 
-        // Ctrl+Shift+A — summon ai-assist from the shell. Zellij can bind
-        // Ctrl+Shift+<letter> (this is exactly how the glyph/gitmoji pickers
-        // below work) but NOT Ctrl+<punctuation>; and zsh (legacy keys) can't
-        // receive a bare Ctrl+Shift+/ distinctly — so the trigger is a letter.
-        // zj-context-keys re-encodes the chord from `name` as the kitty CSI-u
-        // form (`a`=97, ctrl+shift=6 → \e[97;6u) and writes it to the pane; the
-        // zsh ZLE widget bound to '\e[97;6u' (keybindings.sh) fires. Only when a
-        // shell is foreground, so it stays inert under an editor/agent.
-        bind "Ctrl Shift a" {
-            MessagePlugin "context-keys" {
-                name "ctrl+shift+a"
-                payload "when zsh,bash,fish: kitty:$source"
-            }
-        }
+        // (ai-assist is triggered by Ctrl+Alt+A, handled entirely in zsh — it
+        // arrives as the legacy sequence ESC Ctrl-A (\e^A) which passes straight
+        // through Zellij to the pane, so no Zellij bind is needed here. See the
+        // bindkey in dot_config/zsh/keybindings.sh.)
 
         // Ctrl+Shift+u — Unicode / Nerd Font / Emoji glyph picker.
         // Spawns ~/.config/zellij/scripts/pick-glyph-zellij in a
