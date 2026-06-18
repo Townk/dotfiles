@@ -132,8 +132,15 @@ assist::zellij_bin() {
 assist::spawn_pane() {
   local zj; zj="$(assist::zellij_bin)" || die "zellij binary not found"
   [[ -n "${ZELLIJ:-}" ]] || die "not inside a Zellij session"
-  "$zj" action new-pane --direction right --name "ai-assist" \
+  # --close-on-exit: when the worker (ai-assist-render → pager) exits — e.g. the
+  # user quits the pager with q/Esc — close the docked pane instead of parking it.
+  "$zj" action new-pane --direction right --close-on-exit --name "ai-assist" \
     --cwd "${REQ_PROJECT_ROOT:-$PWD}" -- "$@"
+  # zellij sizes only floating panes via --width; a tiled (--direction) pane opens
+  # at 50%. Shrink the new (focused) pane toward ~35% so the original pane stays
+  # the centerpiece. Best-effort: resize moves the shared border in fixed steps.
+  local _n
+  for _n in 1 2 3; do "$zj" action resize decrease left 2>/dev/null || break; done
 }
 
 # ── Context capture (Phase B) ──────────────────────────────────────────────

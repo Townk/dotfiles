@@ -15,7 +15,7 @@ Describe 'ai-assist workers'
     zjstub="$TEST_TMP/zjstub"
     {
       echo '#!/usr/bin/env zsh'
-      echo "printf '%s\\n' \"\$*\" > \"$TEST_TMP/zj-args\""
+      echo "printf '%s\\n' \"\$*\" >> \"$TEST_TMP/zj-args\""
     } > "$zjstub"; chmod +x "$zjstub"
     export ZELLIJ_BIN="$zjstub"
 

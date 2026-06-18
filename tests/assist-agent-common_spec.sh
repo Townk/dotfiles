@@ -119,7 +119,7 @@ JSON
       stub="$TEST_TMP/zjstub"
       {
         echo '#!/usr/bin/env zsh'
-        echo "printf '%s\\n' \"\$*\" > \"$TEST_TMP/zj-args\""
+        echo "printf '%s\\n' \"\$*\" >> \"$TEST_TMP/zj-args\""
       } > "$stub"; chmod +x "$stub"
       export ZELLIJ_BIN="$stub"
       REQ_PROJECT_ROOT="/tmp/proj"
@@ -127,6 +127,7 @@ JSON
       The status should be success
       The contents of file "$TEST_TMP/zj-args" should include "action new-pane"
       The contents of file "$TEST_TMP/zj-args" should include "--direction right"
+      The contents of file "$TEST_TMP/zj-args" should include "--close-on-exit"
       The contents of file "$TEST_TMP/zj-args" should include "--cwd /tmp/proj"
       The contents of file "$TEST_TMP/zj-args" should include "-- echo hello world"
     End

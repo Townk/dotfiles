@@ -34,7 +34,8 @@ cols=$(tput cols 2>/dev/null) || cols=0
 ((cols > 0)) || cols=100
 typeset -i body=$((cols > 6 ? cols - 2 : 80))
 
-# Spinner SGR (inline — no theme sourcing). The pager draws the header itself.
+# SGR (inline — no theme sourcing).
+mauve=$'\e[1;38;2;203;166;247m'
 blue=$'\e[38;2;137;180;250m'
 reset=$'\e[0m'
 
@@ -43,6 +44,11 @@ out=$(mktemp -t ai-assist-render) || exit 1
 trap 'rm -f -- "$out"' EXIT INT TERM
 "${cmd[@]}" >"$out" 2>&1 &
 pid=$!
+
+# Title block while the harness works: blank line, the pane title, a blank line,
+# then the spinner renders on the line below (the pager draws this same title
+# once it takes over). Matches the pager's header so the handoff is seamless.
+printf '\n  %s▓▓▓ ai-assist — %s%s\n\n' "$mauve" "$harness" "$reset"
 
 spin=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
 typeset -i i=1 start=$SECONDS
