@@ -1,0 +1,28 @@
+#!/usr/bin/env zsh
+# ai-assist-pi — terminal-assist harness backed by pi-coding-agent (headless).
+# Launches `pi` in a docked pane to diagnose the request. Usable standalone or
+# behind the `ai-assist` dispatcher.
+set -eu -o pipefail
+
+if [[ "${1:-}" == --probe ]]; then
+  command -v pi >/dev/null 2>&1 || exit 1
+  print -r -- "Pi Coding Agent"
+  exit 0
+fi
+
+source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
+
+# Capable cloud model by design (NOT the cheap flash the commit tool uses).
+: "${ASSIST_MODEL:=${AI_ASSIST_MODEL:-opencode-go/kimi-k2.6}}"
+: "${AI_ASSIST_THINKING:=medium}"
+
+assist_build_cmd() {
+  ASSIST_PANE_CMD=(
+    pi --print --no-session
+    --model "$ASSIST_MODEL"
+    --thinking "$AI_ASSIST_THINKING"
+    "$ASSIST_PROMPT"
+  )
+}
+
+assist::worker_main "Pi Coding Agent" assist_build_cmd "$@"

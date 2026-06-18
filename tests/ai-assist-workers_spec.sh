@@ -72,4 +72,27 @@ JSON
       The stderr should include "request"
     End
   End
+
+  Describe 'ai-assist-pi'
+    SCRIPT() { echo "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_ai-assist-pi"; }
+
+    It 'probe succeeds when pi is on PATH'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      printf '#!/bin/sh\n' > "$stubdir/pi"; chmod +x "$stubdir/pi"
+      export PATH="$stubdir:$PATH"
+      When run script "$(SCRIPT)" --probe
+      The status should be success
+      The output should include "Pi Coding Agent"
+    End
+
+    It 'spawns a docked pane running pi with a capable model and the prompt'
+      When run script "$(SCRIPT)" --request "$TEST_TMP/req.json"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "pi --print"
+      The contents of file "$TEST_TMP/zj-args" should include "--no-session"
+      The contents of file "$TEST_TMP/zj-args" should include "--model opencode-go/kimi-k2.6"
+      The contents of file "$TEST_TMP/zj-args" should include "Diagnose why make failed"
+    End
+  End
 End
