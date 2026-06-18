@@ -24,6 +24,11 @@ absolute path from its caller, so it never needs to be on `PATH`:
 - `ics-view`, `sqlite-view`, `disk-image-view` — rich file preview renderers
   driven by `preview` and Yazi; they are implementation details, not general
   shell commands.
+- `ai-assist-popup` — the floating prompt for the AI terminal assistant: a
+  `zellij-modal --capture` adapter that runs the `ai-assist-input` textarea
+  (Enter submits / Shift+Enter newlines) and returns the typed request. Invoked
+  by the `ai-assist-trigger` ZLE widget bound to `Ctrl+Shift+/` (delivered as
+  kitty `CSI 47;6u` by `zj-context-keys`).
 
 ## Library layering
 
