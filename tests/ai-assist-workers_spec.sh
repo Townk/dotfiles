@@ -71,6 +71,25 @@ JSON
       The status should be failure
       The stderr should include "request"
     End
+
+    It 'accepts --request=FILE (equals-sign form)'
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      When run script "$(SCRIPT)" --request="$TEST_TMP/req.json"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "action new-pane"
+      The contents of file "$TEST_TMP/zj-args" should include "claude --print"
+      The contents of file "$TEST_TMP/zj-args" should include "Diagnose why make failed"
+    End
+
+    It 'passes trailing guidance to the prompt'
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      When run script "$(SCRIPT)" --request "$TEST_TMP/req.json" -- please check the Makefile
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "Additional guidance from the caller:"
+      The contents of file "$TEST_TMP/zj-args" should include "please check the Makefile"
+    End
   End
 
   Describe 'ai-assist-pi'
