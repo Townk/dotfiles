@@ -89,4 +89,55 @@ JSON
       The file "$kb_path" should be exist
     End
   End
+
+  Describe 'assist::system_prompt'
+    It 'includes the bounded-context discipline and the request context'
+      REQ_KIND="error"; REQ_COMMAND_TEXT="make"; REQ_COMMAND_EXIT="2"
+      REQ_PROJECT_ROOT="/tmp/proj"; REQ_PROJECT_NAME="proj"; REQ_BRANCH="main"
+      REQ_SCROLLBACK="No rule to make target 'all'."
+      REQ_USER_REQUEST="Diagnose why make failed"
+      kb=$(mktemp); : > "$kb"
+      When call assist::system_prompt "$kb"
+      The output should include "make"
+      The output should include "Diagnose why make failed"
+      The output should include "bounded"
+      The output should include "No rule to make target"
+    End
+
+    It 'includes knowledge-base contents when present'
+      REQ_KIND="question"; REQ_PROJECT_ROOT="/tmp/proj"
+      REQ_USER_REQUEST="how do I build?"
+      kb=$(mktemp); printf 'KB-FACT: build with gmake\n' > "$kb"
+      When call assist::system_prompt "$kb"
+      The output should include "KB-FACT: build with gmake"
+    End
+  End
+
+  Describe 'assist::spawn_pane'
+    It 'invokes zellij new-pane to the right with the cwd and the command'
+      export ZELLIJ=1
+      stub="$TEST_TMP/zjstub"
+      {
+        echo '#!/usr/bin/env zsh'
+        echo "printf '%s\\n' \"\$*\" > \"$TEST_TMP/zj-args\""
+      } > "$stub"; chmod +x "$stub"
+      export ZELLIJ_BIN="$stub"
+      REQ_PROJECT_ROOT="/tmp/proj"
+      When call assist::spawn_pane echo hello world
+      The status should be success
+      The contents of file "$TEST_TMP/zj-args" should include "action new-pane"
+      The contents of file "$TEST_TMP/zj-args" should include "--direction right"
+      The contents of file "$TEST_TMP/zj-args" should include "--cwd /tmp/proj"
+      The contents of file "$TEST_TMP/zj-args" should include "-- echo hello world"
+    End
+
+    It 'dies when not inside a Zellij session'
+      unset ZELLIJ
+      export ZELLIJ_BIN="/bin/echo"
+      REQ_PROJECT_ROOT="/tmp/proj"
+      When run assist::spawn_pane echo hi
+      The status should be failure
+      The stderr should include "not inside a Zellij session"
+    End
+  End
 End
