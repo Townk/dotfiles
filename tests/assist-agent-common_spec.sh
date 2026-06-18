@@ -140,4 +140,71 @@ JSON
       The stderr should include "not inside a Zellij session"
     End
   End
+
+  Describe 'context capture (Phase B)'
+    setup_cap() {
+      CAP_TMP=$(mktemp -d)
+      # Stub atuin: print one TSV row "<cmd>\t<exit>\t<dir>\t<duration>".
+      {
+        echo '#!/usr/bin/env zsh'
+        echo 'print -r -- "make all\t2\t/tmp/proj\t40ms"'
+      } > "$CAP_TMP/atuin"; chmod +x "$CAP_TMP/atuin"
+      export ATUIN_BIN="$CAP_TMP/atuin"
+      export ATUIN_SESSION="testatuin"
+      # Stub zellij dump-screen: emit a canned screen with a prompt, the
+      # echoed command, its output, and a trailing fresh prompt.
+      {
+        echo '#!/usr/bin/env zsh'
+        echo 'if [[ "$1 $2" == "action dump-screen" ]]; then'
+        echo '  print -r -- "~/proj % make all"'
+        echo '  print -r -- "make: *** No rule to make target \`all'\''.  Stop."'
+        echo '  print -r -- "~/proj % "'
+        echo '  exit 0'
+        echo 'fi'
+      } > "$CAP_TMP/zellij"; chmod +x "$CAP_TMP/zellij"
+      export ZELLIJ_BIN="$CAP_TMP/zellij"; export ZELLIJ=1
+    }
+    cleanup_cap() { rm -rf "$CAP_TMP"; }
+    BeforeEach 'setup_cap'
+    AfterEach 'cleanup_cap'
+
+    It 'capture_command parses atuin and sets error kind on non-zero exit'
+      When call assist::capture_command
+      The variable CAP_CMD should equal "make all"
+      The variable CAP_EXIT should equal "2"
+      The variable CAP_KIND should equal "error"
+      The variable CAP_DIR should equal "/tmp/proj"
+    End
+
+    It 'capture_scrollback slices from the command line to just before the new prompt'
+      result="$(assist::capture_scrollback "make all")"
+      When call printf '%s' "$result"
+      The output should include "make all"
+      The output should include "No rule to make target"
+      The output should not include "~/proj % $"
+    End
+
+    It 'prefill_template builds a diagnosis line for an error'
+      CAP_CMD="make all"; CAP_EXIT="2"; CAP_KIND="error"
+      CAP_PROJECT="proj"
+      When call assist::prefill_template
+      The output should include "make all"
+      The output should include "exit 2"
+    End
+
+    It 'prefill_template is empty for a question'
+      CAP_KIND="question"
+      When call assist::prefill_template
+      The output should equal ""
+    End
+
+    It 'build_request writes a schema the Phase A reader accepts'
+      CAP_CMD="make all"; CAP_EXIT="2"; CAP_KIND="error"; CAP_DIR="/tmp/proj"
+      CAP_DURATION="40ms"; CAP_PROJECT="proj"; CAP_SCROLLBACK="No rule to make target"
+      assist::build_request "fix my build" "$CAP_TMP/req.json"
+      assist::request_read "$CAP_TMP/req.json"
+      When call printf '%s|%s|%s' "$REQ_KIND" "$REQ_COMMAND_TEXT" "$REQ_USER_REQUEST"
+      The output should equal "error|make all|fix my build"
+    End
+  End
 End

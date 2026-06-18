@@ -136,6 +136,74 @@ assist::spawn_pane() {
     --cwd "${REQ_PROJECT_ROOT:-$PWD}" -- "$@"
 }
 
+# ── Context capture (Phase B) ──────────────────────────────────────────────
+: "${ATUIN_BIN:=atuin}"
+
+# assist::capture_command — last command of THIS shell's atuin session →
+# CAP_CMD / CAP_EXIT / CAP_DIR / CAP_DURATION / CAP_KIND.
+assist::capture_command() {
+  local row
+  row="$("$ATUIN_BIN" history last ${ATUIN_SESSION:+--session "$ATUIN_SESSION"} \
+        --format '{command}	{exit}	{directory}	{duration}' 2>/dev/null)" || row=""
+  CAP_CMD="${row%%	*}"; row="${row#*	}"
+  CAP_EXIT="${row%%	*}"; row="${row#*	}"
+  CAP_DIR="${row%%	*}"; CAP_DURATION="${row#*	}"
+  [[ "$CAP_CMD" == "$CAP_EXIT" ]] && CAP_EXIT=""   # single-field row guard
+  if [[ -n "$CAP_EXIT" && "$CAP_EXIT" != 0 ]]; then CAP_KIND=error; else CAP_KIND=question; fi
+}
+
+# assist::capture_scrollback <cmd> — slice the dump-screen for the last run of
+# <cmd>: from the last line containing <cmd> to the line before the trailing
+# (just-rendered) prompt, capped to AI_ASSIST_SCROLLBACK_LINES.
+assist::capture_scrollback() {
+  local cmd="$1" max="${AI_ASSIST_SCROLLBACK_LINES:-200}"
+  local zj; zj="$(assist::zellij_bin)" || { return 0; }
+  local pane="${ZELLIJ_PANE_ID:+terminal_$ZELLIJ_PANE_ID}"
+  local dump; dump="$(mktemp)"
+  "$zj" action dump-screen ${pane:+-p "$pane"} > "$dump" 2>/dev/null || { rm -f "$dump"; return 0; }
+  awk -v cmd="$cmd" -v max="$max" '
+    { lines[NR] = $0; if (index($0, cmd)) start = NR }
+    END {
+      if (start == 0) start = (NR - max > 0 ? NR - max : 1)   # fallback: last max
+      end = NR - 1                                            # drop trailing prompt
+      if (end - start + 1 > max) start = end - max + 1
+      for (i = start; i <= end; i++) print lines[i]
+    }' "$dump"
+  rm -f "$dump"
+}
+
+# assist::prefill_template — deterministic popup seed from CAP_*.
+assist::prefill_template() {
+  [[ "${CAP_KIND:-question}" == error ]] || { print -rn -- ""; return 0; }
+  print -rn -- "Diagnose and fix why \`${CAP_CMD}\` failed (exit ${CAP_EXIT}) in ${CAP_PROJECT:-this directory}"
+}
+
+# assist::build_request <user_request> <out_file> — Phase A request.json.
+assist::build_request() {
+  local user_request="$1" out="$2"
+  require_cmd jq
+  local root; root="$(git -C "${CAP_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || root="${CAP_DIR:-$PWD}"
+  jq -n \
+    --arg kind "${CAP_KIND:-question}" \
+    --arg session "${ZELLIJ_SESSION_NAME:-}" \
+    --arg pane "${ZELLIJ_PANE_ID:+terminal_$ZELLIJ_PANE_ID}" \
+    --arg atuin "${ATUIN_SESSION:-}" \
+    --arg cwd "${CAP_DIR:-$PWD}" \
+    --arg root "$root" \
+    --arg cmd "${CAP_CMD:-}" \
+    --arg exit "${CAP_EXIT:-}" \
+    --arg dur "${CAP_DURATION:-}" \
+    --arg scrollback "${CAP_SCROLLBACK:-}" \
+    --arg user "$user_request" \
+    --arg project "${CAP_PROJECT:-}" \
+    --arg branch "${CAP_BRANCH:-}" \
+    '{version:1, kind:$kind,
+      origin:{zellij_session:$session, pane_id:$pane, atuin_session:$atuin, cwd:$cwd, project_root:$root},
+      command:{text:$cmd, exit:($exit|tonumber? // null), duration_ms:$dur},
+      scrollback:$scrollback, user_request:$user,
+      project:{name:$project, branch:$branch}}' > "$out"
+}
+
 # ── Triage (Phase A stub) ──────────────────────────────────────────────────
 # Returns 0 = "escalate to the chosen harness". The real KB-aware classifier
 # lands in Phase D; until then every request escalates.
