@@ -214,21 +214,6 @@ keybinds clear-defaults=true {
             }
         }
 
-        // Ctrl+? (i.e. Ctrl+Shift+/) — summon ai-assist from the shell. Zellij
-        // folds Shift into the character, so the chord is named "Ctrl ?" (like
-        // Shift+h → "H"); binding "Ctrl Shift /" never matches (the key falls
-        // through to the pane as U+FFFF). zj-context-keys encodes the chord from
-        // `name` as the kitty CSI-u form (`?`=63, ctrl=5 → \e[63;5u) and writes it
-        // to the pane; the zsh ZLE widget bound to '\e[63;5u' (keybindings.sh)
-        // fires. Only when a shell is foreground, so it stays inert under an
-        // editor/agent. `kitty:$source` keeps the encoding in the plugin — never
-        // hand-escape \e here (invalid KDL escape; breaks config parsing).
-        bind "Ctrl ?" {
-            MessagePlugin "context-keys" {
-                name "ctrl+?"
-                payload "when zsh,bash,fish: kitty:$source"
-            }
-        }
 
         // Ctrl+Shift+u — Unicode / Nerd Font / Emoji glyph picker.
         // Spawns ~/.config/zellij/scripts/pick-glyph-zellij in a
