@@ -95,4 +95,36 @@ JSON
       The contents of file "$TEST_TMP/zj-args" should include "Diagnose why make failed"
     End
   End
+
+  Describe 'ai-assist-cursor'
+    SCRIPT() { echo "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_ai-assist-cursor"; }
+
+    It 'probe succeeds when cursor-agent is on PATH'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      printf '#!/bin/sh\n' > "$stubdir/cursor-agent"; chmod +x "$stubdir/cursor-agent"
+      export PATH="$stubdir:$PATH"
+      When run script "$(SCRIPT)" --probe
+      The status should be success
+      The output should include "Cursor Agent"
+    End
+
+    It 'spawns a docked pane running cursor-agent with the prompt'
+      export AI_ASSIST_CURSOR_BIN="cursor-agent"
+      When run script "$(SCRIPT)" --request "$TEST_TMP/req.json"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "cursor-agent --print"
+      The contents of file "$TEST_TMP/zj-args" should include "--trust"
+      The contents of file "$TEST_TMP/zj-args" should include "Diagnose why make failed"
+    End
+
+    It 'adds --model only when one is set'
+      export AI_ASSIST_CURSOR_BIN="cursor-agent"
+      export AI_ASSIST_MODEL="some-capable-model"
+      When run script "$(SCRIPT)" --request "$TEST_TMP/req.json"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "--model some-capable-model"
+    End
+  End
 End

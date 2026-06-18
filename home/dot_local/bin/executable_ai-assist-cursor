@@ -1,0 +1,28 @@
+#!/usr/bin/env zsh
+# ai-assist-cursor — terminal-assist harness backed by Cursor Agent (headless).
+# Launches `cursor-agent` in a docked pane to diagnose the request. Usable
+# standalone or behind the `ai-assist` dispatcher.
+set -eu -o pipefail
+
+: "${AI_ASSIST_CURSOR_BIN:=cursor-agent}"
+
+if [[ "${1:-}" == --probe ]]; then
+  command -v "$AI_ASSIST_CURSOR_BIN" >/dev/null 2>&1 || exit 1
+  print -r -- "Cursor Agent"
+  exit 0
+fi
+
+source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
+
+# Cursor picks its own capable default model; only override when asked.
+: "${ASSIST_MODEL:=${AI_ASSIST_MODEL:-}}"
+
+assist_build_cmd() {
+  ASSIST_PANE_CMD=(
+    "$AI_ASSIST_CURSOR_BIN" --print --output-format text --trust
+  )
+  [[ -n "$ASSIST_MODEL" ]] && ASSIST_PANE_CMD+=(--model "$ASSIST_MODEL")
+  ASSIST_PANE_CMD+=("$ASSIST_PROMPT")
+}
+
+assist::worker_main "Cursor Agent" assist_build_cmd "$@"
