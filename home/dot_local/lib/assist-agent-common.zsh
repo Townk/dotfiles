@@ -137,10 +137,11 @@ assist::spawn_pane() {
   "$zj" action new-pane --direction right --close-on-exit --name "ai-assist" \
     --cwd "${REQ_PROJECT_ROOT:-$PWD}" -- "$@"
   # zellij sizes only floating panes via --width; a tiled (--direction) pane opens
-  # at 50%. Shrink the new (focused) pane toward ~35% so the original pane stays
-  # the centerpiece. Best-effort: resize moves the shared border in fixed steps.
+  # at 50%. Shrink the new (focused) pane toward ~40% so the original pane stays
+  # the centerpiece. Best-effort: resize moves the shared border in fixed steps
+  # (~5%/step here — 2 steps ≈ 40%).
   local _n
-  for _n in 1 2 3; do "$zj" action resize decrease left 2>/dev/null || break; done
+  for _n in 1 2; do "$zj" action resize decrease left 2>/dev/null || break; done
 }
 
 # ── Context capture (Phase B) ──────────────────────────────────────────────
