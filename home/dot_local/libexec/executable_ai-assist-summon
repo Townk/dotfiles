@@ -1,0 +1,37 @@
+#!/usr/bin/env zsh
+# ai-assist-summon — interactive entry point behind the ai-assist trigger (the
+# Ctrl+Alt+A ZLE widget in dot_config/zsh/functions.d/widgets.sh).
+#
+# Runs as a NORMAL subprocess, deliberately NOT inside the ZLE/widget context:
+# sourcing assist-agent-common.zsh from within a ZLE widget triggers a parse
+# error in the live interactive shell, but it sources cleanly here. The widget
+# stays thin (just calls this, then `zle reset-prompt`).
+#
+# Flow: capture the last command + its scrollback → open the prefilled request
+# popup → build the request.json → hand off to the `ai-assist` dispatcher. The
+# shell env it needs (ATUIN_SESSION, ZELLIJ_PANE_ID, ZELLIJ_SESSION_NAME, PWD)
+# is inherited from the shell that invoked the widget.
+set -eu -o pipefail
+
+source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
+
+# This script's own dir, so we reach the sibling libexec helper by absolute path
+# (~/.local/libexec is not on PATH).
+LIBEXEC="${0:A:h}"
+
+assist::capture_command
+CAP_PROJECT="${${CAP_DIR:-$PWD}:t}"
+CAP_BRANCH="$(git -C "${CAP_DIR:-$PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [[ "${CAP_KIND:-}" == error ]]; then
+  CAP_SCROLLBACK="$(assist::capture_scrollback "$CAP_CMD")"
+fi
+
+# Open the popup; a cancel (exit 130) or empty submission means "do nothing".
+user_request="$("$LIBEXEC/ai-assist-popup" --prefill "$(assist::prefill_template)")" || exit 0
+[[ -n "$user_request" ]] || exit 0
+
+req="$(assist::session_dir)/request.json"
+mkdir -p "${req:h}"
+assist::build_request "$user_request" "$req"
+
+exec ai-assist --request "$req"
