@@ -220,7 +220,7 @@ keybinds clear-defaults=true {
         bind "Ctrl Shift /" {
             MessagePlugin "context-keys" {
                 name "ctrl+shift+/"
-                payload "when zsh,bash,fish: write \"\e[47;6u\""
+                payload "when zsh,bash,fish: kitty:$source"
             }
         }
 
