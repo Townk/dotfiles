@@ -1,0 +1,39 @@
+#!/usr/bin/env zsh
+# ai-assist-test — a no-agent harness for live-testing the docked pane (pager +
+# action-broker) without invoking a real agent. Instead of running an LLM, it
+# `cat`s a fixed markdown file, so the full path — popup → summon → request →
+# dispatcher → worker → ai-assist-render → action-broker → ai-assist-pager — is
+# exercised and you can try the copy/play buttons end-to-end, instantly.
+#
+# Usage:
+#   AI_ASSIST_HARNESS=test  then trigger the popup (Ctrl+Alt+A), type anything,
+#   press Enter. The docked pane shows the test markdown with working buttons.
+#   AI_ASSIST_TEST_MD=<path> overrides the markdown file.
+#
+# Hidden from normal harness selection: its --probe fails unless
+# AI_ASSIST_TEST_HARNESS is set, so it never shows up in the picker or as the
+# "sole available" harness during real use. Forcing AI_ASSIST_HARNESS=test
+# bypasses the probe and runs it.
+set -eu -o pipefail
+
+: "${AI_ASSIST_TEST_MD:=$HOME/.local/share/ai-assist/test-sample.md}"
+
+# Probe contract: only "available" when explicitly opted in, so real flows never
+# pick this by accident.
+if [[ "${1:-}" == --probe ]]; then
+  [[ -n "${AI_ASSIST_TEST_HARNESS:-}" ]] || exit 1
+  print -r -- "Test (no agent)"
+  exit 0
+fi
+
+source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
+
+[[ -r "$AI_ASSIST_TEST_MD" ]] || die "test markdown not found: $AI_ASSIST_TEST_MD"
+
+# The "harness command" is just a cat of the test markdown — render buffers it
+# (the spinner barely blinks), then hands it to the pager with the broker wired.
+assist_build_cmd() {
+  ASSIST_PANE_CMD=(cat -- "$AI_ASSIST_TEST_MD")
+}
+
+assist::worker_main "Test (no agent)" assist_build_cmd "$@"
