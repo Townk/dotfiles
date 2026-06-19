@@ -30,14 +30,14 @@ modal="$HOME/.config/zellij/scripts/zellij-modal"
 # height is fixed by --height (it never sizes to the pane height). The float pane
 # is sized in absolute rows to fit the chrome around the textarea: the widget's
 # title + rule (2) + its border (2) + its hint line (1) + the pane frame (2) = 7.
-input_height=8
-pane_height=$((input_height + 7))
+input_height=3
+pane_height=$((input_height + 7)) # = 10
 
 fifo="$(mktemp -u "${TMPDIR:-/tmp}/aiask-fifo.XXXXXX")"
 mkfifo -m 600 "$fifo"
 trap 'rm -f "$fifo"' EXIT INT TERM
 "${ZELLIJ_BIN:-zellij}" action new-pane --floating --close-on-exit \
-  --name "" --borderless false --pinned true --width 70% --height "$pane_height" --cwd "$PWD" \
+  --name "" --borderless false --pinned true --width 55 --height "$pane_height" --cwd "$PWD" \
   -- "$modal" --capture "$fifo" \
   -- "$input_bin" --value "$prefill" --height "$input_height" --title "ai-assist" >/dev/null
 result="$(cat "$fifo")"; rm -f "$fifo"
