@@ -261,10 +261,14 @@ assist::worker_main() {
   # AI_ASSIST_RENDER=0 to run the harness bare (raw output, for debugging).
   local render="$HOME/.local/libexec/ai-assist-render"
   if [[ "${AI_ASSIST_RENDER:-1}" == 1 && -x "$render" ]]; then
-    assist::spawn_pane "$render" --harness "$label" \
-      ${REQ_PANE_ID:+--origin-pane "$REQ_PANE_ID"} \
-      ${${(M)REQ_OVER_SSH:#true}:+--over-ssh} \
-      -- "${ASSIST_PANE_CMD[@]}"
+    # Build the render flags as an array: zsh does NOT word-split an unquoted
+    # ${VAR:+--flag "$VAR"}, so the inline form passed "--origin-pane <id>" as a
+    # SINGLE argument (which render then tried to exec). An array keeps the flag
+    # and its value as separate words.
+    local -a render_flags=()
+    [[ -n "$REQ_PANE_ID" ]] && render_flags+=(--origin-pane "$REQ_PANE_ID")
+    [[ "$REQ_OVER_SSH" == true ]] && render_flags+=(--over-ssh)
+    assist::spawn_pane "$render" --harness "$label" "${render_flags[@]}" -- "${ASSIST_PANE_CMD[@]}"
   else
     assist::spawn_pane "${ASSIST_PANE_CMD[@]}"
   fi

@@ -62,10 +62,13 @@ Describe 'ai-assist-render'
     chmod +x "$TEST_TMP/broker"
   }
 
-  It 'spawns the broker and passes --actions-fifo to the pager when --origin-pane is set'
+  It 'passes --actions-fifo=<path> as ONE token to the pager + spawns the broker when --origin-pane is set'
     fifo_pager() {
+      # Print each arg on its own line so the assertion can require the single
+      # "--actions-fifo=<path>" token — the buggy space form would split into a
+      # bare "--actions-fifo" line with no "=", and fail this check.
       { echo '#!/usr/bin/env zsh'
-        echo 'print -r -- "PAGER actions=$4"   # --harness X --actions-fifo <path> are $1-$4'
+        echo 'print -rl -- "$@"'
       } > "$TEST_TMP/pager"; chmod +x "$TEST_TMP/pager"
     }
     BeforeRun 'broker_stub' 'fifo_pager' \
@@ -74,7 +77,7 @@ Describe 'ai-assist-render'
       'export TEST_TMP="$TEST_TMP"'
     When run script "$SCRIPT" --harness X --origin-pane terminal_4 --over-ssh -- printf 'hi\n'
     The status should be success
-    The output should include "PAGER actions=/"
+    The output should include "--actions-fifo=/"
     The contents of file "$TEST_TMP/broker.log" should include "BROKER"
     The contents of file "$TEST_TMP/broker.log" should include "--origin-pane terminal_4"
     The contents of file "$TEST_TMP/broker.log" should include "--over-ssh"

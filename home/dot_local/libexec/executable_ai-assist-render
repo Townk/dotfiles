@@ -121,7 +121,10 @@ if [[ -z "$pager" ]]; then
   done
 fi
 if [[ -n "$pager" && -x "$pager" ]]; then
-  "$pager" --harness "$harness" ${fifo:+--actions-fifo "$fifo"} "$out"
+  # --actions-fifo=<path> as ONE token: zsh won't word-split an unquoted
+  # ${fifo:+--actions-fifo "$fifo"} (it would pass the flag+value as a single
+  # arg). The = form is a single Go-parseable token; empty $fifo → no arg.
+  "$pager" --harness "$harness" ${fifo:+--actions-fifo=$fifo} "$out"
 else
   theme="$HOME/.config/glow/catppuccin-mocha.json"
   # Feed glow via STDIN, not a file argument: `glow FILE` opens its pager (it

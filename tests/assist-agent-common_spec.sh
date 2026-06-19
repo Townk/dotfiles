@@ -239,7 +239,7 @@ JSON
   End
 
   Describe 'worker_main flag forwarding'
-    It 'forwards --origin-pane and --over-ssh to assist::spawn_pane via the real worker_main'
+    It 'forwards --origin-pane and its value as SEPARATE args via the real worker_main'
       worker_thread() {
         # 1. Write request fixture with pane_id and over_ssh=true.
         printf '{"version":1,"kind":"question","origin":{"pane_id":"terminal_9","over_ssh":true,"cwd":"%s","project_root":"%s","zellij_session":"","atuin_session":""},"command":{"text":"","exit":null,"duration_ms":""},"scrollback":"","user_request":"q","project":{"name":"","branch":""}}' \
@@ -250,21 +250,29 @@ JSON
         printf '#!/usr/bin/env zsh\n' > "$HOME/.local/libexec/ai-assist-render"
         chmod +x "$HOME/.local/libexec/ai-assist-render"
 
-        # 3. Stub assist::spawn_pane to capture argv — keeps the real call site
-        #    in worker_main intact while avoiding a live Zellij dependency.
-        assist::spawn_pane() { print -r -- "SPAWN $*" >> "$TEST_TMP/spawn.log"; }
+        # 3. Stub assist::spawn_pane to capture argv ONE-PER-LINE — so an exact
+        #    whole-line match below can tell a real two-arg "--origin-pane" /
+        #    "terminal_9" pair apart from a buggy single "--origin-pane terminal_9"
+        #    token (the zsh word-split trap). Keeps the real call site intact.
+        assist::spawn_pane() { print -rl -- "$@" >> "$TEST_TMP/spawn.log"; }
 
         # 4. Silence log_ok so ShellSpec sees no unexpected stdout.
         log_ok() { :; }
 
         # 5. Provide a trivial build_fn and call the REAL assist::worker_main.
         bf() { ASSIST_PANE_CMD=(true); }
-        AI_ASSIST_RENDER=1 assist::worker_main test bf --request "$TEST_TMP/req.json"
+        AI_ASSIST_RENDER=1 assist::worker_main test bf --request "$TEST_TMP/req.json" || return 2
+
+        # 6. Whole-line (-Fx) checks: a collapsed "--origin-pane terminal_9" token
+        #    would NOT match the exact patterns, so this fails on the word-split bug.
+        grep -Fxq -- '--origin-pane' "$TEST_TMP/spawn.log" || return 3
+        grep -Fxq -- 'terminal_9'    "$TEST_TMP/spawn.log" || return 4
+        grep -Fxq -- '--over-ssh'    "$TEST_TMP/spawn.log" || return 5
+        print -r -- OK
       }
       When call worker_thread
       The status should be success
-      The contents of file "$TEST_TMP/spawn.log" should include "--origin-pane terminal_9"
-      The contents of file "$TEST_TMP/spawn.log" should include "--over-ssh"
+      The output should equal "OK"
     End
   End
 End
