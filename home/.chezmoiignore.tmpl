@@ -81,6 +81,8 @@
 {{ if eq .profile "dev-shell" -}}
 {{/* Headless dev shells should not receive GUI terminal/app config or local
      inference services. */}}
+.config/espanso
+.config/espanso/**
 .config/ghostty
 .config/ghostty/**
 .config/hammerspoon

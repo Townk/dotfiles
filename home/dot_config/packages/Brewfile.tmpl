@@ -74,8 +74,8 @@ mas "TabBack for Safari", id: 1660506599
 # the Applications folder without going through the AppStore.
 
 # MacOS Improvements
-cask 'espanso'                      # Text expansion / snippets
 {{ if ne .profile "dev-shell" -}}
+cask 'espanso'                      # Text expansion / snippets
 cask 'hammerspoon'                  # Keybindings controller (Keyboard Maestro but better)
 {{- end }}
 
