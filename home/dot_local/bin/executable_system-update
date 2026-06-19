@@ -26,6 +26,8 @@ usage() {
   cat <<'EOF'
 Usage:
   system-update                    run a full update pass
+  system-update --keep-shell       run a full update pass, but don't exec zsh
+                                   at the end (for automated/unattended scripts)
   system-update -h | --help | help show this help
 
 Brings every externally-managed tool to its latest version and keeps the
@@ -52,22 +54,38 @@ block later steps unless explicitly fatal):
 On an interactive run this finishes by replacing the current shell with
 `exec zsh`, so the session picks up the updated environment; it also reminds
 you to run `exec zsh` in any other open sessions. Skipped on non-interactive
-runs and under chezmoi's bootstrap.
+runs, under chezmoi's bootstrap, and when --keep-shell is passed (so automated
+scripts can run the full update and keep going after it returns).
 EOF
 }
 
-case "${1:-}" in
-  -h | --help | help)
-    usage
-    exit 0
-    ;;
-  '') : ;;
-  *)
-    usage >&2
-    printf 'error: unknown argument: %s\n' "$1" >&2
-    exit 1
-    ;;
-esac
+# --keep-shell suppresses the closing `exec zsh` so the script returns to its
+# caller instead of replacing the process. Lets an automated/unattended script
+# run the full update and then keep going. Carried into the post-pull re-exec
+# (see reexec_args below) so it survives a mid-run hand-off to updated code.
+keep_shell=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h | --help | help)
+      usage
+      exit 0
+      ;;
+    --keep-shell)
+      keep_shell=1
+      ;;
+    *)
+      usage >&2
+      printf 'error: unknown argument: %s\n' "$1" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+# Args to forward when re-execing the freshly-applied script after a source
+# pull. Parsing above consumed "$@", so reconstruct the flags that must persist.
+reexec_args=()
+[[ "$keep_shell" -eq 1 ]] && reexec_args+=(--keep-shell)
 
 # Colors / logging come from the shared base (C_*, log_warn/die).
 source "$HOME/.local/lib/common.zsh"
@@ -136,13 +154,14 @@ update_pi_extensions() {
 # refresh until they re-exec.
 #
 # Guarded hard: NEVER exec when running under chezmoi's run_once bootstrap (we'd
-# replace the child process and hang the parent `chezmoi apply`), nor on a
-# non-interactive / non-TTY invocation (cron, CI, a pipe) where there is no
-# terminal to hand off to. In those cases just report success and return so the
-# caller continues normally.
+# replace the child process and hang the parent `chezmoi apply`), when the caller
+# passed --keep-shell (an automated script that needs to keep running after the
+# update returns), nor on a non-interactive / non-TTY invocation (cron, CI, a
+# pipe) where there is no terminal to hand off to. In those cases just report
+# success and return so the caller continues normally.
 finalize_session() {
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
-  if [[ "$running_under_chezmoi" -eq 1 || ! -t 0 || ! -t 1 ]]; then
+  if [[ "$running_under_chezmoi" -eq 1 || "$keep_shell" -eq 1 || ! -t 0 || ! -t 1 ]]; then
     return 0
   fi
   print -P -- "${C_YEL}↻ Run ${C_BWH}exec zsh${C_RES}${C_YEL} in your other open sessions on this machine to pick up the update.${C_RES}"
@@ -237,7 +256,7 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
       "$_pre_rev" != "$_post_rev" ]]; then
       print -P -- "\n♻️  Source advanced (${_pre_rev} → ${_post_rev}); re-running updated system-update...\n"
       export SYSTEM_UPDATE_REEXECED=1
-      exec "$HOME/.local/bin/system-update" "$@"
+      exec "$HOME/.local/bin/system-update" "${reexec_args[@]}"
     fi
   else
     log_warn "Failed to sync chezmoi source from origin (continuing)"
