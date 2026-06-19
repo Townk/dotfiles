@@ -1,0 +1,21 @@
+{{- if eq .profile "dev-shell" -}}
+#!/bin/sh
+set -eu
+
+# These paths are intentionally ignored on headless dev shells. Because ignored
+# targets are skipped by .chezmoiremove, prune stale copies explicitly.
+rm -rf -- \
+  "$HOME/.pi/agent-local" \
+  "$HOME/.config/espanso" \
+  "$HOME/.config/ghostty" \
+  "$HOME/.config/hammerspoon" \
+  "$HOME/.config/homebrew" \
+  "$HOME/.config/llama-swap" \
+  "$HOME/.config/wezterm" \
+  "$HOME/.local/libexec/local-llm-bench" \
+  "$HOME/.local/libexec/local-llm-gateway" \
+  "$HOME/.local/state/llama-swap" \
+  "$HOME/.local/state/local-llm" \
+  "$HOME/Library/LaunchAgents/com.system-service.llama-swap.plist" \
+  "$HOME/Library/LaunchAgents/com.system-service.local-llm-gateway.plist"
+{{- end }}

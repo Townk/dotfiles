@@ -55,31 +55,3 @@
 /.local/bin/ai-commit-cursor
 /.local/share/zsh/site-functions/_ai-commit-cursor
 {{- end }}
-
-# ── pi: no local agent home on headless dev shells ──────────────────────────
-# The local/32K Pi home is useful on human machines, but dev-shells should only
-# keep the primary ~/.pi/agent home.
-{{ if eq .profile "dev-shell" -}}
-/.pi/agent-local/**
-/.pi/agent-local
-/.config/espanso/**
-/.config/espanso
-/.config/ghostty/**
-/.config/ghostty
-/.config/hammerspoon/**
-/.config/hammerspoon
-/.config/homebrew/**
-/.config/homebrew
-/.config/wezterm/**
-/.config/wezterm
-/.config/llama-swap/**
-/.config/llama-swap
-/.local/libexec/local-llm-bench
-/.local/libexec/local-llm-gateway
-/.local/state/llama-swap/**
-/.local/state/llama-swap
-/.local/state/local-llm/**
-/.local/state/local-llm
-/Library/LaunchAgents/com.system-service.llama-swap.plist
-/Library/LaunchAgents/com.system-service.local-llm-gateway.plist
-{{- end }}
