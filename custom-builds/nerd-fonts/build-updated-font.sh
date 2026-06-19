@@ -46,10 +46,17 @@
 #      with the `nf-fa-*` curated set) and natural-language metadata
 #      (labels, search terms, aliases, Unicode names). Written to
 #      ~/.local/share/fonts/nerd-font/glyphs.json — handy for an fzf picker.
-#  10. Emit two self-contained Blink Shell CSS files (JetBrains Mono + each
-#      Symbols variant, base64-embedded) to ~/.local/share/fonts/blink:
-#      jetbrains-custom-nerd-fonts.css (Propo) and -mono.css (Mono). Serve
-#      them for import with serve-blink-fonts.sh.
+#  6c. Patch JetBrains Mono Regular ITSELF with the same merged-FA payload
+#      (single-cell) to produce a fully-embedded "JetBrainsMono Nerd Font Mono"
+#      — text + every icon in one self-contained TTF, for Blink Shell. It goes
+#      through steps 6b/7/7b like the Symbols Mono font and is installed too.
+#  10. Emit ONE self-contained Blink Shell CSS file to ~/.local/share/fonts/blink:
+#      jetbrains-mono-nerd-font.css — the embedded JetBrains Mono Nerd Font as
+#      the catch-all face, an iPad system-font fallback chain (local() +
+#      unicode-range, mirroring the WezTerm font_with_fallback config), and
+#      embedded Twemoji (COLRv0 colour vector) for emoji — split into two faces
+#      by hterm's terminal width so each emoji fills its reserved cell(s). Serve
+#      it for import with serve-blink-fonts.sh.
 #  11. Print the caveats below so you remember them next year.
 #
 # Overrides (export before running, or pass as `KEY=val ./build-updated-font.sh`):
@@ -75,17 +82,18 @@
 #   JSON_OUT_DIR     Where glyphs.json should land.
 #                    Default: ~/.local/share/fonts/nerd-font
 #                    Pass JSON_OUT_DIR="" to skip the JSON step entirely.
-#   BLINK_OUT_DIR    Where the self-contained Blink Shell CSS files land
-#                    (jetbrains-custom-nerd-fonts.css = Propo symbols,
-#                    jetbrains-custom-nerd-fonts-mono.css = Mono symbols).
-#                    Each embeds JetBrains Mono + one Symbols variant as
-#                    base64 data: URIs. Default: ~/.local/share/fonts/blink
+#   BLINK_OUT_DIR    Where the self-contained Blink Shell CSS file lands
+#                    (jetbrains-mono-nerd-font.css). It embeds the fully-patched
+#                    JetBrains Mono Nerd Font and references iPad system fonts by
+#                    name for fallback. Default: ~/.local/share/fonts/blink
 #                    Pass BLINK_OUT_DIR="" to skip the CSS step entirely.
-#                    Serve them for Blink import with ./serve-blink-fonts.sh.
-#   JETBRAINS_TTF    JetBrains Mono Regular TTF embedded as the text face in
-#                    the Blink CSS. Default: auto-detect (~/Library/Fonts ->
-#                    /Library/Fonts -> brew Caskroom font-jetbrains-mono ->
-#                    ~/.local/share/fonts). Override to pin a specific file.
+#                    Serve it for Blink import with ./serve-blink-fonts.sh.
+#   JETBRAINS_TTF    JetBrains Mono Regular TTF that is patched into the embedded
+#                    Blink font AND embedded as its text face. Default:
+#                    auto-detect (~/Library/Fonts -> /Library/Fonts -> brew
+#                    Caskroom font-jetbrains-mono -> ~/.local/share/fonts).
+#                    Override to pin a specific file/weight. If unfound, the
+#                    embedded JBM build and the Blink CSS are both skipped.
 #   ICON_FILL        Multiplier on the measured curated md/oct box that every
 #                    FA + custom icon is normalized to in step 7b. Default: 1.0
 #                    (match md/oct exactly; ≈0.83em in the Propo variant).
@@ -212,6 +220,69 @@ BLINK_OUT_DIR="${BLINK_OUT_DIR-${HOME}/.local/share/fonts/blink}"
 # JetBrains Mono Regular TTF embedded as the primary face in the Blink CSS.
 # Empty -> auto-detect (see emit_blink_css). Override to pin a specific file.
 JETBRAINS_TTF="${JETBRAINS_TTF:-}"
+# Colour emoji for the Blink CSS. The build embeds Twemoji (COLRv0 colour
+# VECTOR font — iOS WebKit renders COLRv0, and unlike Apple's sbix bitmap a
+# vector glyph is resizable). Every emoji is routed to it, split into two
+# @font-face by hterm's terminal width: WIDE emoji (hterm width-2) fill their
+# reserved 2 cells, the rest fit 1 cell. Twemoji advances every glyph at 1.0em,
+# JBM's cell is 0.6em, so 60% = one cell and 120% = two cells. Tune if your
+# terminal cell ratio differs (JBM advance/em = 600/1000).
+EMOJI_NARROW_ADJUST="${EMOJI_NARROW_ADJUST:-60}"   # width-1 emoji -> one cell
+EMOJI_WIDE_ADJUST="${EMOJI_WIDE_ADJUST:-120}"      # width-2 emoji -> two cells
+# Embedded colour-emoji font. Empty -> download Twemoji to WORK_ROOT/emoji and
+# cache it. Override TWEMOJI_TTF to pin a local COLRv0 font, or TWEMOJI_URL to
+# fetch a different one. Set TWEMOJI_TTF="" + unreachable URL to skip (emoji then
+# fall back to the system colour-emoji font via WebKit's last resort).
+TWEMOJI_TTF="${TWEMOJI_TTF:-}"
+TWEMOJI_URL="${TWEMOJI_URL:-https://github.com/mozilla/twemoji-colr/releases/download/v0.7.0/Twemoji.Mozilla.ttf}"
+
+# Resolve JetBrains Mono Regular for the embedded Blink font (and the patch
+# pass that produces it). Honours an explicit JETBRAINS_TTF, else probes the
+# usual install locations (cask -> system -> Linux). Leaves JETBRAINS_TTF empty
+# if nothing is found; callers warn and skip the embedded JBM build + CSS.
+resolve_jetbrains_ttf() {
+  [[ -n "${JETBRAINS_TTF}" && -f "${JETBRAINS_TTF}" ]] && return 0
+  local jb_candidates=(
+    "${HOME}/Library/Fonts/JetBrainsMono-Regular.ttf"
+    "/Library/Fonts/JetBrainsMono-Regular.ttf"
+    "${HOME}/.local/share/fonts/JetBrainsMono-Regular.ttf"
+  )
+  if command -v brew >/dev/null 2>&1; then
+    local brew_prefix cask_jb
+    brew_prefix=$(brew --prefix 2>/dev/null || true)
+    if [[ -n "${brew_prefix}" ]]; then
+      cask_jb=$( { \
+          ls -1 "${brew_prefix}/Caskroom/font-jetbrains-mono/"*"/fonts/ttf/JetBrainsMono-Regular.ttf" \
+                "${brew_prefix}/Caskroom/font-jetbrains-mono/"*"/JetBrainsMono-Regular.ttf" 2>/dev/null \
+          || true; } | sort -V | tail -n 1 || true )
+      [[ -n "${cask_jb}" ]] && jb_candidates+=("${cask_jb}")
+    fi
+  fi
+  local c
+  for c in "${jb_candidates[@]}"; do
+    [[ -f "${c}" ]] && { JETBRAINS_TTF="${c}"; return 0; }
+  done
+  return 0
+}
+
+# Resolve the embedded colour-emoji font. Honours an explicit TWEMOJI_TTF, else
+# uses the cached download, else fetches TWEMOJI_URL into WORK_ROOT/emoji. Leaves
+# TWEMOJI_TTF empty on failure; the CSS then omits the embedded emoji faces.
+resolve_twemoji() {
+  [[ -n "${TWEMOJI_TTF}" && -f "${TWEMOJI_TTF}" ]] && return 0
+  local cache="${WORK_ROOT}/emoji/Twemoji.Mozilla.ttf"
+  if [[ -f "${cache}" ]]; then TWEMOJI_TTF="${cache}"; return 0; fi
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl not found; cannot fetch Twemoji colour-emoji font."; return 1
+  fi
+  mkdir -p "$(dirname "${cache}")"
+  info "downloading Twemoji colour-emoji font (COLRv0) ..."
+  if curl -fL --progress-bar -o "${cache}" "${TWEMOJI_URL}"; then
+    TWEMOJI_TTF="${cache}"; info "Twemoji -> ${cache}"; return 0
+  fi
+  warn "Twemoji download failed (${TWEMOJI_URL}); emoji fall back to the system font."
+  rm -f "${cache}"; return 1
+}
 
 mkdir -p "${WORK_ROOT}" "${WORK_DIR}" "${OUT_DIR}"
 
@@ -691,15 +762,25 @@ def main(argv):
         for cp in sorted(free_cps):
             if cp not in present:
                 continue
-            if cp in occ:
+            # Relocate any free icon that would otherwise land on top of a real
+            # glyph when this merged FA is patched onto a font:
+            #   * cp in occ  -> collides with a curated Nerd Fonts glyph.
+            #   * non-PUA cp -> Font Awesome 7 places some free icons at ASCII /
+            #     text positions (fa-0..9 at U+0030.., fa-a..z at U+0041.., plus
+            #     fa-equals/plus/at/asterisk/... at their ASCII codepoints).
+            #     Harmless in the Symbols-Only font (no text there), but when
+            #     patched onto JetBrains Mono they would clobber its real '=',
+            #     digits and A-Z, and the icon-sizing step (7b) would then
+            #     mis-scale those text glyphs. Relocate them to Plane-16 too.
+            is_pua = (0xE000 <= cp <= 0xF8FF) or (0xF0000 <= cp <= 0xFFFFD) \
+                or (0x100000 <= cp <= 0x10FFFD)
+            if cp in occ or not is_pua:
                 # Deterministic, update-stable slot: native + reserved_start.
-                # FA's colliding free natives all sit in the BMP PUA
-                # (0xE000..0xF8FF), so this lands in 0x10E000..0x10F8FF: well
-                # inside Plane-16 and clear of the custom block above it. The
-                # slot is a pure function of the icon's own native codepoint,
-                # so it does NOT depend on which *other* icons collide — a
-                # given icon keeps the same codepoint across FA / nerd-fonts
-                # updates (unlike a running counter, which reshuffles).
+                # Colliding free natives sit in the BMP PUA (0xE000..0xF8FF) ->
+                # 0x10E000..0x10F8FF; the non-PUA (ASCII) ones land in
+                # 0x100021..0x10005A. Both are well inside Plane-16 and clear of
+                # the custom block above. The slot is a pure function of the
+                # icon's own native codepoint, so it stays stable across updates.
                 new_cp = reserved_start + cp
                 if new_cp > 0x10FFFD:
                     sys.stderr.write("  skip relocate U+%X: lands outside Plane-16\n" % cp)
@@ -713,11 +794,22 @@ def main(argv):
                     dest[new_cp].glyphname = "farelo_%05x" % new_cp
                 except Exception:
                     pass
+                if not is_pua:
+                    # The original sits at a TEXT codepoint, so remove it: unlike
+                    # a curated collision (where the patcher's careful mode skips
+                    # the original because the curated glyph occupies that slot),
+                    # the Symbols-Only font has nothing at ASCII, so a leftover
+                    # original would be added there as a stray icon (and claim
+                    # the codepoint in any fallback chain). Drop it entirely.
+                    try:
+                        dest.removeGlyph(dest[cp])
+                    except Exception:
+                        pass
                 relocations["%04x" % cp] = "%04x" % new_cp
                 fa_cps.append(new_cp)
             else:
                 fa_cps.append(cp)
-        print("  relocated %d colliding free FA icons (stable: native+U+%X) (%d kept at native)"
+        print("  relocated %d free FA icons off curated/text codepoints (stable: native+U+%X) (%d kept at native)"
               % (len(relocations), reserved_start, len(fa_cps) - len(relocations)))
 
     # -- Import local custom SVG icons (Plane-16 PUA) --
@@ -816,9 +908,14 @@ done_ "merged FA -> ${FA_MERGED}"
 # ===========================================================================
 log "step 6/8  patch Symbols-Only SFD (Mono + Propo variants)"
 
+# run_patcher <label> <input-font> [extra patcher flags...]
+# Patches <input-font> with the merged FA payload. <input-font> is the blank
+# Symbols SFD for the Symbols-Only variants, or JetBrains Mono Regular for the
+# fully-embedded Blink font. --careful never overwrites glyphs the input font
+# already has (matters for JBM's own text glyphs).
 run_patcher() {
-  local label="$1"; shift
-  log "  -> [${label}] $*"
+  local label="$1" srcfont="$2"; shift 2
+  log "  -> [${label}] $* $(basename "${srcfont}")"
   ( cd "${REPO_DIR}" && \
     "${FONTFORGE_BIN}" -quiet -script "${PATCHER}" \
       --debug 1 \
@@ -829,18 +926,46 @@ run_patcher() {
       --ext ttf \
       --outputdir "${OUT_DIR}" \
       "$@" \
-      "${BLANK_SFD}" \
+      "${srcfont}" \
   ) 2>&1 | tee -a "${LOG_FILE}" | grep -E '===>|WARNING:|ERROR' || true
 }
 
-run_patcher "Mono"  --single-width-glyphs
-run_patcher "Propo" --variable-width-glyphs
+run_patcher "Mono"  "${BLANK_SFD}" --single-width-glyphs
+run_patcher "Propo" "${BLANK_SFD}" --variable-width-glyphs
 
 BUILT=()
 shopt -s nullglob
 for f in "${OUT_DIR}"/Symbols*.ttf; do BUILT+=("$f"); done
 shopt -u nullglob
 [[ ${#BUILT[@]} -ge 2 ]] || die "expected 2 output TTFs in ${OUT_DIR}"
+
+# --- Fully-embedded JetBrains Mono Nerd Font (single-cell) for Blink Shell ---
+# Patch JetBrains Mono Regular ITSELF with the same merged-FA payload, so one
+# self-contained font carries text + every icon, each added glyph forced into
+# JBM's single cell (--single-width-glyphs = "inside the JBM bounding box").
+# This is what Blink imports; it removes the need for a CSS-level icon fallback.
+# Appended to BUILT so it flows through the same donor-import (6b), emoji-strip
+# (7) and icon-sizing (7b) steps as the Symbols Mono font, and is picked up by
+# --install. glyphs.json (step 9) stays scoped to Symbols*.ttf, so JBM's text
+# glyphs never enter the picker index.
+resolve_jetbrains_ttf
+JBM_TTF=""
+if [[ -n "${JETBRAINS_TTF}" && -f "${JETBRAINS_TTF}" ]]; then
+  info "embedding JetBrains Mono: ${JETBRAINS_TTF}"
+  run_patcher "JetBrainsMono" "${JETBRAINS_TTF}" --single-width-glyphs
+  shopt -s nullglob
+  for f in "${OUT_DIR}"/JetBrains*.ttf; do JBM_TTF="$f"; done
+  shopt -u nullglob
+  if [[ -n "${JBM_TTF}" ]]; then
+    BUILT+=("${JBM_TTF}")
+  else
+    warn "JetBrains Mono patch produced no output; Blink CSS will be skipped."
+  fi
+else
+  warn "JetBrains Mono Regular not found; skipping embedded JBM build + Blink CSS.
+   Install the 'font-jetbrains-mono' cask or set JETBRAINS_TTF=/path/to/JetBrainsMono-Regular.ttf"
+fi
+
 done_ "built ${#BUILT[@]} variants:"
 for f in "${BUILT[@]}"; do
   info "  $(stat -f '%z' "$f" 2>/dev/null || stat -c '%s' "$f") bytes  $(basename "$f")"
@@ -982,7 +1107,8 @@ import re
 import sys
 from pathlib import Path
 
-from fontTools.misc.transform import Identity
+from fontTools.misc.transform import Identity, Transform
+from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.cu2quPen import Cu2QuPen
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.pens.transformPen import TransformPen
@@ -1161,25 +1287,79 @@ def unique_glyph_name(order: set[str], cp: int) -> str:
     return name
 
 
-def draw_donor_glyph(donor: TTFont, donor_gname: str, scale: float):
+def draw_donor_glyph(donor: TTFont, donor_gname: str, transform, max_err: float):
     donor_set = donor.getGlyphSet()
     rec = DecomposingRecordingPen(donor_set)
     donor_set[donor_gname].draw(rec)
 
     tt_pen = TTGlyphPen(None)
-    cu2qu_pen = Cu2QuPen(tt_pen, max_err=max(1.0, scale))
-    rec.replay(TransformPen(cu2qu_pen, Identity.scale(scale)))
+    cu2qu_pen = Cu2QuPen(tt_pen, max_err=max_err)
+    rec.replay(TransformPen(cu2qu_pen, transform))
     return tt_pen.glyph()
 
 
-def import_one(dest: TTFont, donor: TTFont, donor_cmap: dict[int, str], cp: int) -> str:
+# Symbols for Legacy Computing (U+1FB00-1FBFF): cell-fraction block/box glyphs
+# (sextants, eighth/quadrant blocks, shades, ...) that must tile the character
+# cell exactly. Donor fonts draw them on their OWN cell, so for a monospace text
+# font they must be remapped onto its cell and given its advance, or they leave
+# gaps / overlap. We only do this for the embedded mono text font (see main()).
+LEGACY_LO, LEGACY_HI = 0x1FB00, 0x1FBFF
+
+
+def glyphset_bounds(font: TTFont, gname: str):
+    """(xMin,yMin,xMax,yMax) of a glyph's outline (any outline format), or None."""
+    try:
+        gs = font.getGlyphSet()
+        pen = BoundsPen(gs)
+        gs[gname].draw(pen)
+        return pen.bounds
+    except Exception:
+        return None
+
+
+def target_cell(font: TTFont):
+    """The monospace cell rect (x0,y0,x1,y1) from the font's FULL BLOCK U+2588:
+    x 0..advance, y blockYMin..blockYMax. None if U+2588 is absent."""
+    gname = (font.getBestCmap() or {}).get(0x2588)
+    if not gname:
+        return None
+    bb = glyphset_bounds(font, gname)
+    if not bb:
+        return None
+    adv = font["hmtx"].metrics.get(gname, (0, 0))[0]
+    if adv <= 0:
+        return None
+    return (0.0, float(bb[1]), float(adv), float(bb[3]))
+
+
+def donor_block_cell(donor: TTFont, donor_cmap: dict[int, str]):
+    """The donor's design cell for the legacy-computing block, from the union of
+    its U+1FB00-1FBFF glyphs: x 0..max(xMax) (full-width blocks reach the right
+    edge), y min(yMin)..max(yMax) (the set spans the whole cell). None if empty."""
+    xmax = ymin = ymax = None
+    for cp in range(LEGACY_LO, LEGACY_HI + 1):
+        gname = donor_cmap.get(cp)
+        if not gname:
+            continue
+        bb = glyphset_bounds(donor, gname)
+        if not bb:
+            continue
+        xmax = bb[2] if xmax is None else max(xmax, bb[2])
+        ymin = bb[1] if ymin is None else min(ymin, bb[1])
+        ymax = bb[3] if ymax is None else max(ymax, bb[3])
+    if xmax is None or xmax <= 0 or ymax <= ymin:
+        return None
+    return (0.0, float(ymin), float(xmax), float(ymax))
+
+
+def import_one(dest: TTFont, donor: TTFont, donor_cmap: dict[int, str], cp: int,
+               cell=None) -> str:
     if "glyf" not in dest:
         raise SystemExit("destination font is not TrueType/glyf-based")
 
     donor_gname = donor_cmap[cp]
     dest_upm = dest["head"].unitsPerEm
     donor_upm = donor["head"].unitsPerEm
-    scale = dest_upm / donor_upm
 
     order = dest.getGlyphOrder()
     order_set = set(order)
@@ -1187,12 +1367,26 @@ def import_one(dest: TTFont, donor: TTFont, donor_cmap: dict[int, str], cp: int)
     order.append(new_name)
     dest.setGlyphOrder(order)
 
-    glyph = draw_donor_glyph(donor, donor_gname, scale)
-    dest["glyf"][new_name] = glyph
-
-    advance, lsb = donor["hmtx"].metrics.get(donor_gname, (donor_upm, 0))
-    dest["hmtx"].metrics[new_name] = (int(round(advance * scale)),
-                                       int(round(lsb * scale)))
+    if cell is not None:
+        # Cell-normalize: affine-map the donor's block cell onto the target cell
+        # so the glyph tiles, and override the advance to the target cell width.
+        (dx0, dy0, dx1, dy1), (tx0, ty0, tx1, ty1) = cell
+        sx = (tx1 - tx0) / (dx1 - dx0)
+        sy = (ty1 - ty0) / (dy1 - dy0)
+        xform = Transform(sx, 0, 0, sy, tx0 - dx0 * sx, ty0 - dy0 * sy)
+        glyph = draw_donor_glyph(donor, donor_gname, xform, max(1.0, sx, sy))
+        dest["glyf"][new_name] = glyph
+        glyph.recalcBounds(dest["glyf"])
+        dest["hmtx"].metrics[new_name] = (int(round(tx1 - tx0)),
+                                          int(getattr(glyph, "xMin", 0)))
+    else:
+        scale = dest_upm / donor_upm
+        glyph = draw_donor_glyph(donor, donor_gname, Identity.scale(scale),
+                                 max(1.0, scale))
+        dest["glyf"][new_name] = glyph
+        advance, lsb = donor["hmtx"].metrics.get(donor_gname, (donor_upm, 0))
+        dest["hmtx"].metrics[new_name] = (int(round(advance * scale)),
+                                          int(round(lsb * scale)))
 
     for table in dest["cmap"].tables:
         if cmap_accepts_cp(table, cp):
@@ -1239,19 +1433,31 @@ def main(argv: list[str]) -> int:
     for dest_path in built_paths:
         dest = TTFont(dest_path)
         present = set(dest.getBestCmap() or {})
+        # Cell-normalize the legacy-computing block ONLY for the embedded mono
+        # text font (JetBrainsMono*): it renders directly as terminal text, so
+        # its block glyphs must tile the cell. The Symbols-Only fonts are used as
+        # resize-on-render fallbacks, so they keep the donor glyphs verbatim.
+        tcell = target_cell(dest) if os.path.basename(dest_path).startswith("JetBrains") else None
+        norm = 0
         imported = 0
         already = 0
         for _family, _path, donor, cmap, covered in donors:
+            dcell = donor_block_cell(donor, cmap) if tcell is not None else None
             for cp in covered:
                 if cp in present:
                     already += 1
                     continue
-                import_one(dest, donor, cmap, cp)
+                cell = None
+                if tcell is not None and dcell is not None and LEGACY_LO <= cp <= LEGACY_HI:
+                    cell = (dcell, tcell)
+                    norm += 1
+                import_one(dest, donor, cmap, cp, cell=cell)
                 present.add(cp)
                 imported += 1
         dest.save(dest_path)
-        print("  %s: imported %d glyph(s), skipped %d already present" %
-              (os.path.basename(dest_path), imported, already))
+        print("  %s: imported %d glyph(s), skipped %d already present%s" %
+              (os.path.basename(dest_path), imported, already,
+               (" (%d legacy-computing cell-normalized)" % norm) if norm else ""))
 
     if unresolved:
         print("  unresolved donor glyph(s): " +
@@ -1378,6 +1584,7 @@ if EXPLICIT_KEEP:
 for path in sys.argv[2:]:
     font = TTFont(path)
     removed_in_file = 0
+    removed_cps = set()
     for table in font["cmap"].tables:
         # `table.cmap` is a dict {codepoint: glyph_name}. Mutating it
         # while iterating is unsafe; collect first, delete second.
@@ -1385,7 +1592,14 @@ for path in sys.argv[2:]:
         for cp in victims:
             del table.cmap[cp]
         removed_in_file += len(victims)
+        removed_cps.update(victims)
     font.save(path)
+    # Sidecar: the exact set removed from THIS font, so the Blink CSS step can
+    # route precisely these codepoints to Apple Color Emoji. One source of
+    # truth — the CSS unicode-range can never drift from what the font lost.
+    with open(path + ".emoji-stripped.txt", "w", encoding="utf-8") as fh:
+        for cp in sorted(removed_cps):
+            fh.write("U+%04X\n" % cp)
     print("  stripped %5d codepoints from %s" % (removed_in_file, path.rsplit('/', 1)[-1]))
     removed_total += removed_in_file
 
@@ -1603,6 +1817,100 @@ PYEOF
   done_ "icons normalized to md/oct box (fill x${ICON_FILL}, dy ${ICON_DY}em, custom_dy ${CUSTOM_DY}em)"
 else
   warn "skipped: needs fonttools venv + fa-map.json -> FA glyphs left at full size"
+fi
+
+# ===========================================================================
+# Step 7c — Bleed block + legacy-computing glyphs past the cell edges.
+# ===========================================================================
+# JetBrains Mono bleeds its BOX-DRAWING glyphs (U+2500-257F) ~100 units past the
+# cell top/bottom so they tile seamlessly, but its BLOCK ELEMENTS (U+2580-259F)
+# stop exactly at the cell box. A renderer that rounds the cell a hair taller
+# (Blink/hterm) then leaves a 1px seam at the top/bottom of those exact-edge
+# blocks (▌ ▋ ▂, and the imported legacy-computing blocks 🮂 ...). This gives the
+# block + legacy-computing glyphs the SAME overshoot JBM already uses for box
+# drawing, but only on points sitting on the cell boundary (interior points like
+# a half-block's mid-line are untouched, so the fill fraction is preserved).
+# Embedded mono font only — the Symbols variants are resize-on-render fallbacks.
+log "step 7c/9 bleed block + legacy-computing glyphs past the cell edges"
+
+JBM_MONO=""
+for f in "${BUILT[@]}"; do
+  case "$(basename "$f")" in JetBrains*) JBM_MONO="$f" ;; esac
+done
+
+if [[ -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" && -n "${JBM_MONO}" ]]; then
+  BLEED_PY="${WORK_DIR}/_bleed_blocks.py"
+  cat >"${BLEED_PY}" <<'PYEOF'
+"""Bleed block-element + legacy-computing glyphs past the cell top/bottom so they
+tile without a 1px seam (see step 7c).
+
+The cell box is taken from the FULL BLOCK U+2588 (yMin..yMax). The overshoot is
+taken from JetBrains Mono's own box-drawing bleed (the vertical line U+2502
+extends past the cell by this much), so we match the font's existing design
+exactly. Only points sitting ON the cell top/bottom edge are moved; interior
+points are untouched, so each glyph keeps its fill fraction.
+"""
+import sys
+from fontTools.ttLib import TTFont
+
+EPS = 4
+# Block Elements + Symbols for Legacy Computing. Box Drawing (2500-257F) already
+# bleeds and is the reference, so it is intentionally NOT included here.
+RANGES = [(0x2580, 0x259F), (0x1FB00, 0x1FBFF)]
+
+def main(path):
+    f = TTFont(path)
+    cmap = f.getBestCmap()
+    glyf = f["glyf"]
+
+    fb = cmap.get(0x2588)
+    if not fb:
+        print("  no U+2588 full block; skipping"); return 0
+    fbg = glyf[fb]; fbg.recalcBounds(glyf)
+    cell_top, cell_bot = fbg.yMax, fbg.yMin
+
+    over_top = over_bot = 100
+    vl = cmap.get(0x2502)
+    if vl:
+        vlg = glyf[vl]; vlg.recalcBounds(glyf)
+        over_top = max(0, vlg.yMax - cell_top)
+        over_bot = max(0, cell_bot - vlg.yMin)
+    if over_top == 0 and over_bot == 0:
+        over_top = over_bot = 100
+
+    top_to, bot_to = cell_top + over_top, cell_bot - over_bot
+    changed = 0
+    for cp in (c for lo, hi in RANGES for c in range(lo, hi + 1)):
+        gn = cmap.get(cp)
+        if not gn:
+            continue
+        g = glyf[gn]
+        if getattr(g, "numberOfContours", 0) <= 0:
+            continue
+        coords = g.coordinates
+        moved = False
+        for i in range(len(coords)):
+            x, y = coords[i]
+            if abs(y - cell_top) <= EPS:
+                coords[i] = (x, top_to); moved = True
+            elif abs(y - cell_bot) <= EPS:
+                coords[i] = (x, bot_to); moved = True
+        if moved:
+            g.recalcBounds(glyf)
+            changed += 1
+    f.save(path)
+    print("  bled %d block/legacy glyphs (cell %d..%d, overshoot +%d/-%d -> %d..%d)"
+          % (changed, cell_bot, cell_top, over_top, over_bot, bot_to, top_to))
+    return 0
+
+sys.exit(main(sys.argv[1]))
+PYEOF
+  "${PY_VENV_BIN}" "${BLEED_PY}" "${JBM_MONO}" 2>&1 | tee -a "${LOG_FILE}"
+  done_ "block + legacy-computing glyphs bled past the cell edges"
+elif [[ -z "${JBM_MONO}" ]]; then
+  info "skipped: no embedded JBM mono font built."
+else
+  warn "skipped: block bleed needs the fonttools venv."
 fi
 
 # ===========================================================================
@@ -2080,126 +2388,249 @@ fi
 # Step 10 — Emit Blink Shell CSS (self-contained, base64-embedded).
 # ===========================================================================
 # Blink Shell imports a font as a single CSS file containing @font-face rules.
-# We emit TWO variants, each embedding JetBrains Mono (text) plus one Symbols
-# Nerd Font variant (icons) as base64 data: URIs, so the file is fully
-# self-contained — nothing external to break on import. Both faces share the
-# family name "JetBrainsMono NF"; WebKit resolves per-character, falling back
-# to the Symbols face for the PUA / icon codepoints in unicode-range.
+# We emit ONE file, jetbrains-mono-nerd-font.css, embedding the fully-embedded
+# JetBrains Mono Nerd Font (text + icons, single-cell) as the catch-all face,
+# then a controlled fallback chain of iPad system fonts referenced by local()
+# (NOT embedded — no licensing issue) and scoped by unicode-range. This mirrors
+# the user's WezTerm font_with_fallback config.
 #
-#   jetbrains-custom-nerd-fonts.css       -> Propo (variable-width) symbols
-#   jetbrains-custom-nerd-fonts-mono.css  -> Mono  symbols
+# Why this shape: Blink sets the terminal font to `font-family: "<name>", Menlo`
+# — only Menlo is appended, no broad system stack — so the whole fallback chain
+# must live inside this one family as extra @font-face rules. Per CSS, the LAST
+# matching face wins, so the embedded catch-all is declared FIRST and each
+# higher-priority fallback later; emoji is declared last so it wins its range.
 #
-# In Blink, import each file under the name "JetBrainsMono NF".
+# Emoji: embedded Twemoji (COLRv0 colour VECTOR — iOS WebKit renders COLRv0, and
+# a vector glyph is resizable, unlike Apple's sbix bitmap). hterm decides how
+# many columns a glyph occupies from its own width table (font-independent), so
+# the emoji are split into two faces — hterm-wide -> size-adjust to 2 cells,
+# the rest -> 1 cell — to fill exactly what hterm reserves.
+#
+#   jetbrains-mono-nerd-font.css  -> save in Blink as "JetBrainsMono NF"
 log "step 10  emit Blink Shell CSS"
 
 emit_blink_css() {
-  # emit_blink_css <symbols-ttf> <output-css> <family-name>
-  # Streams base64 straight into the file (no multi-MB shell variables).
+  # emit_blink_css <jbm-ttf> <output-css> <family-name> <twemoji-ttf> \
+  #                <emoji-wide-range> <emoji-narrow-range> \
+  #                <wide-size-adjust%> <narrow-size-adjust%>
   #
-  # <family-name> MUST be unique per file: Blink ties the name you save a font
-  # under to its font-family, so two imported fonts cannot share one family
-  # name — if they do, the second import's @font-face rules (including the icon
-  # fallback face) fail to bind and its glyphs render blank. Hence the Mono and
-  # Propo variants use distinct family names.
-  local sym_ttf="$1" out="$2" family="$3"
+  # Emits ONE self-contained Blink font: the fully-embedded JetBrains Mono Nerd
+  # Font (text + icons) as the catch-all face, then an iPad system-font fallback
+  # chain via local() + unicode-range. The catch-all is declared FIRST and each
+  # higher-priority fallback later, because the LAST matching face wins; emoji is
+  # last so it wins its range. Each local() face is unicode-range-scoped to
+  # scripts the embedded font lacks, so it can't override Latin/icons. Blink
+  # auto-appends Menlo as the final broad-text fallback, so it isn't listed here.
+  #
+  # Emoji are EMBEDDED (Twemoji COLRv0 colour vector), split into TWO faces by
+  # hterm's terminal width: hterm reserves 2 columns for "wide" emoji and 1 for
+  # the rest, independent of the font. Each face is size-adjusted so the glyph
+  # fills exactly the cells hterm reserves (wide -> 2 cells, narrow -> 1 cell),
+  # so nothing bleeds or leaves a gap. Twemoji is base64'd into each face.
+  local jbm_ttf="$1" out="$2" family="$3" twemoji_ttf="$4"
+  local emoji_wide="$5" emoji_narrow="$6" wide_adjust="$7" narrow_adjust="$8"
   {
-    # NB: heredocs below are UNQUOTED so ${family} interpolates. The CSS body
-    # contains no other $, backtick, or backslash, so nothing else expands.
+    # NB: heredocs are UNQUOTED so ${family}/${emoji_range} interpolate. The CSS
+    # body contains no other $, backtick, or backslash, so nothing else expands.
     cat <<CSS_HEAD
-/* Blink Shell self-contained font: JetBrains Mono + Symbols Nerd Font fallback.
-   Fonts are embedded as base64 data: URIs so there are NO external file
-   references to break on import. Save this font in Blink under the EXACT name:
+/* Blink Shell self-contained font: fully-embedded JetBrains Mono Nerd Font
+   (text + all icons, single-cell) plus an iPad system-font fallback chain.
+   The embedded face is base64 so there are NO external references. Save this
+   font in Blink under the EXACT name:
        ${family}
-   Blink ties the saved name to the font-family below; each imported font needs
-   a unique name, which is why the Mono and Propo variants differ.
    Generated by custom-builds/nerd-fonts/build-updated-font.sh. */
 
-/* Primary: JetBrains Mono covers all normal text (no unicode-range). */
+/* Catch-all: the embedded JetBrains Mono Nerd Font covers text, every Nerd-Font
+   icon, and the imported donor Unicode symbols. No unicode-range = default. */
 @font-face {
   font-family: "${family}";
   font-style: normal;
   font-weight: normal;
 CSS_HEAD
-    # The base64 payload MUST sit on the same line as "base64," — a newline
-    # in the middle of an unquoted url() token can break CSS parsing. So the
-    # url( prefix is printf'd WITHOUT a trailing newline, the payload is
-    # appended (tr strips base64's own newlines), and the next heredoc opens
-    # with ");" to close the token on that same line.
+    # The base64 payload MUST sit on the same line as "base64," — a newline in
+    # the middle of an unquoted url() token can break CSS parsing. So the url(
+    # prefix is printf'd WITHOUT a trailing newline, the payload is appended (tr
+    # strips base64's own newlines), and the next heredoc closes the token.
     printf '  src: url(data:font/ttf;charset=utf-8;base64,'
-    base64 < "${JETBRAINS_TTF}" | tr -d '\n'
-    cat <<CSS_MID
+    base64 < "${jbm_ttf}" | tr -d '\n'
+    cat <<CSS_FILLERS
 ) format("truetype");
 }
 
-/* Fallback: Symbols Nerd Font icon glyphs. Declared last so it wins for any
-   codepoint in these ranges (Private Use Areas + the few non-PUA symbols
-   Nerd Fonts place in standard Unicode blocks). */
+/* Fallback chain (iPad system fonts, not embedded). Declared low- to
+   high-priority because the LAST matching face wins. */
+
+/* Japanese kana extras. */
 @font-face {
   font-family: "${family}";
-  font-style: normal;
-  font-weight: normal;
-CSS_MID
-    printf '  src: url(data:font/ttf;charset=utf-8;base64,'
-    base64 < "${sym_ttf}" | tr -d '\n'
-    cat <<'CSS_TAIL'
-) format("truetype");
-  unicode-range:
-    U+23FB-23FE,   /* IEC power symbols */
-    U+2665,        /* Octicons heart */
-    U+26A1,        /* Octicons zap */
-    U+2B58,        /* IEC power on/off */
-    U+E000-F8FF,   /* BMP Private Use Area (Powerline, Devicons, FA, etc.) */
-    U+F0000-FFFFD, /* Plane 15 PUA-A (Material Design Icons, newer glyphs) */
-    U+100000-10FFFD; /* Plane 16 PUA-B */
+  src: local("Hiragino Sans");
+  unicode-range: U+3040-30FF, U+31F0-31FF, U+FF65-FF9F;
 }
-CSS_TAIL
+
+/* Unified Canadian Aboriginal Syllabics. */
+@font-face {
+  font-family: "${family}";
+  src: local("Euphemia UCAS");
+  unicode-range: U+1400-167F, U+18B0-18FF;
+}
+
+/* CJK: Han, Bopomofo, radicals, CJK symbols/punctuation. */
+@font-face {
+  font-family: "${family}";
+  src: local("PingFang SC");
+  unicode-range: U+2E80-2EFF, U+2F00-2FDF, U+3000-303F, U+3100-312F,
+    U+31A0-31BF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF;
+}
+
+/* Technical / runic / misc symbols the embedded font does not carry.
+   Conservative range on purpose: too broad and Apple Symbols would steal
+   curated Nerd-Font / donor symbols from the embedded face (last-wins). */
+@font-face {
+  font-family: "${family}";
+  src: local("Apple Symbols");
+  unicode-range: U+16A0-16FF, U+2900-297F, U+2B00-2BFF;
+}
+CSS_FILLERS
+    # Emoji: embedded Twemoji, declared LAST so the two faces win their ranges.
+    # Each base64's the same font; size-adjust scales the COLRv0 vector glyph to
+    # fill its hterm cells. Skipped if Twemoji is unavailable (emoji then fall to
+    # the system colour font via WebKit's last resort).
+    if [[ -f "${twemoji_ttf}" && -n "${emoji_wide}" ]]; then
+      cat <<CSS_TW_WIDE_HEAD
+
+/* Colour emoji, hterm width-2: fill the reserved 2 cells. */
+@font-face {
+  font-family: "${family}";
+  size-adjust: ${wide_adjust}%;
+CSS_TW_WIDE_HEAD
+      printf '  src: url(data:font/ttf;charset=utf-8;base64,'
+      base64 < "${twemoji_ttf}" | tr -d '\n'
+      cat <<CSS_TW_WIDE_TAIL
+) format("truetype");
+  unicode-range: ${emoji_wide};
+}
+CSS_TW_WIDE_TAIL
+    fi
+    if [[ -f "${twemoji_ttf}" && -n "${emoji_narrow}" ]]; then
+      cat <<CSS_TW_NARROW_HEAD
+
+/* Colour emoji, hterm width-1: fit one cell. Tune via EMOJI_NARROW_ADJUST. */
+@font-face {
+  font-family: "${family}";
+  size-adjust: ${narrow_adjust}%;
+CSS_TW_NARROW_HEAD
+      printf '  src: url(data:font/ttf;charset=utf-8;base64,'
+      base64 < "${twemoji_ttf}" | tr -d '\n'
+      cat <<CSS_TW_NARROW_TAIL
+) format("truetype");
+  unicode-range: ${emoji_narrow};
+}
+CSS_TW_NARROW_TAIL
+    fi
   } > "${out}"
 }
 
 if [[ -z "${BLINK_OUT_DIR}" ]]; then
   info "skipped: BLINK_OUT_DIR is empty (explicitly disabled)."
+elif [[ -z "${JBM_TTF}" || ! -f "${JBM_TTF}" ]]; then
+  warn "no embedded JetBrains Mono Nerd Font was built; skipping Blink CSS."
 else
-  # Resolve JetBrains Mono Regular. Honour an explicit override first, then
-  # probe the usual install locations (cask -> system -> brew Caskroom -> Linux).
-  if [[ -z "${JETBRAINS_TTF}" ]]; then
-    jb_candidates=(
-      "${HOME}/Library/Fonts/JetBrainsMono-Regular.ttf"
-      "/Library/Fonts/JetBrainsMono-Regular.ttf"
-      "${HOME}/.local/share/fonts/JetBrainsMono-Regular.ttf"
-    )
-    if command -v brew >/dev/null 2>&1; then
-      brew_prefix=$(brew --prefix 2>/dev/null || true)
-      if [[ -n "${brew_prefix}" ]]; then
-        cask_jb=$( { \
-            ls -1 "${brew_prefix}/Caskroom/font-jetbrains-mono/"*"/fonts/ttf/JetBrainsMono-Regular.ttf" \
-                  "${brew_prefix}/Caskroom/font-jetbrains-mono/"*"/JetBrainsMono-Regular.ttf" 2>/dev/null \
-            || true; } | sort -V | tail -n 1 || true )
-        [[ -n "${cask_jb}" ]] && jb_candidates+=("${cask_jb}")
-      fi
-    fi
-    for c in "${jb_candidates[@]}"; do
-      [[ -f "${c}" ]] && { JETBRAINS_TTF="${c}"; break; }
-    done
+  mkdir -p "${BLINK_OUT_DIR}"
+  # Remove the legacy two-file output (Propo/Mono symbols fallback) so a stale
+  # copy isn't advertised by serve-blink-fonts.sh alongside the new single file.
+  rm -f "${BLINK_OUT_DIR}"/jetbrains-custom-nerd-fonts.css \
+        "${BLINK_OUT_DIR}"/jetbrains-custom-nerd-fonts-mono.css
+  # Resolve (download + cache) the embedded colour-emoji font, then compute the
+  # wide / narrow emoji unicode-ranges from ITS cmap, classified by hterm's exact
+  # terminal-width table (baked below). The text region is excluded so digits,
+  # # * keycap bases and (c)/(r) stay as JBM text.
+  EMOJI_WIDE=""
+  EMOJI_NARROW=""
+  resolve_twemoji || true
+  if [[ -n "${TWEMOJI_TTF}" && -f "${TWEMOJI_TTF}" && -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" ]]; then
+    EMOJI_SPLIT_PY="${WORK_DIR}/_emoji_split.py"
+    cat >"${EMOJI_SPLIT_PY}" <<'PYEOF'
+"""Split the embedded emoji font's cmap into hterm-width-2 (wide) and width-1
+(narrow) unicode-range strings for the Blink CSS. Width comes from hterm's own
+wcwidth table (hterm/third_party/wcwidth/wc.js -> hterm.wc.unambiguous), baked
+in below so classification matches Blink exactly (unicodedata's east_asian_width
+does not). The text region is excluded so it can't clobber JBM's real glyphs."""
+import sys
+from fontTools.ttLib import TTFont
+
+# hterm.wc.unambiguous: width-2 (wide) intervals. Anything not here is width 1.
+HTERM_WIDE = [
+    (4352,4447),(8986,8987),(9001,9002),(9193,9196),(9200,9200),(9203,9203),
+    (9725,9726),(9748,9749),(9800,9811),(9855,9855),(9875,9875),(9889,9889),
+    (9898,9899),(9917,9918),(9924,9925),(9934,9934),(9940,9940),(9962,9962),
+    (9970,9971),(9973,9973),(9978,9978),(9981,9981),(9989,9989),(9994,9995),
+    (10024,10024),(10060,10060),(10062,10062),(10067,10069),(10071,10071),
+    (10133,10135),(10160,10160),(10175,10175),(11035,11036),(11088,11088),
+    (11093,11093),(11904,12255),(12272,12350),(12352,12871),(12880,19903),
+    (19968,42191),(43360,43391),(44032,55203),(63744,64255),(65040,65049),
+    (65072,65135),(65281,65376),(65504,65510),(94176,94180),(94192,94193),
+    (94208,101589),(101632,101640),(110576,110579),(110581,110587),
+    (110589,110590),(110592,110895),(110898,110898),(110928,110930),
+    (110933,110933),(110948,110951),(110960,111359),(126980,126980),
+    (127183,127183),(127374,127374),(127377,127386),(127488,127490),
+    (127504,127547),(127552,127560),(127568,127569),(127584,127589),
+    (127744,127776),(127789,127797),(127799,127868),(127870,127891),
+    (127904,127946),(127951,127955),(127968,127984),(127988,127988),
+    (127992,128062),(128064,128064),(128066,128252),(128255,128317),
+    (128331,128334),(128336,128359),(128378,128378),(128405,128406),
+    (128420,128420),(128507,128591),(128640,128709),(128716,128716),
+    (128720,128722),(128725,128727),(128732,128735),(128747,128748),
+    (128756,128764),(128992,129003),(129008,129008),(129292,129338),
+    (129340,129349),(129351,129535),(129648,129660),(129664,129672),
+    (129680,129725),(129727,129733),(129742,129755),(129760,129768),
+    (129776,129784),(131072,196605),(196608,262141),
+]
+
+def is_text(cp):
+    # Keep JBM's own glyph for these: the whole ASCII/Latin-1 text region (digits,
+    # # and * keycap bases, (c)/(r)), plus TM and the zero-width joiner/selectors.
+    return cp < 0x2000 or cp in (0x2122, 0x200D, 0xFE0F, 0x20E3)
+
+def is_wide(cp):
+    for lo, hi in HTERM_WIDE:
+        if lo <= cp <= hi:
+            return True
+    return False
+
+cps = sorted(c for c in TTFont(sys.argv[1]).getBestCmap() if not is_text(c))
+wide = [c for c in cps if is_wide(c)]
+narrow = [c for c in cps if not is_wide(c)]
+
+def compress(xs):
+    runs, i = [], 0
+    while i < len(xs):
+        j = i
+        while j + 1 < len(xs) and xs[j + 1] == xs[j] + 1:
+            j += 1
+        runs.append("U+%X" % xs[i] if i == j else "U+%X-%X" % (xs[i], xs[j]))
+        i = j + 1
+    return ", ".join(runs)
+
+print(compress(wide))
+print(compress(narrow))
+PYEOF
+    EMOJI_SPLIT="$("${PY_VENV_BIN}" "${EMOJI_SPLIT_PY}" "${TWEMOJI_TTF}")"
+    EMOJI_WIDE="$(printf '%s\n' "${EMOJI_SPLIT}" | sed -n 1p)"
+    EMOJI_NARROW="$(printf '%s\n' "${EMOJI_SPLIT}" | sed -n 2p)"
   fi
-
-  PROPO_TTF="${OUT_DIR}/SymbolsNerdFont-Regular.ttf"
-  MONO_TTF="${OUT_DIR}/SymbolsNerdFontMono-Regular.ttf"
-
-  if [[ -z "${JETBRAINS_TTF}" || ! -f "${JETBRAINS_TTF}" ]]; then
-    warn "JetBrains Mono Regular not found; skipping Blink CSS.
-   Install the 'font-jetbrains-mono' cask or set JETBRAINS_TTF=/path/to/JetBrainsMono-Regular.ttf"
-  elif [[ ! -f "${PROPO_TTF}" || ! -f "${MONO_TTF}" ]]; then
-    warn "built Symbols TTFs missing in ${OUT_DIR}; skipping Blink CSS."
+  if [[ -n "${EMOJI_WIDE}${EMOJI_NARROW}" ]]; then
+    info "emoji -> embedded Twemoji: wide(2-cell, ${EMOJI_WIDE_ADJUST}%) + narrow(1-cell, ${EMOJI_NARROW_ADJUST}%)"
+    info "  $(basename "${TWEMOJI_TTF}") ($(($(stat -f '%z' "${TWEMOJI_TTF}" 2>/dev/null || stat -c '%s' "${TWEMOJI_TTF}")/1024)) KiB, embedded x2)"
   else
-    mkdir -p "${BLINK_OUT_DIR}"
-    info "JetBrains Mono : ${JETBRAINS_TTF}"
-    # Distinct family names: Blink cannot hold two fonts under one name.
-    emit_blink_css "${PROPO_TTF}" "${BLINK_OUT_DIR}/jetbrains-custom-nerd-fonts.css"      "JetBrainsMono NF"
-    info 'wrote jetbrains-custom-nerd-fonts.css      (Propo) -> save as "JetBrainsMono NF"'
-    emit_blink_css "${MONO_TTF}"  "${BLINK_OUT_DIR}/jetbrains-custom-nerd-fonts-mono.css" "JetBrainsMono NF Mono"
-    info 'wrote jetbrains-custom-nerd-fonts-mono.css (Mono)  -> save as "JetBrainsMono NF Mono"'
-    done_ "Blink CSS -> ${BLINK_OUT_DIR}"
+    warn "Twemoji unavailable; Blink CSS omits embedded emoji (system fallback)."
   fi
+
+  info "JetBrains Mono : ${JETBRAINS_TTF}"
+  emit_blink_css "${JBM_TTF}" "${BLINK_OUT_DIR}/jetbrains-mono-nerd-font.css" \
+    "JetBrainsMono NF" "${TWEMOJI_TTF}" \
+    "${EMOJI_WIDE}" "${EMOJI_NARROW}" "${EMOJI_WIDE_ADJUST}" "${EMOJI_NARROW_ADJUST}"
+  info 'wrote jetbrains-mono-nerd-font.css -> save in Blink as "JetBrainsMono NF"'
+  done_ "Blink CSS -> ${BLINK_OUT_DIR}"
 fi
 
 # ===========================================================================
@@ -2211,24 +2642,25 @@ ${C_GRN}Build complete.${C_RST}
 
   Output directory: ${OUT_DIR}
   Variants:
-    - SymbolsNerdFont-Regular.ttf       (variable-width / "Propo")
-    - SymbolsNerdFontMono-Regular.ttf   (monospaced)
+    - SymbolsNerdFont-Regular.ttf            (variable-width / "Propo")
+    - SymbolsNerdFontMono-Regular.ttf        (monospaced)
+    - JetBrainsMonoNerdFontMono-Regular.ttf  (embedded JBM text + icons, for Blink)
   Glyph index:
     - ${JSON_OUT_DIR:-(disabled)}/glyphs.json
-  Blink Shell CSS (save each under its own EXACT name — names must be unique):
-    - ${BLINK_OUT_DIR:-(disabled)}/jetbrains-custom-nerd-fonts.css       (Propo) -> "JetBrainsMono NF"
-    - ${BLINK_OUT_DIR:-(disabled)}/jetbrains-custom-nerd-fonts-mono.css  (Mono)  -> "JetBrainsMono NF Mono"
+  Blink Shell CSS:
+    - ${BLINK_OUT_DIR:-(disabled)}/jetbrains-mono-nerd-font.css  -> save in Blink as "JetBrainsMono NF"
 
 ${C_BLU}== Install manually if you skipped --install ==${C_RST}
-  cp -f "${OUT_DIR}"/Symbols*.ttf ~/Library/Fonts/
+  cp -f "${OUT_DIR}"/Symbols*.ttf "${OUT_DIR}"/JetBrains*.ttf ~/Library/Fonts/
   # Linux: cp ... ~/.local/share/fonts/ && fc-cache -fv
 
 ${C_BLU}== Import the font into Blink Shell ==${C_RST}
   # Serve the CSS dir over HTTP, then in Blink: Settings -> Appearance ->
-  # Add a new font -> point it at the printed URL. Save EACH font under the
-  # exact name shown above (the .css -> "JetBrainsMono NF", the -mono.css ->
-  # "JetBrainsMono NF Mono"). The saved name MUST match the font-family inside
-  # the file, and the two names MUST differ or the second import shows no icons.
+  # Add a new font -> point it at the printed URL. Save the font under the EXACT
+  # name "JetBrainsMono NF" (must match the font-family inside the .css). One
+  # self-contained font: text + icons + embedded Twemoji colour emoji, with an
+  # iPad system-font fallback chain (PingFang SC / Hiragino Sans / Euphemia UCAS
+  # / Apple Symbols) referenced by name. Menlo is auto-appended by Blink.
   ./serve-blink-fonts.sh        # serves ${BLINK_OUT_DIR:-~/.local/share/fonts/blink} on :8000
 
 ${C_BLU}== Feed the glyph index to fzf ==${C_RST}

@@ -14,10 +14,9 @@
 #
 # Override the served directory with BLINK_OUT_DIR (must match the value used
 # by build-updated-font.sh). In Blink: Settings -> Appearance -> Add font ->
-# paste the printed URL. Save EACH font under its own EXACT name (Blink ties
-# the saved name to the font-family, and the two names must differ):
-#   jetbrains-custom-nerd-fonts.css       -> "JetBrainsMono NF"
-#   jetbrains-custom-nerd-fonts-mono.css  -> "JetBrainsMono NF Mono"  (monospaced)
+# paste the printed URL. Save the font under the EXACT name Blink ties to the
+# font-family inside the CSS:
+#   jetbrains-mono-nerd-font.css  -> "JetBrainsMono NF"
 # =============================================================================
 
 set -euo pipefail
@@ -81,7 +80,7 @@ fi
 
 print_urls() {  # print_urls <host>
   local css
-  for css in "${BLINK_OUT_DIR}"/jetbrains-custom-nerd-fonts*.css; do
+  for css in "${BLINK_OUT_DIR}"/jetbrains*nerd-font*.css; do
     [[ -f "${css}" ]] && printf '  http://%s:%s/%s\n' "$1" "${PORT}" "$(basename "${css}")"
   done
 }
