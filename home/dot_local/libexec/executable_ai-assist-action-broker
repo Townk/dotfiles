@@ -42,12 +42,18 @@ broker::copy() {
   fi
 }
 
-# broker::play — type the payload into the origin pane, then submit with CR.
+# broker::play — paste the payload into the origin pane, then submit with CR.
+# The payload is wrapped in bracketed-paste markers (ESC[200~ … ESC[201~) so a
+# multi-line block enters the shell as ONE multi-line command buffer — exactly
+# like a terminal paste — instead of each embedded newline submitting a line on
+# its own. The trailing CR then runs the whole buffer as a single command.
 broker::play() {
   local payload="$1"
   [[ -n "$zj" && -n "$origin" ]] || return 0
+  "$zj" action write --pane-id "$origin" 27 91 50 48 48 126 2>/dev/null  # ESC[200~ paste-start
   "$zj" action write-chars --pane-id "$origin" -- "$payload" 2>/dev/null
-  "$zj" action write --pane-id "$origin" 13 2>/dev/null   # 13 = CR = Enter
+  "$zj" action write --pane-id "$origin" 27 91 50 48 49 126 2>/dev/null  # ESC[201~ paste-end
+  "$zj" action write --pane-id "$origin" 13 2>/dev/null                  # 13 = CR = Enter
 }
 
 # broker::dispatch — parse one record and route it.

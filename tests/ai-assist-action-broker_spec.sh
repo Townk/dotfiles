@@ -46,11 +46,15 @@ Describe 'ai-assist-action-broker'
     The output should equal "echo hi"
   End
 
-  It 'plays by typing into the origin pane then sending CR'
+  It 'plays by bracketed-pasting into the origin pane then sending CR'
     drive() { load_broker; over_ssh=0; broker::dispatch "play${US}make all${RS}"; }
     When call drive
     The status should be success
+    # ESC[200~ paste-start, the payload, ESC[201~ paste-end, then CR — so a
+    # multi-line block enters as one command buffer (like a terminal paste).
+    The contents of file "$TEST_TMP/zj.log" should include "action write --pane-id terminal_7 27 91 50 48 48 126"
     The contents of file "$TEST_TMP/zj.log" should include "action write-chars --pane-id terminal_7 -- make all"
+    The contents of file "$TEST_TMP/zj.log" should include "action write --pane-id terminal_7 27 91 50 48 49 126"
     The contents of file "$TEST_TMP/zj.log" should include "action write --pane-id terminal_7 13"
   End
 
