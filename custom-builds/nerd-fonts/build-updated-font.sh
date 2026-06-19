@@ -42,8 +42,8 @@
 #   8. Use `fonttools` to verify the result and print a glyph-count diff
 #      against the upstream-shipped TTFs in patched-fonts/NerdFontsSymbolsOnly.
 #   9. Emit a glyphs.json index of every codepoint in the built font, with
-#      Nerd-Fonts curated names, FA 7 names (prefixed `fa-` to avoid colliding
-#      with the `nf-fa-*` curated set) and natural-language metadata
+#      Nerd-Fonts curated names (prefixed `nf-`), FA 7 names (prefixed `fa-`)
+#      and natural-language metadata
 #      (labels, search terms, aliases, Unicode names). Written to
 #      ~/.local/share/fonts/nerd-font/glyphs.json — handy for an fzf picker.
 #  6c. Patch JetBrains Mono Regular ITSELF with the same merged-FA payload
@@ -786,9 +786,13 @@ def main(argv):
             #     patched onto JetBrains Mono they would clobber its real '=',
             #     digits and A-Z, and the icon-sizing step (7b) would then
             #     mis-scale those text glyphs. Relocate them to Plane-16 too.
+            #   * terminal_reserved -> terminals such as WezTerm intercept
+            #     U+F5D0..U+F5FB as built-in git-branch sprites before font
+            #     fallback, so FA icons there render as branch lines.
             is_pua = (0xE000 <= cp <= 0xF8FF) or (0xF0000 <= cp <= 0xFFFFD) \
                 or (0x100000 <= cp <= 0x10FFFD)
-            if cp in occ or not is_pua:
+            terminal_reserved = 0xF5D0 <= cp <= 0xF5FB
+            if cp in occ or not is_pua or terminal_reserved:
                 # Deterministic, update-stable slot: native + reserved_start.
                 # Colliding free natives sit in the BMP PUA (0xE000..0xF8FF) ->
                 # 0x10E000..0x10F8FF; the non-PUA (ASCII) ones land in
@@ -808,13 +812,14 @@ def main(argv):
                     dest[new_cp].glyphname = "farelo_%05x" % new_cp
                 except Exception:
                     pass
-                if not is_pua:
-                    # The original sits at a TEXT codepoint, so remove it: unlike
+                if not is_pua or terminal_reserved:
+                    # The original sits at a TEXT or terminal-reserved codepoint,
+                    # so remove it: unlike
                     # a curated collision (where the patcher's careful mode skips
                     # the original because the curated glyph occupies that slot),
-                    # the Symbols-Only font has nothing at ASCII, so a leftover
-                    # original would be added there as a stray icon (and claim
-                    # the codepoint in any fallback chain). Drop it entirely.
+                    # the Symbols-Only font has nothing there, so a leftover
+                    # original would be added as a stray icon and claim a
+                    # codepoint that terminal renderers may reserve. Drop it.
                     try:
                         dest.removeGlyph(dest[cp])
                     except Exception:
@@ -2025,8 +2030,10 @@ else
 """Emit a glyphs.json index describing every codepoint in the built font.
 
 Sources merged into the JSON:
-  * Curated Nerd-Fonts glyph names from <repo>/glyphnames.json
-    (e.g. nf-fa-house, nf-md-account_check, nf-cod-zap).
+  * Curated Nerd-Fonts glyph names from <repo>/glyphnames.json, keyed with an
+    `nf-` prefix in this output (e.g. nf-fa-house, nf-md-account_check,
+    nf-cod-zap) so upstream `fa-*` curated names cannot collide with FA 7
+    native additions.
   * Font Awesome 7 native additions from <fa>/metadata/icons.json
     (keyed `fa-<icon-name>` so they never collide with curated nf-fa-*).
     Pulls FA's label / search.terms / aliases / styles for free-text search.
@@ -2194,20 +2201,20 @@ def main():
             "char": chr(cp),
             "source": "nerd-fonts-curated",
         }
-        parts = nf_name.split("-", 2)
-        if len(parts) >= 2 and parts[0] == "nf":
-            entry["collection"] = NF_COLLECTION_NAMES.get(parts[1], parts[1])
-        # Cross-reference FA metadata for nf-fa-* entries so curated FA
+        parts = nf_name.split("-", 1)
+        if len(parts) >= 2:
+            entry["collection"] = NF_COLLECTION_NAMES.get(parts[0], parts[0])
+        # Cross-reference FA metadata for curated fa-* entries so curated FA
         # icons inherit FA's natural-language tags too.
-        if len(parts) == 3 and parts[1] == "fa":
-            fa_lookup = parts[2].replace("_", "-")
+        if len(parts) == 2 and parts[0] == "fa":
+            fa_lookup = parts[1].replace("_", "-")
             fa_info = fa_icons.get(fa_lookup)
             if fa_info:
                 _enrich_with_fa(entry, fa_info)
         unicode_name = _safe_unicode_name(cp)
         if unicode_name:
             entry["unicode_name"] = unicode_name
-        glyphs[nf_name] = entry
+        glyphs["nf-" + nf_name] = entry
         used.add(cp)
         by_source["nerd-fonts-curated"] += 1
 
