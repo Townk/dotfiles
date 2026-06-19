@@ -1,0 +1,10 @@
+{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+# ~/.bashrc - backup bridge for interactive non-login SSH shells.
+case $- in
+  *i*)
+    if [ "${SHLVL:-1}" -le 1 ] 2>/dev/null && [ -r "$HOME/.profile" ]; then
+      . "$HOME/.profile"
+    fi
+    ;;
+esac
+{{- end }}

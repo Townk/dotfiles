@@ -1,0 +1,24 @@
+{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+# ~/.profile - first-login bridge for headless dev shells.
+#
+# Some hosted SSH shells can start the initial session in the provider default
+# shell while user bootstrap is still settling. Once zsh is on PATH, replace
+# that first interactive SSH shell with the managed login zsh; ~/.zshenv then
+# loads the rest of the chezmoi-rendered setup.
+_chezmoi_exec_zsh_for_ssh() {
+  case $- in
+    *i*) ;;
+    *) return 0 ;;
+  esac
+
+  [ -z "${ZSH_VERSION:-}" ] || return 0
+  [ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ] || return 0
+  [ "${SHLVL:-1}" -le 1 ] 2>/dev/null || return 0
+  command -v zsh >/dev/null 2>&1 || return 0
+
+  exec zsh -l
+}
+
+_chezmoi_exec_zsh_for_ssh
+unset -f _chezmoi_exec_zsh_for_ssh 2>/dev/null || unset _chezmoi_exec_zsh_for_ssh
+{{- end }}

@@ -15,6 +15,9 @@
      it stays unmanaged. Managed fragments are pulled in via the file's
      `Include ~/.ssh/config.d/*` (see ~/.ssh/config.example). */}}
 .ssh/config
+{{/* Cursor MCP config can contain provider URLs, auth headers, and other
+     local-only endpoints. Keep it out of chezmoi on every profile. */}}
+.cursor/mcp.json
 {{/* ~/.config/packages/images.toml is the loose, per-machine sparse-image
      manifest for `system-images`. An image name/mountpoint can name a work
      resource, so it stays local and is never tracked (the committed
@@ -57,6 +60,9 @@
 {{- end }}
 {{ if not (and (eq .chezmoi.os "linux") (eq .profile "dev-shell")) -}}
 {{/* Linux dev-shell artifacts. Keep these off Macs and other profiles. */}}
+.bash_profile
+.bashrc
+.profile
 .config/mise/conf.d/dev-shell.toml
 .config/packages/Snapfile
 .chezmoiscripts/*-setup-dev-shell-tools.sh
@@ -83,7 +89,7 @@
 {{/* Cursor is work-only: the cursor-agent CLI lives on the work machine, so its
      whole footprint is isolated to the work profile and never deploys on
      personal or dev-shell hosts —
-       .cursor                          agent config (agents, rules, skills, mcp.json)
+       .cursor                          agent config (agents, rules, skills)
        .local/bin/ai-commit-cursor      cursor harness for the ai-commit dispatcher
        …/_ai-commit-cursor              that harness's completion
      ai-commit auto-discovers its `ai-commit-*` workers and probe-gates them, so
