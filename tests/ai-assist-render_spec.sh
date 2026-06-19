@@ -51,4 +51,44 @@ Describe 'ai-assist-render'
     The status should eq 2
     The stderr should include "no command"
   End
+
+  # A stub broker: records its args, then sleeps so the render can kill it.
+  broker_stub() {
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'print -r -- "BROKER $*" >> "$TEST_TMP/broker.log"'
+      echo 'sleep 30'
+    } > "$TEST_TMP/broker"
+    chmod +x "$TEST_TMP/broker"
+  }
+
+  It 'spawns the broker and passes --actions-fifo to the pager when --origin-pane is set'
+    fifo_pager() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'print -r -- "PAGER actions=$4"   # --harness X --actions-fifo <path> are $1-$4'
+      } > "$TEST_TMP/pager"; chmod +x "$TEST_TMP/pager"
+    }
+    BeforeRun 'broker_stub' 'fifo_pager' \
+      'export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"' \
+      'export AI_ASSIST_BROKER_BIN="$TEST_TMP/broker"' \
+      'export TEST_TMP="$TEST_TMP"'
+    When run script "$SCRIPT" --harness X --origin-pane terminal_4 --over-ssh -- printf 'hi\n'
+    The status should be success
+    The output should include "PAGER actions=/"
+    The contents of file "$TEST_TMP/broker.log" should include "BROKER"
+    The contents of file "$TEST_TMP/broker.log" should include "--origin-pane terminal_4"
+    The contents of file "$TEST_TMP/broker.log" should include "--over-ssh"
+  End
+
+  It 'runs the pager with no --actions-fifo when --origin-pane is absent'
+    plain_pager() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'print -r -- "PAGER args=[$*]"'
+      } > "$TEST_TMP/pager"; chmod +x "$TEST_TMP/pager"
+    }
+    BeforeRun 'plain_pager' 'export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"'
+    When run script "$SCRIPT" --harness X -- printf 'hi\n'
+    The status should be success
+    The output should not include "actions-fifo"
+  End
 End

@@ -25,9 +25,13 @@ set -uo pipefail
 export RUNEWIDTH_EASTASIAN=0
 
 harness="agent"
+origin_pane=""
+over_ssh=0
 while (($#)); do
   case "$1" in
-    --harness) harness="${2:-agent}"; shift 2 ;;
+    --harness)     harness="${2:-agent}"; shift 2 ;;
+    --origin-pane) origin_pane="${2:-}"; shift 2 ;;
+    --over-ssh)    over_ssh=1; shift ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -48,7 +52,6 @@ reset=$'\e[0m'
 
 # Run the harness, buffering stdout+stderr; spinner while it works.
 out=$(mktemp -t ai-assist-render) || exit 1
-trap 'rm -f -- "$out"' EXIT INT TERM
 "${cmd[@]}" >"$out" 2>&1 &
 pid=$!
 
@@ -66,6 +69,35 @@ while kill -0 "$pid" 2>/dev/null; do
 done
 wait "$pid"; rc=$?
 printf '\r\e[K' # clear the spinner line
+
+# Actions FIFO + broker: when we know the originating pane, create a FIFO, spawn
+# the broker (it performs copy/play), and hand the pager --actions-fifo. The
+# broker's lifetime is this pane's — the EXIT trap below kills it and removes the
+# FIFO. Resolve the broker by absolute path (the docked pane's PATH lacks
+# ~/.local/libexec); AI_ASSIST_BROKER_BIN overrides for tests.
+fifo=""
+broker_pid=""
+if [[ -n "$origin_pane" ]]; then
+  broker="${AI_ASSIST_BROKER_BIN:-}"
+  if [[ -z "$broker" ]]; then
+    for cand in \
+      "$(command -v -- ai-assist-action-broker 2>/dev/null)" \
+      "$HOME/.local/libexec/ai-assist-action-broker"; do
+      [[ -n "$cand" && -x "$cand" ]] && { broker="$cand"; break; }
+    done
+  fi
+  if [[ -n "$broker" && -x "$broker" ]]; then
+    fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-act.XXXXXX")"
+    if mkfifo -m 600 "$fifo" 2>/dev/null; then
+      "$broker" --fifo "$fifo" --origin-pane "$origin_pane" ${over_ssh:+--over-ssh} &
+      broker_pid=$!
+    else
+      fifo=""
+    fi
+  fi
+fi
+# Fold broker + FIFO cleanup into the existing tmpfile trap.
+trap 'rm -f -- "$out"; [[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"' EXIT INT TERM
 
 # Hand the captured markdown to ai-assist-pager (interactive: per-element no-wrap
 # + horizontal scroll for code/tables, full-width bands, vertical scroll; it draws
@@ -89,7 +121,7 @@ if [[ -z "$pager" ]]; then
   done
 fi
 if [[ -n "$pager" && -x "$pager" ]]; then
-  "$pager" --harness "$harness" "$out"
+  "$pager" --harness "$harness" ${fifo:+--actions-fifo "$fifo"} "$out"
 else
   theme="$HOME/.config/glow/catppuccin-mocha.json"
   # Feed glow via STDIN, not a file argument: `glow FILE` opens its pager (it
