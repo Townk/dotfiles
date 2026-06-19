@@ -1,0 +1,79 @@
+#!/usr/bin/env zsh
+# ai-assist-action-broker — reads <kind>US<payload>RS action records the pager
+# writes to a FIFO and performs them: `copy` (clipboard, or OSC 52 over SSH) or
+# `play` (type the block into the origin pane and run it). Spawned by
+# ai-assist-render, which owns the FIFO lifecycle and kills this on pane exit.
+# Self-contained (runs in the bare docked pane): no library sourcing, zellij by
+# absolute path. Every action is best-effort — a missing tool is a silent no-op,
+# never a crash.
+set -uo pipefail
+
+fifo="" origin="" over_ssh=0
+while (($#)); do
+  case "$1" in
+    --fifo)        fifo="${2:-}"; shift 2 ;;
+    --origin-pane) origin="${2:-}"; shift 2 ;;
+    --over-ssh)    over_ssh=1; shift ;;
+    *)             shift ;;
+  esac
+done
+
+# zellij by absolute path (the docked pane's PATH is the minimal daemon one).
+zj=""
+for _z in "${commands[zellij]:-}" /opt/homebrew/bin/zellij /usr/local/bin/zellij \
+          /snap/bin/zellij "$HOME/.local/bin/zellij"; do
+  [[ -n "$_z" && -x "$_z" ]] && { zj="$_z"; break; }
+done
+
+# Local clipboard command (empty if none available).
+clip=""
+for _c in pbcopy wl-copy "xclip -selection clipboard"; do
+  command -v "${_c%% *}" >/dev/null 2>&1 && { clip="$_c"; break; }
+done
+
+# broker::copy — local clipboard, or OSC 52 to the tty over SSH.
+broker::copy() {
+  local payload="$1"
+  if (( over_ssh )); then
+    local b64; b64="$(print -rn -- "$payload" | base64 | tr -d '\n')"
+    printf '\e]52;c;%s\a' "$b64" > "${AI_ASSIST_BROKER_TTY:-/dev/tty}" 2>/dev/null
+  elif [[ -n "$clip" ]]; then
+    print -rn -- "$payload" | ${(z)clip}
+  fi
+}
+
+# broker::play — type the payload into the origin pane, then submit with CR.
+broker::play() {
+  local payload="$1"
+  [[ -n "$zj" && -n "$origin" ]] || return 0
+  "$zj" action write-chars --pane-id "$origin" -- "$payload" 2>/dev/null
+  "$zj" action write --pane-id "$origin" 13 2>/dev/null   # 13 = CR = Enter
+}
+
+# broker::dispatch — parse one record and route it.
+broker::dispatch() {
+  local rec="$1"
+  local kind="${rec%%$'\x1f'*}" payload="${rec#*$'\x1f'}"
+  payload="${payload%$'\x1e'}"   # strip trailing RS if caller included it
+  case "$kind" in
+    copy) broker::copy "$payload" ;;
+    play) broker::play "$payload" ;;
+  esac
+}
+
+# broker::run — hold the FIFO open read-write so the loop survives the pager's
+# open/close per write (no EOF between writes), then dispatch each record.
+broker::run() {
+  local bfd rec
+  exec {bfd}<>"$fifo"
+  while IFS= read -r -d $'\x1e' rec <&$bfd; do
+    broker::dispatch "$rec"
+  done
+}
+
+# Main guard: tests source this with AI_ASSIST_BROKER_NORUN=1 to drive the
+# functions directly; executed for real it runs the FIFO loop until killed.
+if [[ "${AI_ASSIST_BROKER_NORUN:-0}" != 1 ]]; then
+  [[ -n "$fifo" ]] || { print -u2 -- "ai-assist-action-broker: --fifo required"; exit 2; }
+  broker::run
+fi
