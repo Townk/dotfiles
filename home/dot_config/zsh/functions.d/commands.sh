@@ -1,8 +1,34 @@
 source "${0:A:h}/_lib.sh"
 
-# `system-update` is a plain script at ~/.local/bin/system-update (on $PATH);
-# it now updates the git-cloned zsh plugins itself, so no interactive wrapper
-# is needed here anymore (the old wrapper only existed to chain `z4h update`).
+function system-update() {
+  local keep_shell=0 help_requested=0 update_status arg
+  local -a args
+
+  for arg in "$@"; do
+    case "$arg" in
+      --keep-shell)
+        keep_shell=1
+        ;;
+      -h | --help | help)
+        help_requested=1
+        args+=("$arg")
+        ;;
+      *)
+        args+=("$arg")
+        ;;
+    esac
+  done
+
+  command system-update "${args[@]}"
+  update_status=$?
+  (( update_status == 0 )) || return "$update_status"
+  (( keep_shell || help_requested )) && return 0
+  [[ -t 0 && -t 1 ]] || return 0
+
+  print -P -- "%F{yellow}↻ Run %Bexec zsh%b in your other open sessions on this machine to pick up the update.%f"
+  print -P -- "%F{8}Refreshing this session now (exec zsh)…%f"
+  exec zsh
+}
 
 # I decide to make my MOTD screen a function to allow me to call it
 # arbitrarially if I wanted.

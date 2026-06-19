@@ -1,10 +1,9 @@
 #compdef system-update
 #
-# Completion for system-update. Running it bare kicks off the full update pass.
-# We surface -h/--help as exclusive options and --keep-shell as a modifier that
-# suppresses the closing `exec zsh`. The bare `help` positional is supported by
-# the script too but isn't offered here — completion menus for it would be
-# confusing alongside the flag forms.
+# Completion for the interactive system-update wrapper. Running it bare kicks
+# off the full update pass, then the wrapper refreshes the parent shell. The
+# --keep-shell modifier belongs to the wrapper and suppresses that refresh; the
+# underlying script only sees the update/help args.
 
 _arguments \
   '(- *)'{-h,--help}'[show help and exit]' \
