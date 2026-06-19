@@ -214,5 +214,51 @@ JSON
       The status should be success
       The output should equal "error|make all|fix my build"
     End
+
+    It 'records origin.over_ssh=true in the request when under SSH'
+      build() {
+        SSH_CONNECTION="1.2.3.4 5 6.7.8.9 22"
+        CAP_KIND=question
+        assist::build_request "fix it" "$TEST_TMP/req.json"
+        jq -r '.origin.over_ssh' "$TEST_TMP/req.json"
+      }
+      When call build
+      The output should equal "true"
+    End
+
+    It 'records origin.over_ssh=false with no SSH env'
+      build() {
+        unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+        CAP_KIND=question
+        assist::build_request "fix it" "$TEST_TMP/req.json"
+        jq -r '.origin.over_ssh' "$TEST_TMP/req.json"
+      }
+      When call build
+      The output should equal "false"
+    End
+  End
+
+  Describe 'over_ssh threading'
+    It 'REQ_OVER_SSH and --origin-pane flag expansion work at the build→read boundary'
+      boundary() {
+        # Write a request with pane_id and over_ssh=true, then read it back and
+        # assert that flag expansions produce the expected tokens.
+        printf '{"version":1,"kind":"question","origin":{"pane_id":"terminal_9","over_ssh":true,"cwd":"%s","project_root":"%s","zellij_session":"","atuin_session":""},"command":{"text":"","exit":null,"duration_ms":""},"scrollback":"","user_request":"","project":{"name":"","branch":""}}' \
+          "$TEST_TMP" "$TEST_TMP" > "$TEST_TMP/req.json"
+        assist::request_read "$TEST_TMP/req.json"
+        # Assert REQ_OVER_SSH and REQ_PANE_ID are populated
+        printf 'pane=%s ssh=%s\n' "$REQ_PANE_ID" "$REQ_OVER_SSH"
+        # Emit the flag tokens that worker_main would pass to assist::spawn_pane
+        local -a flags=()
+        [[ -n "$REQ_PANE_ID" ]] && flags+=(--origin-pane "$REQ_PANE_ID")
+        [[ -n "${${(M)REQ_OVER_SSH:#true}}" ]] && flags+=(--over-ssh)
+        printf 'flags=%s\n' "${flags[*]}"
+      }
+      When call boundary
+      The output should include "pane=terminal_9"
+      The output should include "ssh=true"
+      The output should include "--origin-pane terminal_9"
+      The output should include "--over-ssh"
+    End
   End
 End

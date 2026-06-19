@@ -48,6 +48,7 @@ assist::request_read() {
   REQ_KIND=$(jq -r '.kind // "question"' "$file")
   REQ_SESSION=$(jq -r '.origin.zellij_session // empty' "$file")
   REQ_PANE_ID=$(jq -r '.origin.pane_id // empty' "$file")
+  REQ_OVER_SSH=$(jq -r '.origin.over_ssh // false' "$file")
   REQ_CWD=$(jq -r '.origin.cwd // empty' "$file")
   REQ_PROJECT_ROOT=$(jq -r '.origin.project_root // .origin.cwd // empty' "$file")
   REQ_COMMAND_TEXT=$(jq -r '.command.text // empty' "$file")
@@ -193,6 +194,8 @@ assist::build_request() {
   local user_request="$1" out="$2"
   require_cmd jq
   local root; root="$(git -C "${CAP_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null)" || root="${CAP_DIR:-$PWD}"
+  local over_ssh="false"
+  [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] && over_ssh="true"
   jq -n \
     --arg kind "${CAP_KIND:-question}" \
     --arg session "${ZELLIJ_SESSION_NAME:-}" \
@@ -207,8 +210,9 @@ assist::build_request() {
     --arg user "$user_request" \
     --arg project "${CAP_PROJECT:-}" \
     --arg branch "${CAP_BRANCH:-}" \
+    --argjson over_ssh "$over_ssh" \
     '{version:1, kind:$kind,
-      origin:{zellij_session:$session, pane_id:$pane, atuin_session:$atuin, cwd:$cwd, project_root:$root},
+      origin:{zellij_session:$session, pane_id:$pane, atuin_session:$atuin, cwd:$cwd, project_root:$root, over_ssh:$over_ssh},
       command:{text:$cmd, exit:($exit|tonumber? // null), duration_ms:$dur},
       scrollback:$scrollback, user_request:$user,
       project:{name:$project, branch:$branch}}' > "$out"
@@ -257,7 +261,10 @@ assist::worker_main() {
   # AI_ASSIST_RENDER=0 to run the harness bare (raw output, for debugging).
   local render="$HOME/.local/libexec/ai-assist-render"
   if [[ "${AI_ASSIST_RENDER:-1}" == 1 && -x "$render" ]]; then
-    assist::spawn_pane "$render" --harness "$label" -- "${ASSIST_PANE_CMD[@]}"
+    assist::spawn_pane "$render" --harness "$label" \
+      ${REQ_PANE_ID:+--origin-pane "$REQ_PANE_ID"} \
+      ${${(M)REQ_OVER_SSH:#true}:+--over-ssh} \
+      -- "${ASSIST_PANE_CMD[@]}"
   else
     assist::spawn_pane "${ASSIST_PANE_CMD[@]}"
   fi
