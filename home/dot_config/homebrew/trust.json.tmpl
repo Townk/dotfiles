@@ -6,8 +6,11 @@
     "atlassian/acli",
 {{ end }}
     "jorgelbg/tap",
-    "olets/tap",
+    "olets/tap"{{ if ne .profile "dev-shell" }},
     "rafaelgarrido/caveats",
     "mostlygeek/llama-swap"
+{{- else }},
+    "rafaelgarrido/caveats"
+{{- end }}
   ]
 }

@@ -4,7 +4,21 @@
 # bumps, pi config). We declaratively OWN only the structural keys; Pi owns the
 # rest. Merge policy lives in .chezmoitemplates/pi-settings-merge.tmpl.
 set -eu
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+_path_prefix=
+for _path_dir in \
+  "$HOME/.local/bin" \
+  "$HOME/.local/share/mise/shims" \
+  /opt/homebrew/bin \
+  /usr/local/bin \
+  /usr/bin \
+  /bin
+do
+  [ -d "$_path_dir" ] || continue
+  _path_prefix="${_path_prefix:+$_path_prefix:}$_path_dir"
+done
+PATH="${_path_prefix}${PATH:+:$PATH}"
+export PATH
+unset _path_dir _path_prefix
 command -v jq >/dev/null 2>&1 || { cat; exit 0; }
 desired=$(cat <<'__PI_DESIRED__'
 {
@@ -32,7 +46,9 @@ desired=$(cat <<'__PI_DESIRED__'
     "npm:pi-web-access",
     "npm:pi-cymbal",
     "npm:pi-lsp",
+{{- if ne .profile "dev-shell" }}
     "npm:glimpseui",
+{{- end }}
     "npm:@tintinweb/pi-subagents",
     "npm:@mario-gc/pi-context7",
     "npm:@plannotator/pi-extension",

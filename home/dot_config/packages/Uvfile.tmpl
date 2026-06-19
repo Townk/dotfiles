@@ -15,6 +15,7 @@
 {{ if eq .profile "personal" -}}
 qmk-skim
 {{- end }}
+{{ if ne .profile "dev-shell" -}}
 # mlx-lm + mlx-vlm — Apple's MLX inference CLIs/servers: the sanctioned,
 # fastest path on Apple Silicon. Each model is served by its own
 # mlx_lm.server / mlx_vlm.server process (so each keeps its own MTP draft
@@ -23,6 +24,7 @@ qmk-skim
 mlx-lm --python 3.13
 mlx-vlm --python 3.13
 huggingface-hub
+{{- end }}
 rich-cli --with catppuccin[pygments]
 
 # Headroom — local context compression / CCR / memory proxy for agent traffic.

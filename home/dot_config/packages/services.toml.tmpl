@@ -65,6 +65,7 @@ error_log_path = "~/.cache/system-images/automount.log"
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 {{ end }}
 
+{{ if ne .profile "dev-shell" -}}
 # llama-swap — single OpenAI-compatible endpoint on :8000 that hot-swaps
 # between per-model mlx_lm.server / mlx_vlm.server backends. Each model runs
 # as its own process so it keeps its own MTP draft config (Qwen native MTP /
@@ -107,6 +108,7 @@ LOCAL_LLM_PREFERRED_MODEL = "Qwen3.6-35B-A3B-6bit"
 LOCAL_LLM_MAX_TOKENS = "2048"
 LOCAL_LLM_LONG_PROMPT_TOKENS = "6000"
 LOCAL_LLM_LONG_PROMPT_MAX_TOKENS = "512"
+{{ end }}
 
 # headroom — local compression and CCR retrieval proxy.
 # Failure learning is intentionally not enabled: this chezmoi repo is public,

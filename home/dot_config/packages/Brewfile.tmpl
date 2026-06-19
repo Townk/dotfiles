@@ -2,7 +2,9 @@
 
 tap "1password/tap"
 tap "jorgelbg/tap"
+{{ if ne .profile "dev-shell" -}}
 tap "mostlygeek/llama-swap"
+{{- end }}
 tap "olets/tap"
 tap "rafaelgarrido/caveats"
 
@@ -73,7 +75,9 @@ mas "TabBack for Safari", id: 1660506599
 
 # MacOS Improvements
 cask 'espanso'                      # Text expansion / snippets
+{{ if ne .profile "dev-shell" -}}
 cask 'hammerspoon'                  # Keybindings controller (Keyboard Maestro but better)
+{{- end }}
 
 {{ if eq .profile "personal" -}}
 cask 'macfuse'                      # R/W ext3 partitions
@@ -91,8 +95,10 @@ cask 'clion'                        # C++ IDE
 {{- end }}
 
 cask 'visual-studio-code'           # Everything Editor/IDE
+{{ if ne .profile "dev-shell" -}}
 cask 'wezterm@nightly'              # Terminal emulator
 cask 'ghostty'                      # Terminal emulator
+{{- end }}
 
 {{ if eq .profile "personal" -}}
 # Podcast
@@ -212,7 +218,9 @@ brew 'hexyl'                        # Binary files viewer (for: yazi)
 # the lua parser rejects. NeoVim links against this. Allowlisted in
 # system-package-brew so the mise-leakage tripwire stays silent.
 brew 'luajit'                       # Lua JIT runtime (for: nvim)
+{{ if ne .profile "dev-shell" -}}
 brew 'm1ddc'                        # Utility used by HammerSpoon to detect external display brightnes (for: hammerspoon)
+{{- end }}
 brew 'media-info'                   # Media files information (for: yazi)
 brew 'onefetch'                     # Git repo terminal statistics like GitHub (for: git)
 brew 'ouch'                         # Univeral compressor wrapper (for: yazi)
@@ -259,15 +267,19 @@ brew 'imagemagick'                  # Image conversion utility
 brew 'jless'                        # JSON visualizer
 brew 'lazygit'                      # Git TUA
 brew 'lazysql'                      # DB TUA
+{{ if ne .profile "dev-shell" -}}
 brew 'llama-swap'                    # Model-swapping proxy in front of mlx_lm/mlx_vlm servers (mostlygeek/llama-swap tap)
+{{- end }}
 brew 'macchina'                     # Environment summary when open a shell
 brew 'mole'                         # Clean up tool
 brew 'mosh'                         # Intermittent connectivity remote connection (`ssh` but better[-ish])
 brew 'neovim'                       # Editor
+{{ if ne .profile "dev-shell" -}}
 # mlx-lm / mlx-vlm (local AI models, Apple Silicon) are provisioned via
 # Uvfile; llama-swap (above) is the brew-managed proxy that launches them.
 # python@3.11 is no longer declared here — the venvs are owned by `uv tool
 # install`.
+{{- end }}
 brew 'pinentry'                     # Terminal pinentry (curses/tty) — used over SSH by pinentry-auto
 brew 'pinentry-mac'                 # GUI passphrase entry; pinentry-touchid's fallback
 brew 'pinentry-touchid'             # Touch ID for GPG passphrases (wraps pinentry-mac); needs jorgelbg/tap

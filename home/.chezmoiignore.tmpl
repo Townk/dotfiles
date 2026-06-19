@@ -78,6 +78,20 @@
      system-package discovers only ecosystems this host can run. */}}
 .local/bin/system-package-brew
 {{- end }}
+{{ if eq .profile "dev-shell" -}}
+{{/* Headless dev shells should not receive GUI terminal/app config or local
+     inference services. */}}
+.config/ghostty
+.config/ghostty/**
+.config/hammerspoon
+.config/hammerspoon/**
+.config/wezterm
+.config/wezterm/**
+.config/llama-swap
+.config/llama-swap/**
+.local/libexec/local-llm-bench
+.local/libexec/local-llm-gateway
+{{- end }}
 {{/* platform:: module — deploy only the active OS's implementation; the
      platform.zsh shim (which dispatches to it) ships everywhere. */}}
 {{ if eq .chezmoi.os "darwin" -}}
@@ -113,6 +127,12 @@
 .pi/agent/git
 .pi/agent/npm
 .pi/agent/sessions
+{{ if eq .profile "dev-shell" -}}
+{{/* The local/32K Pi home is for human machines; headless dev shells only
+     keep the primary ~/.pi/agent home. */}}
+.pi/agent-local
+.pi/agent-local/**
+{{- end }}
 .pi/agent-local/auth.json
 .pi/agent-local/git
 .pi/agent-local/npm
