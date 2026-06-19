@@ -238,27 +238,33 @@ JSON
     End
   End
 
-  Describe 'over_ssh threading'
-    It 'REQ_OVER_SSH and --origin-pane flag expansion work at the build→read boundary'
-      boundary() {
-        # Write a request with pane_id and over_ssh=true, then read it back and
-        # assert that flag expansions produce the expected tokens.
-        printf '{"version":1,"kind":"question","origin":{"pane_id":"terminal_9","over_ssh":true,"cwd":"%s","project_root":"%s","zellij_session":"","atuin_session":""},"command":{"text":"","exit":null,"duration_ms":""},"scrollback":"","user_request":"","project":{"name":"","branch":""}}' \
+  Describe 'worker_main flag forwarding'
+    It 'forwards --origin-pane and --over-ssh to assist::spawn_pane via the real worker_main'
+      worker_thread() {
+        # 1. Write request fixture with pane_id and over_ssh=true.
+        printf '{"version":1,"kind":"question","origin":{"pane_id":"terminal_9","over_ssh":true,"cwd":"%s","project_root":"%s","zellij_session":"","atuin_session":""},"command":{"text":"","exit":null,"duration_ms":""},"scrollback":"","user_request":"q","project":{"name":"","branch":""}}' \
           "$TEST_TMP" "$TEST_TMP" > "$TEST_TMP/req.json"
-        assist::request_read "$TEST_TMP/req.json"
-        # Assert REQ_OVER_SSH and REQ_PANE_ID are populated
-        printf 'pane=%s ssh=%s\n' "$REQ_PANE_ID" "$REQ_OVER_SSH"
-        # Emit the flag tokens that worker_main would pass to assist::spawn_pane
-        local -a flags=()
-        [[ -n "$REQ_PANE_ID" ]] && flags+=(--origin-pane "$REQ_PANE_ID")
-        [[ -n "${${(M)REQ_OVER_SSH:#true}}" ]] && flags+=(--over-ssh)
-        printf 'flags=%s\n' "${flags[*]}"
+
+        # 2. Create an executable stub render so the render branch is taken.
+        mkdir -p "$HOME/.local/libexec"
+        printf '#!/usr/bin/env zsh\n' > "$HOME/.local/libexec/ai-assist-render"
+        chmod +x "$HOME/.local/libexec/ai-assist-render"
+
+        # 3. Stub assist::spawn_pane to capture argv — keeps the real call site
+        #    in worker_main intact while avoiding a live Zellij dependency.
+        assist::spawn_pane() { print -r -- "SPAWN $*" >> "$TEST_TMP/spawn.log"; }
+
+        # 4. Silence log_ok so ShellSpec sees no unexpected stdout.
+        log_ok() { :; }
+
+        # 5. Provide a trivial build_fn and call the REAL assist::worker_main.
+        bf() { ASSIST_PANE_CMD=(true); }
+        AI_ASSIST_RENDER=1 assist::worker_main test bf --request "$TEST_TMP/req.json"
       }
-      When call boundary
-      The output should include "pane=terminal_9"
-      The output should include "ssh=true"
-      The output should include "--origin-pane terminal_9"
-      The output should include "--over-ssh"
+      When call worker_thread
+      The status should be success
+      The contents of file "$TEST_TMP/spawn.log" should include "--origin-pane terminal_9"
+      The contents of file "$TEST_TMP/spawn.log" should include "--over-ssh"
     End
   End
 End
