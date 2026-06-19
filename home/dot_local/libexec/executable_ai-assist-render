@@ -4,13 +4,12 @@
 # The agent harness runs headless, so its stdout is raw markdown text. This
 # wrapper becomes the docked pane's command (the workers spawn
 # `ai-assist-render --harness <name> -- <harness cmd>` instead of the harness
-# directly): it runs the harness with output BUFFERED while a braille spinner
-# shows progress, then hands the captured markdown to `ai-assist-pager` — an
-# interactive TUI viewer (per-element no-wrap + horizontal scroll for code and
-# tables, full-width bands, vertical scroll) which also draws the header. If the
-# pager isn't installed it falls back to `glow`, then a width-aware `fold`. The
-# pane parks on exit (workers spawn it without --close-on-exit) so the reply
-# stays for review.
+# directly): it creates an input FIFO, streams the harness output into it, and
+# launches `ai-assist-pager` in the foreground — the pager owns the pane from
+# the start (title, spinner while waiting, streaming render once text arrives).
+# If the pager isn't installed it falls back to `glow`, then a width-aware
+# `fold`. The pane parks on exit (workers spawn it without --close-on-exit) so
+# the reply stays for review.
 #
 # Reached by absolute path from the workers (~/.local/libexec is not on PATH,
 # and the docked pane's PATH is the non-interactive one). Self-contained: no
@@ -45,31 +44,6 @@ cols=$(tput cols 2>/dev/null) || cols=0
 ((cols > 0)) || cols=100
 typeset -i body=$((cols > 6 ? cols - 2 : 80))
 
-# SGR (inline — no theme sourcing).
-mauve=$'\e[1;38;2;203;166;247m'
-blue=$'\e[38;2;137;180;250m'
-reset=$'\e[0m'
-
-# Run the harness, buffering stdout+stderr; spinner while it works.
-out=$(mktemp -t ai-assist-render) || exit 1
-"${cmd[@]}" >"$out" 2>&1 &
-pid=$!
-
-# Title block while the harness works: blank line, the pane title, a blank line,
-# then the spinner renders on the line below (the pager draws this same title
-# once it takes over). Matches the pager's header so the handoff is seamless.
-printf '\n  %s▓▓▓ ai-assist — %s%s\n\n' "$mauve" "$harness" "$reset"
-
-spin=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-typeset -i i=1 start=$SECONDS
-while kill -0 "$pid" 2>/dev/null; do
-  printf '\r  %s%s%s working… %ds  ' "$blue" "${spin[i]}" "$reset" "$((SECONDS - start))"
-  sleep 0.1
-  i=$((i % 10 + 1))
-done
-wait "$pid"; rc=$?
-printf '\r\e[K' # clear the spinner line
-
 # Actions FIFO + broker: when we know the originating pane, create a FIFO, spawn
 # the broker (it performs copy/play), and hand the pager --actions-fifo. The
 # broker's lifetime is this pane's — the EXIT trap below kills it and removes the
@@ -96,20 +70,21 @@ if [[ -n "$origin_pane" ]]; then
     fi
   fi
 fi
-# Fold broker + FIFO cleanup into the existing tmpfile trap.
-trap 'rm -f -- "$out"; [[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"' EXIT INT TERM
 
-# Hand the captured markdown to ai-assist-pager (interactive: per-element no-wrap
-# + horizontal scroll for code/tables, full-width bands, vertical scroll; it draws
-# the header). Resolve by absolute path — the docked pane's PATH lacks GOBIN where
-# the binary lives. If the pager isn't installed yet, fall back to glow (then a
-# width-aware fold) so the feature degrades gracefully. Not exec'd, so the tempfile
-# trap still fires and the pane parks on the pager's final static render.
-# The docked pane inherits the zellij daemon's PATH, which does NOT include GOBIN
-# (~/.local/share/go/bin where `go install` puts the binary) — so a bare PATH
-# lookup fails there. Try PATH first, then the known go-install locations by
-# absolute path. AI_ASSIST_PAGER_BIN overrides (and is honoured even if missing,
-# so tests can force the glow fallback).
+# Input FIFO: the harness streams stdout+stderr into this; the pager reads from it.
+in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
+mkfifo -m 600 "$in_fifo"
+
+# Cleanup trap: remove input FIFO + actions FIFO + kill broker on exit/signal.
+trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"; rm -f -- "$in_fifo"' EXIT INT TERM
+
+# Launch ai-assist-pager in the FOREGROUND: it owns the pane (title, spinner,
+# streaming render). Resolve by absolute path — the docked pane's PATH lacks GOBIN
+# (~/.local/share/go/bin where `go install` puts the binary). Try PATH first, then
+# the known go-install locations by absolute path. AI_ASSIST_PAGER_BIN overrides
+# (and is honoured even if missing, so tests can force the glow fallback).
+# Not exec'd, so the cleanup trap still fires and the pane parks on the pager's
+# final static render.
 pager="${AI_ASSIST_PAGER_BIN:-}"
 if [[ -z "$pager" ]]; then
   for cand in \
@@ -120,24 +95,28 @@ if [[ -z "$pager" ]]; then
     [[ -n "$cand" && -x "$cand" ]] && { pager="$cand"; break; }
   done
 fi
+
+# Stream harness stdout+stderr into the input FIFO in the background, then
+# launch the pager (or glow fallback) in the foreground.
+{ "${cmd[@]}" 2>&1; } > "$in_fifo" &
+
 if [[ -n "$pager" && -x "$pager" ]]; then
-  # --actions-fifo=<path> as ONE token: zsh won't word-split an unquoted
-  # ${fifo:+--actions-fifo "$fifo"} (it would pass the flag+value as a single
-  # arg). The = form is a single Go-parseable token; empty $fifo → no arg.
-  "$pager" --harness "$harness" ${fifo:+--actions-fifo=$fifo} "$out"
+  # Build flags as a zsh array to avoid the word-split bug with optional flags.
+  typeset -a pager_flags
+  pager_flags=(--harness "$harness" --input-fifo "$in_fifo")
+  [[ -n "$fifo" ]] && pager_flags+=(--actions-fifo "$fifo")
+  "$pager" "${pager_flags[@]}"
 else
   theme="$HOME/.config/glow/catppuccin-mocha.json"
-  # Feed glow via STDIN, not a file argument: `glow FILE` opens its pager (it
-  # would hang the docked pane); reading stdin renders straight to stdout.
+  # Feed glow via the input FIFO. `glow FILE` opens its own pager (hangs the
+  # docked pane); piping via stdin renders straight to stdout instead.
   if command -v glow >/dev/null 2>&1; then
     if [[ -r "$theme" ]]; then
-      glow --style "$theme" --width "$body" < "$out"
+      cat "$in_fifo" | glow --style "$theme" --width "$body"
     else
-      glow --width "$body" < "$out"
+      cat "$in_fifo" | glow --width "$body"
     fi
   else
-    fold -s -w "$body" < "$out"
+    cat "$in_fifo" | fold -s -w "$body"
   fi
 fi
-
-exit "$rc"
