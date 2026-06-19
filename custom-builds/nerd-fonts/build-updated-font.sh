@@ -54,7 +54,7 @@
 #      jetbrains-mono-nerd-font.css — the embedded JetBrains Mono Nerd Font as
 #      the catch-all face, an iPad system-font fallback chain (local() +
 #      unicode-range, mirroring the WezTerm font_with_fallback config), and
-#      embedded Twemoji (COLRv0 colour vector) for emoji — split into two faces
+#      embedded Noto OT-SVG colour emoji (WOFF2) for emoji — split into two faces
 #      by hterm's terminal width so each emoji fills its reserved cell(s). Serve
 #      it for import with serve-blink-fonts.sh.
 #  11. Print the caveats below so you remember them next year.
@@ -220,21 +220,25 @@ BLINK_OUT_DIR="${BLINK_OUT_DIR-${HOME}/.local/share/fonts/blink}"
 # JetBrains Mono Regular TTF embedded as the primary face in the Blink CSS.
 # Empty -> auto-detect (see emit_blink_css). Override to pin a specific file.
 JETBRAINS_TTF="${JETBRAINS_TTF:-}"
-# Colour emoji for the Blink CSS. The build embeds Twemoji (COLRv0 colour
-# VECTOR font — iOS WebKit renders COLRv0, and unlike Apple's sbix bitmap a
-# vector glyph is resizable). Every emoji is routed to it, split into two
-# @font-face by hterm's terminal width: WIDE emoji (hterm width-2) fill their
-# reserved 2 cells, the rest fit 1 cell. Twemoji advances every glyph at 1.0em,
-# JBM's cell is 0.6em, so 60% = one cell and 120% = two cells. Tune if your
-# terminal cell ratio differs (JBM advance/em = 600/1000).
-EMOJI_NARROW_ADJUST="${EMOJI_NARROW_ADJUST:-60}"   # width-1 emoji -> one cell
-EMOJI_WIDE_ADJUST="${EMOJI_WIDE_ADJUST:-120}"      # width-2 emoji -> two cells
-# Embedded colour-emoji font. Empty -> download Twemoji to WORK_ROOT/emoji and
-# cache it. Override TWEMOJI_TTF to pin a local COLRv0 font, or TWEMOJI_URL to
-# fetch a different one. Set TWEMOJI_TTF="" + unreachable URL to skip (emoji then
+# Colour emoji for the Blink CSS. The build embeds Adobe's Noto Color Emoji in
+# OT-SVG form (the OpenType 'SVG ' table — gradient-rich VECTOR art). iOS WebKit
+# renders OT-SVG (since iOS Safari 12.2) but NOT COLRv1, and unlike Apple's sbix
+# bitmap an OT-SVG glyph is resizable. The font is subset to its cmap-reachable
+# single-codepoint emoji (dropping ZWJ/skin-tone/flag ligature glyphs) so it
+# stays under Safari's ~2000 SVG-document ceiling, then SPLIT by hterm's terminal
+# width into two WOFF2 faces (each glyph embedded ONCE): WIDE emoji (hterm
+# width-2) fill their reserved 2 cells, the rest fit 1 cell. Noto advances every
+# glyph at ~1.245em (2550/2048) and JBM's cell is 0.6em, so 48% ~= one cell and
+# 96% ~= two cells. Tune if your terminal cell ratio differs.
+EMOJI_NARROW_ADJUST="${EMOJI_NARROW_ADJUST:-48}"   # width-1 emoji -> one cell
+EMOJI_WIDE_ADJUST="${EMOJI_WIDE_ADJUST:-96}"       # width-2 emoji -> two cells
+# Embedded colour-emoji font. Empty -> download Adobe Noto OT-SVG to
+# WORK_ROOT/emoji and cache it. Override NOTO_EMOJI_OTF to pin a local OT-SVG
+# font (must carry an OpenType 'SVG ' table), or NOTO_EMOJI_URL to fetch a
+# different release. Set NOTO_EMOJI_OTF="" + unreachable URL to skip (emoji then
 # fall back to the system colour-emoji font via WebKit's last resort).
-TWEMOJI_TTF="${TWEMOJI_TTF:-}"
-TWEMOJI_URL="${TWEMOJI_URL:-https://github.com/mozilla/twemoji-colr/releases/download/v0.7.0/Twemoji.Mozilla.ttf}"
+NOTO_EMOJI_OTF="${NOTO_EMOJI_OTF:-}"
+NOTO_EMOJI_URL="${NOTO_EMOJI_URL:-https://github.com/adobe-fonts/noto-emoji-svg/releases/download/2.100/NotoColorEmoji-SVG.otf}"
 
 # Resolve JetBrains Mono Regular for the embedded Blink font (and the patch
 # pass that produces it). Honours an explicit JETBRAINS_TTF, else probes the
@@ -265,22 +269,22 @@ resolve_jetbrains_ttf() {
   return 0
 }
 
-# Resolve the embedded colour-emoji font. Honours an explicit TWEMOJI_TTF, else
-# uses the cached download, else fetches TWEMOJI_URL into WORK_ROOT/emoji. Leaves
-# TWEMOJI_TTF empty on failure; the CSS then omits the embedded emoji faces.
-resolve_twemoji() {
-  [[ -n "${TWEMOJI_TTF}" && -f "${TWEMOJI_TTF}" ]] && return 0
-  local cache="${WORK_ROOT}/emoji/Twemoji.Mozilla.ttf"
-  if [[ -f "${cache}" ]]; then TWEMOJI_TTF="${cache}"; return 0; fi
+# Resolve the embedded colour-emoji font. Honours an explicit NOTO_EMOJI_OTF,
+# else uses the cached download, else fetches NOTO_EMOJI_URL into WORK_ROOT/emoji.
+# Leaves NOTO_EMOJI_OTF empty on failure; the CSS then omits the embedded emoji.
+resolve_noto_emoji() {
+  [[ -n "${NOTO_EMOJI_OTF}" && -f "${NOTO_EMOJI_OTF}" ]] && return 0
+  local cache="${WORK_ROOT}/emoji/NotoColorEmoji-SVG.otf"
+  if [[ -f "${cache}" ]]; then NOTO_EMOJI_OTF="${cache}"; return 0; fi
   if ! command -v curl >/dev/null 2>&1; then
-    warn "curl not found; cannot fetch Twemoji colour-emoji font."; return 1
+    warn "curl not found; cannot fetch Noto OT-SVG colour-emoji font."; return 1
   fi
   mkdir -p "$(dirname "${cache}")"
-  info "downloading Twemoji colour-emoji font (COLRv0) ..."
-  if curl -fL --progress-bar -o "${cache}" "${TWEMOJI_URL}"; then
-    TWEMOJI_TTF="${cache}"; info "Twemoji -> ${cache}"; return 0
+  info "downloading Noto OT-SVG colour-emoji font ..."
+  if curl -fL --progress-bar -o "${cache}" "${NOTO_EMOJI_URL}"; then
+    NOTO_EMOJI_OTF="${cache}"; info "Noto OT-SVG -> ${cache}"; return 0
   fi
-  warn "Twemoji download failed (${TWEMOJI_URL}); emoji fall back to the system font."
+  warn "Noto download failed (${NOTO_EMOJI_URL}); emoji fall back to the system font."
   rm -f "${cache}"; return 1
 }
 
@@ -437,6 +441,9 @@ done_ "FontForge ready: ${FONTFORGE_BIN}"
 log "step 4/8  python venv with fonttools"
 
 PY_VENV_BIN="${VENV_DIR}/bin/python"
+# fonttools = verification + subsetting; lxml = subset the OT-SVG 'SVG ' table;
+# brotli = save the emoji subset as WOFF2.
+PY_PKGS=("fonttools>=4.55.0" lxml brotli)
 if [[ ! -x "${PY_VENV_BIN}" ]]; then
   if ! ask "Create a Python venv with 'fonttools' for verification at ${VENV_DIR}?"; then
     warn "skipping fonttools verification."
@@ -445,14 +452,21 @@ if [[ ! -x "${PY_VENV_BIN}" ]]; then
     if command -v uv >/dev/null 2>&1; then
       info "using uv to provision the venv"
       uv venv --quiet "${VENV_DIR}"
-      uv pip install --quiet --python "${PY_VENV_BIN}" "fonttools>=4.55.0"
     else
       info "using stdlib venv + pip"
       command -v python3 >/dev/null 2>&1 || die "python3 not found on PATH."
       python3 -m venv "${VENV_DIR}"
       "${PY_VENV_BIN}" -m pip install --quiet --upgrade pip
-      "${PY_VENV_BIN}" -m pip install --quiet "fonttools>=4.55.0"
     fi
+  fi
+fi
+# Ensure deps are present (idempotent) even when reusing an existing venv, so an
+# older venv without lxml/brotli still gains OT-SVG + WOFF2 support.
+if [[ -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" ]]; then
+  if command -v uv >/dev/null 2>&1; then
+    uv pip install --quiet --python "${PY_VENV_BIN}" "${PY_PKGS[@]}"
+  else
+    "${PY_VENV_BIN}" -m pip install --quiet "${PY_PKGS[@]}"
   fi
 fi
 [[ -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" ]] && \
@@ -2400,17 +2414,19 @@ fi
 # matching face wins, so the embedded catch-all is declared FIRST and each
 # higher-priority fallback later; emoji is declared last so it wins its range.
 #
-# Emoji: embedded Twemoji (COLRv0 colour VECTOR — iOS WebKit renders COLRv0, and
-# a vector glyph is resizable, unlike Apple's sbix bitmap). hterm decides how
-# many columns a glyph occupies from its own width table (font-independent), so
-# the emoji are split into two faces — hterm-wide -> size-adjust to 2 cells,
+# Emoji: embedded Noto OT-SVG (the OpenType 'SVG ' table — gradient VECTOR art;
+# iOS WebKit renders OT-SVG and resizes it, unlike COLRv1 which iOS can't render
+# and unlike Apple's sbix bitmap which won't scale). hterm decides how many
+# columns a glyph occupies from its own width table (font-independent), so the
+# emoji are split into two WOFF2 faces — hterm-wide -> size-adjust to 2 cells,
 # the rest -> 1 cell — to fill exactly what hterm reserves.
 #
 #   jetbrains-mono-nerd-font.css  -> save in Blink as "JetBrainsMono NF"
 log "step 10  emit Blink Shell CSS"
 
 emit_blink_css() {
-  # emit_blink_css <jbm-ttf> <output-css> <family-name> <twemoji-ttf> \
+  # emit_blink_css <jbm-ttf> <output-css> <family-name> \
+  #                <emoji-wide-woff2> <emoji-narrow-woff2> \
   #                <emoji-wide-range> <emoji-narrow-range> \
   #                <wide-size-adjust%> <narrow-size-adjust%>
   #
@@ -2422,13 +2438,14 @@ emit_blink_css() {
   # scripts the embedded font lacks, so it can't override Latin/icons. Blink
   # auto-appends Menlo as the final broad-text fallback, so it isn't listed here.
   #
-  # Emoji are EMBEDDED (Twemoji COLRv0 colour vector), split into TWO faces by
+  # Emoji are EMBEDDED (Noto OT-SVG colour vector), split into TWO WOFF2 faces by
   # hterm's terminal width: hterm reserves 2 columns for "wide" emoji and 1 for
   # the rest, independent of the font. Each face is size-adjusted so the glyph
   # fills exactly the cells hterm reserves (wide -> 2 cells, narrow -> 1 cell),
-  # so nothing bleeds or leaves a gap. Twemoji is base64'd into each face.
-  local jbm_ttf="$1" out="$2" family="$3" twemoji_ttf="$4"
-  local emoji_wide="$5" emoji_narrow="$6" wide_adjust="$7" narrow_adjust="$8"
+  # so nothing bleeds or leaves a gap. The wide/narrow subsets are DIFFERENT
+  # files (each glyph embedded once) base64'd into their respective face.
+  local jbm_ttf="$1" out="$2" family="$3" emoji_wide_woff2="$4" emoji_narrow_woff2="$5"
+  local emoji_wide="$6" emoji_narrow="$7" wide_adjust="$8" narrow_adjust="$9"
   {
     # NB: heredocs are UNQUOTED so ${family}/${emoji_range} interpolate. The CSS
     # body contains no other $, backtick, or backslash, so nothing else expands.
@@ -2491,41 +2508,42 @@ CSS_HEAD
   unicode-range: U+16A0-16FF, U+2900-297F, U+2B00-2BFF;
 }
 CSS_FILLERS
-    # Emoji: embedded Twemoji, declared LAST so the two faces win their ranges.
-    # Each base64's the same font; size-adjust scales the COLRv0 vector glyph to
-    # fill its hterm cells. Skipped if Twemoji is unavailable (emoji then fall to
-    # the system colour font via WebKit's last resort).
-    if [[ -f "${twemoji_ttf}" && -n "${emoji_wide}" ]]; then
-      cat <<CSS_TW_WIDE_HEAD
+    # Emoji: embedded Noto OT-SVG, declared LAST so the two faces win their
+    # ranges. Each face base64's its OWN WOFF2 subset; size-adjust scales the
+    # OT-SVG vector glyph to fill its hterm cells. Skipped if the subsets are
+    # unavailable (emoji then fall to the system colour font via WebKit's last
+    # resort).
+    if [[ -f "${emoji_wide_woff2}" && -n "${emoji_wide}" ]]; then
+      cat <<CSS_EMOJI_WIDE_HEAD
 
-/* Colour emoji, hterm width-2: fill the reserved 2 cells. */
+/* Colour emoji (Noto OT-SVG), hterm width-2: fill the reserved 2 cells. */
 @font-face {
   font-family: "${family}";
   size-adjust: ${wide_adjust}%;
-CSS_TW_WIDE_HEAD
-      printf '  src: url(data:font/ttf;charset=utf-8;base64,'
-      base64 < "${twemoji_ttf}" | tr -d '\n'
-      cat <<CSS_TW_WIDE_TAIL
-) format("truetype");
+CSS_EMOJI_WIDE_HEAD
+      printf '  src: url(data:font/woff2;charset=utf-8;base64,'
+      base64 < "${emoji_wide_woff2}" | tr -d '\n'
+      cat <<CSS_EMOJI_WIDE_TAIL
+) format("woff2");
   unicode-range: ${emoji_wide};
 }
-CSS_TW_WIDE_TAIL
+CSS_EMOJI_WIDE_TAIL
     fi
-    if [[ -f "${twemoji_ttf}" && -n "${emoji_narrow}" ]]; then
-      cat <<CSS_TW_NARROW_HEAD
+    if [[ -f "${emoji_narrow_woff2}" && -n "${emoji_narrow}" ]]; then
+      cat <<CSS_EMOJI_NARROW_HEAD
 
-/* Colour emoji, hterm width-1: fit one cell. Tune via EMOJI_NARROW_ADJUST. */
+/* Colour emoji (Noto OT-SVG), hterm width-1: fit one cell. Tune via EMOJI_NARROW_ADJUST. */
 @font-face {
   font-family: "${family}";
   size-adjust: ${narrow_adjust}%;
-CSS_TW_NARROW_HEAD
-      printf '  src: url(data:font/ttf;charset=utf-8;base64,'
-      base64 < "${twemoji_ttf}" | tr -d '\n'
-      cat <<CSS_TW_NARROW_TAIL
-) format("truetype");
+CSS_EMOJI_NARROW_HEAD
+      printf '  src: url(data:font/woff2;charset=utf-8;base64,'
+      base64 < "${emoji_narrow_woff2}" | tr -d '\n'
+      cat <<CSS_EMOJI_NARROW_TAIL
+) format("woff2");
   unicode-range: ${emoji_narrow};
 }
-CSS_TW_NARROW_TAIL
+CSS_EMOJI_NARROW_TAIL
     fi
   } > "${out}"
 }
@@ -2540,23 +2558,31 @@ else
   # copy isn't advertised by serve-blink-fonts.sh alongside the new single file.
   rm -f "${BLINK_OUT_DIR}"/jetbrains-custom-nerd-fonts.css \
         "${BLINK_OUT_DIR}"/jetbrains-custom-nerd-fonts-mono.css
-  # Resolve (download + cache) the embedded colour-emoji font, then compute the
-  # wide / narrow emoji unicode-ranges from ITS cmap, classified by hterm's exact
-  # terminal-width table (baked below). The text region is excluded so digits,
-  # # * keycap bases and (c)/(r) stay as JBM text.
+  # Resolve (download + cache) the embedded colour-emoji font, then subset it to
+  # its cmap-reachable emoji and SPLIT into wide/narrow WOFF2 faces, classified
+  # by hterm's exact terminal-width table (baked below). The text region is
+  # excluded so digits, # * keycap bases and (c)/(r) stay as JBM text; layout
+  # closure is dropped so ZWJ/skin-tone/flag glyphs don't push the OT-SVG
+  # document count past Safari's ~2000 ceiling.
   EMOJI_WIDE=""
   EMOJI_NARROW=""
-  resolve_twemoji || true
-  if [[ -n "${TWEMOJI_TTF}" && -f "${TWEMOJI_TTF}" && -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" ]]; then
-    EMOJI_SPLIT_PY="${WORK_DIR}/_emoji_split.py"
+  EMOJI_WIDE_WOFF2=""
+  EMOJI_NARROW_WOFF2=""
+  resolve_noto_emoji || true
+  if [[ -n "${NOTO_EMOJI_OTF}" && -f "${NOTO_EMOJI_OTF}" && -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" ]]; then
+    EMOJI_SPLIT_PY="${WORK_DIR}/_emoji_noto.py"
     cat >"${EMOJI_SPLIT_PY}" <<'PYEOF'
-"""Split the embedded emoji font's cmap into hterm-width-2 (wide) and width-1
-(narrow) unicode-range strings for the Blink CSS. Width comes from hterm's own
-wcwidth table (hterm/third_party/wcwidth/wc.js -> hterm.wc.unambiguous), baked
-in below so classification matches Blink exactly (unicodedata's east_asian_width
-does not). The text region is excluded so it can't clobber JBM's real glyphs."""
-import sys
+"""Subset Noto OT-SVG to its cmap-reachable emoji and split into two WOFF2 faces
+(wide / narrow) for the Blink CSS. Width comes from hterm's own wcwidth table
+(hterm_all.js -> lib.wc.unambiguous), baked in below so classification matches
+Blink exactly (unicodedata's east_asian_width does not). Layout features are
+dropped so ZWJ/skin-tone/flag closure can't inflate the SVG-document count past
+Safari's ~2000 ceiling. Each glyph is embedded once (wide glyphs in one file,
+narrow in the other). Prints four lines: wide-range, narrow-range, wide-woff2,
+narrow-woff2; per-face SVG-document counts go to stderr."""
+import sys, os
 from fontTools.ttLib import TTFont
+from fontTools import subset
 
 # hterm.wc.unambiguous: width-2 (wide) intervals. Anything not here is width 1.
 HTERM_WIDE = [
@@ -2586,20 +2612,16 @@ HTERM_WIDE = [
     (129776,129784),(131072,196605),(196608,262141),
 ]
 
-def is_text(cp):
-    # Keep JBM's own glyph for these: the whole ASCII/Latin-1 text region (digits,
-    # # and * keycap bases, (c)/(r)), plus TM and the zero-width joiner/selectors.
-    return cp < 0x2000 or cp in (0x2122, 0x200D, 0xFE0F, 0x20E3)
-
 def is_wide(cp):
     for lo, hi in HTERM_WIDE:
         if lo <= cp <= hi:
             return True
     return False
 
-cps = sorted(c for c in TTFont(sys.argv[1]).getBestCmap() if not is_text(c))
-wide = [c for c in cps if is_wide(c)]
-narrow = [c for c in cps if not is_wide(c)]
+def is_text(cp):
+    # Keep JBM's own glyph for these: the whole ASCII/Latin-1 text region (digits,
+    # # and * keycap bases, (c)/(r)), plus TM and the zero-width joiner/selectors.
+    return cp < 0x2000 or cp in (0x2122, 0x200D, 0xFE0F, 0x20E3)
 
 def compress(xs):
     runs, i = [], 0
@@ -2611,23 +2633,54 @@ def compress(xs):
         i = j + 1
     return ", ".join(runs)
 
+def subset_to(unicodes, path):
+    f = TTFont(sys.argv[1])
+    ss = subset.Subsetter()
+    # Drop layout closure so ligature/ZWJ glyphs can't pull extra SVG docs back in.
+    ss.options.layout_features = []
+    ss.options.layout_scripts = []
+    ss.options.notdef_outline = False
+    ss.populate(unicodes=unicodes)
+    ss.subset(f)
+    f.flavor = "woff2"
+    f.save(path)
+    g = TTFont(path)
+    return len(g["SVG "].docList) if "SVG " in g else 0
+
+outdir = sys.argv[2]
+os.makedirs(outdir, exist_ok=True)
+cmap = TTFont(sys.argv[1]).getBestCmap()
+emoji = sorted(c for c in cmap if not is_text(c))
+wide = [c for c in emoji if is_wide(c)]
+narrow = [c for c in emoji if not is_wide(c)]
+wide_path = os.path.join(outdir, "noto-emoji-wide.woff2")
+narrow_path = os.path.join(outdir, "noto-emoji-narrow.woff2")
+wdocs = subset_to(wide, wide_path) if wide else 0
+ndocs = subset_to(narrow, narrow_path) if narrow else 0
+sys.stderr.write("  SVG docs: wide=%d narrow=%d (Safari ceiling ~2000)\n" % (wdocs, ndocs))
 print(compress(wide))
 print(compress(narrow))
+print(wide_path if wide else "")
+print(narrow_path if narrow else "")
 PYEOF
-    EMOJI_SPLIT="$("${PY_VENV_BIN}" "${EMOJI_SPLIT_PY}" "${TWEMOJI_TTF}")"
+    EMOJI_OUT_DIR="${WORK_DIR}/emoji-split"
+    EMOJI_SPLIT="$("${PY_VENV_BIN}" "${EMOJI_SPLIT_PY}" "${NOTO_EMOJI_OTF}" "${EMOJI_OUT_DIR}")"
     EMOJI_WIDE="$(printf '%s\n' "${EMOJI_SPLIT}" | sed -n 1p)"
     EMOJI_NARROW="$(printf '%s\n' "${EMOJI_SPLIT}" | sed -n 2p)"
+    EMOJI_WIDE_WOFF2="$(printf '%s\n' "${EMOJI_SPLIT}" | sed -n 3p)"
+    EMOJI_NARROW_WOFF2="$(printf '%s\n' "${EMOJI_SPLIT}" | sed -n 4p)"
   fi
   if [[ -n "${EMOJI_WIDE}${EMOJI_NARROW}" ]]; then
-    info "emoji -> embedded Twemoji: wide(2-cell, ${EMOJI_WIDE_ADJUST}%) + narrow(1-cell, ${EMOJI_NARROW_ADJUST}%)"
-    info "  $(basename "${TWEMOJI_TTF}") ($(($(stat -f '%z' "${TWEMOJI_TTF}" 2>/dev/null || stat -c '%s' "${TWEMOJI_TTF}")/1024)) KiB, embedded x2)"
+    info "emoji -> embedded Noto OT-SVG: wide(2-cell, ${EMOJI_WIDE_ADJUST}%) + narrow(1-cell, ${EMOJI_NARROW_ADJUST}%)"
+    [[ -f "${EMOJI_WIDE_WOFF2}" ]] && info "  $(basename "${EMOJI_WIDE_WOFF2}") ($(($(stat -f '%z' "${EMOJI_WIDE_WOFF2}" 2>/dev/null || stat -c '%s' "${EMOJI_WIDE_WOFF2}")/1024)) KiB)"
+    [[ -f "${EMOJI_NARROW_WOFF2}" ]] && info "  $(basename "${EMOJI_NARROW_WOFF2}") ($(($(stat -f '%z' "${EMOJI_NARROW_WOFF2}" 2>/dev/null || stat -c '%s' "${EMOJI_NARROW_WOFF2}")/1024)) KiB)"
   else
-    warn "Twemoji unavailable; Blink CSS omits embedded emoji (system fallback)."
+    warn "Noto OT-SVG unavailable; Blink CSS omits embedded emoji (system fallback)."
   fi
 
   info "JetBrains Mono : ${JETBRAINS_TTF}"
   emit_blink_css "${JBM_TTF}" "${BLINK_OUT_DIR}/jetbrains-mono-nerd-font.css" \
-    "JetBrainsMono NF" "${TWEMOJI_TTF}" \
+    "JetBrainsMono NF" "${EMOJI_WIDE_WOFF2}" "${EMOJI_NARROW_WOFF2}" \
     "${EMOJI_WIDE}" "${EMOJI_NARROW}" "${EMOJI_WIDE_ADJUST}" "${EMOJI_NARROW_ADJUST}"
   info 'wrote jetbrains-mono-nerd-font.css -> save in Blink as "JetBrainsMono NF"'
   done_ "Blink CSS -> ${BLINK_OUT_DIR}"
@@ -2658,9 +2711,9 @@ ${C_BLU}== Import the font into Blink Shell ==${C_RST}
   # Serve the CSS dir over HTTP, then in Blink: Settings -> Appearance ->
   # Add a new font -> point it at the printed URL. Save the font under the EXACT
   # name "JetBrainsMono NF" (must match the font-family inside the .css). One
-  # self-contained font: text + icons + embedded Twemoji colour emoji, with an
-  # iPad system-font fallback chain (PingFang SC / Hiragino Sans / Euphemia UCAS
-  # / Apple Symbols) referenced by name. Menlo is auto-appended by Blink.
+  # self-contained font: text + icons + embedded Noto OT-SVG colour emoji, with
+  # an iPad system-font fallback chain (PingFang SC / Hiragino Sans / Euphemia
+  # UCAS / Apple Symbols) referenced by name. Menlo is auto-appended by Blink.
   ./serve-blink-fonts.sh        # serves ${BLINK_OUT_DIR:-~/.local/share/fonts/blink} on :8000
 
 ${C_BLU}== Feed the glyph index to fzf ==${C_RST}
