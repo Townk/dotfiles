@@ -42,3 +42,34 @@ Describe 'zellij.zsh — zj::pick'
     The status should be success
   End
 End
+
+Describe 'zellij.zsh — zj:: input drop-ins (off-Zellij fallback)'
+  Include home/dot_local/lib/zellij.zsh
+
+  # Off-Zellij: zj::* must call the inline input::* with args intact. Stub the
+  # input::* the wrappers delegate to (defined after Include → overrides).
+  input::confirm() { printf 'confirm:%s' "$*"; }
+  input::line()    { printf 'line:%s' "$*"; }
+  input::choose()  { printf 'choose:%s' "$*"; }
+
+  setup() { unset ZELLIJ; }   # force the non-Zellij path
+  BeforeEach 'setup'
+
+  It 'zj::confirm delegates to input::confirm with the question'
+    When call zj::confirm "Proceed?"
+    The output should include "confirm:Proceed?"
+    The status should be success
+  End
+
+  It 'zj::confirm strips --pane-* before delegating'
+    When call zj::confirm "Proceed?" --pane-width 40 --pane-height 7
+    The output should not include "--pane-width"
+    The output should include "confirm:Proceed?"
+  End
+
+  It 'zj::choose forwards choices'
+    When call zj::choose "Pick" a b c
+    The output should include "choose:Pick"
+    The output should include "a b c"
+  End
+End

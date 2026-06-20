@@ -18,6 +18,11 @@ _zj_self="${(%):-%x}"
 source "$(dirname "$_zj_self")/pick-common.zsh"
 unset _zj_self
 
+# input-common gives us the input::* fallbacks for the no-Zellij path.
+_zj_self2="${(%):-%x}"
+source "$(dirname "$_zj_self2")/input-common.zsh"
+unset _zj_self2
+
 # zj::available — true when we're inside a Zellij session AND a zellij binary
 # is usable (so we can actually spawn the floating pane). ZELLIJ_BIN overrides
 # the lookup; otherwise PATH resolution keeps this portable across the
@@ -129,4 +134,117 @@ zj::pick() {
 
   [[ -n "$result" ]] || return 130
   print -r -- "$result"
+}
+
+# _zj::float --type T [--title TITLE] [--pane-width W] [--pane-height H]
+#            [--pane-x X] [--pane-y Y] -- <input-widget args...>
+# Spawn a sized floating modal running input-widget and capture the answer via
+# FIFO. Echoes the captured answer on stdout; returns 130 on empty (cancel).
+_zj::float() {
+  local type="line" title="" pane_w="" pane_h="" pane_x="" pane_y=""
+  local -a wargs
+  while (($#)); do
+    case "$1" in
+      --type)        type="${2:-line}"; shift 2 ;;
+      --title)       title="${2-}"; shift 2 ;;
+      --pane-width)  pane_w="${2-}"; shift 2 ;;
+      --pane-height) pane_h="${2-}"; shift 2 ;;
+      --pane-x)      pane_x="${2-}"; shift 2 ;;
+      --pane-y)      pane_y="${2-}"; shift 2 ;;
+      --) shift; wargs+=("$@"); break ;;
+      *) shift ;;
+    esac
+  done
+
+  local bin="${ZELLIJ_BIN:-$(command -v zellij)}"
+  local modal="$HOME/.config/zellij/scripts/zellij-modal"
+  local widget="$HOME/.local/libexec/input-widget"
+
+  local fifo
+  fifo=$(mktemp -u "${TMPDIR:-/tmp}/zjinput-fifo.XXXXXX")
+  mkfifo -m 600 "$fifo" 2>/dev/null || return 1
+
+  local -a pane_geom=()
+  [[ -n "$pane_w" ]] && pane_geom+=(--width "$pane_w")
+  [[ -n "$pane_h" ]] && pane_geom+=(--height "$pane_h")
+  [[ -n "$pane_x" ]] && pane_geom+=(--x "$pane_x")
+  [[ -n "$pane_y" ]] && pane_geom+=(--y "$pane_y")
+
+  local -a modal_args=(--capture "$fifo")
+  [[ -n "$title" ]] && modal_args=(--title "$title" "${modal_args[@]}")
+
+  "$bin" action new-pane --floating --close-on-exit \
+    --name "" --borderless false --pinned true "${pane_geom[@]}" --cwd "$PWD" \
+    -- "$modal" "${modal_args[@]}" \
+    -- "$widget" --type "$type" -- "${wargs[@]}" >/dev/null
+
+  local result
+  result=$(cat "$fifo")
+  rm -f -- "$fifo"
+  [[ -n "$result" ]] || return 130
+  print -rn -- "$result"
+}
+
+# Each public drop-in: split off --pane-* (consumed by _zj::float), keep the
+# rest as widget args. Off-Zellij → the inline input:: widget. Default per-type
+# geometry is supplied here and overridden by any caller --pane-*.
+_zj::split_pane_opts() {  # sets reply=(pane-opts...) and PANE_REST=(widget args)
+  reply=(); PANE_REST=()
+  while (($#)); do
+    case "$1" in
+      --pane-width|--pane-height|--pane-x|--pane-y) reply+=("$1" "${2-}"); shift 2 ;;
+      *) PANE_REST+=("$1"); shift ;;
+    esac
+  done
+}
+
+zj::confirm() {
+  local -a reply; local -a PANE_REST
+  _zj::split_pane_opts "$@"
+  if ! zj::available; then input::confirm "${PANE_REST[@]}"; return; fi
+  local q="${PANE_REST[1]:-}"
+  local rc=0 ans
+  ans=$(_zj::float --type confirm --title "$q" --pane-width 54 --pane-height 7 \
+        "${reply[@]}" -- "${PANE_REST[@]}") || rc=$?
+  ((rc == 130)) && return 130
+  [[ "$ans" == no ]] && { print -rn -- "no"; return 1; }
+  print -rn -- "yes"; return 0
+}
+
+zj::line() {
+  local -a reply; local -a PANE_REST
+  _zj::split_pane_opts "$@"
+  if ! zj::available; then input::line "${PANE_REST[@]}"; return; fi
+  local q="${PANE_REST[1]:-}"
+  _zj::float --type line --title "$q" --pane-width 64 --pane-height 7 \
+    "${reply[@]}" -- "${PANE_REST[@]}"
+}
+
+zj::text() {
+  local -a reply; local -a PANE_REST
+  _zj::split_pane_opts "$@"
+  if ! zj::available; then input::text "${PANE_REST[@]}"; return; fi
+  # No modal --title: ai-assist-input renders its own chrome.
+  _zj::float --type text --pane-width 55 --pane-height 10 \
+    "${reply[@]}" -- "${PANE_REST[@]}"
+}
+
+zj::choose() {
+  local -a reply; local -a PANE_REST
+  _zj::split_pane_opts "$@"
+  if ! zj::available; then input::choose "${PANE_REST[@]}"; return; fi
+  local q="${PANE_REST[1]:-}"
+  # Choices count drives height: question is arg 1, rest are choices/opts.
+  local n=$(( ${#PANE_REST} - 1 )); ((n < 1)) && n=1
+  _zj::float --type choose --title "$q" --pane-width 56 --pane-height $((n + 7)) \
+    "${reply[@]}" -- "${PANE_REST[@]}"
+}
+
+zj::form() {
+  local -a reply; local -a PANE_REST
+  _zj::split_pane_opts "$@"
+  if ! zj::available; then input::form "${PANE_REST[@]}"; return; fi
+  # No modal --title: input::form renders its own title + tab chrome.
+  _zj::float --type form --pane-width 64 --pane-height 16 \
+    "${reply[@]}" -- "${PANE_REST[@]}"
 }
