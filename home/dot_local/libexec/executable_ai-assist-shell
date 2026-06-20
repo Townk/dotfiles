@@ -33,6 +33,8 @@ done
 # running and writes it back after — so cd and export persist across jobs even
 # though each job runs in its own subshell (needed to contain `exit N`).
 _aas_state="$(mktemp)"
+trap 'rm -f -- "$_aas_state" "${_aas_tmp:-}"; exit 0' INT TERM
+trap 'rm -f -- "$_aas_state" "${_aas_tmp:-}"' EXIT
 { print -r -- "cd -- ${(q)PWD}"; export -p; } > "$_aas_state"
 
 _aas_US=$'\x1f' _aas_RS=$'\x1e'
@@ -44,7 +46,9 @@ while IFS= read -r -d "$_aas_RS" _aas_job <&$_aas_fd; do
   # Run in a subshell so `exit N` from user code is captured as the exit code
   # rather than terminating this persistent process. The subshell restores the
   # previous job's cwd/env from the state file, runs the command, then writes
-  # the updated env back so cd and export persist across jobs.
+  # the updated env back so cd and export persist across jobs. Note: a job that
+  # calls `exit N` early is recorded with that exit code, but any cwd/env changes
+  # made before the early exit are not persisted (shell-in-a-script semantics).
   (
     source "$_aas_state" 2>/dev/null
     eval "$_aas_cmd"
@@ -56,7 +60,7 @@ while IFS= read -r -d "$_aas_RS" _aas_job <&$_aas_fd; do
   # Use a temp file to avoid corrupting state on write failure.
   _aas_tmp="$(mktemp)"
   {
-    cat "$_aas_state"
+    print -r -- "$(<"$_aas_state")"
     print -r -- "export LAST_EXCODE=${(q)_aas_code}"
     print -r -- "export LAST_STDOUT=${(q)$(<"$_aas_reply/out")}"
     print -r -- "export LAST_STDERR=${(q)$(<"$_aas_reply/err")}"
