@@ -38,13 +38,15 @@ block later steps unless explicitly fatal):
   1. git pull --rebase the chezmoi source, then `chezmoi apply`
      (skipped under chezmoi's own run_once to avoid lock contention)
   2. `brew update`            refresh formula metadata
-  3. `system-package sync`    install/upgrade across every ecosystem,
+  3. `mise install && mise upgrade && mise prune -y`
+                              converge mise-managed toolchains to their
+                              declared versions BEFORE the package syncs
+  4. `system-package sync`    install/upgrade across every ecosystem,
                               then restart services tied to upgraded
                               packages (see `system-service --help`)
-  4. `brew cleanup --prune=all`
-  5. `system-service sync`    reconcile launchd plists with services.toml
-  6. `ya pkg upgrade`         + commit any package.toml bumps to chezmoi
-  7. `mise upgrade && mise prune -y`
+  5. `brew cleanup --prune=all`
+  6. `system-service sync`    reconcile launchd plists with services.toml
+  7. `ya pkg upgrade --discard`  + commit any package.toml bumps to chezmoi
   8. NeoVim: `Lazy! sync` + `MasonToolsUpdateSync`
   9. Pi: `pi update --extensions` for the cloud + local config homes
  10. `git pull` the zsh plugins in ~/.local/share/zsh/plugins
@@ -264,16 +266,26 @@ fi
 print -P -- "\n  Updating Homebrew sources...\n"
 brew update || die "Failed to update Homebrew!"
 
-# Install mise-managed toolchains BEFORE the package syncs: package workers
-# shell out to tools mise provides (e.g. the Go worker needs `go` on PATH),
-# so those must exist before `system-package sync` runs — otherwise the worker
-# dies with "command not found". `mise install` only adds declared-but-missing
-# tools (a no-op when all present); the later `mise upgrade`/`prune` step still
-# handles version bumps.
+# Converge mise-managed toolchains BEFORE the package syncs, for two reasons:
+#   1. Package workers shell out to tools mise provides (e.g. the Go worker
+#      needs `go` on PATH), so those must exist before `system-package sync`
+#      runs — otherwise the worker dies with "command not found".
+#   2. `mise upgrade`/`prune` must run BEFORE globals are laid down. mise-managed
+#      node stores npm globals under a version-pinned prefix
+#      (~/.local/share/mise/installs/node/<VERSION>/lib/node_modules) with no
+#      shared store across versions. Upgrading node after the npm sync would
+#      activate a fresh, empty prefix — silently orphaning every npm global
+#      the sync just installed (recovered only by re-running `system-package
+#      npm sync`). `mise install` only adds declared-but-missing tools (a no-op
+#      when all present); `mise upgrade` bumps versions and `prune` drops the
+#      now-orphaned old installs. Doing all three here means the npm worker
+#      installs globals into the prefix that will actually remain active.
 if command -v mise >/dev/null 2>&1; then
-  print -P -- "\n🛠️ Installing mise toolchains...\n"
+  print -P -- "\n🛠️ Converging mise toolchains...\n"
   repair_mise_rust_legacy_links
   mise install || log_warn "mise install had failures"
+  mise upgrade || log_warn "mise upgrade had failures"
+  mise prune -y || log_warn "mise prune had failures"
 fi
 
 # Install/upgrade declared packages across every ecosystem. This is the
@@ -312,7 +324,10 @@ fi
 
 if command -v ya >/dev/null 2>&1; then
   print -P -- "\n🦆 Upgrade Yazi plugins...\n"
-  ya pkg upgrade || die "Failed to upgrade Yazi plugins!"
+  # --discard: drop any local edits inside cloned plugin dirs before pulling,
+  # so stray dirt (e.g. a plugin that wrote a cache/log into its own tree)
+  # can't make `ya pkg upgrade` fail mid-update and block everything after it.
+  ya pkg upgrade --discard || die "Failed to upgrade Yazi plugins!"
 
   # Capture any rev/hash bumps `ya pkg upgrade` just wrote into the
   # live package.toml back into the chezmoi source, then commit and
@@ -352,17 +367,6 @@ if command -v ya >/dev/null 2>&1; then
       log_warn "Failed to copy yazi/package.toml into chezmoi source"
     fi
   fi
-fi
-
-if command -v mise >/dev/null 2>&1; then
-  print -P -- "\n🛠️ Upgrade Mise tools...\n"
-  # Best-effort, like every other step: a single tool whose upstream release
-  # is momentarily un-installable (e.g. a new "latest" tag published without
-  # its prebuilt asset yet) must not abort the whole update and skip the nvim
-  # / zsh-plugin steps below. Guard each independently so an upgrade failure
-  # still lets prune run.
-  mise upgrade || log_warn "mise upgrade had failures"
-  mise prune -y || log_warn "mise prune had failures"
 fi
 
 if command -v nvim >/dev/null 2>&1; then
