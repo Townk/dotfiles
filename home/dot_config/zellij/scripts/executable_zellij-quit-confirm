@@ -65,7 +65,7 @@ ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_bin zellij /opt/homebrew/bin/zellij /usr/loc
 # (this runs as a floating pane's PID 1, outside any login shell).
 source "$HOME/.local/lib/input-common.zsh"
 
-# Blank row between zellij-modal's title rule and the gum prompt.
+# Blank row between zellij-modal's title rule and the confirm widget.
 printf '\n'
 
 # overlay0 "Session:" label, text value — now from the shared theme tokens.

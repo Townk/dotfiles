@@ -61,4 +61,17 @@ Describe 'ai-assist-ask'
     The status should be success
     The stderr should be present
   End
+
+  It '--field param containing colons survives without truncation'
+    # A param value like "https://x:8080" contains colons; old ${(@s/:/)fld} parse would
+    # have split it into extra fields, producing a malformed spec and a broken form.
+    # The fix parses name:type:label and treats the rest as param verbatim.
+    export GUM_OUT="myval"
+    printf 'url\037myval\036host\037myval' > "$TEST_TMP/expected"
+    export EXPECT_FILE="$TEST_TMP/expected"
+    When run "$SCRIPT" --type form "Connect" --field "url:line:URL:https://x:8080" --field "host:line:Host:localhost:9090"
+    The output should satisfy output_matches_file
+    The status should be success
+    The stderr should be present
+  End
 End

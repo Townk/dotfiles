@@ -81,7 +81,7 @@ line2"
   End
 
   Describe 'input::choose'
-    pick::start() { cat >/dev/null 2>&1; printf '%s' "${PICK_OUT:-}"; return ${PICK_RC:-0}; }
+    pick::start() { print -r -- "$@" > "$TEST_TMP/pick.args"; cat > "$TEST_TMP/pick.rows"; printf '%s' "${PICK_OUT:-}"; return ${PICK_RC:-0}; }
     It 'returns the chosen row'
       export PICK_OUT="beta"
       When call input::choose "Pick" alpha beta gamma
@@ -92,6 +92,15 @@ line2"
       export PICK_OUT=""; export PICK_RC=130
       When call input::choose "Pick" alpha beta
       The status should eq 130
+    End
+    It 'passes question as --header and choices as rows, not as a selectable row'
+      export PICK_OUT="alpha"
+      When call input::choose "Pick one" alpha beta gamma
+      The output should equal "alpha"
+      The contents of file "$TEST_TMP/pick.args" should include "--header Pick one"
+      The contents of file "$TEST_TMP/pick.rows" should include "alpha"
+      The contents of file "$TEST_TMP/pick.rows" should include "beta"
+      The contents of file "$TEST_TMP/pick.rows" should not include "Pick one"
     End
   End
 End

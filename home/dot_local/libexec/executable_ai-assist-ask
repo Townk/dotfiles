@@ -37,11 +37,16 @@ case "$type" in
   choose) zj::choose "$question" "${choices[@]}" ;;
   form)
     # Build the US/RS spec from --field name:type:label[:param] tokens.
+    # name, type, label must not contain ':' but param may (e.g. "https://..." or "50:50").
     US=$'\x1f' RS=$'\x1e'
     spec=""
+    local fname ftype flabel fparam rest rec
     for fld in "${fields[@]}"; do
-      local -a p=("${(@s/:/)fld}")
-      rec="${p[1]:-}${US}${p[2]:-line}${US}${p[3]:-}${US}${p[4]:-}"
+      fname="${fld%%:*}"; rest="${fld#*:}"
+      ftype="${rest%%:*}"; rest="${rest#*:}"
+      flabel="${rest%%:*}"
+      if [[ "$rest" == *:* ]]; then fparam="${rest#*:}"; else fparam=""; fi
+      rec="${fname}${US}${ftype:-line}${US}${flabel}${US}${fparam}"
       [[ -z "$spec" ]] && spec="$rec" || spec="${spec}${RS}${rec}"
     done
     specfile="$(mktemp "${TMPDIR:-/tmp}/aiask-form.XXXXXX")"

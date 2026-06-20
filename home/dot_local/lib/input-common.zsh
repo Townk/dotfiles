@@ -132,7 +132,7 @@ input::choose() {
       --icon|--margin|--padding|--width) shift 2 ;;
       --) shift; choices+=("$@"); break ;;
       -*) shift ;;
-      *)  choices+=("$1"); shift ;;
+      *)  if [[ -z "$question" ]]; then question="$1"; else choices+=("$1"); fi; shift ;;
     esac
   done
 
