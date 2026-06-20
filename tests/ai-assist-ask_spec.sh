@@ -1,6 +1,10 @@
 Describe 'ai-assist-ask'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_ai-assist-ask"
 
+  # satisfy-compatible helper: reads stdin, compares byte-for-byte to $EXPECT_FILE.
+  # Avoids passing control chars (US/RS) through ShellSpec's eval boundary.
+  output_matches_file() { [ "$(cat)" = "$(cat "$EXPECT_FILE")" ]; }
+
   setup() {
     TEST_TMP="$(mktemp -d)"
     gum="$TEST_TMP/gum"
@@ -10,7 +14,7 @@ Describe 'ai-assist-ask'
     { echo '#!/usr/bin/env zsh'; echo 'printf "%s" "${AII_OUT:-}"'; echo 'exit ${AII_RC:-0}'; } > "$aii"
     chmod +x "$aii"; export AI_ASSIST_INPUT_BIN="$aii"
   }
-  cleanup() { rm -rf "$TEST_TMP"; unset GUM_BIN AI_ASSIST_INPUT_BIN GUM_OUT GUM_RC AII_OUT AII_RC; }
+  cleanup() { rm -rf "$TEST_TMP"; unset GUM_BIN AI_ASSIST_INPUT_BIN GUM_OUT GUM_RC AII_OUT AII_RC EXPECT_FILE; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -46,5 +50,15 @@ Describe 'ai-assist-ask'
     When run "$SCRIPT" --type line "Enter something"
     The output should equal "some typed input"
     The status should be success
+  End
+
+  It 'assembles --field tokens into US/RS spec and returns form answers'
+    export GUM_OUT="x"
+    printf 'name\037x\036email\037x' > "$TEST_TMP/expected"
+    export EXPECT_FILE="$TEST_TMP/expected"
+    When run "$SCRIPT" --type form "Sign up" --field "name:line:Name" --field "email:line:Email"
+    The output should satisfy output_matches_file
+    The status should be success
+    The stderr should be present
   End
 End
