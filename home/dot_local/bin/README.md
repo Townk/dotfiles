@@ -29,6 +29,14 @@ absolute path from its caller, so it never needs to be on `PATH`:
   (Enter submits / Shift+Enter newlines) and returns the typed request. Invoked
   by the `ai-assist-trigger` ZLE widget bound to `Ctrl+Shift+/` (delivered as
   kitty `CSI 47;6u` by `zj-context-keys`).
+- `ai-assist-shell` — long-lived agent shell seeded with the origin environment
+  and cwd; the agent's own real shell, kept alive across tool calls.
+- `ai-assist-run` — runs a command in the agent shell and returns its stdout,
+  stderr, and exit code via reply files (`LAST_STDOUT`/`LAST_STDERR`/`LAST_EXCODE`).
+- `ai-assist-ask` — the only user-input channel for the agent; supports free
+  text, single-line, confirm, and choose prompts (`--type free|line|confirm|choose`).
+- `ai-assist-remember` — saves a durable, distilled fact about the current
+  project to the per-project knowledge base for use in future requests.
 
 ## Library layering
 

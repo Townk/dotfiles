@@ -112,6 +112,22 @@ Relevant terminal output (scrollback of the last command):
 ${REQ_SCROLLBACK:-(none captured)}${kb_block}
 
 Diagnose the situation and explain what is going on and how to fix or proceed.
+
+You have these helper tools on PATH — prefer them over your own raw shell:
+- \`ai-assist-run "<cmd>"\` runs a command in the user's real shell (their cwd
+  and environment). Use it for diagnosis; keep those commands read-only or
+  idempotent. It returns the command's output and exit code.
+- \`ai-assist-ask --type free|line|confirm|choose "<question>" [choices...]\`
+  asks the user and returns their answer. It is the only way to get input.
+- \`ai-assist-remember "<fact>"\` saves a durable, distilled fact about this
+  project for future requests.
+
+Do NOT propose changes by running them yourself — present commands and diffs as
+fenced code blocks for the user to review and apply.
+
+Never write secrets, credentials, or raw environment dumps into a remembered
+fact or into your answer.
+
 Finish with a short summary of the cause and the recommended next step.
 EOF
 }
