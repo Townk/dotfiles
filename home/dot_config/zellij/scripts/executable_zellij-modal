@@ -175,12 +175,9 @@ discover_target_pane() {
       '
 }
 
-# Catppuccin Mocha SGR helpers — 24-bit truecolor. Inlined (not sourced
-# from themes.sh) because this runs outside any login shell and we want
-# zero environmental coupling. Shared by every modal so they all match.
-SGR_TITLE=$'\e[1;38;2;203;166;247m' # mauve, bold (h1 accent)
-SGR_RULE=$'\e[38;2;49;50;68m'       # overlay0 (glow hr)
-SGR_RESET=$'\e[0m'
+# Shared dialog theme — single source of the catppuccin palette (THEME_*) and
+# the rule helper. Sourced by absolute path so it works outside any login shell.
+source "$HOME/.local/lib/theme-common.zsh"
 
 # Title block — blank row, "▓▓▓ <title>", full-width rule — flush to the
 # left frame with a 2-cell inset, no trailing separator. The rule width
@@ -188,16 +185,9 @@ SGR_RESET=$'\e[0m'
 # doesn't reliably export $COLUMNS into the spawned pane and `tput cols`
 # can fall back to terminfo's 80, leaving the rule short of the frame.
 if [[ -n "$title" ]]; then
-  # Group-redirect so the shell's own "/dev/tty: Device not configured"
-  # error (raised before stty even runs, when there's no controlling
-  # tty) is swallowed too; `|| true` keeps `set -e` from aborting.
-  cols=$({ stty size </dev/tty; } 2>/dev/null | awk '{print $2}') || true
-  [[ -z "$cols" ]] && cols="${COLUMNS:-80}"
-  cols=$((cols - 4))
-  ((cols < 1)) && cols=1
-  rule=$(printf '━%.0s' {1..$cols})
-  printf '\n  %s▓▓▓ %s%s\n' "$SGR_TITLE" "$title" "$SGR_RESET"
-  printf '  %s%s%s\n' "$SGR_RULE" "$rule" "$SGR_RESET"
+  rule="$(theme::rule)"
+  printf '\n  %s▓▓▓ %s%s\n' "$THEME_H1" "$title" "$THEME_RESET"
+  printf '  %s%s%s\n' "$THEME_SEPARATOR" "$rule" "$THEME_RESET"
 fi
 
 if [[ -n "$capture" ]]; then
