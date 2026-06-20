@@ -14,7 +14,7 @@ unset _input_self
 # selection to red AND forces default=no (never default to a destructive act).
 input::confirm() {
   local question="" default="yes" affirmative="Yes" negative="No"
-  local danger=0 icon="$THEME_ICON_PROMPT" padding=""
+  local danger=0 icon="" padding="0 2"
   while (($#)); do
     case "$1" in
       --default)     default="${2:-yes}"; shift 2 ;;
@@ -55,15 +55,16 @@ input::confirm() {
 
 # input::line "Q" [--placeholder P] [--value V] [--icon G] [--width N]
 input::line() {
-  local question="" placeholder="" value="" icon="$THEME_ICON_PROMPT" width=""
+  local question="" placeholder="" value="" icon="" width="" padding="0 2"
   while (($#)); do
     case "$1" in
       --placeholder) placeholder="${2-}"; shift 2 ;;
       --value)       value="${2-}"; shift 2 ;;
       --icon)        icon="${2-}"; shift 2 ;;
       --width)       width="${2-}"; shift 2 ;;
+      --padding)     padding="${2-}"; shift 2 ;;
       --header|--title) question="${2-}"; shift 2 ;;
-      --margin|--padding) shift 2 ;;
+      --margin) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
       *)  question="$1"; shift ;;
@@ -79,6 +80,7 @@ input::line() {
   [[ -n "$placeholder" ]] && flags+=(--placeholder "$placeholder")
   [[ -n "$value" ]]       && flags+=(--value "$value")
   [[ -n "$width" ]]       && flags+=(--width "$width")
+  [[ -n "$padding" ]]     && flags+=(--padding "$padding")
 
   local answer rc=0
   answer="$("$gum" input "${flags[@]}")" || rc=$?

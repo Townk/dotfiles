@@ -173,9 +173,16 @@ _zj::float() {
   local -a modal_args=(--capture "$fifo")
   [[ -n "$title" ]] && modal_args=(--title "$title" "${modal_args[@]}")
 
+  # `zellij action new-pane` does NOT propagate COLORTERM into the spawned pane
+  # (it inherits TERM but not COLORTERM), so gum/lipgloss fall back to 256-color
+  # and the Catppuccin truecolor hex are approximated — mauve #cba6f7 lands on
+  # ~gum's default pink, reading as "unthemed". Carry our own COLORTERM through
+  # `env` so the dialog renders true 24-bit color, matching the keybind-spawned
+  # quit pane (which inherits COLORTERM). Default to truecolor if we somehow lack
+  # it (these are GUI terminals).
   "$bin" action new-pane --floating --close-on-exit \
     --name "" --borderless false --pinned true "${pane_geom[@]}" --cwd "$PWD" \
-    -- "$modal" "${modal_args[@]}" \
+    -- env "COLORTERM=${COLORTERM:-truecolor}" "$modal" "${modal_args[@]}" \
     -- "$widget" --type "$type" -- "${wargs[@]}" >/dev/null
 
   local result
@@ -204,7 +211,7 @@ zj::confirm() {
   if ! zj::available; then input::confirm "${PANE_REST[@]}"; return; fi
   local q="${PANE_REST[1]:-}"
   local rc=0 ans
-  ans=$(_zj::float --type confirm --title "$q" --pane-width 54 --pane-height 7 \
+  ans=$(_zj::float --type confirm --title "$q" --pane-width 54 --pane-height 11 \
         "${reply[@]}" -- "${PANE_REST[@]}") || rc=$?
   ((rc == 130)) && return 130
   [[ "$ans" == no ]] && { print -rn -- "no"; return 1; }
@@ -216,7 +223,7 @@ zj::line() {
   _zj::split_pane_opts "$@"
   if ! zj::available; then input::line "${PANE_REST[@]}"; return; fi
   local q="${PANE_REST[1]:-}"
-  _zj::float --type line --title "$q" --pane-width 64 --pane-height 7 \
+  _zj::float --type line --title "$q" --pane-width 64 --pane-height 9 \
     "${reply[@]}" -- "${PANE_REST[@]}"
 }
 
