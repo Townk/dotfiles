@@ -132,6 +132,19 @@ JSON
       The contents of file "$TEST_TMP/zj-args" should include "--shell-cwd"
       The path "${REQFILE:h}/request.env" should be exist
     End
+
+    It 'passes --project-root to ai-assist-render'
+      render_dir="$TEST_TMP/home/.local/libexec"
+      mkdir -p "$render_dir"
+      printf '#!/usr/bin/env zsh\n' > "$render_dir/ai-assist-render"; chmod +x "$render_dir/ai-assist-render"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      export AI_ASSIST_RENDER=1
+      When run script "$(SCRIPT)" --request "$TEST_TMP/req.json"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "--project-root"
+      The contents of file "$TEST_TMP/zj-args" should include "/tmp/proj"
+    End
   End
 
   Describe 'ai-assist-pi'

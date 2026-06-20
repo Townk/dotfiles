@@ -80,7 +80,8 @@ if [[ -n "${ZELLIJ:-}" ]]; then
   # --- Production path: floating pane + FIFO ---
   fifo="$(mktemp -u "${TMPDIR:-/tmp}/aiask-fifo.XXXXXX")"
   mkfifo -m 600 "$fifo"
-  trap 'rm -f "$fifo"' EXIT INT TERM
+  # Combine with any pre-existing choicesfile cleanup so we don't clobber it.
+  trap '[[ -n "${choicesfile:-}" ]] && rm -f -- "$choicesfile"; rm -f -- "$fifo"' EXIT INT TERM
 
   # Resolve modal to absolute path (same reasoning as input_bin above).
   if [[ ! -x "$modal" ]] && command -v -- "$modal" >/dev/null 2>&1; then

@@ -123,4 +123,23 @@ Describe 'ai-assist-render'
     The contents of file "$TEST_TMP/shell-args" should include "--env-file $envf"
     The contents of file "$TEST_TMP/seen-fifo" should not equal "UNSET"
   End
+
+  It 'exports AI_ASSIST_PROJECT_ROOT to the harness when --project-root is passed'
+    setup_projroot_test() {
+      pager_stub
+      shell_stub
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+    }
+    BeforeRun 'setup_projroot_test'
+    envf="$TEST_TMP/req.env"; printf "export X=1\n" > "$envf"
+    harness="$TEST_TMP/harness2"
+    { echo '#!/usr/bin/env zsh'
+      echo "printf '%s' \"\${AI_ASSIST_PROJECT_ROOT:-UNSET}\" > \"$TEST_TMP/seen-projroot\""
+    } > "$harness"; chmod +x "$harness"
+    When run script "$SCRIPT" --harness claude --shell-env "$envf" --shell-cwd "$TEST_TMP" \
+      --shell-bin "$TEST_TMP/ai-assist-shell" --project-root /tmp/proj -- "$harness"
+    The status should be success
+    The output should include "PAGER_RAN"
+    The contents of file "$TEST_TMP/seen-projroot" should equal "/tmp/proj"
+  End
 End

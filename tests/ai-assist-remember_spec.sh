@@ -35,4 +35,15 @@ Describe 'ai-assist-remember'
     The status should eq 2
     The stderr should include "empty fact"
   End
+
+  It 'keys the KB on AI_ASSIST_PROJECT_ROOT when --project is absent and cwd differs'
+    export AI_ASSIST_PROJECT_ROOT=/tmp/proj
+    # Run from a different cwd; without AI_ASSIST_PROJECT_ROOT propagation the
+    # key would be based on $PWD instead of /tmp/proj.
+    cd "$TEST_TMP"
+    When run "$SCRIPT" "fact via env root"
+    The status should be success
+    kb="$(kb_for /tmp/proj)"
+    The contents of file "$kb" should include "fact via env root"
+  End
 End

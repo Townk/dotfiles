@@ -31,18 +31,23 @@ shell_cwd=""
 shell_bin=""
 shell_pid=""
 shell_fifo=""
+project_root=""
 while (($#)); do
   case "$1" in
-    --harness)     harness="${2:-agent}"; shift 2 ;;
-    --origin-pane) origin_pane="${2:-}"; shift 2 ;;
-    --over-ssh)    over_ssh=1; shift ;;
-    --shell-env)   shell_env="${2:-}"; shift 2 ;;
-    --shell-cwd)   shell_cwd="${2:-}"; shift 2 ;;
-    --shell-bin)   shell_bin="${2:-}"; shift 2 ;;
+    --harness)       harness="${2:-agent}"; shift 2 ;;
+    --origin-pane)   origin_pane="${2:-}"; shift 2 ;;
+    --over-ssh)      over_ssh=1; shift ;;
+    --shell-env)     shell_env="${2:-}"; shift 2 ;;
+    --shell-cwd)     shell_cwd="${2:-}"; shift 2 ;;
+    --shell-bin)     shell_bin="${2:-}"; shift 2 ;;
+    --project-root)  project_root="${2:-}"; shift 2 ;;
     --) shift; break ;;
     *) break ;;
   esac
 done
+# Propagate project root so ai-assist-remember (and any other tool) keys the
+# KB on the canonical project root rather than the agent shell's cwd.
+[[ -n "$project_root" ]] && export AI_ASSIST_PROJECT_ROOT="$project_root"
 cmd=("$@")
 [[ ${#cmd[@]} -gt 0 ]] || { print -u2 -- "ai-assist-render: no command after --"; exit 2; }
 
@@ -84,7 +89,8 @@ in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
 mkfifo -m 600 "$in_fifo"
 
 # Cleanup trap: remove input FIFO + actions FIFO + kill broker + kill agent shell on exit/signal.
-trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$shell_pid" ]] && kill "$shell_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"; [[ -n "$shell_fifo" ]] && rm -f -- "$shell_fifo"; rm -f -- "$in_fifo"' EXIT INT TERM
+# Also removes the secrets env-snapshot ($shell_env) so it does not outlive this pane.
+trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$shell_pid" ]] && kill "$shell_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"; [[ -n "$shell_fifo" ]] && rm -f -- "$shell_fifo"; [[ -n "$shell_env" ]] && rm -f -- "$shell_env"; rm -f -- "$in_fifo"' EXIT INT TERM
 
 # Agent's own shell (Phase C1): a real shell seeded with the origin env + cwd,
 # reachable by the harness's `ai-assist-run` through AI_ASSIST_SHELL_FIFO. Owned
