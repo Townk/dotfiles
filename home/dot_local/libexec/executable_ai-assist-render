@@ -127,8 +127,11 @@ if [[ -z "$pager" ]]; then
 fi
 
 # Stream harness stdout+stderr into the input FIFO in the background, then
-# launch the pager (or glow fallback) in the foreground.
+# launch the pager (or glow fallback) in the foreground. Keep the harness PID so
+# its real exit code can be propagated below — the viewer's own status reflects
+# the renderer, not the agent.
 { "${cmd[@]}" 2>&1; } > "$in_fifo" &
+harness_pid=$!
 
 if [[ -n "$pager" && -x "$pager" ]]; then
   # Build flags as a zsh array to avoid the word-split bug with optional flags.
@@ -150,3 +153,10 @@ else
     cat "$in_fifo" | fold -s -w "$body"
   fi
 fi
+
+# The viewer (pager/glow/fold) returns at FIFO EOF — i.e. once the harness has
+# finished and closed its write end. Reap the harness and propagate its real
+# exit code so callers (and tests) see the agent's status, not the renderer's.
+# The EXIT trap still fires afterwards to tear down broker/shell/FIFOs.
+wait "$harness_pid"; rc=$?
+exit "$rc"
