@@ -1,0 +1,5 @@
+# Build artifact emitted by custom-builds/nerd-fonts/build-updated-font.sh.
+# The embedded JetBrains Mono Nerd Font CSS is large (base64 font + emoji data)
+# and fully recreatable by re-running the build, so it is not committed. The
+# colour theme (catppuccin-mocha-custom.js) IS committed — it is hand-authored.
+jetbrains-mono-nerd-font-custom.css

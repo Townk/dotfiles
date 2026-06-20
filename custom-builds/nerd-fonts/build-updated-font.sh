@@ -50,13 +50,13 @@
 #      (single-cell) to produce a fully-embedded "JetBrainsMono Nerd Font Mono"
 #      — text + every icon in one self-contained TTF, for Blink Shell. It goes
 #      through steps 6b/7/7b like the Symbols Mono font and is installed too.
-#  10. Emit ONE self-contained Blink Shell CSS file to ~/.local/share/fonts/blink:
-#      jetbrains-mono-nerd-font.css — the embedded JetBrains Mono Nerd Font as
+#  10. Emit ONE self-contained Blink Shell CSS file to assets/blink-shell/:
+#      jetbrains-mono-nerd-font-custom.css — the embedded JetBrains Mono Nerd Font as
 #      the catch-all face, an iPad system-font fallback chain (local() +
 #      unicode-range, mirroring the WezTerm font_with_fallback config), and
 #      embedded Noto OT-SVG colour emoji (WOFF2) for emoji — split into two faces
 #      by hterm's terminal width so each emoji fills its reserved cell(s). Serve
-#      it for import with serve-blink-fonts.sh.
+#      it for import with assets/blink-shell/serve-blink-assets.sh.
 #  11. Print the caveats below so you remember them next year.
 #
 # Overrides (export before running, or pass as `KEY=val ./build-updated-font.sh`):
@@ -83,11 +83,13 @@
 #                    Default: ~/.local/share/fonts/nerd-font
 #                    Pass JSON_OUT_DIR="" to skip the JSON step entirely.
 #   BLINK_OUT_DIR    Where the self-contained Blink Shell CSS file lands
-#                    (jetbrains-mono-nerd-font.css). It embeds the fully-patched
-#                    JetBrains Mono Nerd Font and references iPad system fonts by
-#                    name for fallback. Default: ~/.local/share/fonts/blink
+#                    (jetbrains-mono-nerd-font-custom.css). It embeds the
+#                    fully-patched JetBrains Mono Nerd Font and references iPad
+#                    system fonts by name for fallback.
+#                    Default: <repo>/assets/blink-shell
 #                    Pass BLINK_OUT_DIR="" to skip the CSS step entirely.
-#                    Serve it for Blink import with ./serve-blink-fonts.sh.
+#                    Serve it for Blink import with
+#                    assets/blink-shell/serve-blink-assets.sh.
 #   JETBRAINS_TTF    JetBrains Mono Regular TTF that is patched into the embedded
 #                    Blink font AND embedded as its text face. Default:
 #                    auto-detect (~/Library/Fonts -> /Library/Fonts -> brew
@@ -205,6 +207,9 @@ arr_append() {
 # Layout.
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd -P )"
+# Repo root — this script lives in custom-builds/nerd-fonts/. The Blink assets
+# (font CSS + committed theme) live under assets/blink-shell/ at the repo root.
+REPO_ROOT="$( cd -- "${SCRIPT_DIR}/../.." >/dev/null 2>&1 && pwd -P )"
 WORK_ROOT="${WORK_ROOT:-${SCRIPT_DIR}/build}"
 NERDFONTS_REF="${NERDFONTS_REF:-master}"
 REPO_DIR="${WORK_ROOT}/nerd-fonts"
@@ -215,8 +220,9 @@ VENV_DIR="${WORK_ROOT}/.venv"
 LOG_FILE="${WORK_DIR}/build.log"
 # Where the glyphs.json index lands. Set to "" to skip emission.
 JSON_OUT_DIR="${JSON_OUT_DIR-${HOME}/.local/share/fonts/nerd-font}"
-# Where the Blink Shell CSS files land. Set to "" to skip emission.
-BLINK_OUT_DIR="${BLINK_OUT_DIR-${HOME}/.local/share/fonts/blink}"
+# Where the Blink Shell CSS file lands (alongside the committed theme). Set to
+# "" to skip emission.
+BLINK_OUT_DIR="${BLINK_OUT_DIR-${REPO_ROOT}/assets/blink-shell}"
 # JetBrains Mono Regular TTF embedded as the primary face in the Blink CSS.
 # Empty -> auto-detect (see emit_blink_css). Override to pin a specific file.
 JETBRAINS_TTF="${JETBRAINS_TTF:-}"
@@ -2409,7 +2415,7 @@ fi
 # Step 10 — Emit Blink Shell CSS (self-contained, base64-embedded).
 # ===========================================================================
 # Blink Shell imports a font as a single CSS file containing @font-face rules.
-# We emit ONE file, jetbrains-mono-nerd-font.css, embedding the fully-embedded
+# We emit ONE file, jetbrains-mono-nerd-font-custom.css, embedding the fully-embedded
 # JetBrains Mono Nerd Font (text + icons, single-cell) as the catch-all face,
 # then a controlled fallback chain of iPad system fonts referenced by local()
 # (NOT embedded — no licensing issue) and scoped by unicode-range. This mirrors
@@ -2428,7 +2434,7 @@ fi
 # emoji are split into two WOFF2 faces — hterm-wide -> size-adjust to 2 cells,
 # the rest -> 1 cell — to fill exactly what hterm reserves.
 #
-#   jetbrains-mono-nerd-font.css  -> save in Blink as "JetBrainsMono NF"
+#   jetbrains-mono-nerd-font-custom.css  -> save in Blink as "JetBrainsMono NF"
 log "step 10  emit Blink Shell CSS"
 
 emit_blink_css() {
@@ -2561,10 +2567,12 @@ elif [[ -z "${JBM_TTF}" || ! -f "${JBM_TTF}" ]]; then
   warn "no embedded JetBrains Mono Nerd Font was built; skipping Blink CSS."
 else
   mkdir -p "${BLINK_OUT_DIR}"
-  # Remove the legacy two-file output (Propo/Mono symbols fallback) so a stale
-  # copy isn't advertised by serve-blink-fonts.sh alongside the new single file.
+  # Remove stale outputs so serve-blink-assets.sh doesn't advertise them: the
+  # legacy two-file output (Propo/Mono symbols fallback) and the pre-rename
+  # single file (jetbrains-mono-nerd-font.css, now -custom.css).
   rm -f "${BLINK_OUT_DIR}"/jetbrains-custom-nerd-fonts.css \
-        "${BLINK_OUT_DIR}"/jetbrains-custom-nerd-fonts-mono.css
+        "${BLINK_OUT_DIR}"/jetbrains-custom-nerd-fonts-mono.css \
+        "${BLINK_OUT_DIR}"/jetbrains-mono-nerd-font.css
   # Resolve (download + cache) the embedded colour-emoji font, then subset it to
   # its cmap-reachable emoji and SPLIT into wide/narrow WOFF2 faces, classified
   # by hterm's exact terminal-width table (baked below). The text region is
@@ -2686,10 +2694,10 @@ PYEOF
   fi
 
   info "JetBrains Mono : ${JETBRAINS_TTF}"
-  emit_blink_css "${JBM_TTF}" "${BLINK_OUT_DIR}/jetbrains-mono-nerd-font.css" \
+  emit_blink_css "${JBM_TTF}" "${BLINK_OUT_DIR}/jetbrains-mono-nerd-font-custom.css" \
     "JetBrainsMono NF" "${EMOJI_WIDE_WOFF2}" "${EMOJI_NARROW_WOFF2}" \
     "${EMOJI_WIDE}" "${EMOJI_NARROW}" "${EMOJI_WIDE_ADJUST}" "${EMOJI_NARROW_ADJUST}"
-  info 'wrote jetbrains-mono-nerd-font.css -> save in Blink as "JetBrainsMono NF"'
+  info 'wrote jetbrains-mono-nerd-font-custom.css -> save in Blink as "JetBrainsMono NF"'
   done_ "Blink CSS -> ${BLINK_OUT_DIR}"
 fi
 
@@ -2708,20 +2716,21 @@ ${C_GRN}Build complete.${C_RST}
   Glyph index:
     - ${JSON_OUT_DIR:-(disabled)}/glyphs.json
   Blink Shell CSS:
-    - ${BLINK_OUT_DIR:-(disabled)}/jetbrains-mono-nerd-font.css  -> save in Blink as "JetBrainsMono NF"
+    - ${BLINK_OUT_DIR:-(disabled)}/jetbrains-mono-nerd-font-custom.css  -> save in Blink as "JetBrainsMono NF"
 
 ${C_BLU}== Install manually if you skipped --install ==${C_RST}
   cp -f "${OUT_DIR}"/Symbols*.ttf "${OUT_DIR}"/JetBrains*.ttf ~/Library/Fonts/
   # Linux: cp ... ~/.local/share/fonts/ && fc-cache -fv
 
 ${C_BLU}== Import the font into Blink Shell ==${C_RST}
-  # Serve the CSS dir over HTTP, then in Blink: Settings -> Appearance ->
-  # Add a new font -> point it at the printed URL. Save the font under the EXACT
-  # name "JetBrainsMono NF" (must match the font-family inside the .css). One
-  # self-contained font: text + icons + embedded Noto OT-SVG colour emoji, with
-  # an iPad system-font fallback chain (PingFang SC / Hiragino Sans / Euphemia
-  # UCAS / Apple Symbols) referenced by name. Menlo is auto-appended by Blink.
-  ./serve-blink-fonts.sh        # serves ${BLINK_OUT_DIR:-~/.local/share/fonts/blink} on :8000
+  # Serve the assets dir over HTTP, then in Blink: Settings -> Appearance ->
+  # Fonts -> New Font -> point it at the printed .css URL. Save the font under
+  # the EXACT name "JetBrainsMono NF" (must match the font-family inside the
+  # .css). One self-contained font: text + icons + embedded Noto OT-SVG colour
+  # emoji, with an iPad system-font fallback chain (PingFang SC / Hiragino Sans /
+  # Euphemia UCAS / Apple Symbols) referenced by name. Menlo is auto-appended by
+  # Blink. The same server also serves the colour theme (.js) for Themes.
+  ../../assets/blink-shell/serve-blink-assets.sh   # serves ${BLINK_OUT_DIR:-<repo>/assets/blink-shell} on :8000
 
 ${C_BLU}== Feed the glyph index to fzf ==${C_RST}
   # Search by name, label, FA terms, FA aliases, or Unicode name.
