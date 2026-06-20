@@ -56,5 +56,10 @@ theme::rule() {
   fi
   cols=$((cols - 4))
   ((cols < 1)) && cols=1
-  printf '%s' "${(l:cols::━:)}"
+  # Pad an explicitly-set empty parameter ($fill) to width $cols with ━. The
+  # parameter name is REQUIRED: a bare ${(l:cols::━:)} aborts under `set -u`
+  # ("parameter not set"), which silently kills zellij-modal (run with
+  # `set -euo pipefail`) before it spawns its dialog target.
+  local fill=""
+  printf '%s' "${(l:cols::━:)fill}"
 }
