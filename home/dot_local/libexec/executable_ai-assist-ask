@@ -1,114 +1,59 @@
 #!/usr/bin/env zsh
-# ai-assist-ask — the ONLY user-input channel for a running request. Renders the
-# matching widget in a floating zellij-modal capture pane and prints the answer.
-# free → ai-assist-input, line → gum input, confirm → gum confirm, choose → fzf.
+# ai-assist-ask — the ONLY user-input channel for a running request. A thin shim
+# over the input stdlib: it maps --type to the matching zj::* floating widget
+# (which falls back to the inline input::* off-Zellij). All theming, chrome,
+# geometry, and capture live in the stdlib now.
 #
-# Usage: ai-assist-ask [--type free|line|confirm|choose] "<question>" [choice...]
-# Prints the user's answer on stdout. confirm prints "yes"/"no" and exits 0/1.
+# Usage: ai-assist-ask [--type free|line|confirm|choose|form] "<question>" [choice...]
+#   form: pass fields via repeated --field name:type:label[:param]
+# Prints the answer on stdout. confirm prints "yes"/"no" and exits 0/1.
 # Cancel (empty capture) exits 130.
 set -uo pipefail
 
+source "$HOME/.local/lib/zellij.zsh"
+
 type="free"
+question=""
+choices=()
+fields=()
 while (($#)); do
   case "$1" in
-    --type) type="${2:-free}"; shift 2 ;;
+    --type)  type="${2:-free}"; shift 2 ;;
+    --field) fields+=("${2-}"); shift 2 ;;
     --) shift; break ;;
     -*) shift ;;
-    *) break ;;
+    *)
+      if [[ -z "$question" ]]; then question="$1"; else choices+=("$1"); fi
+      shift
+      ;;
   esac
 done
-question="${1:-}"; shift 2>/dev/null || true
-choices=("$@")
+[[ -n "$question" ]] || question="${1:-}"
 
-modal="${AI_ASSIST_MODAL_BIN:-$HOME/.config/zellij/scripts/zellij-modal}"
-input_bin="${AI_ASSIST_INPUT_BIN:-ai-assist-input}"
-gum_bin="${GUM_BIN:-gum}"
-
-# Resolve input_bin to an absolute path while we still have the interactive
-# PATH. The floating pane runs under a non-login, non-interactive zsh that may
-# not have GOBIN (~/.local/share/go/bin) on PATH.
-if command -v -- "$input_bin" >/dev/null 2>&1; then
-  input_bin="$(command -v -- "$input_bin")"
-fi
-
-# Resolve gum_bin to an absolute path for the same reason: the floating pane
-# may not have gum on its PATH.
-if command -v -- "$gum_bin" >/dev/null 2>&1; then
-  gum_bin="$(command -v -- "$gum_bin")"
-fi
-
-# Build the target command per type. Each prints the answer on stdout, which
-# zellij-modal --capture relays back via the FIFO (or stdout in test/no-Zellij
-# mode).
 case "$type" in
-  free)
-    target=("$input_bin" --title "ai-assist" --value "")
-    ;;
-  line)
-    target=("$gum_bin" input --placeholder "$question")
-    ;;
-  confirm)
-    # gum confirm exits 0 for yes, 1 for no; wrap so the capture carries
-    # "yes"/"no" text and we re-derive the exit code below.
-    target=(zsh -c "${gum_bin} confirm ${(q)question} && echo yes || echo no")
-    ;;
-  choose)
-    # Write choices to a temp file to avoid quoting/word-splitting hell when
-    # the strings are passed through the zellij action command line.
-    choicesfile="$(mktemp "${TMPDIR:-/tmp}/aiask-choices.XXXXXX")"
-    trap 'rm -f "$choicesfile"' EXIT INT TERM
-    print -rl -- "${choices[@]}" > "$choicesfile"
-    target=(zsh -c "fzf < ${(q)choicesfile}")
+  free) zj::text "$question" ;;
+  line) zj::line "$question" ;;
+  confirm) zj::confirm "$question" ;;
+  choose) zj::choose "$question" "${choices[@]}" ;;
+  form)
+    # Build the US/RS spec from --field name:type:label[:param] tokens.
+    US=$'\x1f' RS=$'\x1e'
+    spec=""
+    for fld in "${fields[@]}"; do
+      local -a p=("${(@s/:/)fld}")
+      rec="${p[1]:-}${US}${p[2]:-line}${US}${p[3]:-}${US}${p[4]:-}"
+      [[ -z "$spec" ]] && spec="$rec" || spec="${spec}${RS}${rec}"
+    done
+    specfile="$(mktemp "${TMPDIR:-/tmp}/aiask-form.XXXXXX")"
+    print -rn -- "$spec" > "$specfile"
+    zj::form "$question" --spec "$specfile"
+    rc=$?
+    rm -f -- "$specfile"
+    exit $rc
     ;;
   *)
     print -ru2 -- "ai-assist-ask: unknown --type '$type'"
     exit 2
     ;;
 esac
-
-# Capture the answer. Two paths:
-#
-# 1. Inside Zellij (production): spawn a floating pane running zellij-modal
-#    with --capture FIFO, then block on reading the FIFO. This mirrors the
-#    ai-assist-popup pattern exactly.
-#
-# 2. Outside Zellij (tests / bare shells): call $modal directly and capture
-#    its stdout via $().  The test stub ignores --capture and prints $ANSWER
-#    to stdout; this branch is also used as a fallback when there is no live
-#    Zellij session.
-if [[ -n "${ZELLIJ:-}" ]]; then
-  # --- Production path: floating pane + FIFO ---
-  fifo="$(mktemp -u "${TMPDIR:-/tmp}/aiask-fifo.XXXXXX")"
-  mkfifo -m 600 "$fifo"
-  # Combine with any pre-existing choicesfile cleanup so we don't clobber it.
-  trap '[[ -n "${choicesfile:-}" ]] && rm -f -- "$choicesfile"; rm -f -- "$fifo"' EXIT INT TERM
-
-  # Resolve modal to absolute path (same reasoning as input_bin above).
-  if [[ ! -x "$modal" ]] && command -v -- "$modal" >/dev/null 2>&1; then
-    modal="$(command -v -- "$modal")"
-  fi
-
-  "${ZELLIJ_BIN:-zellij}" action new-pane --floating --close-on-exit \
-    --cwd "$PWD" --name "" --borderless false --pinned true \
-    -- "$modal" --capture "$fifo" \
-    -- "${target[@]}" >/dev/null
-  answer="$(cat "$fifo")"; rm -f "$fifo"
-else
-  # --- Test / no-Zellij path: call modal directly, capture stdout ---
-  answer="$("$modal" --capture /dev/stdout -- "${target[@]}")"
-fi
-
-[[ -n "$answer" ]] || exit 130   # empty capture = cancel
-
-# For confirm: print "yes"/"no" and exit 0/1 accordingly.
-# For all other types: print the answer on stdout.
-if [[ "$type" == confirm ]]; then
-  if [[ "$answer" == no ]]; then
-    print -rn -- "no"
-    exit 1
-  fi
-  print -rn -- "yes"
-else
-  print -rn -- "$answer"
-fi
-exit 0
+exit $?
