@@ -1,0 +1,34 @@
+# Tests for input-widget — the --type dispatcher (pane process).
+Describe 'input-widget'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_input-widget"
+
+  setup() {
+    TEST_TMP="$(mktemp -d)"
+    gum="$TEST_TMP/gum"
+    { echo '#!/usr/bin/env zsh'; echo 'printf "%s" "${GUM_OUT:-}"'; echo 'exit ${GUM_RC:-0}'; } > "$gum"
+    chmod +x "$gum"; export GUM_BIN="$gum"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset GUM_BIN GUM_OUT GUM_RC; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'dispatches --type line to input::line'
+    export GUM_OUT="typed"
+    When run "$SCRIPT" --type line -- "Name?"
+    The output should equal "typed"
+    The status should be success
+  End
+
+  It 'dispatches --type confirm and maps no to exit 1'
+    export GUM_RC=1
+    When run "$SCRIPT" --type confirm -- "OK?"
+    The output should equal "no"
+    The status should eq 1
+  End
+
+  It 'rejects an unknown type'
+    When run "$SCRIPT" --type bogus -- "x"
+    The status should eq 2
+    The stderr should include "unknown"
+  End
+End

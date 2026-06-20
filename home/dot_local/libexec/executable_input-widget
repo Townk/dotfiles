@@ -1,0 +1,30 @@
+#!/usr/bin/env zsh
+# input-widget — the pane-process entry point for the input stdlib. Sources
+# input-common.zsh and routes --type to the matching input::* widget, forwarding
+# its stdout and exit code. This is what zellij-modal runs inside the float (the
+# role pick-list plays for zj::pick); it is also directly usable from any script.
+#
+# Usage: input-widget --type confirm|line|text|choose|form [widget opts] -- "Q" [CHOICE...]
+set -uo pipefail
+
+source "$HOME/.local/lib/input-common.zsh"
+
+type="line"
+local_args=()
+while (($#)); do
+  case "$1" in
+    --type) type="${2:-line}"; shift 2 ;;
+    --) shift; local_args+=("$@"); break ;;
+    *) local_args+=("$1"); shift ;;
+  esac
+done
+
+case "$type" in
+  confirm) input::confirm "${local_args[@]}" ;;
+  line)    input::line    "${local_args[@]}" ;;
+  text)    input::text    "${local_args[@]}" ;;
+  choose)  input::choose  "${local_args[@]}" ;;
+  form)    input::form    "${local_args[@]}" ;;
+  *) print -ru2 -- "input-widget: unknown --type '$type'"; exit 2 ;;
+esac
+exit $?
