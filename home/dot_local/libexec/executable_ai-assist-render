@@ -26,11 +26,19 @@ export RUNEWIDTH_EASTASIAN=0
 harness="agent"
 origin_pane=""
 over_ssh=0
+shell_env=""
+shell_cwd=""
+shell_bin=""
+shell_pid=""
+shell_fifo=""
 while (($#)); do
   case "$1" in
     --harness)     harness="${2:-agent}"; shift 2 ;;
     --origin-pane) origin_pane="${2:-}"; shift 2 ;;
     --over-ssh)    over_ssh=1; shift ;;
+    --shell-env)   shell_env="${2:-}"; shift 2 ;;
+    --shell-cwd)   shell_cwd="${2:-}"; shift 2 ;;
+    --shell-bin)   shell_bin="${2:-}"; shift 2 ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -75,8 +83,24 @@ fi
 in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
 mkfifo -m 600 "$in_fifo"
 
-# Cleanup trap: remove input FIFO + actions FIFO + kill broker on exit/signal.
-trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"; rm -f -- "$in_fifo"' EXIT INT TERM
+# Cleanup trap: remove input FIFO + actions FIFO + kill broker + kill agent shell on exit/signal.
+trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$shell_pid" ]] && kill "$shell_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"; [[ -n "$shell_fifo" ]] && rm -f -- "$shell_fifo"; rm -f -- "$in_fifo"' EXIT INT TERM
+
+# Agent's own shell (Phase C1): a real shell seeded with the origin env + cwd,
+# reachable by the harness's `ai-assist-run` through AI_ASSIST_SHELL_FIFO. Owned
+# by this pane's lifetime, like the action-broker.
+if [[ -n "$shell_cwd" || -n "$shell_env" ]]; then
+  : "${shell_bin:=$HOME/.local/libexec/ai-assist-shell}"
+  if [[ -x "$shell_bin" ]]; then
+    shell_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-shell.XXXXXX")"; mkfifo -m 600 "$shell_fifo"
+    typeset -a shell_flags=(--cmd-fifo "$shell_fifo")
+    [[ -n "$shell_env" ]] && shell_flags+=(--env-file "$shell_env")
+    [[ -n "$shell_cwd" ]] && shell_flags+=(--cwd "$shell_cwd")
+    "$shell_bin" "${shell_flags[@]}" &
+    shell_pid=$!
+    export AI_ASSIST_SHELL_FIFO="$shell_fifo"
+  fi
+fi
 
 # Launch ai-assist-pager in the FOREGROUND: it owns the pane (title, spinner,
 # streaming render). Resolve by absolute path — the docked pane's PATH lacks GOBIN

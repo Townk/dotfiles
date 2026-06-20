@@ -94,4 +94,33 @@ Describe 'ai-assist-render'
     The status should be success
     The output should not include "actions-fifo"
   End
+
+  shell_stub() {
+    { echo '#!/usr/bin/env zsh'
+      echo "printf '%s\\n' \"\$*\" >> \"$TEST_TMP/shell-args\""
+      echo "sleep 5"   # stay alive so render can export the var + later kill us
+    } > "$TEST_TMP/ai-assist-shell"; chmod +x "$TEST_TMP/ai-assist-shell"
+  }
+
+  It 'spawns ai-assist-shell and exports AI_ASSIST_SHELL_FIFO to the harness'
+    setup_shell_test() {
+      pager_stub
+      shell_stub
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+    }
+    BeforeRun 'setup_shell_test'
+    envf="$TEST_TMP/req.env"; printf "export X=1\n" > "$envf"
+    # harness stub records whether the var reached its environment
+    harness="$TEST_TMP/harness"
+    { echo '#!/usr/bin/env zsh'
+      echo "printf '%s' \"\${AI_ASSIST_SHELL_FIFO:-UNSET}\" > \"$TEST_TMP/seen-fifo\""
+    } > "$harness"; chmod +x "$harness"
+    When run script "$SCRIPT" --harness claude --shell-env "$envf" --shell-cwd "$TEST_TMP" \
+      --shell-bin "$TEST_TMP/ai-assist-shell" -- "$harness"
+    The status should be success
+    The output should include "PAGER_RAN"
+    The contents of file "$TEST_TMP/shell-args" should include "--cmd-fifo"
+    The contents of file "$TEST_TMP/shell-args" should include "--env-file $envf"
+    The contents of file "$TEST_TMP/seen-fifo" should not equal "UNSET"
+  End
 End

@@ -90,6 +90,23 @@ JSON
       The contents of file "$TEST_TMP/zj-args" should include "Additional guidance from the caller:"
       The contents of file "$TEST_TMP/zj-args" should include "please check the Makefile"
     End
+
+    It 'passes the agent-shell env + cwd to ai-assist-render and snapshots the env'
+      # Create a stub render so the worker takes the AI_ASSIST_RENDER=1 branch;
+      # it just needs to be executable — zellij is also stubbed, so it never runs.
+      render_dir="$TEST_TMP/home/.local/libexec"
+      mkdir -p "$render_dir"
+      printf '#!/usr/bin/env zsh\n' > "$render_dir/ai-assist-render"; chmod +x "$render_dir/ai-assist-render"
+      REQFILE="$TEST_TMP/req.json"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      export AI_ASSIST_RENDER=1
+      When run script "$(SCRIPT)" --request "$REQFILE"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "--shell-env"
+      The contents of file "$TEST_TMP/zj-args" should include "--shell-cwd"
+      The path "${REQFILE:h}/request.env" should be exist
+    End
   End
 
   Describe 'ai-assist-pi'

@@ -245,6 +245,11 @@ assist::worker_main() {
   [[ -n "$request_file" ]] || die "missing --request <file>"
 
   assist::request_read "$request_file"
+  # Snapshot the origin environment for the agent's own shell (Phase C1). The
+  # worker is exec-chained from the origin shell, so its env IS the origin env.
+  # export -p is re-sourceable; readonly specials are tolerated on re-source.
+  local req_env="${request_file:h}/request.env"
+  export -p > "$req_env" 2>/dev/null || : > "$req_env"
   local kb; kb="$(assist::kb_ensure "${REQ_PROJECT_ROOT:-$PWD}")"
   ASSIST_PROMPT="$(assist::system_prompt "$kb")"
   [[ -n "$ASSIST_GUIDANCE" ]] && ASSIST_PROMPT+=$'\n\nAdditional guidance from the caller:\n'"$ASSIST_GUIDANCE"
@@ -268,6 +273,7 @@ assist::worker_main() {
     local -a render_flags=()
     [[ -n "$REQ_PANE_ID" ]] && render_flags+=(--origin-pane "$REQ_PANE_ID")
     [[ "$REQ_OVER_SSH" == true ]] && render_flags+=(--over-ssh)
+    render_flags+=(--shell-env "$req_env" --shell-cwd "${REQ_CWD:-$PWD}")
     assist::spawn_pane "$render" --harness "$label" "${render_flags[@]}" -- "${ASSIST_PANE_CMD[@]}"
   else
     assist::spawn_pane "${ASSIST_PANE_CMD[@]}"
