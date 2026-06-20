@@ -119,7 +119,8 @@ do_sync() {
     [[ -z "$pkg" ]] && continue
     local bin=""
     bin=$(awk -F'\t' -v p="$pkg" '$1==p {print $2; exit}' "$pairs")
-    [[ -n "$bin" && -f "$bin_dir/$bin" ]] && rm -v "$bin_dir/$bin"
+    [[ -n "$bin" && -f "$bin_dir/$bin" ]] || continue
+    rm -v "$bin_dir/$bin" || log_warn "failed to remove $bin_dir/$bin"
   done
 
   # Install missing

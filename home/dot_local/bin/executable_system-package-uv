@@ -123,7 +123,8 @@ do_sync() {
   # Uninstall extras BEFORE installing missing — if a swap puts two tools
   # on the same shim path, uv tool install can refuse to overwrite.
   pkg::diff_only_in "$installed" "$declared" | while IFS= read -r tool; do
-    [[ -n "$tool" ]] && uv tool uninstall "$tool"
+    [[ -n "$tool" ]] || continue
+    uv tool uninstall "$tool" || log_warn "failed to uninstall $tool"
   done
   pkg::diff_only_in "$declared" "$installed" | while IFS= read -r tool; do
     [[ -z "$tool" ]] && continue
@@ -136,7 +137,7 @@ do_sync() {
     if pkg::line_has_spec "$line"; then
       args=("${args[@]:2}")
     fi
-    uv tool install "${args[@]}"
+    uv tool install "${args[@]}" || log_warn "failed to install $tool"
   done
 
   # Tools with extra args (e.g. `--with extra-pkg`) get reinstalled every
@@ -153,7 +154,7 @@ do_sync() {
     [[ "$line" == "${line%% *}" ]] && continue # no extras → skip
     local -a args=(${(z)line})
     pkg::line_has_spec "$line" && continue # `--` form → skip
-    uv tool install --reinstall "${args[@]}"
+    uv tool install --reinstall "${args[@]}" || log_warn "failed to reinstall ${line%% *}"
   done <"$declared_full"
 
   uv tool upgrade --all || true

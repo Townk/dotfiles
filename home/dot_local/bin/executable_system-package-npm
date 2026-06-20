@@ -130,13 +130,14 @@ do_sync() {
   # packages on the same binary path (e.g. both ship `bin/pi`), npm
   # install would fail with EEXIST.
   pkg::diff_only_in "$installed" "$declared" | while IFS= read -r pkg; do
-    [[ -n "$pkg" ]] && npm uninstall -g "$pkg"
+    [[ -n "$pkg" ]] || continue
+    npm uninstall -g "$pkg" || log_warn "failed to uninstall $pkg"
   done
   pkg::diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     while IFS= read -r line; do
       [[ "$(pkg::line_canonical "$line")" == "$pkg" ]] || continue
-      npm install -g "${NPM_SYNC_FLAGS[@]}" "$(npm_line_install_spec "$line")"
+      npm install -g "${NPM_SYNC_FLAGS[@]}" "$(npm_line_install_spec "$line")" || log_warn "failed to install $pkg"
       npm_build_global_if_needed "$pkg"
       break
     done <"$declared_full"
