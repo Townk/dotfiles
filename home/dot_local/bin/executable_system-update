@@ -371,8 +371,10 @@ fi
 
 if command -v nvim >/dev/null 2>&1; then
   print -P -- "\n📝 Upgrade NeoVim plugins...\n"
-  nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
-    die "Failed to upgrade NeoVim plugins!"
+  # Bounded with `timeout`: headless plugin sync can hang indefinitely
+  # if a background task (e.g. a treesitter parser build) never settles.
+  timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
+    log_warn "NeoVim plugin upgrade timed out or had failures"
 fi
 
 update_pi_extensions
