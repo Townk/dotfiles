@@ -1,0 +1,42 @@
+#!/usr/bin/env zsh
+# ai-assist-run — run a command in the agent's own shell (ai-assist-shell) and
+# return its output. The agent's diagnosis tool and the playbook "run" engine.
+set -uo pipefail
+
+json=0
+while (($#)); do
+  case "$1" in
+    --json) json=1; shift ;;
+    --)     shift; break ;;
+    *)      break ;;
+  esac
+done
+cmd="$*"
+[[ -n "$cmd" ]] || { print -ru2 -- "ai-assist-run: no command given"; exit 2; }
+
+fifo="${AI_ASSIST_SHELL_FIFO:-}"
+[[ -n "$fifo" && -p "$fifo" ]] || {
+  print -ru2 -- "ai-assist-run: no agent shell (AI_ASSIST_SHELL_FIFO unset/missing)."
+  exit 3
+}
+
+US=$'\x1f' RS=$'\x1e'
+reply="$(mktemp -d "${TMPDIR:-/tmp}/ai-assist-run.XXXXXX")"
+trap 'rm -rf -- "$reply"' EXIT INT TERM
+
+print -rn -- "${reply}${US}${cmd}${RS}" > "$fifo"
+while [[ ! -e "$reply/done" ]]; do sleep 0.02; done
+
+out="$(<"$reply/out")"; err="$(<"$reply/err")"; code="$(<"$reply/exit")"
+: "${code:=1}"
+
+if (( json )); then
+  require_jq() { command -v jq >/dev/null || { print -ru2 -- "ai-assist-run: jq required for --json"; exit 4; }; }
+  require_jq
+  jq -n --arg o "$out" --arg e "$err" --argjson x "$code" \
+        '{stdout:$o, stderr:$e, exit:$x}'
+else
+  [[ -n "$out" ]] && print -r -- "$out"
+  [[ -n "$err" ]] && print -r -- "$err" >&2
+fi
+exit "$code"
