@@ -36,9 +36,12 @@ urldecode() {
   local s="${1//+/ }"
   printf '%b' "${s//%/\\x}"
 }
-path="$(urldecode "${uri#file://}")"
-path="${path#localhost}"
-[ -e "$path" ] || exit 0
+# NB: the variable is `target`, NOT `path`. Under zsh `path` is the array tied
+# to `$PATH`, so `path=…` would clobber the PATH exported above and break the
+# bare `file`/`git`/`basename`/`yazi`/`nvim` lookups below.
+target="$(urldecode "${uri#file://}")"
+target="${target#localhost}"
+[ -e "$target" ] || exit 0
 
 # --- Resolve the session the client PID is currently attached to ----------
 # resolve_session lives in lib/zellij-session.zsh (shared with quick-launch-window):
@@ -50,16 +53,16 @@ path="${path#localhost}"
 session="$(resolve_session "$pid")" || exit 0
 [ -n "$session" ] || exit 0
 
-name="$(basename -- "$path")"
+name="$(basename -- "$target")"
 
 # --- Directory: Yazi in a new tab -----------------------------------------
-if [ -d "$path" ]; then
+if [ -d "$target" ]; then
   exec zellij --session "$session" action new-tab \
-    --cwd "$path" --name "$name" --close-on-exit -- yazi "$path"
+    --cwd "$target" --name "$name" --close-on-exit -- yazi "$target"
 fi
 
 # --- File: classify by MIME -----------------------------------------------
-mime=$(file -b --mime-type -L "$path" 2>/dev/null)
+mime=$(file -b --mime-type -L "$target" 2>/dev/null)
 case "$mime" in
   image/*)
     # Big floating preview pane with a (rounded) frame but no title text and no
@@ -77,16 +80,16 @@ case "$mime" in
       --floating --close-on-exit \
       --name "" --borderless false --pinned false \
       "${size[@]}" \
-      -- "$HOME/.config/zellij/scripts/zellij-preview-image" "$path"
+      -- "$HOME/.config/zellij/scripts/zellij-preview-image" "$target"
     ;;
   *)
     # Treat anything non-binary as editable text/code; ignore real binaries.
-    enc=$(file -b --mime-encoding -L "$path" 2>/dev/null)
+    enc=$(file -b --mime-encoding -L "$target" 2>/dev/null)
     [ "$enc" = "binary" ] && exit 0
-    dir="$(dirname -- "$path")"
+    dir="$(dirname -- "$target")"
     root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root=""
     [ -n "$root" ] || root="$dir"
     exec zellij --session "$session" action new-tab \
-      --cwd "$root" --name "$name" --close-on-exit -- nvim "$path"
+      --cwd "$root" --name "$name" --close-on-exit -- nvim "$target"
     ;;
 esac

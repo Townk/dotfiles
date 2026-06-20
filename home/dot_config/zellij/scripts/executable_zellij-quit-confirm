@@ -102,10 +102,15 @@ prompt="Quit current Zellij session?
 ${SGR_LABEL}Session:${SGR_VALUE} ${ZELLIJ_SESSION_NAME:-?}"
 
 # `set -e` would treat the negative-answer exit (1) as a script failure.
-# Capture the status explicitly so we can branch on it. `--show-help` is
+# Capture the answer explicitly so we can branch on it. `--show-help` is
 # set explicitly (not relying on gum's default-true) so the keybind hint
 # line is deterministic across gum versions.
-status=0
+#
+# The variable is `answer`, NOT `status`: under zsh `$status` is a read-only
+# special parameter (a synonym for `$?`), so `status=0` aborts the script with
+# "read-only variable: status" — before gum ever runs. This bit us when the
+# shebang was flipped bash→zsh (bash treats `status` as an ordinary variable).
+answer=0
 "$GUM_BIN" confirm \
   --default=false \
   --affirmative='Quit' \
@@ -117,9 +122,9 @@ status=0
   --selected.foreground='#1e1e2e' \
   --unselected.background='#313244' \
   --unselected.foreground='#cdd6f4' \
-  "$prompt" || status=$?
+  "$prompt" || answer=$?
 
-case "$status" in
+case "$answer" in
   0) exec "$ZELLIJ_BIN" kill-session "${ZELLIJ_SESSION_NAME:?ZELLIJ_SESSION_NAME unset}" ;;
   *) exit 0 ;;
 esac

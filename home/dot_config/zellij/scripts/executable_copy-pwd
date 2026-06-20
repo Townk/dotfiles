@@ -73,18 +73,21 @@ cwd=$(
 
 # Resolve the path in the requested form. In --relative mode, collapse a
 # $HOME prefix to `~` (exact $HOME → bare `~`); otherwise keep it absolute.
-path="$cwd"
+#
+# NB: the variable is `out`, NOT `path`. Under zsh `path` is the array tied to
+# `$PATH`, so `path="$cwd"` would clobber PATH for the rest of the script.
+out="$cwd"
 if [[ "$mode" == "relative" ]]; then
   if [[ "$cwd" == "$HOME" ]]; then
-    path="~"
+    out="~"
   elif [[ "$cwd" == "$HOME"/* ]]; then
-    path="~${cwd#"$HOME"}"
+    out="~${cwd#"$HOME"}"
   fi
 fi
 
 # Clipboard gets the chosen path with no trailing newline (so it doesn't
 # auto-execute if pasted at a shell prompt).
-printf '%s' "$path" | "$PBCOPY"
+printf '%s' "$out" | "$PBCOPY"
 
 # Keep the OSD focused on the action; the clipboard already carries the path.
 if [[ "$mode" == "absolute" ]]; then
