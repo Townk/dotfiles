@@ -48,6 +48,15 @@ done
 # Propagate project root so ai-assist-remember (and any other tool) keys the
 # KB on the canonical project root rather than the agent shell's cwd.
 [[ -n "$project_root" ]] && export AI_ASSIST_PROJECT_ROOT="$project_root"
+
+# Ensure ~/.local/libexec is on PATH so the agent harness can invoke
+# ai-assist-run, ai-assist-ask, ai-assist-remember etc. by name.
+# The docked pane runs in a non-interactive shell whose PATH omits this dir;
+# guard against double-prepend.
+case ":$PATH:" in
+  *":$HOME/.local/libexec:"*) ;;
+  *) export PATH="$HOME/.local/libexec:$PATH" ;;
+esac
 cmd=("$@")
 [[ ${#cmd[@]} -gt 0 ]] || { print -u2 -- "ai-assist-render: no command after --"; exit 2; }
 

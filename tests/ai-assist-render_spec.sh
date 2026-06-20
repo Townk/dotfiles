@@ -164,4 +164,20 @@ Describe 'ai-assist-render'
     The output should include "PAGER_RAN"
     The contents of file "$TEST_TMP/seen-projroot" should equal "/tmp/proj"
   End
+
+  It 'prepends ~/.local/libexec to PATH so the harness can invoke C1 tools by name'
+    setup_path_test() {
+      pager_stub
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+    }
+    BeforeRun 'setup_path_test'
+    harness="$TEST_TMP/harness-path"
+    { echo '#!/usr/bin/env zsh'
+      echo "printf '%s' \"\$PATH\" > \"$TEST_TMP/seen-path\""
+    } > "$harness"; chmod +x "$harness"
+    When run script "$SCRIPT" --harness claude -- "$harness"
+    The status should be success
+    The output should include "PAGER_RAN"
+    The contents of file "$TEST_TMP/seen-path" should include "$HOME/.local/libexec"
+  End
 End
