@@ -27,16 +27,17 @@ trap 'rm -rf -- "$reply"' EXIT INT TERM
 print -rn -- "${reply}${US}${cmd}${RS}" > "$fifo"
 while [[ ! -e "$reply/done" ]]; do sleep 0.02; done
 
-out="$(<"$reply/out")"; err="$(<"$reply/err")"; code="$(<"$reply/exit")"
+code="$(<"$reply/exit")"
 : "${code:=1}"
 
 if (( json )); then
   require_jq() { command -v jq >/dev/null || { print -ru2 -- "ai-assist-run: jq required for --json"; exit 4; }; }
   require_jq
+  out="$(<"$reply/out")"; err="$(<"$reply/err")"
   jq -n --arg o "$out" --arg e "$err" --argjson x "$code" \
         '{stdout:$o, stderr:$e, exit:$x}'
 else
-  [[ -n "$out" ]] && print -r -- "$out"
-  [[ -n "$err" ]] && print -r -- "$err" >&2
+  [[ -s "$reply/out" ]] && cat -- "$reply/out"
+  [[ -s "$reply/err" ]] && cat -- "$reply/err" >&2
 fi
 exit "$code"
