@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # ai-assist-ask — the ONLY user-input channel for a running request. Renders the
 # matching widget in a floating zellij-modal capture pane and prints the answer.
-# free → ai-assist-input, line → gum input, confirm → gum confirm, choose → zj::pick.
+# free → ai-assist-input, line → gum input, confirm → gum confirm, choose → fzf.
 #
 # Usage: ai-assist-ask [--type free|line|confirm|choose] "<question>" [choice...]
 # Prints the user's answer on stdout. confirm prints "yes"/"no" and exits 0/1.
@@ -31,6 +31,12 @@ if command -v -- "$input_bin" >/dev/null 2>&1; then
   input_bin="$(command -v -- "$input_bin")"
 fi
 
+# Resolve gum_bin to an absolute path for the same reason: the floating pane
+# may not have gum on its PATH.
+if command -v -- "$gum_bin" >/dev/null 2>&1; then
+  gum_bin="$(command -v -- "$gum_bin")"
+fi
+
 # Build the target command per type. Each prints the answer on stdout, which
 # zellij-modal --capture relays back via the FIFO (or stdout in test/no-Zellij
 # mode).
@@ -47,7 +53,12 @@ case "$type" in
     target=(zsh -c "${gum_bin} confirm ${(q)question} && echo yes || echo no")
     ;;
   choose)
-    target=("$gum_bin" choose "${choices[@]}")
+    # Write choices to a temp file to avoid quoting/word-splitting hell when
+    # the strings are passed through the zellij action command line.
+    choicesfile="$(mktemp "${TMPDIR:-/tmp}/aiask-choices.XXXXXX")"
+    trap 'rm -f "$choicesfile"' EXIT INT TERM
+    print -rl -- "${choices[@]}" > "$choicesfile"
+    target=(zsh -c "fzf < ${(q)choicesfile}")
     ;;
   *)
     print -ru2 -- "ai-assist-ask: unknown --type '$type'"
@@ -77,7 +88,7 @@ if [[ -n "${ZELLIJ:-}" ]]; then
   fi
 
   "${ZELLIJ_BIN:-zellij}" action new-pane --floating --close-on-exit \
-    --name "" --borderless false --pinned true \
+    --cwd "$PWD" --name "" --borderless false --pinned true \
     -- "$modal" --capture "$fifo" \
     -- "${target[@]}" >/dev/null
   answer="$(cat "$fifo")"; rm -f "$fifo"
@@ -88,10 +99,13 @@ fi
 
 [[ -n "$answer" ]] || exit 130   # empty capture = cancel
 
-# For confirm: exit 1 for "no" (no output), exit 0 printing "yes" for "yes".
+# For confirm: print "yes"/"no" and exit 0/1 accordingly.
 # For all other types: print the answer on stdout.
 if [[ "$type" == confirm ]]; then
-  [[ "$answer" == no ]] && exit 1
+  if [[ "$answer" == no ]]; then
+    print -rn -- "no"
+    exit 1
+  fi
   print -rn -- "yes"
 else
   print -rn -- "$answer"

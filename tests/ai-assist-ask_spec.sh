@@ -33,6 +33,7 @@ Describe 'ai-assist-ask'
   It 'maps a no confirm to exit 1'
     export ANSWER="no"
     When run "$SCRIPT" --type confirm "Did this solve it?"
+    The output should equal "no"
     The status should eq 1
   End
 
@@ -40,5 +41,19 @@ Describe 'ai-assist-ask'
     export ANSWER=""
     When run "$SCRIPT" --type free "anything?"
     The status should eq 130
+  End
+
+  It 'returns a line answer'
+    export ANSWER="some typed input"
+    When run "$SCRIPT" --type line "Enter something"
+    The output should equal "some typed input"
+    The status should be success
+  End
+
+  It 'returns a choose answer'
+    export ANSWER="option-b"
+    When run "$SCRIPT" --type choose "Pick one" "option-a" "option-b" "option-c"
+    The output should equal "option-b"
+    The status should be success
   End
 End
