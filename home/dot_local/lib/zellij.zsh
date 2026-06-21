@@ -140,6 +140,8 @@ zj::pick() {
 #            [--pane-x X] [--pane-y Y] -- <input-widget args...>
 # Spawn a sized floating modal running input-widget and capture the answer via
 # FIFO. Echoes the captured answer on stdout; returns 130 on empty (cancel).
+# Height is derived via `input::"$type" --measure --width "$pane_w"` so panes
+# always fit exactly (no more hardcoded row counts).
 _zj::float() {
   local type="line" title="" borderless="false" pane_w="" pane_h="" pane_x="" pane_y=""
   local -a wargs
@@ -165,9 +167,31 @@ _zj::float() {
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/zjinput-fifo.XXXXXX")
   mkfifo -m 600 "$fifo" 2>/dev/null || return 1
 
+  # Measure the exact rendered height from the binary (fast, TTY-less).
+  # Fall back to pane_h if provided (legacy override), or a sane per-type default.
+  local _measured_h=""
+  if [[ -n "$pane_w" ]] && [[ "$pane_w" != *% ]]; then
+    _measured_h="$(input::"$type" --measure --width "$pane_w" "${wargs[@]}" 2>/dev/null)"
+  fi
+  # Accept only a plain integer; otherwise use the caller-supplied or per-type default.
+  if [[ "$_measured_h" != <-> ]]; then
+    if [[ -n "$pane_h" ]]; then
+      _measured_h="$pane_h"
+    else
+      case "$type" in
+        confirm) _measured_h=12 ;;
+        line)    _measured_h=12 ;;
+        text)    _measured_h=16 ;;
+        choose)  _measured_h=14 ;;
+        form)    _measured_h=18 ;;
+        *)       _measured_h=14 ;;
+      esac
+    fi
+  fi
+
   local -a pane_geom=()
   [[ -n "$pane_w" ]] && pane_geom+=(--width "$pane_w")
-  [[ -n "$pane_h" ]] && pane_geom+=(--height "$pane_h")
+  pane_geom+=(--height "$_measured_h")
   [[ -n "$pane_x" ]] && pane_geom+=(--x "$pane_x")
   [[ -n "$pane_y" ]] && pane_geom+=(--y "$pane_y")
 
@@ -224,11 +248,8 @@ zj::confirm() {
   _zj::split_pane_opts "$@"
   local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
   if ! zj::available; then input::confirm "${_topt[@]}" "${PANE_REST[@]}"; return; fi
-  # Height = prompt lines + 11 (border 2 + padding 2 + title/rule 2 + 3 insets +
-  # buttons 1 + hint 1), assuming default --padding 1 / --inset 1.
-  local -a _cl=("${(@f)PANE_REST[1]}"); local cl=${#_cl}; ((cl < 1)) && cl=1
   local rc=0 ans
-  ans=$(_zj::float --type confirm --borderless true --pane-width 54 --pane-height $((cl + 11)) \
+  ans=$(_zj::float --type confirm --borderless true --pane-width 54 \
         "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}") || rc=$?
   ((rc == 130)) && return 130
   [[ "$ans" == no ]] && { print -rn -- "no"; return 1; }
@@ -240,7 +261,7 @@ zj::line() {
   _zj::split_pane_opts "$@"
   local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
   if ! zj::available; then input::line "${_topt[@]}" "${PANE_REST[@]}"; return; fi
-  _zj::float --type line --borderless true --pane-width 64 --pane-height 12 \
+  _zj::float --type line --borderless true --pane-width 64 \
     "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}"
 }
 
@@ -273,19 +294,8 @@ zj::choose() {
     return
   fi
 
-  # Count the actual choice items (PANE_REST minus the first positional/prompt).
-  local n=0 _i
-  for (( _i = 2; _i <= ${#PANE_REST}; _i++ )); do
-    case "${PANE_REST[$_i]}" in
-      --) ;;
-      *) (( n++ )) ;;
-    esac
-  done
-  (( n < 1 )) && n=1
-  # Height: min(n,8) visible items + 9 chrome rows (title/rule/prompt/padding/hint)
-  local vis=$(( n < 8 ? n : 8 ))
   _zj::float --type choose --borderless true "${_topt[@]}" \
-    --pane-width 56 --pane-height $(( vis + 9 )) \
+    --pane-width 56 \
     "${reply[@]}" -- "${_topt[@]}" "${_extra[@]}" "${PANE_REST[@]}"
 }
 
@@ -297,7 +307,7 @@ zj::text() {
   _zj::split_pane_opts "$@"
   local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
   if ! zj::available; then input::text "${_topt[@]}" "${PANE_REST[@]}"; return; fi
-  _zj::float --type text --borderless true --pane-width 57 --pane-height 16 \
+  _zj::float --type text --borderless true --pane-width 57 \
     "${reply[@]}" -- --height 5 "${_topt[@]}" "${PANE_REST[@]}"
 }
 
@@ -306,6 +316,6 @@ zj::form() {
   _zj::split_pane_opts "$@"
   local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
   if ! zj::available; then input::form "${_topt[@]}" "${PANE_REST[@]}"; return; fi
-  _zj::float --type form --borderless true --pane-width 64 --pane-height 18 \
+  _zj::float --type form --borderless true --pane-width 64 \
     "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}"
 }

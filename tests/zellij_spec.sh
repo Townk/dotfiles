@@ -136,6 +136,62 @@ Describe 'zellij.zsh — zj::choose borderless float'
   End
 End
 
+Describe 'zellij.zsh — zj::choose --measure-based pane height'
+  Include home/dot_local/lib/zellij.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    ZJ_ARGS="$TEST_TMP/zj-args.txt"
+    export ZELLIJ=1
+
+    # Stub ai-assist-input: when --measure is present, print a known height (9)
+    # so we can assert the pane is spawned with --height 9.
+    aii="$TEST_TMP/ai-assist-input"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'if [[ "$*" == *"--measure"* ]]; then printf "9"; exit 0; fi'
+      echo 'printf "%s" "${AII_OUT:-}"'
+      echo 'exit ${AII_RC:-0}'
+    } > "$aii"; chmod +x "$aii"
+    export AI_ASSIST_INPUT_BIN="$aii"
+
+    stub="$TEST_TMP/zellij"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'if [[ "$1" == action && "$2" == new-pane ]]; then'
+      echo "  echo \"\$*\" > \"$TEST_TMP/zj-args.txt\""
+      echo '  fifo=""; prev=""'
+      echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
+      echo '  [[ -n "$fifo" ]] && { printf "alpha" > "$fifo" & }'
+      echo '  exit 0'
+      echo 'fi'
+      echo 'exit 0'
+    } > "$stub"
+    chmod +x "$stub"
+    export ZELLIJ_BIN="$stub"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset AI_ASSIST_INPUT_BIN AII_OUT; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'spawns the pane with --height equal to the measured value from the binary'
+    When call zj::choose --title "Pick" "Select" alpha beta gamma
+    The output should equal "alpha"
+    The contents of file "$ZJ_ARGS" should include "--height 9"
+    The status should be success
+  End
+
+  It 'does not contain any hardcoded vis+9 style height when binary returns a height'
+    # The pane must carry --height matching the stub (9), not a formula result.
+    # With 3 choices the old formula would yield min(3,8)+9=12; new must be 9.
+    When call zj::choose --title "Pick" "Select" alpha beta gamma
+    The output should equal "alpha"
+    The contents of file "$ZJ_ARGS" should include "--height 9"
+    The contents of file "$ZJ_ARGS" should not include "--height 12"
+    The status should be success
+  End
+End
+
 Describe 'zellij.zsh — zj:: input drop-ins (off-Zellij fallback)'
   Include home/dot_local/lib/zellij.zsh
 

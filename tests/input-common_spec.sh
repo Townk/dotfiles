@@ -156,6 +156,42 @@ line2"
     End
   End
 
+  Describe 'input::choose --measure passthrough'
+    It 'forwards --measure and --width to the binary and returns its printed height'
+      # When --measure is present the stub should receive --measure --width 56
+      # and we return whatever the binary printed (a height number).
+      {
+        echo '#!/usr/bin/env zsh'
+        echo 'print -r -- "$@" >> "'"$TEST_TMP"'/aii.args"'
+        echo 'if [[ "$*" == *"--measure"* ]]; then printf "12"; exit 0; fi'
+        echo 'printf "%s" "${AII_OUT:-}"'
+        echo 'exit ${AII_RC:-0}'
+      } > "$aii"; chmod +x "$aii"
+      When call input::choose --measure --width 56 "Pick" a b c
+      The output should equal "12"
+      The status should be success
+      The contents of file "$TEST_TMP/aii.args" should include "--measure"
+      The contents of file "$TEST_TMP/aii.args" should include "--width 56"
+    End
+    It '--measure forwards the same widget flags as a normal run plus --measure/--width'
+      {
+        echo '#!/usr/bin/env zsh'
+        echo 'print -r -- "$@" >> "'"$TEST_TMP"'/aii.args"'
+        echo 'if [[ "$*" == *"--measure"* ]]; then printf "7"; exit 0; fi'
+        echo 'printf "%s" "${AII_OUT:-}"'
+        echo 'exit ${AII_RC:-0}'
+      } > "$aii"; chmod +x "$aii"
+      When call input::choose --measure --width 40 --title "My Title" "Pick one" alpha beta
+      The output should equal "7"
+      The status should be success
+      The contents of file "$TEST_TMP/aii.args" should include "--type choose"
+      The contents of file "$TEST_TMP/aii.args" should include "--title My Title"
+      The contents of file "$TEST_TMP/aii.args" should include "--prompt Pick one"
+      The contents of file "$TEST_TMP/aii.args" should include "--measure"
+      The contents of file "$TEST_TMP/aii.args" should include "--width 40"
+    End
+  End
+
   Describe 'input::choose'
     It 'forwards --type choose and options after --'
       export AII_OUT="beta"

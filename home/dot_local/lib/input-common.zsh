@@ -30,7 +30,7 @@ _input::bin() {
 # on danger). The themed chrome, keys, and hint all live in the binary now.
 input::confirm() {
   local prompt="" default="yes" affirmative="Yes" negative="No"
-  local danger=0 warning=0 title="" padding="" inset=""
+  local danger=0 warning=0 title="" padding="" inset="" measure=0 width=""
   while (($#)); do
     case "$1" in
       --default)     default="${2:-yes}"; shift 2 ;;
@@ -41,7 +41,9 @@ input::confirm() {
       --title)       title="${2-}"; shift 2 ;;
       --padding)     padding="${2-}"; shift 2 ;;
       --inset)       inset="${2-}"; shift 2 ;;
-      --icon|--margin|--width|--header) shift 2 ;;
+      --measure)     measure=1; shift ;;
+      --width)       width="${2-}"; shift 2 ;;
+      --icon|--margin|--header) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
       *)  [[ -z "$prompt" ]] && prompt="$1"; shift ;;
@@ -60,6 +62,13 @@ input::confirm() {
   [[ -n "$inset" ]]   && flags+=(--inset "$inset")
   theme::args; flags+=("${AI_THEME_ARGS[@]}")
 
+  if ((measure)); then
+    flags+=(--measure)
+    [[ -n "$width" ]] && flags+=(--width "$width")
+    "$bin" "${flags[@]}"
+    return
+  fi
+
   # The binary exits 0 (confirmed) / 1 (declined) / 130 (cancel); map to yes/no.
   local rc=0
   "$bin" "${flags[@]}" >/dev/null || rc=$?
@@ -74,7 +83,7 @@ input::confirm() {
 # Shim over `ai-assist-input --type line`. Prints the typed line; 130 on
 # empty/cancel.
 input::line() {
-  local prompt="" placeholder="" value="" width="" title="" padding="" inset=""
+  local prompt="" placeholder="" value="" width="" title="" padding="" inset="" measure=0
   while (($#)); do
     case "$1" in
       --placeholder) placeholder="${2-}"; shift 2 ;;
@@ -84,6 +93,7 @@ input::line() {
       --padding)     padding="${2-}"; shift 2 ;;
       --inset)       inset="${2-}"; shift 2 ;;
       --header)      prompt="${2-}"; shift 2 ;;
+      --measure)     measure=1; shift ;;
       --icon|--margin) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
@@ -102,6 +112,13 @@ input::line() {
   [[ -n "$inset" ]]       && flags+=(--inset "$inset")
   theme::args; flags+=("${AI_THEME_ARGS[@]}")
 
+  if ((measure)); then
+    flags+=(--measure)
+    [[ -n "$width" ]] && flags+=(--width "$width")
+    "$bin" "${flags[@]}"
+    return
+  fi
+
   local answer rc=0
   answer="$("$bin" "${flags[@]}")" || rc=$?
   ((rc != 0)) && return 130
@@ -112,14 +129,16 @@ input::line() {
 # input::text "Q" [--value V] [--height N] — multi-line via ai-assist-input,
 # which self-renders matching chrome (title + rule + box).
 input::text() {
-  local prompt="" value="" height="" title=""
+  local prompt="" value="" height="" title="" width="" measure=0
   while (($#)); do
     case "$1" in
-      --value)  value="${2-}"; shift 2 ;;
-      --height) height="${2-}"; shift 2 ;;
-      --title)  title="${2-}"; shift 2 ;;
-      --header) prompt="${2-}"; shift 2 ;;
-      --icon|--margin|--padding|--width) shift 2 ;;
+      --value)   value="${2-}"; shift 2 ;;
+      --height)  height="${2-}"; shift 2 ;;
+      --title)   title="${2-}"; shift 2 ;;
+      --header)  prompt="${2-}"; shift 2 ;;
+      --width)   width="${2-}"; shift 2 ;;
+      --measure) measure=1; shift ;;
+      --icon|--margin|--padding) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
       *)  [[ -z "$prompt" ]] && prompt="$1"; shift ;;
@@ -135,6 +154,13 @@ input::text() {
   [[ -n "$height" ]] && args+=(--height "$height")
   theme::args; args+=("${AI_THEME_ARGS[@]}")
 
+  if ((measure)); then
+    args+=(--measure)
+    [[ -n "$width" ]] && args+=(--width "$width")
+    "$bin" "${args[@]}"
+    return
+  fi
+
   local answer rc=0
   answer="$("$bin" "${args[@]}")" || rc=$?
   ((rc != 0)) && return 130
@@ -146,7 +172,7 @@ input::text() {
 # over `ai-assist-input --type choose`. Choices via argv (after first positional
 # or after --). --multi: selections joined by newline. 130 on cancel/empty.
 input::choose() {
-  local question="" multi=0 other="" title=""
+  local question="" multi=0 other="" title="" measure=0 width=""
   local -a choices
   local _got_prompt=0
   while (($#)); do
@@ -156,7 +182,9 @@ input::choose() {
       --other)        other="${2-}"; shift 2 ;;
       --title)        title="${2-}"; shift 2 ;;
       --header)       [[ -z "$question" ]] && question="${2-}"; shift 2 ;;
-      --icon|--margin|--padding|--width) shift 2 ;;
+      --measure)      measure=1; shift ;;
+      --width)        width="${2-}"; shift 2 ;;
+      --icon|--margin|--padding) shift 2 ;;
       --) shift; choices+=("$@"); break ;;
       -*) shift ;;
       *)  if (( ! _got_prompt )); then question="$1"; _got_prompt=1; else choices+=("$1"); fi; shift ;;
@@ -171,6 +199,15 @@ input::choose() {
   ((multi))            && flags+=(--multi)
   [[ -n "$other" ]]    && flags+=(--other "$other")
   theme::args; flags+=("${AI_THEME_ARGS[@]}")
+
+  if ((measure)); then
+    flags+=(--measure)
+    [[ -n "$width" ]] && flags+=(--width "$width")
+    flags+=(-- "${choices[@]}")
+    "$bin" "${flags[@]}"
+    return
+  fi
+
   flags+=(-- "${choices[@]}")
 
   local answer rc=0
@@ -185,11 +222,13 @@ input::choose() {
 # the tab flow + field rendering. Answers printed as name<US>value joined by RS;
 # exit 0 on submit, 130 on cancel.
 input::form() {
-  local title="" spec_file="" _tmp_spec=""
+  local title="" spec_file="" _tmp_spec="" measure=0 width=""
   while (($#)); do
     case "$1" in
-      --title) title="${2-}"; shift 2 ;;
-      --spec)  spec_file="${2-}"; shift 2 ;;
+      --title)   title="${2-}"; shift 2 ;;
+      --spec)    spec_file="${2-}"; shift 2 ;;
+      --measure) measure=1; shift ;;
+      --width)   width="${2-}"; shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
       *) shift ;;
@@ -209,6 +248,15 @@ input::form() {
   local -a flags=(--type form --spec "$spec_file")
   [[ -n "$title" ]] && flags+=(--title "$title")
   theme::args; flags+=("${AI_THEME_ARGS[@]}")
+
+  if ((measure)); then
+    flags+=(--measure)
+    [[ -n "$width" ]] && flags+=(--width "$width")
+    "$bin" "${flags[@]}"
+    local _rc=$?
+    [[ -n "$_tmp_spec" ]] && rm -f -- "$_tmp_spec"
+    return $_rc
+  fi
 
   local answer rc=0
   answer="$("$bin" "${flags[@]}")" || rc=$?
