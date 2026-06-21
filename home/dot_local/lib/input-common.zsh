@@ -133,6 +133,7 @@ input::text() {
   [[ -n "$prompt" ]] && args+=(--prompt "$prompt")
   [[ -n "$value" ]]  && args+=(--value "$value")
   [[ -n "$height" ]] && args+=(--height "$height")
+  theme::args; args+=("${AI_THEME_ARGS[@]}")
 
   local answer rc=0
   answer="$("$bin" "${args[@]}")" || rc=$?

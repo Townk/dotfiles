@@ -141,6 +141,12 @@ line2"
       The contents of file "$TEST_TMP/aii.args" should include "--title Notes"
       The contents of file "$TEST_TMP/aii.args" should not include "--prompt"
     End
+    It 'forwards theme args (--theme-field-border) to the binary'
+      export AII_OUT="themed text"
+      When call input::text "Notes?"
+      The output should equal "themed text"
+      The contents of file "$TEST_TMP/aii.args" should include "--theme-field-border #585b70"
+    End
   End
 
   Describe 'input::choose'
