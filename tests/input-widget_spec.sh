@@ -7,20 +7,23 @@ Describe 'input-widget'
     gum="$TEST_TMP/gum"
     { echo '#!/usr/bin/env zsh'; echo 'printf "%s" "${GUM_OUT:-}"'; echo 'exit ${GUM_RC:-0}'; } > "$gum"
     chmod +x "$gum"; export GUM_BIN="$gum"
+    aii="$TEST_TMP/ai-assist-input"
+    { echo '#!/usr/bin/env zsh'; echo 'printf "%s" "${AII_OUT:-}"'; echo 'exit ${AII_RC:-0}'; } > "$aii"
+    chmod +x "$aii"; export AI_ASSIST_INPUT_BIN="$aii"
   }
-  cleanup() { rm -rf "$TEST_TMP"; unset GUM_BIN GUM_OUT GUM_RC; }
+  cleanup() { rm -rf "$TEST_TMP"; unset GUM_BIN GUM_OUT GUM_RC AI_ASSIST_INPUT_BIN AII_OUT AII_RC; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
   It 'dispatches --type line to input::line'
-    export GUM_OUT="typed"
+    export AII_OUT="typed"
     When run "$SCRIPT" --type line -- "Name?"
     The output should equal "typed"
     The status should be success
   End
 
   It 'dispatches --type confirm and maps no to exit 1'
-    export GUM_RC=1
+    export AII_RC=1
     When run "$SCRIPT" --type confirm -- "OK?"
     The output should equal "no"
     The status should eq 1

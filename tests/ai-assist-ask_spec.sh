@@ -26,14 +26,14 @@ Describe 'ai-assist-ask'
   End
 
   It 'maps a yes confirm to exit 0'
-    export GUM_RC=0
+    export AII_RC=0
     When run "$SCRIPT" --type confirm "Did this solve it?"
     The output should equal "yes"
     The status should be success
   End
 
   It 'maps a no confirm to exit 1'
-    export GUM_RC=1
+    export AII_RC=1
     When run "$SCRIPT" --type confirm "Did this solve it?"
     The output should equal "no"
     The status should eq 1
@@ -46,14 +46,14 @@ Describe 'ai-assist-ask'
   End
 
   It 'returns a line answer'
-    export GUM_OUT="some typed input"
+    export AII_OUT="some typed input"
     When run "$SCRIPT" --type line "Enter something"
     The output should equal "some typed input"
     The status should be success
   End
 
   It 'assembles --field tokens into US/RS spec and returns form answers'
-    export GUM_OUT="x"
+    export AII_OUT="x"
     printf 'name\037x\036email\037x' > "$TEST_TMP/expected"
     export EXPECT_FILE="$TEST_TMP/expected"
     When run "$SCRIPT" --type form "Sign up" --field "name:line:Name" --field "email:line:Email"
@@ -66,7 +66,7 @@ Describe 'ai-assist-ask'
     # A param value like "https://x:8080" contains colons; old ${(@s/:/)fld} parse would
     # have split it into extra fields, producing a malformed spec and a broken form.
     # The fix parses name:type:label and treats the rest as param verbatim.
-    export GUM_OUT="myval"
+    export AII_OUT="myval"
     printf 'url\037myval\036host\037myval' > "$TEST_TMP/expected"
     export EXPECT_FILE="$TEST_TMP/expected"
     When run "$SCRIPT" --type form "Connect" --field "url:line:URL:https://x:8080" --field "host:line:Host:localhost:9090"

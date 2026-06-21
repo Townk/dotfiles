@@ -48,7 +48,7 @@ input::confirm() {
 
   # The binary exits 0 (confirmed) / 1 (declined) / 130 (cancel); map to yes/no.
   local rc=0
-  "$bin" "${flags[@]}" -- "$question" || rc=$?
+  "$bin" "${flags[@]}" -- "$question" >/dev/null || rc=$?
   case "$rc" in
     0) print -rn -- "yes"; return 0 ;;
     1) print -rn -- "no";  return 1 ;;

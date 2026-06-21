@@ -62,6 +62,7 @@ Describe 'input-common.zsh'
     It '--title is forwarded'
       export AII_RC=0
       When call input::confirm "Body?" --title "Heads up"
+      The output should equal "yes"
       The contents of file "$TEST_TMP/aii.args" should include "--title Heads up"
     End
   End
@@ -77,6 +78,7 @@ Describe 'input-common.zsh'
     It 'forwards placeholder and theme args'
       export AII_OUT="x"
       When call input::line "Name?" --placeholder "type…"
+      The output should equal "x"
       The contents of file "$TEST_TMP/aii.args" should include "--placeholder type…"
       The contents of file "$TEST_TMP/aii.args" should include "--theme-field-border #585b70"
     End
