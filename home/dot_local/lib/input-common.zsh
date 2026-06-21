@@ -8,6 +8,21 @@ source "$(dirname "$_input_self")/theme-common.zsh"
 source "$(dirname "$_input_self")/pick-common.zsh"
 unset _input_self
 
+# _input::bin — resolve the ai-assist-input binary. A zellij-spawned pane's PATH
+# does NOT include ~/.local/share/go/bin (only the interactive profile adds it),
+# so a bare `command -v` fails there → fall back to the known install paths.
+# AI_ASSIST_INPUT_BIN overrides everything (used by tests).
+_input::bin() {
+  local p
+  [[ -n "${AI_ASSIST_INPUT_BIN:-}" ]] && { print -r -- "$AI_ASSIST_INPUT_BIN"; return 0; }
+  p="$(command -v ai-assist-input 2>/dev/null)"
+  [[ -n "$p" ]] && { print -r -- "$p"; return 0; }
+  for p in "$HOME/.local/share/go/bin/ai-assist-input" "$HOME/go/bin/ai-assist-input"; do
+    [[ -x "$p" ]] && { print -r -- "$p"; return 0; }
+  done
+  print -r -- "ai-assist-input"
+}
+
 # input::confirm "Q" [--default yes|no] [--affirmative T] [--negative T]
 #                    [--danger|--warning] [--title T] [--padding R] [--inset R]
 # Shim over `ai-assist-input --type confirm`. Prints "yes"/"no"; exit 0/1/130.
@@ -34,8 +49,7 @@ input::confirm() {
   done
   [[ -n "$question" ]] || question="${1:-}"
 
-  local bin; bin="${AI_ASSIST_INPUT_BIN:-ai-assist-input}"
-  command -v -- "$bin" >/dev/null 2>&1 && bin="$(command -v -- "$bin")"
+  local bin; bin="$(_input::bin)"
 
   local -a flags=(--type confirm --affirmative "$affirmative" --negative "$negative")
   [[ -n "$title" ]]   && flags+=(--title "$title")
@@ -79,8 +93,7 @@ input::line() {
   [[ -n "$question" ]] || question="${1:-}"
   [[ -n "$title" ]] || title="$question"
 
-  local bin; bin="${AI_ASSIST_INPUT_BIN:-ai-assist-input}"
-  command -v -- "$bin" >/dev/null 2>&1 && bin="$(command -v -- "$bin")"
+  local bin; bin="$(_input::bin)"
 
   local -a flags=(--type line --title "$title")
   [[ -n "$value" ]]       && flags+=(--value "$value")
@@ -113,8 +126,7 @@ input::text() {
   done
   [[ -n "$question" ]] || question="${1:-}"
 
-  local bin; bin="${AI_ASSIST_INPUT_BIN:-ai-assist-input}"
-  command -v -- "$bin" >/dev/null 2>&1 && bin="$(command -v -- "$bin")"
+  local bin; bin="$(_input::bin)"
 
   local -a args=(--title "$question")
   [[ -n "$value" ]]  && args+=(--value "$value")

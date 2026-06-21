@@ -16,6 +16,22 @@ Describe 'input-common.zsh'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
+  Describe '_input::bin (binary resolution)'
+    It 'honors the AI_ASSIST_INPUT_BIN override'
+      export AI_ASSIST_INPUT_BIN=/custom/path/ai-assist-input
+      When call _input::bin
+      The output should equal "/custom/path/ai-assist-input"
+    End
+    It 'falls back to the install path when ai-assist-input is not on PATH'
+      # A zellij-spawned pane's PATH lacks ~/.local/share/go/bin (only the
+      # interactive profile adds it), so a bare command-v fails there. Simulate
+      # that PATH and assert the resolver still finds the installed binary.
+      When run env PATH=/opt/homebrew/bin:/usr/bin:/bin zsh -c 'unset AI_ASSIST_INPUT_BIN; source "'"$SHELLSPEC_PROJECT_ROOT"'/home/dot_local/lib/input-common.zsh"; _input::bin'
+      The output should equal "$HOME/.local/share/go/bin/ai-assist-input"
+      The status should be success
+    End
+  End
+
   Describe 'input::confirm'
     It 'maps binary exit 0 to yes and forwards confirm flags'
       export AII_RC=0
