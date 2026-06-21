@@ -55,6 +55,30 @@ theme::sgr_fg() {
   printf '\e[38;2;%d;%d;%dm' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
 }
 
+# theme::args — fill the global AI_THEME_ARGS with the --theme-* flags for
+# ai-assist-input (and -pager) from the canonical C_HEX_* palette. One source
+# for the dialog colors; the binary keeps its own defaults if these are absent.
+typeset -ga AI_THEME_ARGS
+theme::args() {
+  AI_THEME_ARGS=(
+    --theme-accent         "$C_HEX_MAUVE"
+    --theme-border         "$C_HEX_BLUE"
+    --theme-danger         "$C_HEX_RED"
+    --theme-warning        "$C_HEX_YELLOW"
+    --theme-base           "$C_HEX_BASE"
+    --theme-text           "$C_HEX_TEXT"
+    --theme-muted          "$C_HEX_OVERLAY0"
+    --theme-rule           "$C_HEX_SURFACE0"
+    --theme-key            "$C_HEX_WHITE"
+    --theme-field-border   "$C_HEX_SURFACE2"
+    --theme-button-bg      "$C_HEX_TAB_BG"
+    --theme-button-fg      "$C_HEX_TAB_FG"
+    --theme-button-sel-bg  "$C_HEX_TAB_ACTIVE_BG"
+    --theme-button-sel-fg  "$C_HEX_TAB_ACTIVE_FG"
+    --theme-scroll-thumb   "$C_HEX_OVERLAY1"
+  )
+}
+
 # theme::rule [COLS] — print a horizontal rule of ━, width = COLS-4 (the modal's
 # 2-cell inset on each side). With no COLS, read the live tty width via stty
 # (zellij doesn't reliably export COLUMNS), falling back to $COLUMNS or 80.

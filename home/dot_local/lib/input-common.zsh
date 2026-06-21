@@ -9,12 +9,13 @@ source "$(dirname "$_input_self")/pick-common.zsh"
 unset _input_self
 
 # input::confirm "Q" [--default yes|no] [--affirmative T] [--negative T]
-#                    [--danger] [--icon G] [--padding SPEC]
-# Prints "yes"/"no"; exit 0 (yes) / 1 (no) / 130 (cancel). --danger swaps the
-# selection to red AND forces default=no (never default to a destructive act).
+#                    [--danger|--warning] [--title T] [--padding R] [--inset R]
+# Shim over `ai-assist-input --type confirm`. Prints "yes"/"no"; exit 0/1/130.
+# --danger/--warning recolor border+title+button (the binary forces default=no
+# on danger). The themed chrome, keys, and hint all live in the binary now.
 input::confirm() {
   local question="" default="yes" affirmative="Yes" negative="No"
-  local danger=0 warning=0 icon="" padding="1 2"
+  local danger=0 warning=0 title="" padding="" inset=""
   while (($#)); do
     case "$1" in
       --default)     default="${2:-yes}"; shift 2 ;;
@@ -22,9 +23,10 @@ input::confirm() {
       --negative)    negative="${2:-No}"; shift 2 ;;
       --danger)      danger=1; shift ;;
       --warning)     warning=1; shift ;;
-      --icon)        icon="${2-}"; shift 2 ;;
+      --title)       title="${2-}"; shift 2 ;;
       --padding)     padding="${2-}"; shift 2 ;;
-      --margin|--width|--header|--title) shift 2 ;;
+      --inset)       inset="${2-}"; shift 2 ;;
+      --icon|--margin|--width|--header) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
       *)  question="$1"; shift ;;
@@ -32,55 +34,21 @@ input::confirm() {
   done
   [[ -n "$question" ]] || question="${1:-}"
 
-  local gum; gum="${GUM_BIN:-gum}"
-  command -v -- "$gum" >/dev/null 2>&1 && gum="$(command -v -- "$gum")"
+  local bin; bin="${AI_ASSIST_INPUT_BIN:-ai-assist-input}"
+  command -v -- "$bin" >/dev/null 2>&1 && bin="$(command -v -- "$bin")"
 
-  # Variant recolors the focused (selected) button: --danger → bright red +
-  # default=no (never default to a destructive act); --warning → yellow (keeps
-  # the normal default). zj::confirm / the modal recolor the title to match.
-  local -a flags=("${theme_gum_confirm[@]}" --affirmative "$affirmative" --negative "$negative")
-  if ((danger)); then
-    flags+=(--selected.background "$C_HEX_RED" --selected.foreground "$C_HEX_WHITE" --default=false)
-  elif ((warning)); then
-    flags+=(--selected.background "$C_HEX_YELLOW" --selected.foreground "$C_HEX_BASE")
-    [[ "$default" == no ]] && flags+=(--default=false) || flags+=(--default)
-  elif [[ "$default" == no ]]; then
-    flags+=(--default=false)
-  else
-    flags+=(--default)
-  fi
+  local -a flags=(--type confirm --affirmative "$affirmative" --negative "$negative")
+  [[ -n "$title" ]]   && flags+=(--title "$title")
+  ((danger))          && flags+=(--danger)
+  ((warning))         && flags+=(--warning)
+  [[ "$default" == no ]] && flags+=(--default negative)
   [[ -n "$padding" ]] && flags+=(--padding "$padding")
-  flags+=(--no-show-help)   # we render our own themed hint below the buttons
+  [[ -n "$inset" ]]   && flags+=(--inset "$inset")
+  theme::args; flags+=("${AI_THEME_ARGS[@]}")
 
-  # Themed hint below the buttons. gum exposes no styling for its help line, so we
-  # disable it and print our own — bright-white keys + dark-grey words, matching
-  # the zj-hud whichkey. Cursor-restore trick: print $hint_rows blank lines, the
-  # hint, then ESC[<n>F to move the cursor back up so gum renders its UI ABOVE the
-  # hint. Goes to /dev/tty (visible) because our stdout is the captured answer
-  # channel. The keys/words SGR is built from the (always-set) C_HEX_* via
-  # theme::sgr_fg — the C_*/THEME_* SGR vars are empty here (our stdout is the
-  # captured file, so common.zsh's [ -t 1 ] gate is false).
-  #
-  # hint_rows MUST equal gum's rendered view height so the hint lands just below
-  # it: padding-top + prompt lines + 1 (blank) + 1 (buttons) + padding-bottom. It
-  # therefore adapts to a multi-line prompt (e.g. the quit dialog) and to a custom
-  # --padding, with no per-caller tuning. Callers size the pane to
-  # title(3) + hint_rows + 1 (the bottom padding line).
+  # The binary exits 0 (confirmed) / 1 (declined) / 130 (cancel); map to yes/no.
   local rc=0
-  if { : >/dev/tty; } 2>/dev/null; then
-    local -a _pp=(${=padding}); local ptop=0 pbot=0
-    case ${#_pp} in
-      1)   ptop=${_pp[1]}; pbot=${_pp[1]} ;;
-      2|3) ptop=${_pp[1]}; pbot=${_pp[1]} ;;
-      4)   ptop=${_pp[1]}; pbot=${_pp[3]} ;;
-    esac
-    local -a _ql=("${(@f)question}"); local plines=${#_ql}; ((plines < 1)) && plines=1
-    local hint_rows=$(( ptop + plines + 2 + pbot ))
-    local kb="$(theme::sgr_fg "$C_HEX_WHITE")" dm="$(theme::sgr_fg "$C_HEX_OVERLAY0")" rs=$'\e[0m'
-    local hint="${kb}󱊷${dm} dismiss · ${kb}↵${dm} submit · ${kb}y${dm} ${(L)affirmative} · ${kb}n${dm} ${(L)negative}${rs}"
-    { printf '\n%.0s' {1..$hint_rows}; printf '  %s' "$hint"; printf '\e[%sF' "$hint_rows"; } >/dev/tty 2>/dev/null
-  fi
-  "$gum" confirm "${flags[@]}" "${icon:+$icon }$question" || rc=$?
+  "$bin" "${flags[@]}" -- "$question" || rc=$?
   case "$rc" in
     0) print -rn -- "yes"; return 0 ;;
     1) print -rn -- "no";  return 1 ;;
@@ -88,37 +56,41 @@ input::confirm() {
   esac
 }
 
-# input::line "Q" [--placeholder P] [--value V] [--icon G] [--width N]
+# input::line "Q" [--placeholder P] [--value V] [--width N] [--title T]
+# Shim over `ai-assist-input --type line`. Prints the typed line; 130 on
+# empty/cancel.
 input::line() {
-  local question="" placeholder="" value="" icon="" width="" padding="1 2"
+  local question="" placeholder="" value="" width="" title="" padding="" inset=""
   while (($#)); do
     case "$1" in
       --placeholder) placeholder="${2-}"; shift 2 ;;
       --value)       value="${2-}"; shift 2 ;;
-      --icon)        icon="${2-}"; shift 2 ;;
       --width)       width="${2-}"; shift 2 ;;
+      --title)       title="${2-}"; shift 2 ;;
       --padding)     padding="${2-}"; shift 2 ;;
-      --header|--title) question="${2-}"; shift 2 ;;
-      --margin) shift 2 ;;
+      --inset)       inset="${2-}"; shift 2 ;;
+      --header)      question="${2-}"; shift 2 ;;
+      --icon|--margin) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
       *)  question="$1"; shift ;;
     esac
   done
   [[ -n "$question" ]] || question="${1:-}"
+  [[ -n "$title" ]] || title="$question"
 
-  local gum; gum="${GUM_BIN:-gum}"
-  command -v -- "$gum" >/dev/null 2>&1 && gum="$(command -v -- "$gum")"
+  local bin; bin="${AI_ASSIST_INPUT_BIN:-ai-assist-input}"
+  command -v -- "$bin" >/dev/null 2>&1 && bin="$(command -v -- "$bin")"
 
-  local -a flags=("${theme_gum_input[@]}" --prompt "${icon:+$icon }")
-  [[ -n "$question" ]]    && flags+=(--header "$question")
-  [[ -n "$placeholder" ]] && flags+=(--placeholder "$placeholder")
+  local -a flags=(--type line --title "$title")
   [[ -n "$value" ]]       && flags+=(--value "$value")
-  [[ -n "$width" ]]       && flags+=(--width "$width")
+  [[ -n "$placeholder" ]] && flags+=(--placeholder "$placeholder")
   [[ -n "$padding" ]]     && flags+=(--padding "$padding")
+  [[ -n "$inset" ]]       && flags+=(--inset "$inset")
+  theme::args; flags+=("${AI_THEME_ARGS[@]}")
 
   local answer rc=0
-  answer="$("$gum" input "${flags[@]}")" || rc=$?
+  answer="$("$bin" "${flags[@]}")" || rc=$?
   ((rc != 0)) && return 130
   [[ -n "$answer" ]] || return 130
   print -rn -- "$answer"

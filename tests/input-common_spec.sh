@@ -12,65 +12,76 @@ Describe 'input-common.zsh'
       echo 'exit ${GUM_RC:-0}'
     } > "$gum"; chmod +x "$gum"
     export GUM_BIN="$gum"
-    # ai-assist-input stub.
+    # ai-assist-input recording stub: append argv to aii.args, print $AII_OUT, exit $AII_RC.
     aii="$TEST_TMP/ai-assist-input"
-    { echo '#!/usr/bin/env zsh'; echo 'printf "%s" "${AII_OUT:-}"'; echo 'exit ${AII_RC:-0}'; } > "$aii"
-    chmod +x "$aii"; export AI_ASSIST_INPUT_BIN="$aii"
+    { echo '#!/usr/bin/env zsh'
+      echo 'print -r -- "$@" >> "'"$TEST_TMP"'/aii.args"'
+      echo 'printf "%s" "${AII_OUT:-}"'
+      echo 'exit ${AII_RC:-0}'
+    } > "$aii"; chmod +x "$aii"; export AI_ASSIST_INPUT_BIN="$aii"
   }
   cleanup() { rm -rf "$TEST_TMP"; unset GUM_BIN AI_ASSIST_INPUT_BIN GUM_OUT GUM_RC AII_OUT AII_RC; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
   Describe 'input::confirm'
-    It 'prints yes and exits 0 on affirmative'
-      export GUM_RC=0
+    It 'maps binary exit 0 to yes and forwards confirm flags'
+      export AII_RC=0
       When call input::confirm "Proceed?"
       The output should equal "yes"
       The status should be success
+      The contents of file "$TEST_TMP/aii.args" should include "--type confirm"
     End
-    It 'prints no and exits 1 on negative'
-      export GUM_RC=1
+    It 'maps binary exit 1 to no'
+      export AII_RC=1
       When call input::confirm "Proceed?"
       The output should equal "no"
       The status should eq 1
     End
-    It 'exits 130 on cancel'
-      export GUM_RC=130
+    It 'maps other exits to 130'
+      export AII_RC=130
       When call input::confirm "Proceed?"
       The status should eq 130
     End
-    It '--danger uses bright-red selection and defaults to no'
-      export GUM_RC=1
-      When call input::confirm "Delete?" --danger
+    It '--danger forwards --danger and the danger theme color'
+      export AII_RC=1
+      When call input::confirm "Delete?" --danger --affirmative Delete --negative Cancel
       The output should equal "no"
       The status should eq 1
-      The contents of file "$TEST_TMP/gum.args" should include "#ff5555"
-      The contents of file "$TEST_TMP/gum.args" should include "--default=false"
+      The contents of file "$TEST_TMP/aii.args" should include "--danger"
+      The contents of file "$TEST_TMP/aii.args" should include "--affirmative Delete"
+      The contents of file "$TEST_TMP/aii.args" should include "--theme-danger #ff5555"
     End
-    It '--warning uses yellow selection and keeps the normal default'
-      export GUM_RC=0
+    It '--warning forwards --warning and the warning theme color'
+      export AII_RC=0
       When call input::confirm "Heads up?" --warning
       The output should equal "yes"
-      The status should be success
-      The contents of file "$TEST_TMP/gum.args" should include "#e5bf7b"
+      The contents of file "$TEST_TMP/aii.args" should include "--warning"
+      The contents of file "$TEST_TMP/aii.args" should include "--theme-warning #e5bf7b"
+    End
+    It '--title is forwarded'
+      export AII_RC=0
+      When call input::confirm "Body?" --title "Heads up"
+      The contents of file "$TEST_TMP/aii.args" should include "--title Heads up"
     End
   End
 
   Describe 'input::line'
-    It 'prints the typed line'
-      export GUM_OUT="hello there"
+    It 'prints the typed line and forwards --type line'
+      export AII_OUT="hello there"
       When call input::line "Name?"
       The output should equal "hello there"
       The status should be success
+      The contents of file "$TEST_TMP/aii.args" should include "--type line"
     End
-    It 'themes the cursor mauve'
-      export GUM_OUT="x"
-      When call input::line "Name?"
-      The output should equal "x"
-      The contents of file "$TEST_TMP/gum.args" should include "--cursor.foreground #cba6f7"
+    It 'forwards placeholder and theme args'
+      export AII_OUT="x"
+      When call input::line "Name?" --placeholder "type…"
+      The contents of file "$TEST_TMP/aii.args" should include "--placeholder type…"
+      The contents of file "$TEST_TMP/aii.args" should include "--theme-field-border #585b70"
     End
     It 'exits 130 on empty'
-      export GUM_OUT=""
+      export AII_OUT=""
       When call input::line "Name?"
       The status should eq 130
     End
