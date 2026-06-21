@@ -18,6 +18,7 @@ type="free"
 title=""
 question=""
 other=""
+multi=0
 choices=()
 fields=()
 variant=()
@@ -26,6 +27,7 @@ while (($#)); do
     --type)  type="${2:-free}"; shift 2 ;;
     --title) title="${2-}"; shift 2 ;;
     --other) other="${2-}"; shift 2 ;;
+    --multi) multi=1; shift ;;
     --field) fields+=("${2-}"); shift 2 ;;
     --danger)  variant+=(--danger); shift ;;
     --warning) variant+=(--warning); shift ;;
@@ -51,7 +53,9 @@ case "$type" in
   choose)
     otheropt=()
     [[ -n "$other" ]] && otheropt=(--other "$other")
-    zj::choose "${titleopt[@]}" "${otheropt[@]}" "$question" "${choices[@]}"
+    multiopt=()
+    ((multi)) && multiopt=(--multi)
+    zj::choose "${titleopt[@]}" "${multiopt[@]}" "${otheropt[@]}" "$question" "${choices[@]}"
     ;;
   form)
     # Build the US/RS spec from --field name:type:label[:param] tokens.
