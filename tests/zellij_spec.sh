@@ -77,6 +77,14 @@ Describe 'zellij.zsh — zj::confirm borderless float'
     The contents of file "$ZJ_ARGS" should include "--title Quit"
     The status should be success
   End
+
+  It 'spawns confirm without --title when none given (no title duplication)'
+    When call zj::confirm "Really?"
+    The output should equal "yes"
+    The contents of file "$ZJ_ARGS" should include "--type confirm"
+    The contents of file "$ZJ_ARGS" should not include "--title"
+    The status should be success
+  End
 End
 
 Describe 'zellij.zsh — zj::choose borderless float'
@@ -140,9 +148,16 @@ Describe 'zellij.zsh — zj:: input drop-ins (off-Zellij fallback)'
   setup() { unset ZELLIJ; }   # force the non-Zellij path
   BeforeEach 'setup'
 
-  It 'zj::confirm delegates to input::confirm with title and question'
+  It 'zj::confirm delegates to input::confirm with prompt only (no --title when none given)'
     When call zj::confirm "Proceed?"
-    The output should include "--title Proceed?"
+    The output should include "Proceed?"
+    The output should not include "--title"
+    The status should be success
+  End
+
+  It 'zj::confirm forwards --title when explicitly given'
+    When call zj::confirm --title "Confirm" "Proceed?"
+    The output should include "--title Confirm"
     The output should include "Proceed?"
     The status should be success
   End
@@ -159,6 +174,12 @@ Describe 'zellij.zsh — zj:: input drop-ins (off-Zellij fallback)'
     The output should include "a"
     The output should include "b"
     The output should include "c"
+  End
+
+  It 'zj::choose does not forward --title when none given'
+    When call zj::choose "Pick" a b c
+    The output should not include "--title"
+    The status should be success
   End
 End
 

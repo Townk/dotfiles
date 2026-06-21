@@ -69,7 +69,11 @@ case "$type" in
     done
     specfile="$(mktemp "${TMPDIR:-/tmp}/aiask-form.XXXXXX")"
     print -rn -- "$spec" > "$specfile"
-    zj::form "${titleopt[@]}" "$question" --spec "$specfile"
+    # For form, the positional is the form TITLE (header), not a prompt. Pass it
+    # explicitly as --title so the form binary always gets its header, regardless
+    # of whether the caller also passed their own --title override.
+    local _form_title="${title:-$question}"
+    zj::form --title "$_form_title" --spec "$specfile"
     rc=$?
     rm -f -- "$specfile"
     exit $rc

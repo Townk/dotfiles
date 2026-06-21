@@ -80,6 +80,13 @@ Describe 'input-common.zsh'
       The contents of file "$TEST_TMP/aii.args" should include "--title Confirm"
       The contents of file "$TEST_TMP/aii.args" should include "--prompt Proceed?"
     End
+    It 'no --title forwarded when none given (no title duplication)'
+      export AII_RC=0
+      When call input::confirm "Proceed?"
+      The output should equal "yes"
+      The contents of file "$TEST_TMP/aii.args" should include "--prompt Proceed?"
+      The contents of file "$TEST_TMP/aii.args" should not include "--title"
+    End
   End
 
   Describe 'input::line'

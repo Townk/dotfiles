@@ -198,9 +198,9 @@ _zj::float() {
 # geometry is supplied here and overridden by any caller --pane-*.
 # Title vs content: `--title TEXT` sets the ▓▓▓ header (the dialog title); the
 # positional arg is the content (the widget prompt / form title / textarea header).
-# When --title is omitted the header defaults to the first positional, so a
-# single-arg call still works. _zj::split_pane_opts pulls --pane-* into `reply`
-# and --title into PANE_TITLE, leaving the content in PANE_REST.
+# When --title is omitted PANE_TITLE is "" — the widget receives no header, only
+# the prompt, so the question renders exactly once. _zj::split_pane_opts pulls
+# --pane-* into `reply` and --title into PANE_TITLE, leaving content in PANE_REST.
 _zj::split_pane_opts() {  # → reply (geom), PANE_TITLE (header), PANE_REST (widget args)
   reply=(); PANE_REST=(); PANE_TITLE=""
   local _ht=0
@@ -211,21 +211,25 @@ _zj::split_pane_opts() {  # → reply (geom), PANE_TITLE (header), PANE_REST (wi
       *) PANE_REST+=("$1"); shift ;;
     esac
   done
-  (( _ht )) || PANE_TITLE="${PANE_REST[1]:-}"
+  # PANE_TITLE is only set when --title was explicitly passed; we no longer default
+  # to the first positional so that a no-title call forwards --prompt only (no
+  # --title), preventing the question from rendering twice (header AND prompt).
 }
 
 # confirm/line/choose: zellij-modal renders the ▓▓▓ header (PANE_TITLE); the
-# content (PANE_REST) is the widget/pick prompt.
+# content (PANE_REST) is the widget/pick prompt. --title is only forwarded when
+# non-empty; an omitted --title means no header chrome, only the prompt.
 zj::confirm() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"
-  if ! zj::available; then input::confirm --title "$PANE_TITLE" "${PANE_REST[@]}"; return; fi
+  local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
+  if ! zj::available; then input::confirm "${_topt[@]}" "${PANE_REST[@]}"; return; fi
   # Height = prompt lines + 11 (border 2 + padding 2 + title/rule 2 + 3 insets +
   # buttons 1 + hint 1), assuming default --padding 1 / --inset 1.
   local -a _cl=("${(@f)PANE_REST[1]}"); local cl=${#_cl}; ((cl < 1)) && cl=1
   local rc=0 ans
   ans=$(_zj::float --type confirm --borderless true --pane-width 54 --pane-height $((cl + 11)) \
-        "${reply[@]}" -- --title "$PANE_TITLE" "${PANE_REST[@]}") || rc=$?
+        "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}") || rc=$?
   ((rc == 130)) && return 130
   [[ "$ans" == no ]] && { print -rn -- "no"; return 1; }
   print -rn -- "yes"; return 0
@@ -234,15 +238,15 @@ zj::confirm() {
 zj::line() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"
-  if ! zj::available; then input::line --title "$PANE_TITLE" "${PANE_REST[@]}"; return; fi
+  local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
+  if ! zj::available; then input::line "${_topt[@]}" "${PANE_REST[@]}"; return; fi
   _zj::float --type line --borderless true --pane-width 64 --pane-height 12 \
-    "${reply[@]}" -- --title "$PANE_TITLE" "${PANE_REST[@]}"
+    "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}"
 }
 
 zj::choose() {
   # Pre-parse --multi and --other before _zj::split_pane_opts so they don't
-  # corrupt PANE_TITLE (split_pane_opts puts unknown args into PANE_REST and
-  # promotes [1] to the title).
+  # corrupt PANE_TITLE (split_pane_opts puts unknown args into PANE_REST).
   local _multi=0 _other="" _skip=0
   local -a _pre_args=()
   local -a _args=("$@")
@@ -258,13 +262,14 @@ zj::choose() {
 
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "${_pre_args[@]}"
+  local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
 
   local -a _extra=()
   (( _multi ))      && _extra+=(--multi)
   [[ -n "$_other" ]] && _extra+=(--other "$_other")
 
   if ! zj::available; then
-    input::choose --title "$PANE_TITLE" "${_extra[@]}" "${PANE_REST[@]}"
+    input::choose "${_topt[@]}" "${_extra[@]}" "${PANE_REST[@]}"
     return
   fi
 
@@ -279,9 +284,9 @@ zj::choose() {
   (( n < 1 )) && n=1
   # Height: min(n,8) visible items + 9 chrome rows (title/rule/prompt/padding/hint)
   local vis=$(( n < 8 ? n : 8 ))
-  _zj::float --type choose --borderless true --title "$PANE_TITLE" \
+  _zj::float --type choose --borderless true "${_topt[@]}" \
     --pane-width 56 --pane-height $(( vis + 9 )) \
-    "${reply[@]}" -- --title "$PANE_TITLE" "${_extra[@]}" "${PANE_REST[@]}"
+    "${reply[@]}" -- "${_topt[@]}" "${_extra[@]}" "${PANE_REST[@]}"
 }
 
 # text/form: the widget owns its chrome, so the title goes to the widget (not the
@@ -290,15 +295,17 @@ zj::choose() {
 zj::text() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"
-  if ! zj::available; then input::text --title "$PANE_TITLE" "${PANE_REST[@]}"; return; fi
+  local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
+  if ! zj::available; then input::text "${_topt[@]}" "${PANE_REST[@]}"; return; fi
   _zj::float --type text --borderless true --pane-width 57 --pane-height 16 \
-    "${reply[@]}" -- --height 5 --title "$PANE_TITLE" "${PANE_REST[@]}"
+    "${reply[@]}" -- --height 5 "${_topt[@]}" "${PANE_REST[@]}"
 }
 
 zj::form() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"
-  if ! zj::available; then input::form --title "$PANE_TITLE" "${PANE_REST[@]}"; return; fi
+  local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
+  if ! zj::available; then input::form "${_topt[@]}" "${PANE_REST[@]}"; return; fi
   _zj::float --type form --borderless true --pane-width 64 --pane-height 18 \
-    "${reply[@]}" -- --title "$PANE_TITLE" "${PANE_REST[@]}"
+    "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}"
 }

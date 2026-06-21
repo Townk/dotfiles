@@ -60,6 +60,24 @@ Describe 'ai-assist-ask'
     The status should be success
   End
 
+  It 'form: positional becomes the form --title (no title duplication)'
+    # ai-assist-ask --type form "Setup" must forward --title Setup to the binary,
+    # NOT a bare positional "Setup". Verify by capturing the args the stub receives.
+    stub2="$TEST_TMP/ai-assist-input2"
+    { echo '#!/usr/bin/env zsh'
+      echo 'printf "%s" "$*" >> "'"$TEST_TMP"'/aii2.args"'
+      echo 'printf "%s" "${AII_OUT:-}"'
+      echo 'exit ${AII_RC:-0}'
+    } > "$stub2"; chmod +x "$stub2"; export AI_ASSIST_INPUT_BIN="$stub2"
+    export AII_OUT=""
+    export AII_RC=130
+    When run "$SCRIPT" --type form "Setup" --field "name:line:Name" --field "email:line:Email"
+    The file "$TEST_TMP/aii2.args" should be exist
+    The contents of file "$TEST_TMP/aii2.args" should include "--title Setup"
+    The contents of file "$TEST_TMP/aii2.args" should not include "-- Setup"
+    The status should eq 130
+  End
+
   It 'forwards --other to choose dispatch'
     export AII_OUT="alpha"
     When run "$SCRIPT" --type choose --other "Something else" "Pick one" alpha beta
