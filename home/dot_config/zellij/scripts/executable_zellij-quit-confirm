@@ -78,7 +78,7 @@ ${THEME_COMMENT}Session:${THEME_TEXT_NORMAL} ${ZELLIJ_SESSION_NAME:-?}"
 # special parameter (a synonym for `$?`), so `status=0` aborts the script with
 # "read-only variable: status".
 answer=0
-input::confirm "$prompt" --danger --affirmative "Quit" --negative "Cancel" >/dev/null || answer=$?
+input::confirm "$prompt" --title "Quit Session" --danger --affirmative "Quit" --negative "Cancel" >/dev/null || answer=$?
 
 case "$answer" in
   0) exec "$ZELLIJ_BIN" kill-session "${ZELLIJ_SESSION_NAME:?ZELLIJ_SESSION_NAME unset}" ;;
