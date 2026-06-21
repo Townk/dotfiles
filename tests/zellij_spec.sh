@@ -43,6 +43,42 @@ Describe 'zellij.zsh — zj::pick'
   End
 End
 
+Describe 'zellij.zsh — zj::confirm borderless float'
+  Include home/dot_local/lib/zellij.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    ZJ_ARGS="$TEST_TMP/zj-args.txt"
+    export ZELLIJ=1
+    stub="$TEST_TMP/zellij"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'if [[ "$1" == action && "$2" == new-pane ]]; then'
+      echo "  echo \"\$*\" > \"$TEST_TMP/zj-args.txt\""
+      echo '  fifo=""; prev=""'
+      echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
+      echo '  [[ -n "$fifo" ]] && { printf "yes" > "$fifo" & }'
+      echo '  exit 0'
+      echo 'fi'
+      echo 'exit 0'
+    } > "$stub"
+    chmod +x "$stub"
+    export ZELLIJ_BIN="$stub"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'spawns confirm in a borderless pane with the title on the widget'
+    When call zj::confirm --title "Quit" "Really?"
+    The output should equal "yes"
+    The contents of file "$ZJ_ARGS" should include "--borderless true"
+    The contents of file "$ZJ_ARGS" should include "--type confirm"
+    The contents of file "$ZJ_ARGS" should include "--title Quit"
+    The status should be success
+  End
+End
+
 Describe 'zellij.zsh — zj:: input drop-ins (off-Zellij fallback)'
   Include home/dot_local/lib/zellij.zsh
 
@@ -55,16 +91,17 @@ Describe 'zellij.zsh — zj:: input drop-ins (off-Zellij fallback)'
   setup() { unset ZELLIJ; }   # force the non-Zellij path
   BeforeEach 'setup'
 
-  It 'zj::confirm delegates to input::confirm with the question'
+  It 'zj::confirm delegates to input::confirm with title and question'
     When call zj::confirm "Proceed?"
-    The output should include "confirm:Proceed?"
+    The output should include "--title Proceed?"
+    The output should include "Proceed?"
     The status should be success
   End
 
   It 'zj::confirm strips --pane-* before delegating'
     When call zj::confirm "Proceed?" --pane-width 40 --pane-height 7
     The output should not include "--pane-width"
-    The output should include "confirm:Proceed?"
+    The output should include "Proceed?"
   End
 
   It 'zj::choose forwards choices'

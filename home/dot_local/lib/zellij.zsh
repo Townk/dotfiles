@@ -141,13 +141,14 @@ zj::pick() {
 # Spawn a sized floating modal running input-widget and capture the answer via
 # FIFO. Echoes the captured answer on stdout; returns 130 on empty (cancel).
 _zj::float() {
-  local type="line" title="" title_color="" pane_w="" pane_h="" pane_x="" pane_y=""
+  local type="line" title="" title_color="" borderless="false" pane_w="" pane_h="" pane_x="" pane_y=""
   local -a wargs
   while (($#)); do
     case "$1" in
       --type)        type="${2:-line}"; shift 2 ;;
       --title)       title="${2-}"; shift 2 ;;
       --title-color) title_color="${2-}"; shift 2 ;;
+      --borderless)  borderless="${2-}"; shift 2 ;;
       --pane-width)  pane_w="${2-}"; shift 2 ;;
       --pane-height) pane_h="${2-}"; shift 2 ;;
       --pane-x)      pane_x="${2-}"; shift 2 ;;
@@ -183,7 +184,7 @@ _zj::float() {
   # quit pane (which inherits COLORTERM). Default to truecolor if we somehow lack
   # it (these are GUI terminals).
   "$bin" action new-pane --floating --close-on-exit \
-    --name "" --borderless false --pinned true "${pane_geom[@]}" --cwd "$PWD" \
+    --name "" --borderless "$borderless" --pinned true "${pane_geom[@]}" --cwd "$PWD" \
     -- env "COLORTERM=${COLORTERM:-truecolor}" "$modal" "${modal_args[@]}" \
     -- "$widget" --type "$type" -- "${wargs[@]}" >/dev/null
 
@@ -220,19 +221,13 @@ _zj::split_pane_opts() {  # → reply (geom), PANE_TITLE (header), PANE_REST (wi
 zj::confirm() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"
-  if ! zj::available; then input::confirm "${PANE_REST[@]}"; return; fi
-  # Height tracks input::confirm's dynamic hint_rows (default padding "1 2" →
-  # hint_rows = content_lines + 4): title(3) + hint_rows + 1 + frame(2)
-  # = content_lines + 11. So a multi-line prompt grows the pane to fit.
+  if ! zj::available; then input::confirm --title "$PANE_TITLE" "${PANE_REST[@]}"; return; fi
+  # Height = prompt lines + 11 (border 2 + padding 2 + title/rule 2 + 3 insets +
+  # buttons 1 + hint 1), assuming default --padding 1 / --inset 1.
   local -a _cl=("${(@f)PANE_REST[1]}"); local cl=${#_cl}; ((cl < 1)) && cl=1
-  # Variant: recolor the ▓▓▓ title to match the --danger/--warning button.
-  local -a tcopt=()
-  if (( ${PANE_REST[(I)--danger]} )); then tcopt=(--title-color "$C_HEX_RED")
-  elif (( ${PANE_REST[(I)--warning]} )); then tcopt=(--title-color "$C_HEX_YELLOW")
-  fi
   local rc=0 ans
-  ans=$(_zj::float --type confirm --title "$PANE_TITLE" "${tcopt[@]}" --pane-width 54 --pane-height $((cl + 11)) \
-        "${reply[@]}" -- "${PANE_REST[@]}") || rc=$?
+  ans=$(_zj::float --type confirm --borderless true --pane-width 54 --pane-height $((cl + 11)) \
+        "${reply[@]}" -- --title "$PANE_TITLE" "${PANE_REST[@]}") || rc=$?
   ((rc == 130)) && return 130
   [[ "$ans" == no ]] && { print -rn -- "no"; return 1; }
   print -rn -- "yes"; return 0
@@ -241,9 +236,9 @@ zj::confirm() {
 zj::line() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"
-  if ! zj::available; then input::line "${PANE_REST[@]}"; return; fi
-  _zj::float --type line --title "$PANE_TITLE" --pane-width 64 --pane-height 11 \
-    "${reply[@]}" -- "${PANE_REST[@]}"
+  if ! zj::available; then input::line --title "$PANE_TITLE" "${PANE_REST[@]}"; return; fi
+  _zj::float --type line --borderless true --pane-width 64 --pane-height 12 \
+    "${reply[@]}" -- --title "$PANE_TITLE" "${PANE_REST[@]}"
 }
 
 zj::choose() {
@@ -263,7 +258,7 @@ zj::text() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"
   if ! zj::available; then input::text --title "$PANE_TITLE" "${PANE_REST[@]}"; return; fi
-  _zj::float --type text --pane-width 55 --pane-height 10 \
+  _zj::float --type text --borderless true --pane-width 57 --pane-height 12 \
     "${reply[@]}" -- --title "$PANE_TITLE" "${PANE_REST[@]}"
 }
 
