@@ -17,10 +17,12 @@ Describe 'theme-common.zsh'
     The output should include "--cursor.foreground #cba6f7"
   End
 
-  It 'themes the gum confirm selection with mauve bg + base fg'
+  It 'themes the gum confirm buttons with the system tab colors'
     When call print -r -- "${theme_gum_confirm[*]}"
-    The output should include "--selected.background #cba6f7"
-    The output should include "--selected.foreground #1e1e2e"
+    The output should include "--selected.background #656a83"
+    The output should include "--selected.foreground #ffffff"
+    The output should include "--unselected.background #282c41"
+    The output should include "--unselected.foreground #9b9fc1"
   End
 
   It 'theme::rule emits a sized bar at an explicit width'

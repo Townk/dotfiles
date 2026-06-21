@@ -65,23 +65,20 @@ ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_bin zellij /opt/homebrew/bin/zellij /usr/loc
 # (this runs as a floating pane's PID 1, outside any login shell).
 source "$HOME/.local/lib/input-common.zsh"
 
-# Blank row between zellij-modal's title rule and the confirm widget.
-printf '\n'
-
-# overlay0 "Session:" label, text value — now from the shared theme tokens.
+# overlay0 "Session:" label, text value — from the shared theme tokens.
 prompt="Quit current Zellij session?
 
 ${THEME_COMMENT}Session:${THEME_TEXT_NORMAL} ${ZELLIJ_SESSION_NAME:-?}"
 
-# input::confirm --danger: red selection, defaults to Cancel (no), and a blank
-# top row to separate it from zellij-modal's rule via --padding.
+# Fully inherits the shared confirm chrome (palette, padding, themed hint that
+# sizes itself to this 3-line prompt). --danger gives the red destructive
+# selection and defaults to Cancel so a stray Enter/Esc never quits.
 #
 # The variable is `answer`, NOT `status`: under zsh `$status` is a read-only
 # special parameter (a synonym for `$?`), so `status=0` aborts the script with
 # "read-only variable: status".
 answer=0
-input::confirm "$prompt" --danger --affirmative "Quit" --negative "Cancel" \
-  --padding "0 0 1 2" >/dev/null || answer=$?
+input::confirm "$prompt" --danger --affirmative "Quit" --negative "Cancel" >/dev/null || answer=$?
 
 case "$answer" in
   0) exec "$ZELLIJ_BIN" kill-session "${ZELLIJ_SESSION_NAME:?ZELLIJ_SESSION_NAME unset}" ;;

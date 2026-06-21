@@ -4,7 +4,9 @@
 # (which falls back to the inline input::* off-Zellij). All theming, chrome,
 # geometry, and capture live in the stdlib now.
 #
-# Usage: ai-assist-ask [--type free|line|confirm|choose|form] "<question>" [choice...]
+# Usage: ai-assist-ask [--type free|line|confirm|choose|form] [--title TEXT] "<question>" [choice...]
+#   --title sets the dialog's ▓▓▓ header; the positional is the content (the
+#           prompt). Without --title the header defaults to the content.
 #   form: pass fields via repeated --field name:type:label[:param]
 # Prints the answer on stdout. confirm prints "yes"/"no" and exits 0/1.
 # Cancel (empty capture) exits 130.
@@ -13,13 +15,18 @@ set -uo pipefail
 source "$HOME/.local/lib/zellij.zsh"
 
 type="free"
+title=""
 question=""
 choices=()
 fields=()
+variant=()
 while (($#)); do
   case "$1" in
     --type)  type="${2:-free}"; shift 2 ;;
+    --title) title="${2-}"; shift 2 ;;
     --field) fields+=("${2-}"); shift 2 ;;
+    --danger)  variant+=(--danger); shift ;;
+    --warning) variant+=(--warning); shift ;;
     --) shift; break ;;
     -*) shift ;;
     *)
@@ -30,11 +37,16 @@ while (($#)); do
 done
 [[ -n "$question" ]] || question="${1:-}"
 
+# --title is the shared title/content split — passed through to zj::* (the
+# machinery lives in the stdlib, not here). Omitted → header defaults to content.
+titleopt=()
+[[ -n "$title" ]] && titleopt=(--title "$title")
+
 case "$type" in
-  free) zj::text "$question" ;;
-  line) zj::line "$question" ;;
-  confirm) zj::confirm "$question" ;;
-  choose) zj::choose "$question" "${choices[@]}" ;;
+  free) zj::text "${titleopt[@]}" "$question" ;;
+  line) zj::line "${titleopt[@]}" "$question" ;;
+  confirm) zj::confirm "${titleopt[@]}" "${variant[@]}" "$question" ;;
+  choose) zj::choose "${titleopt[@]}" "$question" "${choices[@]}" ;;
   form)
     # Build the US/RS spec from --field name:type:label[:param] tokens.
     # name, type, label must not contain ':' but param may (e.g. "https://..." or "50:50").
@@ -51,7 +63,7 @@ case "$type" in
     done
     specfile="$(mktemp "${TMPDIR:-/tmp}/aiask-form.XXXXXX")"
     print -rn -- "$spec" > "$specfile"
-    zj::form "$question" --spec "$specfile"
+    zj::form "${titleopt[@]}" "$question" --spec "$specfile"
     rc=$?
     rm -f -- "$specfile"
     exit $rc

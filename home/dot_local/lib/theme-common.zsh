@@ -16,7 +16,7 @@ THEME_H1="${C_BOLD}${C_MAUVE}"      # modal title (▓▓▓ …)
 THEME_H2="${C_BOLD}${C_TEXT}"       # sub-heading / active form tab
 THEME_SEPARATOR="${C_SURFACE0}"     # rule under the title
 THEME_INPUT_BORDER="${C_SURFACE2}"  # input box border
-THEME_KEY_BINDING="${C_SURFACE2}"   # keybinding hints
+THEME_KEY_BINDING="${C_WHITE}"      # keybinding chord keys (bright white, matches zj-hud whichkey)
 THEME_COMMENT="${C_OVERLAY0}"       # muted labels
 THEME_ACCENT="${C_MAUVE}"           # cursor / prompt / active marker
 THEME_TEXT_NORMAL="${C_TEXT}"
@@ -39,11 +39,21 @@ theme_gum_input=(
 )
 theme_gum_confirm=(
   --prompt.foreground "$C_HEX_TEXT"
-  --selected.background "$C_HEX_MAUVE"
-  --selected.foreground "$C_HEX_BASE"
-  --unselected.background "$C_HEX_SURFACE0"
-  --unselected.foreground "$C_HEX_TEXT"
+  --selected.background "$C_HEX_TAB_ACTIVE_BG"   # match active tab
+  --selected.foreground "$C_HEX_TAB_ACTIVE_FG"
+  --unselected.background "$C_HEX_TAB_BG"         # match inactive tab
+  --unselected.foreground "$C_HEX_TAB_FG"
 )
+
+# theme::sgr_fg "#rrggbb" — a 24-bit set-foreground SGR built from a hex value.
+# Use for color that must render regardless of the source-time `[ -t 1 ]` gate:
+# the C_*/THEME_* SGR vars are empty when a script's stdout is a captured file
+# (e.g. input-widget under zellij-modal), but C_HEX_* are always set. The
+# input::confirm hint always prints to /dev/tty, so it builds its colors here.
+theme::sgr_fg() {
+  local h="${1#\#}"
+  printf '\e[38;2;%d;%d;%dm' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
+}
 
 # theme::rule [COLS] — print a horizontal rule of ━, width = COLS-4 (the modal's
 # 2-cell inset on each side). With no COLS, read the live tty width via stty

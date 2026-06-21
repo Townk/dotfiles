@@ -39,13 +39,20 @@ Describe 'input-common.zsh'
       When call input::confirm "Proceed?"
       The status should eq 130
     End
-    It '--danger uses red selection and defaults to no'
+    It '--danger uses bright-red selection and defaults to no'
       export GUM_RC=1
       When call input::confirm "Delete?" --danger
       The output should equal "no"
       The status should eq 1
-      The contents of file "$TEST_TMP/gum.args" should include "#f38ba8"
+      The contents of file "$TEST_TMP/gum.args" should include "#ff5555"
       The contents of file "$TEST_TMP/gum.args" should include "--default=false"
+    End
+    It '--warning uses yellow selection and keeps the normal default'
+      export GUM_RC=0
+      When call input::confirm "Heads up?" --warning
+      The output should equal "yes"
+      The status should be success
+      The contents of file "$TEST_TMP/gum.args" should include "#e5bf7b"
     End
   End
 

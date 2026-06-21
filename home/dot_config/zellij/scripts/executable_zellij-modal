@@ -70,6 +70,7 @@ resolve_zellij_bin() {
 ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_zellij_bin || true)}"
 
 title=""
+title_color=""
 inject=0
 capture=""
 cmd=()
@@ -81,6 +82,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --title=*)
       title="${1#*=}"
+      shift
+      ;;
+    --title-color)
+      title_color="${2-}"
+      shift 2
+      ;;
+    --title-color=*)
+      title_color="${1#*=}"
       shift
       ;;
     --inject)
@@ -186,7 +195,12 @@ source "$HOME/.local/lib/theme-common.zsh"
 # can fall back to terminfo's 80, leaving the rule short of the frame.
 if [[ -n "$title" ]]; then
   rule="$(theme::rule)"
-  printf '\n  %s▓▓▓ %s%s\n' "$THEME_H1" "$title" "$THEME_RESET"
+  # --title-color (dialog variant: danger red / warning yellow) overrides the
+  # default H1 mauve — bold + the variant color. theme::sgr_fg builds the SGR
+  # from the hex so it works regardless of the [ -t 1 ] gate.
+  h1="$THEME_H1"
+  [[ -n "$title_color" ]] && h1=$'\e[1m'"$(theme::sgr_fg "$title_color")"
+  printf '\n  %s▓▓▓ %s%s\n' "$h1" "$title" "$THEME_RESET"
   printf '  %s%s%s\n' "$THEME_SEPARATOR" "$rule" "$THEME_RESET"
 fi
 

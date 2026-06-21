@@ -59,7 +59,22 @@ C_HEX_SURFACE2="#585b70"
 C_HEX_OVERLAY0="#6c7086"
 C_HEX_BASE="#1e1e2e"
 C_HEX_DANGER="#f38ba8"
+C_HEX_WHITE="#ffffff"
+# Dialog variant accents: default/active = which-key blue, danger = bright red,
+# warning = yellow. Drive the title + focused-button color (and the would-be
+# border, if zellij ever allows per-pane frame color).
+C_HEX_BLUE="#89b4fa"
+C_HEX_RED="#ff5555"
+C_HEX_YELLOW="#e5bf7b"
+# zj-hud status-bar tab colors — the system's established tab UI colors, used so
+# dialog buttons/keys match the tabs. Source: ~/Projects/apps/zellij/zj-hud
+# src/bar/render.rs (TAB_BG/TAB_FG/ACTIVE_TAB_BG/ACTIVE_TAB_FG).
+C_HEX_TAB_BG="#282c41"
+C_HEX_TAB_FG="#9b9fc1"
+C_HEX_TAB_ACTIVE_BG="#656a83"
+C_HEX_TAB_ACTIVE_FG="#ffffff"
 if [ -t 1 ]; then
+  C_WHITE=$'\e[38;2;255;255;255m'
   C_MAUVE=$'\e[38;2;203;166;247m'
   C_TEXT=$'\e[38;2;205;214;244m'
   C_SUBTEXT=$'\e[38;2;166;173;200m'
@@ -71,7 +86,7 @@ if [ -t 1 ]; then
   C_BOLD=$'\e[1m'
 else
   C_MAUVE="" C_TEXT="" C_SUBTEXT="" C_SURFACE0="" C_SURFACE2="" \
-    C_OVERLAY0="" C_BASE="" C_DANGER="" C_BOLD=""
+    C_OVERLAY0="" C_BASE="" C_DANGER="" C_BOLD="" C_WHITE=""
 fi
 
 # --- logging ----------------------------------------------------------------

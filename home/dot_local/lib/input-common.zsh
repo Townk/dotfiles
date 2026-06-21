@@ -14,13 +14,14 @@ unset _input_self
 # selection to red AND forces default=no (never default to a destructive act).
 input::confirm() {
   local question="" default="yes" affirmative="Yes" negative="No"
-  local danger=0 icon="" padding="0 2"
+  local danger=0 warning=0 icon="" padding="1 2"
   while (($#)); do
     case "$1" in
       --default)     default="${2:-yes}"; shift 2 ;;
       --affirmative) affirmative="${2:-Yes}"; shift 2 ;;
       --negative)    negative="${2:-No}"; shift 2 ;;
       --danger)      danger=1; shift ;;
+      --warning)     warning=1; shift ;;
       --icon)        icon="${2-}"; shift 2 ;;
       --padding)     padding="${2-}"; shift 2 ;;
       --margin|--width|--header|--title) shift 2 ;;
@@ -34,17 +35,51 @@ input::confirm() {
   local gum; gum="${GUM_BIN:-gum}"
   command -v -- "$gum" >/dev/null 2>&1 && gum="$(command -v -- "$gum")"
 
+  # Variant recolors the focused (selected) button: --danger → bright red +
+  # default=no (never default to a destructive act); --warning → yellow (keeps
+  # the normal default). zj::confirm / the modal recolor the title to match.
   local -a flags=("${theme_gum_confirm[@]}" --affirmative "$affirmative" --negative "$negative")
   if ((danger)); then
-    flags+=(--selected.background "$C_HEX_DANGER" --default=false)
+    flags+=(--selected.background "$C_HEX_RED" --selected.foreground "$C_HEX_WHITE" --default=false)
+  elif ((warning)); then
+    flags+=(--selected.background "$C_HEX_YELLOW" --selected.foreground "$C_HEX_BASE")
+    [[ "$default" == no ]] && flags+=(--default=false) || flags+=(--default)
   elif [[ "$default" == no ]]; then
     flags+=(--default=false)
   else
     flags+=(--default)
   fi
   [[ -n "$padding" ]] && flags+=(--padding "$padding")
+  flags+=(--no-show-help)   # we render our own themed hint below the buttons
 
+  # Themed hint below the buttons. gum exposes no styling for its help line, so we
+  # disable it and print our own — bright-white keys + dark-grey words, matching
+  # the zj-hud whichkey. Cursor-restore trick: print $hint_rows blank lines, the
+  # hint, then ESC[<n>F to move the cursor back up so gum renders its UI ABOVE the
+  # hint. Goes to /dev/tty (visible) because our stdout is the captured answer
+  # channel. The keys/words SGR is built from the (always-set) C_HEX_* via
+  # theme::sgr_fg — the C_*/THEME_* SGR vars are empty here (our stdout is the
+  # captured file, so common.zsh's [ -t 1 ] gate is false).
+  #
+  # hint_rows MUST equal gum's rendered view height so the hint lands just below
+  # it: padding-top + prompt lines + 1 (blank) + 1 (buttons) + padding-bottom. It
+  # therefore adapts to a multi-line prompt (e.g. the quit dialog) and to a custom
+  # --padding, with no per-caller tuning. Callers size the pane to
+  # title(3) + hint_rows + 1 (the bottom padding line).
   local rc=0
+  if { : >/dev/tty; } 2>/dev/null; then
+    local -a _pp=(${=padding}); local ptop=0 pbot=0
+    case ${#_pp} in
+      1)   ptop=${_pp[1]}; pbot=${_pp[1]} ;;
+      2|3) ptop=${_pp[1]}; pbot=${_pp[1]} ;;
+      4)   ptop=${_pp[1]}; pbot=${_pp[3]} ;;
+    esac
+    local -a _ql=("${(@f)question}"); local plines=${#_ql}; ((plines < 1)) && plines=1
+    local hint_rows=$(( ptop + plines + 2 + pbot ))
+    local kb="$(theme::sgr_fg "$C_HEX_WHITE")" dm="$(theme::sgr_fg "$C_HEX_OVERLAY0")" rs=$'\e[0m'
+    local hint="${kb}󱊷${dm} dismiss · ${kb}↵${dm} submit · ${kb}y${dm} ${(L)affirmative} · ${kb}n${dm} ${(L)negative}${rs}"
+    { printf '\n%.0s' {1..$hint_rows}; printf '  %s' "$hint"; printf '\e[%sF' "$hint_rows"; } >/dev/tty 2>/dev/null
+  fi
   "$gum" confirm "${flags[@]}" "${icon:+$icon }$question" || rc=$?
   case "$rc" in
     0) print -rn -- "yes"; return 0 ;;
@@ -55,7 +90,7 @@ input::confirm() {
 
 # input::line "Q" [--placeholder P] [--value V] [--icon G] [--width N]
 input::line() {
-  local question="" placeholder="" value="" icon="" width="" padding="0 2"
+  local question="" placeholder="" value="" icon="" width="" padding="1 2"
   while (($#)); do
     case "$1" in
       --placeholder) placeholder="${2-}"; shift 2 ;;
