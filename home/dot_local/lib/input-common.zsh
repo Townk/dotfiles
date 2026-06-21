@@ -29,7 +29,7 @@ _input::bin() {
 # --danger/--warning recolor border+title+button (the binary forces default=no
 # on danger). The themed chrome, keys, and hint all live in the binary now.
 input::confirm() {
-  local question="" default="yes" affirmative="Yes" negative="No"
+  local prompt="" default="yes" affirmative="Yes" negative="No"
   local danger=0 warning=0 title="" padding="" inset=""
   while (($#)); do
     case "$1" in
@@ -44,15 +44,15 @@ input::confirm() {
       --icon|--margin|--width|--header) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
-      *)  question="$1"; shift ;;
+      *)  [[ -z "$prompt" ]] && prompt="$1"; shift ;;
     esac
   done
-  [[ -n "$question" ]] || question="${1:-}"
 
   local bin; bin="$(_input::bin)"
 
   local -a flags=(--type confirm --affirmative "$affirmative" --negative "$negative")
   [[ -n "$title" ]]   && flags+=(--title "$title")
+  [[ -n "$prompt" ]]  && flags+=(--prompt "$prompt")
   ((danger))          && flags+=(--danger)
   ((warning))         && flags+=(--warning)
   [[ "$default" == no ]] && flags+=(--default negative)
@@ -62,7 +62,7 @@ input::confirm() {
 
   # The binary exits 0 (confirmed) / 1 (declined) / 130 (cancel); map to yes/no.
   local rc=0
-  "$bin" "${flags[@]}" -- "$question" >/dev/null || rc=$?
+  "$bin" "${flags[@]}" >/dev/null || rc=$?
   case "$rc" in
     0) print -rn -- "yes"; return 0 ;;
     1) print -rn -- "no";  return 1 ;;
@@ -74,7 +74,7 @@ input::confirm() {
 # Shim over `ai-assist-input --type line`. Prints the typed line; 130 on
 # empty/cancel.
 input::line() {
-  local question="" placeholder="" value="" width="" title="" padding="" inset=""
+  local prompt="" placeholder="" value="" width="" title="" padding="" inset=""
   while (($#)); do
     case "$1" in
       --placeholder) placeholder="${2-}"; shift 2 ;;
@@ -83,19 +83,19 @@ input::line() {
       --title)       title="${2-}"; shift 2 ;;
       --padding)     padding="${2-}"; shift 2 ;;
       --inset)       inset="${2-}"; shift 2 ;;
-      --header)      question="${2-}"; shift 2 ;;
+      --header)      prompt="${2-}"; shift 2 ;;
       --icon|--margin) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
-      *)  question="$1"; shift ;;
+      *)  [[ -z "$prompt" ]] && prompt="$1"; shift ;;
     esac
   done
-  [[ -n "$question" ]] || question="${1:-}"
-  [[ -n "$title" ]] || title="$question"
 
   local bin; bin="$(_input::bin)"
 
-  local -a flags=(--type line --title "$title")
+  local -a flags=(--type line)
+  [[ -n "$title" ]]       && flags+=(--title "$title")
+  [[ -n "$prompt" ]]      && flags+=(--prompt "$prompt")
   [[ -n "$value" ]]       && flags+=(--value "$value")
   [[ -n "$placeholder" ]] && flags+=(--placeholder "$placeholder")
   [[ -n "$padding" ]]     && flags+=(--padding "$padding")
@@ -112,23 +112,25 @@ input::line() {
 # input::text "Q" [--value V] [--height N] — multi-line via ai-assist-input,
 # which self-renders matching chrome (title + rule + box).
 input::text() {
-  local question="" value="" height=""
+  local prompt="" value="" height="" title=""
   while (($#)); do
     case "$1" in
       --value)  value="${2-}"; shift 2 ;;
       --height) height="${2-}"; shift 2 ;;
-      --header|--title) question="${2-}"; shift 2 ;;
+      --title)  title="${2-}"; shift 2 ;;
+      --header) prompt="${2-}"; shift 2 ;;
       --icon|--margin|--padding|--width) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
-      *)  question="$1"; shift ;;
+      *)  [[ -z "$prompt" ]] && prompt="$1"; shift ;;
     esac
   done
-  [[ -n "$question" ]] || question="${1:-}"
 
   local bin; bin="$(_input::bin)"
 
-  local -a args=(--title "$question")
+  local -a args=()
+  [[ -n "$title" ]]  && args+=(--title "$title")
+  [[ -n "$prompt" ]] && args+=(--prompt "$prompt")
   [[ -n "$value" ]]  && args+=(--value "$value")
   [[ -n "$height" ]] && args+=(--height "$height")
 

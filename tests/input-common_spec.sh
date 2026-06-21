@@ -73,6 +73,13 @@ Describe 'input-common.zsh'
       The output should equal "yes"
       The contents of file "$TEST_TMP/aii.args" should include "--title Heads up"
     End
+    It 'maps the positional to --prompt and keeps --title'
+      export AII_RC=0
+      When call input::confirm "Proceed?" --title "Confirm"
+      The output should equal "yes"
+      The contents of file "$TEST_TMP/aii.args" should include "--title Confirm"
+      The contents of file "$TEST_TMP/aii.args" should include "--prompt Proceed?"
+    End
   End
 
   Describe 'input::line'
@@ -95,6 +102,20 @@ Describe 'input-common.zsh'
       When call input::line "Name?"
       The status should eq 130
     End
+    It 'maps the positional to --prompt and keeps --title'
+      export AII_OUT="answer"
+      When call input::line "Enter name" --title "User Info"
+      The output should equal "answer"
+      The contents of file "$TEST_TMP/aii.args" should include "--title User Info"
+      The contents of file "$TEST_TMP/aii.args" should include "--prompt Enter name"
+    End
+    It 'empty positional does not emit --prompt'
+      export AII_OUT="answer"
+      When call input::line --title "User Info"
+      The output should equal "answer"
+      The contents of file "$TEST_TMP/aii.args" should include "--title User Info"
+      The contents of file "$TEST_TMP/aii.args" should not include "--prompt"
+    End
   End
 
   Describe 'input::text'
@@ -105,6 +126,20 @@ line2"
       The output should equal "line1
 line2"
       The status should be success
+    End
+    It 'maps the positional to --prompt and keeps --title'
+      export AII_OUT="body text"
+      When call input::text "Enter notes" --title "Notes"
+      The output should equal "body text"
+      The contents of file "$TEST_TMP/aii.args" should include "--title Notes"
+      The contents of file "$TEST_TMP/aii.args" should include "--prompt Enter notes"
+    End
+    It 'empty positional does not emit --prompt'
+      export AII_OUT="body text"
+      When call input::text --title "Notes"
+      The output should equal "body text"
+      The contents of file "$TEST_TMP/aii.args" should include "--title Notes"
+      The contents of file "$TEST_TMP/aii.args" should not include "--prompt"
     End
   End
 
