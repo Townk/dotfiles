@@ -288,5 +288,41 @@ beta"
       When call input::form --spec "$spec"
       The status should eq 130
     End
+    It '--measure with --spec forwards --type form --measure --width to binary without reading stdin'
+      {
+        echo '#!/usr/bin/env zsh'
+        echo 'print -r -- "$@" >> "'"$TEST_TMP"'/aii.args"'
+        echo 'if [[ "$*" == *"--measure"* ]]; then printf "18"; exit 0; fi'
+        echo 'printf "%s" "${AII_OUT:-}"'
+        echo 'exit ${AII_RC:-0}'
+      } > "$aii"; chmod +x "$aii"
+      spec="$TEST_TMP/form.spec"
+      make_spec > "$spec"
+      When call input::form --measure --width 64 --spec "$spec"
+      The output should equal "18"
+      The status should be success
+      The contents of file "$TEST_TMP/aii.args" should include "--type form"
+      The contents of file "$TEST_TMP/aii.args" should include "--measure"
+      The contents of file "$TEST_TMP/aii.args" should include "--width 64"
+      The contents of file "$TEST_TMP/aii.args" should include "--spec"
+    End
+    It '--measure without --spec does not read stdin and returns promptly'
+      # Regression test: input::form --measure with no --spec must NOT do
+      # `cat > tmpfile` (which would block on a live TTY).  With stdin from
+      # /dev/null the call must complete and forward --type form --measure.
+      {
+        echo '#!/usr/bin/env zsh'
+        echo 'print -r -- "$@" >> "'"$TEST_TMP"'/aii.args"'
+        echo 'if [[ "$*" == *"--measure"* ]]; then printf "18"; exit 0; fi'
+        echo 'printf "%s" "${AII_OUT:-}"'
+        echo 'exit ${AII_RC:-0}'
+      } > "$aii"; chmod +x "$aii"
+      When call input::form --measure --width 64
+      The output should equal "18"
+      The status should be success
+      The contents of file "$TEST_TMP/aii.args" should include "--type form"
+      The contents of file "$TEST_TMP/aii.args" should include "--measure"
+      The contents of file "$TEST_TMP/aii.args" should include "--width 64"
+    End
   End
 End

@@ -168,10 +168,12 @@ _zj::float() {
   mkfifo -m 600 "$fifo" 2>/dev/null || return 1
 
   # Measure the exact rendered height from the binary (fast, TTY-less).
+  # Stdin is redirected from /dev/null so any shim that reads stdin (e.g.
+  # input::form without --spec) receives EOF immediately and never hangs.
   # Fall back to pane_h if provided (legacy override), or a sane per-type default.
   local _measured_h=""
   if [[ -n "$pane_w" ]] && [[ "$pane_w" != *% ]]; then
-    _measured_h="$(input::"$type" --measure --width "$pane_w" "${wargs[@]}" 2>/dev/null)"
+    _measured_h="$(input::"$type" --measure --width "$pane_w" "${wargs[@]}" </dev/null 2>/dev/null)"
   fi
   # Accept only a plain integer; otherwise use the caller-supplied or per-type default.
   if [[ "$_measured_h" != <-> ]]; then

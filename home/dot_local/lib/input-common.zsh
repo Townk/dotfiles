@@ -221,6 +221,10 @@ input::choose() {
 # Spec read from FILE (--spec) or stdin (written to a temp file); the binary owns
 # the tab flow + field rendering. Answers printed as name<US>value joined by RS;
 # exit 0 on submit, 130 on cancel.
+#
+# IMPORTANT: the --measure path must NEVER read stdin. Parse args first, then
+# branch on --measure before touching stdin. This prevents _zj::float's sizing
+# probe from hanging when wargs has no --spec (cat on a live TTY blocks forever).
 input::form() {
   local title="" spec_file="" _tmp_spec="" measure=0 width=""
   while (($#)); do
@@ -235,6 +239,24 @@ input::form() {
     esac
   done
 
+  local bin; bin="$(_input::bin)"
+
+  # --measure path: run the binary in sizing mode WITHOUT reading stdin.
+  # If no --spec was given, we omit --spec entirely (binary will measure against
+  # an empty form and return nothing — _zj::float falls back to its per-type
+  # constant). This is intentional: measure must never block.
+  if ((measure)); then
+    local -a flags=(--type form)
+    [[ -n "$spec_file" ]] && flags+=(--spec "$spec_file")
+    [[ -n "$title" ]] && flags+=(--title "$title")
+    theme::args; flags+=("${AI_THEME_ARGS[@]}")
+    flags+=(--measure)
+    [[ -n "$width" ]] && flags+=(--width "$width")
+    "$bin" "${flags[@]}"
+    return
+  fi
+
+  # Normal (non-measure) path: read spec from --spec FILE or from stdin.
   # If no --spec, read stdin into a temp file (the binary requires a seekable
   # file; it also cannot read from the pane's stdin reliably).
   if [[ -z "$spec_file" ]]; then
@@ -243,20 +265,9 @@ input::form() {
     spec_file="$_tmp_spec"
   fi
 
-  local bin; bin="$(_input::bin)"
-
   local -a flags=(--type form --spec "$spec_file")
   [[ -n "$title" ]] && flags+=(--title "$title")
   theme::args; flags+=("${AI_THEME_ARGS[@]}")
-
-  if ((measure)); then
-    flags+=(--measure)
-    [[ -n "$width" ]] && flags+=(--width "$width")
-    "$bin" "${flags[@]}"
-    local _rc=$?
-    [[ -n "$_tmp_spec" ]] && rm -f -- "$_tmp_spec"
-    return $_rc
-  fi
 
   local answer rc=0
   answer="$("$bin" "${flags[@]}")" || rc=$?
