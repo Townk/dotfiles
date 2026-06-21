@@ -129,7 +129,7 @@ input::line() {
 # input::text "Q" [--value V] [--height N] — multi-line via ai-assist-input,
 # which self-renders matching chrome (title + rule + box).
 input::text() {
-  local prompt="" value="" height="" title="" width="" measure=0
+  local prompt="" value="" height="" title="" width="" icon="" measure=0
   while (($#)); do
     case "$1" in
       --value)   value="${2-}"; shift 2 ;;
@@ -137,8 +137,9 @@ input::text() {
       --title)   title="${2-}"; shift 2 ;;
       --header)  prompt="${2-}"; shift 2 ;;
       --width)   width="${2-}"; shift 2 ;;
+      --icon)    icon="${2-}"; shift 2 ;;
       --measure) measure=1; shift ;;
-      --icon|--margin|--padding) shift 2 ;;
+      --margin|--padding) shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
       *)  [[ -z "$prompt" ]] && prompt="$1"; shift ;;
@@ -152,6 +153,7 @@ input::text() {
   [[ -n "$prompt" ]] && args+=(--prompt "$prompt")
   [[ -n "$value" ]]  && args+=(--value "$value")
   [[ -n "$height" ]] && args+=(--height "$height")
+  [[ -n "$icon" ]]   && args+=(--icon "$icon")
   theme::args; args+=("${AI_THEME_ARGS[@]}")
 
   if ((measure)); then
