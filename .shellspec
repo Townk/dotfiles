@@ -1,2 +1,4 @@
 --shell zsh
 --default-path tests
+--helperdir tests
+--require spec_helper

@@ -112,6 +112,22 @@ Relevant terminal output (scrollback of the last command):
 ${REQ_SCROLLBACK:-(none captured)}${kb_block}
 
 Diagnose the situation and explain what is going on and how to fix or proceed.
+
+You have these helper tools on PATH — prefer them over your own raw shell:
+- \`ai-assist-run "<cmd>"\` runs a command in the user's real shell (their cwd
+  and environment). Use it for diagnosis; keep those commands read-only or
+  idempotent. It returns the command's output and exit code.
+- \`ai-assist-ask --type free|line|confirm|choose "<question>" [choices...]\`
+  asks the user and returns their answer. It is the only way to get input.
+- \`ai-assist-remember "<fact>"\` saves a durable, distilled fact about this
+  project for future requests.
+
+Do NOT propose changes by running them yourself — present commands and diffs as
+fenced code blocks for the user to review and apply.
+
+Never write secrets, credentials, or raw environment dumps into a remembered
+fact or into your answer.
+
 Finish with a short summary of the cause and the recommended next step.
 EOF
 }
@@ -245,6 +261,15 @@ assist::worker_main() {
   [[ -n "$request_file" ]] || die "missing --request <file>"
 
   assist::request_read "$request_file"
+  # Snapshot the origin environment for the agent's own shell (Phase C1). The
+  # worker is exec-chained from the origin shell, so its env IS the origin env.
+  # export -p is re-sourceable; readonly specials are tolerated on re-source.
+  # Create the file 0600 before writing any secrets (umask 077 ensures the
+  # empty file is created with no group/other bits even if the user's umask
+  # is more permissive), then append the dump so we never widen the mode.
+  local req_env="${request_file:h}/request.env"
+  ( umask 077; : > "$req_env" ) 2>/dev/null || : > "$req_env"
+  export -p >> "$req_env" 2>/dev/null || true
   local kb; kb="$(assist::kb_ensure "${REQ_PROJECT_ROOT:-$PWD}")"
   ASSIST_PROMPT="$(assist::system_prompt "$kb")"
   [[ -n "$ASSIST_GUIDANCE" ]] && ASSIST_PROMPT+=$'\n\nAdditional guidance from the caller:\n'"$ASSIST_GUIDANCE"
@@ -268,6 +293,8 @@ assist::worker_main() {
     local -a render_flags=()
     [[ -n "$REQ_PANE_ID" ]] && render_flags+=(--origin-pane "$REQ_PANE_ID")
     [[ "$REQ_OVER_SSH" == true ]] && render_flags+=(--over-ssh)
+    render_flags+=(--shell-env "$req_env" --shell-cwd "${REQ_CWD:-$PWD}")
+    [[ -n "${REQ_PROJECT_ROOT:-}" ]] && render_flags+=(--project-root "$REQ_PROJECT_ROOT")
     assist::spawn_pane "$render" --harness "$label" "${render_flags[@]}" -- "${ASSIST_PANE_CMD[@]}"
   else
     assist::spawn_pane "${ASSIST_PANE_CMD[@]}"

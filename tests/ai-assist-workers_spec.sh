@@ -36,6 +36,31 @@ JSON
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
+  Describe 'assist::system_prompt'
+    check_prompt_tools() {
+      source "$AI_ASSIST_LIB_DIR/assist-agent-common.zsh"
+      kb="$(mktemp)"
+      prompt="$(assist::system_prompt "$kb")"
+      case "$prompt" in
+        *ai-assist-run*) ;; (*) echo "missing ai-assist-run" >&2; return 1 ;;
+      esac
+      case "$prompt" in
+        *ai-assist-ask*) ;; (*) echo "missing ai-assist-ask" >&2; return 1 ;;
+      esac
+      case "$prompt" in
+        *ai-assist-remember*) ;; (*) echo "missing ai-assist-remember" >&2; return 1 ;;
+      esac
+      case "$prompt" in
+        *secret*|*secrets*) ;; (*) echo "missing secrets rule" >&2; return 1 ;;
+      esac
+    }
+
+    It 'tells the agent about the helper tools and the secrets rule'
+      When run check_prompt_tools
+      The status should be success
+    End
+  End
+
   Describe 'ai-assist-claude'
     SCRIPT() { echo "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_ai-assist-claude"; }
 
@@ -89,6 +114,36 @@ JSON
       The stdout should include "ai-assist"
       The contents of file "$TEST_TMP/zj-args" should include "Additional guidance from the caller:"
       The contents of file "$TEST_TMP/zj-args" should include "please check the Makefile"
+    End
+
+    It 'passes the agent-shell env + cwd to ai-assist-render and snapshots the env'
+      # Create a stub render so the worker takes the AI_ASSIST_RENDER=1 branch;
+      # it just needs to be executable — zellij is also stubbed, so it never runs.
+      render_dir="$TEST_TMP/home/.local/libexec"
+      mkdir -p "$render_dir"
+      printf '#!/usr/bin/env zsh\n' > "$render_dir/ai-assist-render"; chmod +x "$render_dir/ai-assist-render"
+      REQFILE="$TEST_TMP/req.json"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      export AI_ASSIST_RENDER=1
+      When run script "$(SCRIPT)" --request "$REQFILE"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "--shell-env"
+      The contents of file "$TEST_TMP/zj-args" should include "--shell-cwd"
+      The path "${REQFILE:h}/request.env" should be exist
+    End
+
+    It 'passes --project-root to ai-assist-render'
+      render_dir="$TEST_TMP/home/.local/libexec"
+      mkdir -p "$render_dir"
+      printf '#!/usr/bin/env zsh\n' > "$render_dir/ai-assist-render"; chmod +x "$render_dir/ai-assist-render"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      export AI_ASSIST_RENDER=1
+      When run script "$(SCRIPT)" --request "$TEST_TMP/req.json"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "--project-root"
+      The contents of file "$TEST_TMP/zj-args" should include "/tmp/proj"
     End
   End
 

@@ -26,15 +26,37 @@ export RUNEWIDTH_EASTASIAN=0
 harness="agent"
 origin_pane=""
 over_ssh=0
+shell_env=""
+shell_cwd=""
+shell_bin=""
+shell_pid=""
+shell_fifo=""
+project_root=""
 while (($#)); do
   case "$1" in
-    --harness)     harness="${2:-agent}"; shift 2 ;;
-    --origin-pane) origin_pane="${2:-}"; shift 2 ;;
-    --over-ssh)    over_ssh=1; shift ;;
+    --harness)       harness="${2:-agent}"; shift 2 ;;
+    --origin-pane)   origin_pane="${2:-}"; shift 2 ;;
+    --over-ssh)      over_ssh=1; shift ;;
+    --shell-env)     shell_env="${2:-}"; shift 2 ;;
+    --shell-cwd)     shell_cwd="${2:-}"; shift 2 ;;
+    --shell-bin)     shell_bin="${2:-}"; shift 2 ;;
+    --project-root)  project_root="${2:-}"; shift 2 ;;
     --) shift; break ;;
     *) break ;;
   esac
 done
+# Propagate project root so ai-assist-remember (and any other tool) keys the
+# KB on the canonical project root rather than the agent shell's cwd.
+[[ -n "$project_root" ]] && export AI_ASSIST_PROJECT_ROOT="$project_root"
+
+# Ensure ~/.local/libexec is on PATH so the agent harness can invoke
+# ai-assist-run, ai-assist-ask, ai-assist-remember etc. by name.
+# The docked pane runs in a non-interactive shell whose PATH omits this dir;
+# guard against double-prepend.
+case ":$PATH:" in
+  *":$HOME/.local/libexec:"*) ;;
+  *) export PATH="$HOME/.local/libexec:$PATH" ;;
+esac
 cmd=("$@")
 [[ ${#cmd[@]} -gt 0 ]] || { print -u2 -- "ai-assist-render: no command after --"; exit 2; }
 
@@ -75,8 +97,25 @@ fi
 in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
 mkfifo -m 600 "$in_fifo"
 
-# Cleanup trap: remove input FIFO + actions FIFO + kill broker on exit/signal.
-trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"; rm -f -- "$in_fifo"' EXIT INT TERM
+# Cleanup trap: remove input FIFO + actions FIFO + kill broker + kill agent shell on exit/signal.
+# Also removes the secrets env-snapshot ($shell_env) so it does not outlive this pane.
+trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$shell_pid" ]] && kill "$shell_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"; [[ -n "$shell_fifo" ]] && rm -f -- "$shell_fifo"; [[ -n "$shell_env" ]] && rm -f -- "$shell_env"; rm -f -- "$in_fifo"' EXIT INT TERM
+
+# Agent's own shell (Phase C1): a real shell seeded with the origin env + cwd,
+# reachable by the harness's `ai-assist-run` through AI_ASSIST_SHELL_FIFO. Owned
+# by this pane's lifetime, like the action-broker.
+if [[ -n "$shell_cwd" || -n "$shell_env" ]]; then
+  : "${shell_bin:=$HOME/.local/libexec/ai-assist-shell}"
+  if [[ -x "$shell_bin" ]]; then
+    shell_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-shell.XXXXXX")"; mkfifo -m 600 "$shell_fifo"
+    typeset -a shell_flags=(--cmd-fifo "$shell_fifo")
+    [[ -n "$shell_env" ]] && shell_flags+=(--env-file "$shell_env")
+    [[ -n "$shell_cwd" ]] && shell_flags+=(--cwd "$shell_cwd")
+    "$shell_bin" "${shell_flags[@]}" &
+    shell_pid=$!
+    export AI_ASSIST_SHELL_FIFO="$shell_fifo"
+  fi
+fi
 
 # Launch ai-assist-pager in the FOREGROUND: it owns the pane (title, spinner,
 # streaming render). Resolve by absolute path — the docked pane's PATH lacks GOBIN
@@ -97,8 +136,11 @@ if [[ -z "$pager" ]]; then
 fi
 
 # Stream harness stdout+stderr into the input FIFO in the background, then
-# launch the pager (or glow fallback) in the foreground.
+# launch the pager (or glow fallback) in the foreground. Keep the harness PID so
+# its real exit code can be propagated below — the viewer's own status reflects
+# the renderer, not the agent.
 { "${cmd[@]}" 2>&1; } > "$in_fifo" &
+harness_pid=$!
 
 if [[ -n "$pager" && -x "$pager" ]]; then
   # Build flags as a zsh array to avoid the word-split bug with optional flags.
@@ -120,3 +162,10 @@ else
     cat "$in_fifo" | fold -s -w "$body"
   fi
 fi
+
+# The viewer (pager/glow/fold) returns at FIFO EOF — i.e. once the harness has
+# finished and closed its write end. Reap the harness and propagate its real
+# exit code so callers (and tests) see the agent's status, not the renderer's.
+# The EXIT trap still fires afterwards to tear down broker/shell/FIFOs.
+wait "$harness_pid"; rc=$?
+exit "$rc"

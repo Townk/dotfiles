@@ -1,22 +1,20 @@
 #!/usr/bin/env zsh
-# zellij-quit-confirm — feature adapter for the Quit modal: a Catppuccin
-#                       Mocha `gum confirm` y/N prompt that kills the
+# zellij-quit-confirm — feature adapter for the Quit modal: a themed
+#                       `input::confirm --danger` prompt that kills the
 #                       attached session on affirmative.
 #
 # The floating-pane scaffolding (frame, catppuccin "▓▓▓ Quit Session"
 # title block) lives in zellij-modal, which spawns this script as a
 # NON-inject ("action") target via the LEADER+q chord (`Alt w` then `q`)
 # in ~/.config/zellij/config.kdl. zellij-modal prints the title block,
-# then `exec`s this script as the pane's PID 1; we render the gum body
-# below it and act on the answer.
+# then `exec`s this script as the pane's PID 1; we render the confirm
+# body below it and act on the answer.
 #
 # Flow:
-#   1. We print one blank row to separate gum from zellij-modal's rule,
-#      then invoke `gum confirm` with the Catppuccin Mocha palette flags
-#      below. gum owns /dev/tty and exits 0 (affirmative) or 1
-#      (negative / cancelled via Esc / Ctrl-C). `--default=false` keeps
-#      the dialog on Cancel so a stray Enter or Esc never quits —
-#      destructive actions should never be the default.
+#   1. We print one blank row to separate the dialog from zellij-modal's
+#      rule, then call `input::confirm --danger` from the shared input
+#      stdlib. --danger uses the red destructive palette and defaults to
+#      Cancel so a stray Enter or Esc never quits.
 #   2. On affirmative we exec `zellij kill-session
 #      "$ZELLIJ_SESSION_NAME"`, tearing the session down for every
 #      attached client. (We deliberately don't use `zellij action quit`:
@@ -25,35 +23,15 @@
 #      session — no `close_on_exit` involvement on this path. Anything
 #      else exits cleanly and `close_on_exit true` disposes of the pane.
 #
-# Catppuccin Mocha palette mapping (matches dot_config/zsh/themes.sh and
-# dot_config/glow/catppuccin-mocha.json):
-#   title fg      #cba6f7  mauve      — from zellij-modal's title block
-#   label fg      #6c7086  overlay0   — muted "Session:" metadata
-#   value fg      #cdd6f4  text       — restores fg after the label
-#   prompt fg     #cdd6f4  text       — body text
-#   selected bg   #f38ba8  red        — destructive action (Quit)
-#   selected fg   #1e1e2e  base       — dark text for AAA contrast
-#   unselected bg #313244  surface0   — recedes into the pane
-#   unselected fg #cdd6f4  text       — matches prompt
-#
 # The session name lives on its own prompt line (question, blank,
 # "Session: <name>") so a long ZELLIJ_SESSION_NAME degrades gracefully —
 # at worst it wraps into a 4th prompt row rather than corrupting the
 # layout. The pane geometry (50×14) is fixed in cells in config.kdl so
 # the dialog renders identically across terminal sizes.
 #
-# Fragility note: the inline SGR overrides inside the gum prompt
-# (SGR_LABEL / SGR_VALUE) rely on lipgloss preserving embedded ANSI
-# escapes when it wraps the prompt in --prompt.foreground. This holds in
-# gum 0.17; if a future gum/lipgloss release strips them, drop the
-# inline codes and accept the whole prompt rendering in one color —
-# layout is unaffected.
-#
 # Env-var overrides:
 #   ZELLIJ_BIN  Absolute path to the zellij binary
 #               (default: first zellij found on PATH / known install paths)
-#   GUM_BIN     Absolute path to gum
-#               (default: first gum found on PATH / known install paths)
 
 set -euo pipefail
 
@@ -75,54 +53,30 @@ resolve_bin() {
 }
 
 ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_bin zellij /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij "$HOME/.local/bin/zellij" || true)}"
-GUM_BIN="${GUM_BIN:-$(resolve_bin gum /opt/homebrew/bin/gum /usr/local/bin/gum "$HOME/.local/share/mise/shims/gum" "$HOME/.local/bin/gum" || true)}"
 
 [[ -x "$ZELLIJ_BIN" ]] || {
   echo "zellij-quit-confirm: missing or non-executable: $ZELLIJ_BIN" >&2
   exit 1
 }
-[[ -x "$GUM_BIN" ]] || {
-  echo "zellij-quit-confirm: missing or non-executable: $GUM_BIN" >&2
-  exit 1
-}
 
-# overlay0 for the muted "Session:" label; text to restore the value
-# color afterwards. (The title/rule colors live in zellij-modal.)
-SGR_LABEL=$'\e[38;2;108;112;134m' # overlay0
-SGR_VALUE=$'\e[38;2;205;214;244m' # text
+# Shared input stdlib — themed confirm + palette. Sourced by absolute path
+# (this runs as a floating pane's PID 1, outside any login shell).
+source "$HOME/.local/lib/input-common.zsh"
 
-# Blank row between zellij-modal's title rule and the gum prompt.
-printf '\n'
-
-# Multi-line prompt: question, blank, session metadata. The embedded SGR
-# codes paint "Session:" in overlay0 and restore the value to text color
-# — see the "Fragility note" above for the gum/lipgloss assumption.
+# overlay0 "Session:" label, text value — from the shared theme tokens.
 prompt="Quit current Zellij session?
 
-${SGR_LABEL}Session:${SGR_VALUE} ${ZELLIJ_SESSION_NAME:-?}"
+${THEME_COMMENT}Session:${THEME_TEXT_NORMAL} ${ZELLIJ_SESSION_NAME:-?}"
 
-# `set -e` would treat the negative-answer exit (1) as a script failure.
-# Capture the answer explicitly so we can branch on it. `--show-help` is
-# set explicitly (not relying on gum's default-true) so the keybind hint
-# line is deterministic across gum versions.
+# Fully inherits the shared confirm chrome (palette, padding, themed hint that
+# sizes itself to this 3-line prompt). --danger gives the red destructive
+# selection and defaults to Cancel so a stray Enter/Esc never quits.
 #
 # The variable is `answer`, NOT `status`: under zsh `$status` is a read-only
 # special parameter (a synonym for `$?`), so `status=0` aborts the script with
-# "read-only variable: status" — before gum ever runs. This bit us when the
-# shebang was flipped bash→zsh (bash treats `status` as an ordinary variable).
+# "read-only variable: status".
 answer=0
-"$GUM_BIN" confirm \
-  --default=false \
-  --affirmative='Quit' \
-  --negative='Cancel' \
-  --show-help \
-  --padding='0 0 1 2' \
-  --prompt.foreground='#cdd6f4' \
-  --selected.background='#f38ba8' \
-  --selected.foreground='#1e1e2e' \
-  --unselected.background='#313244' \
-  --unselected.foreground='#cdd6f4' \
-  "$prompt" || answer=$?
+input::confirm "$prompt" --title "Quit Session" --danger --affirmative "Quit" --negative "Cancel" >/dev/null || answer=$?
 
 case "$answer" in
   0) exec "$ZELLIJ_BIN" kill-session "${ZELLIJ_SESSION_NAME:?ZELLIJ_SESSION_NAME unset}" ;;

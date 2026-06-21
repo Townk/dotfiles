@@ -1,0 +1,70 @@
+#!/usr/bin/env zsh
+# ai-assist-shell — the agent's own shell for one request.
+#
+# A persistent shell, seeded with the origin pane's environment + cwd, driven
+# over a command FIFO. Each job runs in a subshell via `eval` with its output
+# captured to a per-job reply dir; cwd and exported vars are propagated back via
+# a state file so cd/exports persist across jobs while `exit N` from user code
+# is captured as the job's exit code rather than terminating this process. This
+# is the engine behind `ai-assist-run`. NOT a sandbox — commands run for real.
+set -uo pipefail
+
+cmd_fifo="" env_file="" cwd="" rc=""
+while (($#)); do
+  case "$1" in
+    --cmd-fifo) cmd_fifo="${2:-}"; shift 2 ;;
+    --env-file) env_file="${2:-}"; shift 2 ;;
+    --cwd)      cwd="${2:-}"; shift 2 ;;
+    --rc)       rc="${2:-}"; shift 2 ;;
+    *)          shift ;;
+  esac
+done
+[[ -n "$cmd_fifo" ]] || { print -ru2 -- "ai-assist-shell: --cmd-fifo required"; exit 2; }
+
+# Seed: optional rc (functions/aliases), then the captured env (live exported
+# state wins over rc), then cd. rc-sourcing is opt-in (the env-fidelity knob):
+# many interactive rc files misbehave when sourced non-interactively.
+[[ -n "$rc" && -r "$rc" ]] && { emulate zsh -c "source '$rc'"; } 2>/dev/null
+[[ -n "$env_file" && -r "$env_file" ]] && source "$env_file" 2>/dev/null
+[[ -n "$cwd" ]] && cd -- "$cwd" 2>/dev/null
+
+# State file: persists cwd and exported vars across jobs. Seeded with the
+# current env (post rc/env-file/cwd). Each job subshell sources it before
+# running and writes it back after — so cd and export persist across jobs even
+# though each job runs in its own subshell (needed to contain `exit N`).
+_aas_state="$(mktemp)"
+trap 'rm -f -- "$_aas_state" "${_aas_tmp:-}"; exit 0' INT TERM
+trap 'rm -f -- "$_aas_state" "${_aas_tmp:-}"' EXIT
+{ print -r -- "cd -- ${(q)PWD}"; export -p; } > "$_aas_state"
+
+_aas_US=$'\x1f' _aas_RS=$'\x1e'
+exec {_aas_fd}<>"$cmd_fifo"
+while IFS= read -r -d "$_aas_RS" _aas_job <&$_aas_fd; do
+  _aas_reply="${_aas_job%%${_aas_US}*}"
+  _aas_cmd="${_aas_job#*${_aas_US}}"
+  [[ -n "$_aas_reply" && -d "$_aas_reply" ]] || continue
+  # Run in a subshell so `exit N` from user code is captured as the exit code
+  # rather than terminating this persistent process. The subshell restores the
+  # previous job's cwd/env from the state file, runs the command, then writes
+  # the updated env back so cd and export persist across jobs. Note: a job that
+  # calls `exit N` early is recorded with that exit code, but any cwd/env changes
+  # made before the early exit are not persisted (shell-in-a-script semantics).
+  (
+    source "$_aas_state" 2>/dev/null
+    eval "$_aas_cmd"
+    { print -r -- "cd -- ${(q)PWD}"; export -p; } > "$_aas_state"
+  ) >"$_aas_reply/out" 2>"$_aas_reply/err"
+  _aas_code=$?
+  print -rn -- "$_aas_code" >"$_aas_reply/exit"
+  # Inject LAST_* into the state file so the next job can reference them.
+  # Use a temp file to avoid corrupting state on write failure.
+  _aas_tmp="$(mktemp)"
+  {
+    print -r -- "$(<"$_aas_state")"
+    print -r -- "export LAST_EXCODE=${(q)_aas_code}"
+    print -r -- "export LAST_STDOUT=${(q)$(<"$_aas_reply/out")}"
+    print -r -- "export LAST_STDERR=${(q)$(<"$_aas_reply/err")}"
+  } > "$_aas_tmp" && mv "$_aas_tmp" "$_aas_state"
+  : >"$_aas_reply/done"
+done
+rm -f "$_aas_state"

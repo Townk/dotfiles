@@ -26,12 +26,12 @@
   `close_on_exit true` disposes of the pane when the target returns.
 */ -}}
 {{- define "zellijModalRun" -}}
-            Run "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }} "--" "{{ joinPath .home ".config/zellij/scripts" .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
+            Run "env" "COLORTERM=truecolor" "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }} "--" "{{ joinPath .home ".config/zellij/scripts" .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
                 name ""
                 close_on_exit true
                 floating true
                 pinned true
-                borderless false
+                borderless {{ if hasKey . "borderless" }}{{ .borderless }}{{ else }}false{{ end }}
                 width "{{ .width }}"
                 height "{{ .height }}"
             }
@@ -361,7 +361,8 @@ keybinds clear-defaults=true {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
                (dict "home" .chezmoi.homeDir
-                     "title" "Quit Session"
+                     "title" ""
+                     "borderless" true
                      "inject" false
                      "script" "zellij-quit-confirm"
                      "width" "50"
@@ -839,7 +840,7 @@ web_client {
 // Choose the theme that is specified in the themes section.
 // Default: default
 // 
-theme "catppuccin-mocha"
+theme "catppuccin-mocha-dialog"
  
 // Theme to use when the host terminal reports a dark color palette.
 // Requires `theme_light` to also be set; otherwise `theme` is used.
