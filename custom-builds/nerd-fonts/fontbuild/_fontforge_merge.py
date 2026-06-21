@@ -150,8 +150,10 @@ def import_custom_svgs(dest, custom_dir, start_cp, meta, used, usvg_bin=""):
                        if n.lower().endswith(".svg"))
     except OSError:
         return out
-    EM = 512.0      # unitsPerEm of the FA combined OTF (see find_fa_files)
-    DESC = -64.0    # FA descent; the FA icon box is DESC .. DESC + EM
+    EM = float(dest.em)          # FA combined OTF unitsPerEm (verified 512 today)
+    # FontForge reports descent as a positive value; the icon box sits in
+    # [descent_em - EM, ascent], i.e. DESC = ascent - em (negative).
+    DESC = float(dest.ascent - dest.em)   # FA icon box is DESC .. DESC + EM
 
     # Pass 1: reserve every valid pin so auto-assignment can't grab it.
     pinned = {}

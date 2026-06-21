@@ -38,7 +38,6 @@ NF_COLLECTION_NAMES = {
     "pom":     "pomicons",
     "seti":    "seti-ui+custom",
     "weather": "weather-icons",
-    "custom":  "seti-ui+custom",
     "indent":  "indent",
 }
 

@@ -18,9 +18,15 @@ custom-builds/nerd-fonts/
 ├── recalibrate-fa.sh        ← fast re-bake of icon sizing (no patcher rerun)
 ├── unicode-donor-glyphs.txt ← small OFL donor-glyph allowlist
 ├── custom-icons/            ← local *.svg icons baked into the font
-│   ├── metadata.json        ←   optional labels/keywords/shortcode/aliases/descriptions
+│   ├── metadata.json        ←   optional labels/keywords/shortcode/aliases/descriptions/code pins
 │   ├── cursor-ai.svg        ←   -> usr-cursor-ai
-│   └── gm.svg               ←   -> usr-gm
+│   ├── gm.svg               ←   -> usr-gm
+│   ├── hammerspoon.svg      ←   -> usr-hammerspoon
+│   ├── layout_panel_up.svg  ←   -> usr-layout_panel_up
+│   ├── pi.svg               ←   -> usr-pi
+│   ├── wezterm.svg          ←   -> usr-wezterm
+│   ├── zellij.svg           ←   -> usr-zellij
+│   └── zsh.svg              ←   -> usr-zsh
 └── build/                   ← created at runtime, gitignored
     ├── nerd-fonts/          ← shallow clone of ryanoasis/nerd-fonts
     ├── work/                ← merged FA OTF, build logs
@@ -163,8 +169,14 @@ Drop any `.svg` into `custom-icons/` and the build bakes it into the font
 as a Plane-16 PUA glyph, keyed `usr-<filename>` in `glyphs.json`:
 
 ```
-custom-icons/cursor-ai.svg   ->  usr-cursor-ai
-custom-icons/gm.svg          ->  usr-gm
+custom-icons/cursor-ai.svg       ->  usr-cursor-ai
+custom-icons/gm.svg              ->  usr-gm
+custom-icons/hammerspoon.svg      ->  usr-hammerspoon
+custom-icons/layout_panel_up.svg  ->  usr-layout_panel_up
+custom-icons/pi.svg               ->  usr-pi
+custom-icons/wezterm.svg          ->  usr-wezterm
+custom-icons/zellij.svg           ->  usr-zellij
+custom-icons/zsh.svg              ->  usr-zsh
 ```
 
 Each SVG is first normalized with [`usvg`](https://github.com/linebender/resvg)

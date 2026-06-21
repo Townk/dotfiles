@@ -63,7 +63,11 @@ die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 [[ -d "${FONTBUILD_DIR}" ]] || die "fontbuild package missing (${FONTBUILD_DIR}); run build-updated-font.sh first."
 
 shopt -s nullglob
-PRISTINE=( "${PRESCALE_DIR}"/Symbols*.ttf )
+# Restore EVERY font the build stashed pre-7b: the Symbols variants AND the
+# fully-embedded JetBrains Mono Nerd Font (for Blink). The build stashes all of
+# them to prescale, so excluding JBM here would leave Blink's icons at the old
+# ICON_FILL until a full rebuild — a silent drift the old Symbols-only glob caused.
+PRISTINE=( "${PRESCALE_DIR}"/Symbols*.ttf "${PRESCALE_DIR}"/JetBrains*.ttf )
 [[ ${#PRISTINE[@]} -ge 1 ]] || die "no pristine TTFs in ${PRESCALE_DIR}"
 
 # Restore pre-7b TTFs into the output dir, then bake the new normalization.
@@ -88,6 +92,12 @@ if [[ "${INSTALL}" == "1" ]]; then
   [[ -n "${USER_FONT_DIR}" ]] || die "unknown OS; copy ${OUT_DIR}/Symbols*.ttf manually."
   mkdir -p "${USER_FONT_DIR}"
   for f in "${BUILT[@]}"; do cp -f "$f" "${USER_FONT_DIR}/"; done
+  # The Blink CSS embeds JBM by base64 in build step 10; a recalibrated JBM
+  # only reaches Blink after a full rebuild re-emits that CSS. Note it so the
+  # user isn't surprised that Blink's icon size lags the Symbols variants.
+  if [[ -f "${OUT_DIR}/JetBrainsMonoNerdFontMono-Regular.ttf" ]]; then
+    printf '\033[33m!!\033[0m Blink CSS still embeds the OLD JBM — run build-updated-font.sh to re-emit it.\n'
+  fi
   if [[ "$(uname -s)" == "Linux" ]] && command -v fc-cache >/dev/null 2>&1; then
     fc-cache -f "${USER_FONT_DIR}" >/dev/null 2>&1 || true
   fi

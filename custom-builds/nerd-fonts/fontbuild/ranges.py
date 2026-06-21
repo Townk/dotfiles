@@ -4,9 +4,26 @@ Single source of truth so the emoji strip (step 7), donor cell-normalization /
 bleed (steps 6b/7c), and the Blink emoji split can't drift from one another.
 """
 
-# Symbols for Legacy Computing (U+1FB00-1FBFF): cell-fraction block/box glyphs
-# (sextants, eighth/quadrant blocks, shades, ...) that tile the character cell.
-LEGACY_LO, LEGACY_HI = 0x1FB00, 0x1FBFF
+# Terminal cell-fill glyphs: block/box/shade/quadrant glyphs that tile the
+# character cell. Unicode 16.0 split these across TWO blocks with identical
+# purpose — the older "Symbols for Legacy Computing" (U+1FB00-1FBFF) and the
+# newer "Symbols for Legacy Computing Supplement" (U+1CC00-1CEFF, added in
+# Unicode 16.0). TUIs draw borders with both (e.g. the zj-hud search/rename
+# frames compose their rounded corners from U+1CEA0/1CEA3/1CEA8/1CEAB in the
+# Supplement block). Keep the list canonical so every consumer (emoji keep,
+# donor cell-normalize, donor cell measure, bleed) handles both blocks
+# together — an earlier scalar "Legacy Computing" range silently dropped the
+# Supplement block, which is how those 4 corners went missing. Add a future
+# terminal-cell block here once and all consumers follow.
+TERMINAL_CELL_RANGES = [
+    (0x1FB00, 0x1FBFF),   # Symbols for Legacy Computing
+    (0x1CC00, 0x1CEFF),   # Symbols for Legacy Computing Supplement (Unicode 16.0)
+]
+
+
+def in_terminal_cell(cp: int) -> bool:
+    return any(lo <= cp <= hi for lo, hi in TERMINAL_CELL_RANGES)
+
 
 # Colour-emoji domain stripped from the built cmaps (step 7). Inclusive pairs.
 # Keep in sync with the long comment on `step 7` in build-updated-font.sh.
@@ -15,14 +32,15 @@ EMOJI_STRIP_RANGES = [
     (0x1F300, 0x1FFFF),   # SMP emoji planes
 ]
 # Ranges deliberately preserved even though they fall inside the strip ranges.
-EMOJI_KEEP_RANGES = [
-    (LEGACY_LO, LEGACY_HI),   # Symbols for Legacy Computing, not emoji
-]
+# The Supplement block (U+1CC00-1CEFF) sits below U+1F300 so the strip never
+# reaches it; list it anyway so the keep set stays in lock-step with the
+# terminal-cell model above and stays self-documenting.
+EMOJI_KEEP_RANGES = list(TERMINAL_CELL_RANGES)
 
-# Block Elements + Symbols for Legacy Computing for the cell-bleed step (7c).
+# Block Elements + terminal-cell glyphs for the cell-bleed step (7c).
 # Box Drawing (2500-257F) already bleeds upstream and is the reference, so it is
 # intentionally NOT included here.
-BLEED_RANGES = [(0x2580, 0x259F), (LEGACY_LO, LEGACY_HI)]
+BLEED_RANGES = [(0x2580, 0x259F)] + TERMINAL_CELL_RANGES
 
 # hterm.wc.unambiguous: width-2 (wide) intervals. Anything not here is width 1.
 # Sourced from hterm_all.js (lib.wc.unambiguous) so the Blink emoji split's

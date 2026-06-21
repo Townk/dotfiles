@@ -22,8 +22,26 @@ def _cmap(f):
     return set((TTFont(f).getBestCmap() or {}).keys())
 
 
+# Cache one TTFont per path so report() doesn't re-parse the same file for
+# cmap + family name + size on every call. Diagnostic-only, but each built /
+# shipped Symbols TTF was being opened 2-3x per report.
+_FONT_CACHE: dict[str, TTFont] = {}
+
+
+def _font(path):
+    f = _FONT_CACHE.get(path)
+    if f is None:
+        f = TTFont(path)
+        _FONT_CACHE[path] = f
+    return f
+
+
+def _cached_cmap(path):
+    return set((_font(path).getBestCmap() or {}).keys())
+
+
 def _name(f, i):
-    t = TTFont(f)["name"]
+    t = _font(f)["name"]
     rec = t.getName(i, 3, 1, 0x409) or t.getName(i, 1, 0, 0)
     return str(rec) if rec else "?"
 
@@ -31,10 +49,10 @@ def _name(f, i):
 def main(argv):
     built_dir, fa_merged, shipped_dir = argv[0], argv[1], argv[2]
 
-    fa_pts = _cmap(fa_merged) if os.path.exists(fa_merged) else set()
+    fa_pts = _cached_cmap(fa_merged) if os.path.exists(fa_merged) else set()
 
     def report(label, path):
-        pts = _cmap(path)
+        pts = _cached_cmap(path)
         print("=== %s: %s (%s bytes) ===" % (label, os.path.basename(path), f"{os.path.getsize(path):,}"))
         print("  family : %s" % _name(path, 1))
         print("  cmap   : %s codepoints" % f"{len(pts):,}")

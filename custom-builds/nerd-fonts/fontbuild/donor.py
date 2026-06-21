@@ -17,9 +17,10 @@ from fontTools.pens.cu2quPen import Cu2QuPen
 from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
-from fontTools.ttLib import TTCollection, TTFont
+from fontTools.ttLib import TTFont
+from fontTools.ttLib.sfnt import readTTCHeader
 
-from .ranges import LEGACY_HI, LEGACY_LO
+from .ranges import TERMINAL_CELL_RANGES, in_terminal_cell
 
 DEFAULT_DIRS = [
     "~/Library/Fonts",
@@ -122,11 +123,30 @@ def font_cmap(font: TTFont) -> dict[int, str]:
     return out
 
 
-def open_font_faces(path: str) -> list[TTFont]:
+def open_font_faces(path: str):
+    """Yield donor faces from a font file lazily, one at a time.
+
+    For a TrueType Collection (.ttc/.otc) this opens each face with
+    ``lazy=True`` by index instead of constructing a TTCollection up front.
+    A TTC like Iosevka packs 162 faces into a 441 MB file; the eager
+    ``list(TTCollection(path).fonts)`` path slurps the whole file once per
+    face (~71 GB peak, ~15 s) just to find the first family match. ``lazy=True``
+    keeps each face's own file handle open and reads only the tables touched
+    (name/cmap for the match; glyf/hmtx/head later in import_one), so a
+    non-matching face is a cheap open+close and the returned donor stays
+    self-contained and cheap.
+
+    Non-TTC inputs stay eager (donor Noto/STIX files are small and we touch
+    most of their glyphs anyway, so lazy's per-table overhead isn't worth it).
+    """
     suffix = Path(path).suffix.lower()
     if suffix in {".ttc", ".otc"}:
-        return list(TTCollection(path).fonts)
-    return [TTFont(path)]
+        with open(path, "rb") as fh:
+            count = readTTCHeader(fh).numFonts
+        for i in range(count):
+            yield TTFont(path, fontNumber=i, lazy=True)
+        return
+    yield TTFont(path)
 
 
 def candidate_paths(family: str, explicit_paths: list[str]) -> list[str]:
@@ -164,11 +184,21 @@ def open_donor(family: str, needed: set[int], explicit_paths: list[str]):
         except Exception:
             continue
         for font in faces:
-            if not family_matches(font, family, path):
-                continue
-            cmap = font_cmap(font)
-            if any(cp in cmap for cp in needed):
-                return path, font, cmap
+            try:
+                if not family_matches(font, family, path):
+                    continue
+                cmap = font_cmap(font)
+                if any(cp in cmap for cp in needed):
+                    return path, font, cmap   # keep this face's handle open
+            except Exception:
+                pass
+            # Non-matching / no-coverage / errored face: release its file
+            # handle now rather than waiting on GC (lazy TTC faces hold an
+            # open fd each; Iosevka has 162 of them).
+            try:
+                font.close()
+            except Exception:
+                pass
     return None, None, {}
 
 
@@ -230,23 +260,67 @@ def target_cell(font: TTFont):
 
 
 def donor_block_cell(donor: TTFont, donor_cmap: dict[int, str]):
-    """The donor's design cell for the legacy-computing block, from the union of
-    its U+1FB00-1FBFF glyphs: x 0..max(xMax), y min(yMin)..max(yMax). None if
-    empty."""
-    xmax = ymin = ymax = None
-    for cp in range(LEGACY_LO, LEGACY_HI + 1):
-        gname = donor_cmap.get(cp)
-        if not gname:
-            continue
+    """The donor's design cell for cell-normalizing terminal-cell glyphs.
+
+    Prefer the FULL BLOCK U+2588 (x 0..advance, y blockYMin..blockYMax), the same
+    canonical cell-defining glyph `target_cell` uses for the destination font.
+    Terminal-cell glyphs (block/box/quadrant/legacy-computing) are defined to
+    tile this cell, so its rect is the correct target to map them onto.
+
+    Some donors that carry terminal-cell glyphs do NOT carry U+2588 (full block
+    is a Block Element, U+2580-259F, which e.g. Noto Sans Symbols 2 doesn't
+    cover). Without a fallback those glyphs would import at the donor's native
+    metrics (NotoSS2's 1000-wide cell) instead of being remapped onto the
+    destination cell — visible as a 1.67x-too-wide BOX_BOT (U+1FB82) breaking
+    the zj-hud frame. So when U+2588 is absent, derive the cell from the
+    terminal-cell glyphs this donor actually has:
+      * width  = MIN advance among them. Terminal glyphs advance exactly 1
+        cell; 2-cell-wide schematics (e.g. U+1CC8D LEFT THIRD INDUCTOR)
+        advance 2x, so the min is the 1-cell width. (Using max xMax here was
+        the original bug — wide schematics inflated it.)
+      * height = union y-extent (min yMin, max yMax). Wide schematics are full
+        cell-height, so they don't corrupt the y-union the way they corrupt
+        x-max.
+    Returns None only if the donor has no usable terminal-cell glyphs at all
+    (cell-normalization is then skipped for that donor).
+    """
+    gname = donor_cmap.get(0x2588)
+    if gname:
         bb = glyphset_bounds(donor, gname)
-        if not bb:
-            continue
-        xmax = bb[2] if xmax is None else max(xmax, bb[2])
-        ymin = bb[1] if ymin is None else min(ymin, bb[1])
-        ymax = bb[3] if ymax is None else max(ymax, bb[3])
-    if xmax is None or xmax <= 0 or ymax <= ymin:
+        if bb:
+            adv = donor["hmtx"].metrics.get(gname, (0, 0))[0]
+            if adv > 0:
+                return (0.0, float(bb[1]), float(adv), float(bb[3]))
+
+    # Fallback: no U+2588 — derive the cell from the terminal-cell glyphs
+    # present in this donor.
+    from collections import Counter
+    advs: list[int] = []
+    ymin = ymax = None
+    for lo, hi in TERMINAL_CELL_RANGES:
+        for cp in range(lo, hi + 1):
+            g = donor_cmap.get(cp)
+            if not g:
+                continue
+            bb = glyphset_bounds(donor, g)
+            if not bb:
+                continue
+            adv = donor["hmtx"].metrics.get(g, (0, 0))[0]
+            if adv > 0:
+                advs.append(adv)
+            ymin = bb[1] if ymin is None else min(ymin, bb[1])
+            ymax = bb[3] if ymax is None else max(ymax, bb[3])
+    if not advs or ymin is None or ymax <= ymin:
         return None
-    return (0.0, float(ymin), float(xmax), float(ymax))
+    # Cell width = the MODE (most common) advance. Terminal-cell block/box/
+    # quarter/sextant glyphs all advance exactly one cell and vastly outnumber
+    # schematic glyphs, so the mode is the 1-cell width. Min-advance is wrong
+    # (a stray narrow glyph, e.g. NotoSS2's 768-advance one, underreports);
+    # max-advance is wrong when the donor carries 2-cell-wide schematics
+    # (e.g. Iosevka's 1000-advance U+1CC8D against its real 500 cell). Mode
+    # sidesteps both.
+    min_adv = Counter(advs).most_common(1)[0][0]
+    return (0.0, float(ymin), float(min_adv), float(ymax))
 
 
 def import_one(dest: TTFont, donor: TTFont, donor_cmap: dict[int, str], cp: int,
@@ -337,7 +411,7 @@ def import_into(dest, donors, cell_normalize_legacy):
                 already += 1
                 continue
             cell = None
-            if tcell is not None and dcell is not None and LEGACY_LO <= cp <= LEGACY_HI:
+            if tcell is not None and dcell is not None and in_terminal_cell(cp):
                 cell = (dcell, tcell)
                 norm += 1
             import_one(dest, donor, cmap, cp, cell=cell)
