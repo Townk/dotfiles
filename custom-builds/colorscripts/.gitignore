@@ -1,0 +1,4 @@
+# Everything the build pipeline creates at runtime (shallow clone of the
+# upstream dwt1/shell-color-scripts repo). All of it can be recreated by
+# re-running ./build-colorscripts.sh.
+build/

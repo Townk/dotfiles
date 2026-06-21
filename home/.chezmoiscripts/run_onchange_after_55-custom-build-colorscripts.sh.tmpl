@@ -1,0 +1,58 @@
+{{- /*
+
+  shell-color-scripts — build hook (Macs only: profiles work + personal).
+
+  Installs Derek Taylor's shell-color-scripts into ~/.local/opt/colorscripts
+  (no sudo), patches its hardcoded /opt data dir to the user install, and
+  symlinks ~/.local/bin/colorscript onto $PATH. The NeoVim dashboard
+  (lua/plugins/core.lua) calls `colorscript -e square` on startup; the
+  upstream Makefile's /usr/local/bin + /opt install is sudo-owned and, on
+  Apple Silicon, off $PATH, so without this the dashboard prints
+  `zsh:1: command not found: colorscript`. mise can't manage it (no
+  tags/releases). See custom-builds/colorscripts/build-colorscripts.sh for
+  the full rationale and recipe.
+
+  run_onchange_after_*: chezmoi re-runs this whenever the rendered output
+  changes. We bake the SHA256 of build-colorscripts.sh into the script
+  below, so editing the builder re-fires it. The builder is otherwise
+  idempotent — a no-op fast path when the installed copy already matches
+  the clone's commit — so routine applies don't re-clone/re-copy, and
+  upstream updates are pulled on demand
+  (COLORSCRIPTS_UPDATE=1 bash build-colorscripts.sh).
+
+  Scope: macOS with the work or personal profile (matches the zsh custom
+  build — personal-machine, macOS-tuned). Exits cleanly elsewhere.
+*/ -}}
+{{- $target := and (eq .chezmoi.os "darwin") (or (eq .profile "work") (eq .profile "personal")) -}}
+{{- $buildSHA := "" -}}
+{{- if $target -}}
+  {{- $buildSHA = output "shasum" "-a" "256" (joinPath .chezmoi.workingTree "custom-builds/colorscripts/build-colorscripts.sh") | trim -}}
+{{- end -}}
+#!/bin/bash
+# shell-color-scripts — build hook.
+#
+# Re-runs whenever the builder changes:
+#   build-colorscripts.sh sha256 : {{ if $buildSHA }}{{ $buildSHA }}{{ else }}(out of scope){{ end }}
+#
+# To pull upstream + reinstall:
+#   COLORSCRIPTS_UPDATE=1 bash ~/.local/share/chezmoi/custom-builds/colorscripts/build-colorscripts.sh
+# To force a clean reinstall:
+#   rm -rf ~/.local/opt/colorscripts && chezmoi apply
+
+set -eu
+
+{{- if not $target }}
+# Only built on macOS work/personal profiles; nothing to do here.
+exit 0
+{{- end }}
+
+BUILD="{{ .chezmoi.workingTree }}/custom-builds/colorscripts/build-colorscripts.sh"
+
+if [ ! -f "$BUILD" ]; then
+  echo "[colorscripts-build] builder missing at $BUILD — skipping." >&2
+  exit 0
+fi
+
+exec bash "$BUILD"
+
+# vim:ft=sh
