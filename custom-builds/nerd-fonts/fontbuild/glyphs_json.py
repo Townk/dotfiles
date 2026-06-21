@@ -120,7 +120,7 @@ def main(argv):
 
     ttf_path = _pick_canonical_ttf(built_dir)
     font = TTFont(ttf_path)
-    cmap = font.getBestCmap()
+    cmap = font.getBestCmap() or {}
     font_codepoints = set(cmap.keys())
 
     # native-hex -> relocated-hex for free FA icons the merge step had to move

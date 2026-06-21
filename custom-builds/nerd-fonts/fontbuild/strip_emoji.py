@@ -8,23 +8,7 @@ next font in the chain (Apple Color Emoji etc.) gets asked.
 Idempotent: a second pass removes nothing (already-stripped codepoints are not
 present). Explicit donor codepoints (imported in step 6b) are preserved.
 """
-import re
-
 from .ranges import EMOJI_KEEP_RANGES, EMOJI_STRIP_RANGES, in_ranges
-
-
-def load_keep_codepoints(path):
-    """Explicit donor codepoints (U+XXXX tokens) to preserve from stripping."""
-    if not path:
-        return set()
-    try:
-        text = open(path, encoding="utf-8").read()
-    except OSError:
-        return set()
-    keep = set()
-    for match in re.finditer(r"U\+([0-9A-Fa-f]{4,6})\b", text):
-        keep.add(int(match.group(1), 16))
-    return keep
 
 
 def in_strip_range(cp, explicit_keep):

@@ -185,9 +185,10 @@ def import_custom_svgs(dest, custom_dir, start_cp, meta, used, usvg_bin=""):
         return cp
 
     def abandon(cp):
-        # Import failed or produced nothing: drop the empty glyph and free its
-        # codepoint so it isn't shipped as an invisible blank PUA slot (and an
-        # auto-assigned icon can reuse the slot).
+        # Import failed or produced nothing: drop the empty glyph so it isn't
+        # shipped as an invisible blank PUA slot. (alloc() only moves forward, so
+        # the discarded codepoint isn't reused; `used` is rebuilt by the caller
+        # anyway -- the discard just keeps this set tidy.)
         try:
             dest.removeGlyph(dest[cp])
         except Exception:

@@ -61,7 +61,7 @@ def main(argv):
     noto_otf = argv[0]
     outdir = argv[1]
     os.makedirs(outdir, exist_ok=True)
-    cmap = TTFont(noto_otf).getBestCmap()
+    cmap = TTFont(noto_otf).getBestCmap() or {}
     emoji = sorted(c for c in cmap if not is_text(c))
     wide = [c for c in emoji if is_wide(c)]
     narrow = [c for c in emoji if not is_wide(c)]

@@ -15,7 +15,7 @@ EPS = 4
 def bleed_font(font):
     """Bleed block/legacy glyphs of an open TTFont past the cell edges. Returns
     a dict of metrics for logging, or None if U+2588 is absent. No file IO."""
-    cmap = font.getBestCmap()
+    cmap = font.getBestCmap() or {}
     glyf = font["glyf"]
 
     fb = cmap.get(0x2588)

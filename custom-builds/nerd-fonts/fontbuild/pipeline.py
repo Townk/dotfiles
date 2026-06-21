@@ -37,7 +37,11 @@ def run(argv):
         cps = donor.load_codepoints(args.donor_glyphs)
         families = [f.strip() for f in args.donor_families.split(",") if f.strip()]
         explicit_paths = [p for p in args.donor_paths.split(os.pathsep) if p]
-        explicit_keep = strip_emoji.load_keep_codepoints(args.donor_glyphs)
+        # Protect every imported donor codepoint from the emoji strip. Reuse the
+        # parsed import set rather than re-parsing the file with a stricter regex,
+        # so the keep set is a strict superset of what was imported (a bare-hex
+        # entry in an emoji range can't be imported and then stripped away).
+        explicit_keep = set(cps)
         if not cps:
             print("  no donor codepoints listed")
         elif not families:
