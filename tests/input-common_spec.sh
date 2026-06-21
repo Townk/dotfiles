@@ -4,14 +4,6 @@ Describe 'input-common.zsh'
 
   setup() {
     TEST_TMP="$(mktemp -d)"
-    # Recording gum stub: append argv to gum.args, print $GUM_OUT, exit $GUM_RC.
-    gum="$TEST_TMP/gum"
-    { echo '#!/usr/bin/env zsh'
-      echo 'print -r -- "$@" >> "'"$TEST_TMP"'/gum.args"'
-      echo 'printf "%s" "${GUM_OUT:-}"'
-      echo 'exit ${GUM_RC:-0}'
-    } > "$gum"; chmod +x "$gum"
-    export GUM_BIN="$gum"
     # ai-assist-input recording stub: append argv to aii.args, print $AII_OUT, exit $AII_RC.
     aii="$TEST_TMP/ai-assist-input"
     { echo '#!/usr/bin/env zsh'
@@ -20,7 +12,7 @@ Describe 'input-common.zsh'
       echo 'exit ${AII_RC:-0}'
     } > "$aii"; chmod +x "$aii"; export AI_ASSIST_INPUT_BIN="$aii"
   }
-  cleanup() { rm -rf "$TEST_TMP"; unset GUM_BIN AI_ASSIST_INPUT_BIN GUM_OUT GUM_RC AII_OUT AII_RC; }
+  cleanup() { rm -rf "$TEST_TMP"; unset AI_ASSIST_INPUT_BIN AII_OUT AII_RC; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 

@@ -141,13 +141,12 @@ zj::pick() {
 # Spawn a sized floating modal running input-widget and capture the answer via
 # FIFO. Echoes the captured answer on stdout; returns 130 on empty (cancel).
 _zj::float() {
-  local type="line" title="" title_color="" borderless="false" pane_w="" pane_h="" pane_x="" pane_y=""
+  local type="line" title="" borderless="false" pane_w="" pane_h="" pane_x="" pane_y=""
   local -a wargs
   while (($#)); do
     case "$1" in
       --type)        type="${2:-line}"; shift 2 ;;
       --title)       title="${2-}"; shift 2 ;;
-      --title-color) title_color="${2-}"; shift 2 ;;
       --borderless)  borderless="${2-}"; shift 2 ;;
       --pane-width)  pane_w="${2-}"; shift 2 ;;
       --pane-height) pane_h="${2-}"; shift 2 ;;
@@ -174,7 +173,6 @@ _zj::float() {
 
   local -a modal_args=(--capture "$fifo")
   [[ -n "$title" ]] && modal_args=(--title "$title" "${modal_args[@]}")
-  [[ -n "$title_color" ]] && modal_args+=(--title-color "$title_color")
 
   # `zellij action new-pane` does NOT propagate COLORTERM into the spawned pane
   # (it inherits TERM but not COLORTERM), so gum/lipgloss fall back to 256-color
@@ -199,7 +197,7 @@ _zj::float() {
 # rest as widget args. Off-Zellij → the inline input:: widget. Default per-type
 # geometry is supplied here and overridden by any caller --pane-*.
 # Title vs content: `--title TEXT` sets the ▓▓▓ header (the dialog title); the
-# positional arg is the content (the gum prompt / form title / textarea header).
+# positional arg is the content (the widget prompt / form title / textarea header).
 # When --title is omitted the header defaults to the first positional, so a
 # single-arg call still works. _zj::split_pane_opts pulls --pane-* into `reply`
 # and --title into PANE_TITLE, leaving the content in PANE_REST.
@@ -217,7 +215,7 @@ _zj::split_pane_opts() {  # → reply (geom), PANE_TITLE (header), PANE_REST (wi
 }
 
 # confirm/line/choose: zellij-modal renders the ▓▓▓ header (PANE_TITLE); the
-# content (PANE_REST) is the gum/pick prompt.
+# content (PANE_REST) is the widget/pick prompt.
 zj::confirm() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"

@@ -47,7 +47,7 @@ else
 fi
 
 # --- extended truecolor palette (Catppuccin Mocha) for dialog chrome ---------
-# C_HEX_* are bare hex values (UNGATED): passed as explicit color args to gum,
+# C_HEX_* are bare hex values (UNGATED): passed as --theme-* color args to ai-assist-input,
 # which owns its own tty, so they must exist even when our stdout is captured.
 # The SGR C_* twins below are gated like the base palette so non-terminal
 # output stays escape-free. THEME_* tokens (theme-common.zsh) compose from these.
