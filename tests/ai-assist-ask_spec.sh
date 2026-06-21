@@ -97,4 +97,23 @@ Describe 'ai-assist-ask'
     The output should satisfy output_matches_file
     The status should be success
   End
+
+  It 'interprets \x1d in a --field choose param as the option separator'
+    # A literal \x1d in the param must become a real GS byte in the assembled spec
+    # so the binary splits it into multiple options. Verify by using a stub that
+    # dumps the --spec file content as its output, then compare bytes to EXPECT_FILE.
+    stub3="$TEST_TMP/ai-assist-input3"
+    { echo '#!/usr/bin/env zsh'
+      echo 'while (($#)); do'
+      echo '  case "$1" in --spec) printf "%s" "$(cat "$2")"; break ;; esac; shift'
+      echo 'done'
+      echo 'exit 0'
+    } > "$stub3"; chmod +x "$stub3"; export AI_ASSIST_INPUT_BIN="$stub3"
+    # Expected spec: plan<US>choose<US>Plan<US>free<GS>pro<RS>x<US>line<US>X<US>
+    printf 'plan\037choose\037Plan\037free\035pro\036x\037line\037X\037' > "$TEST_TMP/expected"
+    export EXPECT_FILE="$TEST_TMP/expected"
+    When run "$SCRIPT" --type form "Setup" --field "plan:choose:Plan:free\x1dpro" --field "x:line:X"
+    The output should satisfy output_matches_file
+    The status should be success
+  End
 End

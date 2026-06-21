@@ -64,6 +64,9 @@ case "$type" in
       ftype="${rest%%:*}"; rest="${rest#*:}"
       flabel="${rest%%:*}"
       if [[ "$rest" == *:* ]]; then fparam="${rest#*:}"; else fparam=""; fi
+      local _gs=$'\x1d'
+      fparam="${fparam//\\x1d/$_gs}"
+      fparam="${fparam//\\035/$_gs}"
       rec="${fname}${US}${ftype:-line}${US}${flabel}${US}${fparam}"
       [[ -z "$spec" ]] && spec="$rec" || spec="${spec}${RS}${rec}"
     done
