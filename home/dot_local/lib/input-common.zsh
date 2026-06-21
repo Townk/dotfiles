@@ -141,35 +141,39 @@ input::text() {
   print -rn -- "$answer"
 }
 
-# input::choose "Q" [--multi[=SEP]] [CHOICE...] — thin pick::start wrapper in
-# selector mode with 1-9 shortcuts. Choices via argv or our stdin. --multi
-# joins selections with SEP (default newline).
+# input::choose "Q" [--multi] [--other LABEL] [--title T] [CHOICE...] — shim
+# over `ai-assist-input --type choose`. Choices via argv (after first positional
+# or after --). --multi: selections joined by newline. 130 on cancel/empty.
 input::choose() {
-  local question="" multi=0 sep=$'\n'
+  local question="" multi=0 other="" title=""
   local -a choices
+  local _got_prompt=0
   while (($#)); do
     case "$1" in
-      --multi)   multi=1; shift ;;
-      --multi=*) multi=1; sep="${1#--multi=}"; shift ;;
-      --header|--title) question="${2-}"; shift 2 ;;
+      --multi)        multi=1; shift ;;
+      --multi=*)      multi=1; shift ;;
+      --other)        other="${2-}"; shift 2 ;;
+      --title)        title="${2-}"; shift 2 ;;
+      --header)       [[ -z "$question" ]] && question="${2-}"; shift 2 ;;
       --icon|--margin|--padding|--width) shift 2 ;;
       --) shift; choices+=("$@"); break ;;
       -*) shift ;;
-      *)  if [[ -z "$question" ]]; then question="$1"; else choices+=("$1"); fi; shift ;;
+      *)  if (( ! _got_prompt )); then question="$1"; _got_prompt=1; else choices+=("$1"); fi; shift ;;
     esac
   done
 
-  local -a pick_args=(--selector --selector-shortcuts --header "$question")
-  if ((multi)); then
-    [[ "$sep" == $'\n' ]] && pick_args+=(--multi) || pick_args+=(--multi="$sep")
-  fi
+  local bin; bin="$(_input::bin)"
+
+  local -a flags=(--type choose)
+  [[ -n "$title" ]]    && flags+=(--title "$title")
+  [[ -n "$question" ]] && flags+=(--prompt "$question")
+  ((multi))            && flags+=(--multi)
+  [[ -n "$other" ]]    && flags+=(--other "$other")
+  theme::args; flags+=("${AI_THEME_ARGS[@]}")
+  flags+=(-- "${choices[@]}")
 
   local answer rc=0
-  if ((${#choices})); then
-    answer="$(print -rl -- "${choices[@]}" | pick::start "${pick_args[@]}")" || rc=$?
-  else
-    answer="$(pick::start "${pick_args[@]}")" || rc=$?
-  fi
+  answer="$("$bin" "${flags[@]}")" || rc=$?
   ((rc != 0)) && return 130
   [[ -n "$answer" ]] || return 130
   print -rn -- "$answer"

@@ -59,6 +59,13 @@ Describe 'ai-assist-ask'
     The stderr should be present
   End
 
+  It 'forwards --other to choose dispatch'
+    export AII_OUT="alpha"
+    When run "$SCRIPT" --type choose --other "Something else" "Pick one" alpha beta
+    The output should equal "alpha"
+    The status should be success
+  End
+
   It '--field param containing colons survives without truncation'
     # A param value like "https://x:8080" contains colons; old ${(@s/:/)fld} parse would
     # have split it into extra fields, producing a malformed spec and a broken form.

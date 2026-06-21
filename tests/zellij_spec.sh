@@ -79,6 +79,55 @@ Describe 'zellij.zsh — zj::confirm borderless float'
   End
 End
 
+Describe 'zellij.zsh — zj::choose borderless float'
+  Include home/dot_local/lib/zellij.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    ZJ_ARGS="$TEST_TMP/zj-args.txt"
+    export ZELLIJ=1
+    stub="$TEST_TMP/zellij"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'if [[ "$1" == action && "$2" == new-pane ]]; then'
+      echo "  echo \"\$*\" > \"$TEST_TMP/zj-args.txt\""
+      echo '  fifo=""; prev=""'
+      echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
+      echo '  [[ -n "$fifo" ]] && { printf "alpha" > "$fifo" & }'
+      echo '  exit 0'
+      echo 'fi'
+      echo 'exit 0'
+    } > "$stub"
+    chmod +x "$stub"
+    export ZELLIJ_BIN="$stub"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'spawns choose in a borderless pane with --type choose'
+    When call zj::choose --title "Pick one" "Select" alpha beta gamma
+    The output should equal "alpha"
+    The contents of file "$ZJ_ARGS" should include "--borderless true"
+    The contents of file "$ZJ_ARGS" should include "--type choose"
+    The status should be success
+  End
+
+  It 'passes --multi through to the float'
+    When call zj::choose --title "Pick" "Select" --multi -- alpha beta gamma
+    The output should equal "alpha"
+    The contents of file "$ZJ_ARGS" should include "--multi"
+    The status should be success
+  End
+
+  It 'passes --other through to the float'
+    When call zj::choose --title "Pick" "Select" --other "Something else" -- alpha beta
+    The output should equal "alpha"
+    The contents of file "$ZJ_ARGS" should include "--other"
+    The status should be success
+  End
+End
+
 Describe 'zellij.zsh — zj:: input drop-ins (off-Zellij fallback)'
   Include home/dot_local/lib/zellij.zsh
 
@@ -106,7 +155,9 @@ Describe 'zellij.zsh — zj:: input drop-ins (off-Zellij fallback)'
 
   It 'zj::choose forwards choices'
     When call zj::choose "Pick" a b c
-    The output should include "choose:Pick"
-    The output should include "a b c"
+    The output should include "Pick"
+    The output should include "a"
+    The output should include "b"
+    The output should include "c"
   End
 End

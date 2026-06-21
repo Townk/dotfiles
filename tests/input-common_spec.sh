@@ -144,26 +144,64 @@ line2"
   End
 
   Describe 'input::choose'
-    pick::start() { print -r -- "$@" > "$TEST_TMP/pick.args"; cat > "$TEST_TMP/pick.rows"; printf '%s' "${PICK_OUT:-}"; return ${PICK_RC:-0}; }
-    It 'returns the chosen row'
-      export PICK_OUT="beta"
-      When call input::choose "Pick" alpha beta gamma
+    It 'forwards --type choose and options after --'
+      export AII_OUT="beta"
+      When call input::choose "Pick" -- alpha beta gamma
       The output should equal "beta"
       The status should be success
+      The contents of file "$TEST_TMP/aii.args" should include "--type choose"
+      The contents of file "$TEST_TMP/aii.args" should include "-- alpha beta gamma"
     End
-    It 'exits 130 when nothing is chosen'
-      export PICK_OUT=""; export PICK_RC=130
-      When call input::choose "Pick" alpha beta
-      The status should eq 130
-    End
-    It 'passes question as --header and choices as rows, not as a selectable row'
-      export PICK_OUT="alpha"
+    It 'forwards bare positional choices'
+      export AII_OUT="alpha"
       When call input::choose "Pick one" alpha beta gamma
       The output should equal "alpha"
-      The contents of file "$TEST_TMP/pick.args" should include "--header Pick one"
-      The contents of file "$TEST_TMP/pick.rows" should include "alpha"
-      The contents of file "$TEST_TMP/pick.rows" should include "beta"
-      The contents of file "$TEST_TMP/pick.rows" should not include "Pick one"
+      The status should be success
+      The contents of file "$TEST_TMP/aii.args" should include "--type choose"
+      The contents of file "$TEST_TMP/aii.args" should include "alpha"
+    End
+    It 'maps the first positional to --prompt'
+      export AII_OUT="alpha"
+      When call input::choose "Pick one" alpha beta
+      The output should equal "alpha"
+      The contents of file "$TEST_TMP/aii.args" should include "--prompt Pick one"
+      The contents of file "$TEST_TMP/aii.args" should not include "-- Pick one"
+    End
+    It 'forwards --title'
+      export AII_OUT="alpha"
+      When call input::choose "Pick one" --title "My Title" alpha beta
+      The output should equal "alpha"
+      The contents of file "$TEST_TMP/aii.args" should include "--title My Title"
+      The contents of file "$TEST_TMP/aii.args" should include "--prompt Pick one"
+    End
+    It 'forwards --multi'
+      export AII_OUT="alpha"$'\n'"beta"
+      When call input::choose "Pick" --multi -- alpha beta gamma
+      The output should equal "alpha
+beta"
+      The contents of file "$TEST_TMP/aii.args" should include "--multi"
+    End
+    It 'forwards --other'
+      export AII_OUT="alpha"
+      When call input::choose "Pick" --other "Something else" -- alpha beta
+      The output should equal "alpha"
+      The contents of file "$TEST_TMP/aii.args" should include "--other Something else"
+    End
+    It 'forwards theme args'
+      export AII_OUT="alpha"
+      When call input::choose "Pick" -- alpha beta
+      The output should equal "alpha"
+      The contents of file "$TEST_TMP/aii.args" should include "--theme-field-border"
+    End
+    It 'exits 130 when binary returns empty'
+      export AII_OUT=""
+      When call input::choose "Pick" -- alpha beta
+      The status should eq 130
+    End
+    It 'exits 130 on non-zero exit'
+      export AII_RC=130
+      When call input::choose "Pick" -- alpha beta
+      The status should eq 130
     End
   End
 End

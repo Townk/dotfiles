@@ -240,13 +240,48 @@ zj::line() {
 }
 
 zj::choose() {
+  # Pre-parse --multi and --other before _zj::split_pane_opts so they don't
+  # corrupt PANE_TITLE (split_pane_opts puts unknown args into PANE_REST and
+  # promotes [1] to the title).
+  local _multi=0 _other="" _skip=0
+  local -a _pre_args=()
+  local -a _args=("$@")
+  local _j
+  for (( _j = 1; _j <= ${#_args}; _j++ )); do
+    local _a="${_args[$_j]}"
+    case "$_a" in
+      --multi) _multi=1 ;;
+      --other) (( _j++ )); _other="${_args[$_j]:-}" ;;
+      *) _pre_args+=("$_a") ;;
+    esac
+  done
+
   local -a reply PANE_REST; local PANE_TITLE
-  _zj::split_pane_opts "$@"
-  if ! zj::available; then input::choose "${PANE_REST[@]}"; return; fi
-  # Choices count drives height: the content positional is arg 1, rest are choices.
-  local n=$(( ${#PANE_REST} - 1 )); ((n < 1)) && n=1
-  _zj::float --type choose --title "$PANE_TITLE" --pane-width 56 --pane-height $((n + 7)) \
-    "${reply[@]}" -- "${PANE_REST[@]}"
+  _zj::split_pane_opts "${_pre_args[@]}"
+
+  local -a _extra=()
+  (( _multi ))      && _extra+=(--multi)
+  [[ -n "$_other" ]] && _extra+=(--other "$_other")
+
+  if ! zj::available; then
+    input::choose --title "$PANE_TITLE" "${_extra[@]}" "${PANE_REST[@]}"
+    return
+  fi
+
+  # Count the actual choice items (PANE_REST minus the first positional/prompt).
+  local n=0 _i
+  for (( _i = 2; _i <= ${#PANE_REST}; _i++ )); do
+    case "${PANE_REST[$_i]}" in
+      --) ;;
+      *) (( n++ )) ;;
+    esac
+  done
+  (( n < 1 )) && n=1
+  # Height: min(n,8) visible items + 9 chrome rows (title/rule/prompt/padding/hint)
+  local vis=$(( n < 8 ? n : 8 ))
+  _zj::float --type choose --borderless true --title "$PANE_TITLE" \
+    --pane-width 56 --pane-height $(( vis + 9 )) \
+    "${reply[@]}" -- --title "$PANE_TITLE" "${_extra[@]}" "${PANE_REST[@]}"
 }
 
 # text/form: the widget owns its chrome, so the title goes to the widget (not the
