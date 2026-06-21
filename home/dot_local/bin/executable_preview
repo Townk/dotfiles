@@ -50,7 +50,7 @@ function stamp-msg() {
   local box_w="${2:-80}"
   local box_h="${3:-24}"
 
-  local figlet_fonts_dir="$XDG_DATA_HOME/fonts/figlet/FIGfonts/fonts"
+  local figlet_fonts_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/figlet"
   local figlet_font="phm-minecraft.flf"
 
   local use_fallback=0

@@ -1,0 +1,127 @@
+{{- /*
+  Figlet font provisioning (macOS + Linux, every profile).
+
+  Clones the three FIGlet font collections the banner scripts rely on
+  (lolbanner in zsh/functions.d/commands.sh, stamp-msg in
+  dot_local/bin/executable_preview) into ~/.local/opt/figlet/<name>/,
+  then flattens every *.flf/*.tlf — from those repos AND figlet's own
+  bundled font directory — into ~/.local/share/fonts/figlet/ via
+  absolute symlinks.
+
+  ~/.local/share/fonts/figlet thus becomes the single source of truth
+  for figlet fonts: one `figlet -d <that dir> -f <name>` resolves any
+  font, bundled or third-party. figlet's -d takes a single directory
+  (toilet's -d is the same), so without this flattening every call site
+  had to fd-discover each font file across the repo dirs and pass
+  -d <parent>; the flat dir removes that gymnastics entirely.
+
+  Sibling of run_onchange_after_20-setup-zsh-plugins. run_onchange:
+  editing the repo list below re-fires the script. Idempotent and
+  best-effort — a single clone/symlink failure never aborts the apply.
+
+  The bundled-font links target Homebrew's stable $(brew --prefix)/share
+  symlink (repointed on `brew upgrade figlet`) rather than the versioned
+  Cellar path, so they survive upgrades. On Linux, figlet -I 2 already
+  reports a stable /usr/share/figlet. Either way, re-running this script
+  repairs any stray links.
+*/ -}}
+#!/bin/bash
+set -uo pipefail
+
+# chezmoi may run with a minimal PATH; make sure git/figlet are reachable.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+command -v git >/dev/null 2>&1 || { echo "git not found; skipping figlet fonts" >&2; exit 0; }
+
+OPT_DIR="${HOME}/.local/opt/figlet"
+SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/figlet"
+mkdir -p "$OPT_DIR" "$SHARE_DIR"
+
+echo "🔠  Provisioning figlet fonts..."
+
+# name|url
+REPOS=(
+  "FIGfonts|https://github.com/PhMajerus/FIGfonts.git"
+  "cmatsuoka-figlet-fonts|https://github.com/cmatsuoka/figlet-fonts.git"
+  "xero-figlet-fonts|https://github.com/xero/figlet-fonts.git"
+)
+
+failures=()
+
+# 1. Clone/pull the repos into ~/.local/opt/figlet/<name>/.
+for entry in "${REPOS[@]}"; do
+  IFS='|' read -r name url <<<"$entry"
+  dest="$OPT_DIR/$name"
+  if [ -d "$dest/.git" ]; then
+    git -C "$dest" pull --ff-only --quiet || failures+=("pull $name")
+  else
+    git clone --depth 1 --quiet "$url" "$dest" || failures+=("clone $name")
+  fi
+done
+
+# 2. Retire the previous layout: repo clones and the ./available/ flat
+#    dir used to live under $SHARE_DIR. They now live in $OPT_DIR, so
+#    clear the old copies so $SHARE_DIR holds only the flat symlinks.
+rm -rf "$SHARE_DIR/available" 2>/dev/null
+for entry in "${REPOS[@]}"; do
+  IFS='|' read -r name _ <<<"$entry"
+  rm -rf "$SHARE_DIR/$name" 2>/dev/null
+done
+
+# 3. Rebuild the flat symlink dir. Wipe stale links first so removed or
+#    renamed fonts don't linger, then relink every *.flf/*.tlf from the
+#    opt repos and figlet's bundled font directory. Absolute targets
+#    (rooted at $HOME / the Cellar) survive across subtrees; last write
+#    wins on same-named fonts across sources.
+find "$SHARE_DIR" -maxdepth 1 -type l -delete 2>/dev/null
+
+link_fonts() {
+  # $1 = source dir to scan (recursive via find)
+  local src="$1"
+  [ -d "$src" ] || return 0
+  while IFS= read -r -d '' font; do
+    local base="${font##*/}"
+    ln -sf "$font" "$SHARE_DIR/$base" || failures+=("link $base")
+  done < <(find "$src" -type f \( -name '*.flf' -o -name '*.tlf' \) \
+             -not -path '*/.git/*' -print0 2>/dev/null)
+}
+
+for entry in "${REPOS[@]}"; do
+  IFS='|' read -r name _ <<<"$entry"
+  link_fonts "$OPT_DIR/$name"
+done
+
+# 4. Figlet's bundled fonts — so the flat dir is the single source of
+#    truth. figlet -I 2 prints figlet's default font directory, but on
+#    Homebrew that's a versioned Cellar path (…/Cellar/figlet/<ver>/…)
+#    that goes stale on `brew upgrade figlet`. Prefer the stable
+#    $(brew --prefix)/share/figlet/fonts symlink, which Homebrew repoints
+#    on upgrade, so our links survive. Elsewhere (Linux apt, etc.)
+#    figlet -I 2 already reports a stable /usr/share/figlet. Only
+#    *.flf/*.tlf are fonts; the bundled *.flc control files and
+#    cjkfonts.tar.gz archive are skipped.
+if command -v figlet >/dev/null 2>&1; then
+  std_dir="$(figlet -I 2 2>/dev/null)"
+  if command -v brew >/dev/null 2>&1; then
+    brew_share="$(brew --prefix 2>/dev/null)/share/figlet/fonts"
+    [ -d "$brew_share" ] && std_dir="$brew_share"
+  fi
+  if [ -n "$std_dir" ] && [ -d "$std_dir" ]; then
+    while IFS= read -r -d '' font; do
+      base="${font##*/}"
+      ln -sf "$font" "$SHARE_DIR/$base" || failures+=("link $base")
+    done < <(find "$std_dir" -maxdepth 1 -type f \( -name '*.flf' -o -name '*.tlf' \) -print0 2>/dev/null)
+  fi
+fi
+
+count=$(find "$SHARE_DIR" -maxdepth 1 -type l 2>/dev/null | wc -l | tr -d ' ')
+echo "🔠  $count fonts linked into $SHARE_DIR"
+
+if (( ${#failures[@]} )); then
+  echo "⚠️  figlet font provisioning had issues (best-effort):" >&2
+  printf '   - %s\n' "${failures[@]}" >&2
+else
+  echo "👍  figlet fonts provisioned."
+fi
+
+# vim:ft=sh
