@@ -1,4 +1,4 @@
-# Tests for theme-common.zsh — semantic tokens + gum flag arrays.
+# Tests for theme-common.zsh — semantic tokens + theme helpers.
 Describe 'theme-common.zsh'
   Include home/dot_local/lib/theme-common.zsh
 
@@ -10,19 +10,6 @@ Describe 'theme-common.zsh'
   It 'maps THEME_ACCENT to mauve'
     When call test "$THEME_ACCENT" = "$C_MAUVE"
     The status should be success
-  End
-
-  It 'themes the gum input cursor mauve'
-    When call print -r -- "${theme_gum_input[*]}"
-    The output should include "--cursor.foreground #cba6f7"
-  End
-
-  It 'themes the gum confirm buttons with the system tab colors'
-    When call print -r -- "${theme_gum_confirm[*]}"
-    The output should include "--selected.background #656a83"
-    The output should include "--selected.foreground #ffffff"
-    The output should include "--unselected.background #282c41"
-    The output should include "--unselected.foreground #9b9fc1"
   End
 
   It 'theme::rule emits a sized bar at an explicit width'

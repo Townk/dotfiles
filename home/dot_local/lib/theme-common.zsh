@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
-# theme-common.zsh — semantic theme tokens (THEME_*), decoration glyphs, gum
-# flag arrays, and theme::rule, all built from the C_*/C_HEX_* palette in
-# common.zsh. SOURCED, never executed. The single styling source of truth for
-# the dialog family (zellij-modal, input::*, zj::*).
+# theme-common.zsh — semantic theme tokens (THEME_*), decoration glyphs,
+# and theme::rule, all built from the C_*/C_HEX_* palette in common.zsh.
+# SOURCED, never executed. The single styling source of truth for the dialog
+# family (zellij-modal, input::*, zj::*).
 
 _theme_self="${(%):-%x}"
 source "$(dirname "$_theme_self")/common.zsh"
@@ -29,21 +29,6 @@ THEME_ICON_PROMPT="󰧑"
 THEME_ICON_CHECK="✓"
 THEME_ICON_ACTIVE="▌"
 THEME_ICON_TAB_SEP="▏"
-
-# --- gum flag arrays (bare hex; gum cannot take SGR sequences) ---------------
-theme_gum_input=(
-  --prompt.foreground "$C_HEX_MAUVE"
-  --cursor.foreground "$C_HEX_MAUVE"
-  --placeholder.foreground "$C_HEX_OVERLAY0"
-  --header.foreground "$C_HEX_MAUVE"
-)
-theme_gum_confirm=(
-  --prompt.foreground "$C_HEX_TEXT"
-  --selected.background "$C_HEX_TAB_ACTIVE_BG"   # match active tab
-  --selected.foreground "$C_HEX_TAB_ACTIVE_FG"
-  --unselected.background "$C_HEX_TAB_BG"         # match inactive tab
-  --unselected.foreground "$C_HEX_TAB_FG"
-)
 
 # theme::sgr_fg "#rrggbb" — a 24-bit set-foreground SGR built from a hex value.
 # Use for color that must render regardless of the source-time `[ -t 1 ]` gate:

@@ -32,8 +32,6 @@
 # Env-var overrides:
 #   ZELLIJ_BIN  Absolute path to the zellij binary
 #               (default: first zellij found on PATH / known install paths)
-#   GUM_BIN     Absolute path to gum; passed through to input::confirm
-#               (default: first gum found on PATH / known install paths)
 
 set -euo pipefail
 

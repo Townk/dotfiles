@@ -7,14 +7,11 @@ Describe 'ai-assist-ask'
 
   setup() {
     TEST_TMP="$(mktemp -d)"
-    gum="$TEST_TMP/gum"
-    { echo '#!/usr/bin/env zsh'; echo 'printf "%s" "${GUM_OUT:-}"'; echo 'exit ${GUM_RC:-0}'; } > "$gum"
-    chmod +x "$gum"; export GUM_BIN="$gum"
     aii="$TEST_TMP/ai-assist-input"
     { echo '#!/usr/bin/env zsh'; echo 'printf "%s" "${AII_OUT:-}"'; echo 'exit ${AII_RC:-0}'; } > "$aii"
     chmod +x "$aii"; export AI_ASSIST_INPUT_BIN="$aii"
   }
-  cleanup() { rm -rf "$TEST_TMP"; unset GUM_BIN AI_ASSIST_INPUT_BIN GUM_OUT GUM_RC AII_OUT AII_RC EXPECT_FILE; }
+  cleanup() { rm -rf "$TEST_TMP"; unset AI_ASSIST_INPUT_BIN AII_OUT AII_RC EXPECT_FILE; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
