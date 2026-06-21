@@ -299,6 +299,6 @@ zj::form() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"
   if ! zj::available; then input::form --title "$PANE_TITLE" "${PANE_REST[@]}"; return; fi
-  _zj::float --type form --pane-width 64 --pane-height 16 \
+  _zj::float --type form --borderless true --pane-width 64 --pane-height 18 \
     "${reply[@]}" -- --title "$PANE_TITLE" "${PANE_REST[@]}"
 }

@@ -1,60 +1,58 @@
-# Tests for input::form — sequential tabbed multi-field widget.
+# Tests for input::form — native binary shim.
+# The shell no longer runs a per-field loop; it delegates to ai-assist-input
+# --type form --spec FILE. These tests verify the shim wiring via the aii stub.
 Describe 'input::form'
   Include home/dot_local/lib/input-common.zsh
 
-  US=$(printf '\037'); RS=$(printf '\036'); GS=$(printf '\035')
+  US=$(printf '\037'); RS=$(printf '\036')
 
-  # Stub the sub-widgets so the form runs headless with scripted answers.
-  input::line()    { printf '%s' "${LINE_ANS:-}";    return ${LINE_RC:-0}; }
-  input::confirm() { printf '%s' "${CONF_ANS:-yes}"; return ${CONF_RC:-0}; }
-  input::choose()  { printf '%s' "${CHOOSE_ANS:-}";  return ${CHOOSE_RC:-0}; }
-
-  # satisfy-compatible helper: reads stdin, compares byte-for-byte to $EXPECT_FILE.
-  # Avoids passing control chars (US/RS) through ShellSpec's eval boundary.
-  output_matches_file() { [ "$(cat)" = "$(cat "$EXPECT_FILE")" ]; }
-
-  setup() { TEST_TMP="$(mktemp -d)"; }
-  cleanup() { rm -rf "$TEST_TMP"; unset LINE_ANS LINE_RC CONF_ANS CONF_RC CHOOSE_ANS CHOOSE_RC EXPECT_FILE; }
+  setup() {
+    TEST_TMP="$(mktemp -d)"
+    aii="$TEST_TMP/ai-assist-input"
+    { echo '#!/usr/bin/env zsh'
+      echo 'print -r -- "$@" >> "'"$TEST_TMP"'/aii.args"'
+      echo 'printf "%s" "${AII_OUT:-}"'
+      echo 'exit ${AII_RC:-0}'
+    } > "$aii"; chmod +x "$aii"; export AI_ASSIST_INPUT_BIN="$aii"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset AI_ASSIST_INPUT_BIN AII_OUT AII_RC; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
   It 'collects answers from a 2-field spec into US/RS output'
-    export LINE_ANS="Ada"; export CONF_ANS="yes"
+    export AII_OUT="name${US}Ada${RS}email${US}yes"
     printf 'name%sline%sName%s%semail%sconfirm%sSubscribe%syes' \
       "$US" "$US" "$US" "$RS" "$US" "$US" "$US" > "$TEST_TMP/spec"
-    printf 'name%sAda%semail%syes' "$US" "$RS" "$US" > "$TEST_TMP/expected"
-    export EXPECT_FILE="$TEST_TMP/expected"
     When call input::form --title "Sign up" --spec "$TEST_TMP/spec"
-    The output should satisfy output_matches_file
+    The contents of file "$TEST_TMP/aii.args" should include "--type form"
+    The contents of file "$TEST_TMP/aii.args" should include "--spec"
+    The output should equal "name${US}Ada${RS}email${US}yes"
     The status should be success
-    The stderr should be present
   End
 
   It 'continues past a confirm "no" (exit 1) and records both fields'
-    export CONF_ANS="no"; export CONF_RC=1
-    export LINE_ANS="after"
+    export AII_OUT="ok${US}no${RS}note${US}after"
     printf 'ok%sconfirm%sProceed%s%snote%sline%sNote' \
       "$US" "$US" "$US" "$RS" "$US" "$US" > "$TEST_TMP/spec"
-    printf 'ok%sno%snote%safter' "$US" "$RS" "$US" > "$TEST_TMP/expected"
-    export EXPECT_FILE="$TEST_TMP/expected"
     When call input::form --spec "$TEST_TMP/spec"
-    The output should satisfy output_matches_file
+    The contents of file "$TEST_TMP/aii.args" should include "--type form"
+    The output should equal "ok${US}no${RS}note${US}after"
     The status should be success
-    The stderr should be present
   End
 
-  It 'aborts the whole form (130) when a field is cancelled'
-    export LINE_RC=130
+  It 'aborts the whole form (130) when the binary exits non-zero'
+    export AII_RC=130
     printf 'a%sline%sA%s%sb%sline%sB' "$US" "$US" "$US" "$RS" "$US" "$US" > "$TEST_TMP/spec"
     When call input::form --spec "$TEST_TMP/spec"
     The status should eq 130
-    The stderr should be present
   End
 
-  It 'rejects a spec with fewer than 2 fields'
-    printf 'solo%sline%sSolo' "$US" "$US" > "$TEST_TMP/spec"
-    When run input::form --spec "$TEST_TMP/spec"
-    The status should eq 2
-    The stderr should include "2-5 fields"
+  It 'passes --title to the binary'
+    export AII_OUT="solo${US}val"
+    printf 'a%sline%sA%s%sb%sline%sB' "$US" "$US" "$US" "$RS" "$US" "$US" > "$TEST_TMP/spec"
+    When call input::form --title "My Form" --spec "$TEST_TMP/spec"
+    The contents of file "$TEST_TMP/aii.args" should include "--title My Form"
+    The output should equal "solo${US}val"
+    The status should be success
   End
 End

@@ -204,4 +204,40 @@ beta"
       The status should eq 130
     End
   End
+
+  Describe 'input::form'
+    make_spec() {
+      # Minimal 2-field spec: name<US>line<US>Your name<RS>subscribe<US>confirm<US>Subscribe?
+      printf 'name\x1fline\x1fYour name\x1esubscribe\x1fconfirm\x1fSubscribe?'
+    }
+    It 'passes --type form --spec <file> to the binary and returns its stdout'
+      export AII_OUT="form-answers"
+      spec="$TEST_TMP/form.spec"
+      make_spec > "$spec"
+      When call input::form --title "Setup" --spec "$spec"
+      The contents of file "$TEST_TMP/aii.args" should include "--type form"
+      The contents of file "$TEST_TMP/aii.args" should include "--spec"
+      The contents of file "$TEST_TMP/aii.args" should include "--title Setup"
+      The output should equal "form-answers"
+      The status should be success
+    End
+    It 'reads spec from stdin when --spec is omitted'
+      export AII_OUT="stdin-answers"
+      Data
+        #|spec-from-stdin
+      End
+      When call input::form --title "Setup"
+      The contents of file "$TEST_TMP/aii.args" should include "--type form"
+      The contents of file "$TEST_TMP/aii.args" should include "--spec"
+      The output should equal "stdin-answers"
+      The status should be success
+    End
+    It 'returns 130 when the binary exits non-zero'
+      export AII_RC=130
+      spec="$TEST_TMP/form.spec"
+      make_spec > "$spec"
+      When call input::form --spec "$spec"
+      The status should eq 130
+    End
+  End
 End

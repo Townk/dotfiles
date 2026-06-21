@@ -50,13 +50,14 @@ Describe 'ai-assist-ask'
   End
 
   It 'assembles --field tokens into US/RS spec and returns form answers'
-    export AII_OUT="x"
+    # The binary now owns field rendering and answer assembly; AII_OUT is the
+    # full name<US>value<RS>… response the real binary would produce.
     printf 'name\037x\036email\037x' > "$TEST_TMP/expected"
     export EXPECT_FILE="$TEST_TMP/expected"
+    export AII_OUT="$(cat "$TEST_TMP/expected")"
     When run "$SCRIPT" --type form "Sign up" --field "name:line:Name" --field "email:line:Email"
     The output should satisfy output_matches_file
     The status should be success
-    The stderr should be present
   End
 
   It 'forwards --other to choose dispatch'
@@ -70,12 +71,12 @@ Describe 'ai-assist-ask'
     # A param value like "https://x:8080" contains colons; old ${(@s/:/)fld} parse would
     # have split it into extra fields, producing a malformed spec and a broken form.
     # The fix parses name:type:label and treats the rest as param verbatim.
-    export AII_OUT="myval"
+    # The binary now owns assembly; AII_OUT is the full response the real binary returns.
     printf 'url\037myval\036host\037myval' > "$TEST_TMP/expected"
     export EXPECT_FILE="$TEST_TMP/expected"
+    export AII_OUT="$(cat "$TEST_TMP/expected")"
     When run "$SCRIPT" --type form "Connect" --field "url:line:URL:https://x:8080" --field "host:line:Host:localhost:9090"
     The output should satisfy output_matches_file
     The status should be success
-    The stderr should be present
   End
 End

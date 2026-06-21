@@ -161,3 +161,42 @@ Describe 'zellij.zsh — zj:: input drop-ins (off-Zellij fallback)'
     The output should include "c"
   End
 End
+
+Describe 'zellij.zsh — zj::form borderless float'
+  Include home/dot_local/lib/zellij.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    ZJ_ARGS="$TEST_TMP/zj-args.txt"
+    export ZELLIJ=1
+    stub="$TEST_TMP/zellij"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'if [[ "$1" == action && "$2" == new-pane ]]; then'
+      echo "  echo \"\$*\" > \"$TEST_TMP/zj-args.txt\""
+      echo '  fifo=""; prev=""'
+      echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
+      echo '  [[ -n "$fifo" ]] && { printf "form-result" > "$fifo" & }'
+      echo '  exit 0'
+      echo 'fi'
+      echo 'exit 0'
+    } > "$stub"
+    chmod +x "$stub"
+    export ZELLIJ_BIN="$stub"
+    # Spec file for the form
+    spec="$TEST_TMP/form.spec"
+    printf 'name\x1fline\x1fYour name\x1esubscribe\x1fconfirm\x1fSubscribe?' > "$spec"
+    FORM_SPEC="$spec"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'spawns form in a borderless pane with --type form'
+    When call zj::form --title "Setup" --spec "$FORM_SPEC"
+    The contents of file "$ZJ_ARGS" should include "--borderless true"
+    The contents of file "$ZJ_ARGS" should include "--type form"
+    The output should equal "form-result"
+    The status should be success
+  End
+End

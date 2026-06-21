@@ -179,16 +179,15 @@ input::choose() {
   print -rn -- "$answer"
 }
 
-# input::form [--title T] [--spec FILE] — present 2-5 fields as a tabbed flow in
-# one pane, advancing as the user answers. Spec read from FILE or stdin; answers
-# printed as name<US>value records joined by RS. Any field cancel aborts → 130.
-# The tab/title chrome is drawn to STDERR (the pane tty) so STDOUT carries only
-# the framed answers for the caller/FIFO.
+# input::form [--title T] [--spec FILE] — shim over `ai-assist-input --type form`.
+# Spec read from FILE (--spec) or stdin (written to a temp file); the binary owns
+# the tab flow + field rendering. Answers printed as name<US>value joined by RS;
+# exit 0 on submit, 130 on cancel.
 input::form() {
-  local title="Questions" spec_file=""
+  local title="" spec_file="" _tmp_spec=""
   while (($#)); do
     case "$1" in
-      --title) title="${2:-Questions}"; shift 2 ;;
+      --title) title="${2-}"; shift 2 ;;
       --spec)  spec_file="${2-}"; shift 2 ;;
       --) shift; break ;;
       -*) shift ;;
@@ -196,77 +195,25 @@ input::form() {
     esac
   done
 
-  local US=$'\x1f' RS=$'\x1e' GS=$'\x1d'
-  local raw
-  if [[ -n "$spec_file" ]]; then raw="$(<"$spec_file")"; else raw="$(cat)"; fi
-
-  local -a f_name f_type f_label f_param parts
-  local rec
-  for rec in "${(@ps:$RS:)raw}"; do
-    [[ -n "$rec" ]] || continue
-    parts=("${(@ps:$US:)rec}")
-    f_name+=("${parts[1]:-}")
-    f_type+=("${parts[2]:-line}")
-    f_label+=("${parts[3]:-}")
-    f_param+=("${parts[4]:-}")
-  done
-
-  local n=${#f_name}
-  if ((n < 2 || n > 5)); then
-    print -ru2 -- "input::form: need 2-5 fields, got $n"
-    return 2
+  # If no --spec, read stdin into a temp file (the binary requires a seekable
+  # file; it also cannot read from the pane's stdin reliably).
+  if [[ -z "$spec_file" ]]; then
+    _tmp_spec="$(mktemp "${TMPDIR:-/tmp}/iform.XXXXXX")" || return 1
+    cat > "$_tmp_spec"
+    spec_file="$_tmp_spec"
   fi
 
-  local -a answers
-  local i j q t p ans d pp mflag
-  local -a ch
-  local rc
-  for ((i = 1; i <= n; i++)); do
-    # --- tab/title chrome → stderr (the pane tty); stdout stays answers-only ---
-    {
-      printf '\033[2J\033[H'
-      printf '\n  %s▓▓▓ %s%s\n' "$THEME_H1" "$title" "$THEME_RESET"
-      printf '  %s%s%s\n\n  ' "$THEME_SEPARATOR" "$(theme::rule)" "$THEME_RESET"
-      for ((j = 1; j <= n; j++)); do
-        ((j > 1)) && printf '%s %s %s' "$THEME_COMMENT" "$THEME_ICON_TAB_SEP" "$THEME_RESET"
-        if ((j < i)); then
-          printf '%s%s %s%s' "$THEME_COMMENT" "$THEME_ICON_CHECK" "${f_label[$j]}" "$THEME_RESET"
-        elif ((j == i)); then
-          printf '%s%s %s%s' "$THEME_H2" "$THEME_ICON_ACTIVE" "${f_label[$j]}" "$THEME_RESET"
-        else
-          printf '%s%s%s' "$THEME_COMMENT" "${f_label[$j]}" "$THEME_RESET"
-        fi
-      done
-      printf '\n\n'
-    } >&2
+  local bin; bin="$(_input::bin)"
 
-    q="${f_label[$i]}" t="${f_type[$i]}" p="${f_param[$i]}"
-    ans="" rc=0
-    case "$t" in
-      line) ans="$(input::line "$q" --placeholder "$p")" || rc=$? ;;
-      text) ans="$(input::text "$q")" || rc=$? ;;
-      confirm)
-        d="yes"; [[ "$p" == no ]] && d="no"
-        ans="$(input::confirm "$q" --default "$d")" || rc=$?
-        ((rc == 130)) && return 130
-        rc=0
-        ;;
-      choose)
-        pp="$p" mflag=0
-        [[ "$pp" == multi:* ]] && { mflag=1; pp="${pp#multi:}"; }
-        ch=("${(@ps:$GS:)pp}")
-        if ((mflag)); then
-          ans="$(input::choose "$q" --multi -- "${ch[@]}")" || rc=$?
-          ans="${ans//$'\n'/$GS}"
-        else
-          ans="$(input::choose "$q" -- "${ch[@]}")" || rc=$?
-        fi
-        ;;
-      *) print -ru2 -- "input::form: unknown field type '$t'"; return 2 ;;
-    esac
-    ((rc != 0)) && return 130
-    answers+=("${f_name[$i]}${US}${ans}")
-  done
+  local -a flags=(--type form --spec "$spec_file")
+  [[ -n "$title" ]] && flags+=(--title "$title")
+  theme::args; flags+=("${AI_THEME_ARGS[@]}")
 
-  print -rn -- "${(pj:$RS:)answers}"
+  local answer rc=0
+  answer="$("$bin" "${flags[@]}")" || rc=$?
+
+  [[ -n "$_tmp_spec" ]] && rm -f -- "$_tmp_spec"
+
+  ((rc != 0)) && return 130
+  print -rn -- "$answer"
 }
