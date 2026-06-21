@@ -29,7 +29,7 @@ WORK_DIR="${WORK_ROOT}/work"
 REPO_DIR="${WORK_ROOT}/nerd-fonts"
 PRESCALE_DIR="${WORK_DIR}/prescale"
 FA_MAP="${WORK_DIR}/fa-map.json"
-SCALE_PY="${WORK_DIR}/_scale_fa.py"
+FONTBUILD_DIR="${SCRIPT_DIR}/fontbuild"
 PY_VENV_BIN="${WORK_ROOT}/.venv/bin/python"
 
 ICON_FILL=""
@@ -60,7 +60,7 @@ die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 [[ -f "${FA_MAP}" ]]      || die "fa-map.json missing (${FA_MAP}); run build-updated-font.sh first."
 [[ -d "${REPO_DIR}" ]]    || die "nerd-fonts checkout missing (${REPO_DIR}); run build-updated-font.sh first."
 [[ -d "${PRESCALE_DIR}" ]] || die "prescale stash missing (${PRESCALE_DIR}); run build-updated-font.sh first."
-[[ -f "${SCALE_PY}" ]]   || die "_scale_fa.py missing (${SCALE_PY}); run build-updated-font.sh first."
+[[ -d "${FONTBUILD_DIR}" ]] || die "fontbuild package missing (${FONTBUILD_DIR}); run build-updated-font.sh first."
 
 shopt -s nullglob
 PRISTINE=( "${PRESCALE_DIR}"/Symbols*.ttf )
@@ -76,7 +76,8 @@ done
 
 printf '\033[34m==\033[0m restoring pristine TTFs and normalizing to md/oct box (fill x%s dy=%sem custom_dy=%sem)\n' \
   "${ICON_FILL}" "${ICON_DY}" "${CUSTOM_DY}"
-"${PY_VENV_BIN}" "${SCALE_PY}" "${FA_MAP}" "${REPO_DIR}" "${ICON_FILL}" "${ICON_DY}" "${CUSTOM_DY}" "${BUILT[@]}"
+PYTHONPATH="${SCRIPT_DIR}" "${PY_VENV_BIN}" -m fontbuild scale \
+  "${FA_MAP}" "${REPO_DIR}" "${ICON_FILL}" "${ICON_DY}" "${CUSTOM_DY}" "${BUILT[@]}"
 
 if [[ "${INSTALL}" == "1" ]]; then
   case "$(uname -s)" in

@@ -6,8 +6,10 @@
     - run_onchange_after_*: chezmoi hashes this template's rendered
       output and re-runs the script whenever the hash changes.
     - We bake static FONT fingerprints into the rendered script as comments:
-        1. The SHA256 of build-updated-font.sh itself. Editing the
-           builder also triggers a rebuild on next apply.
+        1. The SHA256 of build-updated-font.sh itself, plus a digest of the
+           fontbuild/ Python package (every *.py: the donor/strip/scale/bleed
+           pipeline, glyphs.json, verify, emoji split, and FontForge merge).
+           Editing the builder OR any build step triggers a rebuild on next apply.
         2. The SHA256 of unicode-donor-glyphs.txt.
         3. A digest of custom icon inputs that affect the font itself:
            every *.svg and the optional metadata.json `code` pins.
@@ -40,19 +42,26 @@
 {{- $donorGlyphs := "" -}}
 {{- $customFontInputs := "" -}}
 {{- $customMetaSHA := "" -}}
+{{- $fontbuildSig := "" -}}
 {{- $fontStaticSig := "" -}}
 {{- if eq .chezmoi.os "darwin" -}}
   {{- $builderSHA = include "../custom-builds/nerd-fonts/build-updated-font.sh" | sha256sum -}}
   {{- $donorGlyphs = include "../custom-builds/nerd-fonts/unicode-donor-glyphs.txt" | sha256sum -}}
   {{- $customMetaSHA = include "../custom-builds/nerd-fonts/custom-icons/metadata.json" | sha256sum -}}
   {{- $customFontInputs = output "sh" "-c" (printf "python3 - %q <<'PY'\nimport hashlib, json, os, sys\nroot = sys.argv[1]\nh = hashlib.sha256()\nif os.path.isdir(root):\n    for dirpath, _, filenames in os.walk(root):\n        for name in sorted(filenames):\n            if not name.endswith('.svg'):\n                continue\n            path = os.path.join(dirpath, name)\n            rel = os.path.relpath(path, root)\n            h.update(b'svg\\0')\n            h.update(rel.encode('utf-8', 'surrogateescape'))\n            h.update(b'\\0')\n            with open(path, 'rb') as fh:\n                h.update(fh.read())\nmeta = os.path.join(root, 'metadata.json')\ntry:\n    with open(meta, 'r', encoding='utf-8') as fh:\n        data = json.load(fh)\n    icons = data.get('icons', data) if isinstance(data, dict) else {}\n    for key in sorted(k for k in icons if not str(k).startswith(('_', '$'))):\n        value = icons[key]\n        if isinstance(value, dict) and 'code' in value:\n            h.update(b'code\\0')\n            h.update(str(key).encode('utf-8'))\n            h.update(b'\\0')\n            h.update(str(value['code']).encode('utf-8'))\n            h.update(b'\\0')\nexcept Exception:\n    pass\nprint(h.hexdigest()[:16])\nPY" (joinPath .chezmoi.workingTree "custom-builds/nerd-fonts/custom-icons")) | trim -}}
-  {{- $fontStaticSig = printf "builder:%s\ndonor:%s\ncustom-font:%s\n" $builderSHA $donorGlyphs $customFontInputs | sha256sum -}}
+  {{- /* The build logic now lives in the fontbuild/ Python package (donor import,
+         emoji strip, icon scale, cell bleed, glyphs.json, verify, emoji split,
+         and the FontForge merge). Hash every fontbuild/*.py so editing a build
+         step triggers a font rebuild, exactly like editing build-updated-font.sh. */ -}}
+  {{- $fontbuildSig = output "sh" "-c" (printf "python3 - %q <<'PY'\nimport hashlib, os, sys\nroot = sys.argv[1]\nh = hashlib.sha256()\nif os.path.isdir(root):\n    for name in sorted(os.listdir(root)):\n        if not name.endswith('.py'):\n            continue\n        h.update(name.encode('utf-8'))\n        h.update(b'\\0')\n        with open(os.path.join(root, name), 'rb') as fh:\n            h.update(fh.read())\n        h.update(b'\\0')\nprint(h.hexdigest()[:16])\nPY" (joinPath .chezmoi.workingTree "custom-builds/nerd-fonts/fontbuild")) | trim -}}
+  {{- $fontStaticSig = printf "builder:%s\ndonor:%s\ncustom-font:%s\nfontbuild:%s\n" $builderSHA $donorGlyphs $customFontInputs $fontbuildSig | sha256sum -}}
 {{- end -}}
 #!/bin/bash
 # Symbols Nerd Font (custom build) — change-detection hook.
 #
 # Re-runs automatically when any of the static fingerprints below changes:
 #   builder script SHA256 : {{ if $builderSHA }}{{ $builderSHA }}{{ else }}(not macOS){{ end }}
+#   fontbuild pkg digest  : {{ if $fontbuildSig }}{{ $fontbuildSig }}{{ else }}(not macOS){{ end }}
 #   donor glyphs SHA256   : {{ if $donorGlyphs }}{{ $donorGlyphs }}{{ else }}(none / not macOS){{ end }}
 #   custom font inputs    : {{ if $customFontInputs }}{{ $customFontInputs }}{{ else }}(none / not macOS){{ end }}
 #   custom metadata SHA   : {{ if $customMetaSHA }}{{ $customMetaSHA }}{{ else }}(none / not macOS){{ end }}

@@ -3898,7 +3898,7 @@ U+1FBF9 # SEGMENTED DIGIT NINE
 #    Mono has none of these; TUIs draw borders with them, so they are
 #    imported and cell-normalized to the JBM cell for the embedded
 #    Blink mono font (see the legacy-computing normalization in
-#    _import_donor_glyphs.py). Primary donor: Noto Sans Symbols 2.
+#    fontbuild/donor.py). Primary donor: Noto Sans Symbols 2.
 U+1FB00 # BLOCK SEXTANT-1
 U+1FB01 # BLOCK SEXTANT-2
 U+1FB02 # BLOCK SEXTANT-12
