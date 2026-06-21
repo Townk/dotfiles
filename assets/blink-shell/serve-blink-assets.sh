@@ -19,7 +19,11 @@
 # accepts) returns "text/plain", so we force .js -> text/plain below.
 #
 # Usage:
-#   ./serve-blink-assets.sh [port]      # default port 8000
+#   ./serve-blink-assets.sh [port]      # default port 8000; if the requested
+#                                        # port is already listening, walks up
+#                                        # to the first free port and announces
+#                                        # the substitution (never silently
+#                                        # collides with another service).
 #
 # In Blink (Settings -> Appearance):
 #   Fonts  -> New Font  -> paste the printed .css URL -> save as "JetBrainsMono NF"
@@ -37,6 +41,32 @@ PORT="${1:-8000}"
 
 FONT_CSS="jetbrains-mono-nerd-font-custom.css"
 THEME_JS="catppuccin-mocha-custom.js"
+
+# If the requested port is already listening, walk upward to the first free one
+# so this script never silently collides with another service on the same port
+# (e.g. a colliding 127.0.0.1:8000 listener intercepted requests and Blink got
+# a 404 instead of the font). A caller-supplied port is honoured unless it is
+# taken; the chosen port is announced below so the import URLs stay correct.
+port_is_listening() {
+  # lsof on macOS, ss on Linux, netstat fallback.
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltn "sport = :$1" >/dev/null 2>&1
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | grep -Eq "[.:]$1[[:space:]]+.*LISTEN"
+  else
+    return 1  # can't tell — assume free rather than blocking forever
+  fi
+}
+REQUESTED_PORT="${PORT}"
+while port_is_listening "${PORT}"; do
+  PORT=$(( PORT + 1 ))
+done
+if [[ "${PORT}" != "${REQUESTED_PORT}" ]]; then
+  printf 'note: port %s already in use; serving on %s instead.\n\n' \
+    "${REQUESTED_PORT}" "${PORT}" >&2
+fi
 
 if [[ ! -d "${ASSETS_DIR}" ]]; then
   printf 'error: %s does not exist.\n' "${ASSETS_DIR}" >&2
