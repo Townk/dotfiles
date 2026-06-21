@@ -256,8 +256,8 @@ zj::text() {
   local -a reply PANE_REST; local PANE_TITLE
   _zj::split_pane_opts "$@"
   if ! zj::available; then input::text --title "$PANE_TITLE" "${PANE_REST[@]}"; return; fi
-  _zj::float --type text --borderless true --pane-width 57 --pane-height 12 \
-    "${reply[@]}" -- --title "$PANE_TITLE" "${PANE_REST[@]}"
+  _zj::float --type text --borderless true --pane-width 57 --pane-height 16 \
+    "${reply[@]}" -- --height 5 --title "$PANE_TITLE" "${PANE_REST[@]}"
 }
 
 zj::form() {
