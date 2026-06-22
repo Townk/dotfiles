@@ -232,6 +232,14 @@ classified="$(assist::triage_classify "$raw")"
 kind="${classified%%$US*}"
 payload="${classified#*$US}"
 
+# Defensive: re-running the failed command is never a useful triage result —
+# diagnosing a failure needs the capable agent. If the cheap pass merely echoed
+# the failed command back (whitespace-insensitive), escalate instead of typing it.
+if [[ "$kind" == command && -n "${REQ_COMMAND_TEXT:-}" \
+      && "${payload//[[:space:]]/}" == "${REQ_COMMAND_TEXT//[[:space:]]/}" ]]; then
+  kind="escalate"; payload="re-running the failed command is not a diagnosis"
+fi
+
 # ── 5. Dismiss the float ─────────────────────────────────────────────────────
 emit_close
 

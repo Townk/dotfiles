@@ -389,6 +389,11 @@ Failed command: ${REQ_COMMAND_TEXT:-(none)}
 Recent output:
 ${REQ_SCROLLBACK:-(none)}${kb_block}
 
+If a "Failed command" is shown above and the request is to explain why it failed
+or how to fix it, that is a DIAGNOSIS — return __ESCALATE__ so the full assistant
+can investigate the error. Never return a command for failure diagnosis, and
+NEVER propose re-running the failed command itself.
+
 For command usage and current flags, look it up with \`ai-assist-docs <cmd>\`
 (offline tldr + --help) rather than relying on memory. You MAY run read-only
 doc/inspection commands (tldr, --help, man, ls, cat). NEVER run stateful or

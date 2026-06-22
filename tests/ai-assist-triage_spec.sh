@@ -156,6 +156,33 @@ JSON
     The contents of file "$TEST_TMP/in.log" should include "close"
   End
 
+  It 'escalates when triage just echoes the failed command back (no re-run)'
+    # A failed command is in the request; the cheap pass unhelpfully returns it as
+    # a command. The orchestrator must escalate, never type the failed command back
+    # onto the prompt (which would just re-run the failure).
+    cat > "$TEST_TMP/req-failed.json" <<'JSON'
+{
+  "version": 1,
+  "kind": "error",
+  "origin": {"cwd":"/tmp/proj","project_root":"/tmp/proj","pane_id":"terminal_7"},
+  "command": {"text":"gg build","exit":1},
+  "scrollback":"BUILD FAILED",
+  "user_request":"",
+  "project":{"name":"proj","branch":"main"}
+}
+JSON
+    make_worker claude "__COMMAND__"$'\n'"gg build" 0
+    drain_in
+    feed "submit${US}why did this fail?"
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$TEST_TMP/req-failed.json" --origin-pane terminal_7
+    The status should be success
+    The contents of file "$TEST_TMP/zj-args" should include "new-pane"
+    The contents of file "$TEST_TMP/zj-args" should include "ai-assist-claude"
+    The contents of file "$TEST_TMP/zj-args" should not include "write-chars"
+    The contents of file "$TEST_TMP/in.log" should include "close"
+  End
+
   It 'escalates when the harness --triage exits 3 (no cheap pass)'
     make_worker claude "" 3
     drain_in

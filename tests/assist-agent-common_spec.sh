@@ -290,6 +290,7 @@ JSON
       The output should include 'command -v'
       The output should include 'NO markdown code fences'
       The output should include 'EXACTLY ONE'
+      The output should include 'DIAGNOSIS'
     End
   End
 
