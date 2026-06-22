@@ -222,4 +222,37 @@ JSON
     The contents of file "$TEST_TMP/zj-args" should include "ai-assist-render"
     The contents of file "$TEST_TMP/zj-args" should not include "write-chars"
   End
+
+  It 'escalate route removes the float OUT/IN fifo pair (orchestrator owns them)'
+    # The escalate worker uses its own fifos — the float pair is free, so the
+    # orchestrator must clean it up on every escalate branch (no orphans).
+    make_worker claude "__ESCALATE__: needs full help" 0
+    drain_in
+    feed "submit${US}do the thing"
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$REQ" --origin-pane terminal_7
+    The status should be success
+    The contents of file "$TEST_TMP/in.log" should include "close"
+    # Both fifos must be gone after the orchestrator exits.
+    The path "$OUT_FIFO" should not be exist
+    The path "$IN_FIFO" should not be exist
+  End
+
+  It 'answer route passes --cleanup-fifos to ai-assist-render and does not rm the pair itself'
+    # The docked render pane outlives the orchestrator and must clean the fifos
+    # when it exits. The orchestrator must NOT rm them (would yank them from
+    # under the running render). Instead it delegates via --cleanup-fifos.
+    make_worker claude "__ANSWER__"$'\n'"Use mogrify." 0
+    drain_in
+    feed "submit${US}how to resize images"
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$REQ" --origin-pane terminal_7
+    The status should be success
+    The contents of file "$TEST_TMP/in.log" should include "close"
+    # render must be invoked with --cleanup-fifos so the pane cleans up on exit.
+    The contents of file "$TEST_TMP/zj-args" should include "--cleanup-fifos"
+    # The orchestrator must NOT have removed the fifos (render owns them now).
+    The path "$OUT_FIFO" should be exist
+    The path "$IN_FIFO" should be exist
+  End
 End

@@ -197,6 +197,7 @@ if [[ -z "$harness" ]]; then
   # No non-interactive harness → skip the cheap pass, escalate.
   emit_status "Starting the assistant…"
   emit_close
+  cleanup_fifos
   route_escalate "no harness could be resolved without a picker"
   exit 0
 fi
@@ -214,6 +215,7 @@ if (( trc == 3 )) || [[ -z "${raw//[[:space:]]/}" ]]; then
   # No cheap pass, or empty output → escalate (safe default).
   emit_status "Starting the assistant…"
   emit_close
+  cleanup_fifos
   route_escalate "triage produced no usable result"
   exit 0
 fi
@@ -239,13 +241,14 @@ case "$kind" in
     else
       # Origin pane missing → render the command in the docked pager instead of
       # writing to a prompt we don't have.
-      spawn_docked --harness "$harness" -- printf '%s\n' "$payload"
+      spawn_docked --cleanup-fifos --harness "$harness" -- printf '%s\n' "$payload"
     fi
     ;;
   answer)
-    spawn_docked --harness "$harness" -- printf '%s\n' "$payload"
+    spawn_docked --cleanup-fifos --harness "$harness" -- printf '%s\n' "$payload"
     ;;
   escalate|*)
+    cleanup_fifos
     route_escalate "$payload"
     ;;
 esac

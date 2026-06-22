@@ -34,21 +34,25 @@ shell_fifo=""
 project_root=""
 # Caller-provided fifo paths (Phase D orchestrator reuse). When set, render uses
 # them instead of mktemp-ing and does NOT remove them on exit (caller owns them).
+# Exception: when --cleanup-fifos is passed, the caller delegates cleanup to this
+# pane — provided fifos are then added to the EXIT trap's removal set.
 provided_in_fifo=""
 provided_actions_fifo=""
 provided_shell_fifo=""
+cleanup_provided_fifos=0
 while (($#)); do
   case "$1" in
-    --harness)       harness="${2:-agent}"; shift 2 ;;
-    --origin-pane)   origin_pane="${2:-}"; shift 2 ;;
-    --over-ssh)      over_ssh=1; shift ;;
-    --shell-env)     shell_env="${2:-}"; shift 2 ;;
-    --shell-cwd)     shell_cwd="${2:-}"; shift 2 ;;
-    --shell-bin)     shell_bin="${2:-}"; shift 2 ;;
-    --project-root)  project_root="${2:-}"; shift 2 ;;
-    --input-fifo)    provided_in_fifo="${2:-}"; shift 2 ;;
-    --actions-fifo)  provided_actions_fifo="${2:-}"; shift 2 ;;
-    --shell-fifo)    provided_shell_fifo="${2:-}"; shift 2 ;;
+    --harness)        harness="${2:-agent}"; shift 2 ;;
+    --origin-pane)    origin_pane="${2:-}"; shift 2 ;;
+    --over-ssh)       over_ssh=1; shift ;;
+    --shell-env)      shell_env="${2:-}"; shift 2 ;;
+    --shell-cwd)      shell_cwd="${2:-}"; shift 2 ;;
+    --shell-bin)      shell_bin="${2:-}"; shift 2 ;;
+    --project-root)   project_root="${2:-}"; shift 2 ;;
+    --input-fifo)     provided_in_fifo="${2:-}"; shift 2 ;;
+    --actions-fifo)   provided_actions_fifo="${2:-}"; shift 2 ;;
+    --shell-fifo)     provided_shell_fifo="${2:-}"; shift 2 ;;
+    --cleanup-fifos)  cleanup_provided_fifos=1; shift ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -130,9 +134,21 @@ fi
 
 # Cleanup trap: kill broker + agent shell; remove ONLY the fifos this process
 # created (tracked in _owned_fifos). Caller-provided fifos are left in place so
-# the orchestrator can reuse them. Also removes the secrets env-snapshot
-# ($shell_env) so it does not outlive this pane.
-trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$shell_pid" ]] && kill "$shell_pid" 2>/dev/null; (( ${#_owned_fifos[@]} )) && rm -f -- "${_owned_fifos[@]}"; [[ -n "$shell_env" ]] && rm -f -- "$shell_env"' EXIT INT TERM
+# the orchestrator can reuse them — UNLESS --cleanup-fifos was passed, in which
+# case those provided fifos are also removed (the caller delegated ownership).
+# Also removes the secrets env-snapshot ($shell_env) so it does not outlive this pane.
+_cleanup_render() {
+  [[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null
+  [[ -n "$shell_pid" ]] && kill "$shell_pid" 2>/dev/null
+  (( ${#_owned_fifos[@]} )) && rm -f -- "${_owned_fifos[@]}"
+  if (( cleanup_provided_fifos )); then
+    [[ -n "$provided_in_fifo" ]]      && rm -f -- "$provided_in_fifo" 2>/dev/null
+    [[ -n "$provided_actions_fifo" ]] && rm -f -- "$provided_actions_fifo" 2>/dev/null
+    [[ -n "$provided_shell_fifo" ]]   && rm -f -- "$provided_shell_fifo" 2>/dev/null
+  fi
+  [[ -n "$shell_env" ]] && rm -f -- "$shell_env"
+}
+trap '_cleanup_render' EXIT INT TERM
 
 # Agent's own shell (Phase C1): a real shell seeded with the origin env + cwd,
 # reachable by the harness's `ai-assist-run` through AI_ASSIST_SHELL_FIFO. Owned
