@@ -1,20 +1,25 @@
 #!/usr/bin/env zsh
-# ai-assist-action-broker — reads <kind>US<payload>RS action records the pager
-# writes to a FIFO and performs them: `copy` (clipboard, or OSC 52 over SSH) or
-# `play` (type the block into the origin pane and run it). Spawned by
-# ai-assist-render, which owns the FIFO lifecycle and kills this on pane exit.
-# Self-contained (runs in the bare docked pane): no library sourcing, zellij by
-# absolute path. Every action is best-effort — a missing tool is a silent no-op,
-# never a crash.
+# ai-assist-action-broker — reads <kind>US<id>US<payload>RS action records the
+# pager writes to a FIFO and performs them: `copy` (clipboard, or OSC 52 over
+# SSH), `play` (type the block into the origin pane and run it), or `run`
+# (execute via ai-assist-run in the agent shell and emit a result record).
+# Spawned by ai-assist-render, which owns the FIFO lifecycle and kills this on
+# pane exit. Self-contained (runs in the bare docked pane): no library sourcing,
+# zellij by absolute path. Every action is best-effort — a missing tool is a
+# silent no-op, never a crash.
 set -uo pipefail
 
+US=$'\x1f' RS=$'\x1e'
 fifo="" origin="" over_ssh=0
+results="" shell_fifo=""
 while (($#)); do
   case "$1" in
-    --fifo)        fifo="${2:-}"; shift 2 ;;
-    --origin-pane) origin="${2:-}"; shift 2 ;;
-    --over-ssh)    over_ssh=1; shift ;;
-    *)             shift ;;
+    --fifo)          fifo="${2:-}"; shift 2 ;;
+    --origin-pane)   origin="${2:-}"; shift 2 ;;
+    --over-ssh)      over_ssh=1; shift ;;
+    --results-fifo)  results="${2:-}"; shift 2 ;;
+    --shell-fifo)    shell_fifo="${2:-}"; shift 2 ;;
+    *)               shift ;;
   esac
 done
 
@@ -56,14 +61,36 @@ broker::play() {
   "$zj" action write --pane-id "$origin" 13 2>/dev/null                  # 13 = CR = Enter
 }
 
-# broker::dispatch — parse one record and route it.
+# broker::run_block — execute a block in the agent shell via ai-assist-run, then
+# emit a result record (id/exit/logpath) on the results FIFO. Best-effort.
+broker::run_block() {
+  local id="$1" payload="$2"
+  [[ -n "$shell_fifo" ]] || return 0
+  local run="${AI_ASSIST_RUN_BIN:-}"
+  if [[ -z "$run" ]]; then
+    for c in "$HOME/.local/libexec/ai-assist-run" "${commands[ai-assist-run]:-}"; do
+      [[ -n "$c" && -x "$c" ]] && { run="$c"; break; }
+    done
+  fi
+  [[ -n "$run" && -x "$run" ]] || return 0
+  local log; log="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-run.XXXXXX")"
+  AI_ASSIST_SHELL_FIFO="$shell_fifo" "$run" --id "$id" -- "$payload" >"$log" 2>&1
+  local code=$?
+  [[ -n "$results" ]] && print -rn -- "${id}${US}${code}${US}${log}${RS}" >> "$results"
+}
+
+# broker::dispatch — parse one 3-field record and route it.
 broker::dispatch() {
   local rec="$1"
-  local kind="${rec%%$'\x1f'*}" payload="${rec#*$'\x1f'}"
-  payload="${payload%$'\x1e'}"   # strip trailing RS if caller included it
+  local kind="${rec%%${US}*}"
+  local rest="${rec#*${US}}"
+  local id="${rest%%${US}*}"
+  local payload="${rest#*${US}}"
+  payload="${payload%${RS}}"
   case "$kind" in
     copy) broker::copy "$payload" ;;
     play) broker::play "$payload" ;;
+    run)  broker::run_block "$id" "$payload" ;;
   esac
 }
 
