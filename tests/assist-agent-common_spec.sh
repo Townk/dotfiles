@@ -113,6 +113,20 @@ JSON
     End
   End
 
+  Describe 'assist::system_prompt — playbook authoring'
+    It 'instructs the agent to emit a literate playbook with tagged blocks'
+      REQ_USER_REQUEST="why did the build fail"; REQ_PROJECT_ROOT="/tmp/p"
+      kb="$(mktemp)"; : > "$kb"
+      When call assist::system_prompt "$kb"
+      The output should include 'Goal'
+      The output should include 'Why it happens'
+      The output should include 'Fix steps'
+      The output should include 'id='
+      The output should include 'needs='
+      The output should include 'static'
+    End
+  End
+
   Describe 'assist::spawn_pane'
     It 'invokes zellij new-pane to the right with the cwd and the command'
       export ZELLIJ=1
