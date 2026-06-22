@@ -81,4 +81,25 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/results.out" should include "fix"
     The contents of file "$TEST_TMP/results.out" should include "$(printf '\x1f')0$(printf '\x1f')"
   End
+
+  It 'view-diff opens a zellij floating pane on the patch'
+    load_broker
+    broker::dispatch "view-diff${US}d1${US}--- a\n+++ b${RS}"
+    The contents of file "$TEST_TMP/zj.log" should include "new-pane"
+    The contents of file "$TEST_TMP/zj.log" should include "--floating"
+  End
+
+  It 'apply-diff runs git apply via ai-assist-run and writes a result record'
+    load_broker
+    results="$TEST_TMP/results.fifo"; mkfifo "$results"
+    shell_fifo="$TEST_TMP/shell.fifo"; mkfifo "$shell_fifo"
+    printf '#!/usr/bin/env zsh\nprint -r -- "$*" >> "%s/ranlog"\nexit 0\n' "$TEST_TMP" > "$TEST_TMP/airun"
+    chmod +x "$TEST_TMP/airun"; AI_ASSIST_RUN_BIN="$TEST_TMP/airun"
+    ( cat "$results" > "$TEST_TMP/results.out" ) &
+    broker::dispatch "apply-diff${US}d2${US}--- a\n+++ b${RS}"
+    sleep 0.1
+    The contents of file "$TEST_TMP/results.out" should include "d2"
+    The path "$TEST_TMP/airun" should be exist
+    The contents of file "$TEST_TMP/ranlog" should include "git apply"
+  End
 End

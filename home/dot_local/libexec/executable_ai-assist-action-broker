@@ -36,6 +36,13 @@ for _c in pbcopy wl-copy "xclip -selection clipboard"; do
   command -v "${_c%% *}" >/dev/null 2>&1 && { clip="$_c"; break; }
 done
 
+# Diff viewer (delta if present, else less).
+viewer=""
+for _v in "${commands[delta]:-}" /opt/homebrew/bin/delta /usr/local/bin/delta; do
+  [[ -n "$_v" && -x "$_v" ]] && { viewer="$_v --paging=always"; break; }
+done
+[[ -n "$viewer" ]] || viewer="less"
+
 # broker::copy — local clipboard, or OSC 52 to the tty over SSH.
 broker::copy() {
   local payload="$1"
@@ -59,6 +66,36 @@ broker::play() {
   "$zj" action write-chars --pane-id "$origin" -- "$payload" 2>/dev/null
   "$zj" action write --pane-id "$origin" 27 91 50 48 49 126 2>/dev/null  # ESC[201~ paste-end
   "$zj" action write --pane-id "$origin" 13 2>/dev/null                  # 13 = CR = Enter
+}
+
+# broker::view_diff — open the patch in a floating zellij pane via the viewer.
+broker::view_diff() {
+  local id="$1" diff="$2"
+  [[ -n "$zj" ]] || return 0
+  local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-diff.XXXXXX")"
+  print -rn -- "$diff" > "$patch"
+  "$zj" action new-pane --floating --close-on-exit --name "diff:$id" \
+    -- ${(z)viewer} "$patch" 2>/dev/null || true
+}
+
+# broker::apply_diff — apply a patch in the agent shell via ai-assist-run, then
+# emit a result record (id/exit/logpath) on the results FIFO. Best-effort.
+broker::apply_diff() {
+  local id="$1" diff="$2"
+  [[ -n "$shell_fifo" ]] || return 0
+  local run="${AI_ASSIST_RUN_BIN:-}"
+  if [[ -z "$run" ]]; then
+    for c in "$HOME/.local/libexec/ai-assist-run" "${commands[ai-assist-run]:-}"; do
+      [[ -n "$c" && -x "$c" ]] && { run="$c"; break; }
+    done
+  fi
+  [[ -n "$run" && -x "$run" ]] || return 0
+  local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-apply.XXXXXX")"
+  print -rn -- "$diff" > "$patch"
+  local log; log="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-run.XXXXXX")"
+  AI_ASSIST_SHELL_FIFO="$shell_fifo" "$run" --id "$id" -- "git apply -- ${(q)patch}" >"$log" 2>&1
+  local code=$?
+  [[ -n "$results" ]] && print -rn -- "${id}${US}${code}${US}${log}${RS}" >> "$results"
 }
 
 # broker::run_block — execute a block in the agent shell via ai-assist-run, then
@@ -88,9 +125,11 @@ broker::dispatch() {
   local payload="${rest#*${US}}"
   payload="${payload%${RS}}"
   case "$kind" in
-    copy) broker::copy "$payload" ;;
-    play) broker::play "$payload" ;;
-    run)  broker::run_block "$id" "$payload" ;;
+    copy)       broker::copy "$payload" ;;
+    play)       broker::play "$payload" ;;
+    run)        broker::run_block "$id" "$payload" ;;
+    view-diff)  broker::view_diff "$id" "$payload" ;;
+    apply-diff) broker::apply_diff "$id" "$payload" ;;
   esac
 }
 
