@@ -101,22 +101,25 @@ if [ "$test_rc" -ne 0 ]; then
   exit "$test_rc"
 fi
 
-# 8. Delete the agent BRANCH while still inside master-work (HEAD is master
-#    here, so `git branch -d` sees the branch as merged and succeeds). Do
-#    this BEFORE removing master-work — if you cd to the live tree first and
-#    the live tree isn't on master, `-d` refuses ("not fully merged") even
-#    though the branch IS on master.
-git branch -d work-on-<silo>-<suffix>
-
-# 9. Remove master-work. Commits are on master now.
-git worktree remove "$WT_ROOT/master-work"
-
-# 10. Remove the agent WORKTREE. We can't remove the worktree we're no
-#     longer standing in (we're in master-work's parent after step 9, but
-#     the agent worktree is a sibling) — so this is safe. cd to $WT_ROOT
-#     first to be explicit.
+# 8. Remove the agent WORKTREE first. This releases the branch checkout
+#    so step 9 can delete it. We're standing in master-work (a sibling of
+#    the agent worktree under $WT_ROOT), so removal is safe. cd to $WT_ROOT
+#    to be explicit about not being inside the worktree we're removing.
 cd "$WT_ROOT"
 git worktree remove "$WT_ROOT/work-on-<silo>-<suffix>"
+
+# 9. Delete the agent BRANCH. Still inside master-work's git context (HEAD
+#    is master), so `git branch -d` sees the branch as merged and succeeds.
+#    Two constraints make the order matter: (a) `-d` refuses if the branch
+#    is checked out in any worktree — so the agent worktree (step 8) must be
+#    gone first; (b) `-d` refuses if the branch isn't merged into the current
+#    HEAD — so this must run with HEAD=master (i.e. from master-work, NOT
+#    from the live tree which may be on a feature branch).
+cd "$WT_ROOT/master-work"
+git branch -d work-on-<silo>-<suffix>
+
+# 10. Remove master-work. Commits are on master now.
+git worktree remove "$WT_ROOT/master-work"
 
 # 11. Release the integration lock (fd 9 closes).
 exec 9>&-
