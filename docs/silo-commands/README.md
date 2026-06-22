@@ -142,6 +142,34 @@ symlinks commit normally; chezmoi ignores dot-prefixed dirs, so no
 the pi/Claude-Code **compatibility subset** (`description` + `argument-hint`
 frontmatter, `$ARGUMENTS`, markdown body) — no tool-specific features.
 
+### Skills sharing mechanism — pi + Claude Code
+
+`reconcile` and `validate` are **Agent Skills** (a directory with a
+`SKILL.md` carrying `name` + `description` frontmatter), not slash-command
+prompt templates. Each canonical skill directory lives once in
+`docs/silo-commands/` and is symlinked into both tools' skill directories so
+pi auto-discovers it under `.pi/skills/` and Claude Code auto-discovers it
+under `.claude/skills/` (where it also exposes a `/reconcile` / `/validate`
+command):
+
+```
+docs/silo-commands/reconcile/SKILL.md          ← canonical skill (committed)
+docs/silo-commands/validate/SKILL.md            ← canonical skill (committed)
+.pi/skills/reconcile      → ../../docs/silo-commands/reconcile
+.pi/skills/validate       → ../../docs/silo-commands/validate
+.claude/skills/reconcile  → ../../docs/silo-commands/reconcile
+.claude/skills/validate   → ../../docs/silo-commands/validate
+```
+
+A compat symlink at each old path —
+`docs/silo-commands/reconcile.md → reconcile/SKILL.md` (and `validate.md`)
+— keeps the `follow docs/silo-commands/<name>.md` references in the
+`work-on-<silo>.md` templates (and the links in this README) resolving to the
+canonical skill content, so the templates didn't need editing. The skill
+directory name matches the `name` frontmatter field, as the Agent Skills
+standard (and Claude Code) requires; pi is lenient about that but the match
+is kept for portability. `tests/silo-skills_spec.sh` pins this contract.
+
 ## Reference docs
 
 - [`../chezmoi-silo-map.md`](../chezmoi-silo-map.md) — full silo &
@@ -150,6 +178,9 @@ frontmatter, `$ARGUMENTS`, markdown body) — no tool-specific features.
   the `/work-on-*` names are established as the canonical IDs.)
 - [`../chezmoi-unique-features.md`](../chezmoi-unique-features.md) — the
   90-feature evidence catalog the silos were derived from.
-- [`reconcile.md`](reconcile.md) — the `flock`-gated integration procedure.
+- [`reconcile.md`](reconcile.md) — the `flock`-gated integration procedure
+  (now an Agent Skill: `reconcile/SKILL.md`; `reconcile.md` is a compat
+  symlink).
 - [`validate.md`](validate.md) — sandbox self-test (Mode A) + agent-initiated
-  UX session (Mode B).
+  UX session (Mode B) (now an Agent Skill: `validate/SKILL.md`; `validate.md`
+  is a compat symlink).
