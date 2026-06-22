@@ -32,15 +32,27 @@ shell_bin=""
 shell_pid=""
 shell_fifo=""
 project_root=""
+# Caller-provided fifo paths (Phase D orchestrator reuse). When set, render uses
+# them instead of mktemp-ing and does NOT remove them on exit (caller owns them).
+# Exception: when --cleanup-fifos is passed, the caller delegates cleanup to this
+# pane — provided fifos are then added to the EXIT trap's removal set.
+provided_in_fifo=""
+provided_actions_fifo=""
+provided_shell_fifo=""
+cleanup_provided_fifos=0
 while (($#)); do
   case "$1" in
-    --harness)       harness="${2:-agent}"; shift 2 ;;
-    --origin-pane)   origin_pane="${2:-}"; shift 2 ;;
-    --over-ssh)      over_ssh=1; shift ;;
-    --shell-env)     shell_env="${2:-}"; shift 2 ;;
-    --shell-cwd)     shell_cwd="${2:-}"; shift 2 ;;
-    --shell-bin)     shell_bin="${2:-}"; shift 2 ;;
-    --project-root)  project_root="${2:-}"; shift 2 ;;
+    --harness)        harness="${2:-agent}"; shift 2 ;;
+    --origin-pane)    origin_pane="${2:-}"; shift 2 ;;
+    --over-ssh)       over_ssh=1; shift ;;
+    --shell-env)      shell_env="${2:-}"; shift 2 ;;
+    --shell-cwd)      shell_cwd="${2:-}"; shift 2 ;;
+    --shell-bin)      shell_bin="${2:-}"; shift 2 ;;
+    --project-root)   project_root="${2:-}"; shift 2 ;;
+    --input-fifo)     provided_in_fifo="${2:-}"; shift 2 ;;
+    --actions-fifo)   provided_actions_fifo="${2:-}"; shift 2 ;;
+    --shell-fifo)     provided_shell_fifo="${2:-}"; shift 2 ;;
+    --cleanup-fifos)  cleanup_provided_fifos=1; shift ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -66,11 +78,15 @@ cols=$(tput cols 2>/dev/null) || cols=0
 ((cols > 0)) || cols=100
 typeset -i body=$((cols > 6 ? cols - 2 : 80))
 
-# Actions FIFO + broker: when we know the originating pane, create a FIFO, spawn
-# the broker (it performs copy/play), and hand the pager --actions-fifo. The
-# broker's lifetime is this pane's — the EXIT trap below kills it and removes the
-# FIFO. Resolve the broker by absolute path (the docked pane's PATH lacks
-# ~/.local/libexec); AI_ASSIST_BROKER_BIN overrides for tests.
+# Ownership tracking: fifos this process mktemp-ed are appended here and removed
+# by the EXIT trap. Caller-provided fifos are NOT appended — the caller owns them.
+typeset -a _owned_fifos=()
+
+# Actions FIFO + broker: when we know the originating pane, create a FIFO (or use
+# a caller-provided one), spawn the broker (it performs copy/play), and hand the
+# pager --actions-fifo. The broker's lifetime is this pane's — the EXIT trap below
+# kills it and removes any mktemp'd FIFO. Resolve the broker by absolute path (the
+# docked pane's PATH lacks ~/.local/libexec); AI_ASSIST_BROKER_BIN overrides for tests.
 fifo=""
 broker_pid=""
 if [[ -n "$origin_pane" ]]; then
@@ -83,23 +99,56 @@ if [[ -n "$origin_pane" ]]; then
     done
   fi
   if [[ -n "$broker" && -x "$broker" ]]; then
-    fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-act.XXXXXX")"
-    if mkfifo -m 600 "$fifo" 2>/dev/null; then
+    if [[ -n "$provided_actions_fifo" ]]; then
+      fifo="$provided_actions_fifo"
+      # Caller-provided — not owned; do not append to _owned_fifos.
+    else
+      fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-act.XXXXXX")"
+      if mkfifo -m 600 "$fifo" 2>/dev/null; then
+        _owned_fifos+=("$fifo")
+      else
+        fifo=""
+      fi
+    fi
+    if [[ -n "$fifo" ]]; then
       "$broker" --fifo "$fifo" --origin-pane "$origin_pane" ${over_ssh:+--over-ssh} &
       broker_pid=$!
-    else
-      fifo=""
     fi
   fi
+elif [[ -n "$provided_actions_fifo" ]]; then
+  # Caller provided an actions fifo but no --origin-pane: honour the path so the
+  # pager can still receive actions, but don't start the broker.
+  fifo="$provided_actions_fifo"
 fi
 
 # Input FIFO: the harness streams stdout+stderr into this; the pager reads from it.
-in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
-mkfifo -m 600 "$in_fifo"
+# Use caller-provided path when given; otherwise mktemp a new one (and own it).
+if [[ -n "$provided_in_fifo" ]]; then
+  in_fifo="$provided_in_fifo"
+  # Caller-provided — not owned; do not append to _owned_fifos.
+else
+  in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
+  mkfifo -m 600 "$in_fifo"
+  _owned_fifos+=("$in_fifo")
+fi
 
-# Cleanup trap: remove input FIFO + actions FIFO + kill broker + kill agent shell on exit/signal.
+# Cleanup trap: kill broker + agent shell; remove ONLY the fifos this process
+# created (tracked in _owned_fifos). Caller-provided fifos are left in place so
+# the orchestrator can reuse them — UNLESS --cleanup-fifos was passed, in which
+# case those provided fifos are also removed (the caller delegated ownership).
 # Also removes the secrets env-snapshot ($shell_env) so it does not outlive this pane.
-trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$shell_pid" ]] && kill "$shell_pid" 2>/dev/null; [[ -n "$fifo" ]] && rm -f -- "$fifo"; [[ -n "$shell_fifo" ]] && rm -f -- "$shell_fifo"; [[ -n "$shell_env" ]] && rm -f -- "$shell_env"; rm -f -- "$in_fifo"' EXIT INT TERM
+_cleanup_render() {
+  [[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null
+  [[ -n "$shell_pid" ]] && kill "$shell_pid" 2>/dev/null
+  (( ${#_owned_fifos[@]} )) && rm -f -- "${_owned_fifos[@]}"
+  if (( cleanup_provided_fifos )); then
+    [[ -n "$provided_in_fifo" ]]      && rm -f -- "$provided_in_fifo" 2>/dev/null
+    [[ -n "$provided_actions_fifo" ]] && rm -f -- "$provided_actions_fifo" 2>/dev/null
+    [[ -n "$provided_shell_fifo" ]]   && rm -f -- "$provided_shell_fifo" 2>/dev/null
+  fi
+  [[ -n "$shell_env" ]] && rm -f -- "$shell_env"
+}
+trap '_cleanup_render' EXIT INT TERM
 
 # Agent's own shell (Phase C1): a real shell seeded with the origin env + cwd,
 # reachable by the harness's `ai-assist-run` through AI_ASSIST_SHELL_FIFO. Owned
@@ -107,7 +156,14 @@ trap '[[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null; [[ -n "$shell_pi
 if [[ -n "$shell_cwd" || -n "$shell_env" ]]; then
   : "${shell_bin:=$HOME/.local/libexec/ai-assist-shell}"
   if [[ -x "$shell_bin" ]]; then
-    shell_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-shell.XXXXXX")"; mkfifo -m 600 "$shell_fifo"
+    if [[ -n "$provided_shell_fifo" ]]; then
+      shell_fifo="$provided_shell_fifo"
+      # Caller-provided — not owned.
+    else
+      shell_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-shell.XXXXXX")"
+      mkfifo -m 600 "$shell_fifo"
+      _owned_fifos+=("$shell_fifo")
+    fi
     typeset -a shell_flags=(--cmd-fifo "$shell_fifo")
     [[ -n "$shell_env" ]] && shell_flags+=(--env-file "$shell_env")
     [[ -n "$shell_cwd" ]] && shell_flags+=(--cwd "$shell_cwd")

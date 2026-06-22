@@ -1,0 +1,276 @@
+#!/usr/bin/env zsh
+# ai-assist-triage — the detached triage orchestrator/router (Phase D).
+#
+# Spawned disowned by ai-assist-summon so the ZLE widget returns instantly. It
+# owns the request lifecycle from the moment the float (ai-assist-input) is up:
+#
+#   1. Read ONE framed record off the OUT fifo the float writes:
+#        submit␟<value>␞   the user pressed Enter
+#        cancel␞           the user pressed Esc → dismiss, do nothing
+#   2. Finalize request.json with the submitted value.
+#   3. Resolve the harness NON-INTERACTIVELY (env → session pin → sole probed).
+#      Several available + none pinned → no cheap pass possible without the fzf
+#      picker → escalate (safe default; never worse than today).
+#   4. Drive the float's spinner with status␟<label>␞ records on the IN fifo,
+#      run the harness's cheap `ai-assist-<h> --triage` pass, classify it.
+#   5. Send exactly one close␞ to the IN fifo → the float dismisses.
+#   6. Route — REUSING THE SAME TWO FIFOS for any docked pane:
+#        command  → zellij action write-chars --pane-id <origin> (NO trailing CR)
+#        answer   → docked pane: ai-assist-render renders the prose
+#        escalate → docked pane: ai-assist-render runs the capable worker
+#
+# Error posture: any triage failure (no cheap pass / exit 3 / empty / unknown
+# harness) routes to ESCALATE. Origin-pane missing → a command renders in the
+# docked pager instead of being typed at the prompt.
+#
+# FIFO contracts honoured (from ai-assist-input, Task 1):
+#  • the binary's writeOutFifo blocks until a reader opens OUT → we open OUT
+#    read-side (exec {fd}<>) BEFORE reading, so it is always readable.
+#  • the binary's readInFifo opens IN fresh per record → we hold IN open
+#    read-write (exec {fd}<>) so status/close writes never block on a reader.
+set -uo pipefail
+
+source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
+
+US=$'\x1f'   # field separator inside a record
+RS=$'\x1e'   # record terminator
+
+out_fifo="" in_fifo="" request="" origin_pane=""
+while (($#)); do
+  case "$1" in
+    --out-fifo)    out_fifo="${2:-}"; shift 2 ;;
+    --in-fifo)     in_fifo="${2:-}"; shift 2 ;;
+    --request)     request="${2:-}"; shift 2 ;;
+    --origin-pane) origin_pane="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$out_fifo" && -n "$in_fifo" && -n "$request" ]] || \
+  die "usage: ai-assist-triage --out-fifo F --in-fifo G --request R [--origin-pane P]"
+
+# ── IN fifo: hold it open read-write so status/close writes never block ───────
+# (the binary opens IN fresh per record; an O_WRONLY open with no reader would
+# block, and a write between the binary's per-record opens could SIGPIPE — the
+# read-write hold sidesteps both.)
+exec {in_fd}<>"$in_fifo"
+
+emit_status() { print -rn -- "status${US}$1${RS}" >&$in_fd; }
+emit_close()  { print -rn -- "close${RS}" >&$in_fd; }
+
+# A single cleanup: the orchestrator owns the fifos for the whole request, so we
+# remove them when we are truly done. The docked-pane branches pass the SAME
+# fifos to ai-assist-render (which is told NOT to remove caller-provided fifos);
+# but those branches spawn the pane and return immediately, so we must NOT delete
+# the fifos out from under the just-spawned pager. Hence: only the no-pane paths
+# (command-at-prompt, cancel) clean up here; the docked-pane paths leave the
+# fifos for the pager's own pane lifetime (a stale fifo in TMPDIR is harmless).
+cleanup_fifos() { rm -f -- "$out_fifo" "$in_fifo" 2>/dev/null || true; }
+
+# ── 1. Read one record off the OUT fifo ──────────────────────────────────────
+# Open OUT read-side FIRST (read-write so we never see premature EOF), so the
+# binary's writeOutFifo unblocks the instant it opens the write end.
+exec {out_fd}<>"$out_fifo"
+rec=""
+IFS= read -r -d "$RS" -u $out_fd rec || true
+rec="${rec%$RS}"
+
+verb="${rec%%$US*}"
+value=""
+[[ "$rec" == *"$US"* ]] && value="${rec#*$US}"
+
+if [[ "$verb" == cancel || "$verb" != submit ]]; then
+  # Cancel (or anything unexpected): dismiss the float, route nothing, clean up.
+  emit_close
+  cleanup_fifos
+  exit 0
+fi
+
+# ── 2. Finalize the request with the submitted value ─────────────────────────
+emit_status "Reading request…"
+if command -v jq >/dev/null 2>&1 && [[ -s "$request" ]]; then
+  tmp="$(mktemp "${request:h}/request.XXXXXX")" 2>/dev/null || tmp="${request}.tmp"
+  if jq --arg u "$value" '.user_request = $u' "$request" > "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$request"
+  else
+    rm -f -- "$tmp" 2>/dev/null || true
+  fi
+fi
+
+# ── Harness discovery + non-interactive resolution ───────────────────────────
+# Mirror the dispatcher: workers are the `ai-assist-<h>` siblings of the
+# `ai-assist` dispatcher. Resolve the dispatcher's dir from PATH (overridable by
+# AI_ASSIST_BIN_DIR for tests).
+bin_dir="${AI_ASSIST_BIN_DIR:-}"
+if [[ -z "$bin_dir" ]]; then
+  disp="$(command -v -- ai-assist 2>/dev/null)" || disp=""
+  [[ -n "$disp" ]] && bin_dir="${disp:A:h}"
+fi
+[[ -n "$bin_dir" ]] || bin_dir="$HOME/.local/bin"
+
+worker_path() { print -r -- "$bin_dir/ai-assist-$1"; }
+
+typeset -a HARNESSES=()
+for w in "$bin_dir"/ai-assist-*(N-.); do
+  [[ -x "$w" ]] || continue
+  HARNESSES+=("${${w:t}#ai-assist-}")
+done
+
+is_harness() { local n="$1" h; for h in "${HARNESSES[@]}"; do [[ "$h" == "$n" ]] && return 0; done; return 1; }
+
+# resolve_harness — print the chosen harness on stdout, or nothing if it would
+# need the interactive picker (→ caller escalates). Precedence: explicit env,
+# session pin, sole-available-via-probe. Never shows a picker.
+resolve_harness() {
+  if [[ -n "${AI_ASSIST_HARNESS:-}" ]] && is_harness "$AI_ASSIST_HARNESS"; then
+    print -r -- "$AI_ASSIST_HARNESS"; return 0
+  fi
+  local pinned; pinned="$(assist::pin_read)"
+  if [[ -n "$pinned" ]] && is_harness "$pinned"; then
+    print -r -- "$pinned"; return 0
+  fi
+  local h; typeset -a avail=()
+  for h in "${HARNESSES[@]}"; do
+    "$(worker_path "$h")" --probe >/dev/null 2>&1 && avail+=("$h")
+  done
+  (( ${#avail[@]} == 1 )) && { print -r -- "${avail[1]}"; return 0; }
+  return 1   # zero or several → non-interactive resolution impossible
+}
+
+# ── Routing helpers ──────────────────────────────────────────────────────────
+render_bin() {
+  local r="${AI_ASSIST_RENDER_BIN:-}"
+  [[ -n "$r" && -x "$r" ]] && { print -r -- "$r"; return 0; }
+  r="$HOME/.local/libexec/ai-assist-render"
+  [[ -x "$r" ]] && { print -r -- "$r"; return 0; }
+  print -r -- "$r"
+}
+
+# Read the request so REQ_* (project root, over_ssh, pane) are available for the
+# docked pane spawn. Tolerant: missing fields just default.
+assist::request_read "$request" 2>/dev/null || true
+[[ -n "$origin_pane" ]] || origin_pane="${REQ_PANE_ID:-}"
+
+# spawn_docked <render-args...> — open the docked pane running ai-assist-render
+# with the SAME fifo pair reused (Task 5 flags). Render parks/closes on its own.
+spawn_docked() {
+  # CRITICAL: release our own read-write hold on the reused fifos BEFORE handing
+  # them to the docked pager. We held IN/OUT open read-write to drive the float's
+  # spinner; if we keep IN open here, it stays a live *writer* on the pipe, so the
+  # pager never sees EOF after the one-shot render command finishes — the pane
+  # opens but shows nothing. Closing both fds gives the pager/broker clean,
+  # sole ownership (emit_status/emit_close are already done by now).
+  exec {in_fd}>&- 2>/dev/null || true
+  exec {out_fd}>&- 2>/dev/null || true
+  local render; render="$(render_bin)"
+  local -a render_flags=(
+    --input-fifo "$in_fifo" --actions-fifo "$out_fifo"
+  )
+  [[ -n "$origin_pane" ]] && render_flags+=(--origin-pane "$origin_pane")
+  [[ "${REQ_OVER_SSH:-false}" == true ]] && render_flags+=(--over-ssh)
+  [[ -n "${REQ_PROJECT_ROOT:-}" ]] && render_flags+=(--project-root "$REQ_PROJECT_ROOT")
+  REQ_PROJECT_ROOT="${REQ_PROJECT_ROOT:-}" assist::spawn_pane "$render" "${render_flags[@]}" "$@"
+}
+
+# route_escalate <reason> — the capable path, exactly as today: hand off to the
+# `ai-assist` dispatcher (resolved non-interactively to a specific worker when
+# possible, else the bare dispatcher which picks for itself). The worker builds
+# the capable harness command and spawns its OWN render-wrapped docked pane
+# (title + spinner + glow), seeded with the escalation reason as caller guidance.
+# This is the read-only "never worse than today" default for every error path.
+#
+# NOTE on fifo reuse: the float has already been dismissed (close␞ sent), so the
+# OUT/IN pair is free. The worker's render pane creates its own fifos for the
+# pager/broker — reusing the float's pair here would require the worker to accept
+# pre-created fifos, which is out of scope for this task. The orchestrator-owned
+# ANSWER/COMMAND-fallback renders DO reuse the pair (see spawn_docked).
+route_escalate() {
+  local reason="${1:-}"
+  local -a guidance=()
+  [[ -n "$reason" ]] && guidance=(-- "escalation reason: $reason")
+  local h
+  if h="$(resolve_harness)"; then
+    "$(worker_path "$h")" --request "$request" "${guidance[@]}"
+  else
+    local disp="$bin_dir/ai-assist"
+    [[ -x "$disp" ]] || disp="ai-assist"
+    "$disp" --request "$request" "${guidance[@]}"
+  fi
+}
+
+# ── 3–4. Run the cheap pass (if a harness resolves) and classify ─────────────
+kind="" payload=""
+harness="$(resolve_harness)" || harness=""
+
+if [[ -z "$harness" ]]; then
+  # No non-interactive harness → skip the cheap pass, escalate.
+  emit_status "Starting the assistant…"
+  emit_close
+  cleanup_fifos
+  route_escalate "no harness could be resolved without a picker"
+  exit 0
+fi
+
+emit_status "Thinking…"
+worker="$(worker_path "$harness")"
+raw=""
+if [[ -x "$worker" ]]; then
+  raw="$("$worker" --triage --request "$request" 2>/dev/null)"; trc=$?
+else
+  trc=3
+fi
+
+if (( trc == 3 )) || [[ -z "${raw//[[:space:]]/}" ]]; then
+  # No cheap pass, or empty output → escalate (safe default).
+  emit_status "Starting the assistant…"
+  emit_close
+  cleanup_fifos
+  route_escalate "triage produced no usable result"
+  exit 0
+fi
+
+classified="$(assist::triage_classify "$raw")"
+kind="${classified%%$US*}"
+payload="${classified#*$US}"
+
+# Defensive: re-running the failed command is never a useful triage result —
+# diagnosing a failure needs the capable agent. If the cheap pass merely echoed
+# the failed command back (whitespace-insensitive), escalate instead of typing it.
+if [[ "$kind" == command && -n "${REQ_COMMAND_TEXT:-}" \
+      && "${payload//[[:space:]]/}" == "${REQ_COMMAND_TEXT//[[:space:]]/}" ]]; then
+  kind="escalate"; payload="re-running the failed command is not a diagnosis"
+fi
+
+# ── 5. Dismiss the float ─────────────────────────────────────────────────────
+emit_close
+
+# ── 6. Route ─────────────────────────────────────────────────────────────────
+case "$kind" in
+  command)
+    if [[ -n "$origin_pane" ]]; then
+      zj="$(assist::zellij_bin)" || zj=""
+      if [[ -n "$zj" ]]; then
+        # Put the command on the origin prompt via BRACKETED PASTE (ESC[200~ …
+        # ESC[201~) with NO trailing CR — the broker's `play` minus the Enter.
+        # Bracketed paste makes the whole payload land as ONE editable buffer the
+        # user reviews + runs; any embedded newline can NEVER auto-execute.
+        "$zj" action write --pane-id "$origin_pane" 27 91 50 48 48 126 2>/dev/null || true  # ESC[200~
+        "$zj" action write-chars --pane-id "$origin_pane" -- "$payload" 2>/dev/null || true
+        "$zj" action write --pane-id "$origin_pane" 27 91 50 48 49 126 2>/dev/null || true  # ESC[201~
+      fi
+      cleanup_fifos
+    else
+      # Origin pane missing → render the command in the docked pager instead of
+      # writing to a prompt we don't have.
+      spawn_docked --cleanup-fifos --harness "$harness" -- printf '%s\n' "$payload"
+    fi
+    ;;
+  answer)
+    spawn_docked --cleanup-fifos --harness "$harness" -- printf '%s\n' "$payload"
+    ;;
+  escalate|*)
+    cleanup_fifos
+    route_escalate "$payload"
+    ;;
+esac
+
+exit 0

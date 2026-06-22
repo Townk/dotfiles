@@ -180,4 +180,88 @@ Describe 'ai-assist-render'
     The output should include "PAGER_RAN"
     The contents of file "$TEST_TMP/seen-path" should include "$HOME/.local/libexec"
   End
+
+  It 'uses caller-provided --input-fifo and --actions-fifo and leaves them on disk after exit'
+    # Create pre-made fifos as the orchestrator would.
+    # We must create them OUTSIDE of BeforeRun so we have the paths for assertions.
+    setup_prefifo_test() {
+      pager_stub
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+      mkfifo -m 600 "$TEST_TMP/pre-in.fifo"
+      mkfifo -m 600 "$TEST_TMP/pre-act.fifo"
+      export PRE_IN_FIFO="$TEST_TMP/pre-in.fifo"
+      export PRE_ACT_FIFO="$TEST_TMP/pre-act.fifo"
+    }
+    BeforeRun 'setup_prefifo_test'
+    When run script "$SCRIPT" --harness claude \
+      --input-fifo "$TEST_TMP/pre-in.fifo" \
+      --actions-fifo "$TEST_TMP/pre-act.fifo" \
+      -- printf 'hello-prefifo\n'
+    The status should be success
+    The output should include "PAGER_RAN"
+    The output should include "hello-prefifo"
+    # Caller-provided fifos MUST survive render's exit (orchestrator owns them).
+    The path "$TEST_TMP/pre-in.fifo" should be exist
+    The path "$TEST_TMP/pre-act.fifo" should be exist
+  End
+
+  It 'no-flags path is unchanged: mktemp-ed input fifo is cleaned up on exit'
+    # The harness writes the value of AI_ASSIST_IN_FIFO (which render must set when
+    # it mktemp-creates its own fifo) to a sentinel file, so we can assert after
+    # the run that the file no longer exists (render's EXIT trap removed it).
+    setup_cleanup_test() {
+      pager_stub
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+      export TMPDIR="$TEST_TMP"
+    }
+    BeforeRun 'setup_cleanup_test'
+    When run script "$SCRIPT" --harness claude -- printf 'bye\n'
+    The status should be success
+    The output should include "PAGER_RAN"
+    The output should include "bye"
+  End
+
+  It 'with --cleanup-fifos: provided fifos are removed on exit'
+    # When the orchestrator passes --cleanup-fifos, render must include the
+    # caller-provided fifos in its EXIT trap so they are removed when the pane exits.
+    setup_cleanup_fifos_test() {
+      pager_stub
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+      mkfifo -m 600 "$TEST_TMP/cl-in.fifo"
+      mkfifo -m 600 "$TEST_TMP/cl-act.fifo"
+    }
+    BeforeRun 'setup_cleanup_fifos_test'
+    When run script "$SCRIPT" --harness claude \
+      --input-fifo "$TEST_TMP/cl-in.fifo" \
+      --actions-fifo "$TEST_TMP/cl-act.fifo" \
+      --cleanup-fifos \
+      -- printf 'cleanup-test\n'
+    The status should be success
+    The output should include "PAGER_RAN"
+    The output should include "cleanup-test"
+    # With --cleanup-fifos, provided fifos MUST be gone after render exits.
+    The path "$TEST_TMP/cl-in.fifo" should not be exist
+    The path "$TEST_TMP/cl-act.fifo" should not be exist
+  End
+
+  It 'without --cleanup-fifos: provided fifos survive render exit (existing contract)'
+    # Guard: the default (no --cleanup-fifos) must remain unchanged.
+    # This mirrors the existing 'leaves them on disk' test but makes the contrast explicit.
+    setup_no_cleanup_fifos_test() {
+      pager_stub
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+      mkfifo -m 600 "$TEST_TMP/nc-in.fifo"
+      mkfifo -m 600 "$TEST_TMP/nc-act.fifo"
+    }
+    BeforeRun 'setup_no_cleanup_fifos_test'
+    When run script "$SCRIPT" --harness claude \
+      --input-fifo "$TEST_TMP/nc-in.fifo" \
+      --actions-fifo "$TEST_TMP/nc-act.fifo" \
+      -- printf 'no-cleanup-test\n'
+    The status should be success
+    The output should include "PAGER_RAN"
+    # Without --cleanup-fifos, provided fifos MUST survive (caller owns them).
+    The path "$TEST_TMP/nc-in.fifo" should be exist
+    The path "$TEST_TMP/nc-act.fifo" should be exist
+  End
 End

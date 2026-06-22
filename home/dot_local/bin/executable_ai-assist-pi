@@ -25,4 +25,16 @@ assist_build_cmd() {
   )
 }
 
+# Cheap, read-only first pass using a flash-tier model.
+# AI_ASSIST_TRIAGE_MODEL overrides the default (gemini-2.5-flash).
+: "${AI_ASSIST_TRIAGE_MODEL:=gemini-2.5-flash}"
+assist_build_triage_cmd() {
+  ASSIST_TRIAGE_CMD=(
+    pi --print --no-session
+    --model "$AI_ASSIST_TRIAGE_MODEL"
+    --thinking low
+    "$ASSIST_TRIAGE_PROMPT"
+  )
+}
+
 assist::worker_main "Pi Coding Agent" assist_build_cmd "$@"

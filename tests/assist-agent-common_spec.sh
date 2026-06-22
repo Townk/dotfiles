@@ -238,6 +238,62 @@ JSON
     End
   End
 
+  Describe 'assist::triage_classify'
+    classify() { assist::triage_classify "$1"; }
+
+    It 'classifies a command'
+      When call classify "$(printf '__COMMAND__\nmogrify -resize 200x .')"
+      The output should equal "command$(printf '\x1f')mogrify -resize 200x ."
+    End
+    It 'unwraps a fenced command and drops trailing prose'
+      When call classify "$(printf '__COMMAND__\n```bash\nmogrify -resize 200x *.png\n```\nThis resizes all PNGs.')"
+      The output should equal "command$(printf '\x1f')mogrify -resize 200x *.png"
+    End
+    It 'takes only the first line of a command (drops trailing prose)'
+      When call classify "$(printf '__COMMAND__\ngit log --since="5 hours ago"\nThis lists your commits.')"
+      The output should equal "command$(printf '\x1f')git log --since=\"5 hours ago\""
+    End
+    It 'escalates an ambiguous command that also contains another sentinel'
+      When call classify "$(printf '__COMMAND__\n__ANSWER__\nYour command used --since 2 hours.')"
+      The output should equal "escalate$(printf '\x1f')ambiguous triage output"
+    End
+    It 'classifies an answer'
+      When call classify "$(printf '__ANSWER__\nUse mogrify.')"
+      The output should equal "answer$(printf '\x1f')Use mogrify."
+    End
+    It 'ignores leading blank lines before the sentinel'
+      When call classify "$(printf '\n__ANSWER__\nUse mogrify.')"
+      The output should equal "answer$(printf '\x1f')Use mogrify."
+    End
+    It 'classifies an escalate reason with no space after the colon'
+      When call classify '__ESCALATE__:needs files'
+      The output should equal "escalate$(printf '\x1f')needs files"
+    End
+    It 'classifies an escalate with reason'
+      When call classify '__ESCALATE__: needs to inspect files'
+      The output should equal "escalate$(printf '\x1f')needs to inspect files"
+    End
+    It 'treats unrecognized output as escalate'
+      When call classify 'I am not sure'
+      The output should equal "escalate$(printf '\x1f')unrecognized"
+    End
+  End
+
+  Describe 'assist::triage_prompt'
+    It 'asks for the 3-way sentinel, tldr, and command verification'
+      REQ_USER_REQUEST="resize images"; REQ_PROJECT_ROOT="/tmp/p"
+      kb="$(mktemp)"; : > "$kb"
+      When call assist::triage_prompt "$kb"
+      The output should include '__COMMAND__'
+      The output should include '__ESCALATE__'
+      The output should include 'ai-assist-docs'
+      The output should include 'command -v'
+      The output should include 'NO markdown code fences'
+      The output should include 'EXACTLY ONE'
+      The output should include 'DIAGNOSIS'
+    End
+  End
+
   Describe 'worker_main flag forwarding'
     It 'forwards --origin-pane and its value as SEPARATE args via the real worker_main'
       worker_thread() {

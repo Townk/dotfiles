@@ -240,20 +240,26 @@ assist::build_request() {
 assist::triage() { return 0; }
 
 # ── Worker engine ──────────────────────────────────────────────────────────
-# assist::worker_main <label> <build_fn> [--request FILE] [-- guidance...]
+# assist::worker_main <label> <build_fn> [--triage] [--request FILE] [-- guidance...]
 # Shared flow for every ai-assist-<harness> worker. <build_fn> is a function
 # the worker defines; it must populate the array ASSIST_PANE_CMD with the
 # harness command to run in the docked pane, reading ASSIST_PROMPT / ASSIST_MODEL
 # and the REQ_* globals.
+#
+# When --triage is given: builds ASSIST_TRIAGE_PROMPT via assist::triage_prompt,
+# calls the worker's assist_build_triage_cmd (if defined; else exits 3), runs the
+# cheap command in ${REQ_PROJECT_ROOT:-$PWD}, and exits with its status. The
+# capable (non-triage) path is unchanged.
 assist::worker_main() {
   local label="$1" build_fn="$2"; shift 2
-  local request_file=""
+  local request_file="" triage_mode=0
   ASSIST_GUIDANCE=""
   while (($#)); do
     case "$1" in
+      --triage) triage_mode=1; shift ;;
       --request) request_file="${2:-}"; shift 2 ;;
       --request=*) request_file="${1#*=}"; shift ;;
-      -h|--help) print -r -- "Usage: ai-assist-<harness> --request <file> [-- guidance...]"; return 0 ;;
+      -h|--help) print -r -- "Usage: ai-assist-<harness> [--triage] --request <file> [-- guidance...]"; return 0 ;;
       --) shift; ASSIST_GUIDANCE="$*"; break ;;
       *) ASSIST_GUIDANCE="$*"; break ;;
     esac
@@ -261,6 +267,24 @@ assist::worker_main() {
   [[ -n "$request_file" ]] || die "missing --request <file>"
 
   assist::request_read "$request_file"
+
+  # ── Triage path ─────────────────────────────────────────────────────────
+  if (( triage_mode )); then
+    local kb; kb="$(assist::kb_ensure "${REQ_PROJECT_ROOT:-$PWD}")"
+    ASSIST_TRIAGE_PROMPT="$(assist::triage_prompt "$kb")"
+    # If the worker defines no cheap pass, exit 3 (graceful escalate).
+    if ! typeset -f assist_build_triage_cmd >/dev/null 2>&1; then
+      exit 3
+    fi
+    ASSIST_TRIAGE_CMD=()
+    assist_build_triage_cmd
+    [[ ${#ASSIST_TRIAGE_CMD[@]} -gt 0 ]] || exit 3
+    (
+      cd "${REQ_PROJECT_ROOT:-$PWD}" 2>/dev/null || true
+      "${ASSIST_TRIAGE_CMD[@]}"
+    )
+    exit $?
+  fi
   # Snapshot the origin environment for the agent's own shell (Phase C1). The
   # worker is exec-chained from the origin shell, so its env IS the origin env.
   # export -p is re-sourceable; readonly specials are tolerated on re-source.
@@ -300,4 +324,101 @@ assist::worker_main() {
     assist::spawn_pane "${ASSIST_PANE_CMD[@]}"
   fi
   log_ok "ai-assist (${label}) working in a docked pane"
+}
+
+# ── Triage classifier (Phase D) ────────────────────────────────────────────
+# assist::triage_extract_command <raw> — pull a bare, runnable command out of the
+# model's __COMMAND__ body. Models often ignore "no markdown" and wrap the command
+# in a ```fence``` and/or trail an explanation; typing that verbatim at the prompt
+# is wrong. If a fenced block is present, take ONLY its contents; otherwise keep
+# the body as-is. Then strip surrounding whitespace/newlines (no stray newline is
+# typed, and no trailing prose rides along).
+assist::triage_extract_command() {
+  local raw="$1" body
+  if [[ "$raw" == *'```'* ]]; then
+    body="$(print -r -- "$raw" | awk '/^[[:space:]]*```/{f=!f; next} f{print}')"
+  else
+    body="$raw"
+  fi
+  # The command is the FIRST non-empty line — drop any trailing prose the model
+  # appended (a single command is what gets typed at the prompt). Models that try
+  # to explain after the command no longer leak that explanation onto the prompt.
+  body="$(print -r -- "$body" | awk 'NF{print; exit}')"
+  body="${body#"${body%%[![:space:]]*}"}"   # ltrim
+  body="${body%"${body##*[![:space:]]}"}"   # rtrim
+  print -rn -- "$body"
+}
+
+# assist::triage_classify <raw> — map the cheap pass's first line to KIND␟PAYLOAD.
+assist::triage_classify() {
+  local raw="$1" first rest US=$'\x1f'
+  # Skip leading blank lines / whitespace so a stray newline before the sentinel
+  # does not misclassify the response.
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  first="${raw%%$'\n'*}"
+  rest="${raw#*$'\n'}"; [[ "$rest" == "$raw" ]] && rest=""
+  case "$first" in
+    __COMMAND__)
+      local cmd; cmd="$(assist::triage_extract_command "$rest")"
+      # A well-formed command is non-empty and contains no other sentinel. If the
+      # model emitted ambiguous output (e.g. __COMMAND__ then __ANSWER__), DON'T
+      # type it at the prompt — escalate to the capable harness instead.
+      if [[ -z "$cmd" || "$cmd" == *__ANSWER__* || "$cmd" == *__ESCALATE__* || "$cmd" == *__COMMAND__* ]]; then
+        print -rn -- "escalate${US}ambiguous triage output"
+      else
+        print -rn -- "command${US}${cmd}"
+      fi
+      ;;
+    __ANSWER__)       print -rn -- "answer${US}${rest}" ;;
+    __ESCALATE__:*)   local r="${first#__ESCALATE__:}"; print -rn -- "escalate${US}${r# }" ;;
+    __ESCALATE__)     print -rn -- "escalate${US}" ;;
+    *)                print -rn -- "escalate${US}unrecognized" ;;
+  esac
+}
+
+# assist::triage_prompt <kb_path> — the cheap, read-only first-pass prompt.
+assist::triage_prompt() {
+  local kb_path="$1" kb_block=""
+  [[ -s "$kb_path" ]] && kb_block=$'\n\n## What we already know\n\n'"$(cat "$kb_path")"
+  cat <<EOF
+You are a fast terminal triage assistant. Resolve this in ONE quick pass.
+
+Project: ${REQ_PROJECT_NAME:-${REQ_PROJECT_ROOT:-unknown}}
+Request: ${REQ_USER_REQUEST:-(none)}
+Failed command: ${REQ_COMMAND_TEXT:-(none)}
+Recent output:
+${REQ_SCROLLBACK:-(none)}${kb_block}
+
+If a "Failed command" is shown above and the request is to explain why it failed
+or how to fix it, that is a DIAGNOSIS — return __ESCALATE__ so the full assistant
+can investigate the error. Never return a command for failure diagnosis, and
+NEVER propose re-running the failed command itself.
+
+For command usage and current flags, look it up with \`ai-assist-docs <cmd>\`
+(offline tldr + --help) rather than relying on memory. You MAY run read-only
+doc/inspection commands (tldr, --help, man, ls, cat). NEVER run stateful or
+destructive commands — propose them instead, or escalate.
+
+Before proposing a command, verify every program it uses is available with
+\`command -v <prog>\`. If a required program is NOT installed, do NOT return a
+command — return __ANSWER__ explaining it is missing and, if known, how to
+install it.
+
+Output EXACTLY ONE of the three sentinels below — never more than one, and put it
+on its OWN first line with nothing before it. If a single shell command would
+accomplish the request (e.g. "list/show/find/how do I X"), ALWAYS choose
+__COMMAND__ — do not explain instead; explanations belong in __ANSWER__ only when
+there is genuinely no single command to give.
+
+  __COMMAND__
+  <ONE ready-to-run shell command on the very next line and NOTHING else — raw
+   text, NO markdown code fences, NO backticks, NO __ANSWER__ section, NO prose
+   before or after. It is typed directly onto the user's prompt.>
+
+  __ANSWER__
+  <a short markdown explanation — only when no single command fits>
+
+  __ESCALATE__: <one-line reason>   (when this needs multi-step investigation,
+  iteration, file changes, or asking the user)
+EOF
 }
