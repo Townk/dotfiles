@@ -1,0 +1,21 @@
+#!/usr/bin/env zsh
+# ai-assist-docs — quick, offline command docs for the assist agents. Tries
+# tealdeer (tldr) first, then the command's own --help/-h. Prints the docs and
+# exits 0 on a hit; prints nothing and exits 1 on a total miss.
+set -uo pipefail
+cmd="${1:-}"
+[[ -n "$cmd" ]] || { print -ru2 -- "ai-assist-docs: no command given"; exit 2; }
+
+if command -v tldr >/dev/null 2>&1; then
+  if out="$(tldr --offline -- "$cmd" 2>/dev/null)" && [[ -n "$out" ]]; then
+    print -r -- "$out"; exit 0
+  fi
+fi
+if command -v -- "$cmd" >/dev/null 2>&1; then
+  for flag in --help -h; do
+    if out="$("$cmd" "$flag" 2>/dev/null)" && [[ -n "$out" ]]; then
+      print -r -- "$out"; exit 0
+    fi
+  done
+fi
+exit 1
