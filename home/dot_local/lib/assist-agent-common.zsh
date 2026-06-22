@@ -301,3 +301,54 @@ assist::worker_main() {
   fi
   log_ok "ai-assist (${label}) working in a docked pane"
 }
+
+# ── Triage classifier (Phase D) ────────────────────────────────────────────
+# assist::triage_classify <raw> — map the cheap pass's first line to KIND␟PAYLOAD.
+assist::triage_classify() {
+  local raw="$1" first rest
+  first="${raw%%$'\n'*}"
+  rest="${raw#*$'\n'}"; [[ "$rest" == "$raw" ]] && rest=""
+  local US=$'\x1f'
+  case "$first" in
+    __COMMAND__)      print -rn -- "command${US}${rest}" ;;
+    __ANSWER__)       print -rn -- "answer${US}${rest}" ;;
+    __ESCALATE__:*)   print -rn -- "escalate${US}${first#__ESCALATE__: }" ;;
+    __ESCALATE__)     print -rn -- "escalate${US}" ;;
+    *)                print -rn -- "escalate${US}unrecognized" ;;
+  esac
+}
+
+# assist::triage_prompt <kb_path> — the cheap, read-only first-pass prompt.
+assist::triage_prompt() {
+  local kb_path="$1" kb_block=""
+  [[ -s "$kb_path" ]] && kb_block=$'\n\n## What we already know\n\n'"$(cat "$kb_path")"
+  cat <<EOF
+You are a fast terminal triage assistant. Resolve this in ONE quick pass.
+
+Project: ${REQ_PROJECT_NAME:-${REQ_PROJECT_ROOT:-unknown}}
+Request: ${REQ_USER_REQUEST:-(none)}
+Failed command: ${REQ_COMMAND_TEXT:-(none)}
+Recent output:
+${REQ_SCROLLBACK:-(none)}${kb_block}
+
+For command usage and current flags, look it up with \`ai-assist-docs <cmd>\`
+(offline tldr + --help) rather than relying on memory. You MAY run read-only
+doc/inspection commands (tldr, --help, man, ls, cat). NEVER run stateful or
+destructive commands — propose them instead, or escalate.
+
+Before proposing a command, verify every program it uses is available with
+\`command -v <prog>\`. If a required program is NOT installed, do NOT return a
+command — return __ANSWER__ explaining it is missing and, if known, how to
+install it.
+
+Reply with EXACTLY one of:
+  __COMMAND__
+  <a single ready-to-run shell command>
+
+  __ANSWER__
+  <a short markdown explanation>
+
+  __ESCALATE__: <one-line reason>   (when this needs multi-step investigation,
+  iteration, file changes, or asking the user)
+EOF
+}

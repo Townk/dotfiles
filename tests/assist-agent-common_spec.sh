@@ -238,6 +238,39 @@ JSON
     End
   End
 
+  Describe 'assist::triage_classify'
+    classify() { assist::triage_classify "$1"; }
+
+    It 'classifies a command'
+      When call classify "$(printf '__COMMAND__\nmogrify -resize 200x .')"
+      The output should equal "command$(printf '\x1f')mogrify -resize 200x ."
+    End
+    It 'classifies an answer'
+      When call classify "$(printf '__ANSWER__\nUse mogrify.')"
+      The output should equal "answer$(printf '\x1f')Use mogrify."
+    End
+    It 'classifies an escalate with reason'
+      When call classify '__ESCALATE__: needs to inspect files'
+      The output should equal "escalate$(printf '\x1f')needs to inspect files"
+    End
+    It 'treats unrecognized output as escalate'
+      When call classify 'I am not sure'
+      The output should equal "escalate$(printf '\x1f')unrecognized"
+    End
+  End
+
+  Describe 'assist::triage_prompt'
+    It 'asks for the 3-way sentinel, tldr, and command verification'
+      REQ_USER_REQUEST="resize images"; REQ_PROJECT_ROOT="/tmp/p"
+      kb="$(mktemp)"; : > "$kb"
+      When call assist::triage_prompt "$kb"
+      The output should include '__COMMAND__'
+      The output should include '__ESCALATE__'
+      The output should include 'ai-assist-docs'
+      The output should include 'command -v'
+    End
+  End
+
   Describe 'worker_main flag forwarding'
     It 'forwards --origin-pane and its value as SEPARATE args via the real worker_main'
       worker_thread() {
