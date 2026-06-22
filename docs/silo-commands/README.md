@@ -35,6 +35,12 @@ etc.) appear in the templates — the command name is the only identifier.
 4. **Verify after**: an agent's diff should be confined to its owner area + (at
    most) its own run-script in `.chezmoiscripts/`. Run `make test` (ShellSpec)
    for any `home/dot_local/lib/` change.
+5. **End the session with `/end-work`** — the symmetric counterpart to
+   `/work-on-<silo>`. Type `/end-work` (optionally `<silo> <suffix>` if the
+   agent isn't in the worktree) and the agent loads the `reconcile` skill and
+   lands the `work-on-<silo>-<suffix>` branch onto `master` — `flock`-gated,
+   ff-only, `make test` under the lock. See [End-of-session symmetry](#end-of-session-symmetry--work-on--end-work)
+   below.
 
 ## What each command contains
 
@@ -56,6 +62,25 @@ reference docs to start safely:
 - **Verify before claiming done** — the per-silo verification checklist.
 - **Reference** — pointers to the full detail in the two reference docs.
 
+## End-of-session symmetry — `/work-on-*` ↔ `/end-work`
+
+Every `/work-on-<silo>` session opens a branch (`work-on-<silo>-<suffix>`) in
+an isolated worktree and is closed by **`/end-work`**, which lands that
+branch back onto `master` by loading and following the `reconcile` skill.
+`/end-work` is a single shared command for all silos — it auto-derives
+`<silo>` and `<suffix>` from the current `work-on-<silo>-<suffix>` branch
+(the common case, since `/work-on-*` leaves the agent in that worktree), or
+from optional `<silo> <suffix>` arguments when the agent isn't in the
+worktree.
+
+`/end-work` is the **non-UX** end path: it uses the `reconcile` skill
+(logic/test-validated work). For work that needs eyeball judgment, skip
+`/end-work` and use the `validate` skill's Mode B UX session instead — that
+session *is* the integration, so there is no separate `/end-work` step after
+it. `/end-work` is a prompt template (so it is `/end-work` in both pi and
+Claude Code), shared via the same symlink mechanism as the `/work-on-*`
+templates; the `reconcile` skill remains the reusable capability it invokes.
+
 ## Command index
 
 | Command | Domain | One-line purpose |
@@ -76,10 +101,14 @@ reference docs to start safely:
 | `/work-on-yazi` | Yazi | Yazi config + custom plugins |
 | `/work-on-chezmoi` | chezmoi orchestration & run-scripts | `.setup.sh`, `.chezmoiscripts/`, run-script ordering & hash triggers |
 | `/work-on-utils` | cross-cutting utilities | `notify`, `wait-until`, `chezmoi-reverse`, `tab-edit`, `common.zsh` |
+| `/end-work` | session integration | Lands a completed `work-on-<silo>-<suffix>` branch onto `master` via the `reconcile` skill |
 
 The four `/work-on-system-*` commands are sub-silos of the system management
 area. There is intentionally no `/work-on-system` umbrella — always dispatch
 via the specific sub-silo.
+
+`/end-work` is the symmetric end command for every `/work-on-<silo>` — see
+[End-of-session symmetry](#end-of-session-symmetry--work-on--end-work) below.
 
 ## Worktree root
 
