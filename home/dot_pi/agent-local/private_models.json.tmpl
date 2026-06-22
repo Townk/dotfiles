@@ -12,8 +12,8 @@
       },
       "models": [
         {
-          "id": "local-agent-auto",
-          "name": "Local Agent Auto (adaptive Qwen MoE/Gemma)",
+          "id": "gemma-4-12B-it-qat-OptiQ-4bit",
+          "name": "Gemma 4 12B IT (QAT OptiQ 4-bit, assistant MTP) — default",
           "reasoning": false,
           "input": ["text", "image"],
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -24,7 +24,7 @@
         },
         {
           "id": "Qwen3.6-35B-A3B-6bit",
-          "name": "Qwen3.6 35B-A3B MoE (6-bit, mlx_lm)",
+          "name": "Qwen3.6 35B-A3B MoE (6-bit, mlx_lm) — fallback",
           "reasoning": true,
           "input": ["text"],
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -34,8 +34,8 @@
           "compat": { "thinkingFormat": "qwen-chat-template", "maxTokensField": "max_tokens" }
         },
         {
-          "id": "gemma-4-12B-it-8bit",
-          "name": "Gemma 4 12B IT (8-bit, assistant MTP)",
+          "id": "local-agent-auto",
+          "name": "Local Agent Auto (adaptive Qwen MoE/Gemma)",
           "reasoning": false,
           "input": ["text", "image"],
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
