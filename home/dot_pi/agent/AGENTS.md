@@ -63,8 +63,17 @@ multiplier; doing everything in the main context isn't.
 
 ### When to delegate
 
-Default to a sub-agent when any of these is true:
+Default to a sub-agent. The main context is for orchestrating, reading,
+and deciding — not for doing implementation work that a sub-agent can do.
+When in doubt, delegate.
 
+- **Implementation work → `general-purpose`.** Anything beyond a single
+  trivial edit — multi-step changes, file creation, refactors, a change
+  that needs reading siblings for conventions first, or any edit touching
+  more than one file: dispatch to `general-purpose` rather than doing it
+  inline. Keep the main context free for reviewing the returned diff and
+  talking to the user. Doing multi-step implementation inline is the
+  failure mode this rule exists to prevent.
 - **Independent searches you can parallelize.** Two or three `Explore`
   spawns in one message finish faster than three sequential greps. If
   there are no dependencies between the lookups, dispatch them at once.
@@ -83,7 +92,10 @@ Default to a sub-agent when any of these is true:
 
 ### When not to delegate
 
-- The task is one or two tool calls — overhead beats the benefit.
+- The task is a single trivial edit — one line, one file, no
+  investigation needed. Anything more than that is implementation work
+  and belongs with `general-purpose`. Don't rationalize a multi-file
+  change as "just two edits" to keep it inline.
 - It needs back-and-forth with the user. Sub-agents can't ask the user
   clarifying questions; they run on the prompt they're given.
 - The full conversation context matters more than isolation. If you do

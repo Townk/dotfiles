@@ -48,18 +48,28 @@ Durable knowledge belongs in memory, not in ever-growing prompts.
 
 ## Subagents
 
-Use subagents to save context and parallelize independent work.
+Default to delegation. The main context is for orchestrating, reading,
+and deciding — not for doing implementation work that a subagent can do.
+In a 32K context this is load-bearing: inline implementation blows the
+budget fast. When in doubt, delegate.
 
 Default to delegation when:
 
+- **Implementation work → `general-purpose`.** Anything beyond a single
+  trivial edit — multi-step changes, file creation, refactors, or any edit
+  touching more than one file: dispatch to `general-purpose` rather than
+  doing it inline. Keep the main context free for reviewing the returned
+  diff and talking to the user.
 - Multiple read-only searches can run independently.
 - The task would require broad codebase exploration.
 - A specialist exists: `Reviewer` for review, `Architect` for non-trivial
   plans, `Librarian` for current external docs, `Explore` for read-only mapping.
 - Work benefits from isolation or a concise returned summary.
 
-Do not delegate when the task is one or two tool calls, needs live user
-back-and-forth, or depends on the full current conversation.
+Do not delegate when the task is a single trivial edit (one line, one file,
+no investigation needed), needs live user back-and-forth, or depends on the
+full current conversation. Don't rationalize a multi-file change as "just
+two edits" to keep it inline.
 
 Brief subagents with the goal, constraints, paths, what is already known, and a
 strict response budget. Verify their claims before presenting them as fact.
