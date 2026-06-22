@@ -19,13 +19,17 @@ etc.) appear in the templates — the command name is the only identifier.
    master tip, and creates an isolated, uniquely-suffixed worktree under
    `$WT_ROOT` (see below). Never share worktrees; never check out `master`
    directly in a working agent tree.
-3. **Validate & integrate** per the template's pointers:
-   - **Self-test (logic):** sandbox-`$HOME` per [`validate.md`](validate.md)
-     (Mode A) — parallel, no lock, no clobber of real `$HOME`.
+3. **Validate & integrate** per the template's pointers — the agent loads
+   the **`validate`** and **`reconcile`** Agent Skills (see [Skills sharing
+   mechanism](#skills-sharing-mechanism--pi--claude-code) below), not bare
+   markdown docs:
+   - **Self-test (logic):** load the `validate` skill and run **Mode A** —
+     sandbox-`$HOME`, parallel, no lock, no clobber of real `$HOME`.
    - **Human UX validation:** if the work needs eyeball judgment, the agent
-     asks whether to enter a UX session, then follows [`validate.md`](validate.md)
-     (Mode B) — the session merges your branch to master and you iterate live.
-   - **Integrate (non-UX work):** follow [`reconcile.md`](reconcile.md) —
+     asks whether to enter a UX session, then loads the `validate` skill and
+     runs **Mode B** — the session merges your branch to master and you
+     iterate live.
+   - **Integrate (non-UX work):** load the `reconcile` skill and follow it —
      `flock`-gated, on-demand `master-work`, ff-only automated / divergence
      human-gated, `make test` under the lock.
 4. **Verify after**: an agent's diff should be confined to its owner area + (at
@@ -47,7 +51,8 @@ reference docs to start safely:
 - **Where to start** — the best entry-point files for an investigation.
 - **TASK** — `$ARGUMENTS` (your task description, interpolated by the slash
   command).
-- **Validate & integrate** — one-line pointers to `validate.md` / `reconcile.md`.
+- **Validate & integrate** — pointers to load the `validate` / `reconcile`
+  Agent Skills (Mode A self-test, Mode B UX session, reconcile integration).
 - **Verify before claiming done** — the per-silo verification checklist.
 - **Reference** — pointers to the full detail in the two reference docs.
 
@@ -108,12 +113,11 @@ matrix"). The headline hazards (using command names, not codes):
 
 ## Concurrency model — the two `flock` lockfiles
 
-- **`silo-integration.lock`** — held by the [`reconcile.md`](reconcile.md)
-  procedure; spans create `master-work` → merge → `make test` → rollback-or-
-  cleanup → remove `master-work`.
-- **`silo-ux-session.lock`** — held by a UX session
-  ([`validate.md`](validate.md) Mode B); spans session-start merge → live
-  iteration → done cleanup.
+- **`silo-integration.lock`** — held by the `reconcile` skill procedure;
+  spans create `master-work` → merge → `make test` → rollback-or-cleanup →
+  remove `master-work`.
+- **`silo-ux-session.lock`** — held by a UX session (`validate` skill Mode B);
+  spans session-start merge → live iteration → done cleanup.
 
 Each procedure non-block-attempts the *other* lock before proceeding and
 fails-and-reports if held (no silent multi-hour blocking). `flock` is provided
@@ -161,14 +165,14 @@ docs/silo-commands/validate/SKILL.md            ← canonical skill (committed)
 .claude/skills/validate   → ../../docs/silo-commands/validate
 ```
 
-A compat symlink at each old path —
-`docs/silo-commands/reconcile.md → reconcile/SKILL.md` (and `validate.md`)
-— keeps the `follow docs/silo-commands/<name>.md` references in the
-`work-on-<silo>.md` templates (and the links in this README) resolving to the
-canonical skill content, so the templates didn't need editing. The skill
-directory name matches the `name` frontmatter field, as the Agent Skills
-standard (and Claude Code) requires; pi is lenient about that but the match
-is kept for portability. `tests/silo-skills_spec.sh` pins this contract.
+Each `work-on-<silo>.md` template's **Validate & integrate** section directs
+the agent to load these skills (e.g. `/skill:validate` in pi, `/validate` in
+Claude Code, or by reading its `SKILL.md`) rather than pointing at a markdown
+path — the skills are meant to be loaded and followed as Agent Skills, not
+read as plain docs. The skill directory name matches the `name` frontmatter
+field, as the Agent Skills standard (and Claude Code) requires; pi is
+lenient about that but the match is kept for portability.
+`tests/silo-skills_spec.sh` pins this contract.
 
 ## Reference docs
 
@@ -178,9 +182,7 @@ is kept for portability. `tests/silo-skills_spec.sh` pins this contract.
   the `/work-on-*` names are established as the canonical IDs.)
 - [`../chezmoi-unique-features.md`](../chezmoi-unique-features.md) — the
   90-feature evidence catalog the silos were derived from.
-- [`reconcile.md`](reconcile.md) — the `flock`-gated integration procedure
-  (now an Agent Skill: `reconcile/SKILL.md`; `reconcile.md` is a compat
-  symlink).
-- [`validate.md`](validate.md) — sandbox self-test (Mode A) + agent-initiated
-  UX session (Mode B) (now an Agent Skill: `validate/SKILL.md`; `validate.md`
-  is a compat symlink).
+- [`reconcile/SKILL.md`](reconcile/SKILL.md) — the `flock`-gated integration
+  skill (`/skill:reconcile` in pi, `/reconcile` in Claude Code).
+- [`validate/SKILL.md`](validate/SKILL.md) — sandbox self-test (Mode A) +
+  agent-initiated UX session (Mode B) skill (`/skill:validate` / `/validate`).

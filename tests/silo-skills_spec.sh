@@ -2,9 +2,9 @@
 #
 # The canonical skill directories live in docs/silo-commands/<name>/SKILL.md
 # and are symlinked into both harness skill trees (.pi/skills/<name> and
-# .claude/skills/<name>) plus a compat symlink at docs/silo-commands/<name>.md
-# so the work-on-*.md templates' `follow docs/silo-commands/<name>.md` refs
-# keep resolving. This spec pins that contract.
+# .claude/skills/<name>). The work-on-<silo>.md templates direct agents to
+# LOAD these skills (not read a bare markdown path), so this spec pins both
+# the skill structure and that the templates reference the skills by name.
 
 Describe 'silo skills — reconcile & validate'
   # Resolve a frontmatter field from a SKILL.md. $1=file $2=field.
@@ -58,28 +58,6 @@ Describe 'silo skills — reconcile & validate'
     End
   End
 
-  Describe 'compat symlinks (preserve docs/silo-commands/<name>.md refs)'
-    It 'reconcile.md resolves to the canonical SKILL.md'
-      When call test -f docs/silo-commands/reconcile.md
-      The status should be success
-    End
-
-    It 'validate.md resolves to the canonical SKILL.md'
-      When call test -f docs/silo-commands/validate.md
-      The status should be success
-    End
-
-    It 'reconcile.md is a symlink (not a duplicate real file)'
-      When call test -L docs/silo-commands/reconcile.md
-      The status should be success
-    End
-
-    It 'validate.md is a symlink (not a duplicate real file)'
-      When call test -L docs/silo-commands/validate.md
-      The status should be success
-    End
-  End
-
   Describe 'pi skill discovery (.pi/skills/<name>/SKILL.md)'
     It 'reconcile is discoverable by pi'
       When call test -f .pi/skills/reconcile/SKILL.md
@@ -112,6 +90,54 @@ Describe 'silo skills — reconcile & validate'
 
     It '.claude/skills/validate is a symlink'
       When call test -L .claude/skills/validate
+      The status should be success
+    End
+  End
+
+  Describe 'templates direct agents to the skills, not bare markdown paths'
+    # Every work-on-<silo>.md Validate & integrate block must reference the
+    # skills by name and must NOT carry the dead docs/silo-commands/<name>.md
+    # path (those compat symlinks were removed once the templates were
+    # rewired to load the skills).
+    #
+    # `grep -ql` over many files returns success if ANY file matches, so to
+    # assert "every template references the skill" we count the files that
+    # match and compare against the total count.
+    n_templates=$(ls docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+    n_validate=$(grep -l 'the `validate` skill' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+    n_reconcile=$(grep -l 'the `reconcile` skill' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+
+    It 'every template references the validate skill'
+      When call test "$n_validate" -eq "$n_templates"
+      The status should be success
+    End
+
+    It 'every template references the reconcile skill'
+      When call test "$n_reconcile" -eq "$n_templates"
+      The status should be success
+    End
+
+    It 'no template references the removed validate.md path'
+      n=$(grep -l 'docs/silo-commands/validate\.md' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+      When call test "$n" -eq 0
+      The status should be success
+    End
+
+    It 'no template references the removed reconcile.md path'
+      n=$(grep -l 'docs/silo-commands/reconcile\.md' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+      When call test "$n" -eq 0
+      The status should be success
+    End
+  End
+
+  Describe 'no dead compat symlinks left behind'
+    It 'docs/silo-commands/reconcile.md does not exist'
+      When call test ! -e docs/silo-commands/reconcile.md
+      The status should be success
+    End
+
+    It 'docs/silo-commands/validate.md does not exist'
+      When call test ! -e docs/silo-commands/validate.md
       The status should be success
     End
   End

@@ -100,12 +100,14 @@ cd "$WT_ROOT/work-on-custom-builds-$suffix"
 $ARGUMENTS
 
 ## Validate & integrate
-- **Self-test (logic):** sandbox-`$HOME` per `docs/silo-commands/validate.md`
-  (Mode A) — parallel, no lock, no clobber of real `$HOME`.
+- **Self-test (logic):** load the `validate` skill (Agent Skill — invoke
+  `/skill:validate` in pi, `/validate` in Claude Code, or read its `SKILL.md`)
+  and run **Mode A** — sandbox-`$HOME`, parallel, no lock, no clobber of real
+  `$HOME`.
 - **Human UX validation:** if the work needs eyeball judgment, ask the user
-  whether to enter a UX session, then follow `docs/silo-commands/validate.md`
-  (Mode B) — the session merges your branch to master and you iterate live.
-- **Integrate (non-UX work):** follow `docs/silo-commands/reconcile.md` —
+  whether to enter a UX session, then load the `validate` skill and run
+  **Mode B** — the session merges your branch to master and you iterate live.
+- **Integrate (non-UX work):** load the `reconcile` skill and follow it —
   `flock`-gated, on-demand `master-work`, ff-only automated / divergence
   human-gated, `make test` under the lock.
 
