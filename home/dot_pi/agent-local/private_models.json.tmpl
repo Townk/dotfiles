@@ -1,10 +1,10 @@
 {
   "providers": {
     "mlx": {
-      "name": "MLX (local, Headroom + gateway + llama-swap)",
-      "baseUrl": "http://localhost:8787/v1",
+      "name": "MLX (local, direct mlx_vlm.server — Gemma 4)",
+      "baseUrl": "http://127.0.0.1:8799/v1",
       "api": "openai-completions",
-      "apiKey": "local-headroom",
+      "apiKey": "local-mlx",
       "authHeader": true,
       "compat": {
         "supportsDeveloperRole": false,
@@ -13,29 +13,7 @@
       "models": [
         {
           "id": "gemma-4-12B-it-qat-OptiQ-4bit",
-          "name": "Gemma 4 12B IT (QAT OptiQ 4-bit, assistant MTP) — default",
-          "reasoning": false,
-          "input": ["text", "image"],
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-          "contextWindow": 32768,
-          "maxTokens": 2048,
-          "supportsToolCalling": true,
-          "compat": { "maxTokensField": "max_tokens" }
-        },
-        {
-          "id": "Qwen3.6-35B-A3B-6bit",
-          "name": "Qwen3.6 35B-A3B MoE (6-bit, mlx_lm) — fallback",
-          "reasoning": true,
-          "input": ["text"],
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-          "contextWindow": 32768,
-          "maxTokens": 2048,
-          "supportsToolCalling": true,
-          "compat": { "thinkingFormat": "qwen-chat-template", "maxTokensField": "max_tokens" }
-        },
-        {
-          "id": "local-agent-auto",
-          "name": "Local Agent Auto (adaptive Qwen MoE/Gemma)",
+          "name": "Gemma 4 12B IT (QAT OptiQ 4-bit, assistant MTP)",
           "reasoning": false,
           "input": ["text", "image"],
           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
