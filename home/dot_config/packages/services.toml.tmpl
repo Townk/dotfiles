@@ -108,6 +108,49 @@ LOCAL_LLM_PREFERRED_MODEL = "Qwen3.6-35B-A3B-6bit"
 LOCAL_LLM_MAX_TOKENS = "2048"
 LOCAL_LLM_LONG_PROMPT_TOKENS = "6000"
 LOCAL_LLM_LONG_PROMPT_MAX_TOKENS = "512"
+
+# mlx-gemma — DIRECT mlx_vlm.server for pi-local's single-model setup.
+# pi-local was repointed off the headroom→gateway→llama-swap chain to talk
+# straight to mlx_vlm.server on :8799 (one model, so the hot-swap and
+# local-agent-auto routing layers have no job). This entry is the lifecycle
+# owner that llama-swap used to be for that path. It coexists with the stack
+# above on a separate port — remove the now-unused [llama-swap]/
+# [local-llm-gateway] sections (and brew-managed headroom) once you've
+# confirmed nothing else consumes :8787/:8100/:8000.
+#
+# ON-DEMAND by design: keep_alive=false + run_at_load=false, so the ~8.4GB
+# model (≈15–17GB resident with a full 128K-context KV) is NOT pinned at every
+# login. Start it only when coding:  `system-service start mlx-gemma`
+# (stop: `system-service stop mlx-gemma`). To make it always-on instead, set
+# BOTH keys below to true (mirrors [llama-swap]); note launchd has no native
+# idle-unload, so always-on means permanently resident.
+#
+# cmd[0] is `command -v`-resolved to ~/.local/bin/mlx_vlm.server (uv shim).
+# The --model/--draft-model paths MUST be absolute: the worker passes cmd args
+# verbatim (no ~ expansion), exactly like [llama-swap]'s --config.
+[mlx-gemma]
+description    = "Local LLM inference: direct mlx_vlm.server (Gemma 4 OptiQ-4bit + MTP drafter) on :8799"
+cmd            = [
+  "mlx_vlm.server",
+  "--model", "{{ .chezmoi.homeDir }}/.local/share/mlx/models/gemma-4-12B-it-qat-OptiQ-4bit",
+  "--draft-model", "{{ .chezmoi.homeDir }}/.local/share/mlx/models/gemma-4-12B-it-qat-q4_0-assistant",
+  "--draft-kind", "mtp",
+  "--draft-block-size", "4",
+  "--max-tokens", "2048",
+  "--top-logprobs-k", "0",
+  "--host", "127.0.0.1",
+  "--port", "8799",
+]
+keep_alive     = false
+run_at_load    = false
+working_dir    = "~/.local/share/mlx"
+log_path       = "~/.local/state/mlx-gemma/mlx-gemma.log"
+error_log_path = "~/.local/state/mlx-gemma/mlx-gemma.log"
+
+[mlx-gemma.env]
+# launchd doesn't inherit interactive PATH; ~/.local/bin holds the uv-installed
+# mlx_vlm.server shim, which resolves its own venv.
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 {{ end }}
 
 # headroom — local compression and CCR retrieval proxy.
