@@ -200,5 +200,125 @@ JSON
       The stdout should include "ai-assist"
       The contents of file "$TEST_TMP/zj-args" should include "--model some-capable-model"
     End
+
+    It '--triage exits 3 (no cheap pass for cursor)'
+      export AI_ASSIST_CURSOR_BIN="cursor-agent"
+      When run script "$(SCRIPT)" --triage --request "$TEST_TMP/req.json"
+      The status should equal 3
+    End
+  End
+
+  Describe 'ai-assist-claude --triage'
+    SCRIPT() { echo "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_ai-assist-claude"; }
+
+    It 'runs the cheap model and prints raw output'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      {
+        printf '#!/usr/bin/env zsh\n'
+        printf 'printf "%%s\\n" "$@" | grep -q "haiku" && printf "__ANSWER__\\nok\\n"\n'
+      } > "$stubdir/claude"; chmod +x "$stubdir/claude"
+      export PATH="$stubdir:$PATH"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      export AI_ASSIST_TRIAGE_MODEL="haiku"
+      When run script "$(SCRIPT)" --triage --request "$TEST_TMP/req.json"
+      The output should include "__ANSWER__"
+      The status should be success
+    End
+
+    It 'uses haiku as default cheap model'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      {
+        printf '#!/usr/bin/env zsh\n'
+        printf 'args="$*"; printf "%%s\\n" "$args"\n'
+      } > "$stubdir/claude"; chmod +x "$stubdir/claude"
+      export PATH="$stubdir:$PATH"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      When run script "$(SCRIPT)" --triage --request "$TEST_TMP/req.json"
+      The output should include "haiku"
+      The status should be success
+    End
+
+    It 'AI_ASSIST_TRIAGE_MODEL overrides the default cheap model'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      {
+        printf '#!/usr/bin/env zsh\n'
+        printf 'args="$*"; printf "%%s\\n" "$args"\n'
+      } > "$stubdir/claude"; chmod +x "$stubdir/claude"
+      export PATH="$stubdir:$PATH"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      export AI_ASSIST_TRIAGE_MODEL="claude-haiku-3-5"
+      When run script "$(SCRIPT)" --triage --request "$TEST_TMP/req.json"
+      The output should include "claude-haiku-3-5"
+      The status should be success
+    End
+
+    It 'uses the triage prompt (not the system prompt) for --triage'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      {
+        printf '#!/usr/bin/env zsh\n'
+        printf 'printf "%%s\\n" "$@"\n'
+      } > "$stubdir/claude"; chmod +x "$stubdir/claude"
+      export PATH="$stubdir:$PATH"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      When run script "$(SCRIPT)" --triage --request "$TEST_TMP/req.json"
+      The output should include "__COMMAND__"
+      The output should include "__ANSWER__"
+      The status should be success
+    End
+  End
+
+  Describe 'ai-assist-pi --triage'
+    SCRIPT() { echo "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_ai-assist-pi"; }
+
+    It 'runs the cheap model and prints raw output'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      {
+        printf '#!/usr/bin/env zsh\n'
+        printf 'printf "%%s\\n" "$@" | grep -q "flash" && printf "__ANSWER__\\nok\\n"\n'
+      } > "$stubdir/pi"; chmod +x "$stubdir/pi"
+      export PATH="$stubdir:$PATH"
+      export AI_ASSIST_TRIAGE_MODEL="flash"
+      When run script "$(SCRIPT)" --triage --request "$TEST_TMP/req.json"
+      The output should include "__ANSWER__"
+      The status should be success
+    End
+
+    It 'uses a flash-tier model as default cheap model'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      {
+        printf '#!/usr/bin/env zsh\n'
+        printf 'args="$*"; printf "%%s\\n" "$args"\n'
+      } > "$stubdir/pi"; chmod +x "$stubdir/pi"
+      export PATH="$stubdir:$PATH"
+      When run script "$(SCRIPT)" --triage --request "$TEST_TMP/req.json"
+      The output should include "gemini-2.5-flash"
+      The status should be success
+    End
+
+    It 'AI_ASSIST_TRIAGE_MODEL overrides the pi default cheap model'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      {
+        printf '#!/usr/bin/env zsh\n'
+        printf 'args="$*"; printf "%%s\\n" "$args"\n'
+      } > "$stubdir/pi"; chmod +x "$stubdir/pi"
+      export PATH="$stubdir:$PATH"
+      export AI_ASSIST_TRIAGE_MODEL="opencode-go/kimi-k2-flash"
+      When run script "$(SCRIPT)" --triage --request "$TEST_TMP/req.json"
+      The output should include "opencode-go/kimi-k2-flash"
+      The status should be success
+    End
+
+    It '--thinking low is passed for the pi cheap pass'
+      stubdir="$TEST_TMP/pathbin"; mkdir -p "$stubdir"
+      {
+        printf '#!/usr/bin/env zsh\n'
+        printf 'args="$*"; printf "%%s\\n" "$args"\n'
+      } > "$stubdir/pi"; chmod +x "$stubdir/pi"
+      export PATH="$stubdir:$PATH"
+      When run script "$(SCRIPT)" --triage --request "$TEST_TMP/req.json"
+      The output should include "--thinking"
+      The output should include "low"
+      The status should be success
+    End
   End
 End

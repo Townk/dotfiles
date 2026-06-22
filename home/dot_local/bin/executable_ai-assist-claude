@@ -32,4 +32,16 @@ assist_build_cmd() {
   )
 }
 
+# Cheap, read-only first pass. NOT the capable model.
+# AI_ASSIST_TRIAGE_MODEL overrides the default (haiku).
+: "${AI_ASSIST_TRIAGE_MODEL:=haiku}"
+assist_build_triage_cmd() {
+  ASSIST_TRIAGE_CMD=(
+    "$AI_ASSIST_CLAUDE_BIN" --print --output-format text
+    --permission-mode "$AI_ASSIST_CLAUDE_PERMISSION_MODE"
+    --model "$AI_ASSIST_TRIAGE_MODEL"
+    "$ASSIST_TRIAGE_PROMPT"
+  )
+}
+
 assist::worker_main "Claude Code" assist_build_cmd "$@"
