@@ -124,6 +124,7 @@ JSON
       The output should include 'id='
       The output should include 'needs='
       The output should include 'static'
+      The output should include 'AAS_ERR'
     End
   End
 

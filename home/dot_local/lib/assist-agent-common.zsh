@@ -137,9 +137,10 @@ block tagged {id=fix}. Use:
   - python/node/etc. blocks for scripts,
   - diff (or patch) blocks for file changes (the user views/applies them).
 If a step uses a previous step's output, tag it {id=next needs=fix} and reference
-the earlier output via \$AAS_OUT_fix / \$AAS_EXIT_fix.
+the earlier output via \$AAS_OUT_fix / \$AAS_ERR_fix / \$AAS_EXIT_fix.
 Show captured error output or sample output as a console block (or tag it
 {static}) so it is NOT treated as runnable.
+For example, an illustrative block starts with: \`\`\`console {static}
 
 Do NOT apply changes yourself — the user reviews and runs each step from the
 playbook. Keep parts 1–2 short; spend your words on part 3.
