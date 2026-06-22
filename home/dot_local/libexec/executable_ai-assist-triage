@@ -153,6 +153,14 @@ assist::request_read "$request" 2>/dev/null || true
 # spawn_docked <render-args...> — open the docked pane running ai-assist-render
 # with the SAME fifo pair reused (Task 5 flags). Render parks/closes on its own.
 spawn_docked() {
+  # CRITICAL: release our own read-write hold on the reused fifos BEFORE handing
+  # them to the docked pager. We held IN/OUT open read-write to drive the float's
+  # spinner; if we keep IN open here, it stays a live *writer* on the pipe, so the
+  # pager never sees EOF after the one-shot render command finishes — the pane
+  # opens but shows nothing. Closing both fds gives the pager/broker clean,
+  # sole ownership (emit_status/emit_close are already done by now).
+  exec {in_fd}>&- 2>/dev/null || true
+  exec {out_fd}>&- 2>/dev/null || true
   local render; render="$(render_bin)"
   local -a render_flags=(
     --input-fifo "$in_fifo" --actions-fifo "$out_fifo"
