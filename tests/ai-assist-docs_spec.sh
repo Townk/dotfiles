@@ -34,4 +34,19 @@ Describe 'ai-assist-docs'
     The status should be failure
     The output should equal ''
   End
+
+  It 'follows a tealdeer alias page to the real target'
+    # `convert` is an alias page → it should resolve to the `magick convert` docs.
+    Mock tldr
+      case " $* " in (*" --offline "*) exit 2 ;; esac
+      case "$*" in
+        *"magick convert"*) printf 'MAGICK_CONVERT_REAL\n  magick convert in.png out.jpg\n' ;;
+        *convert*) printf 'convert\n\nThis command is an alias of `magick convert`.\n\nView documentation for the original command:\n\n    tldr magick convert\n' ;;
+        *) exit 1 ;;
+      esac
+    End
+    When call docs convert
+    The output should include 'MAGICK_CONVERT_REAL'
+    The output should not include 'alias of'
+  End
 End
