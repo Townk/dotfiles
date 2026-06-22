@@ -41,7 +41,14 @@ _aas_US=$'\x1f' _aas_RS=$'\x1e'
 exec {_aas_fd}<>"$cmd_fifo"
 while IFS= read -r -d "$_aas_RS" _aas_job <&$_aas_fd; do
   _aas_reply="${_aas_job%%${_aas_US}*}"
-  _aas_cmd="${_aas_job#*${_aas_US}}"
+  _aas_rest="${_aas_job#*${_aas_US}}"
+  if [[ "$_aas_rest" == *"${_aas_US}"* ]]; then
+    _aas_id="${_aas_rest%%${_aas_US}*}"
+    _aas_cmd="${_aas_rest#*${_aas_US}}"
+  else
+    _aas_id=""
+    _aas_cmd="$_aas_rest"
+  fi
   [[ -n "$_aas_reply" && -d "$_aas_reply" ]] || continue
   # Run in a subshell so `exit N` from user code is captured as the exit code
   # rather than terminating this persistent process. The subshell restores the
@@ -64,6 +71,12 @@ while IFS= read -r -d "$_aas_RS" _aas_job <&$_aas_fd; do
     print -r -- "export LAST_EXCODE=${(q)_aas_code}"
     print -r -- "export LAST_STDOUT=${(q)$(<"$_aas_reply/out")}"
     print -r -- "export LAST_STDERR=${(q)$(<"$_aas_reply/err")}"
+    if [[ -n "$_aas_id" ]]; then
+      _aas_key="${_aas_id//[^A-Za-z0-9_]/_}"
+      print -r -- "export AAS_OUT_${_aas_key}=${(q)$(<"$_aas_reply/out")}"
+      print -r -- "export AAS_ERR_${_aas_key}=${(q)$(<"$_aas_reply/err")}"
+      print -r -- "export AAS_EXIT_${_aas_key}=${(q)_aas_code}"
+    fi
   } > "$_aas_tmp" && mv "$_aas_tmp" "$_aas_state"
   : >"$_aas_reply/done"
 done

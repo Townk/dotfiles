@@ -19,6 +19,14 @@ Describe 'ai-assist-shell'
     printf '%s' "$reply"
   }
 
+  # Submit a job carrying a block id; blocks until done.
+  run_job_id() {
+    local reply id cmd; reply="$(mktemp -d "$TEST_TMP/reply.XXXXXX")"; id="$1"; cmd="$2"
+    printf '%s\x1f%s\x1f%s\x1e' "$reply" "$id" "$cmd" > "$FIFO"
+    local i=0; while [ ! -e "$reply/done" ] && [ $i -lt 200 ]; do sleep 0.02; i=$((i+1)); done
+    printf '%s' "$reply"
+  }
+
   It 'captures stdout, stderr and exit code separately'
     reply="$(run_job 'echo out; echo err >&2; exit 3')"
     The contents of file "$reply/out" should equal "out"
@@ -51,5 +59,12 @@ Describe 'ai-assist-shell'
     "$SCRIPT" --cmd-fifo "$FIFO" --env-file "$envf" --cwd "$TEST_TMP" & SHELL_PID=$!
     reply="$(run_job 'echo $SEEDED')"
     The contents of file "$reply/out" should equal "yes"
+  End
+
+  It 'exposes AAS_OUT_<id> to a later job'
+    run_job_id diag 'echo hello' >/dev/null
+    reply="$(run_job 'printf %s "$AAS_OUT_diag"')"
+    When call cat "$reply/out"
+    The output should equal "hello"
   End
 End
