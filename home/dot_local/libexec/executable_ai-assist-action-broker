@@ -43,6 +43,14 @@ for _v in "${commands[delta]:-}" /opt/homebrew/bin/delta /usr/local/bin/delta; d
 done
 [[ -n "$viewer" ]] || viewer="less"
 
+# Hunk binary (overridable via AI_ASSIST_HUNK_BIN for tests; empty if not installed).
+hunk_bin="${AI_ASSIST_HUNK_BIN:-}"
+if [[ -z "$hunk_bin" ]]; then
+  for _h in "${commands[hunk]:-}" /opt/homebrew/bin/hunk /usr/local/bin/hunk; do
+    [[ -n "$_h" && -x "$_h" ]] && { hunk_bin="$_h"; break; }
+  done
+fi
+
 # broker::copy — local clipboard, or OSC 52 to the tty over SSH.
 broker::copy() {
   local payload="$1"
@@ -76,6 +84,21 @@ broker::view_diff() {
   print -rn -- "$diff" > "$patch"
   "$zj" action new-pane --floating --close-on-exit --name "diff:$id" \
     -- ${(z)viewer} "$patch" 2>/dev/null || true
+}
+
+# broker::review_diff — open the patch in hunk (if available) or the viewer float.
+broker::review_diff() {
+  local id="$1" diff="$2"
+  [[ -n "$zj" ]] || return 0
+  local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-review.XXXXXX")"
+  print -rn -- "$diff" > "$patch"
+  if [[ -n "$hunk_bin" ]]; then
+    "$zj" action new-pane --floating --close-on-exit --name "review:$id" \
+      -- "$hunk_bin" patch "$patch" 2>/dev/null || true
+  else
+    "$zj" action new-pane --floating --close-on-exit --name "review:$id" \
+      -- ${(z)viewer} "$patch" 2>/dev/null || true
+  fi
 }
 
 # broker::apply_diff — apply a patch in the agent shell via ai-assist-run, then
@@ -128,8 +151,9 @@ broker::dispatch() {
     copy)       broker::copy "$payload" ;;
     play)       broker::play "$payload" ;;
     run)        broker::run_block "$id" "$payload" ;;
-    view-diff)  broker::view_diff "$id" "$payload" ;;
-    apply-diff) broker::apply_diff "$id" "$payload" ;;
+    view-diff)   broker::view_diff "$id" "$payload" ;;
+    review-diff) broker::review_diff "$id" "$payload" ;;
+    apply-diff)  broker::apply_diff "$id" "$payload" ;;
   esac
 }
 

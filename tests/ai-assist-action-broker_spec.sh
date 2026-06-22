@@ -102,4 +102,24 @@ Describe 'ai-assist-action-broker'
     The path "$TEST_TMP/airun" should be exist
     The contents of file "$TEST_TMP/ranlog" should include "git apply"
   End
+
+  It 'review-diff opens hunk in a floating pane when hunk is available'
+    load_broker
+    # stub hunk on PATH so the resolver finds it
+    printf '#!/usr/bin/env zsh\nprint -r -- "hunk $*"\n' > "$TEST_TMP/hunk"; chmod +x "$TEST_TMP/hunk"
+    PATH="$TEST_TMP:$PATH"
+    hunk_bin="$TEST_TMP/hunk"   # force the resolver in the test (see impl note)
+    broker::review_diff r1 "--- a"$'\n'"+++ b"
+    The contents of file "$TEST_TMP/zj.log" should include "new-pane"
+    The contents of file "$TEST_TMP/zj.log" should include "--floating"
+    The contents of file "$TEST_TMP/zj.log" should include "hunk"
+  End
+
+  It 'review-diff falls back to the viewer when hunk is absent'
+    load_broker
+    hunk_bin=""   # no hunk
+    broker::review_diff r2 "--- a"$'\n'"+++ b"
+    The contents of file "$TEST_TMP/zj.log" should include "new-pane"
+    The contents of file "$TEST_TMP/zj.log" should not include "hunk"
+  End
 End
