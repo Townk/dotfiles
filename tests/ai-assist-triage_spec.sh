@@ -113,6 +113,10 @@ JSON
     The status should be success
     The contents of file "$TEST_TMP/zj-args" should include "write-chars --pane-id terminal_7"
     The contents of file "$TEST_TMP/zj-args" should include "mogrify -resize 50%"
+    # Bracketed paste: ESC[200~ (27 91 50 48 48 126) opens it; ESC[201~ closes it,
+    # so the command lands as one editable buffer and embedded newlines can't run.
+    The contents of file "$TEST_TMP/zj-args" should include "write --pane-id terminal_7 27 91 50 48 48 126"
+    The contents of file "$TEST_TMP/zj-args" should include "27 91 50 48 49 126"
     # No CR write (the broker's `play` uses `action write … 13`; COMMAND must NOT).
     The contents of file "$TEST_TMP/zj-args" should not include "write 13"
     # No docked pane for a command.

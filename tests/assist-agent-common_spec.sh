@@ -249,9 +249,25 @@ JSON
       When call classify "$(printf '__COMMAND__\n```bash\nmogrify -resize 200x *.png\n```\nThis resizes all PNGs.')"
       The output should equal "command$(printf '\x1f')mogrify -resize 200x *.png"
     End
+    It 'takes only the first line of a command (drops trailing prose)'
+      When call classify "$(printf '__COMMAND__\ngit log --since="5 hours ago"\nThis lists your commits.')"
+      The output should equal "command$(printf '\x1f')git log --since=\"5 hours ago\""
+    End
+    It 'escalates an ambiguous command that also contains another sentinel'
+      When call classify "$(printf '__COMMAND__\n__ANSWER__\nYour command used --since 2 hours.')"
+      The output should equal "escalate$(printf '\x1f')ambiguous triage output"
+    End
     It 'classifies an answer'
       When call classify "$(printf '__ANSWER__\nUse mogrify.')"
       The output should equal "answer$(printf '\x1f')Use mogrify."
+    End
+    It 'ignores leading blank lines before the sentinel'
+      When call classify "$(printf '\n__ANSWER__\nUse mogrify.')"
+      The output should equal "answer$(printf '\x1f')Use mogrify."
+    End
+    It 'classifies an escalate reason with no space after the colon'
+      When call classify '__ESCALATE__:needs files'
+      The output should equal "escalate$(printf '\x1f')needs files"
     End
     It 'classifies an escalate with reason'
       When call classify '__ESCALATE__: needs to inspect files'
@@ -273,6 +289,7 @@ JSON
       The output should include 'ai-assist-docs'
       The output should include 'command -v'
       The output should include 'NO markdown code fences'
+      The output should include 'EXACTLY ONE'
     End
   End
 

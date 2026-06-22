@@ -233,9 +233,13 @@ case "$kind" in
     if [[ -n "$origin_pane" ]]; then
       zj="$(assist::zellij_bin)" || zj=""
       if [[ -n "$zj" ]]; then
-        # Type the command at the origin prompt — NO trailing CR (the broker's
-        # `play` minus the Enter; the user reviews + runs it themselves).
+        # Put the command on the origin prompt via BRACKETED PASTE (ESC[200~ …
+        # ESC[201~) with NO trailing CR — the broker's `play` minus the Enter.
+        # Bracketed paste makes the whole payload land as ONE editable buffer the
+        # user reviews + runs; any embedded newline can NEVER auto-execute.
+        "$zj" action write --pane-id "$origin_pane" 27 91 50 48 48 126 2>/dev/null || true  # ESC[200~
         "$zj" action write-chars --pane-id "$origin_pane" -- "$payload" 2>/dev/null || true
+        "$zj" action write --pane-id "$origin_pane" 27 91 50 48 49 126 2>/dev/null || true  # ESC[201~
       fi
       cleanup_fifos
     else

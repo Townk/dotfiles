@@ -340,21 +340,37 @@ assist::triage_extract_command() {
   else
     body="$raw"
   fi
-  body="${body#"${body%%[![:space:]]*}"}"   # ltrim (incl. newlines)
-  body="${body%"${body##*[![:space:]]}"}"   # rtrim (incl. newlines)
+  # The command is the FIRST non-empty line — drop any trailing prose the model
+  # appended (a single command is what gets typed at the prompt). Models that try
+  # to explain after the command no longer leak that explanation onto the prompt.
+  body="$(print -r -- "$body" | awk 'NF{print; exit}')"
+  body="${body#"${body%%[![:space:]]*}"}"   # ltrim
+  body="${body%"${body##*[![:space:]]}"}"   # rtrim
   print -rn -- "$body"
 }
 
 # assist::triage_classify <raw> — map the cheap pass's first line to KIND␟PAYLOAD.
 assist::triage_classify() {
-  local raw="$1" first rest
+  local raw="$1" first rest US=$'\x1f'
+  # Skip leading blank lines / whitespace so a stray newline before the sentinel
+  # does not misclassify the response.
+  raw="${raw#"${raw%%[![:space:]]*}"}"
   first="${raw%%$'\n'*}"
   rest="${raw#*$'\n'}"; [[ "$rest" == "$raw" ]] && rest=""
-  local US=$'\x1f'
   case "$first" in
-    __COMMAND__)      print -rn -- "command${US}$(assist::triage_extract_command "$rest")" ;;
+    __COMMAND__)
+      local cmd; cmd="$(assist::triage_extract_command "$rest")"
+      # A well-formed command is non-empty and contains no other sentinel. If the
+      # model emitted ambiguous output (e.g. __COMMAND__ then __ANSWER__), DON'T
+      # type it at the prompt — escalate to the capable harness instead.
+      if [[ -z "$cmd" || "$cmd" == *__ANSWER__* || "$cmd" == *__ESCALATE__* || "$cmd" == *__COMMAND__* ]]; then
+        print -rn -- "escalate${US}ambiguous triage output"
+      else
+        print -rn -- "command${US}${cmd}"
+      fi
+      ;;
     __ANSWER__)       print -rn -- "answer${US}${rest}" ;;
-    __ESCALATE__:*)   print -rn -- "escalate${US}${first#__ESCALATE__: }" ;;
+    __ESCALATE__:*)   local r="${first#__ESCALATE__:}"; print -rn -- "escalate${US}${r# }" ;;
     __ESCALATE__)     print -rn -- "escalate${US}" ;;
     *)                print -rn -- "escalate${US}unrecognized" ;;
   esac
@@ -383,14 +399,19 @@ Before proposing a command, verify every program it uses is available with
 command — return __ANSWER__ explaining it is missing and, if known, how to
 install it.
 
-Reply with EXACTLY one of these, and put the sentinel on its OWN first line:
+Output EXACTLY ONE of the three sentinels below — never more than one, and put it
+on its OWN first line with nothing before it. If a single shell command would
+accomplish the request (e.g. "list/show/find/how do I X"), ALWAYS choose
+__COMMAND__ — do not explain instead; explanations belong in __ANSWER__ only when
+there is genuinely no single command to give.
+
   __COMMAND__
-  <the command and NOTHING else: a single ready-to-run shell command on the
-   next line(s) — raw text, NO markdown code fences, NO backticks, NO surrounding
-   prose or explanation. It will be typed directly onto the user's prompt.>
+  <ONE ready-to-run shell command on the very next line and NOTHING else — raw
+   text, NO markdown code fences, NO backticks, NO __ANSWER__ section, NO prose
+   before or after. It is typed directly onto the user's prompt.>
 
   __ANSWER__
-  <a short markdown explanation>
+  <a short markdown explanation — only when no single command fits>
 
   __ESCALATE__: <one-line reason>   (when this needs multi-step investigation,
   iteration, file changes, or asking the user)
