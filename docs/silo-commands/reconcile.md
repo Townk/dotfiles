@@ -102,23 +102,25 @@ if [ "$test_rc" -ne 0 ]; then
 fi
 
 # 8. Remove the agent WORKTREE first. This releases the branch checkout
-#    so step 9 can delete it. We're standing in master-work (a sibling of
-#    the agent worktree under $WT_ROOT), so removal is safe. cd to $WT_ROOT
-#    to be explicit about not being inside the worktree we're removing.
-cd "$WT_ROOT"
+#    so step 9 can delete it. Run `git worktree remove` with the absolute
+#    path WHILE STILL IN master-work (a valid worktree) — do NOT `cd` to
+#    $WT_ROOT first, because $WT_ROOT is not a worktree and `git` commands
+#    would fail with "not a git repository" there.
 git worktree remove "$WT_ROOT/work-on-<silo>-<suffix>"
 
-# 9. Delete the agent BRANCH. Still inside master-work's git context (HEAD
-#    is master), so `git branch -d` sees the branch as merged and succeeds.
-#    Two constraints make the order matter: (a) `-d` refuses if the branch
-#    is checked out in any worktree — so the agent worktree (step 8) must be
+# 9. Delete the agent BRANCH. Still inside master-work (HEAD is master),
+#    so `git branch -d` sees the branch as merged and succeeds. Two
+#    constraints make the order matter: (a) `-d` refuses if the branch is
+#    checked out in any worktree — so the agent worktree (step 8) must be
 #    gone first; (b) `-d` refuses if the branch isn't merged into the current
-#    HEAD — so this must run with HEAD=master (i.e. from master-work, NOT
-#    from the live tree which may be on a feature branch).
-cd "$WT_ROOT/master-work"
+#    HEAD — so this must run with HEAD=master (from master-work, NOT from
+#    the live tree which may be on a feature branch).
 git branch -d work-on-<silo>-<suffix>
 
-# 10. Remove master-work. Commits are on master now.
+# 10. Remove master-work. We're standing in it, so cd to its parent first
+#     (or the live tree) — `git worktree remove` refuses to remove the
+#     worktree you're inside.
+cd "$HOME/.local/share/chezmoi"
 git worktree remove "$WT_ROOT/master-work"
 
 # 11. Release the integration lock (fd 9 closes).
