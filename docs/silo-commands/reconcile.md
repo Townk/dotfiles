@@ -23,8 +23,17 @@ mkdir -p "$WT_ROOT"
 
 ## Procedure
 
-Run this from the agent's worktree (`$WT_ROOT/work-on-<silo>-<suffix>`), on
-the `work-on-<silo>-<suffix>` branch, with all work committed.
+**Run this as a single shell script / single process.** `flock` only
+holds the lock for the lifetime of the process that opened the file
+descriptor — if you run the steps across separate shell invocations, the
+lock silently releases between them and the serialization is lost. The
+entire critical section (acquire → create master-work → merge → test →
+cleanup → release) must be one process. Save the block below as a script,
+substitute your silo name + suffix, and run it once.
+
+Run this from the agent's worktree
+(`$WT_ROOT/work-on-<silo>-<suffix>`), on the `work-on-<silo>-<suffix>`
+branch, with all work committed.
 
 ```sh
 LOCK="$(git rev-parse --git-common-dir)/silo-integration.lock"
@@ -92,14 +101,25 @@ if [ "$test_rc" -ne 0 ]; then
   exit "$test_rc"
 fi
 
-# 8. Cleanup — commits are on master now.
-git worktree remove "$WT_ROOT/master-work"
-cd - >/dev/null
-exec 9>&-   # release integration lock
-
-# 9. Remove the agent's worktree + branch (branch -d refuses if unmerged).
-git worktree remove "$WT_ROOT/work-on-<silo>-<suffix>"
+# 8. Delete the agent BRANCH while still inside master-work (HEAD is master
+#    here, so `git branch -d` sees the branch as merged and succeeds). Do
+#    this BEFORE removing master-work — if you cd to the live tree first and
+#    the live tree isn't on master, `-d` refuses ("not fully merged") even
+#    though the branch IS on master.
 git branch -d work-on-<silo>-<suffix>
+
+# 9. Remove master-work. Commits are on master now.
+git worktree remove "$WT_ROOT/master-work"
+
+# 10. Remove the agent WORKTREE. We can't remove the worktree we're no
+#     longer standing in (we're in master-work's parent after step 9, but
+#     the agent worktree is a sibling) — so this is safe. cd to $WT_ROOT
+#     first to be explicit.
+cd "$WT_ROOT"
+git worktree remove "$WT_ROOT/work-on-<silo>-<suffix>"
+
+# 11. Release the integration lock (fd 9 closes).
+exec 9>&-
 ```
 
 ## Why no auto-rebase
