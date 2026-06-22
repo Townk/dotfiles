@@ -153,6 +153,83 @@ git worktree remove "$WT_ROOT/master-work"
 exec 9>&-
 ```
 
+## When `master` is already checked out in the live tree
+
+Step 5's `git worktree add "$WT_ROOT/master-work" master` **fails** if
+`master` is already checked out in any other worktree — and in this repo
+the live tree at `~/.local/share/chezmoi` normally sits on `master`, so
+this is the *common* state here, not an edge case. The failure is loud:
+
+```
+fatal: 'master' is already used by worktree at '/Users/thiago/.local/share/chezmoi'
+```
+
+Two independent problems compound that failure if you let the script
+continue (the canonical block above has no `set -e`):
+
+- `cd "$WT_ROOT/master-work"` then fails (no such directory), so the
+  subsequent `git merge --ff-only` runs **in the agent worktree** (HEAD
+  is the agent branch, not `master`) and merges nothing;
+- `make test` runs in the agent worktree, not against advanced `master`;
+- `git worktree remove` of the agent worktree succeeds, but
+  `git branch -d` correctly refuses (the branch isn't merged into `master`),
+  so the agent commit survives — `master` was never advanced.
+
+**Recover by ff-merging in the live tree directly.** Only do this when the
+live tree is on `master` with no **tracked** modifications (an untracked
+scratch dir like `docs/plans/` is fine — a fast-forward doesn't touch it).
+Run it as one process under the same `flock`, substituting `<silo>` and
+`<suffix>`:
+
+```sh
+# Acquire the integration lock exactly as in the main procedure (steps 1-2):
+# exec 9>"$LOCKS_DIR/silo-integration.lock"; UX-check on fd 8; flock 9.
+
+cd "$HOME/.local/share/chezmoi"
+
+# Guard: live tree must be on master with no tracked modifications.
+[ "$(git branch --show-current)" = master ] || { echo "live tree not on master" >&2; exit 1; }
+git diff --quiet && git diff --cached --quiet || { echo "live tree has tracked mods" >&2; exit 1; }
+
+git fetch origin master
+local_ahead=$(git rev-list --count master..work-on-<silo>-<suffix>)
+master_ahead=$(git rev-list --count work-on-<silo>-<suffix>..master)
+
+if [ "$master_ahead" -eq 0 ] && [ "$local_ahead" -gt 0 ]; then
+  git merge --ff-only work-on-<silo>-<suffix>
+elif [ "$local_ahead" -eq 0 ]; then
+  echo "Nothing to integrate." >&2; exit 0
+else
+  echo "master advanced by $master_ahead — divergence, review manually." >&2; exit 1
+fi
+
+make test
+test_rc=$?
+if [ "$test_rc" -ne 0 ]; then
+  git reset --hard ORIG_HEAD 2>/dev/null || git reset --hard master@{1}
+  echo "make test failed ($test_rc); master NOT advanced. Rolled back." >&2
+  exit "$test_rc"
+fi
+
+# Remove the agent WORKTREE first (releases the branch checkout), then
+# delete the branch. We're in the live tree (HEAD=master), so `git branch -d`
+# sees the branch as merged. Order matters for the same reasons as steps 8-9.
+git worktree remove "$WT_ROOT/work-on-<silo>-<suffix>"
+git branch -d work-on-<silo>-<suffix>
+
+exec 9>&-
+```
+
+No `master-work` worktree is created or removed in this variant, so skip
+canonical steps 5 (create `master-work`) and 10 (remove `master-work`).
+Everything else — lock acquisition, UX mutual-exclusion, `--ff-only`,
+`make test` under the lock, rollback on test failure, agent-worktree
+removal (step 8), branch deletion (step 9) — is identical.
+
+If `master` is checked out in a worktree that is **not** the live tree, or
+the live tree has tracked modifications, do **not** ff-merge in place —
+stash/commit or move master first, then re-run the canonical procedure.
+
 ## Why no auto-rebase
 
 Rebasing the agent branch onto a moving master rewrites SHAs and, on conflict,
