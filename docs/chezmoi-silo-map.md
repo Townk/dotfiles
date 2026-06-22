@@ -61,6 +61,8 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 | S11 | Yazi | `dot_config/yazi/` | (lua plugins) | Yazi previewer contract (consumes S10), `cd` event plugins |
 | S12 | chezmoi orchestration & run-scripts | `.setup.sh`, `.chezmoiscripts/`, `.chezmoi*.{tmpl,yaml}` | — | `run_onchange_*` ordering + hash-baking, `zellij-plugin-path.tmpl` shared resolver |
 | S13 | Cross-cutting utilities | `dot_local/bin/{notify,wait-until,chezmoi-reverse,tab-edit}` | `lib/common.zsh` (`notify`), `lib/platform.zsh` | `notify` CLI, `chezmoi-reverse --no-merge`, `tab-edit` launcher |
+| S14 | pi coding agent config | `dot_pi/` + `pi-settings-merge.tmpl` + pi blocks in `.chezmoi.toml.tmpl`/`.chezmoiignore.tmpl`/`.chezmoiscripts/` | (none in `lib/`) | agent-local↔agent symlink sharing (extensions/lsp/skills/themes/Librarian), `modify_settings.json.tmpl` declarative-keys merge + `pi-settings-merge.tmpl`, `.pi.devExtensions` dev-extension symlink resolution |
+| S15 | Cursor coding agent config | `dot_cursor/` | (none in `lib/`) | MDC rule format + `alwaysApply` semantics, agents/skills parallel structure (mirrors S14) |
 
 > **S13 is a coordination silo** — its files are shared deps. Treat
 > `common.zsh`, `notify`, `tab-edit`, `chezmoi-reverse` as read-mostly by
@@ -388,27 +390,73 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 ---
 
+## S14 — pi coding agent config
+
+**Owner area (safe to edit):**
+- `home/dot_pi/agent/` — `AGENTS.md` (cloud baseline), `README.md`, `lsp.json`, `modify_settings.json.tmpl`, `private_models.json.tmpl`, `agents/{Architect,Librarian,Reviewer}.md`, `skills/{code-simplifier,commit}/SKILL.md`, `themes/catppuccin-mocha.json`, `extensions/pi-rtk-optimizer/config.json`, `extensions/symlink_pi-{cockpit,plannotator-bridge}.tmpl`
+- `home/dot_pi/agent-local/` — `AGENTS.md` (local 32K-context variant), `agents/{Architect,Reviewer}.md`, `agents/symlink_Librarian.md.tmpl`, `modify_settings.json.tmpl`, `private_models.json.tmpl`, `symlink_{extensions,lsp.json,skills,themes}.tmpl`
+- `home/dot_pi/web-search.json`
+- `home/.chezmoitemplates/pi-settings-merge.tmpl` (pi-specific FORCE/SEED/KEEP merge policy)
+- **pi-specific content blocks in shared chezmoi files** (S14 owns the pi content; S12 owns the machinery — ordering, `run_once`/`run_after` mechanics, hash-baking, `.chezmoi*` scaffolding): the `[data.pi.devExtensions]` block in `.chezmoi.toml.tmpl`, the pi-cockpit/pi-plannotator-bridge suppression blocks in `.chezmoiignore.tmpl`, the consumer-machine `pi install` blocks in `run_once_after_10-setup-bootstrap-tools.sh.tmpl`, and the `~/.pi/agent-local` prune block in `run_after_90-prune-dev-shell-state.sh.tmpl`.
+
+**Out of scope:** the `pi-local` zsh function in `dot_config/zsh/functions.d/commands.sh` (S9) — S14 owns the `agent-local` config it points at, not the function. The `ai-assist-pi`/`ai-commit-pi` wrappers (S6) — they CALL the pi CLI; S14 owns the CLI's config. The **chezmoi** silo (S12) owns the *machinery* of the shared files the pi blocks live in (run-script ordering/numbering, `run_once` vs `run_after` choice, hash-baking, `.chezmoi*.{tmpl,yaml}` scaffolding) — S14 owns the pi *content* within those files; coordinate with S12 only when adding a brand-new run-script (needs an ordering number) or restructuring a shared file's skeleton. The pi CLI (npm `pi-coding-agent`) and the `pi-cockpit`/`pi-plannotator-bridge` source repos (external, outside this repo, referenced by symlink).
+
+**Public contract (preserve):**
+- **agent-local ↔ agent symlink sharing**: `agent-local/symlink_{extensions,lsp.json,skills,themes}.tmpl` → `~/.pi/agent/{extensions,lsp.json,skills,themes}` and `agent-local/agents/symlink_Librarian.md.tmpl` → `~/.pi/agent/agents/Librarian.md`. A change to a shared resource in `agent/` propagates to `agent-local/` (and `pi-local`). Do not duplicate a shared resource into `agent-local/` as a real file (would shadow the symlink).
+- **`modify_settings.json.tmpl` declarative-keys merge**: the `modify_` script declaratively owns STRUCTURAL keys of `~/.pi/agent/settings.json` (theme, `extensions`/`skills`/`packages` lists, defaultProvider/model, thinking by profile, `npmCommand` via mise, observational-memory). Pi rewrites settings.json at runtime. The merge policy in `pi-settings-merge.tmpl`: FORCE (`extensions`,`skills`,`packages`,`npmCommand`,`observational-memory` — always from `$desired`), SEED (absent keys written once), KEEP (Pi-owned runtime toggles). Byte-identical result → emit ORIGINAL BYTES so chezmoi reports no diff. Do not move a key between FORCE and KEEP without understanding the consequence.
+- **`.pi.devExtensions` dev-extension symlink resolution**: `agent/extensions/symlink_pi-{cockpit,plannotator-bridge}.tmpl` resolve from `.pi.devExtensions` (declared in the `[data.pi]` block of `.chezmoi.toml.tmpl`, S14-owned). Dev machine → value is a path → symlink to live working tree. Consumer machine → value empty → symlink suppressed by the S14-owned `.chezmoiignore.tmpl` block and the S14-owned `run_once_after_10` block runs `pi install git:…` instead. Adding/removing a dev extension touches FOUR places, all S14-owned: the `.chezmoi.toml.tmpl` data block, the `.chezmoiignore.tmpl` suppression, the `run_once_after_10` install block, and a `symlink_*.tmpl` under `dot_pi/agent/extensions/`. (Coordinate with S12 only for an ordering number if a brand-new run-script file is added.)
+- **Profile gating**: `modify_settings.json.tmpl`/`private_models.json.tmpl` are profile-gated (`work`/`dev-shell`/personal) — preserve the guards.
+- **`packages`/`extensions`/`skills` array pinning**: FORCE keys; changing them changes what pi loads on every machine.
+
+**Consumes from:** S6 (`ai-assist-pi`/`ai-commit-pi` wrappers — read-only consumers), S9 (the `pi-local` function — points at S14's config), S12 (the *machinery* of the shared files the pi blocks live in — S14 owns the pi content, S12 owns the mechanics), external pi CLI + `pi-cockpit`/`pi-plannotator-bridge` repos.
+
+**Entry points:** `dot_pi/agent/AGENTS.md`, `dot_pi/agent/modify_settings.json.tmpl`, `.chezmoitemplates/pi-settings-merge.tmpl`, `dot_pi/agent-local/AGENTS.md`.
+
+**Dispatch example:** *"Tighten the pi settings-merge FORCE key set. You own `dot_pi/agent/modify_settings.json.tmpl` + `.chezmoitemplates/pi-settings-merge.tmpl`. Preserve the FORCE/SEED/KEEP policy and the byte-identical-emit invariant (chezmoi must report no diff when no forced key drifted). The `agent-local`↔`agent` symlinks mean a change to `agent/skills/` or `agent/extensions/` propagates to `pi-local` — understand the sharing before editing shared resources. Don't touch the `pi-local` function (S9) or the `ai-assist-pi` wrappers (S6); the pi blocks in `.chezmoi.toml.tmpl`/`.chezmoiignore.tmpl`/`run_once_after_10` are yours — coordinate with S12 only if you add a brand-new run-script."*
+
+---
+
+## S15 — Cursor coding agent config
+
+**Owner area (safe to edit):** `home/dot_cursor/` — `agents/{architect,librarian,reviewer}.md`, `skills/{code-commit,code-review,code-simplifier,handoff}/SKILL.md`, `rules/baseline.mdc`.
+
+**Out of scope:** the `ai-assist-cursor`/`ai-commit-cursor` wrappers (S6) — they CALL cursor; S15 owns the agent's own config. The Cursor app/CLI (external).
+
+**Public contract (preserve):**
+- **MDC rule format**: `rules/baseline.mdc` uses Cursor's `.cursor/rules` MDC format — markdown body + YAML frontmatter (`description`, `alwaysApply: true`). `alwaysApply: true` injects the rule into every Cursor session's context. Preserve the frontmatter schema and the `alwaysApply` semantics.
+- **agents/skills parallel structure**: `agents/{architect,librarian,reviewer}.md` and `skills/*/SKILL.md` mirror `dot_pi/agent/`'s structure (S14). The subagent names (`architect`/"Dave", `librarian`, `reviewer`) and the `SKILL.md` `name`/`description` frontmatter are the contract Cursor's agent/skill discovery depends on. Keep the structure consistent with S14 where the two configs should agree on behavior.
+
+**Consumes from:** S6 (`ai-assist-cursor`/`ai-commit-cursor` wrappers — read-only consumers), external Cursor app/CLI.
+
+**Entry points:** `dot_cursor/rules/baseline.mdc`, `dot_cursor/agents/`, `dot_cursor/skills/`.
+
+**Dispatch example:** *"Review the Cursor baseline rule for clarity. You own `dot_cursor/rules/baseline.mdc` + `dot_cursor/agents/` + `dot_cursor/skills/`. Preserve the MDC frontmatter (`description` + `alwaysApply: true`) — `alwaysApply` is what injects the rule into every session. Keep the agents/skills structure parallel to `dot_pi/agent/` (S14). Don't touch the `ai-assist-cursor` wrappers (S6)."*
+
+---
+
 ## Concurrency & collision matrix
 
 Which silos can run agents **in parallel** without file collisions. `✓` = safe to
 run concurrently; `⚠` = shared file, serialize or pre-agree ownership; `✗` = same
 owner area, don't parallelize.
 
-|  | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11 | S12 | S13 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| S1 | — | ✓ | ✓ | ✓ | ⚠¹ | ✓ | ✓ | ⚠² | ⚠³ | ⚠⁴ | ⚠⁵ | ⚠⁶ | ⚠⁷ |
-| S2 | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠⁸ | ⚠⁹ | ✓ |
-| S3 | ✓ | ✓ | — | ✓ | ⚠¹ | ✓ | ✓ | ✓ | ⚠⁷ | ✓ | ✓ | ✓ | ⚠⁷ |
-| S4 | ✓ | ✓ | ✓ | — | ⚠¹⁰ | ✓ | ✓ | ✓ | ⚠¹¹ | ✓ | ✓ | ✓ | ⚠¹¹ |
-| S5 | ⚠¹ | ✓ | ⚠¹ | ⚠¹⁰ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠⁶ | ✓ |
-| S6 | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ⚠¹² | ✓ | ✓ | ✓ | ✓ |
-| S7 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ⚠¹³ | ✓ | ✓ | ⚠⁶ | ✓ |
-| S8 | ⚠² | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | —¹⁴ | ✓ | ✓ | ✓ | ⚠⁶ | ✓ |
-| S9 | ⚠³ | ✓ | ⚠⁷ | ⚠¹¹ | ✓ | ⚠¹² | ⚠¹³ | ✓ | — | ✓ | ✓ | ⚠⁶ | ⚠¹¹ |
-| S10 | ⚠⁴ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ⚠⁸ | ✓ | ✓ |
-| S11 | ⚠⁵ | ⚠⁸ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠⁸ | — | ✓ | ✓ |
-| S12 | ⚠⁶ | ⚠⁹ | ✓ | ✓ | ⚠⁶ | ✓ | ⚠⁶ | ⚠⁶ | ⚠⁶ | ✓ | ✓ | — | ✓ |
-| S13 | ⚠⁷ | ✓ | ⚠⁷ | ⚠¹¹ | ✓ | ✓ | ✓ | ✓ | ⚠¹¹ | ✓ | ✓ | ✓ | — |
+|  | S1 | S2 | S3 | S4 | S5 | S6 | S7 | S8 | S9 | S10 | S11 | S12 | S13 | S14 | S15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| S1 | — | ✓ | ✓ | ✓ | ⚠¹ | ✓ | ✓ | ⚠² | ⚠³ | ⚠⁴ | ⚠⁵ | ⚠⁶ | ⚠⁷ | ✓ | ✓ |
+| S2 | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠⁸ | ⚠⁹ | ✓ | ✓ | ✓ |
+| S3 | ✓ | ✓ | — | ✓ | ⚠¹ | ✓ | ✓ | ✓ | ⚠⁷ | ✓ | ✓ | ✓ | ⚠⁷ | ✓ | ✓ |
+| S4 | ✓ | ✓ | ✓ | — | ⚠¹⁰ | ✓ | ✓ | ✓ | ⚠¹¹ | ✓ | ✓ | ✓ | ⚠¹¹ | ✓ | ✓ |
+| S5 | ⚠¹ | ✓ | ⚠¹ | ⚠¹⁰ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠⁶ | ✓ | ✓ | ✓ |
+| S6 | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ⚠¹² | ✓ | ✓ | ✓ | ✓ | ✓¹⁵ | ✓¹⁵ |
+| S7 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ⚠¹³ | ✓ | ✓ | ⚠⁶ | ✓ | ✓ | ✓ |
+| S8 | ⚠² | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | —¹⁴ | ✓ | ✓ | ✓ | ⚠⁶ | ✓ | ✓ | ✓ |
+| S9 | ⚠³ | ✓ | ⚠⁷ | ⚠¹¹ | ✓ | ⚠¹² | ⚠¹³ | ✓ | — | ✓ | ✓ | ⚠⁶ | ⚠¹¹ | ✓¹⁶ | ✓ |
+| S10 | ⚠⁴ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ⚠⁸ | ✓ | ✓ | ✓ | ✓ |
+| S11 | ⚠⁵ | ⚠⁸ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠⁸ | — | ✓ | ✓ | ✓ | ✓ |
+| S12 | ⚠⁶ | ⚠⁹ | ✓ | ✓ | ⚠⁶ | ✓ | ⚠⁶ | ⚠⁶ | ⚠⁶ | ✓ | ✓ | — | ✓ | ⚠¹⁷ | ✓ |
+| S13 | ⚠⁷ | ✓ | ⚠⁷ | ⚠¹¹ | ✓ | ✓ | ✓ | ✓ | ⚠¹¹ | ✓ | ✓ | ✓ | — | ✓ | ✓ |
+| S14 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓¹⁵ | ✓ | ✓ | ✓¹⁶ | ✓ | ✓ | ⚠¹⁷ | ✓ | — | ✓ |
+| S15 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓¹⁵ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 
 **Footnotes (the shared files behind each `⚠`):**
 1. **S1↔S5**: built font family name + custom-icon `code` pins are S5's output, S1's font chain references them. Safe if S5 preserves the contract; risky if either changes the pin set.
@@ -425,6 +473,9 @@ owner area, don't parallelize.
 12. **S6↔S9**: `functions.d/widgets.sh` contains both S9's dir-ring/smart-space widgets **and** S6's `ai-assist-trigger` widget. **Same file — serialize S6 and S9, or split the file first.**
 13. **S7↔S9**: `private_secrets.d/` (S7 owns the slot fragments, S9 owns the sourcing in `dot_zshrc`); `prompt-common.zsh` (S9 owns, S7 sources).
 14. **S8 internal**: S8a/S8b/S8c/S8d share `system-package-common.zsh` (`pkg::*`). Parallel within S8 only if no agent edits `pkg::*`; otherwise serialize the lib edit.
+15. **S6↔S14/S15**: the `ai-assist-pi`/`ai-commit-pi` (S6) and `ai-assist-cursor`/`ai-commit-cursor` (S6) wrappers CALL the pi/cursor CLIs whose config S14/S15 own. Disjoint files; the seam is conceptual (the CLI the wrapper invokes is configured by the agent-config silo). Safe to parallelize; preserve the `--probe` contract from S6's side.
+16. **S9↔S14**: the `pi-local` zsh function lives in `dot_config/zsh/functions.d/commands.sh` (S9) and points `PI_CODING_AGENT_DIR` at `~/.pi/agent-local` (S14's owner area). Disjoint files; S14 owns the config the function targets, S9 owns the function. Coordinate only if the function's env vars (`PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR`) need to change.
+17. **S12↔S14**: pi-specific content blocks live inside shared chezmoi-orchestration files — the `[data.pi.devExtensions]` block in `.chezmoi.toml.tmpl`, the pi-cockpit/pi-plannotator-bridge suppression blocks in `.chezmoiignore.tmpl`, the consumer-machine `pi install` blocks in `run_once_after_10-setup-bootstrap-tools.sh.tmpl`, and the `~/.pi/agent-local` prune in `run_after_90-prune-dev-shell-state.sh.tmpl`. **S14 owns these pi content blocks; S12 owns the chezmoi machinery** (run-script ordering/numbering, `run_once` vs `run_after` mechanics, hash-baking, `.chezmoi*.{tmpl,yaml}` scaffolding) — not the pi content. Per-block parallelism is fine; collision only if S12 restructures a shared file or renumbers run-scripts while S14 edits its blocks. Adding a brand-new pi run-script = coordinate with S12 for the ordering number. (No S12↔S15 hazard: `dot_cursor/` has no run-script or ignore gating — verified.)
 
 ## Dispatching cleanly — practical recipe
 

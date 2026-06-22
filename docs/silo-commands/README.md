@@ -107,6 +107,8 @@ templates; the `reconcile` skill remains the reusable capability it invokes.
 | `/work-on-shell` | shell (zsh) bootstrap & widgets | zsh bootstrap, ZLE widgets, `common.zsh`/`prompt::*`/`platform::*` |
 | `/work-on-preview` | file preview & terminal viewers | `preview` engine + terminal "card" viewers |
 | `/work-on-yazi` | Yazi | Yazi config + custom plugins |
+| `/work-on-pi` | pi coding agent config | pi agent config (cloud `agent/` + local `agent-local/`): custom agents/skills/extensions/themes, `pi-rtk-optimizer` extension, declarative settings-merge contract |
+| `/work-on-cursor` | Cursor coding agent config | Cursor agents/skills + `alwaysApply` MDC baseline rule |
 | `/work-on-chezmoi` | chezmoi orchestration & run-scripts | `.setup.sh`, `.chezmoiscripts/`, run-script ordering & hash triggers |
 | `/work-on-utils` | cross-cutting utilities | `notify`, `wait-until`, `chezmoi-reverse`, `tab-edit`, `common.zsh` |
 | `/end-work` | session integration | Lands a completed `work-on-<silo>-<suffix>` branch onto `master` via the `reconcile` skill |
