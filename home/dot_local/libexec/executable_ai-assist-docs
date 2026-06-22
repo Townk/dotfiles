@@ -7,7 +7,9 @@ cmd="${1:-}"
 [[ -n "$cmd" ]] || { print -ru2 -- "ai-assist-docs: no command given"; exit 2; }
 
 if command -v tldr >/dev/null 2>&1; then
-  if out="$(tldr --offline -- "$cmd" 2>/dev/null)" && [[ -n "$out" ]]; then
+  # tealdeer uses its local cache by default (no network unless --update); it has
+  # no --offline flag (passing one errors out). `--` guards a cmd starting with -.
+  if out="$(tldr -- "$cmd" 2>/dev/null)" && [[ -n "$out" ]]; then
     print -r -- "$out"; exit 0
   fi
 fi

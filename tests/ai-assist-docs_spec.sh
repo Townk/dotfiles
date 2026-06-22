@@ -2,11 +2,15 @@ Describe 'ai-assist-docs'
   docs() { "$HOME/.local/share/chezmoi/home/dot_local/libexec/executable_ai-assist-docs" "$@"; }
 
   It 'returns the tldr page on a hit'
+    # Mimic real tealdeer (1.8.x): it uses its cache by default and has NO
+    # --offline flag — passing one errors out. This guards the regression where
+    # ai-assist-docs called `tldr --offline …` and silently fell through to --help.
     Mock tldr
-      printf '# convert\n  resize: convert in.png -resize 200x out.png\n'
+      case " $* " in (*" --offline "*) echo 'tldr: unexpected argument --offline' >&2; exit 2 ;; esac
+      printf 'TLDR_PAGE_MARKER for %s\n' "${@: -1}"
     End
-    When call docs convert
-    The output should include 'resize'
+    When call docs faketool-xyz
+    The output should include 'TLDR_PAGE_MARKER'
     The status should be success
   End
 
