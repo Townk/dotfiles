@@ -164,7 +164,7 @@ for human review via plannotator. Wire this up:
 ### Sub-agent clarifications
 
 For 1–4 quick clarification questions, sub-agents use the
-`ask_user_question` tool (from `pi-askuserquestion`). Batch questions,
+`ask_user_question` tool (from `@juicesharp/rpiv-ask-user-question`). Batch questions,
 prefer single-select over free-text, and continue work around
 unanswered items where possible. Don't let a sub-agent block on a
 chain of single questions.
