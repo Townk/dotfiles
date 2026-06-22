@@ -245,6 +245,10 @@ JSON
       When call classify "$(printf '__COMMAND__\nmogrify -resize 200x .')"
       The output should equal "command$(printf '\x1f')mogrify -resize 200x ."
     End
+    It 'unwraps a fenced command and drops trailing prose'
+      When call classify "$(printf '__COMMAND__\n```bash\nmogrify -resize 200x *.png\n```\nThis resizes all PNGs.')"
+      The output should equal "command$(printf '\x1f')mogrify -resize 200x *.png"
+    End
     It 'classifies an answer'
       When call classify "$(printf '__ANSWER__\nUse mogrify.')"
       The output should equal "answer$(printf '\x1f')Use mogrify."
@@ -268,6 +272,7 @@ JSON
       The output should include '__ESCALATE__'
       The output should include 'ai-assist-docs'
       The output should include 'command -v'
+      The output should include 'NO markdown code fences'
     End
   End
 

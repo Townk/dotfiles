@@ -327,6 +327,24 @@ assist::worker_main() {
 }
 
 # ── Triage classifier (Phase D) ────────────────────────────────────────────
+# assist::triage_extract_command <raw> — pull a bare, runnable command out of the
+# model's __COMMAND__ body. Models often ignore "no markdown" and wrap the command
+# in a ```fence``` and/or trail an explanation; typing that verbatim at the prompt
+# is wrong. If a fenced block is present, take ONLY its contents; otherwise keep
+# the body as-is. Then strip surrounding whitespace/newlines (no stray newline is
+# typed, and no trailing prose rides along).
+assist::triage_extract_command() {
+  local raw="$1" body
+  if [[ "$raw" == *'```'* ]]; then
+    body="$(print -r -- "$raw" | awk '/^[[:space:]]*```/{f=!f; next} f{print}')"
+  else
+    body="$raw"
+  fi
+  body="${body#"${body%%[![:space:]]*}"}"   # ltrim (incl. newlines)
+  body="${body%"${body##*[![:space:]]}"}"   # rtrim (incl. newlines)
+  print -rn -- "$body"
+}
+
 # assist::triage_classify <raw> — map the cheap pass's first line to KIND␟PAYLOAD.
 assist::triage_classify() {
   local raw="$1" first rest
@@ -334,7 +352,7 @@ assist::triage_classify() {
   rest="${raw#*$'\n'}"; [[ "$rest" == "$raw" ]] && rest=""
   local US=$'\x1f'
   case "$first" in
-    __COMMAND__)      print -rn -- "command${US}${rest}" ;;
+    __COMMAND__)      print -rn -- "command${US}$(assist::triage_extract_command "$rest")" ;;
     __ANSWER__)       print -rn -- "answer${US}${rest}" ;;
     __ESCALATE__:*)   print -rn -- "escalate${US}${first#__ESCALATE__: }" ;;
     __ESCALATE__)     print -rn -- "escalate${US}" ;;
@@ -365,9 +383,11 @@ Before proposing a command, verify every program it uses is available with
 command — return __ANSWER__ explaining it is missing and, if known, how to
 install it.
 
-Reply with EXACTLY one of:
+Reply with EXACTLY one of these, and put the sentinel on its OWN first line:
   __COMMAND__
-  <a single ready-to-run shell command>
+  <the command and NOTHING else: a single ready-to-run shell command on the
+   next line(s) — raw text, NO markdown code fences, NO backticks, NO surrounding
+   prose or explanation. It will be typed directly onto the user's prompt.>
 
   __ANSWER__
   <a short markdown explanation>
