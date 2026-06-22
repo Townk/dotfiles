@@ -41,11 +41,19 @@ LOCK="$(git rev-parse --git-common-dir)/silo-integration.lock"
 exec 9>"$LOCK"
 
 # 1. Mutual lock check — refuse if a UX session is active (don't block for it).
+#    Probe the lock STATE, not the lockfile's existence: `flock` does not
+#    remove the lockfile on release, so `[ -e ]` would false-positive on a
+#    stale file left by a crashed run and block all future integrations.
+#    `flock -n` returns non-zero immediately if the lock is held; it succeeds
+#    on a free lock (including a stale-but-unlocked file). Release the probe
+#    fd right after — we only wanted to check, not hold.
 UX_LOCK="$(git rev-parse --git-common-dir)/silo-ux-session.lock"
-if [ -e "$UX_LOCK" ]; then
-  echo "UX session in progress ($UX_LOCK present). Wait for it to end." >&2
+exec 8>"$UX_LOCK"
+if ! "$FLOCK" -n 8; then
+  echo "UX session in progress. Wait for it to end." >&2
   exit 1
 fi
+exec 8>&-
 
 # 2. Acquire the integration lock (blocking — integration is our purpose).
 "$FLOCK" 9 || { echo "could not acquire integration lock" >&2; exit 1; }

@@ -56,13 +56,20 @@ work (no separate `reconcile.md` step after).
 ### Start (agent asks, human approves)
 
 1. Ask the user whether to enter a UX session. On approval:
-2. **Mutual lock check** — refuse if an integration is active (don't block):
+2. **Mutual lock check** — refuse if an integration is active (don't block).
+   Probe the lock STATE, not the lockfile's existence: `flock` does not remove
+   the lockfile on release, so `[ -e ]` would false-positive on a stale file
+   left by a crashed run and block all future sessions. `flock -n` returns
+   non-zero immediately if the lock is held; it succeeds on a free lock
+   (including a stale-but-unlocked file). Release the probe fd right after.
    ```sh
    INT_LOCK="$(git rev-parse --git-common-dir)/silo-integration.lock"
-   if [ -e "$INT_LOCK" ]; then
-     echo "Integration in progress ($INT_LOCK present). Wait for it to end." >&2
+   exec 8>"$INT_LOCK"
+   if ! "$FLOCK" -n 8; then
+     echo "Integration in progress. Wait for it to end." >&2
      exit 1
    fi
+   exec 8>&-
    ```
 3. **Acquire the session lock** (blocking — wait for any other session to end):
    ```sh
