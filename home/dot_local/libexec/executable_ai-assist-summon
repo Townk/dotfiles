@@ -43,7 +43,12 @@ fi
 # scrollback, project) is captured here while we still have the origin shell.
 req="$(assist::session_dir)/request.json"
 mkdir -p "${req:h}"
-assist::build_request "$(assist::prefill_template)" "$req"
+# The prefill is a ready-to-submit request derived from the captured context —
+# for a failed command: "Diagnose and fix why `cmd` failed (exit N) in proj";
+# empty for an ordinary prompt. It seeds request.json AND pre-fills the float so,
+# after an error, the user can just press Enter to ask for help.
+prefill="$(assist::prefill_template)"
+assist::build_request "$prefill" "$req"
 
 # ── Spawn the FLOAT running ai-assist-input directly with the two fifos ───────
 # Unlike the generic zj::text path (which wraps input-widget under zellij-modal
@@ -87,6 +92,7 @@ measured_h="$("$input_bin" --type text --measure --width "$pane_w" \
   --name "" --borderless true --pinned true --width "$pane_w" --height "$measured_h" --cwd "$PWD" \
   -- env "COLORTERM=${COLORTERM:-truecolor}" \
   "$input_bin" --type text --title ai-assist --prompt "$prompt" \
+  --value "$prefill" \
   --height "$height" --icon "$icon" \
   --out-fifo "$out_fifo" --in-fifo "$in_fifo" \
   "${AI_THEME_ARGS[@]}" >/dev/null 2>&1

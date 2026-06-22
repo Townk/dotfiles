@@ -97,4 +97,35 @@ Describe 'ai-assist-summon'
     The result of function cap should include "new-pane"
     The result of function cap should include "--borderless true"
   End
+
+  It 'pre-fills the float with a ready-to-submit request after a failed command'
+    # After an error, the box should carry a request the user can submit with one
+    # Enter (e.g. "Diagnose and fix why `gg build` failed …") — not be empty.
+    export ZELLIJ=1 ZELLIJ_PANE_ID=0 ZELLIJ_SESSION_NAME=s
+    capture="$TEST_TMP/newpane.args"
+
+    # atuin reports a FAILED command → CAP_KIND=error → prefill_template fires.
+    atuinerr="$TEST_TMP/atuin-err"
+    { print -r -- '#!/usr/bin/env zsh'
+      print -r -- 'printf "%s\t%s\t%s\t%s\n" "gg build" "1" "/tmp/SandboxApp" "42"'
+    } > "$atuinerr"; chmod +x "$atuinerr"; export ATUIN_BIN="$atuinerr"
+
+    zjstub="$TEST_TMP/zellij"
+    { print -r -- '#!/usr/bin/env zsh'; print -r -- "print -r -- \"\$*\" >> \"$capture\""; } > "$zjstub"
+    chmod +x "$zjstub"; export ZELLIJ_BIN="$zjstub"
+    aiistub="$TEST_TMP/ai-assist-input"
+    { print -r -- '#!/usr/bin/env zsh'; print -r -- 'print -r -- 9'; } > "$aiistub"
+    chmod +x "$aiistub"; export AI_ASSIST_INPUT_BIN="$aiistub"
+    libexec="$HOME/.local/libexec"; mkdir -p "$libexec"
+    cp "$SCRIPT" "$libexec/ai-assist-summon"
+    { print -r -- '#!/usr/bin/env zsh'; print -r -- 'exit 0'; } > "$libexec/ai-assist-triage"
+    chmod +x "$libexec/ai-assist-triage"
+
+    When run script "$libexec/ai-assist-summon"
+    The status should be success
+    cap() { cat "$capture" 2>/dev/null; }
+    The result of function cap should include "--value"
+    The result of function cap should include "Diagnose and fix why"
+    The result of function cap should include "gg build"
+  End
 End
