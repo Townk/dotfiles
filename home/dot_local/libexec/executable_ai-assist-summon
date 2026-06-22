@@ -21,6 +21,10 @@ set -eu -o pipefail
 
 source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
 source "$HOME/.local/lib/input-common.zsh"
+# zj::available (and the float-spawn helpers) live here — summon runs under
+# `set -eu`, so calling zj::available without this source aborts the whole
+# entry path with `command not found`.
+source "$HOME/.local/lib/zellij.zsh"
 
 # This script's own dir, so we reach the sibling libexec helper by absolute path
 # (~/.local/libexec is not on PATH).
@@ -41,19 +45,22 @@ req="$(assist::session_dir)/request.json"
 mkdir -p "${req:h}"
 assist::build_request "$(assist::prefill_template)" "$req"
 
-# ── Create the ONE pair of framed fifos (created once, reused float→pager) ────
-out_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-out.XXXXXX")"
-in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
-mkfifo -m 600 "$out_fifo" "$in_fifo" || exit 1
-
 # ── Spawn the FLOAT running ai-assist-input directly with the two fifos ───────
 # Unlike the generic zj::text path (which wraps input-widget under zellij-modal
 # to capture a single answer on exit), the orchestrated float runs the binary
 # DIRECTLY: it owns its own lifecycle via the fifos (submit/cancel out, status/
 # close in), so there is no capture-on-exit. Borderless + self-measured, like
-# the other floats. Off-Zellij there is no float to spawn — bail (the trigger is
-# only bound inside Zellij).
-zj::available || { rm -f -- "$out_fifo" "$in_fifo"; exit 0; }
+# the other floats. Off-Zellij there is no float to spawn — bail BEFORE creating
+# any fifos (the trigger is only bound inside Zellij), so the early-exit path
+# never leaks a pair.
+zj::available || exit 0
+
+# ── Create the ONE pair of framed fifos (created once, reused float→pager) ────
+# Only on the in-Zellij path: the float reads them and the orchestrator owns
+# their lifecycle from here on.
+out_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-out.XXXXXX")"
+in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
+mkfifo -m 600 "$out_fifo" "$in_fifo" || exit 1
 
 bin="${ZELLIJ_BIN:-$(command -v zellij)}"
 input_bin="$(_input::bin)"
