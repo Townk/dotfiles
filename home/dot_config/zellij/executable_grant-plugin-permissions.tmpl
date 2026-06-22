@@ -1,0 +1,98 @@
+{{/*
+  Re-grant every managed Zellij plugin the full permission set.
+
+  Resolved paths come from the shared .chezmoitemplates/zellij-plugin-path.tmpl
+  helper — the same one config.kdl uses for its `location=` lines — so the keys
+  we grant always match the paths zellij actually loads. Zellij keys its
+  permission cache by the bare path (RunPluginLocation::File's Display impl
+  drops the `file:` prefix), which is what the helper emits without filePrefix.
+*/ -}}
+{{- $paths := list -}}
+{{- range .zellijPlugins -}}
+{{- $paths = append $paths (includeTemplate "zellij-plugin-path.tmpl" (dict "root" $ "plugin" .) | trim) -}}
+{{- end -}}
+#!/bin/bash
+# Pre-grant Zellij plugin permissions — self-healing, launch-time.
+#
+# WHY THIS EXISTS
+#   Zellij has NO "accept all plugins" / "disable permission prompts" config
+#   option. Upstream issues #4982 (background plugins can't be granted) and
+#   #5027 (an auto-grant / `grant_permissions` load_plugins option) are open
+#   feature requests, not shipped. The ONLY supported way to suppress the
+#   per-plugin approval prompt is to pre-populate the permission cache at
+#   $ZELLIJ_CACHE/permissions.kdl — zellij reads it on every
+#   `request_permission` call (it does not keep the cache in memory; PR #2624).
+#
+# WHY IT RUNS ON EVERY LAUNCH, NOT JUST `chezmoi apply`
+#   zellij's runtime grant writer (wasm_bridge::cache_plugin_permissions) does
+#   a read-modify-write: on a DENIAL it stores an *empty* permission list for
+#   that plugin's path, overwriting whatever full grant was there. A single
+#   headless-plugin prompt the user can't accept (the approval UI is invisible
+#   in small / status-bar panes, upstream #4749) therefore wipes the whole
+#   entry, the plugin stays blocked with a blank statusline, and every later
+#   launch inherits the clobbered cache — until a manual `chezmoi apply`.
+#   Re-granting here, on every shell launch (called from ensure-plugins, which
+#   .zshrc runs right before exec'ing zellij), repairs any prior-session
+#   clobber before the next session loads. With the full 17-variant set below
+#   (every PermissionType in zellij 0.44.x) no prompt ever fires, so there is
+#   nothing to deny and the death spiral can't start.
+#
+# WHY THE FULL SET, NOT A PER-PLUGIN SUBSET
+#   Granting a permission a plugin never requests is harmless, and granting the
+#   complete enum means a plugin version that newly requests an extra
+#   permission doesn't reintroduce the un-acceptable prompt. The set is
+#   version-pinned to zellij 0.44.x; a future zellij that adds an 18th
+#   PermissionType would need it appended here (and in the apply-time twin,
+#   .chezmoiscripts/run_after_45-grant-zellij-plugin-permissions.sh.tmpl).
+#
+# This is the launch-time twin of the apply-time run_after_45 script. Both
+# embed the same permission block and resolve paths from the same manifest +
+# helper; keep them in sync. Idempotent — cmp short-circuits an unchanged
+# cache so the hot path is a stat + a read.
+set -uo pipefail
+
+# Zellij keys its permission cache under an OS-specific cache dir (the
+# `directories` crate: Library/Caches/<bundle> on macOS, ~/.cache/<app>
+# elsewhere). macOS ignores XDG_CACHE_HOME, so don't honour it there.
+case "$(uname -s)" in
+  Darwin) cache_dir="$HOME/Library/Caches/org.Zellij-Contributors.Zellij" ;;
+  *)      cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/zellij" ;;
+esac
+perms="$cache_dir/permissions.kdl"
+mkdir -p "$cache_dir"
+tmp="${TMPDIR:-/tmp}/zellij-permissions.$$"
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+# Overwrite semantics: only the manifest's plugins are trusted, and a removed
+# plugin's stale grant should not linger. cmp avoids touching the mtime when
+# the content is already current (keeps cohabiting writers from flapping).
+cat > "$tmp" <<'KDL'
+{{ range $paths -}}
+"{{ . }}" {
+    ReadApplicationState
+    ChangeApplicationState
+    OpenFiles
+    RunCommands
+    OpenTerminalsOrPlugins
+    WriteToStdin
+    WebAccess
+    ReadCliPipes
+    MessageAndLaunchOtherPlugins
+    Reconfigure
+    FullHdAccess
+    StartWebServer
+    InterceptInput
+    ReadPaneContents
+    RunActionsAsUser
+    WriteToClipboard
+    ReadSessionEnvironmentVariables
+}
+{{ end -}}
+KDL
+
+if [ -f "$perms" ] && cmp -s "$tmp" "$perms"; then
+  exit 0
+fi
+
+mv -f "$tmp" "$perms"
+trap - EXIT HUP INT TERM

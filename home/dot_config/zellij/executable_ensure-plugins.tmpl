@@ -13,6 +13,14 @@
 # a `dev` plugin with a built release wasm loads from that local build and is
 # skipped here; everything else is fetched to the managed dir. Fast on the hot
 # path — a present, valid wasm is left untouched.
+#
+# After (or regardless of) the fetch, re-grant plugin permissions via the
+# sibling grant-plugin-permissions script. That re-grant runs on EVERY shell
+# launch — not just `chezmoi apply` — so a runtime denial in a prior session
+# (which overwrites the plugin's whole permission-cache entry with an empty
+# list) is repaired before zellij starts. See that script's header for the
+# full rationale; zellij has no "accept all" config option, so the cache
+# pre-grant is the only lever.
 set -uo pipefail
 
 plugins_dir="$HOME/.local/share/zellij/plugins"
@@ -52,3 +60,10 @@ fetch() {
 is_wasm "$plugins_dir/{{ .wasm }}" || fetch "{{ .url }}" "$plugins_dir/{{ .wasm }}"
 {{ end -}}
 {{ end -}}
+
+# Re-grant before zellij loads. Best-effort: a failure to re-grant must not
+# abort the shell launch (the apply-time grant may still be intact). The grant
+# is path-keyed and independent of the wasm fetch above, so order doesn't
+# matter, but running it last lets the fetch warm the managed dir first.
+grant="$HOME/.config/zellij/grant-plugin-permissions"
+[ -x "$grant" ] && "$grant" || true
