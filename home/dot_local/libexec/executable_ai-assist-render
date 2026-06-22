@@ -39,6 +39,7 @@ project_root=""
 provided_in_fifo=""
 provided_actions_fifo=""
 provided_shell_fifo=""
+provided_results_fifo=""
 cleanup_provided_fifos=0
 while (($#)); do
   case "$1" in
@@ -52,6 +53,7 @@ while (($#)); do
     --input-fifo)     provided_in_fifo="${2:-}"; shift 2 ;;
     --actions-fifo)   provided_actions_fifo="${2:-}"; shift 2 ;;
     --shell-fifo)     provided_shell_fifo="${2:-}"; shift 2 ;;
+    --results-fifo)   provided_results_fifo="${2:-}"; shift 2 ;;
     --cleanup-fifos)  cleanup_provided_fifos=1; shift ;;
     --) shift; break ;;
     *) break ;;
@@ -82,6 +84,42 @@ typeset -i body=$((cols > 6 ? cols - 2 : 80))
 # by the EXIT trap. Caller-provided fifos are NOT appended — the caller owns them.
 typeset -a _owned_fifos=()
 
+# Agent's own shell (Phase C1): a real shell seeded with the origin env + cwd,
+# reachable by the harness's `ai-assist-run` through AI_ASSIST_SHELL_FIFO. Owned
+# by this pane's lifetime, like the action-broker. Spawned BEFORE the broker so
+# that shell_fifo is already set when the broker is launched.
+if [[ -n "$shell_cwd" || -n "$shell_env" ]]; then
+  : "${shell_bin:=$HOME/.local/libexec/ai-assist-shell}"
+  if [[ -x "$shell_bin" ]]; then
+    if [[ -n "$provided_shell_fifo" ]]; then
+      shell_fifo="$provided_shell_fifo"
+      # Caller-provided — not owned.
+    else
+      shell_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-shell.XXXXXX")"
+      mkfifo -m 600 "$shell_fifo"
+      _owned_fifos+=("$shell_fifo")
+    fi
+    typeset -a shell_flags=(--cmd-fifo "$shell_fifo")
+    [[ -n "$shell_env" ]] && shell_flags+=(--env-file "$shell_env")
+    [[ -n "$shell_cwd" ]] && shell_flags+=(--cwd "$shell_cwd")
+    "$shell_bin" "${shell_flags[@]}" &
+    shell_pid=$!
+    export AI_ASSIST_SHELL_FIFO="$shell_fifo"
+  fi
+fi
+
+# Results FIFO: the broker writes run-result records here; the pager reads them.
+# Use caller-provided path when given; otherwise mktemp a new one (and own it).
+# Created here — before the broker — so it can be passed to the broker spawn.
+if [[ -n "$provided_results_fifo" ]]; then
+  results_fifo="$provided_results_fifo"
+  # Caller-provided — not owned; do not append to _owned_fifos.
+else
+  results_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-res.XXXXXX")"
+  mkfifo -m 600 "$results_fifo"
+  _owned_fifos+=("$results_fifo")
+fi
+
 # Actions FIFO + broker: when we know the originating pane, create a FIFO (or use
 # a caller-provided one), spawn the broker (it performs copy/play), and hand the
 # pager --actions-fifo. The broker's lifetime is this pane's — the EXIT trap below
@@ -111,7 +149,9 @@ if [[ -n "$origin_pane" ]]; then
       fi
     fi
     if [[ -n "$fifo" ]]; then
-      "$broker" --fifo "$fifo" --origin-pane "$origin_pane" ${over_ssh:+--over-ssh} &
+      "$broker" --fifo "$fifo" --origin-pane "$origin_pane" \
+        ${shell_fifo:+--shell-fifo "$shell_fifo"} --results-fifo "$results_fifo" \
+        ${over_ssh:+--over-ssh} &
       broker_pid=$!
     fi
   fi
@@ -145,33 +185,11 @@ _cleanup_render() {
     [[ -n "$provided_in_fifo" ]]      && rm -f -- "$provided_in_fifo" 2>/dev/null
     [[ -n "$provided_actions_fifo" ]] && rm -f -- "$provided_actions_fifo" 2>/dev/null
     [[ -n "$provided_shell_fifo" ]]   && rm -f -- "$provided_shell_fifo" 2>/dev/null
+    [[ -n "$provided_results_fifo" ]] && rm -f -- "$provided_results_fifo" 2>/dev/null
   fi
   [[ -n "$shell_env" ]] && rm -f -- "$shell_env"
 }
 trap '_cleanup_render' EXIT INT TERM
-
-# Agent's own shell (Phase C1): a real shell seeded with the origin env + cwd,
-# reachable by the harness's `ai-assist-run` through AI_ASSIST_SHELL_FIFO. Owned
-# by this pane's lifetime, like the action-broker.
-if [[ -n "$shell_cwd" || -n "$shell_env" ]]; then
-  : "${shell_bin:=$HOME/.local/libexec/ai-assist-shell}"
-  if [[ -x "$shell_bin" ]]; then
-    if [[ -n "$provided_shell_fifo" ]]; then
-      shell_fifo="$provided_shell_fifo"
-      # Caller-provided — not owned.
-    else
-      shell_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-shell.XXXXXX")"
-      mkfifo -m 600 "$shell_fifo"
-      _owned_fifos+=("$shell_fifo")
-    fi
-    typeset -a shell_flags=(--cmd-fifo "$shell_fifo")
-    [[ -n "$shell_env" ]] && shell_flags+=(--env-file "$shell_env")
-    [[ -n "$shell_cwd" ]] && shell_flags+=(--cwd "$shell_cwd")
-    "$shell_bin" "${shell_flags[@]}" &
-    shell_pid=$!
-    export AI_ASSIST_SHELL_FIFO="$shell_fifo"
-  fi
-fi
 
 # Launch ai-assist-pager in the FOREGROUND: it owns the pane (title, spinner,
 # streaming render). Resolve by absolute path — the docked pane's PATH lacks GOBIN
@@ -201,7 +219,7 @@ harness_pid=$!
 if [[ -n "$pager" && -x "$pager" ]]; then
   # Build flags as a zsh array to avoid the word-split bug with optional flags.
   typeset -a pager_flags
-  pager_flags=(--harness "$harness" --input-fifo "$in_fifo")
+  pager_flags=(--harness "$harness" --input-fifo "$in_fifo" --results-fifo "$results_fifo")
   [[ -n "$fifo" ]] && pager_flags+=(--actions-fifo "$fifo")
   "$pager" "${pager_flags[@]}"
 else

@@ -91,9 +91,11 @@ Describe 'ai-assist-render'
     When run script "$SCRIPT" --harness X --origin-pane terminal_4 --over-ssh -- printf 'hi\n'
     The status should be success
     # Flag and value are SEPARATE tokens (own lines): "--actions-fifo" then "/…".
+    # With --results-fifo added before --actions-fifo (lines 5-6), --actions-fifo
+    # is now at line 7.
     The output should include "--actions-fifo"
-    The line 5 of output should equal "--actions-fifo"
-    The line 6 of output should start with "/"
+    The line 7 of output should equal "--actions-fifo"
+    The line 8 of output should start with "/"
     The contents of file "$TEST_TMP/broker.log" should include "BROKER"
     The contents of file "$TEST_TMP/broker.log" should include "--origin-pane terminal_4"
     The contents of file "$TEST_TMP/broker.log" should include "--over-ssh"
@@ -263,5 +265,47 @@ Describe 'ai-assist-render'
     # Without --cleanup-fifos, provided fifos MUST survive (caller owns them).
     The path "$TEST_TMP/nc-in.fifo" should be exist
     The path "$TEST_TMP/nc-act.fifo" should be exist
+  End
+
+  It 'passes --shell-fifo and --results-fifo to the broker and --results-fifo to the pager'
+    # Broker stub: record all argv to broker.args, then exec sleep so render's trap
+    # can kill it.
+    broker_args_stub() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'printf "%s\n" "$@" >> "$TEST_TMP/broker.args"'
+        echo 'exec sleep 30'
+      } > "$TEST_TMP/broker-args"; chmod +x "$TEST_TMP/broker-args"
+    }
+    # Pager stub: record all argv to pager.args, drain --input-fifo so render
+    # doesn't block forever on the FIFO write end.
+    pager_args_stub() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'printf "%s\n" "$@" >> "$TEST_TMP/pager.args"'
+        echo 'in=""; while (($#)); do [[ "$1" == "--input-fifo" ]] && { in="$2"; break; }; shift; done'
+        echo '[[ -n "$in" && -p "$in" ]] && cat -- "$in" >/dev/null'
+      } > "$TEST_TMP/pager-args"; chmod +x "$TEST_TMP/pager-args"
+    }
+    # Shell stub: records args, exec sleep so render's trap can kill it.
+    shell_args_stub() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'printf "%s\n" "$@" >> "$TEST_TMP/shell.args"'
+        echo 'exec sleep 30'
+      } > "$TEST_TMP/shell-args-bin"; chmod +x "$TEST_TMP/shell-args-bin"
+    }
+    setup_fifo_flags_test() {
+      broker_args_stub
+      pager_args_stub
+      shell_args_stub
+      export AI_ASSIST_BROKER_BIN="$TEST_TMP/broker-args"
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager-args"
+      export TEST_TMP="$TEST_TMP"
+    }
+    BeforeRun 'setup_fifo_flags_test'
+    When run script "$SCRIPT" --harness claude --origin-pane terminal_7 \
+      --shell-cwd "$TEST_TMP" --shell-bin "$TEST_TMP/shell-args-bin" -- printf 'x\n'
+    The status should be success
+    The contents of file "$TEST_TMP/broker.args" should include "--shell-fifo"
+    The contents of file "$TEST_TMP/broker.args" should include "--results-fifo"
+    The contents of file "$TEST_TMP/pager.args" should include "--results-fifo"
   End
 End
