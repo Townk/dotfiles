@@ -37,4 +37,11 @@ Describe 'ai-assist-run'
     The status should eq 3
     The stderr should include "no agent shell"
   End
+
+  It 'passes --id through so a later run sees AAS_OUT_<id>'
+    "$RUN" --id step1 -- 'echo wired' >/dev/null
+    When run "$RUN" -- 'printf %s "$AAS_OUT_step1"'
+    The output should equal "wired"
+    The status should equal 0
+  End
 End
