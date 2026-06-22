@@ -21,6 +21,19 @@ WT_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi/worktrees"
 mkdir -p "$WT_ROOT"
 ```
 
+## Lock dir
+
+The flock lockfiles live under the chezmoi **state** dir (machine-local
+runtime locks, not repo content) — **not** in `.git/`. They are 2 fixed-path
+0-byte fixtures, reused every run; they are never unlinked (unlinking a
+flock lockfile breaks mutual exclusion under concurrency — two processes
+end up holding "the lock" on different inodes). `mkdir -p` the dir once.
+
+```sh
+LOCKS_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi/locks"
+mkdir -p "$LOCKS_DIR"
+```
+
 ## Procedure
 
 **Run this as a single shell script / single process.** `flock` only
@@ -36,7 +49,7 @@ Run this from the agent's worktree
 branch, with all work committed.
 
 ```sh
-LOCK="$(git rev-parse --git-common-dir)/silo-integration.lock"
+LOCK="$LOCKS_DIR/silo-integration.lock"
 
 exec 9>"$LOCK"
 
@@ -47,7 +60,7 @@ exec 9>"$LOCK"
 #    `flock -n` returns non-zero immediately if the lock is held; it succeeds
 #    on a free lock (including a stale-but-unlocked file). Release the probe
 #    fd right after — we only wanted to check, not hold.
-UX_LOCK="$(git rev-parse --git-common-dir)/silo-ux-session.lock"
+UX_LOCK="$LOCKS_DIR/silo-ux-session.lock"
 exec 8>"$UX_LOCK"
 if ! "$FLOCK" -n 8; then
   echo "UX session in progress. Wait for it to end." >&2

@@ -118,7 +118,11 @@ matrix"). The headline hazards (using command names, not codes):
 Each procedure non-block-attempts the *other* lock before proceeding and
 fails-and-reports if held (no silent multi-hour blocking). `flock` is provided
 by Homebrew's `util-linux` (keg-only on macOS — the procedures resolve its
-path via `command -v flock || brew --prefix util-linux`).
+path via `command -v flock || brew --prefix util-linux`). The lockfiles live
+under the chezmoi state dir at
+`${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi/locks/` (machine-local runtime
+locks, not repo content) and are never unlinked — unlinking a flock lockfile
+breaks mutual exclusion under concurrency.
 
 ## Sharing mechanism — pi + Claude Code
 

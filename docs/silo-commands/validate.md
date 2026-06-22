@@ -18,6 +18,19 @@ WT_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi/worktrees"
 mkdir -p "$WT_ROOT"
 ```
 
+## Lock dir
+
+The flock lockfiles live under the chezmoi **state** dir (machine-local
+runtime locks, not repo content) — **not** in `.git/`. They are 2 fixed-path
+0-byte fixtures, reused every run; they are never unlinked (unlinking a
+flock lockfile breaks mutual exclusion under concurrency — two processes
+end up holding "the lock" on different inodes). `mkdir -p` the dir once.
+
+```sh
+LOCKS_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi/locks"
+mkdir -p "$LOCKS_DIR"
+```
+
 ---
 
 ## Mode A — sandbox self-test (agent, parallel, no lock)
@@ -63,7 +76,7 @@ work (no separate `reconcile.md` step after).
    non-zero immediately if the lock is held; it succeeds on a free lock
    (including a stale-but-unlocked file). Release the probe fd right after.
    ```sh
-   INT_LOCK="$(git rev-parse --git-common-dir)/silo-integration.lock"
+   INT_LOCK="$LOCKS_DIR/silo-integration.lock"
    exec 8>"$INT_LOCK"
    if ! "$FLOCK" -n 8; then
      echo "Integration in progress. Wait for it to end." >&2
@@ -73,7 +86,7 @@ work (no separate `reconcile.md` step after).
    ```
 3. **Acquire the session lock** (blocking — wait for any other session to end):
    ```sh
-   SESSION_LOCK="$(git rev-parse --git-common-dir)/silo-ux-session.lock"
+   SESSION_LOCK="$LOCKS_DIR/silo-ux-session.lock"
    exec 7>"$SESSION_LOCK"
    "$FLOCK" 7 || { echo "could not acquire session lock" >&2; exit 1; }
    ```
