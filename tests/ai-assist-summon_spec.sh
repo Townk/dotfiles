@@ -67,4 +67,34 @@ Describe 'ai-assist-summon'
     leftover_fifos() { print -r -- "$TMPDIR"/ai-assist-*(N); }
     The result of function leftover_fifos should equal ""
   End
+
+  It 'spawns the float as a BORDERLESS pane (in-Zellij)'
+    # Regression guard: the orchestrated float must pass `--borderless true` (the
+    # widget draws its own frame); a missing flag reintroduces the Zellij border.
+    export ZELLIJ=1 ZELLIJ_PANE_ID=0 ZELLIJ_SESSION_NAME=s
+    capture="$TEST_TMP/newpane.args"
+
+    # Fake zellij: record the `new-pane` invocation's args.
+    zjstub="$TEST_TMP/zellij"
+    { print -r -- '#!/usr/bin/env zsh'; print -r -- "print -r -- \"\$*\" >> \"$capture\""; } > "$zjstub"
+    chmod +x "$zjstub"; export ZELLIJ_BIN="$zjstub"
+
+    # Fake the input binary: --measure must yield a plain integer.
+    aiistub="$TEST_TMP/ai-assist-input"
+    { print -r -- '#!/usr/bin/env zsh'; print -r -- 'print -r -- 9'; } > "$aiistub"
+    chmod +x "$aiistub"; export AI_ASSIST_INPUT_BIN="$aiistub"
+
+    # Run a COPY of summon from a temp libexec so its sibling orchestrator is a
+    # no-op stub (the real ai-assist-triage would block on the OUT fifo).
+    libexec="$HOME/.local/libexec"; mkdir -p "$libexec"
+    cp "$SCRIPT" "$libexec/ai-assist-summon"
+    { print -r -- '#!/usr/bin/env zsh'; print -r -- 'exit 0'; } > "$libexec/ai-assist-triage"
+    chmod +x "$libexec/ai-assist-triage"
+
+    When run script "$libexec/ai-assist-summon"
+    The status should be success
+    cap() { cat "$capture" 2>/dev/null; }
+    The result of function cap should include "new-pane"
+    The result of function cap should include "--borderless true"
+  End
 End

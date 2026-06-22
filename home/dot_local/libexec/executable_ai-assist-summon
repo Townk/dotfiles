@@ -84,7 +84,7 @@ measured_h="$("$input_bin" --type text --measure --width "$pane_w" \
 # fifos. COLORTERM is carried through `env` because `zellij action new-pane` does
 # not propagate it (so gum/lipgloss otherwise drop to 256-color).
 "$bin" action new-pane --floating --close-on-exit \
-  --name "" --pinned true --width "$pane_w" --height "$measured_h" --cwd "$PWD" \
+  --name "" --borderless true --pinned true --width "$pane_w" --height "$measured_h" --cwd "$PWD" \
   -- env "COLORTERM=${COLORTERM:-truecolor}" \
   "$input_bin" --type text --title ai-assist --prompt "$prompt" \
   --height "$height" --icon "$icon" \
