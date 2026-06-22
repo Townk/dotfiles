@@ -96,24 +96,39 @@ Describe 'silo skills — reconcile & validate'
 
   Describe 'templates direct agents to the skills, not bare markdown paths'
     # Every work-on-<silo>.md Validate & integrate block must reference the
-    # skills by name and must NOT carry the dead docs/silo-commands/<name>.md
+    # `validate` skill by name and direct the agent to STOP without
+    # integrating (pointing at /end-work, not at the reconcile skill as the
+    # integration step). It must NOT carry the dead docs/silo-commands/<name>.md
     # path (those compat symlinks were removed once the templates were
     # rewired to load the skills).
     #
     # `grep -ql` over many files returns success if ANY file matches, so to
-    # assert "every template references the skill" we count the files that
-    # match and compare against the total count.
+    # assert "every template references X" we count the files that match and
+    # compare against the total count.
     n_templates=$(ls docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
     n_validate=$(grep -l 'the `validate` skill' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
-    n_reconcile=$(grep -l 'the `reconcile` skill' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+    n_endwork=$(grep -l '`/end-work`' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+    n_stop=$(grep -l 'Stop here — do not integrate' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+    # The old auto-integrate bullet must be gone from every template.
+    n_oldint=$(grep -l 'Integrate (non-UX work):' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
 
     It 'every template references the validate skill'
       When call test "$n_validate" -eq "$n_templates"
       The status should be success
     End
 
-    It 'every template references the reconcile skill'
-      When call test "$n_reconcile" -eq "$n_templates"
+    It 'every template points the human at /end-work to close the session'
+      When call test "$n_endwork" -eq "$n_templates"
+      The status should be success
+    End
+
+    It 'every template tells the agent to stop without integrating'
+      When call test "$n_stop" -eq "$n_templates"
+      The status should be success
+    End
+
+    It 'no template carries the old auto-integrate bullet'
+      When call test "$n_oldint" -eq 0
       The status should be success
     End
 

@@ -89,9 +89,15 @@ $ARGUMENTS
 - **Human UX validation:** if the work needs eyeball judgment, ask the user
   whether to enter a UX session, then load the `validate` skill and run
   **Mode B** — the session merges your branch to master and you iterate live.
-- **Integrate (non-UX work):** load the `reconcile` skill and follow it —
-  `flock`-gated, on-demand `master-work`, ff-only automated / divergence
-  human-gated, `make test` under the lock.
+  The human is in the loop, so this is a human-decided integration.
+- **Stop here — do not integrate.** A workflow started by `/work-on-<silo>`
+  ends only when the human decides. Once your work is self-tested and
+  committed on the `work-on-<silo>-<suffix>` branch, **stop** and leave the
+  branch parked in its worktree. Do **not** load the `reconcile` skill or
+  merge to master yourself. The human closes the session by typing
+  **`/end-work`**, which loads the `reconcile` skill and lands the branch on
+  `master` (`flock`-gated, ff-only, `make test` under the lock). Report that
+  the branch is ready and stop.
 
 ## Verify before claiming done
 - Run `make test` (ShellSpec covers `pkg::*` and the package-domain helpers).

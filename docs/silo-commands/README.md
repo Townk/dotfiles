@@ -19,19 +19,25 @@ etc.) appear in the templates — the command name is the only identifier.
    master tip, and creates an isolated, uniquely-suffixed worktree under
    `$WT_ROOT` (see below). Never share worktrees; never check out `master`
    directly in a working agent tree.
-3. **Validate & integrate** per the template's pointers — the agent loads
-   the **`validate`** and **`reconcile`** Agent Skills (see [Skills sharing
-   mechanism](#skills-sharing-mechanism--pi--claude-code) below), not bare
-   markdown docs:
+3. **Validate, then stop — do not integrate.** The agent loads the
+   **`validate`** Agent Skill (see [Skills sharing
+   mechanism](#skills-sharing-mechanism--pi--claude-code) below), not a bare
+   markdown doc:
    - **Self-test (logic):** load the `validate` skill and run **Mode A** —
      sandbox-`$HOME`, parallel, no lock, no clobber of real `$HOME`.
    - **Human UX validation:** if the work needs eyeball judgment, the agent
      asks whether to enter a UX session, then loads the `validate` skill and
      runs **Mode B** — the session merges your branch to master and you
-     iterate live.
-   - **Integrate (non-UX work):** load the `reconcile` skill and follow it —
-     `flock`-gated, on-demand `master-work`, ff-only automated / divergence
-     human-gated, `make test` under the lock.
+     iterate live. The human is in the loop, so this is a human-decided
+     integration.
+   - **Stop here — do not integrate non-UX work yourself.** A workflow
+     started by `/work-on-<silo>` ends only when the human decides. The
+     agent leaves the `work-on-<silo>-<suffix>` branch parked in its worktree
+     and reports it ready; it does **not** load the `reconcile` skill or
+     merge to master. The human closes the session with `/end-work` (step 5),
+     which does the `flock`-gated, ff-only, `make test`-under-the-lock
+     integration. This keeps `/work-on` (open) and `/end-work` (close)
+     symmetric and human-gated.
 4. **Verify after**: an agent's diff should be confined to its owner area + (at
    most) its own run-script in `.chezmoiscripts/`. Run `make test` (ShellSpec)
    for any `home/dot_local/lib/` change.
@@ -57,8 +63,10 @@ reference docs to start safely:
 - **Where to start** — the best entry-point files for an investigation.
 - **TASK** — `$ARGUMENTS` (your task description, interpolated by the slash
   command).
-- **Validate & integrate** — pointers to load the `validate` / `reconcile`
-  Agent Skills (Mode A self-test, Mode B UX session, reconcile integration).
+- **Validate & integrate** — pointers to load the `validate` Agent Skill
+  (Mode A self-test, Mode B UX session) and a **stop-do-not-integrate**
+  instruction: the agent leaves the branch parked for the human to close with
+  `/end-work` (which loads the `reconcile` skill).
 - **Verify before claiming done** — the per-silo verification checklist.
 - **Reference** — pointers to the full detail in the two reference docs.
 
@@ -195,13 +203,15 @@ docs/silo-commands/validate/SKILL.md            ← canonical skill (committed)
 ```
 
 Each `work-on-<silo>.md` template's **Validate & integrate** section directs
-the agent to load these skills (e.g. `/skill:validate` in pi, `/validate` in
-Claude Code, or by reading its `SKILL.md`) rather than pointing at a markdown
-path — the skills are meant to be loaded and followed as Agent Skills, not
-read as plain docs. The skill directory name matches the `name` frontmatter
-field, as the Agent Skills standard (and Claude Code) requires; pi is
-lenient about that but the match is kept for portability.
-`tests/silo-skills_spec.sh` pins this contract.
+the agent to load the `validate` skill (e.g. `/skill:validate` in pi,
+`/validate` in Claude Code, or by reading its `SKILL.md`) for self-test and
+UX sessions, and to **stop** without integrating — leaving the branch parked
+for the human to close with `/end-work` (which loads the `reconcile` skill).
+The skills are meant to be loaded and followed as Agent Skills, not read as
+plain docs. The skill directory name matches the `name` frontmatter field,
+as the Agent Skills standard (and Claude Code) requires; pi is lenient about
+that but the match is kept for portability. `tests/silo-skills_spec.sh` and
+`tests/silo-commands_spec.sh` pin these contracts.
 
 ## Reference docs
 
