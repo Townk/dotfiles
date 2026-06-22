@@ -24,7 +24,7 @@ dotfiles repo.
 
 - `home/dot_local/bin/ai-assist-cursor`, `ai-commit-cursor`,
   `home/dot_local/lib/{assist,commit}-agent-common.zsh` → **AI agent
-  harnesses** (S6). S6's wrappers CALL cursor; you own the agent's own
+  harnesses**. Its wrappers CALL cursor; you own the agent's own
   config. Treat the wrappers as read-only consumers.
 - The Cursor app/CLI itself — external.
 
@@ -48,7 +48,7 @@ dotfiles repo.
 
 ## What you consume read-only
 
-- **AI agent harnesses (S6):** `ai-assist-cursor` / `ai-commit-cursor`
+- **AI agent harnesses:** `ai-assist-cursor` / `ai-commit-cursor`
   wrappers (CALL cursor; read-only consumers).
 - External: the Cursor app/CLI.
 

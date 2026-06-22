@@ -61,19 +61,19 @@ files are its `AGENTS.md`, `agents/{Architect,Reviewer}.md`, and its two
 ## Out of scope (do not edit — owned by other silos)
 
 - `home/dot_config/zsh/functions.d/commands.sh` `pi-local` function →
-  **shell** (S9). That function points `PI_CODING_AGENT_DIR` at
+  **shell**. That function points `PI_CODING_AGENT_DIR` at
   `~/.pi/agent-local`; you own the *config it targets*, not the function.
-  Coordinate with S9 only if the function's env vars
+  Coordinate with shell only if the function's env vars
   (`PI_CODING_AGENT_DIR` / `PI_CODING_AGENT_SESSION_DIR`) need to change.
 - `home/dot_local/bin/ai-assist-pi`, `ai-commit-pi`,
   `home/dot_local/lib/{assist,commit}-agent-common.zsh` → **AI agent
-  harnesses** (S6). S6's wrappers CALL the pi CLI; you own the CLI's
+  harnesses**. Its wrappers CALL the pi CLI; you own the CLI's
   config. Treat the wrappers as read-only consumers.
-- The **chezmoi** silo (S12) owns the *machinery* of the shared files your
+- The **chezmoi** silo owns the *machinery* of the shared files your
   pi blocks live in: run-script ordering/numbering, the `run_once` vs
   `run_after` choice, hash-baking into rendered comments, and the
   `.chezmoi*.{tmpl,yaml}` file scaffolding. You own the pi *content* within
-  those files; coordinate with S12 only if you add a NEW run-script (needs
+  those files; coordinate with chezmoi only if you add a NEW run-script (needs
   an ordering number) or restructure a shared file's skeleton.
 - The pi CLI (npm `pi-coding-agent`) and the dev extension source repos
   `pi-cockpit` / `pi-plannotator-bridge` (live outside this repo, referenced
@@ -120,7 +120,7 @@ files are its `AGENTS.md`, `agents/{Architect,Reviewer}.md`, and its two
   the `.chezmoi.toml.tmpl` `[data.pi.devExtensions]` block, the
   `.chezmoiignore.tmpl` suppression block, the `run_once_after_10` install
   block, AND a new `symlink_*.tmpl` under `dot_pi/agent/extensions/`. Keep
-  all four consistent. (Coordinate with S12 only for the run-script
+  all four consistent. (Coordinate with chezmoi only for the run-script
   ordering if you add a brand-new script file.)
 - **Profile gating** — `modify_settings.json.tmpl` and
   `private_models.json.tmpl` are profile-gated (`work` / `dev-shell` /
@@ -135,14 +135,14 @@ files are its `AGENTS.md`, `agents/{Architect,Reviewer}.md`, and its two
 
 ## What you consume read-only
 
-- **AI agent harnesses (S6):** `ai-assist-pi` / `ai-commit-pi` wrappers
+- **AI agent harnesses:** `ai-assist-pi` / `ai-commit-pi` wrappers
   (they CALL the pi CLI you configure; treat as read-only consumers).
-- **shell (S9):** the `pi-local` function in `commands.sh` (points at your
+- **shell:** the `pi-local` function in `commands.sh` (points at your
   `agent-local` config; you own the config, not the function).
-- **chezmoi (S12):** the *machinery* of the shared files your pi blocks
+- **chezmoi:** the *machinery* of the shared files your pi blocks
   live in (run-script ordering, `run_once`/`run_after` mechanics,
   hash-baking, `.chezmoi*` scaffolding). You own the pi content blocks;
-  S12 owns the mechanics.
+  chezmoi owns the mechanics.
 - External: the pi CLI (npm `pi-coding-agent`), dev extension source repos
   `pi-cockpit` / `pi-plannotator-bridge` (outside this repo).
 
@@ -220,12 +220,12 @@ $ARGUMENTS
 - Your diff stays within `home/dot_pi/` +
   `home/.chezmoitemplates/pi-settings-merge.tmpl` + your pi content blocks
   in `.chezmoi.toml.tmpl` / `.chezmoiignore.tmpl` / `.chezmoiscripts/`
-  (plus an S12-coordinated ordering number if you add a brand-new
+  (plus a chezmoi-coordinated ordering number if you add a brand-new
   run-script).
 
 ## Reference
 For the full integration map and concurrency/collision matrix, see
 `docs/chezmoi-silo-map.md` (the "pi coding agent config" section — note the
-S12↔pi shared-file hazard on `.chezmoi.toml.tmpl` / `.chezmoiignore.tmpl` /
-`run_once_after_10` / `run_after_90`: pi owns the content blocks, S12 owns
+chezmoi↔pi shared-file hazard on `.chezmoi.toml.tmpl` / `.chezmoiignore.tmpl` /
+`run_once_after_10` / `run_after_90`: pi owns the content blocks, chezmoi owns
 the machinery).
