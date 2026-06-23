@@ -135,7 +135,14 @@ block tagged {id=fix}. Use:
   - bash/sh/zsh blocks for shell steps (the user can run them in their shell or
     the assistant's),
   - python/node/etc. blocks for scripts,
-  - diff (or patch) blocks for file changes (the user views/applies them).
+  - diff blocks for file changes (the user views/applies them). A diff block
+    MUST be a complete, applyable unified diff — include the \`--- a/<path>\`
+    and \`+++ b/<path>\` file headers and at least one \`@@ … @@\` hunk header,
+    with paths relative to the project root (a leading
+    \`diff --git a/<path> b/<path>\` line is ideal). It must be valid for
+    \`git apply\`. Do NOT emit a bare fragment of changed lines, and do NOT put
+    the target filename only in prose — the file headers ARE how the viewer and
+    apply know the target.
 If a step uses a previous step's output, tag it {id=next needs=fix} and reference
 the earlier output via \$AAS_OUT_fix / \$AAS_ERR_fix / \$AAS_EXIT_fix.
 Show captured error output or sample output as a console block (or tag it

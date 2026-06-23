@@ -126,6 +126,15 @@ JSON
       The output should include 'static'
       The output should include 'AAS_ERR'
     End
+
+    It 'requires diff blocks to be complete unified diffs valid for git apply'
+      REQ_USER_REQUEST="why did the build fail"; REQ_PROJECT_ROOT="/tmp/p"
+      kb="$(mktemp)"; : > "$kb"
+      When call assist::system_prompt "$kb"
+      The output should include 'git apply'
+      The output should include '--- a/'
+      The output should include '+++ b/'
+    End
   End
 
   Describe 'assist::spawn_pane'
