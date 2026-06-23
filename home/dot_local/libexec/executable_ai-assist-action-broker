@@ -90,8 +90,12 @@ broker::open_diff() {
   local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-diff.XXXXXX")"
   print -rn -- "$diff" > "$patch"
   _dbg "open_diff id=$id patch=$patch bytes=$(wc -c < "$patch")"
+  # Float over the ORIGIN pane (left ~60%, full height) — NOT the docked pager on
+  # the right. Overlapping the pager makes zellij scroll it 1 line. Width is
+  # tunable via AI_ASSIST_DIFF_WIDTH for non-default splits.
+  local diff_w="${AI_ASSIST_DIFF_WIDTH:-60%}"
   if [[ -n "$hunk_bin" ]]; then
-    "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
+    "$zj" action new-pane --floating --x 0 --y 0 --width "$diff_w" --height 100% --close-on-exit \
       --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "diff:$id" \
       -- "$hunk_bin" patch --mode split "$patch" 2>/dev/null || true
   else
@@ -102,7 +106,7 @@ broker::open_diff() {
     else
       _viewer_cmd="${(z)viewer}"
     fi
-    "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
+    "$zj" action new-pane --floating --x 0 --y 0 --width "$diff_w" --height 100% --close-on-exit \
       --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "diff:$id" \
       -- ${(z)_viewer_cmd} "$patch" 2>/dev/null || true
   fi
