@@ -143,4 +143,13 @@ echo ok')"
     reply="$(run_job 'echo $MISE_SYNCED')"
     The contents of file "$reply/out" should equal "yes"
   End
+
+  # The re-sync hook list is configurable via AI_ASSIST_ENV_HOOKS (option c).
+  It 'honors AI_ASSIST_ENV_HOOKS as the env re-sync hook list'
+    kill "$SHELL_PID" 2>/dev/null
+    AI_ASSIST_ENV_HOOKS='export CUSTOM_HOOK=ran' "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
+    run_job 'true' >/dev/null
+    reply="$(run_job 'echo $CUSTOM_HOOK')"
+    The contents of file "$reply/out" should equal "ran"
+  End
 End

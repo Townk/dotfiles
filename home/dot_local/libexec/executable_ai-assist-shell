@@ -38,6 +38,17 @@ _aas_kill_tree() {
 [[ -n "$env_file" && -r "$env_file" ]] && source "$env_file" 2>/dev/null
 [[ -n "$cwd" ]] && cd -- "$cwd" 2>/dev/null
 
+# Directory-scoped env-manager re-sync hooks: snippets eval'd after each block so
+# a config change (e.g. `mise use …`) refreshes PATH for the next block — the
+# precmd-equivalent for this prompt-less shell. Override via AI_ASSIST_ENV_HOOKS
+# (newline-separated snippets; set it to "" to disable). Default covers mise+direnv.
+if [[ -n "${AI_ASSIST_ENV_HOOKS+set}" ]]; then
+  _aas_env_hooks="$AI_ASSIST_ENV_HOOKS"
+else
+  _aas_env_hooks='command -v mise   >/dev/null 2>&1 && eval "$(mise hook-env -s zsh 2>/dev/null)" 2>/dev/null
+command -v direnv >/dev/null 2>&1 && eval "$(direnv export zsh 2>/dev/null)" 2>/dev/null'
+fi
+
 # State file: persists cwd and exported vars across jobs. Seeded with the
 # current env (post rc/env-file/cwd). Each job subshell sources it before
 # running and writes it back after — so cd and export persist across jobs even
@@ -78,8 +89,7 @@ while IFS= read -r -d "$_aas_RS" _aas_job <&$_aas_fd; do
     # Re-sync directory-scoped env managers so a config change made by THIS block
     # (e.g. `mise use cmake@X`) is visible to later blocks. The interactive shell
     # does this in a precmd hook; this eval loop has no prompt, so we do it here.
-    command -v mise   >/dev/null 2>&1 && eval "$(mise hook-env -s zsh 2>/dev/null)" 2>/dev/null
-    command -v direnv >/dev/null 2>&1 && eval "$(direnv export zsh 2>/dev/null)" 2>/dev/null
+    eval "$_aas_env_hooks" 2>/dev/null  # dir-env re-sync (mise/direnv/…); see AI_ASSIST_ENV_HOOKS
     { print -r -- "cd -- ${(q)PWD}"; export -p; } > "$_aas_state"
     exit $_aas_rc  # the job's exit is the user command's, not the housekeeping's
   ) >"$_aas_reply/out" 2>"$_aas_reply/err" &
