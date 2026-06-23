@@ -290,14 +290,15 @@ assist::triage() { return 0; }
 # capable (non-triage) path is unchanged.
 assist::worker_main() {
   local label="$1" build_fn="$2"; shift 2
-  local request_file="" triage_mode=0 stream_mode=0
+  local request_file="" triage_mode=0 stream_mode=0 prompt_file=""
   ASSIST_GUIDANCE=""
   while (($#)); do
     case "$1" in
-      --triage)  triage_mode=1; shift ;;
-      --stream)  stream_mode=1; shift ;;
-      --request) request_file="${2:-}"; shift 2 ;;
-      --request=*) request_file="${1#*=}"; shift ;;
+      --triage)       triage_mode=1; shift ;;
+      --stream)       stream_mode=1; shift ;;
+      --request)      request_file="${2:-}"; shift 2 ;;
+      --request=*)    request_file="${1#*=}"; shift ;;
+      --prompt-file)  prompt_file="${2:-}"; shift 2 ;;
       -h|--help) print -r -- "Usage: ai-assist-<harness> [--triage] [--stream] --request <file> [-- guidance...]"; return 0 ;;
       --) shift; ASSIST_GUIDANCE="$*"; break ;;
       *) ASSIST_GUIDANCE="$*"; break ;;
@@ -334,7 +335,13 @@ assist::worker_main() {
   ( umask 077; : > "$req_env" ) 2>/dev/null || : > "$req_env"
   export -p >> "$req_env" 2>/dev/null || true
   local kb; kb="$(assist::kb_ensure "${REQ_PROJECT_ROOT:-$PWD}")"
-  ASSIST_PROMPT="$(assist::system_prompt "$kb")"
+  # --prompt-file lets a caller inject a custom system prompt (used by ai-assist-wrapup
+  # for the wrap-up pass). Falls back to the standard system prompt when unset/absent.
+  if [[ -n "$prompt_file" && -f "$prompt_file" ]]; then
+    ASSIST_PROMPT="$(cat -- "$prompt_file")"
+  else
+    ASSIST_PROMPT="$(assist::system_prompt "$kb")"
+  fi
   [[ -n "$ASSIST_GUIDANCE" ]] && ASSIST_PROMPT+=$'\n\nAdditional guidance from the caller:\n'"$ASSIST_GUIDANCE"
 
   assist::triage || true   # Phase A: always escalates

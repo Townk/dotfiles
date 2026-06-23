@@ -61,6 +61,32 @@ JSON
     End
   End
 
+  Describe 'assist::worker_main --prompt-file'
+    # Verify that --stream --prompt-file <F> injects F's content as ASSIST_PROMPT
+    # instead of the default system prompt. We use a small inline script that
+    # sources the lib, wires a stub build_fn that echoes "$ASSIST_PROMPT" as the
+    # stream command, and runs with --stream --prompt-file so the output IS the
+    # prompt text.
+    It '--stream --prompt-file F uses F content as the system prompt'
+      prompt_file_test() {
+        local lib="$1" req="$2" pf="$3"
+        driver="$(mktemp "${TMPDIR:-/tmp}/ai-assist-prompt-file-test.XXXXXX.zsh")"
+        {
+          printf '#!/usr/bin/env zsh\n'
+          printf 'source "%s/assist-agent-common.zsh"\n' "$lib"
+          printf 'echo_prompt_fn() { ASSIST_PANE_CMD=(print -r -- "$ASSIST_PROMPT"); }\n'
+          printf 'assist::worker_main "stub" echo_prompt_fn --stream --prompt-file "%s" --request "%s"\n' "$pf" "$req"
+        } > "$driver"; chmod +x "$driver"
+        zsh "$driver"; rm -f "$driver"
+      }
+      pf="$TEST_TMP/custom-prompt.txt"
+      printf 'CUSTOM_WRAP_UP_PROMPT\n' > "$pf"
+      When call prompt_file_test "$AI_ASSIST_LIB_DIR" "$TEST_TMP/req.json" "$pf"
+      The output should include "CUSTOM_WRAP_UP_PROMPT"
+      The output should not include "bounded"
+    End
+  End
+
   Describe 'ai-assist-claude'
     SCRIPT() { echo "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_ai-assist-claude"; }
 

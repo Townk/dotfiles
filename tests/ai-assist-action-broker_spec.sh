@@ -208,6 +208,28 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/applied" should equal "OK"
   End
 
+  # ── Run log (C3b) ─────────────────────────────────────────────────────────────
+
+  It 'run_block appends a well-formed JSONL line to runlog.jsonl in run_dir'
+    runlog_drive() {
+      load_broker
+      results="$TEST_TMP/results.fifo"; mkfifo "$results"
+      shell_fifo="$TEST_TMP/shell.fifo"; mkfifo "$shell_fifo"
+      run_dir="$TEST_TMP/runlogdir"; mkdir -p "$run_dir"
+      printf '#!/usr/bin/env zsh\nexit 0\n' > "$TEST_TMP/airun"; chmod +x "$TEST_TMP/airun"
+      AI_ASSIST_RUN_BIN="$TEST_TMP/airun"
+      ( cat "$results" > /dev/null ) &
+      broker::dispatch "run${US}fixid${US}echo ok${RS}"
+      sleep 0.3
+      # Read the runlog so the test can assert on it.
+      cat -- "$run_dir/runlog.jsonl"
+    }
+    When call runlog_drive
+    The status should be success
+    The output should include '"id":"fixid"'
+    The output should include '"exit":0'
+  End
+
   # ── Stage 4: regenerate action ────────────────────────────────────────────────
 
   It 'regenerate dispatch invokes the helper with --ctx/--req/--input-fifo/--origin-pane'
@@ -260,6 +282,36 @@ Describe 'ai-assist-action-broker'
     The status should be success
     # Helper must NOT have been invoked (missing ctx/req/input_fifo).
     The path "$TEST_TMP/regen-noop-args" should not be exist
+  End
+
+  # ── Stage C3b: wrapup action ──────────────────────────────────────────────────
+
+  It 'wrapup dispatch invokes ai-assist-wrapup with --ctx/--req/--input-fifo/--run-dir'
+    drive_wrapup() {
+      load_broker
+      regen_ctx="deadbeef"
+      regen_req="cafebabe"
+      input_fifo="$TEST_TMP/wrapup.fifo"
+      mkfifo -m 600 "$input_fifo" 2>/dev/null || true
+      run_dir="$TEST_TMP/wrapup-run"; mkdir -p "$run_dir"
+      {
+        echo '#!/usr/bin/env zsh'
+        echo "printf '%s\n' \"\$@\" >> \"$TEST_TMP/wrapup-args\""
+      } > "$TEST_TMP/wrapup-stub"; chmod +x "$TEST_TMP/wrapup-stub"
+      AI_ASSIST_WRAPUP_BIN="$TEST_TMP/wrapup-stub"
+      broker::dispatch "wrapup${US}w1${US}${RS}"
+      sleep 0.3
+    }
+    When call drive_wrapup
+    The status should be success
+    The path "$TEST_TMP/wrapup-args" should be file
+    The contents of file "$TEST_TMP/wrapup-args" should include "--ctx"
+    The contents of file "$TEST_TMP/wrapup-args" should include "deadbeef"
+    The contents of file "$TEST_TMP/wrapup-args" should include "--req"
+    The contents of file "$TEST_TMP/wrapup-args" should include "cafebabe"
+    The contents of file "$TEST_TMP/wrapup-args" should include "--input-fifo"
+    The contents of file "$TEST_TMP/wrapup-args" should include "wrapup.fifo"
+    The contents of file "$TEST_TMP/wrapup-args" should include "--run-dir"
   End
 
 End

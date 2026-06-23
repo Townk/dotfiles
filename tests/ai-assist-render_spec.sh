@@ -485,4 +485,39 @@ Describe 'ai-assist-render'
     The contents of file "$TEST_TMP/regen-broker.args" should not include "--regen-ctx deadbeef"
     The contents of file "$TEST_TMP/regen-broker.args" should not include "--regen-req cafebabe"
   End
+
+  It 'broker spawn argv includes --regen-request when --cache-request is set'
+    # Broker stub: record all argv one-per-line, then exec sleep so render can kill it.
+    regen_req_broker_stub() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'printf "%s\n" "$@" >> "$TEST_TMP/regen-req-broker.args"'
+        echo 'exec sleep 30'
+      } > "$TEST_TMP/regen-req-broker"; chmod +x "$TEST_TMP/regen-req-broker"
+    }
+    # Pager stub: drain --input-fifo so render's FIFO writer unblocks.
+    regen_req_pager_stub() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'in=""; while (($#)); do [[ "$1" == "--input-fifo" ]] && { in="$2"; break; }; shift; done'
+        echo '[[ -n "$in" && -p "$in" ]] && cat -- "$in" >/dev/null'
+      } > "$TEST_TMP/regen-req-pager"; chmod +x "$TEST_TMP/regen-req-pager"
+    }
+    setup_regen_req_render_test() {
+      regen_req_broker_stub
+      regen_req_pager_stub
+      export AI_ASSIST_BROKER_BIN="$TEST_TMP/regen-req-broker"
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/regen-req-pager"
+      export TEST_TMP="$TEST_TMP"
+    }
+    BeforeRun 'setup_regen_req_render_test'
+    req_file="$TEST_TMP/req.json"
+    printf '{"user_request":"x"}\n' > "$req_file"
+    When run script "$SCRIPT" --harness claude --origin-pane terminal_9 \
+      --cache-ctx "aabbccdd" --cache-req "11223344" \
+      --cache-request "$req_file" -- printf 'hi\n'
+    The status should be success
+    The path "$TEST_TMP/regen-req-broker.args" should be file
+    # render must forward --regen-request to the broker when --cache-request is set.
+    The contents of file "$TEST_TMP/regen-req-broker.args" should include "--regen-request"
+    The contents of file "$TEST_TMP/regen-req-broker.args" should include "req.json"
+  End
 End

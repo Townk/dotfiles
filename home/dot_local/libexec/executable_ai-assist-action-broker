@@ -16,19 +16,20 @@ _log() { [[ -n "${AI_ASSIST_BROKER_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) 
 _dbg() { _log "$@"; }
 fifo="" origin="" over_ssh=0
 results="" shell_fifo="" run_dir="${AI_ASSIST_RUN_DIR:-}"
-input_fifo="" regen_ctx="" regen_req=""
+input_fifo="" regen_ctx="" regen_req="" regen_request=""
 while (($#)); do
   case "$1" in
-    --fifo)          fifo="${2:-}"; shift 2 ;;
-    --origin-pane)   origin="${2:-}"; shift 2 ;;
-    --over-ssh)      over_ssh=1; shift ;;
-    --results-fifo)  results="${2:-}"; shift 2 ;;
-    --shell-fifo)    shell_fifo="${2:-}"; shift 2 ;;
-    --run-dir)       run_dir="${2:-}"; shift 2 ;;
-    --input-fifo)    input_fifo="${2:-}"; shift 2 ;;
-    --regen-ctx)     regen_ctx="${2:-}"; shift 2 ;;
-    --regen-req)     regen_req="${2:-}"; shift 2 ;;
-    *)               shift ;;
+    --fifo)            fifo="${2:-}"; shift 2 ;;
+    --origin-pane)     origin="${2:-}"; shift 2 ;;
+    --over-ssh)        over_ssh=1; shift ;;
+    --results-fifo)    results="${2:-}"; shift 2 ;;
+    --shell-fifo)      shell_fifo="${2:-}"; shift 2 ;;
+    --run-dir)         run_dir="${2:-}"; shift 2 ;;
+    --input-fifo)      input_fifo="${2:-}"; shift 2 ;;
+    --regen-ctx)       regen_ctx="${2:-}"; shift 2 ;;
+    --regen-req)       regen_req="${2:-}"; shift 2 ;;
+    --regen-request)   regen_request="${2:-}"; shift 2 ;;
+    *)                 shift ;;
   esac
 done
 _log "start: fifo=$fifo origin=$origin shell_fifo='${shell_fifo:-EMPTY}' results='${results:-EMPTY}' input_fifo='${input_fifo:-EMPTY}'"
@@ -161,6 +162,9 @@ broker::run_block() {
     local code=$?
     _log "run done id=${id} exit=${code}"
     [[ -n "$results" ]] && print -rn -- "${id}${US}${code}${US}${log}${RS}" >> "$results"
+    # Append a run-log line so ai-assist-wrapup can report outcomes to the agent.
+    [[ -n "$run_dir" ]] && printf '{"id":"%s","exit":%s,"ts":"%s"}\n' \
+      "$id" "$code" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$run_dir/runlog.jsonl" 2>/dev/null || true
   } &
 }
 
@@ -206,6 +210,26 @@ broker::regenerate() {
     ${origin:+--origin-pane "$origin"} >/dev/null 2>&1 &
 }
 
+# broker::wrapup — invoke ai-assist-wrapup in the background to build a
+# session summary and stream it into the existing pane via the input FIFO.
+# Mirrors broker::regenerate: runs in the background, best-effort guard.
+broker::wrapup() {
+  local wrapup_bin="${AI_ASSIST_WRAPUP_BIN:-}"
+  if [[ -z "$wrapup_bin" ]]; then
+    for _w in \
+      "$(command -v ai-assist-wrapup 2>/dev/null)" \
+      "$HOME/.local/libexec/ai-assist-wrapup"; do
+      [[ -n "$_w" && -x "$_w" ]] && { wrapup_bin="$_w"; break; }
+    done
+  fi
+  [[ -n "$regen_ctx" && -n "$regen_req" && -n "$input_fifo" && -n "$wrapup_bin" && -x "$wrapup_bin" ]] || return 0
+  _log "wrapup: ctx=$regen_ctx req=$regen_req input_fifo=$input_fifo run_dir=${run_dir:-EMPTY}"
+  "$wrapup_bin" --ctx "$regen_ctx" --req "$regen_req" --input-fifo "$input_fifo" \
+    ${run_dir:+--run-dir "$run_dir"} \
+    ${regen_request:+--request-file "$regen_request"} \
+    >/dev/null 2>&1 &
+}
+
 # broker::dispatch — parse one 3-field record and route it.
 broker::dispatch() {
   local rec="$1"
@@ -224,6 +248,7 @@ broker::dispatch() {
     review-diff) broker::open_diff "$id" "$payload" ;;  # back-compat alias
     apply-diff)  broker::apply_diff "$id" "$payload" ;;
     regenerate)  broker::regenerate ;;
+    wrapup)      broker::wrapup ;;
   esac
 }
 

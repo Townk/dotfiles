@@ -85,6 +85,11 @@ while (($#)); do
     *) break ;;
   esac
 done
+# Ensure regen keys are always populated — fall back to the cache keys when
+# --regen-ctx/--regen-req were not passed explicitly (fresh playbook path).
+# This lets wrap-up work uniformly on both fresh and cached-replay panes.
+regen_ctx="${regen_ctx:-$cache_ctx}"
+regen_req="${regen_req:-$cache_req}"
 # Propagate project root so ai-assist-remember (and any other tool) keys the
 # KB on the canonical project root rather than the agent shell's cwd.
 [[ -n "$project_root" ]] && export AI_ASSIST_PROJECT_ROOT="$project_root"
@@ -202,6 +207,9 @@ if [[ -n "$origin_pane" ]]; then
       [[ -n "$run_dir" ]] && broker_flags+=(--run-dir "$run_dir")
       (( over_ssh )) && broker_flags+=(--over-ssh)
       [[ -n "$regen_ctx" && -n "$regen_req" ]] && broker_flags+=(--regen-ctx "$regen_ctx" --regen-req "$regen_req")
+      # Forward the original request.json to the broker so wrap-up can use it
+      # as a fresh-playbook request source (avoids needing a cached sidecar).
+      [[ -n "$cache_request" ]] && broker_flags+=(--regen-request "$cache_request")
       # The broker is a sibling of the pager and inherits this pane's tty as its
       # stdout/stderr. `zellij action new-pane` (the diff float) prints the new
       # pane's id to stdout, which would land on the pager's alt-screen and scroll
