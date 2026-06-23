@@ -130,4 +130,17 @@ echo ok')"
     When call cat "$reply/out"
     The output should equal "hello"
   End
+
+  # Directory-scoped env managers (mise/direnv) are re-synced after each job, so a
+  # config change in one block is visible to the next. Stub mise's hook-env to
+  # emit an export and verify a later job sees it.
+  It 're-syncs dir-env managers (mise hook-env) into later jobs'
+    printf '#!/usr/bin/env zsh\n[[ "$1" == "hook-env" ]] && print -r -- "export MISE_SYNCED=yes"\n' > "$TEST_TMP/mise"
+    chmod +x "$TEST_TMP/mise"
+    kill "$SHELL_PID" 2>/dev/null
+    PATH="$TEST_TMP:$PATH" "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
+    run_job 'true' >/dev/null
+    reply="$(run_job 'echo $MISE_SYNCED')"
+    The contents of file "$reply/out" should equal "yes"
+  End
 End

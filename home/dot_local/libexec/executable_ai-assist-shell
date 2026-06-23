@@ -73,9 +73,15 @@ while IFS= read -r -d "$_aas_RS" _aas_job <&$_aas_fd; do
             # multi-command block must not mask an earlier failure. (A block can
             # opt out of a deliberate non-zero with `… || true`.)
     eval "$_aas_cmd"
-    _aas_rc=$?  # capture BEFORE the state-write below, or it masks the real code
+    _aas_rc=$?  # capture BEFORE the resync/state-write below, or they mask it
+    set +e  # housekeeping below must not trip errexit or change the block's exit
+    # Re-sync directory-scoped env managers so a config change made by THIS block
+    # (e.g. `mise use cmake@X`) is visible to later blocks. The interactive shell
+    # does this in a precmd hook; this eval loop has no prompt, so we do it here.
+    command -v mise   >/dev/null 2>&1 && eval "$(mise hook-env -s zsh 2>/dev/null)" 2>/dev/null
+    command -v direnv >/dev/null 2>&1 && eval "$(direnv export zsh 2>/dev/null)" 2>/dev/null
     { print -r -- "cd -- ${(q)PWD}"; export -p; } > "$_aas_state"
-    exit $_aas_rc  # the job's exit is the user command's, not the state-write's
+    exit $_aas_rc  # the job's exit is the user command's, not the housekeeping's
   ) >"$_aas_reply/out" 2>"$_aas_reply/err" &
   _aas_pid=$!
   # Publish the pid so a stop action (broker) can interrupt this run by id.
