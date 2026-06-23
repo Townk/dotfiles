@@ -114,17 +114,33 @@ JSON
   End
 
   Describe 'assist::system_prompt — playbook authoring'
-    It 'instructs the agent to emit a literate playbook with tagged blocks'
+    It 'troubleshooting mode (failed command): 3-part diagnosis + tagged blocks'
       REQ_USER_REQUEST="why did the build fail"; REQ_PROJECT_ROOT="/tmp/p"
+      REQ_COMMAND_TEXT="make"; REQ_COMMAND_EXIT="1"
       kb="$(mktemp)"; : > "$kb"
       When call assist::system_prompt "$kb"
-      The output should include 'Goal'
+      The output should include 'Failed command'
       The output should include 'Why it happens'
       The output should include 'Fix steps'
       The output should include 'id='
       The output should include 'needs='
       The output should include 'static'
       The output should include 'AAS_ERR'
+    End
+
+    # Regression: a general request whose last command SUCCEEDED must NOT be
+    # framed as troubleshooting (no "Failed command", no fabricated diagnosis).
+    It 'general mode (successful/absent last command): how-to, not a diagnosis'
+      REQ_USER_REQUEST="how do I list the last 3 commits in master?"; REQ_PROJECT_ROOT="/tmp/p"
+      REQ_COMMAND_TEXT="git log --oneline -3 master"; REQ_COMMAND_EXIT="0"
+      kb="$(mktemp)"; : > "$kb"
+      When call assist::system_prompt "$kb"
+      The output should include 'HOW-TO'
+      The output should include "Answer the user's request directly"
+      The output should include 'id='
+      The output should not include 'Failed command'
+      The output should not include 'Diagnose the failure'
+      The output should not include 'Why it happens'
     End
 
     It 'requires diff blocks to be complete unified diffs valid for git apply'

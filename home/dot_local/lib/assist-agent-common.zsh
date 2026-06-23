@@ -86,13 +86,27 @@ assist::kb_ensure() {
 # helper tools in Phase C, so this prompt asks the agent to reason from the
 # given context and finish with a summary.
 assist::system_prompt() {
-  local kb_path="$1" kb_block="" cmd_block=""
+  local kb_path="$1" kb_block="" cmd_block="" output_block="" task_line="" structure=""
   if [[ -s "$kb_path" ]]; then
     kb_block=$'\n\n## What we already know about this project\n\n'"$(cat "$kb_path")"
   fi
-  if [[ -n "${REQ_COMMAND_TEXT:-}" ]]; then
-    cmd_block=$'\nFailed command: `'"${REQ_COMMAND_TEXT}"$'`'
-    [[ -n "${REQ_COMMAND_EXIT:-}" ]] && cmd_block+=$' (exit '"${REQ_COMMAND_EXIT}"$')'
+
+  # Failure vs general request. ONLY a non-zero last-command exit is a failure to
+  # diagnose. A successful or absent last command means this is a general
+  # question — there is almost always *some* last command, so do NOT frame a
+  # general request as troubleshooting or invent an error from the last command.
+  local is_failure=0
+  [[ -n "${REQ_COMMAND_EXIT:-}" && "${REQ_COMMAND_EXIT}" != "0" ]] && is_failure=1
+
+  if (( is_failure )); then
+    cmd_block=$'\nFailed command: `'"${REQ_COMMAND_TEXT}"$'` (exit '"${REQ_COMMAND_EXIT}"$')'
+    output_block=$'\n\nRelevant terminal output (the failure):\n'"${REQ_SCROLLBACK:-(none captured)}"
+    task_line="Diagnose the failure: explain what is going on and how to fix it."
+    structure=$'Write your answer as a LITERATE TROUBLESHOOTING PLAYBOOK — a document a teammate\nwithout the full context can follow — in three parts:\n\n1. Goal & error — what the user was trying to do and the error they saw (concise).\n2. Why it happens — the root cause (concise).\n3. Fix steps — prose that walks through the fix, with the runnable steps woven in\n   as fenced code blocks. Do NOT just dump a list of commands.'
+  else
+    # General request: do not invent an error, do not diagnose the last command.
+    task_line="Answer the user's request directly. This is a general request, NOT a troubleshooting case: there is no failure here — do NOT invent or diagnose an error, and do NOT treat the last command as a problem."
+    structure=$'Write your answer as a LITERATE HOW-TO PLAYBOOK — a document a teammate can\nfollow — in two parts:\n\n1. Goal — what the user wants to accomplish (one line).\n2. How — prose that walks through it, with the runnable steps woven in as fenced\n   code blocks. Do NOT just dump a list of commands.'
   fi
 
   cat <<EOF
@@ -106,29 +120,20 @@ Project: ${REQ_PROJECT_NAME:-${REQ_PROJECT_ROOT:-unknown}} (${REQ_PROJECT_ROOT:-
 Request kind: ${REQ_KIND:-question}${cmd_block}
 
 What the user is trying to do:
-${REQ_USER_REQUEST:-(no description given)}
+${REQ_USER_REQUEST:-(no description given)}${output_block}${kb_block}
 
-Relevant terminal output (scrollback of the last command):
-${REQ_SCROLLBACK:-(none captured)}${kb_block}
-
-Diagnose the situation and explain what is going on and how to fix or proceed.
+${task_line}
 
 You have these helper tools on PATH — prefer them over your own raw shell:
 - \`ai-assist-run "<cmd>"\` runs a command in the user's real shell (their cwd
-  and environment). Use it for diagnosis; keep those commands read-only or
+  and environment). Use it to verify; keep those commands read-only or
   idempotent. It returns the command's output and exit code.
 - \`ai-assist-ask --type free|line|confirm|choose "<question>" [choices...]\`
   asks the user and returns their answer. It is the only way to get input.
 - \`ai-assist-remember "<fact>"\` saves a durable, distilled fact about this
   project for future requests.
 
-Write your answer as a LITERATE TROUBLESHOOTING PLAYBOOK — a document a teammate
-without the full context can follow — in three parts:
-
-1. Goal & error — what the user was trying to do and the error they saw (concise).
-2. Why it happens — the root cause (concise).
-3. Fix steps — prose that walks through the fix, with the runnable steps woven in
-   as fenced code blocks. Do NOT just dump a list of commands.
+${structure}
 
 Each runnable step is a fenced code block. EVERY runnable block MUST carry a
 unique short id, e.g. a bash block tagged {id=fix} — the runner keys run/diff/
@@ -154,12 +159,12 @@ Show captured error output or sample output as a console block (or tag it
 For example, an illustrative block starts with: \`\`\`console {static}
 
 Do NOT apply changes yourself — the user reviews and runs each step from the
-playbook. Keep parts 1–2 short; spend your words on part 3.
+playbook. Keep the preamble short; spend your words on the steps.
 
 Never write secrets, credentials, or raw environment dumps into a remembered
 fact or into your answer.
 
-Finish with a short summary of the cause and the recommended next step.
+Finish with a short summary and the recommended next step.
 EOF
 }
 
