@@ -1,0 +1,28 @@
+{{- /*
+  cmake — compile from source on macOS, always.
+
+  mise's default cmake backend is aqua:Kitware/CMake, which downloads
+  Kitware's prebuilt CMake.app. Current macOS Gatekeeper quarantines that
+  unsigned download ("CMake.app is damaged and can't be opened"), so the
+  binary won't run at all. Pin the asdf backend and force a source build
+  via ASDF_CMAKE_FORCE_SOURCE_INSTALL=1 — the source build needs no
+  notarized/prebuilt asset, so there's also no macOS-binary version to
+  chase (this replaces the old config.toml pin that was stuck on 4.3.3,
+  the last release with a working macOS binary).
+
+  Source build needs a C/C++ toolchain — the Xcode Command Line Tools,
+  already a baseline prereq on these machines.
+
+  On other OSes (the Linux dev-shell) the prebuilt binary is fine and far
+  faster, so keep mise's default backend.
+
+  mise loads every conf.d/*.toml alongside config.toml, so this layers the
+  OS-specific choice without templating the main config (same pattern as
+  dev-shell.toml.tmpl).
+*/ -}}
+[tools]
+{{- if eq .chezmoi.os "darwin" }}
+"asdf:mise-plugins/mise-cmake" = { version = "latest", install_env = { ASDF_CMAKE_FORCE_SOURCE_INSTALL = "1" } }
+{{- else }}
+cmake = "latest"
+{{- end }}

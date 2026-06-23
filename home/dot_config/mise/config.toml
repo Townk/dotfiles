@@ -10,11 +10,8 @@ rust = { version = "latest", components = "rust-analyzer,rust-src,rustfmt,clippy
 
 # Tools
 cargo-binstall = "latest"  # prebuilt-binary installer; lets the Cargofile worker skip source builds
-# Pinned: cmake v4.3.4 is tagged upstream but ships no macOS binary asset yet
-# (cmake-4.3.4-macos-universal.tar.gz / -Darwin-arm64 → 404), and the asdf-cmake
-# plugin's source-build fallback produces no binary. Revert to "latest" once the
-# 4.3.4 (or newer) macOS assets are published. See Kitware/CMake releases.
-cmake = "4.3.3"
+# cmake is OS-specific — see conf.d/cmake.toml.tmpl (source build on macOS,
+# prebuilt binary elsewhere).
 just = "latest"
 ninja = "latest"
 uv = "latest"
