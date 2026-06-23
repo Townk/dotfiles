@@ -200,18 +200,20 @@ assist::spawn_pane() {
 # ── Context capture (Phase B) ──────────────────────────────────────────────
 : "${ATUIN_BIN:=atuin}"
 
-# assist::capture_command — the last command run → CAP_CMD / CAP_EXIT /
-# CAP_DIR / CAP_DURATION / CAP_KIND. (`atuin history last` is global and does
-# NOT accept --session; the last global command is the one just run in this
-# pane, so that's what we want anyway.)
+# assist::capture_command — the last command run IN THIS PANE → CAP_CMD / CAP_EXIT
+# / CAP_DIR / CAP_DURATION / CAP_KIND. Uses `atuin history list --session`, which
+# filters to the CURRENT session (the inherited ATUIN_SESSION) and lists oldest→
+# newest, so the LAST line is this pane's most recent command — and a fresh tab
+# that has run nothing yields no command. (`history last` is GLOBAL and would
+# surface a command from another pane, producing a phantom "last command".)
 assist::capture_command() {
   local row
-  row="$("$ATUIN_BIN" history last \
-        --format '{command}	{exit}	{directory}	{duration}' 2>/dev/null)" || row=""
+  row="$("$ATUIN_BIN" history list --session \
+        --format '{command}	{exit}	{directory}	{duration}' 2>/dev/null | tail -1)" || row=""
   CAP_CMD="${row%%	*}"; row="${row#*	}"
   CAP_EXIT="${row%%	*}"; row="${row#*	}"
   CAP_DIR="${row%%	*}"; CAP_DURATION="${row#*	}"
-  [[ "$CAP_CMD" == "$CAP_EXIT" ]] && CAP_EXIT=""   # single-field row guard
+  [[ "$CAP_CMD" == "$CAP_EXIT" ]] && CAP_EXIT=""   # single-field/empty row guard
   if [[ -n "$CAP_EXIT" && "$CAP_EXIT" != 0 ]]; then CAP_KIND=error; else CAP_KIND=question; fi
 }
 

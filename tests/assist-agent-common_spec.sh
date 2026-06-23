@@ -185,7 +185,8 @@ JSON
   Describe 'context capture (Phase B)'
     setup_cap() {
       CAP_TMP=$(mktemp -d)
-      # Stub atuin: print one TSV row "<cmd>\t<exit>\t<dir>\t<duration>".
+      # Stub atuin: `history list --session` prints the session's rows
+      # (oldest→newest); one TSV row "<cmd>\t<exit>\t<dir>\t<duration>".
       {
         echo '#!/usr/bin/env zsh'
         echo 'print -r -- "make all\t2\t/tmp/proj\t40ms"'
@@ -215,6 +216,16 @@ JSON
       The variable CAP_EXIT should equal "2"
       The variable CAP_KIND should equal "error"
       The variable CAP_DIR should equal "/tmp/proj"
+    End
+
+    # Regression: a fresh tab/session lists no commands of its own, so there is
+    # no phantom "last command" pulled from another pane.
+    It 'capture_command yields no command when the session has none (fresh tab)'
+      { echo '#!/usr/bin/env zsh'; } > "$CAP_TMP/atuin"; chmod +x "$CAP_TMP/atuin"  # empty session list
+      When call assist::capture_command
+      The variable CAP_CMD should equal ""
+      The variable CAP_EXIT should equal ""
+      The variable CAP_KIND should equal "question"
     End
 
     It 'capture_scrollback slices from the command line and drops the trailing prompt'
