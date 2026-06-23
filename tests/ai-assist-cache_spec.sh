@@ -274,6 +274,47 @@ Describe 'ai-assist-cache'
     End
   End
 
+  # ── store --request-file / request-file (regenerate sidecar) ──────────────────
+
+  Describe 'store --request-file and request-file'
+    It 'saves the request.json sidecar and request-file prints its path'
+      body_file="$TEST_TMP/body.txt"
+      printf 'snippet body\n' > "$body_file"
+      req_file="$TEST_TMP/request.json"
+      printf '{"REQ_USER_REQUEST":"how do I list files"}\n' > "$req_file"
+      "$SCRIPT" store "sctx" "sreq" command "$body_file" --request-file "$req_file" >/dev/null 2>&1
+      When run "$SCRIPT" request-file "sctx" "sreq"
+      The status should be success
+      The output should include "sreq.request.json"
+    End
+
+    It 'the saved sidecar contains the original request content'
+      body_file="$TEST_TMP/body.txt"
+      printf 'snippet body\n' > "$body_file"
+      req_file="$TEST_TMP/request.json"
+      printf '{"REQ_USER_REQUEST":"how do I list files"}\n' > "$req_file"
+      "$SCRIPT" store "sctx2" "sreq2" command "$body_file" --request-file "$req_file" >/dev/null 2>&1
+      sidecar="$("$SCRIPT" request-file "sctx2" "sreq2")"
+      The path "$sidecar" should be file
+      The contents of file "$sidecar" should include 'how do I list files'
+    End
+
+    It 'request-file exits 1 when no sidecar was saved'
+      body_file="$TEST_TMP/body.txt"
+      printf 'snippet body\n' > "$body_file"
+      "$SCRIPT" store "nctx" "nreq" command "$body_file" >/dev/null 2>&1
+      When run "$SCRIPT" request-file "nctx" "nreq"
+      The status should be failure
+    End
+
+    It 'store without --request-file still writes the entry (sidecar optional)'
+      body_file="$TEST_TMP/body.txt"
+      printf 'snippet body\n' > "$body_file"
+      entry="$("$SCRIPT" store "octx" "oreq" answer "$body_file" 2>/dev/null)"
+      The path "$entry" should be file
+    End
+  End
+
   # ── history ────────────────────────────────────────────────────────────────────
 
   Describe 'history'

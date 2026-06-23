@@ -111,13 +111,15 @@ _store() {
   local body_file="${4:?store: missing body_file}"
   shift 4
 
-  # Parse optional --meta-file and extra k=v pairs.
-  local meta_file=""
+  # Parse optional --meta-file, --request-file, and extra k=v pairs.
+  local meta_file="" request_file=""
   local -A extras=()
   local pair key val
   while (($#)); do
     if [[ "$1" == "--meta-file" ]]; then
       meta_file="${2:-}"; shift 2
+    elif [[ "$1" == "--request-file" ]]; then
+      request_file="${2:-}"; shift 2
     else
       pair="$1"
       key="${pair%%=*}"
@@ -167,9 +169,35 @@ _store() {
 
   mv -f "$tmp" "$entry"
 
+  # Save the original request.json alongside the entry (faithful regenerate: the
+  # full REQ_* incl. scrollback, beyond the redacted front matter). Best-effort.
+  if [[ -n "$request_file" && -f "$request_file" ]]; then
+    local rtmp
+    rtmp="$(mktemp "$cache_dir/.rtmp.XXXXXX")"
+    if cp "$request_file" "$rtmp" 2>/dev/null; then
+      mv -f "$rtmp" "$cache_dir/$req.request.json"
+    else
+      rm -f "$rtmp"
+    fi
+  fi
+
   # NOTE: store no longer appends prompts.jsonl — use the `log` subcommand instead.
 
   print -r -- "$entry"
+}
+
+# ── Subcommand: request-file ──────────────────────────────────────────────────
+# Print the sidecar request.json path for <ctx> <req> + exit 0 if it exists;
+# exit 1 if absent (entry stored before sidecars, or never saved).
+_request_file() {
+  local ctx="${1:?request-file: missing context_hash}"
+  local req="${2:?request-file: missing request_hash}"
+  local sidecar="$_root/cache/$ctx/$req.request.json"
+  if [[ -f "$sidecar" ]]; then
+    print -r -- "$sidecar"
+    return 0
+  fi
+  return 1
 }
 
 # ── Subcommand: log ───────────────────────────────────────────────────────────
@@ -299,9 +327,10 @@ _history() {
 _usage() {
   print -ru2 -- "usage: ai-assist-cache <subcommand> [args]"
   print -ru2 -- "subcommands: context-hash | request-hash <req> | lookup <ctx> <req>"
-  print -ru2 -- "             store <ctx> <req> <kind> <body_file> [--meta-file <file>] [k=v ...]"
+  print -ru2 -- "             store <ctx> <req> <kind> <body_file> [--meta-file <file>] [--request-file <file>] [k=v ...]"
   print -ru2 -- "             log <ctx> <kind> <request>"
   print -ru2 -- "             body <entry_file> | field <entry_file> <key> | history <ctx> [N]"
+  print -ru2 -- "             request-file <ctx> <req>"
   return 2
 }
 
@@ -318,6 +347,7 @@ case "$subcmd" in
   body)           _body "${1:-}" ;;
   field)          _field "${1:-}" "${2:-}" ;;
   history)        _history "${1:-}" "${2:-}" ;;
+  request-file)   _request_file "${1:-}" "${2:-}" ;;
   *)
     print -ru2 -- "ai-assist-cache: unknown subcommand: $subcmd"
     _usage
