@@ -374,6 +374,7 @@ case "$kind" in
           printf '%s\n' "$payload" > "$_body_tmp" 2>/dev/null || true
           local _store_args=("$_cache_ctx" "$_cache_req" command "$_body_tmp")
           [[ -n "$_cache_meta" ]] && _store_args+=(--meta-file "$_cache_meta")
+          _store_args+=(--request-file "$request")
           "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
           rm -f -- "$_body_tmp" 2>/dev/null || true
         fi
@@ -391,6 +392,7 @@ case "$kind" in
           printf '%s\n' "$payload" > "$_body_tmp" 2>/dev/null || true
           local _store_args=("$_cache_ctx" "$_cache_req" command "$_body_tmp")
           [[ -n "$_cache_meta" ]] && _store_args+=(--meta-file "$_cache_meta")
+          _store_args+=(--request-file "$request")
           "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
           rm -f -- "$_body_tmp" 2>/dev/null || true
         fi
@@ -408,6 +410,7 @@ case "$kind" in
         printf '%s\n' "$payload" > "$_body_tmp" 2>/dev/null || true
         local _store_args=("$_cache_ctx" "$_cache_req" answer "$_body_tmp")
         [[ -n "$_cache_meta" ]] && _store_args+=(--meta-file "$_cache_meta")
+        _store_args+=(--request-file "$request")
         "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
         rm -f -- "$_body_tmp" 2>/dev/null || true
       fi

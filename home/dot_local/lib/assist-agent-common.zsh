@@ -363,6 +363,9 @@ assist::worker_main() {
     [[ -n "${AI_ASSIST_CACHE_CTX:-}" ]]  && render_flags+=(--cache-ctx "$AI_ASSIST_CACHE_CTX")
     [[ -n "${AI_ASSIST_CACHE_REQ:-}" ]]  && render_flags+=(--cache-req "$AI_ASSIST_CACHE_REQ")
     [[ -n "${AI_ASSIST_CACHE_META:-}" ]] && render_flags+=(--cache-meta "$AI_ASSIST_CACHE_META")
+    # Forward request.json (same reason: ARG not env) so render saves the regenerate
+    # sidecar alongside the persisted playbook.
+    [[ -n "${AI_ASSIST_CACHE_CTX:-}" && -n "$request_file" ]] && render_flags+=(--cache-request "$request_file")
     assist::spawn_pane "$render" --harness "$label" "${render_flags[@]}" -- "${ASSIST_PANE_CMD[@]}"
   else
     assist::spawn_pane "${ASSIST_PANE_CMD[@]}"

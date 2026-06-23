@@ -318,6 +318,8 @@ Describe 'ai-assist-render'
     } > "$cache_stub"; chmod +x "$cache_stub"
     meta_file="$TEST_TMP/cache-meta2.txt"
     printf 'harness=test\n' > "$meta_file"
+    req_file="$TEST_TMP/request.json"
+    printf '{"user_request":"x"}\n' > "$req_file"
     BeforeRun 'setup_cache_write_test' \
       "export TEST_TMP=\"$TEST_TMP\"" \
       "export AI_ASSIST_CACHE_BIN=\"$cache_stub\""
@@ -330,6 +332,7 @@ Describe 'ai-assist-render'
         --cache-ctx "aabbccdd" \
         --cache-req "11223344" \
         --cache-meta "$meta_file" \
+        --cache-request "$req_file" \
         -- "$stub_harness"
     The status should be success
     The output should include "PAGER_RAN"
@@ -337,6 +340,9 @@ Describe 'ai-assist-render'
     The contents of file "$TEST_TMP/cache-calls" should include "store"
     The contents of file "$TEST_TMP/cache-calls" should include "aabbccdd"
     The contents of file "$TEST_TMP/cache-calls" should include "playbook"
+    # Stage 2: the regenerate sidecar request.json is forwarded into the store call.
+    The contents of file "$TEST_TMP/cache-calls" should include "--request-file"
+    The contents of file "$TEST_TMP/cache-calls" should include "request.json"
   End
 
   It 'with --cache-* flags and harness exiting 1, does NOT write a cache entry'

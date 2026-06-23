@@ -51,6 +51,8 @@ cleanup_provided_fifos=0
 cache_ctx="${AI_ASSIST_CACHE_CTX:-}"
 cache_req="${AI_ASSIST_CACHE_REQ:-}"
 cache_meta="${AI_ASSIST_CACHE_META:-}"
+# Request.json path: persisted as the regenerate sidecar alongside the playbook.
+cache_request="${AI_ASSIST_CACHE_REQUEST:-}"
 # Cache replay badge (Stage 3): when set, forwarded to the pager as --cached <ts>
 # so it can display the cached·<age> badge. Does NOT trigger tee/persist.
 cache_replay_ts=""
@@ -71,6 +73,7 @@ while (($#)); do
     --cache-ctx)      cache_ctx="${2:-}"; shift 2 ;;
     --cache-req)      cache_req="${2:-}"; shift 2 ;;
     --cache-meta)     cache_meta="${2:-}"; shift 2 ;;
+    --cache-request)  cache_request="${2:-}"; shift 2 ;;
     --cached)         cache_replay_ts="${2:-}"; shift 2 ;;
     --) shift; break ;;
     *) break ;;
@@ -322,6 +325,7 @@ if [[ -n "$_cache_bin" && -n "$_cache_body_tmp" && -f "$_cache_body_tmp" ]]; the
   if (( rc == 0 )) && [[ -s "$_cache_body_tmp" ]]; then
     typeset -a _store_args=("$cache_ctx" "$cache_req" playbook "$_cache_body_tmp")
     [[ -n "$cache_meta" && -f "$cache_meta" ]] && _store_args+=(--meta-file "$cache_meta")
+    [[ -n "$cache_request" && -f "$cache_request" ]] && _store_args+=(--request-file "$cache_request")
     "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
   fi
   rm -f -- "$_cache_body_tmp" 2>/dev/null || true

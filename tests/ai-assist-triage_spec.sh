@@ -428,6 +428,30 @@ JSON
     The contents of file "$TEST_TMP/zj-args" should include "ai-assist-render"
   End
 
+  It 'cache MISS persists the regenerate sidecar (request.json) next to the entry'
+    make_worker claude "__ANSWER__"$'\n'"A fresh answer." 0
+    export AI_ASSIST_DATA_DIR="$TEST_TMP/cache-data"
+    mkdir -p "$AI_ASSIST_DATA_DIR"
+    # Symlink the real cache helper so store actually runs (mirrors seed_cache).
+    cache_script="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_ai-assist-cache"
+    ln -sf "$cache_script" "$TEST_TMP/bin/ai-assist-cache" 2>/dev/null || true
+    mkdir -p "$TEST_TMP/home/.local/libexec"
+    ln -sf "$cache_script" "$TEST_TMP/home/.local/libexec/ai-assist-cache" 2>/dev/null || true
+    # Compute the (ctx, req) this submit produces (project-only ctx; request text).
+    export REQ_PROJECT_ROOT="/tmp/proj"
+    unset REQ_COMMAND_TEXT REQ_COMMAND_EXIT REQ_SCROLLBACK 2>/dev/null || true
+    ctx="$("$cache_script" context-hash 2>/dev/null)"
+    req="$("$cache_script" request-hash "sidecar persist test" 2>/dev/null)"
+    unset REQ_PROJECT_ROOT 2>/dev/null || true
+    make_hit_req
+    drain_in
+    feed "submit${US}sidecar persist test"
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$TEST_TMP/req-hit.json" --origin-pane terminal_7
+    The status should be success
+    The path "$TEST_TMP/cache-data/cache/$ctx/$req.request.json" should be file
+  End
+
   It 'AI_ASSIST_NO_CACHE=1 forces a miss and invokes the classify path'
     make_classify_recorder claude
     seed_cache answer "Cached answer that should be bypassed."
