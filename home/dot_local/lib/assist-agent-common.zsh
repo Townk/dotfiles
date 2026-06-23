@@ -130,8 +130,9 @@ without the full context can follow — in three parts:
 3. Fix steps — prose that walks through the fix, with the runnable steps woven in
    as fenced code blocks. Do NOT just dump a list of commands.
 
-Each runnable step is a fenced code block tagged with a short id, e.g. a bash
-block tagged {id=fix}. Use:
+Each runnable step is a fenced code block. EVERY runnable block MUST carry a
+unique short id, e.g. a bash block tagged {id=fix} — the runner keys run/diff/
+apply, output capture, and needs-gating on that id. Use:
   - bash/sh/zsh blocks for shell steps (the user can run them in their shell or
     the assistant's),
   - python/node/etc. blocks for scripts,
@@ -143,6 +144,9 @@ block tagged {id=fix}. Use:
     \`git apply\`. Do NOT emit a bare fragment of changed lines, and do NOT put
     the target filename only in prose — the file headers ARE how the viewer and
     apply know the target.
+Shell blocks run under \`set -e\`: a block FAILS at its FIRST failing command, so
+a later command cannot mask an earlier failure. If a non-zero exit is expected
+(a probe like \`command -v foo\` or \`grep …\`), guard it with \`|| true\`.
 If a step uses a previous step's output, tag it {id=next needs=fix} and reference
 the earlier output via \$AAS_OUT_fix / \$AAS_ERR_fix / \$AAS_EXIT_fix.
 Show captured error output or sample output as a console block (or tag it
