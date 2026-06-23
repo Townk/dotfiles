@@ -50,22 +50,20 @@ _normalize_scrollback() {
 # ── Subcommand: context-hash ──────────────────────────────────────────────────
 _context_hash() {
   local project_root="${REQ_PROJECT_ROOT:-${REQ_CWD:-}}"
-  local command_text="${REQ_COMMAND_TEXT:-}"
+  local command_exit="${REQ_COMMAND_EXIT:-}"
 
-  if [[ -n "$command_text" ]]; then
-    # Error-driven: include command, exit code, and normalized scrollback.
-    local scrollback="${REQ_SCROLLBACK:-}"
+  # Include the last command + its output ONLY when it FAILED (non-zero exit) —
+  # that is the error-diagnosis context. A successful or absent last command is
+  # just noise for a general question, so those key on the PROJECT ONLY: the
+  # bucket stays stable regardless of what the user last ran or cd'd through.
+  if [[ -n "$command_exit" && "$command_exit" != "0" ]]; then
+    local command_text="${REQ_COMMAND_TEXT:-}"
     local normalized_scrollback
-    normalized_scrollback="$(printf '%s' "$scrollback" | _normalize_scrollback)"
+    normalized_scrollback="$(printf '%s' "${REQ_SCROLLBACK:-}" | _normalize_scrollback)"
     printf '%s\n%s\n%s\n%s\n%s' \
-      "v1" \
-      "$project_root" \
-      "$command_text" \
-      "${REQ_COMMAND_EXIT:-}" \
-      "$normalized_scrollback" \
+      "v1" "$project_root" "$command_text" "$command_exit" "$normalized_scrollback" \
     | _sha256
   else
-    # General question: project-only (scrollback is excluded — incidental noise).
     printf '%s\n%s' "v1" "$project_root" | _sha256
   fi
 }

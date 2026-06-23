@@ -350,6 +350,12 @@ assist::worker_main() {
     [[ "$REQ_OVER_SSH" == true ]] && render_flags+=(--over-ssh)
     render_flags+=(--shell-env "$req_env" --shell-cwd "${REQ_CWD:-$PWD}")
     [[ -n "${REQ_PROJECT_ROOT:-}" ]] && render_flags+=(--project-root "$REQ_PROJECT_ROOT")
+    # Forward the cache keys as render ARGS, not env: render runs in a fresh
+    # zellij pane that does NOT inherit this process's env, so the playbook
+    # persist (render tee → ai-assist-cache store) only fires when these are args.
+    [[ -n "${AI_ASSIST_CACHE_CTX:-}" ]]  && render_flags+=(--cache-ctx "$AI_ASSIST_CACHE_CTX")
+    [[ -n "${AI_ASSIST_CACHE_REQ:-}" ]]  && render_flags+=(--cache-req "$AI_ASSIST_CACHE_REQ")
+    [[ -n "${AI_ASSIST_CACHE_META:-}" ]] && render_flags+=(--cache-meta "$AI_ASSIST_CACHE_META")
     assist::spawn_pane "$render" --harness "$label" "${render_flags[@]}" -- "${ASSIST_PANE_CMD[@]}"
   else
     assist::spawn_pane "${ASSIST_PANE_CMD[@]}"

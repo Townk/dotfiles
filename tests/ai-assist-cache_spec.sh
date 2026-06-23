@@ -38,6 +38,20 @@ Describe 'ai-assist-cache'
       The value "$hash1" should equal "$hash2"
     End
 
+    It 'with a SUCCESSFUL last command (exit 0), the hash is project-only (command ignored)'
+      # Regression: a general question must not over-bind to whatever the user
+      # last ran successfully — two different exit-0 commands → same context.
+      export REQ_PROJECT_ROOT=/tmp/proj
+      export REQ_COMMAND_EXIT=0
+      export REQ_COMMAND_TEXT='git log --oneline -3 master'
+      export REQ_SCROLLBACK='whatever'
+      hash1="$("$SCRIPT" context-hash)"
+      export REQ_COMMAND_TEXT='ls -la'
+      export REQ_SCROLLBACK='different'
+      hash2="$("$SCRIPT" context-hash)"
+      The value "$hash1" should equal "$hash2"
+    End
+
     It 'with a command, ANSI-stripped scrollback matches plain scrollback'
       export REQ_PROJECT_ROOT=/tmp/proj
       export REQ_COMMAND_TEXT='make build'
