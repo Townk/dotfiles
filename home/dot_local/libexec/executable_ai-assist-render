@@ -165,7 +165,11 @@ if [[ -n "$origin_pane" ]]; then
       [[ -n "$shell_fifo" ]] && broker_flags+=(--shell-fifo "$shell_fifo")
       [[ -n "$run_dir" ]] && broker_flags+=(--run-dir "$run_dir")
       (( over_ssh )) && broker_flags+=(--over-ssh)
-      "$broker" "${broker_flags[@]}" &
+      # The broker is a sibling of the pager and inherits this pane's tty as its
+      # stdout/stderr. `zellij action new-pane` (the diff float) prints the new
+      # pane's id to stdout, which would land on the pager's alt-screen and scroll
+      # it one line per diff-open (cumulative). Redirect both off the tty.
+      "$broker" "${broker_flags[@]}" >/dev/null 2>&1 &
       broker_pid=$!
     fi
   fi
