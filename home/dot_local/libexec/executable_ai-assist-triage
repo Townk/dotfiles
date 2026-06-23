@@ -241,10 +241,53 @@ if [[ "$kind" == command && -n "${REQ_COMMAND_TEXT:-}" \
   kind="escalate"; payload="re-running the failed command is not a diagnosis"
 fi
 
+# ── Cache: compute hashes + meta (BEST-EFFORT — never block a request) ───────
+# Resolve ai-assist-cache by absolute path (mirrors how other helpers are resolved).
+_cache_bin=""
+for _cand in \
+  "$(command -v -- ai-assist-cache 2>/dev/null)" \
+  "$HOME/.local/libexec/ai-assist-cache"; do
+  [[ -n "$_cand" && -x "$_cand" ]] && { _cache_bin="$_cand"; break; }
+done
+
+_cache_ctx="" _cache_req="" _cache_meta=""
+if [[ -n "$_cache_bin" ]]; then
+  _cache_ctx="$("$_cache_bin" context-hash 2>/dev/null)" || _cache_ctx=""
+  _cache_req="$("$_cache_bin" request-hash "$REQ_USER_REQUEST" 2>/dev/null)" || _cache_req=""
+
+  # Build a meta file with collapsed-single-line request + other fields.
+  # The meta file lives under the same dir as the request.json so it can outlive
+  # triage when escalate hands it off to render.
+  if [[ -n "$_cache_ctx" && -n "$_cache_req" ]]; then
+    _cache_meta="$(mktemp "${request:h}/cache-meta.XXXXXX" 2>/dev/null)" || _cache_meta=""
+    if [[ -n "$_cache_meta" ]]; then
+      # Collapse the request to one line for front-matter (newlines → spaces).
+      local _req_oneline="${REQ_USER_REQUEST//$'\n'/ }"
+      {
+        printf 'request=%s\n'      "$_req_oneline"
+        printf 'project_root=%s\n' "${REQ_PROJECT_ROOT:-}"
+        printf 'project_name=%s\n' "${REQ_PROJECT_NAME:-}"
+        printf 'command=%s\n'      "${REQ_COMMAND_TEXT:-}"
+        printf 'exit=%s\n'         "${REQ_COMMAND_EXIT:-}"
+        printf 'harness=%s\n'      "$harness"
+      } > "$_cache_meta" 2>/dev/null || { rm -f -- "$_cache_meta" 2>/dev/null; _cache_meta=""; }
+    fi
+  fi
+fi
+
 # ── 5. Dismiss the float ─────────────────────────────────────────────────────
 emit_close
 
 # ── 6. Route ─────────────────────────────────────────────────────────────────
+# Determine the log kind (escalate → playbook for the prompt log).
+_log_kind="$kind"
+[[ "$_log_kind" == escalate ]] && _log_kind="playbook"
+
+# Log every submit (best-effort).
+if [[ -n "$_cache_bin" && -n "$_cache_ctx" ]]; then
+  "$_cache_bin" log "$_cache_ctx" "$_log_kind" "$REQ_USER_REQUEST" 2>/dev/null || true
+fi
+
 case "$kind" in
   command)
     if [[ -n "$origin_pane" ]]; then
@@ -258,17 +301,66 @@ case "$kind" in
         "$zj" action write-chars --pane-id "$origin_pane" -- "$payload" 2>/dev/null || true
         "$zj" action write --pane-id "$origin_pane" 27 91 50 48 49 126 2>/dev/null || true  # ESC[201~
       fi
+      # Store the command result (best-effort).
+      if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" ]]; then
+        local _body_tmp
+        _body_tmp="$(mktemp "${TMPDIR:-/tmp}/ai-assist-cmd-body.XXXXXX" 2>/dev/null)" || _body_tmp=""
+        if [[ -n "$_body_tmp" ]]; then
+          printf '%s\n' "$payload" > "$_body_tmp" 2>/dev/null || true
+          local _store_args=("$_cache_ctx" "$_cache_req" command "$_body_tmp")
+          [[ -n "$_cache_meta" ]] && _store_args+=(--meta-file "$_cache_meta")
+          "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+          rm -f -- "$_body_tmp" 2>/dev/null || true
+        fi
+      fi
+      [[ -n "$_cache_meta" ]] && rm -f -- "$_cache_meta" 2>/dev/null || true
       cleanup_fifos
     else
       # Origin pane missing → render the command in the docked pager instead of
       # writing to a prompt we don't have.
+      # Store before spawning (best-effort).
+      if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" ]]; then
+        local _body_tmp
+        _body_tmp="$(mktemp "${TMPDIR:-/tmp}/ai-assist-cmd-body.XXXXXX" 2>/dev/null)" || _body_tmp=""
+        if [[ -n "$_body_tmp" ]]; then
+          printf '%s\n' "$payload" > "$_body_tmp" 2>/dev/null || true
+          local _store_args=("$_cache_ctx" "$_cache_req" command "$_body_tmp")
+          [[ -n "$_cache_meta" ]] && _store_args+=(--meta-file "$_cache_meta")
+          "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+          rm -f -- "$_body_tmp" 2>/dev/null || true
+        fi
+      fi
+      [[ -n "$_cache_meta" ]] && rm -f -- "$_cache_meta" 2>/dev/null || true
       spawn_docked --cleanup-fifos --harness "$harness" -- printf '%s\n' "$payload"
     fi
     ;;
   answer)
+    # Store the answer result (best-effort).
+    if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" ]]; then
+      local _body_tmp
+      _body_tmp="$(mktemp "${TMPDIR:-/tmp}/ai-assist-ans-body.XXXXXX" 2>/dev/null)" || _body_tmp=""
+      if [[ -n "$_body_tmp" ]]; then
+        printf '%s\n' "$payload" > "$_body_tmp" 2>/dev/null || true
+        local _store_args=("$_cache_ctx" "$_cache_req" answer "$_body_tmp")
+        [[ -n "$_cache_meta" ]] && _store_args+=(--meta-file "$_cache_meta")
+        "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+        rm -f -- "$_body_tmp" 2>/dev/null || true
+      fi
+    fi
+    [[ -n "$_cache_meta" ]] && rm -f -- "$_cache_meta" 2>/dev/null || true
     spawn_docked --cleanup-fifos --harness "$harness" -- printf '%s\n' "$payload"
     ;;
   escalate|*)
+    # Pass cache keys to render (via env) so it can persist the playbook after
+    # streaming.  The worker spawns render and inherits this environment.
+    # The meta file must outlive triage — render will remove it.
+    if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" && -n "$_cache_meta" ]]; then
+      export AI_ASSIST_CACHE_CTX="$_cache_ctx"
+      export AI_ASSIST_CACHE_REQ="$_cache_req"
+      export AI_ASSIST_CACHE_META="$_cache_meta"
+    else
+      [[ -n "$_cache_meta" ]] && rm -f -- "$_cache_meta" 2>/dev/null || true
+    fi
     cleanup_fifos
     route_escalate "$payload"
     ;;

@@ -183,13 +183,23 @@ Describe 'ai-assist-cache'
     End
   End
 
-  # ── prompts.jsonl ─────────────────────────────────────────────────────────────
+  # ── prompts.jsonl (store must NOT append; log must) ──────────────────────────
 
   Describe 'prompts.jsonl'
-    It 'store appends a well-formed JSONL line'
+    It 'store does NOT append prompts.jsonl'
       body_file="$TEST_TMP/body.txt"
       printf 'body\n' > "$body_file"
       "$SCRIPT" store "ctx1" "req1" command "$body_file" "request=how to list files" >/dev/null 2>&1
+      prompts="$AI_ASSIST_DATA_DIR/prompts.jsonl"
+      The path "$prompts" should not be exist
+    End
+  End
+
+  # ── log subcommand ────────────────────────────────────────────────────────────
+
+  Describe 'log'
+    It 'appends a well-formed JSONL line'
+      "$SCRIPT" log "ctx1" "command" "how to list files" >/dev/null 2>&1
       prompts="$AI_ASSIST_DATA_DIR/prompts.jsonl"
       The path "$prompts" should be file
       The contents of file "$prompts" should include '"ts"'
@@ -198,23 +208,55 @@ Describe 'ai-assist-cache'
       The contents of file "$prompts" should include '"request":"how to list files"'
     End
 
-    It 'store appends multiple lines on successive calls'
-      body_file="$TEST_TMP/body.txt"
-      printf 'body\n' > "$body_file"
-      "$SCRIPT" store "ctx1" "req1" command "$body_file" "request=first" >/dev/null 2>&1
-      "$SCRIPT" store "ctx1" "req2" answer  "$body_file" "request=second" >/dev/null 2>&1
+    It 'appends multiple lines on successive calls'
+      "$SCRIPT" log "ctx1" "command" "first" >/dev/null 2>&1
+      "$SCRIPT" log "ctx1" "answer"  "second" >/dev/null 2>&1
       prompts="$AI_ASSIST_DATA_DIR/prompts.jsonl"
       line_count="$(wc -l < "$prompts" | tr -d ' ')"
       The value "$line_count" should eq 2
     End
 
     It 'JSON-escapes double-quotes in the request field'
-      body_file="$TEST_TMP/body.txt"
-      printf 'body\n' > "$body_file"
-      "$SCRIPT" store "ctx1" "req1" answer "$body_file" 'request=say "hello"' >/dev/null 2>&1
+      "$SCRIPT" log "ctx1" "answer" 'say "hello"' >/dev/null 2>&1
       prompts="$AI_ASSIST_DATA_DIR/prompts.jsonl"
       # The JSON value should have backslash-escaped quotes: \"hello\"
       The contents of file "$prompts" should include '\"hello\"'
+    End
+  End
+
+  # ── store --meta-file ─────────────────────────────────────────────────────────
+
+  Describe 'store --meta-file'
+    It 'loads k=v pairs from a meta file into the front matter'
+      body_file="$TEST_TMP/body.txt"
+      printf 'body content\n' > "$body_file"
+      meta_file="$TEST_TMP/meta.txt"
+      printf 'project_root=/tmp/myproj\nharness=pi\n' > "$meta_file"
+      entry="$("$SCRIPT" store "ctx9" "req9" playbook "$body_file" --meta-file "$meta_file" 2>/dev/null)"
+      The path "$entry" should be file
+      The contents of file "$entry" should include 'project_root: /tmp/myproj'
+      The contents of file "$entry" should include 'harness: pi'
+    End
+
+    It 'positional k=v args override meta-file values on key clash'
+      body_file="$TEST_TMP/body.txt"
+      printf 'body content\n' > "$body_file"
+      meta_file="$TEST_TMP/meta2.txt"
+      printf 'harness=pi\n' > "$meta_file"
+      entry="$("$SCRIPT" store "ctx8" "req8" answer "$body_file" "harness=claude" --meta-file "$meta_file" 2>/dev/null)"
+      The path "$entry" should be file
+      The contents of file "$entry" should include 'harness: claude'
+    End
+
+    It 'ignores meta-file lines without an = sign'
+      body_file="$TEST_TMP/body.txt"
+      printf 'body content\n' > "$body_file"
+      meta_file="$TEST_TMP/meta3.txt"
+      printf 'this is not a kv pair\nproject_root=/valid\n' > "$meta_file"
+      entry="$("$SCRIPT" store "ctx7" "req7" command "$body_file" --meta-file "$meta_file" 2>/dev/null)"
+      The path "$entry" should be file
+      The contents of file "$entry" should include 'project_root: /valid'
+      The contents of file "$entry" should not include 'this is not a kv pair'
     End
   End
 

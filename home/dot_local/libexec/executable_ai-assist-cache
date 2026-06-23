@@ -1,12 +1,14 @@
 #!/usr/bin/env zsh
-# ai-assist-cache — context-hash response cache + prompt-log helper (Stage 1).
+# ai-assist-cache — context-hash response cache + prompt-log helper (Stage 2).
 #
 # Subcommands:
 #   context-hash              — read REQ_* from env, print the context sha256 hex
 #   request-hash <request>    — print sha256 of the trimmed request text
 #   lookup <ctx> <req>        — print entry path + exit 0 if it exists; exit 1 if not
-#   store <ctx> <req> <kind> <body_file> [k=v …]
-#                             — write the cache entry atomically + append prompts.jsonl
+#   store <ctx> <req> <kind> <body_file> [--meta-file <file>] [k=v …]
+#                             — write the cache entry atomically (does NOT touch prompts.jsonl)
+#   log <ctx> <kind> <request>
+#                             — append one JSONL line to prompts.jsonl (every submit)
 #   body <entry_file>         — strip YAML front matter, print the body
 #   history <ctx> [N]         — ranked + deduped prompt history (jq required)
 #
@@ -111,14 +113,32 @@ _store() {
   local body_file="${4:?store: missing body_file}"
   shift 4
 
-  # Parse extra k=v pairs.
+  # Parse optional --meta-file and extra k=v pairs.
+  local meta_file=""
   local -A extras=()
   local pair key val
-  for pair in "$@"; do
-    key="${pair%%=*}"
-    val="${pair#*=}"
-    extras[$key]="$val"
+  while (($#)); do
+    if [[ "$1" == "--meta-file" ]]; then
+      meta_file="${2:-}"; shift 2
+    else
+      pair="$1"
+      key="${pair%%=*}"
+      val="${pair#*=}"
+      extras[$key]="$val"
+      shift
+    fi
   done
+
+  # Load k=v pairs from the meta file (file entries do NOT override positional args).
+  if [[ -n "$meta_file" && -f "$meta_file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" == *=* ]] || continue          # skip lines without '='
+      key="${line%%=*}"
+      val="${line#*=}"
+      # Only set if not already provided by positional arg.
+      [[ -v "extras[$key]" ]] || extras[$key]="$val"
+    done < "$meta_file"
+  fi
 
   local cache_dir="$_root/cache/$ctx"
   mkdir -p "$cache_dir"
@@ -149,20 +169,30 @@ _store() {
 
   mv -f "$tmp" "$entry"
 
-  # Append to prompts.jsonl.
+  # NOTE: store no longer appends prompts.jsonl — use the `log` subcommand instead.
+
+  print -r -- "$entry"
+}
+
+# ── Subcommand: log ───────────────────────────────────────────────────────────
+# Append one JSONL line to prompts.jsonl. Called on every submit (hit/miss/fail).
+_log() {
+  local ctx="${1:?log: missing context_hash}"
+  local kind="${2:?log: missing kind}"
+  local request="${3:-}"
+
   local prompts_file="$_root/prompts.jsonl"
   mkdir -p "$_root"
 
-  # Extract request text from extras if present.
-  local req_text="${extras[request]:-}"
+  local iso
+  iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
   local escaped_req
-  escaped_req="$(_json_escape "$req_text")"
+  escaped_req="$(_json_escape "$request")"
 
   printf '{"ts":"%s","context":"%s","kind":"%s","request":"%s"}\n' \
     "$iso" "$ctx" "$kind" "$escaped_req" \
     >> "$prompts_file"
-
-  print -r -- "$entry"
 }
 
 # ── Subcommand: body ──────────────────────────────────────────────────────────
@@ -242,7 +272,8 @@ _history() {
 _usage() {
   print -ru2 -- "usage: ai-assist-cache <subcommand> [args]"
   print -ru2 -- "subcommands: context-hash | request-hash <req> | lookup <ctx> <req>"
-  print -ru2 -- "             store <ctx> <req> <kind> <body_file> [k=v ...]"
+  print -ru2 -- "             store <ctx> <req> <kind> <body_file> [--meta-file <file>] [k=v ...]"
+  print -ru2 -- "             log <ctx> <kind> <request>"
   print -ru2 -- "             body <entry_file> | history <ctx> [N]"
   return 2
 }
@@ -256,6 +287,7 @@ case "$subcmd" in
   request-hash)   _request_hash "${1:-}" ;;
   lookup)         _lookup "${1:-}" "${2:-}" ;;
   store)          _store "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${@:5}" ;;
+  log)            _log "${1:-}" "${2:-}" "${3:-}" ;;
   body)           _body "${1:-}" ;;
   history)        _history "${1:-}" "${2:-}" ;;
   *)

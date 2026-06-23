@@ -45,6 +45,12 @@ provided_actions_fifo=""
 provided_shell_fifo=""
 provided_results_fifo=""
 cleanup_provided_fifos=0
+# Cache persist flags (Stage 2): when all three are set, render tees the harness
+# stream and persists a playbook entry on exit-0 + non-empty.  Accepted as CLI
+# flags (explicit triage hand-off) OR via env (worker-spawn escalate path).
+cache_ctx="${AI_ASSIST_CACHE_CTX:-}"
+cache_req="${AI_ASSIST_CACHE_REQ:-}"
+cache_meta="${AI_ASSIST_CACHE_META:-}"
 while (($#)); do
   case "$1" in
     --harness)        harness="${2:-agent}"; shift 2 ;;
@@ -59,6 +65,9 @@ while (($#)); do
     --shell-fifo)     provided_shell_fifo="${2:-}"; shift 2 ;;
     --results-fifo)   provided_results_fifo="${2:-}"; shift 2 ;;
     --cleanup-fifos)  cleanup_provided_fifos=1; shift ;;
+    --cache-ctx)      cache_ctx="${2:-}"; shift 2 ;;
+    --cache-req)      cache_req="${2:-}"; shift 2 ;;
+    --cache-meta)     cache_meta="${2:-}"; shift 2 ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -229,12 +238,39 @@ if [[ -z "$pager" ]]; then
   done
 fi
 
+# Cache: resolve ai-assist-cache binary (best-effort; missing = silent no-op).
+_cache_bin=""
+if [[ -n "$cache_ctx" && -n "$cache_req" && -n "$cache_meta" ]]; then
+  for _cand in \
+    "$(command -v -- ai-assist-cache 2>/dev/null)" \
+    "$HOME/.local/libexec/ai-assist-cache"; do
+    [[ -n "$_cand" && -x "$_cand" ]] && { _cache_bin="$_cand"; break; }
+  done
+fi
+
 # Stream harness stdout+stderr into the input FIFO in the background, then
 # launch the pager (or glow fallback) in the foreground. Keep the harness PID so
 # its real exit code can be propagated below — the viewer's own status reflects
 # the renderer, not the agent.
-{ "${cmd[@]}" 2>&1; } > "$in_fifo" &
-harness_pid=$!
+# When cache keys are set, tee a body tmp so we can persist on success.
+# The harness exit is saved to a file so it survives the tee pipeline.
+_cache_body_tmp=""
+_harness_exit_file=""
+if [[ -n "$_cache_bin" ]]; then
+  _cache_body_tmp="$(mktemp "${TMPDIR:-/tmp}/ai-assist-pb-body.XXXXXX" 2>/dev/null)" || _cache_body_tmp=""
+  _harness_exit_file="$(mktemp "${TMPDIR:-/tmp}/ai-assist-pb-exit.XXXXXX" 2>/dev/null)" || _harness_exit_file=""
+fi
+
+if [[ -n "$_cache_body_tmp" && -n "$_harness_exit_file" ]]; then
+  # Run harness, capture its exit to a file, tee body, redirect to in_fifo.
+  # `{ cmd; echo $? > exitfile; }` — the echo captures cmd's exit in zsh.
+  { "${cmd[@]}" 2>&1; printf '%s' "$?" > "$_harness_exit_file"; } \
+    | tee "$_cache_body_tmp" > "$in_fifo" &
+  harness_pid=$!
+else
+  { "${cmd[@]}" 2>&1; } > "$in_fifo" &
+  harness_pid=$!
+fi
 
 if [[ -n "$pager" && -x "$pager" ]]; then
   # Build flags as a zsh array to avoid the word-split bug with optional flags.
@@ -261,5 +297,28 @@ fi
 # finished and closed its write end. Reap the harness and propagate its real
 # exit code so callers (and tests) see the agent's status, not the renderer's.
 # The EXIT trap still fires afterwards to tear down broker/shell/FIFOs.
+#
+# When tee-ing: harness_pid is the background `{ cmd; save-exit } | tee` subshell.
+# The harness exit is in $_harness_exit_file; wait's rc is tee's exit (ignored).
 wait "$harness_pid"; rc=$?
+
+# Prefer the saved harness exit over the tee pipeline exit.
+if [[ -n "$_harness_exit_file" && -f "$_harness_exit_file" ]]; then
+  _captured_exit="$(<"$_harness_exit_file" 2>/dev/null)"
+  [[ "$_captured_exit" =~ ^[0-9]+$ ]] && rc="$_captured_exit"
+  rm -f -- "$_harness_exit_file" 2>/dev/null || true
+fi
+
+# Cache persist: if harness exited 0 and body is non-empty, write the entry.
+if [[ -n "$_cache_bin" && -n "$_cache_body_tmp" && -f "$_cache_body_tmp" ]]; then
+  if (( rc == 0 )) && [[ -s "$_cache_body_tmp" ]]; then
+    typeset -a _store_args=("$cache_ctx" "$cache_req" playbook "$_cache_body_tmp")
+    [[ -n "$cache_meta" && -f "$cache_meta" ]] && _store_args+=(--meta-file "$cache_meta")
+    "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+  fi
+  rm -f -- "$_cache_body_tmp" 2>/dev/null || true
+fi
+# Remove meta file (render owns it for the escalate path).
+[[ -n "$cache_meta" && -f "$cache_meta" ]] && rm -f -- "$cache_meta" 2>/dev/null || true
+
 exit "$rc"

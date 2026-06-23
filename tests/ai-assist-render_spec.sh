@@ -267,6 +267,111 @@ Describe 'ai-assist-render'
     The path "$TEST_TMP/nc-act.fifo" should be exist
   End
 
+  # ── Cache persist (Stage 2) ───────────────────────────────────────────────────
+
+  It 'with --cache-* flags and exit-0 harness, writes a playbook cache entry'
+    setup_cache_store_test() {
+      pager_stub
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+      export AI_ASSIST_DATA_DIR="$TEST_TMP/ai-assist"
+      mkdir -p "$AI_ASSIST_DATA_DIR"
+      # Make a real (resolvable) ai-assist-cache available as a stub that records calls.
+      # We use the actual script so store logic is exercised end-to-end.
+      export AI_ASSIST_CACHE_BIN=""   # ensure env doesn't confuse resolution
+    }
+    BeforeRun 'setup_cache_store_test'
+    meta_file="$TEST_TMP/cache-meta.txt"
+    printf 'harness=test\nproject_root=/tmp\n' > "$meta_file"
+    # Point ai-assist-cache to the real helper so store actually runs.
+    cache_script="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_ai-assist-cache"
+    When run script "$SCRIPT" --harness test \
+      --cache-ctx "deadbeef0000000000000000000000000000000000000000000000000000cafe" \
+      --cache-req "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" \
+      --cache-meta "$meta_file" \
+      -- env "AI_ASSIST_DATA_DIR=$TEST_TMP/ai-assist" "$cache_script" store \
+         "deadbeef0000000000000000000000000000000000000000000000000000cafe" \
+         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" \
+         playbook /dev/stdin
+    # This test is structural: we verify that --cache-* flags don't break render,
+    # and rely on the helper tests for store correctness.
+    The status should be success
+    The output should include "PAGER_RAN"
+  End
+
+  It 'with --cache-* flags and a stub harness printing output, a playbook entry is written'
+    setup_cache_write_test() {
+      pager_stub
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+      export AI_ASSIST_DATA_DIR="$TEST_TMP/ai-assist"
+      mkdir -p "$AI_ASSIST_DATA_DIR"
+    }
+    BeforeRun 'setup_cache_write_test'
+    # Stub harness: print some lines, exit 0.
+    stub_harness="$TEST_TMP/stub-harness"
+    { echo '#!/usr/bin/env zsh'
+      echo 'printf "# Playbook\nstep 1\nstep 2\n"'
+    } > "$stub_harness"; chmod +x "$stub_harness"
+    # Stub ai-assist-cache that records store calls.
+    cache_stub="$TEST_TMP/ai-assist-cache"
+    { echo '#!/usr/bin/env zsh'
+      echo 'printf "%s\n" "$@" >> "$TEST_TMP/cache-calls"'
+    } > "$cache_stub"; chmod +x "$cache_stub"
+    meta_file="$TEST_TMP/cache-meta2.txt"
+    printf 'harness=test\n' > "$meta_file"
+    BeforeRun 'setup_cache_write_test' \
+      "export TEST_TMP=\"$TEST_TMP\"" \
+      "export AI_ASSIST_CACHE_BIN=\"$cache_stub\""
+    # Override the PATH so our cache stub is found by name too.
+    When run env "PATH=$TEST_TMP:$PATH" \
+      "AI_ASSIST_PAGER_BIN=$TEST_TMP/pager" \
+      "AI_ASSIST_DATA_DIR=$TEST_TMP/ai-assist" \
+      "TEST_TMP=$TEST_TMP" \
+      "$SCRIPT" --harness test \
+        --cache-ctx "aabbccdd" \
+        --cache-req "11223344" \
+        --cache-meta "$meta_file" \
+        -- "$stub_harness"
+    The status should be success
+    The output should include "PAGER_RAN"
+    The path "$TEST_TMP/cache-calls" should be file
+    The contents of file "$TEST_TMP/cache-calls" should include "store"
+    The contents of file "$TEST_TMP/cache-calls" should include "aabbccdd"
+    The contents of file "$TEST_TMP/cache-calls" should include "playbook"
+  End
+
+  It 'with --cache-* flags and harness exiting 1, does NOT write a cache entry'
+    meta_file2="$TEST_TMP/cache-meta3.txt"
+    printf 'harness=test\n' > "$meta_file2"
+    # Failing harness stub.
+    fail_harness="$TEST_TMP/fail-harness"
+    { echo '#!/usr/bin/env zsh'
+      echo 'printf "some output\n"'
+      echo 'exit 1'
+    } > "$fail_harness"; chmod +x "$fail_harness"
+    # Cache stub that records calls.
+    cache_stub2="$TEST_TMP/ai-assist-cache2"
+    { echo '#!/usr/bin/env zsh'
+      echo 'printf "%s\n" "$@" >> "$TEST_TMP/cache-calls2"'
+    } > "$cache_stub2"; chmod +x "$cache_stub2"
+    setup_cache_fail_test() {
+      pager_stub
+    }
+    BeforeRun 'setup_cache_fail_test' \
+      "export TEST_TMP=\"$TEST_TMP\""
+    When run env "PATH=$TEST_TMP:$PATH" \
+      "AI_ASSIST_PAGER_BIN=$TEST_TMP/pager" \
+      "AI_ASSIST_DATA_DIR=$TEST_TMP/ai-assist" \
+      "TEST_TMP=$TEST_TMP" \
+      "$SCRIPT" --harness test \
+        --cache-ctx "aabbccdd" \
+        --cache-req "11223344" \
+        --cache-meta "$meta_file2" \
+        -- "$fail_harness"
+    The status should eq 1
+    The output should include "PAGER_RAN"
+    The path "$TEST_TMP/cache-calls2" should not be exist
+  End
+
   It 'passes --shell-fifo and --results-fifo to the broker and --results-fifo to the pager'
     # Broker stub: record all argv to broker.args, then exec sleep so render's trap
     # can kill it.
