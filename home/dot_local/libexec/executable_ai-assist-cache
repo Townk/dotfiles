@@ -1,0 +1,265 @@
+#!/usr/bin/env zsh
+# ai-assist-cache — context-hash response cache + prompt-log helper (Stage 1).
+#
+# Subcommands:
+#   context-hash              — read REQ_* from env, print the context sha256 hex
+#   request-hash <request>    — print sha256 of the trimmed request text
+#   lookup <ctx> <req>        — print entry path + exit 0 if it exists; exit 1 if not
+#   store <ctx> <req> <kind> <body_file> [k=v …]
+#                             — write the cache entry atomically + append prompts.jsonl
+#   body <entry_file>         — strip YAML front matter, print the body
+#   history <ctx> [N]         — ranked + deduped prompt history (jq required)
+#
+# Store root (overridable for tests):
+#   AI_ASSIST_DATA_DIR  (highest priority)
+#   ${XDG_DATA_HOME:-$HOME/.local/share}/ai-assist  (default)
+set -uo pipefail
+
+# ── Store root ────────────────────────────────────────────────────────────────
+_root="${AI_ASSIST_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/ai-assist}"
+
+# ── SHA-256 helper ────────────────────────────────────────────────────────────
+# Emit only the hex digest; strip the trailing filename field.
+_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  else
+    shasum -a 256 | awk '{print $1}'
+  fi
+}
+
+# ── ANSI/CSI normalizer ───────────────────────────────────────────────────────
+# Strip ANSI/CSI escape sequences, trim trailing whitespace per line,
+# collapse runs of 2+ blank lines to one, drop leading/trailing blank lines.
+_normalize_scrollback() {
+  # sed: strip ESC[ … m and other CSI sequences (ESC followed by [ and parameters)
+  # plus standalone ESC sequences.
+  sed \
+    -e $'s/\x1b\\[[0-9;?]*[A-Za-z]//g' \
+    -e $'s/\x1b[()][AB012]//g' \
+    -e $'s/\x1b[^[]//g' \
+    -e 's/[[:space:]]*$//' \
+  | awk '
+    /^[[:space:]]*$/ { blanks++; next }
+    { if (blanks > 0 && out > 0) { print "" }; blanks = 0; out++; print }
+  '
+}
+
+# ── Subcommand: context-hash ──────────────────────────────────────────────────
+_context_hash() {
+  local project_root="${REQ_PROJECT_ROOT:-${REQ_CWD:-}}"
+  local command_text="${REQ_COMMAND_TEXT:-}"
+
+  if [[ -n "$command_text" ]]; then
+    # Error-driven: include command, exit code, and normalized scrollback.
+    local scrollback="${REQ_SCROLLBACK:-}"
+    local normalized_scrollback
+    normalized_scrollback="$(printf '%s' "$scrollback" | _normalize_scrollback)"
+    printf '%s\n%s\n%s\n%s\n%s' \
+      "v1" \
+      "$project_root" \
+      "$command_text" \
+      "${REQ_COMMAND_EXIT:-}" \
+      "$normalized_scrollback" \
+    | _sha256
+  else
+    # General question: project-only (scrollback is excluded — incidental noise).
+    printf '%s\n%s' "v1" "$project_root" | _sha256
+  fi
+}
+
+# ── Subcommand: request-hash ──────────────────────────────────────────────────
+_request_hash() {
+  local req="${1:-}"
+  # Trim leading/trailing whitespace.
+  req="${req#"${req%%[! $'\t'$'\n']*}"}"
+  req="${req%"${req##*[! $'\t'$'\n']}"}"
+  printf '%s' "$req" | _sha256
+}
+
+# ── Subcommand: lookup ────────────────────────────────────────────────────────
+_lookup() {
+  local ctx="${1:?lookup: missing context_hash}"
+  local req="${2:?lookup: missing request_hash}"
+  local entry="$_root/cache/$ctx/$req.md"
+  if [[ -f "$entry" ]]; then
+    print -r -- "$entry"
+    return 0
+  fi
+  return 1
+}
+
+# ── JSON string escaper ───────────────────────────────────────────────────────
+# Escape a string for JSON: backslash, double-quote, control chars, newlines→\n.
+# Uses zsh parameter expansion to avoid macOS BSD sed's lack of \n in replacements.
+_json_escape() {
+  local s="$1"
+  local _TAB=$'\t' _CR=$'\r' _NL=$'\n'
+  s="${s//\\/\\\\}"         # \ → \\
+  s="${s//\"/\\\"}"         # " → \"
+  s="${s//${_TAB}/\\t}"    # tab → \t
+  s="${s//${_CR}/\\r}"     # CR → \r
+  s="${s//${_NL}/\\n}"     # LF → \n
+  printf '%s' "$s"
+}
+
+# ── Subcommand: store ─────────────────────────────────────────────────────────
+_store() {
+  local ctx="${1:?store: missing context_hash}"
+  local req="${2:?store: missing request_hash}"
+  local kind="${3:?store: missing kind}"
+  local body_file="${4:?store: missing body_file}"
+  shift 4
+
+  # Parse extra k=v pairs.
+  local -A extras=()
+  local pair key val
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    val="${pair#*=}"
+    extras[$key]="$val"
+  done
+
+  local cache_dir="$_root/cache/$ctx"
+  mkdir -p "$cache_dir"
+
+  local entry="$cache_dir/$req.md"
+  local iso
+  iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Write front matter + body atomically via mktemp → mv.
+  local tmp
+  tmp="$(mktemp "$cache_dir/.tmp.XXXXXX")"
+
+  {
+    printf '%s\n' "---"
+    printf '%s\n' "schema: ai-assist-cache/v1"
+    printf '%s\n' "kind: $kind"
+    printf '%s\n' "context_hash: $ctx"
+    printf '%s\n' "request_hash: $req"
+    printf '%s\n' "created_at: $iso"
+    # Emit each extra k=v pair as a YAML field.
+    local k
+    for k in "${(k)extras[@]}"; do
+      printf '%s\n' "$k: ${extras[$k]}"
+    done
+    printf '%s\n' "---"
+    cat "$body_file"
+  } > "$tmp"
+
+  mv -f "$tmp" "$entry"
+
+  # Append to prompts.jsonl.
+  local prompts_file="$_root/prompts.jsonl"
+  mkdir -p "$_root"
+
+  # Extract request text from extras if present.
+  local req_text="${extras[request]:-}"
+  local escaped_req
+  escaped_req="$(_json_escape "$req_text")"
+
+  printf '{"ts":"%s","context":"%s","kind":"%s","request":"%s"}\n' \
+    "$iso" "$ctx" "$kind" "$escaped_req" \
+    >> "$prompts_file"
+
+  print -r -- "$entry"
+}
+
+# ── Subcommand: body ──────────────────────────────────────────────────────────
+_body() {
+  local entry="${1:?body: missing entry_file}"
+  if [[ ! -f "$entry" ]]; then
+    print -ru2 -- "ai-assist-cache body: file not found: $entry"
+    return 1
+  fi
+
+  # Check if the file starts with "---" front matter.
+  local first_line
+  first_line="$(head -1 "$entry")"
+  if [[ "$first_line" != "---" ]]; then
+    # No front matter — print the file as-is.
+    cat "$entry"
+    return 0
+  fi
+
+  # Strip the front matter: skip from first "---" to the second "---".
+  awk '
+    BEGIN { in_fm = 1; found_close = 0; line_no = 0 }
+    {
+      line_no++
+      if (in_fm && line_no == 1 && $0 == "---") { next }
+      if (in_fm && $0 == "---") { in_fm = 0; found_close = 1; next }
+      if (!in_fm) { print }
+    }
+  ' "$entry"
+}
+
+# ── Subcommand: history ───────────────────────────────────────────────────────
+_history() {
+  local ctx="${1:?history: missing context_hash}"
+  local cap="${2:-${AI_ASSIST_PROMPT_CAP:-200}}"
+  local prompts_file="$_root/prompts.jsonl"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    print -ru2 -- "ai-assist-cache history: jq is required but not found"
+    return 1
+  fi
+
+  if [[ ! -f "$prompts_file" ]]; then
+    # No history yet — return empty.
+    return 0
+  fi
+
+  local ctx_json
+  ctx_json="$(printf '%s' "$ctx" | jq -Rs '.')"
+
+  # -n: start with null input so [inputs] reads ALL records from the file
+  # (without -n, jq consumes the first record as the main input and inputs
+  # only sees the rest, silently dropping the first entry).
+  jq -cn --argjson ctx "$ctx_json" --argjson cap "$cap" '
+    [inputs]
+    # Dedup by request: keep only the latest ts per unique request.
+    | group_by(.request)
+    | map(sort_by(.ts) | last)
+    | .[]
+    # Annotate with context_match.
+    | . + {context_match: (.context == $ctx)}
+  ' "$prompts_file" \
+  | jq -sc --argjson ctx "$ctx_json" --argjson cap "$cap" '
+    # Sort: context matches first (by ts desc), then all others (by ts desc).
+    sort_by([
+      (if .context_match then 0 else 1 end),
+      (.ts | explode | map(-.) | .)
+    ])
+    # Cap to N.
+    | .[0:$cap]
+    | .[]
+    | {request: .request, kind: .kind, ts: .ts, context_match: .context_match}
+  '
+}
+
+# ── Dispatch ──────────────────────────────────────────────────────────────────
+_usage() {
+  print -ru2 -- "usage: ai-assist-cache <subcommand> [args]"
+  print -ru2 -- "subcommands: context-hash | request-hash <req> | lookup <ctx> <req>"
+  print -ru2 -- "             store <ctx> <req> <kind> <body_file> [k=v ...]"
+  print -ru2 -- "             body <entry_file> | history <ctx> [N]"
+  return 2
+}
+
+subcmd="${1:-}"
+[[ -n "$subcmd" ]] || _usage
+
+shift
+case "$subcmd" in
+  context-hash)   _context_hash ;;
+  request-hash)   _request_hash "${1:-}" ;;
+  lookup)         _lookup "${1:-}" "${2:-}" ;;
+  store)          _store "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${@:5}" ;;
+  body)           _body "${1:-}" ;;
+  history)        _history "${1:-}" "${2:-}" ;;
+  *)
+    print -ru2 -- "ai-assist-cache: unknown subcommand: $subcmd"
+    _usage
+    ;;
+esac
