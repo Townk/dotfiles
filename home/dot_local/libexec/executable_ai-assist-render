@@ -156,9 +156,10 @@ if [[ -n "$origin_pane" ]]; then
     fi
     if [[ -n "$fifo" ]]; then
       _dbg "broker spawn: --fifo $fifo --origin-pane $origin_pane ${shell_fifo:+--shell-fifo $shell_fifo} --results-fifo $results_fifo"
-      "$broker" --fifo "$fifo" --origin-pane "$origin_pane" \
-        ${shell_fifo:+--shell-fifo "$shell_fifo"} --results-fifo "$results_fifo" \
-        ${over_ssh:+--over-ssh} &
+      typeset -a broker_flags=(--fifo "$fifo" --origin-pane "$origin_pane" --results-fifo "$results_fifo")
+      [[ -n "$shell_fifo" ]] && broker_flags+=(--shell-fifo "$shell_fifo")
+      (( over_ssh )) && broker_flags+=(--over-ssh)
+      "$broker" "${broker_flags[@]}" &
       broker_pid=$!
     fi
   fi

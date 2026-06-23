@@ -63,7 +63,7 @@ Describe 'ai-assist-render'
   broker_stub() {
     {
       echo '#!/usr/bin/env zsh'
-      echo 'print -r -- "BROKER $*" >> "$TEST_TMP/broker.log"'
+      echo 'printf "%s\n" "$@" >> "$TEST_TMP/broker.log"'
       echo 'exec sleep 30'
     } > "$TEST_TMP/broker"
     chmod +x "$TEST_TMP/broker"
@@ -96,8 +96,8 @@ Describe 'ai-assist-render'
     The output should include "--actions-fifo"
     The line 7 of output should equal "--actions-fifo"
     The line 8 of output should start with "/"
-    The contents of file "$TEST_TMP/broker.log" should include "BROKER"
-    The contents of file "$TEST_TMP/broker.log" should include "--origin-pane terminal_4"
+    The contents of file "$TEST_TMP/broker.log" should include "--origin-pane"
+    The contents of file "$TEST_TMP/broker.log" should include "terminal_4"
     The contents of file "$TEST_TMP/broker.log" should include "--over-ssh"
   End
 
@@ -307,5 +307,9 @@ Describe 'ai-assist-render'
     The contents of file "$TEST_TMP/broker.args" should include "--shell-fifo"
     The contents of file "$TEST_TMP/broker.args" should include "--results-fifo"
     The contents of file "$TEST_TMP/pager.args" should include "--results-fifo"
+    # Word-split regression: printf '%s\n' "$@" writes one arg per line, so the
+    # flag and its path must appear on SEPARATE lines. The bug collapsed them into
+    # one arg ("--shell-fifo /path"), which the line below would NOT match.
+    The contents of file "$TEST_TMP/broker.args" should not include "--shell-fifo /"
   End
 End
