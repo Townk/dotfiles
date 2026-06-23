@@ -137,6 +137,8 @@ JSON
     The contents of file "$TEST_TMP/zj-args" should include "ai-assist-render"
     The contents of file "$TEST_TMP/zj-args" should include "--input-fifo $IN_FIFO"
     The contents of file "$TEST_TMP/zj-args" should include "--actions-fifo $OUT_FIFO"
+    # render must receive --shell-cwd so it spawns an agent shell (enabling `run`).
+    The contents of file "$TEST_TMP/zj-args" should include "--shell-cwd /tmp/proj"
     # Not a write-chars to the prompt.
     The contents of file "$TEST_TMP/zj-args" should not include "write-chars"
     The contents of file "$TEST_TMP/in.log" should include "close"
