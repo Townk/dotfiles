@@ -10,6 +10,8 @@
 set -uo pipefail
 
 US=$'\x1f' RS=$'\x1e'
+AI_ASSIST_BROKER_LOG="${AI_ASSIST_BROKER_LOG:-${TMPDIR:-/tmp}/ai-playbook-broker.log}"
+_log() { [[ -n "${AI_ASSIST_BROKER_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) $*" >> "$AI_ASSIST_BROKER_LOG"; }
 fifo="" origin="" over_ssh=0
 results="" shell_fifo=""
 while (($#)); do
@@ -123,20 +125,33 @@ broker::apply_diff() {
 
 # broker::run_block — execute a block in the agent shell via ai-assist-run, then
 # emit a result record (id/exit/logpath) on the results FIFO. Best-effort.
+# Runs asynchronously so a hung ai-assist-run cannot block the dispatch loop.
 broker::run_block() {
   local id="$1" payload="$2"
-  [[ -n "$shell_fifo" ]] || return 0
-  local run="${AI_ASSIST_RUN_BIN:-}"
-  if [[ -z "$run" ]]; then
-    for c in "$HOME/.local/libexec/ai-assist-run" "${commands[ai-assist-run]:-}"; do
-      [[ -n "$c" && -x "$c" ]] && { run="$c"; break; }
-    done
+  _log "run_block id=${id} shell_fifo=${shell_fifo:-EMPTY}"
+  if [[ -z "$shell_fifo" ]]; then
+    _log "run_block id=${id} NO_SHELL"
+    [[ -n "$results" ]] && print -rn -- "${id}${US}1${US}/dev/null${RS}" >> "$results"
+    return 0
   fi
-  [[ -n "$run" && -x "$run" ]] || return 0
-  local log; log="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-run.XXXXXX")"
-  AI_ASSIST_SHELL_FIFO="$shell_fifo" "$run" --id "$id" -- "$payload" >"$log" 2>&1
-  local code=$?
-  [[ -n "$results" ]] && print -rn -- "${id}${US}${code}${US}${log}${RS}" >> "$results"
+  {
+    local run="${AI_ASSIST_RUN_BIN:-}"
+    if [[ -z "$run" ]]; then
+      for c in "$HOME/.local/libexec/ai-assist-run" "${commands[ai-assist-run]:-}"; do
+        [[ -n "$c" && -x "$c" ]] && { run="$c"; break; }
+      done
+    fi
+    if [[ -z "$run" || ! -x "$run" ]]; then
+      _log "run_block id=${id} NO_RUN_BIN"
+      return 0
+    fi
+    local log; log="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-run.XXXXXX")"
+    _log "run start id=${id}"
+    AI_ASSIST_SHELL_FIFO="$shell_fifo" "$run" --id "$id" -- "$payload" >"$log" 2>&1
+    local code=$?
+    _log "run done id=${id} exit=${code}"
+    [[ -n "$results" ]] && print -rn -- "${id}${US}${code}${US}${log}${RS}" >> "$results"
+  } &
 }
 
 # broker::dispatch — parse one 3-field record and route it.

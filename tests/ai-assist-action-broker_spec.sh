@@ -22,6 +22,7 @@ Describe 'ai-assist-action-broker'
   # Source the broker without running its FIFO loop, then drive its functions.
   load_broker() {
     AI_ASSIST_BROKER_NORUN=1
+    AI_ASSIST_BROKER_LOG="$TEST_TMP/broker.log"
     . "$SCRIPT"
     zj="$TEST_TMP/zellij"
     clip="pbcopy"
@@ -77,9 +78,20 @@ Describe 'ai-assist-action-broker'
     chmod +x "$TEST_TMP/airun"; AI_ASSIST_RUN_BIN="$TEST_TMP/airun"
     ( cat "$results" > "$TEST_TMP/results.out" ) &
     broker::dispatch "run${US}fix${US}echo hi${RS}"
-    sleep 0.1
+    sleep 0.3
     The contents of file "$TEST_TMP/results.out" should include "fix"
     The contents of file "$TEST_TMP/results.out" should include "$(printf '\x1f')0$(printf '\x1f')"
+  End
+
+  It 'run with no shell_fifo writes a failure result record'
+    load_broker
+    results="$TEST_TMP/results.fifo"; mkfifo "$results"
+    shell_fifo=""   # no shell attached
+    ( cat "$results" > "$TEST_TMP/results.out" ) &
+    broker::dispatch "run${US}noshell${US}echo hi${RS}"
+    sleep 0.1
+    The contents of file "$TEST_TMP/results.out" should include "noshell"
+    The contents of file "$TEST_TMP/results.out" should include "$(printf '\x1f')1$(printf '\x1f')"
   End
 
   It 'view-diff opens a zellij floating pane on the patch'
