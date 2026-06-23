@@ -126,6 +126,9 @@ JSON
       The output should include 'needs='
       The output should include 'static'
       The output should include 'AAS_ERR'
+      # C3a: outcome-verified fix — the final block re-runs the original command.
+      The output should include 'VERIFY (outcome-check)'
+      The output should include 're-running the original'
     End
 
     # Regression: a general request whose last command SUCCEEDED must NOT be
@@ -141,6 +144,8 @@ JSON
       The output should not include 'Failed command'
       The output should not include 'Diagnose the failure'
       The output should not include 'Why it happens'
+      # C3a: the verify-by-re-running rule is failure-only (no command to verify here).
+      The output should not include 'VERIFY (outcome-check)'
     End
 
     It 'requires diff blocks to be complete unified diffs valid for git apply'
