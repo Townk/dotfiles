@@ -53,6 +53,20 @@ Describe 'ai-assist-shell'
     The contents of file "$reply/exit" should equal "1"
   End
 
+  # A later success in a multi-command block must not mask an earlier failure.
+  It 'fails a multi-command block at the first failing command (set -e)'
+    reply="$(run_job 'false
+echo second')"
+    The contents of file "$reply/exit" should equal "1"
+  End
+
+  # A block can opt out of a deliberate non-zero with `… || true`.
+  It 'lets a block guard a deliberate non-zero (|| true)'
+    reply="$(run_job 'false || true
+echo ok')"
+    The contents of file "$reply/exit" should equal "0"
+  End
+
   # The runner's own nounset must not leak into user code (false failures).
   It 'does not impose nounset on user commands'
     reply="$(run_job 'echo "${THIS_VAR_IS_UNSET}"')"

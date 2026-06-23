@@ -69,6 +69,9 @@ while IFS= read -r -d "$_aas_RS" _aas_job <&$_aas_fd; do
   (
     source "$_aas_state" 2>/dev/null
     set +u  # user commands must not inherit the runner's nounset (false failures)
+    set -e  # fail the block at the FIRST failing command — a later success in a
+            # multi-command block must not mask an earlier failure. (A block can
+            # opt out of a deliberate non-zero with `… || true`.)
     eval "$_aas_cmd"
     _aas_rc=$?  # capture BEFORE the state-write below, or it masks the real code
     { print -r -- "cd -- ${(q)PWD}"; export -p; } > "$_aas_state"
