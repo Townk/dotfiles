@@ -16,6 +16,9 @@
 # library sourcing, so it runs cleanly in a bare zellij pane.
 set -uo pipefail
 
+AI_ASSIST_DEBUG_LOG="${AI_ASSIST_DEBUG_LOG:-${TMPDIR:-/tmp}/ai-playbook-debug.log}"
+_dbg() { print -r -- "$(date +%H:%M:%S) [render] $*" >> "$AI_ASSIST_DEBUG_LOG"; }
+
 # Force narrow (1-cell) width for East-Asian-ambiguous characters (em-dash,
 # ellipsis, smart quotes, nerd-font icons). The pager's width library reads this
 # at process start; the docked pane inherits the zellij daemon env where LANG may
@@ -73,6 +76,8 @@ case ":$PATH:" in
 esac
 cmd=("$@")
 [[ ${#cmd[@]} -gt 0 ]] || { print -u2 -- "ai-assist-render: no command after --"; exit 2; }
+_dbg "start: origin=$origin_pane over_ssh=$over_ssh shell_cwd='$shell_cwd' shell_env='$shell_env' provided_shell_fifo='$provided_shell_fifo' provided_results_fifo='$provided_results_fifo' harness='$harness'"
+_dbg "cmd: ${cmd[*]:0:6} …"
 
 # Pane width (fall back to 100 if we can't query the tty).
 typeset -i cols
@@ -107,6 +112,7 @@ if [[ -n "$shell_cwd" || -n "$shell_env" ]]; then
     export AI_ASSIST_SHELL_FIFO="$shell_fifo"
   fi
 fi
+_dbg "shell: shell_bin='$shell_bin' → shell_fifo='${shell_fifo:-EMPTY}' shell_pid='${shell_pid:-}'"
 
 # Results FIFO: the broker writes run-result records here; the pager reads them.
 # Use caller-provided path when given; otherwise mktemp a new one (and own it).
@@ -149,6 +155,7 @@ if [[ -n "$origin_pane" ]]; then
       fi
     fi
     if [[ -n "$fifo" ]]; then
+      _dbg "broker spawn: --fifo $fifo --origin-pane $origin_pane ${shell_fifo:+--shell-fifo $shell_fifo} --results-fifo $results_fifo"
       "$broker" --fifo "$fifo" --origin-pane "$origin_pane" \
         ${shell_fifo:+--shell-fifo "$shell_fifo"} --results-fifo "$results_fifo" \
         ${over_ssh:+--over-ssh} &

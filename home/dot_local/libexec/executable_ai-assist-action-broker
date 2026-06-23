@@ -10,8 +10,8 @@
 set -uo pipefail
 
 US=$'\x1f' RS=$'\x1e'
-AI_ASSIST_BROKER_LOG="${AI_ASSIST_BROKER_LOG:-${TMPDIR:-/tmp}/ai-playbook-broker.log}"
-_log() { [[ -n "${AI_ASSIST_BROKER_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) $*" >> "$AI_ASSIST_BROKER_LOG"; }
+AI_ASSIST_BROKER_LOG="${AI_ASSIST_BROKER_LOG:-${AI_ASSIST_DEBUG_LOG:-${TMPDIR:-/tmp}/ai-playbook-debug.log}}"
+_log() { [[ -n "${AI_ASSIST_BROKER_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) [broker] $*" >> "$AI_ASSIST_BROKER_LOG"; }
 fifo="" origin="" over_ssh=0
 results="" shell_fifo=""
 while (($#)); do
@@ -24,6 +24,7 @@ while (($#)); do
     *)               shift ;;
   esac
 done
+_log "start: fifo=$fifo origin=$origin shell_fifo='${shell_fifo:-EMPTY}' results='${results:-EMPTY}'"
 
 # zellij by absolute path (the docked pane's PATH is the minimal daemon one).
 zj=""
