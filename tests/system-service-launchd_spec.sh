@@ -85,4 +85,43 @@ STUB
       The output should equal "none"
     End
   End
+
+  Describe 'stop (synchronous bootout)'
+    # `launchctl bootout` returns before the service finishes draining. This
+    # stateful stub models that: `bootout` starts a drain, `print` reports the
+    # service still up for a few polls, then gone. A correct svc::bootout must
+    # POLL until it's actually gone — so the "down" marker only appears if the
+    # wait loop ran. The pre-fix code returned right after `launchctl bootout`
+    # and never re-polled, so the marker would be absent.
+    setup_stateful() {
+      STUB_STATE="$TEST_TMP/state"; mkdir -p "$STUB_STATE"
+      export STUB_STATE
+      cat >"$STUB_DIR/launchctl" <<'STUB'
+#!/bin/sh
+ST="$STUB_STATE"
+case "$1" in
+  bootout)   printf 0 > "$ST/poll" ;;             # drain begins
+  bootstrap) rm -f "$ST/poll" "$ST/down" ;;       # back up
+  print)
+    [ -f "$ST/down" ] && exit 1                    # fully gone
+    if [ -f "$ST/poll" ]; then
+      n=$(cat "$ST/poll"); n=$((n + 1)); printf '%s' "$n" > "$ST/poll"
+      [ "$n" -ge 3 ] && : > "$ST/down"             # drained after 3 polls
+    fi
+    exit 0                                          # still up on this call
+    ;;
+esac
+exit 0
+STUB
+      chmod +x "$STUB_DIR/launchctl"
+    }
+    BeforeEach 'setup_stateful'
+
+    It 'waits for the unload to drain before returning'
+      When run zsh "$LAUNCHD" stop mlx-gemma
+      The status should be success
+      The output should include "stopped"
+      The path "$STUB_STATE/down" should be exist
+    End
+  End
 End

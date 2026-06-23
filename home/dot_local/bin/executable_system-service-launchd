@@ -214,13 +214,25 @@ svc::bootstrap() {
   launchctl bootstrap "$DOMAIN" "$(svc::plist_path "$name")"
 }
 
-# svc::bootout <name> → idempotent
+# svc::bootout <name> → idempotent, and SYNCHRONOUS.
+# `launchctl bootout` returns before the service has finished tearing down, so
+# the instance can still be draining when the command exits. A follow-up
+# `bootstrap` (e.g. from `restart`, or `start` after a plist rewrite) would
+# then see the half-gone instance via `is_bootstrapped`, decide it's "already
+# bootstrapped", skip itself, and leave nothing running once the drain
+# completes. Poll until launchd really has dropped it (≤5s) so callers can
+# safely re-bootstrap.
 svc::bootout() {
   local name="$1"
   local target="$DOMAIN/$(svc::label "$name")"
-  if svc::is_bootstrapped "$name"; then
-    launchctl bootout "$target"
-  fi
+  svc::is_bootstrapped "$name" || return 0
+  launchctl bootout "$target" 2>/dev/null || true
+  local i
+  for i in {1..50}; do
+    svc::is_bootstrapped "$name" || return 0
+    sleep 0.1
+  done
+  return 0
 }
 
 # svc::kickstart <name> → run the service now, regardless of launch conditions.
