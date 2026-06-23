@@ -1,0 +1,302 @@
+#!/usr/bin/env zsh
+# ai-assist-regenerate — re-run a cached request fresh and route the result
+# into the EXISTING docked pane via its input FIFO (Stage 4b-2, Piece E).
+#
+# Called by the broker's `regenerate` action handler with:
+#   --ctx <context_hash> --req <request_hash> --input-fifo <path>
+#   [--origin-pane <id>] [--harness <h>]
+#
+# Behaviour:
+#   1. Resolve the original request.json sidecar (or reconstruct a minimal one).
+#   2. Export AI_ASSIST_NO_CACHE=1 so the re-run bypasses the cache lookup.
+#   3. Classify via the cheap triage pass (same harness-discovery as triage).
+#   4. Route by kind, targeting the EXISTING pane:
+#        command  → bracketed-paste into --origin-pane; close the docked pane
+#                   (write_quit → the pager's close-on-exit fires).
+#        answer   → stream the answer text into --input-fifo; store the entry.
+#        escalate → run worker --stream | tee body > --input-fifo; store entry.
+#
+# NOTE: The harness-discovery block is intentionally duplicated from
+# ai-assist-triage (same logic, self-contained). A future cleanup may extract
+# it to assist-agent-common.zsh once the interface stabilises.
+set -uo pipefail
+
+source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
+
+US=$'\x1f'   # unit separator — field delimiter inside triage_classify output
+
+# ── Parse arguments ───────────────────────────────────────────────────────────
+ctx="" req="" input_fifo="" origin_pane="" harness_override=""
+while (($#)); do
+  case "$1" in
+    --ctx)         ctx="${2:-}";           shift 2 ;;
+    --req)         req="${2:-}";           shift 2 ;;
+    --input-fifo)  input_fifo="${2:-}";    shift 2 ;;
+    --origin-pane) origin_pane="${2:-}";   shift 2 ;;
+    --harness)     harness_override="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+[[ -n "$ctx" && -n "$req" && -n "$input_fifo" ]] || {
+  print -ru2 -- "usage: ai-assist-regenerate --ctx H --req H --input-fifo P [--origin-pane ID] [--harness H]"
+  exit 1
+}
+
+# ── Cache binary — best-effort (same precedence as triage) ───────────────────
+cache_bin=""
+for _cand in \
+  "${AI_ASSIST_CACHE_BIN:-}" \
+  "$(command -v -- ai-assist-cache 2>/dev/null)" \
+  "$HOME/.local/libexec/ai-assist-cache"; do
+  [[ -n "$_cand" && -x "$_cand" ]] && { cache_bin="$_cand"; break; }
+done
+
+# ── Harness discovery — verbatim from ai-assist-triage ───────────────────────
+bin_dir="${AI_ASSIST_BIN_DIR:-}"
+if [[ -z "$bin_dir" ]]; then
+  disp="$(command -v -- ai-assist 2>/dev/null)" || disp=""
+  [[ -n "$disp" ]] && bin_dir="${disp:A:h}"
+fi
+[[ -n "$bin_dir" ]] || bin_dir="$HOME/.local/bin"
+
+worker_path() { print -r -- "$bin_dir/ai-assist-$1"; }
+
+typeset -a HARNESSES=()
+for w in "$bin_dir"/ai-assist-*(N-.); do
+  [[ -x "$w" ]] || continue
+  HARNESSES+=("${${w:t}#ai-assist-}")
+done
+
+is_harness() {
+  local n="$1" h
+  for h in "${HARNESSES[@]}"; do [[ "$h" == "$n" ]] && return 0; done
+  return 1
+}
+
+resolve_harness() {
+  if [[ -n "${AI_ASSIST_HARNESS:-}" ]] && is_harness "$AI_ASSIST_HARNESS"; then
+    print -r -- "$AI_ASSIST_HARNESS"; return 0
+  fi
+  local pinned; pinned="$(assist::pin_read)"
+  if [[ -n "$pinned" ]] && is_harness "$pinned"; then
+    print -r -- "$pinned"; return 0
+  fi
+  local h; typeset -a avail=()
+  for h in "${HARNESSES[@]}"; do
+    "$(worker_path "$h")" --probe >/dev/null 2>&1 && avail+=("$h")
+  done
+  (( ${#avail[@]} == 1 )) && { print -r -- "${avail[1]}"; return 0; }
+  return 1
+}
+
+# ── Force cache bypass for the re-run ────────────────────────────────────────
+export AI_ASSIST_NO_CACHE=1
+
+# ── Temp-file tracking (cleaned up on exit) ───────────────────────────────────
+typeset -a _tmp_files=()
+_cleanup() { rm -f -- "${_tmp_files[@]}" 2>/dev/null || true; }
+trap '_cleanup' EXIT
+
+# ── Quit sentinel: DLE 'q' DLE — the pager interprets this as "quit" ─────────
+# The --close-on-exit pane closes when the pager exits on this sentinel.
+write_quit() { printf '\020q\020' > "$input_fifo" 2>/dev/null || true; }
+
+# ── Resolve the request file ──────────────────────────────────────────────────
+request_file=""
+reconstructed_request=""
+
+if [[ -n "$cache_bin" ]]; then
+  request_file="$("$cache_bin" request-file "$ctx" "$req" 2>/dev/null)" || request_file=""
+  [[ -n "$request_file" && -f "$request_file" ]] || request_file=""
+fi
+
+if [[ -z "$request_file" ]]; then
+  # No sidecar — reconstruct a minimal request.json from the entry front matter.
+  entry=""
+  [[ -n "$cache_bin" ]] && entry="$("$cache_bin" lookup "$ctx" "$req" 2>/dev/null)" || entry=""
+
+  if [[ -z "$entry" || ! -f "$entry" ]]; then
+    # Nothing to regenerate — signal the pager to quit and exit.
+    write_quit
+    exit 0
+  fi
+
+  # Read fields from front matter.
+  _fm_request="$("$cache_bin" field "$entry" request    2>/dev/null)" || _fm_request=""
+  _fm_command="$("$cache_bin" field "$entry" command    2>/dev/null)" || _fm_command=""
+  _fm_exit="$(   "$cache_bin" field "$entry" exit       2>/dev/null)" || _fm_exit=""
+  _fm_root="$(   "$cache_bin" field "$entry" project_root 2>/dev/null)" || _fm_root=""
+  _fm_name="$(   "$cache_bin" field "$entry" project_name 2>/dev/null)" || _fm_name=""
+
+  reconstructed_request="$(mktemp "${TMPDIR:-/tmp}/ai-assist-regen-req.XXXXXX")"
+  _tmp_files+=("$reconstructed_request")
+
+  # Build minimal request.json (jq if available, else careful printf).
+  if command -v jq >/dev/null 2>&1; then
+    # Use jq --null-input so we can safely embed all values.
+    local _exit_val="null"
+    [[ -n "$_fm_exit" ]] && _exit_val="$_fm_exit"
+    jq -n \
+      --arg request   "$_fm_request" \
+      --arg command   "$_fm_command" \
+      --arg exit_code "$_fm_exit" \
+      --arg root      "$_fm_root" \
+      --arg name      "$_fm_name" \
+      --arg origin    "$origin_pane" \
+      '{version:1, kind:"question",
+        origin:{cwd:$root, project_root:$root, pane_id:$origin},
+        command:{text:$command, exit:($exit_code | tonumber? // null)},
+        scrollback:"", user_request:$request,
+        project:{name:$name, branch:""}}' \
+      > "$reconstructed_request" 2>/dev/null || {
+        # jq failed — fall back to printf.
+        printf '{"version":1,"kind":"question","origin":{"cwd":"%s","project_root":"%s","pane_id":"%s"},"command":{"text":"%s","exit":null},"scrollback":"","user_request":"%s","project":{"name":"%s","branch":""}}\n' \
+          "$_fm_root" "$_fm_root" "$origin_pane" "$_fm_command" "$_fm_request" "$_fm_name" \
+          > "$reconstructed_request" 2>/dev/null
+      }
+  else
+    printf '{"version":1,"kind":"question","origin":{"cwd":"%s","project_root":"%s","pane_id":"%s"},"command":{"text":"%s","exit":null},"scrollback":"","user_request":"%s","project":{"name":"%s","branch":""}}\n' \
+      "$_fm_root" "$_fm_root" "$origin_pane" "$_fm_command" "$_fm_request" "$_fm_name" \
+      > "$reconstructed_request" 2>/dev/null
+  fi
+
+  request_file="$reconstructed_request"
+fi
+
+# ── Read REQ_* from the request file ─────────────────────────────────────────
+assist::request_read "$request_file" 2>/dev/null || true
+
+# Re-export REQ_* fields so subcommand subprocesses see the correct values
+# (assist::request_read uses plain assignments, not export).
+export REQ_PROJECT_ROOT="${REQ_PROJECT_ROOT:-}"
+export REQ_CWD="${REQ_CWD:-}"
+export REQ_COMMAND_TEXT="${REQ_COMMAND_TEXT:-}"
+export REQ_COMMAND_EXIT="${REQ_COMMAND_EXIT:-}"
+export REQ_SCROLLBACK="${REQ_SCROLLBACK:-}"
+
+# Prefer the explicit --origin-pane arg; fall back to what's in the request.
+[[ -n "$origin_pane" ]] || origin_pane="${REQ_PANE_ID:-}"
+
+# ── Classify: resolve harness + run cheap triage pass ────────────────────────
+harness="${harness_override:-$(resolve_harness 2>/dev/null || true)}"
+kind="escalate"
+payload=""
+
+if [[ -n "$harness" ]]; then
+  worker="$(worker_path "$harness")"
+  if [[ -x "$worker" ]]; then
+    raw="$("$worker" --triage --request "$request_file" 2>/dev/null)"; trc=$?
+    if (( trc != 3 )) && [[ -n "${raw//[[:space:]]/}" ]]; then
+      classified="$(assist::triage_classify "$raw")"
+      kind="${classified%%$US*}"
+      payload="${classified#*$US}"
+    fi
+    # Guard: re-running the failed command is never a useful triage result.
+    if [[ "$kind" == command && -n "${REQ_COMMAND_TEXT:-}" \
+          && "${payload//[[:space:]]/}" == "${REQ_COMMAND_TEXT//[[:space:]]/}" ]]; then
+      kind="escalate"; payload="re-running the failed command is not a diagnosis"
+    fi
+  fi
+fi
+
+# ── Build meta file for cache store ──────────────────────────────────────────
+cache_meta=""
+if [[ -n "$cache_bin" ]]; then
+  cache_meta="$(mktemp "${TMPDIR:-/tmp}/ai-assist-regen-meta.XXXXXX" 2>/dev/null)" || cache_meta=""
+  _tmp_files+=("$cache_meta")
+  if [[ -n "$cache_meta" ]]; then
+    local _req_oneline="${REQ_USER_REQUEST//$'\n'/ }"
+    {
+      printf 'request=%s\n'      "$_req_oneline"
+      printf 'project_root=%s\n' "${REQ_PROJECT_ROOT:-}"
+      printf 'project_name=%s\n' "${REQ_PROJECT_NAME:-}"
+      printf 'command=%s\n'      "${REQ_COMMAND_TEXT:-}"
+      printf 'exit=%s\n'         "${REQ_COMMAND_EXIT:-}"
+      printf 'harness=%s\n'      "$harness"
+    } > "$cache_meta" 2>/dev/null || { rm -f -- "$cache_meta" 2>/dev/null; cache_meta=""; _tmp_files=("${_tmp_files[@]:#$cache_meta}"); }
+  fi
+fi
+
+# ── Log the re-run ────────────────────────────────────────────────────────────
+_log_kind="$kind"
+[[ "$_log_kind" == escalate ]] && _log_kind="playbook"
+[[ -n "$cache_bin" ]] && \
+  "$cache_bin" log "$ctx" "$_log_kind" "${REQ_USER_REQUEST:-}" 2>/dev/null || true
+
+# ── Route ─────────────────────────────────────────────────────────────────────
+case "$kind" in
+
+  command)
+    # Bracketed-paste the command into the origin shell prompt (no trailing CR),
+    # then write the quit-sentinel so the docked pane closes.
+    if [[ -n "$origin_pane" ]]; then
+      zj="$(assist::zellij_bin 2>/dev/null)" || zj=""
+      if [[ -n "$zj" && -n "$payload" ]]; then
+        "$zj" action write --pane-id "$origin_pane" 27 91 50 48 48 126 2>/dev/null || true  # ESC[200~
+        "$zj" action write-chars --pane-id "$origin_pane" -- "$payload" 2>/dev/null || true
+        "$zj" action write --pane-id "$origin_pane" 27 91 50 48 49 126 2>/dev/null || true  # ESC[201~
+      fi
+    fi
+    # Store the command result (best-effort).
+    if [[ -n "$cache_bin" ]]; then
+      _body_tmp="$(mktemp "${TMPDIR:-/tmp}/ai-assist-regen-cmd-body.XXXXXX" 2>/dev/null)" || _body_tmp=""
+      if [[ -n "$_body_tmp" ]]; then
+        _tmp_files+=("$_body_tmp")
+        printf '%s\n' "$payload" > "$_body_tmp" 2>/dev/null || true
+        local -a _store_args=("$ctx" "$req" command "$_body_tmp")
+        [[ -n "$cache_meta" ]] && _store_args+=(--meta-file "$cache_meta")
+        _store_args+=(--request-file "$request_file")
+        "$cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+      fi
+    fi
+    # Signal pager to quit (close-on-exit fires).
+    write_quit
+    ;;
+
+  answer)
+    # Store the answer result (best-effort).
+    if [[ -n "$cache_bin" ]]; then
+      _body_tmp="$(mktemp "${TMPDIR:-/tmp}/ai-assist-regen-ans-body.XXXXXX" 2>/dev/null)" || _body_tmp=""
+      if [[ -n "$_body_tmp" ]]; then
+        _tmp_files+=("$_body_tmp")
+        printf '%s\n' "$payload" > "$_body_tmp" 2>/dev/null || true
+        local -a _store_args=("$ctx" "$req" answer "$_body_tmp")
+        [[ -n "$cache_meta" ]] && _store_args+=(--meta-file "$cache_meta")
+        _store_args+=(--request-file "$request_file")
+        "$cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+      fi
+    fi
+    # Stream the answer text into the pane's input FIFO.
+    # Writing closes the fifo → the pager sees EOF and stops its spinner.
+    printf '%s\n' "$payload" > "$input_fifo" 2>/dev/null || true
+    ;;
+
+  escalate|*)
+    # Run the capable worker with --stream so output goes to stdout (no pane).
+    # Tee into a body file for cache storage, and into the input FIFO for the pager.
+    _regen_worker="$(worker_path "${harness:-$(resolve_harness 2>/dev/null || true)}")"
+    _body_tmp="$(mktemp "${TMPDIR:-/tmp}/ai-assist-regen-playbook-body.XXXXXX" 2>/dev/null)" || _body_tmp=""
+    [[ -n "$_body_tmp" ]] && _tmp_files+=("$_body_tmp")
+
+    rc=1
+    if [[ -x "$_regen_worker" && -n "$_body_tmp" ]]; then
+      "$_regen_worker" --stream --request "$request_file" \
+        | tee "$_body_tmp" > "$input_fifo"
+      rc=${pipestatus[1]}
+    else
+      # No worker available — signal the pager to quit (no infinite spinner).
+      write_quit
+    fi
+
+    # Persist the playbook entry if the worker succeeded and produced output.
+    if [[ "$rc" == 0 && -n "$_body_tmp" && -s "$_body_tmp" && -n "$cache_bin" ]]; then
+      local -a _store_args=("$ctx" "$req" playbook "$_body_tmp")
+      [[ -n "$cache_meta" ]] && _store_args+=(--meta-file "$cache_meta")
+      _store_args+=(--request-file "$request_file")
+      "$cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+
+exit 0

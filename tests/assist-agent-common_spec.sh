@@ -381,5 +381,33 @@ JSON
       The status should be success
       The output should equal "OK"
     End
+
+    It '--stream runs ASSIST_PANE_CMD to stdout and exits with its status'
+      # Build a minimal request fixture (no pane_id, no over_ssh — only the
+      # stream path is exercised; render/spawn_pane must NOT be called).
+      stream_thread() {
+        printf '{"version":1,"kind":"question","origin":{"pane_id":"","over_ssh":false,"cwd":"%s","project_root":"%s","zellij_session":"","atuin_session":""},"command":{"text":"","exit":null,"duration_ms":""},"scrollback":"","user_request":"stream q","project":{"name":"","branch":""}}' \
+          "$TEST_TMP" "$TEST_TMP" > "$TEST_TMP/req.json"
+
+        # Stub spawn_pane / log_ok — they must NOT be called in stream mode.
+        assist::spawn_pane() { print -r -- "SPAWN_CALLED" >> "$TEST_TMP/spawn.log"; }
+        log_ok() { :; }
+
+        # build_fn: the "capable agent command" simply echoes a sentinel to stdout.
+        bf() { ASSIST_PANE_CMD=(printf '%s\n' "STREAM_OUTPUT"); }
+
+        # AI_ASSIST_RENDER=0 so the render wrapper is not entered (stream bypasses
+        # it before that check anyway, but guard against future reshuffling).
+        AI_ASSIST_RENDER=0 assist::worker_main test bf \
+          --stream --request "$TEST_TMP/req.json"
+      }
+      # Use `run` (not `call`) — worker_main uses `exit $?` in stream mode which
+      # would interfere with ShellSpec's own process tracking under `call`.
+      When run stream_thread
+      The status should be success
+      The output should equal "STREAM_OUTPUT"
+      # spawn_pane must NOT have been called.
+      The path "$TEST_TMP/spawn.log" should not be exist
+    End
   End
 End

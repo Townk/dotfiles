@@ -290,14 +290,15 @@ assist::triage() { return 0; }
 # capable (non-triage) path is unchanged.
 assist::worker_main() {
   local label="$1" build_fn="$2"; shift 2
-  local request_file="" triage_mode=0
+  local request_file="" triage_mode=0 stream_mode=0
   ASSIST_GUIDANCE=""
   while (($#)); do
     case "$1" in
-      --triage) triage_mode=1; shift ;;
+      --triage)  triage_mode=1; shift ;;
+      --stream)  stream_mode=1; shift ;;
       --request) request_file="${2:-}"; shift 2 ;;
       --request=*) request_file="${1#*=}"; shift ;;
-      -h|--help) print -r -- "Usage: ai-assist-<harness> [--triage] --request <file> [-- guidance...]"; return 0 ;;
+      -h|--help) print -r -- "Usage: ai-assist-<harness> [--triage] [--stream] --request <file> [-- guidance...]"; return 0 ;;
       --) shift; ASSIST_GUIDANCE="$*"; break ;;
       *) ASSIST_GUIDANCE="$*"; break ;;
     esac
@@ -341,6 +342,15 @@ assist::worker_main() {
   ASSIST_PANE_CMD=()
   "$build_fn"
   [[ ${#ASSIST_PANE_CMD[@]} -gt 0 ]] || die "worker '$label' produced no command"
+
+  # ── Stream mode (--stream) ───────────────────────────────────────────────
+  # Run the capable agent command directly to stdout without render/pane.
+  # Used by ai-assist-regenerate to pipe the fresh output into the existing
+  # docked pane's input FIFO.
+  if (( stream_mode )); then
+    ( cd "${REQ_PROJECT_ROOT:-$PWD}" 2>/dev/null || true; "${ASSIST_PANE_CMD[@]}" )
+    exit $?
+  fi
 
   # Wrap the harness in ai-assist-render so the docked pane shows a title block +
   # spinner and renders the reply through glow (Phase B-render). Reached by
