@@ -171,8 +171,9 @@ svc::pid() {
 # svc::status <name>
 # Normalised status string for the unified list table. Values:
 #   running  — bootstrapped with a live PID
-#   stopped  — bootstrapped, no PID (waiting for KeepAlive trigger / crashed)
-#   error    — bootstrapped, last_exit_code != 0
+#   stopped  — bootstrapped, no PID (on-demand idle, never run, KeepAlive
+#              wait, or a clean exit)
+#   error    — bootstrapped, no PID, last exit code is a nonzero integer
 #   none     — declared but never bootstrapped (or boot'd-out)
 svc::status() {
   local name="$1"
@@ -186,11 +187,17 @@ svc::status() {
     printf 'running\n'
     return
   fi
-  # Bootstrapped but no PID — check last exit code; non-zero = error
+  # Bootstrapped but no PID. Inspect the last exit code. launchctl prints
+  # either an integer ("0", "2", ...) or the literal "(never exited)" for a
+  # service that was loaded but has not run yet (on-demand: RunAtLoad=false).
+  # Capture the whole value after "= " — splitting on whitespace would slice
+  # "(never exited)" into "(never", which reads as a bogus nonzero code and
+  # paints every idle on-demand service "error". Only a nonzero integer is a
+  # real failure.
   local rc
   rc=$(launchctl print "$DOMAIN/$(svc::label "$name")" 2>/dev/null |
-    awk '/^[[:space:]]*last exit code =/ {print $5; exit}')
-  if [[ -n "$rc" && "$rc" != "0" && "$rc" != "-" ]]; then
+    awk -F ' = ' '/^[[:space:]]*last exit code =/ {print $2; exit}')
+  if [[ "$rc" == <-> && "$rc" != "0" ]]; then
     printf 'error\n'
   else
     printf 'stopped\n'
@@ -216,6 +223,17 @@ svc::bootout() {
   fi
 }
 
+# svc::kickstart <name> → run the service now, regardless of launch conditions.
+# `bootstrap` only *registers* the plist; for a daemon (RunAtLoad=true) that
+# also starts it, but an on-demand service (RunAtLoad=false) stays idle until
+# something triggers it. An explicit `start` should mean "running now" for
+# both kinds, so kickstart after bootstrap. No `-k`: kickstart on an already-
+# running service is a harmless no-op (exit 0), so this never disturbs a live
+# instance — `restart` is the way to recycle one.
+svc::kickstart() {
+  launchctl kickstart "$DOMAIN/$(svc::label "$1")"
+}
+
 # --- subcommands ------------------------------------------------------------
 
 do_render() {
@@ -237,6 +255,7 @@ do_start() {
     svc::bootout "$name"
   fi
   svc::bootstrap "$name"
+  svc::kickstart "$name"
   log_info "started $(svc::label "$name")"
 }
 
