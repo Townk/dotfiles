@@ -34,6 +34,37 @@ Describe 'ai-assist-shell'
     The contents of file "$reply/exit" should equal "3"
   End
 
+  It 'reports exit 0 for a successful command'
+    reply="$(run_job 'true')"
+    The contents of file "$reply/exit" should equal "0"
+  End
+
+  # Regression: a command that fails WITHOUT calling `exit` must still report
+  # its non-zero code. The trailing state-write used to mask it (always 0).
+  It 'reports a non-zero exit for a failing command (not just exit N)'
+    reply="$(run_job 'false')"
+    The contents of file "$reply/exit" should equal "1"
+  End
+
+  # Regression: a failure in any pipe stage must propagate (pipefail), so a
+  # masked failure like `ls /nonexistent | head` is not reported as success.
+  It 'propagates a pipe-stage failure (pipefail)'
+    reply="$(run_job 'false | head -5')"
+    The contents of file "$reply/exit" should equal "1"
+  End
+
+  # The runner's own nounset must not leak into user code (false failures).
+  It 'does not impose nounset on user commands'
+    reply="$(run_job 'echo "${THIS_VAR_IS_UNSET}"')"
+    The contents of file "$reply/exit" should equal "0"
+  End
+
+  # Benign SIGPIPE (producer killed by an early-closing `| head`) is success.
+  It 'treats SIGPIPE as success (downstream closed early)'
+    reply="$(run_job 'yes | head -5')"
+    The contents of file "$reply/exit" should equal "0"
+  End
+
   It 'persists cwd across jobs (cd is stateful)'
     sub="$TEST_TMP/sub"; mkdir "$sub"
     run_job "cd '$sub'" >/dev/null
