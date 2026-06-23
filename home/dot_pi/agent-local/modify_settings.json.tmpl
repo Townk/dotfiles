@@ -62,7 +62,7 @@ desired=$(cat <<'__PI_DESIRED__'
     "npm:pi-tool-display"
   ],
   "defaultProvider": "mlx",
-  "defaultModel": "gemma-4-12B-it-qat-OptiQ-4bit",
+  "defaultModel": "{{ .chezmoi.homeDir }}/.local/share/mlx/models/gemma-4-12B-it-qat-OptiQ-4bit",
   "hideThinkingBlock": false,
   "quietStartup": true,
   "terminal": {

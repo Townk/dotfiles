@@ -1,3 +1,11 @@
+{{/*
+  mlx_vlm.server keys a model by the EXACT string sent in the request and
+  treats any unknown id as a HuggingFace repo to download — so a bare name
+  like "gemma-4-12B-it-qat-OptiQ-4bit" yields `500 (no body)` (HF 401/404).
+  The model id below must therefore equal the absolute --model path the
+  mlx-gemma service preloads (see services.toml), so the request hits the
+  preloaded instance instead of a phantom HF repo.
+*/ -}}
 {
   "providers": {
     "mlx": {
@@ -12,7 +20,7 @@
       },
       "models": [
         {
-          "id": "gemma-4-12B-it-qat-OptiQ-4bit",
+          "id": "{{ .chezmoi.homeDir }}/.local/share/mlx/models/gemma-4-12B-it-qat-OptiQ-4bit",
           "name": "Gemma 4 12B IT (QAT OptiQ 4-bit, assistant MTP)",
           "reasoning": false,
           "input": ["text", "image"],
