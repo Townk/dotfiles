@@ -212,6 +212,7 @@ route_escalate() {
 # ── Cache: resolve binary (BEST-EFFORT — never block a request) ──────────────
 _cache_bin=""
 for _cand in \
+  "${AI_ASSIST_CACHE_BIN:-}" \
   "$(command -v -- ai-assist-cache 2>/dev/null)" \
   "$HOME/.local/libexec/ai-assist-cache"; do
   [[ -n "$_cand" && -x "$_cand" ]] && { _cache_bin="$_cand"; break; }

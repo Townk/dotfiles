@@ -246,6 +246,7 @@ fi
 _cache_bin=""
 if [[ -n "$cache_ctx" && -n "$cache_req" && -n "$cache_meta" ]]; then
   for _cand in \
+    "${AI_ASSIST_CACHE_BIN:-}" \
     "$(command -v -- ai-assist-cache 2>/dev/null)" \
     "$HOME/.local/libexec/ai-assist-cache"; do
     [[ -n "$_cand" && -x "$_cand" ]] && { _cache_bin="$_cand"; break; }
