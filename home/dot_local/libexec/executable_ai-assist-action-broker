@@ -12,6 +12,7 @@ set -uo pipefail
 US=$'\x1f' RS=$'\x1e'
 AI_ASSIST_BROKER_LOG="${AI_ASSIST_BROKER_LOG:-${AI_ASSIST_DEBUG_LOG:-${TMPDIR:-/tmp}/ai-playbook-debug.log}}"
 _log() { [[ -n "${AI_ASSIST_BROKER_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) [broker] $*" >> "$AI_ASSIST_BROKER_LOG"; }
+_dbg() { _log "$@"; }
 fifo="" origin="" over_ssh=0
 results="" shell_fifo=""
 while (($#)); do
@@ -79,27 +80,40 @@ broker::play() {
   "$zj" action write --pane-id "$origin" 13 2>/dev/null                  # 13 = CR = Enter
 }
 
-# broker::view_diff — open the patch in a floating zellij pane via the viewer.
+# broker::view_diff — open the patch in a large floating zellij pane via hunk
+# (read-only, --pager) or the viewer fallback, anchored to the project root.
 broker::view_diff() {
   local id="$1" diff="$2"
   [[ -n "$zj" ]] || return 0
   local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-diff.XXXXXX")"
   print -rn -- "$diff" > "$patch"
-  "$zj" action new-pane --floating --close-on-exit --name "diff:$id" \
-    -- ${(z)viewer} "$patch" 2>/dev/null || true
+  _dbg "view_diff id=$id patch=$patch bytes=$(wc -c < "$patch")"
+  if [[ -n "$hunk_bin" ]]; then
+    "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
+      --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "diff:$id" \
+      -- "$hunk_bin" patch --pager "$patch" 2>/dev/null || true
+  else
+    "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
+      --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "diff:$id" \
+      -- ${(z)viewer} "$patch" 2>/dev/null || true
+  fi
 }
 
-# broker::review_diff — open the patch in hunk (if available) or the viewer float.
+# broker::review_diff — open the patch in a large floating zellij pane via hunk
+# (review chrome) or the viewer fallback, anchored to the project root.
 broker::review_diff() {
   local id="$1" diff="$2"
   [[ -n "$zj" ]] || return 0
-  local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-review.XXXXXX")"
+  local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-diff.XXXXXX")"
   print -rn -- "$diff" > "$patch"
+  _dbg "review_diff id=$id patch=$patch bytes=$(wc -c < "$patch")"
   if [[ -n "$hunk_bin" ]]; then
-    "$zj" action new-pane --floating --close-on-exit --name "review:$id" \
+    "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
+      --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "review:$id" \
       -- "$hunk_bin" patch "$patch" 2>/dev/null || true
   else
-    "$zj" action new-pane --floating --close-on-exit --name "review:$id" \
+    "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
+      --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "review:$id" \
       -- ${(z)viewer} "$patch" 2>/dev/null || true
   fi
 }

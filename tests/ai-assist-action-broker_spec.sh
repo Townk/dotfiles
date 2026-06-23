@@ -99,6 +99,22 @@ Describe 'ai-assist-action-broker'
     broker::dispatch "view-diff${US}d1${US}--- a\n+++ b${RS}"
     The contents of file "$TEST_TMP/zj.log" should include "new-pane"
     The contents of file "$TEST_TMP/zj.log" should include "--floating"
+    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--cwd"
+  End
+
+  It 'view-diff uses hunk --pager when hunk is available'
+    load_broker
+    printf '#!/usr/bin/env zsh\nprint -r -- "hunk $*"\n' > "$TEST_TMP/hunk"; chmod +x "$TEST_TMP/hunk"
+    hunk_bin="$TEST_TMP/hunk"
+    broker::view_diff d3 "--- a"$'\n'"+++ b"
+    The contents of file "$TEST_TMP/zj.log" should include "new-pane"
+    The contents of file "$TEST_TMP/zj.log" should include "--floating"
+    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--cwd"
+    The contents of file "$TEST_TMP/zj.log" should include "hunk patch --pager"
   End
 
   It 'apply-diff runs git apply via ai-assist-run and writes a result record'
@@ -124,7 +140,10 @@ Describe 'ai-assist-action-broker'
     broker::review_diff r1 "--- a"$'\n'"+++ b"
     The contents of file "$TEST_TMP/zj.log" should include "new-pane"
     The contents of file "$TEST_TMP/zj.log" should include "--floating"
-    The contents of file "$TEST_TMP/zj.log" should include "hunk"
+    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--cwd"
+    The contents of file "$TEST_TMP/zj.log" should include "hunk patch"
   End
 
   It 'review-diff falls back to the viewer when hunk is absent'
@@ -132,6 +151,9 @@ Describe 'ai-assist-action-broker'
     hunk_bin=""   # no hunk
     broker::review_diff r2 "--- a"$'\n'"+++ b"
     The contents of file "$TEST_TMP/zj.log" should include "new-pane"
+    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--cwd"
     The contents of file "$TEST_TMP/zj.log" should not include "hunk"
   End
 End
