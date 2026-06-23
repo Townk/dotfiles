@@ -10,7 +10,8 @@
 set -uo pipefail
 
 US=$'\x1f' RS=$'\x1e'
-AI_ASSIST_BROKER_LOG="${AI_ASSIST_BROKER_LOG:-${AI_ASSIST_DEBUG_LOG:-${TMPDIR:-/tmp}/ai-playbook-debug.log}}"
+# Debug logging is OFF unless AI_ASSIST_DEBUG_LOG (or AI_ASSIST_BROKER_LOG) is set.
+AI_ASSIST_BROKER_LOG="${AI_ASSIST_BROKER_LOG:-${AI_ASSIST_DEBUG_LOG:-}}"
 _log() { [[ -n "${AI_ASSIST_BROKER_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) [broker] $*" >> "$AI_ASSIST_BROKER_LOG"; }
 _dbg() { _log "$@"; }
 fifo="" origin="" over_ssh=0

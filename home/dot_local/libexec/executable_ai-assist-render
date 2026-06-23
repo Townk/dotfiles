@@ -16,8 +16,9 @@
 # library sourcing, so it runs cleanly in a bare zellij pane.
 set -uo pipefail
 
-AI_ASSIST_DEBUG_LOG="${AI_ASSIST_DEBUG_LOG:-${TMPDIR:-/tmp}/ai-playbook-debug.log}"
-_dbg() { print -r -- "$(date +%H:%M:%S) [render] $*" >> "$AI_ASSIST_DEBUG_LOG"; }
+# Debug logging is OFF unless AI_ASSIST_DEBUG_LOG is explicitly set to a path.
+AI_ASSIST_DEBUG_LOG="${AI_ASSIST_DEBUG_LOG:-}"
+_dbg() { [[ -n "$AI_ASSIST_DEBUG_LOG" ]] && print -r -- "$(date +%H:%M:%S) [render] $*" >> "$AI_ASSIST_DEBUG_LOG"; }
 
 # Force narrow (1-cell) width for East-Asian-ambiguous characters (em-dash,
 # ellipsis, smart quotes, nerd-font icons). The pager's width library reads this
