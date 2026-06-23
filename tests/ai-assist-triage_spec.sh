@@ -390,6 +390,10 @@ JSON
     The contents of file "$TEST_TMP/zj-args" should include "body"
     # --cached flag must be forwarded.
     The contents of file "$TEST_TMP/zj-args" should include "--cached"
+    # Stage 4: --regen-ctx and --regen-req must be forwarded so the broker can
+    # invoke ai-assist-regenerate when the user clicks the cached pill.
+    The contents of file "$TEST_TMP/zj-args" should include "--regen-ctx"
+    The contents of file "$TEST_TMP/zj-args" should include "--regen-req"
     # The cheap classify must NOT have been invoked.
     The path "$TEST_TMP/classify-calls" should not be exist
   End

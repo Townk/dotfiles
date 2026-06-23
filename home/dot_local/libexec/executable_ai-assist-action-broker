@@ -16,6 +16,7 @@ _log() { [[ -n "${AI_ASSIST_BROKER_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) 
 _dbg() { _log "$@"; }
 fifo="" origin="" over_ssh=0
 results="" shell_fifo="" run_dir="${AI_ASSIST_RUN_DIR:-}"
+input_fifo="" regen_ctx="" regen_req=""
 while (($#)); do
   case "$1" in
     --fifo)          fifo="${2:-}"; shift 2 ;;
@@ -24,10 +25,13 @@ while (($#)); do
     --results-fifo)  results="${2:-}"; shift 2 ;;
     --shell-fifo)    shell_fifo="${2:-}"; shift 2 ;;
     --run-dir)       run_dir="${2:-}"; shift 2 ;;
+    --input-fifo)    input_fifo="${2:-}"; shift 2 ;;
+    --regen-ctx)     regen_ctx="${2:-}"; shift 2 ;;
+    --regen-req)     regen_req="${2:-}"; shift 2 ;;
     *)               shift ;;
   esac
 done
-_log "start: fifo=$fifo origin=$origin shell_fifo='${shell_fifo:-EMPTY}' results='${results:-EMPTY}'"
+_log "start: fifo=$fifo origin=$origin shell_fifo='${shell_fifo:-EMPTY}' results='${results:-EMPTY}' input_fifo='${input_fifo:-EMPTY}'"
 
 # zellij by absolute path (the docked pane's PATH is the minimal daemon one).
 zj=""
@@ -181,6 +185,27 @@ broker::stop_block() {
   _log "stop_block id=${id} killed pid=${pid}"
 }
 
+# broker::regenerate — invoke ai-assist-regenerate in the background to re-run
+# the original request and stream the fresh result into the input FIFO (same
+# pane, no respawn). Runs in the background because the agent run takes seconds
+# and the broker loop must remain responsive to other actions (copy/play/diff)
+# while the re-run is in flight. Best-effort: guard checks ensure all required
+# context is present and the helper is executable before launching.
+broker::regenerate() {
+  local regen_bin="${AI_ASSIST_REGENERATE_BIN:-}"
+  if [[ -z "$regen_bin" ]]; then
+    for _r in \
+      "$(command -v ai-assist-regenerate 2>/dev/null)" \
+      "$HOME/.local/libexec/ai-assist-regenerate"; do
+      [[ -n "$_r" && -x "$_r" ]] && { regen_bin="$_r"; break; }
+    done
+  fi
+  [[ -n "$regen_ctx" && -n "$regen_req" && -n "$input_fifo" && -n "$regen_bin" && -x "$regen_bin" ]] || return 0
+  _log "regenerate: ctx=$regen_ctx req=$regen_req input_fifo=$input_fifo origin=${origin:-EMPTY}"
+  "$regen_bin" --ctx "$regen_ctx" --req "$regen_req" --input-fifo "$input_fifo" \
+    ${origin:+--origin-pane "$origin"} >/dev/null 2>&1 &
+}
+
 # broker::dispatch — parse one 3-field record and route it.
 broker::dispatch() {
   local rec="$1"
@@ -198,6 +223,7 @@ broker::dispatch() {
     view-diff)   broker::open_diff "$id" "$payload" ;;  # back-compat alias
     review-diff) broker::open_diff "$id" "$payload" ;;  # back-compat alias
     apply-diff)  broker::apply_diff "$id" "$payload" ;;
+    regenerate)  broker::regenerate ;;
   esac
 }
 

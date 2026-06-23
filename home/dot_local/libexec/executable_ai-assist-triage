@@ -268,6 +268,8 @@ if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" \
         # Replay answer/playbook (and any unknown future kinds) in a docked pane.
         local -a _cached_flags=()
         [[ -n "$_hit_created" ]] && _cached_flags+=(--cached "$_hit_created")
+        [[ -n "$_cache_ctx" ]] && _cached_flags+=(--regen-ctx "$_cache_ctx")
+        [[ -n "$_cache_req" ]] && _cached_flags+=(--regen-req "$_cache_req")
         spawn_docked --cleanup-fifos "${_cached_flags[@]}" -- "$_cache_bin" body "$_cache_entry"
         ;;
     esac

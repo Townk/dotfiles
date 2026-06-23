@@ -208,4 +208,58 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/applied" should equal "OK"
   End
 
+  # ── Stage 4: regenerate action ────────────────────────────────────────────────
+
+  It 'regenerate dispatch invokes the helper with --ctx/--req/--input-fifo/--origin-pane'
+    drive_regen() {
+      load_broker
+      # Set the regen context that the broker receives from render's --regen-ctx/req.
+      regen_ctx="deadbeef"
+      regen_req="cafebabe"
+      input_fifo="$TEST_TMP/regen.fifo"
+      mkfifo -m 600 "$input_fifo" 2>/dev/null || true
+      origin="terminal_7"
+      # Stub ai-assist-regenerate: record argv to a file, then exit.
+      {
+        echo '#!/usr/bin/env zsh'
+        echo "printf '%s\n' \"\$@\" >> \"$TEST_TMP/regen-args\""
+      } > "$TEST_TMP/regen-stub"; chmod +x "$TEST_TMP/regen-stub"
+      AI_ASSIST_REGENERATE_BIN="$TEST_TMP/regen-stub"
+      broker::dispatch "regenerate${US}r1${US}${RS}"
+      sleep 0.3
+    }
+    When call drive_regen
+    The status should be success
+    The path "$TEST_TMP/regen-args" should be file
+    The contents of file "$TEST_TMP/regen-args" should include "--ctx"
+    The contents of file "$TEST_TMP/regen-args" should include "deadbeef"
+    The contents of file "$TEST_TMP/regen-args" should include "--req"
+    The contents of file "$TEST_TMP/regen-args" should include "cafebabe"
+    The contents of file "$TEST_TMP/regen-args" should include "--input-fifo"
+    The contents of file "$TEST_TMP/regen-args" should include "regen.fifo"
+    The contents of file "$TEST_TMP/regen-args" should include "--origin-pane"
+    The contents of file "$TEST_TMP/regen-args" should include "terminal_7"
+  End
+
+  It 'regenerate is a no-op when regen keys are unset'
+    drive_regen_noop() {
+      load_broker
+      # regen_ctx/regen_req/input_fifo left unset (empty from load_broker).
+      regen_ctx=""
+      regen_req=""
+      input_fifo=""
+      {
+        echo '#!/usr/bin/env zsh'
+        echo "printf '%s\n' \"\$@\" >> \"$TEST_TMP/regen-noop-args\""
+      } > "$TEST_TMP/regen-noop-stub"; chmod +x "$TEST_TMP/regen-noop-stub"
+      AI_ASSIST_REGENERATE_BIN="$TEST_TMP/regen-noop-stub"
+      broker::dispatch "regenerate${US}r2${US}${RS}"
+      sleep 0.1
+    }
+    When call drive_regen_noop
+    The status should be success
+    # Helper must NOT have been invoked (missing ctx/req/input_fifo).
+    The path "$TEST_TMP/regen-noop-args" should not be exist
+  End
+
 End

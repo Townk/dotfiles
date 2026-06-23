@@ -56,6 +56,10 @@ cache_request="${AI_ASSIST_CACHE_REQUEST:-}"
 # Cache replay badge (Stage 3): when set, forwarded to the pager as --cached <ts>
 # so it can display the cached·<age> badge. Does NOT trigger tee/persist.
 cache_replay_ts=""
+# Regenerate context (Stage 4): cache keys forwarded to the broker so it can
+# invoke ai-assist-regenerate on a cached replay pane.
+regen_ctx=""
+regen_req=""
 while (($#)); do
   case "$1" in
     --harness)        harness="${2:-agent}"; shift 2 ;;
@@ -75,6 +79,8 @@ while (($#)); do
     --cache-meta)     cache_meta="${2:-}"; shift 2 ;;
     --cache-request)  cache_request="${2:-}"; shift 2 ;;
     --cached)         cache_replay_ts="${2:-}"; shift 2 ;;
+    --regen-ctx)      regen_ctx="${2:-}"; shift 2 ;;
+    --regen-req)      regen_req="${2:-}"; shift 2 ;;
     --) shift; break ;;
     *) break ;;
   esac
@@ -148,6 +154,18 @@ else
   _owned_fifos+=("$results_fifo")
 fi
 
+# Input FIFO: the harness streams stdout+stderr into this; the pager reads from it.
+# Defined BEFORE the broker spawn so $in_fifo is available for --input-fifo.
+# Use caller-provided path when given; otherwise mktemp a new one (and own it).
+if [[ -n "$provided_in_fifo" ]]; then
+  in_fifo="$provided_in_fifo"
+  # Caller-provided — not owned; do not append to _owned_fifos.
+else
+  in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
+  mkfifo -m 600 "$in_fifo"
+  _owned_fifos+=("$in_fifo")
+fi
+
 # Actions FIFO + broker: when we know the originating pane, create a FIFO (or use
 # a caller-provided one), spawn the broker (it performs copy/play), and hand the
 # pager --actions-fifo. The broker's lifetime is this pane's — the EXIT trap below
@@ -177,11 +195,13 @@ if [[ -n "$origin_pane" ]]; then
       fi
     fi
     if [[ -n "$fifo" ]]; then
-      _dbg "broker spawn: --fifo $fifo --origin-pane $origin_pane ${shell_fifo:+--shell-fifo $shell_fifo} --results-fifo $results_fifo"
+      _dbg "broker spawn: --fifo $fifo --origin-pane $origin_pane ${shell_fifo:+--shell-fifo $shell_fifo} --results-fifo $results_fifo --input-fifo $in_fifo"
       typeset -a broker_flags=(--fifo "$fifo" --origin-pane "$origin_pane" --results-fifo "$results_fifo")
+      broker_flags+=(--input-fifo "$in_fifo")
       [[ -n "$shell_fifo" ]] && broker_flags+=(--shell-fifo "$shell_fifo")
       [[ -n "$run_dir" ]] && broker_flags+=(--run-dir "$run_dir")
       (( over_ssh )) && broker_flags+=(--over-ssh)
+      [[ -n "$regen_ctx" && -n "$regen_req" ]] && broker_flags+=(--regen-ctx "$regen_ctx" --regen-req "$regen_req")
       # The broker is a sibling of the pager and inherits this pane's tty as its
       # stdout/stderr. `zellij action new-pane` (the diff float) prints the new
       # pane's id to stdout, which would land on the pager's alt-screen and scroll
@@ -194,17 +214,6 @@ elif [[ -n "$provided_actions_fifo" ]]; then
   # Caller provided an actions fifo but no --origin-pane: honour the path so the
   # pager can still receive actions, but don't start the broker.
   fifo="$provided_actions_fifo"
-fi
-
-# Input FIFO: the harness streams stdout+stderr into this; the pager reads from it.
-# Use caller-provided path when given; otherwise mktemp a new one (and own it).
-if [[ -n "$provided_in_fifo" ]]; then
-  in_fifo="$provided_in_fifo"
-  # Caller-provided — not owned; do not append to _owned_fifos.
-else
-  in_fifo="$(mktemp -u "${TMPDIR:-/tmp}/ai-assist-in.XXXXXX")"
-  mkfifo -m 600 "$in_fifo"
-  _owned_fifos+=("$in_fifo")
 fi
 
 # Cleanup trap: kill broker + agent shell; remove ONLY the fifos this process

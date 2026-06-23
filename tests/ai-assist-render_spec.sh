@@ -444,4 +444,45 @@ Describe 'ai-assist-render'
     # one arg ("--shell-fifo /path"), which the line below would NOT match.
     The contents of file "$TEST_TMP/broker.args" should not include "--shell-fifo /"
   End
+
+  # ── Stage 4: render forwards --input-fifo + --regen-ctx/req to broker ────────
+
+  It 'broker spawn argv includes --input-fifo, --regen-ctx, --regen-req when render receives those flags'
+    # Broker stub: record all argv one-per-line, then exec sleep so render can kill it.
+    regen_broker_stub() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'printf "%s\n" "$@" >> "$TEST_TMP/regen-broker.args"'
+        echo 'exec sleep 30'
+      } > "$TEST_TMP/regen-broker"; chmod +x "$TEST_TMP/regen-broker"
+    }
+    # Pager stub: drain --input-fifo so render's FIFO writer unblocks.
+    regen_pager_stub() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'in=""; while (($#)); do [[ "$1" == "--input-fifo" ]] && { in="$2"; break; }; shift; done'
+        echo '[[ -n "$in" && -p "$in" ]] && cat -- "$in" >/dev/null'
+      } > "$TEST_TMP/regen-pager"; chmod +x "$TEST_TMP/regen-pager"
+    }
+    setup_regen_render_test() {
+      regen_broker_stub
+      regen_pager_stub
+      export AI_ASSIST_BROKER_BIN="$TEST_TMP/regen-broker"
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/regen-pager"
+      export TEST_TMP="$TEST_TMP"
+    }
+    BeforeRun 'setup_regen_render_test'
+    When run script "$SCRIPT" --harness claude --origin-pane terminal_8 \
+      --regen-ctx "deadbeef" --regen-req "cafebabe" -- printf 'hi\n'
+    The status should be success
+    The path "$TEST_TMP/regen-broker.args" should be file
+    # render must forward --input-fifo to the broker (always, not conditional).
+    The contents of file "$TEST_TMP/regen-broker.args" should include "--input-fifo"
+    # render must forward --regen-ctx and --regen-req to the broker.
+    The contents of file "$TEST_TMP/regen-broker.args" should include "--regen-ctx"
+    The contents of file "$TEST_TMP/regen-broker.args" should include "deadbeef"
+    The contents of file "$TEST_TMP/regen-broker.args" should include "--regen-req"
+    The contents of file "$TEST_TMP/regen-broker.args" should include "cafebabe"
+    # Word-split regression: each flag and value must be on separate lines.
+    The contents of file "$TEST_TMP/regen-broker.args" should not include "--regen-ctx deadbeef"
+    The contents of file "$TEST_TMP/regen-broker.args" should not include "--regen-req cafebabe"
+  End
 End
