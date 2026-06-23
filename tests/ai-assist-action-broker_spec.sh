@@ -185,4 +185,27 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/ranlog" should include "git apply"
   End
 
+  # Regression: the produced patch must end in a newline or `git apply` reports
+  # "corrupt patch". Validate against a real repo via git apply --check.
+  It 'apply-diff produces a patch git apply accepts (trailing newline)'
+    load_broker
+    results="$TEST_TMP/results.fifo"; mkfifo "$results"
+    shell_fifo="$TEST_TMP/shell.fifo"; mkfifo "$shell_fifo"
+    repo="$TEST_TMP/repo"; mkdir "$repo"
+    ( cd "$repo"; git init -q; printf 'a\n' > f; git add f; git -c user.email=t -c user.name=t commit -qm i )
+    # stub ai-assist-run: run the git-apply command's patch through git apply --check
+    printf '#!/usr/bin/env zsh\ncmd="${@[-1]}"\np="${cmd##* }"\ncd "%s" && git apply --check "$p" && print -r -- OK > "%s/applied"\n' "$repo" "$TEST_TMP" > "$TEST_TMP/airun"
+    chmod +x "$TEST_TMP/airun"; AI_ASSIST_RUN_BIN="$TEST_TMP/airun"
+    ( cat "$results" > /dev/null ) &
+    patch='diff --git a/f b/f
+--- a/f
++++ b/f
+@@ -1 +1 @@
+-a
++b'
+    broker::dispatch "apply-diff${US}d7${US}${patch}${RS}"
+    sleep 0.3
+    The contents of file "$TEST_TMP/applied" should equal "OK"
+  End
+
 End

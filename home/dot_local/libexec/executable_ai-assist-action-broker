@@ -88,7 +88,7 @@ broker::open_diff() {
   local id="$1" diff="$2"
   [[ -n "$zj" ]] || return 0
   local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-diff.XXXXXX")"
-  print -rn -- "$diff" > "$patch"
+  print -r -- "$diff" > "$patch"  # trailing newline — git apply rejects a patch without one
   _dbg "open_diff id=$id patch=$patch bytes=$(wc -c < "$patch")"
   if [[ -n "$hunk_bin" ]]; then
     "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
@@ -121,7 +121,7 @@ broker::apply_diff() {
   fi
   [[ -n "$run" && -x "$run" ]] || return 0
   local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-apply.XXXXXX")"
-  print -rn -- "$diff" > "$patch"
+  print -r -- "$diff" > "$patch"  # trailing newline — git apply rejects a patch without one
   local log; log="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-run.XXXXXX")"
   AI_ASSIST_SHELL_FIFO="$shell_fifo" "$run" --id "$id" -- "git apply -- ${(q)patch}" >"$log" 2>&1
   local code=$?
