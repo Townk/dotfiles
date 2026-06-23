@@ -11,10 +11,12 @@
 #   3. Resolve the harness NON-INTERACTIVELY (env → session pin → sole probed).
 #      Several available + none pinned → no cheap pass possible without the fzf
 #      picker → escalate (safe default; never worse than today).
-#   4. Drive the float's spinner with status␟<label>␞ records on the IN fifo,
+#   4. Compute context/request hashes (best-effort) and look up the cache BEFORE
+#      the cheap model. On a hit, replay by kind and return without classifying.
+#   5. Drive the float's spinner with status␟<label>␞ records on the IN fifo,
 #      run the harness's cheap `ai-assist-<h> --triage` pass, classify it.
-#   5. Send exactly one close␞ to the IN fifo → the float dismisses.
-#   6. Route — REUSING THE SAME TWO FIFOS for any docked pane:
+#   6. Send exactly one close␞ to the IN fifo → the float dismisses.
+#   7. Route — REUSING THE SAME TWO FIFOS for any docked pane:
 #        command  → zellij action write-chars --pane-id <origin> (NO trailing CR)
 #        answer   → docked pane: ai-assist-render renders the prose
 #        escalate → docked pane: ai-assist-render runs the capable worker
@@ -149,6 +151,15 @@ render_bin() {
 # docked pane spawn. Tolerant: missing fields just default.
 assist::request_read "$request" 2>/dev/null || true
 [[ -n "$origin_pane" ]] || origin_pane="${REQ_PANE_ID:-}"
+# Export REQ_* fields that ai-assist-cache context-hash reads from env, so the
+# cache helper subprocess sees the correct values. assist::request_read uses plain
+# assignments (not export); any prior export state may be stale after jq reloads
+# the values, so we explicitly re-export the fields the hash depends on.
+export REQ_PROJECT_ROOT="${REQ_PROJECT_ROOT:-}"
+export REQ_CWD="${REQ_CWD:-}"
+export REQ_COMMAND_TEXT="${REQ_COMMAND_TEXT:-}"
+export REQ_COMMAND_EXIT="${REQ_COMMAND_EXIT:-}"
+export REQ_SCROLLBACK="${REQ_SCROLLBACK:-}"
 
 # spawn_docked <render-args...> — open the docked pane running ai-assist-render
 # with the SAME fifo pair reused (Task 5 flags). Render parks/closes on its own.
@@ -198,6 +209,74 @@ route_escalate() {
   fi
 }
 
+# ── Cache: resolve binary (BEST-EFFORT — never block a request) ──────────────
+_cache_bin=""
+for _cand in \
+  "$(command -v -- ai-assist-cache 2>/dev/null)" \
+  "$HOME/.local/libexec/ai-assist-cache"; do
+  [[ -n "$_cand" && -x "$_cand" ]] && { _cache_bin="$_cand"; break; }
+done
+
+# ── Cache: compute context+request hashes BEFORE classify ────────────────────
+# Best-effort: if anything fails, we fall through to the normal classify path.
+_cache_ctx="" _cache_req=""
+if [[ -n "$_cache_bin" ]]; then
+  _cache_ctx="$("$_cache_bin" context-hash 2>/dev/null)" || _cache_ctx=""
+  _cache_req="$("$_cache_bin" request-hash "$REQ_USER_REQUEST" 2>/dev/null)" || _cache_req=""
+fi
+
+# ── Cache: lookup BEFORE cheap model ─────────────────────────────────────────
+# On a hit, replay by kind and exit WITHOUT running the classify step.
+# AI_ASSIST_NO_CACHE=1 forces a miss (bypass for regenerate / testing).
+if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" \
+      && -z "${AI_ASSIST_NO_CACHE:-}" ]]; then
+  _cache_entry="$("$_cache_bin" lookup "$_cache_ctx" "$_cache_req" 2>/dev/null)" || _cache_entry=""
+  if [[ -n "$_cache_entry" && -f "$_cache_entry" ]]; then
+    # HIT — read kind + created_at from front matter.
+    _hit_kind="$("$_cache_bin" field "$_cache_entry" kind 2>/dev/null)" || _hit_kind=""
+    _hit_created="$("$_cache_bin" field "$_cache_entry" created_at 2>/dev/null)" || _hit_created=""
+
+    # Bump recency log (best-effort).
+    [[ -n "$_hit_kind" ]] && \
+      "$_cache_bin" log "$_cache_ctx" "$_hit_kind" "$REQ_USER_REQUEST" 2>/dev/null || true
+
+    # Dismiss the float.
+    emit_close
+
+    case "$_hit_kind" in
+      command)
+        # Re-stage the cached command into the origin pane via bracketed paste
+        # (same sequence as the live command path, NO trailing CR).
+        if [[ -n "$origin_pane" ]]; then
+          _hit_payload="$("$_cache_bin" body "$_cache_entry" 2>/dev/null)" || _hit_payload=""
+          zj="$(assist::zellij_bin)" || zj=""
+          if [[ -n "$zj" && -n "$_hit_payload" ]]; then
+            "$zj" action write --pane-id "$origin_pane" 27 91 50 48 48 126 2>/dev/null || true  # ESC[200~
+            "$zj" action write-chars --pane-id "$origin_pane" -- "$_hit_payload" 2>/dev/null || true
+            "$zj" action write --pane-id "$origin_pane" 27 91 50 48 49 126 2>/dev/null || true  # ESC[201~
+          fi
+          cleanup_fifos
+        else
+          # No origin pane → render in a docked pane (same fallback as live path).
+          local -a _cached_flags=()
+          [[ -n "$_hit_created" ]] && _cached_flags+=(--cached "$_hit_created")
+          spawn_docked --cleanup-fifos "${_cached_flags[@]}" -- "$_cache_bin" body "$_cache_entry"
+        fi
+        ;;
+      answer|playbook|*)
+        # Replay answer/playbook (and any unknown future kinds) in a docked pane.
+        local -a _cached_flags=()
+        [[ -n "$_hit_created" ]] && _cached_flags+=(--cached "$_hit_created")
+        spawn_docked --cleanup-fifos "${_cached_flags[@]}" -- "$_cache_bin" body "$_cache_entry"
+        ;;
+    esac
+    exit 0
+  fi
+fi
+
+# ── MISS (or cache unavailable / NO_CACHE set) ────────────────────────────────
+# Fall through to the existing classify + route + Stage-2 persist flow.
+
 # ── 3–4. Run the cheap pass (if a harness resolves) and classify ─────────────
 kind="" payload=""
 harness="$(resolve_harness)" || harness=""
@@ -241,37 +320,22 @@ if [[ "$kind" == command && -n "${REQ_COMMAND_TEXT:-}" \
   kind="escalate"; payload="re-running the failed command is not a diagnosis"
 fi
 
-# ── Cache: compute hashes + meta (BEST-EFFORT — never block a request) ───────
-# Resolve ai-assist-cache by absolute path (mirrors how other helpers are resolved).
-_cache_bin=""
-for _cand in \
-  "$(command -v -- ai-assist-cache 2>/dev/null)" \
-  "$HOME/.local/libexec/ai-assist-cache"; do
-  [[ -n "$_cand" && -x "$_cand" ]] && { _cache_bin="$_cand"; break; }
-done
-
-_cache_ctx="" _cache_req="" _cache_meta=""
-if [[ -n "$_cache_bin" ]]; then
-  _cache_ctx="$("$_cache_bin" context-hash 2>/dev/null)" || _cache_ctx=""
-  _cache_req="$("$_cache_bin" request-hash "$REQ_USER_REQUEST" 2>/dev/null)" || _cache_req=""
-
-  # Build a meta file with collapsed-single-line request + other fields.
-  # The meta file lives under the same dir as the request.json so it can outlive
-  # triage when escalate hands it off to render.
-  if [[ -n "$_cache_ctx" && -n "$_cache_req" ]]; then
-    _cache_meta="$(mktemp "${request:h}/cache-meta.XXXXXX" 2>/dev/null)" || _cache_meta=""
-    if [[ -n "$_cache_meta" ]]; then
-      # Collapse the request to one line for front-matter (newlines → spaces).
-      local _req_oneline="${REQ_USER_REQUEST//$'\n'/ }"
-      {
-        printf 'request=%s\n'      "$_req_oneline"
-        printf 'project_root=%s\n' "${REQ_PROJECT_ROOT:-}"
-        printf 'project_name=%s\n' "${REQ_PROJECT_NAME:-}"
-        printf 'command=%s\n'      "${REQ_COMMAND_TEXT:-}"
-        printf 'exit=%s\n'         "${REQ_COMMAND_EXIT:-}"
-        printf 'harness=%s\n'      "$harness"
-      } > "$_cache_meta" 2>/dev/null || { rm -f -- "$_cache_meta" 2>/dev/null; _cache_meta=""; }
-    fi
+# ── Cache: build meta file for persist-on-produce ────────────────────────────
+# (ctx/req already computed above; build meta only on a miss that has valid hashes)
+_cache_meta=""
+if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" ]]; then
+  _cache_meta="$(mktemp "${request:h}/cache-meta.XXXXXX" 2>/dev/null)" || _cache_meta=""
+  if [[ -n "$_cache_meta" ]]; then
+    # Collapse the request to one line for front-matter (newlines → spaces).
+    local _req_oneline="${REQ_USER_REQUEST//$'\n'/ }"
+    {
+      printf 'request=%s\n'      "$_req_oneline"
+      printf 'project_root=%s\n' "${REQ_PROJECT_ROOT:-}"
+      printf 'project_name=%s\n' "${REQ_PROJECT_NAME:-}"
+      printf 'command=%s\n'      "${REQ_COMMAND_TEXT:-}"
+      printf 'exit=%s\n'         "${REQ_COMMAND_EXIT:-}"
+      printf 'harness=%s\n'      "$harness"
+    } > "$_cache_meta" 2>/dev/null || { rm -f -- "$_cache_meta" 2>/dev/null; _cache_meta=""; }
   fi
 fi
 
@@ -354,6 +418,9 @@ case "$kind" in
     # Pass cache keys to render (via env) so it can persist the playbook after
     # streaming.  The worker spawns render and inherits this environment.
     # The meta file must outlive triage — render will remove it.
+    # IMPORTANT: AI_ASSIST_CACHE_CTX/REQ/META are exported ONLY here (escalate
+    # path). They must NOT be set globally — the replay/hit paths must leave them
+    # unset so render does NOT attempt to re-persist a cached result.
     if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" && -n "$_cache_meta" ]]; then
       export AI_ASSIST_CACHE_CTX="$_cache_ctx"
       export AI_ASSIST_CACHE_REQ="$_cache_req"

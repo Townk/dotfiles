@@ -288,4 +288,159 @@ JSON
     The path "$OUT_FIFO" should be exist
     The path "$IN_FIFO" should be exist
   End
+
+  # ── Cache lookup + replay tests (Stage 3) ─────────────────────────────────
+
+  # seed_cache <kind> <body> — store a cache entry using the real ai-assist-cache
+  # helper. Uses the same request.json context + a fixed request text so the
+  # triage lookup will find it.
+  seed_cache() {
+    local kind="$1" body_text="$2"
+    local cache_script="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_ai-assist-cache"
+    local body_tmp="$TEST_TMP/seed-body.txt"
+    printf '%s\n' "$body_text" > "$body_tmp"
+    # Use the same REQ_* env the triage will see so context-hash matches.
+    # For a general question (no failed command), context = project_root only.
+    export REQ_PROJECT_ROOT="/tmp/proj"
+    unset REQ_COMMAND_TEXT REQ_COMMAND_EXIT REQ_SCROLLBACK 2>/dev/null || true
+    ctx="$("$cache_script" context-hash 2>/dev/null)"
+    req="$("$cache_script" request-hash "cache hit test" 2>/dev/null)"
+    export AI_ASSIST_DATA_DIR="$TEST_TMP/cache-data"
+    mkdir -p "$AI_ASSIST_DATA_DIR"
+    "$cache_script" store "$ctx" "$req" "$kind" "$body_tmp" \
+      "request=cache hit test" "project_root=/tmp/proj" "harness=claude" >/dev/null 2>&1
+    unset REQ_PROJECT_ROOT 2>/dev/null || true
+    # Symlink the real cache script into stub bin dir AND the expected libexec
+    # path (HOME is overridden to $TEST_TMP/home in setup, so triage's fallback
+    # $HOME/.local/libexec/ai-assist-cache resolves to that location).
+    ln -sf "$cache_script" "$TEST_TMP/bin/ai-assist-cache" 2>/dev/null || true
+    mkdir -p "$TEST_TMP/home/.local/libexec"
+    ln -sf "$cache_script" "$TEST_TMP/home/.local/libexec/ai-assist-cache" 2>/dev/null || true
+  }
+
+  # make_classify_recorder — replace the worker's --triage path with a stub that
+  # records when the cheap model was called (we assert it is NOT called on a hit).
+  make_classify_recorder() {
+    local h="${1:-claude}"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo "[[ \"\${1:-}\" == --probe ]] && { print -r -- '$h available'; exit 0; }"
+      echo "if [[ \"\${1:-}\" == --triage ]]; then"
+      echo "  printf 'CLASSIFY_CALLED' >> \"$TEST_TMP/classify-calls\""
+      echo "  printf '__ANSWER__\nfallback answer'"
+      echo "  exit 0"
+      echo "fi"
+    } > "$TEST_TMP/bin/ai-assist-$h"
+    chmod +x "$TEST_TMP/bin/ai-assist-$h"
+  }
+
+  # REQ_JSON with the request pre-filled to "cache hit test" (matching seed_cache).
+  # jq must update user_request so the hash matches; we inject it statically.
+  make_hit_req() {
+    cat > "$TEST_TMP/req-hit.json" <<'JSON'
+{
+  "version": 1,
+  "kind": "question",
+  "origin": {"cwd":"/tmp/proj","project_root":"/tmp/proj","pane_id":"terminal_7"},
+  "command": {"text":"","exit":null},
+  "scrollback":"",
+  "user_request":"cache hit test",
+  "project":{"name":"proj","branch":"main"}
+}
+JSON
+  }
+
+  It 'cache HIT (command kind): re-stages the body via bracketed paste without invoking classify'
+    make_classify_recorder claude
+    # seed_cache exports AI_ASSIST_DATA_DIR to $TEST_TMP/cache-data; When run
+    # inherits it since it's exported in the enclosing shell.
+    seed_cache command "cached-cmd --opt value"
+    make_hit_req
+    drain_in
+    # Submit the same request text that was seeded.
+    feed "submit${US}cache hit test"
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$TEST_TMP/req-hit.json" --origin-pane terminal_7
+    The status should be success
+    # Must have dismissed the float.
+    The contents of file "$TEST_TMP/in.log" should include "close"
+    # Bracketed paste must carry the cached body.
+    The contents of file "$TEST_TMP/zj-args" should include "write-chars --pane-id terminal_7"
+    The contents of file "$TEST_TMP/zj-args" should include "cached-cmd --opt value"
+    # ESC[200~ open bracket.
+    The contents of file "$TEST_TMP/zj-args" should include "27 91 50 48 48 126"
+    # The cheap classify must NOT have been invoked.
+    The path "$TEST_TMP/classify-calls" should not be exist
+  End
+
+  It 'cache HIT (answer kind): spawns render with -- <cache-bin> body <entry> and --cached flag'
+    make_classify_recorder claude
+    seed_cache answer "This is a cached answer."
+    make_hit_req
+    drain_in
+    feed "submit${US}cache hit test"
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$TEST_TMP/req-hit.json" --origin-pane terminal_7
+    The status should be success
+    The contents of file "$TEST_TMP/in.log" should include "close"
+    # render must be invoked with the cache body emitter.
+    The contents of file "$TEST_TMP/zj-args" should include "new-pane"
+    The contents of file "$TEST_TMP/zj-args" should include "ai-assist-render"
+    # The body subcommand must appear in the render command.
+    The contents of file "$TEST_TMP/zj-args" should include "body"
+    # --cached flag must be forwarded.
+    The contents of file "$TEST_TMP/zj-args" should include "--cached"
+    # The cheap classify must NOT have been invoked.
+    The path "$TEST_TMP/classify-calls" should not be exist
+  End
+
+  It 'cache HIT (playbook kind): spawns render with -- <cache-bin> body <entry> and --cached flag'
+    make_classify_recorder claude
+    seed_cache playbook "## Cached Playbook\nstep 1"
+    make_hit_req
+    drain_in
+    feed "submit${US}cache hit test"
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$TEST_TMP/req-hit.json" --origin-pane terminal_7
+    The status should be success
+    The contents of file "$TEST_TMP/in.log" should include "close"
+    The contents of file "$TEST_TMP/zj-args" should include "new-pane"
+    The contents of file "$TEST_TMP/zj-args" should include "body"
+    The contents of file "$TEST_TMP/zj-args" should include "--cached"
+    The path "$TEST_TMP/classify-calls" should not be exist
+  End
+
+  It 'cache MISS (no entry): falls through to the normal classify path'
+    make_worker claude "__ANSWER__"$'\n'"A fresh answer." 0
+    # Ensure cache data dir exists but does NOT contain an entry for this request.
+    export AI_ASSIST_DATA_DIR="$TEST_TMP/cache-data"
+    mkdir -p "$AI_ASSIST_DATA_DIR"
+    make_hit_req
+    drain_in
+    # Different request text → no entry in the cache → miss.
+    feed "submit${US}this request has no cache entry"
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$TEST_TMP/req-hit.json" --origin-pane terminal_7
+    The status should be success
+    The contents of file "$TEST_TMP/in.log" should include "close"
+    # Normal answer route: render is spawned without "body" (uses printf payload).
+    The contents of file "$TEST_TMP/zj-args" should include "new-pane"
+    The contents of file "$TEST_TMP/zj-args" should include "ai-assist-render"
+  End
+
+  It 'AI_ASSIST_NO_CACHE=1 forces a miss and invokes the classify path'
+    make_classify_recorder claude
+    seed_cache answer "Cached answer that should be bypassed."
+    make_hit_req
+    drain_in
+    feed "submit${US}cache hit test"
+    # Export AI_ASSIST_NO_CACHE before When run so the subprocess inherits it.
+    export AI_ASSIST_NO_CACHE=1
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$TEST_TMP/req-hit.json" --origin-pane terminal_7
+    The status should be success
+    The contents of file "$TEST_TMP/in.log" should include "close"
+    # Classify was called (no-cache forced the miss).
+    The path "$TEST_TMP/classify-calls" should be file
+  End
 End

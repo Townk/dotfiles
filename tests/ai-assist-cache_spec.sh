@@ -330,6 +330,48 @@ Describe 'ai-assist-cache'
     End
   End
 
+  # ── field subcommand ──────────────────────────────────────────────────────────
+
+  Describe 'field'
+    setup_field_entry() {
+      body_file="$TEST_TMP/field-body.txt"
+      printf 'the body\n' > "$body_file"
+      field_entry="$("$SCRIPT" store "fctx" "freq" playbook "$body_file" \
+        "request=test request" "project_root=/tmp/proj" "harness=claude" 2>/dev/null)"
+    }
+    BeforeEach 'setup_field_entry'
+
+    It 'reads the kind field from the front matter'
+      When run "$SCRIPT" field "$field_entry" kind
+      The status should be success
+      The output should equal 'playbook'
+    End
+
+    It 'reads the created_at field from the front matter'
+      result="$("$SCRIPT" field "$field_entry" created_at 2>/dev/null)"
+      # created_at is an ISO-8601 timestamp — just verify it is non-empty and has
+      # the expected structure (YYYY-MM-DD…).
+      The value "$result" should match pattern '????-??-??*'
+    End
+
+    It 'exits 1 and prints nothing for an absent key'
+      When run "$SCRIPT" field "$field_entry" nonexistent_key
+      The status should eq 1
+      The output should equal ''
+    End
+
+    It 'exits 1 for a missing file'
+      When run "$SCRIPT" field "$TEST_TMP/no-such-file.md" kind
+      The status should eq 1
+      The stderr should include 'file not found'
+    End
+
+    It 'does not leak body content when reading a field'
+      result="$("$SCRIPT" field "$field_entry" kind 2>/dev/null)"
+      The value "$result" should not include 'the body'
+    End
+  End
+
   # ── unknown subcommand ────────────────────────────────────────────────────────
 
   Describe 'error handling'

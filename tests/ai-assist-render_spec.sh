@@ -372,6 +372,27 @@ Describe 'ai-assist-render'
     The path "$TEST_TMP/cache-calls2" should not be exist
   End
 
+  It '--cached <ts> is forwarded to the pager as a separate --cached flag+value'
+    # Pager stub: print each arg on its own line so we can assert the flag and
+    # value appear as distinct tokens (word-split regression guard).
+    cached_pager_stub() {
+      { echo '#!/usr/bin/env zsh'
+        echo 'in=""'
+        echo 'for a in "$@"; do printf "%s\n" "$a"; done'
+        echo 'while (($#)); do [[ "$1" == "--input-fifo" ]] && { in="$2"; break; }; shift; done'
+        echo '[[ -n "$in" && -p "$in" ]] && cat -- "$in" >/dev/null'
+      } > "$TEST_TMP/pager-cached"; chmod +x "$TEST_TMP/pager-cached"
+    }
+    BeforeRun 'cached_pager_stub' 'export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager-cached"'
+    When run script "$SCRIPT" --harness X --cached "2026-06-23T12:00:00Z" -- printf 'hi\n'
+    The status should be success
+    # "--cached" and its value must appear as separate output lines.
+    The output should include "--cached"
+    The output should include "2026-06-23T12:00:00Z"
+    # Guard: they must not be collapsed into a single "--cached 2026-…" token.
+    The output should not include "--cached 2026-06-23"
+  End
+
   It 'passes --shell-fifo and --results-fifo to the broker and --results-fifo to the pager'
     # Broker stub: record all argv to broker.args, then exec sleep so render's trap
     # can kill it.

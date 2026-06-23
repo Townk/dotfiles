@@ -195,6 +195,35 @@ _log() {
     >> "$prompts_file"
 }
 
+# ── Subcommand: field ─────────────────────────────────────────────────────────
+# Print the YAML front-matter value for <key> from the leading ---…--- block.
+# Exits 0 + prints the value on success; exits 1 + prints nothing if absent.
+_field() {
+  local entry="${1:?field: missing entry_file}"
+  local key="${2:?field: missing key}"
+  if [[ ! -f "$entry" ]]; then
+    print -ru2 -- "ai-assist-cache field: file not found: $entry"
+    return 1
+  fi
+  # Scan only the front-matter block (between first two "---" lines).
+  awk -v key="$key" '
+    BEGIN { in_fm = 1; line_no = 0; found = 0 }
+    {
+      line_no++
+      if (in_fm && line_no == 1 && $0 == "---") { next }
+      if (in_fm && $0 == "---") { in_fm = 0; next }
+      if (!in_fm) { exit }
+      # Inside front matter: look for "^key: value".
+      if (match($0, "^" key ": ")) {
+        print substr($0, RLENGTH + 1)
+        found = 1
+        exit
+      }
+    }
+    END { if (!found) exit 1 }
+  ' "$entry"
+}
+
 # ── Subcommand: body ──────────────────────────────────────────────────────────
 _body() {
   local entry="${1:?body: missing entry_file}"
@@ -274,7 +303,7 @@ _usage() {
   print -ru2 -- "subcommands: context-hash | request-hash <req> | lookup <ctx> <req>"
   print -ru2 -- "             store <ctx> <req> <kind> <body_file> [--meta-file <file>] [k=v ...]"
   print -ru2 -- "             log <ctx> <kind> <request>"
-  print -ru2 -- "             body <entry_file> | history <ctx> [N]"
+  print -ru2 -- "             body <entry_file> | field <entry_file> <key> | history <ctx> [N]"
   return 2
 }
 
@@ -289,6 +318,7 @@ case "$subcmd" in
   store)          _store "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${@:5}" ;;
   log)            _log "${1:-}" "${2:-}" "${3:-}" ;;
   body)           _body "${1:-}" ;;
+  field)          _field "${1:-}" "${2:-}" ;;
   history)        _history "${1:-}" "${2:-}" ;;
   *)
     print -ru2 -- "ai-assist-cache: unknown subcommand: $subcmd"
