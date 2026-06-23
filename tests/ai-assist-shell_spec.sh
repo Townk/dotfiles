@@ -65,6 +65,24 @@ Describe 'ai-assist-shell'
     The contents of file "$reply/exit" should equal "0"
   End
 
+  # The real execution timeout: a runaway command is killed and reported 124.
+  It 'kills a job that overruns AI_ASSIST_RUN_TIMEOUT (exit 124)'
+    kill "$SHELL_PID" 2>/dev/null
+    AI_ASSIST_RUN_TIMEOUT=1 "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
+    reply="$(run_job 'sleep 5')"
+    The contents of file "$reply/exit" should equal "124"
+  End
+
+  # The per-id pidfile (used by a stop action) is published during the run and
+  # cleaned up after it completes.
+  It 'cleans up the per-id pidfile after a run'
+    rund="$TEST_TMP/run"; mkdir "$rund"
+    kill "$SHELL_PID" 2>/dev/null
+    "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" --run-dir "$rund" & SHELL_PID=$!
+    run_job_id blk1 'true' >/dev/null
+    The path "$rund/blk1.pid" should not be exist
+  End
+
   It 'persists cwd across jobs (cd is stateful)'
     sub="$TEST_TMP/sub"; mkdir "$sub"
     run_job "cd '$sub'" >/dev/null

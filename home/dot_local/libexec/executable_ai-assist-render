@@ -88,6 +88,7 @@ typeset -i body=$((cols > 6 ? cols - 2 : 80))
 # Ownership tracking: fifos this process mktemp-ed are appended here and removed
 # by the EXIT trap. Caller-provided fifos are NOT appended — the caller owns them.
 typeset -a _owned_fifos=()
+run_dir=""  # per-request dir for run pidfiles (stop/interrupt); created with the shell
 
 # Agent's own shell (Phase C1): a real shell seeded with the origin env + cwd,
 # reachable by the harness's `ai-assist-run` through AI_ASSIST_SHELL_FIFO. Owned
@@ -104,12 +105,16 @@ if [[ -n "$shell_cwd" || -n "$shell_env" ]]; then
       mkfifo -m 600 "$shell_fifo"
       _owned_fifos+=("$shell_fifo")
     fi
-    typeset -a shell_flags=(--cmd-fifo "$shell_fifo")
+    # Per-request run dir: the shell publishes each job's pid here so the broker
+    # can stop it by id; bounds-checked + removed on cleanup.
+    run_dir="$(mktemp -d "${TMPDIR:-/tmp}/ai-assist-run.XXXXXX")"
+    typeset -a shell_flags=(--cmd-fifo "$shell_fifo" --run-dir "$run_dir")
     [[ -n "$shell_env" ]] && shell_flags+=(--env-file "$shell_env")
     [[ -n "$shell_cwd" ]] && shell_flags+=(--cwd "$shell_cwd")
     "$shell_bin" "${shell_flags[@]}" &
     shell_pid=$!
     export AI_ASSIST_SHELL_FIFO="$shell_fifo"
+    export AI_ASSIST_RUN_DIR="$run_dir"
   fi
 fi
 _dbg "shell: shell_bin='$shell_bin' → shell_fifo='${shell_fifo:-EMPTY}' shell_pid='${shell_pid:-}'"
@@ -158,6 +163,7 @@ if [[ -n "$origin_pane" ]]; then
       _dbg "broker spawn: --fifo $fifo --origin-pane $origin_pane ${shell_fifo:+--shell-fifo $shell_fifo} --results-fifo $results_fifo"
       typeset -a broker_flags=(--fifo "$fifo" --origin-pane "$origin_pane" --results-fifo "$results_fifo")
       [[ -n "$shell_fifo" ]] && broker_flags+=(--shell-fifo "$shell_fifo")
+      [[ -n "$run_dir" ]] && broker_flags+=(--run-dir "$run_dir")
       (( over_ssh )) && broker_flags+=(--over-ssh)
       "$broker" "${broker_flags[@]}" &
       broker_pid=$!
@@ -189,6 +195,7 @@ _cleanup_render() {
   [[ -n "$broker_pid" ]] && kill "$broker_pid" 2>/dev/null
   [[ -n "$shell_pid" ]] && kill "$shell_pid" 2>/dev/null
   (( ${#_owned_fifos[@]} )) && rm -f -- "${_owned_fifos[@]}"
+  [[ -n "$run_dir" ]] && rm -rf -- "$run_dir" 2>/dev/null
   if (( cleanup_provided_fifos )); then
     [[ -n "$provided_in_fifo" ]]      && rm -f -- "$provided_in_fifo" 2>/dev/null
     [[ -n "$provided_actions_fifo" ]] && rm -f -- "$provided_actions_fifo" 2>/dev/null

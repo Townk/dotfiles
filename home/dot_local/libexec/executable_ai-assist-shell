@@ -9,17 +9,27 @@
 # is the engine behind `ai-assist-run`. NOT a sandbox — commands run for real.
 set -uo pipefail
 
-cmd_fifo="" env_file="" cwd="" rc=""
+cmd_fifo="" env_file="" cwd="" rc="" run_dir="${AI_ASSIST_RUN_DIR:-}"
 while (($#)); do
   case "$1" in
     --cmd-fifo) cmd_fifo="${2:-}"; shift 2 ;;
     --env-file) env_file="${2:-}"; shift 2 ;;
     --cwd)      cwd="${2:-}"; shift 2 ;;
     --rc)       rc="${2:-}"; shift 2 ;;
+    --run-dir)  run_dir="${2:-}"; shift 2 ;;
     *)          shift ;;
   esac
 done
 [[ -n "$cmd_fifo" ]] || { print -ru2 -- "ai-assist-shell: --cmd-fifo required"; exit 2; }
+
+# Kill a process and all its descendants (depth-first). Used to enforce the
+# execution timeout and to honor an external stop. No process groups: this shell
+# is spawned without a controlling tty, so `set -m` is unavailable.
+_aas_kill_tree() {
+  local _p="$1" _sig="${2:-TERM}" _c
+  for _c in ${(f)"$(pgrep -P "$_p" 2>/dev/null)"}; do _aas_kill_tree "$_c" "$_sig"; done
+  kill -"$_sig" "$_p" 2>/dev/null
+}
 
 # Seed: optional rc (functions/aliases), then the captured env (live exported
 # state wins over rc), then cd. rc-sourcing is opt-in (the env-fidelity knob):
@@ -63,8 +73,28 @@ while IFS= read -r -d "$_aas_RS" _aas_job <&$_aas_fd; do
     _aas_rc=$?  # capture BEFORE the state-write below, or it masks the real code
     { print -r -- "cd -- ${(q)PWD}"; export -p; } > "$_aas_state"
     exit $_aas_rc  # the job's exit is the user command's, not the state-write's
-  ) >"$_aas_reply/out" 2>"$_aas_reply/err"
-  _aas_code=$?
+  ) >"$_aas_reply/out" 2>"$_aas_reply/err" &
+  _aas_pid=$!
+  # Publish the pid so a stop action (broker) can interrupt this run by id.
+  [[ -n "$_aas_id" && -n "$run_dir" && -d "$run_dir" ]] &&
+    print -rn -- "$_aas_pid" > "$run_dir/${_aas_id}.pid"
+  # Real execution timeout: poll, and kill the job tree if it overruns. This is
+  # what actually bounds runtime — ai-assist-run's wait is only a backstop.
+  _aas_max="${AI_ASSIST_RUN_TIMEOUT:-120}"
+  _aas_el=0 _aas_timedout=0
+  while kill -0 "$_aas_pid" 2>/dev/null; do
+    sleep 0.1
+    _aas_el=$(( _aas_el + 1 ))
+    if (( _aas_el >= _aas_max * 10 )); then
+      _aas_timedout=1
+      _aas_kill_tree "$_aas_pid" TERM
+      sleep 0.5; _aas_kill_tree "$_aas_pid" KILL
+      break
+    fi
+  done
+  wait "$_aas_pid"; _aas_code=$?
+  [[ -n "$_aas_id" && -n "$run_dir" ]] && rm -f "$run_dir/${_aas_id}.pid"
+  (( _aas_timedout )) && _aas_code=124  # report a timeout as 124, not the signal
   # Treat benign SIGPIPE (128+13) as success: a producer killed because a
   # downstream `| head` / `| grep -q` closed the pipe early is not a failure.
   [[ "$_aas_code" -eq 141 ]] && _aas_code=0

@@ -14,7 +14,7 @@ AI_ASSIST_BROKER_LOG="${AI_ASSIST_BROKER_LOG:-${AI_ASSIST_DEBUG_LOG:-${TMPDIR:-/
 _log() { [[ -n "${AI_ASSIST_BROKER_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) [broker] $*" >> "$AI_ASSIST_BROKER_LOG"; }
 _dbg() { _log "$@"; }
 fifo="" origin="" over_ssh=0
-results="" shell_fifo=""
+results="" shell_fifo="" run_dir="${AI_ASSIST_RUN_DIR:-}"
 while (($#)); do
   case "$1" in
     --fifo)          fifo="${2:-}"; shift 2 ;;
@@ -22,6 +22,7 @@ while (($#)); do
     --over-ssh)      over_ssh=1; shift ;;
     --results-fifo)  results="${2:-}"; shift 2 ;;
     --shell-fifo)    shell_fifo="${2:-}"; shift 2 ;;
+    --run-dir)       run_dir="${2:-}"; shift 2 ;;
     *)               shift ;;
   esac
 done
@@ -158,6 +159,27 @@ broker::run_block() {
   } &
 }
 
+# broker::kill_tree — kill a process and all its descendants (depth-first).
+broker::kill_tree() {
+  local p="$1" sig="${2:-TERM}" c
+  for c in ${(f)"$(pgrep -P "$p" 2>/dev/null)"}; do broker::kill_tree "$c" "$sig"; done
+  kill -"$sig" "$p" 2>/dev/null
+}
+
+# broker::stop_block — interrupt a running block. The agent shell published the
+# job's pid to $run_dir/<id>.pid; kill the whole tree. The shell's wait then
+# returns and the normal result record (non-zero exit) flows back, flipping the
+# block out of "running".
+broker::stop_block() {
+  local id="$1" pidfile="${run_dir:+$run_dir/${1}.pid}" pid
+  _log "stop_block id=${id} pidfile=${pidfile:-EMPTY}"
+  [[ -n "$pidfile" && -r "$pidfile" ]] || { _log "stop_block id=${id} NO_PIDFILE"; return 0; }
+  pid="$(<"$pidfile")"
+  [[ -n "$pid" ]] || return 0
+  broker::kill_tree "$pid" TERM
+  _log "stop_block id=${id} killed pid=${pid}"
+}
+
 # broker::dispatch — parse one 3-field record and route it.
 broker::dispatch() {
   local rec="$1"
@@ -170,6 +192,7 @@ broker::dispatch() {
     copy)        broker::copy "$payload" ;;
     play)        broker::play "$payload" ;;
     run)         broker::run_block "$id" "$payload" ;;
+    stop)        broker::stop_block "$id" ;;
     diff)        broker::open_diff "$id" "$payload" ;;
     view-diff)   broker::open_diff "$id" "$payload" ;;  # back-compat alias
     review-diff) broker::open_diff "$id" "$payload" ;;  # back-compat alias

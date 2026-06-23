@@ -94,6 +94,32 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/results.out" should include "$(printf '\x1f')1$(printf '\x1f')"
   End
 
+  It 'stop kills the running job tree via the per-id pidfile'
+    stopdrive() {
+      load_broker
+      run_dir="$TEST_TMP/run"; mkdir -p "$run_dir"
+      sleep 30 & local victim=$!
+      print -rn -- "$victim" > "$run_dir/blk9.pid"
+      broker::dispatch "stop${US}blk9${US}${RS}"
+      sleep 0.3
+      kill -0 "$victim" 2>/dev/null && print -r -- "ALIVE" || print -r -- "KILLED"
+    }
+    When call stopdrive
+    The output should equal "KILLED"
+  End
+
+  It 'stop is a no-op when no pidfile exists'
+    nostop() {
+      load_broker
+      run_dir="$TEST_TMP/run"; mkdir -p "$run_dir"
+      broker::dispatch "stop${US}ghost${US}${RS}"
+      print -r -- "ok"
+    }
+    When call nostop
+    The status should be success
+    The output should equal "ok"
+  End
+
   It 'diff action opens a zellij 90% floating pane on the patch'
     load_broker
     broker::dispatch "diff${US}d1${US}--- a\n+++ b${RS}"
