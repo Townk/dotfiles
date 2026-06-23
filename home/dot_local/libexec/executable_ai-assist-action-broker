@@ -80,41 +80,30 @@ broker::play() {
   "$zj" action write --pane-id "$origin" 13 2>/dev/null                  # 13 = CR = Enter
 }
 
-# broker::view_diff — open the patch in a large floating zellij pane via hunk
-# (read-only, --pager) or the viewer fallback, anchored to the project root.
-broker::view_diff() {
+# broker::open_diff — open the patch side-by-side in a large floating zellij
+# pane via hunk (--mode split) or the viewer fallback, anchored to the project
+# root. Replaces broker::view_diff and broker::review_diff.
+broker::open_diff() {
   local id="$1" diff="$2"
   [[ -n "$zj" ]] || return 0
   local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-diff.XXXXXX")"
   print -rn -- "$diff" > "$patch"
-  _dbg "view_diff id=$id patch=$patch bytes=$(wc -c < "$patch")"
+  _dbg "open_diff id=$id patch=$patch bytes=$(wc -c < "$patch")"
   if [[ -n "$hunk_bin" ]]; then
     "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
       --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "diff:$id" \
-      -- "$hunk_bin" patch --pager "$patch" 2>/dev/null || true
+      -- "$hunk_bin" patch --mode split "$patch" 2>/dev/null || true
   else
+    # Prefer delta --side-by-side when delta is the viewer; else plain viewer.
+    local _viewer_cmd
+    if [[ "${viewer%% *}" == *delta* ]]; then
+      _viewer_cmd="${viewer%% *} --side-by-side"
+    else
+      _viewer_cmd="${(z)viewer}"
+    fi
     "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
       --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "diff:$id" \
-      -- ${(z)viewer} "$patch" 2>/dev/null || true
-  fi
-}
-
-# broker::review_diff — open the patch in a large floating zellij pane via hunk
-# (review chrome) or the viewer fallback, anchored to the project root.
-broker::review_diff() {
-  local id="$1" diff="$2"
-  [[ -n "$zj" ]] || return 0
-  local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-diff.XXXXXX")"
-  print -rn -- "$diff" > "$patch"
-  _dbg "review_diff id=$id patch=$patch bytes=$(wc -c < "$patch")"
-  if [[ -n "$hunk_bin" ]]; then
-    "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
-      --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "review:$id" \
-      -- "$hunk_bin" patch "$patch" 2>/dev/null || true
-  else
-    "$zj" action new-pane --floating --width 90% --height 90% --close-on-exit \
-      --cwd "${AI_ASSIST_PROJECT_ROOT:-$PWD}" --name "review:$id" \
-      -- ${(z)viewer} "$patch" 2>/dev/null || true
+      -- ${(z)_viewer_cmd} "$patch" 2>/dev/null || true
   fi
 }
 
@@ -178,11 +167,12 @@ broker::dispatch() {
   local payload="${rest#*${US}}"
   payload="${payload%${RS}}"
   case "$kind" in
-    copy)       broker::copy "$payload" ;;
-    play)       broker::play "$payload" ;;
-    run)        broker::run_block "$id" "$payload" ;;
-    view-diff)   broker::view_diff "$id" "$payload" ;;
-    review-diff) broker::review_diff "$id" "$payload" ;;
+    copy)        broker::copy "$payload" ;;
+    play)        broker::play "$payload" ;;
+    run)         broker::run_block "$id" "$payload" ;;
+    diff)        broker::open_diff "$id" "$payload" ;;
+    view-diff)   broker::open_diff "$id" "$payload" ;;  # back-compat alias
+    review-diff) broker::open_diff "$id" "$payload" ;;  # back-compat alias
     apply-diff)  broker::apply_diff "$id" "$payload" ;;
   esac
 }

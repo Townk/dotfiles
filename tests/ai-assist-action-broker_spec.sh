@@ -94,9 +94,9 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/results.out" should include "$(printf '\x1f')1$(printf '\x1f')"
   End
 
-  It 'view-diff opens a zellij floating pane on the patch'
+  It 'diff action opens a zellij 90% floating pane on the patch'
     load_broker
-    broker::dispatch "view-diff${US}d1${US}--- a\n+++ b${RS}"
+    broker::dispatch "diff${US}d1${US}--- a\n+++ b${RS}"
     The contents of file "$TEST_TMP/zj.log" should include "new-pane"
     The contents of file "$TEST_TMP/zj.log" should include "--floating"
     The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
@@ -104,17 +104,45 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/zj.log" should include "--cwd"
   End
 
-  It 'view-diff uses hunk --pager when hunk is available'
+  It 'diff action uses hunk patch --mode split (side-by-side) when hunk is available'
     load_broker
     printf '#!/usr/bin/env zsh\nprint -r -- "hunk $*"\n' > "$TEST_TMP/hunk"; chmod +x "$TEST_TMP/hunk"
     hunk_bin="$TEST_TMP/hunk"
-    broker::view_diff d3 "--- a"$'\n'"+++ b"
+    broker::open_diff d3 "--- a"$'\n'"+++ b"
     The contents of file "$TEST_TMP/zj.log" should include "new-pane"
     The contents of file "$TEST_TMP/zj.log" should include "--floating"
     The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
     The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
     The contents of file "$TEST_TMP/zj.log" should include "--cwd"
-    The contents of file "$TEST_TMP/zj.log" should include "hunk patch --pager"
+    The contents of file "$TEST_TMP/zj.log" should include "hunk patch --mode split"
+  End
+
+  It 'view-diff alias routes to open_diff (back-compat)'
+    load_broker
+    printf '#!/usr/bin/env zsh\nprint -r -- "hunk $*"\n' > "$TEST_TMP/hunk"; chmod +x "$TEST_TMP/hunk"
+    hunk_bin="$TEST_TMP/hunk"
+    broker::dispatch "view-diff${US}d4${US}--- a\n+++ b${RS}"
+    The contents of file "$TEST_TMP/zj.log" should include "hunk patch --mode split"
+  End
+
+  It 'review-diff alias routes to open_diff (back-compat)'
+    load_broker
+    printf '#!/usr/bin/env zsh\nprint -r -- "hunk $*"\n' > "$TEST_TMP/hunk"; chmod +x "$TEST_TMP/hunk"
+    hunk_bin="$TEST_TMP/hunk"
+    broker::dispatch "review-diff${US}d5${US}--- a\n+++ b${RS}"
+    The contents of file "$TEST_TMP/zj.log" should include "hunk patch --mode split"
+  End
+
+  It 'open_diff falls back to viewer (no hunk) and uses delta --side-by-side when delta is viewer'
+    load_broker
+    hunk_bin=""   # no hunk
+    viewer="/opt/homebrew/bin/delta --paging=always"
+    broker::open_diff d6 "--- a"$'\n'"+++ b"
+    The contents of file "$TEST_TMP/zj.log" should include "new-pane"
+    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "delta --side-by-side"
+    The contents of file "$TEST_TMP/zj.log" should not include "hunk"
   End
 
   It 'apply-diff runs git apply via ai-assist-run and writes a result record'
@@ -131,29 +159,4 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/ranlog" should include "git apply"
   End
 
-  It 'review-diff opens hunk in a floating pane when hunk is available'
-    load_broker
-    # stub hunk on PATH so the resolver finds it
-    printf '#!/usr/bin/env zsh\nprint -r -- "hunk $*"\n' > "$TEST_TMP/hunk"; chmod +x "$TEST_TMP/hunk"
-    PATH="$TEST_TMP:$PATH"
-    hunk_bin="$TEST_TMP/hunk"   # force the resolver in the test (see impl note)
-    broker::review_diff r1 "--- a"$'\n'"+++ b"
-    The contents of file "$TEST_TMP/zj.log" should include "new-pane"
-    The contents of file "$TEST_TMP/zj.log" should include "--floating"
-    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
-    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
-    The contents of file "$TEST_TMP/zj.log" should include "--cwd"
-    The contents of file "$TEST_TMP/zj.log" should include "hunk patch"
-  End
-
-  It 'review-diff falls back to the viewer when hunk is absent'
-    load_broker
-    hunk_bin=""   # no hunk
-    broker::review_diff r2 "--- a"$'\n'"+++ b"
-    The contents of file "$TEST_TMP/zj.log" should include "new-pane"
-    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
-    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
-    The contents of file "$TEST_TMP/zj.log" should include "--cwd"
-    The contents of file "$TEST_TMP/zj.log" should not include "hunk"
-  End
 End
