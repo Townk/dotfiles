@@ -120,15 +120,13 @@ Describe 'ai-assist-action-broker'
     The output should equal "ok"
   End
 
-  It 'diff action floats over the origin pane (left-anchored, full height)'
+  It 'diff action opens a zellij 90% floating pane on the patch'
     load_broker
     broker::dispatch "diff${US}d1${US}--- a\n+++ b${RS}"
     The contents of file "$TEST_TMP/zj.log" should include "new-pane"
     The contents of file "$TEST_TMP/zj.log" should include "--floating"
-    The contents of file "$TEST_TMP/zj.log" should include "--x 0"
-    The contents of file "$TEST_TMP/zj.log" should include "--y 0"
-    The contents of file "$TEST_TMP/zj.log" should include "--width 60%"
-    The contents of file "$TEST_TMP/zj.log" should include "--height 100%"
+    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
     The contents of file "$TEST_TMP/zj.log" should include "--cwd"
   End
 
@@ -139,8 +137,8 @@ Describe 'ai-assist-action-broker'
     broker::open_diff d3 "--- a"$'\n'"+++ b"
     The contents of file "$TEST_TMP/zj.log" should include "new-pane"
     The contents of file "$TEST_TMP/zj.log" should include "--floating"
-    The contents of file "$TEST_TMP/zj.log" should include "--width 60%"
-    The contents of file "$TEST_TMP/zj.log" should include "--height 100%"
+    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
     The contents of file "$TEST_TMP/zj.log" should include "--cwd"
     The contents of file "$TEST_TMP/zj.log" should include "hunk patch --mode split"
   End
@@ -167,8 +165,8 @@ Describe 'ai-assist-action-broker'
     viewer="/opt/homebrew/bin/delta --paging=always"
     broker::open_diff d6 "--- a"$'\n'"+++ b"
     The contents of file "$TEST_TMP/zj.log" should include "new-pane"
-    The contents of file "$TEST_TMP/zj.log" should include "--width 60%"
-    The contents of file "$TEST_TMP/zj.log" should include "--height 100%"
+    The contents of file "$TEST_TMP/zj.log" should include "--width 90%"
+    The contents of file "$TEST_TMP/zj.log" should include "--height 90%"
     The contents of file "$TEST_TMP/zj.log" should include "delta --side-by-side"
     The contents of file "$TEST_TMP/zj.log" should not include "hunk"
   End
