@@ -44,4 +44,37 @@ Describe 'ai-assist-run'
     The output should equal "wired"
     The status should equal 0
   End
+
+  Describe 'timeout'
+    timeout_setup() {
+      # Kill the real shell started by outer BeforeEach — not needed here.
+      kill "$SHELL_PID" 2>/dev/null; unset SHELL_PID
+      # Fresh fifo with no shell servicing it.  A background zsh holds the
+      # read end open (so the write in ai-assist-run doesn't block on open),
+      # but never writes 'done', so the poll times out.
+      TIMEOUT_TMP="$(mktemp -d)"
+      TIMEOUT_FIFO="$TIMEOUT_TMP/timeout.fifo"
+      mkfifo "$TIMEOUT_FIFO"
+      # Open read end in a background job so write-open in ai-assist-run
+      # doesn't block; the job will be killed in timeout_cleanup.
+      zsh -c "cat '$TIMEOUT_FIFO' >/dev/null" &
+      DRAIN_PID=$!
+      export AI_ASSIST_SHELL_FIFO="$TIMEOUT_FIFO"
+      export TMPDIR="$TIMEOUT_TMP"
+      export AI_ASSIST_RUN_TIMEOUT=1
+    }
+    timeout_cleanup() {
+      kill "$DRAIN_PID" 2>/dev/null
+      rm -rf "$TIMEOUT_TMP"
+      unset AI_ASSIST_RUN_TIMEOUT DRAIN_PID TIMEOUT_TMP TIMEOUT_FIFO
+    }
+    BeforeEach 'timeout_setup'
+    AfterEach 'timeout_cleanup'
+
+    It 'exits 124 and prints message when agent shell never responds'
+      When run "$RUN" 'echo unreachable'
+      The status should eq 124
+      The stderr should include "timed out after 1s"
+    End
+  End
 End

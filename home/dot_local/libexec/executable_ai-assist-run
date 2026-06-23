@@ -24,10 +24,21 @@ fifo="${AI_ASSIST_SHELL_FIFO:-}"
 
 US=$'\x1f' RS=$'\x1e'
 reply="$(mktemp -d "${TMPDIR:-/tmp}/ai-assist-run.XXXXXX")"
-trap 'rm -rf -- "$reply"' EXIT INT TERM
+trap 'rm -rf -- "$reply" 2>/dev/null' EXIT
+trap 'rm -rf -- "$reply" 2>/dev/null; exit 130' INT
+trap 'rm -rf -- "$reply" 2>/dev/null; exit 143' TERM
 
+local max="${AI_ASSIST_RUN_TIMEOUT:-120}"
 print -rn -- "${reply}${US}${id}${US}${cmd}${RS}" > "$fifo"
-while [[ ! -e "$reply/done" ]]; do sleep 0.02; done
+local elapsed=0 interval=0.02
+while [[ ! -e "$reply/done" ]]; do
+  sleep "$interval"
+  (( elapsed++ ))
+  if (( elapsed * interval >= max )); then
+    print -ru2 -- "ai-assist-run: timed out after ${max}s (agent shell not responding)"
+    exit 124
+  fi
+done
 
 code="$(<"$reply/exit")"
 : "${code:=1}"
