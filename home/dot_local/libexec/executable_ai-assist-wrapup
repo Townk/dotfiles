@@ -43,11 +43,18 @@ while (($#)); do
   esac
 done
 
-[[ -n "$ctx" && -n "$req" && -n "$input_fifo" ]] || {
-  print -ru2 -- "usage: ai-assist-wrapup --ctx H --req H --input-fifo P [--run-dir D] [--request-file F] [--harness H]"
+# ctx + req are optional when --request-file is given: the helper resolves the
+# request from the file directly (priority 1) and only falls back to the cache
+# sidecar (priority 2) or entry front matter (priority 3) when they are set.
+[[ -n "$input_fifo" ]] || {
+  print -ru2 -- "usage: ai-assist-wrapup [--ctx H --req H] --input-fifo P [--run-dir D] [--request-file F] [--harness H]"
   exit 1
 }
-_dbg "invoked ctx=$ctx req=$req input-fifo=$input_fifo run-dir=${run_dir:-}"
+[[ -n "$ctx" || -n "$req" || -n "$request_file_override" ]] || {
+  print -ru2 -- "ai-assist-wrapup: at least one of --ctx/--req or --request-file is required"
+  exit 1
+}
+_dbg "invoked ctx=${ctx:-EMPTY} req=${req:-EMPTY} input-fifo=$input_fifo run-dir=${run_dir:-}"
 
 # ── Cache binary — best-effort (same precedence as triage) ───────────────────
 cache_bin=""

@@ -176,6 +176,18 @@ JSON
     The value "$fifo_hex" should not include "107110"
   End
 
+  # ── (d4) --request-file only (empty ctx/req): streams wrap-up without cache ──
+  It '(d4) with --request-file and empty ctx/req, streams wrap-up to input-fifo (no cache needed)'
+    make_wrapup_worker claude "## Solution: request-file only path"
+    # Do NOT seed a cache entry; pass empty ctx/req — the helper must use request-file.
+    When run script "$SCRIPT" \
+      --ctx "" --req "" \
+      --input-fifo "$INPUT_FILE" \
+      --request-file "$REQ"
+    The status should be success
+    The contents of file "$INPUT_FILE" should include "Solution"
+  End
+
   # ── (e) solution artifact includes front-matter header ─────────────────────
   It '(e) solution artifact starts with a front-matter header'
     make_wrapup_worker claude "## Solution: done"

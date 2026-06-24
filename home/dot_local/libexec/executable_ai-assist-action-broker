@@ -17,6 +17,13 @@ _dbg() { _log "$@"; }
 fifo="" origin="" over_ssh=0
 results="" shell_fifo="" run_dir="${AI_ASSIST_RUN_DIR:-}"
 input_fifo="" regen_ctx="" regen_req="" regen_request=""
+
+# broker::input_error — write a visible warning to the input FIFO so the pager
+# is unblocked and displays the error instead of hanging on an empty read.
+# Writing (and closing) the FIFO unblocks the pager's blocking open() on the
+# read end and stops the spinner. No-op when input_fifo is unset or the write
+# fails (best-effort).
+broker::input_error() { [[ -n "$input_fifo" ]] && printf '\n\n> ⚠ %s\n' "$1" > "$input_fifo" 2>/dev/null || true; }
 while (($#)); do
   case "$1" in
     --fifo)            fifo="${2:-}"; shift 2 ;;
@@ -227,6 +234,8 @@ broker::regenerate() {
 # broker::wrapup — invoke ai-assist-wrapup in the background to build a
 # session summary and stream it into the existing pane via the input FIFO.
 # Mirrors broker::regenerate: runs in the background, best-effort guard.
+# Guard: input_fifo must be set AND (regen_request OR (regen_ctx AND regen_req))
+# must be available so the helper can resolve the original request.
 broker::wrapup() {
   local wrapup_bin="${AI_ASSIST_WRAPUP_BIN:-}"
   if [[ -z "$wrapup_bin" ]]; then
@@ -236,9 +245,23 @@ broker::wrapup() {
       [[ -n "$_w" && -x "$_w" ]] && { wrapup_bin="$_w"; break; }
     done
   fi
-  [[ -n "$regen_ctx" && -n "$regen_req" && -n "$input_fifo" && -n "$wrapup_bin" && -x "$wrapup_bin" ]] || return 0
-  _log "wrapup: ctx=$regen_ctx req=$regen_req input_fifo=$input_fifo run_dir=${run_dir:-EMPTY}"
-  "$wrapup_bin" --ctx "$regen_ctx" --req "$regen_req" --input-fifo "$input_fifo" \
+  # Bail out (and unblock the pager) if input_fifo is missing.
+  if [[ -z "$input_fifo" ]]; then return 0; fi
+  # Bail out with an error if the helper is not resolvable.
+  if [[ -z "$wrapup_bin" || ! -x "$wrapup_bin" ]]; then
+    broker::input_error "could not start the wrap-up"
+    return 0
+  fi
+  # Bail out with an error if there is no way to resolve the original request.
+  if [[ -z "$regen_request" && ( -z "$regen_ctx" || -z "$regen_req" ) ]]; then
+    broker::input_error "could not start the wrap-up"
+    return 0
+  fi
+  _log "wrapup: ctx=${regen_ctx:-EMPTY} req=${regen_req:-EMPTY} regen_request=${regen_request:-EMPTY} input_fifo=$input_fifo run_dir=${run_dir:-EMPTY}"
+  "$wrapup_bin" \
+    ${regen_ctx:+--ctx "$regen_ctx"} \
+    ${regen_req:+--req "$regen_req"} \
+    --input-fifo "$input_fifo" \
     ${run_dir:+--run-dir "$run_dir"} \
     ${regen_request:+--request-file "$regen_request"} \
     >/dev/null 2>&1 &
@@ -247,6 +270,8 @@ broker::wrapup() {
 # broker::followup — invoke ai-assist-followup in the background to re-engage the
 # agent with a "the previous fix did not work" prompt when a verify block fails.
 # Mirrors broker::wrapup: runs in the background, best-effort guard.
+# Guard: input_fifo must be set AND (regen_request OR (regen_ctx AND regen_req))
+# must be available so the helper can resolve the original request.
 broker::followup() {
   local block_id="$1" failed_cmd="$2"
   local followup_bin="${AI_ASSIST_FOLLOWUP_BIN:-}"
@@ -257,9 +282,23 @@ broker::followup() {
       [[ -n "$_f" && -x "$_f" ]] && { followup_bin="$_f"; break; }
     done
   fi
-  [[ -n "$regen_ctx" && -n "$regen_req" && -n "$input_fifo" && -n "$followup_bin" && -x "$followup_bin" ]] || return 0
-  _log "followup: ctx=$regen_ctx req=$regen_req input_fifo=$input_fifo block_id=${block_id} run_dir=${run_dir:-EMPTY}"
-  "$followup_bin" --ctx "$regen_ctx" --req "$regen_req" --input-fifo "$input_fifo" \
+  # Bail out (and unblock the pager) if input_fifo is missing.
+  if [[ -z "$input_fifo" ]]; then return 0; fi
+  # Bail out with an error if the helper is not resolvable.
+  if [[ -z "$followup_bin" || ! -x "$followup_bin" ]]; then
+    broker::input_error "could not start the follow-up"
+    return 0
+  fi
+  # Bail out with an error if there is no way to resolve the original request.
+  if [[ -z "$regen_request" && ( -z "$regen_ctx" || -z "$regen_req" ) ]]; then
+    broker::input_error "could not start the follow-up"
+    return 0
+  fi
+  _log "followup: ctx=${regen_ctx:-EMPTY} req=${regen_req:-EMPTY} regen_request=${regen_request:-EMPTY} input_fifo=$input_fifo block_id=${block_id} run_dir=${run_dir:-EMPTY}"
+  "$followup_bin" \
+    ${regen_ctx:+--ctx "$regen_ctx"} \
+    ${regen_req:+--req "$regen_req"} \
+    --input-fifo "$input_fifo" \
     ${run_dir:+--run-dir "$run_dir"} \
     --block-id "$block_id" --failed-cmd "$failed_cmd" \
     ${regen_request:+--request-file "$regen_request"} \

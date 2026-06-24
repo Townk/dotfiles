@@ -171,6 +171,25 @@ JSON
       The contents of file "$TEST_TMP/zj-args" should include "--project-root"
       The contents of file "$TEST_TMP/zj-args" should include "/tmp/proj"
     End
+
+    It 'passes --cache-request to ai-assist-render even when AI_ASSIST_CACHE_CTX is unset'
+      # Fix 2 regression guard: --cache-request must be forwarded unconditionally
+      # whenever request_file is set, not only when AI_ASSIST_CACHE_CTX is set.
+      # This ensures follow-up/wrap-up can resolve the original request on non-cached
+      # escalations (the cache-disabled path that caused the deadlock).
+      render_dir="$TEST_TMP/home/.local/libexec"
+      mkdir -p "$render_dir"
+      printf '#!/usr/bin/env zsh\n' > "$render_dir/ai-assist-render"; chmod +x "$render_dir/ai-assist-render"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      export AI_ASSIST_RENDER=1
+      unset AI_ASSIST_CACHE_CTX 2>/dev/null || true
+      unset AI_ASSIST_CACHE_REQ 2>/dev/null || true
+      When run script "$(SCRIPT)" --request "$TEST_TMP/req.json"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "--cache-request"
+      The contents of file "$TEST_TMP/zj-args" should include "req.json"
+    End
   End
 
   Describe 'ai-assist-pi'

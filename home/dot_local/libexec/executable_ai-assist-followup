@@ -44,11 +44,18 @@ while (($#)); do
   esac
 done
 
-[[ -n "$ctx" && -n "$req" && -n "$input_fifo" ]] || {
-  print -ru2 -- "usage: ai-assist-followup --ctx H --req H --input-fifo P --block-id ID --failed-cmd TEXT [--run-dir D] [--request-file F] [--harness H]"
+# ctx + req are optional when --request-file is given: the helper resolves the
+# request from the file directly (priority 1) and only falls back to the cache
+# sidecar (priority 2) or entry front matter (priority 3) when they are set.
+[[ -n "$input_fifo" ]] || {
+  print -ru2 -- "usage: ai-assist-followup [--ctx H --req H] --input-fifo P --block-id ID --failed-cmd TEXT [--run-dir D] [--request-file F] [--harness H]"
   exit 1
 }
-_dbg "invoked ctx=$ctx req=$req block-id=$block_id input-fifo=$input_fifo failed-cmd=${failed_cmd:-} run-dir=${run_dir:-}"
+[[ -n "$ctx" || -n "$req" || -n "$request_file_override" ]] || {
+  print -ru2 -- "ai-assist-followup: at least one of --ctx/--req or --request-file is required"
+  exit 1
+}
+_dbg "invoked ctx=${ctx:-EMPTY} req=${req:-EMPTY} block-id=$block_id input-fifo=$input_fifo failed-cmd=${failed_cmd:-} run-dir=${run_dir:-}"
 
 # ── Cache binary — best-effort (same precedence as triage) ───────────────────
 cache_bin=""

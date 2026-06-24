@@ -188,6 +188,19 @@ JSON
     The value "$fifo_hex" should not include "107110"
   End
 
+  # ── (e4) --request-file only (empty ctx/req): streams follow-up without cache ──
+  It '(e4) with --request-file and empty ctx/req, streams follow-up to input-fifo (no cache needed)'
+    make_followup_worker claude "## Revised fix: request-file only path"
+    # Do NOT seed a cache entry; pass empty ctx/req — the helper must use request-file.
+    When run script "$SCRIPT" \
+      --ctx "" --req "" \
+      --input-fifo "$INPUT_FILE" \
+      --block-id "verify" --failed-cmd "make test" \
+      --request-file "$REQ"
+    The status should be success
+    The contents of file "$INPUT_FILE" should include "Revised fix"
+  End
+
   # ── (f) the prompt includes output read from the runlog logpath ─────────────
   It '(f) the prompt includes the failed command output read from runlog logpath'
     make_followup_worker claude "## Revised fix: done"

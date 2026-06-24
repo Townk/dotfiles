@@ -375,6 +375,55 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/followup-args" should include "make test"
   End
 
+  # ── Deadlock-prevention: followup with no regen keys and no helper writes ⚠ ──
+
+  It 'followup with input_fifo set but no regen keys and no helper writes ⚠ error to the fifo'
+    drive_followup_nokeys() {
+      load_broker
+      # No regen_ctx, no regen_req, no regen_request, no followup bin.
+      regen_ctx=""
+      regen_req=""
+      regen_request=""
+      input_fifo="$TEST_TMP/fu-nokeys.txt"
+      : > "$input_fifo"
+      AI_ASSIST_FOLLOWUP_BIN="/nonexistent/ai-assist-followup"
+      broker::dispatch "followup${US}verify${US}make test${RS}"
+      sleep 0.1
+    }
+    When call drive_followup_nokeys
+    The status should be success
+    The contents of file "$TEST_TMP/fu-nokeys.txt" should include "⚠"
+    The contents of file "$TEST_TMP/fu-nokeys.txt" should include "could not start the follow-up"
+  End
+
+  # ── followup with regen_request (no ctx/req): invokes helper with --request-file ──
+
+  It 'followup with regen_request set (no ctx/req) invokes helper with --request-file'
+    drive_followup_reqfile() {
+      load_broker
+      regen_ctx=""
+      regen_req=""
+      regen_request="$TEST_TMP/request.json"
+      printf '{"user_request":"x"}\n' > "$regen_request"
+      input_fifo="$TEST_TMP/fu-reqfile.txt"
+      : > "$input_fifo"
+      {
+        echo '#!/usr/bin/env zsh'
+        echo "printf '%s\n' \"\$@\" >> \"$TEST_TMP/fu-rf-args\""
+      } > "$TEST_TMP/fu-rf-stub"; chmod +x "$TEST_TMP/fu-rf-stub"
+      AI_ASSIST_FOLLOWUP_BIN="$TEST_TMP/fu-rf-stub"
+      broker::dispatch "followup${US}verify${US}make test${RS}"
+      sleep 0.3
+    }
+    When call drive_followup_reqfile
+    The status should be success
+    The path "$TEST_TMP/fu-rf-args" should be file
+    The contents of file "$TEST_TMP/fu-rf-args" should include "--request-file"
+    The contents of file "$TEST_TMP/fu-rf-args" should include "request.json"
+    The contents of file "$TEST_TMP/fu-rf-args" should include "--block-id"
+    The contents of file "$TEST_TMP/fu-rf-args" should include "verify"
+  End
+
   # ── Stage C3b: wrapup action ──────────────────────────────────────────────────
 
   It 'wrapup dispatch invokes ai-assist-wrapup with --ctx/--req/--input-fifo/--run-dir'
@@ -403,6 +452,53 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/wrapup-args" should include "--input-fifo"
     The contents of file "$TEST_TMP/wrapup-args" should include "wrapup.fifo"
     The contents of file "$TEST_TMP/wrapup-args" should include "--run-dir"
+  End
+
+  # ── Deadlock-prevention: wrapup with no regen keys and no helper writes ⚠ ──
+
+  It 'wrapup with input_fifo set but no regen keys and no helper writes ⚠ error to the fifo'
+    drive_wrapup_nokeys() {
+      load_broker
+      regen_ctx=""
+      regen_req=""
+      regen_request=""
+      input_fifo="$TEST_TMP/wu-nokeys.txt"
+      : > "$input_fifo"
+      AI_ASSIST_WRAPUP_BIN="/nonexistent/ai-assist-wrapup"
+      broker::dispatch "wrapup${US}w1${US}${RS}"
+      sleep 0.1
+    }
+    When call drive_wrapup_nokeys
+    The status should be success
+    The contents of file "$TEST_TMP/wu-nokeys.txt" should include "⚠"
+    The contents of file "$TEST_TMP/wu-nokeys.txt" should include "could not start the wrap-up"
+  End
+
+  # ── wrapup with regen_request (no ctx/req): invokes helper with --request-file ──
+
+  It 'wrapup with regen_request set (no ctx/req) invokes helper with --request-file'
+    drive_wrapup_reqfile() {
+      load_broker
+      regen_ctx=""
+      regen_req=""
+      regen_request="$TEST_TMP/wu-request.json"
+      printf '{"user_request":"x"}\n' > "$regen_request"
+      input_fifo="$TEST_TMP/wu-reqfile.txt"
+      : > "$input_fifo"
+      {
+        echo '#!/usr/bin/env zsh'
+        echo "printf '%s\n' \"\$@\" >> \"$TEST_TMP/wu-rf-args\""
+      } > "$TEST_TMP/wu-rf-stub"; chmod +x "$TEST_TMP/wu-rf-stub"
+      AI_ASSIST_WRAPUP_BIN="$TEST_TMP/wu-rf-stub"
+      broker::dispatch "wrapup${US}w1${US}${RS}"
+      sleep 0.3
+    }
+    When call drive_wrapup_reqfile
+    The status should be success
+    The path "$TEST_TMP/wu-rf-args" should be file
+    The contents of file "$TEST_TMP/wu-rf-args" should include "--request-file"
+    The contents of file "$TEST_TMP/wu-rf-args" should include "wu-request.json"
+    The contents of file "$TEST_TMP/wu-rf-args" should include "--input-fifo"
   End
 
 End

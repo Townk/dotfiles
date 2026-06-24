@@ -399,8 +399,11 @@ assist::worker_main() {
     [[ -n "${AI_ASSIST_CACHE_REQ:-}" ]]  && render_flags+=(--cache-req "$AI_ASSIST_CACHE_REQ")
     [[ -n "${AI_ASSIST_CACHE_META:-}" ]] && render_flags+=(--cache-meta "$AI_ASSIST_CACHE_META")
     # Forward request.json (same reason: ARG not env) so render saves the regenerate
-    # sidecar alongside the persisted playbook.
-    [[ -n "${AI_ASSIST_CACHE_CTX:-}" && -n "$request_file" ]] && render_flags+=(--cache-request "$request_file")
+    # sidecar alongside the persisted playbook. Forwarded unconditionally when the
+    # file exists so follow-up/wrap-up can resolve the request even when the cache
+    # is disabled (no AI_ASSIST_CACHE_CTX) — render/broker pass it through as
+    # --regen-request, and the helpers use it as priority-1 request resolution.
+    [[ -n "$request_file" ]] && render_flags+=(--cache-request "$request_file")
     # Forward the debug log path (ARG, not env: new-pane drops env) so the pane's
     # broker/pager/helpers all log to it.
     [[ -n "${AI_ASSIST_DEBUG_LOG:-}" ]] && render_flags+=(--debug-log "$AI_ASSIST_DEBUG_LOG")
