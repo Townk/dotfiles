@@ -37,6 +37,9 @@ source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
 US=$'\x1f'   # field separator inside a record
 RS=$'\x1e'   # record terminator
 
+# ── Debug logging (gated on AI_ASSIST_DEBUG_LOG) ─────────────────────────────
+_dbg() { [[ -n "${AI_ASSIST_DEBUG_LOG:-}" ]] && printf '[triage %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >> "$AI_ASSIST_DEBUG_LOG" 2>/dev/null || true; }
+
 out_fifo="" in_fifo="" request="" origin_pane=""
 while (($#)); do
   case "$1" in
@@ -225,6 +228,8 @@ if [[ -n "$_cache_bin" ]]; then
   _cache_ctx="$("$_cache_bin" context-hash 2>/dev/null)" || _cache_ctx=""
   _cache_req="$("$_cache_bin" request-hash "$REQ_USER_REQUEST" 2>/dev/null)" || _cache_req=""
 fi
+_dbg "cache-hash: ctx=$_cache_ctx req=$_cache_req"
+_dbg "cache-hash: REQ_COMMAND_TEXT=${REQ_COMMAND_TEXT:-<empty>} REQ_COMMAND_EXIT=${REQ_COMMAND_EXIT:-<empty>} REQ_SCROLLBACK_LEN=${#REQ_SCROLLBACK}"
 
 # ── Cache: lookup BEFORE cheap model ─────────────────────────────────────────
 # On a hit, replay by kind and exit WITHOUT running the classify step.
@@ -236,6 +241,7 @@ if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" \
     # HIT — read kind + created_at from front matter.
     _hit_kind="$("$_cache_bin" field "$_cache_entry" kind 2>/dev/null)" || _hit_kind=""
     _hit_created="$("$_cache_bin" field "$_cache_entry" created_at 2>/dev/null)" || _hit_created=""
+    _dbg "cache-lookup: HIT $_cache_entry kind=$_hit_kind"
 
     # Bump recency log (best-effort).
     [[ -n "$_hit_kind" ]] && \
@@ -278,6 +284,7 @@ if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" \
 fi
 
 # ── MISS (or cache unavailable / NO_CACHE set) ────────────────────────────────
+_dbg "cache-lookup: MISS (or NO_CACHE=${AI_ASSIST_NO_CACHE:-0})"
 # Fall through to the existing classify + route + Stage-2 persist flow.
 
 # ── 3–4. Run the cheap pass (if a harness resolves) and classify ─────────────
@@ -357,6 +364,7 @@ fi
 
 case "$kind" in
   command)
+    _dbg "route: command kind"
     if [[ -n "$origin_pane" ]]; then
       zj="$(assist::zellij_bin)" || zj=""
       if [[ -n "$zj" ]]; then
@@ -378,6 +386,7 @@ case "$kind" in
           [[ -n "$_cache_meta" ]] && _store_args+=(--meta-file "$_cache_meta")
           _store_args+=(--request-file "$request")
           "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+          _dbg "cache-lookup: STORE command ctx=$_cache_ctx req=$_cache_req"
           rm -f -- "$_body_tmp" 2>/dev/null || true
         fi
       fi
@@ -396,6 +405,7 @@ case "$kind" in
           [[ -n "$_cache_meta" ]] && _store_args+=(--meta-file "$_cache_meta")
           _store_args+=(--request-file "$request")
           "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+          _dbg "cache-lookup: STORE command ctx=$_cache_ctx req=$_cache_req (no-origin-pane branch)"
           rm -f -- "$_body_tmp" 2>/dev/null || true
         fi
       fi
@@ -404,6 +414,7 @@ case "$kind" in
     fi
     ;;
   answer)
+    _dbg "route: answer kind"
     # Store the answer result (best-effort).
     if [[ -n "$_cache_bin" && -n "$_cache_ctx" && -n "$_cache_req" ]]; then
       local _body_tmp
@@ -414,6 +425,7 @@ case "$kind" in
         [[ -n "$_cache_meta" ]] && _store_args+=(--meta-file "$_cache_meta")
         _store_args+=(--request-file "$request")
         "$_cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
+        _dbg "cache-lookup: STORE answer ctx=$_cache_ctx req=$_cache_req"
         rm -f -- "$_body_tmp" 2>/dev/null || true
       fi
     fi
@@ -421,6 +433,7 @@ case "$kind" in
     spawn_docked --cleanup-fifos --harness "$harness" -- printf '%s\n' "$payload"
     ;;
   escalate|*)
+    _dbg "route: escalate kind"
     # Pass cache keys to render (via env) so it can persist the playbook after
     # streaming.  The worker spawns render and inherits this environment.
     # The meta file must outlive triage — render will remove it.
@@ -431,6 +444,7 @@ case "$kind" in
       export AI_ASSIST_CACHE_CTX="$_cache_ctx"
       export AI_ASSIST_CACHE_REQ="$_cache_req"
       export AI_ASSIST_CACHE_META="$_cache_meta"
+      _dbg "cache-lookup: STORE playbook ctx=$_cache_ctx req=$_cache_req (deferred to render)"
     else
       [[ -n "$_cache_meta" ]] && rm -f -- "$_cache_meta" 2>/dev/null || true
     fi

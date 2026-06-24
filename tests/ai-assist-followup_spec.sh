@@ -155,6 +155,39 @@ JSON
     The contents of file "$TEST_TMP/worker-log" should include "followup test request"
   End
 
+  # ── (e2) no-worker: error message written, pane kept open (no quit-sentinel) ──
+  It '(e2) no-worker: writes an error message to input-fifo, does NOT write the quit-sentinel'
+    # No worker in bin dir — all resolve_harness probes fail.
+    seed_entry playbook "## Playbook step 1"
+    When run script "$SCRIPT" \
+      --ctx "$CTX" --req "$REQ_HASH" --input-fifo "$INPUT_FILE" \
+      --block-id "verify" --failed-cmd "make test"
+    The status should be success
+    # Must contain the warning marker (kept pane open).
+    The contents of file "$INPUT_FILE" should include "⚠"
+    The contents of file "$INPUT_FILE" should include "no assistant available"
+    # Must NOT contain the quit-sentinel bytes (DLE 'q' DLE = 0x10 0x71 0x10).
+    fifo_hex="$(xxd -p "$INPUT_FILE" 2>/dev/null || od -A n -t x1 "$INPUT_FILE" 2>/dev/null | tr -d ' \n')"
+    The value "$fifo_hex" should not include "107110"
+  End
+
+  # ── (e3) no-entry: error message written, pane kept open (no quit-sentinel) ──
+  It '(e3) no-entry (fresh playbook, no cache): writes an error message, does NOT write the quit-sentinel'
+    make_followup_worker claude "unused"
+    # Do NOT seed a cache entry; pass a non-existent ctx/req so resolution fails.
+    When run script "$SCRIPT" \
+      --ctx "nonexistent-ctx" --req "nonexistent-req" \
+      --input-fifo "$INPUT_FILE" \
+      --block-id "verify" --failed-cmd "make test"
+    The status should be success
+    # Must contain the warning marker.
+    The contents of file "$INPUT_FILE" should include "⚠"
+    The contents of file "$INPUT_FILE" should include "could not load"
+    # Must NOT contain the quit-sentinel bytes.
+    fifo_hex="$(xxd -p "$INPUT_FILE" 2>/dev/null || od -A n -t x1 "$INPUT_FILE" 2>/dev/null | tr -d ' \n')"
+    The value "$fifo_hex" should not include "107110"
+  End
+
   # ── (f) the prompt includes output read from the runlog logpath ─────────────
   It '(f) the prompt includes the failed command output read from runlog logpath'
     make_followup_worker claude "## Revised fix: done"

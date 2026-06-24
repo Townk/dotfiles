@@ -26,6 +26,9 @@ set -uo pipefail
 
 source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
 
+# ── Debug logging (gated on AI_ASSIST_DEBUG_LOG) ─────────────────────────────
+_dbg() { [[ -n "${AI_ASSIST_DEBUG_LOG:-}" ]] && printf '[wrapup %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >> "$AI_ASSIST_DEBUG_LOG" 2>/dev/null || true; }
+
 # ── Parse arguments ───────────────────────────────────────────────────────────
 ctx="" req="" input_fifo="" run_dir="" request_file_override="" harness_override=""
 while (($#)); do
@@ -44,6 +47,7 @@ done
   print -ru2 -- "usage: ai-assist-wrapup --ctx H --req H --input-fifo P [--run-dir D] [--request-file F] [--harness H]"
   exit 1
 }
+_dbg "invoked ctx=$ctx req=$req input-fifo=$input_fifo run-dir=${run_dir:-}"
 
 # ── Cache binary — best-effort (same precedence as triage) ───────────────────
 cache_bin=""
@@ -100,18 +104,23 @@ trap '_cleanup' EXIT
 # ── Quit sentinel: DLE 'q' DLE — the pager interprets this as "quit" ─────────
 write_quit() { printf '\020q\020' > "$input_fifo" 2>/dev/null || true; }
 
+# ── Error message: visible blockquote in the pane; keeps the pane open ────────
+write_error() { printf '\n\n> ⚠ %s\n' "$1" > "$input_fifo" 2>/dev/null || true; }
+
 # ── Resolve the request file ──────────────────────────────────────────────────
 request_file=""
 
 # Priority 1: caller-provided --request-file (fresh playbook path)
 if [[ -n "$request_file_override" && -r "$request_file_override" ]]; then
   request_file="$request_file_override"
+  _dbg "request-resolution: request-file (caller-provided) → $request_file"
 fi
 
 # Priority 2: sidecar from cache
 if [[ -z "$request_file" && -n "$cache_bin" ]]; then
   request_file="$("$cache_bin" request-file "$ctx" "$req" 2>/dev/null)" || request_file=""
   [[ -n "$request_file" && -f "$request_file" ]] || request_file=""
+  [[ -n "$request_file" ]] && _dbg "request-resolution: sidecar → $request_file"
 fi
 
 # Priority 3: reconstruct from entry front matter
@@ -120,9 +129,11 @@ if [[ -z "$request_file" ]]; then
   [[ -n "$cache_bin" ]] && entry="$("$cache_bin" lookup "$ctx" "$req" 2>/dev/null)" || entry=""
 
   if [[ -z "$entry" || ! -f "$entry" ]]; then
-    write_quit
+    _dbg "request-resolution: FAILED — no entry for ctx=$ctx req=$req; writing error and keeping pane open"
+    write_error "could not load the request to wrap up"
     exit 0
   fi
+  _dbg "request-resolution: reconstruct from entry front matter → $entry"
 
   _fm_request="$("$cache_bin" field "$entry" request    2>/dev/null)" || _fm_request=""
   _fm_command="$("$cache_bin" field "$entry" command    2>/dev/null)" || _fm_command=""
@@ -217,10 +228,12 @@ artifact="$solutions_dir/${ctx}-${utc_ts}.md"
 # ── Resolve harness + worker ──────────────────────────────────────────────────
 harness="${harness_override:-$(resolve_harness 2>/dev/null || true)}"
 worker="$(worker_path "${harness:-unknown}")"
+_dbg "harness=$harness worker=$worker"
 
 if [[ -z "$harness" || ! -x "$worker" ]]; then
-  # No capable worker — signal the pager to quit so it doesn't spin forever.
-  write_quit
+  # No capable worker — show an error in the pane; keep it open so the user sees it.
+  _dbg "no capable worker available; writing error and keeping pane open"
+  write_error "no assistant available for wrap-up"
   exit 0
 fi
 
@@ -232,5 +245,7 @@ else
   "$worker" --stream --prompt-file "$promptfile" --request "$request_file" \
     > "$input_fifo"
 fi
+_rc=${pipestatus[1]:-$?}
+_dbg "worker exited rc=$_rc; streamed output to input-fifo artifact=${artifact:-<none>}"
 
 exit 0

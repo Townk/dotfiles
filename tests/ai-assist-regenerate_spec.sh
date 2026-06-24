@@ -187,4 +187,36 @@ JSON
     # The stub worker recorded AI_ASSIST_NO_CACHE into env-log.
     The contents of file "$TEST_TMP/env-log" should include "NO_CACHE=1"
   End
+
+  # ── (e) no-entry: error message written, pane kept open (no quit-sentinel) ──
+  It '(e) no-entry: writes an error message to input-fifo, does NOT write the quit-sentinel'
+    make_worker claude "__ESCALATE__: needs full agent" "output"
+    # Do NOT seed a cache entry; no sidecar either.
+    When run script "$SCRIPT" \
+      --ctx "nonexistent-ctx" --req "nonexistent-req" \
+      --input-fifo "$INPUT_FILE"
+    The status should be success
+    # Must contain the warning marker.
+    The contents of file "$INPUT_FILE" should include "⚠"
+    The contents of file "$INPUT_FILE" should include "unavailable"
+    # Must NOT contain the quit-sentinel bytes (DLE 'q' DLE = 0x10 0x71 0x10).
+    fifo_hex="$(xxd -p "$INPUT_FILE" 2>/dev/null || od -A n -t x1 "$INPUT_FILE" 2>/dev/null | tr -d ' \n')"
+    The value "$fifo_hex" should not include "107110"
+  End
+
+  # ── (f) escalate/no-worker: error message written, pane kept open ────────────
+  It '(f) escalate/no-worker: writes an error message, does NOT write the quit-sentinel'
+    # No worker in bin dir — resolve_harness produces empty string → escalate branch
+    # with _regen_worker not executable.
+    seed_entry playbook "output"
+    When run script "$SCRIPT" \
+      --ctx "$CTX" --req "$REQ_HASH" --input-fifo "$INPUT_FILE"
+    The status should be success
+    # Must contain the warning marker.
+    The contents of file "$INPUT_FILE" should include "⚠"
+    The contents of file "$INPUT_FILE" should include "unavailable"
+    # Must NOT contain the quit-sentinel bytes.
+    fifo_hex="$(xxd -p "$INPUT_FILE" 2>/dev/null || od -A n -t x1 "$INPUT_FILE" 2>/dev/null | tr -d ' \n')"
+    The value "$fifo_hex" should not include "107110"
+  End
 End

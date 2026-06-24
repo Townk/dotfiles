@@ -23,6 +23,9 @@ set -uo pipefail
 
 source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
 
+# ── Debug logging (gated on AI_ASSIST_DEBUG_LOG) ─────────────────────────────
+_dbg() { [[ -n "${AI_ASSIST_DEBUG_LOG:-}" ]] && printf '[regenerate %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >> "$AI_ASSIST_DEBUG_LOG" 2>/dev/null || true; }
+
 US=$'\x1f'   # unit separator — field delimiter inside triage_classify output
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
@@ -42,6 +45,7 @@ done
   print -ru2 -- "usage: ai-assist-regenerate --ctx H --req H --input-fifo P [--origin-pane ID] [--harness H]"
   exit 1
 }
+_dbg "invoked ctx=$ctx req=$req input-fifo=$input_fifo origin-pane=${origin_pane:-}"
 
 # ── Cache binary — best-effort (same precedence as triage) ───────────────────
 cache_bin=""
@@ -102,6 +106,9 @@ trap '_cleanup' EXIT
 # The --close-on-exit pane closes when the pager exits on this sentinel.
 write_quit() { printf '\020q\020' > "$input_fifo" 2>/dev/null || true; }
 
+# ── Error message: visible blockquote in the pane; keeps the pane open ────────
+write_error() { printf '\n\n> ⚠ %s\n' "$1" > "$input_fifo" 2>/dev/null || true; }
+
 # ── Resolve the request file ──────────────────────────────────────────────────
 request_file=""
 reconstructed_request=""
@@ -109,6 +116,7 @@ reconstructed_request=""
 if [[ -n "$cache_bin" ]]; then
   request_file="$("$cache_bin" request-file "$ctx" "$req" 2>/dev/null)" || request_file=""
   [[ -n "$request_file" && -f "$request_file" ]] || request_file=""
+  [[ -n "$request_file" ]] && _dbg "request-resolution: sidecar → $request_file"
 fi
 
 if [[ -z "$request_file" ]]; then
@@ -117,10 +125,12 @@ if [[ -z "$request_file" ]]; then
   [[ -n "$cache_bin" ]] && entry="$("$cache_bin" lookup "$ctx" "$req" 2>/dev/null)" || entry=""
 
   if [[ -z "$entry" || ! -f "$entry" ]]; then
-    # Nothing to regenerate — signal the pager to quit and exit.
-    write_quit
+    # Nothing to regenerate — show an error in the pane; keep it open.
+    _dbg "request-resolution: FAILED — no entry for ctx=$ctx req=$req; writing error and keeping pane open"
+    write_error "the fix output was unavailable for regeneration"
     exit 0
   fi
+  _dbg "request-resolution: reconstruct from entry front matter → $entry"
 
   # Read fields from front matter.
   _fm_request="$("$cache_bin" field "$entry" request    2>/dev/null)" || _fm_request=""
@@ -182,6 +192,7 @@ export REQ_SCROLLBACK="${REQ_SCROLLBACK:-}"
 harness="${harness_override:-$(resolve_harness 2>/dev/null || true)}"
 kind="escalate"
 payload=""
+_dbg "harness=$harness worker=$(worker_path "${harness:-unknown}")"
 
 if [[ -n "$harness" ]]; then
   worker="$(worker_path "$harness")"
@@ -192,10 +203,12 @@ if [[ -n "$harness" ]]; then
       kind="${classified%%$US*}"
       payload="${classified#*$US}"
     fi
+    _dbg "triage rc=$trc kind=$kind"
     # Guard: re-running the failed command is never a useful triage result.
     if [[ "$kind" == command && -n "${REQ_COMMAND_TEXT:-}" \
           && "${payload//[[:space:]]/}" == "${REQ_COMMAND_TEXT//[[:space:]]/}" ]]; then
       kind="escalate"; payload="re-running the failed command is not a diagnosis"
+      _dbg "triage guard triggered: escalating (would have re-run failed command)"
     fi
   fi
 fi
@@ -250,7 +263,8 @@ case "$kind" in
         "$cache_bin" store "${_store_args[@]}" >/dev/null 2>&1 || true
       fi
     fi
-    # Signal pager to quit (close-on-exit fires).
+    # Signal pager to quit (close-on-exit fires) — intentional for command kind.
+    _dbg "command kind: wrote bracketed-paste to origin-pane=$origin_pane; writing quit-sentinel to close pane"
     write_quit
     ;;
 
@@ -269,6 +283,7 @@ case "$kind" in
     fi
     # Stream the answer text into the pane's input FIFO.
     # Writing closes the fifo → the pager sees EOF and stops its spinner.
+    _dbg "answer kind: writing answer text to input-fifo"
     printf '%s\n' "$payload" > "$input_fifo" 2>/dev/null || true
     ;;
 
@@ -281,12 +296,15 @@ case "$kind" in
 
     rc=1
     if [[ -x "$_regen_worker" && -n "$_body_tmp" ]]; then
+      _dbg "escalate kind: running worker=$_regen_worker --stream"
       "$_regen_worker" --stream --request "$request_file" \
         | tee "$_body_tmp" > "$input_fifo"
       rc=${pipestatus[1]}
+      _dbg "escalate kind: worker exited rc=$rc"
     else
-      # No worker available — signal the pager to quit (no infinite spinner).
-      write_quit
+      # No worker available — show an error in the pane; keep it open.
+      _dbg "escalate kind: no capable worker (worker=$_regen_worker); writing error and keeping pane open"
+      write_error "the fix output was unavailable for regeneration"
     fi
 
     # Persist the playbook entry if the worker succeeded and produced output.
