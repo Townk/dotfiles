@@ -89,7 +89,10 @@ if (( _aas_use_zpty )); then
       # pipefail semantics WITHOUT a subshell — so cd/export from the user's block
       # persist in the one long-lived hosted shell (native value-passing; no state
       # file). nounset is deliberately NOT enabled (user code must not get false
-      # unset failures).
+      # unset failures). The block's stdin is /dev/null: the hosted shell's own
+      # stdin is the pty (how it receives commands), so a job that reads stdin
+      # (e.g. `./gradlew build` / a daemon probing the console) would otherwise
+      # BLOCK forever waiting for pty input that never comes — wedging the shell.
       #
       # `exit` is shadowed by a function for the duration of the job: in the
       # persistent hosted shell a bare `exit N` from user code would otherwise KILL
@@ -113,7 +116,7 @@ if (( _aas_use_zpty )); then
       # them. The trailing `: > done` flag is what the controller polls.
       _aas_r="${(q)_aas_reply}"
       _aas_line='_aas_uexit= ; exit() { _aas_uexit=${1:-0} ; return 210 }
-() { setopt local_options err_return pipe_fail ; eval '"${(q)_aas_cmd}"' } > '"$_aas_r"'/out 2> '"$_aas_r"'/err
+() { setopt local_options err_return pipe_fail ; eval '"${(q)_aas_cmd}"' } < /dev/null > '"$_aas_r"'/out 2> '"$_aas_r"'/err
 _rc=$? ; unfunction exit 2>/dev/null
 _rc=${_aas_uexit:-$_rc}
 [[ $_rc -eq 141 ]] && _rc=0
@@ -126,7 +129,13 @@ export AAS_OUT_'"$_aas_key"'="$(< '"$_aas_r"'/out)" AAS_ERR_'"$_aas_key"'="$(< '
       fi
       _aas_line+='
 : > '"$_aas_r"'/done'
-      w "$_aas_line"
+      # Hand the job to the hosted shell by WRITING it to a file and sourcing it
+      # in ONE line — never by feeding the multi-line block through the pty. The
+      # interactive line editor mangles multi-line input over a pty (continuation
+      # stalls, paste/length quirks), which silently corrupted value-passing.
+      # `source` reads the wrapper from disk and parses it normally.
+      print -r -- "$_aas_line" > "$_aas_reply/job.zsh"
+      w "source ${(q)_aas_reply}/job.zsh"
 
       # There is no per-job pid here (the job is the hosted shell's foreground),
       # so a stop request arrives as a FLAG file: the broker touches

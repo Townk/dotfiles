@@ -151,7 +151,11 @@ if [[ -n "$shell_cwd" || -n "$shell_init" ]]; then
     # user's AI_ASSIST_SHELL_NO_INTERACTIVE choice arrives as the --no-interactive
     # ARG; re-export it so the spawned ai-assist-shell sees it and uses the eval-loop.
     (( no_interactive )) && export AI_ASSIST_SHELL_NO_INTERACTIVE=1
-    "$shell_bin" "${shell_flags[@]}" &
+    # Detach all stdio: ai-assist-shell is a background sibling of the pager and
+    # would otherwise SHARE the pager's pane tty — any stray output (or tty
+    # contention as a background reader) corrupts the pager's alt-screen. Same
+    # reason the broker is spawned with </dev/null >/dev/null 2>&1.
+    "$shell_bin" "${shell_flags[@]}" </dev/null >/dev/null 2>&1 &
     shell_pid=$!
     export AI_ASSIST_SHELL_FIFO="$shell_fifo"
     export AI_ASSIST_RUN_DIR="$run_dir"

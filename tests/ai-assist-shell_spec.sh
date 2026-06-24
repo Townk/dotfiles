@@ -314,6 +314,15 @@ ALIAS_OK"
     The contents of file "$reply/exit" should equal "0"
   End
 
+  # Regression (zpty): the hosted shell's stdin is the pty, so a job that reads
+  # stdin (`cat`, a daemon/console probe, `./gradlew build`) must get /dev/null —
+  # otherwise it BLOCKS forever on pty input and wedges the shell (the live hang).
+  It 'does not wedge on a job that reads stdin (stdin is /dev/null)'
+    reply="$(run_job 'cat; echo done')"
+    The contents of file "$reply/exit" should equal "0"
+    The contents of file "$reply/out" should equal "done"
+  End
+
   # `exit 0` mid-block must STOP the block (not fall through). A plain
   # `return ${1:-0}` shadow would continue, since err_return only catches non-zero.
   It 'stops the block on exit 0 (does not run the rest)'
