@@ -30,6 +30,14 @@ done
 # AI_ASSIST_SHELL_NO_INTERACTIVE=1 or when zsh/zpty is unavailable (with a
 # warning — the opt-out itself is silent). Both paths are kept intact until a
 # later stage deletes the eval-loop.
+# Kill a process and all its descendants (depth-first). Shared by both backends
+# to enforce the execution timeout and honor a stop.
+_aas_kill_tree() {
+  local _p="$1" _sig="${2:-TERM}" _c
+  for _c in ${(f)"$(pgrep -P "$_p" 2>/dev/null)"}; do _aas_kill_tree "$_c" "$_sig"; done
+  kill -"$_sig" "$_p" 2>/dev/null
+}
+
 _aas_use_zpty=1
 if [[ "${AI_ASSIST_SHELL_NO_INTERACTIVE:-}" == 1 ]]; then
   _aas_use_zpty=0
@@ -40,34 +48,45 @@ fi
 
 if (( _aas_use_zpty )); then
     # ---- zpty controller -----------------------------------------------------
+    # The hosted shell is a REAL interactive login zsh so the user's .zshrc loads
+    # (functions, aliases, dir-managers resolve — the eval-loop cannot do this).
+    # It is used ONLY as the interactive-env provider: each job runs as a
+    # BACKGROUNDED subshell forked from it, so the job inherits the env yet has a
+    # real PID (stop/timeout = kill the tree, robust — no ^C through the pty),
+    # /dev/null stdin (no pty wedge), and is a subshell (so `exit N` can't kill the
+    # shell — no hack — and one bad command can't freeze the session). cd/exports
+    # persist via a state file the subshell sources then rewrites; functions and
+    # aliases ride fork inheritance, not the state file.
     zpty -d AAS 2>/dev/null  # in case a stale handle survives
-    trap 'zpty -d AAS 2>/dev/null; exit 0' INT TERM
-    trap 'zpty -d AAS 2>/dev/null' EXIT
+    _aas_state="$(mktemp)"
+    trap 'zpty -d AAS 2>/dev/null; rm -f -- "${_aas_state:-}"; exit 0' INT TERM
+    trap 'zpty -d AAS 2>/dev/null; rm -f -- "${_aas_state:-}"' EXIT
 
     # -b: non-blocking pty — `zpty -r` returns immediately (never hangs).
     zpty -b AAS zsh -il
 
     w()     { zpty -w AAS "$1"$'\n'; }                                # send a line + ENTER
     flush() { local _o; while zpty -r AAS _o 2>/dev/null; do :; done; }  # non-blocking drain
-    # Poll for a flag file while draining the pty so its buffer never fills (a
-    # full buffer would block the hosted shell). Bounded; returns when present.
-    waitf() {
-      local _f="$1" _max="${2:-1000}" _i=0
+    waitf() {  # poll for a flag while draining the pty (keeps its buffer clear)
+      local _f="$1" _max="${2:-1500}" _i=0
       while [[ ! -e "$_f" ]] && (( _i < _max )); do flush; sleep 0.02; (( _i++ )); done
       flush
     }
-
-    # Seed in order: quiet the prompt + disable echo, cd, source env-file, source
-    # the shell-init dump. Each step drops a sync flag we poll so we know it ran.
-    _aas_seed() {  # _aas_seed <line>
+    _aas_seed() {  # run a line in the hosted shell, sync on a flag
       local _sf; _sf="$(mktemp -u)"
       w "$1 ; : > ${(q)_sf}"
       waitf "$_sf"; rm -f "$_sf"
     }
-    _aas_seed "stty -echo 2>/dev/null ; PROMPT='' RPROMPT=''"
-    [[ -n "$cwd" ]] && _aas_seed "cd -- ${(q)cwd} 2>/dev/null"
-    [[ -n "$env_file" && -r "$env_file" ]] && _aas_seed "source ${(q)env_file} 2>/dev/null"
+    # Quiet the prompt + echo + job-control noise; apply env; cd LAST (so the dump's
+    # stale PWD can't override the target dir and dir-hooks fire for the real cwd);
+    # then snapshot cd+exports into the state file that per-job subshells will source.
+    _aas_seed "stty -echo 2>/dev/null ; PROMPT='' RPROMPT='' ; unsetopt monitor 2>/dev/null"
+    [[ -n "$env_file"  && -r "$env_file"  ]] && _aas_seed "source ${(q)env_file} 2>/dev/null"
     [[ -n "$shell_init" && -r "$shell_init" ]] && _aas_seed "source ${(q)shell_init} 2>/dev/null"
+    # `builtin cd`: the user's interactive rc (z4h/zsh4humans) wraps `cd` and its
+    # wrapper mishandles `cd -- <path>` — bypass it for our own navigation.
+    [[ -n "$cwd" ]] && _aas_seed "builtin cd -- ${(q)cwd} 2>/dev/null"
+    _aas_seed "{ print -r -- \"builtin cd -- \${(q)PWD}\" ; export -p } > ${(q)_aas_state} 2>/dev/null"
 
     _aas_US=$'\x1f' _aas_RS=$'\x1e'
     exec {_aas_fd}<>"$cmd_fifo"
@@ -83,66 +102,55 @@ if (( _aas_use_zpty )); then
       fi
       [[ -n "$_aas_reply" && -d "$_aas_reply" ]] || continue
 
-      # Build the job line for the hosted shell. The reply path is expanded HERE
-      # (by the controller); $? / $_rc etc. stay literal for the hosted shell. The
-      # anonymous function with local_options err_return pipe_fail gives set -e /
-      # pipefail semantics WITHOUT a subshell — so cd/export from the user's block
-      # persist in the one long-lived hosted shell (native value-passing; no state
-      # file). nounset is deliberately NOT enabled (user code must not get false
-      # unset failures). The block's stdin is /dev/null: the hosted shell's own
-      # stdin is the pty (how it receives commands), so a job that reads stdin
-      # (e.g. `./gradlew build` / a daemon probing the console) would otherwise
-      # BLOCK forever waiting for pty input that never comes — wedging the shell.
-      #
-      # `exit` is shadowed by a function for the duration of the job: in the
-      # persistent hosted shell a bare `exit N` from user code would otherwise KILL
-      # the shell (zsh: exit outside a subshell terminates the shell). The shadow
-      # records the requested code in _aas_uexit and forces the anon function to
-      # stop by `return`ing a non-zero sentinel (210) — so BOTH `exit 0` and
-      # `exit N` halt the block immediately (a plain `return ${1:-0}` would let
-      # `exit 0` fall through, since err_return only catches non-zero). _aas_uexit
-      # is reset to EMPTY before each job; after the anon function the job's code is
-      # `${_aas_uexit:-$_rc}` — the user's exit code when exit was called (including
-      # `exit 0`, which sets _aas_uexit=0, a non-empty value), else the anon
-      # function's own rc (a block that never calls exit is unaffected). The
-      # resolution is a plain assignment on its OWN line: a `;`-chained or a
-      # standalone `[[ ]] &&` middle line wedges the interactive hosted shell over
-      # the pty (it stalls awaiting more input). cd/export made before the exit
-      # still persist (anon function, no fork). The shadow is removed right after so
-      # it never affects the controller's own bookkeeping.
-      #
-      # Benign SIGPIPE (141) is mapped to success. LAST_* (and, when an id is
-      # present, AAS_OUT_/ERR_/EXIT_<key>) are exported so later jobs can reference
-      # them. The trailing `: > done` flag is what the controller polls.
+      # Build the job as a script the hosted shell SOURCES (one line over the pty —
+      # never multi-line, which the line editor mangles). It forks a BACKGROUNDED
+      # subshell that sources the state (prior cd+exports), runs the command under
+      # err_return+pipefail with /dev/null stdin and output to files, and on ANY
+      # exit (normal, error, or user `exit N`) runs an EXIT trap that records the
+      # code, writes cd+exports+value-passing back to the state file, and drops the
+      # done flag. The subshell's PID goes to jobpid so the controller can kill the
+      # tree on stop/timeout. SIGPIPE (141) maps to success. nounset is NOT enabled
+      # (user code must not get false unset failures).
       _aas_r="${(q)_aas_reply}"
-      _aas_line='_aas_uexit= ; exit() { _aas_uexit=${1:-0} ; return 210 }
-() { setopt local_options err_return pipe_fail ; eval '"${(q)_aas_cmd}"' } < /dev/null > '"$_aas_r"'/out 2> '"$_aas_r"'/err
-_rc=$? ; unfunction exit 2>/dev/null
-_rc=${_aas_uexit:-$_rc}
-[[ $_rc -eq 141 ]] && _rc=0
-print -rn -- $_rc > '"$_aas_r"'/exit
-export LAST_EXCODE=$_rc LAST_STDOUT="$(< '"$_aas_r"'/out)" LAST_STDERR="$(< '"$_aas_r"'/err)"'
+      _aas_s="${(q)_aas_state}"
+      _aas_vp=''
       if [[ -n "$_aas_id" ]]; then
         _aas_key="${_aas_id//[^A-Za-z0-9_]/_}"
-        _aas_line+='
-export AAS_OUT_'"$_aas_key"'="$(< '"$_aas_r"'/out)" AAS_ERR_'"$_aas_key"'="$(< '"$_aas_r"'/err)" AAS_EXIT_'"$_aas_key"'=$_rc'
+        _aas_vp='      print -r -- "export AAS_OUT_'"$_aas_key"'=${(q)$(< '"$_aas_r"'/out)}"
+      print -r -- "export AAS_ERR_'"$_aas_key"'=${(q)$(< '"$_aas_r"'/err)}"
+      print -r -- "export AAS_EXIT_'"$_aas_key"'=${(q)_rc}"'
       fi
-      _aas_line+='
-: > '"$_aas_r"'/done'
-      # Hand the job to the hosted shell by WRITING it to a file and sourcing it
-      # in ONE line — never by feeding the multi-line block through the pty. The
-      # interactive line editor mangles multi-line input over a pty (continuation
-      # stalls, paste/length quirks), which silently corrupted value-passing.
-      # `source` reads the wrapper from disk and parses it normally.
-      print -r -- "$_aas_line" > "$_aas_reply/job.zsh"
+      : > "$_aas_reply/out"; : > "$_aas_reply/err"
+      rm -f "$_aas_reply/done" "$_aas_reply/jobpid"
+      cat > "$_aas_reply/job.zsh" <<AAS_JOB
+(
+  source $_aas_s 2>/dev/null
+  _aas_record() {
+    local _rc=\${_aas_rc:-\$?}
+    [[ \$_rc -eq 141 ]] && _rc=0
+    print -rn -- \$_rc > $_aas_r/exit
+    {
+      print -r -- "builtin cd -- \${(q)PWD}"
+      export -p
+      print -r -- "export LAST_EXCODE=\${(q)_rc}"
+      print -r -- "export LAST_STDOUT=\${(q)\$(< $_aas_r/out)}"
+      print -r -- "export LAST_STDERR=\${(q)\$(< $_aas_r/err)}"
+$_aas_vp
+    } > ${_aas_s}.tmp 2>/dev/null && mv -f ${_aas_s}.tmp $_aas_s 2>/dev/null
+    : > $_aas_r/done
+  }
+  trap _aas_record EXIT
+  () { setopt local_options err_return pipe_fail ; eval ${(q)_aas_cmd} } < /dev/null > $_aas_r/out 2> $_aas_r/err
+  _aas_rc=\$?
+) </dev/null >/dev/null 2>&1 &
+print -rn -- \$! > $_aas_r/jobpid
+AAS_JOB
       w "source ${(q)_aas_reply}/job.zsh"
 
-      # There is no per-job pid here (the job is the hosted shell's foreground),
-      # so a stop request arrives as a FLAG file: the broker touches
-      # $run_dir/<id>.stop. Each poll iteration checks BOTH the timeout deadline
-      # and the stop flag; whichever fires first sends ^C to interrupt the
-      # foreground job. Timeout → 124, stop → 143 (SIGTERM-class: the pager treats
-      # >128 as "stopped — no auto-follow-up"). The two are kept distinct.
+      # Poll for completion; on stop-flag or timeout, KILL the job's process tree
+      # (robust — no ^C through the pty) and record the contract code. The hosted
+      # shell is NOT blocked (the job is backgrounded), so no resync is needed.
+      # Timeout → 124, stop → 143 (>128: the pager treats it as "stopped").
       _aas_max="${AI_ASSIST_RUN_TIMEOUT:-120}"
       _aas_stopf=""
       [[ -n "$_aas_id" && -n "$run_dir" && -d "$run_dir" ]] && _aas_stopf="$run_dir/${_aas_id}.stop"
@@ -150,50 +158,24 @@ export AAS_OUT_'"$_aas_key"'="$(< '"$_aas_r"'/out)" AAS_ERR_'"$_aas_key"'="$(< '
       while [[ ! -e "$_aas_reply/done" ]]; do
         flush; sleep 0.1
         _aas_el=$(( _aas_el + 1 ))
-        if [[ -n "$_aas_stopf" && -e "$_aas_stopf" ]]; then
-          _aas_stopped=1
-          zpty -w AAS $'\003'           # ^C — interrupt the foreground job
-          break
-        fi
-        if (( _aas_el >= _aas_max * 10 )); then
-          _aas_timedout=1
-          zpty -w AAS $'\003'           # ^C — interrupt the foreground job
-          break
-        fi
+        if [[ -n "$_aas_stopf" && -e "$_aas_stopf" ]]; then _aas_stopped=1; break; fi
+        if (( _aas_el >= _aas_max * 10 )); then _aas_timedout=1; break; fi
       done
       if (( _aas_timedout || _aas_stopped )); then
-        # ^C aborts the interrupted job at the interactive prompt, so the hosted
-        # shell will NOT run the rest of the job line (no done flag drop). Give it
-        # a brief grace window (in case the eval finished concurrently with the
-        # ^C and the flag is about to appear), then synthesize the reply files and
-        # record the contract code (124 timeout / 143 stop). Re-sync the hosted
-        # shell to a clean prompt with our own sync flag so the next job starts
-        # cleanly, then clear the stop flag (best-effort).
+        _aas_jp=""; _aas_g=0
+        while (( _aas_g < 10 )); do _aas_jp="$(<"$_aas_reply/jobpid" 2>/dev/null)"; [[ -n "$_aas_jp" ]] && break; sleep 0.05; (( _aas_g++ )); done
+        [[ -n "$_aas_jp" ]] && { _aas_kill_tree "$_aas_jp" TERM; sleep 0.3; _aas_kill_tree "$_aas_jp" KILL; }
         _aas_g=0
         while [[ ! -e "$_aas_reply/done" ]] && (( _aas_g < 5 )); do flush; sleep 0.1; (( _aas_g++ )); done
         [[ -e "$_aas_reply/out" ]] || : > "$_aas_reply/out"
         [[ -e "$_aas_reply/err" ]] || : > "$_aas_reply/err"
-        if (( _aas_stopped )); then
-          print -rn -- 143 > "$_aas_reply/exit"
-        else
-          print -rn -- 124 > "$_aas_reply/exit"
-        fi
-        _aas_seed "true"   # drain any residual prompt output; resync the shell
+        if (( _aas_stopped )); then print -rn -- 143 > "$_aas_reply/exit"; else print -rn -- 124 > "$_aas_reply/exit"; fi
         [[ -n "$_aas_stopf" ]] && rm -f "$_aas_stopf"
         : > "$_aas_reply/done"
       fi
     done
     exit 0
 fi
-
-# Kill a process and all its descendants (depth-first). Used to enforce the
-# execution timeout and to honor an external stop. No process groups: this shell
-# is spawned without a controlling tty, so `set -m` is unavailable.
-_aas_kill_tree() {
-  local _p="$1" _sig="${2:-TERM}" _c
-  for _c in ${(f)"$(pgrep -P "$_p" 2>/dev/null)"}; do _aas_kill_tree "$_c" "$_sig"; done
-  kill -"$_sig" "$_p" 2>/dev/null
-}
 
 # Seed: optional rc (functions/aliases), then the captured env (live exported
 # state wins over rc), then cd. rc-sourcing is opt-in (the env-fidelity knob):

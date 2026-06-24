@@ -187,7 +187,15 @@ Describe 'ai-assist-shell (zpty interactive backend)'
     # Controlled rc: a minimal .zshrc with a test function + alias, loaded by the
     # hosted `zsh -il` instead of the runner's heavy real rc.
     ZDOT="$TEST_TMP/zdot"; mkdir -p "$ZDOT"
-    printf 'aas_testfn() { print -r -- FN_OK }\nalias aas_testalias='\''print -r -- ALIAS_OK'\''\n' > "$ZDOT/.zshrc"
+    # Controlled rc: a test function + alias, AND a HOSTILE `cd` wrapper that mimics
+    # z4h/zsh4humans — it joins its args so `cd -- <path>` becomes `cd '-- <path>'`
+    # and fails. Our seed/state navigation uses `builtin cd` to bypass it, so the
+    # cwd tests below double as a regression guard for that bypass.
+    {
+      printf 'aas_testfn() { print -r -- FN_OK }\n'
+      printf 'alias aas_testalias=%s\n' "'print -r -- ALIAS_OK'"
+      printf 'cd() { builtin cd "$*" }\n'
+    } > "$ZDOT/.zshrc"
     FIFO="$TEST_TMP/cmd.fifo"; mkfifo "$FIFO"
     ZDOTDIR="$ZDOT" AI_ASSIST_SHELL_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" &
     SHELL_PID=$!
