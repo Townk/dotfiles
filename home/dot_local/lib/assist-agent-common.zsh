@@ -222,13 +222,15 @@ assist::capture_command() {
 # (just-rendered) prompt, capped to AI_ASSIST_SCROLLBACK_LINES.
 assist::capture_scrollback() {
   local cmd="$1" max="${AI_ASSIST_SCROLLBACK_LINES:-200}"
-  local zj; zj="$(assist::zellij_bin)" || { return 0; }
+  # Gated debug helper (AI_ASSIST_DEBUG_LOG): trace why a capture comes back empty.
+  _cap_dbg() { [[ -n "${AI_ASSIST_DEBUG_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) [capture] $*" >> "$AI_ASSIST_DEBUG_LOG" 2>/dev/null || true; }
+  local zj; zj="$(assist::zellij_bin)" || { _cap_dbg "no zellij bin → empty"; return 0; }
   local pane="${ZELLIJ_PANE_ID:+terminal_$ZELLIJ_PANE_ID}"
   local dump; dump="$(mktemp)"
   # Viewport only (NOT --full): the error normally prints just above the returned
   # prompt and is on-screen; --full would dump the entire (possibly multi-MB)
   # scrollback for no gain.
-  "$zj" action dump-screen ${pane:+-p "$pane"} > "$dump" 2>/dev/null || { rm -f "$dump"; return 0; }
+  "$zj" action dump-screen ${pane:+-p "$pane"} > "$dump" 2>/dev/null || { _cap_dbg "dump-screen FAILED pane=${pane:-<focused>} → empty"; rm -f "$dump"; return 0; }
   # Anchor the slice at the most recent run of the command that ACTUALLY HAS
   # output after it. The naive "last line containing <cmd>" is wrong when the
   # command appears again at the very bottom with nothing below it (a build still
