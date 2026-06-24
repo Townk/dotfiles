@@ -72,6 +72,8 @@ if (( _aas_use_zpty )); then
       while [[ ! -e "$_f" ]] && (( _i < _max )); do flush; sleep 0.02; (( _i++ )); done
       flush
     }
+    # Gated controller tracing (set AI_ASSIST_DEBUG_LOG to capture per-job timing).
+    _zdbg() { [[ -n "${AI_ASSIST_DEBUG_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) [shell] $*" >> "$AI_ASSIST_DEBUG_LOG" 2>/dev/null || true; }
     _aas_seed() {  # run a line in the hosted shell, sync on a flag
       local _sf; _sf="$(mktemp -u)"
       w "$1 ; : > ${(q)_sf}"
@@ -87,6 +89,7 @@ if (( _aas_use_zpty )); then
     # wrapper mishandles `cd -- <path>` — bypass it for our own navigation.
     [[ -n "$cwd" ]] && _aas_seed "builtin cd -- ${(q)cwd} 2>/dev/null"
     _aas_seed "{ print -r -- \"builtin cd -- \${(q)PWD}\" ; export -p } > ${(q)_aas_state} 2>/dev/null"
+    _zdbg "seed complete; cwd_arg='${cwd:-}' shell_init='${shell_init:-}' state_bytes=$(wc -c <"$_aas_state" 2>/dev/null | tr -d ' ')"
 
     _aas_US=$'\x1f' _aas_RS=$'\x1e'
     exec {_aas_fd}<>"$cmd_fifo"
@@ -146,6 +149,7 @@ $_aas_vp
 print -rn -- \$! > $_aas_r/jobpid
 AAS_JOB
       w "source ${(q)_aas_reply}/job.zsh"
+      _zdbg "SENT id='${_aas_id}' cmd='${_aas_cmd:0:90}'"
 
       # Poll for completion; on stop-flag or timeout, KILL the job's process tree
       # (robust — no ^C through the pty) and record the contract code. The hosted
@@ -164,6 +168,7 @@ AAS_JOB
       if (( _aas_timedout || _aas_stopped )); then
         _aas_jp=""; _aas_g=0
         while (( _aas_g < 10 )); do _aas_jp="$(<"$_aas_reply/jobpid" 2>/dev/null)"; [[ -n "$_aas_jp" ]] && break; sleep 0.05; (( _aas_g++ )); done
+        _zdbg "$( (( _aas_stopped )) && echo STOP || echo TIMEOUT) id='${_aas_id}' after=$((_aas_el))ds jobpid='${_aas_jp}' alive=$([[ -n "$_aas_jp" ]] && kill -0 "$_aas_jp" 2>/dev/null && echo 1 || echo 0)"
         [[ -n "$_aas_jp" ]] && { _aas_kill_tree "$_aas_jp" TERM; sleep 0.3; _aas_kill_tree "$_aas_jp" KILL; }
         _aas_g=0
         while [[ ! -e "$_aas_reply/done" ]] && (( _aas_g < 5 )); do flush; sleep 0.1; (( _aas_g++ )); done
@@ -173,6 +178,7 @@ AAS_JOB
         [[ -n "$_aas_stopf" ]] && rm -f "$_aas_stopf"
         : > "$_aas_reply/done"
       fi
+      _zdbg "RESOLVED id='${_aas_id}' exit=$(<$_aas_reply/exit 2>/dev/null) elapsed=$((_aas_el))ds"
     done
     exit 0
 fi
