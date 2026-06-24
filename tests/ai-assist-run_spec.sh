@@ -5,7 +5,10 @@ Describe 'ai-assist-run'
   setup() {
     TEST_TMP="$(mktemp -d)"
     FIFO="$TEST_TMP/cmd.fifo"; mkfifo "$FIFO"
-    "$SHELL_SRV" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
+    # These exercise ai-assist-run, not the shell backend. Pin the fast,
+    # deterministic eval-loop (Stage 4 made zpty the default, whose ~0.5s login
+    # seed per spawn races shellspec's per-example timeout here).
+    AI_ASSIST_SHELL_NO_INTERACTIVE=1 "$SHELL_SRV" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
     export AI_ASSIST_SHELL_FIFO="$FIFO"
     export TMPDIR="$TEST_TMP"
   }

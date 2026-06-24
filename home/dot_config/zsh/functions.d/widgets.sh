@@ -73,13 +73,16 @@ ai-assist-trigger() {
   # Capture the user's LIVE interactive aliases + functions here — this widget
   # runs IN the interactive shell, the only place they are visible (a child
   # process like ai-assist-summon never inherits them). Dump them with BUILTINS
-  # only (`functions` then `alias -L`, in that order to avoid the "function
-  # based on alias" collision); do NOT source assist-agent-common.zsh here — it
+  # only (`functions` then `alias -L` then `export -p`: functions before aliases
+  # to avoid the "function based on alias" collision, env LAST so the live
+  # exported state rides the SAME single dump. This is the ONE shell-init dump
+  # (Stage 4 cutover) — it supersedes the worker's separate req_env capture);
+  # do NOT source assist-agent-common.zsh here — it
   # parse-errors in the ZLE/widget context. The dump path is threaded to summon
   # via AI_ASSIST_SHELL_INIT; the worker copies it before this widget removes it
   # (after summon returns).
   local _aas_init; _aas_init="$(mktemp -t ai-assist-init.XXXXXX 2>/dev/null)" || _aas_init=""
-  [[ -n "$_aas_init" ]] && { functions; alias -L } > "$_aas_init" 2>/dev/null
+  [[ -n "$_aas_init" ]] && { functions; alias -L; export -p } > "$_aas_init" 2>/dev/null
   # Redirect all stdio: a ZLE widget must not let its subprocess write to the
   # main pane (the dispatcher's status logs would corrupt the line editor and
   # land on the command line). The popup is its own float and the answer is the

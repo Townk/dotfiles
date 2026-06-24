@@ -1,10 +1,12 @@
 Describe 'ai-assist-shell'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_ai-assist-shell"
 
+  # Stage 4: the zpty controller is now the DEFAULT. These tests exercise the
+  # eval-loop FALLBACK, so every spawn opts out via AI_ASSIST_SHELL_NO_INTERACTIVE=1.
   setup() {
     TEST_TMP="$(mktemp -d)"
     FIFO="$TEST_TMP/cmd.fifo"; mkfifo "$FIFO"
-    "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" &
+    AI_ASSIST_SHELL_NO_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" &
     SHELL_PID=$!
   }
   cleanup() { kill "$SHELL_PID" 2>/dev/null; rm -rf "$TEST_TMP"; }
@@ -82,7 +84,7 @@ echo ok')"
   # The real execution timeout: a runaway command is killed and reported 124.
   It 'kills a job that overruns AI_ASSIST_RUN_TIMEOUT (exit 124)'
     kill "$SHELL_PID" 2>/dev/null
-    AI_ASSIST_RUN_TIMEOUT=1 "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
+    AI_ASSIST_SHELL_NO_INTERACTIVE=1 AI_ASSIST_RUN_TIMEOUT=1 "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
     reply="$(run_job 'sleep 5')"
     The contents of file "$reply/exit" should equal "124"
   End
@@ -92,7 +94,7 @@ echo ok')"
   It 'cleans up the per-id pidfile after a run'
     rund="$TEST_TMP/run"; mkdir "$rund"
     kill "$SHELL_PID" 2>/dev/null
-    "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" --run-dir "$rund" & SHELL_PID=$!
+    AI_ASSIST_SHELL_NO_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" --run-dir "$rund" & SHELL_PID=$!
     run_job_id blk1 'true' >/dev/null
     The path "$rund/blk1.pid" should not be exist
   End
@@ -119,7 +121,7 @@ echo ok')"
   It 'seeds the environment from --env-file'
     envf="$TEST_TMP/env"; printf "export SEEDED=yes\n" > "$envf"
     kill "$SHELL_PID" 2>/dev/null
-    "$SCRIPT" --cmd-fifo "$FIFO" --env-file "$envf" --cwd "$TEST_TMP" & SHELL_PID=$!
+    AI_ASSIST_SHELL_NO_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --env-file "$envf" --cwd "$TEST_TMP" & SHELL_PID=$!
     reply="$(run_job 'echo $SEEDED')"
     The contents of file "$reply/out" should equal "yes"
   End
@@ -138,7 +140,7 @@ echo ok')"
     initf="$TEST_TMP/init"
     printf 'aas_initfn() { print -r -- INITFN_OK }\nalias aas_initalias='\''print -r -- INITALIAS_OK'\''\n' > "$initf"
     kill "$SHELL_PID" 2>/dev/null
-    "$SCRIPT" --cmd-fifo "$FIFO" --shell-init "$initf" --cwd "$TEST_TMP" & SHELL_PID=$!
+    AI_ASSIST_SHELL_NO_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --shell-init "$initf" --cwd "$TEST_TMP" & SHELL_PID=$!
     reply="$(run_job 'aas_initfn')"
     The contents of file "$reply/out" should equal "INITFN_OK"
     reply2="$(run_job 'aas_initalias')"
@@ -152,7 +154,7 @@ echo ok')"
     printf '#!/usr/bin/env zsh\n[[ "$1" == "hook-env" ]] && print -r -- "export MISE_SYNCED=yes"\n' > "$TEST_TMP/mise"
     chmod +x "$TEST_TMP/mise"
     kill "$SHELL_PID" 2>/dev/null
-    PATH="$TEST_TMP:$PATH" "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
+    AI_ASSIST_SHELL_NO_INTERACTIVE=1 PATH="$TEST_TMP:$PATH" "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
     run_job 'true' >/dev/null
     reply="$(run_job 'echo $MISE_SYNCED')"
     The contents of file "$reply/out" should equal "yes"
@@ -161,14 +163,16 @@ echo ok')"
   # The re-sync hook list is configurable via AI_ASSIST_ENV_HOOKS (option c).
   It 'honors AI_ASSIST_ENV_HOOKS as the env re-sync hook list'
     kill "$SHELL_PID" 2>/dev/null
-    AI_ASSIST_ENV_HOOKS='export CUSTOM_HOOK=ran' "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
+    AI_ASSIST_SHELL_NO_INTERACTIVE=1 AI_ASSIST_ENV_HOOKS='export CUSTOM_HOOK=ran' "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
     run_job 'true' >/dev/null
     reply="$(run_job 'echo $CUSTOM_HOOK')"
     The contents of file "$reply/out" should equal "ran"
   End
 End
 
-# The zpty interactive backend (Stage 1, opt-in via AI_ASSIST_SHELL_INTERACTIVE=1).
+# The zpty interactive backend (Stage 4: now the DEFAULT). The legacy
+# AI_ASSIST_SHELL_INTERACTIVE=1 on the spawns below is an inert no-op kept for
+# clarity — with no AI_ASSIST_SHELL_NO_INTERACTIVE=1 the controller picks zpty.
 # Hosts a real login-interactive zsh inside zsh/zpty so the agent's shell mirrors
 # the user's environment. It must satisfy every contract the eval-loop does, so the
 # same core contracts run against it here. Determinism comes from a CONTROLLED

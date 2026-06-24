@@ -23,13 +23,22 @@ while (($#)); do
 done
 [[ -n "$cmd_fifo" ]] || { print -ru2 -- "ai-assist-shell: --cmd-fifo required"; exit 2; }
 
-# Interactive backend (Stage 1, opt-in via AI_ASSIST_SHELL_INTERACTIVE=1): host a
-# real login-interactive zsh inside a zsh/zpty so the agent's shell mirrors the
-# user's environment (functions, aliases, dir-managers). Satisfies every contract
-# the eval-loop does; the eval-loop below stays the default until a later stage.
-# Falls back to the eval-loop (with a warning) if zsh/zpty is unavailable.
-if [[ "${AI_ASSIST_SHELL_INTERACTIVE:-}" == 1 ]]; then
-  if zmodload zsh/zpty 2>/dev/null; then
+# Interactive backend (Stage 4, DEFAULT): host a real login-interactive zsh inside
+# a zsh/zpty so the agent's shell mirrors the user's environment (functions,
+# aliases, dir-managers). Satisfies every contract the eval-loop does. The
+# eval-loop below is now the FALLBACK, used only when the user opts out via
+# AI_ASSIST_SHELL_NO_INTERACTIVE=1 or when zsh/zpty is unavailable (with a
+# warning — the opt-out itself is silent). Both paths are kept intact until a
+# later stage deletes the eval-loop.
+_aas_use_zpty=1
+if [[ "${AI_ASSIST_SHELL_NO_INTERACTIVE:-}" == 1 ]]; then
+  _aas_use_zpty=0
+elif ! zmodload zsh/zpty 2>/dev/null; then
+  _aas_use_zpty=0
+  print -ru2 -- "ai-assist-shell: zsh/zpty unavailable; falling back to non-interactive eval-loop"
+fi
+
+if (( _aas_use_zpty )); then
     # ---- zpty controller -----------------------------------------------------
     zpty -d AAS 2>/dev/null  # in case a stale handle survives
     trap 'zpty -d AAS 2>/dev/null; exit 0' INT TERM
@@ -166,9 +175,6 @@ export AAS_OUT_'"$_aas_key"'="$(< '"$_aas_r"'/out)" AAS_ERR_'"$_aas_key"'="$(< '
       fi
     done
     exit 0
-  else
-    print -ru2 -- "ai-assist-shell: zsh/zpty unavailable; falling back to non-interactive eval-loop"
-  fi
 fi
 
 # Kill a process and all its descendants (depth-first). Used to enforce the

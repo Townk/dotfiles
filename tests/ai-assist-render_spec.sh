@@ -133,19 +133,45 @@ Describe 'ai-assist-render'
       export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
     }
     BeforeRun 'setup_shell_test'
-    envf="$TEST_TMP/req.env"; printf "export X=1\n" > "$envf"
+    initf="$TEST_TMP/req.shell-init"; printf "export X=1\n" > "$initf"
     # harness stub records whether the var reached its environment
     harness="$TEST_TMP/harness"
     { echo '#!/usr/bin/env zsh'
       echo "printf '%s' \"\${AI_ASSIST_SHELL_FIFO:-UNSET}\" > \"$TEST_TMP/seen-fifo\""
     } > "$harness"; chmod +x "$harness"
-    When run script "$SCRIPT" --harness claude --shell-env "$envf" --shell-cwd "$TEST_TMP" \
+    When run script "$SCRIPT" --harness claude --shell-init "$initf" --shell-cwd "$TEST_TMP" \
       --shell-bin "$TEST_TMP/ai-assist-shell" -- "$harness"
     The status should be success
     The output should include "PAGER_RAN"
     The contents of file "$TEST_TMP/shell-args" should include "--cmd-fifo"
-    The contents of file "$TEST_TMP/shell-args" should include "--env-file $envf"
+    # Stage 4: the single consolidated dump is forwarded as --shell-init (the
+    # derived --env-file forward is gone).
+    The contents of file "$TEST_TMP/shell-args" should include "--shell-init $initf"
+    The contents of file "$TEST_TMP/shell-args" should not include "--env-file"
     The contents of file "$TEST_TMP/seen-fifo" should not equal "UNSET"
+  End
+
+  It 're-exports AI_ASSIST_SHELL_NO_INTERACTIVE into the shell spawn when --no-interactive'
+    # Stage 4 fallback toggle: render runs in a fresh zellij pane that drops env,
+    # so --no-interactive arrives as an ARG; render must re-export it so the spawned
+    # ai-assist-shell picks the eval-loop. A custom stub records its OWN environment.
+    setup_noint_test() {
+      pager_stub
+      { echo '#!/usr/bin/env zsh'
+        echo "printf '%s' \"\${AI_ASSIST_SHELL_NO_INTERACTIVE:-UNSET}\" > \"$TEST_TMP/seen-noint\""
+        echo "exec sleep 5"
+      } > "$TEST_TMP/ai-assist-shell"; chmod +x "$TEST_TMP/ai-assist-shell"
+      export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
+    }
+    BeforeRun 'setup_noint_test'
+    initf="$TEST_TMP/req.shell-init"; printf "export X=1\n" > "$initf"
+    harness="$TEST_TMP/harness-noint"
+    { echo '#!/usr/bin/env zsh'; echo "true"; } > "$harness"; chmod +x "$harness"
+    When run script "$SCRIPT" --harness claude --shell-init "$initf" --shell-cwd "$TEST_TMP" \
+      --no-interactive --shell-bin "$TEST_TMP/ai-assist-shell" -- "$harness"
+    The status should be success
+    The output should include "PAGER_RAN"
+    The contents of file "$TEST_TMP/seen-noint" should equal "1"
   End
 
   It 'exports AI_ASSIST_PROJECT_ROOT to the harness when --project-root is passed'
@@ -155,12 +181,12 @@ Describe 'ai-assist-render'
       export AI_ASSIST_PAGER_BIN="$TEST_TMP/pager"
     }
     BeforeRun 'setup_projroot_test'
-    envf="$TEST_TMP/req.env"; printf "export X=1\n" > "$envf"
+    initf="$TEST_TMP/req.shell-init"; printf "export X=1\n" > "$initf"
     harness="$TEST_TMP/harness2"
     { echo '#!/usr/bin/env zsh'
       echo "printf '%s' \"\${AI_ASSIST_PROJECT_ROOT:-UNSET}\" > \"$TEST_TMP/seen-projroot\""
     } > "$harness"; chmod +x "$harness"
-    When run script "$SCRIPT" --harness claude --shell-env "$envf" --shell-cwd "$TEST_TMP" \
+    When run script "$SCRIPT" --harness claude --shell-init "$initf" --shell-cwd "$TEST_TMP" \
       --shell-bin "$TEST_TMP/ai-assist-shell" --project-root /tmp/proj -- "$harness"
     The status should be success
     The output should include "PAGER_RAN"

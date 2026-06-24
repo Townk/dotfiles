@@ -142,7 +142,7 @@ JSON
       The contents of file "$TEST_TMP/zj-args" should include "please check the Makefile"
     End
 
-    It 'passes the agent-shell env + cwd to ai-assist-render and snapshots the env'
+    It 'passes the consolidated shell-init dump + cwd to ai-assist-render (Stage 4)'
       # Create a stub render so the worker takes the AI_ASSIST_RENDER=1 branch;
       # it just needs to be executable — zellij is also stubbed, so it never runs.
       render_dir="$TEST_TMP/home/.local/libexec"
@@ -154,9 +154,28 @@ JSON
       When run script "$(SCRIPT)" --request "$REQFILE"
       The status should be success
       The stdout should include "ai-assist"
-      The contents of file "$TEST_TMP/zj-args" should include "--shell-env"
+      # Stage 4: ONE dump (request.shell-init, env+aliases+functions) — the
+      # separate --shell-env / request.env capture is gone.
+      The contents of file "$TEST_TMP/zj-args" should include "--shell-init"
       The contents of file "$TEST_TMP/zj-args" should include "--shell-cwd"
-      The path "${REQFILE:h}/request.env" should be exist
+      The contents of file "$TEST_TMP/zj-args" should not include "--shell-env"
+      The path "${REQFILE:h}/request.shell-init" should be exist
+      The path "${REQFILE:h}/request.env" should not be exist
+    End
+
+    It 'forwards --no-interactive to render when AI_ASSIST_SHELL_NO_INTERACTIVE=1'
+      # Stage 4 fallback toggle: the user opts out of the zpty backend per-trigger.
+      # summon→worker inherit the var; render gets it as an ARG (new-pane drops env).
+      render_dir="$TEST_TMP/home/.local/libexec"
+      mkdir -p "$render_dir"
+      printf '#!/usr/bin/env zsh\n' > "$render_dir/ai-assist-render"; chmod +x "$render_dir/ai-assist-render"
+      export AI_ASSIST_CLAUDE_BIN="claude"
+      export AI_ASSIST_RENDER=1
+      export AI_ASSIST_SHELL_NO_INTERACTIVE=1
+      When run script "$(SCRIPT)" --request "$TEST_TMP/req.json"
+      The status should be success
+      The stdout should include "ai-assist"
+      The contents of file "$TEST_TMP/zj-args" should include "--no-interactive"
     End
 
     It 'passes --project-root to ai-assist-render'

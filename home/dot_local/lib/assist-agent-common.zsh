@@ -345,28 +345,29 @@ assist::worker_main() {
     )
     exit $?
   fi
-  # Snapshot the origin environment for the agent's own shell (Phase C1). The
-  # worker is exec-chained from the origin shell, so its env IS the origin env.
-  # export -p is re-sourceable; readonly specials are tolerated on re-source.
-  # Create the file 0600 before writing any secrets (umask 077 ensures the
-  # empty file is created with no group/other bits even if the user's umask
-  # is more permissive), then append the dump so we never widen the mode.
-  local req_env="${request_file:h}/request.env"
-  ( umask 077; : > "$req_env" ) 2>/dev/null || : > "$req_env"
-  export -p >> "$req_env" 2>/dev/null || true
-  # Shell-init artifact (Stage 3, additive): the ZLE trigger captured the user's
-  # LIVE interactive aliases/functions (a child can't see them) into a temp file
-  # and threaded its path via AI_ASSIST_SHELL_INIT. Persist it as
-  # request.shell-init so the agent shell can source it as a --shell-init dump.
-  # Reuse semantics keep the ORIGINAL dump across re-invocations:
+  # Shell-init artifact (Stage 4 cutover): the SINGLE dump that seeds the agent
+  # shell. The ZLE trigger captured the user's LIVE interactive aliases/functions
+  # AND its exported env (a child can't see the aliases/functions) into one temp
+  # file — `functions; alias -L; export -p` — and threaded its path via
+  # AI_ASSIST_SHELL_INIT. Persist it as request.shell-init so the agent shell can
+  # source it as a --shell-init dump. This supersedes the old separate req_env
+  # capture (env now rides the same dump). The file ALWAYS exists after this block
+  # so non-widget entry points (re-invocation, direct worker calls) still get env
+  # fidelity. Created 0600 first (umask 077) so we never widen the mode, then the
+  # dump is appended:
   #   - fresh trigger (AI_ASSIST_SHELL_INIT set + readable) → copy the full dump.
-  #   - re-invocation (regenerate/followup/wrapup) → leave the existing artifact.
-  #   - neither → skip; the agent shell falls back to `zsh -il`'s base env.
-  # Created 0600 first (umask 077) like req_env so we never widen the mode.
+  #   - re-invocation (regenerate/followup/wrapup) → keep the existing artifact.
+  #   - neither → fall back to THIS process's exported env (export -p), which is
+  #     the origin env (the worker is exec-chained from the origin shell).
   local req_shell_init="${request_file:h}/request.shell-init"
   if [[ -n "${AI_ASSIST_SHELL_INIT:-}" && -r "$AI_ASSIST_SHELL_INIT" ]]; then
     ( umask 077; : > "$req_shell_init" ) 2>/dev/null || : > "$req_shell_init"
     cat -- "$AI_ASSIST_SHELL_INIT" >> "$req_shell_init" 2>/dev/null || true
+  elif [[ -f "$req_shell_init" ]]; then
+    : # re-invocation: keep the original dump already on disk
+  else
+    ( umask 077; : > "$req_shell_init" ) 2>/dev/null || : > "$req_shell_init"
+    export -p >> "$req_shell_init" 2>/dev/null || true
   fi
   local kb; kb="$(assist::kb_ensure "${REQ_PROJECT_ROOT:-$PWD}")"
   # --prompt-file lets a caller inject a custom system prompt (used by ai-assist-wrapup
@@ -406,11 +407,17 @@ assist::worker_main() {
     local -a render_flags=()
     [[ -n "$REQ_PANE_ID" ]] && render_flags+=(--origin-pane "$REQ_PANE_ID")
     [[ "$REQ_OVER_SSH" == true ]] && render_flags+=(--over-ssh)
-    render_flags+=(--shell-env "$req_env" --shell-cwd "${REQ_CWD:-$PWD}")
-    # Forward the captured live aliases/functions dump (Stage 3) when present.
-    # Additive: carried alongside --shell-env (env for the eval-loop); consolidated
-    # at cutover. Both fresh-copy and reused-original artifacts land here.
+    render_flags+=(--shell-cwd "${REQ_CWD:-$PWD}")
+    # Forward the SINGLE consolidated shell-init dump (Stage 4): functions + aliases
+    # + env in one file. Always present after the block above, so this is the one
+    # source for both backends (the separate --shell-env/req_env capture is gone).
     [[ -f "$req_shell_init" ]] && render_flags+=(--shell-init "$req_shell_init")
+    # Fallback toggle (Stage 4): the user can revert to the non-interactive eval-loop
+    # per-trigger via `export AI_ASSIST_SHELL_NO_INTERACTIVE=1` in their interactive
+    # shell. summon→worker inherit it automatically, but render is spawned into a
+    # fresh zellij pane that DROPS env — so thread it as an ARG; render re-exports it
+    # into the ai-assist-shell spawn environment.
+    [[ -n "${AI_ASSIST_SHELL_NO_INTERACTIVE:-}" ]] && render_flags+=(--no-interactive)
     [[ -n "${REQ_PROJECT_ROOT:-}" ]] && render_flags+=(--project-root "$REQ_PROJECT_ROOT")
     # Forward the cache keys as render ARGS, not env: render runs in a fresh
     # zellij pane that does NOT inherit this process's env, so the playbook
