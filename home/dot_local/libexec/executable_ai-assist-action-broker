@@ -12,6 +12,10 @@ set -uo pipefail
 US=$'\x1f' RS=$'\x1e'
 # Debug logging is OFF unless AI_ASSIST_DEBUG_LOG (or AI_ASSIST_BROKER_LOG) is set.
 AI_ASSIST_BROKER_LOG="${AI_ASSIST_BROKER_LOG:-${AI_ASSIST_DEBUG_LOG:-}}"
+# Re-export the resolved log path so the helpers we spawn (followup/wrapup/
+# regenerate) log to the SAME file — they read AI_ASSIST_DEBUG_LOG, which may not
+# have survived the env path down to here.
+[[ -n "$AI_ASSIST_BROKER_LOG" ]] && export AI_ASSIST_DEBUG_LOG="$AI_ASSIST_BROKER_LOG"
 _log() { [[ -n "${AI_ASSIST_BROKER_LOG:-}" ]] && print -r -- "$(date +%H:%M:%S) [broker] $*" >> "$AI_ASSIST_BROKER_LOG"; }
 _dbg() { _log "$@"; }
 fifo="" origin="" over_ssh=0
