@@ -151,6 +151,17 @@ error_log_path = "~/.local/state/mlx-gemma/mlx-gemma.log"
 # launchd doesn't inherit interactive PATH; ~/.local/bin holds the uv-installed
 # mlx_vlm.server shim, which resolves its own venv.
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+# Automatic Prefix Caching (mlx_vlm/apc.py, built via apc.from_env). Gated by
+# APC_ENABLED, which defaults to "0" — without this the static system-prompt
+# prefix is re-prefilled on every request. APC is exact (byte-identical KV) and
+# composes with the MTP drafter above. APC_DISK_PATH adds the shard-based SSD
+# tier that restores KV blocks after a process restart; APC_HASH=sha256 makes
+# the block hash process-stable (the default "fast" hash is per-process
+# randomized, so disk blocks would never match across restarts). APC creates
+# the dir itself; the parent ~/.local/state/mlx-gemma/ is the log dir above.
+APC_ENABLED = "1"
+APC_HASH = "sha256"
+APC_DISK_PATH = "{{ .chezmoi.homeDir }}/.local/state/mlx-gemma/apc"
 {{ end }}
 
 # headroom — local compression and CCR retrieval proxy.
