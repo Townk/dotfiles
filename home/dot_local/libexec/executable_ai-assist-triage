@@ -232,6 +232,16 @@ fi
 _dbg "cache-hash: ctx=$_cache_ctx req=$_cache_req"
 _dbg "cache-hash: REQ_COMMAND_TEXT=${REQ_COMMAND_TEXT:-<empty>} REQ_COMMAND_EXIT=${REQ_COMMAND_EXIT:-<empty>} REQ_SCROLLBACK_LEN=${#REQ_SCROLLBACK}"
 
+# Defensive: a FAILED command whose scrollback we could not capture has an
+# UNRELIABLE cache key — it collapses to project+command+exit, so two genuinely
+# different errors of the same command would collide and replay the wrong
+# playbook. Disable the cache for this request (clearing the keys makes every
+# lookup/store/persist gate below fall through): always run fresh, never store.
+if [[ -n "$REQ_COMMAND_EXIT" && "$REQ_COMMAND_EXIT" != 0 && -z "${REQ_SCROLLBACK//[[:space:]]/}" ]]; then
+  _dbg "cache: DISABLED — failure (exit $REQ_COMMAND_EXIT) with empty scrollback (unreliable key)"
+  _cache_ctx="" _cache_req=""
+fi
+
 # ── Cache: lookup BEFORE cheap model ─────────────────────────────────────────
 # On a hit, replay by kind and exit WITHOUT running the classify step.
 # AI_ASSIST_NO_CACHE=1 forces a miss (bypass for regenerate / testing).

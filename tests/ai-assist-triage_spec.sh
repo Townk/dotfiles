@@ -471,4 +471,29 @@ JSON
     # Classify was called (no-cache forced the miss).
     The path "$TEST_TMP/classify-calls" should be file
   End
+
+  # A failed command whose scrollback could not be captured has an unreliable
+  # cache key — triage must DISABLE the cache (no false hit across different
+  # errors of the same command).
+  It 'disables the cache for a failure with empty scrollback'
+    make_classify_recorder claude
+    export AI_ASSIST_DEBUG_LOG="$TEST_TMP/dbg.log"
+    cat > "$TEST_TMP/req-fail.json" <<'JSON'
+{
+  "version": 1,
+  "kind": "question",
+  "origin": {"cwd":"/tmp/proj","project_root":"/tmp/proj","pane_id":"terminal_7"},
+  "command": {"text":"make all","exit":2},
+  "scrollback": "",
+  "user_request": "why did make fail",
+  "project": {"name":"proj","branch":"main"}
+}
+JSON
+    drain_in
+    feed "submit${US}why did make fail"
+    When run script "$SCRIPT" --out-fifo "$OUT_FIFO" --in-fifo "$IN_FIFO" \
+      --request "$TEST_TMP/req-fail.json" --origin-pane terminal_7
+    The status should be success
+    The contents of file "$TEST_TMP/dbg.log" should include "cache: DISABLED"
+  End
 End
