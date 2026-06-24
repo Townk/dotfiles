@@ -131,6 +131,20 @@ echo ok')"
     The output should equal "hello"
   End
 
+  # Stage 3: the captured live aliases/functions dump (--shell-init) is sourced
+  # into the eval-loop's seed so a job resolves a function (and alias) defined
+  # ONLY in that dump — proving the dump delivery path for the eval-loop backend.
+  It 'seeds aliases/functions from --shell-init (eval-loop)'
+    initf="$TEST_TMP/init"
+    printf 'aas_initfn() { print -r -- INITFN_OK }\nalias aas_initalias='\''print -r -- INITALIAS_OK'\''\n' > "$initf"
+    kill "$SHELL_PID" 2>/dev/null
+    "$SCRIPT" --cmd-fifo "$FIFO" --shell-init "$initf" --cwd "$TEST_TMP" & SHELL_PID=$!
+    reply="$(run_job 'aas_initfn')"
+    The contents of file "$reply/out" should equal "INITFN_OK"
+    reply2="$(run_job 'aas_initalias')"
+    The contents of file "$reply2/out" should equal "INITALIAS_OK"
+  End
+
   # Directory-scoped env managers (mise/direnv) are re-synced after each job, so a
   # config change in one block is visible to the next. Stub mise's hook-env to
   # emit an export and verify a later job sees it.
@@ -264,12 +278,19 @@ echo ok')"
     The contents of file "$reply/out" should equal "yes"
   End
 
+  # Stage 3: a --shell-init dump (the captured live aliases/functions) is sourced
+  # into the hosted login shell. Both a function AND an alias defined ONLY in the
+  # dump must resolve in a job — proving the dump path end-to-end into the zpty
+  # backend's real interactive shell.
   It 'seeds ad-hoc aliases/functions from --shell-init'
-    initf="$TEST_TMP/init"; printf "alias aas_initalias='print -r -- INIT_OK'\n" > "$initf"
+    initf="$TEST_TMP/init"
+    printf 'aas_initfn() { print -r -- INITFN_OK }\nalias aas_initalias='\''print -r -- INITALIAS_OK'\''\n' > "$initf"
     kill "$SHELL_PID" 2>/dev/null
     ZDOTDIR="$ZDOT" AI_ASSIST_SHELL_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --shell-init "$initf" --cwd "$TEST_TMP" & SHELL_PID=$!
-    reply="$(run_job 'aas_initalias')"
-    The contents of file "$reply/out" should equal "INIT_OK"
+    reply="$(run_job 'aas_initfn')"
+    The contents of file "$reply/out" should equal "INITFN_OK"
+    reply2="$(run_job 'aas_initalias')"
+    The contents of file "$reply2/out" should equal "INITALIAS_OK"
   End
 
   # The real execution timeout: a runaway command is interrupted and reported 124.

@@ -354,6 +354,20 @@ assist::worker_main() {
   local req_env="${request_file:h}/request.env"
   ( umask 077; : > "$req_env" ) 2>/dev/null || : > "$req_env"
   export -p >> "$req_env" 2>/dev/null || true
+  # Shell-init artifact (Stage 3, additive): the ZLE trigger captured the user's
+  # LIVE interactive aliases/functions (a child can't see them) into a temp file
+  # and threaded its path via AI_ASSIST_SHELL_INIT. Persist it as
+  # request.shell-init so the agent shell can source it as a --shell-init dump.
+  # Reuse semantics keep the ORIGINAL dump across re-invocations:
+  #   - fresh trigger (AI_ASSIST_SHELL_INIT set + readable) → copy the full dump.
+  #   - re-invocation (regenerate/followup/wrapup) → leave the existing artifact.
+  #   - neither → skip; the agent shell falls back to `zsh -il`'s base env.
+  # Created 0600 first (umask 077) like req_env so we never widen the mode.
+  local req_shell_init="${request_file:h}/request.shell-init"
+  if [[ -n "${AI_ASSIST_SHELL_INIT:-}" && -r "$AI_ASSIST_SHELL_INIT" ]]; then
+    ( umask 077; : > "$req_shell_init" ) 2>/dev/null || : > "$req_shell_init"
+    cat -- "$AI_ASSIST_SHELL_INIT" >> "$req_shell_init" 2>/dev/null || true
+  fi
   local kb; kb="$(assist::kb_ensure "${REQ_PROJECT_ROOT:-$PWD}")"
   # --prompt-file lets a caller inject a custom system prompt (used by ai-assist-wrapup
   # for the wrap-up pass). Falls back to the standard system prompt when unset/absent.
@@ -393,6 +407,10 @@ assist::worker_main() {
     [[ -n "$REQ_PANE_ID" ]] && render_flags+=(--origin-pane "$REQ_PANE_ID")
     [[ "$REQ_OVER_SSH" == true ]] && render_flags+=(--over-ssh)
     render_flags+=(--shell-env "$req_env" --shell-cwd "${REQ_CWD:-$PWD}")
+    # Forward the captured live aliases/functions dump (Stage 3) when present.
+    # Additive: carried alongside --shell-env (env for the eval-loop); consolidated
+    # at cutover. Both fresh-copy and reused-original artifacts land here.
+    [[ -f "$req_shell_init" ]] && render_flags+=(--shell-init "$req_shell_init")
     [[ -n "${REQ_PROJECT_ROOT:-}" ]] && render_flags+=(--project-root "$REQ_PROJECT_ROOT")
     # Forward the cache keys as render ARGS, not env: render runs in a fresh
     # zellij pane that does NOT inherit this process's env, so the playbook

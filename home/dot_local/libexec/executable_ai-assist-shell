@@ -185,6 +185,11 @@ _aas_kill_tree() {
 # many interactive rc files misbehave when sourced non-interactively.
 [[ -n "$rc" && -r "$rc" ]] && { emulate zsh -c "source '$rc'"; } 2>/dev/null
 [[ -n "$env_file" && -r "$env_file" ]] && source "$env_file" 2>/dev/null
+# --shell-init: the captured live aliases/functions dump (Stage 3). Source it
+# AFTER the env-file so both backends pick up the user's ad-hoc env. Functions
+# resolve here; alias expansion in this non-interactive eval-loop is limited
+# (the zpty backend is the authoritative path for aliases).
+[[ -n "$shell_init" && -r "$shell_init" ]] && source "$shell_init" 2>/dev/null
 [[ -n "$cwd" ]] && cd -- "$cwd" 2>/dev/null
 
 # Directory-scoped env-manager re-sync hooks: snippets eval'd after each block so
