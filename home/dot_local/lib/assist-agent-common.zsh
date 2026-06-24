@@ -383,6 +383,9 @@ assist::worker_main() {
     # Forward request.json (same reason: ARG not env) so render saves the regenerate
     # sidecar alongside the persisted playbook.
     [[ -n "${AI_ASSIST_CACHE_CTX:-}" && -n "$request_file" ]] && render_flags+=(--cache-request "$request_file")
+    # Forward the debug log path (ARG, not env: new-pane drops env) so the pane's
+    # broker/pager/helpers all log to it.
+    [[ -n "${AI_ASSIST_DEBUG_LOG:-}" ]] && render_flags+=(--debug-log "$AI_ASSIST_DEBUG_LOG")
     assist::spawn_pane "$render" --harness "$label" "${render_flags[@]}" -- "${ASSIST_PANE_CMD[@]}"
   else
     assist::spawn_pane "${ASSIST_PANE_CMD[@]}"

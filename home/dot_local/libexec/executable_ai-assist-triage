@@ -182,6 +182,7 @@ spawn_docked() {
   [[ -n "$origin_pane" ]] && render_flags+=(--origin-pane "$origin_pane")
   [[ "${REQ_OVER_SSH:-false}" == true ]] && render_flags+=(--over-ssh)
   [[ -n "${REQ_PROJECT_ROOT:-}" ]] && render_flags+=(--project-root "$REQ_PROJECT_ROOT")
+  [[ -n "${AI_ASSIST_DEBUG_LOG:-}" ]] && render_flags+=(--debug-log "$AI_ASSIST_DEBUG_LOG")
   render_flags+=(--shell-cwd "${REQ_CWD:-$PWD}")
   REQ_PROJECT_ROOT="${REQ_PROJECT_ROOT:-}" assist::spawn_pane "$render" "${render_flags[@]}" "$@"
 }

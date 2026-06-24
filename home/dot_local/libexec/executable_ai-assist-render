@@ -81,10 +81,15 @@ while (($#)); do
     --cached)         cache_replay_ts="${2:-}"; shift 2 ;;
     --regen-ctx)      regen_ctx="${2:-}"; shift 2 ;;
     --regen-req)      regen_req="${2:-}"; shift 2 ;;
+    --debug-log)      AI_ASSIST_DEBUG_LOG="${2:-}"; shift 2 ;;
     --) shift; break ;;
     *) break ;;
   esac
 done
+# Export so the broker, pager, and the regenerate/wrap-up/follow-up helpers (all
+# children of this pane) inherit the debug log path — `zellij action new-pane`
+# drops env, so it only reaches here as the --debug-log ARG.
+[[ -n "$AI_ASSIST_DEBUG_LOG" ]] && export AI_ASSIST_DEBUG_LOG
 # Ensure regen keys are always populated — fall back to the cache keys when
 # --regen-ctx/--regen-req were not passed explicitly (fresh playbook path).
 # This lets wrap-up work uniformly on both fresh and cached-replay panes.
