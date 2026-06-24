@@ -153,3 +153,139 @@ echo ok')"
     The contents of file "$reply/out" should equal "ran"
   End
 End
+
+# The zpty interactive backend (Stage 1, opt-in via AI_ASSIST_SHELL_INTERACTIVE=1).
+# Hosts a real login-interactive zsh inside zsh/zpty so the agent's shell mirrors
+# the user's environment. It must satisfy every contract the eval-loop does, so the
+# same core contracts run against it here. Determinism comes from a CONTROLLED
+# ZDOTDIR: a temp .zshrc that defines a test function + alias (so `zsh -il` loads
+# them fast — NOT the runner's real rc). The new interactive-env test confirms the
+# hosted shell resolves that function and alias (not `command not found`).
+Describe 'ai-assist-shell (zpty interactive backend)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_ai-assist-shell"
+
+  setup() {
+    TEST_TMP="$(mktemp -d)"
+    # Controlled rc: a minimal .zshrc with a test function + alias, loaded by the
+    # hosted `zsh -il` instead of the runner's heavy real rc.
+    ZDOT="$TEST_TMP/zdot"; mkdir -p "$ZDOT"
+    printf 'aas_testfn() { print -r -- FN_OK }\nalias aas_testalias='\''print -r -- ALIAS_OK'\''\n' > "$ZDOT/.zshrc"
+    FIFO="$TEST_TMP/cmd.fifo"; mkfifo "$FIFO"
+    ZDOTDIR="$ZDOT" AI_ASSIST_SHELL_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" &
+    SHELL_PID=$!
+  }
+  cleanup() { kill "$SHELL_PID" 2>/dev/null; rm -rf "$TEST_TMP"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # The hosted shell is a real login zsh (slower seed than the eval-loop); allow a
+  # generous bound so seeding + the job round-trip never races the assertion.
+  run_job() {
+    local reply; reply="$(mktemp -d "$TEST_TMP/reply.XXXXXX")"
+    printf '%s\x1f%s\x1e' "$reply" "$1" > "$FIFO"
+    local i=0; while [ ! -e "$reply/done" ] && [ $i -lt 600 ]; do sleep 0.02; i=$((i+1)); done
+    printf '%s' "$reply"
+  }
+  run_job_id() {
+    local reply id cmd; reply="$(mktemp -d "$TEST_TMP/reply.XXXXXX")"; id="$1"; cmd="$2"
+    printf '%s\x1f%s\x1f%s\x1e' "$reply" "$id" "$cmd" > "$FIFO"
+    local i=0; while [ ! -e "$reply/done" ] && [ $i -lt 600 ]; do sleep 0.02; i=$((i+1)); done
+    printf '%s' "$reply"
+  }
+
+  It 'captures stdout, stderr and exit code separately'
+    reply="$(run_job 'echo out; echo err >&2; exit 3')"
+    The contents of file "$reply/out" should equal "out"
+    The contents of file "$reply/err" should equal "err"
+    The contents of file "$reply/exit" should equal "3"
+  End
+
+  It 'reports exit 0 for a successful command'
+    reply="$(run_job 'true')"
+    The contents of file "$reply/exit" should equal "0"
+  End
+
+  # A command that fails WITHOUT calling `exit` must still report its non-zero code.
+  It 'reports a non-zero exit for a failing command (not just exit N)'
+    reply="$(run_job 'false')"
+    The contents of file "$reply/exit" should equal "1"
+  End
+
+  # A later success in a multi-command block must not mask an earlier failure.
+  It 'fails a multi-command block at the first failing command (set -e)'
+    reply="$(run_job 'false
+echo second')"
+    The contents of file "$reply/exit" should equal "1"
+  End
+
+  # A block can opt out of a deliberate non-zero with `… || true`.
+  It 'lets a block guard a deliberate non-zero (|| true)'
+    reply="$(run_job 'false || true
+echo ok')"
+    The contents of file "$reply/exit" should equal "0"
+  End
+
+  # Benign SIGPIPE (producer killed by an early-closing `| head`) is success.
+  It 'treats SIGPIPE as success (downstream closed early)'
+    reply="$(run_job 'yes | head -5')"
+    The contents of file "$reply/exit" should equal "0"
+  End
+
+  It 'persists cwd across jobs (cd is stateful)'
+    sub="$TEST_TMP/sub"; mkdir "$sub"
+    run_job "cd '$sub'" >/dev/null
+    reply="$(run_job 'pwd')"
+    The contents of file "$reply/out" should equal "$sub"
+  End
+
+  It 'persists exported vars across jobs'
+    run_job 'export FOO=bar' >/dev/null
+    reply="$(run_job 'echo $FOO')"
+    The contents of file "$reply/out" should equal "bar"
+  End
+
+  It 'exposes the previous result as LAST_EXCODE'
+    run_job 'exit 7' >/dev/null
+    reply="$(run_job 'echo $LAST_EXCODE')"
+    The contents of file "$reply/out" should equal "7"
+  End
+
+  It 'exposes AAS_OUT_<id> to a later job'
+    run_job_id diag 'echo hello' >/dev/null
+    reply="$(run_job 'printf %s "$AAS_OUT_diag"')"
+    The contents of file "$reply/out" should equal "hello"
+  End
+
+  It 'seeds the environment from --env-file'
+    envf="$TEST_TMP/env"; printf "export SEEDED=yes\n" > "$envf"
+    kill "$SHELL_PID" 2>/dev/null
+    ZDOTDIR="$ZDOT" AI_ASSIST_SHELL_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --env-file "$envf" --cwd "$TEST_TMP" & SHELL_PID=$!
+    reply="$(run_job 'echo $SEEDED')"
+    The contents of file "$reply/out" should equal "yes"
+  End
+
+  It 'seeds ad-hoc aliases/functions from --shell-init'
+    initf="$TEST_TMP/init"; printf "alias aas_initalias='print -r -- INIT_OK'\n" > "$initf"
+    kill "$SHELL_PID" 2>/dev/null
+    ZDOTDIR="$ZDOT" AI_ASSIST_SHELL_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --shell-init "$initf" --cwd "$TEST_TMP" & SHELL_PID=$!
+    reply="$(run_job 'aas_initalias')"
+    The contents of file "$reply/out" should equal "INIT_OK"
+  End
+
+  # The real execution timeout: a runaway command is interrupted and reported 124.
+  It 'kills a job that overruns AI_ASSIST_RUN_TIMEOUT (exit 124)'
+    kill "$SHELL_PID" 2>/dev/null
+    ZDOTDIR="$ZDOT" AI_ASSIST_RUN_TIMEOUT=1 AI_ASSIST_SHELL_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" & SHELL_PID=$!
+    reply="$(run_job 'sleep 5')"
+    The contents of file "$reply/exit" should equal "124"
+  End
+
+  # The point of the interactive backend: the hosted login shell loads the user's
+  # rc, so a function and an alias defined there RESOLVE (no 127/command not found).
+  It 'resolves the interactive rc function and alias (not command not found)'
+    reply="$(run_job 'aas_testfn; aas_testalias')"
+    The contents of file "$reply/out" should equal "FN_OK
+ALIAS_OK"
+    The contents of file "$reply/exit" should equal "0"
+  End
+End
