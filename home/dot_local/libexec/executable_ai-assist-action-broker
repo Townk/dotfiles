@@ -200,18 +200,31 @@ broker::kill_tree() {
   kill -"$sig" "$p" 2>/dev/null
 }
 
-# broker::stop_block — interrupt a running block. The agent shell published the
-# job's pid to $run_dir/<id>.pid; kill the whole tree. The shell's wait then
-# returns and the normal result record (non-zero exit) flows back, flipping the
-# block out of "running".
+# broker::stop_block — interrupt a running block. Covers BOTH shell backends:
+#   * eval-loop (default): the agent shell published the job's pid to
+#     $run_dir/<id>.pid; kill the whole tree. Its wait then returns and the
+#     normal result record (non-zero exit) flows back, flipping the block out of
+#     "running".
+#   * zpty interactive: the job is the hosted shell's foreground process (no
+#     per-job pid). The controller polls for $run_dir/<id>.stop and sends ^C when
+#     it appears, recording exit 143. So touch the stop flag too.
+# The flag is touched whether or not a pidfile exists (the two backends are
+# mutually exclusive at runtime; touching both is harmless and backend-agnostic).
 broker::stop_block() {
-  local id="$1" pidfile="${run_dir:+$run_dir/${1}.pid}" pid
-  _log "stop_block id=${id} pidfile=${pidfile:-EMPTY}"
-  [[ -n "$pidfile" && -r "$pidfile" ]] || { _log "stop_block id=${id} NO_PIDFILE"; return 0; }
-  pid="$(<"$pidfile")"
-  [[ -n "$pid" ]] || return 0
-  broker::kill_tree "$pid" TERM
-  _log "stop_block id=${id} killed pid=${pid}"
+  local id="$1" pidfile="${run_dir:+$run_dir/${1}.pid}" stopflag="${run_dir:+$run_dir/${1}.stop}" pid
+  _log "stop_block id=${id} pidfile=${pidfile:-EMPTY} stopflag=${stopflag:-EMPTY}"
+  # zpty backend: signal the controller via the stop flag (best-effort).
+  [[ -n "$stopflag" ]] && : > "$stopflag" 2>/dev/null
+  # eval-loop backend: kill the published job tree.
+  if [[ -n "$pidfile" && -r "$pidfile" ]]; then
+    pid="$(<"$pidfile")"
+    if [[ -n "$pid" ]]; then
+      broker::kill_tree "$pid" TERM
+      _log "stop_block id=${id} killed pid=${pid}"
+    fi
+  else
+    _log "stop_block id=${id} NO_PIDFILE"
+  fi
 }
 
 # broker::regenerate — invoke ai-assist-regenerate in the background to re-run

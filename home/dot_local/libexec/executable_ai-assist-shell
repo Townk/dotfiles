@@ -82,20 +82,32 @@ if [[ "${AI_ASSIST_SHELL_INTERACTIVE:-}" == 1 ]]; then
       # file). nounset is deliberately NOT enabled (user code must not get false
       # unset failures).
       #
-      # `exit` is shadowed by a function that `return`s instead, for the duration
-      # of the job: in the persistent hosted shell a bare `exit N` from user code
-      # would otherwise KILL the shell (zsh: exit outside a subshell terminates the
-      # shell). Shadowed, `exit N` returns N from the anon function — so it becomes
-      # the job's exit code while cd/export made before it still persist. The shadow
-      # is removed right after so it never affects the controller's own bookkeeping.
+      # `exit` is shadowed by a function for the duration of the job: in the
+      # persistent hosted shell a bare `exit N` from user code would otherwise KILL
+      # the shell (zsh: exit outside a subshell terminates the shell). The shadow
+      # records the requested code in _aas_uexit and forces the anon function to
+      # stop by `return`ing a non-zero sentinel (210) — so BOTH `exit 0` and
+      # `exit N` halt the block immediately (a plain `return ${1:-0}` would let
+      # `exit 0` fall through, since err_return only catches non-zero). _aas_uexit
+      # is reset to EMPTY before each job; after the anon function the job's code is
+      # `${_aas_uexit:-$_rc}` — the user's exit code when exit was called (including
+      # `exit 0`, which sets _aas_uexit=0, a non-empty value), else the anon
+      # function's own rc (a block that never calls exit is unaffected). The
+      # resolution is a plain assignment on its OWN line: a `;`-chained or a
+      # standalone `[[ ]] &&` middle line wedges the interactive hosted shell over
+      # the pty (it stalls awaiting more input). cd/export made before the exit
+      # still persist (anon function, no fork). The shadow is removed right after so
+      # it never affects the controller's own bookkeeping.
       #
       # Benign SIGPIPE (141) is mapped to success. LAST_* (and, when an id is
       # present, AAS_OUT_/ERR_/EXIT_<key>) are exported so later jobs can reference
       # them. The trailing `: > done` flag is what the controller polls.
       _aas_r="${(q)_aas_reply}"
-      _aas_line='exit() { return ${1:-0} }
+      _aas_line='_aas_uexit= ; exit() { _aas_uexit=${1:-0} ; return 210 }
 () { setopt local_options err_return pipe_fail ; eval '"${(q)_aas_cmd}"' } > '"$_aas_r"'/out 2> '"$_aas_r"'/err
-_rc=$? ; unfunction exit 2>/dev/null ; [[ $_rc -eq 141 ]] && _rc=0
+_rc=$? ; unfunction exit 2>/dev/null
+_rc=${_aas_uexit:-$_rc}
+[[ $_rc -eq 141 ]] && _rc=0
 print -rn -- $_rc > '"$_aas_r"'/exit
 export LAST_EXCODE=$_rc LAST_STDOUT="$(< '"$_aas_r"'/out)" LAST_STDERR="$(< '"$_aas_r"'/err)"'
       if [[ -n "$_aas_id" ]]; then
@@ -107,32 +119,49 @@ export AAS_OUT_'"$_aas_key"'="$(< '"$_aas_r"'/out)" AAS_ERR_'"$_aas_key"'="$(< '
 : > '"$_aas_r"'/done'
       w "$_aas_line"
 
-      # Publish the pid placeholder is N/A here (no per-job pid); a stop flag /
-      # robust escalation is a later stage. Stage 1: bound by the timeout → 124.
+      # There is no per-job pid here (the job is the hosted shell's foreground),
+      # so a stop request arrives as a FLAG file: the broker touches
+      # $run_dir/<id>.stop. Each poll iteration checks BOTH the timeout deadline
+      # and the stop flag; whichever fires first sends ^C to interrupt the
+      # foreground job. Timeout → 124, stop → 143 (SIGTERM-class: the pager treats
+      # >128 as "stopped — no auto-follow-up"). The two are kept distinct.
       _aas_max="${AI_ASSIST_RUN_TIMEOUT:-120}"
-      _aas_el=0 _aas_timedout=0
+      _aas_stopf=""
+      [[ -n "$_aas_id" && -n "$run_dir" && -d "$run_dir" ]] && _aas_stopf="$run_dir/${_aas_id}.stop"
+      _aas_el=0 _aas_timedout=0 _aas_stopped=0
       while [[ ! -e "$_aas_reply/done" ]]; do
         flush; sleep 0.1
         _aas_el=$(( _aas_el + 1 ))
+        if [[ -n "$_aas_stopf" && -e "$_aas_stopf" ]]; then
+          _aas_stopped=1
+          zpty -w AAS $'\003'           # ^C — interrupt the foreground job
+          break
+        fi
         if (( _aas_el >= _aas_max * 10 )); then
           _aas_timedout=1
           zpty -w AAS $'\003'           # ^C — interrupt the foreground job
           break
         fi
       done
-      if (( _aas_timedout )); then
+      if (( _aas_timedout || _aas_stopped )); then
         # ^C aborts the interrupted job at the interactive prompt, so the hosted
         # shell will NOT run the rest of the job line (no done flag drop). Give it
         # a brief grace window (in case the eval finished concurrently with the
         # ^C and the flag is about to appear), then synthesize the reply files and
-        # record the timeout contract code. Re-sync the hosted shell to a clean
-        # prompt with our own sync flag so the next job starts cleanly.
+        # record the contract code (124 timeout / 143 stop). Re-sync the hosted
+        # shell to a clean prompt with our own sync flag so the next job starts
+        # cleanly, then clear the stop flag (best-effort).
         _aas_g=0
         while [[ ! -e "$_aas_reply/done" ]] && (( _aas_g < 5 )); do flush; sleep 0.1; (( _aas_g++ )); done
         [[ -e "$_aas_reply/out" ]] || : > "$_aas_reply/out"
         [[ -e "$_aas_reply/err" ]] || : > "$_aas_reply/err"
-        print -rn -- 124 > "$_aas_reply/exit"
+        if (( _aas_stopped )); then
+          print -rn -- 143 > "$_aas_reply/exit"
+        else
+          print -rn -- 124 > "$_aas_reply/exit"
+        fi
         _aas_seed "true"   # drain any residual prompt output; resync the shell
+        [[ -n "$_aas_stopf" ]] && rm -f "$_aas_stopf"
         : > "$_aas_reply/done"
       fi
     done

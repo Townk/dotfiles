@@ -288,4 +288,52 @@ echo ok')"
 ALIAS_OK"
     The contents of file "$reply/exit" should equal "0"
   End
+
+  # `exit 0` mid-block must STOP the block (not fall through). A plain
+  # `return ${1:-0}` shadow would continue, since err_return only catches non-zero.
+  It 'stops the block on exit 0 (does not run the rest)'
+    reply="$(run_job 'echo a; exit 0; echo b')"
+    The contents of file "$reply/out" should equal "a"
+    The contents of file "$reply/exit" should equal "0"
+  End
+
+  # `exit N` mid-block stops the block AND records N as the exit code.
+  It 'stops the block on exit N and records the code'
+    reply="$(run_job 'echo a; exit 5; echo b')"
+    The contents of file "$reply/out" should equal "a"
+    The contents of file "$reply/exit" should equal "5"
+  End
+
+  # cd made BEFORE an exit still persists (anon function, no fork): a later job
+  # sees the new cwd even though the earlier block exited early.
+  It 'persists cd made before an exit'
+    run_job 'cd /tmp; exit 3' >/dev/null
+    reply="$(run_job 'pwd')"
+    The contents of file "$reply/out" should equal "/tmp"
+  End
+
+  # Stop via the flag file: a long job whose $run_dir/<id>.stop appears mid-run is
+  # interrupted with ^C and recorded as exit 143 (SIGTERM-class). The hosted shell
+  # must SURVIVE and serve a following job (proving ^C only aborted the foreground
+  # job, not the controller).
+  It 'stops a running job via the stop flag (exit 143) and survives'
+    rund="$TEST_TMP/run"; mkdir "$rund"
+    kill "$SHELL_PID" 2>/dev/null
+    ZDOTDIR="$ZDOT" AI_ASSIST_SHELL_INTERACTIVE=1 "$SCRIPT" --cmd-fifo "$FIFO" --cwd "$TEST_TMP" --run-dir "$rund" & SHELL_PID=$!
+    # Submit a long job with an id, then touch the stop flag shortly after dispatch.
+    stopdrive() {
+      local reply; reply="$(mktemp -d "$TEST_TMP/reply.XXXXXX")"
+      printf '%s\x1f%s\x1f%s\x1e' "$reply" "blkstop" "sleep 30" > "$FIFO"
+      sleep 0.5
+      : > "$rund/blkstop.stop"
+      local i=0; while [ ! -e "$reply/done" ] && [ $i -lt 600 ]; do sleep 0.02; i=$((i+1)); done
+      printf '%s' "$reply"
+    }
+    reply="$(stopdrive)"
+    The contents of file "$reply/exit" should equal "143"
+    # The hosted shell survived: a following job runs normally.
+    reply2="$(run_job 'echo alive')"
+    The contents of file "$reply2/out" should equal "alive"
+    The contents of file "$reply2/exit" should equal "0"
+  End
 End

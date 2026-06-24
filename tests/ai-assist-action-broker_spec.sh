@@ -94,7 +94,7 @@ Describe 'ai-assist-action-broker'
     The contents of file "$TEST_TMP/results.out" should include "$(printf '\x1f')1$(printf '\x1f')"
   End
 
-  It 'stop kills the running job tree via the per-id pidfile'
+  It 'stop kills the running job tree via the per-id pidfile (eval-loop backend)'
     stopdrive() {
       load_broker
       run_dir="$TEST_TMP/run"; mkdir -p "$run_dir"
@@ -108,7 +108,36 @@ Describe 'ai-assist-action-broker'
     The output should equal "KILLED"
   End
 
-  It 'stop is a no-op when no pidfile exists'
+  # The stop flag is what the zpty backend's controller polls; the broker must
+  # touch it on every stop so it covers BOTH backends (pidfile-kill + flag).
+  It 'touches the stop flag for the zpty backend'
+    flagdrive() {
+      load_broker
+      run_dir="$TEST_TMP/run"; mkdir -p "$run_dir"
+      broker::dispatch "stop${US}blkz${US}${RS}"
+    }
+    When call flagdrive
+    The status should be success
+    The path "$TEST_TMP/run/blkz.stop" should be exist
+  End
+
+  # Even when a pidfile exists (eval-loop), the stop flag is still touched so a
+  # single stop is backend-agnostic.
+  It 'touches the stop flag even when a pidfile exists'
+    bothdrive() {
+      load_broker
+      run_dir="$TEST_TMP/run"; mkdir -p "$run_dir"
+      sleep 30 & local victim=$!
+      print -rn -- "$victim" > "$run_dir/blk9.pid"
+      broker::dispatch "stop${US}blk9${US}${RS}"
+      sleep 0.3
+    }
+    When call bothdrive
+    The status should be success
+    The path "$TEST_TMP/run/blk9.stop" should be exist
+  End
+
+  It 'stop is a no-op (still touches the flag) when no pidfile exists'
     nostop() {
       load_broker
       run_dir="$TEST_TMP/run"; mkdir -p "$run_dir"
@@ -118,6 +147,7 @@ Describe 'ai-assist-action-broker'
     When call nostop
     The status should be success
     The output should equal "ok"
+    The path "$TEST_TMP/run/ghost.stop" should be exist
   End
 
   It 'diff action opens a zellij 90% floating pane on the patch'
