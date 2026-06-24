@@ -128,7 +128,7 @@ JSON
       The output should include 'AAS_ERR'
       # C3a: outcome-verified fix — the final block re-runs the original command.
       The output should include 'VERIFY (outcome-check)'
-      The output should include 're-running the original'
+      The output should include 'id=verify'
     End
 
     # Regression: a general request whose last command SUCCEEDED must NOT be

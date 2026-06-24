@@ -176,9 +176,9 @@ broker::run_block() {
     local code=$?
     _log "run done id=${id} exit=${code}"
     [[ -n "$results" ]] && print -rn -- "${id}${US}${code}${US}${log}${RS}" >> "$results"
-    # Append a run-log line so ai-assist-wrapup can report outcomes to the agent.
-    [[ -n "$run_dir" ]] && printf '{"id":"%s","exit":%s,"ts":"%s"}\n' \
-      "$id" "$code" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$run_dir/runlog.jsonl" 2>/dev/null || true
+    # Append a run-log line so ai-assist-wrapup / ai-assist-followup can report outcomes.
+    [[ -n "$run_dir" ]] && printf '{"id":"%s","exit":%s,"ts":"%s","log":"%s"}\n' \
+      "$id" "$code" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$log" >> "$run_dir/runlog.jsonl" 2>/dev/null || true
   } &
 }
 
@@ -244,6 +244,28 @@ broker::wrapup() {
     >/dev/null 2>&1 &
 }
 
+# broker::followup — invoke ai-assist-followup in the background to re-engage the
+# agent with a "the previous fix did not work" prompt when a verify block fails.
+# Mirrors broker::wrapup: runs in the background, best-effort guard.
+broker::followup() {
+  local block_id="$1" failed_cmd="$2"
+  local followup_bin="${AI_ASSIST_FOLLOWUP_BIN:-}"
+  if [[ -z "$followup_bin" ]]; then
+    for _f in \
+      "$(command -v ai-assist-followup 2>/dev/null)" \
+      "$HOME/.local/libexec/ai-assist-followup"; do
+      [[ -n "$_f" && -x "$_f" ]] && { followup_bin="$_f"; break; }
+    done
+  fi
+  [[ -n "$regen_ctx" && -n "$regen_req" && -n "$input_fifo" && -n "$followup_bin" && -x "$followup_bin" ]] || return 0
+  _log "followup: ctx=$regen_ctx req=$regen_req input_fifo=$input_fifo block_id=${block_id} run_dir=${run_dir:-EMPTY}"
+  "$followup_bin" --ctx "$regen_ctx" --req "$regen_req" --input-fifo "$input_fifo" \
+    ${run_dir:+--run-dir "$run_dir"} \
+    --block-id "$block_id" --failed-cmd "$failed_cmd" \
+    ${regen_request:+--request-file "$regen_request"} \
+    >/dev/null 2>&1 &
+}
+
 # broker::dispatch — parse one 3-field record and route it.
 broker::dispatch() {
   local rec="$1"
@@ -264,6 +286,7 @@ broker::dispatch() {
     undo-diff)   broker::undo_diff "$id" "$payload" ;;
     regenerate)  broker::regenerate ;;
     wrapup)      broker::wrapup ;;
+    followup)    broker::followup "$id" "$payload" ;;
   esac
 }
 

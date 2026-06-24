@@ -284,6 +284,7 @@ Describe 'ai-assist-action-broker'
     The status should be success
     The output should include '"id":"fixid"'
     The output should include '"exit":0'
+    The output should include '"log"'
   End
 
   # ── Stage 4: regenerate action ────────────────────────────────────────────────
@@ -338,6 +339,40 @@ Describe 'ai-assist-action-broker'
     The status should be success
     # Helper must NOT have been invoked (missing ctx/req/input_fifo).
     The path "$TEST_TMP/regen-noop-args" should not be exist
+  End
+
+  # ── Phase C follow-up: followup action ───────────────────────────────────────
+
+  It 'followup dispatch invokes ai-assist-followup with --block-id/--failed-cmd/--ctx/--req/--input-fifo/--run-dir'
+    drive_followup() {
+      load_broker
+      regen_ctx="deadbeef"
+      regen_req="cafebabe"
+      input_fifo="$TEST_TMP/followup.fifo"
+      mkfifo -m 600 "$input_fifo" 2>/dev/null || true
+      run_dir="$TEST_TMP/followup-run"; mkdir -p "$run_dir"
+      {
+        echo '#!/usr/bin/env zsh'
+        echo "printf '%s\n' \"\$@\" >> \"$TEST_TMP/followup-args\""
+      } > "$TEST_TMP/followup-stub"; chmod +x "$TEST_TMP/followup-stub"
+      AI_ASSIST_FOLLOWUP_BIN="$TEST_TMP/followup-stub"
+      broker::dispatch "followup${US}verify${US}make test${RS}"
+      sleep 0.3
+    }
+    When call drive_followup
+    The status should be success
+    The path "$TEST_TMP/followup-args" should be file
+    The contents of file "$TEST_TMP/followup-args" should include "--ctx"
+    The contents of file "$TEST_TMP/followup-args" should include "deadbeef"
+    The contents of file "$TEST_TMP/followup-args" should include "--req"
+    The contents of file "$TEST_TMP/followup-args" should include "cafebabe"
+    The contents of file "$TEST_TMP/followup-args" should include "--input-fifo"
+    The contents of file "$TEST_TMP/followup-args" should include "followup.fifo"
+    The contents of file "$TEST_TMP/followup-args" should include "--run-dir"
+    The contents of file "$TEST_TMP/followup-args" should include "--block-id"
+    The contents of file "$TEST_TMP/followup-args" should include "verify"
+    The contents of file "$TEST_TMP/followup-args" should include "--failed-cmd"
+    The contents of file "$TEST_TMP/followup-args" should include "make test"
   End
 
   # ── Stage C3b: wrapup action ──────────────────────────────────────────────────

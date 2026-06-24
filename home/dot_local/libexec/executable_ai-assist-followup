@@ -1,0 +1,235 @@
+#!/usr/bin/env zsh
+# ai-assist-followup — failure follow-up: re-engage the agent when a fix fails.
+# Part of Phase C re-engagement (Phase C follow-up).
+#
+# Called by the broker's `followup` action handler with:
+#   --ctx <context_hash> --req <request_hash> --input-fifo <path>
+#   --block-id <id> --failed-cmd <text>
+#   [--run-dir <d>] [--request-file <f>] [--harness <h>]
+#
+# Behaviour:
+#   1. Resolve the original request (from --request-file if given, else sidecar,
+#      else entry front matter).
+#   2. Read the run log ($run_dir/runlog.jsonl) — find the LAST entry for
+#      --block-id and extract its logpath to read the failed command output.
+#   3. Build a follow-up prompt in a temp file: original request + project +
+#      failed command + its output + "try a different fix" instruction.
+#   4. Run `worker --stream --prompt-file <prompt> --request <req>` and pipe
+#      the output into --input-fifo (no artifact — unlike wrapup).
+#   5. Write the quit-sentinel when the worker is missing/non-exec.
+#
+# The harness-discovery block is intentionally duplicated from ai-assist-triage /
+# ai-assist-regenerate / ai-assist-wrapup (same logic, self-contained).
+set -uo pipefail
+
+source "${AI_ASSIST_LIB_DIR:-$HOME/.local/lib}/assist-agent-common.zsh"
+
+# ── Parse arguments ───────────────────────────────────────────────────────────
+ctx="" req="" input_fifo="" run_dir="" request_file_override="" harness_override=""
+block_id="" failed_cmd=""
+while (($#)); do
+  case "$1" in
+    --ctx)           ctx="${2:-}";                   shift 2 ;;
+    --req)           req="${2:-}";                   shift 2 ;;
+    --input-fifo)    input_fifo="${2:-}";            shift 2 ;;
+    --run-dir)       run_dir="${2:-}";               shift 2 ;;
+    --block-id)      block_id="${2:-}";              shift 2 ;;
+    --failed-cmd)    failed_cmd="${2:-}";            shift 2 ;;
+    --request-file)  request_file_override="${2:-}"; shift 2 ;;
+    --harness)       harness_override="${2:-}";      shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+[[ -n "$ctx" && -n "$req" && -n "$input_fifo" ]] || {
+  print -ru2 -- "usage: ai-assist-followup --ctx H --req H --input-fifo P --block-id ID --failed-cmd TEXT [--run-dir D] [--request-file F] [--harness H]"
+  exit 1
+}
+
+# ── Cache binary — best-effort (same precedence as triage) ───────────────────
+cache_bin=""
+for _cand in \
+  "${AI_ASSIST_CACHE_BIN:-}" \
+  "$(command -v -- ai-assist-cache 2>/dev/null)" \
+  "$HOME/.local/libexec/ai-assist-cache"; do
+  [[ -n "$_cand" && -x "$_cand" ]] && { cache_bin="$_cand"; break; }
+done
+
+# ── Harness discovery — verbatim from ai-assist-triage / ai-assist-wrapup ────
+bin_dir="${AI_ASSIST_BIN_DIR:-}"
+if [[ -z "$bin_dir" ]]; then
+  disp="$(command -v -- ai-assist 2>/dev/null)" || disp=""
+  [[ -n "$disp" ]] && bin_dir="${disp:A:h}"
+fi
+[[ -n "$bin_dir" ]] || bin_dir="$HOME/.local/bin"
+
+worker_path() { print -r -- "$bin_dir/ai-assist-$1"; }
+
+typeset -a HARNESSES=()
+for w in "$bin_dir"/ai-assist-*(N-.); do
+  [[ -x "$w" ]] || continue
+  HARNESSES+=("${${w:t}#ai-assist-}")
+done
+
+is_harness() {
+  local n="$1" h
+  for h in "${HARNESSES[@]}"; do [[ "$h" == "$n" ]] && return 0; done
+  return 1
+}
+
+resolve_harness() {
+  if [[ -n "${AI_ASSIST_HARNESS:-}" ]] && is_harness "$AI_ASSIST_HARNESS"; then
+    print -r -- "$AI_ASSIST_HARNESS"; return 0
+  fi
+  local pinned; pinned="$(assist::pin_read)"
+  if [[ -n "$pinned" ]] && is_harness "$pinned"; then
+    print -r -- "$pinned"; return 0
+  fi
+  local h; typeset -a avail=()
+  for h in "${HARNESSES[@]}"; do
+    "$(worker_path "$h")" --probe >/dev/null 2>&1 && avail+=("$h")
+  done
+  (( ${#avail[@]} == 1 )) && { print -r -- "${avail[1]}"; return 0; }
+  return 1
+}
+
+# ── Temp-file tracking (cleaned up on exit) ───────────────────────────────────
+typeset -a _tmp_files=()
+_cleanup() { rm -f -- "${_tmp_files[@]}" 2>/dev/null || true; }
+trap '_cleanup' EXIT
+
+# ── Quit sentinel: DLE 'q' DLE — the pager interprets this as "quit" ─────────
+write_quit() { printf '\020q\020' > "$input_fifo" 2>/dev/null || true; }
+
+# ── Resolve the request file ──────────────────────────────────────────────────
+request_file=""
+
+# Priority 1: caller-provided --request-file (fresh playbook path)
+if [[ -n "$request_file_override" && -r "$request_file_override" ]]; then
+  request_file="$request_file_override"
+fi
+
+# Priority 2: sidecar from cache
+if [[ -z "$request_file" && -n "$cache_bin" ]]; then
+  request_file="$("$cache_bin" request-file "$ctx" "$req" 2>/dev/null)" || request_file=""
+  [[ -n "$request_file" && -f "$request_file" ]] || request_file=""
+fi
+
+# Priority 3: reconstruct from entry front matter
+if [[ -z "$request_file" ]]; then
+  entry=""
+  [[ -n "$cache_bin" ]] && entry="$("$cache_bin" lookup "$ctx" "$req" 2>/dev/null)" || entry=""
+
+  if [[ -z "$entry" || ! -f "$entry" ]]; then
+    write_quit
+    exit 0
+  fi
+
+  _fm_request="$("$cache_bin" field "$entry" request    2>/dev/null)" || _fm_request=""
+  _fm_command="$("$cache_bin" field "$entry" command    2>/dev/null)" || _fm_command=""
+  _fm_exit="$(   "$cache_bin" field "$entry" exit       2>/dev/null)" || _fm_exit=""
+  _fm_root="$(   "$cache_bin" field "$entry" project_root 2>/dev/null)" || _fm_root=""
+  _fm_name="$(   "$cache_bin" field "$entry" project_name 2>/dev/null)" || _fm_name=""
+
+  reconstructed_request="$(mktemp "${TMPDIR:-/tmp}/ai-assist-followup-req.XXXXXX")"
+  _tmp_files+=("$reconstructed_request")
+
+  if command -v jq >/dev/null 2>&1; then
+    jq -n \
+      --arg request   "$_fm_request" \
+      --arg command   "$_fm_command" \
+      --arg exit_code "$_fm_exit" \
+      --arg root      "$_fm_root" \
+      --arg name      "$_fm_name" \
+      '{version:1, kind:"question",
+        origin:{cwd:$root, project_root:$root},
+        command:{text:$command, exit:($exit_code | tonumber? // null)},
+        scrollback:"", user_request:$request,
+        project:{name:$name, branch:""}}' \
+      > "$reconstructed_request" 2>/dev/null || {
+        printf '{"version":1,"kind":"question","origin":{"cwd":"%s","project_root":"%s"},"command":{"text":"%s","exit":null},"scrollback":"","user_request":"%s","project":{"name":"%s","branch":""}}\n' \
+          "$_fm_root" "$_fm_root" "$_fm_command" "$_fm_request" "$_fm_name" \
+          > "$reconstructed_request" 2>/dev/null
+      }
+  else
+    printf '{"version":1,"kind":"question","origin":{"cwd":"%s","project_root":"%s"},"command":{"text":"%s","exit":null},"scrollback":"","user_request":"%s","project":{"name":"%s","branch":""}}\n' \
+      "$_fm_root" "$_fm_root" "$_fm_command" "$_fm_request" "$_fm_name" \
+      > "$reconstructed_request" 2>/dev/null
+  fi
+
+  request_file="$reconstructed_request"
+fi
+
+# ── Read REQ_* from the request file ─────────────────────────────────────────
+assist::request_read "$request_file" 2>/dev/null || true
+export REQ_PROJECT_ROOT="${REQ_PROJECT_ROOT:-}"
+export REQ_USER_REQUEST="${REQ_USER_REQUEST:-}"
+export REQ_CWD="${REQ_CWD:-}"
+export REQ_COMMAND_TEXT="${REQ_COMMAND_TEXT:-}"
+export REQ_COMMAND_EXIT="${REQ_COMMAND_EXIT:-}"
+
+# ── Read failed block output from the run log ─────────────────────────────────
+# Parse $run_dir/runlog.jsonl for the LAST line whose id == $block_id, then
+# extract its log path and cap the output to 4000 bytes. Best-effort.
+out=""
+if [[ -n "$run_dir" && -f "$run_dir/runlog.jsonl" ]]; then
+  logpath=""
+  if command -v jq >/dev/null 2>&1; then
+    logpath="$(jq -r --arg id "$block_id" \
+      'select(.id == $id) | .log // empty' \
+      "$run_dir/runlog.jsonl" 2>/dev/null | tail -1)"
+  else
+    # Fallback: grep for lines containing the id and extract the log field.
+    logpath="$(grep "\"id\":\"${block_id}\"" "$run_dir/runlog.jsonl" 2>/dev/null \
+      | tail -1 \
+      | sed 's/.*"log":"\([^"]*\)".*/\1/' 2>/dev/null)" || logpath=""
+    # If sed returned the full line (no match), clear it.
+    [[ "$logpath" == *'"id"'* ]] && logpath=""
+  fi
+  if [[ -n "$logpath" && -f "$logpath" ]]; then
+    out="$(tail -c 4000 -- "$logpath" 2>/dev/null)" || out=""
+  fi
+fi
+
+# ── Build the follow-up prompt into a temp file ───────────────────────────────
+promptfile="$(mktemp "${TMPDIR:-/tmp}/ai-assist-followup-prompt.XXXXXX")"
+_tmp_files+=("$promptfile")
+
+{
+  printf 'You are a concise technical assistant helping debug a terminal fix that did not work.\n\n'
+  printf '## Original request\n%s\n\n' "${REQ_USER_REQUEST:-<unknown>}"
+  printf '## Project\n%s\n\n' "${REQ_PROJECT_ROOT:-(unknown)}"
+  printf '## Failed command (the verify step that failed)\n```\n%s\n```\n\n' "${failed_cmd:-<unknown>}"
+  if [[ -n "$out" ]]; then
+    printf '## Output of the failed command\n```\n%s\n```\n\n' "$out"
+  else
+    printf '## Output of the failed command\n(no output captured)\n\n'
+  fi
+  printf '## Your task\n'
+  printf 'Your previous fix did NOT work — the step above failed.\n'
+  printf 'Diagnose WHY from the command and its output above, then propose a DIFFERENT,\n'
+  printf 'corrected fix. Do not repeat the failed approach.\n\n'
+  printf 'Write your answer as a literate troubleshooting playbook with:\n'
+  printf '  1. A brief diagnosis: why the previous fix failed.\n'
+  printf '  2. A fresh fix block with a new approach.\n'
+  printf '  3. A SEPARATE verify block tagged {id=verify needs=<fix-id>} that re-runs\n'
+  printf '     the original failed command exactly: `%s`\n' "${failed_cmd:-<command>}"
+  printf '     so the runner can detect success (exit 0) or offer another follow-up.\n\n'
+  printf 'Be concise. Do not re-diagnose the original error; focus on why the fix did not work.\n'
+} > "$promptfile"
+
+# ── Resolve harness + worker ──────────────────────────────────────────────────
+harness="${harness_override:-$(resolve_harness 2>/dev/null || true)}"
+worker="$(worker_path "${harness:-unknown}")"
+
+if [[ -z "$harness" || ! -x "$worker" ]]; then
+  # No capable worker — signal the pager to quit so it doesn't spin forever.
+  write_quit
+  exit 0
+fi
+
+# ── Run: stream the follow-up into the pane (no artifact needed) ─────────────
+"$worker" --stream --prompt-file "$promptfile" --request "$request_file" \
+  > "$input_fifo"
+
+exit 0
