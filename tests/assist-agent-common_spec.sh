@@ -242,6 +242,26 @@ JSON
       The output should not include "TRAILING_PROMPT"
     End
 
+    # Regression: the command repeats and the BOTTOM occurrence is output-less
+    # (a build still running / a re-typed command / captured before output). The
+    # naive "last line containing cmd" anchored on that bottom line → start=NR,
+    # end=NR-1 → EMPTY, which collapsed the cache key (project+command+exit) and
+    # replayed a stale playbook for a genuinely different error. Must anchor on
+    # the most recent run that actually HAS output.
+    It 'capture_scrollback anchors on the run with output when the command repeats at the bottom'
+      { echo '#!/usr/bin/env zsh'
+        echo 'if [[ "$1 $2" == "action dump-screen" ]]; then'
+        echo '  print -r -- "~/proj % make all"'
+        echo '  print -r -- "Error: the real failure here"'
+        echo '  print -r -- "~/proj % make all"'
+        echo '  exit 0'
+        echo 'fi'
+      } > "$CAP_TMP/zellij"; chmod +x "$CAP_TMP/zellij"
+      result="$(assist::capture_scrollback "make all")"
+      When call printf '%s' "$result"
+      The output should include "the real failure here"
+    End
+
     It 'prefill_template builds a diagnosis line for an error'
       CAP_CMD="make all"; CAP_EXIT="2"; CAP_KIND="error"
       CAP_PROJECT="proj"

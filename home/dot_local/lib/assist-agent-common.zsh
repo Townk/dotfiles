@@ -225,16 +225,34 @@ assist::capture_scrollback() {
   local zj; zj="$(assist::zellij_bin)" || { return 0; }
   local pane="${ZELLIJ_PANE_ID:+terminal_$ZELLIJ_PANE_ID}"
   local dump; dump="$(mktemp)"
+  # Viewport only (NOT --full): the error normally prints just above the returned
+  # prompt and is on-screen; --full would dump the entire (possibly multi-MB)
+  # scrollback for no gain.
   "$zj" action dump-screen ${pane:+-p "$pane"} > "$dump" 2>/dev/null || { rm -f "$dump"; return 0; }
-  awk -v cmd="$cmd" -v max="$max" '
-    { lines[NR] = $0; if (index($0, cmd)) start = NR }
+  # Anchor the slice at the most recent run of the command that ACTUALLY HAS
+  # output after it. The naive "last line containing <cmd>" is wrong when the
+  # command appears again at the very bottom with nothing below it (a build still
+  # running, the command captured before its output rendered, or a re-typed
+  # command) — that gave start=NR, end=NR-1 → start>end → an EMPTY capture, which
+  # collapsed the cache key to project+command+exit and replayed a stale playbook
+  # for a genuinely different error.
+  local out
+  out="$(awk -v cmd="$cmd" -v max="$max" '
+    { lines[NR] = $0; if (index($0, cmd)) m[++mc] = NR }
     END {
-      if (start == 0) start = (NR - max > 0 ? NR - max : 1)   # fallback: last max
-      end = NR - 1                                            # drop trailing prompt
+      if (NR == 0) exit
+      start = 0
+      for (i = mc; i >= 1; i--) if (m[i] < NR) { start = m[i]; break }  # last match with output
+      if (start > 0) { end = NR - 1; if (end < start) end = NR }        # drop the trailing prompt
+      else { start = (NR - max + 1 > 0 ? NR - max + 1 : 1); end = NR }  # no anchor: last max lines
       if (end - start + 1 > max) start = end - max + 1
       for (i = start; i <= end; i++) print lines[i]
-    }' "$dump"
+    }' "$dump")"
+  [[ -n "${AI_ASSIST_DEBUG_LOG:-}" ]] && \
+    print -r -- "$(date +%H:%M:%S) [capture] dump_lines=$(wc -l < "$dump" | tr -d ' ') cmd='${cmd}' result_len=${#out}" \
+    >> "$AI_ASSIST_DEBUG_LOG" 2>/dev/null
   rm -f "$dump"
+  print -r -- "$out"
 }
 
 # assist::prefill_template — deterministic popup seed from CAP_*.
