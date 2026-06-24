@@ -114,10 +114,17 @@ broker::open_diff() {
   fi
 }
 
-# broker::apply_diff — apply a patch in the agent shell via ai-assist-run, then
-# emit a result record (id/exit/logpath) on the results FIFO. Best-effort.
-broker::apply_diff() {
-  local id="$1" diff="$2"
+# broker::git_apply — write the patch and run `git apply` in the agent shell via
+# ai-assist-run, then emit a result record (id/exit/logpath) on the results FIFO.
+# Best-effort. Extra flags (e.g. --reverse for undo) are passed after $2.
+# --recount: infer hunk line counts from the body instead of trusting the @@
+# headers — agent-authored diffs reliably miscount hunks, and a wrong count makes
+# git read past the hunk into the next @@ → "corrupt patch at :<line>"; the body
+# itself is correct, so recounting applies it. --ignore-whitespace forgives
+# context-line whitespace drift, another common authoring slip.
+broker::git_apply() {
+  local id="$1" diff="$2"; shift 2
+  local extra="$*"   # e.g. "--reverse"
   [[ -n "$shell_fifo" ]] || return 0
   local run="${AI_ASSIST_RUN_BIN:-}"
   if [[ -z "$run" ]]; then
@@ -129,15 +136,17 @@ broker::apply_diff() {
   local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-apply.XXXXXX")"
   print -r -- "$diff" > "$patch"  # trailing newline — git apply rejects a patch without one
   local log; log="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-run.XXXXXX")"
-  # --recount: infer hunk line counts from the body instead of trusting the @@
-  # headers. Agent-authored diffs reliably miscount hunks, and a wrong count makes
-  # git read past the hunk into the next @@ → "corrupt patch at :<line>"; the body
-  # itself is correct, so recounting applies it. --ignore-whitespace forgives
-  # context-line whitespace drift, another common authoring slip.
-  AI_ASSIST_SHELL_FIFO="$shell_fifo" "$run" --id "$id" -- "git apply --recount --ignore-whitespace -- ${(q)patch}" >"$log" 2>&1
+  AI_ASSIST_SHELL_FIFO="$shell_fifo" "$run" --id "$id" -- \
+    "git apply --recount --ignore-whitespace ${extra:+$extra }-- ${(q)patch}" >"$log" 2>&1
   local code=$?
   [[ -n "$results" ]] && print -rn -- "${id}${US}${code}${US}${log}${RS}" >> "$results"
 }
+
+# broker::apply_diff — apply a patch; broker::undo_diff — reverse it (apply⇄undo
+# toggle). Both emit a result record so the pager can flip the button + re-gate
+# dependents (a {needs=<id>} block re-locks when the patch is undone).
+broker::apply_diff() { broker::git_apply "$1" "$2"; }
+broker::undo_diff()  { broker::git_apply "$1" "$2" --reverse; }
 
 # broker::run_block — execute a block in the agent shell via ai-assist-run, then
 # emit a result record (id/exit/logpath) on the results FIFO. Best-effort.
@@ -252,6 +261,7 @@ broker::dispatch() {
     view-diff)   broker::open_diff "$id" "$payload" ;;  # back-compat alias
     review-diff) broker::open_diff "$id" "$payload" ;;  # back-compat alias
     apply-diff)  broker::apply_diff "$id" "$payload" ;;
+    undo-diff)   broker::undo_diff "$id" "$payload" ;;
     regenerate)  broker::regenerate ;;
     wrapup)      broker::wrapup ;;
   esac

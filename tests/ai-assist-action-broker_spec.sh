@@ -236,6 +236,34 @@ Describe 'ai-assist-action-broker'
     The contents of file "$repo/f" should include "added"
   End
 
+  # apply⇄undo toggle: undo-diff reverses an applied patch so a second click
+  # restores the file (git apply --reverse). Round-trip leaves f back at origin.
+  It 'undo-diff reverses an applied patch'
+    load_broker
+    # Plain file (not a fifo) for results: this test dispatches TWICE, and a
+    # single fifo reader would EOF after the first record and block the second write.
+    results="$TEST_TMP/results.out"
+    shell_fifo="$TEST_TMP/shell.fifo"; mkfifo "$shell_fifo"
+    repo="$TEST_TMP/repo3"; mkdir "$repo"
+    ( cd "$repo"; git init -q; printf 'line1\nline2\nline3\n' > f; git add f; git -c user.email=t -c user.name=t commit -qm i )
+    printf '#!/usr/bin/env zsh\ncd "%s" && eval "${@[-1]}"\n' "$repo" > "$TEST_TMP/airun"
+    chmod +x "$TEST_TMP/airun"; AI_ASSIST_RUN_BIN="$TEST_TMP/airun"
+    patch='diff --git a/f b/f
+--- a/f
++++ b/f
+@@ -1,6 +1,9 @@
+ line1
++added
+ line2'
+    broker::dispatch "apply-diff${US}d10${US}${patch}${RS}"
+    sleep 0.2
+    broker::dispatch "undo-diff${US}d10${US}${patch}${RS}"
+    sleep 0.2
+    # Reversed: "added" gone, original lines intact.
+    The contents of file "$repo/f" should not include "added"
+    The contents of file "$repo/f" should include "line2"
+  End
+
   # ── Run log (C3b) ─────────────────────────────────────────────────────────────
 
   It 'run_block appends a well-formed JSONL line to runlog.jsonl in run_dir'
