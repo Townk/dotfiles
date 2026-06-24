@@ -129,7 +129,12 @@ broker::apply_diff() {
   local patch; patch="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-apply.XXXXXX")"
   print -r -- "$diff" > "$patch"  # trailing newline — git apply rejects a patch without one
   local log; log="$(mktemp "${TMPDIR:-/tmp}/ai-playbook-run.XXXXXX")"
-  AI_ASSIST_SHELL_FIFO="$shell_fifo" "$run" --id "$id" -- "git apply -- ${(q)patch}" >"$log" 2>&1
+  # --recount: infer hunk line counts from the body instead of trusting the @@
+  # headers. Agent-authored diffs reliably miscount hunks, and a wrong count makes
+  # git read past the hunk into the next @@ → "corrupt patch at :<line>"; the body
+  # itself is correct, so recounting applies it. --ignore-whitespace forgives
+  # context-line whitespace drift, another common authoring slip.
+  AI_ASSIST_SHELL_FIFO="$shell_fifo" "$run" --id "$id" -- "git apply --recount --ignore-whitespace -- ${(q)patch}" >"$log" 2>&1
   local code=$?
   [[ -n "$results" ]] && print -rn -- "${id}${US}${code}${US}${log}${RS}" >> "$results"
 }

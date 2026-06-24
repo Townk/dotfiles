@@ -182,7 +182,7 @@ Describe 'ai-assist-action-broker'
     sleep 0.1
     The contents of file "$TEST_TMP/results.out" should include "d2"
     The path "$TEST_TMP/airun" should be exist
-    The contents of file "$TEST_TMP/ranlog" should include "git apply"
+    The contents of file "$TEST_TMP/ranlog" should include "git apply --recount"
   End
 
   # Regression: the produced patch must end in a newline or `git apply` reports
@@ -206,6 +206,34 @@ Describe 'ai-assist-action-broker'
     broker::dispatch "apply-diff${US}d7${US}${patch}${RS}"
     sleep 0.3
     The contents of file "$TEST_TMP/applied" should equal "OK"
+  End
+
+  # Regression: agent-authored diffs reliably MISCOUNT hunk headers (the @@ line
+  # counts don't match the body), which a plain `git apply` rejects as
+  # "corrupt patch at :<line>". --recount infers the counts from the body so it
+  # still applies. The stub here actually RUNS the broker's command.
+  It 'apply-diff applies a patch with wrong hunk counts (--recount)'
+    load_broker
+    results="$TEST_TMP/results.fifo"; mkfifo "$results"
+    shell_fifo="$TEST_TMP/shell.fifo"; mkfifo "$shell_fifo"
+    repo="$TEST_TMP/repo2"; mkdir "$repo"
+    ( cd "$repo"; git init -q; printf 'line1\nline2\nline3\n' > f; git add f; git -c user.email=t -c user.name=t commit -qm i )
+    # stub ai-assist-run: execute the actual command the broker passes (last arg).
+    printf '#!/usr/bin/env zsh\ncd "%s" && eval "${@[-1]}"\n' "$repo" > "$TEST_TMP/airun"
+    chmod +x "$TEST_TMP/airun"; AI_ASSIST_RUN_BIN="$TEST_TMP/airun"
+    ( cat "$results" > "$TEST_TMP/r.out" ) &
+    # Header claims -1,6 +1,9 but the body is 2 context + 1 add → a plain apply
+    # would read past the hunk and report a corrupt patch.
+    patch='diff --git a/f b/f
+--- a/f
++++ b/f
+@@ -1,6 +1,9 @@
+ line1
++added
+ line2'
+    broker::dispatch "apply-diff${US}d9${US}${patch}${RS}"
+    sleep 0.3
+    The contents of file "$repo/f" should include "added"
   End
 
   # ── Run log (C3b) ─────────────────────────────────────────────────────────────
