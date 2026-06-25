@@ -24,19 +24,12 @@ absolute path from its caller, so it never needs to be on `PATH`:
 - `ics-view`, `sqlite-view`, `disk-image-view` — rich file preview renderers
   driven by `preview` and Yazi; they are implementation details, not general
   shell commands.
-- `ai-assist-popup` — the floating prompt for the AI terminal assistant: a
-  `zellij-modal --capture` adapter that runs the `ai-assist-input` textarea
-  (Enter submits / Shift+Enter newlines) and returns the typed request. Invoked
-  by the `ai-assist-trigger` ZLE widget bound to `Ctrl+Shift+/` (delivered as
-  kitty `CSI 47;6u` by `zj-context-keys`).
-- `ai-assist-shell` — long-lived agent shell seeded with the origin environment
-  and cwd; the agent's own real shell, kept alive across tool calls.
-- `ai-assist-run` — runs a command in the agent shell and returns its stdout,
-  stderr, and exit code via reply files (`LAST_STDOUT`/`LAST_STDERR`/`LAST_EXCODE`).
-- `ai-assist-ask` — the only user-input channel for the agent; supports free
-  text, single-line, confirm, and choose prompts (`--type free|line|confirm|choose`).
-- `ai-assist-remember` — saves a durable, distilled fact about the current
-  project to the per-project knowledge base for use in future requests.
+- The AI terminal assistant is now the single `ai-playbook` Go binary
+  (`~/Projects/langs/go/ai-playbook`, manually `go install`ed), which subsumes the
+  former `ai-assist-*` shell stack (popup/input/shell/run/ask/remember/triage/
+  render/pager/harness wrappers). It is launched by the `ai-assist-trigger` ZLE
+  widget (bound to `Ctrl+Shift+/`, delivered as kitty `CSI 47;6u` by
+  `zj-context-keys`), which just runs `ai-playbook troubleshoot`.
 
 ## Library layering
 
@@ -84,7 +77,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | Category | Scripts | Backing library |
 |---|---|---|
 | AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh`, `zellij.zsh` |
-| AI terminal assistant | `ai-assist` + `ai-assist-{claude,pi,cursor}` | `assist-agent-common.zsh`, `zellij.zsh` |
+| AI terminal assistant | `ai-playbook` (Go binary; not a script here) | — |
 | File preview (fzf/yazi) | `preview` | — |
 | Editor/terminal glue | `tab-edit`² | `platform.zsh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |
