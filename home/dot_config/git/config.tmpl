@@ -7,7 +7,9 @@
   whitespace = trailing-space,space-before-tab
   autocrlf = "input"
   commentchar = ";"
+{{- if ne .profile "dev-shell" }}
   pager = hunk pager
+{{- end }}
 
 [interactive]
   diffFilter = delta --color-only
