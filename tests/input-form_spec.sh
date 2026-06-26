@@ -1,5 +1,5 @@
 # Tests for input::form — native binary shim.
-# The shell no longer runs a per-field loop; it delegates to ai-assist-input
+# The shell no longer runs a per-field loop; it delegates to ai-playbook
 # --type form --spec FILE. These tests verify the shim wiring via the aii stub.
 Describe 'input::form'
   Include home/dot_local/lib/input-common.zsh
@@ -8,14 +8,14 @@ Describe 'input::form'
 
   setup() {
     TEST_TMP="$(mktemp -d)"
-    aii="$TEST_TMP/ai-assist-input"
+    aii="$TEST_TMP/ai-playbook"
     { echo '#!/usr/bin/env zsh'
       echo 'print -r -- "$@" >> "'"$TEST_TMP"'/aii.args"'
       echo 'printf "%s" "${AII_OUT:-}"'
       echo 'exit ${AII_RC:-0}'
-    } > "$aii"; chmod +x "$aii"; export AI_ASSIST_INPUT_BIN="$aii"
+    } > "$aii"; chmod +x "$aii"; export AI_PLAYBOOK_INPUT_BIN="$aii"
   }
-  cleanup() { rm -rf "$TEST_TMP"; unset AI_ASSIST_INPUT_BIN AII_OUT AII_RC; }
+  cleanup() { rm -rf "$TEST_TMP"; unset AI_PLAYBOOK_INPUT_BIN AII_OUT AII_RC; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 

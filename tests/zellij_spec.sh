@@ -144,16 +144,16 @@ Describe 'zellij.zsh — zj::choose --measure-based pane height'
     ZJ_ARGS="$TEST_TMP/zj-args.txt"
     export ZELLIJ=1
 
-    # Stub ai-assist-input: when --measure is present, print a known height (9)
+    # Stub ai-playbook input: when --measure is present, print a known height (9)
     # so we can assert the pane is spawned with --height 9.
-    aii="$TEST_TMP/ai-assist-input"
+    aii="$TEST_TMP/ai-playbook"
     {
       echo '#!/usr/bin/env zsh'
       echo 'if [[ "$*" == *"--measure"* ]]; then printf "9"; exit 0; fi'
       echo 'printf "%s" "${AII_OUT:-}"'
       echo 'exit ${AII_RC:-0}'
     } > "$aii"; chmod +x "$aii"
-    export AI_ASSIST_INPUT_BIN="$aii"
+    export AI_PLAYBOOK_INPUT_BIN="$aii"
 
     stub="$TEST_TMP/zellij"
     {
@@ -170,7 +170,7 @@ Describe 'zellij.zsh — zj::choose --measure-based pane height'
     chmod +x "$stub"
     export ZELLIJ_BIN="$stub"
   }
-  cleanup() { rm -rf "$TEST_TMP"; unset AI_ASSIST_INPUT_BIN AII_OUT; }
+  cleanup() { rm -rf "$TEST_TMP"; unset AI_PLAYBOOK_INPUT_BIN AII_OUT; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 

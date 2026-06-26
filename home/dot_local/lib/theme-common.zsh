@@ -41,7 +41,7 @@ theme::sgr_fg() {
 }
 
 # theme::args — fill the global AI_THEME_ARGS with the --theme-* flags for
-# ai-assist-input (and -pager) from the canonical C_HEX_* palette. One source
+# ai-playbook input (and the pager) from the canonical C_HEX_* palette. One source
 # for the dialog colors; the binary keeps its own defaults if these are absent.
 typeset -ga AI_THEME_ARGS
 theme::args() {

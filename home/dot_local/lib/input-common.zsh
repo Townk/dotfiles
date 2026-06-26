@@ -8,24 +8,25 @@ source "$(dirname "$_input_self")/theme-common.zsh"
 source "$(dirname "$_input_self")/pick-common.zsh"
 unset _input_self
 
-# _input::bin — resolve the ai-assist-input binary. A zellij-spawned pane's PATH
-# does NOT include ~/.local/share/go/bin (only the interactive profile adds it),
-# so a bare `command -v` fails there → fall back to the known install paths.
-# AI_ASSIST_INPUT_BIN overrides everything (used by tests).
+# _input::bin — resolve the ai-playbook binary (the input widgets invoke its
+# `input` subcommand). A zellij-spawned pane's PATH does NOT include
+# ~/.local/share/go/bin (only the interactive profile adds it), so a bare
+# `command -v` fails there → fall back to the known install paths.
+# AI_PLAYBOOK_INPUT_BIN overrides everything (used by tests).
 _input::bin() {
   local p
-  [[ -n "${AI_ASSIST_INPUT_BIN:-}" ]] && { print -r -- "$AI_ASSIST_INPUT_BIN"; return 0; }
-  p="$(command -v ai-assist-input 2>/dev/null)"
+  [[ -n "${AI_PLAYBOOK_INPUT_BIN:-}" ]] && { print -r -- "$AI_PLAYBOOK_INPUT_BIN"; return 0; }
+  p="$(command -v ai-playbook 2>/dev/null)"
   [[ -n "$p" ]] && { print -r -- "$p"; return 0; }
-  for p in "$HOME/.local/share/go/bin/ai-assist-input" "$HOME/go/bin/ai-assist-input"; do
+  for p in "$HOME/.local/share/go/bin/ai-playbook" "$HOME/go/bin/ai-playbook"; do
     [[ -x "$p" ]] && { print -r -- "$p"; return 0; }
   done
-  print -r -- "ai-assist-input"
+  print -r -- "ai-playbook"
 }
 
 # input::confirm "Q" [--default yes|no] [--affirmative T] [--negative T]
 #                    [--danger|--warning] [--title T] [--padding R] [--inset R]
-# Shim over `ai-assist-input --type confirm`. Prints "yes"/"no"; exit 0/1/130.
+# Shim over `ai-playbook input --type confirm`. Prints "yes"/"no"; exit 0/1/130.
 # --danger/--warning recolor border+title+button (the binary forces default=no
 # on danger). The themed chrome, keys, and hint all live in the binary now.
 input::confirm() {
@@ -65,13 +66,13 @@ input::confirm() {
   if ((measure)); then
     flags+=(--measure)
     [[ -n "$width" ]] && flags+=(--width "$width")
-    "$bin" "${flags[@]}"
+    "$bin" input "${flags[@]}"
     return
   fi
 
   # The binary exits 0 (confirmed) / 1 (declined) / 130 (cancel); map to yes/no.
   local rc=0
-  "$bin" "${flags[@]}" >/dev/null || rc=$?
+  "$bin" input "${flags[@]}" >/dev/null || rc=$?
   case "$rc" in
     0) print -rn -- "yes"; return 0 ;;
     1) print -rn -- "no";  return 1 ;;
@@ -80,7 +81,7 @@ input::confirm() {
 }
 
 # input::line "Q" [--placeholder P] [--value V] [--width N] [--title T]
-# Shim over `ai-assist-input --type line`. Prints the typed line; 130 on
+# Shim over `ai-playbook input --type line`. Prints the typed line; 130 on
 # empty/cancel.
 input::line() {
   local prompt="" placeholder="" value="" width="" title="" padding="" inset="" measure=0
@@ -115,18 +116,18 @@ input::line() {
   if ((measure)); then
     flags+=(--measure)
     [[ -n "$width" ]] && flags+=(--width "$width")
-    "$bin" "${flags[@]}"
+    "$bin" input "${flags[@]}"
     return
   fi
 
   local answer rc=0
-  answer="$("$bin" "${flags[@]}")" || rc=$?
+  answer="$("$bin" input "${flags[@]}")" || rc=$?
   ((rc != 0)) && return 130
   [[ -n "$answer" ]] || return 130
   print -rn -- "$answer"
 }
 
-# input::text "Q" [--value V] [--height N] — multi-line via ai-assist-input,
+# input::text "Q" [--value V] [--height N] — multi-line via `ai-playbook input`,
 # which self-renders matching chrome (title + rule + box).
 input::text() {
   local prompt="" value="" height="" title="" width="" icon="" measure=0
@@ -159,19 +160,19 @@ input::text() {
   if ((measure)); then
     args+=(--measure)
     [[ -n "$width" ]] && args+=(--width "$width")
-    "$bin" "${args[@]}"
+    "$bin" input "${args[@]}"
     return
   fi
 
   local answer rc=0
-  answer="$("$bin" "${args[@]}")" || rc=$?
+  answer="$("$bin" input "${args[@]}")" || rc=$?
   ((rc != 0)) && return 130
   [[ -n "$answer" ]] || return 130
   print -rn -- "$answer"
 }
 
 # input::choose "Q" [--multi] [--other LABEL] [--title T] [CHOICE...] — shim
-# over `ai-assist-input --type choose`. Choices via argv (after first positional
+# over `ai-playbook input --type choose`. Choices via argv (after first positional
 # or after --). --multi: selections joined by newline. 130 on cancel/empty.
 input::choose() {
   local question="" multi=0 other="" title="" measure=0 width=""
@@ -206,20 +207,20 @@ input::choose() {
     flags+=(--measure)
     [[ -n "$width" ]] && flags+=(--width "$width")
     flags+=(-- "${choices[@]}")
-    "$bin" "${flags[@]}"
+    "$bin" input "${flags[@]}"
     return
   fi
 
   flags+=(-- "${choices[@]}")
 
   local answer rc=0
-  answer="$("$bin" "${flags[@]}")" || rc=$?
+  answer="$("$bin" input "${flags[@]}")" || rc=$?
   ((rc != 0)) && return 130
   [[ -n "$answer" ]] || return 130
   print -rn -- "$answer"
 }
 
-# input::form [--title T] [--spec FILE] — shim over `ai-assist-input --type form`.
+# input::form [--title T] [--spec FILE] — shim over `ai-playbook input --type form`.
 # Spec read from FILE (--spec) or stdin (written to a temp file); the binary owns
 # the tab flow + field rendering. Answers printed as name<US>value joined by RS;
 # exit 0 on submit, 130 on cancel.
@@ -254,7 +255,7 @@ input::form() {
     theme::args; flags+=("${AI_THEME_ARGS[@]}")
     flags+=(--measure)
     [[ -n "$width" ]] && flags+=(--width "$width")
-    "$bin" "${flags[@]}"
+    "$bin" input "${flags[@]}"
     return
   fi
 
@@ -272,7 +273,7 @@ input::form() {
   theme::args; flags+=("${AI_THEME_ARGS[@]}")
 
   local answer rc=0
-  answer="$("$bin" "${flags[@]}")" || rc=$?
+  answer="$("$bin" input "${flags[@]}")" || rc=$?
 
   [[ -n "$_tmp_spec" ]] && rm -f -- "$_tmp_spec"
 

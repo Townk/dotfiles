@@ -4,11 +4,11 @@ Describe 'input-widget'
 
   setup() {
     TEST_TMP="$(mktemp -d)"
-    aii="$TEST_TMP/ai-assist-input"
+    aii="$TEST_TMP/ai-playbook"
     { echo '#!/usr/bin/env zsh'; echo 'printf "%s" "${AII_OUT:-}"'; echo 'exit ${AII_RC:-0}'; } > "$aii"
-    chmod +x "$aii"; export AI_ASSIST_INPUT_BIN="$aii"
+    chmod +x "$aii"; export AI_PLAYBOOK_INPUT_BIN="$aii"
   }
-  cleanup() { rm -rf "$TEST_TMP"; unset AI_ASSIST_INPUT_BIN AII_OUT AII_RC; }
+  cleanup() { rm -rf "$TEST_TMP"; unset AI_PLAYBOOK_INPUT_BIN AII_OUT AII_RC; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 

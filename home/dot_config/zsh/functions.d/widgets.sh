@@ -69,8 +69,8 @@ zle -N cd-down
 # the origin context (last command/exit via atuin, cwd, pane scrollback), opens
 # the request input float, and spawns the docked session pane itself — and it
 # drives the user's REAL interactive shell under a pty (loading this .zshrc), so
-# the old live alias/function/env dump (AI_ASSIST_SHELL_INIT) is no longer
-# needed. Backgrounded with `&!` so the trigger never blocks the prompt while the
+# the old live alias/function/env dump is no longer needed. Backgrounded with
+# `&!` so the trigger never blocks the prompt while the
 # launcher polls the float; stdio detached so the subprocess can't corrupt the
 # line editor or write to the main pane (the float + docked pane are its own UI).
 ai-assist-trigger() {

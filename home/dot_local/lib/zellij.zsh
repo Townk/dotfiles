@@ -302,7 +302,7 @@ zj::choose() {
 }
 
 # text/form: the widget owns its chrome, so the title goes to the widget (not the
-# modal) via --title. ai-assist-input / input::form treat an explicit --title as
+# modal) via --title. ai-playbook input / input::form treat an explicit --title as
 # authoritative over a positional.
 zj::text() {
   local -a reply PANE_REST; local PANE_TITLE

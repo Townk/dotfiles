@@ -210,11 +210,11 @@ keybinds clear-defaults=true {
         bind "Shift Enter" {
             MessagePlugin "context-keys" {
                 name "shift+enter"
-                payload "default: $source; when agent,cursor-agent: key alt+enter; when pi,claude,ai-assist-input: kitty:$source"
+                payload "default: $source; when agent,cursor-agent: key alt+enter; when pi,claude,ai-playbook: kitty:$source"
             }
         }
 
-        // (ai-assist is triggered by Ctrl+Alt+A, handled entirely in zsh — it
+        // (ai-playbook is triggered by Ctrl+Alt+A, handled entirely in zsh — it
         // arrives as the legacy sequence ESC Ctrl-A (\e^A) which passes straight
         // through Zellij to the pane, so no Zellij bind is needed here. See the
         // bindkey in dot_config/zsh/keybindings.sh.)
