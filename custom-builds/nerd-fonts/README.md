@@ -325,6 +325,15 @@ shown again at the bottom of this README).
    standalone run still works.
 5. macOS-only. The build pipeline assumes Homebrew. Pull requests
    welcome if you'd like to teach it about Linux/apt.
+6. The embedded JetBrains Mono build passes an **explicit `--braille circle`**
+   to `font-patcher`. Don't drop it expecting `-c`/`--complete` to cover
+   braille: upstream's `--complete` sets the braille style to `'rectangular'`,
+   a typo the generator (`bin/scripts/braille/Braille.py`) doesn't recognize
+   (`'rectangle'`/`'circle'`/`'gapless'` only), so it emits all 256 braille
+   glyphs (U+2800–U+28FF) with **empty outlines** — blank cells that break the
+   dot-matrix graphs `btm`/`btop` draw. The explicit flag takes the patcher's
+   other code path and draws real dots in JBM's cell. JBM itself ships zero
+   braille glyphs, so this is the only source for them.
 
 See the comment block at the top of `build-updated-font.sh` for the
 full set of overrides (`WORK_ROOT`, `FA_SRC_DIR`, `NERDFONTS_REF`,

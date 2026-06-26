@@ -607,7 +607,16 @@ resolve_jetbrains_ttf
 JBM_TTF=""
 if [[ -n "${JETBRAINS_TTF}" && -f "${JETBRAINS_TTF}" ]]; then
   info "embedding JetBrains Mono: ${JETBRAINS_TTF}"
-  run_patcher "JetBrainsMono" "${JETBRAINS_TTF}" --single-width-glyphs
+  # --braille <style> is passed explicitly (NOT left to -c/--complete). JBM ships
+  # zero braille glyphs (U+2800-28FF), the dot-matrix block apps like btm/btop use
+  # to plot graphs. The patcher CAN synthesize them for monospaced fonts, but its
+  # --complete path sets the style to 'rectangular' (font-patcher upstream typo),
+  # while the generator (bin/scripts/braille/Braille.py) only draws for
+  # 'rectangle'/'circle'/'gapless' — so --complete silently emits 256 EMPTY
+  # braille glyphs (blank cells, invisible graphs in Blink). Passing an explicit
+  # valid style takes the patcher's other code path (braille_enabled=True, style
+  # forwarded verbatim), bypassing the typo and drawing real dots in JBM's cell.
+  run_patcher "JetBrainsMono" "${JETBRAINS_TTF}" --single-width-glyphs --braille circle
   shopt -s nullglob
   for f in "${OUT_DIR}"/JetBrains*.ttf; do JBM_TTF="$f"; done
   shopt -u nullglob
