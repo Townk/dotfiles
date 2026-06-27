@@ -64,17 +64,28 @@ zle -N cd-forward
 zle -N cd-up
 zle -N cd-down
 
-# ── ai-assist trigger (Ctrl+Alt+A) ─────────────────────────────────────────
-# Thin widget: delegate the whole flow to the `ai-playbook` binary. It captures
-# the origin context (last command/exit via atuin, cwd, pane scrollback), opens
-# the request input float, and spawns the docked session pane itself — and it
-# drives the user's REAL interactive shell under a pty (loading this .zshrc), so
-# the old live alias/function/env dump is no longer needed. Backgrounded with
-# `&!` so the trigger never blocks the prompt while the
-# launcher polls the float; stdio detached so the subprocess can't corrupt the
-# line editor or write to the main pane (the float + docked pane are its own UI).
+# ── ai-playbook assist trigger (Ctrl+Alt+A) ────────────────────────────────
+# Delegate the flow to `ai-playbook assist`. With the multiplexer integration
+# OFF (the default), assist runs INLINE in this pane: it captures the origin
+# context (last command/exit via atuin, cwd, scrollback), renders its input box
+# directly on /dev/tty, and drives the user's REAL interactive shell under a pty
+# (loading this .zshrc). When the request classifies to a COMMAND it prints that
+# command to STDOUT; an ANSWER or a playbook takes over the screen itself (the
+# fullscreen viewer on /dev/tty) and returns nothing on stdout.
+#
+# So we run it in the FOREGROUND (not backgrounded) and capture stdout: a
+# COMMAND result fills the command line for the user to review and run; anything
+# else leaves the line untouched. Because the UI is on /dev/tty, capturing
+# stdout doesn't suppress it. (The old backgrounded + stdio-detached form was for
+# the zellij float UI, which no longer activates by default — opt back in with
+# `[mux] backend = "zellij"` in the ai-playbook config.)
 ai-assist-trigger() {
-  ai-playbook troubleshoot </dev/null >/dev/null 2>&1 &!
+  local cmd
+  cmd="$(ai-playbook assist)"
+  if [[ -n "$cmd" ]]; then
+    BUFFER="$cmd"
+    CURSOR=${#BUFFER}
+  fi
   zle reset-prompt
 }
 zle -N ai-assist-trigger
