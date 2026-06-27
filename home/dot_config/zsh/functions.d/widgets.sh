@@ -91,34 +91,13 @@ ai-assist-trigger() {
 zle -N ai-assist-trigger
 
 # ── ai-playbook store picker (Ctrl+Alt+P) ──────────────────────────────────
-# Browse the saved-playbook store with fzf and act on the pick:
-#   Enter      → `ai-playbook run --playbook <slug>` (adapt-on-run + drive)
-#   Alt+Enter  → `ai-playbook edit <slug>` ($EDITOR)
-# `ai-playbook list --format fuzzy-data-source` emits one US(\x1f)-delimited
-# record per playbook: <display>\x1f<slug>\x1f<path>. fzf shows/searches only
-# field 1 (--with-nth 1) and previews the file (field 3). --expect tells us
-# which key accepted so we branch run vs edit. run/edit take over /dev/tty in
-# the foreground (no mux), then we return to a clean prompt — same model as the
-# assist trigger above. An empty store (no stdout) or a cancel just resets.
+# Thin ZLE delegate to the libexec picker (~/.local/libexec/pick-playbook),
+# which sources the zj::pick framework (a zellij float in zellij, inline fzf
+# otherwise) and acts on the choice: Enter runs the playbook (adapt-on-run),
+# Alt+Enter edits it. Both take over the terminal in the foreground (ai-playbook
+# runs no-mux by default), then we redraw the prompt. Cancel/empty just resets.
 ai-playbook-pick() {
-  local out key sel slug
-  out=$(ai-playbook list --format fuzzy-data-source \
-        | fzf --height=60% --reverse --prompt='playbook > ' \
-              --delimiter=$'\x1f' --with-nth=1 --expect=alt-enter \
-              --preview='cat {3}' --preview-window='right,60%,wrap') \
-    || { zle -R; return; }
-  # --expect layout: line 1 = pressed key ("" for plain Enter), line 2 = record.
-  key=${out%%$'\n'*}
-  sel=${out#*$'\n'}
-  [[ -n $sel ]] || { zle -R; return; }
-  slug=${sel#*$'\x1f'}        # drop the display field → slug\x1fpath
-  slug=${slug%%$'\x1f'*}      # keep the slug
-  [[ -n $slug ]] || { zle -R; return; }
-  if [[ $key == alt-enter ]]; then
-    ai-playbook edit "$slug"
-  else
-    ai-playbook run --playbook "$slug"
-  fi
+  "$HOME/.local/libexec/pick-playbook"
   zle reset-prompt
 }
 zle -N ai-playbook-pick

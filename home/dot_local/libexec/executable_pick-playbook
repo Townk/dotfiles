@@ -1,0 +1,50 @@
+#!/usr/bin/env zsh
+# pick-playbook — browse the ai-playbook store and act on the chosen playbook.
+#
+# Off-PATH backend helper (reached by absolute path, never typed), beside
+# pick-glyph / pick-gitmoji / pick-list. The Ctrl+Alt+P ZLE widget
+# (functions.d/widgets.sh) invokes it.
+#
+# Rows come from `ai-playbook list --format fuzzy-data-source`, one US(\x1f)-
+# delimited record per playbook: <display>\x1f<slug>\x1f<path>. We re-encode each
+# into a pick::line whose hidden tail fields carry the per-accept-key ACTION —
+# the glyph-picker idiom: a key selects WHICH tail field is emitted, so the one
+# returned value already encodes what to do (pick::start consumes the pressed key
+# internally and prints only the chosen field; it never echoes the key):
+#   field 1 = run:<slug>    emitted on Enter      (--output field:1)
+#   field 2 = edit:<slug>   emitted on Alt+Enter  (--key-output alt-enter:field:2)
+#
+# zj::pick is the float-aware drop-in for pick::start: a zellij floating pane
+# inside zellij, an inline fzf otherwise — returning the single selected value
+# through one channel, so the action-in-the-value scheme works in both. We then
+# run or edit the chosen playbook in the foreground (ai-playbook is no-mux by
+# default, so run/edit take over this terminal, then return).
+set -euo pipefail
+
+source "$HOME/.local/lib/zellij.zsh" # → zj::pick (+ the pick-common engine)
+
+emit_rows() {
+  local US=$'\x1f' display slug path
+  ai-playbook list --format fuzzy-data-source |
+    while IFS="$US" read -r display slug path; do
+      [[ -n "$slug" ]] || continue
+      pick::line "$display" "run:$slug" "edit:$slug"
+    done
+}
+
+picked=""
+picked="$(emit_rows | PICK_NAME=pick-playbook zj::pick \
+  --header 'playbook' \
+  --output field:1 \
+  --key-output alt-enter:field:2)" || exit 0 # non-zero == cancel (130)
+
+[[ -n "$picked" ]] || exit 0
+
+action="${picked%%:*}"
+slug="${picked#*:}"
+[[ -n "$slug" ]] || exit 0
+
+case "$action" in
+edit) exec ai-playbook edit "$slug" ;;
+*) exec ai-playbook run --playbook "$slug" ;;
+esac
