@@ -46,3 +46,8 @@ command -v atuin >/dev/null && bindkey '^R' atuin-search
 # just this bindkey. (Ctrl+Shift+/ was unusable: no distinct legacy encoding for
 # zsh, and Zellij can't bind Ctrl+punctuation.)
 bindkey '\e^A' ai-assist-trigger
+
+# Ctrl+Alt+P — pick a saved playbook from the ai-playbook store (fzf). Arrives as
+# the legacy sequence ESC Ctrl-P (\e^P), same encoding family as the assist
+# chord above. Enter runs the pick (adapt-on-run); Alt+Enter edits it.
+bindkey '\e^P' ai-playbook-pick
