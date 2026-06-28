@@ -97,7 +97,9 @@ zle -N ai-assist-trigger
 # Alt+Enter edits it. Both take over the terminal in the foreground (ai-playbook
 # runs no-mux by default), then we redraw the prompt. Cancel/empty just resets.
 ai-playbook-pick() {
-  "$HOME/.local/libexec/pick-playbook"
+  # Pass the interactive-shell-resolved binary down: the libexec picker runs as a
+  # non-interactive zsh script and may not inherit the mise/go-bin PATH.
+  AI_PLAYBOOK_BIN="${commands[ai-playbook]:-}" "$HOME/.local/libexec/pick-playbook"
   zle reset-prompt
 }
 zle -N ai-playbook-pick

@@ -23,9 +23,31 @@ set -euo pipefail
 
 source "$HOME/.local/lib/zellij.zsh" # → zj::pick (+ the pick-common engine)
 
+# Resolve the ai-playbook binary. As a `#!/usr/bin/env zsh` SCRIPT this runs
+# non-interactively: zsh sources only ~/.zshenv (+ /etc/zprofile path_helper),
+# NOT ~/.zshrc where mise/go-bin add the binary to PATH — so `ai-playbook` may
+# not be on PATH here. The ZLE widget passes AI_PLAYBOOK_BIN (resolved in the
+# interactive shell); fall back to PATH, then the well-known go-install dirs.
+APB="${AI_PLAYBOOK_BIN:-}"
+if [[ -z "$APB" ]]; then
+  APB="$(command -v ai-playbook 2>/dev/null || true)"
+fi
+if [[ -z "$APB" ]]; then
+  for d in "${GOBIN:-}" "$HOME/.local/share/go/bin" "$HOME/go/bin"; do
+    if [[ -n "$d" && -x "$d/ai-playbook" ]]; then
+      APB="$d/ai-playbook"
+      break
+    fi
+  done
+fi
+if [[ -z "$APB" ]]; then
+  print -u2 "pick-playbook: ai-playbook not found on PATH (set AI_PLAYBOOK_BIN)"
+  exit 1
+fi
+
 emit_rows() {
   local US=$'\x1f' display slug path
-  ai-playbook list --format fuzzy-data-source |
+  "$APB" list --format fuzzy-data-source |
     while IFS="$US" read -r display slug path; do
       [[ -n "$slug" ]] || continue
       pick::line "$display" "run:$slug" "edit:$slug"
@@ -45,6 +67,6 @@ slug="${picked#*:}"
 [[ -n "$slug" ]] || exit 0
 
 case "$action" in
-edit) exec ai-playbook edit "$slug" ;;
-*) exec ai-playbook run --playbook "$slug" ;;
+edit) exec "$APB" edit "$slug" ;;
+*) exec "$APB" run --playbook "$slug" ;;
 esac
