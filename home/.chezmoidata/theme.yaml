@@ -1,0 +1,60 @@
+# theme.yaml — the single source of truth for color across this config.
+#
+# chezmoi loads this as template data under `.theme`, visible to every *.tmpl.
+# Generated projections (e.g. ~/.config/theme/palette.zsh) and templated configs
+# read from here, so the palette is defined exactly once. Hex values are stored
+# WITHOUT a leading '#': templates add '#', '0x', or split to "R G B" as needed.
+#
+# See docs/theme-unification.md.
+theme:
+  # Canonical Catppuccin Mocha — the only place these literals live.
+  palette:
+    rosewater: "f5e0dc"
+    flamingo:  "f2cdcd"
+    pink:      "f5c2e7"
+    mauve:     "cba6f7"
+    red:       "f38ba8"
+    maroon:    "eba0ac"
+    peach:     "fab387"
+    yellow:    "f9e2af"
+    green:     "a6e3a1"
+    teal:      "94e2d5"
+    sky:       "89dceb"
+    sapphire:  "74c7ec"
+    blue:      "89b4fa"
+    lavender:  "b4befe"
+    text:      "cdd6f4"
+    subtext1:  "bac2de"
+    subtext0:  "a6adc8"
+    overlay2:  "9399b2"
+    overlay1:  "7f849c"
+    overlay0:  "6c7086"
+    surface2:  "585b70"
+    surface1:  "45475a"
+    surface0:  "313244"
+    base:      "1e1e2e"
+    mantle:    "181825"
+    crust:     "11111b"
+    white:     "ffffff"   # pure white (not a Catppuccin slot) — keycaps/hints
+
+  # Role -> palette key: the semantic layer, available to every language.
+  semantic:
+    accent:    mauve
+    border:    blue
+    danger:    red
+    warning:   yellow
+    success:   green
+    info:      sapphire
+    muted:     overlay0
+    separator: surface0
+    key:       white
+    title:     mauve
+
+  # Legitimate add-ons layered on the base palette.
+  extended:
+    # zj-hud status-bar tab chrome (so dialogs/keys match the bar's tabs).
+    tab:    { bg: "282c41", fg: "9b9fc1", active_bg: "656a83", active_fg: "ffffff" }
+    # Dialog variant accents: a brighter red and a warmer yellow than the base.
+    dialog: { danger: "ff5555", warning: "e5bf7b" }
+    # Per-machine WezTerm background tints (source for tint-palette.toml).
+    tints:  { cyan: "1c232f", blue: "1d1f33", amber: "2a241f", teal: "16302b", purple: "241c30", grey: "2a2a32" }

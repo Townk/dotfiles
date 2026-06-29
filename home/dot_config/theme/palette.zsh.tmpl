@@ -1,0 +1,50 @@
+#!/usr/bin/env zsh
+# palette.zsh — GENERATED from .chezmoidata/theme.yaml by chezmoi. DO NOT EDIT.
+#
+# The single-source Catppuccin palette projected for the shell layer:
+#   * C_HEX_*  — bare hex, ungated (always set; safe when stdout is captured,
+#     e.g. passed as --theme-* args to ai-playbook input).
+#   * C_*      — truecolor SGR twins, gated on an interactive stdout.
+# Sourced by ~/.local/lib/common.zsh; THEME_* tokens (theme-common.zsh) and the
+# fzf/dialog/ai-playbook colors all bottom out here.
+
+C_HEX_MAUVE="#{{ .theme.palette.mauve }}"
+C_HEX_TEXT="#{{ .theme.palette.text }}"
+C_HEX_SUBTEXT="#{{ .theme.palette.subtext0 }}"
+C_HEX_SURFACE0="#{{ .theme.palette.surface0 }}"
+C_HEX_SURFACE2="#{{ .theme.palette.surface2 }}"
+C_HEX_OVERLAY0="#{{ .theme.palette.overlay0 }}"
+C_HEX_OVERLAY1="#{{ .theme.palette.overlay1 }}"
+C_HEX_BASE="#{{ .theme.palette.base }}"
+C_HEX_DANGER="#{{ .theme.palette.red }}"
+C_HEX_WHITE="#{{ .theme.palette.white }}"
+# Dialog variant accents (brighter red / warmer yellow than the base palette).
+C_HEX_BLUE="#{{ .theme.palette.blue }}"
+C_HEX_RED="#{{ .theme.extended.dialog.danger }}"
+C_HEX_YELLOW="#{{ .theme.extended.dialog.warning }}"
+# zj-hud status-bar tab chrome.
+C_HEX_TAB_BG="#{{ .theme.extended.tab.bg }}"
+C_HEX_TAB_FG="#{{ .theme.extended.tab.fg }}"
+C_HEX_TAB_ACTIVE_BG="#{{ .theme.extended.tab.active_bg }}"
+C_HEX_TAB_ACTIVE_FG="#{{ .theme.extended.tab.active_fg }}"
+
+if [ -t 1 ]; then
+  _theme_sgr_fg() {
+    local h="${1#\#}"
+    printf '\e[38;2;%d;%d;%dm' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
+  }
+  C_WHITE="$(_theme_sgr_fg "$C_HEX_WHITE")"
+  C_MAUVE="$(_theme_sgr_fg "$C_HEX_MAUVE")"
+  C_TEXT="$(_theme_sgr_fg "$C_HEX_TEXT")"
+  C_SUBTEXT="$(_theme_sgr_fg "$C_HEX_SUBTEXT")"
+  C_SURFACE0="$(_theme_sgr_fg "$C_HEX_SURFACE0")"
+  C_SURFACE2="$(_theme_sgr_fg "$C_HEX_SURFACE2")"
+  C_OVERLAY0="$(_theme_sgr_fg "$C_HEX_OVERLAY0")"
+  C_BASE="$(_theme_sgr_fg "$C_HEX_BASE")"
+  C_DANGER="$(_theme_sgr_fg "$C_HEX_DANGER")"
+  C_BOLD=$'\e[1m'
+  unset -f _theme_sgr_fg
+else
+  C_WHITE="" C_MAUVE="" C_TEXT="" C_SUBTEXT="" C_SURFACE0="" C_SURFACE2="" \
+    C_OVERLAY0="" C_BASE="" C_DANGER="" C_BOLD=""
+fi

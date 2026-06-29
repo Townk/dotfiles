@@ -46,49 +46,15 @@ else
   C_RES=""
 fi
 
-# --- extended truecolor palette (Catppuccin Mocha) for dialog chrome ---------
-# C_HEX_* are bare hex values (UNGATED): passed as --theme-* color args to ai-playbook input,
-# which owns its own tty, so they must exist even when our stdout is captured.
-# The SGR C_* twins below are gated like the base palette so non-terminal
-# output stays escape-free. THEME_* tokens (theme-common.zsh) compose from these.
-C_HEX_MAUVE="#cba6f7"
-C_HEX_TEXT="#cdd6f4"
-C_HEX_SUBTEXT="#a6adc8"
-C_HEX_SURFACE0="#313244"
-C_HEX_SURFACE2="#585b70"
-C_HEX_OVERLAY0="#6c7086"
-C_HEX_OVERLAY1="#7f849c"
-C_HEX_BASE="#1e1e2e"
-C_HEX_DANGER="#f38ba8"
-C_HEX_WHITE="#ffffff"
-# Dialog variant accents: default/active = which-key blue, danger = bright red,
-# warning = yellow. Drive the title + focused-button color (and the would-be
-# border, if zellij ever allows per-pane frame color).
-C_HEX_BLUE="#89b4fa"
-C_HEX_RED="#ff5555"
-C_HEX_YELLOW="#e5bf7b"
-# zj-hud status-bar tab colors — the system's established tab UI colors, used so
-# dialog buttons/keys match the tabs. Source: ~/Projects/apps/zellij/zj-hud
-# src/bar/render.rs (TAB_BG/TAB_FG/ACTIVE_TAB_BG/ACTIVE_TAB_FG).
-C_HEX_TAB_BG="#282c41"
-C_HEX_TAB_FG="#9b9fc1"
-C_HEX_TAB_ACTIVE_BG="#656a83"
-C_HEX_TAB_ACTIVE_FG="#ffffff"
-if [ -t 1 ]; then
-  C_WHITE=$'\e[38;2;255;255;255m'
-  C_MAUVE=$'\e[38;2;203;166;247m'
-  C_TEXT=$'\e[38;2;205;214;244m'
-  C_SUBTEXT=$'\e[38;2;166;173;200m'
-  C_SURFACE0=$'\e[38;2;49;50;68m'
-  C_SURFACE2=$'\e[38;2;88;91;112m'
-  C_OVERLAY0=$'\e[38;2;108;112;134m'
-  C_BASE=$'\e[38;2;30;30;46m'
-  C_DANGER=$'\e[38;2;243;139;168m'
-  C_BOLD=$'\e[1m'
-else
-  C_MAUVE="" C_TEXT="" C_SUBTEXT="" C_SURFACE0="" C_SURFACE2="" \
-    C_OVERLAY0="" C_BASE="" C_DANGER="" C_BOLD="" C_WHITE=""
-fi
+# --- Catppuccin palette (single source) -------------------------------------
+# C_HEX_* (bare hex, UNGATED — passed as --theme-* args to ai-playbook input,
+# which owns its own tty, so they must exist even when our stdout is captured)
+# and their gated truecolor SGR twins C_* are generated from
+# .chezmoidata/theme.yaml into ~/.config/theme/palette.zsh by chezmoi — the
+# single styling source of truth. THEME_* tokens (theme-common.zsh) compose from
+# these. THEME_PALETTE_FILE overrides the path; the ShellSpec suite renders the
+# palette to a temp and points it there, so tests don't require `chezmoi apply`.
+source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/palette.zsh}"
 
 # --- logging ----------------------------------------------------------------
 # One house style across every tool. info/ok go to stdout; warnings and errors
