@@ -773,6 +773,17 @@ else
   install_donor_casks
 fi
 
+# Guarantee against silently dropped donor glyphs: the pipeline aborts if any
+# configured donor family provisions NOTHING (e.g. the Iosevka-only legacy-
+# computing set, sole source for every SEPARATED BLOCK SEXTANT). install_donor_
+# casks temp-installs every donor cask by default, so this only bites when
+# provisioning silently no-ops. When the user has explicitly disabled installs
+# (DONOR_INSTALL=0) they've opted into "use only fonts already present", so
+# downgrade that hard abort to the loud warning by allowing missing donors.
+if [[ "${DONOR_INSTALL}" != "1" ]]; then
+  export DONOR_ALLOW_MISSING="${DONOR_ALLOW_MISSING:-1}"
+fi
+
 # Icon-sizing knobs (step 7b). Tunable without a rebuild via recalibrate-fa.sh;
 # once settled, set them here so a clean rebuild reproduces them.
 ICON_FILL="${ICON_FILL:-1.05}"

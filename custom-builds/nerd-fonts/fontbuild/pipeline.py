@@ -29,17 +29,28 @@ def _compact_runs(cps):
 
 
 def warn_unresolved_donors(families, donors, unresolved):
-    """Make a wholesale donor miss IMPOSSIBLE to overlook.
+    """Make a wholesale donor miss IMPOSSIBLE to ship — fail-closed by default.
 
     Donor codepoints with no covering font are dropped silently — they simply
     never enter the built cmap, so the only trace used to be one easily-missed
     line in a multi-thousand-line build log. That is exactly how an entire
     category (e.g. the 856-glyph Iosevka-only set: Symbols for Legacy Computing
     Supplement incl. every SEPARATED BLOCK SEXTANT, plus Latin/Cyrillic
-    extensions) shipped blank into the Blink/JBM font. Print a loud, counted,
-    range-compressed banner that names the donor families which contributed
-    nothing (install those to fix), so the gap is obvious at a glance. Set
-    DONOR_STRICT=1 to turn the gap into a hard build failure instead.
+    extensions) shipped blank into the Blink/JBM font.
+
+    First print a loud, counted, range-compressed banner naming the donor
+    families that contributed nothing. Then GUARANTEE we never ship dropped
+    glyphs: if an ENTIRE configured donor family resolved zero glyphs, a donor
+    the build relies on (Iosevka, the sole source for that 856-glyph set) is
+    absent — abort the build. The builder temp-installs every donor cask by
+    default (DONOR_INSTALL=1), so in the normal flow this never trips; it fires
+    only when provisioning silently no-ops (cask reports installed but the font
+    can't be matched, or installs were disabled). Escape hatches:
+      * DONOR_ALLOW_MISSING=1 — proceed despite a missing donor family. The
+        builder sets this automatically when DONOR_INSTALL=0 (the user has
+        opted into "use only fonts already present").
+      * DONOR_STRICT=1 — additionally abort on per-codepoint gaps even when
+        every family resolved something (allowlist ahead of font coverage).
     """
     resolved_families = {d[0] for d in donors}
     missing_families = [f for f in families if f not in resolved_families]
@@ -57,6 +68,13 @@ def warn_unresolved_donors(families, donors, unresolved):
         shown += ", ... (+%d more ranges)" % (len(runs) - 40)
     print("  Affected codepoints: %s" % shown)
     print(bar)
+
+    if missing_families and os.environ.get("DONOR_ALLOW_MISSING") != "1":
+        raise SystemExit(
+            "donor provisioning incomplete: %s resolved 0 glyph(s) — %d codepoint(s) "
+            "would be dropped (blank cells). Install the donor font(s), or set "
+            "DONOR_ALLOW_MISSING=1 to build without them."
+            % (", ".join(missing_families), len(unresolved)))
     if os.environ.get("DONOR_STRICT") == "1":
         raise SystemExit(
             "DONOR_STRICT=1: %d donor glyph(s) unresolved; aborting build."

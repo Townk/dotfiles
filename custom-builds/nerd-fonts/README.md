@@ -135,13 +135,23 @@ Iosevka is the **sole** donor for ~856 of the listed codepoints — the entire
 Symbols for Legacy Computing Supplement (`U+1CC00-1CEFF`, including every
 SEPARATED BLOCK SEXTANT), the `U+1FBCC-1FBEF` tail of Legacy Computing, and a
 long tail of Latin/Cyrillic extensions and enclosed alphanumerics. No other
-configured donor carries them, so a build where Iosevka is unavailable (e.g.
-`DONOR_INSTALL=0` with no Iosevka on disk, or `brew`/network down) silently
-drops all of them and ships blank cells into the Blink/JBM font. The pipeline
-now prints a loud, range-compressed **`WARNING: N donor glyph(s) had NO covering
-font`** banner naming the unprovisioned donor families whenever this happens —
-watch for it. Set `DONOR_STRICT=1` to turn any unresolved donor glyph into a
-hard build failure instead of a warning.
+configured donor carries them. Because `font-iosevka` is temp-installed like
+every other donor cask (see above), the normal build resolves all of them; the
+risk is a build where provisioning silently no-ops (`DONOR_INSTALL=0` with no
+Iosevka on disk, a cask that reports installed but whose font can't be matched).
+
+To **guarantee** dropped glyphs never ship, the pipeline is fail-closed: any
+unresolved donor codepoint prints a loud, range-compressed **`WARNING: N donor
+glyph(s) had NO covering font`** banner naming the unprovisioned families, and
+if an **entire** configured donor family resolved zero glyphs (a donor the build
+relies on is absent) the build **aborts** rather than emitting blank cells.
+Escape hatches:
+
+- `DONOR_ALLOW_MISSING=1` — build anyway despite a missing donor family. The
+  builder sets this automatically when `DONOR_INSTALL=0`, since disabling
+  installs is an explicit "use only fonts already present".
+- `DONOR_STRICT=1` — also abort on per-codepoint gaps even when every family
+  resolved something (i.e. the allowlist is ahead of available font coverage).
 
 ### `glyphs.json`
 
