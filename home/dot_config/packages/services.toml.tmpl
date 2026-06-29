@@ -66,68 +66,25 @@ PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/s
 {{ end }}
 
 {{ if ne .profile "dev-shell" -}}
-# llama-swap — single OpenAI-compatible endpoint on :8000 that hot-swaps
-# between per-model mlx_lm.server / mlx_vlm.server backends. Each model runs
-# as its own process so it keeps its own MTP draft config (Qwen native MTP /
-# Gemma assistant-drafter MTP); only one is resident at a time. Replaces the
-# old single-process omlx server. llama-swap is brew-managed; the backends
-# (mlx-lm, mlx-vlm) are uv-managed. The --config arg is rendered to an
-# absolute path because the worker passes cmd args verbatim (no ~ expansion).
-[llama-swap]
-description    = "Local LLM inference: llama-swap → mlx_lm/mlx_vlm (MTP, on-demand swap)"
-cmd            = ["llama-swap", "--config", "{{ .chezmoi.homeDir }}/.config/llama-swap/config.yaml", "--listen", "127.0.0.1:8000"]
-keep_alive     = true
-run_at_load    = true
-working_dir    = "~/.local/share/mlx"
-log_path       = "~/.local/state/llama-swap/llama-swap.log"
-error_log_path = "~/.local/state/llama-swap/llama-swap.log"
-
-[llama-swap.env]
-# launchd doesn't inherit interactive shell PATH; bake in the dirs the
-# backends shell out into. ~/.local/bin is where uv installs the
-# mlx_lm.server / mlx_vlm.server shims that llama-swap launches.
-PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-
-# local-llm-gateway — OpenAI-compatible policy shim in front of llama-swap.
-# It adds the `local-agent-auto` alias, caps oversized local generations, and
-# routes auto requests using the latest local-llm-bench measurements.
-[local-llm-gateway]
-description    = "Local LLM policy gateway: adaptive routing and output caps"
-cmd            = ["{{ .chezmoi.homeDir }}/.local/libexec/local-llm-gateway", "--host", "127.0.0.1", "--port", "8100", "--target", "http://127.0.0.1:8000"]
-keep_alive     = true
-run_at_load    = true
-log_path       = "~/.local/state/local-llm/gateway.log"
-error_log_path = "~/.local/state/local-llm/gateway.log"
-
-[local-llm-gateway.env]
-PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-HOME = "{{ .chezmoi.homeDir }}"
-XDG_STATE_HOME = "{{ .chezmoi.homeDir }}/.local/state"
-LOCAL_LLM_FLOOR_TPS = "25"
-LOCAL_LLM_PREFERRED_MODEL = "Qwen3.6-35B-A3B-6bit"
-LOCAL_LLM_MAX_TOKENS = "2048"
-LOCAL_LLM_LONG_PROMPT_TOKENS = "6000"
-LOCAL_LLM_LONG_PROMPT_MAX_TOKENS = "512"
-
 # mlx-gemma — DIRECT mlx_vlm.server for pi-local's single-model setup.
-# pi-local was repointed off the headroom→gateway→llama-swap chain to talk
+# pi-local was repointed off the old headroom→gateway→llama-swap chain to talk
 # straight to mlx_vlm.server on :8799 (one model, so the hot-swap and
-# local-agent-auto routing layers have no job). This entry is the lifecycle
-# owner that llama-swap used to be for that path. It coexists with the stack
-# above on a separate port — remove the now-unused [llama-swap]/
-# [local-llm-gateway] sections (and brew-managed headroom) once you've
-# confirmed nothing else consumes :8787/:8100/:8000.
+# local-agent-auto routing layers had no job). This entry is the lifecycle
+# owner that llama-swap used to be for that path. The old [llama-swap] /
+# [local-llm-gateway] / [headroom] sections were removed once nothing was left
+# consuming :8787/:8100/:8000 — mlx-gemma on :8799 is now the only
+# local-inference service declared here.
 #
 # ON-DEMAND by design: keep_alive=false + run_at_load=false, so the ~8.4GB
 # model (≈15–17GB resident with a full 128K-context KV) is NOT pinned at every
 # login. Start it only when coding:  `system-service start mlx-gemma`
 # (stop: `system-service stop mlx-gemma`). To make it always-on instead, set
-# BOTH keys below to true (mirrors [llama-swap]); note launchd has no native
-# idle-unload, so always-on means permanently resident.
+# BOTH keys below to true; note launchd has no native idle-unload, so
+# always-on means permanently resident.
 #
 # cmd[0] is `command -v`-resolved to ~/.local/bin/mlx_vlm.server (uv shim).
 # The --model/--draft-model paths MUST be absolute: the worker passes cmd args
-# verbatim (no ~ expansion), exactly like [llama-swap]'s --config.
+# verbatim (no ~ expansion).
 [mlx-gemma]
 description    = "Local LLM inference: direct mlx_vlm.server (Gemma 4 OptiQ-4bit + MTP drafter) on :8799"
 cmd            = [
@@ -163,32 +120,5 @@ APC_ENABLED = "1"
 APC_HASH = "sha256"
 APC_DISK_PATH = "{{ .chezmoi.homeDir }}/.local/state/mlx-gemma/apc"
 {{ end }}
-
-# headroom — local compression and CCR retrieval proxy.
-# Failure learning is intentionally not enabled: this chezmoi repo is public,
-# and learned session content must not be written into tracked prompts.
-[headroom]
-description    = "Headroom local context compression and CCR proxy"
-cmd            = ["headroom", "proxy", "--port", "8787"]
-keep_alive     = true
-run_at_load    = true
-working_dir    = "~"
-log_path       = "~/.local/state/headroom/headroom.log"
-error_log_path = "~/.local/state/headroom/headroom.log"
-
-[headroom.env]
-PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-HOME = "{{ .chezmoi.homeDir }}"
-XDG_STATE_HOME = "{{ .chezmoi.homeDir }}/.local/state"
-XDG_CACHE_HOME = "{{ .chezmoi.homeDir }}/.cache"
-HEADROOM_TELEMETRY = "off"
-HEADROOM_WORKSPACE_DIR = "{{ .chezmoi.homeDir }}/.local/state/headroom"
-HEADROOM_CONFIG_DIR = "{{ .chezmoi.homeDir }}/.config/headroom"
-HEADROOM_MEMORY_DB_PATH = "{{ .chezmoi.homeDir }}/.local/state/headroom/memory.db"
-HEADROOM_MEMORY_INJECTION_MODE = "disabled"
-HEADROOM_HOST = "127.0.0.1"
-HEADROOM_PORT = "8787"
-HEADROOM_EMBEDDER_RUNTIME = "pytorch_mps"
-OPENAI_TARGET_API_URL = "http://127.0.0.1:8100/v1"
 
 # vim:ft=toml.gotmpl
