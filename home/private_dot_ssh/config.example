@@ -29,3 +29,32 @@
 
 Match all
 Include ~/.ssh/config.d/*
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — pre-connect resource sync (glyph/gitmoji picker DB).
+#
+# The picker database (~/.local/share/fonts/nerd-font/symbols.db) is a
+# host-specific artifact: it is built on THIS desktop/laptop and bakes in the
+# renderability of this machine's terminal + font — which is exactly what
+# draws the glyphs when you SSH into a headless dev-shell. So the remote copy
+# must mirror whichever machine is connecting. This hook pushes it on every
+# connection; rsync sends only the changed blocks and is a near-instant no-op
+# when nothing changed.
+#
+# This is host-specific, so it stays in this LOCAL file only and never goes
+# back to the repo. To enable: copy the line below, uncomment it, and replace
+# BOTH <devbox> tokens with your dev-shell's Host alias. The remote
+# ~/.local/share/fonts/nerd-font/ directory must already exist.
+#
+# Why each piece:
+#   * `_DBSYNC` sentinel — rsync opens its own ssh to <devbox>, which re-reads
+#     this config; the guard stops that second pass from re-running the hook
+#     (otherwise: infinite loop). The `_DBSYNC=1 rsync` exports it into that
+#     child ssh, which then sees it set and skips.
+#   * `; false` — makes this a side-effect-only block that contributes no SSH
+#     config (the exec never "matches").
+#   * timeouts + </dev/null — a sleeping/unreachable dev-shell can't stall or
+#     swallow stdin from your login; worst case you connect with a stale copy.
+#
+# Match host <devbox> exec "[ -n \"$_DBSYNC\" ] || _DBSYNC=1 rsync -z --timeout=8 -e 'ssh -o ConnectTimeout=5' ~/.local/share/fonts/nerd-font/symbols.db <devbox>:.local/share/fonts/nerd-font/ </dev/null >/dev/null 2>&1; false"
+# ---------------------------------------------------------------------------
