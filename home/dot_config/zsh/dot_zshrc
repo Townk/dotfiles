@@ -125,6 +125,17 @@ command -v mise >/dev/null && eval "$(mise activate zsh)"
 # Extend PATH.
 path=(~/.local/bin "$GOPATH/bin" /Applications/Obsidian.app/Contents/MacOS $path)
 
+# ── Theme override layer ───────────────────────────────────────────────────
+# Resolve the effective palette (canonical ⊕ loose ~/.config/theme/override.toml)
+# into the cache and point the palette consumers at it — common.zsh/dialogs/
+# ai-playbook, the deferred completion.sh fzf colors, and the file viewers (via
+# THEME_PALETTE_*). A no-op (effective == canonical) when no override.toml is
+# present, so this changes nothing until a machine drops one in.
+theme-apply 2>/dev/null
+[[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" ]] \
+  && export THEME_PALETTE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" \
+            THEME_PALETTE_JSON="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.json"
+
 # ── History ──────────────────────────────────────────────────────────────
 # atuin (deferred, below) owns interactive history search; this is the
 # plain on-disk history that atuin imports from and that backs the session.
