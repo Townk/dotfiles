@@ -201,7 +201,7 @@ if [[ -n "$capture" ]]; then
   focus_self
   focus_self_deferred
   result=""
-  tmp=$(mktemp -t zellijmodal)
+  tmp=$(mktemp "${TMPDIR:-/tmp}/zellijmodal.XXXXXX")
   trap 'printf "%s" "$result" > "$capture"; rm -f -- "$tmp"' EXIT
   "${cmd[@]}" >"$tmp" || true
   result=$(cat "$tmp")
@@ -237,7 +237,7 @@ focus_self_deferred
 # independent of the stdout we capture below for the final Enter. The
 # picker only enables those binds when both vars are present, so this
 # stays a no-op for non-picker targets.
-tmp=$(mktemp -t zellijmodal)
+tmp=$(mktemp "${TMPDIR:-/tmp}/zellijmodal.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 if [[ -n "$target_pane" ]]; then
   PICK_INJECT_PANE="$target_pane" PICK_INJECT_ZELLIJ="$ZELLIJ_BIN" \
