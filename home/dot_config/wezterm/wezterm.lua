@@ -142,6 +142,114 @@ config.use_resize_increments = true
 config.window_background_opacity = 1.0
 config.enable_tab_bar = false
 
+-- Discrete background tints for remote sessions (applied per-window via
+-- set_config_overrides in update-status). Catppuccin Mocha base is #1e1e2e;
+-- shifts are intentionally subtle — enough to notice at a glance, not enough
+-- to distract. Location ids come from resolve-terminal-location (and optional
+-- terminal-location.yaml); unmapped remotes fall back to `remote`.
+local terminal_location_tints = {
+	home = {
+		orientation = "Vertical",
+		colors = { "#1e1e2e", "#211d2c" },
+		interpolation = "Linear",
+		blend = "Rgb",
+	},
+	dev = {
+		orientation = "Vertical",
+		colors = { "#1e1e2e", "#1a1f32" },
+		interpolation = "Linear",
+		blend = "Rgb",
+	},
+	remote = {
+		orientation = "Vertical",
+		colors = { "#1e1e2e", "#1e2230" },
+		interpolation = "Linear",
+		blend = "Rgb",
+	},
+}
+
+local resolve_terminal_location_helper =
+	os.getenv("HOME") .. "/.config/zellij/scripts/resolve-terminal-location"
+
+local function gradients_match(a, b)
+	if a == b then
+		return true
+	end
+	if type(a) ~= "table" or type(b) ~= "table" then
+		return false
+	end
+	local ac, bc = a.colors, b.colors
+	if type(ac) ~= "table" or type(bc) ~= "table" then
+		return false
+	end
+	return ac[1] == bc[1] and ac[2] == bc[2]
+end
+
+local function detect_terminal_location(pane)
+	local vars = pane:get_user_vars()
+	local uv = vars and vars.terminal_location
+	if uv == "local" then
+		return "local"
+	end
+	if uv and uv ~= "" then
+		return uv
+	end
+
+	local info = pane:get_foreground_process_info()
+	if not info then
+		return "local"
+	end
+
+	local ok, stdout = pcall(wezterm.run_child_process, {
+		resolve_terminal_location_helper,
+		tostring(info.pid),
+	})
+	if ok and stdout then
+		local loc = stdout:match("(%S+)")
+		if loc and loc ~= "" then
+			return loc
+		end
+	end
+	return "local"
+end
+
+wezterm.GLOBAL.terminal_location_cache = wezterm.GLOBAL.terminal_location_cache or {}
+
+local function resolve_terminal_location_cached(window, pane)
+	local key = tostring(window:window_id()) .. ":" .. tostring(pane:pane_id())
+	local cache = wezterm.GLOBAL.terminal_location_cache
+	local now = wezterm.time.now()
+	local entry = cache[key]
+	if entry and entry.location and entry.pane_id == pane:pane_id() and (now - entry.at) < 0.5 then
+		return entry.location
+	end
+	local location = detect_terminal_location(pane)
+	cache[key] = { location = location, at = now, pane_id = pane:pane_id() }
+	return location
+end
+
+local function apply_terminal_location_tint(window, pane)
+	local location = resolve_terminal_location_cached(window, pane)
+	local overrides = window:get_config_overrides() or {}
+	local desired = nil
+	if location ~= "local" then
+		desired = terminal_location_tints[location] or terminal_location_tints.remote
+	end
+
+	if location == "local" then
+		if overrides.window_background_gradient == nil then
+			return
+		end
+		overrides.window_background_gradient = nil
+	else
+		if gradients_match(overrides.window_background_gradient, desired) then
+			return
+		end
+		overrides.window_background_gradient = desired
+	end
+	window:set_config_overrides(overrides)
+end
+
 config.cursor_blink_ease_in = "Constant"
 config.cursor_blink_ease_out = "Constant"
 config.default_cursor_style = "BlinkingBar"
@@ -354,6 +462,7 @@ wezterm.on("update-status", function(window, pane)
 		last_real_workspace = workspace
 	end
 
+	apply_terminal_location_tint(window, pane)
 	write_fullscreen_state(window)
 end)
 
