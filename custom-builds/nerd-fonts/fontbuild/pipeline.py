@@ -16,6 +16,53 @@ from . import donor, scale, strip_emoji
 from .bleed import bleed_font
 
 
+def _compact_runs(cps):
+    """Collapse a sorted codepoint list into 'U+XXXX' / 'U+XXXX..U+YYYY' runs."""
+    runs = []
+    for cp in sorted(cps):
+        if runs and cp == runs[-1][1] + 1:
+            runs[-1][1] = cp
+        else:
+            runs.append([cp, cp])
+    return ["U+%04X" % a if a == b else "U+%04X..U+%04X" % (a, b)
+            for a, b in runs]
+
+
+def warn_unresolved_donors(families, donors, unresolved):
+    """Make a wholesale donor miss IMPOSSIBLE to overlook.
+
+    Donor codepoints with no covering font are dropped silently — they simply
+    never enter the built cmap, so the only trace used to be one easily-missed
+    line in a multi-thousand-line build log. That is exactly how an entire
+    category (e.g. the 856-glyph Iosevka-only set: Symbols for Legacy Computing
+    Supplement incl. every SEPARATED BLOCK SEXTANT, plus Latin/Cyrillic
+    extensions) shipped blank into the Blink/JBM font. Print a loud, counted,
+    range-compressed banner that names the donor families which contributed
+    nothing (install those to fix), so the gap is obvious at a glance. Set
+    DONOR_STRICT=1 to turn the gap into a hard build failure instead.
+    """
+    resolved_families = {d[0] for d in donors}
+    missing_families = [f for f in families if f not in resolved_families]
+    runs = _compact_runs(unresolved)
+    bar = "  " + "!" * 70
+    print(bar)
+    print("  WARNING: %d donor glyph(s) had NO covering font and will be MISSING"
+          % len(unresolved))
+    print("           from the built fonts (blank cells in Blink/terminals).")
+    if missing_families:
+        print("  Unprovisioned donor families (install to fix): %s"
+              % ", ".join(missing_families))
+    shown = ", ".join(runs[:40])
+    if len(runs) > 40:
+        shown += ", ... (+%d more ranges)" % (len(runs) - 40)
+    print("  Affected codepoints: %s" % shown)
+    print(bar)
+    if os.environ.get("DONOR_STRICT") == "1":
+        raise SystemExit(
+            "DONOR_STRICT=1: %d donor glyph(s) unresolved; aborting build."
+            % len(unresolved))
+
+
 def run(argv):
     ap = argparse.ArgumentParser(prog="fontbuild pipeline")
     ap.add_argument("--fa-map", required=True)
@@ -49,8 +96,7 @@ def run(argv):
         else:
             donors, unresolved = donor.resolve_donors(cps, families, explicit_paths)
             if unresolved:
-                print("  unresolved donor glyph(s): " +
-                      ", ".join("U+%04X" % cp for cp in sorted(unresolved)))
+                warn_unresolved_donors(families, donors, unresolved)
 
     # --- shared scale inputs ---
     fa_map = json.load(open(args.fa_map))

@@ -131,6 +131,18 @@ explicitly named in `DONOR_FONT_PATHS`. Iosevka is last on purpose, matching the
 old fallback order: STIX/Noto win where they cover a glyph, and Iosevka fills
 only the remaining gaps.
 
+Iosevka is the **sole** donor for ~856 of the listed codepoints — the entire
+Symbols for Legacy Computing Supplement (`U+1CC00-1CEFF`, including every
+SEPARATED BLOCK SEXTANT), the `U+1FBCC-1FBEF` tail of Legacy Computing, and a
+long tail of Latin/Cyrillic extensions and enclosed alphanumerics. No other
+configured donor carries them, so a build where Iosevka is unavailable (e.g.
+`DONOR_INSTALL=0` with no Iosevka on disk, or `brew`/network down) silently
+drops all of them and ships blank cells into the Blink/JBM font. The pipeline
+now prints a loud, range-compressed **`WARNING: N donor glyph(s) had NO covering
+font`** banner naming the unprovisioned donor families whenever this happens —
+watch for it. Set `DONOR_STRICT=1` to turn any unresolved donor glyph into a
+hard build failure instead of a warning.
+
 ### `glyphs.json`
 
 A single index of every glyph in the built font, with searchable
@@ -338,7 +350,7 @@ shown again at the bottom of this README).
 See the comment block at the top of `build-updated-font.sh` for the
 full set of overrides (`WORK_ROOT`, `FA_SRC_DIR`, `NERDFONTS_REF`,
 `ASSUME_YES`, `INSTALL`, `JSON_OUT_DIR`, `DONOR_GLYPH_FILE`,
-`DONOR_FONT_FAMILIES`, `DONOR_FONT_PATHS`, `DONOR_INSTALL`).
+`DONOR_FONT_FAMILIES`, `DONOR_FONT_PATHS`, `DONOR_INSTALL`, `DONOR_STRICT`).
 
 ## Picker starter
 
