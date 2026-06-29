@@ -142,25 +142,45 @@ config.use_resize_increments = true
 config.window_background_opacity = 1.0
 config.enable_tab_bar = false
 
--- Named background-tint palette, applied per-window via set_config_overrides in
--- update-status. resolve-terminal-location returns one of these NAMES (or
--- "local" for no tint), choosing it from the session's ssh target: a machine's
--- explicit `color` in system-onboard's map, else its profile default, else grey
--- (see lib/terminal-location.zsh). To add a tint, define a name here and
--- reference it from the onboard map / profile defaults.
+-- Named background-tint palette (name -> hex), applied per-window via
+-- set_config_overrides in update-status. resolve-terminal-location returns one
+-- of these NAMES (or "local" for no tint) from the session's ssh target: a
+-- machine's explicit `color` in system-onboard's map, else its profile default,
+-- else grey (see lib/terminal-location.zsh). We tint colors.background (not
+-- window_background_gradient) so the shift shows behind terminal cells.
 --
--- Each is a faint hue wash over the Catppuccin Mocha base (#1e1e2e): close
--- enough not to disturb the UI, distinct enough to tell machines apart. We tint
--- colors.background (not window_background_gradient) so the shift shows behind
--- terminal cells; a gradient would only paint the window padding.
-local terminal_tint_palette = {
-	cyan = "#1c232f",
-	blue = "#1d1f33",
-	amber = "#2a241f",
-	teal = "#16302b",
-	purple = "#241c30",
-	grey = "#2a2a32",
-}
+-- The palette is the SINGLE SOURCE OF TRUTH in tint-palette.toml, shared with
+-- system-onboard's color set/list/validate. Parsed with a simple line matcher
+-- (flat `name = "#hex"`) — no serde dependency — and falls back to a built-in
+-- default if the file is missing/empty so WezTerm never breaks.
+local function load_tint_palette()
+	local default = {
+		cyan = "#1c232f",
+		blue = "#1d1f33",
+		amber = "#2a241f",
+		teal = "#16302b",
+		purple = "#241c30",
+		grey = "#2a2a32",
+	}
+	local file = io.open(os.getenv("HOME") .. "/.config/wezterm/tint-palette.toml", "r")
+	if not file then
+		return default
+	end
+	local palette = {}
+	for line in file:lines() do
+		local name, hex = line:match('^%s*([%w_-]+)%s*=%s*"(#%x+)"')
+		if name and hex then
+			palette[name] = hex
+		end
+	end
+	file:close()
+	if next(palette) == nil then
+		return default
+	end
+	return palette
+end
+
+local terminal_tint_palette = load_tint_palette()
 
 local resolve_terminal_location_helper =
 	os.getenv("HOME") .. "/.config/zellij/scripts/resolve-terminal-location"
