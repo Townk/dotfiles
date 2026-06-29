@@ -9,3 +9,10 @@ auto-key-locate keyserver
 keyserver hkps://keys.openpgp.org
 
 keyserver-options no-honor-keyserver-url include-revoked auto-key-retrieve
+{{- if eq .profile "dev-shell" }}
+
+# In dev-shell machines, the gpg-agent is forwarded from the laptop over SSH.
+# Never spawn a local agent here, or it would clobber the forwarded socket and
+# sign with the (keyless) local agent instead.
+no-autostart
+{{- end }}

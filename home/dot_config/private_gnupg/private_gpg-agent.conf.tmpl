@@ -1,11 +1,5 @@
 default-cache-ttl 86400
 max-cache-ttl 86400
-{{ if eq .profile "dev-shell" -}}
-# The gpg-agent is forwarded from the host over SSH, so we should never spawn a
-# local agent here, or it would clobber the forwarded socket and sign with the
-# (keyless) local agent instead.
-no-autostart
-{{ end -}}
 {{ if eq .chezmoi.os "darwin" -}}
 pinentry-program {{ .chezmoi.homeDir }}/.local/libexec/pinentry-auto
 {{- end }}
