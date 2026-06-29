@@ -41,8 +41,6 @@ Durable knowledge belongs in memory, not in ever-growing prompts.
   authoritative source locations, rejected approaches with durable reasoning.
 - Do not store transcripts, secrets, one-off observations, or anything copied
   from private/work tooling.
-- If Headroom tools are available, use compression/CCR retrieval for bulky tool
-  outputs and retrieve originals only when exact details are needed.
 - Subagents that create durable knowledge must return it to the parent in a
   short `Knowledge:` block so the parent can persist or cite it.
 

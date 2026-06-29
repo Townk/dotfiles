@@ -2,9 +2,6 @@
 
 tap "1password/tap"
 tap "jorgelbg/tap"
-{{ if ne .profile "dev-shell" -}}
-tap "mostlygeek/llama-swap"
-{{- end }}
 tap "olets/tap"
 tap "rafaelgarrido/caveats"
 
@@ -269,16 +266,13 @@ brew 'imagemagick'                  # Image conversion utility
 brew 'jless'                        # JSON visualizer
 brew 'lazygit'                      # Git TUA
 brew 'lazysql'                      # DB TUA
-{{ if ne .profile "dev-shell" -}}
-brew 'llama-swap'                    # Model-swapping proxy in front of mlx_lm/mlx_vlm servers (mostlygeek/llama-swap tap)
-{{- end }}
 brew 'macchina'                     # Environment summary when open a shell
 brew 'mole'                         # Clean up tool
 brew 'mosh'                         # Intermittent connectivity remote connection (`ssh` but better[-ish])
 brew 'neovim'                       # Editor
 {{ if ne .profile "dev-shell" -}}
-# mlx-lm / mlx-vlm (local AI models, Apple Silicon) are provisioned via
-# Uvfile; llama-swap (above) is the brew-managed proxy that launches them.
+# mlx-vlm (local AI model server, Apple Silicon) is provisioned via Uvfile and
+# launched directly by the [mlx-gemma] launchd user agent (see services.toml).
 # python@3.11 is no longer declared here — the venvs are owned by `uv tool
 # install`.
 {{- end }}

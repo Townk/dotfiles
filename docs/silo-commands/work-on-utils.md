@@ -20,8 +20,7 @@ dotfiles repo.
   with shell**
 - `home/dot_local/lib/platform.zsh` + `platform-{macos,linux}.zsh` —
   **shared with shell**
-- `home/dot_local/libexec/local-llm-gateway`, `local-llm-bench`,
-  `pinentry-auto` (libexec, reached by absolute path)
+- `home/dot_local/libexec/pinentry-auto` (libexec, reached by absolute path)
 
 ## Out of scope (do not edit — owned by other silos)
 

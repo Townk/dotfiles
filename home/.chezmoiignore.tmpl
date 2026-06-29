@@ -92,10 +92,6 @@
 .config/homebrew/**
 .config/wezterm
 .config/wezterm/**
-.config/llama-swap
-.config/llama-swap/**
-.local/libexec/local-llm-bench
-.local/libexec/local-llm-gateway
 {{- end }}
 {{/* platform:: module — deploy only the active OS's implementation; the
      platform.zsh shim (which dispatches to it) ships everywhere. */}}
@@ -142,12 +138,6 @@
 .pi/agent-local/git
 .pi/agent-local/npm
 .pi/agent-local/sessions
-
-# Local agent memory / benchmark state. These are runtime databases and logs,
-# not dotfiles; they may contain session-derived context.
-.headroom
-.local/state/headroom
-.local/state/local-llm
 
 # pi-cockpit symlink is only deployed when the dev working tree exists
 # (data.pi.devExtensions["pi-cockpit"] is non-empty in chezmoi.toml).

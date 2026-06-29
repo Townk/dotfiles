@@ -33,10 +33,10 @@ management area) of this chezmoi dotfiles repo.
   `pkg::restart_services_for`.
 - **Note:** `services.toml.tmpl` declares agents owned by *other* silos:
   `clipboard-bridge` (**terminal-mux** protocol, **system-services** plist),
-  `images-automount` (**system-images** consumer), `llama-sswap`/
-  `local-llm-gateway`/`headroom` (local-LLM stack). Editing the plist fields
-  for these is this silo's job; changing the *protocol* they expose is the
-  other silo's. Pre-agree if both touch the same section.
+  `images-automount` (**system-images** consumer), `mlx-gemma` (local-LLM
+  stack). Editing the plist fields for these is this silo's job; changing the
+  *protocol* they expose is the other silo's. Pre-agree if both touch the same
+  section.
 
 ## What you consume read-only
 

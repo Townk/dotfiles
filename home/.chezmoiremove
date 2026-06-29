@@ -26,6 +26,15 @@
 /.local/bin/sqlite-view
 /.local/bin/disk-image-view
 
+# ── local-LLM stack retired (llama-swap/gateway/headroom → mlx-gemma direct) ──
+# pi-local was repointed to the [mlx-gemma] launchd service talking straight to
+# mlx_vlm.server on :8799, orphaning the old chain. Drop the libexec helpers and
+# the llama-swap config dir (the services.toml sections, brew formula, and uv
+# tools are removed in their own manifests).
+/.local/libexec/local-llm-bench
+/.local/libexec/local-llm-gateway
+/.config/llama-swap
+
 # ── ~/.local/lib: helpers renamed (.sh → .zsh) / removed ────────────────────
 /.local/lib/image-protocol-support
 /.local/lib/system-package-common.sh

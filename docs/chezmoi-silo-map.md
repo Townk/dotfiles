@@ -256,7 +256,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **system-images images** — `system-images` + `images.toml.example`
 - **system-update update orchestrator** — `system-update` (orchestrates system-packages/system-services + external brew/mise/yazi/nvim/pi)
 
-**Out of scope:** the package ecosystems themselves (brew/cargo/go/npm/snap/uv — external). The services *declared* in `services.toml.tmpl` that belong to other silos: `clipboard-bridge` (terminal-mux protocol, system owns the plist), `images-automount` (system-images consumer), `llama-swap`/`local-llm-gateway`/`headroom` (local-LLM stack — treat as system-internal or split out if an agent will work the LLM gateway; the gateway *binary* is `libexec/local-llm-gateway`, see utils/libexec). mise-managed runtimes are external (mise), but `system-package-brew` guards them.
+**Out of scope:** the package ecosystems themselves (brew/cargo/go/npm/snap/uv — external). The services *declared* in `services.toml.tmpl` that belong to other silos: `clipboard-bridge` (terminal-mux protocol, system owns the plist), `images-automount` (system-images consumer), `mlx-gemma` (local-LLM stack — on-demand `mlx_vlm.server` on :8799; treat as system-internal, model/runtime owned by the local-LLM stack). mise-managed runtimes are external (mise), but `system-package-brew` guards them.
 
 **Public contract (preserve):**
 - **`pkg::restart_services_for <pkg>...`** → calls `system-service restart-for "$@"` (system internal seam between system-packages and system-services). `pkg::restart_changed <before> <after>` diffs version snapshots and restarts only changed. **This is the seam your "system packages manager" agent must preserve** — `system-service restart-for` maps a package name to services (launchd by key or `cmd[0]` basename, brew by name) and restarts **only if currently running**.
@@ -355,7 +355,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **Numeric prefix ordering** (`run_*_after_NN-…`): chezmoi runs `after` scripts in alphabetical order, so the prefix fixes execution order. Current map (don't renumber without tracing deps): `05` op-daemon reaper (secrets), `10` bootstrap-tools, `15` dev-shell tools, `20` system-settings, `25` GPG key (secrets), `30` env LaunchAgent reload, `34` sudo touchid, `35` open-in-neovim app (terminal-mux/neovim) + dev-shell sudo links, `36` tab-edit desktop (terminal-mux/utils), `40` snaps (system), `45` zellij plugin perms (terminal-mux), `50` custom zsh build (custom-builds), `60` symbols-db mark (custom-builds), `70` symbols-nerd-font mark (custom-builds), `80` symbols font/DB prompt (custom-builds), `90` dev-shell prune.
 - **Hash-baking**: `run_onchange` scripts bake a SHA256 of their inputs (builder, donor glyphs, custom-SVG `code` pins, manifest content) into rendered comments so chezmoi re-runs on change. Editing a builder (custom-builds) without updating the baked hash logic breaks the trigger.
 - **Open-in-NeoVim app generator** (`run_onchange_after_35`): builds the `.app` via `osacompile`, stamps `neovim-hicontrast.icns`, registers `CFBundleDocumentTypes`, and **queries nvim's filetype registry headlessly** (`vim.filetype.inspect().extension` + `mdls`) — this is a hard dependency on neovim's filetype map.
-- **`.chezmoiignore.tmpl`** — the profile/os gating that makes dev-shell headless (excludes `hammerspoon`/`wezterm`/`ghostty`/`espanso`/`llama-swap` etc. on dev-shell).
+- **`.chezmoiignore.tmpl`** — the profile/os gating that makes dev-shell headless (excludes `hammerspoon`/`wezterm`/`ghostty`/`espanso` etc. on dev-shell).
 
 **Consumes from:** every feature silo (the run-scripts trigger their builds/imports/permissions).
 
@@ -371,7 +371,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - `home/dot_local/bin/executable_notify` (front-end), `executable_wait-until` (standalone POSIX sh), `executable_chezmoi-reverse`, `executable_tab-edit`
 - `home/dot_local/lib/common.zsh` (`notify` primitive, stdlib) — **shared with shell**
 - `home/dot_local/lib/platform.zsh` + `platform-{macos,linux}.zsh` — **shared with shell**
-- `home/dot_local/libexec/local-llm-gateway`, `local-llm-bench`, `pinentry-auto` (libexec, reached by absolute path)
+- `home/dot_local/libexec/pinentry-auto` (libexec, reached by absolute path)
 
 **Out of scope:** the `hs` CLI receivers (hammerspoon), the Zellij session resolver (terminal-mux) that `tab-edit` calls, the chezmoi apply machinery that `chezmoi-reverse` cooperates with.
 

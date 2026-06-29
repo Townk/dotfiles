@@ -16,20 +16,13 @@
 qmk-skim
 {{- end }}
 {{ if ne .profile "dev-shell" -}}
-# mlx-lm + mlx-vlm — Apple's MLX inference CLIs/servers: the sanctioned,
-# fastest path on Apple Silicon. Each model is served by its own
-# mlx_lm.server / mlx_vlm.server process (so each keeps its own MTP draft
-# config); llama-swap (brew) is the proxy that launches/hot-swaps them on
-# one port. Python 3.13 has full mlx wheel coverage; uv fetches it if missing.
-mlx-lm --python 3.13
+# mlx-vlm — Apple's MLX multimodal inference server: the sanctioned, fastest
+# path on Apple Silicon. The [mlx-gemma] launchd user agent (see services.toml)
+# runs mlx_vlm.server directly on :8799. Python 3.13 has full mlx wheel
+# coverage; uv fetches it if missing.
 mlx-vlm --python 3.13
 huggingface-hub
 {{- end }}
 rich-cli --with catppuccin[pygments]
-
-# Headroom — local context compression / CCR / memory proxy for agent traffic.
-# Managed as an explicit package spec so `uv tool list` tracks `headroom-ai`
-# while installing the proxy, MCP, memory, and Apple GPU embedder extras.
-headroom-ai -- headroom-ai[proxy,mcp,memory,pytorch-mps] --python 3.13
 
 # vim:ft=conf.gotmpl

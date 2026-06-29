@@ -55,8 +55,8 @@ chezmoi dotfiles repo.
   (`vim.filetype.inspect().extension` + `mdls`) — a hard dependency on
   **neovim**'s filetype map.
 - **`.chezmoiignore.tmpl`** — the profile/os gating that makes dev-shell
-  headless (excludes `hammerspoon`/`wezterm`/`ghostty`/`espanso`/
-  `llama-swap` etc. on dev-shell).
+  headless (excludes `hammerspoon`/`wezterm`/`ghostty`/`espanso`
+  etc. on dev-shell).
 
 ## What you consume read-only
 

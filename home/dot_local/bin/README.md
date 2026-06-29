@@ -13,9 +13,6 @@ never on `PATH`) live in `~/.local/libexec/` instead. Each is reached by an
 absolute path from its caller, so it never needs to be on `PATH`:
 
 - `pinentry-auto` — gpg-agent's `pinentry-program` (set in `gpg-agent.conf`);
-- `local-llm-bench`, `local-llm-gateway` — private local inference helpers;
-  launchd runs the gateway directly, and the benchmark only refreshes gateway
-  routing state when invoked intentionally;
 - `pick-glyph`, `pick-gitmoji` — the fzf symbol pickers, driven by the zellij
   `pick-{glyph,gitmoji}-zellij` adapters (`Ctrl+Shift+u` / `Ctrl+Shift+g`);
   backed by `pick-symbols-common.zsh` → `pick-common.zsh`.
