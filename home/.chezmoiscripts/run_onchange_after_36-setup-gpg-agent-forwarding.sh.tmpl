@@ -1,0 +1,61 @@
+#!/bin/sh
+set -eu
+{{/*
+  Make SSH gpg-agent forwarding survive disconnect/reconnect on the dev shell.
+
+  Two halves, both required:
+
+    1. user systemd unit (gpg-forward-socketdir.service) pre-creates the hashed
+       gpg socket dir under /run/user/$UID/gnupg at boot. sshd will NOT create
+       parent dirs for a RemoteForward target, and gpg.conf carries `no-autostart`
+       (so no local agent creates it lazily), so without this the very first
+       forward after a boot binds into a missing dir and silently fails.
+
+    2. server-side `StreamLocalBindUnlink yes`. For RemoteForward (-R) the socket
+       is created by the REMOTE sshd, so stale-socket cleanup on reconnect is
+       governed by the server's sshd_config — the client's ssh_config setting is
+       ignored for -R. Without it, a socket orphaned by an unclean disconnect
+       (laptop sleep, Wi-Fi drop) blocks every later forward with
+       "no gpg-agent running in this session".
+       Ref: https://lists.mindrot.org/pipermail/openssh-unix-dev/2016-July/035184.html
+*/ -}}
+{{ if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
+# Re-run when the unit file changes too:
+# gpg-forward-socketdir.service: {{ include "dot_config/systemd/user/gpg-forward-socketdir.service" | sha256sum }}
+
+# --- 1. user service: pre-create the socket dir ---------------------------
+if systemctl --user show-environment >/dev/null 2>&1; then
+  systemctl --user daemon-reload
+  systemctl --user enable --now gpg-forward-socketdir.service
+else
+  echo "gpg-agent forwarding: no user systemd instance reachable; the socket-dir unit will activate at next login/boot." >&2
+fi
+
+# --- 2. server sshd: StreamLocalBindUnlink for -R socket reuse -------------
+drop_in=/etc/ssh/sshd_config.d/99-gpg-agent-forward.conf
+
+if ! sudo -n true 2>/dev/null; then
+  echo "gpg-agent forwarding: sudo unavailable non-interactively; run \`chezmoi apply\` in a terminal on this host to set sshd StreamLocalBindUnlink." >&2
+  exit 0
+fi
+
+sudo -n tee "$drop_in" >/dev/null <<'EOF'
+# Managed by chezmoi — gpg-agent SSH forwarding.
+# For RemoteForward (-R) the remote sshd creates the listening socket, so stale
+# socket cleanup before bind is controlled HERE (server side), not by the
+# client's ssh_config. Without this, a socket left behind by an unclean
+# disconnect blocks every subsequent forward.
+StreamLocalBindUnlink yes
+EOF
+
+if sudo -n sshd -t; then
+  sudo -n systemctl reload ssh
+  echo "gpg-agent forwarding: installed $drop_in and reloaded sshd."
+else
+  echo "gpg-agent forwarding: 'sshd -t' rejected the config; reverting $drop_in." >&2
+  sudo -n rm -f "$drop_in"
+  exit 1
+fi
+{{ end }}
+
+# vim:ft=sh

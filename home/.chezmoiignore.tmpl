@@ -65,6 +65,10 @@
 .profile
 .config/mise/conf.d/dev-shell.toml
 .config/packages/Snapfile
+{{/* gpg-agent SSH forwarding only applies to the headless dev shell (the box
+     keys are forwarded TO); the unit + its setup script are useless elsewhere. */}}
+.config/systemd/user/gpg-forward-socketdir.service
+.chezmoiscripts/*-setup-gpg-agent-forwarding.sh
 .chezmoiscripts/*-setup-dev-shell-tools.sh
 .chezmoiscripts/*-install-dev-shell-sudo-tool-links.sh
 .chezmoiscripts/*-install-snaps.sh
