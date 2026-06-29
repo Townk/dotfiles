@@ -48,8 +48,8 @@ theme::args() {
   AI_THEME_ARGS=(
     --theme-accent         "$C_HEX_MAUVE"
     --theme-border         "$C_HEX_BLUE"
-    --theme-danger         "$C_HEX_RED"
-    --theme-warning        "$C_HEX_YELLOW"
+    --theme-danger         "$C_HEX_DIALOG_DANGER"
+    --theme-warning        "$C_HEX_DIALOG_WARNING"
     --theme-base           "$C_HEX_BASE"
     --theme-text           "$C_HEX_TEXT"
     --theme-muted          "$C_HEX_OVERLAY0"

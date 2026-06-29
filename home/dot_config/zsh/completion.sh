@@ -64,13 +64,15 @@ export FZF_DEFAULT_COMMAND="fd --type f"
 # Catppuccin Mocha palette + layout + previews + key bindings. fzf parses this
 # value with its own quote/newline-aware tokenizer, so single-quoted tokens
 # (the ones containing spaces) are preserved as single arguments.
+# fzf colors come from the single-source palette (generated from theme.yaml).
+source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/palette.zsh}"
 export FZF_DEFAULT_OPTS="
---color=bg:#1e1e2e --color=bg+:#313244
---color=fg:#cdd6f4 --color=fg+:regular:#cdd6f4
---color=hl:#f38ba8 --color=hl+:regular:#f38ba8
---color=prompt:#cba6f7 --color=pointer:#f5e0dc --color=marker:#b4befe
---color=info:#cba6f7 --color=gutter:#1e1e2e --color=header:#f38ba8
---color=spinner:#f5e0dc --color=border:#313244
+--color=bg:${C_HEX_BASE} --color=bg+:${C_HEX_SURFACE0}
+--color=fg:${C_HEX_TEXT} --color=fg+:regular:${C_HEX_TEXT}
+--color=hl:${C_HEX_DANGER} --color=hl+:regular:${C_HEX_DANGER}
+--color=prompt:${C_HEX_MAUVE} --color=pointer:${C_HEX_ROSEWATER} --color=marker:${C_HEX_LAVENDER}
+--color=info:${C_HEX_MAUVE} --color=gutter:${C_HEX_BASE} --color=header:${C_HEX_DANGER}
+--color=spinner:${C_HEX_ROSEWATER} --color=border:${C_HEX_SURFACE0}
 --filepath-word --border --height=~40% --layout=reverse --info=inline-right
 --exit-0 --select-1 --padding=0,2,0,0
 --prompt '    ' --pointer ➔ --marker ✔

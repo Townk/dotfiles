@@ -323,21 +323,21 @@ pick::build_fzf_args() {
   pick_selector_wrap=0
   pick_display_fields=1
   fzf_args=(
-    --color=bg:'#1e1e2e'
-    --color=bg+:'#313244'
-    --color=fg:'#cdd6f4'
-    --color=fg+:'regular:#cdd6f4'
-    --color=hl:'#f9e2af'
-    --color=hl+:'regular:#f9e2af'
-    --color=prompt:'#cba6f7'
-    --color=pointer:'#f5e0dc'
-    --color=marker:'#b4befe'
-    --color=info:'#cba6f7'
-    --color=gutter:'#1e1e2e'
-    --color=header:'#585b70'
-    --color=label:'#cba6f7'
-    --color=spinner:'#f5e0dc'
-    --color=border:'#585b70'
+    --color=bg:"$C_HEX_BASE"
+    --color=bg+:"$C_HEX_SURFACE0"
+    --color=fg:"$C_HEX_TEXT"
+    --color=fg+:"regular:$C_HEX_TEXT"
+    --color=hl:"$C_HEX_YELLOW"
+    --color=hl+:"regular:$C_HEX_YELLOW"
+    --color=prompt:"$C_HEX_MAUVE"
+    --color=pointer:"$C_HEX_ROSEWATER"
+    --color=marker:"$C_HEX_LAVENDER"
+    --color=info:"$C_HEX_MAUVE"
+    --color=gutter:"$C_HEX_BASE"
+    --color=header:"$C_HEX_SURFACE2"
+    --color=label:"$C_HEX_MAUVE"
+    --color=spinner:"$C_HEX_ROSEWATER"
+    --color=border:"$C_HEX_SURFACE2"
     --filepath-word
     --height="${pick_ui[height]:-45%}"
     --layout=reverse
@@ -398,7 +398,7 @@ pick::build_fzf_args() {
       # column (fzf has no "unselected marker"). These override the base
       # --marker/--color above since fzf honours the last occurrence.
       --marker=$'\u2713 '
-      --color=marker:'#a6e3a1'
+      --color=marker:"$C_HEX_GREEN"
     )
   fi
   # Single hint line for every mode; --multi folds its keys into the hints
