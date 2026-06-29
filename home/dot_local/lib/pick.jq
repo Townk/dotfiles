@@ -2,7 +2,8 @@
 #           (pick-glyph, pick-gitmoji, …).
 #
 # Off-PATH internal module, included by the picker scripts via:
-#     jq -L "$HOME/.local/lib" 'include "pick"; … '
+#     jq -L "$HOME/.local/lib" \
+#        --argjson palette "$(cat ~/.config/theme/palette.json)" 'include "pick"; … '
 # `include` merges these defs into the program's namespace, so the
 # emitter can call `c_glyph`, `paint`, `emit_line`, etc. directly.
 #
@@ -25,15 +26,21 @@
 #     read the output payload straight from the tail and ANSI colour
 #     from the visible portion can never leak into stdout.
 
-# --- Catppuccin Mocha palette (24-bit truecolor SGR sequences) ---
-# fzf reads the assembled lines with `--ansi`, so these render as
-# colour rather than literal text in the visible portion only.
+# --- Catppuccin palette from the single source --------------------------------
+# Colors come from $palette (= ~/.config/theme/palette.json, generated from
+# theme.yaml), injected by the caller via `--argjson palette`, so the picker
+# tracks the system theme. Each is a 24-bit truecolor fg SGR built from the
+# palette hex; fzf renders them via `--ansi`. _hex2int parses a 2-char hex byte
+# (jq has no base-N parse).
 def c_reset: "\u001b[0m";
-def c_glyph: "\u001b[38;2;255;255;255m";   # bright white #ffffff — the symbol/emoji itself
-def c_key:   "\u001b[38;2;137;180;250m";   # blue        #89b4fa — curated names / :code:
-def c_auto:  "\u001b[38;2;203;166;247m";   # mauve       #cba6f7 — synthetic EMOJI-/UNICODE- names
-def c_code:  "\u001b[38;2;127;132;156m";   # overlay1    #7f849c — (U+XXXX) codepoint
-def c_desc:  "\u001b[38;2;166;173;200m";   # subtext0    #a6adc8 — description / unicode name
+def _hexnib: if . >= 48 and . <= 57 then . - 48 elif . >= 97 and . <= 102 then . - 87 elif . >= 65 and . <= 70 then . - 55 else 0 end;
+def _hex2int: explode | map(_hexnib) | reduce .[] as $d (0; . * 16 + $d);
+def _fg($hex): ($hex | ltrimstr("#")) as $x | "\u001b[38;2;\($x[0:2]|_hex2int);\($x[2:4]|_hex2int);\($x[4:6]|_hex2int)m";
+def c_glyph: _fg($palette.palette.white);    # bright white — the symbol/emoji itself
+def c_key:   _fg($palette.palette.blue);     # blue — curated names / :code:
+def c_auto:  _fg($palette.palette.mauve);    # mauve — synthetic EMOJI-/UNICODE- names
+def c_code:  _fg($palette.palette.overlay1); # overlay1 — (U+XXXX) codepoint
+def c_desc:  _fg($palette.palette.subtext0); # subtext0 — description / unicode name
 
 # Wrap the input string in an SGR colour and a reset.
 #   "foo" | paint(c_glyph)   →  "\e[…mfoo\e[0m"
