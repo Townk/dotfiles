@@ -185,7 +185,7 @@
   dt = difftool
   ## Stop tracking changes on a tracked file (all files marked with
   ## --assume-unchanged)
-  new-ignore = !gi() { curl -L -s https://www.gitignore.io/api/$@ ;}; gi
+  new-ignore = !gi() { curl -L -s https://www.gitignore.io/api/$@ ";"}";" gi
   ## Remove everything that is not checked-in and belongs to the repository
   nuke = clean -xfd
   ## Rollback any changes in the repository
