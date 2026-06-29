@@ -266,7 +266,7 @@ layout {
                         info "host" {
                             visibility "ssh"
                             type "string"
-                            command "hostname -s"
+                            command "cat ~/.hostname-alias 2>/dev/null || hostname -s"
                             interval "60s"
                             default "󰒍 {value}"
                         }
