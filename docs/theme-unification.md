@@ -486,14 +486,17 @@ it adds a `theme-apply` resolver and a `theme-push` helper, not a new paradigm.
 
 ## 6. Phasing
 
-> **Landed so far:** the §4 foundation (`theme.yaml` + `palette.{zsh,json,lua}`)
-> and every runtime-reading consumer — the 3 viewers, glow, pi (drift fixed),
-> fzf (`completion.sh` + `pick-common`), and `pick.jq` — plus zj-hud's
-> bar-bg-follows-`Style`. All committed and mirrored to the dev-shell, each
-> verified to render identically (except the intended pi recolor). **Remaining:**
-> the named-theme→generated-artifact swaps (ghostty/wezterm/bottom/nvim/yazi),
-> the non-Mocha prompt/statusline migration, the runtime override layer, and the
-> Tier-2 `.tmTheme`.
+> **Landed so far:** the §4 foundation (`theme.yaml` + `palette.{zsh,json,lua}`);
+> every runtime-reading consumer — the 3 viewers, glow, pi (drift fixed), fzf
+> (`completion.sh` + `pick-common`), `pick.jq`; zj-hud's bar-bg-follows-`Style`
+> **and** a configurable which-key background; and the **runtime override layer's
+> shell slice** — `theme-apply` resolver + zshrc wiring, so dropping a
+> `~/.config/theme/override.toml` recolors the shell/fzf/dialogs/viewers on the
+> next shell. All committed and mirrored to the dev-shell, each verified.
+> **Remaining:** override slices 2–3 (the zellij/zj-hud bar background via an
+> effective zellij theme, and the host-side `theme-push` + ssh-hook transport);
+> the named-theme→generated-artifact swaps (ghostty/wezterm/bottom/nvim/yazi);
+> the non-Mocha prompt/statusline migration; and the Tier-2 `.tmTheme`.
 
 1. **Prerequisite — close custom-binary color gaps (§4.7).** zj-hud config keys
    **+ bar-bg-follows-`Style`** — **done & committed** (unreleased; 302 tests,
