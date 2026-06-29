@@ -154,6 +154,11 @@
 
 [url "git@github.com:"]
   insteadOf = ssh+gh:
+{{- if ne .chezmoi.os "darwin" }}
+  ; No HTTPS credential helper on non-macOS (osxkeychain is gated to darwin),
+  ; so push to github.com over SSH while fetch stays on HTTPS.
+  pushInsteadOf = https://github.com/
+{{- end }}
 
 [url "git@github.com:Townk/"]
   insteadOf = gh:/
