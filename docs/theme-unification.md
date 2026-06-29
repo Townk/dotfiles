@@ -486,6 +486,15 @@ it adds a `theme-apply` resolver and a `theme-push` helper, not a new paradigm.
 
 ## 6. Phasing
 
+> **Landed so far:** the §4 foundation (`theme.yaml` + `palette.{zsh,json,lua}`)
+> and every runtime-reading consumer — the 3 viewers, glow, pi (drift fixed),
+> fzf (`completion.sh` + `pick-common`), and `pick.jq` — plus zj-hud's
+> bar-bg-follows-`Style`. All committed and mirrored to the dev-shell, each
+> verified to render identically (except the intended pi recolor). **Remaining:**
+> the named-theme→generated-artifact swaps (ghostty/wezterm/bottom/nvim/yazi),
+> the non-Mocha prompt/statusline migration, the runtime override layer, and the
+> Tier-2 `.tmTheme`.
+
 1. **Prerequisite — close custom-binary color gaps (§4.7).** zj-hud config keys
    **+ bar-bg-follows-`Style`** — **done & committed** (unreleased; 302 tests,
    verified live on the dev-shell). ai-playbook `ui` `--theme-*`/`--theme-file` —
