@@ -104,7 +104,7 @@ if [[ -n "$query" ]]; then pick_args+=(--query "$query"); fi
 # descriptions line up. Visible columns are colour-coded; the hidden tail
 # (after CHAR(31), fields split on CHAR(30)) carries clean OUTPUT values:
 #   1=emoji  2=:name:
-sqlite3 -escape off "$DB_FILE" "
+sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "
   WITH palette AS (
     SELECT
       CHAR(27) || '[0m'                AS reset,

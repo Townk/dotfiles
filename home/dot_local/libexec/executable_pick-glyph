@@ -121,7 +121,7 @@ if [[ -n "$query" ]]; then pick_args+=(--query "$query"); fi
 # uncoloured OUTPUT values so ANSI never leaks into stdout:
 #   1=glyph  2=name  3=\u{HEX}  4=tags  5=description  6=search-blob
 #   7=:shortcode: (or name)
-sqlite3 -escape off "$DB_FILE" "
+sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "
   WITH palette AS (
     SELECT
       CHAR(27) || '[0m'                AS reset,
