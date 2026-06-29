@@ -137,15 +137,28 @@ sec::map_get() {
 }
 
 # sec::map_set <slot> <alias> <profile> <kind> <recipient>
+# MERGE over any existing entry (`(… // {}) * {…}`) rather than replacing it, so
+# extra fields written elsewhere — e.g. a `color` window-tint set via
+# sec::map_set_color — survive a re-onboard. The four managed fields are always
+# overwritten with the new values.
 sec::map_set() {
   sec::map_init
   slot="$1" alias="$2" profile="$3" kind="$4" recipient="$5" yq -i '
-    .[strenv(slot)] = {
+    .[strenv(slot)] = ((.[strenv(slot)] // {}) * {
       "alias": strenv(alias),
       "profile": strenv(profile),
       "kind": strenv(kind),
       "recipient": strenv(recipient)
-    }' "$OPERATOR_MAP"
+    })' "$OPERATOR_MAP"
+}
+
+# sec::map_set_color <slot> <color> — set the optional per-machine window-tint
+# color (a palette name the terminal-mux WezTerm integration reads to tint a
+# session's background). Loose-map only, never committed; an unknown name simply
+# falls back to grey downstream, so this does not validate against the palette.
+sec::map_set_color() {
+  sec::map_init
+  slot="$1" color="$2" yq -i '.[strenv(slot)].color = strenv(color)' "$OPERATOR_MAP"
 }
 
 # sec::map_slot_for_alias <alias> — print the slot mapped to <alias> (or empty).

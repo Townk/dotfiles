@@ -21,7 +21,7 @@ set -eu -o pipefail
 source "$HOME/.local/lib/system-secrets-common.zsh"
 
 # --- arguments ---------------------------------------------------------------
-ALIAS="" HOSTNAME="" PROFILE="" KIND=""
+ALIAS="" HOSTNAME="" PROFILE="" KIND="" COLOR=""
 DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0 LOCAL=0 NO_APPLY=0 SECRETS_REBUILT=0
 VALID_PROFILES=(personal work dev-shell)
 
@@ -30,7 +30,7 @@ usage() {
 Usage:
   system-onboard --alias <ssh-alias> --hostname <ssh-host> \\
                  --profile <personal|work|dev-shell> [--kind human|headless]
-  system-onboard --local [--alias <name>] [--profile <p>] [--no-apply]
+  system-onboard --local [--alias <name>] [--profile <p>] [--color <name>] [--no-apply]
 
 Flags:
   --local              self-onboard THIS machine (human only; no SSH). Assigns a
@@ -42,6 +42,9 @@ Flags:
   --profile <p>        personal | work | dev-shell (with --local, defaults to this
                        machine's configured chezmoi profile)
   --kind <k>           human | headless (default: dev-shell→headless, else human)
+  --color <name>       optional WezTerm window tint for this machine. Palette hint:
+                       cyan, blue, amber, teal, purple, grey (an unknown name falls
+                       back to grey). Loose only (operator map); never committed.
   --rotate-secrets     re-collect this slot's secrets even if its fragment exists
   --no-apply           (with --local) provision + set secretsSlot but skip the final
                        chezmoi apply (the bootstrap runs the heavy apply itself)
@@ -85,6 +88,10 @@ parse_args() {
         ;;
       --kind)
         KIND="${2:-}"
+        shift 2
+        ;;
+      --color)
+        COLOR="${2:-}"
         shift 2
         ;;
       --rotate-secrets)
@@ -311,6 +318,20 @@ assign_slot() {
   fi
 }
 
+# --- step 6.5: window-tint color (optional) ----------------------------------
+# Record the optional --color on the slot's operator-map entry (loose only). A
+# no-op when --color was not given; honors --dry-run. Called after the slot is
+# recorded, so sec::map_set has already created/merged the entry.
+apply_slot_color() {
+  [[ -n "$COLOR" ]] || return 0
+  if ((DRY_RUN)); then
+    log_info "[dry-run] would set color '$COLOR' on slot $SLOT in the operator map"
+    return 0
+  fi
+  sec::map_set_color "$SLOT" "$COLOR"
+  log_ok "recorded color '$COLOR' for slot $SLOT"
+}
+
 # --- step 7: secrets ---------------------------------------------------------
 reconcile_secrets() {
   local frag
@@ -437,10 +458,13 @@ converge_remote() {
 # converge_remote, so it covers both the operator-driven and self-onboarded
 # branches. Best-effort: a failure only costs the target its self-management.
 reconcile_remote_map() {
-  local entry
-  entry="$(slot="$SLOT" al="$ALIAS" pr="$PROFILE" kd="$KIND" rc="$RECIPIENT" \
+  local entry color_kv=""
+  # Self-manage with the same tint: fold color into the entry only when set (an
+  # empty color is harmless to the consumer, but don't write noise).
+  [[ -n "$COLOR" ]] && color_kv=', "color": strenv(cl)'
+  entry="$(slot="$SLOT" al="$ALIAS" pr="$PROFILE" kd="$KIND" rc="$RECIPIENT" cl="$COLOR" \
     yq -n -o=json -I=0 \
-    '{strenv(slot): {"alias": strenv(al), "profile": strenv(pr), "kind": strenv(kd), "recipient": strenv(rc)}}')" ||
+    "{strenv(slot): {\"alias\": strenv(al), \"profile\": strenv(pr), \"kind\": strenv(kd), \"recipient\": strenv(rc)${color_kv}}}")" ||
     {
       log_warn "could not build the operator-map entry for $ALIAS"
       return 0
@@ -555,6 +579,7 @@ main() {
       sec::op_ensure_token # also makes this machine an operator
     fi
     assign_slot
+    apply_slot_color
     reconcile_secrets
     commit_and_push
     converge_local
@@ -590,6 +615,7 @@ main() {
     else
       sec::map_set "$SLOT" "$ALIAS" "$PROFILE" "$KIND" ""
     fi
+    apply_slot_color
     converge_remote
     log_ok "connectivity reconciled for $ALIAS (self-onboarded slot $SLOT)"
     return 0
@@ -598,6 +624,7 @@ main() {
   # Operator-driven: target not self-onboarded, or headless.
   reconcile_age_identity
   assign_slot
+  apply_slot_color
   reconcile_secrets
   commit_and_push
   reconcile_op_token

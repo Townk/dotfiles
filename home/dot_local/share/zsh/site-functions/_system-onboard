@@ -13,6 +13,7 @@ _system-onboard() {
     '--alias[SSH alias, or (with --local) the operator-map key]:alias:' \
     '--profile[machine profile]:profile:(personal work dev-shell)' \
     '(--local)--kind[slot kind]:kind:(human headless)' \
+    '--color[WezTerm window tint (palette name; operator map, loose)]:color:(cyan blue amber teal purple grey)' \
     '(--hostname --kind)--local[self-onboard THIS machine (human only; no SSH)]' \
     '--rotate-secrets[re-collect this slot'\''s secrets even if its fragment exists]' \
     '--no-apply[(with --local) set the slot but skip the final chezmoi apply]' \
