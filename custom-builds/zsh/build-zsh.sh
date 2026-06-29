@@ -65,6 +65,14 @@ die() { printf '[zsh-build] error: %s\n' "$*" >&2; exit 1; }
 width_ok()   { [[ "$("$1" -fc 's=${(#):-0x1FAC0}; print -rn -- ${(m)#s}' 2>/dev/null)" == 2 ]]; }
 # z4h's exec-zsh-i refuses any zsh that can't load these two modules.
 modules_ok() { "$1" -fc 'zmodload -s zsh/terminfo zsh/zselect' 2>/dev/null; }
+# install.fns copies ~1200 function files in config.modules order; its tail is
+# Completion/{Unix,X,Zsh} then Functions/Zle. An interrupted install leaves the
+# binary + modules (installed first) intact, so width_ok/modules_ok still pass
+# while command/file completion silently breaks (`_autocd: function definition
+# file not found`). Assert one sentinel from each tail group, loaded via the
+# build's own default fpath (zsh -f, no rc), so a partial tree is detected and
+# re-done instead of being trusted by the fast path forever.
+fns_ok()     { "$1" -fc 'autoload +X _autocd _files edit-command-line' 2>/dev/null; }
 relink()     { mkdir -p -- "$(dirname "$BINLINK")"; ln -sfn "$ZSH_BIN" "$BINLINK"; }
 repo_commit() { git -C "$REPO" rev-parse --short HEAD 2>/dev/null; }
 
@@ -99,7 +107,7 @@ ensure_login_shell() {
 #    to clone or when ZSH_UPDATE is set.
 if [[ -z "${ZSH_UPDATE:-}" && -x "$ZSH_BIN" && -d "$REPO/.git" \
       && "$(cat "$STAMP" 2>/dev/null)" == "$(repo_commit)" ]] \
-   && width_ok "$ZSH_BIN" && modules_ok "$ZSH_BIN"; then
+   && width_ok "$ZSH_BIN" && modules_ok "$ZSH_BIN" && fns_ok "$ZSH_BIN"; then
   [[ "$(readlink "$BINLINK" 2>/dev/null)" == "$ZSH_BIN" ]] || { relink; log "relinked $BINLINK"; }
   ensure_login_shell
   log "up-to-date: zsh @ $(repo_commit) (non-unicode9) at $ZSH_BIN"
@@ -187,6 +195,7 @@ relink
 
 width_ok   "$ZSH_BIN" || die "post-build width self-test failed (expected width 2 for U+1FAC0)"
 modules_ok "$ZSH_BIN" || die "post-build module self-test failed (zsh/terminfo + zsh/zselect)"
+fns_ok     "$ZSH_BIN" || die "post-build function-set self-test failed (incomplete install.fns: _autocd/_files/edit-command-line missing)"
 
 log "installed $("$ZSH_BIN" --version) @ $commit"
 log "linked $BINLINK -> $ZSH_BIN"
