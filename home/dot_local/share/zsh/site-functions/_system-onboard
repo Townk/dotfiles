@@ -1,25 +1,69 @@
 #compdef system-onboard
 #
-# Completion for system-onboard. All inputs are flags (a bare run on a TTY
-# starts an interactive form). --local self-onboards this machine and has no
-# SSH, so it's incompatible with --hostname; the exclusion lists encode that.
-# --alias / --hostname take free (loose, never-committed) values, so no live
-# candidates are offered beyond _hosts for the SSH endpoint.
+# Completion for system-onboard. The flag-driven form onboards a machine (a bare
+# run on a TTY starts an interactive form); the `update`/`colors` subcommands
+# manage a machine's window-tint color in the loose operator map. --local
+# self-onboards this machine and has no SSH, so it excludes --hostname.
+
+# Palette names completed live from the shared tint-palette.toml (terminal-mux),
+# falling back to the built-in set if the file isn't present.
+_system-onboard_palette() {
+  local -a names
+  names=(${(f)"$(yq -p=toml -o=json '.' "${XDG_CONFIG_HOME:-$HOME/.config}/wezterm/tint-palette.toml" 2>/dev/null | jq -r 'keys[]' 2>/dev/null)"})
+  (($#names)) || names=(cyan blue amber teal purple grey)
+  _describe -t colors 'palette color' names
+}
+
+# Onboarded machine aliases from the loose operator map (local completion only).
+_system-onboard_aliases() {
+  local -a aliases
+  aliases=(${(f)"$(yq -r 'to_entries[].value.alias // empty' "${XDG_CONFIG_HOME:-$HOME/.config}/chezmoi/onboard-map.yaml" 2>/dev/null)"})
+  (($#aliases)) && _describe -t aliases 'onboarded machine' aliases
+}
 
 _system-onboard() {
-  _arguments -s \
-    '(- *)'{-h,--help}'[show help and exit]' \
-    '(--local)--hostname[real SSH endpoint (loose only; never committed)]:hostname:_hosts' \
-    '--alias[SSH alias, or (with --local) the operator-map key]:alias:' \
-    '--profile[machine profile]:profile:(personal work dev-shell)' \
-    '(--local)--kind[slot kind]:kind:(human headless)' \
-    '--color[WezTerm window tint (palette name; operator map, loose)]:color:(cyan blue amber teal purple grey)' \
-    '(--hostname --kind)--local[self-onboard THIS machine (human only; no SSH)]' \
-    '--rotate-secrets[re-collect this slot'\''s secrets even if its fragment exists]' \
-    '--no-apply[(with --local) set the slot but skip the final chezmoi apply]' \
-    '--no-commit[do everything except git commit/push]' \
-    '--no-push[commit but do not push]' \
-    '--dry-run[print the plan; make no local or remote changes]'
+  local curcontext="$curcontext" state line
+  _arguments -C \
+    '1: :->command' \
+    '*:: :->args' && return
+
+  case "$state" in
+    command)
+      local -a cmds
+      cmds=(
+        'update:set or clear a machine'\''s window tint'
+        'colors:list machines'\'' tints + the palette'
+      )
+      _describe -t commands 'subcommand' cmds
+      _arguments -s \
+        '(- *)'{-h,--help}'[show help and exit]' \
+        '(--local)--hostname[real SSH endpoint (loose only; never committed)]:hostname:_hosts' \
+        '--alias[SSH alias, or (with --local) the operator-map key]:alias:' \
+        '--profile[machine profile]:profile:(personal work dev-shell)' \
+        '(--local)--kind[slot kind]:kind:(human headless)' \
+        '--color[WezTerm window tint (palette name; operator map, loose)]:color:_system-onboard_palette' \
+        '(--hostname --kind)--local[self-onboard THIS machine (human only; no SSH)]' \
+        '--rotate-secrets[re-collect this slot'\''s secrets even if its fragment exists]' \
+        '--no-apply[(with --local) set the slot but skip the final chezmoi apply]' \
+        '--no-commit[do everything except git commit/push]' \
+        '--no-push[commit but do not push]' \
+        '--dry-run[print the plan; make no local or remote changes]'
+      ;;
+    args)
+      case "$line[1]" in
+        update)
+          _arguments \
+            '1:machine alias:_system-onboard_aliases' \
+            '--color[palette color name]:color:_system-onboard_palette' \
+            '--clear[remove the color (revert to profile default)]' \
+            '--dry-run[print the plan; change nothing]'
+          ;;
+        colors)
+          _arguments '(- *)'{-h,--help}'[show help and exit]'
+          ;;
+      esac
+      ;;
+  esac
 }
 
 _system-onboard "$@"

@@ -31,6 +31,9 @@ Usage:
   system-onboard --alias <ssh-alias> --hostname <ssh-host> \\
                  --profile <personal|work|dev-shell> [--kind human|headless]
   system-onboard --local [--alias <name>] [--profile <p>] [--color <name>] [--no-apply]
+  system-onboard update <alias> --color <name>   set a machine's window tint
+  system-onboard update <alias> --clear          clear it (revert to default)
+  system-onboard colors                          list machines' tints + palette
 
 Flags:
   --local              self-onboard THIS machine (human only; no SSH). Assigns a
@@ -42,9 +45,9 @@ Flags:
   --profile <p>        personal | work | dev-shell (with --local, defaults to this
                        machine's configured chezmoi profile)
   --kind <k>           human | headless (default: dev-shell→headless, else human)
-  --color <name>       optional WezTerm window tint for this machine. Palette hint:
-                       cyan, blue, amber, teal, purple, grey (an unknown name falls
-                       back to grey). Loose only (operator map); never committed.
+  --color <name>       optional WezTerm window tint for this machine (a palette
+                       name; list them with \`system-onboard colors\`). Unknown
+                       names fall back to grey. Loose only (operator map).
   --rotate-secrets     re-collect this slot's secrets even if its fragment exists
   --no-apply           (with --local) provision + set secretsSlot but skip the final
                        chezmoi apply (the bootstrap runs the heavy apply itself)
@@ -562,7 +565,124 @@ reconcile_op_token() {
   log_ok "configured $ALIAS as an operator (SA token at ~/$OP_TOKEN_REL, loose, 0600)"
 }
 
+# --- window-tint color management (config, not secrets; no SSH) ---------------
+# The palette (valid names → hex) is owned by the terminal-mux WezTerm
+# integration and shared via tint-palette.toml; we only READ it to list/validate.
+TINT_PALETTE_FILE="${TINT_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/wezterm/tint-palette.toml}"
+
+# Print available palette color names, one per line. Empty (success) when the
+# palette file is absent — e.g. a headless box where wezterm config isn't
+# rendered — so callers degrade gracefully.
+tint_palette_names() {
+  [[ -f "$TINT_PALETTE_FILE" ]] || return 0
+  yq -p=toml -o=json '.' "$TINT_PALETTE_FILE" 2>/dev/null | jq -r 'keys[]' 2>/dev/null || true
+}
+
+# Return 0 if <name> is a known palette color. Also 0 when the palette is
+# unreadable — we don't block on validation (the consumer falls back to grey).
+tint_palette_has() {
+  local want="$1" n names
+  names="$(tint_palette_names)"
+  [[ -n "$names" ]] || return 0
+  while IFS= read -r n; do [[ "$n" == "$want" ]] && return 0; done <<< "$names"
+  return 1
+}
+
+# system-onboard update <alias> --color <name> | --clear
+# Set or clear a machine's window-tint color in the loose operator map. No SSH,
+# no commit (the map is loose, never committed). Honors --dry-run.
+cmd_update() {
+  local target="" color="" clear=0
+  while (($#)); do
+    case "$1" in
+      --color) color="${2:-}"; shift 2 ;;
+      --clear) clear=1; shift ;;
+      --dry-run) DRY_RUN=1; shift ;;
+      -h | --help | help) usage; exit 0 ;;
+      -*) usage >&2; die "update: unknown flag: $1" ;;
+      *)
+        [[ -z "$target" ]] && { target="$1"; shift; } || { usage >&2; die "update: unexpected argument: $1"; }
+        ;;
+    esac
+  done
+  [[ -n "$target" ]] || { usage >&2; die "update: <alias> is required"; }
+  if ((clear)); then
+    [[ -z "$color" ]] || die "update: --color and --clear are mutually exclusive"
+  else
+    [[ -n "$color" ]] || die "update: pass --color <name> or --clear"
+  fi
+
+  local slot
+  slot="$(sec::map_slot_for_alias "$target")"
+  [[ -n "$slot" ]] || die "no onboarded machine with alias '$target' (see: system-onboard colors)"
+
+  if ((clear)); then
+    if ((DRY_RUN)); then
+      log_info "[dry-run] would clear the color on slot $slot ($target)"
+      return 0
+    fi
+    sec::map_clear_color "$slot"
+    log_ok "cleared color for '$target' — reverts to its profile default"
+    return 0
+  fi
+
+  tint_palette_has "$color" || log_warn "unknown color '$color' — it will fall back to grey downstream"
+  if ((DRY_RUN)); then
+    log_info "[dry-run] would set color '$color' on slot $slot ($target)"
+    return 0
+  fi
+  sec::map_set_color "$slot" "$color"
+  log_ok "set color '$color' for '$target'"
+}
+
+# system-onboard colors — list each onboarded machine's tint, then the palette.
+cmd_colors() {
+  case "${1:-}" in -h | --help | help) usage; exit 0 ;; esac
+  log_info "Machines:"
+  local rows al col
+  rows="$(yq -r 'to_entries[] | [.value.alias, (.value.color // "")] | @tsv' "$OPERATOR_MAP" 2>/dev/null || true)"
+  if [[ -z "$rows" ]]; then
+    print -- "  (no onboarded machines)"
+  else
+    while IFS=$'\t' read -r al col; do
+      [[ -n "$al" ]] || continue
+      if [[ -n "$col" ]]; then
+        printf '  %-22s %s\n' "$al" "$col"
+      else
+        printf '  %-22s %s\n' "$al" "unset (profile default)"
+      fi
+    done <<< "$rows"
+  fi
+  log_info "Available colors:"
+  local names
+  names="$(tint_palette_names)"
+  if [[ -z "$names" ]]; then
+    print -- "  (palette file not found: $TINT_PALETTE_FILE)"
+  else
+    print -- "$names" | sed 's/^/  /'
+  fi
+}
+
 main() {
+  # Lightweight management subcommands (no SSH, no onboarding): manage the
+  # window-tint color of an already-onboarded machine in the loose operator map.
+  case "${1:-}" in
+    update)
+      shift
+      sec::repo_paths
+      require_cmd yq jq
+      cmd_update "$@"
+      return $?
+      ;;
+    colors)
+      shift
+      sec::repo_paths
+      require_cmd yq jq
+      cmd_colors "$@"
+      return $?
+      ;;
+  esac
+
   parse_args "$@"
   sec::repo_paths
   require_cmd chezmoi git yq

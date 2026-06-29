@@ -45,4 +45,28 @@ Describe 'system-secrets-common.zsh'
       The output should equal "cyan"
     End
   End
+
+  Describe 'sec::map_clear_color'
+    It 'removes a previously set color'
+      sec::map_set slot-abc123 host-a personal human ""
+      sec::map_set_color slot-abc123 teal
+      sec::map_clear_color slot-abc123
+      When call sec::map_get slot-abc123 color
+      The output should equal ""
+    End
+
+    It 'leaves managed fields intact'
+      sec::map_set slot-abc123 host-a personal human ""
+      sec::map_set_color slot-abc123 teal
+      sec::map_clear_color slot-abc123
+      When call sec::map_get slot-abc123 alias
+      The output should equal "host-a"
+    End
+
+    It 'is a no-op when the slot has no color'
+      sec::map_set slot-abc123 host-a personal human ""
+      When call sec::map_clear_color slot-abc123
+      The status should be success
+    End
+  End
 End

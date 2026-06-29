@@ -161,6 +161,13 @@ sec::map_set_color() {
   slot="$1" color="$2" yq -i '.[strenv(slot)].color = strenv(color)' "$OPERATOR_MAP"
 }
 
+# sec::map_clear_color <slot> — remove the optional window-tint color, reverting
+# the machine to its profile default downstream. No-op if the slot has none.
+sec::map_clear_color() {
+  [[ -f "$OPERATOR_MAP" ]] || return 0
+  slot="$1" yq -i 'del(.[strenv(slot)].color)' "$OPERATOR_MAP"
+}
+
 # sec::map_slot_for_alias <alias> — print the slot mapped to <alias> (or empty).
 # Read-only: never creates the map.
 sec::map_slot_for_alias() {
