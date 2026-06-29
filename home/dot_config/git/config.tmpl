@@ -138,9 +138,13 @@
 
 [help]
   autocorrect = 1
+{{- if eq .chezmoi.os "darwin" }}
 
+; osxkeychain is macOS-only; on other OSes it's not a real git subcommand and
+; breaks every HTTPS credential lookup, so confine it to darwin.
 [credential]
   helper = osxkeychain
+{{- end }}
 
 [lfs]
   skipSmudge = true
