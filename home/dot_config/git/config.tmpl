@@ -160,6 +160,13 @@
 [include]
     path = ~/.config/git/config.d/work.config
 
+; The loose work.config above sets the work identity globally on work boxes.
+; Re-assert the personal identity for THIS public dotfiles repo so commits never
+; carry a corporate email/username (see .cursor/rules/no-company-info.mdc). The
+; gitdir scope means every other repo keeps the work identity from work.config.
+[includeIf "gitdir:~/.local/share/chezmoi/"]
+    path = ~/.config/git/personal-identity.config
+
 [alias]
   changes = log --pretty=oneline --abbrev-commit --graph --decorate @{u}..HEAD
   ## Show the current branch
