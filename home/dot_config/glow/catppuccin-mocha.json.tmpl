@@ -2,7 +2,7 @@
   "document": {
     "block_prefix": "\n",
     "block_suffix": "\n",
-    "color": "#cdd6f4",
+    "color": "#{{ .theme.palette.text }}",
     "margin": 2
   },
   "block_quote": {
@@ -15,34 +15,34 @@
   },
   "heading": {
     "block_suffix": "\n",
-    "color": "#cdd6f4",
+    "color": "#{{ .theme.palette.text }}",
     "bold": true
   },
   "h1": {
     "prefix": "▓▓▓ ",
     "suffix": " ",
-    "color": "#f38ba8",
+    "color": "#{{ .theme.palette.red }}",
     "bold": true
   },
   "h2": {
     "prefix": "▓▓▓▓ ",
-    "color": "#fab387"
+    "color": "#{{ .theme.palette.peach }}"
   },
   "h3": {
     "prefix": "▓▓▓▓▓ ",
-    "color": "#f9e2af"
+    "color": "#{{ .theme.palette.yellow }}"
   },
   "h4": {
     "prefix": "▓▓▓▓▓▓ ",
-    "color": "#a6e3a1"
+    "color": "#{{ .theme.palette.green }}"
   },
   "h5": {
     "prefix": "▓▓▓▓▓▓▓ ",
-    "color": "#74c7ec"
+    "color": "#{{ .theme.palette.sapphire }}"
   },
   "h6": {
     "prefix": "▓▓▓▓▓▓▓▓ ",
-    "color": "#b4befe"
+    "color": "#{{ .theme.palette.lavender }}"
   },
   "text": {},
   "strikethrough": {
@@ -55,7 +55,7 @@
     "bold": true
   },
   "hr": {
-    "color": "#6c7086",
+    "color": "#{{ .theme.palette.overlay0 }}",
     "format": "\n--------\n"
   },
   "item": {
@@ -69,118 +69,118 @@
     "unticked": "[ ] "
   },
   "link": {
-    "color": "#89b4fa",
+    "color": "#{{ .theme.palette.blue }}",
     "underline": true
   },
   "link_text": {
-    "color": "#b4befe",
+    "color": "#{{ .theme.palette.lavender }}",
     "bold": true
   },
   "image": {
-    "color": "#89b4fa",
+    "color": "#{{ .theme.palette.blue }}",
     "underline": true
   },
   "image_text": {
-    "color": "#b4befe",
-    "format": "Image: {{.text}} →"
+    "color": "#{{ .theme.palette.lavender }}",
+    "format": "Image: {{ "{{.text}}" }} →"
   },
   "code": {
     "prefix": " ",
     "suffix": " ",
-    "color": "#eba0ac",
-    "background_color": "#181825"
+    "color": "#{{ .theme.palette.maroon }}",
+    "background_color": "#{{ .theme.palette.mantle }}"
   },
   "code_block": {
-    "color": "#181825",
+    "color": "#{{ .theme.palette.mantle }}",
     "margin": 2,
     "chroma": {
       "text": {
-        "color": "#cdd6f4"
+        "color": "#{{ .theme.palette.text }}"
       },
       "error": {
-        "color": "#cdd6f4",
-        "background_color": "#f38ba8"
+        "color": "#{{ .theme.palette.text }}",
+        "background_color": "#{{ .theme.palette.red }}"
       },
       "comment": {
-        "color": "#6c7086"
+        "color": "#{{ .theme.palette.overlay0 }}"
       },
       "comment_preproc": {
-        "color": "#89b4fa"
+        "color": "#{{ .theme.palette.blue }}"
       },
       "keyword": {
-        "color": "#cba6f7"
+        "color": "#{{ .theme.palette.mauve }}"
       },
       "keyword_reserved": {
-        "color": "#cba6f7"
+        "color": "#{{ .theme.palette.mauve }}"
       },
       "keyword_namespace": {
-        "color": "#f9e2af"
+        "color": "#{{ .theme.palette.yellow }}"
       },
       "keyword_type": {
-        "color": "#f9e2af"
+        "color": "#{{ .theme.palette.yellow }}"
       },
       "operator": {
-        "color": "#89dceb"
+        "color": "#{{ .theme.palette.sky }}"
       },
       "punctuation": {
-        "color": "#9399b2"
+        "color": "#{{ .theme.palette.overlay2 }}"
       },
       "name": {
-        "color": "#b4befe"
+        "color": "#{{ .theme.palette.lavender }}"
       },
       "name_builtin": {
-        "color": "#fab387"
+        "color": "#{{ .theme.palette.peach }}"
       },
       "name_tag": {
-        "color": "#cba6f7"
+        "color": "#{{ .theme.palette.mauve }}"
       },
       "name_attribute": {
-        "color": "#f9e2af"
+        "color": "#{{ .theme.palette.yellow }}"
       },
       "name_class": {
-        "color": "#f9e2af"
+        "color": "#{{ .theme.palette.yellow }}"
       },
       "name_constant": {
-        "color": "#f9e2af"
+        "color": "#{{ .theme.palette.yellow }}"
       },
       "name_decorator": {
-        "color": "#f5c2e7"
+        "color": "#{{ .theme.palette.pink }}"
       },
       "name_exception": {},
       "name_function": {
-        "color": "#89b4fa"
+        "color": "#{{ .theme.palette.blue }}"
       },
       "name_other": {},
       "literal": {},
       "literal_number": {
-        "color": "#fab387"
+        "color": "#{{ .theme.palette.peach }}"
       },
       "literal_date": {},
       "literal_string": {
-        "color": "#a6e3a1"
+        "color": "#{{ .theme.palette.green }}"
       },
       "literal_string_escape": {
-        "color": "#f5c2e7"
+        "color": "#{{ .theme.palette.pink }}"
       },
       "generic_deleted": {
-        "color": "#f38ba8"
+        "color": "#{{ .theme.palette.red }}"
       },
       "generic_emph": {
-        "color": "#cdd6f4",
+        "color": "#{{ .theme.palette.text }}",
         "italic": true
       },
       "generic_inserted": {
-        "color": "#a6e3a1"
+        "color": "#{{ .theme.palette.green }}"
       },
       "generic_strong": {
-        "color": "#cdd6f4",
+        "color": "#{{ .theme.palette.text }}",
         "bold": true
       },
       "generic_subheading": {
-        "color": "#89dceb"
+        "color": "#{{ .theme.palette.sky }}"
       },
       "background": {
-        "background_color": "#181825"
+        "background_color": "#{{ .theme.palette.mantle }}"
       }
     }
   },
