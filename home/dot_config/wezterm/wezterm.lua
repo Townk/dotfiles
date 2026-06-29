@@ -142,69 +142,64 @@ config.use_resize_increments = true
 config.window_background_opacity = 1.0
 config.enable_tab_bar = false
 
--- Discrete background tints for remote sessions (applied per-window via
--- set_config_overrides in update-status). Catppuccin Mocha base is #1e1e2e;
--- shifts are intentionally subtle — enough to notice at a glance, not enough
--- to distract. Location ids come from resolve-terminal-location (and optional
--- terminal-location.yaml); unmapped remotes fall back to `remote`.
-local terminal_location_tints = {
-	home = {
-		orientation = "Vertical",
-		colors = { "#1e1e2e", "#211d2c" },
-		interpolation = "Linear",
-		blend = "Rgb",
-	},
-	dev = {
-		orientation = "Vertical",
-		colors = { "#1e1e2e", "#1a1f32" },
-		interpolation = "Linear",
-		blend = "Rgb",
-	},
-	remote = {
-		orientation = "Vertical",
-		colors = { "#1e1e2e", "#1e2230" },
-		interpolation = "Linear",
-		blend = "Rgb",
-	},
+-- Named background-tint palette, applied per-window via set_config_overrides in
+-- update-status. resolve-terminal-location returns one of these NAMES (or
+-- "local" for no tint), choosing it from the session's ssh target: a machine's
+-- explicit `color` in system-onboard's map, else its profile default, else grey
+-- (see lib/terminal-location.zsh). To add a tint, define a name here and
+-- reference it from the onboard map / profile defaults.
+--
+-- Each is a faint hue wash over the Catppuccin Mocha base (#1e1e2e): close
+-- enough not to disturb the UI, distinct enough to tell machines apart. We tint
+-- colors.background (not window_background_gradient) so the shift shows behind
+-- terminal cells; a gradient would only paint the window padding.
+local terminal_tint_palette = {
+	cyan = "#1c232f",
+	blue = "#1d1f33",
+	amber = "#2a241f",
+	teal = "#16302b",
+	purple = "#241c30",
+	grey = "#2a2a32",
 }
 
 local resolve_terminal_location_helper =
 	os.getenv("HOME") .. "/.config/zellij/scripts/resolve-terminal-location"
 
-local function gradients_match(a, b)
-	if a == b then
-		return true
+local function colors_equal(a, b)
+	return a == b
+end
+
+local function background_override(overrides)
+	return overrides.colors and overrides.colors.background
+end
+
+local function set_background_override(overrides, bg)
+	if bg == nil then
+		if overrides.colors then
+			overrides.colors.background = nil
+			if next(overrides.colors) == nil then
+				overrides.colors = nil
+			end
+		end
+		return
 	end
-	if type(a) ~= "table" or type(b) ~= "table" then
-		return false
-	end
-	local ac, bc = a.colors, b.colors
-	if type(ac) ~= "table" or type(bc) ~= "table" then
-		return false
-	end
-	return ac[1] == bc[1] and ac[2] == bc[2]
+	overrides.colors = overrides.colors or {}
+	overrides.colors.background = bg
 end
 
 local function detect_terminal_location(pane)
-	local vars = pane:get_user_vars()
-	local uv = vars and vars.terminal_location
-	if uv == "local" then
-		return "local"
-	end
-	if uv and uv ~= "" then
-		return uv
-	end
-
 	local info = pane:get_foreground_process_info()
 	if not info then
 		return "local"
 	end
 
-	local ok, stdout = pcall(wezterm.run_child_process, {
+	-- pcall returns (pcall_ok, <run_child_process returns...>); run_child_process
+	-- itself returns (success, stdout, stderr), so stdout is the THIRD value.
+	local pcall_ok, run_ok, stdout = pcall(wezterm.run_child_process, {
 		resolve_terminal_location_helper,
 		tostring(info.pid),
 	})
-	if ok and stdout then
+	if pcall_ok and run_ok and type(stdout) == "string" then
 		local loc = stdout:match("(%S+)")
 		if loc and loc ~= "" then
 			return loc
@@ -213,18 +208,20 @@ local function detect_terminal_location(pane)
 	return "local"
 end
 
-wezterm.GLOBAL.terminal_location_cache = wezterm.GLOBAL.terminal_location_cache or {}
+-- Per-pane cache so the resolver isn't spawned on every 250ms status tick.
+-- A plain Lua upvalue (NOT wezterm.GLOBAL, which serializes stored values and
+-- mangles a timestamp into a string) keyed by window:pane → { location, at }.
+local terminal_location_cache = {}
 
 local function resolve_terminal_location_cached(window, pane)
 	local key = tostring(window:window_id()) .. ":" .. tostring(pane:pane_id())
-	local cache = wezterm.GLOBAL.terminal_location_cache
-	local now = wezterm.time.now()
-	local entry = cache[key]
-	if entry and entry.location and entry.pane_id == pane:pane_id() and (now - entry.at) < 0.5 then
+	local now = os.time()
+	local entry = terminal_location_cache[key]
+	if entry and (now - entry.at) < 2 then
 		return entry.location
 	end
 	local location = detect_terminal_location(pane)
-	cache[key] = { location = location, at = now, pane_id = pane:pane_id() }
+	terminal_location_cache[key] = { location = location, at = now }
 	return location
 end
 
@@ -233,19 +230,20 @@ local function apply_terminal_location_tint(window, pane)
 	local overrides = window:get_config_overrides() or {}
 	local desired = nil
 	if location ~= "local" then
-		desired = terminal_location_tints[location] or terminal_location_tints.remote
+		desired = terminal_tint_palette[location] or terminal_tint_palette.grey
 	end
 
+	local current = background_override(overrides)
 	if location == "local" then
-		if overrides.window_background_gradient == nil then
+		if current == nil then
 			return
 		end
-		overrides.window_background_gradient = nil
+		set_background_override(overrides, nil)
 	else
-		if gradients_match(overrides.window_background_gradient, desired) then
+		if colors_equal(current, desired) then
 			return
 		end
-		overrides.window_background_gradient = desired
+		set_background_override(overrides, desired)
 	end
 	window:set_config_overrides(overrides)
 end

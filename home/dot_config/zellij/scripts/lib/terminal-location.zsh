@@ -1,19 +1,25 @@
 #!/usr/bin/env zsh
-# terminal-location.zsh — classify where the focused terminal session effectively
-# runs (local vs remote targets) for WezTerm window background tinting.
+# terminal-location.zsh — pick a named background tint for the focused terminal
+# session, for WezTerm window tinting.
 #
-# Optional mapping file: ~/.config/wezterm/terminal-location.yaml
-# (chezmoi source: private_terminal-location.yaml). Example:
+# Returns a palette COLOR NAME (defined in wezterm.lua) or "local" (no tint).
+# A session's color is resolved from the host its ssh command targets:
 #
-#   sessions:
-#     home: ["Home MacMini"]
-#     dev: ["Dev Shell"]
-#   hosts:
-#     home: ["mac-mini"]
-#     dev: ["dev-shell"]
+#   1. per-machine override — the onboarded entry's `color: <name>` field, if set
+#   2. else the profile default — personal→cyan, dev-shell→blue, work→amber
+#   3. else (an ssh host not onboarded) → grey
+#   4. not an ssh session (the host machine itself) → local
 #
-# Session names match Zellij workspace `name` values. Host entries match
-# substrings (case-insensitive) in an ssh command line.
+# Source of truth is system-onboard's loose operator map
+# (~/.config/chezmoi/onboard-map.yaml): each machine is recorded as
+#   <slot>: { alias: <ssh-alias>, profile: ..., kind: ..., color: <name?> }
+# An ssh command may name the alias OR its real HostName; system-onboard writes
+# the alias→HostName bridge to the loose ~/.ssh/config.d/<alias>.conf, so a
+# hostname is resolved back to its alias. This file only READS those loose
+# artifacts (the secrets silo owns writing them). The `color` field is optional;
+# until system-onboard learns --color it stays empty and the profile default
+# applies. Env overrides (tests): $TERMINAL_LOCATION_ONBOARD_MAP,
+# $TERMINAL_LOCATION_SSH_CONFIG_DIR.
 
 emulate -L zsh
 set -u
@@ -23,61 +29,105 @@ typeset -g __TERMINAL_LOCATION_ZSH=1
 
 [[ -n "${__ZELLIJ_SESSION_ZSH:-}" ]] || source "${0:A:h}/zellij-session.zsh"
 
-tl_config_file() {
-  local f="${TERMINAL_LOCATION_CONFIG:-$HOME/.config/wezterm/terminal-location.yaml}"
-  [[ -f "$f" ]] && print -r -- "$f"
+# Profile → default palette color name. Used when a machine has no explicit
+# `color`. Names must exist in wezterm.lua's palette.
+typeset -gA TL_PROFILE_DEFAULT_COLOR=(
+  personal cyan
+  dev-shell blue
+  work amber
+)
+# Color for an ssh host that is reachable but not in the onboard map.
+typeset -g TL_REMOTE_DEFAULT_COLOR=grey
+
+tl_onboard_map() {
+  print -r -- "${TERMINAL_LOCATION_ONBOARD_MAP:-$HOME/.config/chezmoi/onboard-map.yaml}"
 }
 
-tl_nested_registry() {
-  print -r -- "${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/nested-sessions"
+tl_ssh_config_dir() {
+  print -r -- "${TERMINAL_LOCATION_SSH_CONFIG_DIR:-$HOME/.ssh/config.d}"
 }
 
-tl_is_nested_session() {
-  local name="$1"
-  grep -Fxq "$name" "$(tl_nested_registry)" 2>/dev/null
+# Extract the ssh target host from a command line, stripping any `user@` prefix,
+# `:path` suffix, and option flags (incl. the common arg-taking ones). Empty if
+# the command is not an ssh invocation.
+tl_ssh_target() {
+  local cmd="$1"
+  print -r -- "$cmd" | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "ssh" || $i ~ /\/ssh$/) {
+          j = i + 1
+          while (j <= NF && $j ~ /^-/) {
+            if ($j ~ /^-[bcDeFiIJLlmOopQRSWw]$/) j++  # flag takes a separate arg
+            j++
+          }
+          t = $j
+          sub(/^[^@]*@/, "", t)   # drop user@
+          sub(/:.*/, "", t)       # drop :path
+          print t
+          exit
+        }
+      }
+    }'
 }
 
-tl_yq_to_json() {
-  yq -p=yaml -o=json -I=0 '.' "$1" 2>/dev/null
-}
-
-# Echo a location id when $session matches sessions.<loc>[] in config.
-tl_session_to_location() {
-  local session="$1" config="$2" json loc
-  [[ -n "$config" ]] || return 1
-  json="$(tl_yq_to_json "$config")" || return 1
-  loc="$(jq -r --arg s "$session" '
-    .sessions // {} | to_entries[]
-    | select(.value | index($s)) | .key
-  ' <<<"$json")"
-  [[ -n "$loc" && "$loc" != null ]] && {
-    print -r -- "$loc"
-    return 0
-  }
-  return 1
-}
-
-# Echo a location id when $cmd matches hosts.<loc>[] substrings in config.
-tl_command_to_location() {
-  local cmd="$1" config="$2" json loc pattern
-  [[ -n "$cmd" && -n "$config" ]] || return 1
-  json="$(tl_yq_to_json "$config")" || return 1
-  cmd="${cmd:l}"
-  for loc in home dev remote; do
-    while IFS= read -r pattern; do
-      [[ -n "$pattern" ]] || continue
-      if [[ "$cmd" == *"${pattern:l}"* ]]; then
-        print -r -- "$loc"
-        return 0
-      fi
-    done < <(jq -r --arg loc "$loc" '.hosts[$loc][]?' <<<"$json" 2>/dev/null)
+# An ssh command may target the alias OR its real endpoint. Resolve a real
+# hostname back to its alias via the loose ~/.ssh/config.d/<alias>.conf entries.
+tl_alias_for_target() {
+  local target="$1" dir conf al hn
+  [[ -n "$target" ]] || return 1
+  dir="$(tl_ssh_config_dir)"
+  [[ -d "$dir" ]] || return 1
+  for conf in "$dir"/*.conf(N); do
+    al="$(awk 'tolower($1)=="host"{print $2; exit}' "$conf")"
+    hn="$(awk 'tolower($1)=="hostname"{print $2; exit}' "$conf")"
+    if [[ "$target" == "$al" || "$target" == "$hn" ]]; then
+      print -r -- "$al"
+      return 0
+    fi
   done
   return 1
 }
 
-tl_command_is_ssh() {
-  local cmd="$1"
-  [[ "$cmd" == ssh\ * || "$cmd" == */ssh\ * || "$cmd" == *"/ssh "* ]]
+# Echo "<color>\t<profile>" for an onboarded alias (either field may be empty).
+# Empty profile means the alias is not in the map.
+tl_map_color_profile() {
+  local al="$1" map
+  [[ -n "$al" ]] || return 1
+  map="$(tl_onboard_map)"
+  [[ -f "$map" ]] || return 1
+  al="$al" yq -r '
+    ([.[] | select(.alias == strenv(al))] | .[0]) // {}
+    | [(.color // ""), (.profile // "")] | @tsv
+  ' "$map" 2>/dev/null
+}
+
+# Palette color name for an ssh target (alias or real hostname): explicit
+# per-machine color, else the profile default. Non-zero if not onboarded.
+tl_colorname_for_target() {
+  local target="$1" al cp color profile
+  [[ -n "$target" ]] || return 1
+
+  cp="$(tl_map_color_profile "$target")"
+  color="${cp%%$'\t'*}"
+  profile="${cp#*$'\t'}"
+  if [[ -z "$color" && -z "$profile" ]]; then
+    # Not an alias; map a real hostname to its alias, then retry.
+    al="$(tl_alias_for_target "$target")" || return 1
+    cp="$(tl_map_color_profile "$al")"
+    color="${cp%%$'\t'*}"
+    profile="${cp#*$'\t'}"
+  fi
+
+  [[ -n "$color" ]] && {
+    print -r -- "$color"
+    return 0
+  }
+  [[ -n "$profile" && -n "${TL_PROFILE_DEFAULT_COLOR[$profile]:-}" ]] && {
+    print -r -- "${TL_PROFILE_DEFAULT_COLOR[$profile]}"
+    return 0
+  }
+  return 1
 }
 
 tl_zellij_bin() {
@@ -103,6 +153,7 @@ tl_focused_pane_command() {
     jq -r '[.[] | select(.is_plugin == false and .is_focused == true)] | .[0].pane_command // empty' 2>/dev/null
 }
 
+# RUNNING_COMMAND of the sole client (fallback when no focused terminal pane).
 tl_client_running_command() {
   local session="$1" zj count
   zj="$(tl_zellij_bin)" || return 1
@@ -112,65 +163,46 @@ tl_client_running_command() {
     awk -F'  +' 'NR == 2 { for (i = 3; i <= NF; i++) printf "%s%s", (i > 3 ? " " : ""), $i }'
 }
 
+# Classify a command line → palette color name. An onboarded ssh target yields
+# its color; any other ssh yields the remote default; non-ssh is non-zero (the
+# caller treats that as local).
 tl_classify_command() {
-  local cmd="$1" config="$2" loc
+  local cmd="$1" target
   [[ -n "$cmd" ]] || return 1
-  loc="$(tl_command_to_location "$cmd" "$config")" && {
-    print -r -- "$loc"
-    return 0
-  }
-  if tl_command_is_ssh "$cmd"; then
-    print -r -- remote
-    return 0
-  fi
-  return 1
+  target="$(tl_ssh_target "$cmd")"
+  [[ -n "$target" ]] || return 1
+  tl_colorname_for_target "$target" && return 0
+  print -r -- "$TL_REMOTE_DEFAULT_COLOR"
 }
 
 # resolve_terminal_location <client_pid>
-#   Prints one of: local, home, dev, remote
+#   Prints: local | <palette color name>
 resolve_terminal_location() {
   local client_pid="${1:?usage: resolve_terminal_location <client_pid>}"
-  local config loc session cmd exe args
-
-  config="$(tl_config_file)" || config=""
+  local session cmd exe args
 
   exe=$(ps -p "$client_pid" -o comm= 2>/dev/null) || {
     print -r -- local
     return 0
   }
 
+  # Bare ssh (or anything non-Zellij) in the pane: classify its own argv.
   if [[ "$exe" != *zellij* ]]; then
     args=$(ps -p "$client_pid" -o args= 2>/dev/null) || args=""
-    if tl_classify_command "$args" "$config"; then
-      return 0
-    fi
+    tl_classify_command "$args" && return 0
     print -r -- local
     return 0
   fi
 
+  # Zellij client: find its session, then the focused pane's command.
   session="$(resolve_session "$client_pid" 2>/dev/null)" || {
     print -r -- local
     return 0
   }
 
-  loc="$(tl_session_to_location "$session" "$config")" && {
-    print -r -- "$loc"
-    return 0
-  }
-
-  if tl_is_nested_session "$session"; then
-    print -r -- remote
-    return 0
-  fi
-
   cmd="$(tl_focused_pane_command "$session")"
-  if [[ -z "$cmd" ]]; then
-    cmd="$(tl_client_running_command "$session")" || cmd=""
-  fi
+  [[ -n "$cmd" ]] || cmd="$(tl_client_running_command "$session")" || cmd=""
 
-  if tl_classify_command "$cmd" "$config"; then
-    return 0
-  fi
-
+  tl_classify_command "$cmd" && return 0
   print -r -- local
 }

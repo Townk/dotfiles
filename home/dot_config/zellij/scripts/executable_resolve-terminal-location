@@ -1,14 +1,10 @@
 #!/usr/bin/env zsh
 # resolve-terminal-location <client_pid>
 #
-# Classify the effective terminal location for the WezTerm window hosting the
-# given Zellij client (or bare-shell) PID. Prints one line: local, home, dev,
-# or remote. WezTerm's update-status handler calls this to pick a discrete
-# background tint.
-#
-# Optional mapping: ~/.config/wezterm/terminal-location.yaml
-# For instant updates when a shell is already inside SSH, also call
-# terminal-location-emit from precmd (see that script's header).
+# Pick the background tint for the WezTerm window hosting the given Zellij
+# client (or bare-shell) PID. Prints one line: "local" (no tint) or a palette
+# color name (defined in wezterm.lua), chosen from the ssh target's per-machine
+# color / profile default in system-onboard's map. See lib/terminal-location.zsh.
 emulate -L zsh
 set -eu -o pipefail
 
