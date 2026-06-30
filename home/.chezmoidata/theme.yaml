@@ -63,3 +63,6 @@ theme:
     # to palette tokens; these six don't, so they live here. Used by the
     # generated terminal themes (ghostty, wezterm).
     ansi_bright: { red: "f37799", green: "89d88b", yellow: "ebd391", blue: "74a8fc", magenta: "f2aede", cyan: "6bd7ca" }
+    # macOS Finder tag colors for the yazi mactag plugin — a separate, brighter
+    # set (like the tints), consumed via palette.lua by yazi/init.lua.
+    tags: { red: "ee7b70", orange: "f5bd5c", yellow: "fbe764", green: "91fc87", blue: "5fa3f8", purple: "cb88f8" }
