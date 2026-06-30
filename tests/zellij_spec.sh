@@ -5,6 +5,13 @@
 # with that command and then prints the FIFO selection on its own stdout, so a
 # caller that captures `$(zj::pick ...)` (ai-commit / ai-assist harness pickers)
 # must receive ONLY the selection — never the leaked pane id prepended to it.
+#
+# Stub FIFO delivery: each stub writes the selection through an O_RDWR fd held
+# open briefly (`exec 3<>fifo; printf …>&3; sleep; exec 3>&-`) instead of a
+# blocking `> "$fifo" &` writer. The blocking-open writer could be lost before
+# it rendezvoused with zj::pick's reader — leaving `cat "$fifo"` waiting forever
+# and the captured stdout/stderr pipe held open (the suite hung here). An O_RDWR
+# open never blocks, so the byte is buffered and the reader always drains it.
 Describe 'zellij.zsh — zj::pick'
   Include home/dot_local/lib/zellij.zsh
 
@@ -20,7 +27,7 @@ Describe 'zellij.zsh — zj::pick'
       echo 'if [[ "$1" == action && "$2" == new-pane ]]; then'
       echo '  fifo=""; prev=""'
       echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
-      echo '  [[ -n "$fifo" ]] && { printf "claude" > "$fifo" & }'
+      echo '  [[ -n "$fifo" ]] && { { exec 3<>"$fifo"; printf "claude" >&3; sleep 0.5; exec 3>&- } &! }'
       echo '  print -- "terminal_99"'
       echo '  exit 0'
       echo 'fi'
@@ -57,7 +64,7 @@ Describe 'zellij.zsh — zj::confirm borderless float'
       echo "  echo \"\$*\" > \"$TEST_TMP/zj-args.txt\""
       echo '  fifo=""; prev=""'
       echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
-      echo '  [[ -n "$fifo" ]] && { printf "yes" > "$fifo" & }'
+      echo '  [[ -n "$fifo" ]] && { { exec 3<>"$fifo"; printf "yes" >&3; sleep 0.5; exec 3>&- } &! }'
       echo '  exit 0'
       echo 'fi'
       echo 'exit 0'
@@ -101,7 +108,7 @@ Describe 'zellij.zsh — zj::choose borderless float'
       echo "  echo \"\$*\" > \"$TEST_TMP/zj-args.txt\""
       echo '  fifo=""; prev=""'
       echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
-      echo '  [[ -n "$fifo" ]] && { printf "alpha" > "$fifo" & }'
+      echo '  [[ -n "$fifo" ]] && { { exec 3<>"$fifo"; printf "alpha" >&3; sleep 0.5; exec 3>&- } &! }'
       echo '  exit 0'
       echo 'fi'
       echo 'exit 0'
@@ -162,7 +169,7 @@ Describe 'zellij.zsh — zj::choose --measure-based pane height'
       echo "  echo \"\$*\" > \"$TEST_TMP/zj-args.txt\""
       echo '  fifo=""; prev=""'
       echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
-      echo '  [[ -n "$fifo" ]] && { printf "alpha" > "$fifo" & }'
+      echo '  [[ -n "$fifo" ]] && { { exec 3<>"$fifo"; printf "alpha" >&3; sleep 0.5; exec 3>&- } &! }'
       echo '  exit 0'
       echo 'fi'
       echo 'exit 0'
@@ -253,7 +260,7 @@ Describe 'zellij.zsh — zj::form borderless float'
       echo "  echo \"\$*\" > \"$TEST_TMP/zj-args.txt\""
       echo '  fifo=""; prev=""'
       echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
-      echo '  [[ -n "$fifo" ]] && { printf "form-result" > "$fifo" & }'
+      echo '  [[ -n "$fifo" ]] && { { exec 3<>"$fifo"; printf "form-result" >&3; sleep 0.5; exec 3>&- } &! }'
       echo '  exit 0'
       echo 'fi'
       echo 'exit 0'
