@@ -58,3 +58,29 @@ Include ~/.ssh/config.d/*
 #
 # Match host <devbox> exec "[ -n \"$_DBSYNC\" ] || _DBSYNC=1 rsync -z --timeout=8 -e 'ssh -o ConnectTimeout=5' ~/.local/share/fonts/nerd-font/symbols.db <devbox>:.local/share/fonts/nerd-font/ </dev/null >/dev/null 2>&1; false"
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — pre-connect theme-tint push.
+#
+# theme-push computes the background tint THIS machine's WezTerm paints for
+# <devbox> (the onboarded color / profile default / grey, from the shared
+# tint-palette.toml) and writes it as a loose ~/.config/theme/override.toml on
+# the remote. The remote's theme-apply folds it into the effective palette and
+# the Zellij `system` theme at shell startup, so the zj-hud bar, fzf, dialogs,
+# and file viewers there match the window tint. rsync sends only deltas — a
+# near-instant no-op when nothing changed.
+#
+# Host-specific, so it stays in this LOCAL file only and never goes back to the
+# repo. To enable: copy the line below, uncomment it, and replace BOTH <devbox>
+# tokens with your dev-shell's Host alias.
+#
+# Why each piece (same shape as the symbols.db hook above):
+#   * `_THEMEPUSH` sentinel — theme-push's rsync opens its own ssh to <devbox>,
+#     which re-reads this config; the guard stops that second pass from
+#     re-running the hook (otherwise: infinite loop).
+#   * `; false` — side-effect-only block that contributes no SSH config.
+#   * </dev/null + theme-push's own rsync timeouts — a sleeping/unreachable
+#     dev-shell can't stall or swallow stdin from your login.
+#
+# Match host <devbox> exec "[ -n \"$_THEMEPUSH\" ] || _THEMEPUSH=1 ~/.local/bin/theme-push <devbox> </dev/null >/dev/null 2>&1; false"
+# ---------------------------------------------------------------------------
