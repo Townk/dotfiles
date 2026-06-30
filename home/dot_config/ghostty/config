@@ -5,7 +5,10 @@
 # ---------------------------------------------------------------
 # Appearance
 # ---------------------------------------------------------------
-theme = Catppuccin Mocha
+# `system` is generated from .chezmoidata/theme.yaml into
+# ~/.config/ghostty/themes/system — Catppuccin Mocha, single-sourced. Change the
+# palette there, not here.
+theme = system
 
 # Font: JetBrains Mono DemiBold @ 19pt, 15% extra line height.
 # Ghostty has no `stretch = Expanded` knob — falls back to whatever

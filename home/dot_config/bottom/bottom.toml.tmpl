@@ -1,0 +1,73 @@
+# Optimized bottom (btm) Configuration
+
+[flags]
+# Sets how often data is refreshed (1 second is the sweet spot for accuracy vs overhead)
+rate = "1s"
+
+# Shows the list scroll position tracker in the widget titles
+show_table_scroll_position = true
+
+# Hides unnecessary spacing inside tables to display more information at once
+hide_table_gap = true
+
+# Temperatures are displayed in Celsius (change to "f" if preferred)
+temperature_type = "c"
+
+# Better defaults for the process monitoring widget
+[processes]
+# Groups processes with the same name together by default (like htop)
+default_grouped = true
+
+# Shows the full command path instead of just the process name
+process_command = true
+
+# Uses regular expressions by default when searching with the '/' key
+regex = true
+
+# Sets CPU% metrics relative to the current usage rather than overall system capacity
+current_usage = true
+
+[network]
+# Displays network speeds in bytes instead of bits (easier to read for file transfers)
+network_use_bytes = true
+
+[color]
+# Base theme (built-in). The [styles] below override every painted element from
+# the single-source palette (.chezmoidata/theme.yaml); theme= only covers any
+# element not styled below. Dropping it entirely needs bottom's full [styles]
+# coverage verified first.
+theme = "catppuccin-mocha"
+
+# Accent colors below are projected from .chezmoidata/theme.yaml — DO NOT edit
+# hex here; change the palette there and re-apply.
+[styles.cpu]
+all_entry_color = "#{{ .theme.palette.rosewater }}"
+avg_entry_color = "#{{ .theme.palette.maroon }}"
+cpu_core_colors = ["#{{ .theme.palette.red }}","#{{ .theme.palette.peach }}","#{{ .theme.palette.yellow }}","#{{ .theme.palette.green }}","#{{ .theme.palette.sapphire }}","#{{ .theme.palette.mauve }}"]
+[styles.memory]
+ram_color = "#{{ .theme.palette.green }}"
+cache_color = "#{{ .theme.palette.red }}"
+swap_color = "#{{ .theme.palette.peach }}"
+gpu_colors = ["#{{ .theme.palette.sapphire }}","#{{ .theme.palette.mauve }}","#{{ .theme.palette.red }}","#{{ .theme.palette.peach }}","#{{ .theme.palette.yellow }}","#{{ .theme.palette.green }}"]
+arc_color = "#{{ .theme.palette.sky }}"
+[styles.network]
+rx_color = "#{{ .theme.palette.green }}"
+tx_color = "#{{ .theme.palette.red }}"
+rx_total_color = "#{{ .theme.palette.sky }}"
+tx_total_color = "#{{ .theme.palette.green }}"
+[styles.battery]
+high_battery_color = "#{{ .theme.palette.green }}"
+medium_battery_color = "#{{ .theme.palette.yellow }}"
+low_battery_color = "#{{ .theme.palette.red }}"
+[styles.tables]
+headers = {color = "#{{ .theme.palette.rosewater }}"}
+[styles.graphs]
+graph_color = "#{{ .theme.palette.subtext0 }}"
+legend_text = {color = "#{{ .theme.palette.subtext0 }}"}
+[styles.widgets]
+border_color = "#{{ .theme.palette.surface2 }}"
+selected_border_color = "#{{ .theme.palette.pink }}"
+widget_title = {color = "#{{ .theme.palette.flamingo }}"}
+text = {color = "#{{ .theme.palette.text }}"}
+selected_text = {color = "#{{ .theme.palette.crust }}", bg_color = "#{{ .theme.palette.mauve }}"}
+disabled_text = {color = "#{{ .theme.palette.base }}"}

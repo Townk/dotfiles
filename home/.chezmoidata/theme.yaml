@@ -58,3 +58,8 @@ theme:
     dialog: { danger: "ff5555", warning: "e5bf7b" }
     # Per-machine WezTerm background tints (source for tint-palette.toml).
     tints:  { cyan: "1c232f", blue: "1d1f33", amber: "2a241f", teal: "16302b", purple: "241c30", grey: "2a2a32" }
+    # Bright ANSI variants (terminal slots 9-14): Catppuccin Mocha's official
+    # computed-bright accents, brighter than the base accents. Slots 0-8/15 map
+    # to palette tokens; these six don't, so they live here. Used by the
+    # generated terminal themes (ghostty, wezterm).
+    ansi_bright: { red: "f37799", green: "89d88b", yellow: "ebd391", blue: "74a8fc", magenta: "f2aede", cyan: "6bd7ca" }
