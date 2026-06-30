@@ -1,0 +1,220 @@
+{{- $p := index .theme.palettes .theme.active -}}
+# yazi theme — GENERATED from .chezmoidata/theme.yaml by chezmoi. DO NOT EDIT.
+# Vendored from yazi-rs/flavors:catppuccin-mocha with every hex replaced by a
+# palette-slot ref, so the UI follows the active theme. Code preview uses the
+# generated bat `system` tmTheme (see yazi.toml [preview] syntect_theme).
+# vim:fileencoding=utf-8:foldmethod=marker
+
+# : Manager 
+
+[mgr]
+cwd = { fg = "#{{ $p.teal }}" }
+
+# Find
+find_keyword  = { fg = "#{{ $p.yellow }}", bold = true, italic = true, underline = true }
+find_position = { fg = "#{{ $p.pink }}", bg = "reset", bold = true, italic = true }
+
+# Marker
+marker_copied   = { fg = "#{{ $p.green }}", bg = "#{{ $p.green }}" }
+marker_cut      = { fg = "#{{ $p.red }}", bg = "#{{ $p.red }}" }
+marker_marked   = { fg = "#{{ $p.teal }}", bg = "#{{ $p.teal }}" }
+marker_selected = { fg = "#{{ $p.yellow }}", bg = "#{{ $p.yellow }}" }
+
+# Count
+count_copied   = { fg = "#{{ $p.base }}", bg = "#{{ $p.green }}" }
+count_cut      = { fg = "#{{ $p.base }}", bg = "#{{ $p.red }}" }
+count_selected = { fg = "#{{ $p.base }}", bg = "#{{ $p.yellow }}" }
+
+# Border
+border_symbol = "│"
+border_style  = { fg = "#{{ $p.overlay1 }}" }
+
+# : 
+
+
+# : Tabs 
+
+[tabs]
+active   = { fg = "#{{ $p.base }}", bg = "#{{ $p.blue }}", bold = true }
+inactive = { fg = "#{{ $p.blue }}", bg = "#{{ $p.surface0 }}" }
+
+# : 
+
+
+# : Mode 
+
+[mode]
+
+normal_main = { fg = "#{{ $p.base }}", bg = "#{{ $p.blue }}", bold = true }
+normal_alt  = { fg = "#{{ $p.blue }}", bg = "#{{ $p.surface0 }}" }
+
+# Select mode
+select_main = { fg = "#{{ $p.base }}", bg = "#{{ $p.teal }}", bold = true }
+select_alt  = { fg = "#{{ $p.teal }}", bg = "#{{ $p.surface0 }}" }
+
+# Unset mode
+unset_main = { fg = "#{{ $p.base }}", bg = "#{{ $p.flamingo }}", bold = true }
+unset_alt  = { fg = "#{{ $p.flamingo }}", bg = "#{{ $p.surface0 }}" }
+
+# : 
+
+
+# : Status bar 
+
+[status]
+# Permissions
+perm_sep   = { fg = "#{{ $p.overlay1 }}" }
+perm_type  = { fg = "#{{ $p.blue }}" }
+perm_read  = { fg = "#{{ $p.yellow }}" }
+perm_write = { fg = "#{{ $p.red }}" }
+perm_exec  = { fg = "#{{ $p.green }}" }
+
+# Progress
+progress_label  = { fg = "#{{ $p.white }}", bold = true }
+progress_normal = { fg = "#{{ $p.green }}", bg = "#{{ $p.surface1 }}" }
+progress_error  = { fg = "#{{ $p.yellow }}", bg = "#{{ $p.red }}" }
+
+# : 
+
+
+# : Pick 
+
+[pick]
+border   = { fg = "#{{ $p.blue }}" }
+active   = { fg = "#{{ $p.pink }}", bold = true }
+inactive = {}
+
+# : 
+
+
+# : Input 
+
+[input]
+border   = { fg = "#{{ $p.blue }}" }
+title    = {}
+value    = {}
+selected = { reversed = true }
+
+# : 
+
+
+# : Completion 
+
+[cmp]
+border = { fg = "#{{ $p.blue }}" }
+
+# : 
+
+
+# : Tasks 
+
+[tasks]
+border  = { fg = "#{{ $p.blue }}" }
+title   = {}
+hovered = { fg = "#{{ $p.pink }}", bold = true }
+
+# : 
+
+
+# : Which 
+
+[which]
+mask            = { bg = "#{{ $p.surface0 }}" }
+cand            = { fg = "#{{ $p.teal }}" }
+rest            = { fg = "#{{ $p.overlay2 }}" }
+desc            = { fg = "#{{ $p.pink }}" }
+separator       = "  "
+separator_style = { fg = "#{{ $p.surface2 }}" }
+
+# : 
+
+
+# : Help 
+
+[help]
+on      = { fg = "#{{ $p.teal }}" }
+run     = { fg = "#{{ $p.pink }}" }
+hovered = { reversed = true, bold = true }
+footer  = { fg = "#{{ $p.surface0 }}", bg = "#{{ $p.text }}" }
+
+# : 
+
+
+# : Spotter 
+
+[spot]
+border   = { fg = "#{{ $p.blue }}" }
+title    = { fg = "#{{ $p.blue }}" }
+tbl_col  = { fg = "#{{ $p.teal }}" }
+tbl_cell = { fg = "#{{ $p.pink }}", bg = "#{{ $p.surface1 }}" }
+
+# : 
+
+
+# : Notification 
+
+[notify]
+title_info  = { fg = "#{{ $p.green }}" }
+title_warn  = { fg = "#{{ $p.yellow }}" }
+title_error = { fg = "#{{ $p.red }}" }
+
+# : 
+
+
+# : File-specific styles 
+
+[filetype]
+
+rules = [
+	# Image
+	{ mime = "image/*", fg = "#{{ $p.teal }}" },
+	# Media
+	{ mime = "{audio,video}/*", fg = "#{{ $p.yellow }}" },
+	# Archive
+	{ mime = "application/{zip,rar,7z*,tar,gzip,xz,zstd,bzip*,lzma,compress,archive,cpio,arj,xar,ms-cab*}", fg = "#{{ $p.pink }}" },
+	# Document
+	{ mime = "application/{pdf,doc,rtf}", fg = "#{{ $p.green }}" },
+	# Virtual file system
+	{ mime = "vfs/{absent,stale}", fg = "#{{ $p.overlay2 }}" },
+	# Fallback
+	{ url = "*", fg = "#{{ $p.text }}" },
+	{ url = "*/", fg = "#{{ $p.blue }}" },
+]
+
+# : 
+
+[icon]
+
+dirs = [
+	{ name = ".config", text = "", fg = "#{{ $p.pink }}" },
+	{ name = ".git", text = "", fg = "#{{ $p.teal }}" },
+	{ name = ".github", text = "", fg = "#{{ $p.blue }}" },
+	{ name = ".npm", text = "", fg = "#{{ $p.blue }}" },
+	{ name = "Desktop", text = "", fg = "#{{ $p.teal }}" },
+	{ name = "Development", text = "", fg = "#{{ $p.teal }}" },
+	{ name = "Documents", text = "", fg = "#{{ $p.teal }}" },
+	{ name = "Downloads", text = "", fg = "#{{ $p.teal }}" },
+	{ name = "Library", text = "", fg = "#{{ $p.teal }}" },
+	{ name = "Movies", text = "", fg = "#{{ $p.teal }}" },
+	{ name = "Music", text = "", fg = "#{{ $p.teal }}" },
+	{ name = "Pictures", text = "", fg = "#{{ $p.teal }}" },
+	{ name = "Public", text = "", fg = "#{{ $p.teal }}" },
+	{ name = "Videos", text = "", fg = "#{{ $p.teal }}" },
+]
+conds = [
+	# Special files
+	{ if = "orphan", text = "", fg = "#{{ $p.text }}" },
+	{ if = "link", text = "", fg = "#{{ $p.overlay1 }}" },
+	{ if = "block", text = "", fg = "#{{ $p.flamingo }}" },
+	{ if = "char", text = "", fg = "#{{ $p.flamingo }}" },
+	{ if = "fifo", text = "", fg = "#{{ $p.flamingo }}" },
+	{ if = "sock", text = "", fg = "#{{ $p.flamingo }}" },
+	{ if = "sticky", text = "", fg = "#{{ $p.flamingo }}" },
+	{ if = "dummy", text = "", fg = "#{{ $p.red }}" },
+
+	# Fallback
+	{ if = "dir & hovered", text = "", fg = "#{{ $p.blue }}" },
+	{ if = "dir", text = "", fg = "#{{ $p.blue }}" },
+	{ if = "exec", text = "", fg = "#{{ $p.green }}" },
+	{ if = "!dir", text = "", fg = "#{{ $p.text }}" },
+]

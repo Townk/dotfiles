@@ -1,0 +1,30 @@
+{{- $p := index .theme.palettes .theme.active -}}
+{{- $null := includeTemplate "hex2rgb.tmpl" $p.overlay0 | trim | replace " " ";" -}}
+{{- $false := includeTemplate "hex2rgb.tmpl" $p.red | trim | replace " " ";" -}}
+{{- $true := includeTemplate "hex2rgb.tmpl" $p.green | trim | replace " " ";" -}}
+{{- $num := includeTemplate "hex2rgb.tmpl" $p.peach | trim | replace " " ";" -}}
+{{- $str := includeTemplate "hex2rgb.tmpl" $p.yellow | trim | replace " " ";" -}}
+{{- $arr := includeTemplate "hex2rgb.tmpl" $p.blue | trim | replace " " ";" -}}
+{{- $obj := includeTemplate "hex2rgb.tmpl" $p.lavender | trim | replace " " ";" -}}
+{{- $key := includeTemplate "hex2rgb.tmpl" $p.sapphire | trim | replace " " ";" -}}
+# Theme env vars for CLI tools that can't be themed via a config file. GENERATED
+# from .chezmoidata/theme.yaml ({{ $p.meta.name }}) by chezmoi. DO NOT EDIT.
+# Sourced by ~/.zshenv so subshells (including fzf preview subshells, which run
+# non-interactively) inherit these values too.
+#
+# Keep this file POSIX sh-compatible — ~/.zshenv `.` is also reachable
+# from /bin/sh contexts via the launchd agent that loads environment.sh.
+
+# JQ_COLORS — the active palette via 24-bit SGR codes.
+#
+# Format: null:false:true:numbers:strings:arrays:objects[:object_keys]
+# Each field is a comma-separated SGR sequence. `38;2;R;G;B` selects a
+# true-color foreground; the leading `0;`/`1;` sets attributes
+# (normal/bold). Requires jq 1.7+ for the 8th `object_keys` field and
+# a truecolor terminal for the RGB codes to render.
+#
+# Roles: null=overlay0(bold) false=red true=green numbers=peach strings=yellow
+#        arrays=blue(bold) objects=lavender(bold) object_keys=sapphire
+#
+# `yq -C` and `xq -C` inherit the same palette via this env var.
+export JQ_COLORS='1;38;2;{{ $null }}:0;38;2;{{ $false }}:0;38;2;{{ $true }}:0;38;2;{{ $num }}:0;38;2;{{ $str }}:1;38;2;{{ $arr }}:1;38;2;{{ $obj }}:0;38;2;{{ $key }}'

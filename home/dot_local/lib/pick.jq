@@ -3,7 +3,7 @@
 #
 # Off-PATH internal module, included by the picker scripts via:
 #     jq -L "$HOME/.local/lib" \
-#        --argjson palette "$(cat ~/.config/theme/palette.json)" 'include "pick"; … '
+#        --argjson palette "$(cat ~/.config/theme/chezmoi-system.json)" 'include "pick"; … '
 # `include` merges these defs into the program's namespace, so the
 # emitter can call `c_glyph`, `paint`, `emit_line`, etc. directly.
 #
@@ -27,7 +27,7 @@
 #     from the visible portion can never leak into stdout.
 
 # --- Catppuccin palette from the single source --------------------------------
-# Colors come from $palette (= ~/.config/theme/palette.json, generated from
+# Colors come from $palette (= ~/.config/theme/chezmoi-system.json, generated from
 # theme.yaml), injected by the caller via `--argjson palette`, so the picker
 # tracks the system theme. Each is a 24-bit truecolor fg SGR built from the
 # palette hex; fzf renders them via `--ansi`. _hex2int parses a 2-char hex byte

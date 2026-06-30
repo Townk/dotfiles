@@ -38,3 +38,9 @@ prepend_previewers = [
 ]
 
 append_previewers = [{ url = "*", run = "hexyl" }]
+
+[preview]
+# Code preview syntax highlighting uses the generated `system` tmTheme (from
+# .chezmoidata/theme.yaml, shared with bat), so previews follow the active theme
+# instead of a vendored flavor's tmtheme.
+syntect_theme = "~/.config/bat/themes/chezmoi-system.tmTheme"

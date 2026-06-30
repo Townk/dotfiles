@@ -20,7 +20,7 @@ from typing import Any
 
 
 # -- Catppuccin Mocha Palette -----------------------------------------------
-# Loaded from ~/.config/theme/palette.json (generated from theme.yaml); falls
+# Loaded from ~/.config/theme/chezmoi-system.json (generated from theme.yaml); falls
 # back to the built-in Catppuccin Mocha values if it is unreadable. Read at
 # import, so a future theme override is picked up on the next invocation.
 import json
@@ -41,7 +41,7 @@ _PALETTE_FALLBACK = {
 def _load_palette() -> dict:
     pal = dict(_PALETTE_FALLBACK)
     path = os.path.expanduser(
-        os.environ.get("THEME_PALETTE_JSON", "~/.config/theme/palette.json")
+        os.environ.get("THEME_PALETTE_JSON", "~/.config/theme/chezmoi-system.json")
     )
     try:
         with open(path, encoding="utf-8") as _fh:

@@ -19,14 +19,16 @@ return {
   -- WHY: Warm, soothing palette that reduces eye strain during long sessions.
   -- Mocha variant provides the darkest background for high contrast.
   --------------------------------------------------------------------------------
+  -- Colorscheme: chezmoi-system (lua/../colors/chezmoi-system.lua), generated
+  -- from the single-source palette (~/.config/theme/chezmoi-system.lua, from
+  -- .chezmoidata/theme.yaml). It maps the shared ROLES -> highlight groups, so
+  -- editing theme.yaml (or switching theme.active) re-colors nvim and flips
+  -- light/dark via meta.appearance. Theme-agnostic: NOT pinned to any vendored
+  -- colorscheme plugin, so a custom theme.yaml (e.g. "NorthernLights") works too.
+  { "catppuccin/nvim", enabled = false },
   {
     "LazyVim/LazyVim",
-    dependencies = {
-      { "catppuccin/nvim", name = "catppuccin", priority = 1000 },
-    },
-    opts = {
-      colorscheme = "catppuccin-mocha",
-    },
+    opts = { colorscheme = "chezmoi-system" },
   },
 
   --------------------------------------------------------------------------------

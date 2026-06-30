@@ -104,7 +104,7 @@ pick_harness() {
     --pane-width 63 --pane-height 12 \
     --output field:1 --selector --selector-nav \
     --header "Commit harness" \
-    --hints $'\U000F0331 : run  \u00b7  \U000F12B7 : cancel'
+    --hints "$(pick::hints $'\U000F0331' run $'\U000F12B7' cancel)"
 }
 
 main() {

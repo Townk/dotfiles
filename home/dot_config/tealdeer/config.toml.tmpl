@@ -1,27 +1,33 @@
-# Catppuccin Mocha
-# https://github.com/catppuccin/catppuccin
+{{- $p := index .theme.palettes .theme.active -}}
+{{- $desc := includeTemplate "hex2rgb.tmpl" $p.subtext0 | trim | splitList " " -}}
+{{- $name := includeTemplate "hex2rgb.tmpl" $p.mauve | trim | splitList " " -}}
+{{- $etext := includeTemplate "hex2rgb.tmpl" $p.text | trim | splitList " " -}}
+{{- $ecode := includeTemplate "hex2rgb.tmpl" $p.blue | trim | splitList " " -}}
+{{- $evar := includeTemplate "hex2rgb.tmpl" $p.peach | trim | splitList " " -}}
+# tealdeer style — GENERATED from .chezmoidata/theme.yaml ({{ $p.meta.name }}) by
+# chezmoi. DO NOT EDIT hex here; change the palette in theme.yaml and re-apply.
 
 [style.description]
-# Subtext0
-foreground = { rgb = { r = 166, g = 173, b = 200 } }
+# subtext0
+foreground = { rgb = { r = {{ index $desc 0 }}, g = {{ index $desc 1 }}, b = {{ index $desc 2 }} } }
 
 [style.command_name]
-# Mauve
-foreground = { rgb = { r = 203, g = 166, b = 247 } }
+# mauve
+foreground = { rgb = { r = {{ index $name 0 }}, g = {{ index $name 1 }}, b = {{ index $name 2 }} } }
 bold = true
 
 [style.example_text]
-# Text
-foreground = { rgb = { r = 205, g = 214, b = 244 } }
+# text
+foreground = { rgb = { r = {{ index $etext 0 }}, g = {{ index $etext 1 }}, b = {{ index $etext 2 }} } }
 italic = true
 
 [style.example_code]
-# Blue
-foreground = { rgb = { r = 137, g = 180, b = 250 } }
+# blue
+foreground = { rgb = { r = {{ index $ecode 0 }}, g = {{ index $ecode 1 }}, b = {{ index $ecode 2 }} } }
 
 [style.example_variable]
-# Peach
-foreground = { rgb = { r = 250, g = 179, b = 135 } }
+# peach
+foreground = { rgb = { r = {{ index $evar 0 }}, g = {{ index $evar 1 }}, b = {{ index $evar 2 }} } }
 italic = true
 
 [display]

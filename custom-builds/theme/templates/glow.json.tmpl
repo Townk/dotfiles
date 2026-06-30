@@ -1,8 +1,9 @@
+{{- $p := index .theme.palettes .theme.active -}}
 {
   "document": {
     "block_prefix": "\n",
     "block_suffix": "\n",
-    "color": "#{{ .theme.palette.text }}",
+    "color": "#{{ $p.text }}",
     "margin": 2
   },
   "block_quote": {
@@ -15,34 +16,34 @@
   },
   "heading": {
     "block_suffix": "\n",
-    "color": "#{{ .theme.palette.text }}",
+    "color": "#{{ $p.text }}",
     "bold": true
   },
   "h1": {
     "prefix": "▓▓▓ ",
     "suffix": " ",
-    "color": "#{{ .theme.palette.red }}",
+    "color": "#{{ $p.red }}",
     "bold": true
   },
   "h2": {
     "prefix": "▓▓▓▓ ",
-    "color": "#{{ .theme.palette.peach }}"
+    "color": "#{{ $p.peach }}"
   },
   "h3": {
     "prefix": "▓▓▓▓▓ ",
-    "color": "#{{ .theme.palette.yellow }}"
+    "color": "#{{ $p.yellow }}"
   },
   "h4": {
     "prefix": "▓▓▓▓▓▓ ",
-    "color": "#{{ .theme.palette.green }}"
+    "color": "#{{ $p.green }}"
   },
   "h5": {
     "prefix": "▓▓▓▓▓▓▓ ",
-    "color": "#{{ .theme.palette.sapphire }}"
+    "color": "#{{ $p.sapphire }}"
   },
   "h6": {
     "prefix": "▓▓▓▓▓▓▓▓ ",
-    "color": "#{{ .theme.palette.lavender }}"
+    "color": "#{{ $p.lavender }}"
   },
   "text": {},
   "strikethrough": {
@@ -55,7 +56,7 @@
     "bold": true
   },
   "hr": {
-    "color": "#{{ .theme.palette.overlay0 }}",
+    "color": "#{{ $p.overlay0 }}",
     "format": "\n--------\n"
   },
   "item": {
@@ -69,118 +70,118 @@
     "unticked": "[ ] "
   },
   "link": {
-    "color": "#{{ .theme.palette.blue }}",
+    "color": "#{{ $p.blue }}",
     "underline": true
   },
   "link_text": {
-    "color": "#{{ .theme.palette.lavender }}",
+    "color": "#{{ $p.lavender }}",
     "bold": true
   },
   "image": {
-    "color": "#{{ .theme.palette.blue }}",
+    "color": "#{{ $p.blue }}",
     "underline": true
   },
   "image_text": {
-    "color": "#{{ .theme.palette.lavender }}",
+    "color": "#{{ $p.lavender }}",
     "format": "Image: {{ "{{.text}}" }} →"
   },
   "code": {
     "prefix": " ",
     "suffix": " ",
-    "color": "#{{ .theme.palette.maroon }}",
-    "background_color": "#{{ .theme.palette.mantle }}"
+    "color": "#{{ $p.maroon }}",
+    "background_color": "#{{ $p.mantle }}"
   },
   "code_block": {
-    "color": "#{{ .theme.palette.mantle }}",
+    "color": "#{{ $p.mantle }}",
     "margin": 2,
     "chroma": {
       "text": {
-        "color": "#{{ .theme.palette.text }}"
+        "color": "#{{ $p.text }}"
       },
       "error": {
-        "color": "#{{ .theme.palette.text }}",
-        "background_color": "#{{ .theme.palette.red }}"
+        "color": "#{{ $p.text }}",
+        "background_color": "#{{ $p.red }}"
       },
       "comment": {
-        "color": "#{{ .theme.palette.overlay0 }}"
+        "color": "#{{ $p.overlay0 }}"
       },
       "comment_preproc": {
-        "color": "#{{ .theme.palette.blue }}"
+        "color": "#{{ $p.blue }}"
       },
       "keyword": {
-        "color": "#{{ .theme.palette.mauve }}"
+        "color": "#{{ $p.mauve }}"
       },
       "keyword_reserved": {
-        "color": "#{{ .theme.palette.mauve }}"
+        "color": "#{{ $p.mauve }}"
       },
       "keyword_namespace": {
-        "color": "#{{ .theme.palette.yellow }}"
+        "color": "#{{ $p.yellow }}"
       },
       "keyword_type": {
-        "color": "#{{ .theme.palette.yellow }}"
+        "color": "#{{ $p.yellow }}"
       },
       "operator": {
-        "color": "#{{ .theme.palette.sky }}"
+        "color": "#{{ $p.sky }}"
       },
       "punctuation": {
-        "color": "#{{ .theme.palette.overlay2 }}"
+        "color": "#{{ $p.overlay2 }}"
       },
       "name": {
-        "color": "#{{ .theme.palette.lavender }}"
+        "color": "#{{ $p.lavender }}"
       },
       "name_builtin": {
-        "color": "#{{ .theme.palette.peach }}"
+        "color": "#{{ $p.peach }}"
       },
       "name_tag": {
-        "color": "#{{ .theme.palette.mauve }}"
+        "color": "#{{ $p.mauve }}"
       },
       "name_attribute": {
-        "color": "#{{ .theme.palette.yellow }}"
+        "color": "#{{ $p.yellow }}"
       },
       "name_class": {
-        "color": "#{{ .theme.palette.yellow }}"
+        "color": "#{{ $p.yellow }}"
       },
       "name_constant": {
-        "color": "#{{ .theme.palette.yellow }}"
+        "color": "#{{ $p.yellow }}"
       },
       "name_decorator": {
-        "color": "#{{ .theme.palette.pink }}"
+        "color": "#{{ $p.pink }}"
       },
       "name_exception": {},
       "name_function": {
-        "color": "#{{ .theme.palette.blue }}"
+        "color": "#{{ $p.blue }}"
       },
       "name_other": {},
       "literal": {},
       "literal_number": {
-        "color": "#{{ .theme.palette.peach }}"
+        "color": "#{{ $p.peach }}"
       },
       "literal_date": {},
       "literal_string": {
-        "color": "#{{ .theme.palette.green }}"
+        "color": "#{{ $p.green }}"
       },
       "literal_string_escape": {
-        "color": "#{{ .theme.palette.pink }}"
+        "color": "#{{ $p.pink }}"
       },
       "generic_deleted": {
-        "color": "#{{ .theme.palette.red }}"
+        "color": "#{{ $p.red }}"
       },
       "generic_emph": {
-        "color": "#{{ .theme.palette.text }}",
+        "color": "#{{ $p.text }}",
         "italic": true
       },
       "generic_inserted": {
-        "color": "#{{ .theme.palette.green }}"
+        "color": "#{{ $p.green }}"
       },
       "generic_strong": {
-        "color": "#{{ .theme.palette.text }}",
+        "color": "#{{ $p.text }}",
         "bold": true
       },
       "generic_subheading": {
-        "color": "#{{ .theme.palette.sky }}"
+        "color": "#{{ $p.sky }}"
       },
       "background": {
-        "background_color": "#{{ .theme.palette.mantle }}"
+        "background_color": "#{{ $p.mantle }}"
       }
     }
   },

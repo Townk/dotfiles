@@ -1,8 +1,8 @@
-# Prompt colors from the single-source palette (~/.config/theme/palette.zsh →
+# Prompt colors from the single-source palette (~/.config/theme/chezmoi-system.zsh →
 # C_HEX_*, generated from .chezmoidata/theme.yaml), mapped by role. Source it
 # (guarded + fork-free, a no-op if .zshrc already did) so these resolve even when
 # _lib.sh is pulled in outside an interactive shell.
-source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/palette.zsh}"
+source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.zsh}"
 typeset -g C_GRE="%F{$C_HEX_GREEN}"
 typeset -g C_RED="%F{$C_HEX_RED}"
 typeset -g C_YEL="%F{$C_HEX_YELLOW}"

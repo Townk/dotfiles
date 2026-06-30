@@ -1,3 +1,4 @@
+{{- $p := index .theme.palettes .theme.active -}}
 # Optimized bottom (btm) Configuration
 
 [flags]
@@ -37,33 +38,33 @@ network_use_bytes = true
 # DO NOT edit hex here; change the palette there and re-apply. Anything not styled
 # below keeps bottom's default (the bg stays the terminal background).
 [styles.cpu]
-all_entry_color = "#{{ .theme.palette.rosewater }}"
-avg_entry_color = "#{{ .theme.palette.maroon }}"
-cpu_core_colors = ["#{{ .theme.palette.red }}","#{{ .theme.palette.peach }}","#{{ .theme.palette.yellow }}","#{{ .theme.palette.green }}","#{{ .theme.palette.sapphire }}","#{{ .theme.palette.mauve }}"]
+all_entry_color = "#{{ $p.rosewater }}"
+avg_entry_color = "#{{ $p.maroon }}"
+cpu_core_colors = ["#{{ $p.red }}","#{{ $p.peach }}","#{{ $p.yellow }}","#{{ $p.green }}","#{{ $p.sapphire }}","#{{ $p.mauve }}"]
 [styles.memory]
-ram_color = "#{{ .theme.palette.green }}"
-cache_color = "#{{ .theme.palette.red }}"
-swap_color = "#{{ .theme.palette.peach }}"
-gpu_colors = ["#{{ .theme.palette.sapphire }}","#{{ .theme.palette.mauve }}","#{{ .theme.palette.red }}","#{{ .theme.palette.peach }}","#{{ .theme.palette.yellow }}","#{{ .theme.palette.green }}"]
-arc_color = "#{{ .theme.palette.sky }}"
+ram_color = "#{{ $p.green }}"
+cache_color = "#{{ $p.red }}"
+swap_color = "#{{ $p.peach }}"
+gpu_colors = ["#{{ $p.sapphire }}","#{{ $p.mauve }}","#{{ $p.red }}","#{{ $p.peach }}","#{{ $p.yellow }}","#{{ $p.green }}"]
+arc_color = "#{{ $p.sky }}"
 [styles.network]
-rx_color = "#{{ .theme.palette.green }}"
-tx_color = "#{{ .theme.palette.red }}"
-rx_total_color = "#{{ .theme.palette.sky }}"
-tx_total_color = "#{{ .theme.palette.green }}"
+rx_color = "#{{ $p.green }}"
+tx_color = "#{{ $p.red }}"
+rx_total_color = "#{{ $p.sky }}"
+tx_total_color = "#{{ $p.green }}"
 [styles.battery]
-high_battery_color = "#{{ .theme.palette.green }}"
-medium_battery_color = "#{{ .theme.palette.yellow }}"
-low_battery_color = "#{{ .theme.palette.red }}"
+high_battery_color = "#{{ $p.green }}"
+medium_battery_color = "#{{ $p.yellow }}"
+low_battery_color = "#{{ $p.red }}"
 [styles.tables]
-headers = {color = "#{{ .theme.palette.rosewater }}"}
+headers = {color = "#{{ $p.rosewater }}"}
 [styles.graphs]
-graph_color = "#{{ .theme.palette.subtext0 }}"
-legend_text = {color = "#{{ .theme.palette.subtext0 }}"}
+graph_color = "#{{ $p.subtext0 }}"
+legend_text = {color = "#{{ $p.subtext0 }}"}
 [styles.widgets]
-border_color = "#{{ .theme.palette.surface2 }}"
-selected_border_color = "#{{ .theme.palette.pink }}"
-widget_title = {color = "#{{ .theme.palette.flamingo }}"}
-text = {color = "#{{ .theme.palette.text }}"}
-selected_text = {color = "#{{ .theme.palette.crust }}", bg_color = "#{{ .theme.palette.mauve }}"}
-disabled_text = {color = "#{{ .theme.palette.base }}"}
+border_color = "#{{ $p.surface2 }}"
+selected_border_color = "#{{ $p.pink }}"
+widget_title = {color = "#{{ $p.flamingo }}"}
+text = {color = "#{{ $p.text }}"}
+selected_text = {color = "#{{ $p.crust }}", bg_color = "#{{ $p.mauve }}"}
+disabled_text = {color = "#{{ $p.base }}"}

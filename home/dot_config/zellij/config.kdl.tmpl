@@ -26,7 +26,7 @@
   `close_on_exit true` disposes of the pane when the target returns.
 */ -}}
 {{- define "zellijModalRun" -}}
-            Run "env" "COLORTERM=truecolor" "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }} "--" "{{ joinPath .home ".config/zellij/scripts" .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
+            Run "env" "COLORTERM=truecolor" "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }}{{ if and (hasKey . "no_chrome") .no_chrome }} "--no-chrome"{{ end }} "--" "{{ joinPath .home ".config/zellij/scripts" .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
                 name ""
                 close_on_exit true
                 floating true
@@ -227,19 +227,20 @@ keybinds clear-defaults=true {
         // the pane the user came from. `close_on_exit true` disposes
         // of the floating pane when the wrapper returns. `pinned true`
         // keeps the picker on top if you toggle other floating panes
-        // while it's open. `borderless false` overrides the global
-        // `pane_frames false` so we still get a (rounded) frame around
-        // this single floating pane — pick-glyph runs with --no-border
-        // so the inner fzf border doesn't double up. `name ""`
-        // suppresses the title text in the frame (matches the quit
-        // dialog) — pick-glyph-zellij prints its own catppuccin-mocha
-        // title block on the first interior row instead.
+        // while it's open. `borderless true` + `no_chrome` make this a
+        // "fzf owns the box" modal: no zellij frame (zellij can't tint a
+        // floating frame's background per-pane) and no script title block —
+        // fzf renders the whole modal full-screen, its own rounded border as
+        // the (mantle) outer box with "▓▓▓ <title>" on the border label. The
+        // dialog background follows roles.ui.dialog_bg from theme.yaml.
         bind "Ctrl Shift u" {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
                (dict "home" .chezmoi.homeDir
                      "title" "Glyph Picker"
                      "inject" true
+                     "borderless" true
+                     "no_chrome" true
                      "script" "pick-glyph-zellij"
                      "width" "70%"
                      "height" "60%") }}
@@ -263,6 +264,8 @@ keybinds clear-defaults=true {
                (dict "home" .chezmoi.homeDir
                      "title" "Gitmoji Picker"
                      "inject" true
+                     "borderless" true
+                     "no_chrome" true
                      "script" "pick-gitmoji-zellij"
                      "width" "70%"
                      "height" "60%") }}
@@ -312,6 +315,8 @@ keybinds clear-defaults=true {
                (dict "home" .chezmoi.homeDir
                      "title" "Glyph Picker (resumed)"
                      "inject" true
+                     "borderless" true
+                     "no_chrome" true
                      "script" "pick-glyph-zellij"
                      "args" "\"--resume\""
                      "width" "70%"
@@ -323,6 +328,8 @@ keybinds clear-defaults=true {
                (dict "home" .chezmoi.homeDir
                      "title" "Gitmoji Picker (resumed)"
                      "inject" true
+                     "borderless" true
+                     "no_chrome" true
                      "script" "pick-gitmoji-zellij"
                      "args" "\"--resume\""
                      "width" "70%"
@@ -485,6 +492,8 @@ keybinds clear-defaults=true {
                (dict "home" .chezmoi.homeDir
                      "title" "Quick Launch — Workspace"
                      "inject" false
+                     "borderless" true
+                     "no_chrome" true
                      "script" "quick-launch-zellij"
                      "args" "\"workspace\""
                      "width" "70%"
@@ -531,6 +540,8 @@ keybinds clear-defaults=true {
                (dict "home" .chezmoi.homeDir
                      "title" "Quick Launch — Tab"
                      "inject" false
+                     "borderless" true
+                     "no_chrome" true
                      "script" "quick-launch-zellij"
                      "args" "\"tab\""
                      "width" "70%"
@@ -581,6 +592,8 @@ keybinds clear-defaults=true {
                (dict "home" .chezmoi.homeDir
                      "title" "Quick Launch — Pane"
                      "inject" false
+                     "borderless" true
+                     "no_chrome" true
                      "script" "quick-launch-zellij"
                      "args" "\"pane\""
                      "width" "70%"
@@ -841,10 +854,10 @@ web_client {
 // Default: default
 // 
 // `system` is written at shell startup by theme-apply: the canonical
-// catppuccin-mocha-dialog theme overlaid with the loose per-machine
+// chezmoi-system theme overlaid with the loose per-machine
 // ~/.config/theme/override.toml. zj-hud's bar follows this theme, so a `base`
 // override tints the bar to match the terminal background.
-theme "system"
+theme "chezmoi-system"
  
 // Theme to use when the host terminal reports a dark color palette.
 // Requires `theme_light` to also be set; otherwise `theme` is used.

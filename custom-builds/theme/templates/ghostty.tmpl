@@ -1,0 +1,27 @@
+{{- $p := index .theme.palettes .theme.active -}}
+# ghostty `system` theme — GENERATED from .chezmoidata/theme.yaml by chezmoi.
+# DO NOT EDIT. Reproduces the active theme: normal ANSI + bg/fg/cursor/selection
+# from the palette, bright ANSI 9-14 from the palette's ansi_bright. The ghostty
+# config loads it via `theme = system`.
+palette = 0=#{{ $p.surface1 }}
+palette = 1=#{{ $p.red }}
+palette = 2=#{{ $p.green }}
+palette = 3=#{{ $p.yellow }}
+palette = 4=#{{ $p.blue }}
+palette = 5=#{{ $p.pink }}
+palette = 6=#{{ $p.teal }}
+palette = 7=#{{ $p.subtext0 }}
+palette = 8=#{{ $p.surface2 }}
+palette = 9=#{{ $p.ansi_bright.red }}
+palette = 10=#{{ $p.ansi_bright.green }}
+palette = 11=#{{ $p.ansi_bright.yellow }}
+palette = 12=#{{ $p.ansi_bright.blue }}
+palette = 13=#{{ $p.ansi_bright.magenta }}
+palette = 14=#{{ $p.ansi_bright.cyan }}
+palette = 15=#{{ $p.subtext1 }}
+background = #{{ $p.base }}
+foreground = #{{ $p.text }}
+cursor-color = #{{ $p.rosewater }}
+cursor-text = #{{ $p.base }}
+selection-background = #{{ $p.surface2 }}
+selection-foreground = #{{ $p.text }}

@@ -1,0 +1,18 @@
+{{- $p := index .theme.palettes .theme.active -}}
+# wezterm `system` color scheme — GENERATED from .chezmoidata/theme.yaml by
+# chezmoi. DO NOT EDIT. Reproduces wezterm's built-in "Catppuccin Mocha": every
+# slot maps to a palette token, and (unlike ghostty) the brights reuse the normal
+# accents rather than computed-bright variants. Loaded via color_scheme="system".
+[metadata]
+name = "chezmoi-system"
+
+[colors]
+ansi = ["#{{ $p.surface1 }}", "#{{ $p.red }}", "#{{ $p.green }}", "#{{ $p.yellow }}", "#{{ $p.blue }}", "#{{ $p.pink }}", "#{{ $p.teal }}", "#{{ $p.subtext1 }}"]
+brights = ["#{{ $p.surface2 }}", "#{{ $p.red }}", "#{{ $p.green }}", "#{{ $p.yellow }}", "#{{ $p.blue }}", "#{{ $p.pink }}", "#{{ $p.teal }}", "#{{ $p.subtext0 }}"]
+background = "#{{ $p.base }}"
+foreground = "#{{ $p.text }}"
+cursor_bg = "#{{ $p.rosewater }}"
+cursor_fg = "#{{ $p.crust }}"
+cursor_border = "#{{ $p.rosewater }}"
+selection_bg = "#{{ $p.surface2 }}"
+selection_fg = "#{{ $p.text }}"

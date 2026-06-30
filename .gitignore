@@ -48,3 +48,22 @@ docs/superpowers/
 *.swp
 *.swo
 *~
+
+# Generated theme artifacts — built into $HOME (and assets/) by
+# custom-builds/theme/generate-theme.sh. Never committed; theme.yaml is the
+# single source. Guard the source-equivalent paths so a stray `chezmoi add`
+# of a generated output can't be committed.
+home/dot_config/theme/chezmoi-system.*
+home/dot_config/ghostty/themes/chezmoi-system
+home/dot_config/wezterm/colors/chezmoi-system.toml
+home/dot_config/wezterm/tint-palette.toml
+home/dot_config/bat/themes/chezmoi-system.tmTheme
+home/dot_config/glow/chezmoi-system.json
+home/dot_config/zellij/themes/chezmoi-system*.kdl
+home/dot_config/yazi/flavors/chezmoi-system.yazi/
+home/dot_config/yazi/theme.toml
+home/dot_config/zsh/themes.sh
+home/dot_pi/agent/themes/chezmoi-system.json
+home/dot_config/nvim/colors/chezmoi-system.lua
+home/dot_config/nvim/lua/chezmoi_theme/
+assets/blink-shell/chezmoi-system.js

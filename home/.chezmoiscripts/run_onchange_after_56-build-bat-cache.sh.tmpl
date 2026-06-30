@@ -1,0 +1,27 @@
+{{- /*
+  Register the generated `chezmoi-system` bat theme.
+
+  bat only sees themes under ~/.config/bat/themes/ after `bat cache --build`
+  scans them into its binary cache. The theme is generated from
+  .chezmoidata/theme.yaml (via custom-builds/theme/templates/bat.tmTheme.tmpl), so
+  the cache must be rebuilt whenever the theme OR the active palette changes.
+  delta shares bat's theme assets, so its `syntax-theme = chezmoi-system` resolves too.
+
+  run_onchange: chezmoi re-runs this whenever the rendered text changes. The
+  two hashes below embed the theme template and theme.yaml, so editing either
+  (including switching theme.active) re-fires the cache build.
+
+  bat fragment hash: {{ output "sh" "-c" (printf "shasum -a 256 %q | cut -d' ' -f1" (joinPath .chezmoi.workingTree "custom-builds/theme/templates/bat.tmTheme.tmpl")) | trim }}
+  theme.yaml hash: {{ include ".chezmoidata/theme.yaml" | sha256sum }}
+*/ -}}
+#!/bin/bash
+set -uo pipefail
+
+command -v bat >/dev/null 2>&1 || { echo "bat not found; skipping cache build" >&2; exit 0; }
+[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/bat/themes/chezmoi-system.tmTheme" ] || exit 0
+
+if bat cache --build >/dev/null 2>&1; then
+  echo "🦇  Rebuilt bat theme cache (chezmoi-system)"
+else
+  echo "bat cache --build failed (non-fatal)" >&2
+fi

@@ -4,6 +4,8 @@
 {{- $hudSearchPluginURL = includeTemplate "zellij-plugin-path.tmpl" (dict "root" $ "plugin" . "filePrefix" true) | trim -}}
 {{- end -}}
 {{- end -}}
+{{- $p := index .theme.palettes .theme.active -}}
+{{- $r := .theme.roles -}}
 // zj-hud layout — WezTerm-inspired Zellij HUD
 // Source: {{ .chezmoi.homeDir }}/Projects/apps/zellij/zj-hud
 // Previous plugin: zj-status.wasm (swap back by changing the location line)
@@ -32,20 +34,21 @@ layout {
                     hide_single false
                 }
 
-                // Mode styles (WezTerm palette)
+                // Mode styles — from roles.mode (theme.yaml), so the bar's mode
+                // indicator follows the active theme.
                 modes {
-                    locked      color="#fab387" label="Locked"      icon="󰌾"
-                    resize      color="#{{ .theme.palette.mauve }}" label="Resize"      icon="󰩨"
-                    pane        color="#89b4fa" label="Pane"        icon="" 
-                    tab         color="#a6e3a1" label="Tab"         icon="󰓩"
-                    move        color="#f9e2af" label="Move"        icon="󰆾"
-                    search      color="#{{ .theme.palette.blue }}" label="Search"      icon="" 
-                    scroll      color="#{{ .theme.palette.lavender }}" label="Scroll"      icon="󰩤"
-                    rename_tab  color="#{{ .theme.palette.yellow }}" label="Rename Tab"  icon="󰤌"
-                    rename_pane color="#{{ .theme.palette.yellow }}" label="Rename Pane" icon="󰤌"
-                    prompt      color="#{{ .theme.palette.red }}" label="Prompt"      icon="" 
-                    session     color="#{{ .theme.palette.red }}" label="Session"     icon="󰙀"
-                    tmux        color="#{{ .theme.palette.red }}" label="Command"     icon="󰘳"
+                    locked      color="#{{ index $p $r.mode.locked }}" label="Locked"      icon="󰌾"
+                    resize      color="#{{ index $p $r.mode.resize }}" label="Resize"      icon="󰩨"
+                    pane        color="#{{ index $p $r.mode.pane }}" label="Pane"        icon="" 
+                    tab         color="#{{ index $p $r.mode.tab }}" label="Tab"         icon="󰓩"
+                    move        color="#{{ index $p $r.mode.move }}" label="Move"        icon="󰆾"
+                    search      color="#{{ index $p $r.mode.search }}" label="Search"      icon="" 
+                    scroll      color="#{{ index $p $r.mode.scroll }}" label="Scroll"      icon="󰩤"
+                    rename_tab  color="#{{ index $p $r.mode.rename }}" label="Rename Tab"  icon="󰤌"
+                    rename_pane color="#{{ index $p $r.mode.rename }}" label="Rename Pane" icon="󰤌"
+                    prompt      color="#{{ index $p $r.mode.prompt }}" label="Prompt"      icon="" 
+                    session     color="#{{ index $p $r.mode.session }}" label="Session"     icon="󰙀"
+                    tmux        color="#{{ index $p $r.mode.tmux }}" label="Command"     icon="󰘳"
                 }
 
                 // which-key panel options. Authored here once (single source of
@@ -62,6 +65,11 @@ layout {
                     margin "1,2,2,6"       // outer gap (screen edge -> frame): top,right,bottom,left
                     padding "0,1,0,1"      // inner gap (frame -> text): top,right,bottom,left
                     binding_separator "\u{279C}" // glyph between a binding's keys and its description (➜)
+
+                    // Panel canvas = the dialog/modal background (mantle) from
+                    // theme.yaml (roles.ui.dialog_bg), so the which-key floats as a
+                    // darker modal over the base background. Unset = base.
+                    background "#{{ index $p $r.ui.dialog_bg }}"
 
                     start_hidden "scroll"  // In scroll mode the which-key does not show by default
 
@@ -82,87 +90,87 @@ layout {
                     labels {
                         // wk binding="Ctrl h" desc="focus left" icon="\u{F0312}"
                         // wk binding="Alt y"  desc="copy pwd"    mode="pane"
-                        wk mode="tmux"  binding="l"        desc="Scroll mode …"            icon="󰩤"  icon_color="#{{ .theme.palette.lavender }}"
-                        wk mode="tmux"  binding="o"        desc="Session mode …"           icon="󰙀"  icon_color="#{{ .theme.palette.red }}"
-                        wk mode="tmux"  binding="p"        desc="Pane mode …"              icon=" " icon_color="#89b4fa"
-                        wk mode="tmux"  binding="t"        desc="Tab mode …"               icon="󰓩"  icon_color="#a6e3a1"
-                        wk mode="tmux"  binding="Shift l"  desc="Locked mode …"            icon="󰌾"  icon_color="#fab387"
-                        wk mode="tmux"  binding="Shift y"  desc="copy pwd"                 icon="󰅇"  icon_color="#F9E2AF"
-                        wk mode="tmux"  binding="Alt y"    desc="copy pwd (abs)"           icon="󰅇"  icon_color="#F9E2AF"
-                        wk mode="tmux"  binding=","        desc="terminal settings"        icon=""  icon_color="#93E2D5"
-                        wk mode="tmux"  binding="s"        desc="split pane (horiz)"       icon=""  icon_color="#89B4FA"
-                        wk mode="tmux"  binding="v"        desc="split pane (vert)"        icon=""  icon_color="#89B4FA"
-                        wk mode="tmux"  binding="z"        desc="toggle pane zoom"         icon="󱀅"  icon_color="#89B4FA"
-                        wk mode="tmux"  binding="f"        desc="toggle pane borders"      icon="󰃇"  icon_color="#89B4FA"
-                        wk mode="tmux"  binding="Shift u"  desc="glyph picker (repeat)"    icon="󰥸"  icon_color="#CBA6F7"
-                        wk mode="tmux"  binding="Shift g"  desc="gitmoji picker (repeat)"  icon="󰥸"  icon_color="#CBA6F7"
-                        wk mode="tmux"  binding="u"        desc="alarm on updated"         icon="󰂞"  icon_color="#{{ .theme.palette.yellow }}"
-                        wk mode="tmux"  binding="i"        desc="alarm on idle"            icon="󰂠"  icon_color="#{{ .theme.palette.yellow }}"
-                        wk mode="tmux"  binding="k"        desc="cancel all alarms"        icon="󰂛"  icon_color="#{{ .theme.palette.yellow }}"
-                        wk mode="tmux"  binding="q"        desc="kill current session"     icon="󰈆"  icon_color="#F38BA8"
+                        wk mode="tmux"  binding="l"        desc="Scroll mode …"            icon="󰩤"  icon_color="#{{ $p.lavender }}"
+                        wk mode="tmux"  binding="o"        desc="Session mode …"           icon="󰙀"  icon_color="#{{ $p.red }}"
+                        wk mode="tmux"  binding="p"        desc="Pane mode …"              icon=" " icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="tmux"  binding="t"        desc="Tab mode …"               icon="󰓩"  icon_color="#{{ index $p $r.mode.tab }}"
+                        wk mode="tmux"  binding="Shift l"  desc="Locked mode …"            icon="󰌾"  icon_color="#{{ index $p $r.action.caution }}"
+                        wk mode="tmux"  binding="Shift y"  desc="copy pwd"                 icon="󰅇"  icon_color="#{{ index $p $r.action.attention }}"
+                        wk mode="tmux"  binding="Alt y"    desc="copy pwd (abs)"           icon="󰅇"  icon_color="#{{ index $p $r.action.attention }}"
+                        wk mode="tmux"  binding=","        desc="terminal settings"        icon=""  icon_color="#{{ $p.teal }}"
+                        wk mode="tmux"  binding="s"        desc="split pane (horiz)"       icon=""  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="tmux"  binding="v"        desc="split pane (vert)"        icon=""  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="tmux"  binding="z"        desc="toggle pane zoom"         icon="󱀅"  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="tmux"  binding="f"        desc="toggle pane borders"      icon="󰃇"  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="tmux"  binding="Shift u"  desc="glyph picker (repeat)"    icon="󰥸"  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="tmux"  binding="Shift g"  desc="gitmoji picker (repeat)"  icon="󰥸"  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="tmux"  binding="u"        desc="alarm on updated"         icon="󰂞"  icon_color="#{{ $p.yellow }}"
+                        wk mode="tmux"  binding="i"        desc="alarm on idle"            icon="󰂠"  icon_color="#{{ $p.yellow }}"
+                        wk mode="tmux"  binding="k"        desc="cancel all alarms"        icon="󰂛"  icon_color="#{{ $p.yellow }}"
+                        wk mode="tmux"  binding="q"        desc="kill current session"     icon="󰈆"  icon_color="#{{ index $p $r.action.stop }}"
 
-                        wk mode="session"  binding="a"        desc="about Zellij"          icon=""  icon_color="#{{ .theme.palette.yellow }}"
-                        wk mode="session"  binding="c"        desc="configuration"         icon=""  icon_color="#a6e3a1"
-                        wk mode="session"  binding="l"        desc="layout manager"        icon=""  icon_color="#CBA6F7"
-                        wk mode="session"  binding="p"        desc="plugin manager"        icon="󱐥"  icon_color="#89B4FA"
-                        wk mode="session"  binding="w"        desc="session manager"       icon="󰧨"  icon_color="#{{ .theme.palette.red }}"
-                        wk mode="session"  binding="s"        desc="share"                 icon=""  icon_color="#{{ .theme.palette.red }}"
-                        wk mode="session"  binding="Shift s"  desc="quick launch session"  icon="󱓟"  icon_color="#{{ .theme.palette.red }}"
-                        wk mode="session"  binding="d"        desc="detach"                icon="󱟃"  icon_color="#F38BA8"
+                        wk mode="session"  binding="a"        desc="about Zellij"          icon=""  icon_color="#{{ $p.yellow }}"
+                        wk mode="session"  binding="c"        desc="configuration"         icon=""  icon_color="#{{ index $p $r.mode.tab }}"
+                        wk mode="session"  binding="l"        desc="layout manager"        icon=""  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="session"  binding="p"        desc="plugin manager"        icon="󱐥"  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="session"  binding="w"        desc="session manager"       icon="󰧨"  icon_color="#{{ $p.red }}"
+                        wk mode="session"  binding="s"        desc="share"                 icon=""  icon_color="#{{ $p.red }}"
+                        wk mode="session"  binding="Shift s"  desc="quick launch session"  icon="󱓟"  icon_color="#{{ $p.red }}"
+                        wk mode="session"  binding="d"        desc="detach"                icon="󱟃"  icon_color="#{{ index $p $r.action.stop }}"
 
-                        wk mode="tab"  binding="n"        desc="Rename Tab …"          icon=""  icon_color="#{{ .theme.palette.yellow }}"
-                        wk mode="tab"  binding="s"        desc="sync input all panes"  icon=""  icon_color="#{{ .theme.palette.blue }}"
-                        wk mode="tab"  binding="["        desc="tab to pane at left"   icon="󰮹"  icon_color="#a6e3a1"
-                        wk mode="tab"  binding="]"        desc="tab to pane at right"  icon="󰮺"  icon_color="#a6e3a1"
-                        wk mode="tab"  binding="Shift p"  desc="pane to tab"           icon=""  icon_color="#a6e3a1"
-                        wk mode="tab"  binding="Shift n"  desc="new tab"               icon="󰝜"  icon_color="#CBA6F7"
-                        wk mode="tab"  binding="Shift t"  desc="quick launch new tab"  icon="󱓞"  icon_color="#CBA6F7"
-                        wk mode="tab"  binding="x"        desc="close tab"             icon="󰱞"  icon_color="#F38BA8"
+                        wk mode="tab"  binding="n"        desc="Rename Tab …"          icon=""  icon_color="#{{ $p.yellow }}"
+                        wk mode="tab"  binding="s"        desc="sync input all panes"  icon=""  icon_color="#{{ $p.blue }}"
+                        wk mode="tab"  binding="["        desc="tab to pane at left"   icon="󰮹"  icon_color="#{{ index $p $r.mode.tab }}"
+                        wk mode="tab"  binding="]"        desc="tab to pane at right"  icon="󰮺"  icon_color="#{{ index $p $r.mode.tab }}"
+                        wk mode="tab"  binding="Shift p"  desc="pane to tab"           icon=""  icon_color="#{{ index $p $r.mode.tab }}"
+                        wk mode="tab"  binding="Shift n"  desc="new tab"               icon="󰝜"  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="tab"  binding="Shift t"  desc="quick launch new tab"  icon="󱓞"  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="tab"  binding="x"        desc="close tab"             icon="󰱞"  icon_color="#{{ index $p $r.action.stop }}"
                         wk mode="tab"  binding="left"     desc="previous tab"
                         wk mode="tab"  binding="h"        desc="previous tab"
                         wk mode="tab"  binding="right"    desc="next tab"
                         wk mode="tab"  binding="l"        desc="next tab"
                         wk mode="tab"  binding="tab"      desc="last focused tab"
 
-                        wk mode="pane"  binding="m"        desc="Move Pane …"               icon="󰆾"  icon_color="#f9e2af"
-                        wk mode="pane"  binding="r"        desc="Resize Pane …"             icon="󰩨"  icon_color="#{{ .theme.palette.mauve }}"
-                        wk mode="pane"  binding="n"        desc="Rename Pane …"             icon=""  icon_color="#{{ .theme.palette.yellow }}"
-                        wk mode="pane"  binding="f"        desc="toggle pane borders"       icon="󰃇"  icon_color="#89B4FA"
-                        wk mode="pane"  binding="p"        desc="toggle pinned pane"        icon="󰤱"  icon_color="#89b4fa"
-                        wk mode="pane"  binding="e"        desc="toggle embed pane"         icon=""  icon_color="#89b4fa"
-                        wk mode="pane"  binding="t"        desc="toggle floating"           icon="󰹙"  icon_color="#89b4fa"
-                        wk mode="pane"  binding="Alt t"    desc="toggle floating (sticky)"  icon="󰹙"  icon_color="#89b4fa"
-                        wk mode="pane"  binding="z"        desc="toggle pane zoom"          icon="󱀅"  icon_color="#89b4fa"
-                        wk mode="pane"  binding="x"        desc="close pane"                icon="󰅘"  icon_color="#F38BA8"
-                        wk mode="pane"  binding="Shift h"  desc="split pane left"           icon=""  icon_color="#CBA6F7"
-                        wk mode="pane"  binding="Shift j"  desc="split pane down"           icon=""  icon_color="#CBA6F7"
-                        wk mode="pane"  binding="Shift k"  desc="split pane up"             icon="􏬃"  icon_color="#CBA6F7"
-                        wk mode="pane"  binding="Shift l"  desc="split pane right"          icon=""  icon_color="#CBA6F7"
-                        wk mode="pane"  binding="Shift s"  desc="split pane stack"          icon="󰯋"  icon_color="#CBA6F7"
-                        wk mode="pane"  binding="Shift N"  desc="new pane"                  icon="󰯌"  icon_color="#a6e3a1"
-                        wk mode="pane"  binding="Shift P"  desc="quick launch new pane"     icon="󱓞"  icon_color="#a6e3a1"
+                        wk mode="pane"  binding="m"        desc="Move Pane …"               icon="󰆾"  icon_color="#{{ index $p $r.mode.move }}"
+                        wk mode="pane"  binding="r"        desc="Resize Pane …"             icon="󰩨"  icon_color="#{{ $p.mauve }}"
+                        wk mode="pane"  binding="n"        desc="Rename Pane …"             icon=""  icon_color="#{{ $p.yellow }}"
+                        wk mode="pane"  binding="f"        desc="toggle pane borders"       icon="󰃇"  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="pane"  binding="p"        desc="toggle pinned pane"        icon="󰤱"  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="pane"  binding="e"        desc="toggle embed pane"         icon=""  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="pane"  binding="t"        desc="toggle floating"           icon="󰹙"  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="pane"  binding="Alt t"    desc="toggle floating (sticky)"  icon="󰹙"  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="pane"  binding="z"        desc="toggle pane zoom"          icon="󱀅"  icon_color="#{{ index $p $r.mode.pane }}"
+                        wk mode="pane"  binding="x"        desc="close pane"                icon="󰅘"  icon_color="#{{ index $p $r.action.stop }}"
+                        wk mode="pane"  binding="Shift h"  desc="split pane left"           icon=""  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="pane"  binding="Shift j"  desc="split pane down"           icon=""  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="pane"  binding="Shift k"  desc="split pane up"             icon="􏬃"  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="pane"  binding="Shift l"  desc="split pane right"          icon=""  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="pane"  binding="Shift s"  desc="split pane stack"          icon="󰯋"  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="pane"  binding="Shift N"  desc="new pane"                  icon="󰯌"  icon_color="#{{ index $p $r.mode.tab }}"
+                        wk mode="pane"  binding="Shift P"  desc="quick launch new pane"     icon="󱓞"  icon_color="#{{ index $p $r.mode.tab }}"
 
-                        wk mode="scroll"  binding="/"        desc="Search scroll buffer …"  icon=""  icon_color="#{{ .theme.palette.blue }}"
-                        wk mode="scroll"  binding="Shift v"  desc="edit scrollback"         icon=""  icon_color="#fab387"
+                        wk mode="scroll"  binding="/"        desc="Search scroll buffer …"  icon=""  icon_color="#{{ $p.blue }}"
+                        wk mode="scroll"  binding="Shift v"  desc="edit scrollback"         icon=""  icon_color="#{{ index $p $r.action.caution }}"
 
-                        wk mode="search"  binding="Shift n"  desc="previous match"          icon=""  icon_color="#CBA6F7"
-                        wk mode="search"  binding="n"        desc="next match"              icon=""  icon_color="#CBA6F7"
-                        wk mode="search"  binding="Alt c"    desc="toggle case sensitive"   icon=""  icon_color="#F9E2AF"
-                        wk mode="search"  binding="Alt b"    desc="toggle word boundaries"  icon=""  icon_color="#F9E2AF"
-                        wk mode="search"  binding="Alt p"    desc="toggle line wrap"        icon="󰕇"  icon_color="#F9E2AF"
+                        wk mode="search"  binding="Shift n"  desc="previous match"          icon=""  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="search"  binding="n"        desc="next match"              icon=""  icon_color="#{{ index $p $r.action.primary }}"
+                        wk mode="search"  binding="Alt c"    desc="toggle case sensitive"   icon=""  icon_color="#{{ index $p $r.action.attention }}"
+                        wk mode="search"  binding="Alt b"    desc="toggle word boundaries"  icon=""  icon_color="#{{ index $p $r.action.attention }}"
+                        wk mode="search"  binding="Alt p"    desc="toggle line wrap"        icon="󰕇"  icon_color="#{{ index $p $r.action.attention }}"
 
-                        wk mode="scroll,search"  binding="k"         desc="scroll up"              icon="󰅃"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="j"         desc="scroll down"            icon="󰅀"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="u"         desc="half page scroll up"    icon="󰄿"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="d"         desc="half page scroll down"  icon="󰄼"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="b"         desc="page scroll up"         icon="󰶼"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="PageUp"    desc="page scroll up"         icon="󰶼"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="f"         desc="page scroll down"       icon="󰶹"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="PageDown"  desc="page scroll down"       icon="󰶹"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="g"         desc="scroll to top"          icon="󱥩"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="home"      desc="scroll to top"          icon="󱥩"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="Shift g"   desc="scroll to bottom"       icon="󱥧"  icon_color="#93E2D5"
-                        wk mode="scroll,search"  binding="end"       desc="scroll to bottom"       icon="󱥧"  icon_color="#93E2D5"
+                        wk mode="scroll,search"  binding="k"         desc="scroll up"              icon="󰅃"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="j"         desc="scroll down"            icon="󰅀"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="u"         desc="half page scroll up"    icon="󰄿"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="d"         desc="half page scroll down"  icon="󰄼"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="b"         desc="page scroll up"         icon="󰶼"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="PageUp"    desc="page scroll up"         icon="󰶼"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="f"         desc="page scroll down"       icon="󰶹"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="PageDown"  desc="page scroll down"       icon="󰶹"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="g"         desc="scroll to top"          icon="󱥩"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="home"      desc="scroll to top"          icon="󱥩"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="Shift g"   desc="scroll to bottom"       icon="󱥧"  icon_color="#{{ $p.teal }}"
+                        wk mode="scroll,search"  binding="end"       desc="scroll to bottom"       icon="󱥧"  icon_color="#{{ $p.teal }}"
                     }
 
 

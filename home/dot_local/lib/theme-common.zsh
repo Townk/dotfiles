@@ -40,27 +40,39 @@ theme::sgr_fg() {
   printf '\e[38;2;%d;%d;%dm' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
 }
 
+# theme::sgr_bg "#rrggbb" — a 24-bit set-background SGR. Used to paint a modal's
+# canvas (e.g. the dialog/which-key background) so a whole line/region fills the
+# color, not just the glyphs. Pair with `\e[K` (erase to EOL) to flood a row.
+theme::sgr_bg() {
+  local h="${1#\#}"
+  printf '\e[48;2;%d;%d;%dm' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
+}
+
 # theme::args — fill the global AI_THEME_ARGS with the --theme-* flags for
-# ai-playbook input (and the pager) from the canonical C_HEX_* palette. One source
-# for the dialog colors; the binary keeps its own defaults if these are absent.
+# ai-playbook input (and the pager) from the shared SEMANTIC roles (C_ROLE_*).
+# One source for the dialog colors; the binary keeps its own defaults if these
+# are absent. The button-* chrome is the `neutral` action intent (tab chrome);
+# danger/warning stay on the tuned dialog variants. Action INTENTS for buttons
+# are exported separately via ~/.config/theme/chezmoi-system.json (roles.action) for
+# TUIs to read directly.
 typeset -ga AI_THEME_ARGS
 theme::args() {
   AI_THEME_ARGS=(
-    --theme-accent         "$C_HEX_MAUVE"
-    --theme-border         "$C_HEX_BLUE"
+    --theme-accent         "$C_ROLE_UI_ACCENT"
+    --theme-border         "$C_ROLE_UI_BORDER_FOCUS"
     --theme-danger         "$C_HEX_DIALOG_DANGER"
     --theme-warning        "$C_HEX_DIALOG_WARNING"
-    --theme-base           "$C_HEX_BASE"
-    --theme-text           "$C_HEX_TEXT"
-    --theme-muted          "$C_HEX_OVERLAY0"
-    --theme-rule           "$C_HEX_SURFACE0"
-    --theme-key            "$C_HEX_WHITE"
-    --theme-field-border   "$C_HEX_SURFACE2"
+    --theme-base           "$C_ROLE_UI_DIALOG_BG"
+    --theme-text           "$C_ROLE_UI_FG"
+    --theme-muted          "$C_ROLE_UI_OVERLAY"
+    --theme-rule           "$C_ROLE_UI_SEPARATOR"
+    --theme-key            "$C_ROLE_UI_KEY"
+    --theme-field-border   "$C_ROLE_UI_BORDER"
     --theme-button-bg      "$C_HEX_TAB_BG"
     --theme-button-fg      "$C_HEX_TAB_FG"
     --theme-button-sel-bg  "$C_HEX_TAB_ACTIVE_BG"
     --theme-button-sel-fg  "$C_HEX_TAB_ACTIVE_FG"
-    --theme-scroll-thumb   "$C_HEX_OVERLAY1"
+    --theme-scroll-thumb   "$C_ROLE_UI_MUTED"
   )
 }
 

@@ -3,3 +3,7 @@
 # and fully recreatable by re-running the build, so it is not committed. The
 # colour theme (catppuccin-mocha-custom.js) IS committed — it is hand-authored.
 jetbrains-mono-nerd-font-custom.css
+
+# Blink colour theme — generated from theme.yaml by
+# custom-builds/theme/generate-theme.sh; not committed.
+chezmoi-system.js

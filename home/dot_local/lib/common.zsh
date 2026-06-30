@@ -50,11 +50,11 @@ fi
 # C_HEX_* (bare hex, UNGATED — passed as --theme-* args to ai-playbook input,
 # which owns its own tty, so they must exist even when our stdout is captured)
 # and their gated truecolor SGR twins C_* are generated from
-# .chezmoidata/theme.yaml into ~/.config/theme/palette.zsh by chezmoi — the
+# .chezmoidata/theme.yaml into ~/.config/theme/chezmoi-system.zsh by chezmoi — the
 # single styling source of truth. THEME_* tokens (theme-common.zsh) compose from
 # these. THEME_PALETTE_FILE overrides the path; the ShellSpec suite renders the
 # palette to a temp and points it there, so tests don't require `chezmoi apply`.
-source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/palette.zsh}"
+source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.zsh}"
 
 # --- logging ----------------------------------------------------------------
 # One house style across every tool. info/ok go to stdout; warnings and errors

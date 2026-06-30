@@ -1,0 +1,23 @@
+{{- $p := index .theme.palettes .theme.active -}}
+// chezmoi-system — GENERATED from .chezmoidata/theme.yaml. Matched to WezTerm's scheme.
+  t.prefs_.set('background-color', '#{{ $p.base }}');   // Base
+  t.prefs_.set('foreground-color', '#{{ $p.text }}');   // Text
+  t.prefs_.set('cursor-color',     '#{{ $p.rosewater }}');   // Rosewater
+  t.prefs_.set('color-palette-overrides', [
+    '#{{ $p.surface1 }}', // 0  black         (Surface1)
+    '#{{ $p.red }}', // 1  red
+    '#{{ $p.green }}', // 2  green
+    '#{{ $p.yellow }}', // 3  yellow
+    '#{{ $p.blue }}', // 4  blue
+    '#{{ $p.pink }}', // 5  magenta       (Pink)
+    '#{{ $p.teal }}', // 6  cyan          (Teal)
+    '#{{ $p.subtext1 }}', // 7  white         (Subtext1)
+    '#{{ $p.surface2 }}', // 8  bright black  (Surface2) ← your autosuggest grey
+    '#{{ $p.red }}', // 9  bright red
+    '#{{ $p.green }}', // 10 bright green
+    '#{{ $p.yellow }}', // 11 bright yellow
+    '#{{ $p.blue }}', // 12 bright blue
+    '#{{ $p.pink }}', // 13 bright magenta
+    '#{{ $p.teal }}', // 14 bright cyan
+    '#{{ $p.subtext0 }}', // 15 bright white  (Subtext0)
+  ]);

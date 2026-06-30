@@ -1,11 +1,17 @@
 #!/usr/bin/env zsh
+{{ $p := index .theme.palettes .theme.active -}}
+{{ $r := .theme.roles -}}
 # palette.zsh — GENERATED from .chezmoidata/theme.yaml by chezmoi. DO NOT EDIT.
 #
-# The single-source palette projected for the shell layer:
+# The single-source palette projected for the shell layer, resolved from the
+# ACTIVE theme ({{ $p.meta.name }}):
 #   * C_HEX_*  — bare hex, ungated (always set; safe when stdout is captured,
 #     e.g. passed as --theme-* args to ai-playbook input). The full canonical
-#     Catppuccin set, plus the dialog variants (C_HEX_DIALOG_*) and the zj-hud
+#     vocabulary, plus the dialog variants (C_HEX_DIALOG_*) and the zj-hud
 #     tab chrome (C_HEX_TAB_*).
+#   * C_ROLE_* — bare hex for the shared SEMANTIC roles (ui/state/action),
+#     resolved from the active palette. Prefer these over raw slots so a theme
+#     switch re-colors callers automatically.
 #   * C_*      — truecolor SGR foreground twins for the dialog/log family, gated
 #     on an interactive stdout. Built with builtin arithmetic (no subshells), so
 #     sourcing this at interactive startup is fork-free.
@@ -14,47 +20,58 @@
 [ -n "${__THEME_PALETTE_LOADED:-}" ] && return 0
 __THEME_PALETTE_LOADED=1
 
-# --- canonical Catppuccin Mocha (bare hex, ungated) -------------------------
-C_HEX_ROSEWATER="#{{ .theme.palette.rosewater }}"
-C_HEX_FLAMINGO="#{{ .theme.palette.flamingo }}"
-C_HEX_PINK="#{{ .theme.palette.pink }}"
-C_HEX_MAUVE="#{{ .theme.palette.mauve }}"
-C_HEX_RED="#{{ .theme.palette.red }}"
-C_HEX_MAROON="#{{ .theme.palette.maroon }}"
-C_HEX_PEACH="#{{ .theme.palette.peach }}"
-C_HEX_YELLOW="#{{ .theme.palette.yellow }}"
-C_HEX_GREEN="#{{ .theme.palette.green }}"
-C_HEX_TEAL="#{{ .theme.palette.teal }}"
-C_HEX_SKY="#{{ .theme.palette.sky }}"
-C_HEX_SAPPHIRE="#{{ .theme.palette.sapphire }}"
-C_HEX_BLUE="#{{ .theme.palette.blue }}"
-C_HEX_LAVENDER="#{{ .theme.palette.lavender }}"
-C_HEX_TEXT="#{{ .theme.palette.text }}"
-C_HEX_SUBTEXT1="#{{ .theme.palette.subtext1 }}"
-C_HEX_SUBTEXT0="#{{ .theme.palette.subtext0 }}"
-C_HEX_SUBTEXT="#{{ .theme.palette.subtext0 }}"
-C_HEX_OVERLAY2="#{{ .theme.palette.overlay2 }}"
-C_HEX_OVERLAY1="#{{ .theme.palette.overlay1 }}"
-C_HEX_OVERLAY0="#{{ .theme.palette.overlay0 }}"
-C_HEX_SURFACE2="#{{ .theme.palette.surface2 }}"
-C_HEX_SURFACE1="#{{ .theme.palette.surface1 }}"
-C_HEX_SURFACE0="#{{ .theme.palette.surface0 }}"
-C_HEX_BASE="#{{ .theme.palette.base }}"
-C_HEX_MANTLE="#{{ .theme.palette.mantle }}"
-C_HEX_CRUST="#{{ .theme.palette.crust }}"
-C_HEX_WHITE="#{{ .theme.palette.white }}"
+# --- canonical vocabulary (bare hex, ungated) ------------------------------
+C_HEX_ROSEWATER="#{{ $p.rosewater }}"
+C_HEX_FLAMINGO="#{{ $p.flamingo }}"
+C_HEX_PINK="#{{ $p.pink }}"
+C_HEX_MAUVE="#{{ $p.mauve }}"
+C_HEX_RED="#{{ $p.red }}"
+C_HEX_MAROON="#{{ $p.maroon }}"
+C_HEX_PEACH="#{{ $p.peach }}"
+C_HEX_YELLOW="#{{ $p.yellow }}"
+C_HEX_GREEN="#{{ $p.green }}"
+C_HEX_TEAL="#{{ $p.teal }}"
+C_HEX_SKY="#{{ $p.sky }}"
+C_HEX_SAPPHIRE="#{{ $p.sapphire }}"
+C_HEX_BLUE="#{{ $p.blue }}"
+C_HEX_LAVENDER="#{{ $p.lavender }}"
+C_HEX_TEXT="#{{ $p.text }}"
+C_HEX_SUBTEXT1="#{{ $p.subtext1 }}"
+C_HEX_SUBTEXT0="#{{ $p.subtext0 }}"
+C_HEX_SUBTEXT="#{{ $p.subtext0 }}"
+C_HEX_OVERLAY2="#{{ $p.overlay2 }}"
+C_HEX_OVERLAY1="#{{ $p.overlay1 }}"
+C_HEX_OVERLAY0="#{{ $p.overlay0 }}"
+C_HEX_SURFACE2="#{{ $p.surface2 }}"
+C_HEX_SURFACE1="#{{ $p.surface1 }}"
+C_HEX_SURFACE0="#{{ $p.surface0 }}"
+C_HEX_BASE="#{{ $p.base }}"
+C_HEX_MANTLE="#{{ $p.mantle }}"
+C_HEX_CRUST="#{{ $p.crust }}"
+C_HEX_WHITE="#{{ $p.white }}"
 # Semantic alias kept for back-compat (canonical red).
-C_HEX_DANGER="#{{ .theme.palette.red }}"
+C_HEX_DANGER="#{{ $p.red }}"
 
 # --- dialog variant accents (brighter red / warmer yellow than the base) ----
-C_HEX_DIALOG_DANGER="#{{ .theme.extended.dialog.danger }}"
-C_HEX_DIALOG_WARNING="#{{ .theme.extended.dialog.warning }}"
+C_HEX_DIALOG_DANGER="#{{ $p.dialog.danger }}"
+C_HEX_DIALOG_WARNING="#{{ $p.dialog.warning }}"
 
 # --- zj-hud status-bar tab chrome -------------------------------------------
-C_HEX_TAB_BG="#{{ .theme.extended.tab.bg }}"
-C_HEX_TAB_FG="#{{ .theme.extended.tab.fg }}"
-C_HEX_TAB_ACTIVE_BG="#{{ .theme.extended.tab.active_bg }}"
-C_HEX_TAB_ACTIVE_FG="#{{ .theme.extended.tab.active_fg }}"
+C_HEX_TAB_BG="#{{ $p.tab.bg }}"
+C_HEX_TAB_FG="#{{ $p.tab.fg }}"
+C_HEX_TAB_ACTIVE_BG="#{{ $p.tab.active_bg }}"
+C_HEX_TAB_ACTIVE_FG="#{{ $p.tab.active_fg }}"
+
+# --- semantic roles (bare hex; resolved from the active palette) ------------
+{{- range $k, $v := $r.ui }}
+C_ROLE_UI_{{ $k | upper }}="#{{ index $p $v }}"
+{{- end }}
+{{- range $k, $v := $r.state }}
+C_ROLE_STATE_{{ $k | upper }}="#{{ index $p $v }}"
+{{- end }}
+{{- range $k, $v := $r.action }}
+C_ROLE_ACTION_{{ $k | upper }}="#{{ index $p $v }}"
+{{- end }}
 
 # --- truecolor SGR foreground twins (gated; fork-free arithmetic) -----------
 if [ -t 1 ]; then

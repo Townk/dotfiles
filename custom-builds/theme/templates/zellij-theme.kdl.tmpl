@@ -1,0 +1,146 @@
+{{- $p := index .theme.palettes .theme.active -}}
+{{- $r := .theme.roles -}}
+{{- $text := includeTemplate "hex2rgb.tmpl" $p.text | trim -}}
+{{- $base := includeTemplate "hex2rgb.tmpl" $p.base | trim -}}
+{{- $red := includeTemplate "hex2rgb.tmpl" $p.red | trim -}}
+{{- $blue := includeTemplate "hex2rgb.tmpl" $p.blue | trim -}}
+{{- $green := includeTemplate "hex2rgb.tmpl" $p.green | trim -}}
+{{- $mauve := includeTemplate "hex2rgb.tmpl" $p.mauve | trim -}}
+{{- $surface1 := includeTemplate "hex2rgb.tmpl" $p.surface1 | trim -}}
+{{- $subtext0 := includeTemplate "hex2rgb.tmpl" $p.subtext0 | trim -}}
+{{- $pink := includeTemplate "hex2rgb.tmpl" $p.pink | trim -}}
+{{- $peach := includeTemplate "hex2rgb.tmpl" $p.peach | trim -}}
+{{- $sapphire := includeTemplate "hex2rgb.tmpl" $p.sapphire | trim -}}
+{{- $border_focus := includeTemplate "hex2rgb.tmpl" (index $p $r.ui.border_focus) | trim -}}
+// catppuccin-mocha-dialog — GENERATED from .chezmoidata/theme.yaml by chezmoi.
+// DO NOT EDIT. The active theme ({{ $p.meta.name }}) for Zellij, with the ACTIVE
+// pane frame recolored to the ui.border_focus role instead of the stock green.
+//
+// Why a whole theme: zellij has no partial theme override and no per-pane frame
+// color, so to change the floating-modal border color we must ship a full theme
+// and point `theme` at it (config.kdl). Only `frame_selected`/`frame_highlight`
+// differ from the upstream catppuccin-mocha; everything else mirrors it. KDL
+// color values are "R G B" triples (theme-apply substitutes overrides on them).
+//
+// Frames: active = ui.border_focus; inactive frames are auto-dimmed by zellij.
+// With `pane_frames false`, the only frame shown is the active modal.
+themes {
+    chezmoi-system-base {
+        text_unselected {
+            base {{ $text }}
+            background {{ $base }}
+            emphasis_0 {{ $red }}
+            emphasis_1 {{ $blue }}
+            emphasis_2 {{ $green }}
+            emphasis_3 {{ $mauve }}
+        }
+        text_selected {
+            base {{ $text }}
+            background {{ $surface1 }}
+            emphasis_0 {{ $red }}
+            emphasis_1 {{ $blue }}
+            emphasis_2 {{ $green }}
+            emphasis_3 {{ $mauve }}
+        }
+        ribbon_selected {
+            base {{ $base }}
+            background {{ $green }}
+            emphasis_0 {{ $red }}
+            emphasis_1 {{ $base }}
+            emphasis_2 {{ $mauve }}
+            emphasis_3 {{ $blue }}
+        }
+        ribbon_unselected {
+            base {{ $base }}
+            background {{ $subtext0 }}
+            emphasis_0 {{ $red }}
+            emphasis_1 {{ $base }}
+            emphasis_2 {{ $text }}
+            emphasis_3 {{ $pink }}
+        }
+        table_title {
+            base {{ $green }}
+            background 0
+            emphasis_0 {{ $red }}
+            emphasis_1 {{ $blue }}
+            emphasis_2 {{ $green }}
+            emphasis_3 {{ $mauve }}
+        }
+        table_cell_selected {
+            base {{ $text }}
+            background {{ $surface1 }}
+            emphasis_0 {{ $red }}
+            emphasis_1 {{ $blue }}
+            emphasis_2 {{ $green }}
+            emphasis_3 {{ $mauve }}
+        }
+        table_cell_unselected {
+            base {{ $text }}
+            background {{ $base }}
+            emphasis_0 {{ $red }}
+            emphasis_1 {{ $blue }}
+            emphasis_2 {{ $green }}
+            emphasis_3 {{ $mauve }}
+        }
+        list_selected {
+            base {{ $text }}
+            background {{ $surface1 }}
+            emphasis_0 {{ $red }}
+            emphasis_1 {{ $blue }}
+            emphasis_2 {{ $green }}
+            emphasis_3 {{ $mauve }}
+        }
+        list_unselected {
+            base {{ $text }}
+            background {{ $base }}
+            emphasis_0 {{ $red }}
+            emphasis_1 {{ $blue }}
+            emphasis_2 {{ $green }}
+            emphasis_3 {{ $mauve }}
+        }
+        frame_selected {
+            base {{ $border_focus }}
+            background 0
+            emphasis_0 {{ $border_focus }}
+            emphasis_1 {{ $red }}
+            emphasis_2 0
+            emphasis_3 0
+        }
+        frame_highlight {
+            base {{ $peach }}
+            background 0
+            emphasis_0 {{ $peach }}
+            emphasis_1 0
+            emphasis_2 0
+            emphasis_3 0
+        }
+        exit_code_success {
+            base {{ $green }}
+            background 0
+            emphasis_0 {{ $blue }}
+            emphasis_1 0
+            emphasis_2 0
+            emphasis_3 0
+        }
+        exit_code_error {
+            base {{ $red }}
+            background 0
+            emphasis_0 {{ $peach }}
+            emphasis_1 0
+            emphasis_2 0
+            emphasis_3 0
+        }
+        multiplayer_user_colors {
+            player_1 {{ $mauve }}
+            player_2 {{ $blue }}
+            player_3 0
+            player_4 {{ $peach }}
+            player_5 {{ $sapphire }}
+            player_6 0
+            player_7 {{ $red }}
+            player_8 0
+            player_9 0
+            player_10 0
+        }
+    }
+}

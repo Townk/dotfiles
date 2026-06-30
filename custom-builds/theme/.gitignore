@@ -1,0 +1,3 @@
+# Fetch/patch cache (catppuccin sources for the nvim colorscheme), kept across
+# runs like custom-builds/nerd-fonts/build/ — pulled to latest, never committed.
+/build/

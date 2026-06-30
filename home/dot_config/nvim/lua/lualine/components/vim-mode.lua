@@ -15,24 +15,41 @@
 
 local M = require("lualine.component"):extend()
 
+-- Pull a color from a highlight group so mode colors track the active colorscheme
+-- (which is generated from .chezmoidata/theme.yaml). One Dark literals are the
+-- fallback only when a group is unset.
+local function extract(group, attr)
+  local hl = vim.api.nvim_get_hl(0, { name = group, link = false })
+  if hl[attr] then
+    return string.format("#%06x", hl[attr])
+  end
+  return nil
+end
+
 local default_options = {
   symbols = {
     bar = "▎",
     circle = "●",
-  },
-  mode_colors = {
-    normal = "#61afef",
-    insert = "#98c379",
-    visual = "#e5c07b",
-    replace = "#e06c75",
-    command = "#c678dd",
-    terminal = "#56b6c2",
   },
 }
 
 function M:init(options)
   M.super.init(self, options)
   self.options = vim.tbl_deep_extend("keep", options or {}, default_options)
+
+  -- Mode colors follow the colorscheme (same highlight-group mapping the
+  -- doom-modeline theme uses), so the indicator changes with theme.yaml.
+  self.options.mode_colors = self.options.mode_colors
+    or {
+      normal = extract("Function", "fg") or "#61afef",
+      insert = extract("String", "fg") or "#98c379",
+      visual = extract("DiagnosticWarn", "fg") or "#e5c07b",
+      replace = extract("DiagnosticError", "fg") or "#e06c75",
+      command = extract("Keyword", "fg") or "#c678dd",
+      terminal = extract("DiagnosticInfo", "fg") or "#56b6c2",
+    }
+  -- Inverted swatch foreground = the editor background (was a hardcoded value).
+  self.inverted_fg = extract("Normal", "bg") or "#282c34"
 
   -- 1. Mode Map
   self.mode_map = {
@@ -73,7 +90,7 @@ function M:init(options)
   for mode_name, color_hex in pairs(self.options.mode_colors) do
     self.highlights[mode_name] = {
       standard = self:create_hl({ fg = color_hex }, "mode_" .. mode_name),
-      inverted = self:create_hl({ fg = "#282c34", bg = color_hex }, "mode_inv_" .. mode_name),
+      inverted = self:create_hl({ fg = self.inverted_fg, bg = color_hex }, "mode_inv_" .. mode_name),
     }
   end
 end

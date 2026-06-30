@@ -72,6 +72,7 @@ ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_zellij_bin || true)}"
 title=""
 inject=0
 capture=""
+no_chrome=0
 cmd=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -85,6 +86,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --inject)
       inject=1
+      shift
+      ;;
+    --no-chrome)
+      # Borderless "fzf owns the box" modals: the target (fzf) renders the whole
+      # modal — its own border is the outer box, the title goes on its border
+      # label — so this script skips the frame-era title block and just hands the
+      # title to the target via ZJ_MODAL_TITLE.
+      no_chrome=1
       shift
       ;;
     --capture)
@@ -208,11 +217,26 @@ source "$HOME/.local/lib/theme-common.zsh"
 # is read from the live pane via /dev/tty's TIOCGWINSZ (stty): zellij
 # doesn't reliably export $COLUMNS into the spawned pane and `tput cols`
 # can fall back to terminfo's 80, leaving the rule short of the frame.
-if [[ -n "$title" ]]; then
-  rule="$(theme::rule)"
-  h1="$THEME_H1"
-  printf '\n  %s▓▓▓ %s%s\n' "$h1" "$title" "$THEME_RESET"
-  printf '  %s%s%s\n' "$THEME_SEPARATOR" "$rule" "$THEME_RESET"
+if (( no_chrome )); then
+  # "fzf owns the box": hand the title to the target (pick-common turns it into
+  # the fzf border label) and draw NO chrome here — fzf renders the whole modal.
+  [[ -n "$title" ]] && export ZJ_MODAL_TITLE="$title"
+else
+  # Framed modals (e.g. the confirm dialogs): paint the interior with the dialog
+  # background (mantle) so the title block and the gaps around the target are
+  # uniform — not just the glyphs. `\e[2J` floods every cell with the active bg;
+  # we keep the bg set so areas the target doesn't repaint stay mantle. (The
+  # zellij FRAME border itself can't be tinted per-pane; that's why pickers use
+  # the borderless --no-chrome path above.)
+  dialog_bg="$(theme::sgr_bg "$C_ROLE_UI_DIALOG_BG")"
+  printf '%s\e[2J\e[H' "$dialog_bg"
+  if [[ -n "$title" ]]; then
+    rule="$(theme::rule)"
+    printf '%s\e[K\n' "$dialog_bg"
+    printf '%s  %s▓▓▓ %s%s\e[K\n' "$dialog_bg" "$THEME_H1" "$title" "$dialog_bg"
+    printf '%s  %s%s%s\e[K\n' "$dialog_bg" "$THEME_SEPARATOR" "$rule" "$dialog_bg"
+  fi
+  printf '\e[39;22m'
 fi
 
 if [[ -n "$capture" ]]; then

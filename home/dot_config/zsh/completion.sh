@@ -47,8 +47,8 @@ zstyle ':completion:*' menu no
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|=*' 'l:|=* r:|=*'
 zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
 zstyle ':completion:*' group-name ''
-zstyle ':completion:*:descriptions' format "%F{$C_HEX_YELLOW}-- %d --%f"
-zstyle ':completion:*:warnings' format "%F{$C_HEX_RED}-- no matches --%f"
+zstyle ':completion:*:descriptions' format "%F{$C_ROLE_STATE_WARNING}-- %d --%f"
+zstyle ':completion:*:warnings' format "%F{$C_ROLE_STATE_ERROR}-- no matches --%f"
 zstyle ':completion:*' completer _complete _match _approximate
 zstyle ':completion:*' use-cache on
 zstyle ':completion:*' cache-path "${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompcache"
@@ -65,14 +65,14 @@ export FZF_DEFAULT_COMMAND="fd --type f"
 # value with its own quote/newline-aware tokenizer, so single-quoted tokens
 # (the ones containing spaces) are preserved as single arguments.
 # fzf colors come from the single-source palette (generated from theme.yaml).
-source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/palette.zsh}"
+source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.zsh}"
 export FZF_DEFAULT_OPTS="
---color=bg:${C_HEX_BASE} --color=bg+:${C_HEX_SURFACE0}
---color=fg:${C_HEX_TEXT} --color=fg+:regular:${C_HEX_TEXT}
---color=hl:${C_HEX_DANGER} --color=hl+:regular:${C_HEX_DANGER}
---color=prompt:${C_HEX_MAUVE} --color=pointer:${C_HEX_ROSEWATER} --color=marker:${C_HEX_LAVENDER}
---color=info:${C_HEX_MAUVE} --color=gutter:${C_HEX_BASE} --color=header:${C_HEX_DANGER}
---color=spinner:${C_HEX_ROSEWATER} --color=border:${C_HEX_SURFACE0}
+--color=bg:${C_ROLE_UI_BG} --color=bg+:${C_ROLE_UI_SURFACE}
+--color=fg:${C_ROLE_UI_FG} --color=fg+:regular:${C_ROLE_UI_FG}
+--color=hl:${C_ROLE_STATE_ERROR} --color=hl+:regular:${C_ROLE_STATE_ERROR}
+--color=prompt:${C_ROLE_UI_ACCENT} --color=pointer:${C_ROLE_UI_CURSOR} --color=marker:${C_HEX_LAVENDER}
+--color=info:${C_ROLE_UI_ACCENT} --color=gutter:${C_ROLE_UI_BG} --color=header:${C_ROLE_STATE_ERROR}
+--color=spinner:${C_ROLE_UI_CURSOR} --color=border:${C_ROLE_UI_BORDER}
 --filepath-word --border --height=~40% --layout=reverse --info=inline-right
 --exit-0 --select-1 --padding=0,2,0,0
 --prompt '    ' --pointer ➔ --marker ✔

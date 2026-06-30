@@ -1,7 +1,8 @@
 # bat config — flags applied to every `bat` invocation. One arg per
 # line; supports `#` comments. See `man bat` for the full option set.
 
-# Match the terminal's Catppuccin Mocha theme. Other previewers and
-# tools share this palette via their own configs (fzf in zshrc, yazi
-# in dot_config/yazi/package.toml, etc.).
---theme="Catppuccin Mocha"
+# Match the unified theme. `chezmoi-system` is generated from .chezmoidata/theme.yaml
+# (by custom-builds/theme/generate-theme.sh) and registered via
+# `bat cache --build` (run_onchange script). Other previewers/tools share this
+# palette via their own configs (fzf in zshrc, yazi syntect preview, etc.).
+--theme="chezmoi-system"

@@ -578,7 +578,7 @@
   # Don't show the number of background jobs.
   typeset -g POWERLEVEL9K_BACKGROUND_JOBS_VERBOSE=false
   # Background jobs color.
-  typeset -g POWERLEVEL9K_BACKGROUND_JOBS_FOREGROUND="#ffffff"
+  typeset -g POWERLEVEL9K_BACKGROUND_JOBS_FOREGROUND="$C_ROLE_UI_KEY"
   # Custom icon.
   typeset -g POWERLEVEL9K_BACKGROUND_JOBS_VISUAL_IDENTIFIER_EXPANSION='󰑮 '
 

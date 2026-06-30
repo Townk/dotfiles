@@ -87,10 +87,11 @@ pick_symbols::require_db
 # height + side padding for its floating pane). The hint line shows the submit
 # keys, the insert-and-stay (Alt) keys, and — only with --multi — the marking
 # keys (so fzf never adds a second header row).
-hints=$'󰘴 G: glyph  ·  󰘴 N: name  ·  󰘴 P: code-point  ·  󰘵 G/N/P: insert'
+hb=( "󰘴 G" glyph "󰘴 N" name "󰘴 P" code-point "󰘵 G/N/P" insert )
 if ((multi)); then
-  hints+=$'  ·  ⭾ : select  ·  󰘴 A: select-all'
+  hb+=( ⭾ select "󰘴 A" select-all )
 fi
+hints="$(pick::hints "${hb[@]}")"
 
 pick_args=(
   --header "Pick a glyph"

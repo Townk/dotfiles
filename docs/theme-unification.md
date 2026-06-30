@@ -1,26 +1,40 @@
 # Theme Unification — chezmoi dotfiles repo
 
-A design for a **single source of truth** for color across every app, CLI, and
-shell in this repo, with thin per-format projections that each consumer reads.
-Status: **proposal** (no code changes yet). Decisions baked in below:
+A **single source of truth** for color across every app, CLI, and shell in this
+repo: one switchable, role-based schema in `home/.chezmoidata/theme.yaml`, with
+thin per-format projections (and per-app generated themes) that each consumer
+reads. Status: **implemented**. Editing one key — `theme.active` — and running
+`chezmoi apply` re-colors *every* terminal surface; switching to a light palette
+also flips each app's light/dark mode.
 
-- **Migrate** the non-Catppuccin surfaces (prompt, statusline, parts of the
-  Zellij bar) to true Catppuccin Mocha → one visual identity everywhere.
-- Source of truth covers the **Mocha base palette + all extension sets**
-  (tabs, tints, diff, tags, tool-result tints, custom accents).
-- **Hybrid** mechanism: one chezmoi `data` file; `*.tmpl` configs read it
-  directly; non-template/foreign-language consumers read thin generated
-  `palette.*` modules.
-- **One theme identity:** every app points at a single, flavor-independent theme
-  name (**`system`**), not `catppuccin-mocha`, so re-skinning never renames
-  anything — only `theme.yaml` changes (§4).
+The schema (full detail in §4.1):
+
+- **`theme.active`** names the palette to render — the only switch.
+- **`theme.palettes.<name>`** — the switchable palette files. Each fills the SAME
+  named vocabulary (the 26 Catppuccin slots + `white`) plus `meta.appearance`
+  (`dark`/`light`) and the bespoke per-theme sets (`ansi_bright`, `alternate_bg`
+  washes, `tags`, `tab`, `dialog`, `diff`, `pi`, `find_highlight`). Ships with
+  `catppuccin-mocha` (dark) and `catppuccin-latte` (light).
+- **`theme.roles`** — the shared semantic map (CONSTANT across palettes): every
+  value is a vocabulary slot resolved against the active palette. Generators read
+  THESE roles (`ui`, `state`, `action`, `mode`, `diff`, `ansi`, `syntax`), never
+  raw slot names, so a switch re-colors everything.
+- **No app is pinned to a built-in/vendored theme.** ghostty, wezterm, bottom,
+  zellij, bat, yazi, delta, glow, pi, tealdeer all render a `system`/generated
+  theme produced from `theme.yaml`; nvim renders a `chezmoi-system` colorscheme
+  that **vendors catppuccin/nvim's highlight-group definitions** (MIT) and feeds
+  them OUR palette via injected `C`/`O`/`U` globals — catppuccin's full coverage
+  (~937 groups: editor + treesitter + LSP + plugins) with NO catppuccin runtime
+  dependency, and still theme-agnostic (a custom-named palette drives it).
 - **Runtime override layer:** a loose, host-pushed `~/.config/theme/override.toml`
   lets a session use different colors (e.g. match the WezTerm SSH tint) without
   re-applying chezmoi — resolved at session start (§4.8).
+- **Guardrail:** `make lint` (`tests/lint-theme.sh`) fails on any raw hex outside
+  `theme.yaml`, and `make test` runs it before the suite (§7).
 
-> The hard part — apps that ship **their own copy** of the palette (`bat`,
-> `ghostty`, `bottom`, the yazi flavor, nvim's plugin) and ignore `theme.yaml` —
-> is addressed head-on in **§4.4**.
+> How the apps that ship **their own copy** of the palette (`bat`, `ghostty`,
+> `bottom`, the yazi flavor, nvim's plugin) are made to follow `theme.yaml` is in
+> **§4.4**. Switching is covered in §4.1; the role taxonomy in §4.1.1.
 
 ---
 
@@ -103,7 +117,9 @@ Hammerspoon Stream Deck icon gradients (`streamdeck/presets.lua`, `renderer.lua`
 
 ## 3. Canonical palette (the values to author once)
 
-Standard Catppuccin Mocha. This is the literal content of `theme.palette`.
+Standard Catppuccin Mocha — the content of `theme.palettes.catppuccin-mocha` (the
+default `active` palette). `theme.palettes.catppuccin-latte` mirrors this shape
+with the light flavor's values.
 
 | Token | Hex | RGB |
 |---|---|---|
@@ -144,67 +160,96 @@ name means "whatever this machine's chezmoi config defines," so changing flavor
 or tweaking a color never renames anything; only `theme.yaml` changes
 (`ghostty theme = system`, `wezterm color_scheme = "system"`, `bat --theme=system`,
 `zellij theme "system"`, the generated yazi `theme.toml`, zj-hud/ai-playbook
-config). nvim is the one exception — the `catppuccin/nvim` plugin owns the
-colorscheme name, so there we keep the plugin and inject `color_overrides` (§4.4)
-rather than renaming. `system` is the recommended identifier; `chezmoi` or a
+config). nvim follows the same idea with its own generated colorscheme,
+`chezmoi-system` (§4.4) — no vendored plugin. `system` is the recommended
+identifier; `chezmoi` or a
 personal handle work equally well — it's a one-line change in the templates.
 
 ### 4.1 Source of truth: `home/.chezmoidata/theme.yaml`
 
 chezmoi `data` files are visible to **every** `*.tmpl` in the repo — the natural
-home for a global palette. One file, three sections:
+home for a global palette. Two halves: per-theme **palettes** (switchable) and a
+shared **role map** (constant).
 
 ```yaml
 theme:
-  # Canonical Catppuccin Mocha — the ONLY hex literals in the repo.
-  palette:
-    base:     "1e1e2e"
-    mantle:   "181825"
-    crust:    "11111b"
-    text:     "cdd6f4"
-    mauve:    "cba6f7"
-    blue:     "89b4fa"
-    red:      "f38ba8"
-    green:    "a6e3a1"
-    yellow:   "f9e2af"
-    peach:    "fab387"
-    # … all 26 tokens from §3 …
+  active: catppuccin-mocha          # <- the ONLY switch
 
-  # Role → palette key. Promotes theme-common.zsh's THEME_* tokens to data so
-  # EVERY language (not just zsh) gets the semantic layer.
-  semantic:
-    accent:      mauve     # cursor / prompt / active marker
-    border:      blue      # focused frame / field border accent
-    danger:      red
-    warning:     yellow
-    success:     green
-    info:        sapphire
-    muted:       overlay0  # dim labels
-    separator:   surface0  # rules
-    key:         text      # keybinding chord keys
-    title:       mauve
+  palettes:
+    catppuccin-mocha:
+      meta: { name: "Catppuccin Mocha", appearance: dark }
+      # named vocabulary = the 26 Catppuccin slots + white (all hex, no '#')
+      rosewater: "f5e0dc"  ...  mauve: "cba6f7"  ...  base: "1e1e2e"  white: "ffffff"
+      # bespoke per-theme sets:
+      ansi_bright:  { red: "f37799", green: "89d88b", ... }   # terminal slots 9-14
+      alternate_bg: { cyan: "1c232f", blue: "1d1f33", ... }   # SSH/window tint washes
+      tags:         { red: "ee7b70", ... }                    # yazi mactag (Finder tags)
+      tab:          { bg: "282c41", fg: "9b9fc1", ... }       # zj-hud tab chrome
+      dialog:       { danger: "ff5555", warning: "e5bf7b" }   # loud dialog variants
+      diff:         { plus_bg: "053f1f", minus_bg: "3e151d", ... }  # delta git-diff
+      pi:           { thinking: "d77757", tool_success_bg: "1e2e1e", ... }
+      find_highlight: "3e5767"
+    catppuccin-latte:
+      meta: { name: "Catppuccin Latte", appearance: light }
+      base: "eff1f5"  text: "4c4f69"  ...  white: "11111b"    # light flavor
+      # ... same bespoke sets, light-appropriate values ...
 
-  # The legitimate add-ons (§2.3). Hex unless noted.
-  extended:
-    tab:   { bg: "282c41", fg: "9b9fc1", active_bg: "656a83", active_fg: "ffffff" }
-    tints: { cyan: "1c232f", blue: "1d1f33", amber: "2a241f",
-             teal: "16302b", purple: "241c30", grey: "2a2a32" }
-    tool:  { success_bg: "1e2e1e", error_bg: "321e1e" }
-    diff:  { plus_bg: "053f1f", plus_emph_fg: "2bfa84", plus_emph_bg: "00703e",
-             minus_bg: "3e151d", minus_emph_fg: "ff878a", minus_emph_bg: "9e1125",
-             ln_minus: "ff2e43", ln_minus_bg: "26141a",
-             ln_plus: "00be49",  ln_plus_bg: "04211b" }
-    tags:  { red: "ee7b70", orange: "f5bd5c", yellow: "fbe764",
-             green: "91fc87", blue: "5fa3f8", purple: "cb88f8" }
-    accents: { earth_maroon: "D77757", scroll: "cba6f7" }  # scroll migrated: was #7b5bd6
+  # Shared semantic map — CONSTANT across palettes; every value is a vocabulary
+  # slot resolved against the ACTIVE palette. Generators read THESE.
+  roles:
+    ui:     { bg: base, surface: surface0, fg: text, accent: mauve,
+              border: surface2, border_focus: blue, border_inactive: surface1,
+              hint: overlay1, input_fg: text, placeholder: overlay0,
+              cursor: rosewater, selection: surface2, link: blue, key: white, ... }
+    state:  { error: red, warning: yellow, success: green, info: sapphire, hint: teal }
+    action: { primary: mauve, run: green, confirm: green, stop: red,
+              caution: peach, attention: yellow, info: sapphire, neutral: overlay1 }
+    mode:   { normal: green, locked: peach, pane: blue, tab: green, resize: mauve,
+              move: yellow, search: blue, scroll: lavender, rename: yellow,
+              session: red, prompt: red, tmux: red }
+    diff:   { added: green, removed: red, changed: peach }
+    ansi:   { black: surface1, red: red, ..., bright_white: subtext0 }
+    syntax: { keyword: mauve, string: green, comment: overlay2, function: blue, ... }
 ```
+
+**Switching mechanism:** templates resolve the active palette once —
+`{{ $p := index .theme.palettes .theme.active }}` — then resolve roles against it
+(`{{ index $p $r.ui.accent }}`). Switch = edit `theme.active` + `chezmoi apply`.
+Because every palette fills the same vocabulary, slot refs (`$p.mauve`) and role
+refs both follow the switch.
 
 Notes:
 - Store hex **without** `#` so templates can emit `#{{ . }}`, `0x{{ . }}`, or
-  split to `R G B` as each syntax needs.
-- `extended.tints` replaces `tint-palette.toml` as the source; that file becomes
-  a generated projection (§4.3) so `wezterm.lua`/`system-onboard` keep their
-  current interface.
+  split to `R G B` (the `.chezmoitemplates/hex2rgb.tmpl` helper) as each syntax
+  needs.
+- `alternate_bg` (the SSH/window tint washes) is **per-theme + appearance-aware**:
+  a dark theme keeps them near a dark base, a light theme makes them light. The
+  per-machine layer (`terminal-location.zsh` / onboard color) only selects WHICH
+  name a box uses; the active theme supplies the color, and `tint-palette.toml` is
+  generated from it (§4.3).
+
+#### 4.1.1 Role taxonomy (the app-facing contract)
+
+Roles are grouped by axis so a generator picks the right one:
+
+- **`ui`** — chrome: backgrounds (`bg`/`bg_dim`/`bg_deep`/`surface`/`surface_hi`),
+  foregrounds (`fg`/`fg_dim`/`muted`/`overlay`), `accent`, borders (`border`
+  resting, `border_focus` active/selected, `border_inactive` unfocused), inputs
+  (`input_fg`, `placeholder` = also the zsh-autosuggestion ghost, `hint` = the
+  keybind-hint line), `cursor`/`cursor_text`, `selection`, `link`, `separator`,
+  `key`, `title`.
+- **`state`** — status text: `error`/`warning`/`success`/`info`/`hint`.
+- **`action`** — button INTENTS (one hue each). Apps map their buttons to an
+  intent; the theme never names per-app actions. `run`/`confirm` share green
+  by default (both positive) but stay separate for later per-theme split.
+  Exported via `palette.json` (`roles.action`) for TUIs (e.g. ai-playbook).
+- **`mode`** — input-state indicators (zellij modes, p10k vi-mode), NOT actions.
+- **`diff`** — semantic add/remove/change (editors/pi); delta's full diff
+  highlight (wash bgs, line numbers) lives in the per-theme `palette.diff`.
+- **`ansi`** — canonical 16-color; ghostty/wezterm keep their own near-identical
+  built-in mappings (slot-based), so this is for any new consumer.
+- **`syntax`** — the canonical code-token map for the generated `.tmTheme`
+  (bat/yazi-preview/delta) and nvim.
 
 ### 4.2 Migration map for the non-Mocha surfaces (§2.4 → Mocha by role)
 
@@ -285,9 +330,19 @@ split into three tiers:
     feed `config.color_schemes` from `palette.lua`).
   - **bottom** → drop `theme=`; it already supports a full `[styles]` hex block —
     complete it from `theme.yaml`.
-  - **nvim** → keep the `catppuccin/nvim` plugin (it maps scopes→highlights) but
-    feed `color_overrides.mocha = { … }` from `palette.lua`. Its color names are
-    *exactly* our 26 tokens.
+  - **nvim** → a `chezmoi-system` colorscheme (`nvim/colors/chezmoi-system.lua`)
+    that **vendors catppuccin/nvim's group definitions** (MIT, under
+    `nvim/lua/chezmoi_theme/ctp/`: `groups/{editor,syntax,treesitter,lsp,
+    semantic_tokens}` + the integrations for the plugins this config uses) and
+    invokes them with OUR palette injected as the `C`/`O`/`U` globals — exactly
+    how catppuccin's own compiler calls them. Result: catppuccin's full coverage
+    (~937 highlight groups) with NO catppuccin runtime dependency (the plugin is
+    `enabled = false`), and still theme-agnostic — `C` is built from the active
+    palette's 26 slots, so a custom-named `theme.yaml` drives nvim too. Two
+    vendored files were minimally patched to drop their `require("catppuccin"…)`
+    (see inline notes). (Earlier passes used catppuccin `color_overrides`, then a
+    hand-rolled scheme; both were replaced — the first pinned to the plugin, the
+    second under-covered plugins.)
   - **yazi UI** → drop the flavor dep; UI colors in a generated `theme.toml`
     (user `theme.toml` overrides flavors, so the generated one wins).
   - zellij dialog theme, pi, glow, fzf, the viewers, pick — already custom files
@@ -340,7 +395,7 @@ optionally Whiskers for the Tier-2 `.tmTheme`.
 | `dot_pi/.../catppuccin-mocha.json` | `.tmpl` `vars` block from `.theme.palette` (**fixes drift**); keep role map | → `.tmpl` |
 | `libexec/{ics,sqlite,disk-image}-view` | read `~/.config/theme/palette.json` at startup; delete the 3 `CTP` classes | edit ×3 |
 | `yazi/init.lua` mactag | read `palette.lua` `.extended.tags` | edit |
-| `nvim` core.lua | `catppuccin/nvim` `color_overrides.mocha` ← `palette.lua` (plugin still maps scopes→highlights) | edit |
+| `nvim` core.lua + `colors/chezmoi-system.lua` + `lua/chezmoi_theme/ctp/` | `chezmoi-system` colorscheme: vendored catppuccin group defs (MIT) fed our `palette.lua` via injected `C`/`O`/`U`; `catppuccin/nvim` disabled; `colorscheme = "chezmoi-system"` | edit + vendor |
 | `nvim` lualine `doom-modeline.lua` | migrate One-Dark fallbacks to Mocha (or read `palette.lua`) | edit |
 | `yazi` flavor | **drop the flavor dep**; UI colors in generated `theme.toml`. Code preview → Tier 2 | edit |
 | `bat` · delta `syntax` · yazi code-preview | **Tier 2** (`.tmTheme`): generate/vendor a `.tmTheme` + `bat cache --build` — see §4.4 | generate/vendor |
@@ -486,20 +541,25 @@ it adds a `theme-apply` resolver and a `theme-push` helper, not a new paradigm.
 
 ## 6. Phasing
 
-> **Landed so far:** the §4 foundation (`theme.yaml` + `palette.{zsh,json,lua}`);
-> every runtime-reading consumer — the 3 viewers, glow, pi (drift fixed), fzf
-> (`completion.sh` + `pick-common`), `pick.jq`; zj-hud **v0.1.3** (bar-bg-
-> follows-`Style` + a configurable which-key background), wired into the chezmoi
-> manifest; and the **complete runtime override layer** — `theme-apply` resolves
-> canonical ⊕ loose `override.toml` into the effective palette **and** the Zellij
-> `system` theme (so the zj-hud bar tints too), running before the Zellij attach;
-> and `theme-push` + the ssh `Match host … exec` hook deliver a host's per-target
-> tint on connect. All committed and mirrored to the dev-shell, each verified —
-> end to end, a `theme-push` to the dev-shell tints its bar to the `blue`
-> profile default.
-> **Remaining:** the named-theme→generated-artifact swaps
-> (ghostty/wezterm/bottom/nvim/yazi); the non-Mocha prompt/statusline migration;
-> and the Tier-2 `.tmTheme`.
+> **Status: complete.** The switchable role-based schema is implemented end to
+> end and proven: flipping `theme.active` to `catppuccin-latte` re-renders every
+> generated surface to the light palette (verified via `chezmoi cat`), and
+> `meta.appearance` is exported so nvim flips light/dark too. A custom-named
+> palette (`NorthernLights`) was verified to drive nvim's `chezmoi-system`
+> colorscheme with zero Catppuccin dependency. `make test` (185 examples) and
+> `make lint` (no raw hex outside `theme.yaml`) are green.
+>
+> Delivered across the waves below: the role-based `theme.yaml` (active +
+> palettes + roles); the `palette.{zsh,json,lua}` bridges emitting roles; every
+> generated app theme (ghostty/wezterm/bottom/glow/pi/tealdeer + the zellij base
+> theme + bar modes/which-key + delta diff + JQ_COLORS + tints); the Tier-2
+> `.tmTheme` for bat (+ `bat cache --build`), yazi (UI `theme.toml` + syntect
+> preview, flavor dropped), and delta `syntax-theme = system`; nvim via a
+> `chezmoi-system` colorscheme that vendors catppuccin's group definitions (MIT)
+> and feeds them our palette (~937 groups, catppuccin plugin disabled,
+> theme-agnostic); the non-Mocha
+> prompt/statusline migration; the runtime override layer (`theme-apply` /
+> `theme-push`); a second (`catppuccin-latte`) palette; and the lint.
 
 1. **Prerequisite — close custom-binary color gaps (§4.7).** zj-hud config keys
    **+ bar-bg-follows-`Style`** + configurable which-key bg — **done, released
@@ -519,7 +579,8 @@ it adds a `theme-apply` resolver and a `theme-push` helper, not a new paradigm.
    layout, `delta`, `tealdeer`.
 5. **Replace named themes with the generated `system` theme (Tier 1, §4.4).**
    ghostty `themes/system`; wezterm `colors/system.toml`; `bottom` full `[styles]`
-   (drop `theme=`); nvim `color_overrides`; yazi `theme.toml` (drop flavor dep).
+   (drop `theme=`); nvim `chezmoi-system` colorscheme (catppuccin disabled); yazi
+   `theme.toml` (drop flavor dep).
    Then choose the Tier-2 `.tmTheme` strategy (bat/yazi-preview/delta) + wire
    `bat cache --build`.
 6. **Migrate the non-Mocha surfaces (§4.2).** `p10k.zsh`, `_lib.sh`, lualine
@@ -537,12 +598,18 @@ Each phase is independently shippable and leaves the repo working.
 
 ---
 
-## 7. Guardrail: "no raw hex outside the source"
+## 7. Guardrail: "no raw hex outside the source" — implemented
 
-After migration, add a lightweight check (pre-commit hook or a ShellSpec/CI
-step): grep tracked files for `#[0-9a-fA-F]{6}` and fail if any appear **outside**
-`home/.chezmoidata/theme.yaml`, the generated `palette.*` templates, and an
-allowlist (decorative §2.5 assets). This makes drift structurally impossible.
+`tests/lint-theme.sh` (run by `make lint`, and by `make test` before the suite)
+greps `home/` for `#[0-9a-fA-F]{6}` and fails if any appear outside an allowlist.
+`theme.yaml` stores hex WITHOUT a leading `#`, so it never matches. The allowlist
+exempts only: decorative/non-theme assets (`**/Assets/**`, `*.svg`, `*.css`,
+`**/hammerspoon/**`, the `notify` swatch); runtime FALLBACKS that load a palette
+bridge and fall back to literals only if it is missing (nvim `**/lualine/**`, the
+3 Python viewers, `wezterm.lua`, `yazi/init.lua`); and a few comment/example
+mentions (`theme-apply`/`theme-push`, `ghostty/config`, `lib/zellij.zsh`,
+`ai-commit`). Adding a file to the allowlist requires a real reason — never to
+hide a color that belongs in `theme.yaml`. This makes drift structurally hard.
 
 ---
 

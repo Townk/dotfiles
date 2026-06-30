@@ -27,13 +27,13 @@ _zsh_should_autoattach_zellij() {
 # across the exec and by the panes). A no-op when no override.toml exists.
 # Absolute path — ~/.local/bin only joins PATH later, well after this runs.
 ~/.local/bin/theme-apply 2>/dev/null
-[[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" ]] \
-  && export THEME_PALETTE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" \
-            THEME_PALETTE_JSON="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.json"
+[[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.zsh" ]] \
+  && export THEME_PALETTE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.zsh" \
+            THEME_PALETTE_JSON="${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.json"
 # Load the palette into this shell so the prompt (p10k), _lib.sh, completion.sh,
 # and the welcome separator can reference C_HEX_* (the effective palette when an
-# override is active, else canonical). palette.zsh is fork-free and guarded.
-source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/palette.zsh}"
+# override is active, else canonical). chezmoi-system.zsh is fork-free and guarded.
+source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.zsh}"
 
 # Auto-attach Zellij for interactive shells.
 # Done before the rest of init so the outer shell doesn't pay for setup

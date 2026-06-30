@@ -75,10 +75,11 @@ EOF
 pick_symbols::parse_args "$@"
 pick_symbols::require_db
 
-hints=$'󰌑 : emoji  ·  󰘴 N: :name:  ·  ⌥ ⏎/N: insert & stay'
+hb=( 󰌑 emoji "󰘴 N" ":name:" "⌥ ⏎/N" "insert & stay" )
 if ((multi)); then
-  hints+=$'  ·  ⭾ : select  ·  󰘴 A: select-all'
+  hb+=( ⭾ select "󰘴 A" select-all )
 fi
+hints="$(pick::hints "${hb[@]}")"
 
 pick_args=(
   --header "Pick a gitmoji"

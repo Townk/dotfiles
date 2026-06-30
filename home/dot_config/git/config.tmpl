@@ -1,3 +1,4 @@
+{{- $p := index .theme.palettes .theme.active -}}
 [user]
   name = Thiago Alves
   email = thiago@rapinialves.com
@@ -16,21 +17,22 @@
 
 [delta]
   features = unobtrusive-line-numbers side-by-side decorations
+  syntax-theme = chezmoi-system
   zero-style = syntax
-  plus-style = "syntax #053f1f"
-  plus-emph-style = "#2bfa84 #00703e"
-  minus-style = "syntax #3e151d"
-  minus-emph-style = "#ff878a #9e1125"
+  plus-style = "syntax #{{ $p.diff.plus_bg }}"
+  plus-emph-style = "#{{ $p.diff.plus_emph_fg }} #{{ $p.diff.plus_emph_bg }}"
+  minus-style = "syntax #{{ $p.diff.minus_bg }}"
+  minus-emph-style = "#{{ $p.diff.minus_emph_fg }} #{{ $p.diff.minus_emph_bg }}"
 
 [delta "unobtrusive-line-numbers"]
   line-numbers = true
-  line-numbers-minus-style = "#ff2e43 #26141a"
+  line-numbers-minus-style = "#{{ $p.diff.minus_num_fg }} #{{ $p.diff.minus_num_bg }}"
   line-numbers-zero-style = normal
-  line-numbers-plus-style = "#00be49 #04211b"
+  line-numbers-plus-style = "#{{ $p.diff.plus_num_fg }} #{{ $p.diff.plus_num_bg }}"
   line-numbers-left-format = "{nm:>4} "
   line-numbers-right-format = "{np:>4} "
-  line-numbers-left-style = "#26141a #26141a"
-  line-numbers-right-style = "#04211b #04211b"
+  line-numbers-left-style = "#{{ $p.diff.minus_num_bg }} #{{ $p.diff.minus_num_bg }}"
+  line-numbers-right-style = "#{{ $p.diff.plus_num_bg }} #{{ $p.diff.plus_num_bg }}"
 
 [delta "decorations"]
   commit-decoration-style = bold yellow box ul

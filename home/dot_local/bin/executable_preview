@@ -202,7 +202,7 @@ function preview-csv() {
 function preview-md() {
   command -v glow >/dev/null 2>&1 || return 1
   command -v expect >/dev/null 2>&1 || return 1
-  local style="${XDG_CONFIG_HOME:-$HOME/.config}/glow/catppuccin-mocha.json"
+  local style="${XDG_CONFIG_HOME:-$HOME/.config}/glow/chezmoi-system.json"
   # glow 2.x (termenv v0.16) only emits 16-color ANSI on a pipe even with
   # CLICOLOR_FORCE, and hangs on a pseudo-TTY because lipgloss sends terminal
   # queries (OSC 10/11, DSR 6n) and blocks waiting for responses. We use

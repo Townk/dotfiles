@@ -150,7 +150,7 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
   print -r -- "$ql_json" | jq -r -L "$PICK_LIB_DIR" \
     --arg k "$key" --arg ws "$active_ws" --arg tab "$active_tab" \
     --arg cur "$current_ws" --argjson live "$live_json" --argjson windowed "$windowed_json" \
-    --argjson palette "$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/theme/palette.json")" '
+    --argjson palette "$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.json")" '
     include "pick";
     def icon($t):
       if   $t == "Shell"  then "\uf07c"
@@ -255,15 +255,14 @@ pick_start_args=(
 # 󰌑 = Enter). Alt+Enter works in either mode, so advertise it in both. Keep in
 # sync with pick-common's *_hints_default if they change.
 if [[ "$kind" == workspace ]]; then
-  # Selector hints are the longest line, so they use a tight separator; the
-  # shorter search hints can afford the wider default spacing.
-  ws_sep=" · "
-  ws_sep_wide="  ·  "
+  # Hints are assembled from structured key/label pairs via pick::hints, so the
+  # separator/spacing matches every other dialog (no hand-rolled separators).
+  # 󰘵 󰌑 = Alt+Enter (open in a separate window); 󰌑 = Enter, 󱊷 = Esc.
   pick_start_args+=(
     --cache-usage="$CACHE_DIR/usage-workspace"
     --key-output "alt-enter:field:2"
-    --selector-hints "󰌑 : open${ws_sep}󰘵 󰌑 : new window${ws_sep}󱊷 : cancel${ws_sep}1-9: open${ws_sep}j/k: move${ws_sep}/: search"
-    --search-hints "󰌑 : open${ws_sep_wide}󰘵 󰌑 : new window${ws_sep_wide}󱊷 : cancel${ws_sep_wide}󰘴 U: clear/back"
+    --selector-hints "$(pick::hints 󰌑 open "󰘵 󰌑" "new window" 󱊷 cancel 1-9 open j/k move / search)"
+    --search-hints "$(pick::hints 󰌑 open "󰘵 󰌑" "new window" 󱊷 cancel "󰘴 U" clear/back)"
   )
 fi
 ((no_border)) && pick_start_args+=(--no-border)

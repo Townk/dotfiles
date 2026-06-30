@@ -1,0 +1,13 @@
+{{- $p := index .theme.palettes .theme.active -}}
+# WezTerm window-tint palette: name -> hex. GENERATED from .chezmoidata/theme.yaml
+# (the active theme's alternate_bg) by chezmoi. DO NOT EDIT — change alternate_bg
+# in theme.yaml and re-apply. Read by wezterm.lua (the tint renderer) and by
+# `system-onboard` (color set/list/validate). Each is a faint, appearance-aware
+# wash over the active base; a light theme makes these light. Reference a name
+# from a machine's onboard color or a profile default (lib/terminal-location.zsh).
+cyan   = "#{{ $p.alternate_bg.cyan }}"
+blue   = "#{{ $p.alternate_bg.blue }}"
+amber  = "#{{ $p.alternate_bg.amber }}"
+teal   = "#{{ $p.alternate_bg.teal }}"
+purple = "#{{ $p.alternate_bg.purple }}"
+grey   = "#{{ $p.alternate_bg.grey }}"

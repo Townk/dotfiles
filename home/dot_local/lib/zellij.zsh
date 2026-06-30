@@ -43,14 +43,17 @@ zj::available() {
 #
 #   * No Zellij  -> exactly `pick::start "$@"` (inline, unchanged); pane opts
 #                   are ignored.
-#   * In Zellij  -> the fzf UI runs in a floating, pinned, rounded-frame pane
-#                   via the shared zellij-modal scaffolding (catppuccin title
-#                   block + focus-quirk handling), and the chosen value is
+#   * In Zellij  -> the fzf UI runs in a floating, pinned, BORDERLESS pane via
+#                   the shared zellij-modal scaffolding (--no-chrome, so pty-frame
+#                   draws the box + ▓▓▓ title + rule around fzf — the same chrome
+#                   as the glyph/gitmoji pickers), and the chosen value is
 #                   captured back here through a FIFO.
 #
-# The modal title block reuses the picker's own --header text. The float fzf
-# geometry (--no-border --height -4 ...) is injected after the caller's options
-# so it wins, reproducing the glyph UX without the caller repeating it.
+# The ▓▓▓ title reuses the picker's own --header text (passed as the modal title;
+# pick-common drops the redundant border-label in pty-frame mode). The float fzf
+# geometry (--no-border --padding 0,2,0,2 ...) is injected after the caller's
+# options so it wins; pick-common routes it through pty-frame when ZJ_MODAL_TITLE
+# is set, falling back to the fzf-owns-the-box layout otherwise.
 #
 # Caveat: the capture channel returns the *selection*, so --copy-only and the
 # insert-without-dismiss background sink are not meaningful through the float
@@ -121,9 +124,9 @@ zj::pick() {
   # `sel=$(zj::pick ...)`), so that id must be discarded here — otherwise it is
   # prepended to the FIFO selection and the caller receives "terminal_<n>\n<sel>".
   "$bin" action new-pane --floating --close-on-exit \
-    --name "" --borderless false --pinned true \
+    --name "" --borderless true --pinned true \
     --width "$pane_w" --height "$pane_h" --cwd "$PWD" \
-    -- "$modal" --title "$header" --capture "$fifo" \
+    -- "$modal" --title "$header" --no-chrome --capture "$fifo" \
     -- "$picklist" "${pick_args[@]}" --no-border --height -4 --margin 0,0,0,0 --padding 0,2,0,2 -- "$tmp" >/dev/null
 
   # Block until the modal writes the captured selection (exactly as long as the

@@ -1,0 +1,40 @@
+{{- /*
+  chezmoi-system theme — regenerate every app's theme from theme.yaml on change.
+
+  The unified theme's per-app outputs (colorschemes, syntax themes, palette
+  bridges, nvim engine, blink) are BUILD ARTIFACTS, not committed: the generator
+  custom-builds/theme/generate-theme.sh renders them straight into $HOME via
+  `chezmoi execute-template`. This hook re-runs it whenever theme.yaml OR the
+  generator/its templates change.
+
+  Fingerprints baked below so run_onchange re-fires on change:
+    - theme.yaml via chezmoi's `sha256sum` template func (in-source).
+    - the generator + templates via `output` (they live in custom-builds/, outside
+      the chezmoi source root); content-only hash (sorted file list | cat) so it's
+      path/machine-independent. `shasum -a 256` (present on macOS+Linux; sha256sum
+      is absent on macOS).
+
+  Ordered 54 — BEFORE 56-build-bat-cache, so the bat theme exists before its cache
+  rebuild. `go` is NOT needed; only chezmoi (always) + git/network (nvim fetch only).
+*/ -}}
+{{- $themeSig := include ".chezmoidata/theme.yaml" | sha256sum -}}
+{{- $genSig := output "sh" "-c" (printf "find %q -type f -not -path '*/build/*' | LC_ALL=C sort | xargs cat | shasum -a 256 | cut -d' ' -f1" (joinPath .chezmoi.workingTree "custom-builds/theme")) | trim -}}
+#!/usr/bin/env bash
+# chezmoi-system theme generator — change-driven rebuild.
+#   theme.yaml:            {{ $themeSig }}
+#   generator + templates: {{ $genSig }}
+#
+# Manual rebuild any time:
+#   ~/.local/share/chezmoi/custom-builds/theme/generate-theme.sh
+
+set -euo pipefail
+
+command -v chezmoi >/dev/null 2>&1 || { echo "[generate-theme] chezmoi not found; skipping." >&2; exit 0; }
+GEN="{{ joinPath .chezmoi.workingTree "custom-builds/theme/generate-theme.sh" }}"
+[ -x "$GEN" ] || { echo "[generate-theme] generator missing at $GEN; skipping." >&2; exit 0; }
+
+echo "[generate-theme] rendering chezmoi-system theme from theme.yaml…"
+"$GEN" || echo "[generate-theme] generation reported errors (non-fatal)." >&2
+exit 0
+
+# vim:ft=sh

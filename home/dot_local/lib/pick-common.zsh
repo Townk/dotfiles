@@ -251,7 +251,13 @@ pick::add_selector_mode_binds() {
   local search_payload="$search_hints"$'\n'"$NBSP"
   local selector_header_action="+change-header(${selector_payload})"
   local search_header_action="+change-header(${search_payload})"
-  if (( ${pick_ui[no_hints]:-0} )); then
+  # In a pty-frame modal the hints live in the (static) footer pty-frame draws,
+  # so the selector/search toggle must NOT also push them into fzf's header — that
+  # header is the input→list blank, and change-header would surface the old hints
+  # there. Suppress the header swaps (like --no-hints) when pty-frame owns the
+  # chrome; the display-view swaps below still run. (use_pty_frame is a build_fzf_args
+  # local, visible here via zsh's dynamic function scope.)
+  if (( ${pick_ui[no_hints]:-0} )) || (( ${use_pty_frame:-0} )); then
     selector_header_action=""
     search_header_action=""
   fi
@@ -296,6 +302,63 @@ pick::add_selector_mode_binds() {
   return 0
 }
 
+# --- hint assembly + colorizing -----------------------------------
+
+# pick::hints KEY LABEL [KEY LABEL ...] — assemble a keybind-hint line from
+# key/label PAIRS in the canonical "KEY : label" shape, joined by the narrow
+# " · " separator. This is THE single place dialog hints are formatted, so every
+# picker (glyph, gitmoji, quick-launch, zj::pick consumers) renders identically:
+# callers pass structured pairs and never hand-roll separators/spacing. A key may
+# be a chord ("󰘴 U", "󰘵 󰌑"); quote it as one arg. pick::colorize_hints then
+# paints the keys (key role) and the labels/separators (hint role) for the footer.
+pick::hints() {
+  local out="" first=1 key label
+  while (( $# >= 2 )); do
+    key="$1"; label="$2"; shift 2
+    (( first )) || out+=" · "
+    first=0
+    out+="${key} : ${label}"
+  done
+  print -rn -- "$out"
+}
+
+# "#rrggbb" -> a 24-bit set-foreground SGR.
+pick::_sgr_fg() {
+  local h="${1#\#}"
+  printf '\e[38;2;%d;%d;%dm' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
+}
+
+# Colorize a keybind-hint line for pty-frame's footer: the key chord(s) before
+# each ':' in the bright key color, the labels + separators in the hint color.
+# Sets only the foreground, so pty-frame's mantle footer background shows through.
+# Hints follow the `KEY : label  ·  KEY : label` shape pick::start emits.
+pick::colorize_hints() {
+  local s="$1"
+  [[ -n "$s" ]] || return 0
+  local key_sgr lbl_sgr
+  key_sgr="$(pick::_sgr_fg "$C_ROLE_UI_KEY")"
+  lbl_sgr="$(pick::_sgr_fg "$C_ROLE_UI_HINT")"
+  # Split on the middle-dot separator itself (the surrounding spaces stay inside
+  # each item), so this is robust to BOTH the wide "  ·  " and the tight " · "
+  # separators different pickers use (e.g. the workspace picker's long selector
+  # line). Splitting on the spaced form instead would treat such a line as one
+  # item and only whiten its first key.
+  local -a items; items=( "${(@ps:·:)s}" )
+  local out="" first=1 item k l
+  for item in "${items[@]}"; do
+    (( first )) || out+="${lbl_sgr}·"
+    first=0
+    if [[ "$item" == *:* ]]; then
+      k="${item%%:*}"; l="${item#*:}"
+      out+="${key_sgr}${k}${lbl_sgr}:${l}"
+    else
+      out+="${lbl_sgr}${item}"
+    fi
+  done
+  out+=$'\e[39m'
+  print -rn -- "$out"
+}
+
 # --- fzf argument construction ------------------------------------
 
 # Build the standardized fzf argument list into the global `fzf_args`
@@ -323,28 +386,63 @@ pick::build_fzf_args() {
   # PICK_BG_TINT) paints its background with that tint, so the modal isn't a
   # host-colored island on the tinted window. Only the background shifts; the
   # rest stays canonical, matching the override layer on the remote itself.
-  local pick_bg="${PICK_BG_TINT:-$C_HEX_BASE}"
+  local pick_bg="${PICK_BG_TINT:-$C_ROLE_UI_DIALOG_BG}"  # modal canvas = dialog_bg (mantle); a remote tint still wins
   typeset -gA pick_ui
+  # "fzf owns the box": a borderless zellij modal (zellij-modal --no-chrome)
+  # exports ZJ_MODAL_TITLE. fzf then renders the WHOLE modal — full-screen, its
+  # own rounded --border as the (mantle) outer box, with "▓▓▓ <title>" on the
+  # border label — instead of leaning on a zellij frame + a script title block
+  # (zellij can't tint a floating frame's border background per-pane).
+  # A borderless zellij modal (zellij-modal --no-chrome) exports ZJ_MODAL_TITLE.
+  # Two ways to render it:
+  #   * pty-frame (preferred): a tiny compositor draws the outer box + "▓▓▓ title"
+  #     + rule and runs fzf in a sub-pty composited inside, so fzf's single header
+  #     is free to be the input→list blank — the full dialog spec. fzf draws
+  #     borderless and fills the sub-pty inline (--height=100%).
+  #   * fallback (no pty-frame on PATH): fzf owns the whole box full-screen, with
+  #     the title block on --header --header-first (so no input→list blank).
+  local fzf_owns=0 use_pty_frame=0
+  local PTY_FRAME="$HOME/.local/libexec/pty-frame"
+  if [[ -n "${ZJ_MODAL_TITLE:-}" ]]; then
+    fzf_owns=1
+    unset 'pick_ui[header]'    # title comes from the chrome/▓▓▓ block, not a border-label
+    if [[ -x "$PTY_FRAME" ]]; then
+      use_pty_frame=1
+      pick_ui[no_border]=1     # pty-frame draws the outer box; fzf is borderless
+      pick_ui[height]="100%"   # fzf fills the sub-pty inline
+    else
+      pick_ui[no_border]=0     # fzf's own --border is the (mantle) outer box
+      pick_ui[height]="full"   # full-screen: fill the borderless pane edge-to-edge
+    fi
+  fi
+  typeset -ga pick_finder_prefix; pick_finder_prefix=()  # wraps fzf (pty-frame …  --) in modal mode
   pick_selector_wrap=0
   pick_display_fields=1
   fzf_args=(
     --color=bg:"$pick_bg"
-    --color=bg+:"$C_HEX_SURFACE0"
-    --color=fg:"$C_HEX_TEXT"
-    --color=fg+:"regular:$C_HEX_TEXT"
+    --color=bg+:"$C_ROLE_UI_SURFACE"
+    --color=fg:"$C_ROLE_UI_FG"
+    --color=fg+:"regular:$C_ROLE_UI_FG"
     --color=hl:"$C_HEX_YELLOW"
     --color=hl+:"regular:$C_HEX_YELLOW"
-    --color=prompt:"$C_HEX_MAUVE"
-    --color=pointer:"$C_HEX_ROSEWATER"
+    --color=prompt:"$C_ROLE_UI_ACCENT"
+    --color=pointer:"$C_ROLE_UI_CURSOR"
     --color=marker:"$C_HEX_LAVENDER"
-    --color=info:"$C_HEX_MAUVE"
+    --color=info:"$C_ROLE_UI_ACCENT"
     --color=gutter:"$pick_bg"
-    --color=header:"$C_HEX_SURFACE2"
-    --color=label:"$C_HEX_MAUVE"
-    --color=spinner:"$C_HEX_ROSEWATER"
-    --color=border:"$C_HEX_SURFACE2"
+    # fzf 0.5x+ renders the input/header/list/preview/footer as SEPARATE windows;
+    # `bg` only covers the main/list area, so each section bg (and thus its border,
+    # label, and separators) must be set too or they fall back to the terminal bg.
+    --color=list-bg:"$pick_bg"
+    --color=input-bg:"$pick_bg"
+    --color=header-bg:"$pick_bg"
+    --color=preview-bg:"$pick_bg"
+    --color=footer-bg:"$pick_bg"
+    --color=header:"$C_ROLE_UI_HINT"
+    --color=label:"$C_ROLE_UI_ACCENT"
+    --color=spinner:"$C_ROLE_UI_CURSOR"
+    --color=border:"$C_ROLE_UI_BORDER"
     --filepath-word
-    --height="${pick_ui[height]:-45%}"
     --layout=reverse
     --info=inline-right
     --exit-0
@@ -370,6 +468,10 @@ pick::build_fzf_args() {
     --bind 'ctrl-f:page-down'
     --bind 'ctrl-b:page-up'
   )
+
+  # --height: inline by default; "full" (fzf-owns-the-box modal) omits it so fzf
+  # runs full-screen and fills the borderless pane edge-to-edge.
+  [[ "${pick_ui[height]:-}" == "full" ]] || fzf_args+=( --height="${pick_ui[height]:-45%}" )
 
   [[ -n "${pick_ui[expect]:-}" ]] && fzf_args+=( "--expect=${pick_ui[expect]}" )
 
@@ -406,9 +508,63 @@ pick::build_fzf_args() {
       --color=marker:"$C_HEX_GREEN"
     )
   fi
-  # Single hint line for every mode; --multi folds its keys into the hints
-  # (see pick::start's default), so fzf never adds a second header row.
-  (( ${pick_ui[no_hints]:-0} )) || fzf_args+=( --header="$hints"$'\n'"$NBSP" )
+  # Header/footer.
+  #  - normal: the keybind hints are fzf's --header (a single line).
+  #  - fzf-owns (borderless modal): the "▓▓▓ <title>" + a ━ rule become the
+  #    --header with --header-first, so they sit at the very top like the old
+  #    script title block; the hints move to the --footer. Together with the
+  #    outer --border and the inner --input-border this reproduces the framed
+  #    modal's layout (outer box → title+rule → inner box → list → hints) fully
+  #    in fzf, all on the mantle dialog background.
+  if (( use_pty_frame )); then
+    # pty-frame draws the box + ▓▓▓ title + rule AND the bottom hints (so it owns
+    # their padding + per-key coloring). fzf draws only the inside: the input box,
+    # the freed --header as the input→list blank, and the list. pick_finder_prefix
+    # wraps fzf in pty-frame with the title, theme colors, and colorized hints.
+    fzf_args+=(
+      # Inner separators (the title rule + this input box border) share the
+      # separator color; only the outer box uses the focus border (blue).
+      --color=input-border:"$C_ROLE_UI_SEPARATOR"
+      --header=' '
+      --no-separator
+    )
+    pick_finder_prefix=(
+      "$PTY_FRAME"
+      --title        "$ZJ_MODAL_TITLE"
+      --bg           "$pick_bg"
+      --fg           "$C_ROLE_UI_FG"
+      --border-color "$C_ROLE_UI_BORDER_FOCUS"
+      --title-color  "$C_ROLE_UI_ACCENT"
+      --rule-color   "$C_ROLE_UI_SEPARATOR"
+    )
+    (( ${pick_ui[no_hints]:-0} )) || pick_finder_prefix+=( --hints "$(pick::colorize_hints "$hints")" )
+    pick_finder_prefix+=( -- )
+  elif (( fzf_owns )); then
+    local _cols
+    _cols=$({ stty size </dev/tty; } 2>/dev/null | awk '{print $2}')
+    [[ -n "$_cols" ]] || _cols="${COLUMNS:-80}"
+    # fzf draws the header inside the border and aligns it with the list (past
+    # the pointer/gutter), so the usable width is well under the pane width;
+    # keep the rule a few cells short so fzf doesn't truncate it with "··".
+    local _rw=$(( _cols - 8 )); (( _rw < 1 )) && _rw=1
+    local _fill=""
+    local _rule="${(l:_rw::━:)_fill}"
+    # Outer box = the focus border (blue), like the old active modal frame.
+    # Header block (--header-first): a blank line, the accented ▓▓▓ title, the
+    # rule. Hints stay in the footer (fzf's one header is spent on the title).
+    fzf_args+=(
+      --color=border:"$C_ROLE_UI_BORDER_FOCUS"
+      --color=input-border:"$C_ROLE_UI_HINT"
+      --header=$'\n'"▓▓▓ ${ZJ_MODAL_TITLE}"$'\n'"$_rule"
+      --header-first
+      --color=header:"$C_ROLE_UI_ACCENT"
+    )
+    (( ${pick_ui[no_hints]:-0} )) || fzf_args+=( --footer="$hints" --color=footer:"$C_ROLE_UI_HINT" )
+  else
+    # Single hint line for every mode; --multi folds its keys into the hints
+    # (see pick::start's default), so fzf never adds a second header row.
+    (( ${pick_ui[no_hints]:-0} )) || fzf_args+=( --header="$hints"$'\n'"$NBSP" )
+  fi
 
   pick::add_selector_mode_binds
 
@@ -469,7 +625,10 @@ pick::resume_pos() {
 pick::run() {
   local cache=$1
   local out
-  out=$(pick::feed "$cache" | fzf "${fzf_args[@]}") || exit 130
+  # In a borderless modal with pty-frame present, pick_finder_prefix is
+  # (pty-frame … --) so the run becomes `… | pty-frame … -- fzf "${fzf_args[@]}"`;
+  # otherwise it's empty and this is a plain `fzf "${fzf_args[@]}"`.
+  out=$(pick::feed "$cache" | "${pick_finder_prefix[@]}" fzf "${fzf_args[@]}") || exit 130
 
   # Output layout: line 1 = query (--print-query), line 2 = --expect
   # key, remaining lines = selection.
@@ -854,19 +1013,21 @@ pick::start() {
   if [[ -n "${pick_state_file:-}" ]]; then mkdir -p -- "${pick_state_file:h}" 2>/dev/null || true; fi
   if [[ -n "${pick_usage_file:-}" ]]; then mkdir -p -- "${pick_usage_file:h}" 2>/dev/null || true; fi
 
+  # Default hint lines are assembled from structured key/label pairs via
+  # pick::hints, so spacing/separators are identical across every dialog.
   if [[ -z "${pick_ui[hints]:-}" ]]; then
-    local hints_default=$'󰌑 : open  ·  󱊷 : cancel  ·  󰘴 U: clear'
-    (( ${pick_ui[multi]:-0} )) && hints_default+=$'  ·  󰘴 󱁐 : select  ·  ⭾ : select-and-next  ·  󰘴 A: select-all'
-    pick_ui[hints]="$hints_default"
+    local -a hb=( 󰌑 open 󱊷 cancel "󰘴 U" clear )
+    (( ${pick_ui[multi]:-0} )) && hb+=( "󰘴 󱁐" select ⭾ select-and-next "󰘴 A" select-all )
+    pick_ui[hints]="$(pick::hints "${hb[@]}")"
   fi
   if [[ -z "${pick_ui[selector_hints]:-}" ]]; then
-    local selector_hints_default=$'󰌑 : open  ·  󱊷 : cancel'
-    (( ${pick_ui[selector_shortcuts]:-0} )) && selector_hints_default+=$'  ·  1-9: open'
-    (( ${pick_ui[selector_nav]:-0} )) && selector_hints_default+=$'  ·  j/k: move'
-    selector_hints_default+=$'  ·  /: search'
-    pick_ui[selector_hints]="$selector_hints_default"
+    local -a sb=( 󰌑 open 󱊷 cancel )
+    (( ${pick_ui[selector_shortcuts]:-0} )) && sb+=( 1-9 open )
+    (( ${pick_ui[selector_nav]:-0} )) && sb+=( j/k move )
+    sb+=( / search )
+    pick_ui[selector_hints]="$(pick::hints "${sb[@]}")"
   fi
-  [[ -n "${pick_ui[search_hints]:-}" ]] || pick_ui[search_hints]=$'󰌑 : open  ·  󱊷 : cancel  ·  󰘴 U: clear/back'
+  [[ -n "${pick_ui[search_hints]:-}" ]] || pick_ui[search_hints]="$(pick::hints 󰌑 open 󱊷 cancel "󰘴 U" clear/back)"
 
   case "$output" in
     raw|visible|tail|field:<->) ;;

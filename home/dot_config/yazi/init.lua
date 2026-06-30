@@ -2,10 +2,10 @@ require("full-border"):setup()
 require("folder-rules"):setup()
 require("git"):setup()
 
--- Tag colors come from the single-source palette (~/.config/theme/palette.lua,
+-- Tag colors come from the single-source palette (~/.config/theme/chezmoi-system.lua,
 -- generated from .chezmoidata/theme.yaml -> extended.tags). The literal
 -- fallbacks (the current values) keep tags working if the bridge is missing.
-local _theme_ok, _theme = pcall(dofile, os.getenv("HOME") .. "/.config/theme/palette.lua")
+local _theme_ok, _theme = pcall(dofile, os.getenv("HOME") .. "/.config/theme/chezmoi-system.lua")
 local _tags = (_theme_ok and type(_theme) == "table" and _theme.extended and _theme.extended.tags) or {}
 require("mactag"):setup {
 	-- Keys used to add or remove tags
