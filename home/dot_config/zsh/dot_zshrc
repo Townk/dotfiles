@@ -20,6 +20,17 @@ _zsh_should_autoattach_zellij() {
   return 1
 }
 
+# Theme override layer: resolve the effective palette + Zellij `system` theme
+# (canonical ⊕ loose ~/.config/theme/override.toml) BEFORE the Zellij attach
+# below, so the session loads the tinted theme and zj-hud's bar follows it.
+# Exports the palette env vars for the shell/fzf/dialogs/viewers (inherited
+# across the exec and by the panes). A no-op when no override.toml exists.
+# Absolute path — ~/.local/bin only joins PATH later, well after this runs.
+~/.local/bin/theme-apply 2>/dev/null
+[[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" ]] \
+  && export THEME_PALETTE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" \
+            THEME_PALETTE_JSON="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.json"
+
 # Auto-attach Zellij for interactive shells.
 # Done before the rest of init so the outer shell doesn't pay for setup
 # twice — the shell spawned inside Zellij re-runs .zshrc with $ZELLIJ set,
@@ -124,17 +135,6 @@ command -v mise >/dev/null && eval "$(mise activate zsh)"
 
 # Extend PATH.
 path=(~/.local/bin "$GOPATH/bin" /Applications/Obsidian.app/Contents/MacOS $path)
-
-# ── Theme override layer ───────────────────────────────────────────────────
-# Resolve the effective palette (canonical ⊕ loose ~/.config/theme/override.toml)
-# into the cache and point the palette consumers at it — common.zsh/dialogs/
-# ai-playbook, the deferred completion.sh fzf colors, and the file viewers (via
-# THEME_PALETTE_*). A no-op (effective == canonical) when no override.toml is
-# present, so this changes nothing until a machine drops one in.
-theme-apply 2>/dev/null
-[[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" ]] \
-  && export THEME_PALETTE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" \
-            THEME_PALETTE_JSON="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.json"
 
 # ── History ──────────────────────────────────────────────────────────────
 # atuin (deferred, below) owns interactive history search; this is the

@@ -1,34 +1,49 @@
 #!/usr/bin/env zsh
-# theme-apply — resolve the EFFECTIVE palette (canonical ⊕ loose override) into
-# runtime files that the shell, dialogs, ai-playbook and the file viewers read
-# through THEME_PALETTE_FILE / THEME_PALETTE_JSON.
+# theme-apply — resolve the EFFECTIVE theme (canonical ⊕ loose override) into the
+# runtime files the shell, dialogs, ai-playbook, the file viewers, and Zellij
+# (hence the zj-hud bar) read.
 #
-#   canonical : ~/.config/theme/palette.{json,zsh}  — generated from theme.yaml
-#               by chezmoi; NEVER modified here, so chezmoi stays drift-free.
-#   override  : ~/.config/theme/override.toml        — loose, per-machine,
-#               OPTIONAL. Flat `token = "hex"` (the '#' is optional), e.g.
-#                   base = "#1c232f"   # this session's WezTerm tint
-#               Any palette token may be overridden; `base` is the common one.
-#   effective : $XDG_CACHE_HOME/theme/palette.{json,zsh}  — written here.
+#   canonical : ~/.config/theme/palette.{json,zsh}  and the Zellij theme
+#               ~/.config/zellij/themes/catppuccin-mocha-dialog.kdl
+#               — all chezmoi-generated from theme.yaml; NEVER modified here.
+#   override  : ~/.config/theme/override.toml  — loose, per-machine, OPTIONAL.
+#               Flat `token = "hex"` ('#' optional), e.g. `base = "#1c232f"`
+#               (this session's WezTerm tint). Any palette token; `base` is the
+#               common one.
+#   effective : $XDG_CACHE_HOME/theme/palette.{json,zsh}  (shell consumers, via
+#               THEME_PALETTE_FILE/JSON) and ~/.config/zellij/themes/system.kdl
+#               (the theme `config.kdl` loads; zj-hud's bar follows it).
 #
-# Run early in shell init; the caller exports the two env vars at the cache
-# paths (see dot_zshrc). With no override.toml the effective files equal the
-# canonical ones, so nothing changes. Idempotent and dependency-light: a no-op
-# (exit 0) when the canonical palette or jq is missing.
+# Run early in shell init, BEFORE the Zellij attach, so `system.kdl` exists when
+# the session starts (see dot_zshrc). With no override.toml the effective files
+# equal the canonical ones — nothing changes. Idempotent + cheap: a stamped
+# staleness check makes the common (unchanged) case a few stats.
 emulate -L zsh
 set -uo pipefail
 
 theme_dir="${XDG_CONFIG_HOME:-$HOME/.config}/theme"
+zellij_themes="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/themes"
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/theme"
 canon_json="$theme_dir/palette.json"
 canon_zsh="$theme_dir/palette.zsh"
+canon_kdl="$zellij_themes/catppuccin-mocha-dialog.kdl"
 override="$theme_dir/override.toml"
 eff_json="$cache/palette.json"
 eff_zsh="$cache/palette.zsh"
+eff_kdl="$zellij_themes/system.kdl"
+stamp="$cache/.stamp"
 
 [[ -r "$canon_json" && -r "$canon_zsh" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 mkdir -p "$cache" || exit 0
+
+# --- staleness: skip when inputs unchanged and outputs present ---------------
+mt() { date -r "$1" +%s 2>/dev/null || echo 0; }
+key="o:$(mt "$override") p:$(mt "$canon_json") k:$(mt "$canon_kdl")"
+if [[ -f "$eff_json" && -f "$eff_zsh" && "$(cat "$stamp" 2>/dev/null)" == "$key" \
+   && ( ! -r "$canon_kdl" || -f "$eff_kdl" ) ]]; then
+  exit 0
+fi
 
 # --- override.toml (flat `name = "hex"`, '#' optional) -> JSON {name:"#hex"} --
 ov='{}'
@@ -44,19 +59,20 @@ if [[ -r "$override" ]]; then
   ov="{$ov}"
 fi
 
-# --- effective JSON: overlay the override tokens onto .palette ----------------
+# --- effective palette.json: overlay the override tokens onto .palette --------
 if jq --argjson ov "$ov" '.palette = (.palette + $ov)' "$canon_json" >"$eff_json.tmp" 2>/dev/null; then
   mv "$eff_json.tmp" "$eff_json"
 else
   rm -f "$eff_json.tmp"
   cp "$canon_json" "$eff_json"
   cp "$canon_zsh" "$eff_zsh"
+  [[ -r "$canon_kdl" ]] && sed 's/catppuccin-mocha-dialog {/system {/' "$canon_kdl" >"$eff_kdl"
+  print -r -- "$key" >"$stamp"
   exit 0
 fi
 
-# --- effective zsh: insert the override C_HEX_* re-assignments just before the
-# gated SGR block, so the C_* truecolor twins recompute from the overridden hex
-# automatically (no need to re-emit the escapes here). ------------------------
+# --- effective palette.zsh: insert override C_HEX_* before the gated SGR block,
+# so the C_* truecolor twins recompute from the overridden hex automatically ---
 ov_lines=$(print -r -- "$ov" | jq -r 'to_entries[] | "C_HEX_\(.key | ascii_upcase)=\"\(.value)\""' 2>/dev/null)
 if awk -v ins="$ov_lines" '
   /^if \[ -t 1 \]; then$/ && !done { if (length(ins)) print ins; done = 1 }
@@ -67,3 +83,28 @@ else
   rm -f "$eff_zsh.tmp"
   cp "$canon_zsh" "$eff_zsh"
 fi
+
+# --- effective Zellij theme: substitute each overridden token's "R G B" triple
+# in the canonical theme. zj-hud's bar follows the theme background, so a `base`
+# override tints the bar; KDL color values sit at end-of-line, so anchor on
+# " R G B$" to avoid matching a longer number. ---------------------------------
+if [[ -r "$canon_kdl" ]]; then
+  rgb() { local h="${1#\#}"; print -r -- "$(( 16#${h:0:2} )) $(( 16#${h:2:2} )) $(( 16#${h:4:2} ))"; }
+  # Rename the block to `system` (the name config.kdl loads), then substitute
+  # each overridden token's "R G B" triple (KDL color values sit at end-of-line).
+  typeset -a sed_args
+  sed_args=(-e 's/catppuccin-mocha-dialog {/system {/')
+  while IFS=$'\t' read -r tok hex; do
+    [[ -n "$tok" ]] || continue
+    chex=$(jq -r --arg t "$tok" '.palette[$t] // empty' "$canon_json")
+    [[ -n "$chex" ]] || continue
+    crgb="$(rgb "$chex")"
+    ergb="$(rgb "$hex")"
+    [[ "$crgb" == "$ergb" ]] && continue
+    sed_args+=(-e "s/ ${crgb}\$/ ${ergb}/")
+  done < <(print -r -- "$ov" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' 2>/dev/null)
+  sed "${sed_args[@]}" "$canon_kdl" >"$eff_kdl.tmp" && mv "$eff_kdl.tmp" "$eff_kdl" \
+    || { rm -f "$eff_kdl.tmp"; cp "$canon_kdl" "$eff_kdl"; }
+fi
+
+print -r -- "$key" >"$stamp"

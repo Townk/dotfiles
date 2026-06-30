@@ -840,7 +840,11 @@ web_client {
 // Choose the theme that is specified in the themes section.
 // Default: default
 // 
-theme "catppuccin-mocha-dialog"
+// `system` is written at shell startup by theme-apply: the canonical
+// catppuccin-mocha-dialog theme overlaid with the loose per-machine
+// ~/.config/theme/override.toml. zj-hud's bar follows this theme, so a `base`
+// override tints the bar to match the terminal background.
+theme "system"
  
 // Theme to use when the host terminal reports a dark color palette.
 // Requires `theme_light` to also be set; otherwise `theme` is used.
