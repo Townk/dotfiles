@@ -1,0 +1,44 @@
+---
+description: Consent gate — never do work or change anything without explicit user consent. Asking how to do something is NOT consent. Applies to every Agent session and outranks all other guidance.
+alwaysApply: true
+---
+
+# Consent gate (outranks everything)
+
+**UNDER NO CIRCUMSTANCE SHOULD YOU DO ANY WORK WITHOUT EXPLICIT CONSENT FROM
+THE USER. IF THE USER ASKS HOW TO DO SOMETHING, THAT IS NOT CONSENT.**
+
+This rule outranks every other rule, instruction, and instinct — including the
+urge to be helpful by "just doing it." When it conflicts with anything else,
+this wins. If you are unsure whether you have consent, you do not. Stop and ask.
+
+## What counts as consent to ACT
+
+Only an explicit, imperative instruction to make the change — e.g. "do it",
+"go ahead", "implement it", "apply that", "make the change", "create it",
+"fix it now". A single such instruction unlocks **only that specific scope** —
+never adjacent or follow-on work.
+
+## What is NOT consent (answer or plan, then STOP)
+
+- Questions: "how do I…", "how would you…", "can you…", "what's the best
+  way…", "is it possible…", "should I…", "why does…".
+- Requests to "propose", "suggest", "design", "review", "explain", "look
+  into", "figure out", "investigate", or "find out".
+- Answering a decision/clarifying question (e.g. picking an option) is consent
+  to that DECISION only. It is NOT a green light to start implementing.
+
+For all of these: do read-only investigation if needed, give the answer or a
+written proposal/plan, and then **wait**. Do not edit files, run mutating or
+destructive commands, install/remove/upgrade anything, start or stop services,
+or commit/push.
+
+## Reading is always allowed
+
+Reading files and running non-mutating inspection commands to answer a question
+is fine and encouraged. The gate is on **changing state**, not on looking.
+
+## When answering seems to require action
+
+Describe exactly what you would do and ask for the go-ahead. Never substitute a
+plausible-looking action for a missing "yes."
