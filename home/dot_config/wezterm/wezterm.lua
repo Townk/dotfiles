@@ -38,14 +38,15 @@ config.mux_enable_ssh_agent = false
 -- Appearances
 ---------------------------------------------------------------
 
--- For example, changing the color scheme:
-config.color_scheme = "Catppuccin Mocha"
+-- `system` is generated from .chezmoidata/theme.yaml into
+-- ~/.config/wezterm/colors/system.toml (a byte-faithful copy of wezterm's
+-- built-in Catppuccin Mocha). The SSH-tint logic below overrides
+-- colors.background per window on top of it.
+config.color_scheme = "system"
 -- tab_bar colors come from the single-source palette
 -- (~/.config/theme/palette.lua, generated from .chezmoidata/theme.yaml): base +
 -- the extended.tab chrome. Loaded at config time; the literal fallbacks (the
 -- current Mocha values) keep wezterm working if the bridge is ever missing.
--- color_scheme stays the built-in "Catppuccin Mocha" — a generated `system`
--- scheme would have to reproduce wezterm's own built-in ANSI exactly.
 local function load_palette()
 	local ok, t = pcall(dofile, os.getenv("HOME") .. "/.config/theme/palette.lua")
 	if ok and type(t) == "table" and t.palette then

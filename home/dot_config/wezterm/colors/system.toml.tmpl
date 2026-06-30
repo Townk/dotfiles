@@ -1,0 +1,17 @@
+# wezterm `system` color scheme — GENERATED from .chezmoidata/theme.yaml by
+# chezmoi. DO NOT EDIT. Reproduces wezterm's built-in "Catppuccin Mocha": every
+# slot maps to a palette token, and (unlike ghostty) the brights reuse the normal
+# accents rather than computed-bright variants. Loaded via color_scheme="system".
+[metadata]
+name = "system"
+
+[colors]
+ansi = ["#{{ .theme.palette.surface1 }}", "#{{ .theme.palette.red }}", "#{{ .theme.palette.green }}", "#{{ .theme.palette.yellow }}", "#{{ .theme.palette.blue }}", "#{{ .theme.palette.pink }}", "#{{ .theme.palette.teal }}", "#{{ .theme.palette.subtext1 }}"]
+brights = ["#{{ .theme.palette.surface2 }}", "#{{ .theme.palette.red }}", "#{{ .theme.palette.green }}", "#{{ .theme.palette.yellow }}", "#{{ .theme.palette.blue }}", "#{{ .theme.palette.pink }}", "#{{ .theme.palette.teal }}", "#{{ .theme.palette.subtext0 }}"]
+background = "#{{ .theme.palette.base }}"
+foreground = "#{{ .theme.palette.text }}"
+cursor_bg = "#{{ .theme.palette.rosewater }}"
+cursor_fg = "#{{ .theme.palette.crust }}"
+cursor_border = "#{{ .theme.palette.rosewater }}"
+selection_bg = "#{{ .theme.palette.surface2 }}"
+selection_fg = "#{{ .theme.palette.text }}"

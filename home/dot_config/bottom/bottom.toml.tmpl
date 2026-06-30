@@ -31,15 +31,11 @@ current_usage = true
 # Displays network speeds in bytes instead of bits (easier to read for file transfers)
 network_use_bytes = true
 
-[color]
-# Base theme (built-in). The [styles] below override every painted element from
-# the single-source palette (.chezmoidata/theme.yaml); theme= only covers any
-# element not styled below. Dropping it entirely needs bottom's full [styles]
-# coverage verified first.
-theme = "catppuccin-mocha"
-
-# Accent colors below are projected from .chezmoidata/theme.yaml — DO NOT edit
-# hex here; change the palette there and re-apply.
+# Catppuccin Mocha is NOT a bottom built-in (it only ships default/nord/gruvbox
+# + -light), so there is no `theme=` to lean on — the theme is expressed entirely
+# as [styles] projected from the single-source palette (.chezmoidata/theme.yaml).
+# DO NOT edit hex here; change the palette there and re-apply. Anything not styled
+# below keeps bottom's default (the bg stays the terminal background).
 [styles.cpu]
 all_entry_color = "#{{ .theme.palette.rosewater }}"
 avg_entry_color = "#{{ .theme.palette.maroon }}"
