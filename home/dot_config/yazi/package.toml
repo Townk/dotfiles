@@ -53,6 +53,5 @@ use = "DaBuddhalint/smart-switch"
 rev = "b497bf8"
 hash = "ec0cf1ebe4e27261b8df4523c2f3d273"
 
-# No [[flavor.deps]]: the yazi theme (theme.toml) and code-preview tmTheme are
-# generated from .chezmoidata/theme.yaml, so the UI follows the system theme
-# instead of a vendored Catppuccin flavor.
+[flavor]
+deps = []
