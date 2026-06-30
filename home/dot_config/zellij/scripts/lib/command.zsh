@@ -431,12 +431,12 @@ ql_build_nested_layout() {
 keybinds clear-defaults=true {
     normal {
         bind "Ctrl Alt Space" {
-            Run "$home/.config/zellij/scripts/zellij-modal" "--title" "Quick Launch — Workspace" "--" "$home/.config/zellij/scripts/quick-launch-zellij" "workspace" {
+            Run "env" "COLORTERM=truecolor" "$home/.config/zellij/scripts/zellij-modal" "--title" "Quick Launch — Workspace" "--no-chrome" "--no-discover" "--" "$home/.config/zellij/scripts/quick-launch-zellij" "workspace" {
                 name ""
                 close_on_exit true
                 floating true
                 pinned true
-                borderless false
+                borderless true
                 width "70%"
                 height "60%"
             }

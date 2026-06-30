@@ -382,11 +382,10 @@ pick::colorize_hints() {
 # never leaks to the picker's stdout.
 pick::build_fzf_args() {
   local NBSP=$'\u00a0'
-  # A picker opened over a remote-tinted window (zellij-modal exports
-  # PICK_BG_TINT) paints its background with that tint, so the modal isn't a
-  # host-colored island on the tinted window. Only the background shifts; the
-  # rest stays canonical, matching the override layer on the remote itself.
-  local pick_bg="${PICK_BG_TINT:-$C_ROLE_UI_DIALOG_BG}"  # modal canvas = dialog_bg (mantle); a remote tint still wins
+  # Every picker is a mantle dialog — the same neutral dark modal on host and
+  # remote alike (mantle is shared across machines under one theme). The remote
+  # identity is carried by the window tint and the zj-hud bar, never the dialog.
+  local pick_bg="$C_ROLE_UI_DIALOG_BG"  # modal canvas = dialog_bg (mantle)
   typeset -gA pick_ui
   # "fzf owns the box": a borderless zellij modal (zellij-modal --no-chrome)
   # exports ZJ_MODAL_TITLE. fzf then renders the WHOLE modal — full-screen, its

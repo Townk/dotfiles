@@ -73,6 +73,7 @@ title=""
 inject=0
 capture=""
 no_chrome=0
+no_discover=0
 cmd=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -94,6 +95,14 @@ while [[ $# -gt 0 ]]; do
       # label — so this script skips the frame-era title block and just hands the
       # title to the target via ZJ_MODAL_TITLE.
       no_chrome=1
+      shift
+      ;;
+    --no-discover)
+      # Skip originating-pane discovery (the list-tabs + list-panes round-trips,
+      # ~50ms). Safe for action targets that don't refocus a specific pane: the
+      # workspace/tab quick-launch pickers switch sessions / open tabs and never
+      # read ZELLIJ_MODAL_TARGET_PANE (only the pane picker does).
+      no_discover=1
       shift
       ;;
     --capture)
@@ -184,30 +193,6 @@ discover_target_pane() {
       '
 }
 
-# Resolve the background tint hex for the originating pane and export it as
-# PICK_BG_TINT, so a picker opened over a remote-tinted window paints its fzf
-# background to match instead of the host base. Reuses terminal-location.zsh —
-# the same command→tint mapping WezTerm uses for the window. No-op when the pane
-# isn't a bare-ssh session (a nested-zellij tile isn't covered) or anything is
-# unresolvable; every step fails safe so it never aborts the modal.
-maybe_export_pane_tint() {
-  local pane="${1:-}" lib num cmd name hex
-  [[ -n "$pane" ]] || return 0
-  num="${pane#terminal_}"
-  [[ "$num" == <-> ]] || return 0
-  lib="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/scripts/lib/terminal-location.zsh"
-  [[ -r "$lib" ]] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-  cmd="$("$ZELLIJ_BIN" action list-panes -a -j 2>/dev/null \
-    | jq -r --argjson id "$num" '.[] | select(.id == $id and .is_plugin == false) | .pane_command // empty' 2>/dev/null \
-    | head -n1)" || return 0
-  [[ -n "$cmd" ]] || return 0
-  source "$lib" || return 0
-  name="$(tl_classify_command "$cmd" 2>/dev/null)" || return 0
-  hex="$(tl_hex_for_colorname "$name" 2>/dev/null)" || return 0
-  export PICK_BG_TINT="$hex"
-}
-
 # Shared dialog theme — single source of the catppuccin palette (THEME_*) and
 # the rule helper. Sourced by absolute path so it works outside any login shell.
 source "$HOME/.local/lib/theme-common.zsh"
@@ -261,9 +246,12 @@ if ((!inject)); then
   # Action mode: hand the pane to the target and let it own the outcome
   # (exit status, kill-session, etc). Also pass the originating tiled pane so
   # action targets that split panes can move focus back before calling zellij.
-  target_pane="$(discover_target_pane)" || target_pane=""
+  if (( no_discover )); then
+    target_pane=""
+  else
+    target_pane="$(discover_target_pane)" || target_pane=""
+  fi
   [[ -z "$target_pane" ]] || export ZELLIJ_MODAL_TARGET_PANE="$target_pane"
-  maybe_export_pane_tint "$target_pane" || true
   # `exec` so the target becomes PID 1 of the pane and `close_on_exit` disposes
   # of it when it returns.
   focus_self
@@ -273,7 +261,6 @@ fi
 
 # Picker mode: discover where to inject before running the target.
 target_pane="$(discover_target_pane)" || target_pane=""
-maybe_export_pane_tint "$target_pane" || true
 focus_self
 focus_self_deferred
 

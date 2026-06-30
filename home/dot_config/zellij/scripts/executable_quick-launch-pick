@@ -110,13 +110,14 @@ elif [[ "$kind" == workspace ]]; then
   force_build=1
   live_json="$(zellij list-sessions -s 2>/dev/null | sed '/^$/d' | jq -R . | jq -s -c . 2>/dev/null)"
   [[ -n "$live_json" ]] || live_json='[]'
-  # Which live sessions are attached to their own OS window right now (resolved
-  # from each WezTerm pane's client socket). Such workspaces are tagged "(other
-  # window)" instead of "(detached)", and selecting one raises that window. On
-  # Ghostty / when WezTerm isn't reachable this is empty → all live workspaces
-  # read as "(detached)", matching what we can act on there.
+  # Which live sessions currently have a client attached (i.e. own an OS window):
+  # tagged "(other window)" instead of "(detached)", and selecting one raises
+  # that window. Resolved cheaply from a single ps+lsof snapshot
+  # (zellij_attached_sessions) — the precise WezTerm window is resolved lazily at
+  # dispatch by quick-launch-window, so the menu doesn't pay for it. Empty on
+  # Ghostty / when nothing is attached → all live workspaces read as "(detached)".
   source "${0:A:h}/lib/zellij-session.zsh" 2>/dev/null || true
-  windowed_json="$({ zellij_wezterm_sessions 2>/dev/null | cut -f1 | sed '/^$/d' | jq -R . | jq -s -c .; } 2>/dev/null || true)"
+  windowed_json="$({ zellij_attached_sessions 2>/dev/null | sed '/^$/d' | jq -R . | jq -s -c .; } 2>/dev/null || true)"
   [[ -n "$windowed_json" ]] || windowed_json='[]'
 else
   LINES_CACHE="$CACHE_DIR/lines-$kind.txt"

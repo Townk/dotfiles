@@ -19,14 +19,29 @@
     args    OPTIONAL extra args passed to the target script, already
             KDL-quoted and space-separated (e.g. `"--resume"`). Used by
             the "resume picker" binds. Omit for none.
+    borderless
+            OPTIONAL. Default false → zellij draws a rounded frame
+            (framed dialogs, e.g. the confirm prompts). Pass true for
+            fzf pickers so zellij draws no frame and pty-frame owns the
+            chrome.
+    no_chrome
+            OPTIONAL. Pass true (with borderless true) for fzf pickers:
+            zellij-modal skips its own title block and hands the title
+            to pty-frame, which renders the whole modal.
+    no_discover
+            OPTIONAL. Pass true for action-mode targets that don't refocus
+            a specific pane (the workspace/tab pickers): skips the
+            list-tabs + list-panes round-trips zellij-modal would otherwise
+            run to find the originating pane. Leave unset for the pane
+            picker, which needs ZELLIJ_MODAL_TARGET_PANE.
 
-  `name ""` suppresses the frame title text; `borderless false`
-  overrides the global `pane_frames false` so the modal still gets a
-  rounded frame; `pinned true` keeps it on top of other floats;
-  `close_on_exit true` disposes of the pane when the target returns.
+  `name ""` suppresses the frame title text; `pinned true` keeps it on
+  top of other floats; `close_on_exit true` disposes of the pane when
+  the target returns. `borderless`/`no_chrome` (above) decide whether
+  zellij frames the modal or pty-frame owns the chrome.
 */ -}}
 {{- define "zellijModalRun" -}}
-            Run "env" "COLORTERM=truecolor" "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }}{{ if and (hasKey . "no_chrome") .no_chrome }} "--no-chrome"{{ end }} "--" "{{ joinPath .home ".config/zellij/scripts" .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
+            Run "env" "COLORTERM=truecolor" "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }}{{ if and (hasKey . "no_chrome") .no_chrome }} "--no-chrome"{{ end }}{{ if and (hasKey . "no_discover") .no_discover }} "--no-discover"{{ end }} "--" "{{ joinPath .home ".config/zellij/scripts" .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
                 name ""
                 close_on_exit true
                 floating true
@@ -248,16 +263,16 @@ keybinds clear-defaults=true {
 
         // Ctrl+Shift+g — Gitmoji picker. Spawns
         // ~/.config/zellij/scripts/pick-gitmoji-zellij in a
-        // floating, pinned pane with the same shape, frame, and
+        // floating, pinned pane with the same shape, chrome, and
         // title-block contract as the Ctrl+Shift+u glyph picker.
         // The wrapper runs the general-purpose `pick-gitmoji` from
         // ~/.local/libexec/ (which fetches & caches the gitmoji.dev
         // catalog at $XDG_CACHE_HOME/pick-gitmoji/), captures the
         // chosen emoji or :code:, and `write-chars --pane-id
         // <originating-tile>` injects it back into the pane the
-        // user came from. Same `name ""` + `borderless false`
-        // combo as the glyph picker so the floating frame is
-        // present but title-less.
+        // user came from. Same `borderless true` + `no_chrome`
+        // contract as the glyph picker: pty-frame owns the chrome,
+        // so zellij draws no frame.
         bind "Ctrl Shift g" {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
@@ -494,6 +509,7 @@ keybinds clear-defaults=true {
                      "inject" false
                      "borderless" true
                      "no_chrome" true
+                     "no_discover" true
                      "script" "quick-launch-zellij"
                      "args" "\"workspace\""
                      "width" "70%"
@@ -542,6 +558,7 @@ keybinds clear-defaults=true {
                      "inject" false
                      "borderless" true
                      "no_chrome" true
+                     "no_discover" true
                      "script" "quick-launch-zellij"
                      "args" "\"tab\""
                      "width" "70%"
@@ -891,11 +908,12 @@ theme "chezmoi-system"
 pane_frames false
 
 // Frame corner style. zellij has no per-pane rounded-corners control —
-// it's this global UI setting only. But since `pane_frames false` above
-// keeps every tiled pane frameless, the ONLY panes that actually draw a
-// frame are our `zellijModalRun` modals (they set `borderless false` to
-// opt back in), so in practice this rounds just the modal dialogs — and
-// makes the "(rounded) frame" notes on those binds literally true.
+// it's this global UI setting only. Since `pane_frames false` above keeps
+// every tiled pane frameless, the only panes that draw a zellij frame are
+// the framed dialogs that keep the default `borderless false` (e.g. the
+// gum confirm prompts) and zellij-open's image preview — so this rounds
+// just those. fzf pickers pass `borderless true` and let pty-frame draw
+// their own rounded chrome.
 ui {
     pane_frames {
         rounded_corners true

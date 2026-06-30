@@ -138,9 +138,7 @@ tl_tint_palette() {
 
 # Resolve a palette color NAME to its "#rrggbb" hex from tint-palette.toml — the
 # same source WezTerm reads. Non-zero (no output) when the name is undefined or
-# the palette is missing. Shared by theme-push (host→remote tint) and
-# zellij-modal (tinting a picker opened over a remote-tinted window), so the
-# lookup lives in exactly one place.
+# the palette is missing. Used by theme-push for the host→remote tint push.
 tl_hex_for_colorname() {
   local name="$1" file hex
   [[ -n "$name" ]] || return 1

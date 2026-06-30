@@ -79,6 +79,22 @@ ql_load() {
     return 1
   fi
 
+  # Fast path: reuse the already-merged cache when it is newer than every source
+  # file (the menu writes it via ql_write_merged_cache). Skips the per-file yq +
+  # jq merge — the dominant cost of opening the menu — whenever configs are
+  # unchanged. A touched-but-unchanged source just forces one harmless re-merge.
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/merged.json"
+  if [[ -s "$cache" ]]; then
+    local stale=0
+    for f in "${files[@]}"; do
+      [[ "$f" -nt "$cache" ]] && { stale=1; break; }
+    done
+    if (( ! stale )); then
+      QL_JSON="$(<"$cache")"
+      [[ -n "$QL_JSON" ]] && return 0
+    fi
+  fi
+
   QL_JSON="$(
     for f in "${files[@]}"; do ql_file_to_json "$f"; done | jq -sc '
       def merge_list($docs; $k):
