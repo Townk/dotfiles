@@ -488,20 +488,24 @@ it adds a `theme-apply` resolver and a `theme-push` helper, not a new paradigm.
 
 > **Landed so far:** the §4 foundation (`theme.yaml` + `palette.{zsh,json,lua}`);
 > every runtime-reading consumer — the 3 viewers, glow, pi (drift fixed), fzf
-> (`completion.sh` + `pick-common`), `pick.jq`; zj-hud's bar-bg-follows-`Style`
-> **and** a configurable which-key background; and the **runtime override layer's
-> shell slice** — `theme-apply` resolver + zshrc wiring, so dropping a
-> `~/.config/theme/override.toml` recolors the shell/fzf/dialogs/viewers on the
-> next shell. All committed and mirrored to the dev-shell, each verified.
-> **Remaining:** override slices 2–3 (the zellij/zj-hud bar background via an
-> effective zellij theme, and the host-side `theme-push` + ssh-hook transport);
-> the named-theme→generated-artifact swaps (ghostty/wezterm/bottom/nvim/yazi);
-> the non-Mocha prompt/statusline migration; and the Tier-2 `.tmTheme`.
+> (`completion.sh` + `pick-common`), `pick.jq`; zj-hud **v0.1.3** (bar-bg-
+> follows-`Style` + a configurable which-key background), wired into the chezmoi
+> manifest; and the **complete runtime override layer** — `theme-apply` resolves
+> canonical ⊕ loose `override.toml` into the effective palette **and** the Zellij
+> `system` theme (so the zj-hud bar tints too), running before the Zellij attach;
+> and `theme-push` + the ssh `Match host … exec` hook deliver a host's per-target
+> tint on connect. All committed and mirrored to the dev-shell, each verified —
+> end to end, a `theme-push` to the dev-shell tints its bar to the `blue`
+> profile default.
+> **Remaining:** the named-theme→generated-artifact swaps
+> (ghostty/wezterm/bottom/nvim/yazi); the non-Mocha prompt/statusline migration;
+> and the Tier-2 `.tmTheme`.
 
 1. **Prerequisite — close custom-binary color gaps (§4.7).** zj-hud config keys
-   **+ bar-bg-follows-`Style`** — **done & committed** (unreleased; 302 tests,
-   verified live on the dev-shell). ai-playbook `ui` `--theme-*`/`--theme-file` —
-   **requested** in that repo. The other two binaries need nothing.
+   **+ bar-bg-follows-`Style`** + configurable which-key bg — **done, released
+   v0.1.3** (302 tests; chezmoi manifest bumped). ai-playbook `ui`
+   `--theme-*`/`--theme-file` — **requested** in that repo. The other two
+   binaries need nothing.
 2. **Foundation** — **done.** `theme.yaml` (palette + semantic + extended) +
    generated `~/.config/theme/palette.zsh`; `common.zsh` sources it (path
    overridable via `THEME_PALETTE_FILE`); the spec helper renders it
@@ -521,9 +525,12 @@ it adds a `theme-apply` resolver and a `theme-push` helper, not a new paradigm.
 6. **Migrate the non-Mocha surfaces (§4.2).** `p10k.zsh`, `_lib.sh`, lualine
    fallbacks, `completion.sh` warnings, `dot_zshrc`, the One-Dark colors in the
    zellij bar.
-7. **Runtime override layer (§4.8).** `theme-apply` resolver (effective palette +
-   effective `system.kdl`); loose `override.toml`; `theme-push` + the ssh
-   `Match exec` rsync hook; zj-hud bg-from-`Style` (from step 1).
+7. **Runtime override layer (§4.8) — done.** `theme-apply` resolver (effective
+   palette + effective `system.kdl`: block renamed to `system`, each overridden
+   token's RGB substituted, stamped staleness check) running before the Zellij
+   attach; loose `override.toml`; `theme-push` (host-side, reusing
+   `terminal-location.zsh` + `tint-palette.toml`) + the ssh `Match host … exec`
+   hook documented in `config.example`; zj-hud bg-from-`Style` (from step 1).
 8. **Cleanup.** Blink decision (§4.6); add a lint (§7); document the new silo.
 
 Each phase is independently shippable and leaves the repo working.
