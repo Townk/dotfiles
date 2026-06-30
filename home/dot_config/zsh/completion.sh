@@ -47,8 +47,8 @@ zstyle ':completion:*' menu no
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|=*' 'l:|=* r:|=*'
 zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
 zstyle ':completion:*' group-name ''
-zstyle ':completion:*:descriptions' format '%F{#e5bf7b}-- %d --%f'
-zstyle ':completion:*:warnings' format '%F{#e06c75}-- no matches --%f'
+zstyle ':completion:*:descriptions' format "%F{$C_HEX_YELLOW}-- %d --%f"
+zstyle ':completion:*:warnings' format "%F{$C_HEX_RED}-- no matches --%f"
 zstyle ':completion:*' completer _complete _match _approximate
 zstyle ':completion:*' use-cache on
 zstyle ':completion:*' cache-path "${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompcache"

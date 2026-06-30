@@ -30,6 +30,10 @@ _zsh_should_autoattach_zellij() {
 [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" ]] \
   && export THEME_PALETTE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.zsh" \
             THEME_PALETTE_JSON="${XDG_CACHE_HOME:-$HOME/.cache}/theme/palette.json"
+# Load the palette into this shell so the prompt (p10k), _lib.sh, completion.sh,
+# and the welcome separator can reference C_HEX_* (the effective palette when an
+# override is active, else canonical). palette.zsh is fork-free and guarded.
+source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/palette.zsh}"
 
 # Auto-attach Zellij for interactive shells.
 # Done before the rest of init so the outer shell doesn't pay for setup
@@ -223,7 +227,7 @@ if [[ -n "$ZELLIJ" ]] && \
    [[ "$(zellij action list-tabs -p --json 2>/dev/null \
          | jq 'map(.selectable_tiled_panes_count + .selectable_floating_panes_count) | add' 2>/dev/null)" -eq 1 ]]; then
   type motd >/dev/null 2>&1 && motd
-  print -P -- "                                        %F{#5c6370}━━━━━━━━ ❖ ━━━━━━━━%f\n"
+  print -P -- "                                        %F{$C_HEX_OVERLAY0}━━━━━━━━ ❖ ━━━━━━━━%f\n"
   type terminal_commands >/dev/null 2>&1 && terminal_commands
 fi
 
