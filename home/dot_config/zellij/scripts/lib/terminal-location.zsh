@@ -130,6 +130,30 @@ tl_colorname_for_target() {
   return 1
 }
 
+# Path to the shared WezTerm tint palette (flat `name = "#hex"`). Env override
+# for tests: $TERMINAL_LOCATION_TINT_PALETTE.
+tl_tint_palette() {
+  print -r -- "${TERMINAL_LOCATION_TINT_PALETTE:-${XDG_CONFIG_HOME:-$HOME/.config}/wezterm/tint-palette.toml}"
+}
+
+# Resolve a palette color NAME to its "#rrggbb" hex from tint-palette.toml — the
+# same source WezTerm reads. Non-zero (no output) when the name is undefined or
+# the palette is missing. Shared by theme-push (host→remote tint) and
+# zellij-modal (tinting a picker opened over a remote-tinted window), so the
+# lookup lives in exactly one place.
+tl_hex_for_colorname() {
+  local name="$1" file hex
+  [[ -n "$name" ]] || return 1
+  file="$(tl_tint_palette)"
+  [[ -r "$file" ]] || return 1
+  hex="$(awk -v n="$name" '
+    $0 ~ "^[[:space:]]*" n "[[:space:]]*=" {
+      if (match($0, /#[0-9A-Fa-f]{6}/)) { print substr($0, RSTART, RLENGTH); exit }
+    }' "$file")"
+  [[ -n "$hex" ]] || return 1
+  print -r -- "$hex"
+}
+
 tl_zellij_bin() {
   local z="${ZELLIJ_BIN:-${commands[zellij]:-}}"
   [[ -n "$z" && -x "$z" ]] && {
@@ -145,12 +169,15 @@ tl_zellij_bin() {
   return 1
 }
 
-# Focused terminal pane command via list-panes JSON.
+# Focused terminal pane command via list-panes JSON. A floating modal (our
+# pickers/dialogs) keeps its own focus while the originating tile stays focused
+# in the tiled axis, so `is_focused` matches both; exclude floating panes so a
+# transient modal never hijacks the window tint — the tiled pane is the context.
 tl_focused_pane_command() {
   local session="$1" zj
   zj="$(tl_zellij_bin)" || return 1
   "$zj" -s "$session" action list-panes -a -j 2>/dev/null |
-    jq -r '[.[] | select(.is_plugin == false and .is_focused == true)] | .[0].pane_command // empty' 2>/dev/null
+    jq -r '[.[] | select(.is_plugin == false and .is_focused == true and .is_floating == false)] | .[0].pane_command // empty' 2>/dev/null
 }
 
 # RUNNING_COMMAND of the sole client (fallback when no focused terminal pane).

@@ -319,11 +319,16 @@ pick::add_selector_mode_binds() {
 # never leaks to the picker's stdout.
 pick::build_fzf_args() {
   local NBSP=$'\u00a0'
+  # A picker opened over a remote-tinted window (zellij-modal exports
+  # PICK_BG_TINT) paints its background with that tint, so the modal isn't a
+  # host-colored island on the tinted window. Only the background shifts; the
+  # rest stays canonical, matching the override layer on the remote itself.
+  local pick_bg="${PICK_BG_TINT:-$C_HEX_BASE}"
   typeset -gA pick_ui
   pick_selector_wrap=0
   pick_display_fields=1
   fzf_args=(
-    --color=bg:"$C_HEX_BASE"
+    --color=bg:"$pick_bg"
     --color=bg+:"$C_HEX_SURFACE0"
     --color=fg:"$C_HEX_TEXT"
     --color=fg+:"regular:$C_HEX_TEXT"
@@ -333,7 +338,7 @@ pick::build_fzf_args() {
     --color=pointer:"$C_HEX_ROSEWATER"
     --color=marker:"$C_HEX_LAVENDER"
     --color=info:"$C_HEX_MAUVE"
-    --color=gutter:"$C_HEX_BASE"
+    --color=gutter:"$pick_bg"
     --color=header:"$C_HEX_SURFACE2"
     --color=label:"$C_HEX_MAUVE"
     --color=spinner:"$C_HEX_ROSEWATER"

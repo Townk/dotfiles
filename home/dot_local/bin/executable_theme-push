@@ -19,26 +19,16 @@ set -uo pipefail
 
 target="${1:?usage: theme-push <ssh-target>}"
 
-tint_palette="${XDG_CONFIG_HOME:-$HOME/.config}/wezterm/tint-palette.toml"
 loc_lib="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/scripts/lib/terminal-location.zsh"
+[[ -r "$loc_lib" ]] || exit 0
+source "$loc_lib"
 
 # Tint NAME for the target (the same resolution WezTerm uses); default grey.
-name=grey
-if [[ -r "$loc_lib" ]]; then
-  source "$loc_lib"
-  name="$(tl_colorname_for_target "$target" 2>/dev/null)" || name="${TL_REMOTE_DEFAULT_COLOR:-grey}"
-  [[ -n "$name" ]] || name="${TL_REMOTE_DEFAULT_COLOR:-grey}"
-fi
+name="$(tl_colorname_for_target "$target" 2>/dev/null)" || name="${TL_REMOTE_DEFAULT_COLOR:-grey}"
+[[ -n "$name" ]] || name="${TL_REMOTE_DEFAULT_COLOR:-grey}"
 
-# NAME -> hex from the shared palette (flat `name = "#hex"`).
-hex=""
-if [[ -r "$tint_palette" ]]; then
-  hex="$(awk -v n="$name" '
-    $0 ~ "^[[:space:]]*" n "[[:space:]]*=" {
-      if (match($0, /#[0-9A-Fa-f]{6}/)) { print substr($0, RSTART, RLENGTH); exit }
-    }' "$tint_palette")"
-fi
-[[ -n "$hex" ]] || exit 0   # unknown tint → leave the remote as-is
+# NAME -> hex via the shared lookup (lives in terminal-location.zsh).
+hex="$(tl_hex_for_colorname "$name")" || exit 0   # unknown tint → leave the remote as-is
 
 # Stage the override and rsync it. Timeouts mirror the symbols.db hook so a
 # sleeping or unreachable target can't stall the login.
