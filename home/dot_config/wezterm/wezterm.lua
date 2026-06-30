@@ -40,30 +40,46 @@ config.mux_enable_ssh_agent = false
 
 -- For example, changing the color scheme:
 config.color_scheme = "Catppuccin Mocha"
+-- tab_bar colors come from the single-source palette
+-- (~/.config/theme/palette.lua, generated from .chezmoidata/theme.yaml): base +
+-- the extended.tab chrome. Loaded at config time; the literal fallbacks (the
+-- current Mocha values) keep wezterm working if the bridge is ever missing.
+-- color_scheme stays the built-in "Catppuccin Mocha" — a generated `system`
+-- scheme would have to reproduce wezterm's own built-in ANSI exactly.
+local function load_palette()
+	local ok, t = pcall(dofile, os.getenv("HOME") .. "/.config/theme/palette.lua")
+	if ok and type(t) == "table" and t.palette then
+		return t
+	end
+	return nil
+end
+local theme = load_palette()
+local pal = (theme and theme.palette) or {}
+local tab = (theme and theme.extended and theme.extended.tab) or {}
 config.colors = {
 	tab_bar = {
-		background = "#1E1E2E",
+		background = pal.base or "#1E1E2E",
 		active_tab = {
-			bg_color = "#656A83",
-			fg_color = "#FFFFFF",
+			bg_color = tab.active_bg or "#656A83",
+			fg_color = tab.active_fg or "#FFFFFF",
 			intensity = "Bold",
 		},
 		inactive_tab = {
-			bg_color = "#282C41",
-			fg_color = "#9B9FC1",
+			bg_color = tab.bg or "#282C41",
+			fg_color = tab.fg or "#9B9FC1",
 		},
 		inactive_tab_hover = {
-			bg_color = "#1E1E2E",
-			fg_color = "#9B9FC1",
+			bg_color = pal.base or "#1E1E2E",
+			fg_color = tab.fg or "#9B9FC1",
 			italic = true,
 		},
 		new_tab = {
-			bg_color = "#282C41",
-			fg_color = "#9B9FC1",
+			bg_color = tab.bg or "#282C41",
+			fg_color = tab.fg or "#9B9FC1",
 		},
 		new_tab_hover = {
-			bg_color = "#1E1E2E",
-			fg_color = "#9B9FC1",
+			bg_color = pal.base or "#1E1E2E",
+			fg_color = tab.fg or "#9B9FC1",
 			italic = true,
 		},
 	},
