@@ -37,17 +37,26 @@ stamp="$cache/.stamp"
 command -v jq >/dev/null 2>&1 || exit 0
 mkdir -p "$cache" || exit 0
 
+# The override represents "viewing this machine from elsewhere" (the WezTerm SSH
+# tint), so only honor it in a REMOTE session — a local session at the machine
+# keeps the canonical theme. An always-remote box (a headless dev-shell) is
+# unchanged; the host has no override file. The flag rides the staleness key so
+# switching local<->remote regenerates the effective files.
+remote=0
+[[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] && remote=1
+
 # --- staleness: skip when inputs unchanged and outputs present ---------------
 mt() { date -r "$1" +%s 2>/dev/null || echo 0; }
-key="o:$(mt "$override") p:$(mt "$canon_json") k:$(mt "$canon_kdl")"
+key="o:$(mt "$override") p:$(mt "$canon_json") k:$(mt "$canon_kdl") s:$remote"
 if [[ -f "$eff_json" && -f "$eff_zsh" && "$(cat "$stamp" 2>/dev/null)" == "$key" \
    && ( ! -r "$canon_kdl" || -f "$eff_kdl" ) ]]; then
   exit 0
 fi
 
 # --- override.toml (flat `name = "hex"`, '#' optional) -> JSON {name:"#hex"} --
+# Only in a remote session (see above); local sessions fall through with ov={}.
 ov='{}'
-if [[ -r "$override" ]]; then
+if (( remote )) && [[ -r "$override" ]]; then
   ov=$(awk -F= '
     /^[[:space:]]*#/ { next }
     /=/ {
