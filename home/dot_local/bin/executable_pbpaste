@@ -1,0 +1,45 @@
+#!/bin/sh
+# pbpaste — universal clipboard paste. Read side of the pbcopy/pbpaste pair;
+# see pbcopy for the full picture.
+#
+# Local (no SSH): delegates straight to the real platform clipboard tool
+# (macOS's own /usr/bin/pbpaste, or wl-paste/xclip on Linux).
+#
+# Over SSH: reads the Mac's clipboard back through a reverse SSH tunnel
+# instead of OSC 52 (which Zellij refuses to answer — a terminal-based read
+# would just hang). ~/.ssh/config.d/clipboard.config reverse-forwards the
+# Mac's clipboard-bridge listener (launchd `clipboard-bridge` -> socat ->
+# pbpaste) to a user-only unix socket on this host; we just `nc -U` it. When
+# the tunnel is down there is no local clipboard to fall back to, so this
+# fails loudly instead of silently returning nothing.
+#
+# Standalone POSIX sh, no library sourcing — see pbcopy.
+#
+# Usage: text=$(pbpaste)
+
+set -eu
+
+if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+  # Absolute path, not a PATH lookup — see pbcopy for why.
+  if [ -x /usr/bin/pbpaste ]; then
+    exec /usr/bin/pbpaste
+  elif command -v wl-paste >/dev/null 2>&1; then
+    exec wl-paste
+  elif command -v xclip >/dev/null 2>&1; then
+    exec xclip -selection clipboard -o
+  else
+    echo "pbpaste: no local clipboard tool found (pbpaste/wl-paste/xclip)" >&2
+    exit 1
+  fi
+fi
+
+# Keep in sync with home/private_dot_ssh/config.d/private_clipboard.config
+# (RemoteForward target) and nvim's lua/config/options.lua clipboard provider.
+sock="$HOME/.local/state/runtime/chezmoi-system/clipboard-bridge.sock"
+
+[ -S "$sock" ] || {
+  echo "pbpaste: clipboard bridge socket not found at $sock (reverse SSH tunnel down?)" >&2
+  exit 1
+}
+
+exec nc -U -w 1 "$sock"

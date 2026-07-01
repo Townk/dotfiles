@@ -87,6 +87,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | Secrets & onboarding | `system-secrets`, `system-onboard` | `system-secrets-common.zsh` |
 | Orchestration | `system-update` | — |
 | Notifications | `notify` | `common.zsh` (the `notify` primitive) |
+| Clipboard | `pbcopy`, `pbpaste` | — (standalone POSIX `sh`) |
 | Utility | `wait-until` | — (standalone POSIX `sh`) |
 
 ¹ macOS-only; excluded from other hosts via `.chezmoiignore.tmpl`.
@@ -111,6 +112,29 @@ front-end (help text, argument handling, and a hard error when Hammerspoon
 isn't running). The library function is best-effort instead: it returns
 non-zero quietly so hot paths (e.g. the zellij `copy-pwd` helper) can ignore a
 missing OSD.
+
+## `pbcopy` / `pbpaste`
+
+Universal clipboard front end — the same two commands work whether you're
+sitting at the Mac or SSH'd into a remote host, and they shadow the real
+`/usr/bin/pbcopy`/`pbpaste` on PATH (`~/.local/bin` is prepended ahead of
+`/usr/bin` in `dot_zshrc`):
+
+- **Local** (no `SSH_CONNECTION`/`SSH_CLIENT`/`SSH_TTY`): delegate straight
+  to the platform's real tool (macOS `/usr/bin/pbcopy`/`pbpaste`, or
+  `wl-copy`/`wl-paste`/`xclip` on Linux).
+- **Over SSH**: `pbcopy` base64-encodes stdin and writes an OSC 52 sequence
+  straight to `/dev/tty` (write-only, rides up through Zellij/WezTerm to the
+  Mac's clipboard — see terminal-mux's OSC 52 notes in
+  `docs/chezmoi-silo-map.md`). `pbpaste` reads the Mac's clipboard back
+  through the reverse-SSH-tunnelled unix socket set up by
+  `home/private_dot_ssh/config.d/private_clipboard.config`
+  (`~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`), the same
+  bridge nvim's clipboard provider (`lua/config/options.lua`) uses.
+
+Standalone POSIX `sh`, no library sourcing — same "dependency-free
+primitive" rationale as `wait-until`, since these need to work from any
+caller (editors, git, other scripts) with zero fragile dependencies.
 
 ## `wait-until`
 
