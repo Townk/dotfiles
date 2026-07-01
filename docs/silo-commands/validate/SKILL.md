@@ -52,9 +52,10 @@ rm -rf "$sandbox"
 ```
 
 **Honest limit:** real OS integration surfaces (sockets like
-`~/.clipboard-bridge.sock`, launchd agents, mise-managed runtimes at their
-real install dirs) are **absent** in a sandbox. Logic tests pass; integration
-tests don't run at all. Anything touching those needs Mode B.
+`~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`, launchd agents,
+mise-managed runtimes at their real install dirs) are **absent** in a
+sandbox. Logic tests pass; integration tests don't run at all. Anything
+touching those needs Mode B.
 
 **chezmoi-state caution:** pointing chezmoi at a different `--source` then
 back at the canonical source *may* disturb the global chezmoi state file. If

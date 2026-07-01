@@ -36,8 +36,8 @@ chezmoi dotfiles repo.
   client reads.
 - The `clipboard-bridge` launchd *service definition* in
   `home/dot_config/packages/services.toml.tmpl` → **system-services**. You
-  own the `~/.clipboard-bridge.sock` protocol; **system-services** owns the
-  plist fields.
+  own the `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`
+  protocol; **system-services** owns the plist fields.
 - The `pick::` engine and `pick-glyph`/`pick-gitmoji` libexec → **pick**. You
   own the `zj::pick` adapter and the `pick-*-zellij` modal adapters that call
   them.
@@ -55,8 +55,9 @@ chezmoi dotfiles repo.
   Consumed by `zellij-open`, `tab-edit` (**utils**), quick-launch.
 - **OSC 52 clipboard protocol**: `copy_command` intentionally unset in
   `config.kdl.tmpl`; copy is origin-relative via re-emitted OSC 52. The SSH
-  paste-back reads `~/.clipboard-bridge.sock` (served by **system-services**'
-  `clipboard-bridge` agent); nvim (**neovim**) implements the client.
+  paste-back reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`
+  (served by **system-services**' `clipboard-bridge` agent); nvim
+  (**neovim**) implements the client.
 - **Workspace-rename side-channel**: `__TOGGLE_FULLSCREEN__` /
   `__QL_FOCUS__=<id>` workspace names drive WezTerm handlers. Your
   `terminal-toggle-fullscreen` and quick-launch depend on these exact

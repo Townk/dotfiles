@@ -64,13 +64,16 @@ vim.g.lazyvim_python_ruff = "ruff"
 --           (clipboard-bridge launchd service) that serves `pbpaste`; SSH
 --           reverse-forwards it to a user-only unix socket on this host (see
 --           ~/.ssh/config.d/clipboard.config), and we read it with `nc -U`.
+--           The socket lives under $HOME/.local/state/runtime/chezmoi-system/
+--           (not directly in $HOME) so it doesn't clutter the home directory;
+--           chezmoi creates that directory on apply.
 --           When the tunnel is down (socket missing, no nc, or a non-tunnelled
 --           SSH session) we fall back to the unnamed register, preserving the
 --           old no-hang behavior. Gated to SSH so local Neovim keeps pbcopy.
 if vim.env.SSH_CONNECTION or vim.env.SSH_CLIENT or vim.env.SSH_TTY then
     vim.opt.clipboard = "unnamedplus"
     local osc52 = require("vim.ui.clipboard.osc52")
-    local sock = (vim.env.HOME or "") .. "/.clipboard-bridge.sock"
+    local sock = (vim.env.HOME or "") .. "/.local/state/runtime/chezmoi-system/clipboard-bridge.sock"
     local uv = vim.uv or vim.loop
     local function paste()
         if vim.fn.executable("nc") == 1 and uv.fs_stat(sock) then

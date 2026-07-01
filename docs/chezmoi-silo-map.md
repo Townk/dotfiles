@@ -86,7 +86,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 **Public contract (preserve):**
 - `zj::pick` — drop-in for `pick::start` (pick). Same argv, floats in a Zellij pane when `$ZELLIJ` set, else inline. Consumed by `ai-assist`/`ai-commit` (ai-harnesses) and `quick-launch-pick`.
 - `resolve_session <client_pid>` / `zellij_wezterm_sessions` in `zellij/scripts/lib/zellij-session.zsh` — unix-socket session resolver. Consumed by `zellij-open`, `tab-edit` (utils), quick-launch.
-- **OSC 52 clipboard protocol**: `copy_command` intentionally unset in `config.kdl.tmpl`; copy is origin-relative via re-emitted OSC 52. The SSH paste-back reads `~/.clipboard-bridge.sock` (served by system's `clipboard-bridge` agent). nvim implements the client.
+- **OSC 52 clipboard protocol**: `copy_command` intentionally unset in `config.kdl.tmpl`; copy is origin-relative via re-emitted OSC 52. The SSH paste-back reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` (served by system's `clipboard-bridge` agent). nvim implements the client.
 - **Workspace-rename side-channel**: `__TOGGLE_FULLSCREEN__` / `__QL_FOCUS__=<id>` workspace names drive WezTerm handlers. `terminal-toggle-fullscreen` (this silo) and quick-launch depend on these exact sentinel strings.
 - **Fullscreen-state mirror file**: `~/.local/state/wezterm/fullscreen_state` (atomic write-on-change) — read by the zj-hud bar.
 - `get_terminal_image_protocol()` in `image-protocol-support.zsh` — returns Kitty/iTerm2/Sixel capability list constrained through Zellij. Consumed by `preview` (preview).
@@ -108,7 +108,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 **Public contract (preserve):**
 - **Filetype registry**: `vim.filetype.add` patterns (`.json.tmpl`→`json.gotmpl`, etc.) and `vim.filetype.inspect().extension` — the chezmoi "Open in NeoVim" app generator queries this headlessly to build UTI lists. Adding/removing filetype mappings changes Finder's "Open With" coverage.
-- **SSH clipboard client** (`options.lua`): `vim.g.clipboard` custom paste reads `~/.clipboard-bridge.sock` via `nc -U`; copy uses OSC 52. Gated to SSH. The socket path and the `nc -U` read protocol are the seam with terminal-mux/system.
+- **SSH clipboard client** (`options.lua`): `vim.g.clipboard` custom paste reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` via `nc -U`; copy uses OSC 52. Gated to SSH. The socket path and the `nc -U` read protocol are the seam with terminal-mux/system.
 - **Chezmoi auto-apply** (`autocmds.lua`): `BufReadPre` redirect → `chezmoi-reverse --no-merge` (utils); `BufWritePost` debounced `chezmoi apply --force`. Depends on `chezmoi-reverse`'s `needs-merge` exit semantics (utils).
 - **Harper shared dictionary**: `spell/en.utf-8.add` is chezmoi `create_`-prefixed (so apply never reverts). The `uv.new_fs_event` watcher + `workspace/didChangeConfiguration` ping to harper-ls.
 - **gotmpl treesitter injection**: `after/queries/gotmpl/injections.scm` + custom `inject-inner-ft!` directive.
@@ -460,7 +460,7 @@ owner area, don't parallelize.
 
 **Footnotes (the shared files behind each `⚠`):**
 1. **terminal-mux↔custom-builds**: built font family name + custom-icon `code` pins are custom-builds's output, terminal-mux's font chain references them. Safe if custom-builds preserves the contract; risky if either changes the pin set.
-2. **terminal-mux↔system**: `services.toml.tmpl` `clipboard-bridge` section — system owns the file, terminal-mux owns the socket protocol the nvim client uses. Pre-agree: system edits the plist fields, terminal-mux edits the `~/.clipboard-bridge.sock` protocol; both touching `[clipboard-bridge]` = collision.
+2. **terminal-mux↔system**: `services.toml.tmpl` `clipboard-bridge` section — system owns the file, terminal-mux owns the socket protocol the nvim client uses. Pre-agree: system edits the plist fields, terminal-mux edits the `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` protocol; both touching `[clipboard-bridge]` = collision.
 3. **terminal-mux↔shell**: Zellij auto-attach in `dot_zshrc` (shell) calls into terminal-mux's quick-launch recency seeding; `notify` (shell lib) is called by terminal-mux's `copy-pwd`. Different files, but the *call contract* must stay in sync.
 4. **terminal-mux↔preview**: `image-protocol-support.zsh` is owned by terminal-mux, sourced read-only by preview. Safe if preview only *calls* `get_terminal_image_protocol`; collision if preview needs to edit it (→ hand back to terminal-mux).
 5. **terminal-mux↔yazi**: `zellij-open` (terminal-mux) opens dirs in a Yazi tab (yazi). Contract is the Yazi invocation; different files.

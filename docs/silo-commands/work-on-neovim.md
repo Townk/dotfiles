@@ -34,9 +34,9 @@ You are working on the **NeoVim config** silo of this chezmoi dotfiles repo.
   app generator queries this headlessly to build Finder UTI lists.
   Adding/removing filetype mappings changes Finder's "Open With" coverage.
 - **SSH clipboard client** (`lua/config/options.lua`): `vim.g.clipboard`
-  custom paste reads `~/.clipboard-bridge.sock` via `nc -U`; copy uses OSC 52.
-  Gated to SSH. The socket path + `nc -U` read protocol are the seam with
-  **terminal-mux** / **system-services**.
+  custom paste reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`
+  via `nc -U`; copy uses OSC 52. Gated to SSH. The socket path + `nc -U` read
+  protocol are the seam with **terminal-mux** / **system-services**.
 - **Chezmoi auto-apply** (`lua/config/autocmds.lua`): `BufReadPre` redirect →
   `chezmoi-reverse --no-merge` (**utils**); `BufWritePost` debounced (5s)
   `chezmoi apply --force`; `VimLeavePre` flush. Depends on
@@ -52,8 +52,8 @@ You are working on the **NeoVim config** silo of this chezmoi dotfiles repo.
 ## What you consume read-only
 
 - **utils**: `chezmoi-reverse --no-merge` (emits `needs-merge`)
-- **terminal-mux** / **system-services**: `~/.clipboard-bridge.sock`, OSC 52
-  via WezTerm
+- **terminal-mux** / **system-services**: `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`,
+  OSC 52 via WezTerm
 - **chezmoi**: `chezmoi apply`
 - External: LazyVim, Mason, harper-ls, blink.cmp, opencode.nvim
 
