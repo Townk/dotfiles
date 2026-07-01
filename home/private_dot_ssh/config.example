@@ -31,56 +31,54 @@ Match all
 Include ~/.ssh/config.d/*
 
 # ---------------------------------------------------------------------------
-# OPTIONAL — pre-connect resource sync (glyph/gitmoji picker DB).
+# OPTIONAL — pre-connect remote-asset sync.
 #
-# The picker database (~/.local/share/fonts/nerd-font/symbols.db) is a
-# host-specific artifact: it is built on THIS desktop/laptop and bakes in the
-# renderability of this machine's terminal + font — which is exactly what
-# draws the glyphs when you SSH into a headless dev-shell. So the remote copy
-# must mirror whichever machine is connecting. This hook pushes it on every
-# connection; rsync sends only the changed blocks and is a near-instant no-op
-# when nothing changed.
+# sync-remote-assets is the single entry point for every host->remote sync
+# this config needs before a session starts. Today it runs two steps, both
+# host-specific artifacts computed from THIS machine's state, so they're
+# pushed on connect rather than baked in:
+#   * symbols-db — mirrors the glyph/gitmoji picker DB
+#     (~/.local/share/fonts/nerd-font/symbols.db), built on THIS desktop/
+#     laptop and baking in the renderability of this machine's terminal +
+#     font — exactly what draws the glyphs when you SSH into a headless
+#     dev-shell. The remote ~/.local/share/fonts/nerd-font/ directory must
+#     already exist.
+#   * theme — computes the background tint THIS machine's WezTerm paints for
+#     <devbox> (the onboarded color / profile default / grey, from the shared
+#     tint-palette.toml) and writes it as a loose
+#     ~/.config/theme/override.toml on the remote; the remote's theme-apply
+#     folds it into the effective palette and the Zellij `system` theme at
+#     shell startup, so the zj-hud bar, fzf, dialogs, and file viewers there
+#     match the window tint (see docs/theme-unification.md §4.8).
+# Both rsync deltas only — a near-instant no-op when nothing changed.
 #
 # This is host-specific, so it stays in this LOCAL file only and never goes
 # back to the repo. To enable: copy the line below, uncomment it, and replace
-# BOTH <devbox> tokens with your dev-shell's Host alias. The remote
-# ~/.local/share/fonts/nerd-font/ directory must already exist.
+# BOTH <devbox> tokens with your dev-shell's Host alias.
 #
 # Why each piece:
-#   * `_DBSYNC` sentinel — rsync opens its own ssh to <devbox>, which re-reads
-#     this config; the guard stops that second pass from re-running the hook
-#     (otherwise: infinite loop). The `_DBSYNC=1 rsync` exports it into that
-#     child ssh, which then sees it set and skips.
+#   * `originalhost` (NOT `host`) — `Match host` matches the target hostname
+#     AFTER any `HostName` substitution earlier in the file, so if <devbox>'s
+#     `Host` block sets a `HostName` different from the alias (e.g. `Host
+#     mac-mini { HostName foo.local }`), `Match host <devbox>` silently never
+#     matches — it's comparing the resolved HostName, not the alias.
+#     `originalhost` matches the alias as typed on the command line,
+#     regardless of any HostName substitution, so it works whether or not the
+#     alias equals its resolved HostName. (Verified live: `Match host` never
+#     fired for an alias with a differing HostName; switching to
+#     `originalhost` fixed it.)
+#   * `_SYNCREMOTE` sentinel — each step's rsync opens its own ssh to
+#     <devbox>, which re-reads this config; the guard stops that second pass
+#     from re-running the hook (otherwise: infinite loop). One sentinel
+#     covers every step since they all run from this single script
+#     invocation.
 #   * `; false` — makes this a side-effect-only block that contributes no SSH
 #     config (the exec never "matches").
-#   * timeouts + </dev/null — a sleeping/unreachable dev-shell can't stall or
-#     swallow stdin from your login; worst case you connect with a stale copy.
+#   * timeouts + </dev/null (inside the script, per rsync call) — a sleeping/
+#     unreachable dev-shell can't stall or swallow stdin from your login;
+#     worst case you connect with a stale copy.
 #
-# Match host <devbox> exec "[ -n \"$_DBSYNC\" ] || _DBSYNC=1 rsync -z --timeout=8 -e 'ssh -o ConnectTimeout=5' ~/.local/share/fonts/nerd-font/symbols.db <devbox>:.local/share/fonts/nerd-font/ </dev/null >/dev/null 2>&1; false"
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# OPTIONAL — pre-connect theme-tint push.
+# Run a single step by hand to test it, e.g. `sync-remote-assets <devbox> theme`.
 #
-# theme-push computes the background tint THIS machine's WezTerm paints for
-# <devbox> (the onboarded color / profile default / grey, from the shared
-# tint-palette.toml) and writes it as a loose ~/.config/theme/override.toml on
-# the remote. The remote's theme-apply folds it into the effective palette and
-# the Zellij `system` theme at shell startup, so the zj-hud bar, fzf, dialogs,
-# and file viewers there match the window tint. rsync sends only deltas — a
-# near-instant no-op when nothing changed.
-#
-# Host-specific, so it stays in this LOCAL file only and never goes back to the
-# repo. To enable: copy the line below, uncomment it, and replace BOTH <devbox>
-# tokens with your dev-shell's Host alias.
-#
-# Why each piece (same shape as the symbols.db hook above):
-#   * `_THEMEPUSH` sentinel — theme-push's rsync opens its own ssh to <devbox>,
-#     which re-reads this config; the guard stops that second pass from
-#     re-running the hook (otherwise: infinite loop).
-#   * `; false` — side-effect-only block that contributes no SSH config.
-#   * </dev/null + theme-push's own rsync timeouts — a sleeping/unreachable
-#     dev-shell can't stall or swallow stdin from your login.
-#
-# Match host <devbox> exec "[ -n \"$_THEMEPUSH\" ] || _THEMEPUSH=1 ~/.local/bin/theme-push <devbox> </dev/null >/dev/null 2>&1; false"
+# Match originalhost <devbox> exec "[ -n \"$_SYNCREMOTE\" ] || _SYNCREMOTE=1 ~/.local/libexec/sync-remote-assets <devbox> </dev/null >/dev/null 2>&1; false"
 # ---------------------------------------------------------------------------

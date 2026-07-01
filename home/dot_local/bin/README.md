@@ -21,6 +21,9 @@ absolute path from its caller, so it never needs to be on `PATH`:
 - `ics-view`, `sqlite-view`, `disk-image-view` — rich file preview renderers
   driven by `preview` and Yazi; they are implementation details, not general
   shell commands.
+- `sync-remote-assets` — the single entry point for pre-connect host→remote
+  syncs (glyph-picker DB, WezTerm tint override), driven by an ssh
+  `Match host ... exec` hook (see `~/.ssh/config.example`).
 - The AI terminal assistant is now the single `ai-playbook` Go binary
   (`~/Projects/langs/go/ai-playbook`, manually `go install`ed), which subsumes the
   former `ai-assist-*` shell stack (popup/input/shell/run/ask/remember/triage/

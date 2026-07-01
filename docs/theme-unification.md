@@ -467,15 +467,15 @@ base = "#1c232f"   # this session's tint; any token may be overridden
 ```
 
 **Host-owned, target-keyed, pushed on connect.** The file is authored on the
-**host**, not the remote, and `rsync`'d to the remote on connection — the exact
-mechanism already used for the glyph DB (`private_dot_ssh/config.example`: a
-`Match host … exec` pre-connect hook with a `_DBSYNC` sentinel + `; false`). A
-sibling hook runs `theme-push <target>`, which looks up the target's tint in the
-host's color map (the same `lib/terminal-location.zsh` / `tint-palette.toml`
-source WezTerm uses) and rsyncs a generated `override.toml` to
-`<target>:~/.config/theme/`. Consequence (as intended): a remote's colors reflect
-**the host you connected from** — two hosts with different color maps push
-different overrides to the same box.
+**host**, not the remote, and `rsync`'d to the remote on connection via
+`sync-remote-assets` (`private_dot_ssh/config.example`: a single `Match host …
+exec` pre-connect hook with a `_SYNCREMOTE` sentinel + `; false`) — the same
+entry point that mirrors the glyph DB. Its `theme` step looks up the target's
+tint in the host's color map (the same `lib/terminal-location.zsh` /
+`tint-palette.toml` source WezTerm uses) and rsyncs a generated `override.toml`
+to `<target>:~/.config/theme/`. Consequence (as intended): a remote's colors
+reflect **the host you connected from** — two hosts with different color maps
+push different overrides to the same box.
 
 **Resolver `theme-apply`** runs early in shell init, *before* the Zellij attach
 (and is re-runnable on demand). It merges canonical ⊕ override and emits the
@@ -504,7 +504,8 @@ Zellij theme reload so the plugin re-reads `Style`.
 
 This reuses three existing pieces — the `tint-palette.toml` color source, the
 `Match exec` + `rsync` + sentinel transport, and the per-machine color map — so
-it adds a `theme-apply` resolver and a `theme-push` helper, not a new paradigm.
+it adds a `theme-apply` resolver and a `sync-remote-assets` theme step, not a
+new paradigm.
 
 ## 5. Sharp edges / risks
 
@@ -558,8 +559,9 @@ it adds a `theme-apply` resolver and a `theme-push` helper, not a new paradigm.
 > `chezmoi-system` colorscheme that vendors catppuccin's group definitions (MIT)
 > and feeds them our palette (~937 groups, catppuccin plugin disabled,
 > theme-agnostic); the non-Mocha
-> prompt/statusline migration; the runtime override layer (`theme-apply` /
-> `theme-push`); a second (`catppuccin-latte`) palette; and the lint.
+> prompt/statusline migration; the runtime override layer (`theme-apply` +
+> `sync-remote-assets`'s theme step); a second (`catppuccin-latte`) palette;
+> and the lint.
 
 1. **Prerequisite — close custom-binary color gaps (§4.7).** zj-hud config keys
    **+ bar-bg-follows-`Style`** + configurable which-key bg — **done, released
@@ -589,9 +591,10 @@ it adds a `theme-apply` resolver and a `theme-push` helper, not a new paradigm.
 7. **Runtime override layer (§4.8) — done.** `theme-apply` resolver (effective
    palette + effective `system.kdl`: block renamed to `system`, each overridden
    token's RGB substituted, stamped staleness check) running before the Zellij
-   attach; loose `override.toml`; `theme-push` (host-side, reusing
-   `terminal-location.zsh` + `tint-palette.toml`) + the ssh `Match host … exec`
-   hook documented in `config.example`; zj-hud bg-from-`Style` (from step 1).
+   attach; loose `override.toml`; `sync-remote-assets`'s theme step (host-side,
+   reusing `terminal-location.zsh` + `tint-palette.toml`) + the ssh
+   `Match host … exec` hook documented in `config.example`; zj-hud
+   bg-from-`Style` (from step 1).
 8. **Cleanup.** Blink decision (§4.6); add a lint (§7); document the new silo.
 
 Each phase is independently shippable and leaves the repo working.
@@ -607,8 +610,8 @@ exempts only: decorative/non-theme assets (`**/Assets/**`, `*.svg`, `*.css`,
 `**/hammerspoon/**`, the `notify` swatch); runtime FALLBACKS that load a palette
 bridge and fall back to literals only if it is missing (nvim `**/lualine/**`, the
 3 Python viewers, `wezterm.lua`, `yazi/init.lua`); and a few comment/example
-mentions (`theme-apply`/`theme-push`, `ghostty/config`, `lib/zellij.zsh`,
-`ai-commit`). Adding a file to the allowlist requires a real reason — never to
+mentions (`theme-apply`, `ghostty/config`, `lib/zellij.zsh`, `ai-commit`).
+Adding a file to the allowlist requires a real reason — never to
 hide a color that belongs in `theme.yaml`. This makes drift structurally hard.
 
 ---

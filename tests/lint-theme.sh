@@ -36,7 +36,6 @@ matches=$(rg -n '#[0-9a-fA-F]{6}' home/ \
   -g '!**/bin/executable_ai-commit' \
   -g '!**/bin/executable_notify' \
   -g '!**/bin/executable_theme-apply' \
-  -g '!**/bin/executable_theme-push' \
   2>/dev/null)
 
 if [ -n "$matches" ]; then
