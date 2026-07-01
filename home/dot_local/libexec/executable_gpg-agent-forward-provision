@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+# gpg-agent-forward-provision — make SSH gpg-agent forwarding survive
+# disconnect/reconnect AND reboot on the dev shell.
+#
+# Invoked by the (home-persisted, linger-enabled) gpg-forward-socketdir.service
+# on every boot — never by chezmoi directly. This dev shell wipes everything
+# outside $HOME on every reboot, including /etc, so the sshd half below CANNOT
+# be a one-time chezmoi action: it must be re-applied on every boot from
+# something that itself lives under $HOME, which is exactly what this script
+# (and the systemd unit invoking it) are for.
+#
+# Two halves, both required:
+#
+#   1. Pre-create the hashed gpg socket dir under /run/user/$UID/gnupg. sshd
+#      will NOT create parent dirs for a RemoteForward target, and gpg.conf
+#      carries `no-autostart` (so no local agent creates it lazily), so
+#      without this the very first forward after a boot binds into a missing
+#      dir and silently fails.
+#
+#   2. Server-side `StreamLocalBindUnlink yes`. For RemoteForward (-R) the
+#      socket is created by the REMOTE sshd, so stale-socket cleanup on
+#      reconnect is governed by the server's sshd_config — the client's
+#      ssh_config setting is ignored for -R. Without it, a socket orphaned by
+#      an unclean disconnect (laptop sleep, Wi-Fi drop) blocks every later
+#      forward with "no gpg-agent running in this session".
+#      Ref: https://lists.mindrot.org/pipermail/openssh-unix-dev/2016-July/035184.html
+
+gpgconf --create-socketdir
+
+drop_in=/etc/ssh/sshd_config.d/99-gpg-agent-forward.conf
+[ -f "$drop_in" ] && exit 0
+
+if ! sudo -n true 2>/dev/null; then
+  echo "gpg-agent forwarding: sudo unavailable non-interactively; StreamLocalBindUnlink not set." >&2
+  exit 0
+fi
+
+sudo -n tee "$drop_in" >/dev/null <<'EOF'
+# Managed by gpg-agent-forward-provision — gpg-agent SSH forwarding.
+# Re-applied on every boot (this dev shell wipes /etc on reboot).
+# For RemoteForward (-R) the remote sshd creates the listening socket, so
+# stale socket cleanup before bind is controlled HERE (server side), not by
+# the client's ssh_config. Without this, a socket left behind by an unclean
+# disconnect blocks every subsequent forward.
+StreamLocalBindUnlink yes
+EOF
+
+if sudo -n sshd -t; then
+  sudo -n systemctl reload ssh
+  echo "gpg-agent forwarding: installed $drop_in and reloaded sshd."
+else
+  echo "gpg-agent forwarding: 'sshd -t' rejected the config; reverting $drop_in." >&2
+  sudo -n rm -f "$drop_in"
+  exit 1
+fi
+
+# vim:ft=sh

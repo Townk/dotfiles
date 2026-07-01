@@ -1,11 +1,11 @@
 [Unit]
-Description=Create gpg-agent socket dir for SSH agent forwarding
+Description=Provision gpg-agent SSH forwarding (socket dir + sshd StreamLocalBindUnlink)
 Documentation=man:gpgconf(1)
 
 [Service]
 Type=oneshot
 Environment=GNUPGHOME=%h/.config/gnupg
-ExecStart=/usr/bin/gpgconf --create-socketdir
+ExecStart=%h/.local/libexec/gpg-agent-forward-provision
 RemainAfterExit=yes
 
 [Install]
