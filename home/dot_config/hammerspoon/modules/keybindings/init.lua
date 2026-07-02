@@ -40,8 +40,13 @@ local KeyEventsRouter  = require("keybindings.key_events_router")
 local template         = require("keybindings.template")
 local Dispatcher       = require("keybindings.dispatcher")
 local systemShortcuts  = require("keybindings.system_shortcuts")
+local dismissOnBlur    = require("system.dismiss-on-blur")
 
 local Keybindings = {}
+
+--- Unique id this overlay registers itself under with the shared
+--- dismiss-on-blur module (see modules/system/dismiss-on-blur.lua).
+local DISMISS_ON_BLUR_ID = "whichkey"
 
 ---------------------------------------------------------------------------
 -- Keys: modifier shorthand and symbolic hotkey IDs
@@ -218,6 +223,7 @@ local state = {
 	config = {},
 	navigationStack = {},
 	errorSound = nil,
+	dismissBaselineWindow = nil, -- focused window captured when the overlay opened
 }
 
 ---------------------------------------------------------------------------
@@ -388,8 +394,17 @@ local function onMatch(childNode)
 		end
 	elseif childNode.type == "sticky" then
 		if childNode.action then
+			-- Sticky actions deliberately keep the overlay open across their
+			-- own execution (see below) -- suppress dismiss-on-blur for that
+			-- window so a future action that legitimately touches another
+			-- window doesn't get treated as "focus stolen". None of today's
+			-- sticky actions do this (window-resize/audio/input-source
+			-- helpers only touch already-focused-window/CoreAudio/keyboard
+			-- state), but this guards the general case.
+			dismissOnBlur.suppress(DISMISS_ON_BLUR_ID, true)
 			local fn = childNode.action --[[@as fun()]]
 			local ok, err = pcall(fn)
+			dismissOnBlur.suppress(DISMISS_ON_BLUR_ID, false)
 			if not ok then
 				hs.printf("keybindings: sticky action failed: %s", tostring(err))
 			end
@@ -638,7 +653,20 @@ function Keybindings.show()
 	if not tapOk then
 		hs.printf("keybindings: eventtap start failed: %s", tostring(tapErr))
 		Keybindings.hide()
+		return
 	end
+
+	-- The overlay is nonactivating and never becomes the key window itself
+	-- (see keybindings/overlay.lua's windowStyle), so unlike the clipboard
+	-- picker, "expected" isn't "focus is mine" -- it's "focus hasn't moved
+	-- since I opened", i.e. still whatever window was focused before the
+	-- leader was pressed. Any deviation (a real app switch, or a
+	-- non-activating launcher panel like Raycast stealing key-window status)
+	-- dismisses the overlay -- see modules/system/dismiss-on-blur.lua.
+	state.dismissBaselineWindow = hs.window.focusedWindow()
+	dismissOnBlur.arm(DISMISS_ON_BLUR_ID, function(win)
+		return win == state.dismissBaselineWindow
+	end, Keybindings.hide)
 end
 
 --- Close the overlay and resume global hotkeys.
@@ -655,6 +683,8 @@ function Keybindings.hide()
 	end
 	state.currentNode = nil
 	state.navigationStack = {}
+	state.dismissBaselineWindow = nil
+	dismissOnBlur.disarm(DISMISS_ON_BLUR_ID)
 
 	if state.globalTap then
 		state.globalTap:start()

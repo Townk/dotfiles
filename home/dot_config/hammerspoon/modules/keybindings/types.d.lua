@@ -193,6 +193,7 @@
 --- @field config            KeybindingsConfig
 --- @field navigationStack   BindingNode[]
 --- @field errorSound        hs.sound|nil
+--- @field dismissBaselineWindow hs.window|nil
 
 ---------------------------------------------------------------------------
 -- Overlay instance

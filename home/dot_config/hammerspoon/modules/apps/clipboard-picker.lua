@@ -33,6 +33,7 @@ local M = {}
 
 local sqlite3 = require("hs.sqlite3")
 local history = require("apps.clipboard-history")
+local dismissOnBlur = require("system.dismiss-on-blur")
 
 local ASSETS_DIR = hs.configdir .. "/Assets/html"
 
@@ -264,28 +265,15 @@ end
 -- Webview lifecycle
 --------------------------------------------------------------------------------
 
--- Dismiss the picker automatically when it loses focus (click another
--- window, Cmd+Tab, a system dialog stealing focus, etc). DEBUGGING ESCAPE
--- HATCH: flip to false when you need the picker to STAY open while you
--- switch focus away to inspect it (e.g. taking a live screenshot via a
--- separate hs script, which requires running a command from another app
--- without the panel auto-closing first). Restore to true afterward.
--- TODO(cleanup): remove this flag once dismiss-on-blur is proven reliable
--- and no more live-debugging sessions are expected (end of the
--- universal-clipboard project).
-local DISMISS_ON_FOCUS_LOSS = true
+-- Unique id this picker registers itself under with the shared
+-- dismiss-on-blur module (see modules/system/dismiss-on-blur.lua for the
+-- underlying mechanism and escape hatch).
+local DISMISS_ON_BLUR_ID = "clipboard-picker"
 
 local webview
 local ucc
-local appWatcher
-local switcherTap
 local savedWindow -- the app window focused before the picker opened
 local isShown = false
--- Suppressed during the Alt+Enter "paste and keep open" sequence, which
--- deliberately focuses the target app (to paste) and then reclaims focus —
--- without this, the app-watcher's own dismiss-on-blur would fire mid-sequence
--- and hide the picker exactly when we're keeping it open on purpose.
-local suppressBlurDismiss = false
 
 -- Absolute file:// URL for the icon font, substituted into the CSS's
 -- @font-face src. An explicit @font-face load bypasses WebKit's local
@@ -337,10 +325,10 @@ local function handle_message(body)
       -- necessarily shuffles focus away (to paste into the right app) and
       -- back (to keep accepting keystrokes) — a brief visible flash is
       -- expected/inherent, not a bug; validate the feel in UX review.
-      -- suppressBlurDismiss guards this deliberate focus shuffle from the
-      -- dismiss-on-blur watcher, which would otherwise hide the picker the
-      -- moment we focus the target app to paste.
-      suppressBlurDismiss = true
+      -- dismissOnBlur.suppress guards this deliberate focus shuffle, which
+      -- would otherwise get dismissed the moment we focus the target app to
+      -- paste.
+      dismissOnBlur.suppress(DISMISS_ON_BLUR_ID, true)
       local target = savedWindow
       hs.timer.doAfter(0.02, function()
         if target then target:focus() end
@@ -353,7 +341,7 @@ local function handle_message(body)
               if hsWin then hsWin:focus() end
               webview:evaluateJavaScript("window.__focusInput && window.__focusInput()")
             end
-            suppressBlurDismiss = false
+            dismissOnBlur.suppress(DISMISS_ON_BLUR_ID, false)
           end)
         end)
       end)
@@ -363,49 +351,10 @@ local function handle_message(body)
   end
 end
 
--- Any OTHER app becoming activated while the picker is shown means focus
--- moved away from it (a mouse click on another window, Cmd+Tab, a system
--- dialog stealing focus, ...) -- dismiss. Hammerspoon itself is excluded
--- since M.show()/the Alt+Enter re-show both activate Hammerspoon deliberately
--- to (re)claim keyboard focus for the picker, which must NOT self-trigger a
--- dismiss.
-local function on_app_event(appName, eventType)
-  if not DISMISS_ON_FOCUS_LOSS then return end
-  if suppressBlurDismiss or not isShown then return end
-  if eventType == hs.application.watcher.activated and appName ~= "Hammerspoon" then
-    M.hide()
-  end
-end
-
--- hs.application.watcher alone isn't enough: holding Cmd+Tab shows the OS
--- app-switcher HUD without actually changing the frontmost app (confirmed
--- empirically -- the "activated" event only fires once Cmd is released), so
--- the picker would sit on top of the switcher until release. Catch the
--- Cmd+Tab keyDown directly and dismiss right away; always return false so
--- the keystroke still reaches the OS switcher untouched.
-local function on_key_event(e)
-  if DISMISS_ON_FOCUS_LOSS and isShown and not suppressBlurDismiss then
-    local flags = e:getFlags()
-    if flags.cmd and e:getKeyCode() == hs.keycodes.map.tab then
-      M.hide()
-    end
-  end
-  return false
-end
-
 local function ensure_webview()
   if webview then return end
   ucc = hs.webview.usercontent.new("clipboardPicker")
   ucc:setCallback(function(msg) handle_message(msg.body) end)
-
-  if not appWatcher then
-    appWatcher = hs.application.watcher.new(on_app_event)
-    appWatcher:start()
-  end
-  if not switcherTap then
-    switcherTap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, on_key_event)
-    switcherTap:start()
-  end
 
   local sf = hs.screen.mainScreen():fullFrame()
   local w, h = 780, 520
@@ -442,11 +391,20 @@ function M.show()
   local hsWin = webview:hswindow()
   if hsWin then hsWin:focus() end
   isShown = true
+
+  -- Dismiss automatically when focus moves away (click another window,
+  -- Cmd+Tab, Raycast or any other launcher-style panel stealing key-window
+  -- status, a system dialog, ...) -- see modules/system/dismiss-on-blur.lua.
+  dismissOnBlur.arm(DISMISS_ON_BLUR_ID, function(win)
+    local ourWin = webview and webview:hswindow()
+    return win ~= nil and ourWin ~= nil and win:id() == ourWin:id()
+  end, M.hide)
 end
 
 function M.hide()
   if webview then webview:hide() end
   isShown = false
+  dismissOnBlur.disarm(DISMISS_ON_BLUR_ID)
   -- Without this, focus stays claimed by the (now hidden) webview's window
   -- and keyboard input goes nowhere until the user manually clicks another
   -- window — explicitly hand focus back to whatever was focused before show().
@@ -463,8 +421,7 @@ end
 function M.cleanup()
   if webview then webview:delete(); webview = nil end
   ucc = nil
-  if appWatcher then appWatcher:stop(); appWatcher = nil end
-  if switcherTap then switcherTap:stop(); switcherTap = nil end
+  dismissOnBlur.disarm(DISMISS_ON_BLUR_ID)
   isShown = false
 end
 
