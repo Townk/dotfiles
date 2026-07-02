@@ -130,38 +130,47 @@ clip::bump_recency() {
   done
 }
 
-# --- preview (full multi-line text by id) -----------------------------------
+# --- preview (full multi-line text + a badge footer) -----------------------
 # fzf's {2} is the 2nd \x1f-delimited field = the id (field 1 is the visible
-# preview). Escape the SQL single-quote in the path just in case.
+# item line). The preview command emits the clip's full text, a blank line,
+# then a dim badge (· Nc · app · age · kind) as the preview's footer line.
+# The age expression is shared with nothing else now (the item line carries
+# only icon + content); defined here so the printf stays readable.
 preview_db=${DB_FILE//\'/\'\'}
-PREVIEW_CMD="sqlite3 -escape off '$preview_db' \"SELECT IFNULL(text_plain,'['||type_kind||']') FROM clips WHERE id={2};\""
+age_expr="CASE WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 60 THEN printf('%ds', CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT)) WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 3600 THEN printf('%dm', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/60) WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 86400 THEN printf('%dh', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/3600) ELSE printf('%dd', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/86400) END"
+PREVIEW_CMD="sqlite3 -escape off '$preview_db' \"SELECT COALESCE(text_plain,'['||type_kind||']') || char(10) || char(10) || char(27)||'[38;2;127;132;156m' || printf('· %dc · %s · %s · %s', COALESCE(len,0), COALESCE(IFNULL(source_app,'?'),'?'), ${age_expr}, COALESCE(type_kind,'text')) || char(27)||'[0m' FROM clips WHERE id={2};\""
 
 # --- the row stream ---------------------------------------------------------
-# Visible = preview (or [type_kind] for non-text) + a dim badge
-#   · <len>c · <app> · <reltime> · <type_kind>    (+ a pin glyph when pinned).
-# Tail = id (CHAR 31 = \x1f separates visible from tail).
+# Item line = <pin marker> <type icon>  <content preview>. The badge (len /
+# app / age / type_kind) lives in the preview footer (above), NOT on the item
+# line — so the list reads as icon + content. Tail = id (CHAR 31 = \x1f).
+# Type icons are Font Awesome glyphs merged into the custom Nerd Font:
+#   text   ->  file-text      rich (rtf/html) ->  paint-brush
+#   image  ->  file-image     files           ->  folder
+#   mixed  ->  shuffle
 emit_rows() {
   sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "
     WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,
              CHAR(27)||'[38;2;137;180;250m' AS pin_color,
-             CHAR(27)||'[38;2;127;132;156m' AS dim
+             CHAR(27)||'[38;2;137;180;250m' AS c_text,
+             CHAR(27)||'[38;2;225;170;80m'  AS c_rich,
+             CHAR(27)||'[38;2;166;209;137m' AS c_image,
+             CHAR(27)||'[38;2;148;156;183m' AS c_files,
+             CHAR(27)||'[38;2;234;154;139m' AS c_mixed
     )
     SELECT
-      CASE WHEN pinned=1 THEN pin_color || '' || reset || ' ' ELSE '' END
-      || text_color || IFNULL(text_preview, '['||type_kind||']') || reset
-      || dim || ' · ' || COALESCE(len,0) || 'c · ' || COALESCE(IFNULL(source_app,'?'),'?') || ' · '
-      || CASE
-           WHEN CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT) < 60
-             THEN printf('%ds', CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT))
-           WHEN CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT) < 3600
-             THEN printf('%dm', (CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT))/60)
-           WHEN CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT) < 86400
-             THEN printf('%dh', (CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT))/3600)
-             ELSE printf('%dd', (CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT))/86400)
+      CASE WHEN pinned=1 THEN pin_color || char(1110157) || reset || ' ' ELSE '' END
+      || CASE type_kind
+           WHEN 'text'  THEN c_text  || char(1110065) || reset
+           WHEN 'rtf'   THEN c_rich  || char(1110524) || reset
+           WHEN 'html'  THEN c_rich  || char(1110524) || reset
+           WHEN 'image' THEN c_image || char(1110078) || reset
+           WHEN 'files' THEN c_files || char(1110139) || reset
+           ELSE               c_mixed || char(1110132) || reset
          END
-      || ' · ' || COALESCE(type_kind,'text') || reset
+      || '  ' || text_color || IFNULL(text_preview, '['||type_kind||']') || reset
       || CHAR(31) || id
     FROM clips, palette
     WHERE ${origin_where}
@@ -171,7 +180,7 @@ emit_rows() {
 }
 
 # --- run --------------------------------------------------------------------
-hints="$(pick::hints "󰌑 inject" "󰘵 󰌑 insert" "󰘴 Y copy" "󰘴 D del" "󰘴 P pin" "󱊷 cancel")"
+hints="$(pick::hints "󰌑" inject "󰘵 󰌑" insert "󰘴 Y" copy "󰘴 D" del "󰘴 P" pin "󱊷" cancel)"
 
 pick_args=(
   --header "Clipboard history"
@@ -188,6 +197,8 @@ pick_args=(
   --cache-state
   --preview "$PREVIEW_CMD"
 )
+[[ -n "${PICK_CLIPBOARD_PADDING:-}" ]] && pick_args+=(--padding "${PICK_CLIPBOARD_PADDING}")
+[[ -n "${PICK_CLIPBOARD_HEIGHT:-}" ]]   && pick_args+=(--height "${PICK_CLIPBOARD_HEIGHT}")
 [[ -n "${PICK_CLIPBOARD_RESUME:-}" ]] && pick_args+=(--resume)
 [[ -n "${PICK_CLIPBOARD_NO_BORDER:-}" ]] && pick_args+=(--no-border)
 
