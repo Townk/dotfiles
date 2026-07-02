@@ -226,6 +226,7 @@ cat > "$emit_script" <<EOF
 # minus ~6 (padding + gutter) + 5 (icon + sep + pin) -> CW = fc*55/100 - 11.
 fc=\${FZF_COLUMNS:-80}
 cw=\$((fc * 55 / 100 - 11)); [ \$cw -lt 10 ] && cw=10
+echo "[\$(date +%s)] FZF_COLUMNS=\$fc FZF_LINES=\${FZF_LINES:-?} FZF_PREVIEW_COLUMNS=\${FZF_PREVIEW_COLUMNS:-?} FZF_PREVIEW_LINES=\${FZF_PREVIEW_LINES:-?} cw=\$cw" >> /tmp/pick-clipboard-dims.log
 sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,
@@ -290,6 +291,7 @@ pick_args=(
   --cache-state
   --preview "$PREVIEW_CMD"
   --preview-window "${PICK_CLIPBOARD_PREVIEW_WINDOW:-right:45%}"
+  --info hidden                    # hide the 1/X item counter (top-right)
   # delete / pin run a SQL action AND reload the list in place (fzf
   # execute-silent + reload). {2} = the id (2nd \x1f field). Race-free: the
   # SQL runs synchronously in execute-silent before reload re-streams.

@@ -443,7 +443,7 @@ pick::build_fzf_args() {
     --color=border:"$C_ROLE_UI_BORDER"
     --filepath-word
     --layout=reverse
-    --info=inline-right
+    --info="${pick_ui[info]:-inline-right}"
     --exit-0
     --select-1
     --ansi
@@ -1028,6 +1028,13 @@ pick::start() {
         ;;
       --start-reload)
         start_reload=1; shift
+        ;;
+      --info)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        pick_ui[info]="$2"; shift 2
+        ;;
+      --info=*)
+        pick_ui[info]="${1#--info=}"; shift
         ;;
       --preview)
         [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
