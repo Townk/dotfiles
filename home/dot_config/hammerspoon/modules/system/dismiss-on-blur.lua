@@ -14,6 +14,13 @@
 ---   dismissOnBlur.disarm("my-panel")
 ---   dismissOnBlur.suppress("my-panel", true)  -- deliberate focus shuffle, don't dismiss
 ---   dismissOnBlur.suppress("my-panel", false)
+---   dismissOnBlur.dismissOthers("my-panel")  -- call at the top of show(): mutual
+---                                             -- exclusion between OUR OWN panels
+---                                             -- (e.g. WhichKey opening while the
+---                                             -- clipboard picker is up -- neither
+---                                             -- competes for key-window status
+---                                             -- with the other, so isExpected
+---                                             -- alone would never notice)
 
 local M = {}
 
@@ -171,6 +178,25 @@ end
 function M.suppress(id, val)
 	if guards[id] then
 		guards[id].suppressed = val
+	end
+end
+
+--- Dismiss every OTHER currently-armed panel. Call this at the top of a
+--- panel's own show(), before arming itself, so two of our own managed
+--- panels never coexist -- neither the clipboard picker nor WhichKey ever
+--- takes key-window status away from the other (the picker keeps it, and
+--- WhichKey never wants it), so isExpected()/checkAll() alone would never
+--- notice one opening while the other is already up. Ignores `suppressed`
+--- (another panel explicitly opening is a stronger signal than any
+--- in-flight deliberate focus shuffle) but still respects the `enabled`
+--- escape hatch.
+--- @param exceptId string  Don't dismiss this panel (the one about to show)
+function M.dismissOthers(exceptId)
+	if not M.enabled then return end
+	for id, g in pairs(guards) do
+		if id ~= exceptId then
+			g.onDismiss()
+		end
 	end
 end
 

@@ -631,6 +631,9 @@ function Keybindings.show()
 	if not state.root or not state.overlayInstance then
 		return
 	end
+	-- Mutual exclusion between our own managed panels (e.g. the clipboard
+	-- picker) -- see modules/system/dismiss-on-blur.lua's dismissOthers.
+	dismissOnBlur.dismissOthers(DISMISS_ON_BLUR_ID)
 	local targetNode
 	if state.leaderNode then
 		state.navigationStack = { state.root }

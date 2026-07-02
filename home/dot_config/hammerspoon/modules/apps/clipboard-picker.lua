@@ -377,6 +377,9 @@ end
 --------------------------------------------------------------------------------
 
 function M.show()
+  -- Mutual exclusion between our own managed panels (e.g. WhichKey) -- see
+  -- modules/system/dismiss-on-blur.lua's dismissOthers.
+  dismissOnBlur.dismissOthers(DISMISS_ON_BLUR_ID)
   ensure_webview()
   savedWindow = hs.window.focusedWindow()
   webview:html(build_html(query_items()))
@@ -402,16 +405,27 @@ function M.show()
 end
 
 function M.hide()
+  -- Only reclaim focus for savedWindow if OUR OWN window still has it right
+  -- now -- i.e. this hide() was user-initiated (Escape, accept, Cmd+Tab
+  -- keydown before release) rather than triggered because something else
+  -- already took focus/key-window status (Raycast, another app, WhichKey's
+  -- leader dismissing us via dismissOnBlur.dismissOthers). Stealing focus
+  -- back in that latter case would yank it away from whatever the user just
+  -- switched to -- confirmed this is exactly why Raycast dismissed itself
+  -- right after opening: it lost key status the instant we called
+  -- savedWindow:focus() out from under it.
+  local hsWin = webview and webview:hswindow()
+  local currentlyFocused = hs.window.focusedWindow()
+  local weStillHadFocus = hsWin ~= nil and currentlyFocused ~= nil and currentlyFocused:id() == hsWin:id()
+
   if webview then webview:hide() end
   isShown = false
   dismissOnBlur.disarm(DISMISS_ON_BLUR_ID)
-  -- Without this, focus stays claimed by the (now hidden) webview's window
-  -- and keyboard input goes nowhere until the user manually clicks another
-  -- window — explicitly hand focus back to whatever was focused before show().
-  if savedWindow then
+
+  if savedWindow and weStillHadFocus then
     savedWindow:focus()
-    savedWindow = nil
   end
+  savedWindow = nil
 end
 
 function M.toggle()
