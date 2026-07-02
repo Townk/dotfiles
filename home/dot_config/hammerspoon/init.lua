@@ -214,8 +214,9 @@ kb.setup({
 		{ key = "left", mods = kb.keys.mods.CG, desc = "Previous space", action = kb.keys.sym.MOVE_LEFT_SPACE },
 		{ key = "left", mods = kb.keys.mods.OG, desc = "Show apps", action = kb.keys.sym.SHOW_LAUNCHPAD },
 		{ key = "right", mods = kb.keys.mods.CG, desc = "Next space", action = kb.keys.sym.MOVE_RIGHT_SPACE },
-		-- Hammerspoon actions (function actions handled by eventtap)
-		{ key = "d", mods = kb.keys.mods.COG, icon = "󰭤", desc = "Describe selection", action = clipboard.defineSelection },
+	-- Hammerspoon actions (function actions handled by eventtap)
+	{ key = "d", mods = kb.keys.mods.COG, icon = "󰭤", desc = "Describe selection", action = clipboard.defineSelection },
+	{ key = "v", mods = kb.keys.mods.GS, icon = "󰛐", desc = "Clipboard history", action = clipHistory.show_chooser },
 		{ key = "q", mods = kb.keys.mods.COG, icon = "󰅌", desc = "QR Code from selection", action = apps.raycastQRCodeFromSelection },
 		{ key = "3", mods = kb.keys.mods.GS, desc = "Full screen Screenshot", action = apps.shottrCaptureScreen },
 		{ key = "3", mods = kb.keys.mods.CGS, desc = "Content scrolling Screenshot", action = apps.shottrCaptureScrolling },

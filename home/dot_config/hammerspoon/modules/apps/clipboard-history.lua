@@ -315,4 +315,104 @@ function M._row_count()
   return n
 end
 
+--------------------------------------------------------------------------------
+-- Phase 4: hs.chooser GUI picker + rich restore (spec §10)
+--------------------------------------------------------------------------------
+-- Bound globally to Cmd+Shift+V (see init.lua kb.setup). Reads the same
+-- history.db on each open; selecting a row restores the full rich pasteboard
+-- (all UTIs via hs.pasteboard.writeAllData) and posts ⌘V into the app that had
+-- focus before the chooser opened. hs.chooser's built-in globalCallback already
+-- saves frontmostWindow() on willOpen and refocuses it on didClose, so we only
+-- restore + schedule the ⌘V keystroke for just after didClose.
+--
+-- Raycast also registers Cmd+Shift+V today (spec §10 accepts that shadow);
+-- if Raycast intercepts first the chooser won't open — disable Raycast's
+-- chord or remap this binding if you want the chooser on that key.
+
+local chooser
+
+-- Restore a clip's full rich pasteboard by id (all UTI->blob rows from
+-- clip_types). Returns true on success. Also bumps last_ts (spec §10
+-- "re-bump last_ts on pick"). The pasteboard write bumps changeCount, so the
+-- watcher will re-observe it (dedup bumps the same row again — harmless).
+function M.restore_by_id(id)
+  if not db or not id then return false end
+  local s = assert(db:prepare("SELECT uti, blob FROM clip_types WHERE clip_id=?;"))
+  s:bind(1, id)
+  local data = {}
+  while s:step() == sqlite3.ROW do
+    data[s:get_value(0)] = s:get_value(1)  -- uti -> blob (Lua string)
+  end
+  s:finalize()
+  if next(data) == nil then
+    -- No rich payload (e.g. a laptop-ref text-only row): fall back to text_plain.
+    local t = assert(db:prepare("SELECT text_plain FROM clips WHERE id=?;"))
+    t:bind(1, id)
+    local plain
+    if t:step() == sqlite3.ROW then plain = t:get_value(0) end
+    t:finalize()
+    if not plain then return false end
+    pasteboard.setContents(plain)
+  else
+    pasteboard.writeAllData(data)
+  end
+  local b = db:prepare("UPDATE clips SET last_ts=? WHERE id=?;")
+  if b then b:bind(1, now_ts()); b:bind(2, id); b:step(); b:finalize() end
+  return true
+end
+
+-- Build the chooser rows from the store: top 200 by pinned/last_ts, local +
+-- remote-own only (laptop-ref rows can't be rich-restored on this machine).
+local function chooser_rows()
+  if not db then return {} end
+  local s = assert(db:prepare(
+    "SELECT id, text_preview, type_kind, source_app, len, pinned, "
+    .. " CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT) AS age "
+    .. " FROM clips WHERE origin IN ('local','remote-own') "
+    .. " ORDER BY pinned DESC, last_ts DESC LIMIT 200;"))
+  local rows = {}
+  while s:step() == sqlite3.ROW do
+    local id      = s:get_value(0)
+    local preview = s:get_value(1)
+    local kind    = s:get_value(2) or "text"
+    local app     = s:get_value(3) or "?"
+    local len     = s:get_value(4) or 0
+    local pinned  = s:get_value(5) or 0
+    local age     = s:get_value(6) or 0
+    local age_s = age < 60 and (age .. "s")
+      or  age < 3600 and (math.floor(age / 60) .. "m")
+      or  age < 86400 and (math.floor(age / 3600) .. "h")
+      or  (math.floor(age / 86400) .. "d")
+    rows[#rows + 1] = {
+      text = (pinned == 1 and " " or "") .. (preview or ("[" .. kind .. "]")),
+      subText = string.format("· %dc · %s · %s · %s", len, app, age_s, kind),
+      id = id, kind = kind, pinned = pinned,
+    }
+  end
+  s:finalize()
+  return rows
+end
+
+local function chooser_complete(row)
+  if not row or row.id == nil then return end  -- cancelled
+  M.restore_by_id(row.id)
+  -- Post ⌘V just after the chooser's didClose refocuses the prior app.
+  hs.timer.doAfter(0.12, function() hs.eventtap.keyStroke({ "cmd" }, "v") end)
+end
+
+-- Public entrypoint (bound to Cmd+Shift+V in init.lua). Lazily builds the
+-- chooser, refreshes its rows from the store, and shows it.
+function M.show_chooser()
+  if not db then return end
+  if not chooser then
+    chooser = hs.chooser.new(chooser_complete)
+    chooser:placeholderText("Clipboard history")
+    chooser:searchSubText(true)
+    chooser:choices(chooser_rows)
+    chooser:rows(10)
+  end
+  chooser:refreshChoicesCallback(true)
+  chooser:show()
+end
+
 return M
