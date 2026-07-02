@@ -278,6 +278,7 @@ local DISMISS_ON_FOCUS_LOSS = true
 local webview
 local ucc
 local appWatcher
+local switcherTap
 local savedWindow -- the app window focused before the picker opened
 local isShown = false
 -- Suppressed during the Alt+Enter "paste and keep open" sequence, which
@@ -376,6 +377,22 @@ local function on_app_event(appName, eventType)
   end
 end
 
+-- hs.application.watcher alone isn't enough: holding Cmd+Tab shows the OS
+-- app-switcher HUD without actually changing the frontmost app (confirmed
+-- empirically -- the "activated" event only fires once Cmd is released), so
+-- the picker would sit on top of the switcher until release. Catch the
+-- Cmd+Tab keyDown directly and dismiss right away; always return false so
+-- the keystroke still reaches the OS switcher untouched.
+local function on_key_event(e)
+  if DISMISS_ON_FOCUS_LOSS and isShown and not suppressBlurDismiss then
+    local flags = e:getFlags()
+    if flags.cmd and e:getKeyCode() == hs.keycodes.map.tab then
+      M.hide()
+    end
+  end
+  return false
+end
+
 local function ensure_webview()
   if webview then return end
   ucc = hs.webview.usercontent.new("clipboardPicker")
@@ -384,6 +401,10 @@ local function ensure_webview()
   if not appWatcher then
     appWatcher = hs.application.watcher.new(on_app_event)
     appWatcher:start()
+  end
+  if not switcherTap then
+    switcherTap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, on_key_event)
+    switcherTap:start()
   end
 
   local sf = hs.screen.mainScreen():fullFrame()
@@ -443,6 +464,7 @@ function M.cleanup()
   if webview then webview:delete(); webview = nil end
   ucc = nil
   if appWatcher then appWatcher:stop(); appWatcher = nil end
+  if switcherTap then switcherTap:stop(); switcherTap = nil end
   isShown = false
 end
 
