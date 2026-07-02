@@ -90,6 +90,20 @@ local function checkAll()
 	end
 end
 
+--- True while a Cmd+Tab-triggered dismissal is running. Panels' onDismiss
+--- (typically their own hide()) can check this to skip any focus-touching
+--- cleanup: the OS is about to own the entire focus transition itself once
+--- Cmd is released, and doing any Hammerspoon-side work of our own (window
+--- focus, starting/stopping other eventtaps) synchronously while the OS is
+--- still deciding what to do with this exact keydown is the likely cause of
+--- a reported bug where the switcher HUD behaved as if the key were held
+--- down, rapid-cycling to the last app in the list -- this is reasoned from
+--- the timing (focus hasn't moved yet at keydown time, so the picker's own
+--- savedWindow:focus() call was landing mid-keydown-processing) rather than
+--- a directly reproduced repro, since the visual symptom isn't something
+--- this test harness can observe programmatically.
+M.dismissingViaSwitcher = false
+
 --- Unconditionally dismiss every armed, non-suppressed panel, with no
 --- isExpected check involved.
 ---
@@ -103,11 +117,13 @@ end
 --- focused-window state.
 --- @private
 local function dismissAllArmed()
+	M.dismissingViaSwitcher = true
 	for _, g in pairs(guards) do
 		if not g.suppressed then
 			g.onDismiss()
 		end
 	end
+	M.dismissingViaSwitcher = false
 end
 
 --- @param e hs.eventtap.event
@@ -117,7 +133,16 @@ local function onKeyEvent(e)
 	if M.enabled then
 		local flags = e:getFlags()
 		if flags.cmd and e:getKeyCode() == hs.keycodes.map.tab then
-			dismissAllArmed()
+			-- Deferred, not called synchronously from here: this callback is
+			-- running WHILE the OS is still deciding what to do with this
+			-- exact keydown (it waits for our return value). Doing panel
+			-- teardown synchronously -- hiding webviews, stopping/starting
+			-- other eventtaps (WhichKey's own dispatcher), touching window
+			-- focus -- all from inside that window confuses the switcher's
+			-- own state. Returning immediately and deferring the real work to
+			-- the next runloop tick lets this keydown finish its normal
+			-- journey through the OS untouched first.
+			hs.timer.doAfter(0, dismissAllArmed)
 		end
 	end
 	return false -- never swallow -- the OS switcher must still see the keystroke untouched

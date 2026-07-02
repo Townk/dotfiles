@@ -406,14 +406,19 @@ end
 
 function M.hide()
   -- Only reclaim focus for savedWindow if OUR OWN window still has it right
-  -- now -- i.e. this hide() was user-initiated (Escape, accept, Cmd+Tab
-  -- keydown before release) rather than triggered because something else
-  -- already took focus/key-window status (Raycast, another app, WhichKey's
-  -- leader dismissing us via dismissOnBlur.dismissOthers). Stealing focus
-  -- back in that latter case would yank it away from whatever the user just
-  -- switched to -- confirmed this is exactly why Raycast dismissed itself
-  -- right after opening: it lost key status the instant we called
-  -- savedWindow:focus() out from under it.
+  -- now AND we're not being dismissed because Cmd+Tab was pressed. Two
+  -- distinct reasons to skip it:
+  --   1. Something else already took focus/key-window status (Raycast,
+  --      another app, WhichKey's leader via dismissOnBlur.dismissOthers) --
+  --      stealing it back would yank it away from whatever the user just
+  --      switched to (confirmed: this is exactly why Raycast dismissed
+  --      itself right after opening).
+  --   2. The OS switcher is engaging (dismissOnBlur.dismissingViaSwitcher):
+  --      it's about to own the ENTIRE focus transition itself once Cmd is
+  --      released, to whatever app the user actually selects -- not
+  --      necessarily savedWindow. See dismiss-on-blur.lua for why calling
+  --      :focus() here is the suspected cause of a reported rapid-cycling
+  --      bug in the switcher HUD.
   local hsWin = webview and webview:hswindow()
   local currentlyFocused = hs.window.focusedWindow()
   local weStillHadFocus = hsWin ~= nil and currentlyFocused ~= nil and currentlyFocused:id() == hsWin:id()
@@ -422,7 +427,7 @@ function M.hide()
   isShown = false
   dismissOnBlur.disarm(DISMISS_ON_BLUR_ID)
 
-  if savedWindow and weStillHadFocus then
+  if savedWindow and weStillHadFocus and not dismissOnBlur.dismissingViaSwitcher then
     savedWindow:focus()
   end
   savedWindow = nil
