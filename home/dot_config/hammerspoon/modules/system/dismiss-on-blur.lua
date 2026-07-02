@@ -25,6 +25,32 @@
 local M = {}
 
 ---------------------------------------------------------------------------
+-- Shared predicates
+---------------------------------------------------------------------------
+
+--- True if the given keyDown event is the OS app-switcher shortcut
+--- (Cmd+Tab, with or without Shift for reverse direction).
+---
+--- Any of our OWN key-swallowing eventtaps (e.g. WhichKey's dispatcher,
+--- which otherwise consumes virtually every keydown while its overlay is
+--- shown) MUST consult this and pass the event through untouched.
+--- Reported bug this fixes: WhichKey's dispatcher was swallowing Cmd+Tab
+--- as an "unmatched" key (hs.eventtap consuming an event prevents it from
+--- reaching the OS), so the switcher HUD only appeared on a SECOND press,
+--- once the first press's deferred dismissal had already stopped the
+--- dispatcher. Verified at the unit level that the dispatcher's decision
+--- now returns false (pass-through) for this key; the OS switcher's own
+--- visual engagement can't be driven by synthetic events (confirmed
+--- separately -- they don't trigger it even with nothing else open), so
+--- that part needs a live check.
+--- @param e hs.eventtap.event
+--- @return boolean
+function M.isSwitcherKey(e)
+	local flags = e:getFlags()
+	return flags.cmd and e:getKeyCode() == hs.keycodes.map.tab
+end
+
+---------------------------------------------------------------------------
 -- Configuration
 ---------------------------------------------------------------------------
 
@@ -131,8 +157,7 @@ end
 --- @private
 local function onKeyEvent(e)
 	if M.enabled then
-		local flags = e:getFlags()
-		if flags.cmd and e:getKeyCode() == hs.keycodes.map.tab then
+		if M.isSwitcherKey(e) then
 			-- Deferred, not called synchronously from here: this callback is
 			-- running WHILE the OS is still deciding what to do with this
 			-- exact keydown (it waits for our return value). Doing panel

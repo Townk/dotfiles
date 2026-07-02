@@ -3,6 +3,8 @@
 --- Swallows ALL keyboard events while active, dispatching matched
 --- keys to callbacks for navigation, actions, and scrolling.
 
+local dismissOnBlur = require("system.dismiss-on-blur")
+
 ---------------------------------------------------------------------------
 -- Configuration
 ---------------------------------------------------------------------------
@@ -62,6 +64,16 @@ end
 --- @return boolean  true to swallow the event, false to pass through
 --- @private
 function Dispatcher:_handleKeyEvent(event)
+	-- Never swallow the OS app-switcher shortcut -- see
+	-- modules/system/dismiss-on-blur.lua. dismissOnBlur's own tap handles
+	-- dismissing the overlay for this key; consuming it here (it doesn't
+	-- match any binding, so it would otherwise fall through to onUnmatched
+	-- and get swallowed) prevents the switcher HUD from ever engaging on
+	-- this keypress.
+	if dismissOnBlur.isSwitcherKey(event) then
+		return false
+	end
+
 	local keyCode = event:getKeyCode()
 
 	-- Swallow modifier-only key presses
