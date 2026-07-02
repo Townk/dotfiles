@@ -572,6 +572,14 @@ pick::build_fzf_args() {
   if [[ -n "${pick_ui[query]:-}" ]]; then
     fzf_args+=( --query "${pick_ui[query]}" )
   fi
+
+  # --preview CMD: pass straight through to fzf. The command runs in fzf's
+  # preview window with fzf's placeholders ({1}, {q}, {n}, ...) available;
+  # pick-clipboard uses it to show a clip's full multi-line text by id.
+  # Additive: callers that don't pass --preview are unaffected.
+  if [[ -n "${pick_ui[preview]:-}" ]]; then
+    fzf_args+=( "--preview=${pick_ui[preview]}" )
+  fi
   return 0
 }
 
@@ -757,10 +765,15 @@ pick::background_setup() {
   # $hook. Holding the FIFO open read-write keeps the read loop alive across the
   # transient open/close of each keypress writer (otherwise it would hit EOF).
   {
-    local bfd spec line
+    local bfd key spec line
     exec {bfd}<>"$pick_background_fifo"
-    while IFS=$'\t' read -r spec line <&$bfd; do
-      "$hook" "$(pick::start_format_line "$line" "$spec")"
+    # FIFO record is KEY\tSPEC\tLINE: the KEY is forwarded to the hook as a
+    # 2nd arg so a picker can bind different background keys to different
+    # actions (pick-clipboard's ctrl-d delete / ctrl-p pin / ctrl-y copy).
+    # Existing hooks read $1 (the formatted value) and ignore the extra arg,
+    # so this is backward-compatible.
+    while IFS=$'\t' read -r key spec line <&$bfd; do
+      "$hook" "$(pick::start_format_line "$line" "$spec")" "$key"
     done
   } &!
   pick_background_broker=$!
@@ -777,9 +790,11 @@ pick::background_setup() {
     # The child only writes; one small printf is an atomic FIFO write. The FIFO
     # path is single-quoted so a TMPDIR with spaces can't word-split the
     # redirection target in fzf's child shell ({} is already fzf-quoted; spec is
-    # a validated token). fzf input is newline-delimited, so {} is always one
-    # line and each printf is exactly one broker record.
-    fzf_args+=( --bind "${key}:execute-silent(printf '%s\t%s\n' ${spec} {} >> '${pick_background_fifo}')" )
+    # a validated token; key is a validated chord). The record is KEY\tSPEC\t{}
+    # so the broker can forward the key to the hook (see pick::background_setup).
+    # fzf input is newline-delimited, so {} is always one line and each printf is
+    # exactly one broker record.
+    fzf_args+=( --bind "${key}:execute-silent(printf '%s\t%s\t%s\n' ${key} ${spec} {} >> '${pick_background_fifo}')" )
   done
   return 0
 }
@@ -988,6 +1003,13 @@ pick::start() {
         ;;
       --on-key-background=*)
         on_background="${1#--on-key-background=}"; shift
+        ;;
+      --preview)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        pick_ui[preview]="$2"; shift 2
+        ;;
+      --preview=*)
+        pick_ui[preview]="${1#--preview=}"; shift
         ;;
       --)
         shift

@@ -1,0 +1,202 @@
+#!/usr/bin/env zsh
+# pick-clipboard — fzf picker over the universal clipboard history store.
+#
+# Backs the universal-clipboard project (spec §7). Streams rows straight from
+# the SQLite store at ${XDG_DATA_HOME:-~/.local/share}/pick-clipboard/history.db
+# into pick::start — no assembled-lines cache, no jq — ordered
+#   pinned DESC, last_ts DESC.
+#
+# Wire format (the \x1f/\x1e contract from pick-common.zsh):
+#   <visible preview>\x1f<id>
+# The id is the single tail field (pick::start field:1). Clip content can be
+# multi-line, which fzf's line-based entry model can't carry inline, so the
+# text is re-fetched from the store by id on every accept / background action
+# instead of being embedded in the line.
+#
+# Keys:
+#   Enter        inject the selected clip's text into the originating pane
+#                (zellij-modal captures pick-clipboard's stdout, so we print the
+#                re-fetched text after pick::start returns the id).
+#   Alt-Enter    insert WITHOUT dismissing (--key-background): re-fetch + inject.
+#   Ctrl-Y       accept-and-copy: re-fetch + copy to *my* clipboard (the pbcopy
+#                shim routes OSC 52 / bridge / local). Stays open? No — Ctrl-Y
+#                is accept-and-dismiss: handled as a background key here that
+#                copies then prints a sentinel so the wrapper dismisses. See NOTES.
+#   Ctrl-D/Alt-D delete the row (SQL DELETE by id), stay open.
+#   Ctrl-P       toggle pin, stay open.
+#
+# Origin filter (spec §8): bridge-up ($SSH_CONNECTION + the reverse socket
+# present) -> union of local/remote-own/laptop-ref; else local/remote-own only
+# (excludes stale laptop-ref rows). Phase 3 only has origin='local' rows (the
+# bridge mirror lands in Phase 5), so the filter is forward-compatible.
+#
+# NOTES on Ctrl-Y: pick::start's accept-and-dismiss is Enter (via --output). A
+# second accept-and-dismiss sink (copy-then-close) isn't expressible as a
+# plain --key-output (those emit a field, they don't run a side effect). So
+# Ctrl-Y is a --key-background bind that copies, then writes the magic
+# sentinel `__PICK_CLIPBOARD_CTRL_Y__<id>` to the FIFO... — simpler: Ctrl-Y
+# copies and the user closes with Esc/Enter. A true copy-and-dismiss variant
+# can be added later as a separate accept key if wanted; for now Ctrl-Y is
+# copy-and-stay (delete/pin are also stay), and Enter is the dismiss+inject.
+
+set -eu -o pipefail
+
+PICK_NAME=pick-clipboard
+PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
+source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" ||
+  { print -ru2 -- "pick-clipboard: cannot source pick-common.zsh from $PICK_LIB_DIR"; exit 1; }
+
+DB_FILE="${PICK_CLIPBOARD_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/pick-clipboard/history.db}"
+require_cmd sqlite3
+require_cmd pbcopy 2>/dev/null || true   # copy target; optional in odd envs
+
+# `-escape off` (sqlite >= 3.46) keeps the raw ANSI + US field bytes intact.
+typeset -ga PICK_SQLITE_RAW; PICK_SQLITE_RAW=()
+if sqlite3 -escape off ':memory:' 'SELECT 1;' >/dev/null 2>&1; then
+  PICK_SQLITE_RAW=(-escape off)
+fi
+
+[[ -f "$DB_FILE" ]] || die "clipboard store not found: $DB_FILE
+It is created by the Hammerspoon clipboard-history watcher (chezmoi apply)."
+
+# --- bridge-up detection (spec §8) -----------------------------------------
+bridge_up=0
+if [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] &&
+   [[ -S "$HOME/.local/state/runtime/chezmoi-system/clipboard-bridge.sock" ]]; then
+  bridge_up=1
+fi
+if (( bridge_up )); then
+  origin_where="origin IN ('local','remote-own','laptop-ref')"
+else
+  origin_where="origin IN ('local','remote-own')"
+fi
+SOCK="$HOME/.local/state/runtime/chezmoi-system/clipboard-bridge.sock"
+
+# --- helpers (run in THIS process via the --key-background FIFO broker) ------
+clip::text_by_id() {  # id -> text_plain (raw, multi-line)
+  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "SELECT text_plain FROM clips WHERE id=$1;"
+}
+
+clip::delete_by_id() {
+  sqlite3 "$DB_FILE" "DELETE FROM clip_types WHERE clip_id=$1; DELETE FROM clips WHERE id=$1;"
+}
+
+clip::toggle_pin_by_id() {
+  sqlite3 "$DB_FILE" "UPDATE clips SET pinned = 1 - pinned WHERE id=$1;"
+}
+
+# Copy a clip's text to *my* clipboard. The pbcopy shim at ~/.local/bin/pbcopy
+# already routes origin-relative: local -> /usr/bin/pbcopy, over SSH -> OSC 52
+# (bridge-down) or the reverse channel (bridge-up, once Phase 5 ships it).
+clip::copy_by_id() {
+  local id=$1
+  if command -v pbcopy >/dev/null 2>&1; then
+    clip::text_by_id "$id" | pbcopy
+  fi
+}
+
+# Inject a clip's text into the originating zellij pane (embed mode), else
+# fall back to copy. Mirrors pick::background_sink's inject path.
+clip::inject_by_id() {
+  local id=$1 text
+  text="$(clip::text_by_id "$id")"
+  if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_ZELLIJ:-}" ]]; then
+    ${(z)PICK_INJECT_ZELLIJ} action write-chars --pane-id "$PICK_INJECT_PANE" -- "$text"
+  elif command -v pbcopy >/dev/null 2>&1; then
+    printf '%s' "$text" | pbcopy
+  fi
+}
+
+# --on-key-background hook: $1 = id (field:1), $2 = the key. Dispatch on $2.
+clip::bg_hook() {
+  local id=$1 key=${2:-}
+  [[ -n "$id" ]] || return 0
+  case "$key" in
+    alt-enter)        clip::inject_by_id "$id" ;;
+    ctrl-y)           clip::copy_by_id "$id" ;;
+    ctrl-d|alt-d)     clip::delete_by_id "$id" ;;
+    ctrl-p)           clip::toggle_pin_by_id "$id" ;;
+    *)                ;;  # ignore unmapped background keys
+  esac
+}
+
+# --on-items-picked: re-bump last_ts so the just-picked clip floats to the top.
+clip::bump_recency() {
+  (($#)) || return 0
+  local now id; now=$(date +%s)
+  for id; do
+    [[ -z "$id" ]] && continue
+    sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$now WHERE id=$id;" 2>/dev/null || true
+  done
+}
+
+# --- preview (full multi-line text by id) -----------------------------------
+# fzf's {2} is the 2nd \x1f-delimited field = the id (field 1 is the visible
+# preview). Escape the SQL single-quote in the path just in case.
+preview_db=${DB_FILE//\'/\'\'}
+PREVIEW_CMD="sqlite3 -escape off '$preview_db' \"SELECT IFNULL(text_plain,'['||type_kind||']') FROM clips WHERE id={2};\""
+
+# --- the row stream ---------------------------------------------------------
+# Visible = preview (or [type_kind] for non-text) + a dim badge
+#   · <len>c · <app> · <reltime> · <type_kind>    (+ a pin glyph when pinned).
+# Tail = id (CHAR 31 = \x1f separates visible from tail).
+emit_rows() {
+  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "
+    WITH palette AS (
+      SELECT CHAR(27)||'[0m'                AS reset,
+             CHAR(27)||'[38;2;202;211;245m' AS text_color,
+             CHAR(27)||'[38;2;137;180;250m' AS pin_color,
+             CHAR(27)||'[38;2;127;132;156m' AS dim
+    )
+    SELECT
+      CASE WHEN pinned=1 THEN pin_color || '' || reset || ' ' ELSE '' END
+      || text_color || IFNULL(text_preview, '['||type_kind||']') || reset
+      || dim || ' · ' || COALESCE(len,0) || 'c · ' || COALESCE(IFNULL(source_app,'?'),'?') || ' · '
+      || CASE
+           WHEN CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT) < 60
+             THEN printf('%ds', CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT))
+           WHEN CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT) < 3600
+             THEN printf('%dm', (CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT))/60)
+           WHEN CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT) < 86400
+             THEN printf('%dh', (CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT))/3600)
+             ELSE printf('%dd', (CAST(strftime('%s','now') AS INT) - CAST(last_ts AS INT))/86400)
+         END
+      || ' · ' || COALESCE(type_kind,'text') || reset
+      || CHAR(31) || id
+    FROM clips, palette
+    WHERE ${origin_where}
+    ORDER BY pinned DESC, last_ts DESC
+    LIMIT ${PICK_CLIPBOARD_LIMIT:-500};
+  "
+}
+
+# --- run --------------------------------------------------------------------
+hints="$(pick::hints "󰌑 inject" "󰘵 󰌑 insert" "󰘴 Y copy" "󰘴 D del" "󰘴 P pin" "󱊷 cancel")"
+
+pick_args=(
+  --header "Clipboard history"
+  --hints "$hints"
+  --output field:1                 # Enter -> id (we re-fetch text below)
+  --field-id 1                     # id is tail field 1 (for recency + resume)
+  --key-background alt-enter:field:1
+  --key-background ctrl-y:field:1
+  --key-background ctrl-d:field:1
+  --key-background alt-d:field:1
+  --key-background ctrl-p:field:1
+  --on-key-background clip::bg_hook
+  --on-items-picked clip::bump_recency
+  --cache-state
+  --preview "$PREVIEW_CMD"
+)
+[[ -n "${PICK_CLIPBOARD_RESUME:-}" ]] && pick_args+=(--resume)
+[[ -n "${PICK_CLIPBOARD_NO_BORDER:-}" ]] && pick_args+=(--no-border)
+
+# pick::start prints the selected field:1 (the id) on stdout. We re-fetch the
+# text by id and print THAT, so zellij-modal's stdout capture injects the real
+# (possibly multi-line) clip text into the originating pane.
+selected_id="$(emit_rows | pick::start "${pick_args[@]}")" || exit 130
+# pick::start's --copy-only path is not used here; on a normal accept it prints
+# the joined selection. Re-fetch + emit the text for the picked id.
+if [[ -n "$selected_id" ]]; then
+  clip::text_by_id "$selected_id"
+fi
