@@ -197,7 +197,7 @@ EMIT_SQL="WITH palette AS (
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
       || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-1)) THEN '…' ELSE '' END)
       || reset
-      || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END
+      || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
       || CHAR(31) || id
     FROM clips, palette
     WHERE ${origin_where}
@@ -250,7 +250,7 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
       || printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
       || reset
-      || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END
+      || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
       || CHAR(31) || id
     FROM clips, palette
     WHERE ${origin_where}
@@ -292,6 +292,7 @@ pick_args=(
   --preview "$PREVIEW_CMD"
   --preview-window "${PICK_CLIPBOARD_PREVIEW_WINDOW:-right:45%}"
   --info hidden                    # hide the 1/X item counter (top-right)
+  --no-scrollbar                   # hide the preview/list scrollbar + scroll indicator
   # delete / pin run a SQL action AND reload the list in place (fzf
   # execute-silent + reload). {2} = the id (2nd \x1f field). Race-free: the
   # SQL runs synchronously in execute-silent before reload re-streams.
