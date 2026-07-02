@@ -5,6 +5,20 @@
  */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* Recent macOS/WebKit versions restrict LOCAL font matching by family name
+ * (anti-fingerprinting hardening), which can silently fail to resolve a
+ * user-installed font like this one inside a WKWebView even though the same
+ * font renders fine in native apps/terminals via CoreText. An explicit
+ * @font-face with a file:// src is loaded as a "web font" resource, not a
+ * local-name lookup, so it is not subject to that restriction. %%ICON_FONT_URL%%
+ * is substituted at runtime (clipboard-picker.lua) with an absolute
+ * file://$HOME/Library/Fonts/... URL — never hardcode a username here.
+ */
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  src: url("%%ICON_FONT_URL%%") format("truetype");
+}
+
 :root {
   /* Base text scale. Input is 1.2x, metadata is 0.9x per the UX spec —
      tune here, everything else derives via calc(). */

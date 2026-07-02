@@ -269,10 +269,20 @@ local ucc
 local savedWindow -- the app window focused before the picker opened
 local isShown = false
 
+-- Absolute file:// URL for the icon font, substituted into the CSS's
+-- @font-face src. An explicit @font-face load bypasses WebKit's local
+-- font-matching-by-name restriction (see the comment in
+-- clipboard-picker.css) that can otherwise silently fail to resolve a
+-- user-installed font by family name alone inside a webview.
+local function icon_font_url()
+  return "file://" .. (os.getenv("HOME") or "") .. "/Library/Fonts/SymbolsNerdFontMono-Regular.ttf"
+end
+
 local function build_html(items)
   ensure_templates()
+  local css = substitute(cssTemplateRaw, { ICON_FONT_URL = icon_font_url() })
   return substitute(htmlTemplateRaw, {
-    CSS = cssTemplateRaw,
+    CSS = css,
     -- hs.json.encode escapes '/' as '\/', which prevents a "</script>"
     -- breakout inside the embedded JSON literal (verified empirically:
     -- encode() on a string containing "</b>" yields "<\/b>", so no literal
