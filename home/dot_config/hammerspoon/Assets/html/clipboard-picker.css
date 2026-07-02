@@ -1,0 +1,166 @@
+/* clipboard-picker.css — visual identity matches which-key-overlay.css
+ * (same literal panel background/border/radius tokens), extended with a
+ * split list/preview/metadata layout. See clipboard-picker.lua for the
+ * webview lifecycle and clipboard-picker.html for the DOM + interaction JS.
+ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  /* Base text scale. Input is 1.2x, metadata is 0.9x per the UX spec —
+     tune here, everything else derives via calc(). */
+  --base-size: 13px;
+  --input-size: calc(var(--base-size) * 1.2);
+  --meta-size: calc(var(--base-size) * 0.9);
+  --mono-font: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Symbols Nerd Font Mono', monospace;
+  --ui-font: -apple-system, BlinkMacSystemFont, sans-serif;
+  --icon-font: 'Symbols Nerd Font Mono';
+}
+
+html { background: transparent; }
+body { background: transparent; overflow: hidden; }
+
+/* Same literal tokens as which-key-overlay.css's .panel — matching visual identity. */
+.panel {
+  width: 100vw;
+  height: 100vh;
+  background: rgba(30, 30, 36, 0.88);
+  border: 1px solid rgba(217, 217, 217, 1);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--ui-font);
+  color: rgba(224, 224, 224, 1);
+}
+
+/* --- (A) search row -------------------------------------------------- */
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex: 0 0 auto;
+}
+.search-icon {
+  font-family: var(--icon-font);
+  font-size: var(--input-size);
+  color: rgba(130, 170, 255, 1);
+}
+#query {
+  flex: 1 1 auto;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: rgba(224, 224, 224, 1);
+  font-size: var(--input-size);
+  font-family: var(--ui-font);
+}
+#query::placeholder { color: rgba(150, 150, 150, 0.7); }
+
+/* --- body: (B) list | (C) preview / (D) metadata --------------------- */
+.body-row {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.list-col {
+  flex: 0 0 40%;
+  overflow-y: auto;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 6px 0;
+}
+
+.group-header {
+  font-size: var(--meta-size);
+  color: rgba(128, 128, 128, 1);
+  padding: 6px 12px 3px 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  margin: 0 6px;
+  border-radius: 8px; /* rounded-rect selection highlight */
+  font-size: var(--base-size);
+  white-space: nowrap;
+}
+.item.selected {
+  background: rgba(130, 170, 255, 0.22);
+}
+.item .icon {
+  font-family: var(--icon-font);
+  flex: 0 0 16px;
+  text-align: center;
+}
+.item .content {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item .pin {
+  font-family: var(--icon-font);
+  flex: 0 0 14px;
+  text-align: center;
+  color: rgba(225, 170, 80, 1);
+}
+
+.right-col {
+  flex: 1 1 60%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.preview-pane {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  min-height: 0;
+}
+/* Plain text (and the files best-effort list) render monospace; html/rtf
+   (converted) render in a sandboxed iframe with the clip's own fonts. */
+.preview-pane pre {
+  font-family: var(--mono-font);
+  font-size: var(--base-size);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.preview-pane iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: white;
+  border-radius: 6px;
+}
+.preview-pane img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+}
+.preview-empty {
+  opacity: 0.5;
+  font-size: var(--meta-size);
+}
+
+.meta-pane {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  font-size: var(--meta-size);
+}
+.meta-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 1px 0;
+}
+.meta-row .label { color: rgba(150, 150, 150, 1); }
+.meta-row .value { color: rgba(210, 210, 210, 1); }

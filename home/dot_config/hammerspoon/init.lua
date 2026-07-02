@@ -7,6 +7,7 @@ local apps = require("apps")
 local audio = require("audio")
 local clipboard = require("apps.clipboard")
 local clipHistory = require("apps.clipboard-history")
+local clipPicker = require("apps.clipboard-picker")
 local controls = require("system.controls")
 local dock = require("system.dock")
 local images = require("images")
@@ -25,6 +26,7 @@ lifecycle.registerCleanup(images.clearCache)
 lifecycle.registerCleanup(windowDrag.cleanup)
 lifecycle.registerCleanup(dock.cleanup)
 lifecycle.registerCleanup(clipHistory.cleanup)
+lifecycle.registerCleanup(clipPicker.cleanup)
 
 function notify(icon, text, soundName)
 	osd.notify(icon, text, soundName)
@@ -216,7 +218,7 @@ kb.setup({
 		{ key = "right", mods = kb.keys.mods.CG, desc = "Next space", action = kb.keys.sym.MOVE_RIGHT_SPACE },
 	-- Hammerspoon actions (function actions handled by eventtap)
 	{ key = "d", mods = kb.keys.mods.COG, icon = "󰭤", desc = "Describe selection", action = clipboard.defineSelection },
-	{ key = "v", mods = kb.keys.mods.GS, icon = "󰛐", desc = "Clipboard history", action = clipHistory.show_chooser },
+		{ key = "v", mods = kb.keys.mods.GS, icon = "󰛐", desc = "Clipboard history", action = clipPicker.toggle },
 		{ key = "q", mods = kb.keys.mods.COG, icon = "󰅌", desc = "QR Code from selection", action = apps.raycastQRCodeFromSelection },
 		{ key = "3", mods = kb.keys.mods.GS, desc = "Full screen Screenshot", action = apps.shottrCaptureScreen },
 		{ key = "3", mods = kb.keys.mods.CGS, desc = "Content scrolling Screenshot", action = apps.shottrCaptureScrolling },

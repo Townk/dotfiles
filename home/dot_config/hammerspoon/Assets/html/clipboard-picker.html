@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+%%CSS%%
+</style>
+</head>
+<body>
+  <div class="panel">
+    <div class="search-row">
+      <span class="search-icon">&#xF002F;</span>
+      <input id="query" type="text" placeholder="Type to filter entries…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="body-row">
+      <div class="list-col" id="list"></div>
+      <div class="right-col">
+        <div class="preview-pane" id="preview"><div class="preview-empty">No preview</div></div>
+        <div class="meta-pane" id="meta"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function () {
+    // ITEMS is the full row set from the store (cheap fields only — no
+    // blobs); filtering + selection happen entirely client-side against
+    // this array. Rich preview content (C) is fetched from Lua on selection
+    // change only (see requestPreview / window.__setPreview).
+    //
+    // hs.json.encode escapes '/' as '\/', so a clip's preview text can never
+    // contain a literal "</script" byte sequence here — verified empirically
+    // (encode() on a string containing "</b>" yields "<\/b>").
+    var ITEMS = %%ITEMS_JSON%%;
+    var filtered = ITEMS.slice();
+    var selectedIndex = 0;
+
+    // Nerd Font v3 codepoints (same icons as the terminal picker):
+    // fa-font (text), fa-paintbrush (rtf/html), fa-image, fa-folder (files),
+    // fa-shuffle (mixed), fa-thumbtack (pin).
+    var ICONS = {
+      text: '\u{F0031}', rtf: '\u{F01FC}', html: '\u{F01FC}',
+      image: '\u{F003E}', files: '\u{F007B}'
+    };
+    var MIXED_ICON = '\u{F0074}';
+    var PIN_ICON = '\u{F008D}';
+
+    function post(action, extra) {
+      var msg = Object.assign({ action: action }, extra || {});
+      try { webkit.messageHandlers.clipboardPicker.postMessage(msg); } catch (e) {}
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function renderList() {
+      var listEl = document.getElementById('list');
+      var html = '';
+      var lastGroup = null;
+      for (var i = 0; i < filtered.length; i++) {
+        var it = filtered[i];
+        if (it.group !== lastGroup) {
+          html += '<div class="group-header">' + escapeHtml(it.group) + '</div>';
+          lastGroup = it.group;
+        }
+        var icon = ICONS[it.kind] || MIXED_ICON;
+        var sel = (i === selectedIndex) ? ' selected' : '';
+        html += '<div class="item' + sel + '" data-idx="' + i + '">'
+          + '<span class="icon">' + icon + '</span>'
+          + '<span class="content">' + escapeHtml(it.preview) + '</span>'
+          + '<span class="pin">' + (it.pinned ? PIN_ICON : '') + '</span>'
+          + '</div>';
+      }
+      listEl.innerHTML = html || '<div class="preview-empty" style="padding:8px 12px;">No clips</div>';
+      Array.prototype.forEach.call(listEl.querySelectorAll('.item'), function (el) {
+        el.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          selectedIndex = parseInt(el.getAttribute('data-idx'), 10);
+          renderList();
+          updateRight();
+        });
+        el.addEventListener('dblclick', function () { accept(true); });
+      });
+      var selEl = listEl.querySelector('.item.selected');
+      if (selEl) selEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    function updateMeta(it) {
+      var metaEl = document.getElementById('meta');
+      if (!it) { metaEl.innerHTML = ''; return; }
+      function row(label, value) {
+        return '<div class="meta-row"><span class="label">' + label + '</span><span class="value">' + escapeHtml(value) + '</span></div>';
+      }
+      metaEl.innerHTML = row('Source:', it.app)
+        + row('Content Type:', it.kindLabel)
+        + row('Characters:', it.len)
+        + row('Words:', it.words)
+        + row('Copied:', it.age);
+    }
+
+    function updateRight() {
+      var it = filtered[selectedIndex];
+      updateMeta(it);
+      var previewEl = document.getElementById('preview');
+      if (!it) { previewEl.innerHTML = '<div class="preview-empty">No preview</div>'; return; }
+      previewEl.innerHTML = '<div class="preview-empty">Loading…</div>';
+      post('preview', { id: it.id, kind: it.kind });
+    }
+
+    // Lua -> JS callbacks (invoked via webview:evaluateJavaScript).
+    window.__setPreview = function (content) {
+      var previewEl = document.getElementById('preview');
+      if (!content) { previewEl.innerHTML = '<div class="preview-empty">No preview</div>'; return; }
+      if (content.kind === 'html') {
+        previewEl.innerHTML = '<iframe sandbox srcdoc="' + escapeHtml(content.html) + '"></iframe>';
+      } else if (content.kind === 'image') {
+        previewEl.innerHTML = '<img src="' + content.dataUri + '">';
+      } else {
+        previewEl.innerHTML = '<pre>' + escapeHtml(content.text) + '</pre>';
+      }
+    };
+
+    window.__setPinned = function (id, pinned) {
+      for (var i = 0; i < ITEMS.length; i++) { if (ITEMS[i].id === id) ITEMS[i].pinned = pinned; }
+      applyFilter(document.getElementById('query').value, true);
+    };
+
+    window.__removeItem = function (id) {
+      ITEMS = ITEMS.filter(function (it) { return it.id !== id; });
+      applyFilter(document.getElementById('query').value, true);
+    };
+
+    window.__focusInput = function () {
+      var q = document.getElementById('query');
+      q.focus();
+      q.select();
+    };
+
+    function applyFilter(q, keepSelection) {
+      q = (q || '').toLowerCase();
+      var prevId = keepSelection && filtered[selectedIndex] ? filtered[selectedIndex].id : null;
+      // Pinned-first, otherwise preserve the server-side pinned/last_ts order.
+      var base = ITEMS.slice().sort(function (a, b) {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return 0;
+      });
+      filtered = q === '' ? base : base.filter(function (it) {
+        return it.preview.toLowerCase().indexOf(q) !== -1
+          || (it.app || '').toLowerCase().indexOf(q) !== -1;
+      });
+      if (prevId != null) {
+        var idx = -1;
+        for (var i = 0; i < filtered.length; i++) { if (filtered[i].id === prevId) { idx = i; break; } }
+        selectedIndex = idx >= 0 ? idx : 0;
+      } else {
+        selectedIndex = 0;
+      }
+      renderList();
+      updateRight();
+    }
+
+    function move(delta) {
+      if (filtered.length === 0) return;
+      selectedIndex = Math.max(0, Math.min(filtered.length - 1, selectedIndex + delta));
+      renderList();
+      updateRight();
+    }
+
+    function pageMove(dir) {
+      var listEl = document.getElementById('list');
+      var approxRowHeight = 24;
+      var visible = Math.max(1, Math.floor(listEl.clientHeight / approxRowHeight));
+      move(dir * visible);
+    }
+
+    function accept(dismiss) {
+      var it = filtered[selectedIndex];
+      if (!it) return;
+      post('accept', { id: it.id, dismiss: dismiss });
+    }
+
+    function del() {
+      var it = filtered[selectedIndex];
+      if (!it) return;
+      post('delete', { id: it.id });
+      window.__removeItem(it.id);
+    }
+
+    function pin() {
+      var it = filtered[selectedIndex];
+      if (!it) return;
+      post('pin', { id: it.id }); // optimistic update arrives via __setPinned
+    }
+
+    document.getElementById('query').addEventListener('input', function (e) {
+      applyFilter(e.target.value, false);
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && e.altKey) { e.preventDefault(); accept(false); return; }
+      if (e.key === 'Enter') { e.preventDefault(); accept(true); return; }
+      if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'j')) { e.preventDefault(); move(1); return; }
+      if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'k')) { e.preventDefault(); move(-1); return; }
+      if (e.ctrlKey && e.key === 'f') { e.preventDefault(); pageMove(1); return; }
+      if (e.ctrlKey && e.key === 'b') { e.preventDefault(); pageMove(-1); return; }
+      if (e.ctrlKey && e.key === 'd') { e.preventDefault(); del(); return; }
+      if (e.ctrlKey && e.key === 'p') { e.preventDefault(); pin(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); post('dismiss'); return; }
+    });
+
+    applyFilter('', false);
+    window.__focusInput();
+  })();
+  </script>
+</body>
+</html>
