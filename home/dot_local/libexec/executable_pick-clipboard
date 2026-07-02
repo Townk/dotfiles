@@ -140,15 +140,15 @@ clip::bump_recency() {
 # that bottom-aligns the footer.
 COLS=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
 ROWS=${LINES:-$(tput lines 2>/dev/null || echo 24)}
-CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-$(( COLS - 16 ))}
+# Item-line content width. The list pane is ~55% of the fzf window (the
+# preview takes 45%); the fzf window is the pty-frame sub-pty = COLS-2 (box);
+# minus ~6 (fzf padding 0,2,0,2 + input-border gutter each side); minus 5
+# (icon + sep + pin column). So CW = (COLS-2)*55/100 - 11. The list width
+# isn't exposed to the input stream (items emit before fzf lays out), so this
+# is computed from tput cols — the preview footer instead uses fzf's exact
+# FZF_PREVIEW_COLUMNS (see the preview script).
+CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-$(( (COLS - 2) * 55 / 100 - 11 ))}
 (( CW < 10 )) && CW=10
-preview_w=$(( COLS * 45 / 100 ))
-(( preview_w < 20 )) && preview_w=20
-lw=14
-vw=$(( preview_w - lw - 2 ))
-(( vw < 4 )) && vw=4
-preview_h=$(( ROWS - 4 ))
-(( preview_h < 6 )) && preview_h=6
 
 # --- preview (full text + bottom-aligned formatted footer) ------------------
 # fzf's {2} = the id. The preview script emits the clip's full text, blank
@@ -232,7 +232,13 @@ sqlite3 '$DB_FILE' "UPDATE clips SET pinned=1-pinned WHERE id=\$1;"
 EOF
 cat > "$preview_script" <<EOF
 #!/bin/sh
-sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age FROM clips WHERE id=\$1) SELECT body || char(10) || replace(printf('%*s', MAX(0, ${preview_h} - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-${lw}s%${vw}s' || char(10), 'Source:', substr(app,1,${vw})) || printf('%-${lw}s%${vw}s' || char(10), 'Content Type:', substr(kind,1,${vw})) || printf('%-${lw}s%${vw}s' || char(10), 'Characters:', substr(len,1,${vw})) || printf('%-${lw}s%${vw}s' || char(10), 'Words:', substr(words,1,${vw})) || printf('%-${lw}s%${vw}s', 'Copied:', substr(age,1,${vw})) || char(27)||'[0m' FROM c;"
+# fzf sets FZF_PREVIEW_COLUMNS / FZF_PREVIEW_LINES to the preview pane's exact
+# dimensions when running this — use them to fit the footer + bottom-align it.
+pc=\${FZF_PREVIEW_COLUMNS:-40}
+ph=\${FZF_PREVIEW_LINES:-20}
+lw=14
+vw=\$((pc - lw - 2)); [ \$vw -lt 4 ] && vw=4
+sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age FROM clips WHERE id=\$1) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
 EOF
 
 # --- run --------------------------------------------------------------------
