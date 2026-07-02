@@ -147,7 +147,7 @@ ROWS=${LINES:-$(tput lines 2>/dev/null || echo 24)}
 # isn't exposed to the input stream (items emit before fzf lays out), so this
 # is computed from tput cols — the preview footer instead uses fzf's exact
 # FZF_PREVIEW_COLUMNS (see the preview script).
-CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-$(( (COLS - 2) * 55 / 100 - 11 ))}
+CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-$(( (COLS - 2) * 55 / 100 - 12 ))}
 (( CW < 10 )) && CW=10
 
 # --- preview (full text + bottom-aligned formatted footer) ------------------
@@ -225,7 +225,7 @@ cat > "$emit_script" <<EOF
 # the EXACT pane size: list pane = 55% of FZF_COLUMNS (preview takes 45%),
 # minus ~6 (padding + gutter) + 5 (icon + sep + pin) -> CW = fc*55/100 - 11.
 fc=\${PTY_FRAME_COLUMNS:-\${FZF_COLUMNS:-80}}
-cw=\$((fc * 55 / 100 - 11)); [ \$cw -lt 10 ] && cw=10
+cw=\$((fc * 55 / 100 - 12)); [ \$cw -lt 10 ] && cw=10
 echo "[\$(date +%s)] PTY_FRAME_COLUMNS=\${PTY_FRAME_COLUMNS:-?} fc=\$fc cw=\$cw" >> /tmp/pick-clipboard-dims.log
 sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
@@ -290,7 +290,7 @@ pick_args=(
   --on-items-picked clip::bump_recency
   --cache-state
   --preview "$PREVIEW_CMD"
-  --preview-window "${PICK_CLIPBOARD_PREVIEW_WINDOW:-right:45%}"
+  --preview-window "${PICK_CLIPBOARD_PREVIEW_WINDOW:-right:45%,noinfo}"
   --info hidden                    # hide the 1/X item counter (top-right)
   --no-scrollbar                   # hide the preview/list scrollbar + scroll indicator
   # delete / pin run a SQL action AND reload the list in place (fzf
