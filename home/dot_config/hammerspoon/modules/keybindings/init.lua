@@ -672,14 +672,26 @@ function Keybindings.show()
 	end, Keybindings.hide)
 end
 
+--- Stop the dispatcher and resume the global hotkey tap.
+--- @private
+local function teardownTaps()
+	if state.keyHandler then
+		state.keyHandler:stop()
+	end
+	if state.globalTap then
+		state.globalTap:start()
+	end
+end
+
 --- Close the overlay and resume global hotkeys.
 function Keybindings.hide()
+	-- Read this BEFORE disarming below (which is what flips it back to
+	-- false once dismissAllArmed()'s loop finishes).
+	local viaSwitcher = dismissOnBlur.dismissingViaSwitcher
+
 	if state.timeoutTimer then
 		state.timeoutTimer:stop()
 		state.timeoutTimer = nil
-	end
-	if state.keyHandler then
-		state.keyHandler:stop()
 	end
 	if state.overlayInstance then
 		state.overlayInstance:hide()
@@ -689,8 +701,22 @@ function Keybindings.hide()
 	state.dismissBaselineWindow = nil
 	dismissOnBlur.disarm(DISMISS_ON_BLUR_ID)
 
-	if state.globalTap then
-		state.globalTap:start()
+	if viaSwitcher then
+		-- Stopping the dispatcher and starting globalTap are themselves
+		-- eventtap-topology changes. Doing them synchronously here, while
+		-- the OS switcher HUD is still actively engaging the Cmd+Tab gesture
+		-- it just received, appears to reset/cancel that in-flight gesture
+		-- (this is what was still causing "have to press Cmd+Tab twice" even
+		-- after the dispatcher itself was fixed to pass the key through --
+		-- the keydown reaches the OS fine, but this teardown moments later
+		-- was disrupting it). Give the switcher a brief moment to settle
+		-- first. The dispatcher stays running for this window, but it
+		-- already passes Cmd+Tab through untouched (see dispatcher.lua), so
+		-- that's harmless; it just means non-switcher keys pressed in this
+		-- same ~200ms are still swallowed as if the overlay were still open.
+		hs.timer.doAfter(0.2, teardownTaps)
+	else
+		teardownTaps()
 	end
 end
 
