@@ -9,7 +9,8 @@
 <body>
   <div class="panel">
     <div class="search-row">
-      <span class="search-icon">&#xF002F;</span>
+      <!-- fa-magnifying-glass, U+10F002 (verified against symbols.db) -->
+      <span class="search-icon">&#x10F002;</span>
       <input id="query" type="text" placeholder="Type to filter entries…" autocomplete="off" spellcheck="false">
     </div>
     <div class="body-row">
@@ -34,15 +35,17 @@
     var filtered = ITEMS.slice();
     var selectedIndex = 0;
 
-    // Nerd Font v3 codepoints (same icons as the terminal picker):
-    // fa-font (text), fa-paintbrush (rtf/html), fa-image, fa-folder (files),
-    // fa-shuffle (mixed), fa-thumbtack (pin).
+    // Nerd Font v3 codepoints (same icons as the terminal picker, verified
+    // against ~/.local/share/fonts/nerd-font/symbols.db by name — these are
+    // 6-hex-digit Plane 16 (Supplementary PUA-B) codepoints, U+10Fxxx, NOT
+    // 5-digit U+F0xxx (Plane 15): fa-font, fa-paintbrush (rtf/html),
+    // fa-image, fa-folder (files), fa-shuffle (mixed), fa-thumbtack (pin).
     var ICONS = {
-      text: '\u{F0031}', rtf: '\u{F01FC}', html: '\u{F01FC}',
-      image: '\u{F003E}', files: '\u{F007B}'
+      text: '\u{10F031}', rtf: '\u{10F1FC}', html: '\u{10F1FC}',
+      image: '\u{10F03E}', files: '\u{10F07B}'
     };
-    var MIXED_ICON = '\u{F0074}';
-    var PIN_ICON = '\u{F008D}';
+    var MIXED_ICON = '\u{10F074}';
+    var PIN_ICON = '\u{10F08D}';
 
     function post(action, extra) {
       var msg = Object.assign({ action: action }, extra || {});
