@@ -6,6 +6,7 @@ local actions = require("system.actions")
 local apps = require("apps")
 local audio = require("audio")
 local clipboard = require("apps.clipboard")
+local clipHistory = require("apps.clipboard-history")
 local controls = require("system.controls")
 local dock = require("system.dock")
 local images = require("images")
@@ -23,6 +24,7 @@ lifecycle.registerCleanup(sd.cleanup)
 lifecycle.registerCleanup(images.clearCache)
 lifecycle.registerCleanup(windowDrag.cleanup)
 lifecycle.registerCleanup(dock.cleanup)
+lifecycle.registerCleanup(clipHistory.cleanup)
 
 function notify(icon, text, soundName)
 	osd.notify(icon, text, soundName)
@@ -33,6 +35,7 @@ function notifyAnsi(icon, text, soundName)
 end
 
 dock.setup()
+clipHistory.setup()
 
 -- Cmd+drag anywhere on a window to move it; plain Cmd+click is preserved
 -- via replay so apps that use it (Ghostty URL opening, etc.) keep working.
