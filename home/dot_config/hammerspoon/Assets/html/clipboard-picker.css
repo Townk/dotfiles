@@ -124,6 +124,14 @@ body { background: transparent; overflow: hidden; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* A clip's OWN text can itself contain Nerd Font glyphs (e.g. copied from
+   * the terminal picker's output, or any icon-styled text) — without this
+   * fallback those characters render as tofu, since --ui-font's stack
+   * (-apple-system, BlinkMacSystemFont, sans-serif) has no icon coverage.
+   * This was the actual bug: the picker's OWN icon/pin glyphs (which use
+   * --icon-font directly) always rendered correctly; it was clip CONTENT
+   * containing its own PUA characters that had nowhere to fall back to. */
+  font-family: var(--ui-font), var(--icon-font);
 }
 .item .pin {
   font-family: var(--icon-font);
