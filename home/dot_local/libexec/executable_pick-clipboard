@@ -130,15 +130,37 @@ clip::bump_recency() {
   done
 }
 
-# --- preview (full multi-line text + a formatted footer) --------------------
-# fzf's {2} is the 2nd \x1f-delimited field = the id. The preview emits the
-# clip's full text, a blank line, then a 5-line footer: labels left-aligned,
-# values right-aligned to a fixed column, "Copied:" last. Dim throughout.
-preview_db=${DB_FILE//\'/\'\'}
+# --- dynamic geometry (from the live TTY) -----------------------------------
+# The item line + preview footer are sized to the actual pane so the pin sits
+# at the right edge (not truncated off) and the footer fits the preview pane.
+# pty-frame draws a 1-cell box + fzf pads ~3 each side, so the usable list
+# area is ~COLS-8; the item line reserves icon(2)+sep(2)+sep(2)+pin(2)=8, so
+# content width CW = COLS-16. The preview pane is 45% of the fzf window; the
+# footer label/value widths sum to fit it. preview_h drives the blank padding
+# that bottom-aligns the footer.
+COLS=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
+ROWS=${LINES:-$(tput lines 2>/dev/null || echo 24)}
+CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-$(( COLS - 16 ))}
+(( CW < 10 )) && CW=10
+preview_w=$(( COLS * 45 / 100 ))
+(( preview_w < 20 )) && preview_w=20
+lw=14
+vw=$(( preview_w - lw - 2 ))
+(( vw < 4 )) && vw=4
+preview_h=$(( ROWS - 4 ))
+(( preview_h < 6 )) && preview_h=6
+
+# --- preview (full text + bottom-aligned formatted footer) ------------------
+# fzf's {2} = the id. The preview script emits the clip's full text, blank
+# padding to push the footer to the bottom of the preview pane, then a 5-line
+# footer (labels left, values right-aligned, Copied: last). Dim throughout.
+# A standalone script (fzf's preview runs a fresh shell) with the DB path +
+# widths + age/words expressions inlined; \$1 = the id from fzf {2}.
 age_expr="CASE WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 60 THEN printf('%ds', CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT)) WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 3600 THEN printf('%dm', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/60) WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 86400 THEN printf('%dh', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/3600) ELSE printf('%dd', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/86400) END"
 # word count: space-separated tokens in the newline-flattened text (0 if empty/NULL)
 words_expr="CASE WHEN text_plain IS NULL OR text_plain='' THEN 0 ELSE length(trim(replace(text_plain,char(10),' '))) - length(replace(trim(replace(text_plain,char(10),' ')),' ','')) + 1 END"
-PREVIEW_CMD="sqlite3 -escape off '$preview_db' \"SELECT COALESCE(text_plain,'['||type_kind||']') || char(10) || char(10) || char(27)||'[38;2;127;132;156m' || printf('%-18s%18s' || char(10), 'Source:', COALESCE(IFNULL(source_app,'?'),'?')) || printf('%-18s%18s' || char(10), 'Content Type:', COALESCE(type_kind,'text')) || printf('%-18s%18s' || char(10), 'Characters:', COALESCE(len,0)) || printf('%-18s%18s' || char(10), 'Words:', ${words_expr}) || printf('%-18s%18s', 'Copied:', (${age_expr}) || ' ago') || char(27)||'[0m' FROM clips WHERE id={2};\""
+preview_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-preview.XXXXXX")
+PREVIEW_CMD="bash $preview_script {2}"
 
 # --- the row stream ---------------------------------------------------------
 # Item line = 3 columns, all rows aligned:
@@ -152,7 +174,6 @@ PREVIEW_CMD="sqlite3 -escape off '$preview_db' \"SELECT COALESCE(text_plain,'['|
 #
 # EMIT_SQL is shared by emit_rows (the initial stream) AND the --reload-cmd
 # script (fzf reloads the list with it after a delete/pin).
-CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-50}
 EMIT_SQL="WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,
@@ -174,10 +195,9 @@ EMIT_SQL="WITH palette AS (
       END
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
-      || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,${CW}))
+      || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-2))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-2)) THEN '··' ELSE '' END)
       || reset
-      || '  '
-      || CASE WHEN pinned=1 THEN pin_color || char(1110157) || reset ELSE '  ' END
+      || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END
       || CHAR(31) || id
     FROM clips, palette
     WHERE ${origin_where}
@@ -197,7 +217,7 @@ emit_rows() {
 emit_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-emit.XXXXXX")
 del_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-del.XXXXXX")
 pin_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-pin.XXXXXX")
-trap 'rm -f -- "$emit_script" "$del_script" "$pin_script"' EXIT INT TERM
+trap 'rm -f -- "$emit_script" "$del_script" "$pin_script" "$preview_script"' EXIT INT TERM
 cat > "$emit_script" <<EOF
 #!/bin/sh
 sqlite3 ${PICK_SQLITE_RAW[*]} '$DB_FILE' "$EMIT_SQL"
@@ -209,6 +229,10 @@ EOF
 cat > "$pin_script" <<EOF
 #!/bin/sh
 sqlite3 '$DB_FILE' "UPDATE clips SET pinned=1-pinned WHERE id=\$1;"
+EOF
+cat > "$preview_script" <<EOF
+#!/bin/sh
+sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age FROM clips WHERE id=\$1) SELECT body || char(10) || replace(printf('%*s', MAX(0, ${preview_h} - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-${lw}s%${vw}s' || char(10), 'Source:', substr(app,1,${vw})) || printf('%-${lw}s%${vw}s' || char(10), 'Content Type:', substr(kind,1,${vw})) || printf('%-${lw}s%${vw}s' || char(10), 'Characters:', substr(len,1,${vw})) || printf('%-${lw}s%${vw}s' || char(10), 'Words:', substr(words,1,${vw})) || printf('%-${lw}s%${vw}s', 'Copied:', substr(age,1,${vw})) || char(27)||'[0m' FROM c;"
 EOF
 
 # --- run --------------------------------------------------------------------
@@ -225,7 +249,7 @@ pick_args=(
   --on-items-picked clip::bump_recency
   --cache-state
   --preview "$PREVIEW_CMD"
-  --preview-window "${PICK_CLIPBOARD_PREVIEW_WINDOW:-right:40%}"
+  --preview-window "${PICK_CLIPBOARD_PREVIEW_WINDOW:-right:45%}"
   # delete / pin run a SQL action AND reload the list in place (fzf
   # execute-silent + reload). {2} = the id (2nd \x1f field). Race-free: the
   # SQL runs synchronously in execute-silent before reload re-streams.
