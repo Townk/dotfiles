@@ -67,7 +67,6 @@ This configuration follows LazyVim's modular structure with custom extensions:
 - **Smart Window Navigation** - Seamless movement between NeoVim splits and tmux panes
 - **Visual Block Movement** - Alt+Arrow keys to move selections
 - **Code Transformation** - TreeSJ for split/join, Coerce for case conversion
-- **Advanced Yanking** - Yanky.nvim for yank history and advanced paste operations
 
 ## 🔧 Configuration Customization
 
@@ -114,7 +113,6 @@ Automated behavior:
 - **nvim-dap** - Debug adapter protocol with custom F-key bindings
 - **blink.cmp** - Completion engine with smart tab/snippet logic
 - **nvim-autopairs** - Auto-close brackets/quotes
-- **yanky.nvim** - Advanced clipboard management
 
 ### AI Integration (`lua/plugins/ai.lua`)
 - **opencode.nvim** - AI coding assistant with custom keybindings

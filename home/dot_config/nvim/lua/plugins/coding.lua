@@ -11,7 +11,6 @@
 --   - conform.nvim: Code formatting
 --   - blink.cmp: Completion engine with smart behavior
 --   - nvim-autopairs: Auto-close brackets/quotes
---   - yanky.nvim: Clipboard/yank history management
 --
 -- The most complex configuration here is blink.cmp's smart actions which
 -- provide intelligent tab behavior and session state tracking.
@@ -473,19 +472,5 @@ return {
     "windwp/nvim-autopairs",
     event = "InsertEnter",
     opts = {},
-  },
-
-  {
-    "gbprod/yanky.nvim",
-    keys = {
-      { "p", "<Plug>(YankyPutAfter)", mode = { "n" }, desc = "Put Text After Cursor" },
-      { "P", "<Plug>(YankyPutAfter)", mode = { "x" }, desc = "Put Text After Cursor" },
-      { "P", "<Plug>(YankyPutBefore)", mode = { "n" }, desc = "Put Text Before Cursor" },
-      { "p", "<Plug>(YankyPutBefore)", mode = { "x" }, desc = "Put Text Before Cursor" },
-      { "gp", "<Plug>(YankyGPutAfter)", mode = { "n" }, desc = "Put Text After Selection" },
-      { "gP", "<Plug>(YankyGPutAfter)", mode = { "x" }, desc = "Put Text After Selection" },
-      { "gP", "<Plug>(YankyGPutBefore)", mode = { "n" }, desc = "Put Text Before Selection" },
-      { "gp", "<Plug>(YankyGPutBefore)", mode = { "x" }, desc = "Put Text Before Selection" },
-    },
   },
 }

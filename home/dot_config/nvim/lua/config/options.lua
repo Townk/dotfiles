@@ -48,7 +48,7 @@ vim.g.lazyvim_python_lsp = "basedpyright"
 vim.g.lazyvim_python_ruff = "ruff"
 
 --------------------------------------------------------------------------------
--- Clipboard over SSH (OSC 52 copy out, reverse-tunnel paste in)
+-- Clipboard over SSH (type-preserving provider)
 --------------------------------------------------------------------------------
 -- WHY: LazyVim disables system-clipboard sync when SSH_CONNECTION is set
 -- (`opt.clipboard = ""`) to avoid Neovim's built-in OSC 52 provider, whose
@@ -56,40 +56,20 @@ vim.g.lazyvim_python_ruff = "ruff"
 -- response...") because Zellij deliberately refuses OSC 52 reads. The fallout:
 -- plain `y` never reached the host clipboard, and `"*y` froze until Ctrl-C.
 --
--- On SSH we re-enable `unnamedplus` and supply both halves explicitly:
---   copy  → write-only OSC 52: yanks travel up through WezTerm to the host
---           (Mac) clipboard. No terminal query, so no hang.
---   paste → read the host clipboard back through a reverse SSH tunnel instead
---           of OSC 52 (which Zellij refuses). The Mac runs a tiny listener
---           (clipboard-bridge launchd service) that serves `pbpaste`; SSH
---           reverse-forwards it to a user-only unix socket on this host (see
---           ~/.ssh/config.d/clipboard.config), and we read it with `nc -U`.
---           The socket lives under $HOME/.local/state/runtime/chezmoi-system/
---           (not directly in $HOME) so it doesn't clutter the home directory;
---           chezmoi creates that directory on apply.
---           When the tunnel is down (socket missing, no nc, or a non-tunnelled
---           SSH session) we fall back to the unnamed register, preserving the
---           old no-hang behavior. Gated to SSH so local Neovim keeps pbcopy.
-if vim.env.SSH_CONNECTION or vim.env.SSH_CLIENT or vim.env.SSH_TTY then
-    vim.opt.clipboard = "unnamedplus"
-    local osc52 = require("vim.ui.clipboard.osc52")
-    local sock = (vim.env.HOME or "") .. "/.local/state/runtime/chezmoi-system/clipboard-bridge.sock"
-    local uv = vim.uv or vim.loop
-    local function paste()
-        if vim.fn.executable("nc") == 1 and uv.fs_stat(sock) then
-            local out = vim.fn.systemlist({ "nc", "-U", "-w", "1", sock })
-            if vim.v.shell_error == 0 then
-                return { out, "v" }
-            end
-        end
-        return { vim.fn.split(vim.fn.getreg(""), "\n"), vim.fn.getregtype("") }
-    end
-    vim.g.clipboard = {
-        name = "osc52-write-tunnel-read",
-        copy = { ["+"] = osc52.copy("+"), ["*"] = osc52.copy("*") },
-        paste = { ["+"] = paste, ["*"] = paste },
-    }
-end
+-- On SSH we re-enable `unnamedplus` and install a type-preserving provider
+-- (lua/clipboard/universal.lua) that keeps the existing transport —
+-- write-only OSC 52 copy (yanks ride up through Zellij/WezTerm to the host
+-- clipboard; no terminal query, no hang) + a paste that reads the host
+-- clipboard back through the reverse SSH tunnel (the clipboard-bridge
+-- launchd service, socket at $HOME/.local/state/runtime/chezmoi-system/
+-- clipboard-bridge.sock) AND restores the register type from a tiny
+-- per-process cache. The prior provider returned a hardcoded regtype "v",
+-- so a visual-BLOCK yank lost its shape on the round-trip and yanky.nvim
+-- rejected it with E5108; the cache fixes that. Bridge-down (iPad/Blink,
+-- no tunnel) serves the cache; empty cache + bridge-down falls back to the
+-- unnamed register, preserving the old no-hang behavior. Gated to SSH so
+-- local Neovim keeps pbcopy.
+require("clipboard.universal").setup()
 
 -- Define the paths to add. Adjust the Homebrew path if necessary (e.g., to /usr/local/bin for Intel Macs).
 local homebrew_bin = "/opt/homebrew/bin"
