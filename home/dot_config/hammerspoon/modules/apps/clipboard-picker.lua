@@ -317,6 +317,8 @@ local function handle_message(body)
           hs.timer.doAfter(0.1, function()
             if webview then
               webview:show()
+              local hsWin = webview:hswindow()
+              if hsWin then hsWin:focus() end
               webview:evaluateJavaScript("window.__focusInput && window.__focusInput()")
             end
           end)
@@ -359,12 +361,27 @@ function M.show()
   webview:html(build_html(query_items()))
   webview:show()
   webview:bringToFront(true)
+  -- Hammerspoon is a background/accessory app: showing a window does NOT by
+  -- itself make it the key window or activate the app, so keyboard input
+  -- goes nowhere until the user manually clicks it. hswindow():focus() is
+  -- the same call hs.window uses to raise+activate a normal app window, and
+  -- works on a webview's own window too (verified: hs.window.focusedWindow()
+  -- afterward matches this window's id).
+  local hsWin = webview:hswindow()
+  if hsWin then hsWin:focus() end
   isShown = true
 end
 
 function M.hide()
   if webview then webview:hide() end
   isShown = false
+  -- Without this, focus stays claimed by the (now hidden) webview's window
+  -- and keyboard input goes nowhere until the user manually clicks another
+  -- window — explicitly hand focus back to whatever was focused before show().
+  if savedWindow then
+    savedWindow:focus()
+    savedWindow = nil
+  end
 end
 
 function M.toggle()
