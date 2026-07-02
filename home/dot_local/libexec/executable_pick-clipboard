@@ -130,30 +130,33 @@ clip::bump_recency() {
   done
 }
 
-# --- preview (full multi-line text + a badge footer) -----------------------
-# fzf's {2} is the 2nd \x1f-delimited field = the id (field 1 is the visible
-# item line). The preview command emits the clip's full text, a blank line,
-# then a dim badge (· Nc · app · age · kind) as the preview's footer line.
-# The age expression is shared with nothing else now (the item line carries
-# only icon + content); defined here so the printf stays readable.
+# --- preview (full multi-line text + a formatted footer) --------------------
+# fzf's {2} is the 2nd \x1f-delimited field = the id. The preview emits the
+# clip's full text, a blank line, then a 5-line footer: labels left-aligned,
+# values right-aligned to a fixed column, "Copied:" last. Dim throughout.
 preview_db=${DB_FILE//\'/\'\'}
 age_expr="CASE WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 60 THEN printf('%ds', CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT)) WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 3600 THEN printf('%dm', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/60) WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 86400 THEN printf('%dh', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/3600) ELSE printf('%dd', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/86400) END"
-PREVIEW_CMD="sqlite3 -escape off '$preview_db' \"SELECT COALESCE(text_plain,'['||type_kind||']') || char(10) || char(10) || char(27)||'[38;2;127;132;156m' || printf('· %dc · %s · %s · %s', COALESCE(len,0), COALESCE(IFNULL(source_app,'?'),'?'), ${age_expr}, COALESCE(type_kind,'text')) || char(27)||'[0m' FROM clips WHERE id={2};\""
+# word count: space-separated tokens in the newline-flattened text (0 if empty/NULL)
+words_expr="CASE WHEN text_plain IS NULL OR text_plain='' THEN 0 ELSE length(trim(replace(text_plain,char(10),' '))) - length(replace(trim(replace(text_plain,char(10),' ')),' ','')) + 1 END"
+PREVIEW_CMD="sqlite3 -escape off '$preview_db' \"SELECT COALESCE(text_plain,'['||type_kind||']') || char(10) || char(10) || char(27)||'[38;2;127;132;156m' || printf('%-18s%18s' || char(10), 'Source:', COALESCE(IFNULL(source_app,'?'),'?')) || printf('%-18s%18s' || char(10), 'Content Type:', COALESCE(type_kind,'text')) || printf('%-18s%18s' || char(10), 'Characters:', COALESCE(len,0)) || printf('%-18s%18s' || char(10), 'Words:', ${words_expr}) || printf('%-18s%18s', 'Copied:', (${age_expr}) || ' ago') || char(27)||'[0m' FROM clips WHERE id={2};\""
 
 # --- the row stream ---------------------------------------------------------
-# Item line = <pin marker> <type icon>  <content preview>. The badge (len /
-# app / age / type_kind) lives in the preview footer (above), NOT on the item
-# line. Tail = id (CHAR 31 = \x1f). Type icons: fa-font (text), fa-paintbrush
+# Item line = 3 columns, all rows aligned:
+#   col 1: type icon (colored by type)
+#   col 2: content preview, padded to a fixed width (CW) so col 3 aligns;
+#          YELLOW when pinned (so pinned rows stand out)
+#   col 3: pin thumbtack (yellow) when pinned, else blank
+# Tail = id (CHAR 31 = \x1f). Type icons: fa-font (text), fa-paintbrush
 # (rtf/html), fa-image, fa-folder (files), fa-shuffle (mixed), fa-thumbtack
-# (pinned marker) — Nerd Font v3 codepoints via SQL char(N).
+# (pin) — Nerd Font v3 codepoints via SQL char(N).
 #
 # EMIT_SQL is shared by emit_rows (the initial stream) AND the --reload-cmd
-# script below (fzf reloads the list with it after a delete/pin), so the list
-# refreshes in place.
+# script (fzf reloads the list with it after a delete/pin).
+CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-50}
 EMIT_SQL="WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,
-             CHAR(27)||'[38;2;137;180;250m' AS pin_color,
+             CHAR(27)||'[38;2;225;170;80m'  AS pin_color,
              CHAR(27)||'[38;2;137;180;250m' AS c_text,
              CHAR(27)||'[38;2;225;170;80m'  AS c_rich,
              CHAR(27)||'[38;2;166;209;137m' AS c_image,
@@ -161,16 +164,20 @@ EMIT_SQL="WITH palette AS (
              CHAR(27)||'[38;2;234;154;139m' AS c_mixed
     )
     SELECT
-      CASE WHEN pinned=1 THEN pin_color || char(1110157) || reset || ' ' ELSE '' END
-      || CASE type_kind
+      CASE type_kind
            WHEN 'text'  THEN c_text  || char(1110065) || reset
            WHEN 'rtf'   THEN c_rich  || char(1110524) || reset
            WHEN 'html'  THEN c_rich  || char(1110524) || reset
            WHEN 'image' THEN c_image || char(1110078) || reset
            WHEN 'files' THEN c_files || char(1110139) || reset
            ELSE               c_mixed || char(1110132) || reset
-         END
-      || '  ' || text_color || IFNULL(text_preview, '['||type_kind||']') || reset
+      END
+      || '  '
+      || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
+      || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,${CW}))
+      || reset
+      || '  '
+      || CASE WHEN pinned=1 THEN pin_color || char(1110157) || reset ELSE '  ' END
       || CHAR(31) || id
     FROM clips, palette
     WHERE ${origin_where}
@@ -218,6 +225,7 @@ pick_args=(
   --on-items-picked clip::bump_recency
   --cache-state
   --preview "$PREVIEW_CMD"
+  --preview-window "${PICK_CLIPBOARD_PREVIEW_WINDOW:-right:40%}"
   # delete / pin run a SQL action AND reload the list in place (fzf
   # execute-silent + reload). {2} = the id (2nd \x1f field). Race-free: the
   # SQL runs synchronously in execute-silent before reload re-streams.

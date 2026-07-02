@@ -580,6 +580,11 @@ pick::build_fzf_args() {
   if [[ -n "${pick_ui[preview]:-}" ]]; then
     fzf_args+=( "--preview=${pick_ui[preview]}" )
   fi
+  # --preview-window SPEC: fzf preview-window geometry (e.g. "right:40%").
+  # Additive; callers that don't pass it get fzf's default.
+  if [[ -n "${pick_ui[preview_window]:-}" ]]; then
+    fzf_args+=( "--preview-window=${pick_ui[preview_window]}" )
+  fi
   return 0
 }
 
@@ -1026,6 +1031,13 @@ pick::start() {
         ;;
       --preview=*)
         pick_ui[preview]="${1#--preview=}"; shift
+        ;;
+      --preview-window)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        pick_ui[preview_window]="$2"; shift 2
+        ;;
+      --preview-window=*)
+        pick_ui[preview_window]="${1#--preview-window=}"; shift
         ;;
       --)
         shift
