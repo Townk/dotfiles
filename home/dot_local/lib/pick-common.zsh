@@ -585,6 +585,10 @@ pick::build_fzf_args() {
   if [[ -n "${pick_ui[preview_window]:-}" ]]; then
     fzf_args+=( "--preview-window=${pick_ui[preview_window]}" )
   fi
+  # --no-scrollbar: hide the list + preview scrollbar / scroll-position indicator.
+  if (( ${pick_ui[no_scrollbar]:-0} )); then
+    fzf_args+=( --no-scrollbar )
+  fi
   return 0
 }
 
@@ -1035,6 +1039,9 @@ pick::start() {
         ;;
       --info=*)
         pick_ui[info]="${1#--info=}"; shift
+        ;;
+      --no-scrollbar)
+        pick_ui[no_scrollbar]=1; shift
         ;;
       --preview)
         [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
