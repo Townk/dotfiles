@@ -224,9 +224,9 @@ cat > "$emit_script" <<EOF
 # start:reload + the delete/pin reloads), so compute the content width from
 # the EXACT pane size: list pane = 55% of FZF_COLUMNS (preview takes 45%),
 # minus ~6 (padding + gutter) + 5 (icon + sep + pin) -> CW = fc*55/100 - 11.
-fc=\${FZF_COLUMNS:-80}
+fc=\${PTY_FRAME_COLUMNS:-\${FZF_COLUMNS:-80}}
 cw=\$((fc * 55 / 100 - 11)); [ \$cw -lt 10 ] && cw=10
-echo "[\$(date +%s)] FZF_COLUMNS=\$fc FZF_LINES=\${FZF_LINES:-?} FZF_PREVIEW_COLUMNS=\${FZF_PREVIEW_COLUMNS:-?} FZF_PREVIEW_LINES=\${FZF_PREVIEW_LINES:-?} cw=\$cw" >> /tmp/pick-clipboard-dims.log
+echo "[\$(date +%s)] PTY_FRAME_COLUMNS=\${PTY_FRAME_COLUMNS:-?} fc=\$fc cw=\$cw" >> /tmp/pick-clipboard-dims.log
 sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,

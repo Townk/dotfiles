@@ -611,6 +611,16 @@ func (a *app) run() (int, error) {
 	errR, errW, _ := os.Pipe()
 
 	cmd := exec.Command(a.cfg.child[0], a.cfg.child[1:]...)
+	// Export the sub-pty's exact size to the child (fzf) + its --bind commands
+	// (reload/preview), so pickers that size their layout to the pane (e.g.
+	// pick-clipboard's item-line width) can read PTY_FRAME_COLUMNS/LINES
+	// instead of guessing from tput cols. fzf sets FZF_PREVIEW_* for the
+	// preview command but FZF_COLUMNS=0 for start:reload, so this is the
+	// reliable source for the list-pane width.
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("PTY_FRAME_COLUMNS=%d", a.g.w),
+		fmt.Sprintf("PTY_FRAME_LINES=%d", a.g.h),
+	)
 	cmd.Stdin = os.Stdin // the list to filter
 	cmd.Stdout = selW    // the selection
 	cmd.Stderr = errW
