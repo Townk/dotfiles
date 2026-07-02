@@ -351,6 +351,29 @@ keybinds clear-defaults=true {
                      "height" "60%") }}
         }
 
+        // Alt+w c — Clipboard history picker. Spawns
+        // ~/.config/zellij/scripts/pick-clipboard-zellij in a floating, pinned
+        // pane. The wrapper runs ~/.local/libexec/pick-clipboard (which reads
+        // the universal SQLite store), captures the chosen clip's text, and
+        // `write-chars --pane-id <originating-tile>`s it back into the pane
+        // the user came from. Same `borderless true` + `no_chrome true`
+        // contract as the glyph/gitmoji pickers: pty-frame owns the chrome, so
+        // zellij draws no frame. `c` for "clipboard"; the spec's `Alt w v`
+        // collided with the existing tmux-mode `v` (split-right), so this
+        // keeps split-right on `v` and uses the free `c` chord instead.
+        bind "c" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Clipboard history"
+                     "inject" true
+                     "borderless" true
+                     "no_chrome" true
+                     "script" "pick-clipboard-zellij"
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+
         // Quit zellij — Catppuccin Mocha-themed `gum confirm` dialog
         // (see scripts/zellij-quit-confirm) drawn inside a compact,
         // pinned floating pane with a (rounded) frame but no title

@@ -1,0 +1,46 @@
+#!/usr/bin/env zsh
+# pick-clipboard-zellij — feature adapter for the Clipboard picker modal.
+#
+# Twin of pick-glyph-zellij. The floating-pane scaffolding (originating-pane
+# discovery, stdout capture + inject-into-tile) lives in zellij-modal, which
+# spawns this script as its --inject target via the "Alt w c" leader chord in
+# ~/.config/zellij/config.kdl. All this adapter does is configure the
+# floating-pane fzf geometry and exec ~/.local/libexec/pick-clipboard; its
+# stdout (the chosen clip's text) is what zellij-modal captures and injects
+# into the pane you came from.
+#
+# pick-clipboard reads the PICK_CLIPBOARD_* env (it doesn't parse CLI args the
+# way pick-glyph does — the universal-clipboard spec §7 wires geometry through
+# env here), so we export the geometry flags rather than pass them on the
+# command line. In the borderless --no-chrome modal pty-frame owns the chrome
+# and fills the sub-pty at height=100%, so an explicit height env is not
+# needed there; PICK_CLIPBOARD_HEIGHT is exported for the no-pty-frame fallback
+# path + parity with pick-glyph-zellij.
+#
+# Env-var overrides:
+#   PICK_CLIPBOARD_BIN      Absolute path to pick-clipboard
+#                           (default: $HOME/.local/libexec/pick-clipboard)
+#   PICK_CLIPBOARD_HEIGHT   fzf height inside the pane (default -4; see above)
+#   PICK_CLIPBOARD_MARGIN   fzf --margin (T,R,B,L). Default 0 on every side.
+#   PICK_CLIPBOARD_PADDING  fzf --padding (T,R,B,L). Default 0,2,0,2.
+#
+# Any positional args are forwarded to pick-clipboard (reserved for a future
+# --resume entrypoint, matching the Alt w U / Alt w G resume chords).
+
+set -euo pipefail
+
+PICK_CLIPBOARD_BIN="${PICK_CLIPBOARD_BIN:-$HOME/.local/libexec/pick-clipboard}"
+[[ -x "$PICK_CLIPBOARD_BIN" ]] || {
+  echo "pick-clipboard-zellij: missing or non-executable: $PICK_CLIPBOARD_BIN" >&2
+  exit 1
+}
+
+# --no-border: the floating pane already draws its own frame; a second fzf
+# border would just shave columns off the usable width. pick-clipboard reads
+# this env (not a CLI flag) to add --no-border to its pick::start args.
+export PICK_CLIPBOARD_NO_BORDER=1
+export PICK_CLIPBOARD_HEIGHT="${PICK_CLIPBOARD_HEIGHT:--4}"
+export PICK_CLIPBOARD_MARGIN="${PICK_CLIPBOARD_MARGIN:-0,0,0,0}"
+export PICK_CLIPBOARD_PADDING="${PICK_CLIPBOARD_PADDING:-0,2,0,2}"
+
+exec "$PICK_CLIPBOARD_BIN" "$@"
