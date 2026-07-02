@@ -195,7 +195,7 @@ EMIT_SQL="WITH palette AS (
       END
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
-      || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-2))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-2)) THEN '··' ELSE '' END)
+      || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-1)) THEN '…' ELSE '' END)
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END
       || CHAR(31) || id
@@ -220,7 +220,41 @@ pin_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-pin.XXXXXX")
 trap 'rm -f -- "$emit_script" "$del_script" "$pin_script" "$preview_script"' EXIT INT TERM
 cat > "$emit_script" <<EOF
 #!/bin/sh
-sqlite3 ${PICK_SQLITE_RAW[*]} '$DB_FILE' "$EMIT_SQL"
+# fzf sets FZF_COLUMNS to the fzf window width for --bind commands (including
+# start:reload + the delete/pin reloads), so compute the content width from
+# the EXACT pane size: list pane = 55% of FZF_COLUMNS (preview takes 45%),
+# minus ~6 (padding + gutter) + 5 (icon + sep + pin) -> CW = fc*55/100 - 11.
+fc=\${FZF_COLUMNS:-80}
+cw=\$((fc * 55 / 100 - 11)); [ \$cw -lt 10 ] && cw=10
+sqlite3 -escape off '$DB_FILE' "WITH palette AS (
+      SELECT CHAR(27)||'[0m'                AS reset,
+             CHAR(27)||'[38;2;202;211;245m' AS text_color,
+             CHAR(27)||'[38;2;225;170;80m'  AS pin_color,
+             CHAR(27)||'[38;2;137;180;250m' AS c_text,
+             CHAR(27)||'[38;2;225;170;80m'  AS c_rich,
+             CHAR(27)||'[38;2;166;209;137m' AS c_image,
+             CHAR(27)||'[38;2;148;156;183m' AS c_files,
+             CHAR(27)||'[38;2;234;154;139m' AS c_mixed
+    )
+    SELECT
+      CASE type_kind
+           WHEN 'text'  THEN c_text  || char(1110065) || reset
+           WHEN 'rtf'   THEN c_rich  || char(1110524) || reset
+           WHEN 'html'  THEN c_rich  || char(1110524) || reset
+           WHEN 'image' THEN c_image || char(1110078) || reset
+           WHEN 'files' THEN c_files || char(1110139) || reset
+           ELSE               c_mixed || char(1110132) || reset
+      END
+      || '  '
+      || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
+      || printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
+      || reset
+      || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END
+      || CHAR(31) || id
+    FROM clips, palette
+    WHERE ${origin_where}
+    ORDER BY pinned DESC, last_ts DESC
+    LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
 EOF
 cat > "$del_script" <<EOF
 #!/bin/sh
@@ -237,8 +271,8 @@ cat > "$preview_script" <<EOF
 pc=\${FZF_PREVIEW_COLUMNS:-40}
 ph=\${FZF_PREVIEW_LINES:-20}
 lw=14
-vw=\$((pc - lw - 2)); [ \$vw -lt 4 ] && vw=4
-sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age FROM clips WHERE id=\$1) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
+vw=\$((pc - lw)); [ \$vw -lt 4 ] && vw=4
+sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age FROM clips WHERE id=\$1) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 5), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
 EOF
 
 # --- run --------------------------------------------------------------------
@@ -260,6 +294,8 @@ pick_args=(
   # execute-silent + reload). {2} = the id (2nd \x1f field). Race-free: the
   # SQL runs synchronously in execute-silent before reload re-streams.
   --reload-cmd "bash $emit_script"
+  --start-reload                   # load the list via start:reload so the emit
+                                   # script runs with FZF_COLUMNS (exact width)
   --key-reload ctrl-d:"bash $del_script {2}"
   --key-reload alt-d:"bash $del_script {2}"
   --key-reload ctrl-p:"bash $pin_script {2}"

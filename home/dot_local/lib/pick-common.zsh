@@ -845,6 +845,7 @@ pick::start() {
   local -a background_binds
   local -a key_reload_binds
   local reload_cmd=""
+  local start_reload=0
   # pick_ui is the global UI scratch read by pick::build_fzf_args et al. Clear it
   # so each pick::start call is self-contained (flags-only): no UI state leaks in
   # from a prior call in the same process.
@@ -1025,6 +1026,9 @@ pick::start() {
       --key-reload=*)
         key_reload_binds+=( "${1#--key-reload=}" ); shift
         ;;
+      --start-reload)
+        start_reload=1; shift
+        ;;
       --preview)
         [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
         pick_ui[preview]="$2"; shift 2
@@ -1136,6 +1140,13 @@ pick::start() {
       [[ -n "$key" && "$key" != "$kr" ]] || die "invalid --key-reload: $kr (expected KEY:CMD)"
       fzf_args+=( --bind "${key}:execute-silent(${cmd})+reload(${reload_cmd})" )
     done
+  fi
+
+  # --start-reload: load the list at fzf start via `start:reload(reload-cmd)`,
+  # so the emit command runs with FZF_COLUMNS/FZF_LINES set (exact pane size)
+  # instead of the guessed tput-cols width used for the initial stdin stream.
+  if (( start_reload )) && [[ -n "$reload_cmd" ]]; then
+    fzf_args+=( --bind "start:reload(${reload_cmd})" )
   fi
 
   pick::run "$source"
