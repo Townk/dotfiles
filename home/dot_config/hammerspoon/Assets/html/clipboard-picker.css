@@ -17,6 +17,13 @@
 @font-face {
   font-family: 'Symbols Nerd Font Mono';
   src: url("%%ICON_FONT_URL%%") format("truetype");
+  /* block: hide text using this family (briefly, invisibly) until the font
+   * is ready rather than painting a fallback glyph — a fallback-then-swap
+   * (font-display: swap, the browser default) does not reliably repaint
+   * already-rendered DOM text nodes once a slow-to-load local @font-face
+   * finishes, which is the actual bug this is pairing with the JS-side
+   * document.fonts.ready gate below to close entirely. */
+  font-display: block;
 }
 
 :root {

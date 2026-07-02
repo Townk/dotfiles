@@ -213,8 +213,24 @@
       if (e.key === 'Escape') { e.preventDefault(); post('dismiss'); return; }
     });
 
-    applyFilter('', false);
-    window.__focusInput();
+    // The icon font (@font-face, a local file:// load) is asynchronous. If
+    // the very first list render happens before it's ready, WebKit paints a
+    // fallback glyph for those rows and does not reliably repaint them once
+    // the font arrives (font-display: block above avoids painting a WRONG
+    // glyph, but an early render can still race the font and end up blank
+    // instead of correct). Gate the first render on document.fonts.ready so
+    // every row's icon is painted only once the font is actually available;
+    // subsequent re-renders (typing, delete/pin) happen well after this
+    // resolves and are unaffected either way.
+    function firstRender() {
+      applyFilter('', false);
+      window.__focusInput();
+    }
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(firstRender, firstRender);
+    } else {
+      firstRender();
+    }
   })();
   </script>
 </body>
