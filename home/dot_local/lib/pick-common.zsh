@@ -838,6 +838,8 @@ pick::start() {
   local -A key_output
   local -a expect_keys
   local -a background_binds
+  local -a key_reload_binds
+  local reload_cmd=""
   # pick_ui is the global UI scratch read by pick::build_fzf_args et al. Clear it
   # so each pick::start call is self-contained (flags-only): no UI state leaks in
   # from a prior call in the same process.
@@ -1004,6 +1006,20 @@ pick::start() {
       --on-key-background=*)
         on_background="${1#--on-key-background=}"; shift
         ;;
+      --reload-cmd)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        reload_cmd="$2"; shift 2
+        ;;
+      --reload-cmd=*)
+        reload_cmd="${1#--reload-cmd=}"; shift
+        ;;
+      --key-reload)
+        [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
+        key_reload_binds+=( "$2" ); shift 2
+        ;;
+      --key-reload=*)
+        key_reload_binds+=( "${1#--key-reload=}" ); shift
+        ;;
       --preview)
         [[ $# -ge 2 ]] || pick::start_missing_arg "$1"
         pick_ui[preview]="$2"; shift 2
@@ -1094,6 +1110,20 @@ pick::start() {
     [[ -n "$on_background" ]] || on_background="pick::background_sink"
     pick::background_setup "$on_background" "${background_binds[@]}"
     trap 'pick::background_teardown; [[ -n "${tmp_source:-}" ]] && rm -f -- "${tmp_source}"' EXIT INT TERM
+  fi
+
+  # --key-reload: binds that run a command AND reload the list (e.g. delete or
+  # pin a row, then refresh). The command runs in fzf's child shell with fzf
+  # placeholders available ({2} = the 2nd \x1f field = the id here); reload
+  # re-runs --reload-cmd to re-stream the rows. execute-silent + reload chain
+  # so the picker stays open with a refreshed list. Requires --reload-cmd.
+  if (( ${#key_reload_binds[@]} )) && [[ -n "$reload_cmd" ]]; then
+    local kr key cmd
+    for kr in "${key_reload_binds[@]}"; do
+      key="${kr%%:*}"; cmd="${kr#*:}"
+      [[ -n "$key" && "$key" != "$kr" ]] || die "invalid --key-reload: $kr (expected KEY:CMD)"
+      fzf_args+=( --bind "${key}:execute-silent(${cmd})+reload(${reload_cmd})" )
+    done
   fi
 
   pick::run "$source"
