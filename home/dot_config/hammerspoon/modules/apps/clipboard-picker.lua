@@ -264,10 +264,27 @@ end
 -- Webview lifecycle
 --------------------------------------------------------------------------------
 
+-- Dismiss the picker automatically when it loses focus (click another
+-- window, Cmd+Tab, a system dialog stealing focus, etc). DEBUGGING ESCAPE
+-- HATCH: flip to false when you need the picker to STAY open while you
+-- switch focus away to inspect it (e.g. taking a live screenshot via a
+-- separate hs script, which requires running a command from another app
+-- without the panel auto-closing first). Restore to true afterward.
+-- TODO(cleanup): remove this flag once dismiss-on-blur is proven reliable
+-- and no more live-debugging sessions are expected (end of the
+-- universal-clipboard project).
+local DISMISS_ON_FOCUS_LOSS = true
+
 local webview
 local ucc
+local appWatcher
 local savedWindow -- the app window focused before the picker opened
 local isShown = false
+-- Suppressed during the Alt+Enter "paste and keep open" sequence, which
+-- deliberately focuses the target app (to paste) and then reclaims focus —
+-- without this, the app-watcher's own dismiss-on-blur would fire mid-sequence
+-- and hide the picker exactly when we're keeping it open on purpose.
+local suppressBlurDismiss = false
 
 -- Absolute file:// URL for the icon font, substituted into the CSS's
 -- @font-face src. An explicit @font-face load bypasses WebKit's local
@@ -319,6 +336,10 @@ local function handle_message(body)
       -- necessarily shuffles focus away (to paste into the right app) and
       -- back (to keep accepting keystrokes) — a brief visible flash is
       -- expected/inherent, not a bug; validate the feel in UX review.
+      -- suppressBlurDismiss guards this deliberate focus shuffle from the
+      -- dismiss-on-blur watcher, which would otherwise hide the picker the
+      -- moment we focus the target app to paste.
+      suppressBlurDismiss = true
       local target = savedWindow
       hs.timer.doAfter(0.02, function()
         if target then target:focus() end
@@ -331,6 +352,7 @@ local function handle_message(body)
               if hsWin then hsWin:focus() end
               webview:evaluateJavaScript("window.__focusInput && window.__focusInput()")
             end
+            suppressBlurDismiss = false
           end)
         end)
       end)
@@ -340,10 +362,29 @@ local function handle_message(body)
   end
 end
 
+-- Any OTHER app becoming activated while the picker is shown means focus
+-- moved away from it (a mouse click on another window, Cmd+Tab, a system
+-- dialog stealing focus, ...) -- dismiss. Hammerspoon itself is excluded
+-- since M.show()/the Alt+Enter re-show both activate Hammerspoon deliberately
+-- to (re)claim keyboard focus for the picker, which must NOT self-trigger a
+-- dismiss.
+local function on_app_event(appName, eventType)
+  if not DISMISS_ON_FOCUS_LOSS then return end
+  if suppressBlurDismiss or not isShown then return end
+  if eventType == hs.application.watcher.activated and appName ~= "Hammerspoon" then
+    M.hide()
+  end
+end
+
 local function ensure_webview()
   if webview then return end
   ucc = hs.webview.usercontent.new("clipboardPicker")
   ucc:setCallback(function(msg) handle_message(msg.body) end)
+
+  if not appWatcher then
+    appWatcher = hs.application.watcher.new(on_app_event)
+    appWatcher:start()
+  end
 
   local sf = hs.screen.mainScreen():fullFrame()
   local w, h = 780, 520
@@ -401,6 +442,7 @@ end
 function M.cleanup()
   if webview then webview:delete(); webview = nil end
   ucc = nil
+  if appWatcher then appWatcher:stop(); appWatcher = nil end
   isShown = false
 end
 
