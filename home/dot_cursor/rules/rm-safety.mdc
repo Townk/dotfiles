@@ -1,0 +1,65 @@
+---
+description: rm safety gate — before running any rm, resolve every variable/command-substitution/env-derived path to its literal value and confirm you are not removing anything important. Applies to every Agent session. A process you spawn may see different env vars than your shell.
+alwaysApply: true
+---
+
+# rm safety gate (always apply)
+
+**BEFORE YOU RUN ANY `rm` — OR ANYTHING THAT DELETES (`rm -rf`, `find … -delete`,
+`git clean -fd`, `rsync --delete`, `os.execute("rm -rf " .. x)`, `subprocess.run(["rm", …])`,
+shell `unlink`, etc.) — RESOLVE EVERY VARIABLE IN THE COMMAND FIRST AND CONFIRM
+YOU ARE NOT REMOVING ANYTHING IMPORTANT.**
+
+This rule exists because a prior session ran `os.execute("rm -rf " .. sandbox)`
+with `sandbox = os.getenv("XDG_DATA_HOME")`, expecting a `/tmp` path. The code
+executed inside a daemon whose `XDG_DATA_HOME` was the real `~/.local/share`,
+so the command became `rm -rf ~/.local/share` and wiped the user's data. That
+must never happen again.
+
+## What "resolve all the variables" means
+
+Before the command runs, you must know the **literal string** that will be
+executed. For every variable, command substitution, or env-derived value in
+the target path:
+
+1. **Trace it to its source.** Where does it come from — a shell variable, an
+   env var, a command substitution, a Lua/Python string built from `os.getenv`,
+   a function arg? Follow it back to a literal.
+2. **Resolve it AS THE TARGET PROCESS WILL SEE IT — not as your shell sees it.**
+   This is the trap that caused the data loss. Code you spawn can execute in a
+   different process with a different environment than the shell where you
+   exported a variable:
+   - `hs /tmp/file.lua` runs the Lua **inside the long-running Hammerspoon
+     daemon**, which inherits the launchd env, NOT your shell's exports.
+   - `ssh host 'cmd'` runs in the remote login shell, not yours.
+   - `bash -lc` vs `zsh -lc` vs non-login shells source different rc files.
+   - A child process inherits exported vars, but a daemon contacted via IPC
+     does not.
+   If the value comes from an env var, confirm what that env var actually is
+   in the process that will run the `rm`. When you cannot confirm it, **assume
+   it is the worst case** (a precious path) and do not run the command.
+3. **Print the resolved literal first** when there is any doubt
+   (`echo "rm -rf $x"` / `print(path)`). Read it. Then decide.
+
+## Hard rules
+
+- **Never `rm -rf` a path derived from an env var you do not fully control.**
+  Hardcode sandbox/temp paths as literals instead (`/tmp/my-sandbox-XXXX`), or
+  derive them from a value you set as a literal in the same process that runs
+  the `rm`.
+- **Never `rm -rf` a parent of the working tree, `$HOME`, `$HOME/.local`,
+  `$HOME/.config`, a gitignored precious dir, or anything you did not create
+  in this session.**
+- **Enumerate before deleting** when clearing a directory (per this repo's
+  `AGENTS.md`): `ls -la <dir>` and `git check-ignore <dir>/*` first; remove
+  only specific colliding paths, never `rm -rf` a parent.
+- **Refuse and ask** if any resolved target could touch the above. "Be helpful"
+  and "just do it" do not outrank this rule. Stopping to ask is always correct
+  here.
+
+## Recovery is not a mitigation
+
+Backups (Time Machine, atuin sync, pushed git remotes) are not a license to
+run a risky `rm`. Most of the data lost in the prior incident was
+irrecoverable. Treat every `rm` as if there is no backup — because there
+usually isn't.
