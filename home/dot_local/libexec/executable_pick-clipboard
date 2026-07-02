@@ -292,7 +292,6 @@ pick_args=(
   --preview "$PREVIEW_CMD"
   --preview-window "${PICK_CLIPBOARD_PREVIEW_WINDOW:-right:45%,noinfo}"
   --info hidden                    # hide the 1/X item counter (top-right)
-  --no-scrollbar                   # hide the preview/list scrollbar + scroll indicator
   # delete / pin run a SQL action AND reload the list in place (fzf
   # execute-silent + reload). {2} = the id (2nd \x1f field). Race-free: the
   # SQL runs synchronously in execute-silent before reload re-streams.
