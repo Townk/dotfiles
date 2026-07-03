@@ -251,23 +251,21 @@ local function enforce_retention()
   exec("DELETE FROM clip_types WHERE clip_id NOT IN (SELECT id FROM clips);")
 end
 
--- Laptop→remote history mirror (spec §11). When this Mac is SSH'd into a
--- remote with the clipboard mirror -L forward up, an outbound unix socket
--- exists at ~/.local/state/runtime/chezmoi-system/clipboard-mirror-out.sock
--- (forwarded to the remote's clipboard-mirror-dispatch). We push each local
--- capture's TEXT + METADATA + our clip id there — never blobs — so the remote
--- shows a live `laptop-ref` row it can restore-by-id over the reverse channel.
-local function mirror_out_sock()
-  return (os.getenv("HOME") or "") .. "/.local/state/runtime/chezmoi-system/clipboard-mirror-out.sock"
-end
+-- Laptop→remote history mirror (spec §11). When this Mac is SSH'd into a remote
+-- with the clipboard mirror -L forward up, loopback TCP 2492 here is forwarded
+-- to the remote's clipboard-mirror listener. We push each local capture's TEXT
+-- + METADATA + our clip id there — never blobs — so the remote shows a live
+-- `laptop-ref` row it can restore-by-id over the reverse channel. TCP, not a
+-- unix socket: a forwarded socket goes stale on an unclean disconnect and macOS
+-- ssh won't clear it; a port frees itself (see clipboard-bridge-client.zsh).
+local MIRROR_HOST, MIRROR_PORT = "127.0.0.1", "2492"
 local CLIENT_LIB = (os.getenv("HOME") or "") .. "/.local/lib/clipboard-bridge-client.zsh"
 
--- Best-effort, non-blocking. Silently no-ops when the forward is down (the
--- common case: not SSH'd anywhere). Record wire format (US=0x1f, RS=0x1e):
+-- Best-effort, non-blocking. Fire-and-forget: when the forward is down (the
+-- common case, not SSH'd anywhere) the client's `nc` refuses instantly and the
+-- record is dropped — no gate needed. Record wire format (US=0x1f, RS=0x1e):
 --   ref_id US kind US app US len RS preview RS text_plain
 local function push_to_mirror(ref_id, kind, app, len_val, preview, plain)
-  local sock = mirror_out_sock()
-  if not hs.fs.attributes(sock) then return end
   local us, rs = "\31", "\30"
   local payload = table.concat({ tostring(ref_id), kind or "", app or "", tostring(len_val or 0) }, us)
     .. rs .. (preview or "") .. rs .. (plain or "")
@@ -278,8 +276,9 @@ local function push_to_mirror(ref_id, kind, app, len_val, preview, plain)
   f:close()
   -- Frame + send via the shared zsh client (M opcode), then delete the temp
   -- file in-script so cleanup happens even if the callback never fires.
-  local script = 'source "$1"; clipbridge::send "$2" M "$3"; rm -f "$3"'
-  local t = hs.task.new("/bin/zsh", function() end, { "-c", script, "zsh", CLIENT_LIB, sock, tmp })
+  local script = 'source "$1"; clipbridge::send "$2" "$3" M "$4"; rm -f "$4"'
+  local t = hs.task.new("/bin/zsh", function() end,
+    { "-c", script, "zsh", CLIENT_LIB, MIRROR_HOST, MIRROR_PORT, tmp })
   if t then t:start() else os.remove(tmp) end
 end
 

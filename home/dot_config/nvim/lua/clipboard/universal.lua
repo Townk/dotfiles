@@ -2,10 +2,11 @@
 -- universal.lua — type-preserving clipboard provider for SSH NeoVim.
 --------------------------------------------------------------------------------
 -- Talks the Phase 5 clipboard-bridge framing protocol over the reverse SSH
--- tunnel (the clipboard-bridge launchd service on the Mac, reached at
--- $HOME/.local/state/runtime/chezmoi-system/clipboard-bridge.sock). The bridge
--- now serves a length-prefixed binary protocol instead of bare pbpaste, so we
--- can carry the register TYPE across machines, not just the text:
+-- tunnel (the clipboard-bridge launchd service on the Mac, reached at loopback
+-- TCP 127.0.0.1:2490 — the RemoteForward endpoint; see ~/.ssh/config.d/
+-- clipboard.config). The bridge serves a length-prefixed binary protocol
+-- instead of bare pbpaste, so we carry the register TYPE across machines, not
+-- just the text:
 --
 --   paste()  → G (get text) + R (get-regtype)  → {lines, regtype}
 --   copy()   → T (set text + regtype)            when bridge-up
@@ -36,9 +37,11 @@ local function cache_path()
   return cache .. "/nvim-clipboard/last"
 end
 
-local function sock_path()
-  return (vim.env.HOME or "") .. "/.local/state/runtime/chezmoi-system/clipboard-bridge.sock"
-end
+-- The reverse-forwarded peer clipboard is a loopback TCP port (see
+-- ~/.ssh/config.d/clipboard.config): a forwarded unix socket goes stale on an
+-- unclean disconnect and macOS ssh won't clear it; a port frees itself.
+local BRIDGE_HOST = "127.0.0.1"
+local BRIDGE_PORT = 2490
 
 --------------------------------------------------------------------------------
 -- Regtype normalization. NeoVim hands copy() a getregtype()-style code
@@ -84,37 +87,37 @@ local function unpack_be32(s, off)
   return ((a * 256 + b) * 256 + c) * 256 + d
 end
 
--- Send one framed request <opcode><BE32 len><payload> to the bridge socket and
--- return the response {status_byte, payload}, or nil on any connect/timeout/
--- protocol error. Synchronous: drives the libuv loop via vim.wait. Using a
--- libuv pipe (not `nc` + systemlist) is what keeps the binary length prefix and
--- any embedded newlines/NULs in the payload byte-exact.
-local function frame_request(sock, opcode, payload, timeout_ms)
+-- Send one framed request <opcode><BE32 len><payload> to the bridge and return
+-- the response {status_byte, payload}, or nil on any connect/timeout/protocol
+-- error (a refused connect = bridge down = clean fallback). Synchronous: drives
+-- the libuv loop via vim.wait. A libuv TCP connect (not `nc` + systemlist) keeps
+-- the binary length prefix and any embedded newlines/NULs byte-exact.
+local function frame_request(host, port, opcode, payload, timeout_ms)
   local uv = vim.uv or vim.loop
   payload = payload or ""
   local req = opcode .. pack_be32(#payload) .. payload
-  local pipe = uv.new_pipe(false)
+  local tcp = uv.new_tcp()
   local chunks, done, result = {}, false, nil
 
   local function finish(res)
     if done then return end
     result, done = res, true
-    if not pipe:is_closing() then
+    if not tcp:is_closing() then
       pcall(function()
-        pipe:read_stop()
+        tcp:read_stop()
       end)
       pcall(function()
-        pipe:close()
+        tcp:close()
       end)
     end
   end
 
-  pipe:connect(sock, function(cerr)
+  tcp:connect(host, port, function(cerr)
     if cerr then
       finish(nil)
       return
     end
-    pipe:read_start(function(rerr, chunk)
+    tcp:read_start(function(rerr, chunk)
       if rerr then
         finish(nil)
         return
@@ -132,7 +135,7 @@ local function frame_request(sock, opcode, payload, timeout_ms)
         end
       end
     end)
-    pipe:write(req)
+    tcp:write(req)
   end)
 
   vim.wait(timeout_ms or 1000, function()
@@ -176,16 +179,12 @@ function M.copy(reg)
   return function(lines, regtype)
     local rt = norm_regtype(regtype)
     write_cache(lines, rt)
-    local uv = vim.uv or vim.loop
-    local sock = sock_path()
-    if uv.fs_stat(sock) then
-      local text = table.concat(lines, "\n")
-      local resp = frame_request(sock, "T", rt .. text, 1000)
-      if resp and resp[1] == "O" then
-        return -- pushed to the host clipboard with its type; done
-      end
+    local text = table.concat(lines, "\n")
+    local resp = frame_request(BRIDGE_HOST, BRIDGE_PORT, "T", rt .. text, 1000)
+    if resp and resp[1] == "O" then
+      return -- pushed to the host clipboard with its type; done
     end
-    osc52(lines)
+    osc52(lines) -- bridge-down or push failed: OSC 52 (text only)
   end
 end
 
@@ -194,23 +193,19 @@ end
 -- {text, regtype}; empty cache → unnamed register (old no-hang behavior).
 function M.paste()
   return function()
-    local uv = vim.uv or vim.loop
-    local sock = sock_path()
     local cached_rt, cached_text = read_cache()
-    if uv.fs_stat(sock) then
-      local g = frame_request(sock, "G", "", 1000)
-      if g and g[1] == "O" then
-        local text = g[2]
-        local regtype
-        local r = frame_request(sock, "R", "", 1000)
-        if r and r[1] == "O" and #r[2] >= 1 then
-          local rt = r[2]:sub(1, 1)
-          if rt == "v" or rt == "l" or rt == "b" then
-            regtype = rt
-          end
+    local g = frame_request(BRIDGE_HOST, BRIDGE_PORT, "G", "", 1000)
+    if g and g[1] == "O" then
+      local text = g[2]
+      local regtype
+      local r = frame_request(BRIDGE_HOST, BRIDGE_PORT, "R", "", 1000)
+      if r and r[1] == "O" and #r[2] >= 1 then
+        local rt = r[2]:sub(1, 1)
+        if rt == "v" or rt == "l" or rt == "b" then
+          regtype = rt
         end
-        return { to_lines(text), regtype or cached_rt or infer_regtype(text) }
       end
+      return { to_lines(text), regtype or cached_rt or infer_regtype(text) }
     end
     if cached_text then
       return { vim.split(cached_text, "\n", { plain = true }), cached_rt or "v" }

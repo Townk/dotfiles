@@ -59,14 +59,15 @@ error_log_path = "~/.cache/clipboard-bridge/listener.log"
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
 # clipboard-mirror — receive a laptop's clipboard-history mirror over the SSH
-# StreamLocalForward -L (see ~/.ssh/config.d/clipboard.config). socat listens on
-# a per-user unix socket and EXECs clipboard-mirror-dispatch per connection,
-# which upserts a text+metadata `laptop-ref` row (no blobs) into this host's
-# store. `unlink-early` clears a stale socket from an unclean exit; mode=0600
-# keeps it user-only. macOS only (the store's capture side is Hammerspoon).
+# LocalForward -L (see ~/.ssh/config.d/clipboard.config). socat listens on
+# loopback TCP 2491 and EXECs clipboard-mirror-dispatch per connection, which
+# upserts a text+metadata `laptop-ref` row (no blobs) into this host's store.
+# Loopback TCP (not a unix socket) for the same reason the reverse channel is:
+# a forwarded socket file goes stale on an unclean disconnect and macOS ssh
+# won't clear it; a port frees itself. macOS only (capture is Hammerspoon).
 [clipboard-mirror]
 description    = "Receive a laptop's clipboard history mirror over an SSH -L forward"
-cmd            = ["socat", "UNIX-LISTEN:{{ .chezmoi.homeDir }}/.local/state/runtime/chezmoi-system/clipboard-mirror.sock,fork,unlink-early,mode=0600", "EXEC:{{ .chezmoi.homeDir }}/.local/libexec/clipboard-mirror-dispatch"]
+cmd            = ["socat", "TCP-LISTEN:2491,bind=127.0.0.1,fork,reuseaddr", "EXEC:{{ .chezmoi.homeDir }}/.local/libexec/clipboard-mirror-dispatch"]
 keep_alive     = true
 run_at_load    = true
 log_path       = "~/.cache/clipboard-bridge/mirror.log"

@@ -137,13 +137,15 @@ local function count_words(text)
   return n
 end
 
--- Bridge-up (spec §8): a laptop is SSH'd into this Mac iff the reverse-tunnel
--- socket exists (sshd's RemoteForward created it). Unlike the terminal picker
--- there is no SSH_CONNECTION here — the GUI is always the "sitting at the Mac"
--- front-end; the socket's presence alone signals a connected laptop.
+-- Bridge-up (spec §8): a laptop is SSH'd into this Mac iff the reverse-forwarded
+-- peer clipboard is reachable on loopback TCP 2490 (its RemoteForward bound the
+-- port). Unlike the terminal picker there is no SSH_CONNECTION here — the GUI is
+-- always the "sitting at the Mac" front-end; the port being live signals a
+-- connected laptop. A real connect probe, not a file-exists check: the port
+-- vanishes the instant the session ends, so this can never be stale.
 local function bridge_up()
-  local sock = (os.getenv("HOME") or "") .. "/.local/state/runtime/chezmoi-system/clipboard-bridge.sock"
-  return hs.fs.attributes(sock) ~= nil
+  local _, ok = hs.execute("/usr/bin/nc -z -w 1 127.0.0.1 2490 >/dev/null 2>&1")
+  return ok == true
 end
 
 -- Top N clips. Bridge-up folds in the laptop mirror's `laptop-ref` rows (spec

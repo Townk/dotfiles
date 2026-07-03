@@ -2,29 +2,40 @@
 # clipboard-bridge-client.zsh — minimal client for the clipboard-bridge framing
 # protocol (docs/clipboard-universal-project.md §11). Sends one framed request
 #   <1-byte opcode><4-byte BE length><payload>
-# to the reverse-tunnel unix socket and reports whether the server (the laptop's
-# clipboard-bridge-dispatch) answered with an 'O' (ok) status byte.
+# to a loopback TCP endpoint and reports whether the server answered 'O' (ok).
 #
-# Used by pick-clipboard's origin-aware Ctrl-Y for the reverse-channel copy-back
-# (S restore-by-id, C ship-rich). The G/R response *payloads* are consumed by
-# the nvim provider over libuv, not from zsh, so this client only needs the
-# status byte — it never has to parse a framed response body.
+# TCP, not a unix socket, on purpose: the bridge channel is carried by an SSH
+# forward, and macOS's OpenSSH silently ignores StreamLocalBindUnlink for remote
+# unix-socket forwards — so an unclean disconnect strands a stale socket file
+# that kills every later forward until it's manually removed. A forwarded TCP
+# port is owned by the ssh process and freed by the OS when the session ends, so
+# there is nothing to go stale. Endpoints: 2490 = reverse-forwarded peer
+# clipboard, 2492 = mirror-forward to the peer's history receiver.
 #
-# Byte-safe: like the dispatcher, it runs under `setopt nomultibyte` so the
-# BE-length bytes and any binary payload (an image blob) are counted and written
-# as raw bytes, never mangled by the UTF-8 locale's character semantics. The
-# length bytes and payload are assembled in a temp file (never a $(...) capture,
-# which truncates embedded NULs).
+# Used by pick-clipboard's origin-aware Ctrl-Y (S restore, C ship-rich) and by
+# the Hammerspoon mirror sender (M). Response *payloads* (G/R) are consumed by
+# the nvim provider over libuv, not here, so this only needs the status byte.
+#
+# Byte-safe: runs under `setopt nomultibyte` so the BE-length bytes and any
+# binary payload (an image blob) are counted/written as raw bytes; the request
+# is assembled in a temp file, never a $(...) capture (which truncates NULs).
 
-# clipbridge::send <sock> <opcode> <payload_file>
-#   Streams <opcode><BE32 len><payload-bytes> to <sock> via `nc -U` and returns
-#   0 iff the response begins with the 'O' status byte. Returns non-zero on a
-#   missing socket, connection failure, timeout, or an 'E' error response.
+# clipbridge::probe <host> <port>
+#   0 iff something is accepting on host:port (a live forward). Cheap connect
+#   scan — this is the honest "bridge-up" test (a down/stale tunnel refuses).
+clipbridge::probe() {
+  nc -z -w 1 "$1" "$2" >/dev/null 2>&1
+}
+
+# clipbridge::send <host> <port> <opcode> <payload_file>
+#   Streams <opcode><BE32 len><payload-bytes> to host:port via `nc` and returns
+#   0 iff the response begins with the 'O' status byte. Non-zero on an
+#   unreachable endpoint, timeout, or an 'E' error response.
 clipbridge::send() {
   emulate -L zsh              # local options: resets the caller's errexit etc.
   setopt nomultibyte          # count/emit bytes, not decoded characters
-  local sock=$1 opcode=$2 payload_file=$3
-  [[ -S "$sock" && -r "$payload_file" ]] || return 1
+  local host=$1 port=$2 opcode=$3 payload_file=$4
+  [[ -r "$payload_file" ]] || return 1
   local -i plen
   plen=$(wc -c < "$payload_file" | tr -d ' ')
   local reqf respf
@@ -35,7 +46,7 @@ clipbridge::send() {
     printf "\\$(printf %03o $(( (plen >> 24) & 255 )))\\$(printf %03o $(( (plen >> 16) & 255 )))\\$(printf %03o $(( (plen >> 8) & 255 )))\\$(printf %03o $(( plen & 255 )))"
     cat "$payload_file"
   } > "$reqf"
-  nc -U -w 2 "$sock" < "$reqf" > "$respf" 2>/dev/null
+  nc -w 2 "$host" "$port" < "$reqf" > "$respf" 2>/dev/null
   local status_byte
   status_byte=$(dd if="$respf" bs=1 count=1 2>/dev/null)
   rm -f "$reqf" "$respf"

@@ -78,9 +78,15 @@ fi
 It is created by the Hammerspoon clipboard-history watcher (chezmoi apply)."
 
 # --- bridge-up detection (spec §8) -----------------------------------------
+# Bridge-up = we're in an SSH session AND the reverse-forwarded peer clipboard
+# is actually reachable on the loopback TCP port. A real connect probe (not a
+# "does a socket file exist?" check) — a down/stale tunnel refuses, so we
+# degrade cleanly instead of the old "file present but connection refused" trap.
+BRIDGE_HOST=127.0.0.1
+BRIDGE_PORT=2490
 bridge_up=0
 if [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] &&
-   [[ -S "$HOME/.local/state/runtime/chezmoi-system/clipboard-bridge.sock" ]]; then
+   clipbridge::probe "$BRIDGE_HOST" "$BRIDGE_PORT"; then
   bridge_up=1
 fi
 if (( bridge_up )); then
@@ -88,7 +94,6 @@ if (( bridge_up )); then
 else
   origin_where="origin IN ('local','remote-own')"
 fi
-SOCK="$HOME/.local/state/runtime/chezmoi-system/clipboard-bridge.sock"
 
 # --- helpers (run in THIS process via the --key-background FIFO broker) ------
 clip::text_by_id() {  # id -> text_plain (raw, multi-line)
@@ -125,7 +130,7 @@ clip::ship_image_by_id() {
         cat "$blobf"
       } > "$payloadf"
       rm -f "$blobf"
-      if clipbridge::send "$SOCK" C "$payloadf"; then rm -f "$payloadf"; return 0; fi
+      if clipbridge::send "$BRIDGE_HOST" "$BRIDGE_PORT" C "$payloadf"; then rm -f "$payloadf"; return 0; fi
       rm -f "$payloadf"
       return 1
     fi
@@ -152,7 +157,7 @@ clip::copy_by_id() {
         if [[ -n "$ref_id" ]]; then
           local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-refid.XXXXXX")
           print -rn -- "$ref_id" > "$pf"
-          if clipbridge::send "$SOCK" S "$pf"; then rm -f "$pf"; return 0; fi
+          if clipbridge::send "$BRIDGE_HOST" "$BRIDGE_PORT" S "$pf"; then rm -f "$pf"; return 0; fi
           rm -f "$pf"
         fi
         ;;
