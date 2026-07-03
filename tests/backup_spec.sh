@@ -1910,5 +1910,32 @@ EOF
       The line 3 should equal "hello"
       The stderr should be defined
     End
+
+    It 'restore --force is undoable (real restic round-trip)'
+      usmoke() {
+        source "$LIB/backup.zsh"
+        FIX=$(mktemp -d)
+        export BKP_STATE_DIR="$FIX/state" BKP_WIP_DIR="$FIX/state/wip" BKP_CONFIG="$FIX/c.toml"
+        mkdir -p "$FIX/root"
+        print v1 > "$FIX/root/f.txt"
+        printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
+        printf '[staging]\npath = "%s/repo"\npassword_command = "echo smoke-pass"\n' "$FIX" > "$FIX/c.toml"
+        zsh -c 'source "$1/backup.zsh"; bkp::capture::run "$2" "$3"' \
+          _ "$LIB" "$FIX/m.toml" "$FIX/c.toml" >/dev/null 2>&1 || return 1
+        local snap
+        snap=$(RESTIC_REPOSITORY="$FIX/repo" RESTIC_PASSWORD_COMMAND="echo smoke-pass" \
+          restic snapshots --json 2>/dev/null | jq -r '.[0].id')
+        print v2 > "$FIX/root/f.txt"
+        bkp::restore::paths "$snap" --force "$FIX/root/f.txt" >/dev/null 2>&1 || return 1
+        cat "$FIX/root/f.txt"
+        bkp::restore::undo >/dev/null 2>&1 || return 1
+        cat "$FIX/root/f.txt"
+        rm -rf "$FIX"
+      }
+      When run usmoke
+      The line 1 should equal "v1"
+      The line 2 should equal "v2"
+      The stderr should be defined
+    End
   End
 End

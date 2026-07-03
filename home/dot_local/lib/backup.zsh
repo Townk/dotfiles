@@ -1211,19 +1211,29 @@ bkp::restore::paths() {
 
 # bkp::restore::undo
 # Revert the last restore: restore the newest bkp-undo snapshot in place,
-# then forget it — stacked undos peel one restore at a time.
+# then forget it — stacked undos peel one restore at a time. The restore is
+# restricted to the snapshot's own recorded paths: a bare `--target /` would
+# make restic recreate parent nodes like /var, which is a symlink on macOS
+# (it fatals trying to replace it).
 bkp::restore::undo() {
   local staging
   staging=$(bkp::config::staging_path) || return 2
-  local id
-  id=$(bkp::restic "$staging" snapshots --json --tag bkp-undo |
+  local sel
+  sel=$(bkp::restic "$staging" snapshots --json --tag bkp-undo |
     jq -r '[(. // [])[] | select((.tags // []) | index("bkp-undo"))]
-           | sort_by(.time) | last | .id // empty' 2>/dev/null)
-  [[ -n "$id" ]] || {
+           | sort_by(.time) | last // empty
+           | [.id, ((.paths // []) | join("\u001f"))] | @tsv' 2>/dev/null)
+  [[ -n "$sel" ]] || {
     log_error "bkp: nothing to undo"
     return 1
   }
-  bkp::restic "$staging" restore "$id" --target / || return 1
+  local id="${sel%%$'\t'*}" joined="${sel#*$'\t'}"
+  local -a includes=()
+  local p
+  for p in "${(@ps:\x1f:)joined}"; do
+    [[ -n "$p" ]] && includes+=(--include "$p")
+  done
+  bkp::restic "$staging" restore "$id" --target / "${includes[@]}" || return 1
   bkp::restic "$staging" forget "$id"
 }
 
