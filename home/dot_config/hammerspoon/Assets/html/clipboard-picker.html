@@ -79,9 +79,8 @@
     var MIXED_ICON = '\u{F1518}';
 
     // Origin (spec §8): a `laptop-ref` row is this Mac's live mirror of a clip
-    // copied on a connected remote peer; everything else is this Mac's own.
-    // Labelled "remote" vs "local" (never machine-typed like "laptop").
-    function originLabel(origin) { return origin === 'laptop-ref' ? 'remote' : 'local'; }
+    // copied on a connected remote peer; only those get a "remote" badge — this
+    // Mac's own clips are the unmarked default.
 
     function post(action, extra) {
       var msg = Object.assign({ action: action }, extra || {});
@@ -107,12 +106,12 @@
         var icon = ICONS[it.kind] || MIXED_ICON;
         var sel = (i === selectedIndex) ? ' selected' : '';
         var pinnedClass = it.pinned ? ' pinned' : '';
-        var oLabel = originLabel(it.origin);
-        html += '<div class="item' + sel + pinnedClass + '" data-idx="' + i + '" data-kind="' + it.kind
-          + '" data-origin="' + oLabel + '">'
+        // Only remote (mirrored) rows get a badge; local is the unmarked default.
+        var originBadge = (it.origin === 'laptop-ref') ? '<span class="origin-badge">remote</span>' : '';
+        html += '<div class="item' + sel + pinnedClass + '" data-idx="' + i + '" data-kind="' + it.kind + '">'
           + '<span class="icon">' + icon + '</span>'
           + '<span class="content">' + escapeHtml(it.preview) + '</span>'
-          + '<span class="origin-badge">' + oLabel + '</span>'
+          + originBadge
           + '</div>';
       }
       listEl.innerHTML = html || '<div class="preview-empty" style="padding:8px 12px;">No clips</div>';
@@ -224,10 +223,12 @@
         : BYTE_SIZED_KINDS[it.kind] ? row('Bytes:', formatBytes(it.len))
         : CHARACTERS_ONLY_KINDS[it.kind] ? row('Characters:', formatThousands(it.len))
         : row('Characters:', formatThousands(it.len)) + row('Words:', formatThousands(it.words));
+      // Origin row only for remote (mirrored) clips; local is the default.
+      var originRow = (it.origin === 'laptop-ref') ? row('Origin:', 'remote') : '';
       metaEl.innerHTML = '<div class="meta-title">Information</div>'
         + row('Source:', '<span class="source-icon" id="sourceIcon"></span>' + escapeHtml(it.app))
         + row('Content Type:', escapeHtml(it.kindLabel))
-        + row('Origin:', originLabel(it.origin))
+        + originRow
         + sizeRow
         // Populated on demand by __setPreview below, once/if the fetched
         // preview turns out to be an image -- collapses to nothing (see

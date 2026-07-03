@@ -194,23 +194,18 @@ body { background: transparent; overflow: hidden; }
 .item.pinned .content {
   color: var(--pin-yellow);
 }
-/* Origin badge: a small "local"/"remote" text tag at the row's right edge
- * (after the flex-growing .content) so a mirrored (remote) clip is obvious at a
- * glance. Colored by data-origin — mauve for remote, muted for local. */
+/* Origin badge: a small "remote" text tag at the row's right edge (after the
+ * flex-growing .content) so a mirrored clip is obvious at a glance. Only remote
+ * rows carry it — local is the unmarked default. Mauve, matching the terminal
+ * picker's c_origin. */
 .item .origin-badge {
   flex: 0 0 auto;
   font-size: calc(var(--base-size) * 0.72);
   letter-spacing: 0.02em;
   padding: 1px 6px;
   border-radius: 6px;
-}
-.item[data-origin="remote"] .origin-badge {
   color: var(--icon-origin);
   background: rgba(203, 166, 247, 0.15);
-}
-.item[data-origin="local"] .origin-badge {
-  color: var(--meta-label);
-  background: rgba(150, 150, 150, 0.10);
 }
 
 .right-col {
