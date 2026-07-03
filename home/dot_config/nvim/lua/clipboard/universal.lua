@@ -44,18 +44,18 @@ local BRIDGE_HOST = "127.0.0.1"
 local BRIDGE_PORT = 2490
 
 --------------------------------------------------------------------------------
--- Regtype normalization. NeoVim hands copy() a getregtype()-style code
--- ("v" charwise, "V" linewise, CTRL-V[+width] blockwise); the protocol (and
+-- Regtype normalization. NeoVim's g:clipboard copy() gets one of "v" charwise,
+-- "V" linewise, or "b" blockwise (verified empirically on 0.12 — it passes the
+-- plain "b", NOT the getregtype() CTRL-V[+width] form); the protocol (and
 -- setreg(), which paste()'s return feeds) speak "v"/"l"/"b". Normalize on the
--- way in so the cache and the T op both store a clean single byte. (The prior
--- provider stored the raw "V"/CTRL-V, which failed its own {v,l,b} validation
--- and silently dropped the type — the block bug this module fixes.)
+-- way in so the cache and the T op store a clean single byte. Accept the CTRL-V
+-- form too, defensively, in case a future NeoVim changes the contract.
 --------------------------------------------------------------------------------
 local function norm_regtype(rt)
   if not rt or rt == "" then return "v" end
   local c = rt:sub(1, 1)
-  if c == "V" then return "l" end
-  if c == "\22" then return "b" end -- CTRL-V (0x16)
+  if c == "V" or c == "l" then return "l" end
+  if c == "b" or c == "\22" then return "b" end -- "b" (what NeoVim passes) or CTRL-V (0x16)
   return "v"
 end
 
