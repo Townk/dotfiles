@@ -107,6 +107,15 @@ svc::render_json() {
       | if $s.log_path       then . + {StandardOutPath:     ($s.log_path       | detilde)} else . end
       | if $s.error_log_path then . + {StandardErrorPath:   ($s.error_log_path | detilde)} else . end
       | if $s.env            then . + {EnvironmentVariables:($s.env | with_entries(.value |= detilde))} else . end
+      # Optional scheduling / QoS keys (added for system-backup agents).
+      # low_priority_io compares against null, not truthiness, so an explicit
+      # `false` still renders (the other five have no meaningful falsy value).
+      | if $s.start_interval          then . + {StartInterval:         $s.start_interval} else . end
+      | if $s.start_calendar_interval then . + {StartCalendarInterval: $s.start_calendar_interval} else . end
+      | if $s.watch_paths             then . + {WatchPaths:            ($s.watch_paths | map(detilde))} else . end
+      | if $s.process_type            then . + {ProcessType:           $s.process_type} else . end
+      | if $s.low_priority_io != null then . + {LowPriorityIO:         $s.low_priority_io} else . end
+      | if $s.nice                    then . + {Nice:                  $s.nice} else . end
     '
 }
 

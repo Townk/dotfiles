@@ -1,0 +1,72 @@
+#!/usr/bin/env zsh
+# system-backup-capture — worker: one capture tick into the staging repo.
+#
+# Resolves the manifest (roots − deny − chezmoi-managed − gitignored), writes
+# the git-history sidecars (bundle + meta.json), snapshots everything into the
+# always-present local staging repo, then applies the retention ladder
+# (restic forget; the expensive prune runs as its own daily job).
+#
+# Coalesces under a run-lock: if a capture is already running, this tick
+# exits 0 immediately.
+#
+# Usage:
+#   system-backup-capture [--manifest <file>] [--config <file>]
+
+set -eu -o pipefail
+
+source "${BKP_LIB:-$HOME/.local/lib}/backup.zsh"
+
+usage() {
+  cat <<EOF
+Usage:
+  system-backup-capture [--manifest <file>] [--config <file>] [--reconcile]
+
+One capture tick: manifest -> staging restic repo (+ git-history sidecars,
+then retention forget). With --reconcile, follow the capture with a
+reconcile pass (the scheduled agent uses this — spec §6 "reconcile after
+every capture"). Defaults: manifest $BKP_MANIFEST, config $BKP_CONFIG.
+EOF
+}
+
+main() {
+  local manifest="$BKP_MANIFEST" config="$BKP_CONFIG" reconcile=0
+  while (( $# )); do
+    case "$1" in
+      --manifest)
+        [[ $# -ge 2 ]] || die "--manifest requires a value"
+        manifest="$2"
+        shift 2
+        ;;
+      --config)
+        [[ $# -ge 2 ]] || die "--config requires a value"
+        config="$2"
+        shift 2
+        ;;
+      --reconcile)
+        reconcile=1
+        shift
+        ;;
+      -h | --help | help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+  # Unconfigured machine (no config.toml yet): clean no-op, so the committed
+  # launchd agent is harmless before onboarding (images-automount precedent).
+  [[ -f "$config" ]] || {
+    log_info "bkp: not configured (no $config) — skipping"
+    exit 0
+  }
+  if (( reconcile )); then
+    bkp::tick "$manifest" "$config"
+  else
+    bkp::capture::run "$manifest" "$config"
+  fi
+}
+
+main "$@"
