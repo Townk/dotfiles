@@ -137,31 +137,31 @@ local function count_words(text)
   return n
 end
 
--- Bridge-up (spec §8): a laptop is SSH'd into this Mac iff the reverse-forwarded
--- peer clipboard is reachable on loopback TCP 2490 (its RemoteForward bound the
+-- Bridge-up (spec §8): a remote machine is SSH'd into this Mac iff the reverse-forwarded
+-- remote clipboard is reachable on loopback TCP 2490 (its RemoteForward bound the
 -- port). Unlike the terminal picker there is no SSH_CONNECTION here — the GUI is
 -- always the "sitting at the Mac" front-end; the port being live signals a
--- connected laptop. A real connect probe, not a file-exists check: the port
+-- connected remote machine. A real connect probe, not a file-exists check: the port
 -- vanishes the instant the session ends, so this can never be stale.
 local function bridge_up()
   local _, ok = hs.execute("/usr/bin/nc -z -w 1 127.0.0.1 2490 >/dev/null 2>&1")
   return ok == true
 end
 
--- Top N clips. Bridge-up folds in the laptop mirror's `laptop-ref` rows (spec
+-- Top N clips. Bridge-up folds in the mirrored `remote-ref` rows (spec
 -- §8 union); accepting one restores its mirrored text_plain locally so a paste
--- lands on THIS Mac (restore_by_id's text fallback). Rich laptop-ref rows are
--- text+id only here (§14) — their blobs live on the laptop; the terminal
+-- lands on THIS Mac (restore_by_id's text fallback). Rich remote-ref rows are
+-- text+id only here (§14) — their blobs live on the remote; the terminal
 -- picker's Ctrl-Y is the rich cross-machine copy-back path. Bridge-down keeps
--- the local-only view (no stale laptop rows), matching the terminal picker.
+-- the local-only view (no stale remote rows), matching the terminal picker.
 local function query_items()
   local db = sqlite3.open(history._db_path())
   if not db then return {} end
   local origin_filter = bridge_up()
-    and "origin IN ('local','remote-own','laptop-ref')"
+    and "origin IN ('local','remote-own','remote-ref')"
     or "origin IN ('local','remote-own')"
   local s = assert(db:prepare([[
-    SELECT id, text_preview, text_plain, type_kind, source_app, source_bundle_id, len, pinned, last_ts, origin
+    SELECT id, text_preview, text_plain, type_kind, source_app, source_bundle_id, len, pinned, last_ts, origin, source_host
     FROM clips
     WHERE ]] .. origin_filter .. [[
     ORDER BY pinned DESC, last_ts DESC
@@ -169,11 +169,15 @@ local function query_items()
   ]]))
   local items = {}
   local now = os.time()
+  local my_host = history._my_host()
   while s:step() == sqlite3.ROW do
     local kind = s:get_value(3) or "text"
     local plain = s:get_value(2)
     local last_ts = s:get_value(8) or now
     local pinned = (s:get_value(7) or 0) == 1
+    -- Provenance: remote iff the clip was copied on a different host. NULL
+    -- source_host (pre-migration / local pre-column rows) reads as local.
+    local host = s:get_value(10)
     items[#items + 1] = {
       id        = s:get_value(0),
       preview   = s:get_value(1) or ("[" .. kind .. "]"),
@@ -185,6 +189,8 @@ local function query_items()
       words     = count_words(plain),
       pinned    = pinned,
       origin    = s:get_value(9) or "local",
+      remote    = (host ~= nil and host ~= "" and host ~= my_host),
+      sourceHost = host,
       group     = group_label(last_ts, now, pinned),
       age       = age_string(last_ts, now),
     }

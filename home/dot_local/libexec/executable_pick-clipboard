@@ -36,16 +36,16 @@
 #                no rich-vs-raw distinction in a terminal.
 #   Ctrl-Y       accept-and-dismiss + copy to *my* clipboard, dispatching by
 #                origin and carrying the register type so a block clip stays
-#                block-pasteable (clip::copy_by_id): laptop-ref -> S restore on
-#                the peer; local image -> C; local/other text -> T(regtype+text)
-#                to the peer (SSH) or this machine's bridge (local); iPad -> OSC
+#                block-pasteable (clip::copy_by_id): remote-ref -> S restore on
+#                the remote; local image -> C; local/other text -> T(regtype+text)
+#                to the remote (SSH) or this machine's bridge (local); iPad -> OSC
 #                52. Emits nothing to the pane (unlike Enter, which injects).
 #   Ctrl-D/Alt-D delete the row (SQL DELETE by id), stay open.
 #   Ctrl-P       toggle pin, stay open.
 #
 # Origin filter (spec §8): bridge-up ($SSH_CONNECTION + the reverse socket
-# present) -> union of local/remote-own/laptop-ref; else local/remote-own only
-# (excludes stale laptop-ref rows).
+# present) -> union of local/remote-own/remote-ref; else local/remote-own only
+# (excludes stale remote-ref rows).
 #
 # Accept markers: pick::start emits one of three tail fields on accept, and the
 # wrapper below dispatches on the prefix — field:1 plain id (Enter -> inject
@@ -76,12 +76,12 @@ fi
 It is created by the Hammerspoon clipboard-history watcher (chezmoi apply)."
 
 # --- bridge-up detection (spec §8) -----------------------------------------
-# Bridge-up = we're in an SSH session AND the reverse-forwarded peer clipboard
+# Bridge-up = we're in an SSH session AND the reverse-forwarded remote clipboard
 # is actually reachable on the loopback TCP port. A real connect probe (not a
 # "does a socket file exist?" check) — a down/stale tunnel refuses, so we
 # degrade cleanly instead of the old "file present but connection refused" trap.
 BRIDGE_HOST=127.0.0.1
-BRIDGE_PORT=2490   # reverse-forwarded peer clipboard (SSH bridge-up)
+BRIDGE_PORT=2490   # reverse-forwarded remote clipboard (SSH bridge-up)
 LOCAL_PORT=2489   # this machine's own clipboard-bridge (sitting locally)
 bridge_up=0
 if [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] &&
@@ -89,10 +89,21 @@ if [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] &&
   bridge_up=1
 fi
 if (( bridge_up )); then
-  origin_where="origin IN ('local','remote-own','laptop-ref')"
+  origin_where="origin IN ('local','remote-own','remote-ref')"
 else
   origin_where="origin IN ('local','remote-own')"
 fi
+
+# --- provenance (spec §11) --------------------------------------------------
+# A clip's `source_host` is the hostname where it was actually copied. The
+# picker derives local/remote by comparing it to THIS machine's hostname
+# (absolute, not the per-DB `origin` flag which is relative and was ambiguous):
+# a row is "remote" iff it carries a source_host that differs from ours. NULL
+# source_host (pre-migration rows, or a local capture from before the column)
+# reads as local. Interpolated into the badge/footer SQL below.
+MY_HOST=$(scutil --get LocalHostName 2>/dev/null)
+[[ -n "$MY_HOST" ]] || MY_HOST=$(hostname -s 2>/dev/null)
+remote_when="source_host IS NOT NULL AND source_host <> '$MY_HOST'"
 
 # --- helpers (run in THIS process via the --key-background FIFO broker) ------
 clip::text_by_id() {  # id -> text_plain (raw, multi-line)
@@ -107,7 +118,7 @@ clip::toggle_pin_by_id() {
   sqlite3 "$DB_FILE" "UPDATE clips SET pinned = 1 - pinned WHERE id=$1;"
 }
 
-# Ship an image clip's blob to the laptop via the reverse channel (C op). Tries
+# Ship an image clip's blob to the remote via the reverse channel (C op). Tries
 # each image UTI in turn (same set/order as clip::markdown_image); the first with
 # a stored blob is packaged as <BE16 uti_len><uti><blob> and sent. Returns 0 on
 # an 'O' response. Byte-safe: the payload (BE16 len + binary blob) is built in a
@@ -140,7 +151,7 @@ clip::ship_image_by_id() {
 
 # Set the target clipboard to a clip via the framing T op (regtype + exact
 # text), so the register type is RECORDED alongside — a later nvim paste can
-# then block-paste it. <port> picks the dispatcher: BRIDGE_PORT (the laptop over
+# then block-paste it. <port> picks the dispatcher: BRIDGE_PORT (the remote over
 # the reverse tunnel) or LOCAL_PORT (this machine's own bridge). text_plain is
 # written via writefile so no sqlite trailing newline sneaks in (an extra line
 # would corrupt a block clip). Returns 0 on an 'O' response.
@@ -160,10 +171,10 @@ clip::set_via_bridge() {
 
 # Copy a clip's content to *my* clipboard, dispatching by origin (spec §8) and
 # carrying the register type so a block clip stays block-pasteable:
-#   bridge-up (SSH) laptop-ref     -> S restore-by-id on the laptop (full rich,
+#   bridge-up (SSH) remote-ref     -> S restore-by-id on the remote (full rich,
 #                                     zero transfer; reinstates its regtype there)
 #   bridge-up local/remote-own img -> C ship the blob (OSC 52 can't carry it)
-#   bridge-up local/remote-own txt -> T(regtype+text) to the laptop
+#   bridge-up local/remote-own txt -> T(regtype+text) to the remote
 #   sitting locally (no SSH)       -> T(regtype+text) to this machine's bridge
 #   SSH bridge-down (iPad) / fail  -> pbcopy shim (OSC 52 text; iPad can't block)
 clip::copy_by_id() {
@@ -171,7 +182,7 @@ clip::copy_by_id() {
   if (( bridge_up )); then
     local origin; origin=$(sqlite3 "$DB_FILE" "SELECT origin FROM clips WHERE id=$id;" 2>/dev/null) || origin=""
     case "$origin" in
-      laptop-ref)
+      remote-ref)
         local ref_id; ref_id=$(sqlite3 "$DB_FILE" "SELECT IFNULL(ref_id,'') FROM clips WHERE id=$id;" 2>/dev/null) || ref_id=""
         if [[ -n "$ref_id" ]]; then
           local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-refid.XXXXXX")
@@ -372,10 +383,11 @@ EMIT_SQL="WITH palette AS (
              CHAR(27)||'[38;2;203;166;247m' AS c_origin
     )
     SELECT
-      -- Color the kind glyph by ORIGIN when it's a laptop mirror row (mauve
-      -- c_origin), else by kind — a zero-width at-a-glance origin cue that
-      -- keeps the kind glyph intact. (Two CASEs: color, then glyph.)
-      (CASE WHEN origin='laptop-ref'    THEN c_origin
+      -- Color the kind glyph mauve (c_origin) when the clip was copied on a
+      -- DIFFERENT host (source_host <> ours), else by kind — a zero-width
+      -- at-a-glance remote cue that keeps the kind glyph intact. (Two CASEs:
+      -- color, then glyph.)
+      (CASE WHEN ${remote_when}     THEN c_origin
             WHEN type_kind='text'       THEN c_text
             WHEN type_kind IN ('rtf','html') THEN c_rich
             WHEN type_kind='image'      THEN c_image
@@ -444,7 +456,7 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
              CHAR(27)||'[38;2;203;166;247m' AS c_origin
     )
     SELECT
-      (CASE WHEN origin='laptop-ref'    THEN c_origin
+      (CASE WHEN ${remote_when}     THEN c_origin
             WHEN type_kind='text'       THEN c_text
             WHEN type_kind IN ('rtf','html') THEN c_rich
             WHEN type_kind='image'      THEN c_image
@@ -497,7 +509,7 @@ pc=\${FZF_PREVIEW_COLUMNS:-40}
 ph=\${FZF_PREVIEW_LINES:-20}
 lw=14
 vw=\$((pc - lw)); [ \$vw -lt 4 ] && vw=4
-sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN origin='laptop-ref' THEN 'remote' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
+sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN ${remote_when} THEN 'remote ('||source_host||')' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
 EOF
 
 # --- run --------------------------------------------------------------------

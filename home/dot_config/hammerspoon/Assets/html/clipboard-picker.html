@@ -79,9 +79,9 @@
     // against symbols.db).
     var MIXED_ICON = '\u{F1518}';
 
-    // Origin (spec §8): a `laptop-ref` row is this Mac's live mirror of a clip
-    // copied on a connected remote peer; only those get a "remote" badge — this
-    // Mac's own clips are the unmarked default.
+    // Provenance (spec §11): `it.remote` is true when the clip was copied on a
+    // different host (its source_host differs from this Mac's). Only remote rows
+    // get a "remote" badge — this Mac's own clips are the unmarked default.
 
     function post(action, extra) {
       var msg = Object.assign({ action: action }, extra || {});
@@ -107,8 +107,8 @@
         var icon = ICONS[it.kind] || MIXED_ICON;
         var sel = (i === selectedIndex) ? ' selected' : '';
         var pinnedClass = it.pinned ? ' pinned' : '';
-        // Only remote (mirrored) rows get a badge; local is the unmarked default.
-        var originBadge = (it.origin === 'laptop-ref') ? '<span class="origin-badge">remote</span>' : '';
+        // Only remote rows get a badge; local is the unmarked default.
+        var originBadge = it.remote ? '<span class="origin-badge">remote</span>' : '';
         html += '<div class="item' + sel + pinnedClass + '" data-idx="' + i + '" data-kind="' + it.kind + '">'
           + '<span class="icon">' + icon + '</span>'
           + '<span class="content">' + escapeHtml(it.preview) + '</span>'
@@ -224,8 +224,11 @@
         : BYTE_SIZED_KINDS[it.kind] ? row('Bytes:', formatBytes(it.len))
         : CHARACTERS_ONLY_KINDS[it.kind] ? row('Characters:', formatThousands(it.len))
         : row('Characters:', formatThousands(it.len)) + row('Words:', formatThousands(it.words));
-      // Origin row only for remote (mirrored) clips; local is the default.
-      var originRow = (it.origin === 'laptop-ref') ? row('Origin:', 'remote') : '';
+      // Origin row only for remote clips (copied on another host); local is the
+      // default. Show the source hostname for at-a-glance provenance.
+      var originRow = it.remote
+        ? row('Origin:', 'remote (' + escapeHtml(it.sourceHost) + ')')
+        : '';
       metaEl.innerHTML = '<div class="meta-title">Information</div>'
         + row('Source:', '<span class="source-icon" id="sourceIcon"></span>' + escapeHtml(it.app))
         + row('Content Type:', escapeHtml(it.kindLabel))

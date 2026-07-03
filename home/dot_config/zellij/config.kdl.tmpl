@@ -971,8 +971,8 @@ scroll_buffer_size 1000000
 // (WezTerm), which has no payload-size cap and writes the clipboard. That makes
 // copy *origin-relative*:
 //   - sitting locally  → WezTerm writes this machine's clipboard;
-//   - reached over ssh → the sequence rides the ssh stream up to the laptop's
-//                        WezTerm and writes the *laptop's* clipboard.
+//   - reached over ssh → the sequence rides the ssh stream up to the local
+//                        machine's WezTerm and writes the *local* clipboard.
 // So a Mac reached over ssh behaves exactly like the Linux dev-shell (yanks and
 // terminal selections land on the machine you're typing at), instead of the
 // `copy_command "pbcopy"` we used to set on macOS, which captured copies to the

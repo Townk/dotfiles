@@ -1,22 +1,24 @@
 #!/usr/bin/env zsh
-# clipboard-mirror-dispatch — receiver for the laptop→remote clipboard history
+# clipboard-mirror-dispatch — receiver for the local→remote clipboard history
 # mirror (Phase 5, docs/clipboard-universal-project.md §11). The [clipboard-
 # mirror] launchd service socat-listens on a per-user unix socket and EXECs
 # this once per accepted connection, with the connection wired to stdin/stdout.
 #
-# A laptop, while SSH'd into this host with the mirror -L StreamLocalForward up,
+# A remote machine, while SSH'd into this host with the mirror -L StreamLocalForward up,
 # pushes each of its local captures here as a single framed record:
 #
 #   request:  <'M'><4-byte BE length N><N-byte payload>
 #   response: <'O'|'E'><4-byte BE length N><N-byte payload>
 #
-#   payload = ref_id US kind US app US len RS preview RS text_plain
+#   payload = ref_id US kind US app US len US source_host RS preview RS text_plain
 #             (US = 0x1f, RS = 0x1e; text_plain is the remainder and may
 #              itself contain RS/newlines — only the FIRST two RS delimit)
+#             source_host is the hostname of the machine where the clip was
+#             copied; the picker derives local/remote by comparing it to its own.
 #
-# We upsert a `laptop-ref` row (keyed on ref_id) carrying only TEXT + METADATA
+# We upsert a `remote-ref` row (keyed on ref_id) carrying only TEXT + METADATA
 # — never blobs. The remote picker shows it origin-badged; Ctrl-Y on it asks
-# the laptop to restore-by-id over the reverse channel (full rich, zero
+# the remote to restore-by-id over the reverse channel (full rich, zero
 # transfer). See clipboard-history.lua's push_to_mirror for the sender.
 #
 # Byte-safe like clipboard-bridge-dispatch: `setopt nomultibyte` so the length
@@ -85,12 +87,12 @@ preview=${rest%%${RS}*}
 text=${rest#*${RS}}
 local -a f
 IFS=$US read -rA f <<< "$meta"
-ref_id=${f[1]:-} kind=${f[2]:-} app=${f[3]:-} len=${f[4]:-0}
+ref_id=${f[1]:-} kind=${f[2]:-} app=${f[3]:-} len=${f[4]:-0} source_host=${f[5]:-}
 
 [[ "$ref_id" == <-> ]] || { send_err "bad ref_id"; exit 0 }
 [[ "$len" == <-> ]] || len=0
 
-# --- upsert a laptop-ref row (text + metadata only, no blobs) ----------------
+# --- upsert a remote-ref row (text + metadata only, no blobs) ----------------
 # Arbitrary text goes through readfile() rather than SQL string literals so
 # quotes/newlines/binary in the payload can't break or inject the statement.
 tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-mirror.XXXXXX") || { send_err "mktemp"; exit 0 }
@@ -98,27 +100,29 @@ print -rn -- "$preview" > "$tmpd/preview"
 print -rn -- "$text"    > "$tmpd/text"
 print -rn -- "$app"     > "$tmpd/app"
 print -rn -- "$kind"    > "$tmpd/kind"
+print -rn -- "$source_host" > "$tmpd/host"
 ts=$EPOCHREALTIME
 
-existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE origin='laptop-ref' AND ref_id=$ref_id;" 2>/dev/null)
+existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE origin='remote-ref' AND ref_id=$ref_id;" 2>/dev/null)
 if [[ -n "$existing" ]]; then
   sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts, \
     text_preview=CAST(readfile('$tmpd/preview') AS TEXT), \
     text_plain=CAST(readfile('$tmpd/text') AS TEXT), \
     len=$len, type_kind=CAST(readfile('$tmpd/kind') AS TEXT), \
-    source_app=CAST(readfile('$tmpd/app') AS TEXT) WHERE id=$existing;" 2>/dev/null
+    source_app=CAST(readfile('$tmpd/app') AS TEXT), \
+    source_host=CAST(readfile('$tmpd/host') AS TEXT) WHERE id=$existing;" 2>/dev/null
 else
   sqlite3 "$DB_FILE" "INSERT INTO clips \
-    (text_preview, text_plain, len, first_ts, last_ts, source_app, type_kind, origin, ref_id, pinned) \
+    (text_preview, text_plain, len, first_ts, last_ts, source_app, type_kind, origin, ref_id, pinned, source_host) \
     VALUES (CAST(readfile('$tmpd/preview') AS TEXT), CAST(readfile('$tmpd/text') AS TEXT), \
     $len, $ts, $ts, CAST(readfile('$tmpd/app') AS TEXT), CAST(readfile('$tmpd/kind') AS TEXT), \
-    'laptop-ref', $ref_id, 0);" 2>/dev/null
+    'remote-ref', $ref_id, 0, CAST(readfile('$tmpd/host') AS TEXT));" 2>/dev/null
 fi
 
-# Bound the mirror: drop oldest laptop-ref rows past the cap (the local watcher's
+# Bound the mirror: drop oldest remote-ref rows past the cap (the local watcher's
 # own retention also sweeps, but a headless-ish remote may get no local writes).
-sqlite3 "$DB_FILE" "DELETE FROM clips WHERE origin='laptop-ref' AND id NOT IN \
-  (SELECT id FROM clips WHERE origin='laptop-ref' ORDER BY last_ts DESC LIMIT $MAX_REF_ROWS);" 2>/dev/null
+sqlite3 "$DB_FILE" "DELETE FROM clips WHERE origin='remote-ref' AND id NOT IN \
+  (SELECT id FROM clips WHERE origin='remote-ref' ORDER BY last_ts DESC LIMIT $MAX_REF_ROWS);" 2>/dev/null
 
 rm -rf -- "$tmpd"
 send_ok ""

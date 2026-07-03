@@ -56,8 +56,8 @@
   --icon-directory: rgb(250, 179, 135); /* peach */
   --icon-url: rgb(116, 199, 236); /* sapphire */
 
-  /* Origin badge (laptop-ref rows). Catppuccin Mocha "mauve" -- distinct from
-   * every per-kind icon color above so a mirrored-from-laptop row reads at a
+  /* Origin badge (remote-ref rows). Catppuccin Mocha "mauve" -- distinct from
+   * every per-kind icon color above so a mirrored-from-a-remote row reads at a
    * glance. Matches pick-clipboard's c_origin ANSI triple. */
   --icon-origin: rgb(203, 166, 247);
 

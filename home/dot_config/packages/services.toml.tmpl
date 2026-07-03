@@ -58,15 +58,15 @@ error_log_path = "~/.cache/clipboard-bridge/listener.log"
 # (hs) and /usr/bin (sqlite3, pbpaste, pbcopy) resolve.
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
-# clipboard-mirror — receive a laptop's clipboard-history mirror over the SSH
+# clipboard-mirror — receive a remote machine's clipboard-history mirror over the SSH
 # LocalForward -L (see ~/.ssh/config.d/clipboard.config). socat listens on
 # loopback TCP 2491 and EXECs clipboard-mirror-dispatch per connection, which
-# upserts a text+metadata `laptop-ref` row (no blobs) into this host's store.
+# upserts a text+metadata `remote-ref` row (no blobs) into this host's store.
 # Loopback TCP (not a unix socket) for the same reason the reverse channel is:
 # a forwarded socket file goes stale on an unclean disconnect and macOS ssh
 # won't clear it; a port frees itself. macOS only (capture is Hammerspoon).
 [clipboard-mirror]
-description    = "Receive a laptop's clipboard history mirror over an SSH -L forward"
+description    = "Receive a remote machine's clipboard history mirror over an SSH -L forward"
 cmd            = ["socat", "TCP-LISTEN:2491,bind=127.0.0.1,fork,reuseaddr", "EXEC:{{ .chezmoi.homeDir }}/.local/libexec/clipboard-mirror-dispatch"]
 keep_alive     = true
 run_at_load    = true
