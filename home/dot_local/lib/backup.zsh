@@ -597,6 +597,16 @@ bkp::project::warn_large() {
   return 0
 }
 
+# bkp::lock <name>
+# Non-blocking run-lock, held until the process exits (zsystem flock keeps
+# the fd). rc 1 when busy — callers coalesce (skip the tick), never queue.
+bkp::lock() {
+  local lockfile="$BKP_STATE_DIR/$1.lock"
+  mkdir -p "$BKP_STATE_DIR"
+  : >> "$lockfile"
+  zsystem flock -t 0 "$lockfile" 2>/dev/null
+}
+
 # bkp::project::sidecar <repo> <bundle_unpushed> <warn_size>
 # One repo's history layer: meta.json always, bundle when enabled. Sidecar
 # problems warn but never block the file capture (rc 0).

@@ -875,4 +875,33 @@ EOF
       The line 2 should equal "no-bundle"
     End
   End
+
+  Describe 'bkp::lock'
+    setup_fix() { FIX=$(mktemp -d); export BKP_STATE_DIR="$FIX/state"; }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'a second process cannot take a held lock'
+      locks() {
+        source "$LIB/backup.zsh"
+        bkp::lock capture || return 1
+        print first
+        zsh -c 'source "'"$LIB"'/backup.zsh"; bkp::lock capture' && print oops || print blocked
+      }
+      When run locks
+      The line 1 should equal "first"
+      The line 2 should equal "blocked"
+    End
+
+    It 'the lock dies with its holder'
+      afterlife() {
+        source "$LIB/backup.zsh"
+        zsh -c 'source "'"$LIB"'/backup.zsh"; bkp::lock capture'   # exits, releasing
+        bkp::lock capture && print free
+      }
+      When run afterlife
+      The output should equal "free"
+    End
+  End
 End
