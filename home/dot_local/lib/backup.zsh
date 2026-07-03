@@ -693,6 +693,39 @@ bkp::capture::thin() {
   bkp::restic "$repo" forget "${drop[@]}"
 }
 
+# bkp::restic::snapshot_keys <repo>
+# "<raw-id>\t<identity>" per snapshot, identity = original // id. restic
+# copy gives copies new ids but stamps `original` — identity comparison is
+# what keeps reconcile idempotent (spec §4).
+bkp::restic::snapshot_keys() {
+  setopt local_options pipe_fail
+  bkp::restic "$1" snapshots --json |
+    jq -r '(. // [])[] | [.id, (.original // .id)] | @tsv' 2>/dev/null || {
+    log_error "bkp: cannot list snapshots in $1"
+    return 2
+  }
+}
+
+# bkp::reconcile::plan <staging_tsv> <target_tsv>
+# Pure planner (spec §12 test 7). Inputs are snapshot_keys lines. Emits the
+# copy plan converging both repos toward the union:
+#   push\t<raw-id>   copy staging -> target
+#   pull\t<raw-id>   copy target  -> staging
+bkp::reconcile::plan() {
+  local -A s_key=() t_key=()
+  local line
+  for line in ${(f)1}; do s_key[${line##*$'\t'}]="${line%%$'\t'*}"; done
+  for line in ${(f)2}; do t_key[${line##*$'\t'}]="${line%%$'\t'*}"; done
+  local key
+  for key in ${(ko)s_key}; do
+    [[ -z "${t_key[$key]:-}" ]] && print -r -- "push"$'\t'"$s_key[$key]"
+  done
+  for key in ${(ko)t_key}; do
+    [[ -z "${s_key[$key]:-}" ]] && print -r -- "pull"$'\t'"$t_key[$key]"
+  done
+  return 0
+}
+
 # bkp::capture::run [<manifest>] [<config>]
 # One capture tick (spec §4): lock -> ensure staging -> git sidecars ->
 # resolve manifest -> restic backup -> thin. Sidecars are written FIRST so

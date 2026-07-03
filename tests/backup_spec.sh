@@ -1092,6 +1092,49 @@ EOF
     End
   End
 
+  Describe 'bkp::reconcile — planner'
+    It 'identity-matched copies produce no ops'
+      noop() {
+        source "$LIB/backup.zsh"
+        # target s1c is a copy of staging s1 (original=s1): already converged.
+        bkp::reconcile::plan $'s1\ts1' $'s1c\ts1' && print converged
+      }
+      When run noop
+      The output should equal "converged"
+    End
+
+    It 'pushes staging-only and pulls target-only raw ids, sorted'
+      diverged() {
+        source "$LIB/backup.zsh"
+        bkp::reconcile::plan $'s1\ts1\ns2\ts2\nb9\ta0' $'s1c\ts1\nt7\tt7'
+      }
+      When run diverged
+      The line 1 should equal "push${TAB}b9"
+      The line 2 should equal "push${TAB}s2"
+      The line 3 should equal "pull${TAB}t7"
+      The lines of output should equal 3
+    End
+
+    It 'is empty for empty inputs'
+      empty() { source "$LIB/backup.zsh"; bkp::reconcile::plan '' '' && print none; }
+      When run empty
+      The output should equal "none"
+    End
+
+    It 'snapshot_keys emits raw id + identity (original wins)'
+      keys() {
+        source "$LIB/backup.zsh"
+        bkp::restic() {
+          printf '%s' '[{"id":"aaa","time":"t"},{"id":"bbb","original":"orig1","time":"t"}]'
+        }
+        bkp::restic::snapshot_keys /any
+      }
+      When run keys
+      The line 1 should equal "aaa${TAB}aaa"
+      The line 2 should equal "bbb${TAB}orig1"
+    End
+  End
+
   Describe 'integration smoke — real restic (BKP_SMOKE=1)'
     Skip if 'BKP_SMOKE != 1 (run: BKP_SMOKE=1 shellspec tests/backup_spec.sh)' \
       test "${BKP_SMOKE:-0}" != 1
