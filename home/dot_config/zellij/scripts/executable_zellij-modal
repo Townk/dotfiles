@@ -143,19 +143,24 @@ focus_self() {
   "$ZELLIJ_BIN" action focus-pane-id "terminal_${ZELLIJ_PANE_ID}" 2>/dev/null || true
 }
 
-# Re-assert focus on our own floating pane shortly after it finishes opening.
+# Re-assert focus on our own floating pane after it finishes opening.
 # When the modal is spawned over a pane running a fullscreen TUI (e.g. an
-# editor), zellij can leave keyboard focus on that underlying tiled pane — a
-# known quirk where the float is visible but keystrokes still go to the pane
-# below (zellij-org/zellij#2116, #4656). The eager focus_self above runs
-# before our UI starts, so a late focus event can still steal it back; this
-# deferred re-focus lands once the float is fully registered and pulls the
-# keyboard into it. Backgrounded so it survives the `exec` in action mode.
+# editor, or an agent TUI like Claude Code), zellij can leave keyboard focus on
+# that underlying tiled pane — a known quirk where the float is visible but
+# keystrokes still go to the pane below (zellij-org/zellij#2116, #4656). The
+# eager focus_self above runs before our UI starts, so a late focus event steals
+# it back. A SINGLE deferred re-focus (we used to sleep 0.2 once) is enough for a
+# quiet editor but not for an aggressive TUI that re-grabs focus during its own
+# render pass well after 200ms — so re-assert several times across ~1s. Each
+# focus-pane-id to our own pane is idempotent (no flicker if we already hold it),
+# and hits on a closed pane are harmless. Backgrounded so it survives the `exec`.
 focus_self_deferred() {
   [[ -n "${ZELLIJ_PANE_ID:-}" ]] || return 0
   (
-    sleep 0.2
-    "$ZELLIJ_BIN" action focus-pane-id "terminal_${ZELLIJ_PANE_ID}" 2>/dev/null || true
+    for _ in 1 2 3 4 5 6; do
+      sleep 0.15
+      "$ZELLIJ_BIN" action focus-pane-id "terminal_${ZELLIJ_PANE_ID}" 2>/dev/null || true
+    done
   ) &
 }
 
