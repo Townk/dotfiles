@@ -1085,6 +1085,79 @@ EOF
       The stderr should include "config not found"
     End
 
+    It 'sweeps once per tick (repo plan + file list share one pass)'
+      onesweep() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        # counting chezmoi stub: each sweep queries `chezmoi managed` once
+        printf '#!/bin/sh\necho x >> "%s"\nexit 0\n' "$FIX/chezmoi-calls" > "$STUB/chezmoi"
+        chmod +x "$STUB/chezmoi"
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        grep -c x "$FIX/chezmoi-calls"
+      }
+      When run onesweep
+      The output should equal 1
+    End
+
+    It 'captures fresh sidecars even when BKP_WIP_DIR is outside every root'
+      wipcapture() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        # a real repo inside the root produces a sidecar in the (external) wip dir
+        export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$FIX/gitconfig"
+        printf '[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n' > "$FIX/gitconfig"
+        git -C "$FIX/root" init -q
+        git -C "$FIX/root" add f.txt
+        git -C "$FIX/root" commit -qm init
+        files_from_capture() {  # intercept the file list restic receives
+          bkp::restic() {
+            local repo="$1"; shift
+            case "$1 ${2:-}" in
+              'cat config') return 1 ;;
+              backup*)      cp "$3" "$FIX/captured-list"; return 0 ;;
+              'snapshots --json') printf '[]' ;;
+              *) return 0 ;;
+            esac
+          }
+          bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null
+        }
+        files_from_capture || return 1
+        grep -c "meta.json" "$FIX/captured-list"
+      }
+      When run wipcapture
+      The output should equal 1
+    End
+
+    It 'BKP_PROGRESS=1 drops --quiet and narrates the phases'
+      narrated() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        # keep gum out of the interactive path: the spinner is untestable
+        # TUI noise here; the log-line fallback is the assertable behavior
+        gum() { return 127 }
+        export BKP_PROGRESS=1
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" || return 1
+        print -r -- "quiet-count:$(grep -- backup "$FIX/calls" | grep -c -- --quiet || true)"
+      }
+      When run narrated
+      The output should include "resolving capture set"
+      The output should include "capturing"
+      The output should include "applying retention"
+      The output should include "quiet-count:0"
+    End
+
+    It 'stays --quiet for the scheduled (non-interactive) path'
+      scheduled() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        export BKP_PROGRESS=0
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        grep -- backup "$FIX/calls" | grep -c -- --quiet
+      }
+      When run scheduled
+      The output should equal 1
+    End
+
     It 'restic rc 3 (partial read) warns but keeps the tick alive'
       partial() {
         source "$LIB/backup.zsh"

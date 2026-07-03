@@ -823,10 +823,22 @@ bkp::reconcile::plan() {
   return 0
 }
 
+# bkp::ux::interactive — is a human watching this run?
+# BKP_PROGRESS=1/0 overrides (test seam / user escape hatch); default is
+# "stderr is a terminal", which is false under launchd.
+bkp::ux::interactive() {
+  case "${BKP_PROGRESS:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [[ -t 2 ]]
+}
+
 # bkp::capture::run [<manifest>] [<config>]
-# One capture tick (spec §4): lock -> ensure staging -> git sidecars ->
-# resolve manifest -> restic backup -> thin. Sidecars are written FIRST so
-# the sweep captures them (BKP_WIP_DIR lives under a manifest root).
+# One capture tick (spec §4): lock -> ensure staging -> ONE sweep (repo plan
+# + file list share the pass) -> git sidecars -> restic backup -> thin.
+# Sidecar files are appended to the file list explicitly, so fresh bundles
+# ride this very snapshot no matter where BKP_WIP_DIR lives.
 bkp::capture::run() {
   local manifest="${1:-$BKP_MANIFEST}"
   local BKP_CONFIG="${2:-$BKP_CONFIG}"   # dynamic scope: bkp::restic sees it
@@ -838,22 +850,56 @@ bkp::capture::run() {
   staging=$(bkp::config::staging_path) || return 2
   bkp::capture::ensure_repo "$staging" || return 1
 
-  local repo bundle warn
-  while IFS=$'\t' read -r repo bundle warn; do
-    [[ -z "$repo" ]] && continue
-    bkp::project::sidecar "$repo" "$bundle" "$warn"
-  done < <(bkp::manifest::repos "$manifest")
-
-  local files_from
+  local sweep_file files_from
+  sweep_file=$(mktemp "${TMPDIR:-/tmp}/bkp-sweep.XXXXXX") || return 1
   files_from=$(mktemp "${TMPDIR:-/tmp}/bkp-files.XXXXXX") || return 1
   {
-    bkp::manifest::files "$manifest" > "$files_from" || return 2
+    # The sweep is the silent minute — narrate it, with a spinner on top
+    # when a human is watching and gum is around.
+    log_info "bkp: resolving capture set"
+    local sweep_rc=0
+    # Real binary only: a gum FUNCTION is the tests' opt-out seam.
+    if bkp::ux::interactive && command -v gum >/dev/null 2>&1 && (( ! ${+functions[gum]} )); then
+      bkp::manifest::sweep "$manifest" > "$sweep_file" &
+      local sweep_pid=$!
+      gum spin --spinner dot --title "resolving capture set…" -- \
+        zsh -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done' _ "$sweep_pid" || :
+      wait "$sweep_pid" || sweep_rc=$?
+    else
+      bkp::manifest::sweep "$manifest" > "$sweep_file" || sweep_rc=$?
+    fi
+    (( sweep_rc )) && return 2
+
+    local repo bundle warn nrepos=0
+    while IFS=$'\t' read -r repo bundle warn; do
+      [[ -z "$repo" ]] && continue
+      nrepos=$(( nrepos + 1 ))
+      bkp::project::sidecar "$repo" "$bundle" "$warn"
+    done < <(awk -F'\t' '$1 == "R" { print $2 "\t" $3 "\t" $4 }' "$sweep_file")
+
+    # File list = swept files minus (possibly stale) wip entries, plus the
+    # wip dir as it stands after the sidecars above were (re)written.
+    awk -F'\t' -v wip="$BKP_WIP_DIR/" \
+      '$1 == "F" && index($2, wip) != 1 { print $2 }' "$sweep_file" > "$files_from"
+    local wf
+    for wf in "$BKP_WIP_DIR"/*(N.); do
+      print -r -- "$wf" >> "$files_from"
+    done
+
+    local nfiles
+    nfiles=$(( $(wc -l < "$files_from") ))
+    log_info "bkp: capturing $nfiles files ($nrepos git repos) -> $staging"
+
     bkp::restic "$staging" unlock >/dev/null 2>&1 || :   # stale-lock recovery
     # -verbatim is load-bearing: plain --files-from glob-expands every line,
     # so a captured file named "[.md" (tldr pages ship one) aborts the whole
     # backup with Go's "syntax error in pattern". Our list is literal paths.
+    # Interactive runs keep restic's native progress display; scheduled runs
+    # stay --quiet for the log.
+    local -a quiet=(--quiet)
+    bkp::ux::interactive && quiet=()
     local backup_rc=0
-    bkp::restic "$staging" backup --files-from-verbatim "$files_from" --quiet || backup_rc=$?
+    bkp::restic "$staging" backup --files-from-verbatim "$files_from" "${quiet[@]}" || backup_rc=$?
     if (( backup_rc == 3 )); then
       # rc 3 = snapshot CREATED, some sources unreadable (deleted between
       # sweep and read, or permission-denied). A partial snapshot beats none.
@@ -862,8 +908,9 @@ bkp::capture::run() {
       return 1
     fi
   } always {
-    rm -f "$files_from"
+    rm -f "$sweep_file" "$files_from"
   }
+  log_info "bkp: applying retention"
   bkp::capture::thin "$staging" "$manifest"
 }
 
