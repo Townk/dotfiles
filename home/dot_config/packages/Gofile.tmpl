@@ -4,16 +4,11 @@
 # line uninstalls the binary on next sync.
 
 # ai-playbook — the AI terminal assistant and themed input-widget backend
-# (input::confirm/line/choose/form shim over `ai-playbook input`).
+# (input::confirm/line/choose/form shim over `ai-playbook input`, the docked
+# pager, and the diff viewer — all subcommands of the one binary; installs the
+# short `apb` alias too via cmd/apb).
 github.com/Townk/ai-playbook/cmd/ai-playbook
-
-# ai-assist-input — prefilled textarea popup for the ai-assist terminal
-# assistant (Enter submits, Shift+Enter newlines).
-github.com/Townk/ai-assist-input
-
-# ai-assist-pager — interactive TUI markdown viewer for the docked agent pane
-# (no-wrap code/tables with horizontal scroll).
-github.com/Townk/ai-assist-pager
+github.com/Townk/ai-playbook/cmd/apb
 
 {{ if eq .profile "personal" -}}
 github.com/bscott/pm-cli/cmd/pm-cli
