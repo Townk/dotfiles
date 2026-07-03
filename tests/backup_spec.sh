@@ -1300,5 +1300,47 @@ EOF
       The line 3 should equal "world"
       The stderr should be defined   # restic/log chatter allowed, not required
     End
+
+    It 'reconcile converges a target and is idempotent (real restic copy)'
+      rsmoke() {
+        source "$LIB/backup.zsh"
+        FIX=$(mktemp -d)
+        export BKP_STATE_DIR="$FIX/state" BKP_WIP_DIR="$FIX/state/wip"
+        mkdir -p "$FIX/root"
+        print hello > "$FIX/root/f.txt"
+        printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
+        cat > "$FIX/c.toml" <<EOF
+[staging]
+path = "$FIX/repo"
+password_command = "echo smoke-pass"
+[[target]]
+name = "tmp"
+path = "$FIX/tgt"
+EOF
+        run_in_proc() {  # fresh process per op: locks are process-lifetime
+          zsh -c 'source "$1/backup.zsh"; "$2" "$3" "$4"' _ "$LIB" "$@"
+        }
+        run_in_proc bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null 2>&1 || return 1
+        run_in_proc bkp::reconcile::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null 2>&1 || return 1
+        tsnaps() {
+          RESTIC_REPOSITORY="$FIX/tgt" RESTIC_PASSWORD_COMMAND="echo smoke-pass" \
+            restic snapshots --json 2>/dev/null | jq length
+        }
+        n1=$(tsnaps)
+        run_in_proc bkp::reconcile::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null 2>&1 || return 1
+        n2=$(tsnaps)
+        print "$n1 $n2"
+        [ "$n1" = "$n2" ] && print idempotent
+        RESTIC_REPOSITORY="$FIX/tgt" RESTIC_PASSWORD_COMMAND="echo smoke-pass" \
+          restic restore latest --target "$FIX/out" --quiet >/dev/null 2>&1
+        cat "$FIX/out$FIX/root/f.txt"
+        rm -rf "$FIX"
+      }
+      When run rsmoke
+      The line 1 should equal "1 1"
+      The line 2 should equal "idempotent"
+      The line 3 should equal "hello"
+      The stderr should be defined
+    End
   End
 End
