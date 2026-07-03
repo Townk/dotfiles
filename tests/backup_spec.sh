@@ -1000,7 +1000,10 @@ EOF
         stub_restic
         bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
         grep -c "^$FIX/repo init" "$FIX/calls"
-        grep -c "^$FIX/repo backup --files-from" "$FIX/calls"
+        # MUST be the -verbatim variant: plain --files-from glob-expands each
+        # line, so a captured file literally named "[.md" (tldr pages ship
+        # one) kills the whole backup with Go's "syntax error in pattern".
+        grep -c "^$FIX/repo backup --files-from-verbatim " "$FIX/calls"
         grep -- forget "$FIX/calls"
       }
       When run tick
@@ -1845,6 +1848,9 @@ EOF
         export BKP_STATE_DIR="$FIX/state" BKP_WIP_DIR="$FIX/state/wip"
         mkdir -p "$FIX/root"
         print hello > "$FIX/root/f.txt"
+        # Glob-metacharacter filename: tldr pages ship a literal "[.md"; it
+        # must ride --files-from-verbatim without aborting the backup.
+        print bracket > "$FIX/root/[.md"
         printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
         printf '[staging]\npath = "%s/repo"\npassword_command = "echo smoke-pass"\n' "$FIX" > "$FIX/c.toml"
         run_tick() {  # fresh process per tick: the run-lock is process-lifetime
@@ -1858,6 +1864,7 @@ EOF
         RESTIC_REPOSITORY="$FIX/repo" RESTIC_PASSWORD_COMMAND="echo smoke-pass" \
           restic restore latest --target "$FIX/out" --quiet >/dev/null 2>&1
         cat "$FIX/out$FIX/root/f.txt"
+        cat "$FIX/out$FIX/root/[.md"
         rm -rf "$FIX"
       }
       When run smoke
@@ -1866,6 +1873,7 @@ EOF
       The line 1 should match pattern "[12]"
       The line 2 should equal "hello"
       The line 3 should equal "world"
+      The line 4 should equal "bracket"
       The stderr should be defined   # restic/log chatter allowed, not required
     End
 

@@ -826,7 +826,10 @@ bkp::capture::run() {
   {
     bkp::manifest::files "$manifest" > "$files_from" || return 2
     bkp::restic "$staging" unlock >/dev/null 2>&1 || :   # stale-lock recovery
-    bkp::restic "$staging" backup --files-from "$files_from" --quiet || return 1
+    # -verbatim is load-bearing: plain --files-from glob-expands every line,
+    # so a captured file named "[.md" (tldr pages ship one) aborts the whole
+    # backup with Go's "syntax error in pattern". Our list is literal paths.
+    bkp::restic "$staging" backup --files-from-verbatim "$files_from" --quiet || return 1
   } always {
     rm -f "$files_from"
   }
