@@ -692,4 +692,53 @@ EOF
       The stderr should include "unparseable snapshot list"
     End
   End
+
+  Describe 'bkp::config'
+    setup_fix() { FIX=$(mktemp -d); }
+    cleanup_fix() { rm -rf "$FIX"; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'reads staging path (~ expanded) and password command'
+      cfg() {
+        source "$LIB/backup.zsh"
+        printf '[staging]\npath = "~/repo"\npassword_command = "sec get x"\n' > "$FIX/c.toml"
+        bkp::config::staging_path "$FIX/c.toml"
+        bkp::config::password_command "$FIX/c.toml"
+      }
+      When run cfg
+      The line 1 should equal "$HOME/repo"
+      The line 2 should equal "sec get x"
+    End
+
+    It 'fails loudly when config.toml is missing'
+      nocfg() { source "$LIB/backup.zsh"; bkp::config::staging_path "$FIX/nope.toml"; }
+      When run nocfg
+      The status should equal 2
+      The stderr should include "config not found"
+    End
+
+    It 'fails loudly when [staging] is incomplete'
+      partial() {
+        source "$LIB/backup.zsh"
+        printf '[staging]\npath = "~/repo"\n' > "$FIX/c.toml"
+        bkp::config::password_command "$FIX/c.toml"
+      }
+      When run partial
+      The status should equal 2
+      The stderr should include "password_command"
+    End
+
+    It 'ships a valid config.toml.example'
+      example() {
+        source "$LIB/backup.zsh"
+        local ex="$SHELLSPEC_PROJECT_ROOT/home/dot_config/backup/config.toml.example"
+        bkp::config::staging_path "$ex" >/dev/null &&
+          bkp::config::password_command "$ex" >/dev/null &&
+          print ok
+      }
+      When run example
+      The output should equal ok
+    End
+  End
 End

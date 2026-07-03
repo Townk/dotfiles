@@ -401,6 +401,47 @@ bkp::manifest::repos() {
 
 # ── Capture + Storage ────────────────────────────────────────────────────────
 
+BKP_CONFIG="${BKP_CONFIG:-$HOME/.config/backup/config.toml}"
+
+# bkp::config::json [<file>]
+# The local-only deployment config as JSON (staging + targets + secret).
+bkp::config::json() {
+  local file="${1:-$BKP_CONFIG}"
+  [[ -f "$file" ]] || {
+    log_error "bkp: config not found: $file (copy config.toml.example and edit)"
+    return 2
+  }
+  yq -p toml -o json '.' "$file" 2>/dev/null || {
+    log_error "bkp: unparseable config: $file"
+    return 2
+  }
+}
+
+# bkp::config::staging_path [<file>] — the staging repo path, ~ expanded.
+bkp::config::staging_path() {
+  local json val
+  json=$(bkp::config::json "$@") || return 2
+  # capture-then-print: jq -e still writes "null" to stdout on a missing key
+  val=$(jq -er --arg home "$HOME" '.staging.path | sub("^~"; $home)' <<<"$json" 2>/dev/null) || {
+    log_error "bkp: config missing [staging].path"
+    return 2
+  }
+  print -r -- "$val"
+}
+
+# bkp::config::password_command [<file>]
+# The command that resolves the repo passphrase (1Password via
+# system-secrets) — the command string only, never the secret itself.
+bkp::config::password_command() {
+  local json val
+  json=$(bkp::config::json "$@") || return 2
+  val=$(jq -er '.staging.password_command' <<<"$json" 2>/dev/null) || {
+    log_error "bkp: config missing [staging].password_command"
+    return 2
+  }
+  print -r -- "$val"
+}
+
 # bkp::time::epoch <rfc3339>
 # RFC3339 -> unix epoch, in REPLY. Pure integer arithmetic (civil-days
 # algorithm) — no strptime, so no platform/TZ variance. Fractional seconds

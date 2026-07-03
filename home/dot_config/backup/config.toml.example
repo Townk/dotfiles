@@ -1,0 +1,20 @@
+# config.toml — THIS MACHINE's deployment: WHERE to store + the secret.
+# Local-only (never committed). Copy to ~/.config/backup/config.toml and edit.
+# The capture spec (what to back up, retention) lives in manifest.toml.
+
+[staging]
+path = "~/.local/state/terminal-backup/repo"
+password_command = "system-secrets get backup-repo"
+
+# Replication targets (reconcile): present -> converged, absent -> skipped
+# silently and retried next pass. Same passphrase as staging (one key, so
+# `restic copy` works everywhere).
+#
+# [[target]]
+# name = "ssd"
+# path = "/Volumes/BackupSSD/terminal-backup"
+# role = "master"          # never-prune deepest archive; omit -> mirror staging
+#
+# [[target]]
+# name = "onedrive"
+# path = "~/Library/CloudStorage/OneDrive-Company/terminal-backup"
