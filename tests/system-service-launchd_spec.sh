@@ -181,4 +181,50 @@ EOF
       The output should equal "false"
     End
   End
+
+  Describe 'list (idle labels for timer-driven services)'
+    # A bootstrapped interval/calendar/watch agent between fires is launchd
+    # "not running", but "stopped" reads as broken to a human. `list` shows
+    # those as idle (<schedule>); plain on-demand services stay "stopped".
+    # The internal `status` verb is UNCHANGED (restart-for's contract).
+    setup_sched() {
+      export SVCFILE="$TEST_TMP/services.toml"
+      cat > "$SVCFILE" <<'EOF'
+[half-hourly]
+cmd = ["/bin/echo", "tick"]
+start_interval = 1800
+
+[nightly]
+cmd = ["/bin/echo", "repack"]
+start_calendar_interval = {Hour = 3, Minute = 17}
+
+[watcher]
+cmd = ["/bin/echo", "sync"]
+watch_paths = ["/Volumes"]
+start_interval = 3600
+
+[classic]
+cmd = ["/bin/echo", "hi"]
+EOF
+      # Every service reports bootstrapped + cleanly exited (the idle state).
+      export STUB_RC=0
+      export STUB_PRINT="$(printf '\tstate = not running\n\tlast exit code = 0')"
+    }
+    BeforeEach 'setup_sched'
+    AfterEach 'unset SVCFILE STUB_RC STUB_PRINT'
+
+    It 'labels timer-driven services idle with their schedule'
+      rows() { zsh "$LAUNCHD" list | cut -f1,2; }
+      When run rows
+      The output should include "half-hourly	idle (every 30m)"
+      The output should include "nightly	idle (daily 03:17)"
+      The output should include "watcher	idle (every 1h + watch)"
+      The output should include "classic	stopped"
+    End
+
+    It 'keeps the internal status verb vocabulary untouched'
+      When run zsh "$LAUNCHD" status half-hourly
+      The output should equal "stopped"
+    End
+  End
 End

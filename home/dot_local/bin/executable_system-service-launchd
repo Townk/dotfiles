@@ -307,14 +307,45 @@ do_info() {
   fi
 }
 
+# svc::schedule_label <name>
+# Human-readable schedule for a timer-driven service — "every 30m",
+# "daily 03:17", "watch", joined with " + " when combined; empty for plain
+# on-demand/keep-alive services. Intervals print as hours when they divide
+# evenly, minutes otherwise.
+svc::schedule_label() {
+  svc::toml_json | jq -r --arg n "$1" '
+    def pad2: tostring | if length < 2 then "0" + . else . end;
+    .[$n] as $s
+    | [ (if $s.start_interval then
+           (if ($s.start_interval % 3600) == 0
+            then "every \($s.start_interval / 3600 | floor)h"
+            else "every \($s.start_interval / 60 | floor)m"
+            end)
+         else empty end),
+        (if $s.start_calendar_interval then
+           "daily \($s.start_calendar_interval.Hour // 0 | pad2):\($s.start_calendar_interval.Minute // 0 | pad2)"
+         else empty end),
+        (if $s.watch_paths then "watch" else empty end) ]
+    | join(" + ")'
+}
+
 # do_list — TSV rows: Service\tStatus\tUser\tFile (Source is prepended
-# by the dispatcher).
+# by the dispatcher). A bootstrapped timer/watch agent between fires is
+# launchd "not running", but "stopped" reads as broken to a human — those
+# render as "idle (<schedule>)". Display only: the `status` verb keeps the
+# running/stopped/error/none vocabulary (restart-for's contract).
 do_list() {
-  local user
+  # NB: "st", not "status" — status is zsh's read-only alias for $?.
+  local user st label
   user=$(id -un)
   svc::names | while IFS= read -r name; do
     [[ -z "$name" ]] && continue
-    printf '%s\t%s\t%s\t%s\n' "$name" "$(svc::status "$name")" "$user" "$(svc::plist_path "$name")"
+    st=$(svc::status "$name")
+    if [[ "$st" == stopped ]]; then
+      label=$(svc::schedule_label "$name")
+      [[ -n "$label" ]] && st="idle ($label)"
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$name" "$st" "$user" "$(svc::plist_path "$name")"
   done
 }
 
