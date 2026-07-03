@@ -1135,6 +1135,137 @@ EOF
     End
   End
 
+  Describe 'bkp::reconcile — engine'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml"
+      printf 'roots = []\n' > "$FIX/m.toml"
+      printf '[staging]\npath = "%s/stg"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      # staging: s1 (10:01) + s2 (10:14); target: s1-copy + its own t9 (Jan 1).
+      printf '%s' '[{"id":"s1","time":"2026-01-02T10:01:00Z"},{"id":"s2","time":"2026-01-02T10:14:00Z"}]' > "$FIX/stg.json"
+      printf '%s' '[{"id":"s1c","original":"s1","time":"2026-01-02T10:01:00Z"},{"id":"t9","time":"2026-01-01T09:00:00Z"}]' > "$FIX/tgt.json"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_CONFIG; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    # Recorder stub keyed by repo basename: <base>.json feeds snapshots,
+    # $FIX/has-<base> makes `cat config` succeed (repo "exists").
+    stub_restic() {
+      bkp::restic() {
+        local repo="$1"; shift
+        print -r -- "$repo $*" >> "$FIX/calls"
+        case "$1 ${2:-}" in
+          'cat config')       [ -e "$FIX/has-${repo:t}" ] ;;
+          'snapshots --json') cat "$FIX/${repo:t}.json" 2>/dev/null || printf '[]' ;;
+          *) return 0 ;;
+        esac
+      }
+    }
+
+    It 'converges a fresh mirror target and applies retention'
+      mirror() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::reconcile::one "$FIX/stg" tgt "$FIX/tgt" mirror "$FIX/m.toml" >/dev/null || return 1
+        grep -c -- "--copy-chunker-params" "$FIX/calls"
+        grep -- "copy --from-repo $FIX/stg" "$FIX/calls" | grep -c " s2$"
+        grep -- "copy --from-repo $FIX/tgt" "$FIX/calls" | grep -c " t9$"
+        grep -- forget "$FIX/calls"
+      }
+      When run mirror
+      The line 1 should equal 1
+      The line 2 should equal 1
+      The line 3 should equal 1
+      The line 4 should equal "$FIX/tgt forget t9"
+    End
+
+    It 'master role converges without forgetting'
+      master() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::reconcile::one "$FIX/stg" tgt "$FIX/tgt" master "$FIX/m.toml" >/dev/null || return 1
+        grep -c -- "copy --from-repo" "$FIX/calls"
+        grep -c forget "$FIX/calls" || true
+      }
+      When run master
+      The line 1 should equal 2
+      The line 2 should equal 0
+    End
+
+    It 'an already-converged pair copies nothing'
+      converged() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        : > "$FIX/has-tgt"
+        printf '%s' '[{"id":"s1","time":"2026-01-02T10:01:00Z"}]' > "$FIX/stg.json"
+        printf '%s' '[{"id":"s1c","original":"s1","time":"2026-01-02T10:01:00Z"}]' > "$FIX/tgt.json"
+        bkp::reconcile::one "$FIX/stg" tgt "$FIX/tgt" mirror "$FIX/m.toml" >/dev/null || return 1
+        grep -c -- "copy" "$FIX/calls" || true
+      }
+      When run converged
+      The output should equal 0
+    End
+
+    It 'run skips absent targets and reconciles present ones'
+      pass() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        cat >> "$FIX/c.toml" <<EOF
+[[target]]
+name = "tgt"
+path = "$FIX/tgt"
+[[target]]
+name = "ghost"
+path = "$FIX/gone/tb"
+EOF
+        bkp::reconcile::run "$FIX/m.toml" "$FIX/c.toml" | grep -c "ghost' absent"
+        grep -c "^$FIX/tgt copy\|^$FIX/stg copy" "$FIX/calls"
+      }
+      When run pass
+      The line 1 should equal 1
+      The line 2 should equal 2
+    End
+
+    It 'prune hits staging + present initialized mirrors only'
+      prunes() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        mkdir -p "$FIX/mastertb"
+        : > "$FIX/has-tgt"
+        cat >> "$FIX/c.toml" <<EOF
+[[target]]
+name = "tgt"
+path = "$FIX/tgt"
+[[target]]
+name = "arch"
+path = "$FIX/mastertb/repo"
+role = "master"
+[[target]]
+name = "ghost"
+path = "$FIX/gone/tb"
+EOF
+        bkp::reconcile::prune "$FIX/c.toml" >/dev/null || return 1
+        grep -c "prune" "$FIX/calls"
+        grep "prune" "$FIX/calls" | head -2
+      }
+      When run prunes
+      The line 1 should equal 2
+      The line 2 should equal "$FIX/stg prune --quiet"
+      The line 3 should equal "$FIX/tgt prune --quiet"
+    End
+
+    It 'worker --help prints usage'
+      rhelp() {
+        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-reconcile" --help
+      }
+      When run rhelp
+      The status should be success
+      The output should include "system-backup-reconcile"
+      The output should include "--prune"
+    End
+  End
+
   Describe 'integration smoke — real restic (BKP_SMOKE=1)'
     Skip if 'BKP_SMOKE != 1 (run: BKP_SMOKE=1 shellspec tests/backup_spec.sh)' \
       test "${BKP_SMOKE:-0}" != 1

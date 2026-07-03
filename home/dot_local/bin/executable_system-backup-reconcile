@@ -1,0 +1,67 @@
+#!/usr/bin/env zsh
+# system-backup-reconcile — worker: converge replication targets.
+#
+# For every [[target]] in config.toml that is PRESENT (parent dir exists and
+# is writable): initialize it from staging on first contact
+# (--copy-chunker-params), `restic copy` both ways toward the union of
+# snapshots, then apply the retention ladder to mirrors (role = "master"
+# never forgets — deepest archive). Absent targets are skipped silently and
+# retried on the next pass.
+#
+# --prune runs the expensive daily repack instead (staging + present
+# initialized mirrors).
+#
+# Usage:
+#   system-backup-reconcile [--manifest <file>] [--config <file>] [--prune]
+
+set -eu -o pipefail
+
+source "${BKP_LIB:-$HOME/.local/lib}/backup.zsh"
+
+usage() {
+  cat <<EOF
+Usage:
+  system-backup-reconcile [--manifest <file>] [--config <file>] [--prune]
+
+Converge present replication targets toward the union of snapshots and apply
+retention to mirrors. With --prune, run the daily repack instead.
+Defaults: manifest $BKP_MANIFEST, config $BKP_CONFIG.
+EOF
+}
+
+main() {
+  local manifest="$BKP_MANIFEST" config="$BKP_CONFIG" prune=0
+  while (( $# )); do
+    case "$1" in
+      --manifest)
+        [[ $# -ge 2 ]] || die "--manifest requires a value"
+        manifest="$2"
+        shift 2
+        ;;
+      --config)
+        [[ $# -ge 2 ]] || die "--config requires a value"
+        config="$2"
+        shift 2
+        ;;
+      --prune)
+        prune=1
+        shift
+        ;;
+      -h | --help | help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+  if (( prune )); then
+    bkp::reconcile::prune "$config"
+  else
+    bkp::reconcile::run "$manifest" "$config"
+  fi
+}
+
+main "$@"

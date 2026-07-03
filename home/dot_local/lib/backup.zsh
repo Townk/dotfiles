@@ -758,3 +758,112 @@ bkp::capture::run() {
   }
   bkp::capture::thin "$staging" "$manifest"
 }
+
+# ── Reconcile ────────────────────────────────────────────────────────────────
+
+# bkp::restic::copy <src> <dst> <ids…>
+# restic copy through the seam. Both repos share one passphrase (spec §8) —
+# required, since copy needs credentials for both ends.
+bkp::restic::copy() {
+  local src="$1" dst="$2"; shift 2
+  local pwcmd
+  pwcmd=$(bkp::config::password_command) || return 2
+  bkp::restic "$dst" copy --from-repo "$src" --from-password-command "$pwcmd" "$@"
+}
+
+# bkp::reconcile::ensure_target <staging> <target>
+# First contact with a target: init sharing staging's chunker params so
+# `restic copy` preserves dedup and stays idempotent across re-copies (§4).
+bkp::reconcile::ensure_target() {
+  local staging="$1" target="$2"
+  bkp::restic "$target" cat config >/dev/null 2>&1 && return 0
+  local pwcmd
+  pwcmd=$(bkp::config::password_command) || return 2
+  log_info "bkp: initializing target repo at $target"
+  mkdir -p "$target"
+  bkp::restic "$target" init --from-repo "$staging" \
+    --from-password-command "$pwcmd" --copy-chunker-params
+}
+
+# bkp::reconcile::one <staging> <name> <path> <role> <manifest>
+# Converge one present target toward the union, then apply retention to
+# mirrors. A master keeps everything: no forget, ever (deepest archive).
+bkp::reconcile::one() {
+  local staging="$1" name="$2" tpath="$3" role="$4" manifest="$5"
+  bkp::reconcile::ensure_target "$staging" "$tpath" || return 1
+  local s_keys t_keys plan
+  s_keys=$(bkp::restic::snapshot_keys "$staging") || return 1
+  t_keys=$(bkp::restic::snapshot_keys "$tpath") || return 1
+  plan=$(bkp::reconcile::plan "$s_keys" "$t_keys")
+  local line
+  local -a push=() pull=()
+  for line in ${(f)plan}; do
+    case "$line" in
+      push$'\t'*) push+=("${line#push$'\t'}") ;;
+      pull$'\t'*) pull+=("${line#pull$'\t'}") ;;
+    esac
+  done
+  if (( ${#push} )); then
+    bkp::restic::copy "$staging" "$tpath" "${push[@]}" || return 1
+  fi
+  if (( ${#pull} )); then
+    bkp::restic::copy "$tpath" "$staging" "${pull[@]}" || return 1
+  fi
+  if [[ "$role" != master ]]; then
+    bkp::capture::thin "$tpath" "$manifest" || return 1
+  fi
+  log_ok "bkp: target '$name' reconciled (${#push} pushed, ${#pull} pulled)"
+}
+
+# bkp::reconcile::run [<manifest>] [<config>]
+# One reconcile pass (spec §4): every configured target that is present gets
+# converged; absent targets are skipped silently and retried next pass.
+bkp::reconcile::run() {
+  local manifest="${1:-$BKP_MANIFEST}"
+  local BKP_CONFIG="${2:-$BKP_CONFIG}"   # dynamic scope, like capture::run
+  bkp::lock reconcile || {
+    log_info "bkp: reconcile already running — coalescing"
+    return 0
+  }
+  local staging targets
+  staging=$(bkp::config::staging_path) || return 2
+  targets=$(bkp::config::targets) || return 2
+  [[ -z "$targets" ]] && return 0   # staging-only setup: nothing to do
+    # NB: "tpath", not "path" — a lowercase `local path` would shadow zsh's
+  # special $path array (tied to $PATH) and wipe command lookup in-scope.
+  local name tpath role rc=0
+  while IFS=$'\t' read -r name tpath role; do
+    [[ -z "$name" ]] && continue
+    if ! bkp::target::present "$tpath"; then
+      log_info "bkp: target '$name' absent — skipped"
+      continue
+    fi
+    bkp::reconcile::one "$staging" "$name" "$tpath" "$role" "$manifest" || rc=1
+  done <<<"$targets"
+  return $rc
+}
+
+# bkp::reconcile::prune [<config>]
+# The expensive daily repack (spec §5): staging + present, initialized,
+# non-master targets. Exclusive restic op — a lock conflict with a running
+# capture fails loudly; the next daily run retries.
+bkp::reconcile::prune() {
+  local BKP_CONFIG="${1:-$BKP_CONFIG}"
+  bkp::lock reconcile || {
+    log_info "bkp: reconcile busy — prune skipped"
+    return 0
+  }
+  local staging targets rc=0
+  staging=$(bkp::config::staging_path) || return 2
+  targets=$(bkp::config::targets) || return 2
+  bkp::restic "$staging" prune --quiet || rc=1
+  local name tpath role
+  while IFS=$'\t' read -r name tpath role; do
+    [[ -z "$name" ]] && continue
+    [[ "$role" == master ]] && continue
+    bkp::target::present "$tpath" || continue
+    bkp::restic "$tpath" cat config >/dev/null 2>&1 || continue
+    bkp::restic "$tpath" prune --quiet || rc=1
+  done <<<"$targets"
+  return $rc
+}
