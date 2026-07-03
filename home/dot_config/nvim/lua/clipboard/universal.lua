@@ -1,31 +1,31 @@
 --------------------------------------------------------------------------------
--- universal.lua — type-preserving clipboard provider for SSH NeoVim.
+-- universal.lua — type-preserving clipboard provider for NeoVim.
 --------------------------------------------------------------------------------
--- Talks the Phase 5 clipboard-bridge framing protocol over the reverse SSH
--- tunnel (the clipboard-bridge launchd service on the Mac, reached at loopback
--- TCP 127.0.0.1:2490 — the RemoteForward endpoint; see ~/.ssh/config.d/
--- clipboard.config). The bridge serves a length-prefixed binary protocol
--- instead of bare pbpaste, so we carry the register TYPE across machines, not
--- just the text:
+-- Talks the clipboard-bridge framing protocol to a loopback TCP port served by
+-- the clipboard-bridge launchd service, which speaks a length-prefixed binary
+-- protocol instead of bare pbpaste so we carry the register TYPE, not just text:
 --
 --   paste()  → G (get text) + R (get-regtype)  → {lines, regtype}
---   copy()   → T (set text + regtype)            when bridge-up
+--   copy()   → T (set text + regtype)
 --
--- This is what finally makes a visual-BLOCK yank (regtype "b") keep its shape
--- across an SSH boundary: the laptop records the regtype when nvim copies, and
--- hands it back on the next paste. The prior provider read only text and
--- inferred the type, so block-ness was lost on the round-trip and yanky.nvim
--- rejected it with E5108 "provider returned invalid data".
+-- This is what makes a visual-BLOCK yank (regtype "b") keep its shape: the
+-- service records the regtype when nvim copies and hands it back on the next
+-- paste (a hash check self-invalidates it if anything else changed the
+-- clipboard meanwhile). The prior provider read only text and inferred the
+-- type, so block-ness was lost.
 --
--- Bridge-down (iPad/Blink — no reverse tunnel, OSC 52 has no read): copy()
--- falls back to write-only OSC 52 (text rides up through Zellij/WezTerm to the
--- host clipboard) and paste() serves the per-process {text, regtype} cache, so
--- yank-then-put stays type-correct in-session and never queries the terminal
--- (Zellij refuses OSC 52 reads — the hang this bridge exists to avoid). Empty
--- cache + bridge-down falls back to the unnamed register.
+-- TWO modes, one protocol — only the port differs:
+--   * SSH   (127.0.0.1:2490) — the RemoteForward endpoint: reads/writes the
+--            PEER's clipboard across the reverse tunnel, so a block yanked in
+--            remote nvim pastes as a block, cross-machine.
+--   * local (127.0.0.1:2489) — this Mac's OWN clipboard-bridge service, so a
+--            block copied anywhere (locally, or pushed here from a remote by
+--            its T op) pastes as a block in local nvim too.
 --
--- SSH-only: options.lua gates setup() on SSH_CONNECTION/SSH_CLIENT/SSH_TTY, so
--- local NeoVim keeps LazyVim's default pbcopy/pbpaste.
+-- Fallbacks when the bridge is unreachable: SSH → write-only OSC 52 copy /
+-- per-process cache paste (iPad/Blink, no tunnel, and Zellij refuses OSC 52
+-- reads); local → direct pbcopy/pbpaste (same as LazyVim's default, minus the
+-- type). Empty cache + no bridge falls back to the unnamed register.
 local M = {}
 
 local function ssh()
@@ -37,11 +37,19 @@ local function cache_path()
   return cache .. "/nvim-clipboard/last"
 end
 
--- The reverse-forwarded peer clipboard is a loopback TCP port (see
--- ~/.ssh/config.d/clipboard.config): a forwarded unix socket goes stale on an
--- unclean disconnect and macOS ssh won't clear it; a port frees itself.
+-- Loopback TCP (not a unix socket): a forwarded socket goes stale on an unclean
+-- disconnect and macOS ssh won't clear it; a port frees itself. BRIDGE_PORT is
+-- chosen by setup() per mode (2490 SSH / 2489 local); CLIPBOARD_BRIDGE_PORT
+-- overrides it (tests).
 local BRIDGE_HOST = "127.0.0.1"
 local BRIDGE_PORT = 2490
+
+local function pbcopy(text)
+  vim.fn.system({ "pbcopy" }, text)
+end
+local function pbpaste()
+  return vim.fn.systemlist({ "pbpaste" })
+end
 
 --------------------------------------------------------------------------------
 -- Regtype normalization. NeoVim's g:clipboard copy() gets one of "v" charwise,
@@ -171,9 +179,9 @@ local function write_cache(lines, regtype)
   end
 end
 
--- SSH copy. Always cache locally. Bridge-up → push text+regtype to the host
--- clipboard with the T op (carries the register type across the tunnel).
--- Bridge-down or push failure → write-only OSC 52 (text only).
+-- copy. Always cache locally, then push text+regtype to the bridge with T
+-- (records the register type). On an unreachable bridge: SSH → write-only
+-- OSC 52 (text rides up through Zellij/WezTerm); local → direct pbcopy.
 function M.copy(reg)
   local osc52 = require("vim.ui.clipboard.osc52").copy(reg)
   return function(lines, regtype)
@@ -182,15 +190,19 @@ function M.copy(reg)
     local text = table.concat(lines, "\n")
     local resp = frame_request(BRIDGE_HOST, BRIDGE_PORT, "T", rt .. text, 1000)
     if resp and resp[1] == "O" then
-      return -- pushed to the host clipboard with its type; done
+      return -- set the clipboard with its type via the bridge; done
     end
-    osc52(lines) -- bridge-down or push failed: OSC 52 (text only)
+    if ssh() then
+      osc52(lines)
+    else
+      pbcopy(text)
+    end
   end
 end
 
--- SSH paste. Bridge-up → G (text) + R (regtype) over the tunnel; the regtype is
--- authoritative (block preserved across machines). Bridge-down → cached
--- {text, regtype}; empty cache → unnamed register (old no-hang behavior).
+-- paste. Bridge → G (text) + R (regtype); the regtype is authoritative (block
+-- preserved). On an unreachable bridge: cached {text, regtype}; then, local
+-- only, direct pbpaste (type inferred); SSH empty-cache → unnamed register.
 function M.paste()
   return function()
     local cached_rt, cached_text = read_cache()
@@ -210,15 +222,20 @@ function M.paste()
     if cached_text then
       return { vim.split(cached_text, "\n", { plain = true }), cached_rt or "v" }
     end
+    if not ssh() then
+      local out = pbpaste()
+      return { out, infer_regtype(table.concat(out, "\n")) }
+    end
     return { vim.fn.split(vim.fn.getreg(""), "\n"), vim.fn.getregtype("") }
   end
 end
 
 function M.setup()
-  if not ssh() then return end
+  local is_ssh = ssh()
+  BRIDGE_PORT = tonumber(vim.env.CLIPBOARD_BRIDGE_PORT) or (is_ssh and 2490 or 2489)
   vim.opt.clipboard = "unnamedplus"
   vim.g.clipboard = {
-    name = "universal-ssh",
+    name = is_ssh and "universal-ssh" or "universal-local",
     copy = { ["+"] = M.copy("+"), ["*"] = M.copy("*") },
     paste = { ["+"] = M.paste(), ["*"] = M.paste() },
   }

@@ -56,19 +56,17 @@ vim.g.lazyvim_python_ruff = "ruff"
 -- response...") because Zellij deliberately refuses OSC 52 reads. The fallout:
 -- plain `y` never reached the host clipboard, and `"*y` froze until Ctrl-C.
 --
--- On SSH we re-enable `unnamedplus` and install a type-preserving provider
--- (lua/clipboard/universal.lua) that keeps the existing transport —
--- write-only OSC 52 copy (yanks ride up through Zellij/WezTerm to the host
--- clipboard; no terminal query, no hang) + a paste that reads the host
--- clipboard back through the reverse SSH tunnel (the clipboard-bridge
--- launchd service, socket at $HOME/.local/state/runtime/chezmoi-system/
--- clipboard-bridge.sock) AND restores the register type from a tiny
--- per-process cache. The prior provider returned a hardcoded regtype "v",
--- so a visual-BLOCK yank lost its shape on the round-trip and yanky.nvim
--- rejected it with E5108; the cache fixes that. Bridge-down (iPad/Blink,
--- no tunnel) serves the cache; empty cache + bridge-down falls back to the
--- unnamed register, preserving the old no-hang behavior. Gated to SSH so
--- local Neovim keeps pbcopy.
+-- We install a type-preserving provider (lua/clipboard/universal.lua) that
+-- talks the clipboard-bridge framing protocol to a loopback TCP port and
+-- restores the register type (so a visual-BLOCK yank keeps its shape — the
+-- prior provider hardcoded regtype "v", which lost block-ness and tripped
+-- E5108). Two modes, one protocol: over SSH it targets the reverse-forwarded
+-- PEER clipboard (:2490) for cross-machine yank/paste; locally it targets this
+-- Mac's OWN clipboard-bridge service (:2489) so block yanks are preserved in
+-- local nvim too. Fallbacks: SSH → write-only OSC 52 copy (no terminal query,
+-- so no hang from Zellij refusing OSC 52 reads) + per-process cache paste;
+-- local → direct pbcopy/pbpaste. The provider re-enables `unnamedplus`, which
+-- LazyVim clears on SSH to dodge the built-in OSC-52 paste hang.
 require("clipboard.universal").setup()
 
 -- Define the paths to add. Adjust the Homebrew path if necessary (e.g., to /usr/local/bin for Intel Macs).
