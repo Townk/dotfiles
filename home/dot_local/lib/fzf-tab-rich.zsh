@@ -49,22 +49,24 @@ typeset -gA _ftb_rich_color=()
   done
 }
 
-# Muted color for the description half of a completion (the value stays default).
+# Value (candidate) color = blue; description half = muted grey.
+typeset -g _ftb_rich_value="$(ftb_rich::_esc "${C_HEX_BLUE:-}")"
 typeset -g _ftb_rich_dim="$(ftb_rich::_esc "${C_ROLE_UI_MUTED:-}")"
 
-# ── description dimming ───────────────────────────────────────────────────────
+# ── display styling ───────────────────────────────────────────────────────────
 # zsh renders a described match as "value<pad>-- description" (-- is the default
-# list-separator). Recolor that into "value   <dim>description<reset>": drop the
-# "-- " marker, and dim the description so it reads as secondary. Sets REPLY.
-# Applied identically to _ftb_complist field 2 AND the matching _ftb_compcap key
-# so fzf-tab's accept/preview lookups (which key on this exact string) still hit.
-ftb_rich::_dim_desc() {
+# list-separator). Restyle into "<blue>value<reset>   <dim>description<reset>":
+# color the candidate blue, drop the "-- " marker, and dim the description so it
+# reads as secondary. Sets REPLY. Applied identically to _ftb_complist field 2
+# AND the matching _ftb_compcap key so fzf-tab's accept/preview lookups (which
+# key on this exact string) still hit.
+ftb_rich::_style() {
   emulate -L zsh
   local s=$1
   if [[ $s == *' -- '* ]]; then
-    REPLY="${s%% -- *}   ${_ftb_rich_dim}${s#* -- }${FTB_RICH_RESET}"
+    REPLY="${_ftb_rich_value}${s%% -- *}${FTB_RICH_RESET}   ${_ftb_rich_dim}${s#* -- }${FTB_RICH_RESET}"
   else
-    REPLY=$s
+    REPLY="${_ftb_rich_value}${s}${FTB_RICH_RESET}"
   fi
 }
 
@@ -179,10 +181,16 @@ ftb_rich::render() {
 
     g=${_ftb_rich_glyph[$REPLY]:-$_ftb_rich_glyph[fallback]}
     c=${_ftb_rich_color[$REPLY]:-}
-    # Dim the "-- description" half. REPLY is reused by _dim_desc, so read the
-    # glyph/color from it (above) BEFORE this call. Rebuild the entry with the
-    # recolored field 2; field 1 and field 3 are preserved.
-    ftb_rich::_dim_desc "$f2"; new_f2=$REPLY
+    # Style field 2 (blue value, dimmed description). REPLY is reused by _style,
+    # so read the glyph/color from it (above) BEFORE this call. Rebuild the entry
+    # with the restyled field 2; field 1 and field 3 are preserved. In degrade
+    # mode we leave field 2 raw — the compcap keys aren't rewritten there (below),
+    # so styling field 2 would desync it from the accept key.
+    if (( degrade )); then
+      new_f2=$f2
+    else
+      ftb_rich::_style "$f2"; new_f2=$REPLY
+    fi
     f1=${entry%%$nul*}
     out+="${c}${g}${FTB_RICH_RESET}  ${f1}${nul}${new_f2}${nul}${f3}"
   done
@@ -194,7 +202,7 @@ ftb_rich::render() {
   (( degrade )) && return 0
   newcc=()
   for cc in $_ftb_compcap; do
-    ftb_rich::_dim_desc "${cc%%$bs*}"
+    ftb_rich::_style "${cc%%$bs*}"
     newcc+="${REPLY}${bs}${cc#*$bs}"
   done
   _ftb_compcap=("${(@)newcc}")

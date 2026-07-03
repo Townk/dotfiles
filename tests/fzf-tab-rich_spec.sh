@@ -86,12 +86,18 @@ Describe 'fzf-tab-rich.zsh'
     # Extract field 2 the way fzf-tab does on accept.
     key_of() { local e=$1; print -rn -- "${${e#*$nul}%$nul*}"; }
 
-    It 'prepends a glyph and preserves the accept key (field 2) byte-for-byte'
+    It 'keeps the inserted word resolvable after styling field 2'
       _ftb_groups=('external command')
       _ftb_compcap=("git${bs}word${nul}git${nul}group${nul}1")
-      _ftb_complist=("$(entry $'\e[33m' git '')")
+      _ftb_complist=("$(entry '' git '')")
       ftb_rich::render
-      When call key_of "$_ftb_complist[1]"
+      resolve() {
+        local choice=$(key_of "$_ftb_complist[1]")
+        local match=${_ftb_compcap[(r)${(b)choice}${bs}*]}
+        local -A vv=("${(@0)${match#*$bs}}")
+        print -rn -- "$vv[word]"
+      }
+      When call resolve
       The output should equal 'git'
     End
 
@@ -158,7 +164,7 @@ Describe 'fzf-tab-rich.zsh'
     # Descriptions: zsh renders "value  -- description"; we drop the "-- " marker
     # and dim the description. The accept key (field 2) and the compcap key are
     # rewritten together, so completion still inserts the bare word.
-    It 'dims the description and drops the "-- " marker'
+    It 'colors the value blue, dims the description, drops the "-- " marker'
       _ftb_groups=('alias')
       _ftb_compcap=("git  -- noglob git${bs}word${nul}git")
       _ftb_complist=("$(entry '' 'git  -- noglob git' '')")
@@ -166,7 +172,17 @@ Describe 'fzf-tab-rich.zsh'
       When call key_of "$_ftb_complist[1]"
       The output should not include ' -- '
       The output should include 'noglob git'
+      The output should include "${_ftb_rich_value}"
       The output should include "${_ftb_rich_dim}"
+    End
+
+    It 'colors a plain (undescribed) value blue'
+      _ftb_groups=('external command')
+      _ftb_compcap=("ls${bs}word${nul}ls${nul}group${nul}1")
+      _ftb_complist=("$(entry '' ls '')")
+      ftb_rich::render
+      When call key_of "$_ftb_complist[1]"
+      The output should include "${_ftb_rich_value}"
     End
 
     It 'still resolves accept after the description recolor'
