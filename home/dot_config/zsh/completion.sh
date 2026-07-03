@@ -154,6 +154,23 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
         ftb_rich::render
       }
     fi
+    # ftb_rich::render colors each candidate, so every _ftb_compcap key now
+    # starts with the same SGR escape. -ftb-generate-query derives the initial
+    # fzf query from the longest COMMON PREFIX of those keys — which becomes the
+    # bare color escape, matches nothing (fzf strips ANSI), exits via --exit-0,
+    # and gets inserted into the buffer. Strip SGR escapes from the query so the
+    # prefix is computed from the visible text (empty for `git`, "sta" for
+    # stash/status, etc.).
+    if (( ! ${+functions[-ftb-generate-query-orig]} )); then
+      autoload +X -Uz -- -ftb-generate-query
+      functions[-ftb-generate-query-orig]=$functions[-ftb-generate-query]
+      -ftb-generate-query() {
+        -ftb-generate-query-orig
+        (( ${FZF_TAB_RICH:-1} )) || return
+        emulate -L zsh -o extendedglob
+        _ftb_query=${_ftb_query//$'\e'\[[0-9;]#m/}
+      }
+    fi
   fi
 
   # fzf-flags is appended LAST on fzf-tab's own fzf command line (after its
