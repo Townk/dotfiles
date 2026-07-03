@@ -12,8 +12,9 @@
 > original spec called for (a few details evolved during implementation —
 > notably Phase 4 became a full custom `hs.webview` UI, not the `hs.chooser`
 > this spec describes, and Phase 1's provider doesn't push over the bridge
-> during `copy()` the way §9 describes). Phase 5 (bridge evolution) is next
-> and **has not been started** — its design below is still the live plan.
+> during `copy()` the way §9 describes). Phase 5 (bridge evolution) is now
+> **implemented and live** too (commit `9819757`) — the §11 design below is
+> what shipped. Phases 6–7 remain.
 
 A single clipboard history + type-preserving copy/paste system that works
 across the laptop, a mac-mini (used locally or over SSH), a Linux dev shell
@@ -350,8 +351,17 @@ store can add it — not part of this project.
 
 ## 11. Bridge — evolve the existing `clipboard-bridge`
 
-> **Status: not started (Phase 5, next up).** Everything in this section is
-> still the live, agreed design — nothing here has been superseded.
+> **Status: implemented and live (Phase 5, commit `9819757`).** As-built: the
+> dispatcher (G/R/T/S/C/F framing) is wired into the `clipboard-bridge` service;
+> the nvim provider (§9) pastes G+R and copies T over a libuv pipe (block
+> regtype preserved across machines); `pick-clipboard`'s Ctrl-Y dispatches by
+> origin (laptop-ref→S restore-by-id, local image→C ship); the laptop→remote
+> mirror is a `[clipboard-mirror]` service + `ref_id` column + a fire-and-forget
+> sender in the HS watcher. Deviations from the design below: the SSH forward
+> uses `LocalForward` (macOS's OpenSSH rejects `StreamLocalForward`); C
+> copy-back ships a single representation (not the full multi-UTI set); the
+> laptop-ref refresh relies on `ref_id` upsert + retention, not an explicit
+> clear-on-connect handshake — all noted as deferred refinements.
 
 Loose `~/.ssh/config.d/clipboard.config` (untracked, never committed),
 `StreamLocalBindUnlink yes`:
@@ -535,9 +545,11 @@ the seams.
 Each phase is independently testable. The end state is the whole system
 working.
 
-> **STATUS as of this recovery**: Phases 1–4 are **done and live** (with the
-> as-built deltas noted inline in §7/§9/§10 above). **Phase 5 has not been
-> started** — it's next. Phases 6–7 are also not started.
+> **STATUS**: Phases 1–**5** are **done and live** (with the as-built deltas
+> noted inline in §7/§9/§10/§11 above). Phase 5 (bridge evolution) shipped in
+> commit `9819757` — dispatcher wired into the service, type-preserving
+> cross-machine nvim paste, origin-aware `Ctrl-Y` in both pickers, and the
+> laptop→remote history mirror. **Phases 6–7 are not started.**
 
 ## 19. Verification
 
