@@ -56,6 +56,11 @@
   --icon-directory: rgb(250, 179, 135); /* peach */
   --icon-url: rgb(116, 199, 236); /* sapphire */
 
+  /* Origin badge (laptop-ref rows). Catppuccin Mocha "mauve" -- distinct from
+   * every per-kind icon color above so a mirrored-from-laptop row reads at a
+   * glance. Matches pick-clipboard's c_origin ANSI triple. */
+  --icon-origin: rgb(203, 166, 247);
+
   /* pick-clipboard's pin/pinned-row color is rgb(225, 170, 80) -- the SAME
    * as --icon-rich above. Requested as the midpoint between that terminal
    * yellow and --bright-white: (225+255)/2, (170+255)/2, (80+255)/2,
@@ -188,6 +193,24 @@ body { background: transparent; overflow: hidden; }
  * either way -- pinned status doesn't change it, in the terminal either. */
 .item.pinned .content {
   color: var(--pin-yellow);
+}
+/* Origin badge: a small "local"/"remote" text tag at the row's right edge
+ * (after the flex-growing .content) so a mirrored (remote) clip is obvious at a
+ * glance. Colored by data-origin — mauve for remote, muted for local. */
+.item .origin-badge {
+  flex: 0 0 auto;
+  font-size: calc(var(--base-size) * 0.72);
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+.item[data-origin="remote"] .origin-badge {
+  color: var(--icon-origin);
+  background: rgba(203, 166, 247, 0.15);
+}
+.item[data-origin="local"] .origin-badge {
+  color: var(--meta-label);
+  background: rgba(150, 150, 150, 0.10);
 }
 
 .right-col {

@@ -347,20 +347,33 @@ EMIT_SQL="WITH palette AS (
              CHAR(27)||'[38;2;235;160;172m' AS c_mixed,
              CHAR(27)||'[38;2;180;190;254m' AS c_file,
              CHAR(27)||'[38;2;250;179;135m' AS c_directory,
-             CHAR(27)||'[38;2;116;199;236m' AS c_url
+             CHAR(27)||'[38;2;116;199;236m' AS c_url,
+             CHAR(27)||'[38;2;203;166;247m' AS c_origin
     )
     SELECT
-      CASE type_kind
-           WHEN 'text'      THEN c_text      || char(1110065) || reset
-           WHEN 'rtf'       THEN c_rich      || char(1110524) || reset
-           WHEN 'html'      THEN c_rich      || char(1110524) || reset
-           WHEN 'image'     THEN c_image     || char(1110078) || reset
-           WHEN 'files'     THEN c_files     || char(1110139) || reset
-           WHEN 'file'      THEN c_file      || char(983588)  || reset
-           WHEN 'directory' THEN c_directory || char(983638)  || reset
-           WHEN 'url'       THEN c_url       || char(983865)  || reset
-           ELSE                  c_mixed     || char(988440)  || reset
-      END
+      -- Color the kind glyph by ORIGIN when it's a laptop mirror row (mauve
+      -- c_origin), else by kind — a zero-width at-a-glance origin cue that
+      -- keeps the kind glyph intact. (Two CASEs: color, then glyph.)
+      (CASE WHEN origin='laptop-ref'    THEN c_origin
+            WHEN type_kind='text'       THEN c_text
+            WHEN type_kind IN ('rtf','html') THEN c_rich
+            WHEN type_kind='image'      THEN c_image
+            WHEN type_kind='files'      THEN c_files
+            WHEN type_kind='file'       THEN c_file
+            WHEN type_kind='directory'  THEN c_directory
+            WHEN type_kind='url'        THEN c_url
+            ELSE c_mixed END)
+      || (CASE type_kind
+           WHEN 'text'      THEN char(1110065)
+           WHEN 'rtf'       THEN char(1110524)
+           WHEN 'html'      THEN char(1110524)
+           WHEN 'image'     THEN char(1110078)
+           WHEN 'files'     THEN char(1110139)
+           WHEN 'file'      THEN char(983588)
+           WHEN 'directory' THEN char(983638)
+           WHEN 'url'       THEN char(983865)
+           ELSE                  char(988440) END)
+      || reset
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
       || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-1)) THEN '…' ELSE '' END)
@@ -406,20 +419,30 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
              CHAR(27)||'[38;2;235;160;172m' AS c_mixed,
              CHAR(27)||'[38;2;180;190;254m' AS c_file,
              CHAR(27)||'[38;2;250;179;135m' AS c_directory,
-             CHAR(27)||'[38;2;116;199;236m' AS c_url
+             CHAR(27)||'[38;2;116;199;236m' AS c_url,
+             CHAR(27)||'[38;2;203;166;247m' AS c_origin
     )
     SELECT
-      CASE type_kind
-           WHEN 'text'      THEN c_text      || char(1110065) || reset
-           WHEN 'rtf'       THEN c_rich      || char(1110524) || reset
-           WHEN 'html'      THEN c_rich      || char(1110524) || reset
-           WHEN 'image'     THEN c_image     || char(1110078) || reset
-           WHEN 'files'     THEN c_files     || char(1110139) || reset
-           WHEN 'file'      THEN c_file      || char(983588)  || reset
-           WHEN 'directory' THEN c_directory || char(983638)  || reset
-           WHEN 'url'       THEN c_url       || char(983865)  || reset
-           ELSE                  c_mixed     || char(988440)  || reset
-      END
+      (CASE WHEN origin='laptop-ref'    THEN c_origin
+            WHEN type_kind='text'       THEN c_text
+            WHEN type_kind IN ('rtf','html') THEN c_rich
+            WHEN type_kind='image'      THEN c_image
+            WHEN type_kind='files'      THEN c_files
+            WHEN type_kind='file'       THEN c_file
+            WHEN type_kind='directory'  THEN c_directory
+            WHEN type_kind='url'        THEN c_url
+            ELSE c_mixed END)
+      || (CASE type_kind
+           WHEN 'text'      THEN char(1110065)
+           WHEN 'rtf'       THEN char(1110524)
+           WHEN 'html'      THEN char(1110524)
+           WHEN 'image'     THEN char(1110078)
+           WHEN 'files'     THEN char(1110139)
+           WHEN 'file'      THEN char(983588)
+           WHEN 'directory' THEN char(983638)
+           WHEN 'url'       THEN char(983865)
+           ELSE                  char(988440) END)
+      || reset
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
       || printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
@@ -453,7 +476,7 @@ pc=\${FZF_PREVIEW_COLUMNS:-40}
 ph=\${FZF_PREVIEW_LINES:-20}
 lw=14
 vw=\$((pc - lw)); [ \$vw -lt 4 ] && vw=4
-sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 5), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
+sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN origin='laptop-ref' THEN 'remote' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
 EOF
 
 # --- run --------------------------------------------------------------------

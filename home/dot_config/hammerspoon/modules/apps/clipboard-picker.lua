@@ -161,7 +161,7 @@ local function query_items()
     and "origin IN ('local','remote-own','laptop-ref')"
     or "origin IN ('local','remote-own')"
   local s = assert(db:prepare([[
-    SELECT id, text_preview, text_plain, type_kind, source_app, source_bundle_id, len, pinned, last_ts
+    SELECT id, text_preview, text_plain, type_kind, source_app, source_bundle_id, len, pinned, last_ts, origin
     FROM clips
     WHERE ]] .. origin_filter .. [[
     ORDER BY pinned DESC, last_ts DESC
@@ -184,6 +184,7 @@ local function query_items()
       len       = s:get_value(6) or 0,
       words     = count_words(plain),
       pinned    = pinned,
+      origin    = s:get_value(9) or "local",
       group     = group_label(last_ts, now, pinned),
       age       = age_string(last_ts, now),
     }
