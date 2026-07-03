@@ -1,0 +1,12 @@
+#compdef tm
+#
+# Completion for tm, the anchored Terminal Time Machine front-end
+# (functions.d/tm.sh): tm [path] | tm --deleted [path].
+
+_tm() {
+  _arguments \
+    '(- *)--deleted[recover files deleted under here]' \
+    '1:path:_files'
+}
+
+_tm "$@"

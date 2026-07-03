@@ -1,0 +1,14 @@
+#compdef system-backup-reconcile
+#
+# Completion for the system-backup reconcile worker (normally launchd-invoked;
+# humans use `system-backup reconcile`, but the flags help when debugging).
+
+_system-backup-reconcile() {
+  _arguments \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '--manifest[capture spec (retention policy)]:manifest:_files -g "*.toml"' \
+    '--config[deployment config (staging/targets/secret)]:config:_files -g "*.toml"' \
+    '--prune[run the daily repack instead of a reconcile pass]'
+}
+
+_system-backup-reconcile "$@"

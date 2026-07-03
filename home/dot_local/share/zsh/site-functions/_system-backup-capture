@@ -1,0 +1,14 @@
+#compdef system-backup-capture
+#
+# Completion for the system-backup capture worker (normally launchd-invoked;
+# humans use `system-backup now`, but the flags help when debugging a tick).
+
+_system-backup-capture() {
+  _arguments \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '--manifest[capture spec (roots/deny/policy)]:manifest:_files -g "*.toml"' \
+    '--config[deployment config (staging/targets/secret)]:config:_files -g "*.toml"' \
+    '--reconcile[follow the capture with a reconcile pass]'
+}
+
+_system-backup-capture "$@"

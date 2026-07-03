@@ -1,0 +1,78 @@
+#compdef system-backup
+#
+# Completion for system-backup, the Terminal Time Machine dispatcher.
+# Snapshot-id completions are sourced LIVE from the staging repo via
+# `system-backup list` (a cheap local restic read); they degrade to nothing
+# on a machine that hasn't onboarded backups yet.
+
+# __system-backup-snapshots — snapshot ids with time/age/tier descriptions.
+# `list` prints column-aligned "ID TIME AGE TIER" rows; TIME is two tokens.
+__system-backup-snapshots() {
+  local -a snaps
+  snaps=( ${(f)"$(system-backup list 2>/dev/null |
+    awk 'NR > 1 {printf "%s:%s %s · %s · %s\n", $1, $2, $3, $4, $5}')"} )
+  (( ${#snaps} )) && _describe -t snapshots 'snapshot' snaps
+}
+
+_system-backup() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a help_flag
+  help_flag=(
+    '(- *)'{-h,--help}'[show help and exit]'
+  )
+
+  _arguments -C \
+    $help_flag \
+    '1: :->cmd' \
+    '*:: :->cmdargs'
+
+  case "$state" in
+    cmd)
+      _values 'subcommand' \
+        'status[staging summary + target presence]' \
+        'now[force a capture tick (+ reconcile)]' \
+        'list[snapshots with tier labels]' \
+        'browse[Time-Machine browse (httm/fzf)]' \
+        'diff[file diff across snapshots]' \
+        'restore[undoable in-place restore from a snapshot]' \
+        'restore-project[reconstruct a git project from its sidecar]' \
+        'undo[revert the last restore]' \
+        'reconcile[converge present targets]' \
+        'targets[configured targets + presence]' \
+        'verify[restic check staging + targets]' \
+        'help[show help]'
+      ;;
+    cmdargs)
+      case "$words[1]" in
+        browse)
+          _arguments $help_flag \
+            '--deleted[recover files deleted under the anchor]' \
+            '1:anchor path:_files'
+          ;;
+        diff)
+          _arguments $help_flag \
+            '1:path:_files' \
+            '2:snapshot A:__system-backup-snapshots' \
+            '3:snapshot B (default live file):__system-backup-snapshots'
+          ;;
+        restore)
+          _arguments $help_flag \
+            '--snapshot[snapshot to restore from]:snapshot:__system-backup-snapshots' \
+            '--force[overwrite existing paths (undo snapshot taken first)]' \
+            '*:path:_files'
+          ;;
+        restore-project)
+          _arguments $help_flag \
+            '1:repo path:_directories'
+          ;;
+        status | now | list | undo | reconcile | targets | verify)
+          _arguments $help_flag
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_system-backup "$@"
