@@ -1,0 +1,43 @@
+# manifest.toml — the backup SPEC: WHAT to capture + how much to keep.
+# Machine-independent and committed; per-machine deployment (staging path,
+# targets, passphrase command) lives in the local-only config.toml.
+#
+#   capture = roots − deny − chezmoi-managed − files any captured repo ignores
+#
+# The chezmoi and git filters are automatic — never hand-list managed files
+# or gitignored artifacts here.
+
+exclude_chezmoi_managed = true
+
+# A root is a path STRING (defaults: bundle_unpushed = true,
+# untracked_warn_size = "50m") or a TABLE with per-root git overrides.
+roots = [
+  "~/.config",
+  "~/.local/state",
+  "~/.local/share",
+  "~/.ssh",
+  "~/Library/LaunchAgents",
+  "~/Library/Preferences",
+  "~/Library/Application Support",
+  "~/Projects",
+]
+
+deny = [
+  "~/.cache",
+  "~/.local/share/nvim",
+  "~/.local/share/mise",
+  "~/.local/share/rustup",
+  "~/.local/share/uv",
+  "~/.local/share/go",
+  "~/.cargo/registry",
+  "~/.gradle",
+  "~/Library/Caches",
+  "**/*.sock",
+  "**/.DS_Store",
+  "**/node_modules/**",
+  "**/__pycache__/**",
+  "**/Cache/**",
+  "**/cache/**",
+]
+
+# [policy] omitted -> the default §5 ladder (30m/1h/6h/12h/day/week/month/year).

@@ -635,4 +635,20 @@ EOF
       The stderr should include "over-capturing"
     End
   End
+
+  Describe 'shipped manifest.toml'
+    MANIFEST="$SHELLSPEC_PROJECT_ROOT/home/dot_config/backup/manifest.toml"
+
+    It 'parses, keeps the chezmoi filter on, and declares sane roots'
+      shipped() {
+        source "$LIB/backup.zsh"
+        bkp::manifest::chezmoi_excluded "$MANIFEST" || return 1
+        bkp::manifest::roots "$MANIFEST" | grep -c "^$HOME/"
+        bkp::manifest::deny "$MANIFEST" | grep -Fc '.cache'
+      }
+      When run shipped
+      The line 1 should equal 8
+      The line 2 should equal 1
+    End
+  End
 End
