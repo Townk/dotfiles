@@ -170,4 +170,102 @@ Describe 'backup.zsh'
       The stderr should include "bad policy line"
     End
   End
+
+  Describe 'bkp::thin — ladder counts (spec §5)'
+    # NOW = 2026-01-02 Fri 00:00:00Z (1767312000): local midnight, and the
+    # 11-day mark lands on a Monday midnight, so every band below aligns with
+    # its grid. Fixtures place snapshots strictly INSIDE each band's open
+    # interior — ages in (min, max) — because the exact band-min instant
+    # belongs to the coarser tier and would add a boundary cell.
+    NOW=1767312000
+
+    series_keeps() {  # series_keeps <min_age> <max_age> <step> — dense series -> keep count
+      source "$LIB/backup.zsh"
+      local min=$1 max=$2 step=$3 age
+      for (( age = min + step; age < max; age += step )); do
+        printf 's%s\t%s\n' "$(( NOW - age ))" "$(( NOW - age ))"
+      done | bkp::thin "$NOW" | grep -c '^keep'
+    }
+
+    It 'T1: 24h of 15-min snapshots thin to 48 half-hour keeps'
+      When run series_keeps 0 86400 900
+      The output should equal 48
+    End
+    It 'T2: day 2 thins to 24 hourly keeps'
+      When run series_keeps 86400 172800 900
+      The output should equal 24
+    End
+    It 'T3: day 3 thins to 4 six-hour keeps'
+      When run series_keeps 172800 259200 900
+      The output should equal 4
+    End
+    It 'T4: day 4 thins to 2 twelve-hour keeps'
+      When run series_keeps 259200 345600 900
+      The output should equal 2
+    End
+    It 'T5: days 4-11 thin to 7 daily keeps'
+      When run series_keeps 345600 950400 3600
+      The output should equal 7
+    End
+    It 'T6: days 11-67 thin to 8 weekly keeps'
+      When run series_keeps 950400 5788800 21600
+      The output should equal 8
+    End
+    It 'T7: a year of monthly snapshots keeps all 12'
+      # Steady-state input after weekly thinning upstream: one snapshot on the
+      # 15th of each month, 12:00Z, 2024-11-15 .. 2025-10-15 (ages ~78-413d,
+      # all inside (67d, 432d)). Fixed epochs — a generated step risks landing
+      # two snapshots in one calendar month or skipping one.
+      months() {
+        source "$LIB/backup.zsh"
+        local e
+        for e in 1731672000 1734264000 1736942400 1739620800 1742040000 \
+                 1744718400 1747310400 1749988800 1752580800 1755259200 \
+                 1757937600 1760529600; do
+          printf 's%s\t%s\n' "$e" "$e"
+        done | bkp::thin "$NOW" | grep -c '^keep'
+      }
+      When run months
+      The output should equal 12
+    End
+    It 'T7: two snapshots in the same calendar month collapse to one'
+      samemonth() {
+        source "$LIB/backup.zsh"
+        # 2025-08-05 and 2025-08-20 12:00Z — both in month cell 202508,
+        # ages ~135-150d from NOW.
+        printf '%s\n' $'a\t1754395200' $'b\t1755691200' | bkp::thin "$NOW"
+      }
+      When run samemonth
+      The line 1 should equal "drop${TAB}a"
+      The line 2 should equal "keep${TAB}b"
+    End
+
+    It 'T8: yearly tier keeps one per calendar year forever'
+      yearly() {
+        source "$LIB/backup.zsh"
+        # 2020-01-15, 2020-06-01, 2018-03-03 (all 12:00Z): two collapse to
+        # the newest of 2020; 2018 survives despite being 8y old.
+        printf '%s\n' $'a\t1579089600' $'b\t1591012800' $'c\t1520078400' |
+          bkp::thin "$NOW"
+      }
+      When run yearly
+      The line 1 should equal "drop${TAB}a"
+      The line 2 should equal "keep${TAB}b"
+      The line 3 should equal "keep${TAB}c"
+    End
+
+    It 'is idempotent: thinning the keep-set again drops nothing'
+      idem() {
+        source "$LIB/backup.zsh"
+        local age
+        for (( age = 900; age < 40000000; age += 47700 )); do
+          printf 's%s\t%s\n' "$(( NOW - age ))" "$(( NOW - age ))"
+        done | bkp::thin "$NOW" |
+          awk -F'\t' '$1 == "keep" { print $2 "\t" substr($2, 2) }' |
+          bkp::thin "$NOW" | grep -c '^drop' || true
+      }
+      When run idem
+      The output should equal 0
+    End
+  End
 End
