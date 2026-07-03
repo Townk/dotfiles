@@ -268,4 +268,25 @@ Describe 'backup.zsh'
       The output should equal 0
     End
   End
+
+  Describe 'bkp::thin — wall clock is local time'
+    # NOW = 2026-01-07 00:00Z. Snapshots 2026-01-01 03:00Z and 07:00Z are both
+    # ~6 days old (daily tier). Same UTC date -> one cell; in Etc/GMT+5 they
+    # straddle local midnight (Dec 31 22:00 / Jan 1 02:00) -> two cells.
+    tz_thin() {
+      export TZ="$1"
+      source "$LIB/backup.zsh"
+      printf '%s\n' $'a\t1767236400' $'b\t1767250800' | bkp::thin 1767744000 |
+        grep -c '^keep'
+    }
+
+    It 'groups by UTC date under TZ=UTC'
+      When run tz_thin UTC
+      The output should equal 1
+    End
+    It 'splits across local midnight under TZ=Etc/GMT+5'
+      When run tz_thin Etc/GMT+5
+      The output should equal 2
+    End
+  End
 End
