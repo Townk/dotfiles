@@ -132,6 +132,14 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   # in its place (see fzf-tab-rich.zsh, wired below).
   zstyle ':fzf-tab:*' prefix ''
 
+  # Hide the textual group-header legend (e.g. "-- external command --  -- shell
+  # function --"): the per-row type glyph now conveys the group. Use `quiet`, NOT
+  # `none` — `none` rewrites _ftb_groups entries to "__hide__N" before our render
+  # runs, which would starve ftb_rich::classify of the real group names and make
+  # every non-file candidate fall back to the generic glyph. `quiet` suppresses
+  # the header row while keeping _ftb_groups intact for the classifier.
+  zstyle ':fzf-tab:*' show-group quiet
+
   # Rich candidates: prepend a colored, per-type glyph to each fzf-tab row.
   # Lives only in fzf-tab's render path, so the native zsh menu is unaffected.
   # fzf-tab lazily autoloads its lib funcs, so force -ftb-generate-complist's
