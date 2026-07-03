@@ -56,6 +56,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 | ai-harnesses | AI agent harnesses | `dot_local/bin/ai-assist*`, `ai-commit*` | `lib/{assist,commit}-agent-common.zsh` | `request.json` shape, harness `--probe` contract (consumed by terminal-mux pane render) |
 | secrets | Secrets & onboarding | `dot_local/bin/system-secrets`, `system-onboard` | `lib/system-secrets-common.zsh` | `sec::*` slot API, `.leak-patterns` audit, `secrets.yaml` manifest |
 | system | System management | `dot_local/bin/system-{package,service,images,update}*` | `lib/system-package-common.zsh` | `pkg::restart_services_for` → `system-service restart-for` (system internal seam), `services.toml.tmpl` |
+| system-backup | Terminal Time Machine backups | `dot_local/bin/{system-backup,system-backup-capture,system-backup-reconcile}`, `dot_config/backup/` | `lib/backup.zsh` (`bkp::*`) | `bkp::thin` pure retention planner, `bkp::restic` storage seam, manifest = roots−deny−chezmoi−gitignored, `tm` |
 | shell | Shell (zsh) bootstrap & widgets | `dot_config/zsh/`, `dot_zshrc`/`dot_zshenv`/`dot_p10k.zsh` | `lib/{common,prompt-common,platform}.zsh` | `environment.sh` (XDG source of truth), ZLE widgets, `notify` primitive |
 | preview | File preview & terminal viewers | `dot_local/bin/{preview,fzf-tab-preview-open}`, `libexec/{ics,sqlite,disk-image}-view` | (uses `image-protocol-support.zsh` from terminal-mux) | `preview` as fzf/Yazi `--preview` backend |
 | yazi | Yazi | `dot_config/yazi/` | (lua plugins) | Yazi previewer contract (consumes preview), `cd` event plugins |
@@ -270,6 +271,35 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 **Entry points:** `system-package-common.zsh`, `bin/system-package`, `bin/system-service-launchd`, `bin/system-update`, `packages/services.toml.tmpl`.
 
 **Dispatch example (matches your stated need):** *"Review the system-packages manager for performance improvements. You own silo **system-packages**: `bin/system-package*` + `lib/system-package-common.zsh` + `packages/{Brewfile,Cargofile,Gofile,Npmfile,Snapfile,Uvfile}.tmpl`. Don't touch `services.toml.tmpl` (system-services) or `system-update` (system-update). The cross-seam contract you must preserve is `pkg::restart_services_for` → `system-service restart-for` (system-services owns the receiver) and the manifest grammar (`<name> -- <spec>`, comment-stripping). Each worker's `list -u` fans out parallel outdated-checks to registries — start there."*
+
+---
+
+## system-backup — Terminal Time Machine backups
+
+**Owner area (safe to edit):**
+- `home/dot_local/bin/executable_system-backup` (dispatcher), `executable_system-backup-capture` / `executable_system-backup-reconcile` (workers)
+- `home/dot_local/lib/backup.zsh` (`bkp::*` — thinning engine, manifest resolver, capture/reconcile, restore/UX)
+- `home/dot_config/backup/manifest.toml` (committed capture spec) + `config.toml.example` (the real `config.toml` is local-only, never committed)
+- `home/dot_config/zsh/functions.d/tm.sh` (the `tm` front-end function)
+- The three `backup-*` sections in `packages/services.toml.tmpl` (the *scheduling keys* schema itself — `start_interval`, `watch_paths`, etc. — belongs to system-services; coordinate)
+- `docs/system-backup-recovery.md` (bare-metal runbook)
+
+**Out of scope:** restic/httm/hunk/fzf (external; installed via system-packages' Brewfile). `system-service-launchd` and the Servicefile *schema* (system-services — system-backup only declares entries). chezmoi's `managed` query and git (consumed read-only as filters). The `sec::` secret slot holding the repo passphrase (secrets).
+
+**Public contract (preserve):**
+- **`bkp::thin (now, [id\tepoch…], policy) → keep/drop`** — pure, deterministic, idempotent; wall-clock-aligned grids (LOCAL time, ISO-Monday weeks); half-open age bands; `keep_last=1`. The ladder counts are emergent (band÷grid), never enforced.
+- **`bkp::restic <repo> <args…>`** — the single storage seam; every test stubs it. Passphrase only ever flows via `RESTIC_PASSWORD_COMMAND`.
+- **Manifest semantics**: `capture = roots − deny − chezmoi-managed(files) − per-repo gitignored(full resolution)`; fail-safe is always over-capture; roots are string-or-table (`bundle_unpushed`, `untracked_warn_size`).
+- **Sidecar format**: `~/.local/state/terminal-backup/wip/<basename>-<12hex>.{bundle,meta.json}` — `restore-project` depends on it.
+- **Reconcile identity**: snapshots compare as `original // id` (restic copy rewrites ids); `role = "master"` never forgets/prunes.
+- **`bkp-undo` tag**: pre-restore safety snapshots; excluded from the thin ladder, expire after 7 days, consumed by `undo`.
+- **Workers no-op silently without `config.toml`** (the committed launchd agents must be harmless pre-onboarding); the dispatcher dies loudly instead.
+
+**Consumes from:** system-services (Servicefile schema + `system-service sync`), secrets (`system-secrets get backup-repo` via `password_command`), shell (`common.zsh` stdlib), chezmoi (`chezmoi managed` filter), external restic/git/httm/hunk/fzf/yq/jq.
+
+**Entry points:** `lib/backup.zsh` (top: thinning; middle: manifest/capture; tail: reconcile/UX), `bin/system-backup`, `docs/system-backup-recovery.md`, spec `docs/superpowers/specs/2026-07-03-terminal-time-machine-design.md` (gitignored working doc).
+
+**Dispatch example:** *"Tune the retention ladder boundaries. You own silo **system-backup**: `lib/backup.zsh` + `bin/system-backup*` + `dot_config/backup/`. `bkp::thin` must stay pure/deterministic/idempotent (tests pin 48/24/4/2/7/8/12 emergent counts). Don't touch the Servicefile schema (system-services) — only the `backup-*` entries are yours. All restic calls go through `bkp::restic`; stub it, never touch a real repo or \$HOME."*
 
 ---
 
