@@ -137,15 +137,31 @@ local function count_words(text)
   return n
 end
 
--- Top N clips (local + remote-own; laptop-ref rows can't be rich-restored
--- here — same origin filter as the Phase-4 chooser and the terminal picker).
+-- Bridge-up (spec §8): a laptop is SSH'd into this Mac iff the reverse-tunnel
+-- socket exists (sshd's RemoteForward created it). Unlike the terminal picker
+-- there is no SSH_CONNECTION here — the GUI is always the "sitting at the Mac"
+-- front-end; the socket's presence alone signals a connected laptop.
+local function bridge_up()
+  local sock = (os.getenv("HOME") or "") .. "/.local/state/runtime/chezmoi-system/clipboard-bridge.sock"
+  return hs.fs.attributes(sock) ~= nil
+end
+
+-- Top N clips. Bridge-up folds in the laptop mirror's `laptop-ref` rows (spec
+-- §8 union); accepting one restores its mirrored text_plain locally so a paste
+-- lands on THIS Mac (restore_by_id's text fallback). Rich laptop-ref rows are
+-- text+id only here (§14) — their blobs live on the laptop; the terminal
+-- picker's Ctrl-Y is the rich cross-machine copy-back path. Bridge-down keeps
+-- the local-only view (no stale laptop rows), matching the terminal picker.
 local function query_items()
   local db = sqlite3.open(history._db_path())
   if not db then return {} end
+  local origin_filter = bridge_up()
+    and "origin IN ('local','remote-own','laptop-ref')"
+    or "origin IN ('local','remote-own')"
   local s = assert(db:prepare([[
     SELECT id, text_preview, text_plain, type_kind, source_app, source_bundle_id, len, pinned, last_ts
     FROM clips
-    WHERE origin IN ('local','remote-own')
+    WHERE ]] .. origin_filter .. [[
     ORDER BY pinned DESC, last_ts DESC
     LIMIT 500;
   ]]))

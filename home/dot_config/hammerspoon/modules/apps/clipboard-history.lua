@@ -192,7 +192,8 @@ local function ensure_schema()
     origin TEXT,
     regtype TEXT,
     pinned INTEGER DEFAULT 0,
-    type_hash TEXT
+    type_hash TEXT,
+    ref_id INTEGER
   );]])
   exec([[CREATE TABLE IF NOT EXISTS clip_types (
     clip_id INTEGER,
@@ -209,6 +210,15 @@ local function ensure_schema()
   -- display name alone isn't enough for hs.image.imageFromAppBundle).
   if not column_exists("clips", "source_bundle_id") then
     exec("ALTER TABLE clips ADD COLUMN source_bundle_id TEXT;")
+  end
+
+  -- Migration for the laptop→remote history mirror (Phase 5, spec §11): a
+  -- `laptop-ref` row carries the SOURCE machine's original clip id here, so
+  -- Ctrl-Y can ask the laptop to restore-by-id over the reverse channel
+  -- (full rich, zero blob transfer). NULL for local/remote-own rows. Both the
+  -- mirror receiver (clipboard-mirror-dispatch) and pick-clipboard rely on it.
+  if not column_exists("clips", "ref_id") then
+    exec("ALTER TABLE clips ADD COLUMN ref_id INTEGER;")
   end
 end
 
@@ -239,6 +249,38 @@ local function enforce_retention()
   -- orphaned clip_types rows (cascade by hand: SQLite lacks FK enforcement
   -- unless PRAGMA foreign_keys=ON, which we don't rely on across processes).
   exec("DELETE FROM clip_types WHERE clip_id NOT IN (SELECT id FROM clips);")
+end
+
+-- Laptop→remote history mirror (spec §11). When this Mac is SSH'd into a
+-- remote with the clipboard mirror -L forward up, an outbound unix socket
+-- exists at ~/.local/state/runtime/chezmoi-system/clipboard-mirror-out.sock
+-- (forwarded to the remote's clipboard-mirror-dispatch). We push each local
+-- capture's TEXT + METADATA + our clip id there — never blobs — so the remote
+-- shows a live `laptop-ref` row it can restore-by-id over the reverse channel.
+local function mirror_out_sock()
+  return (os.getenv("HOME") or "") .. "/.local/state/runtime/chezmoi-system/clipboard-mirror-out.sock"
+end
+local CLIENT_LIB = (os.getenv("HOME") or "") .. "/.local/lib/clipboard-bridge-client.zsh"
+
+-- Best-effort, non-blocking. Silently no-ops when the forward is down (the
+-- common case: not SSH'd anywhere). Record wire format (US=0x1f, RS=0x1e):
+--   ref_id US kind US app US len RS preview RS text_plain
+local function push_to_mirror(ref_id, kind, app, len_val, preview, plain)
+  local sock = mirror_out_sock()
+  if not hs.fs.attributes(sock) then return end
+  local us, rs = "\31", "\30"
+  local payload = table.concat({ tostring(ref_id), kind or "", app or "", tostring(len_val or 0) }, us)
+    .. rs .. (preview or "") .. rs .. (plain or "")
+  local tmp = os.tmpname()
+  local f = io.open(tmp, "wb")
+  if not f then return end
+  f:write(payload)
+  f:close()
+  -- Frame + send via the shared zsh client (M opcode), then delete the temp
+  -- file in-script so cleanup happens even if the callback never fires.
+  local script = 'source "$1"; clipbridge::send "$2" M "$3"; rm -f "$3"'
+  local t = hs.task.new("/bin/zsh", function() end, { "-c", script, "zsh", CLIENT_LIB, sock, tmp })
+  if t then t:start() else os.remove(tmp) end
 end
 
 -- Store one capture. Returns the clip id, or nil if skipped.
@@ -340,6 +382,7 @@ function M.capture_now()
     up:bind(6, len_val); up:bind(7, kind); up:bind(8, existing_id)
     up:step(); up:finalize()
     enforce_retention()
+    push_to_mirror(existing_id, kind, app_name, len_val, preview, plain)
     return existing_id
   end
 
@@ -365,6 +408,7 @@ function M.capture_now()
   end
 
   enforce_retention()
+  push_to_mirror(new_id, kind, app_name, len_val, preview, plain)
   return new_id
 end
 
