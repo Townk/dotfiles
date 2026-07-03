@@ -75,4 +75,99 @@ Describe 'backup.zsh'
       The output should equal "20260102.1"
     End
   End
+
+  Describe 'bkp::thin — core'
+    # Helpers run in a fresh zsh via `run`; TAB-separated stdin comes from
+    # printf so the spec file itself stays tab-free.
+    thin() {  # thin <now> [<policy>] — stdin: "<id> <epoch>" space pairs, one per line
+      source "$LIB/backup.zsh"
+      local id epoch
+      while read -r id epoch; do
+        printf '%s\t%s\n' "$id" "$epoch"
+      done | bkp::thin "$@"
+    }
+
+    It 'keeps a single snapshot (keep_last)'
+      single() { printf 'abc 999999999\n' | thin 1000000000; }
+      When run single
+      The output should equal "keep${TAB}abc"
+    End
+
+    It 'emits nothing for empty input'
+      empty() { : | thin 1000000000; }
+      When run empty
+      The output should equal ""
+      The status should be success
+    End
+
+    It 'keeps newest per 30-min cell and drops the rest'
+      # 14:05 and 14:10 share cell 2026010214.0 (ages < 24h from NOW);
+      # 14:40 is in the .1 half-cell. NOW = 2026-01-02 18:00Z = 1767376800.
+      pair() {
+        printf '%s\n' 'a 1767362700' 'b 1767363000' 'c 1767364800' | thin 1767376800
+      }
+      When run pair
+      The line 1 should equal "drop${TAB}a"
+      The line 2 should equal "keep${TAB}b"
+      The line 3 should equal "keep${TAB}c"
+    End
+
+    It 'preserves input order in the output'
+      order() {
+        printf '%s\n' 'z 1767364800' 'a 1767362700' 'b 1767363000' | thin 1767376800
+      }
+      When run order
+      The line 1 should equal "keep${TAB}z"
+      The line 2 should equal "drop${TAB}a"
+      The line 3 should equal "keep${TAB}b"
+    End
+
+    It 'assigns age exactly 24h to the hourly tier (half-open bands)'
+      # NOW = 2026-01-02 00:00Z. A = exactly 24h old (T2, hour cell Jan1-00),
+      # B = 23h30m old (T1, 30-min cell). Both survive: different tiers.
+      boundary() {
+        printf '%s\n' 'a 1767225600' 'b 1767227400' | thin 1767312000
+      }
+      When run boundary
+      The line 1 should equal "keep${TAB}a"
+      The line 2 should equal "keep${TAB}b"
+    End
+
+    It 'treats a future snapshot (clock skew) as age 0'
+      skew() { printf 'f 1767312100\n' | thin 1767312000; }
+      When run skew
+      The output should equal "keep${TAB}f"
+    End
+
+    It 'honors a custom policy'
+      # Single daily tier: same local date collapses to one keep.
+      custom() {
+        printf '%s\n' 'a 1767362700' 'b 1767363000' | thin 1767376800 'day 0 -'
+      }
+      When run custom
+      The line 1 should equal "drop${TAB}a"
+      The line 2 should equal "keep${TAB}b"
+    End
+
+    It 'rejects a non-numeric now'
+      badnow() { printf 'a 1\n' | thin tomorrow; }
+      When run badnow
+      The status should equal 2
+      The stderr should include "unix epoch"
+    End
+
+    It 'rejects a malformed snapshot line'
+      badline() { printf 'no-epoch-here\n' | thin 1767312000; }
+      When run badline
+      The status should equal 2
+      The stderr should include "bad snapshot line"
+    End
+
+    It 'rejects a malformed policy'
+      badpolicy() { printf 'a 1\n' | thin 1767312000 'day zero'; }
+      When run badpolicy
+      The status should equal 2
+      The stderr should include "bad policy line"
+    End
+  End
 End

@@ -57,3 +57,101 @@ bkp::thin::cell() {
       ;;
   esac
 }
+
+# bkp::thin <now_epoch> [<policy>]
+# The retention planner (spec §5). Pure: no restic, no clock reads, no
+# filesystem — fully driven by its arguments and stdin.
+#
+#   stdin:  one snapshot per line:  <id><TAB><unix_epoch>
+#   stdout: one line per snapshot:  keep<TAB><id>  |  drop<TAB><id>
+#           (input order preserved)
+#   policy: BKP_THIN_DEFAULT_POLICY format; defaults to the §5 ladder.
+#
+# Every snapshot is assigned the first tier whose age band contains it, then
+# quantized to that tier's wall-clock grid cell; the newest snapshot in each
+# (tier, cell) survives, and the newest snapshot overall always survives
+# (keep_last=1). Deterministic and idempotent for a fixed <now>: re-running
+# on its own keep-set changes nothing.
+bkp::thin() {
+  local now="${1:-}" policy="${2:-$BKP_THIN_DEFAULT_POLICY}"
+  [[ "$now" == <-> ]] || {
+    log_error "bkp::thin: <now> must be a unix epoch, got '$now'"
+    return 2
+  }
+
+  # Parse the policy table. ${(z)} tokenization (not pattern-trimming, which
+  # would need extendedglob) handles indentation and blank lines.
+  local -a t_grid=() t_min=() t_max=()
+  local line
+  local -a f
+  while IFS= read -r line; do
+    f=(${(z)line})
+    (( ${#f} )) || continue
+    [[ "$f[1]" == '#'* ]] && continue
+    if (( ${#f} != 3 )) || [[ "$f[2]" != <-> ]] ||
+      [[ "$f[3]" != <-> && "$f[3]" != - ]]; then
+      log_error "bkp::thin: bad policy line: '$line'"
+      return 2
+    fi
+    t_grid+=("$f[1]") t_min+=("$f[2]") t_max+=("$f[3]")
+  done <<<"$policy"
+  (( ${#t_grid} )) || {
+    log_error "bkp::thin: empty policy"
+    return 2
+  }
+
+  # Read the snapshot list.
+  local -a s_id=() s_epoch=()
+  local id epoch
+  while IFS=$'\t' read -r id epoch; do
+    [[ -z "$id$epoch" ]] && continue
+    if [[ -z "$id" || "$epoch" != <-> ]]; then
+      log_error "bkp::thin: bad snapshot line (want <id><TAB><epoch>): '$id'"
+      return 2
+    fi
+    s_id+=("$id") s_epoch+=("$epoch")
+  done
+  (( ${#s_id} )) || return 0
+
+  # keep_last=1 — the newest snapshot always survives.
+  local i newest=1
+  for (( i = 2; i <= ${#s_id}; i++ )); do
+    (( s_epoch[i] > s_epoch[newest] )) && newest=$i
+  done
+
+  # Newest snapshot per (tier, wall-clock cell).
+  local -A best=()   # "tier:cell" -> index of the newest snapshot in that cell
+  local age t key REPLY
+  for (( i = 1; i <= ${#s_id}; i++ )); do
+    age=$(( now - s_epoch[i] ))
+    (( age < 0 )) && age=0   # clock skew: a future snapshot is "brand new"
+    for (( t = 1; t <= ${#t_grid}; t++ )); do
+      (( age >= t_min[t] )) || continue
+      [[ "$t_max[t]" == - ]] || (( age < t_max[t] )) || continue
+      break
+    done
+    (( t <= ${#t_grid} )) || {
+      log_error "bkp::thin: no tier covers age ${age}s — policy must be exhaustive"
+      return 2
+    }
+    bkp::thin::cell "$t_grid[t]" "$s_epoch[i]" || return 2
+    key="$t:$REPLY"
+    if [[ -z "${best[$key]:-}" ]] || (( s_epoch[i] > s_epoch[best[$key]] )); then
+      best[$key]=$i
+    fi
+  done
+
+  local -A keep=()
+  keep[$newest]=1
+  for key in ${(k)best}; do
+    keep[$best[$key]]=1
+  done
+
+  for (( i = 1; i <= ${#s_id}; i++ )); do
+    if (( ${keep[$i]:-0} )); then
+      print -r -- "keep"$'\t'"$s_id[i]"
+    else
+      print -r -- "drop"$'\t'"$s_id[i]"
+    fi
+  done
+}
