@@ -41,6 +41,8 @@ deny = [
   "~/Library/Caches",
   "~/Library/Application Support/JetBrains/*/plugins",  # ~1 GB/IDE, marketplace-regenerable
   "**/*.sock",
+  "**/.#lk*",                           # gnupg lock litter (spec §2 B: skip .#lk*/S.*)
+  "**/S.gpg-agent*",
   "**/.DS_Store",
   "**/node_modules/**",
   "**/__pycache__/**",
