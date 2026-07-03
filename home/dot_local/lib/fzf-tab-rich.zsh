@@ -83,6 +83,23 @@ ftb_rich::classify() {
   return 0
 }
 
+# ── shadowing precedence ─────────────────────────────────────────────────────
+# A display key can resolve to more than one group — e.g. `system-update` is
+# both an external command and a shell function. fzf-tab keys candidates by the
+# display string, so we can't tell which row is which from _ftb_complist alone.
+# Pick the type zsh would actually run: alias > function > builtin > command.
+# Anything outside that ladder (or a tie) keeps the first type. Sets REPLY.
+typeset -gA _ftb_rich_shadow_rank=( alias 1 function 2 builtin 3 command 4 )
+ftb_rich::_shadow_pick() {
+  emulate -L zsh
+  local t best=$1 r; local -i bestrank=99
+  for t in "$@"; do
+    r=${_ftb_rich_shadow_rank[$t]:-50}
+    (( r < bestrank )) && { bestrank=$r; best=$t }
+  done
+  REPLY=$best
+}
+
 # ── render ───────────────────────────────────────────────────────────────────
 # Rewrite _ftb_complist in place: prepend a colored type glyph to field 1 of
 # each entry. Field 2 (accept key) and field 3 (suffix) are preserved verbatim;
@@ -110,15 +127,30 @@ ftb_rich::render() {
         (*)  REPLY=file ;;
       esac
     else
-      local match=${_ftb_compcap[(r)${(b)f2}$bs*]}
-      if [[ -n $match ]]; then
-        v=("${(@0)${match#*$bs}}")
+      # Gather ALL compcap entries for this display key, not just the first:
+      # a key can appear in multiple groups (a name that is both a function and
+      # an external command). Reverse-subscript `(r)` would take only the first.
+      local -a matches=(${(M)_ftb_compcap:#${(b)f2}${bs}*})
+      if (( $#matches == 0 )); then
+        REPLY=fallback
+      elif (( $#matches == 1 )); then
+        v=("${(@0)${matches[1]#*$bs}}")
         word=${(Q)v[word]}
         filepath=''
         (( $+v[realdir] )) && filepath=${v[realdir]}$word
         ftb_rich::classify "${_ftb_groups[${v[group]:-0}]:-}" "$filepath"
       else
-        REPLY=fallback
+        # Ambiguous key: classify each group's entry, then pick by shadowing.
+        local -a types=(); local m
+        for m in $matches; do
+          v=("${(@0)${m#*$bs}}")
+          word=${(Q)v[word]}
+          filepath=''
+          (( $+v[realdir] )) && filepath=${v[realdir]}$word
+          ftb_rich::classify "${_ftb_groups[${v[group]:-0}]:-}" "$filepath"
+          types+=$REPLY
+        done
+        ftb_rich::_shadow_pick $types
       fi
     fi
 

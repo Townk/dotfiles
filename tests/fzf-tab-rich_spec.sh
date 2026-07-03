@@ -120,5 +120,21 @@ Describe 'fzf-tab-rich.zsh'
       When call key_of "$_ftb_complist[1]"
       The output should equal 'foo.txt'
     End
+
+    # Regression: a candidate whose display key exists in more than one group
+    # (e.g. `system-update` is both an external command AND a shell function).
+    # The compcap lookup must not blindly take the first match — it should pick
+    # the type that actually runs (zsh shadowing: function shadows the command).
+    It 'picks the shadowing type (function over command) for a key in two groups'
+      _ftb_groups=('external command' 'shell function')
+      _ftb_compcap=(
+        "system-update${bs}word${nul}system-update${nul}group${nul}1"
+        "system-update${bs}word${nul}system-update${nul}group${nul}2"
+      )
+      _ftb_complist=("$(entry $'\e[33m' system-update '')")
+      ftb_rich::render
+      When call print -rn -- "$_ftb_complist[1]"
+      The output should include "${_ftb_rich_glyph[function]}"
+    End
   End
 End
