@@ -121,6 +121,24 @@ Describe 'fzf-tab-rich.zsh'
       The output should equal 'foo.txt'
     End
 
+    # Regression: with MULTIPLE rows each hitting the ambiguous (>1 match) branch
+    # — which happens whenever _match/_approximate add duplicate compcap entries —
+    # a bare `local m` re-declared per outer iteration made zsh PRINT `m=<value>`
+    # (the stale compcap entry) to stdout, dumping a wall of internals. render
+    # must emit nothing to stdout.
+    It 'does not leak loop internals to stdout across multiple ambiguous rows'
+      _ftb_groups=('external command' 'shell function')
+      _ftb_compcap=(
+        "a${bs}word${nul}a${nul}group${nul}1"
+        "a${bs}word${nul}a${nul}group${nul}2"
+        "b${bs}word${nul}b${nul}group${nul}1"
+        "b${bs}word${nul}b${nul}group${nul}2"
+      )
+      _ftb_complist=("$(entry '' a '')" "$(entry '' b '')")
+      When call ftb_rich::render
+      The output should equal ''
+    End
+
     # Regression: a candidate whose display key exists in more than one group
     # (e.g. `system-update` is both an external command AND a shell function).
     # The compcap lookup must not blindly take the first match — it should pick

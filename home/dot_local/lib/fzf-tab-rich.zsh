@@ -112,9 +112,13 @@ ftb_rich::render() {
   local -i degrade=0
   (( $#_ftb_complist > ${FZF_TAB_RICH_MAX:-400} )) && degrade=1
 
-  local entry f2 f3 filepath word g c
+  # Declare every loop-scoped local ONCE, here — never with a bare `local` inside
+  # the loop. In zsh a bare `local m` (no assignment), re-run on a later iteration
+  # when `m` already exists, PRINTS `m=<value>` to stdout (typeset's "show the
+  # parameter" behavior) — which would dump compcap entries onto the terminal.
+  local entry f2 f3 filepath word g c m
   local -A v
-  local -a out=()
+  local -a out=() matches types
 
   for entry in $_ftb_complist; do
     f2=${${entry#*$nul}%$nul*}          # accept key (between first & last NUL)
@@ -130,7 +134,7 @@ ftb_rich::render() {
       # Gather ALL compcap entries for this display key, not just the first:
       # a key can appear in multiple groups (a name that is both a function and
       # an external command). Reverse-subscript `(r)` would take only the first.
-      local -a matches=(${(M)_ftb_compcap:#${(b)f2}${bs}*})
+      matches=(${(M)_ftb_compcap:#${(b)f2}${bs}*})
       if (( $#matches == 0 )); then
         REPLY=fallback
       elif (( $#matches == 1 )); then
@@ -141,7 +145,7 @@ ftb_rich::render() {
         ftb_rich::classify "${_ftb_groups[${v[group]:-0}]:-}" "$filepath"
       else
         # Ambiguous key: classify each group's entry, then pick by shadowing.
-        local -a types=(); local m
+        types=()
         for m in $matches; do
           v=("${(@0)${m#*$bs}}")
           word=${(Q)v[word]}
