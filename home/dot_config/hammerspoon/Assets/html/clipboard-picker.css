@@ -35,6 +35,32 @@
   --mono-font: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Symbols Nerd Font Mono', monospace;
   --ui-font: -apple-system, BlinkMacSystemFont, sans-serif;
   --icon-font: 'Symbols Nerd Font Mono';
+
+  --bright-white: rgb(255, 255, 255);
+  --meta-label: rgb(150, 150, 150);
+
+  /* Per-kind item icon colors. text/rich/image/files match pick-clipboard's
+   * (the terminal picker's) truecolor ANSI palette exactly (same RGB
+   * triples as its c_text/c_rich/c_image/c_files). mixed/file/directory/url
+   * are pulled from the canonical Catppuccin Mocha vocabulary in
+   * home/.chezmoidata/theme.yaml (the project's actual color source of
+   * truth) -- mixed snaps pick-clipboard's hand-tuned near-match to the
+   * exact "maroon" slot; file/directory/url are new, chosen to stay
+   * visually distinct from every other color already in use here. */
+  --icon-text: rgb(137, 180, 250);
+  --icon-rich: rgb(225, 170, 80);
+  --icon-image: rgb(166, 209, 137);
+  --icon-files: rgb(148, 156, 183);
+  --icon-mixed: rgb(235, 160, 172); /* maroon */
+  --icon-file: rgb(180, 190, 254); /* lavender */
+  --icon-directory: rgb(250, 179, 135); /* peach */
+  --icon-url: rgb(116, 199, 236); /* sapphire */
+
+  /* pick-clipboard's pin/pinned-row color is rgb(225, 170, 80) -- the SAME
+   * as --icon-rich above. Requested as the midpoint between that terminal
+   * yellow and --bright-white: (225+255)/2, (170+255)/2, (80+255)/2,
+   * rounded half-up -> 240, 213, 168. */
+  --pin-yellow: rgb(240, 213, 168);
 }
 
 html { background: transparent; }
@@ -44,7 +70,7 @@ body { background: transparent; overflow: hidden; }
 .panel {
   width: 100vw;
   height: 100vh;
-  background: rgba(30, 30, 36, 0.88);
+  background: rgba(30, 30, 36, 0.95);
   border: 1px solid rgba(217, 217, 217, 1);
   border-radius: 12px;
   display: flex;
@@ -58,15 +84,15 @@ body { background: transparent; overflow: hidden; }
 .search-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
+  gap: 15px;
+  padding: 15px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex: 0 0 auto;
 }
 .search-icon {
   font-family: var(--icon-font);
   font-size: var(--input-size);
-  color: rgba(130, 170, 255, 1);
+  color: var(--bright-white);
 }
 #query {
   flex: 1 1 auto;
@@ -90,23 +116,37 @@ body { background: transparent; overflow: hidden; }
   flex: 0 0 40%;
   overflow-y: auto;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 6px 0;
+  padding: 15px;
 }
 
 .group-header {
-  font-size: var(--meta-size);
+  font-size: var(--meta-size); /* 0.9x .item's font-size, both derived from --base-size */
   color: rgba(128, 128, 128, 1);
-  padding: 6px 12px 3px 12px;
-  text-transform: uppercase;
+  /* Horizontal inset comes exclusively from .list-col's own padding -- no
+   * horizontal padding here, or the two would compound. */
+  padding: 6px 0 3px;
   letter-spacing: 0.04em;
+}
+/* The JS always renders the first group's header as .list-col's literal
+ * first child (renderList()'s lastGroup starts null), so this top padding
+ * would otherwise compound with .list-col's own top padding. Headers for
+ * any later group are preceded by items, so they keep the separation. */
+.group-header:first-child {
+  padding-top: 0;
 }
 
 .item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px;
-  margin: 0 6px;
+  /* Negative margin + equal padding: with box-sizing: border-box, the
+   * padding is absorbed back into the now-wider box, so the CONTENT ends
+   * up at the exact same horizontal position as with 0/0 -- only the
+   * .selected background (which paints the full border-box) actually
+   * extends outward, eating 6px into .list-col's own padding on each
+   * side to match the 6px above/below the text vertically. */
+  margin: 0 -6px;
+  padding: 6px;
   border-radius: 8px; /* rounded-rect selection highlight */
   font-size: var(--base-size);
   white-space: nowrap;
@@ -118,7 +158,16 @@ body { background: transparent; overflow: hidden; }
   font-family: var(--icon-font);
   flex: 0 0 16px;
   text-align: center;
+  color: var(--icon-mixed); /* fallback for any kind besides the ones below, matching pick-clipboard's ELSE branch */
 }
+.item[data-kind="text"] .icon { color: var(--icon-text); }
+.item[data-kind="rtf"] .icon,
+.item[data-kind="html"] .icon { color: var(--icon-rich); }
+.item[data-kind="image"] .icon { color: var(--icon-image); }
+.item[data-kind="files"] .icon { color: var(--icon-files); }
+.item[data-kind="file"] .icon { color: var(--icon-file); }
+.item[data-kind="directory"] .icon { color: var(--icon-directory); }
+.item[data-kind="url"] .icon { color: var(--icon-url); }
 .item .content {
   flex: 1 1 auto;
   overflow: hidden;
@@ -133,11 +182,12 @@ body { background: transparent; overflow: hidden; }
    * containing its own PUA characters that had nowhere to fall back to. */
   font-family: var(--ui-font), var(--icon-font);
 }
-.item .pin {
-  font-family: var(--icon-font);
-  flex: 0 0 14px;
-  text-align: center;
-  color: rgba(225, 170, 80, 1);
+/* Pinned rows: content text turns yellow, matching pick-clipboard's own
+ * pinned-row text color (see --pin-yellow above for why the GUI value
+ * differs from the terminal's). The type icon keeps its own kind color
+ * either way -- pinned status doesn't change it, in the terminal either. */
+.item.pinned .content {
+  color: var(--pin-yellow);
 }
 
 .right-col {
@@ -150,7 +200,7 @@ body { background: transparent; overflow: hidden; }
 .preview-pane {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 10px 12px;
+  padding: 15px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   min-height: 0;
 }
@@ -168,6 +218,31 @@ body { background: transparent; overflow: hidden; }
   border: none;
   background: white;
   border-radius: 6px;
+  /* This renders arbitrary, uncontrolled HTML/RTF-converted content (rich
+   * text from whatever app originated the clip) inside a sandboxed iframe
+   * -- we can't rewrite ITS internal colors without a real risk of also
+   * stomping legitimate color use (headings, highlights, etc.) baked into
+   * the content. Inverting the whole rendered iframe flips its typical
+   * "black text on white" into "white text on black", matching the rest of
+   * the panel's dark theme while preserving relative color relationships
+   * (hue-rotate(180deg) alongside invert(1) keeps inverted hues looking
+   * natural rather than shifted, e.g. blue stays a blue rather than
+   * becoming orange) -- the standard trick for theming iframe'd content you
+   * don't control. Known tradeoff: any actual images embedded IN the
+   * html/rtf blob itself would also get visually inverted; clips captured
+   * as their own separate "image" kind are unaffected (this rule only
+   * targets the html/rtf preview iframe). */
+  filter: invert(1) hue-rotate(180deg);
+}
+/* .no-bg is added by the load handler in clipboard-picker.html when the
+ * content has NO explicit background anywhere (html or body) -- inverting
+ * would be wrong here, since there'd be no white layer to invert INTO
+ * black, just the dark panel showing through transparently (which would
+ * get inverted to light instead). Let the panel's own background show
+ * through untouched instead. */
+.preview-pane iframe.no-bg {
+  background: transparent;
+  filter: none;
 }
 .preview-pane img {
   max-width: 100%;
@@ -183,13 +258,79 @@ body { background: transparent; overflow: hidden; }
 
 .meta-pane {
   flex: 0 0 auto;
-  padding: 8px 12px;
+  padding: 15px;
   font-size: var(--meta-size);
+}
+.meta-title {
+  /* Same size as the rest of the metadata text (inherited from .meta-pane),
+   * just bold -- not a bigger heading. */
+  font-weight: 600;
+  color: var(--bright-white);
+  /* The gap to the first row below -- .meta-title + .meta-row (NOT
+   * .meta-row:first-child, which never matches here: .meta-title is the
+   * actual first child of .meta-pane, so the first .meta-row is the SECOND
+   * child overall, not the first) zeroes that row's own top padding so
+   * this margin is the ONLY spacing between them, not compounded with it. */
+  margin-bottom: 15px;
 }
 .meta-row {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  padding: 1px 0;
+  /* 6px top + 6px bottom per row; combined with a neighbor's own 6px (and
+   * the border-bottom sitting between them) that's a 12px gap around the
+   * separator line, 6px above/6px below it. */
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-.meta-row .label { color: rgba(150, 150, 150, 1); }
+.meta-title + .meta-row {
+  padding-top: 0; /* avoid compounding with .meta-title's own margin-bottom above */
+}
+.meta-row:last-child {
+  border-bottom: none; /* no separator after the last row, .meta-pane's own bottom padding follows */
+}
+.meta-row:empty {
+  display: none; /* the on-demand #dimensionsRow placeholder, before it's populated (or for non-image kinds) */
+}
+.meta-row .label { color: var(--meta-label); }
 .meta-row .value { color: rgba(210, 210, 210, 1); }
+
+.source-icon {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
+.source-icon img {
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+/* --- (E) keybinding hints --------------------------------------------- */
+/* Same font size (14px, hardcoded to match, not this picker's --meta-size)
+ * and footer/footer-key treatment as which-key-overlay.css's .footer --
+ * dim label text, brighter key glyph. Padding matches every other pane's
+ * own 15px all-around (search-row/list-col/preview-pane/meta-pane). */
+.hints-row {
+  font-family: var(--ui-font), var(--icon-font);
+  font-size: 14px;
+  color: rgba(102, 102, 102, 1);
+  white-space: nowrap;
+  padding: 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  gap: 24px; /* between hints -- bigger than .hint-key's own margin-right below */
+  flex: 0 0 auto;
+}
+.hint-key {
+  font-family: var(--icon-font), var(--ui-font);
+  color: rgba(191, 191, 191, 1);
+  margin-right: 8px; /* key -> its own label */
+}
+.hint-mod {
+  margin-right: 5px; /* modifier -> key -- box-model margin, not
+    letter-spacing: the two glyphs get shaped into one cluster by the
+    icon font, leaving letter-spacing nothing to act between. */
+}

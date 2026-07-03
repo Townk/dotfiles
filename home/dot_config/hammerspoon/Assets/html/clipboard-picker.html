@@ -9,8 +9,8 @@
 <body>
   <div class="panel">
     <div class="search-row">
-      <!-- fa-magnifying-glass, U+10F002 (verified against symbols.db) -->
-      <span class="search-icon">&#x10F002;</span>
+      <!-- fa-clipboard_list, U+ED7B (verified against symbols.db) -->
+      <span class="search-icon">&#xED7B;</span>
       <input id="query" type="text" placeholder="Type to filter entries…" autocomplete="off" spellcheck="false">
     </div>
     <div class="body-row">
@@ -19,6 +19,31 @@
         <div class="preview-pane" id="preview"><div class="preview-empty">No preview</div></div>
         <div class="meta-pane" id="meta"></div>
       </div>
+    </div>
+    <!-- Same footer-key/label pattern as which-key-overlay.html's .footer:
+         nf-md-keyboard_return (U+F0311), nf-md-keyboard_esc (U+F12B7),
+         nf-md-apple_keyboard_option (U+F0635), all verified against
+         symbols.db. Plain "⌃" (U+2303) for Control matches the overlay's
+         own ⌃D/⌃U style; Option gets the dedicated glyph above instead of
+         the plain "⌥" character. Modifier<->key spacing uses a wrapped
+         .hint-mod span + margin, NOT letter-spacing: the two adjacent PUA
+         glyphs get shaped into a single cluster by the icon font, so
+         letter-spacing had no character boundary to act on (confirmed:
+         changing its value had zero visible effect at any size). Key-to-
+         label and between-hint spacing come from CSS margin/gap too, not
+         literal spaces.
+
+         hintPinLabel and the whole hintAltEnter hint are updated on every
+         selection change by updateHints() below (pin/unpin text; ⌥Enter's
+         raw/markdown label and visibility, since it's only relevant for
+         some kinds). -->
+    <div class="hints-row">
+      <span><span class="hint-key">&#xF12B7;</span>close</span>
+      <span><span class="hint-key"><span class="hint-mod">&#x2303;</span>D</span>delete</span>
+      <span><span class="hint-key"><span class="hint-mod">&#x2303;</span>P</span><span id="hintPinLabel">pin</span></span>
+      <span><span class="hint-key">&#xF0311;</span>paste</span>
+      <span><span class="hint-key"><span class="hint-mod">&#x2303;</span>&#xF0311;</span>keep open</span>
+      <span id="hintAltEnter"><span class="hint-key"><span class="hint-mod">&#xF0635;</span>&#xF0311;</span><span id="hintAltEnterLabel">raw</span></span>
     </div>
   </div>
   <script>
@@ -39,13 +64,19 @@
     // against ~/.local/share/fonts/nerd-font/symbols.db by name — these are
     // 6-hex-digit Plane 16 (Supplementary PUA-B) codepoints, U+10Fxxx, NOT
     // 5-digit U+F0xxx (Plane 15): fa-font, fa-paintbrush (rtf/html),
-    // fa-image, fa-folder (files), fa-shuffle (mixed), fa-thumbtack (pin).
+    // fa-image, fa-folder (files).
     var ICONS = {
       text: '\u{10F031}', rtf: '\u{10F1FC}', html: '\u{10F1FC}',
-      image: '\u{10F03E}', files: '\u{10F07B}'
+      image: '\u{10F03E}', files: '\u{10F07B}',
+      // Material Design Icons glyphs -- a different icon set within the
+      // same Nerd Font, living in the 5-digit Plane 15 range (also
+      // verified against symbols.db): nf-md-file_outline,
+      // nf-md-folder_outline, nf-md-link_variant.
+      file: '\u{F0224}', directory: '\u{F0256}', url: '\u{F0339}'
     };
-    var MIXED_ICON = '\u{10F074}';
-    var PIN_ICON = '\u{10F08D}';
+    // nf-md-file_document_multiple_outline (5-digit Plane 15, verified
+    // against symbols.db).
+    var MIXED_ICON = '\u{F1518}';
 
     function post(action, extra) {
       var msg = Object.assign({ action: action }, extra || {});
@@ -70,10 +101,10 @@
         }
         var icon = ICONS[it.kind] || MIXED_ICON;
         var sel = (i === selectedIndex) ? ' selected' : '';
-        html += '<div class="item' + sel + '" data-idx="' + i + '">'
+        var pinnedClass = it.pinned ? ' pinned' : '';
+        html += '<div class="item' + sel + pinnedClass + '" data-idx="' + i + '" data-kind="' + it.kind + '">'
           + '<span class="icon">' + icon + '</span>'
           + '<span class="content">' + escapeHtml(it.preview) + '</span>'
-          + '<span class="pin">' + (it.pinned ? PIN_ICON : '') + '</span>'
           + '</div>';
       }
       listEl.innerHTML = html || '<div class="preview-empty" style="padding:8px 12px;">No clips</div>';
@@ -86,26 +117,153 @@
         });
         el.addEventListener('dblclick', function () { accept(true); });
       });
-      var selEl = listEl.querySelector('.item.selected');
-      if (selEl) selEl.scrollIntoView({ block: 'nearest' });
+      scrollSelectedIntoView();
+    }
+
+    // Keeps SCROLL_OFFSET items visible between the selected item and
+    // whichever edge of the viewport it's approaching (vim's `scrolloff`,
+    // applied to this list) -- shrinking near the start/end of the list,
+    // since there's nothing further to reveal there.
+    var SCROLL_OFFSET = 3;
+    function scrollSelectedIntoView() {
+      var listEl = document.getElementById('list');
+      var items = listEl.querySelectorAll('.item');
+      if (items.length === 0) return;
+      var selEl = items[selectedIndex];
+      if (!selEl) return;
+
+      // el.offsetTop is relative to el.offsetParent -- which, empirically,
+      // is NOT #list itself here (verified: every child's offsetTop carried
+      // a constant ~50px offset that #list.scrollTop knows nothing about).
+      // Comparing the two directly silently skewed every margin check by
+      // that constant, in OPPOSITE directions for the top vs. bottom
+      // comparison -- exactly the down-scrolls-too-far/up-scrolls-not-far-
+      // enough asymmetry this was reported as. getBoundingClientRect() is
+      // always screen-relative regardless of the offsetParent chain;
+      // subtracting the list's own rect.top and adding back its current
+      // scrollTop gives each element's position within #list's scrollable
+      // content, independent of both the offsetParent quirk and the
+      // current scroll position.
+      var listRectTop = listEl.getBoundingClientRect().top;
+      function relTop(el) {
+        return el.getBoundingClientRect().top - listRectTop + listEl.scrollTop;
+      }
+
+      // Within SCROLL_OFFSET items of either edge: snap all the way to
+      // that edge (there's nothing further to reveal beyond it, headers
+      // included) rather than computing a partial margin.
+      if (selectedIndex < SCROLL_OFFSET) {
+        listEl.scrollTop = 0;
+        return;
+      }
+      if (selectedIndex >= items.length - SCROLL_OFFSET) {
+        var lastEl = items[items.length - 1];
+        listEl.scrollTop = Math.max(0, relTop(lastEl) + lastEl.offsetHeight - listEl.clientHeight);
+        return;
+      }
+
+      // Otherwise, measure the ACTUAL DOM elements SCROLL_OFFSET items
+      // away rather than approximating with rowHeight * SCROLL_OFFSET --
+      // a group header interspersed within that span has a different
+      // height than a normal row, which threw a uniform-height estimate off.
+      var aboveEl = items[selectedIndex - SCROLL_OFFSET];
+      var belowEl = items[selectedIndex + SCROLL_OFFSET];
+      var desiredTop = relTop(aboveEl);
+      var desiredBottom = relTop(belowEl) + belowEl.offsetHeight;
+      if (desiredTop < listEl.scrollTop) {
+        listEl.scrollTop = desiredTop;
+      } else if (desiredBottom > listEl.scrollTop + listEl.clientHeight) {
+        listEl.scrollTop = desiredBottom - listEl.clientHeight;
+      }
+    }
+
+    function formatThousands(n) {
+      return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
+    // For "image"/"files"/"file" clips, clipboard-history.lua stores `len`
+    // as a byte size (total blob size, or the real on-disk file size for
+    // "file" -- see len_val in capture_now()) rather than a character
+    // count, so it needs KB/MB-style formatting instead of a thousands
+    // separator. "directory" has no meaningful size to show at all. "url"
+    // has a meaningful character count, but a word count is just noise for
+    // a single token.
+    var BYTE_SIZED_KINDS = { image: true, files: true, file: true };
+    var SIZELESS_KINDS = { directory: true };
+    var CHARACTERS_ONLY_KINDS = { url: true };
+    var BYTE_UNITS = ['B', 'Kb', 'Mb', 'Gb'];
+    function formatBytes(n) {
+      var i = 0;
+      var val = n;
+      while (val >= 1024 && i < BYTE_UNITS.length - 1) {
+        val /= 1024;
+        i++;
+      }
+      var rounded = (i === 0) ? Math.round(val) : Math.round(val * 10) / 10;
+      return rounded + BYTE_UNITS[i];
     }
 
     function updateMeta(it) {
       var metaEl = document.getElementById('meta');
       if (!it) { metaEl.innerHTML = ''; return; }
-      function row(label, value) {
-        return '<div class="meta-row"><span class="label">' + label + '</span><span class="value">' + escapeHtml(value) + '</span></div>';
+      // valueHtml is trusted, pre-escaped/pre-built HTML (unlike the old
+      // version, this is no longer escaped internally) -- callers must
+      // escape their own plain-text values themselves.
+      function row(label, valueHtml) {
+        return '<div class="meta-row"><span class="label">' + label + '</span><span class="value">' + valueHtml + '</span></div>';
       }
-      metaEl.innerHTML = row('Source:', it.app)
-        + row('Content Type:', it.kindLabel)
-        + row('Characters:', it.len)
-        + row('Words:', it.words)
-        + row('Copied:', it.age);
+      var sizeRow = SIZELESS_KINDS[it.kind] ? ''
+        : BYTE_SIZED_KINDS[it.kind] ? row('Bytes:', formatBytes(it.len))
+        : CHARACTERS_ONLY_KINDS[it.kind] ? row('Characters:', formatThousands(it.len))
+        : row('Characters:', formatThousands(it.len)) + row('Words:', formatThousands(it.words));
+      metaEl.innerHTML = '<div class="meta-title">Information</div>'
+        + row('Source:', '<span class="source-icon" id="sourceIcon"></span>' + escapeHtml(it.app))
+        + row('Content Type:', escapeHtml(it.kindLabel))
+        + sizeRow
+        // Populated on demand by __setPreview below, once/if the fetched
+        // preview turns out to be an image -- collapses to nothing (see
+        // .meta-row:empty in the CSS) for every other kind.
+        + '<div class="meta-row" id="dimensionsRow"></div>'
+        + row('Copied:', escapeHtml(it.age));
+      // Real app icons are fetched on demand (not bulk-loaded with ITEMS) --
+      // see fetch_app_icon in clipboard-picker.lua.
+      post('icon', { id: it.id, bundleId: it.bundleId, appName: it.app });
+    }
+
+    // Lua -> JS: apply a fetched app icon, but only if the item it was for
+    // is STILL the one currently shown (guards against a stale response
+    // landing after the user has already moved to a different item).
+    window.__setSourceIcon = function (payload) {
+      var current = filtered[selectedIndex];
+      if (!current || current.id !== payload.id || !payload.dataUri) return;
+      var iconEl = document.getElementById('sourceIcon');
+      if (iconEl) iconEl.innerHTML = '<img src="' + payload.dataUri + '">';
+    };
+
+    // ⌥Enter only does something distinct for these kinds (see
+    // restore_plain_by_id in clipboard-history.lua) -- html/rtf strip
+    // styling down to "raw" text, the rest linkify as "markdown". Every
+    // other kind (text, files, mixed) already pastes as plain text via a
+    // plain Enter, so the hint is hidden rather than shown as a no-op.
+    var ALT_ENTER_LABELS = {
+      html: 'raw', rtf: 'raw',
+      image: 'markdown', file: 'markdown', directory: 'markdown', url: 'markdown',
+    };
+    function updateHints(it) {
+      var pinLabel = document.getElementById('hintPinLabel');
+      if (pinLabel) pinLabel.textContent = (it && it.pinned) ? 'unpin' : 'pin';
+
+      var altEnterHint = document.getElementById('hintAltEnter');
+      var altEnterLabel = document.getElementById('hintAltEnterLabel');
+      var label = it && ALT_ENTER_LABELS[it.kind];
+      if (altEnterHint) altEnterHint.style.display = label ? '' : 'none';
+      if (label && altEnterLabel) altEnterLabel.textContent = label;
     }
 
     function updateRight() {
       var it = filtered[selectedIndex];
       updateMeta(it);
+      updateHints(it);
       var previewEl = document.getElementById('preview');
       if (!it) { previewEl.innerHTML = '<div class="preview-empty">No preview</div>'; return; }
       previewEl.innerHTML = '<div class="preview-empty">Loading…</div>';
@@ -115,9 +273,45 @@
     // Lua -> JS callbacks (invoked via webview:evaluateJavaScript).
     window.__setPreview = function (content) {
       var previewEl = document.getElementById('preview');
+      // Guards the Dimensions injection below against a stale response
+      // landing after the user has already moved to a different item (the
+      // preview pane render further down predates this check and isn't
+      // guarded the same way -- not touching that pre-existing behavior).
+      var current = filtered[selectedIndex];
+      var dimEl = document.getElementById('dimensionsRow');
+      if (dimEl) {
+        dimEl.innerHTML = (content && current && content.id === current.id
+          && content.kind === 'image' && content.width && content.height)
+          ? '<span class="label">Dimensions:</span><span class="value">' + content.width + '\u00d7' + content.height + '</span>'
+          : '';
+      }
       if (!content) { previewEl.innerHTML = '<div class="preview-empty">No preview</div>'; return; }
       if (content.kind === 'html') {
-        previewEl.innerHTML = '<iframe sandbox srcdoc="' + escapeHtml(content.html) + '"></iframe>';
+        // allow-same-origin (but NOT allow-scripts) lets the load handler
+        // below read the iframe's computed styles -- still fully blocks any
+        // embedded <script> in the clip from ever executing.
+        previewEl.innerHTML = '<iframe sandbox="allow-same-origin" srcdoc="' + escapeHtml(content.html) + '"></iframe>';
+        var frame = previewEl.querySelector('iframe');
+        frame.addEventListener('load', function () {
+          try {
+            var doc = frame.contentDocument;
+            function isTransparentBg(style) {
+              return style.backgroundColor === 'rgba(0, 0, 0, 0)' && style.backgroundImage === 'none';
+            }
+            var htmlTransparent = isTransparentBg(getComputedStyle(doc.documentElement));
+            var bodyTransparent = !doc.body || isTransparentBg(getComputedStyle(doc.body));
+            if (htmlTransparent && bodyTransparent) {
+              // No explicit background anywhere -- let the dark panel show
+              // through instead of the CSS default white/invert treatment
+              // (see clipboard-picker.css's .no-bg rule), and give
+              // otherwise-uncolored text the same gray .panel itself uses.
+              // Normal (non-!important) inheritance: any text the clip DID
+              // color explicitly keeps its own color untouched.
+              frame.classList.add('no-bg');
+              doc.documentElement.style.color = 'rgba(224, 224, 224, 1)';
+            }
+          } catch (e) {}
+        });
       } else if (content.kind === 'image') {
         previewEl.innerHTML = '<img src="' + content.dataUri + '">';
       } else {
@@ -125,14 +319,32 @@
       }
     };
 
-    window.__setPinned = function (id, pinned) {
-      for (var i = 0; i < ITEMS.length; i++) { if (ITEMS[i].id === id) ITEMS[i].pinned = pinned; }
+    // payload: { id, pinned, group } -- group is recomputed Lua-side (via
+    // the same group_label() the initial query uses) since pinning moves a
+    // clip into/out of the "Pinned" group and the client has no way to
+    // recompute that itself from a pre-formatted group string alone.
+    window.__setPinned = function (payload) {
+      for (var i = 0; i < ITEMS.length; i++) {
+        if (ITEMS[i].id === payload.id) { ITEMS[i].pinned = payload.pinned; ITEMS[i].group = payload.group; }
+      }
       applyFilter(document.getElementById('query').value, true);
+      if (payload.pinned) {
+        // The Pinned group is always first -- reveal its header the same
+        // way selecting the very first item already does. Unpinning needs
+        // no equivalent: applyFilter above re-selects the same clip at its
+        // new (unpinned) position, and scrollSelectedIntoView() already
+        // brings whatever's selected into view.
+        document.getElementById('list').scrollTop = 0;
+      }
     };
 
-    window.__removeItem = function (id) {
+    // nextSelectId: which clip to select once `id` is gone (computed by the
+    // caller BEFORE removal, from the about-to-be-stale `filtered` array) --
+    // avoids the old behavior of always snapping back to index 0, since the
+    // just-removed id can never re-match in the post-removal list.
+    window.__removeItem = function (id, nextSelectId) {
       ITEMS = ITEMS.filter(function (it) { return it.id !== id; });
-      applyFilter(document.getElementById('query').value, true);
+      applyFilter(document.getElementById('query').value, false, nextSelectId);
     };
 
     window.__focusInput = function () {
@@ -141,9 +353,10 @@
       q.select();
     };
 
-    function applyFilter(q, keepSelection) {
+    function applyFilter(q, keepSelection, selectId) {
       q = (q || '').toLowerCase();
-      var prevId = keepSelection && filtered[selectedIndex] ? filtered[selectedIndex].id : null;
+      var prevId = selectId != null ? selectId
+        : (keepSelection && filtered[selectedIndex] ? filtered[selectedIndex].id : null);
       // Pinned-first, otherwise preserve the server-side pinned/last_ts order.
       var base = ITEMS.slice().sort(function (a, b) {
         if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -184,11 +397,24 @@
       post('accept', { id: it.id, dismiss: dismiss });
     }
 
+    // Alt+Enter: paste with RTF/HTML styling stripped (restore_plain_by_id
+    // on the Lua side), always dismissing -- same as a plain Enter accept.
+    function acceptPlain() {
+      var it = filtered[selectedIndex];
+      if (!it) return;
+      post('acceptPlain', { id: it.id });
+    }
+
     function del() {
       var it = filtered[selectedIndex];
       if (!it) return;
+      // Select the next item first (or the previous one, if there is no
+      // next), computed against the about-to-be-stale `filtered` array --
+      // otherwise the deleted id can never re-match afterward and
+      // selection would fall back to index 0 every time.
+      var next = filtered[selectedIndex + 1] || filtered[selectedIndex - 1];
       post('delete', { id: it.id });
-      window.__removeItem(it.id);
+      window.__removeItem(it.id, next ? next.id : null);
     }
 
     function pin() {
@@ -202,7 +428,8 @@
     });
 
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && e.altKey) { e.preventDefault(); accept(false); return; }
+      if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); accept(false); return; }
+      if (e.key === 'Enter' && e.altKey) { e.preventDefault(); acceptPlain(); return; }
       if (e.key === 'Enter') { e.preventDefault(); accept(true); return; }
       if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'j')) { e.preventDefault(); move(1); return; }
       if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'k')) { e.preventDefault(); move(-1); return; }

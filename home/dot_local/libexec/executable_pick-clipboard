@@ -7,17 +7,33 @@
 #   pinned DESC, last_ts DESC.
 #
 # Wire format (the \x1f/\x1e contract from pick-common.zsh):
-#   <visible preview>\x1f<id>
-# The id is the single tail field (pick::start field:1). Clip content can be
+#   <visible preview>\x1f<id>\x1eMD:<id>
+# Field 1 (pick::start field:1) is the plain id, used by Enter/--field-id
+# recency. Field 2 is a synthetic "MD:<id>" marker (--key-output can only
+# select an existing field, not synthesize a literal), read by Alt-Enter to
+# request the markdown-alternate rendering below. Clip content can be
 # multi-line, which fzf's line-based entry model can't carry inline, so the
 # text is re-fetched from the store by id on every accept / background action
 # instead of being embedded in the line.
 #
 # Keys:
-#   Enter        inject the selected clip's text into the originating pane
+#   Enter        paste the selected clip's text into the originating pane
 #                (zellij-modal captures pick-clipboard's stdout, so we print the
 #                re-fetched text after pick::start returns the id).
-#   Alt-Enter    insert WITHOUT dismissing (--key-background): re-fetch + inject.
+#   Ctrl-O       keep open (--key-background): re-fetch + insert WITHOUT
+#                dismissing. The GUI picker uses Ctrl-Enter for this, but fzf
+#                0.73.1's --bind parser has no "ctrl-enter" key name at all
+#                (confirmed: `fzf --bind ctrl-enter:accept` -> "unsupported
+#                key: ctrl-enter", exit 2) -- most terminals send identical
+#                bytes for Enter and Ctrl-Enter and fzf never implemented the
+#                Kitty-protocol disambiguation for it, unlike the other
+#                ctrl/alt combos it does support. Ctrl-O is the substitute.
+#   Alt-Enter    accept-and-dismiss with the markdown alternate (--key-output
+#                field:2): a [label](file://...) link for file/directory
+#                clips, [url](url) for url clips, an inline
+#                ![](data:image/...;base64,...) for image clips, and plain
+#                text_plain (same as Enter) for every other kind -- there's
+#                no rich-vs-raw distinction in a terminal.
 #   Ctrl-Y       accept-and-copy: re-fetch + copy to *my* clipboard (the pbcopy
 #                shim routes OSC 52 / bridge / local). Stays open? No — Ctrl-Y
 #                is accept-and-dismiss: handled as a background key here that
@@ -107,12 +123,90 @@ clip::inject_by_id() {
   fi
 }
 
+# --- markdown alternate (Alt-Enter, --key-output field:2) -------------------
+# No rich-vs-raw distinction here (there's nothing to strip in a terminal --
+# it's all plain text already); file/directory/url/image clips get linkified,
+# everything else falls back to the same text_plain as a normal Enter.
+
+clip::markdown_url() {
+  local id=$1 url
+  url="$(clip::text_by_id "$id")"
+  printf '[%s](%s)' "$url" "$url"
+}
+
+# POSIX path -> a valid file:// URI, percent-encoding each path segment
+# individually via jq's @uri (not the whole string at once, which would also
+# escape the "/" separators) -- mirrors path_to_file_url in
+# clipboard-history.lua.
+#
+# NOTE: the parameter is named "fpath", not "path" -- zsh's lowercase $path
+# is a special array tied to $PATH; a plain-string `local path=...` shadows
+# it and silently breaks command lookup (sqlite3 et al.) for the rest of
+# this function's scope. Confirmed empirically. Same reasoning in
+# clip::markdown_path_link below.
+clip::path_to_file_url() {
+  local fpath=$1 seg encoded=""
+  for seg in "${(s:/:)fpath}"; do
+    [[ -z "$seg" ]] && continue
+    encoded+="/$(jq -rn --arg s "$seg" '$s|@uri')"
+  done
+  print -r -- "file://$encoded"
+}
+
+# file/directory clips: link text is the basename, target is the already-
+# resolved path Lua's capture code stored under the synthetic
+# "x-resolved-path" UTI (clipboard-history.lua resolves macOS's opaque
+# file-reference URLs there; nothing to re-resolve here).
+clip::markdown_path_link() {
+  local id=$1 fpath
+  fpath="$(sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "SELECT blob FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';")"
+  if [[ -n "$fpath" ]]; then
+    printf '[%s](%s)' "${fpath##*/}" "$(clip::path_to_file_url "$fpath")"
+  else
+    clip::text_by_id "$id"
+  fi
+}
+
+# image clips: try each image UTI in turn (same set/order as
+# IMAGE_UTIS/IMAGE_MIME in clipboard-picker.lua); the first one with a stored
+# blob wins. writefile() needs the sqlite3 fileio extension (built into this
+# system's sqlite3 by default); `base64 -i ... | tr -d '\n'` is portable
+# single-line output regardless of whether the local base64 wraps by default.
+clip::markdown_image() {
+  local id=$1 pair uti mime tmpfile b64
+  local -a utis=(public.png:image/png public.jpeg:image/jpeg public.tiff:image/tiff com.compuserve.gif:image/gif)
+  for pair in "${utis[@]}"; do
+    uti="${pair%%:*}"; mime="${pair#*:}"
+    tmpfile="$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-img.XXXXXX")"
+    sqlite3 "$DB_FILE" "SELECT writefile('$tmpfile', blob) FROM clip_types WHERE clip_id=$id AND uti='$uti';" >/dev/null
+    if [[ -s "$tmpfile" ]]; then
+      b64="$(base64 -i "$tmpfile" | tr -d '\n')"
+      rm -f -- "$tmpfile"
+      printf '![](data:%s;base64,%s)' "$mime" "$b64"
+      return 0
+    fi
+    rm -f -- "$tmpfile"
+  done
+  clip::text_by_id "$id"
+}
+
+clip::markdown_by_id() {  # id -> markdown string for file/directory/url/image; else plain text (same as Enter)
+  local id=$1 kind
+  kind="$(sqlite3 "$DB_FILE" "SELECT type_kind FROM clips WHERE id=$id;")"
+  case "$kind" in
+    url)              clip::markdown_url "$id" ;;
+    file|directory)   clip::markdown_path_link "$id" ;;
+    image)            clip::markdown_image "$id" ;;
+    *)                clip::text_by_id "$id" ;;
+  esac
+}
+
 # --on-key-background hook: $1 = id (field:1), $2 = the key. Dispatch on $2.
 clip::bg_hook() {
   local id=$1 key=${2:-}
   [[ -n "$id" ]] || return 0
   case "$key" in
-    alt-enter)        clip::inject_by_id "$id" ;;
+    ctrl-o)           clip::inject_by_id "$id" ;;
     ctrl-y)           clip::copy_by_id "$id" ;;
     ctrl-d|alt-d)     clip::delete_by_id "$id" ;;
     ctrl-p)           clip::toggle_pin_by_id "$id" ;;
@@ -151,11 +245,14 @@ CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-$(( (COLS - 2) * 55 / 100 - 12 ))}
 (( CW < 10 )) && CW=10
 
 # --- preview (full text + bottom-aligned formatted footer) ------------------
-# fzf's {2} = the id. The preview script emits the clip's full text, blank
-# padding to push the footer to the bottom of the preview pane, then a 5-line
-# footer (labels left, values right-aligned, Copied: last). Dim throughout.
-# A standalone script (fzf's preview runs a fresh shell) with the DB path +
-# widths + age/words expressions inlined; \$1 = the id from fzf {2}.
+# fzf's {2} = "id\x1eMD:id" (fzf's own --delimiter only splits on \x1f, so the
+# \x1e-joined markdown marker rides along inside field 2 unsplit -- the
+# script strips it back off; see the wire-format comment at the top of this
+# file). The preview script emits the clip's full text, blank padding to push
+# the footer to the bottom of the preview pane, then a 5-line footer (labels
+# left, values right-aligned, Copied: last). Dim throughout. A standalone
+# script (fzf's preview runs a fresh shell) with the DB path + widths +
+# age/words expressions inlined.
 age_expr="CASE WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 60 THEN printf('%ds', CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT)) WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 3600 THEN printf('%dm', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/60) WHEN CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT) < 86400 THEN printf('%dh', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/3600) ELSE printf('%dd', (CAST(strftime('%s','now') AS INT)-CAST(last_ts AS INT))/86400) END"
 # word count: space-separated tokens in the newline-flattened text (0 if empty/NULL)
 words_expr="CASE WHEN text_plain IS NULL OR text_plain='' THEN 0 ELSE length(trim(replace(text_plain,char(10),' '))) - length(replace(trim(replace(text_plain,char(10),' ')),' ','')) + 1 END"
@@ -168,9 +265,13 @@ PREVIEW_CMD="bash $preview_script {2}"
 #   col 2: content preview, padded to a fixed width (CW) so col 3 aligns;
 #          YELLOW when pinned (so pinned rows stand out)
 #   col 3: pin thumbtack (yellow) when pinned, else blank
-# Tail = id (CHAR 31 = \x1f). Type icons: fa-font (text), fa-paintbrush
-# (rtf/html), fa-image, fa-folder (files), fa-shuffle (mixed), fa-thumbtack
-# (pin) — Nerd Font v3 codepoints via SQL char(N).
+# Tail = id\x1eMD:id (CHAR 31 = \x1f, CHAR 30 = \x1e -- see the wire-format
+# comment at the top of this file). Type icons: fa-font (text), fa-paintbrush
+# (rtf/html), fa-image, fa-folder (files), nf-md-file_outline (file),
+# nf-md-folder_outline (directory), nf-md-link_variant (url),
+# nf-md-file_document_multiple_outline (mixed), fa-thumbtack (pin) -- same
+# glyphs/colors as the GUI picker (clipboard-picker.css/.html), Nerd Font v3
+# codepoints via SQL char(N).
 #
 # EMIT_SQL is shared by emit_rows (the initial stream) AND the --reload-cmd
 # script (fzf reloads the list with it after a delete/pin).
@@ -182,23 +283,29 @@ EMIT_SQL="WITH palette AS (
              CHAR(27)||'[38;2;225;170;80m'  AS c_rich,
              CHAR(27)||'[38;2;166;209;137m' AS c_image,
              CHAR(27)||'[38;2;148;156;183m' AS c_files,
-             CHAR(27)||'[38;2;234;154;139m' AS c_mixed
+             CHAR(27)||'[38;2;235;160;172m' AS c_mixed,
+             CHAR(27)||'[38;2;180;190;254m' AS c_file,
+             CHAR(27)||'[38;2;250;179;135m' AS c_directory,
+             CHAR(27)||'[38;2;116;199;236m' AS c_url
     )
     SELECT
       CASE type_kind
-           WHEN 'text'  THEN c_text  || char(1110065) || reset
-           WHEN 'rtf'   THEN c_rich  || char(1110524) || reset
-           WHEN 'html'  THEN c_rich  || char(1110524) || reset
-           WHEN 'image' THEN c_image || char(1110078) || reset
-           WHEN 'files' THEN c_files || char(1110139) || reset
-           ELSE               c_mixed || char(1110132) || reset
+           WHEN 'text'      THEN c_text      || char(1110065) || reset
+           WHEN 'rtf'       THEN c_rich      || char(1110524) || reset
+           WHEN 'html'      THEN c_rich      || char(1110524) || reset
+           WHEN 'image'     THEN c_image     || char(1110078) || reset
+           WHEN 'files'     THEN c_files     || char(1110139) || reset
+           WHEN 'file'      THEN c_file      || char(983588)  || reset
+           WHEN 'directory' THEN c_directory || char(983638)  || reset
+           WHEN 'url'       THEN c_url       || char(983865)  || reset
+           ELSE                  c_mixed     || char(988440)  || reset
       END
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
       || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-1)) THEN '…' ELSE '' END)
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
-      || CHAR(31) || id
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id
     FROM clips, palette
     WHERE ${origin_where}
     ORDER BY pinned DESC, last_ts DESC
@@ -235,23 +342,29 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
              CHAR(27)||'[38;2;225;170;80m'  AS c_rich,
              CHAR(27)||'[38;2;166;209;137m' AS c_image,
              CHAR(27)||'[38;2;148;156;183m' AS c_files,
-             CHAR(27)||'[38;2;234;154;139m' AS c_mixed
+             CHAR(27)||'[38;2;235;160;172m' AS c_mixed,
+             CHAR(27)||'[38;2;180;190;254m' AS c_file,
+             CHAR(27)||'[38;2;250;179;135m' AS c_directory,
+             CHAR(27)||'[38;2;116;199;236m' AS c_url
     )
     SELECT
       CASE type_kind
-           WHEN 'text'  THEN c_text  || char(1110065) || reset
-           WHEN 'rtf'   THEN c_rich  || char(1110524) || reset
-           WHEN 'html'  THEN c_rich  || char(1110524) || reset
-           WHEN 'image' THEN c_image || char(1110078) || reset
-           WHEN 'files' THEN c_files || char(1110139) || reset
-           ELSE               c_mixed || char(1110132) || reset
+           WHEN 'text'      THEN c_text      || char(1110065) || reset
+           WHEN 'rtf'       THEN c_rich      || char(1110524) || reset
+           WHEN 'html'      THEN c_rich      || char(1110524) || reset
+           WHEN 'image'     THEN c_image     || char(1110078) || reset
+           WHEN 'files'     THEN c_files     || char(1110139) || reset
+           WHEN 'file'      THEN c_file      || char(983588)  || reset
+           WHEN 'directory' THEN c_directory || char(983638)  || reset
+           WHEN 'url'       THEN c_url       || char(983865)  || reset
+           ELSE                  c_mixed     || char(988440)  || reset
       END
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
       || printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
-      || CHAR(31) || id
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id
     FROM clips, palette
     WHERE ${origin_where}
     ORDER BY pinned DESC, last_ts DESC
@@ -259,32 +372,39 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
 EOF
 cat > "$del_script" <<EOF
 #!/bin/sh
-sqlite3 '$DB_FILE' "DELETE FROM clip_types WHERE clip_id=\$1; DELETE FROM clips WHERE id=\$1;"
+# {2} is now "id\x1eMD:id" (fzf's own --delimiter only splits on \x1f, so the
+# \x1e-joined markdown marker rides along inside field 2 unsplit) -- strip
+# everything from the first RS (\036) byte onward to recover the plain id.
+id=\${1%%\$(printf '\036')*}
+sqlite3 '$DB_FILE' "DELETE FROM clip_types WHERE clip_id=\$id; DELETE FROM clips WHERE id=\$id;"
 EOF
 cat > "$pin_script" <<EOF
 #!/bin/sh
-sqlite3 '$DB_FILE' "UPDATE clips SET pinned=1-pinned WHERE id=\$1;"
+id=\${1%%\$(printf '\036')*}
+sqlite3 '$DB_FILE' "UPDATE clips SET pinned=1-pinned WHERE id=\$id;"
 EOF
 cat > "$preview_script" <<EOF
 #!/bin/sh
 # fzf sets FZF_PREVIEW_COLUMNS / FZF_PREVIEW_LINES to the preview pane's exact
 # dimensions when running this — use them to fit the footer + bottom-align it.
+id=\${1%%\$(printf '\036')*}
 pc=\${FZF_PREVIEW_COLUMNS:-40}
 ph=\${FZF_PREVIEW_LINES:-20}
 lw=14
 vw=\$((pc - lw)); [ \$vw -lt 4 ] && vw=4
-sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age FROM clips WHERE id=\$1) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 5), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
+sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 5), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
 EOF
 
 # --- run --------------------------------------------------------------------
-hints="$(pick::hints "󰌑" inject "󰘵 󰌑" insert "󰘴 Y" copy "󰘴 D" del "󰘴 P" pin "󱊷" cancel)"
+hints="$(pick::hints "󰌑" paste "󰘵 󰌑" markdown "󰘴 O" "keep open" "󰘴 Y" copy "󰘴 D" del "󰘴 P" pin)"
 
 pick_args=(
   --header "Clipboard history"
   --hints "$hints"
   --output field:1                 # Enter -> id (we re-fetch text below)
   --field-id 1                     # id is tail field 1 (for recency + resume)
-  --key-background alt-enter:field:1   # insert without dismissing (broker hook)
+  --key-output alt-enter:field:2       # accept-and-dismiss with the "MD:id" marker
+  --key-background ctrl-o:field:1      # insert without dismissing (broker hook)
   --key-background ctrl-y:field:1      # copy to my clipboard (broker hook)
   --on-key-background clip::bg_hook
   --on-items-picked clip::bump_recency
@@ -293,8 +413,9 @@ pick_args=(
   --preview-window "${PICK_CLIPBOARD_PREVIEW_WINDOW:-right:45%,noinfo}"
   --info hidden                    # hide the 1/X item counter (top-right)
   # delete / pin run a SQL action AND reload the list in place (fzf
-  # execute-silent + reload). {2} = the id (2nd \x1f field). Race-free: the
-  # SQL runs synchronously in execute-silent before reload re-streams.
+  # execute-silent + reload). {2} is the 2nd \x1f field, "id\x1eMD:id" --
+  # del_script/pin_script strip the \x1e-joined suffix back off. Race-free:
+  # the SQL runs synchronously in execute-silent before reload re-streams.
   --reload-cmd "bash $emit_script"
   --start-reload                   # load the list via start:reload so the emit
                                    # script runs with FZF_COLUMNS (exact width)
@@ -307,12 +428,14 @@ pick_args=(
 [[ -n "${PICK_CLIPBOARD_RESUME:-}" ]] && pick_args+=(--resume)
 [[ -n "${PICK_CLIPBOARD_NO_BORDER:-}" ]] && pick_args+=(--no-border)
 
-# pick::start prints the selected field:1 (the id) on stdout. We re-fetch the
-# text by id and print THAT, so zellij-modal's stdout capture injects the real
-# (possibly multi-line) clip text into the originating pane.
-selected_id="$(emit_rows | pick::start "${pick_args[@]}")" || exit 130
-# pick::start's --copy-only path is not used here; on a normal accept it prints
-# the joined selection. Re-fetch + emit the text for the picked id.
-if [[ -n "$selected_id" ]]; then
-  clip::text_by_id "$selected_id"
+# pick::start prints field:1 (the plain id, Enter) or field:2 (the "MD:id"
+# marker, Alt-Enter) on stdout. We re-fetch by id and print the appropriate
+# rendering, so zellij-modal's stdout capture injects the real (possibly
+# multi-line) clip text -- or its markdown alternate -- into the originating
+# pane. pick::start's --copy-only path is not used here.
+selected="$(emit_rows | pick::start "${pick_args[@]}")" || exit 130
+if [[ "$selected" == MD:* ]]; then
+  clip::markdown_by_id "${selected#MD:}"
+elif [[ -n "$selected" ]]; then
+  clip::text_by_id "$selected"
 fi

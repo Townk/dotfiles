@@ -13,7 +13,7 @@
 ---
 --- Schema (spec §5):
 ---   clips(id, text_preview, text_plain, len, first_ts, last_ts, source_app,
----         type_kind, origin, regtype, pinned, type_hash)
+---         source_bundle_id, type_kind, origin, regtype, pinned, type_hash)
 ---   clip_types(clip_id, uti, blob)   -- one row per UTI, full rich payload
 --- `type_hash` is the dedup index for spec §5's "Dedup on a hash of the
 --- type-set; re-copy bumps last_ts" — sha256 of the sorted (UTI=blob) pairs.
@@ -91,6 +91,44 @@ local function classify(utis)
   return "mixed"
 end
 
+-- Refine the generic "files" kind into "file"/"directory" by resolving the
+-- pasteboard's file URL to a real path and stat-ing it. macOS sometimes
+-- vends an opaque file-reference URL (file:///.file/id=<vol>.<inode>, seen
+-- from some Finder/system affordances) instead of a normal path-based one;
+-- readURL()'s `filePath` field already resolves that in-process (verified
+-- empirically against a captured file:///.file/id=... clip -- no need to
+-- shell out to osascript/NSURL.filePathURL). Returns (kind, path) on
+-- success, or (nil, nil) if resolution/stat fails -- caller keeps the
+-- generic "files" kind (multi-file copies land here too: only pasteboard
+-- item 1 is ever inspected, a pre-existing limitation, unchanged).
+local function classify_file_or_directory()
+  local r = pasteboard.readURL()
+  local path = r and r.filePath
+  if not path then return nil, nil end
+  local mode = hs.fs.attributes(path, "mode")
+  if mode == "directory" then return "directory", path end
+  if mode == "file" then return "file", path end
+  return nil, nil
+end
+
+-- Best-effort "is this JUST a URL, with nothing else" heuristic (used to
+-- reclassify a text/html clip as "url"). Trimmed and anchored end-to-end:
+-- scheme + "://" + no-whitespace, and nothing besides that in the string.
+local function looks_like_bare_url(s)
+  s = (s or ""):match("^%s*(.-)%s*$")
+  return s ~= "" and s:match("^%a[%w+%.%-]*://%S+$") ~= nil
+end
+
+-- Minimal HTML->text reduction, good enough for the bare-URL check above
+-- (not a general HTML renderer): drop tags, unescape the handful of
+-- entities that could otherwise break the URL match.
+local function strip_html_tags(html)
+  local text = (html or ""):gsub("<[^>]->", "")
+  text = text:gsub("&amp;", "&"):gsub("&lt;", "<"):gsub("&gt;", ">")
+             :gsub("&quot;", '"'):gsub("&#39;", "'"):gsub("&nbsp;", " ")
+  return text
+end
+
 -- sha256 of the sorted (uti=blob) set — the dedup key. Binary-safe.
 local function type_hash(data_by_uti)
   local utis = {}
@@ -125,6 +163,19 @@ local function exec(sql)
   return rc
 end
 
+-- True if `table_name` already has a column named `column_name`. SQLite has
+-- no "ADD COLUMN IF NOT EXISTS", so migrations below check first.
+local function column_exists(table_name, column_name)
+  local st = db:prepare("PRAGMA table_info(" .. table_name .. ");")
+  if not st then return false end
+  local found = false
+  while st:step() == sqlite3.ROW do
+    if st:get_value(1) == column_name then found = true end
+  end
+  st:finalize()
+  return found
+end
+
 local function ensure_schema()
   exec("PRAGMA journal_mode=WAL;")
   exec("PRAGMA synchronous=NORMAL;")
@@ -136,6 +187,7 @@ local function ensure_schema()
     first_ts REAL,
     last_ts REAL,
     source_app TEXT,
+    source_bundle_id TEXT,
     type_kind TEXT,
     origin TEXT,
     regtype TEXT,
@@ -151,6 +203,13 @@ local function ensure_schema()
   exec("CREATE INDEX IF NOT EXISTS idx_clips_type_hash ON clips(type_hash);")
   exec("CREATE INDEX IF NOT EXISTS idx_clips_last_ts ON clips(last_ts DESC);")
   exec("CREATE INDEX IF NOT EXISTS idx_clips_pinned_ts ON clips(pinned DESC, last_ts DESC);")
+
+  -- Migration for databases created before source_bundle_id existed (used
+  -- for real app-icon lookup in the picker's metadata pane -- the app's
+  -- display name alone isn't enough for hs.image.imageFromAppBundle).
+  if not column_exists("clips", "source_bundle_id") then
+    exec("ALTER TABLE clips ADD COLUMN source_bundle_id TEXT;")
+  end
 end
 
 -- Drop oldest non-pinned rows until under both the row and byte caps.
@@ -198,12 +257,19 @@ function M.capture_now()
   -- App deny-list (spec §6).
   local app = hs.application.frontmostApplication()
   local app_name = app and app:name() or nil
+  local app_bundle_id = app and app:bundleID() or nil
   if app_name and DENY_APPS[app_name] then return nil end
 
   local data_by_uti = pasteboard.readAllData() or {}
   if next(data_by_uti) == nil then return nil end
 
   local kind = classify(item_utis)
+  local resolvedPath -- only set when kind refines to "file"/"directory" below
+
+  if kind == "files" then
+    local refined, path = classify_file_or_directory()
+    if refined then kind = refined; resolvedPath = path end
+  end
 
   -- Skip oversized images (spec §5: "skip images > ~5 MB").
   if kind == "image" or kind == "mixed" then
@@ -218,16 +284,43 @@ function M.capture_now()
   local plain = data_by_uti["public.utf8-plain-text"]
                 or data_by_uti["public.text"]
                 or data_by_uti["NSStringPboardType"]
+
+  -- Reclassify a "just a URL, nothing else" text/html clip as "url" --
+  -- checks the plain-text representation first, then (for html) falls
+  -- back to the tag-stripped html, since either can carry the real text.
+  if kind == "text" or kind == "html" then
+    local isUrl = looks_like_bare_url(plain)
+    if not isUrl and kind == "html" then
+      isUrl = looks_like_bare_url(strip_html_tags(data_by_uti["public.html"]))
+    end
+    if isUrl then kind = "url" end
+  end
+
   local preview = preview_of(plain)
   if not preview then
     -- non-text clip: synthesize a short badge from the kind + a payload hint
     if kind == "image" then preview = "[image]"
     elseif kind == "files" then preview = "[files]"
+    elseif kind == "file" then preview = "[file]"
+    elseif kind == "directory" then preview = "[directory]"
     elseif kind == "rtf" then preview = "[rtf]"
     elseif kind == "html" then preview = "[html]"
     else preview = "[" .. kind .. "]" end
   end
   local len_val = plain and #plain or total_bytes
+  if kind == "file" and resolvedPath then
+    -- Real on-disk size, not the byte-length of the pasteboard's file-url
+    -- string or the character count of the filename (what len_val would
+    -- otherwise end up as for this kind).
+    len_val = hs.fs.attributes(resolvedPath, "size") or len_val
+  end
+  if resolvedPath then
+    -- Synthetic (non-pasteboard) UTI key, inserted below via the normal
+    -- clip_types loop -- keeps the original public.file-url bytes intact
+    -- (may matter for accurately restoring/pasting the clip later) while
+    -- giving the picker a clean, human-readable path for its preview.
+    data_by_uti["x-resolved-path"] = resolvedPath
+  end
   local ts = now_ts()
 
   -- Dedup on type_hash: bump last_ts + refresh source_app/preview if present.
@@ -241,10 +334,10 @@ function M.capture_now()
 
   if existing_id then
     local up = assert(db:prepare(
-      "UPDATE clips SET last_ts=?, source_app=?, text_preview=?, text_plain=?, "
+      "UPDATE clips SET last_ts=?, source_app=?, source_bundle_id=?, text_preview=?, text_plain=?, "
       .. " len=?, type_kind=? WHERE id=?;"))
-    up:bind(1, ts); up:bind(2, app_name); up:bind(3, preview); up:bind(4, plain)
-    up:bind(5, len_val); up:bind(6, kind); up:bind(7, existing_id)
+    up:bind(1, ts); up:bind(2, app_name); up:bind(3, app_bundle_id); up:bind(4, preview); up:bind(5, plain)
+    up:bind(6, len_val); up:bind(7, kind); up:bind(8, existing_id)
     up:step(); up:finalize()
     enforce_retention()
     return existing_id
@@ -253,11 +346,11 @@ function M.capture_now()
   -- New row.
   local ins = assert(db:prepare(
     "INSERT INTO clips (text_preview, text_plain, len, first_ts, last_ts, "
-    .. " source_app, type_kind, origin, regtype, pinned, type_hash) "
-    .. " VALUES (?,?,?,?,?,?,?,  'local', NULL, 0, ?);"))
+    .. " source_app, source_bundle_id, type_kind, origin, regtype, pinned, type_hash) "
+    .. " VALUES (?,?,?,?,?,?,?,?,  'local', NULL, 0, ?);"))
   ins:bind(1, preview); ins:bind(2, plain); ins:bind(3, len_val)
-  ins:bind(4, ts); ins:bind(5, ts); ins:bind(6, app_name)
-  ins:bind(7, kind); ins:bind(8, th)
+  ins:bind(4, ts); ins:bind(5, ts); ins:bind(6, app_name); ins:bind(7, app_bundle_id)
+  ins:bind(8, kind); ins:bind(9, th)
   ins:step(); ins:finalize()
   local new_id = db:last_insert_rowid()
 
@@ -325,12 +418,12 @@ end
 -- module keeps only the DB-facing restore primitive both the picker and any
 -- future consumer need.
 
--- Restore a clip's full rich pasteboard by id (all UTI->blob rows from
--- clip_types). Returns true on success. Also bumps last_ts (spec §10
--- "re-bump last_ts on pick"). The pasteboard write bumps changeCount, so the
--- watcher will re-observe it (dedup bumps the same row again — harmless).
-function M.restore_by_id(id)
-  if not db or not id then return false end
+local function bump_last_ts(id)
+  local b = db:prepare("UPDATE clips SET last_ts=? WHERE id=?;")
+  if b then b:bind(1, now_ts()); b:bind(2, id); b:step(); b:finalize() end
+end
+
+local function fetch_clip_types(id)
   local s = assert(db:prepare("SELECT uti, blob FROM clip_types WHERE clip_id=?;"))
   s:bind(1, id)
   local data = {}
@@ -338,20 +431,142 @@ function M.restore_by_id(id)
     data[s:get_value(0)] = s:get_value(1)  -- uti -> blob (Lua string)
   end
   s:finalize()
+  return data
+end
+
+local function fetch_text_plain(id)
+  local t = assert(db:prepare("SELECT text_plain FROM clips WHERE id=?;"))
+  t:bind(1, id)
+  local plain
+  if t:step() == sqlite3.ROW then plain = t:get_value(0) end
+  t:finalize()
+  return plain
+end
+
+-- Restore a clip's full rich pasteboard by id (all UTI->blob rows from
+-- clip_types). Returns true on success. Also bumps last_ts (spec §10
+-- "re-bump last_ts on pick"). The pasteboard write bumps changeCount, so the
+-- watcher will re-observe it (dedup bumps the same row again — harmless).
+function M.restore_by_id(id)
+  if not db or not id then return false end
+  local data = fetch_clip_types(id)
   if next(data) == nil then
     -- No rich payload (e.g. a laptop-ref text-only row): fall back to text_plain.
-    local t = assert(db:prepare("SELECT text_plain FROM clips WHERE id=?;"))
-    t:bind(1, id)
-    local plain
-    if t:step() == sqlite3.ROW then plain = t:get_value(0) end
-    t:finalize()
+    local plain = fetch_text_plain(id)
     if not plain then return false end
     pasteboard.setContents(plain)
   else
     pasteboard.writeAllData(data)
   end
-  local b = db:prepare("UPDATE clips SET last_ts=? WHERE id=?;")
-  if b then b:bind(1, now_ts()); b:bind(2, id); b:step(); b:finalize() end
+  bump_last_ts(id)
+  return true
+end
+
+-- POSIX path -> a valid file:// URI, percent-encoding each path segment
+-- individually (not the whole string at once, which would also escape the
+-- "/" separators themselves).
+local function path_to_file_url(path)
+  local segments = {}
+  for seg in path:gmatch("[^/]+") do
+    segments[#segments + 1] = hs.http.encodeForQuery(seg)
+  end
+  return "file:///" .. table.concat(segments, "/")
+end
+
+local function basename(path)
+  return path:match("([^/]+)/?$") or path
+end
+
+-- Same UTI/MIME set as IMAGE_UTIS/IMAGE_MIME in clipboard-picker.lua --
+-- duplicated rather than shared: this module is the lower-level one (the
+-- picker already requires it), so it can't require the picker back
+-- without a cycle, and it's a handful of lines, not worth a new shared
+-- module for.
+local IMAGE_UTIS = { "public.png", "public.jpeg", "public.tiff", "com.compuserve.gif" }
+local IMAGE_MIME = {
+  ["public.png"] = "image/png", ["public.jpeg"] = "image/jpeg",
+  ["public.tiff"] = "image/tiff", ["com.compuserve.gif"] = "image/gif",
+}
+
+-- [label](target) markdown link/image for file/directory/url/image clips
+-- (spec: Alt+Enter). Returns nil if there's nothing to link to (shouldn't
+-- happen for these kinds in practice, but restore_plain_by_id below falls
+-- back to its normal text_plain path if so).
+local function markdown_link_for(id, kind)
+  if kind == "url" then
+    local url = fetch_text_plain(id)
+    if not url or url == "" then return nil end
+    return "[" .. url .. "](" .. url .. ")"
+  end
+  if kind == "image" then
+    for _, uti in ipairs(IMAGE_UTIS) do
+      local s = db:prepare("SELECT blob FROM clip_types WHERE clip_id=? AND uti=?;")
+      s:bind(1, id); s:bind(2, uti)
+      local blob
+      if s:step() == sqlite3.ROW then blob = s:get_value(0) end
+      s:finalize()
+      if blob then
+        local ok, b64 = pcall(hs.base64.encode, blob)
+        if ok and b64 then
+          return "![](data:" .. (IMAGE_MIME[uti] or "image/png") .. ";base64," .. b64 .. ")"
+        end
+      end
+    end
+    return nil
+  end
+  local s = assert(db:prepare("SELECT blob FROM clip_types WHERE clip_id=? AND uti='x-resolved-path';"))
+  s:bind(1, id)
+  local path
+  if s:step() == sqlite3.ROW then path = s:get_value(0) end
+  s:finalize()
+  if not path then return nil end
+  return "[" .. basename(path) .. "](" .. path_to_file_url(path) .. ")"
+end
+
+-- Restore ONLY the plain-text representation of a clip -- RTF/HTML styling
+-- stripped, file/directory/url clips linkified as markdown (spec:
+-- Alt+Enter). text_plain already covers the vast majority of real
+-- captures (macOS copy operations from rich sources almost always also
+-- place a plain-text sibling on the pasteboard); when it's genuinely
+-- missing, derive it from whatever rich payload IS available via
+-- hs.styledtext's own text conversion rather than failing outright.
+function M.restore_plain_by_id(id)
+  if not db or not id then return false end
+
+  local k = assert(db:prepare("SELECT type_kind FROM clips WHERE id=?;"))
+  k:bind(1, id)
+  local kind
+  if k:step() == sqlite3.ROW then kind = k:get_value(0) end
+  k:finalize()
+
+  if kind == "file" or kind == "directory" or kind == "url" or kind == "image" then
+    local link = markdown_link_for(id, kind)
+    if link then
+      pasteboard.setContents(link)
+      bump_last_ts(id)
+      return true
+    end
+  end
+
+  local plain = fetch_text_plain(id)
+  if not plain or plain == "" then
+    local data = fetch_clip_types(id)
+    local html = data["public.html"]
+    local rtf = data["public.rtf"]
+    local rtfd = data["NeXT RTFD pasteboard type"] or data["Apple RTFD pasteboard type"]
+    local ok, st
+    if html then ok, st = pcall(hs.styledtext.getStyledTextFromData, html, "html")
+    elseif rtf then ok, st = pcall(hs.styledtext.getStyledTextFromData, rtf, "rtf")
+    elseif rtfd then ok, st = pcall(hs.styledtext.getStyledTextFromData, rtfd, "rtfd")
+    end
+    if ok and st then
+      local ok2, text = pcall(function() return st:convert("text") end)
+      if ok2 and text then plain = text end
+    end
+  end
+  if not plain or plain == "" then return false end
+  pasteboard.setContents(plain)
+  bump_last_ts(id)
   return true
 end
 

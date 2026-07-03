@@ -81,6 +81,7 @@ end
 local KIND_LABELS = {
   text = "Plain Text", rtf = "Rich Text", html = "HTML",
   image = "Image", files = "Files", mixed = "Mixed",
+  file = "File", directory = "Directory", url = "URL",
 }
 
 local function age_string(ts, now)
@@ -91,9 +92,30 @@ local function age_string(ts, now)
   else return math.floor(diff / 86400) .. "d ago" end
 end
 
--- Today / Yesterday / <weekday> (this week) / <Mon DD> (older). Computed from
--- calendar-day difference at local noon (DST-safe), not raw second deltas.
-local function group_label(ts, now)
+-- 1st/2nd/3rd/4th... suffix for a day-of-month number.
+local function ordinal_suffix(day)
+  local rem100 = day % 100
+  if rem100 >= 11 and rem100 <= 13 then return "th" end
+  local rem10 = day % 10
+  if rem10 == 1 then return "st"
+  elseif rem10 == 2 then return "nd"
+  elseif rem10 == 3 then return "rd"
+  else return "th" end
+end
+
+-- "Tuesday, July 4th 2025" -- full weekday + full month + ordinal day + year.
+local function full_date_label(ts)
+  local d = os.date("*t", ts)
+  return os.date("%A, %B ", ts) .. d.day .. ordinal_suffix(d.day) .. os.date(" %Y", ts)
+end
+
+-- Pinned / Today / Yesterday / <full date> (everything else). Pinned always
+-- wins regardless of date, so pinned items form their own group at the top
+-- (the SQL query already sorts pinned DESC, last_ts DESC, so they're
+-- already contiguous). Date grouping is computed from calendar-day
+-- difference at local noon (DST-safe), not raw second deltas.
+local function group_label(ts, now, pinned)
+  if pinned then return "Pinned" end
   -- last_ts is a SQLite REAL (fractional seconds from hs.timer.secondsSinceEpoch);
   -- os.date/os.time require an integer, hence the floor.
   ts = math.floor(ts)
@@ -105,8 +127,7 @@ local function group_label(ts, now)
   local diffDays = math.floor((midday(now) - midday(ts)) / 86400 + 0.5)
   if diffDays <= 0 then return "Today"
   elseif diffDays == 1 then return "Yesterday"
-  elseif diffDays < 7 then return os.date("%A", ts)
-  else return os.date("%b %d", ts) end
+  else return full_date_label(ts) end
 end
 
 local function count_words(text)
@@ -122,7 +143,7 @@ local function query_items()
   local db = sqlite3.open(history._db_path())
   if not db then return {} end
   local s = assert(db:prepare([[
-    SELECT id, text_preview, text_plain, type_kind, source_app, len, pinned, last_ts
+    SELECT id, text_preview, text_plain, type_kind, source_app, source_bundle_id, len, pinned, last_ts
     FROM clips
     WHERE origin IN ('local','remote-own')
     ORDER BY pinned DESC, last_ts DESC
@@ -133,17 +154,19 @@ local function query_items()
   while s:step() == sqlite3.ROW do
     local kind = s:get_value(3) or "text"
     local plain = s:get_value(2)
-    local last_ts = s:get_value(7) or now
+    local last_ts = s:get_value(8) or now
+    local pinned = (s:get_value(7) or 0) == 1
     items[#items + 1] = {
       id        = s:get_value(0),
       preview   = s:get_value(1) or ("[" .. kind .. "]"),
       kind      = kind,
       kindLabel = KIND_LABELS[kind] or kind,
       app       = s:get_value(4) or "?",
-      len       = s:get_value(5) or 0,
+      bundleId  = s:get_value(5), -- nil for clips captured before this column existed
+      len       = s:get_value(6) or 0,
       words     = count_words(plain),
-      pinned    = (s:get_value(6) or 0) == 1,
-      group     = group_label(last_ts, now),
+      pinned    = pinned,
+      group     = group_label(last_ts, now, pinned),
       age       = age_string(last_ts, now),
     }
   end
@@ -188,6 +211,85 @@ local function fetch_text_plain(db, id)
   return text
 end
 
+-- Cache of bundleId -> data-URI icon string (or false for "looked up, no
+-- icon found" -- cached too, so a missing/uninstalled app isn't re-queried
+-- on every selection change). Lives for the module's lifetime; M.cleanup()
+-- only ever runs right before a full hs.reload(), which wipes this (and
+-- every other module-level local) anyway, so there's nothing to explicitly
+-- clear here.
+local iconCache = {}
+
+-- Best-effort bundle ID resolution from an app's display name, for clips
+-- captured before source_bundle_id existed (nothing else to go on for
+-- those). Mirrors streamdeck/layers.lua's resolveAppBundleID: try the app
+-- if it's currently running first (exact, no guessing), else guess the
+-- same 4 common install directories it checks. Not reused directly from
+-- there since it's a private helper scoped to that module's own streamdeck
+-- concerns -- duplicating ~15 lines here beats a cross-module refactor for
+-- what's just a fallback path for pre-migration data.
+local function guess_bundle_id_from_name(name)
+  local running = hs.application.get(name)
+  if running then
+    local ok, id = pcall(function() return running:bundleID() end)
+    if ok and id then return id end
+  end
+  local paths = {
+    "/Applications/" .. name .. ".app",
+    "/System/Applications/" .. name .. ".app",
+    "/Applications/Utilities/" .. name .. ".app",
+    "/System/Applications/Utilities/" .. name .. ".app",
+  }
+  for _, path in ipairs(paths) do
+    local info = hs.application.infoForBundlePath(path)
+    if info and info.CFBundleIdentifier then return info.CFBundleIdentifier end
+  end
+  return nil
+end
+
+-- Fetch the app's real icon as a data-URI string (base64 PNG via
+-- hs.image:encodeAsURLString(), ready to use directly as an <img src>),
+-- cached by bundle id since the same handful of apps repeat across many
+-- clips. Falls back to guessing the bundle id from appName when bundleId
+-- is nil (pre-migration clips). Returns nil if nothing resolves or no icon
+-- is found.
+local function fetch_app_icon(bundleId, appName)
+  local key = bundleId
+  if not key or key == "" then
+    if not appName or appName == "" then return nil end
+    key = guess_bundle_id_from_name(appName)
+    if not key then return nil end
+  end
+  local cached = iconCache[key]
+  if cached ~= nil then
+    return cached or nil
+  end
+  local ok, img = pcall(hs.image.imageFromAppBundle, key)
+  local dataUri
+  if ok and img then
+    local ok2, encoded = pcall(function() return img:encodeAsURLString() end)
+    if ok2 and encoded then dataUri = encoded end
+  end
+  iconCache[key] = dataUri or false
+  return dataUri
+end
+
+local FILE_PREVIEW_MAX_BYTES = 65536
+
+-- Heuristic "is this a text file" check on a bounded sample: reject NUL
+-- bytes (binary formats almost always contain one early) and reject if
+-- more than a small fraction of bytes are non-whitespace control
+-- characters. Crude but good enough for a quick preview, not a real
+-- content-type sniffer.
+local function looks_like_text(sample)
+  if #sample == 0 or sample:find("\0") then return false end
+  local bad = 0
+  for i = 1, #sample do
+    local b = sample:byte(i)
+    if b < 32 and b ~= 9 and b ~= 10 and b ~= 13 then bad = bad + 1 end
+  end
+  return (bad / #sample) < 0.01
+end
+
 -- Build the preview payload {kind="text"|"html"|"image", ...} for a clip id.
 -- rtf/rtfd is converted to HTML natively via hs.styledtext (no shell-out).
 -- Falls back to text_plain when a rich payload is missing or unconvertible.
@@ -216,7 +318,15 @@ local function fetch_preview(id, kind)
     if blob then
       local ok, b64 = pcall(hs.base64.encode, blob)
       if ok and b64 then
-        result = { kind = "image", dataUri = "data:" .. (IMAGE_MIME[uti] or "image/png") .. ";base64," .. b64 }
+        local dataUri = "data:" .. (IMAGE_MIME[uti] or "image/png") .. ";base64," .. b64
+        -- hs.image has no raw-bytes constructor; round-tripping the just-built
+        -- data URI through imageFromURL (per its own docs: it accepts the
+        -- output of encodeAsURLString back as input) is the only way to get
+        -- an hs.image object -- and thus :size() -- from in-memory blob bytes.
+        local dims
+        local okImg, img = pcall(hs.image.imageFromURL, dataUri)
+        if okImg and img then dims = img:size() end
+        result = { kind = "image", dataUri = dataUri, width = dims and dims.w, height = dims and dims.h }
       end
     end
   elseif kind == "files" then
@@ -225,6 +335,49 @@ local function fetch_preview(id, kind)
     -- bookmark-data decoding. Known limitation, not exhaustive.
     local blob = fetch_blob(db, id, { "public.file-url" })
     if blob then result = { kind = "text", text = blob } end
+  elseif kind == "file" then
+    local path = fetch_blob(db, id, { "x-resolved-path" })
+    if path then
+      -- If the file is an image, show it as one instead of the text quick
+      -- view below (imageFromPath sniffs actual content, not just the
+      -- extension, so a mislabeled/corrupt file correctly falls through).
+      local okImg, img = pcall(hs.image.imageFromPath, path)
+      if okImg and img then
+        local okEnc, encoded = pcall(function() return img:encodeAsURLString() end)
+        if okEnc and encoded then
+          local dims = img:size()
+          result = { kind = "image", dataUri = encoded, width = dims and dims.w, height = dims and dims.h }
+        end
+      end
+    end
+    if path and not result and path:lower():match("%.html?$") then
+      -- .html/.htm by extension -- unlike images, there's no equivalent
+      -- single-call content sniff available here. Rendered through the
+      -- same iframe path as the "html" kind (dark-mode/transparency
+      -- detection etc. all apply unchanged).
+      local f = io.open(path, "rb")
+      if f then
+        local content = f:read(FILE_PREVIEW_MAX_BYTES)
+        f:close()
+        if content and content ~= "" then result = { kind = "html", html = content } end
+      end
+    end
+    if path and not result then
+      local f = io.open(path, "rb")
+      if f then
+        local content = f:read(FILE_PREVIEW_MAX_BYTES)
+        local truncated = content and #content == FILE_PREVIEW_MAX_BYTES and f:read(1) ~= nil
+        f:close()
+        if content and looks_like_text(content) then
+          result = { kind = "text", text = truncated and (content .. "…") or content }
+        end
+      end
+      -- Unreadable, binary, empty, or missing: fall back to the path itself.
+      if not result then result = { kind = "text", text = path } end
+    end
+  elseif kind == "directory" then
+    local path = fetch_blob(db, id, { "x-resolved-path" })
+    if path then result = { kind = "text", text = path } end
   end
 
   if not result then
@@ -245,20 +398,28 @@ local function delete_item(id)
   db:close()
 end
 
+-- Returns the new pinned state AND the item's current group label (via the
+-- same group_label() the initial query uses) -- pinning/unpinning changes
+-- which group a clip belongs to (into/out of "Pinned"), and the client
+-- has no way to recompute that itself (it only ever sees a pre-formatted
+-- group string, never the raw timestamp).
 local function toggle_pin(id)
   local db = sqlite3.open(history._db_path())
-  if not db then return false end
+  if not db then return false, nil end
   local u = db:prepare("UPDATE clips SET pinned = 1 - pinned WHERE id=?;")
   if u then u:bind(1, id); u:step(); u:finalize() end
-  local pinned = false
-  local s = db:prepare("SELECT pinned FROM clips WHERE id=?;")
+  local pinned, group = false, nil
+  local s = db:prepare("SELECT pinned, last_ts FROM clips WHERE id=?;")
   if s then
     s:bind(1, id)
-    if s:step() == sqlite3.ROW then pinned = (s:get_value(0) == 1) end
+    if s:step() == sqlite3.ROW then
+      pinned = (s:get_value(0) == 1)
+      group = group_label(s:get_value(1) or os.time(), os.time(), pinned)
+    end
     s:finalize()
   end
   db:close()
-  return pinned
+  return pinned, group
 end
 
 --------------------------------------------------------------------------------
@@ -304,15 +465,23 @@ local function handle_message(body)
 
   if action == "preview" then
     local content = fetch_preview(body.id, body.kind)
+    content.id = body.id -- lets JS guard against a stale response landing after the selection has moved on
     if webview then
       webview:evaluateJavaScript("window.__setPreview(" .. hs.json.encode(content) .. ")")
+    end
+  elseif action == "icon" then
+    local dataUri = fetch_app_icon(body.bundleId, body.appName)
+    if webview then
+      webview:evaluateJavaScript(
+        "window.__setSourceIcon(" .. hs.json.encode({ id = body.id, dataUri = dataUri }) .. ")")
     end
   elseif action == "delete" then
     delete_item(body.id)
   elseif action == "pin" then
-    local pinned = toggle_pin(body.id)
+    local pinned, group = toggle_pin(body.id)
     if webview then
-      webview:evaluateJavaScript(string.format("window.__setPinned(%d, %s)", body.id, tostring(pinned)))
+      webview:evaluateJavaScript(
+        "window.__setPinned(" .. hs.json.encode({ id = body.id, pinned = pinned, group = group }) .. ")")
     end
   elseif action == "accept" then
     history.restore_by_id(body.id)
@@ -321,7 +490,7 @@ local function handle_message(body)
       -- Post the paste just after hide() refocuses the target app.
       hs.timer.doAfter(0.12, function() hs.eventtap.keyStroke({ "cmd" }, "v") end)
     else
-      -- Alt+Enter: paste into the target app but keep the picker open. This
+      -- Ctrl+Enter: paste into the target app but keep the picker open. This
       -- necessarily shuffles focus away (to paste into the right app) and
       -- back (to keep accepting keystrokes) — a brief visible flash is
       -- expected/inherent, not a bug; validate the feel in UX review.
@@ -346,6 +515,12 @@ local function handle_message(body)
         end)
       end)
     end
+  elseif action == "acceptPlain" then
+    -- Alt+Enter: paste with RTF/HTML styling stripped, otherwise the same
+    -- dismiss-then-paste flow as a plain Enter accept.
+    history.restore_plain_by_id(body.id)
+    M.hide()
+    hs.timer.doAfter(0.12, function() hs.eventtap.keyStroke({ "cmd" }, "v") end)
   elseif action == "dismiss" then
     M.hide()
   end
@@ -357,7 +532,7 @@ local function ensure_webview()
   ucc:setCallback(function(msg) handle_message(msg.body) end)
 
   local sf = hs.screen.mainScreen():fullFrame()
-  local w, h = 780, 520
+  local w, h = 780, 570 -- +50px vs. the pre-keybinding-hints-row height
   local rect = { x = sf.x + (sf.w - w) / 2, y = sf.y + (sf.h - h) / 2, w = w, h = h }
 
   webview = hs.webview.new(rect, {}, ucc)
@@ -449,5 +624,6 @@ M._query_items = query_items
 M._group_label = group_label
 M._count_words = count_words
 M._fetch_preview = fetch_preview
+M._fetch_app_icon = fetch_app_icon
 
 return M
