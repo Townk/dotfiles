@@ -1548,6 +1548,24 @@ EOF
       The line 3 should include "here"
     End
 
+    It 'status survives the dispatcher shell options (set -eu -o pipefail)'
+      # Regression: `(( count++ ))` post-increments from 0, the expression
+      # evaluates to 0 → exit status 1 → errexit killed status mid-function
+      # when run under the dispatcher (which sets -eu -o pipefail).
+      strict() {
+        zsh -c '
+          set -eu -o pipefail
+          source "$1/backup.zsh"
+          bkp::restic() { printf "%s" "[{\"id\":\"aaa\",\"time\":\"2026-01-02T10:00:00Z\"}]"; }
+          bkp::ux::status "$2" "$3"
+        ' _ "$LIB" "$FIX/m.toml" "$FIX/c.toml"
+      }
+      When run strict
+      The status should be success
+      The line 2 should include "snapshots: 1"
+      The line 3 should include "here"
+    End
+
     It 'verify checks staging + present initialized targets, propagating failure'
       checks() {
         source "$LIB/backup.zsh"

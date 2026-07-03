@@ -1036,7 +1036,9 @@ bkp::ux::status() {
   print -r -- "staging: $staging"
   local count=0 newest=0 line epoch
   for line in ${(f)snaps}; do
-    (( count++ ))
+    # NB: not `(( count++ ))` — post-increment from 0 evaluates to 0, which
+    # is exit status 1, and the dispatcher's errexit would kill us here.
+    count=$(( count + 1 ))
     epoch="${line##*$'\t'}"
     (( epoch > newest )) && newest=$epoch
   done
