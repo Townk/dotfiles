@@ -155,3 +155,53 @@ bkp::thin() {
     fi
   done
 }
+
+# ── Manifest ─────────────────────────────────────────────────────────────────
+
+BKP_MANIFEST="${BKP_MANIFEST:-$HOME/.config/backup/manifest.toml}"
+
+# bkp::manifest::json <file>
+# The manifest as JSON on stdout (house parse: yq TOML->JSON once, jq after).
+bkp::manifest::json() {
+  local file="$1"
+  [[ -f "$file" ]] || {
+    log_error "bkp: manifest not found: $file"
+    return 2
+  }
+  yq -p toml -o json '.' "$file" 2>/dev/null || {
+    log_error "bkp: unparseable manifest: $file"
+    return 2
+  }
+}
+
+# bkp::manifest::roots <file>
+# One root per line: <path>\t<bundle_unpushed>\t<untracked_warn_size>.
+# A bare-string root takes the built-in defaults (bundle_unpushed=true,
+# untracked_warn_size=50m); a table overrides per root. ~ expands to $HOME.
+bkp::manifest::roots() {
+  local json
+  json=$(bkp::manifest::json "$1") || return 2
+  jq -r --arg home "$HOME" '
+    (.roots // [])[]
+    | (if type == "string" then {path: .} else . end)
+    | [ (.path | sub("^~"; $home)),
+        # NB: not `// true` — the // operator treats an explicit false as absent.
+        ((.bundle_unpushed != false) | tostring),
+        (.untracked_warn_size // "50m") ]
+    | @tsv' <<<"$json"
+}
+
+# bkp::manifest::deny <file> — the deny globs, one per line, ~ expanded.
+bkp::manifest::deny() {
+  local json
+  json=$(bkp::manifest::json "$1") || return 2
+  jq -r --arg home "$HOME" '(.deny // [])[] | sub("^~"; $home)' <<<"$json"
+}
+
+# bkp::manifest::chezmoi_excluded <file>
+# Predicate: true unless the manifest sets exclude_chezmoi_managed = false.
+bkp::manifest::chezmoi_excluded() {
+  local json
+  json=$(bkp::manifest::json "$1") || return 2
+  jq -e '.exclude_chezmoi_managed != false' <<<"$json" >/dev/null
+}

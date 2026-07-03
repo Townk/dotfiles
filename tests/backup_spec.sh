@@ -289,4 +289,73 @@ Describe 'backup.zsh'
       The output should equal 2
     End
   End
+
+  Describe 'bkp::manifest — parsing'
+    setup_fix() { FIX=$(mktemp -d); }
+    cleanup_fix() { rm -rf "$FIX"; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'applies per-root git defaults to string roots and honors table overrides'
+      roots() {
+        source "$LIB/backup.zsh"
+        cat > "$FIX/m.toml" <<EOF
+roots = [
+  "$FIX/a",
+  { path = "$FIX/b", bundle_unpushed = false },
+  { path = "$FIX/c", untracked_warn_size = "2g" },
+]
+EOF
+        bkp::manifest::roots "$FIX/m.toml"
+      }
+      When run roots
+      The line 1 should equal "$FIX/a${TAB}true${TAB}50m"
+      The line 2 should equal "$FIX/b${TAB}false${TAB}50m"
+      The line 3 should equal "$FIX/c${TAB}true${TAB}2g"
+    End
+
+    It 'expands ~ in roots and deny'
+      tilde() {
+        source "$LIB/backup.zsh"
+        printf 'roots = ["~/xyz"]\ndeny = ["~/.cache", "**/*.sock"]\n' > "$FIX/m.toml"
+        bkp::manifest::roots "$FIX/m.toml"
+        bkp::manifest::deny "$FIX/m.toml"
+      }
+      When run tilde
+      The line 1 should equal "$HOME/xyz${TAB}true${TAB}50m"
+      The line 2 should equal "$HOME/.cache"
+      The line 3 should equal "**/*.sock"
+    End
+
+    It 'chezmoi filter defaults on and honors explicit false'
+      toggle() {
+        source "$LIB/backup.zsh"
+        printf 'roots = []\n' > "$FIX/on.toml"
+        printf 'exclude_chezmoi_managed = false\n' > "$FIX/off.toml"
+        bkp::manifest::chezmoi_excluded "$FIX/on.toml" && print on
+        bkp::manifest::chezmoi_excluded "$FIX/off.toml" || print off
+      }
+      When run toggle
+      The line 1 should equal "on"
+      The line 2 should equal "off"
+    End
+
+    It 'errors on a missing manifest'
+      missing() { source "$LIB/backup.zsh"; bkp::manifest::json "$FIX/nope.toml"; }
+      When run missing
+      The status should equal 2
+      The stderr should include "manifest not found"
+    End
+
+    It 'errors on unparseable TOML'
+      bad() {
+        source "$LIB/backup.zsh"
+        printf 'roots = [ oops\n' > "$FIX/m.toml"
+        bkp::manifest::json "$FIX/m.toml"
+      }
+      When run bad
+      The status should equal 2
+      The stderr should include "unparseable manifest"
+    End
+  End
 End
