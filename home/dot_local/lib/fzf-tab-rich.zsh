@@ -82,3 +82,51 @@ ftb_rich::classify() {
   esac
   return 0
 }
+
+# ── render ───────────────────────────────────────────────────────────────────
+# Rewrite _ftb_complist in place: prepend a colored type glyph to field 1 of
+# each entry. Field 2 (accept key) and field 3 (suffix) are preserved verbatim;
+# no NULs are added. Above FZF_TAB_RICH_MAX candidates, take a cheap path that
+# derives the glyph from field 3's suffix (no _ftb_compcap lookup).
+ftb_rich::render() {
+  emulate -L zsh
+  (( $#_ftb_complist )) || return 0
+  local nul=$'\0' bs=$'\2'
+  local -i degrade=0
+  (( $#_ftb_complist > ${FZF_TAB_RICH_MAX:-400} )) && degrade=1
+
+  local entry f2 f3 filepath word g c
+  local -A v
+  local -a out=()
+
+  for entry in $_ftb_complist; do
+    f2=${${entry#*$nul}%$nul*}          # accept key (between first & last NUL)
+    f3=${entry##*$nul}                  # suffix (after last NUL)
+
+    if (( degrade )); then
+      case $f3 in
+        (*/) REPLY=directory ;;
+        (*@) REPLY=symlink ;;
+        (*)  REPLY=file ;;
+      esac
+    else
+      local match=${_ftb_compcap[(r)${(b)f2}$bs*]}
+      if [[ -n $match ]]; then
+        v=("${(@0)${match#*$bs}}")
+        word=${(Q)v[word]}
+        filepath=''
+        (( $+v[realdir] )) && filepath=${v[realdir]}$word
+        ftb_rich::classify "${_ftb_groups[${v[group]:-0}]:-}" "$filepath"
+      else
+        REPLY=fallback
+      fi
+    fi
+
+    g=${_ftb_rich_glyph[$REPLY]:-$_ftb_rich_glyph[fallback]}
+    c=${_ftb_rich_color[$REPLY]:-}
+    out+="${c}${g}${FTB_RICH_RESET}  ${entry}"
+  done
+
+  _ftb_complist=("${(@)out}")
+  return 0
+}
