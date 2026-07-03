@@ -20,17 +20,22 @@
 # Opcodes:
 #   G  get            req: empty                    resp: clipboard text
 #   R  get-regtype    req: empty                     resp: 1 byte v|l|b
+#   H  get-host       req: empty                     resp: this machine's hostname
+#      Lets a consumer stamp the origin of the clip it just read from here, so
+#      it can materialize a self-contained copy with correct provenance (§11).
 #   T  set (copy)     req: <1 byte regtype><text>    resp: empty
 #      Sets the real pbcopy clipboard AND records {regtype, sha256(text)} so
 #      a later R reflects it — until something else changes the clipboard,
 #      which self-invalidates via the hash compare (see clip::get_regtype).
 #      Used by universal.lua's copy() instead of OSC 52 when bridge-up (no
 #      OSC52-vs-bridge race: this is the only path that sets the clipboard).
-#   S  restore-by-id  req: id (ASCII decimal)        resp: empty | error text
+#   P  persist        req: source_host US kind US app US regtype RS text
+#      Materialize a used peer clip into THIS machine's store (§11). Sent to the
+#      LOCAL bridge by the nvim provider on paste-over-tunnel. resp: empty | err.
 #   C  copy (rich)    req: <2 bytes uti_len><uti><blob>  resp: empty | error text
 #   F  fetch-file     req: absolute path (UTF-8)     resp: file bytes | error text
 #
-# Rich payload writes (S, C) go through hs.pasteboard.writeAllData via a
+# Rich payload writes (C) go through hs.pasteboard.writeAllData via a
 # throwaway generated Lua script run as `hs <file>` (NOT `hs -c`, which hangs
 # on this box — confirmed empirically; see the comment above clip::hs_run).
 # Deliberately does NOT call into the running apps.clipboard-history module
@@ -44,6 +49,7 @@
 
 set -u
 zmodload zsh/system
+zmodload zsh/datetime   # $EPOCHREALTIME for op_persist timestamps
 
 # This handler speaks a raw BYTE protocol end to end: every length prefix,
 # loop counter, and substring split below is meant to count/index bytes, not
@@ -64,6 +70,7 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/pick-clipboard"
 REGTYPE_FILE="$STATE_DIR/current-regtype"
 LEGACY_GRACE_S=0.2
 READ_TIMEOUT_S=5
+MAX_ROWS=1000   # op_persist sweep cap (mirrors the HS watcher's row retention)
 
 mkdir -p "$STATE_DIR" 2>/dev/null
 
@@ -203,74 +210,6 @@ clip::op_set() {
   send_ok ""
 }
 
-# Reinstate the register type for a restored clip: if it carries a v/l/b
-# regtype, write it + sha256 of the LIVE clipboard to REGTYPE_FILE so a later R
-# op returns it. Hash pbpaste (what actually landed), not the DB text_plain, so
-# it matches op_get_regtype exactly. Call after the clipboard has been set.
-clip::reinstate_regtype() {
-  local id=$1 rt
-  rt=$(sqlite3 "$DB_FILE" "SELECT IFNULL(regtype,'') FROM clips WHERE id=$id;" 2>/dev/null)
-  [[ "$rt" == (v|l|b) ]] || return 0
-  local h; h="$(pbpaste 2>/dev/null | shasum -a 256 | awk '{print $1}')"
-  print -r -- "$rt" > "$REGTYPE_FILE"
-  print -r -- "$h" >> "$REGTYPE_FILE"
-}
-
-clip::op_restore() {
-  local id=$1
-  [[ "$id" == <-> ]] || { send_err "invalid id"; return }
-  local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-restore.XXXXXX")
-  local script="$tmpdir/restore.lua"
-  # One uti per row -- sqlite3's row separator is a plain newline (its
-  # -separator flag only affects COLUMN separation within a row), so split
-  # on newlines (zsh's (f) flag), not NUL.
-  local -a rows
-  rows=("${(@f)$(sqlite3 "$DB_FILE" \
-    "SELECT uti FROM clip_types WHERE clip_id=$id;" 2>/dev/null)}")
-  if (( $#rows == 0 )) || [[ -z "${rows[1]}" ]]; then
-    local plain
-    plain="$(sqlite3 "$DB_FILE" "SELECT text_plain FROM clips WHERE id=$id;" 2>/dev/null)"
-    if [[ -n "$plain" ]]; then
-      print -rn -- "$plain" | pbcopy
-      clip::reinstate_regtype "$id"
-      send_ok ""
-    else
-      send_err "clip $id not found"
-    fi
-    rm -rf -- "$tmpdir"
-    return
-  fi
-  # Every uti and blob is written to its OWN file, and the generated Lua
-  # only ever reads file contents -- it never has to embed a uti string (or
-  # binary blob) INTO Lua source syntax, sidestepping any escaping question
-  # entirely (a first attempt embedded the uti as `data[[==[<uti>]==]]`,
-  # which is simply invalid Lua -- `t[X] = v` needs X as an index
-  # expression, and `[[==[...]==]]` reads as nested long-bracket literals,
-  # not one; confirmed by the syntax error running it).
-  {
-    print -r -- "local function readfile(p) local f=io.open(p,'rb'); if not f then return nil end; local c=f:read('*a'); f:close(); return c end"
-    print -r -- "local data = {}"
-    local uti n=0
-    for uti in "${rows[@]}"; do
-      [[ -z "$uti" ]] && continue
-      (( n++ ))
-      local blobfile="$tmpdir/blob$n" utifile="$tmpdir/uti$n"
-      print -rn -- "$uti" > "$utifile"
-      sqlite3 "$DB_FILE" "SELECT writefile('$blobfile', blob) FROM clip_types WHERE clip_id=$id AND uti='$uti';" >/dev/null
-      print -r -- "local u$n, b$n = readfile([[$utifile]]), readfile([[$blobfile]])"
-      print -r -- "if u$n and b$n then data[u$n] = b$n end"
-    done
-    print -r -- "hs.pasteboard.writeAllData(data)"
-  } > "$script"
-  if clip::hs_run "$script"; then
-    clip::reinstate_regtype "$id"
-    send_ok ""
-  else
-    send_err "hs run failed for clip $id"
-  fi
-  rm -rf -- "$tmpdir"
-}
-
 clip::op_copy() {
   local payload=$1
   (( $#payload >= 2 )) || { send_err "short payload"; return }
@@ -331,6 +270,63 @@ clip::op_fetch_file() {
   exec {fd}<&-
 }
 
+# H  get-host: this machine's hostname, so a consumer can stamp the origin of
+# the clip it just read from here (materialization provenance, §11). Same
+# source the pickers use (scutil LocalHostName), falling back to hostname -s.
+clip::op_get_host() {
+  local h; h="$(scutil --get LocalHostName 2>/dev/null)"
+  [[ -n "$h" ]] || h="$(hostname -s 2>/dev/null)"
+  send_ok "$h"
+}
+
+# P  persist: materialize a used peer clip into THIS machine's store (§11) so a
+# self-contained copy lands here and survives the origin going offline. Sent by
+# the nvim provider to the LOCAL bridge on paste-over-tunnel. Byte-safe direct
+# SQLite insert (same technique as the rest of this script).
+#   payload = source_host US kind US app US regtype RS text
+# Dedup on (source_host, sha256(text)) -- repeated pastes just bump last_ts. A
+# bounded sweep caps growth when this machine never captures locally itself
+# (headless / SSH-only remote, where the HS watcher's own retention never runs).
+clip::op_persist() {
+  local payload=$1
+  local us=$'\x1f' rs=$'\x1e'
+  local meta=${payload%%${rs}*}
+  local text=${payload#*${rs}}
+  local -a f
+  IFS=$us read -rA f <<< "$meta"
+  local host=${f[1]:-} kind=${f[2]:-text} app=${f[3]:-} regtype=${f[4]:-}
+  [[ -n "$host" ]] || { send_err "no source_host"; return }
+  [[ "$regtype" == (v|l|b) ]] || regtype=""
+  local -i len=$#text
+  local preview=${text%%$'\n'*}
+  local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  local ts=$EPOCHREALTIME
+  local eh=${host//\'/\'\'} ek=${kind//\'/\'\'}
+  local rt_sql="NULL"; [[ -n "$regtype" ]] && rt_sql="'$regtype'"
+  # Arbitrary text/app -> temp files + readfile(), never SQL string literals.
+  local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-persist.XXXXXX") || { send_err "mktemp"; return }
+  print -rn -- "$text"    > "$tmpd/text"
+  print -rn -- "$preview" > "$tmpd/preview"
+  print -rn -- "$app"     > "$tmpd/app"
+  local existing
+  existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh' AND type_hash='$hash' LIMIT 1;" 2>/dev/null)
+  if [[ -n "$existing" ]]; then
+    sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null
+    rm -rf -- "$tmpd"; send_ok ""; return
+  fi
+  # A text clip is self-contained via text_plain -- every restore path falls
+  # back to it when a row has no clip_types blobs, so no rich rows are needed.
+  sqlite3 "$DB_FILE" "INSERT INTO clips \
+    (text_preview, text_plain, len, first_ts, last_ts, source_app, type_kind, regtype, pinned, type_hash, source_host) \
+    VALUES (CAST(readfile('$tmpd/preview') AS TEXT), CAST(readfile('$tmpd/text') AS TEXT), \
+    $len, $ts, $ts, CAST(readfile('$tmpd/app') AS TEXT), '$ek', $rt_sql, 0, '$hash', '$eh');" 2>/dev/null
+  sqlite3 "$DB_FILE" "DELETE FROM clips WHERE pinned=0 AND id NOT IN \
+    (SELECT id FROM clips ORDER BY pinned DESC, last_ts DESC LIMIT $MAX_ROWS);" 2>/dev/null
+  sqlite3 "$DB_FILE" "DELETE FROM clip_types WHERE clip_id NOT IN (SELECT id FROM clips);" 2>/dev/null
+  rm -rf -- "$tmpd"
+  send_ok ""
+}
+
 # --- connection handler ----------------------------------------------------
 
 read_n 1 "$LEGACY_GRACE_S"
@@ -358,8 +354,9 @@ fi
 case "$opcode" in
   G) clip::op_get ;;
   R) clip::op_get_regtype ;;
+  H) clip::op_get_host ;;
   T) clip::op_set "$payload" ;;
-  S) clip::op_restore "$payload" ;;
+  P) clip::op_persist "$payload" ;;
   C) clip::op_copy "$payload" ;;
   F) clip::op_fetch_file "$payload" ;;
   *) send_err "unknown opcode" ;;

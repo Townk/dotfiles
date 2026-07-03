@@ -56,9 +56,9 @@
   --icon-directory: rgb(250, 179, 135); /* peach */
   --icon-url: rgb(116, 199, 236); /* sapphire */
 
-  /* Origin badge (remote-ref rows). Catppuccin Mocha "mauve" -- distinct from
-   * every per-kind icon color above so a mirrored-from-a-remote row reads at a
-   * glance. Matches pick-clipboard's c_origin ANSI triple. */
+  /* Origin badge (remote rows — source_host != this Mac). Catppuccin Mocha
+   * "mauve", distinct from every per-kind icon color above so a clip copied on
+   * another machine reads at a glance. Matches pick-clipboard's c_origin. */
   --icon-origin: rgb(203, 166, 247);
 
   /* pick-clipboard's pin/pinned-row color is rgb(225, 170, 80) -- the SAME

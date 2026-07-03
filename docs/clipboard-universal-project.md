@@ -102,7 +102,7 @@ Same socket, same tunnel — stop throwing the type away.
                 │                 SQLite store (per machine)           │
                 │  clips(id, text_preview, text_plain, len,            │
                 │         first_ts, last_ts, source_app, type_kind,    │
-                │         origin, regtype, pinned)                     │
+                │         source_host, regtype, pinned)                 │
                 │  clip_types(clip_id, uti, blob)   -- rich payloads    │
                 └─────────────────────────────────────────────────────┘
                       ▲ write                        ▲ read        ▲ read
@@ -115,13 +115,14 @@ Same socket, same tunnel — stop throwing the type away.
    │  X11: xclip-poll          │
    └───────────────────────────┘
                       │
-                      │  (local→remote: text + metadata + id only, no BLOBs)
+                      │  (materialize-on-use: full reps + origin host, on demand)
                       ▼
    ┌─────────────────────────────────────────────────────────────────────┐
-   │ Bridge (evolve existing clipboard-bridge)                            │
-   │  local→remote (-L StreamLocal): history mirror into the remote's DB     │
-   │  remote→local (-R StreamLocal): copy-back, get-channel, rich BLOBs      │
-   │  length-prefixed binary framing; regtype rides alongside             │
+   │ Bridge (evolve existing clipboard-bridge) — live ops only            │
+   │  {get}         → full representation set + source_host (materialize)  │
+   │  {get-regtype} → current Vim regtype (block preservation)            │
+   │  {set}         → write the peer's clipboard when copying toward it    │
+   │  length-prefixed binary framing; no mirror, no restore-by-id         │
    └─────────────────────────────────────────────────────────────────────┘
                       │
                       ▼
@@ -139,15 +140,21 @@ mode. Machine-local, **untracked, never committed, never synced via the repo**
 (sensitive clips). Created on first use.
 
 - `clips(id INTEGER PK, text_preview TEXT, text_plain TEXT, len INTEGER,
-  first_ts REAL, last_ts REAL, source_app TEXT, type_kind TEXT, origin TEXT,
-  regtype TEXT, pinned INTEGER DEFAULT 0)`
+  first_ts REAL, last_ts REAL, source_app TEXT, type_kind TEXT,
+  source_host TEXT, regtype TEXT, pinned INTEGER DEFAULT 0)`
   - `type_kind` ∈ `text|rtf|html|image|files|mixed` (row badge).
-  - `origin` ∈ `local|remote-ref|remote-own` (drives the picker's
-    union-vs-local filter, Section 8).
+  - `source_host` — the hostname of the machine where the clip was
+    **originally copied** (`scutil --get LocalHostName`). This is the *only*
+    field that conveys origin: a row is "local" iff `source_host` equals this
+    machine's hostname, "remote" otherwise. There is **no `origin` column and
+    no cross-machine reference id** — every clip a machine holds, it holds in
+    full (see §11, self-contained clips).
   - `regtype` ∈ `v|l|b` (Vim register type, when the write came from the
     NeoVim provider; NULL otherwise).
 - `clip_types(clip_id INTEGER, uti TEXT, blob BLOB)` — one row per UTI, via
   `hs.pasteboard.readAllData()` on macOS. Enables full rich restoration.
+  Present on **every** machine that holds the clip (a clip is materialized in
+  full wherever it is used — §11), so restoration is always a local read.
 - **Dedup** on a hash of the type-set; re-copy bumps `last_ts` (recency for
   free — no `--cache-usage` file). The most-recently-copied item floats to
   the top in every front-end.
@@ -177,8 +184,8 @@ is OS-agnostic.
 - **Wayland**: `wl-paste --watch <writer>` (genuinely event-driven) → same
   schema, text-only.
 - **X11**: xclip polling daemon → same.
-- **Headless / dev shell**: no GUI clipboard; its DB is fed by the bridge
-  (local machine's mirror) + `pbcopy`/`clip-copy` shims + editor yanks.
+- **Headless / dev shell**: no GUI clipboard; its DB is fed by materialize-on-
+  use over the bridge (§11) + `pbcopy`/`clip-copy` shims + editor yanks.
 
 The skip-filter runs **before any forward** to the bridge, so sensitive
 content never leaves the originating machine.
@@ -236,34 +243,28 @@ into `pick::start` (no assembled-lines cache, no jq),
 
 ## 8. Access-path matrix and the 3-way detection
 
-The picker and the `pbcopy`/`clip-copy` shims key off two signals:
-`$SSH_CONNECTION` (am I in an SSH session?) and **bridge-up** (is the reverse
-`-R` socket connectable, i.e. is a remote machine driving this one over SSH?). Bridge-up is
-also the signal the existing `pbcopy` shim uses to route.
+Two signals still gate behavior: `$SSH_CONNECTION` (am I in an SSH session?)
+and **bridge-up** (is the reverse `-R` socket connectable?). But under the
+**self-contained** model (§11) the picker is *always* a pure view of **this
+machine's own store** — there is no union with a peer and no origin-relative
+filter. Every clip a machine can show, it already holds in full.
 
 | Scenario | `$SSH_CONNECTION` | bridge (`-R`) up | Picker shows | `Ctrl-Y` / `pbcopy` target |
 |---|---|---|---|---|
-| Sitting at a Mac (GUI) | unset | no | **local-only** | `/usr/bin/pbcopy` (local) + `Cmd+Shift+V` chooser |
-| Local Mac → SSH → remote (Mac / dev shell) | set | yes | **union** (this machine's clips + the mirrored ones) | reverse channel → local Mac (restore-by-id / BLOB-ship) |
-| iPad → Blink → SSH → remote | set | no | **local-only** | **OSC 52 → iPad** |
+| Sitting at a Mac (GUI) | unset | no | this machine's store | `/usr/bin/pbcopy` (local) + `Cmd+Shift+V` chooser |
+| SSH into a machine | set | yes | that machine's store | local `writeAllData`; the copy also rides the reverse channel to the machine you're sitting at |
+| iPad → Blink → SSH | set | no | that machine's store | **OSC 52 → iPad** (text) |
 
-- **Picker origin filter**: bridge-up → `origin IN ('local','remote-own','remote-ref')`
-  (union; `remote-ref` is live). bridge-down →
-  `origin IN ('local','remote-own')` — **excludes stale `remote-ref` rows**
-  from prior sessions, so the iPad / sitting-at views never show
-  dusty mirrored history.
-- **`remote-ref` refresh**: on each connection, the remote clears
-  `origin='remote-ref'` rows and re-feeds from the connecting machine's current
-  history, so the mirror stays current and bounded.
-
-### `Ctrl-Y` resolution by origin (when bridge-up)
-
-- `remote-ref` row → restore-by-id: send `{restore, remote_id}` on the
-  reverse channel; the local machine restores from its own DB via
-  `hs.pasteboard.writeAllData`. **Full rich, zero BLOB transfer** (the
-  payload already lives on the local machine). Fallback on id-miss → OSC 52 text.
-- `local` / `remote-own` row → ship BLOBs over the reverse channel directly
-  to the local receiver → `writeAllData`.
+- **No origin filter.** The picker `SELECT`s the local store unconditionally,
+  ordered by recency. `source_host` only decides the per-row local/remote
+  **badge**, never which rows appear. Bridge-up no longer changes *what* the
+  picker shows — only where a `Ctrl-Y` copy additionally lands.
+- **`Ctrl-Y` is always a local copy first.** The selected clip's full content
+  lives in this machine's store, so copy-back is `hs.pasteboard.writeAllData` /
+  `pbcopy` locally — no reverse-channel restore, no dependency on any other
+  machine being online. When bridge-up, the same bytes also ride the reverse
+  channel to the machine you're sitting at (so your physical clipboard gets it),
+  exactly as the `pbcopy` shim already routes.
 
 ## 9. NeoVim clipboard provider (type-preserving) + drop yanky
 
@@ -350,66 +351,91 @@ store can add it — not part of this project.
 > The webview matches the WhichKey overlay's visual identity and does
 > support all of those, unlike `hs.chooser`.
 
-## 11. Bridge — evolve the existing `clipboard-bridge`
+## 11. Self-contained clips — materialize on use
 
-> **Status: implemented and live (Phase 5, commit `9819757`).** As-built: the
-> dispatcher (G/R/T/S/C/F framing) is wired into the `clipboard-bridge` service;
-> the nvim provider (§9) pastes G+R and copies T over a libuv pipe (block
-> regtype preserved across machines); `pick-clipboard`'s Ctrl-Y dispatches by
-> origin (remote-ref→S restore-by-id, local image→C ship); the local→remote
-> mirror is a `[clipboard-mirror]` service + `ref_id` column + a fire-and-forget
-> sender in the HS watcher. Deviations from the design below: the SSH forward
-> uses `LocalForward` (macOS's OpenSSH rejects `StreamLocalForward`); C
-> copy-back ships a single representation (not the full multi-UTI set); the
-> remote-ref refresh relies on `ref_id` upsert + retention, not an explicit
-> clear-on-connect handshake — all noted as deferred refinements.
+> **Supersedes the Phase-5 pointer mirror** (commit `9819757`). The
+> `[clipboard-mirror]` launchd service, the `M` mirror opcode, the `S`
+> restore-by-id op, the `ref_id` column, and the `origin` column are **all
+> removed**. The principle they violated: *a machine must never depend on
+> another being online to reproduce a clip it has already shown you.*
 
-Loose `~/.ssh/config.d/clipboard.config` (untracked, never committed),
-`StreamLocalBindUnlink yes`:
+**Principle.** A clip's content lives, *in full*, on every machine where it has
+ever been **used**. Nothing is stored as a pointer; nothing is fetched back
+later. The scenario that forces this:
 
-- **local→remote (`-L` StreamLocal forward)**: the capture shim writes
-  **text + metadata + remote-id only (no BLOBs)** to a local forwarded
-  socket. A remote framed-socket daemon (systemd user unit on Linux;
-  launchd on a macOS remote) listens on
-  `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`, ingests
-  into the remote DB as `origin='remote-ref'`. Length-prefixed binary
-  framing. Bandwidth stays tiny.
-- **remote→local (`-R` StreamLocal forward)** — already exists for `pbpaste`;
-  extend to carry:
-  - `{restore, remote_id}` — copy-back by id (full rich, no BLOB transfer).
-  - `{copy, uti, blob}` — remote-originated rich (rare; e.g. an image file
-    on the dev shell) → local `writeAllData`.
-  - `{get}` / `{get-regtype}` — the NeoVim provider's cross-machine paste.
-  - `{fetch_file, remote_path}` — Section 12.
-- **Local receiver**: extend the existing `clipboard-bridge` launchd
-  service (or a sibling helper) to handle these ops, dispatching to
-  Hammerspoon via `hs -c 'clipboard.restore_by_id(N)'` (rich) or `pbcopy`
-  (text). Do **not** use `hs.socket` for the Unix listener — its Unix-domain
-  server requires timer polling (CocoaAsyncSocket limitation, confirmed
-  upstream); use a standalone framed-socket daemon that shells out to `hs`.
+> Copy on the laptop → SSH to the mac-mini and paste it (content flows over the
+> live bridge while the laptop is up). The next day, iPad → SSH → mac-mini with
+> the laptop shut in a bag: picking that same clip must just work, served
+> locally, with nothing to phone home to.
+
+**What travels, and when.** Only on *use*, and only over the already-live
+bridge: the clip's **full representation set + its origin hostname**. There is
+no eager mirror and no background mirror service.
+
+- **Local capture** (`hs.pasteboard.watcher`): store the full clip;
+  `source_host` = this machine's hostname. Unchanged from today, minus the
+  fire-and-forget mirror push.
+- **Use of a peer clip over the bridge** (nvim paste, picker `Ctrl-Y`, the
+  `pbcopy` read-back): the bridge `get` response carries every UTI's bytes
+  **plus the origin `source_host`**. The consuming machine writes a full clip
+  into its own store, stamped with that origin host — so it badges "remote
+  (laptop)" even though its bytes are now local — and dedups against what it
+  already holds. From that moment the clip is indistinguishable from a
+  locally-captured one except for `source_host`, and survives the origin
+  machine going offline.
+- **No identity token is needed.** Because content materializes on use,
+  copy-back is never "ask host X for clip N" — it is a local `writeAllData`. So
+  there is no `ref_id` and no shared `type_hash` has to travel. `type_hash`, if
+  kept at all, is a purely *local* dedup key computed from the content in hand.
+
+**Bridge ops that remain** (loose `~/.ssh/config.d/clipboard.config`,
+`LocalForward`/`RemoteForward`, loopback TCP — `StreamLocalForward` is rejected
+by macOS OpenSSH). The reverse channel keeps only the *live* ops the NeoVim
+provider and the `pbcopy` shim need — no mirror, no restore-by-id:
+
+- `{get}` → the current clipboard's **full representation set + `source_host`**
+  (this is the materialization source; extends today's text-only `G`).
+- `{get-regtype}` → current Vim regtype (block preservation, §9).
+- `{set, reps, regtype}` → write the peer's clipboard when you copy toward it.
+
+- **Receiver**: the existing `clipboard-bridge` launchd service handles these,
+  shelling to Hammerspoon for `readAllData`/`writeAllData`. Do **not** use
+  `hs.socket` for the listener (its Unix-domain server needs timer polling —
+  CocoaAsyncSocket limitation); keep the standalone framed-socket dispatcher.
 - Verify `AllowStreamLocalForwarding yes` on the dev shell's `sshd_config`
-  (default is `yes`).
+  (default `yes`).
 
-**Why this beats a custom base64-over-socket protocol for the common case**:
-the reverse channel is already a raw byte-capable unix socket (via SSH
-`StreamLocalForward`), so nothing here needs text-armoring — length-prefixed
-binary framing carries `{copy, uti, blob}` bytes directly when a blob truly
-must move. But for the *far more common* case — you copied something rich
-on the local machine and you're just picking it from a remote session — the blob
-never needs to travel at all: `{restore, remote_id}` tells the local machine to
-restore its own stored clip onto its own pasteboard via
-`hs.pasteboard.writeAllData`. The "protocol" for that path is just an id.
+### Migration (safe column drop + backfill)
+
+The existing store predates this model. On first run of the revised
+`ensure_schema`, in this order:
+
+1. **Delete stale pointer rows** — `DELETE FROM clips WHERE origin='remote-ref'`.
+   They are text-only references to a peer's history with **no blobs** and
+   cannot be made self-contained. Must run *before* step 3 drops `origin`.
+2. **Backfill origin** — `UPDATE clips SET source_host = <this host> WHERE
+   source_host IS NULL OR source_host = ''`. Every pre-existing local capture
+   becomes correctly "local" (its bytes were always here).
+3. **Drop the dead columns** — `ALTER TABLE clips DROP COLUMN origin;` and
+   `ALTER TABLE clips DROP COLUMN ref_id;` (SQLite ≥ 3.35; if the bundled
+   `hs.sqlite3` predates `DROP COLUMN`, fall back to a `CREATE TABLE … AS
+   SELECT` rebuild).
+
+No data of value is lost: the only rows removed are peer-history pointers that
+were never self-contained to begin with.
 
 ## 12. Remote file copy — scp-down + local file-url
 
-- **Local-originated file ref** (copied in Finder): restore-by-id (Section
-  8) restores the original `public.file-url` on the local machine — works, the file
-  is local. No transfer.
-- **Remote→local file copy**: `Ctrl-Y` on a `files`-kind row sends
-  `{fetch_file, remote_path}` on the reverse channel. The local receiver
-  `scp`s the file to a local temp dir, puts a real `public.file-url`
-  (pointing to the temp file) on the pasteboard, and schedules cleanup on
-  paste-or-timeout. Pasting into Finder then works.
+File clips follow the same self-contained rule (§11): a `files`/`file` clip is
+materialized by pulling the bytes down **at use time**, then stored locally.
+
+- **Locally-copied file** (Finder): the `public.file-url` and the file are
+  already on this machine. No transfer; `Ctrl-Y` restores the local file-url.
+- **Peer file, used over the bridge**: `Ctrl-Y` on a `files`-kind row `scp`s
+  the file down to a local temp dir at use time, puts a real `public.file-url`
+  (pointing to the temp file) on the pasteboard, and records it in the local
+  store (`source_host` = the origin host) so a later paste needs no re-fetch.
+  Pasting into Finder then works.
   - An `scp:` URI alone does **not** paste into Finder (Finder pastes
     `public.file-url`, not `scp:`); the scp-down-to-temp + local-url path is
     the honest way. `scp:` URIs only matter for apps that explicitly handle
@@ -455,10 +481,11 @@ where "you" is decided by bridge-up:
   with a message.
 - **UTI detection**: wrong UTI → garbage on the pasteboard. Detect from
   extension first, then `file --mime-type`.
-- **`remote-ref` rows are text + id only** on the remote. The remote can
-  *show* them (origin-badged) and copy them back by id, but cannot inject
-  rich BLOBs into a terminal pane (terminals take text). Rich copy-back of
-  a `remote-ref` row resolves the BLOB on the local machine via restore-by-id.
+- **Remote-origin rows carry their own BLOBs** (self-contained, §11): a clip
+  materialized from a peer is stored in full locally, so it is copied back by a
+  local `writeAllData` like any other — no cross-machine resolve. A terminal
+  pane still only receives text (rich BLOBs go to the GUI clipboard, not the
+  pane); that limit is about the sink, not about where the payload lives.
 - **Storage cost**: image BLOBs can be MBs. Per-representation cap (~5 MB),
   total-store cap, oldest-dropped retention sweep.
 
@@ -549,8 +576,21 @@ working.
 > **STATUS**: Phases 1–**5** are **done and live** (with the as-built deltas
 > noted inline in §7/§9/§10/§11 above). Phase 5 (bridge evolution) shipped in
 > commit `9819757` — dispatcher wired into the service, type-preserving
-> cross-machine nvim paste, origin-aware `Ctrl-Y` in both pickers, and the
-> local→remote history mirror. **Phases 6–7 are not started.**
+> cross-machine nvim paste, `Ctrl-Y` in both pickers, and a local→remote
+> history mirror. Absolute `source_host` provenance + the `loginwindow` echo
+> guard landed in `eee3cf2`. **Phases 6–7 are not started.**
+>
+> **Phase 5-R — self-contained clips (revision, supersedes the mirror).** The
+> Phase-5 pointer mirror is being replaced per §11: clips materialize in full
+> wherever they are *used*, so no machine ever depends on another being online.
+> **Removed**: `[clipboard-mirror]` service, `M` mirror opcode, `S`
+> restore-by-id, `ref_id`, `origin`, the dead `remote-own`, and the whole
+> bridge-up *union* view. **Kept**: local capture, `source_host` (now the sole
+> origin field), and the live bridge `get`/`get-regtype`/`set` ops — with
+> `get` extended to return the full representation set + origin host so the
+> consumer can persist a self-contained copy. Migration in §11 (drop stale
+> pointer rows, backfill `source_host`, drop dead columns). **Design approved;
+> implementation pending** (this doc is the spec of record).
 
 ## 19. Verification
 
@@ -571,9 +611,10 @@ working.
   - Copy rich text in a GUI app → `Cmd+Shift+V` → paste styled into another
     GUI app.
   - `Alt+w v` in a local Zellij → pick a recent clip → injects into the pane.
-  - SSH from your Mac → dev shell → `Alt+w v` shows union → `Ctrl-Y` on a
-    local-originated image restores it to your local clipboard.
-  - SSH iPad→a Mac (Blink) → `Alt+w v` shows that Mac's local clips only →
+  - SSH from your Mac → dev shell → paste a clip you copied on the Mac (it
+    materializes into the dev shell's store) → next day, offline from the Mac,
+    the same clip is still pickable there and `Ctrl-Y` copies it locally.
+  - SSH iPad→a Mac (Blink) → `Alt+w v` shows that Mac's store →
     `Ctrl-Y` text → onto the iPad clipboard (OSC 52).
   - Sensitive copy (e.g. from a password manager) → never appears in history.
 - **Post-edit**: every file write in this chezmoi repo is followed by
@@ -592,15 +633,16 @@ working.
 - Picker: `pick-clipboard` reading the store; `Alt+w v` leader chord.
 - GUI: Hammerspoon `hs.chooser` on `Cmd+Shift+V` (accept the Raycast shadow),
   full rich restore, select = paste.
-- Bridge: evolve the existing `clipboard-bridge`; local→remote forwards
-  text+metadata+id (no BLOBs); reverse channel does restore-by-id (full
-  rich, no BLOB transfer for local-originated) + BLOB-ship for
-  remote-originated + `get`/`get-regtype` for cross-machine paste.
+- Bridge: evolve the existing `clipboard-bridge`; live ops only — `{get}`
+  (full representation set + origin host), `{get-regtype}`, `{set}`. No mirror,
+  no restore-by-id (self-contained clips, §11): a clip materializes in full on
+  any machine that uses it.
 - NeoVim: type-preserving Lua provider; **drop yanky.nvim**.
 - Cross-machine block: in scope (regtype column + current-regtype tracking
   on the local machine, reset on non-NeoVim writes). No "v1.5" — the project
   delivers the whole thing.
-- Remote picker view: **union** of local DB + the remote mirror, origin-badged.
+- Picker view: **this machine's store only** — no peer union. `source_host`
+  drives the per-row local/remote badge, not row visibility.
 - Remote file copy: scp-down to temp + local `public.file-url`.
 - Any GUI Mac: full install when used locally; dev-shell-equivalent when SSH'd
   into. `pbcopy` shim auto-detects via bridge-up × `$SSH_CONNECTION`.
@@ -664,10 +706,9 @@ First verifications (do these before writing code):
    wezterm / Blink). Every OSC 52 copy-back path depends on it.
 2. Read the existing clipboard-bridge launchd service and
    ~/.ssh/config.d/clipboard.config so you extend, not duplicate.
-3. Read §11's "why this beats a custom base64-over-socket protocol" note —
-   the reverse channel is a raw binary-capable unix socket already; no
-   text-armoring is needed, and the common case (local-originated content)
-   needs no byte transfer at all (restore-by-id).
+3. Read §11 (self-contained clips): the bridge is now live-ops-only
+   (`get`/`get-regtype`/`set`); a clip materializes in full wherever it is
+   used, so there is no mirror, no `ref_id`, and no restore-by-id fetch.
 
 Silo workflow: this is cross-silo. Start in a `work-on-pick` worktree for
 the pick-common.zsh + pick-clipboard pieces if touching them (see
@@ -687,9 +728,10 @@ Contracts you MUST NOT break (load-bearing for >=3 silos):
   gating — local (non-SSH) NeoVim keeps pbcopy/pbpaste.
 
 Verification before claiming done (spec §19): run make test for lib/
-primitives; test cross-machine copy-back over SSH (restore-by-id path);
-test the iPad/Blink OSC 52 path; confirm a password-manager copy never
-enters history. Run chezmoi apply after every edit. Scan diffs for company
+primitives; test cross-machine materialize-on-use over SSH (use a peer clip,
+then confirm it survives the peer going offline); test the iPad/Blink OSC 52
+path; confirm a password-manager copy never enters history. Run chezmoi apply
+after every edit. Scan diffs for company
 info before staging.
 
 Self-test via the `validate` skill (Mode A sandbox) per the work-on-<silo>

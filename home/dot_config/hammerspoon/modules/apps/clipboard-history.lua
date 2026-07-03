@@ -13,16 +13,18 @@
 ---
 --- Schema (spec §5):
 ---   clips(id, text_preview, text_plain, len, first_ts, last_ts, source_app,
----         source_bundle_id, type_kind, origin, regtype, pinned, type_hash)
+---         source_bundle_id, type_kind, regtype, pinned, type_hash, source_host)
 ---   clip_types(clip_id, uti, blob)   -- one row per UTI, full rich payload
 --- `type_hash` is the dedup index for spec §5's "Dedup on a hash of the
 --- type-set; re-copy bumps last_ts" — sha256 of the sorted (UTI=blob) pairs.
 --- It is an implementation column; readers select the documented columns.
+--- `source_host` is the clip's origin (spec §11): local iff it equals this
+--- machine's hostname. Self-contained clips — no `origin`/`ref_id` columns.
 ---
 --- Phase 2 scope: store + macOS `hs.pasteboard.watcher` capture. The chooser
---- (§10), bridge evolution (§11), and regtype / current-regtype tracking (§9)
---- land in later phases. Here every captured row is `origin='local'` and
---- `regtype=NULL` (the watcher can't see that a copy came from remote nvim).
+--- (§10) and bridge evolution (§11) land in later phases. A locally-captured
+--- row carries `source_host` = this machine and `regtype=NULL` (the watcher
+--- can't see that a copy came from remote nvim).
 ---
 --- API:
 ---   local ch = require("apps.clipboard-history")
@@ -70,11 +72,11 @@ local function db_path()
   return data_dir() .. "/pick-clipboard/history.db"
 end
 
--- This machine's stable hostname, stamped on every clip captured here so the
--- source machine travels WITH the clip (through the mirror too). A picker then
--- derives local/remote by comparing to its own hostname -- absolute provenance,
--- not a per-DB direction flag. Cached; the pickers read it the same way
--- (scutil --get LocalHostName).
+-- This machine's stable hostname, stamped on every clip captured here as its
+-- origin (§11). A picker derives local/remote by comparing it to its own
+-- hostname -- absolute provenance, not a per-DB direction flag. When a peer
+-- clip is materialized here on use, it keeps ITS origin host, not this one.
+-- Cached; the pickers read it the same way (scutil --get LocalHostName).
 local MY_HOST
 local function my_host()
   if MY_HOST == nil then
@@ -239,6 +241,10 @@ end
 local function ensure_schema()
   exec("PRAGMA journal_mode=WAL;")
   exec("PRAGMA synchronous=NORMAL;")
+  -- Self-contained clips (spec §11): every clip a machine holds, it holds in
+  -- full. `source_host` is the ONLY origin field (local iff it equals this
+  -- machine's hostname). There is no `origin` column and no cross-machine
+  -- reference id -- a clip is materialized in full wherever it is used.
   exec([[CREATE TABLE IF NOT EXISTS clips (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     text_preview TEXT,
@@ -249,11 +255,9 @@ local function ensure_schema()
     source_app TEXT,
     source_bundle_id TEXT,
     type_kind TEXT,
-    origin TEXT,
     regtype TEXT,
     pinned INTEGER DEFAULT 0,
     type_hash TEXT,
-    ref_id INTEGER,
     source_host TEXT
   );]])
   exec([[CREATE TABLE IF NOT EXISTS clip_types (
@@ -273,27 +277,29 @@ local function ensure_schema()
     exec("ALTER TABLE clips ADD COLUMN source_bundle_id TEXT;")
   end
 
-  -- Migration for the local→remote history mirror (Phase 5, spec §11): a
-  -- `remote-ref` row carries the SOURCE machine's original clip id here, so
-  -- Ctrl-Y can ask the remote to restore-by-id over the reverse channel
-  -- (full rich, zero blob transfer). NULL for local/remote-own rows. Both the
-  -- mirror receiver (clipboard-mirror-dispatch) and pick-clipboard rely on it.
-  if not column_exists("clips", "ref_id") then
-    exec("ALTER TABLE clips ADD COLUMN ref_id INTEGER;")
-  end
-
-  -- Provenance: the hostname of the machine where the clip was actually copied,
-  -- stamped at capture and carried through the mirror. A picker derives
-  -- local/remote by comparing to its own hostname (absolute, not a per-DB
-  -- flag). NULL on pre-migration rows -> treated as local.
+  -- source_host: the hostname where the clip was originally copied (§11).
   if not column_exists("clips", "source_host") then
     exec("ALTER TABLE clips ADD COLUMN source_host TEXT;")
   end
 
-  -- Rename the legacy origin value 'laptop-ref' -> 'remote-ref'. Provenance is
-  -- machine-agnostic now: a mirrored row references a clip on whatever remote
-  -- machine is connected, not one named host. Idempotent; cheap on every start.
-  exec("UPDATE clips SET origin='remote-ref' WHERE origin='laptop-ref';")
+  -- Migration to the self-contained model (spec §11). Order matters:
+  --   1. drop the old text-only mirror pointer rows (origin='remote-ref' /
+  --      legacy 'laptop-ref') -- no blobs, cannot be made self-contained;
+  --   2. backfill source_host on every remaining row (all pre-existing rows
+  --      were local captures, so their origin is this machine);
+  --   3. drop the now-dead `origin` and `ref_id` columns.
+  if column_exists("clips", "origin") then
+    exec("DELETE FROM clips WHERE origin IN ('remote-ref','laptop-ref');")
+  end
+  local host = (my_host() or ""):gsub("'", "''")
+  exec("UPDATE clips SET source_host='" .. host ..
+    "' WHERE source_host IS NULL OR source_host='';")
+  if column_exists("clips", "origin") then
+    exec("ALTER TABLE clips DROP COLUMN origin;")
+  end
+  if column_exists("clips", "ref_id") then
+    exec("ALTER TABLE clips DROP COLUMN ref_id;")
+  end
 end
 
 -- Drop oldest non-pinned rows until under both the row and byte caps.
@@ -325,38 +331,6 @@ local function enforce_retention()
   exec("DELETE FROM clip_types WHERE clip_id NOT IN (SELECT id FROM clips);")
 end
 
--- local→remote history mirror (spec §11). When this Mac is SSH'd into a remote
--- with the clipboard mirror -L forward up, loopback TCP 2492 here is forwarded
--- to the remote's clipboard-mirror listener. We push each local capture's TEXT
--- + METADATA + our clip id there — never blobs — so the remote shows a live
--- `remote-ref` row it can restore-by-id over the reverse channel. TCP, not a
--- unix socket: a forwarded socket goes stale on an unclean disconnect and macOS
--- ssh won't clear it; a port frees itself (see clipboard-bridge-client.zsh).
-local MIRROR_HOST, MIRROR_PORT = "127.0.0.1", "2492"
-local CLIENT_LIB = (os.getenv("HOME") or "") .. "/.local/lib/clipboard-bridge-client.zsh"
-
--- Best-effort, non-blocking. Fire-and-forget: when the forward is down (the
--- common case, not SSH'd anywhere) the client's `nc` refuses instantly and the
--- record is dropped — no gate needed. Record wire format (US=0x1f, RS=0x1e):
---   ref_id US kind US app US len US source_host RS preview RS text_plain
-local function push_to_mirror(ref_id, kind, app, len_val, preview, plain, host)
-  local us, rs = "\31", "\30"
-  local payload = table.concat(
-    { tostring(ref_id), kind or "", app or "", tostring(len_val or 0), host or "" }, us)
-    .. rs .. (preview or "") .. rs .. (plain or "")
-  local tmp = os.tmpname()
-  local f = io.open(tmp, "wb")
-  if not f then return end
-  f:write(payload)
-  f:close()
-  -- Frame + send via the shared zsh client (M opcode), then delete the temp
-  -- file in-script so cleanup happens even if the callback never fires.
-  local script = 'source "$1"; clipbridge::send "$2" "$3" M "$4"; rm -f "$4"'
-  local t = hs.task.new("/bin/zsh", function() end,
-    { "-c", script, "zsh", CLIENT_LIB, MIRROR_HOST, MIRROR_PORT, tmp })
-  if t then t:start() else os.remove(tmp) end
-end
-
 -- Store one capture. Returns the clip id, or nil if skipped.
 function M.capture_now()
   if not db then return nil end
@@ -379,10 +353,10 @@ function M.capture_now()
   -- Echo guard: when no interactive GUI user owns the session (frontmost is
   -- `loginwindow` / nil), a pasteboard change is not a genuine local copy but a
   -- bridge write echoing a *remote* machine's clip onto our pasteboard (e.g. a
-  -- remote machine SSH'd in doing a T copy). Capturing it would stamp a bogus
-  -- origin='local'/source_app='loginwindow' row for another host's clip, which
-  -- is exactly the provenance bug source_host is meant to fix — so skip it. The
-  -- remote host records its own copy and mirrors it to us as its own row.
+  -- remote machine SSH'd in doing a T copy). Capturing it would stamp a clip
+  -- that was really copied elsewhere with THIS machine's hostname (a bogus
+  -- source_app='loginwindow', "local" row) — so skip it. The origin machine
+  -- holds its own copy; if we use it here it materializes with ITS host (§11).
   if not app_name or app_name == "loginwindow" then return nil end
 
   local data_by_uti = pasteboard.readAllData() or {}
@@ -470,15 +444,14 @@ function M.capture_now()
     up:bind(6, len_val); up:bind(7, kind); up:bind(8, cap_rt); up:bind(9, host); up:bind(10, existing_id)
     up:step(); up:finalize()
     enforce_retention()
-    push_to_mirror(existing_id, kind, app_name, len_val, preview, plain, host)
     return existing_id
   end
 
   -- New row.
   local ins = assert(db:prepare(
     "INSERT INTO clips (text_preview, text_plain, len, first_ts, last_ts, "
-    .. " source_app, source_bundle_id, type_kind, origin, regtype, pinned, type_hash, source_host) "
-    .. " VALUES (?,?,?,?,?,?,?,?,  'local', ?, 0, ?, ?);"))
+    .. " source_app, source_bundle_id, type_kind, regtype, pinned, type_hash, source_host) "
+    .. " VALUES (?,?,?,?,?,?,?,?,  ?, 0, ?, ?);"))
   ins:bind(1, preview); ins:bind(2, plain); ins:bind(3, len_val)
   ins:bind(4, ts); ins:bind(5, ts); ins:bind(6, app_name); ins:bind(7, app_bundle_id)
   ins:bind(8, kind); ins:bind(9, cap_rt); ins:bind(10, th); ins:bind(11, host)
@@ -496,7 +469,6 @@ function M.capture_now()
   end
 
   enforce_retention()
-  push_to_mirror(new_id, kind, app_name, len_val, preview, plain, host)
   return new_id
 end
 
@@ -586,7 +558,7 @@ function M.restore_by_id(id)
   if not db or not id then return false end
   local data = fetch_clip_types(id)
   if next(data) == nil then
-    -- No rich payload (e.g. a remote-ref text-only row): fall back to text_plain.
+    -- No rich payload (e.g. a materialized text-only row): fall back to text_plain.
     local plain = fetch_text_plain(id)
     if not plain then return false end
     pasteboard.setContents(plain)

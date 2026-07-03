@@ -8,6 +8,13 @@
 --   paste()  → G (get text) + R (get-regtype)  → {lines, regtype}
 --   copy()   → T (set text + regtype)
 --
+-- Self-contained clips (spec §11): when we paste the PEER's clipboard over the
+-- SSH tunnel, we also persist a full local copy into THIS machine's store (H to
+-- learn the peer's hostname, then a fire-and-forget P to the LOCAL bridge). So a
+-- clip used here survives the origin going offline — next session it's already
+-- in the local history, no phone-home. Only over SSH; local pastes are already
+-- captured by the Hammerspoon watcher.
+--
 -- This is what makes a visual-BLOCK yank (regtype "b") keep its shape: the
 -- service records the regtype when nvim copies and hands it back on the next
 -- paste (a hash check self-invalidates it if anything else changed the
@@ -43,6 +50,10 @@ end
 -- overrides it (tests).
 local BRIDGE_HOST = "127.0.0.1"
 local BRIDGE_PORT = 2490
+-- This machine's OWN bridge, where a used peer clip is materialized (op P) into
+-- the local store. Fixed at 2489 regardless of the paste source port; env
+-- override for tests.
+local LOCAL_PERSIST_PORT = tonumber(vim.env.CLIPBOARD_PERSIST_PORT) or 2489
 
 local function pbcopy(text)
   vim.fn.system({ "pbcopy" }, text)
@@ -153,6 +164,57 @@ local function frame_request(host, port, opcode, payload, timeout_ms)
   return result
 end
 
+-- Fire-and-forget framed request: connect, write, and close on the first
+-- response byte (or a 2s safety timer) — no vim.wait, so the caller (paste())
+-- is never blocked. libuv services the callbacks on nvim's main loop. Used for
+-- the materialize P op, whose reply we don't need.
+local function frame_fire(host, port, opcode, payload)
+  local uv = vim.uv or vim.loop
+  payload = payload or ""
+  local req = opcode .. pack_be32(#payload) .. payload
+  local tcp = uv.new_tcp()
+  local timer = uv.new_timer()
+  local closed = false
+  local function shut()
+    if closed then return end
+    closed = true
+    pcall(function() timer:stop(); timer:close() end)
+    pcall(function() tcp:read_stop() end)
+    pcall(function() tcp:close() end)
+  end
+  tcp:connect(host, port, function(cerr)
+    if cerr then shut(); return end
+    -- Any reply (or EOF) means the server has read+processed the request.
+    tcp:read_start(function() shut() end)
+    tcp:write(req)
+  end)
+  timer:start(2000, 0, shut) -- safety net if the server never replies
+end
+
+-- The peer's hostname (origin of clips read over the SSH tunnel), fetched once
+-- via H and cached for the session. Only meaningful in SSH mode. Retries until
+-- a non-empty answer, so a transient bridge hiccup doesn't poison the cache.
+local PEER_HOST
+local function peer_host()
+  if PEER_HOST then return PEER_HOST end
+  local h = frame_request(BRIDGE_HOST, BRIDGE_PORT, "H", "", 1000)
+  if h and h[1] == "O" and h[2] ~= "" then PEER_HOST = h[2] end
+  return PEER_HOST
+end
+
+-- Materialize a just-pasted peer clip into THIS machine's store (spec §11), so
+-- it stays available after the origin machine goes offline. Fire-and-forget P
+-- to the local bridge; best-effort (never blocks or errors the paste).
+local US, RS = "\31", "\30"
+local function materialize(text, regtype)
+  if not text or text == "" then return end
+  local host = peer_host()
+  if not host then return end -- can't attribute origin -> skip (retry next paste)
+  local rt = (regtype == "v" or regtype == "l" or regtype == "b") and regtype or ""
+  local meta = table.concat({ host, "text", "", rt }, US)
+  frame_fire(BRIDGE_HOST, LOCAL_PERSIST_PORT, "P", meta .. RS .. text)
+end
+
 -- Read the cached {regtype, text}. Returns nil if absent or malformed.
 local function read_cache()
   local f = io.open(cache_path(), "r")
@@ -217,7 +279,12 @@ function M.paste()
           regtype = rt
         end
       end
-      return { to_lines(text), regtype or cached_rt or infer_regtype(text) }
+      local rt = regtype or cached_rt or infer_regtype(text)
+      -- Self-contained (§11): over SSH this text is the PEER's clip, read across
+      -- the tunnel — persist a full copy locally so it survives the peer going
+      -- offline. Local pastes are already the HS watcher's job; skip those.
+      if ssh() then materialize(text, rt) end
+      return { to_lines(text), rt }
     end
     if cached_text then
       return { vim.split(cached_text, "\n", { plain = true }), cached_rt or "v" }

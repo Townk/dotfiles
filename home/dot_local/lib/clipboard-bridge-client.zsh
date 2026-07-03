@@ -10,10 +10,10 @@
 # that kills every later forward until it's manually removed. A forwarded TCP
 # port is owned by the ssh process and freed by the OS when the session ends, so
 # there is nothing to go stale. Endpoints: 2490 = reverse-forwarded peer
-# clipboard, 2492 = mirror-forward to the peer's history receiver.
+# clipboard, 2489 = this machine's own bridge (local set / materialize).
 #
-# Used by pick-clipboard's origin-aware Ctrl-Y (S restore, C ship-rich) and by
-# the Hammerspoon mirror sender (M). Response *payloads* (G/R) are consumed by
+# Used by pick-clipboard's Ctrl-Y (T set-with-regtype, C ship-rich to the peer).
+# Response *payloads* (G/R) are consumed by
 # the nvim provider over libuv, not here, so this only needs the status byte.
 #
 # Byte-safe: runs under `setopt nomultibyte` so the BE-length bytes and any
