@@ -34,26 +34,24 @@
 #                ![](data:image/...;base64,...) for image clips, and plain
 #                text_plain (same as Enter) for every other kind -- there's
 #                no rich-vs-raw distinction in a terminal.
-#   Ctrl-Y       accept-and-copy: re-fetch + copy to *my* clipboard (the pbcopy
-#                shim routes OSC 52 / bridge / local). Stays open? No — Ctrl-Y
-#                is accept-and-dismiss: handled as a background key here that
-#                copies then prints a sentinel so the wrapper dismisses. See NOTES.
+#   Ctrl-Y       accept-and-dismiss + copy to *my* clipboard, dispatching by
+#                origin and carrying the register type so a block clip stays
+#                block-pasteable (clip::copy_by_id): laptop-ref -> S restore on
+#                the peer; local image -> C; local/other text -> T(regtype+text)
+#                to the peer (SSH) or this machine's bridge (local); iPad -> OSC
+#                52. Emits nothing to the pane (unlike Enter, which injects).
 #   Ctrl-D/Alt-D delete the row (SQL DELETE by id), stay open.
 #   Ctrl-P       toggle pin, stay open.
 #
 # Origin filter (spec §8): bridge-up ($SSH_CONNECTION + the reverse socket
 # present) -> union of local/remote-own/laptop-ref; else local/remote-own only
-# (excludes stale laptop-ref rows). Phase 3 only has origin='local' rows (the
-# bridge mirror lands in Phase 5), so the filter is forward-compatible.
+# (excludes stale laptop-ref rows).
 #
-# NOTES on Ctrl-Y: pick::start's accept-and-dismiss is Enter (via --output). A
-# second accept-and-dismiss sink (copy-then-close) isn't expressible as a
-# plain --key-output (those emit a field, they don't run a side effect). So
-# Ctrl-Y is a --key-background bind that copies, then writes the magic
-# sentinel `__PICK_CLIPBOARD_CTRL_Y__<id>` to the FIFO... — simpler: Ctrl-Y
-# copies and the user closes with Esc/Enter. A true copy-and-dismiss variant
-# can be added later as a separate accept key if wanted; for now Ctrl-Y is
-# copy-and-stay (delete/pin are also stay), and Enter is the dismiss+inject.
+# Accept markers: pick::start emits one of three tail fields on accept, and the
+# wrapper below dispatches on the prefix — field:1 plain id (Enter -> inject
+# text), field:2 "MD:id" (Alt-Enter -> markdown), field:3 "CP:id" (Ctrl-Y ->
+# copy, print nothing). A dedicated accept field is how copy-and-dismiss runs a
+# side effect without injecting: the wrapper does the copy instead of printing.
 
 set -eu -o pipefail
 
@@ -83,7 +81,8 @@ It is created by the Hammerspoon clipboard-history watcher (chezmoi apply)."
 # "does a socket file exist?" check) — a down/stale tunnel refuses, so we
 # degrade cleanly instead of the old "file present but connection refused" trap.
 BRIDGE_HOST=127.0.0.1
-BRIDGE_PORT=2490
+BRIDGE_PORT=2490   # reverse-forwarded peer clipboard (SSH bridge-up)
+LOCAL_PORT=2489   # this machine's own clipboard-bridge (sitting locally)
 bridge_up=0
 if [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] &&
    clipbridge::probe "$BRIDGE_HOST" "$BRIDGE_PORT"; then
@@ -139,14 +138,34 @@ clip::ship_image_by_id() {
   return 1
 }
 
-# Copy a clip's content to *my* clipboard, dispatching by origin (spec §8).
-# Bridge-up uses the reverse channel to the laptop's clipboard-bridge:
-#   laptop-ref     -> S restore-by-id (the laptop restores its own stored clip,
-#                     full rich, ZERO blob transfer — the payload already lives
-#                     there); fall through on id-miss.
-#   local/remote-own image -> C ship the blob (OSC 52 can't carry an image).
-# Everything else (bridge-down, or a non-image local row) falls through to the
-# pbcopy shim: local -> /usr/bin/pbcopy, over SSH -> OSC 52 (text).
+# Set the target clipboard to a clip via the framing T op (regtype + exact
+# text), so the register type is RECORDED alongside — a later nvim paste can
+# then block-paste it. <port> picks the dispatcher: BRIDGE_PORT (the laptop over
+# the reverse tunnel) or LOCAL_PORT (this machine's own bridge). text_plain is
+# written via writefile so no sqlite trailing newline sneaks in (an extra line
+# would corrupt a block clip). Returns 0 on an 'O' response.
+clip::set_via_bridge() {
+  local port=$1 id=$2 rt txtf
+  rt=$(sqlite3 "$DB_FILE" "SELECT IFNULL(regtype,'v') FROM clips WHERE id=$id;" 2>/dev/null) || rt=v
+  [[ "$rt" == (v|l|b) ]] || rt=v
+  local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-set.XXXXXX") || return 1
+  txtf="$pf.txt"
+  print -rn -- "$rt" > "$pf"
+  sqlite3 "$DB_FILE" "SELECT writefile('$txtf', text_plain) FROM clips WHERE id=$id;" >/dev/null 2>&1
+  [[ -f "$txtf" ]] && cat "$txtf" >> "$pf"
+  rm -f "$txtf"
+  if clipbridge::send "$BRIDGE_HOST" "$port" T "$pf"; then rm -f "$pf"; return 0; fi
+  rm -f "$pf"; return 1
+}
+
+# Copy a clip's content to *my* clipboard, dispatching by origin (spec §8) and
+# carrying the register type so a block clip stays block-pasteable:
+#   bridge-up (SSH) laptop-ref     -> S restore-by-id on the laptop (full rich,
+#                                     zero transfer; reinstates its regtype there)
+#   bridge-up local/remote-own img -> C ship the blob (OSC 52 can't carry it)
+#   bridge-up local/remote-own txt -> T(regtype+text) to the laptop
+#   sitting locally (no SSH)       -> T(regtype+text) to this machine's bridge
+#   SSH bridge-down (iPad) / fail  -> pbcopy shim (OSC 52 text; iPad can't block)
 clip::copy_by_id() {
   local id=$1
   if (( bridge_up )); then
@@ -164,8 +183,11 @@ clip::copy_by_id() {
       local|remote-own)
         local kind; kind=$(sqlite3 "$DB_FILE" "SELECT type_kind FROM clips WHERE id=$id;" 2>/dev/null) || kind=""
         [[ "$kind" == image ]] && clip::ship_image_by_id "$id" && return 0
+        clip::set_via_bridge "$BRIDGE_PORT" "$id" && return 0
         ;;
     esac
+  elif [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]]; then
+    clip::set_via_bridge "$LOCAL_PORT" "$id" && return 0
   fi
   if command -v pbcopy >/dev/null 2>&1; then
     clip::text_by_id "$id" | pbcopy
@@ -268,7 +290,6 @@ clip::bg_hook() {
   [[ -n "$id" ]] || return 0
   case "$key" in
     ctrl-o)           clip::inject_by_id "$id" ;;
-    ctrl-y)           clip::copy_by_id "$id" ;;
     ctrl-d|alt-d)     clip::delete_by_id "$id" ;;
     ctrl-p)           clip::toggle_pin_by_id "$id" ;;
     *)                ;;  # ignore unmapped background keys
@@ -379,7 +400,7 @@ EMIT_SQL="WITH palette AS (
       || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-1)) THEN '…' ELSE '' END)
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
-      || CHAR(31) || id || CHAR(30) || 'MD:' || id
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
     FROM clips, palette
     WHERE ${origin_where}
     ORDER BY pinned DESC, last_ts DESC
@@ -448,7 +469,7 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       || printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
-      || CHAR(31) || id || CHAR(30) || 'MD:' || id
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
     FROM clips, palette
     WHERE ${origin_where}
     ORDER BY pinned DESC, last_ts DESC
@@ -488,8 +509,8 @@ pick_args=(
   --output field:1                 # Enter -> id (we re-fetch text below)
   --field-id 1                     # id is tail field 1 (for recency + resume)
   --key-output alt-enter:field:2       # accept-and-dismiss with the "MD:id" marker
+  --key-output ctrl-y:field:3          # accept-and-dismiss with the "CP:id" marker (copy)
   --key-background ctrl-o:field:1      # insert without dismissing (broker hook)
-  --key-background ctrl-y:field:1      # copy to my clipboard (broker hook)
   --on-key-background clip::bg_hook
   --on-items-picked clip::bump_recency
   --cache-state
@@ -512,13 +533,16 @@ pick_args=(
 [[ -n "${PICK_CLIPBOARD_RESUME:-}" ]] && pick_args+=(--resume)
 [[ -n "${PICK_CLIPBOARD_NO_BORDER:-}" ]] && pick_args+=(--no-border)
 
-# pick::start prints field:1 (the plain id, Enter) or field:2 (the "MD:id"
-# marker, Alt-Enter) on stdout. We re-fetch by id and print the appropriate
-# rendering, so zellij-modal's stdout capture injects the real (possibly
-# multi-line) clip text -- or its markdown alternate -- into the originating
-# pane. pick::start's --copy-only path is not used here.
+# pick::start prints one accept marker on stdout: the plain id (Enter), "MD:id"
+# (Alt-Enter, markdown), or "CP:id" (Ctrl-Y, copy). We re-fetch by id and print
+# the appropriate rendering, which zellij-modal's stdout capture injects into
+# the originating pane -- EXCEPT Ctrl-Y, which copies to the clipboard (with the
+# register type, so a block clip stays block-pasteable) and prints nothing, so
+# nothing is injected. pick::start's --copy-only path is not used here.
 selected="$(emit_rows | pick::start "${pick_args[@]}")" || exit 130
-if [[ "$selected" == MD:* ]]; then
+if [[ "$selected" == CP:* ]]; then
+  clip::copy_by_id "${selected#CP:}"
+elif [[ "$selected" == MD:* ]]; then
   clip::markdown_by_id "${selected#MD:}"
 elif [[ -n "$selected" ]]; then
   clip::text_by_id "$selected"

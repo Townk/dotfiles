@@ -70,6 +70,51 @@ local function db_path()
   return data_dir() .. "/pick-clipboard/history.db"
 end
 
+-- The clipboard-bridge dispatcher's self-invalidating regtype file: line 1 is
+-- the register type (v/l/b), line 2 is sha256(clipboard text). The nvim T op
+-- writes it on copy; op_get_regtype trusts it only while the hash still matches
+-- the live clipboard. We read it at capture (to record a clip's regtype) and
+-- write it at restore (to reinstate one). Same path/format as the dispatcher.
+local function regtype_file()
+  local state = os.getenv("XDG_STATE_HOME") or ((os.getenv("HOME") or "") .. "/.local/state")
+  return state .. "/pick-clipboard/current-regtype"
+end
+
+-- If the regtype file's hash matches this clip's plain text, the clip was just
+-- set with that register type (e.g. an nvim block yank) — return it to record
+-- on the row; else nil. sha256 is byte-identical to the dispatcher's shasum.
+local function captured_regtype(plain)
+  if not plain or plain == "" then return nil end
+  local f = io.open(regtype_file(), "r")
+  if not f then return nil end
+  local rt = f:read("*l")
+  local h = f:read("*l")
+  f:close()
+  if rt ~= "v" and rt ~= "l" and rt ~= "b" then return nil end
+  if h and h == hash.SHA256(plain) then return rt end
+  return nil
+end
+
+-- After restoring a clip, write its stored regtype + the hash of what actually
+-- landed on the clipboard to the regtype file, so the next nvim paste (R op)
+-- reinstates the register type. Hash the LIVE pasteboard (not the DB text_plain)
+-- so it matches op_get_regtype's own sha256(pbpaste). No-op unless the clip
+-- carries a v/l/b regtype (block-ness is a text concept). Call AFTER restoring.
+local function write_regtype_for(id)
+  if not db or not id then return end
+  local s = db:prepare("SELECT regtype FROM clips WHERE id=?;")
+  if not s then return end
+  s:bind(1, id)
+  local rt
+  if s:step() == sqlite3.ROW then rt = s:get_value(0) end
+  s:finalize()
+  if rt ~= "v" and rt ~= "l" and rt ~= "b" then return end
+  local cur = pasteboard.getContents()
+  if not cur or cur == "" then return end
+  local f = io.open(regtype_file(), "w")
+  if f then f:write(rt .. "\n" .. hash.SHA256(cur) .. "\n"); f:close() end
+end
+
 local function now_ts()
   return hs.timer.secondsSinceEpoch()
 end
@@ -363,6 +408,10 @@ function M.capture_now()
     data_by_uti["x-resolved-path"] = resolvedPath
   end
   local ts = now_ts()
+  -- Record the register type if this clip was just set via the nvim bridge
+  -- (its text hash matches the current-regtype file) — so a visual-block yank
+  -- keeps its "b" in history and can be block-pasted later. nil otherwise.
+  local cap_rt = captured_regtype(plain)
 
   -- Dedup on type_hash: bump last_ts + refresh source_app/preview if present.
   local dup = assert(db:prepare(
@@ -376,9 +425,9 @@ function M.capture_now()
   if existing_id then
     local up = assert(db:prepare(
       "UPDATE clips SET last_ts=?, source_app=?, source_bundle_id=?, text_preview=?, text_plain=?, "
-      .. " len=?, type_kind=? WHERE id=?;"))
+      .. " len=?, type_kind=?, regtype=? WHERE id=?;"))
     up:bind(1, ts); up:bind(2, app_name); up:bind(3, app_bundle_id); up:bind(4, preview); up:bind(5, plain)
-    up:bind(6, len_val); up:bind(7, kind); up:bind(8, existing_id)
+    up:bind(6, len_val); up:bind(7, kind); up:bind(8, cap_rt); up:bind(9, existing_id)
     up:step(); up:finalize()
     enforce_retention()
     push_to_mirror(existing_id, kind, app_name, len_val, preview, plain)
@@ -389,10 +438,10 @@ function M.capture_now()
   local ins = assert(db:prepare(
     "INSERT INTO clips (text_preview, text_plain, len, first_ts, last_ts, "
     .. " source_app, source_bundle_id, type_kind, origin, regtype, pinned, type_hash) "
-    .. " VALUES (?,?,?,?,?,?,?,?,  'local', NULL, 0, ?);"))
+    .. " VALUES (?,?,?,?,?,?,?,?,  'local', ?, 0, ?);"))
   ins:bind(1, preview); ins:bind(2, plain); ins:bind(3, len_val)
   ins:bind(4, ts); ins:bind(5, ts); ins:bind(6, app_name); ins:bind(7, app_bundle_id)
-  ins:bind(8, kind); ins:bind(9, th)
+  ins:bind(8, kind); ins:bind(9, cap_rt); ins:bind(10, th)
   ins:step(); ins:finalize()
   local new_id = db:last_insert_rowid()
 
@@ -501,6 +550,7 @@ function M.restore_by_id(id)
   else
     pasteboard.writeAllData(data)
   end
+  write_regtype_for(id) -- reinstate the register type so a later nvim paste keeps block-ness
   bump_last_ts(id)
   return true
 end

@@ -203,6 +203,19 @@ clip::op_set() {
   send_ok ""
 }
 
+# Reinstate the register type for a restored clip: if it carries a v/l/b
+# regtype, write it + sha256 of the LIVE clipboard to REGTYPE_FILE so a later R
+# op returns it. Hash pbpaste (what actually landed), not the DB text_plain, so
+# it matches op_get_regtype exactly. Call after the clipboard has been set.
+clip::reinstate_regtype() {
+  local id=$1 rt
+  rt=$(sqlite3 "$DB_FILE" "SELECT IFNULL(regtype,'') FROM clips WHERE id=$id;" 2>/dev/null)
+  [[ "$rt" == (v|l|b) ]] || return 0
+  local h; h="$(pbpaste 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+  print -r -- "$rt" > "$REGTYPE_FILE"
+  print -r -- "$h" >> "$REGTYPE_FILE"
+}
+
 clip::op_restore() {
   local id=$1
   [[ "$id" == <-> ]] || { send_err "invalid id"; return }
@@ -219,6 +232,7 @@ clip::op_restore() {
     plain="$(sqlite3 "$DB_FILE" "SELECT text_plain FROM clips WHERE id=$id;" 2>/dev/null)"
     if [[ -n "$plain" ]]; then
       print -rn -- "$plain" | pbcopy
+      clip::reinstate_regtype "$id"
       send_ok ""
     else
       send_err "clip $id not found"
@@ -249,6 +263,7 @@ clip::op_restore() {
     print -r -- "hs.pasteboard.writeAllData(data)"
   } > "$script"
   if clip::hs_run "$script"; then
+    clip::reinstate_regtype "$id"
     send_ok ""
   else
     send_err "hs run failed for clip $id"
