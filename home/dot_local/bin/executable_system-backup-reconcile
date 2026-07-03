@@ -57,6 +57,12 @@ main() {
         ;;
     esac
   done
+  # Unconfigured machine (no config.toml yet): clean no-op, so the committed
+  # launchd agents are harmless before onboarding (images-automount precedent).
+  [[ -f "$config" ]] || {
+    log_info "bkp: not configured (no $config) — skipping"
+    exit 0
+  }
   if (( prune )); then
     bkp::reconcile::prune "$config"
   else

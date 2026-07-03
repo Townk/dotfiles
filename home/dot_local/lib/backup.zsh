@@ -843,6 +843,15 @@ bkp::reconcile::run() {
   return $rc
 }
 
+# bkp::tick [<manifest>] [<config>]
+# One scheduled tick (spec §6): capture, then reconcile-after-capture. The
+# two phases hold distinct locks, so in-process chaining is safe; each still
+# coalesces independently against concurrent runs.
+bkp::tick() {
+  bkp::capture::run "$@" || return $?
+  bkp::reconcile::run "$@"
+}
+
 # bkp::reconcile::prune [<config>]
 # The expensive daily repack (spec §5): staging + present, initialized,
 # non-master targets. Exclusive restic op — a lock conflict with a running

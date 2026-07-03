@@ -1264,6 +1264,58 @@ EOF
       The output should include "system-backup-reconcile"
       The output should include "--prune"
     End
+
+    It 'bkp::tick captures then reconciles in one pass'
+      tick2() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        mkdir -p "$FIX/root"
+        print d > "$FIX/root/f.txt"
+        STUB2="$FIX/stub2"; mkdir -p "$STUB2"
+        printf '#!/bin/sh\nexit 0\n' > "$STUB2/chezmoi"
+        chmod +x "$STUB2/chezmoi"
+        PATH="$STUB2:$PATH"
+        cat > "$FIX/c2.toml" <<EOF
+[staging]
+path = "$FIX/stg"
+password_command = "echo pw"
+[[target]]
+name = "tgt"
+path = "$FIX/tgt"
+EOF
+        printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m2.toml"
+        rm -f "$FIX/stg.json" "$FIX/tgt.json"   # stub falls back to []
+        bkp::tick "$FIX/m2.toml" "$FIX/c2.toml" >/dev/null || return 1
+        grep -c "backup --files-from" "$FIX/calls"
+        grep -c "^$FIX/tgt init" "$FIX/calls"
+      }
+      When run tick2
+      The line 1 should equal 1
+      The line 2 should equal 1
+    End
+
+    It 'workers no-op cleanly on an unconfigured machine'
+      unconf() {
+        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" \
+          --config "$FIX/never-created.toml" --manifest "$FIX/m.toml" && print cap-ok
+        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-reconcile" \
+          --config "$FIX/never-created.toml" --manifest "$FIX/m.toml" && print rec-ok
+      }
+      When run unconf
+      The line 1 should include "not configured"
+      The line 2 should equal "cap-ok"
+      The line 3 should include "not configured"
+      The line 4 should equal "rec-ok"
+    End
+
+    It 'capture worker --help documents --reconcile'
+      chelp() {
+        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" --help
+      }
+      When run chelp
+      The status should be success
+      The output should include "--reconcile"
+    End
   End
 
   Describe 'integration smoke — real restic (BKP_SMOKE=1)'

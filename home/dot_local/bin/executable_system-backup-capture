@@ -19,15 +19,17 @@ source "${BKP_LIB:-$HOME/.local/lib}/backup.zsh"
 usage() {
   cat <<EOF
 Usage:
-  system-backup-capture [--manifest <file>] [--config <file>]
+  system-backup-capture [--manifest <file>] [--config <file>] [--reconcile]
 
 One capture tick: manifest -> staging restic repo (+ git-history sidecars,
-then retention forget). Defaults: manifest $BKP_MANIFEST, config $BKP_CONFIG.
+then retention forget). With --reconcile, follow the capture with a
+reconcile pass (the scheduled agent uses this — spec §6 "reconcile after
+every capture"). Defaults: manifest $BKP_MANIFEST, config $BKP_CONFIG.
 EOF
 }
 
 main() {
-  local manifest="$BKP_MANIFEST" config="$BKP_CONFIG"
+  local manifest="$BKP_MANIFEST" config="$BKP_CONFIG" reconcile=0
   while (( $# )); do
     case "$1" in
       --manifest)
@@ -40,6 +42,10 @@ main() {
         config="$2"
         shift 2
         ;;
+      --reconcile)
+        reconcile=1
+        shift
+        ;;
       -h | --help | help)
         usage
         exit 0
@@ -50,7 +56,17 @@ main() {
         ;;
     esac
   done
-  bkp::capture::run "$manifest" "$config"
+  # Unconfigured machine (no config.toml yet): clean no-op, so the committed
+  # launchd agent is harmless before onboarding (images-automount precedent).
+  [[ -f "$config" ]] || {
+    log_info "bkp: not configured (no $config) — skipping"
+    exit 0
+  }
+  if (( reconcile )); then
+    bkp::tick "$manifest" "$config"
+  else
+    bkp::capture::run "$manifest" "$config"
+  fi
 }
 
 main "$@"
