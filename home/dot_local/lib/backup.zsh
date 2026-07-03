@@ -787,7 +787,11 @@ bkp::capture::thin() {
     done
   fi
   (( ${#drop} )) || return 0
-  bkp::restic "$repo" forget "${drop[@]}"
+  # --quiet is load-bearing: forget's removed-snapshot table includes a Paths
+  # column, and our snapshots record every files-from entry (tens of
+  # thousands of paths) — without it each drop dumps them all.
+  bkp::restic "$repo" forget --quiet "${drop[@]}" || return 1
+  log_info "bkp: retention dropped ${#drop} snapshot(s)"
 }
 
 # bkp::restic::snapshot_keys <repo>
@@ -918,12 +922,15 @@ bkp::capture::run() {
 
 # bkp::restic::copy <src> <dst> <ids…>
 # restic copy through the seam. Both repos share one passphrase (spec §8) —
-# required, since copy needs credentials for both ends.
+# required, since copy needs credentials for both ends. --quiet suppresses
+# copy's per-snapshot "snapshot X of [paths…]" header, which would echo the
+# tens of thousands of files-from paths our snapshots record; reconcile logs
+# its own pushed/pulled summary instead.
 bkp::restic::copy() {
   local src="$1" dst="$2"; shift 2
   local pwcmd
   pwcmd=$(bkp::config::password_command) || return 2
-  bkp::restic "$dst" copy --from-repo "$src" --from-password-command "$pwcmd" "$@"
+  bkp::restic "$dst" copy --from-repo "$src" --from-password-command "$pwcmd" --quiet "$@"
 }
 
 # bkp::reconcile::ensure_target <staging> <target>
@@ -1296,7 +1303,10 @@ bkp::restore::paths() {
   for p in "$@"; do
     includes+=(--include "$p")
   done
-  bkp::restic "$staging" restore "$snap" --target / "${includes[@]}"
+  # --quiet: restore's header echoes the snapshot's recorded paths — tens of
+  # thousands of files-from entries for capture snapshots.
+  bkp::restic "$staging" restore "$snap" --target / "${includes[@]}" --quiet || return 1
+  log_ok "bkp: restored $# path(s) from snapshot ${snap[1,8]} (undo with \`system-backup undo\`)"
 }
 
 # bkp::restore::undo
@@ -1323,8 +1333,9 @@ bkp::restore::undo() {
   for p in "${(@ps:\x1f:)joined}"; do
     [[ -n "$p" ]] && includes+=(--include "$p")
   done
-  bkp::restic "$staging" restore "$id" --target / "${includes[@]}" || return 1
-  bkp::restic "$staging" forget "$id"
+  bkp::restic "$staging" restore "$id" --target / "${includes[@]}" --quiet || return 1
+  bkp::restic "$staging" forget --quiet "$id" || return 1
+  log_ok "bkp: undid the last restore ($(( ${#includes} / 2 )) path(s))"
 }
 
 # bkp::tick [<manifest>] [<config>]

@@ -1042,7 +1042,7 @@ EOF
       When run tick
       The line 1 should equal 1
       The line 2 should equal 1
-      The line 3 should equal "$FIX/repo forget old1"
+      The line 3 should equal "$FIX/repo forget --quiet old1"
     End
 
     It 'skips init when the repo exists'
@@ -1381,7 +1381,7 @@ EOF
       The line 1 should equal 1
       The line 2 should equal 1
       The line 3 should equal 1
-      The line 4 should equal "$FIX/tgt forget t9"
+      The line 4 should equal "$FIX/tgt forget --quiet t9"
     End
 
     It 'master role converges without forgetting'
@@ -1695,7 +1695,7 @@ EOF
         source "$LIB/backup.zsh"
         stub_restic
         print live > "$FIX/f.txt"
-        bkp::restore::paths abc123 --force "$FIX/f.txt" || return 1
+        bkp::restore::paths abc123 --force "$FIX/f.txt" >/dev/null || return 1
         awk '/bkp-undo/ {u = NR} /restore/ {r = NR} END {print ((u && r && u < r) ? "undo-first" : "wrong")}' "$FIX/calls"
         grep -- "restore abc123 --target / --include $FIX/f.txt" "$FIX/calls" >/dev/null && print restored
       }
@@ -1708,7 +1708,7 @@ EOF
       fresh() {
         source "$LIB/backup.zsh"
         stub_restic
-        bkp::restore::paths abc123 "$FIX/new-file.txt" || return 1
+        bkp::restore::paths abc123 "$FIX/new-file.txt" >/dev/null || return 1
         grep -c "bkp-undo" "$FIX/calls" || true
       }
       When run fresh
@@ -1720,9 +1720,9 @@ EOF
         source "$LIB/backup.zsh"
         stub_restic
         printf '%s' '[{"id":"u-old","time":"2026-01-01T09:00:00Z","tags":["bkp-undo"]},{"id":"u-new","time":"2026-01-02T09:00:00Z","tags":["bkp-undo"]}]' > "$FIX/stg.json"
-        bkp::restore::undo || return 1
+        bkp::restore::undo >/dev/null || return 1
         grep -- "restore u-new --target /" "$FIX/calls" >/dev/null && print restored
-        grep -- "forget u-new" "$FIX/calls" >/dev/null && print forgotten
+        grep -- "forget --quiet u-new" "$FIX/calls" >/dev/null && print forgotten
       }
       When run peel
       The line 1 should equal "restored"
@@ -1752,7 +1752,7 @@ EOF
  {"id":"u-stale","time":"2026-01-02T10:20:00Z","tags":["bkp-undo"]},
  {"id":"u-fresh","time":"$fresh_ts","tags":["bkp-undo"]}]
 EOF
-        bkp::capture::thin "$FIX/stg" "$FIX/m.toml" || return 1
+        bkp::capture::thin "$FIX/stg" "$FIX/m.toml" >/dev/null || return 1
         local forget
         forget=$(grep -- forget "$FIX/calls")
         case "$forget" in
