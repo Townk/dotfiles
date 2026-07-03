@@ -1318,6 +1318,122 @@ EOF
     End
   End
 
+  Describe 'bkp::ux — read side'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml"
+      printf 'roots = []\n' > "$FIX/m.toml"
+      cat > "$FIX/c.toml" <<EOF
+[staging]
+path = "$FIX/stg"
+password_command = "echo pw"
+[[target]]
+name = "here"
+path = "$FIX/tgt"
+[[target]]
+name = "ghost"
+path = "$FIX/gone/tb"
+role = "master"
+EOF
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_CONFIG; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    stub_restic() {
+      bkp::restic() {
+        local repo="$1"; shift
+        print -r -- "$repo $*" >> "$FIX/calls"
+        case "$1 ${2:-}" in
+          'cat config')       [ -e "$FIX/has-${repo:t}" ] ;;
+          'snapshots --json') cat "$FIX/${repo:t}.json" 2>/dev/null || printf '[]' ;;
+          check*)             [ ! -e "$FIX/check-fails" ] ;;
+          *) return 0 ;;
+        esac
+      }
+    }
+
+    It 'labels tiers by age band'
+      tiers() {
+        source "$LIB/backup.zsh"
+        local REPLY
+        bkp::thin::tier_of 1767312000 1767311000 && print -r -- "$REPLY"   # ~17m -> 30m
+        bkp::thin::tier_of 1767312000 1767225600 && print -r -- "$REPLY"   # 24h -> 1h
+        bkp::thin::tier_of 1767312000 1727312000 && print -r -- "$REPLY"   # ~463d -> year
+      }
+      When run tiers
+      The line 1 should equal "30m"
+      The line 2 should equal "1h"
+      The line 3 should equal "year"
+    End
+
+    It 'humanizes ages'
+      ages() {
+        source "$LIB/backup.zsh"
+        local REPLY s
+        for s in 300 7200 259200; do
+          bkp::ux::age "$s" && print -r -- "$REPLY"
+        done
+      }
+      When run ages
+      The line 1 should equal "5m"
+      The line 2 should equal "2h"
+      The line 3 should equal "3d"
+    End
+
+    It 'lists snapshots with tier labels'
+      lists() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        printf '%s' '[{"id":"aaaabbbbcccc","time":"2026-01-02T10:00:00Z"}]' > "$FIX/stg.json"
+        bkp::ux::list "$FIX/m.toml" "$FIX/c.toml"
+      }
+      When run lists
+      The line 1 should include "aaaabbbb"
+      The line 1 should include "2026-01-02"
+      The line 1 should match pattern "*[mhd]	*"
+    End
+
+    It 'shows target presence as dots'
+      dots() {
+        source "$LIB/backup.zsh"
+        bkp::ux::targets "$FIX/c.toml"
+      }
+      When run dots
+      The line 1 should equal "●${TAB}here${TAB}mirror${TAB}$FIX/tgt"
+      The line 2 should equal "○${TAB}ghost${TAB}master${TAB}$FIX/gone/tb"
+    End
+
+    It 'status reports staging, snapshot count and targets'
+      stat() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        printf '%s' '[{"id":"aaa","time":"2026-01-02T10:00:00Z"},{"id":"bbb","time":"2026-01-02T11:00:00Z"}]' > "$FIX/stg.json"
+        bkp::ux::status "$FIX/m.toml" "$FIX/c.toml"
+      }
+      When run stat
+      The line 1 should equal "staging: $FIX/stg"
+      The line 2 should include "snapshots: 2 (latest"
+      The line 3 should include "here"
+    End
+
+    It 'verify checks staging + present initialized targets, propagating failure'
+      checks() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        : > "$FIX/has-tgt"
+        bkp::ux::verify "$FIX/c.toml" >/dev/null && print all-ok
+        : > "$FIX/check-fails"
+        bkp::ux::verify "$FIX/c.toml" >/dev/null || print failed
+        grep -c "check" "$FIX/calls"
+      }
+      When run checks
+      The line 1 should equal "all-ok"
+      The line 2 should equal "failed"
+      The line 3 should equal 4
+    End
+  End
+
   Describe 'declared backup agents (services.toml.tmpl)'
     TMPL="$SHELLSPEC_PROJECT_ROOT/home/dot_config/packages/services.toml.tmpl"
     no_chezmoi() { ! command -v chezmoi >/dev/null 2>&1; }

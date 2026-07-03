@@ -843,6 +843,125 @@ bkp::reconcile::run() {
   return $rc
 }
 
+# ── UX helpers ───────────────────────────────────────────────────────────────
+
+# bkp::thin::tier_of <now> <epoch> [<policy>]
+# REPLY = grid name of the tier whose age band contains the snapshot — the
+# tier label shown by `system-backup list`.
+bkp::thin::tier_of() {
+  local now="$1" epoch="$2" policy="${3:-$BKP_THIN_DEFAULT_POLICY}"
+  local age=$(( now - epoch ))
+  (( age < 0 )) && age=0
+  local line
+  local -a f
+  while IFS= read -r line; do
+    f=(${(z)line})
+    (( ${#f} == 3 )) || continue
+    [[ "$f[1]" == '#'* ]] && continue
+    (( age >= f[2] )) || continue
+    [[ "$f[3]" == - ]] || (( age < f[3] )) || continue
+    REPLY="$f[1]"
+    return 0
+  done <<<"$policy"
+  REPLY="?"
+  return 1
+}
+
+# bkp::ux::age <seconds> — human age in REPLY: 5m / 2h / 3d.
+bkp::ux::age() {
+  local s=$1
+  if (( s < 3600 )); then
+    REPLY="$(( s / 60 ))m"
+  elif (( s < 172800 )); then
+    REPLY="$(( s / 3600 ))h"
+  else
+    REPLY="$(( s / 86400 ))d"
+  fi
+}
+
+# bkp::ux::list [<manifest>] [<config>]
+# Snapshot rows: <id8>\t<local time>\t<age>\t<tier>.
+bkp::ux::list() {
+  local manifest="${1:-$BKP_MANIFEST}"
+  local BKP_CONFIG="${2:-$BKP_CONFIG}"
+  local staging policy snaps
+  staging=$(bkp::config::staging_path) || return 2
+  policy=$(bkp::manifest::thin_policy "$manifest") || return 2
+  snaps=$(bkp::restic "$staging" snapshots --json | bkp::restic::parse_snapshots) || return 2
+  [[ -z "$snaps" ]] && return 0
+  local line id epoch tier when REPLY now="$EPOCHSECONDS"
+  for line in ${(f)snaps}; do
+    id="${line%%$'\t'*}" epoch="${line##*$'\t'}"
+    bkp::thin::tier_of "$now" "$epoch" "$policy" || :
+    tier="$REPLY"
+    bkp::ux::age $(( now - epoch ))
+    strftime -s when '%Y-%m-%d %H:%M' "$epoch"
+    print -r -- "${id[1,8]}"$'\t'"$when"$'\t'"$REPLY"$'\t'"$tier"
+  done
+}
+
+# bkp::ux::targets [<config>] — presence table: ●/○ name role path.
+bkp::ux::targets() {
+  local BKP_CONFIG="${1:-$BKP_CONFIG}"
+  local targets
+  targets=$(bkp::config::targets) || return 2
+  [[ -z "$targets" ]] && {
+    log_info "bkp: no targets configured"
+    return 0
+  }
+  local name tpath role dot
+  while IFS=$'\t' read -r name tpath role; do
+    [[ -z "$name" ]] && continue
+    if bkp::target::present "$tpath"; then dot="●"; else dot="○"; fi
+    print -r -- "$dot"$'\t'"$name"$'\t'"$role"$'\t'"$tpath"
+  done <<<"$targets"
+}
+
+# bkp::ux::status [<manifest>] [<config>] — glanceable summary (spec §7;
+# drift + tier ribbon are the §14 statusline follow-up).
+bkp::ux::status() {
+  local manifest="${1:-$BKP_MANIFEST}"
+  local BKP_CONFIG="${2:-$BKP_CONFIG}"
+  local staging snaps
+  staging=$(bkp::config::staging_path) || return 2
+  snaps=$(bkp::restic "$staging" snapshots --json | bkp::restic::parse_snapshots) || return 2
+  print -r -- "staging: $staging"
+  local count=0 newest=0 line epoch
+  for line in ${(f)snaps}; do
+    (( count++ ))
+    epoch="${line##*$'\t'}"
+    (( epoch > newest )) && newest=$epoch
+  done
+  if (( count )); then
+    local REPLY
+    bkp::ux::age $(( EPOCHSECONDS - newest ))
+    print -r -- "snapshots: $count (latest $REPLY ago)"
+  else
+    print -r -- "snapshots: none yet"
+  fi
+  bkp::ux::targets
+}
+
+# bkp::ux::verify [<config>] — restic check on staging + every present,
+# initialized target. rc 1 when any check fails.
+bkp::ux::verify() {
+  local BKP_CONFIG="${1:-$BKP_CONFIG}"
+  local staging targets rc=0
+  staging=$(bkp::config::staging_path) || return 2
+  targets=$(bkp::config::targets) || return 2
+  log_info "bkp: checking staging"
+  bkp::restic "$staging" check || rc=1
+  local name tpath role
+  while IFS=$'\t' read -r name tpath role; do
+    [[ -z "$name" ]] && continue
+    bkp::target::present "$tpath" || continue
+    bkp::restic "$tpath" cat config >/dev/null 2>&1 || continue
+    log_info "bkp: checking target '$name'"
+    bkp::restic "$tpath" check || rc=1
+  done <<<"$targets"
+  return $rc
+}
+
 # bkp::tick [<manifest>] [<config>]
 # One scheduled tick (spec §6): capture, then reconcile-after-capture. The
 # two phases hold distinct locks, so in-process chaining is safe; each still
