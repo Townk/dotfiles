@@ -554,4 +554,85 @@ EOF
       The output should equal 2
     End
   End
+
+  Describe 'bkp::manifest — per-repo git filter'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      printf '#!/bin/sh\nexit 0\n' > "$STUB/chezmoi"
+      chmod +x "$STUB/chezmoi"
+      PATH="$STUB:$PATH"
+      # Hermetic git: fixture-owned global config with a global excludesfile.
+      export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$FIX/gitconfig"
+      printf '*.global-ignored\n' > "$FIX/global-ignore"
+      printf '[core]\n\texcludesFile = %s\n[user]\n\tname = t\n\temail = t@t\n' \
+        "$FIX/global-ignore" > "$FIX/gitconfig"
+
+      mkdir -p "$FIX/root/repo" "$FIX/root/plain"
+      REPO="$FIX/root/repo"    # no cd: keep shellspec's cwd untouched
+      git -C "$REPO" init -q
+      print tracked > "$REPO/tracked.txt"
+      print build > "$REPO/build.out"
+      print local > "$REPO/tmp.local"
+      print glob > "$REPO/x.global-ignored"
+      print untracked > "$REPO/untracked.txt"
+      printf 'build.out\n' > "$REPO/.gitignore"
+      printf 'tmp.local\n' >> "$REPO/.git/info/exclude"
+      git -C "$REPO" add tracked.txt .gitignore
+      git -C "$REPO" -c commit.gpgsign=false commit -qm init
+      # Non-repo sibling: gitignore-looking files are NOT filtered there.
+      print loose > "$FIX/root/plain/x.global-ignored"
+      printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'honors full ignore resolution inside the repo, deny-only outside'
+      gitsweep() {
+        source "$LIB/backup.zsh"
+        bkp::manifest::files "$FIX/m.toml" | sort
+      }
+      When run gitsweep
+      The line 1 should equal "$FIX/root/plain/x.global-ignored"
+      The line 2 should equal "$FIX/root/repo/.gitignore"
+      The line 3 should equal "$FIX/root/repo/tracked.txt"
+      The line 4 should equal "$FIX/root/repo/untracked.txt"
+      The lines of output should equal 4
+    End
+
+    It 'records the repo in the bundle plan with the root defaults'
+      plan() {
+        source "$LIB/backup.zsh"
+        bkp::manifest::repos "$FIX/m.toml"
+      }
+      When run plan
+      The output should equal "$FIX/root/repo${TAB}true${TAB}50m"
+    End
+
+    It 'carries per-root overrides into the plan'
+      overrides() {
+        source "$LIB/backup.zsh"
+        printf 'roots = [ { path = "%s/root", bundle_unpushed = false } ]\n' \
+          "$FIX" > "$FIX/m.toml"
+        bkp::manifest::repos "$FIX/m.toml"
+      }
+      When run overrides
+      The output should equal "$FIX/root/repo${TAB}false${TAB}50m"
+    End
+
+    It 'over-captures (minus .git) when git enumeration fails'
+      brokegit() {
+        source "$LIB/backup.zsh"
+        printf '#!/bin/sh\nexit 128\n' > "$STUB/git"
+        chmod +x "$STUB/git"
+        rehash   # setup ran the real git; drop the stale command-hash entry
+        bkp::manifest::files "$FIX/m.toml" | grep -c "root/repo/"
+      }
+      When run brokegit
+      # All 6 repo files (incl. ignored ones) captured, .git skipped.
+      The output should equal 6
+      The stderr should include "over-capturing"
+    End
+  End
 End
