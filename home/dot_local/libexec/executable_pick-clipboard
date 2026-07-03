@@ -61,6 +61,8 @@ PICK_NAME=pick-clipboard
 PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
 source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" ||
   { print -ru2 -- "pick-clipboard: cannot source pick-common.zsh from $PICK_LIB_DIR"; exit 1; }
+source "${PICK_BRIDGE_CLIENT_LIB:-$PICK_LIB_DIR/clipboard-bridge-client.zsh}" ||
+  { print -ru2 -- "pick-clipboard: cannot source clipboard-bridge-client.zsh from $PICK_LIB_DIR"; exit 1; }
 
 DB_FILE="${PICK_CLIPBOARD_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/pick-clipboard/history.db}"
 require_cmd sqlite3
@@ -101,11 +103,65 @@ clip::toggle_pin_by_id() {
   sqlite3 "$DB_FILE" "UPDATE clips SET pinned = 1 - pinned WHERE id=$1;"
 }
 
-# Copy a clip's text to *my* clipboard. The pbcopy shim at ~/.local/bin/pbcopy
-# already routes origin-relative: local -> /usr/bin/pbcopy, over SSH -> OSC 52
-# (bridge-down) or the reverse channel (bridge-up, once Phase 5 ships it).
+# Ship an image clip's blob to the laptop via the reverse channel (C op). Tries
+# each image UTI in turn (same set/order as clip::markdown_image); the first with
+# a stored blob is packaged as <BE16 uti_len><uti><blob> and sent. Returns 0 on
+# an 'O' response. Byte-safe: the payload (BE16 len + binary blob) is built in a
+# temp file under nomultibyte, never a $(...) capture.
+clip::ship_image_by_id() {
+  emulate -L zsh
+  setopt nomultibyte
+  local id=$1 uti blobf payloadf
+  local -a utis=(public.png public.jpeg public.tiff com.compuserve.gif)
+  for uti in "${utis[@]}"; do
+    blobf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-ship.XXXXXX") || return 1
+    sqlite3 "$DB_FILE" "SELECT writefile('$blobf', blob) FROM clip_types WHERE clip_id=$id AND uti='$uti';" >/dev/null 2>&1
+    if [[ -s "$blobf" ]]; then
+      payloadf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-ship-p.XXXXXX") || { rm -f "$blobf"; return 1; }
+      local -i ulen=$#uti
+      {
+        printf "\\$(printf %03o $(( (ulen >> 8) & 255 )))\\$(printf %03o $(( ulen & 255 )))"
+        printf '%s' "$uti"
+        cat "$blobf"
+      } > "$payloadf"
+      rm -f "$blobf"
+      if clipbridge::send "$SOCK" C "$payloadf"; then rm -f "$payloadf"; return 0; fi
+      rm -f "$payloadf"
+      return 1
+    fi
+    rm -f "$blobf"
+  done
+  return 1
+}
+
+# Copy a clip's content to *my* clipboard, dispatching by origin (spec §8).
+# Bridge-up uses the reverse channel to the laptop's clipboard-bridge:
+#   laptop-ref     -> S restore-by-id (the laptop restores its own stored clip,
+#                     full rich, ZERO blob transfer — the payload already lives
+#                     there); fall through on id-miss.
+#   local/remote-own image -> C ship the blob (OSC 52 can't carry an image).
+# Everything else (bridge-down, or a non-image local row) falls through to the
+# pbcopy shim: local -> /usr/bin/pbcopy, over SSH -> OSC 52 (text).
 clip::copy_by_id() {
   local id=$1
+  if (( bridge_up )); then
+    local origin; origin=$(sqlite3 "$DB_FILE" "SELECT origin FROM clips WHERE id=$id;" 2>/dev/null) || origin=""
+    case "$origin" in
+      laptop-ref)
+        local ref_id; ref_id=$(sqlite3 "$DB_FILE" "SELECT IFNULL(ref_id,'') FROM clips WHERE id=$id;" 2>/dev/null) || ref_id=""
+        if [[ -n "$ref_id" ]]; then
+          local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-refid.XXXXXX")
+          print -rn -- "$ref_id" > "$pf"
+          if clipbridge::send "$SOCK" S "$pf"; then rm -f "$pf"; return 0; fi
+          rm -f "$pf"
+        fi
+        ;;
+      local|remote-own)
+        local kind; kind=$(sqlite3 "$DB_FILE" "SELECT type_kind FROM clips WHERE id=$id;" 2>/dev/null) || kind=""
+        [[ "$kind" == image ]] && clip::ship_image_by_id "$id" && return 0
+        ;;
+    esac
+  fi
   if command -v pbcopy >/dev/null 2>&1; then
     clip::text_by_id "$id" | pbcopy
   fi
