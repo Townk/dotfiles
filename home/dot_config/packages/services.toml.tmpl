@@ -10,6 +10,12 @@
 #   log_path       = "~/path/out.log"        → StandardOutPath
 #   error_log_path = "~/path/err.log"        → StandardErrorPath
 #   description    = "human-friendly text"   (info / list only — not in plist)
+#   start_interval = 1800                    → StartInterval (seconds)
+#   start_calendar_interval = {Hour=3, Minute=17} → StartCalendarInterval
+#   watch_paths    = ["/Volumes", "~/x"]     → WatchPaths (fire on change)
+#   process_type   = "Background"            → ProcessType (macOS QoS class)
+#   low_priority_io = true|false             → LowPriorityIO
+#   nice           = 10                      → Nice
 #
 #   [<name>.env]                             → EnvironmentVariables
 #   KEY = "value"

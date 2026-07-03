@@ -124,4 +124,61 @@ STUB
       The path "$STUB_STATE/down" should be exist
     End
   End
+
+  Describe 'render (scheduling keys)'
+    # A fixture Servicefile exercises the optional scheduling keys added for
+    # system-backup (spec §6): StartInterval / StartCalendarInterval /
+    # WatchPaths / ProcessType / LowPriorityIO / Nice. Entries WITHOUT them
+    # must render exactly the classic plist (regression pin).
+    setup_svc() {
+      export SVCFILE="$TEST_TMP/services.toml"
+      cat > "$SVCFILE" <<'EOF'
+[scheduled]
+cmd = ["/bin/echo", "tick"]
+start_interval = 1800
+watch_paths = ["/Volumes", "~/Library/CloudStorage"]
+process_type = "Background"
+low_priority_io = true
+nice = 10
+start_calendar_interval = {Hour = 3, Minute = 17}
+
+[classic]
+cmd = ["/bin/echo", "hi"]
+keep_alive = true
+EOF
+    }
+    BeforeEach 'setup_svc'
+    AfterEach 'unset SVCFILE'
+
+    render_json() {  # render <name> -> plist as JSON
+      zsh "$LAUNCHD" render "$1" | plutil -convert json -o - -- -
+    }
+
+    It 'renders all six scheduling keys'
+      sched() {
+        render_json scheduled | jq -r '
+          .StartInterval, .ProcessType, .LowPriorityIO, .Nice,
+          (.WatchPaths | join(",")),
+          .StartCalendarInterval.Hour, .StartCalendarInterval.Minute'
+      }
+      When run sched
+      The line 1 should equal 1800
+      The line 2 should equal "Background"
+      The line 3 should equal "true"
+      The line 4 should equal 10
+      The line 5 should equal "/Volumes,$HOME/Library/CloudStorage"
+      The line 6 should equal 3
+      The line 7 should equal 17
+    End
+
+    It 'renders none of them when absent (classic entries unchanged)'
+      classic() {
+        render_json classic | jq -r '
+          [has("StartInterval"), has("StartCalendarInterval"), has("WatchPaths"),
+           has("ProcessType"), has("LowPriorityIO"), has("Nice")] | any'
+      }
+      When run classic
+      The output should equal "false"
+    End
+  End
 End
