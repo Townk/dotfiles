@@ -1318,6 +1318,35 @@ EOF
     End
   End
 
+  Describe 'declared backup agents (services.toml.tmpl)'
+    TMPL="$SHELLSPEC_PROJECT_ROOT/home/dot_config/packages/services.toml.tmpl"
+    no_chezmoi() { ! command -v chezmoi >/dev/null 2>&1; }
+    Skip if 'chezmoi unavailable' no_chezmoi
+
+    It 'declares capture/reconcile/prune with the spec §6 schedule'
+      agents() {
+        chezmoi execute-template < "$TMPL" | yq -p toml -o json '.' | jq -r '
+          (."backup-capture".cmd | join(" ")),
+          ."backup-capture".start_interval,
+          ."backup-capture".process_type,
+          ."backup-reconcile".cmd[0],
+          (."backup-reconcile".watch_paths | join(",")),
+          ."backup-reconcile".start_interval,
+          (."backup-prune".cmd | join(" ")),
+          ."backup-prune".start_calendar_interval.Hour'
+      }
+      When run agents
+      The line 1 should equal "system-backup-capture --reconcile"
+      The line 2 should equal 1800
+      The line 3 should equal "Background"
+      The line 4 should equal "system-backup-reconcile"
+      The line 5 should equal "/Volumes,~/Library/CloudStorage"
+      The line 6 should equal 3600
+      The line 7 should equal "system-backup-reconcile --prune"
+      The line 8 should equal 3
+    End
+  End
+
   Describe 'integration smoke — real restic (BKP_SMOKE=1)'
     Skip if 'BKP_SMOKE != 1 (run: BKP_SMOKE=1 shellspec tests/backup_spec.sh)' \
       test "${BKP_SMOKE:-0}" != 1

@@ -99,6 +99,57 @@ error_log_path = "~/.cache/system-images/automount.log"
 # launchd agents don't inherit an interactive PATH; system-images shells out to
 # yq/jq/hdiutil/diskutil. Mirror the dirs the omlx agent bakes in.
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
+# backup-* — the Terminal Time Machine schedule (system-backup silo, spec §6).
+# Three agents: a 30-min capture tick (which chains a reconcile pass), a
+# mount-watching + hourly-safety reconcile, and the daily prune repack. All
+# run at Background QoS with low-priority IO so they never compete with
+# foreground work. On a machine without ~/.config/backup/config.toml the
+# workers exit 0 immediately, so declaring these is harmless pre-onboarding.
+# watch_paths names the mount ROOTS (not per-target paths — those live in the
+# local-only config.toml): any mount/unmount event fires a cheap, coalesced,
+# idempotent reconcile that skips absent targets.
+# Linux: systemd user timers are the spec §10 seam — TODO, darwin-only for v1.
+[backup-capture]
+description     = "Terminal Time Machine: 30-min capture tick (+ reconcile)"
+cmd             = ["system-backup-capture", "--reconcile"]
+run_at_load     = true
+start_interval  = 1800
+process_type    = "Background"
+low_priority_io = true
+nice            = 10
+log_path        = "~/.local/state/terminal-backup/capture.log"
+error_log_path  = "~/.local/state/terminal-backup/capture.log"
+
+[backup-capture.env]
+# Workers shell out to yq/jq/restic (homebrew), git (system), chezmoi.
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
+[backup-reconcile]
+description     = "Terminal Time Machine: reconcile targets on mount + hourly safety pass"
+cmd             = ["system-backup-reconcile"]
+watch_paths     = ["/Volumes", "~/Library/CloudStorage"]
+start_interval  = 3600
+process_type    = "Background"
+low_priority_io = true
+nice            = 10
+log_path        = "~/.local/state/terminal-backup/reconcile.log"
+error_log_path  = "~/.local/state/terminal-backup/reconcile.log"
+
+[backup-reconcile.env]
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
+[backup-prune]
+description     = "Terminal Time Machine: daily repack (restic prune)"
+cmd             = ["system-backup-reconcile", "--prune"]
+start_calendar_interval = {Hour = 3, Minute = 17}
+process_type    = "Background"
+low_priority_io = true
+log_path        = "~/.local/state/terminal-backup/prune.log"
+error_log_path  = "~/.local/state/terminal-backup/prune.log"
+
+[backup-prune.env]
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 {{ end }}
 
 {{ if ne .profile "dev-shell" -}}
