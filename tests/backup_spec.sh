@@ -634,6 +634,34 @@ EOF
       The output should equal 6
       The stderr should include "over-capturing"
     End
+
+    It 'skips tracked-but-deleted files (they exist in the index, not on disk)'
+      phantom() {
+        source "$LIB/backup.zsh"
+        rm "$FIX/root/repo/tracked.txt"   # deleted from disk, still in the index
+        bkp::manifest::files "$FIX/m.toml" | grep -c "root/repo/"
+      }
+      When run phantom
+      # .gitignore + untracked.txt survive; the phantom tracked.txt does not.
+      The output should equal 2
+    End
+
+    It 'treats a broken gitfile dir (vendored tarball) as a plain dir, quietly'
+      brokenfile() {
+        source "$LIB/backup.zsh"
+        # lua-language-server tarballs ship submodule gitfiles pointing at a
+        # gitdir that does not exist in the extracted tree.
+        mkdir -p "$FIX/root/vendored"
+        printf 'gitdir: ../../.git/modules/nope\n' > "$FIX/root/vendored/.git"
+        print v > "$FIX/root/vendored/data.txt"
+        bkp::manifest::files "$FIX/m.toml" | grep -c "vendored/data.txt"
+        bkp::manifest::repos "$FIX/m.toml" | grep -c vendored || true
+      }
+      When run brokenfile
+      The line 1 should equal 1
+      The line 2 should equal 0
+      The stderr should equal ""
+    End
   End
 
   Describe 'shipped manifest.toml'
@@ -1055,6 +1083,44 @@ EOF
       When run noconf
       The status should equal 2
       The stderr should include "config not found"
+    End
+
+    It 'restic rc 3 (partial read) warns but keeps the tick alive'
+      partial() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1 ${2:-}" in
+            'cat config') return 1 ;;
+            backup*)      return 3 ;;   # snapshot created, some files unreadable
+            'snapshots --json') printf '[]' ;;
+            *) return 0 ;;
+          esac
+        }
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null && print survived
+      }
+      When run partial
+      The line 1 should equal "survived"
+      The stderr should include "unreadable"
+    End
+
+    It 'other restic backup failures still fail the tick'
+      hardfail() {
+        source "$LIB/backup.zsh"
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1 ${2:-}" in
+            'cat config') return 1 ;;
+            backup*)      return 1 ;;
+            *) return 0 ;;
+          esac
+        }
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null
+      }
+      When run hardfail
+      The status should equal 1
+      The stdout should include ""
     End
 
     It 'worker --help prints usage without touching restic'

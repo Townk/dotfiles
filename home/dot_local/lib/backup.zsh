@@ -287,22 +287,32 @@ bkp::chezmoi::managed() {
   chezmoi managed --include=files --path-style=absolute
 }
 
-# bkp::git::is_repo <dir> — does <dir> head a git work tree?
+# bkp::git::is_repo <dir> — does <dir> head a USABLE git work tree?
+# The `.git` gate alone is not enough: vendored release tarballs (e.g.
+# lua-language-server's meta/3rd/*) ship submodule gitfiles whose gitdir does
+# not exist in the extracted tree. Those are plain dirs, not repos — the
+# rev-parse check (only run when a .git exists, so it stays off the hot path)
+# sends them down the ordinary walk instead of the repo path.
 bkp::git::is_repo() {
-  [[ -e "$1/.git" ]]
+  [[ -e "$1/.git" ]] || return 1
+  git -C "$1" rev-parse --git-dir >/dev/null 2>&1
 }
 
 # bkp::git::ls <repo>
 # Absolute paths of the repo's capturable working tree: tracked + untracked
 # minus everything git's FULL ignore resolution drops (repo .gitignore(s),
-# .git/info/exclude, and the machine-global core.excludesFile).
+# .git/info/exclude, and the machine-global core.excludesFile). Restricted to
+# files present on disk — `ls-files --cached` also lists tracked files whose
+# uncommitted deletion hasn't landed in the index; feeding those phantoms to
+# restic makes the whole backup exit 3.
 bkp::git::ls() {
   local repo="$1" out
   out=$(git -C "$repo" ls-files --cached --others --exclude-standard 2>/dev/null) || return 1
   local f
   for f in ${(f)out}; do
-    print -r -- "$repo/$f"
+    [[ -e "$repo/$f" || -h "$repo/$f" ]] && print -r -- "$repo/$f"
   done
+  return 0
 }
 
 # ── The sweep ────────────────────────────────────────────────────────────────
@@ -334,23 +344,36 @@ bkp::manifest::walk() {
     return 0
   fi
   [[ -d "$node" ]] || return 0
-  if bkp::git::is_repo "$node"; then
-    print -r -- "R"$'\t'"$node"$'\t'"$_bkp_bundle"$'\t'"$_bkp_warn"
-    local git_out f
-    if git_out=$(bkp::git::ls "$node"); then
-      for f in ${(f)git_out}; do
-        bkp::manifest::denied "$f" && continue
-        [[ -n "${_bkp_managed[$f]:-}" ]] && continue
-        print -r -- "F"$'\t'"$f"
-      done
-    else
-      log_warn "bkp: git enumeration failed in $node — over-capturing (ignore rules skipped)"
+  if [[ -e "$node/.git" ]]; then
+    if bkp::git::is_repo "$node"; then
+      print -r -- "R"$'\t'"$node"$'\t'"$_bkp_bundle"$'\t'"$_bkp_warn"
+      local git_out f
+      if git_out=$(bkp::git::ls "$node"); then
+        for f in ${(f)git_out}; do
+          bkp::manifest::denied "$f" && continue
+          [[ -n "${_bkp_managed[$f]:-}" ]] && continue
+          print -r -- "F"$'\t'"$f"
+        done
+      else
+        log_warn "bkp: git enumeration failed in $node — over-capturing (ignore rules skipped)"
+        for entry in "$node"/*(DN); do
+          [[ "$entry" == "$node/.git" ]] && continue
+          bkp::manifest::walk "$entry"
+        done
+      fi
+      return 0
+    elif [[ -d "$node/.git" ]]; then
+      # A real .git dir that git can't use (corrupt repo, broken git binary):
+      # capture the tree but never the pack store.
+      log_warn "bkp: unusable git repo at $node — over-capturing (ignore rules skipped)"
       for entry in "$node"/*(DN); do
         [[ "$entry" == "$node/.git" ]] && continue
         bkp::manifest::walk "$entry"
       done
+      return 0
     fi
-    return 0
+    # Broken gitFILE (vendored tarballs ship submodule gitfiles pointing at
+    # nonexistent gitdirs): not a repo at all — quiet plain walk below.
   fi
   for entry in "$node"/*(DN); do
     bkp::manifest::walk "$entry"
@@ -544,7 +567,7 @@ bkp::project::id() {
 # (clone origin -> fetch bundle -> overlay tree -> re-apply stashes).
 bkp::project::meta() {
   local repo="$1" branch head
-  branch=$(git -C "$repo" symbolic-ref --short -q HEAD) || branch=""   # detached
+  branch=$(git -C "$repo" symbolic-ref --short -q HEAD 2>/dev/null) || branch=""   # detached
   head=$(git -C "$repo" rev-parse -q --verify HEAD 2>/dev/null) || head=""  # unborn
   jq -n \
     --arg path "$repo" --arg branch "$branch" --arg head "$head" \
@@ -829,7 +852,15 @@ bkp::capture::run() {
     # -verbatim is load-bearing: plain --files-from glob-expands every line,
     # so a captured file named "[.md" (tldr pages ship one) aborts the whole
     # backup with Go's "syntax error in pattern". Our list is literal paths.
-    bkp::restic "$staging" backup --files-from-verbatim "$files_from" --quiet || return 1
+    local backup_rc=0
+    bkp::restic "$staging" backup --files-from-verbatim "$files_from" --quiet || backup_rc=$?
+    if (( backup_rc == 3 )); then
+      # rc 3 = snapshot CREATED, some sources unreadable (deleted between
+      # sweep and read, or permission-denied). A partial snapshot beats none.
+      log_warn "bkp: some source files were unreadable — snapshot created without them"
+    elif (( backup_rc != 0 )); then
+      return 1
+    fi
   } always {
     rm -f "$files_from"
   }
