@@ -1,0 +1,214 @@
+#!/usr/bin/env zsh
+# system-backup — Terminal Time Machine dispatcher.
+#
+# Tiered, deduplicated, encrypted restic snapshots of the chezmoi-unmanaged
+# configuration under $HOME plus the uncommitted work in git projects, with
+# Time-Machine-style browse/restore from the terminal. The capture/reconcile
+# machinery runs on a launchd schedule (see services.toml); this is the
+# human'sfront door. `tm` (a zsh function) is the context-aware shortcut,
+# anchored at $PWD.
+#
+# Usage:
+#   system-backup                     # alias for `status`
+#   system-backup status              # staging summary + target presence
+#   system-backup now                 # force a capture (+ reconcile)
+#   system-backup list                # snapshots with tier labels
+#   system-backup browse [--deleted] [path]
+#   system-backup diff <path> <snapA> [<snapB>]
+#   system-backup restore --snapshot <id> [--force] <path>...
+#   system-backup restore-project <repo>
+#   system-backup undo                # revert the last restore
+#   system-backup reconcile           # converge present targets now
+#   system-backup targets             # configured targets + presence
+#   system-backup verify              # restic check staging + targets
+
+set -eu -o pipefail
+
+source "${BKP_LIB:-$HOME/.local/lib}/backup.zsh"
+
+usage() {
+  cat <<EOF
+Usage:
+  system-backup                          alias for \`status\`
+  system-backup status                   staging summary + target presence
+  system-backup now                      force a capture tick (+ reconcile)
+  system-backup list                     snapshots with tier labels
+  system-backup browse [--deleted] [p]   Time-Machine browse (httm/fzf)
+  system-backup diff <path> <A> [<B>]    file diff across snapshots
+  system-backup restore --snapshot <id> [--force] <path>...
+  system-backup restore-project <repo>   reconstruct a git project
+  system-backup undo                     revert the last restore
+  system-backup reconcile                converge present targets
+  system-backup targets                  configured targets + presence
+  system-backup verify                   restic check staging + targets
+  system-backup -h | --help | help       show this help
+
+The \`tm\` shell function is the anchored shortcut: \`tm\` browses \$PWD,
+\`tm <file>\` scrubs one file, \`tm --deleted\` recovers deletions here.
+Run \`system-backup <command> --help\` for per-command details.
+EOF
+}
+
+usage_for() {
+  case "$1" in
+    browse)
+      cat <<EOF
+Usage:
+  system-backup browse [--deleted] [path]
+
+Time-Machine browse anchored at [path] (default \$PWD). With httm + a FUSE
+provider: httm over a transient restic mount. Otherwise: an fzf version
+picker that restores the chosen version AS A COPY (<path>.<snapid>) —
+in-place restores go through \`restore\`, which is undoable.
+EOF
+      ;;
+    diff)
+      cat <<EOF
+Usage:
+  system-backup diff <path> <snapshotA> [<snapshotB>]
+
+Diff <path> between two snapshots, or between <snapshotA> and the live file
+when <snapshotB> is omitted. Viewed via hunk (fallback: unified diff).
+EOF
+      ;;
+    restore)
+      cat <<EOF
+Usage:
+  system-backup restore --snapshot <id> [--force] <path>...
+
+Restore paths in place from a snapshot. Refuses to overwrite existing paths
+without --force; with it, the live state is snapshotted first (tag bkp-undo)
+so \`system-backup undo\` can revert the restore.
+EOF
+      ;;
+    restore-project)
+      cat <<EOF
+Usage:
+  system-backup restore-project <repo-path>
+
+Reconstruct a git project from its captured sidecar: init + fetch origin,
+fetch the unpushed-history bundle, re-align HEAD/branch/index around the
+already-restored working tree, and re-register the stash.
+EOF
+      ;;
+    undo)
+      cat <<EOF
+Usage:
+  system-backup undo
+
+Revert the last restore: the newest bkp-undo snapshot is restored in place
+and then forgotten. Stacked undos peel one restore at a time.
+EOF
+      ;;
+    *)
+      usage
+      ;;
+  esac
+}
+
+# require_config — a human asked, so a missing config is an error (the
+# scheduled agents no-op instead; see the workers).
+require_config() {
+  [[ -f "$BKP_CONFIG" ]] ||
+    die "not configured: $BKP_CONFIG missing — copy config.toml.example, set the staging path, and create the backup-repo secret"
+}
+
+main() {
+  local cmd="${1:-status}"
+  shift 2>/dev/null || true
+
+  case "$cmd" in
+    -h | --help | help)
+      usage
+      exit 0
+      ;;
+    status | now | list | undo | reconcile | targets | verify)
+      args_contain_help "$@" && {
+        usage_for "$cmd"
+        exit 0
+      }
+      require_config
+      case "$cmd" in
+        status)    bkp::ux::status ;;
+        now)       bkp::tick ;;
+        list)      { print -r -- $'ID\tTIME\tAGE\tTIER'; bkp::ux::list; } | column -t -s$'\t' ;;
+        undo)      bkp::restore::undo ;;
+        reconcile) bkp::reconcile::run ;;
+        targets)   bkp::ux::targets | column -t -s$'\t' ;;
+        verify)    bkp::ux::verify ;;
+      esac
+      ;;
+    browse)
+      args_contain_help "$@" && {
+        usage_for browse
+        exit 0
+      }
+      require_config
+      local anchor="" deleted=""
+      while (( $# )); do
+        case "$1" in
+          --deleted) deleted="--deleted" ;;
+          *) anchor="$1" ;;
+        esac
+        shift
+      done
+      bkp::ux::browse "${anchor:-$PWD}" ${deleted:+--deleted}
+      ;;
+    diff)
+      args_contain_help "$@" && {
+        usage_for diff
+        exit 0
+      }
+      require_config
+      bkp::ux::diff "$@"
+      ;;
+    restore)
+      args_contain_help "$@" && {
+        usage_for restore
+        exit 0
+      }
+      require_config
+      local snap="" force=""
+      local -a paths=()
+      while (( $# )); do
+        case "$1" in
+          --snapshot)
+            [[ $# -ge 2 ]] || die "--snapshot requires a value"
+            snap="$2"
+            shift 2
+            ;;
+          --force)
+            force="--force"
+            shift
+            ;;
+          *)
+            paths+=("$1")
+            shift
+            ;;
+        esac
+      done
+      if [[ -z "$snap" ]] || (( ${#paths} == 0 )); then
+        usage_for restore >&2
+        die "restore requires --snapshot <id> and at least one path"
+      fi
+      bkp::restore::paths "$snap" ${force:+--force} "${paths[@]}"
+      ;;
+    restore-project)
+      args_contain_help "$@" && {
+        usage_for restore-project
+        exit 0
+      }
+      [[ $# -eq 1 ]] || {
+        usage_for restore-project >&2
+        die "restore-project requires exactly one repo path"
+      }
+      bkp::project::restore "${1:A}"
+      ;;
+    *)
+      usage
+      die "unknown subcommand: $cmd"
+      ;;
+  esac
+}
+
+main "$@"

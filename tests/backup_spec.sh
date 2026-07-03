@@ -1717,6 +1717,94 @@ EOF
     End
   End
 
+  Describe 'system-backup dispatcher + tm'
+    DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup"
+    TMFN="$SHELLSPEC_PROJECT_ROOT/home/dot_config/zsh/functions.d/tm.sh"
+
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml" BKP_LIB="$LIB"
+      cat > "$FIX/c.toml" <<EOF
+[staging]
+path = "$FIX/stg"
+password_command = "echo pw"
+[[target]]
+name = "ghost"
+path = "$FIX/gone/tb"
+EOF
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_CONFIG BKP_LIB; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'top-level help lists every subcommand'
+      When run zsh "$DISPATCH" --help
+      The status should be success
+      The output should include "status"
+      The output should include "restore-project"
+      The output should include "verify"
+      The output should include "tm"
+    End
+
+    It 'dies on an unknown subcommand'
+      When run zsh "$DISPATCH" frobnicate
+      The status should equal 1
+      The stderr should include "unknown subcommand"
+      The output should include "Usage"
+    End
+
+    It 'restore --help documents --snapshot and --force'
+      When run zsh "$DISPATCH" restore --help
+      The status should be success
+      The output should include "--snapshot"
+      The output should include "--force"
+    End
+
+    It 'targets renders the presence table without touching restic'
+      When run zsh "$DISPATCH" targets
+      The status should be success
+      The output should include "○"
+      The output should include "ghost"
+    End
+
+    It 'is loud when unconfigured (a human asked)'
+      loud() {
+        BKP_CONFIG="$FIX/nope.toml" zsh "$DISPATCH" status
+      }
+      When run loud
+      The status should equal 1
+      The stderr should include "not configured"
+    End
+
+    It 'restore demands a snapshot id and paths'
+      When run zsh "$DISPATCH" restore /some/path
+      The status should equal 1
+      The stderr should include "--snapshot"
+    End
+
+    It 'tm maps its forms onto system-backup browse'
+      tmmap() {
+        STUB="$FIX/stub"; mkdir -p "$STUB"
+        cat > "$STUB/system-backup" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$FIX/tm-calls"
+EOF
+        chmod +x "$STUB/system-backup"
+        PATH="$STUB:$PATH"
+        source "$TMFN"
+        cd "$FIX"
+        tm
+        tm /x/file.txt
+        tm --deleted
+        cat "$FIX/tm-calls"
+      }
+      When run tmmap
+      The line 1 should equal "browse $FIX"
+      The line 2 should equal "browse /x/file.txt"
+      The line 3 should equal "browse --deleted $FIX"
+    End
+  End
+
   Describe 'declared backup agents (services.toml.tmpl)'
     TMPL="$SHELLSPEC_PROJECT_ROOT/home/dot_config/packages/services.toml.tmpl"
     no_chezmoi() { ! command -v chezmoi >/dev/null 2>&1; }
