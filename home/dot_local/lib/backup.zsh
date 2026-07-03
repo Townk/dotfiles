@@ -1036,6 +1036,136 @@ bkp::ux::verify() {
   return $rc
 }
 
+# bkp::ux::has_fuse — is a FUSE provider available for `restic mount`?
+# BKP_HAS_FUSE=0/1 overrides (test seam / user escape hatch).
+bkp::ux::has_fuse() {
+  case "${BKP_HAS_FUSE:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [[ -e /Library/Filesystems/macfuse.fs ||
+     -e "/Library/Application Support/fuse-t" ||
+     -e /dev/fuse ]]
+}
+
+# bkp::ux::browse_mode — REPLY=httm|fzf; rc 2 when neither stack is present.
+bkp::ux::browse_mode() {
+  if command -v httm >/dev/null 2>&1 && bkp::ux::has_fuse; then
+    REPLY=httm
+  elif command -v fzf >/dev/null 2>&1; then
+    REPLY=fzf
+  else
+    log_error "bkp: browse needs httm + a FUSE provider, or fzf for the fallback picker"
+    return 2
+  fi
+}
+
+# bkp::mount <repo> <mountpoint>
+# Transient `restic mount` for browse: background the mount, wait for the
+# FUSE tree to appear, REPLY = mount pid. Caller must bkp::umount.
+bkp::mount() {
+  local repo="$1" mp="$2"
+  mkdir -p "$mp"
+  bkp::restic "$repo" mount "$mp" >/dev/null 2>&1 &
+  local pid=$! i
+  for (( i = 0; i < 100; i++ )); do
+    if [[ -d "$mp/snapshots" ]]; then
+      REPLY=$pid
+      return 0
+    fi
+    kill -0 $pid 2>/dev/null || break
+    sleep 0.1
+  done
+  kill $pid 2>/dev/null
+  log_error "bkp: restic mount did not come up at $mp"
+  return 1
+}
+
+# bkp::umount <pid> <mountpoint> — end a transient mount, best-effort.
+bkp::umount() {
+  kill "$1" 2>/dev/null
+  local i
+  for (( i = 0; i < 20; i++ )); do
+    [[ -d "$2/snapshots" ]] || return 0
+    sleep 0.1
+  done
+  umount "$2" 2>/dev/null || diskutil unmount force "$2" >/dev/null 2>&1 || :
+}
+
+# bkp::ux::browse <path> [--deleted]
+# Time-Machine browse (spec §7): httm over a transient restic mount when
+# httm + FUSE are available, else the fzf version picker.
+bkp::ux::browse() {
+  local anchor="${1:-$PWD}" deleted="${2:-}"
+  local staging REPLY
+  staging=$(bkp::config::staging_path) || return 2
+  bkp::ux::browse_mode || return 2
+  local mode="$REPLY"
+  if [[ "$mode" == httm ]]; then
+    local mp="${TMPDIR:-/tmp}/bkp-mount.$$"
+    bkp::mount "$staging" "$mp" || return 1
+    local pid=$REPLY
+    local -a args=(-b -R --alt-store=restic)
+    [[ "$deleted" == --deleted ]] && args+=(--deleted)
+    {
+      httm "${args[@]}" "$anchor"
+    } always {
+      bkp::umount "$pid" "$mp"
+      rmdir "$mp" 2>/dev/null || :
+    }
+  else
+    bkp::ux::browse_fzf "$staging" "$anchor"
+  fi
+}
+
+# bkp::ux::browse_fzf <repo> <path>
+# FUSE-less fallback: pick a version of <path> across snapshots and restore
+# it AS A COPY next to the live file (<path>.<snapid>) — in-place restores go
+# through the undoable `restore` verb, never through the picker.
+bkp::ux::browse_fzf() {
+  local repo="$1" p="$2"
+  local sel
+  sel=$(bkp::restic "$repo" find --json -- "$p" 2>/dev/null |
+    jq -r '.[]? | (.snapshot[0:8]) as $s | .matches[]? | [$s, .path] | @tsv' 2>/dev/null |
+    fzf --with-nth=1 --prompt="versions of ${p:t}> ") || return 1
+  [[ -n "$sel" ]] || return 0
+  local snap="${sel%%$'\t'*}"
+  bkp::restic "$repo" dump "$snap" "${sel##*$'\t'}" > "$p.$snap" || return 1
+  log_ok "bkp: restored copy -> $p.$snap"
+}
+
+# bkp::ux::diff <path> <snapA> [<snapB>]
+# File diff across snapshots (spec §7): dump A (and B; default = the live
+# file) and view via hunk, falling back to plain unified diff.
+bkp::ux::diff() {
+  local p="${1:-}" a="${2:-}" b="${3:-}"
+  if [[ -z "$p" || -z "$a" ]]; then
+    log_error "bkp: diff needs <path> <snapshotA> [<snapshotB>]"
+    return 2
+  fi
+  local staging
+  staging=$(bkp::config::staging_path) || return 2
+  local ta tb=""
+  ta=$(mktemp "${TMPDIR:-/tmp}/bkp-diff.XXXXXX") || return 1
+  {
+    bkp::restic "$staging" dump "$a" "$p" > "$ta" || return 1
+    local right="$p"
+    if [[ -n "$b" ]]; then
+      tb=$(mktemp "${TMPDIR:-/tmp}/bkp-diff.XXXXXX") || return 1
+      bkp::restic "$staging" dump "$b" "$p" > "$tb" || return 1
+      right="$tb"
+    fi
+    # Either viewer: rc 1 means "files differ", which is not a failure here.
+    if command -v hunk >/dev/null 2>&1; then
+      hunk diff "$ta" "$right" || (( $? == 1 ))
+    else
+      diff -u "$ta" "$right" || (( $? == 1 ))
+    fi
+  } always {
+    rm -f "$ta" ${tb:+"$tb"}
+  }
+}
+
 # bkp::restore::undo_snapshot <path…>
 # The pre-restore safety net (spec §7): capture the live state of the paths
 # about to be overwritten, tagged bkp-undo, so a bad restore is one

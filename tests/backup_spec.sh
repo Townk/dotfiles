@@ -1613,6 +1613,110 @@ EOF
     End
   End
 
+  Describe 'bkp::ux — browse/diff plumbing'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml"
+      printf '[staging]\npath = "%s/stg"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_CONFIG BKP_HAS_FUSE; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'selects httm with FUSE, fzf without, and errors bare'
+      modes() {
+        source "$LIB/backup.zsh"
+        local REPLY
+        printf '#!/bin/sh\nexit 0\n' > "$STUB/httm"; chmod +x "$STUB/httm"
+        printf '#!/bin/sh\nexit 0\n' > "$STUB/fzf"; chmod +x "$STUB/fzf"
+        PATH="$STUB:$PATH" BKP_HAS_FUSE=1 bkp::ux::browse_mode && print -r -- "$REPLY"
+        PATH="$STUB:$PATH" BKP_HAS_FUSE=0 bkp::ux::browse_mode && print -r -- "$REPLY"
+        PATH="/usr/bin:/bin" BKP_HAS_FUSE=0 bkp::ux::browse_mode || print bare-error
+      }
+      When run modes
+      The line 1 should equal "httm"
+      The line 2 should equal "fzf"
+      The line 3 should equal "bare-error"
+      The stderr should include "browse needs"
+    End
+
+    It 'mount waits for the FUSE tree and reports the pid'
+      mounts() {
+        source "$LIB/backup.zsh"
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1" in
+            mount) mkdir -p "$2/snapshots"; sleep 3 ;;
+            *) return 0 ;;
+          esac
+        }
+        local REPLY
+        bkp::mount "$FIX/stg" "$FIX/mp" || return 1
+        [ -d "$FIX/mp/snapshots" ] && print mounted
+        kill -0 "$REPLY" 2>/dev/null && print alive
+        kill "$REPLY" 2>/dev/null
+      }
+      When run mounts
+      The line 1 should equal "mounted"
+      The line 2 should equal "alive"
+    End
+
+    It 'mount fails cleanly when restic dies'
+      badmount() {
+        source "$LIB/backup.zsh"
+        bkp::restic() { return 1 }
+        bkp::mount "$FIX/stg" "$FIX/mp"
+      }
+      When run badmount
+      The status should equal 1
+      The stderr should include "did not come up"
+    End
+
+    It 'diff dumps both snapshots and pipes them to the viewer'
+      # hunk stubbed as plain `diff -u` so nothing interactive launches and
+      # the viewer branch is exercised with deterministic output.
+      diffs() {
+        source "$LIB/backup.zsh"
+        printf '#!/bin/sh\nshift\nexec diff -u "$@"\n' > "$STUB/hunk"
+        chmod +x "$STUB/hunk"
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1 ${2:-}" in
+            'dump snapA') print old ;;
+            'dump snapB') print new ;;
+            *) return 0 ;;
+          esac
+        }
+        PATH="$STUB:$PATH" bkp::ux::diff "$FIX/f.txt" snapA snapB
+      }
+      When run diffs
+      The status should be success
+      The output should include "-old"
+      The output should include "+new"
+    End
+
+    It 'diff against the live file needs only one dump'
+      livediff() {
+        source "$LIB/backup.zsh"
+        printf '#!/bin/sh\nshift\nexec diff -u "$@"\n' > "$STUB/hunk"
+        chmod +x "$STUB/hunk"
+        print live-content > "$FIX/f.txt"
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1 ${2:-}" in
+            'dump snapA') print old ;;
+            *) return 0 ;;
+          esac
+        }
+        PATH="$STUB:$PATH" bkp::ux::diff "$FIX/f.txt" snapA
+      }
+      When run livediff
+      The status should be success
+      The output should include "+live-content"
+    End
+  End
+
   Describe 'declared backup agents (services.toml.tmpl)'
     TMPL="$SHELLSPEC_PROJECT_ROOT/home/dot_config/packages/services.toml.tmpl"
     no_chezmoi() { ! command -v chezmoi >/dev/null 2>&1; }
