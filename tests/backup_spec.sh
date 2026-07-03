@@ -425,4 +425,60 @@ EOF
       The stderr should include "unsupported tier interval"
     End
   End
+
+  Describe 'bkp::manifest — sweep'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      # chezmoi stub: no managed files, always succeeds — the chezmoi-filter
+      # block overrides it per test.
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      printf '#!/bin/sh\nexit 0\n' > "$STUB/chezmoi"
+      chmod +x "$STUB/chezmoi"
+      PATH="$STUB:$PATH"
+    }
+    cleanup_fix() { rm -rf "$FIX"; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'captures files, prunes deny paths and glob matches, keeps symlinks as entries'
+      sweep() {
+        source "$LIB/backup.zsh"
+        mkdir -p "$FIX/root/sub" "$FIX/root/cache" "$FIX/root/Cache/deep"
+        print keep > "$FIX/root/keep.txt"
+        print nested > "$FIX/root/sub/nested.txt"
+        print blob > "$FIX/root/cache/blob.bin"
+        print cached > "$FIX/root/Cache/deep/f"
+        print sock > "$FIX/root/junk.sock"
+        ln -s keep.txt "$FIX/root/link"
+        cat > "$FIX/m.toml" <<EOF
+roots = ["$FIX/root", "$FIX/absent"]
+deny = ["$FIX/root/cache", "**/*.sock", "**/Cache/**"]
+EOF
+        bkp::manifest::files "$FIX/m.toml" | sort
+      }
+      When run sweep
+      The line 1 should equal "$FIX/root/keep.txt"
+      The line 2 should equal "$FIX/root/link"
+      The line 3 should equal "$FIX/root/sub/nested.txt"
+      The lines of output should equal 3
+    End
+
+    It 'captures a root that is a single file'
+      filedirect() {
+        source "$LIB/backup.zsh"
+        print one > "$FIX/one.txt"
+        printf 'roots = ["%s/one.txt"]\n' "$FIX" > "$FIX/m.toml"
+        bkp::manifest::files "$FIX/m.toml"
+      }
+      When run filedirect
+      The output should equal "$FIX/one.txt"
+    End
+
+    It 'errors when the manifest itself is missing'
+      nomanifest() { source "$LIB/backup.zsh"; bkp::manifest::files "$FIX/nope.toml"; }
+      When run nomanifest
+      The status should equal 2
+      The stderr should include "manifest not found"
+    End
+  End
 End

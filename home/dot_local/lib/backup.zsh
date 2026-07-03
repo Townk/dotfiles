@@ -272,3 +272,129 @@ bkp::manifest::thin_policy() {
   done
   print -r -- "year $min -"
 }
+
+# ── External seams (stubbed in tests) ────────────────────────────────────────
+
+# bkp::chezmoi::managed — absolute paths of every chezmoi-managed FILE.
+# Files only: a managed directory (e.g. ~/.config) still holds unmanaged
+# children, so subtraction must be file-grained; a fully-managed subtree
+# prunes wholesale because every file in it is listed.
+bkp::chezmoi::managed() {
+  chezmoi managed --include=files --path-style=absolute
+}
+
+# bkp::git::is_repo <dir> — does <dir> head a git work tree?
+bkp::git::is_repo() {
+  [[ -e "$1/.git" ]]
+}
+
+# bkp::git::ls <repo>
+# Absolute paths of the repo's capturable working tree: tracked + untracked
+# minus everything git's FULL ignore resolution drops (repo .gitignore(s),
+# .git/info/exclude, and the machine-global core.excludesFile).
+bkp::git::ls() {
+  local repo="$1" out
+  out=$(git -C "$repo" ls-files --cached --others --exclude-standard 2>/dev/null) || return 1
+  local f
+  for f in ${(f)out}; do
+    print -r -- "$repo/$f"
+  done
+}
+
+# ── The sweep ────────────────────────────────────────────────────────────────
+
+# bkp::manifest::denied <path>
+# Predicate against the _bkp_deny globs (dynamic scope from the sweep).
+# Three shapes per pattern: exact/glob match, prefix subsumption (a denied
+# dir denies its contents), and dir-with-trailing-slash (so "**/Cache/**"
+# prunes the Cache dir itself, not just files under it).
+bkp::manifest::denied() {
+  local p="$1" pat
+  for pat in "${_bkp_deny[@]}"; do
+    [[ "$p" == ${~pat} || "$p" == ${~pat}/* || "$p/" == ${~pat} ]] && return 0
+  done
+  return 1
+}
+
+# bkp::manifest::walk <node>
+# Recursive sweep worker. Emits F\t<file> / R\t<repo>\t<bundle>\t<warn>.
+# Reads _bkp_deny, _bkp_managed, _bkp_bundle, _bkp_warn from the caller's
+# scope. Inside a git repo, enumeration is delegated to git (full ignore
+# resolution); on git failure it degrades to a plain walk that skips .git —
+# over-capture, never under-capture.
+bkp::manifest::walk() {
+  local node="$1" entry
+  bkp::manifest::denied "$node" && return 0
+  if [[ -h "$node" || -f "$node" ]]; then
+    [[ -n "${_bkp_managed[$node]:-}" ]] || print -r -- "F"$'\t'"$node"
+    return 0
+  fi
+  [[ -d "$node" ]] || return 0
+  if bkp::git::is_repo "$node"; then
+    print -r -- "R"$'\t'"$node"$'\t'"$_bkp_bundle"$'\t'"$_bkp_warn"
+    local git_out f
+    if git_out=$(bkp::git::ls "$node"); then
+      for f in ${(f)git_out}; do
+        bkp::manifest::denied "$f" && continue
+        [[ -n "${_bkp_managed[$f]:-}" ]] && continue
+        print -r -- "F"$'\t'"$f"
+      done
+    else
+      log_warn "bkp: git enumeration failed in $node — over-capturing (ignore rules skipped)"
+      for entry in "$node"/*(DN); do
+        [[ "$entry" == "$node/.git" ]] && continue
+        bkp::manifest::walk "$entry"
+      done
+    fi
+    return 0
+  fi
+  for entry in "$node"/*(DN); do
+    bkp::manifest::walk "$entry"
+  done
+}
+
+# bkp::manifest::sweep <manifest>
+# Resolve the manifest into a mixed F/R stream (spec §2):
+#   capture = roots − deny − chezmoi-managed − per-repo gitignored
+# Missing roots are skipped (spec §11); chezmoi filter failure over-captures.
+bkp::manifest::sweep() {
+  local manifest="$1"
+  bkp::manifest::json "$manifest" >/dev/null || return 2
+
+  local -a _bkp_deny=()
+  local deny_out
+  deny_out=$(bkp::manifest::deny "$manifest") || return 2
+  [[ -n "$deny_out" ]] && _bkp_deny=(${(f)deny_out})
+
+  local -A _bkp_managed=()
+  if bkp::manifest::chezmoi_excluded "$manifest"; then
+    local managed_out mline
+    if managed_out=$(bkp::chezmoi::managed 2>/dev/null); then
+      for mline in ${(f)managed_out}; do
+        _bkp_managed[$mline]=1
+      done
+    else
+      log_warn "bkp: chezmoi filter unavailable — over-capturing managed files"
+    fi
+  fi
+
+  local root _bkp_bundle _bkp_warn
+  while IFS=$'\t' read -r root _bkp_bundle _bkp_warn; do
+    [[ -e "$root" || -h "$root" ]] || continue
+    bkp::manifest::walk "$root"
+  done < <(bkp::manifest::roots "$manifest")
+}
+
+# bkp::manifest::files <manifest> — the resolved --files-from list.
+bkp::manifest::files() {
+  setopt local_options pipe_fail
+  bkp::manifest::sweep "$1" | awk -F'\t' '$1 == "F" { print $2 }'
+}
+
+# bkp::manifest::repos <manifest>
+# The bundle plan: <repo>\t<bundle_unpushed>\t<untracked_warn_size> per repo
+# the sweep entered. Capture (Phase 3) decides what to do with the flags.
+bkp::manifest::repos() {
+  setopt local_options pipe_fail
+  bkp::manifest::sweep "$1" | awk -F'\t' '$1 == "R" { print $2 "\t" $3 "\t" $4 }'
+}
