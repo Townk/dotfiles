@@ -45,6 +45,20 @@
 set -u
 zmodload zsh/system
 
+# This handler speaks a raw BYTE protocol end to end: every length prefix,
+# loop counter, and substring split below is meant to count/index bytes, not
+# characters. Under the default multibyte (UTF-8) locale zsh counts decoded
+# CHARACTERS instead -- so `$#chunk`, `$#payload`, and `${payload[a,b]}` all
+# undercount whenever the bytes contain multibyte sequences or a length
+# header byte >0x7f. That silently corrupts the framing: read_n's `got`
+# never reaches `n` (loop spins to a false timeout/EOF even though every byte
+# already arrived -- verified: the scalar holds the full payload byte-for-
+# byte, only the count is wrong), send_frame advertises a short length so the
+# client under-reads, and be32_to_int/op_copy split on the wrong offsets.
+# Disabling multibyte makes $#, [a,b] indexing, and $(( #byte )) all operate
+# on bytes -- exactly the protocol's unit -- fixing the whole class at once.
+setopt nomultibyte
+
 DB_FILE="${PICK_CLIPBOARD_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/pick-clipboard/history.db}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/pick-clipboard"
 REGTYPE_FILE="$STATE_DIR/current-regtype"
@@ -63,13 +77,23 @@ mkdir -p "$STATE_DIR" 2>/dev/null
 read_n() {
   local n=$1 timeout=$2
   local -i got=0
+  # `chunk` MUST be declared once, OUTSIDE the loop. A bare `local chunk`
+  # (no assignment) re-run on a later iteration, when `chunk` already exists
+  # in this function scope, is parsed by zsh as a request to DISPLAY the
+  # parameter -- it prints `chunk=$'...<the bytes>...'` to stdout. A pipe/
+  # socket read completes in several `sysread`s (partial reads), so putting
+  # the declaration inside the loop dumped the whole payload onto the wire
+  # and corrupted every framed response >~one read buffer. (A single-read
+  # file completes in one iteration, which is why this hid during file-based
+  # testing.) sysread overwrites chunk in full each call, so one declaration
+  # is correct.
+  local chunk
   REPLY=""
   REPLY_STATUS="ok"
   while (( got < n )); do
-    local chunk
     sysread -s $(( n - got )) -t "$timeout" chunk
     case $? in
-      0) REPLY+="$chunk"; got+=$#chunk ;;
+      0) REPLY+="$chunk"; (( got += $#chunk )) ;;
       4) REPLY_STATUS="timeout"; return 1 ;;
       5) REPLY_STATUS="eof"; return 1 ;;
       *) REPLY_STATUS="error"; return 1 ;;
@@ -274,8 +298,13 @@ clip::op_fetch_file() {
   int_to_be32 "$bytes"
   syswrite -- "O$REPLY"
   local -i remaining=$bytes
+  # `chunk` declared once, outside the loop -- a bare `local chunk` re-run
+  # inside the loop prints `chunk=$'...'` to stdout on the 2nd+ iteration
+  # (zsh displays an already-existing parameter), which here would inject the
+  # file's own bytes back into the response stream. See the matching note in
+  # read_n().
+  local chunk
   while (( remaining > 0 )); do
-    local chunk
     sysread -s $(( remaining < 65536 ? remaining : 65536 )) -i $fd chunk || break
     syswrite -- "$chunk"
     # NOTE: bare `remaining-=$#chunk` is not valid zsh syntax at all (it's
