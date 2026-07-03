@@ -874,6 +874,63 @@ EOF
       The line 1 should equal "meta"
       The line 2 should equal "no-bundle"
     End
+
+    It 'restore-project round-trips: branch, head, unpushed commit, stash, clean tree'
+      roundtrip() {
+        source "$LIB/backup.zsh"
+        local head_before
+        head_before=$(git -C "$REPO" rev-parse HEAD)
+        bkp::project::sidecar "$REPO" true 50m || return 1
+        rm -rf "$REPO/.git"                       # the disaster
+        bkp::project::restore "$REPO" >/dev/null || return 1
+        git -C "$REPO" symbolic-ref --short HEAD
+        [ "$(git -C "$REPO" rev-parse HEAD)" = "$head_before" ] && print same-head
+        git -C "$REPO" log --format=%s | head -1
+        git -C "$REPO" stash list | grep -c .
+        [ -z "$(git -C "$REPO" status --porcelain)" ] && print clean
+      }
+      When run roundtrip
+      The line 1 should equal "main"
+      The line 2 should equal "same-head"
+      The line 3 should equal "unpushed"
+      The line 4 should equal 1
+      The line 5 should equal "clean"
+    End
+
+    It 'restore-project works with no remote (full bundle)'
+      noremote() {
+        source "$LIB/backup.zsh"
+        local R2="$FIX/solo"
+        mkdir -p "$R2"
+        git -C "$R2" init -q
+        print only > "$R2/only.txt"
+        git -C "$R2" add only.txt
+        git -C "$R2" commit -qm solo
+        local head_before
+        head_before=$(git -C "$R2" rev-parse HEAD)
+        bkp::project::sidecar "$R2" true 50m || return 1
+        rm -rf "$R2/.git"
+        bkp::project::restore "$R2" >/dev/null || return 1
+        git -C "$R2" symbolic-ref --short HEAD
+        [ "$(git -C "$R2" rev-parse HEAD)" = "$head_before" ] && print same-head
+        [ -z "$(git -C "$R2" status --porcelain)" ] && print clean
+      }
+      When run noremote
+      The line 1 should equal "main"
+      The line 2 should equal "same-head"
+      The line 3 should equal "clean"
+    End
+
+    It 'restore-project refuses when .git already exists'
+      hasgit() {
+        source "$LIB/backup.zsh"
+        bkp::project::sidecar "$REPO" true 50m || return 1
+        bkp::project::restore "$REPO"
+      }
+      When run hasgit
+      The status should equal 3
+      The stderr should include "already has a .git"
+    End
   End
 
   Describe 'bkp::lock'

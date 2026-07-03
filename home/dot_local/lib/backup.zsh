@@ -652,6 +652,63 @@ bkp::target::present() {
   [[ -d "$parent" && -w "$parent" ]]
 }
 
+# bkp::project::restore <repo-path>
+# Reconstruct a repo from its sidecar (spec §7): the working-tree FILES are
+# assumed already on disk (a restic restore put them back); this rebuilds the
+# .git side around them — init + origin fetch, bundle fetch for unpushed
+# refs, HEAD/branch/index alignment (mixed reset: the on-disk tree is never
+# touched), and stash re-registration. Refuses on an existing .git.
+bkp::project::restore() {
+  local repo="$1" REPLY
+  bkp::project::id "$repo" || return 1
+  local meta="$BKP_WIP_DIR/$REPLY.meta.json" bundle="$BKP_WIP_DIR/$REPLY.bundle"
+  [[ -f "$meta" ]] || {
+    log_error "bkp: no sidecar meta for $repo ($meta)"
+    return 2
+  }
+  if [[ -e "$repo/.git" ]]; then
+    log_error "bkp: $repo already has a .git — refusing to reconstruct over it"
+    return 3
+  fi
+  local branch head origin
+  branch=$(jq -r '.branch // empty' "$meta")
+  head=$(jq -r '.head // empty' "$meta")
+  origin=$(jq -r '.remotes[]?
+    | select(startswith("origin\t")) | select(endswith("(fetch)"))
+    | split("\t")[1] | sub(" \\(fetch\\)$"; "")' "$meta" | head -1)
+
+  mkdir -p "$repo"
+  git -C "$repo" init -q || return 1
+  if [[ -n "$origin" ]]; then
+    git -C "$repo" remote add origin "$origin"
+    git -C "$repo" fetch -q origin 2>/dev/null ||
+      log_warn "bkp: origin unreachable ($origin) — continuing from the bundle alone"
+  fi
+  if [[ -f "$bundle" ]]; then
+    # --update-head-ok: the fresh init's HEAD already names the branch being
+    # fetched; the mixed reset below re-aligns the index right after.
+    git -C "$repo" fetch -q --update-head-ok "$bundle" \
+      'refs/heads/*:refs/heads/*' 'refs/tags/*:refs/tags/*' 2>/dev/null ||
+      log_warn "bkp: bundle fetch failed (missing prerequisites?) — unpushed refs not recovered"
+  fi
+  [[ -n "$branch" ]] && git -C "$repo" symbolic-ref HEAD "refs/heads/$branch"
+  if [[ -n "$head" ]] && git -C "$repo" cat-file -e "$head" 2>/dev/null; then
+    git -C "$repo" update-ref "refs/heads/${branch:-main}" "$head" 2>/dev/null || :
+    git -C "$repo" reset -q "$head" 2>/dev/null || :
+  fi
+  if [[ -f "$bundle" ]]; then
+    local stash_sha
+    stash_sha=$(git -C "$repo" bundle list-heads "$bundle" 2>/dev/null |
+      awk '$2 == "refs/stash" {print $1}')
+    if [[ -n "$stash_sha" ]]; then
+      git -C "$repo" fetch -q "$bundle" refs/stash 2>/dev/null || :
+      git -C "$repo" stash store -m "restored by system-backup" "$stash_sha" 2>/dev/null ||
+        log_warn "bkp: could not re-register stash $stash_sha"
+    fi
+  fi
+  log_ok "bkp: reconstructed $repo (branch ${branch:-<detached>}, head ${head[1,8]:-none})"
+}
+
 # bkp::restic <repo> <args…>
 # THE storage seam — every restic invocation goes through here (tests stub
 # this function). Repo + passphrase-command via env; the passphrase itself is
