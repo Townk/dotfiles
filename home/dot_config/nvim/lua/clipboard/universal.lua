@@ -1,34 +1,30 @@
 --------------------------------------------------------------------------------
 -- universal.lua — type-preserving clipboard provider for SSH NeoVim.
 --------------------------------------------------------------------------------
--- Evolves the options.lua OSC 52-write / tunnel-read bridge: stop throwing
--- the register type away on paste.
+-- Talks the Phase 5 clipboard-bridge framing protocol over the reverse SSH
+-- tunnel (the clipboard-bridge launchd service on the Mac, reached at
+-- $HOME/.local/state/runtime/chezmoi-system/clipboard-bridge.sock). The bridge
+-- now serves a length-prefixed binary protocol instead of bare pbpaste, so we
+-- can carry the register TYPE across machines, not just the text:
 --
--- The prior provider copied via write-only OSC 52 (yanks ride up through
--- Zellij/WezTerm to the host clipboard) and pasted by reading the host
--- clipboard back through the reverse SSH tunnel (the clipboard-bridge
--- launchd service on the Mac, served at
--- $HOME/.local/state/runtime/chezmoi-system/clipboard-bridge.sock). But its
--- paste() returned a hardcoded regtype "v", so a visual-BLOCK yank
--- (regtype "b") lost its shape on the round-trip and yanky.nvim rejected
--- the corrupted result with E5108 "provider returned invalid data".
+--   paste()  → G (get text) + R (get-regtype)  → {lines, regtype}
+--   copy()   → T (set text + regtype)            when bridge-up
 --
--- This module keeps the same transport and SSH gating, and adds a tiny
--- per-process cache of the last copy's {lines, regtype}. paste() pairs the
--- tunnel text with the cached regtype (bridge-up) or serves the cached
--- {text, regtype} directly (bridge-down — the iPad/Blink path, where there
--- is no tunnel and OSC 52 has no read), so block yank-then-put round-trips
--- type-correctly and never errors. Empty cache + bridge-down falls back to
--- the unnamed register, preserving the old no-hang behavior.
+-- This is what finally makes a visual-BLOCK yank (regtype "b") keep its shape
+-- across an SSH boundary: the laptop records the regtype when nvim copies, and
+-- hands it back on the next paste. The prior provider read only text and
+-- inferred the type, so block-ness was lost on the round-trip and yanky.nvim
+-- rejected it with E5108 "provider returned invalid data".
 --
--- Cross-machine block (regtype recorded on the laptop and fetched over the
--- reverse channel) is a later phase; here the cached regtype is the
--- in-session currency, which is correct for the common yank-then-put flow.
+-- Bridge-down (iPad/Blink — no reverse tunnel, OSC 52 has no read): copy()
+-- falls back to write-only OSC 52 (text rides up through Zellij/WezTerm to the
+-- host clipboard) and paste() serves the per-process {text, regtype} cache, so
+-- yank-then-put stays type-correct in-session and never queries the terminal
+-- (Zellij refuses OSC 52 reads — the hang this bridge exists to avoid). Empty
+-- cache + bridge-down falls back to the unnamed register.
 --
--- SSH-only: options.lua gates setup() on SSH_CONNECTION/SSH_CLIENT/SSH_TTY,
--- so local NeoVim keeps LazyVim's default pbcopy/pbpaste. The socket path
--- and the nc -U read protocol are unchanged — a type-preserving evolution,
--- not a new transport.
+-- SSH-only: options.lua gates setup() on SSH_CONNECTION/SSH_CLIENT/SSH_TTY, so
+-- local NeoVim keeps LazyVim's default pbcopy/pbpaste.
 local M = {}
 
 local function ssh()
@@ -42,6 +38,108 @@ end
 
 local function sock_path()
   return (vim.env.HOME or "") .. "/.local/state/runtime/chezmoi-system/clipboard-bridge.sock"
+end
+
+--------------------------------------------------------------------------------
+-- Regtype normalization. NeoVim hands copy() a getregtype()-style code
+-- ("v" charwise, "V" linewise, CTRL-V[+width] blockwise); the protocol (and
+-- setreg(), which paste()'s return feeds) speak "v"/"l"/"b". Normalize on the
+-- way in so the cache and the T op both store a clean single byte. (The prior
+-- provider stored the raw "V"/CTRL-V, which failed its own {v,l,b} validation
+-- and silently dropped the type — the block bug this module fixes.)
+--------------------------------------------------------------------------------
+local function norm_regtype(rt)
+  if not rt or rt == "" then return "v" end
+  local c = rt:sub(1, 1)
+  if c == "V" then return "l" end
+  if c == "\22" then return "b" end -- CTRL-V (0x16)
+  return "v"
+end
+
+local function infer_regtype(text)
+  return text:sub(-1) == "\n" and "l" or "v"
+end
+
+-- Mirror vim.fn.systemlist: drop a single trailing newline, then split.
+local function to_lines(text)
+  if text:sub(-1) == "\n" then text = text:sub(1, -2) end
+  return vim.split(text, "\n", { plain = true })
+end
+
+--------------------------------------------------------------------------------
+-- Binary framing. LuaJIT (NeoVim) has no string.pack, so pack/unpack a 4-byte
+-- big-endian length by hand with plain arithmetic (no bit module needed).
+--------------------------------------------------------------------------------
+local function pack_be32(n)
+  return string.char(
+    math.floor(n / 0x1000000) % 256,
+    math.floor(n / 0x10000) % 256,
+    math.floor(n / 0x100) % 256,
+    n % 256
+  )
+end
+
+local function unpack_be32(s, off)
+  local a, b, c, d = s:byte(off, off + 3)
+  return ((a * 256 + b) * 256 + c) * 256 + d
+end
+
+-- Send one framed request <opcode><BE32 len><payload> to the bridge socket and
+-- return the response {status_byte, payload}, or nil on any connect/timeout/
+-- protocol error. Synchronous: drives the libuv loop via vim.wait. Using a
+-- libuv pipe (not `nc` + systemlist) is what keeps the binary length prefix and
+-- any embedded newlines/NULs in the payload byte-exact.
+local function frame_request(sock, opcode, payload, timeout_ms)
+  local uv = vim.uv or vim.loop
+  payload = payload or ""
+  local req = opcode .. pack_be32(#payload) .. payload
+  local pipe = uv.new_pipe(false)
+  local chunks, done, result = {}, false, nil
+
+  local function finish(res)
+    if done then return end
+    result, done = res, true
+    if not pipe:is_closing() then
+      pcall(function()
+        pipe:read_stop()
+      end)
+      pcall(function()
+        pipe:close()
+      end)
+    end
+  end
+
+  pipe:connect(sock, function(cerr)
+    if cerr then
+      finish(nil)
+      return
+    end
+    pipe:read_start(function(rerr, chunk)
+      if rerr then
+        finish(nil)
+        return
+      end
+      if not chunk then -- EOF before a full frame
+        finish(nil)
+        return
+      end
+      chunks[#chunks + 1] = chunk
+      local buf = table.concat(chunks)
+      if #buf >= 5 then
+        local n = unpack_be32(buf, 2)
+        if #buf >= 5 + n then
+          finish({ buf:sub(1, 1), buf:sub(6, 5 + n) })
+        end
+      end
+    end)
+    pipe:write(req)
+  end)
+
+  vim.wait(timeout_ms or 1000, function()
+    return done
+  end, 10)
+  finish(nil) -- ensure the handle is closed if we timed out
+  return result
 end
 
 -- Read the cached {regtype, text}. Returns nil if absent or malformed.
@@ -58,49 +156,60 @@ local function read_cache()
   return regtype, text
 end
 
--- Persist the last copy's regtype + text so paste() can restore the shape.
+-- Persist the last copy's regtype + text so bridge-down paste() restores shape.
 local function write_cache(lines, regtype)
   local path = cache_path()
   vim.fn.mkdir(vim.fs.dirname(path), "p")
   local text = table.concat(lines, "\n")
   local f = io.open(path, "w")
   if f then
-    f:write((regtype or "v") .. "\n" .. text)
+    f:write(regtype .. "\n" .. text)
     f:close()
   end
 end
 
-local function infer_regtype(text)
-  return text:sub(-1) == "\n" and "l" or "v"
-end
-
--- SSH copy: write-only OSC 52 (reuses the bundled module so yanks ride up
--- through Zellij/WezTerm to the host clipboard, unchanged) + cache the
--- regtype for a later type-correct paste.
+-- SSH copy. Always cache locally. Bridge-up → push text+regtype to the host
+-- clipboard with the T op (carries the register type across the tunnel).
+-- Bridge-down or push failure → write-only OSC 52 (text only).
 function M.copy(reg)
   local osc52 = require("vim.ui.clipboard.osc52").copy(reg)
   return function(lines, regtype)
-    write_cache(lines, regtype)
+    local rt = norm_regtype(regtype)
+    write_cache(lines, rt)
+    local uv = vim.uv or vim.loop
+    local sock = sock_path()
+    if uv.fs_stat(sock) then
+      local text = table.concat(lines, "\n")
+      local resp = frame_request(sock, "T", rt .. text, 1000)
+      if resp and resp[1] == "O" then
+        return -- pushed to the host clipboard with its type; done
+      end
+    end
     osc52(lines)
   end
 end
 
--- SSH paste: read the host clipboard back through the reverse tunnel
--- (bridge-up) and pair it with the cached regtype; bridge-down (iPad/Blink)
--- serves the cached {text, regtype} so paste is type-correct and never
--- queries the terminal (Zellij refuses OSC 52 reads — the hang this bridge
--- exists to avoid). Empty cache + bridge-down falls back to the unnamed
--- register, matching the prior behavior.
+-- SSH paste. Bridge-up → G (text) + R (regtype) over the tunnel; the regtype is
+-- authoritative (block preserved across machines). Bridge-down → cached
+-- {text, regtype}; empty cache → unnamed register (old no-hang behavior).
 function M.paste()
   return function()
     local uv = vim.uv or vim.loop
     local sock = sock_path()
     local cached_rt, cached_text = read_cache()
-    if vim.fn.executable("nc") == 1 and uv.fs_stat(sock) then
-      local out = vim.fn.systemlist({ "nc", "-U", "-w", "1", sock })
-      if vim.v.shell_error == 0 then
-        local text = table.concat(out, "\n")
-        return { out, cached_rt or infer_regtype(text) }
+    if uv.fs_stat(sock) then
+      local g = frame_request(sock, "G", "", 1000)
+      if g and g[1] == "O" then
+        local text = g[2]
+        local regtype
+        local r = frame_request(sock, "R", "", 1000)
+        if r and r[1] == "O" and #r[2] >= 1 then
+          local rt = r[2]:sub(1, 1)
+          if rt == "v" or rt == "l" or rt == "b" then
+            regtype = rt
+          end
+        end
+        return { to_lines(text), regtype or cached_rt or infer_regtype(text) }
       end
     end
     if cached_text then
