@@ -13,6 +13,10 @@ source "$(dirname "$_bkp_self")/common.zsh"
 unset _bkp_self
 
 zmodload zsh/datetime
+zmodload zsh/system
+# -F … b:zstat loads only the zstat builtin — a plain `zmodload zsh/stat`
+# would shadow the system `stat` command for every sourcing script.
+zmodload -F zsh/stat b:zstat
 
 # Default retention ladder (spec §5). One tier per line:
 #   <grid> <min_age_seconds> <max_age_seconds|->
@@ -499,4 +503,115 @@ bkp::restic::parse_snapshots() {
     bkp::time::epoch "${row##*$'\t'}" || return 2
     print -r -- "${row%%$'\t'*}"$'\t'"$REPLY"
   done
+}
+
+BKP_STATE_DIR="${BKP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/terminal-backup}"
+BKP_WIP_DIR="${BKP_WIP_DIR:-$BKP_STATE_DIR/wip}"
+
+# bkp::size_bytes <spec> — "50m"/"2g"/"512k"/plain-bytes -> bytes in REPLY.
+bkp::size_bytes() {
+  local spec="${(L)1}" n="${1%?}"
+  if [[ "$spec" == <-> ]]; then
+    REPLY=$(( 10#$spec ))
+    return 0
+  fi
+  if [[ "$n" != <-> ]]; then
+    log_error "bkp: bad size '$1' (want <n>[k|m|g])"
+    return 2
+  fi
+  case "$spec" in
+    *k) REPLY=$(( 10#$n * 1024 )) ;;
+    *m) REPLY=$(( 10#$n * 1048576 )) ;;
+    *g) REPLY=$(( 10#$n * 1073741824 )) ;;
+    *)
+      log_error "bkp: bad size '$1' (want <n>[k|m|g])"
+      return 2
+      ;;
+  esac
+}
+
+# bkp::project::id <repo>
+# Stable sidecar basename: <dirname>-<12 hex of the path>. Hashing via git
+# itself — git is guaranteed present wherever bundles are being made.
+bkp::project::id() {
+  local hash
+  hash=$(print -rn -- "$1" | git hash-object --stdin 2>/dev/null) || return 1
+  REPLY="${1:t}-${hash[1,12]}"
+}
+
+# bkp::project::meta <repo>
+# Reconstruction metadata (spec §2 D): drives restore-project
+# (clone origin -> fetch bundle -> overlay tree -> re-apply stashes).
+bkp::project::meta() {
+  local repo="$1" branch head
+  branch=$(git -C "$repo" symbolic-ref --short -q HEAD) || branch=""   # detached
+  head=$(git -C "$repo" rev-parse -q --verify HEAD 2>/dev/null) || head=""  # unborn
+  jq -n \
+    --arg path "$repo" --arg branch "$branch" --arg head "$head" \
+    --arg remotes "$(git -C "$repo" remote -v 2>/dev/null)" \
+    --arg status "$(git -C "$repo" status --porcelain 2>/dev/null)" \
+    --arg stashes "$(git -C "$repo" stash list 2>/dev/null)" \
+    '{path: $path, branch: $branch, head: $head,
+      remotes: ($remotes | split("\n") | map(select(length > 0))),
+      status:  ($status  | split("\n") | map(select(length > 0))),
+      stashes: ($stashes | split("\n") | map(select(length > 0)))}'
+}
+
+# bkp::project::bundle <repo> <out>
+# Local-only history: branches + tags (+ the latest stash) minus everything
+# any remote already holds. Nothing unpushed -> no bundle (rc 0, stale file
+# removed). Older stash entries (stash@{1}+) are reflog-only: enumerated in
+# meta.json but not bundled — documented v1 caveat (spec §2 D).
+bkp::project::bundle() {
+  local repo="$1" out="$2"
+  local -a refs=(--branches --tags)
+  git -C "$repo" rev-parse -q --verify refs/stash >/dev/null 2>&1 && refs+=(refs/stash)
+  local count
+  count=$(git -C "$repo" rev-list --count "${refs[@]}" --not --remotes 2>/dev/null) || {
+    log_warn "bkp: cannot enumerate history in $repo — skipping bundle"
+    return 1
+  }
+  if (( count == 0 )); then
+    rm -f "$out"
+    return 0
+  fi
+  git -C "$repo" bundle create "$out" "${refs[@]}" --not --remotes 2>/dev/null || {
+    log_warn "bkp: bundle failed in $repo"
+    return 1
+  }
+}
+
+# bkp::project::warn_large <repo> <size-spec>
+# The "about to haul in a 2 GB blob?" tripwire (spec §2 D): flag untracked
+# non-ignored files over the per-root guard. Logged, never silent, never fatal.
+bkp::project::warn_large() {
+  local repo="$1" REPLY
+  bkp::size_bytes "$2" || return 2
+  local limit=$REPLY f size
+  git -C "$repo" ls-files --others --exclude-standard 2>/dev/null |
+    while IFS= read -r f; do
+      size=$(zstat +size "$repo/$f" 2>/dev/null) || continue
+      (( size > limit )) &&
+        log_warn "bkp: large untracked file in $repo: $f ($size bytes > $2)"
+    done
+  return 0
+}
+
+# bkp::project::sidecar <repo> <bundle_unpushed> <warn_size>
+# One repo's history layer: meta.json always, bundle when enabled. Sidecar
+# problems warn but never block the file capture (rc 0).
+bkp::project::sidecar() {
+  local repo="$1" bundle="$2" warn="$3" REPLY
+  bkp::project::id "$repo" || {
+    log_warn "bkp: cannot id repo $repo — skipping sidecar"
+    return 0
+  }
+  local id="$REPLY"
+  mkdir -p "$BKP_WIP_DIR"
+  bkp::project::meta "$repo" > "$BKP_WIP_DIR/$id.meta.json"
+  if [[ "$bundle" == true ]]; then
+    bkp::project::bundle "$repo" "$BKP_WIP_DIR/$id.bundle" || :
+  fi
+  bkp::project::warn_large "$repo" "$warn" || :
+  return 0
 }

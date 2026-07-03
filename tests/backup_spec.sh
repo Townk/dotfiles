@@ -741,4 +741,138 @@ EOF
       The output should equal ok
     End
   End
+
+  Describe 'bkp::project — git history sidecar'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$FIX/gitconfig"
+      printf '[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n' > "$FIX/gitconfig"
+      export BKP_STATE_DIR="$FIX/state" BKP_WIP_DIR="$FIX/state/wip"
+      REPO="$FIX/proj"
+      mkdir -p "$REPO"
+      git -C "$REPO" init -q
+      print pushed > "$REPO/pushed.txt"
+      git -C "$REPO" add pushed.txt
+      git -C "$REPO" commit -qm pushed
+      git clone -q --bare "$REPO" "$FIX/origin.git"
+      git -C "$REPO" remote add origin "$FIX/origin.git"
+      git -C "$REPO" fetch -q origin
+      print unpushed > "$REPO/unpushed.txt"
+      git -C "$REPO" add unpushed.txt
+      git -C "$REPO" commit -qm unpushed
+      print stashme > "$REPO/stash.txt"
+      git -C "$REPO" add stash.txt
+      git -C "$REPO" stash -q
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL BKP_STATE_DIR BKP_WIP_DIR; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'converts size specs to bytes'
+      size() {
+        source "$LIB/backup.zsh"
+        local s
+        for s in 50m 2g 512k 123; do
+          bkp::size_bytes "$s" && print -r -- "$REPLY"
+        done
+      }
+      When run size
+      The line 1 should equal 52428800
+      The line 2 should equal 2147483648
+      The line 3 should equal 524288
+      The line 4 should equal 123
+    End
+
+    It 'derives a stable, name-bearing repo id'
+      rid() { source "$LIB/backup.zsh"; bkp::project::id "$REPO" && print -r -- "$REPLY"; }
+      When run rid
+      The output should match pattern "proj-????????????"
+    End
+
+    It 'bundles only unpushed history (fetchable, includes stash)'
+      bundle() {
+        source "$LIB/backup.zsh"
+        bkp::project::bundle "$REPO" "$FIX/b.bundle" || return 1
+        # The bundle must verify against a clone that has only pushed history…
+        git clone -q "$FIX/origin.git" "$FIX/verify"
+        git -C "$FIX/verify" bundle verify "$FIX/b.bundle" >/dev/null 2>&1 && print verifies
+        # …and fetching it must materialize the unpushed commit + the stash.
+        git -C "$FIX/verify" fetch -q "$FIX/b.bundle" 'refs/*:refs/bkp/*'
+        git -C "$FIX/verify" cat-file -e "$(git -C "$REPO" rev-parse main)" && print has-unpushed
+        git -C "$FIX/verify" cat-file -e "$(git -C "$REPO" rev-parse refs/stash)" && print has-stash
+      }
+      When run bundle
+      The line 1 should equal "verifies"
+      The line 2 should equal "has-unpushed"
+      The line 3 should equal "has-stash"
+    End
+
+    It 'writes no bundle when everything is pushed'
+      nobundle() {
+        source "$LIB/backup.zsh"
+        git -C "$REPO" stash drop -q
+        git -C "$REPO" push -q origin main
+        bkp::project::bundle "$REPO" "$FIX/b.bundle" && print "rc0"
+        [ ! -e "$FIX/b.bundle" ] && print "no-file"
+      }
+      When run nobundle
+      The line 1 should equal "rc0"
+      The line 2 should equal "no-file"
+    End
+
+    It 'meta.json records path, branch, head, remotes, status and stashes'
+      meta() {
+        source "$LIB/backup.zsh"
+        bkp::project::meta "$REPO" | jq -r '
+          .path, .branch, (.head | length),
+          (.remotes | length), (.stashes | length)'
+      }
+      When run meta
+      The line 1 should equal "$REPO"
+      The line 2 should equal "main"
+      The line 3 should equal 40
+      The line 4 should equal 2
+      The line 5 should equal 1
+    End
+
+    It 'flags an untracked file over the per-root guard'
+      warn() {
+        source "$LIB/backup.zsh"
+        dd if=/dev/zero of="$REPO/blob.bin" bs=1024 count=2 2>/dev/null
+        bkp::project::warn_large "$REPO" 1k
+      }
+      When run warn
+      The status should be success
+      The stderr should include "large untracked file"
+      The stderr should include "blob.bin"
+    End
+
+    It 'sidecar writes meta + bundle under BKP_WIP_DIR and never fails capture'
+      sidecar() {
+        source "$LIB/backup.zsh"
+        bkp::project::sidecar "$REPO" true 50m || return 1
+        local REPLY
+        bkp::project::id "$REPO"
+        [ -s "$BKP_WIP_DIR/$REPLY.meta.json" ] && print meta
+        [ -s "$BKP_WIP_DIR/$REPLY.bundle" ] && print bundle
+      }
+      When run sidecar
+      The line 1 should equal "meta"
+      The line 2 should equal "bundle"
+    End
+
+    It 'sidecar honors bundle_unpushed=false (meta only)'
+      nosidecarbundle() {
+        source "$LIB/backup.zsh"
+        bkp::project::sidecar "$REPO" false 50m || return 1
+        local REPLY
+        bkp::project::id "$REPO"
+        [ -s "$BKP_WIP_DIR/$REPLY.meta.json" ] && print meta
+        [ ! -e "$BKP_WIP_DIR/$REPLY.bundle" ] && print no-bundle
+      }
+      When run nosidecarbundle
+      The line 1 should equal "meta"
+      The line 2 should equal "no-bundle"
+    End
+  End
 End
