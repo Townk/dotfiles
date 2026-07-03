@@ -128,6 +128,25 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   zstyle ':fzf-tab:*' group-colors $_hdrs
   unset _wh _hdr _hdrs _i
 
+  # Drop fzf-tab's "·" bullet prefix — the rich renderer prepends a type glyph
+  # in its place (see fzf-tab-rich.zsh, wired below).
+  zstyle ':fzf-tab:*' prefix ''
+
+  # Rich candidates: prepend a colored, per-type glyph to each fzf-tab row.
+  # Lives only in fzf-tab's render path, so the native zsh menu is unaffected.
+  # fzf-tab lazily autoloads its lib funcs, so force -ftb-generate-complist's
+  # real body in before capturing it (a bare capture would grab the stub).
+  if [[ -r "$HOME/.local/lib/fzf-tab-rich.zsh" ]]; then
+    source "$HOME/.local/lib/fzf-tab-rich.zsh"
+    autoload +X -Uz -- -ftb-generate-complist
+    functions[-ftb-generate-complist-orig]=$functions[-ftb-generate-complist]
+    -ftb-generate-complist() {
+      -ftb-generate-complist-orig
+      (( ${FZF_TAB_RICH:-1} )) || return
+      ftb_rich::render
+    }
+  fi
+
   # fzf-flags is appended LAST on fzf-tab's own fzf command line (after its
   # internally computed --height), so it's where we override two things:
   #
