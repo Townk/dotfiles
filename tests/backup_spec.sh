@@ -358,4 +358,71 @@ EOF
       The stderr should include "unparseable manifest"
     End
   End
+
+  Describe 'bkp::manifest — policy mapping'
+    setup_fix() { FIX=$(mktemp -d); }
+    cleanup_fix() { rm -rf "$FIX"; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'converts durations to seconds'
+      dur() {
+        source "$LIB/backup.zsh"
+        local d
+        for d in 30m 24h 7d 2w; do
+          bkp::duration "$d" && print -r -- "$REPLY"
+        done
+      }
+      When run dur
+      The line 1 should equal 1800
+      The line 2 should equal 86400
+      The line 3 should equal 604800
+      The line 4 should equal 1209600
+    End
+
+    It 'rejects a malformed duration'
+      baddur() { source "$LIB/backup.zsh"; bkp::duration 5years; }
+      When run baddur
+      The status should equal 2
+      The stderr should include "bad duration"
+    End
+
+    It 'maps [policy].tiers onto cumulative bands with a terminal yearly tier'
+      tiers() {
+        source "$LIB/backup.zsh"
+        cat > "$FIX/m.toml" <<'EOF'
+[policy]
+tiers = [ {interval="30m", window="24h"}, {interval="6h", window="24h"} ]
+EOF
+        bkp::manifest::thin_policy "$FIX/m.toml"
+      }
+      When run tiers
+      The line 1 should equal "30m 0 86400"
+      The line 2 should equal "6h 86400 172800"
+      The line 3 should equal "year 172800 -"
+    End
+
+    It 'falls back to the default ladder when [policy] is absent'
+      nopolicy() {
+        source "$LIB/backup.zsh"
+        printf 'roots = []\n' > "$FIX/m.toml"
+        # Command substitution strips trailing newlines on both sides,
+        # making the comparison newline-shape-proof.
+        [ "$(bkp::manifest::thin_policy "$FIX/m.toml")" = "$(print -r -- "$BKP_THIN_DEFAULT_POLICY")" ] && print same
+      }
+      When run nopolicy
+      The output should equal "same"
+    End
+
+    It 'rejects an interval with no wall-clock grid'
+      badtier() {
+        source "$LIB/backup.zsh"
+        printf '[policy]\ntiers = [ {interval="42m", window="24h"} ]\n' > "$FIX/m.toml"
+        bkp::manifest::thin_policy "$FIX/m.toml"
+      }
+      When run badtier
+      The status should equal 2
+      The stderr should include "unsupported tier interval"
+    End
+  End
 End

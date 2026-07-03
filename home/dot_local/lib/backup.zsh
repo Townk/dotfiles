@@ -205,3 +205,70 @@ bkp::manifest::chezmoi_excluded() {
   json=$(bkp::manifest::json "$1") || return 2
   jq -e '.exclude_chezmoi_managed != false' <<<"$json" >/dev/null
 }
+
+# bkp::duration <spec>
+# "30m"/"24h"/"7d"/"2w" -> seconds, in REPLY. Sizes ("50m" megabytes) are a
+# different beast — this is time only.
+bkp::duration() {
+  local spec="$1" n="${1%?}"
+  if [[ "$n" != <-> ]]; then
+    log_error "bkp: bad duration '$spec' (want <n>m|h|d|w)"
+    return 2
+  fi
+  case "$spec" in
+    *m) REPLY=$(( n * 60 )) ;;
+    *h) REPLY=$(( n * 3600 )) ;;
+    *d) REPLY=$(( n * 86400 )) ;;
+    *w) REPLY=$(( n * 604800 )) ;;
+    *)
+      log_error "bkp: bad duration '$spec' (want <n>m|h|d|w)"
+      return 2
+      ;;
+  esac
+}
+
+# bkp::thin::grid_for <interval>
+# Map a [policy] tier interval keyword onto a wall-clock grid (REPLY). The
+# thinning engine is grid-based, so only grid-shaped intervals are legal.
+bkp::thin::grid_for() {
+  case "$1" in
+    30m)               REPLY=30m ;;
+    60m | 1h)          REPLY=1h ;;
+    6h)                REPLY=6h ;;
+    12h)               REPLY=12h ;;
+    24h | 1d | daily)  REPLY=day ;;
+    7d | 1w | weekly)  REPLY=week ;;
+    monthly)           REPLY=month ;;
+    yearly)            REPLY=year ;;
+    *)
+      log_error "bkp: unsupported tier interval '$1' (grids: 30m 60m 6h 12h 24h 7d monthly yearly)"
+      return 2
+      ;;
+  esac
+}
+
+# bkp::manifest::thin_policy <file>
+# [policy].tiers -> a bkp::thin policy table. Windows are cumulative age
+# bands; a terminal unbounded yearly tier is always appended so the policy is
+# exhaustive. No [policy].tiers -> the default §5 ladder.
+bkp::manifest::thin_policy() {
+  local json
+  json=$(bkp::manifest::json "$1") || return 2
+  local rows
+  rows=$(jq -r '(.policy.tiers // [])[] | [.interval, .window] | @tsv' <<<"$json")
+  if [[ -z "$rows" ]]; then
+    print -r -- "$BKP_THIN_DEFAULT_POLICY"
+    return 0
+  fi
+  local row interval window grid min=0 max REPLY
+  for row in ${(f)rows}; do
+    interval="${row%%$'\t'*}" window="${row##*$'\t'}"
+    bkp::thin::grid_for "$interval" || return 2
+    grid="$REPLY"
+    bkp::duration "$window" || return 2
+    max=$(( min + REPLY ))
+    print -r -- "$grid $min $max"
+    min=$max
+  done
+  print -r -- "year $min -"
+}
