@@ -502,6 +502,12 @@ local function handle_message(body)
       webview:evaluateJavaScript(
         "window.__setPinned(" .. hs.json.encode({ id = body.id, pinned = pinned, group = group }) .. ")")
     end
+  elseif action == "copy" then
+    -- Ctrl+Y: restore to the clipboard (restore_by_id reinstates the register
+    -- type) and dismiss — but do NOT auto-paste, so a block clip can be `p`'d
+    -- as a block in nvim instead of being pasted charwise into the focused app.
+    history.restore_by_id(body.id)
+    M.hide()
   elseif action == "accept" then
     history.restore_by_id(body.id)
     if body.dismiss then

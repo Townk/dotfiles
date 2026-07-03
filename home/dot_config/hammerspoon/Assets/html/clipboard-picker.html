@@ -42,6 +42,7 @@
       <span><span class="hint-key"><span class="hint-mod">&#x2303;</span>D</span>delete</span>
       <span><span class="hint-key"><span class="hint-mod">&#x2303;</span>P</span><span id="hintPinLabel">pin</span></span>
       <span><span class="hint-key">&#xF0311;</span>paste</span>
+      <span><span class="hint-key"><span class="hint-mod">&#x2303;</span>Y</span>copy</span>
       <span><span class="hint-key"><span class="hint-mod">&#x2303;</span>&#xF0311;</span>keep open</span>
       <span id="hintAltEnter"><span class="hint-key"><span class="hint-mod">&#xF0635;</span>&#xF0311;</span><span id="hintAltEnterLabel">raw</span></span>
     </div>
@@ -415,6 +416,16 @@
       post('acceptPlain', { id: it.id });
     }
 
+    // Ctrl+Y: restore the clip to the clipboard WITH its register type and
+    // dismiss WITHOUT pasting (no auto-Cmd-V) -- so you paste it yourself, e.g.
+    // `p` in nvim to keep a block clip's shape. Unlike Enter, which restores
+    // AND pastes charwise into whatever app is focused.
+    function copyClip() {
+      var it = filtered[selectedIndex];
+      if (!it) return;
+      post('copy', { id: it.id });
+    }
+
     function del() {
       var it = filtered[selectedIndex];
       if (!it) return;
@@ -445,6 +456,7 @@
       if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'k')) { e.preventDefault(); move(-1); return; }
       if (e.ctrlKey && e.key === 'f') { e.preventDefault(); pageMove(1); return; }
       if (e.ctrlKey && e.key === 'b') { e.preventDefault(); pageMove(-1); return; }
+      if (e.ctrlKey && e.key === 'y') { e.preventDefault(); copyClip(); return; }
       if (e.ctrlKey && e.key === 'd') { e.preventDefault(); del(); return; }
       if (e.ctrlKey && e.key === 'p') { e.preventDefault(); pin(); return; }
       if (e.key === 'Escape') { e.preventDefault(); post('dismiss'); return; }
