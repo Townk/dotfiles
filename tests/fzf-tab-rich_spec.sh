@@ -154,5 +154,34 @@ Describe 'fzf-tab-rich.zsh'
       When call print -rn -- "$_ftb_complist[1]"
       The output should include "${_ftb_rich_glyph[function]}"
     End
+
+    # Descriptions: zsh renders "value  -- description"; we drop the "-- " marker
+    # and dim the description. The accept key (field 2) and the compcap key are
+    # rewritten together, so completion still inserts the bare word.
+    It 'dims the description and drops the "-- " marker'
+      _ftb_groups=('alias')
+      _ftb_compcap=("git  -- noglob git${bs}word${nul}git")
+      _ftb_complist=("$(entry '' 'git  -- noglob git' '')")
+      ftb_rich::render
+      When call key_of "$_ftb_complist[1]"
+      The output should not include ' -- '
+      The output should include 'noglob git'
+      The output should include "${_ftb_rich_dim}"
+    End
+
+    It 'still resolves accept after the description recolor'
+      _ftb_groups=('alias')
+      _ftb_compcap=("git  -- noglob git${bs}word${nul}git")
+      _ftb_complist=("$(entry '' 'git  -- noglob git' '')")
+      ftb_rich::render
+      accept() {
+        local choice=$(key_of "$_ftb_complist[1]")
+        local match=${_ftb_compcap[(r)${(b)choice}${bs}*]}
+        local -A vv=("${(@0)${match#*$bs}}")
+        print -rn -- "$vv[word]"
+      }
+      When call accept
+      The output should equal 'git'
+    End
   End
 End

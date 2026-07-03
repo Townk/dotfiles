@@ -49,6 +49,25 @@ typeset -gA _ftb_rich_color=()
   done
 }
 
+# Muted color for the description half of a completion (the value stays default).
+typeset -g _ftb_rich_dim="$(ftb_rich::_esc "${C_ROLE_UI_MUTED:-}")"
+
+# ── description dimming ───────────────────────────────────────────────────────
+# zsh renders a described match as "value<pad>-- description" (-- is the default
+# list-separator). Recolor that into "value   <dim>description<reset>": drop the
+# "-- " marker, and dim the description so it reads as secondary. Sets REPLY.
+# Applied identically to _ftb_complist field 2 AND the matching _ftb_compcap key
+# so fzf-tab's accept/preview lookups (which key on this exact string) still hit.
+ftb_rich::_dim_desc() {
+  emulate -L zsh
+  local s=$1
+  if [[ $s == *' -- '* ]]; then
+    REPLY="${s%% -- *}   ${_ftb_rich_dim}${s#* -- }${FTB_RICH_RESET}"
+  else
+    REPLY=$s
+  fi
+}
+
 # ── classifier ───────────────────────────────────────────────────────────────
 # ftb_rich::classify <group_desc> <filepath> -> sets REPLY to one type token.
 # filepath is realdir+word for path candidates (may be empty).
@@ -116,9 +135,9 @@ ftb_rich::render() {
   # the loop. In zsh a bare `local m` (no assignment), re-run on a later iteration
   # when `m` already exists, PRINTS `m=<value>` to stdout (typeset's "show the
   # parameter" behavior) — which would dump compcap entries onto the terminal.
-  local entry f2 f3 filepath word g c m
+  local entry f2 f3 f1 new_f2 filepath word g c m cc
   local -A v
-  local -a out=() matches types
+  local -a out=() matches types newcc
 
   for entry in $_ftb_complist; do
     f2=${${entry#*$nul}%$nul*}          # accept key (between first & last NUL)
@@ -160,9 +179,24 @@ ftb_rich::render() {
 
     g=${_ftb_rich_glyph[$REPLY]:-$_ftb_rich_glyph[fallback]}
     c=${_ftb_rich_color[$REPLY]:-}
-    out+="${c}${g}${FTB_RICH_RESET}  ${entry}"
+    # Dim the "-- description" half. REPLY is reused by _dim_desc, so read the
+    # glyph/color from it (above) BEFORE this call. Rebuild the entry with the
+    # recolored field 2; field 1 and field 3 are preserved.
+    ftb_rich::_dim_desc "$f2"; new_f2=$REPLY
+    f1=${entry%%$nul*}
+    out+="${c}${g}${FTB_RICH_RESET}  ${f1}${nul}${new_f2}${nul}${f3}"
   done
-
   _ftb_complist=("${(@)out}")
+
+  # Rewrite each compcap key the SAME way so fzf-tab's accept/preview lookups —
+  # which key on the (now recolored) field-2 string — still resolve. Skipped in
+  # degrade mode, which never rewrote field 2 above.
+  (( degrade )) && return 0
+  newcc=()
+  for cc in $_ftb_compcap; do
+    ftb_rich::_dim_desc "${cc%%$bs*}"
+    newcc+="${REPLY}${bs}${cc#*$bs}"
+  done
+  _ftb_compcap=("${(@)newcc}")
   return 0
 }
