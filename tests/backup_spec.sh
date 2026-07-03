@@ -1002,4 +1002,40 @@ EOF
       The output should include "--manifest"
     End
   End
+
+  Describe 'integration smoke — real restic (BKP_SMOKE=1)'
+    Skip if 'BKP_SMOKE != 1 (run: BKP_SMOKE=1 shellspec tests/backup_spec.sh)' \
+      test "${BKP_SMOKE:-0}" != 1
+
+    It 'capture -> thin/forget -> restore round-trips'
+      smoke() {
+        source "$LIB/backup.zsh"
+        FIX=$(mktemp -d)
+        export BKP_STATE_DIR="$FIX/state" BKP_WIP_DIR="$FIX/state/wip"
+        mkdir -p "$FIX/root"
+        print hello > "$FIX/root/f.txt"
+        printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
+        printf '[staging]\npath = "%s/repo"\npassword_command = "echo smoke-pass"\n' "$FIX" > "$FIX/c.toml"
+        run_tick() {  # fresh process per tick: the run-lock is process-lifetime
+          zsh -c 'source "$1/backup.zsh"; bkp::capture::run "$2" "$3"' _ "$LIB" "$FIX/m.toml" "$FIX/c.toml"
+        }
+        run_tick >/dev/null || return 1
+        print world >> "$FIX/root/f.txt"
+        run_tick >/dev/null || return 1
+        RESTIC_REPOSITORY="$FIX/repo" RESTIC_PASSWORD_COMMAND="echo smoke-pass" \
+          restic snapshots --json 2>/dev/null | jq length
+        RESTIC_REPOSITORY="$FIX/repo" RESTIC_PASSWORD_COMMAND="echo smoke-pass" \
+          restic restore latest --target "$FIX/out" --quiet >/dev/null 2>&1
+        cat "$FIX/out$FIX/root/f.txt"
+        rm -rf "$FIX"
+      }
+      When run smoke
+      # 1 when both ticks land in one 30-min cell (thin dropped the older);
+      # 2 in the rare tick-straddles-:00/:30 run. Restore is deterministic.
+      The line 1 should match pattern "[12]"
+      The line 2 should equal "hello"
+      The line 3 should equal "world"
+      The stderr should be defined   # restic/log chatter allowed, not required
+    End
+  End
 End
