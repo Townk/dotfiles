@@ -115,18 +115,13 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   # so every fzf surface matches. `use-fzf-default-opts` is what pulls that in.
   zstyle ':fzf-tab:*' use-fzf-default-opts yes
 
-  # Color the group-header row. fzf-tab draws these itself (it ignores %F{} in
-  # the descriptions format — see the format zstyle above), defaulting to a
-  # fixed rainbow of ANSI + 256-colors that ignores our palette. Pin every group
-  # to the theme's warning accent instead, converted from the palette hex to a
-  # truecolor escape, so headers keep the single amber the native format had.
-  # group-colors indexes per group, so seed enough copies to cover any menu.
-  local _wh=${C_ROLE_STATE_WARNING#\#}
-  local _hdr=$'\x1b['"38;2;$((16#${_wh[1,2]}));$((16#${_wh[3,4]}));$((16#${_wh[5,6]}))m"
-  local -a _hdrs=(); local _i
-  for _i in {1..24}; do _hdrs+=$_hdr; done
-  zstyle ':fzf-tab:*' group-colors $_hdrs
-  unset _wh _hdr _hdrs _i
+  # Neutralize fzf-tab's group color. It's used only to tint the group-header
+  # row — which we hide (`show-group quiet` below) — but it also bleeds into the
+  # candidate + description text. An empty value means no tint, so non-file
+  # candidates render in the terminal's default fg; files keep their list-colors,
+  # and the per-type glyph is the color cue. (Left unset, fzf-tab falls back to a
+  # fixed rainbow that bleeds into candidates.)
+  zstyle ':fzf-tab:*' group-colors ''
 
   # Drop fzf-tab's "·" bullet prefix — the rich renderer prepends a type glyph
   # in its place (see fzf-tab-rich.zsh, wired below).
