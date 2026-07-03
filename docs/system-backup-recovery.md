@@ -18,8 +18,10 @@ No managed file is stored twice, yet everything comes back.
 
 ## 0. What you need
 
-- The **restic repo passphrase**, in 1Password as the `backup-repo` secret
-  (1Password syncs independently of this machine — that is the point).
+- The **restic repo passphrase** — the `BACKUP_REPO_PASSPHRASE` secret,
+  stored in 1Password (1Password syncs independently of this machine — that
+  is the point; locally it materializes as a `~/.config/zsh/secrets.d`
+  slot export).
 - One backup repo: the external SSD (`/Volumes/…/terminal-backup`), the
   OneDrive folder, or — if the machine is alive and only `$HOME` is hurt —
   the local staging repo at `~/.local/state/terminal-backup/repo`.
@@ -94,7 +96,7 @@ Working tree files are already on disk from step 3; this rebuilds each
 ## 7. Re-onboard and resume the schedule
 
 ```sh
-system-onboard                       # secret slots (incl. backup-repo)
+system-onboard                       # secret slots (incl. BACKUP_REPO_PASSPHRASE)
 cp ~/.config/backup/config.toml.example ~/.config/backup/config.toml
 $EDITOR ~/.config/backup/config.toml # staging path + [[target]]s for THIS machine
 system-service sync                  # boots backup-capture / -reconcile / -prune

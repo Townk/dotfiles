@@ -4,7 +4,13 @@
 
 [staging]
 path = "~/.local/state/terminal-backup/repo"
-password_command = "system-secrets get backup-repo"
+# The passphrase lives in the BACKUP_REPO_PASSPHRASE secret slot (declare it
+# once with `system-secrets add BACKUP_REPO_PASSPHRASE`; chezmoi apply
+# materializes it into ~/.config/zsh/secrets.d/slot-*.sh). Sourcing the slot
+# files works from launchd too — no interactive 1Password unlock needed:
+password_command = "zsh -c 'for f in ~/.config/zsh/secrets.d/*.sh(N); do source \"$f\"; done; printf %s \"$BACKUP_REPO_PASSPHRASE\"'"
+# Alternative for interactive use (1Password app unlocked):
+# password_command = "op read 'op://Private/restic backup-repo/password'"
 
 # Replication targets (reconcile): present -> converged, absent -> skipped
 # silently and retried next pass. Same passphrase as staging (one key, so
