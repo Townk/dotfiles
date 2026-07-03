@@ -394,14 +394,17 @@ keybinds clear-defaults=true {
         //                 content area. Rule is intentionally 44
         //                 cells (2 short of the content area) for a
         //                 tucked-in look.
-        //   height  14  — 2 frame rows + 12 content rows: top pad,
+        //   height  13  — 2 frame rows + 11 content rows: top pad,
         //                 title, rule, separator blank, three-line
-        //                 gum prompt (question, blank, "Session:
-        //                 <name>"), gum blank, buttons, gum blank,
-        //                 gum help, bottom pad. The session name on
-        //                 its own line means long ZELLIJ_SESSION_NAME
-        //                 values degrade by wrapping into the bottom
-        //                 pad instead of corrupting the dialog.
+        //                 confirm prompt (question, blank, "Session:
+        //                 <name>"), blank, buttons, blank, hint. The
+        //                 hint now sits flush against the bottom frame
+        //                 row — the input::confirm dialog no longer pads
+        //                 a blank line below the hint (ai-playbook
+        //                 renderFrame change), so this dropped from 14.
+        //                 The session name on its own line means long
+        //                 ZELLIJ_SESSION_NAME values degrade by wrapping
+        //                 rather than corrupting the dialog.
         bind "q" {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
@@ -411,7 +414,7 @@ keybinds clear-defaults=true {
                      "inject" false
                      "script" "zellij-quit-confirm"
                      "width" "50"
-                     "height" "14") }}
+                     "height" "13") }}
         }
 
         // Yank — copy the active pane's cwd to the system clipboard, with a
