@@ -626,6 +626,32 @@ bkp::project::sidecar() {
   return 0
 }
 
+# bkp::config::targets [<file>]
+# TSV per replication target: name\tpath\trole (role: mirror|master,
+# default mirror). Path is ~-expanded. Invalid entries are a config error.
+bkp::config::targets() {
+  local json
+  json=$(bkp::config::json "$@") || return 2
+  jq -r --arg home "$HOME" '
+    (.target // [])[]
+    | if (.name == null or .path == null) then error("missing name/path")
+      elif ((.role // "mirror") | IN("mirror", "master") | not) then error("bad role")
+      else . end
+    | [ .name, (.path | sub("^~"; $home)), (.role // "mirror") ]
+    | @tsv' <<<"$json" 2>/dev/null || {
+    log_error "bkp: invalid [[target]] (need name + path, role mirror|master)"
+    return 2
+  }
+}
+
+# bkp::target::present <path>
+# Present = parent dir exists AND is writable (spec §8). The repo dir itself
+# may not exist yet — first reconcile creates it.
+bkp::target::present() {
+  local parent="${1:h}"
+  [[ -d "$parent" && -w "$parent" ]]
+}
+
 # bkp::restic <repo> <args…>
 # THE storage seam — every restic invocation goes through here (tests stub
 # this function). Repo + passphrase-command via env; the passphrase itself is

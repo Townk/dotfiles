@@ -1003,6 +1003,95 @@ EOF
     End
   End
 
+  Describe 'bkp::config — targets'
+    setup_fix() { FIX=$(mktemp -d); }
+    cleanup_fix() { rm -rf "$FIX"; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'emits name/path/role with mirror default and ~ expansion'
+      tgts() {
+        source "$LIB/backup.zsh"
+        cat > "$FIX/c.toml" <<'EOF'
+[staging]
+path = "~/repo"
+password_command = "echo pw"
+[[target]]
+name = "ssd"
+path = "/Volumes/X/tb"
+role = "master"
+[[target]]
+name = "onedrive"
+path = "~/OneDrive/tb"
+EOF
+        bkp::config::targets "$FIX/c.toml"
+      }
+      When run tgts
+      The line 1 should equal "ssd${TAB}/Volumes/X/tb${TAB}master"
+      The line 2 should equal "onedrive${TAB}$HOME/OneDrive/tb${TAB}mirror"
+    End
+
+    It 'is empty (rc 0) for a staging-only config'
+      none() {
+        source "$LIB/backup.zsh"
+        printf '[staging]\npath = "~/r"\npassword_command = "e"\n' > "$FIX/c.toml"
+        bkp::config::targets "$FIX/c.toml" && print ok
+      }
+      When run none
+      The output should equal "ok"
+    End
+
+    It 'rejects a target without a path'
+      nopath() {
+        source "$LIB/backup.zsh"
+        printf '[[target]]\nname = "ssd"\n' > "$FIX/c.toml"
+        bkp::config::targets "$FIX/c.toml"
+      }
+      When run nopath
+      The status should equal 2
+      The stderr should include "invalid [[target]]"
+    End
+
+    It 'rejects an unknown role'
+      badrole() {
+        source "$LIB/backup.zsh"
+        printf '[[target]]\nname = "s"\npath = "/x"\nrole = "weird"\n' > "$FIX/c.toml"
+        bkp::config::targets "$FIX/c.toml"
+      }
+      When run badrole
+      The status should equal 2
+      The stderr should include "invalid [[target]]"
+    End
+  End
+
+  Describe 'bkp::target::present'
+    setup_fix() { FIX=$(mktemp -d); }
+    cleanup_fix() { chmod -R u+w "$FIX" 2>/dev/null; rm -rf "$FIX"; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'present when the parent exists and is writable'
+      yes() { source "$LIB/backup.zsh"; mkdir -p "$FIX/vol"; bkp::target::present "$FIX/vol/repo" && print present; }
+      When run yes
+      The output should equal "present"
+    End
+    It 'absent when the parent is missing'
+      nodir() { source "$LIB/backup.zsh"; bkp::target::present "$FIX/gone/repo" || print absent; }
+      When run nodir
+      The output should equal "absent"
+    End
+    It 'absent when the parent is not writable'
+      rodir() {
+        source "$LIB/backup.zsh"
+        mkdir -p "$FIX/ro"
+        chmod 555 "$FIX/ro"
+        bkp::target::present "$FIX/ro/repo" || print absent
+      }
+      When run rodir
+      The output should equal "absent"
+    End
+  End
+
   Describe 'integration smoke — real restic (BKP_SMOKE=1)'
     Skip if 'BKP_SMOKE != 1 (run: BKP_SMOKE=1 shellspec tests/backup_spec.sh)' \
       test "${BKP_SMOKE:-0}" != 1
