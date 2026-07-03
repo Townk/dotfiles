@@ -625,3 +625,77 @@ bkp::project::sidecar() {
   bkp::project::warn_large "$repo" "$warn" || :
   return 0
 }
+
+# bkp::restic <repo> <args…>
+# THE storage seam — every restic invocation goes through here (tests stub
+# this function). Repo + passphrase-command via env; the passphrase itself is
+# resolved by restic at exec time and never appears in argv or logs.
+bkp::restic() {
+  local repo="$1"; shift
+  local pwcmd
+  pwcmd=$(bkp::config::password_command) || return 2
+  RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD_COMMAND="$pwcmd" restic "$@"
+}
+
+# bkp::capture::ensure_repo <repo>
+# First-run init. Encrypted by construction: restic init with a passphrase
+# from password_command — there is no unencrypted path through here.
+bkp::capture::ensure_repo() {
+  local repo="$1"
+  bkp::restic "$repo" cat config >/dev/null 2>&1 && return 0
+  log_info "bkp: initializing restic repo at $repo"
+  mkdir -p "$repo"
+  bkp::restic "$repo" init
+}
+
+# bkp::capture::thin <repo> <manifest>
+# Post-capture retention: snapshots -> pure bkp::thin plan -> restic forget.
+# Cheap ref removal only — repack/reclaim is the daily `prune` job (spec §5).
+bkp::capture::thin() {
+  local repo="$1" manifest="$2"
+  local policy snaps plan
+  policy=$(bkp::manifest::thin_policy "$manifest") || return 2
+  snaps=$(bkp::restic "$repo" snapshots --json | bkp::restic::parse_snapshots) || return 2
+  [[ -z "$snaps" ]] && return 0
+  plan=$(print -r -- "$snaps" | bkp::thin "$EPOCHSECONDS" "$policy") || return 2
+  local line
+  local -a drop=()
+  for line in ${(f)plan}; do
+    [[ "$line" == drop$'\t'* ]] && drop+=("${line#drop$'\t'}")
+  done
+  (( ${#drop} )) || return 0
+  bkp::restic "$repo" forget "${drop[@]}"
+}
+
+# bkp::capture::run [<manifest>] [<config>]
+# One capture tick (spec §4): lock -> ensure staging -> git sidecars ->
+# resolve manifest -> restic backup -> thin. Sidecars are written FIRST so
+# the sweep captures them (BKP_WIP_DIR lives under a manifest root).
+bkp::capture::run() {
+  local manifest="${1:-$BKP_MANIFEST}"
+  local BKP_CONFIG="${2:-$BKP_CONFIG}"   # dynamic scope: bkp::restic sees it
+  bkp::lock capture || {
+    log_info "bkp: capture already running — coalescing"
+    return 0
+  }
+  local staging
+  staging=$(bkp::config::staging_path) || return 2
+  bkp::capture::ensure_repo "$staging" || return 1
+
+  local repo bundle warn
+  while IFS=$'\t' read -r repo bundle warn; do
+    [[ -z "$repo" ]] && continue
+    bkp::project::sidecar "$repo" "$bundle" "$warn"
+  done < <(bkp::manifest::repos "$manifest")
+
+  local files_from
+  files_from=$(mktemp "${TMPDIR:-/tmp}/bkp-files.XXXXXX") || return 1
+  {
+    bkp::manifest::files "$manifest" > "$files_from" || return 2
+    bkp::restic "$staging" unlock >/dev/null 2>&1 || :   # stale-lock recovery
+    bkp::restic "$staging" backup --files-from "$files_from" --quiet || return 1
+  } always {
+    rm -f "$files_from"
+  }
+  bkp::capture::thin "$staging" "$manifest"
+}

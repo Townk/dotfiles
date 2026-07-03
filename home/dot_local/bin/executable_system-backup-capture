@@ -1,0 +1,56 @@
+#!/usr/bin/env zsh
+# system-backup-capture — worker: one capture tick into the staging repo.
+#
+# Resolves the manifest (roots − deny − chezmoi-managed − gitignored), writes
+# the git-history sidecars (bundle + meta.json), snapshots everything into the
+# always-present local staging repo, then applies the retention ladder
+# (restic forget; the expensive prune runs as its own daily job).
+#
+# Coalesces under a run-lock: if a capture is already running, this tick
+# exits 0 immediately.
+#
+# Usage:
+#   system-backup-capture [--manifest <file>] [--config <file>]
+
+set -eu -o pipefail
+
+source "${BKP_LIB:-$HOME/.local/lib}/backup.zsh"
+
+usage() {
+  cat <<EOF
+Usage:
+  system-backup-capture [--manifest <file>] [--config <file>]
+
+One capture tick: manifest -> staging restic repo (+ git-history sidecars,
+then retention forget). Defaults: manifest $BKP_MANIFEST, config $BKP_CONFIG.
+EOF
+}
+
+main() {
+  local manifest="$BKP_MANIFEST" config="$BKP_CONFIG"
+  while (( $# )); do
+    case "$1" in
+      --manifest)
+        [[ $# -ge 2 ]] || die "--manifest requires a value"
+        manifest="$2"
+        shift 2
+        ;;
+      --config)
+        [[ $# -ge 2 ]] || die "--config requires a value"
+        config="$2"
+        shift 2
+        ;;
+      -h | --help | help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+  bkp::capture::run "$manifest" "$config"
+}
+
+main "$@"

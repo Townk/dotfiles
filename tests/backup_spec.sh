@@ -904,4 +904,102 @@ EOF
       The output should equal "free"
     End
   End
+
+  Describe 'bkp::capture'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_STATE_DIR="$FIX/state" BKP_WIP_DIR="$FIX/state/wip"
+      mkdir -p "$FIX/root"
+      print data > "$FIX/root/f.txt"
+      printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      printf '#!/bin/sh\nexit 0\n' > "$STUB/chezmoi"
+      chmod +x "$STUB/chezmoi"
+      PATH="$STUB:$PATH"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_WIP_DIR; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    # Recorder stub: logs every bkp::restic call, fakes minimal behavior.
+    # $FIX/has-repo controls `cat config`; snapshots return two same-cell
+    # snapshots so thin must drop the older one.
+    stub_restic() {
+      bkp::restic() {
+        local repo="$1"; shift
+        print -r -- "$repo $*" >> "$FIX/calls"
+        case "$1 ${2:-}" in
+          'cat config')       [ -e "$FIX/has-repo" ] ;;
+          'snapshots --json') printf '%s' '[{"id":"old1","time":"2026-01-02T10:01:00Z"},{"id":"new1","time":"2026-01-02T10:14:00Z"}]' ;;
+          *) return 0 ;;
+        esac
+      }
+    }
+
+    It 'runs the full tick: init -> backup -> forget (drop ids only)'
+      tick() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        grep -c "^$FIX/repo init" "$FIX/calls"
+        grep -c "^$FIX/repo backup --files-from" "$FIX/calls"
+        grep -- forget "$FIX/calls"
+      }
+      When run tick
+      The line 1 should equal 1
+      The line 2 should equal 1
+      The line 3 should equal "$FIX/repo forget old1"
+    End
+
+    It 'skips init when the repo exists'
+      noinit() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        : > "$FIX/has-repo"
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        grep -c init "$FIX/calls" || true
+      }
+      When run noinit
+      The output should equal 0
+    End
+
+    It 'coalesces when the lock is held'
+      held() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::lock capture || return 1
+        zsh -c '
+          source "'"$LIB"'/backup.zsh"
+          bkp::restic() { print -r -- "$@" >> "'"$FIX"'/calls"; }
+          bkp::capture::run "'"$FIX"'/m.toml" "'"$FIX"'/c.toml"
+        ' >/dev/null 2>&1 && print coalesced   # rc 0, log_info chatter silenced
+        [ ! -e "$FIX/calls" ] && print untouched
+      }
+      When run held
+      The line 1 should equal "coalesced"
+      The line 2 should equal "untouched"
+    End
+
+    It 'fails loudly without config'
+      noconf() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::capture::run "$FIX/m.toml" "$FIX/absent.toml"
+      }
+      When run noconf
+      The status should equal 2
+      The stderr should include "config not found"
+    End
+
+    It 'worker --help prints usage without touching restic'
+      whelp() {
+        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" --help
+      }
+      When run whelp
+      The status should be success
+      The output should include "system-backup-capture"
+      The output should include "--manifest"
+    End
+  End
 End
