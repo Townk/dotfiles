@@ -1434,6 +1434,128 @@ EOF
     End
   End
 
+  Describe 'bkp::restore — undoable restores'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml"
+      printf 'roots = []\n' > "$FIX/m.toml"
+      printf '[staging]\npath = "%s/stg"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_CONFIG; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    stub_restic() {
+      bkp::restic() {
+        local repo="$1"; shift
+        print -r -- "$repo $*" >> "$FIX/calls"
+        case "$1 ${2:-}" in
+          'snapshots --json') cat "$FIX/stg.json" 2>/dev/null || printf '[]' ;;
+          *) return 0 ;;
+        esac
+      }
+    }
+
+    It 'refuses to overwrite an existing path without --force'
+      refuse() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        print live > "$FIX/f.txt"
+        bkp::restore::paths abc123 "$FIX/f.txt"
+      }
+      When run refuse
+      The status should equal 3
+      The stderr should include "refusing to overwrite"
+    End
+
+    It 'takes the undo snapshot BEFORE restoring, with --force'
+      order() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        print live > "$FIX/f.txt"
+        bkp::restore::paths abc123 --force "$FIX/f.txt" || return 1
+        awk '/bkp-undo/ {u = NR} /restore/ {r = NR} END {print ((u && r && u < r) ? "undo-first" : "wrong")}' "$FIX/calls"
+        grep -- "restore abc123 --target / --include $FIX/f.txt" "$FIX/calls" >/dev/null && print restored
+      }
+      When run order
+      The line 1 should equal "undo-first"
+      The line 2 should equal "restored"
+    End
+
+    It 'skips the undo snapshot when nothing would be overwritten'
+      fresh() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::restore::paths abc123 "$FIX/new-file.txt" || return 1
+        grep -c "bkp-undo" "$FIX/calls" || true
+      }
+      When run fresh
+      The output should equal 0
+    End
+
+    It 'undo restores the newest bkp-undo snapshot and forgets it'
+      peel() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        printf '%s' '[{"id":"u-old","time":"2026-01-01T09:00:00Z","tags":["bkp-undo"]},{"id":"u-new","time":"2026-01-02T09:00:00Z","tags":["bkp-undo"]}]' > "$FIX/stg.json"
+        bkp::restore::undo || return 1
+        grep -- "restore u-new --target /" "$FIX/calls" >/dev/null && print restored
+        grep -- "forget u-new" "$FIX/calls" >/dev/null && print forgotten
+      }
+      When run peel
+      The line 1 should equal "restored"
+      The line 2 should equal "forgotten"
+    End
+
+    It 'undo with no undo snapshots fails loudly'
+      nothing() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::restore::undo
+      }
+      When run nothing
+      The status should equal 1
+      The stderr should include "nothing to undo"
+    End
+
+    It 'thin excludes undo snapshots from the ladder and expires old ones'
+      isolate() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        local fresh_ts
+        TZ=UTC strftime -s fresh_ts '%Y-%m-%dT%H:%M:%SZ' $(( EPOCHSECONDS - 3600 ))
+        cat > "$FIX/stg.json" <<EOF
+[{"id":"old1","time":"2026-01-02T10:01:00Z"},
+ {"id":"new1","time":"2026-01-02T10:14:00Z"},
+ {"id":"u-stale","time":"2026-01-02T10:20:00Z","tags":["bkp-undo"]},
+ {"id":"u-fresh","time":"$fresh_ts","tags":["bkp-undo"]}]
+EOF
+        bkp::capture::thin "$FIX/stg" "$FIX/m.toml" || return 1
+        local forget
+        forget=$(grep -- forget "$FIX/calls")
+        case "$forget" in
+          *old1*) print drops-old1 ;;
+        esac
+        case "$forget" in
+          *u-stale*) print drops-stale-undo ;;
+        esac
+        case "$forget" in
+          *u-fresh*) print BAD ;;
+          *) print keeps-fresh-undo ;;
+        esac
+        case "$forget" in
+          *new1*) print BAD ;;
+          *) print keeps-new1 ;;
+        esac
+      }
+      When run isolate
+      The line 1 should equal "drops-old1"
+      The line 2 should equal "drops-stale-undo"
+      The line 3 should equal "keeps-fresh-undo"
+      The line 4 should equal "keeps-new1"
+    End
+  End
+
   Describe 'declared backup agents (services.toml.tmpl)'
     TMPL="$SHELLSPEC_PROJECT_ROOT/home/dot_config/packages/services.toml.tmpl"
     no_chezmoi() { ! command -v chezmoi >/dev/null 2>&1; }

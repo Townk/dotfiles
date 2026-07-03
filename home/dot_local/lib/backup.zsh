@@ -677,18 +677,35 @@ bkp::capture::ensure_repo() {
 # bkp::capture::thin <repo> <manifest>
 # Post-capture retention: snapshots -> pure bkp::thin plan -> restic forget.
 # Cheap ref removal only — repack/reclaim is the daily `prune` job (spec §5).
+#
+# bkp-undo safety-net snapshots (pre-restore captures, spec §7) are excluded
+# from the ladder — a one-path undo snapshot must never win a wall-clock cell
+# and displace a full capture. They expire on their own clock instead:
+# forgotten once older than 7 days.
 bkp::capture::thin() {
   local repo="$1" manifest="$2"
-  local policy snaps plan
+  local policy json snaps undo plan
   policy=$(bkp::manifest::thin_policy "$manifest") || return 2
-  snaps=$(bkp::restic "$repo" snapshots --json | bkp::restic::parse_snapshots) || return 2
-  [[ -z "$snaps" ]] && return 0
-  plan=$(print -r -- "$snaps" | bkp::thin "$EPOCHSECONDS" "$policy") || return 2
+  json=$(bkp::restic "$repo" snapshots --json) || return 2
+  snaps=$(print -r -- "$json" |
+    jq '[(. // [])[] | select(((.tags // []) | index("bkp-undo")) | not)]' 2>/dev/null |
+    bkp::restic::parse_snapshots) || return 2
+  undo=$(print -r -- "$json" |
+    jq '[(. // [])[] | select((.tags // []) | index("bkp-undo"))]' 2>/dev/null |
+    bkp::restic::parse_snapshots) || return 2
   local line
   local -a drop=()
-  for line in ${(f)plan}; do
-    [[ "$line" == drop$'\t'* ]] && drop+=("${line#drop$'\t'}")
-  done
+  if [[ -n "$undo" ]]; then
+    for line in ${(f)undo}; do
+      (( EPOCHSECONDS - ${line##*$'\t'} > 604800 )) && drop+=("${line%%$'\t'*}")
+    done
+  fi
+  if [[ -n "$snaps" ]]; then
+    plan=$(print -r -- "$snaps" | bkp::thin "$EPOCHSECONDS" "$policy") || return 2
+    for line in ${(f)plan}; do
+      [[ "$line" == drop$'\t'* ]] && drop+=("${line#drop$'\t'}")
+    done
+  fi
   (( ${#drop} )) || return 0
   bkp::restic "$repo" forget "${drop[@]}"
 }
@@ -960,6 +977,67 @@ bkp::ux::verify() {
     bkp::restic "$tpath" check || rc=1
   done <<<"$targets"
   return $rc
+}
+
+# bkp::restore::undo_snapshot <path…>
+# The pre-restore safety net (spec §7): capture the live state of the paths
+# about to be overwritten, tagged bkp-undo, so a bad restore is one
+# `system-backup undo` away. Excluded from the thin ladder (see thin).
+bkp::restore::undo_snapshot() {
+  local staging
+  staging=$(bkp::config::staging_path) || return 2
+  bkp::restic "$staging" backup --tag bkp-undo --quiet "$@"
+}
+
+# bkp::restore::paths <snapshot> [--force] <path…>
+# Undoable in-place restore: refuses to overwrite existing paths without
+# --force (rc 3); with it, the live state is snapshotted first, then the
+# requested paths are restored from <snapshot>.
+bkp::restore::paths() {
+  local snap="${1:-}"; shift 2>/dev/null || :
+  local force=0
+  [[ "${1:-}" == --force ]] && { force=1; shift }
+  if [[ -z "$snap" ]] || (( $# == 0 )); then
+    log_error "bkp: restore needs a snapshot id and at least one path"
+    return 2
+  fi
+  local staging
+  staging=$(bkp::config::staging_path) || return 2
+  local p
+  local -a live=()
+  for p in "$@"; do
+    [[ -e "$p" || -h "$p" ]] && live+=("$p")
+  done
+  if (( ${#live} && ! force )); then
+    log_error "bkp: refusing to overwrite ${#live} existing path(s) — pass --force (an undo snapshot is taken first)"
+    return 3
+  fi
+  if (( ${#live} )); then
+    bkp::restore::undo_snapshot "${live[@]}" || return 1
+  fi
+  local -a includes=()
+  for p in "$@"; do
+    includes+=(--include "$p")
+  done
+  bkp::restic "$staging" restore "$snap" --target / "${includes[@]}"
+}
+
+# bkp::restore::undo
+# Revert the last restore: restore the newest bkp-undo snapshot in place,
+# then forget it — stacked undos peel one restore at a time.
+bkp::restore::undo() {
+  local staging
+  staging=$(bkp::config::staging_path) || return 2
+  local id
+  id=$(bkp::restic "$staging" snapshots --json --tag bkp-undo |
+    jq -r '[(. // [])[] | select((.tags // []) | index("bkp-undo"))]
+           | sort_by(.time) | last | .id // empty' 2>/dev/null)
+  [[ -n "$id" ]] || {
+    log_error "bkp: nothing to undo"
+    return 1
+  }
+  bkp::restic "$staging" restore "$id" --target / || return 1
+  bkp::restic "$staging" forget "$id"
 }
 
 # bkp::tick [<manifest>] [<config>]
