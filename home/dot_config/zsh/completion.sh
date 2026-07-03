@@ -47,7 +47,10 @@ zstyle ':completion:*' menu no
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|=*' 'l:|=* r:|=*'
 zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
 zstyle ':completion:*' group-name ''
-zstyle ':completion:*:descriptions' format "%F{$C_ROLE_STATE_WARNING}-- %d --%f"
+# No color escapes here: fzf-tab uses this description as the group-header text
+# and prints %F{}/%f literally (README: "don't use escape sequences … fzf-tab
+# will ignore them"). It colors group headers itself via `group-colors` below.
+zstyle ':completion:*:descriptions' format '-- %d --'
 zstyle ':completion:*:warnings' format "%F{$C_ROLE_STATE_ERROR}-- no matches --%f"
 zstyle ':completion:*' completer _complete _match _approximate
 zstyle ':completion:*' use-cache on
@@ -112,6 +115,19 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   # so every fzf surface matches. `use-fzf-default-opts` is what pulls that in.
   zstyle ':fzf-tab:*' use-fzf-default-opts yes
 
+  # Color the group-header row. fzf-tab draws these itself (it ignores %F{} in
+  # the descriptions format — see the format zstyle above), defaulting to a
+  # fixed rainbow of ANSI + 256-colors that ignores our palette. Pin every group
+  # to the theme's warning accent instead, converted from the palette hex to a
+  # truecolor escape, so headers keep the single amber the native format had.
+  # group-colors indexes per group, so seed enough copies to cover any menu.
+  local _wh=${C_ROLE_STATE_WARNING#\#}
+  local _hdr=$'\x1b['"38;2;$((16#${_wh[1,2]}));$((16#${_wh[3,4]}));$((16#${_wh[5,6]}))m"
+  local -a _hdrs=(); local _i
+  for _i in {1..24}; do _hdrs+=$_hdr; done
+  zstyle ':fzf-tab:*' group-colors $_hdrs
+  unset _wh _hdr _hdrs _i
+
   # fzf-flags is appended LAST on fzf-tab's own fzf command line (after its
   # internally computed --height), so it's where we override two things:
   #
@@ -126,7 +142,12 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   #                  40% of the pane — matching the other fzf surfaces.
   #   ctrl-space     fzf-tab's defaults (-ftb-fzf) rebind it to multi-select
   #                  *after* FZF_DEFAULT_OPTS; reclaim it for preview-toggle.
-  zstyle ':fzf-tab:*' fzf-flags --height=~40% --bind=ctrl-space:toggle-preview
+  #   preview-window fzf merges repeated --preview-window flags, and fzf-flags is
+  #                  appended last, so `hidden` starts the completion preview
+  #                  collapsed while keeping the inherited right:60% geometry.
+  #                  ctrl-space reveals it on demand. Scoped to the TAB menu only
+  #                  — Ctrl-T/Ctrl-R/Alt-C keep their preview on by default.
+  zstyle ':fzf-tab:*' fzf-flags --height=~40% --preview-window=hidden --bind=ctrl-space:toggle-preview
 
   # TAB descends into the highlighted directory and re-opens the menu — the
   # equivalent of z4h's `tab:repeat` (fzf-tab's continuous-trigger, default '/').
