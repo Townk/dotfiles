@@ -18,7 +18,11 @@ roots = [
   "~/.ssh",
   "~/Library/LaunchAgents",
   "~/Library/Preferences",
-  "~/Library/Application Support",
+  # Application Support holds app BULK (Steam alone: 122 GB) — capture only
+  # the config-bearing corners, never the whole dir. Missing paths are
+  # skipped, so machine-specific entries are safe to list.
+  "~/Library/Application Support/Code/User",
+  "~/Library/Application Support/JetBrains",
   "~/Projects",
 ]
 
@@ -26,12 +30,16 @@ deny = [
   "~/.cache",
   "~/.local/share/nvim",
   "~/.local/share/mise",
+  "~/.local/share/mlx",                 # downloaded LLM weights (9+ GB, regenerable)
   "~/.local/share/rustup",
   "~/.local/share/uv",
   "~/.local/share/go",
+  "~/.local/share/opencode",
+  "~/.local/share/cargo/registry",      # MISE_CARGO_HOME registry cache
   "~/.cargo/registry",
   "~/.gradle",
   "~/Library/Caches",
+  "~/Library/Application Support/JetBrains/*/plugins",  # ~1 GB/IDE, marketplace-regenerable
   "**/*.sock",
   "**/.DS_Store",
   "**/node_modules/**",

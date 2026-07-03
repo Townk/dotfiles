@@ -645,10 +645,15 @@ EOF
         bkp::manifest::chezmoi_excluded "$MANIFEST" || return 1
         bkp::manifest::roots "$MANIFEST" | grep -c "^$HOME/"
         bkp::manifest::deny "$MANIFEST" | grep -Fc '.cache'
+        # The Application Support BULK trap: never a broad root (Steam et al
+        # live there); only config-bearing subdir roots are allowed.
+        bkp::manifest::roots "$MANIFEST" |
+          grep -c "^$HOME/Library/Application Support$(printf '\t')" || true
       }
       When run shipped
-      The line 1 should equal 8
+      The line 1 should equal 9
       The line 2 should equal 1
+      The line 3 should equal 0
     End
   End
 
