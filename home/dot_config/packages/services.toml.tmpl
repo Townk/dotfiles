@@ -32,19 +32,48 @@
 # reads: a remote `"+p` can't pull the Mac clipboard otherwise.
 #
 # socat listens on loopback TCP 2489 and, on every accepted connection, EXECs
-# a fresh `pbpaste` — so the *live* clipboard is served (a `pbpaste | nc -l`
-# loop snapshots at listen time and serves stale text). `fork` handles
-# concurrent/repeated pastes; the remote reaches it through a user-only unix
-# socket forwarded by SSH (see ~/.ssh/config.d/clipboard.config) and reads it
-# with `nc -U`. macOS only: pbpaste is the source of truth off-host there's
-# nothing to serve.
+# a fresh clipboard-bridge-dispatch — the Phase 5 per-connection handler that
+# speaks a length-prefixed binary framing protocol (get/get-regtype/set/
+# restore/copy/fetch-file; see docs/clipboard-universal-project.md §11). It is
+# backward compatible: an old bare-`nc -U` client that connects and sends
+# nothing hits the dispatcher's short first-byte timeout and falls through to
+# `exec pbpaste`, exactly the pre-Phase-5 behavior, so the *live* clipboard is
+# still served (a `pbpaste | nc -l` loop would snapshot at listen time and
+# serve stale text). `fork` handles concurrent/repeated pastes; the remote
+# reaches it through a user-only unix socket forwarded by SSH (see
+# ~/.ssh/config.d/clipboard.config). macOS only: pbpaste is the source of
+# truth off-host there's nothing to serve.
 [clipboard-bridge]
 description    = "Serve the Mac clipboard to remote nvim over an SSH reverse tunnel"
-cmd            = ["socat", "TCP-LISTEN:2489,bind=127.0.0.1,fork,reuseaddr", "EXEC:/usr/bin/pbpaste"]
+cmd            = ["socat", "TCP-LISTEN:2489,bind=127.0.0.1,fork,reuseaddr", "EXEC:{{ .chezmoi.homeDir }}/.local/libexec/clipboard-bridge-dispatch"]
 keep_alive     = true
 run_at_load    = true
 log_path       = "~/.cache/clipboard-bridge/listener.log"
 error_log_path = "~/.cache/clipboard-bridge/listener.log"
+
+[clipboard-bridge.env]
+# Unlike the old bare-pbpaste target (an absolute path needing nothing), the
+# dispatcher shells out to sqlite3 and hs (rich restore/copy) — neither is on
+# launchd's minimal PATH. Mirror the images-automount PATH so /opt/homebrew/bin
+# (hs) and /usr/bin (sqlite3, pbpaste, pbcopy) resolve.
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
+# clipboard-mirror — receive a laptop's clipboard-history mirror over the SSH
+# StreamLocalForward -L (see ~/.ssh/config.d/clipboard.config). socat listens on
+# a per-user unix socket and EXECs clipboard-mirror-dispatch per connection,
+# which upserts a text+metadata `laptop-ref` row (no blobs) into this host's
+# store. `unlink-early` clears a stale socket from an unclean exit; mode=0600
+# keeps it user-only. macOS only (the store's capture side is Hammerspoon).
+[clipboard-mirror]
+description    = "Receive a laptop's clipboard history mirror over an SSH -L forward"
+cmd            = ["socat", "UNIX-LISTEN:{{ .chezmoi.homeDir }}/.local/state/runtime/chezmoi-system/clipboard-mirror.sock,fork,unlink-early,mode=0600", "EXEC:{{ .chezmoi.homeDir }}/.local/libexec/clipboard-mirror-dispatch"]
+keep_alive     = true
+run_at_load    = true
+log_path       = "~/.cache/clipboard-bridge/mirror.log"
+error_log_path = "~/.cache/clipboard-bridge/mirror.log"
+
+[clipboard-mirror.env]
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
 # images-automount — mount declared sparse images at login. Generic, one-shot
 # (keep_alive=false): runs `system-images mount --all`, which mounts every
