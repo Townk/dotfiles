@@ -1,0 +1,322 @@
+#!/usr/bin/env zsh
+# clipboard-bridge-dispatch — the clipboard-bridge service's per-connection
+# handler (Phase 5, universal-clipboard project spec §11). socat EXECs this
+# once per accepted connection on 127.0.0.1:2489, with the connection's
+# bytes wired to our stdin/stdout — see services.toml.tmpl.
+#
+# Backward compatible with the pre-Phase-5 bridge: the OLD client (`pbpaste`
+# / universal.lua's paste(), both doing a bare `nc -U -w1 <socket>` with NO
+# input) just connects and waits for pbpaste's output. If nothing arrives
+# within LEGACY_GRACE_S, we assume that's what's happening and fall back to
+# dumping pbpaste immediately, unframed — exactly the old behavior. A
+# well-behaved new-protocol client sends its opcode byte the instant it
+# connects, so a real timeout is a reliable signal of "old client", not a
+# slow new one.
+#
+# Wire protocol (new clients only, all multi-byte integers big-endian):
+#   request:  <1 byte opcode><4 bytes length N><N bytes payload>
+#   response: <1 byte status: 'O' ok | 'E' error><4 bytes length N><N bytes payload>
+#
+# Opcodes:
+#   G  get            req: empty                    resp: clipboard text
+#   R  get-regtype    req: empty                     resp: 1 byte v|l|b
+#   T  set (copy)     req: <1 byte regtype><text>    resp: empty
+#      Sets the real pbcopy clipboard AND records {regtype, sha256(text)} so
+#      a later R reflects it — until something else changes the clipboard,
+#      which self-invalidates via the hash compare (see clip::get_regtype).
+#      Used by universal.lua's copy() instead of OSC 52 when bridge-up (no
+#      OSC52-vs-bridge race: this is the only path that sets the clipboard).
+#   S  restore-by-id  req: id (ASCII decimal)        resp: empty | error text
+#   C  copy (rich)    req: <2 bytes uti_len><uti><blob>  resp: empty | error text
+#   F  fetch-file     req: absolute path (UTF-8)     resp: file bytes | error text
+#
+# Rich payload writes (S, C) go through hs.pasteboard.writeAllData via a
+# throwaway generated Lua script run as `hs <file>` (NOT `hs -c`, which hangs
+# on this box — confirmed empirically; see the comment above clip::hs_run).
+# Deliberately does NOT call into the running apps.clipboard-history module
+# via `hs -c`/`hs <file>` for its own state (its `db` upvalue was observed
+# nil from a fresh `hs <file>` invocation despite `package.loaded` already
+# holding the module — likely a stale/duplicate instance from Hammerspoon's
+# selective hot-reload; unconfirmed root cause, not this script's bug to
+# fix). Instead this script talks to the SQLite store directly (same
+# technique pick-clipboard already uses) and only uses `hs.pasteboard.*`
+# core APIs (verified reliable) for the actual pasteboard write.
+
+set -u
+zmodload zsh/system
+
+DB_FILE="${PICK_CLIPBOARD_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/pick-clipboard/history.db}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/pick-clipboard"
+REGTYPE_FILE="$STATE_DIR/current-regtype"
+LEGACY_GRACE_S=0.2
+READ_TIMEOUT_S=5
+
+mkdir -p "$STATE_DIR" 2>/dev/null
+
+# --- byte-level helpers (see the "no base64 needed" note in the project doc:
+# sysread/syswrite handle raw bytes, including embedded NULs, correctly when
+# fed scalar literals directly -- never round-tripped through $(...), which
+# WOULD mangle them) ------------------------------------------------------
+
+# read_n <nbytes> <timeout> -> sets $REPLY to the bytes read (may be short on
+# timeout/EOF; caller checks $REPLY_STATUS: ok|timeout|eof).
+read_n() {
+  local n=$1 timeout=$2
+  local -i got=0
+  REPLY=""
+  REPLY_STATUS="ok"
+  while (( got < n )); do
+    local chunk
+    sysread -s $(( n - got )) -t "$timeout" chunk
+    case $? in
+      0) REPLY+="$chunk"; got+=$#chunk ;;
+      4) REPLY_STATUS="timeout"; return 1 ;;
+      5) REPLY_STATUS="eof"; return 1 ;;
+      *) REPLY_STATUS="error"; return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# be32_to_int <4-byte-scalar> -> prints the decimal value
+#
+# NOTE: `$(( #b[1,1] ))` (ordinal of an inline substring expression) silently
+# computes the wrong thing in zsh arithmetic -- confirmed empirically
+# (returns 0 regardless of the byte's real value). The substring MUST be
+# extracted to its own variable first, then `$(( #var ))` gives the correct
+# ordinal.
+be32_to_int() {
+  local b=$1
+  local c1=${b[1,1]} c2=${b[2,2]} c3=${b[3,3]} c4=${b[4,4]}
+  local -i b1=$(( #c1 )) b2=$(( #c2 )) b3=$(( #c3 )) b4=$(( #c4 ))
+  print -r -- $(( (b1 << 24) | (b2 << 16) | (b3 << 8) | b4 ))
+}
+
+# int_to_be32 <n> -> writes the 4-byte big-endian scalar to $REPLY.
+#
+# NOTE: ${(e)string} does NOT interpret \NNN octal escapes the way $'...'
+# does (confirmed empirically -- it left the literal backslash-digit text
+# untouched). printf's OWN format-string handling of \NNN is standard and
+# reliable, but its result must reach us via a real file descriptor, not
+# $(command substitution), which truncates embedded NULs (relevant here:
+# any byte in a length can legitimately be 0x00). Round-tripping through a
+# small temp file is the verified-safe way to land raw computed bytes in a
+# zsh scalar.
+int_to_be32() {
+  local -i n=$1
+  local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/clipboard-bridge-be32.XXXXXX")
+  printf "\\$(printf %03o $(( (n >> 24) & 255 )))\\$(printf %03o $(( (n >> 16) & 255 )))\\$(printf %03o $(( (n >> 8) & 255 )))\\$(printf %03o $(( n & 255 )))" > "$tmpf"
+  local fd
+  exec {fd}< "$tmpf"
+  sysread -s 4 -i $fd REPLY
+  exec {fd}<&-
+  rm -f "$tmpf"
+}
+
+# send_frame <status-byte> <payload-scalar>
+# NOTE: the local is named stat_byte, not "status" -- zsh's $status is a
+# read-only alias for $? and a `local status=...` errors out immediately
+# ("read-only variable: status"). Confirmed empirically; same class of bug
+# as pick-clipboard's earlier "local path" vs. zsh's special $path array.
+send_frame() {
+  local stat_byte=$1 payload=$2
+  int_to_be32 $#payload
+  syswrite -- "$stat_byte$REPLY$payload"
+}
+
+send_ok()  { send_frame O "${1:-}"; }
+send_err() { send_frame E "$1"; }
+
+# --- op implementations ---------------------------------------------------
+
+# Runs a Lua script file through Hammerspoon. `hs -c` is unreliable here
+# (observed to hang even on trivial code); `hs <file>` is the confirmed-
+# reliable form (see the header comment).
+clip::hs_run() {
+  local script=$1
+  timeout 10 hs "$script" >/dev/null 2>&1
+}
+
+clip::op_get() {
+  local text
+  text="$(pbpaste 2>/dev/null)" || text=""
+  send_ok "$text"
+}
+
+# See the header comment on op T: a hash of the clipboard text at set-time
+# is stored alongside the regtype, so a later get-regtype only trusts it if
+# nothing else has copied since (self-invalidating, no dependency on
+# Hammerspoon's own change-tracking).
+clip::op_get_regtype() {
+  local regtype='v'
+  if [[ -f "$REGTYPE_FILE" ]]; then
+    local stored_rt stored_hash current_hash
+    { read -r stored_rt; read -r stored_hash; } < "$REGTYPE_FILE"
+    current_hash="$(pbpaste 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+    if [[ -n "$stored_rt" && "$stored_hash" == "$current_hash" ]]; then
+      regtype=$stored_rt
+    else
+      # Command substitution strips trailing newlines, so a bare
+      # "$(pbpaste)" can never end in \n even when the real clipboard does
+      # -- append a sentinel after it so the real trailing byte (if any)
+      # isn't the last character being stripped.
+      local sentinel; sentinel="$(pbpaste 2>/dev/null; print -n x)"
+      [[ "$sentinel" == *$'\n''x' ]] && regtype='l' || regtype='v'
+    fi
+  fi
+  send_ok "$regtype"
+}
+
+clip::op_set() {
+  local payload=$1
+  (( $#payload >= 1 )) || { send_err "empty payload"; return }
+  local regtype=${payload[1,1]}
+  local text=${payload[2,-1]}
+  print -rn -- "$text" | pbcopy
+  local h; h="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  print -r -- "$regtype" > "$REGTYPE_FILE"
+  print -r -- "$h" >> "$REGTYPE_FILE"
+  send_ok ""
+}
+
+clip::op_restore() {
+  local id=$1
+  [[ "$id" == <-> ]] || { send_err "invalid id"; return }
+  local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-restore.XXXXXX")
+  local script="$tmpdir/restore.lua"
+  # One uti per row -- sqlite3's row separator is a plain newline (its
+  # -separator flag only affects COLUMN separation within a row), so split
+  # on newlines (zsh's (f) flag), not NUL.
+  local -a rows
+  rows=("${(@f)$(sqlite3 "$DB_FILE" \
+    "SELECT uti FROM clip_types WHERE clip_id=$id;" 2>/dev/null)}")
+  if (( $#rows == 0 )) || [[ -z "${rows[1]}" ]]; then
+    local plain
+    plain="$(sqlite3 "$DB_FILE" "SELECT text_plain FROM clips WHERE id=$id;" 2>/dev/null)"
+    if [[ -n "$plain" ]]; then
+      print -rn -- "$plain" | pbcopy
+      send_ok ""
+    else
+      send_err "clip $id not found"
+    fi
+    rm -rf -- "$tmpdir"
+    return
+  fi
+  # Every uti and blob is written to its OWN file, and the generated Lua
+  # only ever reads file contents -- it never has to embed a uti string (or
+  # binary blob) INTO Lua source syntax, sidestepping any escaping question
+  # entirely (a first attempt embedded the uti as `data[[==[<uti>]==]]`,
+  # which is simply invalid Lua -- `t[X] = v` needs X as an index
+  # expression, and `[[==[...]==]]` reads as nested long-bracket literals,
+  # not one; confirmed by the syntax error running it).
+  {
+    print -r -- "local function readfile(p) local f=io.open(p,'rb'); if not f then return nil end; local c=f:read('*a'); f:close(); return c end"
+    print -r -- "local data = {}"
+    local uti n=0
+    for uti in "${rows[@]}"; do
+      [[ -z "$uti" ]] && continue
+      (( n++ ))
+      local blobfile="$tmpdir/blob$n" utifile="$tmpdir/uti$n"
+      print -rn -- "$uti" > "$utifile"
+      sqlite3 "$DB_FILE" "SELECT writefile('$blobfile', blob) FROM clip_types WHERE clip_id=$id AND uti='$uti';" >/dev/null
+      print -r -- "local u$n, b$n = readfile([[$utifile]]), readfile([[$blobfile]])"
+      print -r -- "if u$n and b$n then data[u$n] = b$n end"
+    done
+    print -r -- "hs.pasteboard.writeAllData(data)"
+  } > "$script"
+  if clip::hs_run "$script"; then
+    send_ok ""
+  else
+    send_err "hs run failed for clip $id"
+  fi
+  rm -rf -- "$tmpdir"
+}
+
+clip::op_copy() {
+  local payload=$1
+  (( $#payload >= 2 )) || { send_err "short payload"; return }
+  local pc1=${payload[1,1]} pc2=${payload[2,2]}
+  local -i uti_len=$(( (#pc1 << 8) | #pc2 ))
+  (( $#payload >= 2 + uti_len )) || { send_err "truncated payload"; return }
+  local uti=${payload[3,2+uti_len]}
+  local blob=${payload[3+uti_len,-1]}
+  local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-copy.XXXXXX")
+  local blobfile="$tmpdir/blob"
+  local fd
+  exec {fd}> "$blobfile"
+  syswrite -o $fd -- "$blob"
+  exec {fd}>&-
+  local utifile="$tmpdir/uti"
+  print -rn -- "$uti" > "$utifile"
+  local script="$tmpdir/copy.lua"
+  {
+    print -r -- "local function readfile(p) local f=io.open(p,'rb'); if not f then return nil end; local c=f:read('*a'); f:close(); return c end"
+    print -r -- "local u, b = readfile([[$utifile]]), readfile([[$blobfile]])"
+    print -r -- "if u and b then hs.pasteboard.writeAllData({[u] = b}) end"
+  } > "$script"
+  if clip::hs_run "$script"; then
+    send_ok ""
+  else
+    send_err "hs run failed"
+  fi
+  rm -rf -- "$tmpdir"
+}
+
+clip::op_fetch_file() {
+  local fpath=$1
+  if [[ ! -r "$fpath" ]]; then
+    send_err "cannot read: $fpath"
+    return
+  fi
+  local bytes; bytes=$(wc -c < "$fpath" | tr -d ' ')
+  local fd
+  exec {fd}< "$fpath"
+  int_to_be32 "$bytes"
+  syswrite -- "O$REPLY"
+  local -i remaining=$bytes
+  while (( remaining > 0 )); do
+    local chunk
+    sysread -s $(( remaining < 65536 ? remaining : 65536 )) -i $fd chunk || break
+    syswrite -- "$chunk"
+    # NOTE: bare `remaining-=$#chunk` is not valid zsh syntax at all (it's
+    # parsed as an attempt to RUN A COMMAND named "remaining-=N", regardless
+    # of `-i` typing -- confirmed empirically). The compound assignment only
+    # works inside arithmetic `(( ))`.
+    (( remaining -= $#chunk ))
+  done
+  exec {fd}<&-
+}
+
+# --- connection handler ----------------------------------------------------
+
+read_n 1 "$LEGACY_GRACE_S"
+if [[ "$REPLY_STATUS" != "ok" ]]; then
+  # Legacy bare-connect client (or a truly empty probe) -- old behavior.
+  exec pbpaste
+fi
+opcode=$REPLY
+
+read_n 4 "$READ_TIMEOUT_S"
+if [[ "$REPLY_STATUS" != "ok" ]]; then
+  exit 0
+fi
+length=$(be32_to_int "$REPLY")
+
+payload=""
+if (( length > 0 )); then
+  read_n "$length" "$READ_TIMEOUT_S"
+  if [[ "$REPLY_STATUS" != "ok" ]]; then
+    exit 0
+  fi
+  payload=$REPLY
+fi
+
+case "$opcode" in
+  G) clip::op_get ;;
+  R) clip::op_get_regtype ;;
+  T) clip::op_set "$payload" ;;
+  S) clip::op_restore "$payload" ;;
+  C) clip::op_copy "$payload" ;;
+  F) clip::op_fetch_file "$payload" ;;
+  *) send_err "unknown opcode" ;;
+esac
