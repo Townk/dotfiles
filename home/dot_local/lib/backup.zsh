@@ -398,3 +398,64 @@ bkp::manifest::repos() {
   setopt local_options pipe_fail
   bkp::manifest::sweep "$1" | awk -F'\t' '$1 == "R" { print $2 "\t" $3 "\t" $4 }'
 }
+
+# ── Capture + Storage ────────────────────────────────────────────────────────
+
+# bkp::time::epoch <rfc3339>
+# RFC3339 -> unix epoch, in REPLY. Pure integer arithmetic (civil-days
+# algorithm) — no strptime, so no platform/TZ variance. Fractional seconds
+# and Z / ±hh:mm / ±hhmm offsets accepted.
+bkp::time::epoch() {
+  local ts="$1"
+  local d="${ts%%T*}" rest="${ts#*T}" time="" off="" sign=""
+  if [[ "$rest" == "$ts" || "$d" != <->-<->-<-> ]]; then
+    log_error "bkp: bad timestamp '$ts'"
+    return 2
+  fi
+  case "$rest" in
+    *Z)  time="${rest%Z}" ;;
+    *+*) time="${rest%+*}" off="${rest##*+}" sign='-' ;;  # east of UTC: subtract
+    *-*) time="${rest%-*}" off="${rest##*-}" sign='+' ;;  # west of UTC: add
+    *)   time="$rest" ;;
+  esac
+  time="${time%%.*}"
+  local -a T=(${(s.:.)time}) D=(${(s:-:)d})
+  if (( ${#T} != 3 )) || [[ "$T[1]$T[2]$T[3]" != <-> ]]; then
+    log_error "bkp: bad timestamp '$ts'"
+    return 2
+  fi
+  local y=$(( 10#$D[1] )) m=$(( 10#$D[2] )) dd=$(( 10#$D[3] ))
+  local offsec=0
+  if [[ -n "$off" ]]; then
+    off="${off//:/}"
+    offsec=$(( 10#${off[1,2]} * 3600 + 10#${off[3,4]:-0} * 60 ))
+  fi
+  local era yoe doy doe days
+  (( m <= 2 )) && (( y-- ))
+  (( era = y / 400 ))
+  (( yoe = y - era * 400 ))
+  (( doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + dd - 1 ))
+  (( doe = yoe * 365 + yoe / 4 - yoe / 100 + doy ))
+  (( days = era * 146097 + doe - 719468 ))
+  REPLY=$(( days * 86400 + 10#$T[1] * 3600 + 10#$T[2] * 60 + 10#$T[3] ))
+  [[ "$sign" == '-' ]] && REPLY=$(( REPLY - offsec ))
+  [[ "$sign" == '+' ]] && REPLY=$(( REPLY + offsec ))
+  return 0
+}
+
+# bkp::restic::parse_snapshots
+# `restic snapshots --json` on stdin -> "<id>\t<epoch>" per line (the
+# bkp::thin input format). A null/empty snapshot list is fine (empty output).
+bkp::restic::parse_snapshots() {
+  local rows
+  rows=$(jq -r '(. // [])[] | [.id, .time] | @tsv' 2>/dev/null) || {
+    log_error "bkp: unparseable snapshot list"
+    return 2
+  }
+  [[ -z "$rows" ]] && return 0
+  local row REPLY
+  for row in ${(f)rows}; do
+    bkp::time::epoch "${row##*$'\t'}" || return 2
+    print -r -- "${row%%$'\t'*}"$'\t'"$REPLY"
+  done
+}

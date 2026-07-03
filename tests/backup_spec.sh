@@ -651,4 +651,45 @@ EOF
       The line 2 should equal 1
     End
   End
+
+  Describe 'bkp::time::epoch'
+    epoch() { source "$LIB/backup.zsh"; bkp::time::epoch "$1" && print -r -- "$REPLY"; }
+
+    It 'parses UTC (Z)'
+      When run epoch "2026-01-02T00:00:00Z"
+      The output should equal 1767312000
+    End
+    It 'parses a negative offset'
+      When run epoch "2026-01-01T17:00:00-07:00"
+      The output should equal 1767312000
+    End
+    It 'parses a positive offset with fractional seconds'
+      When run epoch "2026-01-02T07:30:00.123456+07:30"
+      The output should equal 1767312000
+    End
+    It 'rejects garbage'
+      When run epoch "not-a-time"
+      The status should equal 2
+      The stderr should include "bad timestamp"
+    End
+  End
+
+  Describe 'bkp::restic::parse_snapshots'
+    It 'converts restic snapshot JSON to id/epoch lines'
+      parse() {
+        source "$LIB/backup.zsh"
+        printf '%s' '[{"id":"aaa","time":"2026-01-02T00:00:00Z"},{"id":"bbb","time":"2026-01-01T17:00:00.5-07:00"}]' |
+          bkp::restic::parse_snapshots
+      }
+      When run parse
+      The line 1 should equal "aaa${TAB}1767312000"
+      The line 2 should equal "bbb${TAB}1767312000"
+    End
+    It 'errors on non-JSON input'
+      badparse() { source "$LIB/backup.zsh"; print oops | bkp::restic::parse_snapshots; }
+      When run badparse
+      The status should equal 2
+      The stderr should include "unparseable snapshot list"
+    End
+  End
 End
