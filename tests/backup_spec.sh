@@ -481,4 +481,77 @@ EOF
       The stderr should include "manifest not found"
     End
   End
+
+  Describe 'bkp::manifest — chezmoi filter'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      PATH="$STUB:$PATH"
+      mkdir -p "$FIX/root/mdir"
+      print m > "$FIX/root/managed.txt"
+      print u > "$FIX/root/unmanaged.txt"
+      print m1 > "$FIX/root/mdir/a"
+      print m2 > "$FIX/root/mdir/b"
+      printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
+    }
+    cleanup_fix() { rm -rf "$FIX"; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    stub_chezmoi() {  # stub_chezmoi <line>... — managed-list stub on PATH
+      { printf '#!/bin/sh\n'; printf 'echo "%s"\n' "$@"; } > "$STUB/chezmoi"
+      chmod +x "$STUB/chezmoi"
+    }
+
+    It 'subtracts managed files and keeps unmanaged siblings'
+      subtract() {
+        source "$LIB/backup.zsh"
+        stub_chezmoi "$FIX/root/managed.txt"
+        bkp::manifest::files "$FIX/m.toml" | sort
+      }
+      When run subtract
+      The line 1 should equal "$FIX/root/mdir/a"
+      The line 2 should equal "$FIX/root/mdir/b"
+      The line 3 should equal "$FIX/root/unmanaged.txt"
+      The lines of output should equal 3
+    End
+
+    It 'prunes a fully-managed subtree wholesale'
+      wholesale() {
+        source "$LIB/backup.zsh"
+        stub_chezmoi "$FIX/root/mdir/a" "$FIX/root/mdir/b"
+        bkp::manifest::files "$FIX/m.toml" | sort
+      }
+      When run wholesale
+      The line 1 should equal "$FIX/root/managed.txt"
+      The line 2 should equal "$FIX/root/unmanaged.txt"
+      The lines of output should equal 2
+    End
+
+    It 'over-captures when chezmoi fails (fail-safe)'
+      failsafe() {
+        source "$LIB/backup.zsh"
+        printf '#!/bin/sh\nexit 1\n' > "$STUB/chezmoi"
+        chmod +x "$STUB/chezmoi"
+        bkp::manifest::files "$FIX/m.toml" | sort
+      }
+      When run failsafe
+      The line 1 should equal "$FIX/root/managed.txt"
+      The lines of output should equal 4
+      The stderr should include "over-capturing"
+    End
+
+    It 'skips the subtraction entirely when exclude_chezmoi_managed = false'
+      # grep -c managed.txt counts managed.txt AND unmanaged.txt — 2 means
+      # the managed file was captured despite the stub listing it.
+      disabled() {
+        source "$LIB/backup.zsh"
+        stub_chezmoi "$FIX/root/managed.txt"
+        printf 'exclude_chezmoi_managed = false\nroots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
+        bkp::manifest::files "$FIX/m.toml" | grep -c managed.txt
+      }
+      When run disabled
+      The output should equal 2
+    End
+  End
 End
