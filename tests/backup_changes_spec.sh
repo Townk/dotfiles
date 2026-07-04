@@ -249,4 +249,89 @@ EOF
       The output should equal ""
     End
   End
+
+  Describe 'bkp::ux::changes_cmd'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_CONFIG="$FIX/c.toml"
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      cat > "$FIX/snaps.json" <<'EOF'
+[{"id":"aaaa000000000000000000000000000000000000000000000000000000000000","time":"2026-07-01T10:00:00Z"},
+ {"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
+EOF
+      printf '' > "$FIX/diff.json"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    stub_restic() {
+      bkp::restic() {
+        local repo="$1"; shift
+        print -r -- "$repo $*" >> "$FIX/calls"
+        case "$1" in
+          snapshots) cat "$FIX/snaps.json" ;;
+          diff)      cat "$FIX/diff.json" ;;
+          *) return 0 ;;
+        esac
+      }
+    }
+
+    It 'defaults to previous vs latest and reports no changes'
+      run_it() {
+        source "$LIB/backup.zsh"; stub_restic
+        bkp::ux::changes_cmd "" "" "" ""
+      }
+      When run run_it
+      The status should be success
+      The output should include "no changes"
+      The output should include "aaaa"
+      The output should include "cccc"
+    End
+
+    It 'refuses --since combined with explicit snapshots'
+      run_it() {
+        source "$LIB/backup.zsh"; stub_restic
+        bkp::ux::changes_cmd "yesterday" "aaaa0000" "" ""
+      }
+      When run run_it
+      The status should equal 2
+      The stderr should include "mutually exclusive"
+    End
+
+    It 'diffs restic-side and prints the as-of footer'
+      run_it() {
+        source "$LIB/backup.zsh"; stub_restic
+        printf '{"message_type":"change","path":"/x","modifier":"M"}\n' > "$FIX/diff.json"
+        mkdir -p "$FIX/snaps/aaaa0000" # restore stub materializes nothing -> empty sides
+        bkp::ux::changes_cmd "" "aaaa0000" "cccc0000" "" 2>/dev/null
+      }
+      When run run_it
+      The status should be success
+      The output should include "as of"
+    End
+  End
+
+  Describe 'system-backup dispatcher: changes + diff guard'
+    DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup"
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" BKP_CONFIG="$FIX/c.toml"
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_LIB BKP_CONFIG; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'lists changes in usage'
+      When run zsh "$DISPATCH" --help
+      The output should include "changes"
+    End
+
+    It 'redirects diff on a directory to changes'
+      When run zsh "$DISPATCH" diff "$FIX" aaaa0000
+      The status should equal 2
+      The stderr should include "changes"
+    End
+  End
 End

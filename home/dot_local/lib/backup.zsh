@@ -1411,6 +1411,10 @@ bkp::ux::diff() {
     log_error "bkp: diff needs <path> <snapshotA> [<snapshotB>]"
     return 2
   fi
+  if [[ -d "$p" ]]; then
+    log_error "bkp: '$p' is a directory — use \`system-backup changes [--since <when>] [<snapA> [<snapB>]] $p\`"
+    return 2
+  fi
   local staging
   staging=$(bkp::config::staging_path) || return 2
   local ta tb=""
@@ -1432,6 +1436,73 @@ bkp::ux::diff() {
   } always {
     rm -f "$ta" ${tb:+"$tb"}
   }
+}
+
+# bkp::ux::changes <snapA> <snapB> [<scope>]
+# Render a synthesized changeset: hunk tree-view when available and
+# interactive, else the raw patch through the pager.
+bkp::ux::changes() {
+  local a="$1" b="$2" scope="${3:-/}"
+  local patch
+  patch=$(mktemp "${TMPDIR:-/tmp}/bkp-changes.XXXXXX.patch") || return 1
+  {
+    bkp::changeset::patch "$a" "$b" "$scope" > "$patch" || return $?
+    if [[ ! -s "$patch" ]]; then
+      log_ok "bkp: no changes between ${a[1,8]} and ${b[1,8]}${${scope:#/}:+ under $scope}"
+      return 0
+    fi
+    if command -v hunk >/dev/null 2>&1 && [[ -t 1 ]]; then
+      hunk patch "$patch" || (( $? == 1 ))
+    else
+      ${PAGER:-less} "$patch"
+    fi
+  } always {
+    rm -f "$patch"
+  }
+}
+
+# bkp::ux::changes_cmd <since> <a> <b> <scope>
+# Argument resolution for the changes verb (spec §4): --since resolves to
+# "rung at/before <when> vs latest"; bare = previous vs latest; explicit
+# ids are prefix-expanded. B defaults to the LATEST SNAPSHOT, not live —
+# the footer states the as-of time.
+bkp::ux::changes_cmd() {
+  local since="$1" a="$2" b="$3" scope="${4:-/}"
+  local ladder REPLY
+  ladder=$(bkp::snap::ladder) || return 2
+  [[ -n "$ladder" ]] || { log_error "bkp: no snapshots yet"; return 2 }
+  local -a lines=("${(f)ladder}")
+  local latest="${lines[1]%%$'\t'*}"
+  if [[ -n "$since" ]]; then
+    [[ -z "$a" ]] || { log_error "bkp: --since and explicit snapshots are mutually exclusive"; return 2 }
+    bkp::snap::resolve_since "$since" || return 2
+    a="$REPLY" b="$latest"
+  elif [[ -z "$a" ]]; then
+    (( ${#lines} >= 2 )) || { log_error "bkp: only one snapshot so far — nothing to compare"; return 2 }
+    a="${lines[2]%%$'\t'*}" b="$latest"
+  else
+    bkp::snap::expand "$a" "$ladder" || return 2
+    a="$REPLY"
+    if [[ -n "$b" ]]; then
+      bkp::snap::expand "$b" "$ladder" || return 2
+      b="$REPLY"
+    else
+      b="$latest"
+    fi
+  fi
+  if [[ "$a" == "$b" ]]; then
+    log_ok "bkp: nothing to compare — both sides are ${a[1,8]}"
+    return 0
+  fi
+  bkp::ux::changes "$a" "$b" "$scope" || return $?
+  local line epoch="" when
+  for line in "${lines[@]}"; do
+    [[ "${line%%$'\t'*}" == "$b" ]] && epoch="${line##*$'\t'}"
+  done
+  if [[ -n "$epoch" ]]; then
+    strftime -s when '%Y-%m-%d %H:%M' "$epoch"
+    log_info "bkp: as of $when (snapshot ${b[1,8]}) — run \`system-backup now\` first for up-to-the-second"
+  fi
 }
 
 # bkp::restore::undo_snapshot <path…>

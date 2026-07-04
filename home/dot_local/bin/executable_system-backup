@@ -35,6 +35,8 @@ Usage:
   system-backup list                     snapshots with tier labels
   system-backup browse [--deleted] [p]   Time-Machine browse (httm/fzf)
   system-backup diff <path> <A> [<B>]    file diff across snapshots
+  system-backup changes [--since <when>] [<snapA> [<snapB>]] [path]
+                                         what changed between two points in time
   system-backup restore --snapshot <id> [--force] <path>...
   system-backup restore-project <repo>   reconstruct a git project
   system-backup undo                     revert the last restore
@@ -69,6 +71,19 @@ Usage:
 
 Diff <path> between two snapshots, or between <snapshotA> and the live file
 when <snapshotB> is omitted. Viewed via hunk (fallback: unified diff).
+EOF
+      ;;
+    changes)
+      cat <<'EOF'
+Usage: system-backup changes [--since <when>] [<snapA> [<snapB>]] [path]
+
+Tree-view changeset between two snapshots (hunk), scoped to [path].
+  (no snapshots)   latest snapshot vs the one before it
+  --since <when>   newest snapshot at/before <when> vs the latest
+                   <when>: yesterday | 3h/2d/1w | YYYY-MM-DD | snapshot id
+  <snapA> <snapB>  explicit pair (8+ hex chars each)
+The right side is the LATEST SNAPSHOT (≤30 min stale) — run
+`system-backup now` first for up-to-the-second results.
 EOF
       ;;
     restore)
@@ -161,6 +176,35 @@ main() {
       }
       require_config
       bkp::ux::diff "$@"
+      ;;
+    changes)
+      args_contain_help "$@" && {
+        usage_for changes
+        exit 0
+      }
+      require_config
+      local since="" scope="" a="" b=""
+      while (( $# )); do
+        case "$1" in
+          --since)
+            [[ $# -ge 2 ]] || die "--since requires a value"
+            since="$2"
+            shift 2
+            ;;
+          *)
+            if [[ "$1" =~ '^[0-9a-f]{8,64}$' ]]; then
+              if [[ -z "$a" ]]; then a="$1"
+              elif [[ -z "$b" ]]; then b="$1"
+              else die "too many snapshot ids"
+              fi
+            else
+              scope="${1:A}"
+            fi
+            shift
+            ;;
+        esac
+      done
+      bkp::ux::changes_cmd "$since" "$a" "$b" "$scope"
       ;;
     restore)
       args_contain_help "$@" && {
