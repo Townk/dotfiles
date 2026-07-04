@@ -120,9 +120,81 @@ tm_route() {
   return 0
 }
 
-# Stub — Task 10 replaces tm_apply/tm_confirm_apply.
-tm_apply() { :; }
-tm_confirm_apply() { :; }
+# tm_apply <session> [selected-path…]
+# Assemble the apply selection (spec §6) and open the confirm gate in a
+# floating pane (inline when not under Zellij).
+tm_apply() {
+  setopt local_options pipe_fail
+  local s="$1"; shift 2>/dev/null || :
+  local lens="" REPLY
+  [[ -f "$s/lens" ]] && lens=$(<"$s/lens")
+  bkp::tm::rung_id "$s" || return 1
+  local short="${REPLY[1,8]}"
+  local -a live=()
+  if (( $# )); then
+    local p
+    for p in "$@"; do
+      live+=("${p#$s/mnt/ids/$short}")
+    done
+  elif [[ "$lens" == diff ]]; then
+    local sid="" focus=""
+    sid=$(hunk session list 2>/dev/null |
+      awk -v want="path: $s" '/^[0-9a-f]/ { id = $1 } index($0, want) { print id; exit }')
+    if [[ -n "$sid" ]]; then
+      focus=$(hunk session get "$sid" --json 2>/dev/null | jq -r '.focus.file // empty')
+    fi
+    if [[ -n "$focus" ]]; then
+      live+=("/${focus#/}")
+    else
+      # fallback: multi-pick over the current patch's files
+      local -a picked=()
+      if [[ -f "$s/current.patch" ]]; then
+        picked=("${(@f)$(awk '/^diff --git /{ print $NF }' "$s/current.patch" |
+          sed 's/^b//' | sort -u | fzf --multi --prompt='apply> ')}") || return 0
+      fi
+      (( ${#picked} )) || return 0
+      live+=("${picked[@]}")
+    fi
+  else
+    log_warn "bkp: nothing selected — select in yazi and press R to apply"
+    return 0
+  fi
+  (( ${#live} )) || return 0
+  print -rl -- "${live[@]}" > "$s/apply.list"
+  if [[ -n "${ZELLIJ:-}" ]]; then
+    zellij action new-pane --floating --close-on-exit \
+      --name "" --pinned true --width 70 --height 14 \
+      -- "$HOME/.local/bin/system-backup-tm" confirm-apply "$s"
+  else
+    tm_confirm_apply "$s"
+  fi
+}
+
+# tm_confirm_apply <session>
+# The gate: show the selection, warn (data loss + the bkp-undo safety
+# line), and only on explicit confirmation restore --force from the
+# current rung. The dialog IS the --force consent (spec §6).
+tm_confirm_apply() {
+  setopt local_options pipe_fail
+  local s="$1" REPLY
+  local -a live=()
+  [[ -f "$s/apply.list" ]] && live=("${(@f)$(<"$s/apply.list")}")
+  (( ${#live} )) || return 0
+  bkp::tm::rung_id "$s" || return 1
+  local snap="$REPLY"
+  if [[ "${BKP_TM_ASSUME_YES:-}" != 1 ]]; then
+    source "$HOME/.local/lib/input-common.zsh"
+    local prompt="Restore ${#live} path(s) from snapshot ${snap[1,8]} onto your live filesystem?
+
+$(print -rl -- "${live[@]}" | head -8)
+
+This writes over your live files and can cause data loss.
+Your current state is snapshotted first — \`system-backup undo\` reverts this."
+    input::confirm "$prompt" --title "Apply from the past" --danger \
+      --affirmative "Restore" --negative "Cancel" >/dev/null || return 0
+  fi
+  bkp::restore::paths "$snap" --force "${live[@]}"
+}
 
 main() {
   local verb="${1:-}"

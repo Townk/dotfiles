@@ -302,4 +302,50 @@ EOS
       The contents of file "$FIX/sessions/s.test/rung" should equal 1
     End
   End
+
+  Describe 'apply flow'
+    BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-tm"
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions" BKP_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+      export BKP_CONFIG="$FIX/c.toml" BKP_TM_ASSUME_YES=1
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      S="$FIX/sessions/s.test"; mkdir -p "$S"
+      printf 'cccc000000000000000000000000000000000000000000000000000000000000\t1751500000\t30m\n' > "$S/ladder"
+      printf '1\n' > "$S/rung"
+      printf 'explore\n' > "$S/lens"
+      printf '%s\n' "$FIX/anchor" > "$S/anchor"
+      mkdir -p "$FIX/anchor"
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      # recorder restic: apply must call restore --force via bkp::restore::paths
+      printf '#!/bin/sh\necho "restic $*" >> "%s/restic.calls"\nexit 0\n' "$FIX" > "$STUB/restic"
+      chmod +x "$STUB/restic"
+      PATH="$STUB:$PATH"
+      unset ZELLIJ
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG BKP_TM_ASSUME_YES; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'maps mount-absolute selections to live paths and restores with --force'
+      run_it() {
+        print old > "$FIX/anchor/f.txt"   # live file exists -> undo snapshot fires
+        zsh "$BIN" apply "$S" "$S/mnt/ids/cccc0000$FIX/anchor/f.txt" >/dev/null
+        cat "$S/apply.list"
+        grep -c 'backup --tag bkp-undo' "$FIX/restic.calls"
+        grep -c -- '--include' "$FIX/restic.calls"
+      }
+      When run run_it
+      The line 1 should equal "$FIX/anchor/f.txt"
+      The line 2 should equal 1
+      The line 3 should equal 1
+    End
+
+    It 'does nothing without a selection in the explore lens'
+      When run zsh "$BIN" apply "$S"
+      The status should be success
+      The stderr should include "select in yazi"
+      The file "$S/apply.list" should not be exist
+    End
+  End
 End
