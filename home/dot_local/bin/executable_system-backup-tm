@@ -134,12 +134,18 @@ tm_apply() {
   if (( $# )); then
     local p
     for p in "$@"; do
-      live+=("${p#$s/mnt/ids/$short}")
+      if [[ "$p" == "$s/mnt/ids/$short"/* ]]; then
+        live+=("${p#$s/mnt/ids/$short}")
+      else
+        log_error "bkp: selection is not under the current rung's mount: $p"
+        return 1
+      fi
     done
   elif [[ "$lens" == diff ]]; then
     local sid="" focus=""
     sid=$(hunk session list 2>/dev/null |
-      awk -v want="path: $s" '/^[0-9a-f]/ { id = $1 } index($0, want) { print id; exit }')
+      awk -v want="path: $s" \
+        '/^[0-9a-f]/ { id = $1 } { line = $0; sub(/^[ \t]+/, "", line) } line == want { print id; exit }')
     if [[ -n "$sid" ]]; then
       focus=$(hunk session get "$sid" --json 2>/dev/null | jq -r '.focus.file // empty')
     fi

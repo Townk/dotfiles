@@ -347,5 +347,43 @@ EOS
       The stderr should include "select in yazi"
       The file "$S/apply.list" should not be exist
     End
+
+    It 'rejects a selection outside the current rung mount'
+      When run zsh "$BIN" apply "$S" "/etc/passwd"
+      The status should equal 1
+      The stderr should include "not under the current rung"
+      The file "$S/apply.list" should not be exist
+    End
+
+    It 'routes the diff-lens focus through hunk with an anchored session match'
+      run_it() {
+        printf 'diff\n' > "$S/lens"
+        # hunk recorder: session list carries a prefix-collision decoy
+        # (path: ${S}0) FIRST; only the real session id yields a focus.
+        cat > "$STUB/hunk" <<EOF
+#!/bin/sh
+case "\$1 \$2" in
+  'session list')
+    printf 'deadbeef-0000-0000-0000-000000000000\n'
+    printf '  path: ${S}0\n'
+    printf 'cafecafe-0000-0000-0000-000000000000\n'
+    printf '  path: ${S}\n'
+    ;;
+  'session get')
+    if [ "\$3" = "cafecafe-0000-0000-0000-000000000000" ]; then
+      printf '{"focus":{"file":"tmp-live/f.txt"}}\n'
+    else
+      printf '{}\n'
+    fi
+    ;;
+esac
+EOF
+        chmod +x "$STUB/hunk"
+        zsh "$BIN" apply "$S" >/dev/null
+        cat "$S/apply.list"
+      }
+      When run run_it
+      The output should equal "/tmp-live/f.txt"
+    End
   End
 End
