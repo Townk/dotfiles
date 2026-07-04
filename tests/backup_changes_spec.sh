@@ -110,4 +110,92 @@ EOF
       The stderr should include "aaaa"
     End
   End
+
+  Describe 'bkp::changeset::patch (snapshot pair)'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_CONFIG="$FIX/c.toml"
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      # Fixture snapshot trees: snaps/<id><abs-path>
+      mkdir -p "$FIX/snaps/aaaa/$FIX/home/sub" "$FIX/snaps/bbbb/$FIX/home/sub"
+      print v1   > "$FIX/snaps/aaaa/$FIX/home/f.txt"
+      print v2   > "$FIX/snaps/bbbb/$FIX/home/f.txt"
+      print gone > "$FIX/snaps/aaaa/$FIX/home/sub/del.txt"
+      print new  > "$FIX/snaps/bbbb/$FIX/home/sub/add.txt"
+      # restic diff --json fixture (one line per change, NDJSON)
+      cat > "$FIX/diff.json" <<EOF
+{"message_type":"change","path":"$FIX/home/f.txt","modifier":"M"}
+{"message_type":"change","path":"$FIX/home/sub/del.txt","modifier":"-"}
+{"message_type":"change","path":"$FIX/home/sub/add.txt","modifier":"+"}
+{"message_type":"change","path":"$FIX/home/meta.txt","modifier":"U"}
+{"message_type":"change","path":"$FIX/elsewhere/x.txt","modifier":"M"}
+{"message_type":"statistics","source_snapshot":"aaaa"}
+EOF
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    stub_restic() {
+      bkp::restic() {
+        local repo="$1"; shift
+        print -r -- "$repo $*" >> "$FIX/calls"
+        case "$1" in
+          diff) cat "$FIX/diff.json" ;;
+          restore)
+            local snap="$2" target="" incfile="" p src
+            while (( $# )); do
+              case "$1" in
+                --target) target="$2"; shift 2 ;;
+                --include-file) incfile="$2"; shift 2 ;;
+                *) shift ;;
+              esac
+            done
+            while IFS= read -r p; do
+              src="$FIX/snaps/$snap$p"
+              [ -e "$src" ] || continue
+              mkdir -p "$target${p:h}"
+              cp "$src" "$target$p"
+            done < "$incfile"
+            ;;
+          *) return 0 ;;
+        esac
+      }
+    }
+
+    It 'synthesizes a patch with live-relative a/b labels'
+      run_it() {
+        source "$LIB/backup.zsh"; stub_restic
+        bkp::changeset::patch aaaa bbbb "$FIX/home"
+      }
+      When run run_it
+      The output should include "diff --git a$FIX/home/f.txt b$FIX/home/f.txt"
+      The output should include "+++ b$FIX/home/sub/add.txt"
+      The output should include "--- a$FIX/home/sub/del.txt"
+      The output should not include "meta.txt"
+      The output should not include "elsewhere"
+    End
+
+    It 'emits nothing when the scope has no changes'
+      run_it() {
+        source "$LIB/backup.zsh"; stub_restic
+        bkp::changeset::patch aaaa bbbb "$FIX/nowhere"
+      }
+      When run run_it
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'stubs oversized files and logs the skip'
+      run_it() {
+        source "$LIB/backup.zsh"; stub_restic
+        printf '\n[changes]\nsize_threshold = "1k"\n' >> "$FIX/c.toml"
+        head -c 2048 /dev/urandom > "$FIX/snaps/bbbb/$FIX/home/f.txt"
+        bkp::changeset::patch aaaa bbbb "$FIX/home"
+      }
+      When run run_it
+      The output should include "content skipped"
+      The stderr should include "size threshold"
+    End
+  End
 End

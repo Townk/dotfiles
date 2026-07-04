@@ -592,6 +592,63 @@ bkp::snap::resolve_since() {
   return 2
 }
 
+# --- changeset synthesis (spec 2026-07-04 §3) ---------------------------
+
+# bkp::changeset::guard <workdir> <max-bytes>
+# Replace files above the size threshold (either side) with a small stub so
+# the patch stays light. The stub carries size + cksum so two changed
+# oversized versions still differ; every skip is logged — never silent.
+bkp::changeset::guard() {
+  local work="$1" max="$2" f
+  local -a st
+  for f in "$work"/{a,b}/**/*(.NoN); do
+    zstat -A st +size -- "$f" 2>/dev/null || continue
+    (( st[1] > max )) || continue
+    local sum
+    sum=$(cksum "$f")
+    log_warn "bkp: changes: ${f#$work/[ab]} is $(( st[1] / 1048576 ))MB — over the size threshold, content skipped"
+    print -r -- "[tm] content skipped (over changes.size_threshold): ${st[1]} bytes, cksum ${sum%% *}" > "$f"
+  done
+  return 0
+}
+
+# bkp::changeset::patch <snapA> <snapB> [<scope>]
+# Git-style patch between two snapshots, scoped to <scope> (default /).
+# Only changed files are materialized (restic diff → include-file restore
+# of each side), then `git diff --no-index` from a workdir whose subdirs
+# are literally named a and b — with --src-prefix=/--dst-prefix= the dir
+# names become the conventional a/ b/ labels, already live-relative.
+bkp::changeset::patch() {
+  local a="$1" b="$2" scope="${3:-/}"
+  local staging thresh work
+  staging=$(bkp::config::staging_path) || return 2
+  thresh=$(bkp::config::change_size_threshold) || return 2
+  work=$(mktemp -d "${TMPDIR:-/tmp}/bkp-changes.XXXXXX") || return 1
+  {
+    bkp::restic "$staging" diff --json "$a" "$b" 2>/dev/null |
+      jq -r --arg s "${scope%/}/" 'select(.message_type == "change")
+        | select(.modifier != "U")
+        | select(.path | endswith("/") | not)
+        | select(($s == "/") or (.path | startswith($s)) or (.path == ($s | rtrimstr("/"))))
+        | .path' > "$work/include" || return 1
+    [[ -s "$work/include" ]] || return 0
+    mkdir -p "$work/a" "$work/b"
+    bkp::restic "$staging" restore "$a" --target "$work/a" \
+      --include-file "$work/include" --quiet || return 1
+    bkp::restic "$staging" restore "$b" --target "$work/b" \
+      --include-file "$work/include" --quiet || return 1
+    bkp::changeset::guard "$work" "$thresh"
+    local rc=0
+    ( cd "$work" &&
+      git -c core.quotePath=false diff --no-index \
+        --src-prefix= --dst-prefix= -- a b ) || rc=$?
+    (( rc <= 1 )) || return 1
+    return 0
+  } always {
+    rm -rf "$work"
+  }
+}
+
 BKP_STATE_DIR="${BKP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/terminal-backup}"
 BKP_WIP_DIR="${BKP_WIP_DIR:-$BKP_STATE_DIR/wip}"
 
