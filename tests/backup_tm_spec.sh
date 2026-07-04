@@ -1,0 +1,88 @@
+# backup_tm_spec.sh — tm scrub sessions (spec 2026-07-04 §5-6).
+Describe 'backup-tm.zsh'
+  TAB=$(printf '\t')
+  LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  Describe 'session state + stepping'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export TZ=UTC BKP_CONFIG="$FIX/c.toml" BKP_TM_SESSIONS="$FIX/sessions"
+      export BKP_STATE_DIR="$FIX/state"
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      printf 'roots = []\n' > "$FIX/m.toml"
+      export BKP_MANIFEST="$FIX/m.toml"
+      cat > "$FIX/snaps.json" <<'EOF'
+[{"id":"aaaa000000000000000000000000000000000000000000000000000000000000","time":"2026-07-01T10:00:00Z"},
+ {"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
+EOF
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      printf '#!/bin/sh\necho "ya $*" >> "%s/ya.calls"\n' "$FIX" > "$STUB/ya"
+      chmod +x "$STUB/ya"
+      PATH="$STUB:$PATH"
+      mkdir -p "$FIX/anchor"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_TM_SESSIONS BKP_STATE_DIR BKP_MANIFEST; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    stub_restic() {
+      bkp::restic() {
+        local repo="$1"; shift
+        case "$1 ${2:-}" in
+          'snapshots --json') cat "$FIX/snaps.json" ;;
+          *) return 0 ;;
+        esac
+      }
+    }
+
+    It 'creates a session with ladder, lens, anchor and rung=1'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        local s
+        s=$(bkp::tm::session_new explore "$FIX/anchor") || return 1
+        cat "$s/lens" "$s/rung"
+        head -1 "$s/ladder"
+      }
+      When run run_it
+      The line 1 should equal "explore"
+      The line 2 should equal "1"
+      The line 3 should start with "cccc"
+      The line 3 should match pattern "*[0-9]	*"
+    End
+
+    It 'steps older/newer with clamping and refreshes explore via ya'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        local s
+        s=$(bkp::tm::session_new explore "$FIX/anchor")
+        print -r -- 42 > "$s/yazi.id"
+        mkdir -p "$s/mnt/ids"
+        bkp::tm::step "$s" older; local r1=$(<"$s/rung")
+        bkp::tm::step "$s" older; local r2=$(<"$s/rung")   # clamp at oldest
+        bkp::tm::step "$s" newer; local r3=$(<"$s/rung")
+        print -r -- "$r1 $r2 $r3"
+        cat "$FIX/ya.calls"
+      }
+      When run run_it
+      The line 1 should equal "2 2 1"
+      The line 2 should start with "ya emit-to 42 cd"
+      The line 2 should include "/mnt/ids/aaaa0000"
+    End
+
+    It 'regenerates current.patch for the diff lens on step'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        local s
+        s=$(bkp::tm::session_new diff "$FIX/anchor")
+        # fake mount rung trees for both rungs
+        mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
+        print past > "$s/mnt/ids/aaaa0000$FIX/anchor/f.txt"
+        print now  > "$FIX/anchor/f.txt"
+        bkp::tm::step "$s" older
+        grep -c 'diff --git' "$s/current.patch"
+      }
+      When run run_it
+      The output should equal 1
+    End
+  End
+End
