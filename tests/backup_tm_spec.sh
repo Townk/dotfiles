@@ -431,5 +431,50 @@ EOF
       The output should include "lens"
       The output should include "size=26"
     End
+
+    It 'sanitizes quotes/backslashes out of the tab name (KDL injection)'
+      run_it() {
+        mkdir -p "$FIX/we\"ird"
+        source "$LIB/backup-tm.zsh"; stub_restic
+        bkp::tm::launch explore "$FIX/we\"ird"
+        cat "$FIX/zj.calls"
+      }
+      When run run_it
+      The status should be success
+      The output should include 'tm weird'
+      The output should not include 'we"ird'
+    End
+
+    It 'fallback survives a failing lens under set -e and still tears down'
+      run_it() {
+        printf '#!/bin/sh\nexit 3\n' > "$STUB/bx"
+        chmod +x "$STUB/bx"
+        cat > "$FIX/driver.zsh" <<EOS
+set -eu -o pipefail
+source "$LIB/backup-tm.zsh"
+bkp::restic() {
+  local repo="\$1"; shift
+  case "\$1 \${2:-}" in
+    'snapshots --json') cat "$FIX/snaps.json" ;;
+    *) return 0 ;;
+  esac
+}
+bkp::mount() { mkdir -p "\$2/snapshots"; REPLY=\$\$; }
+bkp::umount() { print umount >> "$FIX/calls"; }
+unset ZELLIJ
+s=\$(bkp::tm::session_new explore "$FIX/anchor")
+bkp::tm::fallback "\$s"
+[[ -d "\$s" ]] && print leaked || print cleaned
+EOS
+        zsh "$FIX/driver.zsh" <<< q
+        cat "$FIX/calls"
+      }
+      When run run_it
+      The status should be success
+      The output should include "cleaned"
+      The output should include "umount"
+      # read -k has no tty here; it degrades to the q path with a complaint
+      The stderr should be defined
+    End
   End
 End

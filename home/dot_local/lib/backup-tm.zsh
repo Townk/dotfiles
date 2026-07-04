@@ -255,8 +255,13 @@ bkp::tm::launch() {
   s=$(bkp::tm::session_new "$lens" "$anchor") || return $?
   if [[ -n "${ZELLIJ:-}" ]]; then
     local bin="$HOME/.local/bin/system-backup-tm"
+    # KDL-sanitize the tab name — a quote/backslash in the anchor's last
+    # component would break out of the layout string.
+    local tail="${anchor:t}"
+    tail="${tail//[\\\"]/}"
+    [[ -n "$tail" ]] || tail="/"
     zellij action new-tab --layout-string "layout {
-    tab name=\"tm ${anchor:t}\" focus=true {
+    tab name=\"tm $tail\" focus=true {
         pane split_direction=\"vertical\" {
             pane size=26 command=\"$bin\" {
                 args \"timeline\" \"$s\"
@@ -271,14 +276,18 @@ bkp::tm::launch() {
     }
 }" || { rm -rf "$s"; return 1 }
   else
-    bkp::tm::fallback "$s"
+    bkp::tm::fallback "$s" || return $?
   fi
 }
 
 # bkp::tm::fallback <session>
 # No-Zellij sequential mode (spec §5.4): lens full-screen, then a keybar —
 # j older / k newer / a apply / q quit — stepping relaunches the lens.
+# The dispatcher runs under set -e; this function manages its own return
+# codes, so err_exit is disabled for its body — otherwise a lens app dying
+# (Ctrl-C) would abort the process before the always-teardown unmounts.
 bkp::tm::fallback() {
+  setopt local_options no_err_exit
   local s="$1" staging pid key REPLY
   staging=$(bkp::config::staging_path) || return 2
   print -r -- $$ > "$s/timeline.pid"
@@ -292,7 +301,7 @@ bkp::tm::fallback() {
       rm -f "$s/respawn"     # fallback relaunches anyway
       local -a cmd
       cmd=("${(@f)$(bkp::tm::lens_cmd "$s")}") || break
-      ( cd "$s" && "${cmd[@]}" )
+      ( cd "$s" && "${cmd[@]}" ) || :
       bkp::tm::rung_line "$s" || break
       local tier="${REPLY##*$'\t'}" rung=""
       [[ -f "$s/rung" ]] && rung=$(<"$s/rung")
@@ -301,9 +310,9 @@ bkp::tm::fallback() {
       read -k 1 key || key=q
       printf '\n'
       case "$key" in
-        j) bkp::tm::step "$s" older ;;
-        k) bkp::tm::step "$s" newer ;;
-        a) "$HOME/.local/bin/system-backup-tm" apply "$s" ;;
+        j) bkp::tm::step "$s" older || : ;;
+        k) bkp::tm::step "$s" newer || : ;;
+        a) "$HOME/.local/bin/system-backup-tm" apply "$s" || : ;;
         *) break ;;
       esac
     done
