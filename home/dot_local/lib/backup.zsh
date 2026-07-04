@@ -667,6 +667,17 @@ bkp::config::targets() {
   }
 }
 
+# bkp::config::change_size_threshold [<file>]
+# [changes].size_threshold (spec 2026-07-04 §3) as bytes on stdout —
+# files larger than this are stubbed out of synthesized changeset patches.
+bkp::config::change_size_threshold() {
+  local json val REPLY
+  json=$(bkp::config::json "$@") || return 2
+  val=$(jq -er '.changes.size_threshold' <<<"$json" 2>/dev/null) || val="5m"
+  bkp::size_bytes "$val" || return 2
+  print -r -- "$REPLY"
+}
+
 # bkp::target::present <path>
 # Present = parent dir exists AND is writable (spec §8). The repo dir itself
 # may not exist yet — first reconcile creates it.
