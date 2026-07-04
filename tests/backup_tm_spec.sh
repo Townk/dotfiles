@@ -266,19 +266,47 @@ EOS
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
-    It 'generates an overlay whose keymap adds the session bindings'
+    It 'generates a parseable overlay keymap (append form, no user array)'
       run_it() {
         source "$LIB/backup-tm.zsh"
         local ovl
         ovl=$(bkp::tm::yazi_overlay "$S")
         [ -L "$ovl/yazi.toml" ] && echo linked
-        grep -c 'prepend_keymap' "$ovl/keymap.toml"
-        grep 'system-backup-tm' "$ovl/keymap.toml" | head -1
+        yq -p toml -o json '.' "$ovl/keymap.toml" | jq -r '.mgr.prepend_keymap | length'
+        grep -c 'system-backup-tm' "$ovl/keymap.toml" > /dev/null && echo has-bindings
       }
       When run run_it
       The line 1 should equal "linked"
       The line 2 should equal 6
-      The line 3 should include "system-backup-tm"
+      The line 3 should equal "has-bindings"
+    End
+
+    It 'injects into an existing [mgr] prepend_keymap array (parseable, ours first)'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        cat > "$FIX/yazicfg/keymap.toml" <<'EOF'
+[mgr]
+prepend_keymap = [
+  { on = "X", run = "noop", desc = "user row" },
+]
+
+[input]
+prepend_keymap = [{ on = "<Esc>", run = "close", desc = "Cancel input" }]
+EOF
+        local ovl
+        ovl=$(bkp::tm::yazi_overlay "$S")
+        local json
+        json=$(yq -p toml -o json '.' "$ovl/keymap.toml") || { echo UNPARSEABLE; return 1 }
+        jq -r '.mgr.prepend_keymap | length' <<<"$json"
+        jq -r '.mgr.prepend_keymap[0].on' <<<"$json"
+        jq -r '.mgr.prepend_keymap[-1].on' <<<"$json"
+        jq -r '.input.prepend_keymap | length' <<<"$json"
+      }
+      When run run_it
+      The line 1 should equal 7
+      The line 2 should equal "K"
+      The line 3 should equal "X"
+      The line 4 should equal 1
     End
 
     It 'binds Shift-Up/Down to the same newer/older steps as K/J'
@@ -294,17 +322,30 @@ EOS
       The line 2 should equal 1
     End
 
-    It 'builds a jailed explore command'
+    It 'builds a jailed explore command (bx exec, session under $HOME)'
       run_it() {
         source "$LIB/backup-tm.zsh"
         print -r -- explore > "$S/lens"
         print -r -- 77 > "$S/yazi.id"
-        bkp::tm::lens_cmd "$S"
+        HOME="$FIX" bkp::tm::lens_cmd "$S"
       }
       When run run_it
       The line 1 should equal "bx"
+      The line 2 should equal "exec"
       The output should include "--client-id"
       The output should include "/mnt/ids/cccc0000"
+    End
+
+    It 'skips the jail when the session lives outside $HOME'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        print -r -- explore > "$S/lens"
+        print -r -- 77 > "$S/yazi.id"
+        HOME="$FIX/elsewhere" bkp::tm::lens_cmd "$S" 2>/dev/null
+      }
+      When run run_it
+      The line 1 should equal "env"
+      The output should not include "bx"
     End
 
     It 'builds the hunk --watch command for the diff lens'

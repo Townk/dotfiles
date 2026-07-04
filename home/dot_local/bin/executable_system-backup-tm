@@ -16,9 +16,15 @@ tm_timeline() {
     bkp::mount "$staging" "$s/mnt" || exit 1
     print -r -- "$REPLY" > "$s/mount.pid"
   fi
+  # Tab/pane close sends HUP (zellij) — flag the session closed so the loop
+  # breaks into the always-teardown instead of dying mid-frame.
+  trap 'touch "$s/closed"' HUP TERM INT
   {
     touch "$s/ready"
-    bkp::tm::refresh "$s" || :
+    # Initial refresh is a diff-lens need (current.patch must exist before
+    # hunk --watch opens). Explore starts at the right rung by argv — an
+    # eager refresh here would race yazi's startup and flag a respawn.
+    [[ "$(<"$s/lens")" == diff ]] && { bkp::tm::refresh "$s" || : }
     local key rest last_rung="" rung height
     while [[ ! -e "$s/closed" ]]; do
       rung=$(<"$s/rung")
@@ -27,7 +33,7 @@ tm_timeline() {
         (( height < 3 )) && height=20
         printf '\e[2J\e[H'
         bkp::tm::timeline_render "$s" "$height"
-        printf '\n%s j/k scrub · a apply · q quit %s' "$C_DIM" "$C_RES"
+        printf '\n%s j/k · a · q %s' "$C_DIM" "$C_RES"
         last_rung="$rung"
       fi
       read -t 1 -k 1 key 2>/dev/null || continue

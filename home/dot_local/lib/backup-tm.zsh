@@ -211,8 +211,11 @@ bkp::tm::timeline_render() {
 
 # bkp::tm::yazi_overlay <session>
 # YAZI_CONFIG_HOME for explore sessions: the user's config (symlinked)
-# plus generated scrub bindings appended as prepend_keymap (prepend wins
-# over the base keymap regardless of position in the file).
+# plus generated scrub bindings. When the user keymap already defines
+# `prepend_keymap = [` under [mgr], the bindings are INJECTED at the head
+# of that array — TOML forbids re-defining the key as [[mgr.prepend_keymap]]
+# afterwards (yazi refuses to boot on the parse error). Without one, the
+# table-array form is appended.
 #   K / J           timeline newer / older (parent-arrow muscle memory)
 #   Shift-Up/Down   same step, native yazi binding (works outside Zellij too)
 #   R               restore selection to the live filesystem (gated apply flow)
@@ -223,42 +226,44 @@ bkp::tm::yazi_overlay() {
   for f in yazi.toml init.lua package.toml plugins flavors; do
     [[ -e "$src/$f" ]] && ln -sfn "$src/$f" "$ovl/$f"
   done
-  {
-    [[ -f "$src/keymap.toml" ]] && cat "$src/keymap.toml"
-    cat <<EOF
-
-# --- tm scrub session bindings (generated; spec 2026-07-04 §5.2/§6) ---
-[[mgr.prepend_keymap]]
-on = "K"
-run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s newer"'
-desc = "tm: newer snapshot"
-
-[[mgr.prepend_keymap]]
-on = "J"
-run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s older"'
-desc = "tm: older snapshot"
-
-[[mgr.prepend_keymap]]
-on = "<S-Up>"
-run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s newer"'
-desc = "tm: newer snapshot"
-
-[[mgr.prepend_keymap]]
-on = "<S-Down>"
-run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s older"'
-desc = "tm: older snapshot"
-
-[[mgr.prepend_keymap]]
-on = "R"
-run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm apply $s \"\$@\""'
-desc = "tm: restore selection to live filesystem"
-
-[[mgr.prepend_keymap]]
-on = "q"
-run = [ 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s end"', "quit" ]
-desc = "tm: end scrub session"
-EOF
-  } > "$ovl/keymap.toml"
+  local bin='$HOME/.local/bin/system-backup-tm'
+  # One row per binding, inline-table form (also reused for the appended form).
+  local -a rows=(
+    "  { on = \"K\", run = 'shell --orphan \"$bin ctl $s newer\"', desc = \"tm: newer snapshot\" },"
+    "  { on = \"J\", run = 'shell --orphan \"$bin ctl $s older\"', desc = \"tm: older snapshot\" },"
+    "  { on = \"<S-Up>\", run = 'shell --orphan \"$bin ctl $s newer\"', desc = \"tm: newer snapshot\" },"
+    "  { on = \"<S-Down>\", run = 'shell --orphan \"$bin ctl $s older\"', desc = \"tm: older snapshot\" },"
+    "  { on = \"R\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
+    "  { on = \"q\", run = [ 'shell --orphan \"$bin ctl $s end\"', \"quit\" ], desc = \"tm: end scrub session\" },"
+  )
+  print -rl -- "${rows[@]}" > "$ovl/.rows"
+  if [[ -f "$src/keymap.toml" ]] &&
+     awk '/^\[mgr\]/ { m = 1; next }
+          /^\[/ { m = 0 }
+          m && /^prepend_keymap = \[/ { found = 1 }
+          END { exit !found }' "$src/keymap.toml"; then
+    # Inject at the head of the existing [mgr] prepend_keymap array.
+    awk -v rf="$ovl/.rows" '
+      /^\[mgr\]/ { m = 1 }
+      /^\[/ && !/^\[mgr\]/ { m = 0 }
+      { print }
+      m && !done && /^prepend_keymap = \[/ {
+        while ((getline row < rf) > 0) print row
+        close(rf)
+        done = 1
+      }' "$src/keymap.toml" > "$ovl/keymap.toml"
+  else
+    {
+      [[ -f "$src/keymap.toml" ]] && cat "$src/keymap.toml"
+      print -r -- ""
+      print -r -- "# --- tm scrub session bindings (generated; spec 2026-07-04 §5.2/§6) ---"
+      print -r -- "[mgr]"
+      print -r -- "prepend_keymap = ["
+      print -rl -- "${rows[@]}"
+      print -r -- "]"
+    } > "$ovl/keymap.toml"
+  fi
+  rm -f "$ovl/.rows"
   print -r -- "$ovl"
 }
 
@@ -277,10 +282,13 @@ bkp::tm::lens_cmd() {
   local rung="$REPLY" ovl yid
   ovl=$(bkp::tm::yazi_overlay "$s") || return 1
   yid=$(<"$s/yazi.id")
-  if command -v bx >/dev/null 2>&1; then
-    print -rl -- bx "$s/mnt" --
+  # `bx exec <dir> -- cmd` is bx's arbitrary-command jail; bx only accepts
+  # workdirs inside $HOME (sessions live under ~/.local/state, so this only
+  # skips the jail for a relocated BKP_TM_SESSIONS).
+  if command -v bx >/dev/null 2>&1 && [[ "$s" == "$HOME"/* ]]; then
+    print -rl -- bx exec "$s/mnt" --
   else
-    log_warn "bkp: bx not installed — explore runs unjailed (mount is still read-only)"
+    log_warn "bkp: no usable bx jail — explore runs unjailed (mount is still read-only)"
   fi
   print -rl -- env "YAZI_CONFIG_HOME=$ovl" yazi --client-id "$yid" "$rung$anchor"
 }
