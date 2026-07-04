@@ -1,0 +1,41 @@
+{{- /*
+
+  pinentry-touchid backend repair — idempotent, runs every apply.
+
+  gpg-agent.conf points `pinentry-program` at our pinentry-auto wrapper, which
+  dispatches to pinentry-touchid. pinentry-touchid does NOT render the prompt
+  itself: it delegates to pinentry-mac, located by asking `gpgconf` for the
+  pinentry path. gpgconf returns GnuPG's compiled-in default — the symlink
+  $HOMEBREW_PREFIX/opt/pinentry/bin/pinentry — NOT the pinentry-program override.
+
+  That symlink is owned by the Homebrew `pinentry` formula (curses), a dependency
+  of gnupg/gpgme/pinentry-touchid. Every `brew upgrade`/reinstall of `pinentry`
+  resets it to pinentry-curses, so pinentry-touchid resolves the wrong backend,
+  refuses to run, and gpg reports "signing failed: Operation cancelled".
+
+  `pinentry-touchid -fix` repoints that symlink to pinentry-mac. It must re-run on
+  every apply (not run_onchange) because a bare `brew upgrade` can clobber the
+  symlink without touching any chezmoi-managed source. `-check` is the idempotent
+  probe: exit 0 when already correct, so steady-state applies stay silent.
+*/ -}}
+#!/bin/sh
+set -eu
+
+{{- if eq .chezmoi.os "darwin" }}
+if ! command -v pinentry-touchid >/dev/null 2>&1; then
+  exit 0
+fi
+
+if pinentry-touchid -check >/dev/null 2>&1; then
+  exit 0
+fi
+
+echo "pinentry-touchid: backend pinentry is not pinentry-mac; repairing symlink" >&2
+if pinentry-touchid -fix >/dev/null 2>&1 && pinentry-touchid -check >/dev/null 2>&1; then
+  echo "pinentry-touchid: backend repaired -> pinentry-mac" >&2
+else
+  echo "pinentry-touchid: could not repair backend; run 'pinentry-touchid -fix' manually" >&2
+fi
+{{- end }}
+
+# vim:ft=sh

@@ -5,19 +5,46 @@
 # in a minimal, non-interactive environment, and all it does is branch and exec
 # another binary — there is nothing here that warrants a shell dependency.
 #
-# gpg forwards $PINENTRY_USER_DATA from the client into this process via the
-# agent. Interactive shells export USE_CURSES=1 when remote (see
-# dot_config/zsh/environment.sh), so GPG passphrase prompts raised during an
-# SSH/mosh session land on the session tty instead of an invisible GUI dialog
-# on the (locked, possibly headless) Mac.
+# Three ways this Mac is driven, three different pinentries:
 #
-# Locally PINENTRY_USER_DATA is unset, so we hand off to pinentry-touchid: it
-# unlocks the keychain entry with Touch ID and, when Touch ID isn't usable
-# (lid closed, no Touch ID keyboard) or the key isn't cached yet, falls back to
-# the pinentry-mac GUI on its own. pinentry-touchid does NOT honor USE_CURSES
-# (jorgelbg/pinentry-touchid#26), which is exactly why this dispatcher has to
-# route the remote case before ever reaching it.
+#   SSH      -> pinentry-curses   prompt on the session tty
+#   VNC      -> pinentry-mac      GUI dialog on the Aqua desktop being viewed
+#   physical -> pinentry-touchid  Touch ID (own fallback to pinentry-mac)
+#
+# SSH is detected client-side: interactive shells export USE_CURSES=1 when
+# remote (see dot_config/zsh/environment.sh) and gpg forwards $PINENTRY_USER_DATA
+# through the agent to us. It must be done there, not here, because gpg-agent's
+# environment has no SSH_CONNECTION to test. pinentry-touchid also does NOT honor
+# USE_CURSES (jorgelbg/pinentry-touchid#26), so this branch must come first.
+#
+# VNC vs. physical is decided here, because at the shell level a Screen Sharing
+# session is indistinguishable from sitting at the machine — both are the console
+# user in the same Aqua session — and because the state can change (connect /
+# disconnect) independently of any shell. The one thing a VNC viewer has that a
+# person at the keyboard does not is a live inbound connection on the Screen
+# Sharing port, so we probe for that fresh on every invocation. It matters
+# because Touch ID cannot be satisfied by a remote viewer (no reachable sensor);
+# pinentry-touchid then returns "Operation cancelled" instead of falling back, so
+# VNC has to be routed to the pinentry-mac GUI, which renders on the very desktop
+# the viewer is looking at.
+
+# viewing_over_vnc — true when a macOS Screen Sharing (VNC) client is currently
+# attached. $4 is the local-address column of `netstat -an`; matching the port
+# there (not anywhere on the line) avoids a false positive when this Mac is
+# itself a VNC *client* of another host.
+viewing_over_vnc() {
+  /usr/sbin/netstat -an -p tcp 2>/dev/null | /usr/bin/awk '
+    $4 ~ /\.5900$/ && $NF == "ESTABLISHED" { found = 1 }
+    END { exit found ? 0 : 1 }
+  '
+}
+
 case "${PINENTRY_USER_DATA:-}" in
   *USE_CURSES*) exec /opt/homebrew/bin/pinentry-curses "$@" ;;
 esac
+
+if viewing_over_vnc; then
+  exec /opt/homebrew/bin/pinentry-mac "$@"
+fi
+
 exec /opt/homebrew/bin/pinentry-touchid "$@"
