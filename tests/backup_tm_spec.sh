@@ -174,6 +174,24 @@ EOF
       The line 4 should include "2026"
     End
 
+    It 'renders the highlighted current rung under set -u with styling on'
+      run_it() {
+        # tty styling makes the highlight/pad branch run; set -u is what
+        # the real worker runs under — this combination once crashed with
+        # ": parameter not set" (zsh (l::) pad on an empty param name).
+        zsh -c '
+          set -u -o pipefail
+          source "'"$LIB"'/backup-tm.zsh"
+          C_RES=$(printf "\e[0m")
+          bkp::tm::timeline_render "'"$S"'" 20 24 1 > /dev/null
+        '
+        print -r -- "rc=$?"
+      }
+      When run run_it
+      The output should equal "rc=0"
+      The stderr should equal ""
+    End
+
     It 'windows long ladders around the current rung'
       run_it() {
         source "$LIB/backup-tm.zsh"

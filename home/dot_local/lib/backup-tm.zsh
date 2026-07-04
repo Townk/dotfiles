@@ -220,11 +220,11 @@ bkp::tm::timeline_render() {
     if (( i == cur )) && [[ -n "$bg" ]]; then
       vis=$(( 3 + ${#date_s} ))
       pad=""
-      (( width > vis )) && pad="${(l:$(( width - vis )):: :)}"
+      (( width > vis )) && pad="${(l:$(( width - vis )):: :):-}"
       r1="${bg} ${gc}●${C_RES}${bg} ${date_s}${pad}${C_RES}"
       vis=$(( 3 + ${#time_s} ))
       pad=""
-      (( width > vis )) && pad="${(l:$(( width - vis )):: :)}"
+      (( width > vis )) && pad="${(l:$(( width - vis )):: :):-}"
       r2="${bg} ${gc}┃${C_RES}${bg} ${time_s}${pad}${C_RES}"
     else
       r1=" ${gc}●${C_RES} ${date_s}"
