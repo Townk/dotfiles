@@ -25,7 +25,10 @@ tm_timeline() {
     # hunk --watch opens). Explore starts at the right rung by argv — an
     # eager refresh here would race yazi's startup and flag a respawn.
     [[ "$(<"$s/lens")" == diff ]] && { bkp::tm::refresh "$s" || : }
-    local key rest last_rung="" rung height
+    local key rest last_rung="" rung height interactive=1
+    # No tty on stdin (headless run): read would return instantly on EOF
+    # forever — wait on the closed flag instead of busy-polling keys.
+    [[ -t 0 ]] || interactive=0
     while [[ ! -e "$s/closed" ]]; do
       rung=$(<"$s/rung")
       if [[ "$rung" != "$last_rung" ]]; then
@@ -35,6 +38,10 @@ tm_timeline() {
         bkp::tm::timeline_render "$s" "$height"
         printf '\n%s j/k · a · q %s' "$C_DIM" "$C_RES"
         last_rung="$rung"
+      fi
+      if (( ! interactive )); then
+        sleep 1
+        continue
       fi
       read -t 1 -k 1 key 2>/dev/null || continue
       case "$key" in

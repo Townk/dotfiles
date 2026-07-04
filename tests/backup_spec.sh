@@ -1964,13 +1964,17 @@ JSON
         chmod +x "$STUB/restic"
         printf 'roots = []\n' > "$FIX/m.toml"
         mkdir -p "$FIX/anchor"
-        PATH="$STUB:$PATH" BKP_HAS_FUSE=1 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" ZELLIJ=1 \
+        printf '#!/bin/sh\necho "tm $*" >> "%s/tm.calls"\n' "$FIX" > "$STUB/system-backup-tm"
+        chmod +x "$STUB/system-backup-tm"
+        PATH="$STUB:$PATH" BKP_HAS_FUSE=1 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" \
+          BKP_TM_BIN="$STUB/system-backup-tm" ZELLIJ=1 \
           zsh "$DISPATCH" browse "$FIX/anchor"
-        cat "$FIX/zj.calls"
+        cat "$FIX/zj.calls" "$FIX/tm.calls"
       }
       When run run_it
       The status should be success
-      The output should include "action new-tab"
+      The output should include "run --close-on-exit --direction right"
+      The output should include "tm timeline"
     End
 
     It 'browse launches a zellij scrub session tab for a diff dir anchor without FUSE'
@@ -1985,13 +1989,17 @@ JSON
         chmod +x "$STUB/restic"
         printf 'roots = []\n' > "$FIX/m.toml"
         mkdir -p "$FIX/anchor"
-        PATH="$STUB:$PATH" BKP_HAS_FUSE=0 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" ZELLIJ=1 \
+        printf '#!/bin/sh\necho "tm $*" >> "%s/tm.calls"\n' "$FIX" > "$STUB/system-backup-tm"
+        chmod +x "$STUB/system-backup-tm"
+        PATH="$STUB:$PATH" BKP_HAS_FUSE=0 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" \
+          BKP_TM_BIN="$STUB/system-backup-tm" ZELLIJ=1 \
           zsh "$DISPATCH" browse --diff "$FIX/anchor"
-        cat "$FIX/zj.calls"
+        cat "$FIX/zj.calls" "$FIX/tm.calls"
       }
       When run run_it
       The status should be success
-      The output should include "action new-tab"
+      The output should include "run --close-on-exit --direction right"
+      The output should include "tm timeline"
     End
   End
 

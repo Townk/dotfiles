@@ -267,10 +267,49 @@ bkp::tm::yazi_overlay() {
   print -r -- "$ovl"
 }
 
+# bkp::tm::jail_profile <session>
+# Seatbelt allowlist profile for the explore lens, written to <s>/jail.sb;
+# prints the path. Semantics (spec §5.3): the OS runs normally
+# (allow default), but $HOME and /Volumes are unreadable EXCEPT the
+# session, the mount, yazi's own config/state/cache, and the backup
+# tooling the session bindings shell out to; writes are confined to
+# temp dirs, yazi state/cache, and the session's control files.
+# Seatbelt matches RESOLVED paths — $TMPDIR must be realpath'd
+# (/var/folders → /private/var/folders) or its allows never match.
+bkp::tm::jail_profile() {
+  local s="$1" t
+  t=$(cd "${TMPDIR:-/tmp}" && pwd -P) || t=/tmp
+  cat > "$s/jail.sb" <<EOF
+(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write*
+  (subpath "$t") (subpath "/private/tmp") (subpath "/dev")
+  (subpath "$s")
+  (subpath "$HOME/.local/state/yazi") (subpath "$HOME/.cache/yazi"))
+(deny file-read* (subpath "$HOME") (subpath "/Volumes"))
+(allow file-read-metadata
+  (literal "/Users") (literal "$HOME")
+  (literal "$HOME/.config") (literal "$HOME/.cache")
+  (literal "$HOME/.local") (literal "$HOME/.local/state")
+  (literal "$HOME/.local/state/terminal-backup")
+  (literal "${BKP_TM_SESSIONS}"))
+(allow file-read*
+  (subpath "$s")
+  (subpath "$HOME/.config/yazi") (subpath "$HOME/.config/backup")
+  (subpath "$HOME/.local/state/yazi") (subpath "$HOME/.cache/yazi")
+  (subpath "$HOME/.cache/theme")
+  (subpath "$HOME/.local/lib") (subpath "$HOME/.local/bin")
+  (subpath "$t") (subpath "/private/tmp"))
+EOF
+  print -r -- "$s/jail.sb"
+}
+
 # bkp::tm::lens_cmd <session>
 # The lens pane argv, one element per line (caller reads into an array).
-# Explore: yazi under the bx Seatbelt jail scoped to the mount (read-only
-# by construction; bx blocks navigating out). Diff: hunk in watch mode.
+# Explore: yazi under a native sandbox-exec jail (bx was a denylist-model
+# editor launcher that scanned the FUSE mount at startup — wrong tool).
+# Diff: hunk in watch mode.
 bkp::tm::lens_cmd() {
   local s="$1" lens anchor REPLY
   lens=$(<"$s/lens") anchor=$(<"$s/anchor")
@@ -279,49 +318,41 @@ bkp::tm::lens_cmd() {
     return 0
   fi
   bkp::tm::rung_path "$s" || return 1
-  local rung="$REPLY" ovl yid
+  local rung="$REPLY" ovl yid jail
   ovl=$(bkp::tm::yazi_overlay "$s") || return 1
   yid=$(<"$s/yazi.id")
-  # `bx exec <dir> -- cmd` is bx's arbitrary-command jail; bx only accepts
-  # workdirs inside $HOME (sessions live under ~/.local/state, so this only
-  # skips the jail for a relocated BKP_TM_SESSIONS).
-  if command -v bx >/dev/null 2>&1 && [[ "$s" == "$HOME"/* ]]; then
-    print -rl -- bx exec "$s/mnt" --
+  if command -v sandbox-exec >/dev/null 2>&1; then
+    jail=$(bkp::tm::jail_profile "$s") || return 1
+    print -rl -- sandbox-exec -f "$jail"
   else
-    log_warn "bkp: no usable bx jail — explore runs unjailed (mount is still read-only)"
+    log_warn "bkp: sandbox-exec unavailable — explore runs unjailed (mount is still read-only)"
   fi
   print -rl -- env "YAZI_CONFIG_HOME=$ovl" yazi --client-id "$yid" "$rung$anchor"
 }
 
+: ${BKP_TM_BIN:="$HOME/.local/bin/system-backup-tm"}
+
 # bkp::tm::launch <lens> <anchor>
-# Entry point (spec §5): under Zellij, a dedicated tab — timeline pane
-# left (26 cols), lens pane right; otherwise the sequential fallback.
+# Entry point (spec §5): under Zellij the session lives in the CURRENT
+# tab — the lens pane splits off to the right and the timeline takes over
+# the invoking pane (the shell prompt returns when the session ends, and
+# the tab keeps its zj-hud chrome — a fresh layout-string tab loses it).
+# Outside Zellij: the sequential fallback.
 bkp::tm::launch() {
   local lens="$1" anchor="${2:A}"
   local s
   s=$(bkp::tm::session_new "$lens" "$anchor") || return $?
   if [[ -n "${ZELLIJ:-}" ]]; then
-    local bin="$HOME/.local/bin/system-backup-tm"
-    # KDL-sanitize the tab name — a quote/backslash in the anchor's last
-    # component would break out of the layout string.
-    local tail="${anchor:t}"
-    tail="${tail//[\\\"]/}"
-    [[ -n "$tail" ]] || tail="/"
-    zellij action new-tab --layout-string "layout {
-    tab name=\"tm $tail\" focus=true {
-        pane split_direction=\"vertical\" {
-            pane size=26 command=\"$bin\" {
-                args \"timeline\" \"$s\"
-                close_on_exit true
-            }
-            pane command=\"$bin\" {
-                args \"lens\" \"$s\"
-                close_on_exit true
-                focus true
-            }
-        }
-    }
-}" || { rm -rf "$s"; return 1 }
+    zellij run --close-on-exit --direction right --name "tm lens" \
+      -- "$BKP_TM_BIN" lens "$s" || { rm -rf "$s"; return 1 }
+    # The new pane takes focus; grow it leftward so the timeline pane
+    # narrows toward its ~26-col design width, then come back.
+    local i
+    for i in 1 2 3 4 5; do
+      zellij action resize increase left 2>/dev/null || break
+    done
+    zellij action move-focus left 2>/dev/null || :
+    "$BKP_TM_BIN" timeline "$s" || return $?
   else
     bkp::tm::fallback "$s" || return $?
   fi
@@ -361,7 +392,7 @@ bkp::tm::fallback() {
       case "$key" in
         j) bkp::tm::step "$s" older || : ;;
         k) bkp::tm::step "$s" newer || : ;;
-        a) "$HOME/.local/bin/system-backup-tm" apply "$s" || : ;;
+        a) "$BKP_TM_BIN" apply "$s" || : ;;
         *) break ;;
       esac
     done

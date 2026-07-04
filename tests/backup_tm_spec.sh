@@ -259,7 +259,6 @@ EOS
       printf '[mgr]\n' > "$FIX/yazicfg/keymap.toml"
       printf '# yazi.toml\n' > "$FIX/yazicfg/yazi.toml"
       STUB="$FIX/stub"; mkdir -p "$STUB"
-      printf '#!/bin/sh\nexit 0\n' > "$STUB/bx"; chmod +x "$STUB/bx"
       PATH="$STUB:$PATH"
     }
     cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS YAZI_USER_CONFIG; }
@@ -322,30 +321,36 @@ EOF
       The line 2 should equal 1
     End
 
-    It 'builds a jailed explore command (bx exec, session under $HOME)'
+    It 'builds a jailed explore command (native sandbox-exec profile)'
       run_it() {
         source "$LIB/backup-tm.zsh"
         print -r -- explore > "$S/lens"
         print -r -- 77 > "$S/yazi.id"
-        HOME="$FIX" bkp::tm::lens_cmd "$S"
+        bkp::tm::lens_cmd "$S"
       }
       When run run_it
-      The line 1 should equal "bx"
-      The line 2 should equal "exec"
+      The line 1 should equal "sandbox-exec"
+      The line 2 should equal "-f"
+      The line 3 should equal "$S/jail.sb"
       The output should include "--client-id"
       The output should include "/mnt/ids/cccc0000"
     End
 
-    It 'skips the jail when the session lives outside $HOME'
+    It 'writes a jail profile that seals $HOME and uses resolved temp paths'
       run_it() {
         source "$LIB/backup-tm.zsh"
-        print -r -- explore > "$S/lens"
-        print -r -- 77 > "$S/yazi.id"
-        HOME="$FIX/elsewhere" bkp::tm::lens_cmd "$S" 2>/dev/null
+        local jail
+        jail=$(bkp::tm::jail_profile "$S")
+        grep -c 'deny file-read\* (subpath "'"$HOME"'")' "$jail"
+        grep -c '(subpath "'"$S"'")' "$jail"
+        # Seatbelt matches resolved paths: the TMPDIR allows (read + write)
+        # must use the /private/var real path, not the /var symlink.
+        grep -c '(subpath "/private/var/folders' "$jail"
       }
       When run run_it
-      The line 1 should equal "env"
-      The output should not include "bx"
+      The line 1 should equal 1
+      The line 2 should equal 2
+      The line 3 should equal 2
     End
 
     It 'builds the hunk --watch command for the diff lens'
@@ -533,11 +538,14 @@ EOF
       STUB="$FIX/stub"; mkdir -p "$STUB"
       printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
       chmod +x "$STUB/zellij"
+      printf '#!/bin/sh\necho "tm $*" >> "%s/tm.calls"\n' "$FIX" > "$STUB/system-backup-tm"
+      chmod +x "$STUB/system-backup-tm"
+      export BKP_TM_BIN="$STUB/system-backup-tm"
       PATH="$STUB:$PATH"
       mkdir -p "$FIX/anchor"
       export ZELLIJ=1 ZELLIJ_PANE_ID=1
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_TM_SESSIONS BKP_MANIFEST BKP_HAS_FUSE ZELLIJ ZELLIJ_PANE_ID; }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_TM_SESSIONS BKP_MANIFEST BKP_HAS_FUSE ZELLIJ ZELLIJ_PANE_ID BKP_TM_BIN; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -551,37 +559,26 @@ EOF
       }
     }
 
-    It 'spawns a two-pane zellij tab for the session'
+    It 'splits the current tab: lens pane right, timeline in the invoking pane'
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         bkp::tm::launch explore "$FIX/anchor"
         cat "$FIX/zj.calls"
+        cat "$FIX/tm.calls"
       }
       When run run_it
       The status should be success
-      The output should include "action new-tab --layout-string"
-      The output should include "timeline"
-      The output should include "lens"
-      The output should include "size=26"
-    End
-
-    It 'sanitizes quotes/backslashes out of the tab name (KDL injection)'
-      run_it() {
-        mkdir -p "$FIX/we\"ird"
-        source "$LIB/backup-tm.zsh"; stub_restic
-        bkp::tm::launch explore "$FIX/we\"ird"
-        cat "$FIX/zj.calls"
-      }
-      When run run_it
-      The status should be success
-      The output should include 'tm weird'
-      The output should not include 'we"ird'
+      The output should include "run --close-on-exit --direction right"
+      The output should include "action resize increase left"
+      The output should include "action move-focus left"
+      The output should include "tm timeline"
+      The output should not include "new-tab"
     End
 
     It 'fallback survives a failing lens under set -e and still tears down'
       run_it() {
-        printf '#!/bin/sh\nexit 3\n' > "$STUB/bx"
-        chmod +x "$STUB/bx"
+        printf '#!/bin/sh\nexit 3\n' > "$STUB/sandbox-exec"
+        chmod +x "$STUB/sandbox-exec"
         cat > "$FIX/driver.zsh" <<EOS
 set -eu -o pipefail
 source "$LIB/backup-tm.zsh"

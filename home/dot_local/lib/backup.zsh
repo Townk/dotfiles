@@ -1331,14 +1331,25 @@ bkp::mount() {
 }
 
 # bkp::umount <pid> <mountpoint> — end a transient mount, best-effort.
+# Clean unmount FIRST — restic exits on its own when the mount detaches.
+# Killing is the fallback, and it must hit the whole tree: <pid> is the
+# backgrounded wrapper and restic is its CHILD; a killed wrapper leaves
+# restic serving the mount, and the eventual forced unmount can wedge the
+# vnode (uninterruptible D-state for anything touching the path).
 bkp::umount() {
-  kill "$1" 2>/dev/null
-  local i
+  local pid="$1" mp="$2" i
+  umount "$mp" 2>/dev/null || :
   for (( i = 0; i < 20; i++ )); do
-    [[ -d "$2/snapshots" ]] || return 0
+    [[ -d "$mp/snapshots" ]] || return 0
     sleep 0.1
   done
-  umount "$2" 2>/dev/null || diskutil unmount force "$2" >/dev/null 2>&1 || :
+  pkill -P "$pid" 2>/dev/null
+  kill "$pid" 2>/dev/null
+  for (( i = 0; i < 20; i++ )); do
+    [[ -d "$mp/snapshots" ]] || return 0
+    sleep 0.1
+  done
+  diskutil unmount force "$mp" >/dev/null 2>&1 || :
 }
 
 # bkp::ux::browse_fzf <repo> <path>
