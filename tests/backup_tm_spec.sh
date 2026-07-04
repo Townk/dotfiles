@@ -40,6 +40,7 @@ EOF
         source "$LIB/backup-tm.zsh"; stub_restic
         local s
         s=$(bkp::tm::session_new explore "$FIX/anchor") || return 1
+        bkp::tm::ladder_fill "$s" || return 1
         cat "$s/lens" "$s/rung"
         head -1 "$s/ladder"
       }
@@ -55,6 +56,7 @@ EOF
         source "$LIB/backup-tm.zsh"; stub_restic
         local s
         s=$(bkp::tm::session_new explore "$FIX/anchor")
+        bkp::tm::ladder_fill "$s"
         print -r -- 42 > "$s/yazi.id"
         mkdir -p "$s/mnt/ids"
         bkp::tm::step "$s" older; local r1=$(<"$s/rung")
@@ -74,6 +76,7 @@ EOF
         source "$LIB/backup-tm.zsh"; stub_restic
         local s
         s=$(bkp::tm::session_new explore "$FIX/anchor")
+        bkp::tm::ladder_fill "$s"
         bkp::tm::step "$s" older
         print -r -- "rc=$? rung=$(<"$s/rung")"
       }
@@ -87,6 +90,7 @@ EOF
         source "$LIB/backup-tm.zsh"; stub_restic
         local s
         s=$(bkp::tm::session_new diff "$FIX/anchor")
+        bkp::tm::ladder_fill "$s"
         # fake mount rung trees for both rungs
         mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
         print past > "$s/mnt/ids/aaaa0000$FIX/anchor/f.txt"
@@ -125,6 +129,7 @@ EOF
         }
         local s
         s=$(bkp::tm::session_new diff "$FIX/anchor")
+        bkp::tm::ladder_fill "$s"
         print now > "$FIX/anchor/f.txt"
         # no $s/mnt dir at all — rung_root must fall back to the cache
         bkp::tm::refresh "$s" || { echo "refresh1 rc=$?"; return 1 }

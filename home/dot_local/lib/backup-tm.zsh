@@ -10,13 +10,26 @@ unset _bkp_tm_self
 : ${BKP_TM_SESSIONS:="${BKP_STATE_DIR:-$HOME/.local/state/terminal-backup}/sessions"}
 
 # bkp::tm::session_new <lens> <anchor>
-# Create session state; prints the session dir. Ladder rows carry the tier
-# label so the timeline renders without re-deriving policy per frame.
+# Create session state (metadata only, instant); prints the session dir.
+# The ladder is filled by the timeline pane (bkp::tm::ladder_fill) so the
+# invoking prompt never freezes on the restic call.
 bkp::tm::session_new() {
   local lens="$1" anchor="$2"
-  local s ladder policy line id epoch REPLY now="$EPOCHSECONDS"
+  local s
   mkdir -p "$BKP_TM_SESSIONS"
   s=$(mktemp -d "$BKP_TM_SESSIONS/s.XXXXXX") || return 1
+  print -r -- "$lens" > "$s/lens"
+  print -r -- "$anchor" > "$s/anchor"
+  print -r -- 1 > "$s/rung"
+  print -r -- "$s"
+}
+
+# bkp::tm::ladder_fill <session>
+# Populate the ladder (<id>\t<epoch>\t<tier>, newest first) — the slow
+# restic call, deferred out of session_new. Rows carry the tier label so
+# the timeline renders without re-deriving policy per frame.
+bkp::tm::ladder_fill() {
+  local s="$1" ladder policy line id epoch REPLY now="$EPOCHSECONDS"
   ladder=$(bkp::snap::ladder) || return 2
   [[ -n "$ladder" ]] || { log_error "bkp: no snapshots yet — nothing to scrub"; return 2 }
   policy=$(bkp::manifest::thin_policy "$BKP_MANIFEST") || return 2
@@ -27,10 +40,6 @@ bkp::tm::session_new() {
       print -r -- "$id"$'\t'"$epoch"$'\t'"$REPLY"
     done
   } > "$s/ladder"
-  print -r -- "$lens" > "$s/lens"
-  print -r -- "$anchor" > "$s/anchor"
-  print -r -- 1 > "$s/rung"
-  print -r -- "$s"
 }
 
 # bkp::tm::rung_line <session> — REPLY = current ladder line (id\tepoch\ttier).
@@ -442,6 +451,7 @@ bkp::tm::lens_cmd() {
 # Outside Zellij: the sequential fallback.
 bkp::tm::launch() {
   local lens="$1" anchor="${2:A}"
+  log_info "bkp: preparing scrub session for ${anchor/#$HOME/~}…"
   local s
   s=$(bkp::tm::session_new "$lens" "$anchor") || return $?
   if [[ -n "${ZELLIJ:-}" ]]; then
@@ -473,7 +483,10 @@ bkp::tm::fallback() {
   staging=$(bkp::config::staging_path) || return 2
   print -r -- $$ > "$s/timeline.pid"
   print -r -- $$ > "$s/yazi.id"
+  printf '%s⏳ reading the snapshot ladder…%s\n' "$C_DIM" "$C_RES"
+  bkp::tm::ladder_fill "$s" || { rm -rf "$s"; return 2 }
   if bkp::ux::has_fuse; then
+    printf '%s⏳ mounting snapshot repository…%s\n' "$C_DIM" "$C_RES"
     bkp::mount "$staging" "$s/mnt" || return 1
     print -r -- "$REPLY" > "$s/mount.pid"
   fi

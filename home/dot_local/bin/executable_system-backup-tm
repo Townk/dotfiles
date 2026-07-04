@@ -12,8 +12,11 @@ tm_timeline() {
   local s="$1" staging
   staging=$(bkp::config::staging_path) || exit 2
   print -r -- $$ > "$s/timeline.pid"
+  # Session prep runs HERE, in the visible pane, with narration — the
+  # invoking prompt only creates metadata and splits, so nothing freezes.
+  printf '%s⏳ reading the snapshot ladder…%s\n' "$C_DIM" "$C_RES"
+  bkp::tm::ladder_fill "$s" || { bkp::tm::end "$s"; rm -rf "$s"; exit 2 }
   if bkp::ux::has_fuse; then
-    # The mount takes seconds — say so instead of showing a dead pane.
     printf '%s⏳ mounting snapshot repository…%s\n' "$C_DIM" "$C_RES"
     bkp::mount "$staging" "$s/mnt" || exit 1
     print -r -- "$REPLY" > "$s/mount.pid"
