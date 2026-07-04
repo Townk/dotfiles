@@ -1,0 +1,114 @@
+#!/usr/bin/env zsh
+# system-backup-tm — tm scrub session worker (spec 2026-07-04).
+# Verbs: timeline <session> | lens <session> | ctl <session> <older|newer|end>
+#        route <key> <pane-pid> | apply <session> [path…] | confirm-apply <session>
+# The dispatcher/tm front-end creates sessions; zj-context-keys fires route;
+# yazi bindings fire ctl/apply. BKP_TM_SESSIONS overrides the state root.
+
+set -u -o pipefail
+source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
+
+tm_timeline() {
+  local s="$1" staging pid
+  staging=$(bkp::config::staging_path) || exit 2
+  print -r -- $$ > "$s/timeline.pid"
+  bkp::mount "$staging" "$s/mnt" || exit 1
+  pid=$REPLY
+  print -r -- "$pid" > "$s/mount.pid"
+  {
+    touch "$s/ready"
+    bkp::tm::refresh "$s" || :
+    local key rest last_rung="" rung height
+    while [[ ! -e "$s/closed" ]]; do
+      rung=$(<"$s/rung")
+      if [[ "$rung" != "$last_rung" ]]; then
+        height=$(( LINES - 2 ))
+        (( height < 3 )) && height=20
+        printf '\e[2J\e[H'
+        bkp::tm::timeline_render "$s" "$height"
+        printf '\n%s j/k scrub · a apply · q quit %s' "$C_DIM" "$C_RES"
+        last_rung="$rung"
+      fi
+      read -t 1 -k 1 key 2>/dev/null || continue
+      case "$key" in
+        j) bkp::tm::step "$s" older ;;
+        k) bkp::tm::step "$s" newer ;;
+        a) tm_apply "$s" ;;
+        q) break ;;
+        $'\e')
+          # arrow keys arrive as ESC [ A/B; bare ESC ends the session
+          if read -t 0.05 -k 2 rest 2>/dev/null; then
+            case "$rest" in
+              '[A') bkp::tm::step "$s" newer ;;
+              '[B') bkp::tm::step "$s" older ;;
+            esac
+          else
+            break
+          fi
+          ;;
+      esac
+    done
+  } always {
+    bkp::tm::end "$s"
+    local lpid
+    lpid=$(<"$s/lens.pid" 2>/dev/null) && kill "$lpid" 2>/dev/null
+    bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
+    rm -rf "$s"
+  }
+}
+
+tm_lens() {
+  local s="$1" i
+  print -r -- $$ > "$s/lens.pid"
+  print -r -- $$ > "$s/yazi.id"
+  for (( i = 0; i < 100; i++ )); do
+    [[ -e "$s/ready" ]] && break
+    sleep 0.1
+  done
+  [[ -e "$s/ready" ]] || { log_error "bkp: session mount never came up"; bkp::tm::end "$s"; exit 1 }
+  local -a cmd
+  {
+    while [[ ! -e "$s/closed" ]]; do
+      cmd=("${(@f)$(bkp::tm::lens_cmd "$s")}") || break
+      ( cd "$s" && "${cmd[@]}" )
+      # explore lens: a failed DDS cd flags a respawn; anything else ends
+      if [[ -e "$s/respawn" && ! -e "$s/closed" ]]; then
+        rm -f "$s/respawn"
+        continue
+      fi
+      break
+    done
+  } always {
+    bkp::tm::end "$s"
+  }
+}
+
+tm_ctl() {
+  local s="$1" op="$2"
+  [[ -d "$s" ]] || exit 0
+  case "$op" in
+    older | newer) bkp::tm::step "$s" "$op" ;;
+    end)           bkp::tm::end "$s" ;;
+  esac
+}
+
+# Stubs — Task 9 replaces tm_route, Task 10 replaces tm_apply/tm_confirm_apply.
+tm_route() { :; }
+tm_apply() { :; }
+tm_confirm_apply() { :; }
+
+main() {
+  local verb="${1:-}"
+  shift 2>/dev/null || true
+  case "$verb" in
+    timeline)      tm_timeline "$1" ;;
+    lens)          tm_lens "$1" ;;
+    ctl)           tm_ctl "$@" ;;
+    route)         tm_route "$@" ;;          # Task 9
+    apply)         tm_apply "$@" ;;          # Task 10
+    confirm-apply) tm_confirm_apply "$@" ;;  # Task 10
+    *) die "system-backup-tm: unknown verb: $verb" ;;
+  esac
+}
+
+main "$@"

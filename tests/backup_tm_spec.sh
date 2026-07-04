@@ -145,4 +145,66 @@ EOF
       The output should include "…"
     End
   End
+
+  Describe 'yazi overlay + lens command'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions" YAZI_USER_CONFIG="$FIX/yazicfg"
+      mkdir -p "$FIX/sessions/s.test" "$FIX/yazicfg/plugins"
+      S="$FIX/sessions/s.test"
+      printf 'cccc000000000000000000000000000000000000000000000000000000000000\t1751500000\t30m\n' > "$S/ladder"
+      printf '1\n' > "$S/rung"
+      printf '%s\n' "$FIX/anchor" > "$S/anchor"
+      mkdir -p "$FIX/anchor"
+      printf '[mgr]\n' > "$FIX/yazicfg/keymap.toml"
+      printf '# yazi.toml\n' > "$FIX/yazicfg/yazi.toml"
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      printf '#!/bin/sh\nexit 0\n' > "$STUB/bx"; chmod +x "$STUB/bx"
+      PATH="$STUB:$PATH"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS YAZI_USER_CONFIG; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'generates an overlay whose keymap adds the session bindings'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        local ovl
+        ovl=$(bkp::tm::yazi_overlay "$S")
+        [ -L "$ovl/yazi.toml" ] && echo linked
+        grep -c 'prepend_keymap' "$ovl/keymap.toml"
+        grep 'system-backup-tm' "$ovl/keymap.toml" | head -1
+      }
+      When run run_it
+      The line 1 should equal "linked"
+      The line 2 should equal 4
+      The line 3 should include "system-backup-tm"
+    End
+
+    It 'builds a jailed explore command'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        print -r -- explore > "$S/lens"
+        print -r -- 77 > "$S/yazi.id"
+        bkp::tm::lens_cmd "$S"
+      }
+      When run run_it
+      The line 1 should equal "bx"
+      The output should include "--client-id"
+      The output should include "/mnt/ids/cccc0000"
+    End
+
+    It 'builds the hunk --watch command for the diff lens'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        print -r -- diff > "$S/lens"
+        bkp::tm::lens_cmd "$S"
+      }
+      When run run_it
+      The line 1 should equal "hunk"
+      The line 2 should equal "patch"
+      The output should include "current.patch"
+      The output should include "--watch"
+    End
+  End
 End

@@ -167,3 +167,68 @@ bkp::tm::timeline_render() {
     fi
   done
 }
+
+# bkp::tm::yazi_overlay <session>
+# YAZI_CONFIG_HOME for explore sessions: the user's config (symlinked)
+# plus generated scrub bindings appended as prepend_keymap (prepend wins
+# over the base keymap regardless of position in the file).
+#   K / J   timeline newer / older (matches the parent-arrow muscle memory)
+#   R       restore selection to the live filesystem (gated apply flow)
+bkp::tm::yazi_overlay() {
+  local s="$1" src="${YAZI_USER_CONFIG:-$HOME/.config/yazi}" ovl="$1/yazi"
+  mkdir -p "$ovl"
+  local f
+  for f in yazi.toml init.lua package.toml plugins flavors; do
+    [[ -e "$src/$f" ]] && ln -sfn "$src/$f" "$ovl/$f"
+  done
+  {
+    [[ -f "$src/keymap.toml" ]] && cat "$src/keymap.toml"
+    cat <<EOF
+
+# --- tm scrub session bindings (generated; spec 2026-07-04 §5.2/§6) ---
+[[mgr.prepend_keymap]]
+on = "K"
+run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s newer"'
+desc = "tm: newer snapshot"
+
+[[mgr.prepend_keymap]]
+on = "J"
+run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s older"'
+desc = "tm: older snapshot"
+
+[[mgr.prepend_keymap]]
+on = "R"
+run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm apply $s \"\$@\""'
+desc = "tm: restore selection to live filesystem"
+
+[[mgr.prepend_keymap]]
+on = "q"
+run = [ 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s end"', "quit" ]
+desc = "tm: end scrub session"
+EOF
+  } > "$ovl/keymap.toml"
+  print -r -- "$ovl"
+}
+
+# bkp::tm::lens_cmd <session>
+# The lens pane argv, one element per line (caller reads into an array).
+# Explore: yazi under the bx Seatbelt jail scoped to the mount (read-only
+# by construction; bx blocks navigating out). Diff: hunk in watch mode.
+bkp::tm::lens_cmd() {
+  local s="$1" lens anchor REPLY
+  lens=$(<"$s/lens") anchor=$(<"$s/anchor")
+  if [[ "$lens" == diff ]]; then
+    print -rl -- hunk patch "$s/current.patch" --watch
+    return 0
+  fi
+  bkp::tm::rung_path "$s" || return 1
+  local rung="$REPLY" ovl yid
+  ovl=$(bkp::tm::yazi_overlay "$s") || return 1
+  yid=$(<"$s/yazi.id")
+  if command -v bx >/dev/null 2>&1; then
+    print -rl -- bx "$s/mnt" --
+  else
+    log_warn "bkp: bx not installed — explore runs unjailed (mount is still read-only)"
+  fi
+  print -rl -- env "YAZI_CONFIG_HOME=$ovl" yazi --client-id "$yid" "$rung$anchor"
+}
