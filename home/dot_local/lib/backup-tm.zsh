@@ -73,8 +73,9 @@ bkp::tm::refresh() {
     bkp::changeset::patch_live "$rung" "$anchor" > "$s/current.patch.new" || return 1
     mv "$s/current.patch.new" "$s/current.patch"
   else
+    [[ -f "$s/yazi.id" ]] || return 0   # yazi not up yet
     local yid
-    yid=$(<"$s/yazi.id" 2>/dev/null) || return 0   # yazi not up yet
+    yid=$(<"$s/yazi.id")
     ya emit-to "$yid" cd "$rung$anchor" 2>/dev/null || touch "$s/respawn"
   fi
   return 0

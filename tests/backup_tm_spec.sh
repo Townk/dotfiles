@@ -69,6 +69,19 @@ EOF
       The line 2 should include "/mnt/ids/aaaa0000"
     End
 
+    It 'refresh is a silent no-op before yazi publishes its id'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        local s
+        s=$(bkp::tm::session_new explore "$FIX/anchor")
+        bkp::tm::step "$s" older
+        print -r -- "rc=$? rung=$(<"$s/rung")"
+      }
+      When run run_it
+      The output should equal "rc=0 rung=2"
+      The stderr should equal ""
+    End
+
     It 'regenerates current.patch for the diff lens on step'
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
