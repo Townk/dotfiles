@@ -1444,7 +1444,7 @@ bkp::ux::diff() {
 bkp::ux::changes() {
   local a="$1" b="$2" scope="${3:-/}"
   local patch
-  patch=$(mktemp "${TMPDIR:-/tmp}/bkp-changes.XXXXXX.patch") || return 1
+  patch=$(mktemp "${TMPDIR:-/tmp}/bkp-changes.XXXXXX") || return 1
   {
     bkp::changeset::patch "$a" "$b" "$scope" > "$patch" || return $?
     if [[ ! -s "$patch" ]]; then
