@@ -98,3 +98,72 @@ bkp::tm::step() {
 
 # bkp::tm::end <session> — signal every session process to wind down.
 bkp::tm::end() { touch "$1/closed" }
+
+# bkp::tm::timeline_render <session> <height>
+# One timeline frame (spec §5.1 mock): newest at top, ● rungs joined by ┃,
+# relative ages < 48h, absolute two-line stamps beyond, current rung
+# highlighted with its tier label, windowed to <height> rows with … rows
+# when clipped. Colors come from common.zsh C_* (empty when not a tty).
+bkp::tm::timeline_render() {
+  local s="$1" height="$2"
+  local -a ladder=("${(@f)$(<"$s/ladder")}")
+  local cur n=${#ladder}
+  cur=$(<"$s/rung")
+  local now="$EPOCHSECONDS"
+
+  # Build per-rung row groups first, then window by rows.
+  local -a rows=()          # rendered text rows
+  local -a row_rung=()      # owning rung index per row (0 = connector)
+  local i id epoch tier age label label2 REPLY
+  for (( i = 1; i <= n; i++ )); do
+    id="${ladder[i]%%$'\t'*}"
+    epoch="${${ladder[i]#*$'\t'}%%$'\t'*}"
+    tier="${ladder[i]##*$'\t'}"
+    if (( now - epoch < 172800 )); then
+      bkp::ux::age $(( now - epoch ))
+      label="● $REPLY ago"
+      label2=""
+    else
+      strftime -s label '● %a, %b %e %Y' "$epoch"
+      strftime -s label2 '%I:%M %p' "$epoch"
+      label2="┃ ${(L)label2}"
+    fi
+    if (( i == cur )); then
+      rows+=("${C_BWH}${label}${C_RES} ${C_BBL}${tier}${C_RES}")
+    else
+      rows+=("${C_DIM}${label}${C_RES}")
+    fi
+    row_rung+=($i)
+    if [[ -n "$label2" ]]; then
+      rows+=("${C_DIM}${label2}${C_RES}")
+      row_rung+=($i)
+    fi
+    if (( i < n )); then
+      rows+=("${C_DIM}┃${C_RES}")
+      row_rung+=(0)
+    fi
+  done
+
+  # Window: locate the current rung's first row, center it.
+  local total=${#rows} first=1
+  if (( total > height )); then
+    local cur_row=1 r
+    for (( r = 1; r <= total; r++ )); do
+      (( row_rung[r] == cur )) && { cur_row=$r; break }
+    done
+    first=$(( cur_row - height / 2 ))
+    (( first < 1 )) && first=1
+    (( first + height - 1 > total )) && first=$(( total - height + 1 ))
+  fi
+  local last=$(( first + height - 1 ))
+  (( last > total )) && last=$total
+  local out_row
+  for (( out_row = first; out_row <= last; out_row++ )); do
+    if (( total > height )) && { (( out_row == first && first > 1 )) ||
+                                 (( out_row == last && last < total )) }; then
+      print -r -- "${C_DIM}…${C_RES}"
+    else
+      print -r -- "${rows[out_row]}"
+    fi
+  done
+}

@@ -98,4 +98,51 @@ EOF
       The output should equal 1
     End
   End
+
+  Describe 'bkp::tm::timeline_render'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions"
+      mkdir -p "$FIX/sessions/s.test"
+      S="$FIX/sessions/s.test"
+      # epochs: fixed, old enough for absolute rendering + one recent
+      now=$(date +%s)
+      printf 'cccc000000000000000000000000000000000000000000000000000000000000\t%s\t30m\n' "$(( now - 1800 ))" > "$S/ladder"
+      printf 'aaaa000000000000000000000000000000000000000000000000000000000000\t1782813780\tyear\n' >> "$S/ladder"
+      printf '1\n' > "$S/rung"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'renders rungs with relative and absolute stamps'
+      run_it() { source "$LIB/backup-tm.zsh"; bkp::tm::timeline_render "$S" 20; }
+      When run run_it
+      The line 1 should include "● 30m ago"
+      The output should include "┃"
+      The output should include "2026"     # absolute stamp for the old rung
+    End
+
+    It 'marks the current rung with the tier label'
+      run_it() { source "$LIB/backup-tm.zsh"; bkp::tm::timeline_render "$S" 20; }
+      When run run_it
+      The line 1 should include "30m"
+    End
+
+    It 'windows long ladders around the current rung'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        local i now=$(date +%s)
+        : > "$S/ladder"
+        for i in {1..40}; do
+          printf '%04d00000000000000000000000000000000000000000000000000000000000\t%s\tday\n' "$i" "$(( now - i * 86400 ))" >> "$S/ladder"
+        done
+        print -r -- 20 > "$S/rung"
+        bkp::tm::timeline_render "$S" 12
+      }
+      When run run_it
+      The lines of output should equal 12
+      The output should include "…"
+    End
+  End
 End
