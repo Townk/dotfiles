@@ -13,7 +13,7 @@
 #   system-backup status              # staging summary + target presence
 #   system-backup now                 # force a capture (+ reconcile)
 #   system-backup list                # snapshots with tier labels
-#   system-backup browse [--deleted] [path]
+#   system-backup browse [--diff] [--deleted] [path]
 #   system-backup diff <path> <snapA> [<snapB>]
 #   system-backup restore --snapshot <id> [--force] <path>...
 #   system-backup restore-project <repo>
@@ -33,7 +33,9 @@ Usage:
   system-backup status                   staging summary + target presence
   system-backup now                      force a capture tick (+ reconcile)
   system-backup list                     snapshots with tier labels
-  system-backup browse [--deleted] [p]   Time-Machine browse (httm/fzf)
+  system-backup browse [--diff] [--deleted] [p]
+                                         scrub session: explore (yazi) or
+                                         diff (hunk) live vs. snapshots
   system-backup diff <path> <A> [<B>]    file diff across snapshots
   system-backup changes [--since <when>] [<snapA> [<snapB>]] [path]
                                          what changed between two points in time
@@ -45,9 +47,10 @@ Usage:
   system-backup verify                   restic check staging + targets
   system-backup -h | --help | help       show this help
 
-The \`tm\` shell function is the anchored shortcut: \`tm\` browses \$PWD,
-\`tm <file>\` scrubs one file, \`tm --deleted\` recovers deletions here.
-Run \`system-backup <command> --help\` for per-command details.
+The \`tm\` shell function is the anchored shortcut: \`tm\` explores \$PWD,
+\`tm --diff\`/\`tm <file>\` opens a diff session, \`tm --deleted\` recovers
+deletions here. Run \`system-backup <command> --help\` for per-command
+details.
 EOF
 }
 
@@ -56,12 +59,16 @@ usage_for() {
     browse)
       cat <<EOF
 Usage:
-  system-backup browse [--deleted] [path]
+  system-backup browse [--diff] [--deleted] [path]
 
-Time-Machine browse anchored at [path] (default \$PWD). With httm + a FUSE
-provider: httm over a transient restic mount. Otherwise: an fzf version
-picker that restores the chosen version AS A COPY (<path>.<snapid>) —
-in-place restores go through \`restore\`, which is undoable.
+Open a scrub session anchored at [path] (default \$PWD): a timeline pane
+(under Zellij) or keybar (without it) steps through snapshots while a lens
+pane follows along. Lens picks itself — explore (yazi, jailed) for a
+directory, diff (hunk) for a file; --diff/--deleted force the diff lens.
+Needs macFUSE for the restic mount; without it, files fall back to an fzf
+version picker that restores the chosen version AS A COPY
+(<path>.<snapid>) — in-place restores go through \`restore\`, which is
+undoable.
 EOF
       ;;
     diff)
@@ -159,15 +166,26 @@ main() {
         exit 0
       }
       require_config
-      local anchor="" deleted=""
+      local anchor="" lens=""
       while (( $# )); do
         case "$1" in
-          --deleted) deleted="--deleted" ;;
+          --diff | --deleted) lens=diff ;;
           *) anchor="$1" ;;
         esac
         shift
       done
-      bkp::ux::browse "${anchor:-$PWD}" ${deleted:+--deleted}
+      anchor="${${anchor:-$PWD}:A}"
+      [[ -z "$lens" && -f "$anchor" ]] && lens=diff
+      [[ -z "$lens" ]] && lens=explore
+      source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
+      if ! bkp::ux::has_fuse; then
+        if [[ "$lens" == diff && -f "$anchor" ]]; then
+          bkp::ux::browse_fzf "$(bkp::config::staging_path)" "$anchor"
+          exit $?
+        fi
+        die "scrub sessions need macFUSE for the restic mount — approve the system extension, or use \`system-backup changes\` (mount-free)"
+      fi
+      bkp::tm::launch "$lens" "$anchor"
       ;;
     diff)
       args_contain_help "$@" && {

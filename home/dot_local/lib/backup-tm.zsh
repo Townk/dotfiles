@@ -245,3 +245,71 @@ bkp::tm::lens_cmd() {
   fi
   print -rl -- env "YAZI_CONFIG_HOME=$ovl" yazi --client-id "$yid" "$rung$anchor"
 }
+
+# bkp::tm::launch <lens> <anchor>
+# Entry point (spec §5): under Zellij, a dedicated tab — timeline pane
+# left (26 cols), lens pane right; otherwise the sequential fallback.
+bkp::tm::launch() {
+  local lens="$1" anchor="${2:A}"
+  local s
+  s=$(bkp::tm::session_new "$lens" "$anchor") || return $?
+  if [[ -n "${ZELLIJ:-}" ]]; then
+    local bin="$HOME/.local/bin/system-backup-tm"
+    zellij action new-tab --layout-string "layout {
+    tab name=\"tm ${anchor:t}\" focus=true {
+        pane split_direction=\"vertical\" {
+            pane size=26 command=\"$bin\" {
+                args \"timeline\" \"$s\"
+                close_on_exit true
+            }
+            pane command=\"$bin\" {
+                args \"lens\" \"$s\"
+                close_on_exit true
+                focus true
+            }
+        }
+    }
+}" || { rm -rf "$s"; return 1 }
+  else
+    bkp::tm::fallback "$s"
+  fi
+}
+
+# bkp::tm::fallback <session>
+# No-Zellij sequential mode (spec §5.4): lens full-screen, then a keybar —
+# j older / k newer / a apply / q quit — stepping relaunches the lens.
+bkp::tm::fallback() {
+  local s="$1" staging pid key REPLY
+  staging=$(bkp::config::staging_path) || return 2
+  print -r -- $$ > "$s/timeline.pid"
+  print -r -- $$ > "$s/yazi.id"
+  bkp::mount "$staging" "$s/mnt" || return 1
+  pid=$REPLY
+  {
+    touch "$s/ready"
+    while [[ ! -e "$s/closed" ]]; do
+      bkp::tm::refresh "$s" || break
+      rm -f "$s/respawn"     # fallback relaunches anyway
+      local -a cmd
+      cmd=("${(@f)$(bkp::tm::lens_cmd "$s")}") || break
+      ( cd "$s" && "${cmd[@]}" )
+      bkp::tm::rung_line "$s" || break
+      local tier="${REPLY##*$'\t'}" rung=""
+      [[ -f "$s/rung" ]] && rung=$(<"$s/rung")
+      printf '%s[rung %s · %s]  j older · k newer · a apply · q quit%s ' \
+        "$C_DIM" "$rung" "$tier" "$C_RES"
+      read -k 1 key || key=q
+      printf '\n'
+      case "$key" in
+        j) bkp::tm::step "$s" older ;;
+        k) bkp::tm::step "$s" newer ;;
+        a) "$HOME/.local/bin/system-backup-tm" apply "$s" ;;
+        *) break ;;
+      esac
+    done
+  } always {
+    bkp::tm::kill_lens "$s"
+    bkp::umount "$pid" "$s/mnt"
+    rm -rf "$s"
+  }
+}

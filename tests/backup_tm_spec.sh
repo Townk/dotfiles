@@ -386,4 +386,50 @@ EOF
       The output should equal "/tmp-live/f.txt"
     End
   End
+
+  Describe 'session launcher'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export TZ=UTC BKP_CONFIG="$FIX/c.toml" BKP_TM_SESSIONS="$FIX/sessions"
+      export BKP_MANIFEST="$FIX/m.toml" BKP_HAS_FUSE=1
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      printf 'roots = []\n' > "$FIX/m.toml"
+      cat > "$FIX/snaps.json" <<'EOF'
+[{"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
+EOF
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
+      chmod +x "$STUB/zellij"
+      PATH="$STUB:$PATH"
+      mkdir -p "$FIX/anchor"
+      export ZELLIJ=1 ZELLIJ_PANE_ID=1
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_TM_SESSIONS BKP_MANIFEST BKP_HAS_FUSE ZELLIJ ZELLIJ_PANE_ID; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    stub_restic() {
+      bkp::restic() {
+        local repo="$1"; shift
+        case "$1 ${2:-}" in
+          'snapshots --json') cat "$FIX/snaps.json" ;;
+          *) return 0 ;;
+        esac
+      }
+    }
+
+    It 'spawns a two-pane zellij tab for the session'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        bkp::tm::launch explore "$FIX/anchor"
+        cat "$FIX/zj.calls"
+      }
+      When run run_it
+      The status should be success
+      The output should include "action new-tab --layout-string"
+      The output should include "timeline"
+      The output should include "lens"
+      The output should include "size=26"
+    End
+  End
 End
