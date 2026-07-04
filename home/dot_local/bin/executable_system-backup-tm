@@ -91,8 +91,36 @@ tm_ctl() {
   esac
 }
 
-# Stubs — Task 9 replaces tm_route, Task 10 replaces tm_apply/tm_confirm_apply.
-tm_route() { :; }
+# tm_route <key> <pane-pid>
+# zj-context-keys fires this for Shift+Up/Down/Enter over yazi/hunk panes.
+# If the pane belongs to a scrub session, drive it; otherwise write the
+# original key through so non-session panes lose nothing.
+tm_route() {
+  local key="$1" pid="$2" s lpid tpid
+  for s in "$BKP_TM_SESSIONS"/s.*(/N); do
+    lpid="" tpid=""
+    [[ -f "$s/lens.pid" ]] && lpid=$(<"$s/lens.pid")
+    [[ -f "$s/timeline.pid" ]] && tpid=$(<"$s/timeline.pid")
+    if [[ "$lpid" == "$pid" || "$tpid" == "$pid" ]]; then
+      case "$key" in
+        shift+up)   bkp::tm::step "$s" newer ;;
+        shift+down) bkp::tm::step "$s" older ;;
+        apply)      tm_apply "$s" ;;
+      esac
+      return 0
+    fi
+  done
+  local seq=""
+  case "$key" in
+    shift+up)   seq=$'\e[1;2A' ;;
+    shift+down) seq=$'\e[1;2B' ;;
+    apply)      seq=$'\r' ;;
+  esac
+  [[ -n "$seq" ]] && zellij action write-chars -- "$seq" 2>/dev/null
+  return 0
+}
+
+# Stub — Task 10 replaces tm_apply/tm_confirm_apply.
 tm_apply() { :; }
 tm_confirm_apply() { :; }
 

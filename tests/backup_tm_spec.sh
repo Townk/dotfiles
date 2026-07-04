@@ -265,4 +265,41 @@ EOS
       The output should include "--watch"
     End
   End
+
+  Describe 'route verb'
+    BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-tm"
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions" BKP_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+      export BKP_CONFIG="$FIX/c.toml"
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      S="$FIX/sessions/s.test"; mkdir -p "$S"
+      printf 'cccc000000000000000000000000000000000000000000000000000000000000\t1751500000\t30m\naaaa000000000000000000000000000000000000000000000000000000000000\t1751000000\tday\n' > "$S/ladder"
+      printf '1\n' > "$S/rung"
+      printf 'diff\n' > "$S/lens"
+      printf '%s\n' "$FIX/anchor" > "$S/anchor"
+      mkdir -p "$FIX/anchor" "$S/mnt/ids/cccc0000$FIX/anchor" "$S/mnt/ids/aaaa0000$FIX/anchor"
+      printf '4242\n' > "$S/lens.pid"
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
+      chmod +x "$STUB/zellij"
+      PATH="$STUB:$PATH"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'steps the owning session older on shift+down'
+      When run zsh "$BIN" route shift+down 4242
+      The status should be success
+      The contents of file "$FIX/sessions/s.test/rung" should equal 2
+    End
+
+    It 'writes the key through when no session owns the pid'
+      When run zsh "$BIN" route shift+down 9999
+      The status should be success
+      The contents of file "$FIX/zj.calls" should include "action write-chars"
+      The contents of file "$FIX/sessions/s.test/rung" should equal 1
+    End
+  End
 End
