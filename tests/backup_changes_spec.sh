@@ -82,12 +82,14 @@ EOF
     It 'resolves a relative duration'
       run_it() {
         source "$LIB/backup.zsh"; stub_restic
-        # freeze "now" so 24h lands between the 07-02 and 07-03 snapshots
+        # now-24h is always after the newest fixture snapshot (2026-07-03),
+        # so the newest rung at/before the cutoff is deterministically cccc.
         bkp::snap::resolve_since "24h"
         print -r -- "$REPLY"
       }
       When run run_it
       The status should be success
+      The output should start with "cccc"
     End
 
     It 'resolves a snapshot id prefix'
