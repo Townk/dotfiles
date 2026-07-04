@@ -29,6 +29,7 @@ alias zcp="noglob zmv -C"
 alias zln="noglob zmv -L"
 alias vim="nvim"
 alias vi="nvim"
+alias zj="zellij"
 
 ## git aliases
 alias git="noglob git"
