@@ -23,8 +23,12 @@ tm_timeline() {
   anchor=$(<"$s/anchor")
   print -r -- $$ > "$s/timeline.pid"
   # Alt-screen: prep narration and frames never pollute the shell's
-  # scrollback, and the prompt view is restored intact on exit.
-  printf '\e[?1049h\e[2J\e[H'
+  # scrollback, and the prompt view is restored intact on exit. Cursor
+  # hidden and tty echo off for the whole session (read -k leaves echo
+  # on, so keypresses were being drawn into the frame).
+  printf '\e[?1049h\e[2J\e[H\e[?25l'
+  local _stty=""
+  [[ -t 0 ]] && { _stty=$(stty -g); stty -echo; }
   # Session prep runs HERE, in the visible pane, with narration — the
   # invoking prompt only creates metadata and splits, so nothing freezes.
   printf '%s⏳ reading the snapshot ladder…%s\n' "$C_DIM" "$C_RES"
@@ -58,19 +62,28 @@ tm_timeline() {
         (( height < 3 )) && height=16
         width=$(( COLUMNS - 1 ))
         (( width < 10 )) && width=24
-        printf '\e[2J\e[H'
-        printf ' %s⏱ tm%s %s%s%s\n\n' "$C_BWH" "$C_RES" "$C_DIM" "${anchor/#$HOME/~}" "$C_RES"
-        bkp::tm::timeline_render "$s" "$height" "$width" "$focused"
-        printf '\n %sj/k%s%s : scrub%s\n %sa%s%s : apply%s %s·%s %sq%s%s : quit%s' \
-          "$kc" "$C_RES" "$hc" "$C_RES" \
-          "$kc" "$C_RES" "$hc" "$C_RES" "$hc" "$C_RES" "$kc" "$C_RES" "$hc" "$C_RES"
+        # Flicker-free repaint: build the frame, then home + per-line
+        # erase-to-EOL + erase-below, atomically via synchronized update
+        # (\e[?2026 — same mechanism hunk uses). No full-screen clear.
+        local frame line out=""
+        frame="$(
+          printf ' %s⏱ tm%s %s%s%s\n\n' "$C_BWH" "$C_RES" "$C_DIM" "${anchor/#$HOME/~}" "$C_RES"
+          bkp::tm::timeline_render "$s" "$height" "$width" "$focused"
+          printf '\n %sj/k%s%s : scrub%s\n %sa%s%s : apply%s %s·%s %sq%s%s : quit%s' \
+            "$kc" "$C_RES" "$hc" "$C_RES" \
+            "$kc" "$C_RES" "$hc" "$C_RES" "$hc" "$C_RES" "$kc" "$C_RES" "$hc" "$C_RES"
+        )"
+        for line in "${(@f)frame}"; do
+          out+="$line"$'\e[K\n'
+        done
+        printf '\e[?2026h\e[H%s\e[J\e[?2026l' "$out"
         last_state="$rung:$focused"
       fi
       if (( ! interactive )); then
         sleep 1
         continue
       fi
-      read -t 1 -k 1 key 2>/dev/null || continue
+      read -t 0.25 -k 1 key 2>/dev/null || continue
       case "$key" in
         j) bkp::tm::step "$s" older ;;
         k) bkp::tm::step "$s" newer ;;
@@ -90,7 +103,8 @@ tm_timeline() {
       esac
     done
   } always {
-    printf '\e[?1049l'
+    printf '\e[?25h\e[?1049l'
+    [[ -n "$_stty" ]] && stty "$_stty" 2>/dev/null
     bkp::tm::end "$s"
     bkp::tm::kill_lens "$s"
     [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
