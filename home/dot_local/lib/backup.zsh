@@ -528,6 +528,70 @@ bkp::restic::parse_snapshots() {
   done
 }
 
+# --- snapshot addressing (spec 2026-07-04 §4) ---------------------------
+
+# bkp::snap::ladder [<config>]
+# Capture snapshots newest-first as <full-id>\t<epoch>. bkp-undo snapshots
+# are restore plumbing, not points on the time ladder — excluded.
+bkp::snap::ladder() {
+  local staging
+  staging=$(bkp::config::staging_path "$@") || return 2
+  bkp::restic "$staging" snapshots --json |
+    jq '[(. // [])[] | select(((.tags // []) | index("bkp-undo")) | not)]' |
+    bkp::restic::parse_snapshots | sort -t$'\t' -k2,2 -rn
+}
+
+# bkp::snap::expand <prefix> <ladder> — REPLY = full id for a hex prefix.
+bkp::snap::expand() {
+  local prefix="$1" ladder="$2" line
+  for line in ${(f)ladder}; do
+    if [[ "${line%%$'\t'*}" == "$prefix"* ]]; then
+      REPLY="${line%%$'\t'*}"
+      return 0
+    fi
+  done
+  log_error "bkp: no snapshot matching '$prefix'"
+  return 2
+}
+
+# bkp::snap::resolve_since <when> [<config>]
+# REPLY = full id of the newest snapshot at or before <when>.
+# <when>: yesterday | <N><m|h|d|w> | YYYY-MM-DD | snapshot id (8-64 hex).
+bkp::snap::resolve_since() {
+  local when="$1"; shift
+  local ladder cutoff
+  ladder=$(bkp::snap::ladder "$@") || return 2
+  [[ -n "$ladder" ]] || { log_error "bkp: no snapshots yet"; return 2 }
+  if [[ "$when" == yesterday ]]; then
+    cutoff=$(( EPOCHSECONDS - 86400 ))
+  elif [[ "$when" =~ '^[0-9]+[mhdw]$' ]]; then
+    bkp::duration "$when" || return 2
+    cutoff=$(( EPOCHSECONDS - REPLY ))
+  elif [[ "$when" =~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ]]; then
+    strftime -r -s cutoff '%Y-%m-%d' "$when" 2>/dev/null || {
+      log_error "bkp: unparseable date: $when"
+      return 2
+    }
+  elif [[ "$when" =~ '^[0-9a-f]{8,64}$' ]]; then
+    bkp::snap::expand "$when" "$ladder"
+    return $?
+  else
+    log_error "bkp: cannot parse '$when' (yesterday | 3h/2d/1w | YYYY-MM-DD | snapshot id)"
+    return 2
+  fi
+  local line id epoch oldest=""
+  for line in ${(f)ladder}; do
+    id="${line%%$'\t'*}" epoch="${line##*$'\t'}"
+    oldest="$id"
+    if (( epoch <= cutoff )); then
+      REPLY="$id"
+      return 0
+    fi
+  done
+  log_error "bkp: no snapshot at or before '$when' — oldest is ${oldest[1,8]}"
+  return 2
+}
+
 BKP_STATE_DIR="${BKP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/terminal-backup}"
 BKP_WIP_DIR="${BKP_WIP_DIR:-$BKP_STATE_DIR/wip}"
 
