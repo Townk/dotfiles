@@ -25,8 +25,8 @@ _zsh_should_autoattach_zellij() {
 # below, so the session loads the tinted theme and zj-hud's bar follows it.
 # Exports the palette env vars for the shell/fzf/dialogs/viewers (inherited
 # across the exec and by the panes). A no-op when no override.toml exists.
-# Absolute path — ~/.local/bin only joins PATH later, well after this runs.
-~/.local/bin/theme-apply 2>/dev/null
+# Absolute path — libexec is never on PATH (and PATH isn't set up yet here anyway).
+~/.local/libexec/theme-apply 2>/dev/null
 [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.zsh" ]] \
   && export THEME_PALETTE_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.zsh" \
             THEME_PALETTE_JSON="${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.json"

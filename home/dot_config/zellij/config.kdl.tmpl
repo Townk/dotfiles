@@ -901,6 +901,16 @@ web_client {
 // ~/.config/theme/override.toml. zj-hud's bar follows this theme, so a `base`
 // override tints the bar to match the terminal background.
 theme "chezmoi-system"
+
+// theme-reload nonce — see ~/.local/libexec/theme-apply. Zellij watches config.kdl but
+// NOT the themes dir, so to recolor a RUNNING session on a tint change theme-apply
+// writes a fresh token to the loose, untracked
+// $XDG_CACHE_HOME/theme/zellij-reload-nonce and re-applies THIS file (scoped to
+// config.kdl only); the changed bytes trip the config watcher, which re-reads the
+// chezmoi-system theme so the zj-hud bar recolors live. Empty until first written.
+{{ $nonceDir := (env "XDG_CACHE_HOME" | default (joinPath .chezmoi.homeDir ".cache")) -}}
+{{ $noncePath := joinPath $nonceDir "theme/zellij-reload-nonce" -}}
+// theme-reload: {{ if stat $noncePath }}{{ output "cat" $noncePath | trim }}{{ end }}
  
 // Theme to use when the host terminal reports a dark color palette.
 // Requires `theme_light` to also be set; otherwise `theme` is used.

@@ -32,10 +32,24 @@ eff_json="$cache/chezmoi-system.json"
 eff_zsh="$cache/chezmoi-system.zsh"
 eff_kdl="$zellij_themes/chezmoi-system.kdl"
 stamp="$cache/.stamp"
+nonce="$cache/zellij-reload-nonce"
 
 [[ -r "$canon_json" && -r "$canon_zsh" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 mkdir -p "$cache" || exit 0
+
+# Force a live Zellij reload so a RUNNING session re-reads the freshly regenerated
+# effective theme (chezmoi-system.kdl). Zellij watches config.kdl, NOT the themes
+# dir, so write a fresh token to the loose (untracked) nonce file and re-render
+# config.kdl (which inlines it in a comment) via a SCOPED apply — config.kdl ONLY,
+# never a bare `chezmoi apply`. No-op without chezmoi or a rendered config.kdl.
+bump_reload_nonce() {
+  command -v chezmoi >/dev/null 2>&1 || return 0
+  local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/config.kdl"
+  [[ -f "$cfg" ]] || return 0
+  print -r -- "${RANDOM}${RANDOM}$(date +%s)" >"$nonce" 2>/dev/null || return 0
+  chezmoi apply "$cfg" >/dev/null 2>&1 || true
+}
 
 # The override represents "viewing this machine from elsewhere" (the WezTerm SSH
 # tint), so only honor it in a REMOTE session — a local session at the machine
@@ -76,6 +90,7 @@ else
   cp "$canon_json" "$eff_json"
   cp "$canon_zsh" "$eff_zsh"
   [[ -r "$canon_kdl" ]] && sed 's/chezmoi-system-base {/chezmoi-system {/' "$canon_kdl" >"$eff_kdl"
+  bump_reload_nonce
   print -r -- "$key" >"$stamp"
   exit 0
 fi
@@ -116,4 +131,5 @@ if [[ -r "$canon_kdl" ]]; then
     || { rm -f "$eff_kdl.tmp"; cp "$canon_kdl" "$eff_kdl"; }
 fi
 
+bump_reload_nonce
 print -r -- "$key" >"$stamp"

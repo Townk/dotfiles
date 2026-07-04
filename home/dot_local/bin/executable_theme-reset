@@ -1,0 +1,27 @@
+#!/usr/bin/env zsh
+# theme-reset — drop this machine's loose per-session tint override and revert the
+# effective theme to canonical, reloading any running Zellij session live.
+#
+# Why: the tint override (~/.config/theme/override.toml) is pushed by a REMOTE
+# client on connect (sync-remote-assets' theme step) so this machine's theme
+# matches that client's window tint. It is machine-wide, so a later session from a
+# DIFFERENT client inherits the previous client's tint — e.g. after a work laptop
+# SSHes in and tints the box, a Blink-shell session sees that same tint. Run this
+# from such a session to clear the override and return to the canonical palette.
+#
+# Note: the override is machine-wide (not per-session), so this reverts EVERY
+# session on this box; the other client re-pushes its own tint on its next connect.
+emulate -L zsh
+set -uo pipefail
+
+theme_dir="${XDG_CONFIG_HOME:-$HOME/.config}/theme"
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/theme"
+
+# Drop the override, and the staleness stamp so theme-apply is FORCED to regenerate
+# the canonical effective theme (and bump the reload nonce) even if it would
+# otherwise decide nothing changed.
+rm -f "$theme_dir/override.toml" "$cache/.stamp"
+
+# Re-resolve → canonical effective files + a live Zellij reload (theme-apply's
+# nonce bump re-applies config.kdl). theme-apply is an internal helper in libexec.
+exec "$HOME/.local/libexec/theme-apply"

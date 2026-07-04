@@ -24,6 +24,10 @@ absolute path from its caller, so it never needs to be on `PATH`:
 - `sync-remote-assets` — the single entry point for pre-connect host→remote
   syncs (glyph-picker DB, WezTerm tint override), driven by an ssh
   `Match host ... exec` hook (see `~/.ssh/config.example`).
+- `theme-apply` — resolves the EFFECTIVE theme (canonical ⊕ the loose per-machine
+  `~/.config/theme/override.toml`) into the runtime files the shell, dialogs, and
+  Zellij read; run from shell init (`dot_zshrc`) before the Zellij attach, and by
+  the user-facing `theme-reset` (in `bin`), which clears the override and re-runs it.
 - The AI terminal assistant is now the single `ai-playbook` Go binary
   (`~/Projects/langs/go/ai-playbook`, manually `go install`ed), which subsumes the
   former `ai-assist-*` shell stack (popup/input/shell/run/ask/remember/triage/

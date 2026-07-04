@@ -35,7 +35,7 @@ matches=$(rg -n '#[0-9a-fA-F]{6}' home/ \
   -g '!**/lib/zellij.zsh' \
   -g '!**/bin/executable_ai-commit' \
   -g '!**/bin/executable_notify' \
-  -g '!**/bin/executable_theme-apply' \
+  -g '!**/libexec/executable_theme-apply' \
   2>/dev/null)
 
 if [ -n "$matches" ]; then
