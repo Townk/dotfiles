@@ -235,13 +235,13 @@ keybinds clear-defaults=true {
         bind "Shift Up" {
             MessagePlugin "context-keys" {
                 name "shift+up"
-                payload "default: $source; when yazi,hunk: run {{ joinPath .chezmoi.homeDir ".local/bin/system-backup-tm" }} route shift+up {pid}"
+                payload "default: $source; when yazi: $source; when hunk: run {{ joinPath .chezmoi.homeDir ".local/bin/system-backup-tm" }} route shift+up {pid}"
             }
         }
         bind "Shift Down" {
             MessagePlugin "context-keys" {
                 name "shift+down"
-                payload "default: $source; when yazi,hunk: run {{ joinPath .chezmoi.homeDir ".local/bin/system-backup-tm" }} route shift+down {pid}"
+                payload "default: $source; when yazi: $source; when hunk: run {{ joinPath .chezmoi.homeDir ".local/bin/system-backup-tm" }} route shift+down {pid}"
             }
         }
 
