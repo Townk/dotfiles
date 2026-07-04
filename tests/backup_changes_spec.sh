@@ -141,7 +141,7 @@ EOF
         local repo="$1"; shift
         print -r -- "$repo $*" >> "$FIX/calls"
         case "$1" in
-          diff) cat "$FIX/diff.json" ;;
+          diff) [ -e "$FIX/diff-fails" ] && return 1; cat "$FIX/diff.json" ;;
           restore)
             local snap="$2" target="" incfile="" p src
             while (( $# )); do
@@ -196,6 +196,16 @@ EOF
       When run run_it
       The output should include "content skipped"
       The stderr should include "size threshold"
+    End
+
+    It 'fails (rc 1) when restic diff fails instead of reporting no changes'
+      run_it() {
+        source "$LIB/backup.zsh"; stub_restic
+        touch "$FIX/diff-fails"
+        bkp::changeset::patch aaaa bbbb "$FIX/home"
+      }
+      When run run_it
+      The status should equal 1
     End
   End
 End

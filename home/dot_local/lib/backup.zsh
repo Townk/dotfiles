@@ -606,7 +606,7 @@ bkp::changeset::guard() {
     (( st[1] > max )) || continue
     local sum
     sum=$(cksum "$f")
-    log_warn "bkp: changes: ${f#$work/[ab]} is $(( st[1] / 1048576 ))MB — over the size threshold, content skipped"
+    log_warn "bkp: changes: ${f#$work/[ab]} is ${st[1]} bytes — over the size threshold, content skipped"
     print -r -- "[tm] content skipped (over changes.size_threshold): ${st[1]} bytes, cksum ${sum%% *}" > "$f"
   done
   return 0
@@ -619,13 +619,14 @@ bkp::changeset::guard() {
 # are literally named a and b — with --src-prefix=/--dst-prefix= the dir
 # names become the conventional a/ b/ labels, already live-relative.
 bkp::changeset::patch() {
+  setopt local_options pipe_fail
   local a="$1" b="$2" scope="${3:-/}"
   local staging thresh work
   staging=$(bkp::config::staging_path) || return 2
   thresh=$(bkp::config::change_size_threshold) || return 2
   work=$(mktemp -d "${TMPDIR:-/tmp}/bkp-changes.XXXXXX") || return 1
   {
-    bkp::restic "$staging" diff --json "$a" "$b" 2>/dev/null |
+    bkp::restic "$staging" diff --json "$a" "$b" |
       jq -r --arg s "${scope%/}/" 'select(.message_type == "change")
         | select(.modifier != "U")
         | select(.path | endswith("/") | not)
