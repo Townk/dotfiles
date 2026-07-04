@@ -13,6 +13,8 @@ tm_timeline() {
   staging=$(bkp::config::staging_path) || exit 2
   print -r -- $$ > "$s/timeline.pid"
   if bkp::ux::has_fuse; then
+    # The mount takes seconds — say so instead of showing a dead pane.
+    printf '%s⏳ mounting snapshot repository…%s\n' "$C_DIM" "$C_RES"
     bkp::mount "$staging" "$s/mnt" || exit 1
     print -r -- "$REPLY" > "$s/mount.pid"
   fi
@@ -74,6 +76,7 @@ tm_lens() {
   local s="$1" i
   print -r -- $$ > "$s/lens.pid"
   print -r -- $$ > "$s/yazi.id"
+  printf '%s⏳ waiting for the snapshot mount…%s\n' "$C_DIM" "$C_RES"
   for (( i = 0; i < 100; i++ )); do
     [[ -e "$s/ready" ]] && break
     sleep 0.1
@@ -96,12 +99,29 @@ tm_lens() {
   }
 }
 
+# tm_ctl <session> <older|newer|end> [hovered]
+# Fired by the yazi overlay bindings, which run with yazi's cwd and pass
+# the hovered entry — recorded (anchor-relative) so the refresh can keep
+# the user's place across rungs.
 tm_ctl() {
-  local s="$1" op="$2"
+  local s="$1" op="$2" hovered="${3:-}"
   [[ -d "$s" ]] || exit 0
   case "$op" in
-    older | newer) bkp::tm::step "$s" "$op" ;;
-    end)           bkp::tm::end "$s" ;;
+    older | newer)
+      if [[ "$(<"$s/lens")" == explore ]]; then
+        local REPLY
+        if bkp::tm::rung_path "$s" 2>/dev/null; then
+          local base="$REPLY$(<"$s/anchor")"
+          if [[ "$PWD" == "$base"* ]]; then
+            local relh=""
+            [[ -n "$hovered" && "$hovered" == "$base"* ]] && relh="${hovered#$base}"
+            print -r -- "${PWD#$base}"$'\t'"$relh" > "$s/yazi.loc"
+          fi
+        fi
+      fi
+      bkp::tm::step "$s" "$op"
+      ;;
+    end) bkp::tm::end "$s" ;;
   esac
 }
 

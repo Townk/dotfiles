@@ -102,9 +102,30 @@ bkp::tm::refresh() {
     bkp::tm::rung_path "$s" || return 1
     local rung="$REPLY"
     [[ -f "$s/yazi.id" ]] || return 0   # yazi not up yet
-    local yid
+    local yid loc="" cwd="" hovered=""
     yid=$(<"$s/yazi.id")
-    ya emit-to "$yid" cd "$rung$anchor" 2>/dev/null || touch "$s/respawn"
+    # yazi.loc (written by the step bindings) carries the anchor-relative
+    # location: "<cwd-rel>\t<hovered-rel>". Re-target the new rung there;
+    # when the path no longer exists, walk up to the first parent that
+    # does — never above the anchor.
+    if [[ -f "$s/yazi.loc" ]]; then
+      loc=$(<"$s/yazi.loc")
+      cwd="${loc%%$'\t'*}"
+      hovered="${loc#*$'\t'}"
+      [[ "$hovered" == "$loc" ]] && hovered=""
+    fi
+    local base="$rung$anchor" target="$rung$anchor$cwd"
+    while [[ ! -d "$target" && "$target" != "$base" ]]; do
+      target="${target:h}"
+    done
+    [[ -d "$target" ]] || target="$base"
+    local hover_abs="$base$hovered" hover_parent=""
+    [[ -n "$hovered" ]] && hover_parent="${hover_abs:h}"
+    if [[ -n "$hovered" && -e "$hover_abs" && "$hover_parent" == "$target" ]]; then
+      ya emit-to "$yid" reveal "$hover_abs" 2>/dev/null || touch "$s/respawn"
+    else
+      ya emit-to "$yid" cd "$target" 2>/dev/null || touch "$s/respawn"
+    fi
   fi
   return 0
 }
@@ -222,18 +243,38 @@ bkp::tm::timeline_render() {
 bkp::tm::yazi_overlay() {
   local s="$1" src="${YAZI_USER_CONFIG:-$HOME/.config/yazi}" ovl="$1/yazi"
   mkdir -p "$ovl"
+  # Symlink the WHOLE user config (theme.toml, flavors, init.lua…) — only
+  # keymap.toml, init.lua and plugins/ are composed. A hardcoded list here
+  # once dropped the theme on the floor.
   local f
-  for f in yazi.toml init.lua package.toml plugins flavors; do
-    [[ -e "$src/$f" ]] && ln -sfn "$src/$f" "$ovl/$f"
+  for f in "$src"/*(DN); do
+    [[ "${f:t}" == keymap.toml || "${f:t}" == init.lua || "${f:t}" == plugins ]] && continue
+    ln -sfn "$f" "$ovl/${f:t}"
   done
+  # plugins/: the user's plugins plus the generated session gate.
+  mkdir -p "$ovl/plugins"
+  if [[ -d "$src/plugins" ]]; then
+    for f in "$src/plugins"/*(DN); do
+      ln -sfn "$f" "$ovl/plugins/${f:t}"
+    done
+  fi
+  bkp::tm::gate_plugin "$ovl/plugins"
+  # init.lua: the user's own, then the gate (env-driven, static content).
+  {
+    [[ -f "$src/init.lua" ]] && print -r -- "dofile(\"$src/init.lua\")"
+    print -r -- 'require("tm-gate"):setup()'
+  } > "$ovl/init.lua"
   local bin='$HOME/.local/bin/system-backup-tm'
-  # One row per binding, inline-table form (also reused for the appended form).
+  # One row per binding, inline-table form (also reused for the appended
+  # form). Step bindings pass yazi's hovered entry ($0) and inherit yazi's
+  # cwd — that context is what preserves the selection across rungs.
   local -a rows=(
-    "  { on = \"K\", run = 'shell --orphan \"$bin ctl $s newer\"', desc = \"tm: newer snapshot\" },"
-    "  { on = \"J\", run = 'shell --orphan \"$bin ctl $s older\"', desc = \"tm: older snapshot\" },"
-    "  { on = \"<S-Up>\", run = 'shell --orphan \"$bin ctl $s newer\"', desc = \"tm: newer snapshot\" },"
-    "  { on = \"<S-Down>\", run = 'shell --orphan \"$bin ctl $s older\"', desc = \"tm: older snapshot\" },"
+    "  { on = \"K\", run = 'shell --orphan \"$bin ctl $s newer \\\"\$0\\\"\"', desc = \"tm: newer snapshot\" },"
+    "  { on = \"J\", run = 'shell --orphan \"$bin ctl $s older \\\"\$0\\\"\"', desc = \"tm: older snapshot\" },"
+    "  { on = \"<S-Up>\", run = 'shell --orphan \"$bin ctl $s newer \\\"\$0\\\"\"', desc = \"tm: newer snapshot\" },"
+    "  { on = \"<S-Down>\", run = 'shell --orphan \"$bin ctl $s older \\\"\$0\\\"\"', desc = \"tm: older snapshot\" },"
     "  { on = \"R\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
+    "  { on = \"<S-Enter>\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"q\", run = [ 'shell --orphan \"$bin ctl $s end\"', \"quit\" ], desc = \"tm: end scrub session\" },"
   )
   print -rl -- "${rows[@]}" > "$ovl/.rows"
@@ -267,48 +308,104 @@ bkp::tm::yazi_overlay() {
   print -r -- "$ovl"
 }
 
-# bkp::tm::jail_profile <session>
-# Seatbelt allowlist profile for the explore lens, written to <s>/jail.sb;
-# prints the path. Semantics (spec §5.3): the OS runs normally
-# (allow default), but $HOME and /Volumes are unreadable EXCEPT the
-# session, the mount, yazi's own config/state/cache, and the backup
-# tooling the session bindings shell out to; writes are confined to
-# temp dirs, yazi state/cache, and the session's control files.
-# Seatbelt matches RESOLVED paths — $TMPDIR must be realpath'd
-# (/var/folders → /private/var/folders) or its allows never match.
-bkp::tm::jail_profile() {
-  local s="$1" t
-  t=$(cd "${TMPDIR:-/tmp}" && pwd -P) || t=/tmp
-  cat > "$s/jail.sb" <<EOF
-(version 1)
-(allow default)
-(deny file-write*)
-(allow file-write*
-  (subpath "$t") (subpath "/private/tmp") (subpath "/dev")
-  (subpath "$s")
-  (subpath "$HOME/.local/state/yazi") (subpath "$HOME/.cache/yazi"))
-(deny file-read* (subpath "$HOME") (subpath "/Volumes"))
-(allow file-read-metadata
-  (literal "/Users") (literal "$HOME")
-  (literal "$HOME/.config") (literal "$HOME/.cache")
-  (literal "$HOME/.local") (literal "$HOME/.local/state")
-  (literal "$HOME/.local/state/terminal-backup")
-  (literal "${BKP_TM_SESSIONS}"))
-(allow file-read*
-  (subpath "$s")
-  (subpath "$HOME/.config/yazi") (subpath "$HOME/.config/backup")
-  (subpath "$HOME/.local/state/yazi") (subpath "$HOME/.cache/yazi")
-  (subpath "$HOME/.cache/theme")
-  (subpath "$HOME/.local/lib") (subpath "$HOME/.local/bin")
-  (subpath "$t") (subpath "/private/tmp"))
+# bkp::tm::gate_plugin <plugins-dir>
+# Write the tm-gate yazi plugin (static content, env-driven at runtime):
+# 1) bounce any cd that leaves <mnt>/ids/<rung><anchor> back to the last
+#    good directory (cross-rung cds match the pattern, so scrubbing works);
+# 2) replace the header cwd with "\u25cf <age>  <live-relative path>" so the
+#    mount plumbing never shows. Reads BKP_TM_MNT/ANCHOR/SESSION from env.
+bkp::tm::gate_plugin() {
+  local dir="$1/tm-gate.yazi"
+  mkdir -p "$dir"
+  cat > "$dir/main.lua" <<'EOF'
+-- tm-gate.yazi — scrub-session navigation gate + header rewrite
+-- (generated per session by backup-tm.zsh; configured via BKP_TM_* env).
+local M = {}
+
+local function esc(s)
+	return (s:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1"))
+end
+
+function M:setup()
+	local mnt = os.getenv("BKP_TM_MNT")
+	local anchor = os.getenv("BKP_TM_ANCHOR") or ""
+	local sess = os.getenv("BKP_TM_SESSION")
+	if not mnt then
+		return
+	end
+	local pat = "^" .. esc(mnt) .. "/ids/([^/]+)" .. esc(anchor) .. "(.*)$"
+
+	-- id(8) -> epoch, from the session ladder (static for the session).
+	local epochs = {}
+	if sess then
+		local f = io.open(sess .. "/ladder", "r")
+		if f then
+			for line in f:lines() do
+				local id, epoch = line:match("^(%x+)\t(%d+)")
+				if id then
+					epochs[id:sub(1, 8)] = tonumber(epoch)
+				end
+			end
+			f:close()
+		end
+	end
+
+	local function inside(cwd)
+		local id, rest = cwd:match(pat)
+		if not id then
+			return nil
+		end
+		if rest ~= "" and rest:sub(1, 1) ~= "/" then
+			return nil
+		end
+		return id, rest
+	end
+
+	local last_ok = nil
+	ps.sub("cd", function()
+		local cwd = tostring(cx.active.current.cwd)
+		if inside(cwd) then
+			last_ok = cwd
+		elseif last_ok then
+			ya.emit("cd", { last_ok })
+		end
+	end)
+
+	-- Header: hide the mount plumbing, show when + where (live-relative).
+	pcall(function()
+		Header.cwd = function(_)
+			local cwd = tostring(cx.active.current.cwd)
+			local id, rest = inside(cwd)
+			if not id then
+				return ui.Span(" " .. cwd .. " ")
+			end
+			local label = "snapshot " .. id:sub(1, 8)
+			local epoch = epochs[id:sub(1, 8)]
+			if epoch then
+				local age = os.time() - epoch
+				if age < 3600 then
+					label = math.floor(age / 60) .. "m ago"
+				elseif age < 172800 then
+					label = math.floor(age / 3600) .. "h ago"
+				else
+					label = math.floor(age / 86400) .. "d ago"
+				end
+			end
+			return ui.Span(" \u{25cf} " .. label .. "  " .. anchor .. rest .. " ")
+		end
+	end)
+end
+
+return M
 EOF
-  print -r -- "$s/jail.sb"
 }
 
 # bkp::tm::lens_cmd <session>
 # The lens pane argv, one element per line (caller reads into an array).
-# Explore: yazi under a native sandbox-exec jail (bx was a denylist-model
-# editor launcher that scanned the FUSE mount at startup — wrong tool).
+# Explore: plain yazi anchored inside the rung — the tm-gate plugin does
+# the confinement (navigation bounce + header rewrite); snapshots are
+# immutable via the read-only mount, so no sandbox is needed (spec §5.3
+# as amended: mistake-prevention, not a security boundary).
 # Diff: hunk in watch mode.
 bkp::tm::lens_cmd() {
   local s="$1" lens anchor REPLY
@@ -318,16 +415,12 @@ bkp::tm::lens_cmd() {
     return 0
   fi
   bkp::tm::rung_path "$s" || return 1
-  local rung="$REPLY" ovl yid jail
+  local rung="$REPLY" ovl yid
   ovl=$(bkp::tm::yazi_overlay "$s") || return 1
   yid=$(<"$s/yazi.id")
-  if command -v sandbox-exec >/dev/null 2>&1; then
-    jail=$(bkp::tm::jail_profile "$s") || return 1
-    print -rl -- sandbox-exec -f "$jail"
-  else
-    log_warn "bkp: sandbox-exec unavailable — explore runs unjailed (mount is still read-only)"
-  fi
-  print -rl -- env "YAZI_CONFIG_HOME=$ovl" yazi --client-id "$yid" "$rung$anchor"
+  print -rl -- env "YAZI_CONFIG_HOME=$ovl" \
+    "BKP_TM_MNT=$s/mnt" "BKP_TM_ANCHOR=$anchor" "BKP_TM_SESSION=$s" \
+    yazi --client-id "$yid" "$rung$anchor"
 }
 
 : ${BKP_TM_BIN:="$HOME/.local/bin/system-backup-tm"}
@@ -346,12 +439,13 @@ bkp::tm::launch() {
     zellij run --close-on-exit --direction right --name "tm lens" \
       -- "$BKP_TM_BIN" lens "$s" || { rm -rf "$s"; return 1 }
     # The new pane takes focus; grow it leftward so the timeline pane
-    # narrows toward its ~26-col design width, then come back.
+    # narrows toward its ~26-col design width. Focus STAYS on the lens —
+    # scrubbing works from inside it (Shift+arrows / K / J), and a focused
+    # timeline reads as two active panes with no visual tiebreaker.
     local i
     for i in 1 2 3 4 5; do
       zellij action resize increase left 2>/dev/null || break
     done
-    zellij action move-focus left 2>/dev/null || :
     "$BKP_TM_BIN" timeline "$s" || return $?
   else
     bkp::tm::fallback "$s" || return $?

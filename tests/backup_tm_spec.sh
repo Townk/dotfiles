@@ -276,7 +276,7 @@ EOS
       }
       When run run_it
       The line 1 should equal "linked"
-      The line 2 should equal 6
+      The line 2 should equal 7
       The line 3 should equal "has-bindings"
     End
 
@@ -302,7 +302,7 @@ EOF
         jq -r '.input.prepend_keymap | length' <<<"$json"
       }
       When run run_it
-      The line 1 should equal 7
+      The line 1 should equal 8
       The line 2 should equal "K"
       The line 3 should equal "X"
       The line 4 should equal 1
@@ -321,7 +321,7 @@ EOF
       The line 2 should equal 1
     End
 
-    It 'builds a jailed explore command (native sandbox-exec profile)'
+    It 'builds a plain gated explore command (env-driven tm-gate, no sandbox)'
       run_it() {
         source "$LIB/backup-tm.zsh"
         print -r -- explore > "$S/lens"
@@ -329,28 +329,38 @@ EOF
         bkp::tm::lens_cmd "$S"
       }
       When run run_it
-      The line 1 should equal "sandbox-exec"
-      The line 2 should equal "-f"
-      The line 3 should equal "$S/jail.sb"
+      The line 1 should equal "env"
+      The output should include "BKP_TM_MNT=$S/mnt"
+      The output should include "BKP_TM_ANCHOR=$FIX/anchor"
+      The output should include "BKP_TM_SESSION=$S"
       The output should include "--client-id"
       The output should include "/mnt/ids/cccc0000"
+      The output should not include "sandbox-exec"
     End
 
-    It 'writes a jail profile that seals $HOME and uses resolved temp paths'
+    It 'composes plugins/init.lua: user config + generated tm-gate'
       run_it() {
         source "$LIB/backup-tm.zsh"
-        local jail
-        jail=$(bkp::tm::jail_profile "$S")
-        grep -c 'deny file-read\* (subpath "'"$HOME"'")' "$jail"
-        grep -c '(subpath "'"$S"'")' "$jail"
-        # Seatbelt matches resolved paths: the TMPDIR allows (read + write)
-        # must use the /private/var real path, not the /var symlink.
-        grep -c '(subpath "/private/var/folders' "$jail"
+        mkdir -p "$FIX/yazicfg/plugins/userp.yazi"
+        printf 'return {}\n' > "$FIX/yazicfg/plugins/userp.yazi/main.lua"
+        printf '-- user init\n' > "$FIX/yazicfg/init.lua"
+        printf '# theme\n' > "$FIX/yazicfg/theme.toml"
+        local ovl
+        ovl=$(bkp::tm::yazi_overlay "$S")
+        [ -L "$ovl/theme.toml" ] && echo theme-linked
+        [ -L "$ovl/plugins/userp.yazi" ] && echo userplugin-linked
+        grep -c 'ps.sub("cd"' "$ovl/plugins/tm-gate.yazi/main.lua"
+        grep -c 'BKP_TM_MNT' "$ovl/plugins/tm-gate.yazi/main.lua"
+        grep -c 'require("tm-gate")' "$ovl/init.lua"
+        grep -c 'dofile' "$ovl/init.lua"
       }
       When run run_it
-      The line 1 should equal 1
-      The line 2 should equal 2
-      The line 3 should equal 2
+      The line 1 should equal "theme-linked"
+      The line 2 should equal "userplugin-linked"
+      The line 3 should equal 1
+      The line 4 should equal 1
+      The line 5 should equal 1
+      The line 6 should equal 1
     End
 
     It 'builds the hunk --watch command for the diff lens'
@@ -570,15 +580,16 @@ EOF
       The status should be success
       The output should include "run --close-on-exit --direction right"
       The output should include "action resize increase left"
-      The output should include "action move-focus left"
       The output should include "tm timeline"
       The output should not include "new-tab"
+      # focus deliberately STAYS on the lens pane — no move-focus back
+      The output should not include "move-focus"
     End
 
     It 'fallback survives a failing lens under set -e and still tears down'
       run_it() {
-        printf '#!/bin/sh\nexit 3\n' > "$STUB/sandbox-exec"
-        chmod +x "$STUB/sandbox-exec"
+        printf '#!/bin/sh\nexit 3\n' > "$STUB/yazi"
+        chmod +x "$STUB/yazi"
         cat > "$FIX/driver.zsh" <<EOS
 set -eu -o pipefail
 source "$LIB/backup-tm.zsh"
