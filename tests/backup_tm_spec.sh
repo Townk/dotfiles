@@ -97,6 +97,48 @@ EOF
       When run run_it
       The output should equal 1
     End
+
+    It 'refreshes a FUSE-less diff session from a per-rung restore cache'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        local calls="$FIX/restore.calls"
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1" in
+            snapshots) cat "$FIX/snaps.json" ;;
+            restore)
+              shift
+              print -r -- restore >> "$calls"
+              local target="" anchor=""
+              while (( $# )); do
+                case "$1" in
+                  --target) target="$2"; shift 2 ;;
+                  --include) anchor="$2"; shift 2 ;;
+                  *) shift ;;
+                esac
+              done
+              mkdir -p "$target$anchor"
+              print past > "$target$anchor/f.txt"
+              ;;
+            *) return 0 ;;
+          esac
+        }
+        local s
+        s=$(bkp::tm::session_new diff "$FIX/anchor")
+        print now > "$FIX/anchor/f.txt"
+        # no $s/mnt dir at all — rung_root must fall back to the cache
+        bkp::tm::refresh "$s" || { echo "refresh1 rc=$?"; return 1 }
+        grep -c 'diff --git' "$s/current.patch"
+        [[ -f "$s/rungs/cccc0000/.done" ]] && echo done-exists || echo missing
+        # second refresh must be a cache hit — no second restore invocation
+        bkp::tm::refresh "$s" || { echo "refresh2 rc=$?"; return 1 }
+        grep -c '' "$calls"
+      }
+      When run run_it
+      The line 1 should equal 1
+      The line 2 should equal "done-exists"
+      The line 3 should equal 1
+    End
   End
 
   Describe 'bkp::tm::timeline_render'

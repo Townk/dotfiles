@@ -65,10 +65,12 @@ Open a scrub session anchored at [path] (default \$PWD): a timeline pane
 (under Zellij) or keybar (without it) steps through snapshots while a lens
 pane follows along. Lens picks itself — explore (yazi, jailed) for a
 directory, diff (hunk) for a file; --diff/--deleted force the diff lens.
-Needs macFUSE for the restic mount; without it, files fall back to an fzf
-version picker that restores the chosen version AS A COPY
+Explore needs macFUSE for the restic mount; without it, a file anchor falls
+back to an fzf version picker that restores the chosen version AS A COPY
 (<path>.<snapid>) — in-place restores go through \`restore\`, which is
-undoable.
+undoable — and a directory anchor errors with the macFUSE hint. The diff
+lens works either way: without macFUSE it restores each rung into a
+per-session cache instead of mounting it.
 EOF
       ;;
     diff)
@@ -178,13 +180,15 @@ main() {
       [[ -z "$lens" && -f "$anchor" ]] && lens=diff
       [[ -z "$lens" ]] && lens=explore
       source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
-      if ! bkp::ux::has_fuse; then
-        if [[ "$lens" == diff && -f "$anchor" ]]; then
+      if ! bkp::ux::has_fuse && [[ "$lens" == explore ]]; then
+        if [[ -f "$anchor" ]]; then
           bkp::ux::browse_fzf "$(bkp::config::staging_path)" "$anchor"
           exit $?
         fi
         die "scrub sessions need macFUSE for the restic mount — approve the system extension, or use \`system-backup changes\` (mount-free)"
       fi
+      # diff lens: FUSE-less sessions fall back to a restore cache per rung
+      # (bkp::tm::rung_root) — proceed to launch either way.
       bkp::tm::launch "$lens" "$anchor"
       ;;
     diff)

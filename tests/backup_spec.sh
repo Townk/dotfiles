@@ -1972,6 +1972,27 @@ JSON
       The status should be success
       The output should include "action new-tab"
     End
+
+    It 'browse launches a zellij scrub session tab for a diff dir anchor without FUSE'
+      run_it() {
+        STUB="$FIX/stub"; mkdir -p "$STUB"
+        printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
+        chmod +x "$STUB/zellij"
+        cat > "$FIX/snaps.json" <<'JSON'
+[{"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
+JSON
+        printf '#!/bin/sh\ncase "$1 $2" in\n  "snapshots --json") cat "%s/snaps.json" ;;\n  *) exit 0 ;;\nesac\n' "$FIX" > "$STUB/restic"
+        chmod +x "$STUB/restic"
+        printf 'roots = []\n' > "$FIX/m.toml"
+        mkdir -p "$FIX/anchor"
+        PATH="$STUB:$PATH" BKP_HAS_FUSE=0 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" ZELLIJ=1 \
+          zsh "$DISPATCH" browse --diff "$FIX/anchor"
+        cat "$FIX/zj.calls"
+      }
+      When run run_it
+      The status should be success
+      The output should include "action new-tab"
+    End
   End
 
   Describe 'declared backup agents (services.toml.tmpl)'

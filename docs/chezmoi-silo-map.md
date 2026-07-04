@@ -277,8 +277,8 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 ## system-backup — Terminal Time Machine backups
 
 **Owner area (safe to edit):**
-- `home/dot_local/bin/executable_system-backup` (dispatcher), `executable_system-backup-capture` / `executable_system-backup-reconcile` (workers)
-- `home/dot_local/lib/backup.zsh` (`bkp::*` — thinning engine, manifest resolver, capture/reconcile, restore/UX)
+- `home/dot_local/bin/executable_system-backup` (dispatcher), `executable_system-backup-capture` / `executable_system-backup-reconcile` (workers), `executable_system-backup-tm` (scrub session worker: timeline/lens/route/apply)
+- `home/dot_local/lib/backup.zsh` (`bkp::*` — thinning engine, manifest resolver, capture/reconcile, restore/UX), `home/dot_local/lib/backup-tm.zsh` (`bkp::tm::*` — scrub session state machine + yazi/hunk lens plumbing)
 - `home/dot_config/backup/manifest.toml` (committed capture spec) + `config.toml.example` (the real `config.toml` is local-only, never committed)
 - `home/dot_config/zsh/functions.d/tm.sh` (the `tm` front-end function)
 - The three `backup-*` sections in `packages/services.toml.tmpl` (the *scheduling keys* schema itself — `start_interval`, `watch_paths`, etc. — belongs to system-services; coordinate)

@@ -9,12 +9,13 @@ set -u -o pipefail
 source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
 
 tm_timeline() {
-  local s="$1" staging pid
+  local s="$1" staging
   staging=$(bkp::config::staging_path) || exit 2
   print -r -- $$ > "$s/timeline.pid"
-  bkp::mount "$staging" "$s/mnt" || exit 1
-  pid=$REPLY
-  print -r -- "$pid" > "$s/mount.pid"
+  if bkp::ux::has_fuse; then
+    bkp::mount "$staging" "$s/mnt" || exit 1
+    print -r -- "$REPLY" > "$s/mount.pid"
+  fi
   {
     touch "$s/ready"
     bkp::tm::refresh "$s" || :
@@ -51,7 +52,7 @@ tm_timeline() {
   } always {
     bkp::tm::end "$s"
     bkp::tm::kill_lens "$s"
-    bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
+    [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
     rm -rf "$s"
   }
 }

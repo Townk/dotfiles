@@ -48,9 +48,6 @@ bkp::tm::rung_id() {
   REPLY="${REPLY%%$'\t'*}"
 }
 
-# bkp::tm::mount_root <session> — the session mountpoint path.
-bkp::tm::mount_root() { print -r -- "$1/mnt" }
-
 # bkp::tm::rung_path <session>
 # REPLY = mount path of the current rung (restic mount's default ids/
 # layout uses SHORT ids).
@@ -60,6 +57,32 @@ bkp::tm::rung_path() {
   REPLY="$s/mnt/ids/${REPLY[1,8]}"
 }
 
+# bkp::tm::rung_root <session>
+# REPLY = a root that materializes the current rung at <root><anchor>:
+# the live restic mount when present, else a per-rung restore cache
+# (FUSE-less diff sessions; cleaned with the session dir).
+bkp::tm::rung_root() {
+  local s="$1"
+  bkp::tm::rung_path "$s" || return 1
+  [[ -d "$REPLY" ]] && return 0
+  # Two statements, not one: a single `local a=X b=$a` expands both RHSes
+  # against the pre-statement environment, so `cache` would never see the
+  # `short` this same line just computed.
+  local short="${REPLY:t}"
+  local cache="$s/rungs/$short"
+  if [[ ! -e "$cache/.done" ]]; then
+    local staging anchor snap
+    staging=$(bkp::config::staging_path) || return 2
+    anchor=$(<"$s/anchor")
+    bkp::tm::rung_id "$s" || return 1
+    snap="$REPLY"
+    mkdir -p "$cache"
+    bkp::restic "$staging" restore "$snap" --target "$cache" --include "$anchor" --quiet || return 1
+    touch "$cache/.done"
+  fi
+  REPLY="$cache"
+}
+
 # bkp::tm::refresh <session>
 # Point the lens at the current rung: rewrite current.patch (diff lens —
 # hunk --watch reloads) or DDS-cd yazi (explore lens; a failed emit flags
@@ -67,12 +90,17 @@ bkp::tm::rung_path() {
 bkp::tm::refresh() {
   local s="$1" lens anchor REPLY
   lens=$(<"$s/lens") anchor=$(<"$s/anchor")
-  bkp::tm::rung_path "$s" || return 1
-  local rung="$REPLY"
   if [[ "$lens" == diff ]]; then
+    # FUSE-less fallback: rung_root restores the scoped subtree to a
+    # per-rung cache when the mount isn't there.
+    bkp::tm::rung_root "$s" || return 1
+    local rung="$REPLY"
     bkp::changeset::patch_live "$rung" "$anchor" > "$s/current.patch.new" || return 1
     mv "$s/current.patch.new" "$s/current.patch"
   else
+    # Explore still needs the real mount — yazi navigates it live.
+    bkp::tm::rung_path "$s" || return 1
+    local rung="$REPLY"
     [[ -f "$s/yazi.id" ]] || return 0   # yazi not up yet
     local yid
     yid=$(<"$s/yazi.id")
@@ -288,12 +316,14 @@ bkp::tm::launch() {
 # (Ctrl-C) would abort the process before the always-teardown unmounts.
 bkp::tm::fallback() {
   setopt local_options no_err_exit
-  local s="$1" staging pid key REPLY
+  local s="$1" staging key REPLY
   staging=$(bkp::config::staging_path) || return 2
   print -r -- $$ > "$s/timeline.pid"
   print -r -- $$ > "$s/yazi.id"
-  bkp::mount "$staging" "$s/mnt" || return 1
-  pid=$REPLY
+  if bkp::ux::has_fuse; then
+    bkp::mount "$staging" "$s/mnt" || return 1
+    print -r -- "$REPLY" > "$s/mount.pid"
+  fi
   {
     touch "$s/ready"
     while [[ ! -e "$s/closed" ]]; do
@@ -318,7 +348,7 @@ bkp::tm::fallback() {
     done
   } always {
     bkp::tm::kill_lens "$s"
-    bkp::umount "$pid" "$s/mnt"
+    [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
     rm -rf "$s"
   }
 }
