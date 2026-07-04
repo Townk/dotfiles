@@ -1409,7 +1409,7 @@ bkp::ux::changes() {
     if command -v hunk >/dev/null 2>&1 && [[ -t 1 ]]; then
       hunk patch "$patch" || (( $? == 1 ))
     else
-      ${PAGER:-less} "$patch"
+      ${=PAGER:-less} "$patch"
     fi
   } always {
     rm -f "$patch"

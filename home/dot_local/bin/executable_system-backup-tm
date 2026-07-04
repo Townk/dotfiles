@@ -153,11 +153,17 @@ tm_apply() {
     if [[ -n "$focus" ]]; then
       live+=("/${focus#/}")
     else
-      # fallback: multi-pick over the current patch's files
+      # fallback: multi-pick over the current patch's files. Parsed from the
+      # +++ b/--- a header lines (not the `diff --git` summary line's last
+      # field) so paths containing spaces survive intact; deleted files
+      # appear via their `--- a/` line, /dev/null lines never match either
+      # pattern.
       local -a picked=()
       if [[ -f "$s/current.patch" ]]; then
-        picked=("${(@f)$(awk '/^diff --git /{ print $NF }' "$s/current.patch" |
-          sed 's/^b//' | sort -u | fzf --multi --prompt='apply> ')}") || return 0
+        picked=("${(@f)$(awk '
+            /^\+\+\+ b\// { s = substr($0, 6); sub(/\t$/, "", s); print s; next }
+            /^--- a\// { s = substr($0, 6); sub(/\t$/, "", s); print s }
+          ' "$s/current.patch" | sort -u | fzf --multi --prompt='apply> ')}") || return 0
       fi
       (( ${#picked} )) || return 0
       live+=("${picked[@]}")

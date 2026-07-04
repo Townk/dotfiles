@@ -427,6 +427,43 @@ EOF
       When run run_it
       The output should equal "/tmp-live/f.txt"
     End
+
+    It 'fzf-fallback preserves spaces in paths and skips /dev/null (no hunk focus)'
+      run_it() {
+        printf 'diff\n' > "$S/lens"
+        # No hunk stub at all -> `hunk session list` is "command not found",
+        # sid stays empty, tm_apply falls through to the fzf multi-pick over
+        # current.patch's +++ b/--- a header lines. Real git diff appends a
+        # trailing tab on --- /+++ lines whose path has a space — this
+        # fixture reproduces that so the tab-strip is exercised too.
+        {
+          print -r -- 'diff --git a/live/dir/deleted one.txt b/live/dir/deleted one.txt'
+          print -r -- 'deleted file mode 100644'
+          print -r -- 'index 111..000'
+          print -r -- $'--- a/live/dir/deleted one.txt\t'
+          print -r -- '+++ /dev/null'
+          print -r -- '@@ -1 +0,0 @@'
+          print -r -- '-gone'
+          print -r -- 'diff --git a/live/dir/file one.txt b/live/dir/file one.txt'
+          print -r -- 'index 222..333 100644'
+          print -r -- $'--- a/live/dir/file one.txt\t'
+          print -r -- $'+++ b/live/dir/file one.txt\t'
+          print -r -- '@@ -1 +1 @@'
+          print -r -- '-old'
+          print -r -- '+new'
+        } > "$S/current.patch"
+        # stub fzf: select everything piped to it (stands in for the user
+        # multi-picking every changed file)
+        printf '#!/bin/sh\ncat\n' > "$STUB/fzf"
+        chmod +x "$STUB/fzf"
+        zsh "$BIN" apply "$S" >/dev/null
+        cat "$S/apply.list"
+      }
+      When run run_it
+      The line 1 should equal "/live/dir/deleted one.txt"
+      The line 2 should equal "/live/dir/file one.txt"
+      The lines of output should equal 2
+    End
   End
 
   Describe 'session launcher'
