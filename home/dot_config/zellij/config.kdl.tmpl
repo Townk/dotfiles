@@ -225,7 +225,23 @@ keybinds clear-defaults=true {
         bind "Shift Enter" {
             MessagePlugin "context-keys" {
                 name "shift+enter"
-                payload "default: $source; when agent,cursor-agent: key alt+enter; when pi,claude,ai-playbook: kitty:$source"
+                payload "default: $source; when agent,cursor-agent: key alt+enter; when pi,claude,ai-playbook: kitty:$source; when yazi,hunk: run {{ joinPath .chezmoi.homeDir ".local/bin/system-backup-tm" }} route apply {pid}"
+            }
+        }
+
+        // Shift+Up/Down: timeline scrub inside tm sessions (yazi/hunk lens
+        // panes); every other app gets the raw key. Non-session yazi/hunk
+        // panes get it written back by `system-backup-tm route`.
+        bind "Shift Up" {
+            MessagePlugin "context-keys" {
+                name "shift+up"
+                payload "default: $source; when yazi,hunk: run {{ joinPath .chezmoi.homeDir ".local/bin/system-backup-tm" }} route shift+up {pid}"
+            }
+        }
+        bind "Shift Down" {
+            MessagePlugin "context-keys" {
+                name "shift+down"
+                payload "default: $source; when yazi,hunk: run {{ joinPath .chezmoi.homeDir ".local/bin/system-backup-tm" }} route shift+down {pid}"
             }
         }
 

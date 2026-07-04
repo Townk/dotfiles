@@ -277,14 +277,14 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 ## system-backup — Terminal Time Machine backups
 
 **Owner area (safe to edit):**
-- `home/dot_local/bin/executable_system-backup` (dispatcher), `executable_system-backup-capture` / `executable_system-backup-reconcile` (workers)
-- `home/dot_local/lib/backup.zsh` (`bkp::*` — thinning engine, manifest resolver, capture/reconcile, restore/UX)
+- `home/dot_local/bin/executable_system-backup` (dispatcher), `executable_system-backup-capture` / `executable_system-backup-reconcile` (workers), `executable_system-backup-tm` (scrub session worker: timeline/lens/route/apply)
+- `home/dot_local/lib/backup.zsh` (`bkp::*` — thinning engine, manifest resolver, capture/reconcile, restore/UX), `home/dot_local/lib/backup-tm.zsh` (`bkp::tm::*` — scrub session state machine + yazi/hunk lens plumbing)
 - `home/dot_config/backup/manifest.toml` (committed capture spec) + `config.toml.example` (the real `config.toml` is local-only, never committed)
 - `home/dot_config/zsh/functions.d/tm.sh` (the `tm` front-end function)
 - The three `backup-*` sections in `packages/services.toml.tmpl` (the *scheduling keys* schema itself — `start_interval`, `watch_paths`, etc. — belongs to system-services; coordinate)
 - `docs/system-backup-recovery.md` (bare-metal runbook)
 
-**Out of scope:** restic/httm/hunk/fzf (external; installed via system-packages' Brewfile). `system-service-launchd` and the Servicefile *schema* (system-services — system-backup only declares entries). chezmoi's `managed` query and git (consumed read-only as filters). The `sec::` secret slot holding the repo passphrase (secrets).
+**Out of scope:** restic/zellij/hunk/fzf (external; installed via system-packages' Brewfile). `system-service-launchd` and the Servicefile *schema* (system-services — system-backup only declares entries). chezmoi's `managed` query and git (consumed read-only as filters). The `sec::` secret slot holding the repo passphrase (secrets).
 
 **Public contract (preserve):**
 - **`bkp::thin (now, [id\tepoch…], policy) → keep/drop`** — pure, deterministic, idempotent; wall-clock-aligned grids (LOCAL time, ISO-Monday weeks); half-open age bands; `keep_last=1`. The ladder counts are emergent (band÷grid), never enforced.
@@ -295,7 +295,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **`bkp-undo` tag**: pre-restore safety snapshots; excluded from the thin ladder, expire after 7 days, consumed by `undo`.
 - **Workers no-op silently without `config.toml`** (the committed launchd agents must be harmless pre-onboarding); the dispatcher dies loudly instead.
 
-**Consumes from:** system-services (Servicefile schema + `system-service sync`), secrets (`system-secrets get backup-repo` via `password_command`), shell (`common.zsh` stdlib), chezmoi (`chezmoi managed` filter), external restic/git/httm/hunk/fzf/yq/jq.
+**Consumes from:** system-services (Servicefile schema + `system-service sync`), secrets (`system-secrets get backup-repo` via `password_command`), shell (`common.zsh` stdlib), chezmoi (`chezmoi managed` filter), terminal-mux (`zellij action` for scrub sessions), external restic/git/hunk/fzf/yq/jq.
 
 **Entry points:** `lib/backup.zsh` (top: thinning; middle: manifest/capture; tail: reconcile/UX), `bin/system-backup`, `docs/system-backup-recovery.md`, spec `docs/superpowers/specs/2026-07-03-terminal-time-machine-design.md` (gitignored working doc).
 

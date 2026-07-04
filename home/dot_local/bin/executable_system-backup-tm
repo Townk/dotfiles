@@ -1,0 +1,226 @@
+#!/usr/bin/env zsh
+# system-backup-tm — tm scrub session worker (spec 2026-07-04).
+# Verbs: timeline <session> | lens <session> | ctl <session> <older|newer|end>
+#        route <key> <pane-pid> | apply <session> [path…] | confirm-apply <session>
+# The dispatcher/tm front-end creates sessions; zj-context-keys fires route;
+# yazi bindings fire ctl/apply. BKP_TM_SESSIONS overrides the state root.
+
+set -u -o pipefail
+source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
+
+tm_timeline() {
+  local s="$1" staging
+  staging=$(bkp::config::staging_path) || exit 2
+  print -r -- $$ > "$s/timeline.pid"
+  if bkp::ux::has_fuse; then
+    bkp::mount "$staging" "$s/mnt" || exit 1
+    print -r -- "$REPLY" > "$s/mount.pid"
+  fi
+  {
+    touch "$s/ready"
+    bkp::tm::refresh "$s" || :
+    local key rest last_rung="" rung height
+    while [[ ! -e "$s/closed" ]]; do
+      rung=$(<"$s/rung")
+      if [[ "$rung" != "$last_rung" ]]; then
+        height=$(( LINES - 2 ))
+        (( height < 3 )) && height=20
+        printf '\e[2J\e[H'
+        bkp::tm::timeline_render "$s" "$height"
+        printf '\n%s j/k scrub · a apply · q quit %s' "$C_DIM" "$C_RES"
+        last_rung="$rung"
+      fi
+      read -t 1 -k 1 key 2>/dev/null || continue
+      case "$key" in
+        j) bkp::tm::step "$s" older ;;
+        k) bkp::tm::step "$s" newer ;;
+        a) tm_apply "$s" ;;
+        q) break ;;
+        $'\e')
+          # arrow keys arrive as ESC [ A/B; bare ESC ends the session
+          if read -t 0.05 -k 2 rest 2>/dev/null; then
+            case "$rest" in
+              '[A') bkp::tm::step "$s" newer ;;
+              '[B') bkp::tm::step "$s" older ;;
+            esac
+          else
+            break
+          fi
+          ;;
+      esac
+    done
+  } always {
+    bkp::tm::end "$s"
+    bkp::tm::kill_lens "$s"
+    [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
+    rm -rf "$s"
+  }
+}
+
+tm_lens() {
+  local s="$1" i
+  print -r -- $$ > "$s/lens.pid"
+  print -r -- $$ > "$s/yazi.id"
+  for (( i = 0; i < 100; i++ )); do
+    [[ -e "$s/ready" ]] && break
+    sleep 0.1
+  done
+  [[ -e "$s/ready" ]] || { log_error "bkp: session mount never came up"; bkp::tm::end "$s"; exit 1 }
+  local -a cmd
+  {
+    while [[ ! -e "$s/closed" ]]; do
+      cmd=("${(@f)$(bkp::tm::lens_cmd "$s")}") || break
+      ( cd "$s" && "${cmd[@]}" )
+      # explore lens: a failed DDS cd flags a respawn; anything else ends
+      if [[ -e "$s/respawn" && ! -e "$s/closed" ]]; then
+        rm -f "$s/respawn"
+        continue
+      fi
+      break
+    done
+  } always {
+    bkp::tm::end "$s"
+  }
+}
+
+tm_ctl() {
+  local s="$1" op="$2"
+  [[ -d "$s" ]] || exit 0
+  case "$op" in
+    older | newer) bkp::tm::step "$s" "$op" ;;
+    end)           bkp::tm::end "$s" ;;
+  esac
+}
+
+# tm_route <key> <pane-pid>
+# zj-context-keys fires this for Shift+Up/Down/Enter over yazi/hunk panes.
+# If the pane belongs to a scrub session, drive it; otherwise write the
+# original key through so non-session panes lose nothing.
+tm_route() {
+  local key="$1" pid="$2" s lpid tpid
+  for s in "$BKP_TM_SESSIONS"/s.*(/N); do
+    lpid="" tpid=""
+    [[ -f "$s/lens.pid" ]] && lpid=$(<"$s/lens.pid")
+    [[ -f "$s/timeline.pid" ]] && tpid=$(<"$s/timeline.pid")
+    if [[ "$lpid" == "$pid" || "$tpid" == "$pid" ]]; then
+      case "$key" in
+        shift+up)   bkp::tm::step "$s" newer ;;
+        shift+down) bkp::tm::step "$s" older ;;
+        apply)      tm_apply "$s" ;;
+      esac
+      return 0
+    fi
+  done
+  local seq=""
+  case "$key" in
+    shift+up)   seq=$'\e[1;2A' ;;
+    shift+down) seq=$'\e[1;2B' ;;
+    apply)      seq=$'\r' ;;
+  esac
+  [[ -n "$seq" ]] && zellij action write-chars -- "$seq" 2>/dev/null
+  return 0
+}
+
+# tm_apply <session> [selected-path…]
+# Assemble the apply selection (spec §6) and open the confirm gate in a
+# floating pane (inline when not under Zellij).
+tm_apply() {
+  setopt local_options pipe_fail
+  local s="$1"; shift 2>/dev/null || :
+  local lens="" REPLY
+  [[ -f "$s/lens" ]] && lens=$(<"$s/lens")
+  bkp::tm::rung_id "$s" || return 1
+  local short="${REPLY[1,8]}"
+  local -a live=()
+  if (( $# )); then
+    local p
+    for p in "$@"; do
+      if [[ "$p" == "$s/mnt/ids/$short"/* ]]; then
+        live+=("${p#$s/mnt/ids/$short}")
+      else
+        log_error "bkp: selection is not under the current rung's mount: $p"
+        return 1
+      fi
+    done
+  elif [[ "$lens" == diff ]]; then
+    local sid="" focus=""
+    sid=$(hunk session list 2>/dev/null |
+      awk -v want="path: $s" \
+        '/^[0-9a-f]/ { id = $1 } { line = $0; sub(/^[ \t]+/, "", line) } line == want { print id; exit }')
+    if [[ -n "$sid" ]]; then
+      focus=$(hunk session get "$sid" --json 2>/dev/null | jq -r '.focus.file // empty')
+    fi
+    if [[ -n "$focus" ]]; then
+      live+=("/${focus#/}")
+    else
+      # fallback: multi-pick over the current patch's files. Parsed from the
+      # +++ b/--- a header lines (not the `diff --git` summary line's last
+      # field) so paths containing spaces survive intact; deleted files
+      # appear via their `--- a/` line, /dev/null lines never match either
+      # pattern.
+      local -a picked=()
+      if [[ -f "$s/current.patch" ]]; then
+        picked=("${(@f)$(awk '
+            /^\+\+\+ b\// { s = substr($0, 6); sub(/\t$/, "", s); print s; next }
+            /^--- a\// { s = substr($0, 6); sub(/\t$/, "", s); print s }
+          ' "$s/current.patch" | sort -u | fzf --multi --prompt='apply> ')}") || return 0
+      fi
+      (( ${#picked} )) || return 0
+      live+=("${picked[@]}")
+    fi
+  else
+    log_warn "bkp: nothing selected — select in yazi and press R to apply"
+    return 0
+  fi
+  (( ${#live} )) || return 0
+  print -rl -- "${live[@]}" > "$s/apply.list"
+  if [[ -n "${ZELLIJ:-}" ]]; then
+    zellij action new-pane --floating --close-on-exit \
+      --name "" --pinned true --width 70 --height 14 \
+      -- "$HOME/.local/bin/system-backup-tm" confirm-apply "$s"
+  else
+    tm_confirm_apply "$s"
+  fi
+}
+
+# tm_confirm_apply <session>
+# The gate: show the selection, warn (data loss + the bkp-undo safety
+# line), and only on explicit confirmation restore --force from the
+# current rung. The dialog IS the --force consent (spec §6).
+tm_confirm_apply() {
+  setopt local_options pipe_fail
+  local s="$1" REPLY
+  local -a live=()
+  [[ -f "$s/apply.list" ]] && live=("${(@f)$(<"$s/apply.list")}")
+  (( ${#live} )) || return 0
+  bkp::tm::rung_id "$s" || return 1
+  local snap="$REPLY"
+  if [[ "${BKP_TM_ASSUME_YES:-}" != 1 ]]; then
+    source "$HOME/.local/lib/input-common.zsh"
+    local prompt="Restore ${#live} path(s) from snapshot ${snap[1,8]} onto your live filesystem?
+
+$(print -rl -- "${live[@]}" | head -8)
+
+This writes over your live files and can cause data loss.
+Your current state is snapshotted first — \`system-backup undo\` reverts this."
+    input::confirm "$prompt" --title "Apply from the past" --danger \
+      --affirmative "Restore" --negative "Cancel" >/dev/null || return 0
+  fi
+  bkp::restore::paths "$snap" --force "${live[@]}"
+}
+
+main() {
+  local verb="${1:-}"
+  shift 2>/dev/null || true
+  case "$verb" in
+    timeline)      tm_timeline "$1" ;;
+    lens)          tm_lens "$1" ;;
+    ctl)           tm_ctl "$@" ;;
+    route)         tm_route "$@" ;;          # Task 9
+    apply)         tm_apply "$@" ;;          # Task 10
+    confirm-apply) tm_confirm_apply "$@" ;;  # Task 10
+    *) die "system-backup-tm: unknown verb: $verb" ;;
+  esac
+}
+
+main "$@"

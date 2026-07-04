@@ -24,3 +24,8 @@ password_command = "zsh -c 'for f in ~/.config/zsh/secrets.d/*.sh(N); do source 
 # [[target]]
 # name = "onedrive"
 # path = "~/Library/CloudStorage/OneDrive-Company/terminal-backup"
+
+# Changeset review (`system-backup changes`, tm --diff): files larger than
+# this are stubbed out of the synthesized patch (the skip is logged).
+# [changes]
+# size_threshold = "5m"

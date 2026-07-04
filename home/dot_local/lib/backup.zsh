@@ -528,6 +528,166 @@ bkp::restic::parse_snapshots() {
   done
 }
 
+# --- snapshot addressing (spec 2026-07-04 §4) ---------------------------
+
+# bkp::snap::ladder [<config>]
+# Capture snapshots newest-first as <full-id>\t<epoch>. bkp-undo snapshots
+# are restore plumbing, not points on the time ladder — excluded.
+bkp::snap::ladder() {
+  local staging
+  staging=$(bkp::config::staging_path "$@") || return 2
+  bkp::restic "$staging" snapshots --json |
+    jq '[(. // [])[] | select(((.tags // []) | index("bkp-undo")) | not)]' |
+    bkp::restic::parse_snapshots | sort -t$'\t' -k2,2 -rn
+}
+
+# bkp::snap::expand <prefix> <ladder> — REPLY = full id for a hex prefix.
+bkp::snap::expand() {
+  local prefix="$1" ladder="$2" line
+  for line in ${(f)ladder}; do
+    if [[ "${line%%$'\t'*}" == "$prefix"* ]]; then
+      REPLY="${line%%$'\t'*}"
+      return 0
+    fi
+  done
+  log_error "bkp: no snapshot matching '$prefix'"
+  return 2
+}
+
+# bkp::snap::resolve_since <when> [<config>]
+# REPLY = full id of the newest snapshot at or before <when>.
+# <when>: yesterday | <N><m|h|d|w> | YYYY-MM-DD | snapshot id (8-64 hex).
+bkp::snap::resolve_since() {
+  local when="$1"; shift
+  local ladder cutoff
+  ladder=$(bkp::snap::ladder "$@") || return 2
+  [[ -n "$ladder" ]] || { log_error "bkp: no snapshots yet"; return 2 }
+  if [[ "$when" == yesterday ]]; then
+    cutoff=$(( EPOCHSECONDS - 86400 ))
+  elif [[ "$when" =~ '^[0-9]+[mhdw]$' ]]; then
+    bkp::duration "$when" || return 2
+    cutoff=$(( EPOCHSECONDS - REPLY ))
+  elif [[ "$when" =~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ]]; then
+    strftime -r -s cutoff '%Y-%m-%d' "$when" 2>/dev/null || {
+      log_error "bkp: unparseable date: $when"
+      return 2
+    }
+  elif [[ "$when" =~ '^[0-9a-f]{8,64}$' ]]; then
+    bkp::snap::expand "$when" "$ladder"
+    return $?
+  else
+    log_error "bkp: cannot parse '$when' (yesterday | 3h/2d/1w | YYYY-MM-DD | snapshot id)"
+    return 2
+  fi
+  local line id epoch oldest=""
+  for line in ${(f)ladder}; do
+    id="${line%%$'\t'*}" epoch="${line##*$'\t'}"
+    oldest="$id"
+    if (( epoch <= cutoff )); then
+      REPLY="$id"
+      return 0
+    fi
+  done
+  log_error "bkp: no snapshot at or before '$when' — oldest is ${oldest[1,8]}"
+  return 2
+}
+
+# --- changeset synthesis (spec 2026-07-04 §3) ---------------------------
+
+# bkp::changeset::guard <workdir> <max-bytes>
+# Replace files above the size threshold (either side) with a small stub so
+# the patch stays light. The stub carries size + cksum so two changed
+# oversized versions still differ; every skip is logged — never silent.
+bkp::changeset::guard() {
+  local work="$1" max="$2" f
+  local -a st
+  for f in "$work"/{a,b}/**/*(.NoN); do
+    zstat -A st +size -- "$f" 2>/dev/null || continue
+    (( st[1] > max )) || continue
+    local sum
+    sum=$(cksum "$f")
+    log_warn "bkp: changes: ${f#$work/[ab]} is ${st[1]} bytes — over the size threshold, content skipped"
+    print -r -- "[tm] content skipped (over changes.size_threshold): ${st[1]} bytes, cksum ${sum%% *}" > "$f"
+  done
+  return 0
+}
+
+# bkp::changeset::patch <snapA> <snapB> [<scope>]
+# Git-style patch between two snapshots, scoped to <scope> (default /).
+# Only changed files are materialized (restic diff → include-file restore
+# of each side), then `git diff --no-index` from a workdir whose subdirs
+# are literally named a and b — with --src-prefix=/--dst-prefix= the dir
+# names become the conventional a/ b/ labels, already live-relative.
+bkp::changeset::patch() {
+  setopt local_options pipe_fail
+  local a="$1" b="$2" scope="${3:-/}"
+  local staging thresh work
+  staging=$(bkp::config::staging_path) || return 2
+  thresh=$(bkp::config::change_size_threshold) || return 2
+  work=$(mktemp -d "${TMPDIR:-/tmp}/bkp-changes.XXXXXX") || return 1
+  {
+    bkp::restic "$staging" diff --json "$a" "$b" |
+      jq -r --arg s "${scope%/}/" 'select(.message_type == "change")
+        | select(.modifier != "U")
+        | select(.path | endswith("/") | not)
+        | select(($s == "/") or (.path | startswith($s)) or (.path == ($s | rtrimstr("/"))))
+        | .path' > "$work/include" || return 1
+    [[ -s "$work/include" ]] || return 0
+    mkdir -p "$work/a" "$work/b"
+    bkp::restic "$staging" restore "$a" --target "$work/a" \
+      --include-file "$work/include" --quiet || return 1
+    bkp::restic "$staging" restore "$b" --target "$work/b" \
+      --include-file "$work/include" --quiet || return 1
+    bkp::changeset::guard "$work" "$thresh"
+    local rc=0
+    ( cd "$work" &&
+      git -c core.quotePath=false diff --no-index \
+        --src-prefix= --dst-prefix= -- a b ) || rc=$?
+    (( rc <= 1 )) || return 1
+    return 0
+  } always {
+    rm -rf "$work"
+  }
+}
+
+# bkp::changeset::relabel <past-root>
+# Rewrite --no-index header labels: strip the mount rung root from the
+# left side so both labels are live-absolute. Literal string replace on
+# header lines only (paths may contain regex metacharacters).
+bkp::changeset::relabel() {
+  local past="${1#/}"
+  awk -v past="$past" '
+    function fix(s, from, to,  i) {
+      i = index(s, from)
+      if (i) s = substr(s, 1, i - 1) to substr(s, i + length(from))
+      return s
+    }
+    /^(diff --git |--- |\+\+\+ |Binary files )/ {
+      $0 = fix($0, "a/" past "/", "a/")
+      $0 = fix($0, "b/" past "/", "b/")
+    }
+    { print }
+  '
+}
+
+# bkp::changeset::patch_live <mount-rung-root> <scope>
+# Patch of the mounted snapshot rung vs the live filesystem, scoped.
+# Both sides are diffed in place (restic mount is read-only); the size
+# guard is skipped here — mount reads are lazy and hunk renders binaries
+# as rows without loading them, so scoped live diffs stay cheap.
+bkp::changeset::patch_live() {
+  setopt local_options pipe_fail
+  local rung="$1" scope="$2"
+  local rc=0 out
+  out=$(git -c core.quotePath=false diff --no-index -- "$rung$scope" "$scope" 2>/dev/null) || rc=$?
+  (( rc <= 1 )) || {
+    log_error "bkp: git diff failed for $scope"
+    return 1
+  }
+  [[ -n "$out" ]] || return 0
+  print -r -- "$out" | bkp::changeset::relabel "$rung"
+}
+
 BKP_STATE_DIR="${BKP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/terminal-backup}"
 BKP_WIP_DIR="${BKP_WIP_DIR:-$BKP_STATE_DIR/wip}"
 
@@ -665,6 +825,17 @@ bkp::config::targets() {
     log_error "bkp: invalid [[target]] (need name + path, role mirror|master)"
     return 2
   }
+}
+
+# bkp::config::change_size_threshold [<file>]
+# [changes].size_threshold (spec 2026-07-04 §3) as bytes on stdout —
+# files larger than this are stubbed out of synthesized changeset patches.
+bkp::config::change_size_threshold() {
+  local json val REPLY
+  json=$(bkp::config::json "$@") || return 2
+  val=$(jq -er '.changes.size_threshold' <<<"$json" 2>/dev/null) || val="5m"
+  bkp::size_bytes "$val" || return 2
+  print -r -- "$REPLY"
 }
 
 # bkp::target::present <path>
@@ -1138,18 +1309,6 @@ bkp::ux::has_fuse() {
      -e /dev/fuse ]]
 }
 
-# bkp::ux::browse_mode — REPLY=httm|fzf; rc 2 when neither stack is present.
-bkp::ux::browse_mode() {
-  if command -v httm >/dev/null 2>&1 && bkp::ux::has_fuse; then
-    REPLY=httm
-  elif command -v fzf >/dev/null 2>&1; then
-    REPLY=fzf
-  else
-    log_error "bkp: browse needs httm + a FUSE provider, or fzf for the fallback picker"
-    return 2
-  fi
-}
-
 # bkp::mount <repo> <mountpoint>
 # Transient `restic mount` for browse: background the mount, wait for the
 # FUSE tree to appear, REPLY = mount pid. Caller must bkp::umount.
@@ -1182,39 +1341,6 @@ bkp::umount() {
   umount "$2" 2>/dev/null || diskutil unmount force "$2" >/dev/null 2>&1 || :
 }
 
-# bkp::ux::browse <path> [--deleted]
-# Time-Machine browse (spec §7): httm over a transient restic mount when
-# httm + FUSE are available, else the fzf version picker.
-bkp::ux::browse() {
-  local anchor="${1:-$PWD}" deleted="${2:-}"
-  local staging REPLY
-  staging=$(bkp::config::staging_path) || return 2
-  bkp::ux::browse_mode || return 2
-  local mode="$REPLY"
-  if [[ "$mode" == httm ]]; then
-    local mp="${TMPDIR:-/tmp}/bkp-mount.$$"
-    bkp::mount "$staging" "$mp" || return 1
-    local pid=$REPLY
-    local -a args=(-b -R --alt-store=restic)
-    [[ "$deleted" == --deleted ]] && args+=(--deleted)
-    # Scrubbing previews as live diffs (spec §7): hunk when present, else
-    # httm's built-in bowie diff.
-    if command -v hunk >/dev/null 2>&1; then
-      args+=(--preview='hunk diff {snap_file} {live_file}')
-    else
-      args+=(--preview)
-    fi
-    {
-      httm "${args[@]}" "$anchor"
-    } always {
-      bkp::umount "$pid" "$mp"
-      rmdir "$mp" 2>/dev/null || :
-    }
-  else
-    bkp::ux::browse_fzf "$staging" "$anchor"
-  fi
-}
-
 # bkp::ux::browse_fzf <repo> <path>
 # FUSE-less fallback: pick a version of <path> across snapshots and restore
 # it AS A COPY next to the live file (<path>.<snapid>) — in-place restores go
@@ -1240,6 +1366,10 @@ bkp::ux::diff() {
     log_error "bkp: diff needs <path> <snapshotA> [<snapshotB>]"
     return 2
   fi
+  if [[ -d "$p" ]]; then
+    log_error "bkp: '$p' is a directory — use \`system-backup changes [--since <when>] [<snapA> [<snapB>]] $p\`"
+    return 2
+  fi
   local staging
   staging=$(bkp::config::staging_path) || return 2
   local ta tb=""
@@ -1261,6 +1391,73 @@ bkp::ux::diff() {
   } always {
     rm -f "$ta" ${tb:+"$tb"}
   }
+}
+
+# bkp::ux::changes <snapA> <snapB> [<scope>]
+# Render a synthesized changeset: hunk tree-view when available and
+# interactive, else the raw patch through the pager.
+bkp::ux::changes() {
+  local a="$1" b="$2" scope="${3:-/}"
+  local patch
+  patch=$(mktemp "${TMPDIR:-/tmp}/bkp-changes.XXXXXX") || return 1
+  {
+    bkp::changeset::patch "$a" "$b" "$scope" > "$patch" || return $?
+    if [[ ! -s "$patch" ]]; then
+      log_ok "bkp: no changes between ${a[1,8]} and ${b[1,8]}${${scope:#/}:+ under $scope}"
+      return 0
+    fi
+    if command -v hunk >/dev/null 2>&1 && [[ -t 1 ]]; then
+      hunk patch "$patch" || (( $? == 1 ))
+    else
+      ${=PAGER:-less} "$patch"
+    fi
+  } always {
+    rm -f "$patch"
+  }
+}
+
+# bkp::ux::changes_cmd <since> <a> <b> <scope>
+# Argument resolution for the changes verb (spec §4): --since resolves to
+# "rung at/before <when> vs latest"; bare = previous vs latest; explicit
+# ids are prefix-expanded. B defaults to the LATEST SNAPSHOT, not live —
+# the footer states the as-of time.
+bkp::ux::changes_cmd() {
+  local since="$1" a="$2" b="$3" scope="${4:-/}"
+  local ladder REPLY
+  ladder=$(bkp::snap::ladder) || return 2
+  [[ -n "$ladder" ]] || { log_error "bkp: no snapshots yet"; return 2 }
+  local -a lines=("${(f)ladder}")
+  local latest="${lines[1]%%$'\t'*}"
+  if [[ -n "$since" ]]; then
+    [[ -z "$a" ]] || { log_error "bkp: --since and explicit snapshots are mutually exclusive"; return 2 }
+    bkp::snap::resolve_since "$since" || return 2
+    a="$REPLY" b="$latest"
+  elif [[ -z "$a" ]]; then
+    (( ${#lines} >= 2 )) || { log_error "bkp: only one snapshot so far — nothing to compare"; return 2 }
+    a="${lines[2]%%$'\t'*}" b="$latest"
+  else
+    bkp::snap::expand "$a" "$ladder" || return 2
+    a="$REPLY"
+    if [[ -n "$b" ]]; then
+      bkp::snap::expand "$b" "$ladder" || return 2
+      b="$REPLY"
+    else
+      b="$latest"
+    fi
+  fi
+  if [[ "$a" == "$b" ]]; then
+    log_ok "bkp: nothing to compare — both sides are ${a[1,8]}"
+    return 0
+  fi
+  bkp::ux::changes "$a" "$b" "$scope" || return $?
+  local line epoch="" when
+  for line in "${lines[@]}"; do
+    [[ "${line%%$'\t'*}" == "$b" ]] && epoch="${line##*$'\t'}"
+  done
+  if [[ -n "$epoch" ]]; then
+    strftime -s when '%Y-%m-%d %H:%M' "$epoch"
+    log_info "bkp: as of $when (snapshot ${b[1,8]}) — run \`system-backup now\` first for up-to-the-second"
+  fi
 }
 
 # bkp::restore::undo_snapshot <path…>
