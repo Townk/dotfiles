@@ -277,8 +277,21 @@ EOS
       }
       When run run_it
       The line 1 should equal "linked"
-      The line 2 should equal 4
+      The line 2 should equal 6
       The line 3 should include "system-backup-tm"
+    End
+
+    It 'binds Shift-Up/Down to the same newer/older steps as K/J'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        local ovl
+        ovl=$(bkp::tm::yazi_overlay "$S")
+        grep -A1 'on = "<S-Up>"' "$ovl/keymap.toml" | grep -c 'ctl .* newer'
+        grep -A1 'on = "<S-Down>"' "$ovl/keymap.toml" | grep -c 'ctl .* older'
+      }
+      When run run_it
+      The line 1 should equal 1
+      The line 2 should equal 1
     End
 
     It 'builds a jailed explore command'

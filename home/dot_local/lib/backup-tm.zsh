@@ -213,8 +213,9 @@ bkp::tm::timeline_render() {
 # YAZI_CONFIG_HOME for explore sessions: the user's config (symlinked)
 # plus generated scrub bindings appended as prepend_keymap (prepend wins
 # over the base keymap regardless of position in the file).
-#   K / J   timeline newer / older (matches the parent-arrow muscle memory)
-#   R       restore selection to the live filesystem (gated apply flow)
+#   K / J           timeline newer / older (parent-arrow muscle memory)
+#   Shift-Up/Down   same step, native yazi binding (works outside Zellij too)
+#   R               restore selection to the live filesystem (gated apply flow)
 bkp::tm::yazi_overlay() {
   local s="$1" src="${YAZI_USER_CONFIG:-$HOME/.config/yazi}" ovl="$1/yazi"
   mkdir -p "$ovl"
@@ -234,6 +235,16 @@ desc = "tm: newer snapshot"
 
 [[mgr.prepend_keymap]]
 on = "J"
+run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s older"'
+desc = "tm: older snapshot"
+
+[[mgr.prepend_keymap]]
+on = "<S-Up>"
+run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s newer"'
+desc = "tm: newer snapshot"
+
+[[mgr.prepend_keymap]]
+on = "<S-Down>"
 run = 'shell --orphan "\$HOME/.local/bin/system-backup-tm ctl $s older"'
 desc = "tm: older snapshot"
 
