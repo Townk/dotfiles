@@ -50,8 +50,7 @@ tm_timeline() {
     done
   } always {
     bkp::tm::end "$s"
-    local lpid
-    lpid=$(<"$s/lens.pid" 2>/dev/null) && kill "$lpid" 2>/dev/null
+    bkp::tm::kill_lens "$s"
     bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
     rm -rf "$s"
   }

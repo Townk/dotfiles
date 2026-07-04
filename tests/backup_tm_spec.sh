@@ -146,6 +146,64 @@ EOF
     End
   End
 
+  Describe 'bkp::tm::kill_lens'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_TM_SESSIONS="$FIX/sessions"
+      mkdir -p "$FIX/sessions/s.test"
+      S="$FIX/sessions/s.test"
+    }
+    cleanup_fix() {
+      # belt-and-braces: never leak the fake wrapper/child past the test
+      [ -f "$S/child.pid" ] && kill "$(cat "$S/child.pid")" 2>/dev/null
+      [ -f "$S/lens.pid" ] && kill "$(cat "$S/lens.pid")" 2>/dev/null
+      rm -rf "$FIX"; unset BKP_TM_SESSIONS
+    }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'kills the wrapper and its child UI process'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        cat > "$S/wrapper.zsh" <<'EOS'
+sleep 100 &
+print -r -- $! > "$1/child.pid"
+print -r -- $$ > "$1/lens.pid"
+wait
+EOS
+        zsh "$S/wrapper.zsh" "$S" &
+        local i
+        for i in {1..50}; do
+          [[ -s "$S/child.pid" && -s "$S/lens.pid" ]] && break
+          sleep 0.02
+        done
+        [[ -s "$S/child.pid" && -s "$S/lens.pid" ]] || { echo "setup failed"; return 1 }
+        bkp::tm::kill_lens "$S" || { echo "kill_lens rc=$?"; return 1 }
+        local child=$(<"$S/child.pid") wrapper=$(<"$S/lens.pid") cdead=no wdead=no
+        for i in {1..50}; do
+          kill -0 "$child" 2>/dev/null || cdead=yes
+          kill -0 "$wrapper" 2>/dev/null || wdead=yes
+          [[ "$cdead" == yes && "$wdead" == yes ]] && break
+          sleep 0.02
+        done
+        print -r -- "child-dead=$cdead wrapper-dead=$wdead"
+      }
+      When run run_it
+      The output should equal "child-dead=yes wrapper-dead=yes"
+    End
+
+    It 'is a no-op when no lens.pid exists'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        bkp::tm::kill_lens "$S"
+        print -r -- "rc=$?"
+      }
+      When run run_it
+      The output should equal "rc=0"
+      The stderr should equal ""
+    End
+  End
+
   Describe 'yazi overlay + lens command'
     setup_fix() {
       FIX=$(mktemp -d)

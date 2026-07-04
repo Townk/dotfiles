@@ -99,6 +99,19 @@ bkp::tm::step() {
 # bkp::tm::end <session> — signal every session process to wind down.
 bkp::tm::end() { touch "$1/closed" }
 
+# bkp::tm::kill_lens <session>
+# End the lens pane's process tree: the wrapper's children first (the
+# actual yazi/hunk/bx UI — the subshell execs it, so it is a direct
+# child), then the wrapper itself. Safe when nothing is running.
+bkp::tm::kill_lens() {
+  local s="$1" lpid=""
+  [[ -f "$s/lens.pid" ]] && lpid=$(<"$s/lens.pid")
+  [[ -n "$lpid" ]] || return 0
+  pkill -P "$lpid" 2>/dev/null
+  kill "$lpid" 2>/dev/null
+  return 0
+}
+
 # bkp::tm::timeline_render <session> <height>
 # One timeline frame (spec §5.1 mock): newest at top, ● rungs joined by ┃,
 # relative ages < 48h, absolute two-line stamps beyond, current rung
