@@ -176,47 +176,66 @@ bkp::tm::kill_lens() {
   return 0
 }
 
-# bkp::tm::timeline_render <session> <height>
-# One timeline frame (spec §5.1 mock): newest at top, ● rungs joined by ┃,
-# relative ages < 48h, absolute two-line stamps beyond, current rung
-# highlighted with its tier label, windowed to <height> rows with … rows
-# when clipped. Colors come from common.zsh C_* (empty when not a tty).
+# bkp::tm::_sgr <fg|bg> <#rrggbb>
+# Truecolor SGR from a palette hex var — emits nothing when stdout isn't
+# being styled (C_RES empty), so captured output stays plain.
+bkp::tm::_sgr() {
+  [[ -n "$C_RES" ]] || return 0
+  local h="${2#\#}" mode=38
+  [[ "$1" == bg ]] && mode=48
+  printf '\e[%d;2;%d;%d;%dm' "$mode" "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
+}
+
+# bkp::tm::timeline_render <session> <height> [<width>] [<focused 0|1>]
+# One timeline frame (spec §5.1, UX-session shape): newest at top, every
+# rung a two-line stamp (date over time) behind its ● / ┃ glyphs, one
+# leading space throughout. Glyph color says where you are: newer-than-
+# current red, current green, older yellow. The current rung's two lines
+# get a full-width highlight — active-tab background when the timeline
+# pane is focused, inactive-tab background otherwise. Windowed to
+# <height> rows centered on the current rung with … rows when clipped.
 bkp::tm::timeline_render() {
-  local s="$1" height="$2"
+  local s="$1" height="$2" width="${3:-0}" focused="${4:-1}"
   local -a ladder=("${(@f)$(<"$s/ladder")}")
   local cur n=${#ladder}
   cur=$(<"$s/rung")
-  local now="$EPOCHSECONDS"
+  local bg
+  if (( focused )); then
+    bg=$(bkp::tm::_sgr bg "$C_HEX_TAB_ACTIVE_BG")
+  else
+    bg=$(bkp::tm::_sgr bg "$C_HEX_TAB_BG")
+  fi
 
-  # Build per-rung row groups first, then window by rows.
-  local -a rows=()          # rendered text rows
-  local -a row_rung=()      # owning rung index per row (0 = connector)
-  local i id epoch tier age label label2 REPLY
+  local -a rows=() row_rung=()
+  local i epoch gc cc date_s time_s r1 r2 pad vis
   for (( i = 1; i <= n; i++ )); do
-    id="${ladder[i]%%$'\t'*}"
     epoch="${${ladder[i]#*$'\t'}%%$'\t'*}"
-    tier="${ladder[i]##*$'\t'}"
-    if (( now - epoch < 172800 )); then
-      bkp::ux::age $(( now - epoch ))
-      label="● $REPLY ago"
-      label2=""
+    strftime -s date_s '%a, %b %e %Y' "$epoch"
+    strftime -s time_s '%I:%M %p' "$epoch"
+    time_s="${(L)time_s}"
+    if (( i < cur )); then gc="$C_RED"
+    elif (( i == cur )); then gc="$C_GRN"
+    else gc="$C_YEL"
+    fi
+    if (( i == cur )) && [[ -n "$bg" ]]; then
+      vis=$(( 3 + ${#date_s} ))
+      pad=""
+      (( width > vis )) && pad="${(l:$(( width - vis )):: :)}"
+      r1="${bg} ${gc}●${C_RES}${bg} ${date_s}${pad}${C_RES}"
+      vis=$(( 3 + ${#time_s} ))
+      pad=""
+      (( width > vis )) && pad="${(l:$(( width - vis )):: :)}"
+      r2="${bg} ${gc}┃${C_RES}${bg} ${time_s}${pad}${C_RES}"
     else
-      strftime -s label '● %a, %b %e %Y' "$epoch"
-      strftime -s label2 '%I:%M %p' "$epoch"
-      label2="┃ ${(L)label2}"
+      r1=" ${gc}●${C_RES} ${date_s}"
+      r2=" ${gc}┃${C_RES} ${C_DIM}${time_s}${C_RES}"
     fi
-    if (( i == cur )); then
-      rows+=("${C_BWH}${label}${C_RES} ${C_BBL}${tier}${C_RES}")
-    else
-      rows+=("${C_DIM}${label}${C_RES}")
-    fi
-    row_rung+=($i)
-    if [[ -n "$label2" ]]; then
-      rows+=("${C_DIM}${label2}${C_RES}")
-      row_rung+=($i)
-    fi
+    rows+=("$r1"); row_rung+=($i)
+    rows+=("$r2"); row_rung+=($i)
     if (( i < n )); then
-      rows+=("${C_DIM}┃${C_RES}")
+      cc="$C_YEL"
+      (( i < cur )) && cc="$C_RED"
+      rows+=(" ${cc}┃${C_RES}")
       row_rung+=(0)
     fi
   done
@@ -238,7 +257,7 @@ bkp::tm::timeline_render() {
   for (( out_row = first; out_row <= last; out_row++ )); do
     if (( total > height )) && { (( out_row == first && first > 1 )) ||
                                  (( out_row == last && last < total )) }; then
-      print -r -- "${C_DIM}…${C_RES}"
+      print -r -- " ${C_DIM}…${C_RES}"
     else
       print -r -- "${rows[out_row]}"
     fi

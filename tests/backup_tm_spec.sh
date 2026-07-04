@@ -162,18 +162,16 @@ EOF
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
-    It 'renders rungs with relative and absolute stamps'
+    It 'renders every rung as a two-line date/time stamp with a leading space'
       run_it() { source "$LIB/backup-tm.zsh"; bkp::tm::timeline_render "$S" 20; }
       When run run_it
-      The line 1 should include "● 30m ago"
-      The output should include "┃"
-      The output should include "2026"     # absolute stamp for the old rung
-    End
-
-    It 'marks the current rung with the tier label'
-      run_it() { source "$LIB/backup-tm.zsh"; bkp::tm::timeline_render "$S" 20; }
-      When run run_it
-      The line 1 should include "30m"
+      # 2 rungs -> 2 stamp rows each + 1 connector = 5 rows
+      The lines of output should equal 5
+      The line 1 should start with " ● "
+      The line 1 should include "2026"
+      The line 2 should start with " ┃ "
+      The line 2 should match pattern "*[ap]m*"
+      The line 4 should include "2026"
     End
 
     It 'windows long ladders around the current rung'
