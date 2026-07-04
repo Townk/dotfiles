@@ -1200,7 +1200,7 @@ bkp::ux::browse() {
     # Scrubbing previews as live diffs (spec §7): hunk when present, else
     # httm's built-in bowie diff.
     if command -v hunk >/dev/null 2>&1; then
-      args+=(--preview 'hunk diff {snap_file} {live_file}')
+      args+=(--preview='hunk diff {snap_file} {live_file}')
     else
       args+=(--preview)
     fi
