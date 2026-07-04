@@ -239,6 +239,20 @@ EOF
       The output should not include "mnt/ids"
     End
 
+    It 'survives special files (sockets/fifos) in the live tree via a clean view'
+      run_it() {
+        source "$LIB/backup.zsh"
+        mkfifo "$FIX/live/pipe.fifo"
+        bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live"
+      }
+      When run run_it
+      The status should be success
+      # labels must map the cleaned view back to the real live root
+      The output should include "diff --git a$FIX/live/f.txt b$FIX/live/f.txt"
+      The output should include "+new"
+      The output should not include "bkp-liveview"
+    End
+
     It 'is empty when past and live are identical'
       run_it() {
         source "$LIB/backup.zsh"

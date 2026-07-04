@@ -650,19 +650,26 @@ bkp::changeset::patch() {
   }
 }
 
-# bkp::changeset::relabel <past-root>
+# bkp::changeset::relabel <past-root> [<view-root> <live-root>]
 # Rewrite --no-index header labels: strip the mount rung root from the
-# left side so both labels are live-absolute. Literal string replace on
-# header lines only (paths may contain regex metacharacters).
+# left side — and, when the live side was diffed through a cleaned view
+# (hardlink farm without sockets/fifos), map the view root back to the
+# real live root — so both labels are live-absolute. Literal string
+# replace on header lines only (paths may contain regex metacharacters).
 bkp::changeset::relabel() {
-  local past="${1#/}"
-  awk -v past="$past" '
+  local past="${1#/}" view="${2:-}" live="${3:-}"
+  view="${view#/}" live="${live#/}"
+  awk -v past="$past" -v view="$view" -v live="$live" '
     function fix(s, from, to,  i) {
       i = index(s, from)
       if (i) s = substr(s, 1, i - 1) to substr(s, i + length(from))
       return s
     }
     /^(diff --git |--- |\+\+\+ |Binary files )/ {
+      if (view != "") {
+        $0 = fix($0, "a/" view "/", "a/" live "/")
+        $0 = fix($0, "b/" view "/", "b/" live "/")
+      }
       $0 = fix($0, "a/" past "/", "a/")
       $0 = fix($0, "b/" past "/", "b/")
     }
@@ -678,14 +685,37 @@ bkp::changeset::relabel() {
 bkp::changeset::patch_live() {
   setopt local_options pipe_fail
   local rung="$1" scope="$2"
-  local rc=0 out
-  out=$(git -c core.quotePath=false diff --no-index -- "$rung$scope" "$scope" 2>/dev/null) || rc=$?
-  (( rc <= 1 )) || {
-    log_error "bkp: git diff failed for $scope"
-    return 1
+  # git --no-index FATALS on special files (unix sockets like gnupg's
+  # S.gpg-agent, fifos) on the live side — snapshots never contain them.
+  # When the live tree has any, diff against a cleaned hardlink view
+  # (-rlpt copies no sockets/fifos/devices; --link-dest makes the
+  # view near-free) and relabel the view back to the live root.
+  local live="$scope" view=""
+  if [[ -d "$scope" ]] && [[ -n "$(find "$scope" \( -type s -o -type p -o -type b -o -type c \) -print -quit 2>/dev/null)" ]]; then
+    view=$(mktemp -d "${TMPDIR:-/tmp}/bkp-liveview.XXXXXX") || return 1
+    rsync -rlpt --link-dest="$scope" "$scope/" "$view/" 2>/dev/null || {
+      rm -rf "$view"
+      log_error "bkp: could not build a clean live view for $scope"
+      return 1
+    }
+    live="$view"
+  fi
+  {
+    local rc=0 out
+    out=$(git -c core.quotePath=false diff --no-index -- "$rung$scope" "$live" 2>/dev/null) || rc=$?
+    (( rc <= 1 )) || {
+      log_error "bkp: git diff failed for $scope"
+      return 1
+    }
+    [[ -n "$out" ]] || return 0
+    if [[ -n "$view" ]]; then
+      print -r -- "$out" | bkp::changeset::relabel "$rung" "$view" "$scope"
+    else
+      print -r -- "$out" | bkp::changeset::relabel "$rung"
+    fi
+  } always {
+    [[ -n "$view" ]] && rm -rf "$view" || :
   }
-  [[ -n "$out" ]] || return 0
-  print -r -- "$out" | bkp::changeset::relabel "$rung"
 }
 
 BKP_STATE_DIR="${BKP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/terminal-backup}"

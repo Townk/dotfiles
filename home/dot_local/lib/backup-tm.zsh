@@ -95,7 +95,13 @@ bkp::tm::refresh() {
     # per-rung cache when the mount isn't there.
     bkp::tm::rung_root "$s" || return 1
     local rung="$REPLY"
-    bkp::changeset::patch_live "$rung" "$anchor" > "$s/current.patch.new" || return 1
+    # A failed synthesis must not kill the session: hunk renders an empty
+    # patch as a graceful "no files" state and --watch refills it on the
+    # next scrub step, so degrade to empty instead of erroring out.
+    if ! bkp::changeset::patch_live "$rung" "$anchor" > "$s/current.patch.new"; then
+      log_warn "bkp: changeset synthesis failed for this rung — showing an empty changeset"
+      : > "$s/current.patch.new"
+    fi
     mv "$s/current.patch.new" "$s/current.patch"
   else
     # Explore still needs the real mount — yazi navigates it live.
@@ -411,6 +417,9 @@ bkp::tm::lens_cmd() {
   local s="$1" lens anchor REPLY
   lens=$(<"$s/lens") anchor=$(<"$s/anchor")
   if [[ "$lens" == diff ]]; then
+    # hunk needs the file to exist even when the first synthesis failed —
+    # an empty patch renders as a graceful "no changes" state.
+    [[ -f "$s/current.patch" ]] || : > "$s/current.patch"
     print -rl -- hunk patch "$s/current.patch" --watch
     return 0
   fi
@@ -437,7 +446,7 @@ bkp::tm::launch() {
   s=$(bkp::tm::session_new "$lens" "$anchor") || return $?
   if [[ -n "${ZELLIJ:-}" ]]; then
     zellij run --close-on-exit --direction right --name "tm lens" \
-      -- "$BKP_TM_BIN" lens "$s" || { rm -rf "$s"; return 1 }
+      -- "$BKP_TM_BIN" lens "$s" >/dev/null || { rm -rf "$s"; return 1 }
     # The new pane takes focus; grow it leftward so the timeline pane
     # narrows toward its ~26-col design width. Focus STAYS on the lens —
     # scrubbing works from inside it (Shift+arrows / K / J), and a focused
