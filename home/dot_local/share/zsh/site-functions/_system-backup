@@ -34,7 +34,7 @@ _system-backup() {
         'status[staging summary + target presence]' \
         'now[force a capture tick (+ reconcile)]' \
         'list[snapshots with tier labels]' \
-        'browse[Time-Machine browse (httm/fzf)]' \
+        'browse[Time-Machine browse (scrub session/fzf)]' \
         'diff[file diff across snapshots]' \
         'restore[undoable in-place restore from a snapshot]' \
         'restore-project[reconstruct a git project from its sidecar]' \

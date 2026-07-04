@@ -1309,18 +1309,6 @@ bkp::ux::has_fuse() {
      -e /dev/fuse ]]
 }
 
-# bkp::ux::browse_mode — REPLY=httm|fzf; rc 2 when neither stack is present.
-bkp::ux::browse_mode() {
-  if command -v httm >/dev/null 2>&1 && bkp::ux::has_fuse; then
-    REPLY=httm
-  elif command -v fzf >/dev/null 2>&1; then
-    REPLY=fzf
-  else
-    log_error "bkp: browse needs httm + a FUSE provider, or fzf for the fallback picker"
-    return 2
-  fi
-}
-
 # bkp::mount <repo> <mountpoint>
 # Transient `restic mount` for browse: background the mount, wait for the
 # FUSE tree to appear, REPLY = mount pid. Caller must bkp::umount.
@@ -1351,39 +1339,6 @@ bkp::umount() {
     sleep 0.1
   done
   umount "$2" 2>/dev/null || diskutil unmount force "$2" >/dev/null 2>&1 || :
-}
-
-# bkp::ux::browse <path> [--deleted]
-# Time-Machine browse (spec §7): httm over a transient restic mount when
-# httm + FUSE are available, else the fzf version picker.
-bkp::ux::browse() {
-  local anchor="${1:-$PWD}" deleted="${2:-}"
-  local staging REPLY
-  staging=$(bkp::config::staging_path) || return 2
-  bkp::ux::browse_mode || return 2
-  local mode="$REPLY"
-  if [[ "$mode" == httm ]]; then
-    local mp="${TMPDIR:-/tmp}/bkp-mount.$$"
-    bkp::mount "$staging" "$mp" || return 1
-    local pid=$REPLY
-    local -a args=(-b -R --alt-store=restic)
-    [[ "$deleted" == --deleted ]] && args+=(--deleted)
-    # Scrubbing previews as live diffs (spec §7): hunk when present, else
-    # httm's built-in bowie diff.
-    if command -v hunk >/dev/null 2>&1; then
-      args+=(--preview='hunk diff {snap_file} {live_file}')
-    else
-      args+=(--preview)
-    fi
-    {
-      httm "${args[@]}" "$anchor"
-    } always {
-      bkp::umount "$pid" "$mp"
-      rmdir "$mp" 2>/dev/null || :
-    }
-  else
-    bkp::ux::browse_fzf "$staging" "$anchor"
-  fi
 }
 
 # bkp::ux::browse_fzf <repo> <path>
