@@ -208,4 +208,45 @@ EOF
       The status should equal 1
     End
   End
+
+  Describe 'bkp::changeset::patch_live'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export BKP_CONFIG="$FIX/c.toml"
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      # "mount": past state; "live": current state
+      mkdir -p "$FIX/mnt/ids/aaaa$FIX/live" "$FIX/live"
+      print old > "$FIX/mnt/ids/aaaa$FIX/live/f.txt"
+      print new > "$FIX/live/f.txt"
+      print lost > "$FIX/mnt/ids/aaaa$FIX/live/del.txt"
+    }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'diffs mount rung vs live with live-absolute labels'
+      run_it() {
+        source "$LIB/backup.zsh"
+        bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live"
+      }
+      When run run_it
+      The output should include "diff --git a$FIX/live/f.txt b$FIX/live/f.txt"
+      The output should include "--- a$FIX/live/del.txt"
+      The output should include "-old"
+      The output should include "+new"
+      The output should not include "mnt/ids"
+    End
+
+    It 'is empty when past and live are identical'
+      run_it() {
+        source "$LIB/backup.zsh"
+        rm "$FIX/mnt/ids/aaaa$FIX/live/del.txt"
+        print new > "$FIX/mnt/ids/aaaa$FIX/live/f.txt"
+        bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live"
+      }
+      When run run_it
+      The status should be success
+      The output should equal ""
+    End
+  End
 End

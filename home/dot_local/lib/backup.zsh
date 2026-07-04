@@ -650,6 +650,44 @@ bkp::changeset::patch() {
   }
 }
 
+# bkp::changeset::relabel <past-root>
+# Rewrite --no-index header labels: strip the mount rung root from the
+# left side so both labels are live-absolute. Literal string replace on
+# header lines only (paths may contain regex metacharacters).
+bkp::changeset::relabel() {
+  local past="${1#/}"
+  awk -v past="$past" '
+    function fix(s, from, to,  i) {
+      i = index(s, from)
+      if (i) s = substr(s, 1, i - 1) to substr(s, i + length(from))
+      return s
+    }
+    /^(diff --git |--- |\+\+\+ |Binary files )/ {
+      $0 = fix($0, "a/" past "/", "a/")
+      $0 = fix($0, "b/" past "/", "b/")
+    }
+    { print }
+  '
+}
+
+# bkp::changeset::patch_live <mount-rung-root> <scope>
+# Patch of the mounted snapshot rung vs the live filesystem, scoped.
+# Both sides are diffed in place (restic mount is read-only); the size
+# guard is skipped here — mount reads are lazy and hunk renders binaries
+# as rows without loading them, so scoped live diffs stay cheap.
+bkp::changeset::patch_live() {
+  setopt local_options pipe_fail
+  local rung="$1" scope="$2"
+  local rc=0 out
+  out=$(git -c core.quotePath=false diff --no-index -- "$rung$scope" "$scope" 2>/dev/null) || rc=$?
+  (( rc <= 1 )) || {
+    log_error "bkp: git diff failed for $scope"
+    return 1
+  }
+  [[ -n "$out" ]] || return 0
+  print -r -- "$out" | bkp::changeset::relabel "$rung"
+}
+
 BKP_STATE_DIR="${BKP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/terminal-backup}"
 BKP_WIP_DIR="${BKP_WIP_DIR:-$BKP_STATE_DIR/wip}"
 
