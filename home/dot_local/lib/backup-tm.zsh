@@ -273,6 +273,8 @@ bkp::tm::timeline_render() {
 # table-array form is appended.
 #   K / J           timeline newer / older (parent-arrow muscle memory)
 #   Shift-Up/Down   same step, native yazi binding (works outside Zellij too)
+#   H / L           focus the timeline / the file list (visual swap only —
+#                   indicator + timeline highlight trade the active palette)
 #   R               restore selection to the live filesystem (gated apply flow)
 bkp::tm::yazi_overlay() {
   local s="$1" src="${YAZI_USER_CONFIG:-$HOME/.config/yazi}" ovl="$1/yazi"
@@ -378,6 +380,8 @@ LUA
     "  { on = \"J\", run = 'shell --orphan \"$bin ctl $s older \\\"\$0\\\"\"', desc = \"tm: older snapshot\" },"
     "  { on = \"<S-Up>\", run = 'shell --orphan \"$bin ctl $s newer \\\"\$0\\\"\"', desc = \"tm: newer snapshot\" },"
     "  { on = \"<S-Down>\", run = 'shell --orphan \"$bin ctl $s older \\\"\$0\\\"\"', desc = \"tm: older snapshot\" },"
+    "  { on = \"H\", run = \"plugin tm-gate --args=focus\", desc = \"tm: focus the timeline\" },"
+    "  { on = \"L\", run = \"plugin tm-gate --args=blur\", desc = \"tm: focus the file list\" },"
     "  { on = \"R\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"<S-Enter>\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"q\", run = [ 'shell --orphan \"$bin ctl $s end\"', \"quit\" ], desc = \"tm: end scrub session\" },"
@@ -435,6 +439,33 @@ local function esc(s)
 	return (s:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1"))
 end
 
+-- Focus swap (keymap H / L): a visual tiebreaker between the file list
+-- and the timeline column. The flag lives in the sync VM's globals so
+-- Parent:redraw (sync) and the keybinding entry (async) agree; the
+-- file-list cursor follows via th.indicator, which is re-read per
+-- render. ya.render() works here because the swap is a real key command
+-- inside yazi — the retired external DDS publish path had no such luck.
+local set_tl_focus = ya.sync(function(_, v)
+	_G.__tm_tl_focus = v
+	if th and th.indicator then
+		local bg = os.getenv(v and "BKP_TM_INACTIVE_BG" or "BKP_TM_ACTIVE_BG")
+		local fg = os.getenv(v and "BKP_TM_TAB_FG" or "BKP_TM_ACTIVE_FG")
+		if bg and fg then
+			th.indicator.current = ui.Style():fg(fg):bg(bg):bold()
+		end
+	end
+	ya.render()
+end)
+
+function M:entry(job)
+	local arg = job.args and job.args[1]
+	if arg == "focus" then
+		set_tl_focus(true)
+	elseif arg == "blur" then
+		set_tl_focus(false)
+	end
+end
+
 function M:setup()
 	local mnt = os.getenv("BKP_TM_MNT")
 	local anchor = os.getenv("BKP_TM_ANCHOR") or ""
@@ -490,10 +521,12 @@ function M:setup()
 	-- full redraw, so this stays fresh with no other repaint machinery.
 	local act_bg = os.getenv("BKP_TM_ACTIVE_BG")
 	local act_fg = os.getenv("BKP_TM_ACTIVE_FG")
+	local inact_bg = os.getenv("BKP_TM_INACTIVE_BG")
 	local dim_fg = os.getenv("BKP_TM_TAB_FG")
 	local accent_fg = os.getenv("BKP_TM_ACCENT_FG")
 	local key_fg = os.getenv("BKP_TM_KEY_FG")
 	local hint_fg = os.getenv("BKP_TM_HINT_FG")
+	_G.__tm_tl_focus = false -- the file list owns focus at launch
 
 	local function cur_rung()
 		local f = sess and io.open(sess .. "/rung", "r")
@@ -520,24 +553,29 @@ function M:setup()
 
 			-- Every rung is a two-line date/time stamp behind ● / ┃ glyphs;
 			-- glyph color says where you are (newer red, current green,
-			-- older yellow); the current rung gets a full-width highlight.
+			-- older yellow); the current rung gets a full-width highlight —
+			-- active-tab palette when the timeline holds the focus (H),
+			-- inactive-tab palette otherwise.
+			local focus = _G.__tm_tl_focus
+			local hl_bg = focus and act_bg or inact_bg
+			local hl_fg = focus and act_fg or dim_fg
 			local rows = {}
 			for i, r in ipairs(ladder) do
 				local date = os.date("%a, %b %e %Y", r.epoch)
 				local clock = string.lower(os.date("%I:%M %p", r.epoch))
 				local gc = i < cur and "red" or (i == cur and "green" or "yellow")
-				if i == cur and act_bg and act_fg then
+				if i == cur and hl_bg and hl_fg then
 					local pad1 = string.rep(" ", math.max(0, w - 3 - #date))
 					local pad2 = string.rep(" ", math.max(0, w - 3 - #clock))
 					rows[#rows + 1] = { rung = i, line = ui.Line({
-						ui.Span(" "):bg(act_bg),
-						ui.Span("●"):fg(gc):bg(act_bg),
-						ui.Span(" " .. date .. pad1):fg(act_fg):bg(act_bg):bold(),
+						ui.Span(" "):bg(hl_bg),
+						ui.Span("●"):fg(gc):bg(hl_bg),
+						ui.Span(" " .. date .. pad1):fg(hl_fg):bg(hl_bg):bold(),
 					}) }
 					rows[#rows + 1] = { rung = i, line = ui.Line({
-						ui.Span(" "):bg(act_bg),
-						ui.Span("┃"):fg(gc):bg(act_bg),
-						ui.Span(" " .. clock .. pad2):fg(act_fg):bg(act_bg),
+						ui.Span(" "):bg(hl_bg),
+						ui.Span("┃"):fg(gc):bg(hl_bg),
+						ui.Span(" " .. clock .. pad2):fg(hl_fg):bg(hl_bg),
 					}) }
 				else
 					rows[#rows + 1] = { rung = i, line = ui.Line({
