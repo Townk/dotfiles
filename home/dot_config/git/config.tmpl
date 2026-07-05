@@ -22,6 +22,9 @@
 [delta]
   features = unobtrusive-line-numbers decorations
   syntax-theme = chezmoi-system
+  # diffnav has no horizontal scroll — wrap long lines fully rather than
+  # truncate (delta's default gives up after 2 continuation rows).
+  wrap-max-lines = unlimited
   zero-style = syntax
   plus-style = "syntax #{{ $p.diff.plus_bg }}"
   plus-emph-style = "#{{ $p.diff.plus_emph_fg }} #{{ $p.diff.plus_emph_bg }}"
