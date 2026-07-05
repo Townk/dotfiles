@@ -6,9 +6,11 @@
 # ai-playbook — the AI terminal assistant and themed input-widget backend
 # (input::confirm/line/choose/form shim over `ai-playbook input`, the docked
 # pager, and the diff viewer — all subcommands of the one binary; installs the
-# short `apb` alias too via cmd/apb).
+# short `apb` alias too via cmd/apb, and the standalone `ask` dialog binary
+# for scripts (confirm/line/choose/form as a pure-I/O utility).
 github.com/Townk/ai-playbook/cmd/ai-playbook
 github.com/Townk/ai-playbook/cmd/apb
+github.com/Townk/ai-playbook/cmd/ask
 
 {{ if eq .profile "personal" -}}
 github.com/bscott/pm-cli/cmd/pm-cli
