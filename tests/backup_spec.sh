@@ -1821,6 +1821,96 @@ EOF
       The stderr should include "did not come up"
     End
 
+    It 'mount wrapper survives the pane-close HUP (FUSE server outlives the pty)'
+      hupmount() {
+        source "$LIB/backup.zsh"
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1" in
+            mount) mkdir -p "$2/snapshots"; sleep 5 ;;
+            *) return 0 ;;
+          esac
+        }
+        local REPLY
+        bkp::mount "$FIX/stg" "$FIX/mp" || return 1
+        local pid="$REPLY"
+        kill -HUP "$pid" 2>/dev/null
+        sleep 0.3
+        if kill -0 "$pid" 2>/dev/null; then print survives-hup; else print died; fi
+        pkill -P "$pid" 2>/dev/null
+        kill "$pid" 2>/dev/null
+      }
+      When run hupmount
+      The output should equal "survives-hup"
+    End
+
+    It 'umount clears a dead-server wedge via the mount table, not the tree'
+      wedge() {
+        source "$LIB/backup.zsh"
+        # Simulate the wedge: the mount-TABLE entry persists (flag file)
+        # while the tree is inaccessible; plain umount always fails and
+        # only `diskutil unmount force` clears the entry.
+        cat > "$STUB/mount" <<EOF
+#!/bin/sh
+[ -e "$FIX/mounted" ] && echo "restic:cafe on $FIX/mp (macfuse, nodev, read-only)"
+exit 0
+EOF
+        cat > "$STUB/umount" <<EOF
+#!/bin/sh
+echo "umount \$*" >> "$FIX/calls"
+exit 1
+EOF
+        cat > "$STUB/diskutil" <<EOF
+#!/bin/sh
+echo "diskutil \$*" >> "$FIX/calls"
+rm -f "$FIX/mounted"
+EOF
+        chmod +x "$STUB/mount" "$STUB/umount" "$STUB/diskutil"
+        PATH="$STUB:$PATH"
+        touch "$FIX/mounted"
+        sleep 30 & local dummy=$!
+        bkp::umount "$dummy" "$FIX/mp"; local rc=$?
+        kill "$dummy" 2>/dev/null
+        print -r -- "rc=$rc"
+        grep -c 'diskutil unmount force' "$FIX/calls"
+        [ -e "$FIX/mounted" ] && print still-wedged || print cleared
+      }
+      When run wedge
+      The line 1 should equal "rc=0"
+      The line 2 should equal 1
+      The line 3 should equal "cleared"
+    End
+
+    It 'umount returns fast on a clean detach without touching diskutil'
+      cleanun() {
+        source "$LIB/backup.zsh"
+        cat > "$STUB/mount" <<EOF
+#!/bin/sh
+[ -e "$FIX/mounted" ] && echo "restic:cafe on $FIX/mp (macfuse, nodev, read-only)"
+exit 0
+EOF
+        cat > "$STUB/umount" <<EOF
+#!/bin/sh
+rm -f "$FIX/mounted"
+EOF
+        cat > "$STUB/diskutil" <<EOF
+#!/bin/sh
+echo diskutil >> "$FIX/calls"
+EOF
+        chmod +x "$STUB/mount" "$STUB/umount" "$STUB/diskutil"
+        PATH="$STUB:$PATH"
+        touch "$FIX/mounted"
+        sleep 30 & local dummy=$!
+        bkp::umount "$dummy" "$FIX/mp"; local rc=$?
+        kill "$dummy" 2>/dev/null
+        print -r -- "rc=$rc"
+        [ -f "$FIX/calls" ] && print diskutil-called || print no-force
+      }
+      When run cleanun
+      The line 1 should equal "rc=0"
+      The line 2 should equal "no-force"
+    End
+
     It 'diff dumps both snapshots and pipes them to the viewer'
       # hunk stubbed as plain `diff -u` so nothing interactive launches and
       # the viewer branch is exercised with deterministic output.

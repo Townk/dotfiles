@@ -1342,10 +1342,15 @@ bkp::ux::has_fuse() {
 # bkp::mount <repo> <mountpoint>
 # Transient `restic mount` for browse: background the mount, wait for the
 # FUSE tree to appear, REPLY = mount pid. Caller must bkp::umount.
+# The wrapper ignores HUP: closing a zellij pane HUPs the whole pty, and
+# a FUSE server that dies WITH the pane leaves the teardown racing a
+# corpse — the mount-table entry wedges and rm -rf leaves mnt behind.
+# HUP-immune, restic outlives the pane just long enough for the
+# teardown's unmount to detach a live mount (restic then exits itself).
 bkp::mount() {
   local repo="$1" mp="$2"
   mkdir -p "$mp"
-  bkp::restic "$repo" mount "$mp" >/dev/null 2>&1 &
+  ( trap '' HUP; bkp::restic "$repo" mount "$mp" ) >/dev/null 2>&1 &
   local pid=$! i
   for (( i = 0; i < 100; i++ )); do
     if [[ -d "$mp/snapshots" ]]; then
@@ -1355,10 +1360,16 @@ bkp::mount() {
     kill -0 $pid 2>/dev/null || break
     sleep 0.1
   done
+  pkill -P $pid 2>/dev/null
   kill $pid 2>/dev/null
   log_error "bkp: restic mount did not come up at $mp"
   return 1
 }
+
+# bkp::mounted <mountpoint> — true while the mount-TABLE entry exists.
+# The table, not the tree: with a dead FUSE server the tree goes
+# inaccessible ([[ -d … ]] false) while the entry stays wedged in place.
+bkp::mounted() { mount | grep -qF " on $1 (" }
 
 # bkp::umount <pid> <mountpoint> — end a transient mount, best-effort.
 # Clean unmount FIRST — restic exits on its own when the mount detaches.
@@ -1366,20 +1377,28 @@ bkp::mount() {
 # backgrounded wrapper and restic is its CHILD; a killed wrapper leaves
 # restic serving the mount, and the eventual forced unmount can wedge the
 # vnode (uninterruptible D-state for anything touching the path).
+# Every wait probes the mount table (bkp::mounted) — the old tree probe
+# declared victory on dead-server wedges and left the entry mounted.
 bkp::umount() {
   local pid="$1" mp="$2" i
   umount "$mp" 2>/dev/null || :
   for (( i = 0; i < 20; i++ )); do
-    [[ -d "$mp/snapshots" ]] || return 0
+    bkp::mounted "$mp" || return 0
     sleep 0.1
   done
   pkill -P "$pid" 2>/dev/null
   kill "$pid" 2>/dev/null
   for (( i = 0; i < 20; i++ )); do
-    [[ -d "$mp/snapshots" ]] || return 0
+    bkp::mounted "$mp" || return 0
+    umount "$mp" 2>/dev/null || :
     sleep 0.1
   done
   diskutil unmount force "$mp" >/dev/null 2>&1 || :
+  for (( i = 0; i < 10; i++ )); do
+    bkp::mounted "$mp" || return 0
+    sleep 0.1
+  done
+  return 1
 }
 
 # bkp::ux::browse_fzf <repo> <path>
