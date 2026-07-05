@@ -432,9 +432,13 @@ tm_confirm_apply() {
   bkp::restore::paths "$snap" --force "${live[@]}" || return $?
   # The live side just changed: every cached rung patch is stale, and
   # the visible changeset should reflect the new reality — rebuild in
-  # the background (the float must not hang on a slow synthesis).
+  # the background (the float must not hang on a slow synthesis). Only
+  # when a lens is actually up: without one there is nobody to show it,
+  # and the orphaned build would race the session teardown.
   rm -rf "$s/patches"
-  ( bkp::tm::refresh "$s" || : ) >> "$s/refresh.log" 2>&1 &!
+  if [[ -f "$s/lens.pid" && ! -e "$s/closed" ]]; then
+    ( bkp::tm::refresh "$s" || : ) >> "$s/refresh.log" 2>&1 &!
+  fi
   return 0
 }
 
