@@ -458,7 +458,10 @@ local set_tl_focus = ya.sync(function(_, v)
 			th.indicator.current = ui.Style():fg(fg):bg(bg):bold()
 		end
 	end
-	ya.render()
+	-- ui.render(), NOT ya.render(): yazi 26 renamed it, and a nil call
+	-- here fails the whole sync block — the task lands in the task
+	-- manager as failed AND the repaint never happens.
+	ui.render()
 end)
 
 -- Navigation context for the focus-scoped j/k dispatch below.
