@@ -278,7 +278,7 @@ tm_apply() {
       live+=("${picked[@]}")
     fi
   else
-    log_warn "bkp: nothing selected — select in yazi and press R to apply"
+    log_warn "bkp: nothing selected — select in yazi and press a to apply"
     return 0
   fi
   (( ${#live} )) || return 0
