@@ -284,17 +284,63 @@ tm_apply() {
   (( ${#live} )) || return 0
   print -rl -- "${live[@]}" > "$s/apply.list"
   if [[ -n "${ZELLIJ:-}" ]]; then
-    # Borderless like every other dialog float (zellij.zsh) — the confirm
-    # draws its own chrome, a pane frame double-borders and misaligns it.
-    # COLORTERM must be carried through explicitly: new-pane doesn't
-    # propagate it, and gum falls back to 256-color approximations.
+    # Size the float from the ACTUAL prompt (the _zj::float convention):
+    # the confirm box grows to its longest content line and does not
+    # clamp to the pane, so hardcoded geometry clips top and right.
+    # Width = longest prompt line + chrome; height = --measure at that
+    # width. Borderless: the dialog draws its own chrome, a pane frame
+    # double-borders and misaligns it. COLORTERM must be carried through
+    # explicitly: new-pane doesn't propagate it, and gum falls back to
+    # 256-color approximations.
+    source "$HOME/.local/lib/input-common.zsh"
+    local prompt line pane_w=0 pane_h
+    prompt=$(tm_apply_prompt "$s") || return 1
+    for line in ${(f)prompt}; do
+      (( ${#line} > pane_w )) && pane_w=${#line}
+    done
+    pane_w=$(( pane_w + 8 ))
+    (( pane_w < 54 )) && pane_w=54
+    (( pane_w > 100 )) && pane_w=100
+    pane_h=$(input::confirm "$prompt" --title "Apply from the past" --danger \
+      --affirmative "Restore" --negative "Cancel" \
+      --measure --width "$pane_w" </dev/null 2>/dev/null)
+    [[ "$pane_h" == <-> ]] || pane_h=18
     zellij action new-pane --floating --close-on-exit \
-      --name "" --borderless true --pinned true --width 70 --height 14 \
+      --name "" --borderless true --pinned true \
+      --width "$pane_w" --height "$pane_h" \
       -- env "COLORTERM=${COLORTERM:-truecolor}" \
       "$HOME/.local/bin/system-backup-tm" confirm-apply "$s"
   else
     tm_confirm_apply "$s"
   fi
+}
+
+# tm_apply_prompt <session>
+# The confirm-gate prompt, built once and shared by the float sizing
+# (tm_apply) and the dialog itself (tm_confirm_apply). Paths display
+# ~-collapsed and middle-ellipsized so no single line blows the box
+# width past the pane; past 8 entries the remainder is summarized
+# instead of silently dropped.
+tm_apply_prompt() {
+  local s="$1" REPLY
+  local -a live=() shown=()
+  [[ -f "$s/apply.list" ]] && live=("${(@f)$(<"$s/apply.list")}")
+  (( ${#live} )) || return 1
+  bkp::tm::rung_id "$s" || return 1
+  local snap="$REPLY" p
+  for p in "${live[@]:0:8}"; do
+    p="${p/#$HOME/~}"
+    (( ${#p} > 58 )) && p="${p[1,27]}…${p[-28,-1]}"
+    shown+=("$p")
+  done
+  (( ${#live} > 8 )) && shown+=("…and $(( ${#live} - 8 )) more")
+  print -r -- "Restore ${#live} path(s) from snapshot ${snap[1,8]} onto your live filesystem?
+
+$(print -rl -- "${shown[@]}")
+
+This writes over your live files and can cause data loss.
+Your current state is snapshotted first —
+\`system-backup undo\` reverts this."
 }
 
 # tm_confirm_apply <session>
@@ -311,12 +357,8 @@ tm_confirm_apply() {
   local snap="$REPLY"
   if [[ "${BKP_TM_ASSUME_YES:-}" != 1 ]]; then
     source "$HOME/.local/lib/input-common.zsh"
-    local prompt="Restore ${#live} path(s) from snapshot ${snap[1,8]} onto your live filesystem?
-
-$(print -rl -- "${live[@]}" | head -8)
-
-This writes over your live files and can cause data loss.
-Your current state is snapshotted first — \`system-backup undo\` reverts this."
+    local prompt
+    prompt=$(tm_apply_prompt "$s") || return 1
     input::confirm "$prompt" --title "Apply from the past" --danger \
       --affirmative "Restore" --negative "Cancel" >/dev/null || return 0
   fi
