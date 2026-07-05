@@ -368,7 +368,7 @@ EOF
         printf '# theme\n' > "$FIX/yazicfg/theme.toml"
         local ovl
         ovl=$(bkp::tm::yazi_overlay "$S")
-        [ -L "$ovl/theme.toml" ] && echo theme-linked
+        grep -q '^hovered = ' "$ovl/theme.toml" && grep -q '# theme' "$ovl/theme.toml" && echo theme-composed
         [ -L "$ovl/plugins/userp.yazi" ] && echo userplugin-linked
         # two cd subscriptions: the navigation bounce + first-paint hook
         grep -c 'ps.sub("cd"' "$ovl/plugins/tm-gate.yazi/main.lua"
@@ -377,7 +377,7 @@ EOF
         grep -c 'dofile' "$ovl/init.lua"
       }
       When run run_it
-      The line 1 should equal "theme-linked"
+      The line 1 should equal "theme-composed"
       The line 2 should equal "userplugin-linked"
       The line 3 should equal 2
       The line 4 should equal 1
