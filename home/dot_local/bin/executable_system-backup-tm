@@ -137,15 +137,23 @@ tm_timeline() {
 }
 
 tm_lens() {
-  local s="$1" i
+  local s="$1" i lens
+  lens=$(<"$s/lens")
   print -r -- $$ > "$s/lens.pid"
   print -r -- $$ > "$s/yazi.id"
-  printf '%s⏳ waiting for the snapshot mount…%s\n' "$C_DIM" "$C_RES"
-  for (( i = 0; i < 100; i++ )); do
-    [[ -e "$s/ready" ]] && break
-    sleep 0.1
-  done
+  if [[ ! -e "$s/ready" ]]; then
+    printf '%s⏳ waiting for the snapshot mount…%s\n' "$C_DIM" "$C_RES"
+    for (( i = 0; i < 100; i++ )); do
+      [[ -e "$s/ready" ]] && break
+      sleep 0.1
+    done
+  fi
   [[ -e "$s/ready" ]] || { log_error "bkp: session mount never came up"; bkp::tm::end "$s"; exit 1 }
+  # Explore owns the session's only pane, so this worker owns teardown
+  # too. Pane close sends HUP — flag the session closed so the loop
+  # breaks into the always-teardown instead of leaking the FUSE mount.
+  # (Diff keeps the timeline pane as the teardown owner.)
+  [[ "$lens" == explore ]] && trap 'touch "$s/closed"' HUP TERM INT
   local -a cmd
   {
     while [[ ! -e "$s/closed" ]]; do
@@ -160,6 +168,10 @@ tm_lens() {
     done
   } always {
     bkp::tm::end "$s"
+    if [[ "$lens" == explore ]]; then
+      [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
+      rm -rf "$s"
+    fi
   }
 }
 

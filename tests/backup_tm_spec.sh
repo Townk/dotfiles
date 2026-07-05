@@ -291,12 +291,12 @@ EOS
         source "$LIB/backup-tm.zsh"
         local ovl
         ovl=$(bkp::tm::yazi_overlay "$S")
-        [ -f "$ovl/yazi.toml" ] && grep -q 'ratio = \[ 0, 5, 5 \]' "$ovl/yazi.toml" && echo two-col
+        [ -f "$ovl/yazi.toml" ] && grep -q 'ratio = \[ 2, 4, 4 \]' "$ovl/yazi.toml" && echo three-col
         yq -p toml -o json '.' "$ovl/keymap.toml" | jq -r '.mgr.prepend_keymap | length'
         grep -c 'system-backup-tm' "$ovl/keymap.toml" > /dev/null && echo has-bindings
       }
       When run run_it
-      The line 1 should equal "two-col"
+      The line 1 should equal "three-col"
       The line 2 should equal 7
       The line 3 should equal "has-bindings"
     End
@@ -368,21 +368,29 @@ EOF
         printf '# theme\n' > "$FIX/yazicfg/theme.toml"
         local ovl
         ovl=$(bkp::tm::yazi_overlay "$S")
-        grep -q '^\[dark.mgr\]' "$ovl/theme.toml" && grep -q '# theme' "$ovl/theme.toml" && echo theme-composed
+        # user theme passes through untouched (the dead [dark.mgr] hover
+        # block is gone — cursor styling lives in the flavor [indicator])
+        grep -q '# theme' "$ovl/theme.toml" && ! grep -q 'dark.mgr' "$ovl/theme.toml" && echo theme-linked
         [ -L "$ovl/plugins/userp.yazi" ] && echo userplugin-linked
-        # two cd subscriptions: the navigation bounce + first-paint hook
+        # one cd subscription: the navigation bounce
         grep -c 'ps.sub("cd"' "$ovl/plugins/tm-gate.yazi/main.lua"
         grep -c 'BKP_TM_MNT' "$ovl/plugins/tm-gate.yazi/main.lua"
+        # the timeline renders inside yazi's parent column, and the dead
+        # tm-focus/cursor-bounce machinery stays gone
+        grep -q 'Parent:redraw' "$ovl/plugins/tm-gate.yazi/main.lua" && echo timeline-in-parent
+        grep -q 'tm-focus' "$ovl/plugins/tm-gate.yazi/main.lua" || echo no-tm-focus
         grep -c 'require("tm-gate")' "$ovl/init.lua"
         grep -c 'dofile' "$ovl/init.lua"
       }
       When run run_it
-      The line 1 should equal "theme-composed"
+      The line 1 should equal "theme-linked"
       The line 2 should equal "userplugin-linked"
-      The line 3 should equal 2
+      The line 3 should equal 1
       The line 4 should equal 1
-      The line 5 should equal 1
-      The line 6 should equal 1
+      The line 5 should equal "timeline-in-parent"
+      The line 6 should equal "no-tm-focus"
+      The line 7 should equal 1
+      The line 8 should equal 1
     End
 
     It 'builds the hunk --watch command for the diff lens'
@@ -591,11 +599,26 @@ EOF
       }
     }
 
-    It 'splits the current tab: lens pane right, timeline in the invoking pane'
+    It 'runs explore as ONE pane: the lens takes the invoking pane, no split'
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         bkp::mount() { mkdir -p "$2/snapshots"; REPLY=$$; }
         bkp::tm::launch explore "$FIX/anchor"
+        cat "$FIX/tm.calls"
+        [ -f "$FIX/zj.calls" ] && cat "$FIX/zj.calls" || echo no-zellij-calls
+      }
+      When run run_it
+      The status should be success
+      The output should include "tm lens"
+      The output should include "no-zellij-calls"
+      The output should not include "tm timeline"
+    End
+
+    It 'splits the diff tab: hunk lens right, timeline in the invoking pane'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        bkp::mount() { mkdir -p "$2/snapshots"; REPLY=$$; }
+        bkp::tm::launch diff "$FIX/anchor"
         cat "$FIX/zj.calls"
         cat "$FIX/tm.calls"
       }

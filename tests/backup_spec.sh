@@ -1952,7 +1952,7 @@ EOF
       The line 3 should equal "browse --deleted $FIX"
     End
 
-    It 'browse launches a zellij scrub session tab under FUSE'
+    It 'browse launches a one-pane explore scrub session under FUSE'
       run_it() {
         STUB="$FIX/stub"; mkdir -p "$STUB"
         printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
@@ -1969,12 +1969,16 @@ JSON
         PATH="$STUB:$PATH" BKP_HAS_FUSE=1 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" \
           BKP_TM_BIN="$STUB/system-backup-tm" ZELLIJ=1 \
           zsh "$DISPATCH" browse "$FIX/anchor"
-        cat "$FIX/zj.calls" "$FIX/tm.calls"
+        cat "$FIX/tm.calls"
+        [ -f "$FIX/zj.calls" ] && cat "$FIX/zj.calls" || echo no-zellij-calls
       }
       When run run_it
       The status should be success
-      The output should include "run --close-on-exit --direction right"
-      The output should include "tm timeline"
+      # explore is ONE pane: yazi (in-column timeline) takes over the
+      # invoking pane — no split, no timeline pane
+      The output should include "tm lens"
+      The output should include "no-zellij-calls"
+      The output should not include "tm timeline"
     End
 
     It 'browse launches a zellij scrub session tab for a diff dir anchor without FUSE'

@@ -98,14 +98,13 @@ func focused() bool {
 }
 
 type ui struct {
-	sess, anchor, ctlBin     string
-	activeBG, inactiveBG     string
-	keyFG, hintFG, titleFG   string
-	lens, yaziID, inactHex   string
-	ladder                   []rung
-	rungIdx                  int
-	focus                    bool
-	w, h                     int
+	sess, anchor, ctlBin   string
+	activeBG, inactiveBG   string
+	keyFG, hintFG, titleFG string
+	ladder                 []rung
+	rungIdx                int
+	focus                  bool
+	w, h                   int
 }
 
 func (u *ui) frame() string {
@@ -232,9 +231,6 @@ func main() {
 		keyFG:      sgr(*keyFG, false),
 		hintFG:     sgr(*hintFG, false),
 		titleFG:    sgr(*titleFG, false),
-		lens:       readTrim(filepath.Join(sess, "lens")),
-		yaziID:     readTrim(filepath.Join(sess, "yazi.id")),
-		inactHex:   *inactiveBG,
 		ladder:     readLadder(sess),
 		rungIdx:    1,
 		focus:      true,
@@ -326,24 +322,6 @@ func main() {
 				if f := focused(); f != u.focus {
 					u.focus = f
 					dirty = true
-					// Tell yazi so its hovered-row bg mirrors the swap.
-					if u.lens == "explore" {
-						// yazi.id may not exist yet at our startup — re-read.
-						if u.yaziID == "" {
-							u.yaziID = readTrim(filepath.Join(u.sess, "yazi.id"))
-						}
-						if u.yaziID != "" {
-							// Publish the LENS's focus, which within the
-							// session tab is the negation of ours — yazi
-							// dims when the TIMELINE is the focused pane.
-							v := "0"
-							if !f {
-								v = "1"
-							}
-							c := exec.Command("ya", "pub-to", u.yaziID, "tm-focus", "--str", v)
-							go func() { _ = c.Run() }()
-						}
-					}
 				}
 			}
 		}

@@ -285,23 +285,10 @@ bkp::tm::yazi_overlay() {
     [[ "${f:t}" == keymap.toml || "${f:t}" == init.lua || "${f:t}" == plugins || "${f:t}" == yazi.toml || "${f:t}" == theme.toml || "${f:t}" == flavors ]] && continue
     ln -sfn "$f" "$ovl/${f:t}"
   done
-  # theme.toml: user theme + tab-palette hover colors (runtime th mutation
-  # is not honored by yazi 26.5 — the theme file is the reliable channel).
-  if [[ -n "${C_HEX_TAB_ACTIVE_BG:-}" && -n "${C_HEX_TAB_BG:-}" ]]; then
-    {
-      # yazi resolves dark/light flavors — theme overrides only apply
-      # inside [dark.*]/[light.*] sections (a bare [mgr] is ignored).
-      local m
-      for m in dark light; do
-        print -r -- "[$m.mgr]"
-        print -r -- "hovered = { bg = \"$C_HEX_TAB_ACTIVE_BG\" }"
-        print -r -- "preview_hovered = { bg = \"$C_HEX_TAB_BG\" }"
-      done
-      [[ -f "$src/theme.toml" ]] && cat "$src/theme.toml"
-    } > "$ovl/theme.toml"
-  elif [[ -f "$src/theme.toml" ]]; then
-    ln -sfn "$src/theme.toml" "$ovl/theme.toml"
-  fi
+  # theme.toml: the user's own, untouched — cursor styling lives in the
+  # flavor copy's [indicator] section below ([mgr] hovered is gone in
+  # yazi 26, and a flavor file beats theme.toml anyway).
+  [[ -f "$src/theme.toml" ]] && ln -sfn "$src/theme.toml" "$ovl/theme.toml"
   # flavors/: symlink all, but append an [indicator] section to the active
   # flavor copy — yazi 26 moved cursor-row styling there (mgr hovered is
   # gone; the default is current = reversed). The tab palette drives it:
@@ -334,8 +321,9 @@ bkp::tm::yazi_overlay() {
   elif [[ -d "$src/flavors" ]]; then
     ln -sfn "$src/flavors" "$ovl/flavors"
   fi
-  # yazi.toml: user config + 2-column ratio for the scrub session (parent
-  # column dropped — the timeline pane owns "where am I").
+  # yazi.toml: user config + a scrub-session ratio — the parent column
+  # stays visible because tm-gate's Parent:redraw override renders the
+  # snapshot timeline there ("where am I" lives inside yazi now).
   {
     [[ -f "$src/yazi.toml" ]] && cat "$src/yazi.toml"
     if [[ -f "$src/yazi.toml" ]] && grep -q '^\[mgr\]' "$src/yazi.toml"; then
@@ -345,7 +333,7 @@ bkp::tm::yazi_overlay() {
     fi
   } > "$ovl/yazi.toml"
   if grep -q '^\[mgr\]' "$ovl/yazi.toml" && ! grep -q '^ratio' "$ovl/yazi.toml"; then
-    awk '{ print } /^\[mgr\]/ && !done { print "ratio = [ 0, 5, 5 ]"; done = 1 }' \
+    awk '{ print } /^\[mgr\]/ && !done { print "ratio = [ 2, 4, 4 ]"; done = 1 }' \
       "$ovl/yazi.toml" > "$ovl/yazi.toml.new" && mv "$ovl/yazi.toml.new" "$ovl/yazi.toml"
   fi
   # plugins/: the user's plugins plus the generated session gate.
@@ -430,7 +418,11 @@ LUA
 # 1) bounce any cd that leaves <mnt>/ids/<rung><anchor> back to the last
 #    good directory (cross-rung cds match the pattern, so scrubbing works);
 # 2) replace the header cwd with "\u25cf <age>  <live-relative path>" so the
-#    mount plumbing never shows. Reads BKP_TM_MNT/ANCHOR/SESSION from env.
+#    mount plumbing never shows;
+# 3) render the snapshot timeline in the parent column (Parent:redraw
+#    override) \u2014 rung changes arrive as emit-to cd/reveal, which forces a
+#    full redraw, so the timeline repaints for free.
+# Reads BKP_TM_MNT/ANCHOR/SESSION + palette colors from env.
 bkp::tm::gate_plugin() {
   local dir="$1/tm-gate.yazi"
   mkdir -p "$dir"
@@ -452,14 +444,17 @@ function M:setup()
 	end
 	local pat = "^" .. esc(mnt) .. "/ids/([^/]+)" .. esc(anchor) .. "(.*)$"
 
-	-- id(8) -> epoch, from the session ladder (static for the session).
-	local epochs = {}
+	-- The session ladder, newest first (static for the session): an
+	-- ordered array for the timeline plus an id(8) -> epoch map for the
+	-- header rewrite.
+	local ladder, epochs = {}, {}
 	if sess then
 		local f = io.open(sess .. "/ladder", "r")
 		if f then
 			for line in f:lines() do
 				local id, epoch = line:match("^(%x+)\t(%d+)")
 				if id then
+					ladder[#ladder + 1] = { id = id:sub(1, 8), epoch = tonumber(epoch) }
 					epochs[id:sub(1, 8)] = tonumber(epoch)
 				end
 			end
@@ -488,38 +483,125 @@ function M:setup()
 		end
 	end)
 
-	-- Focus-aware cursor: the timeline pane publishes tm-focus 0/1 over
-	-- DDS; yazi swaps th.indicator.current between the active-tab pair
-	-- (focused) and the inactive-tab pair (timeline focused). The earlier
-	-- th.mgr.hovered mutation failed only because that key no longer
-	-- exists — indicator styles are read per-render and ARE mutable.
-	local act = os.getenv("BKP_TM_ACTIVE_BG")
-	local actfg = os.getenv("BKP_TM_ACTIVE_FG")
-	local inact = os.getenv("BKP_TM_INACTIVE_BG")
-	local inactfg = os.getenv("BKP_TM_TAB_FG")
-	if act and actfg and inact and inactfg then
-		ps.sub_remote("tm-focus", function(body)
-			if not (th and th.indicator) then
-				return
+	-- Snapshot timeline in the parent column: the ladder IS "where am I"
+	-- for a scrub session, so the parent listing (mount plumbing) is
+	-- replaced wholesale. The rung file is re-read on every redraw — rung
+	-- changes always arrive as `ya emit-to cd|reveal`, which triggers a
+	-- full redraw, so this stays fresh with no other repaint machinery.
+	local act_bg = os.getenv("BKP_TM_ACTIVE_BG")
+	local act_fg = os.getenv("BKP_TM_ACTIVE_FG")
+	local dim_fg = os.getenv("BKP_TM_TAB_FG")
+	local accent_fg = os.getenv("BKP_TM_ACCENT_FG")
+	local key_fg = os.getenv("BKP_TM_KEY_FG")
+	local hint_fg = os.getenv("BKP_TM_HINT_FG")
+
+	local function cur_rung()
+		local f = sess and io.open(sess .. "/rung", "r")
+		if not f then
+			return 1
+		end
+		local n = tonumber(f:read("*l")) or 1
+		f:close()
+		return n
+	end
+
+	local function dim(span)
+		return dim_fg and span:fg(dim_fg) or span
+	end
+
+	if #ladder > 0 then
+		function Parent:redraw()
+			local w, h = self._area.w, self._area.h
+			local cur = cur_rung()
+			local lines = {}
+			local title = ui.Span(" ▓▓▓ Snapshots")
+			lines[#lines + 1] = ui.Line({ accent_fg and title:fg(accent_fg) or title })
+			lines[#lines + 1] = ui.Line("")
+
+			-- Every rung is a two-line date/time stamp behind ● / ┃ glyphs;
+			-- glyph color says where you are (newer red, current green,
+			-- older yellow); the current rung gets a full-width highlight.
+			local rows = {}
+			for i, r in ipairs(ladder) do
+				local date = os.date("%a, %b %e %Y", r.epoch)
+				local clock = string.lower(os.date("%I:%M %p", r.epoch))
+				local gc = i < cur and "red" or (i == cur and "green" or "yellow")
+				if i == cur and act_bg and act_fg then
+					local pad1 = string.rep(" ", math.max(0, w - 3 - #date))
+					local pad2 = string.rep(" ", math.max(0, w - 3 - #clock))
+					rows[#rows + 1] = { rung = i, line = ui.Line({
+						ui.Span(" "):bg(act_bg),
+						ui.Span("●"):fg(gc):bg(act_bg),
+						ui.Span(" " .. date .. pad1):fg(act_fg):bg(act_bg):bold(),
+					}) }
+					rows[#rows + 1] = { rung = i, line = ui.Line({
+						ui.Span(" "):bg(act_bg),
+						ui.Span("┃"):fg(gc):bg(act_bg),
+						ui.Span(" " .. clock .. pad2):fg(act_fg):bg(act_bg),
+					}) }
+				else
+					rows[#rows + 1] = { rung = i, line = ui.Line({
+						ui.Span(" "),
+						ui.Span("●"):fg(gc),
+						ui.Span(" " .. date),
+					}) }
+					rows[#rows + 1] = { rung = i, line = ui.Line({
+						ui.Span(" "),
+						ui.Span("┃"):fg(gc),
+						dim(ui.Span(" " .. clock)),
+					}) }
+				end
+				if i < #ladder then
+					rows[#rows + 1] = { rung = 0, line = ui.Line({
+						ui.Span(" "),
+						ui.Span("┃"):fg(i < cur and "red" or "yellow"),
+					}) }
+				end
 			end
-			if tostring(body) == "0" then
-				th.indicator.current = ui.Style():fg(inactfg):bg(inact):bold()
-			else
-				th.indicator.current = ui.Style():fg(actfg):bg(act):bold()
+
+			-- Window the rows around the current rung; ⋮ marks clipped ends.
+			local height = math.max(3, h - 5)
+			local first = 1
+			if #rows > height then
+				local at = 1
+				for i, row in ipairs(rows) do
+					if row.rung == cur then
+						at = i
+						break
+					end
+				end
+				first = math.max(1, at - math.floor(height / 2))
+				if first + height - 1 > #rows then
+					first = #rows - height + 1
+				end
 			end
-			-- ya.render() alone leaves the cursor row stale, and arrow 0 is
-			-- swallowed as a no-op — bounce the cursor one row and back
-			-- (edge-aware) to force real repaint events with no net move.
-			ya.render()
-			local cur = cx.active.current.cursor
-			if cur > 0 then
-				ya.emit("arrow", { -1 })
-				ya.emit("arrow", { 1 })
-			else
-				ya.emit("arrow", { 1 })
-				ya.emit("arrow", { -1 })
+			local last = math.min(first + height - 1, #rows)
+			for i = first, last do
+				if #rows > height and ((i == first and first > 1) or (i == last and last < #rows)) then
+					lines[#lines + 1] = ui.Line({ dim(ui.Span(" ⋮")) })
+				else
+					lines[#lines + 1] = rows[i].line
+				end
 			end
-		end)
+
+			local function key(text)
+				local span = ui.Span(text)
+				return key_fg and span:fg(key_fg) or span
+			end
+			local function hint(text)
+				local span = ui.Span(text)
+				return hint_fg and span:fg(hint_fg) or span
+			end
+			lines[#lines + 1] = ui.Line({ dim(ui.Span(" " .. string.rep("━", math.max(1, w - 2)))) })
+			lines[#lines + 1] = ui.Line({ key(" 󰘶K"), hint(" newer "), hint("· "), key("󰘶J"), hint(" older") })
+			lines[#lines + 1] = ui.Line({ key("  q"), hint(" quit  "), hint("·  "), key("R"), hint(" apply") })
+
+			return { ui.List(lines):area(self._area) }
+		end
+		-- The column no longer lists the parent folder — a click or wheel
+		-- there must not navigate the mount underneath the timeline.
+		function Parent:click() end
+		function Parent:scroll() end
 	end
 
 	-- Header: hide the mount plumbing, show when + where (live-relative).
@@ -576,6 +658,8 @@ bkp::tm::lens_cmd() {
     "BKP_TM_MNT=$s/mnt" "BKP_TM_ANCHOR=$anchor" "BKP_TM_SESSION=$s" \
     "BKP_TM_INACTIVE_BG=${C_HEX_TAB_BG:-}" "BKP_TM_ACTIVE_BG=${C_HEX_TAB_ACTIVE_BG:-}" \
     "BKP_TM_ACTIVE_FG=${C_HEX_TAB_ACTIVE_FG:-}" "BKP_TM_TAB_FG=${C_HEX_TAB_FG:-}" \
+    "BKP_TM_ACCENT_FG=${C_ROLE_UI_ACCENT:-}" "BKP_TM_KEY_FG=${C_ROLE_UI_KEY:-}" \
+    "BKP_TM_HINT_FG=${C_ROLE_UI_HINT:-}" \
     yazi --client-id "$yid" "$rung$anchor"
 }
 
@@ -583,9 +667,11 @@ bkp::tm::lens_cmd() {
 
 # bkp::tm::launch <lens> <anchor>
 # Entry point (spec §5): under Zellij the session lives in the CURRENT
-# tab — the lens pane splits off to the right and the timeline takes over
-# the invoking pane (the shell prompt returns when the session ends, and
-# the tab keeps its zj-hud chrome — a fresh layout-string tab loses it).
+# tab. Explore is ONE pane — yazi takes over the invoking pane and the
+# timeline renders inside its parent column (tm-gate). Diff splits the
+# hunk lens off to the right and the timeline pane takes the invoking
+# pane. Either way the shell prompt returns when the session ends, and
+# the tab keeps its zj-hud chrome — a fresh layout-string tab loses it.
 # Outside Zellij: the sequential fallback.
 bkp::tm::launch() {
   local lens="$1" anchor="${2:A}"
@@ -621,17 +707,24 @@ bkp::tm::launch() {
       fi
     fi
     touch "$s/ready"
-    zellij run --close-on-exit --direction right --name "tm lens" \
-      -- "$BKP_TM_BIN" lens "$s" >/dev/null || { rm -rf "$s"; return 1 }
-    # The new pane takes focus; grow it leftward so the timeline pane
-    # narrows toward its ~26-col design width. Focus STAYS on the lens —
-    # scrubbing works from inside it (Shift+arrows / K / J), and a focused
-    # timeline reads as two active panes with no visual tiebreaker.
-    local i
-    for i in 1 2 3 4 5; do
-      zellij action resize increase left 2>/dev/null || break
-    done
-    "$BKP_TM_BIN" timeline "$s" || return $?
+    if [[ "$lens" == explore ]]; then
+      # One pane: yazi owns the whole session — the timeline lives in its
+      # parent column, so there is no split and no timeline pane. The lens
+      # worker tears the session down (unmount + rm) when yazi exits.
+      "$BKP_TM_BIN" lens "$s" || return $?
+    else
+      zellij run --close-on-exit --direction right --name "tm lens" \
+        -- "$BKP_TM_BIN" lens "$s" >/dev/null || { rm -rf "$s"; return 1 }
+      # The new pane takes focus; grow it leftward so the timeline pane
+      # narrows toward its ~26-col design width. Focus STAYS on the lens —
+      # scrubbing works from inside it (Shift+arrows), and a focused
+      # timeline reads as two active panes with no visual tiebreaker.
+      local i
+      for i in 1 2 3 4 5; do
+        zellij action resize increase left 2>/dev/null || break
+      done
+      "$BKP_TM_BIN" timeline "$s" || return $?
+    fi
   else
     bkp::tm::fallback "$s" || return $?
   fi
