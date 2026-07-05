@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/mattn/go-runewidth"
@@ -503,7 +504,10 @@ func setSize(f *os.File, w, h int) {
 
 type config struct {
 	title, hints                          string
+	titleFile, focusFile                  string
 	bg, fg, border, titleColor, ruleColor color
+	titleColorBlur                        color
+	bare, tui                             bool
 	child                                 []string
 }
 
@@ -520,6 +524,7 @@ type app struct {
 	hintRow        int // 1-based row for the footer hints (0 = none)
 	ptmx           *os.File
 	mu             sync.Mutex
+	focused        bool // --focus-file state; true = active chrome colors
 }
 
 func main() {
@@ -542,7 +547,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	a := &app{cfg: cfg, tty: tty}
+	a := &app{cfg: cfg, tty: tty, focused: true}
+	a.refreshDynamic()
 	a.layout(w, h)
 
 	// Raw mode on the real tty so keystrokes pass straight through to the child.
@@ -566,6 +572,25 @@ func main() {
 }
 
 func (a *app) layout(w, h int) {
+	if a.cfg.bare {
+		// Bare (lens) mode: no box at all — title on row 1, rule on row 2,
+		// the child owns everything below at full pane width. This is the
+		// explore-lens header look, not the picker dialog.
+		a.hintRow = 0
+		innerH := h - 2
+		if innerH < 1 {
+			innerH = 1
+		}
+		a.paneW, a.paneH = w, h
+		a.rowOff = 3
+		a.colOff = 1
+		if a.g == nil {
+			a.g = newGrid(w, innerH)
+		} else {
+			a.g.resize(w, innerH)
+		}
+		return
+	}
 	// Frame, top→bottom: row1 top border(+label), row2 blank, row3 ▓▓▓ title,
 	// row4 rule, then the child, then (when hints are set) a blank + the hints,
 	// then the bottom border. Sides at col1/colW with a 1-cell mantle gutter, so
@@ -622,7 +647,16 @@ func (a *app) run() (int, error) {
 		fmt.Sprintf("PTY_FRAME_LINES=%d", a.g.h),
 	)
 	cmd.Stdin = os.Stdin // the list to filter
-	cmd.Stdout = selW    // the selection
+	if a.cfg.tui {
+		// Full-TUI child (diffnav): our stdin is the pane's real tty, and
+		// a tty-stdin would make the child read keys DIRECTLY, racing our
+		// own forwarder. /dev/null forces it onto /dev/tty = the sub-pty.
+		if devnull, err := os.Open(os.DevNull); err == nil {
+			cmd.Stdin = devnull
+			defer devnull.Close()
+		}
+	}
+	cmd.Stdout = selW // the selection
 	cmd.Stderr = errW
 	cmd.ExtraFiles = []*os.File{pts} // child fd 3 = controlling tty
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 3}
@@ -665,6 +699,23 @@ func (a *app) run() (int, error) {
 	a.blit()
 	a.mu.Unlock()
 
+	// Dynamic chrome: poll the title/focus files and repaint on change
+	// (daemon goroutine; dies with the process, like the key forwarder).
+	if a.cfg.titleFile != "" || a.cfg.focusFile != "" {
+		go func() {
+			t := time.NewTicker(300 * time.Millisecond)
+			defer t.Stop()
+			for range t.C {
+				a.mu.Lock()
+				if a.refreshDynamic() {
+					a.drawChrome()
+					a.blit()
+				}
+				a.mu.Unlock()
+			}
+		}()
+	}
+
 	// Pump the child UI → emulator → blit until the pty closes (child exits).
 	buf := make([]byte, 32*1024)
 	for {
@@ -705,6 +756,27 @@ func (a *app) run() (int, error) {
 func (a *app) drawChrome() {
 	w, h := a.paneW, a.paneH
 	var b strings.Builder
+	if a.cfg.bare {
+		// Bare (lens) mode: repaint ONLY the two header rows — no flood
+		// (the child owns everything from rowOff down and a 2J here would
+		// blank it between chrome and blit).
+		b.WriteString("\x1b[?2026h")
+		bg := a.cfg.bg.bgSGR(color{})
+		moveTo(&b, 1, 1)
+		b.WriteString("\x1b[" + bg + "m\x1b[2K")
+		b.WriteString("\x1b[" + bg + ";" + a.effTitleColor().fgSGR() + "m " + a.cfg.title)
+		moveTo(&b, 2, 1)
+		b.WriteString("\x1b[" + bg + "m\x1b[2K")
+		ruleW := w - 2
+		if ruleW < 1 {
+			ruleW = 1
+		}
+		moveTo(&b, 2, 2)
+		b.WriteString("\x1b[" + bg + ";" + a.cfg.ruleColor.fgSGR() + "m" + strings.Repeat("━", ruleW))
+		b.WriteString("\x1b[0m\x1b[?2026l")
+		a.tty.WriteString(b.String())
+		return
+	}
 	b.WriteString("\x1b[?2026h")
 	bg := a.cfg.bg.bgSGR(color{})
 	// flood the whole pane with the dialog bg
@@ -728,7 +800,7 @@ func (a *app) drawChrome() {
 	// each side so they aren't flush against the gutter.
 	if a.cfg.title != "" {
 		moveTo(&b, 3, a.colOff+headerPad)
-		b.WriteString("\x1b[" + bg + ";" + a.cfg.titleColor.fgSGR() + "m▓▓▓ " + a.cfg.title)
+		b.WriteString("\x1b[" + bg + ";" + a.effTitleColor().fgSGR() + "m▓▓▓ " + a.cfg.title)
 		ruleW := a.g.w - 2*headerPad
 		if ruleW < 1 {
 			ruleW = 1
@@ -855,8 +927,61 @@ func parseArgs(args []string) config {
 			cfg.ruleColor = parseHex(val())
 		case strings.HasPrefix(a, "--rule-color="):
 			cfg.ruleColor = parseHex(a[len("--rule-color="):])
+		case a == "--title-color-blur":
+			cfg.titleColorBlur = parseHex(val())
+		case strings.HasPrefix(a, "--title-color-blur="):
+			cfg.titleColorBlur = parseHex(a[len("--title-color-blur="):])
+		case a == "--title-file":
+			cfg.titleFile = val()
+		case strings.HasPrefix(a, "--title-file="):
+			cfg.titleFile = a[len("--title-file="):]
+		case a == "--focus-file":
+			cfg.focusFile = val()
+		case strings.HasPrefix(a, "--focus-file="):
+			cfg.focusFile = a[len("--focus-file="):]
+		case a == "--bare":
+			cfg.bare = true
+		case a == "--tui":
+			cfg.tui = true
 		}
 		i++
 	}
 	return cfg
+}
+
+// refreshDynamic re-reads the --title-file / --focus-file channels and
+// reports whether the chrome needs a redraw. Missing files keep the last
+// state (focus defaults to true so a bare title starts active).
+func (a *app) refreshDynamic() bool {
+	changed := false
+	if a.cfg.titleFile != "" {
+		if b, err := os.ReadFile(a.cfg.titleFile); err == nil {
+			t := strings.TrimSpace(string(b))
+			if t != "" && t != a.cfg.title {
+				a.cfg.title = t
+				changed = true
+			}
+		}
+	}
+	if a.cfg.focusFile != "" {
+		f := true
+		if b, err := os.ReadFile(a.cfg.focusFile); err == nil {
+			f = strings.TrimSpace(string(b)) != "0"
+		}
+		if f != a.focused {
+			a.focused = f
+			changed = true
+		}
+	}
+	return changed
+}
+
+// effTitleColor is the focus-aware title color: the blur variant applies
+// whenever a focus channel says the pane lost focus (and a blur color was
+// given); everything else keeps the active color.
+func (a *app) effTitleColor() color {
+	if !a.focused && a.cfg.titleColorBlur.set {
+		return a.cfg.titleColorBlur
+	}
+	return a.cfg.titleColor
 }

@@ -203,11 +203,12 @@ func (u *ui) frame() string {
 		}
 	}
 
-	// Hints display uppercase; the shift glyph marks only real Shift
-	// chords — this pane's keys are plain j/k/a/q, so bare uppercase.
+	// Hints mirror the explore lens footer verbatim (session-wide
+	// contract: Shift+K/J scrub from ANY pane, so the shift glyphs are
+	// honest here too even though this pane also takes plain j/k).
 	k, h := u.keyFG, u.hintFG
 	b.WriteString(u.sepLine())
-	b.WriteString(fmt.Sprintf(" %sK%s%s newer %s%s· %s%sJ%s%s older%s\x1b[K\r\n %sQ%s%s quit  %s%s·  %s%sA%s%s apply%s",
+	b.WriteString(fmt.Sprintf(" %s\U000F0636K%s%s newer %s%s· %s%s\U000F0636J%s%s older%s\x1b[K\r\n %sQ%s%s quit  %s%s·  %s%sA%s%s apply%s",
 		k, reset, h, reset, h, reset, k, reset, h, reset,
 		k, reset, h, reset, h, reset, k, reset, h, reset))
 	return b.String()
@@ -302,6 +303,7 @@ func main() {
 	if u.w <= 0 {
 		u.w, u.h = 26, 24
 	}
+	writeLensFocus(u.sess, !u.focus)
 	u.draw()
 
 	closedPath := filepath.Join(sess, "closed")
@@ -343,6 +345,10 @@ func main() {
 				if f := focused(); f != u.focus {
 					u.focus = f
 					dirty = true
+					// Publish the LENS's focus (the negation of ours in a
+					// two-pane tab) — pty-frame's --focus-file reads it to
+					// dim/brighten the lens header.
+					writeLensFocus(u.sess, !f)
 				}
 			}
 		}
@@ -350,6 +356,18 @@ func main() {
 			u.draw()
 		}
 	}
+}
+
+// writeLensFocus records whether the LENS pane holds the zellij focus —
+// the lens chrome (pty-frame --focus-file) polls this to swap its header
+// between the active and blurred palette, the same tiebreaker the explore
+// lens gets from its in-yazi focus flag.
+func writeLensFocus(sess string, lensFocused bool) {
+	v := "0"
+	if lensFocused {
+		v = "1"
+	}
+	_ = os.WriteFile(filepath.Join(sess, "focus"), []byte(v), 0o644)
 }
 
 func max(a, b int) int {

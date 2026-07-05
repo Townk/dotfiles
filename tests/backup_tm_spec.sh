@@ -512,10 +512,11 @@ EOF
       The line 8 should equal 1
     End
 
-    It 'builds the diffnav watch command for the diff lens'
+    It 'builds the diffnav watch command for the diff lens (no pty-frame)'
       run_it() {
         source "$LIB/backup-tm.zsh"
         print -r -- diff > "$S/lens"
+        export BKP_TM_PTYFRAME_BIN=/nonexistent
         bkp::tm::lens_cmd "$S"
         # the watch-cmd must be ONE argv element (space inside, no quoting)
         bkp::tm::lens_cmd "$S" | sed -n '8p'
@@ -530,6 +531,32 @@ EOF
       The line 6 should equal "--watch"
       The output should include "--watch-interval"
       The line 11 should equal "cat $S/current.patch"
+    End
+
+    It 'wraps the lens in pty-frame with title/focus channels when present'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        print -r -- diff > "$S/lens"
+        printf '#!/bin/sh\n' > "$FIX/ptyframe"
+        chmod +x "$FIX/ptyframe"
+        BKP_TM_PTYFRAME_BIN="$FIX/ptyframe" bkp::tm::lens_cmd "$S" > "$FIX/argv"
+        grep -c -- '--bare' "$FIX/argv"
+        grep -c -- '--tui' "$FIX/argv"
+        grep -c "^$S/lens-title$" "$FIX/argv"
+        grep -c "^$S/focus$" "$FIX/argv"
+        grep -c '^diffnav$' "$FIX/argv"
+        # the header file is seeded at lens spawn, explore-style
+        head -c 4 "$S/lens-title"; echo
+        grep -c "$FIX/anchor" "$S/lens-title"
+      }
+      When run run_it
+      The line 1 should equal 1
+      The line 2 should equal 1
+      The line 3 should equal 1
+      The line 4 should equal 1
+      The line 5 should equal 1
+      The line 6 should equal "● "
+      The line 7 should equal 1
     End
   End
 

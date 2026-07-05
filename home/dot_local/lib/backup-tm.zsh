@@ -103,6 +103,9 @@ bkp::tm::refresh() {
   [[ -e "$s/closed" || ! -d "$s" ]] && return 0
   lens=$(<"$s/lens") anchor=$(<"$s/anchor")
   if [[ "$lens" == diff ]]; then
+    # The lens header follows the rung instantly (like the timeline
+    # highlight) — even for steps whose build gets debounced away.
+    bkp::tm::lens_title "$s"
     # Debounce: a held scrub key fires one ctl per key repeat, and every
     # lens update costs a hunk respawn (even cache hits). Only the rung
     # the user SETTLES on deserves one: nap briefly, and if the rung
@@ -211,6 +214,24 @@ bkp::tm::step() {
 
 # bkp::tm::end <session> — signal every session process to wind down.
 bkp::tm::end() { touch "$1/closed" }
+
+# bkp::tm::lens_title <session>
+# Write the lens header line — "● <age>  <live anchor>" — the same
+# shape the explore lens shows via its yazi Header override. pty-frame
+# polls the file (--title-file), so the header follows the rung.
+bkp::tm::lens_title() {
+  local s="$1" REPLY
+  bkp::tm::rung_line "$s" || return 0
+  local epoch="${${REPLY#*$'\t'}%%$'\t'*}" anchor age
+  anchor=$(<"$s/anchor")
+  local d=$(( EPOCHSECONDS - epoch ))
+  if (( d < 3600 )); then age="$(( d / 60 ))m ago"
+  elif (( d < 172800 )); then age="$(( d / 3600 ))h ago"
+  else age="$(( d / 86400 ))d ago"
+  fi
+  print -r -- "● $age  ${anchor/#$HOME/~}" > "$s/lens-title.tmp"
+  mv "$s/lens-title.tmp" "$s/lens-title"
+}
 
 # bkp::tm::build_signal <session>
 # Flip the lens pane into its spinner phase: flag the build and take
@@ -914,10 +935,24 @@ bkp::tm::lens_cmd() {
     feats=$(git config --get delta.features 2>/dev/null) || feats=""
     feats=${feats//side-by-side/}
     [[ -f "$s/current.patch" ]] || : > "$s/current.patch"
+    bkp::tm::lens_title "$s"
+    # pty-frame (bare mode) gives the lens the explore-style header —
+    # "● <age>  <anchor>" following the rung via --title-file — and the
+    # focus-aware color swap via --focus-file (the timeline pane writes
+    # it). Plain diffnav is the no-binary fallback.
+    local pf="${BKP_TM_PTYFRAME_BIN:-$HOME/.local/libexec/pty-frame}"
+    local -a wrap=()
+    if [[ -x "$pf" ]]; then
+      wrap=("$pf" --bare --tui
+        --title-file "$s/lens-title" --focus-file "$s/focus"
+        --title-color "${C_ROLE_UI_ACCENT:-}" --title-color-blur "${C_ROLE_UI_MUTED:-}"
+        --rule-color "${C_ROLE_UI_SEPARATOR:-}" --)
+    fi
     # COLORTERM: zellij-run panes don't inherit it (the documented
     # new-pane gotcha), and without it delta downgrades the truecolor
     # washes to 256-color greys — the whole diff reads black-on-black.
     print -rl -- env "DELTA_FEATURES=$feats" "COLORTERM=${COLORTERM:-truecolor}" \
+      "${wrap[@]}" \
       diffnav --unified --watch --watch-cmd "cat $s/current.patch" --watch-interval 1s
     return 0
   fi
