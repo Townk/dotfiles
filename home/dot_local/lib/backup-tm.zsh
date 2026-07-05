@@ -273,8 +273,10 @@ bkp::tm::timeline_render() {
 # table-array form is appended.
 #   K / J           timeline newer / older (parent-arrow muscle memory)
 #   Shift-Up/Down   same step, native yazi binding (works outside Zellij too)
-#   H / L           focus the timeline / the file list (visual swap only —
-#                   indicator + timeline highlight trade the active palette)
+#   H / L           focus the timeline / the file list (indicator + timeline
+#                   highlight trade the active palette)
+#   j / k           scoped by focus: file-list cursor, or scrub when the
+#                   timeline holds the focus
 #   R               restore selection to the live filesystem (gated apply flow)
 bkp::tm::yazi_overlay() {
   local s="$1" src="${YAZI_USER_CONFIG:-$HOME/.config/yazi}" ovl="$1/yazi"
@@ -380,8 +382,10 @@ LUA
     "  { on = \"J\", run = 'shell --orphan \"$bin ctl $s older \\\"\$0\\\"\"', desc = \"tm: older snapshot\" },"
     "  { on = \"<S-Up>\", run = 'shell --orphan \"$bin ctl $s newer \\\"\$0\\\"\"', desc = \"tm: newer snapshot\" },"
     "  { on = \"<S-Down>\", run = 'shell --orphan \"$bin ctl $s older \\\"\$0\\\"\"', desc = \"tm: older snapshot\" },"
-    "  { on = \"H\", run = \"plugin tm-gate --args=focus\", desc = \"tm: focus the timeline\" },"
-    "  { on = \"L\", run = \"plugin tm-gate --args=blur\", desc = \"tm: focus the file list\" },"
+    "  { on = \"H\", run = \"plugin tm-gate focus\", desc = \"tm: focus the timeline\" },"
+    "  { on = \"L\", run = \"plugin tm-gate blur\", desc = \"tm: focus the file list\" },"
+    "  { on = \"j\", run = \"plugin tm-gate j\", desc = \"tm: down (file list) / older (timeline)\" },"
+    "  { on = \"k\", run = \"plugin tm-gate k\", desc = \"tm: up (file list) / newer (timeline)\" },"
     "  { on = \"R\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"<S-Enter>\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"q\", run = [ 'shell --orphan \"$bin ctl $s end\"', \"quit\" ], desc = \"tm: end scrub session\" },"
@@ -457,12 +461,47 @@ local set_tl_focus = ya.sync(function(_, v)
 	ya.render()
 end)
 
+-- Navigation context for the focus-scoped j/k dispatch below.
+local get_nav = ya.sync(function()
+	local h = cx.active.current.hovered
+	return _G.__tm_tl_focus and true or false,
+		tostring(cx.active.current.cwd),
+		h and tostring(h.url) or ""
+end)
+
+-- Keymap args are POSITIONAL ("plugin tm-gate focus") — yazi 26.5
+-- silently drops the old `--args=focus` form (job.args arrives empty).
 function M:entry(job)
 	local arg = job.args and job.args[1]
 	if arg == "focus" then
 		set_tl_focus(true)
 	elseif arg == "blur" then
 		set_tl_focus(false)
+	elseif arg == "j" or arg == "k" then
+		-- j/k are scoped by the focused side: file-list cursor when the
+		-- list owns focus, snapshot scrub when the timeline does (same
+		-- ctl contract as K/J — yazi's cwd + hovered keep the place).
+		local focused, cwd, hovered = get_nav()
+		if not focused then
+			ya.emit("arrow", { arg == "j" and 1 or -1 })
+			return
+		end
+		local sess = os.getenv("BKP_TM_SESSION")
+		if not sess then
+			return
+		end
+		local cmd = Command(os.getenv("HOME") .. "/.local/bin/system-backup-tm")
+			:arg("ctl")
+			:arg(sess)
+			:arg(arg == "j" and "older" or "newer")
+		if hovered ~= "" then
+			cmd = cmd:arg(hovered)
+		end
+		-- output() waits; spawn() must NOT be used here — the discarded
+		-- Child handle is killed on GC, racing the ctl to death.
+		pcall(function()
+			cmd:cwd(cwd):stdout(Command.PIPED):stderr(Command.PIPED):output()
+		end)
 	end
 end
 

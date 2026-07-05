@@ -294,11 +294,14 @@ EOS
         [ -f "$ovl/yazi.toml" ] && grep -q 'ratio = \[ 2, 4, 4 \]' "$ovl/yazi.toml" && echo three-col
         yq -p toml -o json '.' "$ovl/keymap.toml" | jq -r '.mgr.prepend_keymap | length'
         grep -c 'system-backup-tm' "$ovl/keymap.toml" > /dev/null && echo has-bindings
+        # yazi 26.5 silently drops `--args=` plugin args — positional only
+        grep -q -- '--args=' "$ovl/keymap.toml" || echo positional-args
       }
       When run run_it
       The line 1 should equal "three-col"
-      The line 2 should equal 9
+      The line 2 should equal 11
       The line 3 should equal "has-bindings"
+      The line 4 should equal "positional-args"
     End
 
     It 'injects into an existing [mgr] prepend_keymap array (parseable, ours first)'
@@ -323,7 +326,7 @@ EOF
         jq -r '.input.prepend_keymap | length' <<<"$json"
       }
       When run run_it
-      The line 1 should equal 10
+      The line 1 should equal 12
       The line 2 should equal "K"
       The line 3 should equal "X"
       The line 4 should equal 1
