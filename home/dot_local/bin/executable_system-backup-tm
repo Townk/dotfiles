@@ -47,6 +47,16 @@ tm_timeline() {
     # hunk --watch opens). Explore starts at the right rung by argv — an
     # eager refresh here would race yazi's startup and flag a respawn.
     [[ "$(<"$s/lens")" == diff ]] && { bkp::tm::refresh "$s" || : }
+    local tlbin="${BKP_TM_TIMELINE_BIN:-$HOME/.local/libexec/tm-timeline}"
+    if [[ -t 0 && -x "$tlbin" ]]; then
+      # Compiled timeline pane (custom-builds/tm-timeline, pty-frame
+      # pattern): raw input, event-driven redraw, instant focus tracking.
+      # Theme flows in as flags from the single-source palette. The shell
+      # loop below remains the no-Go fallback.
+      "$tlbin" --active-bg "${C_HEX_TAB_ACTIVE_BG:-}" --inactive-bg "${C_HEX_TAB_BG:-}" \
+        --key-fg "${C_ROLE_UI_KEY:-}" --hint-fg "${C_ROLE_UI_HINT:-}" "$s" || :
+      return 0
+    fi
     local key rest last_state="" rung focused height width interactive=1
     local kc hc
     kc=$(bkp::tm::_sgr fg "$C_ROLE_UI_KEY")
