@@ -507,10 +507,18 @@ function M:setup()
 			else
 				th.indicator.current = ui.Style():fg(actfg):bg(act):bold()
 			end
-			-- ya.render() alone leaves the cursor row stale until the next
-			-- cursor event — emit a zero-move arrow to force one.
+			-- ya.render() alone leaves the cursor row stale, and arrow 0 is
+			-- swallowed as a no-op — bounce the cursor one row and back
+			-- (edge-aware) to force real repaint events with no net move.
 			ya.render()
-			ya.emit("arrow", { 0 })
+			local cur = cx.active.current.cursor
+			if cur > 0 then
+				ya.emit("arrow", { -1 })
+				ya.emit("arrow", { 1 })
+			else
+				ya.emit("arrow", { 1 })
+				ya.emit("arrow", { -1 })
+			end
 		end)
 	end
 
