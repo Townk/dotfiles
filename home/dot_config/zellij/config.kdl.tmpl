@@ -282,15 +282,18 @@ keybinds clear-defaults=true {
 
         // Shift+S in a diffnav pane: the "wide diff" toggle — diffnav has
         // no way to couple its own `s` (side-by-side) and `e` (file tree)
-        // toggles, so write both keys. Long lines only wrap in delta's
-        // side-by-side mode, and hiding the tree gives the halves room.
+        // toggles, so write both keys. ORDER IS LOAD-BEARING: tree-hide
+        // first (`e`) so the pane grows, THEN side-by-side (`s`) so delta
+        // lays the halves out at the widened width — the reverse renders
+        // narrow halves that never expand. Long lines only wrap in
+        // delta's side-by-side mode.
         // Matched on diffnav ONLY (bare lowercase s is far too hot a
         // typing key to intercept globally). Caveat: using `e` on its own
         // desyncs the pairing until the next `e`.
         bind "S" {
             MessagePlugin "context-keys" {
                 name "shift+s"
-                payload "default: $source; when diffnav: write se"
+                payload "default: $source; when diffnav: write es"
             }
         }
 
