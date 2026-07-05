@@ -545,6 +545,7 @@ EOF
         grep -c "^$S/lens-title$" "$FIX/argv"
         grep -c "^$S/focus$" "$FIX/argv"
         grep -c '^diffnav$' "$FIX/argv"
+        grep -c -- '--focus-remap' "$FIX/argv"
         # the header file is seeded at lens spawn, explore-style
         head -c 4 "$S/lens-title"; echo
         grep -c "$FIX/anchor" "$S/lens-title"
@@ -555,8 +556,9 @@ EOF
       The line 3 should equal 1
       The line 4 should equal 1
       The line 5 should equal 1
-      The line 6 should equal "● "
-      The line 7 should equal 1
+      The line 6 should equal 1
+      The line 7 should equal "● "
+      The line 8 should equal 1
     End
   End
 

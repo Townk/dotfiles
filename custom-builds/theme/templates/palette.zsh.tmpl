@@ -62,6 +62,10 @@ C_HEX_TAB_FG="#{{ $p.tab.fg }}"
 C_HEX_TAB_ACTIVE_BG="#{{ $p.tab.active_bg }}"
 C_HEX_TAB_ACTIVE_FG="#{{ $p.tab.active_fg }}"
 
+# diffnav's hardcoded selection/chrome bg (foreign constant) — the tm diff
+# lens hands it to pty-frame --focus-remap as the source color.
+C_HEX_DIFFNAV_SELECTION="#{{ $p.diffnav.selection }}"
+
 # --- semantic roles (bare hex; resolved from the active palette) ------------
 {{- range $k, $v := $r.ui }}
 C_ROLE_UI_{{ $k | upper }}="#{{ index $p $v }}"

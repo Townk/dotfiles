@@ -33,6 +33,8 @@ import (
 
 type color struct {
 	set     bool
+	ansi    bool  // palette-indexed: emit 38;5/48;5 so the TERMINAL maps it
+	idx     uint8 // palette index when ansi
 	r, g, b uint8
 }
 
@@ -52,6 +54,9 @@ func (c color) fgSGR() string {
 	if !c.set {
 		return "39"
 	}
+	if c.ansi {
+		return fmt.Sprintf("38;5;%d", c.idx)
+	}
 	return fmt.Sprintf("38;2;%d;%d;%d", c.r, c.g, c.b)
 }
 
@@ -63,34 +68,24 @@ func (c color) bgSGR(fallback color) string {
 	if !use.set {
 		return "49"
 	}
+	if use.ansi {
+		return fmt.Sprintf("48;5;%d", use.idx)
+	}
 	return fmt.Sprintf("48;2;%d;%d;%d", use.r, use.g, use.b)
 }
 
-// xterm 256-color → RGB (16 base, 216 cube, 24 gray).
-var base16 = [16][3]uint8{
-	{0, 0, 0}, {205, 0, 0}, {0, 205, 0}, {205, 205, 0},
-	{0, 0, 238}, {205, 0, 205}, {0, 205, 205}, {229, 229, 229},
-	{127, 127, 127}, {255, 0, 0}, {0, 255, 0}, {255, 255, 0},
-	{92, 92, 255}, {255, 0, 255}, {0, 255, 255}, {255, 255, 255},
-}
-
-func xterm256(n int) color {
-	switch {
-	case n < 16:
-		return color{true, base16[n][0], base16[n][1], base16[n][2]}
-	case n < 232:
-		n -= 16
-		conv := func(v int) uint8 {
-			if v == 0 {
-				return 0
-			}
-			return uint8(55 + v*40)
-		}
-		return color{true, conv(n / 36 % 6), conv(n / 6 % 6), conv(n % 6)}
-	default:
-		g := uint8(8 + (n-232)*10)
-		return color{true, g, g, g}
+// ansiColor preserves a palette index verbatim — the terminal's own
+// palette (catppuccin) maps it, exactly as it would without the frame.
+// (Converting indices to a hardcoded RGB table here is what once turned
+// diffnav's ANSI tree/border colors into garish VGA blue.)
+func ansiColor(n int) color {
+	if n < 0 {
+		n = 0
 	}
+	if n > 255 {
+		n = 255
+	}
+	return color{set: true, ansi: true, idx: uint8(n)}
 }
 
 // ----------------------------------------------------------------------------
@@ -392,17 +387,17 @@ func (g *grid) applySGR(p []int) {
 		case n == 27:
 			g.penAttrs &^= attrReverse
 		case n >= 30 && n <= 37:
-			g.penFg = xterm256(n - 30)
+			g.penFg = ansiColor(n - 30)
 		case n == 39:
 			g.penFg = color{}
 		case n >= 40 && n <= 47:
-			g.penBg = xterm256(n - 40)
+			g.penBg = ansiColor(n - 40)
 		case n == 49:
 			g.penBg = color{}
 		case n >= 90 && n <= 97:
-			g.penFg = xterm256(n - 90 + 8)
+			g.penFg = ansiColor(n - 90 + 8)
 		case n >= 100 && n <= 107:
-			g.penBg = xterm256(n - 100 + 8)
+			g.penBg = ansiColor(n - 100 + 8)
 		case n == 38 || n == 48:
 			c, adv := readExtColor(p, i)
 			if n == 38 {
@@ -424,12 +419,12 @@ func readExtColor(p []int, i int) (color, int) {
 	switch p[i+1] {
 	case 2:
 		if i+4 < len(p) {
-			return color{true, uint8(p[i+2]), uint8(p[i+3]), uint8(p[i+4])}, 4
+			return color{set: true, r: uint8(p[i+2]), g: uint8(p[i+3]), b: uint8(p[i+4])}, 4
 		}
 		return color{}, len(p) - i - 1
 	case 5:
 		if i+2 < len(p) {
-			return xterm256(p[i+2]), 2
+			return ansiColor(p[i+2]), 2
 		}
 		return color{}, len(p) - i - 1
 	}
@@ -507,6 +502,7 @@ type config struct {
 	titleFile, focusFile                  string
 	bg, fg, border, titleColor, ruleColor color
 	titleColorBlur                        color
+	remapSrc, remapActive, remapBlur      color
 	bare, tui                             bool
 	child                                 []string
 }
@@ -573,16 +569,16 @@ func main() {
 
 func (a *app) layout(w, h int) {
 	if a.cfg.bare {
-		// Bare (lens) mode: no box at all — title on row 1, rule on row 2,
-		// the child owns everything below at full pane width. This is the
-		// explore-lens header look, not the picker dialog.
+		// Bare (lens) mode: no box, no rule — just the title on row 1 and
+		// the child owning everything below at full pane width (the child
+		// app draws its own borders; a rule doubles them).
 		a.hintRow = 0
-		innerH := h - 2
+		innerH := h - 1
 		if innerH < 1 {
 			innerH = 1
 		}
 		a.paneW, a.paneH = w, h
-		a.rowOff = 3
+		a.rowOff = 2
 		a.colOff = 1
 		if a.g == nil {
 			a.g = newGrid(w, innerH)
@@ -758,22 +754,14 @@ func (a *app) drawChrome() {
 	w, h := a.paneW, a.paneH
 	var b strings.Builder
 	if a.cfg.bare {
-		// Bare (lens) mode: repaint ONLY the two header rows — no flood
-		// (the child owns everything from rowOff down and a 2J here would
+		// Bare (lens) mode: repaint ONLY the title row — no flood (the
+		// child owns everything from rowOff down and a 2J here would
 		// blank it between chrome and blit).
 		b.WriteString("\x1b[?2026h")
 		bg := a.cfg.bg.bgSGR(color{})
 		moveTo(&b, 1, 1)
 		b.WriteString("\x1b[" + bg + "m\x1b[2K")
 		b.WriteString("\x1b[" + bg + ";" + a.effTitleColor().fgSGR() + "m " + a.cfg.title)
-		moveTo(&b, 2, 1)
-		b.WriteString("\x1b[" + bg + "m\x1b[2K")
-		ruleW := w - 2
-		if ruleW < 1 {
-			ruleW = 1
-		}
-		moveTo(&b, 2, 2)
-		b.WriteString("\x1b[" + bg + ";" + a.cfg.ruleColor.fgSGR() + "m" + strings.Repeat("━", ruleW))
 		b.WriteString("\x1b[0m\x1b[?2026l")
 		a.tty.WriteString(b.String())
 		return
@@ -833,6 +821,16 @@ func (a *app) blit() {
 				continue // wide-char trailer cell
 			}
 			fg, bg := c.fg, c.bg
+			if a.cfg.remapSrc.set && bg.set && !bg.ansi &&
+				bg.r == a.cfg.remapSrc.r && bg.g == a.cfg.remapSrc.g && bg.b == a.cfg.remapSrc.b {
+				if a.focused {
+					if a.cfg.remapActive.set {
+						bg = a.cfg.remapActive
+					}
+				} else if a.cfg.remapBlur.set {
+					bg = a.cfg.remapBlur
+				}
+			}
 			if c.attrs&attrReverse != 0 {
 				rf := fg
 				if !rf.set {
@@ -944,10 +942,26 @@ func parseArgs(args []string) config {
 			cfg.bare = true
 		case a == "--tui":
 			cfg.tui = true
+		case a == "--focus-remap":
+			cfg.remapSrc, cfg.remapActive, cfg.remapBlur = parseRemap(val())
+		case strings.HasPrefix(a, "--focus-remap="):
+			cfg.remapSrc, cfg.remapActive, cfg.remapBlur = parseRemap(a[len("--focus-remap="):])
 		}
 		i++
 	}
 	return cfg
+}
+
+// parseRemap parses "SRC:ACTIVE:BLUR" (hex colors, # optional): cells
+// whose background equals SRC blit as ACTIVE while the pane is focused
+// and as BLUR while it is not — how the lens repaints the child's
+// hardcoded selection color with the active/inactive tab palette.
+func parseRemap(v string) (src, active, blur color) {
+	parts := strings.Split(v, ":")
+	if len(parts) != 3 {
+		return color{}, color{}, color{}
+	}
+	return parseHex(parts[0]), parseHex(parts[1]), parseHex(parts[2])
 }
 
 // refreshDynamic re-reads the --title-file / --focus-file channels and

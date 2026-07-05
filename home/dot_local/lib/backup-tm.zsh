@@ -938,15 +938,18 @@ bkp::tm::lens_cmd() {
     bkp::tm::lens_title "$s"
     # pty-frame (bare mode) gives the lens the explore-style header —
     # "● <age>  <anchor>" following the rung via --title-file — and the
-    # focus-aware color swap via --focus-file (the timeline pane writes
-    # it). Plain diffnav is the no-binary fallback.
+    # focus-aware swaps via --focus-file (the timeline pane writes it):
+    # the header dims to muted, and diffnav's hardcoded selection bg
+    # (C_HEX_DIFFNAV_SELECTION) is remapped to the tab palette, the same
+    # tiebreaker the explore lens gets from its yazi indicator swap.
+    # Plain diffnav is the no-binary fallback.
     local pf="${BKP_TM_PTYFRAME_BIN:-$HOME/.local/libexec/pty-frame}"
     local -a wrap=()
     if [[ -x "$pf" ]]; then
       wrap=("$pf" --bare --tui
         --title-file "$s/lens-title" --focus-file "$s/focus"
         --title-color "${C_ROLE_UI_ACCENT:-}" --title-color-blur "${C_ROLE_UI_MUTED:-}"
-        --rule-color "${C_ROLE_UI_SEPARATOR:-}" --)
+        --focus-remap "${C_HEX_DIFFNAV_SELECTION:-}:${C_HEX_TAB_ACTIVE_BG:-}:${C_HEX_TAB_BG:-}" --)
     fi
     # COLORTERM: zellij-run panes don't inherit it (the documented
     # new-pane gotcha), and without it delta downgrades the truecolor

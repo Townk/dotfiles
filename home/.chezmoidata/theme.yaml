@@ -95,6 +95,11 @@ theme:
       # syntax-theme (.tmTheme) find-highlight wash — bespoke, appearance-dependent.
       find_highlight: "3e5767"
 
+      # diffnav's HARDCODED selection/chrome bg (a foreign constant baked
+      # into the binary, not a theme choice) — the tm diff lens remaps it
+      # to the tab palette via pty-frame --focus-remap.
+      diffnav: { selection: "2d2c35" }
+
     # ----------------------------------------------------------------------- #
     catppuccin-latte:
       meta: { name: "Catppuccin Latte", appearance: light }
@@ -161,6 +166,10 @@ theme:
 
       # syntax-theme find-highlight wash — light blue.
       find_highlight: "b8d4f0"
+
+      # diffnav's HARDCODED selection/chrome bg — same foreign constant on
+      # every host theme (see the mocha entry).
+      diffnav: { selection: "2d2c35" }
 
   # ------------------------------------------------------------------------- #
   # Shared semantic map. CONSTANT across themes; every value is a vocabulary
