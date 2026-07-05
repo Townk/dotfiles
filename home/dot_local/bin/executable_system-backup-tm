@@ -322,8 +322,12 @@ tm_apply() {
       # Floating picker: apply fires from the timeline pane's ctl, which
       # has no tty of its own — an inline fzf would die silently there.
       source "$HOME/.local/lib/zellij.zsh"
+      # Explicit hints: the defaults prepend open/cancel/clear, which
+      # blows past the pane width — the multi-select trio is the part
+      # that matters here.
       picked=("${(@f)$(print -rl -- "${cands[@]}" | PICK_NAME=tm-apply zj::pick \
-        --pane-width 82 --pane-height 16 --multi \
+        --pane-width 75 --pane-height 16 --multi \
+        --hints "$(pick::hints "󰘴 󱁐" select ⭾ select-and-next "󰘴 A" select-all)" \
         --header "Restore from snapshot")}") || return 0
     else
       picked=("${(@f)$(print -rl -- "${cands[@]}" | fzf --multi --prompt='apply> ')}") || return 0
