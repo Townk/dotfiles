@@ -368,7 +368,7 @@ EOF
         printf '# theme\n' > "$FIX/yazicfg/theme.toml"
         local ovl
         ovl=$(bkp::tm::yazi_overlay "$S")
-        grep -q '^hovered = ' "$ovl/theme.toml" && grep -q '# theme' "$ovl/theme.toml" && echo theme-composed
+        grep -q '^\[dark.mgr\]' "$ovl/theme.toml" && grep -q '# theme' "$ovl/theme.toml" && echo theme-composed
         [ -L "$ovl/plugins/userp.yazi" ] && echo userplugin-linked
         # two cd subscriptions: the navigation bounce + first-paint hook
         grep -c 'ps.sub("cd"' "$ovl/plugins/tm-gate.yazi/main.lua"

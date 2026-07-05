@@ -289,9 +289,14 @@ bkp::tm::yazi_overlay() {
   # is not honored by yazi 26.5 — the theme file is the reliable channel).
   if [[ -n "${C_HEX_TAB_ACTIVE_BG:-}" && -n "${C_HEX_TAB_BG:-}" ]]; then
     {
-      print -r -- "[mgr]"
-      print -r -- "hovered = { bg = \"$C_HEX_TAB_ACTIVE_BG\" }"
-      print -r -- "preview_hovered = { bg = \"$C_HEX_TAB_BG\" }"
+      # yazi resolves dark/light flavors — theme overrides only apply
+      # inside [dark.*]/[light.*] sections (a bare [mgr] is ignored).
+      local m
+      for m in dark light; do
+        print -r -- "[$m.mgr]"
+        print -r -- "hovered = { bg = \"$C_HEX_TAB_ACTIVE_BG\" }"
+        print -r -- "preview_hovered = { bg = \"$C_HEX_TAB_BG\" }"
+      done
       [[ -f "$src/theme.toml" ]] && cat "$src/theme.toml"
     } > "$ovl/theme.toml"
   elif [[ -f "$src/theme.toml" ]]; then
