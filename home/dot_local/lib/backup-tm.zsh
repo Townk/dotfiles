@@ -214,13 +214,13 @@ bkp::tm::end() { touch "$1/closed" }
 
 # bkp::tm::build_signal <session>
 # Flip the lens pane into its spinner phase: flag the build and take
-# down the hunk UI — the lens loop sees the flag and shows the build
+# down the diff UI — the lens loop sees the flag and shows the build
 # spinner until the patch lands (bkp::tm::lens_reload clears it).
 bkp::tm::build_signal() {
   local s="$1"
   touch "$s/building"
   [[ -f "$s/lens.pid" ]] || return 0
-  pkill -f "hunk patch $s/current.patch" 2>/dev/null || :
+  pkill -f "diffnav .*$s/current.patch" 2>/dev/null || :
   return 0
 }
 
@@ -264,15 +264,12 @@ bkp::tm::build_wait() {
 }
 
 # bkp::tm::lens_reload <session>
-# A build landed: clear the spinner flag (its watcher exits by itself)
-# and, when the hunk UI is up, respawn it on the fresh current.patch —
-# hunk --watch (hunkdiff 0.16) never re-reads the patch file.
+# A build landed: clear the spinner flag — its watcher exits and the
+# lens loop relaunches the viewer. A LIVE diffnav needs nothing at all:
+# its watch-cmd re-reads current.patch on its own (cache hits land in
+# place, no restart, scroll position kept).
 bkp::tm::lens_reload() {
-  local s="$1"
-  rm -f "$s/building"
-  [[ -f "$s/lens.pid" ]] || return 0
-  touch "$s/respawn"
-  pkill -f "hunk patch $s/current.patch" 2>/dev/null || rm -f "$s/respawn"
+  rm -f "$1/building"
   return 0
 }
 
@@ -902,10 +899,14 @@ bkp::tm::lens_cmd() {
   local s="$1" lens anchor REPLY
   lens=$(<"$s/lens") anchor=$(<"$s/anchor")
   if [[ "$lens" == diff ]]; then
-    # hunk needs the file to exist even when the first synthesis failed —
-    # an empty patch renders as a graceful "no changes" state.
+    # diffnav: file tree visible by default, diffs rendered through the
+    # user's delta (single-source theme applies for free), and a REAL
+    # watch — the watch-cmd re-reads current.patch, so cached rung
+    # switches land in place with no lens restart. The file must exist
+    # even when the first synthesis failed — an empty patch renders as
+    # a graceful no-changes state.
     [[ -f "$s/current.patch" ]] || : > "$s/current.patch"
-    print -rl -- hunk patch "$s/current.patch" --watch
+    print -rl -- diffnav --watch --watch-cmd "cat $s/current.patch" --watch-interval 1s
     return 0
   fi
   bkp::tm::rung_path "$s" || return 1

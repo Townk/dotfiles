@@ -301,31 +301,33 @@ tm_apply() {
       fi
     done
   elif [[ "$lens" == diff ]]; then
-    local sid="" focus=""
-    sid=$(hunk session list 2>/dev/null |
-      awk -v want="path: $s" \
-        '/^[0-9a-f]/ { id = $1 } { line = $0; sub(/^[ \t]+/, "", line) } line == want { print id; exit }')
-    if [[ -n "$sid" ]]; then
-      focus=$(hunk session get "$sid" --json 2>/dev/null | jq -r '.focus.file // empty')
+    # Multi-pick over the current patch's files. Parsed from the +++ b/
+    # --- a header lines (not the `diff --git` summary line's last field)
+    # so paths containing spaces survive intact; deleted files appear via
+    # their `--- a/` line, /dev/null lines never match either pattern.
+    local -a cands=() picked=()
+    if [[ -f "$s/current.patch" ]]; then
+      cands=("${(@f)$(awk '
+          /^\+\+\+ b\// { s = substr($0, 6); sub(/\t$/, "", s); print s; next }
+          /^--- a\// { s = substr($0, 6); sub(/\t$/, "", s); print s }
+        ' "$s/current.patch" | sort -u)}")
     fi
-    if [[ -n "$focus" ]]; then
-      live+=("/${focus#/}")
+    if (( ! ${#cands} )) || [[ -z "${cands[1]}" ]]; then
+      log_warn "bkp: this rung shows no changes — nothing to apply"
+      return 0
+    fi
+    if [[ -n "${ZELLIJ:-}" ]]; then
+      # Floating picker: apply fires from the timeline pane's ctl, which
+      # has no tty of its own — an inline fzf would die silently there.
+      source "$HOME/.local/lib/zellij.zsh"
+      picked=("${(@f)$(print -rl -- "${cands[@]}" | PICK_NAME=tm-apply zj::pick \
+        --pane-width 72 --pane-height 16 --multi \
+        --header "Restore from snapshot")}") || return 0
     else
-      # fallback: multi-pick over the current patch's files. Parsed from the
-      # +++ b/--- a header lines (not the `diff --git` summary line's last
-      # field) so paths containing spaces survive intact; deleted files
-      # appear via their `--- a/` line, /dev/null lines never match either
-      # pattern.
-      local -a picked=()
-      if [[ -f "$s/current.patch" ]]; then
-        picked=("${(@f)$(awk '
-            /^\+\+\+ b\// { s = substr($0, 6); sub(/\t$/, "", s); print s; next }
-            /^--- a\// { s = substr($0, 6); sub(/\t$/, "", s); print s }
-          ' "$s/current.patch" | sort -u | fzf --multi --prompt='apply> ')}") || return 0
-      fi
-      (( ${#picked} )) || return 0
-      live+=("${picked[@]}")
+      picked=("${(@f)$(print -rl -- "${cands[@]}" | fzf --multi --prompt='apply> ')}") || return 0
     fi
+    (( ${#picked} )) && [[ -n "${picked[1]}" ]] || return 0
+    live+=("${picked[@]}")
   else
     log_warn "bkp: nothing selected — select in yazi and press a to apply"
     return 0

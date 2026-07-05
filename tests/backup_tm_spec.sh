@@ -102,7 +102,7 @@ EOF
       The output should equal 1
     End
 
-    It 'kills hunk into the spinner on builds, respawns it on cache hits'
+    It 'kills the viewer into the spinner on builds; cache hits reload in place'
       wait_dead() {
         local pid="$1" i
         for i in {1..50}; do
@@ -119,31 +119,32 @@ EOF
         bkp::tm::ladder_fill "$s"
         mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
         print -r -- 4242 > "$s/lens.pid"
-        # fake hunk UI whose cmdline matches the session's patch path
-        printf '#!/bin/sh\nsleep 30\n' > "$FIX/stub/hunk"
-        chmod +x "$FIX/stub/hunk"
-        # UNCACHED rung: hunk dies at build start (spinner phase takes
-        # over) and the building flag is cleared once the patch lands.
-        "$FIX/stub/hunk" patch "$s/current.patch" & local a=$!
+        # fake viewer whose cmdline matches the session's patch path
+        printf '#!/bin/sh\nsleep 30\n' > "$FIX/stub/diffnav"
+        chmod +x "$FIX/stub/diffnav"
+        # UNCACHED rung: the viewer dies at build start (spinner phase
+        # takes over) and the building flag clears once the patch lands.
+        "$FIX/stub/diffnav" --watch --watch-cmd "cat $s/current.patch" & local a=$!
         sleep 0.2
         bkp::tm::step "$s" older || { echo "step rc=$?"; return 1 }
         print -r -- "build-kill=$(wait_dead "$a")"
         [[ -e "$s/building" ]] && print building-left || print building-cleared
-        rm -f "$s/respawn"
         bkp::tm::step "$s" newer   # rung 1 built too (for the cache below)
-        rm -f "$s/respawn"
-        # CACHED rung: no spinner phase — hunk is respawn-flagged + killed.
-        "$FIX/stub/hunk" patch "$s/current.patch" & local c=$!
+        # CACHED rung: no spinner, no kill — diffnav's own watch re-reads
+        # the patch in place.
+        "$FIX/stub/diffnav" --watch --watch-cmd "cat $s/current.patch" & local c=$!
         sleep 0.2
         bkp::tm::step "$s" older || { echo "step rc=$?"; return 1 }
-        print -r -- "cache-kill=$(wait_dead "$c")"
-        [[ -e "$s/respawn" ]] && print respawn-flagged || print no-flag
+        sleep 0.3
+        if kill -0 "$c" 2>/dev/null; then print viewer-alive; else print viewer-killed; fi
+        kill "$c" 2>/dev/null
+        [[ -e "$s/respawn" ]] && print respawn-flagged || print no-respawn
       }
       When run run_it
       The line 1 should equal "build-kill=yes"
       The line 2 should equal "building-cleared"
-      The line 3 should equal "cache-kill=yes"
-      The line 4 should equal "respawn-flagged"
+      The line 3 should equal "viewer-alive"
+      The line 4 should equal "no-respawn"
     End
 
     It 'serves a revisited rung from the patch cache (one synthesis per rung)'
@@ -511,17 +512,20 @@ EOF
       The line 8 should equal 1
     End
 
-    It 'builds the hunk --watch command for the diff lens'
+    It 'builds the diffnav watch command for the diff lens'
       run_it() {
         source "$LIB/backup-tm.zsh"
         print -r -- diff > "$S/lens"
         bkp::tm::lens_cmd "$S"
+        # the watch-cmd must be ONE argv element (space inside, no quoting)
+        bkp::tm::lens_cmd "$S" | sed -n '4p'
       }
       When run run_it
-      The line 1 should equal "hunk"
-      The line 2 should equal "patch"
-      The output should include "current.patch"
-      The output should include "--watch"
+      The line 1 should equal "diffnav"
+      The line 2 should equal "--watch"
+      The line 3 should equal "--watch-cmd"
+      The line 7 should equal "cat $S/current.patch"
+      The output should include "--watch-interval"
     End
   End
 
@@ -615,45 +619,14 @@ EOF
       The file "$S/apply.list" should not be exist
     End
 
-    It 'routes the diff-lens focus through hunk with an anchored session match'
+    It 'fzf multi-pick preserves spaces in paths and skips /dev/null'
       run_it() {
         printf 'diff\n' > "$S/lens"
-        # hunk recorder: session list carries a prefix-collision decoy
-        # (path: ${S}0) FIRST; only the real session id yields a focus.
-        cat > "$STUB/hunk" <<EOF
-#!/bin/sh
-case "\$1 \$2" in
-  'session list')
-    printf 'deadbeef-0000-0000-0000-000000000000\n'
-    printf '  path: ${S}0\n'
-    printf 'cafecafe-0000-0000-0000-000000000000\n'
-    printf '  path: ${S}\n'
-    ;;
-  'session get')
-    if [ "\$3" = "cafecafe-0000-0000-0000-000000000000" ]; then
-      printf '{"focus":{"file":"tmp-live/f.txt"}}\n'
-    else
-      printf '{}\n'
-    fi
-    ;;
-esac
-EOF
-        chmod +x "$STUB/hunk"
-        zsh "$BIN" apply "$S" >/dev/null
-        cat "$S/apply.list"
-      }
-      When run run_it
-      The output should equal "/tmp-live/f.txt"
-    End
-
-    It 'fzf-fallback preserves spaces in paths and skips /dev/null (no hunk focus)'
-      run_it() {
-        printf 'diff\n' > "$S/lens"
-        # No hunk stub at all -> `hunk session list` is "command not found",
-        # sid stays empty, tm_apply falls through to the fzf multi-pick over
-        # current.patch's +++ b/--- a header lines. Real git diff appends a
-        # trailing tab on --- /+++ lines whose path has a space — this
-        # fixture reproduces that so the tab-strip is exercised too.
+        # No ZELLIJ in this fixture -> tm_apply takes the inline fzf
+        # multi-pick over current.patch's +++ b/--- a header lines. Real
+        # git diff appends a trailing tab on --- /+++ lines whose path
+        # has a space — this fixture reproduces that so the tab-strip is
+        # exercised too.
         {
           print -r -- 'diff --git a/live/dir/deleted one.txt b/live/dir/deleted one.txt'
           print -r -- 'deleted file mode 100644'
