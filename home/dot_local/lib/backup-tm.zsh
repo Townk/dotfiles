@@ -114,6 +114,7 @@ bkp::tm::refresh() {
     local pcache="$s/patches/${REPLY[1,8]}.patch"
     if [[ -f "$pcache" ]]; then
       cp "$pcache" "$s/current.patch.new" && mv "$s/current.patch.new" "$s/current.patch"
+      bkp::tm::lens_reload "$s"
       return 0
     fi
     # Only the LATEST rung's synthesis matters: every scrub step spawns
@@ -149,6 +150,7 @@ bkp::tm::refresh() {
       : > "$s/current.patch.new"
     fi
     mv "$s/current.patch.new" "$s/current.patch"
+    bkp::tm::lens_reload "$s"
     [[ -f "$s/refresh.pid" && "$(<"$s/refresh.pid")" == "$self" ]] && rm -f "$s/refresh.pid"
   else
     # Explore still needs the real mount — yazi navigates it live.
@@ -218,6 +220,19 @@ bkp::tm::synth_placeholder() {
     print -r -- '+building the diff against this snapshot — one moment…'
   } > "$s/current.patch.tmp"
   mv "$s/current.patch.tmp" "$s/current.patch"
+}
+
+# bkp::tm::lens_reload <session>
+# hunk --watch (hunkdiff 0.16) never re-reads the patch file — a
+# completed synthesis must force the reload by respawning the lens:
+# flag first, then kill the hunk UI; the lens loop relaunches it on the
+# fresh current.patch. No-op when the lens isn't up yet.
+bkp::tm::lens_reload() {
+  local s="$1"
+  [[ -f "$s/lens.pid" ]] || return 0
+  touch "$s/respawn"
+  pkill -f "hunk patch $s/current.patch" 2>/dev/null || rm -f "$s/respawn"
+  return 0
 }
 
 # bkp::tm::session_rm <session>
