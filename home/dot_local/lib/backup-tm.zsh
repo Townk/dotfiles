@@ -279,7 +279,7 @@ bkp::tm::timeline_render() {
 #                   timeline holds the focus
 #   h / Left        leave — except at the session root, where the focus
 #                   moves to the timeline (and once there, h is a no-op)
-#   l / Right       open — except from the timeline, where the focus
+#   l / Right       enter — except from the timeline, where the focus
 #                   returns to the file area
 #   R               restore selection to the live filesystem (gated apply flow)
 bkp::tm::yazi_overlay() {
@@ -394,8 +394,8 @@ LUA
     "  { on = \"k\", run = \"plugin tm-gate k\", desc = \"tm: up (file list) / newer (timeline)\" },"
     "  { on = \"h\", run = \"plugin tm-gate h\", desc = \"tm: leave; timeline focus at the root\" },"
     "  { on = \"<Left>\", run = \"plugin tm-gate h\", desc = \"tm: leave; timeline focus at the root\" },"
-    "  { on = \"l\", run = \"plugin tm-gate l\", desc = \"tm: open; file focus from the timeline\" },"
-    "  { on = \"<Right>\", run = \"plugin tm-gate l\", desc = \"tm: open; file focus from the timeline\" },"
+    "  { on = \"l\", run = \"plugin tm-gate l\", desc = \"tm: enter; file focus from the timeline\" },"
+    "  { on = \"<Right>\", run = \"plugin tm-gate l\", desc = \"tm: enter; file focus from the timeline\" },"
     "  { on = \"R\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"<S-Enter>\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"q\", run = [ 'shell --orphan \"$bin ctl $s end\"', \"quit\" ], desc = \"tm: end scrub session\" },"
@@ -507,12 +507,13 @@ function M:entry(job)
 		end
 	elseif arg == "l" then
 		-- l/Right from the timeline return to the file area; in the file
-		-- area they keep their native enter/open behavior.
+		-- area they keep the preset behavior: enter (dirs only) — NOT
+		-- open, which would launch the opener on hovered files.
 		local focused = get_nav()
 		if focused then
 			set_tl_focus(false)
 		else
-			ya.emit("open", {})
+			ya.emit("enter", {})
 		end
 	elseif arg == "j" or arg == "k" then
 		-- j/k are scoped by the focused side: file-list cursor when the
