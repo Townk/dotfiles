@@ -282,7 +282,7 @@ bkp::tm::yazi_overlay() {
   # once dropped the theme on the floor.
   local f
   for f in "$src"/*(DN); do
-    [[ "${f:t}" == keymap.toml || "${f:t}" == init.lua || "${f:t}" == plugins || "${f:t}" == yazi.toml || "${f:t}" == theme.toml ]] && continue
+    [[ "${f:t}" == keymap.toml || "${f:t}" == init.lua || "${f:t}" == plugins || "${f:t}" == yazi.toml || "${f:t}" == theme.toml || "${f:t}" == flavors ]] && continue
     ln -sfn "$f" "$ovl/${f:t}"
   done
   # theme.toml: user theme + tab-palette hover colors (runtime th mutation
@@ -301,6 +301,36 @@ bkp::tm::yazi_overlay() {
     } > "$ovl/theme.toml"
   elif [[ -f "$src/theme.toml" ]]; then
     ln -sfn "$src/theme.toml" "$ovl/theme.toml"
+  fi
+  # flavors/: symlink all, but PATCH the active flavor's [mgr] hover rows —
+  # the flavor defines hovered as reversed-video with no bg, and flavor
+  # values win over theme.toml overrides, so the tab-palette hover must be
+  # written into the flavor itself.
+  if [[ -d "$src/flavors" && -n "${C_HEX_TAB_ACTIVE_BG:-}" && -n "${C_HEX_TAB_BG:-}" ]]; then
+    local flav
+    flav=$(yq -p toml -o json '.' "$src/theme.toml" 2>/dev/null |
+      jq -r '.flavor.dark // .flavor.use // empty' 2>/dev/null)
+    mkdir -p "$ovl/flavors"
+    for f in "$src/flavors"/*(DN); do
+      if [[ -n "$flav" && "${f:t}" == "$flav.yazi" && -f "$f/flavor.toml" ]]; then
+        mkdir -p "$ovl/flavors/${f:t}"
+        local ff
+        for ff in "$f"/*(DN); do
+          [[ "${ff:t}" == flavor.toml ]] && continue
+          ln -sfn "$ff" "$ovl/flavors/${f:t}/${ff:t}"
+        done
+        awk -v act="$C_HEX_TAB_ACTIVE_BG" -v inact="$C_HEX_TAB_BG" '
+          /^\[mgr\]/ { m = 1; print; next }
+          /^\[/ { m = 0 }
+          m && /^hovered = / { print "hovered = { bg = \"" act "\", bold = true }"; next }
+          m && /^preview_hovered = / { print "preview_hovered = { bg = \"" inact "\" }"; next }
+          { print }' "$f/flavor.toml" > "$ovl/flavors/${f:t}/flavor.toml"
+      else
+        ln -sfn "$f" "$ovl/flavors/${f:t}"
+      fi
+    done
+  elif [[ -d "$src/flavors" ]]; then
+    ln -sfn "$src/flavors" "$ovl/flavors"
   fi
   # yazi.toml: user config + 2-column ratio for the scrub session (parent
   # column dropped — the timeline pane owns "where am I").
