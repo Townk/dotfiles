@@ -563,7 +563,8 @@ bkp::tm::lens_cmd() {
   yid=$(<"$s/yazi.id")
   print -rl -- env "YAZI_CONFIG_HOME=$ovl" \
     "BKP_TM_MNT=$s/mnt" "BKP_TM_ANCHOR=$anchor" "BKP_TM_SESSION=$s" \
-    "BKP_TM_INACTIVE_BG=${C_HEX_TAB_BG:-}" \
+    "BKP_TM_INACTIVE_BG=${C_HEX_TAB_BG:-}" "BKP_TM_ACTIVE_BG=${C_HEX_TAB_ACTIVE_BG:-}" \
+    "BKP_TM_ACTIVE_FG=${C_HEX_TAB_ACTIVE_FG:-}" "BKP_TM_TAB_FG=${C_HEX_TAB_FG:-}" \
     yazi --client-id "$yid" "$rung$anchor"
 }
 
