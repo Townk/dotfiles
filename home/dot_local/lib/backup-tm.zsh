@@ -443,14 +443,21 @@ function M:setup()
 	-- unfocused yazi dims its hovered row to the inactive-tab background.
 	local inact = os.getenv("BKP_TM_INACTIVE_BG")
 	if inact then
-		local orig = th and th.mgr and th.mgr.hovered
+		local orig = nil
 		ps.sub_remote("tm-focus", function(body)
-			if tostring(body) == "0" then
-				th.mgr.hovered = ui.Style():bg(inact)
-			elseif orig then
-				th.mgr.hovered = orig
+			-- th may not be populated at setup time: capture the original
+			-- hovered style lazily, the first time we swap it out.
+			if orig == nil and th and th.mgr then
+				orig = th.mgr.hovered
 			end
-			ya.render()
+			if th and th.mgr then
+				if tostring(body) == "0" then
+					th.mgr.hovered = ui.Style():bg(inact)
+				elseif orig ~= nil then
+					th.mgr.hovered = orig
+				end
+				ya.render()
+			end
 		end)
 	end
 

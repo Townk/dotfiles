@@ -327,13 +327,19 @@ func main() {
 					u.focus = f
 					dirty = true
 					// Tell yazi so its hovered-row bg mirrors the swap.
-					if u.lens == "explore" && u.yaziID != "" {
-						v := "1"
-						if !f {
-							v = "0"
+					if u.lens == "explore" {
+						// yazi.id may not exist yet at our startup — re-read.
+						if u.yaziID == "" {
+							u.yaziID = readTrim(filepath.Join(u.sess, "yazi.id"))
 						}
-						c := exec.Command("ya", "pub-to", u.yaziID, "tm-focus", "--str", v)
-						go func() { _ = c.Run() }()
+						if u.yaziID != "" {
+							v := "1"
+							if !f {
+								v = "0"
+							}
+							c := exec.Command("ya", "pub-to", u.yaziID, "tm-focus", "--str", v)
+							go func() { _ = c.Run() }()
+						}
 					}
 				}
 			}
