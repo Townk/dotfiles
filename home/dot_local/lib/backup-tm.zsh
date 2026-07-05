@@ -905,8 +905,17 @@ bkp::tm::lens_cmd() {
     # switches land in place with no lens restart. The file must exist
     # even when the first synthesis failed — an empty patch renders as
     # a graceful no-changes state.
+    # delta re-reads gitconfig inside diffnav, and a global
+    # `features = … side-by-side …` re-enables the split OVER diffnav's
+    # --unified (the flag only adds delta args, it negates nothing).
+    # DELTA_FEATURES without a leading + REPLACES the gitconfig list —
+    # hand the lens the same features minus side-by-side.
+    local feats
+    feats=$(git config --get delta.features 2>/dev/null) || feats=""
+    feats=${feats//side-by-side/}
     [[ -f "$s/current.patch" ]] || : > "$s/current.patch"
-    print -rl -- diffnav --unified --watch --watch-cmd "cat $s/current.patch" --watch-interval 1s
+    print -rl -- env "DELTA_FEATURES=$feats" \
+      diffnav --unified --watch --watch-cmd "cat $s/current.patch" --watch-interval 1s
     return 0
   fi
   bkp::tm::rung_path "$s" || return 1

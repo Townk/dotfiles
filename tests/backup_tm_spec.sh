@@ -518,15 +518,17 @@ EOF
         print -r -- diff > "$S/lens"
         bkp::tm::lens_cmd "$S"
         # the watch-cmd must be ONE argv element (space inside, no quoting)
-        bkp::tm::lens_cmd "$S" | sed -n '5p'
+        bkp::tm::lens_cmd "$S" | sed -n '7p'
       }
       When run run_it
-      The line 1 should equal "diffnav"
-      The line 2 should equal "--unified"
-      The line 3 should equal "--watch"
-      The line 4 should equal "--watch-cmd"
+      The line 1 should equal "env"
+      The line 2 should start with "DELTA_FEATURES="
+      The line 2 should not include "side-by-side"
+      The line 3 should equal "diffnav"
+      The line 4 should equal "--unified"
+      The line 5 should equal "--watch"
       The output should include "--watch-interval"
-      The line 8 should equal "cat $S/current.patch"
+      The line 10 should equal "cat $S/current.patch"
     End
   End
 
