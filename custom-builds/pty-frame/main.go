@@ -106,13 +106,14 @@ type cell struct {
 }
 
 type grid struct {
-	w, h          int
-	cells         [][]cell
-	curX, curY    int
-	penFg, penBg  color
-	penAttrs      uint8
-	cursorVisible bool
-	cprRequested  bool
+	w, h           int
+	cells          [][]cell
+	curX, curY     int
+	scrTop, scrBot int // scroll region (0-based, inclusive)
+	penFg, penBg   color
+	penAttrs       uint8
+	cursorVisible  bool
+	cprRequested   bool
 
 	// parser state
 	pending []byte // incomplete trailing bytes carried across feeds
@@ -130,6 +131,7 @@ const (
 
 func newGrid(w, h int) *grid {
 	g := &grid{w: w, h: h, cursorVisible: true}
+	g.scrTop, g.scrBot = 0, h-1
 	g.alloc()
 	return g
 }
@@ -153,7 +155,49 @@ func (g *grid) alloc() {
 func (g *grid) resize(w, h int) {
 	g.w, g.h = w, h
 	g.curX, g.curY = 0, 0
+	g.scrTop, g.scrBot = 0, h-1
 	g.alloc()
+}
+
+// blankRow returns a fresh row of spaces in the current pen background.
+func (g *grid) blankRow() []cell {
+	row := make([]cell, g.w)
+	for x := range row {
+		row[x] = cell{r: ' ', bg: g.penBg}
+	}
+	return row
+}
+
+// scrollUp shifts rows [top..bot] up by n, blanking the freed bottom rows.
+func (g *grid) scrollUp(top, bot, n int) {
+	if top < 0 || bot >= g.h || top > bot || n <= 0 {
+		return
+	}
+	if n > bot-top+1 {
+		n = bot - top + 1
+	}
+	for y := top; y <= bot-n; y++ {
+		g.cells[y] = g.cells[y+n]
+	}
+	for y := bot - n + 1; y <= bot; y++ {
+		g.cells[y] = g.blankRow()
+	}
+}
+
+// scrollDown shifts rows [top..bot] down by n, blanking the freed top rows.
+func (g *grid) scrollDown(top, bot, n int) {
+	if top < 0 || bot >= g.h || top > bot || n <= 0 {
+		return
+	}
+	if n > bot-top+1 {
+		n = bot - top + 1
+	}
+	for y := bot; y >= top+n; y-- {
+		g.cells[y] = g.cells[y-n]
+	}
+	for y := top; y < top+n; y++ {
+		g.cells[y] = g.blankRow()
+	}
 }
 
 func (g *grid) clearRegion(x0, y0, x1, y1 int) {
@@ -205,7 +249,9 @@ func (g *grid) feed(data []byte) {
 				g.curX = 0
 				i++
 			case b == '\n':
-				if g.curY < g.h-1 {
+				if g.curY == g.scrBot {
+					g.scrollUp(g.scrTop, g.scrBot, 1)
+				} else if g.curY < g.h-1 {
 					g.curY++
 				}
 				i++
@@ -239,6 +285,20 @@ func (g *grid) feed(data []byte) {
 				g.inter = g.inter[:0]
 			case ']':
 				g.state = stOSC
+			case 'D': // IND — line feed with region scroll
+				if g.curY == g.scrBot {
+					g.scrollUp(g.scrTop, g.scrBot, 1)
+				} else if g.curY < g.h-1 {
+					g.curY++
+				}
+				g.state = stGround
+			case 'M': // RI — reverse line feed with region scroll
+				if g.curY == g.scrTop {
+					g.scrollDown(g.scrTop, g.scrBot, 1)
+				} else if g.curY > 0 {
+					g.curY--
+				}
+				g.state = stGround
 			case '(', ')', '*', '+':
 				i++ // charset designator: skip the next byte too
 				g.state = stGround
@@ -347,6 +407,55 @@ func (g *grid) dispatchCSI(final byte) {
 		case 2:
 			g.clearRegion(0, g.curY, g.w-1, g.curY)
 		}
+	case 'X': // ECH — erase n chars at the cursor (no move)
+		n := max1(arg(0, 1))
+		g.clearRegion(g.curX, g.curY, g.curX+n-1, g.curY)
+	case 'P': // DCH — delete n chars, pull the rest of the line left
+		if g.curY >= 0 && g.curY < g.h {
+			n := max1(arg(0, 1))
+			row := g.cells[g.curY]
+			for x := g.curX; x < g.w; x++ {
+				if x+n < g.w {
+					row[x] = row[x+n]
+				} else {
+					row[x] = cell{r: ' ', bg: g.penBg}
+				}
+			}
+		}
+	case '@': // ICH — insert n blanks, push the rest of the line right
+		if g.curY >= 0 && g.curY < g.h {
+			n := max1(arg(0, 1))
+			row := g.cells[g.curY]
+			for x := g.w - 1; x >= g.curX+n; x-- {
+				row[x] = row[x-n]
+			}
+			for x := g.curX; x < g.curX+n && x < g.w; x++ {
+				row[x] = cell{r: ' ', bg: g.penBg}
+			}
+		}
+	case 'S': // SU — scroll region up
+		g.scrollUp(g.scrTop, g.scrBot, max1(arg(0, 1)))
+	case 'T': // SD — scroll region down
+		g.scrollDown(g.scrTop, g.scrBot, max1(arg(0, 1)))
+	case 'L': // IL — insert lines at the cursor (within the region)
+		if g.curY >= g.scrTop && g.curY <= g.scrBot {
+			g.scrollDown(g.curY, g.scrBot, max1(arg(0, 1)))
+		}
+	case 'M': // DL — delete lines at the cursor (within the region)
+		if g.curY >= g.scrTop && g.curY <= g.scrBot {
+			g.scrollUp(g.curY, g.scrBot, max1(arg(0, 1)))
+		}
+	case 'r': // DECSTBM — set scroll region, home the cursor
+		if !private {
+			top := clamp(arg(0, 1)-1, 0, g.h-1)
+			bot := clamp(arg(1, g.h)-1, 0, g.h-1)
+			if top < bot {
+				g.scrTop, g.scrBot = top, bot
+			} else {
+				g.scrTop, g.scrBot = 0, g.h-1
+			}
+			g.curX, g.curY = 0, 0
+		}
 	case 'm': // SGR
 		g.applySGR(p)
 	case 'n': // DSR
@@ -362,6 +471,7 @@ func (g *grid) dispatchCSI(final byte) {
 			case 1049, 47, 1047: // alt screen: treat enter/leave as a clear
 				g.clearRegion(0, 0, g.w-1, g.h-1)
 				g.curX, g.curY = 0, 0
+				g.scrTop, g.scrBot = 0, g.h-1
 			}
 		}
 	}
