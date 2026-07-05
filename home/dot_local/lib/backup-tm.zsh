@@ -441,23 +441,31 @@ function M:setup()
 
 	-- Focus-aware hover: the timeline pane publishes tm-focus 0/1 over DDS;
 	-- unfocused yazi dims its hovered row to the inactive-tab background.
+	-- Hover styling from the tab palette: the focused column's hovered row
+	-- uses the ACTIVE tab bg; the next-to-be-selected row in the other
+	-- column always uses the inactive bg; losing pane focus drops the
+	-- active one to inactive too (tm-focus over DDS from the timeline).
 	local inact = os.getenv("BKP_TM_INACTIVE_BG")
-	if inact then
-		local orig = nil
+	local act = os.getenv("BKP_TM_ACTIVE_BG")
+	if inact and act then
+		local function paint(focus)
+			if not (th and th.mgr) then
+				return
+			end
+			th.mgr.hovered = ui.Style():bg(focus and act or inact)
+			th.mgr.preview_hovered = ui.Style():bg(inact)
+			ya.render()
+		end
+		local painted = false
+		ps.sub("cd", function()
+			if not painted then
+				painted = true
+				paint(true)
+			end
+		end)
 		ps.sub_remote("tm-focus", function(body)
-			-- th may not be populated at setup time: capture the original
-			-- hovered style lazily, the first time we swap it out.
-			if orig == nil and th and th.mgr then
-				orig = th.mgr.hovered
-			end
-			if th and th.mgr then
-				if tostring(body) == "0" then
-					th.mgr.hovered = ui.Style():bg(inact)
-				elseif orig ~= nil then
-					th.mgr.hovered = orig
-				end
-				ya.render()
-			end
+			painted = true
+			paint(tostring(body) ~= "0")
 		end)
 	end
 
