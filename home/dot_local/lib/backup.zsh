@@ -330,12 +330,21 @@ bkp::manifest::denied() {
   return 1
 }
 
+# bkp::fs::device <path> — REPLY = st_dev of <path>, empty on failure.
+# A seam so tests can fake mountpoints without mounting anything.
+bkp::fs::device() {
+  local -a _st
+  REPLY=""
+  zstat -A _st +device -- "$1" 2>/dev/null && REPLY=$_st[1]
+  return 0
+}
+
 # bkp::manifest::walk <node>
 # Recursive sweep worker. Emits F\t<file> / R\t<repo>\t<bundle>\t<warn>.
-# Reads _bkp_deny, _bkp_managed, _bkp_bundle, _bkp_warn from the caller's
-# scope. Inside a git repo, enumeration is delegated to git (full ignore
-# resolution); on git failure it degrades to a plain walk that skips .git —
-# over-capture, never under-capture.
+# Reads _bkp_deny, _bkp_managed, _bkp_bundle, _bkp_warn, _bkp_root_dev from
+# the caller's scope. Inside a git repo, enumeration is delegated to git
+# (full ignore resolution); on git failure it degrades to a plain walk that
+# skips .git — over-capture, never under-capture.
 bkp::manifest::walk() {
   local node="$1" entry
   bkp::manifest::denied "$node" && return 0
@@ -344,6 +353,19 @@ bkp::manifest::walk() {
     return 0
   fi
   [[ -d "$node" ]] || return 0
+  # Never cross a filesystem boundary: anything MOUNTED inside a root (a
+  # scrub session's restic FUSE mount, a network volume) is not this
+  # machine's state — and descending into a repo mount reads the whole
+  # repository back through FUSE (the sweep once wedged for 22 hours in
+  # exactly that).
+  if [[ -n "${_bkp_root_dev:-}" ]]; then
+    local REPLY
+    bkp::fs::device "$node"
+    if [[ -n "$REPLY" && "$REPLY" != "$_bkp_root_dev" ]]; then
+      log_warn "bkp: skipping $node — mounted filesystem inside a capture root"
+      return 0
+    fi
+  fi
   if [[ -e "$node/.git" ]]; then
     if bkp::git::is_repo "$node"; then
       print -r -- "R"$'\t'"$node"$'\t'"$_bkp_bundle"$'\t'"$_bkp_warn"
@@ -392,6 +414,11 @@ bkp::manifest::sweep() {
   local deny_out
   deny_out=$(bkp::manifest::deny "$manifest") || return 2
   [[ -n "$deny_out" ]] && _bkp_deny=(${(f)deny_out})
+  # The backup's own state dir is ALWAYS denied, in code: the repo must
+  # never capture itself, and scrub sessions mount the repository via
+  # FUSE under sessions/. WIP bundles still ride along — capture::run
+  # re-appends $BKP_WIP_DIR explicitly after the sweep.
+  _bkp_deny+=("$BKP_STATE_DIR")
 
   local -A _bkp_managed=()
   if bkp::manifest::chezmoi_excluded "$manifest"; then
@@ -405,9 +432,11 @@ bkp::manifest::sweep() {
     fi
   fi
 
-  local root _bkp_bundle _bkp_warn
+  local root _bkp_bundle _bkp_warn _bkp_root_dev REPLY
   while IFS=$'\t' read -r root _bkp_bundle _bkp_warn; do
     [[ -e "$root" || -h "$root" ]] || continue
+    bkp::fs::device "$root"
+    _bkp_root_dev="$REPLY"
     bkp::manifest::walk "$root"
   done < <(bkp::manifest::roots "$manifest")
 }

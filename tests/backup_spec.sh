@@ -463,6 +463,43 @@ EOF
       The lines of output should equal 3
     End
 
+    It 'always denies the backup state dir, even when a root contains it'
+      statedeny() {
+        source "$LIB/backup.zsh"
+        export BKP_STATE_DIR="$FIX/root/state"
+        mkdir -p "$FIX/root/state/repo" "$FIX/root/state/sessions/s.x/mnt"
+        print keep > "$FIX/root/keep.txt"
+        print pack > "$FIX/root/state/repo/pack.bin"
+        print mnt  > "$FIX/root/state/sessions/s.x/mnt/f"
+        printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
+        bkp::manifest::files "$FIX/m.toml"
+      }
+      When run statedeny
+      The output should equal "$FIX/root/keep.txt"
+    End
+
+    It 'never crosses a filesystem boundary inside a root'
+      mountskip() {
+        source "$LIB/backup.zsh"
+        mkdir -p "$FIX/root/mnt/deep"
+        print keep > "$FIX/root/keep.txt"
+        print fuse > "$FIX/root/mnt/deep/f"
+        # fake st_dev: the mnt dir reports a different device than the root
+        bkp::fs::device() {
+          case "$1" in
+            "$FIX/root/mnt") REPLY=222 ;;
+            *) REPLY=111 ;;
+          esac
+          return 0
+        }
+        printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
+        bkp::manifest::files "$FIX/m.toml"
+      }
+      When run mountskip
+      The output should equal "$FIX/root/keep.txt"
+      The stderr should include "mounted filesystem inside a capture root"
+    End
+
     It 'captures a root that is a single file'
       filedirect() {
         source "$LIB/backup.zsh"
