@@ -287,12 +287,16 @@ bkp::tm::yazi_overlay() {
   done
   # theme.toml: user theme + tab-palette hover colors (runtime th mutation
   # is not honored by yazi 26.5 — the theme file is the reliable channel).
-  {
-    print -r -- "[mgr]"
-    print -r -- "hovered = { bg = \"${C_HEX_TAB_ACTIVE_BG:-#585b70}\" }"
-    print -r -- "preview_hovered = { bg = \"${C_HEX_TAB_BG:-#313244}\" }"
-    [[ -f "$src/theme.toml" ]] && cat "$src/theme.toml"
-  } > "$ovl/theme.toml"
+  if [[ -n "${C_HEX_TAB_ACTIVE_BG:-}" && -n "${C_HEX_TAB_BG:-}" ]]; then
+    {
+      print -r -- "[mgr]"
+      print -r -- "hovered = { bg = \"$C_HEX_TAB_ACTIVE_BG\" }"
+      print -r -- "preview_hovered = { bg = \"$C_HEX_TAB_BG\" }"
+      [[ -f "$src/theme.toml" ]] && cat "$src/theme.toml"
+    } > "$ovl/theme.toml"
+  elif [[ -f "$src/theme.toml" ]]; then
+    ln -sfn "$src/theme.toml" "$ovl/theme.toml"
+  fi
   # yazi.toml: user config + 2-column ratio for the scrub session (parent
   # column dropped — the timeline pane owns "where am I").
   {
