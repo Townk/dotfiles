@@ -1076,8 +1076,17 @@ bkp::tm::launch() {
         local i _cols
         for i in {1..30}; do
           _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
-          [[ -n "$_cols" ]] && (( _cols > 21 )) || break
+          [[ -n "$_cols" ]] && (( _cols > 22 )) || break
           zellij action resize increase left 2>/dev/null || break
+          sleep 0.05
+        done
+        # Overshoot correction: zellij's resize step is coarser than one
+        # column, so the last shrink can land below the 21-col floor —
+        # nudge the lens's left edge back until we're in the 21..22 band.
+        for i in 1 2 3 4; do
+          _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
+          [[ -n "$_cols" ]] && (( _cols < 21 )) || break
+          zellij action resize decrease left 2>/dev/null || break
           sleep 0.05
         done
       fi
