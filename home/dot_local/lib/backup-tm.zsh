@@ -871,8 +871,8 @@ function M:setup()
 			-- Hints display uppercase; the shift glyph only marks actual
 			-- Shift chords (K/J) — plain keys (q/a) show bare uppercase.
 			lines[#lines + 1] = sep_line()
-			lines[#lines + 1] = ui.Line({ key(" 󰘶K"), hint(" newer "), hint("· "), key("󰘶J"), hint(" older") })
-			lines[#lines + 1] = ui.Line({ key("  Q"), hint(" quit  "), hint("·  "), key("󰘶A"), hint(" apply") })
+			lines[#lines + 1] = ui.Line({ key(" 󰘶 K"), hint(" newer "), hint("· "), key("󰘶 J"), hint(" older") })
+			lines[#lines + 1] = ui.Line({ key("   Q"), hint(" quit  "), hint("· "), key("󰘶 A"), hint(" apply") })
 
 			return { ui.List(lines):area(self._area) }
 		end
