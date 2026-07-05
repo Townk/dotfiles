@@ -302,50 +302,12 @@ bkp::tm::yazi_overlay() {
   elif [[ -f "$src/theme.toml" ]]; then
     ln -sfn "$src/theme.toml" "$ovl/theme.toml"
   fi
-  # flavors/: symlink all, but PATCH the active flavor's [mgr] hover rows —
-  # the flavor defines hovered as reversed-video with no bg, and flavor
-  # values win over theme.toml overrides, so the tab-palette hover must be
-  # written into the flavor itself.
-  if [[ -d "$src/flavors" && -n "${C_HEX_TAB_ACTIVE_BG:-}" && -n "${C_HEX_TAB_BG:-}" ]]; then
-    local flav
-    flav=$(yq -p toml -o json '.' "$src/theme.toml" 2>/dev/null |
-      jq -r '.flavor.dark // .flavor.use // empty' 2>/dev/null)
-    mkdir -p "$ovl/flavors"
-    for f in "$src/flavors"/*(DN); do
-      if [[ -n "$flav" && "${f:t}" == "$flav.yazi" && -f "$f/flavor.toml" ]]; then
-        mkdir -p "$ovl/flavors/${f:t}"
-        local ff
-        for ff in "$f"/*(DN); do
-          [[ "${ff:t}" == flavor.toml ]] && continue
-          ln -sfn "$ff" "$ovl/flavors/${f:t}/${ff:t}"
-        done
-        # INSERT (not replace): the flavor's [mgr] may not define these
-        # keys at all — yazi then falls back to its built-in reversed
-        # hover, which is what the override must beat.
-        awk -v act="$C_HEX_TAB_ACTIVE_BG" -v actfg="$C_HEX_TAB_ACTIVE_FG" -v inact="$C_HEX_TAB_BG" '
-          # yazi ≥26 styles the cursor row via [filetype] rules with
-          # if = "hovered" — [mgr] hovered no longer exists. Prepend a
-          # catch-all hovered rule (first match wins).
-          /^\[filetype\]/ { ft = 1; print; next }
-          /^\[/ { ft = 0 }
-          ft && /^rules = \[/ {
-            print
-            # dirs match the trailing-slash glob, files the bare one. The
-            # current column HARDCODES reverse-video on the cursor row, so
-            # the rule pre-swaps: fg here renders as the highlight
-            # background, bg as the text color.
-            print "\t{ if = \"hovered\", url = \"*/\", fg = \"" act "\", bg = \"" actfg "\", bold = true },"
-            print "\t{ if = \"hovered\", url = \"*\", fg = \"" act "\", bg = \"" actfg "\", bold = true },"
-            next
-          }
-          { print }' "$f/flavor.toml" > "$ovl/flavors/${f:t}/flavor.toml"
-      else
-        ln -sfn "$f" "$ovl/flavors/${f:t}"
-      fi
-    done
-  elif [[ -d "$src/flavors" ]]; then
-    ln -sfn "$src/flavors" "$ovl/flavors"
-  fi
+  # flavors/: passed through untouched. yazi 26.5 has NO theme-level
+  # hover control — [mgr] hovered/preview_hovered were removed from the
+  # schema, and filetype "if = hovered" is not evaluated (such a rule
+  # styles every row). The cursor highlight is the hardcoded reversal of
+  # each row own colors; revisit when yazi regains a hover knob.
+  [[ -d "$src/flavors" ]] && ln -sfn "$src/flavors" "$ovl/flavors"
   # yazi.toml: user config + 2-column ratio for the scrub session (parent
   # column dropped — the timeline pane owns "where am I").
   {
