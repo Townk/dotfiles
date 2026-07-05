@@ -15,8 +15,12 @@
 [interactive]
   diffFilter = delta --color-only
 
+# delta no longer pages git itself (core.pager = hunk pager) — this section
+# now themes the tm scrub sessions' diff lens, which renders through delta
+# via diffnav. No side-by-side: the lens shares its tab with the timeline
+# and forces unified (backup-tm lens_cmd also strips it defensively).
 [delta]
-  features = unobtrusive-line-numbers side-by-side decorations
+  features = unobtrusive-line-numbers decorations
   syntax-theme = chezmoi-system
   zero-style = syntax
   plus-style = "syntax #{{ $p.diff.plus_bg }}"
