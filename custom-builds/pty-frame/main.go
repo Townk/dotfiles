@@ -613,6 +613,8 @@ type config struct {
 	bg, fg, border, titleColor, ruleColor color
 	titleColorBlur                        color
 	remapSrc, remapActive, remapBlur      color
+	remapFg                               color
+	remapCols                             int
 	bare, tui                             bool
 	child                                 []string
 }
@@ -931,7 +933,11 @@ func (a *app) blit() {
 				continue // wide-char trailer cell
 			}
 			fg, bg := c.fg, c.bg
+			// The focus remap targets the child's hardcoded selection color;
+			// remapCols confines it to the file-tree columns so same-colored
+			// chrome elsewhere (diff-pane file headers) stays untouched.
 			if a.cfg.remapSrc.set && bg.set && !bg.ansi &&
+				(a.cfg.remapCols <= 0 || x < a.cfg.remapCols) &&
 				bg.r == a.cfg.remapSrc.r && bg.g == a.cfg.remapSrc.g && bg.b == a.cfg.remapSrc.b {
 				if a.focused {
 					if a.cfg.remapActive.set {
@@ -939,6 +945,9 @@ func (a *app) blit() {
 					}
 				} else if a.cfg.remapBlur.set {
 					bg = a.cfg.remapBlur
+				}
+				if a.cfg.remapFg.set {
+					fg = a.cfg.remapFg
 				}
 			}
 			if c.attrs&attrReverse != 0 {
@@ -1056,6 +1065,14 @@ func parseArgs(args []string) config {
 			cfg.remapSrc, cfg.remapActive, cfg.remapBlur = parseRemap(val())
 		case strings.HasPrefix(a, "--focus-remap="):
 			cfg.remapSrc, cfg.remapActive, cfg.remapBlur = parseRemap(a[len("--focus-remap="):])
+		case a == "--focus-remap-cols":
+			cfg.remapCols, _ = strconv.Atoi(val())
+		case strings.HasPrefix(a, "--focus-remap-cols="):
+			cfg.remapCols, _ = strconv.Atoi(a[len("--focus-remap-cols="):])
+		case a == "--focus-remap-fg":
+			cfg.remapFg = parseHex(val())
+		case strings.HasPrefix(a, "--focus-remap-fg="):
+			cfg.remapFg = parseHex(a[len("--focus-remap-fg="):])
 		}
 		i++
 	}

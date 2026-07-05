@@ -946,10 +946,15 @@ bkp::tm::lens_cmd() {
     local pf="${BKP_TM_PTYFRAME_BIN:-$HOME/.local/libexec/pty-frame}"
     local -a wrap=()
     if [[ -x "$pf" ]]; then
+      # remap-cols confines the swap to the file tree (diffnav's
+      # fileTreeWidth, pinned in its config.yml) so the diff pane's
+      # file-header boxes — same hardcoded color — never flip with
+      # focus; remap-fg brightens the selected row's text (ui.key).
       wrap=("$pf" --bare --tui
         --title-file "$s/lens-title" --focus-file "$s/focus"
         --title-color "${C_ROLE_UI_ACCENT:-}" --title-color-blur "${C_ROLE_UI_MUTED:-}"
-        --focus-remap "${C_HEX_DIFFNAV_SELECTION:-}:${C_HEX_TAB_ACTIVE_BG:-}:${C_HEX_TAB_BG:-}" --)
+        --focus-remap "${C_HEX_DIFFNAV_SELECTION:-}:${C_HEX_TAB_ACTIVE_BG:-}:${C_HEX_TAB_BG:-}"
+        --focus-remap-cols 26 --focus-remap-fg "${C_ROLE_UI_KEY:-}" --)
     fi
     # COLORTERM: zellij-run panes don't inherit it (the documented
     # new-pane gotcha), and without it delta downgrades the truecolor
@@ -988,6 +993,14 @@ bkp::tm::launch() {
   local s
   s=$(bkp::tm::session_new "$lens" "$anchor") || return $?
   if [[ -n "${ZELLIJ:-}" ]]; then
+    # Diff splits a lens pane AFTER the slow prep below, but zellij run
+    # is focus-relative — remember the tab we were invoked in so the
+    # split lands here even if the user wanders off during prep.
+    local _origin_tab=""
+    if [[ "$lens" == diff ]]; then
+      _origin_tab=$(zellij action list-tabs -s 2>/dev/null |
+        awk -F'  +' 'NR > 1 && $4 == "true" { print $2; exit }')
+    fi
     # ALL slow prep happens here, before any layout change: spinner per
     # stage (gum), completion line after each, split only when ready.
     local _spin=0
@@ -1033,6 +1046,18 @@ bkp::tm::launch() {
       # worker tears the session down (unmount + rm) when yazi exits.
       "$BKP_TM_BIN" lens "$s" || return $?
     else
+      # If the user switched tabs during prep, hop back to the ORIGIN
+      # tab for the split (and the resize, which is focus-relative too),
+      # then hand the view back to wherever they were. Same-tab case:
+      # both positions match and no hop happens.
+      local _now_tab=""
+      _now_tab=$(zellij action list-tabs -s 2>/dev/null |
+        awk -F'  +' 'NR > 1 && $4 == "true" { print $2; exit }')
+      local _hop=0
+      if [[ -n "$_origin_tab" && -n "$_now_tab" && "$_now_tab" != "$_origin_tab" ]]; then
+        _hop=1
+        zellij action go-to-tab $(( _origin_tab + 1 )) 2>/dev/null || :
+      fi
       zellij run --close-on-exit --direction right --name "tm lens" \
         -- "$BKP_TM_BIN" lens "$s" >/dev/null || { rm -rf "$s"; return 1 }
       # The new pane takes focus; grow it leftward so the timeline pane
@@ -1043,6 +1068,7 @@ bkp::tm::launch() {
       for i in 1 2 3 4 5; do
         zellij action resize increase left 2>/dev/null || break
       done
+      (( _hop )) && zellij action go-to-tab $(( _now_tab + 1 )) 2>/dev/null || :
       "$BKP_TM_BIN" timeline "$s" || return $?
     fi
   else
