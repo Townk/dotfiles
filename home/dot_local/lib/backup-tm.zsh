@@ -282,9 +282,17 @@ bkp::tm::yazi_overlay() {
   # once dropped the theme on the floor.
   local f
   for f in "$src"/*(DN); do
-    [[ "${f:t}" == keymap.toml || "${f:t}" == init.lua || "${f:t}" == plugins || "${f:t}" == yazi.toml ]] && continue
+    [[ "${f:t}" == keymap.toml || "${f:t}" == init.lua || "${f:t}" == plugins || "${f:t}" == yazi.toml || "${f:t}" == theme.toml ]] && continue
     ln -sfn "$f" "$ovl/${f:t}"
   done
+  # theme.toml: user theme + tab-palette hover colors (runtime th mutation
+  # is not honored by yazi 26.5 — the theme file is the reliable channel).
+  {
+    print -r -- "[mgr]"
+    print -r -- "hovered = { bg = \"${C_HEX_TAB_ACTIVE_BG:-#585b70}\" }"
+    print -r -- "preview_hovered = { bg = \"${C_HEX_TAB_BG:-#313244}\" }"
+    [[ -f "$src/theme.toml" ]] && cat "$src/theme.toml"
+  } > "$ovl/theme.toml"
   # yazi.toml: user config + 2-column ratio for the scrub session (parent
   # column dropped — the timeline pane owns "where am I").
   {
