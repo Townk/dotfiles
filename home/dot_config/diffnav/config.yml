@@ -1,0 +1,14 @@
+# diffnav — the tm scrub sessions' diff lens (renders through delta, so
+# the single-source theme covers the diff content itself).
+#
+# v0.11 config is layout-only: the chrome palette (file-header boxes,
+# tree highlight, status bar) is hardcoded upstream (dlvhdr/diffnav) and
+# reads as off-black against the chezmoi-system base. Hiding the header
+# and footer removes the two largest off-palette surfaces; proper chrome
+# theming needs an upstream feature.
+ui:
+  hideHeader: true
+  hideFooter: true
+  # unified diffs — the lens shares its tab with the timeline pane
+  # (backup-tm also forces this via --unified + DELTA_FEATURES).
+  sideBySide: false
