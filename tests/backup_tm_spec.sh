@@ -370,6 +370,7 @@ EOF
         ovl=$(bkp::tm::yazi_overlay "$S")
         [ -L "$ovl/theme.toml" ] && echo theme-linked
         [ -L "$ovl/plugins/userp.yazi" ] && echo userplugin-linked
+        # two cd subscriptions: the navigation bounce + first-paint hook
         grep -c 'ps.sub("cd"' "$ovl/plugins/tm-gate.yazi/main.lua"
         grep -c 'BKP_TM_MNT' "$ovl/plugins/tm-gate.yazi/main.lua"
         grep -c 'require("tm-gate")' "$ovl/init.lua"
@@ -378,7 +379,7 @@ EOF
       When run run_it
       The line 1 should equal "theme-linked"
       The line 2 should equal "userplugin-linked"
-      The line 3 should equal 1
+      The line 3 should equal 2
       The line 4 should equal 1
       The line 5 should equal 1
       The line 6 should equal 1
