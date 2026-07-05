@@ -103,6 +103,14 @@ bkp::tm::refresh() {
   [[ -e "$s/closed" || ! -d "$s" ]] && return 0
   lens=$(<"$s/lens") anchor=$(<"$s/anchor")
   if [[ "$lens" == diff ]]; then
+    # Debounce: a held scrub key fires one ctl per key repeat, and every
+    # lens update costs a hunk respawn (even cache hits). Only the rung
+    # the user SETTLES on deserves one: nap briefly, and if the rung
+    # moved meanwhile a newer ctl owns it — this one bows out.
+    local r0
+    r0=$(<"$s/rung")
+    sleep "${BKP_TM_SCRUB_DEBOUNCE:-0.25}"
+    [[ "$(cat "$s/rung" 2>/dev/null)" == "$r0" ]] || return 0
     # NOT $$: the initial refresh runs as a backgrounded SUBSHELL of the
     # timeline pane, and zsh's $$ stays the parent's pid there — the
     # first scrub would supersede-kill the whole session.

@@ -7,6 +7,11 @@
 # takes precedence over this module-level unset.
 unset ZELLIJ ZELLIJ_PANE_ID ZELLIJ_SESSION_NAME
 
+# tm scrub-session debounce: real sessions nap before each synthesis so a
+# held key only builds the rung the user settles on — specs step rapidly
+# on purpose and would pay the nap dozens of times.
+export BKP_TM_SCRUB_DEBOUNCE=0
+
 # Render the single-source palette (.chezmoidata/theme.yaml ->
 # custom-builds/theme/templates/palette.zsh.tmpl) to a temp file and point
 # common.zsh at it via THEME_PALETTE_FILE, so palette-dependent specs resolve the

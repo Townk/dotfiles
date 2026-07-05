@@ -1,0 +1,51 @@
+{{- $p := index .theme.palettes .theme.active -}}
+{{- $r := .theme.roles -}}
+{{- $base := "github-dark-default" -}}
+{{- if eq $p.meta.appearance "light" }}{{ $base = "github-light-default" }}{{ end -}}
+{{- if has .theme.active (list "catppuccin-mocha" "catppuccin-latte" "catppuccin-macchiato" "catppuccin-frappe") }}{{ $base = .theme.active }}{{ end -}}
+# hunk (hunkdiff) — GENERATED from .chezmoidata/theme.yaml ({{ $p.meta.name }})
+# by chezmoi. DO NOT EDIT hex here; change the palette in theme.yaml and
+# re-apply. Chrome + diff surfaces follow the shared roles; syntax follows
+# the canonical roles.syntax map; everything else inherits from the base.
+
+theme = "custom"
+
+[custom_theme]
+base = "{{ $base }}"
+label = "{{ $p.meta.name }} (chezmoi-system)"
+background = "#{{ index $p $r.ui.bg }}"
+panel = "#{{ index $p $r.ui.surface }}"
+panelAlt = "#{{ index $p $r.ui.surface_hi }}"
+border = "#{{ index $p $r.ui.border }}"
+accent = "#{{ index $p $r.ui.accent }}"
+text = "#{{ index $p $r.ui.fg }}"
+muted = "#{{ index $p $r.ui.muted }}"
+selectedHunk = "#{{ index $p $r.ui.selection }}"
+noteBorder = "#{{ index $p $r.ui.accent }}"
+addedBg = "#{{ $p.diff.plus_bg }}"
+removedBg = "#{{ $p.diff.minus_bg }}"
+addedSignColor = "#{{ index $p $r.diff.added }}"
+removedSignColor = "#{{ index $p $r.diff.removed }}"
+lineNumberBg = "#{{ index $p $r.ui.bg_dim }}"
+lineNumberFg = "#{{ index $p $r.ui.muted }}"
+badgeAdded = "#{{ index $p $r.diff.added }}"
+badgeRemoved = "#{{ index $p $r.diff.removed }}"
+badgeNeutral = "#{{ index $p $r.ui.muted }}"
+fileNew = "#{{ index $p $r.diff.added }}"
+fileDeleted = "#{{ index $p $r.diff.removed }}"
+fileModified = "#{{ index $p $r.diff.changed }}"
+fileRenamed = "#{{ index $p $r.ui.link }}"
+fileUntracked = "#{{ index $p $r.ui.muted }}"
+
+[custom_theme.syntax]
+default = "#{{ index $p $r.syntax.variable }}"
+keyword = "#{{ index $p $r.syntax.keyword }}"
+string = "#{{ index $p $r.syntax.string }}"
+comment = "#{{ index $p $r.syntax.comment }}"
+number = "#{{ index $p $r.syntax.number }}"
+function = "#{{ index $p $r.syntax.function }}"
+property = "#{{ index $p $r.syntax.property }}"
+type = "#{{ index $p $r.syntax.type }}"
+variable = "#{{ index $p $r.syntax.variable }}"
+operator = "#{{ index $p $r.syntax.operator }}"
+punctuation = "#{{ index $p $r.syntax.punctuation }}"
