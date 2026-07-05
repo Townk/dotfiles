@@ -98,18 +98,33 @@ func focused() bool {
 }
 
 type ui struct {
-	sess, anchor, ctlBin   string
-	activeBG, inactiveBG   string
-	keyFG, hintFG, titleFG string
-	ladder                 []rung
-	rungIdx                int
-	focus                  bool
-	w, h                   int
+	sess, anchor, ctlBin          string
+	activeBG, inactiveBG          string
+	keyFG, hintFG, titleFG, sepFG string
+	ladder                        []rung
+	rungIdx                       int
+	focus                         bool
+	w, h                          int
+}
+
+// sepLine renders a full-width rule in the theme separator color
+// (falling back to terminal dim when the palette flag is absent).
+func (u *ui) sepLine() string {
+	c := u.sepFG
+	if c == "" {
+		c = dim
+	}
+	n := u.w - 2
+	if n < 1 {
+		n = 1
+	}
+	return " " + c + strings.Repeat("━", n) + reset + " \x1b[K\r\n"
 }
 
 func (u *ui) frame() string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(" %s▓▓▓ Snapshots%s\r\n\r\n", u.titleFG, reset))
+	b.WriteString(fmt.Sprintf(" %s\U0010F1DA Snapshots%s\x1b[K\r\n", u.titleFG, reset))
+	b.WriteString(u.sepLine())
 
 	bg := u.inactiveBG
 	if u.focus {
@@ -182,13 +197,11 @@ func (u *ui) frame() string {
 		}
 	}
 
+	// Hints display uppercase; the shift glyph marks only real Shift
+	// chords — this pane's keys are plain j/k/a/q, so bare uppercase.
 	k, h := u.keyFG, u.hintFG
-	sep := u.w - 2
-	if sep < 1 {
-		sep = 1
-	}
-	b.WriteString(" " + dim + strings.Repeat("━", sep) + reset + " \x1b[K\r\n")
-	b.WriteString(fmt.Sprintf(" %s\U000F0636K%s%s newer%s %s·%s %s\U000F0636J%s%s older%s\x1b[K\r\n  %s\U000F12B7%s%s quit%s  %s·%s  %sa%s%s apply%s",
+	b.WriteString(u.sepLine())
+	b.WriteString(fmt.Sprintf(" %sK%s%s newer %s%s· %s%sJ%s%s older%s\x1b[K\r\n %sQ%s%s quit  %s%s·  %s%sA%s%s apply%s",
 		k, reset, h, reset, h, reset, k, reset, h, reset,
 		k, reset, h, reset, h, reset, k, reset, h, reset))
 	return b.String()
@@ -210,6 +223,7 @@ func main() {
 	keyFG := flag.String("key-fg", "", "footer key color, #rrggbb")
 	hintFG := flag.String("hint-fg", "", "footer hint color, #rrggbb")
 	titleFG := flag.String("title-fg", "", "pane title color, #rrggbb")
+	sepFG := flag.String("sep-fg", "", "separator rule color, #rrggbb")
 	flag.Parse()
 	sess := flag.Arg(0)
 	if sess == "" {
@@ -231,6 +245,7 @@ func main() {
 		keyFG:      sgr(*keyFG, false),
 		hintFG:     sgr(*hintFG, false),
 		titleFG:    sgr(*titleFG, false),
+		sepFG:      sgr(*sepFG, false),
 		ladder:     readLadder(sess),
 		rungIdx:    1,
 		focus:      true,

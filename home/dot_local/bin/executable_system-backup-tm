@@ -68,7 +68,7 @@ tm_timeline() {
       # loop below remains the no-Go fallback.
       "$tlbin" --active-bg "${C_HEX_TAB_ACTIVE_BG:-}" --inactive-bg "${C_HEX_TAB_BG:-}" \
         --key-fg "${C_ROLE_UI_KEY:-}" --hint-fg "${C_ROLE_UI_HINT:-}" \
-        --title-fg "${C_ROLE_UI_ACCENT:-}" "$s" || :
+        --title-fg "${C_ROLE_UI_ACCENT:-}" --sep-fg "${C_ROLE_UI_SEPARATOR:-}" "$s" || :
       return 0
     fi
     local key rest last_state="" rung focused height width interactive=1
