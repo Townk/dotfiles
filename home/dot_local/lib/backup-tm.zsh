@@ -428,9 +428,10 @@ bkp::tm::timeline_render() {
 #                   moves to the timeline (and once there, h is a no-op)
 #   l / Right       enter — except from the timeline, where the focus
 #                   returns to the file area
-#   a / R           restore selection to the live filesystem (gated apply
+#   A (canonical), a / R
+#                   restore selection to the live filesystem (gated apply
 #                   flow — snapshots are read-only, so create is meaningless
-#                   here and `a` is free)
+#                   here and `a` stays as an alias)
 bkp::tm::yazi_overlay() {
   local s="$1" src="${YAZI_USER_CONFIG:-$HOME/.config/yazi}" ovl="$1/yazi"
   mkdir -p "$ovl"
@@ -545,6 +546,7 @@ LUA
     "  { on = \"<Left>\", run = \"plugin tm-gate h\", desc = \"tm: leave; timeline focus at the root\" },"
     "  { on = \"l\", run = \"plugin tm-gate l\", desc = \"tm: enter; file focus from the timeline\" },"
     "  { on = \"<Right>\", run = \"plugin tm-gate l\", desc = \"tm: enter; file focus from the timeline\" },"
+    "  { on = \"A\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"a\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"R\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"<S-Enter>\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
@@ -870,7 +872,7 @@ function M:setup()
 			-- Shift chords (K/J) — plain keys (q/a) show bare uppercase.
 			lines[#lines + 1] = sep_line()
 			lines[#lines + 1] = ui.Line({ key(" 󰘶K"), hint(" newer "), hint("· "), key("󰘶J"), hint(" older") })
-			lines[#lines + 1] = ui.Line({ key("  Q"), hint(" quit  "), hint("·  "), key("A"), hint(" apply") })
+			lines[#lines + 1] = ui.Line({ key("  Q"), hint(" quit  "), hint("·  "), key("󰘶A"), hint(" apply") })
 
 			return { ui.List(lines):area(self._area) }
 		end

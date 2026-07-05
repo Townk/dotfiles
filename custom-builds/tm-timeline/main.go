@@ -208,7 +208,7 @@ func (u *ui) frame() string {
 	// honest here too even though this pane also takes plain j/k).
 	k, h := u.keyFG, u.hintFG
 	b.WriteString(u.sepLine())
-	b.WriteString(fmt.Sprintf(" %s\U000F0636K%s%s newer %s%s· %s%s\U000F0636J%s%s older%s\x1b[K\r\n %sQ%s%s quit  %s%s·  %s%sA%s%s apply%s",
+	b.WriteString(fmt.Sprintf(" %s\U000F0636K%s%s newer %s%s· %s%s\U000F0636J%s%s older%s\x1b[K\r\n %sQ%s%s quit  %s%s·  %s%s\U000F0636A%s%s apply%s",
 		k, reset, h, reset, h, reset, k, reset, h, reset,
 		k, reset, h, reset, h, reset, k, reset, h, reset))
 	return b.String()
