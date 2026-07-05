@@ -205,7 +205,7 @@ EOF
       }
       When run run_it
       The lines of output should equal 12
-      The output should include "…"
+      The output should include "⋮"
     End
   End
 

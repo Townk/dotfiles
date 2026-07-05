@@ -142,18 +142,18 @@ func (u *ui) frame() string {
 			pad2 := strings.Repeat(" ", max(0, width-3-len(clock)))
 			rows = append(rows,
 				row{bg + " " + gc + "●" + reset + bg + " " + date + pad1 + reset, i + 1},
-				row{bg + " " + gc + "⋮" + reset + bg + " " + clock + pad2 + reset, i + 1})
+				row{bg + " " + gc + "┃" + reset + bg + " " + clock + pad2 + reset, i + 1})
 		} else {
 			rows = append(rows,
 				row{" " + gc + "●" + reset + " " + date, i + 1},
-				row{" " + gc + "⋮" + reset + " " + dim + clock + reset, i + 1})
+				row{" " + gc + "┃" + reset + " " + dim + clock + reset, i + 1})
 		}
 		if i+1 < len(u.ladder) {
 			cc := yellw
 			if i+1 < u.rungIdx {
 				cc = red
 			}
-			rows = append(rows, row{" " + cc + "⋮" + reset, 0})
+			rows = append(rows, row{" " + cc + "┃" + reset, 0})
 		}
 	}
 
@@ -177,14 +177,14 @@ func (u *ui) frame() string {
 	last := min(first+height, len(rows))
 	for i := first; i < last; i++ {
 		if len(rows) > height && ((i == first && first > 0) || (i == last-1 && last < len(rows))) {
-			b.WriteString(" " + dim + "…" + reset + "\x1b[K\r\n")
+			b.WriteString(" " + dim + "⋮" + reset + "\x1b[K\r\n")
 		} else {
 			b.WriteString(rows[i].text + "\x1b[K\r\n")
 		}
 	}
 
 	k, h := u.keyFG, u.hintFG
-	b.WriteString(fmt.Sprintf("\r\n %s\U000F0636K%s%s newer%s %s·%s %s\U000F0636J%s%s older%s\x1b[K\r\n %s\U000F12B7%s%s quit%s %s·%s %sa%s%s apply%s",
+	b.WriteString(fmt.Sprintf("\r\n %s\U000F0636K%s%s newer%s %s·%s %s\U000F0636J%s%s older%s\x1b[K\r\n  %s\U000F12B7%s%s quit%s  %s·%s  %sa%s%s apply%s",
 		k, reset, h, reset, h, reset, k, reset, h, reset,
 		k, reset, h, reset, h, reset, k, reset, h, reset))
 	return b.String()

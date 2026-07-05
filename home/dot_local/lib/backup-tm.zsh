@@ -257,7 +257,7 @@ bkp::tm::timeline_render() {
   for (( out_row = first; out_row <= last; out_row++ )); do
     if (( total > height )) && { (( out_row == first && first > 1 )) ||
                                  (( out_row == last && last < total )) }; then
-      print -r -- " ${C_DIM}…${C_RES}"
+      print -r -- " ${C_DIM}⋮${C_RES}"
     else
       print -r -- "${rows[out_row]}"
     fi
