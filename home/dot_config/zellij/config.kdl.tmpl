@@ -280,6 +280,20 @@ keybinds clear-defaults=true {
             }
         }
 
+        // Shift+S in a diffnav pane: the "wide diff" toggle — diffnav has
+        // no way to couple its own `s` (side-by-side) and `e` (file tree)
+        // toggles, so write both keys. Long lines only wrap in delta's
+        // side-by-side mode, and hiding the tree gives the halves room.
+        // Matched on diffnav ONLY (bare lowercase s is far too hot a
+        // typing key to intercept globally). Caveat: using `e` on its own
+        // desyncs the pairing until the next `e`.
+        bind "S" {
+            MessagePlugin "context-keys" {
+                name "shift+s"
+                payload "default: $source; when diffnav: write se"
+            }
+        }
+
         // (ai-playbook is triggered by Ctrl+Alt+A, handled entirely in zsh — it
         // arrives as the legacy sequence ESC Ctrl-A (\e^A) which passes straight
         // through Zellij to the pane, so no Zellij bind is needed here. See the
