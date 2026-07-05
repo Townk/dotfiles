@@ -45,16 +45,14 @@ tm_timeline() {
   trap 'touch "$s/closed"' HUP TERM INT
   {
     touch "$s/ready"
-    # Initial refresh is a diff-lens need (current.patch must exist before
-    # hunk --watch opens) — but synthesis over a big anchor takes minutes
-    # and must not hold the timeline UI hostage: seed an empty patch so
-    # hunk boots into its graceful empty state, and synthesize in the
-    # background (--watch picks up the mv; errors land in refresh.log,
-    # never on the timeline's alt screen). Explore starts at the right
-    # rung by argv — an eager refresh would race yazi's startup and flag
-    # a respawn.
-    if [[ "$(<"$s/lens")" == diff ]]; then
-      [[ -f "$s/current.patch" ]] || : > "$s/current.patch"
+    # The first changeset normally arrives pre-built by launch's inline
+    # spinner stage. When it isn't there (fallback paths), build it in
+    # the background — the lens pane shows the build spinner meanwhile
+    # (errors land in refresh.log, never on the timeline's alt screen).
+    # Explore starts at the right rung by argv — an eager refresh would
+    # race yazi's startup and flag a respawn.
+    if [[ "$(<"$s/lens")" == diff && ! -f "$s/current.patch" ]]; then
+      : > "$s/current.patch"
       ( bkp::tm::refresh "$s" || : ) >> "$s/refresh.log" 2>&1 &!
     fi
     # Converge this pane to the 21-column design width (resize acts on the
@@ -196,8 +194,19 @@ tm_lens() {
   local -a cmd
   {
     while [[ ! -e "$s/closed" ]]; do
+      # Diff build in flight: this pane becomes the build spinner until
+      # the patch lands (or the rung changes — the title follows).
+      if [[ "$lens" == diff && -e "$s/building" ]]; then
+        bkp::tm::build_wait "$s"
+        continue
+      fi
       cmd=("${(@f)$(bkp::tm::lens_cmd "$s")}") || break
       ( cd "$s" && "${cmd[@]}" )
+      # a build just took the UI down (build_signal fired mid-hunk):
+      # loop back into the spinner phase, not out of the session
+      if [[ "$lens" == diff && -e "$s/building" && ! -e "$s/closed" ]]; then
+        continue
+      fi
       # explore lens: a failed DDS cd flags a respawn; anything else ends
       if [[ -e "$s/respawn" && ! -e "$s/closed" ]]; then
         rm -f "$s/respawn"
@@ -298,8 +307,6 @@ tm_apply() {
         '/^[0-9a-f]/ { id = $1 } { line = $0; sub(/^[ \t]+/, "", line) } line == want { print id; exit }')
     if [[ -n "$sid" ]]; then
       focus=$(hunk session get "$sid" --json 2>/dev/null | jq -r '.focus.file // empty')
-      # never "restore" the synthesizing-placeholder pseudo-file
-      [[ "$focus" == "[tm] "* ]] && focus=""
     fi
     if [[ -n "$focus" ]]; then
       live+=("/${focus#/}")
@@ -314,7 +321,7 @@ tm_apply() {
         picked=("${(@f)$(awk '
             /^\+\+\+ b\// { s = substr($0, 6); sub(/\t$/, "", s); print s; next }
             /^--- a\// { s = substr($0, 6); sub(/\t$/, "", s); print s }
-          ' "$s/current.patch" | grep -v '^\[tm\] ' | sort -u | fzf --multi --prompt='apply> ')}") || return 0
+          ' "$s/current.patch" | sort -u | fzf --multi --prompt='apply> ')}") || return 0
       fi
       (( ${#picked} )) || return 0
       live+=("${picked[@]}")

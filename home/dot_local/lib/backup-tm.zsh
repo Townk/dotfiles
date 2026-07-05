@@ -130,14 +130,15 @@ bkp::tm::refresh() {
     fi
     print -r -- "$self" > "$s/refresh.pid"
     rm -rf "$s"/bkp-liveview.*(N) 2>/dev/null
-    # Visible feedback while the (possibly minutes-long) build runs.
-    bkp::tm::synth_placeholder "$s"
+    # Flip the lens into its spinner phase for the build's duration.
+    bkp::tm::build_signal "$s"
     # The live view lands inside the session dir — rm -rf at teardown
     # sweeps it even when its builder died mid-copy.
     local BKP_LIVEVIEW_DIR="$s"
     # FUSE-less fallback: rung_root restores the scoped subtree to a
-    # per-rung cache when the mount isn't there.
-    bkp::tm::rung_root "$s" || return 1
+    # per-rung cache when the mount isn't there. On failure the spinner
+    # flag must not outlive us — the lens would spin forever.
+    bkp::tm::rung_root "$s" || { rm -f "$s/building"; return 1 }
     local rung="$REPLY"
     # A failed synthesis must not kill the session: hunk renders an empty
     # patch as a graceful "no files" state and --watch refills it on the
@@ -203,32 +204,58 @@ bkp::tm::step() {
 # bkp::tm::end <session> — signal every session process to wind down.
 bkp::tm::end() { touch "$1/closed" }
 
-# bkp::tm::synth_placeholder <session>
-# hunk cannot distinguish "no changes yet" from "still synthesizing" —
-# an empty patch renders as a clean no-changes state, which reads as
-# "this rung has no diff" while a slow build (FUSE reads of every
-# captured file) is still running. Show a placeholder row instead; the
-# real patch replaces it via the same mv that hunk --watch picks up.
-bkp::tm::synth_placeholder() {
+# bkp::tm::build_signal <session>
+# Flip the lens pane into its spinner phase: flag the build and take
+# down the hunk UI — the lens loop sees the flag and shows the build
+# spinner until the patch lands (bkp::tm::lens_reload clears it).
+bkp::tm::build_signal() {
   local s="$1"
-  {
-    print -r -- 'diff --git a/[tm] synthesizing changeset… b/[tm] synthesizing changeset…'
-    print -r -- 'new file mode 100644'
-    print -r -- '--- /dev/null'
-    print -r -- '+++ b/[tm] synthesizing changeset…'
-    print -r -- '@@ -0,0 +1 @@'
-    print -r -- '+building the diff against this snapshot — one moment…'
-  } > "$s/current.patch.tmp"
-  mv "$s/current.patch.tmp" "$s/current.patch"
+  touch "$s/building"
+  [[ -f "$s/lens.pid" ]] || return 0
+  pkill -f "hunk patch $s/current.patch" 2>/dev/null || :
+  return 0
+}
+
+# bkp::tm::build_wait <session>
+# Foreground spinner for the lens pane while a changeset build is in
+# flight. Returns when the build lands, the session closes, or the
+# user scrubs to another rung (so the title can follow the rung).
+bkp::tm::build_wait() {
+  local s="$1" when="" rung0="" REPLY
+  [[ -f "$s/rung" ]] && rung0=$(<"$s/rung")
+  if bkp::tm::rung_line "$s"; then
+    local epoch="${${REPLY#*$'\t'}%%$'\t'*}"
+    strftime -s when ' for %a, %b %e %I:%M %p' "$epoch"
+    when="${when//  / }"
+  fi
+  # The static line always shows (even if gum degrades in an odd tty);
+  # gum animates below it when available.
+  printf '\e[2J\e[H\n %s building the changeset%s…%s\n\n' \
+    "${C_DIM:-}" "$when" "${C_RES:-}"
+  # NB: plain `cat`, not `$(<file)` — the special fast-read form silently
+  # degrades to an empty command once a redirection is attached, and the
+  # comparison then fails instantly (the spinner busy-looped invisibly).
+  if [[ -t 1 ]] && command -v gum >/dev/null 2>&1 && (( ! ${+functions[gum]} )); then
+    gum spin --spinner dot --title "hold on…" -- \
+      zsh -c 'while [[ -e "$1/building" && ! -e "$1/closed" &&
+                      "$(cat "$1/rung" 2>/dev/null)" == "$2" ]]; do sleep 0.1; done' \
+      _ "$s" "$rung0" || :
+  else
+    while [[ -e "$s/building" && ! -e "$s/closed" &&
+             "$(cat "$s/rung" 2>/dev/null)" == "$rung0" ]]; do
+      sleep 0.1
+    done
+  fi
+  return 0
 }
 
 # bkp::tm::lens_reload <session>
-# hunk --watch (hunkdiff 0.16) never re-reads the patch file — a
-# completed synthesis must force the reload by respawning the lens:
-# flag first, then kill the hunk UI; the lens loop relaunches it on the
-# fresh current.patch. No-op when the lens isn't up yet.
+# A build landed: clear the spinner flag (its watcher exits by itself)
+# and, when the hunk UI is up, respawn it on the fresh current.patch —
+# hunk --watch (hunkdiff 0.16) never re-reads the patch file.
 bkp::tm::lens_reload() {
   local s="$1"
+  rm -f "$s/building"
   [[ -f "$s/lens.pid" ]] || return 0
   touch "$s/respawn"
   pkill -f "hunk patch $s/current.patch" 2>/dev/null || rm -f "$s/respawn"
@@ -921,6 +948,17 @@ bkp::tm::launch() {
         staging=$(bkp::config::staging_path) || { rm -rf "$s"; return 2 }
         bkp::mount "$staging" "$s/mnt" || { rm -rf "$s"; return 1 }
         print -r -- "$REPLY" > "$s/mount.pid"
+      fi
+    fi
+    # Diff: the first changeset build joins the inline prep narration —
+    # hunk then opens on a REAL patch instead of spinning in the pane.
+    if [[ "$lens" == diff ]]; then
+      if (( _spin )); then
+        gum spin --spinner dot --title "Building the changeset…" -- \
+          zsh -c "source '$HOME/.local/lib/backup-tm.zsh'; bkp::tm::refresh '$s'" || :
+        log_ok "bkp: changeset ready"
+      else
+        bkp::tm::refresh "$s" || :
       fi
     fi
     touch "$s/ready"

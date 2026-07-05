@@ -102,7 +102,16 @@ EOF
       The output should equal 1
     End
 
-    It 'reloads the lens after a completed synthesis (hunk --watch is inert)'
+    It 'kills hunk into the spinner on builds, respawns it on cache hits'
+      wait_dead() {
+        local pid="$1" i
+        for i in {1..50}; do
+          kill -0 "$pid" 2>/dev/null || { print yes; return 0 }
+          sleep 0.02
+        done
+        kill "$pid" 2>/dev/null
+        print no
+      }
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         local s
@@ -113,22 +122,28 @@ EOF
         # fake hunk UI whose cmdline matches the session's patch path
         printf '#!/bin/sh\nsleep 30\n' > "$FIX/stub/hunk"
         chmod +x "$FIX/stub/hunk"
-        "$FIX/stub/hunk" patch "$s/current.patch" &
-        local hpid=$!
+        # UNCACHED rung: hunk dies at build start (spinner phase takes
+        # over) and the building flag is cleared once the patch lands.
+        "$FIX/stub/hunk" patch "$s/current.patch" & local a=$!
         sleep 0.2
         bkp::tm::step "$s" older || { echo "step rc=$?"; return 1 }
-        local i dead=no
-        for i in {1..50}; do
-          kill -0 "$hpid" 2>/dev/null || { dead=yes; break }
-          sleep 0.02
-        done
-        kill "$hpid" 2>/dev/null
-        print -r -- "hunk-killed=$dead"
+        print -r -- "build-kill=$(wait_dead "$a")"
+        [[ -e "$s/building" ]] && print building-left || print building-cleared
+        rm -f "$s/respawn"
+        bkp::tm::step "$s" newer   # rung 1 built too (for the cache below)
+        rm -f "$s/respawn"
+        # CACHED rung: no spinner phase — hunk is respawn-flagged + killed.
+        "$FIX/stub/hunk" patch "$s/current.patch" & local c=$!
+        sleep 0.2
+        bkp::tm::step "$s" older || { echo "step rc=$?"; return 1 }
+        print -r -- "cache-kill=$(wait_dead "$c")"
         [[ -e "$s/respawn" ]] && print respawn-flagged || print no-flag
       }
       When run run_it
-      The line 1 should equal "hunk-killed=yes"
-      The line 2 should equal "respawn-flagged"
+      The line 1 should equal "build-kill=yes"
+      The line 2 should equal "building-cleared"
+      The line 3 should equal "cache-kill=yes"
+      The line 4 should equal "respawn-flagged"
     End
 
     It 'serves a revisited rung from the patch cache (one synthesis per rung)'
@@ -153,23 +168,27 @@ EOF
       The line 2 should equal 1
     End
 
-    It 'shows a synthesizing placeholder that yields to the real patch'
+    It 'flags the build spinner during synthesis and clears it after'
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         local s
         s=$(bkp::tm::session_new diff "$FIX/anchor")
         bkp::tm::ladder_fill "$s"
-        bkp::tm::synth_placeholder "$s"
-        grep -c 'synthesizing changeset' "$s/current.patch"
-        # a completed refresh replaces it with the real (here: empty) diff
         mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
+        # observe the flag mid-build via a synthesis stub
+        bkp::changeset::patch_live() {
+          [[ -e "$S_UNDER_TEST/building" ]] && print -r -- flag-during-build >&2
+          print -r -- "diff --git a/x b/x"
+        }
+        S_UNDER_TEST="$s"
         bkp::tm::refresh "$s" || return 1
-        grep -c 'synthesizing changeset' "$s/current.patch" || echo replaced
+        [[ -e "$s/building" ]] && print flag-left || print flag-cleared
+        grep -c 'diff --git' "$s/current.patch"
       }
       When run run_it
-      The line 1 should equal 2
-      The line 2 should equal 0
-      The line 3 should equal "replaced"
+      The line 1 should equal "flag-cleared"
+      The line 2 should equal 1
+      The stderr should include "flag-during-build"
     End
 
     It 'supersedes a running synthesis and reaps its pid file'
