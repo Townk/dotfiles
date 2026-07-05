@@ -946,10 +946,12 @@ bkp::tm::lens_cmd() {
     local pf="${BKP_TM_PTYFRAME_BIN:-$HOME/.local/libexec/pty-frame}"
     local -a wrap=()
     if [[ -x "$pf" ]]; then
-      # remap-cols confines the swap to the file tree (diffnav's
-      # fileTreeWidth, pinned in its config.yml) so the diff pane's
-      # file-header boxes — same hardcoded color — never flip with
-      # focus; remap-fg brightens the selected row's text (ui.key).
+      # remap-cols is the tree-width HINT for pty-frame's divider scan:
+      # the swap applies only left of diffnav's detected tree/diff
+      # divider (and not at all when the tree is hidden), so the diff
+      # pane's file-header boxes — same hardcoded color — never flip
+      # with focus. remap-fg brightens the selected row's text (ui.key).
+      # 26 = diffnav fileTreeWidth, pinned in its config.yml.
       wrap=("$pf" --bare --tui
         --title-file "$s/lens-title" --focus-file "$s/focus"
         --title-color "${C_ROLE_UI_ACCENT:-}" --title-color-blur "${C_ROLE_UI_MUTED:-}"

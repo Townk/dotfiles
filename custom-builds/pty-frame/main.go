@@ -921,9 +921,46 @@ func (a *app) drawChrome() {
 	a.tty.WriteString(b.String())
 }
 
+// treeDivider locates the child's tree/diff divider: a column (scanned
+// in a window around the configured tree width) where nearly every grid
+// row holds '│'. diffnav draws it whenever the file tree is visible —
+// and never in the tree-hidden wide mode, where the same hardcoded
+// selection color belongs to diff-pane file headers that must NOT flip
+// with focus. Returns -1 when absent.
+func (a *app) treeDivider() int {
+	if a.cfg.remapCols <= 0 {
+		return -1
+	}
+	lo := a.cfg.remapCols - 4
+	if lo < 1 {
+		lo = 1
+	}
+	hi := a.cfg.remapCols + 10
+	if hi > a.g.w-1 {
+		hi = a.g.w - 1
+	}
+	need := a.g.h * 7 / 10
+	for x := lo; x <= hi; x++ {
+		n := 0
+		for y := 0; y < a.g.h; y++ {
+			if a.g.cells[y][x].r == '│' {
+				n++
+			}
+		}
+		if n >= need {
+			return x
+		}
+	}
+	return -1
+}
+
 func (a *app) blit() {
 	var b strings.Builder
 	b.WriteString("\x1b[?2026h\x1b[?25l")
+	remapDiv := -1
+	if a.cfg.remapSrc.set {
+		remapDiv = a.treeDivider()
+	}
 	for y := 0; y < a.g.h; y++ {
 		moveTo(&b, a.rowOff+y, a.colOff)
 		prev := ""
@@ -933,11 +970,11 @@ func (a *app) blit() {
 				continue // wide-char trailer cell
 			}
 			fg, bg := c.fg, c.bg
-			// The focus remap targets the child's hardcoded selection color;
-			// remapCols confines it to the file-tree columns so same-colored
-			// chrome elsewhere (diff-pane file headers) stays untouched.
-			if a.cfg.remapSrc.set && bg.set && !bg.ansi &&
-				(a.cfg.remapCols <= 0 || x < a.cfg.remapCols) &&
+			// The focus remap targets the child's hardcoded selection color,
+			// confined to the columns LEFT of the detected tree divider so
+			// same-colored chrome elsewhere (diff-pane file headers) stays
+			// untouched — and skipped entirely when the tree is hidden.
+			if remapDiv > 0 && x < remapDiv && bg.set && !bg.ansi &&
 				bg.r == a.cfg.remapSrc.r && bg.g == a.cfg.remapSrc.g && bg.b == a.cfg.remapSrc.b {
 				if a.focused {
 					if a.cfg.remapActive.set {
