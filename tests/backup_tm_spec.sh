@@ -291,12 +291,12 @@ EOS
         source "$LIB/backup-tm.zsh"
         local ovl
         ovl=$(bkp::tm::yazi_overlay "$S")
-        [ -L "$ovl/yazi.toml" ] && echo linked
+        [ -f "$ovl/yazi.toml" ] && grep -q 'ratio = \[ 0, 5, 5 \]' "$ovl/yazi.toml" && echo two-col
         yq -p toml -o json '.' "$ovl/keymap.toml" | jq -r '.mgr.prepend_keymap | length'
         grep -c 'system-backup-tm' "$ovl/keymap.toml" > /dev/null && echo has-bindings
       }
       When run run_it
-      The line 1 should equal "linked"
+      The line 1 should equal "two-col"
       The line 2 should equal 7
       The line 3 should equal "has-bindings"
     End

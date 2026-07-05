@@ -282,9 +282,23 @@ bkp::tm::yazi_overlay() {
   # once dropped the theme on the floor.
   local f
   for f in "$src"/*(DN); do
-    [[ "${f:t}" == keymap.toml || "${f:t}" == init.lua || "${f:t}" == plugins ]] && continue
+    [[ "${f:t}" == keymap.toml || "${f:t}" == init.lua || "${f:t}" == plugins || "${f:t}" == yazi.toml ]] && continue
     ln -sfn "$f" "$ovl/${f:t}"
   done
+  # yazi.toml: user config + 2-column ratio for the scrub session (parent
+  # column dropped — the timeline pane owns "where am I").
+  {
+    [[ -f "$src/yazi.toml" ]] && cat "$src/yazi.toml"
+    if [[ -f "$src/yazi.toml" ]] && grep -q '^\[mgr\]' "$src/yazi.toml"; then
+      :
+    else
+      print -r -- "[mgr]"
+    fi
+  } > "$ovl/yazi.toml"
+  if grep -q '^\[mgr\]' "$ovl/yazi.toml" && ! grep -q '^ratio' "$ovl/yazi.toml"; then
+    awk '{ print } /^\[mgr\]/ && !done { print "ratio = [ 0, 5, 5 ]"; done = 1 }' \
+      "$ovl/yazi.toml" > "$ovl/yazi.toml.new" && mv "$ovl/yazi.toml.new" "$ovl/yazi.toml"
+  fi
   # plugins/: the user's plugins plus the generated session gate.
   mkdir -p "$ovl/plugins"
   if [[ -d "$src/plugins" ]]; then
@@ -295,7 +309,27 @@ bkp::tm::yazi_overlay() {
   bkp::tm::gate_plugin "$ovl/plugins"
   # init.lua: the user's own, then the gate (env-driven, static content).
   {
-    [[ -f "$src/init.lua" ]] && print -r -- "dofile(\"$src/init.lua\")"
+    # Load the user init with Header additions captured and removed — the
+    # user@host element wastes the narrow session header (tm-gate owns it).
+    if [[ -f "$src/init.lua" ]]; then
+      cat <<'LUA'
+do
+	local _add, ids = Header.children_add, {}
+	Header.children_add = function(self, fn, order)
+		local id = _add(self, fn, order)
+		ids[#ids + 1] = id
+		return id
+	end
+LUA
+      print -r -- "	dofile(\"$src/init.lua\")"
+      cat <<'LUA'
+	for _, id in ipairs(ids) do
+		pcall(function() Header:children_remove(id) end)
+	end
+	Header.children_add = _add
+end
+LUA
+    fi
     print -r -- 'require("tm-gate"):setup()'
   } > "$ovl/init.lua"
   local bin='$HOME/.local/bin/system-backup-tm'
@@ -405,6 +439,21 @@ function M:setup()
 		end
 	end)
 
+	-- Focus-aware hover: the timeline pane publishes tm-focus 0/1 over DDS;
+	-- unfocused yazi dims its hovered row to the inactive-tab background.
+	local inact = os.getenv("BKP_TM_INACTIVE_BG")
+	if inact then
+		local orig = th and th.mgr and th.mgr.hovered
+		ps.sub_remote("tm-focus", function(body)
+			if tostring(body) == "0" then
+				th.mgr.hovered = ui.Style():bg(inact)
+			elseif orig then
+				th.mgr.hovered = orig
+			end
+			ya.render()
+		end)
+	end
+
 	-- Header: hide the mount plumbing, show when + where (live-relative).
 	pcall(function()
 		Header.cwd = function(_)
@@ -457,6 +506,7 @@ bkp::tm::lens_cmd() {
   yid=$(<"$s/yazi.id")
   print -rl -- env "YAZI_CONFIG_HOME=$ovl" \
     "BKP_TM_MNT=$s/mnt" "BKP_TM_ANCHOR=$anchor" "BKP_TM_SESSION=$s" \
+    "BKP_TM_INACTIVE_BG=${C_HEX_TAB_BG:-}" \
     yazi --client-id "$yid" "$rung$anchor"
 }
 

@@ -100,7 +100,8 @@ func focused() bool {
 type ui struct {
 	sess, anchor, ctlBin     string
 	activeBG, inactiveBG     string
-	keyFG, hintFG            string
+	keyFG, hintFG, titleFG   string
+	lens, yaziID, inactHex   string
 	ladder                   []rung
 	rungIdx                  int
 	focus                    bool
@@ -109,17 +110,13 @@ type ui struct {
 
 func (u *ui) frame() string {
 	var b strings.Builder
-	title := u.anchor
-	if home, err := os.UserHomeDir(); err == nil {
-		title = strings.Replace(title, home, "~", 1)
-	}
-	b.WriteString(fmt.Sprintf(" %s⏱ tm%s %s%s%s\r\n\r\n", bwh, reset, dim, title, reset))
+	b.WriteString(fmt.Sprintf(" %s▓▓▓ Snapshots%s\r\n\r\n", u.titleFG, reset))
 
 	bg := u.inactiveBG
 	if u.focus {
 		bg = u.activeBG
 	}
-	width := u.w - 1
+	width := u.w
 	height := u.h - 5
 	if height < 3 {
 		height = 3
@@ -145,18 +142,18 @@ func (u *ui) frame() string {
 			pad2 := strings.Repeat(" ", max(0, width-3-len(clock)))
 			rows = append(rows,
 				row{bg + " " + gc + "●" + reset + bg + " " + date + pad1 + reset, i + 1},
-				row{bg + " " + gc + "┃" + reset + bg + " " + clock + pad2 + reset, i + 1})
+				row{bg + " " + gc + "⋮" + reset + bg + " " + clock + pad2 + reset, i + 1})
 		} else {
 			rows = append(rows,
 				row{" " + gc + "●" + reset + " " + date, i + 1},
-				row{" " + gc + "┃" + reset + " " + dim + clock + reset, i + 1})
+				row{" " + gc + "⋮" + reset + " " + dim + clock + reset, i + 1})
 		}
 		if i+1 < len(u.ladder) {
 			cc := yellw
 			if i+1 < u.rungIdx {
 				cc = red
 			}
-			rows = append(rows, row{" " + cc + "┃" + reset, 0})
+			rows = append(rows, row{" " + cc + "⋮" + reset, 0})
 		}
 	}
 
@@ -187,8 +184,9 @@ func (u *ui) frame() string {
 	}
 
 	k, h := u.keyFG, u.hintFG
-	b.WriteString(fmt.Sprintf("\r\n %sj/k%s%s : scrub%s\x1b[K\r\n %sa%s%s : apply%s %s·%s %sq%s%s : quit%s",
-		k, reset, h, reset, k, reset, h, reset, h, reset, k, reset, h, reset))
+	b.WriteString(fmt.Sprintf("\r\n %s\U000F0636K%s%s newer%s %s·%s %s\U000F0636J%s%s older%s\x1b[K\r\n %s\U000F12B7%s%s quit%s %s·%s %sa%s%s apply%s",
+		k, reset, h, reset, h, reset, k, reset, h, reset,
+		k, reset, h, reset, h, reset, k, reset, h, reset))
 	return b.String()
 }
 
@@ -207,6 +205,7 @@ func main() {
 	inactiveBG := flag.String("inactive-bg", "", "highlight bg (unfocused), #rrggbb")
 	keyFG := flag.String("key-fg", "", "footer key color, #rrggbb")
 	hintFG := flag.String("hint-fg", "", "footer hint color, #rrggbb")
+	titleFG := flag.String("title-fg", "", "pane title color, #rrggbb")
 	flag.Parse()
 	sess := flag.Arg(0)
 	if sess == "" {
@@ -227,6 +226,10 @@ func main() {
 		inactiveBG: sgr(*inactiveBG, true),
 		keyFG:      sgr(*keyFG, false),
 		hintFG:     sgr(*hintFG, false),
+		titleFG:    sgr(*titleFG, false),
+		lens:       readTrim(filepath.Join(sess, "lens")),
+		yaziID:     readTrim(filepath.Join(sess, "yazi.id")),
+		inactHex:   *inactiveBG,
 		ladder:     readLadder(sess),
 		rungIdx:    1,
 		focus:      true,
@@ -289,9 +292,9 @@ func main() {
 				return
 			}
 			switch c {
-			case 'j':
+			case 'j', 'J':
 				u.ctl("older")
-			case 'k':
+			case 'k', 'K':
 				u.ctl("newer")
 			case 'a':
 				cmd := exec.Command(u.ctlBin, "apply", u.sess)
@@ -318,6 +321,15 @@ func main() {
 				if f := focused(); f != u.focus {
 					u.focus = f
 					dirty = true
+					// Tell yazi so its hovered-row bg mirrors the swap.
+					if u.lens == "explore" && u.yaziID != "" {
+						v := "1"
+						if !f {
+							v = "0"
+						}
+						c := exec.Command("ya", "pub-to", u.yaziID, "tm-focus", "--str", v)
+						go func() { _ = c.Run() }()
+					}
 				}
 			}
 		}

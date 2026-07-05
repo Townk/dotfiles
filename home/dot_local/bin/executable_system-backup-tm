@@ -47,6 +47,17 @@ tm_timeline() {
     # hunk --watch opens). Explore starts at the right rung by argv — an
     # eager refresh here would race yazi's startup and flag a respawn.
     [[ "$(<"$s/lens")" == diff ]] && { bkp::tm::refresh "$s" || : }
+    # Converge this pane to the 21-column design width (resize acts on the
+    # focused pane — the lens — so growing it leftward narrows us).
+    if [[ -n "${ZELLIJ:-}" && -t 0 ]]; then
+      local _cols _i
+      for _i in {1..30}; do
+        _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
+        [[ -n "$_cols" ]] && (( _cols > 21 )) || break
+        zellij action resize increase left 2>/dev/null || break
+        sleep 0.05
+      done
+    fi
     local tlbin="${BKP_TM_TIMELINE_BIN:-$HOME/.local/libexec/tm-timeline}"
     if [[ -t 0 && -x "$tlbin" ]]; then
       # Compiled timeline pane (custom-builds/tm-timeline, pty-frame
@@ -54,7 +65,8 @@ tm_timeline() {
       # Theme flows in as flags from the single-source palette. The shell
       # loop below remains the no-Go fallback.
       "$tlbin" --active-bg "${C_HEX_TAB_ACTIVE_BG:-}" --inactive-bg "${C_HEX_TAB_BG:-}" \
-        --key-fg "${C_ROLE_UI_KEY:-}" --hint-fg "${C_ROLE_UI_HINT:-}" "$s" || :
+        --key-fg "${C_ROLE_UI_KEY:-}" --hint-fg "${C_ROLE_UI_HINT:-}" \
+        --title-fg "${C_ROLE_UI_ACCENT:-}" "$s" || :
       return 0
     fi
     local key rest last_state="" rung focused height width interactive=1
