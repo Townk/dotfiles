@@ -236,6 +236,12 @@ bkp::tm::build_wait() {
     strftime -s when ' for %a, %b %e %I:%M %p' "$epoch"
     when="${when//  / }"
   fi
+  # The lens UI just got SIGTERMed mid-flight: the pane is still in its
+  # raw modes (kitty keyboard flags, mouse tracking, alt screen, pending
+  # DA/CSI-u queries whose replies would echo as visible escape junk).
+  # Sanitize before drawing anything: pop kitty flags, reset
+  # modifyOtherKeys, mouse/focus/paste/sync off, main screen, cursor on.
+  printf '\e[<u\e[>4;0m\e[?1000l\e[?1002l\e[?1003l\e[?1006l\e[?1004l\e[?2004l\e[?2026l\e[?1049l\e[?25h'
   # The static line always shows (even if gum degrades in an odd tty);
   # gum animates below it when available.
   printf '\e[2J\e[H\n %s building the changeset%s…%s\n\n' \
