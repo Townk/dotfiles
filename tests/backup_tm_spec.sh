@@ -102,6 +102,25 @@ EOF
       The output should equal 1
     End
 
+    It 'shows a synthesizing placeholder that yields to the real patch'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        local s
+        s=$(bkp::tm::session_new diff "$FIX/anchor")
+        bkp::tm::ladder_fill "$s"
+        bkp::tm::synth_placeholder "$s"
+        grep -c 'synthesizing changeset' "$s/current.patch"
+        # a completed refresh replaces it with the real (here: empty) diff
+        mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
+        bkp::tm::refresh "$s" || return 1
+        grep -c 'synthesizing changeset' "$s/current.patch" || echo replaced
+      }
+      When run run_it
+      The line 1 should equal 2
+      The line 2 should equal 0
+      The line 3 should equal "replaced"
+    End
+
     It 'supersedes a running synthesis and reaps its pid file'
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic

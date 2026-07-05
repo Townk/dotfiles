@@ -116,6 +116,8 @@ bkp::tm::refresh() {
     fi
     print -r -- $$ > "$s/refresh.pid"
     rm -rf "$s"/bkp-liveview.*(N) 2>/dev/null
+    # Visible feedback while the (possibly minutes-long) build runs.
+    bkp::tm::synth_placeholder "$s"
     # The live view lands inside the session dir — rm -rf at teardown
     # sweeps it even when its builder died mid-copy.
     local BKP_LIVEVIEW_DIR="$s"
@@ -182,6 +184,36 @@ bkp::tm::step() {
 
 # bkp::tm::end <session> — signal every session process to wind down.
 bkp::tm::end() { touch "$1/closed" }
+
+# bkp::tm::synth_placeholder <session>
+# hunk cannot distinguish "no changes yet" from "still synthesizing" —
+# an empty patch renders as a clean no-changes state, which reads as
+# "this rung has no diff" while a slow build (FUSE reads of every
+# captured file) is still running. Show a placeholder row instead; the
+# real patch replaces it via the same mv that hunk --watch picks up.
+bkp::tm::synth_placeholder() {
+  local s="$1"
+  {
+    print -r -- 'diff --git a/[tm] synthesizing changeset… b/[tm] synthesizing changeset…'
+    print -r -- 'new file mode 100644'
+    print -r -- '--- /dev/null'
+    print -r -- '+++ b/[tm] synthesizing changeset…'
+    print -r -- '@@ -0,0 +1 @@'
+    print -r -- '+building the diff against this snapshot — one moment…'
+  } > "$s/current.patch.tmp"
+  mv "$s/current.patch.tmp" "$s/current.patch"
+}
+
+# bkp::tm::session_rm <session>
+# Remove the session dir, tolerating a just-killed synthesis whose
+# rsync receiver is still flushing its last writes — a straight rm -rf
+# races it and spews "Directory not empty" onto the user's prompt.
+bkp::tm::session_rm() {
+  rm -rf "$1" 2>/dev/null || :
+  [[ -e "$1" ]] || return 0
+  sleep 0.5
+  rm -rf "$1" 2>/dev/null || :
+}
 
 # bkp::tm::kill_lens <session>
 # End the lens pane's process tree: the wrapper's children first (the
@@ -928,6 +960,6 @@ bkp::tm::fallback() {
   } always {
     bkp::tm::kill_lens "$s"
     [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
-    rm -rf "$s"
+    bkp::tm::session_rm "$s"
   }
 }
