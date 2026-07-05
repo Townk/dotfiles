@@ -55,17 +55,10 @@ tm_timeline() {
       : > "$s/current.patch"
       ( bkp::tm::refresh "$s" || : ) >> "$s/refresh.log" 2>&1 &!
     fi
-    # Converge this pane to the 21-column design width (resize acts on the
-    # focused pane — the lens — so growing it leftward narrows us).
-    if [[ -n "${ZELLIJ:-}" && -t 0 ]]; then
-      local _cols _i
-      for _i in {1..30}; do
-        _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
-        [[ -n "$_cols" ]] && (( _cols > 21 )) || break
-        zellij action resize increase left 2>/dev/null || break
-        sleep 0.05
-      done
-    fi
+    # Pane geometry is settled by launch BEFORE this verb runs: resize
+    # acts on the focused pane, and by now the user may be focused on a
+    # different pane or tab entirely — resizing from here would mangle
+    # whatever they are looking at.
     local tlbin="${BKP_TM_TIMELINE_BIN:-$HOME/.local/libexec/tm-timeline}"
     if [[ -t 0 && -x "$tlbin" ]]; then
       # Compiled timeline pane (custom-builds/tm-timeline, pty-frame
@@ -313,6 +306,15 @@ tm_apply() {
         ' "$s/current.patch" | sort -u)}")
     fi
     if (( ! ${#cands} )) || [[ -z "${cands[1]}" ]]; then
+      # Apply fires from the timeline pane's ctl, whose stderr is
+      # /dev/null — a bare warning here IS "nothing happens". Show a
+      # transient notice float instead.
+      if [[ -n "${ZELLIJ:-}" ]]; then
+        zellij action new-pane --floating --close-on-exit --name "" \
+          --borderless true --pinned true --width 52 --height 3 -- \
+          zsh -c 'print; print -r -- "  this snapshot shows no changes — nothing to apply"; sleep 2' \
+          2>/dev/null || :
+      fi
       log_warn "bkp: this rung shows no changes — nothing to apply"
       return 0
     fi

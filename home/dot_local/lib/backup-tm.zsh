@@ -1062,14 +1062,23 @@ bkp::tm::launch() {
       fi
       zellij run --close-on-exit --direction right --name "tm lens" \
         -- "$BKP_TM_BIN" lens "$s" >/dev/null || { rm -rf "$s"; return 1 }
-      # The new pane takes focus; grow it leftward so the timeline pane
-      # narrows toward its ~26-col design width. Focus STAYS on the lens —
-      # scrubbing works from inside it (Shift+arrows), and a focused
+      # The new pane takes focus; grow it leftward until THIS pane (the
+      # timeline-to-be) converges on its 21-col design width. Geometry
+      # must settle HERE, while the origin tab is guaranteed active —
+      # the timeline verb can't do it later, since resize acts on the
+      # focused pane and the user may be on another tab by then. Focus
+      # STAYS on the lens: scrubbing works from inside it, and a focused
       # timeline reads as two active panes with no visual tiebreaker.
-      local i
-      for i in 1 2 3 4 5; do
-        zellij action resize increase left 2>/dev/null || break
-      done
+      zellij action resize increase left 2>/dev/null || :
+      if [[ -t 0 ]]; then   # /dev/tty redirection aborts headless runs
+        local i _cols
+        for i in {1..30}; do
+          _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
+          [[ -n "$_cols" ]] && (( _cols > 21 )) || break
+          zellij action resize increase left 2>/dev/null || break
+          sleep 0.05
+        done
+      fi
       (( _hop )) && zellij action go-to-tab $(( _now_tab + 1 )) 2>/dev/null || :
       "$BKP_TM_BIN" timeline "$s" || return $?
     fi

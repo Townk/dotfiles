@@ -297,6 +297,16 @@ keybinds clear-defaults=true {
             }
         }
 
+        // Shift+A in tm session panes: the apply flow (same as `a` in the
+        // timeline pane / yazi) — makes the "A apply" hint true from the
+        // diffnav lens too. Passthrough everywhere else.
+        bind "A" {
+            MessagePlugin "context-keys" {
+                name "shift+a"
+                payload "default: $source; when yazi: $source; when diffnav,system-backup-tm,tm-timeline: run {{ joinPath .chezmoi.homeDir ".local/bin/system-backup-tm" }} route apply {pid}"
+            }
+        }
+
         // (ai-playbook is triggered by Ctrl+Alt+A, handled entirely in zsh — it
         // arrives as the legacy sequence ESC Ctrl-A (\e^A) which passes straight
         // through Zellij to the pane, so no Zellij bind is needed here. See the

@@ -320,7 +320,7 @@ func main() {
 				u.ctl("older")
 			case 'k', 'K':
 				u.ctl("newer")
-			case 'a':
+			case 'a', 'A':
 				cmd := exec.Command(u.ctlBin, "apply", u.sess)
 				go func() { _ = cmd.Run() }()
 			case 'q', 3, 27: // q, Ctrl-C, bare ESC
