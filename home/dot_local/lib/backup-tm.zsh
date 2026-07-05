@@ -211,6 +211,7 @@ bkp::tm::timeline_render() {
   for (( i = 1; i <= n; i++ )); do
     epoch="${${ladder[i]#*$'\t'}%%$'\t'*}"
     strftime -s date_s '%a, %b %e %Y' "$epoch"
+    date_s="${date_s//  / }"   # %e space-pads single-digit days
     strftime -s time_s '%I:%M %p' "$epoch"
     time_s="${(L)time_s}"
     if (( i < cur )); then gc="$C_RED"
@@ -646,7 +647,8 @@ function M:setup()
 			local hl_fg = focus and act_fg or dim_fg
 			local rows = {}
 			for i, r in ipairs(ladder) do
-				local date = os.date("%a, %b %e %Y", r.epoch)
+				-- %e space-pads single-digit days ("Jul  5") — collapse it.
+				local date = os.date("%a, %b %e %Y", r.epoch):gsub("%s%s+", " ")
 				local clock = string.lower(os.date("%I:%M %p", r.epoch))
 				local gc = i < cur and "red" or (i == cur and "green" or "yellow")
 				if i == cur and hl_bg and hl_fg then

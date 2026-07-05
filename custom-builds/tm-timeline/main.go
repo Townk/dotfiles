@@ -128,7 +128,7 @@ func (u *ui) frame() string {
 	var rows []row
 	for i, r := range u.ladder {
 		t := time.Unix(r.epoch, 0)
-		date := t.Format("Mon, Jan _2 2006")
+		date := t.Format("Mon, Jan 2 2006")
 		clock := t.Format("03:04 pm")
 		gc := yellw
 		if i+1 < u.rungIdx {
