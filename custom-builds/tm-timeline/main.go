@@ -333,9 +333,12 @@ func main() {
 							u.yaziID = readTrim(filepath.Join(u.sess, "yazi.id"))
 						}
 						if u.yaziID != "" {
-							v := "1"
+							// Publish the LENS's focus, which within the
+							// session tab is the negation of ours — yazi
+							// dims when the TIMELINE is the focused pane.
+							v := "0"
 							if !f {
-								v = "0"
+								v = "1"
 							}
 							c := exec.Command("ya", "pub-to", u.yaziID, "tm-focus", "--str", v)
 							go func() { _ = c.Run() }()
