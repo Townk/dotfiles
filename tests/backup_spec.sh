@@ -1960,7 +1960,7 @@ EOF
         cat > "$FIX/snaps.json" <<'JSON'
 [{"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
 JSON
-        printf '#!/bin/sh\ncase "$1 $2" in\n  "snapshots --json") cat "%s/snaps.json" ;;\n  *) exit 0 ;;\nesac\n' "$FIX" > "$STUB/restic"
+        printf '#!/bin/sh\ncase "$1 $2" in\n  "snapshots --json") cat "%s/snaps.json" ;;\n  mount*) mkdir -p "$2/snapshots"; sleep 3 ;;\n  *) exit 0 ;;\nesac\n' "$FIX" > "$STUB/restic"
         chmod +x "$STUB/restic"
         printf 'roots = []\n' > "$FIX/m.toml"
         mkdir -p "$FIX/anchor"

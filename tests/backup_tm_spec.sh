@@ -593,6 +593,7 @@ EOF
     It 'splits the current tab: lens pane right, timeline in the invoking pane'
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
+        bkp::mount() { mkdir -p "$2/snapshots"; REPLY=$$; }
         bkp::tm::launch explore "$FIX/anchor"
         cat "$FIX/zj.calls"
         cat "$FIX/tm.calls"
