@@ -507,7 +507,10 @@ function M:setup()
 			else
 				th.indicator.current = ui.Style():fg(actfg):bg(act):bold()
 			end
+			-- ya.render() alone leaves the cursor row stale until the next
+			-- cursor event — emit a zero-move arrow to force one.
 			ya.render()
+			ya.emit("arrow", { 0 })
 		end)
 	end
 
