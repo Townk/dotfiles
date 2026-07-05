@@ -102,6 +102,28 @@ EOF
       The output should equal 1
     End
 
+    It 'serves a revisited rung from the patch cache (one synthesis per rung)'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        local s calls="$FIX/synth.calls"
+        s=$(bkp::tm::session_new diff "$FIX/anchor")
+        bkp::tm::ladder_fill "$s"
+        mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
+        bkp::changeset::patch_live() {
+          print -r -- synth >> "$FIX/synth.calls"
+          print -r -- "diff --git a/x b/x for rung ${1:t}"
+        }
+        bkp::tm::step "$s" older    # rung 2: synthesis #1
+        bkp::tm::step "$s" newer    # rung 1: synthesis #2
+        bkp::tm::step "$s" older    # rung 2 again: cache hit
+        grep -c '' "$calls"
+        grep -c 'aaaa0000' "$s/current.patch"
+      }
+      When run run_it
+      The line 1 should equal 2
+      The line 2 should equal 1
+    End
+
     It 'shows a synthesizing placeholder that yields to the real patch'
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic

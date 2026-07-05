@@ -420,7 +420,13 @@ tm_confirm_apply() {
     input::confirm "$prompt" --title "Apply from the past" --warning \
       --default no --affirmative "Restore" --negative "Cancel" >/dev/null || return 0
   fi
-  bkp::restore::paths "$snap" --force "${live[@]}"
+  bkp::restore::paths "$snap" --force "${live[@]}" || return $?
+  # The live side just changed: every cached rung patch is stale, and
+  # the visible changeset should reflect the new reality — rebuild in
+  # the background (the float must not hang on a slow synthesis).
+  rm -rf "$s/patches"
+  ( bkp::tm::refresh "$s" || : ) >> "$s/refresh.log" 2>&1 &!
+  return 0
 }
 
 main() {

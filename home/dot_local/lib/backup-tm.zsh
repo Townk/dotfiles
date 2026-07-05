@@ -103,6 +103,19 @@ bkp::tm::refresh() {
   [[ -e "$s/closed" || ! -d "$s" ]] && return 0
   lens=$(<"$s/lens") anchor=$(<"$s/anchor")
   if [[ "$lens" == diff ]]; then
+    # NOT $$: the initial refresh runs as a backgrounded SUBSHELL of the
+    # timeline pane, and zsh's $$ stays the parent's pid there — the
+    # first scrub would supersede-kill the whole session.
+    local self="${sysparams[pid]:-$$}"
+    # A rung whose patch was already built this session is served from
+    # the cache — scrubbing back is instant, and a slow build only ever
+    # has to survive once. The apply flow invalidates the cache.
+    bkp::tm::rung_id "$s" || return 1
+    local pcache="$s/patches/${REPLY[1,8]}.patch"
+    if [[ -f "$pcache" ]]; then
+      cp "$pcache" "$s/current.patch.new" && mv "$s/current.patch.new" "$s/current.patch"
+      return 0
+    fi
     # Only the LATEST rung's synthesis matters: every scrub step spawns
     # an orphaned ctl, and a whole-tree synthesis can run for minutes —
     # unsupervised they pile up into a fork storm (the 200-rsync
@@ -110,11 +123,11 @@ bkp::tm::refresh() {
     # and record ourselves so the teardown can reap us too.
     local prev=""
     [[ -f "$s/refresh.pid" ]] && prev=$(<"$s/refresh.pid")
-    if [[ -n "$prev" && "$prev" != "$$" ]]; then
+    if [[ -n "$prev" && "$prev" != "$self" ]]; then
       pkill -P "$prev" 2>/dev/null
       kill "$prev" 2>/dev/null
     fi
-    print -r -- $$ > "$s/refresh.pid"
+    print -r -- "$self" > "$s/refresh.pid"
     rm -rf "$s"/bkp-liveview.*(N) 2>/dev/null
     # Visible feedback while the (possibly minutes-long) build runs.
     bkp::tm::synth_placeholder "$s"
@@ -128,12 +141,15 @@ bkp::tm::refresh() {
     # A failed synthesis must not kill the session: hunk renders an empty
     # patch as a graceful "no files" state and --watch refills it on the
     # next scrub step, so degrade to empty instead of erroring out.
-    if ! bkp::changeset::patch_live "$rung" "$anchor" > "$s/current.patch.new"; then
+    if bkp::changeset::patch_live "$rung" "$anchor" > "$s/current.patch.new"; then
+      mkdir -p "$s/patches"
+      cp "$s/current.patch.new" "$pcache"
+    else
       log_warn "bkp: changeset synthesis failed for this rung — showing an empty changeset"
       : > "$s/current.patch.new"
     fi
     mv "$s/current.patch.new" "$s/current.patch"
-    [[ -f "$s/refresh.pid" && "$(<"$s/refresh.pid")" == "$$" ]] && rm -f "$s/refresh.pid"
+    [[ -f "$s/refresh.pid" && "$(<"$s/refresh.pid")" == "$self" ]] && rm -f "$s/refresh.pid"
   else
     # Explore still needs the real mount — yazi navigates it live.
     bkp::tm::rung_path "$s" || return 1
