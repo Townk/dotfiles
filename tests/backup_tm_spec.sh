@@ -299,7 +299,7 @@ EOS
       }
       When run run_it
       The line 1 should equal "three-col"
-      The line 2 should equal 11
+      The line 2 should equal 17
       The line 3 should equal "has-bindings"
       The line 4 should equal "positional-args"
     End
@@ -326,7 +326,7 @@ EOF
         jq -r '.input.prepend_keymap | length' <<<"$json"
       }
       When run run_it
-      The line 1 should equal 12
+      The line 1 should equal 18
       The line 2 should equal "K"
       The line 3 should equal "X"
       The line 4 should equal 1
@@ -377,6 +377,7 @@ EOF
         [ -L "$ovl/plugins/userp.yazi" ] && echo userplugin-linked
         # one cd subscription: the navigation bounce
         grep -c 'ps.sub("cd"' "$ovl/plugins/tm-gate.yazi/main.lua"
+        # two BKP_TM_MNT reads: the setup gate + the h-at-root handler
         grep -c 'BKP_TM_MNT' "$ovl/plugins/tm-gate.yazi/main.lua"
         # the timeline renders inside yazi's parent column, and the dead
         # tm-focus/cursor-bounce machinery stays gone
@@ -389,7 +390,7 @@ EOF
       The line 1 should equal "theme-linked"
       The line 2 should equal "userplugin-linked"
       The line 3 should equal 1
-      The line 4 should equal 1
+      The line 4 should equal 2
       The line 5 should equal "timeline-in-parent"
       The line 6 should equal "no-tm-focus"
       The line 7 should equal 1

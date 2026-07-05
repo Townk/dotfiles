@@ -274,9 +274,13 @@ bkp::tm::timeline_render() {
 #   K / J           timeline newer / older (parent-arrow muscle memory)
 #   Shift-Up/Down   same step, native yazi binding (works outside Zellij too)
 #   H / L           focus the timeline / the file list (indicator + timeline
-#                   highlight trade the active palette)
+#                   highlight trade the active palette); Shift-Left/Right too
 #   j / k           scoped by focus: file-list cursor, or scrub when the
 #                   timeline holds the focus
+#   h / Left        leave — except at the session root, where the focus
+#                   moves to the timeline (and once there, h is a no-op)
+#   l / Right       open — except from the timeline, where the focus
+#                   returns to the file area
 #   R               restore selection to the live filesystem (gated apply flow)
 bkp::tm::yazi_overlay() {
   local s="$1" src="${YAZI_USER_CONFIG:-$HOME/.config/yazi}" ovl="$1/yazi"
@@ -384,8 +388,14 @@ LUA
     "  { on = \"<S-Down>\", run = 'shell --orphan \"$bin ctl $s older \\\"\$0\\\"\"', desc = \"tm: older snapshot\" },"
     "  { on = \"H\", run = \"plugin tm-gate focus\", desc = \"tm: focus the timeline\" },"
     "  { on = \"L\", run = \"plugin tm-gate blur\", desc = \"tm: focus the file list\" },"
+    "  { on = \"<S-Left>\", run = \"plugin tm-gate focus\", desc = \"tm: focus the timeline\" },"
+    "  { on = \"<S-Right>\", run = \"plugin tm-gate blur\", desc = \"tm: focus the file list\" },"
     "  { on = \"j\", run = \"plugin tm-gate j\", desc = \"tm: down (file list) / older (timeline)\" },"
     "  { on = \"k\", run = \"plugin tm-gate k\", desc = \"tm: up (file list) / newer (timeline)\" },"
+    "  { on = \"h\", run = \"plugin tm-gate h\", desc = \"tm: leave; timeline focus at the root\" },"
+    "  { on = \"<Left>\", run = \"plugin tm-gate h\", desc = \"tm: leave; timeline focus at the root\" },"
+    "  { on = \"l\", run = \"plugin tm-gate l\", desc = \"tm: open; file focus from the timeline\" },"
+    "  { on = \"<Right>\", run = \"plugin tm-gate l\", desc = \"tm: open; file focus from the timeline\" },"
     "  { on = \"R\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"<S-Enter>\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"q\", run = [ 'shell --orphan \"$bin ctl $s end\"', \"quit\" ], desc = \"tm: end scrub session\" },"
@@ -480,6 +490,30 @@ function M:entry(job)
 		set_tl_focus(true)
 	elseif arg == "blur" then
 		set_tl_focus(false)
+	elseif arg == "h" then
+		-- Immutable rule: with the timeline focused, h/Left do NOTHING.
+		-- In the file area they leave as usual, except at the session
+		-- root, where "one more left" hands the focus to the timeline.
+		local focused, cwd = get_nav()
+		if focused then
+			return
+		end
+		local mnt = os.getenv("BKP_TM_MNT")
+		local anchor = os.getenv("BKP_TM_ANCHOR") or ""
+		if mnt and cwd:match("^" .. esc(mnt) .. "/ids/[^/]+" .. esc(anchor) .. "$") then
+			set_tl_focus(true)
+		else
+			ya.emit("leave", {})
+		end
+	elseif arg == "l" then
+		-- l/Right from the timeline return to the file area; in the file
+		-- area they keep their native enter/open behavior.
+		local focused = get_nav()
+		if focused then
+			set_tl_focus(false)
+		else
+			ya.emit("open", {})
+		end
 	elseif arg == "j" or arg == "k" then
 		-- j/k are scoped by the focused side: file-list cursor when the
 		-- list owns focus, snapshot scrub when the timeline does (same
