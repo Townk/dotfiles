@@ -524,6 +524,34 @@ bkp::tm::launch() {
   local s
   s=$(bkp::tm::session_new "$lens" "$anchor") || return $?
   if [[ -n "${ZELLIJ:-}" ]]; then
+    # ALL slow prep happens here, before any layout change: spinner per
+    # stage (gum), completion line after each, split only when ready.
+    local _spin=0
+    [[ -t 1 ]] && command -v gum >/dev/null 2>&1 && (( ! ${+functions[gum]} )) && _spin=1
+    if (( _spin )); then
+      gum spin --spinner dot --title "Reading the snapshot ladder…" -- \
+        zsh -c "source '$HOME/.local/lib/backup-tm.zsh'; bkp::tm::ladder_fill '$s'" ||
+        { rm -rf "$s"; return 2 }
+      log_ok "bkp: snapshot ladder ready"
+    else
+      bkp::tm::ladder_fill "$s" || { rm -rf "$s"; return 2 }
+    fi
+    if bkp::ux::has_fuse; then
+      if (( _spin )); then
+        gum spin --spinner dot --title "Mounting the snapshot repository…" -- \
+          zsh -c "source '$HOME/.local/lib/backup-tm.zsh'
+                  bkp::mount \"\$(bkp::config::staging_path)\" '$s/mnt' &&
+                  print -r -- \$REPLY > '$s/mount.pid'" ||
+          { rm -rf "$s"; return 1 }
+        log_ok "bkp: repository mounted"
+      else
+        local staging REPLY
+        staging=$(bkp::config::staging_path) || { rm -rf "$s"; return 2 }
+        bkp::mount "$staging" "$s/mnt" || { rm -rf "$s"; return 1 }
+        print -r -- "$REPLY" > "$s/mount.pid"
+      fi
+    fi
+    touch "$s/ready"
     zellij run --close-on-exit --direction right --name "tm lens" \
       -- "$BKP_TM_BIN" lens "$s" >/dev/null || { rm -rf "$s"; return 1 }
     # The new pane takes focus; grow it leftward so the timeline pane

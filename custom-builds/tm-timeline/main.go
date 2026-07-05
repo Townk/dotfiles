@@ -184,7 +184,12 @@ func (u *ui) frame() string {
 	}
 
 	k, h := u.keyFG, u.hintFG
-	b.WriteString(fmt.Sprintf("\r\n %s\U000F0636K%s%s newer%s %s·%s %s\U000F0636J%s%s older%s\x1b[K\r\n  %s\U000F12B7%s%s quit%s  %s·%s  %sa%s%s apply%s",
+	sep := u.w - 2
+	if sep < 1 {
+		sep = 1
+	}
+	b.WriteString(" " + dim + strings.Repeat("━", sep) + reset + " \x1b[K\r\n")
+	b.WriteString(fmt.Sprintf(" %s\U000F0636K%s%s newer%s %s·%s %s\U000F0636J%s%s older%s\x1b[K\r\n  %s\U000F12B7%s%s quit%s  %s·%s  %sa%s%s apply%s",
 		k, reset, h, reset, h, reset, k, reset, h, reset,
 		k, reset, h, reset, h, reset, k, reset, h, reset))
 	return b.String()
