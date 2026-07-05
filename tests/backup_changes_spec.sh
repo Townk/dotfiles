@@ -264,6 +264,35 @@ EOF
       The status should be success
       The output should equal ""
     End
+
+    It 'tolerates rsync partial-transfer (rc 23/24) when building the view'
+      run_it() {
+        source "$LIB/backup.zsh"
+        mkfifo "$FIX/live/pipe.fifo"
+        # rsync stub: copies what held still, then reports "files
+        # vanished" (rc 24) — routine on a churning live tree, and the
+        # view must still be used, not discarded.
+        STUB="$FIX/stub"; mkdir -p "$STUB"
+        cat > "$STUB/rsync" <<'EOF'
+#!/bin/sh
+n=$#
+dst=$(eval "echo \${$n}")
+m=$((n - 1))
+src=$(eval "echo \${$m}")
+mkdir -p "$dst"
+cp "$src"f.txt "$dst"/f.txt 2>/dev/null
+exit 24
+EOF
+        chmod +x "$STUB/rsync"
+        PATH="$STUB:$PATH"
+        bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live"
+      }
+      When run run_it
+      The status should be success
+      The output should include "+new"
+      The output should not include "bkp-liveview"
+      The stderr should equal ""
+    End
   End
 
   Describe 'bkp::ux::changes_cmd'

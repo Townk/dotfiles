@@ -693,11 +693,16 @@ bkp::changeset::patch_live() {
   local live="$scope" view=""
   if [[ -d "$scope" ]] && [[ -n "$(find "$scope" \( -type s -o -type p -o -type b -o -type c \) -print -quit 2>/dev/null)" ]]; then
     view=$(mktemp -d "${TMPDIR:-/tmp}/bkp-liveview.XXXXXX") || return 1
-    rsync -rlpt --link-dest="$scope" "$scope/" "$view/" 2>/dev/null || {
+    rsync -rlpt --link-dest="$scope" "$scope/" "$view/" 2>/dev/null
+    local rrc=$?
+    # 23/24 = partial transfer / files vanished mid-copy — routine on a
+    # live tree (caches churn under us); the view is still a usable
+    # clean copy of everything that held still. Anything else is fatal.
+    if (( rrc != 0 && rrc != 23 && rrc != 24 )); then
       rm -rf "$view"
-      log_error "bkp: could not build a clean live view for $scope"
+      log_error "bkp: could not build a clean live view for $scope (rsync rc=$rrc)"
       return 1
-    }
+    fi
     live="$view"
   fi
   {

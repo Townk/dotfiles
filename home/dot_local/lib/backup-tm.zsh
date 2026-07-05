@@ -98,6 +98,9 @@ bkp::tm::rung_root() {
 # a respawn for the lens loop).
 bkp::tm::refresh() {
   local s="$1" lens anchor REPLY
+  # A background synthesis may outlive the session (teardown races it) —
+  # never write into a dir that is already winding down.
+  [[ -e "$s/closed" || ! -d "$s" ]] && return 0
   lens=$(<"$s/lens") anchor=$(<"$s/anchor")
   if [[ "$lens" == diff ]]; then
     # FUSE-less fallback: rung_root restores the scoped subtree to a

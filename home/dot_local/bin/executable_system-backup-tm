@@ -46,9 +46,17 @@ tm_timeline() {
   {
     touch "$s/ready"
     # Initial refresh is a diff-lens need (current.patch must exist before
-    # hunk --watch opens). Explore starts at the right rung by argv — an
-    # eager refresh here would race yazi's startup and flag a respawn.
-    [[ "$(<"$s/lens")" == diff ]] && { bkp::tm::refresh "$s" || : }
+    # hunk --watch opens) — but synthesis over a big anchor takes minutes
+    # and must not hold the timeline UI hostage: seed an empty patch so
+    # hunk boots into its graceful empty state, and synthesize in the
+    # background (--watch picks up the mv; errors land in refresh.log,
+    # never on the timeline's alt screen). Explore starts at the right
+    # rung by argv — an eager refresh would race yazi's startup and flag
+    # a respawn.
+    if [[ "$(<"$s/lens")" == diff ]]; then
+      [[ -f "$s/current.patch" ]] || : > "$s/current.patch"
+      ( bkp::tm::refresh "$s" || : ) >> "$s/refresh.log" 2>&1 &!
+    fi
     # Converge this pane to the 21-column design width (resize acts on the
     # focused pane — the lens — so growing it leftward narrows us).
     if [[ -n "${ZELLIJ:-}" && -t 0 ]]; then
