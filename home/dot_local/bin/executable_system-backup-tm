@@ -284,9 +284,14 @@ tm_apply() {
   (( ${#live} )) || return 0
   print -rl -- "${live[@]}" > "$s/apply.list"
   if [[ -n "${ZELLIJ:-}" ]]; then
+    # Borderless like every other dialog float (zellij.zsh) — the confirm
+    # draws its own chrome, a pane frame double-borders and misaligns it.
+    # COLORTERM must be carried through explicitly: new-pane doesn't
+    # propagate it, and gum falls back to 256-color approximations.
     zellij action new-pane --floating --close-on-exit \
-      --name "" --pinned true --width 70 --height 14 \
-      -- "$HOME/.local/bin/system-backup-tm" confirm-apply "$s"
+      --name "" --borderless true --pinned true --width 70 --height 14 \
+      -- env "COLORTERM=${COLORTERM:-truecolor}" \
+      "$HOME/.local/bin/system-backup-tm" confirm-apply "$s"
   else
     tm_confirm_apply "$s"
   fi
