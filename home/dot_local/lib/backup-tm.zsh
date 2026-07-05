@@ -221,6 +221,10 @@ bkp::tm::timeline_render() {
     elif (( i == cur )); then gc="$C_GRN"
     else gc="$C_YEL"
     fi
+    # The time row's bar continues the line toward the next rung; the
+    # LAST rung has nothing below it — no dangling bar.
+    local tg="┃"
+    (( i == n )) && tg=" "
     if (( i == cur )) && [[ -n "$bg" ]]; then
       vis=$(( 3 + ${#date_s} ))
       pad=""
@@ -229,10 +233,10 @@ bkp::tm::timeline_render() {
       vis=$(( 3 + ${#time_s} ))
       pad=""
       (( width > vis )) && pad="${(l:$(( width - vis )):: :):-}"
-      r2="${bg} ${gc}┃${C_RES}${bg} ${time_s}${pad}${C_RES}"
+      r2="${bg} ${gc}${tg}${C_RES}${bg} ${time_s}${pad}${C_RES}"
     else
       r1=" ${gc}●${C_RES} ${date_s}"
-      r2=" ${gc}┃${C_RES} ${C_DIM}${time_s}${C_RES}"
+      r2=" ${gc}${tg}${C_RES} ${C_DIM}${time_s}${C_RES}"
     fi
     rows+=("$r1"); row_rung+=($i)
     rows+=("$r2"); row_rung+=($i)
@@ -654,6 +658,9 @@ function M:setup()
 				local date = os.date("%a, %b %e %Y", r.epoch):gsub("%s%s+", " ")
 				local clock = string.lower(os.date("%I:%M %p", r.epoch))
 				local gc = i < cur and "red" or (i == cur and "green" or "yellow")
+				-- The time row's bar continues the line toward the next rung;
+				-- the LAST rung has nothing below it — no dangling bar.
+				local tg = i < #ladder and "┃" or " "
 				if i == cur and hl_bg and hl_fg then
 					local pad1 = string.rep(" ", math.max(0, w - 3 - #date))
 					local pad2 = string.rep(" ", math.max(0, w - 3 - #clock))
@@ -664,7 +671,7 @@ function M:setup()
 					}) }
 					rows[#rows + 1] = { rung = i, line = ui.Line({
 						ui.Span(" "):bg(hl_bg),
-						ui.Span("┃"):fg(gc):bg(hl_bg),
+						ui.Span(tg):fg(gc):bg(hl_bg),
 						ui.Span(" " .. clock .. pad2):fg(hl_fg):bg(hl_bg),
 					}) }
 				else
@@ -675,7 +682,7 @@ function M:setup()
 					}) }
 					rows[#rows + 1] = { rung = i, line = ui.Line({
 						ui.Span(" "),
-						ui.Span("┃"):fg(gc),
+						ui.Span(tg):fg(gc),
 						dim(ui.Span(" " .. clock)),
 					}) }
 				end

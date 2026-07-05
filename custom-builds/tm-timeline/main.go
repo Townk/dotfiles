@@ -151,16 +151,22 @@ func (u *ui) frame() string {
 		} else if i+1 == u.rungIdx {
 			gc = green
 		}
+		// The time row's bar continues the line toward the next rung;
+		// the LAST rung has nothing below it — no dangling bar.
+		tg := "┃"
+		if i+1 == len(u.ladder) {
+			tg = " "
+		}
 		if i+1 == u.rungIdx && bg != "" {
 			pad1 := strings.Repeat(" ", max(0, width-3-len(date)))
 			pad2 := strings.Repeat(" ", max(0, width-3-len(clock)))
 			rows = append(rows,
 				row{bg + " " + gc + "●" + reset + bg + " " + date + pad1 + reset, i + 1},
-				row{bg + " " + gc + "┃" + reset + bg + " " + clock + pad2 + reset, i + 1})
+				row{bg + " " + gc + tg + reset + bg + " " + clock + pad2 + reset, i + 1})
 		} else {
 			rows = append(rows,
 				row{" " + gc + "●" + reset + " " + date, i + 1},
-				row{" " + gc + "┃" + reset + " " + dim + clock + reset, i + 1})
+				row{" " + gc + tg + reset + " " + dim + clock + reset, i + 1})
 		}
 		if i+1 < len(u.ladder) {
 			cc := yellw
