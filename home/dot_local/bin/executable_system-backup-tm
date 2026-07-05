@@ -326,21 +326,32 @@ tm_apply_prompt() {
   local -a live=() shown=()
   [[ -f "$s/apply.list" ]] && live=("${(@f)$(<"$s/apply.list")}")
   (( ${#live} )) || return 1
-  bkp::tm::rung_id "$s" || return 1
-  local snap="$REPLY" p
+  # The rung's timestamp, not its id — "snapshot c8a9b39d" means nothing
+  # to a human; "the snapshot at Fri, Jul 3 2026 at 6:33pm" does.
+  bkp::tm::rung_line "$s" || return 1
+  local epoch="${${REPLY#*$'\t'}%%$'\t'*}" when time_s p
+  strftime -s when '%a, %b %e %Y' "$epoch"
+  when="${when//  / }"             # %e space-pads single-digit days
+  strftime -s time_s '%I:%M %p' "$epoch"
+  time_s="${(L)time_s}"
+  time_s="${time_s#0}"             # 06:33 pm -> 6:33 pm
+  time_s="${time_s/ /}"            # 6:33 pm  -> 6:33pm
   for p in "${live[@]:0:8}"; do
     p="${p/#$HOME/~}"
     (( ${#p} > 58 )) && p="${p[1,27]}…${p[-28,-1]}"
     shown+=("$p")
   done
   (( ${#live} > 8 )) && shown+=("…and $(( ${#live} - 8 )) more")
-  print -r -- "Restore ${#live} path(s) from snapshot ${snap[1,8]} onto your live filesystem?
+  local noun="paths"
+  (( ${#live} == 1 )) && noun="path"
+  print -r -- "Restore ${#live} $noun onto your live filesystem
+from the snapshot at $when at $time_s?
 
 $(print -rl -- "${shown[@]}")
 
-This writes over your live files and can cause data loss.
+This replaces the selected live files with their snapshot versions.
 Your current state is snapshotted first —
-\`system-backup undo\` reverts this."
+\`system-backup undo\` brings it back."
 }
 
 # tm_confirm_apply <session>
