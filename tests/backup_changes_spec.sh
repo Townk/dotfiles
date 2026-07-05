@@ -265,6 +265,19 @@ EOF
       The output should equal ""
     End
 
+    It 'refuses a scope over the live-view file cap, loudly'
+      run_it() {
+        source "$LIB/backup.zsh"
+        local i
+        for i in 1 2 3 4 5; do print x > "$FIX/live/extra$i.txt"; done
+        BKP_TM_LIVEVIEW_MAX_FILES=3 \
+          bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live"
+      }
+      When run run_it
+      The status should equal 1
+      The stderr should include "too large for live-diff synthesis"
+    End
+
     It 'tolerates rsync partial-transfer (rc 23/24) when building the view'
       run_it() {
         source "$LIB/backup.zsh"

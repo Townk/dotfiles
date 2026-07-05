@@ -103,6 +103,22 @@ bkp::tm::refresh() {
   [[ -e "$s/closed" || ! -d "$s" ]] && return 0
   lens=$(<"$s/lens") anchor=$(<"$s/anchor")
   if [[ "$lens" == diff ]]; then
+    # Only the LATEST rung's synthesis matters: every scrub step spawns
+    # an orphaned ctl, and a whole-tree synthesis can run for minutes —
+    # unsupervised they pile up into a fork storm (the 200-rsync
+    # incident). Supersede the previous synthesis, sweep its dead view,
+    # and record ourselves so the teardown can reap us too.
+    local prev=""
+    [[ -f "$s/refresh.pid" ]] && prev=$(<"$s/refresh.pid")
+    if [[ -n "$prev" && "$prev" != "$$" ]]; then
+      pkill -P "$prev" 2>/dev/null
+      kill "$prev" 2>/dev/null
+    fi
+    print -r -- $$ > "$s/refresh.pid"
+    rm -rf "$s"/bkp-liveview.*(N) 2>/dev/null
+    # The live view lands inside the session dir — rm -rf at teardown
+    # sweeps it even when its builder died mid-copy.
+    local BKP_LIVEVIEW_DIR="$s"
     # FUSE-less fallback: rung_root restores the scoped subtree to a
     # per-rung cache when the mount isn't there.
     bkp::tm::rung_root "$s" || return 1
@@ -115,6 +131,7 @@ bkp::tm::refresh() {
       : > "$s/current.patch.new"
     fi
     mv "$s/current.patch.new" "$s/current.patch"
+    [[ -f "$s/refresh.pid" && "$(<"$s/refresh.pid")" == "$$" ]] && rm -f "$s/refresh.pid"
   else
     # Explore still needs the real mount — yazi navigates it live.
     bkp::tm::rung_path "$s" || return 1

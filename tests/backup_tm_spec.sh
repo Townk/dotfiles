@@ -102,6 +102,31 @@ EOF
       The output should equal 1
     End
 
+    It 'supersedes a running synthesis and reaps its pid file'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        local s
+        s=$(bkp::tm::session_new diff "$FIX/anchor")
+        bkp::tm::ladder_fill "$s"
+        mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
+        # fake in-flight synthesis from a previous scrub step
+        sleep 30 & local prev=$!
+        print -r -- "$prev" > "$s/refresh.pid"
+        bkp::tm::step "$s" older || { echo "step rc=$?"; return 1 }
+        local i dead=no
+        for i in {1..50}; do
+          kill -0 "$prev" 2>/dev/null || { dead=yes; break }
+          sleep 0.02
+        done
+        kill "$prev" 2>/dev/null
+        print -r -- "prev-dead=$dead"
+        [[ -f "$s/refresh.pid" ]] && print pid-file-left || print pid-file-reaped
+      }
+      When run run_it
+      The line 1 should equal "prev-dead=yes"
+      The line 2 should equal "pid-file-reaped"
+    End
+
     It 'refreshes a FUSE-less diff session from a per-rung restore cache'
       run_it() {
         source "$LIB/backup-tm.zsh"

@@ -685,14 +685,27 @@ bkp::changeset::relabel() {
 bkp::changeset::patch_live() {
   setopt local_options pipe_fail
   local rung="$1" scope="$2"
+  # Pathology cap: a live diff of a huge scope (~/.local/share…) means a
+  # whole-tree rsync view + a whole-tree FUSE walk PER SYNTHESIS — the
+  # 200-rsync incident. Count with an early-exit pipe (head closes it
+  # after cap+1 lines) and refuse, loudly, above the cap.
+  local cap="${BKP_TM_LIVEVIEW_MAX_FILES:-50000}" nfiles
+  nfiles=$(find "$scope" -not -type d 2>/dev/null | head -n $(( cap + 1 )) | wc -l | tr -d ' ')
+  if (( nfiles > cap )); then
+    log_error "bkp: $scope holds over $cap files — too large for live-diff synthesis (BKP_TM_LIVEVIEW_MAX_FILES raises the cap)"
+    return 1
+  fi
   # git --no-index FATALS on special files (unix sockets like gnupg's
   # S.gpg-agent, fifos) on the live side — snapshots never contain them.
   # When the live tree has any, diff against a cleaned hardlink view
   # (-rlpt copies no sockets/fifos/devices; --link-dest makes the
   # view near-free) and relabel the view back to the live root.
+  # BKP_LIVEVIEW_DIR overrides the view's parent — tm sessions point it
+  # at the session dir so teardown's rm -rf sweeps a view whose builder
+  # was killed mid-copy.
   local live="$scope" view=""
   if [[ -d "$scope" ]] && [[ -n "$(find "$scope" \( -type s -o -type p -o -type b -o -type c \) -print -quit 2>/dev/null)" ]]; then
-    view=$(mktemp -d "${TMPDIR:-/tmp}/bkp-liveview.XXXXXX") || return 1
+    view=$(mktemp -d "${BKP_LIVEVIEW_DIR:-${TMPDIR:-/tmp}}/bkp-liveview.XXXXXX") || return 1
     rsync -rlpt --link-dest="$scope" "$scope/" "$view/" 2>/dev/null
     local rrc=$?
     # 23/24 = partial transfer / files vanished mid-copy — routine on a

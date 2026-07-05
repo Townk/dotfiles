@@ -139,9 +139,24 @@ tm_timeline() {
     [[ -n "$_stty" ]] && stty "$_stty" 2>/dev/null
     bkp::tm::end "$s"
     bkp::tm::kill_lens "$s"
+    tm_kill_refresh "$s"
     [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
     rm -rf "$s"
   }
+}
+
+# tm_kill_refresh <session>
+# Reap a still-running changeset synthesis (recorded in refresh.pid by
+# bkp::tm::refresh) — scrub steps run as orphaned ctl processes, so
+# without this a slow synthesis outlives the session (the 200-rsync
+# incident). Safe when nothing is running.
+tm_kill_refresh() {
+  local s="$1" rp=""
+  [[ -f "$s/refresh.pid" ]] && rp=$(<"$s/refresh.pid")
+  [[ -n "$rp" ]] || return 0
+  pkill -P "$rp" 2>/dev/null
+  kill "$rp" 2>/dev/null
+  return 0
 }
 
 tm_lens() {
@@ -177,6 +192,7 @@ tm_lens() {
   } always {
     bkp::tm::end "$s"
     if [[ "$lens" == explore ]]; then
+      tm_kill_refresh "$s"
       [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
       rm -rf "$s"
     fi
