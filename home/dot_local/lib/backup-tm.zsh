@@ -281,7 +281,9 @@ bkp::tm::timeline_render() {
 #                   moves to the timeline (and once there, h is a no-op)
 #   l / Right       enter — except from the timeline, where the focus
 #                   returns to the file area
-#   R               restore selection to the live filesystem (gated apply flow)
+#   a / R           restore selection to the live filesystem (gated apply
+#                   flow — snapshots are read-only, so create is meaningless
+#                   here and `a` is free)
 bkp::tm::yazi_overlay() {
   local s="$1" src="${YAZI_USER_CONFIG:-$HOME/.config/yazi}" ovl="$1/yazi"
   mkdir -p "$ovl"
@@ -396,6 +398,7 @@ LUA
     "  { on = \"<Left>\", run = \"plugin tm-gate h\", desc = \"tm: leave; timeline focus at the root\" },"
     "  { on = \"l\", run = \"plugin tm-gate l\", desc = \"tm: enter; file focus from the timeline\" },"
     "  { on = \"<Right>\", run = \"plugin tm-gate l\", desc = \"tm: enter; file focus from the timeline\" },"
+    "  { on = \"a\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"R\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"<S-Enter>\", run = 'shell --orphan \"$bin apply $s \\\"\$@\\\"\"', desc = \"tm: restore selection to live filesystem\" },"
     "  { on = \"q\", run = [ 'shell --orphan \"$bin ctl $s end\"', \"quit\" ], desc = \"tm: end scrub session\" },"
@@ -603,6 +606,7 @@ function M:setup()
 	local accent_fg = os.getenv("BKP_TM_ACCENT_FG")
 	local key_fg = os.getenv("BKP_TM_KEY_FG")
 	local hint_fg = os.getenv("BKP_TM_HINT_FG")
+	local sep_fg = os.getenv("BKP_TM_SEP_FG") or os.getenv("BKP_TM_TAB_FG")
 	_G.__tm_tl_focus = false -- the file list owns focus at launch
 
 	local function cur_rung()
@@ -623,10 +627,14 @@ function M:setup()
 		function Parent:redraw()
 			local w, h = self._area.w, self._area.h
 			local cur = cur_rung()
+			local function sep_line()
+				local span = ui.Span(" " .. string.rep("━", math.max(1, w - 2)))
+				return ui.Line({ sep_fg and span:fg(sep_fg) or span })
+			end
 			local lines = {}
-			local title = ui.Span(" ▓▓▓ Snapshots")
+			local title = ui.Span(" \u{10F1DA} Snapshots")
 			lines[#lines + 1] = ui.Line({ accent_fg and title:fg(accent_fg) or title })
-			lines[#lines + 1] = ui.Line("")
+			lines[#lines + 1] = sep_line()
 
 			-- Every rung is a two-line date/time stamp behind ● / ┃ glyphs;
 			-- glyph color says where you are (newer red, current green,
@@ -707,9 +715,11 @@ function M:setup()
 				local span = ui.Span(text)
 				return hint_fg and span:fg(hint_fg) or span
 			end
-			lines[#lines + 1] = ui.Line({ dim(ui.Span(" " .. string.rep("━", math.max(1, w - 2)))) })
+			-- Hints display uppercase; the shift glyph only marks actual
+			-- Shift chords (K/J) — plain keys (q/a) show bare uppercase.
+			lines[#lines + 1] = sep_line()
 			lines[#lines + 1] = ui.Line({ key(" 󰘶K"), hint(" newer "), hint("· "), key("󰘶J"), hint(" older") })
-			lines[#lines + 1] = ui.Line({ key("  q"), hint(" quit  "), hint("·  "), key("R"), hint(" apply") })
+			lines[#lines + 1] = ui.Line({ key("  Q"), hint(" quit  "), hint("·  "), key("A"), hint(" apply") })
 
 			return { ui.List(lines):area(self._area) }
 		end
@@ -774,7 +784,7 @@ bkp::tm::lens_cmd() {
     "BKP_TM_INACTIVE_BG=${C_HEX_TAB_BG:-}" "BKP_TM_ACTIVE_BG=${C_HEX_TAB_ACTIVE_BG:-}" \
     "BKP_TM_ACTIVE_FG=${C_HEX_TAB_ACTIVE_FG:-}" "BKP_TM_TAB_FG=${C_HEX_TAB_FG:-}" \
     "BKP_TM_ACCENT_FG=${C_ROLE_UI_ACCENT:-}" "BKP_TM_KEY_FG=${C_ROLE_UI_KEY:-}" \
-    "BKP_TM_HINT_FG=${C_ROLE_UI_HINT:-}" \
+    "BKP_TM_HINT_FG=${C_ROLE_UI_HINT:-}" "BKP_TM_SEP_FG=${C_ROLE_UI_SEPARATOR:-}" \
     yazi --client-id "$yid" "$rung$anchor"
 }
 

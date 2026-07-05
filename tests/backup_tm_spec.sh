@@ -299,7 +299,7 @@ EOS
       }
       When run run_it
       The line 1 should equal "three-col"
-      The line 2 should equal 17
+      The line 2 should equal 18
       The line 3 should equal "has-bindings"
       The line 4 should equal "positional-args"
     End
@@ -326,7 +326,7 @@ EOF
         jq -r '.input.prepend_keymap | length' <<<"$json"
       }
       When run run_it
-      The line 1 should equal 18
+      The line 1 should equal 19
       The line 2 should equal "K"
       The line 3 should equal "X"
       The line 4 should equal 1
