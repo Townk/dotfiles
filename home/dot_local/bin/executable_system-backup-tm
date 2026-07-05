@@ -298,11 +298,11 @@ tm_apply() {
     for line in ${(f)prompt}; do
       (( ${#line} > pane_w )) && pane_w=${#line}
     done
-    pane_w=$(( pane_w + 8 ))
+    pane_w=$(( pane_w + 6 ))
     (( pane_w < 54 )) && pane_w=54
     (( pane_w > 100 )) && pane_w=100
-    pane_h=$(input::confirm "$prompt" --title "Apply from the past" --danger \
-      --affirmative "Restore" --negative "Cancel" \
+    pane_h=$(input::confirm "$prompt" --title "Apply from the past" --warning \
+      --default no --affirmative "Restore" --negative "Cancel" \
       --measure --width "$pane_w" </dev/null 2>/dev/null)
     [[ "$pane_h" == <-> ]] || pane_h=18
     zellij action new-pane --floating --close-on-exit \
@@ -336,9 +336,11 @@ tm_apply_prompt() {
   time_s="${(L)time_s}"
   time_s="${time_s#0}"             # 06:33 pm -> 6:33 pm
   time_s="${time_s/ /}"            # 6:33 pm  -> 6:33pm
+  # Cap paths at the width of the warning block's longest line (52) so
+  # the float never grows past it; the dialog lands at 52 + 6 chrome.
   for p in "${live[@]:0:8}"; do
     p="${p/#$HOME/~}"
-    (( ${#p} > 58 )) && p="${p[1,27]}…${p[-28,-1]}"
+    (( ${#p} > 52 )) && p="${p[1,25]}…${p[-26,-1]}"
     shown+=("$p")
   done
   (( ${#live} > 8 )) && shown+=("…and $(( ${#live} - 8 )) more")
@@ -349,9 +351,9 @@ from the snapshot at $when at $time_s?
 
 $(print -rl -- "${shown[@]}")
 
-This replaces the selected live files with their snapshot versions.
-Your current state is snapshotted first —
-\`system-backup undo\` brings it back."
+This replaces the selected live files with their
+snapshot versions. Your current state is snapshotted
+first — \`system-backup undo\` brings it back."
 }
 
 # tm_confirm_apply <session>
@@ -370,8 +372,11 @@ tm_confirm_apply() {
     source "$HOME/.local/lib/input-common.zsh"
     local prompt
     prompt=$(tm_apply_prompt "$s") || return 1
-    input::confirm "$prompt" --title "Apply from the past" --danger \
-      --affirmative "Restore" --negative "Cancel" >/dev/null || return 0
+    # --warning, not --danger: nothing is lost (the undo snapshot fires
+    # first), but --default no keeps Enter from confirming accidentally —
+    # only --danger forces that on its own.
+    input::confirm "$prompt" --title "Apply from the past" --warning \
+      --default no --affirmative "Restore" --negative "Cancel" >/dev/null || return 0
   fi
   bkp::restore::paths "$snap" --force "${live[@]}"
 }
