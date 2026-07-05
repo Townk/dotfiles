@@ -647,17 +647,18 @@ func (a *app) run() (int, error) {
 		fmt.Sprintf("PTY_FRAME_LINES=%d", a.g.h),
 	)
 	cmd.Stdin = os.Stdin // the list to filter
-	if a.cfg.tui {
-		// Full-TUI child (diffnav): our stdin is the pane's real tty, and
-		// a tty-stdin would make the child read keys DIRECTLY, racing our
-		// own forwarder. /dev/null forces it onto /dev/tty = the sub-pty.
-		if devnull, err := os.Open(os.DevNull); err == nil {
-			cmd.Stdin = devnull
-			defer devnull.Close()
-		}
-	}
-	cmd.Stdout = selW // the selection
+	cmd.Stdout = selW    // the selection
 	cmd.Stderr = errW
+	if a.cfg.tui {
+		// Full-TUI child (diffnav/bubbletea): stdin AND stdout must be
+		// the sub-pty slave itself. A non-tty stdin (/dev/null) makes
+		// diffnav read it as a piped diff and exit ('No diff'); the real
+		// pane tty would race our key forwarder; and bubbletea renders
+		// its UI to STDOUT — wired to the selection pipe it would draw
+		// into the void. There is no "selection" from a TUI child.
+		cmd.Stdin = pts
+		cmd.Stdout = pts
+	}
 	cmd.ExtraFiles = []*os.File{pts} // child fd 3 = controlling tty
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 3}
 
