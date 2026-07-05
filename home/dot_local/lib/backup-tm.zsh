@@ -319,11 +319,19 @@ bkp::tm::yazi_overlay() {
           [[ "${ff:t}" == flavor.toml ]] && continue
           ln -sfn "$ff" "$ovl/flavors/${f:t}/${ff:t}"
         done
+        # INSERT (not replace): the flavor's [mgr] may not define these
+        # keys at all — yazi then falls back to its built-in reversed
+        # hover, which is what the override must beat.
         awk -v act="$C_HEX_TAB_ACTIVE_BG" -v inact="$C_HEX_TAB_BG" '
-          /^\[mgr\]/ { m = 1; print; next }
+          /^\[mgr\]/ {
+            m = 1
+            print
+            print "hovered = { bg = \"" act "\", bold = true }"
+            print "preview_hovered = { bg = \"" inact "\" }"
+            next
+          }
           /^\[/ { m = 0 }
-          m && /^hovered = / { print "hovered = { bg = \"" act "\", bold = true }"; next }
-          m && /^preview_hovered = / { print "preview_hovered = { bg = \"" inact "\" }"; next }
+          m && /^(hovered|preview_hovered) = / { next }
           { print }' "$f/flavor.toml" > "$ovl/flavors/${f:t}/flavor.toml"
       else
         ln -sfn "$f" "$ovl/flavors/${f:t}"
