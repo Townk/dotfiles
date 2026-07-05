@@ -302,12 +302,38 @@ bkp::tm::yazi_overlay() {
   elif [[ -f "$src/theme.toml" ]]; then
     ln -sfn "$src/theme.toml" "$ovl/theme.toml"
   fi
-  # flavors/: passed through untouched. yazi 26.5 has NO theme-level
-  # hover control — [mgr] hovered/preview_hovered were removed from the
-  # schema, and filetype "if = hovered" is not evaluated (such a rule
-  # styles every row). The cursor highlight is the hardcoded reversal of
-  # each row own colors; revisit when yazi regains a hover knob.
-  [[ -d "$src/flavors" ]] && ln -sfn "$src/flavors" "$ovl/flavors"
+  # flavors/: symlink all, but append an [indicator] section to the active
+  # flavor copy — yazi 26 moved cursor-row styling there (mgr hovered is
+  # gone; the default is current = reversed). The tab palette drives it:
+  # white-on-active-tab for the cursor row, inactive-tab bg for the
+  # preview column hover.
+  if [[ -d "$src/flavors" && -n "${C_HEX_TAB_ACTIVE_BG:-}" && -n "${C_HEX_TAB_ACTIVE_FG:-}" && -n "${C_HEX_TAB_BG:-}" ]]; then
+    local flav
+    flav=$(yq -p toml -o json '.' "$src/theme.toml" 2>/dev/null |
+      jq -r '.flavor.dark // .flavor.use // empty' 2>/dev/null)
+    mkdir -p "$ovl/flavors"
+    for f in "$src/flavors"/*(DN); do
+      if [[ -n "$flav" && "${f:t}" == "$flav.yazi" && -f "$f/flavor.toml" ]]; then
+        mkdir -p "$ovl/flavors/${f:t}"
+        local ff
+        for ff in "$f"/*(DN); do
+          [[ "${ff:t}" == flavor.toml ]] && continue
+          ln -sfn "$ff" "$ovl/flavors/${f:t}/${ff:t}"
+        done
+        {
+          cat "$f/flavor.toml"
+          print -r -- ""
+          print -r -- "[indicator]"
+          print -r -- "current = { fg = \"$C_HEX_TAB_ACTIVE_FG\", bg = \"$C_HEX_TAB_ACTIVE_BG\", bold = true }"
+          print -r -- "preview = { bg = \"$C_HEX_TAB_BG\" }"
+        } > "$ovl/flavors/${f:t}/flavor.toml"
+      else
+        ln -sfn "$f" "$ovl/flavors/${f:t}"
+      fi
+    done
+  elif [[ -d "$src/flavors" ]]; then
+    ln -sfn "$src/flavors" "$ovl/flavors"
+  fi
   # yazi.toml: user config + 2-column ratio for the scrub session (parent
   # column dropped — the timeline pane owns "where am I").
   {
