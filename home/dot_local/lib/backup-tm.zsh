@@ -325,7 +325,7 @@ bkp::tm::yazi_overlay() {
           print -r -- ""
           print -r -- "[indicator]"
           print -r -- "current = { fg = \"$C_HEX_TAB_ACTIVE_FG\", bg = \"$C_HEX_TAB_ACTIVE_BG\", bold = true }"
-          print -r -- "preview = { bg = \"$C_HEX_TAB_BG\" }"
+          print -r -- "preview = { fg = \"$C_HEX_TAB_FG\", bg = \"$C_HEX_TAB_BG\" }"
         } > "$ovl/flavors/${f:t}/flavor.toml"
       else
         ln -sfn "$f" "$ovl/flavors/${f:t}"
@@ -488,33 +488,26 @@ function M:setup()
 		end
 	end)
 
-	-- Focus-aware hover: the timeline pane publishes tm-focus 0/1 over DDS;
-	-- unfocused yazi dims its hovered row to the inactive-tab background.
-	-- Hover styling from the tab palette: the focused column's hovered row
-	-- uses the ACTIVE tab bg; the next-to-be-selected row in the other
-	-- column always uses the inactive bg; losing pane focus drops the
-	-- active one to inactive too (tm-focus over DDS from the timeline).
-	local inact = os.getenv("BKP_TM_INACTIVE_BG")
+	-- Focus-aware cursor: the timeline pane publishes tm-focus 0/1 over
+	-- DDS; yazi swaps th.indicator.current between the active-tab pair
+	-- (focused) and the inactive-tab pair (timeline focused). The earlier
+	-- th.mgr.hovered mutation failed only because that key no longer
+	-- exists — indicator styles are read per-render and ARE mutable.
 	local act = os.getenv("BKP_TM_ACTIVE_BG")
-	if inact and act then
-		local function paint(focus)
-			if not (th and th.mgr) then
+	local actfg = os.getenv("BKP_TM_ACTIVE_FG")
+	local inact = os.getenv("BKP_TM_INACTIVE_BG")
+	local inactfg = os.getenv("BKP_TM_TAB_FG")
+	if act and actfg and inact and inactfg then
+		ps.sub_remote("tm-focus", function(body)
+			if not (th and th.indicator) then
 				return
 			end
-			th.mgr.hovered = ui.Style():bg(focus and act or inact)
-			th.mgr.preview_hovered = ui.Style():bg(inact)
-			ya.render()
-		end
-		local painted = false
-		ps.sub("cd", function()
-			if not painted then
-				painted = true
-				paint(true)
+			if tostring(body) == "0" then
+				th.indicator.current = ui.Style():fg(inactfg):bg(inact):bold()
+			else
+				th.indicator.current = ui.Style():fg(actfg):bg(act):bold()
 			end
-		end)
-		ps.sub_remote("tm-focus", function(body)
-			painted = true
-			paint(tostring(body) ~= "0")
+			ya.render()
 		end)
 	end
 
