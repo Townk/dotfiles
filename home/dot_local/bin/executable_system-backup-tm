@@ -323,7 +323,7 @@ tm_apply() {
       # has no tty of its own — an inline fzf would die silently there.
       source "$HOME/.local/lib/zellij.zsh"
       picked=("${(@f)$(print -rl -- "${cands[@]}" | PICK_NAME=tm-apply zj::pick \
-        --pane-width 72 --pane-height 16 --multi \
+        --pane-width 82 --pane-height 16 --multi \
         --header "Restore from snapshot")}") || return 0
     else
       picked=("${(@f)$(print -rl -- "${cands[@]}" | fzf --multi --prompt='apply> ')}") || return 0
