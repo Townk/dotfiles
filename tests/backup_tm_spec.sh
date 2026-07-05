@@ -441,8 +441,9 @@ EOF
     setup_fix() {
       FIX=$(mktemp -d)
       export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions" BKP_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
-      export BKP_CONFIG="$FIX/c.toml"
+      export BKP_CONFIG="$FIX/c.toml" BKP_MANIFEST="$FIX/m.toml"
       printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      printf 'roots = []\n' > "$FIX/m.toml"
       S="$FIX/sessions/s.test"; mkdir -p "$S"
       printf 'cccc000000000000000000000000000000000000000000000000000000000000\t1751500000\t30m\naaaa000000000000000000000000000000000000000000000000000000000000\t1751000000\tday\n' > "$S/ladder"
       printf '1\n' > "$S/rung"
@@ -455,7 +456,7 @@ EOF
       chmod +x "$STUB/zellij"
       PATH="$STUB:$PATH"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG; }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG BKP_MANIFEST; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 

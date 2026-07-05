@@ -441,6 +441,40 @@ bkp::manifest::sweep() {
   done < <(bkp::manifest::roots "$manifest")
 }
 
+# bkp::manifest::scoped_files <manifest> <scope>
+# The CAPTURABLE files under one scope dir, per the sweep's exact rules
+# (deny globs + always-denied state dir + chezmoi-managed + per-repo
+# gitignore + no filesystem crossing). This is what "the backup owns"
+# inside <scope> — the diff lens compares live against snapshots through
+# this filter so exclusions don't render as phantom additions.
+bkp::manifest::scoped_files() {
+  local manifest="$1" scope="$2"
+  bkp::manifest::json "$manifest" >/dev/null || return 2
+
+  local -a _bkp_deny=()
+  local deny_out
+  deny_out=$(bkp::manifest::deny "$manifest") || return 2
+  [[ -n "$deny_out" ]] && _bkp_deny=(${(f)deny_out})
+  _bkp_deny+=("$BKP_STATE_DIR")
+
+  local -A _bkp_managed=()
+  if bkp::manifest::chezmoi_excluded "$manifest"; then
+    local managed_out mline
+    if managed_out=$(bkp::chezmoi::managed 2>/dev/null); then
+      for mline in ${(f)managed_out}; do
+        _bkp_managed[$mline]=1
+      done
+    else
+      log_warn "bkp: chezmoi filter unavailable — over-capturing managed files"
+    fi
+  fi
+
+  local _bkp_bundle="" _bkp_warn="" _bkp_root_dev REPLY
+  bkp::fs::device "$scope"
+  _bkp_root_dev="$REPLY"
+  bkp::manifest::walk "$scope" | awk -F'\t' '$1 == "F" { print $2 }'
+}
+
 # bkp::manifest::files <manifest> — the resolved --files-from list.
 bkp::manifest::files() {
   setopt local_options pipe_fail
@@ -706,62 +740,73 @@ bkp::changeset::relabel() {
   '
 }
 
-# bkp::changeset::patch_live <mount-rung-root> <scope>
-# Patch of the mounted snapshot rung vs the live filesystem, scoped.
-# Both sides are diffed in place (restic mount is read-only); the size
-# guard is skipped here — mount reads are lazy and hunk renders binaries
-# as rows without loading them, so scoped live diffs stay cheap.
+# bkp::changeset::patch_live <mount-rung-root> <scope> [<manifest>]
+# Patch of the mounted snapshot rung vs the live filesystem, scoped. The
+# live side is FILTERED through the capture rules (bkp::manifest::
+# scoped_files): snapshots only ever contain capturable files, so a raw
+# dir-vs-dir diff drowns real changes in "added" noise for everything
+# capture deliberately skips (chezmoi-managed, gitignored, denied). The
+# filtered file list becomes a hardlink view (rsync --files-from +
+# --link-dest, near-free) — which also keeps git --no-index away from
+# live sockets/fifos, since specials never make the list. A file scope
+# is diffed directly (an explicitly anchored file is shown regardless
+# of capture rules).
+# BKP_LIVEVIEW_DIR overrides the view's parent — tm sessions point it
+# at the session dir so teardown's rm -rf sweeps a view whose builder
+# was killed mid-copy.
 bkp::changeset::patch_live() {
   setopt local_options pipe_fail
-  local rung="$1" scope="$2"
+  local rung="$1" scope="$2" manifest="${3:-$BKP_MANIFEST}"
+  if [[ ! -d "$scope" ]]; then
+    local frc=0 fout
+    fout=$(git -c core.quotePath=false diff --no-index -- "$rung$scope" "$scope" 2>/dev/null) || frc=$?
+    (( frc <= 1 )) || {
+      log_error "bkp: git diff failed for $scope"
+      return 1
+    }
+    [[ -n "$fout" ]] || return 0
+    print -r -- "$fout" | bkp::changeset::relabel "$rung"
+    return 0
+  fi
   # Pathology cap: a live diff of a huge scope (~/.local/share…) means a
-  # whole-tree rsync view + a whole-tree FUSE walk PER SYNTHESIS — the
-  # 200-rsync incident. Count with an early-exit pipe (head closes it
-  # after cap+1 lines) and refuse, loudly, above the cap.
+  # whole-tree walk PER SYNTHESIS — the 200-rsync incident. Count with
+  # an early-exit pipe (head closes it after cap+1 lines) and refuse,
+  # loudly, before the capture-rule sweep even starts.
   local cap="${BKP_TM_LIVEVIEW_MAX_FILES:-50000}" nfiles
   nfiles=$(find "$scope" -not -type d 2>/dev/null | head -n $(( cap + 1 )) | wc -l | tr -d ' ')
   if (( nfiles > cap )); then
     log_error "bkp: $scope holds over $cap files — too large for live-diff synthesis (BKP_TM_LIVEVIEW_MAX_FILES raises the cap)"
     return 1
   fi
-  # git --no-index FATALS on special files (unix sockets like gnupg's
-  # S.gpg-agent, fifos) on the live side — snapshots never contain them.
-  # When the live tree has any, diff against a cleaned hardlink view
-  # (-rlpt copies no sockets/fifos/devices; --link-dest makes the
-  # view near-free) and relabel the view back to the live root.
-  # BKP_LIVEVIEW_DIR overrides the view's parent — tm sessions point it
-  # at the session dir so teardown's rm -rf sweeps a view whose builder
-  # was killed mid-copy.
-  local live="$scope" view=""
-  if [[ -d "$scope" ]] && [[ -n "$(find "$scope" \( -type s -o -type p -o -type b -o -type c \) -print -quit 2>/dev/null)" ]]; then
-    view=$(mktemp -d "${BKP_LIVEVIEW_DIR:-${TMPDIR:-/tmp}}/bkp-liveview.XXXXXX") || return 1
-    rsync -rlpt --link-dest="$scope" "$scope/" "$view/" 2>/dev/null
-    local rrc=$?
-    # 23/24 = partial transfer / files vanished mid-copy — routine on a
-    # live tree (caches churn under us); the view is still a usable
-    # clean copy of everything that held still. Anything else is fatal.
-    if (( rrc != 0 && rrc != 23 && rrc != 24 )); then
-      rm -rf "$view"
-      log_error "bkp: could not build a clean live view for $scope (rsync rc=$rrc)"
-      return 1
-    fi
-    live="$view"
-  fi
+  local files
+  files=$(bkp::manifest::scoped_files "$manifest" "$scope") || return 1
+  local -a live_files=()
+  [[ -n "$files" ]] && live_files=(${(f)files})
+  local view
+  view=$(mktemp -d "${BKP_LIVEVIEW_DIR:-${TMPDIR:-/tmp}}/bkp-liveview.XXXXXX") || return 1
   {
+    if (( ${#live_files} )); then
+      print -rl -- "${live_files[@]#$scope/}" |
+        rsync -lpt --files-from=- --link-dest="$scope" "$scope/" "$view/" 2>/dev/null
+      local rrc=$?
+      # 23/24 = partial transfer / files vanished mid-copy — routine on
+      # a live tree (files churn under us); the view is still a usable
+      # copy of everything that held still. Anything else is fatal.
+      if (( rrc != 0 && rrc != 23 && rrc != 24 )); then
+        log_error "bkp: could not build a clean live view for $scope (rsync rc=$rrc)"
+        return 1
+      fi
+    fi
     local rc=0 out
-    out=$(git -c core.quotePath=false diff --no-index -- "$rung$scope" "$live" 2>/dev/null) || rc=$?
+    out=$(git -c core.quotePath=false diff --no-index -- "$rung$scope" "$view" 2>/dev/null) || rc=$?
     (( rc <= 1 )) || {
       log_error "bkp: git diff failed for $scope"
       return 1
     }
     [[ -n "$out" ]] || return 0
-    if [[ -n "$view" ]]; then
-      print -r -- "$out" | bkp::changeset::relabel "$rung" "$view" "$scope"
-    else
-      print -r -- "$out" | bkp::changeset::relabel "$rung"
-    fi
+    print -r -- "$out" | bkp::changeset::relabel "$rung" "$view" "$scope"
   } always {
-    [[ -n "$view" ]] && rm -rf "$view" || :
+    rm -rf "$view"
   }
 }
 

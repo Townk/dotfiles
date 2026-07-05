@@ -214,15 +214,21 @@ EOF
   Describe 'bkp::changeset::patch_live'
     setup_fix() {
       FIX=$(mktemp -d)
-      export BKP_CONFIG="$FIX/c.toml"
+      export BKP_CONFIG="$FIX/c.toml" BKP_MANIFEST="$FIX/m.toml"
       printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      printf 'roots = []\n' > "$FIX/m.toml"
+      # hermetic chezmoi: no managed files unless a test overrides the stub
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      printf '#!/bin/sh\nexit 0\n' > "$STUB/chezmoi"
+      chmod +x "$STUB/chezmoi"
+      PATH="$STUB:$PATH"
       # "mount": past state; "live": current state
       mkdir -p "$FIX/mnt/ids/aaaa$FIX/live" "$FIX/live"
       print old > "$FIX/mnt/ids/aaaa$FIX/live/f.txt"
       print new > "$FIX/live/f.txt"
       print lost > "$FIX/mnt/ids/aaaa$FIX/live/del.txt"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG; }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_MANIFEST; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -263,6 +269,27 @@ EOF
       When run run_it
       The status should be success
       The output should equal ""
+    End
+
+    It 'filters the live side through capture rules — no phantom additions'
+      run_it() {
+        source "$LIB/backup.zsh"
+        # live-only files the capture deliberately skips: one chezmoi-
+        # managed, one deny-listed. A raw dir diff would render both as
+        # added; the filtered view must show only the real change.
+        print managed > "$FIX/live/managed.txt"
+        print denied > "$FIX/live/secret.key"
+        printf 'roots = []\ndeny = ["**/*.key"]\n' > "$FIX/m.toml"
+        printf '#!/bin/sh\necho "%s/live/managed.txt"\n' "$FIX" > "$STUB/chezmoi"
+        chmod +x "$STUB/chezmoi"
+        bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live"
+      }
+      When run run_it
+      The status should be success
+      The output should include "+new"
+      The output should include "del.txt"
+      The output should not include "managed.txt"
+      The output should not include "secret.key"
     End
 
     It 'refuses a scope over the live-view file cap, loudly'
