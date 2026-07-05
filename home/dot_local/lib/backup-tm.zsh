@@ -323,15 +323,20 @@ bkp::tm::yazi_overlay() {
         # keys at all — yazi then falls back to its built-in reversed
         # hover, which is what the override must beat.
         awk -v act="$C_HEX_TAB_ACTIVE_BG" -v inact="$C_HEX_TAB_BG" '
-          /^\[mgr\]/ {
-            m = 1
+          # yazi ≥26 styles the cursor row via [filetype] rules with
+          # if = "hovered" — [mgr] hovered no longer exists. Prepend a
+          # catch-all hovered rule (first match wins).
+          /^\[filetype\]/ { ft = 1; print; next }
+          /^\[/ { ft = 0 }
+          ft && /^rules = \[/ {
             print
-            print "hovered = { bg = \"" act "\", bold = true }"
-            print "preview_hovered = { bg = \"" inact "\" }"
+            # dirs match the trailing-slash glob, files the bare one; the
+            # current column reverse-videos the entry style, so fg here is
+            # what becomes the highlight BACKGROUND under the cursor.
+            print "\t{ if = \"hovered\", url = \"*/\", fg = \"" act "\", bold = true },"
+            print "\t{ if = \"hovered\", url = \"*\", fg = \"" act "\", bold = true },"
             next
           }
-          /^\[/ { m = 0 }
-          m && /^(hovered|preview_hovered) = / { next }
           { print }' "$f/flavor.toml" > "$ovl/flavors/${f:t}/flavor.toml"
       else
         ln -sfn "$f" "$ovl/flavors/${f:t}"
