@@ -914,7 +914,10 @@ bkp::tm::lens_cmd() {
     feats=$(git config --get delta.features 2>/dev/null) || feats=""
     feats=${feats//side-by-side/}
     [[ -f "$s/current.patch" ]] || : > "$s/current.patch"
-    print -rl -- env "DELTA_FEATURES=$feats" \
+    # COLORTERM: zellij-run panes don't inherit it (the documented
+    # new-pane gotcha), and without it delta downgrades the truecolor
+    # washes to 256-color greys — the whole diff reads black-on-black.
+    print -rl -- env "DELTA_FEATURES=$feats" "COLORTERM=${COLORTERM:-truecolor}" \
       diffnav --unified --watch --watch-cmd "cat $s/current.patch" --watch-interval 1s
     return 0
   fi
