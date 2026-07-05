@@ -906,7 +906,7 @@ bkp::tm::lens_cmd() {
     # even when the first synthesis failed — an empty patch renders as
     # a graceful no-changes state.
     [[ -f "$s/current.patch" ]] || : > "$s/current.patch"
-    print -rl -- diffnav --watch --watch-cmd "cat $s/current.patch" --watch-interval 1s
+    print -rl -- diffnav --unified --watch --watch-cmd "cat $s/current.patch" --watch-interval 1s
     return 0
   fi
   bkp::tm::rung_path "$s" || return 1
