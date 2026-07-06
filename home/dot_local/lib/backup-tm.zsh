@@ -1001,14 +1001,16 @@ bkp::tm::halt() {
   body=$(print -r -- "$msg" | fold -s -w 58 | sed 's/[[:space:]]*$//')
   # COLORTERM explicit: zellij panes don't inherit it, and without it
   # gum/lipgloss degrade the hex palette to 256-color approximations.
+  # --no-show-help drops the key-hint line; a leading blank line insets
+  # the body from the top edge to match the rest of the dialog chrome.
   COLORTERM=truecolor gum confirm \
-    --affirmative "  OK  " --negative "" \
+    --affirmative "  OK  " --negative "" --no-show-help \
     "--prompt.foreground=$C_ROLE_UI_FG" \
     "--selected.background=$C_HEX_DIALOG_WARNING" \
     "--selected.foreground=$C_ROLE_UI_DIALOG_BG" \
     "--unselected.foreground=$C_ROLE_UI_MUTED" \
     "--unselected.background=$C_ROLE_UI_DIALOG_BG" \
-    -- "$body" || :
+    -- $'\n'"$body" || :
 }
 
 # bkp::tm::anchor_captured <session> <anchor>
