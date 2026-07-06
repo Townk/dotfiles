@@ -791,4 +791,83 @@ EOS
       The stderr should be defined
     End
   End
+
+  Describe 'tm-tab: sessions in a fresh zellij tab'
+    BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_tm-tab"
+    setup_fix() {
+      FIX=$(mktemp -d)
+      mkdir -p "$FIX/stub"
+      # zellij stub records its argv and snapshots the layout file before
+      # tm-tab's delayed reaper can touch it
+      cat > "$FIX/stub/zellij" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$FIX/zellij.calls"
+for a in "\$@"; do prev_was_layout=\${layout:+x}; done
+EOF
+      cat > "$FIX/stub/zellij" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$FIX/zellij.calls"
+while [ \$# -gt 0 ]; do
+  [ "\$1" = "--layout" ] && cp "\$2" "$FIX/layout.kdl"
+  shift
+done
+EOF
+      cat > "$FIX/stub/system-backup" <<EOF
+#!/bin/sh
+printf 'browse-direct %s\n' "\$*" >> "$FIX/sb.calls"
+EOF
+      chmod +x "$FIX/stub/zellij" "$FIX/stub/system-backup"
+    }
+    cleanup_fix() { rm -rf "$FIX"; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'renders a one-pane layout and names the tab after the anchor'
+      run_it() {
+        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/some dir"
+        cat "$FIX/zellij.calls"
+        cat "$FIX/layout.kdl"
+      }
+      When run run_it
+      The status should be success
+      The output should include "action new-tab --name tm: some dir --layout"
+      The output should include 'command="system-backup"'
+      The output should include "args \"browse\" \"$FIX/some dir\""
+      The output should include "close_on_exit true"
+    End
+
+    It 'escapes KDL-hostile characters in the anchor path'
+      run_it() {
+        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/we\"ird"
+        grep -F 'we\"ird' "$FIX/layout.kdl" | head -1
+      }
+      When run run_it
+      The status should be success
+      The output should include 'we\"ird'
+    End
+
+    It 'drops empty positionals and anchors at PWD'
+      run_it() {
+        cd "$FIX"
+        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" ""
+        cat "$FIX/layout.kdl" | grep args
+      }
+      When run run_it
+      The status should be success
+      The output should include "\"browse\" \"$FIX\""
+    End
+
+    It 'degrades to an inline session outside zellij'
+      run_it() {
+        cd "$FIX"
+        PATH="$FIX/stub:$PATH" ZELLIJ= zsh "$BIN" --diff "$FIX"
+        cat "$FIX/sb.calls"
+        [[ -f "$FIX/zellij.calls" ]] && print zellij-was-called || print no-zellij
+      }
+      When run run_it
+      The status should be success
+      The output should include "browse-direct browse --diff $FIX"
+      The output should include "no-zellij"
+    End
+  End
 End

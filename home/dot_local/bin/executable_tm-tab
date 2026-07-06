@@ -1,0 +1,49 @@
+#!/usr/bin/env zsh
+# tm-tab [tm-args…] — open a Terminal Time Machine session in a NEW zellij
+# tab (yazi's `g t` lands here; works from any shell inside zellij too).
+# Args are tm's: a path (dir = explore, file = scoped diff), --diff, etc.
+#
+# `zellij action new-tab` cannot run a command directly — only a layout
+# file can name one — so we render a one-pane layout and point it there.
+emulate -L zsh
+set -u
+
+# Empty positionals happen (yazi's "$0" in an empty directory) — drop them.
+set -- "${(@)@:#}"
+
+# Outside zellij there is no tab to make: degrade to an inline session.
+if [[ -z "${ZELLIJ:-}" ]]; then
+  exec system-backup browse "${@:-$PWD}"
+fi
+
+# Tab title from the anchor (last non-flag arg, PWD when none).
+local a anchor="$PWD"
+for a in "$@"; do
+  [[ "$a" == --* ]] || anchor="$a"
+done
+local name="${${anchor:a}:t}"
+
+# KDL string escaping for the layout: backslash first, then quotes.
+local -a kargs=(browse "${@:-$PWD}")
+local piece args=""
+for piece in "${kargs[@]}"; do
+  piece="${piece//\\/\\\\}"
+  args+=" \"${piece//\"/\\\"}\""
+done
+
+local layout
+layout=$(mktemp "${TMPDIR:-/tmp}/tm-tab.XXXXXX") || exit 1
+cat > "$layout" <<EOF
+layout {
+    pane command="system-backup" {
+        args$args
+        close_on_exit true
+    }
+}
+EOF
+
+zellij action new-tab --name "tm: $name" --layout "$layout"
+local rc=$?
+# The server reads the file on its own clock — reap it off the fast path.
+( sleep 5; rm -f "$layout" ) &!
+return $rc
