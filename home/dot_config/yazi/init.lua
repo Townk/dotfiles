@@ -88,7 +88,7 @@ if not os.getenv("BKP_TM_SESSION") and not os.getenv("NVIM") then
 			{ label = "Projects", path = "~/Projects", icon = "󰃖" },
 			{ label = "Videos", path = "~/Movies", icon = "󰿎" },
 			{ label = "Music", path = "~/Music", icon = "󰝚" },
-			{ label = "Public", path = "~/Public", icon = "" },
+			{ label = "Public", path = "~/Public", icon = "" },
 		},
 		colors = {
 			title = _ui.title,
