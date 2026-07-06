@@ -459,13 +459,17 @@ bkp::tm::yazi_overlay() {
       jq -r '.flavor.dark // .flavor.use // empty' 2>/dev/null)
     mkdir -p "$ovl/flavors"
     for f in "$src/flavors"/*(DN); do
-      if [[ -n "$flav" && "${f:t}" == "$flav.yazi" && -f "$f/flavor.toml" ]]; then
+      if [[ -n "$flav" && "${f:t}" == "$flav.yazi" && -f "$f/flavor.toml" ]] &&
+         ! grep -q '^\[indicator\]' "$f/flavor.toml"; then
         mkdir -p "$ovl/flavors/${f:t}"
         local ff
         for ff in "$f"/*(DN); do
           [[ "${ff:t}" == flavor.toml ]] && continue
           ln -sfn "$ff" "$ovl/flavors/${f:t}/${ff:t}"
         done
+        # Append only when the flavor lacks its own [indicator] — the
+        # generated chezmoi-system flavor now ships one, and a duplicate
+        # TOML table would fail the parse (yazi refuses to boot).
         {
           cat "$f/flavor.toml"
           print -r -- ""
