@@ -3,13 +3,23 @@
 # tab (yazi's `g t` lands here; works from any shell inside zellij too).
 # Args are tm's: a path (dir = explore, file = scoped diff), --diff, etc.
 #
-# A plain `new-tab` + typing the command into its shell, NOT a layout
-# with a command pane: a layout replaces the default tab template (chrome
-# panes and all), and a command pane runs outside the user's shell env —
-# both break the session. The typed route is byte-identical to running
-# `tm` by hand, which is the proven path.
+# The tab is spawned WITH the session command baked into a generated
+# layout — nothing is typed into panes (the old write-chars route raced
+# tab-construction focus, spraying keys into plugin panes or the origin
+# yazi). The layout derives from the deployed default.kdl, so the tab
+# keeps the full zj-hud chrome its default_tab_template provides.
 emulate -L zsh
 set -u
+
+# Diagnostics on demand: `touch $BKP_STATE/tm-tab.debug` and every run
+# xtraces into tm-tab.log alongside it. TM_TAB_* are spec seams — the
+# user zshenv re-exports the XDG vars, so env overrides die at startup.
+local _dbg="${TM_TAB_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}}/terminal-backup"
+if [[ -e "$_dbg/tm-tab.debug" ]]; then
+  exec 2>>"$_dbg/tm-tab.log"
+  print -u2 "== run $(date +%T) argv: $*"
+  setopt xtrace
+fi
 
 # Empty positionals happen (yazi's "$0" in an empty directory) — drop them.
 set -- "${(@)@:#}"
@@ -26,37 +36,40 @@ for a in "$@"; do
 done
 local name="${${anchor:a}:t}"
 
-# write-chars types into the client's FOCUSED pane, and under load the
-# focus switch can lag new-tab — early keystrokes would land in the
-# ORIGIN pane, where a yazi reads them as a keybinding barrage. Verify
-# the focus actually moved before typing; on timeout, type NOTHING
-# (a bare tab beats keystrokes sprayed into the wrong pane).
-# With ZELLIJ_PANE_ID in the env (running under a pane, as the yazi
-# binding does), list-clients reports the CALLING pane instead of the
-# client's focus — the poll would never see the switch. Strip it; the
-# write actions keep it and still target the client's focused pane.
-tm_tab_focus() { ZELLIJ_PANE_ID= zellij action list-clients 2>/dev/null | awk 'NR==2 {print $2}' }
-local before after i
-before=$(tm_tab_focus)
-zellij action new-tab --name "tm: $name" || exit 1
-# Tab construction focuses the chrome PLUGIN panes first (zj-hub tab
-# bar) — typing then would feed the command to a plugin, which eats
-# it. Only a fresh TERMINAL pane counts as arrived.
-for (( i = 0; i < 60; i++ )); do
-  after=$(tm_tab_focus)
-  [[ "$after" == terminal_* && "$after" != "$before" ]] && break
-  sleep 0.05
-done
-if [[ "$after" != terminal_* || "$after" == "$before" ]]; then
-  print -u2 "tm-tab: focus never reached the new tab — run: tm ${(j: :)${(@q)@}}"
-  exit 1
-fi
-# The shell in the fresh pane may still be starting; keystrokes wait in
-# the TTY buffer, so this settle is comfort, not a lock.
-sleep 0.2
-# exec: the session replaces the shell, so quitting it closes the tab.
-# The (q) flag shell-quotes each arg against the typed command line, and
-# the leading space keeps the line out of shell history.
-local -a cmd=("${@:-$PWD}")
-zellij action write-chars " exec system-backup browse ${(j: :)${(@q)cmd}}"
-zellij action write 13
+# The pane runs zsh -c so the session sees the full user environment
+# (.zshenv always runs); (q) shell-quotes each arg into that command
+# line, then the whole line is KDL-escaped (backslash first, quotes
+# second) to survive the layout file.
+local -a cmd=(exec "$HOME/.local/bin/system-backup" browse "${@:-$PWD}")
+local sh_line="${(j: :)${(@q)cmd}}"
+local kdl="${sh_line//\\/\\\\}"
+kdl="${kdl//\"/\\\"}"
+local kname="tm: ${name//\\/\\\\}"
+kname="${kname//\"/\\\"}"
+
+local base="${TM_TAB_LAYOUTS:-${XDG_CONFIG_HOME:-$HOME/.config}/zellij/layouts}/default.kdl"
+local layout
+layout=$(mktemp "${TMPDIR:-/tmp}/tm-tab.XXXXXX") || exit 1
+{
+  if [[ -r "$base" ]]; then
+    # Everything but the closing brace: pane templates and the
+    # default_tab_template (chrome + floating which-key panes) — the
+    # tab node below gets wrapped by it.
+    sed '$d' "$base"
+  else
+    print 'layout {'   # chrome-less fallback: still a working session
+  fi
+  print -r -- "    tab name=\"$kname\" focus=true {"
+  print -r -- "        pane command=\"/bin/zsh\" {"
+  print -r -- "            args \"-c\" \"$kdl\""
+  print -r -- "            close_on_exit true"
+  print -r -- "        }"
+  print -r -- "    }"
+  print '}'
+} > "$layout"
+
+zellij action new-tab --name "$kname" --layout "$layout"
+local rc=$?
+# The server reads the file on its own clock — reap it off the fast path.
+( sleep 5; rm -f "$layout" ) &!
+return $rc

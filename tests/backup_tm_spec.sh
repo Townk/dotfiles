@@ -792,26 +792,77 @@ EOS
     End
   End
 
+  Describe 'bkp::tm::halt: refusals stay readable'
+    It 'logs and returns without blocking when there is no TTY'
+      run_it() {
+        source "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/backup-tm.zsh"
+        bkp::tm::halt "bkp: nope"
+      }
+      When run run_it
+      The status should be success
+      The stderr should include "bkp: nope"
+    End
+  End
+
+  Describe 'bkp::tm::anchor_captured: never-captured anchors are refused'
+    setup_fix() { FIX=$(mktemp -d); mkdir -p "$FIX/s/mnt/ids/aaaa$FIX/home/sub"; }
+    cleanup_fix() { rm -rf "$FIX"; }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'accepts an anchor present in at least one rung'
+      run_it() {
+        source "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/backup-tm.zsh"
+        bkp::tm::anchor_captured "$FIX/s" "$FIX/home/sub"
+      }
+      When run run_it
+      The status should be success
+    End
+
+    It 'rejects an anchor absent from every rung (deny-listed path)'
+      run_it() {
+        source "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/backup-tm.zsh"
+        bkp::tm::anchor_captured "$FIX/s" "$FIX/home/never-captured"
+      }
+      When run run_it
+      The status should be failure
+    End
+
+    It 'allows anything when there is no FUSE mount to consult'
+      run_it() {
+        source "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/backup-tm.zsh"
+        bkp::tm::anchor_captured "$FIX/no-mount" "$FIX/home/whatever"
+      }
+      When run run_it
+      The status should be success
+    End
+  End
+
   Describe 'tm-tab: sessions in a fresh zellij tab'
     BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_tm-tab"
     setup_fix() {
       FIX=$(mktemp -d)
-      mkdir -p "$FIX/stub"
-      # list-clients reports the focused pane: terminal_1 until a
-      # new-tab has been issued, terminal_9 after (focus moved).
+      mkdir -p "$FIX/stub" "$FIX/layouts"
+      # a stand-in default.kdl: recognizable chrome content + closing brace
+      cat > "$FIX/layouts/default.kdl" <<'EOF'
+layout {
+    pane_template name="chrome-pane" borderless=true {
+        plugin location="status-bar"
+    }
+    default_tab_template {
+        children
+        chrome-pane size=1
+    }
+}
+EOF
+      # zellij stub: records argv, snapshots the layout before the reaper
       cat > "$FIX/stub/zellij" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$FIX/zellij.calls"
-if [ "\$*" = "action list-clients" ]; then
-  # focus sequence after new-tab: chrome plugin pane first (2 polls),
-  # then the terminal pane — mirrors zj-hub tab construction
-  p=terminal_1
-  if grep -q new-tab "$FIX/zellij.calls" && [ ! -e "$FIX/focus-stuck" ]; then
-    n=\$(grep -c list-clients "$FIX/zellij.calls")
-    if [ "\$n" -le 3 ]; then p=plugin_7; else p=terminal_9; fi
-  fi
-  printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         %s     zsh\n' "\$p"
-fi
+while [ \$# -gt 0 ]; do
+  [ "\$1" = "--layout" ] && cp "\$2" "$FIX/layout.kdl"
+  shift
+done
 EOF
       cat > "$FIX/stub/system-backup" <<EOF
 #!/bin/sh
@@ -823,57 +874,62 @@ EOF
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
-    It 'opens a plain named tab and types the session command into it'
+    It 'bakes the session command into a chrome-preserving layout'
       run_it() {
-        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/some dir"
+        PATH="$FIX/stub:$PATH" TM_TAB_LAYOUTS="$FIX/layouts" ZELLIJ=1 \
+          zsh "$BIN" "$FIX/some dir"
         grep -v list-clients "$FIX/zellij.calls"
+        cat "$FIX/layout.kdl"
       }
       When run run_it
       The status should be success
-      # plain new-tab (NO --layout): the default tab template must apply,
-      # or the zj-hub chrome panes vanish
-      The line 1 should equal "action new-tab --name tm: some dir"
-      The line 2 should include "action write-chars  exec system-backup browse"
-      The line 2 should include "some\\ dir"
-      The line 3 should equal "action write 13"
-      The lines of output should equal 3
+      The line 1 should start with "action new-tab --name tm: some dir --layout "
+      # the default layout's chrome must ride along...
+      The output should include 'default_tab_template'
+      The output should include 'chrome-pane size=1'
+      # ...wrapped around our command tab
+      The output should include 'tab name="tm: some dir" focus=true'
+      The output should include 'pane command="/bin/zsh"'
+      The output should include 'some\\ dir'
+      The output should include "close_on_exit true"
     End
 
-    It 'types nothing when focus never reaches the new tab'
+    It 'escapes KDL-hostile characters in the baked command'
       run_it() {
-        : > "$FIX/focus-stuck"
-        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/some dir"
-        rc=$?
-        grep -c write "$FIX/zellij.calls"
-        return $rc
-      }
-      When run run_it
-      The status should equal 1
-      # no write-chars, no write 13 — a bare tab beats a keystroke spray
-      The output should equal 0
-      The stderr should include "focus never reached"
-    End
-
-    It 'shell-quotes hostile characters in the typed command'
-      run_it() {
-        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/we'ird"
-        grep write-chars "$FIX/zellij.calls"
+        PATH="$FIX/stub:$PATH" TM_TAB_LAYOUTS="$FIX/layouts" ZELLIJ=1 \
+          zsh "$BIN" "$FIX/we\"ird"
+        grep 'args "-c"' "$FIX/layout.kdl"
       }
       When run run_it
       The status should be success
-      # zsh (q) renders the quote as we\'ird — the typed line must carry it
-      The output should include "we\'ird"
+      # zsh (q) shell-escapes the quote, then KDL escaping doubles the
+      # backslash and escapes the quote for the layout string
+      The output should include 'we\\\"ird'
+    End
+
+    It 'still opens a session when no default layout exists (no chrome)'
+      run_it() {
+        PATH="$FIX/stub:$PATH" TM_TAB_LAYOUTS="$FIX/nowhere" ZELLIJ=1 \
+          zsh "$BIN" "$FIX/some dir"
+        cat "$FIX/layout.kdl"
+      }
+      When run run_it
+      The status should be success
+      The line 1 should equal "layout {"
+      The output should include 'tab name="tm: some dir" focus=true'
+      The output should not include 'default_tab_template'
     End
 
     It 'drops empty positionals and anchors at PWD'
       run_it() {
         cd "$FIX"
-        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" ""
-        grep write-chars "$FIX/zellij.calls"
+        PATH="$FIX/stub:$PATH" TM_TAB_LAYOUTS="$FIX/layouts" ZELLIJ=1 \
+          zsh "$BIN" ""
+        grep 'args "-c"' "$FIX/layout.kdl"
       }
       When run run_it
       The status should be success
-      The output should include "exec system-backup browse $FIX"
+      The output should include "browse $FIX"
     End
 
     It 'degrades to an inline session outside zellij'

@@ -984,6 +984,31 @@ bkp::tm::lens_cmd() {
 
 : ${BKP_TM_BIN:="$HOME/.local/bin/system-backup-tm"}
 
+# bkp::tm::halt <message>
+# A refusal the user can actually read: tm-tab sessions run in a
+# close_on_exit tab that vanishes the instant we return, so block on a
+# single-OK confirm while there is a TTY to show it on.
+bkp::tm::halt() {
+  log_error "$1"
+  if [[ -t 0 && -t 1 ]] && command -v gum >/dev/null 2>&1; then
+    gum confirm --affirmative "OK" --negative "" -- "$1" || :
+  fi
+}
+
+# bkp::tm::anchor_captured <session> <anchor>
+# True when at least one mounted rung contains the anchor. A path in NO
+# snapshot was never captured (deny-listed, chezmoi-managed, or outside
+# the roots) — the session must refuse it up front: yazi would silently
+# fall back to the nearest captured ancestor, and on a giant FUSE tree
+# the watcher/preview churn reads as "yazi endlessly reloading" while
+# restic burns a core serving stats.
+bkp::tm::anchor_captured() {
+  local s="$1" anchor="$2"
+  [[ -d "$s/mnt/ids" ]] || return 0   # FUSE-less fallback: cannot tell, allow
+  local -a hits=( "$s"/mnt/ids/*"$anchor"(N) )
+  (( ${#hits} ))
+}
+
 # bkp::tm::launch <lens> <anchor>
 # Entry point (spec §5): under Zellij the session lives in the CURRENT
 # tab. Explore is ONE pane — yazi takes over the invoking pane and the
@@ -1032,6 +1057,14 @@ bkp::tm::launch() {
         bkp::mount "$staging" "$s/mnt" || { rm -rf "$s"; return 1 }
         print -r -- "$REPLY" > "$s/mount.pid"
       fi
+    fi
+    if ! bkp::tm::anchor_captured "$s" "$anchor"; then
+      # Release the mount BEFORE the blocking dialog — nothing should
+      # keep a FUSE server alive while the user reads a refusal.
+      [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
+      bkp::tm::session_rm "$s"
+      bkp::tm::halt "bkp: ${anchor/#$HOME/~} is not in any snapshot — deny-listed, chezmoi-managed, or outside the backup roots (see \`system-backup status\`)"
+      return 2
     fi
     # Diff: the first changeset build joins the inline prep narration —
     # hunk then opens on a REAL patch instead of spinning in the pane.

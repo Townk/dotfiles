@@ -195,6 +195,11 @@ tm_lens() {
       fi
       cmd=("${(@f)$(bkp::tm::lens_cmd "$s")}") || break
       ( cd "$s" && "${cmd[@]}" )
+      local lens_rc=$?
+      # One breadcrumb per lens exit — the only way to see WHY a lens
+      # bounced (respawn churn, instant crashes) after the session dir
+      # is swept.
+      print -r -- "$(date +%T) ${s:t} lens-exit rc=$lens_rc respawn=$([[ -e "$s/respawn" ]] && print y || print n) building=$([[ -e "$s/building" ]] && print y || print n) closed=$([[ -e "$s/closed" ]] && print y || print n)" >> "$BKP_STATE_DIR/lens.log" 2>/dev/null || :
       # a build just took the UI down (build_signal fired mid-hunk):
       # loop back into the spinner phase, not out of the session
       if [[ "$lens" == diff && -e "$s/building" && ! -e "$s/closed" ]]; then
