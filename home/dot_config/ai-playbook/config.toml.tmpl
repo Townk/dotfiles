@@ -22,5 +22,12 @@ backend = "zellij"
 [agent]
 # Profile-selected: {{ .profile }} -> {{ $harness }}.
 harness = "{{ $harness }}"
+{{- if eq .profile "work" }}
+# cursor's model catalog is subscription-scoped (`cursor-agent --list-models`).
+# Escalation on a capable, fast-served Opus; triage on a cheap flash model
+# (triage fires on every assist, so keep it cheap).
+model = "claude-opus-4-8-thinking-high-fast"
+triage_model = "gemini-3.5-flash"
+{{- end }}
 
 # vim:ft=toml
