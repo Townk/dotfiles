@@ -797,9 +797,21 @@ EOS
     setup_fix() {
       FIX=$(mktemp -d)
       mkdir -p "$FIX/stub"
+      # list-clients reports the focused pane: terminal_1 until a
+      # new-tab has been issued, terminal_9 after (focus moved).
       cat > "$FIX/stub/zellij" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$FIX/zellij.calls"
+if [ "\$*" = "action list-clients" ]; then
+  # focus sequence after new-tab: chrome plugin pane first (2 polls),
+  # then the terminal pane — mirrors zj-hub tab construction
+  p=terminal_1
+  if grep -q new-tab "$FIX/zellij.calls" && [ ! -e "$FIX/focus-stuck" ]; then
+    n=\$(grep -c list-clients "$FIX/zellij.calls")
+    if [ "\$n" -le 3 ]; then p=plugin_7; else p=terminal_9; fi
+  fi
+  printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         %s     zsh\n' "\$p"
+fi
 EOF
       cat > "$FIX/stub/system-backup" <<EOF
 #!/bin/sh
@@ -814,7 +826,7 @@ EOF
     It 'opens a plain named tab and types the session command into it'
       run_it() {
         PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/some dir"
-        cat "$FIX/zellij.calls"
+        grep -v list-clients "$FIX/zellij.calls"
       }
       When run run_it
       The status should be success
@@ -825,6 +837,21 @@ EOF
       The line 2 should include "some\\ dir"
       The line 3 should equal "action write 13"
       The lines of output should equal 3
+    End
+
+    It 'types nothing when focus never reaches the new tab'
+      run_it() {
+        : > "$FIX/focus-stuck"
+        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/some dir"
+        rc=$?
+        grep -c write "$FIX/zellij.calls"
+        return $rc
+      }
+      When run run_it
+      The status should equal 1
+      # no write-chars, no write 13 — a bare tab beats a keystroke spray
+      The output should equal 0
+      The stderr should include "focus never reached"
     End
 
     It 'shell-quotes hostile characters in the typed command'

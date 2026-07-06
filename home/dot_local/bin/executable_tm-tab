@@ -26,10 +26,34 @@ for a in "$@"; do
 done
 local name="${${anchor:a}:t}"
 
+# write-chars types into the client's FOCUSED pane, and under load the
+# focus switch can lag new-tab — early keystrokes would land in the
+# ORIGIN pane, where a yazi reads them as a keybinding barrage. Verify
+# the focus actually moved before typing; on timeout, type NOTHING
+# (a bare tab beats keystrokes sprayed into the wrong pane).
+# With ZELLIJ_PANE_ID in the env (running under a pane, as the yazi
+# binding does), list-clients reports the CALLING pane instead of the
+# client's focus — the poll would never see the switch. Strip it; the
+# write actions keep it and still target the client's focused pane.
+tm_tab_focus() { ZELLIJ_PANE_ID= zellij action list-clients 2>/dev/null | awk 'NR==2 {print $2}' }
+local before after i
+before=$(tm_tab_focus)
 zellij action new-tab --name "tm: $name" || exit 1
-# new-tab focuses the fresh pane; give its shell a beat to come up. Early
-# keystrokes only land in the TTY buffer, so this is comfort, not a lock.
-sleep 0.3
+# Tab construction focuses the chrome PLUGIN panes first (zj-hub tab
+# bar) — typing then would feed the command to a plugin, which eats
+# it. Only a fresh TERMINAL pane counts as arrived.
+for (( i = 0; i < 60; i++ )); do
+  after=$(tm_tab_focus)
+  [[ "$after" == terminal_* && "$after" != "$before" ]] && break
+  sleep 0.05
+done
+if [[ "$after" != terminal_* || "$after" == "$before" ]]; then
+  print -u2 "tm-tab: focus never reached the new tab — run: tm ${(j: :)${(@q)@}}"
+  exit 1
+fi
+# The shell in the fresh pane may still be starting; keystrokes wait in
+# the TTY buffer, so this settle is comfort, not a lock.
+sleep 0.2
 # exec: the session replaces the shell, so quitting it closes the tab.
 # The (q) flag shell-quotes each arg against the typed command line, and
 # the leading space keeps the line out of shell history.
