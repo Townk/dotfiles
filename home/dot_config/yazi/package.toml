@@ -53,5 +53,10 @@ use = "DaBuddhalint/smart-switch"
 rev = "b497bf8"
 hash = "ec0cf1ebe4e27261b8df4523c2f3d273"
 
+[[plugin.deps]]
+use = "Townk/nice-sidebar"
+rev = "d94c86f"
+hash = "e6d8ab1643b58f2c314087ef3933e14"
+
 [flavor]
 deps = []

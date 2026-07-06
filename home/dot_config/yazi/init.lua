@@ -67,3 +67,39 @@ Header:children_add(function()
 	end
 	return ui.Span(ya.user_name() .. "@" .. ya.host_name() .. ": "):fg("blue")
 end, 500, Header.LEFT)
+
+-- nice-sidebar: Finder-style sticky sidebar in the parent column. Skipped in
+-- tm scrub sessions (tm-gate owns that column and its own ratio) and in
+-- embedded-nvim yazi (the float is too narrow to surrender a fixed column).
+if not os.getenv("BKP_TM_SESSION") and not os.getenv("NVIM") then
+	local _r = (_theme_ok and type(_theme) == "table" and _theme.roles) or {}
+	local _ui = _r.ui or {}
+	local _st = _r.state or {}
+	local _tab = (_theme_ok and type(_theme) == "table" and _theme.extended and _theme.extended.tab) or {}
+	require("nice-sidebar"):setup {
+		dirs = {
+			{ label = "Home", path = "~", icon = "󰠦" },
+			{ label = "Desktop", path = "~/Desktop", icon = "󰇄" },
+			{ label = "Depot", path = "~/Depot", icon = "󰀼" },
+			{ label = "Download", path = "~/Downloads", icon = "󱑢" },
+			{ label = "Documents", path = "~/Documents", icon = "󰈙" },
+			{ label = "Notes", path = "~/Notes", icon = "󱓧" },
+			{ label = "Pictures", path = "~/Pictures", icon = "󰋩" },
+			{ label = "Projects", path = "~/Projects", icon = "󰃖" },
+			{ label = "Videos", path = "~/Movies", icon = "󰿎" },
+			{ label = "Music", path = "~/Music", icon = "󰝚" },
+			{ label = "Public", path = "~/Public", icon = "" },
+		},
+		colors = {
+			title = _ui.title,
+			section = _st.info,
+			separator = _ui.separator,
+			selected_bg = _tab.active_bg,
+			selected_fg = _tab.active_fg,
+			selected_inactive_bg = _tab.bg,
+			selected_inactive_fg = _tab.fg,
+			cursor_bg = _tab.bg,
+			cursor_fg = _tab.fg,
+		},
+	}
+end
