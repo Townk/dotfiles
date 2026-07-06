@@ -3,8 +3,11 @@
 # tab (yazi's `g t` lands here; works from any shell inside zellij too).
 # Args are tm's: a path (dir = explore, file = scoped diff), --diff, etc.
 #
-# `zellij action new-tab` cannot run a command directly — only a layout
-# file can name one — so we render a one-pane layout and point it there.
+# A plain `new-tab` + typing the command into its shell, NOT a layout
+# with a command pane: a layout replaces the default tab template (chrome
+# panes and all), and a command pane runs outside the user's shell env —
+# both break the session. The typed route is byte-identical to running
+# `tm` by hand, which is the proven path.
 emulate -L zsh
 set -u
 
@@ -23,27 +26,13 @@ for a in "$@"; do
 done
 local name="${${anchor:a}:t}"
 
-# KDL string escaping for the layout: backslash first, then quotes.
-local -a kargs=(browse "${@:-$PWD}")
-local piece args=""
-for piece in "${kargs[@]}"; do
-  piece="${piece//\\/\\\\}"
-  args+=" \"${piece//\"/\\\"}\""
-done
-
-local layout
-layout=$(mktemp "${TMPDIR:-/tmp}/tm-tab.XXXXXX") || exit 1
-cat > "$layout" <<EOF
-layout {
-    pane command="system-backup" {
-        args$args
-        close_on_exit true
-    }
-}
-EOF
-
-zellij action new-tab --name "tm: $name" --layout "$layout"
-local rc=$?
-# The server reads the file on its own clock — reap it off the fast path.
-( sleep 5; rm -f "$layout" ) &!
-return $rc
+zellij action new-tab --name "tm: $name" || exit 1
+# new-tab focuses the fresh pane; give its shell a beat to come up. Early
+# keystrokes only land in the TTY buffer, so this is comfort, not a lock.
+sleep 0.3
+# exec: the session replaces the shell, so quitting it closes the tab.
+# The (q) flag shell-quotes each arg against the typed command line, and
+# the leading space keeps the line out of shell history.
+local -a cmd=("${@:-$PWD}")
+zellij action write-chars " exec system-backup browse ${(j: :)${(@q)cmd}}"
+zellij action write 13

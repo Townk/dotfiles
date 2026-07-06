@@ -797,20 +797,9 @@ EOS
     setup_fix() {
       FIX=$(mktemp -d)
       mkdir -p "$FIX/stub"
-      # zellij stub records its argv and snapshots the layout file before
-      # tm-tab's delayed reaper can touch it
       cat > "$FIX/stub/zellij" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$FIX/zellij.calls"
-for a in "\$@"; do prev_was_layout=\${layout:+x}; done
-EOF
-      cat > "$FIX/stub/zellij" <<EOF
-#!/bin/sh
-printf '%s\n' "\$*" >> "$FIX/zellij.calls"
-while [ \$# -gt 0 ]; do
-  [ "\$1" = "--layout" ] && cp "\$2" "$FIX/layout.kdl"
-  shift
-done
 EOF
       cat > "$FIX/stub/system-backup" <<EOF
 #!/bin/sh
@@ -822,39 +811,42 @@ EOF
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
-    It 'renders a one-pane layout and names the tab after the anchor'
+    It 'opens a plain named tab and types the session command into it'
       run_it() {
         PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/some dir"
         cat "$FIX/zellij.calls"
-        cat "$FIX/layout.kdl"
       }
       When run run_it
       The status should be success
-      The output should include "action new-tab --name tm: some dir --layout"
-      The output should include 'command="system-backup"'
-      The output should include "args \"browse\" \"$FIX/some dir\""
-      The output should include "close_on_exit true"
+      # plain new-tab (NO --layout): the default tab template must apply,
+      # or the zj-hub chrome panes vanish
+      The line 1 should equal "action new-tab --name tm: some dir"
+      The line 2 should include "action write-chars  exec system-backup browse"
+      The line 2 should include "some\\ dir"
+      The line 3 should equal "action write 13"
+      The lines of output should equal 3
     End
 
-    It 'escapes KDL-hostile characters in the anchor path'
+    It 'shell-quotes hostile characters in the typed command'
       run_it() {
-        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/we\"ird"
-        grep -F 'we\"ird' "$FIX/layout.kdl" | head -1
+        PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" "$FIX/we'ird"
+        grep write-chars "$FIX/zellij.calls"
       }
       When run run_it
       The status should be success
-      The output should include 'we\"ird'
+      # zsh (q) renders the quote as we\'ird — the typed line must carry it
+      The output should include "we\'ird"
     End
 
     It 'drops empty positionals and anchors at PWD'
       run_it() {
         cd "$FIX"
         PATH="$FIX/stub:$PATH" ZELLIJ=1 zsh "$BIN" ""
-        cat "$FIX/layout.kdl" | grep args
+        grep write-chars "$FIX/zellij.calls"
       }
       When run run_it
       The status should be success
-      The output should include "\"browse\" \"$FIX\""
+      The output should include "exec system-backup browse $FIX"
     End
 
     It 'degrades to an inline session outside zellij'
