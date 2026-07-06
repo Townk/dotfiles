@@ -904,11 +904,12 @@ bkp::changeset::patch_live() {
 BKP_STATE_DIR="${BKP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/terminal-backup}"
 BKP_WIP_DIR="${BKP_WIP_DIR:-$BKP_STATE_DIR/wip}"
 # Wall-clock ceiling for a single scheduled capture's `restic backup`. Kept
-# below the 30-min (1800s) schedule cadence so a wedged run self-aborts within
-# one cycle and the next launchd tick can start fresh instead of stacking behind
-# a hung process. A normal capture of tens of thousands of local files finishes
-# in well under a minute; this only ever trips on a genuine hang.
-BKP_CAPTURE_TIMEOUT="${BKP_CAPTURE_TIMEOUT:-1200}"
+# well below the 30-min (1800s) schedule cadence so a wedged run self-aborts
+# with room to spare and the NEXT launchd tick starts clean — a hang dies in
+# ~5min, not ~20, so a burst of wedges can't chew a whole cycle before the
+# heartbeat recovers. A normal capture of tens of thousands of local files
+# finishes in seconds; this only ever trips on a genuine hang.
+BKP_CAPTURE_TIMEOUT="${BKP_CAPTURE_TIMEOUT:-300}"
 
 # bkp::size_bytes <spec> — "50m"/"2g"/"512k"/plain-bytes -> bytes in REPLY.
 bkp::size_bytes() {
