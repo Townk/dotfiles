@@ -223,7 +223,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - `home/dot_local/lib/system-secrets-common.zsh` (`sec::*`, 24K — also sources `prompt-common.zsh`)
 - `home/dot_config/zsh/private_secrets.d/private_slot-*.sh.tmpl`
 - `home/.chezmoidata/secrets.yaml` (manifest of env-var NAMES + prompts + `requiredFor` profiles — no values)
-- `secrets/<slot>.sops.sh` (outside the chezmoi source root), `.sops.yaml`, `.leak-patterns`
+- `secrets/<slot>/<NAME>.sops.sh` (outside the chezmoi source root), `.sops.yaml`, `.leak-patterns`
 - GPG chezmoiscript `run_after_25-setup-gpg-key.sh.tmpl` + the op-daemon reaper `run_before_05-reap-stale-op-daemon.sh.tmpl` (trigger wiring is chezmoi; the *logic* is secrets)
 
 **Out of scope:** the 1Password CLI / SOPS / age tools (external). The `op-cache-v1` content-hash cache is secrets-internal. The operator map `~/.config/chezmoi/onboard-map.yaml` is loose/unmanaged (not in repo).

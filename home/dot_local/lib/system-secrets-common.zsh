@@ -79,6 +79,34 @@ sec::manifest_has() {
   [[ "$hit" != "0" ]]
 }
 
+# sec::manifest_add <name> <prompt> <comma-separated-profiles> — append a new
+# secret entry to the manifest. Caller has already validated name/profiles.
+sec::manifest_add() {
+  sec::manifest_check
+  name="$1" pr="$2" profs="${3// /}" yq -i '
+    .secrets += [{
+      "name": strenv(name),
+      "prompt": strenv(pr),
+      "requiredFor": (strenv(profs) | split(","))
+    }]' "$MANIFEST"
+}
+
+# sec::manifest_add_profile <name> <profile> — add <profile> to a declared
+# secret's requiredFor if absent. Returns 0 iff it actually added it (so callers
+# can log/commit), 1 if the profile was already present.
+sec::manifest_add_profile() {
+  sec::manifest_check
+  local name="$1" profile="$2" has
+  has="$(name="$name" p="$profile" yq -r \
+    '.secrets[] | select(.name == strenv(name)) | (.requiredFor | contains([strenv(p)]))' \
+    "$MANIFEST")"
+  [[ "$has" == "true" ]] && return 1
+  name="$name" p="$profile" yq -i '
+    (.secrets[] | select(.name == strenv(name)) | .requiredFor) += [strenv(p)]
+  ' "$MANIFEST"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Interactive prompt helpers (prompt::required / ::default / ::secret /
 # ::choice / ::confirm) live in the shared prompt-common.zsh module.
@@ -109,7 +137,25 @@ sec::valid_slot() {
 sec::valid_name() { [[ "$1" =~ '^[A-Z][A-Z0-9_]*$' ]]; }
 
 sec::fragment_path() { printf '%s/private_%s.sh.tmpl' "$FRAGMENT_DIR" "$1"; }
-sec::blob_path() { printf '%s/%s.sops.sh' "$SECRETS_BLOB_DIR" "$1"; }
+# Per-secret encrypted blobs live under secrets/<slot>/<NAME>.sops.sh so a single
+# secret can be added or rotated without re-encrypting the slot's whole set.
+sec::blob_dir() { printf '%s/%s' "$SECRETS_BLOB_DIR" "$1"; }
+sec::blob_path() { printf '%s/%s/%s.sops.sh' "$SECRETS_BLOB_DIR" "$1" "$2"; }
+# Pre-split layout: one monolithic blob per slot. Retained ONLY for lazy-migration
+# detection — the operator holds a headless box's PUBLIC key, so it cannot decrypt
+# an old blob to split it; the first per-secret edit re-collects the slot's values
+# once and drops this file. New blobs never use this path.
+sec::legacy_blob_path() { printf '%s/%s.sops.sh' "$SECRETS_BLOB_DIR" "$1"; }
+# sec::headless_slot_names <slot> — NAMEs that currently have a per-secret blob,
+# one per line (the set the fragment must decrypt). Empty when none yet.
+sec::headless_slot_names() {
+  local dir b
+  dir="$(sec::blob_dir "$1")"
+  [[ -d "$dir" ]] || return 0
+  for b in "$dir"/*.sops.sh(N); do
+    printf '%s\n' "${${b:t}%.sops.sh}"
+  done
+}
 
 # ---------------------------------------------------------------------------
 # Operator map — LOOSE, NEVER COMMITTED. Lives under ~/.config/chezmoi/.
@@ -181,33 +227,44 @@ sec::map_slot_for_alias() {
 }
 
 # ---------------------------------------------------------------------------
-# SOPS + age. Blobs are BINARY-store sops files at secrets/<slot>.sops.sh whose
-# decrypted bytes are a ready-to-source `export NAME=value` snippet — shell
-# quoting is done here (in shell), so the decrypt template is a verbatim
-# passthrough. The .sops.yaml creation rule mirrors each slot's recipient so
-# `sops updatekeys` and review work; the recipient is passed explicitly to
-# encrypt so it never depends on cwd.
+# SOPS + age. Blobs are BINARY-store sops files at secrets/<slot>/<NAME>.sops.sh
+# (one per variable), whose decrypted bytes are a ready-to-source
+# `export NAME=value` line — shell quoting is done here (in shell), so the
+# decrypt template is a verbatim passthrough. The .sops.yaml creation rule is
+# dir-wide per slot (secrets/<slot>/.*\.sops\.sh$ -> recipient) so every one of a
+# slot's blobs shares one rule and `sops updatekeys`/review work; the recipient is
+# passed explicitly to encrypt so it never depends on cwd.
 # ---------------------------------------------------------------------------
 
-# sec::sops_rule_set <slot> <recipient> — upsert the slot's creation rule.
+# sec::sops_rule_set <slot> <recipient> — upsert the slot's (dir-wide) rule.
 sec::sops_rule_set() {
   local slot="$1" recipient="$2"
   [[ -f "$SOPS_YAML" ]] || printf 'creation_rules: []\n' >"$SOPS_YAML"
-  re="secrets/${slot}\\.sops\\.sh\$" age="$recipient" yq -i '
+  re="secrets/${slot}/.*\\.sops\\.sh\$" age="$recipient" yq -i '
     .creation_rules = ((.creation_rules // [])
       | map(select(.path_regex != strenv(re)))
       + [{"path_regex": strenv(re), "age": strenv(age)}])
   ' "$SOPS_YAML"
 }
 
+# sec::sops_rule_remove_legacy <slot> — drop the pre-split monolithic rule
+# (secrets/<slot>.sops.sh$) once per-secret blobs replace it. No-op if absent.
+sec::sops_rule_remove_legacy() {
+  [[ -f "$SOPS_YAML" ]] || return 0
+  re="secrets/${1}\\.sops\\.sh\$" yq -i \
+    '.creation_rules = ((.creation_rules // []) | map(select(.path_regex != strenv(re))))' \
+    "$SOPS_YAML"
+}
+
 # sec::sops_recipient_for_slot <slot> — recipient from .sops.yaml (or empty).
+# Matches both the new dir-wide rule and the legacy monolithic rule.
 sec::sops_recipient_for_slot() {
   [[ -f "$SOPS_YAML" ]] || {
     printf ''
     return 0
   }
-  re="secrets/${1}\\.sops\\.sh\$" yq -r \
-    '(.creation_rules // [])[] | select(.path_regex == strenv(re)) | .age' \
+  rn="secrets/${1}/.*\\.sops\\.sh\$" ro="secrets/${1}\\.sops\\.sh\$" yq -r \
+    '(.creation_rules // [])[] | select(.path_regex == strenv(rn) or .path_regex == strenv(ro)) | .age' \
     "$SOPS_YAML" 2>/dev/null | head -n1
 }
 
@@ -241,20 +298,29 @@ sec::sops_updatekeys() {
 # <slot>.sh (0600) only on the host whose secretsSlot matches (.chezmoiignore).
 # ---------------------------------------------------------------------------
 
-# sec::write_headless_fragment <slot> — body is a single SOPS decrypt call.
+# sec::write_headless_fragment <slot> <name>... — body is one SOPS decrypt call
+# per variable. The ciphertext blobs live at repo-root secrets/<slot>/<NAME>.sops.sh
+# (outside the chezmoi source root), each decrypting to a single `export` line.
 sec::write_headless_fragment() {
-  local slot="$1" frag
+  local slot="$1"
+  shift
+  local frag name
   frag="$(sec::fragment_path "$slot")"
   mkdir -p "${frag:h}"
-  cat >"$frag" <<EOF
-{{- /* headless slot ${slot}: SOPS+age secrets, decrypted ONCE per apply into
-       a 0600 file (the private_ source prefix). The ciphertext blob lives at
-       repo-root secrets/${slot}.sops.sh, outside the chezmoi source root, so
-       it is read by path and never rendered into \$HOME. sops finds the age
-       identity through SOPS_AGE_KEY_FILE, set in chezmoi's [env] on headless
-       hosts. The decrypted bytes are already \`export NAME=value\` lines. */ -}}
-{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "${slot}.sops.sh") }}
+  {
+    cat <<EOF
+{{- /* headless slot ${slot}: SOPS+age secrets, decrypted ONCE per apply into a
+       0600 file (the private_ source prefix). One ciphertext blob per variable
+       at repo-root secrets/${slot}/<NAME>.sops.sh, outside the chezmoi source
+       root, so each is read by path and never rendered into \$HOME. sops finds
+       the age identity through SOPS_AGE_KEY_FILE, set in chezmoi's [env] on
+       headless hosts. Each blob decrypts to a single \`export NAME=value\`. */ -}}
 EOF
+    for name in "$@"; do
+      printf '{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "%s" "%s.sops.sh") }}\n' \
+        "$slot" "$name"
+    done
+  } >"$frag"
 }
 
 # sec::write_human_fragment <slot> <NAME=op://ref>... — cache after materializing.
@@ -291,32 +357,60 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# 1Password helpers (human machines). The operator's service-account token is
-# the single mechanism: `system-onboard`/`system-secrets` run `op` in
-# SERVICE-ACCOUNT mode by prefixing each call with the token, so there is no
-# desktop-app authorization and no account picker (a service account is bound to
-# one account; its vault list is already scoped). This lets the tooling CREATE
-# the backing item from a masked value and derive its op:// reference, and it is
-# the same token copied to each new machine for apply-time resolution.
+# 1Password helpers (human machines). PROVISIONING (create/edit the backing
+# items here) uses the same auth split as RESOLUTION (`op read` at apply): the
+# desktop app in ACCOUNT mode (Touch ID) on a machine you sit at, and the loose
+# SERVICE-ACCOUNT token only over SSH, where there is no GUI. So a local human
+# machine needs no token at all — `sec::op` picks the mode from the environment
+# (see sec::op_use_service), exactly mirroring environment.sh.
 #
-# Source of truth: a RAW token string at $OP_SA_TOKEN_FILE — loose, 0600, NEVER
-# committed, and deliberately NOT under ~/.config/zsh/secrets.d (which every shell
-# sources). environment.sh exports it ONLY over SSH, so a LOCAL `chezmoi apply`
-# has no token and resolves op:// in account mode (Touch ID, full Private-vault
-# access for the GPG import), while an SSH apply gets the token and uses service
-# mode. The token is passed as a one-shot ENV assignment (env, not argv — not
-# visible in process args). Items use the "API Credential" category; values are
-# stored ONE PER MACHINE as a CONCEALED field labeled with the slot hash, so refs
-# are deterministic: op://<vault>/<NAME>/<slot-hash> (one item per variable, one
-# field per machine — per-machine values and per-machine rotation).
+# Source of truth for the token: a RAW string at $OP_SA_TOKEN_FILE — loose, 0600,
+# NEVER committed, and deliberately NOT under ~/.config/zsh/secrets.d (which every
+# shell sources). environment.sh exports it ONLY over SSH, so a LOCAL `chezmoi
+# apply` has no token and resolves op:// in account mode (Touch ID, full
+# Private-vault access for the GPG import), while an SSH apply gets the token and
+# uses service mode. The token is passed as a one-shot ENV assignment (env, not
+# argv — not visible in process args). Items use the "API Credential" category;
+# values are stored ONE PER MACHINE as a CONCEALED field labeled with the slot
+# hash, so refs are deterministic: op://<vault>/<NAME>/<slot-hash> (one item per
+# variable, one field per machine — per-machine values and per-machine rotation).
 # ---------------------------------------------------------------------------
 OP_SA_TOKEN_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/op/service-account"
+# Cached 1Password vault name — loose, per-machine, NEVER committed. Kept in its
+# own file (not the operator map) because known_slots() treats every top-level
+# map key as a slot, so a non-slot key there would corrupt rotate/reconcile.
+OP_VAULT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/chezmoi/op-vault"
 
 sec::op_available() { command -v op >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; }
 sec::op_have_token() { [[ -s "$OP_SA_TOKEN_FILE" ]]; }
 
-# sec::op <args…> — run op in service-account mode using the loose token.
-sec::op() { OP_SERVICE_ACCOUNT_TOKEN="$(cat "$OP_SA_TOKEN_FILE")" op "$@"; }
+# sec::op_use_service — 0 iff op must use the loose service-account token instead
+# of the desktop app: i.e. over SSH, where there is no GUI for Touch ID. Mirrors
+# environment.sh so provisioning matches apply-time resolution.
+sec::op_use_service() { [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; }
+
+# sec::op_sa <args…> — force SERVICE-ACCOUNT mode using the loose token.
+sec::op_sa() { OP_SERVICE_ACCOUNT_TOKEN="$(cat "$OP_SA_TOKEN_FILE")" op "$@"; }
+
+# sec::op_account <args…> — force ACCOUNT mode (desktop app / Touch ID). `env -u`
+# drops any half-set token so it can't hijack the call into the SA and loop.
+sec::op_account() { env -u OP_SERVICE_ACCOUNT_TOKEN op "$@"; }
+
+# sec::op <args…> — run op with the auth the environment calls for: service over
+# SSH, account locally. All item reads/writes go through this.
+sec::op() {
+  if sec::op_use_service; then sec::op_sa "$@"; else sec::op_account "$@"; fi
+}
+
+# sec::op_token_valid — 0 iff the stored token actually authenticates. A
+# non-empty file is NOT proof: a wrong value (e.g. a pasted secret, or a ref
+# that points at the wrong item) reads fine but fails every SA call with
+# "format is invalid". Always probes in SERVICE mode — it is the token being
+# validated, not the desktop app.
+sec::op_token_valid() {
+  sec::op_have_token || return 1
+  sec::op_sa vault list --format=json >/dev/null 2>&1
+}
 
 # sec::op_store_token <token> — write the raw token loose at 0600.
 sec::op_store_token() {
@@ -328,20 +422,41 @@ sec::op_store_token() {
   chmod 600 "$OP_SA_TOKEN_FILE"
 }
 
+# sec::op_vault_get — print the cached vault name (empty if none).
+sec::op_vault_get() { [[ -r "$OP_VAULT_FILE" ]] && cat "$OP_VAULT_FILE" || printf ''; }
+
+# sec::op_vault_set <name> — remember the chosen vault (loose, 0600).
+sec::op_vault_set() {
+  (
+    umask 077
+    mkdir -p "${OP_VAULT_FILE:h}" && printf '%s' "$1" >"$OP_VAULT_FILE"
+  ) ||
+    die "could not write $OP_VAULT_FILE"
+  chmod 600 "$OP_VAULT_FILE"
+}
+
 # sec::op_read_ref <op://ref> — read a value via the 1Password app in ACCOUNT
 # mode (env -u OP_SERVICE_ACCOUNT_TOKEN, so a half-set token can't force the SA
 # and loop). Echoes the value; empty + nonzero on failure.
-sec::op_read_ref() { env -u OP_SERVICE_ACCOUNT_TOKEN op read "$1" 2>/dev/null; }
+sec::op_read_ref() { sec::op_account read "$1" 2>/dev/null; }
 
-# sec::op_ensure_token — guarantee the loose token exists. In order:
-#   1. token file already present                        -> done
+# sec::op_ensure_token — guarantee a VALID loose token exists (only needed over
+# SSH; local machines use the desktop app). In order:
+#   1. token file present AND authenticates                -> done
 #   2. a remembered op:// ref ($OP_SA_TOKEN_FILE.ref) read via the desktop app
 #   3. prompt for the op:// ref, read it via the desktop app, then remember it
 #   4. masked paste of the raw token
 # Reads always go through the desktop app (account mode), since the service
 # account itself can't be expected to store its own token.
 sec::op_ensure_token() {
-  sec::op_have_token && return 0
+  # A non-empty file is not a working token: validate it. If it is stale/wrong,
+  # discard BOTH it and its remembered ref (the ref most likely pointed at the
+  # wrong item) so the steps below re-collect from scratch.
+  if sec::op_have_token; then
+    sec::op_token_valid && return 0
+    log_warn "stored service-account token at $OP_SA_TOKEN_FILE is invalid; discarding it and its remembered ref"
+    rm -f "$OP_SA_TOKEN_FILE" "$OP_SA_TOKEN_FILE.ref"
+  fi
   local ref_file="$OP_SA_TOKEN_FILE.ref" __tok="" __ref=""
 
   # 2. remembered ref (non-interactive; just needs the app authed)
@@ -350,10 +465,15 @@ sec::op_ensure_token() {
     if __tok="$(sec::op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
       sec::op_store_token "$__tok"
       __tok=""
-      log_ok "loaded service-account token from $__ref (account mode) at $OP_SA_TOKEN_FILE"
-      return 0
+      if sec::op_token_valid; then
+        log_ok "loaded service-account token from $__ref (account mode) at $OP_SA_TOKEN_FILE"
+        return 0
+      fi
+      log_warn "$__ref did not yield a valid service-account token; discarding it and will prompt"
+      rm -f "$OP_SA_TOKEN_FILE" "$ref_file"
+    else
+      log_warn "could not read $__ref via the 1Password app; will prompt"
     fi
-    log_warn "could not read $__ref via the 1Password app; will prompt"
   fi
 
   # 3. prompt for a ref and read it via the desktop app
@@ -365,14 +485,19 @@ sec::op_ensure_token() {
       if __tok="$(sec::op_read_ref "$__ref")" && [[ -n "$__tok" ]]; then
         sec::op_store_token "$__tok"
         __tok=""
-        (
-          umask 077
-          printf '%s' "$__ref" >"$ref_file"
-        ) && chmod 600 "$ref_file"
-        log_ok "stored service-account token from $__ref (loose, 0600) at $OP_SA_TOKEN_FILE"
-        return 0
+        if sec::op_token_valid; then
+          (
+            umask 077
+            printf '%s' "$__ref" >"$ref_file"
+          ) && chmod 600 "$ref_file"
+          log_ok "stored service-account token from $__ref (loose, 0600) at $OP_SA_TOKEN_FILE"
+          return 0
+        fi
+        log_warn "$__ref resolves to a value but not a valid service-account token; falling back to paste"
+        rm -f "$OP_SA_TOKEN_FILE"
+      else
+        log_warn "could not read $__ref; falling back to paste"
       fi
-      log_warn "could not read $__ref; falling back to paste"
     fi
   fi
 
@@ -380,6 +505,10 @@ sec::op_ensure_token() {
   prompt::secret __tok "1Password service-account token (stored at $OP_SA_TOKEN_FILE):"
   sec::op_store_token "$__tok"
   __tok=""
+  sec::op_token_valid || {
+    rm -f "$OP_SA_TOKEN_FILE"
+    die "that value is not a valid 1Password service-account token (an SA token looks like 'ops_...'); nothing stored"
+  }
   log_ok "stored service-account token (loose, 0600) at $OP_SA_TOKEN_FILE"
 }
 
@@ -418,6 +547,75 @@ sec::op_upsert_field() {
   printf 'op://%s/%s/%s\n' "$vault" "$item" "$field"
 }
 
+# sec::op_resolve_vault — echo the 1Password vault to use, or empty when op/jq
+# are unavailable (callers then fall back to manual op:// entry). Ensures a token
+# over SSH, reuses the cached choice, or asks once and remembers it. Dies if the
+# vault list fails. ALL informational output is routed to stderr so this stays
+# safe inside a command substitution (only the vault name is written to stdout).
+sec::op_resolve_vault() {
+  sec::op_available || {
+    printf ''
+    return 0
+  }
+  sec::op_use_service && sec::op_ensure_token 1>&2
+  local vault_json
+  # Capture separately: piping op straight into an array command-substitution
+  # with 2>/dev/null let an op auth failure die SILENTLY under pipefail.
+  if ! vault_json="$(sec::op vault list --format=json 2>&1)"; then
+    if sec::op_use_service; then
+      die "1Password vault list failed (check the service-account token at $OP_SA_TOKEN_FILE): $vault_json"
+    else
+      die "1Password vault list failed — is the desktop app signed in? try 'op signin': $vault_json"
+    fi
+  fi
+  local -a vaults
+  vaults=("${(@f)$(printf '%s' "$vault_json" | jq -r '.[].name')}")
+  vaults=(${vaults:#})
+  local cached_vault vault=""
+  cached_vault="$(sec::op_vault_get)"
+  if [[ -n "$cached_vault" ]] && (($vaults[(Ie)$cached_vault])); then
+    vault="$cached_vault"
+    log_info "using cached 1Password vault '$vault' (clear $OP_VAULT_FILE to change)" 1>&2
+  elif ((${#vaults[@]} > 1)); then
+    prompt::choice vault "1Password vault" "${vaults[@]}"
+    sec::op_vault_set "$vault"
+  elif ((${#vaults[@]} == 1)); then
+    vault="${vaults[1]}"
+    sec::op_vault_set "$vault"
+  fi
+  printf '%s' "$vault"
+}
+
+# sec::op_set_field <vault> <name> <hash> <desc> — prompt for and store ONE
+# machine's value for NAME (concealed field <hash> on item NAME). Confirms before
+# replacing an existing value. Dies on write failure. Shared by full rebuild and
+# single-secret add/rotate so both prompt and error identically.
+sec::op_set_field() {
+  local vault="$1" name="$2" hash="$3" desc="$4" val auth_hint ref="op://$1/$2/$3"
+  if sec::op_use_service; then
+    auth_hint="does the service account have write access to '$vault'?"
+  else
+    auth_hint="is the desktop app signed in with write access to '$vault'?"
+  fi
+  if sec::op_field_exists "$vault" "$name" "$hash"; then
+    if prompt::confirm "  $name ($desc): field $hash already set — replace its value?"; then
+      prompt::secret val "    new value for $name (masked):"
+      sec::op_upsert_field "$vault" "$name" "$hash" "$val" >/dev/null ||
+        die "could not update $ref ($auth_hint)"
+      val=""
+      log_ok "    updated $ref"
+    else
+      log_info "    keeping existing $ref"
+    fi
+  else
+    prompt::secret val "  $name ($desc) — value for field $hash (masked):"
+    sec::op_upsert_field "$vault" "$name" "$hash" "$val" >/dev/null ||
+      die "could not write $ref ($auth_hint)"
+    val=""
+    log_ok "    wrote $ref"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Leak audit. Mirrors the local pre-commit hook: scan STAGED added lines and
 # staged file names against the gitignored .leak-patterns. Run this in-tool
@@ -447,19 +645,22 @@ $names"
 }
 
 # ---------------------------------------------------------------------------
-# Slot (re)build — the shared core used by BOTH onboarding (new slot) and
-# `system-secrets` rotate/reconcile (existing slot), so the two paths cannot
-# drift. (Re)collects every secret the slot's profile requires and regenerates
-# its fragment (+ encrypted blob for headless). The caller commits.
+# Slot (re)build & per-secret materialization — the shared core used by BOTH
+# onboarding (new slot) and `system-secrets` add/rotate (existing slot), so the
+# paths cannot drift. `sec::rebuild_slot` (re)collects the slot's WHOLE required
+# set; `sec::materialize_secret` touches ONE variable. The caller commits.
 #
 # Headless note: the operator holds only the box's age PUBLIC key (recipient),
-# never its private key, so a blob cannot be partially decrypted/patched — a
-# rebuild always re-collects the full required set and re-encrypts. This is the
-# per-machine-isolation tradeoff (a compromised box can't read peers' secrets).
+# never its private key. Per-secret blobs mean adding/rotating one variable only
+# re-encrypts that variable. But a legacy MONOLITHIC blob cannot be split (no
+# private key), so the first per-secret edit on such a slot re-collects the whole
+# set once (lazy migration). Per-machine isolation is preserved: each blob is
+# encrypted only to its own slot's recipient.
 # ---------------------------------------------------------------------------
 
-# sec::rebuild_slot <slot> — regenerate fragment/blob from freshly prompted
-# values. Reads kind/profile/recipient from the operator map.
+# sec::rebuild_slot <slot> — regenerate the fragment and the FULL per-secret blob
+# set from freshly prompted values. Reads kind/profile/recipient from the map,
+# and clears any legacy monolithic blob/rule it replaces.
 sec::rebuild_slot() {
   local slot="$1" kind profile recipient
   kind="$(sec::map_get "$slot" kind)"
@@ -475,73 +676,120 @@ sec::rebuild_slot() {
     return 0
   }
 
-  local n val ref
+  local n val
   if [[ "$kind" == headless ]]; then
     recipient="$(sec::map_get "$slot" recipient)"
     [[ -n "$recipient" ]] || recipient="$(sec::sops_recipient_for_slot "$slot")"
     [[ -n "$recipient" ]] || die "no age recipient known for headless slot $slot"
-    local plain
-    plain="$(mktemp "${TMPDIR:-/tmp}/sec-plain.XXXXXX")"
-    chmod 0600 "$plain"
-    trap 'rm -f "$plain"' EXIT
+    local tmpd
+    tmpd="$(mktemp -d "${TMPDIR:-/tmp}/sec-plain.XXXXXX")"
+    chmod 0700 "$tmpd"
+    trap 'rm -rf "$tmpd"' EXIT
+    mkdir -p "$(sec::blob_dir "$slot")"
+    sec::sops_rule_set "$slot" "$recipient"
     log_info "Enter values for the '$profile' secrets (hidden). Headless slot $slot:"
     for n in "${names[@]}"; do
       prompt::secret val "  $n — $(sec::manifest_prompt "$n"):"
-      printf 'export %s=%s\n' "$n" "${(qq)val}" >>"$plain"
+      printf 'export %s=%s\n' "$n" "${(qq)val}" >"$tmpd/$n"
+      val=""
+      sec::sops_encrypt "$recipient" "$tmpd/$n" "$(sec::blob_path "$slot" "$n")"
     done
-    mkdir -p "$SECRETS_BLOB_DIR"
-    sec::sops_rule_set "$slot" "$recipient"
-    sec::sops_encrypt "$recipient" "$plain" "$(sec::blob_path "$slot")"
-    rm -f "$plain"
+    rm -rf "$tmpd"
     trap - EXIT
-    sec::write_headless_fragment "$slot"
+    # A full rebuild is authoritative: drop any legacy monolithic blob/rule now
+    # that per-secret blobs cover the set.
+    [[ -f "$(sec::legacy_blob_path "$slot")" ]] && rm -f "$(sec::legacy_blob_path "$slot")"
+    sec::sops_rule_remove_legacy "$slot"
+    sec::write_headless_fragment "$slot" "${names[@]}"
     log_ok "encrypted ${#names[@]} secret(s) for slot $slot"
   else
     # Human: each secret resolves from 1Password at apply via `output "op" read`.
     # Schema: ONE item per variable; ONE concealed field per machine, labeled
     # with the slot hash — so the ref is deterministic op://<vault>/<NAME>/<hash>.
-    # With op + jq we read/write those fields through the service-account token
-    # (SA mode). Without op/jq, fall back to entering op:// references by hand.
-    local pairs=() vault="" desc hash="${slot#slot-}"
-    if sec::op_available; then
-      sec::op_ensure_token
-      local -a vaults
-      vaults=("${(@f)$(sec::op vault list --format=json 2>/dev/null | jq -r '.[].name')}")
-      vaults=(${vaults:#})
-      if ((${#vaults[@]} > 1)); then
-        prompt::choice vault "1Password vault" "${vaults[@]}"
-      elif ((${#vaults[@]} == 1)); then
-        vault="${vaults[1]}"
-      fi
-    fi
+    # With op + jq we read/write those fields through `sec::op` (desktop app
+    # locally, service-account token over SSH). Without op/jq, or with no vault,
+    # fall back to entering op:// references by hand.
+    local pairs=() vault desc ref hash="${slot#slot-}"
+    vault="$(sec::op_resolve_vault)"
     log_info "1Password setup for the '$profile' secrets (human slot $slot, field $hash)."
     [[ -n "$vault" ]] &&
       log_warn "op:// references are committed to this PUBLIC repo — keep vault/item names non-identifying."
     for n in "${names[@]}"; do
       desc="$(sec::manifest_prompt "$n")"
       if [[ -n "$vault" ]]; then
+        sec::op_set_field "$vault" "$n" "$hash" "$desc"
         ref="op://$vault/$n/$hash"
-        if sec::op_field_exists "$vault" "$n" "$hash"; then
-          if prompt::confirm "  $n ($desc): field $hash already set — replace its value?"; then
-            prompt::secret val "    new value for $n (masked):"
-            sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null ||
-              die "could not update $ref (does the service account have write access to '$vault'?)"
-            val=""
-            log_ok "    updated $ref"
-          else
-            log_info "    keeping existing $ref"
-          fi
-        else
-          prompt::secret val "  $n ($desc) — value for field $hash (masked):"
-          sec::op_upsert_field "$vault" "$n" "$hash" "$val" >/dev/null ||
-            die "could not write $ref (does the service account have write access to '$vault'?)"
-          val=""
-          log_ok "    wrote $ref"
-        fi
       else
         prompt::required ref "  $n — op:// reference ($desc):"
       fi
       pairs+=("$n=$ref")
+    done
+    sec::write_human_fragment "$slot" "${pairs[@]}"
+    log_ok "wrote ${#pairs[@]} 1Password reference(s) for slot $slot"
+  fi
+}
+
+# sec::materialize_secret <slot> <name> — set/rotate ONE variable on a slot,
+# leaving the slot's other secrets untouched, then regenerate the fragment.
+# Reads kind/profile from the map; the profile MUST require NAME (caller ensures
+# this via the manifest). Headless slots still on a legacy monolithic blob escalate
+# to a full rebuild once (lazy migration).
+sec::materialize_secret() {
+  local slot="$1" name="$2" kind profile
+  kind="$(sec::map_get "$slot" kind)"
+  profile="$(sec::map_get "$slot" profile)"
+  [[ -n "$kind" && -n "$profile" ]] ||
+    die "slot $slot is not in the operator map (run system-onboard first)"
+  sec::manifest_names_for_profile "$profile" | grep -Fxq "$name" ||
+    die "'$name' is not required for profile '$profile' (slot $slot)"
+
+  if [[ "$kind" == headless ]]; then
+    local recipient
+    if [[ -f "$(sec::legacy_blob_path "$slot")" ]]; then
+      log_info "slot $slot still uses a monolithic blob; re-collecting its values once to migrate to per-secret blobs"
+      sec::rebuild_slot "$slot"
+      return 0
+    fi
+    recipient="$(sec::map_get "$slot" recipient)"
+    [[ -n "$recipient" ]] || recipient="$(sec::sops_recipient_for_slot "$slot")"
+    [[ -n "$recipient" ]] || die "no age recipient known for headless slot $slot"
+    local val plain
+    plain="$(mktemp "${TMPDIR:-/tmp}/sec-plain.XXXXXX")"
+    chmod 0600 "$plain"
+    trap 'rm -f "$plain"' EXIT
+    prompt::secret val "  $name — $(sec::manifest_prompt "$name") (headless slot $slot):"
+    printf 'export %s=%s\n' "$name" "${(qq)val}" >"$plain"
+    val=""
+    mkdir -p "$(sec::blob_dir "$slot")"
+    sec::sops_rule_set "$slot" "$recipient"
+    sec::sops_encrypt "$recipient" "$plain" "$(sec::blob_path "$slot" "$name")"
+    rm -f "$plain"
+    trap - EXIT
+    local slot_names
+    slot_names=("${(@f)$(sec::headless_slot_names "$slot")}")
+    slot_names=(${slot_names:#})
+    sec::write_headless_fragment "$slot" "${slot_names[@]}"
+    log_ok "encrypted $name for slot $slot"
+  else
+    # Human: without op/jq (or a resolvable vault) there is no clean single-field
+    # path, so fall back to a full rebuild (manual op:// entry for the whole set).
+    local vault hash="${slot#slot-}"
+    vault="$(sec::op_resolve_vault)"
+    [[ -n "$vault" ]] || {
+      log_info "no 1Password vault available; rebuilding the whole slot to enter references manually"
+      sec::rebuild_slot "$slot"
+      return 0
+    }
+    log_warn "op:// references are committed to this PUBLIC repo — keep vault/item names non-identifying."
+    sec::op_set_field "$vault" "$name" "$hash" "$(sec::manifest_prompt "$name")"
+    # Regenerate the fragment from every profile secret that has a field on this
+    # machine, so existing entries survive and only NAME changed.
+    local -a names pairs
+    names=("${(@f)$(sec::manifest_names_for_profile "$profile")}")
+    names=(${names:#})
+    local n
+    for n in "${names[@]}"; do
+      sec::op_field_exists "$vault" "$n" "$hash" && pairs+=("$n=op://$vault/$n/$hash")
     done
     sec::write_human_fragment "$slot" "${pairs[@]}"
     log_ok "wrote ${#pairs[@]} 1Password reference(s) for slot $slot"
@@ -555,11 +803,15 @@ sec::commit_paths_for_slot() {
     "$(sec::fragment_path "$slot")" \
     "$SOPS_YAML" \
     "$MANIFEST"
-  # Human slots have no SOPS blob; guard with `if` (not a trailing `&&`, whose
-  # false result would make this function return 1 and trip the caller's `set
-  # -e` during `paths=("$(...)")`).
-  if [[ -f "$(sec::blob_path "$slot")" ]]; then
-    printf '%s\n' "$(sec::blob_path "$slot")"
+  # Headless slots carry SOPS blobs; stage the per-secret blob directory and the
+  # legacy monolithic path (so its deletion is staged on migration). git add of a
+  # missing/never-tracked path is a swallowed no-op in sec::git_commit. Human
+  # slots emit neither. Guard with `if` (not a trailing `&&`, whose false result
+  # would return 1 and trip the caller's `set -e` during `paths=("$(...)")`).
+  if [[ "$(sec::map_get "$slot" kind)" == headless ]]; then
+    printf '%s\n' \
+      "$(sec::blob_dir "$slot")" \
+      "$(sec::legacy_blob_path "$slot")"
   fi
 }
 

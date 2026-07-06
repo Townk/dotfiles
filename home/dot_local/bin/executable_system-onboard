@@ -454,7 +454,7 @@ converge_remote() {
 # --- step 9.5: record the target's OWN map entry ----------------------------
 # A remotely-onboarded machine gets the SA token (operator-capable) but, unlike
 # a --local self-onboard, never recorded its own slot in ITS operator map — so
-# its local `system-secrets list/rotate/reconcile` couldn't see its own slot.
+# its local `system-secrets list/rotate` couldn't see its own slot.
 # Upsert just THIS machine's entry into the target's loose map (a deep merge, so
 # any peers it may already manage are preserved). Values mirror sec::map_set;
 # idempotent. yq is resolved via rexec's normalized REMOTE_PATH. Runs from

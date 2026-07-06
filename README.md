@@ -275,7 +275,7 @@ endpoints and the alias↔slot map live only in the loose, unmanaged layer. See
 | alias ↔ slot ↔ host map | `~/.config/chezmoi/onboard-map.yaml` (loose, never committed) |
 | Which slot is *this host's* | `~/.config/chezmoi/chezmoi.toml` `[data].secretsSlot` (generated at init, local) |
 | slot id → age recipient | `.sops.yaml` (committed — opaque slot + age **public** key only) |
-| Encrypted values | `secrets/<slot>.sops.sh` (committed — ciphertext, opaque name; outside the chezmoi source root) |
+| Encrypted values | `secrets/<slot>/<NAME>.sops.sh` (committed — one ciphertext blob per secret, opaque names; outside the chezmoi source root) |
 | Env var names + prompts | `home/.chezmoidata/secrets.yaml` (committed — no values) |
 | 1Password service-account token | `~/.local/share/op/service-account` (loose, 0600, never committed; exported by `environment.sh` only over SSH, so local sessions stay in account mode / Touch ID) |
 
@@ -321,17 +321,27 @@ operator-driven. Idempotent — safe to rerun.
 ### Managing secrets
 
 ```sh
-system-secrets list                       # manifest + known slots
-system-secrets add <NAME>                 # declare a new secret in the manifest
-system-secrets rotate <NAME> [--slot S]   # re-collect the secret(s) on a slot
-system-secrets reconcile [--slot S]       # rebuild a slot to match the manifest
+system-secrets list                            # manifest + known slots
+system-secrets add <NAME>                       # declare (if new) + set NAME on this machine
+system-secrets rotate <NAME> [--slot S | --all] # re-collect NAME (default: this machine)
+system-secrets rotate [--slot S | --all]        # rebuild a slot's whole secret set
 ```
 
-Both commands share `~/.local/lib/system-secrets-common.zsh` so onboarding and
-later edits cannot drift. A headless blob is encrypted only to its box's
-recipient (per-machine isolation — a compromised box can't read peers'
-secrets), and the operator holds only the public key, so rotating a headless
-slot re-collects its full required set rather than patching in place.
+`add` is the one-step path for the machine you're on: it declares the secret if
+new, **auto-adds this machine's profile** to its `requiredFor` if missing (so the
+value can materialize here), then stores this machine's value. `rotate <NAME>`
+re-collects one secret — on this machine by default, on `--slot S`, or across the
+fleet with `--all`; with no NAME it rebuilds a slot's whole set. Both commands
+share `~/.local/lib/system-secrets-common.zsh` with onboarding so the paths can't
+drift.
+
+Values are stored per-secret: one 1Password field per machine (human), or one
+`secrets/<slot>/<NAME>.sops.sh` blob (headless), so adding or rotating a single
+secret never disturbs the others. A headless blob is encrypted only to its box's
+recipient (per-machine isolation — a compromised box can't read peers' secrets),
+and the operator holds only the public key. A slot still on the pre-split
+monolithic blob can't be decrypted operator-side to patch, so its first
+per-secret edit re-collects the slot's set once to migrate it.
 
 ### Key custody
 

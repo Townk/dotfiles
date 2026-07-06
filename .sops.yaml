@@ -9,11 +9,15 @@
 # encrypted only to its own slot's recipient, so a compromised box cannot
 # decrypt a peer's secrets.
 #
-# Managed by `system-onboard` / `system-secrets`, which append a rule per slot
-# and run `sops updatekeys` when a recipient rotates. The blobs themselves live
-# under secrets/<slot>.sops.sh (binary store; auto-detected by sops). This file
+# Managed by `system-onboard` / `system-secrets`, which keep one dir-wide rule
+# per slot (secrets/<slot>/.*\.sops\.sh$) and run `sops updatekeys` when a
+# recipient rotates. The blobs themselves live one-per-secret under
+# secrets/<slot>/<NAME>.sops.sh (binary store; auto-detected by sops). This file
 # and that directory sit OUTSIDE the chezmoi source root (home/), so chezmoi
 # never renders them into $HOME.
+#
+# Pre-split slots may still carry a legacy monolithic rule (secrets/<slot>.sops.sh$)
+# until their first per-secret edit migrates them to the dir-wide form.
 creation_rules:
   - path_regex: secrets/slot-686a5d\.sops\.sh$
     age: age1k28rm03x0atk94vmxltuy3tcrhygprs56vhxzz8gpdtdlj7gdf6qqa0eqr

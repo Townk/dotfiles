@@ -17,7 +17,7 @@ repo.
 - `home/dot_config/zsh/private_secrets.d/private_slot-*.sh.tmpl`
 - `home/.chezmoidata/secrets.yaml` (manifest of env-var NAMES + prompts +
   `requiredFor` profiles — **no values**)
-- `secrets/<slot>.sops.sh` (outside the chezmoi source root), `.sops.yaml`,
+- `secrets/<slot>/<NAME>.sops.sh` (outside the chezmoi source root), `.sops.yaml`,
   `.leak-patterns`
 - GPG chezmoiscript `run_after_25-setup-gpg-key.sh.tmpl` + the op-daemon
   reaper `run_before_05-reap-stale-op-daemon.sh.tmpl` (trigger wiring is
