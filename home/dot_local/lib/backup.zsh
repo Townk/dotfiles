@@ -10,6 +10,9 @@
 # repo path (the ShellSpec suite sources us directly).
 _bkp_self="${(%):-%x}"
 source "$(dirname "$_bkp_self")/common.zsh"
+# The freshness heartbeat + prompt banner (bkp::drift::*). Standalone so the
+# prompt can source it alone; here the workers get bkp::drift::stamp.
+source "$(dirname "$_bkp_self")/backup-drift.zsh"
 unset _bkp_self
 
 zmodload zsh/datetime
@@ -1298,6 +1301,9 @@ bkp::capture::run() {
   } always {
     rm -f "$sweep_file" "$files_from"
   }
+  # The snapshot exists now — stamp capture fresh BEFORE retention, so a
+  # thin failure (retention only) never masks a successful capture.
+  bkp::drift::stamp capture 0
   log_info "bkp: applying retention"
   bkp::capture::thin "$staging" "$manifest"
 }
@@ -1386,6 +1392,7 @@ bkp::reconcile::run() {
     fi
     bkp::reconcile::one "$staging" "$name" "$tpath" "$role" "$manifest" || rc=1
   done <<<"$targets"
+  bkp::drift::stamp reconcile "$rc"
   return $rc
 }
 
@@ -1820,5 +1827,6 @@ bkp::reconcile::prune() {
     bkp::restic "$tpath" cat config >/dev/null 2>&1 || continue
     bkp::restic "$tpath" prune --quiet || rc=1
   done <<<"$targets"
+  bkp::drift::stamp prune "$rc"
   return $rc
 }

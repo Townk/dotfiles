@@ -1,0 +1,117 @@
+# backup_drift_spec.sh — freshness heartbeat + prompt drift banner.
+Describe 'backup-drift.zsh'
+  LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  setup_fix() {
+    FIX=$(mktemp -d)
+    export BKP_DRIFT_STATE="$FIX/state"
+    export BKP_CAPTURE_CADENCE=1800
+  }
+  cleanup_fix() { rm -rf "$FIX"; unset BKP_DRIFT_STATE BKP_CAPTURE_CADENCE; }
+  BeforeEach 'setup_fix'
+  AfterEach 'cleanup_fix'
+
+  Describe 'bkp::drift::assess (pure, fake clock)'
+    # NOW is a fixed wall clock; epochs are offsets back from it.
+    NOW=1000000
+
+    It 'is silent within the cadence window'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        # 20 min old, cadence 30 min → healthy
+        bkp::drift::assess $NOW $(( NOW - 1200 )) 0 1800
+      }
+      When run run_it
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'warns once capture is over 2x the cadence overdue'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        # 4h old → warn
+        bkp::drift::assess $NOW $(( NOW - 14400 )) 0 1800
+      }
+      When run run_it
+      The status should be success
+      The output should include "warn"
+      The output should include "backup: last capture 4h ago (expected every 30m)"
+    End
+
+    It 'escalates to crit past 24h'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        bkp::drift::assess $NOW $(( NOW - 100000 )) 0 1800
+      }
+      When run run_it
+      The status should be success
+      The output should include "crit"
+    End
+
+    It 'is crit and named a failure when the last phase rc is nonzero'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        # recent but failed → crit, even inside the window
+        bkp::drift::assess $NOW $(( NOW - 60 )) 1 1800
+      }
+      When run run_it
+      The status should be success
+      The output should include "crit"
+      The output should include "failed"
+    End
+  End
+
+  Describe 'bkp::drift::stamp'
+    It 'records a phase line and rewrites it in place'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        bkp::drift::stamp capture 0
+        bkp::drift::stamp reconcile 1
+        bkp::drift::stamp capture 0   # rewrite, not duplicate
+        grep -c '^capture ' "$BKP_DRIFT_STATE/heartbeat"
+        grep -c '^reconcile ' "$BKP_DRIFT_STATE/heartbeat"
+      }
+      When run run_it
+      The status should be success
+      The line 1 should equal 1
+      The line 2 should equal 1
+    End
+  End
+
+  Describe 'bkp::drift::banner (prompt hook)'
+    It 'prints nothing when there is no heartbeat yet'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        bkp::drift::banner
+      }
+      When run run_it
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'prints nothing when the last capture is fresh'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        bkp::drift::stamp capture 0   # now
+        bkp::drift::banner
+      }
+      When run run_it
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'prints a banner when the heartbeat is stale'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        mkdir -p "$BKP_DRIFT_STATE"
+        # hand-write a capture 5h in the past
+        print -r -- "capture $(( EPOCHSECONDS - 18000 )) 0" > "$BKP_DRIFT_STATE/heartbeat"
+        bkp::drift::banner
+      }
+      When run run_it
+      The status should be success
+      The output should include "backup: last capture"
+      The output should include "expected every 30m"
+    End
+  End
+End
