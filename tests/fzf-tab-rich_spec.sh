@@ -85,6 +85,11 @@ Describe 'fzf-tab-rich.zsh'
     entry() { print -rn -- "$1$nul$2$nul$3"; }
     # Extract field 2 the way fzf-tab does on accept.
     key_of() { local e=$1; print -rn -- "${${e#*$nul}%$nul*}"; }
+    # fzf runs with --ansi and STRIPS SGR escapes from the line it returns, so
+    # the string fzf-tab looks up in _ftb_compcap is the *visible* text. Mirror
+    # that here — matching against the raw colored field 2 would mask the exact
+    # accept-time mismatch this recolor path has to avoid.
+    strip_sgr() { emulate -L zsh -o extendedglob; local s=$1; print -rn -- "${s//$'\e'\[[0-9;]#m/}"; }
 
     It 'keeps the inserted word resolvable after styling field 2'
       _ftb_groups=('external command')
@@ -92,7 +97,7 @@ Describe 'fzf-tab-rich.zsh'
       _ftb_complist=("$(entry '' git '')")
       ftb_rich::render
       resolve() {
-        local choice=$(key_of "$_ftb_complist[1]")
+        local choice=$(strip_sgr "$(key_of "$_ftb_complist[1]")")
         local match=${_ftb_compcap[(r)${(b)choice}${bs}*]}
         local -A vv=("${(@0)${match#*$bs}}")
         print -rn -- "$vv[word]"
@@ -191,7 +196,7 @@ Describe 'fzf-tab-rich.zsh'
       _ftb_complist=("$(entry '' 'git  -- noglob git' '')")
       ftb_rich::render
       accept() {
-        local choice=$(key_of "$_ftb_complist[1]")
+        local choice=$(strip_sgr "$(key_of "$_ftb_complist[1]")")
         local match=${_ftb_compcap[(r)${(b)choice}${bs}*]}
         local -A vv=("${(@0)${match#*$bs}}")
         print -rn -- "$vv[word]"

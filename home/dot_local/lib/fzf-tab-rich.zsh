@@ -5,9 +5,12 @@
 # around -ftb-generate-complist installed in completion.sh), so the native zsh
 # menu and every non-fzf-tab surface fall back to unmodified behavior.
 #
-# It prepends a colored, per-type Nerd Font glyph to each candidate and never
-# touches fzf-tab's field 2 (the accept key) — descriptions zsh bakes into the
-# candidate are shown by fzf-tab as-is.
+# It prepends a colored, per-type Nerd Font glyph to each candidate and recolors
+# field 2 for DISPLAY (blue value, dimmed description). fzf runs with --ansi and
+# strips SGR escapes from the line it hands back on accept, so the accept/preview
+# lookups key on the *visible* text — not the escaped one. The matching
+# _ftb_compcap key is therefore rewritten to that plain visible text so the
+# lookups still resolve.
 
 # ── color helper ─────────────────────────────────────────────────────────────
 # ftb_rich::_esc <#rrggbb> -> truecolor SGR escape (nothing if hex is invalid).
@@ -57,9 +60,10 @@ typeset -g _ftb_rich_dim="$(ftb_rich::_esc "${C_ROLE_UI_MUTED:-}")"
 # zsh renders a described match as "value<pad>-- description" (-- is the default
 # list-separator). Restyle into "<blue>value<reset>   <dim>description<reset>":
 # color the candidate blue, drop the "-- " marker, and dim the description so it
-# reads as secondary. Sets REPLY. Applied identically to _ftb_complist field 2
-# AND the matching _ftb_compcap key so fzf-tab's accept/preview lookups (which
-# key on this exact string) still hit.
+# reads as secondary. Sets REPLY. Used for _ftb_complist field 2 (the DISPLAY
+# string). The compcap key gets ftb_rich::_plain instead — the same text
+# transform WITHOUT the SGR escapes — because fzf strips ANSI from the line it
+# returns, so the accept/preview lookups match on the visible text.
 ftb_rich::_style() {
   emulate -L zsh
   local s=$1
@@ -67,6 +71,20 @@ ftb_rich::_style() {
     REPLY="${_ftb_rich_value}${s%% -- *}${FTB_RICH_RESET}   ${_ftb_rich_dim}${s#* -- }${FTB_RICH_RESET}"
   else
     REPLY="${_ftb_rich_value}${s}${FTB_RICH_RESET}"
+  fi
+}
+
+# ftb_rich::_plain — the visible text ftb_rich::_style produces, sans color: same
+# "-- " → three-space transform, no SGR. This is exactly what fzf hands back on
+# accept (it strips ANSI under --ansi), so it's what the compcap key must equal.
+# Sets REPLY.
+ftb_rich::_plain() {
+  emulate -L zsh
+  local s=$1
+  if [[ $s == *' -- '* ]]; then
+    REPLY="${s%% -- *}   ${s#* -- }"
+  else
+    REPLY="$s"
   fi
 }
 
@@ -196,13 +214,15 @@ ftb_rich::render() {
   done
   _ftb_complist=("${(@)out}")
 
-  # Rewrite each compcap key the SAME way so fzf-tab's accept/preview lookups —
-  # which key on the (now recolored) field-2 string — still resolve. Skipped in
-  # degrade mode, which never rewrote field 2 above.
+  # Rewrite each compcap key to the PLAIN visible form of the restyled field 2 —
+  # fzf strips ANSI from the line it returns on accept, so the accept/preview
+  # lookups key on the visible text, not the escaped one. (Rewriting to the
+  # escaped form silently breaks accept: the stripped choice never matches.)
+  # Skipped in degrade mode, which never rewrote field 2 above.
   (( degrade )) && return 0
   newcc=()
   for cc in $_ftb_compcap; do
-    ftb_rich::_style "${cc%%$bs*}"
+    ftb_rich::_plain "${cc%%$bs*}"
     newcc+="${REPLY}${bs}${cc#*$bs}"
   done
   _ftb_compcap=("${(@)newcc}")
