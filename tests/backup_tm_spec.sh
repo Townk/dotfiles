@@ -793,14 +793,16 @@ EOS
   End
 
   Describe 'bkp::tm::halt: refusals stay readable'
-    It 'logs and returns without blocking when there is no TTY'
+    It 'logs a flattened message and returns without blocking when there is no TTY'
       run_it() {
         source "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/backup-tm.zsh"
-        bkp::tm::halt "bkp: nope"
+        bkp::tm::halt "line one.
+line two."
       }
       When run run_it
       The status should be success
-      The stderr should include "bkp: nope"
+      # multi-line message collapses to one log line, no dialog spawned
+      The stderr should include "line one. line two."
     End
   End
 

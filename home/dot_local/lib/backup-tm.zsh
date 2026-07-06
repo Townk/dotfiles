@@ -987,12 +987,28 @@ bkp::tm::lens_cmd() {
 # bkp::tm::halt <message>
 # A refusal the user can actually read: tm-tab sessions run in a
 # close_on_exit tab that vanishes the instant we return, so block on a
-# single-OK confirm while there is a TTY to show it on.
+# single-OK dialog while there is a TTY to show it on. `ask` has no
+# single-button primitive, so this is gum — but styled from the shared
+# palette (theme-common.zsh) so it matches every other dialog, and the
+# body is soft-wrapped to ~58 cols so gum (which does not wrap prompts)
+# shows tidy lines instead of one that overruns the pane.
 bkp::tm::halt() {
-  log_error "$1"
-  if [[ -t 0 && -t 1 ]] && command -v gum >/dev/null 2>&1; then
-    gum confirm --affirmative "OK" --negative "" -- "$1" || :
-  fi
+  local msg="$1"
+  log_error "${msg//$'\n'/ }"
+  [[ -t 0 && -t 1 ]] && command -v gum >/dev/null 2>&1 || return 0
+  source "$HOME/.local/lib/theme-common.zsh"
+  local body
+  body=$(print -r -- "$msg" | fold -s -w 58 | sed 's/[[:space:]]*$//')
+  # COLORTERM explicit: zellij panes don't inherit it, and without it
+  # gum/lipgloss degrade the hex palette to 256-color approximations.
+  COLORTERM=truecolor gum confirm \
+    --affirmative "  OK  " --negative "" \
+    "--prompt.foreground=$C_ROLE_UI_FG" \
+    "--selected.background=$C_HEX_DIALOG_WARNING" \
+    "--selected.foreground=$C_ROLE_UI_DIALOG_BG" \
+    "--unselected.foreground=$C_ROLE_UI_MUTED" \
+    "--unselected.background=$C_ROLE_UI_DIALOG_BG" \
+    -- "$body" || :
 }
 
 # bkp::tm::anchor_captured <session> <anchor>
@@ -1063,7 +1079,9 @@ bkp::tm::launch() {
       # keep a FUSE server alive while the user reads a refusal.
       [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
       bkp::tm::session_rm "$s"
-      bkp::tm::halt "bkp: ${anchor/#$HOME/~} is not in any snapshot — deny-listed, chezmoi-managed, or outside the backup roots (see \`system-backup status\`)"
+      local shown="${anchor/#$HOME/~}"
+      (( ${#shown} > 44 )) && shown="${shown[1,21]}…${shown[-22,-1]}"
+      bkp::tm::halt "The $shown dir is not part of any snapshot. It is part of the deny-list, chezmoi-managed, or outside the backup roots (see \`system-backup status\`)."
       return 2
     fi
     # Diff: the first changeset build joins the inline prep narration —
