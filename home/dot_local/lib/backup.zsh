@@ -990,14 +990,17 @@ bkp::project::warn_large() {
   return 0
 }
 
-# bkp::lock <name>
-# Non-blocking run-lock, held until the process exits (zsystem flock keeps
-# the fd). rc 1 when busy — callers coalesce (skip the tick), never queue.
+# bkp::lock <name> [<timeout>]
+# Run-lock, held until the process exits (zsystem flock keeps the fd).
+# Default is non-blocking: rc 1 when busy — tick callers coalesce (skip
+# the run), never queue. A timeout (seconds) waits that long for the
+# holder to finish instead — for callers that must eventually run, like
+# the nightly prune.
 bkp::lock() {
   local lockfile="$BKP_STATE_DIR/$1.lock"
   mkdir -p "$BKP_STATE_DIR"
   : >> "$lockfile"
-  zsystem flock -t 0 "$lockfile" 2>/dev/null
+  zsystem flock -t "${2:-0}" "$lockfile" 2>/dev/null
 }
 
 # bkp::project::sidecar <repo> <bundle_unpushed> <warn_size>
@@ -1786,13 +1789,24 @@ bkp::tick() {
 
 # bkp::reconcile::prune [<config>]
 # The expensive daily repack (spec §5): staging + present, initialized,
-# non-master targets. Exclusive restic op — a lock conflict with a running
-# capture fails loudly; the next daily run retries.
+# non-master targets. Prune is restic-EXCLUSIVE — it cannot share the
+# staging repo with a capture, and the nightly calendar slot lands inside
+# a 30-minute capture tick more often than not (it failed two nights
+# straight racing the 03:14 capture). So it WAITS for the in-flight tick
+# on BOTH locks, in the tick's own acquisition order (capture, then
+# reconcile) so the two can never deadlock. Holding the capture lock
+# coalesces capture ticks away for the repack's duration; they resume on
+# the next tick.
 bkp::reconcile::prune() {
   local BKP_CONFIG="${1:-$BKP_CONFIG}"
-  bkp::lock reconcile || {
-    log_info "bkp: reconcile busy — prune skipped"
-    return 0
+  local lock_wait="${BKP_PRUNE_LOCK_WAIT:-900}"
+  bkp::lock capture "$lock_wait" || {
+    log_error "bkp: capture still running after ${lock_wait}s — prune aborted"
+    return 1
+  }
+  bkp::lock reconcile "$lock_wait" || {
+    log_error "bkp: reconcile still running after ${lock_wait}s — prune aborted"
+    return 1
   }
   local staging targets rc=0
   staging=$(bkp::config::staging_path) || return 2

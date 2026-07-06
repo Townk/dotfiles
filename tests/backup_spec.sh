@@ -1496,6 +1496,54 @@ EOF
       The line 3 should equal "$FIX/tgt prune --quiet"
     End
 
+    It 'prune waits out a running capture instead of racing it'
+      prune_waits() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        : > "$FIX/has-tgt"
+        # a "capture" holds its lock for a moment, as a live tick would
+        mkdir -p "$BKP_STATE_DIR"
+        zsh -c '
+          zmodload zsh/system
+          : >> "$1/capture.lock"
+          zsystem flock -t 0 "$1/capture.lock" || exit 1
+          sleep 0.4
+        ' -- "$BKP_STATE_DIR" &
+        local holder=$!
+        sleep 0.1   # let the holder take the lock first
+        BKP_PRUNE_LOCK_WAIT=3 bkp::reconcile::prune "$FIX/c.toml" >/dev/null || return 1
+        wait "$holder"
+        grep -c "prune" "$FIX/calls"
+      }
+      When run prune_waits
+      The status should be success
+      The output should equal 1
+      The stderr should equal ""
+    End
+
+    It 'prune aborts loudly when the lock wait expires'
+      prune_expires() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        mkdir -p "$BKP_STATE_DIR"
+        zsh -c '
+          zmodload zsh/system
+          : >> "$1/capture.lock"
+          zsystem flock -t 0 "$1/capture.lock" || exit 1
+          sleep 2
+        ' -- "$BKP_STATE_DIR" &
+        local holder=$!
+        sleep 0.1
+        BKP_PRUNE_LOCK_WAIT=0.3 bkp::reconcile::prune "$FIX/c.toml"
+        local rc=$?
+        kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+        return $rc
+      }
+      When run prune_expires
+      The status should equal 1
+      The stderr should include "prune aborted"
+    End
+
     It 'worker --help prints usage'
       rhelp() {
         BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-reconcile" --help
