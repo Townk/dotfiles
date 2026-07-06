@@ -1,0 +1,26 @@
+{{- /*
+  Drop the cached compinit dump when completion functions change.
+
+  completion.sh takes the fast path (`compinit -C`) whenever the dump is
+  younger than 24h, and that path NEVER rescans fpath — a newly deployed
+  completion file (e.g. a fresh _system-backup verb) stays invisible until
+  the dump is deleted by hand. Removing the dump here makes the next shell
+  do one full compinit and pick everything up.
+
+  run_onchange: the hashes below embed every managed completion file, so
+  adding or editing one re-fires this script on apply. They must live
+  OUTSIDE this template comment: actions nested in a comment are raw
+  text — never evaluated, never rendered, never re-fired.
+*/ -}}
+#!/bin/bash
+# site-functions hashes:
+{{ range (glob (joinPath .chezmoi.sourceDir "dot_local/share/zsh/site-functions/*")) -}}
+# {{ . | base }}: {{ include . | sha256sum }}
+{{ end -}}
+set -uo pipefail
+
+# The compiled .zwc twin matches the same glob — both must go.
+removed=$(find "${XDG_CACHE_HOME:-$HOME/.cache}/zsh" -maxdepth 1 -name 'zcompdump-*' -print -delete 2>/dev/null | wc -l | tr -d ' ')
+if [ "${removed:-0}" -gt 0 ]; then
+  echo "🐚  Cleared $removed stale zcompdump file(s) — next shell rebuilds completions"
+fi

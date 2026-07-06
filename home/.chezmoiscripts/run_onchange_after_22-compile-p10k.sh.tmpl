@@ -14,10 +14,12 @@
   run_onchange: chezmoi re-runs this whenever the rendered text changes.
   The hash below embeds p10k.zsh's content, so editing the config (or
   `p10k configure` regenerating it via chezmoi) re-fires the compile.
-
-  p10k.zsh hash: {{ include "dot_config/zsh/p10k.zsh" | sha256sum }}
+  It must live OUTSIDE this template comment: actions nested in a
+  comment are raw text — never evaluated, never rendered, never
+  re-fired.
 */ -}}
 #!/bin/bash
+# p10k.zsh hash: {{ include "dot_config/zsh/p10k.zsh" | sha256sum }}
 set -uo pipefail
 
 cfg="${XDG_CONFIG_HOME:-$HOME/.config}/zsh/p10k.zsh"

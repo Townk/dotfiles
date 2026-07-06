@@ -9,12 +9,13 @@
 
   run_onchange: chezmoi re-runs this whenever the rendered text changes. The
   two hashes below embed the theme template and theme.yaml, so editing either
-  (including switching theme.active) re-fires the cache build.
-
-  bat fragment hash: {{ output "sh" "-c" (printf "shasum -a 256 %q | cut -d' ' -f1" (joinPath .chezmoi.workingTree "custom-builds/theme/templates/bat.tmTheme.tmpl")) | trim }}
-  theme.yaml hash: {{ include ".chezmoidata/theme.yaml" | sha256sum }}
+  (including switching theme.active) re-fires the cache build. They must
+  live OUTSIDE this template comment: actions nested in a comment are raw
+  text — never evaluated, never rendered, never re-fired.
 */ -}}
 #!/bin/bash
+# bat fragment hash: {{ output "sh" "-c" (printf "shasum -a 256 %q | cut -d' ' -f1" (joinPath .chezmoi.workingTree "custom-builds/theme/templates/bat.tmTheme.tmpl")) | trim }}
+# theme.yaml hash: {{ include ".chezmoidata/theme.yaml" | sha256sum }}
 set -uo pipefail
 
 command -v bat >/dev/null 2>&1 || { echo "bat not found; skipping cache build" >&2; exit 0; }
