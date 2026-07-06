@@ -15,23 +15,49 @@
 
   `pinentry-touchid -fix` repoints that symlink to pinentry-mac. It must re-run on
   every apply (not run_onchange) because a bare `brew upgrade` can clobber the
-  symlink without touching any chezmoi-managed source. `-check` is the idempotent
-  probe: exit 0 when already correct, so steady-state applies stay silent.
+  symlink without touching any chezmoi-managed source.
+
+  We do NOT probe with `pinentry-touchid -check`: in 0.0.3 that subcommand never
+  exits — it launches pinentry-mac and blocks on the Assuan protocol forever when
+  a tty is on stdin (and exits non-zero when stdin is closed), so it can never
+  report "already correct". Running it wedged `system-update`, which invokes this
+  script via `chezmoi apply`, right after the source sync. Inspect the managed
+  symlink directly instead, and only shell out to `-fix` (bounded by a timeout,
+  stdin closed) when it actually points at the wrong backend.
 */ -}}
 #!/bin/sh
 set -eu
 
 {{- if eq .chezmoi.os "darwin" }}
-if ! command -v pinentry-touchid >/dev/null 2>&1; then
-  exit 0
-fi
+command -v pinentry-touchid >/dev/null 2>&1 || exit 0
 
-if pinentry-touchid -check >/dev/null 2>&1; then
+mac="$(command -v pinentry-mac 2>/dev/null || true)"
+[ -n "$mac" ] || exit 0
+
+# The backend symlink pinentry-touchid resolves via gpgconf; fall back to the
+# well-known Homebrew keg path if gpgconf can't report it.
+link="$(gpgconf --list-components 2>/dev/null | awk -F: '$1 == "pinentry" { print $3 }' || true)"
+[ -n "$link" ] || link="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/opt/pinentry/bin/pinentry"
+
+# True when the managed symlink already resolves to the same file as pinentry-mac.
+backend_ok() {
+  [ -e "$link" ] && [ -e "$mac" ] &&
+    [ "$(realpath "$link" 2>/dev/null || true)" = "$(realpath "$mac" 2>/dev/null || true)" ]
+}
+
+if backend_ok; then
   exit 0
 fi
 
 echo "pinentry-touchid: backend pinentry is not pinentry-mac; repairing symlink" >&2
-if pinentry-touchid -fix >/dev/null 2>&1 && pinentry-touchid -check >/dev/null 2>&1; then
+to="$(command -v gtimeout || command -v timeout || true)"
+if [ -n "$to" ]; then
+  "$to" 20 pinentry-touchid -fix >/dev/null 2>&1 </dev/null || true
+else
+  pinentry-touchid -fix >/dev/null 2>&1 </dev/null || true
+fi
+
+if backend_ok; then
   echo "pinentry-touchid: backend repaired -> pinentry-mac" >&2
 else
   echo "pinentry-touchid: could not repair backend; run 'pinentry-touchid -fix' manually" >&2

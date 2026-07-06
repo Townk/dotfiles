@@ -94,6 +94,30 @@ repair_mise_rust_legacy_links() {
   ((repaired == 0)) || log_warn "Removed stale mise Rust link(s); reinstalling Rust with current XDG paths."
 }
 
+# Re-point the gpgconf pinentry backend at pinentry-mac. `brew upgrade pinentry`
+# reverts the `pinentry` → pinentry-mac symlink to pinentry-curses independently
+# of any chezmoi-managed source, silently degrading the Touch ID / GUI unlock. We
+# inspect the managed symlink directly rather than calling `pinentry-touchid
+# -check`: in 0.0.3 that probe never exits (it launches pinentry-mac and blocks on
+# the Assuan protocol), which is what froze this script mid-run. Only when the
+# symlink points at the wrong backend do we invoke `-fix`, bounded by a timeout
+# with stdin closed so a misbehaving pinentry can't wedge the update.
+reassert_pinentry_mac_backend() {
+  command -v pinentry-touchid >/dev/null 2>&1 || return 0
+  local mac link to
+  mac="$(command -v pinentry-mac 2>/dev/null || true)"
+  [[ -n "$mac" ]] || return 0
+  link="$(gpgconf --list-components 2>/dev/null | awk -F: '$1 == "pinentry" { print $3 }' || true)"
+  [[ -n "$link" ]] || link="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/opt/pinentry/bin/pinentry"
+  [[ "$(realpath "$link" 2>/dev/null || true)" == "$(realpath "$mac" 2>/dev/null || true)" ]] && return 0
+  to="$(command -v gtimeout || command -v timeout || true)"
+  if [[ -n "$to" ]]; then
+    "$to" 20 pinentry-touchid -fix >/dev/null 2>&1 </dev/null || log_warn "pinentry-touchid -fix failed"
+  else
+    pinentry-touchid -fix >/dev/null 2>&1 </dev/null || log_warn "pinentry-touchid -fix failed"
+  fi
+}
+
 # Bring the git-cloned zsh plugins to latest. These live in
 # ~/.local/share/zsh/plugins (cloned by run_onchange_after_20-setup-zsh-plugins)
 # and replace what zsh4humans used to bundle + self-update via `z4h update`.
@@ -297,19 +321,16 @@ system-package sync || die "Failed to sync system packages!"
 print -P -- "\n🧹 Cleaning up Homebrew artifacts...\n"
 brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
 
-# Re-assert pinentry-touchid's pinentry-mac fallback. `brew upgrade pinentry`
-# recreates that keg and reverts the `pinentry` → pinentry-mac symlink that
-# `pinentry-touchid -fix` installs, so the GUI fallback (closed lid / no
-# Touch ID) would otherwise silently degrade to pinentry-curses. Guarded on
-# the binary so it no-ops on hosts without it. Cheap and idempotent.
+# Re-assert pinentry-touchid's pinentry-mac backend after `system-package sync`
+# may have run `brew upgrade pinentry`, which reverts the gpgconf `pinentry`
+# symlink to pinentry-curses. See reassert_pinentry_mac_backend for why we probe
+# the symlink directly instead of `pinentry-touchid -check`.
 #
-# SKIP over SSH: both `-check` and `-fix` can spawn pinentry-mac — a GUI
-# dialog that can never complete on a remote/notty session and hangs the
-# whole update (no display, no Touch ID). The fallback only matters for a
-# LOCAL GUI session anyway, so leave it to the next interactive run.
-if [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] &&
-  command -v pinentry-touchid >/dev/null 2>&1; then
-  pinentry-touchid -check >/dev/null 2>&1 || pinentry-touchid -fix || log_warn "pinentry-touchid -fix failed"
+# SKIP over SSH: the repair only matters for a LOCAL Touch ID / GUI session, and
+# keeping it off remote/notty runs avoids any chance of a pinentry GUI on a
+# headless desktop. Leave it to the next interactive run.
+if [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]]; then
+  reassert_pinentry_mac_backend
 fi
 
 # Reconcile launchd-managed services with ~/.config/packages/services.toml.
