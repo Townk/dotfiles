@@ -168,6 +168,89 @@ def wrap_plain(text: str, width: int) -> list[str]:
     return lines
 
 
+def wrap_ansi(content: str, width: int) -> list[str]:
+    """Word-wrap `content` to `width` visible columns while preserving ANSI SGR.
+
+    Mirrors wrap_plain's word semantics (split on whitespace, single-space
+    joins, hard-break overlong words) but keeps color: inline codes are
+    retained, the style active at each line's start is re-opened, and every
+    emitted line ends reset. wrap_plain cannot do this -- it strips the escapes,
+    so a wrapped row would render colorless.
+    """
+    if width <= 0:
+        return [""]
+
+    active = ""
+
+    def apply(code: str) -> None:
+        nonlocal active
+        active = "" if code in ("\033[0m", "\033[m") else active + code
+
+    # Tokenise into words, recording the SGR state active at each word's start.
+    tokens: list[tuple[str, int, str]] = []  # (text_with_sgr, visible_width, style_before)
+    cur_text, cur_w, cur_before, in_word = "", 0, "", False
+    i, n = 0, len(content)
+    while i < n:
+        m = _ANSI_RE.match(content, i)
+        if m:
+            if in_word:
+                cur_text += m.group(0)
+            apply(m.group(0))
+            i = m.end()
+            continue
+        ch = content[i]
+        i += 1
+        if ch == " ":  # break only on ASCII space; NBSP keeps a pill intact
+            if in_word:
+                tokens.append((cur_text, cur_w, cur_before))
+                cur_text, cur_w, in_word = "", 0, False
+        else:
+            if not in_word:
+                in_word, cur_before, cur_text, cur_w = True, active, "", 0
+            cur_text += ch
+            cur_w += 1
+    if in_word:
+        tokens.append((cur_text, cur_w, cur_before))
+
+    if not tokens:
+        return []
+
+    # Greedily pack words into lines. Each word re-emits the SGR state active at
+    # its start (`before`), so it is styled correctly wherever it lands, not just
+    # when it opens a line. The powerline pill caps depend on this: their colour
+    # is set by an SGR that sits on the whitespace just before the glyph, which
+    # would otherwise be lost (colourless caps) or replaced by the leftover pill
+    # background (inverted caps).
+    lines: list[str] = []
+    line, line_w = "", 0
+
+    def flush() -> None:
+        nonlocal line, line_w
+        lines.append(line + _reset())
+        line, line_w = "", 0
+
+    for text, word_w, before in tokens:
+        if word_w > width:  # overlong word: flush, then hard-break its glyphs
+            if line_w > 0:
+                flush()
+            plain = _ANSI_RE.sub("", text)
+            for j in range(0, len(plain), width):
+                lines.append(before + plain[j : j + width] + _reset())
+            continue
+        sep = 1 if line_w > 0 else 0
+        if line_w + sep + word_w > width:
+            flush()
+            sep = 0
+        if sep:
+            line += " "
+            line_w += 1
+        line += before + text
+        line_w += word_w
+    if line:
+        flush()
+    return lines
+
+
 def human_bytes(size: int) -> str:
     value = float(size)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
@@ -298,7 +381,7 @@ class CardRenderer:
     def _blank_row(self) -> str:
         return self.s.primary + self.s.VERT + " " * (self.w - 2) + self.s.VERT + self._reset
 
-    def _row(self, content: str, prefix: str = "", indent: int = 3, right_indent: int | None = None) -> str:
+    def _row(self, content: str, prefix: str = "", indent: int = 3, right_indent: int | None = None, blank_between: bool = False) -> str:
         right_pad = right_indent if right_indent is not None else indent
         margin = " " * indent
         inner_w = self.w - 2 - indent - right_pad
@@ -315,23 +398,30 @@ class CardRenderer:
                 + self.s.primary + self.s.VERT + self._reset
             )
 
-        lines = wrap_plain(plain, inner_w)
+        lines = wrap_ansi(content, inner_w)
         out = []
         continuation_indent = indent + (visual_width(prefix) + 1 if prefix else 0)
         for i, line in enumerate(lines):
             pre = margin if i == 0 else " " * continuation_indent
             out.append(
                 self.s.primary + self.s.VERT + self._reset
-                + pre + line + " " * (inner_w - len(line)) + " " * right_pad
+                + pre + line + " " * (inner_w - visual_width(line)) + " " * right_pad
                 + self.s.primary + self.s.VERT + self._reset
             )
-        return "\n".join(out)
+        # When asked (used for the pill row), separate wrapped lines with a blank
+        # card row so multi-line pills breathe instead of stacking tightly.
+        joiner = "\n" + self._blank_row() + "\n" if blank_between else "\n"
+        return joiner.join(out)
 
     def _pill(self, text: str, rgb: tuple[int, int, int]) -> str:
         r, g, b = rgb
         br, bg, bb = CTP.BASE
+        # Pad and space the label with non-breaking spaces so wrap_ansi treats
+        # the whole pill as one unbreakable word: a pill that would not fit on
+        # the current line moves to the next line intact, never splitting.
+        body = "\u00a0" + text.replace(" ", "\u00a0") + "\u00a0"
         left = f"\033[38;2;{r};{g};{b};49m{self.s.PILL_LEFT}\033[0m"
-        middle = f"\033[38;2;{br};{bg};{bb};48;2;{r};{g};{b}m {text} \033[0m"
+        middle = f"\033[38;2;{br};{bg};{bb};48;2;{r};{g};{b}m{body}\033[0m"
         right = f"\033[38;2;{r};{g};{b};49m{self.s.PILL_RIGHT}\033[0m"
         return left + middle + right
 
@@ -484,7 +574,7 @@ def render_overview(info: DatabaseInfo, width: int, max_objects: int) -> str:
         r._pill(f"{info.index_count} indexes", CTP.BLUE),
         r._pill(f"{info.trigger_count} triggers", CTP.PEACH),
     ]
-    lines.append(r._row("  ".join(object_pills)))
+    lines.append(r._row("  ".join(object_pills), blank_between=True))
     lines.append(r._blank_row())
 
     db_size = human_bytes(info.size)
