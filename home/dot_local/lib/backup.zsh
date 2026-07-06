@@ -903,6 +903,12 @@ bkp::changeset::patch_live() {
 
 BKP_STATE_DIR="${BKP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/terminal-backup}"
 BKP_WIP_DIR="${BKP_WIP_DIR:-$BKP_STATE_DIR/wip}"
+# Wall-clock ceiling for a single scheduled capture's `restic backup`. Kept
+# below the 30-min (1800s) schedule cadence so a wedged run self-aborts within
+# one cycle and the next launchd tick can start fresh instead of stacking behind
+# a hung process. A normal capture of tens of thousands of local files finishes
+# in well under a minute; this only ever trips on a genuine hang.
+BKP_CAPTURE_TIMEOUT="${BKP_CAPTURE_TIMEOUT:-1200}"
 
 # bkp::size_bytes <spec> — "50m"/"2g"/"512k"/plain-bytes -> bytes in REPLY.
 bkp::size_bytes() {
@@ -1123,11 +1129,28 @@ bkp::project::restore() {
 # THE storage seam — every restic invocation goes through here (tests stub
 # this function). Repo + passphrase-command via env; the passphrase itself is
 # resolved by restic at exec time and never appears in argv or logs.
+#
+# Optional wall-clock guard: when BKP_RESTIC_TIMEOUT is a positive integer and
+# a coreutils `timeout` (or `gtimeout`) is on PATH, the restic run is bounded so
+# a wedged process (observed hanging for hours at 0% CPU, ignoring SIGTERM, and
+# blocking the whole capture schedule) self-aborts. -k escalates to SIGKILL
+# after BKP_RESTIC_KILL_AFTER seconds precisely because a hung restic ignores
+# SIGTERM; the timeout binary then exits 124 (TERM) or 137 (KILL), both of which
+# read as failure to callers. With no timeout binary the seam degrades to an
+# unguarded run so a coreutils-less host still backs up. Callers opt in per
+# invocation (capture scopes it to its `backup`) — it is never applied globally,
+# so a legitimately long `copy`/`prune`/`restore` is not truncated.
 bkp::restic() {
   local repo="$1"; shift
   local pwcmd
   pwcmd=$(bkp::config::password_command) || return 2
-  RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD_COMMAND="$pwcmd" restic "$@"
+  local -a guard=()
+  if [[ "${BKP_RESTIC_TIMEOUT:-0}" == <1-> ]]; then
+    local tbin
+    tbin=$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null)
+    [[ -n "$tbin" ]] && guard=("$tbin" -k "${BKP_RESTIC_KILL_AFTER:-30}" "$BKP_RESTIC_TIMEOUT")
+  fi
+  RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD_COMMAND="$pwcmd" "${guard[@]}" restic "$@"
 }
 
 # bkp::capture::ensure_repo <repo>
@@ -1290,11 +1313,21 @@ bkp::capture::run() {
     local -a quiet=(--quiet)
     bkp::ux::interactive && quiet=()
     local backup_rc=0
-    bkp::restic "$staging" backup --files-from-verbatim "$files_from" "${quiet[@]}" || backup_rc=$?
+    # Bound this run so a wedged restic can't stall the whole schedule (see
+    # bkp::restic). Scoped to the capture backup only — reconcile/prune/restore
+    # keep their unbounded seam.
+    BKP_RESTIC_TIMEOUT=$BKP_CAPTURE_TIMEOUT \
+      bkp::restic "$staging" backup --files-from-verbatim "$files_from" "${quiet[@]}" || backup_rc=$?
     if (( backup_rc == 3 )); then
       # rc 3 = snapshot CREATED, some sources unreadable (deleted between
       # sweep and read, or permission-denied). A partial snapshot beats none.
       log_warn "bkp: some source files were unreadable — snapshot created without them"
+    elif (( backup_rc == 124 || backup_rc == 137 )); then
+      # timeout(1) fired: restic exceeded BKP_CAPTURE_TIMEOUT and was killed.
+      # Return failure so this run's heartbeat stays stale and the next tick
+      # starts clean instead of stacking behind a hang.
+      log_error "bkp: capture exceeded ${BKP_CAPTURE_TIMEOUT}s wall-clock — restic killed (wedged run?)"
+      return 1
     elif (( backup_rc != 0 )); then
       return 1
     fi

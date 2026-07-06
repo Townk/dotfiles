@@ -2320,4 +2320,64 @@ EOF
       The stderr should be defined
     End
   End
+
+  # The restic seam wraps a runaway `restic` in a wall-clock bound so a wedged
+  # process (observed hanging for hours with 0% CPU, ignoring SIGTERM) can no
+  # longer block the whole capture schedule. The guard is opt-in per call via
+  # BKP_RESTIC_TIMEOUT; when unset the seam is a transparent passthrough.
+  Describe 'bkp::restic — timeout guard'
+    setup_guard() {
+      FIX=$(mktemp -d)
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      PATH="$STUB:$PATH"
+    }
+    cleanup_guard() { rm -rf "$FIX"; }
+    BeforeEach 'setup_guard'
+    AfterEach 'cleanup_guard'
+
+    # A restic that ignores SIGTERM and never exits — the real wedge we saw.
+    stub_wedged_restic() {
+      printf '#!/bin/sh\ntrap "" TERM\nsleep 30\n' > "$STUB/restic"
+      chmod +x "$STUB/restic"
+    }
+
+    It 'SIGKILLs a wedged restic past BKP_RESTIC_TIMEOUT (137, not a hang)'
+      run_guarded() {
+        stub_wedged_restic
+        source "$LIB/backup.zsh"
+        bkp::config::password_command() { print -r -- true; }
+        BKP_RESTIC_TIMEOUT=1 BKP_RESTIC_KILL_AFTER=1 \
+          bkp::restic "$FIX/repo" backup
+      }
+      When run run_guarded
+      # coreutils `timeout` reports 137 (128+SIGKILL) once -k escalation fires,
+      # which is exactly the TERM-ignoring path a wedged restic takes.
+      The status should equal 137
+    End
+
+    It 'is a transparent passthrough when BKP_RESTIC_TIMEOUT is unset'
+      run_unguarded() {
+        printf '#!/bin/sh\nexit 3\n' > "$STUB/restic"
+        chmod +x "$STUB/restic"
+        source "$LIB/backup.zsh"
+        bkp::config::password_command() { print -r -- true; }
+        bkp::restic "$FIX/repo" backup
+      }
+      When run run_unguarded
+      The status should equal 3
+    End
+
+    It 'degrades to an unguarded run when no timeout binary is on PATH'
+      run_no_timeout() {
+        printf '#!/bin/sh\nexit 3\n' > "$STUB/restic"
+        chmod +x "$STUB/restic"
+        source "$LIB/backup.zsh"
+        bkp::config::password_command() { print -r -- true; }
+        # Hermetic PATH with only our stub restic — no timeout/gtimeout in sight.
+        PATH="$STUB" BKP_RESTIC_TIMEOUT=1 bkp::restic "$FIX/repo" backup
+      }
+      When run run_no_timeout
+      The status should equal 3
+    End
+  End
 End
