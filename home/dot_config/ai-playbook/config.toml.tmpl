@@ -1,0 +1,26 @@
+{{- /*
+  ai-playbook config — chezmoi-managed template.
+  Target: ~/.config/ai-playbook/config.toml
+
+  Selects the model harness per machine profile and turns on the zellij mux
+  integration. Only the keys set here override ai-playbook's baked-in defaults;
+  everything else (models, thinking, kb, driver) falls through to the
+  per-harness defaults. Edit THIS template, not the rendered file, then
+  `chezmoi apply`.
+
+  Harness by profile:
+    - work            -> cursor  (the company-sanctioned CLI; FULL tier)
+    - personal / else -> claude  (the default harness)
+*/ -}}
+{{- $harness := "claude" -}}
+{{- if eq .profile "work" }}{{ $harness = "cursor" }}{{ end -}}
+[mux]
+# Enable the built-in zellij preset (ADR-0007): floating/docked panes and the
+# input widget open as zellij panes instead of the inline no-mux UX.
+backend = "zellij"
+
+[agent]
+# Profile-selected: {{ .profile }} -> {{ $harness }}.
+harness = "{{ $harness }}"
+
+# vim:ft=toml
