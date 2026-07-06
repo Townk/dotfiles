@@ -856,10 +856,16 @@ bkp::changeset::patch_live() {
     fi
     (( ${#cands} )) || return 0
     # Degenerate rungs (near-everything changed): one whole-tree diff
-    # beats thousands of per-file forks.
+    # beats thousands of per-file forks. The threshold is a knob so the
+    # spec suite can force either path and pin them to each other.
     local rc=0 out
-    if (( ${#cands} > 400 )); then
-      out=$(git -c core.quotePath=false diff --no-index -- "$past" "$vtree" 2>/dev/null) || rc=$?
+    if (( ${#cands} > ${BKP_TM_PRESCREEN_MAX:-400} )); then
+      # A rung that never captured the scope has no $past to diff
+      # against — stand in an empty tree so everything renders added.
+      local base="$past"
+      [[ -d "$base" ]] || { base=$(mktemp -d) || return 1 }
+      out=$(git -c core.quotePath=false diff --no-index -- "$base" "$vtree" 2>/dev/null) || rc=$?
+      [[ "$base" == "$past" ]] || rmdir "$base" 2>/dev/null
       (( rc <= 1 )) || {
         log_error "bkp: git diff failed for $scope"
         return 1
@@ -870,15 +876,22 @@ bkp::changeset::patch_live() {
     fi
     # NB: rel is already local above — re-`local`ing an existing local
     # makes zsh PRINT its value (typeset semantics), polluting the patch.
+    # (o) sorts candidates: same file order as a whole-tree git diff,
+    # so both paths emit byte-identical patches (pinned by the spec).
     local a b piece
-    for rel in "${cands[@]}"; do
+    for rel in "${(o)cands[@]}"; do
       a="$past/$rel" b="$vtree/$rel"
       [[ -e "$a" || -h "$a" ]] || a=/dev/null
       [[ -e "$b" || -h "$b" ]] || b=/dev/null
       rc=0
       piece=$(git -c core.quotePath=false diff --no-index -- "$a" "$b" 2>/dev/null) || rc=$?
       (( rc <= 1 )) || continue
-      [[ -n "$piece" ]] && print -r -- "$piece"
+      # -z||print, NOT -n&&print: a candidate whose content held still
+      # (mtime-only churn) yields an empty piece, and if it lands LAST
+      # the &&-form exits the loop with status 1 — under pipe_fail that
+      # fails the whole synthesis and the refresh throws a good patch
+      # away. Exactly what blanked the lens on real rungs.
+      [[ -z "$piece" ]] || print -r -- "$piece"
     done | bkp::changeset::relabel "$rung" "$vtree" "$scope"
   } always {
     (( own )) && rm -rf "$view" || :

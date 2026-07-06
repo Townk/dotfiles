@@ -309,6 +309,55 @@ EOF
       The stderr should include "too large for live-diff synthesis"
     End
 
+    It 'succeeds when the last candidate is mtime-only churn (no content change)'
+      run_it() {
+        source "$LIB/backup.zsh"
+        # zzz sorts last in the prescreen candidates: same content, same
+        # size, different mtime — flagged by the stat prescreen, empty
+        # git diff. The synthesis must still exit 0 with the real diffs.
+        print same > "$FIX/mnt/ids/aaaa$FIX/live/zzz.txt"
+        print same > "$FIX/live/zzz.txt"
+        touch -t 202601010000 "$FIX/mnt/ids/aaaa$FIX/live/zzz.txt"
+        bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live"
+      }
+      When run run_it
+      The status should be success
+      The output should include "+new"
+      The output should include "del.txt"
+      The output should not include "zzz.txt"
+    End
+
+    It 'produces the same patch through the prescreen and the whole-tree path'
+      run_it() {
+        source "$LIB/backup.zsh"
+        # ground truth: force the whole-tree git diff (threshold 0);
+        # the per-file prescreen path must match it byte for byte
+        print extra > "$FIX/live/added.txt"
+        local pre full
+        pre=$(bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live") || return 1
+        full=$(BKP_TM_PRESCREEN_MAX=0 \
+          bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live") || return 1
+        [[ "$pre" == "$full" ]] && print identical
+        print -r -- "$pre" | grep -c "^diff --git"
+      }
+      When run run_it
+      The status should be success
+      The line 1 should equal identical
+      The line 2 should equal 3
+    End
+
+    It 'whole-tree fallback renders additions when the rung never captured the scope'
+      run_it() {
+        source "$LIB/backup.zsh"
+        BKP_TM_PRESCREEN_MAX=0 \
+          bkp::changeset::patch_live "$FIX/mnt/ids/ffff" "$FIX/live"
+      }
+      When run run_it
+      The status should be success
+      The output should include "+++ b$FIX/live/f.txt"
+      The output should include "--- /dev/null"
+    End
+
     It 'renders everything as additions when the rung never captured the scope'
       run_it() {
         source "$LIB/backup.zsh"
