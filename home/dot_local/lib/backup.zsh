@@ -740,20 +740,64 @@ bkp::changeset::relabel() {
   '
 }
 
+# bkp::changeset::live_view <scope> <dest> [<manifest>]
+# Build (or reuse) the capture-filtered live view at <dest>: the scope
+# swept through the capture rules (deny + chezmoi-managed + gitignored),
+# survivors hardlinked under <dest>/tree via rsync --files-from +
+# --link-dest (near-free). A <dest>/.ready stamp marks a complete build;
+# callers rm -rf <dest> to invalidate (e.g. after an apply). The stamp
+# lives OUTSIDE tree/ so it can never appear in a diff.
+bkp::changeset::live_view() {
+  local scope="$1" dest="$2" manifest="${3:-$BKP_MANIFEST}"
+  [[ -e "$dest/.ready" ]] && return 0
+  rm -rf "$dest"
+  # Pathology cap: a huge scope (~/.local/share…) means a whole-tree
+  # walk — the 200-rsync incident. Count with an early-exit pipe and
+  # refuse, loudly, before the capture-rule sweep even starts.
+  local cap="${BKP_TM_LIVEVIEW_MAX_FILES:-50000}" nfiles
+  nfiles=$(find "$scope" -not -type d 2>/dev/null | head -n $(( cap + 1 )) | wc -l | tr -d ' ')
+  if (( nfiles > cap )); then
+    log_error "bkp: $scope holds over $cap files — too large for live-diff synthesis (BKP_TM_LIVEVIEW_MAX_FILES raises the cap)"
+    return 1
+  fi
+  local files
+  files=$(bkp::manifest::scoped_files "$manifest" "$scope") || return 1
+  local -a live_files=()
+  [[ -n "$files" ]] && live_files=(${(f)files})
+  mkdir -p "$dest/tree"
+  if (( ${#live_files} )); then
+    print -rl -- "${live_files[@]#$scope/}" |
+      rsync -lpt --files-from=- --link-dest="$scope" "$scope/" "$dest/tree/" 2>/dev/null
+    local rrc=$?
+    # 23/24 = partial transfer / files vanished mid-copy — routine on
+    # a live tree (files churn under us); the view is still a usable
+    # copy of everything that held still. Anything else is fatal.
+    if (( rrc != 0 && rrc != 23 && rrc != 24 )); then
+      rm -rf "$dest"
+      log_error "bkp: could not build a clean live view for $scope (rsync rc=$rrc)"
+      return 1
+    fi
+  fi
+  touch "$dest/.ready"
+}
+
 # bkp::changeset::patch_live <mount-rung-root> <scope> [<manifest>]
 # Patch of the mounted snapshot rung vs the live filesystem, scoped. The
-# live side is FILTERED through the capture rules (bkp::manifest::
-# scoped_files): snapshots only ever contain capturable files, so a raw
+# live side is FILTERED through the capture rules (bkp::changeset::
+# live_view): snapshots only ever contain capturable files, so a raw
 # dir-vs-dir diff drowns real changes in "added" noise for everything
-# capture deliberately skips (chezmoi-managed, gitignored, denied). The
-# filtered file list becomes a hardlink view (rsync --files-from +
-# --link-dest, near-free) — which also keeps git --no-index away from
-# live sockets/fifos, since specials never make the list. A file scope
-# is diffed directly (an explicitly anchored file is shown regardless
-# of capture rules).
-# BKP_LIVEVIEW_DIR overrides the view's parent — tm sessions point it
-# at the session dir so teardown's rm -rf sweeps a view whose builder
-# was killed mid-copy.
+# capture deliberately skips. A file scope is diffed directly (an
+# explicitly anchored file is shown regardless of capture rules).
+#
+# Perf: within a session the live side never changes between rungs —
+# BKP_LIVEVIEW_REUSE names a persistent view dir that is built once and
+# reused (invalidated by rm -rf, e.g. after an apply). And instead of
+# content-reading every captured file through FUSE, an rsync dry-run
+# prescreens by size+mtime (the same unchanged-heuristic restic itself
+# uses for incremental backups) and only the candidates get a real
+# content diff — per-rung cost tracks CHANGES, not tree size.
+# BKP_LIVEVIEW_DIR overrides the throwaway view parent when REUSE is
+# unset.
 bkp::changeset::patch_live() {
   setopt local_options pipe_fail
   local rung="$1" scope="$2" manifest="${3:-$BKP_MANIFEST}"
@@ -768,45 +812,76 @@ bkp::changeset::patch_live() {
     print -r -- "$fout" | bkp::changeset::relabel "$rung"
     return 0
   fi
-  # Pathology cap: a live diff of a huge scope (~/.local/share…) means a
-  # whole-tree walk PER SYNTHESIS — the 200-rsync incident. Count with
-  # an early-exit pipe (head closes it after cap+1 lines) and refuse,
-  # loudly, before the capture-rule sweep even starts.
-  local cap="${BKP_TM_LIVEVIEW_MAX_FILES:-50000}" nfiles
-  nfiles=$(find "$scope" -not -type d 2>/dev/null | head -n $(( cap + 1 )) | wc -l | tr -d ' ')
-  if (( nfiles > cap )); then
-    log_error "bkp: $scope holds over $cap files — too large for live-diff synthesis (BKP_TM_LIVEVIEW_MAX_FILES raises the cap)"
-    return 1
+  local view own=0
+  if [[ -n "${BKP_LIVEVIEW_REUSE:-}" ]]; then
+    view="$BKP_LIVEVIEW_REUSE"
+  else
+    view=$(mktemp -d "${BKP_LIVEVIEW_DIR:-${TMPDIR:-/tmp}}/bkp-liveview.XXXXXX") || return 1
+    rm -rf "$view"   # live_view owns the dest layout
+    own=1
   fi
-  local files
-  files=$(bkp::manifest::scoped_files "$manifest" "$scope") || return 1
-  local -a live_files=()
-  [[ -n "$files" ]] && live_files=(${(f)files})
-  local view
-  view=$(mktemp -d "${BKP_LIVEVIEW_DIR:-${TMPDIR:-/tmp}}/bkp-liveview.XXXXXX") || return 1
   {
-    if (( ${#live_files} )); then
-      print -rl -- "${live_files[@]#$scope/}" |
-        rsync -lpt --files-from=- --link-dest="$scope" "$scope/" "$view/" 2>/dev/null
-      local rrc=$?
-      # 23/24 = partial transfer / files vanished mid-copy — routine on
-      # a live tree (files churn under us); the view is still a usable
-      # copy of everything that held still. Anything else is fatal.
-      if (( rrc != 0 && rrc != 23 && rrc != 24 )); then
-        log_error "bkp: could not build a clean live view for $scope (rsync rc=$rrc)"
+    bkp::changeset::live_view "$scope" "$view" "$manifest" || return 1
+    local vtree="$view/tree" past="$rung$scope"
+    # Prescreen: rsync dry-run compares size+mtime only (no content
+    # reads) and names what differs; --delete surfaces live-deleted
+    # files. FUSE getattrs are ~10x cheaper than reads.
+    local -a cands=()
+    if [[ -d "$past" ]]; then
+      local plist prc=0
+      plist=$(rsync -rlptn --delete --out-format="%o|%n"         "$vtree/" "$past/" 2>/dev/null) || prc=$?
+      if (( prc != 0 && prc != 23 && prc != 24 )); then
+        log_error "bkp: prescreen failed for $scope (rsync rc=$prc)"
         return 1
       fi
+      local line op rel
+      for line in ${(f)plist}; do
+        op="${line%%|*}" rel="${line#*|}"
+        [[ "$op" == send || "$op" == del. ]] || continue
+        # directories are creation/deletion NOISE here; their files
+        # arrive as their own entries
+        [[ -d "$vtree/$rel" && ! -h "$vtree/$rel" ]] && continue
+        [[ -d "$past/$rel" && ! -h "$past/$rel" ]] && continue
+        cands+=("${rel%/}")
+      done
+    else
+      # Nothing captured under the scope in that snapshot: every view
+      # file is an addition since then. ^/ = anything but a directory —
+      # the view holds only files and symlinks, and glob qualifiers AND
+      # together, so (.@) would match nothing at all.
+      local f
+      for f in "$vtree"/**/*(DN^/); do
+        cands+=("${f#$vtree/}")
+      done
     fi
+    (( ${#cands} )) || return 0
+    # Degenerate rungs (near-everything changed): one whole-tree diff
+    # beats thousands of per-file forks.
     local rc=0 out
-    out=$(git -c core.quotePath=false diff --no-index -- "$rung$scope" "$view" 2>/dev/null) || rc=$?
-    (( rc <= 1 )) || {
-      log_error "bkp: git diff failed for $scope"
-      return 1
-    }
-    [[ -n "$out" ]] || return 0
-    print -r -- "$out" | bkp::changeset::relabel "$rung" "$view" "$scope"
+    if (( ${#cands} > 400 )); then
+      out=$(git -c core.quotePath=false diff --no-index -- "$past" "$vtree" 2>/dev/null) || rc=$?
+      (( rc <= 1 )) || {
+        log_error "bkp: git diff failed for $scope"
+        return 1
+      }
+      [[ -n "$out" ]] || return 0
+      print -r -- "$out" | bkp::changeset::relabel "$rung" "$vtree" "$scope"
+      return 0
+    fi
+    # NB: rel is already local above — re-`local`ing an existing local
+    # makes zsh PRINT its value (typeset semantics), polluting the patch.
+    local a b piece
+    for rel in "${cands[@]}"; do
+      a="$past/$rel" b="$vtree/$rel"
+      [[ -e "$a" || -h "$a" ]] || a=/dev/null
+      [[ -e "$b" || -h "$b" ]] || b=/dev/null
+      rc=0
+      piece=$(git -c core.quotePath=false diff --no-index -- "$a" "$b" 2>/dev/null) || rc=$?
+      (( rc <= 1 )) || continue
+      [[ -n "$piece" ]] && print -r -- "$piece"
+    done | bkp::changeset::relabel "$rung" "$vtree" "$scope"
   } always {
-    rm -rf "$view"
+    (( own )) && rm -rf "$view" || :
   }
 }
 

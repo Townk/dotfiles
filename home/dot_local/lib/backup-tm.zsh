@@ -140,12 +140,13 @@ bkp::tm::refresh() {
       kill "$prev" 2>/dev/null
     fi
     print -r -- "$self" > "$s/refresh.pid"
-    rm -rf "$s"/bkp-liveview.*(N) 2>/dev/null
     # Flip the lens into its spinner phase for the build's duration.
     bkp::tm::build_signal "$s"
-    # The live view lands inside the session dir — rm -rf at teardown
-    # sweeps it even when its builder died mid-copy.
-    local BKP_LIVEVIEW_DIR="$s"
+    # The live side is identical for every rung of a session: build the
+    # filtered view ONCE under the session dir and reuse it (the apply
+    # flow invalidates it; teardown's rm -rf sweeps it, .ready-stamped
+    # or half-built alike).
+    local BKP_LIVEVIEW_REUSE="$s/liveview"
     # FUSE-less fallback: rung_root restores the scoped subtree to a
     # per-rung cache when the mount isn't there. On failure the spinner
     # flag must not outlive us — the lens would spin forever.

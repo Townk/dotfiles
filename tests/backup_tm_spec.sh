@@ -91,9 +91,11 @@ EOF
         local s
         s=$(bkp::tm::session_new diff "$FIX/anchor")
         bkp::tm::ladder_fill "$s"
-        # fake mount rung trees for both rungs
+        # fake mount rung trees for both rungs (snapshot side gets PAST
+        # mtimes — the prescreen compares size+mtime)
         mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
         print past > "$s/mnt/ids/aaaa0000$FIX/anchor/f.txt"
+        touch -t 202601010000 "$s/mnt/ids/aaaa0000$FIX/anchor/f.txt"
         print now  > "$FIX/anchor/f.txt"
         bkp::tm::step "$s" older
         grep -c 'diff --git' "$s/current.patch"

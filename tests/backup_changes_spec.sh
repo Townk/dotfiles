@@ -222,11 +222,15 @@ EOF
       printf '#!/bin/sh\nexit 0\n' > "$STUB/chezmoi"
       chmod +x "$STUB/chezmoi"
       PATH="$STUB:$PATH"
-      # "mount": past state; "live": current state
+      # "mount": past state; "live": current state. The snapshot side gets
+      # PAST mtimes — the prescreen compares size+mtime (like restic's own
+      # incremental heuristic), and a real snapshot is never same-second
+      # with the live edit.
       mkdir -p "$FIX/mnt/ids/aaaa$FIX/live" "$FIX/live"
       print old > "$FIX/mnt/ids/aaaa$FIX/live/f.txt"
       print new > "$FIX/live/f.txt"
       print lost > "$FIX/mnt/ids/aaaa$FIX/live/del.txt"
+      touch -t 202601010000 "$FIX/mnt/ids/aaaa$FIX/live/"*
     }
     cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_MANIFEST; }
     BeforeEach 'setup_fix'
@@ -305,6 +309,44 @@ EOF
       The stderr should include "too large for live-diff synthesis"
     End
 
+    It 'renders everything as additions when the rung never captured the scope'
+      run_it() {
+        source "$LIB/backup.zsh"
+        # a rung id whose tree has nothing under the scope
+        bkp::changeset::patch_live "$FIX/mnt/ids/ffff" "$FIX/live"
+      }
+      When run run_it
+      The status should be success
+      The output should include "+++ b$FIX/live/f.txt"
+      The output should include "--- /dev/null"
+      The output should include "+new"
+    End
+
+    It 'builds the live view once per session with BKP_LIVEVIEW_REUSE'
+      run_it() {
+        source "$LIB/backup.zsh"
+        # count view builds (--files-from) while delegating everything to
+        # the real rsync — two scrubs against a persistent view must pay
+        # for exactly one build
+        REAL_RSYNC=$(command -v rsync)
+        cat > "$STUB/rsync" <<EOF
+#!/bin/sh
+case "\$*" in *--files-from*) echo build >> "$FIX/builds" ;; esac
+exec "$REAL_RSYNC" "\$@"
+EOF
+        chmod +x "$STUB/rsync"
+        export BKP_LIVEVIEW_REUSE="$FIX/lv"
+        bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live" > /dev/null
+        bkp::changeset::patch_live "$FIX/mnt/ids/aaaa" "$FIX/live"
+        wc -l < "$FIX/builds" | tr -d ' ' >&2
+      }
+      When run run_it
+      The status should be success
+      The output should include "+new"
+      The output should include "del.txt"
+      The stderr should equal 1
+    End
+
     It 'tolerates rsync partial-transfer (rc 23/24) when building the view'
       run_it() {
         source "$LIB/backup.zsh"
@@ -313,14 +355,22 @@ EOF
         # vanished" (rc 24) — routine on a churning live tree, and the
         # view must still be used, not discarded.
         STUB="$FIX/stub"; mkdir -p "$STUB"
-        cat > "$STUB/rsync" <<'EOF'
+        # The stub intercepts only the view build (--files-from); the
+        # prescreen dry-run must run against the real rsync.
+        REAL_RSYNC=$(command -v rsync)
+        cat > "$STUB/rsync" <<EOF
 #!/bin/sh
-n=$#
-dst=$(eval "echo \${$n}")
-m=$((n - 1))
-src=$(eval "echo \${$m}")
-mkdir -p "$dst"
-cp "$src"f.txt "$dst"/f.txt 2>/dev/null
+case "\$*" in
+  *--files-from*) : ;;
+  *) exec "$REAL_RSYNC" "\$@" ;;
+esac
+n=\$#
+dst=\$(eval "echo \\\${\$n}")
+m=\$((n - 1))
+src=\$(eval "echo \\\${\$m}")
+mkdir -p "\$dst"
+cp "\$src"f.txt "\$dst"/f.txt 2>/dev/null
+cat > /dev/null
 exit 24
 EOF
         chmod +x "$STUB/rsync"
