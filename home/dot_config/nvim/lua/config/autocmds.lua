@@ -13,6 +13,36 @@
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
+-- Snacks-toggle registration helper
+--------------------------------------------------------------------------------
+-- WHY: Our Snacks toggles (<leader>uR/uM/uU, and uH in harper.lua) must only
+-- register once Snacks is loaded. The obvious `User VeryLazy` autocmd works
+-- ONLY when this file loads BEFORE VeryLazy fires (LazyVim's argc>0 path, where
+-- config.autocmds is required eagerly). But when you launch a bare `nvim`
+-- (argc==0), LazyVim requires config.autocmds *from inside* the VeryLazy
+-- dispatch — a `once = true` autocmd added mid-dispatch never runs, and
+-- VeryLazy never fires again, so the toggle is silently never mapped. Pressing
+-- `<leader>uR` then falls through to `u` (undo) + `R` (Replace mode).
+--
+-- lazy.nvim sets `vim.g.did_very_lazy` right before firing VeryLazy, so it's the
+-- authoritative "has VeryLazy already happened?" signal. Register immediately
+-- when it has (Snacks is up); otherwise defer to the VeryLazy autocmd. This is
+-- strictly safe: the deferred branch is the exact old behavior.
+--------------------------------------------------------------------------------
+local function on_very_lazy(fn)
+  local function run()
+    if type(_G.Snacks) == "table" and type(Snacks.toggle) == "table" then
+      fn()
+    end
+  end
+  if vim.g.did_very_lazy then
+    run()
+  else
+    vim.api.nvim_create_autocmd("User", { pattern = "VeryLazy", once = true, callback = run })
+  end
+end
+
+--------------------------------------------------------------------------------
 -- Number Toggle: Relative in Normal Mode, Absolute in Insert Mode
 --------------------------------------------------------------------------------
 -- WHY: Relative line numbers are great for motions (5j, 12k) in normal mode,
@@ -156,26 +186,19 @@ local function read_mode_set(enabled)
   end
 end
 
--- Snacks toggle (registered after Snacks loads), mapped to <leader>uR. Same
--- VeryLazy pattern as the Chezmoi/Harper/Unicode toggles above.
-vim.api.nvim_create_autocmd("User", {
-  pattern = "VeryLazy",
-  once = true,
-  callback = function()
-    if type(_G.Snacks) ~= "table" or type(Snacks.toggle) ~= "table" then
-      return
-    end
-    Snacks.toggle.new({
-      name = "Read Mode",
-      get = function()
-        return vim.g.read_mode == true
-      end,
-      set = function(state)
-        read_mode_set(state)
-      end,
-    }):map("<leader>uR")
-  end,
-})
+-- Snacks toggle (registered once Snacks loads), mapped to <leader>uR. Uses
+-- on_very_lazy so it maps even in a bare `nvim` launched to the dashboard.
+on_very_lazy(function()
+  Snacks.toggle.new({
+    name = "Read Mode",
+    get = function()
+      return vim.g.read_mode == true
+    end,
+    set = function(state)
+      read_mode_set(state)
+    end,
+  }):map("<leader>uR")
+end)
 
 --------------------------------------------------------------------------------
 -- Yazi Lua Types: Configure lua_ls for Yazi plugin files
@@ -462,27 +485,20 @@ vim.api.nvim_create_user_command("ChezmoiApplyNow", function()
   vim.notify("chezmoi apply triggered", vim.log.levels.INFO)
 end, { desc = "Run `chezmoi apply` immediately, bypassing the BufWritePost debounce" })
 
--- LazyVim/Snacks toggle, registered after Snacks loads (VeryLazy event).
+-- LazyVim/Snacks toggle, registered once Snacks loads (see on_very_lazy).
 -- Mapped to <leader>uM (chezMoi). Toggling off pauses both the redirect and
 -- the auto-apply on save without removing the autocmds.
-vim.api.nvim_create_autocmd("User", {
-  pattern = "VeryLazy",
-  once = true,
-  callback = function()
-    if type(_G.Snacks) ~= "table" or type(Snacks.toggle) ~= "table" then
-      return
-    end
-    Snacks.toggle.new({
-      name = "Chezmoi Redirect",
-      get = function()
-        return chezmoi_redirect_enabled
-      end,
-      set = function(state)
-        chezmoi_redirect_enabled = state
-      end,
-    }):map("<leader>uM")
-  end,
-})
+on_very_lazy(function()
+  Snacks.toggle.new({
+    name = "Chezmoi Redirect",
+    get = function()
+      return chezmoi_redirect_enabled
+    end,
+    set = function(state)
+      chezmoi_redirect_enabled = state
+    end,
+  }):map("<leader>uM")
+end)
 
 --------------------------------------------------------------------------------
 -- Force classical conf syntax for `conf.gotmpl` buffers
@@ -577,27 +593,21 @@ for _, b in ipairs(vim.api.nvim_list_bufs()) do
   end
 end
 
--- Snacks toggle (registered after Snacks loads), mapped to <leader>uU.
-vim.api.nvim_create_autocmd("User", {
-  pattern = "VeryLazy",
-  once = true,
-  callback = function()
-    if type(_G.Snacks) ~= "table" or type(Snacks.toggle) ~= "table" then
-      return
-    end
-    Snacks.toggle.new({
-      name = "Unicode Code-Point Hints",
-      get = function()
-        return unicode_hints_enabled
-      end,
-      set = function(state)
-        unicode_hints_enabled = state
-        for _, b in ipairs(vim.api.nvim_list_bufs()) do
-          if vim.api.nvim_buf_is_loaded(b) then
-            unicode_hints_refresh(b)
-          end
+-- Snacks toggle (registered once Snacks loads, see on_very_lazy), mapped to
+-- <leader>uU.
+on_very_lazy(function()
+  Snacks.toggle.new({
+    name = "Unicode Code-Point Hints",
+    get = function()
+      return unicode_hints_enabled
+    end,
+    set = function(state)
+      unicode_hints_enabled = state
+      for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_loaded(b) then
+          unicode_hints_refresh(b)
         end
-      end,
-    }):map("<leader>uU")
-  end,
-})
+      end
+    end,
+  }):map("<leader>uU")
+end)

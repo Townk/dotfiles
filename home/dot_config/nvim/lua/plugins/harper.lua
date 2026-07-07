@@ -305,45 +305,56 @@ return {
       ------------------------------------------------------------------------
       -- Toggle (<leader>uH)
       ------------------------------------------------------------------------
-      -- Same VeryLazy/Snacks.toggle pattern used for the chezmoi-redirect
-      -- toggle in lua/config/autocmds.lua. Default state is ON; flipping
-      -- off stops every harper-ls client, flipping on re-fires the FileType
-      -- autocmd so LazyVim's LSP attach hook restarts harper-ls on each
-      -- loaded buffer.
-      vim.api.nvim_create_autocmd("User", {
-        pattern = "VeryLazy",
-        once = true,
-        callback = function()
-          if type(_G.Snacks) ~= "table" or type(Snacks.toggle) ~= "table" then
-            return
-          end
-          Snacks.toggle
-            .new({
-              name = "Harper Grammar",
-              get = function()
-                return vim.g.harper_enabled ~= false
-              end,
-              set = function(state)
-                vim.g.harper_enabled = state
-                if state then
-                  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-                    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype ~= "" then
-                      pcall(vim.api.nvim_exec_autocmds, "FileType", {
-                        buffer = buf,
-                        modeline = false,
-                      })
-                    end
-                  end
-                else
-                  for _, c in ipairs(vim.lsp.get_clients({ name = "harper_ls" })) do
-                    vim.lsp.stop_client(c.id, true)
+      -- Default state is ON; flipping off stops every harper-ls client,
+      -- flipping on re-fires the FileType autocmd so LazyVim's LSP attach hook
+      -- restarts harper-ls on each loaded buffer.
+      --
+      -- Registration must survive both LazyVim load paths. A plain
+      -- `User VeryLazy` autocmd only fires when this init() runs BEFORE VeryLazy;
+      -- launched as a bare `nvim` (argc==0) this can run from inside the VeryLazy
+      -- dispatch, where a freshly-added `once` autocmd never fires and the
+      -- toggle is silently never mapped. lazy.nvim sets `vim.g.did_very_lazy`
+      -- just before firing VeryLazy, so register now if it's already set,
+      -- otherwise defer. (Mirrors on_very_lazy in lua/config/autocmds.lua.)
+      local function register_harper_toggle()
+        if type(_G.Snacks) ~= "table" or type(Snacks.toggle) ~= "table" then
+          return
+        end
+        Snacks.toggle
+          .new({
+            name = "Harper Grammar",
+            get = function()
+              return vim.g.harper_enabled ~= false
+            end,
+            set = function(state)
+              vim.g.harper_enabled = state
+              if state then
+                for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+                  if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype ~= "" then
+                    pcall(vim.api.nvim_exec_autocmds, "FileType", {
+                      buffer = buf,
+                      modeline = false,
+                    })
                   end
                 end
-              end,
-            })
-            :map("<leader>uH")
-        end,
-      })
+              else
+                for _, c in ipairs(vim.lsp.get_clients({ name = "harper_ls" })) do
+                  vim.lsp.stop_client(c.id, true)
+                end
+              end
+            end,
+          })
+          :map("<leader>uH")
+      end
+      if vim.g.did_very_lazy then
+        register_harper_toggle()
+      else
+        vim.api.nvim_create_autocmd("User", {
+          pattern = "VeryLazy",
+          once = true,
+          callback = register_harper_toggle,
+        })
+      end
 
       -- Gate auto-attach while the toggle is off. LazyVim's lspconfig setup
       -- registers a FileType autocmd that starts harper-ls on any matching
