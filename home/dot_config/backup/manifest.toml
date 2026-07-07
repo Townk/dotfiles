@@ -40,6 +40,12 @@ deny = [
   "~/.gradle",
   "~/Library/Caches",
   "~/Library/Application Support/JetBrains/*/plugins",  # ~1 GB/IDE, marketplace-regenerable
+  "~/.local/state/terminal-backup",     # the backup's OWN staging/wip — never self-ingest
+  "~/.local/share/pick-clipboard",      # clipboard DB, ephemeral (atuin kept: it's valuable + append-only, dedups well)
+  "~/Projects/3D",                      # 850+ MB of .gcode/.step CAD output, non-git
+  "~/Projects/AI/llama.cpp/models",     # downloadable model weights (.gguf)
+  "**/build/**",                        # gradle/xcode build output in non-git project dirs
+  "**/*.log",                           # debug/error logs (commit-ai 292M, nvim lsp 63M): churn, regenerable
   "**/*.sock",
   "**/.#lk*",                           # gnupg lock litter (spec §2 B: skip .#lk*/S.*)
   "**/S.gpg-agent*",
