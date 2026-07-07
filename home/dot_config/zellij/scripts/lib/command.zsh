@@ -12,7 +12,7 @@ ql_zellij_bin() {
     print -r -- "$z"
     return 0
   }
-  for z in /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij "$HOME/.local/bin/zellij"; do
+  for z in /opt/homebrew/bin/zellij /usr/local/bin/zellij "$HOME/.local/share/mise/shims/zellij" "$HOME/.local/bin/zellij"; do
     [[ -x "$z" ]] && {
       print -r -- "$z"
       return 0

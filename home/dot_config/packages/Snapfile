@@ -6,12 +6,11 @@
 # `system-update`. That worker installs missing declared snaps and refreshes
 # declared snaps without trying to remove snapd-managed base/platform snaps.
 #
-# Reserve this for classic-confined apps that are better as snaps than as
-# mise binaries. Do NOT list mise or atuin here:
+# No current dev-shell snaps. Reserve this for classic-confined apps that are
+# better as snaps than as mise binaries. Do NOT list mise, atuin, zellij, or
+# neovim here:
 #   - snap mise symlinks its tool shims to /snap/bin/mise, which breaks
 #     shim execution (tools resolve to the snap dispatcher).
 #   - snap atuin is strict-confined and cannot write ~/.local/share/atuin.
-# Both of those come from mise / standalone installers instead.
-
-nvim --classic
-zellij --classic
+#   - zellij and neovim must survive dev-shell reboots, so they are installed
+#     in $HOME via mise instead of snap's system state.

@@ -66,7 +66,7 @@ if _zsh_should_autoattach_zellij; then
       | head -n 50 >| "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null
     return 0
   }
-  for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij ~/.local/bin/zellij; do
+  for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij "$HOME/.local/share/mise/shims/zellij" ~/.local/bin/zellij; do
     [[ -x "$_zellij" ]] || continue
     # Make sure the managed plugin wasms exist before launch. We fetch them
     # ourselves (config.kdl loads them via file:) instead of trusting Zellij's

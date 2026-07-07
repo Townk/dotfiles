@@ -52,7 +52,7 @@ resolve_bin() {
   return 1
 }
 
-ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_bin zellij /opt/homebrew/bin/zellij /usr/local/bin/zellij /snap/bin/zellij "$HOME/.local/bin/zellij" || true)}"
+ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_bin zellij /opt/homebrew/bin/zellij /usr/local/bin/zellij "$HOME/.local/share/mise/shims/zellij" "$HOME/.local/bin/zellij" || true)}"
 
 [[ -x "$ZELLIJ_BIN" ]] || {
   echo "zellij-quit-confirm: missing or non-executable: $ZELLIJ_BIN" >&2
