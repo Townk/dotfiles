@@ -29,6 +29,9 @@ vim.api.nvim_create_autocmd("InsertEnter", {
   group = number_toggle,
   pattern = "*",
   callback = function()
+    if vim.g.read_mode then
+      return -- Read mode owns the gutter: keep line numbers hidden.
+    end
     if vim.bo.buftype ~= "" then
       return -- Skip non-file buffers (Snacks, terminal, help, etc.)
     end
@@ -41,12 +44,137 @@ vim.api.nvim_create_autocmd("InsertLeave", {
   group = number_toggle,
   pattern = "*",
   callback = function()
+    if vim.g.read_mode then
+      return -- Read mode owns the gutter: don't resurrect numbers on exit.
+    end
     if vim.bo.buftype ~= "" then
       return -- Skip non-file buffers (Snacks, terminal, help, etc.)
     end
     vim.opt.relativenumber = true
   end,
   desc = "Use relative line numbers in normal mode",
+})
+
+--------------------------------------------------------------------------------
+-- Read Mode: distraction-free reading toggle (<leader>uR)
+--------------------------------------------------------------------------------
+-- WHY: When reading rather than editing, the editing affordances turn into
+-- noise. Read mode flips all of these off in a single keystroke and restores
+-- whatever they were on the way back out:
+--   * diagnostics       (vim.diagnostic)
+--   * Harper grammar    (harper-ls, via vim.g.harper_enabled — see harper.lua)
+--   * spell checking     (spell)
+--   * guide lines        (Snacks indent guides)
+--   * soft wrapping      (wrap)
+--   * line numbers       (number + relativenumber)
+--
+-- State is GLOBAL (vim.g.read_mode) to match the other global toggles in this
+-- config (Chezmoi redirect, Harper, Unicode hints) and because the NumberToggle
+-- autocmd above is itself global. The saved-state table captures each feature's
+-- value at the moment Read mode is switched on, so switching it off restores the
+-- prior state instead of assuming defaults (e.g. a markdown buffer that had
+-- `wrap` on keeps it on afterwards).
+--
+-- The NumberToggle InsertEnter/InsertLeave autocmds early-return while
+-- vim.g.read_mode is set, so entering or leaving insert mode never resurrects
+-- the line-number gutter mid-read.
+--------------------------------------------------------------------------------
+vim.g.read_mode = false
+local read_mode_saved = nil
+
+-- Stop/start Harper the same way the <leader>uH toggle does (harper.lua):
+-- flip the global flag, then either stop every harper-ls client or re-fire
+-- FileType so LazyVim's lsp attach hook restarts harper-ls on loaded buffers.
+local function read_mode_set_harper(enabled)
+  vim.g.harper_enabled = enabled
+  if enabled then
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype ~= "" then
+        pcall(vim.api.nvim_exec_autocmds, "FileType", { buffer = buf, modeline = false })
+      end
+    end
+  else
+    for _, c in ipairs(vim.lsp.get_clients({ name = "harper_ls" })) do
+      vim.lsp.stop_client(c.id, true)
+    end
+  end
+end
+
+-- Indent guides live in Snacks; enable()/disable() flip Snacks.indent.enabled
+-- and redraw, matching the <leader>ug toggle. Guard on Snacks being loaded.
+local function read_mode_set_indent(enabled)
+  if type(_G.Snacks) == "table" and type(Snacks.indent) == "table" then
+    pcall(enabled and Snacks.indent.enable or Snacks.indent.disable)
+  end
+end
+
+local function read_mode_indent_enabled()
+  if type(_G.Snacks) == "table" and type(Snacks.indent) == "table" then
+    return Snacks.indent.enabled ~= false
+  end
+  return vim.g.snacks_indent ~= false
+end
+
+local function read_mode_set(enabled)
+  enabled = enabled and true or false
+  if enabled == (vim.g.read_mode == true) then
+    return -- already in the requested state; nothing to save/restore.
+  end
+
+  if enabled then
+    -- Snapshot the current state so we can put it back exactly. Window-local
+    -- options are read from the current window (vim.wo); read mode is a global
+    -- mode entered from the window you're reading in.
+    read_mode_saved = {
+      diagnostics = vim.diagnostic.is_enabled(),
+      harper = vim.g.harper_enabled ~= false,
+      indent = read_mode_indent_enabled(),
+      number = vim.wo.number,
+      relativenumber = vim.wo.relativenumber,
+      wrap = vim.wo.wrap,
+      spell = vim.wo.spell,
+    }
+    vim.g.read_mode = true
+    vim.diagnostic.enable(false)
+    read_mode_set_harper(false)
+    read_mode_set_indent(false)
+    vim.opt.number = false
+    vim.opt.relativenumber = false
+    vim.opt.wrap = false
+    vim.opt.spell = false
+  else
+    local s = read_mode_saved or {}
+    vim.g.read_mode = false
+    vim.diagnostic.enable(s.diagnostics ~= false)
+    read_mode_set_harper(s.harper ~= false)
+    read_mode_set_indent(s.indent ~= false)
+    vim.opt.number = s.number ~= false
+    vim.opt.relativenumber = s.relativenumber ~= false
+    vim.opt.wrap = s.wrap == true
+    vim.opt.spell = s.spell == true
+    read_mode_saved = nil
+  end
+end
+
+-- Snacks toggle (registered after Snacks loads), mapped to <leader>uR. Same
+-- VeryLazy pattern as the Chezmoi/Harper/Unicode toggles above.
+vim.api.nvim_create_autocmd("User", {
+  pattern = "VeryLazy",
+  once = true,
+  callback = function()
+    if type(_G.Snacks) ~= "table" or type(Snacks.toggle) ~= "table" then
+      return
+    end
+    Snacks.toggle.new({
+      name = "Read Mode",
+      get = function()
+        return vim.g.read_mode == true
+      end,
+      set = function(state)
+        read_mode_set(state)
+      end,
+    }):map("<leader>uR")
+  end,
 })
 
 --------------------------------------------------------------------------------
