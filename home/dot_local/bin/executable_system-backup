@@ -45,6 +45,7 @@ Usage:
   system-backup reconcile                converge present targets
   system-backup targets                  configured targets + presence
   system-backup verify                   restic check staging + targets
+  system-backup reclaim [--dry-run] [-y] retro-apply the deny list, reclaim space
   system-backup -h | --help | help       show this help
 
 The \`tm\` shell function is the anchored shortcut: \`tm\` explores \$PWD,
@@ -119,6 +120,28 @@ Usage:
 
 Revert the last restore: the newest bkp-undo snapshot is restored in place
 and then forgotten. Stacked undos peel one restore at a time.
+EOF
+      ;;
+    reclaim)
+      cat <<EOF
+Usage:
+  system-backup reclaim [--dry-run] [-y | --yes]
+
+Retroactively enforce the manifest's deny list on EXISTING snapshots. A deny
+change only shapes future captures; reclaim rewrites every snapshot in each
+repo to drop the now-denied paths, then prunes the freed packs — reclaiming
+space that pre-dates the deny change.
+
+Runs across staging AND every present target (master included): a rewrite
+keeps every snapshot, it only trims paths. Mirrors must be reclaimed this way
+because reconcile keys on the snapshot's original id, which a rewrite
+preserves — a staging-only rewrite never reaches them.
+
+  --dry-run    show what each repo would drop; write nothing
+  -y | --yes   skip the confirmation prompt (required when non-interactive)
+
+Destructive and irreversible: the rewritten history replaces the old. It is
+restic-exclusive, so it waits out any in-flight capture.
 EOF
       ;;
     *)
@@ -264,6 +287,40 @@ main() {
         die "restore-project requires exactly one repo path"
       }
       bkp::project::restore "${1:A}"
+      ;;
+    reclaim)
+      args_contain_help "$@" && {
+        usage_for reclaim
+        exit 0
+      }
+      require_config
+      local dry=0 yes=0
+      while (( $# )); do
+        case "$1" in
+          --dry-run) dry=1 ;;
+          -y | --yes) yes=1 ;;
+          *)
+            usage_for reclaim >&2
+            die "reclaim: unexpected argument '$1'"
+            ;;
+        esac
+        shift
+      done
+      # Irreversible history rewrite — confirm unless previewing or -y. With
+      # no tty (a script/agent) refuse rather than block on a dead prompt.
+      if (( ! dry && ! yes )); then
+        print -u2 -r -- "reclaim rewrites EVERY snapshot in staging + all present targets to drop"
+        print -u2 -r -- "the manifest's deny paths, then prunes. This is irreversible."
+        if [[ -t 0 ]]; then
+          read -q "REPLY?Proceed? [y/N] " || { print -u2; die "aborted"; }
+          print -u2
+        else
+          die "reclaim is destructive — re-run with --yes (or --dry-run to preview)"
+        fi
+      fi
+      local -a rargs=()
+      (( dry )) && rargs+=(--dry-run)
+      bkp::reclaim::run "${rargs[@]}"
       ;;
     *)
       usage

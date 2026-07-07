@@ -2073,3 +2073,104 @@ bkp::reconcile::prune() {
   bkp::drift::stamp prune "$rc"
   return $rc
 }
+
+# bkp::reclaim::run [<manifest>] [<config>] [--dry-run]
+# Retroactively enforce the manifest deny list on EXISTING snapshots. A deny
+# change only shapes FUTURE captures; this rewrites every snapshot in each
+# repo to drop the now-denied paths (restic rewrite), then prunes the freed
+# packs. Applies to staging AND every present, initialized target — master
+# included: a rewrite keeps every snapshot, it only trims paths, so the
+# deepest archive stays complete while shedding what should never have been
+# in it. Mirrors MUST be reclaimed here, not via reconcile: reconcile keys
+# snapshots on `.original`, which rewrite preserves, so a staging-only
+# rewrite is invisible to a mirror. Restic-exclusive like the nightly prune,
+# so it serializes behind capture+reconcile in the same acquisition order.
+#   --dry-run: `rewrite --dry-run` per repo, no forget, no prune.
+bkp::reclaim::run() {
+  local manifest="$BKP_MANIFEST" cfg="$BKP_CONFIG" dry=0 pos=0
+  while (( $# )); do
+    case "$1" in
+      --dry-run) dry=1 ;;
+      --*) log_error "bkp: reclaim: unknown flag '$1'"; return 2 ;;
+      *)
+        case $pos in
+          0) manifest="$1" ;;
+          1) cfg="$1" ;;
+          *) log_error "bkp: reclaim: too many arguments"; return 2 ;;
+        esac
+        pos=$(( pos + 1 ))
+        ;;
+    esac
+    shift
+  done
+  local BKP_CONFIG="$cfg"
+
+  # Excludes = the manifest deny globs (~-expanded) plus the always-denied
+  # state dir (capture appends this too — never re-ingest our own repo).
+  local -a excludes=() rewrite_args=()
+  local deny_out
+  deny_out=$(bkp::manifest::deny "$manifest") || return 2
+  [[ -n "$deny_out" ]] && excludes=(${(f)deny_out})
+  excludes+=("$BKP_STATE_DIR")
+  local pat
+  for pat in "${excludes[@]}"; do rewrite_args+=(--exclude "$pat"); done
+
+  local staging targets rc=0
+  staging=$(bkp::config::staging_path) || return 2
+  targets=$(bkp::config::targets) || return 2
+
+  # A rewrite cannot share a repo with a capture — wait the tick out on both
+  # locks, in the tick's own order (capture then reconcile) so they can never
+  # deadlock. A preview writes nothing, so it needs no lock.
+  if (( ! dry )); then
+    local lock_wait="${BKP_PRUNE_LOCK_WAIT:-900}"
+    bkp::lock capture "$lock_wait" || {
+      log_error "bkp: capture still running after ${lock_wait}s — reclaim aborted"
+      return 1
+    }
+    bkp::lock reconcile "$lock_wait" || {
+      log_error "bkp: reconcile still running after ${lock_wait}s — reclaim aborted"
+      return 1
+    }
+  fi
+
+  # staging first, then every present, initialized target (master included).
+  local -a repos=("staging"$'\t'"$staging")
+  local name tpath role
+  while IFS=$'\t' read -r name tpath role; do
+    [[ -z "$name" ]] && continue
+    bkp::target::present "$tpath" || continue
+    bkp::restic "$tpath" cat config >/dev/null 2>&1 || continue
+    repos+=("$name"$'\t'"$tpath")
+  done <<<"$targets"
+
+  local entry rname rpath before after out n REPLY
+  for entry in "${repos[@]}"; do
+    rname="${entry%%$'\t'*}" rpath="${entry##*$'\t'}"
+    if (( dry )); then
+      # restic rewrite spews the full file list per snapshot to stdout —
+      # capture it so the flood never hits the terminal, report only the
+      # count. (stderr still flows, so real errors surface.) The capture
+      # buffers until the repo finishes, so announce first — a big/cloud
+      # repo can take a while with nothing else to show.
+      log_info "bkp: reclaim ($rname) — previewing…"
+      out=$(bkp::restic "$rpath" rewrite --dry-run "${rewrite_args[@]}") || rc=1
+      n=$(grep -c 'would save new snapshot' <<<"$out") || n=0
+      log_info "bkp: reclaim ($rname) — $n snapshot(s) would change"
+    else
+      bkp::ux::_dirsize "$rpath"; before="$REPLY"
+      log_info "bkp: reclaim ($rname) — rewrite + prune ($before on disk)"
+      # -q silences the same per-file flood (mirrors the capture path's
+      # `backup --quiet`); prune --quiet keeps its repack chatter down too.
+      if bkp::restic "$rpath" rewrite -q --forget "${rewrite_args[@]}"; then
+        bkp::restic "$rpath" prune --quiet || rc=1
+      else
+        rc=1; continue
+      fi
+      bkp::ux::_dirsize "$rpath"; after="$REPLY"
+      log_ok "bkp: reclaim ($rname) — $before → $after"
+    fi
+  done
+  (( dry )) || bkp::drift::stamp prune "$rc"
+  return $rc
+}

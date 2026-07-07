@@ -43,6 +43,7 @@ _system-backup() {
         'reconcile[converge present targets]' \
         'targets[configured targets + presence]' \
         'verify[restic check staging + targets]' \
+        'reclaim[retro-apply the deny list, reclaim space]' \
         'help[show help]'
       ;;
     cmdargs)
@@ -73,6 +74,11 @@ _system-backup() {
         restore-project)
           _arguments $help_flag \
             '1:repo path:_directories'
+          ;;
+        reclaim)
+          _arguments $help_flag \
+            '--dry-run[show what each repo would drop; write nothing]' \
+            '(-y --yes)'{-y,--yes}'[skip the confirmation prompt]'
           ;;
         status | now | list | undo | reconcile | targets | verify)
           _arguments $help_flag

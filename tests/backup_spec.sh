@@ -1544,6 +1544,94 @@ EOF
       The stderr should include "prune aborted"
     End
 
+    It 'reclaim rewrites + prunes staging and every present repo, master included'
+      reclaim_all() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        : > "$FIX/has-tgt"
+        mkdir -p "$FIX/mastertb"; : > "$FIX/has-repo"
+        cat >> "$FIX/c.toml" <<EOF
+[[target]]
+name = "tgt"
+path = "$FIX/tgt"
+[[target]]
+name = "arch"
+path = "$FIX/mastertb/repo"
+role = "master"
+[[target]]
+name = "ghost"
+path = "$FIX/gone/tb"
+EOF
+        printf 'roots = []\ndeny = ["~/.cache", "**/*.log"]\n' > "$FIX/m.toml"
+        bkp::reclaim::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        grep -c "rewrite -q --forget" "$FIX/calls"
+        grep -c "prune --quiet" "$FIX/calls"
+        grep -c "^$FIX/mastertb/repo rewrite -q --forget" "$FIX/calls"
+        grep -c "gone" "$FIX/calls" || true
+        grep "^$FIX/stg rewrite" "$FIX/calls"
+      }
+      When run reclaim_all
+      The status should be success
+      The line 1 should equal 3
+      The line 2 should equal 3
+      The line 3 should equal 1
+      The line 4 should equal 0
+      # excludes = manifest deny (~-expanded) + the always-denied state dir
+      The line 5 should include "**/*.log"
+      The line 5 should include "$FIX/state"
+    End
+
+    It 'reclaim --dry-run previews with no forget and no prune'
+      reclaim_dry() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        : > "$FIX/has-tgt"
+        cat >> "$FIX/c.toml" <<EOF
+[[target]]
+name = "tgt"
+path = "$FIX/tgt"
+EOF
+        printf 'roots = []\ndeny = ["**/*.log"]\n' > "$FIX/m.toml"
+        bkp::reclaim::run "$FIX/m.toml" "$FIX/c.toml" --dry-run >/dev/null || return 1
+        grep -c "rewrite --dry-run" "$FIX/calls"
+        grep -c "prune" "$FIX/calls" || true
+        grep -c -- "--forget" "$FIX/calls" || true
+      }
+      When run reclaim_dry
+      The line 1 should equal 2
+      The line 2 should equal 0
+      The line 3 should equal 0
+    End
+
+    It 'reclaim --dry-run swallows the restic file flood, summarizing instead'
+      no_flood() {
+        source "$LIB/backup.zsh"
+        # emulate restic rewrite --dry-run: a per-file flood on stdout plus
+        # one summary line per would-be-modified snapshot.
+        bkp::restic() {
+          print -r -- "/Users/me/secret-a.txt /Users/me/secret-b.txt"
+          print -r -- "would save new snapshot"
+        }
+        printf 'roots = []\ndeny = ["**/*.log"]\n' > "$FIX/m.toml"
+        bkp::reclaim::run "$FIX/m.toml" "$FIX/c.toml" --dry-run
+      }
+      When run no_flood
+      The status should be success
+      The output should include "1 snapshot(s) would change"
+      The output should not include "secret-a.txt"
+    End
+
+    It 'reclaim refuses a destructive run with no tty and no --yes'
+      refuse() {
+        BKP_LIB="$LIB" zsh \
+          "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup" \
+          reclaim </dev/null
+      }
+      When run refuse
+      The status should equal 1
+      The stderr should include "re-run with --yes"
+    End
+
     It 'worker --help prints usage'
       rhelp() {
         BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-reconcile" --help
