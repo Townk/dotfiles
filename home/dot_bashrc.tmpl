@@ -1,5 +1,16 @@
 {{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
-# ~/.bashrc - backup bridge for interactive non-login SSH shells.
+# ~/.bashrc - env + backup bridge for SSH shells. Bash reads this file for
+# interactive SSH shells AND (via its sshd stdin detection) for non-interactive
+# `ssh host 'cmd'` invocations.
+
+# Env FIRST, unconditionally, before the interactive guard below: git commit -S,
+# AI agents, and scripts run over SSH as non-interactive bash, which otherwise
+# gets no GNUPGHOME/PATH -- gpg then falls back to an empty ~/.gnupg with no
+# forwarded agent and signing fails. environment.sh is sh-compatible and
+# side-effect-safe (the same file ~/.zshenv and the launchd agent source).
+[ -r "$HOME/.config/zsh/environment.sh" ] && . "$HOME/.config/zsh/environment.sh"
+
+# Interactive non-login bridge: hand a fresh interactive SSH shell to zsh.
 case $- in
   *i*)
     if [ "${SHLVL:-1}" -le 1 ] 2>/dev/null && [ -r "$HOME/.profile" ]; then
