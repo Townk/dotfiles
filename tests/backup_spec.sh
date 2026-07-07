@@ -1758,6 +1758,30 @@ EOF
       The line 3 should equal "3d"
     End
 
+    It 'spin runs the command, captures stdout, and returns success'
+      spun_ok() {
+        source "$LIB/backup.zsh"
+        BKP_PROGRESS=0   # non-interactive: no gum, run plainly
+        bkp::spin "working" "$FIX/spun" -- print -r -- "captured"
+        print -r -- "rc=$?"
+        cat "$FIX/spun"
+      }
+      When run spun_ok
+      The line 1 should equal "rc=0"
+      The line 2 should equal "captured"
+    End
+
+    It 'spin propagates a failing command status'
+      spun_fail() {
+        source "$LIB/backup.zsh"
+        BKP_PROGRESS=0
+        bkp::spin "working" /dev/null -- sh -c 'exit 4'
+        print -r -- "rc=$?"
+      }
+      When run spun_fail
+      The line 1 should equal "rc=4"
+    End
+
     It 'lists snapshots with tier labels'
       lists() {
         source "$LIB/backup.zsh"

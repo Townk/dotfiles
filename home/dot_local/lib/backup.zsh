@@ -1375,6 +1375,30 @@ bkp::ux::interactive() {
   [[ -t 2 ]]
 }
 
+# bkp::spin <title> <outfile> -- <cmd...>
+# Run <cmd> with its stdout redirected to <outfile>, animating a gum spinner
+# titled <title> while it works — but ONLY when a human is watching
+# (bkp::ux::interactive) and the real gum binary is present. Otherwise run it
+# plainly, so scheduled/piped runs stay silent and gum-free. Returns <cmd>'s
+# exit status. Use it to keep an otherwise-silent long restic op — one we run
+# --quiet to suppress its output flood — from looking frozen.
+bkp::spin() {
+  local title="$1" outfile="$2"; shift 2
+  [[ "${1:-}" == -- ]] && shift
+  local rc=0
+  # Real binary only: a gum FUNCTION is the tests' opt-out seam.
+  if bkp::ux::interactive && command -v gum >/dev/null 2>&1 && (( ! ${+functions[gum]} )); then
+    "$@" > "$outfile" &
+    local pid=$!
+    gum spin --spinner dot --title "$title" -- \
+      zsh -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done' _ "$pid" || :
+    wait "$pid" || rc=$?
+  else
+    "$@" > "$outfile" || rc=$?
+  fi
+  return $rc
+}
+
 # bkp::capture::run [<manifest>] [<config>]
 # One capture tick (spec §4): lock -> ensure staging -> ONE sweep (repo plan
 # + file list share the pass) -> git sidecars -> restic backup -> thin.
@@ -1399,16 +1423,8 @@ bkp::capture::run() {
     # when a human is watching and gum is around.
     log_info "bkp: resolving capture set"
     local sweep_rc=0
-    # Real binary only: a gum FUNCTION is the tests' opt-out seam.
-    if bkp::ux::interactive && command -v gum >/dev/null 2>&1 && (( ! ${+functions[gum]} )); then
-      bkp::manifest::sweep "$manifest" > "$sweep_file" &
-      local sweep_pid=$!
-      gum spin --spinner dot --title "resolving capture set…" -- \
-        zsh -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done' _ "$sweep_pid" || :
-      wait "$sweep_pid" || sweep_rc=$?
-    else
-      bkp::manifest::sweep "$manifest" > "$sweep_file" || sweep_rc=$?
-    fi
+    bkp::spin "resolving capture set…" "$sweep_file" -- \
+      bkp::manifest::sweep "$manifest" || sweep_rc=$?
     (( sweep_rc )) && return 2
 
     local repo bundle warn nrepos=0
@@ -1480,7 +1496,11 @@ bkp::restic::copy() {
   local src="$1" dst="$2"; shift 2
   local pwcmd
   pwcmd=$(bkp::config::password_command) || return 2
-  bkp::restic "$dst" copy --from-repo "$src" --from-password-command "$pwcmd" --quiet "$@"
+  # Interactive runs keep restic's native copy progress (a slow copy must not
+  # look frozen); scheduled runs stay --quiet for the log.
+  local -a quiet=(--quiet)
+  bkp::ux::interactive && quiet=()
+  bkp::restic "$dst" copy --from-repo "$src" --from-password-command "$pwcmd" "${quiet[@]}" "$@"
 }
 
 # bkp::reconcile::ensure_target <staging> <target>
@@ -2144,26 +2164,31 @@ bkp::reclaim::run() {
     repos+=("$name"$'\t'"$tpath")
   done <<<"$targets"
 
-  local entry rname rpath before after out n REPLY
+  local entry rname rpath before after tmp n REPLY
+  local -a pq
   for entry in "${repos[@]}"; do
     rname="${entry%%$'\t'*}" rpath="${entry##*$'\t'}"
     if (( dry )); then
-      # restic rewrite spews the full file list per snapshot to stdout —
-      # capture it so the flood never hits the terminal, report only the
-      # count. (stderr still flows, so real errors surface.) The capture
-      # buffers until the repo finishes, so announce first — a big/cloud
-      # repo can take a while with nothing else to show.
-      log_info "bkp: reclaim ($rname) — previewing…"
-      out=$(bkp::restic "$rpath" rewrite --dry-run "${rewrite_args[@]}") || rc=1
-      n=$(grep -c 'would save new snapshot' <<<"$out") || n=0
+      # restic rewrite spews the full file list per snapshot to stdout — send
+      # it to a temp file so the flood never hits the terminal (stderr still
+      # flows, so real errors surface), and spin so a big/cloud repo doesn't
+      # look frozen while it reads. Report only the count.
+      tmp=$(mktemp "${TMPDIR:-/tmp}/bkp-reclaim.XXXXXX") || return 1
+      bkp::spin "reclaim ($rname): previewing…" "$tmp" -- \
+        bkp::restic "$rpath" rewrite --dry-run "${rewrite_args[@]}" || rc=1
+      n=$(grep -c 'would save new snapshot' "$tmp") || n=0
+      rm -f "$tmp"
       log_info "bkp: reclaim ($rname) — $n snapshot(s) would change"
     else
       bkp::ux::_dirsize "$rpath"; before="$REPLY"
       log_info "bkp: reclaim ($rname) — rewrite + prune ($before on disk)"
-      # -q silences the same per-file flood (mirrors the capture path's
-      # `backup --quiet`); prune --quiet keeps its repack chatter down too.
-      if bkp::restic "$rpath" rewrite -q --forget "${rewrite_args[@]}"; then
-        bkp::restic "$rpath" prune --quiet || rc=1
+      # rewrite MUST stay -q (its per-file flood is unusable), so spin over
+      # it. prune has a usable native progress bar — show it interactively,
+      # stay --quiet when scheduled/piped.
+      if bkp::spin "reclaim ($rname): rewriting…" /dev/null -- \
+           bkp::restic "$rpath" rewrite -q --forget "${rewrite_args[@]}"; then
+        pq=(--quiet); bkp::ux::interactive && pq=()
+        bkp::restic "$rpath" prune "${pq[@]}" || rc=1
       else
         rc=1; continue
       fi
