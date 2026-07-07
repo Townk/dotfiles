@@ -65,6 +65,20 @@ zmodload zsh/datetime   # $EPOCHREALTIME for op_persist timestamps
 # on bytes -- exactly the protocol's unit -- fixing the whole class at once.
 setopt nomultibyte
 
+# Force a UTF-8 locale for the CHILD tools we shell out to. pbcopy/pbpaste
+# transcode between the pasteboard's Unicode text and their stdio bytes using
+# the locale's charset; under the clipboard-bridge service env (only PATH is
+# set -- see services.toml.tmpl [clipboard-bridge.env]) that charset defaults
+# to Mac OS Roman. So op_set's `... | pbcopy` reinterprets nvim's UTF-8 bytes
+# as MacRoman -- e2 95 ad ("╭") lands as three chars "‚ï≠" -- and op_get's
+# pbpaste can't emit non-MacRoman clip text at all (a bare "╭" comes back as
+# "?"). Exporting a UTF-8 LC_CTYPE makes both round-trip byte-exact. This does
+# NOT undo `setopt nomultibyte` above: that governs THIS shell's own string
+# handling (byte-exact framing) and wins over the locale regardless; LC_CTYPE
+# only reaches the child processes. Nothing in the service env sets LC_ALL, so
+# this category is respected.
+export LC_CTYPE=en_US.UTF-8
+
 DB_FILE="${PICK_CLIPBOARD_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/pick-clipboard/history.db}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/pick-clipboard"
 REGTYPE_FILE="$STATE_DIR/current-regtype"
