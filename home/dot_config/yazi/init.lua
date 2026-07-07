@@ -102,4 +102,27 @@ if not os.getenv("BKP_TM_SESSION") and not os.getenv("NVIM") then
 			cursor_fg = _tab.fg,
 		},
 	}
+
+	-- nice-sidebar mouse cooperation. The sidebar owns the parent column and a
+	-- keyboard focus model ("sidebar" vs the file panes); its Parent:click
+	-- focuses the sidebar. Stock yazi, though, never syncs that focus state when
+	-- the center/preview columns are clicked, so a click on the panes leaves the
+	-- highlight stranded on the sidebar. Wrap the stock click handlers to run
+	-- their normal behavior (center: hover the row; preview: traverse into the
+	-- hovered child) and then hand focus back to the panes. `blur` is guarded
+	-- inside the plugin (no-op unless the sidebar holds focus), so this is inert
+	-- once the panes already own focus.
+	local function reclaim_focus(comp)
+		local orig = comp.click
+		comp.click = function(self, event, up)
+			if orig then
+				orig(self, event, up)
+			end
+			if not up and not event.is_middle then
+				ya.emit("plugin", { "nice-sidebar", "blur" })
+			end
+		end
+	end
+	reclaim_focus(Current)
+	reclaim_focus(Preview)
 end
