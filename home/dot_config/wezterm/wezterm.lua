@@ -224,6 +224,33 @@ local function set_background_override(overrides, bg)
 	overrides.colors.background = bg
 end
 
+-- Dim the whole window's text when it loses focus — the window-wide analog of
+-- config.inactive_pane_hsb (which only dims inactive panes *within* the focused
+-- window). foreground_text_hsb.brightness scales all glyph brightness; we set it
+-- to DIM_BRIGHTNESS on blur and clear it on focus. It's a separate override key
+-- from the SSH colors.background tint, and both paths read-merge-write the same
+-- overrides table (see apply_terminal_location_tint), so they compose without
+-- clobbering each other. Idempotent: only calls set_config_overrides on an
+-- actual state change, so the 250ms update-status tick stays cheap.
+local DIM_BRIGHTNESS = 0.7
+
+local function apply_focus_dim(window)
+	local overrides = window:get_config_overrides() or {}
+	local current = overrides.foreground_text_hsb
+	if window:is_focused() then
+		if current == nil then
+			return
+		end
+		overrides.foreground_text_hsb = nil
+	else
+		if current and current.brightness == DIM_BRIGHTNESS then
+			return
+		end
+		overrides.foreground_text_hsb = { hue = 1.0, saturation = 1.0, brightness = DIM_BRIGHTNESS }
+	end
+	window:set_config_overrides(overrides)
+end
+
 local function detect_terminal_location(pane)
 	local info = pane:get_foreground_process_info()
 	if not info then
@@ -498,6 +525,7 @@ wezterm.on("update-status", function(window, pane)
 	end
 
 	apply_terminal_location_tint(window, pane)
+	apply_focus_dim(window)
 	write_fullscreen_state(window)
 end)
 
@@ -506,6 +534,7 @@ wezterm.on("window-resized", function(window, _pane)
 end)
 
 wezterm.on("window-focus-changed", function(window, _pane)
+	apply_focus_dim(window)
 	write_fullscreen_state(window)
 end)
 
