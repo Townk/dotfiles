@@ -32,13 +32,20 @@ tm_timeline() {
   # Session prep runs HERE, in the visible pane, with narration — the
   # invoking prompt only creates metadata and splits, so nothing freezes.
   if [[ ! -e "$s/ready" ]]; then
-    printf '%s⏳ reading the snapshot ladder…%s\n' "$C_DIM" "$C_RES"
-    bkp::tm::ladder_fill "$s" || { bkp::tm::end "$s"; rm -rf "$s"; exit 2 }
+    # Mount before the ladder: the scope-aware pass signs rungs off this
+    # mount, so its index loads once here rather than per snapshot.
     if bkp::ux::has_fuse; then
       printf '%s⏳ mounting snapshot repository…%s\n' "$C_DIM" "$C_RES"
       bkp::mount "$staging" "$s/mnt" || exit 1
       print -r -- "$REPLY" > "$s/mount.pid"
     fi
+    printf '%s⏳ reading the snapshot ladder…%s\n' "$C_DIM" "$C_RES"
+    bkp::tm::ladder_fill "$s" || {
+      # The mount is up by now (built above) — release it before rm, or a
+      # dead FUSE server wedges the mount-table entry.
+      [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"
+      bkp::tm::end "$s"; rm -rf "$s"; exit 2
+    }
   fi
   # Tab/pane close sends HUP (zellij) — flag the session closed so the loop
   # breaks into the always-teardown instead of dying mid-frame.

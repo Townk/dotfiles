@@ -594,6 +594,27 @@ bkp::restic::parse_snapshots() {
   done
 }
 
+# bkp::restic::parse_snapshots_tree
+# Like parse_snapshots, but keeps the root tree id: "<id>\t<epoch>\t<tree>".
+# A snapshot with no tree field yields an empty 3rd column so the scrub
+# dedup fails open (never collapses a snapshot of unknown content).
+bkp::restic::parse_snapshots_tree() {
+  local rows
+  rows=$(jq -r '(. // [])[] | [.id, .time, (.tree // "")] | @tsv' 2>/dev/null) || {
+    log_error "bkp: unparseable snapshot list"
+    return 2
+  }
+  [[ -z "$rows" ]] && return 0
+  local row id time tree mid REPLY
+  for row in ${(f)rows}; do
+    id="${row%%$'\t'*}"
+    tree="${row##*$'\t'}"
+    mid="${row#*$'\t'}"; time="${mid%$'\t'*}"
+    bkp::time::epoch "$time" || return 2
+    print -r -- "$id"$'\t'"$REPLY"$'\t'"$tree"
+  done
+}
+
 # --- snapshot addressing (spec 2026-07-04 §4) ---------------------------
 
 # bkp::snap::ladder [<config>]
@@ -605,6 +626,111 @@ bkp::snap::ladder() {
   bkp::restic "$staging" snapshots --json |
     jq '[(. // [])[] | select(((.tags // []) | index("bkp-undo")) | not)]' |
     bkp::restic::parse_snapshots | sort -t$'\t' -k2,2 -rn
+}
+
+# bkp::snap::tree_sig <dir>
+# REPLY = a cksum over "<size> <mtime> <relpath>" of every regular file under
+# <dir> (files only — dir mtimes are noisy and not rsync-comparable). Paths
+# are <dir>-relative so a mounted rung's anchor subtree and the live tree
+# sign identically when their content matches. A missing/empty <dir> yields
+# the stable empty signature. size+mtime is the same notion of change the
+# live-diff prescreen (bkp::changeset::live_view) uses, so two rungs sign
+# alike exactly when the diff lens would show them alike.
+bkp::snap::tree_sig() {
+  local dir="$1" out
+  if [[ -d "$dir" ]]; then
+    # find -exec stat + : one stat process for the whole subtree; strip the
+    # "./" that `find .` prefixes so the relpath matches live_sig's.
+    out=$( cd "$dir" && find . -type f -exec stat -f '%z %m %N' {} + 2>/dev/null |
+      sed 's# \./# #' | sort | cksum )
+  else
+    out=$(print -n | cksum)
+  fi
+  REPLY="${out%% *}"
+}
+
+# bkp::snap::live_sig <scope> [<manifest>]
+# REPLY = tree_sig's signature for the CAPTURE-FILTERED live tree under
+# <scope> — the same file set (bkp::manifest::scoped_files) and "<size>
+# <mtime> <relpath>" format the mounted rungs are signed with, so a rung
+# equals live exactly when the diff lens would render it empty. Filtering
+# matters: snapshots only hold capturable files, so an unfiltered live walk
+# would never match. If the file set is uncomputable the signature is made
+# unique so no rung is wrongly dropped as "identical to live".
+bkp::snap::live_sig() {
+  local scope="$1" manifest="${2:-$BKP_MANIFEST}" files out
+  files=$(bkp::manifest::scoped_files "$manifest" "$scope") || { REPLY="live-uncomputable"; return 0 }
+  out=$(
+    for f in ${(f)files}; do
+      [[ -n "$f" ]] || continue
+      st=$(stat -f '%z %m' "$f" 2>/dev/null) || continue
+      print -r -- "$st ${f#$scope/}"
+    done | sort | cksum
+  )
+  REPLY="${out%% *}"
+}
+
+# bkp::snap::ladder_scrub <scope> [<mnt-ids>]
+# The scrub ladder: bkp::snap::ladder with runs of unchanged snapshots
+# collapsed, so a snapshot that adds nothing over its older neighbour is not
+# its own rung. The OLDEST of each unchanged run survives (the rung sits at
+# the change boundary). Output is the same "<id>\t<epoch>" newest-first shape
+# ladder consumers expect. Two tiers:
+#   1. whole-tree — drop a snapshot whose root tree equals its older
+#      neighbour's (the entire backup is unchanged). Free, from the one
+#      snapshots call; a snapshot with no tree id is never collapsed here.
+#   2. scope-aware — when <scope> is a directory anchor AND the session repo
+#      is mounted at <mnt-ids> (…/mnt/ids), also drop a snapshot whose subtree
+#      UNDER <scope> is unchanged from its older neighbour (something changed
+#      elsewhere in the backup, but not here), AND drop any snapshot whose
+#      subtree equals the LIVE tree — those render as an empty diff, since the
+#      lens diffs each rung against live. Signatures come from walking the
+#      one session-long mount (index loaded once), not a restic call per
+#      snapshot. Skipped without a mount ("/" anchor, a file anchor, or the
+#      FUSE-less fallback), where tier 1 still applies.
+bkp::snap::ladder_scrub() {
+  local scope="${1:-}" mnt_ids="${2:-}" staging rows
+  staging=$(bkp::config::staging_path) || return 2
+  rows=$(bkp::restic "$staging" snapshots --json |
+    jq '[(. // [])[] | select(((.tags // []) | index("bkp-undo")) | not)]' |
+    bkp::restic::parse_snapshots_tree | sort -t$'\t' -k2,2 -rn) || return 2
+  [[ -n "$rows" ]] || return 0
+  # Tier 1: collapse adjacent identical root trees.
+  local -a lines=("${(@f)rows}") kept=()
+  local i n=${#lines} line tree next_tree
+  for (( i = 1; i <= n; i++ )); do
+    line="${lines[i]}"
+    tree="${line##*$'\t'}"
+    if (( i < n )) && [[ -n "$tree" ]]; then
+      next_tree="${lines[i+1]##*$'\t'}"
+      [[ "$tree" == "$next_tree" ]] && continue
+    fi
+    kept+=("$line")   # still <id>\t<epoch>\t<tree>
+  done
+  # Tier 2: collapse adjacent identical anchored subtrees + drop == live.
+  if [[ -n "$scope" && "$scope" != "/" && -d "$scope" && -n "$mnt_ids" && -d "$mnt_ids" ]]; then
+    local -a sigs=() scoped=()
+    local REPLY f st id sid m=${#kept} live_sig
+    for line in "${kept[@]}"; do
+      id="${line%%$'\t'*}" sid="${id[1,8]}"
+      bkp::snap::tree_sig "$mnt_ids/$sid$scope"
+      sigs+=("$REPLY")
+    done
+    bkp::snap::live_sig "$scope"; live_sig="$REPLY"
+    for (( i = 1; i <= m; i++ )); do
+      (( i < m )) && [[ "${sigs[i]}" == "${sigs[i+1]}" ]] && continue   # unchanged from older rung
+      [[ "${sigs[i]}" == "$live_sig" ]] && continue                     # identical to live -> empty diff
+      scoped+=("${kept[i]}")
+    done
+    # A dir static across all of history AND equal to live drops every rung.
+    # Keep the oldest so the session still opens (the lens renders its empty
+    # state gracefully) instead of failing as "no snapshots yet".
+    (( ${#scoped} )) || scoped=("${kept[-1]}")
+    kept=("${scoped[@]}")
+  fi
+  for line in "${kept[@]}"; do
+    print -r -- "${line%$'\t'*}"   # strip the tree column -> <id>\t<epoch>
+  done
 }
 
 # bkp::snap::expand <prefix> <ladder> — REPLY = full id for a hex prefix.

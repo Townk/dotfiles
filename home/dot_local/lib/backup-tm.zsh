@@ -29,8 +29,15 @@ bkp::tm::session_new() {
 # restic call, deferred out of session_new. Rows carry the tier label so
 # the timeline renders without re-deriving policy per frame.
 bkp::tm::ladder_fill() {
-  local s="$1" ladder policy line id epoch REPLY now="$EPOCHSECONDS"
-  ladder=$(bkp::snap::ladder) || return 2
+  local s="$1" ladder policy line id epoch REPLY now="$EPOCHSECONDS" anchor mnt_ids
+  anchor=$(<"$s/anchor")
+  # Dedup rungs relative to the anchor: the lenses only ever show the
+  # anchored subtree, so a snapshot unchanged THERE is a redundant rung
+  # even when something changed elsewhere in the backup. The scope-aware
+  # pass signs each rung by walking the session mount (built before this,
+  # so its index is loaded once) — pass it when it is up.
+  mnt_ids="$s/mnt/ids"; [[ -d "$mnt_ids" ]] || mnt_ids=""
+  ladder=$(bkp::snap::ladder_scrub "$anchor" "$mnt_ids") || return 2
   [[ -n "$ladder" ]] || { log_error "bkp: no snapshots yet — nothing to scrub"; return 2 }
   policy=$(bkp::manifest::thin_policy "$BKP_MANIFEST") || return 2
   {
@@ -1057,14 +1064,10 @@ bkp::tm::launch() {
     # stage (gum), completion line after each, split only when ready.
     local _spin=0
     [[ -t 1 ]] && command -v gum >/dev/null 2>&1 && (( ! ${+functions[gum]} )) && _spin=1
-    if (( _spin )); then
-      gum spin --spinner dot --title "Reading the snapshot ladder…" -- \
-        zsh -c "source '$HOME/.local/lib/backup-tm.zsh'; bkp::tm::ladder_fill '$s'" ||
-        { rm -rf "$s"; return 2 }
-      log_ok "bkp: snapshot ladder ready"
-    else
-      bkp::tm::ladder_fill "$s" || { rm -rf "$s"; return 2 }
-    fi
+    # Mount FIRST: the scope-aware ladder signs each rung by walking this
+    # mount, so its index is loaded once here instead of via a restic call
+    # per snapshot. The anchor-captured refusal (which also reads the mount)
+    # then runs before any ladder work is spent.
     if bkp::ux::has_fuse; then
       if (( _spin )); then
         gum spin --spinner dot --title "Mounting the snapshot repository…" -- \
@@ -1089,6 +1092,16 @@ bkp::tm::launch() {
       (( ${#shown} > 44 )) && shown="${shown[1,21]}…${shown[-22,-1]}"
       bkp::tm::halt "The $shown dir is not part of any snapshot. It is part of the deny-list, chezmoi-managed, or outside the backup roots (see \`system-backup status\`)."
       return 2
+    fi
+    if (( _spin )); then
+      gum spin --spinner dot --title "Reading the snapshot ladder…" -- \
+        zsh -c "source '$HOME/.local/lib/backup-tm.zsh'; bkp::tm::ladder_fill '$s'" ||
+        { [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"; rm -rf "$s"; return 2 }
+      log_ok "bkp: snapshot ladder ready"
+    else
+      bkp::tm::ladder_fill "$s" || {
+        [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"; rm -rf "$s"; return 2
+      }
     fi
     # Diff: the first changeset build joins the inline prep narration —
     # hunk then opens on a REAL patch instead of spinning in the pane.
@@ -1168,13 +1181,16 @@ bkp::tm::fallback() {
   staging=$(bkp::config::staging_path) || return 2
   print -r -- $$ > "$s/timeline.pid"
   print -r -- $$ > "$s/yazi.id"
-  printf '%s⏳ reading the snapshot ladder…%s\n' "$C_DIM" "$C_RES"
-  bkp::tm::ladder_fill "$s" || { rm -rf "$s"; return 2 }
+  # Mount before the ladder: the scope-aware pass signs rungs off this mount.
   if bkp::ux::has_fuse; then
     printf '%s⏳ mounting snapshot repository…%s\n' "$C_DIM" "$C_RES"
     bkp::mount "$staging" "$s/mnt" || return 1
     print -r -- "$REPLY" > "$s/mount.pid"
   fi
+  printf '%s⏳ reading the snapshot ladder…%s\n' "$C_DIM" "$C_RES"
+  bkp::tm::ladder_fill "$s" || {
+    [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"; rm -rf "$s"; return 2
+  }
   {
     touch "$s/ready"
     while [[ ! -e "$s/closed" ]]; do

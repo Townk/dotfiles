@@ -51,6 +51,151 @@ EOF
       The line 3 should match pattern "*[0-9]	*"
     End
 
+    It 'drops rungs whose tree is unchanged from the older snapshot'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        cat > "$FIX/snaps.json" <<'EOF'
+[{"id":"aaaa000000000000000000000000000000000000000000000000000000000000","time":"2026-07-01T10:00:00Z","tree":"1111000000000000000000000000000000000000000000000000000000000000"},
+ {"id":"bbbb000000000000000000000000000000000000000000000000000000000000","time":"2026-07-02T10:00:00Z","tree":"1111000000000000000000000000000000000000000000000000000000000000"},
+ {"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z","tree":"2222000000000000000000000000000000000000000000000000000000000000"},
+ {"id":"dddd000000000000000000000000000000000000000000000000000000000000","time":"2026-07-04T10:00:00Z","tree":"2222000000000000000000000000000000000000000000000000000000000000"}]
+EOF
+        local s
+        s=$(bkp::tm::session_new explore "$FIX/anchor") || return 1
+        bkp::tm::ladder_fill "$s" || return 1
+        awk 'END{print NR}' "$s/ladder"
+        cut -c1-4 "$s/ladder" | tr '\n' ' '
+      }
+      When run run_it
+      # bbbb (== aaaa) and dddd (== cccc) collapse; the oldest of each
+      # identical run survives, newest-first.
+      The line 1 should equal "2"
+      The line 2 should equal "cccc aaaa "
+    End
+
+    It 'keeps every rung when snapshots carry no tree id (fail open)'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; stub_restic
+        cat > "$FIX/snaps.json" <<'EOF'
+[{"id":"aaaa000000000000000000000000000000000000000000000000000000000000","time":"2026-07-01T10:00:00Z"},
+ {"id":"bbbb000000000000000000000000000000000000000000000000000000000000","time":"2026-07-02T10:00:00Z"},
+ {"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
+EOF
+        local s
+        s=$(bkp::tm::session_new explore "$FIX/anchor") || return 1
+        bkp::tm::ladder_fill "$s" || return 1
+        awk 'END{print NR}' "$s/ladder"
+      }
+      When run run_it
+      The output should equal "3"
+    End
+
+    # Four snapshots, every one with a DISTINCT root tree (something changed
+    # somewhere each time) so the whole-tree pass keeps all four. The anchored
+    # subtree only changes once: aaaa==bbbb share one state, cccc==dddd another.
+    scope_snaps() {
+      cat > "$FIX/snaps.json" <<'EOF'
+[{"id":"aaaa000000000000000000000000000000000000000000000000000000000000","time":"2026-07-01T10:00:00Z","tree":"a111000000000000000000000000000000000000000000000000000000000000"},
+ {"id":"bbbb000000000000000000000000000000000000000000000000000000000000","time":"2026-07-02T10:00:00Z","tree":"b222000000000000000000000000000000000000000000000000000000000000"},
+ {"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z","tree":"c333000000000000000000000000000000000000000000000000000000000000"},
+ {"id":"dddd000000000000000000000000000000000000000000000000000000000000","time":"2026-07-04T10:00:00Z","tree":"d444000000000000000000000000000000000000000000000000000000000000"}]
+EOF
+    }
+    # Build a rung's anchor subtree in the fake mount ($s/mnt/ids/<sid><anchor>)
+    # with one file at a chosen mtime — that (size+mtime) IS the scope sig.
+    mk_rung() {  # mk_rung <session> <sid> <mtime YYYYMMDDhhmm> <content>
+      local d="$1/mnt/ids/$2$FIX/anchor"
+      mkdir -p "$d"; print -r -- "$4" > "$d/init.lua"; touch -mt "$3" "$d/init.lua"
+    }
+
+    It 'collapses rungs whose anchored subtree is unchanged (mount-signed)'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; scope_snaps
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1 ${2:-}" in
+            'snapshots --json') cat "$FIX/snaps.json" ;;
+            *) return 0 ;;
+          esac
+        }
+        local s
+        s=$(bkp::tm::session_new diff "$FIX/anchor") || return 1
+        mk_rung "$s" aaaa0000 202601010000 v1
+        mk_rung "$s" bbbb0000 202601010000 v1   # == aaaa within scope
+        mk_rung "$s" cccc0000 202602020000 v2
+        mk_rung "$s" dddd0000 202602020000 v2   # == cccc within scope
+        # Live differs from both states, so nothing is dropped as "== live".
+        print -r -- v0 > "$FIX/anchor/init.lua"; touch -mt 202603030000 "$FIX/anchor/init.lua"
+        bkp::manifest::scoped_files() { print -r -- "$FIX/anchor/init.lua" }
+        bkp::tm::ladder_fill "$s" || return 1
+        awk 'END{print NR}' "$s/ladder"
+        cut -c1-4 "$s/ladder" | tr '\n' ' '
+      }
+      When run run_it
+      # Oldest of each unchanged run survives: cccc (07-03) and aaaa (07-01).
+      The line 1 should equal "2"
+      The line 2 should equal "cccc aaaa "
+    End
+
+    It 'drops rungs identical to the live tree (live is the diff base)'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; scope_snaps
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1 ${2:-}" in
+            'snapshots --json') cat "$FIX/snaps.json" ;;
+            *) return 0 ;;
+          esac
+        }
+        local s
+        s=$(bkp::tm::session_new diff "$FIX/anchor") || return 1
+        mk_rung "$s" aaaa0000 202601010000 v1
+        mk_rung "$s" bbbb0000 202601010000 v1
+        mk_rung "$s" cccc0000 202602020000 v2
+        mk_rung "$s" dddd0000 202602020000 v2
+        # Live == the cccc/dddd state: those rungs would show an EMPTY diff,
+        # so they must not be offered at all.
+        print -r -- v2 > "$FIX/anchor/init.lua"; touch -mt 202602020000 "$FIX/anchor/init.lua"
+        bkp::manifest::scoped_files() { print -r -- "$FIX/anchor/init.lua" }
+        bkp::tm::ladder_fill "$s" || return 1
+        awk 'END{print NR}' "$s/ladder"
+        cut -c1-4 "$s/ladder" | tr '\n' ' '
+      }
+      When run run_it
+      # cccc/dddd == live -> dropped; only the older, differing state remains.
+      The line 1 should equal "1"
+      The line 2 should equal "aaaa "
+    End
+
+    It 'never empties the ladder when a dir is static and equals live'
+      run_it() {
+        source "$LIB/backup-tm.zsh"; scope_snaps
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1 ${2:-}" in
+            'snapshots --json') cat "$FIX/snaps.json" ;;
+            *) return 0 ;;
+          esac
+        }
+        local s
+        s=$(bkp::tm::session_new diff "$FIX/anchor") || return 1
+        # Every rung identical within scope AND equal to live.
+        mk_rung "$s" aaaa0000 202601010000 v
+        mk_rung "$s" bbbb0000 202601010000 v
+        mk_rung "$s" cccc0000 202601010000 v
+        mk_rung "$s" dddd0000 202601010000 v
+        print -r -- v > "$FIX/anchor/init.lua"; touch -mt 202601010000 "$FIX/anchor/init.lua"
+        bkp::manifest::scoped_files() { print -r -- "$FIX/anchor/init.lua" }
+        bkp::tm::ladder_fill "$s" || return 1
+        awk 'END{print NR}' "$s/ladder"
+        cut -c1-4 "$s/ladder" | tr '\n' ' '
+      }
+      When run run_it
+      # Not zero: the oldest rung is kept so the session still opens.
+      The line 1 should equal "1"
+      The line 2 should equal "aaaa "
+    End
+
     It 'steps older/newer with clamping and refreshes explore via ya'
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
