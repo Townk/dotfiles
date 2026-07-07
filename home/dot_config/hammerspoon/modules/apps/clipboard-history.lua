@@ -384,6 +384,17 @@ function M.capture_now()
                 or data_by_uti["public.text"]
                 or data_by_uti["NSStringPboardType"]
 
+  -- Empty-copy guard: a Cmd+C with nothing selected still bumps the pasteboard
+  -- (the frontmost app places an empty public.utf8-plain-text on it), so the
+  -- #item_utis and next(data_by_uti) guards above both pass — an empty blob
+  -- value isn't nil. Without this, that blank copy lands a zero-length row at
+  -- the top of history. Skip when the clip carries no real payload: for a
+  -- text-bearing kind, nothing but whitespace; for any kind, zero total bytes.
+  if kind == "text" or kind == "html" then
+    if not plain or plain:match("^%s*$") then return nil end
+  end
+  if total_bytes == 0 then return nil end
+
   -- Reclassify a "just a URL, nothing else" text/html clip as "url" --
   -- checks the plain-text representation first, then (for html) falls
   -- back to the tag-stripped html, since either can carry the real text.
