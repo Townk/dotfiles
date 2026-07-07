@@ -64,6 +64,7 @@ home/dot_config/yazi/flavors/chezmoi-system.yazi/
 home/dot_config/yazi/theme.toml
 home/dot_config/zsh/themes.sh
 home/dot_pi/agent/themes/chezmoi-system.json
+home/dot_claude/themes/chezmoi-system.json
 home/dot_config/nvim/colors/chezmoi-system.lua
 home/dot_config/nvim/lua/chezmoi_theme/
 assets/blink-shell/chezmoi-system.js

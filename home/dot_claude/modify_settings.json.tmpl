@@ -1,0 +1,43 @@
+#!/bin/sh
+# chezmoi modify_ script — ~/.claude/settings.json.
+# Claude Code rewrites settings.json at runtime (plugin toggles, permissions,
+# model, /theme). We declaratively OWN only `theme`, forcing it to the generated
+# chezmoi-system custom theme; Claude keeps everything else it last wrote.
+#
+# `theme` must be FORCED (not seed-if-absent): the key already exists on disk as
+# "auto", so a seed would never take effect. To switch themes, edit
+# `theme.active` in home/.chezmoidata/theme.yaml — not /theme (a /theme change is
+# reverted on the next `chezmoi apply`). The theme file itself is rendered by
+# custom-builds/theme/generate-theme.sh into ~/.claude/themes/chezmoi-system.json.
+#
+# If the merged result is byte-identical to the on-disk file we emit the ORIGINAL
+# bytes verbatim, so chezmoi reports no diff regardless of jq vs Claude's
+# serializer formatting. We only re-serialize when `theme` has actually drifted.
+set -eu
+_path_prefix=
+for _path_dir in \
+  "$HOME/.local/bin" \
+  "$HOME/.local/share/mise/shims" \
+  /opt/homebrew/bin \
+  /usr/local/bin \
+  /usr/bin \
+  /bin
+do
+  [ -d "$_path_dir" ] || continue
+  _path_prefix="${_path_prefix:+$_path_prefix:}$_path_dir"
+done
+PATH="${_path_prefix}${PATH:+:$PATH}"
+export PATH
+unset _path_dir _path_prefix
+command -v jq >/dev/null 2>&1 || { cat; exit 0; }
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+cat > "$tmp"
+[ -s "$tmp" ] || printf '{}' > "$tmp"
+merged="$(jq '.theme = "custom:chezmoi-system"' "$tmp")"
+if jq -e --argjson m "$merged" '. == $m' "$tmp" >/dev/null 2>&1; then
+  cat "$tmp"
+else
+  printf '%s\n' "$merged"
+fi

@@ -1,0 +1,79 @@
+{{- $p := index .theme.palettes .theme.active -}}
+{{- $base := "dark" -}}
+{{- if eq $p.meta.appearance "light" }}{{ $base = "light" }}{{ end -}}
+{
+  "name": "chezmoi-system",
+  "base": "{{ $base }}",
+  "overrides": {
+    "claude": "#{{ $p.mauve }}",
+    "text": "#{{ $p.text }}",
+    "inverseText": "#{{ $p.base }}",
+    "inactive": "#{{ $p.overlay1 }}",
+    "subtle": "#{{ $p.overlay0 }}",
+    "suggestion": "#{{ $p.subtext0 }}",
+    "permission": "#{{ $p.blue }}",
+    "remember": "#{{ $p.lavender }}",
+
+    "success": "#{{ $p.green }}",
+    "error": "#{{ $p.red }}",
+    "warning": "#{{ $p.yellow }}",
+    "merged": "#{{ $p.mauve }}",
+
+    "promptBorder": "#{{ $p.surface2 }}",
+    "planMode": "#{{ $p.teal }}",
+    "autoAccept": "#{{ $p.green }}",
+    "bashBorder": "#{{ $p.yellow }}",
+    "ide": "#{{ $p.blue }}",
+    "fastMode": "#{{ $p.peach }}",
+
+    "diffAdded": "#{{ $p.diff.plus_bg }}",
+    "diffRemoved": "#{{ $p.diff.minus_bg }}",
+    "diffAddedDimmed": "#{{ $p.diff.plus_num_bg }}",
+    "diffRemovedDimmed": "#{{ $p.diff.minus_num_bg }}",
+    "diffAddedWord": "#{{ $p.diff.plus_emph_bg }}",
+    "diffRemovedWord": "#{{ $p.diff.minus_emph_bg }}",
+
+    "userMessageBackground": "#{{ $p.surface0 }}",
+    "userMessageBackgroundHover": "#{{ $p.surface1 }}",
+    "messageActionsBackground": "#{{ $p.surface1 }}",
+    "bashMessageBackgroundColor": "#{{ $p.surface0 }}",
+    "memoryBackgroundColor": "#{{ $p.mantle }}",
+    "selectionBg": "#{{ $p.surface2 }}",
+
+    "rate_limit_fill": "#{{ $p.mauve }}",
+    "rate_limit_empty": "#{{ $p.surface1 }}",
+    "briefLabelYou": "#{{ $p.blue }}",
+    "briefLabelClaude": "#{{ $p.mauve }}",
+
+    "claudeShimmer": "#{{ $p.lavender }}",
+    "warningShimmer": "#{{ $p.rosewater }}",
+    "permissionShimmer": "#{{ $p.sky }}",
+    "promptBorderShimmer": "#{{ $p.overlay1 }}",
+    "inactiveShimmer": "#{{ $p.overlay2 }}",
+    "fastModeShimmer": "#{{ $p.rosewater }}",
+
+    "red_FOR_SUBAGENTS_ONLY": "#{{ $p.red }}",
+    "blue_FOR_SUBAGENTS_ONLY": "#{{ $p.blue }}",
+    "green_FOR_SUBAGENTS_ONLY": "#{{ $p.green }}",
+    "yellow_FOR_SUBAGENTS_ONLY": "#{{ $p.yellow }}",
+    "purple_FOR_SUBAGENTS_ONLY": "#{{ $p.mauve }}",
+    "orange_FOR_SUBAGENTS_ONLY": "#{{ $p.peach }}",
+    "pink_FOR_SUBAGENTS_ONLY": "#{{ $p.pink }}",
+    "cyan_FOR_SUBAGENTS_ONLY": "#{{ $p.teal }}",
+
+    "rainbow_red": "#{{ $p.red }}",
+    "rainbow_red_shimmer": "#{{ $p.maroon }}",
+    "rainbow_orange": "#{{ $p.peach }}",
+    "rainbow_orange_shimmer": "#{{ $p.flamingo }}",
+    "rainbow_yellow": "#{{ $p.yellow }}",
+    "rainbow_yellow_shimmer": "#{{ $p.rosewater }}",
+    "rainbow_green": "#{{ $p.green }}",
+    "rainbow_green_shimmer": "#{{ $p.teal }}",
+    "rainbow_blue": "#{{ $p.blue }}",
+    "rainbow_blue_shimmer": "#{{ $p.sapphire }}",
+    "rainbow_indigo": "#{{ $p.lavender }}",
+    "rainbow_indigo_shimmer": "#{{ $p.blue }}",
+    "rainbow_violet": "#{{ $p.mauve }}",
+    "rainbow_violet_shimmer": "#{{ $p.pink }}"
+  }
+}

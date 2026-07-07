@@ -63,6 +63,12 @@ render zellij-theme.kdl.tmpl ".config/zellij/themes/chezmoi-system-base.kdl"
 # --- pi agent ----------------------------------------------------------------
 render pi.json.tmpl ".pi/agent/themes/chezmoi-system.json"
 
+# --- Claude Code -------------------------------------------------------------
+# Custom theme JSON discovered from ~/.claude/themes/; selected via settings.json
+# ("theme": "custom:chezmoi-system", set by home/dot_claude/modify_settings.json).
+# Claude watches the dir and reloads on change.
+render claude-code.json.tmpl ".claude/themes/chezmoi-system.json"
+
 # --- yazi (flavor) -----------------------------------------------------------
 # yazi reads a fixed theme.toml; to carry the chezmoi-system name we ship a
 # flavor. Under a flavor yazi ignores syntect_theme and uses the flavor's own
