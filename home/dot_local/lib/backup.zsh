@@ -1630,31 +1630,114 @@ bkp::ux::targets() {
   done <<<"$targets"
 }
 
-# bkp::ux::status [<manifest>] [<config>] — glanceable summary (spec §7;
-# drift + tier ribbon are the §14 statusline follow-up).
+# bkp::ux::_dirsize <path> — REPLY = human on-disk footprint (du -sh) of the
+# repo dir, or "—" when it does not exist yet. This is the true stored size
+# (packs + index), and du is effectively free even on a fat repo.
+bkp::ux::_dirsize() {
+  REPLY="—"
+  [[ -d "$1" ]] || return 0
+  local out
+  out=$(du -sh "$1" 2>/dev/null) || return 0
+  REPLY="${out%%$'\t'*}"
+}
+
+# bkp::ux::_diskfree <path> — REPLY = human free space (df avail) on the
+# volume holding the nearest EXISTING ancestor of <path>, or "—". An absent
+# target's repo dir need not exist, so we walk up to a real mountpoint.
+bkp::ux::_diskfree() {
+  local p="$1" prev=""
+  while [[ -n "$p" && ! -e "$p" && "$p" != "$prev" ]]; do
+    prev="$p"; p="${p:h}"
+  done
+  [[ -e "$p" ]] || { REPLY="—"; return 0; }
+  local avail
+  avail=$(df -h "$p" 2>/dev/null | awk 'NR==2{print $4; exit}') || avail=""
+  REPLY="${avail:-—}"
+}
+
+# bkp::ux::status [<manifest>] [<config>] — glanceable health + size summary.
+# Fast path only: heartbeat freshness (no restic), snapshot span, and each
+# copy's on-disk size (du) + volume headroom (df). Logical size / dedup ratio
+# scan the repo, so they belong in a --full view or a capture-stamped cache,
+# not here.
 bkp::ux::status() {
   local manifest="${1:-$BKP_MANIFEST}"
   local BKP_CONFIG="${2:-$BKP_CONFIG}"
-  local staging snaps
+  local staging snaps REPLY
   staging=$(bkp::config::staging_path) || return 2
   snaps=$(bkp::restic "$staging" snapshots --json | bkp::restic::parse_snapshots) || return 2
-  print -r -- "staging: $staging"
-  local count=0 newest=0 line epoch
+
+  print -r -- "Terminal Time Machine"
+  print
+
+  # ── freshness: heartbeat only, so this stays a single-file read ──
+  local now="$EPOCHSECONDS" cad hb epoch rc verdict glyph
+  if   (( BKP_CAPTURE_CADENCE < 3600 ));  then cad="$(( BKP_CAPTURE_CADENCE / 60 ))m"
+  elif (( BKP_CAPTURE_CADENCE < 86400 )); then cad="$(( BKP_CAPTURE_CADENCE / 3600 ))h"
+  else                                         cad="$(( BKP_CAPTURE_CADENCE / 86400 ))d"
+  fi
+  if hb=$(bkp::drift::last capture); then
+    epoch="${hb%% *}"; rc="${hb##* }"
+    bkp::ux::age $(( now - epoch ))
+    verdict=$(bkp::drift::assess "$now" "$epoch" "$rc" "$BKP_CAPTURE_CADENCE")
+    if   [[ -z "$verdict" ]];            then glyph="✓"
+    elif [[ "$verdict" == crit$'\t'* ]]; then glyph="✗"
+    else                                      glyph="⚠"
+    fi
+    printf '  %-11s%s %-9s%s\n' capture "$glyph" "$REPLY ago" "every $cad"
+  else
+    printf '  %-11s%s\n' capture "— never captured"
+  fi
+  if hb=$(bkp::drift::last reconcile); then
+    epoch="${hb%% *}"; rc="${hb##* }"
+    bkp::ux::age $(( now - epoch ))
+    if (( rc == 0 )); then glyph="✓"; else glyph="✗"; fi
+    printf '  %-11s%s %-9s%s\n' reconcile "$glyph" "$REPLY ago" \
+      "$( (( rc == 0 )) || print -n 'last pass failed' )"
+  fi
+
+  # ── snapshot span: count + how far back a restore can reach ──
+  local count=0 newest=0 oldest=0 line e
   for line in ${(f)snaps}; do
+    [[ -n "$line" ]] || continue
     # NB: not `(( count++ ))` — post-increment from 0 evaluates to 0, which
     # is exit status 1, and the dispatcher's errexit would kill us here.
     count=$(( count + 1 ))
-    epoch="${line##*$'\t'}"
-    (( epoch > newest )) && newest=$epoch
+    e="${line##*$'\t'}"
+    (( e > newest )) && newest=$e
+    (( oldest == 0 || e < oldest )) && oldest=$e
   done
   if (( count )); then
-    local REPLY
-    bkp::ux::age $(( EPOCHSECONDS - newest ))
-    print -r -- "snapshots: $count (latest $REPLY ago)"
+    bkp::ux::age $(( now - oldest ))
+    local span="$REPLY" od nd
+    strftime -s od '%Y-%m-%d' "$oldest"
+    strftime -s nd '%Y-%m-%d' "$newest"
+    printf '  %-11s%-9s%s back · %s → %s\n' snapshots "$count" "$span" "$od" "$nd"
   else
-    print -r -- "snapshots: none yet"
+    printf '  %-11s%s\n' snapshots "none yet"
   fi
-  bkp::ux::targets
+  print
+
+  # ── copies: staging + every configured target, with size + headroom ──
+  printf '  %s %-9s %-7s %8s   %s\n' ' ' copy role 'on disk' free
+  bkp::ux::_dirsize "$staging"; local ssize="$REPLY"
+  bkp::ux::_diskfree "$staging"; local sfree="$REPLY"
+  printf '  %s %-9s %-7s %8s   %s\n' '●' staging local "$ssize" "$sfree"
+  local targets name tpath role dot dsz dfr
+  targets=$(bkp::config::targets) || return 2
+  if [[ -n "$targets" ]]; then
+    while IFS=$'\t' read -r name tpath role; do
+      [[ -z "$name" ]] && continue
+      if bkp::target::present "$tpath"; then
+        dot="●"
+        bkp::ux::_dirsize "$tpath"; dsz="$REPLY"
+        bkp::ux::_diskfree "$tpath"; dfr="$REPLY"
+      else
+        dot="○"; dsz="—"; dfr="—"
+      fi
+      printf '  %s %-9s %-7s %8s   %s\n' "$dot" "$name" "$role" "$dsz" "$dfr"
+    done <<<"$targets"
+  fi
 }
 
 # bkp::ux::verify [<config>] — restic check on staging + every present,

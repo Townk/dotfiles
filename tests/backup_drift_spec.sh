@@ -78,6 +78,32 @@ Describe 'backup-drift.zsh'
     End
   End
 
+  Describe 'bkp::drift::last'
+    It 'echoes epoch and rc for a recorded phase'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        bkp::drift::stamp reconcile 1
+        bkp::drift::last reconcile
+      }
+      When run run_it
+      The status should be success
+      The word 1 should match pattern '[0-9]*'
+      The word 2 should equal 1
+    End
+
+    It 'returns nonzero when the heartbeat or phase is absent'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        bkp::drift::last capture && print present || print absent
+        bkp::drift::stamp capture 0
+        bkp::drift::last reconcile && print present || print absent
+      }
+      When run run_it
+      The line 1 should equal absent
+      The line 2 should equal absent
+    End
+  End
+
   Describe 'bkp::drift::banner (prompt hook)'
     It 'prints nothing when there is no heartbeat yet'
       run_it() {

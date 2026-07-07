@@ -45,6 +45,22 @@ bkp::drift::stamp() {
   return 0
 }
 
+# bkp::drift::last <phase> — echo "<epoch> <rc>" for the recorded <phase>
+# stamp, or return nonzero if the heartbeat is missing or lacks that phase.
+# Cheap single-file read (no restic), so `status` can show freshness without
+# touching a repo.
+bkp::drift::last() {
+  local f="$BKP_DRIFT_STATE/heartbeat" ph e r
+  [[ -r "$f" ]] || return 1
+  while IFS=' ' read -r ph e r; do
+    [[ "$ph" == "$1" ]] || continue
+    [[ "$e" == <-> ]] || return 1
+    print -r -- "$e ${r:-0}"
+    return 0
+  done < "$f"
+  return 1
+}
+
 # bkp::drift::assess <now> <epoch> <rc> <cadence> — PURE drift verdict.
 # Prints "<level>\t<message>" (level = warn|crit) when the last capture is
 # overdue or failed; prints nothing (rc 0) when healthy. Testable with a

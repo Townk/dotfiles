@@ -1693,7 +1693,7 @@ EOF
       The line 2 should equal "○${TAB}ghost${TAB}master${TAB}$FIX/gone/tb"
     End
 
-    It 'status reports staging, snapshot count and targets'
+    It 'status reports health, snapshot span, and per-copy size'
       stat() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1701,9 +1701,15 @@ EOF
         bkp::ux::status "$FIX/m.toml" "$FIX/c.toml"
       }
       When run stat
-      The line 1 should equal "staging: $FIX/stg"
-      The line 2 should include "snapshots: 2 (latest"
-      The line 3 should include "here"
+      The status should be success
+      The line 1 should equal "Terminal Time Machine"
+      # No heartbeat in the fixture -> capture line 3, snapshots line 4.
+      The line 4 should include "snapshots"
+      The line 4 should include "2"
+      # A copy table row per configured target, plus staging.
+      The output should include "staging"
+      The output should include "here"
+      The output should include "ghost"
     End
 
     It 'status survives the dispatcher shell options (set -eu -o pipefail)'
@@ -1720,8 +1726,8 @@ EOF
       }
       When run strict
       The status should be success
-      The line 2 should include "snapshots: 1"
-      The line 3 should include "here"
+      The output should include "snapshots"
+      The output should include "here"
     End
 
     It 'verify checks staging + present initialized targets, propagating failure'
