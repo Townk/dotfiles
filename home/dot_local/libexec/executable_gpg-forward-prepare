@@ -1,0 +1,30 @@
+#!/bin/sh
+# gpg-forward-prepare — let the FIRST inbound SSH connection after a (daily)
+# reboot forward the laptop's gpg-agent.
+#
+# Run from the laptop as a pre-connect `Match ... exec` hook, BEFORE the main
+# session binds its RemoteForward. sshd will NOT mkdir a RemoteForward target
+# dir; /run is tmpfs (empty after every boot); and gpg.conf carries
+# `no-autostart` so nothing creates the hashed gpg socketdir lazily. Without
+# this, the first post-reboot forward binds into a missing socketdir and
+# silently fails ("no gpg-agent running in this session"); every reconnect then
+# works only because the dir has since appeared. This closes that first-
+# connection gap without depending on anything outside $HOME (no user-systemd
+# linger, no /etc, no sudo).
+#
+# Idempotent: --create-socketdir is a no-op once the dir exists. A dead/stale
+# socket (orphaned by an unclean disconnect) is removed so the next forward can
+# bind; a LIVE forwarded socket from a concurrent session is left untouched.
+set -eu
+
+export GNUPGHOME="${GNUPGHOME:-$HOME/.config/gnupg}"
+
+gpgconf --create-socketdir >/dev/null 2>&1 || true
+
+sock="$(gpgconf --list-dirs agent-socket 2>/dev/null || true)"
+if [ -n "$sock" ] && [ -S "$sock" ] \
+  && ! gpg-connect-agent --no-autostart 'getinfo version' /bye >/dev/null 2>&1; then
+  rm -f "$sock"
+fi
+
+# vim:ft=sh
