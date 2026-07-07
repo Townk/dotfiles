@@ -231,7 +231,8 @@ end
 -- from the SSH colors.background tint, and both paths read-merge-write the same
 -- overrides table (see apply_terminal_location_tint), so they compose without
 -- clobbering each other. Idempotent: only calls set_config_overrides on an
--- actual state change, so the 250ms update-status tick stays cheap.
+-- actual state change, which also avoids the window-config-reloaded feedback
+-- loop that set_config_overrides can trigger.
 local DIM_BRIGHTNESS = 0.5
 
 local function apply_focus_dim(window)
@@ -570,7 +571,6 @@ wezterm.on("update-status", function(window, pane)
 	end
 
 	apply_terminal_location_tint(window, pane)
-	apply_focus_dim(window)
 	write_fullscreen_state(window)
 end)
 
@@ -578,6 +578,12 @@ wezterm.on("window-resized", function(window, _pane)
 	write_fullscreen_state(window)
 end)
 
+-- The focus dim is driven ONLY from here, never from update-status. set_config_overrides
+-- re-evaluates and re-applies the whole config; doing that from update-status ties the
+-- repaint to the status_update_interval cadence and stacks a redundant second apply per
+-- switch, which is the ~1s focus-change lag documented in wezterm discussion #2537. The
+-- window-focus-changed event fires immediately on the transition, so a single apply here
+-- updates the dim with no perceptible delay.
 wezterm.on("window-focus-changed", function(window, _pane)
 	apply_focus_dim(window)
 	write_fullscreen_state(window)
