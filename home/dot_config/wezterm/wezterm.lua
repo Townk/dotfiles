@@ -252,87 +252,42 @@ local function apply_focus_dim(window)
 	window:set_config_overrides(overrides)
 end
 
--- The location resolver is resolved ASYNCHRONOUSLY. It used to run inline via
--- wezterm.run_child_process, which is synchronous: the helper cold-spawns a zsh
--- and sources libs (~250ms; more for ssh panes), and update-status co-fires on
--- every window-focus change. That blocked the render thread on the focus tick —
--- invisible while it only gated the rarely-changing tint, but the focus-dim
--- below makes every focus switch a *visible* change, so the block surfaced as
--- dim lag. Now update-status never spawns inline: it reads the last resolved
--- value from a tiny per-pane cache file (cheap io) and kicks a background
--- refresh at most every LOC_TTL seconds. The tint lands at most one 250ms tick
--- after a cold resolve; the focus-dim repaints instantly.
-local location_state_dir = (os.getenv("XDG_STATE_HOME") or (os.getenv("HOME") .. "/.local/state"))
-	.. "/wezterm/loc-cache"
-wezterm.background_child_process({ "mkdir", "-p", location_state_dir })
-
-local LOC_TTL = 2 -- seconds between background refreshes per pane
-
--- Per-pane in-memory cache: key -> { location, spawned_at }. A plain Lua upvalue
--- (NOT wezterm.GLOBAL, which serializes stored values and mangles the timestamp
--- into a string), keyed by window:pane.
-local terminal_location_cache = {}
-
-local function location_cache_file(key)
-	return location_state_dir .. "/" .. key:gsub("[^%w]", "_")
-end
-
-local function read_location_file(key)
-	local file = io.open(location_cache_file(key), "r")
-	if not file then
-		return nil
+local function detect_terminal_location(pane)
+	local info = pane:get_foreground_process_info()
+	if not info then
+		return "local"
 	end
-	local contents = file:read("*a") or ""
-	file:close()
-	local loc = contents:match("(%S+)")
-	if loc and loc ~= "" then
-		return loc
-	end
-	return nil
-end
 
--- Fire-and-forget the helper, writing its stdout atomically (tmp + mv) to the
--- pane's cache file. Never blocks the caller. Paths here (helper under $HOME,
--- cache under the state dir) contain no shell metacharacters; pid is an integer.
-local function spawn_location_refresh(key, pid)
-	local file = location_cache_file(key)
-	local cmd = string.format(
-		"'%s' %d > '%s.tmp' 2>/dev/null && mv '%s.tmp' '%s'",
+	-- pcall returns (pcall_ok, <run_child_process returns...>); run_child_process
+	-- itself returns (success, stdout, stderr), so stdout is the THIRD value.
+	local pcall_ok, run_ok, stdout = pcall(wezterm.run_child_process, {
 		resolve_terminal_location_helper,
-		pid,
-		file,
-		file,
-		file
-	)
-	wezterm.background_child_process({ "/bin/sh", "-c", cmd })
+		tostring(info.pid),
+	})
+	if pcall_ok and run_ok and type(stdout) == "string" then
+		local loc = stdout:match("(%S+)")
+		if loc and loc ~= "" then
+			return loc
+		end
+	end
+	return "local"
 end
+
+-- Per-pane cache so the resolver isn't spawned on every 250ms status tick.
+-- A plain Lua upvalue (NOT wezterm.GLOBAL, which serializes stored values and
+-- mangles a timestamp into a string) keyed by window:pane → { location, at }.
+local terminal_location_cache = {}
 
 local function resolve_terminal_location_cached(window, pane)
 	local key = tostring(window:window_id()) .. ":" .. tostring(pane:pane_id())
 	local now = os.time()
-	local existing = terminal_location_cache[key]
-	local entry = existing or { location = "local", spawned_at = 0 }
-
-	-- Pick up the freshest async result once we've spawned at least one refresh
-	-- for this pane. Skipping the read on first sight avoids trusting a stale
-	-- cache file left by a prior session that reused this pane id.
-	if existing then
-		local fresh = read_location_file(key)
-		if fresh then
-			entry.location = fresh
-		end
+	local entry = terminal_location_cache[key]
+	if entry and (now - entry.at) < 2 then
+		return entry.location
 	end
-
-	if (now - entry.spawned_at) >= LOC_TTL then
-		local info = pane:get_foreground_process_info()
-		if info then
-			spawn_location_refresh(key, info.pid)
-			entry.spawned_at = now
-		end
-	end
-
-	terminal_location_cache[key] = entry
-	return entry.location
+	local location = detect_terminal_location(pane)
+	terminal_location_cache[key] = { location = location, at = now }
+	return location
 end
 
 local function apply_terminal_location_tint(window, pane)
