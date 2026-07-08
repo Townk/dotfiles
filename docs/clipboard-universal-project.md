@@ -741,3 +741,157 @@ flow. Stop on the work-on-<silo> branch for the user to close with
 Begin by reading docs/clipboard-universal-project.md in full, then the
 files listed above. Report what you found before making changes.
 ```
+
+---
+
+## 22. Live peer clipboard entry in the picker
+
+> **Addendum to §11 (extends §7 `pick-clipboard` and §8 the access-path
+> matrix).** Numbered §22 because §12 is already "Remote file copy"; this is a
+> feature section living after the meta sections rather than renumbering the
+> §12–§21 cross-references.
+
+**The gap.** When you're SSH'd into a machine, the terminal picker (§7) shows
+only *that* machine's own store — a copy you made moments ago on the machine
+you're sitting at is reachable by *pasting* (`pbpaste` / nvim `p` read it live
+over the reverse tunnel, §9) but is **invisible in the picker**. Users
+reasonably expect to *see* it there. This section makes the picker surface the
+peer's current clipboard as a single live entry, without weakening §11.
+
+**Principle (unchanged from §11): viewing ≠ owning; using = owning.** Merely
+seeing the peer's clipboard in the picker persists nothing. The row is fetched
+live and shown; it is **not** in `history.db`. Only when you *act* on it
+(Enter = paste, Ctrl-Y = copy) does it materialize into this machine's store —
+the exact same `P`-op path nvim `p` already uses (§9, §11). This is not a
+revival of the removed Phase-5 mirror: nothing is pushed eagerly and nothing
+is stored as a pointer.
+
+### 22.1 Detection (reuse, no new signal)
+
+Show the live entry **iff `bridge_up`** — the flag `pick-clipboard` already
+computes: `$SSH_CONNECTION` set **and** a real connect probe to the
+reverse-forwarded peer clipboard on `127.0.0.1:2490` succeeds
+(`clipbridge::probe`). Sitting locally at a Mac → no peer, no entry.
+Bridge-down (iPad/Blink, no tunnel) → no entry. The picker otherwise behaves
+exactly as today.
+
+### 22.2 Fetch (open time — bounded, best-effort)
+
+On picker open, when `bridge_up`, issue over the reverse tunnel (port 2490):
+
+- `G` (get) → the peer's **current** clipboard text.
+- `H` (get-host) → the peer's hostname, for the badge label.
+
+Both with a **short timeout (~400 ms each)**. On timeout / error / empty, the
+entry is simply omitted — **never block or delay the picker**. `R` (get-regtype)
+and the materialize `P` are deferred to accept time (§22.4), so open costs at
+most two sub-second loopback round-trips.
+
+> **Empty guard applies here too.** If the peer's current clipboard is empty or
+> whitespace-only, omit the live entry — the same rule the capture watcher uses
+> (an empty/whitespace copy is never a real clip). Reuses the `^%s*$` test.
+
+> **Scope: one entry, text only.** The bridge vends the *current* clipboard,
+> not the peer's history — so this surfaces exactly one live row. `G` is
+> text-only; a peer image/RTF clip surfaces as its text representation or (no
+> text) is omitted. Rich live fetch is out of scope for v1 (see §22.6).
+
+### 22.3 Display (synthetic top row, not a DB row)
+
+The entry is **prepended** to the row stream (it cannot come from the `clips`
+`SELECT`), sorted above every stored row, with a sentinel tail id `LIVE`
+(no numeric id — it is not a row):
+
+- Glyph + color: the mauve **origin** color already used for `source_host ≠
+  me` (`c_origin`), with a distinct "live/remote" glyph, so it reads as
+  not-from-here at a glance.
+- Preview: first line of the fetched text, truncated to the same `CW` width as
+  other rows.
+- Label/badge: `<peerhost> · live` (fall back to `peer · live` if `H` failed).
+- Preview-pane footer: the preview script special-cases the `LIVE` sentinel —
+  it renders from the fetched text held in a temp file (not a DB lookup, which
+  would return nothing for `LIVE`): `Source: <peerhost> (live)`,
+  `Content Type: text`, `Origin: remote (<peerhost>)`, `Characters`/`Words`
+  from the text, `Copied: live`.
+
+### 22.4 Accept → materialize (the ownership step)
+
+On accept of the `LIVE` entry, the wrapper (which today branches on the
+`CP:`/`MD:`/plain-id accept markers) special-cases the sentinel:
+
+1. **Deliver the content** using the *already-fetched* text (no second `G`):
+   - Enter → inject the text into the originating pane (as normal Enter does).
+   - Ctrl-Y → set my clipboard to the text (local set / ship, as `clip::copy_by_id`).
+   - Alt-Enter → text (no rich-vs-raw distinction in a terminal).
+2. **Materialize** it into this machine's store: fetch `R` (regtype) over 2490,
+   then send `P` to the **local** bridge (`127.0.0.1:2489`) with the op-persist
+   payload `source_host=<peerhost> US kind=text US app='' US regtype=<R> RS text`.
+   After this it is an ordinary local row, badged `remote (<peerhost>)`, and the
+   next picker open shows it as a normal stored row (and the live entry dedups
+   against it — §22.5).
+
+`Ctrl-D` (delete) and `Ctrl-P` (pin) are **no-ops** on the `LIVE` entry — there
+is no row to delete or pin. The background-key hook ignores the sentinel id.
+
+> **Ephemerality invariant (must hold):** opening the picker, scrolling over
+> the live entry, and dismissing without accepting it writes **nothing** to
+> `history.db`. Assert this in verification (§22.7): row count is unchanged
+> across an open+dismiss that showed a live entry.
+
+### 22.5 Dedup
+
+If you already materialized the peer's current clip (e.g. you just `p`'d it),
+don't show a twin. Suppress the live entry when a stored row already matches —
+using **op-persist's dedup key**: `source_host = <peerhost>` AND
+`type_hash = sha256(text)`.
+
+> **type_hash caveat:** `op_persist` stores `type_hash = sha256(text)` (the
+> dispatch handler, §3), whereas the Hammerspoon watcher stores
+> `sha256("<uti>=<blob>"…)`. They differ, so the live-entry dedup must use the
+> `sha256(text)` form to match rows that arrived via `P` (the only way a
+> peer-origin text row is created). A locally-captured row with the same text
+> won't collide — acceptable: it has a different `source_host` anyway.
+
+### 22.6 Honest limits
+
+- **Current clip only, text only** (§22.2). No peer history, no live image/RTF.
+- **Best-effort** — a slow/again-down bridge just omits the entry; the picker
+  never hangs on it.
+- **No auto-refresh** — the entry reflects the peer clipboard as of picker
+  open. Copying on the peer while the picker is open does not live-update it
+  (consistent with how the stored rows are a snapshot at open).
+
+### 22.7 Files touched & verification
+
+**Files** (picker-only; the bridge already speaks `G`/`R`/`H`/`P` — no
+dispatcher or schema change):
+
+- `home/dot_local/libexec/executable_pick-clipboard` — open-time fetch +
+  prepend the synthetic `LIVE` row; preview-script `LIVE` special-case; accept
+  branch for the sentinel (deliver + materialize); ignore `LIVE` in
+  delete/pin/background hooks.
+- `home/dot_local/lib/clipboard-bridge-client.zsh` — add thin `clipbridge::get`
+  / `clipbridge::get_host` helpers if not already present (`send` + read the
+  framed `O` response); the `P` send reuses `clipbridge::send`.
+
+**Verification** (over a real SSH session, machine you're sitting at → remote):
+
+1. Copy text on the peer → open the picker on the remote → the live entry
+   appears at the top, badged `<peerhost> · live`.
+2. Dismiss without selecting → `SELECT COUNT(*) FROM clips` unchanged
+   (ephemerality invariant, §22.4).
+3. Select it (Enter) → text is injected **and** a new row exists, badged
+   `remote (<peerhost>)`; reopen → it's a normal stored row and the live entry
+   is now deduped away (§22.5).
+4. Empty/whitespace peer clipboard → no live entry (§22.2).
+5. Bridge down (kill the tunnel) → no live entry, picker otherwise unaffected.
+
+### 22.8 Decisions log (this section)
+
+- Live entry gated on `bridge_up` only; reuses the existing probe. No new state.
+- Open-time cost bounded to `G`+`H` with short timeouts; `R`+`P` deferred to
+  accept. Never blocks the picker.
+- Ephemeral until accepted; accept materializes via the existing `P` op — same
+  ownership rule as nvim `p`. Does **not** revive the Phase-5 mirror.
+- One entry, text-only, current-clip-only for v1; rich/history explicitly out
+  of scope.
