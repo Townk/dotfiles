@@ -8,12 +8,13 @@
 #
 # Bootstrap on a new machine:
 #
-#   - Personal (non-work) machine: copy this file to ~/.ssh/config
-#         cp ~/.ssh/config.example ~/.ssh/config
-#
-#   - Work machine: first run your work SSH tooling so it generates
-#     ~/.ssh/config with its own block, then append the two lines at the bottom
-#     of this file (Match all + Include) BELOW that work-managed block.
+#   `chezmoi apply` auto-ensures the `Match all` + `Include ~/.ssh/config.d/*`
+#   lines below are present in ~/.ssh/config (idempotent, every apply — see
+#   .chezmoiscripts/run_after_08-ensure-ssh-config-include). You no longer need
+#   to copy this file by hand; it stays as reference and to enable the OPTIONAL
+#   pre-connect hook at the bottom. On a work machine the ensured lines are
+#   appended BELOW whatever the work SSH tooling wrote — exactly what's required
+#   (see the IMPORTANT note below).
 #
 # IMPORTANT — the `Match all` before the Include is required. The work tooling
 # writes its block as a host-specific `Host <work-hosts>` section, and an

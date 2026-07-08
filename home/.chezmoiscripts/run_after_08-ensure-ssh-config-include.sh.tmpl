@@ -1,0 +1,45 @@
+{{- /*
+
+  ~/.ssh/config config.d Include — idempotent, runs every apply.
+
+  ~/.ssh/config is intentionally NOT chezmoi-managed: work SSH tooling rewrites
+  it on every run (see ~/.ssh/config.example), so letting chezmoi own it would
+  fight that tooling and leak work host names into this public repo. Everything
+  managed lands under ~/.ssh/config.d/* instead — the `Host *` defaults in
+  personal.config, plus the per-alias fragments system-onboard writes (real
+  endpoints, the clipboard reverse-forward) — and reaches ssh ONLY through:
+
+    Match all
+    Include ~/.ssh/config.d/*
+
+  Without that line a freshly-bootstrapped, not-yet-onboarded machine deploys
+  config.d/* but never reads it: the Host * identity/agent/mux defaults and the
+  clipboard forward are all inert. system-onboard's reconcile_ssh ensures the
+  same line on the operator host during a remote onboard; this covers every
+  machine at apply time, onboarded or not.
+
+  `Match all` first: an Include nested inside a non-matching `Host <work>` block
+  (how the work tooling writes its section) is skipped entirely -- verified with
+  `ssh -G`. Appending puts both lines BELOW any work block, exactly as required.
+
+  Every apply (not run_once) so it self-heals: a bare work-tooling rewrite can
+  drop the Include without touching any chezmoi-managed source.
+
+  POSIX grep only ([[:space:]], not \s): this runs before bootstrap-tools
+  installs GNU grep, so it must work with the platform's stock grep.
+
+*/ -}}
+#!/bin/sh
+set -eu
+
+sshcfg="$HOME/.ssh/config"
+
+if [ ! -f "$sshcfg" ] || ! grep -Eq '^[[:space:]]*Include[[:space:]]+.*\.ssh/config\.d/\*' "$sshcfg"; then
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
+  printf '\nMatch all\nInclude ~/.ssh/config.d/*\n' >> "$sshcfg"
+  chmod 600 "$sshcfg"
+  echo "ssh-config: added 'Match all + Include ~/.ssh/config.d/*' to $sshcfg" >&2
+fi
+
+# vim:ft=sh
