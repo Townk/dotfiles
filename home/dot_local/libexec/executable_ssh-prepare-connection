@@ -34,6 +34,9 @@
 # gpgconf's homedir hash) never go stale — the lines self-declare, so no header
 # list is needed. Eventually-consistent and best-effort: a rewrite lands for the
 # NEXT connection, and a line whose keys can't all be resolved is left untouched.
+# Because the fix is one connection late, a changed line also arms a marker on
+# the remote (see arm_drift_marker) so the current session gets a blocking
+# "reconnect" notice at login (see ~/.config/zsh/.zshrc).
 #
 # Idempotent and safe on every connection: rsync steps send only deltas; the
 # gpg step only touches the remote's own socketdir; a resolve writes only when
@@ -139,6 +142,8 @@ resolve_value() {
 # keeps it out of `Include config.d/*`) renamed over the file — no lock needed,
 # since rename is atomic and concurrent writers resolve to the same value.
 # Best-effort: a line whose keys can't all be resolved is left untouched.
+# When a line actually changes, arm_drift_marker drops a marker on the remote so
+# the current (still-superseded) session gets a "reconnect" notice at login.
 heal_resolve_lines() {
   local config="$1" marker='@@resolve@@:'
   grep -qF -- "$marker" "$config" 2>/dev/null || return 0   # nothing to heal
@@ -147,7 +152,7 @@ heal_resolve_lines() {
   lines=("${(@f)$(<"$config")}")
   local -i i changed=0
   local line indent tmpl rendered rest key val newline
-  local -a keys
+  local -a keys new_values line_vals
   for (( i = 1; i <= ${#lines}; i++ )); do
     line="${lines[i]}"
     [[ "$line" == *"$marker"* ]] || continue
@@ -161,22 +166,39 @@ heal_resolve_lines() {
     done
     keys=("${(@u)keys}")
 
-    rendered="$tmpl"; local ok=1
+    rendered="$tmpl"; line_vals=(); local ok=1
     for key in "${keys[@]}"; do
       val="$(resolve_value "$key")" || { ok=0; break; }
-      rendered="${rendered//@@$key@@/$val}"
+      rendered="${rendered//@@$key@@/$val}"; line_vals+=("$val")
     done
     (( ok )) || continue
 
     newline="${indent}${rendered}  # @@resolve@@: ${tmpl}"
-    [[ "$newline" == "$line" ]] || { lines[i]="$newline"; changed=1; }
+    [[ "$newline" == "$line" ]] || { lines[i]="$newline"; changed=1; new_values+=("${line_vals[@]}"); }
   done
   (( changed )) || return 0
 
   local tmp
   tmp="$(mktemp "${config:h}/.${config:t}.XXXXXX")" || return 0
   chmod 0600 "$tmp"
-  print -rl -- "${lines[@]}" > "$tmp" && mv -f "$tmp" "$config" || rm -f "$tmp"
+  if print -rl -- "${lines[@]}" > "$tmp" && mv -f "$tmp" "$config"; then
+    arm_drift_marker "${new_values[@]}"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+# arm_drift_marker <new-value …> — a resolve line just changed, so THIS session
+# is still on the superseded value (the heal only fixes the client config for the
+# NEXT connection). Drop a marker on the remote whose mere EXISTENCE tells the
+# login shell to warn "reconnect" (see ~/.config/zsh/.zshrc); it stores the new
+# value(s) purely for debugging. No remote socket inspection — the client's heal
+# is the drift oracle, so systemd socket-activation etc. are irrelevant. The
+# corrected reconnect re-runs heal with nothing to change, so it never re-arms.
+# Best-effort; _SYNCREMOTE (set by the hook) stops the nested ssh from recursing.
+arm_drift_marker() {
+  print -rl -- "$@" | ssh -o ControlPath=none -o ClearAllForwardings=yes -o ConnectTimeout=5 \
+    "$target" 'd="${XDG_STATE_HOME:-$HOME/.local/state}/ssh"; mkdir -p "$d" && cat > "$d/new-socket"' 2>/dev/null || true
 }
 
 # --- run ---------------------------------------------------------------------

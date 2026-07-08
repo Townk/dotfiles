@@ -86,7 +86,12 @@ Include ~/.ssh/config.d/*
 # rendered into the line's left side on each connect. The line self-declares, so
 # there's no separate `resolve:` header list. It is eventually-consistent — a
 # rewrite lands for the NEXT connection — and best-effort: a line whose keys
-# can't all be resolved is left untouched. Example inside the Host block:
+# can't all be resolved is left untouched. Because the fix is one connection
+# late, a changed line also drops a marker on the remote
+# (~/.local/state/ssh/new-socket) whose existence makes the remote's login shell
+# show a blocking "reconnect" notice, then clears it (see ~/.config/zsh/.zshrc);
+# the corrected reconnect re-runs the heal with nothing to change, so it never
+# re-arms. Example inside the Host block:
 #
 #   RemoteForward /run/user/<uid>/gnupg/d.<hash>/S.gpg-agent %d/.config/gnupg/S.gpg-agent.extra  # @@resolve@@: RemoteForward @@gpg-agent-socket@@ %d/.config/gnupg/S.gpg-agent.extra
 #

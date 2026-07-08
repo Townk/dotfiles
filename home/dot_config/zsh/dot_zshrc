@@ -35,17 +35,20 @@ _zsh_should_autoattach_zellij() {
 # override is active, else canonical). chezmoi-system.zsh is fork-free and guarded.
 source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.zsh}"
 
-# gpg-agent forward drift check — SSH login shells only, BEFORE the Zellij
+# gpg-agent forward drift notice — SSH login shells only, BEFORE the Zellij
 # attach below. The forwarded agent socket path embeds the remote uid + gpgconf's
 # homedir hash, so a re-provisioned box can leave the client's
 # ~/.ssh/config.d/<host>.conf pointing at a stale path. ssh-prepare-connection
-# heals it, but only for the NEXT connection — so warn now, BLOCKING, so a
-# short-lived window can't flash-and-close before you notice. Gated to the
-# pre-attach login shell (ZELLIJ unset ⇒ runs once per connection; panes re-run
-# .zshrc with ZELLIJ set and skip) on a real TTY; silent when the forward is fine
-# or absent (see gpg-forward-prepare --check).
-if [[ -o interactive && -z "$ZELLIJ" && -n "${SSH_CONNECTION:-}" && -t 2 ]] \
-   && ! ~/.local/libexec/gpg-forward-prepare --check 2>/dev/null; then
+# heals it, but only for the NEXT connection, so when it does it arms this marker
+# here (its existence is the whole signal — the client's heal is the drift
+# oracle, so nothing pokes at sockets). Warn now, BLOCKING, so a short-lived
+# window can't flash-and-close before you notice, then clear it so it fires once;
+# the corrected reconnect re-runs heal with nothing to change and never re-arms.
+# Gated to the pre-attach login shell (ZELLIJ unset ⇒ once per connection; panes
+# re-run .zshrc with ZELLIJ set and skip) on a real TTY.
+_gpgfwd_marker="${XDG_STATE_HOME:-$HOME/.local/state}/ssh/new-socket"
+if [[ -o interactive && -z "$ZELLIJ" && -n "${SSH_CONNECTION:-}" && -t 2 && -f "$_gpgfwd_marker" ]]; then
+  rm -f "$_gpgfwd_marker"
   _gpgfwd_msg='gpg-agent socket moved since this box was provisioned — reconnect to refresh the gpg forward.'
   if command -v gum >/dev/null 2>&1; then
     COLORTERM=truecolor gum confirm --affirmative='Got it' --negative='' "$_gpgfwd_msg" </dev/tty >/dev/tty 2>&1 || true
@@ -56,6 +59,7 @@ if [[ -o interactive && -z "$ZELLIJ" && -n "${SSH_CONNECTION:-}" && -t 2 ]] \
   fi
   unset _gpgfwd_msg
 fi
+unset _gpgfwd_marker
 
 # Auto-attach Zellij for interactive shells.
 # Done before the rest of init so the outer shell doesn't pay for setup
