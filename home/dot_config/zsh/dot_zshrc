@@ -41,20 +41,36 @@ source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-sy
 # ~/.ssh/config.d/<host>.conf pointing at a stale path. ssh-prepare-connection
 # heals it, but only for the NEXT connection, so when it does it arms this marker
 # here (its existence is the whole signal — the client's heal is the drift
-# oracle, so nothing pokes at sockets). Warn now, BLOCKING, so a short-lived
-# window can't flash-and-close before you notice, then clear it so it fires once;
-# the corrected reconnect re-runs heal with nothing to change and never re-arms.
-# Gated to the pre-attach login shell (ZELLIJ unset ⇒ once per connection; panes
-# re-run .zshrc with ZELLIJ set and skip) on a real TTY.
+# oracle, so nothing pokes at sockets). This session is still on the stale
+# forward, so prompt — BLOCKING (a short-lived window can't flash-and-close
+# before you notice) — and clear the marker so it fires once. Choosing Reconnect
+# exits the login shell, closing the connection so the next connect picks up the
+# healed forward (its heal then finds nothing to change and never re-arms); Stay
+# drops you into this (stale-forward) session. Colors come from the system
+# palette loaded just above (C_HEX_*), with named fallbacks. Gated to the
+# pre-attach login shell (ZELLIJ unset ⇒ once per connection; panes re-run .zshrc
+# with ZELLIJ set and skip) on a real TTY.
 _gpgfwd_marker="${XDG_STATE_HOME:-$HOME/.local/state}/ssh/new-socket"
 if [[ -o interactive && -z "$ZELLIJ" && -n "${SSH_CONNECTION:-}" && -t 2 && -f "$_gpgfwd_marker" ]]; then
   rm -f "$_gpgfwd_marker"
   _gpgfwd_msg='gpg-agent socket moved since this box was provisioned — reconnect to refresh the gpg forward.'
   if command -v gum >/dev/null 2>&1; then
-    COLORTERM=truecolor gum confirm --affirmative='Got it' --negative='' "$_gpgfwd_msg" </dev/tty >/dev/tty 2>&1 || true
+    if COLORTERM=truecolor \
+       GUM_CONFIRM_PROMPT_FOREGROUND="${C_HEX_DIALOG_WARNING:-${C_HEX_YELLOW:-yellow}}" \
+       GUM_CONFIRM_SELECTED_BACKGROUND="${C_HEX_DIALOG_WARNING:-${C_HEX_YELLOW:-yellow}}" \
+       GUM_CONFIRM_SELECTED_FOREGROUND="${C_HEX_CRUST:-${C_HEX_BASE:-black}}" \
+       GUM_CONFIRM_UNSELECTED_FOREGROUND="${C_HEX_SUBTEXT:-white}" \
+       GUM_CONFIRM_UNSELECTED_BACKGROUND="${C_HEX_SURFACE0:-black}" \
+       gum confirm --default --affirmative='Reconnect' --negative='Stay' \
+         "$_gpgfwd_msg" </dev/tty >/dev/tty 2>&1; then
+      unset _gpgfwd_msg _gpgfwd_marker
+      exit 0
+    fi
   else
     print -u2 -P -- "%F{yellow}⚠ ${_gpgfwd_msg}%f"
-    read -k 1 -s "?  press any key to continue… " </dev/tty || true
+    if read -q "?Reconnect now? [y/N] " </dev/tty; then
+      print; unset _gpgfwd_msg _gpgfwd_marker; exit 0
+    fi
     print
   fi
   unset _gpgfwd_msg
