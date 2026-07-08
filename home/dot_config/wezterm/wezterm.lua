@@ -224,6 +224,35 @@ local function set_background_override(overrides, bg)
 	overrides.colors.background = bg
 end
 
+-- Frost the whole window when it loses focus — a translucency-based focus cue, the
+-- replacement for the reverted foreground_text_hsb dim. window_background_opacity covers
+-- default-bg/padding regions; text_background_opacity covers the opaque painted-bg cells
+-- (nvim buffers, the zellij bar). Toggling BOTH together frosts the entire surface
+-- uniformly; foreground glyphs stay fully opaque, so no glyph rendering is transformed
+-- (that's what mangled UI glyphs before). Both keys are disjoint from the SSH
+-- colors.background tint, so the two overrides compose in the same table without clobbering
+-- (see apply_terminal_location_tint). Idempotent: only calls set_config_overrides on an
+-- actual state change, which also avoids the window-config-reloaded feedback loop.
+local FOCUS_OPACITY = 0.85
+
+local function apply_focus_opacity(window)
+	local overrides = window:get_config_overrides() or {}
+	if window:is_focused() then
+		if overrides.window_background_opacity == nil then
+			return
+		end
+		overrides.window_background_opacity = nil
+		overrides.text_background_opacity = nil
+	else
+		if overrides.window_background_opacity == FOCUS_OPACITY then
+			return
+		end
+		overrides.window_background_opacity = FOCUS_OPACITY
+		overrides.text_background_opacity = FOCUS_OPACITY
+	end
+	window:set_config_overrides(overrides)
+end
+
 local function detect_terminal_location(pane)
 	local info = pane:get_foreground_process_info()
 	if not info then
@@ -506,6 +535,7 @@ wezterm.on("window-resized", function(window, _pane)
 end)
 
 wezterm.on("window-focus-changed", function(window, _pane)
+	apply_focus_opacity(window)
 	write_fullscreen_state(window)
 end)
 
