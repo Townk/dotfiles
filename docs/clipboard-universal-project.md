@@ -923,3 +923,61 @@ dispatcher or schema change):
 - Verified end-to-end over the live bridge (reads, render, field extraction,
   accept→deliver+materialize, dedup, ephemerality) — the DB row count is
   unchanged across an open+dismiss that showed a live entry.
+
+---
+
+## 23. Remote-copy provenance
+
+> **✅ Implemented** (2026-07-08). **Extends §11 (provenance) and §9 (the copy
+> paths).** Design doc: `docs/superpowers/specs/2026-07-08-remote-copy-provenance-design.md`.
+
+**The gap.** A copy made while you're SSH'd into a machine is routed to the
+clipboard of the Mac you're sitting at — `pbcopy` writes OSC 52 up through
+Zellij/WezTerm, nvim `y` sends a `T` op to `:2490`. So the **origin** machine
+never records it (its pasteboard is untouched), and the **sit-Mac** captures it
+stamped `source_host = itself` → it reads *local*, never `remote(origin)`.
+Provenance reflected *where the bytes landed*, not *where the copy happened*.
+
+**Principle: a copy's origin is where the copy happened.** A copy on the origin
+is now stamped `source_host = origin` **everywhere** — a **local** row on the
+origin, a **remote(origin)** row on the sit-Mac — while the bytes still land on
+the sit-Mac's clipboard for `Cmd+V`.
+
+### 23.1 Mechanism
+
+- **New bridge op `O` (declare-origin).** Request `<source_host> US <text>`;
+  writes a hash-keyed, TTL'd state file
+  `${XDG_STATE_HOME}/pick-clipboard/current-origin` (three lines: host /
+  `sha256(text)` / epoch). Mirrors the `current-regtype` file `T` already writes.
+  No schema change; `G/R/H/T/P/C/F` untouched.
+- **Watcher override.** `clipboard-history.lua` gains `captured_origin(plain)`
+  (mirrors `captured_regtype`): if a fresh declaration (within `ORIGIN_TTL = 5 s`)
+  hashes to the captured text, `capture_now` stamps `source_host = origin`
+  instead of `my_host()`. The watcher stays the sole DB writer — one row,
+  correctly tagged, no duplicate.
+- **Both copy paths declare before delivering.** Over SSH, `pbcopy` and nvim
+  `copy()` buffer the text once and send `O`→`:2490` (awaited, so the state file
+  exists before the bytes trigger the watcher), deliver the bytes (OSC 52 / `T`),
+  and record a local row via `P`→`:2489` (`source_host = origin`).
+
+### 23.2 Invariants & degradation
+
+- **Hash-domain invariant:** the `O` hash and the watcher's `hash.SHA256(plain)`
+  are over identical bytes — each path buffers the text once (temp file / single
+  local) and reuses it for `O`, delivery, and `P`, trailing newline included.
+- **Ordering:** `O` is synchronous and strictly precedes the clipboard set.
+- **Best-effort / no-hang:** `O` and `P` are silent no-ops on any failure
+  (`pbcopy`'s secondary `mktemp`s and `nc` calls all degrade); a down bridge
+  falls back to today's OSC 52 behavior. The copy never blocks or aborts.
+- **Limits (v1):** text only; `source_app` on the sit-Mac row reflects the
+  sit-Mac's frontmost app (deferred refinement); an identical-text physical copy
+  on the sit-Mac within the 5 s TTL can be mis-tagged (accepted, same class as
+  the regtype file).
+
+### 23.3 Files
+
+`clipboard-bridge-dispatch` (op `O` + `current-origin` writer),
+`clipboard-history.lua` (`captured_origin` + the one-line `host` stamp),
+`executable_pbcopy` (buffer, `O` before OSC 52, `P`, `PBCOPY_OSC52_SINK` test
+seam), `universal.lua` (nvim `copy()`: `O` before `T`, `P`). Deployed to both
+Macs via chezmoi; symmetric — either can be origin or sit-Mac.
