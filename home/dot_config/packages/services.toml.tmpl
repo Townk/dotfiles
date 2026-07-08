@@ -114,7 +114,10 @@ PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/s
 [backup-reconcile]
 description     = "Terminal Time Machine: reconcile targets on mount + hourly safety pass"
 cmd             = ["system-backup-reconcile"]
-watch_paths     = ["/Volumes", "~/Library/CloudStorage"]
+# Only /Volumes (removable master/mirror media). NOT ~/Library/CloudStorage — a
+# cloud-sync root churns constantly and storms this agent with reconciles; the
+# always-present cloud target is covered by the hourly pass + post-capture reconcile.
+watch_paths     = ["/Volumes"]
 start_interval  = 3600
 process_type    = "Background"
 low_priority_io = true
