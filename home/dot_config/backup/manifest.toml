@@ -41,6 +41,8 @@ deny = [
   "~/Library/Caches",
   "~/Library/Application Support/JetBrains/*/plugins",  # ~1 GB/IDE, marketplace-regenerable
   "~/.local/state/terminal-backup",     # the backup's OWN staging/wip — never self-ingest
+  "~/.local/state/images",              # system-images backing store — live .sparseimage files (18+ GB, churn); mounted contents already skipped as a separate fs
+  "~/.config/cursor/chats",             # Cursor agent chat DBs (store.db): multi-GB, high churn, regenerable
   "~/.local/share/pick-clipboard",      # clipboard DB, ephemeral (atuin kept: it's valuable + append-only, dedups well)
   "~/Projects/3D",                      # 850+ MB of .gcode/.step CAD output, non-git
   "~/Projects/AI/llama.cpp/models",     # downloadable model weights (.gguf)
