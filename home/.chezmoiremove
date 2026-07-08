@@ -64,3 +64,23 @@
 /.local/bin/ai-commit-cursor
 /.local/share/zsh/site-functions/_ai-commit-cursor
 {{- end }}
+
+# ── theme outputs: old names superseded by chezmoi-system.* ──────────────────
+# The theme generator (custom-builds/theme/generate-theme.sh) now renders
+# chezmoi-system.* everywhere; the previous palette.* / system / catppuccin-mocha.*
+# outputs are left beside the new files since chezmoi never wrote them itself.
+# Anchored to the exact stale basenames so the live chezmoi-system.* copies stay.
+/.config/theme/palette.json
+/.config/theme/palette.lua
+/.config/theme/palette.zsh
+/.config/wezterm/colors/system.toml
+/.config/ghostty/themes/system
+/.config/glow/catppuccin-mocha.json
+/.config/zellij/themes/catppuccin-mocha-dialog.kdl
+/.pi/agent/themes/catppuccin-mocha.json
+
+# ── stray leftovers from removed/renamed source entries ─────────────────────
+# ~/README.md: an early deployed copy of the repo README, no longer a source
+# entry. quick-launch-external: renamed to quick-launch{,-pick,-window,-zellij}.
+/README.md
+/.config/zellij/scripts/quick-launch-external
