@@ -746,6 +746,11 @@ files listed above. Report what you found before making changes.
 
 ## 22. Live peer clipboard entry in the picker
 
+> **✅ Implemented** (commit `541976c`, 2026-07-08; UI polish in the same
+> commit). Live-verified over a real SSH session against the reverse bridge —
+> the §22.7 checks pass. The few deviations from this section as first written
+> are folded into §22.3 and logged in §22.8.
+
 > **Addendum to §11 (extends §7 `pick-clipboard` and §8 the access-path
 > matrix).** Numbered §22 because §12 is already "Remote file copy"; this is a
 > feature section living after the meta sections rather than renumbering the
@@ -803,16 +808,23 @@ The entry is **prepended** to the row stream (it cannot come from the `clips`
 (no numeric id — it is not a row):
 
 - Glyph + color: the mauve **origin** color already used for `source_host ≠
-  me` (`c_origin`), with a distinct "live/remote" glyph, so it reads as
-  not-from-here at a glance.
+  me` (`c_origin`), with the `nf-md-access-point` glyph (`char(983043)`,
+  U+F0003 — radiating waves), so it reads as live/not-from-here at a glance.
+  *(Shipped as access-point; the first draft left the glyph unspecified.)*
 - Preview: first line of the fetched text, truncated to the same `CW` width as
   other rows.
-- Label/badge: `<peerhost> · live` (fall back to `peer · live` if `H` failed).
+- Badge: carried by the mauve access-point glyph + top position — there is no
+  inline `<peerhost> · live` text on the row line; the peer host and liveness
+  live in the preview footer instead (`H` failure falls back to `peer`).
 - Preview-pane footer: the preview script special-cases the `LIVE` sentinel —
   it renders from the fetched text held in a temp file (not a DB lookup, which
-  would return nothing for `LIVE`): `Source: <peerhost> (live)`,
-  `Content Type: text`, `Origin: remote (<peerhost>)`, `Characters`/`Words`
-  from the text, `Copied: live`.
+  would return nothing for `LIVE`): `Source: —` (the copying app is unknown for
+  a live clip), `Content Type: text`, `Origin: remote (<peerhost>)`,
+  `Characters`/`Words` from the text, `Copied: live`. The host is shown **once**
+  (in `Origin`, not also `Source`) and middle-ellipsized (`remote (ZTMA…Q5P)`)
+  so long `LocalHostName`s fit; every value field char-pads (`printf`'s `%!`
+  flag) so the multibyte ellipsis / em-dash still right-align. *(The first draft
+  put the host in both `Source` and `Origin` and byte-padded — corrected here.)*
 
 ### 22.4 Accept → materialize (the ownership step)
 
@@ -895,3 +907,19 @@ dispatcher or schema change):
   ownership rule as nvim `p`. Does **not** revive the Phase-5 mirror.
 - One entry, text-only, current-clip-only for v1; rich/history explicitly out
   of scope.
+
+**Implementation notes (commit `541976c`):**
+
+- Payload reads use a new `clipbridge::request` (framed send + byte-exact
+  response via `head -c 1` / `tail -c +6`, never a `$(...)` capture) with thin
+  `clipbridge::get` / `clipbridge::get_host` wrappers; `P` still reuses
+  `clipbridge::send`.
+- The `LIVE` row is pre-rendered once at open into a temp file and catted above
+  the stored rows by **both** emit paths (`emit_rows` and the `start:reload`
+  `emit_script`), so it survives delete/pin reloads without re-fetching —
+  honoring "no auto-refresh" (§22.6).
+- Row glyph: `nf-md-access-point`. Footer: host shown once, middle-ellipsized,
+  char-padded (`%!`). See §22.3.
+- Verified end-to-end over the live bridge (reads, render, field extraction,
+  accept→deliver+materialize, dedup, ephemerality) — the DB row count is
+  unchanged across an open+dismiss that showed a live entry.
