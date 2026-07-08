@@ -151,6 +151,7 @@ heal_resolve_lines() {
   for (( i = 1; i <= ${#lines}; i++ )); do
     line="${lines[i]}"
     [[ "$line" == *"$marker"* ]] || continue
+    [[ "$line" == [[:space:]]#\#* ]] && continue            # a comment merely MENTIONING the marker (e.g. this file's own docs), not a real resolve line
     tmpl="${line#*$marker}"; tmpl="${tmpl##[[:space:]]#}"    # template = text after the marker
     indent="${line%%[^[:space:]]*}"                          # preserve leading whitespace
 
