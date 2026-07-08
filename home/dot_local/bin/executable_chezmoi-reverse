@@ -8,9 +8,31 @@
 # that want to detect drift without blocking on a merge tool.
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Propagate destination edits back to chezmoi source templates: for each file,
+diff the deployed copy against its rendered source and patch the source so the
+change lives in the repo (re-adds plain files, patches templates, falls back to
+`chezmoi merge` on conflicts).
+
+Usage:
+  chezmoi-reverse [--no-merge] [--] <file> [<file>...]
+
+Options:
+  --no-merge   on a conflict needing a 3-way merge, leave the source untouched
+               and emit `needs-merge` instead of opening a merge tool (for
+               non-interactive callers such as editor hooks)
+  -h, --help   show this help
+EOF
+}
+
 no_merge=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    -h | --help | help)
+      usage
+      exit 0
+      ;;
     --no-merge)
       no_merge=1
       shift

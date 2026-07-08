@@ -454,4 +454,18 @@ function main() {
   preview-text "$target"
 }
 
+case "${1:-}" in
+  -h | --help | help)
+    cat <<'EOF'
+Render a preview for fzf's --preview hook, Yazi's shell previewer, or any tool
+that calls it with a file path. Routes by extension then MIME: images (chafa /
+Kitty graphics), audio/video (mediainfo), archives, PDFs, notebooks and data
+files, binary hex dump, and syntax-highlighted text via bat as the fallback.
+
+Usage: preview <path>
+EOF
+    exit 0
+    ;;
+esac
+
 main "$@"

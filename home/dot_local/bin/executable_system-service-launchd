@@ -455,5 +455,18 @@ case "${1:-}" in
     shift
     do_status "$@"
     ;; # internal: used by restart-for
+  -h | --help | help)
+    cat <<'EOF'
+Manage launchd user agents declared in ~/.config/packages/services.toml: each
+plist is rendered from its TOML entry and bootstrapped into the GUI domain.
+Usually driven by the unified `system-service` CLI, not called directly.
+
+Usage:
+  system-service-launchd list                       declared launchd services
+  system-service-launchd start|stop|restart|info <name>
+  system-service-launchd sync                        reconcile plists with services.toml
+EOF
+    exit 0
+    ;;
   *) die "usage: system-service-launchd {list|start|stop|restart|info|sync|render|declared|matching|status} [args]" ;;
 esac

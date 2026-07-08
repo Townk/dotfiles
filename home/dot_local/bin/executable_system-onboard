@@ -27,6 +27,10 @@ VALID_PROFILES=(personal work dev-shell)
 
 usage() {
   cat <<EOF
+Reconcile a machine into this dotfiles system: assign it a secrets slot, wire
+up SSH/profile, and apply chezmoi. Idempotent; run from a trusted operator
+host, or use --local to self-onboard this machine.
+
 Usage:
   system-onboard --alias <ssh-alias> --hostname <ssh-host> \\
                  --profile <personal|work|dev-shell> [--kind human|headless]

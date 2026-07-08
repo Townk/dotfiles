@@ -48,6 +48,9 @@ is_harness() {
 
 usage() {
   cat <<EOF
+Group the working tree's changes into logical Conventional Commits using an
+AI harness (Claude Code or pi-coding-agent).
+
 Usage:
   ai-commit <harness> [options...]    run a specific harness
   ai-commit [options...]              auto-pick (sole harness) or fzf-pick

@@ -84,5 +84,19 @@ case "${1:-}" in
     shift
     do_names
     ;; # internal: used by the dispatcher
+  -h | --help | help)
+    cat <<'EOF'
+Thin wrapper around `brew services` so the unified `system-service` CLI can
+address brew-provisioned services (atuin, unbound, …) the same way it addresses
+launchd ones. Normalises `brew services` output into the dispatcher's table
+shape and passes lifecycle verbs through. Usually driven by `system-service`,
+not called directly.
+
+Usage:
+  system-service-brew list                          brew services, table shape
+  system-service-brew start|stop|restart|info <name>
+EOF
+    exit 0
+    ;;
   *) die "usage: system-service-brew {list|start|stop|restart|info|names} [name]" ;;
 esac

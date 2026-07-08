@@ -34,6 +34,9 @@ IMG_DIR="${IMG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/images}"
 
 usage() {
   cat <<EOF
+Manage the local sparse disk images declared in images.toml — create, mount,
+sync, and remove them.
+
 Usage:
   system-images                       alias for \`list\`
   system-images list                  show declared + on-disk images

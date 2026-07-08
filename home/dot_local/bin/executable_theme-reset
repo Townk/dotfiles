@@ -14,6 +14,24 @@
 emulate -L zsh
 set -uo pipefail
 
+case "${1:-}" in
+  -h | --help | help)
+    cat <<'EOF'
+Drop this machine's loose per-session tint override and revert to the canonical
+theme, reloading any running Zellij session live.
+
+A remote client can push a tint override (~/.config/theme/override.toml) on
+connect so this box matches that client's window color. The override is
+machine-wide, so a later session from a different client inherits the previous
+one's tint — run theme-reset from such a session to clear it and return to the
+canonical palette.
+
+Usage: theme-reset            (takes no arguments)
+EOF
+    exit 0
+    ;;
+esac
+
 theme_dir="${XDG_CONFIG_HOME:-$HOME/.config}/theme"
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/theme"
 

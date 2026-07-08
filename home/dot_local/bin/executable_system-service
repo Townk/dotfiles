@@ -32,6 +32,9 @@ SUBCOMMANDS=(list start stop restart info sync)
 
 usage() {
   cat <<EOF
+Unified service dispatcher: manage launchd user agents and brew services
+through one interface (list/start/stop/restart/info/sync).
+
 Usage:
   system-service                       alias for \`list\`
   system-service list                  show all services (launchd + brew)
