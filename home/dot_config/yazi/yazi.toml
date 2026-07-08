@@ -1,3 +1,8 @@
+[mgr]
+# The status bar shows the resolved (readlink -f style) symlink target, so the
+# inline " -> target" in the file list columns is redundant.
+show_symlink = false
+
 [plugin]
 prepend_fetchers = [
   { url = "*", run = "git", group = "git" },
