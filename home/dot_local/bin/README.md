@@ -130,11 +130,12 @@ sitting at the Mac or SSH'd into a remote host, and they shadow the real
 - **Over SSH**: `pbcopy` base64-encodes stdin and writes an OSC 52 sequence
   straight to `/dev/tty` (write-only, rides up through Zellij/WezTerm to the
   Mac's clipboard — see terminal-mux's OSC 52 notes in
-  `docs/chezmoi-silo-map.md`). `pbpaste` reads the Mac's clipboard back
-  through the reverse-SSH-tunnelled unix socket set up by
-  `home/private_dot_ssh/config.d/private_clipboard.config`
-  (`~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`), the same
-  bridge nvim's clipboard provider (`lua/config/options.lua`) uses.
+  `docs/chezmoi-silo-map.md`). `pbpaste` reads the Mac's clipboard back over
+  the clipboard-bridge reverse tunnel — a framed `G` (get) request to loopback
+  TCP `:2490`, the `RemoteForward` `system-onboard` writes into the loose
+  `~/.ssh/config.d/<alias>.conf` (default on; `--no-clipboard` /
+  `system-onboard update <alias> --clipboard|--no-clipboard` to toggle) — the
+  same bridge nvim's clipboard provider (`lua/clipboard/universal.lua`) uses.
 
 Standalone POSIX `sh`, no library sourcing — same "dependency-free
 primitive" rationale as `wait-until`, since these need to work from any
