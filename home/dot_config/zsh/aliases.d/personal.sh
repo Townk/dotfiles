@@ -38,6 +38,7 @@ alias gl="git log --graph --pretty='format:%C(auto)%h %<(50,trunc)%s %C(magenta)
 
 # Other helpers
 alias isotime="date -u +'%Y-%m-%dT%H:%M:%S+0000'"
+alias gpg-check="echo test | gpg --clearsign >/dev/null 2>&1 && echo SIGNING_OK || echo SIGNING_FAILED"
 
 # Global aliases
 alias -g -- /h='-h 2>&1 | bat --language=help --style=plain'
