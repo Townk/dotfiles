@@ -136,6 +136,33 @@ local function now_ts()
   return hs.timer.secondsSinceEpoch()
 end
 
+-- Path/format shared with the dispatcher's O op: <host>\n<sha256hex>\n<epoch>.
+local function origin_file()
+  local state = os.getenv("XDG_STATE_HOME") or ((os.getenv("HOME") or "") .. "/.local/state")
+  return state .. "/pick-clipboard/current-origin"
+end
+
+local ORIGIN_TTL = 5 -- seconds; a declaration older than this is stale
+
+-- If a fresh declare-origin (O op, §23) matches this clip's plain text, the clip
+-- was copied on that host (pbcopy / nvim y from a machine SSH'd into here) and
+-- its bytes were pushed onto our pasteboard — return that host so the row is
+-- stamped remote(host) instead of local. Mirrors captured_regtype; hash-keyed +
+-- TTL'd so a later identical LOCAL copy isn't retroactively mis-tagged.
+local function captured_origin(plain)
+  if not plain or plain == "" then return nil end
+  local f = io.open(origin_file(), "r")
+  if not f then return nil end
+  local host = f:read("*l")
+  local h = f:read("*l")
+  local ts = tonumber(f:read("*l"))
+  f:close()
+  if not host or host == "" then return nil end
+  if not h or h ~= hash.SHA256(plain) then return nil end
+  if not ts or (now_ts() - ts) > ORIGIN_TTL then return nil end
+  return host
+end
+
 -- Classify the type_kind badge (spec §5: text|rtf|html|image|files|mixed)
 -- from the UTI set. Rich kinds are counted; 0 -> text, 1 -> that kind,
 -- >1 -> mixed.
@@ -436,7 +463,7 @@ function M.capture_now()
   -- (its text hash matches the current-regtype file) — so a visual-block yank
   -- keeps its "b" in history and can be block-pasted later. nil otherwise.
   local cap_rt = captured_regtype(plain)
-  local host = my_host()
+  local host = captured_origin(plain) or my_host()
 
   -- Dedup on type_hash: bump last_ts + refresh source_app/preview if present.
   local dup = assert(db:prepare(
