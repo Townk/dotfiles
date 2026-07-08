@@ -39,4 +39,29 @@ EOF
     When run command sh "$SCRIPT"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:P"
   End
+
+  # Best-effort/no-hang invariant: if the O/P temp files can't be created, the
+  # copy must still deliver OSC 52 and exit success (a local FS failure must not
+  # be worse than a down bridge). Stub mktemp to fail ONLY the secondary O/P
+  # templates while delegating the primary stdin buffer, so we isolate the guard
+  # (pointing TMPDIR at a read-only dir instead would also break the primary
+  # buffer, which legitimately must abort since stdin can't be buffered at all).
+  It 'still delivers OSC 52 when the O/P temp files cannot be created'
+    BINDIR="$SHELLSPEC_TMPBASE/bin"
+    cat > "$BINDIR/mktemp" <<'MKEOF'
+#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    *pbcopy-o.*|*pbcopy-p.*) exit 1 ;;
+  esac
+done
+exec /usr/bin/mktemp "$@"
+MKEOF
+    chmod +x "$BINDIR/mktemp"
+    Data 'hello'
+    When run command sh "$SCRIPT"
+    The status should be success
+    The contents of file "$PBCOPY_OSC52_SINK" should include "]52;c;"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should equal ""
+  End
 End

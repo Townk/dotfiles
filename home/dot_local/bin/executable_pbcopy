@@ -85,10 +85,12 @@ send_frame() {
 # 1. Declare origin to the sit-Mac FIRST (before the bytes land, so its watcher
 #    tags the row remote(host)). Payload: <host> US <text>.
 if [ -n "$host" ]; then
-  odecl=$(mktemp "${TMPDIR:-/tmp}/pbcopy-o.XXXXXX")
-  { printf '%s\037' "$host"; cat "$tmp"; } > "$odecl"
-  send_frame O 2490 "$odecl"
-  rm -f "$odecl"
+  odecl=$(mktemp "${TMPDIR:-/tmp}/pbcopy-o.XXXXXX" 2>/dev/null) || odecl=""
+  if [ -n "$odecl" ]; then
+    { printf '%s\037' "$host"; cat "$tmp"; } > "$odecl"
+    send_frame O 2490 "$odecl"
+    rm -f "$odecl"
+  fi
 fi
 
 # 2. Deliver the bytes (unchanged OSC 52 semantics).
@@ -99,8 +101,10 @@ printf '\033]52;c;%s\033\\' "$data" > "$sink"
 #    text ends in a newline, else charwise. Payload: host US "text" US "" US rt RS text.
 if [ -n "$host" ]; then
   if [ -n "$(tail -c1 "$tmp")" ]; then rt=v; else rt=l; fi   # non-empty last byte => no trailing \n => charwise
-  ppersist=$(mktemp "${TMPDIR:-/tmp}/pbcopy-p.XXXXXX")
-  { printf '%s\037text\037\037%s\036' "$host" "$rt"; cat "$tmp"; } > "$ppersist"
-  send_frame P 2489 "$ppersist"
-  rm -f "$ppersist"
+  ppersist=$(mktemp "${TMPDIR:-/tmp}/pbcopy-p.XXXXXX" 2>/dev/null) || ppersist=""
+  if [ -n "$ppersist" ]; then
+    { printf '%s\037text\037\037%s\036' "$host" "$rt"; cat "$tmp"; } > "$ppersist"
+    send_frame P 2489 "$ppersist"
+    rm -f "$ppersist"
+  fi
 fi
