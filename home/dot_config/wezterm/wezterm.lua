@@ -224,34 +224,6 @@ local function set_background_override(overrides, bg)
 	overrides.colors.background = bg
 end
 
--- Dim the whole window's text when it loses focus — the window-wide analog of
--- config.inactive_pane_hsb (which only dims inactive panes *within* the focused
--- window). foreground_text_hsb.brightness scales all glyph brightness; we set it
--- to DIM_BRIGHTNESS on blur and clear it on focus. It's a separate override key
--- from the SSH colors.background tint, and both paths read-merge-write the same
--- overrides table (see apply_terminal_location_tint), so they compose without
--- clobbering each other. Idempotent: only calls set_config_overrides on an
--- actual state change, which also avoids the window-config-reloaded feedback
--- loop that set_config_overrides can trigger.
-local DIM_BRIGHTNESS = 0.5
-
-local function apply_focus_dim(window)
-	local overrides = window:get_config_overrides() or {}
-	local current = overrides.foreground_text_hsb
-	if window:is_focused() then
-		if current == nil then
-			return
-		end
-		overrides.foreground_text_hsb = nil
-	else
-		if current and current.brightness == DIM_BRIGHTNESS then
-			return
-		end
-		overrides.foreground_text_hsb = { hue = 1.0, saturation = 1.0, brightness = DIM_BRIGHTNESS }
-	end
-	window:set_config_overrides(overrides)
-end
-
 local function detect_terminal_location(pane)
 	local info = pane:get_foreground_process_info()
 	if not info then
@@ -533,14 +505,7 @@ wezterm.on("window-resized", function(window, _pane)
 	write_fullscreen_state(window)
 end)
 
--- The focus dim is driven ONLY from here, never from update-status. set_config_overrides
--- re-evaluates and re-applies the whole config; doing that from update-status ties the
--- repaint to the status_update_interval cadence and stacks a redundant second apply per
--- switch, which is the ~1s focus-change lag documented in wezterm discussion #2537. The
--- window-focus-changed event fires immediately on the transition, so a single apply here
--- updates the dim with no perceptible delay.
 wezterm.on("window-focus-changed", function(window, _pane)
-	apply_focus_dim(window)
 	write_fullscreen_state(window)
 end)
 
