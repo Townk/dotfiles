@@ -15,9 +15,36 @@
 # Idempotent: --create-socketdir is a no-op once the dir exists. A dead/stale
 # socket (orphaned by an unclean disconnect) is removed so the next forward can
 # bind; a LIVE forwarded socket from a concurrent session is left untouched.
+#
+# Modes:
+#   (no args)  prepare — the pre-connect setup described above.
+#   --check    verify (read-only) — used by the interactive-login drift warning
+#              (see ~/.config/zsh/.zshrc). Exit 0 when the forwarded agent socket
+#              is live at the path gpg will use, OR when nothing gpg-related was
+#              forwarded (not a gpg host → stay silent). Exit 1 ONLY when a
+#              forward was attempted but isn't working here — the socket is dead,
+#              or it bound at a stale hashed path because the box was
+#              re-provisioned (new uid/homedir → new gpgconf hash). That is the
+#              "reconnect to refresh the forward" signal. Touches nothing.
 set -eu
 
 export GNUPGHOME="${GNUPGHOME:-$HOME/.config/gnupg}"
+
+if [ "${1:-}" = "--check" ]; then
+  sock="$(gpgconf --list-dirs agent-socket 2>/dev/null || true)"
+  if [ -n "$sock" ] && [ -S "$sock" ]; then
+    # Socket present at the canonical path — live (forwarded) or dead? --no-autostart
+    # means success requires a reachable agent, i.e. the forward is up.
+    gpg-connect-agent --no-autostart 'getinfo version' /bye >/dev/null 2>&1 || exit 1
+    exit 0
+  fi
+  # Nothing at the canonical path. If a socket is nonetheless bound under a stale
+  # hashed dir, the forward landed at an old path (box re-provisioned) → drift.
+  for sock in /run/user/"$(id -u)"/gnupg/d.*/S.gpg-agent; do
+    [ -S "$sock" ] && exit 1
+  done
+  exit 0
+fi
 
 gpgconf --create-socketdir >/dev/null 2>&1 || true
 

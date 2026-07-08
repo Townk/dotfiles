@@ -21,9 +21,11 @@ absolute path from its caller, so it never needs to be on `PATH`:
 - `ics-view`, `sqlite-view`, `disk-image-view` — rich file preview renderers
   driven by `preview` and Yazi; they are implementation details, not general
   shell commands.
-- `sync-remote-assets` — the single entry point for pre-connect host→remote
-  syncs (glyph-picker DB, WezTerm tint override), driven by an ssh
-  `Match host ... exec` hook (see `~/.ssh/config.example`).
+- `ssh-prepare-connection` — the single entry point for pre-connect remote prep
+  (gpg-agent socketdir, glyph-picker DB, WezTerm tint override) plus self-healing
+  of token-less endpoints (e.g. the gpg agent-socket path). Takes the loose
+  `~/.ssh/config.d/<alias>.conf` and reads its header block for what to do;
+  driven by an ssh `Match originalhost ... exec` hook (see `~/.ssh/config.example`).
 - `theme-apply` — resolves the EFFECTIVE theme (canonical ⊕ the loose per-machine
   `~/.config/theme/override.toml`) into the runtime files the shell, dialogs, and
   Zellij read; run from shell init (`dot_zshrc`) before the Zellij attach, and by

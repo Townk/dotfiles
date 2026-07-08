@@ -468,8 +468,8 @@ base = "#1c232f"   # this session's tint; any token may be overridden
 
 **Host-owned, target-keyed, pushed on connect.** The file is authored on the
 **host**, not the remote, and `rsync`'d to the remote on connection via
-`sync-remote-assets` (`private_dot_ssh/config.example`: a single `Match host …
-exec` pre-connect hook with a `_SYNCREMOTE` sentinel + `; false`) — the same
+`ssh-prepare-connection` (`private_dot_ssh/config.example`: a single `Match
+originalhost … exec` pre-connect hook with a `_SYNCREMOTE` sentinel + `; false`) — the same
 entry point that mirrors the glyph DB. Its `theme` step looks up the target's
 tint in the host's color map (the same `lib/terminal-location.zsh` /
 `tint-palette.toml` source WezTerm uses) and rsyncs a generated `override.toml`
@@ -504,7 +504,7 @@ Zellij theme reload so the plugin re-reads `Style`.
 
 This reuses three existing pieces — the `tint-palette.toml` color source, the
 `Match exec` + `rsync` + sentinel transport, and the per-machine color map — so
-it adds a `theme-apply` resolver and a `sync-remote-assets` theme step, not a
+it adds a `theme-apply` resolver and a `ssh-prepare-connection` theme step, not a
 new paradigm.
 
 ## 5. Sharp edges / risks
@@ -560,7 +560,7 @@ new paradigm.
 > and feeds them our palette (~937 groups, catppuccin plugin disabled,
 > theme-agnostic); the non-Mocha
 > prompt/statusline migration; the runtime override layer (`theme-apply` +
-> `sync-remote-assets`'s theme step); a second (`catppuccin-latte`) palette;
+> `ssh-prepare-connection`'s theme step); a second (`catppuccin-latte`) palette;
 > and the lint.
 
 1. **Prerequisite — close custom-binary color gaps (§4.7).** zj-hud config keys
@@ -591,7 +591,7 @@ new paradigm.
 7. **Runtime override layer (§4.8) — done.** `theme-apply` resolver (effective
    palette + effective `system.kdl`: block renamed to `system`, each overridden
    token's RGB substituted, stamped staleness check) running before the Zellij
-   attach; loose `override.toml`; `sync-remote-assets`'s theme step (host-side,
+   attach; loose `override.toml`; `ssh-prepare-connection`'s theme step (host-side,
    reusing `terminal-location.zsh` + `tint-palette.toml`) + the ssh
    `Match host … exec` hook documented in `config.example`; zj-hud
    bg-from-`Style` (from step 1).

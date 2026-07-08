@@ -48,6 +48,11 @@
 /.local/libexec/local-llm-gateway
 /.config/llama-swap
 
+# ── ~/.local/libexec: sync-remote-assets renamed to ssh-prepare-connection ──
+# The pre-connect helper gained a gpg-socketdir-prep step (beyond the glyph DB +
+# theme rsyncs), so it was renamed to reflect the wider scope. Drop the old name.
+/.local/libexec/sync-remote-assets
+
 # ── ~/.local/lib: helpers renamed (.sh → .zsh) / removed ────────────────────
 /.local/lib/image-protocol-support
 /.local/lib/system-package-common.sh

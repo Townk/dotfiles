@@ -21,10 +21,14 @@ set -eu -o pipefail
 source "$HOME/.local/lib/system-secrets-common.zsh"
 
 # --- arguments ---------------------------------------------------------------
-ALIAS="" HOSTNAME="" PROFILE="" KIND="" COLOR=""
+ALIAS="" HOSTNAME="" PROFILE="" KIND="" COLOR="" PREPARE=""
 DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0 LOCAL=0 NO_APPLY=0 SECRETS_REBUILT=0
 NO_CLIPBOARD=0
 VALID_PROFILES=(personal work dev-shell)
+# ssh-prepare-connection steps a host's front matter may request (see
+# ~/.local/libexec/ssh-prepare-connection). `--prepare` also accepts the meta
+# values `none` (no pre-connect hook at all) and `all` (every step).
+readonly PREPARE_STEPS=(gpg symbols-db theme)
 
 usage() {
   cat <<EOF
@@ -40,6 +44,7 @@ Usage:
   system-onboard update <alias> --clear          clear it (revert to default)
   system-onboard update <alias> --clipboard      (re)enable its clipboard forward
   system-onboard update <alias> --no-clipboard   remove its clipboard forward
+  system-onboard update <alias> --prepare <spec> set its pre-connect prep steps
   system-onboard colors                          list machines' tints + palette
 
 Flags:
@@ -59,6 +64,11 @@ Flags:
                        (default: set one up so the target's nvim/pickers can read
                        this machine's clipboard). Toggle later with
                        \`system-onboard update <alias> --clipboard|--no-clipboard\`.
+  --prepare <spec>     pre-connect prep steps for this host, written to the ssh
+                       fragment's front matter: none | all | a comma/space list of
+                       $(IFS=,; echo "${PREPARE_STEPS[*]}") (default: theme).
+                       \`none\` writes no Match hook (clipboard-only). Change later
+                       with \`system-onboard update <alias> --prepare <spec>\`.
   --rotate-secrets     re-collect this slot's secrets even if its fragment exists
   --no-apply           (with --local) provision + set secretsSlot but skip the final
                        chezmoi apply (the bootstrap runs the heavy apply itself)
@@ -106,6 +116,10 @@ parse_args() {
         ;;
       --color)
         COLOR="${2:-}"
+        shift 2
+        ;;
+      --prepare)
+        PREPARE="${2:-}"
         shift 2
         ;;
       --rotate-secrets)
@@ -193,6 +207,7 @@ validate_local_inputs() {
 }
 
 validate_inputs() {
+  [[ -z "$PREPARE" ]] || validate_prepare "$PREPARE"
   if ((LOCAL)); then
     validate_local_inputs
     return 0
@@ -236,19 +251,104 @@ check_working_tree() {
 readonly CLIPBOARD_REMOTE_PORT=2490
 readonly CLIPBOARD_LOCAL_PORT=2489
 
+# gpg-agent forward — rendered when `prepare` implies gpg (contains `gpg`, or is
+# `all`). The remote bind path carries the remote uid + gpgconf's homedir hash,
+# neither expressible as an ssh token, so it is self-healed per-connect by
+# ssh-prepare-connection from the trailing `# @@resolve@@:` template. A fresh
+# render seeds the LEFT side with a pending absolute path (ssh rejects a bare
+# @@placeholder@@ as a forwarding spec), which heals on the first connect.
+readonly GPG_FWD_LOCAL='%d/.config/gnupg/S.gpg-agent.extra'
+readonly GPG_FWD_TEMPLATE="RemoteForward @@gpg-agent-socket@@ ${GPG_FWD_LOCAL}"
+readonly GPG_FWD_PENDING='/nonexistent/S.gpg-agent.pending-first-connect'
+
+# validate_prepare <spec> — accept `none`, `all`, or a comma/space list of known
+# steps; die on anything else so we never write a hook that can't run.
+validate_prepare() {
+  local spec="$1" tok
+  [[ "$spec" == none || "$spec" == all ]] && return 0
+  for tok in ${=${spec//,/ }}; do
+    (( ${PREPARE_STEPS[(Ie)$tok]} )) \
+      || die "invalid --prepare step '$tok' (valid: none, all, ${(j:, :)PREPARE_STEPS})"
+  done
+}
+
+# default_frontmatter <alias> <prepare> — the front matter written for a brand-new
+# (or front-matter-less) fragment. Hand-editable afterwards; system-onboard only
+# ever PRESERVES an existing front matter, never rewrites it, so this seeds it once.
+default_frontmatter() {
+  local alias="$1" prepare="$2"
+  # Fenced front matter FIRST (top of the file), like YAML front matter — the
+  # parser and the preservation logic both key off it, so it stays at line 1.
+  print -r -- "# ---"
+  print -r -- "# alias: $alias"
+  print -r -- "# prepare: $prepare"
+  print -r -- "# ---"
+  print -r -- "# Loose per-host ssh fragment written by system-onboard — NOT chezmoi-managed,"
+  print -r -- "# never committed (holds the real endpoint). The fenced block above is the"
+  print -r -- "# ssh-prepare-connection front matter (kept at the very top): hand-edit 'prepare'"
+  print -r -- "# and system-onboard re-renders everything from 'Host' down (see"
+  print -r -- "# ~/.ssh/config.example); everything above 'Host' is preserved verbatim."
+}
+
 # write_ssh_conf <conf> <alias> <hostname> <want_clipboard 0|1>
-# Single writer for the loose per-alias fragment — used by both reconcile_ssh and
-# the `update` clipboard toggle so the shape lives in exactly one place.
+# Single writer for the loose per-alias fragment (used by reconcile_ssh and the
+# `update` clipboard toggle). The file has two zones: the hand-authored FRONT
+# MATTER (every line above `Host`) and the MECHANICAL block (`Host` and below).
+# The front matter is preserved verbatim; the mechanical block is re-rendered
+# from the front matter's `prepare`, so an update/regeneration never clobbers
+# hand-authored intent. `prepare` implying gpg renders the gpg-agent forward +
+# the pre-connect hook; an already-healed gpg line is preserved as-is.
 write_ssh_conf() {
   local conf="$1" alias="$2" hostname="$3" want_clip="$4"
+  setopt local_options extended_glob
+
+  # Preserve the leading front matter + any already-healed gpg line; synthesize a
+  # default front matter for a brand-new / front-matter-less fragment.
+  local frontmatter="" gpg_line=""
+  if [[ -f "$conf" ]] && grep -qiE '^[[:space:]]*Host[[:space:]]' "$conf"; then
+    frontmatter="$(awk 'tolower($1)=="host"{exit} {print}' "$conf")"
+    gpg_line="$(grep -iE '^[[:space:]]*RemoteForward .*@@resolve@@:' "$conf" 2>/dev/null | head -1 || true)"
+  fi
+  [[ "$frontmatter" == *alias:* ]] || frontmatter="$(default_frontmatter "$alias" "${PREPARE:-theme}")"
+
+  # `prepare` from the (preserved or default) front matter drives the render.
+  local prepare
+  prepare="$(print -r -- "$frontmatter" | awk '/^#[[:space:]]*prepare:/{sub(/^#[[:space:]]*prepare:[[:space:]]*/,"");print;exit}')"
+  [[ -n "$prepare" ]] || prepare="theme"
+  # `none` (or empty) ⇒ clipboard-only, no pre-connect hook. Otherwise the hook
+  # renders, and gpg additionally gates the gpg-agent forward.
+  local want_hook=1 want_gpg=0
+  [[ "$prepare" == none ]] && want_hook=0
+  [[ "$prepare" == all || "$prepare" == *gpg* ]] && want_gpg=1
+
   {
-    print -r -- "# Written by system-onboard. LOOSE — never committed (holds the real endpoint)."
+    print -r -- "$frontmatter"
     print -r -- "Host $alias"
     print -r -- "    HostName $hostname"
     if ((want_clip)); then
       print -r -- "    # Clipboard bridge — exposes this machine's clipboard to $alias so its nvim /"
       print -r -- "    # pickers can read it. Toggle: system-onboard update $alias --no-clipboard"
       print -r -- "    RemoteForward 127.0.0.1:$CLIPBOARD_REMOTE_PORT 127.0.0.1:$CLIPBOARD_LOCAL_PORT"
+    fi
+    if ((want_gpg)); then
+      print -r -- "    # gpg agent-socket forward — the remote bind path (remote uid + gpgconf"
+      print -r -- "    # homedir hash) can't be an ssh token, so ssh-prepare-connection re-renders"
+      print -r -- "    # the '# @@resolve@@:' template into this line's left side each connect"
+      print -r -- "    # (self-heals on the NEXT connection)."
+      if [[ -n "$gpg_line" ]]; then
+        print -r -- "    ${gpg_line##[[:space:]]#}"          # preserve the already-healed value
+      else
+        print -r -- "    RemoteForward $GPG_FWD_PENDING $GPG_FWD_LOCAL  # @@resolve@@: $GPG_FWD_TEMPLATE"
+      fi
+      print -r -- "    StreamLocalBindUnlink yes"
+    fi
+    if ((want_hook)); then
+      print -r -- ""
+      print -r -- "# Pre-connect prep — ssh-prepare-connection reads this file's front matter"
+      print -r -- "# (prepare: $prepare) and runs the steps (and heals any '# @@resolve@@:' line"
+      print -r -- "# above). The _SYNCREMOTE sentinel stops the nested ssh/rsync from re-triggering"
+      print -r -- "# this hook. Rendered by system-onboard from 'prepare'."
+      print -r -- 'Match originalhost '"$alias"' exec "[ -n \"$_SYNCREMOTE\" ] || _SYNCREMOTE=1 ~/.local/libexec/ssh-prepare-connection ~/.ssh/config.d/'"$alias"'.conf </dev/null >/dev/null 2>&1; false"'
     fi
   } >"$conf"
   chmod 0600 "$conf"
@@ -636,13 +736,14 @@ tint_palette_has() {
 # Set or clear a machine's window-tint color in the loose operator map. No SSH,
 # no commit (the map is loose, never committed). Honors --dry-run.
 cmd_update() {
-  local target="" color="" clear=0 clip=-1
+  local target="" color="" clear=0 clip=-1 prepare_spec="" have_prepare=0
   while (($#)); do
     case "$1" in
       --color) color="${2:-}"; shift 2 ;;
       --clear) clear=1; shift ;;
       --clipboard) clip=1; shift ;;
       --no-clipboard) clip=0; shift ;;
+      --prepare) prepare_spec="${2:-}"; have_prepare=1; shift 2 ;;
       --dry-run) DRY_RUN=1; shift ;;
       -h | --help | help) usage; exit 0 ;;
       -*) usage >&2; die "update: unknown flag: $1" ;;
@@ -659,7 +760,8 @@ cmd_update() {
   ((clear)) && n=$((n + 1))
   [[ -n "$color" ]] && n=$((n + 1))
   ((clip >= 0)) && n=$((n + 1))
-  ((n == 1)) || die "update: pass exactly one of --color <name> | --clear | --clipboard | --no-clipboard"
+  ((have_prepare)) && n=$((n + 1))
+  ((n == 1)) || die "update: pass exactly one of --color <name> | --clear | --clipboard | --no-clipboard | --prepare <spec>"
 
   # Clipboard toggle: rewrites only the loose ssh fragment. No SSH, no operator map.
   if ((clip >= 0)); then
@@ -675,6 +777,37 @@ cmd_update() {
     fi
     write_ssh_conf "$conf" "$target" "$hostname" "$clip"
     log_ok "clipboard forward $state for '$target'"
+    return 0
+  fi
+
+  # Prepare change: rewrite the front matter's `prepare:` line, then re-render the
+  # mechanical block from it (adds/removes the hook + gpg forward). Loose ssh
+  # fragment only; no SSH, no operator map. The current clipboard state is kept.
+  if ((have_prepare)); then
+    local conf="$HOME/.ssh/config.d/$target.conf"
+    [[ -f "$conf" ]] || die "no ssh config.d entry for '$target' at $conf — onboard it first"
+    validate_prepare "$prepare_spec"
+    local hostname
+    hostname="$(awk 'tolower($1)=="hostname"{print $2; exit}' "$conf")"
+    [[ -n "$hostname" ]] || die "$conf has no HostName line — refusing to rewrite; edit it by hand"
+    local want_clip=0
+    if grep -qE "^[[:space:]]*RemoteForward 127\.0\.0\.1:$CLIPBOARD_REMOTE_PORT " "$conf"; then want_clip=1; fi
+    if ((DRY_RUN)); then
+      log_info "[dry-run] would set prepare '$prepare_spec' for '$target' and re-render $conf"
+      return 0
+    fi
+    # Replace the first `# prepare:` line in the front matter (above Host).
+    local tmp rc; tmp="$(mktemp)"
+    awk -v val="$prepare_spec" '
+      tolower($1)=="host" { host=1 }
+      !host && !done && /^#[[:space:]]*prepare:/ { print "# prepare: " val; done=1; next }
+      { print }
+      END { exit(done ? 0 : 3) }
+    ' "$conf" > "$tmp" && rc=0 || rc=$?
+    ((rc == 0)) || { rm -f "$tmp"; die "$conf front matter has no '# prepare:' line — edit it by hand"; }
+    mv "$tmp" "$conf"
+    write_ssh_conf "$conf" "$target" "$hostname" "$want_clip"
+    log_ok "prepare set to '$prepare_spec' for '$target'"
     return 0
   fi
 

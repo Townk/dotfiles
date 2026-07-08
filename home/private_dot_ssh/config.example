@@ -32,12 +32,37 @@ Match all
 Include ~/.ssh/config.d/*
 
 # ---------------------------------------------------------------------------
-# OPTIONAL — pre-connect remote-asset sync.
+# OPTIONAL — pre-connect remote prep + self-healing.
 #
-# sync-remote-assets is the single entry point for every host->remote sync
-# this config needs before a session starts. Today it runs two steps, both
-# host-specific artifacts computed from THIS machine's state, so they're
-# pushed on connect rather than baked in:
+# ssh-prepare-connection is the single entry point for every pre-connect prep
+# this config needs before a session starts. It is driven ENTIRELY by a header
+# block in the loose ~/.ssh/config.d/<devbox>.conf it is handed, so the hook
+# line at the bottom of every host's config is identical — all per-host variance
+# lives in that host's own header. Header block (a `# ---` fenced comment) — it
+# must be the FIRST thing in the file (top-of-file front matter; any descriptive
+# comments go below the closing fence, still above `Host`):
+#
+#   # ---
+#   # alias: <devbox>             the ssh target: used to connect AND as the
+#   #                             theme color-map key (single source of truth,
+#   #                             so the hook line needs no %n)
+#   # prepare: all | <step …>     which prep steps to run (default: all);
+#   #                             including `gpg` (or `all`) also declares that
+#   #                             this host wants the gpg-agent forward
+#   # ---
+#
+# The header is the "front matter": system-onboard preserves everything ABOVE the
+# `Host` line and re-renders the block below it from `prepare` (Host/HostName,
+# clipboard forward, and — when `prepare` implies gpg — the gpg forward + the
+# hook line). So on a system-onboard'd host you edit `prepare` here and let
+# `system-onboard update <devbox>` regenerate the mechanical parts; the example
+# below is what that render produces (and what to write by hand elsewhere).
+#
+# Steps (prepare) — some push host-specific artifacts computed from THIS
+# machine's state (rather than baking them in), one preps remote state:
+#   * gpg — pre-creates the remote gpg-agent socketdir so the FIRST post-reboot
+#     connection can forward gpg-agent. Always runs before the rsync steps,
+#     since they open the forward-bearing ssh master.
 #   * symbols-db — mirrors the glyph/gitmoji picker DB
 #     (~/.local/share/fonts/nerd-font/symbols.db), built on THIS desktop/
 #     laptop and baking in the renderability of this machine's terminal +
@@ -51,11 +76,27 @@ Include ~/.ssh/config.d/*
 #     folds it into the effective palette and the Zellij `system` theme at
 #     shell startup, so the zj-hud bar, fzf, dialogs, and file viewers there
 #     match the window tint (see docs/theme-unification.md §4.8).
-# Both rsync deltas only — a near-instant no-op when nothing changed.
+# The rsync steps send deltas only — a near-instant no-op when nothing changed.
 #
-# This is host-specific, so it stays in this LOCAL file only and never goes
-# back to the repo. To enable: copy the line below, uncomment it, and replace
-# BOTH <devbox> tokens with your dev-shell's Host alias.
+# Resolve (self-healing) — for an endpoint whose value is remote-derived and
+# cannot be written with an ssh token (e.g. the gpg agent-socket path, which
+# carries the remote uid + gpgconf's homedir hash). Any line carrying a trailing
+# `# @@resolve@@: <template>` marker is self-healing: the template (text after
+# the marker) is canonical and its @@<key>@@ placeholders are looked up live and
+# rendered into the line's left side on each connect. The line self-declares, so
+# there's no separate `resolve:` header list. It is eventually-consistent — a
+# rewrite lands for the NEXT connection — and best-effort: a line whose keys
+# can't all be resolved is left untouched. Example inside the Host block:
+#
+#   RemoteForward /run/user/<uid>/gnupg/d.<hash>/S.gpg-agent %d/.config/gnupg/S.gpg-agent.extra  # @@resolve@@: RemoteForward @@gpg-agent-socket@@ %d/.config/gnupg/S.gpg-agent.extra
+#
+# (The left side must stay a valid RemoteForward spec — ssh rejects a bare
+# @@placeholder@@ — so a fresh render uses a pending absolute path that heals on
+# first connect.)
+#
+# This is host-specific, so it stays in this LOCAL file only and never goes back
+# to the repo. On a system-onboard'd host, `system-onboard` renders all of this
+# from `prepare`; elsewhere, write the front matter + the block below by hand.
 #
 # Why each piece:
 #   * `originalhost` (NOT `host`) — `Match host` matches the target hostname
@@ -68,18 +109,22 @@ Include ~/.ssh/config.d/*
 #     alias equals its resolved HostName. (Verified live: `Match host` never
 #     fired for an alias with a differing HostName; switching to
 #     `originalhost` fixed it.)
-#   * `_SYNCREMOTE` sentinel — each step's rsync opens its own ssh to
-#     <devbox>, which re-reads this config; the guard stops that second pass
-#     from re-running the hook (otherwise: infinite loop). One sentinel
-#     covers every step since they all run from this single script
-#     invocation.
+#   * the config-file PATH argument (not %n) — ssh has no token for a config
+#     file's own path (see man ssh_config TOKENS), so it's passed literally;
+#     each loose file names itself. The script reads the header's `alias:` to
+#     learn the target, so the argument is purely "which file describes this
+#     connection".
+#   * `_SYNCREMOTE` sentinel — each step opens its own ssh to <devbox>, which
+#     re-reads this config; the guard stops that second pass from re-running
+#     the hook (otherwise: infinite loop). One sentinel covers every step
+#     since they all run from this single script invocation.
 #   * `; false` — makes this a side-effect-only block that contributes no SSH
 #     config (the exec never "matches").
 #   * timeouts + </dev/null (inside the script, per rsync call) — a sleeping/
 #     unreachable dev-shell can't stall or swallow stdin from your login;
 #     worst case you connect with a stale copy.
 #
-# Run a single step by hand to test it, e.g. `sync-remote-assets <devbox> theme`.
+# Run it by hand to test: `ssh-prepare-connection ~/.ssh/config.d/<devbox>.conf`.
 #
-# Match originalhost <devbox> exec "[ -n \"$_SYNCREMOTE\" ] || _SYNCREMOTE=1 ~/.local/libexec/sync-remote-assets <devbox> </dev/null >/dev/null 2>&1; false"
+# Match originalhost <devbox> exec "[ -n \"$_SYNCREMOTE\" ] || _SYNCREMOTE=1 ~/.local/libexec/ssh-prepare-connection ~/.ssh/config.d/<devbox>.conf </dev/null >/dev/null 2>&1; false"
 # ---------------------------------------------------------------------------

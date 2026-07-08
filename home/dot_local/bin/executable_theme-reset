@@ -3,7 +3,7 @@
 # effective theme to canonical, reloading any running Zellij session live.
 #
 # Why: the tint override (~/.config/theme/override.toml) is pushed by a REMOTE
-# client on connect (sync-remote-assets' theme step) so this machine's theme
+# client on connect (ssh-prepare-connection's theme step) so this machine's theme
 # matches that client's window tint. It is machine-wide, so a later session from a
 # DIFFERENT client inherits the previous client's tint — e.g. after a work laptop
 # SSHes in and tints the box, a Blink-shell session sees that same tint. Run this

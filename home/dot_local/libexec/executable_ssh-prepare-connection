@@ -1,0 +1,211 @@
+#!/usr/bin/env zsh
+# ssh-prepare-connection <config-file> — pre-connect prep, driven entirely by a
+# header block in the loose ~/.ssh/config.d/<alias>.conf it is given. Every
+# host's hook line is therefore identical; all per-host variance lives in the
+# file's own header:
+#   Match originalhost <names> exec "… ssh-prepare-connection <this-file> …"
+# (ssh has no token for a config file's own path — see man ssh_config TOKENS —
+# so the path is passed literally; each loose file names itself.)
+#
+# Header block — a `# ---` fenced comment near the top of the file:
+#   # ---
+#   # alias: <ssh-alias>          the ssh target (used to connect AND as the
+#   #                             theme color-map key)
+#   # prepare: all | <step …>     which prep steps to run (default: all)
+#   # ---
+#
+# Steps (prepare):
+#   gpg        — pre-create the remote gpg socketdir BEFORE the forward-bearing
+#                master binds the gpg RemoteForward (always runs FIRST). See
+#                step_gpg; the careful stale-socket logic lives in the remote
+#                gpg-forward-prepare it invokes.
+#   symbols-db — mirror THIS machine's glyph/gitmoji picker DB so remote pickers
+#                render with this machine's font support.
+#   theme      — resolve THIS machine's WezTerm tint for the target and push it
+#                as a loose ~/.config/theme/override.toml.
+#
+# Resolve (self-healing): any line carrying a trailing `# @@resolve@@: <template>`
+# marker is regenerated on each connect. The template (text after the marker) is
+# canonical; the line's left side is its rendered cache. Each @@<key>@@ in the
+# template is looked up live (see resolve_value) and substituted, then the line
+# is rebuilt as  <indent><rendered>  # @@resolve@@: <template>  so it stays
+# self-healing. This lets an endpoint that is remote-derived and cannot be
+# expressed with an ssh token (e.g. a gpg socket path carrying the remote uid +
+# gpgconf's homedir hash) never go stale — the lines self-declare, so no header
+# list is needed. Eventually-consistent and best-effort: a rewrite lands for the
+# NEXT connection, and a line whose keys can't all be resolved is left untouched.
+#
+# Idempotent and safe on every connection: rsync steps send only deltas; the
+# gpg step only touches the remote's own socketdir; a resolve writes only when
+# a value changed.
+emulate -L zsh
+setopt extended_glob
+set -uo pipefail
+
+config="${1:?usage: ssh-prepare-connection <config-file>}"
+[[ -r "$config" ]] || { print -u2 -- "ssh-prepare-connection: cannot read '$config'"; exit 1; }
+
+typeset -a all_steps=(gpg symbols-db theme)
+
+trim() { local s="$1"; s="${s##[[:space:]]#}"; s="${s%%[[:space:]]#}"; print -r -- "$s"; }
+
+# --- header parse ------------------------------------------------------------
+typeset target="" prepare=""
+parse_header() {
+  local -a block
+  block=("${(@f)$(awk '
+    /^#[[:space:]]*---[[:space:]]*$/ { n++; next }
+    n == 1 { print }
+    n >= 2 { exit }
+  ' "$config")}")
+  local line
+  for line in "${block[@]}"; do
+    line="${line#\#}"; line="${line# }"           # drop the comment marker + one space
+    case "$line" in
+      alias:*)   target="$(trim "${line#alias:}")" ;;
+      prepare:*) prepare="$(trim "${line#prepare:}")" ;;
+    esac
+  done
+}
+
+# --- prepare steps -----------------------------------------------------------
+step_gpg() {
+  # Throwaway, forwarding-suppressed ssh: neither joins the shared mux nor binds
+  # forwards; the remote path is single-quoted so the REMOTE shell expands ~.
+  # The caller's _SYNCREMOTE sentinel stops this nested ssh from re-triggering
+  # the hook. Runs before the rsync steps open the forward-bearing master.
+  ssh -o ControlPath=none -o ClearAllForwardings=yes -o ConnectTimeout=5 \
+    "$target" '~/.local/libexec/gpg-forward-prepare' </dev/null >/dev/null 2>&1
+}
+
+step_symbols_db() {
+  rsync -z --timeout=8 -e 'ssh -o ConnectTimeout=5' \
+    ~/.local/share/fonts/nerd-font/symbols.db \
+    "$target:.local/share/fonts/nerd-font/" </dev/null >/dev/null 2>&1
+}
+
+step_theme() {
+  local loc_lib="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/scripts/lib/terminal-location.zsh"
+  [[ -r "$loc_lib" ]] || return 0
+  source "$loc_lib"
+
+  # Tint NAME for the target (the same resolution WezTerm uses); default grey.
+  local name hex tmp
+  name="$(tl_colorname_for_target "$target" 2>/dev/null)" || name="${TL_REMOTE_DEFAULT_COLOR:-grey}"
+  [[ -n "$name" ]] || name="${TL_REMOTE_DEFAULT_COLOR:-grey}"
+
+  # NAME -> hex via the shared lookup (lives in terminal-location.zsh).
+  hex="$(tl_hex_for_colorname "$name")" || return 0   # unknown tint -> leave the remote as-is
+
+  tmp="$(mktemp -t theme-override.XXXXXX)" || return 0
+  {
+    print -r -- "# Pushed by ssh-prepare-connection (theme step): per-session window tint ($name). Loose; not chezmoi-managed."
+    print -r -- "base = \"$hex\""
+  } >"$tmp"
+
+  rsync -z --timeout=8 -e 'ssh -o ConnectTimeout=5' \
+    "$tmp" "$target:.config/theme/override.toml" </dev/null >/dev/null 2>&1
+  rm -f "$tmp"
+}
+
+# --- resolvers (predefined registry) -----------------------------------------
+# resolve_value <key> — print the live value for a known key (non-zero when
+# unknown or unresolvable). Each resolver validates its own output so a bad read
+# can't render a broken line. Remote reads use the same throwaway, forwarding-
+# suppressed ssh as step_gpg; _SYNCREMOTE stops the nested ssh from recursing.
+resolve_value() {
+  local key="$1" val
+  case "$key" in
+    gpg-agent-socket)
+      val="$(ssh -o ControlPath=none -o ClearAllForwardings=yes -o ConnectTimeout=5 \
+              "$target" 'gpgconf --list-dirs agent-socket' </dev/null 2>/dev/null)"
+      val="${val//[[:space:]]/}"
+      [[ "$val" == /* ]] || return 1              # must be an absolute socket path
+      print -r -- "$val"
+      ;;
+    *)
+      print -u2 -- "ssh-prepare-connection: unknown resolve key '$key'"
+      return 2
+      ;;
+  esac
+}
+
+# heal_resolve_lines <config> — regenerate every line carrying a trailing
+# `# @@resolve@@: <template>` marker. The template (text after the marker) is
+# canonical; the left side is its rendered cache. Each @@<key>@@ in the template
+# is resolved via the registry and substituted; the line is rebuilt as
+#   <indent><rendered>  # @@resolve@@: <template>
+# so it stays self-healing. Atomic: a hidden temp in the same dir (leading dot
+# keeps it out of `Include config.d/*`) renamed over the file — no lock needed,
+# since rename is atomic and concurrent writers resolve to the same value.
+# Best-effort: a line whose keys can't all be resolved is left untouched.
+heal_resolve_lines() {
+  local config="$1" marker='@@resolve@@:'
+  grep -qF -- "$marker" "$config" 2>/dev/null || return 0   # nothing to heal
+
+  local -a lines
+  lines=("${(@f)$(<"$config")}")
+  local -i i changed=0
+  local line indent tmpl rendered rest key val newline
+  local -a keys
+  for (( i = 1; i <= ${#lines}; i++ )); do
+    line="${lines[i]}"
+    [[ "$line" == *"$marker"* ]] || continue
+    tmpl="${line#*$marker}"; tmpl="${tmpl##[[:space:]]#}"    # template = text after the marker
+    indent="${line%%[^[:space:]]*}"                          # preserve leading whitespace
+
+    keys=(); rest="$tmpl"                                    # collect the unique @@key@@ tokens
+    while [[ "$rest" =~ '@@([a-z0-9-]+)@@' ]]; do
+      keys+=("$match[1]"); rest="${rest/@@$match[1]@@/}"
+    done
+    keys=("${(@u)keys}")
+
+    rendered="$tmpl"; local ok=1
+    for key in "${keys[@]}"; do
+      val="$(resolve_value "$key")" || { ok=0; break; }
+      rendered="${rendered//@@$key@@/$val}"
+    done
+    (( ok )) || continue
+
+    newline="${indent}${rendered}  # @@resolve@@: ${tmpl}"
+    [[ "$newline" == "$line" ]] || { lines[i]="$newline"; changed=1; }
+  done
+  (( changed )) || return 0
+
+  local tmp
+  tmp="$(mktemp "${config:h}/.${config:t}.XXXXXX")" || return 0
+  chmod 0600 "$tmp"
+  print -rl -- "${lines[@]}" > "$tmp" && mv -f "$tmp" "$config" || rm -f "$tmp"
+}
+
+# --- run ---------------------------------------------------------------------
+parse_header
+[[ -n "$target" ]] || { print -u2 -- "ssh-prepare-connection: no 'alias:' in $config header"; exit 1; }
+
+typeset -a steps
+if [[ -z "$prepare" || "$prepare" == all ]]; then
+  steps=("${all_steps[@]}")
+else
+  steps=(${=prepare})
+fi
+
+# gpg prep MUST precede any rsync step that opens the forward-bearing master, so
+# hoist it to the front (and dedupe it) no matter where it appears.
+if (( ${steps[(I)gpg]} )); then
+  typeset -a rest=("${(@)steps:#gpg}")
+  steps=(gpg "${rest[@]}")
+fi
+
+for step in "${steps[@]}"; do
+  case "$step" in
+    gpg)        step_gpg ;;
+    symbols-db) step_symbols_db ;;
+    theme)      step_theme ;;
+    *)
+      print -u2 -- "ssh-prepare-connection: unknown step '$step' (known: ${(j:, :)all_steps})"
+      exit 1
+      ;;
+  esac
+done
+
+heal_resolve_lines "$config"
