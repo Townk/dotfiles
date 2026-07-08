@@ -63,7 +63,7 @@ function M.copyChromeCurrentTabUrl()
 
   if ok and url and url ~= "" then
     hs.pasteboard.setContents(url)
-    osd.notify("glyph:cod-link", "URL copied to clipboard", "Frog")
+    osd.notify("glyph:nf-fa-chrome", "URL copied to clipboard", "Frog")
   else
     hs.printf("Chrome active tab URL was not available")
   end
