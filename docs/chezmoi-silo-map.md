@@ -58,10 +58,10 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 | system | System management | `dot_local/bin/system-{package,service,images,update}*` | `lib/system-package-common.zsh` | `pkg::restart_services_for` → `system-service restart-for` (system internal seam), `services.toml.tmpl` |
 | system-backup | Terminal Time Machine backups | `dot_local/bin/{system-backup,system-backup-capture,system-backup-reconcile}`, `dot_config/backup/` | `lib/backup.zsh` (`bkp::*`) | `bkp::thin` pure retention planner, `bkp::restic` storage seam, manifest = roots−deny−chezmoi−gitignored, `tm` |
 | shell | Shell (zsh) bootstrap & widgets | `dot_config/zsh/`, `dot_zshrc`/`dot_zshenv`/`dot_p10k.zsh` | `lib/{common,prompt-common,platform}.zsh` | `environment.sh` (XDG source of truth), ZLE widgets, `notify` primitive |
-| preview | File preview & terminal viewers | `dot_local/bin/{preview,fzf-tab-preview-open}`, `libexec/{ics,sqlite,disk-image}-view` | (uses `image-protocol-support.zsh` from terminal-mux) | `preview` as fzf/Yazi `--preview` backend |
+| preview | File preview & terminal viewers | `dot_local/bin/preview`, `libexec/{fzf-tab-preview-open,ics-view,sqlite-view,disk-image-view}` | (uses `image-protocol-support.zsh` from terminal-mux) | `preview` as fzf/Yazi `--preview` backend |
 | yazi | Yazi | `dot_config/yazi/` | (lua plugins) | Yazi previewer contract (consumes preview), `cd` event plugins |
 | chezmoi | chezmoi orchestration & run-scripts | `.setup.sh`, `.chezmoiscripts/`, `.chezmoi*.{tmpl,yaml}` | — | `run_onchange_*` ordering + hash-baking, `zellij-plugin-path.tmpl` shared resolver |
-| utils | Cross-cutting utilities | `dot_local/bin/{notify,wait-until,chezmoi-reverse,tab-edit}` | `lib/common.zsh` (`notify`), `lib/platform.zsh` | `notify` CLI, `chezmoi-reverse --no-merge`, `tab-edit` launcher |
+| utils | Cross-cutting utilities | `dot_local/bin/{notify,wait-until,chezmoi-reverse}`, `libexec/tab-edit` | `lib/common.zsh` (`notify`), `lib/platform.zsh` | `notify` CLI, `chezmoi-reverse --no-merge`, `tab-edit` launcher |
 | pi | pi coding agent config | `dot_pi/` + `pi-settings-merge.tmpl` + pi blocks in `.chezmoi.toml.tmpl`/`.chezmoiignore.tmpl`/`.chezmoiscripts/` | (none in `lib/`) | agent-local↔agent symlink sharing (extensions/lsp/skills/themes/Librarian), `modify_settings.json.tmpl` declarative-keys merge + `pi-settings-merge.tmpl`, `.pi.devExtensions` dev-extension symlink resolution |
 | cursor | Cursor coding agent config | `dot_cursor/` | (none in `lib/`) | MDC rule format + `alwaysApply` semantics, agents/skills parallel structure (mirrors pi) |
 
@@ -277,7 +277,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 ## system-backup — Terminal Time Machine backups
 
 **Owner area (safe to edit):**
-- `home/dot_local/bin/executable_system-backup` (dispatcher), `executable_system-backup-capture` / `executable_system-backup-reconcile` (workers), `executable_system-backup-tm` (scrub session worker: timeline/lens/route/apply)
+- `home/dot_local/bin/executable_system-backup` (dispatcher), `executable_system-backup-capture` / `executable_system-backup-reconcile` (workers), `libexec/executable_system-backup-tm` (scrub session worker: timeline/lens/route/apply — libexec, invoked by absolute path from zellij/yazi)
 - `home/dot_local/lib/backup.zsh` (`bkp::*` — thinning engine, manifest resolver, capture/reconcile, restore/UX), `home/dot_local/lib/backup-tm.zsh` (`bkp::tm::*` — scrub session state machine + yazi/hunk lens plumbing)
 - `home/dot_config/backup/manifest.toml` (committed capture spec) + `config.toml.example` (the real `config.toml` is local-only, never committed)
 - `home/dot_config/zsh/functions.d/tm.sh` (the `tm` front-end function)
@@ -334,7 +334,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 ## preview — File preview & terminal viewers
 
 **Owner area:**
-- `home/dot_local/bin/executable_preview` (15K), `executable_fzf-tab-preview-open`
+- `home/dot_local/bin/executable_preview` (15K), `libexec/executable_fzf-tab-preview-open`
 - `home/dot_local/libexec/executable_ics-view`, `sqlite-view`, `disk-image-view` (Python stdlib)
 
 **Out of scope:** `image-protocol-support.zsh` (terminal-mux — preview *sources* it read-only). Yazi's previewer *wiring* (yazi — yazi calls `preview`/the libexec viewers). fzf itself (external).
@@ -398,7 +398,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 ## utils — Cross-cutting utilities
 
 **Owner area:**
-- `home/dot_local/bin/executable_notify` (front-end), `executable_wait-until` (standalone POSIX sh), `executable_chezmoi-reverse`, `executable_tab-edit`
+- `home/dot_local/bin/executable_notify` (front-end), `executable_wait-until` (standalone POSIX sh), `executable_chezmoi-reverse`, `libexec/executable_tab-edit`
 - `home/dot_local/lib/common.zsh` (`notify` primitive, stdlib) — **shared with shell**
 - `home/dot_local/lib/platform.zsh` + `platform-{macos,linux}.zsh` — **shared with shell**
 - `home/dot_local/libexec/pinentry-auto` (libexec, reached by absolute path)
@@ -414,7 +414,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 **Consumes from:** terminal-mux (`resolve_session` for `tab-edit`), hammerspoon (`hs` CLI for `notify`), custom-builds (symbols.db for `glyph:` icons), chezmoi (for `chezmoi-reverse`).
 
-**Entry points:** `bin/notify`, `bin/chezmoi-reverse`, `bin/tab-edit`, `lib/common.zsh`.
+**Entry points:** `bin/notify`, `bin/chezmoi-reverse`, `libexec/tab-edit`, `lib/common.zsh`.
 
 **Dispatch example:** *"Review `chezmoi-reverse` patch robustness. You own `bin/chezmoi-reverse`. Preserve the `--no-merge` → `needs-merge` status contract (neovim's nvim `BufReadPre` autocmd depends on it) and the skip list (`encrypted_*`/`run_*`/`symlink_*`/`modify_*`)."*
 

@@ -61,7 +61,7 @@ dotfiles repo.
 
 ## Where to start
 
-`home/dot_local/bin/notify`, `bin/chezmoi-reverse`, `bin/tab-edit`,
+`home/dot_local/bin/notify`, `bin/chezmoi-reverse`, `libexec/tab-edit`,
 `home/dot_local/lib/common.zsh`.
 
 ## Setup — branch from the freshest master tip into an isolated worktree

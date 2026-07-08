@@ -2,7 +2,7 @@
   Skip paths that are generated at runtime or are never rendered into $HOME.
     - .config/nvim/lazy-lock.json: managed by lazy.nvim, not chezmoi
   Skip macOS-only artifacts on other platforms.
-    - .local/bin/tab-edit ships on macOS AND graphical Linux (opens files in a
+    - .local/libexec/tab-edit ships on macOS AND graphical Linux (opens files in a
       new WezTerm/Zellij tab; OS-specific bits live behind the platform::
       module). Only the headless dev-shell and other non-GUI hosts skip it.
 */ -}}
@@ -49,8 +49,7 @@
      file manager to be useful); skip it on the headless dev-shell and any
      other non-GUI host. */}}
 {{ if not (or (eq .chezmoi.os "darwin") $guiLinux) -}}
-.local/bin/tab-edit
-.local/share/zsh/site-functions/_tab-edit
+.local/libexec/tab-edit
 {{- end }}
 {{/* The Linux .desktop handler generator only makes sense on a graphical
      Linux: macOS uses the Finder droplet instead, and headless hosts have no

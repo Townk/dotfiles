@@ -59,7 +59,7 @@ prepend_keymap = [
 
   # Terminal Time Machine on the hovered path, in its own zellij tab
   # (dir = explore session, file = diff session scoped to that file).
-  { on = [ "g", "t", ], run = 'shell --orphan -- tm-tab "$0"', desc = "Time Machine here, in a new tab" },
+  { on = [ "g", "t", ], run = 'shell --orphan -- "$HOME/.local/libexec/tm-tab" "$0"', desc = "Time Machine here, in a new tab" },
 
   # I would love to use these, but they do not work in my environment
   # { on = [ "g", "f", ], run = "plugin fzf", desc = "Jump to a file/directory via fzf" },

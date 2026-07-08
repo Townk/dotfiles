@@ -378,7 +378,7 @@ tm_apply() {
       --name "" --borderless true --pinned true \
       --width "$pane_w" --height "$pane_h" \
       -- env "COLORTERM=${COLORTERM:-truecolor}" \
-      "$HOME/.local/bin/system-backup-tm" confirm-apply "$s"
+      "$HOME/.local/libexec/system-backup-tm" confirm-apply "$s"
   else
     tm_confirm_apply "$s"
   fi

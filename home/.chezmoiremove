@@ -25,6 +25,12 @@
 /.local/bin/ics-view
 /.local/bin/sqlite-view
 /.local/bin/disk-image-view
+/.local/bin/tm-tab
+/.local/bin/tab-edit
+/.local/bin/fzf-tab-preview-open
+/.local/bin/system-backup-tm
+# tab-edit's completion was removed outright — it was never a typed command.
+/.local/share/zsh/site-functions/_tab-edit
 
 # ── local-LLM stack retired (llama-swap/gateway/headroom → mlx-gemma direct) ──
 # pi-local was repointed to the [mlx-gemma] launchd service talking straight to

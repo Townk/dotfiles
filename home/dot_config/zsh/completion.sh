@@ -214,7 +214,7 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   # waits for a key) and --close-on-exit reaps the pane. `execute-silent` keeps
   # the menu open and never tears fzf down, so there's no Sixel-teardown to fight.
   zstyle ':fzf-tab:*' fzf-bindings \
-    'ctrl-o:execute-silent($HOME/.local/bin/fzf-tab-preview-open --fzf-tab-desc {2})'
+    'ctrl-o:execute-silent($HOME/.local/libexec/fzf-tab-preview-open --fzf-tab-desc {2})'
 
   # Make the `tab` continuous-trigger descend-only (z4h `tab:repeat` semantics).
   # Out of the box, continuous-trigger means "accept then re-complete" with no

@@ -24,7 +24,7 @@ trap cleanup EXIT INT TERM
 
 cat > "$script" <<'APPLESCRIPT'
 on open droppedItems
-  set commandText to quoted form of (POSIX path of (path to home folder) & ".local/bin/tab-edit")
+  set commandText to quoted form of (POSIX path of (path to home folder) & ".local/libexec/tab-edit")
   repeat with droppedItem in droppedItems
     set commandText to commandText & " " & quoted form of (POSIX path of droppedItem)
   end repeat
@@ -32,7 +32,7 @@ on open droppedItems
 end open
 
 on run
-  do shell script quoted form of (POSIX path of (path to home folder) & ".local/bin/tab-edit")
+  do shell script quoted form of (POSIX path of (path to home folder) & ".local/libexec/tab-edit")
 end run
 APPLESCRIPT
 

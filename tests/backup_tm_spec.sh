@@ -710,7 +710,7 @@ EOF
   End
 
   Describe 'route verb'
-    BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-tm"
+    BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_system-backup-tm"
     setup_fix() {
       FIX=$(mktemp -d)
       export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions" BKP_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
@@ -748,7 +748,7 @@ EOF
   End
 
   Describe 'apply flow'
-    BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-tm"
+    BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_system-backup-tm"
     setup_fix() {
       FIX=$(mktemp -d)
       export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions" BKP_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
@@ -986,7 +986,7 @@ line two."
   End
 
   Describe 'tm-tab: sessions in a fresh zellij tab'
-    BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_tm-tab"
+    BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_tm-tab"
     setup_fix() {
       FIX=$(mktemp -d)
       mkdir -p "$FIX/stub" "$FIX/layouts"

@@ -539,7 +539,7 @@ LUA
     fi
     print -r -- 'require("tm-gate"):setup()'
   } > "$ovl/init.lua"
-  local bin='$HOME/.local/bin/system-backup-tm'
+  local bin='$HOME/.local/libexec/system-backup-tm'
   # One row per binding, inline-table form (also reused for the appended
   # form). Step bindings pass yazi's hovered entry ($0) and inherit yazi's
   # cwd — that context is what preserves the selection across rungs.
@@ -692,7 +692,7 @@ function M:entry(job)
 		if not sess then
 			return
 		end
-		local cmd = Command(os.getenv("HOME") .. "/.local/bin/system-backup-tm")
+		local cmd = Command(os.getenv("HOME") .. "/.local/libexec/system-backup-tm")
 			:arg("ctl")
 			:arg(sess)
 			:arg(arg == "j" and "older" or "newer")
@@ -993,7 +993,7 @@ bkp::tm::lens_cmd() {
     yazi --client-id "$yid" "$rung$anchor"
 }
 
-: ${BKP_TM_BIN:="$HOME/.local/bin/system-backup-tm"}
+: ${BKP_TM_BIN:="$HOME/.local/libexec/system-backup-tm"}
 
 # bkp::tm::halt <message>
 # A refusal the user can actually read: tm-tab sessions run in a
