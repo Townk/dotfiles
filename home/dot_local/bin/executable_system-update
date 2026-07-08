@@ -24,14 +24,14 @@ set -eu -o pipefail
 
 usage() {
   cat <<'EOF'
-Usage:
-  system-update                    run a full update pass
-  system-update -h | --help | help show this help
-
 Brings every externally-managed tool to its latest version and keeps the
 chezmoi source repo in sync across machines. Idempotent and safe to run
 periodically. Also invoked by chezmoi's run_once bootstrap so a fresh
 machine converges to the same end state as a steady-state run.
+
+Usage:
+  system-update                    run a full update pass
+  system-update -h | --help | help show this help
 
 Update order (each step is best-effort; failures are reported but never
 block later steps unless explicitly fatal):

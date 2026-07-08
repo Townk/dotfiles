@@ -20,11 +20,12 @@ source "${BKP_LIB:-$HOME/.local/lib}/backup.zsh"
 
 usage() {
   cat <<EOF
+Converge present replication targets toward the union of snapshots and apply
+retention to mirrors. With --prune, run the daily repack instead.
+
 Usage:
   system-backup-reconcile [--manifest <file>] [--config <file>] [--prune]
 
-Converge present replication targets toward the union of snapshots and apply
-retention to mirrors. With --prune, run the daily repack instead.
 Defaults: manifest $BKP_MANIFEST, config $BKP_CONFIG.
 EOF
 }

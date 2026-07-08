@@ -18,13 +18,14 @@ source "${BKP_LIB:-$HOME/.local/lib}/backup.zsh"
 
 usage() {
   cat <<EOF
+One capture tick: manifest -> staging restic repo (+ git-history sidecars, then
+retention forget). With --reconcile, follow the capture with a reconcile pass
+(the scheduled agent uses this — spec §6 "reconcile after every capture").
+
 Usage:
   system-backup-capture [--manifest <file>] [--config <file>] [--reconcile]
 
-One capture tick: manifest -> staging restic repo (+ git-history sidecars,
-then retention forget). With --reconcile, follow the capture with a
-reconcile pass (the scheduled agent uses this — spec §6 "reconcile after
-every capture"). Defaults: manifest $BKP_MANIFEST, config $BKP_CONFIG.
+Defaults: manifest $BKP_MANIFEST, config $BKP_CONFIG.
 EOF
 }
 

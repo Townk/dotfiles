@@ -419,14 +419,14 @@ do_sync() {
 
 usage() {
   cat <<EOF
+Syncs Homebrew formulas, casks, and MAS apps against:
+  ~/.config/packages/Brewfile.bootstrap
+  ~/.config/packages/Brewfile
+
 Usage:
   system-package-brew list [-u|--update] [-a|--all]
   system-package-brew sync
   system-package-brew -h | --help | help
-
-Syncs Homebrew formulas, casks, and MAS apps against:
-  ~/.config/packages/Brewfile.bootstrap
-  ~/.config/packages/Brewfile
 
 list flags:
   -u, --update   annotate packages with available updates

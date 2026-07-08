@@ -197,12 +197,12 @@ do_sync() {
 
 usage() {
   cat <<EOF
+Syncs \`cargo install\`-managed binaries against ~/.config/packages/Cargofile.
+
 Usage:
   system-package-cargo list [-u|--update]
   system-package-cargo sync
   system-package-cargo -h | --help | help
-
-Syncs \`cargo install\`-managed binaries against ~/.config/packages/Cargofile.
 
 list flags:
   -u, --update   annotate packages with available updates (queries crates.io)

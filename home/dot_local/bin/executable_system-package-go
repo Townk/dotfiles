@@ -144,12 +144,12 @@ do_sync() {
 
 usage() {
   cat <<EOF
+Syncs \`go install\`-managed binaries against ~/.config/packages/Gofile.
+
 Usage:
   system-package-go list [-u|--update]
   system-package-go sync
   system-package-go -h | --help | help
-
-Syncs \`go install\`-managed binaries against ~/.config/packages/Gofile.
 
 Manifest entries are full module paths (e.g. \`github.com/x/y/cmd/foo\`);
 binaries land in \$GOBIN (\`go env GOPATH\`/bin by default).

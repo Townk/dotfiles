@@ -28,6 +28,10 @@ source "${BKP_LIB:-$HOME/.local/lib}/backup.zsh"
 
 usage() {
   cat <<EOF
+Tiered, encrypted restic backups of this machine: a scheduled agent captures
+snapshots into a staging repo and replicates them to configured targets. This
+CLI inspects, browses, diffs, restores, and verifies them.
+
 Usage:
   system-backup                          alias for \`status\`
   system-backup status                   staging summary + target presence

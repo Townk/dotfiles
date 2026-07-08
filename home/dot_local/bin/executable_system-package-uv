@@ -170,12 +170,12 @@ do_sync() {
 
 usage() {
   cat <<EOF
+Syncs uv-tool-installed Python tools against ~/.config/packages/Uvfile.
+
 Usage:
   system-package-uv list [-u|--update]
   system-package-uv sync
   system-package-uv -h | --help | help
-
-Syncs uv-tool-installed Python tools against ~/.config/packages/Uvfile.
 
 list flags:
   -u, --update   annotate packages with available updates (queries pypi.org)

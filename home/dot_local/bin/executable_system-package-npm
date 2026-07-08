@@ -160,12 +160,12 @@ do_sync() {
 
 usage() {
   cat <<EOF
+Syncs globally-installed npm packages against ~/.config/packages/Npmfile.
+
 Usage:
   system-package-npm list [-u|--update]
   system-package-npm sync
   system-package-npm -h | --help | help
-
-Syncs globally-installed npm packages against ~/.config/packages/Npmfile.
 
 Manifest lines may use \`<name> -- <install-spec>\` for non-registry installs;
 the canonical \`<name>\` is diffed against \`npm ls -g\`, and the spec after

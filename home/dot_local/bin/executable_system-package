@@ -30,6 +30,10 @@ SUBCOMMANDS=(list sync)
 
 usage() {
   cat <<EOF
+Keep this machine's installed packages in sync with per-ecosystem manifests
+(Brewfile, Cargofile, Gofile, Npmfile, Uvfile, …): list what's installed vs.
+declared, and sync to converge. Dispatches to one worker per ecosystem.
+
 Usage:
   system-package <subcommand> [args...]              run for every ecosystem
   system-package <ecosystem> [<subcommand> [args...]] run for one ecosystem

@@ -135,12 +135,12 @@ do_sync() {
 
 usage() {
   cat <<EOF
+Syncs snap packages against ~/.config/packages/Snapfile (linux dev-shell only).
+
 Usage:
   system-package-snap list [-u|--update]
   system-package-snap sync
   system-package-snap -h | --help | help
-
-Syncs snap packages against ~/.config/packages/Snapfile (linux dev-shell only).
 
 Manifest lines are \`<name> [snap flags]\`; the first word is the canonical
 snap name, the rest is forwarded to \`snap install\` (\`--classic\`, etc.).
