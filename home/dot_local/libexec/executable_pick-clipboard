@@ -101,6 +101,40 @@ MY_HOST=$(scutil --get LocalHostName 2>/dev/null)
 [[ -n "$MY_HOST" ]] || MY_HOST=$(hostname -s 2>/dev/null)
 remote_when="source_host IS NOT NULL AND source_host <> '$MY_HOST'"
 
+# --- live peer clipboard entry (spec §22) -----------------------------------
+# When bridge-up (SSH'd in here with the reverse tunnel live), surface the
+# CURRENT clipboard of the machine you're sitting at as one synthetic top row,
+# fetched live at open time. Viewing != owning (§11): nothing is written to the
+# store until the row is accepted (Enter/Ctrl-Y), which materializes it via the
+# same P op nvim `p` uses. Bounded + best-effort: on any failure the row is just
+# omitted, never blocking the picker. The probe (bridge_up) already succeeded,
+# so the G/H reads are fast loopback round-trips.
+#
+# LIVE_TEXT_FILE non-empty => a live entry is available; its bytes are the exact
+# peer clipboard text (reused verbatim at accept time — no second G). live_row_file
+# holds the pre-rendered picker line, emitted at the top by emit_rows/emit_script.
+LIVE_TEXT_FILE=""
+LIVE_HOST=""
+live_row_file=""
+if (( bridge_up )); then
+  _lt=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-live.XXXXXX")
+  if clipbridge::get "$BRIDGE_HOST" "$BRIDGE_PORT" > "$_lt" 2>/dev/null && [[ -s "$_lt" ]] &&
+     grep -q '[^[:space:]]' "$_lt"; then          # empty/whitespace guard (§22.2)
+    LIVE_HOST=$(clipbridge::get_host "$BRIDGE_HOST" "$BRIDGE_PORT" 2>/dev/null)
+    [[ -n "$LIVE_HOST" ]] || LIVE_HOST="peer"
+    # Dedup (§22.5): suppress when this exact peer clip is already materialized,
+    # keyed as op-persist stores it — source_host = peerhost AND type_hash =
+    # sha256(text). op_get strips the trailing newline the same way, so the hash
+    # of the fetched bytes matches a row that arrived via P.
+    _lhash=$(shasum -a 256 "$_lt" | awk '{print $1}')
+    _lhost_sql=${LIVE_HOST//\'/\'\'}
+    if [[ -z "$(sqlite3 "$DB_FILE" "SELECT 1 FROM clips WHERE source_host='$_lhost_sql' AND type_hash='$_lhash' LIMIT 1;" 2>/dev/null)" ]]; then
+      LIVE_TEXT_FILE="$_lt"
+    fi
+  fi
+  [[ -n "$LIVE_TEXT_FILE" ]] || rm -f "$_lt"
+fi
+
 # --- helpers (run in THIS process via the --key-background FIFO broker) ------
 clip::text_by_id() {  # id -> text_plain (raw, multi-line)
   sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "SELECT text_plain FROM clips WHERE id=$1;"
@@ -185,6 +219,42 @@ clip::copy_by_id() {
   if command -v pbcopy >/dev/null 2>&1; then
     clip::text_by_id "$id" | pbcopy
   fi
+}
+
+# --- live entry accept handlers (spec §22.4) --------------------------------
+# The three below act on the already-fetched peer text in LIVE_TEXT_FILE — no
+# second G. deliver = print it (zellij-modal injects our stdout into the pane);
+# copy = set the clipboard I'm sitting at (T with the peer's regtype); materialize
+# = persist a self-contained local row via the P op on THIS machine's own bridge,
+# so the next open shows it as an ordinary stored row (badged remote) and the live
+# entry dedups against it. materialize runs after any accept; it's best-effort —
+# a failed persist still delivered the text.
+clip::deliver_live() {
+  [[ -n "$LIVE_TEXT_FILE" && -f "$LIVE_TEXT_FILE" ]] && cat "$LIVE_TEXT_FILE"
+}
+
+clip::copy_live() {
+  [[ -n "$LIVE_TEXT_FILE" && -s "$LIVE_TEXT_FILE" ]] || return 0
+  local rt; rt=$(clipbridge::request "$BRIDGE_HOST" "$BRIDGE_PORT" R 2>/dev/null)
+  [[ "$rt" == (v|l|b) ]] || rt=v
+  local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-live-cp.XXXXXX") || return 0
+  { print -rn -- "$rt"; cat "$LIVE_TEXT_FILE"; } > "$pf"
+  # bridge_up is a precondition of a live entry existing, so the copy target is
+  # the machine I'm sitting at, over the reverse tunnel (T = set + record regtype).
+  clipbridge::send "$BRIDGE_HOST" "$BRIDGE_PORT" T "$pf"
+  rm -f "$pf"
+}
+
+clip::materialize_live() {
+  [[ -n "$LIVE_TEXT_FILE" && -s "$LIVE_TEXT_FILE" ]] || return 0
+  local rt; rt=$(clipbridge::request "$BRIDGE_HOST" "$BRIDGE_PORT" R 2>/dev/null)
+  [[ "$rt" == (v|l|b) ]] || rt=v
+  local us=$'\x1f' rs=$'\x1e'
+  local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-live-p.XXXXXX") || return 0
+  # P payload: source_host US kind US app US regtype RS text  (app empty)
+  { print -rn -- "${LIVE_HOST}${us}text${us}${us}${rt}${rs}"; cat "$LIVE_TEXT_FILE"; } > "$pf"
+  clipbridge::send "$BRIDGE_HOST" "$LOCAL_PORT" P "$pf"
+  rm -f "$pf"
 }
 
 # Inject a clip's text into the originating zellij pane (embed mode), else
@@ -280,7 +350,8 @@ clip::markdown_by_id() {  # id -> markdown string for file/directory/url/image; 
 # --on-key-background hook: $1 = id (field:1), $2 = the key. Dispatch on $2.
 clip::bg_hook() {
   local id=$1 key=${2:-}
-  [[ -n "$id" ]] || return 0
+  # The LIVE sentinel is not a row — ignore every background key on it (§22.4).
+  [[ -n "$id" && "$id" != LIVE ]] || return 0
   case "$key" in
     ctrl-o)           clip::inject_by_id "$id" ;;
     ctrl-d|alt-d)     clip::delete_by_id "$id" ;;
@@ -294,7 +365,7 @@ clip::bump_recency() {
   (($#)) || return 0
   local now id; now=$(date +%s)
   for id; do
-    [[ -z "$id" ]] && continue
+    [[ "$id" == <-> ]] || continue   # numeric ids only — skips the LIVE sentinel
     sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$now WHERE id=$id;" 2>/dev/null || true
   done
 }
@@ -318,6 +389,33 @@ ROWS=${LINES:-$(tput lines 2>/dev/null || echo 24)}
 # FZF_PREVIEW_COLUMNS (see the preview script).
 CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-$(( (COLS - 2) * 55 / 100 - 12 ))}
 (( CW < 10 )) && CW=10
+
+# Pre-render the synthetic LIVE row (§22.3) once, into a temp file the emit path
+# cats above the stored rows. Rendered via sqlite3 so the glyph/ANSI/printf are
+# byte-identical to the DB rows; the peer text comes from LIVE_TEXT_FILE via
+# readfile (no DB row exists for it). Kind glyph is nf-md-access-point (char 983043,
+# U+F0003) in the mauve origin color (c_origin) — radiating waves that read as
+# live/not-from-here at a glance.
+# Preview = first line only, same CW truncation + ellipsis as stored rows. Tail
+# id is the sentinel LIVE (not numeric): field1=LIVE, field2=MD:LIVE, field3=CP:LIVE.
+if [[ -n "$LIVE_TEXT_FILE" ]]; then
+  live_row_file=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-liverow.XXXXXX")
+  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "WITH palette AS (
+        SELECT CHAR(27)||'[0m'                AS reset,
+               CHAR(27)||'[38;2;202;211;245m' AS text_color,
+               CHAR(27)||'[38;2;203;166;247m' AS c_origin
+      ),
+      live AS ( SELECT CAST(readfile('$LIVE_TEXT_FILE') AS TEXT) AS body ),
+      l AS ( SELECT CASE WHEN instr(body, char(10)) > 0
+                         THEN substr(body, 1, instr(body, char(10)) - 1)
+                         ELSE body END AS oneline FROM live )
+      SELECT c_origin || char(983043) || reset || '  '
+        || text_color
+        || printf('%-${CW}s', substr(oneline,1,$((CW-1))) || CASE WHEN length(oneline) > $((CW-1)) THEN '…' ELSE '' END)
+        || reset || '   '
+        || CHAR(31) || 'LIVE' || CHAR(30) || 'MD:LIVE' || CHAR(30) || 'CP:LIVE'
+      FROM l, palette;" > "$live_row_file"
+fi
 
 # --- preview (full text + bottom-aligned formatted footer) ------------------
 # fzf's {2} = "id\x1eMD:id" (fzf's own --delimiter only splits on \x1f, so the
@@ -400,6 +498,7 @@ EMIT_SQL="WITH palette AS (
     LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
 
 emit_rows() {
+  [[ -n "$live_row_file" && -f "$live_row_file" ]] && cat "$live_row_file"
   sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL"
 }
 
@@ -412,7 +511,7 @@ emit_rows() {
 emit_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-emit.XXXXXX")
 del_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-del.XXXXXX")
 pin_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-pin.XXXXXX")
-trap 'rm -f -- "$emit_script" "$del_script" "$pin_script" "$preview_script"' EXIT INT TERM
+trap 'rm -f -- "$emit_script" "$del_script" "$pin_script" "$preview_script" "$live_row_file" "$LIVE_TEXT_FILE"' EXIT INT TERM
 cat > "$emit_script" <<EOF
 #!/bin/sh
 # fzf sets FZF_COLUMNS to the fzf window width for --bind commands (including
@@ -422,6 +521,10 @@ cat > "$emit_script" <<EOF
 fc=\${PTY_FRAME_COLUMNS:-\${FZF_COLUMNS:-80}}
 cw=\$((fc * 55 / 100 - 12)); [ \$cw -lt 10 ] && cw=10
 echo "[\$(date +%s)] PTY_FRAME_COLUMNS=\${PTY_FRAME_COLUMNS:-?} fc=\$fc cw=\$cw" >> /tmp/pick-clipboard-dims.log
+# Synthetic LIVE row (§22): pre-rendered once at open into \$live_row_file; catted
+# above the stored rows here so it survives fzf reloads (delete/pin) without a
+# re-fetch — the entry reflects the peer clipboard as of picker open (§22.6).
+[ -n '$live_row_file' ] && [ -f '$live_row_file' ] && cat '$live_row_file'
 sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,
@@ -489,7 +592,14 @@ pc=\${FZF_PREVIEW_COLUMNS:-40}
 ph=\${FZF_PREVIEW_LINES:-20}
 lw=14
 vw=\$((pc - lw)); [ \$vw -lt 4 ] && vw=4
-sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN ${remote_when} THEN 'remote ('||source_host||')' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
+# LIVE sentinel (§22.3): there is no DB row, so render the full text + footer
+# from the fetched peer clipboard (LIVE_TEXT_FILE via readfile). Same layout as
+# a stored row; Source/Origin badge the peer host, Copied reads 'live'.
+if [ "\$id" = LIVE ]; then
+  sqlite3 -escape off '$DB_FILE' "WITH d AS (SELECT CAST(readfile('$LIVE_TEXT_FILE') AS TEXT) AS body) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - (CASE WHEN body IS NULL OR body='' THEN 1 ELSE length(body)-length(replace(body,char(10),''))+1 END) - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr('—',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr('text',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr('remote ('||(CASE WHEN length('$LIVE_HOST')>9 THEN substr('$LIVE_HOST',1,4)||'…'||substr('$LIVE_HOST',-3) ELSE '$LIVE_HOST' END)||')',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(length(body),1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(CASE WHEN body IS NULL OR body='' THEN 0 ELSE length(trim(replace(body,char(10),' '))) - length(replace(trim(replace(body,char(10),' ')),' ','')) + 1 END,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr('live',1,\$vw)) || char(27)||'[0m' FROM d;"
+  exit 0
+fi
+sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_kind||']') AS body, CASE WHEN text_plain IS NULL OR text_plain='' THEN 1 ELSE length(text_plain)-length(replace(text_plain,char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN ${remote_when} THEN 'remote ('||(CASE WHEN length(source_host)>9 THEN substr(source_host,1,4)||'…'||substr(source_host,-3) ELSE source_host END)||')' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
 EOF
 
 # --- run --------------------------------------------------------------------
@@ -532,10 +642,15 @@ pick_args=(
 # register type, so a block clip stays block-pasteable) and prints nothing, so
 # nothing is injected. pick::start's --copy-only path is not used here.
 selected="$(emit_rows | pick::start "${pick_args[@]}")" || exit 130
-if [[ "$selected" == CP:* ]]; then
-  clip::copy_by_id "${selected#CP:}"
-elif [[ "$selected" == MD:* ]]; then
-  clip::markdown_by_id "${selected#MD:}"
-elif [[ -n "$selected" ]]; then
-  clip::text_by_id "$selected"
-fi
+case "$selected" in
+  # LIVE sentinel (§22.4): deliver the already-fetched peer text, then
+  # materialize a self-contained local row. Ctrl-Y (CP:) copies + emits nothing;
+  # Enter / Alt-Enter inject the text (no rich-vs-raw distinction in a terminal).
+  CP:LIVE) clip::copy_live;    clip::materialize_live ;;
+  MD:LIVE) clip::deliver_live; clip::materialize_live ;;
+  LIVE)    clip::deliver_live; clip::materialize_live ;;
+  CP:*)    clip::copy_by_id "${selected#CP:}" ;;
+  MD:*)    clip::markdown_by_id "${selected#MD:}" ;;
+  "")      ;;
+  *)       clip::text_by_id "$selected" ;;
+esac

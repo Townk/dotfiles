@@ -52,3 +52,42 @@ clipbridge::send() {
   rm -f "$reqf" "$respf"
   [[ "$status_byte" == "O" ]]
 }
+
+# clipbridge::request <host> <port> <opcode> [payload_file]
+#   Like clipbridge::send, but on an 'O' response it writes the response
+#   PAYLOAD bytes to stdout (byte-exact via head/tail, never a $(...) capture,
+#   so embedded NULs and any trailing newline survive) and returns 0. Non-zero
+#   on an unreachable endpoint, timeout, or an 'E' response. This is the read
+#   counterpart used by the G/R/H ops whose payload the caller needs (the live
+#   peer-clipboard entry, §22); clipbridge::send stays the write/status-only path.
+#
+#   Extraction is header-length-agnostic: the response is exactly one frame
+#   (<status><BE32 len><payload>) followed by EOF, so the payload is simply
+#   "everything after the 5-byte header" — `tail -c +6`. No per-byte dd, so a
+#   large clip doesn't pay a byte-at-a-time read.
+clipbridge::request() {
+  emulate -L zsh
+  setopt nomultibyte
+  local host=$1 port=$2 opcode=$3 payload_file=${4:-}
+  local -i plen=0
+  [[ -n "$payload_file" && -r "$payload_file" ]] && plen=$(wc -c < "$payload_file" | tr -d ' ')
+  local reqf respf
+  reqf=$(mktemp "${TMPDIR:-/tmp}/clipbridge-req.XXXXXX")   || return 1
+  respf=$(mktemp "${TMPDIR:-/tmp}/clipbridge-resp.XXXXXX") || { rm -f "$reqf"; return 1; }
+  {
+    printf '%s' "$opcode"
+    printf "\\$(printf %03o $(( (plen >> 24) & 255 )))\\$(printf %03o $(( (plen >> 16) & 255 )))\\$(printf %03o $(( (plen >> 8) & 255 )))\\$(printf %03o $(( plen & 255 )))"
+    (( plen > 0 )) && cat "$payload_file"
+  } > "$reqf"
+  nc -w 2 "$host" "$port" < "$reqf" > "$respf" 2>/dev/null
+  local st; st=$(head -c 1 "$respf" 2>/dev/null)
+  if [[ "$st" != "O" ]]; then rm -f "$reqf" "$respf"; return 1; fi
+  tail -c +6 "$respf" 2>/dev/null
+  rm -f "$reqf" "$respf"
+  return 0
+}
+
+# clipbridge::get <host> <port>      -> peer clipboard text (op G) on stdout.
+# clipbridge::get_host <host> <port> -> peer hostname (op H) on stdout.
+clipbridge::get()      { clipbridge::request "$1" "$2" G; }
+clipbridge::get_host() { clipbridge::request "$1" "$2" H; }
