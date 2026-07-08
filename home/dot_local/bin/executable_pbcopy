@@ -11,9 +11,9 @@
 # config.kdl.tmpl), so it rides up through WezTerm to the Mac's system
 # clipboard. Write-only — no terminal round-trip, so unlike an OSC 52
 # *read* (which Zellij refuses to answer) this never hangs. See pbpaste for
-# the read side of this bridge, and
-# home/private_dot_ssh/config.d/private_clipboard.config for the reverse
-# SSH tunnel it depends on.
+# the read side of this bridge, and the RemoteForward that system-onboard writes
+# into ~/.ssh/config.d/<alias>.conf (default on; --no-clipboard to skip) for the
+# reverse SSH tunnel it depends on.
 #
 # Standalone POSIX sh, no library sourcing: this needs to work from any
 # caller (editors, git, other scripts) with zero fragile dependencies, same

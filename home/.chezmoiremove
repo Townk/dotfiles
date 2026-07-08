@@ -32,6 +32,13 @@
 # tab-edit's completion was removed outright — it was never a typed command.
 /.local/share/zsh/site-functions/_tab-edit
 
+# ── clipboard reverse-forward folded into system-onboard ────────────────────
+# The committed clipboard.config (a hardcoded Host + RemoteForward) is gone; the
+# forward is now written per-alias into the loose ~/.ssh/config.d/<alias>.conf by
+# system-onboard (default on; --no-clipboard / `onboard update <alias>
+# --clipboard|--no-clipboard` to toggle). Prune the old committed copy.
+/.ssh/config.d/clipboard.config
+
 # ── local-LLM stack retired (llama-swap/gateway/headroom → mlx-gemma direct) ──
 # pi-local was repointed to the [mlx-gemma] launchd service talking straight to
 # mlx_vlm.server on :8799, orphaning the old chain. Drop the libexec helpers and
