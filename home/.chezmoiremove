@@ -102,3 +102,26 @@
 # entry. quick-launch-external: renamed to quick-launch{,-pick,-window,-zellij}.
 /README.md
 /.config/zellij/scripts/quick-launch-external
+
+# ── ai-assist shell stack retired (→ ai-playbook binary) ────────────────────
+# The zsh ai-assist dispatcher + harness workers + shared lib were removed from
+# source when the input system was rebranded to the `ai-playbook` binary; the
+# Ctrl+Alt+A widget now runs `ai-playbook assist`. Their source entries were
+# deleted but never listed here, so chezmoi left the rendered copies behind.
+# Nothing live invokes them — pure dead code. Anchored to the exact basenames.
+/.local/bin/ai-assist
+/.local/bin/ai-assist-claude
+/.local/bin/ai-assist-cursor
+/.local/bin/ai-assist-pi
+/.local/bin/ai-assist-test
+/.local/libexec/ai-assist-action-broker
+/.local/libexec/ai-assist-ask
+/.local/libexec/ai-assist-docs
+/.local/libexec/ai-assist-popup
+/.local/libexec/ai-assist-remember
+/.local/libexec/ai-assist-render
+/.local/libexec/ai-assist-run
+/.local/libexec/ai-assist-shell
+/.local/libexec/ai-assist-summon
+/.local/libexec/ai-assist-triage
+/.local/lib/assist-agent-common.zsh
