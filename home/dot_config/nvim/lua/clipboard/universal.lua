@@ -202,6 +202,17 @@ local function peer_host()
   return PEER_HOST
 end
 
+-- THIS machine's stable hostname (the copy origin), stamped on the provenance
+-- we push out on copy. Cached; scutil LocalHostName, same source the pickers use.
+local MY_HOST
+local function my_host()
+  if MY_HOST then return MY_HOST end
+  local out = (vim.fn.system({ "scutil", "--get", "LocalHostName" }) or ""):gsub("%s+$", "")
+  if out == "" then out = (vim.fn.system({ "hostname", "-s" }) or ""):gsub("%s+$", "") end
+  if out ~= "" then MY_HOST = out end
+  return MY_HOST
+end
+
 -- Materialize a just-pasted peer clip into THIS machine's store (spec §11), so
 -- it stays available after the origin machine goes offline. Fire-and-forget P
 -- to the local bridge; best-effort (never blocks or errors the paste).
@@ -250,9 +261,20 @@ function M.copy(reg)
     local rt = norm_regtype(regtype)
     write_cache(lines, rt)
     local text = table.concat(lines, "\n")
+    -- §23: over SSH this copy ORIGINATED here. Declare our host to the sit-Mac
+    -- (awaited, BEFORE T sets its clipboard, so its watcher tags remote(us) not
+    -- local), and record a local row in our own store. Best-effort; never blocks.
+    if ssh() then
+      local host = my_host()
+      if host then
+        frame_request(BRIDGE_HOST, BRIDGE_PORT, "O", host .. US .. text, 1000)
+        frame_fire(BRIDGE_HOST, LOCAL_PERSIST_PORT, "P",
+          table.concat({ host, "text", "", rt }, US) .. RS .. text)
+      end
+    end
     local resp = frame_request(BRIDGE_HOST, BRIDGE_PORT, "T", rt .. text, 1000)
     if resp and resp[1] == "O" then
-      return -- set the clipboard with its type via the bridge; done
+      return -- clipboard set with its type via the bridge; done
     end
     if ssh() then
       osc52(lines)
