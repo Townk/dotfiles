@@ -55,8 +55,8 @@ hash = "ec0cf1ebe4e27261b8df4523c2f3d273"
 
 [[plugin.deps]]
 use = "Townk/nice-sidebar"
-rev = "056bda8"
-hash = "7129514b3375c23b3ff0ea4a4edfe51e"
+rev = "cacf44f"
+hash = "69f6a7672ce9f4628afbf451faf6d3f2"
 
 [flavor]
 deps = []
