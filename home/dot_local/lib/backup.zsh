@@ -1496,11 +1496,10 @@ bkp::restic::copy() {
   local src="$1" dst="$2"; shift 2
   local pwcmd
   pwcmd=$(bkp::config::password_command) || return 2
-  # Interactive runs keep restic's native copy progress (a slow copy must not
-  # look frozen); scheduled runs stay --quiet for the log.
-  local -a quiet=(--quiet)
-  bkp::ux::interactive && quiet=()
-  bkp::restic "$dst" copy --from-repo "$src" --from-password-command "$pwcmd" "${quiet[@]}" "$@"
+  # Always --quiet: copy's per-snapshot "snapshot X of [paths…]" header echoes
+  # every files-from path our snapshots record. Interactive feedback comes from
+  # a spinner at the call site instead (bkp::reconcile::one).
+  bkp::restic "$dst" copy --from-repo "$src" --from-password-command "$pwcmd" --quiet "$@"
 }
 
 # bkp::reconcile::ensure_target <staging> <target>
@@ -1536,10 +1535,12 @@ bkp::reconcile::one() {
     esac
   done
   if (( ${#push} )); then
-    bkp::restic::copy "$staging" "$tpath" "${push[@]}" || return 1
+    bkp::spin "target '$name': pushing ${#push} snapshot(s)…" /dev/null -- \
+      bkp::restic::copy "$staging" "$tpath" "${push[@]}" || return 1
   fi
   if (( ${#pull} )); then
-    bkp::restic::copy "$tpath" "$staging" "${pull[@]}" || return 1
+    bkp::spin "target '$name': pulling ${#pull} snapshot(s)…" /dev/null -- \
+      bkp::restic::copy "$tpath" "$staging" "${pull[@]}" || return 1
   fi
   if [[ "$role" != master ]]; then
     bkp::capture::thin "$tpath" "$manifest" || return 1
