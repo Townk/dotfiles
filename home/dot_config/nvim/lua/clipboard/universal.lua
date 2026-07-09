@@ -202,13 +202,22 @@ local function peer_host()
   return PEER_HOST
 end
 
+-- Run a command and return its trimmed stdout, or "" if the binary isn't on
+-- PATH. vim.fn.system() with a list arg RAISES E475 (not empty return) when the
+-- executable is missing, so guard with executable() — a dev-shell PATH that
+-- lacks /usr/sbin (no scutil) must degrade to the fallback, not throw.
+local function sys(cmd)
+  if vim.fn.executable(cmd[1]) == 0 then return "" end
+  return (vim.fn.system(cmd) or ""):gsub("%s+$", "")
+end
+
 -- THIS machine's stable hostname (the copy origin), stamped on the provenance
 -- we push out on copy. Cached; scutil LocalHostName, same source the pickers use.
 local MY_HOST
 local function my_host()
   if MY_HOST then return MY_HOST end
-  local out = (vim.fn.system({ "scutil", "--get", "LocalHostName" }) or ""):gsub("%s+$", "")
-  if out == "" then out = (vim.fn.system({ "hostname", "-s" }) or ""):gsub("%s+$", "") end
+  local out = sys({ "scutil", "--get", "LocalHostName" })
+  if out == "" then out = sys({ "hostname", "-s" }) end
   if out ~= "" then MY_HOST = out end
   return MY_HOST
 end
