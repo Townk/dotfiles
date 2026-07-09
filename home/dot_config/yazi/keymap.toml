@@ -48,6 +48,11 @@ prepend_keymap = [
   { on = "<Down>",     run = "plugin nice-sidebar j",     desc = "Down (list) / next (sidebar)" },
   { on = "k",          run = "plugin nice-sidebar k",     desc = "Up (list) / previous (sidebar)" },
   { on = "<Up>",       run = "plugin nice-sidebar k",     desc = "Up (list) / previous (sidebar)" },
+
+  # Directory backstack (H/L are taken by nice-sidebar above)
+  { on = "{",          run = "plugin backnav back",    desc = "Back in the directory backstack" },
+  { on = "}",          run = "plugin backnav forward", desc = "Forward in the directory backstack" },
+
   { on = "q", run = "plugin confirm-quit", desc = "Quit Yazi file manager" },
   { on = "t", run = "plugin smart-tab-switch", desc = "Create a tab and enter the hovered directory" },
   { on = "Z", run = "plugin toggle-pane min-preview", desc = "Show or hide the preview pane" },

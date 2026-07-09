@@ -238,11 +238,108 @@ Header:children_add(function()
 	return ui.Span(" " .. (ya.user_name() .. "@" .. ya.host_name()):lower() .. "  "):fg("blue")
 end, 500, Header.LEFT)
 
+-- Back / forward buttons at the very left of the header. Clicking fires the
+-- directory backstack's `back` / `forward`; each glyph is light yellow when a
+-- target exists and dark grey otherwise. Yazi exposes neither the backstack nor
+-- a cd's source to Lua, so BackNav mirrors the per-tab stack by watching `cd`
+-- events and reading the new cwd from `cx` (the local `cd` ember omits the url;
+-- the handler runs in the sync VM after the cwd is updated). Every real cd is a
+-- push (truncating any forward history), while `back` / `forward` pre-move the
+-- pointer via BackNav.step first, so their echoed cd lands on the current entry
+-- and is absorbed by the equality guard. This stays exact only because `back` /
+-- `forward` are issued solely through BackNav.step (these buttons, and the {/}
+-- keys via the `backnav` plugin) -- nothing else in this config calls them.
+local HDR_BACK = "\u{F0A8}"
+local HDR_FWD = "\u{F0A9}"
+local HDR_BTN_ON = _pal.yellow or "#f9e2af"
+local HDR_BTN_OFF = _pal.surface2 or "#585b70"
+local function _hdr_btn_w(s) return ui.Line({ ui.Span(s) }):width() end
+
+BackNav = { tabs = {} }
+
+ps.sub("cd", function(_)
+	local id, url = cx.active.id.value, tostring(cx.active.current.cwd)
+	local s = BackNav.tabs[id]
+	if not s then
+		BackNav.tabs[id] = { stack = { url }, cur = 1 }
+		return
+	end
+	if s.stack[s.cur] == url then
+		return
+	end
+	s.cur = s.cur + 1
+	s.stack[s.cur] = url
+	for i = #s.stack, s.cur + 1, -1 do
+		s.stack[i] = nil
+	end
+end)
+
+-- Pre-moves the active tab's pointer and returns whether the move was possible;
+-- the caller emits the real command only when true.
+function BackNav.step(dir)
+	local s = BackNav.tabs[cx.active.id.value]
+	if not s then
+		return false
+	end
+	if dir == "back" then
+		if s.cur > 1 then
+			s.cur = s.cur - 1
+			return true
+		end
+	elseif s.cur < #s.stack then
+		s.cur = s.cur + 1
+		return true
+	end
+	return false
+end
+
+-- Read-only: can the active tab move `dir` right now? (drives button colour)
+function BackNav.can(dir)
+	local s = BackNav.tabs[cx.active.id.value]
+	if not s then
+		return false
+	end
+	return (dir == "back" and s.cur > 1) or (dir == "forward" and s.cur < #s.stack)
+end
+
+Header:children_add(function()
+	return ui.Line {
+		ui.Span(" "),
+		ui.Span(HDR_BACK):fg(BackNav.can("back") and HDR_BTN_ON or HDR_BTN_OFF),
+		ui.Span(" "),
+		ui.Span(HDR_FWD):fg(BackNav.can("forward") and HDR_BTN_ON or HDR_BTN_OFF),
+		ui.Span(" "),
+	}
+end, 100, Header.LEFT)
+
+local _hdr_click = Header.click
+function Header:click(event, up)
+	if not up and not event.is_middle then
+		local back_lo = self._area.x + 1
+		local back_hi = back_lo + _hdr_btn_w(HDR_BACK)
+		local fwd_lo = back_hi + 1
+		local fwd_hi = fwd_lo + _hdr_btn_w(HDR_FWD)
+		if event.x >= back_lo and event.x < back_hi then
+			if BackNav.step("back") then
+				ya.emit("back", {})
+			end
+			return
+		elseif event.x >= fwd_lo and event.x < fwd_hi then
+			if BackNav.step("forward") then
+				ya.emit("forward", {})
+			end
+			return
+		end
+	end
+	return _hdr_click and _hdr_click(self, event, up)
+end
+
 -- Current dir uses the same middle-component shortening as the status-bar path,
 -- budgeted against the user@host prefix (leading + host + 2 trailing cells) and
 -- the right-hand count, instead of the default right-to-left hard cut.
 function Header:cwd()
-	local prefix = 3 + #(ya.user_name() .. "@" .. ya.host_name())
+	local prefix = (3 + _hdr_btn_w(HDR_BACK) + _hdr_btn_w(HDR_FWD))
+		+ 3 + #(ya.user_name() .. "@" .. ya.host_name())
 	local max = self._area.w - (self._right_width or 0) - prefix
 	if max <= 0 then
 		return ""
