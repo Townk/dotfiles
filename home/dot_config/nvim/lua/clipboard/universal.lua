@@ -55,10 +55,14 @@ local BRIDGE_PORT = 2490
 -- override for tests.
 local LOCAL_PERSIST_PORT = tonumber(vim.env.CLIPBOARD_PERSIST_PORT) or 2489
 
+-- pb* guard executable() for the same reason sys() does (E475 on a missing
+-- binary): a restricted PATH without pbcopy/pbpaste must no-op, not throw.
 local function pbcopy(text)
+  if vim.fn.executable("pbcopy") == 0 then return end
   vim.fn.system({ "pbcopy" }, text)
 end
 local function pbpaste()
+  if vim.fn.executable("pbpaste") == 0 then return {} end
   return vim.fn.systemlist({ "pbpaste" })
 end
 
