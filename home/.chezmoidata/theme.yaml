@@ -50,6 +50,7 @@ theme:
       mantle:    "181825"
       crust:     "11111b"
       white:     "ffffff"   # pure white (not a Catppuccin slot) — keycaps/hints
+      mauve_light: "e2cefb" # light tint of mauve (not a Catppuccin slot) — shimmer partner for the mauve "Thinking" text
 
       # Bright ANSI variants (terminal slots 9-14): Mocha's official computed-
       # bright accents, brighter than the base accents. Consumed by the generated
@@ -132,6 +133,7 @@ theme:
       mantle:    "e6e9ef"
       crust:     "dce0e8"
       white:     "11111b"   # max-contrast "key" color — near-black on a light bg
+      mauve_light: "b888f5" # light tint of mauve (not a Catppuccin slot) — shimmer partner for the mauve "Thinking" text
 
       # Brights reuse the base accents (like wezterm), tuned for the light flavor.
       ansi_bright: { red: "d20f39", green: "40a02b", yellow: "df8e1d", blue: "1e66f5", magenta: "ea76cb", cyan: "179299" }
