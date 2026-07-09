@@ -122,13 +122,15 @@ if (( bridge_up )); then
      grep -q '[^[:space:]]' "$_lt"; then          # empty/whitespace guard (§22.2)
     LIVE_HOST=$(clipbridge::get_host "$BRIDGE_HOST" "$BRIDGE_PORT" 2>/dev/null)
     [[ -n "$LIVE_HOST" ]] || LIVE_HOST="peer"
-    # Dedup (§22.5): suppress when this exact peer clip is already materialized,
-    # keyed as op-persist stores it — source_host = peerhost AND type_hash =
-    # sha256(text). op_get strips the trailing newline the same way, so the hash
-    # of the fetched bytes matches a row that arrived via P.
-    _lhash=$(shasum -a 256 "$_lt" | awk '{print $1}')
-    _lhost_sql=${LIVE_HOST//\'/\'\'}
-    if [[ -z "$(sqlite3 "$DB_FILE" "SELECT 1 FROM clips WHERE source_host='$_lhost_sql' AND type_hash='$_lhash' LIMIT 1;" 2>/dev/null)" ]]; then
+    # Dedup (§22.5, revised for §23): suppress the live entry when its text is
+    # already in the store — compared trailing-newline-insensitively and
+    # regardless of source_host. Two reasons the old (peerhost, type_hash) key
+    # misses: (1) op_get (G) strips the trailing newline a stored copy keeps, so
+    # sha256(live) != the stored type_hash; (2) a remote copy (§23) now stores the
+    # clip LOCALLY (source_host = this host, not the peer). rtrim(char(10)) on both
+    # sides drops the newline difference; no source_host filter covers any origin;
+    # readfile keeps the compare byte-safe for arbitrary text.
+    if [[ -z "$(sqlite3 "$DB_FILE" "SELECT 1 FROM clips WHERE rtrim(text_plain, char(10)) = rtrim(CAST(readfile('$_lt') AS TEXT), char(10)) LIMIT 1;" 2>/dev/null)" ]]; then
       LIVE_TEXT_FILE="$_lt"
     fi
   fi
