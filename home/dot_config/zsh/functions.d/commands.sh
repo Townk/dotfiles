@@ -161,10 +161,12 @@ function super-cd {
       die "${C_YEL}No previous directories available${C_RES}"
       return 1
     elif [[ "${#prev_stack[@]}" -gt 1 ]]; then
-      # No explicit fzf flags: inherit FZF_DEFAULT_OPTS (glyph prompt, visible
-      # `preview {}`, colours, binds) so this matches TAB and the other widgets.
-      # `--no-sort` is the one exception — keep the dirstack/zoxide order intact.
-      next_dir=$(print -l -- "${prev_stack[@]}" | fzf --no-sort)
+      # Inherit FZF_DEFAULT_OPTS (glyph prompt, colours, binds) so this matches
+      # TAB and the other widgets, with two exceptions: `--no-sort` keeps the
+      # dirstack/zoxide order intact, and `--preview-window=hidden` starts the
+      # preview collapsed (fzf merges repeated --preview-window flags, so the
+      # inherited right:60% geometry survives; ctrl-space reveals it on demand).
+      next_dir=$(print -l -- "${prev_stack[@]}" | fzf --no-sort --preview-window=hidden)
       next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
     else
       next_dir="${prev_stack[1]}"
@@ -190,8 +192,8 @@ function super-cd {
       dir_stack+=("$_cur_dir")
       _cur_dir="${_cur_dir%/*}"
     done
-    # Inherit FZF_DEFAULT_OPTS (glyph prompt, visible preview, …) like above.
-    next_dir=$(print -l -- "${dir_stack[@]}" | fzf)
+    # Inherit FZF_DEFAULT_OPTS like above; preview starts collapsed.
+    next_dir=$(print -l -- "${dir_stack[@]}" | fzf --preview-window=hidden)
     next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
     if [[ -n "$next_dir" ]]; then
       \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
