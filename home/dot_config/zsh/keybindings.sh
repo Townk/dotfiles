@@ -1,6 +1,6 @@
 # Key bindings. Sourced (deferred) from ~/.config/zsh/.zshrc after the ZLE plugins and
 # tool init, so every widget referenced here is already defined:
-#   - smart-space-expansion, cd-*  → functions.d/widgets.sh (synchronous)
+#   - smart-space-expansion, cd-*, smart-paste  → functions.d/widgets.sh (synchronous)
 #   - autosuggest-*                → zsh-autosuggestions
 #   - history-substring-search-*   → zsh-history-substring-search
 #   - atuin-search                 → `atuin init zsh`
@@ -51,3 +51,7 @@ bindkey '\e^A' ai-assist-trigger
 # the legacy sequence ESC Ctrl-P (\e^P), same encoding family as the assist
 # chord above. Enter runs the pick (adapt-on-run); Alt+Enter edits it.
 bindkey '\e^P' ai-playbook-pick
+
+# Alt+p — smart paste: files clip runs `pbpaste --files` as a visible command,
+# anything else inserts the clipboard text at the cursor.
+bindkey '\ep' smart-paste
