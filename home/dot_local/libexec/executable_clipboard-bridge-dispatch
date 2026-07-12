@@ -45,6 +45,15 @@
 #      fidelity restore of a stored clip by rowid. The watcher then captures
 #      the new pasteboard state -- same full-circle design as pbcopy's O/P
 #      frames. Callers: pbcopy (files-yazi T3), pick-clipboard (T9).
+#   L  list-files    req: empty  resp: <type_kind US source_host US last_ts
+#                                        US path NUL path ...> | err
+#      Returns the manifest of the CURRENT clipboard entry, resolved through
+#      the store's latest row (files-yazi design §4) -- no payload in, no
+#      pasteboard access, this is a pure store query. "not-files" if the
+#      latest row isn't kind files/file/directory (retried once after a
+#      brief sleep to ride out the watcher's ~0.5s capture lag); "empty-store"
+#      if there are no rows at all. Callers: pbpaste --manifest (files-yazi
+#      T4), the yazi smart-paste plugin (T8).
 #
 # Rich payload writes (C) go through hs.pasteboard.writeAllData via a
 # throwaway generated Lua script run as `hs <file>` (NOT `hs -c`, which hangs
@@ -309,6 +318,145 @@ clip::op_set_file_urls() {
   rm -rf -- "$tmpdir"
 }
 
+# clip::read_file <path> -> sets $REPLY to the file's raw bytes, byte-exact
+# (may contain embedded NULs -- e.g. a NUL-joined multi-path manifest). Never
+# use $(<file)/$(cat file) for this: command substitution truncates at the
+# first embedded NUL. Mirrors op_fetch_file's own sysread loop, just reading
+# a whole local file into a scalar instead of streaming it over the wire.
+clip::read_file() {
+  local f=$1
+  local -i sz
+  sz=$(wc -c < "$f" 2>/dev/null | tr -d ' ') || sz=0
+  REPLY=""
+  (( sz > 0 )) || return 0
+  local fd
+  exec {fd}< "$f"
+  local -i got=0
+  local chunk
+  while (( got < sz )); do
+    sysread -s $(( sz - got )) -i $fd chunk || break
+    REPLY+="$chunk"
+    (( got += $#chunk ))
+  done
+  exec {fd}<&-
+}
+
+# clip::parse_ns_filenames <blobfile> <tmpdir> -> sets $REPLY to the NUL-
+# joined paths decoded from an NSFilenamesPboardType blob (binary OR XML
+# property list -- plutil auto-detects either form). Primary path: convert
+# to JSON and pick the string array apart in zsh (brief's prescribed
+# algorithm -- good enough for paths, which don't contain raw '","' runs).
+# Fallback (plutil choking on some binary-plist edge case): a throwaway
+# hs.plist.read() Lua script via clip::hs_run, same generated-side-file
+# pattern as op_copy/op_set_file_urls.
+clip::parse_ns_filenames() {
+  local blobfile=$1 tmpdir=$2
+  REPLY=""
+  local json; json="$(plutil -convert json -o - "$blobfile" 2>/dev/null)"
+  local -a paths
+  if [[ -n "$json" && "$json" == \[*\] ]]; then
+    local inner=${json#\[}
+    inner=${inner%\]}
+    if [[ -n "$inner" ]]; then
+      # Split on the literal 3-char run quote-comma-quote. Using a plain `"`
+      # inside the (s:...:) flag text would prematurely close THIS function
+      # body's own double-quoted strings elsewhere in the script, so the
+      # split is done in two steps: turn each "," boundary into a real
+      # newline first (a $'...' pattern can hold a literal " with no
+      # escaping headache, unlike a "..." one), then split on newlines.
+      inner=${inner//$'",'/$'\n'}
+      local -a raw; raw=("${(@f)inner}")
+      local r
+      for r in "${raw[@]}"; do
+        r=${r#\"}
+        r=${r%\"}
+        r=${r//\\\//\/}
+        r=${r//\\\"/\"}
+        paths+=("$r")
+      done
+    fi
+  fi
+  if (( ${#paths[@]} == 0 )); then
+    local outfile="$tmpdir/ns-filenames-fallback"
+    local script="$tmpdir/ns-filenames-fallback.lua"
+    {
+      print -r -- "local t = hs.plist.read([[$blobfile]])"
+      print -r -- "if t and #t > 0 then"
+      print -r -- "  local f = io.open([[$outfile]], 'wb')"
+      print -r -- "  f:write(table.concat(t, '\\0'))"
+      print -r -- "  f:close()"
+      print -r -- "end"
+    } > "$script"
+    if clip::hs_run "$script" && [[ -s "$outfile" ]]; then
+      clip::read_file "$outfile"
+    fi
+    return
+  fi
+  REPLY="${(pj:\0:)paths}"
+}
+
+# L  list-files: the manifest of the CURRENT clipboard entry, resolved
+# through the store's latest row (see the header comment). Pure store query
+# -- no pasteboard access, no payload in.
+clip::op_list_files() {
+  local us=$'\x1f'
+  local id kind host ts row
+  local -a f
+  local -i attempt
+  for attempt in 1 2; do
+    row="$(sqlite3 -separator "$us" "$DB_FILE" "SELECT id, type_kind, source_host, last_ts FROM clips ORDER BY last_ts DESC LIMIT 1;" 2>/dev/null)"
+    if [[ -z "$row" ]]; then
+      send_err "empty-store"
+      return
+    fi
+    f=()
+    IFS=$us read -rA f <<< "$row"
+    id=${f[1]:-} kind=${f[2]:-} host=${f[3]:-} ts=${f[4]:-}
+    [[ "$kind" == (files|file|directory) ]] && break
+    if (( attempt == 1 )); then
+      # Watcher capture lag (spec §4): the store trails the pasteboard by up
+      # to ~0.5s, so a paste right after a Finder copy can still see the
+      # PREVIOUS (non-files) row. One retry covers it without stalling every
+      # ordinary text paste.
+      sleep 0.3
+      continue
+    fi
+    send_err "not-files"
+    return
+  done
+
+  local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-listfiles.XXXXXX") || { send_err "mktemp failed"; return }
+  local paths=""
+
+  local manifestfile="$tmpdir/x-file-manifest"
+  sqlite3 "$DB_FILE" "SELECT writefile('$manifestfile', blob) FROM clip_types WHERE clip_id=$id AND uti='x-file-manifest';" >/dev/null 2>&1
+  if [[ -s "$manifestfile" ]]; then
+    clip::read_file "$manifestfile"
+    paths=$REPLY
+  else
+    local resolvedfile="$tmpdir/x-resolved-path"
+    sqlite3 "$DB_FILE" "SELECT writefile('$resolvedfile', blob) FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';" >/dev/null 2>&1
+    if [[ -s "$resolvedfile" ]]; then
+      clip::read_file "$resolvedfile"
+      paths=$REPLY
+    else
+      local nsfile="$tmpdir/ns-filenames"
+      sqlite3 "$DB_FILE" "SELECT writefile('$nsfile', blob) FROM clip_types WHERE clip_id=$id AND uti='NSFilenamesPboardType';" >/dev/null 2>&1
+      if [[ -s "$nsfile" ]]; then
+        clip::parse_ns_filenames "$nsfile" "$tmpdir"
+        paths=$REPLY
+      fi
+    fi
+  fi
+  rm -rf -- "$tmpdir"
+
+  if [[ -z "$paths" ]]; then
+    send_err "not-files"
+    return
+  fi
+  send_ok "${kind}${us}${host}${us}${ts}${us}${paths}"
+}
+
 clip::op_fetch_file() {
   local fpath=$1
   if [[ ! -r "$fpath" ]]; then
@@ -450,5 +598,6 @@ case "$opcode" in
   C) clip::op_copy "$payload" ;;
   F) clip::op_fetch_file "$payload" ;;
   U) clip::op_set_file_urls "$payload" ;;
+  L) clip::op_list_files ;;
   *) send_err "unknown opcode" ;;
 esac
