@@ -211,8 +211,9 @@ end
 -- empirically against a captured file:///.file/id=... clip -- no need to
 -- shell out to osascript/NSURL.filePathURL). Returns (kind, path) on
 -- success, or (nil, nil) if resolution/stat fails -- caller keeps the
--- generic "files" kind (multi-file copies land here too: only pasteboard
--- item 1 is ever inspected, a pre-existing limitation, unchanged).
+-- generic "files" kind. readURL() only ever inspects pasteboard item 1, so
+-- the caller (capture_now) gates this to the genuinely single-path case
+-- via ns_filenames() below -- a real multi-file clip never reaches here.
 local function classify_file_or_directory()
   local r = pasteboard.readURL()
   local path = r and r.filePath
@@ -221,6 +222,42 @@ local function classify_file_or_directory()
   if mode == "directory" then return "directory", path end
   if mode == "file" then return "file", path end
   return nil, nil
+end
+
+-- Parse an NSFilenamesPboardType blob (binary or XML property list holding
+-- an array of POSIX path strings -- macOS's legacy multi-file pasteboard
+-- type, populated by Finder alongside public.file-url on a real multi- or
+-- single-file copy) into a Lua array of paths, or nil if the blob is
+-- missing/unparseable/empty. Pure -- test seam, see M._ns_filenames_from_blob.
+local function ns_filenames_from_blob(blob)
+  if not blob or blob == "" then return nil end
+  local ok, names = pcall(hs.plist.readString, blob)
+  if not ok or type(names) ~= "table" or #names == 0 then return nil end
+  return names
+end
+M._ns_filenames_from_blob = ns_filenames_from_blob -- test seam only (pure function)
+
+-- All paths of the current pasteboard's "files" clip, or nil if there's no
+-- (parseable) NSFilenamesPboardType data. This -- NOT `data_by_uti`'s
+-- allContentTypes()-derived key, and NOT pasteboard item count -- is the
+-- only reliable way to tell a genuine multi-file clip from a single-file
+-- one: verified empirically (R5a scratchpad) that once a clip has been
+-- through M.restore_by_id (hs.pasteboard.writeAllData writes back a single
+-- pasteboard item; it has no notion of "multiple items"), a *re-capture* of
+-- that same clip shows its NSFilenamesPboardType blob wrapped in a
+-- dynamically-generated "dyn.xxxx" UTI under allContentTypes()/
+-- readAllData() -- so `data_by_uti["NSFilenamesPboardType"]` is nil and the
+-- pasteboard's own item count is back down to 1, even for a 2-file clip.
+-- hs.pasteboard.readDataForUTI(nil, "NSFilenamesPboardType"), asked by the
+-- legacy type NAME rather than enumerated UTI, still resolves it correctly
+-- via macOS's own legacy-type<->UTI bridging -- confirmed byte-identical to
+-- the original blob in that exact restore-then-recapture scenario, which is
+-- the case validated live in R5a (a restored 2-file clip mis-captured as
+-- type_kind='file').
+local function ns_filenames()
+  local ok, blob = pcall(hs.pasteboard.readDataForUTI, nil, "NSFilenamesPboardType")
+  if not ok then return nil end
+  return ns_filenames_from_blob(blob)
 end
 
 -- Best-effort "is this JUST a URL, with nothing else" heuristic (used to
@@ -266,6 +303,37 @@ local function preview_of(text)
   if #first > 100 then first = first:sub(1, 100) .. "…" end
   return first
 end
+
+-- Build the text_preview for a genuine multi-file "files" clip: full paths
+-- newline-joined, staying inside preview_of()'s own ~100-char budget so the
+-- column keeps its existing size discipline. Once the join would blow past
+-- that, keep as many whole paths as fit and summarize the rest instead of
+-- truncating mid-path. Pure -- test seam, see M._files_preview.
+local function files_preview(paths)
+  if not paths or #paths == 0 then return "[files]" end
+  local joined = table.concat(paths, "\n")
+  if #joined <= 100 then return joined end
+  local out, len, shown = {}, 0, 0
+  for _, p in ipairs(paths) do
+    local candidate_len = len + #p + (shown > 0 and 1 or 0)
+    if candidate_len > 100 then break end
+    out[#out + 1] = p
+    len = candidate_len
+    shown = shown + 1
+  end
+  if shown == 0 then
+    -- Not even the first path fits on its own -- show it truncated (mirrors
+    -- preview_of()'s own truncation) rather than an all-summary preview
+    -- with zero real content.
+    return preview_of(paths[1]) .. "\n… +" .. (#paths - 1) .. " more"
+  end
+  local remaining = #paths - shown
+  if remaining > 0 then
+    return table.concat(out, "\n") .. "\n… +" .. remaining .. " more"
+  end
+  return table.concat(out, "\n")
+end
+M._files_preview = files_preview -- test seam only (pure function)
 
 local function exec(sql)
   local rc = db:exec(sql)
@@ -414,10 +482,23 @@ function M.capture_now()
 
   local kind = classify(item_utis)
   local resolvedPath -- only set when kind refines to "file"/"directory" below
+  local multi_paths  -- only set for a genuine multi-file "files" clip (>=2 real paths)
 
   if kind == "files" then
-    local refined, path = classify_file_or_directory()
-    if refined then kind = refined; resolvedPath = path end
+    local names = ns_filenames()
+    if names and #names >= 2 then
+      -- Genuine multi-file clip: stays "files" (ambiguous which of the N
+      -- paths is a file vs a directory, so no file/directory refinement),
+      -- but gets a real preview built from all N paths (see badge synth
+      -- below) instead of the anonymous "[files]" badge.
+      multi_paths = names
+    else
+      -- Exactly one path (or no parseable NSFilenamesPboardType at all --
+      -- e.g. a non-Finder source that only sets public.file-url): refine
+      -- to "file"/"directory" exactly as before.
+      local refined, path = classify_file_or_directory()
+      if refined then kind = refined; resolvedPath = path end
+    end
   end
 
   -- Skip oversized images (spec §5: "skip images > ~5 MB").
@@ -460,7 +541,7 @@ function M.capture_now()
   if not preview then
     -- non-text clip: synthesize a short badge from the kind + a payload hint
     if kind == "image" then preview = "[image]"
-    elseif kind == "files" then preview = "[files]"
+    elseif kind == "files" then preview = multi_paths and files_preview(multi_paths) or "[files]"
     elseif kind == "file" then preview = "[file]"
     elseif kind == "directory" then preview = "[directory]"
     elseif kind == "rtf" then preview = "[rtf]"
