@@ -385,4 +385,25 @@ Describe 'clipboard-bridge-dispatch: N push-manifest'
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     The output should start with "E"
   End
+
+  # Echo suppression (reviewer-confirmed fix): the HS watcher independently
+  # captures N's own pasteboard text write ~0.5s later, under a DIFFERENT
+  # type_hash formula (sha256 of the UTI=blob pairs vs the dispatcher's
+  # sha256 of the text -- never dedups), landing a phantom text row NEWER
+  # than the manifest. So N's origin declaration must carry the one-shot
+  # suppress-echo flag (origin-file line 4) that captured_origin()/
+  # capture_now() in clipboard-history.lua consume to skip exactly that one
+  # capture. Lines 1-3 stay the pre-existing O format (host / sha256(text) /
+  # epoch), so the provenance mechanics are byte-identical to a plain O.
+  It 'declares origin with the one-shot suppress-echo flag (line 4)'
+    build_req devbox /tmp/remote-e.txt /tmp/remote-f.txt
+    originfile="$XDG_STATE_HOME/pick-clipboard/current-origin"
+    expected_hash=$(printf '/tmp/remote-e.txt\n/tmp/remote-f.txt' | shasum -a 256 | awk '{print $1}')
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+    The line 1 of contents of file "$originfile" should equal "devbox"
+    The line 2 of contents of file "$originfile" should equal "$expected_hash"
+    The line 4 of contents of file "$originfile" should equal "suppress-echo"
+  End
 End

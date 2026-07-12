@@ -136,7 +136,18 @@ local function now_ts()
   return hs.timer.secondsSinceEpoch()
 end
 
--- Path/format shared with the dispatcher's O op: <host>\n<sha256hex>\n<epoch>.
+-- Path/format shared with the dispatcher's O/N ops:
+-- <host>\n<sha256hex>\n<epoch>[\nsuppress-echo]. The optional 4th line is the
+-- one-shot echo-suppress flag written ONLY by the dispatcher's N op
+-- (push-manifest, files-yazi design §5 T11 -- see the coordinator-authorized
+-- contract note on clip::declare_origin_core in
+-- ~/.local/libexec/clipboard-bridge-dispatch): N inserts its own
+-- authoritative `files` store row, so this watcher must not also capture the
+-- echoed pasteboard text (a duplicate row whose type_hash -- sha256 of the
+-- UTI=blob pairs -- never matches the dispatcher's text-hash, so nothing
+-- would ever dedup it, and its later capture timestamp would shadow the
+-- manifest as the "latest" row). A 3-line file is exactly the pre-existing
+-- O-op format.
 local function origin_file()
   local state = os.getenv("XDG_STATE_HOME") or ((os.getenv("HOME") or "") .. "/.local/state")
   return state .. "/pick-clipboard/current-origin"
@@ -144,23 +155,35 @@ end
 
 local ORIGIN_TTL = 5 -- seconds; a declaration older than this is stale
 
+-- Pure origin-file parser (deliberately no hs.*/upvalue dependencies beyond
+-- ORIGIN_TTL, so it can be smoke-tested outside a live Hammerspoon capture
+-- path -- exposed as M._parse_origin_file below). Returns nil when the file
+-- is missing/mismatched/stale, else host plus a boolean suppress flag.
+local function parse_origin_file(path, plain_sha256, now)
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local host = f:read("*l")
+  local h = f:read("*l")
+  local ts = tonumber(f:read("*l"))
+  local flag = f:read("*l")
+  f:close()
+  if not host or host == "" then return nil end
+  if not h or h ~= plain_sha256 then return nil end
+  if not ts or (now - ts) > ORIGIN_TTL then return nil end
+  return host, (flag == "suppress-echo")
+end
+M._parse_origin_file = parse_origin_file -- test seam only (pure function)
+
 -- If a fresh declare-origin (O op, §23) matches this clip's plain text, the clip
 -- was copied on that host (pbcopy / nvim y from a machine SSH'd into here) and
 -- its bytes were pushed onto our pasteboard — return that host so the row is
 -- stamped remote(host) instead of local. Mirrors captured_regtype; hash-keyed +
 -- TTL'd so a later identical LOCAL copy isn't retroactively mis-tagged.
+-- Second return: the N op's echo-suppress flag (see origin_file above);
+-- capture_now consumes the file and skips the capture when it's set.
 local function captured_origin(plain)
   if not plain or plain == "" then return nil end
-  local f = io.open(origin_file(), "r")
-  if not f then return nil end
-  local host = f:read("*l")
-  local h = f:read("*l")
-  local ts = tonumber(f:read("*l"))
-  f:close()
-  if not host or host == "" then return nil end
-  if not h or h ~= hash.SHA256(plain) then return nil end
-  if not ts or (now_ts() - ts) > ORIGIN_TTL then return nil end
-  return host
+  return parse_origin_file(origin_file(), hash.SHA256(plain), now_ts())
 end
 
 -- Classify the type_kind badge (spec §5: text|rtf|html|image|files|mixed)
@@ -463,7 +486,19 @@ function M.capture_now()
   -- (its text hash matches the current-regtype file) — so a visual-block yank
   -- keeps its "b" in history and can be block-pasted later. nil otherwise.
   local cap_rt = captured_regtype(plain)
-  local host = captured_origin(plain) or my_host()
+  local origin_host, suppress_echo = captured_origin(plain)
+  if origin_host and suppress_echo then
+    -- N-op echo suppression (see origin_file's contract note): the
+    -- dispatcher already inserted the authoritative `files` manifest row for
+    -- this very pasteboard change, so capturing its text echo here would add
+    -- a duplicate, newer row that shadows the manifest. Consume the one-shot
+    -- marker first -- only THIS capture is suppressed; a later identical
+    -- copy declares no origin and captures normally -- then skip the insert
+    -- entirely (same nil contract as the sensitive/deny-list skips above).
+    os.remove(origin_file())
+    return nil
+  end
+  local host = origin_host or my_host()
 
   -- Dedup on type_hash: bump last_ts + refresh source_app/preview if present.
   local dup = assert(db:prepare(
