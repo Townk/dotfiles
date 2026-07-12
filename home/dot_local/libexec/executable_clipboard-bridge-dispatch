@@ -496,16 +496,29 @@ clip::op_list_files() {
     clip::read_file "$manifestfile"
     paths=$REPLY
   else
-    local resolvedfile="$tmpdir/x-resolved-path"
-    sqlite3 "$DB_FILE" "SELECT writefile('$resolvedfile', blob) FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';" >/dev/null 2>&1
-    if [[ -s "$resolvedfile" ]]; then
-      clip::read_file "$resolvedfile"
+    # NSFilenamesPboardType BEFORE x-resolved-path: the HS watcher's
+    # classify_file_or_directory() resolves x-resolved-path via readURL(),
+    # which only ever inspects pasteboard item 1 -- so on a genuine
+    # multi-file local capture (Finder multi-select, yazi multi-yank,
+    # `pbcopy a b c`) that blob holds just the FIRST of N paths, while
+    # NSFilenamesPboardType (set once, on item 1, as the full array) already
+    # carries all of them. Checking it first here means a multi-file row
+    # resolves completely instead of silently truncating to one path.
+    # Safe for single-file rows too: those still carry a matching
+    # NSFilenamesPboardType blob (one-element array) from the same capture.
+    # pick-clipboard's own localized single-path rows (copy_files_by_id)
+    # never write a NSFilenamesPboardType blob -- only x-resolved-path -- so
+    # they fall through to the fallback below exactly as before.
+    local nsfile="$tmpdir/ns-filenames"
+    sqlite3 "$DB_FILE" "SELECT writefile('$nsfile', blob) FROM clip_types WHERE clip_id=$id AND uti='NSFilenamesPboardType';" >/dev/null 2>&1
+    if [[ -s "$nsfile" ]]; then
+      clip::parse_ns_filenames "$nsfile" "$tmpdir"
       paths=$REPLY
     else
-      local nsfile="$tmpdir/ns-filenames"
-      sqlite3 "$DB_FILE" "SELECT writefile('$nsfile', blob) FROM clip_types WHERE clip_id=$id AND uti='NSFilenamesPboardType';" >/dev/null 2>&1
-      if [[ -s "$nsfile" ]]; then
-        clip::parse_ns_filenames "$nsfile" "$tmpdir"
+      local resolvedfile="$tmpdir/x-resolved-path"
+      sqlite3 "$DB_FILE" "SELECT writefile('$resolvedfile', blob) FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';" >/dev/null 2>&1
+      if [[ -s "$resolvedfile" ]]; then
+        clip::read_file "$resolvedfile"
         paths=$REPLY
       fi
     fi

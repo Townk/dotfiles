@@ -227,6 +227,43 @@ Describe 'clipboard-bridge-dispatch: L list-files'
     The output should include "/tmp/dev-b.txt"
   End
 
+  # Regression: the HS watcher's classify_file_or_directory() only ever
+  # inspects pasteboard item 1 (clipboard-history.lua ~L206-224), so a
+  # genuine multi-file local capture (Finder multi-select, yazi multi-yank,
+  # `pbcopy a b c`) still gets an x-resolved-path blob holding just the
+  # FIRST of the N paths -- even though the SAME capture's
+  # NSFilenamesPboardType blob (set once, on item 1, as the full array)
+  # already carries all of them, and even though the refined kind often
+  # lands as the singular 'file' (a pre-existing, unrelated mislabel --
+  # unchanged here). Seeding BOTH blobs on one row, exactly as the watcher
+  # produces for a real multi-file capture: L must resolve every path via
+  # NSFilenamesPboardType, not silently truncate to the x-resolved-path
+  # blob's single entry.
+  It 'resolves ALL paths of a multi-file local clip (NSFilenamesPboardType over a single-path x-resolved-path)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','laptop',260.0); SELECT last_insert_rowid();")
+    plistfile="$SHELLSPEC_TMPBASE/multi-filenames.plist"
+    {
+      printf '<?xml version="1.0" encoding="UTF-8"?>\n'
+      printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+      printf '<plist version="1.0"><array>\n'
+      printf '<string>/tmp/multi-a.txt</string>\n'
+      printf '<string>/tmp/multi-b.txt</string>\n'
+      printf '<string>/tmp/multi-c.txt</string>\n'
+      printf '</array></plist>\n'
+    } > "$plistfile"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'NSFilenamesPboardType', readfile('$plistfile'));"
+    resolvedfile="$SHELLSPEC_TMPBASE/multi-resolved-path"
+    printf '%s' "/tmp/multi-a.txt" > "$resolvedfile"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-resolved-path', readfile('$resolvedfile'));"
+
+    When call run_l
+    The status should be success
+    The output should include "STATUS:O"
+    The output should include "/tmp/multi-a.txt"
+    The output should include "/tmp/multi-b.txt"
+    The output should include "/tmp/multi-c.txt"
+  End
+
   It 'errors not-files when the latest row is a plain text clip'
     sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','laptop',400.0,'hello');"
 
