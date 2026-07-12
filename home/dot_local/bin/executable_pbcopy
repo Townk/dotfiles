@@ -32,12 +32,24 @@
 #   files at all (unlike the plain-text branch below, which always has the
 #   OSC 52 fallback).
 #
+# --content <file> (M3, files-yazi design): puts a file's raw BYTES on the
+# pasteboard under a detected UTI (extension map first, `file --mime-type -b`
+# fallback, else a loud "cannot infer UTI" error) — a rich-type sibling of
+# the path-args file-OBJECT mode above, not a text/file-reference copy.
+#   Local (no SSH) → send op `C` (copy-rich: uti + blob) to 127.0.0.1:2489,
+#   reply-checked the same way as `U` above.
+#   Over SSH + reverse-bridge-up → send `C` to the reverse-tunneled peer
+#   bridge (same CLIPBOARD_BRIDGE_PORT/probe convention as `N` above).
+#   Over SSH, no bridge → loud error: OSC 52 is text-only and cannot carry
+#   rich types any more than it can carry files.
+#
 # Standalone POSIX sh, no library sourcing: this needs to work from any
 # caller (editors, git, other scripts) with zero fragile dependencies, same
 # rationale as ~/.local/bin/wait-until.
 #
 # Usage: printf '%s' "$text" | pbcopy
 #        pbcopy <path>...
+#        pbcopy --content <file>
 
 set -eu
 
@@ -51,6 +63,10 @@ clipboard.
 Local: delegates to the platform tool (/usr/bin/pbcopy, wl-copy, or xclip).
 Over SSH: writes an OSC 52 sequence that rides up through Zellij/WezTerm to the
 Mac's clipboard (write-only, never hangs). See pbpaste for the read side.
+
+pbcopy <path>...        puts a real file clip on the pasteboard.
+pbcopy --content <file> puts the file's raw bytes on the pasteboard under a
+                        detected UTI (rich-type copy).
 
 Usage: printf '%s' "$text" | pbcopy
 EOF
@@ -98,6 +114,104 @@ send_frame() {
     } | nc -w2 127.0.0.1 "$_port" >/dev/null 2>&1 || true
   fi
 }
+
+# UTI detection for --content mode below: extension map first (fast, no
+# external process needed for the common cases), then `file --mime-type -b`
+# as a fallback for extensionless or misnamed files. Prints the UTI on
+# stdout and returns 0, or returns 1 (nothing printed) when neither table
+# has a match — caller turns that into the "cannot infer UTI" error.
+detect_uti() {
+  _duti_f=$1
+  _duti_base=$(basename -- "$_duti_f")
+  case "$_duti_base" in
+    *.*) _duti_ext=$(printf '%s' "${_duti_base##*.}" | tr '[:upper:]' '[:lower:]') ;;
+    *) _duti_ext="" ;;
+  esac
+  case "$_duti_ext" in
+    png) printf '%s' public.png; return 0 ;;
+    jpg|jpeg) printf '%s' public.jpeg; return 0 ;;
+    tif|tiff) printf '%s' public.tiff; return 0 ;;
+    pdf) printf '%s' com.adobe.pdf; return 0 ;;
+    txt) printf '%s' public.utf8-plain-text; return 0 ;;
+    gif) printf '%s' com.compuserve.gif; return 0 ;;
+    webp) printf '%s' org.webmproject.webp; return 0 ;;
+  esac
+  _duti_mime=$(file --mime-type -b -- "$_duti_f" 2>/dev/null)
+  case "$_duti_mime" in
+    image/png) printf '%s' public.png; return 0 ;;
+    image/jpeg) printf '%s' public.jpeg; return 0 ;;
+    image/tiff) printf '%s' public.tiff; return 0 ;;
+    application/pdf) printf '%s' com.adobe.pdf; return 0 ;;
+    text/plain) printf '%s' public.utf8-plain-text; return 0 ;;
+    image/gif) printf '%s' com.compuserve.gif; return 0 ;;
+    image/webp) printf '%s' org.webmproject.webp; return 0 ;;
+  esac
+  return 1
+}
+
+# --content <file> (M3 UTI mode, files-yazi design): put the file's raw
+# BYTES on the clipboard under a detected UTI via bridge op `C` (copy-rich —
+# see clip::op_copy in clipboard-bridge-dispatch: its payload framing is
+# <2-byte BE uti_len><uti><blob>; send_frame's outer opcode+BE32-length
+# wraps that whole thing, exactly like every other op). Handled as its own
+# top-level mode, entirely separate from the no-arg/path-args branches
+# below, since it dispatches to `C` (not `U`/`N`) and needs its own honest
+# SSH-no-bridge error (OSC 52 is text-only and can't carry rich types any
+# more than it can carry files — see the file-mode comment above for the
+# same rationale).
+if [ "${1:-}" = "--content" ]; then
+  shift
+  if [ $# -ne 1 ]; then
+    echo "pbcopy: --content takes exactly one file" >&2
+    exit 1
+  fi
+  content_file=$1
+  if [ ! -e "$content_file" ]; then
+    echo "pbcopy: no such file: $content_file" >&2
+    exit 1
+  fi
+  content_uti=$(detect_uti "$content_file") || {
+    echo "pbcopy: cannot infer UTI for $content_file" >&2
+    exit 1
+  }
+
+  payfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-c.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
+  replyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-cr.XXXXXX") || { rm -f "$payfile"; echo "pbcopy: mktemp failed" >&2; exit 1; }
+  trap 'rm -f "$payfile" "$replyfile"' EXIT INT TERM
+
+  # op_copy's inner framing: a 2-byte big-endian length, then that many UTI
+  # bytes, then the raw blob -- built into the payfile via `cat` (never
+  # $(...), which would mangle a blob containing NULs).
+  _uti_len=$(printf '%s' "$content_uti" | wc -c | tr -d ' ')
+  {
+    printf "\\$(printf %03o $(((_uti_len>>8)&255)))\\$(printf %03o $((_uti_len&255)))"
+    printf '%s' "$content_uti"
+    cat "$content_file"
+  } > "$payfile"
+
+  if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+    content_port=2489
+  else
+    content_port="${CLIPBOARD_BRIDGE_PORT:-2490}"
+    if ! nc -z -w1 127.0.0.1 "$content_port" >/dev/null 2>&1; then
+      echo "pbcopy: --content needs the reverse bridge (OSC 52 cannot carry rich types)" >&2
+      exit 1
+    fi
+  fi
+
+  send_frame C "$content_port" "$payfile" "$replyfile"
+  _status=$(head -c 1 "$replyfile" 2>/dev/null || true)
+  if [ "$_status" = "O" ]; then
+    exit 0
+  fi
+  if [ "$_status" = "E" ]; then
+    _msg=$(tail -c +6 "$replyfile" 2>/dev/null)
+    echo "pbcopy: ${_msg:-bridge reported an error}" >&2
+    exit 1
+  fi
+  echo "pbcopy: clipboard bridge is not reachable on 127.0.0.1:$content_port" >&2
+  exit 1
+fi
 
 if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
   if [ $# -gt 0 ]; then

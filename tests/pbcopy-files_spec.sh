@@ -202,3 +202,172 @@ EOF
     The output should include "$sentinel"
   End
 End
+
+# `pbcopy --content <file>` (M3, files-yazi design): puts the file's raw
+# BYTES on the clipboard under a detected UTI via bridge op `C` (copy-rich).
+# Unlike the U/N tests above (which only ever carry NUL-joined path TEXT and
+# so can fold NULs to "|" for readable log assertions), op C's payload is
+# itself binary (a 2-byte length + a blob that can hold arbitrary bytes,
+# including NULs) -- so this fake `nc` captures the exact, untranslated
+# frame to a side file and the tests below parse it byte-for-byte with
+# od/head/tail instead of string-matching a translated log.
+Describe 'pbcopy: --content rich-UTI mode'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbcopy"
+  NCRAW="" # set in setup(), below
+
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    export PBCOPY_OSC52_SINK="$SHELLSPEC_TMPBASE/osc52"
+    BINDIR="$SHELLSPEC_TMPBASE/bin-content"; mkdir -p "$BINDIR"
+    NCLOG="$SHELLSPEC_TMPBASE/nclog-content"; : > "$NCLOG"
+    NCRAW="$SHELLSPEC_TMPBASE/ncraw-content"; rm -f "$NCRAW"
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+# Probe form (SSH+bridge branch): "nc -z -w1 127.0.0.1 <port>", no stdin.
+if [ "\$1" = "-z" ]; then
+  [ "\${NC_BRIDGE_UP:-1}" = "1" ] && exit 0 || exit 1
+fi
+port=\$3
+cat > "$NCRAW"
+# A separate translated text log, just for the cheap "which port/opcode,
+# was a frame sent at all" assertions -- same "\\0 -> |" trick as the
+# U/N fake, safe here because only the log (never \$NCRAW) is compared as
+# text.
+{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "$NCRAW"; printf '\\n'; } >> "$NCLOG"
+case "\${NC_REPLY:-ok}" in
+  err) printf 'E\\000\\000\\000\\004boom' ;;
+  *) printf 'O\\000\\000\\000\\000' ;;
+esac
+EOF
+    chmod +x "$BINDIR/nc"
+    export PATH="$BINDIR:$PATH"
+  }
+  BeforeEach 'setup'
+
+  # od -An -tu1 -j <0-based offset> -N 1 <file> -> decimal value of that byte.
+  byte_val() {
+    od -An -tu1 -j "$2" -N 1 "$1" | tr -d ' \n'
+  }
+
+  # Splits $NCRAW (a raw <opcode><BE32 len><BE16 uti_len><uti><blob> frame)
+  # apart and writes the uti to $1-uti and the blob to $1-blob, both as real
+  # files -- so callers can assert on them with ordinary shellspec file
+  # matchers (uti) or a binary-safe `cmp` (blob), never a shell string that
+  # would choke on embedded NULs.
+  split_frame() {
+    _out=$1
+    _b1=$(byte_val "$NCRAW" 5)
+    _b2=$(byte_val "$NCRAW" 6)
+    _uti_len=$((_b1 * 256 + _b2))
+    tail -c +8 "$NCRAW" | head -c "$_uti_len" > "${_out}-uti"
+    tail -c +"$((8 + _uti_len))" "$NCRAW" > "${_out}-blob"
+  }
+
+  It 'sends a C frame to :2489 carrying the exact uti and byte-identical (NUL-containing) blob'
+    fixture="$SHELLSPEC_TMPBASE/blob.png"
+    printf 'PNG\000HEADER\000MORE\000DATA' > "$fixture"
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be success
+    The contents of file "$NCLOG" should include "2489:C"
+    split_frame "$SHELLSPEC_TMPBASE/got"
+    The contents of file "$SHELLSPEC_TMPBASE/got-uti" should equal "public.png"
+    cmp -s "$SHELLSPEC_TMPBASE/got-blob" "$fixture" && echo same > "$SHELLSPEC_TMPBASE/blobcmp" || echo diff > "$SHELLSPEC_TMPBASE/blobcmp"
+    The contents of file "$SHELLSPEC_TMPBASE/blobcmp" should equal "same"
+  End
+
+  It 'infers public.png from a .png extension'
+    fixture="$SHELLSPEC_TMPBASE/pic.png"; touch "$fixture"
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be success
+    split_frame "$SHELLSPEC_TMPBASE/got2"
+    The contents of file "$SHELLSPEC_TMPBASE/got2-uti" should equal "public.png"
+  End
+
+  It 'infers com.adobe.pdf from a .pdf extension'
+    fixture="$SHELLSPEC_TMPBASE/doc.pdf"; touch "$fixture"
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be success
+    split_frame "$SHELLSPEC_TMPBASE/got3"
+    The contents of file "$SHELLSPEC_TMPBASE/got3-uti" should equal "com.adobe.pdf"
+  End
+
+  It 'falls back to `file --mime-type -b` for an extensionless file'
+    fixture="$SHELLSPEC_TMPBASE/mimetext"
+    printf 'hello world\n' > "$fixture"
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be success
+    split_frame "$SHELLSPEC_TMPBASE/got4"
+    The contents of file "$SHELLSPEC_TMPBASE/got4-uti" should equal "public.utf8-plain-text"
+  End
+
+  It 'errors with the exact "cannot infer UTI" message and exit 1 for an unrecognized type'
+    fixture="$SHELLSPEC_TMPBASE/weird.xyz"
+    printf '\001\002\003\004' > "$fixture"
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be failure
+    The stderr should equal "pbcopy: cannot infer UTI for $fixture"
+    The contents of file "$NCLOG" should equal ""
+  End
+
+  It 'exits 1 naming a missing file, without contacting the bridge'
+    missing="$SHELLSPEC_TMPBASE/does-not-exist-content.png"
+    When run command sh "$SCRIPT" --content "$missing"
+    The status should be failure
+    The stderr should include "$missing"
+    The contents of file "$NCLOG" should equal ""
+  End
+
+  It 'errors when given zero files'
+    When run command sh "$SCRIPT" --content
+    The status should be failure
+    The stderr should include "--content"
+  End
+
+  It 'errors when given more than one file'
+    f1="$SHELLSPEC_TMPBASE/multi-a.png"; touch "$f1"
+    f2="$SHELLSPEC_TMPBASE/multi-b.png"; touch "$f2"
+    When run command sh "$SCRIPT" --content "$f1" "$f2"
+    The status should be failure
+    The stderr should include "--content"
+  End
+
+  It 'fails loudly when the bridge replies with an E status'
+    fixture="$SHELLSPEC_TMPBASE/err.png"; touch "$fixture"
+    export NC_REPLY=err
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be failure
+    The stderr should include "boom"
+  End
+
+  # Over SSH + reverse-bridge-up: same `C` op, but to the reverse-tunneled
+  # peer bridge (port 2490 / CLIPBOARD_BRIDGE_PORT) instead of 2489 -- OSC 52
+  # is text-only and can't carry rich types any more than it can carry files.
+  It 'sends a C frame to :2490 when SSH+bridge-up'
+    export SSH_CONNECTION="x 1 y 22"
+    export NC_BRIDGE_UP=1
+    fixture="$SHELLSPEC_TMPBASE/rem.png"; touch "$fixture"
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be success
+    The contents of file "$NCLOG" should include "2490:C"
+  End
+
+  It 'honors CLIPBOARD_BRIDGE_PORT for the SSH+content probe and frame'
+    export SSH_CONNECTION="x 1 y 22"
+    export CLIPBOARD_BRIDGE_PORT=9999
+    export NC_BRIDGE_UP=1
+    fixture="$SHELLSPEC_TMPBASE/rem-port.png"; touch "$fixture"
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be success
+    The contents of file "$NCLOG" should include "9999:C"
+  End
+
+  It 'errors with the reverse-bridge message when no bridge is up, without sending a frame'
+    export SSH_CONNECTION="x 1 y 22"
+    export NC_BRIDGE_UP=0
+    fixture="$SHELLSPEC_TMPBASE/rem-nobridge.png"; touch "$fixture"
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be failure
+    The stderr should include "pbcopy: --content needs the reverse bridge (OSC 52 cannot carry rich types)"
+    The contents of file "$NCLOG" should equal ""
+  End
+End
