@@ -190,6 +190,22 @@ is OS-agnostic.
 The skip-filter runs **before any forward** to the bridge, so sensitive
 content never leaves the originating machine.
 
+> **As-built note (Phase 6)**: the Phase 6 design explicitly planned *no*
+> edits to the Hammerspoon watcher module (`clipboard-history.lua`) — the
+> bridge dispatcher was meant to drive Hammerspoon only via generated
+> `hs_run` scripts. That held for every new op except `N` (push-manifest):
+> its origin declaration needed a way to tell the watcher "the next
+> pasteboard change is an echo of a manifest I just pushed, not a new copy,"
+> or a phantom text row would shadow the manifest row in the store. The
+> existing current-origin state-file contract (host + hash + epoch, 3 lines)
+> gained an optional one-shot 4th line, `suppress-echo`, written only by op
+> `N`'s origin declaration; `capture_now()` consumes it and skips capturing
+> that one change. Plain `O` origin declarations (text-frame writes) are
+> unchanged — still 3 lines, regression-pinned by existing tests. This is the
+> one authorized deviation from "no Hammerspoon module edits" in the Phase 6
+> design (coordinator-authorized plan deviation, tracked through the SDD
+> progress log).
+
 ## 7. `pick-clipboard` (picker, pick silo)
 
 New `~/.local/libexec/executable_pick-clipboard`, modeled on
@@ -441,6 +457,43 @@ materialized by pulling the bytes down **at use time**, then stored locally.
     the honest way. `scp:` URIs only matter for apps that explicitly handle
     them (Transmit, Cyberduck) — out of scope.
 
+> **As-built note (Phase 6)**: the flow name "scp-down" is kept for the
+> Mac←remote pull described above, but the engine is brew rsync
+> (`rsync -a --info=progress2 -e ssh`), not `scp` — chosen for its resumable
+> `--partial` and live progress meter on many-small-file pulls. The terminal
+> picker's `Ctrl-Y` on a remote-manifest row localizes into
+> `~/.cache/pick-clipboard/files/<clip-id>/<idx>/` via that engine, then
+> restores a real local file clip through the bridge's new `U` op (§13
+> below) — same local-url outcome this section describes, with an extra
+> localization hop first.
+>
+> The reverse direction — a dev shell pasting a Mac-origin clip, which has no
+> ssh path back to the Mac — uses two new framed bridge ops instead of rsync:
+> `F` (fetch-file; replies with an exact `is-directory` error frame when the
+> path is a directory, signaling the client to fall back to `A`) for
+> individual files, and `A` (archive-stream) for directories: a `tar` stream
+> whose reply carries a `BE64` size prefix computed from a pre-flight
+> `du -sk` — an **estimate for progress display only, with no directional
+> guarantee** (block-accounting rounding and sparse files can push the real
+> stream above *or* below it). Clients read to EOF rather than trusting the
+> count, clamp progress display at 100% instead of overshooting, and treat
+> the tar stream's own extraction exit status — not the size prefix — as the
+> integrity check. Every detectable failure, including an unreadable entry
+> found by a pre-flight readability walk over the source tree, is reported
+> as an error frame *before* any stream byte goes out; an I/O fault striking
+> truly mid-stream (after the walk, before `tar` gets there) can only
+> manifest as a short-but-clean stream, caught client-side by `pbpaste`'s own
+> tar-extraction check.
+>
+> Local materialization (same host, either direction) is tiered: APFS
+> clonefile (`cp -Rc`, copy-on-write, instant) → brew rsync (cross-volume or
+> non-APFS) → `cp -a` (rsync absent). All materialization — local and
+> cross-machine — stages into a temp directory next to the target and
+> renames each item into place atomically on completion, so an interrupt
+> never leaves a partial file at the destination. `--force` on an existing
+> name uses rename-aside (moves the existing item out of the way first),
+> never `rm` followed by `mv`.
+
 ## 13. `pbcopy` / `clip-copy` shims
 
 A bridge-aware `pbcopy` shim on macOS and the dev shell (and
@@ -460,9 +513,93 @@ where "you" is decided by bridge-up:
   (macOS: `osascript … as «class PNGf»` / `pngpaste`; Linux: `wl-paste -t
   image/png` / `xclip -o -t image/png`).
 
-> **As-built note**: the landed `pbcopy`/`pbpaste` shims (Phase 1/pre-project)
-> are simpler than this — plain text only, no `clip-copy` file/image mode
-> yet. This section is Phase 6 scope, not started.
+> **As-built note (Phase 1/pre-project)**: the shims started out plain
+> text-only, no `clip-copy` file/image mode. Superseded below.
+
+> **As-built note (Phase 6, supersedes the note above)**: `clip-copy` was
+> never built as a separate command. File/content modes folded into the
+> existing shims instead, so `pbcopy`/`pbpaste` remain the only two entry
+> points:
+>
+> - `pbcopy <paths…>` — file-object mode. Sitting at the Mac → local bridge
+>   op `U` (set-file-urls) writes a real file clip straight to the
+>   pasteboard. SSH + bridge-up → op `N` (push-manifest): the Mac records an
+>   `x-file-manifest` store row and puts the paths on its own pasteboard as
+>   text, so the clip is visible in history without the bytes crossing yet
+>   (§12's lazy rule). No bridge (iPad) → clear error; file clips never ride
+>   OSC 52 (§14).
+> - `pbcopy --content <file>` — the file's *bytes* under a detected UTI
+>   (extension first, then `file --mime-type`) via the existing `C` op. This
+>   is the mode this section originally called `clip-copy`.
+> - `pbpaste --manifest` — prints the current file clip's manifest (kind,
+>   host, timestamp, NUL-joined paths) via the new `L` op (list-files); no
+>   filesystem writes.
+> - `pbpaste --files [--force] [--quiet|--progress|--porcelain] [dir]` —
+>   materializes the current file clip into `dir` (default cwd); see §12's
+>   as-built note for the transfer engines, tiers, and staging behavior.
+>
+> **Rationale for folding rather than adding sibling commands**: `pbpaste`'s
+> plain invocation is `$(pbpaste)`-safe by contract — scripts and editors
+> call it blind and must never trigger a filesystem write. Keeping one
+> command with the file behavior strictly flag-gated (`--files`) preserves
+> that contract; a `clip-paste` sibling would have split callers across two
+> tools for no safety gain. `pbcopy` overloads safely on path arguments
+> because that syntax was already dead: neither the shim nor Apple's own
+> binary accepted operands before Phase 6, so the no-arg stdin path stays
+> byte-identical.
+>
+> **New bridge ops** (same framed protocol —
+> `<opcode><BE32 len><payload>` — and `hs_run` pattern as the existing
+> `get`/`get-regtype`/`set`/`C` ops):
+> - `U` set-file-urls — NUL-separated absolute paths → writes
+>   `NSFilenamesPboardType` + `public.file-url` via Hammerspoon; the watcher
+>   then captures the clip like any other copy (full circle, same design as
+>   the `O`/`P` text frames). Also has an `id:<n>` full-fidelity restore form
+>   (used by the picker's `Ctrl-Y`).
+> - `L` list-files — no payload; returns
+>   `type_kind US source_host US created_at US <path NUL path …>` for the
+>   current clip, or an error frame if it isn't a files clip. Retries briefly
+>   (~0.3s) to tolerate the watcher's capture lag before declaring "not
+>   files" (§14).
+> - `N` push-manifest — remote `pbcopy`'s manifest push: sets the Mac's
+>   pasteboard text and inserts an `x-file-manifest` store row.
+> - `A` archive-stream — directory tar stream (§12's as-built note above).
+>
+> `F` (fetch-file) predates Phase 6 as a caller-less opcode; Phase 6 gave it
+> its first real callers.
+>
+> **Store**: new synthetic UTI `x-file-manifest` (NUL-joined absolute
+> paths), following the `x-resolved-path` precedent (§5). Rows carry
+> `type_kind='files'` and `source_host=<origin host>`; a manifest row is
+> replaced by a fully local row once the clip is materialized, so later
+> pastes need no re-fetch.
+
+### Yazi + zsh smart-paste (net-new, Phase 6 — beyond the original master-spec scope)
+
+Yazi was never in this document's original scope; Phase 6 added it as a thin
+consumer of the shims above — no clipboard protocol logic lives in Lua:
+
+- `y` mirrors the selection to the system clipboard via `pbcopy` (best
+  effort, silent — a dead bridge or iPad session never blocks or fails a
+  plain internal yank) and stamps a `last-yank` marker, then runs yazi's
+  native internal yank. `x` (cut) stamps the marker only, never mirrored —
+  a mirrored cut pasted elsewhere would silently become a copy, breaking
+  the move contract.
+- `p`/`P` run the `smart-paste.yazi` plugin: a 5-rule resolver that compares
+  the yank list against the current clipboard manifest, host, and the
+  `last-yank`/`last-paste` marker timestamps to choose between yazi's native
+  paste (internal yank — preserves cut/move semantics) and
+  `pbpaste --files` (system clipboard). Local manifests paste in the
+  background; remote manifests (bytes must cross machines) run
+  `pbpaste --files` via a blocking `shell --block` so the shim's own
+  progress renders in the foreground, same renderer as zsh.
+- zsh got a matching `Alt+p` ZLE widget (`smart-paste`, bound in
+  `keybindings.sh`): a text clip is inserted at the cursor; a files clip
+  fills the buffer with `pbpaste --files` and accepts it as a normal,
+  visible, cancellable command, rather than blocking inside ZLE.
+
+This is called out explicitly because it is scope this document never
+claimed before Phase 6 — see §18/STATUS.
 
 ## 14. Honest limits (must be handled, not hidden)
 
@@ -488,6 +625,31 @@ where "you" is decided by bridge-up:
   pane); that limit is about the sink, not about where the payload lives.
 - **Storage cost**: image BLOBs can be MBs. Per-representation cap (~5 MB),
   total-store cap, oldest-dropped retention sweep.
+- **File clips never ride OSC 52** (Phase 6). An iPad/no-bridge
+  `pbcopy <paths>` fails with a clear error; picker `Ctrl-Y` on a files row
+  from the iPad is a no-op — same honesty rule as images, above.
+- **`CLIP_FILE_MAX`** (Phase 6, default 200 MB / 209715200 bytes,
+  env-overridable): cross-machine fetches above the cap prompt for
+  confirmation on an interactive TTY; non-interactive callers fail with the
+  limit named, rather than silently pulling an arbitrarily large transfer.
+- **`A` (archive-stream) sizes are estimates** (Phase 6), computed via a
+  pre-flight `du` before the tar stream starts — not a byte-exact guarantee
+  in either direction (§12's as-built note). Clients clamp progress at 100%
+  rather than overshoot and treat the tar stream's own exit status, not the
+  size prefix, as the integrity check.
+- **Watcher lag** (Phase 6): the `L` op resolves through the store, which
+  trails the pasteboard by up to ~0.5s; it retries briefly (~0.3s) before
+  declaring "not a files clip." A paste executed inside that window can
+  still see the previous clip.
+- **Clock skew** (Phase 6): the yazi resolver's rule 5 compares a
+  manifest's `created_at` against the local `last-yank` marker's mtime,
+  potentially across different machines. NTP keeps skew sub-second, but a
+  copy race inside that window can pick the wrong source. Documented, not
+  hidden.
+- **Mid-stream truncation** (Phase 6): a dropped connection or I/O fault
+  during an `F` or `A` stream can't be caught from the byte count (an
+  estimate for `A`) — it surfaces client-side, as a short `F` file or a
+  tar stream that fails to extract cleanly.
 
 ## 15. Security
 
@@ -578,7 +740,22 @@ working.
 > commit `9819757` — dispatcher wired into the service, type-preserving
 > cross-machine nvim paste, `Ctrl-Y` in both pickers, and a local→remote
 > history mirror. Absolute `source_host` provenance + the `loginwindow` echo
-> guard landed in `eee3cf2`. **Phases 6–7 are not started.**
+> guard landed in `eee3cf2`.
+>
+> **Phase 6 — file clips + yazi/zsh integration — done and live as of
+> 2026-07-12** (as-built deltas in §6, §12, §13 above; design of record:
+> `docs/superpowers/specs/2026-07-11-clipboard-phase6-files-yazi-design.md`).
+> Landed: the `U`/`L`/`N`/`A` bridge ops and the `x-file-manifest` synthetic
+> UTI; `pbcopy`/`pbpaste` file modes with no `clip-copy` sibling (folded in,
+> §13); the rsync-engine scp-down + picker `Ctrl-Y` file-row localization
+> (§12); the one-shot `suppress-echo` extension to the Hammerspoon watcher's
+> origin-file contract (§6) — the plan's one authorized deviation from "no
+> Hammerspoon module edits." **Beyond the original master spec's scope**:
+> yazi `y`/`x`/`p`/`P` clipboard integration and the `smart-paste.yazi`
+> plugin, plus a zsh `Alt+p` smart-paste ZLE widget (§13) — yazi was never
+> covered by this document before Phase 6.
+>
+> **Phase 7 (Linux capture) is not started.**
 >
 > **Phase 5-R — self-contained clips (revision, supersedes the mirror).** The
 > Phase-5 pointer mirror is being replaced per §11: clips materialize in full
