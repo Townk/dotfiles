@@ -407,3 +407,122 @@ Describe 'clipboard-bridge-dispatch: N push-manifest'
     The line 4 of contents of file "$originfile" should equal "suppress-echo"
   End
 End
+
+# F fetch-file: M3 extends the existing raw-bytes op with one new error case
+# -- handed a DIRECTORY it must reply `E is-directory` (exact string, not
+# just "starts with E") rather than trying to `wc -c`/stream a directory as
+# if it were a file. Task 13's remote pbpaste greps for this exact string to
+# decide "retry this path as an A archive-stream instead" (files-yazi design
+# §4/§8) -- a looser string would silently break that retry.
+Describe 'clipboard-bridge-dispatch: F fetch-file'
+  DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
+    mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
+  }
+  BeforeEach 'setup'
+
+  It 'errors is-directory when handed a directory path'
+    dir="$SHELLSPEC_TMPBASE/f-is-a-dir"
+    mkdir -p "$dir"
+    payload=$(printf '%s' "$dir")
+    len=${#payload}
+    { printf 'F'; printf '\000\000\000'; printf "\\$(printf %03o "$len")"; printf '%s' "$payload"; } \
+      > "$SHELLSPEC_TMPBASE/f-req"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$SHELLSPEC_TMPBASE/f-req"
+    The status should be success
+    The output should equal "$(printf 'E\000\000\000\014is-directory')"
+  End
+End
+
+# A archive-stream: M3's directory-pull sibling of F (files-yazi design §4).
+# Reply on success: O + BE32 len=8 + BE64 total-byte-count (a `du -sk`-based
+# CEILING estimate, not an exact promise -- see the header comment on
+# clip::op_archive_stream), then the raw `tar -cf -` stream of the directory
+# until EOF, no trailing frame. Error frames (bad path) look exactly like any
+# other op's E frame and arrive BEFORE any stream bytes.
+Describe 'clipboard-bridge-dispatch: A archive-stream'
+  DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
+    mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
+    DIR="$SHELLSPEC_TMPBASE/archive-src"
+    rm -rf "$DIR"
+    mkdir -p "$DIR/sub"
+    printf 'hello' > "$DIR/a.txt"
+    printf 'world, this is a longer nested file body' > "$DIR/sub/b.txt"
+    REQ="$SHELLSPEC_TMPBASE/a-req"
+    RESP="$SHELLSPEC_TMPBASE/a-resp"
+  }
+  BeforeEach 'setup'
+
+  # be32 <n> -- mirrors the dispatcher's own int_to_be32 (see the N describe
+  # block above for the identical helper/rationale).
+  be32() {
+    n=$1
+    printf "\\$(printf %03o $(( (n >> 24) & 255 )))\\$(printf %03o $(( (n >> 16) & 255 )))\\$(printf %03o $(( (n >> 8) & 255 )))\\$(printf %03o $(( n & 255 )))"
+  }
+
+  build_req() {
+    _path=$1
+    _len=${#_path}
+    { printf 'A'; be32 "$_len"; printf '%s' "$_path"; } > "$REQ"
+  }
+
+  # be_n_to_int <byte-offset> <nbytes> -- decodes the big-endian integer at
+  # that offset in $RESP (byte-exact via `od`, no `$(<file)` truncation risk
+  # since these offsets never straddle a NUL -- length/count headers only).
+  be_n_to_int() {
+    dd if="$RESP" bs=1 skip="$1" count="$2" 2>/dev/null | od -An -tu1 | tr -s ' \n' ' ' | \
+      awk '{s=0; for (i=1;i<=NF;i++) if ($i!="") s=s*256+$i; print s}'
+  }
+
+  # -f: see the matching note on the U describe block above.
+  It 'replies O + BE32(8) + BE64 count>=actual, then a tar stream of the seeded dir'
+    build_req "$DIR"
+    When run command sh -c 'zsh -f "$1" < "$2" > "$3"' _ "$DISPATCH" "$REQ" "$RESP"
+    The status should be success
+
+    status_byte=$(head -c1 "$RESP")
+    The variable status_byte should equal "O"
+
+    hdr_len=$(be_n_to_int 1 4)
+    The variable hdr_len should equal "8"
+
+    reported_bytes=$(be_n_to_int 5 8)
+    actual_kb=$(du -sk "$DIR" | awk '{print $1}')
+    actual_bytes=$(( actual_kb * 1024 ))
+    is_ge=$(awk -v a="$reported_bytes" -v b="$actual_bytes" 'BEGIN { print (a >= b) ? "yes" : "no" }')
+    The variable is_ge should equal "yes"
+
+    tail -c +14 "$RESP" > "$SHELLSPEC_TMPBASE/a-tar"
+    tar_list=$(tar -tf "$SHELLSPEC_TMPBASE/a-tar" | sort)
+    The variable tar_list should include "archive-src/a.txt"
+    The variable tar_list should include "archive-src/sub/b.txt"
+  End
+
+  It 'errors on a nonexistent path'
+    build_req "$SHELLSPEC_TMPBASE/does-not-exist-at-all"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+  End
+
+  It 'errors on a FILE path (not a directory)'
+    f="$SHELLSPEC_TMPBASE/a-plain-file.txt"
+    printf 'just a file' > "$f"
+    build_req "$f"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "not a directory"
+  End
+
+  It 'errors on a relative path'
+    build_req "relative/dir"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+  End
+End

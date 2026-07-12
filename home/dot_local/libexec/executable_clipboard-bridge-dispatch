@@ -34,6 +34,16 @@
 #      LOCAL bridge by the nvim provider on paste-over-tunnel. resp: empty | err.
 #   C  copy (rich)    req: <2 bytes uti_len><uti><blob>  resp: empty | error text
 #   F  fetch-file     req: absolute path (UTF-8)     resp: file bytes | error text
+#      Handed a directory instead of a file, replies the EXACT error text
+#      "is-directory" (M3) -- a remote pbpaste greps for that string to know
+#      to retry the same path as an A archive-stream. See clip::op_fetch_file.
+#   A  archive-stream req: absolute directory path (UTF-8)
+#                     resp: BE64 byte-count header + raw tar stream | err
+#      F's directory sibling (M3, files-yazi design §4): replies `O` + BE32
+#      len=8 + a BE64 total-byte-count (a `du`-based CEILING estimate, not an
+#      exact promise), then the raw `tar -cf -` stream of the directory until
+#      EOF -- no trailing frame, the client just reads until the peer
+#      closes. See clip::op_archive_stream.
 #   O  declare-origin req: source_host US text        resp: empty | err
 #      Records that the NEXT pasteboard change hashing to sha256(text) was
 #      really copied on source_host (§23) -- sent by a machine SSH'd into the
@@ -186,6 +196,23 @@ int_to_be32() {
   local fd
   exec {fd}< "$tmpf"
   sysread -s 4 -i $fd REPLY
+  exec {fd}<&-
+  rm -f "$tmpf"
+}
+
+# int_to_be64 <n> -> writes the 8-byte big-endian scalar to $REPLY. Same
+# mktemp round-trip as int_to_be32 above (same note applies -- ${(e)string}
+# doesn't do \NNN escapes, printf's does but only survives via a real fd, not
+# a $(...) that would truncate an embedded NUL byte). Needed for op A's
+# BE64 total-byte-count header: a directory's `du`-based byte count can
+# exceed 4 GiB, overflowing BE32.
+int_to_be64() {
+  local -i n=$1
+  local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/clipboard-bridge-be64.XXXXXX")
+  printf "\\$(printf %03o $(( (n >> 56) & 255 )))\\$(printf %03o $(( (n >> 48) & 255 )))\\$(printf %03o $(( (n >> 40) & 255 )))\\$(printf %03o $(( (n >> 32) & 255 )))\\$(printf %03o $(( (n >> 24) & 255 )))\\$(printf %03o $(( (n >> 16) & 255 )))\\$(printf %03o $(( (n >> 8) & 255 )))\\$(printf %03o $(( n & 255 )))" > "$tmpf"
+  local fd
+  exec {fd}< "$tmpf"
+  sysread -s 8 -i $fd REPLY
   exec {fd}<&-
   rm -f "$tmpf"
 }
@@ -492,6 +519,17 @@ clip::op_list_files() {
 
 clip::op_fetch_file() {
   local fpath=$1
+  # M3: a directory can't be read/streamed as flat bytes -- reply with this
+  # EXACT string (not just "starts with E"). Task 13's remote pbpaste greps
+  # for it to know "retry this path as an A archive-stream instead" (see
+  # clip::op_archive_stream just below). Checked before the -r test: a
+  # directory usually passes -r (it's listable), so without this check
+  # `wc -c < "$fpath"` below would instead fail on "is a directory" and
+  # muddy the error.
+  if [[ -d "$fpath" ]]; then
+    send_err "is-directory"
+    return
+  fi
   if [[ ! -r "$fpath" ]]; then
     send_err "cannot read: $fpath"
     return
@@ -516,6 +554,65 @@ clip::op_fetch_file() {
     # of `-i` typing -- confirmed empirically). The compound assignment only
     # works inside arithmetic `(( ))`.
     (( remaining -= $#chunk ))
+  done
+  exec {fd}<&-
+}
+
+# A  archive-stream: F's directory sibling (M3, files-yazi design §4) -- F
+# can only handle a flat file, so a directory pull goes through `tar` here
+# instead. Reply: O + BE32 len=8 + BE64 total-byte-count, then the raw
+# `tar -cf - -C <parent> <basename>` stream until EOF -- unlike F's reply,
+# there is NO trailing frame and the byte count is NOT an exact promise: it
+# comes from `du -sk <dir>` (the filesystem's own KiB block accounting) x
+# 1024, which is a CEILING relative to the tar stream's real length (tar
+# adds its own per-entry header/padding overhead; `du` also collapses
+# sparse-file holes that would still cost real bytes in the archive). A
+# caller can size a progress bar off it but must never use it to decide when
+# to stop reading -- that's EOF, exactly like a normal socket close.
+clip::op_archive_stream() {
+  local dir=$1
+  if [[ "$dir" != /* ]]; then
+    send_err "not absolute: $dir"
+    return
+  fi
+  if [[ ! -e "$dir" ]]; then
+    send_err "cannot read: $dir"
+    return
+  fi
+  if [[ ! -d "$dir" ]]; then
+    send_err "not a directory: $dir"
+    return
+  fi
+  if [[ ! -r "$dir" ]]; then
+    send_err "cannot read: $dir"
+    return
+  fi
+
+  local -i kb
+  kb=$(du -sk "$dir" 2>/dev/null | awk '{print $1}')
+  local -i total_bytes=$(( kb * 1024 ))
+
+  # tar wants a parent dir + basename (so the archive's entries are rooted
+  # at the basename, not an absolute path) -- zsh's :h/:t modifiers split
+  # exactly that without a subshell.
+  local parent=${dir:h} base=${dir:t}
+
+  int_to_be32 8
+  local len_hdr=$REPLY
+  int_to_be64 "$total_bytes"
+  syswrite -- "O$len_hdr$REPLY"
+
+  local fd
+  exec {fd}< <(tar -cf - -C "$parent" -- "$base" 2>/dev/null)
+  # `chunk` declared once, outside the loop -- see the matching gotcha
+  # comment on read_n()/op_fetch_file above: a bare `local chunk` re-run
+  # inside the loop on a later iteration gets parsed by zsh as a request to
+  # DISPLAY the parameter instead of declaring it, which here would inject
+  # `chunk=$'...'` text into the middle of the tar stream.
+  local chunk
+  while true; do
+    sysread -s 65536 -i $fd chunk || break
+    syswrite -- "$chunk"
   done
   exec {fd}<&-
 }
@@ -728,6 +825,7 @@ case "$opcode" in
   O) clip::op_declare_origin "$payload" ;;
   C) clip::op_copy "$payload" ;;
   F) clip::op_fetch_file "$payload" ;;
+  A) clip::op_archive_stream "$payload" ;;
   U) clip::op_set_file_urls "$payload" ;;
   L) clip::op_list_files ;;
   N) clip::op_push_manifest "$payload" ;;
