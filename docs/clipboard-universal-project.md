@@ -14,7 +14,9 @@
 > this spec describes, and Phase 1's provider doesn't push over the bridge
 > during `copy()` the way §9 describes). Phase 5 (bridge evolution) is now
 > **implemented and live** too (commit `9819757`) — the §11 design below is
-> what shipped. Phases 6–7 remain.
+> what shipped. Phase 6 (file clips + yazi/zsh smart paste) shipped
+> 2026-07-12 — see the §18 STATUS block and the §12/§13 as-built notes.
+> Phase 7 (Linux capture) remains.
 
 A single clipboard history + type-preserving copy/paste system that works
 across multiple Macs (each used locally or over SSH), a Linux dev shell over
@@ -166,7 +168,11 @@ mode. Machine-local, **untracked, never committed, never synced via the repo**
 > **As-built note**: `source_bundle_id` was added by a later migration (not
 > in this original schema) for app-icon lookup in the GUI picker's metadata
 > pane. `type_kind` also grew `file`/`directory`/`url`/`mixed` refinements
-> beyond the original `text|rtf|html|image|files|mixed` set.
+> beyond the original `text|rtf|html|image|files|mixed` set. `clip_types`
+> also carries synthetic (non-pasteboard) UTIs the watcher/bridge mint
+> themselves: `x-resolved-path` (the resolved absolute path stored alongside
+> a captured file clip's `public.file-url`) and, since Phase 6,
+> `x-file-manifest` (§13 as-built note).
 
 ## 6. Capture shims (per-OS, behind one shared SQLite writer)
 
@@ -557,8 +563,10 @@ where "you" is decided by bridge-up:
 >   the `O`/`P` text frames). Also has an `id:<n>` full-fidelity restore form
 >   (used by the picker's `Ctrl-Y`).
 > - `L` list-files — no payload; returns
->   `type_kind US source_host US created_at US <path NUL path …>` for the
->   current clip, or an error frame if it isn't a files clip. Retries briefly
+>   `type_kind US source_host US last_ts US <path NUL path …>` for the
+>   current clip (the store row's `last_ts`, which `pbpaste --manifest`
+>   prints under the wire label `ts`), or an error frame if it isn't a
+>   files clip. Retries briefly
 >   (~0.3s) to tolerate the watcher's capture lag before declaring "not
 >   files" (§14).
 > - `N` push-manifest — remote `pbcopy`'s manifest push: sets the Mac's
@@ -642,7 +650,8 @@ claimed before Phase 6 — see §18/STATUS.
   declaring "not a files clip." A paste executed inside that window can
   still see the previous clip.
 - **Clock skew** (Phase 6): the yazi resolver's rule 5 compares a
-  manifest's `created_at` against the local `last-yank` marker's mtime,
+  manifest's timestamp (the store row's `last_ts`, wire-labeled `ts` in
+  `pbpaste --manifest`) against the local `last-yank` marker's mtime,
   potentially across different machines. NTP keeps skew sub-second, but a
   copy race inside that window can pick the wrong source. Documented, not
   hidden.
@@ -676,7 +685,8 @@ claimed before Phase 6 — see §18/STATUS.
 - Local framed-socket receiver / extended `clipboard-bridge` launchd service
   (utils/shell)
 - Remote framed-socket daemon + systemd user unit (Linux dev shell)
-- `pbcopy` / `clip-copy` shims (utils/shell)
+- `pbcopy` / `clip-copy` shims (utils/shell) *(clip-copy superseded — folded
+  into `pbcopy`/`pbpaste`, see §13 as-built note)*
 - Wayland `wl-paste --watch` writer + X11 xclip-poll writer (utils/shell)
 - The untracked SQLite store + nvim cache (runtime data, not in the repo)
 - Loose `~/.ssh/config.d/clipboard.config` additions (untracked)
@@ -705,7 +715,8 @@ the seams.
 - `pick-clipboard-zellij` + the `Alt+w v` keybind → **terminal-mux** silo.
 - NeoVim provider + `options.lua` + yanky removal → **nvim** silo.
 - Hammerspoon watcher + chooser → **hammerspoon** (its own area).
-- `pbcopy`/`clip-copy` shims, local receiver, remote daemon, Wayland/X11
+- `pbcopy`/`clip-copy` shims *(clip-copy superseded — see §13 as-built
+  note)*, local receiver, remote daemon, Wayland/X11
   writers, SSH config → **utils/shell** silos.
 - The SQLite store schema is a new contract shared by capture, picker, and
   chooser — coordinate across pick + hammerspoon + utils.
