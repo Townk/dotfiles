@@ -115,6 +115,22 @@ send_frame() {
   fi
 }
 
+# unknown_opcode_hint <port> -- rework R7: an E reply whose payload is
+# EXACTLY "unknown opcode" means one side's clipboard-bridge predates file
+# clips (U/N/C are newer than the always-supported plain-text G/O/P) --
+# the bare relayed "pbcopy: unknown opcode" left no clue which machine
+# needed the update. Port 2489 is always THIS machine's own bridge (U's
+# only port, and --content's local branch); anything else is the
+# reverse-tunneled PEER bridge (N's only port, and --content's SSH branch)
+# -- so the port alone decides which side the hint should name.
+unknown_opcode_hint() {
+  if [ "$1" = 2489 ]; then
+    printf '%s' "this machine's clipboard bridge is outdated (unknown opcode) -- chezmoi apply + restart clipboard-bridge"
+  else
+    printf '%s' "peer bridge doesn't support file clips yet (unknown opcode) -- update chezmoi on the other machine"
+  fi
+}
+
 # UTI detection for --content mode below: extension map first (fast, no
 # external process needed for the common cases), then `file --mime-type -b`
 # as a fallback for extensionless or misnamed files. Prints the UTI on
@@ -206,7 +222,11 @@ if [ "${1:-}" = "--content" ]; then
   fi
   if [ "$_status" = "E" ]; then
     _msg=$(tail -c +6 "$replyfile" 2>/dev/null)
-    echo "pbcopy: ${_msg:-bridge reported an error}" >&2
+    if [ "$_msg" = "unknown opcode" ]; then
+      echo "pbcopy: $(unknown_opcode_hint "$content_port")" >&2
+    else
+      echo "pbcopy: ${_msg:-bridge reported an error}" >&2
+    fi
     exit 1
   fi
   echo "pbcopy: clipboard bridge is not reachable on 127.0.0.1:$content_port" >&2
@@ -244,7 +264,11 @@ if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
     fi
     if [ "$_status" = "E" ]; then
       _msg=$(tail -c +6 "$replyfile" 2>/dev/null)
-      echo "pbcopy: ${_msg:-bridge reported an error}" >&2
+      if [ "$_msg" = "unknown opcode" ]; then
+        echo "pbcopy: $(unknown_opcode_hint 2489)" >&2
+      else
+        echo "pbcopy: ${_msg:-bridge reported an error}" >&2
+      fi
       exit 1
     fi
     echo "pbcopy: clipboard bridge is not reachable on 127.0.0.1:2489" >&2
@@ -305,7 +329,11 @@ if [ $# -gt 0 ]; then
   fi
   if [ "$_status" = "E" ]; then
     _msg=$(tail -c +6 "$replyfile" 2>/dev/null)
-    echo "pbcopy: ${_msg:-bridge reported an error}" >&2
+    if [ "$_msg" = "unknown opcode" ]; then
+      echo "pbcopy: $(unknown_opcode_hint "$bridge_port")" >&2
+    else
+      echo "pbcopy: ${_msg:-bridge reported an error}" >&2
+    fi
     exit 1
   fi
   echo "pbcopy: clipboard bridge is not reachable on 127.0.0.1:$bridge_port" >&2

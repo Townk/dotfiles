@@ -18,7 +18,9 @@ Describe 'pbcopy: file-object mode'
     # U payload is NUL-joined paths), then log "<port>:<frame with NUL ->
     # '|'>" -- safe to compare via shellspec's string matchers. Replies per
     # $NC_REPLY: "ok" (default) -> success frame; "err" -> error frame
-    # carrying the message "boom".
+    # carrying the message "boom"; "unknown_opcode" -> an error frame whose
+    # payload is EXACTLY "unknown opcode" (rework R7: pbcopy turns that
+    # specific payload into an actionable hint instead of relaying it raw).
     cat > "$BINDIR/nc" <<EOF
 #!/bin/sh
 # Probe form used by the SSH+bridge branch: "nc -z -w1 127.0.0.1 <port>",
@@ -39,6 +41,7 @@ cat > "\$raw"
 rm -f "\$raw"
 case "\${NC_REPLY:-ok}" in
   err) printf 'E\\000\\000\\000\\004boom' ;;
+  unknown_opcode) printf 'E\\000\\000\\000\\016unknown opcode' ;;
   *) printf 'O\\000\\000\\000\\000' ;;
 esac
 EOF
@@ -83,6 +86,19 @@ EOF
     When run command sh "$SCRIPT" "$f1"
     The status should be failure
     The stderr should include "boom"
+  End
+
+  # Rework R7: an "unknown opcode" E-reply on the LOCAL (:2489) send means
+  # THIS machine's own bridge predates file clips -- the bare relayed
+  # "pbcopy: unknown opcode" gave no clue that chezmoi needed applying here.
+  It 'gives an actionable hint (this machine outdated) when the LOCAL bridge replies unknown opcode'
+    f1="$SHELLSPEC_TMPBASE/unknown-local.txt"; touch "$f1"
+    export NC_REPLY=unknown_opcode
+    When run command sh "$SCRIPT" "$f1"
+    The status should be failure
+    The stderr should include "this machine's clipboard bridge is outdated"
+    The stderr should include "unknown opcode"
+    The stderr should include "chezmoi apply"
   End
 
   It 'exits 1 naming a missing path, without contacting the bridge'
@@ -161,6 +177,20 @@ EOF
     The stderr should include "boom"
   End
 
+  # Rework R7: an "unknown opcode" E-reply on the REMOTE (:2490/peer) send
+  # means the OTHER machine's bridge predates file clips.
+  It 'gives an actionable hint (peer bridge outdated) when the manifest push gets unknown opcode'
+    export SSH_CONNECTION="x 1 y 22"
+    export NC_BRIDGE_UP=1
+    export NC_REPLY=unknown_opcode
+    f1="$SHELLSPEC_TMPBASE/rem-unknown.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
+    The status should be failure
+    The stderr should include "peer bridge doesn't support file clips yet"
+    The stderr should include "unknown opcode"
+    The stderr should include "update chezmoi on the other machine"
+  End
+
   It 'errors with the reverse-bridge message when no bridge is up, without sending a frame'
     export SSH_CONNECTION="x 1 y 22"
     export NC_BRIDGE_UP=0
@@ -236,6 +266,7 @@ cat > "$NCRAW"
 { printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "$NCRAW"; printf '\\n'; } >> "$NCLOG"
 case "\${NC_REPLY:-ok}" in
   err) printf 'E\\000\\000\\000\\004boom' ;;
+  unknown_opcode) printf 'E\\000\\000\\000\\016unknown opcode' ;;
   *) printf 'O\\000\\000\\000\\000' ;;
 esac
 EOF
@@ -339,6 +370,18 @@ EOF
     The stderr should include "boom"
   End
 
+  # Rework R7: an "unknown opcode" E-reply on --content's LOCAL (:2489)
+  # send means THIS machine's own bridge predates rich-type/file clips.
+  It 'gives an actionable hint (this machine outdated) when the LOCAL bridge replies unknown opcode'
+    fixture="$SHELLSPEC_TMPBASE/unknown-local.png"; touch "$fixture"
+    export NC_REPLY=unknown_opcode
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be failure
+    The stderr should include "this machine's clipboard bridge is outdated"
+    The stderr should include "unknown opcode"
+    The stderr should include "chezmoi apply"
+  End
+
   # Over SSH + reverse-bridge-up: same `C` op, but to the reverse-tunneled
   # peer bridge (port 2490 / CLIPBOARD_BRIDGE_PORT) instead of 2489 -- OSC 52
   # is text-only and can't carry rich types any more than it can carry files.
@@ -369,5 +412,19 @@ EOF
     The status should be failure
     The stderr should include "pbcopy: --content needs the reverse bridge (OSC 52 cannot carry rich types)"
     The contents of file "$NCLOG" should equal ""
+  End
+
+  # Rework R7: an "unknown opcode" E-reply on --content's REMOTE (:2490/peer)
+  # send means the OTHER machine's bridge predates rich-type/file clips.
+  It 'gives an actionable hint (peer bridge outdated) when the REMOTE bridge replies unknown opcode'
+    export SSH_CONNECTION="x 1 y 22"
+    export NC_BRIDGE_UP=1
+    export NC_REPLY=unknown_opcode
+    fixture="$SHELLSPEC_TMPBASE/rem-unknown.png"; touch "$fixture"
+    When run command sh "$SCRIPT" --content "$fixture"
+    The status should be failure
+    The stderr should include "peer bridge doesn't support file clips yet"
+    The stderr should include "unknown opcode"
+    The stderr should include "update chezmoi on the other machine"
   End
 End
