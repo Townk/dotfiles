@@ -128,35 +128,180 @@ local function is_remote_manifest(m)
 	return m.host ~= "" and m.host ~= local_host()
 end
 
+-- basename(path) -- last path component, for naming the in-flight item in a
+-- progress toast ("Pasting notes.txt… 42%" reads better than the full
+-- manifest path).
+local function basename(path)
+	return path:match("([^/]+)/?$") or path
+end
+
+-- human_size(bytes) -- compact size for the completion notify. Mirrors the
+-- tiers of pbpaste's own pbpaste_files_human, but doesn't need to match it
+-- byte-for-byte: this only feeds a toast, never the porcelain contract.
+local function human_size(bytes)
+	if bytes >= 1073741824 then
+		return string.format("%.1fG", bytes / 1073741824)
+	elseif bytes >= 1048576 then
+		return string.format("%.1fM", bytes / 1048576)
+	elseif bytes >= 1024 then
+		return string.format("%.1fK", bytes / 1024)
+	end
+	return bytes .. "B"
+end
+
+-- split_tabs(line) -- tab-separated fields of one porcelain line. Trailing
+-- match against an appended tab keeps a lone trailing field from being
+-- dropped; extra trailing fields (a future porcelain column -- the contract
+-- may only GROW columns, never reshape existing ones) are simply ignored by
+-- callers that only read fields[1..N], so this plugin stays forward
+-- compatible without knowing about them.
+local function split_tabs(line)
+	local fields = {}
+	for f in (line .. "\t"):gmatch("([^\t]*)\t") do
+		fields[#fields + 1] = f
+	end
+	return fields
+end
+
+-- parse_porcelain_line(line) -- `pbpaste --files --porcelain`'s two line
+-- shapes (design §8): `progress\t<path>\t<done>\t<total>` per update, and a
+-- terminal `done\t<files>\t<bytes>\t<seconds>`. Returns nil for anything
+-- that doesn't match either shape (a malformed/truncated line should never
+-- explode the read loop -- just gets silently skipped, same "defensive nil"
+-- posture as this file's own manifest() parser).
+local function parse_porcelain_line(line)
+	local fields = split_tabs(line)
+	local kind = fields[1]
+	if kind == "progress" and fields[2] and fields[3] and fields[4] then
+		return {
+			kind = "progress",
+			path = fields[2],
+			done = tonumber(fields[3]),
+			total = tonumber(fields[4]),
+		}
+	elseif kind == "done" and fields[2] and fields[3] and fields[4] then
+		return {
+			kind = "done",
+			files = tonumber(fields[2]),
+			bytes = tonumber(fields[3]),
+			seconds = tonumber(fields[4]),
+		}
+	end
+	return nil
+end
+
+-- paste_system_remote(force) -- R1 rework of the remote branch (design §8,
+-- as originally written, deferred a background-pull option; a live
+-- validation session found the ORIGINAL implementation -- a blocking
+-- foreground `shell --block` -- pulled yazi off its alternate screen for the
+-- whole transfer, so a FAST paste read as a blank-screen crash). Bytes cross
+-- machines via the bridge's F/A streams, which can take a while, so this
+-- streams `pbpaste --files --porcelain` INCREMENTALLY off a background
+-- `Command` -- `Command:spawn()` + `Child:read_line()` in a loop, verified
+-- against yazi 26.5.6's types.yazi package (`Child:read_line` -> `string?,
+-- integer`, event 0 = stdout line, 1 = stderr line, 2 = EOF on both) and
+-- against ouch.yazi's own `spawn()`/`read_line()` preview loop, which uses
+-- exactly this pattern to stream a running child's output. `Command:output()`
+-- / `Child:wait_with_output()` both wait for the child to exit and would
+-- forfeit live progress entirely, so neither is an option here. Progress
+-- surfaces via throttled `ya.notify` updates -- one per completed item, or
+-- every ~10% of a large in-flight item -- never per 64 KiB tick (the shim's
+-- own internal cadence; a toast per tick would spam the screen far worse
+-- than the blank flash this replaces). Percent is clamped at 100: an `A`
+-- (directory) total is only a `du` estimate, so an in-flight item's `done`
+-- can transiently exceed `total`. `touch_last_paste` runs after this
+-- returns, same "regardless of outcome" rule as the local branch below.
+local function paste_system_remote(force)
+	local args = { "--files", "--porcelain" }
+	if force then
+		args[#args + 1] = "--force"
+	end
+	local child, spawn_err = Command("pbpaste"):arg(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+	if not child then
+		ya.notify({
+			title = "Clipboard",
+			content = "Paste failed: " .. tostring(spawn_err or "could not start pbpaste --files"),
+			timeout = 5,
+			level = "error",
+		})
+		return
+	end
+
+	local stderr_lines = {}
+	local cur_path, cur_pct = nil, -1
+	local summary -- {kind="done", files, bytes, seconds}, set by the terminal line
+
+	while true do
+		local line, event = child:read_line()
+		if event == 2 then -- EOF on both stdout and stderr: nothing left to read
+			break
+		elseif event == 1 then -- stderr line: captured for the failure notify only
+			if line and line ~= "" then
+				stderr_lines[#stderr_lines + 1] = line
+			end
+		elseif event == 0 and line then -- stdout: the porcelain contract
+			local parsed = parse_porcelain_line(line)
+			if parsed and parsed.kind == "progress" then
+				if parsed.path ~= cur_path then
+					cur_path, cur_pct = parsed.path, -1 -- new item: reset the throttle
+				end
+				local pct = 0
+				if parsed.total > 0 then
+					pct = math.floor(parsed.done * 100 / parsed.total)
+					if pct > 100 then
+						pct = 100
+					end
+				end
+				local item_done = parsed.total > 0 and parsed.done >= parsed.total
+				if item_done or pct - cur_pct >= 10 then
+					ya.notify({
+						title = "Clipboard",
+						content = string.format("Pasting %s… %d%%", basename(parsed.path), pct),
+						timeout = 2,
+					})
+					cur_pct = pct
+				end
+			elseif parsed and parsed.kind == "done" then
+				summary = parsed
+			end
+		end
+	end
+
+	local status = child:wait()
+	if status and status.success and summary then
+		ya.notify({
+			title = "Clipboard",
+			content = string.format(
+				"Pasted %d file(s), %s in %ds",
+				summary.files,
+				human_size(summary.bytes),
+				summary.seconds
+			),
+			timeout = 3,
+		})
+	else
+		local reason = (#stderr_lines > 0 and table.concat(stderr_lines, "\n"))
+			or "pbpaste --files --porcelain failed to run"
+		ya.notify({
+			title = "Clipboard",
+			content = "Paste failed: " .. reason,
+			timeout = 5,
+			level = "error",
+		})
+	end
+end
+
 -- paste_system(force, remote) -- the system-clipboard branch: materializes
--- the current file clip into cwd via `pbpaste --files`.
---   Local manifest (remote == false, unchanged from M1/T8): background
---   Command -- local clone tiers are instant, so a single ya.notify on
---   completion/failure is enough.
---   Remote manifest (remote == true, T13/design §8): bytes cross machines
---   via the bridge's F/A streams, which render their OWN live progress and
---   can take a while -- run through a BLOCKING foreground shell
---   (`shell --block`) instead of a background Command, so that progress
---   renders on yazi's secondary screen instead of being captured and
---   silently discarded. `ya.emit` is documented as fire-and-forget ("send
---   an action... without waiting for the executor to execute" -- confirmed
---   against the utils docs), so there is no captured output/status to build
---   a completion ya.notify from here; design §8's yazi bullet for this path
---   omits a notify entirely (unlike the local background one), since the
---   shim's own terminal output during the blocked session already IS the
---   user-visible result. `block = true` still occupies yazi's main screen
---   for the whole run (confirmed via the `shell` command docs: "Yazi will
---   hide into a secondary screen... until it exits"), so the user cannot
---   press `p` again before this returns regardless of ya.emit's own
---   fire-and-forget semantics -- touching the marker immediately after
---   emitting is observably identical to touching it "after completion".
+-- the current file clip into cwd via `pbpaste --files`. Both branches now
+-- run as a background `Command` (R1: the remote branch no longer leaves
+-- yazi's alternate screen -- see paste_system_remote above).
+--   Local manifest (remote == false, unchanged from M1/T8): local clone
+--   tiers are instant, so a single ya.notify on completion/failure is
+--   enough -- no porcelain stream needed.
+--   Remote manifest (remote == true): see paste_system_remote.
 local function paste_system(force, remote)
 	if remote then
-		local cmd = "pbpaste --files"
-		if force then
-			cmd = cmd .. " --force"
-		end
-		ya.emit("shell", { cmd, block = true })
+		paste_system_remote(force)
 		touch_last_paste()
 		return
 	end
