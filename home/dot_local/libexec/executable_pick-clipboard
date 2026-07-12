@@ -44,9 +44,10 @@
 #                this Mac's pasteboard instead (files-yazi design §9,
 #                clip::copy_files_by_id): a local row does a full-fidelity
 #                id:<n> restore, a remote manifest row rsyncs the files down
-#                to ~/.cache/pick-clipboard/files/<id>/ first and localizes
-#                the clip; any failure there falls back to the plain-text
-#                copy above.
+#                to ~/.cache/pick-clipboard/files/<id>/<idx>/ first and
+#                localizes the clip (an already-localized row short-circuits
+#                to its on-disk copies); any failure there falls back to the
+#                plain-text copy above.
 #   Ctrl-D/Alt-D delete the row (SQL DELETE by id), stay open.
 #   Ctrl-P       toggle pin, stay open.
 #
@@ -208,48 +209,93 @@ clip::set_via_bridge() {
   rm -f "$pf"; return 1
 }
 
+# clip::send_file_urls <path>... -- send a form-A U frame (NUL-joined absolute
+# paths) to this Mac's own bridge; op_set_file_urls's form A is what generates
+# the NSFilenamesPboardType/public.file-url Finder needs. Shared by the
+# localized-row guard and the post-pull send in clip::copy_files_by_id.
+# Returns 0 on an 'O' response.
+clip::send_file_urls() {
+  local upf; upf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-fileurls.XXXXXX") || return 1
+  local first=1 lp
+  {
+    for lp in "$@"; do
+      if (( first )); then print -rn -- "$lp"; first=0
+      else print -rn -- $'\0'"$lp"; fi
+    done
+  } > "$upf"
+  if clipbridge::send "$BRIDGE_HOST" "$LOCAL_PORT" U "$upf"; then rm -f "$upf"; return 0; fi
+  rm -f "$upf"
+  return 1
+}
+
 # Restore a files/file/directory row's real file object onto THIS Mac's
 # pasteboard (Ctrl-Y, files-yazi design §9/§12; M2 scope -- the picker runs on
 # the Mac, so a files restore ALWAYS targets $LOCAL_PORT, this machine's own
 # bridge, regardless of bridge_up/SSH: Finder only reads a real file-url on
 # the machine it's running on). Returns 1 on any failure so the caller
 # (clip::copy_by_id) falls back to the existing text behavior; a reason goes
-# to stderr.
+# to stderr. Four cases, in dispatch order:
 #
-# "Remote" is decided the same way op_list_files decides it (spec §10): the
-# row carries an `x-file-manifest` clip_types blob AND its source_host isn't
-# this machine. Anything else (a genuine local Finder capture, which already
-# has real NSFilenamesPboardType/public.file-url blobs) takes the id:<n>
-# full-fidelity path.
+#   1. source_host is this host (or NULL/legacy) -- a genuine local capture
+#      with real NSFilenamesPboardType/public.file-url blobs: U with the
+#      id:<n> form, a full-fidelity restore_by_id.
+#   2. remote origin, but every recorded path (x-file-manifest, else
+#      x-resolved-path) already exists locally on disk: U with those paths
+#      directly (form A). This is the row shape the picker itself creates
+#      when it localizes a pull (below) -- single-path rows carry only a
+#      synthetic x-resolved-path (id:<n> would restore the blob under that
+#      literal UTI: nothing pasteable), multi-path rows carry an
+#      x-file-manifest of LOCAL paths (the rsync branch would try to pull
+#      them from the origin, which never had them). The existence check
+#      handles both shapes without caring which UTI the paths came from.
+#      Known accepted tradeoff: a genuine remote manifest whose path strings
+#      happen to ALSO exist on this machine (e.g. /etc/hosts) short-circuits
+#      to the local copy.
+#   3. remote origin, x-file-manifest paths not all local: the spec §12
+#      pull -- rsync each manifest path down into its own per-position
+#      subdir ~/.cache/pick-clipboard/files/<id>/<idx>/ (the <idx> namespace
+#      keeps two manifest entries that share a basename from colliding on
+#      one flat cache path, which would silently drop a file), skipping any
+#      position already cached from an earlier pull of this SAME row. Then
+#      record the localized clip as a new local row (mirrors op_persist:
+#      source_host stays the ORIGIN host, so the new row still badges remote
+#      even though its bytes are now local; best-effort -- a bookkeeping
+#      failure does not block the paste) and U the localized paths (form A).
+#   4. remote origin, only an x-resolved-path whose file is gone (a stale
+#      localized row after a cache sweep): fail honestly -- the origin never
+#      had the cache path, so there is nothing to re-pull from.
 #
-# Remote branch (spec §12): rsync each manifest path down to
-# ~/.cache/pick-clipboard/files/<id>/ -- skipping any path already cached
-# there from an earlier pull of this SAME row, so a later paste needs no
-# re-fetch -- then record the localized clip as a new local row (mirrors
-# op_persist: source_host stays the ORIGIN host, so the new row still badges
-# remote even though its bytes are now local) and send U with the localized
-# NUL-joined paths directly (form A -- op_set_file_urls's form A is what
-# actually generates the NSFilenamesPboardType/public.file-url Finder needs;
-# the freshly inserted row has no native pasteboard blobs of its own yet, so
-# id:<newid> would not paste into Finder). The DB insert is best-effort: a
-# bookkeeping failure there does not block the paste.
-#
-# rsync is resolved via $PATH (plain `rsync`, not pbpaste's pinned
-# /opt/homebrew/bin/rsync) so a test can shadow it with a fake on PATH --
-# on a real Mac PATH already resolves to the same brew build pbpaste pins.
+# rsync is pinned to /opt/homebrew/bin/rsync exactly like pbpaste's tier 2
+# (stock /usr/bin/rsync is openrsync, which lacks --info=progress2).
+# PICK_CLIPBOARD_RSYNC is a TEST-ONLY override: an absolute-path invocation
+# can't be shadowed via PATH, so the shellspec suite injects its fake rsync
+# through this env var instead. Never set it in production.
 clip::copy_files_by_id() {
   local id=$1
   local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
-  local manifestfile; manifestfile=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-cpfiles-manifest.XXXXXX") || {
+
+  # Recorded paths: x-file-manifest first (multi-path), else x-resolved-path
+  # (single-path). srcuti remembers which one so case 3 vs 4 can differ.
+  local blobtmp; blobtmp=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-cpfiles-blob.XXXXXX") || {
     print -ru2 -- "pick-clipboard: mktemp failed"; return 1
   }
-  sqlite3 "$DB_FILE" "SELECT writefile('$manifestfile', blob) FROM clip_types WHERE clip_id=$id AND uti='x-file-manifest';" >/dev/null 2>&1
+  local srcuti=""
+  sqlite3 "$DB_FILE" "SELECT writefile('$blobtmp', blob) FROM clip_types WHERE clip_id=$id AND uti='x-file-manifest';" >/dev/null 2>&1
+  if [[ -s "$blobtmp" ]]; then
+    srcuti="x-file-manifest"
+  else
+    sqlite3 "$DB_FILE" "SELECT writefile('$blobtmp', blob) FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';" >/dev/null 2>&1
+    [[ -s "$blobtmp" ]] && srcuti="x-resolved-path"
+  fi
+  local -a rpaths
+  if [[ -n "$srcuti" ]]; then
+    local blob; blob="$(<"$blobtmp")"
+    rpaths=("${(@ps:\0:)blob}")
+  fi
+  rm -f "$blobtmp"
 
-  local -i is_remote=0
-  [[ -s "$manifestfile" && -n "$host" && "$host" != "$MY_HOST" ]] && is_remote=1
-
-  if (( ! is_remote )); then
-    rm -f "$manifestfile"
+  # Case 1: genuine local capture -> full-fidelity id: restore.
+  if [[ -z "$host" || "$host" == "$MY_HOST" ]]; then
     local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-fileid.XXXXXX") || return 1
     print -rn -- "id:$id" > "$pf"
     if clipbridge::send "$BRIDGE_HOST" "$LOCAL_PORT" U "$pf"; then
@@ -261,28 +307,48 @@ clip::copy_files_by_id() {
     return 1
   fi
 
-  # Remote manifest row.
-  if ! command -v rsync >/dev/null 2>&1; then
-    rm -f "$manifestfile"
-    print -ru2 -- "pick-clipboard: rsync not found on PATH"
+  # Remote-origin row from here on.
+  (( ${#rpaths[@]} > 0 )) || { print -ru2 -- "pick-clipboard: no file paths recorded for row $id"; return 1 }
+
+  # Case 2: every recorded path already exists locally (a row this picker
+  # localized earlier, either shape) -> form A with those paths, no re-pull.
+  local -i all_local=1
+  local rp
+  for rp in "${rpaths[@]}"; do
+    [[ -e "$rp" ]] || { all_local=0; break }
+  done
+  if (( all_local )); then
+    clip::send_file_urls "${rpaths[@]}" && return 0
+    print -ru2 -- "pick-clipboard: localized files restore failed for row $id"
+    return 1
+  fi
+
+  # Case 4: a stale localized row (x-resolved-path only, file gone) has
+  # nothing to pull -- the origin host never held the local cache path.
+  if [[ "$srcuti" != "x-file-manifest" ]]; then
+    print -ru2 -- "pick-clipboard: localized copy for row $id is missing on disk (${rpaths[1]})"
+    return 1
+  fi
+
+  # Case 3: genuine remote manifest -> rsync pull-down (spec §12).
+  local rsync_bin="${PICK_CLIPBOARD_RSYNC:-/opt/homebrew/bin/rsync}"
+  if [[ ! -x "$rsync_bin" ]]; then
+    print -ru2 -- "pick-clipboard: brew rsync not found: $rsync_bin"
     return 1
   fi
   local kind; kind=$(sqlite3 "$DB_FILE" "SELECT IFNULL(type_kind,'files') FROM clips WHERE id=$id;" 2>/dev/null) || kind="files"
-  local manifest; manifest="$(<"$manifestfile")"
-  rm -f "$manifestfile"
-  local -a rpaths; rpaths=("${(@ps:\0:)manifest}")
-  (( ${#rpaths[@]} > 0 )) || { print -ru2 -- "pick-clipboard: empty x-file-manifest for row $id"; return 1 }
 
   local cachedir="$HOME/.cache/pick-clipboard/files/$id"
-  mkdir -p "$cachedir" || { print -ru2 -- "pick-clipboard: cannot create $cachedir"; return 1 }
-
   local -a local_paths
-  local rp base lp
+  local -i idx=0
+  local sub lp
   for rp in "${rpaths[@]}"; do
-    base="${rp:t}"
-    lp="$cachedir/$base"
+    (( idx += 1 ))
+    sub="$cachedir/$idx"
+    lp="$sub/${rp:t}"
     if [[ ! -e "$lp" ]]; then
-      if ! rsync -a --info=progress2 -e ssh "${host}:${rp}" "$cachedir/" >/dev/null 2>&1; then
+      mkdir -p "$sub" || { print -ru2 -- "pick-clipboard: cannot create $sub"; return 1 }
+      if ! "$rsync_bin" -a --info=progress2 -e ssh "${host}:${rp}" "$sub/" >/dev/null 2>&1; then
         print -ru2 -- "pick-clipboard: rsync failed pulling $host:$rp"
         return 1
       fi
@@ -294,6 +360,7 @@ clip::copy_files_by_id() {
   # (spec §12), single-path rows via x-resolved-path (matching a genuine
   # file/directory capture), multi-path via x-file-manifest (matching a
   # genuine files capture) -- the same distinction op_list_files reads back.
+  # Re-picking this new row later lands in case 2 above.
   local ts; ts=$(date +%s)
   local ek="${kind//\'/\'\'}" eh="${host//\'/\'\'}"
   local new_id
@@ -315,18 +382,7 @@ clip::copy_files_by_id() {
     rm -f "$blobf"
   fi
 
-  local upf; upf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-localize-u.XXXXXX") || return 1
-  { first=1
-    for lp in "${local_paths[@]}"; do
-      if (( first )); then print -rn -- "$lp"; first=0
-      else print -rn -- $'\0'"$lp"; fi
-    done
-  } > "$upf"
-  if clipbridge::send "$BRIDGE_HOST" "$LOCAL_PORT" U "$upf"; then
-    rm -f "$upf"
-    return 0
-  fi
-  rm -f "$upf"
+  clip::send_file_urls "${local_paths[@]}" && return 0
   print -ru2 -- "pick-clipboard: localized files restore failed for row $id"
   return 1
 }

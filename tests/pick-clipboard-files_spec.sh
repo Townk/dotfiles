@@ -15,12 +15,19 @@
 # convention as tests/clipboard-files-ops_spec.sh's "L list-files" Describe.
 # Bridge sends are captured by a fake `nc` on PATH (same log convention as
 # tests/pbpaste-files_spec.sh: "<port>:<frame-with-NUL-as-|>"); the remote
-# pull is captured by a fake `rsync` on PATH (clip::copy_files_by_id resolves
-# rsync via $PATH, not pbpaste's pinned /opt/homebrew/bin/rsync, specifically
-# so a test can shadow it this way).
+# pull is captured by a fake `rsync` wired in via PICK_CLIPBOARD_RSYNC (the
+# picker pins /opt/homebrew/bin/rsync in production, same as pbpaste -- the
+# env var is the test-only override documented in clip::copy_files_by_id).
+#
+# Remote manifest paths in these tests live under /pick-clipboard-remote-src/
+# -- a root that never exists on the test machine. That matters: the
+# localized-row guard sends U directly when a remote-origin row's recorded
+# paths ALL exist locally, so a manifest pointing at a real local path (e.g.
+# /tmp/foo) could short-circuit the rsync branch these tests mean to exercise.
 Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+  REMOTE_SRC="/pick-clipboard-remote-src"
 
   setup() {
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
@@ -114,6 +121,11 @@ EOF
     export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
     export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
     export PICK_CLIPBOARD_NO_RUN=1
+    # Test-only override (documented in clip::copy_files_by_id): production
+    # pins /opt/homebrew/bin/rsync exactly like pbpaste's tier 2 -- an
+    # absolute-path invocation can't be shadowed via PATH, so the fake is
+    # wired in through this env var instead.
+    export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync"
     export SCRIPT_PATH="$SCRIPT"
   }
   BeforeEach 'setup'
@@ -149,39 +161,70 @@ EOF
     The contents of file "$NCLOG" should include "id:$id"
   End
 
-  It 'remote manifest row: rsyncs each manifest path into the per-clip cache dir'
+  It 'remote manifest row: rsyncs each manifest path into its per-position cache subdir'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',200); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/manifest.bin"
-    printf '/tmp/remote-a.txt\000/tmp/remote-b.txt' > "$mf"
+    printf '%s/remote-a.txt\000%s/remote-b.txt' "$REMOTE_SRC" "$REMOTE_SRC" > "$mf"
     sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$RSYNCLOG" should include "devbox:/tmp/remote-a.txt"
-    The contents of file "$RSYNCLOG" should include "devbox:/tmp/remote-b.txt"
-    The contents of file "$RSYNCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/"
-    The path "$HOME/.cache/pick-clipboard/files/$id/remote-a.txt" should be exist
-    The path "$HOME/.cache/pick-clipboard/files/$id/remote-b.txt" should be exist
+    The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/remote-a.txt"
+    The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/remote-b.txt"
+    The contents of file "$RSYNCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/"
+    The contents of file "$RSYNCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/2/"
+    The path "$HOME/.cache/pick-clipboard/files/$id/1/remote-a.txt" should be exist
+    The path "$HOME/.cache/pick-clipboard/files/$id/2/remote-b.txt" should be exist
   End
 
   It 'remote manifest row: sends U with the localized NUL-joined paths (not id:)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',201); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/manifest.bin"
-    printf '/tmp/remote-a.txt\000/tmp/remote-b.txt' > "$mf"
+    printf '%s/remote-a.txt\000%s/remote-b.txt' "$REMOTE_SRC" "$REMOTE_SRC" > "$mf"
     sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
 
     When call run_copy "$id"
     The status should be success
     The contents of file "$NCLOG" should include "2489:U"
     The contents of file "$NCLOG" should not include "id:$id"
-    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/remote-a.txt"
-    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/remote-b.txt"
+    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/remote-a.txt"
+    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/2/remote-b.txt"
+  End
+
+  # Reviewer finding 1 (critical): two manifest entries sharing a basename
+  # used to collide on one flat cache path -- only ONE rsync ran and the U
+  # payload carried the same localized path twice, silently losing a file.
+  # The per-position <idx>/ namespacing must keep them distinct end to end:
+  # two rsync invocations, two distinct paths in the U payload AND in the
+  # localized row's recorded blob.
+  It 'remote manifest row: two paths sharing a basename stay distinct (per-position namespacing)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',210); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/dirA/README.md\000%s/dirB/README.md' "$REMOTE_SRC" "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/dirA/README.md"
+    The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/dirB/README.md"
+    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/README.md"
+    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/2/README.md"
+    # The localized row's own blob must record two DISTINCT paths. Extracted
+    # via writefile: the sqlite3 CLI truncates direct blob output at the
+    # first embedded NUL (verified empirically), so a `SELECT blob` pipe
+    # would only ever show the first path. tr the NUL joints to newlines
+    # BEFORE the $(...) capture; grep -c counts the de-duplicated survivors
+    # -- 1 would mean the old collision.
+    locblob="$SHELLSPEC_TMPBASE/localized-blob"
+    sqlite3 "$DB" "SELECT writefile('$locblob', blob) FROM clip_types WHERE clip_id=(SELECT MAX(id) FROM clips) AND uti='x-file-manifest';" >/dev/null
+    distinct=$(tr '\000' '\n' < "$locblob" | sort -u | grep -c 'README.md')
+    The variable distinct should equal 2
   End
 
   It 'remote manifest row: records a localized clip (new row, source_host stays the origin host)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',202); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/manifest.bin"
-    printf '/tmp/remote-a.txt\000/tmp/remote-b.txt' > "$mf"
+    printf '%s/remote-a.txt\000%s/remote-b.txt' "$REMOTE_SRC" "$REMOTE_SRC" > "$mf"
     sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
 
     When call run_copy "$id"
@@ -195,7 +238,7 @@ EOF
   It 'remote manifest row: a second Ctrl-Y on the same row does not re-rsync an already-cached path'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',203); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/manifest.bin"
-    printf '/tmp/remote-a.txt' > "$mf"
+    printf '%s/remote-a.txt' "$REMOTE_SRC" > "$mf"
     sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
 
     run_copy "$id" >/dev/null 2>&1
@@ -203,6 +246,72 @@ EOF
     When call run_copy "$id"
     The status should be success
     The contents of file "$RSYNCLOG" should equal ""
+  End
+
+  # Reviewer finding 2 (important): re-picking a row the picker itself
+  # localized earlier. Two shapes, both previously broken:
+  #   single-path -> only a synthetic x-resolved-path blob; the old code sent
+  #     `U id:<n>` and restore_by_id wrote the blob under the literal
+  #     'x-resolved-path' UTI -- nothing pasteable, false success.
+  #   multi-path -> x-file-manifest with LOCAL cache paths but
+  #     source_host=origin; the old code tried `rsync origin:<local-path>`.
+  # Fix under test: when a remote-origin row's recorded paths ALL exist
+  # locally on disk, send U with those paths directly (form A) -- no id:, no
+  # rsync.
+  It 'localized single-path row (x-resolved-path, remote origin, file on disk): sends U with the path, no id:, no rsync'
+    locdir="$SHELLSPEC_TMPBASE/localized-single"; rm -rf "$locdir"; mkdir -p "$locdir"
+    printf 'already local\n' > "$locdir/doc.txt"
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',220); SELECT last_insert_rowid();")
+    pathfile="$SHELLSPEC_TMPBASE/resolved-path"
+    printf '%s' "$locdir/doc.txt" > "$pathfile"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-resolved-path', readfile('$pathfile'));"
+
+    When call run_copy "$id"
+    The status should be success
+    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "$locdir/doc.txt"
+    The contents of file "$NCLOG" should not include "id:$id"
+    The contents of file "$RSYNCLOG" should equal ""
+  End
+
+  It 'localized multi-path row (x-file-manifest of local paths, remote origin): sends U with the paths, no rsync'
+    locdir="$SHELLSPEC_TMPBASE/localized-multi"; rm -rf "$locdir"; mkdir -p "$locdir/1" "$locdir/2"
+    printf 'a\n' > "$locdir/1/a.txt"
+    printf 'b\n' > "$locdir/2/b.txt"
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',221); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/1/a.txt\000%s/2/b.txt' "$locdir" "$locdir" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "$locdir/1/a.txt"
+    The contents of file "$NCLOG" should include "$locdir/2/b.txt"
+    The contents of file "$NCLOG" should not include "id:$id"
+    The contents of file "$RSYNCLOG" should equal ""
+  End
+
+  # Reviewer finding 3 (important): the pull must use the pinned
+  # /opt/homebrew/bin/rsync (stock /usr/bin/rsync is openrsync without
+  # --info=progress2 -- the exact reason pbpaste pins it), never a PATH
+  # lookup. With the test override unset, the PATH-shadowing fake must NOT
+  # be consulted (empty rsynclog) even though it sits first on PATH; the
+  # real pinned binary then fails to reach the bogus .invalid host
+  # (sandboxed HOME = no ssh config) and the text fallback kicks in.
+  It 'pins /opt/homebrew/bin/rsync: the PATH-shadowing fake is never consulted without the override'
+    unset PICK_CLIPBOARD_RSYNC
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('files','no-such-host.invalid',230,'$REMOTE_SRC/x.txt'); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/x.txt' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    The stderr should include "rsync"
+    The contents of file "$RSYNCLOG" should equal ""
+    The contents of file "$NCLOG" should include "2489:T"
+    The contents of file "$NCLOG" should not include "2489:U"
   End
 
   It 'local restore failure falls back to the current text-copy behavior'
@@ -219,9 +328,9 @@ EOF
   End
 
   It 'a failed rsync falls back to the current text-copy behavior (T set, not U)'
-    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('files','devbox',301,'/tmp/a.txt /tmp/b.txt'); SELECT last_insert_rowid();")
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('files','devbox',301,'a b'); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/manifest.bin"
-    printf '/tmp/remote-a.txt\000/tmp/remote-b.txt' > "$mf"
+    printf '%s/remote-a.txt\000%s/remote-b.txt' "$REMOTE_SRC" "$REMOTE_SRC" > "$mf"
     sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
     cat > "$BINDIR/rsync" <<'EOF'
 #!/bin/sh
