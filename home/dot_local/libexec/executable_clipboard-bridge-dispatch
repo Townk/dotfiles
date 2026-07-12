@@ -40,10 +40,12 @@
 #   A  archive-stream req: absolute directory path (UTF-8)
 #                     resp: BE64 byte-count header + raw tar stream | err
 #      F's directory sibling (M3, files-yazi design §4): replies `O` + BE32
-#      len=8 + a BE64 total-byte-count (a `du`-based CEILING estimate, not an
-#      exact promise), then the raw `tar -cf -` stream of the directory until
-#      EOF -- no trailing frame, the client just reads until the peer
-#      closes. See clip::op_archive_stream.
+#      len=8 + a BE64 total-byte-count -- a `du`-based size ESTIMATE for
+#      progress display only, NO directional guarantee -- then the raw
+#      `tar -cf -` stream of the directory until EOF: no trailing frame,
+#      the client just reads until the peer closes. Unreadable entries are
+#      rejected up front with an E frame; see clip::op_archive_stream for
+#      the full size/error semantics.
 #   O  declare-origin req: source_host US text        resp: empty | err
 #      Records that the NEXT pasteboard change hashing to sha256(text) was
 #      really copied on source_host (§23) -- sent by a machine SSH'd into the
@@ -562,13 +564,28 @@ clip::op_fetch_file() {
 # can only handle a flat file, so a directory pull goes through `tar` here
 # instead. Reply: O + BE32 len=8 + BE64 total-byte-count, then the raw
 # `tar -cf - -C <parent> <basename>` stream until EOF -- unlike F's reply,
-# there is NO trailing frame and the byte count is NOT an exact promise: it
-# comes from `du -sk <dir>` (the filesystem's own KiB block accounting) x
-# 1024, which is a CEILING relative to the tar stream's real length (tar
-# adds its own per-entry header/padding overhead; `du` also collapses
-# sparse-file holes that would still cost real bytes in the archive). A
-# caller can size a progress bar off it but must never use it to decide when
-# to stop reading -- that's EOF, exactly like a normal socket close.
+# there is NO trailing frame.
+#
+# BE64 size semantics: `du -sk <dir>` (the filesystem's own KiB block
+# accounting) x 1024 -- a size ESTIMATE for progress display only, with NO
+# directional guarantee. tar's per-entry headers plus bsdtar's fixed 10 KiB
+# blocking-factor padding push the real stream ABOVE it (empirically: this
+# repo's own two-small-files test fixture is du 8192 vs a 20480-byte real
+# archive), while sparse files push it the other way (du charges only
+# allocated blocks; tar writes the holes as real bytes -- or vice versa
+# with hole-detecting tar modes). The client MUST read to EOF (never use
+# the count to decide when to stop) and MUST clamp its progress display
+# at 100%.
+#
+# Error semantics: every detectable failure -- bad path AND any unreadable
+# entry inside the tree (the common mid-stream tar killer, caught by the
+# pre-flight walk below) -- is reported as a normal E frame BEFORE any
+# stream byte. Residual limitation, inherent to the EOF-terminated design:
+# an I/O error striking MID-stream (disk fault, file deleted between the
+# pre-flight walk and tar reaching it) can no longer be signaled -- the O
+# header is already out and EOF is the only terminator, so the client just
+# sees a short-but-clean stream. Client-side mitigation (treating tar
+# extraction failure as the error signal) lands in Task 13's pbpaste.
 clip::op_archive_stream() {
   local dir=$1
   if [[ "$dir" != /* ]]; then
@@ -588,9 +605,33 @@ clip::op_archive_stream() {
     return
   fi
 
-  local -i kb
+  # Pre-flight readability walk: an entry tar can't open would otherwise
+  # fail MID-stream, after the O header -- where the EOF-terminated design
+  # has no error channel left and the client would accept a silently
+  # truncated archive as a clean EOF. Catch the common trigger (permission-
+  # denied entries) up front, where a real E frame is still possible. A zsh
+  # recursive glob, not `find ... ! -readable`: macOS /usr/bin/find has no
+  # -readable primary (verified: "unknown primary or operator"), and
+  # `[[ -r ]]` tests EFFECTIVE access, which is the thing tar actually
+  # needs -- a -perm bit heuristic would miss ACLs and root-squash cases.
+  # (D) includes dotfiles, (N) makes an empty dir yield nothing, (oN) skips
+  # sorting. Symlinks are exempt: tar archives the link itself, never the
+  # target. An unreadable nested DIR is caught as itself (the glob can't
+  # descend into it, but the dir entry still appears and fails -r/-x).
+  local entry
+  for entry in "$dir"/**/*(DNoN); do
+    if [[ -L "$entry" ]]; then
+      continue
+    elif [[ -d "$entry" ]]; then
+      [[ -r "$entry" && -x "$entry" ]] || { send_err "unreadable-entries: $entry"; return }
+    else
+      [[ -r "$entry" ]] || { send_err "unreadable-entries: $entry"; return }
+    fi
+  done
+
+  local kb
   kb=$(du -sk "$dir" 2>/dev/null | awk '{print $1}')
-  local -i total_bytes=$(( kb * 1024 ))
+  local -i total_bytes=$(( ${kb:-0} * 1024 ))
 
   # tar wants a parent dir + basename (so the archive's entries are rooted
   # at the basename, not an absolute path) -- zsh's :h/:t modifiers split

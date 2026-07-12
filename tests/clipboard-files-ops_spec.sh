@@ -438,10 +438,14 @@ Describe 'clipboard-bridge-dispatch: F fetch-file'
 End
 
 # A archive-stream: M3's directory-pull sibling of F (files-yazi design §4).
-# Reply on success: O + BE32 len=8 + BE64 total-byte-count (a `du -sk`-based
-# CEILING estimate, not an exact promise -- see the header comment on
-# clip::op_archive_stream), then the raw `tar -cf -` stream of the directory
-# until EOF, no trailing frame. Error frames (bad path) look exactly like any
+# Reply on success: O + BE32 len=8 + BE64 total-byte-count -- a `du -sk`-
+# based size ESTIMATE for progress display only, with NO directional
+# guarantee (tar header/padding overhead and sparse files can push the real
+# stream above OR below it -- empirically, this very fixture reports du 8192
+# vs a 20480-byte real archive); see the header comment on
+# clip::op_archive_stream.
+# Then the raw `tar -cf -` stream of the directory until EOF, no trailing
+# frame. Error frames (bad path, unreadable entries) look exactly like any
 # other op's E frame and arrive BEFORE any stream bytes.
 Describe 'clipboard-bridge-dispatch: A archive-stream'
   DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
@@ -482,7 +486,7 @@ Describe 'clipboard-bridge-dispatch: A archive-stream'
   }
 
   # -f: see the matching note on the U describe block above.
-  It 'replies O + BE32(8) + BE64 count>=actual, then a tar stream of the seeded dir'
+  It 'replies O + BE32(8) + a sane BE64 estimate, then a tar stream of the seeded dir'
     build_req "$DIR"
     When run command sh -c 'zsh -f "$1" < "$2" > "$3"' _ "$DISPATCH" "$REQ" "$RESP"
     The status should be success
@@ -493,16 +497,54 @@ Describe 'clipboard-bridge-dispatch: A archive-stream'
     hdr_len=$(be_n_to_int 1 4)
     The variable hdr_len should equal "8"
 
+    # The BE64 is an ESTIMATE with no directional guarantee -- so the honest
+    # assertion is a sanity band against the REAL archive byte count (the
+    # response tail we actually received), not a fake ceiling. Asserting
+    # against a second `du -sk` call would be tautological (comparing du to
+    # itself can never fail); asserting `>= real` would pin a ceiling the op
+    # does not promise. Band: both > 0, estimate <= 2x real, and real <=
+    # 2x estimate + 10240 -- the additive term is bsdtar's fixed blocking-
+    # factor padding (every archive is padded to a 10 KiB multiple), which
+    # dominates on a deliberately tiny fixture like this one (measured here:
+    # du 8192 vs real 20480) but is constant noise at real sizes.
     reported_bytes=$(be_n_to_int 5 8)
-    actual_kb=$(du -sk "$DIR" | awk '{print $1}')
-    actual_bytes=$(( actual_kb * 1024 ))
-    is_ge=$(awk -v a="$reported_bytes" -v b="$actual_bytes" 'BEGIN { print (a >= b) ? "yes" : "no" }')
-    The variable is_ge should equal "yes"
-
     tail -c +14 "$RESP" > "$SHELLSPEC_TMPBASE/a-tar"
+    real_bytes=$(wc -c < "$SHELLSPEC_TMPBASE/a-tar" | tr -d ' ')
+    in_band=$(awk -v r="$reported_bytes" -v a="$real_bytes" \
+      'BEGIN { print (r > 0 && a > 0 && r <= 2*a && a <= 2*r + 10240) ? "yes" : "no" }')
+    The variable in_band should equal "yes"
+
     tar_list=$(tar -tf "$SHELLSPEC_TMPBASE/a-tar" | sort)
     The variable tar_list should include "archive-src/a.txt"
     The variable tar_list should include "archive-src/sub/b.txt"
+  End
+
+  # Pre-flight readability: a nested entry tar cannot read would otherwise
+  # surface only as a MID-STREAM tar failure -- the O header and partial
+  # stream are already out, so the client sees a clean EOF and silently
+  # accepts a truncated archive. The op must catch the common trigger
+  # (permission-denied entries) UP FRONT, where a real E frame is still
+  # possible, before any stream byte.
+  It 'errors unreadable-entries BEFORE any stream bytes when a nested file is unreadable'
+    chmod 000 "$DIR/sub/b.txt"
+    build_req "$DIR"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "E"
+    The output should include "unreadable-entries"
+    The output should include "$DIR/sub/b.txt"
+  End
+
+  It 'errors unreadable-entries when a nested DIRECTORY is untraversable'
+    chmod 000 "$DIR/sub"
+    build_req "$DIR"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    # Restore before assertions so the next example's setup() can rm -rf it.
+    chmod 755 "$DIR/sub"
+    The status should be success
+    The output should start with "E"
+    The output should include "unreadable-entries"
+    The output should include "$DIR/sub"
   End
 
   It 'errors on a nonexistent path'
