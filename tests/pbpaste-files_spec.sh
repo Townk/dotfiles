@@ -759,6 +759,17 @@ EOF
 
   # Design §11: per-item size cap, F engine. Declared total comes straight
   # from F's own BE32 length header, known before any body byte is pulled.
+  #
+  # Both examples below exercise ONLY the non-interactive refusal branch of
+  # pbpaste_files_cap_check (no usable /dev/tty in this harness -- `tty`
+  # reports "not a tty" for the whole shellspec sandbox, and a scripted PTY
+  # via `script -q /dev/null` was tried and confirmed unworkable here: the
+  # wrapped child's `read </dev/tty` came back empty even when fed input
+  # through script's own stdin, because the harness process itself has no
+  # controlling terminal for `script` to relay through). The interactive
+  # ACCEPT path (`[ -t 1 ] && [ -r /dev/tty ]` true, gum/`read` answers "y")
+  # is exercised only by hand against a live terminal -- see the Mode B UX
+  # validation session, not covered by an automated example here.
   It 'fails naming the cap and the item when CLIP_FILE_MAX is exceeded (F, non-interactive)'
     pf="$SHELLSPEC_TMPBASE/payload"
     build_manifest "$pf" file mac-mini 1752300000.7 "/remote/toobig.txt"

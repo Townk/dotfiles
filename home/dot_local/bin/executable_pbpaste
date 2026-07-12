@@ -378,24 +378,35 @@ pbpaste_read_n() {
 
 # pbpaste_files_cap_check <label> <bytes> -- design §11's per-item size cap:
 # a declared total (F's exact size, or A's estimate) over
-# ${CLIP_FILE_MAX:-209715200} bytes (200 MB) prompts on an interactive TTY
-# (stdin, since this reads a confirmation -- `--progress`/`--porcelain`
-# don't change this, only whether stdIN is a terminal does), `gum confirm`
-# if it's on PATH, else a plain `read -r` fallback; non-interactive callers
-# fail naming the cap and the item. Returns 0 to proceed, 1 to abort (a
-# message is always on stderr in the 1 case).
+# ${CLIP_FILE_MAX:-209715200} bytes (200 MB) prompts on an interactive
+# terminal, `gum confirm` if it's on PATH, else a plain `read -r` fallback;
+# non-interactive callers fail naming the cap and the item. Returns 0 to
+# proceed, 1 to abort (a message is always on stderr in the 1 case).
+#
+# Interactivity is decided via /dev/tty, NOT `[ -t 0 ]`: every call site
+# (pbpaste_remote_materialize/_dir) runs from inside main's per-item
+# `while read PF_P ... done < "$PF_PATHLIST"` loop, so stdin is ALWAYS the
+# pathlist file here, never a tty -- `[ -t 0 ]` read false even at a live
+# interactive terminal, silently forcing the non-interactive refusal every
+# time; a stdin `read` for the answer would additionally have eaten
+# pathlist lines out from under the loop. `[ -t 1 ] && [ -r /dev/tty ]`
+# instead asks "does this invocation have a usable controlling terminal at
+# all" -- true whenever one exists, regardless of what stdin is currently
+# wired to -- and the prompt/answer are read/written through /dev/tty
+# directly so they never touch the redirected stdin or the porcelain-
+# reserved stdout.
 pbpaste_files_cap_check() {
   _label=$1 _bytes=$2
   _cap=${CLIP_FILE_MAX:-209715200}
   [ "$_bytes" -gt "$_cap" ] || return 0
-  if [ -t 0 ]; then
+  if [ -t 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
     if command -v gum >/dev/null 2>&1; then
-      if gum confirm "pbpaste: $_label ($_bytes bytes) exceeds CLIP_FILE_MAX ($_cap bytes) -- continue?"; then
+      if gum confirm "pbpaste: $_label ($_bytes bytes) exceeds CLIP_FILE_MAX ($_cap bytes) -- continue?" </dev/tty >/dev/tty 2>&1; then
         return 0
       fi
     else
-      printf 'pbpaste: %s (%s bytes) exceeds CLIP_FILE_MAX (%s bytes) -- continue? [y/N] ' "$_label" "$_bytes" "$_cap" >&2
-      IFS= read -r _reply || _reply=""
+      printf 'pbpaste: %s (%s bytes) exceeds CLIP_FILE_MAX (%s bytes) -- continue? [y/N] ' "$_label" "$_bytes" "$_cap" >/dev/tty
+      IFS= read -r _reply </dev/tty || _reply=""
       case "$_reply" in
         [Yy]*) return 0 ;;
       esac
