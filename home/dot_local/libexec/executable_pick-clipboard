@@ -40,6 +40,13 @@
 #                lives here, so copy is local; when bridge-up it also ships to
 #                the machine you're sitting at (image -> C, text -> T(regtype));
 #                iPad -> OSC 52. Emits nothing to the pane (unlike Enter).
+#                files/file/directory rows restore a REAL file object onto
+#                this Mac's pasteboard instead (files-yazi design §9,
+#                clip::copy_files_by_id): a local row does a full-fidelity
+#                id:<n> restore, a remote manifest row rsyncs the files down
+#                to ~/.cache/pick-clipboard/files/<id>/ first and localizes
+#                the clip; any failure there falls back to the plain-text
+#                copy above.
 #   Ctrl-D/Alt-D delete the row (SQL DELETE by id), stay open.
 #   Ctrl-P       toggle pin, stay open.
 #
@@ -201,18 +208,147 @@ clip::set_via_bridge() {
   rm -f "$pf"; return 1
 }
 
+# Restore a files/file/directory row's real file object onto THIS Mac's
+# pasteboard (Ctrl-Y, files-yazi design §9/§12; M2 scope -- the picker runs on
+# the Mac, so a files restore ALWAYS targets $LOCAL_PORT, this machine's own
+# bridge, regardless of bridge_up/SSH: Finder only reads a real file-url on
+# the machine it's running on). Returns 1 on any failure so the caller
+# (clip::copy_by_id) falls back to the existing text behavior; a reason goes
+# to stderr.
+#
+# "Remote" is decided the same way op_list_files decides it (spec §10): the
+# row carries an `x-file-manifest` clip_types blob AND its source_host isn't
+# this machine. Anything else (a genuine local Finder capture, which already
+# has real NSFilenamesPboardType/public.file-url blobs) takes the id:<n>
+# full-fidelity path.
+#
+# Remote branch (spec §12): rsync each manifest path down to
+# ~/.cache/pick-clipboard/files/<id>/ -- skipping any path already cached
+# there from an earlier pull of this SAME row, so a later paste needs no
+# re-fetch -- then record the localized clip as a new local row (mirrors
+# op_persist: source_host stays the ORIGIN host, so the new row still badges
+# remote even though its bytes are now local) and send U with the localized
+# NUL-joined paths directly (form A -- op_set_file_urls's form A is what
+# actually generates the NSFilenamesPboardType/public.file-url Finder needs;
+# the freshly inserted row has no native pasteboard blobs of its own yet, so
+# id:<newid> would not paste into Finder). The DB insert is best-effort: a
+# bookkeeping failure there does not block the paste.
+#
+# rsync is resolved via $PATH (plain `rsync`, not pbpaste's pinned
+# /opt/homebrew/bin/rsync) so a test can shadow it with a fake on PATH --
+# on a real Mac PATH already resolves to the same brew build pbpaste pins.
+clip::copy_files_by_id() {
+  local id=$1
+  local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
+  local manifestfile; manifestfile=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-cpfiles-manifest.XXXXXX") || {
+    print -ru2 -- "pick-clipboard: mktemp failed"; return 1
+  }
+  sqlite3 "$DB_FILE" "SELECT writefile('$manifestfile', blob) FROM clip_types WHERE clip_id=$id AND uti='x-file-manifest';" >/dev/null 2>&1
+
+  local -i is_remote=0
+  [[ -s "$manifestfile" && -n "$host" && "$host" != "$MY_HOST" ]] && is_remote=1
+
+  if (( ! is_remote )); then
+    rm -f "$manifestfile"
+    local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-fileid.XXXXXX") || return 1
+    print -rn -- "id:$id" > "$pf"
+    if clipbridge::send "$BRIDGE_HOST" "$LOCAL_PORT" U "$pf"; then
+      rm -f "$pf"
+      return 0
+    fi
+    rm -f "$pf"
+    print -ru2 -- "pick-clipboard: local files restore (id:$id) failed"
+    return 1
+  fi
+
+  # Remote manifest row.
+  if ! command -v rsync >/dev/null 2>&1; then
+    rm -f "$manifestfile"
+    print -ru2 -- "pick-clipboard: rsync not found on PATH"
+    return 1
+  fi
+  local kind; kind=$(sqlite3 "$DB_FILE" "SELECT IFNULL(type_kind,'files') FROM clips WHERE id=$id;" 2>/dev/null) || kind="files"
+  local manifest; manifest="$(<"$manifestfile")"
+  rm -f "$manifestfile"
+  local -a rpaths; rpaths=("${(@ps:\0:)manifest}")
+  (( ${#rpaths[@]} > 0 )) || { print -ru2 -- "pick-clipboard: empty x-file-manifest for row $id"; return 1 }
+
+  local cachedir="$HOME/.cache/pick-clipboard/files/$id"
+  mkdir -p "$cachedir" || { print -ru2 -- "pick-clipboard: cannot create $cachedir"; return 1 }
+
+  local -a local_paths
+  local rp base lp
+  for rp in "${rpaths[@]}"; do
+    base="${rp:t}"
+    lp="$cachedir/$base"
+    if [[ ! -e "$lp" ]]; then
+      if ! rsync -a --info=progress2 -e ssh "${host}:${rp}" "$cachedir/" >/dev/null 2>&1; then
+        print -ru2 -- "pick-clipboard: rsync failed pulling $host:$rp"
+        return 1
+      fi
+    fi
+    local_paths+=("$lp")
+  done
+
+  # Best-effort bookkeeping: a new local row, source_host = the ORIGIN host
+  # (spec §12), single-path rows via x-resolved-path (matching a genuine
+  # file/directory capture), multi-path via x-file-manifest (matching a
+  # genuine files capture) -- the same distinction op_list_files reads back.
+  local ts; ts=$(date +%s)
+  local ek="${kind//\'/\'\'}" eh="${host//\'/\'\'}"
+  local new_id
+  new_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips (type_kind, first_ts, last_ts, source_host) VALUES ('$ek', $ts, $ts, '$eh'); SELECT last_insert_rowid();") 2>/dev/null || new_id=""
+  if [[ -n "$new_id" ]]; then
+    local blobf; blobf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-localize-blob.XXXXXX")
+    local uti="x-resolved-path" first=1
+    if (( ${#local_paths[@]} > 1 )); then
+      uti="x-file-manifest"
+      { for lp in "${local_paths[@]}"; do
+          if (( first )); then print -rn -- "$lp"; first=0
+          else print -rn -- $'\0'"$lp"; fi
+        done
+      } > "$blobf"
+    else
+      print -rn -- "${local_paths[1]}" > "$blobf"
+    fi
+    sqlite3 "$DB_FILE" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($new_id, '$uti', readfile('$blobf'));" >/dev/null 2>&1
+    rm -f "$blobf"
+  fi
+
+  local upf; upf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-localize-u.XXXXXX") || return 1
+  { first=1
+    for lp in "${local_paths[@]}"; do
+      if (( first )); then print -rn -- "$lp"; first=0
+      else print -rn -- $'\0'"$lp"; fi
+    done
+  } > "$upf"
+  if clipbridge::send "$BRIDGE_HOST" "$LOCAL_PORT" U "$upf"; then
+    rm -f "$upf"
+    return 0
+  fi
+  rm -f "$upf"
+  print -ru2 -- "pick-clipboard: localized files restore failed for row $id"
+  return 1
+}
+
 # Copy a clip's content to *my* clipboard, carrying the register type so a block
 # clip stays block-pasteable. Self-contained model (§11): the clip already lives
 # in this store, so there is no cross-machine restore — copy is always a local
 # set, plus (when bridge-up) a ship to the machine you're sitting at:
+#   files/file/directory -> clip::copy_files_by_id (id: form locally, rsync
+#     pull-down + localize for a remote manifest row, spec §9/§12); on ANY
+#     failure there, falls through to the behavior below unchanged.
 #   bridge-up (SSH) image  -> C ship the blob to the peer (OSC 52 can't carry it)
 #   bridge-up (SSH) text   -> T(regtype+text) to the peer you're sitting at
 #   sitting locally (no SSH)-> T(regtype+text) to this machine's own bridge
 #   SSH bridge-down (iPad) / fail -> pbcopy shim (OSC 52 text; iPad can't block)
 clip::copy_by_id() {
   local id=$1
+  local kind; kind=$(sqlite3 "$DB_FILE" "SELECT type_kind FROM clips WHERE id=$id;" 2>/dev/null) || kind=""
+  if [[ "$kind" == (files|file|directory) ]]; then
+    clip::copy_files_by_id "$id" && return 0
+  fi
   if (( bridge_up )); then
-    local kind; kind=$(sqlite3 "$DB_FILE" "SELECT type_kind FROM clips WHERE id=$id;" 2>/dev/null) || kind=""
     [[ "$kind" == image ]] && clip::ship_image_by_id "$id" && return 0
     clip::set_via_bridge "$BRIDGE_PORT" "$id" && return 0
   elif [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]]; then
@@ -605,6 +741,14 @@ sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,'['||type_
 EOF
 
 # --- run --------------------------------------------------------------------
+# PICK_CLIPBOARD_NO_RUN (test-only escape hatch): skip the interactive fzf
+# session entirely. A test harness sources this file with it set so it can
+# exercise the functions above (e.g. clip::copy_by_id) directly against a
+# seeded DB + faked nc/rsync on PATH, without an fzf process ever starting.
+if [[ -n "${PICK_CLIPBOARD_NO_RUN:-}" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 hints="$(pick::hints "󰌑" paste "󰘵 󰌑" markdown "󰘴 O" "keep open" "󰘴 Y" copy "󰘴 D" del "󰘴 P" pin)"
 
 pick_args=(
