@@ -54,6 +54,15 @@
 #      brief sleep to ride out the watcher's ~0.5s capture lag); "empty-store"
 #      if there are no rows at all. Callers: pbpaste --manifest (files-yazi
 #      T4), the yazi smart-paste plugin (T8).
+#   N  push-manifest req: source_host US path NUL path ...  resp: empty | err
+#      Cross-machine sibling of U (files-yazi design §5, T11): a machine
+#      SSH'd in, with the reverse bridge up, sends this instead of U because
+#      it cannot write to THIS Mac's pasteboard directly. Declares origin +
+#      sets the pasteboard to the newline-joined paths as plain TEXT (O+T's
+#      cores, see clip::declare_origin_core / clip::set_pasteboard_core) AND
+#      inserts a `files` store row carrying the real x-file-manifest blob
+#      directly, so L resolves it instead of the watcher's text echo.
+#      Callers: pbcopy (files-yazi T11, remote branch).
 #
 # Rich payload writes (C) go through hs.pasteboard.writeAllData via a
 # throwaway generated Lua script run as `hs <file>` (NOT `hs -c`, which hangs
@@ -233,15 +242,25 @@ clip::op_get_regtype() {
   send_ok "$regtype"
 }
 
+# clip::set_pasteboard_core <regtype> <text> -- the actual pasteboard write +
+# regtype-file bookkeeping op T performs, split out so op N (push-manifest,
+# files-yazi design §5) can invoke it directly without a reply frame of its
+# own (see the callers below -- op_set is now a thin wrapper: parse the wire
+# payload, call the core, send ONE reply).
+clip::set_pasteboard_core() {
+  local regtype=$1 text=$2
+  print -rn -- "$text" | pbcopy
+  local h; h="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  print -r -- "$regtype" > "$REGTYPE_FILE"
+  print -r -- "$h" >> "$REGTYPE_FILE"
+}
+
 clip::op_set() {
   local payload=$1
   (( $#payload >= 1 )) || { send_err "empty payload"; return }
   local regtype=${payload[1,1]}
   local text=${payload[2,-1]}
-  print -rn -- "$text" | pbcopy
-  local h; h="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
-  print -r -- "$regtype" > "$REGTYPE_FILE"
-  print -r -- "$h" >> "$REGTYPE_FILE"
+  clip::set_pasteboard_core "$regtype" "$text"
   send_ok ""
 }
 
@@ -561,18 +580,97 @@ clip::op_persist() {
 # SSH'd into the peer, just before it sets the peer clipboard. The HS watcher's
 # captured_origin() consults this (hash-keyed + TTL'd) to stamp the row
 # remote(source_host) instead of local. Payload: <source_host> US <text>.
-clip::op_declare_origin() {
-  local payload=$1
-  local us=$'\x1f'
-  local host=${payload%%${us}*}
-  local text=${payload#*${us}}
-  [[ -n "$host" && "$host" != "$payload" ]] || { send_err "bad origin payload"; return }
+# clip::declare_origin_core <host> <text> -- the actual origin-file write op
+# O performs, split out so op N (push-manifest) can invoke it directly
+# without a reply frame of its own (mirrors set_pasteboard_core above; see
+# the header comment there).
+clip::declare_origin_core() {
+  local host=$1 text=$2
   local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
   {
     print -r -- "$host"
     print -r -- "$hash"
     print -r -- "$EPOCHSECONDS"
   } > "$ORIGIN_FILE"
+}
+
+clip::op_declare_origin() {
+  local payload=$1
+  local us=$'\x1f'
+  local host=${payload%%${us}*}
+  local text=${payload#*${us}}
+  [[ -n "$host" && "$host" != "$payload" ]] || { send_err "bad origin payload"; return }
+  clip::declare_origin_core "$host" "$text"
+  send_ok ""
+}
+
+# N  push-manifest: cross-machine sibling of local `U` (files-yazi design §5,
+# T11) -- a machine SSH'd in, with the reverse bridge up, sends this instead
+# of `U` because it cannot write to THIS Mac's pasteboard directly. Reuses
+# O's and T's cores (see the header comments on declare_origin_core /
+# set_pasteboard_core just above) to declare the origin and put the
+# newline-joined paths on the pasteboard as plain TEXT -- visible/pasteable
+# everywhere immediately, and the row the HS watcher's own capture creates
+# for that text gets the correct source_host via the origin declaration,
+# exactly like a normal remote pbcopy. On top of that (paths, unlike prose,
+# need a real NUL-joined manifest the watcher's text echo could never
+# carry) this inserts a `files` store row directly, same insert+retention-
+# sweep pattern as op_persist (~line 519).
+#   payload = source_host US path NUL path ...
+# Ordering matters (spec mandate): the manifest row is inserted AFTER the
+# pasteboard write above, with `last_ts` sampled fresh at that point -- so it
+# is strictly greater than the last_ts of any row that already existed
+# before this call (in particular the watcher's own echo of the SAME
+# pasteboard write, which -- capture-lag aside -- can only be observed
+# afterward). `L`'s "latest row" query then resolves to the manifest row.
+clip::op_push_manifest() {
+  local payload=$1
+  local us=$'\x1f'
+  local host=${payload%%${us}*}
+  local paths=${payload#*${us}}
+  [[ -n "$host" && "$host" != "$payload" && -n "$paths" ]] || { send_err "bad manifest payload"; return }
+
+  local -a f
+  f=( "${(@ps:\0:)paths}" )
+  (( ${#f[@]} > 0 )) || { send_err "bad manifest payload"; return }
+  local p
+  for p in "${f[@]}"; do
+    [[ -n "$p" && "$p" == /* ]] || { send_err "not absolute: $p"; return }
+  done
+  local text="${(pj:\n:)f}"
+
+  clip::declare_origin_core "$host" "$text"
+  clip::set_pasteboard_core "v" "$text"
+
+  local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-manifest.XXXXXX") || { send_err "mktemp failed"; return }
+  print -rn -- "$text"  > "$tmpd/preview"
+  print -rn -- "$paths" > "$tmpd/manifest"
+  local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  local eh=${host//\'/\'\'}
+  # Fresh EPOCHREALTIME, read only AFTER the pasteboard write above -- see
+  # the "ordering matters" note in the header comment.
+  local ts=$EPOCHREALTIME
+  local -i len=$#text
+
+  local existing
+  existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh' AND type_hash='$hash' LIMIT 1;" 2>/dev/null)
+  local row_id
+  if [[ -n "$existing" ]]; then
+    sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null
+    row_id=$existing
+  else
+    row_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips \
+      (text_preview, len, first_ts, last_ts, type_kind, pinned, type_hash, source_host) \
+      VALUES (CAST(readfile('$tmpd/preview') AS TEXT), $len, $ts, $ts, 'files', 0, '$hash', '$eh'); \
+      SELECT last_insert_rowid();" 2>/dev/null)
+  fi
+  if [[ -n "$row_id" ]]; then
+    sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO clip_types (clip_id, uti, blob) VALUES ($row_id, 'x-file-manifest', readfile('$tmpd/manifest'));" 2>/dev/null
+  fi
+  sqlite3 "$DB_FILE" "DELETE FROM clips WHERE pinned=0 AND id NOT IN \
+    (SELECT id FROM clips ORDER BY pinned DESC, last_ts DESC LIMIT $MAX_ROWS);" 2>/dev/null
+  sqlite3 "$DB_FILE" "DELETE FROM clip_types WHERE clip_id NOT IN (SELECT id FROM clips);" 2>/dev/null
+  rm -rf -- "$tmpd"
   send_ok ""
 }
 
@@ -611,5 +709,6 @@ case "$opcode" in
   F) clip::op_fetch_file "$payload" ;;
   U) clip::op_set_file_urls "$payload" ;;
   L) clip::op_list_files ;;
+  N) clip::op_push_manifest "$payload" ;;
   *) send_err "unknown opcode" ;;
 esac

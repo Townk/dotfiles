@@ -23,7 +23,14 @@
 #   machine's own bridge on 127.0.0.1:2489, and — unlike the fire-and-forget
 #   O/P frames below — actually check the reply, since there is no local-tool
 #   fallback for a file clip: `E` status fails loudly.
-#   Over SSH → honest error for now (no manifest-push yet; that's T11).
+#   Over SSH + reverse-bridge-up (T11) → send op `N` (push-manifest: this
+#   host US NUL-joined absolute paths) to the reverse-tunneled peer bridge
+#   (CLIPBOARD_BRIDGE_PORT, default 2490 — same port pbpaste's --manifest
+#   already reads from). Bridge-up is a real probe (`nc -z`), not just "are
+#   we SSH'd in": an iPad/Blink session has no reverse tunnel at all.
+#   Over SSH, no bridge → loud error: OSC 52 is text-only and cannot carry
+#   files at all (unlike the plain-text branch below, which always has the
+#   OSC 52 fallback).
 #
 # Standalone POSIX sh, no library sourcing: this needs to work from any
 # caller (editors, git, other scripts) with zero fragile dependencies, same
@@ -146,9 +153,48 @@ if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
 fi
 
 if [ $# -gt 0 ]; then
-  # File-object mode over SSH: no manifest-push yet (that's T11) -- honest
-  # error rather than silently falling back to a text-only copy of the paths.
-  echo "pbcopy: file clips over SSH are not supported yet" >&2
+  # File-object mode over SSH (files-yazi design §5, T11): manifest-push to
+  # the reverse-tunneled peer bridge, if it's up -- OSC 52 cannot carry files
+  # at all, so unlike the plain-text branch below there is no other way.
+  bridge_port="${CLIPBOARD_BRIDGE_PORT:-2490}"
+  if ! nc -z -w1 127.0.0.1 "$bridge_port" >/dev/null 2>&1; then
+    echo "pbcopy: file clips need the reverse bridge (OSC 52 cannot carry files)" >&2
+    exit 1
+  fi
+
+  host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
+
+  payfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-n.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
+  replyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-nr.XXXXXX") || { rm -f "$payfile"; echo "pbcopy: mktemp failed" >&2; exit 1; }
+  trap 'rm -f "$payfile" "$replyfile"' EXIT INT TERM
+
+  printf '%s\037' "$host" > "$payfile"
+  _first=1
+  for _p in "$@"; do
+    if [ ! -e "$_p" ]; then
+      echo "pbcopy: no such file: $_p" >&2
+      exit 1
+    fi
+    _ap=$(abspath "$_p")
+    if [ "$_first" -eq 1 ]; then
+      printf '%s' "$_ap" >> "$payfile"
+      _first=0
+    else
+      printf '\000%s' "$_ap" >> "$payfile"
+    fi
+  done
+
+  send_frame N "$bridge_port" "$payfile" "$replyfile"
+  _status=$(head -c 1 "$replyfile" 2>/dev/null || true)
+  if [ "$_status" = "O" ]; then
+    exit 0
+  fi
+  if [ "$_status" = "E" ]; then
+    _msg=$(tail -c +6 "$replyfile" 2>/dev/null)
+    echo "pbcopy: ${_msg:-bridge reported an error}" >&2
+    exit 1
+  fi
+  echo "pbcopy: clipboard bridge is not reachable on 127.0.0.1:$bridge_port" >&2
   exit 1
 fi
 

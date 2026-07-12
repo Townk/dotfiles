@@ -21,6 +21,13 @@ Describe 'pbcopy: file-object mode'
     # carrying the message "boom".
     cat > "$BINDIR/nc" <<EOF
 #!/bin/sh
+# Probe form used by the SSH+bridge branch: "nc -z -w1 127.0.0.1 <port>",
+# no stdin. \$NC_BRIDGE_UP ("1" default, or "0") controls the exit status;
+# never logged -- tests asserting "no frame was sent" only care about real
+# frame-carrying invocations below.
+if [ "\$1" = "-z" ]; then
+  [ "\${NC_BRIDGE_UP:-1}" = "1" ] && exit 0 || exit 1
+fi
 port=\$3
 raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
 cat > "\$raw"
@@ -105,12 +112,73 @@ EOF
     The stderr should include "bridge"
   End
 
-  It 'errors over SSH instead of sending a frame (T11 replaces this)'
+  # Over SSH + reverse-bridge-up (files-yazi design §5, T11): pbcopy pushes a
+  # manifest via op `N` instead of the local `U` -- OSC 52 cannot carry files
+  # at all, so this is the only path. Host field: replicate pbcopy's own
+  # scutil-then-hostname fallback here rather than stubbing either, so the
+  # assertion tracks whatever this machine actually resolves to.
+  It 'sends an N frame to :2490 with this host and the NUL-joined absolute paths (bridge up)'
     export SSH_CONNECTION="x 1 y 22"
-    f1="$SHELLSPEC_TMPBASE/ssh.txt"; touch "$f1"
+    expected_host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
+    f1="$SHELLSPEC_TMPBASE/rem-a.txt"; touch "$f1"
+    f2="$SHELLSPEC_TMPBASE/rem-b.txt"; touch "$f2"
+    cf1=$(cd "$(dirname "$f1")" && pwd -P)/$(basename "$f1")
+    cf2=$(cd "$(dirname "$f2")" && pwd -P)/$(basename "$f2")
+    export NC_BRIDGE_UP=1
+    When run command sh "$SCRIPT" "$f1" "$f2"
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:N"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$expected_host"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$cf1|$cf2"
+  End
+
+  It 'honors CLIPBOARD_BRIDGE_PORT for the SSH+files probe and frame'
+    export SSH_CONNECTION="x 1 y 22"
+    export CLIPBOARD_BRIDGE_PORT=9999
+    export NC_BRIDGE_UP=1
+    f1="$SHELLSPEC_TMPBASE/rem-port.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "9999:N"
+  End
+
+  It 'exits 0 when the manifest push gets an O reply'
+    export SSH_CONNECTION="x 1 y 22"
+    export NC_BRIDGE_UP=1
+    export NC_REPLY=ok
+    f1="$SHELLSPEC_TMPBASE/rem-ok.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
+    The status should be success
+  End
+
+  It 'fails loudly when the manifest push gets an E reply'
+    export SSH_CONNECTION="x 1 y 22"
+    export NC_BRIDGE_UP=1
+    export NC_REPLY=err
+    f1="$SHELLSPEC_TMPBASE/rem-err.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
     The status should be failure
-    The stderr should include "file clips over SSH are not supported yet"
+    The stderr should include "boom"
+  End
+
+  It 'errors with the reverse-bridge message when no bridge is up, without sending a frame'
+    export SSH_CONNECTION="x 1 y 22"
+    export NC_BRIDGE_UP=0
+    f1="$SHELLSPEC_TMPBASE/rem-nobridge.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
+    The status should be failure
+    The stderr should include "pbcopy: file clips need the reverse bridge (OSC 52 cannot carry files)"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should equal ""
+  End
+
+  It 'exits 1 naming a missing path over SSH with the bridge up, without sending a frame'
+    export SSH_CONNECTION="x 1 y 22"
+    export NC_BRIDGE_UP=1
+    f1="$SHELLSPEC_TMPBASE/rem-exists.txt"; touch "$f1"
+    missing="$SHELLSPEC_TMPBASE/rem-missing.txt"
+    When run command sh "$SCRIPT" "$f1" "$missing"
+    The status should be failure
+    The stderr should include "$missing"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should equal ""
   End
 

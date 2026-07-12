@@ -243,3 +243,146 @@ Describe 'clipboard-bridge-dispatch: L list-files'
     The output should include "empty-store"
   End
 End
+
+# N push-manifest: the cross-machine sibling of U (files-yazi design §5,
+# T11). A machine SSH'd in, with the reverse bridge up, sends this instead of
+# writing the pasteboard directly. Declares origin + sets the pasteboard text
+# (reusing O's/T's cores) AND inserts a `files` row carrying the real
+# x-file-manifest blob, so a later `L` resolves it instead of whatever the HS
+# watcher's own capture of that text echo would have stamped.
+Describe 'clipboard-bridge-dispatch: N push-manifest'
+  DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
+    mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    # SHELLSPEC_TMPBASE is shared across every It in this file -- see the
+    # matching note on the L describe block above.
+    rm -f "$DB"
+    sqlite3 "$DB" '
+      CREATE TABLE clips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text_preview TEXT,
+        text_plain TEXT,
+        len INTEGER,
+        first_ts REAL,
+        last_ts REAL,
+        source_app TEXT,
+        source_bundle_id TEXT,
+        type_kind TEXT,
+        regtype TEXT,
+        pinned INTEGER DEFAULT 0,
+        type_hash TEXT,
+        source_host TEXT
+      );
+      CREATE TABLE clip_types (
+        clip_id INTEGER,
+        uti TEXT,
+        blob BLOB,
+        PRIMARY KEY (clip_id, uti)
+      );
+    '
+    # A pre-existing row with an old last_ts -- stands in for whatever the HS
+    # watcher's own capture of a PRIOR clip already stamped, so the "strictly
+    # greater" assertion below has a concrete timestamp to beat.
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('text','laptop',1.0);"
+
+    # Fake pbcopy: op N's pasteboard write reuses op T's core
+    # (clip::set_pasteboard_core), which pipes the text through the bare
+    # `pbcopy` command -- capture stdin here instead of touching the real
+    # system clipboard (this dispatcher's own env has only PATH set, so the
+    # unqualified `pbcopy` call resolves through whatever we put on PATH).
+    export PATH="$SHELLSPEC_TMPBASE/bin:$PATH"
+    mkdir -p "$SHELLSPEC_TMPBASE/bin"
+    printf '#!/bin/sh\ncat > "%s"\n' "$SHELLSPEC_TMPBASE/pbcopy-stdin" \
+      > "$SHELLSPEC_TMPBASE/bin/pbcopy"
+    chmod +x "$SHELLSPEC_TMPBASE/bin/pbcopy"
+
+    REQ="$SHELLSPEC_TMPBASE/n-req"
+    RESP="$SHELLSPEC_TMPBASE/n-resp"
+  }
+  BeforeEach 'setup'
+
+  # be32 <n> -- prints the 4-byte big-endian encoding of $n, mirroring the
+  # dispatcher's own int_to_be32 (needed here since the N payload -- host +
+  # multiple paths -- can exceed the single literal-octal-byte length these
+  # tests use elsewhere for short U/O payloads).
+  be32() {
+    n=$1
+    printf "\\$(printf %03o $(( (n >> 24) & 255 )))\\$(printf %03o $(( (n >> 16) & 255 )))\\$(printf %03o $(( (n >> 8) & 255 )))\\$(printf %03o $(( n & 255 )))"
+  }
+
+  # build_req <host> <path> [<path> ...] -- writes a framed N request to $REQ.
+  build_req() {
+    _host=$1; shift
+    _payfile="$SHELLSPEC_TMPBASE/n-payload"
+    printf '%s\037' "$_host" > "$_payfile"
+    _first=1
+    for _p in "$@"; do
+      if [ "$_first" -eq 1 ]; then
+        printf '%s' "$_p" >> "$_payfile"
+        _first=0
+      else
+        printf '\000%s' "$_p" >> "$_payfile"
+      fi
+    done
+    _len=$(wc -c < "$_payfile" | tr -d ' ')
+    { printf 'N'; be32 "$_len"; cat "$_payfile"; } > "$REQ"
+  }
+
+  # -f: see the matching note on the U describe block above (skips
+  # ~/.zshenv, which would clobber the sandbox XDG overrides).
+  It 'acks O, sets the pasteboard text, and inserts a files row + x-file-manifest blob'
+    build_req devbox /tmp/remote-a.txt /tmp/remote-b.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+
+    pbcopy_stdin=$(cat "$SHELLSPEC_TMPBASE/pbcopy-stdin")
+    The variable pbcopy_stdin should equal "$(printf '/tmp/remote-a.txt\n/tmp/remote-b.txt')"
+
+    kind=$(sqlite3 "$DB" "SELECT type_kind FROM clips WHERE source_host='devbox';")
+    The variable kind should equal "files"
+    host=$(sqlite3 "$DB" "SELECT source_host FROM clips WHERE source_host='devbox';")
+    The variable host should equal "devbox"
+    preview=$(sqlite3 "$DB" "SELECT text_preview FROM clips WHERE source_host='devbox';")
+    The variable preview should equal "$(printf '/tmp/remote-a.txt\n/tmp/remote-b.txt')"
+
+    manifest_id=$(sqlite3 "$DB" "SELECT id FROM clips WHERE source_host='devbox';")
+    manifestfile="$SHELLSPEC_TMPBASE/n-manifest-out"
+    sqlite3 "$DB" "SELECT writefile('$manifestfile', blob) FROM clip_types WHERE clip_id=$manifest_id AND uti='x-file-manifest';" >/dev/null
+    manifest_paths=$(tr '\000' '|' < "$manifestfile")
+    The variable manifest_paths should equal "/tmp/remote-a.txt|/tmp/remote-b.txt"
+  End
+
+  It 'stamps last_ts strictly greater than a pre-existing row'
+    build_req devbox /tmp/remote-c.txt
+    prior_ts=$(sqlite3 "$DB" "SELECT last_ts FROM clips WHERE source_host='laptop';")
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+    new_ts=$(sqlite3 "$DB" "SELECT last_ts FROM clips WHERE source_host='devbox';")
+    is_greater=$(awk -v a="$new_ts" -v b="$prior_ts" 'BEGIN { print (a > b) ? "yes" : "no" }')
+    The variable is_greater should equal "yes"
+  End
+
+  It 'errors on a malformed payload (missing US separator)'
+    { printf 'N\000\000\000\010nohostie'; } > "$REQ"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+  End
+
+  It 'errors on a malformed payload (empty host)'
+    build_req "" /tmp/remote-d.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+  End
+
+  It 'errors on a malformed payload (relative path)'
+    build_req devbox relative/path.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+  End
+End
