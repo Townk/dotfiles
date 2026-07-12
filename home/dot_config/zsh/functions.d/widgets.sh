@@ -103,3 +103,18 @@ ai-playbook-pick() {
   zle reset-prompt
 }
 zle -N ai-playbook-pick
+
+# ── Clipboard: smart paste (Alt+p) ──────────────────────────────────────────
+# Alt+p — smart paste: files clip → run `pbpaste --files` as a visible,
+# cancellable command; anything else → insert clipboard text at the cursor.
+# All clipboard logic lives in pbpaste; this is pure ZLE glue.
+smart-paste() {
+  if pbpaste --manifest >/dev/null 2>&1; then
+    BUFFER="pbpaste --files"
+    zle accept-line
+  else
+    LBUFFER+="$(pbpaste)"
+  fi
+}
+zle -N smart-paste
+bindkey '\ep' smart-paste
