@@ -38,6 +38,13 @@
 #      Records that the NEXT pasteboard change hashing to sha256(text) was
 #      really copied on source_host (§23) -- sent by a machine SSH'd into the
 #      peer just before it sets the peer clipboard. See clip::op_declare_origin.
+#   U  set-file-urls req: <path NUL path ...> | "id:<rowid>"  resp: empty | err
+#      Puts a real file clip on THIS Mac's pasteboard (files-yazi design §4):
+#      form A writes NSFilenamesPboardType (all paths) + public.file-url
+#      (first path) via hs.pasteboard.writeAllData; form B does a full-
+#      fidelity restore of a stored clip by rowid. The watcher then captures
+#      the new pasteboard state -- same full-circle design as pbcopy's O/P
+#      frames. Callers: pbcopy (files-yazi T3), pick-clipboard (T9).
 #
 # Rich payload writes (C) go through hs.pasteboard.writeAllData via a
 # throwaway generated Lua script run as `hs <file>` (NOT `hs -c`, which hangs
@@ -259,6 +266,49 @@ clip::op_copy() {
   rm -rf -- "$tmpdir"
 }
 
+# U  set-file-urls: put a real file clip on THIS Mac's pasteboard (see the
+# header comment). Payload form A: NUL-joined absolute paths, written as
+# NSFilenamesPboardType (all paths) + public.file-url (first path). Form B:
+# "id:<rowid>", routed to the HS clipboard-history module's restore_by_id for
+# a full-fidelity local restore of a stored files row.
+clip::op_set_file_urls() {
+  local payload=$1
+  local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-fileurls.XXXXXX") || { send_err "mktemp failed"; return }
+  local script="$tmpdir/set-file-urls.lua"
+  if [[ "$payload" == id:<-> ]]; then
+    local id=${payload#id:}
+    print -r -- "require('modules.apps.clipboard-history').restore_by_id($id)" > "$script"
+  else
+    local -a paths=( "${(@ps:\0:)payload}" )
+    local p
+    for p in "${paths[@]}"; do
+      [[ "$p" == /* ]] || { send_err "not absolute: $p"; rm -rf -- "$tmpdir"; return }
+    done
+    # Paths go via a NUL-joined side file, not string-interpolated into Lua
+    # (paths may contain quotes/brackets that would break a Lua literal).
+    local pathfile="$tmpdir/paths"
+    print -rn -- "$payload" > "$pathfile"
+    {
+      print -r -- "local f = io.open([[$pathfile]], 'rb'); local raw = f:read('*a'); f:close()"
+      print -r -- "local paths = {}"
+      print -r -- "for p in raw:gmatch('[^\\0]+') do paths[#paths+1] = p end"
+      print -r -- "local xml = {'<?xml version=\"1.0\" encoding=\"UTF-8\"?>',"
+      print -r -- "  '<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">',"
+      print -r -- "  '<plist version=\"1.0\"><array>'}"
+      print -r -- "local function esc(s) return (s:gsub('&','&amp;'):gsub('<','&lt;'):gsub('>','&gt;')) end"
+      print -r -- "for _, p in ipairs(paths) do xml[#xml+1] = '<string>' .. esc(p) .. '</string>' end"
+      print -r -- "xml[#xml+1] = '</array></plist>'"
+      print -r -- "local function urlenc(s) return (s:gsub('[^%w%-%._~/]', function(c) return string.format('%%%02X', c:byte()) end)) end"
+      print -r -- "hs.pasteboard.writeAllData({"
+      print -r -- "  ['NSFilenamesPboardType'] = table.concat(xml, '\\n'),"
+      print -r -- "  ['public.file-url'] = 'file://' .. urlenc(paths[1]),"
+      print -r -- "})"
+    } > "$script"
+  fi
+  if clip::hs_run "$script"; then send_ok ""; else send_err "hs run failed"; fi
+  rm -rf -- "$tmpdir"
+}
+
 clip::op_fetch_file() {
   local fpath=$1
   if [[ ! -r "$fpath" ]]; then
@@ -399,5 +449,6 @@ case "$opcode" in
   O) clip::op_declare_origin "$payload" ;;
   C) clip::op_copy "$payload" ;;
   F) clip::op_fetch_file "$payload" ;;
+  U) clip::op_set_file_urls "$payload" ;;
   *) send_err "unknown opcode" ;;
 esac
