@@ -11,6 +11,9 @@ prepend_keymap = [
   { on = "<C-f>", run = "seek 10" },
   { on = "<C-b>", run = "seek -10" },
 
+  { on = "y", run = [ '''shell -- d="${XDG_STATE_HOME:-$HOME/.local/state}/yazi"; mkdir -p "$d"; pbcopy "$@" 2>/dev/null; touch "$d/last-yank"''', "yank" ], desc = "Yank (+ system clipboard)" },
+  { on = "x", run = [ '''shell -- d="${XDG_STATE_HOME:-$HOME/.local/state}/yazi"; mkdir -p "$d"; touch "$d/last-yank"''', "yank --cut" ], desc = "Cut (internal)" },
+
   { on = "!", run = 'shell "$SHELL" --block', desc = "Open shell here" },
   { on = "2", run = "plugin smart-switch 1", desc = "Switch or create tab 2" },
   { on = "3", run = "plugin smart-switch 2", desc = "Switch or create tab 3" },
