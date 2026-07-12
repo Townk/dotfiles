@@ -17,9 +17,22 @@
 # down there is no local clipboard to fall back to, so this fails loudly instead
 # of silently returning nothing.
 #
+# `pbpaste --manifest` (files-yazi design §5): instead of the clipboard text,
+# print the CURRENT clipboard entry's file manifest via bridge op `L`
+# (list-files, T2) -- a pure store query, no pasteboard access. Four lines to
+# stdout: `kind\t<type_kind>`, `host\t<source_host>`, `ts\t<last_ts>`, then one
+# `path\t<path>` line per file. Non-files clip / bridge error / bridge down:
+# exit 1, nothing on stdout, reason on stderr. Same port convention as
+# pbcopy's U/P frames and this file's own G frame: 2489 locally (this
+# machine's own bridge), CLIPBOARD_BRIDGE_PORT (default 2490) over SSH (the
+# reverse-tunneled peer bridge). Callers: the Alt+p widget (T6), the yazi
+# smart-paste plugin (T8); `pbpaste --files` (T5) reuses the same fetch/parse
+# functions below, only the final rendering differs.
+#
 # Standalone POSIX sh, no library sourcing — see pbcopy.
 #
 # Usage: text=$(pbpaste)
+#        pbpaste --manifest
 
 set -eu
 
@@ -34,11 +47,134 @@ Over SSH: reads the Mac's clipboard back over the clipboard-bridge reverse tunne
 (loopback TCP :2490, set up by system-onboard) instead of OSC 52, which would
 hang. Fails loudly when the tunnel is down. See pbcopy for the write side.
 
+--manifest: print the current clipboard entry's file manifest (kind/host/ts/
+path lines) instead of its text. Exits 1 (nothing on stdout) if the current
+clip isn't a files clip, or the bridge is down.
+
 Usage: text=$(pbpaste)
+       pbpaste --manifest
 EOF
     exit 0
     ;;
 esac
+
+# --- --manifest (files-yazi design §5) --------------------------------------
+#
+# manifest_port: 2489 (this machine's own bridge) locally, else
+# CLIPBOARD_BRIDGE_PORT (default 2490, the reverse-tunneled peer bridge --
+# same var the plain-paste G frame below honors).
+manifest_port() {
+  if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+    echo 2489
+  else
+    echo "${CLIPBOARD_BRIDGE_PORT:-2490}"
+  fi
+}
+
+# manifest_fetch <replyfile> -- sends an empty `L` frame to the manifest port
+# and captures the raw <status><BE32 len><payload> reply into <replyfile>.
+# Best-effort: a down bridge / missing nc just leaves the file short or
+# empty, which manifest_parse's status check below reports as a normal error
+# (mirrors pbcopy's send_frame `|| true` rationale: under `set -e` a
+# connection-refused failure here must not kill the script before the reply
+# check runs).
+manifest_fetch() {
+  _replyfile=$1
+  _port=$(manifest_port)
+  printf 'L\000\000\000\000' | nc -w 2 127.0.0.1 "$_port" > "$_replyfile" 2>/dev/null || true
+}
+
+# manifest_parse <replyfile> -- on an `O` reply, sets $MANIFEST_KIND /
+# $MANIFEST_HOST / $MANIFEST_TS and writes the NUL-joined path list to
+# $MANIFEST_PATHFILE; returns 0. On any failure (bridge down, `E` status,
+# empty reply) prints a reason to stderr and returns 1 -- caller must not
+# print anything to stdout in that case.
+#
+# Byte-level, not string-level: the payload can hold embedded NULs (the path
+# separators), which a POSIX shell variable can't carry intact through
+# command substitution (truncates at the first NUL) -- so the payload is
+# sliced and split entirely at the file level (dd/tr), never read into a
+# shell scalar as a whole. Only the three US-delimited header fields
+# (kind/host/ts), which never contain NULs, are lifted into variables.
+manifest_parse() {
+  _replyfile=$1
+  _status=$(dd bs=1 count=1 2>/dev/null < "$_replyfile")
+  if [ -z "$_status" ]; then
+    echo "pbpaste: clipboard bridge not reachable (reverse SSH tunnel down?)" >&2
+    return 1
+  fi
+  _lenbytes=$(dd bs=1 skip=1 count=4 2>/dev/null < "$_replyfile" | od -An -tu1)
+  set -- $_lenbytes
+  _len=$(( ${1:-0} * 16777216 + ${2:-0} * 65536 + ${3:-0} * 256 + ${4:-0} ))
+
+  if [ "$_status" != "O" ]; then
+    _msg=$(dd bs=1 skip=5 count="$_len" 2>/dev/null < "$_replyfile")
+    echo "pbpaste: ${_msg:-bridge reported an error}" >&2
+    return 1
+  fi
+
+  _payloadfile=$(mktemp "${TMPDIR:-/tmp}/pbpaste-manifest-payload.XXXXXX") || {
+    echo "pbpaste: mktemp failed" >&2
+    return 1
+  }
+  dd bs=1 skip=5 count="$_len" 2>/dev/null < "$_replyfile" > "$_payloadfile"
+
+  # Only the 3 header-field separators are \037 (US) -- real filesystem paths
+  # don't contain that byte -- so this tr is a safe field split even though
+  # the tail (the path blob) keeps flowing through unchanged.
+  _fieldsfile=$(mktemp "${TMPDIR:-/tmp}/pbpaste-manifest-fields.XXXXXX") || {
+    rm -f "$_payloadfile"
+    echo "pbpaste: mktemp failed" >&2
+    return 1
+  }
+  tr '\037' '\n' < "$_payloadfile" > "$_fieldsfile"
+  rm -f "$_payloadfile"
+
+  MANIFEST_KIND=$(sed -n '1p' "$_fieldsfile")
+  MANIFEST_HOST=$(sed -n '2p' "$_fieldsfile")
+  MANIFEST_TS=$(sed -n '3p' "$_fieldsfile")
+
+  MANIFEST_PATHFILE=$(mktemp "${TMPDIR:-/tmp}/pbpaste-manifest-paths.XXXXXX") || {
+    rm -f "$_fieldsfile"
+    echo "pbpaste: mktemp failed" >&2
+    return 1
+  }
+  tail -n +4 "$_fieldsfile" > "$MANIFEST_PATHFILE"
+  rm -f "$_fieldsfile"
+  return 0
+}
+
+# pbpaste_manifest -- the --manifest entry point: fetch + parse + print the
+# four-line kind/host/ts/path* format, or exit 1 with a stderr reason and
+# nothing on stdout.
+pbpaste_manifest() {
+  _replyfile=$(mktemp "${TMPDIR:-/tmp}/pbpaste-manifest-reply.XXXXXX") || {
+    echo "pbpaste: mktemp failed" >&2
+    exit 1
+  }
+  manifest_fetch "$_replyfile"
+  if ! manifest_parse "$_replyfile"; then
+    rm -f "$_replyfile"
+    exit 1
+  fi
+  rm -f "$_replyfile"
+
+  printf 'kind\t%s\n' "$MANIFEST_KIND"
+  printf 'host\t%s\n' "$MANIFEST_HOST"
+  printf 'ts\t%s\n' "$MANIFEST_TS"
+  # NUL -> newline conversion happens ONLY here, at the final print (paths may
+  # contain spaces; a path containing a literal newline is a known, accepted
+  # limit -- see header comment).
+  tr '\000' '\n' < "$MANIFEST_PATHFILE" | while IFS= read -r _p || [ -n "$_p" ]; do
+    printf 'path\t%s\n' "$_p"
+  done
+  rm -f "$MANIFEST_PATHFILE"
+  exit 0
+}
+
+if [ "${1:-}" = "--manifest" ]; then
+  pbpaste_manifest
+fi
 
 if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
   # Absolute path, not a PATH lookup — see pbcopy for why.
