@@ -360,15 +360,20 @@ EOF
     The output should equal ""
   End
 
-  It 'exits 1 naming the exact milestone message for a manifest from a different host'
+  # A manifest from a DIFFERENT host used to hit T5's "later milestone"
+  # error here; T13 replaces that with a real remote engine (its own
+  # dedicated "pbpaste: --files (remote engine)" Describe below, with an
+  # opcode-aware fake `nc` that can actually answer F/A). This Describe's
+  # fake `nc` only ever answers the `L` manifest fetch, so the one thing
+  # worth asserting HERE is the negative: the OLD milestone string is gone.
+  It 'no longer refuses a manifest from a different host with the old milestone message'
     printf 'x\n' > "$SRC/r.txt"
     pf="$SHELLSPEC_TMPBASE/payload"
     build_manifest "$pf" file some-other-mac 1752200000.6 "$SRC/r.txt"
     build_frame O "$pf" "$REPLY_FRAME"
 
     When run command sh "$SCRIPT" --files "$TARGET"
-    The status should be failure
-    The stderr should equal "pbpaste: remote file clips land in a later milestone"
+    The stderr should not include "later milestone"
   End
 
   It 'errors pointing at plain pbpaste when the clipboard entry is not a files clip'
@@ -489,5 +494,306 @@ EOF
       cmp -s "$2/big.bin" "$MNT/big.bin" || exit 6
     ' _ "$SCRIPT" "$TARGET"
     The status should be success
+  End
+End
+
+# Tests for pbpaste's REMOTE file-materialization engine (T13, design
+# §5/§8): manifest host != this host -> stream each item over F (files) /
+# A (directories, via the dispatcher's `E is-directory` retry) instead of
+# the local tiered engine. The fake `nc` here is opcode-aware (peeks the
+# first request byte) so it can serve a DIFFERENT canned reply per opcode --
+# unlike the single-`$REPLY_FRAME` convention above, which only ever needs
+# to answer one `L` request per invocation. Fake `scutil` reports THIS
+# host as "dev-shell"; manifest host "mac-mini" is therefore a DIFFERENT
+# machine, exercising the remote branch (a manifest host of "dev-shell"
+# itself, reused from the Describes above, would take the LOCAL branch
+# instead -- see the explicit host-comparison this task added).
+Describe 'pbpaste: --files (remote engine)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+
+  build_frame() {
+    st=$1 payload_file=$2 outfile=$3
+    len=$(wc -c < "$payload_file" | tr -d ' ')
+    {
+      printf '%s' "$st"
+      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
+      cat "$payload_file"
+    } > "$outfile"
+  }
+
+  build_manifest() {
+    outfile=$1 kind=$2 host=$3 ts=$4
+    shift 4
+    {
+      printf '%s\037%s\037%s\037' "$kind" "$host" "$ts"
+      first=1
+      for p in "$@"; do
+        if [ "$first" -eq 1 ]; then
+          printf '%s' "$p"
+          first=0
+        else
+          printf '\000%s' "$p"
+        fi
+      done
+    } > "$outfile"
+  }
+
+  # build_a_frame <est_bytes> <tar_body_file> <outfile> -- an A-reply frame:
+  # O + BE32(8) + BE64(est_bytes), then <tar_body_file>'s bytes RAW (no
+  # further framing -- op_archive_stream's contract: read to EOF).
+  build_a_frame() {
+    est=$1 body=$2 outfile=$3
+    {
+      printf 'O'
+      len=8
+      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
+      b8=$(( est & 255 )); b7=$(( (est>>8)&255 )); b6=$(( (est>>16)&255 )); b5=$(( (est>>24)&255 ))
+      b4=$(( (est>>32)&255 )); b3=$(( (est>>40)&255 )); b2=$(( (est>>48)&255 )); b1=$(( (est>>56)&255 ))
+      printf "\\$(printf %03o $b1)\\$(printf %03o $b2)\\$(printf %03o $b3)\\$(printf %03o $b4)\\$(printf %03o $b5)\\$(printf %03o $b6)\\$(printf %03o $b7)\\$(printf %03o $b8)"
+      cat "$body"
+    } > "$outfile"
+  }
+
+  setup() {
+    export SSH_CONNECTION="x 1 y 22"
+    unset SSH_CLIENT SSH_TTY
+    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
+    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
+    REPLY_L="$SHELLSPEC_TMPBASE/reply.L"; : > "$REPLY_L"
+    REPLY_F="$SHELLSPEC_TMPBASE/reply.F"; : > "$REPLY_F"
+    REPLY_A="$SHELLSPEC_TMPBASE/reply.A"; : > "$REPLY_A"
+    export REPLY_L REPLY_F REPLY_A
+
+    # Opcode-aware fake nc: peeks the request's first byte (the opcode) and
+    # replies from the matching canned file. Logs "<port>:<op>:<frame, NUL
+    # -> '|'>" so tests can assert both port selection (requirement 4) and
+    # which opcode each call actually sent.
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+argc=\$#
+eval "port=\\\${\$argc}"
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+op=\$(dd bs=1 count=1 2>/dev/null < "\$raw")
+{ printf '%s:%s:' "\$port" "\$op"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+rm -f "\$raw"
+case "\$op" in
+  L) cat "$REPLY_L" ;;
+  F) cat "$REPLY_F" ;;
+  A) cat "$REPLY_A" ;;
+esac
+EOF
+    chmod +x "$BINDIR/nc"
+
+    cat > "$BINDIR/scutil" <<'EOF'
+#!/bin/sh
+if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
+  echo dev-shell
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$BINDIR/scutil"
+    export PATH="$BINDIR:$PATH"
+
+    # A dedicated target subdir, NOT the "$SHELLSPEC_TMPBASE/target" the
+    # Describes above use: $SHELLSPEC_TMPBASE is shared for the whole spec
+    # run (not reset per Example), so reusing that path here would collide
+    # with files an earlier Describe already materialized under the exact
+    # same item names (e.g. "a.txt").
+    TARGET="$SHELLSPEC_TMPBASE/target-remote"; mkdir -p "$TARGET"
+  }
+  BeforeEach 'setup'
+
+  It 'materializes a regular file via F, byte-identical to the source bytes'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752300000.1 "/remote/a.txt"
+    build_frame O "$pf" "$REPLY_L"
+
+    body="$SHELLSPEC_TMPBASE/filebody"
+    printf 'hello from the remote Mac\n' > "$body"
+    build_frame O "$body" "$REPLY_F"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be success
+    The contents of file "$TARGET/a.txt" should equal "hello from the remote Mac"
+  End
+
+  It 'sends F to the reverse-tunneled :2490 port (requirement 4)'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752300000.2 "/remote/b.txt"
+    build_frame O "$pf" "$REPLY_L"
+    body="$SHELLSPEC_TMPBASE/filebody"
+    printf 'port check\n' > "$body"
+    build_frame O "$body" "$REPLY_F"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:L:"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:F:"
+  End
+
+  It 'refuses to overwrite an existing target name without --force (same conflict semantics as local)'
+    printf 'old\n' > "$TARGET/dup.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752300000.3 "/remote/dup.txt"
+    build_frame O "$pf" "$REPLY_L"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "dup.txt"
+    The contents of file "$TARGET/dup.txt" should equal "old"
+    # The conflict check runs BEFORE any transfer -- only the manifest's own
+    # `L` fetch happened, never an `F`/`A` call for the conflicting item.
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:L:"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include ":F:"
+  End
+
+  It "retries as A on the dispatcher's exact is-directory error, extracting the directory correctly"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" directory mac-mini 1752300000.4 "/remote/adir"
+    build_frame O "$pf" "$REPLY_L"
+
+    errf="$SHELLSPEC_TMPBASE/is-directory-msg"
+    printf 'is-directory' > "$errf"
+    build_frame E "$errf" "$REPLY_F"
+
+    # The real dispatcher's `tar -cf - -C <parent> <basename>` roots the
+    # archive's entries at the manifest path's OWN basename ("adir", from
+    # "/remote/adir" above) -- this fixture's source dir must be named
+    # identically so the tar body is byte-shaped like the real thing, or
+    # the extraction below would land at PF_STAGING/src-adir while
+    # pbpaste_files_place expects PF_STAGING/adir (the manifest's basename).
+    src="$SHELLSPEC_TMPBASE/adir"
+    mkdir -p "$src/nested"
+    printf 'top level\n' > "$src/top.txt"
+    printf 'nested content\n' > "$src/nested/deep.txt"
+    tarfile="$SHELLSPEC_TMPBASE/adir.tar"
+    tar -cf "$tarfile" -C "$SHELLSPEC_TMPBASE" "$(basename "$src")"
+    kb=$(du -sk "$src" | awk '{print $1}')
+    est=$(( kb * 1024 ))
+    build_a_frame "$est" "$tarfile" "$REPLY_A"
+
+    When run command sh -c '
+      sh "$1" --files "$2" || exit 1
+      diff -r "$3" "$2/adir" || exit 2
+    ' _ "$SCRIPT" "$TARGET" "$src"
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include ":F:"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include ":A:"
+  End
+
+  # Integrity check per T13/design §4: a mid-stream I/O error on the far end
+  # has no error frame left to send once the A stream's O header is out, so
+  # the client's own tar EXTRACTION failing is the only truncation signal.
+  # A genuinely truncated archive (real random bytes, cut well past any
+  # header so tar has committed to extracting a file it can't finish) must
+  # fail the item AND leave no partial directory in the target.
+  It 'fails a genuinely truncated A stream, leaving no partial directory in the target'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" directory mac-mini 1752300000.5 "/remote/bigdir"
+    build_frame O "$pf" "$REPLY_L"
+
+    errf="$SHELLSPEC_TMPBASE/is-directory-msg2"
+    printf 'is-directory' > "$errf"
+    build_frame E "$errf" "$REPLY_F"
+
+    # Same basename requirement as the "retries as A" test above: the
+    # manifest path's basename ("bigdir") must be the tar's rooted entry
+    # name, or a would-be-successful extraction lands under the wrong name
+    # regardless of truncation.
+    src="$SHELLSPEC_TMPBASE/bigdir"
+    mkdir -p "$src"
+    head -c 200000 /dev/urandom > "$src/big.bin" 2>/dev/null || dd if=/dev/urandom of="$src/big.bin" bs=1000 count=200 2>/dev/null
+    fulltar="$SHELLSPEC_TMPBASE/bigdir-full.tar"
+    tar -cf "$fulltar" -C "$SHELLSPEC_TMPBASE" "$(basename "$src")"
+    fullsize=$(wc -c < "$fulltar" | tr -d ' ')
+    cutsize=$(( fullsize * 60 / 100 ))
+    cutbody="$SHELLSPEC_TMPBASE/bigdir-cut.tar"
+    head -c "$cutsize" "$fulltar" > "$cutbody"
+    kb=$(du -sk "$src" | awk '{print $1}')
+    est=$(( kb * 1024 ))
+    build_a_frame "$est" "$cutbody" "$REPLY_A"
+
+    When run command sh -c '
+      sh "$1" --files "$2" >/dev/null 2>&1
+      rc=$?
+      if [ "$rc" -eq 0 ]; then exit 9; fi
+      if [ -e "$2/bigdir" ]; then exit 8; fi
+      if ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1; then exit 7; fi
+      exit 0
+    ' _ "$SCRIPT" "$TARGET"
+    The status should be success
+  End
+
+  # Porcelain contract from the remote path (reusing the local Describe's
+  # assertion pattern): every line exactly 4 tab fields, stream ends with a
+  # `done` line. Unlike the local engine's single instant tier, an in-flight
+  # remote item's `progress` lines are NOT required to have done==total
+  # (see pbpaste_progress_tick) -- only the FINAL line pbpaste_files_place
+  # emits per item is (done==total==the real transferred size).
+  It 'porcelain: every line has exactly 4 tab fields and the stream ends with a done line'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752300000.6 "/remote/p.txt"
+    build_frame O "$pf" "$REPLY_L"
+    body="$SHELLSPEC_TMPBASE/filebody-porcelain"
+    printf 'porcelain payload contents\n' > "$body"
+    build_frame O "$body" "$REPLY_F"
+
+    When run command sh -c '
+      sh "$1" --files --porcelain "$2" > "$3" || exit 1
+      awk -F"\t" "{ if (NF != 4) exit 9 }" "$3" || exit 9
+      last=$(tail -n 1 "$3")
+      case "$last" in
+        done*) : ;;
+        *) exit 8 ;;
+      esac
+      final=$(awk -F"\t" "\$1 == \"progress\" { line = \$0 } END { print line }" "$3")
+      case "$final" in
+        *"$2/p.txt"*) : ;;
+        *) exit 7 ;;
+      esac
+    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/porcelain.out"
+    The status should be success
+  End
+
+  # Design §11: per-item size cap, F engine. Declared total comes straight
+  # from F's own BE32 length header, known before any body byte is pulled.
+  It 'fails naming the cap and the item when CLIP_FILE_MAX is exceeded (F, non-interactive)'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752300000.7 "/remote/toobig.txt"
+    build_frame O "$pf" "$REPLY_L"
+    body="$SHELLSPEC_TMPBASE/filebody-toobig"
+    printf '0123456789012345678901234567890123456789' > "$body"
+    build_frame O "$body" "$REPLY_F"
+
+    When run command env CLIP_FILE_MAX=10 sh "$SCRIPT" --files "$TARGET" </dev/null
+    The status should be failure
+    The stderr should include "CLIP_FILE_MAX"
+    The stderr should include "toobig.txt"
+    The file "$TARGET/toobig.txt" should not be exist
+  End
+
+  # Same cap, A engine: declared total is the BE64 estimate, known before
+  # the tar pipeline even starts.
+  It 'fails naming the cap and the item when CLIP_FILE_MAX is exceeded (A, non-interactive)'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" directory mac-mini 1752300000.8 "/remote/toobigdir"
+    build_frame O "$pf" "$REPLY_L"
+    errf="$SHELLSPEC_TMPBASE/is-directory-msg3"
+    printf 'is-directory' > "$errf"
+    build_frame E "$errf" "$REPLY_F"
+    src="$SHELLSPEC_TMPBASE/toobigdir-src"
+    mkdir -p "$src"
+    printf 'small\n' > "$src/small.txt"
+    tarfile="$SHELLSPEC_TMPBASE/toobigdir.tar"
+    tar -cf "$tarfile" -C "$SHELLSPEC_TMPBASE" "$(basename "$src")"
+    build_a_frame 999999999 "$tarfile" "$REPLY_A"
+
+    When run command env CLIP_FILE_MAX=10 sh "$SCRIPT" --files "$TARGET" </dev/null
+    The status should be failure
+    The stderr should include "CLIP_FILE_MAX"
+    The stderr should include "toobigdir"
+    The file "$TARGET/toobigdir" should not be exist
   End
 End

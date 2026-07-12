@@ -92,13 +92,75 @@ local function touch_last_paste()
 	Command("sh"):arg({ "-c", 'mkdir -p "$1" && touch "$1/last-paste"', "_", d }):output()
 end
 
--- paste_system(force) -- the system-clipboard branch: materializes the
--- current file clip into cwd via `pbpaste --files`. Local manifest only
--- (this task's scope, spec §6/§8) -- run as a background Command: local
--- clone tiers are instant, so there is nothing to show beyond a single
--- ya.notify on completion or failure. The remote manifest's foreground
--- `shell --block` path (progress meter) is Task 13's.
-local function paste_system(force)
+-- local_host() -- this machine's hostname, via the SAME convention pbpaste
+-- itself uses for the manifest-host comparison (`scutil --get
+-- LocalHostName`, falling back to `hostname -s`) so the remote/local
+-- decision below agrees with the shim it's driving. Not memoized at module
+-- scope -- callers that need it more than once per `entry()` invocation
+-- compute it once locally and reuse the value (see `is_remote_manifest`'s
+-- callers in `resolve`), matching the brief's "cached once per invocation"
+-- (a fresh yazi Lua state per keypress isn't guaranteed either way, so
+-- module-level memoization would be a stale-cache risk for no real gain --
+-- one `scutil` call per `p` keypress is not a meaningful cost).
+local function local_host()
+	local out = Command("scutil"):arg({ "--get", "LocalHostName" }):output()
+	if out and out.status.success then
+		local h = out.stdout:gsub("%s+$", "")
+		if h ~= "" then
+			return h
+		end
+	end
+	out = Command("hostname"):arg({ "-s" }):output()
+	if out and out.status.success then
+		return (out.stdout:gsub("%s+$", ""))
+	end
+	return ""
+end
+
+-- is_remote_manifest(m) -- true iff the manifest's files live on a DIFFERENT
+-- machine than this one. An empty m.host is treated as LOCAL, explicitly --
+-- not merely by falling through an unevaluated comparison -- mirroring the
+-- same fix in pbpaste's own MANIFEST_HOST check (a row predating
+-- source_host tracking, or a same-host synthetic x-resolved-path row,
+-- carries no host at all and certainly didn't cross a bridge from another
+-- machine).
+local function is_remote_manifest(m)
+	return m.host ~= "" and m.host ~= local_host()
+end
+
+-- paste_system(force, remote) -- the system-clipboard branch: materializes
+-- the current file clip into cwd via `pbpaste --files`.
+--   Local manifest (remote == false, unchanged from M1/T8): background
+--   Command -- local clone tiers are instant, so a single ya.notify on
+--   completion/failure is enough.
+--   Remote manifest (remote == true, T13/design §8): bytes cross machines
+--   via the bridge's F/A streams, which render their OWN live progress and
+--   can take a while -- run through a BLOCKING foreground shell
+--   (`shell --block`) instead of a background Command, so that progress
+--   renders on yazi's secondary screen instead of being captured and
+--   silently discarded. `ya.emit` is documented as fire-and-forget ("send
+--   an action... without waiting for the executor to execute" -- confirmed
+--   against the utils docs), so there is no captured output/status to build
+--   a completion ya.notify from here; design §8's yazi bullet for this path
+--   omits a notify entirely (unlike the local background one), since the
+--   shim's own terminal output during the blocked session already IS the
+--   user-visible result. `block = true` still occupies yazi's main screen
+--   for the whole run (confirmed via the `shell` command docs: "Yazi will
+--   hide into a secondary screen... until it exits"), so the user cannot
+--   press `p` again before this returns regardless of ya.emit's own
+--   fire-and-forget semantics -- touching the marker immediately after
+--   emitting is observably identical to touching it "after completion".
+local function paste_system(force, remote)
+	if remote then
+		local cmd = "pbpaste --files"
+		if force then
+			cmd = cmd .. " --force"
+		end
+		ya.emit("shell", { cmd, block = true })
+		touch_last_paste()
+		return
+	end
+
 	local args = { "--files" }
 	if force then
 		args[#args + 1] = "--force"
@@ -154,12 +216,12 @@ local function resolve(force)
 	local d = state_dir()
 	if #yanked == 0 then -- rule 4 (+ stale guard)
 		if m.ts > mtime(d .. "/last-paste") then
-			return paste_system(force)
+			return paste_system(force, is_remote_manifest(m))
 		end
 		return native_paste(force)
 	end
 	if m.ts > mtime(d .. "/last-yank") then -- rule 5
-		return paste_system(force)
+		return paste_system(force, is_remote_manifest(m))
 	end
 	return native_paste(force)
 end

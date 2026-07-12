@@ -64,6 +64,43 @@
 # containing a literal TAB would break the porcelain field count -- accepted,
 # not engineered around.
 #
+# --files, REMOTE branch (T13, design §5/§8): when the manifest's host is a
+# DIFFERENT machine (this host is over SSH, the clip lives on the Mac), the
+# tiered local engine above cannot run -- there is no shared filesystem.
+# Instead, for each manifest path, this streams the item over the SAME
+# reverse-tunneled bridge connection (2489 locally / CLIPBOARD_BRIDGE_PORT,
+# default 2490, over SSH -- manifest_port()'s existing convention, reused
+# unchanged) via two opcodes:
+#   F  fetch-file     -- tried first. `O` + BE32 len (the file's EXACT byte
+#                         count, known up front) + raw bytes. `E is-directory`
+#                         (that EXACT string) means the path is a directory
+#                         instead -- retried as an A archive-stream.
+#   A  archive-stream  -- `O` + BE32 len=8 + BE64 total (a `du`-based
+#                         ESTIMATE, no directional guarantee -- see
+#                         clip::op_archive_stream) + a raw `tar` stream with
+#                         NO trailing frame: read until EOF, never trust the
+#                         estimate to know when to stop. Piped into
+#                         `tar -xf -` inside the staging dir; a nonzero tar
+#                         exit is the truncation/corruption signal (an
+#                         in-flight I/O error on the far end can silently
+#                         truncate the stream with no error frame left to
+#                         send once the O header is out).
+# Same staging + atomic-move + conflict/--force/dup-basename semantics as
+# the local engine (shared pbpaste_files_place tail, see below) -- only the
+# "fill the staging entry" step differs. Progress (§8): completed items
+# print a permanent `✓ name (size)` line; the in-flight item is ONE
+# `\r`-rewritten line (name, bytes done/total, percent, throughput) updated
+# from the same byte counter driving the read loop, at least every 64 KiB;
+# percent is clamped at 100 (an A total is only an estimate). `--porcelain`
+# emits the same `progress`/`done` contract lines from that counter -- for
+# an in-flight A item, `done` may transiently exceed the estimated `total`
+# (porcelain consumers are expected to clamp; this shim doesn't lie about
+# the raw counter). Per-item size cap (design §11): a declared total (F's
+# exact size, or A's estimate) over `${CLIP_FILE_MAX:-209715200}` bytes
+# (200 MB) prompts `continue? [y/N]` on an interactive TTY (`gum confirm` if
+# on PATH, else a plain `read -r`); non-interactive callers fail naming the
+# cap and the item, before any bytes are pulled.
+#
 # Standalone POSIX sh, no library sourcing — see pbcopy.
 #
 # Usage: text=$(pbpaste)
@@ -294,6 +331,384 @@ pbpaste_files_copy() {
   cp -a -- "$_src" "$_dst"
 }
 
+# --- --files, REMOTE engine (T13, design §5/§8) ------------------------------
+#
+# pbpaste_send_path_request <op> <path> -- writes the raw
+# <op><BE32 len><path> request bytes (no trailing NUL) for an F/A call to
+# stdout. Same octal-escape BE32 technique as pbcopy's own send_frame,
+# specialized to a single absolute-path payload (F/A take nothing else).
+pbpaste_send_path_request() {
+  _op=$1 _path=$2
+  _len=$(printf '%s' "$_path" | wc -c | tr -d ' ')
+  printf '%s' "$_op"
+  printf "\\$(printf %03o $(((_len>>24)&255)))\\$(printf %03o $(((_len>>16)&255)))\\$(printf %03o $(((_len>>8)&255)))\\$(printf %03o $((_len&255)))"
+  printf '%s' "$_path"
+}
+
+# pbpaste_read_n <need> <outfile> -- reads exactly <need> bytes from fd 3
+# (the current F/A connection, opened by the caller) into <outfile>
+# (truncated first), byte-exact via dd -- never through a shell scalar (see
+# manifest_parse's own embedded-NUL rationale: these header/body bytes can
+# be anything, including NUL). A single `dd bs=N count=1` read(2) on a pipe
+# can return FEWER bytes than requested even mid-stream, not just at EOF --
+# verified empirically against this exact fifo-based setup -- so dd's exit
+# status is never trusted (a short read is not a dd error at all); only its
+# own "N bytes transferred" summary line is, looped until <need> is
+# satisfied. Returns 1 (outfile left short) the moment a read returns
+# nothing -- the connection hit EOF before <need> bytes arrived, the
+# caller's truncation signal.
+pbpaste_read_n() {
+  _need=$1 _outfile=$2
+  : > "$_outfile"
+  _got=0
+  while [ "$_got" -lt "$_need" ]; do
+    _want=$((_need - _got))
+    _errf=$(mktemp "${TMPDIR:-/tmp}/pbpaste-dderr.XXXXXX") || return 1
+    dd bs="$_want" count=1 2>"$_errf" 1>>"$_outfile" <&3 || true
+    _thisn=$(awk '/bytes transferred/{print $1; exit}' "$_errf" 2>/dev/null || true)
+    rm -f "$_errf"
+    _thisn=${_thisn:-0}
+    [ "$_thisn" -gt 0 ] || return 1
+    _got=$((_got + _thisn))
+  done
+  return 0
+}
+
+# pbpaste_files_cap_check <label> <bytes> -- design §11's per-item size cap:
+# a declared total (F's exact size, or A's estimate) over
+# ${CLIP_FILE_MAX:-209715200} bytes (200 MB) prompts on an interactive TTY
+# (stdin, since this reads a confirmation -- `--progress`/`--porcelain`
+# don't change this, only whether stdIN is a terminal does), `gum confirm`
+# if it's on PATH, else a plain `read -r` fallback; non-interactive callers
+# fail naming the cap and the item. Returns 0 to proceed, 1 to abort (a
+# message is always on stderr in the 1 case).
+pbpaste_files_cap_check() {
+  _label=$1 _bytes=$2
+  _cap=${CLIP_FILE_MAX:-209715200}
+  [ "$_bytes" -gt "$_cap" ] || return 0
+  if [ -t 0 ]; then
+    if command -v gum >/dev/null 2>&1; then
+      if gum confirm "pbpaste: $_label ($_bytes bytes) exceeds CLIP_FILE_MAX ($_cap bytes) -- continue?"; then
+        return 0
+      fi
+    else
+      printf 'pbpaste: %s (%s bytes) exceeds CLIP_FILE_MAX (%s bytes) -- continue? [y/N] ' "$_label" "$_bytes" "$_cap" >&2
+      IFS= read -r _reply || _reply=""
+      case "$_reply" in
+        [Yy]*) return 0 ;;
+      esac
+    fi
+    echo "pbpaste: aborted at user request ($_label)" >&2
+    return 1
+  fi
+  echo "pbpaste: $_label exceeds size cap (CLIP_FILE_MAX=$_cap bytes, item is $_bytes bytes) -- refusing (non-interactive)" >&2
+  return 1
+}
+
+# pbpaste_progress_tick <final> <done> <total> -- the shared in-flight
+# renderer for the remote engine (design §8). Porcelain emits the raw
+# contract line straight from the byte counter (an in-flight A item's
+# `done` may transiently exceed `total`, since `total` is only a `du`
+# estimate -- consumers clamp, this shim doesn't lie about the counter).
+# Human/TTY mode rewrites ONE line with a bare `\r` (no trailing newline --
+# pbpaste_files_place clears it with its own leading `\r` + ANSI
+# clear-to-EOL before printing the item's permanent `✓` line), percent
+# clamped at 100 for the same A-estimate reason.
+pbpaste_progress_tick() {
+  _final=$1 _done=$2 _total=$3
+  if [ "$PF_PORCELAIN" -eq 1 ]; then
+    printf 'progress\t%s\t%s\t%s\n' "$_final" "$_done" "$_total"
+  elif [ "$PF_SHOW" -eq 1 ]; then
+    _pct=0
+    if [ "$_total" -gt 0 ]; then
+      _pct=$(( _done * 100 / _total ))
+      [ "$_pct" -gt 100 ] && _pct=100
+    fi
+    _now=$(date +%s)
+    _elapsed=$(( _now - PF_ITEM_START ))
+    [ "$_elapsed" -lt 1 ] && _elapsed=1
+    _rate=$(( _done / _elapsed ))
+    printf '\r%s  %s/%s  %s%%  %s/s' "$(basename -- "$_final")" "$_done" "$_total" "$_pct" "$(pbpaste_files_human "$_rate")"
+    PF_INFLIGHT_PRINTED=1
+  fi
+}
+
+# pbpaste_stream_file_body <destfile> <total> <final> -- the F engine's body
+# reader: copies exactly <total> bytes from fd 3 into <destfile> (truncated
+# first), ticking progress at least every 64 KiB and on the final chunk.
+# Sets PF_STREAM_DONE to the bytes actually copied. Returns 1 (message
+# already on stderr) if EOF arrives before <total> bytes -- a truncated F
+# stream, which (unlike A) has no tar-exit integrity check to fall back on,
+# so this loop IS the truncation detector for F.
+pbpaste_stream_file_body() {
+  _dest=$1 _total=$2 _final=$3
+  : > "$_dest"
+  _done=0
+  _since=0
+  while [ "$_done" -lt "$_total" ]; do
+    _want=$(( _total - _done )); [ "$_want" -gt 65536 ] && _want=65536
+    _errf=$(mktemp "${TMPDIR:-/tmp}/pbpaste-dderr.XXXXXX") || return 1
+    dd bs="$_want" count=1 2>"$_errf" 1>>"$_dest" <&3 || true
+    _n=$(awk '/bytes transferred/{print $1; exit}' "$_errf" 2>/dev/null || true)
+    rm -f "$_errf"
+    _n=${_n:-0}
+    if [ "$_n" -le 0 ]; then
+      echo "pbpaste: truncated stream for $_final (got $_done of $_total bytes)" >&2
+      PF_STREAM_DONE=$_done
+      return 1
+    fi
+    _done=$((_done + _n))
+    _since=$((_since + _n))
+    if [ "$_since" -ge 65536 ] || [ "$_done" -ge "$_total" ]; then
+      pbpaste_progress_tick "$_final" "$_done" "$_total"
+      _since=0
+    fi
+  done
+  PF_STREAM_DONE=$_done
+  return 0
+}
+
+# pbpaste_stream_dir_body <final> <est_total> -- the A engine's body reader:
+# copies bytes from fd 3 into fd 4 (the tar-extraction fifo, already open by
+# the caller) until EOF -- an A stream carries NO trailing frame or length,
+# the server just closes the connection (see clip::op_archive_stream), so
+# EOF here is the NORMAL end, not an error. tar itself can also stop reading
+# and close ITS end early, the moment it has consumed a complete valid
+# archive (its own end-of-archive markers) -- verified empirically this can
+# happen well before fd 3 hits EOF (bsdtar's blocking-factor padding isn't
+# fully drained) -- so a write-side broken pipe here is ALSO normal, not an
+# error: `|| true` on the dd call keeps `set -e` from treating either as a
+# crash, and an empty (rather than "0 bytes transferred") dd stats file
+# covers the broken-pipe case specifically. Either way, tar's own exit
+# status (checked by the caller after this returns) is the real
+# truncation/corruption signal, never this loop's byte count.
+pbpaste_stream_dir_body() {
+  _final=$1 _total=$2
+  _done=0
+  _since=0
+  while :; do
+    _errf=$(mktemp "${TMPDIR:-/tmp}/pbpaste-dderr.XXXXXX") || break
+    dd bs=65536 count=1 2>"$_errf" 1>&4 <&3 || true
+    _n=$(awk '/bytes transferred/{print $1; exit}' "$_errf" 2>/dev/null || true)
+    rm -f "$_errf"
+    _n=${_n:-0}
+    [ "$_n" -gt 0 ] || break
+    _done=$((_done + _n))
+    _since=$((_since + _n))
+    if [ "$_since" -ge 65536 ]; then
+      pbpaste_progress_tick "$_final" "$_done" "$_total"
+      _since=0
+    fi
+  done
+  pbpaste_progress_tick "$_final" "$_done" "$_total"
+  PF_STREAM_DONE=$_done
+}
+
+# pbpaste_remote_materialize_dir <src> <stage> <final> -- the A-archive
+# retry path (see pbpaste_remote_materialize below): a FRESH connection, a
+# fresh A request, tar extraction into PF_STAGING via a second fifo (fd 4)
+# so tar's own exit status is the truncation-integrity check (see the
+# header comment on pbpaste_stream_dir_body and clip::op_archive_stream's
+# own comment on why a mid-stream I/O error on the Mac has no error frame
+# left to send). `tar -xf - -C PF_STAGING` on an archive rooted at
+# <src>'s basename produces exactly PF_STAGING/<basename> == <stage> --
+# nothing further to place on success.
+pbpaste_remote_materialize_dir() {
+  _src=$1 _stage=$2 _final=$3
+
+  _fifo="$PF_STAGING/.netfifo.$$.$PF_IDX"
+  rm -f "$_fifo"
+  mkfifo "$_fifo" || { echo "pbpaste: mkfifo failed" >&2; return 1; }
+  ( pbpaste_send_path_request A "$_src" | nc -w "${PF_NC_TIMEOUT:-10}" 127.0.0.1 "$PF_PORT" > "$_fifo" ) &
+  _ncpid=$!
+  exec 3< "$_fifo"
+  rm -f "$_fifo"
+
+  _hdr1="$PF_STAGING/.hdr1.$$.$PF_IDX"
+  _hdr4="$PF_STAGING/.hdr4.$$.$PF_IDX"
+  if ! pbpaste_read_n 1 "$_hdr1" || ! pbpaste_read_n 4 "$_hdr4"; then
+    exec 3<&-
+    wait "$_ncpid" 2>/dev/null
+    rm -f "$_hdr1" "$_hdr4"
+    echo "pbpaste: connection closed unexpectedly fetching $_final" >&2
+    return 1
+  fi
+  _status=$(cat "$_hdr1")
+  _lenbytes=$(od -An -tu1 < "$_hdr4")
+  rm -f "$_hdr1" "$_hdr4"
+  set -- $_lenbytes
+  _len=$(( ${1:-0} * 16777216 + ${2:-0} * 65536 + ${3:-0} * 256 + ${4:-0} ))
+
+  if [ "$_status" = "E" ]; then
+    _errbody="$PF_STAGING/.errbody.$$.$PF_IDX"
+    pbpaste_read_n "$_len" "$_errbody" || true
+    _errmsg=$(cat "$_errbody" 2>/dev/null)
+    rm -f "$_errbody"
+    exec 3<&-
+    wait "$_ncpid" 2>/dev/null
+    echo "pbpaste: ${_errmsg:-archive fetch failed} ($_final)" >&2
+    return 1
+  fi
+
+  _hdr8="$PF_STAGING/.hdr8.$$.$PF_IDX"
+  if ! pbpaste_read_n 8 "$_hdr8"; then
+    exec 3<&-
+    wait "$_ncpid" 2>/dev/null
+    rm -f "$_hdr8"
+    echo "pbpaste: connection closed unexpectedly fetching $_final" >&2
+    return 1
+  fi
+  _szbytes=$(od -An -tu1 < "$_hdr8")
+  rm -f "$_hdr8"
+  set -- $_szbytes
+  _est=$(( (${1:-0} * 72057594037927936) + (${2:-0} * 281474976710656) + (${3:-0} * 1099511627776) \
+    + (${4:-0} * 4294967296) + (${5:-0} * 16777216) + (${6:-0} * 65536) + (${7:-0} * 256) + ${8:-0} ))
+
+  if ! pbpaste_files_cap_check "$_final" "$_est"; then
+    exec 3<&-
+    wait "$_ncpid" 2>/dev/null
+    return 1
+  fi
+
+  _tarfifo="$PF_STAGING/.tarfifo.$$.$PF_IDX"
+  rm -f "$_tarfifo"
+  mkfifo "$_tarfifo" || {
+    exec 3<&-
+    wait "$_ncpid" 2>/dev/null
+    echo "pbpaste: mkfifo failed" >&2
+    return 1
+  }
+  ( tar -xf - -C "$PF_STAGING" < "$_tarfifo" ) &
+  _tarpid=$!
+  exec 4> "$_tarfifo"
+  rm -f "$_tarfifo"
+
+  PF_ITEM_START=$(date +%s)
+  pbpaste_stream_dir_body "$_final" "$_est"
+
+  exec 4>&-
+  exec 3<&-
+  wait "$_ncpid" 2>/dev/null
+  _tarrc=0
+  wait "$_tarpid" || _tarrc=$?
+
+  if [ "$_tarrc" -ne 0 ]; then
+    echo "pbpaste: archive extraction failed for $_final (truncated or corrupt stream)" >&2
+    rm -rf -- "$_stage"
+    return 1
+  fi
+  return 0
+}
+
+# pbpaste_remote_materialize <src> <stage> <final> -- the M3 remote engine
+# (design §5/§8): stream <src> from the peer bridge into <stage> (inside
+# PF_STAGING; the caller's pbpaste_files_place does the same atomic-move
+# tail as the local engine). Tries F first; retries the SAME path as A on
+# the dispatcher's EXACT "is-directory" error text (see
+# clip::op_fetch_file). Sets PF_STREAM_DONE on success; on failure a message
+# is already on stderr and this returns 1.
+pbpaste_remote_materialize() {
+  _src=$1 _stage=$2 _final=$3
+
+  _fifo="$PF_STAGING/.netfifo.$$.$PF_IDX"
+  rm -f "$_fifo"
+  mkfifo "$_fifo" || { echo "pbpaste: mkfifo failed" >&2; return 1; }
+  ( pbpaste_send_path_request F "$_src" | nc -w "${PF_NC_TIMEOUT:-10}" 127.0.0.1 "$PF_PORT" > "$_fifo" ) &
+  _ncpid=$!
+  exec 3< "$_fifo"
+  rm -f "$_fifo"
+
+  _hdr1="$PF_STAGING/.hdr1.$$.$PF_IDX"
+  _hdr4="$PF_STAGING/.hdr4.$$.$PF_IDX"
+  if ! pbpaste_read_n 1 "$_hdr1" || ! pbpaste_read_n 4 "$_hdr4"; then
+    exec 3<&-
+    wait "$_ncpid" 2>/dev/null
+    rm -f "$_hdr1" "$_hdr4"
+    echo "pbpaste: connection closed unexpectedly fetching $_final" >&2
+    return 1
+  fi
+  _status=$(cat "$_hdr1")
+  _lenbytes=$(od -An -tu1 < "$_hdr4")
+  rm -f "$_hdr1" "$_hdr4"
+  set -- $_lenbytes
+  _len=$(( ${1:-0} * 16777216 + ${2:-0} * 65536 + ${3:-0} * 256 + ${4:-0} ))
+
+  if [ "$_status" = "E" ]; then
+    _errbody="$PF_STAGING/.errbody.$$.$PF_IDX"
+    pbpaste_read_n "$_len" "$_errbody" || true
+    _errmsg=$(cat "$_errbody" 2>/dev/null)
+    rm -f "$_errbody"
+    exec 3<&-
+    wait "$_ncpid" 2>/dev/null
+    if [ "$_errmsg" = "is-directory" ]; then
+      pbpaste_remote_materialize_dir "$_src" "$_stage" "$_final"
+      return $?
+    fi
+    echo "pbpaste: ${_errmsg:-fetch failed} ($_final)" >&2
+    return 1
+  fi
+
+  if ! pbpaste_files_cap_check "$_final" "$_len"; then
+    exec 3<&-
+    wait "$_ncpid" 2>/dev/null
+    return 1
+  fi
+
+  : > "$_stage"
+  PF_ITEM_START=$(date +%s)
+  if ! pbpaste_stream_file_body "$_stage" "$_len" "$_final"; then
+    exec 3<&-
+    wait "$_ncpid" 2>/dev/null
+    rm -f "$_stage"
+    return 1
+  fi
+  exec 3<&-
+  wait "$_ncpid" 2>/dev/null
+  return 0
+}
+
+# pbpaste_files_place <name> <size> <stage> <final> -- the shared atomic-move
+# tail for BOTH the local (pbpaste_files_copy) and remote
+# (pbpaste_remote_materialize/_dir) engines: renames <stage> into <final>
+# (displacing any existing target aside first, same rename-aside rationale
+# as before -- never delete-then-move), then emits the item's totals and
+# permanent output line. A remote item may have just been rendering an
+# in-flight `\r` line (PF_INFLIGHT_PRINTED): clear it with a fresh `\r` +
+# ANSI clear-to-EOL before printing the permanent `✓` line, so the two never
+# visually collide. Local-only invocations never set PF_INFLIGHT_PRINTED, so
+# their output is byte-identical to before this task.
+pbpaste_files_place() {
+  _name=$1 _size=$2 _stage=$3 _final=$4
+  _bak=""
+  if [ -e "$_final" ]; then
+    _bak="$PF_STAGING/.replaced.$$.$PF_IDX"
+    mv -- "$_final" "$_bak" || {
+      echo "pbpaste: failed to displace existing $_name in $PF_DIR" >&2
+      rm -f "$PF_PATHLIST"
+      exit 1
+    }
+  fi
+  mv -- "$_stage" "$_final" || {
+    [ -n "$_bak" ] && mv -- "$_bak" "$_final" 2>/dev/null
+    echo "pbpaste: failed to move $_name into $PF_DIR" >&2
+    rm -f "$PF_PATHLIST"
+    exit 1
+  }
+
+  PF_TOTAL_BYTES=$((PF_TOTAL_BYTES + _size))
+  PF_TOTAL_FILES=$((PF_TOTAL_FILES + 1))
+
+  if [ "$PF_PORCELAIN" -eq 1 ]; then
+    printf 'progress\t%s\t%s\t%s\n' "$_final" "$_size" "$_size"
+  elif [ "$PF_SHOW" -eq 1 ]; then
+    if [ "${PF_INFLIGHT_PRINTED:-0}" -eq 1 ]; then
+      printf '\r\033[K'
+      PF_INFLIGHT_PRINTED=0
+    fi
+    printf '\342\234\223 %s (%s)\n' "$_name" "$(pbpaste_files_human "$_size")"
+  fi
+}
+
 # pbpaste_files [--force] [--quiet|--progress|--porcelain] [dir] -- the
 # --files entry point.
 pbpaste_files() {
@@ -338,6 +753,11 @@ pbpaste_files() {
   [ -d "$PF_DIR" ] || { echo "pbpaste: no such directory: $PF_DIR" >&2; exit 1; }
 
   PF_HOST=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || true)
+  # Same port manifest_fetch already used for its own L frame (T13
+  # requirement 4): 2489 locally, CLIPBOARD_BRIDGE_PORT (default 2490) over
+  # SSH -- captured once here and reused by every F/A call below instead of
+  # recomputing it per item.
+  PF_PORT=$(manifest_port)
 
   PF_REPLYFILE=$(mktemp "${TMPDIR:-/tmp}/pbpaste-files-reply.XXXXXX") || {
     echo "pbpaste: mktemp failed" >&2
@@ -361,10 +781,16 @@ pbpaste_files() {
   fi
   rm -f "$PF_REPLYFILE" "$PF_ERRFILE"
 
-  if [ -n "$MANIFEST_HOST" ] && [ "$MANIFEST_HOST" != "$PF_HOST" ]; then
-    rm -f "$MANIFEST_PATHFILE"
-    echo "pbpaste: remote file clips land in a later milestone" >&2
-    exit 1
+  # Explicit LOCAL/REMOTE decision (T5 review ledger: an empty MANIFEST_HOST
+  # must be treated as local ON PURPOSE, not merely because the old
+  # single-line `-n MANIFEST_HOST && != PF_HOST` guard happened to fall
+  # through unevaluated for it) -- a row predating source_host tracking, or
+  # a same-host synthetic x-resolved-path row, carries no host at all and
+  # certainly didn't cross the bridge from another machine.
+  if [ -z "$MANIFEST_HOST" ] || [ "$MANIFEST_HOST" = "$PF_HOST" ]; then
+    PF_REMOTE=0
+  else
+    PF_REMOTE=1
   fi
 
   # NUL -> newline, same rule as pbpaste_manifest's own final print: real
@@ -404,7 +830,11 @@ pbpaste_files() {
   PF_MISSING=0
   while IFS= read -r PF_P || [ -n "$PF_P" ]; do
     [ -n "$PF_P" ] || continue
-    if [ ! -e "$PF_P" ]; then
+    # This machine can only stat a LOCAL source path -- a remote manifest's
+    # paths live on the OTHER machine, so existence is discovered from the
+    # F/A opcode's own reply instead (missing source there is just another
+    # bridge error, surfaced per-item during materialization below).
+    if [ "$PF_REMOTE" -eq 0 ] && [ ! -e "$PF_P" ]; then
       echo "pbpaste: source no longer exists: $PF_P" >&2
       PF_MISSING=1
       continue
@@ -477,20 +907,30 @@ $PF_NAME
   PF_TOTAL_FILES=0
   PF_IDX=0
 
+  PF_INFLIGHT_PRINTED=0
+
   while IFS= read -r PF_P || [ -n "$PF_P" ]; do
     [ -n "$PF_P" ] || continue
     PF_IDX=$((PF_IDX + 1))
     PF_NAME=$(basename -- "$PF_P")
     PF_STAGE_TARGET="$PF_STAGING/$PF_NAME"
-    PF_SIZE=$(pbpaste_files_size "$PF_P")
+    PF_FINAL="$PF_DIR/$PF_NAME"
 
-    if ! pbpaste_files_copy "$PF_P" "$PF_STAGE_TARGET"; then
-      echo "pbpaste: failed to copy $PF_P" >&2
-      rm -f "$PF_PATHLIST"
-      exit 1
+    if [ "$PF_REMOTE" -eq 1 ]; then
+      if ! pbpaste_remote_materialize "$PF_P" "$PF_STAGE_TARGET" "$PF_FINAL"; then
+        rm -f "$PF_PATHLIST"
+        exit 1
+      fi
+      PF_SIZE=$PF_STREAM_DONE
+    else
+      PF_SIZE=$(pbpaste_files_size "$PF_P")
+      if ! pbpaste_files_copy "$PF_P" "$PF_STAGE_TARGET"; then
+        echo "pbpaste: failed to copy $PF_P" >&2
+        rm -f "$PF_PATHLIST"
+        exit 1
+      fi
     fi
 
-    PF_FINAL="$PF_DIR/$PF_NAME"
     # --force replacement is rename-aside, NOT delete-then-move: `rm -rf` of
     # a directory target is a recursive, non-atomic delete, so a kill inside
     # that window would leave a half-shredded old tree in the destination --
@@ -501,33 +941,8 @@ $PF_NAME
     # inside staging, and the EXIT/INT/TERM trap (or, after SIGKILL, the
     # next run's stale-staging sweep) reaps it from there. The `.replaced.`
     # names can't collide with staged items ($$ + index) and die with the
-    # staging dir.
-    PF_BAK=""
-    if [ -e "$PF_FINAL" ]; then
-      PF_BAK="$PF_STAGING/.replaced.$$.$PF_IDX"
-      mv -- "$PF_FINAL" "$PF_BAK" || {
-        echo "pbpaste: failed to displace existing $PF_NAME in $PF_DIR" >&2
-        rm -f "$PF_PATHLIST"
-        exit 1
-      }
-    fi
-    mv -- "$PF_STAGE_TARGET" "$PF_FINAL" || {
-      # Put the displaced original back before bailing; best-effort (the
-      # trap still reaps it from staging if even this rename fails).
-      [ -n "$PF_BAK" ] && mv -- "$PF_BAK" "$PF_FINAL" 2>/dev/null
-      echo "pbpaste: failed to move $PF_NAME into $PF_DIR" >&2
-      rm -f "$PF_PATHLIST"
-      exit 1
-    }
-
-    PF_TOTAL_BYTES=$((PF_TOTAL_BYTES + PF_SIZE))
-    PF_TOTAL_FILES=$((PF_TOTAL_FILES + 1))
-
-    if [ "$PF_PORCELAIN" -eq 1 ]; then
-      printf 'progress\t%s\t%s\t%s\n' "$PF_FINAL" "$PF_SIZE" "$PF_SIZE"
-    elif [ "$PF_SHOW" -eq 1 ]; then
-      printf '\342\234\223 %s (%s)\n' "$PF_NAME" "$(pbpaste_files_human "$PF_SIZE")"
-    fi
+    # staging dir. (See pbpaste_files_place, shared by both engines.)
+    pbpaste_files_place "$PF_NAME" "$PF_SIZE" "$PF_STAGE_TARGET" "$PF_FINAL"
   done < "$PF_PATHLIST"
 
   rm -f "$PF_PATHLIST"
