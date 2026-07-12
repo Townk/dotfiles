@@ -499,6 +499,13 @@ materialized by pulling the bytes down **at use time**, then stored locally.
 > never leaves a partial file at the destination. `--force` on an existing
 > name uses rename-aside (moves the existing item out of the way first),
 > never `rm` followed by `mv`.
+>
+> The Mac-side `pbpaste --files` rsync-from-`source_host` branch (a Mac,
+> sitting at itself, pulling a remote-manifest clip straight down via
+> rsync) was deferred/descoped: it was never built. `pbpaste --files` on a
+> remote manifest while sitting at the Mac (no SSH env) now refuses with a
+> pointer to `pick-clipboard`'s `Ctrl-Y`, which remains the supported
+> Mac-side localization path for a remote-origin file clip.
 
 ## 13. `pbcopy` / `clip-copy` shims
 

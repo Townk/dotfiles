@@ -808,6 +808,25 @@ pbpaste_files() {
     PF_REMOTE=1
   fi
 
+  # Mac-side pbpaste --files on a remote manifest, NOT over SSH: refuse. The
+  # T13 remote engine (F/A opcodes) only exists on the ORIGIN machine's own
+  # bridge (port 2489, reachable over the loopback reverse tunnel from an
+  # SSH'd-in dev shell) -- sitting at this Mac directly, `manifest_port`
+  # would still resolve to 2489, i.e. THIS Mac's own bridge, which has never
+  # heard of a path that lives on $MANIFEST_HOST. The spec §12 "Mac-side
+  # pbpaste rsync-from-source_host" branch was descoped (quietly, see the
+  # §12 as-built note); without it this used to fall through to the F/A
+  # engine anyway, producing a confusing per-item "cannot read" at best and,
+  # whenever the manifest's absolute path happens to also exist on this
+  # Mac (the Mac-to-Mac mirror case), silently materializing a STALE LOCAL
+  # TWIN at worst. pick-clipboard's own Ctrl-Y (clip::copy_files_by_id's
+  # rsync pull) is the supported Mac-side localization path.
+  if [ "$PF_REMOTE" -eq 1 ] && [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+    echo "pbpaste: manifest lives on $MANIFEST_HOST -- use pick-clipboard Ctrl-Y to localize it on this Mac" >&2
+    rm -f "$MANIFEST_PATHFILE"
+    exit 1
+  fi
+
   # NUL -> newline, same rule as pbpaste_manifest's own final print: real
   # paths never carry NULs, so this is a lossless, safe split; a path with a
   # literal newline is a known, accepted limit (see manifest_parse's header).

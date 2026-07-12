@@ -366,6 +366,9 @@ EOF
   # opcode-aware fake `nc` that can actually answer F/A). This Describe's
   # fake `nc` only ever answers the `L` manifest fetch, so the one thing
   # worth asserting HERE is the negative: the OLD milestone string is gone.
+  # It's since ALSO become a same-shape case of the Mac-side-no-SSH refusal
+  # (see the dedicated regression test right below this one) -- still
+  # failure, but for the NEW reason, never the old milestone message.
   It 'no longer refuses a manifest from a different host with the old milestone message'
     printf 'x\n' > "$SRC/r.txt"
     pf="$SHELLSPEC_TMPBASE/payload"
@@ -373,7 +376,40 @@ EOF
     build_frame O "$pf" "$REPLY_FRAME"
 
     When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
     The stderr should not include "later milestone"
+  End
+
+  # Regression: sitting at the Mac (no SSH_* env at all -- this Describe's
+  # setup() unsets them) with a manifest whose source_host differs from this
+  # machine's own (fake scutil says "mac-mini"; manifest says
+  # "some-other-mac") used to fall through to PF_REMOTE's F/A engine anyway
+  # -- talking to THIS Mac's own bridge (port 2489) for paths that live on a
+  # DIFFERENT host. This Describe's fake `nc` only ever answers the `L`
+  # manifest fetch (never F/A), so the old behavior would have produced a
+  # per-item bridge/connection failure instead of a clean refusal -- and on
+  # a real machine, whenever the remote path happens to also exist locally
+  # (the Mac-to-Mac mirror case), it would silently materialize that STALE
+  # LOCAL TWIN instead. Assert the exact refusal message, exit 1, and that
+  # no SECOND `nc` call (an F/A frame) was ever made -- only the initial `L`
+  # manifest fetch appears in the log.
+  It 'refuses --files on a remote manifest when sitting at the Mac (no SSH): exact error, exit 1, no F/A frames sent'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.61 "/remote/mirror.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh -c '
+      sh "$1" --files "$2" >"$3" 2>"$4"
+      rc=$?
+      [ "$rc" -eq 1 ] || { echo "rc=$rc" >&2; exit 9; }
+      exp="pbpaste: manifest lives on some-other-mac -- use pick-clipboard Ctrl-Y to localize it on this Mac"
+      got=$(cat "$4")
+      [ "$got" = "$exp" ] || { echo "stderr=[$got]" >&2; exit 8; }
+      [ -s "$3" ] && { echo "unexpected stdout" >&2; exit 7; }
+      lines=$(wc -l < "$5" | tr -d " ")
+      [ "$lines" -eq 1 ] || { echo "nclog lines=$lines" >&2; exit 6; }
+    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/out61" "$SHELLSPEC_TMPBASE/err61" "$NCLOG"
+    The status should be success
   End
 
   It 'errors pointing at plain pbpaste when the clipboard entry is not a files clip'
