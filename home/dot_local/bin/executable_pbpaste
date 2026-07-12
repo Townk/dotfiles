@@ -475,9 +475,11 @@ $PF_NAME
   PF_START=$(date +%s)
   PF_TOTAL_BYTES=0
   PF_TOTAL_FILES=0
+  PF_IDX=0
 
   while IFS= read -r PF_P || [ -n "$PF_P" ]; do
     [ -n "$PF_P" ] || continue
+    PF_IDX=$((PF_IDX + 1))
     PF_NAME=$(basename -- "$PF_P")
     PF_STAGE_TARGET="$PF_STAGING/$PF_NAME"
     PF_SIZE=$(pbpaste_files_size "$PF_P")
@@ -489,8 +491,30 @@ $PF_NAME
     fi
 
     PF_FINAL="$PF_DIR/$PF_NAME"
-    [ -e "$PF_FINAL" ] && rm -rf -- "$PF_FINAL"
+    # --force replacement is rename-aside, NOT delete-then-move: `rm -rf` of
+    # a directory target is a recursive, non-atomic delete, so a kill inside
+    # that window would leave a half-shredded old tree in the destination --
+    # exactly the partial state staging exists to prevent. Instead the old
+    # item is renamed INTO the staging dir (same filesystem, atomic), so
+    # every destination-visible step is a rename: a kill between the two
+    # renames leaves the name briefly absent but the old tree fully intact
+    # inside staging, and the EXIT/INT/TERM trap (or, after SIGKILL, the
+    # next run's stale-staging sweep) reaps it from there. The `.replaced.`
+    # names can't collide with staged items ($$ + index) and die with the
+    # staging dir.
+    PF_BAK=""
+    if [ -e "$PF_FINAL" ]; then
+      PF_BAK="$PF_STAGING/.replaced.$$.$PF_IDX"
+      mv -- "$PF_FINAL" "$PF_BAK" || {
+        echo "pbpaste: failed to displace existing $PF_NAME in $PF_DIR" >&2
+        rm -f "$PF_PATHLIST"
+        exit 1
+      }
+    fi
     mv -- "$PF_STAGE_TARGET" "$PF_FINAL" || {
+      # Put the displaced original back before bailing; best-effort (the
+      # trap still reaps it from staging if even this rename fails).
+      [ -n "$PF_BAK" ] && mv -- "$PF_BAK" "$PF_FINAL" 2>/dev/null
       echo "pbpaste: failed to move $PF_NAME into $PF_DIR" >&2
       rm -f "$PF_PATHLIST"
       exit 1

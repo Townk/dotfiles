@@ -281,6 +281,31 @@ EOF
     The contents of file "$TARGET/dup2.txt" should equal "new"
   End
 
+  # --force over a DIRECTORY must replace it wholesale via rename-aside
+  # (old tree renamed into staging, new tree renamed into place -- both
+  # atomic), never delete-then-move: `rm -rf` of a directory target is a
+  # recursive non-atomic delete, and a kill inside it would leave a
+  # half-shredded old tree in the destination. Assert full replacement
+  # (stale entry gone, new tree identical) and no staging residue.
+  It '--force replaces an existing directory target wholesale, leaving no staging dir'
+    mkdir -p "$SRC/rdir/sub"
+    printf 'new\n' > "$SRC/rdir/sub/new.txt"
+    mkdir -p "$TARGET/rdir"
+    printf 'old\n' > "$TARGET/rdir/stale.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" directory mac-mini 1752200000.37 "$SRC/rdir"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh -c '
+      sh "$1" --files --force "$2" || exit 1
+      [ ! -e "$2/rdir/stale.txt" ] || exit 9
+      diff -r "$3/rdir" "$2/rdir" || exit 8
+      if ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1; then exit 7; fi
+      exit 0
+    ' _ "$SCRIPT" "$TARGET" "$SRC"
+    The status should be success
+  End
+
   # Two manifest entries sharing one basename (multi-dir selection) cannot
   # both land in one flat target dir -- the second would silently clobber
   # the first, so this is refused even with --force (which only waives
