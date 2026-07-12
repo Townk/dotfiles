@@ -20,7 +20,10 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
 
   setup() {
-    CONFDIR="$SHELLSPEC_TMPBASE/ssh-conf-$$-$RANDOM"; mkdir -p "$CONFDIR"
+    # mktemp, not $RANDOM: each example's setup runs in its own subshell with
+    # the same seed, so a $RANDOM-suffixed path repeats and leaks a previous
+    # example's fragment into the next.
+    CONFDIR="$(mktemp -d "$SHELLSPEC_TMPBASE/ssh-conf.XXXXXX")"
     export SCRIPT_PATH="$SCRIPT" CONFDIR
   }
   BeforeEach 'setup'
@@ -97,5 +100,49 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
     The status should be success
     The contents of file "$conf" should include "Host mac-mini hand-edited-name"
     The contents of file "$conf" should not include "some-other-hint"
+  End
+
+  # ssh `Host` patterns GLOB: an unvalidated `*` would match every outgoing
+  # host and silently extend this fragment's RemoteForwards (clipboard
+  # bridge, gpg agent) to all of them. valid_peer_hostname allowlists
+  # [A-Za-z0-9][A-Za-z0-9.-]* at BOTH ends — hint acceptance and front-matter
+  # read-back (front matter is hand-editable, so persisted values are
+  # re-checked on every render).
+  It 'rejects a glob peer-hostname hint: never persisted, never on the Host line'
+    conf="$CONFDIR/mac-mini.conf"
+    When call run_write "$conf" mac-mini mac-mini.local 1 '*'
+    The status should be success
+    The stderr should include "not a safe ssh Host name"
+    The contents of file "$conf" should not include "peer-hostname"
+    The contents of file "$conf" should include "Host mac-mini"
+    The contents of file "$conf" should not include "Host mac-mini *"
+  End
+
+  It 'ignores a hand-edited glob peer-hostname in front matter (defense in depth): bare Host line'
+    conf="$CONFDIR/mac-mini.conf"
+    run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
+    sed -i '' 's/^# peer-hostname:.*/# peer-hostname: */' "$conf"
+    When call run_write "$conf" mac-mini mac-mini.local 1
+    The status should be success
+    The stderr should include "not a safe ssh Host name"
+    The contents of file "$conf" should not include "Host mac-mini *"
+    The contents of file "$conf" should include "Host mac-mini"
+  End
+
+  It 'rejects a leading-dash capture: no peer-hostname persisted'
+    conf="$CONFDIR/shapes.conf"
+    When call run_write "$conf" shapes host.local 0 '-lead'
+    The status should be success
+    The stderr should include "not a safe ssh Host name"
+    The contents of file "$conf" should not include "peer-hostname"
+    The contents of file "$conf" should not include "Host shapes -lead"
+  End
+
+  It 'accepts a valid dotted peer hostname on the Host line'
+    conf="$CONFDIR/shapes.conf"
+    run_write "$conf" shapes host.local 0 'peer.example.com' >/dev/null
+    When run command grep -E '^Host ' "$conf"
+    The status should be success
+    The output should equal "Host shapes peer.example.com"
   End
 End

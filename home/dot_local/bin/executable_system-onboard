@@ -272,6 +272,21 @@ validate_prepare() {
   done
 }
 
+# valid_peer_hostname <name> — allowlist gate for a peer's captured (or
+# hand-edited) LocalHostName BEFORE it lands on an ssh_config `Host` line.
+# `Host` patterns glob: an unvalidated `*` (a garbage or hostile capture)
+# would match EVERY outgoing ssh host and silently extend this fragment's
+# RemoteForwards (clipboard bridge, gpg agent) to all of them. Accept only an
+# RFC-hostname-ish shape — alnum first char, then alnum/dot/dash — and reject
+# everything else (empty, leading dash/dot, globs, whitespace, unicode).
+# Unlike ALIAS this value crosses a trust boundary (it is read back from the
+# remote machine and from hand-editable front matter), so it gets the strict
+# charset check ALIAS never needed.
+valid_peer_hostname() {
+  setopt local_options extended_glob   # `#` (zero-or-more) needs extended_glob
+  [[ "$1" == [A-Za-z0-9][A-Za-z0-9.-]# ]]
+}
+
 # default_frontmatter <alias> <prepare> — the front matter written for a brand-new
 # (or front-matter-less) fragment. Hand-editable afterwards; system-onboard only
 # ever PRESERVES an existing front matter, never rewrites it, so this seeds it once.
@@ -339,14 +354,25 @@ write_ssh_conf() {
   # as `prepare` above. Seed it into the front matter (before the closing `#
   # ---` fence) the first time a hint arrives; once the line exists it is
   # preserved verbatim on every later render (hand-editable, never re-derived).
+  # Both sources pass valid_peer_hostname before use — the hint before it is
+  # persisted, AND the front-matter value on every read (defense in depth:
+  # front matter is hand-editable, and a rejected value must never become an
+  # ssh `Host` glob pattern). A rejected value renders as if absent.
   local peer_hostname
   peer_hostname="$(print -r -- "$frontmatter" | awk '/^#[[:space:]]*peer-hostname:/{sub(/^#[[:space:]]*peer-hostname:[[:space:]]*/,"");print;exit}')"
-  if [[ -z "$peer_hostname" && -n "$peer_hint" ]]; then
-    peer_hostname="$peer_hint"
-    frontmatter="$(print -r -- "$frontmatter" | awk -v val="$peer_hostname" '
-      /^#[[:space:]]*---[[:space:]]*$/ { n++; if (n == 2) print "# peer-hostname: " val }
-      { print }
-    ')"
+  if [[ -n "$peer_hostname" ]] && ! valid_peer_hostname "$peer_hostname"; then
+    log_warn "ignoring invalid peer-hostname '$peer_hostname' in $conf front matter — not a safe ssh Host name"
+    peer_hostname=""
+  elif [[ -z "$peer_hostname" && -n "$peer_hint" ]]; then
+    if valid_peer_hostname "$peer_hint"; then
+      peer_hostname="$peer_hint"
+      frontmatter="$(print -r -- "$frontmatter" | awk -v val="$peer_hostname" '
+        /^#[[:space:]]*---[[:space:]]*$/ { n++; if (n == 2) print "# peer-hostname: " val }
+        { print }
+      ')"
+    else
+      log_warn "ignoring invalid captured peer hostname '$peer_hint' — not a safe ssh Host name"
+    fi
   fi
 
   {
@@ -457,6 +483,16 @@ reconcile_peer_hostname() {
   peer_hostname="$(rexec 'scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null' 2>/dev/null | tr -d '[:space:]')" || true
   if [[ -z "$peer_hostname" ]]; then
     log_warn "could not determine $ALIAS's LocalHostName — a clipboard pull naming it as source_host may not resolve"
+    return 0
+  fi
+  # Allowlist gate BEFORE the name is persisted or rendered: this value came
+  # from the remote machine, and ssh `Host` patterns glob — a stray `*` here
+  # would extend this fragment's RemoteForwards to every outgoing ssh host.
+  # (write_ssh_conf re-checks on every read; this keeps garbage out of the
+  # front matter in the first place.) Same degradation as a failed rexec:
+  # warn and proceed without a peer alias.
+  if ! valid_peer_hostname "$peer_hostname"; then
+    log_warn "captured LocalHostName '$peer_hostname' from $ALIAS is not a safe ssh Host name — proceeding without a peer alias"
     return 0
   fi
   local conf="$HOME/.ssh/config.d/$ALIAS.conf" want_clip=$((!NO_CLIPBOARD))
