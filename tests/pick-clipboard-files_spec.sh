@@ -147,6 +147,15 @@ EOF
     ' _ "$1"
   }
 
+  # Runs the SCRIPT directly (not sourced, no PICK_CLIPBOARD_NO_RUN escape
+  # hatch) with --restore-id <id> as real argv (spec R4's headless CLI mode)
+  # -- this is the exact invocation shape clipboard-picker.lua's hs.task call
+  # uses (full launchPath + a plain arguments table, no shell). -f: same
+  # ~/.zshenv guard as run_copy above.
+  run_restore_id() {
+    zsh -f "$SCRIPT" --restore-id "$1"
+  }
+
   It 'local files row: sends U with the id:<n> form to the local bridge port'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',100); SELECT last_insert_rowid();")
 
@@ -512,5 +521,47 @@ EOF
     The status should be success
     bumped=$(sqlite3 "$DB" "SELECT last_ts > 403 FROM clips WHERE id=$id;")
     The variable bumped should equal "1"
+  End
+
+  # --- spec R4: headless --restore-id CLI mode --------------------------------
+  It '--restore-id <n> works headless for a local row (spec R4): sends U with the id: form, exit 0'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',500); SELECT last_insert_rowid();")
+
+    When call run_restore_id "$id"
+    The status should be success
+    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "id:$id"
+  End
+
+  It '--restore-id <n> works headless for a remote manifest row (spec R4): rsync-pulls then sends U with the localized paths, exit 0'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',501); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/remote-a.txt' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_restore_id "$id"
+    The status should be success
+    The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/remote-a.txt"
+    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/remote-a.txt"
+  End
+
+  It '--restore-id rejects a non-numeric id, exit 1 (spec R4)'
+    When call zsh -f "$SCRIPT" --restore-id notanumber
+    The status should be failure
+    The stderr should include "numeric clip id"
+  End
+
+  It '--restore-id exits 1 when the underlying restore genuinely fails (spec R4)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',502); SELECT last_insert_rowid();")
+    cat > "$BINDIR/nc" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+    chmod +x "$BINDIR/nc"
+
+    When call run_restore_id "$id"
+    The status should be failure
+    The stderr should include "local files restore"
   End
 End

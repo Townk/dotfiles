@@ -488,6 +488,34 @@ clip::copy_files_by_id() {
   return 1
 }
 
+# --restore-id <n> (headless CLI mode, spec R4): runs the SAME
+# clip::copy_files_by_id logic Ctrl-Y's files branch uses above, with no fzf
+# and no TTY -- stdout/stderr plain, exit 0 on success/1 on failure. This is
+# what clipboard-picker.lua's Hammerspoon side shells out to (via hs.task)
+# for a files/file/directory row it cannot restore in-process (a genuine
+# remote manifest, or one already localized but still remote-badged, spec
+# §12): the GUI has no rsync-pull-and-localize engine of its own, so it
+# delegates to this CLI instead of re-implementing that dance a second time
+# in Lua. Checked here -- right after clip::copy_files_by_id's own
+# definition, before clip::copy_by_id and everything interactive-only below
+# it (live peer entry already ran by this point, but geometry, the
+# --key-reload temp scripts, and fzf's hints/args never do) -- so a headless
+# caller pays for none of the fzf/pty-frame setup it will never use. $1 here
+# is the SCRIPT's own first argument (this runs at the top level, not inside
+# a function), never confused with a sourced test harness's own "$1" of a
+# bare numeric id (PICK_CLIPBOARD_NO_RUN's test convention): the comparison
+# is against the literal string "--restore-id", which a plain id never matches.
+if [[ "${1:-}" == --restore-id ]]; then
+  shift
+  restore_id="${1:-}"
+  if [[ -z "$restore_id" || "$restore_id" != <-> ]]; then
+    print -ru2 -- "pick-clipboard: --restore-id requires a numeric clip id"
+    exit 1
+  fi
+  clip::copy_files_by_id "$restore_id" && exit 0
+  exit 1
+fi
+
 # Copy a clip's content to *my* clipboard, carrying the register type so a block
 # clip stays block-pasteable. Self-contained model (§11): the clip already lives
 # in this store, so there is no cross-machine restore — copy is always a local

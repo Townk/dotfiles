@@ -430,6 +430,85 @@ local function toggle_pin(id)
 end
 
 --------------------------------------------------------------------------------
+-- Headless files restore (spec R4) -- delegates to the terminal picker's own
+-- rsync-pull-and-localize engine for a files row this in-process restore_by_id
+-- cannot faithfully materialize.
+--------------------------------------------------------------------------------
+
+-- True for a files/file/directory row that history.restore_by_id cannot
+-- faithfully restore in-process: restore_by_id (hs.pasteboard.writeAllData)
+-- writes back exactly the UTI->blob rows clip_types has on file, keyed by
+-- their LITERAL uti string -- fine for a genuine local capture (real
+-- public.file-url/NSFilenamesPboardType blobs alongside the synthetic
+-- x-resolved-path, clipboard-history.lua:177,454-460), but for a row whose
+-- ONLY rich payload is x-file-manifest (a remote manifest -- the bytes were
+-- never pulled) or x-resolved-path with no matching pasteboard-standard UTI
+-- (a row the TERMINAL picker localized itself, spec §12: source_host stays
+-- the origin host on purpose) it would write nonsense bytes under a literal
+-- "x-file-manifest"/"x-resolved-path" UTI -- nothing Finder can paste, a
+-- silent false "success". Simplest honest gate (mirrors
+-- clip::copy_files_by_id's own case-3/case-4 split in
+-- executable_pick-clipboard, kept in the one place that owns the rsync
+-- engine): an x-file-manifest blob is present, OR the row's source_host
+-- differs from this host.
+local function needs_headless_restore(id)
+  local db = sqlite3.open(history._db_path())
+  if not db then return false end
+  local kind, host
+  local s = db:prepare("SELECT type_kind, source_host FROM clips WHERE id=?;")
+  if s then
+    s:bind(1, id)
+    if s:step() == sqlite3.ROW then
+      kind = s:get_value(0)
+      host = s:get_value(1)
+    end
+    s:finalize()
+  end
+  local has_manifest = false
+  if kind == "files" or kind == "file" or kind == "directory" then
+    local m = db:prepare("SELECT 1 FROM clip_types WHERE clip_id=? AND uti='x-file-manifest';")
+    if m then
+      m:bind(1, id)
+      has_manifest = (m:step() == sqlite3.ROW)
+      m:finalize()
+    end
+  end
+  db:close()
+  if kind ~= "files" and kind ~= "file" and kind ~= "directory" then return false end
+  local my_host = history._my_host()
+  local is_remote = host ~= nil and host ~= "" and host ~= my_host
+  return has_manifest or is_remote
+end
+
+local PICK_CLIPBOARD_BIN = (os.getenv("HOME") or "") .. "/.local/libexec/pick-clipboard"
+
+-- Async headless restore for a gated files row: shells out to the SAME
+-- clip::copy_files_by_id logic the terminal picker's Ctrl-Y uses
+-- (executable_pick-clipboard --restore-id <id>, spec R4) via hs.task --
+-- rsync pulls a remote manifest, which can take a while, so this must never
+-- block the UI thread. hs.task.new(launchPath, callbackFn, [streamCallbackFn],
+-- [arguments]) -> hs.task; callbackFn receives (exitCode, stdOut, stdErr) on
+-- termination (verified against modules/system/controls.lua's existing
+-- hs.task.new(path, cb, argsTable) usage -- the 3-arg form, table detected
+-- positionally as `arguments` -- and Hammerspoon's own docs.json for
+-- hs.task.new). launchPath MUST be an absolute path (never PATH-searched).
+-- onDone(ok), if given, runs after the alert.
+local function headless_restore(id, onDone)
+  local task = hs.task.new(PICK_CLIPBOARD_BIN, function(exitCode, _stdOut, stdErr)
+    local ok = (exitCode == 0)
+    if ok then
+      hs.alert.show("Files restored")
+    else
+      local reason = (stdErr and stdErr:match("[^\n]+")) or "restore failed"
+      hs.alert.show("Clipboard: " .. reason)
+    end
+    if onDone then onDone(ok) end
+  end, { "--restore-id", tostring(id) })
+  task:start()
+  return task
+end
+
+--------------------------------------------------------------------------------
 -- Webview lifecycle
 --------------------------------------------------------------------------------
 
@@ -494,9 +573,32 @@ local function handle_message(body)
     -- Ctrl+Y: restore to the clipboard (restore_by_id reinstates the register
     -- type) and dismiss — but do NOT auto-paste, so a block clip can be `p`'d
     -- as a block in nvim instead of being pasted charwise into the focused app.
-    history.restore_by_id(body.id)
+    -- files/file/directory rows restore_by_id cannot faithfully restore
+    -- (spec R4 -- a remote manifest, or a row the terminal picker already
+    -- localized itself) go through the headless rsync-pull CLI instead,
+    -- same as the terminal picker's own Ctrl-Y; dismiss now regardless (the
+    -- pull is async and best-effort from here on), success/failure surfaces
+    -- via hs.alert once it lands.
+    if needs_headless_restore(body.id) then
+      headless_restore(body.id)
+    else
+      history.restore_by_id(body.id)
+    end
     M.hide()
   elseif action == "accept" then
+    if needs_headless_restore(body.id) then
+      -- Enter on a gated files row: the real bytes aren't here yet, so the
+      -- normal "restore then paste" order inverts to "dismiss, pull, paste
+      -- only once the pull actually lands" -- always dismissing rather than
+      -- keeping the Ctrl-Enter flourish's picker-stays-open behavior below,
+      -- since holding a modal panel open across a multi-second network pull
+      -- would be more disruptive than clarifying.
+      M.hide()
+      headless_restore(body.id, function(ok)
+        if ok then hs.eventtap.keyStroke({ "cmd" }, "v") end
+      end)
+      return
+    end
     history.restore_by_id(body.id)
     if body.dismiss then
       M.hide()
@@ -638,5 +740,6 @@ M._group_label = group_label
 M._count_words = count_words
 M._fetch_preview = fetch_preview
 M._fetch_app_icon = fetch_app_icon
+M._needs_headless_restore = needs_headless_restore
 
 return M
