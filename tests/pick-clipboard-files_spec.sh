@@ -20,10 +20,10 @@
 # env var is the test-only override documented in clip::copy_files_by_id).
 #
 # Remote manifest paths in these tests live under /pick-clipboard-remote-src/
-# -- a root that never exists on the test machine. That matters: the
-# localized-row guard sends U directly when a remote-origin row's recorded
-# paths ALL exist locally, so a manifest pointing at a real local path (e.g.
-# /tmp/foo) could short-circuit the rsync branch these tests mean to exercise.
+# -- a root that never exists on the test machine. The localized-row guard is
+# restricted to the picker's own cache root, so a real local path could no
+# longer short-circuit the rsync branch, but keeping remote paths obviously
+# nonexistent stays the honest fixture shape (they ARE remote paths).
 Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
@@ -255,11 +255,12 @@ EOF
   #     'x-resolved-path' UTI -- nothing pasteable, false success.
   #   multi-path -> x-file-manifest with LOCAL cache paths but
   #     source_host=origin; the old code tried `rsync origin:<local-path>`.
-  # Fix under test: when a remote-origin row's recorded paths ALL exist
-  # locally on disk, send U with those paths directly (form A) -- no id:, no
-  # rsync.
-  It 'localized single-path row (x-resolved-path, remote origin, file on disk): sends U with the path, no id:, no rsync'
-    locdir="$SHELLSPEC_TMPBASE/localized-single"; rm -rf "$locdir"; mkdir -p "$locdir"
+  # Fix under test: when a remote-origin row's recorded paths ALL live under
+  # the picker's own cache root (~/.cache/pick-clipboard/files/ -- the only
+  # place localization ever records) AND exist on disk, send U with those
+  # paths directly (form A) -- no id:, no rsync.
+  It 'localized single-path row (x-resolved-path cache path, remote origin, file on disk): sends U with the path, no id:, no rsync'
+    locdir="$HOME/.cache/pick-clipboard/files/77/1"; mkdir -p "$locdir"
     printf 'already local\n' > "$locdir/doc.txt"
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',220); SELECT last_insert_rowid();")
     pathfile="$SHELLSPEC_TMPBASE/resolved-path"
@@ -274,8 +275,8 @@ EOF
     The contents of file "$RSYNCLOG" should equal ""
   End
 
-  It 'localized multi-path row (x-file-manifest of local paths, remote origin): sends U with the paths, no rsync'
-    locdir="$SHELLSPEC_TMPBASE/localized-multi"; rm -rf "$locdir"; mkdir -p "$locdir/1" "$locdir/2"
+  It 'localized multi-path row (x-file-manifest of cache paths, remote origin): sends U with the paths, no rsync'
+    locdir="$HOME/.cache/pick-clipboard/files/78"; mkdir -p "$locdir/1" "$locdir/2"
     printf 'a\n' > "$locdir/1/a.txt"
     printf 'b\n' > "$locdir/2/b.txt"
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',221); SELECT last_insert_rowid();")
@@ -290,6 +291,42 @@ EOF
     The contents of file "$NCLOG" should include "$locdir/2/b.txt"
     The contents of file "$NCLOG" should not include "id:$id"
     The contents of file "$RSYNCLOG" should equal ""
+  End
+
+  # Re-review follow-up 1: the guard must be RESTRICTED to the cache root.
+  # A remote manifest whose path strings happen to exist locally too (the
+  # Mac-to-Mac mirror case: /Users/<me>/... exists on both machines) must
+  # NOT short-circuit to the possibly-stale local copies -- it takes the
+  # rsync branch like any other remote manifest.
+  It 'remote manifest of locally-existing NON-cache paths: takes the rsync branch, not the guard'
+    coincdir="$SHELLSPEC_TMPBASE/coincident"; rm -rf "$coincdir"; mkdir -p "$coincdir"
+    printf 'stale local twin\n' > "$coincdir/doc.txt"
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',222); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/doc.txt' "$coincdir" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    The contents of file "$RSYNCLOG" should include "devbox:$coincdir/doc.txt"
+    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/doc.txt"
+    The contents of file "$NCLOG" should not include "$coincdir/doc.txt"
+  End
+
+  # Re-review follow-up 2: a fully-cached re-pick pulls nothing, so it must
+  # not insert another bookkeeping row (type_hash is NULL on these rows, so
+  # nothing would ever dedup the pile-up).
+  It 'two consecutive picks of the same remote row record exactly one localized row'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',223); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/remote-a.txt\000%s/remote-b.txt' "$REMOTE_SRC" "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    run_copy "$id" >/dev/null 2>&1
+    When call run_copy "$id"
+    The status should be success
+    localized_rows=$(sqlite3 "$DB" "SELECT COUNT(*) FROM clips WHERE id != $id AND source_host = 'devbox';")
+    The variable localized_rows should equal 1
   End
 
   # Reviewer finding 3 (important): the pull must use the pinned
@@ -327,6 +364,11 @@ EOF
     The stderr should include "files restore"
   End
 
+  # NOTE: the in-place overwrite of $BINDIR/rsync below is intentionally
+  # coupled to setup()'s `PICK_CLIPBOARD_RSYNC=$BINDIR/rsync` -- the picker
+  # invokes whatever that override points at (never a PATH lookup, see the
+  # pinning test above), so swapping the file's CONTENT is how this test
+  # turns the fake into a failing rsync without touching the env wiring.
   It 'a failed rsync falls back to the current text-copy behavior (T set, not U)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('files','devbox',301,'a b'); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/manifest.bin"

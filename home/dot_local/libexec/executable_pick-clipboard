@@ -240,27 +240,33 @@ clip::send_file_urls() {
 #      with real NSFilenamesPboardType/public.file-url blobs: U with the
 #      id:<n> form, a full-fidelity restore_by_id.
 #   2. remote origin, but every recorded path (x-file-manifest, else
-#      x-resolved-path) already exists locally on disk: U with those paths
+#      x-resolved-path) lives under the picker's own cache root
+#      ~/.cache/pick-clipboard/files/ AND exists on disk: U with those paths
 #      directly (form A). This is the row shape the picker itself creates
 #      when it localizes a pull (below) -- single-path rows carry only a
 #      synthetic x-resolved-path (id:<n> would restore the blob under that
 #      literal UTI: nothing pasteable), multi-path rows carry an
 #      x-file-manifest of LOCAL paths (the rsync branch would try to pull
-#      them from the origin, which never had them). The existence check
-#      handles both shapes without caring which UTI the paths came from.
-#      Known accepted tradeoff: a genuine remote manifest whose path strings
-#      happen to ALSO exist on this machine (e.g. /etc/hosts) short-circuits
-#      to the local copy.
-#   3. remote origin, x-file-manifest paths not all local: the spec §12
-#      pull -- rsync each manifest path down into its own per-position
-#      subdir ~/.cache/pick-clipboard/files/<id>/<idx>/ (the <idx> namespace
-#      keeps two manifest entries that share a basename from colliding on
-#      one flat cache path, which would silently drop a file), skipping any
+#      them from the origin, which never had them). The check handles both
+#      shapes without caring which UTI the paths came from. The cache-root
+#      restriction is load-bearing: localization records paths exclusively
+#      under the cache root, so a remote manifest naming a path that happens
+#      to exist on this Mac too (the Mac-to-Mac mirror case --
+#      /Users/<me>/doc.txt on both machines) still takes the pull branch
+#      instead of silently pasting a possibly-stale local twin.
+#   3. remote origin, not a case-2 row: the spec §12 pull -- rsync each
+#      x-file-manifest path down into its own per-position subdir
+#      ~/.cache/pick-clipboard/files/<id>/<idx>/ (the <idx> namespace keeps
+#      two manifest entries that share a basename from colliding on one
+#      flat cache path, which would silently drop a file), skipping any
 #      position already cached from an earlier pull of this SAME row. Then
 #      record the localized clip as a new local row (mirrors op_persist:
 #      source_host stays the ORIGIN host, so the new row still badges remote
 #      even though its bytes are now local; best-effort -- a bookkeeping
-#      failure does not block the paste) and U the localized paths (form A).
+#      failure does not block the paste; SKIPPED entirely when nothing was
+#      actually pulled, i.e. every position was already cached -- these rows
+#      have no type_hash, so a re-pick would otherwise pile up an identical
+#      row every time) and U the localized paths (form A).
 #   4. remote origin, only an x-resolved-path whose file is gone (a stale
 #      localized row after a cache sweep): fail honestly -- the origin never
 #      had the cache path, so there is nothing to re-pull from.
@@ -310,23 +316,29 @@ clip::copy_files_by_id() {
   # Remote-origin row from here on.
   (( ${#rpaths[@]} > 0 )) || { print -ru2 -- "pick-clipboard: no file paths recorded for row $id"; return 1 }
 
-  # Case 2: every recorded path already exists locally (a row this picker
-  # localized earlier, either shape) -> form A with those paths, no re-pull.
-  local -i all_local=1
+  # Case 2: every recorded path is one of the picker's OWN cache paths and
+  # exists (a row this picker localized earlier, either shape) -> form A
+  # with those paths, no re-pull. The cache-root prefix requirement is what
+  # keeps a coincidentally-existing non-cache path (Mac-to-Mac mirror rows)
+  # from short-circuiting to a possibly-stale local twin.
+  local cacheroot="$HOME/.cache/pick-clipboard/files/"
+  local -i all_cached=1
   local rp
   for rp in "${rpaths[@]}"; do
-    [[ -e "$rp" ]] || { all_local=0; break }
+    [[ "$rp" == "$cacheroot"* && -e "$rp" ]] || { all_cached=0; break }
   done
-  if (( all_local )); then
+  if (( all_cached )); then
     clip::send_file_urls "${rpaths[@]}" && return 0
     print -ru2 -- "pick-clipboard: localized files restore failed for row $id"
     return 1
   fi
 
-  # Case 4: a stale localized row (x-resolved-path only, file gone) has
-  # nothing to pull -- the origin host never held the local cache path.
+  # Case 4: an x-resolved-path-only remote row that case 2 didn't claim --
+  # either a stale localized row (cache path swept from disk: the origin
+  # never held it, nothing to re-pull) or a mirrored row recording a
+  # non-cache origin path (only x-file-manifest rows are pullable in M2).
   if [[ "$srcuti" != "x-file-manifest" ]]; then
-    print -ru2 -- "pick-clipboard: localized copy for row $id is missing on disk (${rpaths[1]})"
+    print -ru2 -- "pick-clipboard: no pullable manifest for row $id (recorded path: ${rpaths[1]})"
     return 1
   fi
 
@@ -340,7 +352,7 @@ clip::copy_files_by_id() {
 
   local cachedir="$HOME/.cache/pick-clipboard/files/$id"
   local -a local_paths
-  local -i idx=0
+  local -i idx=0 pulled=0
   local sub lp
   for rp in "${rpaths[@]}"; do
     (( idx += 1 ))
@@ -352,6 +364,7 @@ clip::copy_files_by_id() {
         print -ru2 -- "pick-clipboard: rsync failed pulling $host:$rp"
         return 1
       fi
+      (( pulled += 1 ))
     fi
     local_paths+=("$lp")
   done
@@ -360,26 +373,32 @@ clip::copy_files_by_id() {
   # (spec §12), single-path rows via x-resolved-path (matching a genuine
   # file/directory capture), multi-path via x-file-manifest (matching a
   # genuine files capture) -- the same distinction op_list_files reads back.
-  # Re-picking this new row later lands in case 2 above.
-  local ts; ts=$(date +%s)
-  local ek="${kind//\'/\'\'}" eh="${host//\'/\'\'}"
-  local new_id
-  new_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips (type_kind, first_ts, last_ts, source_host) VALUES ('$ek', $ts, $ts, '$eh'); SELECT last_insert_rowid();") 2>/dev/null || new_id=""
-  if [[ -n "$new_id" ]]; then
-    local blobf; blobf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-localize-blob.XXXXXX")
-    local uti="x-resolved-path" first=1
-    if (( ${#local_paths[@]} > 1 )); then
-      uti="x-file-manifest"
-      { for lp in "${local_paths[@]}"; do
-          if (( first )); then print -rn -- "$lp"; first=0
-          else print -rn -- $'\0'"$lp"; fi
-        done
-      } > "$blobf"
-    else
-      print -rn -- "${local_paths[1]}" > "$blobf"
+  # Re-picking this new row later lands in case 2 above. Skipped when
+  # nothing was pulled (every position already cached by an earlier pick of
+  # this same row): the localized row for this pull already exists, and
+  # these rows carry no type_hash, so re-inserting would pile up an
+  # identical row on every re-pick with nothing to dedup it.
+  if (( pulled > 0 )); then
+    local ts; ts=$(date +%s)
+    local ek="${kind//\'/\'\'}" eh="${host//\'/\'\'}"
+    local new_id
+    new_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips (type_kind, first_ts, last_ts, source_host) VALUES ('$ek', $ts, $ts, '$eh'); SELECT last_insert_rowid();") 2>/dev/null || new_id=""
+    if [[ -n "$new_id" ]]; then
+      local blobf; blobf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-localize-blob.XXXXXX")
+      local uti="x-resolved-path" first=1
+      if (( ${#local_paths[@]} > 1 )); then
+        uti="x-file-manifest"
+        { for lp in "${local_paths[@]}"; do
+            if (( first )); then print -rn -- "$lp"; first=0
+            else print -rn -- $'\0'"$lp"; fi
+          done
+        } > "$blobf"
+      else
+        print -rn -- "${local_paths[1]}" > "$blobf"
+      fi
+      sqlite3 "$DB_FILE" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($new_id, '$uti', readfile('$blobf'));" >/dev/null 2>&1
+      rm -f "$blobf"
     fi
-    sqlite3 "$DB_FILE" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($new_id, '$uti', readfile('$blobf'));" >/dev/null 2>&1
-    rm -f "$blobf"
   fi
 
   clip::send_file_urls "${local_paths[@]}" && return 0
