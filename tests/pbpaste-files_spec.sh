@@ -159,3 +159,310 @@ EOF
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should equal ""
   End
 End
+
+# Tests for pbpaste's local file-materialization engine (files-yazi design
+# §5/§8, T5): `pbpaste --files [--force] [--quiet|--progress|--porcelain]
+# [dir]`. Same fake-`nc`-with-a-canned-`L`-reply convention as the
+# `--manifest` Describe above, but every manifest here points at REAL temp
+# files/dirs on disk (this Describe's own SRC), since the whole point is to
+# exercise the actual copy engine and assert on real bytes landing in TARGET.
+Describe 'pbpaste: --files (local materialization)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+
+  # build_frame <status> <payload_file> <outfile> -- same wire-exact
+  # <status><BE32 len><payload> framing helper as the --manifest Describe
+  # above (each files-yazi spec file keeps its own copy -- see
+  # pbcopy-files_spec.sh for the convention).
+  build_frame() {
+    st=$1 payload_file=$2 outfile=$3
+    len=$(wc -c < "$payload_file" | tr -d ' ')
+    {
+      printf '%s' "$st"
+      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
+      cat "$payload_file"
+    } > "$outfile"
+  }
+
+  # build_manifest <outfile> <kind> <host> <ts> <path>... -- writes the raw
+  # `L`-reply payload manifest_parse expects: kind US host US ts US path NUL
+  # path NUL path ...
+  build_manifest() {
+    outfile=$1 kind=$2 host=$3 ts=$4
+    shift 4
+    {
+      printf '%s\037%s\037%s\037' "$kind" "$host" "$ts"
+      first=1
+      for p in "$@"; do
+        if [ "$first" -eq 1 ]; then
+          printf '%s' "$p"
+          first=0
+        else
+          printf '\000%s' "$p"
+        fi
+      done
+    } > "$outfile"
+  }
+
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
+    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
+    REPLY_FRAME="$SHELLSPEC_TMPBASE/reply.frame"
+    export REPLY_FRAME
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+argc=\$#
+eval "port=\\\${\$argc}"
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+rm -f "\$raw"
+cat "$REPLY_FRAME"
+EOF
+    chmod +x "$BINDIR/nc"
+    # Fake scutil: pins THIS host's name for the local/remote manifest-host
+    # comparison (pbpaste_files uses the same `scutil --get LocalHostName`
+    # || `hostname -s` fallback as pbcopy), so the suite never depends on
+    # the real machine's name.
+    cat > "$BINDIR/scutil" <<'EOF'
+#!/bin/sh
+if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
+  echo mac-mini
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$BINDIR/scutil"
+    export PATH="$BINDIR:$PATH"
+
+    SRC="$SHELLSPEC_TMPBASE/src"; mkdir -p "$SRC"
+    TARGET="$SHELLSPEC_TMPBASE/target"; mkdir -p "$TARGET"
+  }
+  BeforeEach 'setup'
+
+  It 'materializes a file and a directory into the target dir, contents identical to the source'
+    printf 'hello world\n' > "$SRC/a.txt"
+    mkdir -p "$SRC/adir/nested"
+    printf 'nested content\n' > "$SRC/adir/nested/b.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" files mac-mini 1752200000.1 "$SRC/a.txt" "$SRC/adir"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh -c '
+      sh "$1" --files "$2" >/dev/null 2>"$3" || exit 1
+      diff -r "$4/a.txt" "$2/a.txt" || exit 2
+      diff -r "$4/adir" "$2/adir" || exit 3
+    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/err" "$SRC"
+    The status should be success
+  End
+
+  It 'refuses to overwrite an existing name and lists it on stderr'
+    printf 'new\n' > "$SRC/dup.txt"
+    printf 'old\n' > "$TARGET/dup.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752200000.2 "$SRC/dup.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "dup.txt"
+    The contents of file "$TARGET/dup.txt" should equal "old"
+  End
+
+  It '--force overwrites the conflicting target'
+    printf 'new\n' > "$SRC/dup2.txt"
+    printf 'old\n' > "$TARGET/dup2.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752200000.3 "$SRC/dup2.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files --force "$TARGET"
+    The status should be success
+    The contents of file "$TARGET/dup2.txt" should equal "new"
+  End
+
+  # Two manifest entries sharing one basename (multi-dir selection) cannot
+  # both land in one flat target dir -- the second would silently clobber
+  # the first, so this is refused even with --force (which only waives
+  # PRE-EXISTING targets, not intra-clip collisions).
+  It 'refuses a clip whose entries share a basename, even with --force'
+    mkdir -p "$SRC/d1" "$SRC/d2"
+    printf 'first\n' > "$SRC/d1/same.txt"
+    printf 'second\n' > "$SRC/d2/same.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" files mac-mini 1752200000.35 "$SRC/d1/same.txt" "$SRC/d2/same.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files --force "$TARGET"
+    The status should be failure
+    The stderr should include "same.txt"
+    The file "$TARGET/same.txt" should not be exist
+  End
+
+  # Porcelain is a CONTRACT (design §8): every line must be exactly 4
+  # tab-separated fields, every progress line's done/total bytes must be
+  # equal (these tiers are instant), and the stream must end with a `done`
+  # line. Asserted with awk, not string-matching, per the task brief.
+  It 'porcelain: every line has exactly 4 tab fields, progress done==total, ends with a done line'
+    printf 'abc\n' > "$SRC/p1.txt"
+    printf 'defgh\n' > "$SRC/p2.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" files mac-mini 1752200000.4 "$SRC/p1.txt" "$SRC/p2.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh -c '
+      sh "$1" --files --porcelain "$2" > "$3" || exit 1
+      awk -F"\t" "{ if (NF != 4) exit 9 }" "$3" || exit 9
+      awk -F"\t" "\$1 == \"progress\" && \$3 != \$4 { exit 6 }" "$3" || exit 6
+      last=$(tail -n 1 "$3")
+      case "$last" in
+        done*) : ;;
+        *) exit 8 ;;
+      esac
+      sed "\$d" "$3" | awk -F"\t" "\$1 != \"progress\" { exit 7 }" || exit 7
+    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/porcelain.out"
+    The status should be success
+  End
+
+  It 'prints nothing to stdout by default when not attached to a TTY'
+    printf 'quiet content\n' > "$SRC/q.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752200000.5 "$SRC/q.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be success
+    The output should equal ""
+  End
+
+  It 'exits 1 naming the exact milestone message for a manifest from a different host'
+    printf 'x\n' > "$SRC/r.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.6 "$SRC/r.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should equal "pbpaste: remote file clips land in a later milestone"
+  End
+
+  It 'errors pointing at plain pbpaste when the clipboard entry is not a files clip'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    printf 'not-files' > "$pf"
+    build_frame E "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "pbpaste"
+  End
+End
+
+# Interrupt-safety: killing pbpaste --files mid-copy must never leave a
+# partial entry in the target, and a leftover staging dir from an
+# untrappable SIGKILL must be swept by the next invocation. APFS clonefile
+# (tier 1) is near-instant regardless of size -- copying even a many-GB file
+# within the SAME container completes in milliseconds, which would make
+# "kill mid-copy" untestable via timing. This Describe forces a genuine,
+# timeable byte-for-byte copy by putting the source on its OWN APFS
+# container (a throwaway sparse disk image): per `man cp`, `-c` degrades to
+# a normal copy across containers -- still tier 1 code, but no longer
+# instant -- without needing to fake/skip any real binary.
+Describe 'pbpaste: --files interrupt safety'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+
+  build_frame() {
+    st=$1 payload_file=$2 outfile=$3
+    len=$(wc -c < "$payload_file" | tr -d ' ')
+    {
+      printf '%s' "$st"
+      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
+      cat "$payload_file"
+    } > "$outfile"
+  }
+
+  build_manifest() {
+    outfile=$1 kind=$2 host=$3 ts=$4
+    shift 4
+    {
+      printf '%s\037%s\037%s\037' "$kind" "$host" "$ts"
+      first=1
+      for p in "$@"; do
+        if [ "$first" -eq 1 ]; then
+          printf '%s' "$p"
+          first=0
+        else
+          printf '\000%s' "$p"
+        fi
+      done
+    } > "$outfile"
+  }
+
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
+    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
+    REPLY_FRAME="$SHELLSPEC_TMPBASE/reply.frame"
+    export REPLY_FRAME
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+argc=\$#
+eval "port=\\\${\$argc}"
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+rm -f "\$raw"
+cat "$REPLY_FRAME"
+EOF
+    chmod +x "$BINDIR/nc"
+    cat > "$BINDIR/scutil" <<'EOF'
+#!/bin/sh
+if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
+  echo mac-mini
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$BINDIR/scutil"
+    export PATH="$BINDIR:$PATH"
+
+    TARGET="$SHELLSPEC_TMPBASE/target"; mkdir -p "$TARGET"
+
+    DMG="$SHELLSPEC_TMPBASE/xvol.sparseimage"
+    hdiutil create -size 5g -fs APFS -volname PbpasteFilesTest -type SPARSE "$DMG" >/dev/null
+    ATTACH_OUT=$(hdiutil attach "$DMG" -nobrowse)
+    MNT=$(printf '%s\n' "$ATTACH_OUT" | awk -F'\t' '/\/Volumes\//{print $NF; exit}')
+    export MNT
+    # Real (non-sparse) zero-fill: a genuinely dense, cross-container source
+    # so tier 1's fallback copy has real bytes to move (see Describe header).
+    dd if=/dev/zero of="$MNT/big.bin" bs=4m count=1024 >/dev/null 2>&1
+  }
+  BeforeEach 'setup'
+
+  cleanup() {
+    if [ -n "${MNT:-}" ]; then
+      hdiutil detach "$MNT" -force >/dev/null 2>&1
+    fi
+    rm -f "$SHELLSPEC_TMPBASE/xvol.sparseimage"
+  }
+  AfterEach 'cleanup'
+
+  It 'leaves no partial entry in the target when killed mid-copy, and sweeps staging on the next run'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752200000.7 "$MNT/big.bin"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh -c '
+      sh "$1" --files "$2" >/dev/null 2>&1 &
+      pid=$!
+      sleep 0.2
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      if [ -e "$2/big.bin" ]; then exit 9; fi
+      sh "$1" --files "$2" >/dev/null 2>&1 || exit 1
+      if ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1; then exit 8; fi
+      if [ ! -e "$2/big.bin" ]; then exit 7; fi
+      cmp -s "$2/big.bin" "$MNT/big.bin" || exit 6
+    ' _ "$SCRIPT" "$TARGET"
+    The status should be success
+  End
+End

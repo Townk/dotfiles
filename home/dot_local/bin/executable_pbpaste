@@ -29,10 +29,46 @@
 # smart-paste plugin (T8); `pbpaste --files` (T5) reuses the same fetch/parse
 # functions below, only the final rendering differs.
 #
+# `pbpaste --files [--force] [--quiet|--progress|--porcelain] [dir]` (T5,
+# design §5/§8): materializes the CURRENT file clip into `dir` (default cwd).
+# This task implements ONLY manifests whose host is THIS host -- a manifest
+# from a different host exits 1 pointing at the future cross-machine
+# milestone (T13). Local engine, tiered (§8):
+#   1. darwin: `cp -Rc` (APFS clonefile). Per `man cp`, `-c` transparently
+#      falls back to a plain byte copy when cloning isn't possible
+#      (cross-volume, non-APFS) and STILL returns success -- tier 2 is only
+#      reached if the `cp -c` invocation itself errors (non-darwin, a real
+#      cp failure), not merely "cross-volume".
+#   2. `/opt/homebrew/bin/rsync -a --info=progress2`, if that exact binary is
+#      executable (stock macOS openrsync lacks --info=progress2).
+#   3. `cp -a`, with an honest one-line stderr note that there is no live
+#      meter for this transfer.
+# Everything materializes into `<dir>/.pbpaste-staging.$$/` first; each item
+# is `mv`d into its final name individually, so a kill at any point --
+# including inside the OS copy syscalls -- never leaves a partial entry in
+# the target, only in the (disposable) staging dir. Catchable signals
+# (INT/TERM) clean the staging dir on the spot via a trap; an untrappable
+# SIGKILL can leave one behind, so every invocation sweeps any stale
+# `.pbpaste-staging.*` left by a previous killed run before starting its own.
+# Existing target names are refused (all conflicts listed on one stderr
+# message) unless `--force`, checked BEFORE any transfer. Output is the
+# progress skeleton this task establishes (§8): TTY (or `--progress`) prints
+# a `✓ name (size)` line per item plus a final summary; non-TTY (or
+# `--quiet`) is silent; `--porcelain` prints
+# `progress\t<path>\t<bytes_done>\t<bytes_total>` per item and a terminal
+# `done\t<files>\t<bytes>\t<seconds>` -- a CONTRACT later tasks and tests
+# parse, so it may only grow columns, never reshape existing ones. For these
+# local tiers every item is a single instant operation, so bytes_done always
+# equals bytes_total (no partial in-flight progress to report yet). Like the
+# accepted literal-newline limit on paths (see manifest_parse), a path
+# containing a literal TAB would break the porcelain field count -- accepted,
+# not engineered around.
+#
 # Standalone POSIX sh, no library sourcing — see pbcopy.
 #
 # Usage: text=$(pbpaste)
 #        pbpaste --manifest
+#        pbpaste --files [--force] [--quiet|--progress|--porcelain] [dir]
 
 set -eu
 
@@ -51,8 +87,16 @@ hang. Fails loudly when the tunnel is down. See pbcopy for the write side.
 path lines) instead of its text. Exits 1 (nothing on stdout) if the current
 clip isn't a files clip, or the bridge is down.
 
+--files [--force] [--quiet|--progress|--porcelain] [dir]: materialize the
+current file clip into dir (default: cwd). Refuses existing names unless
+--force. Only manifests originating on this host are supported so far
+(remote hosts land in a later milestone). TTY prints a line per item plus a
+summary; --porcelain prints a stable machine-readable progress/done stream;
+--quiet is silent; non-TTY is silent by default.
+
 Usage: text=$(pbpaste)
        pbpaste --manifest
+       pbpaste --files [--force] [--quiet|--progress|--porcelain] [dir]
 EOF
     exit 0
     ;;
@@ -172,8 +216,316 @@ pbpaste_manifest() {
   exit 0
 }
 
+# --- --files (files-yazi design §5/§8, T5) -----------------------------------
+#
+# pbpaste_files_size <path> -- bytes for the progress/porcelain fields. Exact
+# byte count for a regular file (`wc -c`); disk-usage estimate (`du -sk`,
+# rounded to 1K blocks) for a directory, since there is no single "size of a
+# tree" syscall. Both the "done" and "total" fields for an item are computed
+# by calling this ONCE and reusing the value, so bytes_done == bytes_total
+# always holds for these instant local tiers, even though the directory
+# figure itself is only an estimate.
+pbpaste_files_size() {
+  _p=$1
+  if [ -d "$_p" ]; then
+    _sz=$(du -sk -- "$_p" 2>/dev/null | awk '{print $1*1024}')
+  else
+    _sz=$(wc -c < "$_p" 2>/dev/null | tr -d ' ')
+  fi
+  # An unreadable subtree (permissions, a mid-copy race) can make `du`/`wc`
+  # come back empty; that must not blow up the caller's arithmetic.
+  printf '%s' "${_sz:-0}"
+}
+
+# pbpaste_files_human <bytes> -- compact human size for the TTY per-item line
+# (`✓ name (12.3M)`). Not used by --porcelain, which reports raw bytes.
+pbpaste_files_human() {
+  _b=$1
+  if [ "$_b" -ge 1073741824 ]; then
+    awk -v b="$_b" 'BEGIN { printf "%.1fG", b / 1073741824 }'
+  elif [ "$_b" -ge 1048576 ]; then
+    awk -v b="$_b" 'BEGIN { printf "%.1fM", b / 1048576 }'
+  elif [ "$_b" -ge 1024 ]; then
+    awk -v b="$_b" 'BEGIN { printf "%.1fK", b / 1024 }'
+  else
+    printf '%sB' "$_b"
+  fi
+}
+
+# pbpaste_files_copy <src> <stagedst> -- the tiered engine (see the header
+# comment for the full rationale). Reads the caller's PF_SHOW (whether the
+# rsync tier may render its live meter -- on stderr, so a --porcelain stdout
+# stream stays parseable) and reads/writes PF_CPA_NOTED (so the tier-3 "no
+# live meter" note prints at most once per invocation, not once per item).
+pbpaste_files_copy() {
+  _src=$1 _dst=$2
+  if [ "$(uname -s)" = "Darwin" ] && cp -Rc -- "$_src" "$_dst" 2>/dev/null; then
+    return 0
+  fi
+  # A failed tier can leave a PARTIAL $_dst behind (cp/rsync dying mid-tree
+  # on a quota or permission error). Clear it before trying the next tier:
+  # rsync would silently merge into the partial result, and `cp -a src dst`
+  # with dst already existing as a directory nests src one level deep
+  # (dst/src/...) instead of replacing it. Staging content is disposable by
+  # design, so an rm between tiers is always safe.
+  rm -rf -- "$_dst" 2>/dev/null || true
+  if [ -x /opt/homebrew/bin/rsync ]; then
+    # Trailing-slash "contents into a pre-made dst" for a directory is
+    # byte-equivalent to `cp -R src dst`; a plain file needs neither.
+    if [ -d "$_src" ]; then
+      _from="$_src/"
+      mkdir -p "$_dst" || return 1
+    else
+      _from=$_src
+    fi
+    if [ "$PF_SHOW" -eq 1 ]; then
+      # The §8 tier-2 promise is brew rsync's live overall meter -- let it
+      # through on stderr, keeping stdout reserved for the per-item lines.
+      /opt/homebrew/bin/rsync -a --info=progress2 -- "$_from" "$_dst" 1>&2 && return 0
+    else
+      /opt/homebrew/bin/rsync -a --info=progress2 -- "$_from" "$_dst" >/dev/null 2>&1 && return 0
+    fi
+    rm -rf -- "$_dst" 2>/dev/null || true
+  fi
+  if [ "$PF_CPA_NOTED" -eq 0 ] && [ "$PF_SHOW" -eq 1 ]; then
+    echo "pbpaste: no live progress meter for this transfer (cp -a fallback)" >&2
+    PF_CPA_NOTED=1
+  fi
+  cp -a -- "$_src" "$_dst"
+}
+
+# pbpaste_files [--force] [--quiet|--progress|--porcelain] [dir] -- the
+# --files entry point.
+pbpaste_files() {
+  PF_FORCE=0
+  PF_MODE=auto
+  PF_DIR=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) PF_FORCE=1 ;;
+      --quiet) PF_MODE=quiet ;;
+      --progress) PF_MODE=progress ;;
+      --porcelain) PF_MODE=porcelain ;;
+      --)
+        shift
+        for _a in "$@"; do
+          if [ -z "$PF_DIR" ]; then
+            PF_DIR=$_a
+          else
+            echo "pbpaste: too many arguments" >&2
+            exit 1
+          fi
+        done
+        break
+        ;;
+      -*)
+        echo "pbpaste: unknown option: $1" >&2
+        exit 1
+        ;;
+      *)
+        if [ -z "$PF_DIR" ]; then
+          PF_DIR=$1
+        else
+          echo "pbpaste: too many arguments" >&2
+          exit 1
+        fi
+        ;;
+    esac
+    shift
+  done
+  [ -n "$PF_DIR" ] || PF_DIR=.
+
+  [ -d "$PF_DIR" ] || { echo "pbpaste: no such directory: $PF_DIR" >&2; exit 1; }
+
+  PF_HOST=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || true)
+
+  PF_REPLYFILE=$(mktemp "${TMPDIR:-/tmp}/pbpaste-files-reply.XXXXXX") || {
+    echo "pbpaste: mktemp failed" >&2
+    exit 1
+  }
+  manifest_fetch "$PF_REPLYFILE"
+  PF_ERRFILE=$(mktemp "${TMPDIR:-/tmp}/pbpaste-files-err.XXXXXX") || {
+    rm -f "$PF_REPLYFILE"
+    echo "pbpaste: mktemp failed" >&2
+    exit 1
+  }
+  if ! manifest_parse "$PF_REPLYFILE" 2>"$PF_ERRFILE"; then
+    rm -f "$PF_REPLYFILE"
+    if grep -q 'not-files' "$PF_ERRFILE" 2>/dev/null; then
+      echo "pbpaste: current clipboard entry is not a files clip -- use plain pbpaste to read it as text" >&2
+    else
+      cat "$PF_ERRFILE" >&2
+    fi
+    rm -f "$PF_ERRFILE"
+    exit 1
+  fi
+  rm -f "$PF_REPLYFILE" "$PF_ERRFILE"
+
+  if [ -n "$MANIFEST_HOST" ] && [ "$MANIFEST_HOST" != "$PF_HOST" ]; then
+    rm -f "$MANIFEST_PATHFILE"
+    echo "pbpaste: remote file clips land in a later milestone" >&2
+    exit 1
+  fi
+
+  # NUL -> newline, same rule as pbpaste_manifest's own final print: real
+  # paths never carry NULs, so this is a lossless, safe split; a path with a
+  # literal newline is a known, accepted limit (see manifest_parse's header).
+  PF_PATHLIST=$(mktemp "${TMPDIR:-/tmp}/pbpaste-files-list.XXXXXX") || {
+    echo "pbpaste: mktemp failed" >&2
+    exit 1
+  }
+  tr '\000' '\n' < "$MANIFEST_PATHFILE" > "$PF_PATHLIST"
+  rm -f "$MANIFEST_PATHFILE"
+
+  # Sweep any staging dir orphaned by a previous SIGKILLed run (untrappable,
+  # so its own EXIT trap never fired) before this run creates its own. PID-
+  # gated, not a blind wildcard rm: a SECOND, genuinely concurrent `pbpaste
+  # --files` targeting the same dir has its own live `.pbpaste-staging.<pid>`
+  # -- only remove one whose pid is no longer running.
+  for PF_STALE in "$PF_DIR"/.pbpaste-staging.*; do
+    [ -e "$PF_STALE" ] || continue
+    PF_STALE_PID=${PF_STALE##*.}
+    case "$PF_STALE_PID" in
+      '' | *[!0-9]*) rm -rf -- "$PF_STALE" ;;
+      *) kill -0 "$PF_STALE_PID" 2>/dev/null || rm -rf -- "$PF_STALE" ;;
+    esac
+  done
+
+  # --- conflict check, BEFORE any transfer: list every conflicting name. ---
+  # Two flavors, both fatal here: a name that already exists in the target
+  # (waived by --force), and two manifest entries sharing one basename
+  # (e.g. /a/notes.txt + /b/notes.txt from a multi-dir selection) -- NOT
+  # waived by --force, since materializing both into one flat dir would
+  # silently make the last one win.
+  PF_CONFLICTS=""
+  PF_DUPES=""
+  PF_SEEN="
+"
+  PF_MISSING=0
+  while IFS= read -r PF_P || [ -n "$PF_P" ]; do
+    [ -n "$PF_P" ] || continue
+    if [ ! -e "$PF_P" ]; then
+      echo "pbpaste: source no longer exists: $PF_P" >&2
+      PF_MISSING=1
+      continue
+    fi
+    PF_NAME=$(basename -- "$PF_P")
+    case "$PF_SEEN" in
+      *"
+$PF_NAME
+"*) PF_DUPES="$PF_DUPES$PF_NAME
+" ;;
+      *) PF_SEEN="$PF_SEEN$PF_NAME
+" ;;
+    esac
+    if [ -e "$PF_DIR/$PF_NAME" ] && [ "$PF_FORCE" -eq 0 ]; then
+      PF_CONFLICTS="$PF_CONFLICTS$PF_NAME
+"
+    fi
+  done < "$PF_PATHLIST"
+
+  if [ "$PF_MISSING" -eq 1 ]; then
+    rm -f "$PF_PATHLIST"
+    exit 1
+  fi
+
+  if [ -n "$PF_DUPES" ]; then
+    echo "pbpaste: clip contains multiple items with the same name -- cannot paste into one directory:" >&2
+    printf '%s' "$PF_DUPES" | while IFS= read -r PF_C; do
+      [ -n "$PF_C" ] && echo "  $PF_C" >&2
+    done
+    rm -f "$PF_PATHLIST"
+    exit 1
+  fi
+
+  if [ -n "$PF_CONFLICTS" ]; then
+    echo "pbpaste: refusing to overwrite existing items (use --force):" >&2
+    printf '%s' "$PF_CONFLICTS" | while IFS= read -r PF_C; do
+      [ -n "$PF_C" ] && echo "  $PF_C" >&2
+    done
+    rm -f "$PF_PATHLIST"
+    exit 1
+  fi
+
+  # --- materialize: stage every item, then mv each into place. ---
+  PF_STAGING="$PF_DIR/.pbpaste-staging.$$"
+  mkdir -p "$PF_STAGING" || {
+    echo "pbpaste: could not create staging dir under $PF_DIR" >&2
+    rm -f "$PF_PATHLIST"
+    exit 1
+  }
+  # Catchable interrupt (Ctrl+C, a plain TERM) cleans up on the spot. An
+  # untrappable SIGKILL skips this -- the sweep at the top of the NEXT
+  # invocation is what handles that case (see above).
+  trap 'rm -rf -- "$PF_STAGING" 2>/dev/null' EXIT INT TERM
+
+  PF_IS_TTY=0
+  [ -t 1 ] && PF_IS_TTY=1
+  case "$PF_MODE" in
+    quiet) PF_SHOW=0; PF_PORCELAIN=0 ;;
+    porcelain) PF_SHOW=0; PF_PORCELAIN=1 ;;
+    progress) PF_SHOW=1; PF_PORCELAIN=0 ;;
+    auto)
+      PF_PORCELAIN=0
+      if [ "$PF_IS_TTY" -eq 1 ]; then PF_SHOW=1; else PF_SHOW=0; fi
+      ;;
+  esac
+
+  PF_CPA_NOTED=0
+  PF_START=$(date +%s)
+  PF_TOTAL_BYTES=0
+  PF_TOTAL_FILES=0
+
+  while IFS= read -r PF_P || [ -n "$PF_P" ]; do
+    [ -n "$PF_P" ] || continue
+    PF_NAME=$(basename -- "$PF_P")
+    PF_STAGE_TARGET="$PF_STAGING/$PF_NAME"
+    PF_SIZE=$(pbpaste_files_size "$PF_P")
+
+    if ! pbpaste_files_copy "$PF_P" "$PF_STAGE_TARGET"; then
+      echo "pbpaste: failed to copy $PF_P" >&2
+      rm -f "$PF_PATHLIST"
+      exit 1
+    fi
+
+    PF_FINAL="$PF_DIR/$PF_NAME"
+    [ -e "$PF_FINAL" ] && rm -rf -- "$PF_FINAL"
+    mv -- "$PF_STAGE_TARGET" "$PF_FINAL" || {
+      echo "pbpaste: failed to move $PF_NAME into $PF_DIR" >&2
+      rm -f "$PF_PATHLIST"
+      exit 1
+    }
+
+    PF_TOTAL_BYTES=$((PF_TOTAL_BYTES + PF_SIZE))
+    PF_TOTAL_FILES=$((PF_TOTAL_FILES + 1))
+
+    if [ "$PF_PORCELAIN" -eq 1 ]; then
+      printf 'progress\t%s\t%s\t%s\n' "$PF_FINAL" "$PF_SIZE" "$PF_SIZE"
+    elif [ "$PF_SHOW" -eq 1 ]; then
+      printf '\342\234\223 %s (%s)\n' "$PF_NAME" "$(pbpaste_files_human "$PF_SIZE")"
+    fi
+  done < "$PF_PATHLIST"
+
+  rm -f "$PF_PATHLIST"
+
+  PF_ELAPSED=$(( $(date +%s) - PF_START ))
+
+  if [ "$PF_PORCELAIN" -eq 1 ]; then
+    printf 'done\t%s\t%s\t%s\n' "$PF_TOTAL_FILES" "$PF_TOTAL_BYTES" "$PF_ELAPSED"
+  elif [ "$PF_SHOW" -eq 1 ]; then
+    printf 'done: %s file(s), %s in %ss\n' "$PF_TOTAL_FILES" "$(pbpaste_files_human "$PF_TOTAL_BYTES")" "$PF_ELAPSED"
+  fi
+
+  exit 0
+}
+
 if [ "${1:-}" = "--manifest" ]; then
   pbpaste_manifest
+fi
+
+if [ "${1:-}" = "--files" ]; then
+  shift
+  pbpaste_files "$@"
 fi
 
 if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
