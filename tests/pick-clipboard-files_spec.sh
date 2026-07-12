@@ -41,6 +41,11 @@ Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
     # no-re-fetch behavior under test) skip rsync -- a false pass/fail
     # bleeding across examples. Fresh HOME dir per It avoids it.
     export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    # A dedicated TMPDIR (spec R3): the rsync-failure test below globs for the
+    # stderr-capture temp file clip::copy_files_by_id leaves behind on a
+    # failed pull, which needs a clean, known directory rather than whatever
+    # this machine's ambient TMPDIR happens to already contain.
+    export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     export PICK_CLIPBOARD_DB="$DB"
@@ -385,5 +390,127 @@ EOF
     The stderr should include "rsync failed"
     The contents of file "$NCLOG" should include "2489:T"
     The contents of file "$NCLOG" should not include "2489:U"
+  End
+
+  # --- spec R3: readable pull failures + warning suppression -----------------
+  It 'rsync -e string clears the clipboard bridge forward (spec R3): kills the redundant reverse-forward attempt and its warning at the source'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',400); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/remote-a.txt' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    The contents of file "$RSYNCLOG" should include "ClearAllForwardings=yes"
+  End
+
+  # Fake rsync writes real noise to ITS OWN stderr (standing in for the
+  # "Warning: remote port forwarding failed..." ssh line the live session
+  # showed) and fails. The picker must surface a single readable line on its
+  # OWN stderr -- never the raw noise -- while the noise itself survives on
+  # disk for follow-up (the detail file the message points at).
+  It 'a failed pull captures rsync/ssh stderr to a temp file instead of forwarding raw noise onto the picker'\''s own stderr (spec R3)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('files','devbox',401,'a b'); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/remote-a.txt' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+    cat > "$BINDIR/rsync" <<'EOF'
+#!/bin/sh
+echo "FAKE-SSH-NOISE: Warning: remote port forwarding failed for listen port 2490" >&2
+exit 1
+EOF
+    chmod +x "$BINDIR/rsync"
+
+    When call run_copy "$id"
+    The status should be success
+    The stderr should include "rsync failed pulling"
+    The stderr should include "details:"
+    The stderr should not include "FAKE-SSH-NOISE"
+    detail_file=$(ls "$TMPDIR"/pick-clipboard-rsync-err.* 2>/dev/null | head -1)
+    The path "$detail_file" should be exist
+    The contents of file "$detail_file" should include "FAKE-SSH-NOISE"
+  End
+
+  # --- spec R5b: localized bookkeeping rows get a real text_preview ----------
+  # Integration: the localized row is no longer anonymous (row 983's live-
+  # session bug -- a NULL text_preview renders as "[files]" in both pickers'
+  # IFNULL fallback). Doesn't assert on the exact preview text: under
+  # shellspec's own deeply-nested sandbox HOME the localized cache path alone
+  # can run past clip::localized_preview's ~100-char budget (an environment
+  # artifact, not a real-world path length) -- the shape of the truncation is
+  # covered as a pure-function unit test below instead.
+  It 'localized bookkeeping row gets a non-empty text_preview (not the anonymous NULL/[files] fallback), spec R5b'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',402); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/remote-a.txt\000%s/remote-b.txt' "$REMOTE_SRC" "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    preview=$(sqlite3 "$DB" "SELECT IFNULL(text_preview,'') FROM clips WHERE id=(SELECT MAX(id) FROM clips);")
+    The variable preview should not equal ""
+  End
+
+  # Unit test (pure function, short synthetic paths -- no HOME/cache-root
+  # dependency): newline-joined paths that fit the ~100-char budget are kept
+  # whole; the localized cache path this function actually receives at the
+  # real call site is always well under that in production (a normal
+  # $HOME, unlike the sandbox's own deeply-nested tmp HOME above).
+  It 'clip::localized_preview joins short paths whole (spec R5b, pure-function unit test)'
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::localized_preview "/tmp/a/1/one.txt" "/tmp/a/2/two.txt"
+    ' 2>&1)"
+    expected=$'/tmp/a/1/one.txt\n/tmp/a/2/two.txt'
+    When call test "$result" = "$expected"
+    The status should be success
+  End
+
+  # Unit test: paths that blow the budget fall back to "first path
+  # truncated + K more", never a silent empty/anonymous preview.
+  It 'clip::localized_preview summarizes when paths exceed the ~100-char budget (spec R5b, pure-function unit test)'
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::localized_preview "/this/is/a/very/long/synthetic/path/that/alone/blows/right/past/the/one/hundred/character/budget/one.txt" "/another/long/path/two.txt"
+    ' 2>&1)"
+    When call test -n "$result"
+    The status should be success
+    The variable result should include "more"
+  End
+
+  # --- spec R5c: bump-on-use ---------------------------------------------------
+  It 'local files row restore bumps the original row'\''s last_ts (spec R5c)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',100); SELECT last_insert_rowid();")
+
+    When call run_copy "$id"
+    The status should be success
+    bumped=$(sqlite3 "$DB" "SELECT last_ts > 100 FROM clips WHERE id=$id;")
+    The variable bumped should equal "1"
+  End
+
+  It 'localized (already-cached) row restore bumps the original row'\''s last_ts (spec R5c, case 2)'
+    locdir="$HOME/.cache/pick-clipboard/files/79/1"; mkdir -p "$locdir"
+    printf 'already local\n' > "$locdir/doc.txt"
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',404); SELECT last_insert_rowid();")
+    pathfile="$SHELLSPEC_TMPBASE/resolved-path"
+    printf '%s' "$locdir/doc.txt" > "$pathfile"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-resolved-path', readfile('$pathfile'));"
+
+    When call run_copy "$id"
+    The status should be success
+    bumped=$(sqlite3 "$DB" "SELECT last_ts > 404 FROM clips WHERE id=$id;")
+    The variable bumped should equal "1"
+  End
+
+  It 'remote-pull files row restore bumps the ORIGINAL row'\''s last_ts, not just the new localized bookkeeping row (spec R5c, case 3)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',403); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/remote-a.txt' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    bumped=$(sqlite3 "$DB" "SELECT last_ts > 403 FROM clips WHERE id=$id;")
+    The variable bumped should equal "1"
   End
 End
