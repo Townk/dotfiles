@@ -796,4 +796,85 @@ EOF
     The stderr should include "toobigdir"
     The file "$TARGET/toobigdir" should not be exist
   End
+
+  # The byte counter must NEVER derive from dd's stderr summary: its wording
+  # is dialect-specific (BSD dd prints "bytes transferred", GNU dd "bytes
+  # copied"), and the primary consumer of the remote branch is a Linux dev
+  # shell -- parsing one dialect zeroes out every read on the other,
+  # producing instant spurious "connection closed/truncated" failures. The
+  # canned-stream fixtures above can't switch dd flavors, so this pins the
+  # MECHANISM instead: every chunked dd read in the shim must discard its
+  # stderr (2>/dev/null), proving the counts come from artifact files
+  # (`wc -c`) -- which the functional examples above then exercise for
+  # correctness, on any platform's dd.
+  It 'never captures dd stderr for byte counting (BSD/GNU dd summaries differ)'
+    When run command sh -c 'grep -E "dd bs=.*count=1" "$1" | grep -v "^ *#" | grep -v "2>/dev/null"' _ "$SCRIPT"
+    The status should be failure
+    The output should equal ""
+  End
+
+  # Multi-item failure semantics: items are placed into the target one at a
+  # time, atomically, as each completes -- a later item's failure ABORTS the
+  # run (exit 1) but does NOT roll back items already placed (per-item
+  # placement + abort-on-failure, not all-or-nothing; inherited from the
+  # local engine's own loop shape). Pin exactly that: item 1's file IS in
+  # the target with full content, item 2 left nothing behind, and the
+  # staging dir is gone (EXIT trap).
+  It 'keeps an already-placed item when a later item truncates, aborting with a clean staging dir'
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" files mac-mini 1752300000.9 "/remote/ok.txt" "/remote/trunc.txt"
+    build_frame O "$pf" "$REPLY_L"
+
+    okbody="$SHELLSPEC_TMPBASE/okbody"
+    printf 'first item, completes fine\n' > "$okbody"
+    build_frame O "$okbody" "$SHELLSPEC_TMPBASE/reply.F-ok"
+
+    # Truncated F reply: header declares 100 body bytes, only 40 follow
+    # (1 status + 4 len + 40 body = 45) -- pbpaste_stream_file_body's
+    # EOF-before-total check must fail the item.
+    truncbody="$SHELLSPEC_TMPBASE/truncbody"
+    head -c 100 /dev/zero > "$truncbody"
+    fullframe="$SHELLSPEC_TMPBASE/reply.F-full"
+    build_frame O "$truncbody" "$fullframe"
+    head -c 45 "$fullframe" > "$SHELLSPEC_TMPBASE/reply.F-trunc"
+
+    # Per-path F replies: this test's own nc picks the canned reply by
+    # grepping the request payload for the item's basename -- the
+    # setup-provided nc serves ONE canned file per opcode, which can't
+    # distinguish the two F calls this run makes.
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+argc=\$#
+eval "port=\\\${\$argc}"
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+op=\$(dd bs=1 count=1 2>/dev/null < "\$raw")
+{ printf '%s:%s:' "\$port" "\$op"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+case "\$op" in
+  L) cat "$SHELLSPEC_TMPBASE/reply.L" ;;
+  F)
+    if LC_ALL=C grep -q "trunc.txt" "\$raw"; then
+      cat "$SHELLSPEC_TMPBASE/reply.F-trunc"
+    else
+      cat "$SHELLSPEC_TMPBASE/reply.F-ok"
+    fi
+    ;;
+esac
+rm -f "\$raw"
+EOF
+    chmod +x "$BINDIR/nc"
+
+    When run command sh -c '
+      sh "$1" --files "$2" >/dev/null 2>"$3"
+      rc=$?
+      if [ "$rc" -eq 0 ]; then exit 9; fi
+      [ -e "$2/ok.txt" ] || exit 8
+      grep -q "first item, completes fine" "$2/ok.txt" || exit 8
+      if [ -e "$2/trunc.txt" ]; then exit 7; fi
+      if ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1; then exit 6; fi
+      grep -q "truncated stream" "$3" || exit 5
+      exit 0
+    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/two-item-err"
+    The status should be success
+  End
 End
