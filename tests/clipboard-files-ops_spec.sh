@@ -122,6 +122,22 @@ Describe 'clipboard-bridge-dispatch: L list-files'
     tail -c +6 "$RESP" | tr '\037\000' '\n\n'
   }
 
+  # Raw variant for the exact-format test: emits the reply payload with
+  # every \037 field separator rendered as a visible `<US>` token (1:1, so
+  # the assertion still pins the exact byte positions -- a transposed or
+  # missing field still fails). NOT left as raw \037 bytes: shellspec uses
+  # US as its own internal field separator, and letting it cross the
+  # capture leaks `(eval): ... field_...` noise from its reporter --
+  # observed empirically. Substring checks alone would pass with kind/host
+  # transposed; the reply format is a cross-task contract parsed
+  # positionally by `pbpaste --manifest` (T4), so one test must pin the
+  # exact order.
+  run_l_raw() {
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP" 2>/dev/null
+    printf 'STATUS:%s\n' "$(head -c1 "$RESP")"
+    tail -c +6 "$RESP" | sed $'s/\037/<US>/g'
+  }
+
   It 'resolves a single file via x-resolved-path (type_kind=file)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','laptop',100.5); SELECT last_insert_rowid();")
     pathfile="$SHELLSPEC_TMPBASE/resolved-path"
@@ -134,6 +150,18 @@ Describe 'clipboard-bridge-dispatch: L list-files'
     The output should include "file"
     The output should include "laptop"
     The output should include "/tmp/single-file.txt"
+  End
+
+  It 'emits the exact positional reply format kind US host US ts US paths'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','laptop',100.5); SELECT last_insert_rowid();")
+    pathfile="$SHELLSPEC_TMPBASE/resolved-path"
+    printf '%s' "/tmp/single-file.txt" > "$pathfile"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-resolved-path', readfile('$pathfile'));"
+    expected=$(printf 'STATUS:O\nfile<US>laptop<US>100.5<US>/tmp/single-file.txt')
+
+    When call run_l_raw
+    The status should be success
+    The output should equal "$expected"
   End
 
   It 'resolves two files via a real NSFilenamesPboardType XML plist (type_kind=files)'
@@ -156,6 +184,32 @@ Describe 'clipboard-bridge-dispatch: L list-files'
     The output should include "laptop"
     The output should include "/tmp/pboard-a.txt"
     The output should include "/tmp/pboard-b.txt"
+  End
+
+  # Regression: a path literally ending in `"` in NON-terminal array
+  # position. plutil emits `"\/tmp\/quoted\"","..."` -- the parser's split
+  # on the `",` boundary consumes the element's real closing quote, so a
+  # per-element trailing-quote strip then ate the second half of the escaped
+  # `\"` (content!), yielding `/tmp/quoted\` (stray backslash) instead of
+  # `/tmp/quoted"`. Exact-equality assertion: silently-wrong path bytes are
+  # the failure mode, substring checks could miss a mangled variant.
+  It 'preserves a path ending in a literal quote (non-terminal plist element)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','laptop',250.5); SELECT last_insert_rowid();")
+    plistfile="$SHELLSPEC_TMPBASE/quoted.plist"
+    {
+      printf '<?xml version="1.0" encoding="UTF-8"?>\n'
+      printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+      printf '<plist version="1.0"><array>\n'
+      printf '<string>/tmp/quoted"</string>\n'
+      printf '<string>/tmp/plain.txt</string>\n'
+      printf '</array></plist>\n'
+    } > "$plistfile"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'NSFilenamesPboardType', readfile('$plistfile'));"
+    expected=$(printf 'STATUS:O\nfiles\nlaptop\n250.5\n/tmp/quoted"\n/tmp/plain.txt')
+
+    When call run_l
+    The status should be success
+    The output should equal "$expected"
   End
 
   It 'emits an x-file-manifest blob as-is, NUL-joined (type_kind=files, remote source_host)'

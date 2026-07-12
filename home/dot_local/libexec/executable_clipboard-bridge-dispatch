@@ -358,20 +358,32 @@ clip::parse_ns_filenames() {
     local inner=${json#\[}
     inner=${inner%\]}
     if [[ -n "$inner" ]]; then
-      # Split on the literal 3-char run quote-comma-quote. Using a plain `"`
-      # inside the (s:...:) flag text would prematurely close THIS function
-      # body's own double-quoted strings elsewhere in the script, so the
-      # split is done in two steps: turn each "," boundary into a real
-      # newline first (a $'...' pattern can hold a literal " with no
-      # escaping headache, unlike a "..." one), then split on newlines.
-      inner=${inner//$'",'/$'\n'}
+      # Strip the array's outermost string quotes FIRST, while they are
+      # unambiguous (a JSON string always terminates on an UNescaped quote,
+      # so inner's first/last chars are never the tail of an escaped `\"`).
+      # Doing this per-element instead was a real bug: the boundary split
+      # already consumes each non-terminal element's closing quote, so a
+      # per-element `${r%\"}` had nothing legitimate left to strip and ate
+      # the `"` of an escaped `\"` whenever a path literally ends in a
+      # quote -- `/tmp/a"` came out as `/tmp/a\`.
+      inner=${inner#\"}
+      inner=${inner%\"}
+      # Split on the literal 3-char quote-comma-quote element boundary.
+      # Content can never false-match it: an in-content quote is always
+      # escaped as `\"`, so a bare quote right after a comma only occurs
+      # where a real element starts. Two steps -- boundary -> real newline,
+      # then (@f) -- because a $'...' pattern holds literal `"`s with none
+      # of the escaping headaches a "..." one has here.
+      inner=${inner//$'","'/$'\n'}
       local -a raw; raw=("${(@f)inner}")
       local r
       for r in "${raw[@]}"; do
-        r=${r#\"}
-        r=${r%\"}
+        # JSON unescapes. Order matters: `\/` and `\"` before `\\`, or the
+        # backslash freed by `\\ -> \` would pair with a following `/`/`"`
+        # and be double-unescaped.
         r=${r//\\\//\/}
         r=${r//\\\"/\"}
+        r=${r//\\\\/\\}
         paths+=("$r")
       done
     fi
