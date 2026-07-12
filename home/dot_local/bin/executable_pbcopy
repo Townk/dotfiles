@@ -2,6 +2,8 @@
 # pbcopy — universal clipboard copy: same command everywhere, whether this
 # shell is sitting at the Mac or SSH'd into a remote host.
 #
+# No args (sacred, byte-for-byte unchanged since before files-yazi Phase 6):
+#
 # Local (no SSH): delegates straight to the real platform clipboard tool
 # (macOS's own /usr/bin/pbcopy, or wl-copy/xclip on Linux).
 #
@@ -15,11 +17,20 @@
 # into ~/.ssh/config.d/<alias>.conf (default on; --no-clipboard to skip) for the
 # reverse SSH tunnel it depends on.
 #
+# Path args (files-yazi Phase 6 design §5): `pbcopy <path>…` puts a real
+# file clip on the Mac's pasteboard instead of reading stdin.
+#   Local (no SSH) → send op `U` (NUL-joined absolute paths) to this
+#   machine's own bridge on 127.0.0.1:2489, and — unlike the fire-and-forget
+#   O/P frames below — actually check the reply, since there is no local-tool
+#   fallback for a file clip: `E` status fails loudly.
+#   Over SSH → honest error for now (no manifest-push yet; that's T11).
+#
 # Standalone POSIX sh, no library sourcing: this needs to work from any
 # caller (editors, git, other scripts) with zero fragile dependencies, same
 # rationale as ~/.local/bin/wait-until.
 #
 # Usage: printf '%s' "$text" | pbcopy
+#        pbcopy <path>...
 
 set -eu
 
@@ -40,7 +51,85 @@ EOF
     ;;
 esac
 
+# A leading "--" (end-of-options marker) lets a path literally starting with
+# "-" (e.g. a file named -h) still reach file mode below.
+if [ "${1:-}" = "--" ]; then
+  shift
+fi
+
+# POSIX-safe absolute-path canonicalization for file mode: no arrays, no
+# `realpath` (not guaranteed present on every box this ships to). Caller has
+# already checked existence.
+abspath() {
+  _p=$1
+  (cd "$(dirname -- "$_p")" && printf '%s/%s' "$(pwd -P)" "$(basename -- "$_p")")
+}
+
+# Emit a framed request <opcode><BE32 len><payload> to 127.0.0.1:<port>.
+# Best-effort by default: a down bridge is a silent no-op (never blocks the
+# copy) -- unless a 4th arg names a file to capture the reply into, which
+# file mode below needs (there's no local-tool fallback for a file clip, so
+# a down/erroring bridge there must be a loud failure, not a silent one).
+send_frame() {
+  _op=$1 _port=$2 _payfile=$3 _replyfile=${4:-}
+  _len=$(wc -c < "$_payfile" | tr -d ' ')
+  if [ -n "$_replyfile" ]; then
+    # `|| true`: under `set -e`, a connection-refused (or missing `nc`)
+    # failure here would otherwise kill the script on the spot, bypassing
+    # the caller's reply check entirely -- an empty $_replyfile falls
+    # through to that check instead, which reports it properly.
+    {
+      printf '%s' "$_op"
+      printf "\\$(printf %03o $(((_len>>24)&255)))\\$(printf %03o $(((_len>>16)&255)))\\$(printf %03o $(((_len>>8)&255)))\\$(printf %03o $((_len&255)))"
+      cat "$_payfile"
+    } | nc -w2 127.0.0.1 "$_port" > "$_replyfile" 2>/dev/null || true
+  else
+    {
+      printf '%s' "$_op"
+      printf "\\$(printf %03o $(((_len>>24)&255)))\\$(printf %03o $(((_len>>16)&255)))\\$(printf %03o $(((_len>>8)&255)))\\$(printf %03o $((_len&255)))"
+      cat "$_payfile"
+    } | nc -w2 127.0.0.1 "$_port" >/dev/null 2>&1 || true
+  fi
+}
+
 if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+  if [ $# -gt 0 ]; then
+    # File-object mode, local branch (files-yazi design §5): build a
+    # NUL-joined absolute-path payload and send it as a `U` frame to this
+    # Mac's own bridge, then check the reply for real (see send_frame above).
+    payfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-u.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
+    replyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-ur.XXXXXX") || { rm -f "$payfile"; echo "pbcopy: mktemp failed" >&2; exit 1; }
+    trap 'rm -f "$payfile" "$replyfile"' EXIT INT TERM
+
+    _first=1
+    for _p in "$@"; do
+      if [ ! -e "$_p" ]; then
+        echo "pbcopy: no such file: $_p" >&2
+        exit 1
+      fi
+      _ap=$(abspath "$_p")
+      if [ "$_first" -eq 1 ]; then
+        printf '%s' "$_ap" >> "$payfile"
+        _first=0
+      else
+        printf '\000%s' "$_ap" >> "$payfile"
+      fi
+    done
+
+    send_frame U 2489 "$payfile" "$replyfile"
+    _status=$(head -c 1 "$replyfile" 2>/dev/null || true)
+    if [ "$_status" = "O" ]; then
+      exit 0
+    fi
+    if [ "$_status" = "E" ]; then
+      _msg=$(tail -c +6 "$replyfile" 2>/dev/null)
+      echo "pbcopy: ${_msg:-bridge reported an error}" >&2
+      exit 1
+    fi
+    echo "pbcopy: clipboard bridge is not reachable on 127.0.0.1:2489" >&2
+    exit 1
+  fi
+
   # Absolute path, not a PATH lookup: ~/.local/bin (this script's own home)
   # is prepended to PATH ahead of /usr/bin, so `command -v pbcopy` would
   # just resolve back to us and recurse forever.
@@ -56,6 +145,13 @@ if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
   fi
 fi
 
+if [ $# -gt 0 ]; then
+  # File-object mode over SSH: no manifest-push yet (that's T11) -- honest
+  # error rather than silently falling back to a text-only copy of the paths.
+  echo "pbcopy: file clips over SSH are not supported yet" >&2
+  exit 1
+fi
+
 sink="${PBCOPY_OSC52_SINK:-/dev/tty}"
 [ "$sink" != /dev/tty ] || [ -e /dev/tty ] || {
   echo "pbcopy: no controlling terminal to send OSC 52 through" >&2
@@ -69,18 +165,6 @@ trap 'rm -f "$tmp"' EXIT INT TERM
 cat > "$tmp"
 
 host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
-
-# Emit a framed request <opcode><BE32 len><payload> to 127.0.0.1:<port>.
-# Best-effort: a down bridge is a silent no-op (never blocks the copy).
-send_frame() {
-  _op=$1 _port=$2 _payfile=$3
-  _len=$(wc -c < "$_payfile" | tr -d ' ')
-  {
-    printf '%s' "$_op"
-    printf "\\$(printf %03o $(((_len>>24)&255)))\\$(printf %03o $(((_len>>16)&255)))\\$(printf %03o $(((_len>>8)&255)))\\$(printf %03o $((_len&255)))"
-    cat "$_payfile"
-  } | nc -w2 127.0.0.1 "$_port" >/dev/null 2>&1 || true
-}
 
 # 1. Declare origin to the sit-Mac FIRST (before the bytes land, so its watcher
 #    tags the row remote(host)). Payload: <host> US <text>.
