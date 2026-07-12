@@ -506,6 +506,17 @@ materialized by pulling the bytes down **at use time**, then stored locally.
 > remote manifest while sitting at the Mac (no SSH env) now refuses with a
 > pointer to `pick-clipboard`'s `Ctrl-Y`, which remains the supported
 > Mac-side localization path for a remote-origin file clip.
+>
+> **As-built note (R2)**: `rsync -e ssh <source_host>:...` only resolves if
+> the puller's own ssh config knows `source_host` by that exact name — and
+> `source_host` is always the origin's own LocalHostName (§5), which need not
+> equal the alias the puller calls it by. `system-onboard` closes that gap:
+> once it can SSH into a peer, it captures the peer's `scutil --get
+> LocalHostName` (or `hostname -s`) and persists it in the loose ssh
+> fragment's front matter (`# peer-hostname: <name>`, see
+> `~/.ssh/config.example`), then renders `Host <alias> <peer-hostname>` so
+> both names resolve. `system-onboard update <alias> --clipboard|--prepare`
+> reconstructs that second name from the front matter without reconnecting.
 
 ## 13. `pbcopy` / `clip-copy` shims
 

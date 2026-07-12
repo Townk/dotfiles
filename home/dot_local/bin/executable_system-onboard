@@ -290,16 +290,30 @@ default_frontmatter() {
   print -r -- "# ~/.ssh/config.example); everything above 'Host' is preserved verbatim."
 }
 
-# write_ssh_conf <conf> <alias> <hostname> <want_clipboard 0|1>
-# Single writer for the loose per-alias fragment (used by reconcile_ssh and the
-# `update` clipboard toggle). The file has two zones: the hand-authored FRONT
-# MATTER (every line above `Host`) and the MECHANICAL block (`Host` and below).
-# The front matter is preserved verbatim; the mechanical block is re-rendered
-# from the front matter's `prepare`, so an update/regeneration never clobbers
-# hand-authored intent. `prepare` implying gpg renders the gpg-agent forward +
-# the pre-connect hook; an already-healed gpg line is preserved as-is.
+# write_ssh_conf <conf> <alias> <hostname> <want_clipboard 0|1> [peer_hostname_hint]
+# Single writer for the loose per-alias fragment (used by reconcile_ssh, the
+# `update` clipboard/prepare toggles, and reconcile_peer_hostname). The file
+# has two zones: the hand-authored FRONT MATTER (every line above `Host`) and
+# the MECHANICAL block (`Host` and below). The front matter is preserved
+# verbatim; the mechanical block is re-rendered from the front matter's
+# `prepare` (and now `peer-hostname`), so an update/regeneration never
+# clobbers hand-authored intent. `prepare` implying gpg renders the gpg-agent
+# forward + the pre-connect hook; an already-healed gpg line is preserved
+# as-is.
+#
+# `peer_hostname_hint` (5th arg, optional): the peer's own LocalHostName,
+# captured post-verify by reconcile_peer_hostname. It is spliced into the
+# front matter as `# peer-hostname: <name>` the FIRST time it's known (front
+# matter has no such line yet); after that the front matter's own line wins
+# and the hint is ignored, so a hand-edit or removal sticks — same
+# preserve-once-then-verbatim contract as `alias`/`prepare`. This is what lets
+# `Host` carry a second name: the clipboard store stamps a file row's
+# `source_host` with the ORIGIN's LocalHostName (see pbcopy's `scutil --get
+# LocalHostName || hostname -s`), not our alias for it, so a puller's `rsync
+# -e ssh $source_host:...` only resolves if this machine's ssh config also
+# knows that exact name.
 write_ssh_conf() {
-  local conf="$1" alias="$2" hostname="$3" want_clip="$4"
+  local conf="$1" alias="$2" hostname="$3" want_clip="$4" peer_hint="${5:-}"
   setopt local_options extended_glob
 
   # Preserve the leading front matter + any already-healed gpg line; synthesize a
@@ -321,9 +335,34 @@ write_ssh_conf() {
   [[ "$prepare" == none ]] && want_hook=0
   [[ "$prepare" == all || "$prepare" == *gpg* ]] && want_gpg=1
 
+  # `peer-hostname` — same "read from front matter, seed once if absent" deal
+  # as `prepare` above. Seed it into the front matter (before the closing `#
+  # ---` fence) the first time a hint arrives; once the line exists it is
+  # preserved verbatim on every later render (hand-editable, never re-derived).
+  local peer_hostname
+  peer_hostname="$(print -r -- "$frontmatter" | awk '/^#[[:space:]]*peer-hostname:/{sub(/^#[[:space:]]*peer-hostname:[[:space:]]*/,"");print;exit}')"
+  if [[ -z "$peer_hostname" && -n "$peer_hint" ]]; then
+    peer_hostname="$peer_hint"
+    frontmatter="$(print -r -- "$frontmatter" | awk -v val="$peer_hostname" '
+      /^#[[:space:]]*---[[:space:]]*$/ { n++; if (n == 2) print "# peer-hostname: " val }
+      { print }
+    ')"
+  fi
+
   {
     print -r -- "$frontmatter"
-    print -r -- "Host $alias"
+    # A bare `Host $alias` unless the peer's own LocalHostName differs from
+    # our alias for it — then it's also listed here, so ssh (and thus a
+    # peer's `rsync -e ssh $source_host:...` clipboard pull) resolves that
+    # name too. Deliberately NOT added to the `Match originalhost` hook below:
+    # a pull connecting under the peer name should stay a plain, fast
+    # connection and skip the theme/gpg pre-connect hook, which is keyed to
+    # the alias identity, not every name this Host answers to.
+    if [[ -n "$peer_hostname" && "$peer_hostname" != "$alias" ]]; then
+      print -r -- "Host $alias $peer_hostname"
+    else
+      print -r -- "Host $alias"
+    fi
     print -r -- "    HostName $hostname"
     if ((want_clip)); then
       print -r -- "    # Clipboard bridge — exposes this machine's clipboard to $alias so its nvim /"
@@ -348,6 +387,9 @@ write_ssh_conf() {
       print -r -- "# (prepare: $prepare) and runs the steps (and heals any '# @@resolve@@:' line"
       print -r -- "# above). The _SYNCREMOTE sentinel stops the nested ssh/rsync from re-triggering"
       print -r -- "# this hook. Rendered by system-onboard from 'prepare'."
+      print -r -- "# Deliberately keyed to \$alias only, even when Host also answers to the"
+      print -r -- "# peer's LocalHostName below — a clipboard pull connecting under that name"
+      print -r -- "# skips the theme/gpg pre-connect hook (see write_ssh_conf)."
       print -r -- 'Match originalhost '"$alias"' exec "[ -n \"$_SYNCREMOTE\" ] || _SYNCREMOTE=1 ~/.local/libexec/ssh-prepare-connection ~/.ssh/config.d/'"$alias"'.conf </dev/null >/dev/null 2>&1; false"'
     fi
   } >"$conf"
@@ -393,6 +435,35 @@ verify_access() {
   rexec true 2>/dev/null ||
     die "cannot ssh to '$ALIAS'. Establish first-contact access (password/temp key/console) and rerun."
   log_ok "ssh access to $ALIAS"
+}
+
+# --- step 3.5: peer hostname (clipboard ssh-alias coverage) ------------------
+# The universal-clipboard store stamps a file clip's `source_host` with the
+# ORIGIN machine's own LocalHostName (see pbcopy/pbpaste's `scutil --get
+# LocalHostName 2>/dev/null || hostname -s` — that one-liner already
+# self-selects the right command per OS, so it's rexec'd verbatim rather than
+# reimplemented per-platform here). A puller's picker later does `rsync -e ssh
+# $source_host:...`, so THIS machine's ssh config must also resolve that exact
+# name for $ALIAS, not just our own alias for it. Runs after verify_access so
+# rexec is known to work; persists the captured name in the fragment's front
+# matter (write_ssh_conf's `peer_hostname_hint`) so a later `system-onboard
+# update` can re-render the extra Host alias without reconnecting.
+reconcile_peer_hostname() {
+  if ((DRY_RUN)); then
+    log_info "[dry-run] would capture $ALIAS's LocalHostName for the ssh alias"
+    return 0
+  fi
+  local peer_hostname
+  peer_hostname="$(rexec 'scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null' 2>/dev/null | tr -d '[:space:]')" || true
+  if [[ -z "$peer_hostname" ]]; then
+    log_warn "could not determine $ALIAS's LocalHostName — a clipboard pull naming it as source_host may not resolve"
+    return 0
+  fi
+  local conf="$HOME/.ssh/config.d/$ALIAS.conf" want_clip=$((!NO_CLIPBOARD))
+  write_ssh_conf "$conf" "$ALIAS" "$HOSTNAME" "$want_clip" "$peer_hostname"
+  if [[ "$peer_hostname" != "$ALIAS" ]]; then
+    log_ok "ssh alias for $ALIAS also covers its LocalHostName ($peer_hostname)"
+  fi
 }
 
 # --- step 4: remote basics ---------------------------------------------------
@@ -919,6 +990,7 @@ main() {
   check_working_tree
   reconcile_ssh
   verify_access
+  reconcile_peer_hostname
   reconcile_remote_basics
 
   # If a human target already self-onboarded, it owns its slot: reconcile
@@ -950,5 +1022,15 @@ main() {
   converge_remote
   log_ok "onboarding complete for $ALIAS (slot $SLOT)"
 }
+
+# SYSTEM_ONBOARD_NO_RUN (test-only escape hatch, same convention as
+# PICK_CLIPBOARD_NO_RUN in executable_pick-clipboard): a test harness sources
+# this file with it set so it can call write_ssh_conf/default_frontmatter
+# directly against a temp conf file, without main() ever running (no SSH, no
+# git, no chezmoi apply). `return` unwinds a sourced file; `exit` covers the
+# (unsupported) case of executing this script with the var set directly.
+if [[ -n "${SYSTEM_ONBOARD_NO_RUN:-}" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 main "$@"

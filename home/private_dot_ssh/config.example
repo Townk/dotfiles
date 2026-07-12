@@ -49,6 +49,18 @@ Include ~/.ssh/config.d/*
 #   # prepare: all | <step …>     which prep steps to run (default: all);
 #   #                             including `gpg` (or `all`) also declares that
 #   #                             this host wants the gpg-agent forward
+#   # peer-hostname: <name>       OPTIONAL — <devbox>'s own LocalHostName
+#   #                             (`scutil --get LocalHostName` / `hostname
+#   #                             -s`), captured by system-onboard once it can
+#   #                             SSH in. Renders as a second name on the
+#   #                             `Host` line below (`Host <devbox> <name>`)
+#   #                             so a clipboard pull's `rsync -e ssh
+#   #                             <source_host>:...` resolves this host even
+#   #                             though the clipboard store stamped the row
+#   #                             with <devbox>'s own hostname, not our alias
+#   #                             for it. Omitted (or equal to <devbox>)
+#   #                             ⇒ no second name. Seeded once, then
+#   #                             preserved verbatim like `prepare` above.
 #   # ---
 #
 # The header is the "front matter": system-onboard preserves everything ABOVE the
