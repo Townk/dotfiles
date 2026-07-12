@@ -376,6 +376,36 @@ pbpaste_read_n() {
   return 0
 }
 
+# pbpaste_cap_theme <field> -- resolves one hex color for the size-cap gum
+# dialog below. This is standalone POSIX sh, so it can't see the zsh-only
+# C_HEX_* palette vars (dot_zshrc:57-65's own themed-gum-confirm idiom) --
+# they're never exported. Instead this reads the SAME generated JSON palette
+# those vars come from (${THEME_PALETTE_JSON:-~/.config/theme/chezmoi-system.json},
+# shape `{"palette": {...}, "extended": {"dialog": {...}}}` -- see
+# ics-view's _PALETTE_FALLBACK/_load_palette for the identical
+# read-json-or-fall-back-to-literals precedent for a non-zsh consumer) via
+# jq, falling back to the literal Catppuccin Mocha value on ANY failure
+# (jq missing, file missing/unreadable, bad JSON, key absent) -- jq is
+# best-effort, zero new hard dependencies, and a stale/missing palette file
+# must never block the confirm dialog itself.
+pbpaste_cap_theme() {
+  case $1 in
+    dialog_warning) _ct_path=.extended.dialog.warning _ct_fallback='#e5bf7b' ;;
+    crust) _ct_path=.palette.crust _ct_fallback='#11111b' ;;
+    subtext0) _ct_path=.palette.subtext0 _ct_fallback='#a6adc8' ;;
+    surface0) _ct_path=.palette.surface0 _ct_fallback='#313244' ;;
+  esac
+  _ct_file=${THEME_PALETTE_JSON:-$HOME/.config/theme/chezmoi-system.json}
+  _ct_val=""
+  if command -v jq >/dev/null 2>&1 && [ -r "$_ct_file" ]; then
+    _ct_val=$(jq -r "${_ct_path} // empty" "$_ct_file" 2>/dev/null) || _ct_val=""
+  fi
+  case $_ct_val in
+    '#'*) printf '%s' "$_ct_val" ;;
+    *) printf '%s' "$_ct_fallback" ;;
+  esac
+}
+
 # pbpaste_files_cap_check <label> <bytes> -- design §11's per-item size cap:
 # a declared total (F's exact size, or A's estimate) over
 # ${CLIP_FILE_MAX:-209715200} bytes (200 MB) prompts on an interactive
@@ -401,7 +431,16 @@ pbpaste_files_cap_check() {
   [ "$_bytes" -gt "$_cap" ] || return 0
   if [ -t 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
     if command -v gum >/dev/null 2>&1; then
-      if gum confirm "pbpaste: $_label ($_bytes bytes) exceeds CLIP_FILE_MAX ($_cap bytes) -- continue?" </dev/tty >/dev/tty 2>&1; then
+      # Same env-prefix theming idiom as dot_zshrc's own gum confirm
+      # (dot_zshrc:57-65), just resolved from the JSON palette instead of
+      # C_HEX_* (see pbpaste_cap_theme above for why).
+      if COLORTERM=truecolor \
+         GUM_CONFIRM_PROMPT_FOREGROUND="$(pbpaste_cap_theme dialog_warning)" \
+         GUM_CONFIRM_SELECTED_BACKGROUND="$(pbpaste_cap_theme dialog_warning)" \
+         GUM_CONFIRM_SELECTED_FOREGROUND="$(pbpaste_cap_theme crust)" \
+         GUM_CONFIRM_UNSELECTED_FOREGROUND="$(pbpaste_cap_theme subtext0)" \
+         GUM_CONFIRM_UNSELECTED_BACKGROUND="$(pbpaste_cap_theme surface0)" \
+         gum confirm "pbpaste: $_label ($_bytes bytes) exceeds CLIP_FILE_MAX ($_cap bytes) -- continue?" </dev/tty >/dev/tty 2>&1; then
         return 0
       fi
     else
@@ -991,6 +1030,17 @@ $PF_NAME
 
   exit 0
 }
+
+# Test-only escape hatch: sourcing this file with PBPASTE_TEST_SOURCE_ONLY=1
+# defines every function above (manifest_port .. pbpaste_files) and then
+# returns here, before the real dispatch/exec logic below ever runs -- lets
+# the test suite call an internal helper (e.g. pbpaste_cap_theme) directly
+# without tripping the local/SSH branches' real side effects (which would
+# otherwise exec into the actual platform pbpaste). Never set by anything
+# except the test harness.
+if [ "${PBPASTE_TEST_SOURCE_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 if [ "${1:-}" = "--manifest" ]; then
   pbpaste_manifest

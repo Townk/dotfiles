@@ -29,6 +29,7 @@ matches=$(rg -n '#[0-9a-fA-F]{6}' home/ \
   -g '!**/libexec/executable_ics-view' \
   -g '!**/libexec/executable_sqlite-view' \
   -g '!**/libexec/executable_disk-image-view' \
+  -g '!**/bin/executable_pbpaste' \
   -g '!**/wezterm/wezterm.lua' \
   -g '!**/yazi/init.lua' \
   -g '!**/ghostty/config' \

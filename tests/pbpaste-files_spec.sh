@@ -925,3 +925,49 @@ EOF
     The status should be success
   End
 End
+
+# pbpaste_cap_theme (rework R6): resolves the size-cap gum confirm's colors
+# from the generated JSON palette (THEME_PALETTE_JSON, same file the zsh-only
+# C_HEX_* vars come from -- see the function's own header comment). The gum
+# dialog itself is untestable here (no usable /dev/tty in this harness, same
+# limitation noted above pbpaste_files_cap_check's other examples), but the
+# helper is a plain function with no tty/gum dependency, so it's exercised
+# directly by sourcing the script with PBPASTE_TEST_SOURCE_ONLY=1 (stops
+# right after the function definitions, before the real dispatch/exec logic
+# would run).
+Describe 'pbpaste: pbpaste_cap_theme (size-cap dialog palette)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+
+  It 'reads dialog_warning/crust/subtext0/surface0 from a fixture palette JSON'
+    fixture="$SHELLSPEC_TMPBASE/palette.json"
+    cat > "$fixture" <<'EOF'
+{
+  "palette": {"crust": "#000001", "subtext0": "#000002", "surface0": "#000003"},
+  "extended": {"dialog": {"warning": "#000004"}}
+}
+EOF
+    When run command env PBPASTE_TEST_SOURCE_ONLY=1 THEME_PALETTE_JSON="$fixture" sh -c '
+      . "$1"
+      printf "warn=%s crust=%s subtext0=%s surface0=%s\n" \
+        "$(pbpaste_cap_theme dialog_warning)" \
+        "$(pbpaste_cap_theme crust)" \
+        "$(pbpaste_cap_theme subtext0)" \
+        "$(pbpaste_cap_theme surface0)"
+    ' _ "$SCRIPT"
+    The status should be success
+    The output should equal "warn=#000004 crust=#000001 subtext0=#000002 surface0=#000003"
+  End
+
+  It 'falls back to the hardcoded Catppuccin Mocha literals when the palette file is missing'
+    When run command env PBPASTE_TEST_SOURCE_ONLY=1 THEME_PALETTE_JSON="$SHELLSPEC_TMPBASE/does-not-exist.json" sh -c '
+      . "$1"
+      printf "warn=%s crust=%s subtext0=%s surface0=%s\n" \
+        "$(pbpaste_cap_theme dialog_warning)" \
+        "$(pbpaste_cap_theme crust)" \
+        "$(pbpaste_cap_theme subtext0)" \
+        "$(pbpaste_cap_theme surface0)"
+    ' _ "$SCRIPT"
+    The status should be success
+    The output should equal "warn=#e5bf7b crust=#11111b subtext0=#a6adc8 surface0=#313244"
+  End
+End
