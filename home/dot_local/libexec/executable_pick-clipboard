@@ -433,11 +433,23 @@ clip::copy_files_by_id() {
       # minimal repro of `local x; x=$(mktemp ...)` inside a `for` prints
       # "x=<path>" to stdout once). The single-line form has no such leak.
       local rsync_err=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-rsync-err.XXXXXX")
+      # ... which in turn means mktemp's exit status is swallowed (`local
+      # x=$(cmd)` reports the `local` builtin's status, never cmd's), so a
+      # failed mktemp can't be caught with `||`. Explicit check instead: on
+      # an empty/unwritable capture path, degrade to /dev/null rather than
+      # letting the `2>"$rsync_err"` redirection below error out and dump a
+      # raw zsh diagnostic onto stderr -- exactly the noise class this
+      # capture exists to suppress.
+      [[ -n "$rsync_err" && -w "$rsync_err" ]] || rsync_err=/dev/null
       if ! "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes' "${host}:${rp}" "$sub/" >/dev/null 2>"$rsync_err"; then
-        print -ru2 -- "pick-clipboard: rsync failed pulling $host:$rp (details: $rsync_err)"
+        if [[ "$rsync_err" == /dev/null ]]; then
+          print -ru2 -- "pick-clipboard: rsync failed pulling $host:$rp"
+        else
+          print -ru2 -- "pick-clipboard: rsync failed pulling $host:$rp (details: $rsync_err)"
+        fi
         return 1
       fi
-      rm -f "$rsync_err"
+      if [[ "$rsync_err" != /dev/null ]]; then rm -f "$rsync_err"; fi
       (( pulled += 1 ))
     fi
     local_paths+=("$lp")
