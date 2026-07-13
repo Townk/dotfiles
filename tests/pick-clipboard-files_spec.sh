@@ -982,3 +982,165 @@ EOF
     The status should be success
   End
 End
+
+# X8: a files/file/directory row's path was right-truncated
+# (substr(...,1,CW-1)||'…') exactly like a text row, which chops off the
+# BASENAME -- the part that matters. clip::shorten_path (list rows) and the
+# preview_script's fold-based wrap (preview pane) fix that; see the X8
+# comment block above EMIT_ROW_BODY in the picker script for the full
+# design (why a zsh/bash-portable helper + a \x02-marker splice in
+# emit_rows/emit_script, rather than doing tail-truncation in pure SQL).
+Describe 'pick-clipboard: file-path rendering keeps the basename (X8)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
+  LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  setup() {
+    # No SSH_CONNECTION -> bridge_up is false -> no live row, so emit_rows'
+    # output below is exactly the seeded DB rows, nothing synthetic mixed in.
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    export PICK_CLIPBOARD_DB="$DB"
+    rm -f "$DB"
+    sqlite3 "$DB" '
+      CREATE TABLE clips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text_preview TEXT,
+        text_plain TEXT,
+        len INTEGER,
+        first_ts REAL,
+        last_ts REAL,
+        source_app TEXT,
+        source_bundle_id TEXT,
+        type_kind TEXT,
+        regtype TEXT,
+        pinned INTEGER DEFAULT 0,
+        type_hash TEXT,
+        source_host TEXT
+      );
+      CREATE TABLE clip_types (
+        clip_id INTEGER,
+        uti TEXT,
+        blob BLOB,
+        PRIMARY KEY (clip_id, uti)
+      );
+    '
+    export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
+    export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    export PICK_CLIPBOARD_NO_RUN=1
+    export SCRIPT_PATH="$SCRIPT"
+  }
+  BeforeEach 'setup'
+
+  # run_list_content -- sources the picker under PICK_CLIPBOARD_NO_RUN, calls
+  # emit_rows, and for each row prints just the visible content column
+  # (everything before the first \x1f tail field), with ANSI color codes
+  # stripped -- the padded/truncated text this fix is about, with none of
+  # the glyph/color noise around it.
+  run_list_content() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      emit_rows | while IFS= read -r line; do
+        vis=${line%%$'"'"'\x1f'"'"'*}
+        print -r -- "$vis"
+      done | sed -E $'"'"'s/\x1b\[[0-9;]*m//g'"'"'
+    '
+  }
+
+  It 'a long single-file path in a narrow CW: list content keeps the basename, elides the head with a leading …/'
+    export PICK_CLIPBOARD_CONTENT_WIDTH=20
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('file','/Users/thiago/.local/share/chezmoi/Makefile','mac-mini',100);"
+
+    When call run_list_content
+    The status should be success
+    The output should include "…/chezmoi/Makefile"
+    The output should not include ".local/share/chezmoi/Makefile"
+  End
+
+  It 'a multi-file row: list content shows the first file'"'"'s tail + a (+N) suffix for the rest'
+    export PICK_CLIPBOARD_CONTENT_WIDTH=30
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('files','/tmp/one.txt
+/tmp/two.txt
+/tmp/three.txt','mac-mini',100);"
+
+    When call run_list_content
+    The status should be success
+    The output should include "/tmp/one.txt (+2)"
+  End
+
+  # Non-file kinds are untouched: same substr(...,1,CW-1)||'…' right-truncate
+  # as before X8 (requirement 3).
+  It 'a text row still gets the plain right-truncate (unchanged by X8)'
+    export PICK_CLIPBOARD_CONTENT_WIDTH=10
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, text_preview, source_host, last_ts) VALUES ('text','a rather long line of text','a rather long line of text','mac-mini',100);"
+
+    When call run_list_content
+    The status should be success
+    The output should include "a rather …"
+    The output should not include "…/"
+  End
+
+  It 'the preview pane for a files row wraps a long path across multiple lines, dropping no characters'
+    long_path="/Users/thiago/.local/share/chezmoi/home/dot_local/libexec/executable_pick-clipboard-with-an-unusually-long-name.sh"
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('file','$long_path','mac-mini',100); SELECT last_insert_rowid();")
+
+    outfile="$SHELLSPEC_TMPBASE/preview-out-$id"
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      FZF_PREVIEW_COLUMNS=20 bash "$preview_script" "$1" > "$2"
+    ' _ "$id" "$outfile"
+    first_line=$(head -1 "$outfile")
+    flat=$(tr -d '\n' < "$outfile")
+
+    When call test "${#first_line}" -le 20
+    The status should be success
+    The variable flat should include "$long_path"
+  End
+
+  It 'the preview pane for a multi-file row still shows every path (unwrapped, since each fits the pane)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('files','/tmp/a.txt
+/tmp/b.txt','mac-mini',100); SELECT last_insert_rowid();")
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      bash "$preview_script" "$1"
+    ' _ "$id" 2>&1)"
+    When call test -n "$result"
+    The status should be success
+    The variable result should include "/tmp/a.txt"
+    The variable result should include "/tmp/b.txt"
+  End
+
+  # --- clip::shorten_path (pure-function unit tests) --------------------------
+  It 'clip::shorten_path: a path that already fits the width is returned whole'
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::shorten_path "/tmp/a.txt" 20
+    ')"
+    When call test -n "$result"
+    The status should be success
+    The variable result should equal "/tmp/a.txt"
+  End
+
+  It 'clip::shorten_path: a path over budget is tail-truncated, keeping the basename + as many trailing segments as fit'
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::shorten_path "/Users/thiago/.local/share/chezmoi/Makefile" 18
+    ')"
+    When call test -n "$result"
+    The status should be success
+    The variable result should equal "…/chezmoi/Makefile"
+  End
+
+  It 'clip::shorten_path: a single segment longer than the width falls back to ITS OWN trailing chars'
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::shorten_path "areallylongfilenamewithoutanyslashesatall.txt" 10
+    ')"
+    When call test -n "$result"
+    The status should be success
+    The variable result should equal "satall.txt"
+    The variable result should not include "/"
+  End
+End

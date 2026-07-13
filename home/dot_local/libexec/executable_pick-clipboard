@@ -934,6 +934,128 @@ words_expr="CASE WHEN text_plain IS NULL OR text_plain='' THEN 0 ELSE length(tri
 preview_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-preview.XXXXXX")
 PREVIEW_CMD="bash $preview_script {2}"
 
+# --- X8: file/dir/files row content -- keep the basename, not the head -----
+# A files/file/directory row's content used to get the SAME right-truncate
+# (substr(...,1,CW-1)||'…') as a text row, which chops the tail off a path --
+# exactly the part (the basename) that matters. Doing tail-aware truncation
+# ("keep the basename + as many trailing segments as fit, elide the head
+# with a leading '…/'") in pure SQL is awkward, so EMIT_ROW_BODY instead
+# marks these three kinds' content with \x02<kind>\x02<raw>\x03 (raw
+# newlines swapped for \x01 so a multi-file row's manifest still round-trips
+# as ONE line through the sqlite3->fzf pipe) and clip::filter_file_rows
+# rewrites just that span, byte for byte leaving every other row (text/rtf/
+# html/image/url) exactly as SQL rendered it -- requirement 3.
+#
+# Written in portable bash+zsh parameter-expansion only (no zsh-only :t/:h
+# modifiers, no arrays) because the SAME source has to run unmodified in two
+# places: eval'd into this script's own zsh session (emit_rows, and any test
+# that sources the file under PICK_CLIPBOARD_NO_RUN), AND pasted verbatim
+# into the emit_script reload script below, which fzf always runs via
+# `bash $emit_script` regardless of its shebang -- a fresh shell that can't
+# see this script's zsh functions (the same constraint EMIT_ROW_BODY's own
+# SQL duplication works around).
+CLIP_SHORTEN_FUNCS=$(cat <<'SHORTENEOF'
+clip::shorten_path() {
+  # $1 = path, $2 = width (characters) -> stdout the path, whole if it
+  # already fits, else tail-truncated: basename + as many trailing "/seg"
+  # groups as fit under width, prefixed with a leading '…/'. If even the
+  # bare basename doesn't fit, falls back to ITS OWN trailing $width
+  # characters (still the tail, never the head) -- the single-segment-
+  # longer-than-width edge case.
+  #
+  # NOTE: the parameter is named "srcpath", not "path" AND NOT "fpath" --
+  # zsh's lowercase $path is a special array tied to $PATH (a plain
+  # `local path=...` shadows it and silently breaks command lookup for the
+  # rest of this function's scope), and $fpath is the SAME kind of tied
+  # special array (the function autoload search path) -- `local fpath=...`
+  # doesn't error, it just silently makes ${#fpath} return the ARRAY
+  # element count (1) instead of the string length, which is exactly the
+  # bug this function exists to avoid for the path it's given (confirmed
+  # empirically; clip::path_to_file_url elsewhere in this file gets away
+  # with "fpath" only because it never takes ${#fpath}). Every other local
+  # here is `local` for the same reason one level down: undeclared
+  # assignments inside a zsh function walk UP the call stack to the
+  # nearest existing scope of that name (or global) -- this runs nested
+  # inside clip::filter_file_rows/clip::render_file_content, so an
+  # undeclared `width` etc. here would clobber theirs.
+  local srcpath=$1 width=$2 base kept rest seg cand prevrest
+  [ "$width" -lt 1 ] && width=1
+  if [ "${#srcpath}" -le "$width" ]; then
+    printf '%s' "$srcpath"
+    return 0
+  fi
+  base=${srcpath##*/}
+  if [ "${#base}" -ge "$width" ]; then
+    printf '%s' "${base:$((${#base} - width))}"
+    return 0
+  fi
+  kept=$base; rest=${srcpath%/*}
+  while [ "$rest" != "$srcpath" ] && [ -n "$rest" ] && [ "$rest" != "/" ]; do
+    seg=${rest##*/}
+    cand="$seg/$kept"
+    if [ $(( ${#cand} + 2 )) -gt "$width" ]; then
+      break
+    fi
+    kept=$cand
+    prevrest=$rest
+    rest=${rest%/*}
+    [ "$rest" = "$prevrest" ] && break
+  done
+  printf '…/%s' "$kept"
+}
+clip::render_file_content() {
+  # $1 = type_kind (files|file|directory), $2 = raw text_preview (real
+  # newlines restored), $3 = width -> stdout the row content, NOT yet
+  # padded (the caller pads to width). A "files" manifest shows the first
+  # path's tail + " (+N)" for the rest; file/directory show the one path's
+  # tail.
+  local kind=$1 raw=$2 width=$3 first total extra suffix budget
+  if [ "$kind" = files ]; then
+    first=${raw%%$'\n'*}
+    total=$(printf '%s\n' "$raw" | wc -l | tr -d ' ')
+    extra=$(( total - 1 ))
+    if [ "$extra" -gt 0 ]; then
+      suffix=" (+${extra})"
+      budget=$(( width - ${#suffix} ))
+      [ "$budget" -lt 1 ] && budget=1
+      printf '%s%s' "$(clip::shorten_path "$first" "$budget")" "$suffix"
+    else
+      clip::shorten_path "$first" "$width"
+    fi
+  else
+    clip::shorten_path "$raw" "$width"
+  fi
+}
+clip::filter_file_rows() {
+  # $1 = width -> reads emitted rows on stdin, writes to stdout. Only rows
+  # carrying the \x02<kind>\x02<raw>\x03 marker get rewritten; every other
+  # row passes through byte for byte.
+  local width=$1 line pre rest kind raw_enc post raw content pad
+  while IFS= read -r line; do
+    case "$line" in
+      *$'\x02'*$'\x02'*$'\x03'*)
+        pre=${line%%$'\x02'*}
+        rest=${line#*$'\x02'}
+        kind=${rest%%$'\x02'*}
+        rest=${rest#*$'\x02'}
+        raw_enc=${rest%%$'\x03'*}
+        post=${rest#*$'\x03'}
+        raw=${raw_enc//$'\x01'/$'\n'}
+        content=$(clip::render_file_content "$kind" "$raw" "$width")
+        pad=$(( width - ${#content} ))
+        [ "$pad" -lt 0 ] && pad=0
+        printf '%s%s%*s%s\n' "$pre" "$content" "$pad" '' "$post"
+        ;;
+      *)
+        printf '%s\n' "$line"
+        ;;
+    esac
+  done
+}
+SHORTENEOF
+)
+eval "$CLIP_SHORTEN_FUNCS"
+
 # --- the row stream ---------------------------------------------------------
 # Item line = 3 columns, all rows aligned:
 #   col 1: type icon (colored by type)
@@ -1003,7 +1125,10 @@ EMIT_ROW_BODY="WITH palette AS (
       || reset
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
-      || printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-1)) THEN '…' ELSE '' END)
+      || CASE WHEN type_kind IN ('files','file','directory')
+              THEN char(2) || type_kind || char(2) || replace(IFNULL(text_preview,'['||type_kind||']'), char(10), char(1)) || char(3)
+              ELSE printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-1)) THEN '…' ELSE '' END)
+         END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
       || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
@@ -1029,13 +1154,18 @@ EMIT_SQL_BELOW="${EMIT_ROW_BODY}
     LIMIT "
 
 emit_rows() {
-  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL_ABOVE"
-  [[ -n "$live_row_file" && -f "$live_row_file" ]] && cat "$live_row_file"
-  local -i a below_limit
-  a=$(sqlite3 "$DB_FILE" "$EMIT_COUNT_ABOVE")
-  below_limit=$(( PICK_LIMIT - a - LIVE_COUNT ))
-  (( below_limit < 0 )) && below_limit=0
-  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "${EMIT_SQL_BELOW}${below_limit};"
+  # X8: pipe through clip::filter_file_rows so a files/file/directory row's
+  # \x02-marked content (see EMIT_ROW_BODY) gets tail-truncated instead of
+  # the generic right-truncate every other kind still gets untouched.
+  {
+    sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL_ABOVE"
+    [[ -n "$live_row_file" && -f "$live_row_file" ]] && cat "$live_row_file"
+    local -i a below_limit
+    a=$(sqlite3 "$DB_FILE" "$EMIT_COUNT_ABOVE")
+    below_limit=$(( PICK_LIMIT - a - LIVE_COUNT ))
+    (( below_limit < 0 )) && below_limit=0
+    sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "${EMIT_SQL_BELOW}${below_limit};"
+  } | clip::filter_file_rows "$CW"
 }
 
 # --- temp scripts for --key-reload (delete / pin + list refresh) -------------
@@ -1057,6 +1187,15 @@ cat > "$emit_script" <<EOF
 fc=\${PTY_FRAME_COLUMNS:-\${FZF_COLUMNS:-80}}
 cw=\$((fc * 55 / 100 - 12)); [ \$cw -lt 10 ] && cw=10
 echo "[\$(date +%s)] PTY_FRAME_COLUMNS=\${PTY_FRAME_COLUMNS:-?} fc=\$fc cw=\$cw" >> /tmp/pick-clipboard-dims.log
+# X8: clip::shorten_path/render_file_content/filter_file_rows, pasted
+# verbatim (this is a fresh shell -- see the temp-scripts comment above) so
+# the \x02-marked files/file/directory rows below get the SAME tail-aware
+# truncation as the initial emit_rows stream. See that helper's own comment
+# (above EMIT_ROW_BODY in this file) for why it's written portable
+# bash+zsh -- fzf always runs this reload script via a bare "bash" argv,
+# ignoring its shebang.
+${CLIP_SHORTEN_FUNCS}
+{
 # Synthetic LIVE row (§22): pre-rendered once at open into \$live_row_file;
 # catted here so it survives fzf reloads (delete/pin) without a re-fetch —
 # the entry reflects the peer clipboard as of picker open (§22.6). X9: no
@@ -1104,7 +1243,10 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       || reset
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
-      || printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
+      || CASE WHEN type_kind IN ('files','file','directory')
+              THEN char(2) || type_kind || char(2) || replace(IFNULL(text_preview,'['||type_kind||']'), char(10), char(1)) || char(3)
+              ELSE printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
+         END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
       || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
@@ -1158,7 +1300,10 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       || reset
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
-      || printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
+      || CASE WHEN type_kind IN ('files','file','directory')
+              THEN char(2) || type_kind || char(2) || replace(IFNULL(text_preview,'['||type_kind||']'), char(10), char(1)) || char(3)
+              ELSE printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
+         END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
       || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
@@ -1166,6 +1311,7 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
     WHERE pinned=0 AND last_ts <= ${live_ts_threshold}
     ORDER BY last_ts DESC
     LIMIT \$below_limit;"
+} | clip::filter_file_rows "\$cw"
 EOF
 cat > "$del_script" <<EOF
 #!/bin/sh
@@ -1194,6 +1340,25 @@ vw=\$((pc - lw)); [ \$vw -lt 4 ] && vw=4
 # a stored row; Source/Origin badge the peer host, Copied reads 'live'.
 if [ "\$id" = LIVE ]; then
   sqlite3 -escape off '$DB_FILE' "WITH d AS (SELECT CAST(readfile('$LIVE_TEXT_FILE') AS TEXT) AS body) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - (CASE WHEN body IS NULL OR body='' THEN 1 ELSE length(body)-length(replace(body,char(10),''))+1 END) - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr('—',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr('text',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr('remote ('||(CASE WHEN length('$LIVE_HOST')>9 THEN substr('$LIVE_HOST',1,4)||'…'||substr('$LIVE_HOST',-3) ELSE '$LIVE_HOST' END)||')',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(length(body),1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(CASE WHEN body IS NULL OR body='' THEN 0 ELSE length(trim(replace(body,char(10),' '))) - length(replace(trim(replace(body,char(10),' ')),' ','')) + 1 END,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr('live',1,\$vw)) || char(27)||'[0m' FROM d;"
+  exit 0
+fi
+# X8: a files/file/directory row's body is a path (or a newline-joined
+# manifest of paths) -- fzf's preview window doesn't wrap by default, so an
+# over-long single path was visually clipped at the pane edge even though
+# the full text was already in \`body\`. Wrap it ourselves (one path per
+# line; \`fold\` further breaks any line that's still too long) instead of
+# the generic single-line-of-\$vw rendering every other kind keeps. nlines
+# is recomputed from the WRAPPED text (not the raw row) so the footer still
+# bottom-aligns correctly.
+kind=\$(sqlite3 '$DB_FILE' "SELECT COALESCE(type_kind,'text') FROM clips WHERE id=\$id;")
+if [ "\$kind" = files ] || [ "\$kind" = file ] || [ "\$kind" = directory ]; then
+  raw=\$(sqlite3 -escape off '$DB_FILE' "SELECT COALESCE(text_plain,text_preview,'['||type_kind||']') FROM clips WHERE id=\$id;")
+  wrapfile=\$(mktemp "\${TMPDIR:-/tmp}/pick-clipboard-wrap.XXXXXX")
+  printf '%s\n' "\$raw" | fold -w "\$pc" > "\$wrapfile"
+  nlines=\$(wc -l < "\$wrapfile" | tr -d ' ')
+  [ "\$nlines" -lt 1 ] && nlines=1
+  sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT CAST(readfile('\$wrapfile') AS TEXT) AS body, \$nlines AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN ${remote_when} THEN 'remote ('||(CASE WHEN length(source_host)>9 THEN substr(source_host,1,4)||'…'||substr(source_host,-3) ELSE source_host END)||')' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
+  rm -f "\$wrapfile"
   exit 0
 fi
 sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,text_preview,'['||type_kind||']') AS body, CASE WHEN COALESCE(text_plain,text_preview) IS NULL OR COALESCE(text_plain,text_preview)='' THEN 1 ELSE length(COALESCE(text_plain,text_preview))-length(replace(COALESCE(text_plain,text_preview),char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN ${remote_when} THEN 'remote ('||(CASE WHEN length(source_host)>9 THEN substr(source_host,1,4)||'…'||substr(source_host,-3) ELSE source_host END)||')' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
