@@ -552,6 +552,22 @@ where "you" is decided by bridge-up:
 >   text, so the clip is visible in history without the bytes crossing yet
 >   (§12's lazy rule). No bridge (iPad) → clear error; file clips never ride
 >   OSC 52 (§14).
+>
+> **As-built note (X2, corrects the bullet above)**: the description above
+> was push-only and wrong — a live self-test showed a file copied over SSH
+> from a mini never showed up in the *mini's own* picker, only the laptop's.
+> The design principle (a file belongs to the machine whose bytes it is)
+> means the origin always gets a local clip too. `pbcopy <paths…>` over SSH
+> now does BOTH, in order: (1) the same local `U` send this section already
+> describes for sitting-at-the-Mac (to 127.0.0.1:2489, this machine's own
+> bridge) — the PRIMARY action, so the origin's own watcher records a local
+> `files` row and its own picker shows the clip; then (2) a best-effort peer
+> `N` push to the reverse-tunneled bridge (2490), so the far side can still
+> pull lazily. The peer push is now secondary: a down, outdated, or erroring
+> peer bridge only warns on stderr ("peer not notified") and exits 0 —
+> only a failure of the LOCAL `U` (no reachable bridge on this machine, or
+> an `E` reply) hard-fails the command, since that's the one action with no
+> fallback.
 > - `pbcopy --content <file>` — the file's *bytes* under a detected UTI
 >   (extension first, then `file --mime-type`) via the existing `C` op. This
 >   is the mode this section originally called `clip-copy`.

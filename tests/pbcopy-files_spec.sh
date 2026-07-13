@@ -128,12 +128,14 @@ EOF
     The stderr should include "bridge"
   End
 
-  # Over SSH + reverse-bridge-up (files-yazi design §5, T11): pbcopy pushes a
-  # manifest via op `N` instead of the local `U` -- OSC 52 cannot carry files
-  # at all, so this is the only path. Host field: replicate pbcopy's own
-  # scutil-then-hostname fallback here rather than stubbing either, so the
-  # assertion tracks whatever this machine actually resolves to.
-  It 'sends an N frame to :2490 with this host and the NUL-joined absolute paths (bridge up)'
+  # X2 rework: a file copied over SSH belongs to the machine whose bytes it
+  # is -- pbcopy now records a LOCAL origin clip (op `U` to this machine's
+  # OWN bridge, 2489) as the PRIMARY action, then best-effort pushes a peer
+  # manifest (op `N` to the reverse-tunneled bridge, 2490) so the far side
+  # can pull lazily. Host field: replicate pbcopy's own scutil-then-hostname
+  # fallback here rather than stubbing either, so the assertion tracks
+  # whatever this machine actually resolves to.
+  It 'sends BOTH a U frame to :2489 (local origin clip) and an N frame to :2490 (peer manifest), in that order'
     export SSH_CONNECTION="x 1 y 22"
     expected_host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
     f1="$SHELLSPEC_TMPBASE/rem-a.txt"; touch "$f1"
@@ -143,9 +145,13 @@ EOF
     export NC_BRIDGE_UP=1
     When run command sh "$SCRIPT" "$f1" "$f2"
     The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:U"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:N"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$expected_host"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$cf1|$cf2"
+    # Order matters: the local U (origin clip, primary) must precede the N
+    # (peer manifest, best-effort secondary) in the log.
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should match pattern "*2489:U*2490:N*"
   End
 
   It 'honors CLIPBOARD_BRIDGE_PORT for the SSH+files probe and frame'
@@ -167,37 +173,111 @@ EOF
     The status should be success
   End
 
-  It 'fails loudly when the manifest push gets an E reply'
+  # X2 rework: the local U (primary action) already succeeded by the time the
+  # peer N is attempted, so an N-side error is now a WARNING, never a command
+  # failure. Needs a port-differentiated fake nc: 2489 (local U) must reply
+  # O so the primary action truly succeeds, while 2490 (peer N) replies E --
+  # the shared setup() fake nc can't express that since NC_REPLY isn't
+  # port-scoped.
+  It 'warns (not fails) when the manifest push gets an E reply -- the local origin clip already succeeded'
     export SSH_CONNECTION="x 1 y 22"
-    export NC_BRIDGE_UP=1
-    export NC_REPLY=err
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+if [ "\$1" = "-z" ]; then
+  exit 0
+fi
+port=\$3
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+rm -f "\$raw"
+if [ "\$port" = "2489" ]; then
+  printf 'O\\000\\000\\000\\000'
+else
+  printf 'E\\000\\000\\000\\004boom'
+fi
+EOF
+    chmod +x "$BINDIR/nc"
     f1="$SHELLSPEC_TMPBASE/rem-err.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
-    The status should be failure
+    The status should be success
     The stderr should include "boom"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:U"
   End
 
-  # Rework R7: an "unknown opcode" E-reply on the REMOTE (:2490/peer) send
-  # means the OTHER machine's bridge predates file clips.
-  It 'gives an actionable hint (peer bridge outdated) when the manifest push gets unknown opcode'
+  # Rework R7 (still true under X2): an "unknown opcode" E-reply on the
+  # REMOTE (:2490/peer) send means the OTHER machine's bridge predates file
+  # clips -- but under X2 that's only a warning, since the local U already
+  # recorded the origin clip. Same port-differentiated fake nc as above.
+  It 'gives an actionable hint (peer bridge outdated) when the manifest push gets unknown opcode, but still exits 0'
     export SSH_CONNECTION="x 1 y 22"
-    export NC_BRIDGE_UP=1
-    export NC_REPLY=unknown_opcode
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+if [ "\$1" = "-z" ]; then
+  exit 0
+fi
+port=\$3
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+rm -f "\$raw"
+if [ "\$port" = "2489" ]; then
+  printf 'O\\000\\000\\000\\000'
+else
+  printf 'E\\000\\000\\000\\016unknown opcode'
+fi
+EOF
+    chmod +x "$BINDIR/nc"
     f1="$SHELLSPEC_TMPBASE/rem-unknown.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
-    The status should be failure
+    The status should be success
     The stderr should include "peer bridge doesn't support file clips yet"
     The stderr should include "unknown opcode"
     The stderr should include "update chezmoi on the other machine"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:U"
   End
 
-  It 'errors with the reverse-bridge message when no bridge is up, without sending a frame'
+  # X2 rework: a down reverse bridge no longer fails the command -- the local
+  # origin clip (U to 2489) is the primary action and still lands; only the
+  # peer notification (N to 2490) is skipped, with a warning naming why.
+  It 'still records the local origin clip and warns (exit 0) when the peer bridge (2490) is down'
     export SSH_CONNECTION="x 1 y 22"
     export NC_BRIDGE_UP=0
     f1="$SHELLSPEC_TMPBASE/rem-nobridge.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
+    The status should be success
+    The stderr should include "peer"
+    The stderr should include "not notified"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:U"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2490:N"
+  End
+
+  # X2 rework: this machine's OWN bridge (2489) is the primary action -- if
+  # IT is unreachable, that's a hard error (there is no local-tool fallback
+  # for a file clip), regardless of the peer bridge's state.
+  It 'hard-errors (exit 1) when this machine'"'"'s own bridge (2489) is unreachable'
+    export SSH_CONNECTION="x 1 y 22"
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+if [ "\$1" = "-z" ]; then
+  exit 0
+fi
+port=\$3
+if [ "\$port" = "2489" ]; then
+  cat > /dev/null
+  exit 1
+fi
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+rm -f "\$raw"
+printf 'O\\000\\000\\000\\000'
+EOF
+    chmod +x "$BINDIR/nc"
+    f1="$SHELLSPEC_TMPBASE/rem-local-down.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
     The status should be failure
-    The stderr should include "pbcopy: file clips need the reverse bridge (OSC 52 cannot carry files)"
+    The stderr should include "this machine's own clipboard bridge"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should equal ""
   End
 
