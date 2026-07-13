@@ -710,7 +710,12 @@ clip::op_persist() {
   print -rn -- "$preview" > "$tmpd/preview"
   print -rn -- "$app"     > "$tmpd/app"
   local existing
-  existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh' AND type_hash='$hash' LIMIT 1;" 2>/dev/null)
+  # Dedup is scoped by type_kind too -- host+hash alone collides with a
+  # push-manifest (N) row of the same text (a file list's newline-joined
+  # paths hash identically to that same string arriving as plain text). Without
+  # the kind filter, a text P-persist could match and bump an unrelated FILES
+  # row's last_ts instead of inserting its own text row (and vice versa).
+  existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh' AND type_hash='$hash' AND type_kind='$ek' LIMIT 1;" 2>/dev/null)
   if [[ -n "$existing" ]]; then
     sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null
     rm -rf -- "$tmpd"; send_ok ""; return
@@ -825,7 +830,12 @@ clip::op_push_manifest() {
   local -i len=$#text
 
   local existing
-  existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh' AND type_hash='$hash' LIMIT 1;" 2>/dev/null)
+  # Scoped to type_kind='files' -- host+hash alone collides with a plain text
+  # row hashing the same string (e.g. a remote pbcopy of a path that matches
+  # an old text clip verbatim). Without this filter the dedup would bump that
+  # text row's last_ts instead of inserting/updating the files manifest,
+  # leaving both pickers showing "text" and nothing to paste as files.
+  existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh' AND type_hash='$hash' AND type_kind='files' LIMIT 1;" 2>/dev/null)
   local row_id
   if [[ -n "$existing" ]]; then
     sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null

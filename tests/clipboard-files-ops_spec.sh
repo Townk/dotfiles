@@ -443,6 +443,149 @@ Describe 'clipboard-bridge-dispatch: N push-manifest'
     The line 2 of contents of file "$originfile" should equal "$expected_hash"
     The line 4 of contents of file "$originfile" should equal "suppress-echo"
   End
+
+  # Regression (X1, live-validated): the dedup keyed off (source_host,
+  # type_hash) alone collides with a plain TEXT row whose text happens to
+  # hash-match the newline-joined paths -- a real scenario when a remote
+  # `pbcopy <file>` sends a path string that matches an earlier text copy
+  # from the same host verbatim. Before the fix, N's dedup query had no
+  # type_kind filter, so this UPDATEd the old text row's last_ts instead of
+  # inserting the files manifest -- both pickers kept showing "text" and
+  # Finder had nothing to paste. type_kind must be part of the dedup key.
+  It 'inserts a NEW files row (not bumping a same-hash TEXT row) when the joined paths collide with an old text clip'
+    joined=$(printf '/tmp/collide-a.txt\n/tmp/collide-b.txt')
+    collide_hash=$(printf '%s' "$joined" | shasum -a 256 | awk '{print $1}')
+    text_id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, type_hash, last_ts, text_plain) \
+      VALUES ('text','collidehost','$collide_hash',50.0,'$joined'); SELECT last_insert_rowid();")
+
+    build_req collidehost /tmp/collide-a.txt /tmp/collide-b.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+
+    files_count=$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='collidehost' AND type_kind='files';")
+    The variable files_count should equal "1"
+
+    files_id=$(sqlite3 "$DB" "SELECT id FROM clips WHERE source_host='collidehost' AND type_kind='files';")
+    manifestfile="$SHELLSPEC_TMPBASE/collide-manifest-out"
+    sqlite3 "$DB" "SELECT writefile('$manifestfile', blob) FROM clip_types WHERE clip_id=$files_id AND uti='x-file-manifest';" >/dev/null
+    manifest_paths=$(tr '\000' '|' < "$manifestfile")
+    The variable manifest_paths should equal "/tmp/collide-a.txt|/tmp/collide-b.txt"
+
+    text_kind=$(sqlite3 "$DB" "SELECT type_kind FROM clips WHERE id=$text_id;")
+    The variable text_kind should equal "text"
+    text_ts=$(sqlite3 "$DB" "SELECT last_ts FROM clips WHERE id=$text_id;")
+    The variable text_ts should equal "50.0"
+
+    The variable files_id should not equal "$text_id"
+  End
+
+  # Companion to the above: dedup must still work WITHIN the files kind --
+  # sending the identical N payload twice must not create a second files row.
+  It 'dedups a repeated N of the same host+paths to a single files row'
+    build_req dupsend /tmp/dup-a.txt /tmp/dup-b.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+
+    build_req dupsend /tmp/dup-a.txt /tmp/dup-b.txt
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP" 2>/dev/null
+    status2=$(head -c1 "$RESP")
+    The variable status2 should equal "O"
+
+    files_count=$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='dupsend' AND type_kind='files';")
+    The variable files_count should equal "1"
+  End
+End
+
+# P persist: the symmetric hazard to N above (X1 regression). op_persist's
+# own dedup was keyed on the same (source_host, type_hash) shape with no
+# type_kind filter -- a text payload arriving with a hash that happens to
+# match an existing FILES row (e.g. an N-pushed manifest) would bump that
+# files row's last_ts for what is really an unrelated text paste, instead of
+# inserting its own text row. Confirms clip::op_persist's dedup query is
+# scoped by type_kind exactly like op_push_manifest's now is.
+Describe 'clipboard-bridge-dispatch: P persist'
+  DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
+    mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    rm -f "$DB"
+    sqlite3 "$DB" '
+      CREATE TABLE clips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text_preview TEXT,
+        text_plain TEXT,
+        len INTEGER,
+        first_ts REAL,
+        last_ts REAL,
+        source_app TEXT,
+        source_bundle_id TEXT,
+        type_kind TEXT,
+        regtype TEXT,
+        pinned INTEGER DEFAULT 0,
+        type_hash TEXT,
+        source_host TEXT
+      );
+      CREATE TABLE clip_types (
+        clip_id INTEGER,
+        uti TEXT,
+        blob BLOB,
+        PRIMARY KEY (clip_id, uti)
+      );
+    '
+    REQ="$SHELLSPEC_TMPBASE/p-req"
+    RESP="$SHELLSPEC_TMPBASE/p-resp"
+  }
+  BeforeEach 'setup'
+
+  # be32 <n> -- mirrors the dispatcher's own int_to_be32 (see the N describe
+  # block above for the identical helper/rationale).
+  be32() {
+    n=$1
+    printf "\\$(printf %03o $(( (n >> 24) & 255 )))\\$(printf %03o $(( (n >> 16) & 255 )))\\$(printf %03o $(( (n >> 8) & 255 )))\\$(printf %03o $(( n & 255 )))"
+  }
+
+  # build_req <host> <kind> <app> <regtype> <text> -- writes a framed P
+  # request to $REQ. Payload shape (op_persist's header comment):
+  #   source_host US kind US app US regtype RS text
+  build_req() {
+    _host=$1 _kind=$2 _app=$3 _regtype=$4 _text=$5
+    _payfile="$SHELLSPEC_TMPBASE/p-payload"
+    printf '%s\037%s\037%s\037%s\036%s' "$_host" "$_kind" "$_app" "$_regtype" "$_text" > "$_payfile"
+    _len=$(wc -c < "$_payfile" | tr -d ' ')
+    { printf 'P'; be32 "$_len"; cat "$_payfile"; } > "$REQ"
+  }
+
+  # -f: see the matching note on the U describe block above (skips
+  # ~/.zshenv, which would clobber the sandbox XDG overrides).
+  It 'inserts a NEW text row (not bumping a same-hash FILES row) when the text collides with an existing manifest hash'
+    text="hello from a persisted paste"
+    collide_hash=$(printf '%s' "$text" | shasum -a 256 | awk '{print $1}')
+    files_id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, type_hash, last_ts) \
+      VALUES ('files','pdup','$collide_hash',77.0); SELECT last_insert_rowid();")
+
+    build_req pdup text someapp "" "$text"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+
+    text_count=$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='pdup' AND type_kind='text';")
+    The variable text_count should equal "1"
+    text_plain=$(sqlite3 "$DB" "SELECT text_plain FROM clips WHERE source_host='pdup' AND type_kind='text';")
+    The variable text_plain should equal "$text"
+
+    files_kind=$(sqlite3 "$DB" "SELECT type_kind FROM clips WHERE id=$files_id;")
+    The variable files_kind should equal "files"
+    files_ts=$(sqlite3 "$DB" "SELECT last_ts FROM clips WHERE id=$files_id;")
+    The variable files_ts should equal "77.0"
+
+    total=$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='pdup';")
+    The variable total should equal "2"
+  End
 End
 
 # F fetch-file: M3 extends the existing raw-bytes op with one new error case
