@@ -190,41 +190,57 @@ local function parse_porcelain_line(line)
 	return nil
 end
 
--- paste_system_remote(force) -- R1 rework of the remote branch (design §8,
--- as originally written, deferred a background-pull option; a live
--- validation session found the ORIGINAL implementation -- a blocking
--- foreground `shell --block` -- pulled yazi off its alternate screen for the
--- whole transfer, so a FAST paste read as a blank-screen crash). Bytes cross
--- machines via the bridge's F/A streams, which can take a while, so this
--- streams `pbpaste --files --porcelain` INCREMENTALLY off a background
--- `Command` -- `Command:spawn()` + `Child:read_line()` in a loop, verified
--- against yazi 26.5.6's types.yazi package (`Child:read_line` -> `string?,
--- integer`, event 0 = stdout line, 1 = stderr line, 2 = EOF on both) and
--- against ouch.yazi's own `spawn()`/`read_line()` preview loop, which uses
--- exactly this pattern to stream a running child's output. `Command:output()`
--- / `Child:wait_with_output()` both wait for the child to exit and would
--- forfeit live progress entirely, so neither is an option here. Progress
--- surfaces via throttled `ya.notify` updates -- one per completed item, or
--- every ~10% of a large in-flight item -- never per 64 KiB tick (the shim's
--- own internal cadence; a toast per tick would spam the screen far worse
--- than the blank flash this replaces). Percent is clamped at 100: an `A`
--- (directory) total is only a `du` estimate, so an in-flight item's `done`
--- can transiently exceed `total`. `touch_last_paste` runs after this
--- returns, same "regardless of outcome" rule as the local branch below.
-local function paste_system_remote(force)
-	local args = { "--files", "--porcelain" }
-	if force then
-		args[#args + 1] = "--force"
+-- parse_cap_refusal(line) -- recognizes pbpaste_files_cap_check's
+-- non-interactive refusal line (executable_pbpaste, `pbpaste_files_cap_check`
+-- ~line 428-458), the ONLY signal this plugin has that a background paste
+-- hit the per-item size cap rather than failing for some other reason
+-- (truncated stream, name conflict, etc). PARSE CONTRACT (mirrored in a
+-- comment on the pbpaste side -- keep both in sync on any change):
+--   pbpaste: <label> exceeds size cap (CLIP_FILE_MAX=<cap> bytes, item is <bytes> bytes) -- refusing (...)
+-- Only the fixed substring up through "-- refusing" is load-bearing; the
+-- parenthetical AFTER "refusing" is free-form human text for non-yazi
+-- callers and is deliberately NOT parsed here (pbpaste is free to reword it
+-- without breaking this plugin, as long as the piece before "-- refusing"
+-- doesn't change shape). Returns {label=, cap=, bytes=} or nil.
+local function parse_cap_refusal(line)
+	local label, cap, bytes =
+		line:match("^pbpaste: (.-) exceeds size cap %(CLIP_FILE_MAX=(%d+) bytes, item is (%d+) bytes%) %-%- refusing")
+	if not label then
+		return nil
 	end
-	local child, spawn_err = Command("pbpaste"):arg(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+	return { label = label, cap = tonumber(cap), bytes = tonumber(bytes) }
+end
+
+-- MAX_CAP_CONFIRMS -- design note (W1 item 4): pbpaste aborts its ENTIRE run
+-- on the FIRST item that exceeds CLIP_FILE_MAX (design §11), so a multi-item
+-- paste can surface a DISTINCT cap refusal per retry -- item 2's refusal
+-- only appears once item 1's retry has been approved and gotten past it.
+-- The spec's "retry once" rule is therefore applied PER DISTINCT REFUSAL,
+-- not once per `p` keypress: each new refusal earns its own confirm+retry,
+-- letting a several-large-files paste clear its cap items one at a time.
+-- This constant bounds the TOTAL number of confirms shown in one `p`
+-- invocation, so a pathological clip (or a shim bug that keeps re-refusing
+-- the same item despite a raised cap) can't loop forever prompting the
+-- user -- once the budget is spent, any further refusal surfaces as a plain
+-- error notify instead of another dialog.
+local MAX_CAP_CONFIRMS = 3
+
+-- run_remote_once(args, env_max) -- spawns `pbpaste --files --porcelain`
+-- once (optionally with CLIP_FILE_MAX raised to env_max for a cap-refusal
+-- retry) and streams it to completion, exactly the loop paste_system_remote
+-- used to run inline before it grew a retry wrapper. Returns
+-- `ok, summary, stderr_lines`: `ok` is the child's success status (falsy if
+-- spawn itself failed), `summary` is the parsed `done` line (nil if the run
+-- failed before one arrived), `stderr_lines` is every stderr line seen (or
+-- a single synthetic entry naming the spawn error).
+local function run_remote_once(args, env_max)
+	local cmd = Command("pbpaste"):arg(args)
+	if env_max then
+		cmd = cmd:env("CLIP_FILE_MAX", tostring(env_max))
+	end
+	local child, spawn_err = cmd:stdout(Command.PIPED):stderr(Command.PIPED):spawn()
 	if not child then
-		ya.notify({
-			title = "Clipboard",
-			content = "Paste failed: " .. tostring(spawn_err or "could not start pbpaste --files"),
-			timeout = 5,
-			level = "error",
-		})
-		return
+		return false, nil, { tostring(spawn_err or "could not start pbpaste --files") }
 	end
 
 	local stderr_lines = {}
@@ -268,26 +284,116 @@ local function paste_system_remote(force)
 	end
 
 	local status = child:wait()
-	if status and status.success and summary then
-		ya.notify({
-			title = "Clipboard",
-			content = string.format(
-				"Pasted %d file(s), %s in %ds",
-				summary.files,
-				human_size(summary.bytes),
-				summary.seconds
-			),
-			timeout = 3,
-		})
-	else
-		local reason = (#stderr_lines > 0 and table.concat(stderr_lines, "\n"))
-			or "pbpaste --files --porcelain failed to run"
-		ya.notify({
-			title = "Clipboard",
-			content = "Paste failed: " .. reason,
-			timeout = 5,
-			level = "error",
-		})
+	return status and status.success, summary, stderr_lines
+end
+
+-- paste_system_remote(force) -- R1 rework of the remote branch (design §8,
+-- as originally written, deferred a background-pull option; a live
+-- validation session found the ORIGINAL implementation -- a blocking
+-- foreground `shell --block` -- pulled yazi off its alternate screen for the
+-- whole transfer, so a FAST paste read as a blank-screen crash). Bytes cross
+-- machines via the bridge's F/A streams, which can take a while, so this
+-- streams `pbpaste --files --porcelain` INCREMENTALLY off a background
+-- `Command` -- `Command:spawn()` + `Child:read_line()` in a loop, verified
+-- against yazi 26.5.6's types.yazi package (`Child:read_line` -> `string?,
+-- integer`, event 0 = stdout line, 1 = stderr line, 2 = EOF on both) and
+-- against ouch.yazi's own `spawn()`/`read_line()` preview loop, which uses
+-- exactly this pattern to stream a running child's output. `Command:output()`
+-- / `Child:wait_with_output()` both wait for the child to exit and would
+-- forfeit live progress entirely, so neither is an option here. Progress
+-- surfaces via throttled `ya.notify` updates -- one per completed item, or
+-- every ~10% of a large in-flight item -- never per 64 KiB tick (the shim's
+-- own internal cadence; a toast per tick would spam the screen far worse
+-- than the blank flash this replaces). Percent is clamped at 100: an `A`
+-- (directory) total is only a `du` estimate, so an in-flight item's `done`
+-- can transiently exceed `total`. `touch_last_paste` runs after this
+-- returns, same "regardless of outcome" rule as the local branch below.
+--
+-- W1 (this run): unlike the TERMINAL flow (which keeps pbpaste's own
+-- gum/`read </dev/tty` confirm, since a real controlling terminal is
+-- reachable there), this background `Command` never has a TTY, so
+-- pbpaste_files_cap_check always took its non-interactive refusal branch --
+-- an over-cap paste could never be approved from yazi at all. This loop
+-- recognizes that specific refusal (parse_cap_refusal) and raises a native
+-- `ya.confirm` dialog naming the item, its size, and the cap; on YES it
+-- retries the SAME command with CLIP_FILE_MAX raised just above that item's
+-- size (via `Command:env`, verified against types.yazi -- no shell prefix
+-- needed). See MAX_CAP_CONFIRMS above for how repeats across multiple
+-- over-cap items in one paste are bounded.
+local function paste_system_remote(force)
+	local args = { "--files", "--porcelain" }
+	if force then
+		args[#args + 1] = "--force"
+	end
+
+	local env_max -- CLIP_FILE_MAX override for a cap-refusal retry, raised
+	-- (never lowered) as each distinct refusal is approved, so an earlier
+	-- approved item doesn't get re-refused when the whole run restarts.
+	local confirms = 0
+
+	while true do
+		local ok, summary, stderr_lines = run_remote_once(args, env_max)
+		if ok and summary then
+			ya.notify({
+				title = "Clipboard",
+				content = string.format(
+					"Pasted %d file(s), %s in %ds",
+					summary.files,
+					human_size(summary.bytes),
+					summary.seconds
+				),
+				timeout = 3,
+			})
+			return
+		end
+
+		local refusal -- last cap-refusal line seen, if any (pbpaste emits at
+		-- most one per aborted run -- it stops at the first over-cap item)
+		for _, l in ipairs(stderr_lines) do
+			local parsed = parse_cap_refusal(l)
+			if parsed then
+				refusal = parsed
+			end
+		end
+
+		if refusal and confirms < MAX_CAP_CONFIRMS then
+			confirms = confirms + 1
+			local proceed = ya.confirm({
+				pos = { "center", w = 60, h = 10 },
+				title = "Clipboard: item exceeds size cap",
+				body = string.format(
+					"%s is %s, over the %s cap.\nPaste it anyway?",
+					refusal.label,
+					human_size(refusal.bytes),
+					human_size(refusal.cap)
+				),
+			})
+			if not proceed then
+				ya.notify({
+					title = "Clipboard",
+					content = "Paste cancelled (" .. refusal.label .. " exceeds size cap)",
+					timeout = 3,
+				})
+				return
+			end
+			env_max = math.max(env_max or 0, refusal.bytes)
+			-- loop: retry the whole run with the raised cap. A second
+			-- refusal of the SAME item despite env_max >= its bytes would
+			-- mean the shim disagrees with us about its own size -- that's
+			-- a bug, not something to keep retrying past the confirms
+			-- budget above, so it just spends another confirm like any
+			-- other distinct-looking refusal would.
+		else
+			local reason = (#stderr_lines > 0 and table.concat(stderr_lines, "\n"))
+				or "pbpaste --files --porcelain failed to run"
+			ya.notify({
+				title = "Clipboard",
+				content = "Paste failed: " .. reason,
+				timeout = 5,
+				level = "error",
+			})
+			return
+		end
 	end
 end
 
