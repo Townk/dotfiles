@@ -1133,14 +1133,66 @@ Describe 'pick-clipboard: file-path rendering keeps the basename (X8)'
     The variable result should equal "…/chezmoi/Makefile"
   End
 
-  It 'clip::shorten_path: a single segment longer than the width falls back to ITS OWN trailing chars'
+  # X8 review (Minor): an over-long bare basename still keeps a leading '…'
+  # elision marker (was a bare trailing substring, which read like an
+  # un-truncated short name) -- '…atall.txt', not 'satall.txt'.
+  It 'clip::shorten_path: a single segment longer than the width falls back to a … marker + ITS OWN trailing chars'
     result="$(zsh -f -c '
       source "$SCRIPT_PATH"
       clip::shorten_path "areallylongfilenamewithoutanyslashesatall.txt" 10
     ')"
     When call test -n "$result"
     The status should be success
-    The variable result should equal "satall.txt"
+    The variable result should equal "…atall.txt"
     The variable result should not include "/"
+  End
+
+  # X8 review (Critical): the base case ('…/'+basename, no fitted segments)
+  # must be budget-checked like the loop candidates are -- pre-fix a basename
+  # of length width-1 returned an 11-char string for width 10 ('…/Makefile1'),
+  # overflowing the fixed content column and misaligning it against text
+  # rows. Assert the result is <= width at the exact boundary (basename ==
+  # width-1, width, width+1). Runs under LC_ALL=C to also exercise the
+  # byte-vs-char length fix below on plain ASCII (char==byte here, so this
+  # isolates the off-by-one).
+  It 'clip::shorten_path: result length never exceeds width at the basename==width-1/width/width+1 boundaries'
+    out="$(LC_ALL=C zsh -f -c '
+      source "$SCRIPT_PATH"
+      for p in /x/Makefil /x/Makefile /x/Makefilee; do
+        r=$(clip::shorten_path "$p" 8)
+        # measure in CHARACTERS (utf-8), matching the columns math
+        LC_ALL= LC_CTYPE=en_US.UTF-8
+        print -r -- "${#r}"
+      done
+    ')"
+    # basenames are Makefil(7)=width-1, Makefile(8)=width, Makefilee(9)=width+1
+    When call test "$out" = "$(printf '8\n8\n8')"
+    The status should be success
+  End
+
+  # X8 review (Important): the fit/pad math must count CHARACTERS, not bytes,
+  # so an accented path aligns with a text row's CW even under LC_ALL=C (where
+  # bare ${#var} counts bytes). Cross-kind parity: render a multibyte file row
+  # AND an ASCII text row at the same CW, strip ANSI, and assert the visible
+  # content columns have equal character width.
+  It 'file-row content aligns to the same char width as a text-row at the same CW, even under LC_ALL=C (multibyte)'
+    export PICK_CLIPBOARD_CONTENT_WIDTH=14
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('file','/tmp/café/résumé.txt','mac-mini',100);"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, text_preview, source_host, last_ts) VALUES ('text','ABCDEFGHIJKLMNOP','ABCDEFGHIJKLMNOP','mac-mini',90);"
+
+    out="$(LC_ALL=C zsh -f -c '
+      source "$SCRIPT_PATH"
+      emit_rows | while IFS= read -r line; do
+        vis=${line%%$'"'"'\x1f'"'"'*}
+        stripped=$(print -r -- "$vis" | sed -E $'"'"'s/\x1b\[[0-9;]*m//g'"'"')
+        LC_ALL= LC_CTYPE=en_US.UTF-8
+        print -r -- "${#stripped}"
+      done
+    ')"
+    # two rows, both the same visible char width -> aligned
+    file_w=$(printf '%s\n' "$out" | sed -n 1p)
+    text_w=$(printf '%s\n' "$out" | sed -n 2p)
+    When call test "$file_w" = "$text_w"
+    The status should be success
   End
 End

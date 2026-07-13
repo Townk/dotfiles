@@ -959,9 +959,24 @@ clip::shorten_path() {
   # $1 = path, $2 = width (characters) -> stdout the path, whole if it
   # already fits, else tail-truncated: basename + as many trailing "/seg"
   # groups as fit under width, prefixed with a leading '…/'. If even the
-  # bare basename doesn't fit, falls back to ITS OWN trailing $width
-  # characters (still the tail, never the head) -- the single-segment-
-  # longer-than-width edge case.
+  # bare basename can't fit under that '…/' marker, falls back to a single
+  # '…' + ITS OWN trailing chars (still the tail, never the head) -- the
+  # single-segment-longer-than-width edge case. The result is ALWAYS <=
+  # width columns (the '…/' or '…' elision marker is counted against the
+  # budget in every branch, including the base case: X8 review found the
+  # pre-fix base case returned '…/'+basename un-budget-checked, so a
+  # basename of length width-1 overflowed by 1 and misaligned the content
+  # column against text rows).
+  #
+  # LC_ALL=/LC_CTYPE utf-8: ${#var} and ${var:off} count BYTES under
+  # LC_ALL=C but the picker's column layout is character/display-cell wide
+  # (a text row's substr()/CW is char-based), so an accented path would
+  # otherwise render short + misalign under a C locale. Force a UTF-8
+  # ctype for this helper's length/substring math so it counts characters,
+  # matching the SQL side. macOS-only tool, so en_US.UTF-8 is always
+  # present (same locale the rest of the desktop session runs). `local`
+  # (dynamically scoped in both zsh and bash) so it also covers the nested
+  # clip::render_file_content/clip::shorten_path calls, and doesn't leak.
   #
   # NOTE: the parameter is named "srcpath", not "path" AND NOT "fpath" --
   # zsh's lowercase $path is a special array tied to $PATH (a plain
@@ -978,15 +993,27 @@ clip::shorten_path() {
   # nearest existing scope of that name (or global) -- this runs nested
   # inside clip::filter_file_rows/clip::render_file_content, so an
   # undeclared `width` etc. here would clobber theirs.
-  local srcpath=$1 width=$2 base kept rest seg cand prevrest
+  local LC_ALL= LC_CTYPE=en_US.UTF-8
+  local srcpath=$1 width=$2 base kept rest seg cand prevrest off tail_len
   [ "$width" -lt 1 ] && width=1
   if [ "${#srcpath}" -le "$width" ]; then
     printf '%s' "$srcpath"
     return 0
   fi
   base=${srcpath##*/}
-  if [ "${#base}" -ge "$width" ]; then
-    printf '%s' "${base:$((${#base} - width))}"
+  # Base case: the shortened form is '…/'+kept, so kept must fit in
+  # width-2. If even the bare basename can't ('…/'+basename > width),
+  # truncate the basename itself, keeping a single '…' marker (1 col) +
+  # its trailing width-1 chars -- an over-long basename still reads as
+  # elided, and the total is exactly <= width.
+  if [ $(( ${#base} + 2 )) -gt "$width" ]; then
+    tail_len=$(( width - 1 ))
+    if [ "$tail_len" -lt 1 ]; then
+      printf '…'
+    else
+      off=$(( ${#base} - tail_len ))
+      printf '…%s' "${base:$off}"
+    fi
     return 0
   fi
   kept=$base; rest=${srcpath%/*}
@@ -1008,7 +1035,8 @@ clip::render_file_content() {
   # newlines restored), $3 = width -> stdout the row content, NOT yet
   # padded (the caller pads to width). A "files" manifest shows the first
   # path's tail + " (+N)" for the rest; file/directory show the one path's
-  # tail.
+  # tail. UTF-8 ctype (see clip::shorten_path) so ${#suffix} is char-count.
+  local LC_ALL= LC_CTYPE=en_US.UTF-8
   local kind=$1 raw=$2 width=$3 first total extra suffix budget
   if [ "$kind" = files ]; then
     first=${raw%%$'\n'*}
@@ -1029,7 +1057,10 @@ clip::render_file_content() {
 clip::filter_file_rows() {
   # $1 = width -> reads emitted rows on stdin, writes to stdout. Only rows
   # carrying the \x02<kind>\x02<raw>\x03 marker get rewritten; every other
-  # row passes through byte for byte.
+  # row passes through byte for byte. UTF-8 ctype (see clip::shorten_path)
+  # so the pad math (width - ${#content}) is char-count -- an accented file
+  # path then pads to the same column width as a text row's CW.
+  local LC_ALL= LC_CTYPE=en_US.UTF-8
   local width=$1 line pre rest kind raw_enc post raw content pad
   while IFS= read -r line; do
     case "$line" in
