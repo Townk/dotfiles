@@ -89,5 +89,11 @@ clipbridge::request() {
 
 # clipbridge::get <host> <port>      -> peer clipboard text (op G) on stdout.
 # clipbridge::get_host <host> <port> -> peer hostname (op H) on stdout.
+# clipbridge::get_ts <host> <port>   -> peer's CURRENT-clip copy-time (op S,
+#   decimal last_ts or empty) on stdout -- lets a consumer sort a live peer
+#   entry chronologically instead of always pinning it to the top (X9,
+#   pick-clipboard §22). See clip::op_get_ts in the dispatcher for the exact
+#   resolution/fallback chain.
 clipbridge::get()      { clipbridge::request "$1" "$2" G; }
 clipbridge::get_host() { clipbridge::request "$1" "$2" H; }
+clipbridge::get_ts()   { clipbridge::request "$1" "$2" S; }

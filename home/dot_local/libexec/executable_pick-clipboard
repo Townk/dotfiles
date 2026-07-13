@@ -146,6 +146,24 @@ if (( bridge_up )); then
   [[ -n "$LIVE_TEXT_FILE" ]] || rm -f "$_lt"
 fi
 
+# X9: the live row must sort chronologically by when the PEER's clipboard was
+# actually copied, not always float to the top. One more fast loopback round-
+# trip (op S) for the copy-time -- best-effort: on any failure (bridge dropped
+# between the G/H reads above and now, a non-numeric reply, ...) fall back to
+# "now", which sorts the row at/near the top exactly like the old always-
+# pinned-to-top behavior, so a lookup failure never loses the row or
+# misplaces it below fresh local rows. live_ts_threshold feeds the ABOVE/
+# BELOW split in EMIT_SQL below; -1 (older than any real last_ts) when there
+# is no live row at all, so that split degrades to "everything in ABOVE,
+# nothing in BELOW" -- the plain original ordering.
+LIVE_TS=""
+live_ts_threshold=-1
+if [[ -n "$LIVE_TEXT_FILE" ]]; then
+  LIVE_TS="$(clipbridge::request "$BRIDGE_HOST" "$BRIDGE_PORT" S 2>/dev/null)"
+  [[ "$LIVE_TS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || LIVE_TS=$EPOCHREALTIME
+  live_ts_threshold=$LIVE_TS
+fi
+
 # --- helpers (run in THIS process via the --key-background FIFO broker) ------
 clip::text_by_id() {  # id -> text_plain (raw, multi-line)
   sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "SELECT text_plain FROM clips WHERE id=$1;"
@@ -915,9 +933,21 @@ PREVIEW_CMD="bash $preview_script {2}"
 # glyphs/colors as the GUI picker (clipboard-picker.css/.html), Nerd Font v3
 # codepoints via SQL char(N).
 #
-# EMIT_SQL is shared by emit_rows (the initial stream) AND the --reload-cmd
-# script (fzf reloads the list with it after a delete/pin).
-EMIT_SQL="WITH palette AS (
+# EMIT_ROW_BODY is shared by emit_rows (the initial stream) AND the
+# --reload-cmd script (fzf reloads the list with it after a delete/pin).
+#
+# X9: the live-peer row (§22) is no longer unconditionally prepended above
+# this query's whole result -- it must interleave by its own copy-time
+# (live_ts_threshold, resolved above) among the UNPINNED rows. Simplest
+# correct split (the live row is never pinned, so pinned rows are unaffected
+# either way): run this body TWICE, once selecting the rows that belong
+# ABOVE the live row (pinned, or unpinned-and-newer) and once for the rows
+# that belong BELOW it (unpinned-and-not-newer), with the live row cat'd
+# between the two in emit_rows/the reload script. When there is no live row,
+# live_ts_threshold is -1 (older than any real last_ts), which degrades the
+# ABOVE query back to "everything" and BELOW to "nothing" -- the original
+# single-query ordering.
+EMIT_ROW_BODY="WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,
              CHAR(27)||'[38;2;225;170;80m'  AS pin_color,
@@ -962,13 +992,21 @@ EMIT_SQL="WITH palette AS (
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
       || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
-    FROM clips, palette
+    FROM clips, palette"
+
+EMIT_SQL_ABOVE="${EMIT_ROW_BODY}
+    WHERE pinned=1 OR last_ts > ${live_ts_threshold}
     ORDER BY pinned DESC, last_ts DESC
+    LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
+EMIT_SQL_BELOW="${EMIT_ROW_BODY}
+    WHERE pinned=0 AND last_ts <= ${live_ts_threshold}
+    ORDER BY last_ts DESC
     LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
 
 emit_rows() {
+  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL_ABOVE"
   [[ -n "$live_row_file" && -f "$live_row_file" ]] && cat "$live_row_file"
-  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL"
+  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL_BELOW"
 }
 
 # --- temp scripts for --key-reload (delete / pin + list refresh) -------------
@@ -990,9 +1028,61 @@ cat > "$emit_script" <<EOF
 fc=\${PTY_FRAME_COLUMNS:-\${FZF_COLUMNS:-80}}
 cw=\$((fc * 55 / 100 - 12)); [ \$cw -lt 10 ] && cw=10
 echo "[\$(date +%s)] PTY_FRAME_COLUMNS=\${PTY_FRAME_COLUMNS:-?} fc=\$fc cw=\$cw" >> /tmp/pick-clipboard-dims.log
-# Synthetic LIVE row (§22): pre-rendered once at open into \$live_row_file; catted
-# above the stored rows here so it survives fzf reloads (delete/pin) without a
-# re-fetch — the entry reflects the peer clipboard as of picker open (§22.6).
+# Synthetic LIVE row (§22): pre-rendered once at open into \$live_row_file;
+# catted here so it survives fzf reloads (delete/pin) without a re-fetch —
+# the entry reflects the peer clipboard as of picker open (§22.6). X9: no
+# longer unconditionally first — interleaved by its own copy-time
+# (live_ts_threshold, baked in below as a literal at generation time, same
+# as \$remote_when/\$DB_FILE elsewhere in this heredoc) between an ABOVE
+# query (pinned rows, plus unpinned rows newer than the live row) and a
+# BELOW query (the rest) -- see the EMIT_ROW_BODY comment above for why this
+# split is correct. live_ts_threshold is -1 (no live row) when the split
+# degrades back to "everything in ABOVE" -- the original single-query order.
+sqlite3 -escape off '$DB_FILE' "WITH palette AS (
+      SELECT CHAR(27)||'[0m'                AS reset,
+             CHAR(27)||'[38;2;202;211;245m' AS text_color,
+             CHAR(27)||'[38;2;225;170;80m'  AS pin_color,
+             CHAR(27)||'[38;2;137;180;250m' AS c_text,
+             CHAR(27)||'[38;2;225;170;80m'  AS c_rich,
+             CHAR(27)||'[38;2;166;209;137m' AS c_image,
+             CHAR(27)||'[38;2;148;156;183m' AS c_files,
+             CHAR(27)||'[38;2;235;160;172m' AS c_mixed,
+             CHAR(27)||'[38;2;180;190;254m' AS c_file,
+             CHAR(27)||'[38;2;250;179;135m' AS c_directory,
+             CHAR(27)||'[38;2;116;199;236m' AS c_url,
+             CHAR(27)||'[38;2;203;166;247m' AS c_origin
+    )
+    SELECT
+      (CASE WHEN ${remote_when}     THEN c_origin
+            WHEN type_kind='text'       THEN c_text
+            WHEN type_kind IN ('rtf','html') THEN c_rich
+            WHEN type_kind='image'      THEN c_image
+            WHEN type_kind='files'      THEN c_files
+            WHEN type_kind='file'       THEN c_file
+            WHEN type_kind='directory'  THEN c_directory
+            WHEN type_kind='url'        THEN c_url
+            ELSE c_mixed END)
+      || (CASE type_kind
+           WHEN 'text'      THEN char(1110065)
+           WHEN 'rtf'       THEN char(1110524)
+           WHEN 'html'      THEN char(1110524)
+           WHEN 'image'     THEN char(1110078)
+           WHEN 'files'     THEN char(1110139)
+           WHEN 'file'      THEN char(983588)
+           WHEN 'directory' THEN char(983638)
+           WHEN 'url'       THEN char(983865)
+           ELSE                  char(988440) END)
+      || reset
+      || '  '
+      || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
+      || printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
+      || reset
+      || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
+    FROM clips, palette
+    WHERE pinned=1 OR last_ts > ${live_ts_threshold}
+    ORDER BY pinned DESC, last_ts DESC
+    LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
 [ -n '$live_row_file' ] && [ -f '$live_row_file' ] && cat '$live_row_file'
 sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
@@ -1036,7 +1126,8 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
       || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
     FROM clips, palette
-    ORDER BY pinned DESC, last_ts DESC
+    WHERE pinned=0 AND last_ts <= ${live_ts_threshold}
+    ORDER BY last_ts DESC
     LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
 EOF
 cat > "$del_script" <<EOF

@@ -66,6 +66,11 @@
 #      brief sleep to ride out the watcher's ~0.5s capture lag); "empty-store"
 #      if there are no rows at all. Callers: pbpaste --manifest (files-yazi
 #      T4), the yazi smart-paste plugin (T8).
+#   S  get-current-ts req: empty  resp: decimal last_ts, or empty
+#      The CURRENT clipboard's copy-time, so a consumer surfacing a peer's live
+#      clipboard as a synthetic row can sort it chronologically instead of
+#      always pinning it to the top (X9, pick-clipboard's live-peer row, §22).
+#      See clip::op_get_ts for the exact fallback chain.
 #   M  manifest-persist-local (X2-redo; Fix A retired N below in favor of a
 #      second use of this same op) req: source_host US path NUL path ...
 #      resp: empty | err
@@ -269,6 +274,39 @@ clip::op_get() {
   local text
   text="$(pbpaste 2>/dev/null)" || text=""
   send_ok "$text"
+}
+
+# S  get-current-ts (X9): the CURRENT clipboard's copy-time, so a consumer
+# surfacing a peer's live clipboard as a synthetic row (pick-clipboard §22)
+# can sort it chronologically against its own stored rows instead of always
+# pinning it to the top. Fallback chain (documented here since it's easy to
+# lose track of across the two SELECTs below):
+#   1. Read the current clipboard text the SAME way op_get does (pbpaste).
+#   2. Hash it the SAME way op_persist hashes a text clip: shasum -a 256 of
+#      the raw text. NOT the Hammerspoon watcher's own type_hash (that hashes
+#      the sorted uti=blob SET of a captured pasteboard entry, a different
+#      formula) -- a P/M-persisted row's type_hash already matches this exact
+#      formula, but a row the HS watcher captured directly generally will
+#      not, so step 3 below is a best-effort match, not a guarantee.
+#   3. If some row's type_hash matches, that row's last_ts (the most recent,
+#      if several rows share the hash) IS the copy-time -- return it.
+#   4. Otherwise (a just-copied clip that hasn't round-tripped into the store
+#      yet, a non-text pasteboard entry, or a locally-HS-captured row using
+#      the other hash formula) fall back to the store's most-recent last_ts
+#      (MAX(last_ts)) -- close enough: it's almost certainly what a fresh
+#      "current clipboard" query means anyway.
+#   5. If the store itself is empty, there is nothing to fall back to --
+#      reply with an empty payload; the caller treats that as "unknown".
+clip::op_get_ts() {
+  local text
+  text="$(pbpaste 2>/dev/null)" || text=""
+  local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  local ts
+  ts="$(sqlite3 "$DB_FILE" "SELECT last_ts FROM clips WHERE type_hash='$hash' ORDER BY last_ts DESC LIMIT 1;" 2>/dev/null)"
+  if [[ -z "$ts" ]]; then
+    ts="$(sqlite3 "$DB_FILE" "SELECT MAX(last_ts) FROM clips;" 2>/dev/null)"
+  fi
+  send_ok "${ts:-}"
 }
 
 # See the header comment on op T: a hash of the clipboard text at set-time
@@ -951,6 +989,7 @@ fi
 
 case "$opcode" in
   G) clip::op_get ;;
+  S) clip::op_get_ts ;;
   R) clip::op_get_regtype ;;
   H) clip::op_get_host ;;
   T) clip::op_set "$payload" ;;

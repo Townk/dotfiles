@@ -742,3 +742,187 @@ EOF
     The status should be success
   End
 End
+
+# Tests for X9: the synthetic live-peer row (spec §22) must sort
+# chronologically by when the PEER's clipboard was copied (fetched via the
+# new S get-current-ts op), not always float to the top above every local
+# row.
+#
+# bridge_up (top of executable_pick-clipboard) requires an SSH env var AND a
+# real connect-probe success (`nc -z -w 1 host port`), so the fake `nc` here
+# is a different, more capable shape than the shared one in the Describe
+# above (which never sets an SSH env var, so bridge_up -- and this fake --
+# never engage there): it answers the `-z` probe unconditionally, and
+# dispatches the framed G/H/S reads (the picker's live-row fetch at open) to
+# fixed canned replies. It does NOT attempt the `-z` probe's real filehandle
+# behavior (no listener, no timeout) -- just "yes, reachable".
+Describe 'pick-clipboard: live-peer row ordering (X9)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
+  LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  # be32_esc <n> -- prints a literal `\NNN\NNN\NNN\NNN` (backslash + 3-digit
+  # octal, 4x) BE32-length escape sequence as TEXT, for baking into a
+  # generated shell script's own `printf 'FORMAT'` call (mirrors the
+  # dispatcher's own int_to_be32; see its comment for why printf's \NNN
+  # octal escapes are the reliable way to emit raw framing bytes).
+  be32_esc() {
+    local n=$1
+    printf '\\%03o\\%03o\\%03o\\%03o' $(( (n>>24)&255 )) $(( (n>>16)&255 )) $(( (n>>8)&255 )) $(( n&255 ))
+  }
+
+  setup() {
+    unset SSH_CLIENT SSH_TTY
+    export SSH_CONNECTION="10.0.0.1 1234 10.0.0.2 22"   # bridge_up precondition 1/2
+    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
+    export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    export PICK_CLIPBOARD_DB="$DB"
+    rm -f "$DB"
+    sqlite3 "$DB" '
+      CREATE TABLE clips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text_preview TEXT,
+        text_plain TEXT,
+        len INTEGER,
+        first_ts REAL,
+        last_ts REAL,
+        source_app TEXT,
+        source_bundle_id TEXT,
+        type_kind TEXT,
+        regtype TEXT,
+        pinned INTEGER DEFAULT 0,
+        type_hash TEXT,
+        source_host TEXT
+      );
+      CREATE TABLE clip_types (
+        clip_id INTEGER,
+        uti TEXT,
+        blob BLOB,
+        PRIMARY KEY (clip_id, uti)
+      );
+    '
+
+    # Peer fixtures: text distinct from every seeded local row's text_plain
+    # (so the §22.5 dedup check never suppresses the live row out from under
+    # these ordering tests) and a peer hostname. LIVE_TS is set per-It below
+    # (each example wires its own G_LEN/H_LEN/S_LEN + fake nc).
+    LIVE_TEXT="peer clipboard text, distinct from every local row"
+    LIVE_HOST="peer-host"
+
+    # Fake scutil: pins THIS host's name (mac-mini), same convention as the
+    # Describe above -- source_host==self / remote comparisons need it.
+    cat > "$BINDIR/scutil" <<'EOF'
+#!/bin/sh
+if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
+  echo mac-mini
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$BINDIR/scutil"
+
+    export PATH="$BINDIR:$PATH"
+    export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
+    export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    export PICK_CLIPBOARD_NO_RUN=1
+    export SCRIPT_PATH="$SCRIPT"
+  }
+  BeforeEach 'setup'
+
+  # write_fake_nc <live_ts> -- the picker's live-row fetch at open (spec §22)
+  # sends G (peer text), H (peer host), then S (X9, peer copy-time) over the
+  # reverse-tunnel loopback port; bridge_up itself first probes with
+  # `nc -z -w 1`. This fake answers all four shapes: `-z` -> immediate
+  # success (no stdin read -- a real probe sends none either); G/H/S -> the
+  # canned LIVE_TEXT/LIVE_HOST/<live_ts> reply; anything else (T/P from the
+  # accept-time materialize path, not exercised by these ordering-only
+  # tests) -> a bare O + empty body.
+  write_fake_nc() {
+    local live_ts=$1
+    local g_hdr h_hdr s_hdr
+    g_hdr=$(be32_esc ${#LIVE_TEXT})
+    h_hdr=$(be32_esc ${#LIVE_HOST})
+    s_hdr=$(be32_esc ${#live_ts})
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+if [ "\$1" = "-z" ]; then
+  exit 0
+fi
+raw="\$(mktemp "$SHELLSPEC_TMPBASE/nc-raw.XXXXXX")"
+cat > "\$raw"
+opcode=\$(dd if="\$raw" bs=1 count=1 2>/dev/null)
+rm -f "\$raw"
+case "\$opcode" in
+  G) printf 'O'; printf '$g_hdr'; printf '%s' '$LIVE_TEXT' ;;
+  H) printf 'O'; printf '$h_hdr'; printf '%s' '$LIVE_HOST' ;;
+  S) printf 'O'; printf '$s_hdr'; printf '%s' '$live_ts' ;;
+  *) printf 'O\\000\\000\\000\\000' ;;
+esac
+EOF
+    chmod +x "$BINDIR/nc"
+  }
+
+  # run_emit -- sources the picker under PICK_CLIPBOARD_NO_RUN (same escape
+  # hatch/convention as run_copy in the Describe above) then calls emit_rows
+  # directly, printing just the tail id of each emitted row ("LIVE" for the
+  # synthetic row) one per line, in emission order -- exactly the ordering
+  # this fix is about, with none of the ANSI/preview-width noise around it.
+  run_emit() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      emit_rows | while IFS= read -r line; do
+        tail=${line##*$'"'"'\x1f'"'"'}
+        id=${tail%%$'"'"'\x1e'"'"'*}
+        print -r -- "$id"
+      done
+    '
+  }
+
+  It 'interleaves the live row by copy-time between newer and older local rows'
+    id_old=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'old local'); SELECT last_insert_rowid();")
+    id_new=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',300,'new local'); SELECT last_insert_rowid();")
+    write_fake_nc 200
+
+    When call run_emit
+    The status should be success
+    expected=$(printf '%s\nLIVE\n%s' "$id_new" "$id_old")
+    The output should equal "$expected"
+  End
+
+  It 'places the live row at the very top when its copy-time is newer than every local row'
+    id_a=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'a'); SELECT last_insert_rowid();")
+    id_b=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',200,'b'); SELECT last_insert_rowid();")
+    write_fake_nc 999
+
+    When call run_emit
+    The status should be success
+    expected=$(printf 'LIVE\n%s\n%s' "$id_b" "$id_a")
+    The output should equal "$expected"
+  End
+
+  It 'places the live row at the very bottom when its copy-time is older than every local row'
+    id_a=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'a'); SELECT last_insert_rowid();")
+    id_b=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',200,'b'); SELECT last_insert_rowid();")
+    write_fake_nc 1
+
+    When call run_emit
+    The status should be success
+    expected=$(printf '%s\n%s\nLIVE' "$id_b" "$id_a")
+    The output should equal "$expected"
+  End
+
+  # Pinned local rows sort above the live row regardless of ts (the live row
+  # is never pinned) -- spec X9 requirement 3's explicit invariant.
+  It 'keeps a pinned local row above the live row even when the pinned row is chronologically older'
+    id_pinned=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain, pinned) VALUES ('text','mac-mini',10,'pinned-old',1); SELECT last_insert_rowid();")
+    id_unpinned=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',50,'unpinned-old'); SELECT last_insert_rowid();")
+    write_fake_nc 200
+
+    When call run_emit
+    The status should be success
+    expected=$(printf '%s\nLIVE\n%s' "$id_pinned" "$id_unpinned")
+    The output should equal "$expected"
+  End
+End
