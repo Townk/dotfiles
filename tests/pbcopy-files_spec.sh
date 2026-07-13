@@ -128,14 +128,20 @@ EOF
     The stderr should include "bridge"
   End
 
-  # X2 rework: a file copied over SSH belongs to the machine whose bytes it
-  # is -- pbcopy now records a LOCAL origin clip (op `U` to this machine's
-  # OWN bridge, 2489) as the PRIMARY action, then best-effort pushes a peer
-  # manifest (op `N` to the reverse-tunneled bridge, 2490) so the far side
-  # can pull lazily. Host field: replicate pbcopy's own scutil-then-hostname
-  # fallback here rather than stubbing either, so the assertion tracks
-  # whatever this machine actually resolves to.
-  It 'sends BOTH a U frame to :2489 (local origin clip) and an N frame to :2490 (peer manifest), in that order'
+  # X2-redo (supersedes X2 below): a file copied over SSH belongs to the
+  # machine whose bytes it is -- pbcopy records a LOCAL origin clip as the
+  # PRIMARY action, then best-effort pushes a peer manifest (op `N` to the
+  # reverse-tunneled bridge, 2490) so the far side can pull lazily. The
+  # local record is now op `M` (manifest-persist-local), not `U`: the origin
+  # machine is typically locked/headless when reached over SSH, where the
+  # Hammerspoon watcher's loginwindow guard skips ALL capture -- so a plain
+  # `U` (which only sets the pasteboard, relying on the watcher to capture
+  # it) never actually lands a store row there (live-confirmed). `M`
+  # persists the row directly, bypassing the watcher, and -- unlike `U` --
+  # never touches the pasteboard at all. Host field: replicate pbcopy's own
+  # scutil-then-hostname fallback here rather than stubbing either, so the
+  # assertion tracks whatever this machine actually resolves to.
+  It 'sends BOTH an M frame to :2489 (local origin record) and an N frame to :2490 (peer manifest), in that order, and never a U frame'
     export SSH_CONNECTION="x 1 y 22"
     expected_host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
     f1="$SHELLSPEC_TMPBASE/rem-a.txt"; touch "$f1"
@@ -145,13 +151,17 @@ EOF
     export NC_BRIDGE_UP=1
     When run command sh "$SCRIPT" "$f1" "$f2"
     The status should be success
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:U"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:N"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$expected_host"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$cf1|$cf2"
-    # Order matters: the local U (origin clip, primary) must precede the N
+    # Order matters: the local M (origin record, primary) must precede the N
     # (peer manifest, best-effort secondary) in the log.
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should match pattern "*2489:U*2490:N*"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should match pattern "*2489:M*2490:N*"
+    # The bug this whole rework exists to fix: no `U` frame is sent anymore
+    # (it set the pasteboard and relied on a watcher that can't see a
+    # locked/headless origin over SSH).
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2489:U"
   End
 
   It 'honors CLIPBOARD_BRIDGE_PORT for the SSH+files probe and frame'
@@ -173,13 +183,13 @@ EOF
     The status should be success
   End
 
-  # X2 rework: the local U (primary action) already succeeded by the time the
+  # X2-redo: the local M (primary action) already succeeded by the time the
   # peer N is attempted, so an N-side error is now a WARNING, never a command
-  # failure. Needs a port-differentiated fake nc: 2489 (local U) must reply
+  # failure. Needs a port-differentiated fake nc: 2489 (local M) must reply
   # O so the primary action truly succeeds, while 2490 (peer N) replies E --
   # the shared setup() fake nc can't express that since NC_REPLY isn't
   # port-scoped.
-  It 'warns (not fails) when the manifest push gets an E reply -- the local origin clip already succeeded'
+  It 'warns (not fails) when the manifest push gets an E reply -- the local origin record already succeeded'
     export SSH_CONNECTION="x 1 y 22"
     cat > "$BINDIR/nc" <<EOF
 #!/bin/sh
@@ -202,13 +212,13 @@ EOF
     When run command sh "$SCRIPT" "$f1"
     The status should be success
     The stderr should include "boom"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:U"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
   End
 
-  # Rework R7 (still true under X2): an "unknown opcode" E-reply on the
+  # Rework R7 (still true under X2-redo): an "unknown opcode" E-reply on the
   # REMOTE (:2490/peer) send means the OTHER machine's bridge predates file
-  # clips -- but under X2 that's only a warning, since the local U already
-  # recorded the origin clip. Same port-differentiated fake nc as above.
+  # clips -- but that's only a warning, since the local M already recorded
+  # the origin clip. Same port-differentiated fake nc as above.
   It 'gives an actionable hint (peer bridge outdated) when the manifest push gets unknown opcode, but still exits 0'
     export SSH_CONNECTION="x 1 y 22"
     cat > "$BINDIR/nc" <<EOF
@@ -234,12 +244,12 @@ EOF
     The stderr should include "peer bridge doesn't support file clips yet"
     The stderr should include "unknown opcode"
     The stderr should include "update chezmoi on the other machine"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:U"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
   End
 
-  # X2 rework: a down reverse bridge no longer fails the command -- the local
-  # origin clip (U to 2489) is the primary action and still lands; only the
-  # peer notification (N to 2490) is skipped, with a warning naming why.
+  # X2-redo: a down reverse bridge no longer fails the command -- the local
+  # origin record (M to 2489) is the primary action and still lands; only
+  # the peer notification (N to 2490) is skipped, with a warning naming why.
   It 'still records the local origin clip and warns (exit 0) when the peer bridge (2490) is down'
     export SSH_CONNECTION="x 1 y 22"
     export NC_BRIDGE_UP=0
@@ -248,11 +258,11 @@ EOF
     The status should be success
     The stderr should include "peer"
     The stderr should include "not notified"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:U"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2490:N"
   End
 
-  # X2 rework: this machine's OWN bridge (2489) is the primary action -- if
+  # X2-redo: this machine's OWN bridge (2489) is the primary action -- if
   # IT is unreachable, that's a hard error (there is no local-tool fallback
   # for a file clip), regardless of the peer bridge's state.
   It 'hard-errors (exit 1) when this machine'"'"'s own bridge (2489) is unreachable'

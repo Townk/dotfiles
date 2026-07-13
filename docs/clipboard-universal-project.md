@@ -568,6 +568,32 @@ where "you" is decided by bridge-up:
 > only a failure of the LOCAL `U` (no reachable bridge on this machine, or
 > an `E` reply) hard-fails the command, since that's the one action with no
 > fallback.
+>
+> **As-built note (X2-redo, corrects the LOCAL send in the X2 note above)**:
+> live validation caught a second bug in the same flow — the local `U` send
+> sets the origin's pasteboard and relies on the Hammerspoon watcher to
+> capture that write into the store, but the watcher's `loginwindow` guard
+> skips ALL capture when the origin has no interactive GUI user, which is
+> ALWAYS true for a machine reached over SSH (locked/headless). Confirmed
+> live: `U` set the pasteboard (a real file-url landed) but no store row
+> ever appeared. The fix: `pbcopy`'s SSH files branch now sends a new op `M`
+> (manifest-persist-local) to 127.0.0.1:2489 instead of `U` — same payload
+> shape as `N` (`<host> US path NUL path …`), but record-only: it inserts
+> the `files` store row DIRECTLY via SQL (dedup-scoped exactly like `N`),
+> bypassing the watcher entirely, and never touches the pasteboard at all.
+> This brings files-over-SSH in line with how text-over-SSH already behaves
+> — plain `pbcopy` over SSH never sets the origin pasteboard either, it only
+> `P`-persists to the store (§13's own text-mode description above). `M` is
+> otherwise a drop-in replacement for `U` in this one branch: still the
+> PRIMARY, reply-checked, hard-failing action; the peer `N` push (2490) is
+> unchanged. A later `Ctrl-Y` on the resulting row, run on the origin
+> machine itself, is still fully restorable: `pick-clipboard`'s
+> `clip::copy_files_by_id` now recognizes a self-origin row whose only blob
+> is `x-file-manifest` (impossible for a genuine Hammerspoon capture, which
+> always writes `NSFilenamesPboardType`/`public.file-url` too) and routes it
+> through the same paths-direct `U` form its remote-origin cache-hit case
+> already used, instead of the `id:<n>` full-fidelity restore that would
+> otherwise try to restore a private UTI Finder can't paste.
 > - `pbcopy --content <file>` — the file's *bytes* under a detected UTI
 >   (extension first, then `file --mime-type`) via the existing `C` op. This
 >   is the mode this section originally called `clip-copy`.
@@ -605,6 +631,12 @@ where "you" is decided by bridge-up:
 >   files" (§14).
 > - `N` push-manifest — remote `pbcopy`'s manifest push: sets the Mac's
 >   pasteboard text and inserts an `x-file-manifest` store row.
+> - `M` manifest-persist-local (X2-redo) — record-only sibling of `N`, same
+>   payload shape; inserts ONLY the `x-file-manifest` store row, no
+>   pasteboard write. `pbcopy`'s SSH files branch uses this instead of `U`
+>   for its local origin record, since the origin is typically
+>   locked/headless over SSH and the Hammerspoon watcher can't capture a
+>   pasteboard write there (see the X2-redo as-built note above).
 > - `A` archive-stream — directory tar stream (§12's as-built note above).
 >
 > `F` (fetch-file) predates Phase 6 as a caller-less opcode; Phase 6 gave it

@@ -498,6 +498,196 @@ Describe 'clipboard-bridge-dispatch: N push-manifest'
   End
 End
 
+# M manifest-persist-local (X2-redo): a record-only sibling of N, for pbcopy
+# over SSH to persist the LOCAL origin's own files row DIRECTLY to the store
+# -- bypassing the Hammerspoon watcher entirely, since the origin machine is
+# typically locked/headless when reached over SSH and the watcher's
+# loginwindow guard then skips ALL capture (live-confirmed: a plain `U` set
+# the pasteboard but no store row ever appeared). Same payload shape as N
+# (<host> US path NUL path ...) and the same row shape (type_kind='files',
+# x-file-manifest blob, text_preview = newline-joined paths), but M does
+# ONLY the row-insert -- no pasteboard write, no declare-origin.
+Describe 'clipboard-bridge-dispatch: M manifest-persist-local'
+  DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
+    mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    rm -f "$DB"
+    sqlite3 "$DB" '
+      CREATE TABLE clips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text_preview TEXT,
+        text_plain TEXT,
+        len INTEGER,
+        first_ts REAL,
+        last_ts REAL,
+        source_app TEXT,
+        source_bundle_id TEXT,
+        type_kind TEXT,
+        regtype TEXT,
+        pinned INTEGER DEFAULT 0,
+        type_hash TEXT,
+        source_host TEXT
+      );
+      CREATE TABLE clip_types (
+        clip_id INTEGER,
+        uti TEXT,
+        blob BLOB,
+        PRIMARY KEY (clip_id, uti)
+      );
+    '
+
+    # Fake pbcopy: if M ever invoked op T's/N's pasteboard core, this would
+    # capture stdin -- its ABSENCE is exactly how the tests below prove M
+    # never touches the pasteboard (see the "does not touch the pasteboard"
+    # example). Same stub shape as the N describe block above.
+    export PATH="$SHELLSPEC_TMPBASE/bin:$PATH"
+    mkdir -p "$SHELLSPEC_TMPBASE/bin"
+    rm -f "$SHELLSPEC_TMPBASE/pbcopy-stdin"
+    printf '#!/bin/sh\ncat > "%s"\n' "$SHELLSPEC_TMPBASE/pbcopy-stdin" \
+      > "$SHELLSPEC_TMPBASE/bin/pbcopy"
+    chmod +x "$SHELLSPEC_TMPBASE/bin/pbcopy"
+
+    # Fake hs: if M ever ran a writeAllData/declare-origin Lua script through
+    # Hammerspoon, this would record it -- its ABSENCE proves M never touches
+    # the pasteboard via that path either. Same stub shape as the U describe
+    # block at the top of this file.
+    rm -f "$SHELLSPEC_TMPBASE/hs-script"
+    printf '#!/bin/sh\ncat "$1" > "%s"\n' "$SHELLSPEC_TMPBASE/hs-script" \
+      > "$SHELLSPEC_TMPBASE/bin/hs"
+    chmod +x "$SHELLSPEC_TMPBASE/bin/hs"
+
+    REQ="$SHELLSPEC_TMPBASE/m-req"
+    RESP="$SHELLSPEC_TMPBASE/m-resp"
+  }
+  BeforeEach 'setup'
+
+  # be32 <n> -- mirrors the dispatcher's own int_to_be32 (see the N describe
+  # block above for the identical helper/rationale).
+  be32() {
+    n=$1
+    printf "\\$(printf %03o $(( (n >> 24) & 255 )))\\$(printf %03o $(( (n >> 16) & 255 )))\\$(printf %03o $(( (n >> 8) & 255 )))\\$(printf %03o $(( n & 255 )))"
+  }
+
+  # build_req <host> <path> [<path> ...] -- writes a framed M request to $REQ.
+  # Payload shape is identical to N's.
+  build_req() {
+    _host=$1; shift
+    _payfile="$SHELLSPEC_TMPBASE/m-payload"
+    printf '%s\037' "$_host" > "$_payfile"
+    _first=1
+    for _p in "$@"; do
+      if [ "$_first" -eq 1 ]; then
+        printf '%s' "$_p" >> "$_payfile"
+        _first=0
+      else
+        printf '\000%s' "$_p" >> "$_payfile"
+      fi
+    done
+    _len=$(wc -c < "$_payfile" | tr -d ' ')
+    { printf 'M'; be32 "$_len"; cat "$_payfile"; } > "$REQ"
+  }
+
+  # -f: see the matching note on the U describe block above (skips
+  # ~/.zshenv, which would clobber the sandbox XDG overrides).
+  It 'acks O and inserts a files row + x-file-manifest blob, without touching the pasteboard'
+    build_req thismac /tmp/local-a.txt /tmp/local-b.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+
+    kind=$(sqlite3 "$DB" "SELECT type_kind FROM clips WHERE source_host='thismac';")
+    The variable kind should equal "files"
+    host=$(sqlite3 "$DB" "SELECT source_host FROM clips WHERE source_host='thismac';")
+    The variable host should equal "thismac"
+    preview=$(sqlite3 "$DB" "SELECT text_preview FROM clips WHERE source_host='thismac';")
+    The variable preview should equal "$(printf '/tmp/local-a.txt\n/tmp/local-b.txt')"
+
+    manifest_id=$(sqlite3 "$DB" "SELECT id FROM clips WHERE source_host='thismac';")
+    manifestfile="$SHELLSPEC_TMPBASE/m-manifest-out"
+    sqlite3 "$DB" "SELECT writefile('$manifestfile', blob) FROM clip_types WHERE clip_id=$manifest_id AND uti='x-file-manifest';" >/dev/null
+    manifest_paths=$(tr '\000' '|' < "$manifestfile")
+    The variable manifest_paths should equal "/tmp/local-a.txt|/tmp/local-b.txt"
+
+    # The negative assertion this whole op exists for: no pasteboard write
+    # happened (neither the plain-text pbcopy core nor a writeAllData hs
+    # script), unlike N which does both.
+    The path "$SHELLSPEC_TMPBASE/pbcopy-stdin" should not be exist
+    The path "$SHELLSPEC_TMPBASE/hs-script" should not be exist
+  End
+
+  It 'does not declare an origin file (no O/N-style provenance write)'
+    originfile="$XDG_STATE_HOME/pick-clipboard/current-origin"
+    rm -f "$originfile"
+    build_req thismac /tmp/local-c.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+    The path "$originfile" should not be exist
+  End
+
+  It 'errors on a malformed payload (missing US separator)'
+    { printf 'M\000\000\000\010nohostie'; } > "$REQ"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+  End
+
+  It 'errors on a malformed payload (empty host)'
+    build_req "" /tmp/local-d.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+  End
+
+  It 'errors on a malformed payload (relative path)'
+    build_req thismac relative/path.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+  End
+
+  # Kind-scoped dedup (X1 regression, must hold for M exactly like N): a
+  # repeated M of the same host+paths must not create a second files row.
+  It 'dedups a repeated M of the same host+paths to a single files row'
+    build_req dupsend /tmp/mdup-a.txt /tmp/mdup-b.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+
+    build_req dupsend /tmp/mdup-a.txt /tmp/mdup-b.txt
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP" 2>/dev/null
+    status2=$(head -c1 "$RESP")
+    The variable status2 should equal "O"
+
+    files_count=$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='dupsend' AND type_kind='files';")
+    The variable files_count should equal "1"
+  End
+
+  # Kind-scoped dedup, the collision direction (X1 regression, mirrors N's
+  # own test above): M's dedup must not bump an unrelated same-hash TEXT
+  # row's last_ts.
+  It 'inserts a NEW files row (not bumping a same-hash TEXT row) when the joined paths collide with an old text clip'
+    joined=$(printf '/tmp/mcollide-a.txt\n/tmp/mcollide-b.txt')
+    collide_hash=$(printf '%s' "$joined" | shasum -a 256 | awk '{print $1}')
+    text_id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, type_hash, last_ts, text_plain) \
+      VALUES ('text','mcollidehost','$collide_hash',50.0,'$joined'); SELECT last_insert_rowid();")
+
+    build_req mcollidehost /tmp/mcollide-a.txt /tmp/mcollide-b.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+
+    files_count=$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='mcollidehost' AND type_kind='files';")
+    The variable files_count should equal "1"
+
+    text_kind=$(sqlite3 "$DB" "SELECT type_kind FROM clips WHERE id=$text_id;")
+    The variable text_kind should equal "text"
+    text_ts=$(sqlite3 "$DB" "SELECT last_ts FROM clips WHERE id=$text_id;")
+    The variable text_ts should equal "50.0"
+  End
+End
+
 # P persist: the symmetric hazard to N above (X1 regression). op_persist's
 # own dedup was keyed on the same (source_host, type_hash) shape with no
 # type_kind filter -- a text payload arriving with a hash that happens to

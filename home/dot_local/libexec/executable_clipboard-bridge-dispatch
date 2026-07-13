@@ -77,6 +77,20 @@
 #      the authoritative record; the HS watcher skips its own capture of the
 #      echoed text (see the suppress note on declare_origin_core), so L
 #      resolves the manifest row. Callers: pbcopy (files-yazi T11, remote).
+#   M  manifest-persist-local (X2-redo) req: source_host US path NUL path ...
+#      resp: empty | err
+#      Record-only sibling of N, same wire payload -- but writes ONLY the
+#      `files` store row (N's row-insert half, shared via
+#      clip::persist_files_manifest_row), no pasteboard write and no
+#      declare-origin. Exists because pbcopy over SSH used to persist the
+#      SSH'd-into machine's own origin clip via a plain `U` (relying on the
+#      Hammerspoon watcher to capture the pasteboard write into the store) --
+#      but that machine is typically locked/headless when reached over SSH,
+#      and the watcher's loginwindow guard skips ALL capture in that state
+#      (live-confirmed: `U` set the pasteboard but no store row ever
+#      appeared). `M` bypasses the watcher entirely, mirroring how `P`
+#      (persist, plain text) already bypasses it for the identical reason.
+#      Caller: pbcopy (files-yazi X2-redo, SSH files branch, local half).
 #
 # Rich payload writes (C) go through hs.pasteboard.writeAllData via a
 # throwaway generated Lua script run as `hs <file>` (NOT `hs -c`, which hangs
@@ -799,33 +813,63 @@ clip::op_declare_origin() {
 # captured_origin() in clipboard-history.lua consumes it and skips exactly
 # that one capture. The manifest insert still happens AFTER the pasteboard
 # set with a fresh last_ts, keeping it the store's newest row at rest.
-clip::op_push_manifest() {
+# clip::parse_manifest_payload <payload> -- shared parse+validate for N's and
+# M's IDENTICAL wire payload (<source_host> US path NUL path ...): splits off
+# the host, NUL-splits the path list, and rejects anything not absolute. On
+# success returns 0 with $REPLY_HOST/$REPLY_PATHS set (host, and the raw
+# NUL-joined path substring, ready for clip::persist_files_manifest_row); on
+# failure returns 1 with $REPLY set to the caller-facing error message
+# (unchanged wording from the pre-refactor inline checks, so existing E-frame
+# assertions still hold for both ops).
+clip::parse_manifest_payload() {
   local payload=$1
   local us=$'\x1f'
   local host=${payload%%${us}*}
   local paths=${payload#*${us}}
-  [[ -n "$host" && "$host" != "$payload" && -n "$paths" ]] || { send_err "bad manifest payload"; return }
-
+  if [[ -z "$host" || "$host" == "$payload" || -z "$paths" ]]; then
+    REPLY="bad manifest payload"
+    return 1
+  fi
   local -a f
   f=( "${(@ps:\0:)paths}" )
-  (( ${#f[@]} > 0 )) || { send_err "bad manifest payload"; return }
+  if (( ${#f[@]} == 0 )); then
+    REPLY="bad manifest payload"
+    return 1
+  fi
   local p
   for p in "${f[@]}"; do
-    [[ -n "$p" && "$p" == /* ]] || { send_err "not absolute: $p"; return }
+    if [[ -z "$p" || "$p" != /* ]]; then
+      REPLY="not absolute: $p"
+      return 1
+    fi
   done
+  REPLY_HOST=$host
+  REPLY_PATHS=$paths
+  return 0
+}
+
+# clip::persist_files_manifest_row <host> <paths> -- the row-insert core
+# shared by N (push-manifest) and M (manifest-persist-local, X2-redo): a
+# dedup-scoped INSERT/UPDATE of a `files` store row carrying the
+# text_preview (newline-joined paths, X3) + x-file-manifest blob (NUL-joined
+# paths -- <paths> is stored verbatim). Pure store write: no pasteboard
+# access, no origin declaration -- callers that need those (only N) do them
+# separately with their own EPOCHREALTIME read, so the manifest still lands
+# as the store's newest row (see N's header comment). Returns 0 on success
+# ($REPLY==""); 1 with $REPLY set to an error message on mktemp failure (the
+# only failure mode once the caller has already validated host/paths via
+# clip::parse_manifest_payload).
+clip::persist_files_manifest_row() {
+  local host=$1 paths=$2
+  local -a f
+  f=( "${(@ps:\0:)paths}" )
   local text="${(pj:\n:)f}"
 
-  clip::declare_origin_core "$host" "$text" suppress
-  clip::set_pasteboard_core "v" "$text"
-
-  local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-manifest.XXXXXX") || { send_err "mktemp failed"; return }
+  local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-manifest.XXXXXX") || { REPLY="mktemp failed"; return 1 }
   print -rn -- "$text"  > "$tmpd/preview"
   print -rn -- "$paths" > "$tmpd/manifest"
   local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
   local eh=${host//\'/\'\'}
-  # Fresh EPOCHREALTIME, read only AFTER the pasteboard write above -- keeps
-  # the manifest the store's newest row at rest (the watcher's own echo of
-  # that write never lands at all; see the header comment).
   local ts=$EPOCHREALTIME
   local -i len=$#text
 
@@ -853,7 +897,48 @@ clip::op_push_manifest() {
     (SELECT id FROM clips ORDER BY pinned DESC, last_ts DESC LIMIT $MAX_ROWS);" 2>/dev/null
   sqlite3 "$DB_FILE" "DELETE FROM clip_types WHERE clip_id NOT IN (SELECT id FROM clips);" 2>/dev/null
   rm -rf -- "$tmpd"
-  send_ok ""
+  REPLY=""
+  return 0
+}
+
+clip::op_push_manifest() {
+  local payload=$1
+  clip::parse_manifest_payload "$payload" || { send_err "$REPLY"; return }
+  local host=$REPLY_HOST paths=$REPLY_PATHS
+  local -a f
+  f=( "${(@ps:\0:)paths}" )
+  local text="${(pj:\n:)f}"
+
+  clip::declare_origin_core "$host" "$text" suppress
+  clip::set_pasteboard_core "v" "$text"
+
+  if clip::persist_files_manifest_row "$host" "$paths"; then
+    send_ok ""
+  else
+    send_err "$REPLY"
+  fi
+}
+
+# M  manifest-persist-local (X2-redo, see the header opcode table): record-
+# only sibling of N above -- ONLY the row-insert half (via the same
+# clip::persist_files_manifest_row helper N uses), no pasteboard write, no
+# declare-origin. Sent by pbcopy's SSH files branch to persist the SSH'd-into
+# machine's OWN origin clip directly into ITS OWN store, since that machine
+# is typically locked/headless over SSH and the Hammerspoon watcher's
+# loginwindow guard then skips ALL capture (a plain `U` sets the pasteboard
+# but nothing ever lands in the store -- confirmed live). Mirrors how `P`
+# (persist, plain text) already bypasses the watcher for the identical
+# reason -- text-over-SSH never sets the origin pasteboard at all, it only
+# P-persists to the store, so this brings files-over-SSH in line with that.
+clip::op_manifest_persist_local() {
+  local payload=$1
+  clip::parse_manifest_payload "$payload" || { send_err "$REPLY"; return }
+  local host=$REPLY_HOST paths=$REPLY_PATHS
+  if clip::persist_files_manifest_row "$host" "$paths"; then
+    send_ok ""
+  else
+    send_err "$REPLY"
+  fi
 }
 
 # --- connection handler ----------------------------------------------------
@@ -893,5 +978,6 @@ case "$opcode" in
   U) clip::op_set_file_urls "$payload" ;;
   L) clip::op_list_files ;;
   N) clip::op_push_manifest "$payload" ;;
+  M) clip::op_manifest_persist_local "$payload" ;;
   *) send_err "unknown opcode" ;;
 esac

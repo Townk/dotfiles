@@ -286,7 +286,14 @@ clip::send_file_urls() {
 #
 #   1. source_host is this host (or NULL/legacy) -- a genuine local capture
 #      with real NSFilenamesPboardType/public.file-url blobs: U with the
-#      id:<n> form, a full-fidelity restore_by_id.
+#      id:<n> form, a full-fidelity restore_by_id. EXCEPTION (X2-redo): a
+#      self-origin row whose ONLY recorded blob is x-file-manifest (an
+#      M-persisted row -- pbcopy over SSH writing directly to this machine's
+#      own store, since the watcher can't capture a locked/headless origin's
+#      pasteboard) has no NSFilenamesPboardType/public.file-url to restore
+#      via id: -- it takes form A with the manifest's own paths instead,
+#      same wire shape as case 2 below minus the cache-root check (already
+#      guaranteed local by source_host==self).
 #   2. remote origin, but every recorded path (x-file-manifest, else
 #      x-resolved-path) lives under the picker's own cache root
 #      ~/.cache/pick-clipboard/files/ AND exists on disk: U with those paths
@@ -380,8 +387,30 @@ clip::copy_files_by_id() {
   fi
   rm -f "$blobtmp"
 
-  # Case 1: genuine local capture -> full-fidelity id: restore.
+  # Case 1: genuine local capture -> full-fidelity id: restore. EXCEPT when
+  # the only recorded blob is an x-file-manifest (X2-redo: an M-persisted
+  # row -- pbcopy over SSH writing directly into THIS machine's own store,
+  # bypassing the Hammerspoon watcher entirely, since the origin is
+  # typically locked/headless over SSH and the watcher's loginwindow guard
+  # then skips all capture). A genuine Hammerspoon capture never writes an
+  # x-file-manifest blob at all (only N's cross-machine push and this
+  # picker's own case-3 localization below do, neither of which is
+  # source_host==self) -- so srcuti=='x-file-manifest' here reliably means
+  # "no real NSFilenamesPboardType/public.file-url blob exists to restore
+  # from". restore_by_id's blind writeAllData over just that private UTI
+  # would silently paste nothing in Finder; route through form A with the
+  # manifest's own paths instead -- no cache-root check needed (unlike case
+  # 2 below): source_host==self already establishes they're genuinely local.
   if [[ -z "$host" || "$host" == "$MY_HOST" ]]; then
+    if [[ "$srcuti" == "x-file-manifest" ]]; then
+      if (( ${#rpaths[@]} > 0 )) && clip::send_file_urls "${rpaths[@]}"; then
+        clip::bump_last_ts_now "$id"   # spec R5c: bump-on-use
+        return 0
+      fi
+      clip::restore_fail "local manifest restore failed for row $id"
+      return 1
+    fi
+
     local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-fileid.XXXXXX") || return 1
     print -rn -- "id:$id" > "$pf"
     if clipbridge::send "$BRIDGE_HOST" "$LOCAL_PORT" U "$pf"; then

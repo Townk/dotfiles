@@ -176,6 +176,33 @@ EOF
     The contents of file "$NCLOG" should include "id:$id"
   End
 
+  # X2-redo gap fix: an M-persisted row (op M, manifest-persist-local --
+  # pbcopy over SSH persisting DIRECTLY to this machine's OWN store, since a
+  # locked/headless origin's Hammerspoon watcher can never capture the
+  # pasteboard) has source_host==self, same as a genuine local capture, but
+  # carries ONLY an x-file-manifest blob -- no NSFilenamesPboardType/
+  # public.file-url, since no real pasteboard write ever happened. A genuine
+  # Hammerspoon capture never writes x-file-manifest at all (only N's
+  # cross-machine push and the picker's own localization step do, neither of
+  # which is source_host==self) -- so `srcuti == x-file-manifest` reliably
+  # picks out this shape. restore_by_id's blind writeAllData over just that
+  # private UTI would silently paste nothing in Finder; this must route
+  # through form A with the manifest's own (already-local, no cache-root
+  # check needed) paths instead of the id:<n> form.
+  It 'local M-persisted row (source_host=self, only an x-file-manifest blob): sends U with the raw paths, not id:'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','mac-mini',150); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/local-manifest.bin"
+    printf '%s/local-a.txt\000%s/local-b.txt' "$HOME" "$HOME" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "$HOME/local-a.txt|$HOME/local-b.txt"
+    The contents of file "$NCLOG" should not include "id:$id"
+    The contents of file "$RSYNCLOG" should equal ""
+  End
+
   It 'remote manifest row: rsyncs each manifest path into its per-position cache subdir'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',200); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/manifest.bin"
