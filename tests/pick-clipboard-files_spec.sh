@@ -638,4 +638,43 @@ EOF
     The variable result should equal "pick-clipboard: rsync failed pulling devbox:/x/y (details: /tmp/z)"
     The contents of file "$SHELLSPEC_TMPBASE/restore-fail-stderr" should include "rsync failed pulling devbox:/x/y"
   End
+
+  # W2 reviewer Minor: by the time the hold screen shows, the plain-text
+  # fallback (the T set after a failed files restore) usually already put
+  # the clip's path text on the clipboard -- an error-only hold misreads as
+  # "nothing was copied". clip::copy_by_id marks that success in
+  # CLIP_RESTORE_FALLBACK_OK so the hold can append a note line. The marker
+  # must be set on the failed-files-restore-then-successful-text-fallback
+  # path, and NEVER on an ordinary copy that hit no failure.
+  It 'a failed files restore whose text fallback succeeds sets CLIP_RESTORE_FALLBACK_OK (W2 note line)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('files','devbox',600,'/x/a.txt'); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/manifest.bin"
+    printf '%s/remote-a.txt' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+    cat > "$BINDIR/rsync" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+    chmod +x "$BINDIR/rsync"
+
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::copy_by_id "$1"
+      print -r -- "fallback_ok=${CLIP_RESTORE_FALLBACK_OK}"
+    ' _ "$id" 2>/dev/null)"
+    When call test "$result" = "fallback_ok=1"
+    The status should be success
+  End
+
+  It 'an ordinary text-row copy (no files failure) leaves CLIP_RESTORE_FALLBACK_OK empty -- the note can never appear without its error'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',601,'hello'); SELECT last_insert_rowid();")
+
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::copy_by_id "$1"
+      print -r -- "fallback_ok=${CLIP_RESTORE_FALLBACK_OK}"
+    ' _ "$id" 2>/dev/null)"
+    When call test "$result" = "fallback_ok="
+    The status should be success
+  End
 End

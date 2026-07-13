@@ -342,6 +342,20 @@ clip::restore_fail() {
   CLIP_RESTORE_FAILURE="$msg"
 }
 
+# Set when clip::copy_by_id's plain-text fallback SUCCEEDED after a captured
+# files-restore failure. By the time the hold screen shows, the clip's path
+# text is usually already on the clipboard (the fallback ran between the
+# failure and the hold), so an error-only screen misreads as "nothing was
+# copied at all" -- the hold appends a note line when this is set. Gated on a
+# failure actually being captured: an ordinary text-row copy (no files
+# branch, no failure) never sets it, so the note can never appear without
+# its error.
+CLIP_RESTORE_FALLBACK_OK=""
+clip::note_fallback_ok() {
+  [[ -n "$CLIP_RESTORE_FAILURE" ]] && CLIP_RESTORE_FALLBACK_OK=1
+  return 0
+}
+
 clip::copy_files_by_id() {
   local id=$1
   local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
@@ -563,14 +577,21 @@ clip::copy_by_id() {
   if [[ "$kind" == (files|file|directory) ]]; then
     clip::copy_files_by_id "$id" && return 0
   fi
+  # Every success below marks the fallback (clip::note_fallback_ok is a no-op
+  # unless a files-restore failure was captured above, so a plain text/image
+  # row's ordinary copy never sets the flag): the hold screen (W2) uses it to
+  # note that the clip's path text DID land on the clipboard despite the
+  # file-object restore failing.
   if (( bridge_up )); then
-    [[ "$kind" == image ]] && clip::ship_image_by_id "$id" && return 0
-    clip::set_via_bridge "$BRIDGE_PORT" "$id" && return 0
+    [[ "$kind" == image ]] && clip::ship_image_by_id "$id" && { clip::note_fallback_ok; return 0 }
+    clip::set_via_bridge "$BRIDGE_PORT" "$id" && { clip::note_fallback_ok; return 0 }
   elif [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]]; then
-    clip::set_via_bridge "$LOCAL_PORT" "$id" && return 0
+    clip::set_via_bridge "$LOCAL_PORT" "$id" && { clip::note_fallback_ok; return 0 }
   fi
   if command -v pbcopy >/dev/null 2>&1; then
-    clip::text_by_id "$id" | pbcopy
+    if clip::text_by_id "$id" | pbcopy; then
+      clip::note_fallback_ok
+    fi
   fi
 }
 
@@ -623,13 +644,19 @@ clip::should_hold_on_restore_failure() {
 # common.zsh's own gated C_DANGER/C_DIM/C_RES (gated on an interactive
 # stdout, so this degrades to plain text under a captured/piped stdout).
 clip::render_restore_failure() {
-  local reason=$1
+  local reason=$1 fallback_ok=${2:-}
   if command -v gum >/dev/null 2>&1; then
     GUM_STYLE_FOREGROUND="${C_HEX_DIALOG_DANGER:-${C_HEX_RED:-red}}" \
     GUM_STYLE_BORDER_FOREGROUND="${C_HEX_DIALOG_DANGER:-${C_HEX_RED:-red}}" \
       gum style --border rounded --padding "0 1" --bold -- "$reason" >/dev/tty 2>/dev/null
   else
     printf '%s%s%s\n' "$C_DANGER" "$reason" "$C_RES" >/dev/tty
+  fi
+  # The text fallback usually already put the clip's path text on the
+  # clipboard by the time this screen shows -- say so, or "error, press key"
+  # reads as "nothing was copied" (reviewer Minor on W2).
+  if [[ -n "$fallback_ok" ]]; then
+    printf '%snote: the path was still copied as plain text%s\n' "$C_DIM" "$C_RES" >/dev/tty
   fi
   printf '%spress any key to close%s\n' "$C_DIM" "$C_RES" >/dev/tty
 }
@@ -1088,7 +1115,7 @@ esac
 # untouched -- CLIP_RESTORE_FAILURE stays empty, this is a no-op, instant
 # dismiss exactly like before.
 if clip::should_hold_on_restore_failure "$CLIP_RESTORE_FAILURE" 0; then
-  clip::render_restore_failure "$CLIP_RESTORE_FAILURE"
+  clip::render_restore_failure "$CLIP_RESTORE_FAILURE" "$CLIP_RESTORE_FALLBACK_OK"
   read -k1 -s < /dev/tty || true
   exit 1
 fi
