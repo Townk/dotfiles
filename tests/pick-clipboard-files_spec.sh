@@ -148,9 +148,10 @@ EOF
   }
 
   # Runs the SCRIPT directly (not sourced, no PICK_CLIPBOARD_NO_RUN escape
-  # hatch) with --restore-id <id> as real argv (spec R4's headless CLI mode)
-  # -- this is the exact invocation shape clipboard-picker.lua's hs.task call
-  # uses (full launchPath + a plain arguments table, no shell). -f: same
+  # hatch) with --restore-id <id> as real argv (spec R4's headless CLI mode).
+  # clipboard-picker.lua's hs.task call now wraps this same argv in
+  # `/bin/zsh -lc` for an environment-faithful login shell (W3); the CLI's
+  # own contract -- and what this helper exercises -- is unchanged. -f: same
   # ~/.zshenv guard as run_copy above.
   run_restore_id() {
     zsh -f "$SCRIPT" --restore-id "$1"
