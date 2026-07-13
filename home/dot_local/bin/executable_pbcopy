@@ -138,11 +138,11 @@ send_frame() {
 
 # unknown_opcode_hint <port> -- rework R7: an E reply whose payload is
 # EXACTLY "unknown opcode" means one side's clipboard-bridge predates file
-# clips (U/N/C are newer than the always-supported plain-text G/O/P) --
+# clips (U/M/C are newer than the always-supported plain-text G/O/P) --
 # the bare relayed "pbcopy: unknown opcode" left no clue which machine
 # needed the update. Port 2489 is always THIS machine's own bridge (U's
-# only port, and --content's local branch); anything else is the
-# reverse-tunneled PEER bridge (N's only port, and --content's SSH branch)
+# local port, and --content's local branch); anything else is the
+# reverse-tunneled PEER bridge (M's peer port, and --content's SSH branch)
 # -- so the port alone decides which side the hint should name.
 unknown_opcode_hint() {
   if [ "$1" = 2489 ]; then

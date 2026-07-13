@@ -849,7 +849,7 @@ working.
 > **Phase 6 — file clips + yazi/zsh integration — done and live as of
 > 2026-07-12** (as-built deltas in §6, §12, §13 above; design of record:
 > `docs/superpowers/specs/2026-07-11-clipboard-phase6-files-yazi-design.md`).
-> Landed: the `U`/`L`/`N`/`A` bridge ops and the `x-file-manifest` synthetic
+> Landed: the `U`/`L`/`M`/`A` bridge ops and the `x-file-manifest` synthetic
 > UTI; `pbcopy`/`pbpaste` file modes with no `clip-copy` sibling (folded in,
 > §13); the rsync-engine scp-down + picker `Ctrl-Y` file-row localization
 > (§12); the one-shot `suppress-echo` extension to the Hammerspoon watcher's
