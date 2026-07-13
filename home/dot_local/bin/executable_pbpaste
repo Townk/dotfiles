@@ -413,6 +413,18 @@ pbpaste_cap_theme() {
 # non-interactive callers fail naming the cap and the item. Returns 0 to
 # proceed, 1 to abort (a message is always on stderr in the 1 case).
 #
+# PARSE CONTRACT (clipboard-phase6 W1): smart-paste.yazi's remote paste path
+# runs this shim as a background `Command` with no controlling terminal, so
+# it ALWAYS takes the non-interactive-refusal branch below -- that plugin
+# greps this exact stderr line (parse_cap_refusal in
+# home/dot_config/yazi/plugins/smart-paste.yazi/main.lua) to recognize a cap
+# refusal and raise its own native confirm dialog. Only the fixed substring
+# up through "-- refusing" is load-bearing (label, then the parenthesized
+# CLIP_FILE_MAX/item byte counts, then " -- refusing"); the free-form text
+# AFTER "refusing" is for human eyes only (varies by context) and MUST NOT
+# be relied on by anything parsing this line. Keep both sides' comments in
+# sync if this shape ever changes.
+#
 # Interactivity is decided via /dev/tty, NOT `[ -t 0 ]`: every call site
 # (pbpaste_remote_materialize/_dir) runs from inside main's per-item
 # `while read PF_P ... done < "$PF_PATHLIST"` loop, so stdin is ALWAYS the
@@ -453,7 +465,7 @@ pbpaste_files_cap_check() {
     echo "pbpaste: aborted at user request ($_label)" >&2
     return 1
   fi
-  echo "pbpaste: $_label exceeds size cap (CLIP_FILE_MAX=$_cap bytes, item is $_bytes bytes) -- refusing (non-interactive)" >&2
+  echo "pbpaste: $_label exceeds size cap (CLIP_FILE_MAX=$_cap bytes, item is $_bytes bytes) -- refusing (no interactive confirm available; set CLIP_FILE_MAX=$_bytes or higher to allow)" >&2
   return 1
 }
 

@@ -818,6 +818,12 @@ EOF
     The status should be failure
     The stderr should include "CLIP_FILE_MAX"
     The stderr should include "toobig.txt"
+    # W1: the refusal is actionable and doesn't imply a terminal is needed --
+    # smart-paste.yazi's remote path parses everything up through "--
+    # refusing" (see parse_cap_refusal); this pins that the fixed shape
+    # survived the reword and that the free-form suggestion text is present.
+    The stderr should include "-- refusing (no interactive confirm available"
+    The stderr should include "set CLIP_FILE_MAX=40 or higher to allow"
     The file "$TARGET/toobig.txt" should not be exist
   End
 
@@ -841,6 +847,8 @@ EOF
     The status should be failure
     The stderr should include "CLIP_FILE_MAX"
     The stderr should include "toobigdir"
+    The stderr should include "-- refusing (no interactive confirm available"
+    The stderr should include "set CLIP_FILE_MAX=999999999 or higher to allow"
     The file "$TARGET/toobigdir" should not be exist
   End
 
