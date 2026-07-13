@@ -218,6 +218,36 @@ local function fetch_text_plain(db, id)
   return text
 end
 
+local function fetch_text_preview(db, id)
+  local s = db:prepare("SELECT text_preview FROM clips WHERE id=?;")
+  local text
+  if s then
+    s:bind(1, id)
+    if s:step() == sqlite3.ROW then text = s:get_value(0) end
+    s:finalize()
+  end
+  return text
+end
+
+-- Split an x-file-manifest blob (NUL-joined absolute paths -- see
+-- executable_clipboard-bridge-dispatch's clip::persist_files_manifest_row)
+-- into a list of paths. Plain string:find (not a pattern) on purpose: a
+-- character class containing a literal NUL byte is unreliable across Lua
+-- versions, plain-find has no such issue.
+local function split_manifest(blob)
+  local paths = {}
+  if not blob or blob == "" then return paths end
+  local pos, n = 1, #blob
+  while pos <= n do
+    local nul = blob:find("\0", pos, true)
+    local seg
+    if nul then seg = blob:sub(pos, nul - 1); pos = nul + 1
+    else seg = blob:sub(pos); pos = n + 1 end
+    if seg ~= "" then paths[#paths + 1] = seg end
+  end
+  return paths
+end
+
 -- Cache of bundleId -> data-URI icon string (or false for "looked up, no
 -- icon found" -- cached too, so a missing/uninstalled app isn't re-queried
 -- on every selection change). Lives for the module's lifetime; M.cleanup()
@@ -297,6 +327,34 @@ local function looks_like_text(sample)
   return (bad / #sample) < 0.01
 end
 
+-- Preview built from the x-file-manifest blob alone (NUL-joined absolute
+-- paths -- same data the TUI picker shows via text_preview, X3), one path
+-- per line. nil when no manifest blob is recorded.
+local function manifest_preview(db, id)
+  local blob = fetch_blob(db, id, { "x-file-manifest" })
+  local paths = split_manifest(blob)
+  if #paths == 0 then return nil end
+  return { kind = "text", text = table.concat(paths, "\n") }
+end
+
+-- Fallback preview chain for the files/file/directory kinds when their
+-- primary rich payload (public.file-url / x-resolved-path) is absent --
+-- true for a remote manifest row whose bytes were never pulled locally
+-- (X2-redo/N: only x-file-manifest is recorded, spec X7). Tries, in order:
+-- (1) the manifest's full path list -- unlike public.file-url, which only
+-- ever held the first path, this shows ALL of them; (2) clips.text_preview,
+-- which for a files/file/directory row is already either the newline-joined
+-- paths (X3) or the synthetic "[kind]" badge, so it also covers (3) the
+-- badge as a last resort; (4) the badge itself, for the belt-and-suspenders
+-- case where text_preview is unexpectedly empty/NULL.
+local function file_kind_fallback(db, id, kind)
+  local mp = manifest_preview(db, id)
+  if mp then return mp end
+  local tp = fetch_text_preview(db, id)
+  if tp and tp ~= "" then return { kind = "text", text = tp } end
+  return { kind = "text", text = "[" .. kind .. "]" }
+end
+
 -- Build the preview payload {kind="text"|"html"|"image", ...} for a clip id.
 -- rtf/rtfd is converted to HTML natively via hs.styledtext (no shell-out).
 -- Falls back to text_plain when a rich payload is missing or unconvertible.
@@ -341,7 +399,14 @@ local function fetch_preview(id, kind)
     -- bytes; render as-is (monospace) rather than attempting full NSURL
     -- bookmark-data decoding. Known limitation, not exhaustive.
     local blob = fetch_blob(db, id, { "public.file-url" })
-    if blob then result = { kind = "text", text = blob } end
+    if blob then
+      result = { kind = "text", text = blob }
+    else
+      -- No public.file-url: a remote manifest row (bytes never pulled) has
+      -- neither this nor x-resolved-path -- fall back to the manifest/
+      -- text_preview/badge chain instead of leaving the preview blank (X7).
+      result = file_kind_fallback(db, id, kind)
+    end
   elseif kind == "file" then
     local path = fetch_blob(db, id, { "x-resolved-path" })
     if path then
@@ -382,9 +447,20 @@ local function fetch_preview(id, kind)
       -- Unreadable, binary, empty, or missing: fall back to the path itself.
       if not result then result = { kind = "text", text = path } end
     end
+    if not path then
+      -- No x-resolved-path at all (a remote manifest row -- kind refines
+      -- to "file" only for a genuine local capture, but be defensive):
+      -- fall back to the manifest/text_preview/badge chain rather than a
+      -- blank preview (X7).
+      result = file_kind_fallback(db, id, kind)
+    end
   elseif kind == "directory" then
     local path = fetch_blob(db, id, { "x-resolved-path" })
-    if path then result = { kind = "text", text = path } end
+    if path then
+      result = { kind = "text", text = path }
+    else
+      result = file_kind_fallback(db, id, kind)
+    end
   end
 
   if not result then
