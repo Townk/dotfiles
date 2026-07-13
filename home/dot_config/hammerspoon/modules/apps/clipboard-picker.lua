@@ -482,28 +482,93 @@ end
 
 local PICK_CLIPBOARD_BIN = (os.getenv("HOME") or "") .. "/.local/libexec/pick-clipboard"
 
+-- Single-quote a string for safe embedding in a shell command line: wrap in
+-- '...', escaping any embedded ' as '\''  (close quote, escaped quote,
+-- reopen quote). Used below for PICK_CLIPBOARD_BIN even though it never
+-- contains shell metacharacters in practice -- interpolating ANY string
+-- into a command line that a shell will parse deserves the discipline on
+-- principle, not just when a byte pattern happens to demand it.
+local function shell_quote(str)
+  return "'" .. tostring(str):gsub("'", "'\\''") .. "'"
+end
+
+-- Last non-blank line of a possibly-multiline string, or nil. Used to pull
+-- the shim's one-line failure reason out of stderr: clip::restore_fail (W2,
+-- executable_pick-clipboard) prints exactly one "pick-clipboard: ..." line
+-- per failure, but it's not always the ONLY line on stderr -- a failing
+-- rsync can leave its own diagnostics ahead of it -- so the reason is the
+-- LAST line, not the first (matching first would surface rsync's noise
+-- instead of the shim's actual verdict).
+local function last_line(s)
+  if not s or s == "" then return nil end
+  local last
+  for line in s:gmatch("[^\n]+") do last = line end
+  return last
+end
+
 -- Async headless restore for a gated files row: shells out to the SAME
 -- clip::copy_files_by_id logic the terminal picker's Ctrl-Y uses
 -- (executable_pick-clipboard --restore-id <id>, spec R4) via hs.task --
 -- rsync pulls a remote manifest, which can take a while, so this must never
--- block the UI thread. hs.task.new(launchPath, callbackFn, [streamCallbackFn],
--- [arguments]) -> hs.task; callbackFn receives (exitCode, stdOut, stdErr) on
--- termination (verified against modules/system/controls.lua's existing
--- hs.task.new(path, cb, argsTable) usage -- the 3-arg form, table detected
--- positionally as `arguments` -- and Hammerspoon's own docs.json for
--- hs.task.new). launchPath MUST be an absolute path (never PATH-searched).
--- onDone(ok), if given, runs after the alert.
+-- block the UI thread.
+--
+-- Routed through `/bin/zsh -lc "<cmd>"` rather than invoking
+-- PICK_CLIPBOARD_BIN directly as hs.task's launchPath (the argv-form used
+-- before, no shell involved at all): Hammerspoon is a background/accessory
+-- GUI app, and hs.task's argv-form inherits Hammerspoon's OWN process
+-- environment verbatim -- SSH_AUTH_SOCK pointing at Apple's keyless default
+-- agent (/var/run/com.apple.launchd.*/Listeners) and a bare
+-- /usr/bin:/bin:/usr/sbin:/sbin PATH -- never the real environment any of
+-- the user's shells run with (their own SSH agent socket, homebrew PATH,
+-- etc.), which only gets assembled by ~/.zshenv & co. The rsync-over-ssh
+-- pull inside --restore-id authenticates via SSH_AUTH_SOCK, so headless
+-- restores of a REMOTE row silently failed auth from Hammerspoon while the
+-- identical `pick-clipboard --restore-id` worked from any login shell --
+-- this is the load-bearing reason a login shell is used here, not just a
+-- PATH nicety. `-l` (login, no `-i`) sources zshenv/zprofile without
+-- pulling in prompt frameworks (p10k, etc) meant for an interactive TTY --
+-- the extra startup cost (well under a second) is acceptable, one-time,
+-- latency for a paste.
+--
+-- hs.task.new(launchPath, callbackFn, [streamCallbackFn], [arguments]) ->
+-- hs.task; callbackFn receives (exitCode, stdOut, stdErr) on termination
+-- (verified against modules/system/controls.lua's own hs.task.new("/bin/sh",
+-- cb, { "-c", cmd }) usage, and Hammerspoon's own docs.json for
+-- hs.task.new). launchPath MUST be an absolute path (never PATH-searched);
+-- "/bin/zsh" satisfies that same as "/bin/sh" did before. onDone(ok), if
+-- given, runs after the toast/notification.
 local function headless_restore(id, onDone)
-  local task = hs.task.new(PICK_CLIPBOARD_BIN, function(exitCode, _stdOut, stdErr)
+  local cmd = shell_quote(PICK_CLIPBOARD_BIN) .. " --restore-id " .. shell_quote(tostring(id))
+  local task = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
+    -- Success is the exit code alone, never output presence: pick-clipboard
+    -- can legitimately print nothing on stdout/stderr on a clean success,
+    -- and conversely a captured failure reason on stderr must never be
+    -- mistaken for "it printed something so it must have worked".
     local ok = (exitCode == 0)
+    -- Always printed to the HS console (both branches) -- so the full
+    -- stdout+stderr is retrievable after the fact even when the toast was
+    -- missed, which live validation showed was easy to do.
+    print(string.format(
+      "clipboard-picker: headless restore id=%s exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
+      tostring(id), tostring(exitCode), stdOut or "", stdErr or ""))
     if ok then
       hs.alert.show("Files restored")
     else
-      local reason = (stdErr and stdErr:match("[^\n]+")) or "restore failed"
-      hs.alert.show("Clipboard: " .. reason)
+      -- hs.alert's default ~2s toast was unreadably brief for a failure
+      -- (live validation). hs.notify is a real Notification Center item;
+      -- withdrawAfter=0 disables its own default auto-withdrawal (5s for
+      -- the hs.notify.show() shorthand, per hs.notify docs) so it stays
+      -- until the user dismisses it -- same durable-until-acknowledged
+      -- intent as the terminal picker's own restore-failure hold (W2).
+      local reason = last_line(stdErr) or "restore failed"
+      hs.notify.new(nil, {
+        title = "Clipboard restore failed",
+        informativeText = reason,
+        withdrawAfter = 0,
+      }):send()
     end
     if onDone then onDone(ok) end
-  end, { "--restore-id", tostring(id) })
+  end, { "-lc", cmd })
   task:start()
   return task
 end
