@@ -70,6 +70,8 @@
 #      The CURRENT clipboard's copy-time, so a consumer surfacing a peer's live
 #      clipboard as a synthetic row can sort it chronologically instead of
 #      always pinning it to the top (X9, pick-clipboard's live-peer row, §22).
+#      Resolved by TEXT-CONTENT match against the store (the picker's own §22.5
+#      dedup query), so it matches HS-watcher-captured rows too -- NOT by hash.
 #      See clip::op_get_ts for the exact fallback chain.
 #   M  manifest-persist-local (X2-redo; Fix A retired N below in favor of a
 #      second use of this same op) req: source_host US path NUL path ...
@@ -281,31 +283,38 @@ clip::op_get() {
 # can sort it chronologically against its own stored rows instead of always
 # pinning it to the top. Fallback chain (documented here since it's easy to
 # lose track of across the two SELECTs below):
-#   1. Read the current clipboard text the SAME way op_get does (pbpaste).
-#   2. Hash it the SAME way op_persist hashes a text clip: shasum -a 256 of
-#      the raw text. NOT the Hammerspoon watcher's own type_hash (that hashes
-#      the sorted uti=blob SET of a captured pasteboard entry, a different
-#      formula) -- a P/M-persisted row's type_hash already matches this exact
-#      formula, but a row the HS watcher captured directly generally will
-#      not, so step 3 below is a best-effort match, not a guarantee.
-#   3. If some row's type_hash matches, that row's last_ts (the most recent,
-#      if several rows share the hash) IS the copy-time -- return it.
-#   4. Otherwise (a just-copied clip that hasn't round-tripped into the store
-#      yet, a non-text pasteboard entry, or a locally-HS-captured row using
-#      the other hash formula) fall back to the store's most-recent last_ts
-#      (MAX(last_ts)) -- close enough: it's almost certainly what a fresh
-#      "current clipboard" query means anyway.
-#   5. If the store itself is empty, there is nothing to fall back to --
+#   1. Read the current clipboard text the SAME way op_get does (pbpaste),
+#      into a temp file (byte-safe: arbitrary clip text, incl. embedded NULs,
+#      would be mangled through a $(...) capture or a SQL string literal).
+#   2. Match by TEXT CONTENT, not by any hash: find the store row whose
+#      text_plain equals the current clipboard text, compared trailing-
+#      newline-insensitively (rtrim char(10) on both sides) and byte-safely
+#      (readfile, no SQL-escaping of the text). This is EXACTLY the picker's
+#      own §22.5 dedup query -- and it's the whole point of this rework: a
+#      hash match (shasum, = op_persist's formula) only ever matched a P/M-
+#      persisted row, so a clip the Hammerspoon watcher captured on the HOME
+#      machine (hashed over the sorted uti=blob SET, a different formula)
+#      never matched and its real last_ts was lost. Content match hits the
+#      watcher-captured common case too. Most-recent (ORDER BY last_ts DESC)
+#      when several rows share the text.
+#   3. If NO row has that text (a just-copied clip that hasn't round-tripped
+#      into the store yet, or a non-text pasteboard entry), fall back to the
+#      store's most-recent last_ts (MAX(last_ts)) -- acceptable: a genuinely-
+#      not-in-store current clip is something freshly copied, so "recent /
+#      near the top" is the right default.
+#   4. If the store itself is empty, there is nothing to fall back to --
 #      reply with an empty payload; the caller treats that as "unknown".
 clip::op_get_ts() {
   local text
   text="$(pbpaste 2>/dev/null)" || text=""
-  local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/clipboard-bridge-curts.XXXXXX") || { send_ok ""; return }
+  print -rn -- "$text" > "$tmpf"
   local ts
-  ts="$(sqlite3 "$DB_FILE" "SELECT last_ts FROM clips WHERE type_hash='$hash' ORDER BY last_ts DESC LIMIT 1;" 2>/dev/null)"
+  ts="$(sqlite3 "$DB_FILE" "SELECT last_ts FROM clips WHERE rtrim(text_plain, char(10)) = rtrim(CAST(readfile('$tmpf') AS TEXT), char(10)) ORDER BY last_ts DESC LIMIT 1;" 2>/dev/null)"
   if [[ -z "$ts" ]]; then
     ts="$(sqlite3 "$DB_FILE" "SELECT MAX(last_ts) FROM clips;" 2>/dev/null)"
   fi
+  rm -f "$tmpf"
   send_ok "${ts:-}"
 }
 

@@ -63,6 +63,14 @@ End
 # same way op_get does -- a bare `pbpaste`) so these tests never touch the
 # real system pasteboard.
 #
+# Resolution is by TEXT CONTENT (the picker's §22.5 dedup query: rtrim
+# char(10) on both sides, byte-safe via readfile), NOT by any hash -- so it
+# matches a row the Hammerspoon watcher captured on the HOME machine, whose
+# type_hash is computed over the sorted uti=blob SET (a different formula
+# than op_persist's shasum) and would never hash-match. The
+# 'watcher-captured row' test below is the case that a hash-based S got
+# wrong (the whole reason for this rework).
+#
 # NOT exercised here: whether the OS pasteboard content a real `pbpaste`
 # would return actually reflects a genuine user copy. That would require
 # either mutating the real macOS pasteboard (intrusive -- this machine's
@@ -70,11 +78,11 @@ End
 # tests run outside any sandbox for it) or a running Hammerspoon instance,
 # neither appropriate for a headless spec run. Stubbing `pbpaste` instead
 # exercises the exact same code path op_get_ts runs in production (shelling
-# out to `pbpaste`, nothing pasteboard-API-specific) -- so the hash-then-
-# SELECT resolution and both fallback tiers below are fully covered; only
-# "does pbpaste's own output genuinely reflect the live pasteboard" is
-# deferred/untested, and that's op_get's own well-established behavior, not
-# new surface this op adds.
+# out to `pbpaste`, nothing pasteboard-API-specific) -- so the content-match
+# resolution and both fallback tiers below are fully covered; only "does
+# pbpaste's own output genuinely reflect the live pasteboard" is deferred/
+# untested, and that's op_get's own well-established behavior, not new
+# surface this op adds.
 Describe 'clipboard-bridge-dispatch: S get-current-ts'
   DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
 
@@ -144,22 +152,45 @@ EOF
     tail -c +6 "$RESP"
   }
 
-  It "returns the matching row's last_ts when the current clipboard hashes to a stored row"
+  # THE case a hash-based S got wrong: a row the HS watcher captured on the
+  # HOME machine has its text in text_plain but a type_hash computed over the
+  # sorted uti=blob SET -- deliberately NOT equal to shasum(text_plain). The
+  # old S hashed the current clipboard with shasum and looked up type_hash,
+  # so it never matched this row and fell through to MAX(last_ts) (~now,
+  # inflated by an unrelated recent push) -- floating an old clip to the top.
+  # Content match returns ITS real last_ts instead.
+  It "returns a watcher-captured row's last_ts via content match (type_hash is an unrelated uti-set hash, never shasum(text))"
     printf '%s' 'hello world' > "$PBPASTE_FIXTURE"
-    hash=$(printf '%s' 'hello world' | shasum -a 256 | awk '{print $1}')
-    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, type_hash) VALUES ('text', 111.5, '$hash');"
+    # A newer, unrelated row (an M-push, say) is what MAX(last_ts) would
+    # wrongly return if the content match failed -- pin it far in the future.
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, text_plain, type_hash) VALUES ('text', 999.9, 'something else entirely', 'unrelated-recent');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, text_plain, type_hash) VALUES ('text', 111.5, 'hello world', 'uti-set-hash-not-shasum');"
 
     When call run_s
     The status should be success
     The output should include "STATUS:O"
     The output should include "111.5"
+    The output should not include "999.9"
   End
 
-  It 'returns the MOST RECENT last_ts when several rows share the current clipboard hash'
+  # Trailing-newline insensitivity (rtrim char(10) on both sides): op_get
+  # (pbpaste) strips the trailing newline a stored copy keeps, so the current
+  # clipboard text can differ from text_plain only by that newline and must
+  # still match.
+  It 'matches trailing-newline-insensitively (stored text_plain keeps a newline op_get stripped)'
+    printf '%s' 'line one' > "$PBPASTE_FIXTURE"   # no trailing newline (as pbpaste returns)
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, text_plain, type_hash) VALUES ('text', 123.5, 'line one' || char(10), 'x');"
+
+    When call run_s
+    The status should be success
+    The output should include "STATUS:O"
+    The output should include "123.5"
+  End
+
+  It 'returns the MOST RECENT last_ts when several rows share the current clipboard text'
     printf '%s' 'hello world' > "$PBPASTE_FIXTURE"
-    hash=$(printf '%s' 'hello world' | shasum -a 256 | awk '{print $1}')
-    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, type_hash) VALUES ('text', 111.5, '$hash');"
-    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, type_hash) VALUES ('text', 222.75, '$hash');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, text_plain, type_hash) VALUES ('text', 111.5, 'hello world', 'a');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, text_plain, type_hash) VALUES ('text', 222.75, 'hello world', 'b');"
 
     When call run_s
     The status should be success
@@ -168,14 +199,14 @@ EOF
     The output should not include "111.5"
   End
 
-  # Fallback tier 1 (dispatcher comment step 4): no stored row's type_hash
-  # matches the current clipboard (a just-copied text that hasn't round-
-  # tripped into the store yet, or -- as here -- simply nothing matching) --
-  # fall back to the store's most-recent last_ts.
-  It "falls back to the store's most recent last_ts when nothing matches the current clipboard's hash"
+  # Fallback tier 1 (dispatcher comment step 3): no stored row's text matches
+  # the current clipboard (a just-copied text that hasn't round-tripped into
+  # the store yet, or -- as here -- simply nothing matching) -- fall back to
+  # the store's most-recent last_ts.
+  It "falls back to the store's most recent last_ts when nothing matches the current clipboard's text"
     printf '%s' 'not in the store' > "$PBPASTE_FIXTURE"
-    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, type_hash) VALUES ('text', 50, 'deadbeef');"
-    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, type_hash) VALUES ('text', 300.25, 'cafebabe');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, text_plain, type_hash) VALUES ('text', 50, 'row a', 'deadbeef');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts, text_plain, type_hash) VALUES ('text', 300.25, 'row b', 'cafebabe');"
 
     When call run_s
     The status should be success
