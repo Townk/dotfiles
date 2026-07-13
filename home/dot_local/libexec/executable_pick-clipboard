@@ -324,6 +324,24 @@ clip::send_file_urls() {
 # PICK_CLIPBOARD_RSYNC is a TEST-ONLY override: an absolute-path invocation
 # can't be shadowed via PATH, so the shellspec suite injects its fake rsync
 # through this env var instead. Never set it in production.
+#
+# W2: every failure exit below goes through clip::restore_fail instead of a
+# bare `print -ru2`, so the SAME one-line reason that always went to stderr
+# (wire format unchanged -- tests still match on it) is ALSO stashed in
+# CLIP_RESTORE_FAILURE. The interactive tail of this script (after the
+# accept-dispatch case, once fzf has already exited) reads that global to
+# decide whether to hold the picker's floating pane open long enough to show
+# it -- the printed-then-vanished-with-the-pane bug validated live twice.
+# Headless (--restore-id) also runs through here and sets the global, but
+# never looks at it: that branch exits immediately, before this file's
+# interactive tail is reached at all.
+CLIP_RESTORE_FAILURE=""
+clip::restore_fail() {
+  local msg="pick-clipboard: $1"
+  print -ru2 -- "$msg"
+  CLIP_RESTORE_FAILURE="$msg"
+}
+
 clip::copy_files_by_id() {
   local id=$1
   local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
@@ -331,7 +349,7 @@ clip::copy_files_by_id() {
   # Recorded paths: x-file-manifest first (multi-path), else x-resolved-path
   # (single-path). srcuti remembers which one so case 3 vs 4 can differ.
   local blobtmp; blobtmp=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-cpfiles-blob.XXXXXX") || {
-    print -ru2 -- "pick-clipboard: mktemp failed"; return 1
+    clip::restore_fail "mktemp failed"; return 1
   }
   local srcuti=""
   sqlite3 "$DB_FILE" "SELECT writefile('$blobtmp', blob) FROM clip_types WHERE clip_id=$id AND uti='x-file-manifest';" >/dev/null 2>&1
@@ -358,12 +376,12 @@ clip::copy_files_by_id() {
       return 0
     fi
     rm -f "$pf"
-    print -ru2 -- "pick-clipboard: local files restore (id:$id) failed"
+    clip::restore_fail "local files restore (id:$id) failed"
     return 1
   fi
 
   # Remote-origin row from here on.
-  (( ${#rpaths[@]} > 0 )) || { print -ru2 -- "pick-clipboard: no file paths recorded for row $id"; return 1 }
+  (( ${#rpaths[@]} > 0 )) || { clip::restore_fail "no file paths recorded for row $id"; return 1 }
 
   # Case 2: every recorded path is one of the picker's OWN cache paths and
   # exists (a row this picker localized earlier, either shape) -> form A
@@ -381,7 +399,7 @@ clip::copy_files_by_id() {
       clip::bump_last_ts_now "$id"   # spec R5c: bump-on-use
       return 0
     fi
-    print -ru2 -- "pick-clipboard: localized files restore failed for row $id"
+    clip::restore_fail "localized files restore failed for row $id"
     return 1
   fi
 
@@ -390,14 +408,14 @@ clip::copy_files_by_id() {
   # never held it, nothing to re-pull) or a mirrored row recording a
   # non-cache origin path (only x-file-manifest rows are pullable in M2).
   if [[ "$srcuti" != "x-file-manifest" ]]; then
-    print -ru2 -- "pick-clipboard: no pullable manifest for row $id (recorded path: ${rpaths[1]})"
+    clip::restore_fail "no pullable manifest for row $id (recorded path: ${rpaths[1]})"
     return 1
   fi
 
   # Case 3: genuine remote manifest -> rsync pull-down (spec §12).
   local rsync_bin="${PICK_CLIPBOARD_RSYNC:-/opt/homebrew/bin/rsync}"
   if [[ ! -x "$rsync_bin" ]]; then
-    print -ru2 -- "pick-clipboard: brew rsync not found: $rsync_bin"
+    clip::restore_fail "brew rsync not found: $rsync_bin"
     return 1
   fi
   local kind; kind=$(sqlite3 "$DB_FILE" "SELECT IFNULL(type_kind,'files') FROM clips WHERE id=$id;" 2>/dev/null) || kind="files"
@@ -411,7 +429,7 @@ clip::copy_files_by_id() {
     sub="$cachedir/$idx"
     lp="$sub/${rp:t}"
     if [[ ! -e "$lp" ]]; then
-      mkdir -p "$sub" || { print -ru2 -- "pick-clipboard: cannot create $sub"; return 1 }
+      mkdir -p "$sub" || { clip::restore_fail "cannot create $sub"; return 1 }
       # spec R3: this pull's ssh session has no use for the clipboard bridge's
       # RemoteForward -- without ClearAllForwardings, a session multiplexed
       # onto the interactive connection's ControlMaster re-requests the same
@@ -443,9 +461,9 @@ clip::copy_files_by_id() {
       [[ -n "$rsync_err" && -w "$rsync_err" ]] || rsync_err=/dev/null
       if ! "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes' "${host}:${rp}" "$sub/" >/dev/null 2>"$rsync_err"; then
         if [[ "$rsync_err" == /dev/null ]]; then
-          print -ru2 -- "pick-clipboard: rsync failed pulling $host:$rp"
+          clip::restore_fail "rsync failed pulling $host:$rp"
         else
-          print -ru2 -- "pick-clipboard: rsync failed pulling $host:$rp (details: $rsync_err)"
+          clip::restore_fail "rsync failed pulling $host:$rp (details: $rsync_err)"
         fi
         return 1
       fi
@@ -496,7 +514,7 @@ clip::copy_files_by_id() {
     clip::bump_last_ts_now "$id"   # spec R5c: bump-on-use
     return 0
   fi
-  print -ru2 -- "pick-clipboard: localized files restore failed for row $id"
+  clip::restore_fail "localized files restore failed for row $id"
   return 1
 }
 
@@ -554,6 +572,66 @@ clip::copy_by_id() {
   if command -v pbcopy >/dev/null 2>&1; then
     clip::text_by_id "$id" | pbcopy
   fi
+}
+
+# --- restore-failure hold (Ctrl-Y files-restore path, W2) --------------------
+# CLIP_RESTORE_FAILURE (set by clip::restore_fail, above) is checked once, at
+# the very end of this script's interactive tail, after the accept-dispatch
+# case has run and fzf has released the tty. Split into three small pieces so
+# the DECISION is unit-testable without any fzf/floating-pane machinery (see
+# tests/pick-clipboard-files_spec.sh):
+#
+#   clip::has_live_tty              -- is a controlling terminal reachable at
+#                                       all right now?
+#   clip::should_hold_on_restore_failure -- pure decision, no I/O
+#   clip::render_restore_failure     -- the actual on-screen rendering
+#
+# The `read -k1 -s` hold itself still needs a real terminal to block on,
+# which a test harness never has -- that last mile stays exercised only by
+# live validation, not by the spec.
+
+# A real attempt to open /dev/tty for reading, not `[[ -e /dev/tty ]]` --
+# that special file exists on disk regardless of whether THIS process has a
+# controlling terminal (true even under this repo's own shellspec harness,
+# which has none), so an existence check alone would say "yes, hold" and
+# block a headless/CI run. Opening it is the honest test: with no
+# controlling terminal the open fails immediately (ENXIO) instead of
+# hanging, which is exactly the fast, safe "no tty" signal this needs.
+clip::has_live_tty() {
+  { : < /dev/tty; } 2>/dev/null
+}
+
+# Decide whether to hold the pane open: only when there IS a reason to show,
+# we're on the interactive path (headless=1 -- --restore-id / hs.task --
+# always wins even if a reason were somehow set; in production that path
+# exits long before this function could ever be reached, but the parameter
+# keeps the guard on the MODE rather than relying on tty-detection alone),
+# and a live terminal is actually reachable to hold against.
+clip::should_hold_on_restore_failure() {
+  local reason=$1 headless=${2:-0}
+  [[ -n "$reason" ]] || return 1
+  (( headless )) && return 1
+  clip::has_live_tty || return 1
+  return 0
+}
+
+# Render the captured reason clearly and hold for one keypress. gum-styled
+# (themed via the Catppuccin C_HEX_*/C_ROLE_* palette already in scope
+# through common.zsh -- pick-common.zsh sources it transitively, so unlike
+# pbpaste's standalone-POSIX-sh JSON-palette detour, the zsh vars are simply
+# there) when gum is on PATH; otherwise a plain ANSI fallback using
+# common.zsh's own gated C_DANGER/C_DIM/C_RES (gated on an interactive
+# stdout, so this degrades to plain text under a captured/piped stdout).
+clip::render_restore_failure() {
+  local reason=$1
+  if command -v gum >/dev/null 2>&1; then
+    GUM_STYLE_FOREGROUND="${C_HEX_DIALOG_DANGER:-${C_HEX_RED:-red}}" \
+    GUM_STYLE_BORDER_FOREGROUND="${C_HEX_DIALOG_DANGER:-${C_HEX_RED:-red}}" \
+      gum style --border rounded --padding "0 1" --bold -- "$reason" >/dev/tty 2>/dev/null
+  else
+    printf '%s%s%s\n' "$C_DANGER" "$reason" "$C_RES" >/dev/tty
+  fi
+  printf '%spress any key to close%s\n' "$C_DIM" "$C_RES" >/dev/tty
 }
 
 # --- live entry accept handlers (spec §22.4) --------------------------------
@@ -997,3 +1075,20 @@ case "$selected" in
   "")      ;;
   *)       clip::text_by_id "$selected" ;;
 esac
+
+# W2: a Ctrl-Y files-restore failure (rsync pull of a since-vanished remote
+# path, a stale localized row, …) used to be unreadable -- its one-line
+# reason printed to stderr right as this script exited, and zellij-modal's
+# floating pane (close_on_exit) was gone a heartbeat later (validated live
+# twice). Hold it on screen instead of letting it vanish with the picker:
+# only fires when clip::copy_by_id actually hit a files-restore failure
+# above (CLIP_RESTORE_FAILURE non-empty), we're on the interactive path
+# (never --restore-id/hs.task, which already exited long before this line),
+# and a real terminal is attached to hold against. The success path is
+# untouched -- CLIP_RESTORE_FAILURE stays empty, this is a no-op, instant
+# dismiss exactly like before.
+if clip::should_hold_on_restore_failure "$CLIP_RESTORE_FAILURE" 0; then
+  clip::render_restore_failure "$CLIP_RESTORE_FAILURE"
+  read -k1 -s < /dev/tty || true
+  exit 1
+fi

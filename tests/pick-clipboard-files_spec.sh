@@ -564,4 +564,78 @@ EOF
     The status should be failure
     The stderr should include "local files restore"
   End
+
+  # --- W2: restore-failure messages must not vanish with the picker ----------
+  # The interactive tail of the script (after fzf's accept-dispatch case) can
+  # hold the floating pane open on a Ctrl-Y files-restore failure so the
+  # one-line reason is readable instead of flashing past as the pane closes
+  # (validated live twice). That hold must NEVER apply to the --restore-id
+  # headless mode: clipboard-picker.lua's hs.task shells out to exactly this
+  # invocation and can't answer a `read -k1 -s` prompt, so a hold there would
+  # wedge the GUI picker's restore call forever. --restore-id already exits
+  # (at the top of the script, long before the interactive tail) on both
+  # success and failure, so this is really a structural guarantee -- this
+  # timeout-guarded example is the regression net: if a future change ever
+  # routed --restore-id through the interactive tail, this would hang and
+  # timeout instead of silently passing.
+  It '--restore-id failure exits promptly (never holds) even though the same reason reaches stderr (spec R4 + W2)'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',503); SELECT last_insert_rowid();")
+    cat > "$BINDIR/nc" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+    chmod +x "$BINDIR/nc"
+
+    When call timeout 5 zsh -f "$SCRIPT" --restore-id "$id" < /dev/null
+    The status should be failure
+    The status should not equal 124
+    The stderr should include "local files restore"
+  End
+
+  # clip::should_hold_on_restore_failure is the pure decision the interactive
+  # tail gates on; exercised directly (via PICK_CLIPBOARD_NO_RUN) so it's
+  # covered without ever touching fzf or a floating pane. The TRUE "hold"
+  # case (a live controlling terminal actually reachable) is intentionally
+  # NOT exercised here -- there is no way to fake a real controlling tty
+  # inside this shellspec harness, and clip::has_live_tty's whole point is to
+  # tell the difference (see its own comment in the script). What IS covered
+  # is every reason the decision must come back "no": no reason to show, the
+  # headless/hs.task mode, and -- the case this harness always hits -- no
+  # live terminal attached.
+  run_should_hold() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::should_hold_on_restore_failure "$1" "$2"
+    ' _ "$1" "$2"
+  }
+
+  It 'clip::should_hold_on_restore_failure: no reason to show -> never hold'
+    When call run_should_hold "" 0
+    The status should be failure
+  End
+
+  It 'clip::should_hold_on_restore_failure: headless mode -> never hold, even with a reason'
+    When call run_should_hold "pick-clipboard: rsync failed pulling devbox:/x" 1
+    The status should be failure
+  End
+
+  It 'clip::should_hold_on_restore_failure: interactive but no live controlling terminal (this harness) -> never hold'
+    When call run_should_hold "pick-clipboard: rsync failed pulling devbox:/x" 0
+    The status should be failure
+  End
+
+  # clip::restore_fail is what every failure exit inside clip::copy_files_by_id
+  # now goes through (W2): it must keep printing the EXACT same stderr text
+  # existing callers already assert on (see the rsync/local-restore-failure
+  # tests above) while ALSO capturing it into CLIP_RESTORE_FAILURE for the
+  # interactive tail to render+hold on later.
+  It 'clip::restore_fail prints the reason to stderr AND stashes it in CLIP_RESTORE_FAILURE'
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::restore_fail "rsync failed pulling devbox:/x/y (details: /tmp/z)"
+      print -r -- "$CLIP_RESTORE_FAILURE"
+    ' 2>"$SHELLSPEC_TMPBASE/restore-fail-stderr")"
+    The variable result should equal "pick-clipboard: rsync failed pulling devbox:/x/y (details: /tmp/z)"
+    The contents of file "$SHELLSPEC_TMPBASE/restore-fail-stderr" should include "rsync failed pulling devbox:/x/y"
+  End
 End
