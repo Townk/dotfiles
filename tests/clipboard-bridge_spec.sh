@@ -39,10 +39,11 @@ Describe 'clipboard-bridge-dispatch: O declare-origin'
     The contents of file "$ORIGINFILE" should include "$expected"
   End
 
-  # A plain O must NOT set the N op's one-shot suppress-echo flag (origin-file
+  # A plain O must NOT set the one-shot suppress-echo flag (origin-file
   # line 4, files-yazi T11): text flows (nvim / pbcopy) NEED the watcher's
-  # capture -- only N suppresses it, because N inserts its own authoritative
-  # store row. Exactly 3 lines = the pre-existing format, nothing extra.
+  # capture. Historically only the now-retired `N` push-manifest op (Fix A)
+  # set it, because N inserted its own authoritative store row. Exactly 3
+  # lines = the pre-existing format, nothing extra.
   It 'does not write the suppress-echo flag (exactly 3 lines)'
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     The output should start with "O"

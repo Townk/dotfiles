@@ -594,6 +594,30 @@ where "you" is decided by bridge-up:
 > through the same paths-direct `U` form its remote-origin cache-hit case
 > already used, instead of the `id:<n>` full-fidelity restore that would
 > otherwise try to restore a private UTI Finder can't paste.
+>
+> **As-built note (Fix A, corrects the peer `N` push described by X2-redo
+> above)**: files-over-SSH now persists a RECORD-ONLY manifest on **both**
+> the origin (local, 2489) and the peer (remote, 2490) via the same op `M` —
+> it does **not** set the peer's pasteboard. Files are lazy (§12): the peer
+> is only supposed to get a manifest *pointer*, materialized on `Ctrl-Y`, so
+> its live pasteboard must never be touched by this push. The peer send used
+> to be op `N` (push-manifest), which — on top of the row-insert — also
+> declared origin and set the peer's pasteboard to the paths as plain TEXT.
+> That text placeholder got reflected back up through the peer's live
+> clipboard and surfaced as a confusing "remote text" twin of the same clip
+> on the origin's own TUI picker (whose live-peer entry mirrors the peer's
+> current clipboard). `pbcopy` was the only caller of `N`, so the op has been
+> retired from the dispatcher entirely — both the local and peer sends in
+> `pbcopy`'s SSH files branch are now `M`, byte-identical payload, sent to
+> 127.0.0.1:2489 then (best-effort) `CLIPBOARD_BRIDGE_PORT`/2490. The
+> `M`-inserted row's `source_host` is what tells the two sides apart: on the
+> origin it equals the local host (a local clip); on the peer it differs (a
+> remote clip) — same distinction the picker already made, just without a
+> pasteboard write triggering it. The suppress-echo origin-file mechanism
+> (Task 11) that used to guard `N`'s pasteboard echo is left in place,
+> unused but harmless, in `clipboard-bridge-dispatch`'s
+> `clip::declare_origin_core` and `clipboard-history.lua`'s
+> `captured_origin()`.
 > - `pbcopy --content <file>` — the file's *bytes* under a detected UTI
 >   (extension first, then `file --mime-type`) via the existing `C` op. This
 >   is the mode this section originally called `clip-copy`.
@@ -629,14 +653,17 @@ where "you" is decided by bridge-up:
 >   files clip. Retries briefly
 >   (~0.3s) to tolerate the watcher's capture lag before declaring "not
 >   files" (§14).
-> - `N` push-manifest — remote `pbcopy`'s manifest push: sets the Mac's
->   pasteboard text and inserts an `x-file-manifest` store row.
-> - `M` manifest-persist-local (X2-redo) — record-only sibling of `N`, same
->   payload shape; inserts ONLY the `x-file-manifest` store row, no
->   pasteboard write. `pbcopy`'s SSH files branch uses this instead of `U`
->   for its local origin record, since the origin is typically
+> - `M` manifest-persist-local (X2-redo; Fix A) — record-only: inserts ONLY
+>   the `x-file-manifest` store row, no pasteboard write, no origin
+>   declaration. `pbcopy`'s SSH files branch sends this to BOTH its own
+>   bridge (local origin record, since the origin is typically
 >   locked/headless over SSH and the Hammerspoon watcher can't capture a
->   pasteboard write there (see the X2-redo as-built note above).
+>   pasteboard write there) and the reverse-tunneled peer bridge (remote
+>   manifest push, so the peer's live pasteboard is never touched — see the
+>   X2-redo and Fix A as-built notes above). Supersedes the original
+>   `N` push-manifest op (removed): `N` did the same row-insert but also set
+>   the peer's pasteboard to the paths as plain TEXT, which reflected back
+>   as a confusing "remote text" twin on the origin's own TUI picker.
 > - `A` archive-stream — directory tar stream (§12's as-built note above).
 >
 > `F` (fetch-file) predates Phase 6 as a caller-less opcode; Phase 6 gave it

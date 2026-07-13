@@ -66,31 +66,39 @@
 #      brief sleep to ride out the watcher's ~0.5s capture lag); "empty-store"
 #      if there are no rows at all. Callers: pbpaste --manifest (files-yazi
 #      T4), the yazi smart-paste plugin (T8).
-#   N  push-manifest req: source_host US path NUL path ...  resp: empty | err
-#      Cross-machine sibling of U (files-yazi design §5, T11): a machine
-#      SSH'd in, with the reverse bridge up, sends this instead of U because
-#      it cannot write to THIS Mac's pasteboard directly. Declares origin
-#      with the one-shot suppress-echo flag + sets the pasteboard to the
-#      newline-joined paths as plain TEXT (O+T's cores, see
-#      clip::declare_origin_core / clip::set_pasteboard_core) AND inserts a
-#      `files` store row carrying the real x-file-manifest blob directly --
-#      the authoritative record; the HS watcher skips its own capture of the
-#      echoed text (see the suppress note on declare_origin_core), so L
-#      resolves the manifest row. Callers: pbcopy (files-yazi T11, remote).
-#   M  manifest-persist-local (X2-redo) req: source_host US path NUL path ...
+#   M  manifest-persist-local (X2-redo; Fix A retired N below in favor of a
+#      second use of this same op) req: source_host US path NUL path ...
 #      resp: empty | err
-#      Record-only sibling of N, same wire payload -- but writes ONLY the
-#      `files` store row (N's row-insert half, shared via
+#      Record-only: writes ONLY the `files` store row (via
 #      clip::persist_files_manifest_row), no pasteboard write and no
-#      declare-origin. Exists because pbcopy over SSH used to persist the
-#      SSH'd-into machine's own origin clip via a plain `U` (relying on the
-#      Hammerspoon watcher to capture the pasteboard write into the store) --
-#      but that machine is typically locked/headless when reached over SSH,
-#      and the watcher's loginwindow guard skips ALL capture in that state
-#      (live-confirmed: `U` set the pasteboard but no store row ever
-#      appeared). `M` bypasses the watcher entirely, mirroring how `P`
-#      (persist, plain text) already bypasses it for the identical reason.
-#      Caller: pbcopy (files-yazi X2-redo, SSH files branch, local half).
+#      declare-origin. Originally added because pbcopy over SSH used to
+#      persist the SSH'd-into machine's own origin clip via a plain `U`
+#      (relying on the Hammerspoon watcher to capture the pasteboard write
+#      into the store) -- but that machine is typically locked/headless when
+#      reached over SSH, and the watcher's loginwindow guard skips ALL
+#      capture in that state (live-confirmed: `U` set the pasteboard but no
+#      store row ever appeared). `M` bypasses the watcher entirely, mirroring
+#      how `P` (persist, plain text) already bypasses it for the identical
+#      reason. Fix A: pbcopy's SSH files branch now ALSO sends this same op
+#      (same payload) to the reverse-tunneled peer bridge instead of the
+#      retired `N` op (see below) -- files are lazy (§12), so the peer must
+#      only get a record of the manifest, never a pasteboard write. Callers:
+#      pbcopy (files-yazi X2-redo, SSH files branch, both the local AND
+#      peer halves as of Fix A).
+#
+#   N  push-manifest -- RETIRED (Fix A). Used to be the cross-machine sibling
+#      of U (files-yazi design §5, T11): declared origin + set the PEER's
+#      pasteboard to the newline-joined paths as plain TEXT, on top of
+#      inserting the `files` manifest row. That pasteboard write was the bug
+#      Fix A exists to fix: it got reflected back up through the peer's live
+#      clipboard and showed up as a confusing "remote text" twin of the same
+#      clip on the origin's own TUI picker. pbcopy's SSH files branch was the
+#      only caller (grepped repo-wide) and now sends `M` (record-only, see
+#      above) to both ports instead, so the opcode itself has been removed
+#      from the dispatch table below. clip::declare_origin_core's optional
+#      suppress-echo 3rd arg (only ever passed by this retired op) and
+#      clipboard-history.lua's matching consumption of it are left in place,
+#      unused but harmless -- see the comment on declare_origin_core.
 #
 # Rich payload writes (C) go through hs.pasteboard.writeAllData via a
 # throwaway generated Lua script run as `hs <file>` (NOT `hs -c`, which hangs
@@ -288,10 +296,13 @@ clip::op_get_regtype() {
 }
 
 # clip::set_pasteboard_core <regtype> <text> -- the actual pasteboard write +
-# regtype-file bookkeeping op T performs, split out so op N (push-manifest,
-# files-yazi design §5) can invoke it directly without a reply frame of its
-# own (see the callers below -- op_set is now a thin wrapper: parse the wire
-# payload, call the core, send ONE reply).
+# regtype-file bookkeeping op T performs, split out so a caller needing that
+# write without a reply frame of its own could invoke it directly (see
+# op_set below -- now a thin wrapper: parse the wire payload, call the core,
+# send ONE reply). Was also used by the now-retired `N` push-manifest op
+# (files-yazi design §5, Fix A) -- see the header opcode table's note on why
+# N was removed; no current caller other than op_set invokes this directly,
+# but it's left split out in case a future op needs the same seam.
 clip::set_pasteboard_core() {
   local regtype=$1 text=$2
   print -rn -- "$text" | pbcopy
@@ -725,7 +736,7 @@ clip::op_persist() {
   print -rn -- "$app"     > "$tmpd/app"
   local existing
   # Dedup is scoped by type_kind too -- host+hash alone collides with a
-  # push-manifest (N) row of the same text (a file list's newline-joined
+  # files-manifest (M) row of the same text (a file list's newline-joined
   # paths hash identically to that same string arriving as plain text). Without
   # the kind filter, a text P-persist could match and bump an unrelated FILES
   # row's last_ts instead of inserting its own text row (and vice versa).
@@ -753,23 +764,30 @@ clip::op_persist() {
 # captured_origin() consults this (hash-keyed + TTL'd) to stamp the row
 # remote(source_host) instead of local. Payload: <source_host> US <text>.
 # clip::declare_origin_core <host> <text> [suppress] -- the actual origin-file
-# write op O performs, split out so op N (push-manifest) can invoke it
-# directly without a reply frame of its own (mirrors set_pasteboard_core
-# above; see the header comment there).
+# write op O performs, split out so a caller needing origin declaration
+# without a reply frame of its own could invoke it directly (mirrors
+# set_pasteboard_core above; see the header comment there).
 #
 # The optional 3rd arg extends the origin-file contract with a 4th line,
 # `suppress-echo`: it tells the HS watcher's captured_origin() that, beyond
 # stamping provenance, it must SKIP capturing the matching pasteboard change
 # entirely and consume the file (one-shot -- a later identical local copy
-# captures normally). Only op N sets it: N inserts its own authoritative
-# store row, so the watcher's echo of N's pasteboard write would otherwise
-# land a duplicate, NEWER text row that shadows the manifest (the watcher's
-# type_hash formula differs from this script's, so dedup never merges them).
-# Plain O flows (nvim / pbcopy text) NEED the capture and never set the flag.
-# A 3-line file (no flag) is exactly the pre-existing format; readers that
-# stop at line 3 are unaffected. Same hash-key + TTL semantics as the base
-# mechanism (spec §23). This is a coordinator-authorized extension of the
-# origin-file seam shared with clipboard-history.lua's captured_origin().
+# captures normally). Historically only the now-retired `N` push-manifest op
+# set it: N inserted its own authoritative store row, so the watcher's echo
+# of N's pasteboard write would otherwise have landed a duplicate, NEWER text
+# row that shadowed the manifest (the watcher's type_hash formula differs
+# from this script's, so dedup never merged them). Plain O flows (nvim /
+# pbcopy text) NEED the capture and never set the flag. Fix A retired N (see
+# the header opcode table) because its pasteboard write was itself the bug --
+# the peer's live clipboard must never be touched by a files-over-SSH push.
+# No current caller passes a truthy 3rd arg, so this parameter and the
+# suppress-echo consumption in clipboard-history.lua's captured_origin() are
+# both unused but deliberately left in place: harmless, and the mechanism may
+# still matter for other origin-declaring flows down the line. A 3-line file
+# (no flag) is exactly the pre-existing format; readers that stop at line 3
+# are unaffected. Same hash-key + TTL semantics as the base mechanism
+# (spec §23). This is a coordinator-authorized extension of the origin-file
+# seam shared with clipboard-history.lua's captured_origin().
 clip::declare_origin_core() {
   local host=$1 text=$2 suppress=${3:-}
   local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
@@ -791,36 +809,17 @@ clip::op_declare_origin() {
   send_ok ""
 }
 
-# N  push-manifest: cross-machine sibling of local `U` (files-yazi design §5,
-# T11) -- a machine SSH'd in, with the reverse bridge up, sends this instead
-# of `U` because it cannot write to THIS Mac's pasteboard directly. Reuses
-# O's and T's cores (see the header comments on declare_origin_core /
-# set_pasteboard_core just above) to declare the origin and put the
-# newline-joined paths on the pasteboard as plain TEXT -- visible/pasteable
-# everywhere immediately. On top of that (paths, unlike prose, need a real
-# NUL-joined manifest a plain text row could never carry) this inserts a
-# `files` store row directly, same insert+retention-sweep pattern as
-# op_persist (~line 519).
-#   payload = source_host US path NUL path ...
-# Echo suppression: unlike a plain remote text copy, the HS watcher's own
-# capture of the pasteboard write above must NOT land a row -- this op's
-# manifest insert is the authoritative record, and the watcher's echo would
-# be a duplicate text row stamped ~0.5s LATER (capture lag) whose type_hash
-# (sha256 of the UTI=blob pairs) never matches this row's (sha256 of the
-# text), so nothing would ever dedup them: `L`'s "latest row" query would
-# resolve the phantom text row instead of the manifest. So the origin is
-# declared WITH the one-shot `suppress-echo` flag (see declare_origin_core);
-# captured_origin() in clipboard-history.lua consumes it and skips exactly
-# that one capture. The manifest insert still happens AFTER the pasteboard
-# set with a fresh last_ts, keeping it the store's newest row at rest.
-# clip::parse_manifest_payload <payload> -- shared parse+validate for N's and
-# M's IDENTICAL wire payload (<source_host> US path NUL path ...): splits off
-# the host, NUL-splits the path list, and rejects anything not absolute. On
-# success returns 0 with $REPLY_HOST/$REPLY_PATHS set (host, and the raw
-# NUL-joined path substring, ready for clip::persist_files_manifest_row); on
-# failure returns 1 with $REPLY set to the caller-facing error message
-# (unchanged wording from the pre-refactor inline checks, so existing E-frame
-# assertions still hold for both ops).
+# clip::parse_manifest_payload <payload> -- shared parse+validate for M's
+# wire payload (<source_host> US path NUL path ...): splits off the host,
+# NUL-splits the path list, and rejects anything not absolute. On success
+# returns 0 with $REPLY_HOST/$REPLY_PATHS set (host, and the raw NUL-joined
+# path substring, ready for clip::persist_files_manifest_row); on failure
+# returns 1 with $REPLY set to the caller-facing error message (unchanged
+# wording from the pre-refactor inline checks, so existing E-frame assertions
+# still hold). Originally shared with the now-retired `N` push-manifest op
+# (Fix A) -- the name and "shared" framing stuck around because M is itself
+# now sent to two different destinations (local + peer, see the header
+# comment on op M above), not because another opcode uses this helper.
 clip::parse_manifest_payload() {
   local payload=$1
   local us=$'\x1f'
@@ -848,14 +847,14 @@ clip::parse_manifest_payload() {
   return 0
 }
 
-# clip::persist_files_manifest_row <host> <paths> -- the row-insert core
-# shared by N (push-manifest) and M (manifest-persist-local, X2-redo): a
-# dedup-scoped INSERT/UPDATE of a `files` store row carrying the
-# text_preview (newline-joined paths, X3) + x-file-manifest blob (NUL-joined
-# paths -- <paths> is stored verbatim). Pure store write: no pasteboard
-# access, no origin declaration -- callers that need those (only N) do them
-# separately with their own EPOCHREALTIME read, so the manifest still lands
-# as the store's newest row (see N's header comment). Returns 0 on success
+# clip::persist_files_manifest_row <host> <paths> -- the row-insert core used
+# by M (manifest-persist-local, X2-redo; Fix A): a dedup-scoped INSERT/UPDATE
+# of a `files` store row carrying the text_preview (newline-joined paths, X3)
+# + x-file-manifest blob (NUL-joined paths -- <paths> is stored verbatim).
+# Pure store write: no pasteboard access, no origin declaration. Originally
+# shared with the now-retired `N` push-manifest op, which needed those two
+# extra steps itself (see the header comment on op M above for why N was
+# retired) -- M never needs them, by design. Returns 0 on success
 # ($REPLY==""); 1 with $REPLY set to an error message on mktemp failure (the
 # only failure mode once the caller has already validated host/paths via
 # clip::parse_manifest_payload).
@@ -901,35 +900,20 @@ clip::persist_files_manifest_row() {
   return 0
 }
 
-clip::op_push_manifest() {
-  local payload=$1
-  clip::parse_manifest_payload "$payload" || { send_err "$REPLY"; return }
-  local host=$REPLY_HOST paths=$REPLY_PATHS
-  local -a f
-  f=( "${(@ps:\0:)paths}" )
-  local text="${(pj:\n:)f}"
-
-  clip::declare_origin_core "$host" "$text" suppress
-  clip::set_pasteboard_core "v" "$text"
-
-  if clip::persist_files_manifest_row "$host" "$paths"; then
-    send_ok ""
-  else
-    send_err "$REPLY"
-  fi
-}
-
 # M  manifest-persist-local (X2-redo, see the header opcode table): record-
-# only sibling of N above -- ONLY the row-insert half (via the same
-# clip::persist_files_manifest_row helper N uses), no pasteboard write, no
-# declare-origin. Sent by pbcopy's SSH files branch to persist the SSH'd-into
-# machine's OWN origin clip directly into ITS OWN store, since that machine
-# is typically locked/headless over SSH and the Hammerspoon watcher's
-# loginwindow guard then skips ALL capture (a plain `U` sets the pasteboard
-# but nothing ever lands in the store -- confirmed live). Mirrors how `P`
-# (persist, plain text) already bypasses the watcher for the identical
-# reason -- text-over-SSH never sets the origin pasteboard at all, it only
-# P-persists to the store, so this brings files-over-SSH in line with that.
+# only -- ONLY the row-insert (via clip::persist_files_manifest_row), no
+# pasteboard write, no declare-origin. Sent by pbcopy's SSH files branch to
+# persist the SSH'd-into machine's OWN origin clip directly into ITS OWN
+# store, since that machine is typically locked/headless over SSH and the
+# Hammerspoon watcher's loginwindow guard then skips ALL capture (a plain `U`
+# sets the pasteboard but nothing ever lands in the store -- confirmed live).
+# Mirrors how `P` (persist, plain text) already bypasses the watcher for the
+# identical reason -- text-over-SSH never sets the origin pasteboard at all,
+# it only P-persists to the store, so this brings files-over-SSH in line with
+# that. Fix A: pbcopy's SSH files branch now ALSO sends this same op to the
+# peer bridge (see the header opcode table's note on the retired `N` op) --
+# so this handler runs for both the local (2489) and peer (2490) sends, with
+# no pasteboard side effect on either machine.
 clip::op_manifest_persist_local() {
   local payload=$1
   clip::parse_manifest_payload "$payload" || { send_err "$REPLY"; return }
@@ -977,7 +961,6 @@ case "$opcode" in
   A) clip::op_archive_stream "$payload" ;;
   U) clip::op_set_file_urls "$payload" ;;
   L) clip::op_list_files ;;
-  N) clip::op_push_manifest "$payload" ;;
   M) clip::op_manifest_persist_local "$payload" ;;
   *) send_err "unknown opcode" ;;
 esac

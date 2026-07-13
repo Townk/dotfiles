@@ -18,10 +18,10 @@
 # reverse SSH tunnel it depends on.
 #
 # Path args (files-yazi Phase 6 design §5, corrected by X2, corrected again
-# by X2-redo): `pbcopy <path>…` puts a real file clip on the Mac's pasteboard
-# instead of reading stdin. A file belongs to the machine whose bytes it is,
-# so this ALWAYS records a local origin clip first — SSH only adds a second,
-# best-effort step.
+# by X2-redo, corrected again by Fix A): `pbcopy <path>…` puts a real file
+# clip on the Mac's pasteboard instead of reading stdin. A file belongs to
+# the machine whose bytes it is, so this ALWAYS records a local origin clip
+# first — SSH only adds a second, best-effort step.
 #   Local (no SSH) → send op `U` (NUL-joined absolute paths) to this
 #   machine's own bridge on 127.0.0.1:2489, and — unlike the fire-and-forget
 #   O/P frames below — actually check the reply, since there is no local-tool
@@ -29,21 +29,29 @@
 #   Over SSH → send op `M` (manifest-persist-local: this host US NUL-joined
 #   absolute paths) to THIS machine's own bridge (127.0.0.1:2489) first — the
 #   primary action, reply-checked exactly like the local branch's `U` above —
-#   then best-effort push op `N` (push-manifest: this host US NUL-joined
-#   absolute paths) to the reverse-tunneled peer bridge
-#   (CLIPBOARD_BRIDGE_PORT, default 2490 — same port pbpaste's --manifest
-#   already reads from), so the peer can pull lazily. `M`, unlike `U`,
-#   deliberately does NOT set the pasteboard: the machine reached over SSH is
-#   typically locked/headless, where the Hammerspoon watcher's loginwindow
-#   guard skips ALL capture — a plain `U` here would set the pasteboard with
-#   nothing ever landing in the store (live-confirmed). `M` persists the row
-#   directly instead, bypassing the watcher entirely — the exact same reason
+#   then best-effort send the SAME op `M` (same payload) to the
+#   reverse-tunneled peer bridge (CLIPBOARD_BRIDGE_PORT, default 2490 — same
+#   port pbpaste's --manifest already reads from), so the peer can pull
+#   lazily. `M`, unlike `U`, deliberately does NOT set the pasteboard on
+#   EITHER end: the local send doesn't because the machine reached over SSH
+#   is typically locked/headless, where the Hammerspoon watcher's
+#   loginwindow guard skips ALL capture — a plain `U` here would set the
+#   pasteboard with nothing ever landing in the store (live-confirmed). The
+#   peer send doesn't because files are lazy (§12): the peer only gets a
+#   manifest POINTER, materialized on Ctrl-Y, so its live pasteboard must
+#   stay untouched. `M` persists the row directly on whichever machine
+#   receives it, bypassing the watcher entirely — the exact same reason
 #   plain-text pbcopy (below) never sets the origin pasteboard either, only
-#   `P`-persists to the store. Bridge-up is a real probe (`nc -z`), not just
-#   "are we SSH'd in": an iPad/Blink session has no reverse tunnel at all. A
-#   down/outdated/erroring peer bridge only warns on stderr and exits 0 —
-#   the local clip already succeeded, so a missing peer notification never
-#   fails the command. Only the LOCAL `M` (2489) can hard-fail this mode.
+#   `P`-persists to the store. (Fix A: the peer send used to be op `N`
+#   [push-manifest], which ALSO set the peer's pasteboard to the paths as
+#   plain TEXT — that text placeholder got reflected back and shown as a
+#   confusing "remote text" twin on the origin's own TUI picker. `M` fixes
+#   that by never touching any pasteboard.) Bridge-up is a real probe
+#   (`nc -z`), not just "are we SSH'd in": an iPad/Blink session has no
+#   reverse tunnel at all. A down/outdated/erroring peer bridge only warns on
+#   stderr and exits 0 — the local clip already succeeded, so a missing peer
+#   notification never fails the command. Only the LOCAL `M` (2489) can
+#   hard-fail this mode.
 #
 # --content <file> (M3, files-yazi design): puts a file's raw BYTES on the
 # pasteboard under a detected UTI (extension map first, `file --mime-type -b`
@@ -323,14 +331,26 @@ if [ $# -gt 0 ]; then
   # pbcopy over SSH below, which also never sets the origin pasteboard,
   # only `P`-persists to the store.
   #
-  # The peer manifest push (`N` to the reverse-tunneled bridge, 2490) is a
-  # SECONDARY, best-effort courtesy so the far side can pull lazily (§12) --
-  # a down or outdated peer bridge only warns; it never fails the command,
-  # since the local record already succeeded by the time it's attempted.
+  # The peer manifest push (SAME op `M`, to the reverse-tunneled bridge,
+  # 2490) is a SECONDARY, best-effort courtesy so the far side can pull
+  # lazily (§12) -- a down or outdated peer bridge only warns; it never fails
+  # the command, since the local record already succeeded by the time it's
+  # attempted.
+  #
+  # Fix A (corrects X2-redo's peer send): the peer push used to be op `N`
+  # (push-manifest), which -- on top of inserting the manifest row -- ALSO
+  # set the PEER's pasteboard to the newline-joined paths as plain TEXT. That
+  # text placeholder got reflected back up to the origin (the peer's live
+  # clipboard is what the origin's own TUI picker surfaces) and showed up
+  # there as a confusing "remote text" twin of the same clip. Files are
+  # lazy (§12): the peer is only supposed to get a manifest POINTER,
+  # materialized on Ctrl-Y -- its live pasteboard must not be touched by this
+  # push at all. So the peer send is now the SAME `M` op as the local send
+  # above (record-only, no pasteboard write); no `N` frame is sent anymore.
   host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
 
   # Path canonicalization + existence check + NUL-join, done ONCE: both the
-  # local M payload and the peer N payload carry the identical
+  # local M payload and the peer M payload carry the identical
   # "<host> US path NUL path ..." shape.
   pathsfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-paths.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
   trap 'rm -f "$pathsfile"' EXIT INT TERM
@@ -350,8 +370,8 @@ if [ $# -gt 0 ]; then
     fi
   done
 
-  # M and N carry the byte-identical payload -- built once, sent to both
-  # ports below.
+  # Both M sends (local and peer) carry the byte-identical payload -- built
+  # once, sent to both ports below.
   mn_payfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-mn.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
   trap 'rm -f "$pathsfile" "$mn_payfile"' EXIT INT TERM
   { printf '%s\037' "$host"; cat "$pathsfile"; } > "$mn_payfile"
@@ -379,31 +399,36 @@ if [ $# -gt 0 ]; then
     exit 1
   fi
 
-  # 2. Peer manifest push: `N` to the reverse-tunneled bridge (2490 /
-  #    CLIPBOARD_BRIDGE_PORT) -- best-effort, same payload as `M` above. The
-  #    local record already succeeded, so nothing past this point can fail
-  #    the command; every non-success outcome is a warning on stderr, not
-  #    an error.
+  # 2. Peer manifest push: the SAME op `M` (record-only) to the
+  #    reverse-tunneled bridge (2490 / CLIPBOARD_BRIDGE_PORT) -- best-effort,
+  #    same payload as the local send above. The local record already
+  #    succeeded, so nothing past this point can fail the command; every
+  #    non-success outcome is a warning on stderr, not an error.
+  #
+  #    Fix A: this used to be op `N` (push-manifest), which also set the
+  #    PEER's pasteboard to the paths as plain text -- files are lazy (§12),
+  #    so the peer's live pasteboard must never be touched by this push; `M`
+  #    only persists the manifest row on the peer's own store.
   bridge_port="${CLIPBOARD_BRIDGE_PORT:-2490}"
   if ! nc -z -w1 127.0.0.1 "$bridge_port" >/dev/null 2>&1; then
     echo "pbcopy: file copied to this machine's clipboard; peer not notified -- reverse bridge down" >&2
     exit 0
   fi
 
-  nreplyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-nr.XXXXXX") || { echo "pbcopy: file copied to this machine's clipboard; peer not notified -- mktemp failed" >&2; exit 0; }
-  trap 'rm -f "$pathsfile" "$mn_payfile" "$m_replyfile" "$nreplyfile"' EXIT INT TERM
+  peer_replyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-mr2.XXXXXX") || { echo "pbcopy: file copied to this machine's clipboard; peer not notified -- mktemp failed" >&2; exit 0; }
+  trap 'rm -f "$pathsfile" "$mn_payfile" "$m_replyfile" "$peer_replyfile"' EXIT INT TERM
 
-  send_frame N "$bridge_port" "$mn_payfile" "$nreplyfile"
-  _nstatus=$(head -c 1 "$nreplyfile" 2>/dev/null || true)
-  if [ "$_nstatus" = "O" ]; then
+  send_frame M "$bridge_port" "$mn_payfile" "$peer_replyfile"
+  _peerstatus=$(head -c 1 "$peer_replyfile" 2>/dev/null || true)
+  if [ "$_peerstatus" = "O" ]; then
     exit 0
   fi
-  if [ "$_nstatus" = "E" ]; then
-    _nmsg=$(tail -c +6 "$nreplyfile" 2>/dev/null)
-    if [ "$_nmsg" = "unknown opcode" ]; then
+  if [ "$_peerstatus" = "E" ]; then
+    _peermsg=$(tail -c +6 "$peer_replyfile" 2>/dev/null)
+    if [ "$_peermsg" = "unknown opcode" ]; then
       echo "pbcopy: $(unknown_opcode_hint "$bridge_port")" >&2
     else
-      echo "pbcopy: file copied to this machine's clipboard; peer not notified -- ${_nmsg:-bridge reported an error}" >&2
+      echo "pbcopy: file copied to this machine's clipboard; peer not notified -- ${_peermsg:-bridge reported an error}" >&2
     fi
     exit 0
   fi

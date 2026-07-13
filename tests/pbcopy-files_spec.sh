@@ -128,20 +128,24 @@ EOF
     The stderr should include "bridge"
   End
 
-  # X2-redo (supersedes X2 below): a file copied over SSH belongs to the
-  # machine whose bytes it is -- pbcopy records a LOCAL origin clip as the
-  # PRIMARY action, then best-effort pushes a peer manifest (op `N` to the
-  # reverse-tunneled bridge, 2490) so the far side can pull lazily. The
-  # local record is now op `M` (manifest-persist-local), not `U`: the origin
-  # machine is typically locked/headless when reached over SSH, where the
-  # Hammerspoon watcher's loginwindow guard skips ALL capture -- so a plain
-  # `U` (which only sets the pasteboard, relying on the watcher to capture
-  # it) never actually lands a store row there (live-confirmed). `M`
-  # persists the row directly, bypassing the watcher, and -- unlike `U` --
-  # never touches the pasteboard at all. Host field: replicate pbcopy's own
+  # X2-redo (supersedes X2 below); Fix A (supersedes the N-based peer push
+  # described by X2-redo): a file copied over SSH belongs to the machine
+  # whose bytes it is -- pbcopy records a LOCAL origin clip as the PRIMARY
+  # action, then best-effort pushes a peer manifest so the far side can pull
+  # lazily (§12's lazy rule: the peer only gets a manifest POINTER,
+  # materialized on Ctrl-Y). Both sends are now op `M` (manifest-persist-
+  # local), RECORD-ONLY on both ends: the origin machine is typically
+  # locked/headless when reached over SSH, where the Hammerspoon watcher's
+  # loginwindow guard skips ALL capture -- so a plain `U` (which only sets
+  # the pasteboard, relying on the watcher to capture it) never actually
+  # lands a store row there (live-confirmed). Fix A: the peer send used to be
+  # op `N` (push-manifest), which ALSO set the PEER's pasteboard to the
+  # paths as plain TEXT -- reflected back and shown as a confusing "remote
+  # text" twin on the origin's own TUI picker. `M` never touches ANY
+  # pasteboard, on either end. Host field: replicate pbcopy's own
   # scutil-then-hostname fallback here rather than stubbing either, so the
   # assertion tracks whatever this machine actually resolves to.
-  It 'sends BOTH an M frame to :2489 (local origin record) and an N frame to :2490 (peer manifest), in that order, and never a U frame'
+  It 'sends an M frame to BOTH :2489 (local origin record) and :2490 (peer manifest), in that order, and never a U or N frame'
     export SSH_CONNECTION="x 1 y 22"
     expected_host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
     f1="$SHELLSPEC_TMPBASE/rem-a.txt"; touch "$f1"
@@ -152,16 +156,20 @@ EOF
     When run command sh "$SCRIPT" "$f1" "$f2"
     The status should be success
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:N"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:M"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$expected_host"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$cf1|$cf2"
-    # Order matters: the local M (origin record, primary) must precede the N
-    # (peer manifest, best-effort secondary) in the log.
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should match pattern "*2489:M*2490:N*"
+    # Order matters: the local M (origin record, primary) must precede the
+    # peer M (best-effort secondary) in the log.
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should match pattern "*2489:M*2490:M*"
     # The bug this whole rework exists to fix: no `U` frame is sent anymore
     # (it set the pasteboard and relied on a watcher that can't see a
     # locked/headless origin over SSH).
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2489:U"
+    # Fix A: no `N` frame is sent anymore either -- it set the PEER's
+    # pasteboard to the paths as text, which is exactly the reflected
+    # "remote text" twin this fix exists to stop.
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not match pattern "*:N*"
   End
 
   It 'honors CLIPBOARD_BRIDGE_PORT for the SSH+files probe and frame'
@@ -171,7 +179,7 @@ EOF
     f1="$SHELLSPEC_TMPBASE/rem-port.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
     The status should be success
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "9999:N"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "9999:M"
   End
 
   It 'exits 0 when the manifest push gets an O reply'
@@ -184,10 +192,10 @@ EOF
   End
 
   # X2-redo: the local M (primary action) already succeeded by the time the
-  # peer N is attempted, so an N-side error is now a WARNING, never a command
-  # failure. Needs a port-differentiated fake nc: 2489 (local M) must reply
-  # O so the primary action truly succeeds, while 2490 (peer N) replies E --
-  # the shared setup() fake nc can't express that since NC_REPLY isn't
+  # peer M is attempted, so a peer-side error is now a WARNING, never a
+  # command failure. Needs a port-differentiated fake nc: 2489 (local M) must
+  # reply O so the primary action truly succeeds, while 2490 (peer M) replies
+  # E -- the shared setup() fake nc can't express that since NC_REPLY isn't
   # port-scoped.
   It 'warns (not fails) when the manifest push gets an E reply -- the local origin record already succeeded'
     export SSH_CONNECTION="x 1 y 22"
@@ -259,7 +267,7 @@ EOF
     The stderr should include "peer"
     The stderr should include "not notified"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2490:N"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2490:M"
   End
 
   # X2-redo: this machine's OWN bridge (2489) is the primary action -- if
