@@ -1,0 +1,23 @@
+#compdef pbcopy
+#
+# Completion for the pbcopy clipboard shim (~/.local/bin/pbcopy). macOS ships
+# its own /usr/share/zsh/*/functions/_pbcopy with `#compdef pbcopy pbpaste`,
+# which offers Apple's own -pboard/-Prefer/-help flags and no file completion
+# at all -- wrong surface for this shim. This file's own #compdef line (and
+# site-functions sitting ahead of the stock functions dir in fpath, see
+# ~/.config/zsh/completion.sh) makes compinit bind pbcopy to THIS function
+# instead.
+#
+# Surface: no-arg reads stdin as text (nothing to complete there);
+# `pbcopy <path>...` puts a real file/dir clip on the pasteboard (multiple
+# paths); `pbcopy --content <file>` puts one file's raw bytes on the
+# pasteboard under a detected UTI (exactly one file, not repeatable); -h/--help.
+
+_pbcopy() {
+  _arguments -s \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '(*)--content[copy a file'"'"'s raw bytes onto the pasteboard under a detected UTI]:file:_files' \
+    '(--content)*:file or directory:_files'
+}
+
+_pbcopy "$@"

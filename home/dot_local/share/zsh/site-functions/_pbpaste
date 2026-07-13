@@ -1,0 +1,48 @@
+#compdef pbpaste
+#
+# Completion for the pbpaste clipboard shim (~/.local/bin/pbpaste). Same
+# stock-vs-shim hijack problem as pbcopy -- see _pbcopy's header comment for
+# why this file's own #compdef line is what makes compinit bind pbpaste to
+# THIS function instead of Apple's /usr/share/zsh/*/functions/_pbcopy (which
+# also claims pbpaste).
+#
+# Surface: no-arg prints clipboard text (nothing to complete there);
+# `--manifest` prints the current file clip's manifest; `--files [--force]
+# [--quiet|--progress|--porcelain] [dir]` materializes the current file clip
+# (the three output modes are mutually exclusive, final positional is a
+# directory); -h/--help. The shim's own dispatch only ever looks at $1 for
+# the mode, so --manifest/--files/-h/--help are modeled as alternatives at
+# position 1, mirroring _system-service-brew's subcommand-state pattern.
+
+_pbpaste() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  _arguments -C \
+    '1: :->cmd' \
+    '*:: :->cmdargs'
+
+  case "$state" in
+    cmd)
+      _values 'pbpaste mode' \
+        '-h[show help and exit]' \
+        '--help[show help and exit]' \
+        '--manifest[print the current clip'"'"'s file manifest]' \
+        '--files[materialize the current file clip into a directory]'
+      ;;
+    cmdargs)
+      case "$words[1]" in
+        --files)
+          _arguments -s \
+            '--force[overwrite existing items in the target directory]' \
+            '(--quiet --progress --porcelain)--quiet[suppress all output]' \
+            '(--quiet --progress --porcelain)--progress[force human progress lines even off a TTY]' \
+            '(--quiet --progress --porcelain)--porcelain[machine-readable progress/done stream]' \
+            '*:directory:_files -/'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_pbpaste "$@"
