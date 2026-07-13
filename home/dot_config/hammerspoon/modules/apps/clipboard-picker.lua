@@ -506,6 +506,27 @@ local function last_line(s)
   return last
 end
 
+-- Coerce a clip id received from the webview's JS bridge into an integer,
+-- or nil if it can't be one. Load-bearing for the CLI handoff below: the
+-- row id is born an integer (query_items, line ~165: `id = s:get_value(0)`
+-- straight from sqlite) and travels to JS intact, but every JS number is a
+-- double, so when clipboard-picker.html posts it back (`post('copy', { id:
+-- it.id })` etc., Assets/html/clipboard-picker.html:411/419/429) the WebKit
+-- message bridge delivers it to Lua as a FLOAT -- verified live on this
+-- runtime: evaluateJavaScript("({id: 1010})") round-trips as
+-- math.type=="float", tostring=="1010.0". The in-process sqlite binds
+-- shrug that off (numeric affinity: 1010.0 == 1010), which is why preview/
+-- delete/pin all worked -- but stringifying it for pick-clipboard's argv
+-- produced "--restore-id 1010.0", which the CLI's all-digits `<->` guard
+-- correctly rejects ("--restore-id requires a numeric clip id", the exact
+-- failure toast from live validation). math.tointeger accepts an integral
+-- float (1010.0 -> 1010) and rejects a fractional one (no silent
+-- truncation of garbage); tonumber first also admits a numeric string.
+local function clip_id_int(id)
+  local n = tonumber(id)
+  return n and math.tointeger(n) or nil
+end
+
 -- Async headless restore for a gated files row: shells out to the SAME
 -- clip::copy_files_by_id logic the terminal picker's Ctrl-Y uses
 -- (executable_pick-clipboard --restore-id <id>, spec R4) via hs.task --
@@ -538,7 +559,24 @@ end
 -- "/bin/zsh" satisfies that same as "/bin/sh" did before. onDone(ok), if
 -- given, runs after the toast/notification.
 local function headless_restore(id, onDone)
-  local cmd = shell_quote(PICK_CLIPBOARD_BIN) .. " --restore-id " .. shell_quote(tostring(id))
+  -- Never spawn with garbage: resolve the JS-bridge float (see clip_id_int)
+  -- to a real integer first, and if that fails, surface it the same way a
+  -- CLI failure would -- full context to the console, persistent notify --
+  -- instead of letting the CLI reject a stringified float downstream.
+  local intId = clip_id_int(id)
+  if not intId then
+    print(string.format(
+      "clipboard-picker: headless restore got an unresolvable clip id: %s (%s)",
+      tostring(id), type(id)))
+    hs.notify.new(nil, {
+      title = "Clipboard restore failed",
+      informativeText = "couldn't resolve the row's clip id",
+      withdrawAfter = 0,
+    }):send()
+    if onDone then onDone(false) end
+    return nil
+  end
+  local cmd = shell_quote(PICK_CLIPBOARD_BIN) .. " --restore-id " .. tostring(intId)
   local task = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
     -- Success is the exit code alone, never output presence: pick-clipboard
     -- can legitimately print nothing on stdout/stderr on a clean success,
@@ -549,8 +587,8 @@ local function headless_restore(id, onDone)
     -- stdout+stderr is retrievable after the fact even when the toast was
     -- missed, which live validation showed was easy to do.
     print(string.format(
-      "clipboard-picker: headless restore id=%s exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
-      tostring(id), tostring(exitCode), stdOut or "", stdErr or ""))
+      "clipboard-picker: headless restore id=%d exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
+      intId, tostring(exitCode), stdOut or "", stdErr or ""))
     if ok then
       hs.alert.show("Files restored")
     else
@@ -806,5 +844,6 @@ M._count_words = count_words
 M._fetch_preview = fetch_preview
 M._fetch_app_icon = fetch_app_icon
 M._needs_headless_restore = needs_headless_restore
+M._clip_id_int = clip_id_int
 
 return M
