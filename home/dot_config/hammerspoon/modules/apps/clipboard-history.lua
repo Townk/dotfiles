@@ -542,8 +542,13 @@ function M.capture_now()
     -- non-text clip: synthesize a short badge from the kind + a payload hint
     if kind == "image" then preview = "[image]"
     elseif kind == "files" then preview = multi_paths and files_preview(multi_paths) or "[files]"
-    elseif kind == "file" then preview = "[file]"
-    elseif kind == "directory" then preview = "[directory]"
+    -- Single file/directory: show the resolved path itself (same ~100-char
+    -- right-truncate budget as any text preview via preview_of()), not the
+    -- anonymous "[file]"/"[directory]" badge -- matches R5a's multi-file
+    -- fix (files_preview) so the picker can glance-check what it's about to
+    -- paste regardless of clip count.
+    elseif kind == "file" then preview = resolvedPath and preview_of(resolvedPath) or "[file]"
+    elseif kind == "directory" then preview = resolvedPath and preview_of(resolvedPath) or "[directory]"
     elseif kind == "rtf" then preview = "[rtf]"
     elseif kind == "html" then preview = "[html]"
     else preview = "[" .. kind .. "]" end

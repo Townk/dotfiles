@@ -488,6 +488,42 @@ EOF
     The variable result should include "more"
   End
 
+  # --- X4/X3: --preview pane detail body shows the path, not a "[kind]" badge -
+  # for a files/file/directory row whose text_plain is NULL. The watcher and
+  # N-op never populate text_plain for these kinds (only text_preview holds
+  # the path(s)) -- before this fix the detail pane's body expression
+  # (COALESCE(text_plain,'['||type_kind||']')) fell straight through to the
+  # anonymous badge whenever text_plain was NULL, so the LIST row showed the
+  # real path (text_preview, fixed separately) but the right-hand detail pane
+  # still showed "[file]"/"[directory]"/"[files]". Exercises the generated
+  # preview_script directly -- PICK_CLIPBOARD_NO_RUN writes it to a temp file
+  # (and the SQL/vars it closes over) before the script returns.
+  It 'the --preview pane detail body shows the path, not a "[file]" badge, for a single-file row with no text_plain'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('file','/tmp/some/report.pdf','mac-mini',600); SELECT last_insert_rowid();")
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      bash "$preview_script" "$1"
+    ' _ "$id" 2>&1)"
+    When call test -n "$result"
+    The status should be success
+    The variable result should include "/tmp/some/report.pdf"
+    The variable result should not include "[file]"
+  End
+
+  It 'the --preview pane detail body shows joined paths, not "[files]", for a multi-file row with no text_plain'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('files','/tmp/a.txt
+/tmp/b.txt','mac-mini',601); SELECT last_insert_rowid();")
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      bash "$preview_script" "$1"
+    ' _ "$id" 2>&1)"
+    When call test -n "$result"
+    The status should be success
+    The variable result should include "/tmp/a.txt"
+    The variable result should include "/tmp/b.txt"
+    The variable result should not include "[files]"
+  End
+
   # --- spec R5c: bump-on-use ---------------------------------------------------
   It 'local files row restore bumps the original row'\''s last_ts (spec R5c)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',100); SELECT last_insert_rowid();")
