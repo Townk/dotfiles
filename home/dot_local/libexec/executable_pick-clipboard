@@ -159,10 +159,25 @@ fi
 LIVE_TS=""
 live_ts_threshold=-1
 if [[ -n "$LIVE_TEXT_FILE" ]]; then
-  LIVE_TS="$(clipbridge::request "$BRIDGE_HOST" "$BRIDGE_PORT" S 2>/dev/null)"
+  LIVE_TS="$(clipbridge::get_ts "$BRIDGE_HOST" "$BRIDGE_PORT" 2>/dev/null)"
   [[ "$LIVE_TS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || LIVE_TS=$EPOCHREALTIME
   live_ts_threshold=$LIVE_TS
 fi
+
+# X9 shared row budget: the live row split (ABOVE + live + BELOW) must emit no
+# MORE rows than PICK_CLIPBOARD_LIMIT in total -- pre-X9 it was a single query
+# with one global LIMIT, and naively giving BOTH halves the full limit would
+# roughly DOUBLE the cap (the watcher retains up to 1000 rows). The live row
+# occupies one slot in that budget, so reserve it up front: ABOVE is capped at
+# (limit - live), then BELOW gets whatever ABOVE's ACTUAL returned row count
+# and the live row leave. LIVE_COUNT is 0 when there's no live row, so the
+# whole thing degrades to a single LIMIT-capped ABOVE query (BELOW's WHERE
+# matches nothing at threshold -1) -- the exact pre-X9 ordering + cap.
+PICK_LIMIT=${PICK_CLIPBOARD_LIMIT:-500}
+LIVE_COUNT=0
+[[ -n "$LIVE_TEXT_FILE" ]] && LIVE_COUNT=1
+ABOVE_LIMIT=$(( PICK_LIMIT - LIVE_COUNT ))
+(( ABOVE_LIMIT < 0 )) && ABOVE_LIMIT=0
 
 # --- helpers (run in THIS process via the --key-background FIFO broker) ------
 clip::text_by_id() {  # id -> text_plain (raw, multi-line)
@@ -994,19 +1009,33 @@ EMIT_ROW_BODY="WITH palette AS (
       || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
     FROM clips, palette"
 
+# ABOVE carries the reserved-slot budget (ABOVE_LIMIT = limit - live).
+# EMIT_COUNT_ABOVE counts what ABOVE ACTUALLY returned (row-exact regardless
+# of any embedded newline in a preview -- COUNT over the same WHERE+LIMIT),
+# so BELOW's dynamic limit (limit - A - live) leaves the total at or under
+# the global cap. BELOW's limit is appended at emit time (EMIT_SQL_BELOW ends
+# at the LIMIT keyword) since A isn't known until ABOVE has run.
 EMIT_SQL_ABOVE="${EMIT_ROW_BODY}
     WHERE pinned=1 OR last_ts > ${live_ts_threshold}
     ORDER BY pinned DESC, last_ts DESC
-    LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
+    LIMIT ${ABOVE_LIMIT};"
+EMIT_COUNT_ABOVE="SELECT COUNT(*) FROM (SELECT id FROM clips
+    WHERE pinned=1 OR last_ts > ${live_ts_threshold}
+    ORDER BY pinned DESC, last_ts DESC
+    LIMIT ${ABOVE_LIMIT});"
 EMIT_SQL_BELOW="${EMIT_ROW_BODY}
     WHERE pinned=0 AND last_ts <= ${live_ts_threshold}
     ORDER BY last_ts DESC
-    LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
+    LIMIT "
 
 emit_rows() {
   sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL_ABOVE"
   [[ -n "$live_row_file" && -f "$live_row_file" ]] && cat "$live_row_file"
-  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL_BELOW"
+  local -i a below_limit
+  a=$(sqlite3 "$DB_FILE" "$EMIT_COUNT_ABOVE")
+  below_limit=$(( PICK_LIMIT - a - LIVE_COUNT ))
+  (( below_limit < 0 )) && below_limit=0
+  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "${EMIT_SQL_BELOW}${below_limit};"
 }
 
 # --- temp scripts for --key-reload (delete / pin + list refresh) -------------
@@ -1082,8 +1111,16 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
     FROM clips, palette
     WHERE pinned=1 OR last_ts > ${live_ts_threshold}
     ORDER BY pinned DESC, last_ts DESC
-    LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
+    LIMIT ${ABOVE_LIMIT};"
 [ -n '$live_row_file' ] && [ -f '$live_row_file' ] && cat '$live_row_file'
+# X9 shared budget (see the emit_rows note above): count what ABOVE actually
+# returned (row-exact COUNT over the same WHERE+LIMIT) so BELOW's limit
+# (global limit - A - live) keeps the total ABOVE+live+BELOW at/under the
+# cap. Baked literals: \$DB_FILE, the threshold, ABOVE_LIMIT, PICK_LIMIT,
+# LIVE_COUNT; \$a / \$below_limit are this reload script's own runtime vars.
+a=\$(sqlite3 '$DB_FILE' "SELECT COUNT(*) FROM (SELECT id FROM clips WHERE pinned=1 OR last_ts > ${live_ts_threshold} ORDER BY pinned DESC, last_ts DESC LIMIT ${ABOVE_LIMIT});")
+below_limit=\$(( ${PICK_LIMIT} - \$a - ${LIVE_COUNT} ))
+[ \$below_limit -lt 0 ] && below_limit=0
 sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,
@@ -1128,7 +1165,7 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
     FROM clips, palette
     WHERE pinned=0 AND last_ts <= ${live_ts_threshold}
     ORDER BY last_ts DESC
-    LIMIT ${PICK_CLIPBOARD_LIMIT:-500};"
+    LIMIT \$below_limit;"
 EOF
 cat > "$del_script" <<EOF
 #!/bin/sh

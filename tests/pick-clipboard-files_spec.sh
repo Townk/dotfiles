@@ -779,6 +779,11 @@ Describe 'pick-clipboard: live-peer row ordering (X9)'
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     export PICK_CLIPBOARD_DB="$DB"
+    # The budget test below exports PICK_CLIPBOARD_LIMIT; shellspec shares one
+    # shell across a Describe's examples, so clear it here so every other
+    # example runs at the default cap (500) rather than inheriting a stale
+    # tiny limit from a previous It.
+    unset PICK_CLIPBOARD_LIMIT
     rm -f "$DB"
     sqlite3 "$DB" '
       CREATE TABLE clips (
@@ -924,5 +929,56 @@ EOF
     The status should be success
     expected=$(printf '%s\nLIVE\n%s' "$id_pinned" "$id_unpinned")
     The output should equal "$expected"
+  End
+
+  # Tie: an UNPINNED local row whose last_ts EQUALS the live row's copy-time.
+  # The split is ABOVE = (last_ts > threshold), BELOW = (last_ts <= threshold),
+  # so a tie is `<=` -> it lands in BELOW, i.e. just UNDER the live row. This
+  # is the deterministic, documented placement (ties sort below the live row).
+  It 'places a local row tied with the live copy-time just below the live row'
+    id_tie=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',200,'tie'); SELECT last_insert_rowid();")
+    id_above=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',300,'above'); SELECT last_insert_rowid();")
+    write_fake_nc 200
+
+    When call run_emit
+    The status should be success
+    expected=$(printf '%s\nLIVE\n%s' "$id_above" "$id_tie")
+    The output should equal "$expected"
+  End
+
+  # X9 shared budget: pre-fix, ABOVE and BELOW each carried the full
+  # PICK_CLIPBOARD_LIMIT, so with a live row present the picker could emit
+  # ~2x the cap. The two halves must share ONE budget: total emitted rows
+  # (ABOVE + live + BELOW) <= PICK_CLIPBOARD_LIMIT. Tiny limit + a live row +
+  # more local rows than the cap -> the count must never exceed the limit.
+  It 'never emits more than PICK_CLIPBOARD_LIMIT rows total, live row included'
+    export PICK_CLIPBOARD_LIMIT=2
+    # Four local rows straddling the live copy-time (200): two above, two
+    # below -- so a naive per-half full-limit would emit 2 (above) + 1 (live)
+    # + 2 (below) = 5, well over the cap of 2.
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'a');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',150,'b');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',250,'c');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',350,'d');"
+    write_fake_nc 200
+
+    n=$(run_emit | grep -c .)
+    When call test "$n" -le 2
+    The status should be success
+  End
+
+  # Same budget, without any live row: the split degrades to a single
+  # LIMIT-capped ABOVE query (LIVE_COUNT=0, ABOVE_LIMIT=limit), matching the
+  # pre-X9 single-global-LIMIT behavior exactly -- exactly `limit` rows.
+  It 'caps at exactly PICK_CLIPBOARD_LIMIT rows when there is no live row (no bridge)'
+    unset SSH_CONNECTION   # no bridge -> no live row at all
+    export PICK_CLIPBOARD_LIMIT=2
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'a');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',200,'b');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',300,'c');"
+
+    n=$(run_emit | grep -c .)
+    When call test "$n" -eq 2
+    The status should be success
   End
 End
