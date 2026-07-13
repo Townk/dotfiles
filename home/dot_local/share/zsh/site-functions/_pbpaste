@@ -38,7 +38,7 @@ _pbpaste() {
             '(--quiet --progress --porcelain)--quiet[suppress all output]' \
             '(--quiet --progress --porcelain)--progress[force human progress lines even off a TTY]' \
             '(--quiet --progress --porcelain)--porcelain[machine-readable progress/done stream]' \
-            '*:directory:_files -/'
+            ':directory:_files -/'
           ;;
       esac
       ;;

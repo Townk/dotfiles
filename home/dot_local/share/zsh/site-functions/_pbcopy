@@ -8,16 +8,48 @@
 # ~/.config/zsh/completion.sh) makes compinit bind pbcopy to THIS function
 # instead.
 #
-# Surface: no-arg reads stdin as text (nothing to complete there);
-# `pbcopy <path>...` puts a real file/dir clip on the pasteboard (multiple
-# paths); `pbcopy --content <file>` puts one file's raw bytes on the
-# pasteboard under a detected UTI (exactly one file, not repeatable); -h/--help.
+# Surface: the shim dispatches on `case "${1:-}"`, so --content/-h/--help are
+# ONLY meaningful as the FIRST token -- at position 2+ the shim treats them as
+# literal filenames. Bare file args, by contrast, are valid at any position.
+# So position 1 offers {--content, -h/--help, files/dirs}; `--content <file>`
+# then takes exactly ONE file (files only, not a directory target); a file at
+# position 1 opens repeatable file/dir args and the flags never reappear.
+# Modeled as a position-1 state machine, mirroring _pbpaste and
+# _system-service-brew.
 
 _pbcopy() {
-  _arguments -s \
-    '(- *)'{-h,--help}'[show help and exit]' \
-    '(*)--content[copy a file'"'"'s raw bytes onto the pasteboard under a detected UTI]:file:_files' \
-    '(--content)*:file or directory:_files'
+  local context state state_descr line
+  typeset -A opt_args
+
+  _arguments -C \
+    '1: :->first' \
+    '*:: :->rest'
+
+  case "$state" in
+    first)
+      # Bare file/dir args AND the position-1-only flags, offered together.
+      _files
+      _values 'pbcopy option' \
+        '--content[copy a file'"'"'s raw bytes onto the pasteboard under a detected UTI]' \
+        '-h[show help and exit]' \
+        '--help[show help and exit]'
+      ;;
+    rest)
+      case "$words[1]" in
+        --content)
+          # Exactly one file (not a directory target); nothing after it.
+          _arguments ':file:_files -g "*"'
+          ;;
+        -h | --help)
+          # Terminal flags: the shim reads nothing further.
+          ;;
+        *)
+          # Position 1 was a file -> keep completing file/dir args, no flags.
+          _files
+          ;;
+      esac
+      ;;
+  esac
 }
 
 _pbcopy "$@"
