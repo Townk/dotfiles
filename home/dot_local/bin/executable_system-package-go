@@ -9,7 +9,21 @@ source "$HOME/.local/lib/system-package-common.zsh"
 GOFILE="$PKG_DIR/Gofile"
 
 go_bin_dir() {
-  go env GOBIN 2>/dev/null | grep . || printf '%s/bin\n' "$(go env GOPATH)"
+  local bin_dir goroot mise_data_dir
+  bin_dir=$(go env GOBIN 2>/dev/null)
+  goroot=$(go env GOROOT)
+  mise_data_dir="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}"
+
+  # Never reconcile a Go toolchain directory. mise exports GOBIN as its
+  # toolchain's bin directory, where treating undeclared binaries as extras
+  # would delete `go` and `gofmt` themselves.
+  if [[ -n "$bin_dir" &&
+    "$bin_dir" != "$goroot/bin" &&
+    "$bin_dir" != "$mise_data_dir"/installs/go/*/bin ]]; then
+    printf '%s\n' "$bin_dir"
+  else
+    printf '%s/bin\n' "$(go env GOPATH)"
+  fi
 }
 
 # Print one "<package_path>\t<binary_basename>" per line for everything in
@@ -97,7 +111,12 @@ do_list() {
 do_sync() {
   log_info "Syncing go binaries..."
 
-  local declared installed pairs before_snap after_snap
+  local declared installed pairs before_snap after_snap package_bin_dir go_executable
+  package_bin_dir=$(go_bin_dir)
+  export GOBIN="$package_bin_dir"
+  go_executable="$(go env GOROOT)/bin/go"
+  [[ -x "$go_executable" ]] || die "Go toolchain executable not found: $go_executable"
+
   declared=$(mktemp)
   installed=$(mktemp)
   pairs=$(mktemp)
@@ -126,13 +145,13 @@ do_sync() {
   # Install missing
   pkg::diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
-    go install "$pkg@latest" || log_warn "failed to install $pkg"
+    "$go_executable" install "$pkg@latest" || log_warn "failed to install $pkg"
   done
 
   # Upgrade everything still declared (re-running go install fetches latest)
   while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
-    go install "$pkg@latest" || log_warn "failed to upgrade $pkg"
+    "$go_executable" install "$pkg@latest" || log_warn "failed to upgrade $pkg"
   done <"$declared"
 
   # Restart services whose backing binary changed version. Keyed on binary
