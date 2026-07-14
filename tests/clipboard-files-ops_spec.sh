@@ -306,6 +306,17 @@ Describe 'clipboard-bridge-dispatch: M manifest-persist-local'
   setup() {
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
+    # clip::mount_enrich (clipboard-mount-enrich_spec.sh) now runs, backgrounded
+    # + disowned, after every M reply -- harmless when $HOME/.local/libexec/
+    # clipboard-mount is absent (its own guard exits 0 immediately), but on a
+    # box where the real helper IS installed, a `check` miss for these fake
+    # hosts ("thismac" etc.) would fall through to `ensure`, which shells out to
+    # rclone/ssh against a host that doesn't exist -- a real, slow, network-
+    # touching side effect this suite must never trigger. Pointing
+    # CLIPBOARD_MOUNT_BIN at a path that can't exist makes clip::mount_enrich's
+    # very first guard (`[[ -x "$cm" ]] || exit 0`) fire unconditionally,
+    # independent of what's installed on the machine running the tests.
+    export CLIPBOARD_MOUNT_BIN="$SHELLSPEC_TMPBASE/no-clipboard-mount-here"
     mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     rm -f "$DB"

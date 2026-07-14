@@ -964,6 +964,71 @@ clip::persist_files_manifest_row() {
   return 0
 }
 
+# clip::pb_changecount -- prints hs.pasteboard.changeCount() (the guard token
+# for retroactive enrichment; see clip::mount_enrich). Same generated-side-
+# file pattern as every other hs call; unlike clip::hs_run this CAPTURES
+# stdout, since the whole point is reading a value back. rc 1 (nothing
+# printed) when hs is unavailable or prints a non-number.
+clip::pb_changecount() {
+  local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-cc.XXXXXX") || return 1
+  print -r -- 'print(hs.pasteboard.changeCount())' > "$tmpd/cc.lua"
+  local out
+  out=$(timeout 10 hs "$tmpd/cc.lua" 2>/dev/null)
+  rm -rf -- "$tmpd"
+  out="${out//[[:space:]]/}"
+  [[ "$out" == <-> ]] || return 1
+  print -r -- "$out"
+}
+
+# clip::mount_enrich <host> <NUL-joined-abs-paths> -- the mount-aware half of
+# op M (clipboard-mount spec §3.4): when THIS Mac holds a healthy rclone
+# mount of <host>, additionally set the pasteboard with mount-relative
+# file-urls so Cmd+V in Finder is a native Finder copy. The durable store row
+# stays the lazy manifest the caller already persisted -- Ctrl-Y rsync
+# materialization is untouched and remains the fallback.
+#
+# Runs ENTIRELY in a disowned, fd-detached background subshell, called AFTER
+# send_ok: the reply latency pbcopy sees is identical to the pre-mount
+# behavior in every case, and a wedged FUSE stat in here can never hang the
+# dispatcher. Chain:
+#   changeCount snapshot -> check (instant negative when unmounted) ->
+#   [self-heal: ensure + re-check -- a remount takes ~3-7s, far past pbcopy's
+#    2s best-effort window, and sessions ride a long-lived ControlMaster mux
+#    so after a mid-session teardown the Match-hook may not re-fire for days;
+#    without this every copy would silently stay lazy until a fresh
+#    connection] -> map paths (inline prefix concat; clipboard-mount map's
+#    line output can't carry NUL-joined path lists) -> first-path existence ->
+#    changeCount unchanged? (the guard that makes a LATE set unable to
+#    clobber anything the user copied in the gap) -> arm one-shot
+#    suppress-echo (hash over the newline-joined MAPPED paths -- the exact
+#    identity clipboard-history.lua's files capture derives, see its
+#    files-suppress note) -> set_file_urls_core.
+# Every failure anywhere just exits: the lazy row is already the fallback.
+# CLIPBOARD_MOUNT_BIN overrides the helper path (tests stub it; unset+missing
+# file = enrichment compiled out, byte-identical legacy behavior).
+clip::mount_enrich() {
+  local host=$1 paths=$2
+  (
+    local cm="${CLIPBOARD_MOUNT_BIN:-$HOME/.local/libexec/clipboard-mount}"
+    [[ -x "$cm" ]] || exit 0
+    local cc; cc=$(clip::pb_changecount) || exit 0
+    local mp
+    if ! mp=$("$cm" check "$host" 2>/dev/null); then
+      "$cm" ensure "$host" >/dev/null 2>&1 || exit 0
+      mp=$("$cm" check "$host" 2>/dev/null) || exit 0
+    fi
+    [[ -n "$mp" ]] || exit 0
+    local -a f=( "${(@ps:\0:)paths}" ) mapped=()
+    local p
+    for p in "${f[@]}"; do mapped+=( "${mp}${p}" ); done
+    [[ -e "${mapped[1]}" ]] || exit 0
+    local now_cc; now_cc=$(clip::pb_changecount) || exit 0
+    [[ "$now_cc" == "$cc" ]] || exit 0
+    clip::declare_origin_core "$host" "${(pj:\n:)mapped}" suppress-echo
+    clip::set_file_urls_core "${(pj:\0:)mapped}"
+  ) </dev/null >/dev/null 2>&1 &!
+}
+
 # M  manifest-persist-local (X2-redo, see the header opcode table): record-
 # only -- ONLY the row-insert (via clip::persist_files_manifest_row), no
 # pasteboard write, no declare-origin. Sent by pbcopy's SSH files branch to
@@ -984,6 +1049,10 @@ clip::op_manifest_persist_local() {
   local host=$REPLY_HOST paths=$REPLY_PATHS
   if clip::persist_files_manifest_row "$host" "$paths"; then
     send_ok ""
+    # Mount enrichment AFTER the reply (spec §3.4): backgrounded + disowned,
+    # so pbcopy's reply window never stretches and a dead mount can't hang
+    # this handler. See clip::mount_enrich for the full chain.
+    clip::mount_enrich "$host" "$paths"
   else
     send_err "$REPLY"
   fi
