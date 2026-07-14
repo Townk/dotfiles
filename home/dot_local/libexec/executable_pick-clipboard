@@ -106,7 +106,31 @@ fi
 # the ONLY thing conveying origin: a row is "remote" iff its source_host differs
 # from THIS machine's hostname. NULL source_host (legacy rows) reads as local.
 # Drives the per-row badge/footer only — never row visibility.
-MY_HOST=$(scutil --get LocalHostName 2>/dev/null)
+#
+# MY_HOST (Phase 7): resolved via clip::self_host (clipboard-store-core.zsh) --
+# self-name file first (the wire identity a peer push carries, and what rows
+# get STAMPED with -- ephemeral cloud/dev-shell hostnames make `hostname -s`
+# an unstable badge key), then scutil, then hostname -s. Same precedence the
+# store itself uses (H op / clip::op_get_host), so badges and stamps agree.
+#
+# Sourced inside a `$(...)` SUBSHELL, deliberately NOT at top level: the core
+# sets `setopt nomultibyte` and `export LC_CTYPE=en_US.UTF-8` as file-scope
+# side effects (byte-exact wire framing for ITS OWN read_n/be32_to_int/etc,
+# none of which this picker uses -- only clip::self_host is wanted here).
+# `setopt nomultibyte` forces ${#var}/${var:off} to count BYTES regardless of
+# locale -- it would override, not just coexist with, this script's OWN
+# `local LC_ALL= LC_CTYPE=en_US.UTF-8` blocks in clip::shorten_path /
+# clip::render_file_content / clip::filter_file_rows below, which depend on
+# the shell's DEFAULT (multibyte-on) character counting to size the TUI's
+# columns -- a bare top-level `source` would leak nomultibyte for the rest of
+# this script and silently misalign every accented/wide-glyph path. `$(...)`
+# forks a subshell in zsh, so the core's setopt/export/zmodload side effects
+# all die with it; only clip::self_host's printed value crosses back out via
+# stdout. `|| true` + the hostname -s fallback below: under this script's
+# `set -eu`, a failed command substitution assigned to a plain scalar would
+# otherwise abort the whole picker if clipboard-store-core.zsh were ever
+# missing (e.g. a partial install) instead of degrading gracefully.
+MY_HOST=$(source "${CLIPBOARD_LIB_DIR:-${0:A:h}/../lib}/clipboard-store-core.zsh" 2>/dev/null && clip::self_host) || true
 [[ -n "$MY_HOST" ]] || MY_HOST=$(hostname -s 2>/dev/null)
 remote_when="source_host IS NOT NULL AND source_host <> '$MY_HOST'"
 

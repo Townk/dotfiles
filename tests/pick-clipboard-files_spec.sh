@@ -41,6 +41,14 @@ Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
     # no-re-fetch behavior under test) skip rsync -- a false pass/fail
     # bleeding across examples. Fresh HOME dir per It avoids it.
     export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    # Phase 7: MY_HOST now resolves via clip::self_host, which checks
+    # $XDG_STATE_HOME/clipboard/self-name BEFORE scutil. Left unsandboxed,
+    # this would leak the REAL dev machine's self-name file (if one exists,
+    # e.g. from an actual clipboard-bridge deployment) straight through the
+    # sandboxed HOME above, decoupling MY_HOST from the fake scutil this
+    # suite relies on for deterministic local/remote comparisons. Pointing
+    # it inside the just-wiped HOME guarantees no self-name file exists.
+    export XDG_STATE_HOME="$HOME/.local/state"
     # A dedicated TMPDIR (spec R3): the rsync-failure test below globs for the
     # stderr-capture temp file clip::copy_files_by_id leaves behind on a
     # failed pull, which needs a clean, known directory rather than whatever
@@ -775,6 +783,10 @@ Describe 'pick-clipboard: live-peer row ordering (X9)'
     export SSH_CONNECTION="10.0.0.1 1234 10.0.0.2 22"   # bridge_up precondition 1/2
     BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
     export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    # Phase 7: sandbox self_host's self-name lookup too (see the matching
+    # comment in the Ctrl-Y files branch Describe's setup() above) so this
+    # machine's own self-name file, if any, can never leak into MY_HOST here.
+    export XDG_STATE_HOME="$HOME/.local/state"
     export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
@@ -999,6 +1011,10 @@ Describe 'pick-clipboard: file-path rendering keeps the basename (X8)'
     # output below is exactly the seeded DB rows, nothing synthetic mixed in.
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
     export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    # Phase 7: sandbox self_host's self-name lookup too (see the matching
+    # comment in the Ctrl-Y files branch Describe's setup() above) so this
+    # machine's own self-name file, if any, can never leak into MY_HOST here.
+    export XDG_STATE_HOME="$HOME/.local/state"
     export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
@@ -1194,5 +1210,49 @@ Describe 'pick-clipboard: file-path rendering keeps the basename (X8)'
     text_w=$(printf '%s\n' "$out" | sed -n 2p)
     When call test "$file_w" = "$text_w"
     The status should be success
+  End
+End
+
+Describe 'pick-clipboard: MY_HOST portability (Phase 7)'
+  PICKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
+  CORE="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/clipboard-store-core.zsh"
+
+  It 'resolves MY_HOST from the self-name file before scutil'
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf 'cruise-box' > "$XDG_STATE_HOME/clipboard/self-name"
+    When run command sh -c 'zsh -f -c "source \"$1\"; clip::self_host"' _ "$CORE"
+    The output should equal "cruise-box"
+  End
+
+  # clip::self_host already has direct coverage above (it predates this task
+  # -- Tasks 1-2). What's new here is the WIRING: does the picker's own
+  # MY_HOST actually pick up the self-name file, through the subshell-
+  # isolated `source` this task adds (see the header comment at MY_HOST's
+  # assignment site). Sources the picker under PICK_CLIPBOARD_NO_RUN (same
+  # escape hatch every other Describe in this file uses) and echoes $MY_HOST
+  # directly -- a real store file must exist for the picker to get past its
+  # own `[[ -f "$DB_FILE" ]] || die` guard, so an empty DB is created first.
+  It 'wires MY_HOST from the self-name file through the picker itself'
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    export HOME="$SHELLSPEC_TMPBASE/myhost-home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/myhost-data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/myhost-state"
+    mkdir -p "$XDG_STATE_HOME/clipboard" "$XDG_STATE_HOME/pick-clipboard"
+    printf 'cruise-box' > "$XDG_STATE_HOME/clipboard/self-name"
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    sqlite3 "$DB" 'CREATE TABLE clips (id INTEGER PRIMARY KEY AUTOINCREMENT, source_host TEXT);'
+    export PICK_CLIPBOARD_DB="$DB"
+    LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+    export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
+    export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    export PICK_CLIPBOARD_NO_RUN=1
+    export SCRIPT_PATH="$PICKER"
+
+    When run command zsh -f -c '
+      source "$SCRIPT_PATH"
+      print -r -- "$MY_HOST"
+    '
+    The output should equal "cruise-box"
   End
 End
