@@ -147,11 +147,29 @@ cm::sweep() {
   return 0
 }
 
+# cm::check <host> — the dispatcher's gate (spec §3.1): mountpoint printed +
+# rc 0 iff healthy. Deliberately read-only — remount-on-failure is the
+# caller's move (the dispatcher's self-heal chain owns that), which keeps
+# check cheap enough for the hot copy path. Missing dir = instant negative
+# (the common unmounted case). Present-but-unhealthy additionally kicks an
+# async, fd-detached sweep so the broken mount gets reaped without this
+# caller waiting on it.
+cm::check() {
+  local host=$1 mp
+  mp=$(cm::mountpoint "$host") || return 1
+  [[ -d "$mp" ]] || return 1
+  if ! cm::is_mounted "$mp" || ! cm::probe "$mp"; then
+    ( cm::sweep ) </dev/null >/dev/null 2>&1 &!
+    return 1
+  fi
+  print -r -- "$mp"
+}
+
 case "${1:-}" in
   map)     shift; cm::map "$@" ;;
   unmount) shift; cm::mountpoint "${1:-}" >/dev/null || exit 1; cm::teardown "$1" ;;
   sweep)   cm::sweep ;;
-  ensure|check)
-           print -u2 -- "clipboard-mount: $1 not implemented yet"; exit 2 ;;
+  check)   shift; cm::check "${1:?usage: clipboard-mount check <host>}" ;;
+  ensure)  print -u2 -- "clipboard-mount: ensure not implemented yet"; exit 2 ;;
   *)       usage ;;
 esac

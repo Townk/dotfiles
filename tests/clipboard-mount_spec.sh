@@ -59,6 +59,10 @@ Describe 'clipboard-mount: unmount + sweep'
     export PATH="$STUBS:$PATH"
     mkdir -p "$STUBS" "$MNT_ROOT"
     rm -f "$SHELLSPEC_TMPBASE/mount-table" "$SHELLSPEC_TMPBASE/calls"
+    # $SHELLSPEC_TMPBASE (and $STUBS) is shared across Describes in one run;
+    # the hung-volume example installs a sleeping `stat` stub — reset it so
+    # no example inherits it.
+    rm -f "$STUBS/stat"
     : > "$SHELLSPEC_TMPBASE/mount-table"
     # `mount` prints the fixture table; umount/diskutil/kill-targets record.
     printf '#!/bin/sh\ncat "%s"\n' "$SHELLSPEC_TMPBASE/mount-table" > "$STUBS/mount"
@@ -103,5 +107,55 @@ Describe 'clipboard-mount: unmount + sweep'
     When run command zsh -f "$CM" sweep
     The status should be success
     The contents of file "$SHELLSPEC_TMPBASE/calls" should include "diskutil unmount force $MNT_ROOT/peer-mini"
+  End
+End
+
+Describe 'clipboard-mount: check'
+  CM="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-mount"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    MNT_ROOT="$XDG_STATE_HOME/clipboard/mnt"
+    STUBS="$SHELLSPEC_TMPBASE/bin"
+    export PATH="$STUBS:$PATH"
+    mkdir -p "$STUBS" "$MNT_ROOT"
+    # $STUBS is shared across Describes: the sweep block's hung-volume example
+    # leaves a sleeping `stat` stub behind, which would wedge cm::probe here.
+    rm -f "$STUBS/stat"
+    : > "$SHELLSPEC_TMPBASE/mount-table"
+    printf '#!/bin/sh\ncat "%s"\n' "$SHELLSPEC_TMPBASE/mount-table" > "$STUBS/mount"
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/umount"
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/diskutil"
+    printf '#!/bin/sh\nexit 1\n' > "$STUBS/pgrep"
+    chmod +x "$STUBS/mount" "$STUBS/umount" "$STUBS/diskutil" "$STUBS/pgrep"
+  }
+  BeforeEach 'setup'
+
+  It 'prints the mountpoint and succeeds when mounted and answering'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    When run command zsh -f "$CM" check peer-mini
+    The status should be success
+    The output should equal "$MNT_ROOT/peer-mini"
+  End
+
+  It 'fails instantly when the mountpoint dir does not exist'
+    When run command zsh -f "$CM" check peer-mini
+    The status should be failure
+    The output should equal ""
+  End
+
+  It 'fails and sweeps when the dir exists but nothing is mounted'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    # the async sweep must reap the orphan dir; poll briefly for it
+    When run command sh -c 'zsh -f "$1" check peer-mini; rc=$?; i=0; while [ -d "$2" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done; exit $rc' _ "$CM" "$MNT_ROOT/peer-mini"
+    The status should be failure
+    The path "$MNT_ROOT/peer-mini" should not be exist
+  End
+
+  It 'rejects an invalid host'
+    When run command zsh -f "$CM" check "../evil"
+    The status should be failure
+    The stderr should include "invalid host"
   End
 End
