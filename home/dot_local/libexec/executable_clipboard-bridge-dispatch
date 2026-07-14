@@ -397,6 +397,42 @@ clip::op_copy() {
   rm -rf -- "$tmpdir"
 }
 
+# clip::set_file_urls_core <NUL-joined-abs-paths> -- the form-A pasteboard
+# write extracted from op_set_file_urls so the M handler's mount enrichment
+# (clip::mount_enrich below) can reuse it verbatim: generates the
+# writeAllData Lua (NSFilenamesPboardType = all paths as an XML plist,
+# public.file-url = the first path, urlencoded) and runs it through hs.
+# No framing/validation/reply -- callers own those. rc 0 on success.
+clip::set_file_urls_core() {
+  local payload=$1
+  local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-fileurls.XXXXXX") || return 1
+  local script="$tmpdir/set-file-urls.lua"
+  # Paths go via a NUL-joined side file, not string-interpolated into Lua
+  # (paths may contain quotes/brackets that would break a Lua literal).
+  local pathfile="$tmpdir/paths"
+  print -rn -- "$payload" > "$pathfile"
+  {
+    print -r -- "local f = io.open([[$pathfile]], 'rb'); local raw = f:read('*a'); f:close()"
+    print -r -- "local paths = {}"
+    print -r -- "for p in raw:gmatch('[^\\0]+') do paths[#paths+1] = p end"
+    print -r -- "local xml = {'<?xml version=\"1.0\" encoding=\"UTF-8\"?>',"
+    print -r -- "  '<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">',"
+    print -r -- "  '<plist version=\"1.0\"><array>'}"
+    print -r -- "local function esc(s) return (s:gsub('&','&amp;'):gsub('<','&lt;'):gsub('>','&gt;')) end"
+    print -r -- "for _, p in ipairs(paths) do xml[#xml+1] = '<string>' .. esc(p) .. '</string>' end"
+    print -r -- "xml[#xml+1] = '</array></plist>'"
+    print -r -- "local function urlenc(s) return (s:gsub('[^%w%-%._~/]', function(c) return string.format('%%%02X', c:byte()) end)) end"
+    print -r -- "hs.pasteboard.writeAllData({"
+    print -r -- "  ['NSFilenamesPboardType'] = table.concat(xml, '\\n'),"
+    print -r -- "  ['public.file-url'] = 'file://' .. urlenc(paths[1]),"
+    print -r -- "})"
+  } > "$script"
+  local rc=0
+  clip::hs_run "$script" || rc=1
+  rm -rf -- "$tmpdir"
+  return $rc
+}
+
 # U  set-file-urls: put a real file clip on THIS Mac's pasteboard (see the
 # header comment). Payload form A: NUL-joined absolute paths, written as
 # NSFilenamesPboardType (all paths) + public.file-url (first path). Form B:
@@ -404,40 +440,21 @@ clip::op_copy() {
 # a full-fidelity local restore of a stored files row.
 clip::op_set_file_urls() {
   local payload=$1
-  local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-fileurls.XXXXXX") || { send_err "mktemp failed"; return }
-  local script="$tmpdir/set-file-urls.lua"
   if [[ "$payload" == id:<-> ]]; then
     local id=${payload#id:}
+    local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-fileurls.XXXXXX") || { send_err "mktemp failed"; return }
+    local script="$tmpdir/set-file-urls.lua"
     print -r -- "require('modules.apps.clipboard-history').restore_by_id($id)" > "$script"
-  else
-    local -a paths=( "${(@ps:\0:)payload}" )
-    local p
-    for p in "${paths[@]}"; do
-      [[ "$p" == /* ]] || { send_err "not absolute: $p"; rm -rf -- "$tmpdir"; return }
-    done
-    # Paths go via a NUL-joined side file, not string-interpolated into Lua
-    # (paths may contain quotes/brackets that would break a Lua literal).
-    local pathfile="$tmpdir/paths"
-    print -rn -- "$payload" > "$pathfile"
-    {
-      print -r -- "local f = io.open([[$pathfile]], 'rb'); local raw = f:read('*a'); f:close()"
-      print -r -- "local paths = {}"
-      print -r -- "for p in raw:gmatch('[^\\0]+') do paths[#paths+1] = p end"
-      print -r -- "local xml = {'<?xml version=\"1.0\" encoding=\"UTF-8\"?>',"
-      print -r -- "  '<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">',"
-      print -r -- "  '<plist version=\"1.0\"><array>'}"
-      print -r -- "local function esc(s) return (s:gsub('&','&amp;'):gsub('<','&lt;'):gsub('>','&gt;')) end"
-      print -r -- "for _, p in ipairs(paths) do xml[#xml+1] = '<string>' .. esc(p) .. '</string>' end"
-      print -r -- "xml[#xml+1] = '</array></plist>'"
-      print -r -- "local function urlenc(s) return (s:gsub('[^%w%-%._~/]', function(c) return string.format('%%%02X', c:byte()) end)) end"
-      print -r -- "hs.pasteboard.writeAllData({"
-      print -r -- "  ['NSFilenamesPboardType'] = table.concat(xml, '\\n'),"
-      print -r -- "  ['public.file-url'] = 'file://' .. urlenc(paths[1]),"
-      print -r -- "})"
-    } > "$script"
+    if clip::hs_run "$script"; then send_ok ""; else send_err "hs run failed"; fi
+    rm -rf -- "$tmpdir"
+    return
   fi
-  if clip::hs_run "$script"; then send_ok ""; else send_err "hs run failed"; fi
-  rm -rf -- "$tmpdir"
+  local -a paths=( "${(@ps:\0:)payload}" )
+  local p
+  for p in "${paths[@]}"; do
+    [[ "$p" == /* ]] || { send_err "not absolute: $p"; return }
+  done
+  if clip::set_file_urls_core "$payload"; then send_ok ""; else send_err "hs run failed"; fi
 }
 
 # clip::read_file <path> -> sets $REPLY to the file's raw bytes, byte-exact
