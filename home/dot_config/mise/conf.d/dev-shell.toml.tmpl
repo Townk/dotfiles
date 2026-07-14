@@ -59,6 +59,12 @@ use_versions_host = false
 "sops" = "latest"
 "age" = "latest"
 
+# sqlite3 CLI for the clipboard store (Phase 7). MUST be mise-managed, not
+# apt: the image wipes everything outside $HOME on reboot, and the bridge
+# dispatcher + pick-clipboard shell out to sqlite3 (incl. its readfile()/
+# writefile() shell functions) on every store op.
+"sqlite" = "latest"
+
 # fzf straight from GitHub releases. The registry/apt fzf is too old
 # (0.29) for the modern --bind keys z4h's completion widgets use (e.g.
 # alt-page-up), which made TAB-completion error out. Pin the backend so

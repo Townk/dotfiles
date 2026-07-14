@@ -1,0 +1,16 @@
+# Per-connection handler for clipboard-bridge.socket (Accept=yes template).
+# StandardInput=socket wires the accepted connection to the dispatcher's
+# stdin/stdout -- its sysread/syswrite framing runs unmodified.
+# The explicit PATH encodes the launchd-PATH lesson (clipboard-mount/rclone):
+# unit environments have no mise shims, and the dispatcher needs zsh (custom
+# build in ~/.local/bin), sqlite3 (mise shim), and coreutils.
+[Unit]
+Description=Clipboard bridge connection handler
+CollectMode=inactive-or-failed
+
+[Service]
+ExecStart=%h/.local/libexec/clipboard-bridge-dispatch
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
