@@ -159,3 +159,104 @@ Describe 'clipboard-mount: check'
     The stderr should include "invalid host"
   End
 End
+
+Describe 'clipboard-mount: ensure'
+  CM="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-mount"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/cache"
+    MNT_ROOT="$XDG_STATE_HOME/clipboard/mnt"
+    STUBS="$SHELLSPEC_TMPBASE/bin"
+    export PATH="$STUBS:$PATH"
+    mkdir -p "$STUBS" "$MNT_ROOT"
+    : > "$SHELLSPEC_TMPBASE/mount-table"
+    rm -f "$SHELLSPEC_TMPBASE/rclone-argv" "$SHELLSPEC_TMPBASE/rclone-env" \
+          "$SHELLSPEC_TMPBASE/lock-held"
+    printf '#!/bin/sh\ncat "%s"\n' "$SHELLSPEC_TMPBASE/mount-table" > "$STUBS/mount"
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/umount"
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/diskutil"
+    printf '#!/bin/sh\nexit 1\n' > "$STUBS/pgrep"
+    # rclone stub: record argv + _SYNCREMOTE, then "mount" by appending a
+    # mount-table line for the mountpoint arg (argv position 3: rclone mount
+    # <remote> <mountpoint> ...).
+    cat > "$STUBS/rclone" <<STUB
+#!/bin/sh
+printf '%s\n' "\$@" > "$SHELLSPEC_TMPBASE/rclone-argv"
+printf '%s\n' "\${_SYNCREMOTE:-}" > "$SHELLSPEC_TMPBASE/rclone-env"
+echo "mini-clip on \$3 (macfuse, nodev)" >> "$SHELLSPEC_TMPBASE/mount-table"
+exit 0
+STUB
+    chmod +x "$STUBS/mount" "$STUBS/umount" "$STUBS/diskutil" "$STUBS/pgrep" "$STUBS/rclone"
+  }
+  BeforeEach 'setup'
+
+  It 'mounts with the pinned rclone argv, _SYNCREMOTE set, alias defaulting to host'
+    When run command zsh -f "$CM" ensure peer-mini
+    The status should be success
+    The path "$MNT_ROOT/peer-mini" should be directory
+    The line 1 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal "mount"
+    The line 2 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal ":sftp,ssh='ssh -o ControlPath=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 peer-mini':/"
+    The line 3 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal "$MNT_ROOT/peer-mini"
+    The contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should include "--read-only"
+    The contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should include "--daemon"
+    The contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should include "nobrowse"
+    The contents of file "$SHELLSPEC_TMPBASE/rclone-env" should equal "1"
+  End
+
+  It 'uses the explicit alias for ssh while keying the mountpoint by host'
+    When run command zsh -f "$CM" ensure peer-mini mini
+    The status should be success
+    The line 2 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal ":sftp,ssh='ssh -o ControlPath=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 mini':/"
+    The line 3 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal "$MNT_ROOT/peer-mini"
+  End
+
+  It 'is a no-op when already healthy (rclone not re-invoked)'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    When run command zsh -f "$CM" ensure peer-mini
+    The status should be success
+    The path "$SHELLSPEC_TMPBASE/rclone-argv" should not be exist
+  End
+
+  It 'fails soft with a warning when rclone is not installed'
+    rm -f "$STUBS/rclone"
+    When run command sh -c 'PATH="$1:/usr/bin:/bin" zsh -f "$2" ensure peer-mini' _ "$STUBS" "$CM"
+    The status should be failure
+    The stderr should include "rclone not installed"
+  End
+
+  It 'tears down and fails when the mount comes up unhealthy'
+    # rclone "succeeds" but never lands a mount-table entry
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/rclone"; chmod +x "$STUBS/rclone"
+    When run command zsh -f "$CM" ensure peer-mini
+    The status should be failure
+    The stderr should include "unhealthy"
+    The path "$MNT_ROOT/peer-mini" should not be exist
+  End
+
+  It 'rejects an invalid alias (it lands inside the rclone connection string)'
+    When run command zsh -f "$CM" ensure peer-mini "bad'alias"
+    The status should be failure
+    The stderr should include "invalid"
+  End
+
+  It 'fails busy when another process holds the per-host lock (rclone never invoked)'
+    # A background zsh takes the flock, then drops a ready-sentinel; the test
+    # waits for the sentinel (no acquire race), runs ensure with the lock
+    # timeout dialed to 1s (test seam; default stays 10s), and reaps the
+    # holder before exiting so nothing leaks past the example.
+    When run command sh -c 'zsh -fc "zmodload zsh/system; : >> \"$1\"; zsystem flock \"$1\"; : > \"$2\"; sleep 5" & h=$!; i=0; while [ ! -f "$2" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; CLIPBOARD_MOUNT_LOCK_TIMEOUT_S=1 zsh -f "$3" ensure peer-mini; rc=$?; kill $h 2>/dev/null; exit $rc' _ "$MNT_ROOT/.peer-mini.lock" "$SHELLSPEC_TMPBASE/lock-held" "$CM"
+    The status should be failure
+    The stderr should include "busy"
+    The path "$SHELLSPEC_TMPBASE/rclone-argv" should not be exist
+  End
+
+  It 'tears down and fails when rclone itself exits nonzero'
+    printf '#!/bin/sh\nexit 1\n' > "$STUBS/rclone"; chmod +x "$STUBS/rclone"
+    When run command zsh -f "$CM" ensure peer-mini
+    The status should be failure
+    The stderr should include "failed"
+    The path "$MNT_ROOT/peer-mini" should not be exist
+  End
+End
