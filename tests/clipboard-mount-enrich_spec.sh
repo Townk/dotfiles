@@ -15,11 +15,14 @@ Describe 'clipboard-bridge-dispatch: M mount enrichment'
     { printf 'M'; printf '\000\000\000'; printf "\\$(printf %03o "$_len")"; printf '%s' "$_payload"; } > "$REQ"
   }
 
-  # run_and_wait <artifact>: runs the dispatcher, then polls up to 5s for the
-  # background chain's artifact so assertions see settled state.
+  # run_and_wait <artifact> [budget]: runs the dispatcher, then polls (budget
+  # x 0.1s; default 150 = 15s -- suite-wide process churn can stretch the
+  # disowned chain well past 5s, seen flaking once under full-suite load) for
+  # the background chain's artifact so assertions see settled state. Costs
+  # nothing when green: the poll exits as soon as the artifact appears.
   run_and_wait() {
     zsh -f "$DISPATCH" < "$REQ" > "$RESP"
-    i=0; while [ ! -e "$1" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+    i=0; while [ ! -e "$1" ] && [ $i -lt "${2:-150}" ]; do sleep 0.1; i=$((i+1)); done
   }
 
   setup() {
@@ -125,7 +128,9 @@ STUB
   It 'no CLIPBOARD_MOUNT_BIN executable: byte-identical legacy behavior'
     export CLIPBOARD_MOUNT_BIN="$SHELLSPEC_TMPBASE/nonexistent"
     build_m_req thiago-mac-mini /Users/thiago/big.bin
-    When call run_and_wait "$SHELLSPEC_TMPBASE/never-appears"
+    # 3s budget: this artifact never appears by design (absence is
+    # probabilistic anyway); the default 15s would just add suite latency.
+    When call run_and_wait "$SHELLSPEC_TMPBASE/never-appears" 30
     The contents of file "$RESP" should start with "O"
     The result of function db_row_count should equal 1
     The path "$SHELLSPEC_TMPBASE/hs-set-script" should not be exist
@@ -151,11 +156,14 @@ Describe 'clipboard-bridge-dispatch: M self-heal + changeCount guard'
     { printf 'M'; printf '\000\000\000'; printf "\\$(printf %03o "$_len")"; printf '%s' "$_payload"; } > "$REQ"
   }
 
-  # run_and_wait <artifact>: runs the dispatcher, then polls up to 5s for the
-  # background chain's artifact so assertions see settled state.
+  # run_and_wait <artifact> [budget]: runs the dispatcher, then polls (budget
+  # x 0.1s; default 150 = 15s -- suite-wide process churn can stretch the
+  # disowned chain well past 5s, seen flaking once under full-suite load) for
+  # the background chain's artifact so assertions see settled state. Costs
+  # nothing when green: the poll exits as soon as the artifact appears.
   run_and_wait() {
     zsh -f "$DISPATCH" < "$REQ" > "$RESP"
-    i=0; while [ ! -e "$1" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+    i=0; while [ ! -e "$1" ] && [ $i -lt "${2:-150}" ]; do sleep 0.1; i=$((i+1)); done
   }
 
   setup() {
