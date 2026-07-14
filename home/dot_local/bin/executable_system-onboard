@@ -377,15 +377,27 @@ write_ssh_conf() {
 
   {
     print -r -- "$frontmatter"
-    # A bare `Host $alias` unless the peer's own LocalHostName differs from
-    # our alias for it — then it's also listed here, so ssh (and thus a
-    # peer's `rsync -e ssh $source_host:...` clipboard pull) resolves that
-    # name too. Deliberately NOT added to the `Match originalhost` hook below:
-    # a pull connecting under the peer name should stay a plain, fast
-    # connection and skip the theme/gpg pre-connect hook, which is keyed to
-    # the alias identity, not every name this Host answers to.
+    # A bare `Host $alias` unless the peer's own LocalHostName is known —
+    # then the Host also answers to that name AND its mDNS `.local` form, so
+    # every way a human or tool reaches this machine gets the fragment:
+    #   $alias                — the operator's chosen name (hooked below)
+    #   $peer_hostname        — the store identity; a peer's `rsync -e ssh
+    #                           $source_host:...` clipboard pull resolves it.
+    #                           Deliberately NOT hooked below: pulls must stay
+    #                           plain, fast connections with no prep steps.
+    #   $peer_hostname.local  — the mDNS name humans type (and quick-launch
+    #                           entries carry); hooked below like the alias.
+    #                           The retired clipboard.config scoped its forward
+    #                           to exactly this name — dropping it silently cut
+    #                           the reverse bridge off every FQDN session.
     if [[ -n "$peer_hostname" && "$peer_hostname" != "$alias" ]]; then
-      print -r -- "Host $alias $peer_hostname"
+      if [[ "$peer_hostname" != *.* ]]; then
+        # Flat LocalHostName: also answer to its mDNS .local form. A dotted
+        # peer-hostname is a real DNS name — no .local variant exists for it.
+        print -r -- "Host $alias $peer_hostname $peer_hostname.local"
+      else
+        print -r -- "Host $alias $peer_hostname"
+      fi
     else
       print -r -- "Host $alias"
     fi
@@ -416,7 +428,15 @@ write_ssh_conf() {
       print -r -- "# Deliberately keyed to \$alias only, even when Host also answers to the"
       print -r -- "# peer's LocalHostName below — a clipboard pull connecting under that name"
       print -r -- "# skips the theme/gpg pre-connect hook (see write_ssh_conf)."
-      print -r -- 'Match originalhost '"$alias"' exec "[ -n \"$_SYNCREMOTE\" ] || _SYNCREMOTE=1 ~/.local/libexec/ssh-prepare-connection ~/.ssh/config.d/'"$alias"'.conf </dev/null >/dev/null 2>&1; false"'
+      # Hooked entry points: the alias plus the mDNS `.local` form when the
+      # peer hostname is known — both are how HUMANS open sessions, and both
+      # must get the prep steps (theme/mount/...). The bare peer hostname is
+      # deliberately absent: it is the machine-to-machine pull identity.
+      local hook_hosts="$alias"
+      if [[ -n "$peer_hostname" && "$peer_hostname" != "$alias" && "$peer_hostname" != *.* ]]; then
+        hook_hosts="$alias,$peer_hostname.local"
+      fi
+      print -r -- 'Match originalhost '"$hook_hosts"' exec "[ -n \"$_SYNCREMOTE\" ] || _SYNCREMOTE=1 ~/.local/libexec/ssh-prepare-connection ~/.ssh/config.d/'"$alias"'.conf </dev/null >/dev/null 2>&1; false"'
     fi
   } >"$conf"
   chmod 0600 "$conf"

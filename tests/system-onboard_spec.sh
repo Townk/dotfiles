@@ -56,12 +56,34 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
     The contents of file "$conf" should include "# peer-hostname: thiago-mac-mini"
   End
 
+  It 'renders the mDNS .local form as a third Host name and a hooked entry point'
+    conf="$CONFDIR/mac-mini.conf"
+    run_write "$conf" mac-mini mac-mini.local 1 >/dev/null
+    When call run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini
+    The status should be success
+    The contents of file "$conf" should include "Host mac-mini thiago-mac-mini thiago-mac-mini.local"
+    # The hook's originalhost list ends at ' exec', so this single substring
+    # pins the ENTIRE list: alias + .local hooked, bare peer hostname (the
+    # machine-to-machine pull identity) deliberately absent. The retired
+    # clipboard.config scoped its forward to the .local name; quick-launch /
+    # human FQDN sessions must keep getting the forwards AND the prep hook.
+    The contents of file "$conf" should include 'Match originalhost mac-mini,thiago-mac-mini.local exec'
+  End
+
+  It 'keeps the alias-only hook when no peer hostname is known'
+    conf="$CONFDIR/fresh.conf"
+    When call run_write "$conf" fresh fresh.local 1
+    The status should be success
+    The contents of file "$conf" should include 'Match originalhost fresh exec'
+    The contents of file "$conf" should not include ".local exec"
+  End
+
   It 'reconciles with the hand-fixed laptop fragment: alias mac-mini + peer thiago-mac-mini both resolve'
     conf="$CONFDIR/mac-mini.conf"
     run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
-    When run command grep -E '^Host mac-mini thiago-mac-mini$' "$conf"
+    When run command grep -E '^Host mac-mini thiago-mac-mini thiago-mac-mini\.local$' "$conf"
     The status should be success
-    The output should equal "Host mac-mini thiago-mac-mini"
+    The output should equal "Host mac-mini thiago-mac-mini thiago-mac-mini.local"
   End
 
   It 'preserves the extra Host alias on a later re-render with no hint (system-onboard update)'
@@ -83,13 +105,14 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
     The contents of file "$conf" should not include "Host same-name same-name"
   End
 
-  It 'keeps the Match originalhost pre-connect hook keyed to the alias only, never the peer name'
+  It 'hooks the human entry points (alias + .local) but never the bare peer name (pull identity)'
     conf="$CONFDIR/mac-mini.conf"
     When call run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini
     The status should be success
-    The contents of file "$conf" should include 'Match originalhost mac-mini exec'
+    # The originalhost list ends at ' exec', so this substring pins the whole
+    # list: bare thiago-mac-mini (rsync/GUI pull identity) cannot be in it.
+    The contents of file "$conf" should include 'Match originalhost mac-mini,thiago-mac-mini.local exec'
     The contents of file "$conf" should not include 'Match originalhost thiago-mac-mini'
-    The contents of file "$conf" should not include 'Match originalhost mac-mini thiago-mac-mini'
   End
 
   It 'hand-edited front matter wins: a later hint never overrides an existing peer-hostname line'
@@ -138,7 +161,7 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
     The contents of file "$conf" should not include "Host shapes -lead"
   End
 
-  It 'accepts a valid dotted peer hostname on the Host line'
+  It 'accepts a valid dotted peer hostname on the Host line — with no bogus .local variant'
     conf="$CONFDIR/shapes.conf"
     run_write "$conf" shapes host.local 0 'peer.example.com' >/dev/null
     When run command grep -E '^Host ' "$conf"

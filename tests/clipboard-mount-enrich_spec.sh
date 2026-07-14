@@ -70,12 +70,18 @@ STUB
 if grep -q changeCount "\$1" 2>/dev/null; then
   cat "$SHELLSPEC_TMPBASE/cc-value"
 else
-  cat "\$1" > "$SHELLSPEC_TMPBASE/hs-set-script"
+  # Write ATOMICALLY (temp + mv): run_and_wait polls for this file's
+  # EXISTENCE, and a two-step write let assertions read a half-written
+  # artifact under load (observed live: multi-file paths missing). mv within
+  # the same directory is a rename -- pollers see nothing or everything.
+  tmp="$SHELLSPEC_TMPBASE/hs-set-script.tmp.\$\$"
+  cat "\$1" > "\$tmp"
   pf=\$(sed -n "s/.*io\\.open(\\[\\[\\(.*\\)\\]\\], 'rb').*/\\1/p" "\$1" | head -1)
   if [ -n "\$pf" ] && [ -f "\$pf" ]; then
-    printf '\\n--PATHS--\\n' >> "$SHELLSPEC_TMPBASE/hs-set-script"
-    tr '\\0' '\\n' < "\$pf" >> "$SHELLSPEC_TMPBASE/hs-set-script"
+    printf '\\n--PATHS--\\n' >> "\$tmp"
+    tr '\\0' '\\n' < "\$pf" >> "\$tmp"
   fi
+  mv "\$tmp" "$SHELLSPEC_TMPBASE/hs-set-script"
 fi
 STUB
     chmod +x "$STUBS/hs"
@@ -242,12 +248,18 @@ STUB
 if grep -q changeCount "\$1" 2>/dev/null; then
   cat "$SHELLSPEC_TMPBASE/cc-value"
 else
-  cat "\$1" > "$SHELLSPEC_TMPBASE/hs-set-script"
+  # Write ATOMICALLY (temp + mv): run_and_wait polls for this file's
+  # EXISTENCE, and a two-step write let assertions read a half-written
+  # artifact under load (observed live: multi-file paths missing). mv within
+  # the same directory is a rename -- pollers see nothing or everything.
+  tmp="$SHELLSPEC_TMPBASE/hs-set-script.tmp.\$\$"
+  cat "\$1" > "\$tmp"
   pf=\$(sed -n "s/.*io\\.open(\\[\\[\\(.*\\)\\]\\], 'rb').*/\\1/p" "\$1" | head -1)
   if [ -n "\$pf" ] && [ -f "\$pf" ]; then
-    printf '\\n--PATHS--\\n' >> "$SHELLSPEC_TMPBASE/hs-set-script"
-    tr '\\0' '\\n' < "\$pf" >> "$SHELLSPEC_TMPBASE/hs-set-script"
+    printf '\\n--PATHS--\\n' >> "\$tmp"
+    tr '\\0' '\\n' < "\$pf" >> "\$tmp"
   fi
+  mv "\$tmp" "$SHELLSPEC_TMPBASE/hs-set-script"
 fi
 STUB
     chmod +x "$STUBS/hs"
@@ -321,12 +333,18 @@ STUB
 if grep -q changeCount "\$1" 2>/dev/null; then
   n=\$(cat "$SHELLSPEC_TMPBASE/cc-value"); echo "\$n"; echo \$((n+1)) > "$SHELLSPEC_TMPBASE/cc-value"
 else
-  cat "\$1" > "$SHELLSPEC_TMPBASE/hs-set-script"
+  # Write ATOMICALLY (temp + mv): run_and_wait polls for this file's
+  # EXISTENCE, and a two-step write let assertions read a half-written
+  # artifact under load (observed live: multi-file paths missing). mv within
+  # the same directory is a rename -- pollers see nothing or everything.
+  tmp="$SHELLSPEC_TMPBASE/hs-set-script.tmp.\$\$"
+  cat "\$1" > "\$tmp"
   pf=\$(sed -n "s/.*io\\.open(\\[\\[\\(.*\\)\\]\\], 'rb').*/\\1/p" "\$1" | head -1)
   if [ -n "\$pf" ] && [ -f "\$pf" ]; then
-    printf '\\n--PATHS--\\n' >> "$SHELLSPEC_TMPBASE/hs-set-script"
-    tr '\\0' '\\n' < "\$pf" >> "$SHELLSPEC_TMPBASE/hs-set-script"
+    printf '\\n--PATHS--\\n' >> "\$tmp"
+    tr '\\0' '\\n' < "\$pf" >> "\$tmp"
   fi
+  mv "\$tmp" "$SHELLSPEC_TMPBASE/hs-set-script"
 fi
 STUB
     chmod +x "$STUBS/hs"
