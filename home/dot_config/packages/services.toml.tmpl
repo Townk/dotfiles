@@ -75,7 +75,7 @@ PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/s
 # on demand; this agent covers the quiet hours between clips.
 [clipboard-mount-sweep]
 description     = "Reap unhealthy clipboard peer mounts (rclone/MacFUSE)"
-cmd             = ["clipboard-mount", "sweep"]
+cmd             = ["{{ .chezmoi.homeDir }}/.local/libexec/clipboard-mount", "sweep"]
 run_at_load     = true
 start_interval  = 60
 process_type    = "Background"
@@ -85,8 +85,10 @@ error_log_path  = "~/.cache/clipboard-mount/sweep.log"
 [clipboard-mount-sweep.env]
 # Single leading tilde only — the renderer's detilde expands only a
 # string-leading `~`, so a second `~/...` segment would reach launchd
-# literally. ~/.local/libexec is where clipboard-mount lives; /opt/homebrew
-# for rclone; /sbin + /usr/sbin for mount/umount/diskutil.
+# literally. ~/.local/libexec is where clipboard-mount lives; the rest of the
+# PATH exists for mount/umount/diskutil/pgrep in /sbin, /usr/sbin, /usr/bin —
+# sweep never execs rclone itself (that's cm::rclone_pids_for's job, driven by
+# pgrep/ps), and rclone now lives at ~/.local/bin via custom-builds anyway.
 PATH = "~/.local/libexec:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
 # (The former [clipboard-mirror] service was removed with the self-contained
