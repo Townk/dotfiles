@@ -169,3 +169,75 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
     The output should equal "Host shapes peer.example.com"
   End
 End
+
+# R-batch Task A: front-matter `alias:` becomes a space-separated list of full
+# entry points (Host name + hooked Match) — the FIRST token stays the primary
+# ($alias/arg2: fragment filename, ssh target, theme key), every other token
+# gets exactly the same treatment. These examples hand-edit the `# alias:`
+# line the same way the peer-hostname examples above hand-edit
+# `# peer-hostname:`, then re-render via run_write to prove system-onboard
+# picks up the hand-authored list.
+Describe 'system-onboard: write_ssh_conf (alias lists / R-batch Task A)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    CONFDIR="$(mktemp -d "$SHELLSPEC_TMPBASE/ssh-conf-alias.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT" CONFDIR
+  }
+  BeforeEach 'setup'
+
+  run_write() {
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      write_ssh_conf "$@"
+    ' _ "$@"
+  }
+
+  It 'renders every front-matter alias token as a full Host + hook entry point'
+    conf="$CONFDIR/mac-mini.conf"
+    run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
+    sed -i '' 's/^# alias:.*/# alias: mac-mini mini m1/' "$conf"
+    When call run_write "$conf" mac-mini mac-mini.local 1
+    The status should be success
+    The contents of file "$conf" should include "Host mac-mini mini m1 thiago-mac-mini thiago-mac-mini.local"
+    The contents of file "$conf" should include 'Match originalhost mac-mini,mini,m1,thiago-mac-mini.local exec'
+  End
+
+  It 'drops a glob-unsafe alias token instead of letting it reach the Host/hook lines'
+    conf="$CONFDIR/mac-mini.conf"
+    run_write "$conf" mac-mini mac-mini.local 1 >/dev/null
+    sed -i '' 's/^# alias:.*/# alias: mac-mini */' "$conf"
+    When call run_write "$conf" mac-mini mac-mini.local 1
+    The status should be success
+    The stderr should include "not a safe ssh Host name"
+    The contents of file "$conf" should include "Host mac-mini"
+    The contents of file "$conf" should not include "Host mac-mini *"
+    The contents of file "$conf" should not include 'Match originalhost mac-mini,*'
+  End
+
+  # The alias list carries an EXTRA name (mini) beyond primary + peer-name,
+  # so this can only pass through the list renderer's dedupe path — the old
+  # single-alias renderer would omit `mini` entirely. Also pins the explicit
+  # opt-in judgment: a HAND-LISTED alias equal to the captured peer hostname
+  # is a full configured entry point, so the bare peer name IS hooked here
+  # (unlike the auto-captured-only case, which stays hook-exempt).
+  It 'dedupes a front-matter alias that already names the captured peer hostname'
+    conf="$CONFDIR/mac-mini.conf"
+    run_write "$conf" mac-mini mac-mini.local 1 >/dev/null
+    sed -i '' 's/^# alias:.*/# alias: mac-mini mini thiago-mac-mini/' "$conf"
+    run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
+    When run command grep -E '^Host mac-mini mini thiago-mac-mini thiago-mac-mini\.local$' "$conf"
+    The status should be success
+    The output should equal "Host mac-mini mini thiago-mac-mini thiago-mac-mini.local"
+  End
+
+  It 'hooks a hand-listed alias even when it equals the captured peer hostname (explicit opt-in)'
+    conf="$CONFDIR/mac-mini.conf"
+    run_write "$conf" mac-mini mac-mini.local 1 >/dev/null
+    sed -i '' 's/^# alias:.*/# alias: mac-mini mini thiago-mac-mini/' "$conf"
+    When call run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini
+    The status should be success
+    The contents of file "$conf" should include 'Match originalhost mac-mini,mini,thiago-mac-mini,thiago-mac-mini.local exec'
+  End
+End

@@ -72,4 +72,23 @@ Describe 'ssh-prepare-connection: mount step'
     When call run_and_wait
     The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure thiago-mac-mini mini"
   End
+
+  # R-batch Task A: front-matter `alias:` is now a space-separated list of
+  # full entry points; parse_header's target must be the FIRST token only —
+  # a later token (e.g. a second human-facing name) must never leak into the
+  # ssh target this step connects with.
+  It 'uses the first alias token as the ssh target when the front matter lists several'
+    {
+      echo "# ---"
+      echo "# alias: mini backup-mini"
+      echo "# prepare: mount"
+      echo "# peer-hostname: thiago-mac-mini"
+      echo "# ---"
+      echo "Host mini backup-mini thiago-mac-mini thiago-mac-mini.local"
+      echo "    HostName 192.0.2.10"
+      echo "    RemoteForward 127.0.0.1:2490 127.0.0.1:2489"
+    } > "$CONF"
+    When call run_and_wait
+    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure thiago-mac-mini mini"
+  End
 End

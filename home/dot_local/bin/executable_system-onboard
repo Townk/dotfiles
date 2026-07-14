@@ -316,6 +316,21 @@ default_frontmatter() {
 # forward + the pre-connect hook; an already-healed gpg line is preserved
 # as-is.
 #
+# `alias` (the front matter's `alias:` line) is a SPACE-SEPARATED LIST: every
+# token is a full entry point (Host name + hooked pre-connect Match, same as
+# the primary). The FIRST token is the primary — this is what `$alias` (arg2)
+# always is for every caller — and it alone keys the fragment's own filename
+# and its `Match ... ssh-prepare-connection ~/.ssh/config.d/<primary>.conf`
+# path. The front matter's list is the hand-authored surface, so when it names
+# MORE tokens than arg2 alone, the front matter wins for rendering (an
+# operator can add `mini m1` to an already-onboarded `mac-mini` fragment by
+# hand and re-run `system-onboard update` to pick them up). Every token is
+# allowlist-gated with the same shape rule as valid_peer_hostname before it
+# can reach an ssh `Host` pattern (patterns GLOB: an unvalidated `*` token
+# would extend this fragment's RemoteForwards to every outgoing host) — an
+# invalid token is dropped (logged, never fatal: this is a hand-editable
+# zone).
+#
 # `peer_hostname_hint` (5th arg, optional): the peer's own LocalHostName,
 # captured post-verify by reconcile_peer_hostname. It is spliced into the
 # front matter as `# peer-hostname: <name>` the FIRST time it's known (front
@@ -350,6 +365,30 @@ write_ssh_conf() {
   [[ "$prepare" == none ]] && want_hook=0
   [[ "$prepare" == all || "$prepare" == *gpg* ]] && want_gpg=1
 
+  # `alias` — parse the (preserved or default) front matter's `alias:` field
+  # into the full list of configured names. `${=...}` splits on whitespace;
+  # each token then passes the same allowlist gate as a captured
+  # peer-hostname (ssh `Host` patterns glob, so a stray `*` token would
+  # silently extend this fragment's RemoteForwards to every outgoing host).
+  # An invalid token is dropped and warned about, never fatal. Falls back to
+  # arg2 if the field is somehow empty (defense in depth; default_frontmatter
+  # always seeds it), and to arg2 again if every token was rejected — the
+  # Host line must always carry at least the primary.
+  local alias_field
+  alias_field="$(print -r -- "$frontmatter" | awk '/^#[[:space:]]*alias:/{sub(/^#[[:space:]]*alias:[[:space:]]*/,"");print;exit}')"
+  [[ -n "$alias_field" ]] || alias_field="$alias"
+  local -a aliases
+  local tok
+  for tok in ${=alias_field}; do
+    if valid_peer_hostname "$tok"; then
+      aliases+=("$tok")
+    else
+      log_warn "ignoring invalid alias token '$tok' in $conf front matter — not a safe ssh Host name"
+    fi
+  done
+  aliases=("${(@u)aliases}")            # dedupe, order-preserving
+  (( ${#aliases} )) || aliases=("$alias")
+
   # `peer-hostname` — same "read from front matter, seed once if absent" deal
   # as `prepare` above. Seed it into the front matter (before the closing `#
   # ---` fence) the first time a hint arrives; once the line exists it is
@@ -377,30 +416,33 @@ write_ssh_conf() {
 
   {
     print -r -- "$frontmatter"
-    # A bare `Host $alias` unless the peer's own LocalHostName is known —
-    # then the Host also answers to that name AND its mDNS `.local` form, so
-    # every way a human or tool reaches this machine gets the fragment:
-    #   $alias                — the operator's chosen name (hooked below)
+    # `Host` answers to every configured alias, plus the peer's own
+    # LocalHostName and its mDNS `.local` form when known — so every way a
+    # human or tool reaches this machine gets the fragment:
+    #   $aliases              — every operator-configured name (hooked below)
     #   $peer_hostname        — the store identity; a peer's `rsync -e ssh
     #                           $source_host:...` clipboard pull resolves it.
-    #                           Deliberately NOT hooked below: pulls must stay
+    #                           Deliberately NOT hooked below (unless it is
+    #                           ALSO a configured alias): pulls must stay
     #                           plain, fast connections with no prep steps.
     #   $peer_hostname.local  — the mDNS name humans type (and quick-launch
-    #                           entries carry); hooked below like the alias.
+    #                           entries carry); hooked below like the aliases.
     #                           The retired clipboard.config scoped its forward
     #                           to exactly this name — dropping it silently cut
     #                           the reverse bridge off every FQDN session.
+    # Skipped entirely when the peer hostname IS the primary alias (arg2) —
+    # same "no new information" gate as before list support landed.
+    local -a host_names=("${aliases[@]}")
     if [[ -n "$peer_hostname" && "$peer_hostname" != "$alias" ]]; then
+      (( ${host_names[(Ie)$peer_hostname]} )) || host_names+=("$peer_hostname")
       if [[ "$peer_hostname" != *.* ]]; then
         # Flat LocalHostName: also answer to its mDNS .local form. A dotted
         # peer-hostname is a real DNS name — no .local variant exists for it.
-        print -r -- "Host $alias $peer_hostname $peer_hostname.local"
-      else
-        print -r -- "Host $alias $peer_hostname"
+        local peer_local="$peer_hostname.local"
+        (( ${host_names[(Ie)$peer_local]} )) || host_names+=("$peer_local")
       fi
-    else
-      print -r -- "Host $alias"
     fi
+    print -r -- "Host ${host_names[*]}"
     print -r -- "    HostName $hostname"
     if ((want_clip)); then
       print -r -- "    # Clipboard bridge — exposes this machine's clipboard to $alias so its nvim /"
@@ -425,17 +467,23 @@ write_ssh_conf() {
       print -r -- "# (prepare: $prepare) and runs the steps (and heals any '# @@resolve@@:' line"
       print -r -- "# above). The _SYNCREMOTE sentinel stops the nested ssh/rsync from re-triggering"
       print -r -- "# this hook. Rendered by system-onboard from 'prepare'."
-      print -r -- "# Deliberately keyed to \$alias only, even when Host also answers to the"
-      print -r -- "# peer's LocalHostName below — a clipboard pull connecting under that name"
-      print -r -- "# skips the theme/gpg pre-connect hook (see write_ssh_conf)."
-      # Hooked entry points: the alias plus the mDNS `.local` form when the
-      # peer hostname is known — both are how HUMANS open sessions, and both
-      # must get the prep steps (theme/mount/...). The bare peer hostname is
-      # deliberately absent: it is the machine-to-machine pull identity.
-      local hook_hosts="$alias"
+      print -r -- "# Deliberately keyed to every configured alias only, even when Host also"
+      print -r -- "# answers to the peer's bare LocalHostName below — a clipboard pull"
+      print -r -- "# connecting under that bare name skips the theme/gpg pre-connect hook"
+      print -r -- "# (see write_ssh_conf)."
+      # Hooked entry points: every configured alias (each one is a FULL entry
+      # point — that's the whole point of a front-matter alias LIST) plus the
+      # mDNS `.local` form when the peer hostname is known — both are how
+      # HUMANS open sessions, and both must get the prep steps
+      # (theme/mount/...). The BARE peer hostname is deliberately absent
+      # unless it is itself a configured alias: it is the machine-to-machine
+      # pull identity.
+      local -a hook_names=("${aliases[@]}")
       if [[ -n "$peer_hostname" && "$peer_hostname" != "$alias" && "$peer_hostname" != *.* ]]; then
-        hook_hosts="$alias,$peer_hostname.local"
+        local peer_local="$peer_hostname.local"
+        (( ${hook_names[(Ie)$peer_local]} )) || hook_names+=("$peer_local")
       fi
+      local hook_hosts="${(j:,:)hook_names}"
       print -r -- 'Match originalhost '"$hook_hosts"' exec "[ -n \"$_SYNCREMOTE\" ] || _SYNCREMOTE=1 ~/.local/libexec/ssh-prepare-connection ~/.ssh/config.d/'"$alias"'.conf </dev/null >/dev/null 2>&1; false"'
     fi
   } >"$conf"

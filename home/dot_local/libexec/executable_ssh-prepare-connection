@@ -9,8 +9,13 @@
 #
 # Header block — a `# ---` fenced comment near the top of the file:
 #   # ---
-#   # alias: <ssh-alias>          the ssh target (used to connect AND as the
-#   #                             theme color-map key)
+#   # alias: <name …>             space-separated list of every configured
+#   #                             entry point for this Host (system-onboard
+#   #                             renders one full entry point per token: a
+#   #                             Host name + a hooked Match). The FIRST token
+#   #                             is the ssh target used to connect AND the
+#   #                             theme color-map key; the rest are additional
+#   #                             names this same fragment also answers to.
 #   # prepare: all | <step …>     which prep steps to run (default: all)
 #   # ---
 #
@@ -65,7 +70,11 @@ parse_header() {
   for line in "${block[@]}"; do
     line="${line#\#}"; line="${line# }"           # drop the comment marker + one space
     case "$line" in
-      alias:*)   target="$(trim "${line#alias:}")" ;;
+      # `alias:` is a space-separated list (system-onboard renders one full
+      # entry point per token); the connection TARGET is the FIRST token
+      # only — trim preserves surrounding whitespace semantics, `%% *` then
+      # drops everything from the first internal space on.
+      alias:*)   target="$(trim "${line#alias:}")"; target="${target%% *}" ;;
       prepare:*) prepare="$(trim "${line#prepare:}")" ;;
       peer-hostname:*) peer_hostname="$(trim "${line#peer-hostname:}")" ;;
     esac
