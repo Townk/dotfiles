@@ -64,6 +64,31 @@ error_log_path = "~/.cache/clipboard-bridge/listener.log"
 # (hs) and /usr/bin (sqlite3, pbpaste, pbcopy) resolve.
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
+# clipboard-mount-sweep — belt-and-braces reaper for clipboard peer mounts
+# (clipboard-mount spec §3.3): every 60s, force-unmount any rclone SFTP mount
+# under ~/.local/state/clipboard/mnt that stopped answering (peer asleep,
+# network change, rclone death) and remove its mountpoint dir, so a stale
+# pasted file-url fails instantly instead of beachballing Finder. Healthy
+# mounts are left alone even with no ssh session open — teardown is
+# health-driven, not session-driven; the next connect (or the dispatcher's
+# self-heal) remounts. The dispatcher's check-failure path also kicks a sweep
+# on demand; this agent covers the quiet hours between clips.
+[clipboard-mount-sweep]
+description     = "Reap unhealthy clipboard peer mounts (rclone/MacFUSE)"
+cmd             = ["clipboard-mount", "sweep"]
+run_at_load     = true
+start_interval  = 60
+process_type    = "Background"
+log_path        = "~/.cache/clipboard-mount/sweep.log"
+error_log_path  = "~/.cache/clipboard-mount/sweep.log"
+
+[clipboard-mount-sweep.env]
+# Single leading tilde only — the renderer's detilde expands only a
+# string-leading `~`, so a second `~/...` segment would reach launchd
+# literally. ~/.local/libexec is where clipboard-mount lives; /opt/homebrew
+# for rclone; /sbin + /usr/sbin for mount/umount/diskutil.
+PATH = "~/.local/libexec:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
 # (The former [clipboard-mirror] service was removed with the self-contained
 # clips revision, spec §11: clips are no longer mirrored as text-only pointers;
 # a clip materializes in full wherever it is used, over the existing bridge.)
