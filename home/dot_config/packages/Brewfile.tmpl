@@ -74,10 +74,18 @@ cask 'espanso'                      # Text expansion / snippets
 cask 'hammerspoon'                  # Keybindings controller (Keyboard Maestro but better)
 {{- end }}
 
-{{ if eq .profile "personal" -}}
-cask 'macfuse'                      # R/W ext3 partitions + restic mount (system-backup scrub sessions)
+{{ if or (eq .profile "personal") (eq .profile "work") -}}
+# macfuse consumers: clipboard peer mounts (clipboard-mount — every sit-at
+# Mac, hence work too) + on personal machines R/W ext3 partitions and
+# restic mount (system-backup scrub sessions). One-time kext approval per
+# machine (System Settings → Privacy & Security; Apple Silicon may first
+# need Reduced Security via Recovery's Startup Security Utility).
+cask 'macfuse'
 # rclone comes from mise (dot_config/mise/conf.d/rclone.toml.tmpl) — aqua's
 # official binary; brew's build disables mount support on macOS
+{{- end }}
+
+{{ if eq .profile "personal" -}}
 cask 'paragon-extfs'                # ext3 FS manager
 {{- end }}
 
