@@ -289,9 +289,33 @@ STUB
 
   It 'fails soft with a warning when rclone is not installed'
     rm -f "$STUBS/rclone"
-    When run command sh -c 'PATH="$1:/usr/bin:/bin" zsh -f "$2" ensure peer-mini' _ "$STUBS" "$CM"
+    # Hermetic: pin the shim-fallback seam to a path that can never exist,
+    # regardless of this real machine's own mise install state.
+    When run command sh -c 'PATH="$1:/usr/bin:/bin" CLIPBOARD_MOUNT_RCLONE_SHIM="$3/no-such-shim" zsh -f "$2" ensure peer-mini' _ "$STUBS" "$CM" "$SHELLSPEC_TMPBASE"
     The status should be failure
     The stderr should include "rclone not installed"
+    The path "$SHELLSPEC_TMPBASE/rclone-argv" should not be exist
+  End
+
+  It 'falls back to the mise shim path when rclone is off PATH (headless launchd context)'
+    rm -f "$STUBS/rclone"
+    # A recording stub standing in for the mise shim, at a path OTHER than
+    # $STUBS (which is on PATH) — proves resolution really used the
+    # fallback, not PATH.
+    mkdir -p "$SHELLSPEC_TMPBASE/shim-dir"
+    cat > "$SHELLSPEC_TMPBASE/shim-dir/rclone" <<STUB
+#!/bin/sh
+printf '%s\n' "\$@" > "$SHELLSPEC_TMPBASE/rclone-argv"
+printf '%s\n' "\${_SYNCREMOTE:-}" > "$SHELLSPEC_TMPBASE/rclone-env"
+echo "mini-clip on \$3 (macfuse, nodev)" >> "$SHELLSPEC_TMPBASE/mount-table"
+exit 0
+STUB
+    chmod +x "$SHELLSPEC_TMPBASE/shim-dir/rclone"
+    When run command sh -c 'PATH="$1:/usr/bin:/bin" CLIPBOARD_MOUNT_RCLONE_SHIM="$3/shim-dir/rclone" zsh -f "$2" ensure peer-mini' _ "$STUBS" "$CM" "$SHELLSPEC_TMPBASE"
+    The status should be success
+    The path "$MNT_ROOT/peer-mini" should be directory
+    The line 1 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal "mount"
+    The contents of file "$SHELLSPEC_TMPBASE/rclone-env" should equal "1"
   End
 
   It 'tears down and fails when the mount comes up unhealthy'

@@ -1,0 +1,39 @@
+{{- /*
+  rclone — mise-managed, mount-capable (macOS personal profile only).
+
+  Homebrew's rclone formula hard-refuses `rclone mount` on macOS
+  ("rclone mount is not supported on MacOS when rclone is installed via
+  Homebrew") — live-proven, not a hypothetical. mise's default backend for
+  rclone, aqua:rclone/rclone, instead ships the official upstream GitHub
+  release binaries: cmount-tagged (`rclone version` shows `go/tags: cmount`)
+  and mount-capable — verified live on this machine, including a mount
+  attempt reaching `mount_macfuse` (the same "it got as far as the kext"
+  proof the old custom-builds installer relied on).
+
+  Unlike the CMake case (cmake.toml.tmpl) — where Gatekeeper quarantines
+  Kitware's prebuilt CMake.app and refuses to run it — the rclone CLI
+  binary aqua installs runs cleanly with no quarantine friction; it's a
+  bare executable, not an app bundle. So no source-build workaround is
+  needed here, just the aqua-backed prebuilt.
+
+  clipboard-mount (home/dot_local/libexec/executable_clipboard-mount) is
+  the sole consumer: its SFTP-over-MacFUSE peer mount is why rclone exists
+  in this repo at all. It resolves the mise shim off PATH for interactive
+  callers, with a hardcoded shim-path fallback for the headless launchd
+  clipboard-bridge service, whose PATH has no shims dir.
+
+  mise loads every conf.d/*.toml alongside config.toml, so this layers the
+  tool in without templating the main config (same pattern as
+  cmake.toml.tmpl / dev-shell.toml.tmpl).
+
+  Scope: macOS, personal profile only — mount support needs macFUSE
+  (cask 'macfuse' in Brewfile.tmpl), which is personal-profile-only, and
+  rclone-for-mount has no reason to install anywhere else.
+*/ -}}
+{{- if and (eq .chezmoi.os "darwin") (eq .profile "personal") }}
+[tools]
+rclone = "latest"
+{{- else }}
+# Not installed: this profile has no clipboard-mount consumer for it
+# (see the header comment above for the full rationale).
+{{- end }}

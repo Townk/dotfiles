@@ -76,8 +76,8 @@ cask 'hammerspoon'                  # Keybindings controller (Keyboard Maestro b
 
 {{ if eq .profile "personal" -}}
 cask 'macfuse'                      # R/W ext3 partitions + restic mount (system-backup scrub sessions)
-# rclone comes from custom-builds/rclone (downloads.rclone.org) — brew's
-# build disables mount support on macOS; see custom-builds/rclone/README.md
+# rclone comes from mise (dot_config/mise/conf.d/rclone.toml.tmpl) — aqua's
+# official binary; brew's build disables mount support on macOS
 cask 'paragon-extfs'                # ext3 FS manager
 {{- end }}
 

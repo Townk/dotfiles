@@ -42,6 +42,11 @@ LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/clipboard-mount"
 # ensure's per-host flock wait. Env-overridable purely as a test seam (the
 # busy-lock spec would otherwise sit through the full wait); default unchanged.
 CLIPBOARD_MOUNT_LOCK_TIMEOUT_S="${CLIPBOARD_MOUNT_LOCK_TIMEOUT_S:-10}"
+# rclone's mise shim, used only when rclone isn't already on PATH (the
+# headless clipboard-bridge launchd service has no shims dir on PATH — see
+# cm::ensure). Env-overridable purely as a test seam (a hermetic spec can't
+# depend on this real machine's mise install state); default unchanged.
+CLIPBOARD_MOUNT_RCLONE_SHIM="${CLIPBOARD_MOUNT_RCLONE_SHIM:-$HOME/.local/share/mise/shims/rclone}"
 
 usage() {
   print -u2 -- "usage: clipboard-mount ensure <host> [<alias>] | check <host> | unmount <host> | sweep | map <host> <abspath>..."
@@ -233,10 +238,25 @@ cm::ensure() {
   fi
   [[ -d "$mp" ]] && cm::teardown "$host"
 
-  command -v rclone >/dev/null 2>&1 || { print -u2 -- "clipboard-mount: rclone not installed; clips stay lazy"; return 1 }
+  # rclone lives under mise (aqua backend: the official, cmount-capable
+  # binaries -- Homebrew's build hard-disables `rclone mount` on macOS).
+  # Interactive shells resolve the shim via PATH; headless callers (the
+  # clipboard-bridge launchd service driving the M-op self-heal) have no
+  # shims dir on PATH, so fall back to the shim's canonical location.
+  # mise shims are symlinks to the mise binary itself (argv[0] dispatch),
+  # so exec'ing the shim directly needs no PATH help at all.
+  local rclone_bin
+  if rclone_bin=$(command -v rclone 2>/dev/null); then
+    :
+  elif [[ -x "$CLIPBOARD_MOUNT_RCLONE_SHIM" ]]; then
+    rclone_bin="$CLIPBOARD_MOUNT_RCLONE_SHIM"
+  else
+    print -u2 -- "clipboard-mount: rclone not installed (mise); clips stay lazy"
+    return 1
+  fi
   mkdir -p "$mp" 2>/dev/null || { print -u2 -- "clipboard-mount: cannot create $mp"; return 1 }
 
-  if ! _SYNCREMOTE=1 rclone mount \
+  if ! _SYNCREMOTE=1 "$rclone_bin" mount \
       ":sftp,ssh='ssh -o ControlPath=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 ${alias}':/" \
       "$mp" \
       --daemon --daemon-wait 5s --daemon-timeout 10s \
