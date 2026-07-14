@@ -99,7 +99,20 @@ clip::op_copy() {
     local text_sql="NULL" preview_sql="NULL" len=$#blob
     if [[ "$kind" == text ]]; then
       text_sql="CAST(readfile('$tmpd/blob') AS TEXT)"
-      preview_sql="$text_sql"
+      # Store-wide invariant: text_preview is always a SINGLE line (every
+      # other writer collapses to the first line -- clip::persist_text_row's
+      # ${text%%$'\n'*}, and the Hammerspoon watcher does the same) because
+      # pick-clipboard renders text-kind previews raw; a multi-line preview
+      # would emit orphan fzf rows. Write the first line to its OWN temp
+      # file (byte-safe via syswrite, same pattern as the blob file above --
+      # never a scalar substring fed through SQL) so preview_sql reads only
+      # that line while text_sql keeps reading the full blob.
+      local preview=${blob%%$'\n'*}
+      local pfd
+      exec {pfd}> "$tmpd/preview"
+      syswrite -o $pfd -- "$preview"
+      exec {pfd}>&-
+      preview_sql="CAST(readfile('$tmpd/preview') AS TEXT)"
     fi
     row_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips \
       (text_preview, text_plain, len, first_ts, last_ts, type_kind, pinned, type_hash, source_host) \

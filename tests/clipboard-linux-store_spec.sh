@@ -143,6 +143,39 @@ Describe 'clipboard-bridge-dispatch: linux-headless text ops'
     When run run_dispatch
     The output should include "héllo→"
   End
+
+  # Fix 2 (final-review): embedded-NUL byte-safety. Verified empirically
+  # (sqlite3 CLI, readfile/writefile) that a NUL byte inside a TEXT column
+  # survives SQLite storage byte-exact -- SQL functions like length() use a
+  # strlen-style scan and misreport a NUL-containing TEXT value's character
+  # count, but the ACTUAL stored bytes (and everything this store reads back
+  # through readfile()/writefile(), never length()) are untouched. The two
+  # tests below confirm the same holds end to end through T then G. Byte-
+  # exact capture never goes through shellspec's own output variable or a
+  # $(...) substitution for the reply itself (both are C-string-shaped and
+  # would silently truncate at the NUL) -- same file-redirection discipline
+  # this codebase already uses everywhere else for byte-safe payloads.
+  It 'T stores an embedded NUL byte-exactly (fix 2)'
+    # regtype 'v' + "ab\0cd" (5 bytes) = 6-byte payload
+    printf 'T\000\000\000\006vab\000cd' > "$REQ"
+    When run run_dispatch
+    The output should start with "O"
+    stored=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT length(CAST(text_plain AS BLOB)) FROM clips;")
+    The variable stored should equal 5
+  End
+
+  It 'G reply preserves an embedded NUL byte-exactly (fix 2)'
+    printf 'T\000\000\000\006vab\000cd' > "$REQ"
+    run_dispatch >/dev/null
+    printf 'G\000\000\000\000' > "$REQ"
+    reply="$SHELLSPEC_TMPBASE/nul-reply.bin"
+    When run command sh -c 'CLIPBOARD_PLATFORM=linux-headless zsh -f "$1" < "$2" > "$3"' _ "$DISPATCH" "$REQ" "$reply"
+    The status should be success
+    size=$(wc -c < "$reply" | tr -d ' ')
+    The variable size should equal 10   # 5-byte header + 5-byte payload ("ab\0cd")
+    hex=$(od -An -tx1 "$reply" | tr -s ' \n' ' ')
+    The variable hex should include "61 62 00 63 64"
+  End
 End
 
 Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
@@ -179,6 +212,23 @@ Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
     The output should start with "O"
     kind=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT type_kind FROM clips;")
     The variable kind should equal "image"
+  End
+
+  # Fix 1 (final-review): the store-wide single-line-preview invariant
+  # (clip::persist_text_row's ${text%%$'\n'*}, and the Hammerspoon watcher's
+  # own equivalent) applies to op_copy's text-UTI branch too -- text_preview
+  # must collapse to the first line even though text_plain keeps the full
+  # multi-line blob, since pick-clipboard renders text-kind previews raw.
+  It 'C collapses a multi-line text-UTI blob to a single-line text_preview'
+    # uti "public.utf8-plain-text" = 22 bytes; blob "first\nsecond" = 12
+    # bytes (5 + 1 newline + 6); payload = 2 + 22 + 12 = 36
+    printf 'C\000\000\000\044\000\026public.utf8-plain-textfirst\nsecond' > "$REQ"
+    When run run_dispatch
+    The output should start with "O"
+    plain=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT text_plain FROM clips;")
+    preview=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT text_preview FROM clips;")
+    The variable plain should equal "$(printf 'first\nsecond')"
+    The variable preview should equal "first"
   End
 
   It 'U form A persists a files manifest row stamped with self-name'

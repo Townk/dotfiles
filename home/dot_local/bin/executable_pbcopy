@@ -407,6 +407,15 @@ if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
       send_frame T 2489 "$_tpay" "$_trep"
       _tst=$(head -c 1 "$_trep" 2>/dev/null || true)
       [ "$_tst" = "O" ] && exit 0
+      if [ "$_tst" = "E" ]; then
+        _tmsg=$(tail -c +6 "$_trep" 2>/dev/null)
+        if [ "$_tmsg" = "unknown opcode" ]; then
+          echo "pbcopy: $(unknown_opcode_hint 2489)" >&2
+        else
+          echo "pbcopy: ${_tmsg:-clipboard bridge rejected the copy}" >&2
+        fi
+        exit 1
+      fi
       echo "pbcopy: clipboard bridge rejected the copy" >&2
       exit 1
     fi

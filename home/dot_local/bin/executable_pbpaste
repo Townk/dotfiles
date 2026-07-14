@@ -1156,7 +1156,20 @@ if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
         rm -f "$_greq" "$_gresp"
         exit 0
       fi
+      # ensure_local_bridge already confirmed the bridge is UP -- a non-O
+      # reply here (E, or garbage/empty from a mid-read hiccup) is a real
+      # answer, not an unreachable bridge, so this must not fall through to
+      # the generic "not reachable" message below (that would blame the
+      # wrong failure mode). Surface the E-frame payload when there is one,
+      # same as pbcopy's own E-reply branches.
+      _gmsg=$(tail -c +6 "$_gresp" 2>/dev/null)
       rm -f "$_greq" "$_gresp"
+      if [ "$_gst" = "E" ]; then
+        echo "pbpaste: clipboard bridge answered with an error${_gmsg:+ -- $_gmsg}" >&2
+      else
+        echo "pbpaste: clipboard bridge answered with an error (127.0.0.1:2489)" >&2
+      fi
+      exit 1
     fi
     echo "pbpaste: no local clipboard tool found (pbpaste/wl-paste/xclip) and the clipboard bridge is not reachable on 127.0.0.1:2489" >&2
     exit 1

@@ -1049,4 +1049,35 @@ EOF
     The status should be success
     The output should equal "hi"
   End
+
+  It 'distinguishes a reachable bridge answering E from an unreachable one (fix 5b)'
+    # Overrides the shared setup()'s nc stub: -z probe still succeeds (the
+    # bridge IS reachable), but the G request now gets an E reply carrying a
+    # real error message instead of O.
+    cat > "$STUBS/nc" <<'EOF'
+#!/bin/sh
+case "$1" in
+  -z) exit 0 ;;
+esac
+printf 'E\000\000\000\012store down'
+EOF
+    chmod +x "$STUBS/nc"
+    When run command sh "$PBPASTE"
+    The status should equal 1
+    The stderr should include "answered with an error"
+    The stderr should include "store down"
+    The stderr should not include "is not reachable"
+  End
+
+  It 'keeps the combined not-reachable message when the bridge never answers the probe'
+    # -z probe itself fails (and, since uname says Linux, there is no
+    # systemctl stub either, so the self-heal kick is a no-op) -- this is
+    # the genuinely-unreachable case, which must keep the ORIGINAL combined
+    # wording, not the new "answered with an error" branch.
+    printf '#!/bin/sh\nexit 1\n' > "$STUBS/nc"
+    chmod +x "$STUBS/nc"
+    When run command sh "$PBPASTE"
+    The status should equal 1
+    The stderr should include "clipboard bridge is not reachable on 127.0.0.1:2489"
+  End
 End

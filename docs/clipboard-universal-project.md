@@ -16,7 +16,8 @@
 > **implemented and live** too (commit `9819757`) — the §11 design below is
 > what shipped. Phase 6 (file clips + yazi/zsh smart paste) shipped
 > 2026-07-12 — see the §18 STATUS block and the §12/§13 as-built notes.
-> Phase 7 (Linux capture) remains.
+> Phase 7's Linux dev-shell store/bridge shipped 2026-07-14 — see the §18
+> STATUS block; only Linux GUI capture remains.
 
 A single clipboard history + type-preserving copy/paste system that works
 across multiple Macs (each used locally or over SSH), a Linux dev shell over

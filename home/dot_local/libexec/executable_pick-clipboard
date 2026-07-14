@@ -124,9 +124,14 @@ fi
 # the shell's DEFAULT (multibyte-on) character counting to size the TUI's
 # columns -- a bare top-level `source` would leak nomultibyte for the rest of
 # this script and silently misalign every accented/wide-glyph path. `$(...)`
-# forks a subshell in zsh, so the core's setopt/export/zmodload side effects
-# all die with it; only clip::self_host's printed value crosses back out via
-# stdout. `|| true` + the hostname -s fallback below: under this script's
+# forks a subshell in zsh, so the core's setopt/export/zmodload SHELL-STATE
+# side effects all die with it -- only clip::self_host's printed value
+# crosses back out via stdout. (One side effect does NOT die with the
+# subshell: sourcing the core file-scope-runs `mkdir -p "$STATE_DIR"`,
+# a filesystem write that persists past it -- harmless/idempotent, so it
+# doesn't change the scoping rationale above, which is about shell
+# OPTIONS/exports/modules leaking into the rest of this script.) `|| true`
+# + the hostname -s fallback below: under this script's
 # `set -eu`, a failed command substitution assigned to a plain scalar would
 # otherwise abort the whole picker if clipboard-store-core.zsh were ever
 # missing (e.g. a partial install) instead of degrading gracefully.

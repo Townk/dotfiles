@@ -720,4 +720,21 @@ EOF
     The contents of file "$SHELLSPEC_TMPBASE/nc-request.bin" should start with "T"
     The contents of file "$SHELLSPEC_TMPBASE/nc-request.bin" should include "vhello"
   End
+
+  It 'surfaces the E-frame payload when the local bridge rejects op T'
+    # Overrides the shared setup()'s nc stub: -z probe still succeeds, but
+    # the framed T send now gets an E reply carrying a real error message
+    # instead of O, exercising the fix-5(a) fidelity path.
+    cat > "$STUBS/nc" <<'EOF'
+#!/bin/sh
+case "$1" in
+  -z) exit 0 ;;
+esac
+printf 'E\000\000\000\022store write failed'
+EOF
+    chmod +x "$STUBS/nc"
+    When run command sh -c 'printf hello | sh "$1"' _ "$PBCOPY"
+    The status should equal 1
+    The stderr should include "store write failed"
+  End
 End
