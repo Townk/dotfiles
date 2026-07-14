@@ -213,6 +213,19 @@ manifest_fetch() {
   printf 'L\000\000\000\000' | nc -w 2 127.0.0.1 "$_port" > "$_replyfile" 2>/dev/null || true
 }
 
+# ensure_local_bridge -- 0 iff this machine's own bridge (127.0.0.1:2489)
+# answers a connect scan, self-healing on Linux first (Phase 7 spec §5): a
+# stopped clipboard-bridge.socket is restarted best-effort via systemd user
+# socket activation, then re-probed once. On macOS the bridge is launchd-
+# supervised -- no kick, the probe verdict stands.
+ensure_local_bridge() {
+  nc -z -w1 127.0.0.1 2489 >/dev/null 2>&1 && return 0
+  [ "$(uname)" = Darwin ] && return 1
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user start clipboard-bridge.socket >/dev/null 2>&1 || true
+  nc -z -w1 127.0.0.1 2489 >/dev/null 2>&1
+}
+
 # manifest_parse <replyfile> -- on an `O` reply, sets $MANIFEST_KIND /
 # $MANIFEST_HOST / $MANIFEST_TS and writes the NUL-joined path list to
 # $MANIFEST_PATHFILE; returns 0. On any failure (bridge down, `E` status,
@@ -1119,14 +1132,33 @@ fi
 
 if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
   # Absolute path, not a PATH lookup — see pbcopy for why.
-  if [ -x /usr/bin/pbpaste ]; then
-    exec /usr/bin/pbpaste
+  # PBPASTE_DARWIN_BIN: test seam (mirrors pbcopy's PBCOPY_DARWIN_BIN) --
+  # lets the spec suite, running on a Mac where /usr/bin/pbpaste exists,
+  # force this branch to fall through to the Linux paths.
+  _darwin_pb="${PBPASTE_DARWIN_BIN:-/usr/bin/pbpaste}"
+  if [ -x "$_darwin_pb" ]; then
+    exec "$_darwin_pb"
   elif command -v wl-paste >/dev/null 2>&1; then
     exec wl-paste
   elif command -v xclip >/dev/null 2>&1; then
     exec xclip -selection clipboard -o
   else
-    echo "pbpaste: no local clipboard tool found (pbpaste/wl-paste/xclip)" >&2
+    # Headless Linux (Phase 7 spec §5): the store IS the clipboard -- read
+    # the latest clip via this machine's own bridge (op G).
+    if ensure_local_bridge; then
+      _greq=$(mktemp "${TMPDIR:-/tmp}/pbpaste-g.XXXXXX") || { echo "pbpaste: mktemp failed" >&2; exit 1; }
+      _gresp=$(mktemp "${TMPDIR:-/tmp}/pbpaste-gr.XXXXXX") || { rm -f "$_greq"; echo "pbpaste: mktemp failed" >&2; exit 1; }
+      printf 'G\000\000\000\000' > "$_greq"
+      nc -w 2 127.0.0.1 2489 < "$_greq" > "$_gresp" 2>/dev/null || true
+      _gst=$(head -c 1 "$_gresp" 2>/dev/null || true)
+      if [ "$_gst" = "O" ]; then
+        tail -c +6 "$_gresp"
+        rm -f "$_greq" "$_gresp"
+        exit 0
+      fi
+      rm -f "$_greq" "$_gresp"
+    fi
+    echo "pbpaste: no local clipboard tool found (pbpaste/wl-paste/xclip) and the clipboard bridge is not reachable on 127.0.0.1:2489" >&2
     exit 1
   fi
 fi

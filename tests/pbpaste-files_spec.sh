@@ -1015,3 +1015,38 @@ EOF
     The output should equal "warn=#e5bf7b crust=#11111b subtext0=#a6adc8 surface0=#313244"
   End
 End
+
+Describe 'pbpaste local mode: Phase 7 store fallback'
+  PBPASTE="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+
+  setup() {
+    STUBS="$SHELLSPEC_TMPBASE/stubs"; mkdir -p "$STUBS"
+    # Restricted PATH -- see Task 7's local-text Describe: a brew-installed
+    # wl-paste/xclip must not win the command -v probes.
+    export PATH="$STUBS:/usr/bin:/bin"
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    # Defeat the `-x /usr/bin/pbpaste` Darwin branch on the Mac running this
+    # suite (test seam, mirrors Task 7's PBCOPY_DARWIN_BIN).
+    export PBPASTE_DARWIN_BIN=/nonexistent
+    printf '#!/bin/sh\necho Linux\n' > "$STUBS/uname"; chmod +x "$STUBS/uname"
+    # nc stub: -z probe succeeds; a G request gets a framed "O" + "hi" reply
+    cat > "$STUBS/nc" <<'EOF'
+#!/bin/sh
+case "$1" in
+  -z) exit 0 ;;
+esac
+# framed response: O + BE32(2) + "hi"
+printf 'O\000\000\000\002hi'
+EOF
+    chmod +x "$STUBS/nc"
+    # No wl-paste/xclip stubs and /usr/bin/pbpaste absent-by-uname -> falls
+    # through to the bridge branch.
+  }
+  BeforeEach 'setup'
+
+  It 'falls back to bridge G when no local clipboard tool exists'
+    When run command sh "$PBPASTE"
+    The status should be success
+    The output should equal "hi"
+  End
+End
