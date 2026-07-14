@@ -330,6 +330,15 @@ clip::persist_text_row() {
 #   4. If the store itself is empty, there is nothing to fall back to --
 #      reply with an empty payload; the caller treats that as "unknown".
 clip::op_get_ts() {
+  # linux-headless short-circuit (spec §3): current clipboard == latest row,
+  # so the content-match chain below degenerates to MAX(last_ts) directly.
+  if [[ "${CLIPBOARD_PLATFORM:-$(uname -s)}" != Darwin && "${CLIPBOARD_PLATFORM:-}" != macos ]]; then
+    local ts
+    ts="$(sqlite3 "$DB_FILE" "SELECT MAX(last_ts) FROM clips;" 2>/dev/null)"
+    send_ok "${ts:-}"
+    return
+  fi
+
   pb::get_text; local text=$REPLY
   local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/clipboard-bridge-curts.XXXXXX") || { send_ok ""; return }
   print -rn -- "$text" > "$tmpf"
