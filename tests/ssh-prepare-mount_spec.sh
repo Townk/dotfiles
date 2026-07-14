@@ -1,0 +1,75 @@
+# ssh-prepare-connection `mount` step (clipboard-mount spec §3.2): mounts the
+# peer at connect, gated on peer-hostname + the clipboard RemoteForward,
+# backgrounded so the connection never waits. The step disowns its work, so
+# examples poll for the stub's record file.
+Describe 'ssh-prepare-connection: mount step'
+  SPC="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_ssh-prepare-connection"
+
+  write_conf() {  # write_conf <peer-hostname-line-or-empty> <remoteforward 0|1>
+    {
+      echo "# ---"
+      echo "# alias: mini"
+      echo "# prepare: mount"
+      [ -n "$1" ] && echo "# peer-hostname: $1"
+      echo "# ---"
+      echo "Host mini thiago-mac-mini"
+      echo "    HostName 192.0.2.10"
+      if [ "$2" = 1 ]; then
+        echo "    RemoteForward 127.0.0.1:2490 127.0.0.1:2489"
+      fi
+    } > "$CONF"
+  }
+
+  run_and_wait() {
+    zsh -f "$SPC" "$CONF"
+    i=0; while [ ! -e "$SHELLSPEC_TMPBASE/cm-calls" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+    return 0
+  }
+
+  setup() {
+    CONF="$SHELLSPEC_TMPBASE/mini.conf"
+    rm -f "$SHELLSPEC_TMPBASE/cm-calls"
+    STUBS="$SHELLSPEC_TMPBASE/bin"
+    export PATH="$STUBS:$PATH"
+    mkdir -p "$STUBS"
+    export CLIPBOARD_MOUNT_BIN="$STUBS/clipboard-mount"
+    printf '#!/bin/sh\necho "$*" >> "%s"\n' "$SHELLSPEC_TMPBASE/cm-calls" > "$STUBS/clipboard-mount"
+    # the other prepare steps' externals, inert (prepare: mount runs only the
+    # mount step, but keep these for the prepare: all example)
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/ssh"
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/rsync"
+    chmod +x "$STUBS/clipboard-mount" "$STUBS/ssh" "$STUBS/rsync"
+  }
+  BeforeEach 'setup'
+
+  It 'ensures the peer mount, keyed by peer-hostname, ssh via the alias'
+    write_conf thiago-mac-mini 1
+    When call run_and_wait
+    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure thiago-mac-mini mini"
+  End
+
+  It 'skips silently when the fragment has no peer-hostname'
+    write_conf "" 1
+    When call run_and_wait
+    The path "$SHELLSPEC_TMPBASE/cm-calls" should not be exist
+  End
+
+  It 'skips when the fragment has no clipboard RemoteForward'
+    write_conf thiago-mac-mini 0
+    When call run_and_wait
+    The path "$SHELLSPEC_TMPBASE/cm-calls" should not be exist
+  End
+
+  It 'skips when peer-hostname is not a safe ssh/host name'
+    write_conf "../evil" 1
+    When call run_and_wait
+    The path "$SHELLSPEC_TMPBASE/cm-calls" should not be exist
+  End
+
+  It 'prepare: all includes the mount step'
+    write_conf thiago-mac-mini 1
+    sed -i '' 's/# prepare: mount/# prepare: all/' "$CONF"
+    When call run_and_wait
+    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure thiago-mac-mini mini"
+  End
+End

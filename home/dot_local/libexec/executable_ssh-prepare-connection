@@ -48,12 +48,12 @@ set -uo pipefail
 config="${1:?usage: ssh-prepare-connection <config-file>}"
 [[ -r "$config" ]] || { print -u2 -- "ssh-prepare-connection: cannot read '$config'"; exit 1; }
 
-typeset -a all_steps=(gpg symbols-db theme)
+typeset -a all_steps=(gpg symbols-db theme mount)
 
 trim() { local s="$1"; s="${s##[[:space:]]#}"; s="${s%%[[:space:]]#}"; print -r -- "$s"; }
 
 # --- header parse ------------------------------------------------------------
-typeset target="" prepare=""
+typeset target="" prepare="" peer_hostname=""
 parse_header() {
   local -a block
   block=("${(@f)$(awk '
@@ -67,6 +67,7 @@ parse_header() {
     case "$line" in
       alias:*)   target="$(trim "${line#alias:}")" ;;
       prepare:*) prepare="$(trim "${line#prepare:}")" ;;
+      peer-hostname:*) peer_hostname="$(trim "${line#peer-hostname:}")" ;;
     esac
   done
 }
@@ -109,6 +110,30 @@ step_theme() {
   rsync -z --timeout=8 -e 'ssh -o ConnectTimeout=5' \
     "$tmp" "$target:.config/theme/override.toml" </dev/null >/dev/null 2>&1
   rm -f "$tmp"
+}
+
+step_mount() {
+  # Clipboard peer mount (clipboard-mount spec §3.2): mount <peer-hostname>'s
+  # / read-only via rclone SFTP so a file copied on it lands here as a
+  # pasteable mount-relative file-url (Finder-native paste). Darwin-only
+  # (Finder is the point; MacFUSE/rclone are the Mac side), gated on the
+  # fragment knowing the peer's LocalHostName (the store identity M rows
+  # carry -- no peer-hostname, no mount key) AND on the clipboard bridge
+  # being enabled for this host (the rendered RemoteForward line is the
+  # signal -- the mount is a clipboard feature). Backgrounded + disowned:
+  # the connection must never wait ~5s of rclone daemon-wait; a copy a few
+  # seconds after connecting finds the mount healthy, and the dispatcher's
+  # own self-heal covers the race. peer_hostname is re-validated here
+  # (defense in depth: front matter is hand-editable, and this value becomes
+  # both a mountpoint directory component and an ssh target) -- same shape
+  # rule as system-onboard's valid_peer_hostname.
+  [[ "$OSTYPE" == darwin* ]] || return 0
+  [[ "$peer_hostname" == [A-Za-z0-9][A-Za-z0-9.-]# ]] || return 0
+  grep -qE '^[[:space:]]*RemoteForward[[:space:]]+127\.0\.0\.1:2490[[:space:]]' "$config" || return 0
+  local cm="${CLIPBOARD_MOUNT_BIN:-$HOME/.local/libexec/clipboard-mount}"
+  [[ -x "$cm" ]] || return 0
+  "$cm" ensure "$peer_hostname" "$target" </dev/null >/dev/null 2>&1 &!
+  return 0
 }
 
 # --- resolvers (predefined registry) -----------------------------------------
@@ -224,6 +249,7 @@ for step in "${steps[@]}"; do
     gpg)        step_gpg ;;
     symbols-db) step_symbols_db ;;
     theme)      step_theme ;;
+    mount)      step_mount ;;
     *)
       print -u2 -- "ssh-prepare-connection: unknown step '$step' (known: ${(j:, :)all_steps})"
       exit 1
