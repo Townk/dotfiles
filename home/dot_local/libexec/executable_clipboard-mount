@@ -110,7 +110,14 @@ cm::rclone_pids_for() {
   local pid cmdline
   for pid in ${(f)"$(pgrep -f 'rclone mount' 2>/dev/null)"}; do
     cmdline=$(ps -p "$pid" -o command= 2>/dev/null) || continue
-    [[ "$cmdline" == *"$mp"* ]] && pids+=("$pid")
+    # Whole-argv-word match, not a bare substring: a plain *"$mp"* match would
+    # also hit a prefix-sharing sibling mountpoint (e.g. tearing down host
+    # `foo` would substring-match and kill the rclone serving `foo-bar` too).
+    # $mp is always a full argv word (either the mountpoint arg itself, or
+    # followed by another flag), so requiring a surrounding space (or a
+    # trailing end-of-string, since it's the command's last argv word here)
+    # pins the match to the exact word.
+    [[ "$cmdline" == *" $mp "* || "$cmdline" == *" $mp" ]] && pids+=("$pid")
   done
   (( ${#pids[@]} )) && print -r -- "${pids[@]}"
   return 0
@@ -124,6 +131,23 @@ cm::rclone_pids_for() {
 cm::teardown() {
   local host=$1 mp
   mp=$(cm::mountpoint "$host") || return 0
+  # teardown used to run lock-free, so check's async sweep-kick (and the 60s
+  # launchd sweep agent) could force-unmount/kill/rmdir a mount that a
+  # concurrent flock-holding `ensure` was still in the middle of creating.
+  # Take the SAME per-host lock ensure uses, non-blocking: if another process
+  # holds it, an ensure is in flight and will settle the mount's health
+  # itself — never fight the winner, just bail. Empirically verified (zsh
+  # `zsystem flock`, BSD flock semantics): a process re-locking a file it
+  # ALREADY holds the lock on (e.g. `ensure` calling teardown internally,
+  # same process, different fd) succeeds immediately instead of blocking or
+  # failing — flock conflicts are per-process, not per-fd — so this guard is
+  # transparent to `ensure`'s own teardown calls and only ever turns away a
+  # genuinely different process. The fd is held open to process exit exactly
+  # like ensure's own lock fd; fine here too since unmount/sweep processes are
+  # short-lived.
+  local lock="$MNT_ROOT/.$host.lock"
+  : >> "$lock" 2>/dev/null
+  zsystem flock -t 0 "$lock" 2>/dev/null || return 0
   if ! umount "$mp" 2>/dev/null; then
     diskutil unmount force "$mp" >/dev/null 2>&1 || true
   fi

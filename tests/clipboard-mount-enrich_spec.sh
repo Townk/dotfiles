@@ -42,6 +42,20 @@ Describe 'clipboard-bridge-dispatch: M mount enrichment'
     export PATH="$STUBS:$PATH"
     mkdir -p "$STUBS"
     rm -f "$SHELLSPEC_TMPBASE"/hs-set-script "$SHELLSPEC_TMPBASE"/cm-calls "$SHELLSPEC_TMPBASE"/cc-value
+    # scutil stub: pinned to a fixed non-fixture hostname by DEFAULT, reset
+    # every example -- NOT simply removed. mount_enrich's self-host guard
+    # falls back to the real `scutil`/`hostname -s` when no stub is present,
+    # and this file's fixture host ("thiago-mac-mini") is empirically a real
+    # developer machine's actual LocalHostName -- confirmed live, it made
+    # every M-enrichment example here false-negative (self-host guard firing
+    # for real) on that box. Pinning a stub host that can never collide with
+    # any fixture used in this file keeps the suite hostname-independent; the
+    # self-host example below overrides this stub with its own.
+    cat > "$STUBS/scutil" <<STUB
+#!/bin/sh
+echo test-suite-nonself
+STUB
+    chmod +x "$STUBS/scutil"
     # hs stub with two personalities: a changeCount script (contains
     # "changeCount") prints the fixture counter; anything else is a
     # pasteboard-set script -- record it. clip::set_file_urls_core passes
@@ -135,6 +149,28 @@ STUB
     The result of function db_row_count should equal 1
     The path "$SHELLSPEC_TMPBASE/hs-set-script" should not be exist
   End
+
+  It 'self-host record: M payload host IS this machine -- record-only, no mount attempt at all'
+    # scutil stubbed to answer the SAME host the M payload carries, so
+    # mount_enrich's self-host guard fires as the very first thing inside the
+    # backgrounded subshell -- before it even execs $cm. Row still persists
+    # (op_manifest_persist_local's insert runs before mount_enrich is called
+    # at all); no cm-calls (clipboard-mount never invoked), no hs-set-script,
+    # no origin file.
+    cat > "$STUBS/scutil" <<STUB
+#!/bin/sh
+echo thiago-test-self
+STUB
+    chmod +x "$STUBS/scutil"
+    build_m_req thiago-test-self /Users/thiago/big.bin
+    # 3s budget: none of these artifacts appear by design.
+    When call run_and_wait "$SHELLSPEC_TMPBASE/never-appears" 30
+    The contents of file "$RESP" should start with "O"
+    The result of function db_row_count should equal 1
+    The path "$SHELLSPEC_TMPBASE/cm-calls" should not be exist
+    The path "$SHELLSPEC_TMPBASE/hs-set-script" should not be exist
+    The path "$ORIGIN" should not be exist
+  End
 End
 
 # Second half of clipboard-mount spec §3.4 coverage: the self-heal branch
@@ -183,6 +219,15 @@ Describe 'clipboard-bridge-dispatch: M self-heal + changeCount guard'
     export PATH="$STUBS:$PATH"
     mkdir -p "$STUBS"
     rm -f "$SHELLSPEC_TMPBASE"/hs-set-script "$SHELLSPEC_TMPBASE"/cm-calls "$SHELLSPEC_TMPBASE"/cc-value "$SHELLSPEC_TMPBASE"/mounted
+    # scutil stub pinned to a fixed non-fixture hostname -- see the matching
+    # comment in the previous Describe's setup() for why this can't just be
+    # removed (this file's fixture host collides with a real dev machine's
+    # actual LocalHostName, confirmed live).
+    cat > "$STUBS/scutil" <<STUB
+#!/bin/sh
+echo test-suite-nonself
+STUB
+    chmod +x "$STUBS/scutil"
     # hs stub with two personalities: a changeCount script (contains
     # "changeCount") prints the fixture counter; anything else is a
     # pasteboard-set script -- record it. clip::set_file_urls_core passes

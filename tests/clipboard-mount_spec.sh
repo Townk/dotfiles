@@ -108,6 +108,74 @@ Describe 'clipboard-mount: unmount + sweep'
     The status should be success
     The contents of file "$SHELLSPEC_TMPBASE/calls" should include "diskutil unmount force $MNT_ROOT/peer-mini"
   End
+
+  It 'teardown (via unmount) skips when another process holds the per-host lock'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    # Same pattern as the ensure-side busy-lock example (Describe 'ensure'
+    # below): a background zsh takes the SAME per-host flock cm::teardown now
+    # acquires, drops a ready-sentinel, and this example's teardown (via
+    # `unmount`, teardown's only CLI-reachable caller) must see it busy and
+    # bail WITHOUT ever calling umount -- an in-flight `ensure` owns settling
+    # this mount's health, teardown must never fight it.
+    When run command sh -c 'zsh -fc "zmodload zsh/system; : >> \"$1\"; zsystem flock \"$1\"; : > \"$2\"; sleep 5" & h=$!; i=0; while [ ! -f "$2" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; zsh -f "$3" unmount peer-mini; rc=$?; kill $h 2>/dev/null; exit $rc' _ "$MNT_ROOT/.peer-mini.lock" "$SHELLSPEC_TMPBASE/lock-held" "$CM"
+    The status should be success
+    The path "$SHELLSPEC_TMPBASE/calls" should not be exist
+    The path "$MNT_ROOT/peer-mini" should be directory
+  End
+End
+
+# cm::rclone_pids_for's whole-argv-word matching, tested at its real seam: a
+# bare *"$mp"* substring match would also hit a prefix-sharing sibling
+# mountpoint (tearing down host `peer` would kill the rclone serving
+# `peer-mini` too). `kill` is a zsh BUILTIN (not found on PATH), so a stub
+# can't intercept it to observe which pids cm::teardown actually signals --
+# and the pids here are fake anyway, so a real kill -9 on them just fails
+# silently (`2>/dev/null || true`), leaving nothing externally observable
+# through teardown's own CLI surface. The honest seam is cm::rclone_pids_for
+# itself: `source` the script (harmlessly, with a no-op `sweep` argv so the
+# case-dispatch at file-scope doesn't error/exit) into the CURRENT shell --
+# zsh restores the caller's own positional params once `source` returns (
+# confirmed empirically), so the function definitions stick around and can
+# be called directly afterward, no subprocess/kill interception needed.
+Describe 'clipboard-mount: cm::rclone_pids_for word-matching'
+  CM="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-mount"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    MNT_ROOT="$XDG_STATE_HOME/clipboard/mnt"
+    STUBS="$SHELLSPEC_TMPBASE/bin"
+    export PATH="$STUBS:$PATH"
+    mkdir -p "$STUBS" "$MNT_ROOT"
+    rm -f "$STUBS/stat"
+    : > "$SHELLSPEC_TMPBASE/mount-table"
+    printf '#!/bin/sh\ncat "%s"\n' "$SHELLSPEC_TMPBASE/mount-table" > "$STUBS/mount"
+    # Two fake rclone-mount pids: 111 serves .../peer, 222 serves the
+    # prefix-sharing .../peer-mini -- exactly the collision the substring
+    # match used to cause.
+    printf '#!/bin/sh\necho 111\necho 222\n' > "$STUBS/pgrep"
+    cat > "$STUBS/ps" <<STUB
+#!/bin/sh
+case "\$2" in
+  111) echo "rclone mount :sftp,ssh=xxx $MNT_ROOT/peer --daemon --read-only" ;;
+  222) echo "rclone mount :sftp,ssh=xxx $MNT_ROOT/peer-mini --daemon --read-only" ;;
+esac
+STUB
+    chmod +x "$STUBS/mount" "$STUBS/pgrep" "$STUBS/ps"
+  }
+  BeforeEach 'setup'
+
+  It 'matches only the exact mountpoint word, not a prefix-sharing sibling'
+    When run command zsh -c 'source "$1" sweep >/dev/null 2>&1; cm::rclone_pids_for "$2"' _ "$CM" "$MNT_ROOT/peer"
+    The status should be success
+    The output should equal "111"
+  End
+
+  It 'the sibling mountpoint only ever matches its own pid'
+    When run command zsh -c 'source "$1" sweep >/dev/null 2>&1; cm::rclone_pids_for "$2"' _ "$CM" "$MNT_ROOT/peer-mini"
+    The status should be success
+    The output should equal "222"
+  End
 End
 
 Describe 'clipboard-mount: check'
