@@ -1,0 +1,77 @@
+#!/usr/bin/env zsh
+# clipboard-mount — single owner of the clipboard peer-mount layout: a
+# read-only `rclone mount` (SFTP backend on the already-installed MacFUSE) of
+# a peer's / under ${XDG_STATE_HOME}/clipboard/mnt/<host>, so a file copied on
+# that peer can land on THIS Mac's pasteboard as an ordinary mount-relative
+# public.file-url and Cmd+V in Finder becomes a native Finder copy (progress
+# window and all). Spec:
+# docs/superpowers/specs/2026-07-13-clipboard-mount-subsystem-design.md
+#
+# Subcommands:
+#   ensure <host> [<alias>]   mount if needed (idempotent, flock-guarded);
+#                             <alias> defaults to <host> — the ssh fragment's
+#                             `Host` line already answers to the peer's
+#                             LocalHostName (system-onboard R2), the same fact
+#                             Ctrl-Y's `rsync -e ssh <source_host>:…` relies on
+#   check <host>              bounded health probe; prints the mountpoint and
+#                             exits 0 iff mounted AND answering; read-only —
+#                             remounting is the CALLER's move (the dispatcher's
+#                             self-heal), so this stays cheap for hot paths
+#   unmount <host>            force teardown of one host's mount
+#   sweep                     reap every unhealthy/orphaned mount under the
+#                             mnt root (launchd interval agent + check-failure
+#                             kick both land here)
+#   map <host> <abspath>…     pure path mapping: peer path -> mountpoint path
+#                             (the mount mirrors the peer's / 1:1, so this is
+#                             concatenation; CLI/test surface — the dispatcher
+#                             does the same concat inline on NUL-joined
+#                             payloads, which this output form can't carry)
+#
+# <host> is the peer's LocalHostName as it appears in store rows' source_host
+# (the M payload's host field). It crosses a trust boundary (wire payload),
+# so it gets the same strict RFC-hostname-ish charset check system-onboard's
+# valid_peer_hostname applies — and that check doubles as path-traversal
+# defense, since <host> becomes a directory component of MNT_ROOT.
+emulate -L zsh
+setopt extended_glob
+set -uo pipefail
+zmodload zsh/system   # zsystem flock (ensure's serialization)
+
+MNT_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/mnt"
+LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/clipboard-mount"
+
+usage() {
+  print -u2 -- "usage: clipboard-mount ensure <host> [<alias>] | check <host> | unmount <host> | sweep | map <host> <abspath>..."
+  exit 1
+}
+
+# Same shape rule as system-onboard's valid_peer_hostname: alnum first char,
+# then alnum/dot/dash. Rejects empty, leading dash/dot, globs, whitespace,
+# unicode, and anything path-traversal-shaped.
+cm::valid_host() {
+  [[ "${1:-}" == [A-Za-z0-9][A-Za-z0-9.-]# ]]
+}
+
+cm::mountpoint() {
+  cm::valid_host "${1:-}" || { print -u2 -- "clipboard-mount: invalid host '${1:-}'"; return 1 }
+  print -r -- "$MNT_ROOT/$1"
+}
+
+cm::map() {
+  [[ $# -gt 0 ]] || { print -u2 -- "clipboard-mount: map needs a host"; return 1 }
+  local host="$1"; shift
+  local mp; mp=$(cm::mountpoint "$host") || return 1
+  (( $# > 0 )) || { print -u2 -- "clipboard-mount: map needs at least one path"; return 1 }
+  local p
+  for p in "$@"; do
+    [[ "$p" == /* ]] || { print -u2 -- "clipboard-mount: not absolute: $p"; return 1 }
+    print -r -- "${mp}${p}"
+  done
+}
+
+case "${1:-}" in
+  map)     shift; cm::map "$@" ;;
+  ensure|check|unmount|sweep)
+           print -u2 -- "clipboard-mount: $1 not implemented yet"; exit 2 ;;
+  *)       usage ;;
+esac
