@@ -518,6 +518,22 @@ materialized by pulling the bytes down **at use time**, then stored locally.
 > both names resolve. `system-onboard update <alias> --clipboard|--prepare`
 > reconstructs that second name from the front matter without reconnecting.
 
+> **As-built note (mount subsystem, 2026-07-13)**: the lazy-manifest contract
+> above still holds, and gains a fast path. When the home Mac holds a healthy
+> read-only `rclone mount` (SFTP on MacFUSE) of the origin host — auto-mounted
+> by the `mount` prepare step at ssh connect, health-swept by launchd, spec:
+> `docs/superpowers/specs/2026-07-13-clipboard-mount-subsystem-design.md` —
+> the bridge's `M` handler additionally sets the home pasteboard with
+> **mount-relative file-urls** right after the manifest row lands (echo-
+> suppressed, changeCount-guarded, self-healing remount when the mount died
+> mid-session). Cmd+V in Finder is then a native Finder copy off the mounted
+> volume — progress window, ETA, Cancel — with the bytes still moving only at
+> paste time. The store row stays the lazy manifest: `Ctrl-Y` rsync
+> materialization is unchanged and remains the fallback whenever no healthy
+> mount exists (iPad/Blink sessions, mount failure, Linux sit-at). This
+> refines the DRIVEN→HOME rule (§13): the home pasteboard IS set on copy when
+> — and only when — a healthy mount makes the pointer directly pasteable.
+
 ## 13. `pbcopy` / `clip-copy` shims
 
 A bridge-aware `pbcopy` shim on macOS and the dev shell (and
@@ -858,6 +874,10 @@ working.
 > yazi `y`/`x`/`p`/`P` clipboard integration and the `smart-paste.yazi`
 > plugin, plus a zsh `Alt+p` smart-paste ZLE widget (§13) — yazi was never
 > covered by this document before Phase 6.
+>
+> The **mount subsystem** (Finder-native paste: rclone SFTP on MacFUSE,
+> receiver-side M enrichment — spec 2026-07-13) is built on top of Phase 6;
+> see the §12 as-built note.
 >
 > **Phase 7 (Linux capture) is not started.**
 >
