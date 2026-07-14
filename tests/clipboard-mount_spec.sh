@@ -60,8 +60,9 @@ Describe 'clipboard-mount: unmount + sweep'
     mkdir -p "$STUBS" "$MNT_ROOT"
     rm -f "$SHELLSPEC_TMPBASE/mount-table" "$SHELLSPEC_TMPBASE/calls"
     # $SHELLSPEC_TMPBASE (and $STUBS) is shared across Describes in one run;
-    # the hung-volume example installs a sleeping `stat` stub — reset it so
-    # no example inherits it.
+    # several examples below install a `stat` stub to pin cm::probe's
+    # outcome (healthy/dead/hung) — reset it here so no example inherits
+    # another's.
     rm -f "$STUBS/stat"
     : > "$SHELLSPEC_TMPBASE/mount-table"
     # `mount` prints the fixture table; umount/diskutil/kill-targets record.
@@ -84,6 +85,37 @@ Describe 'clipboard-mount: unmount + sweep'
   It 'sweep leaves a healthy mount alone'
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    # Healthy signature under the new probe: the child-lookup completes with
+    # ENOENT, proving a real daemon round-trip (not an attr-cache answer).
+    printf '#!/bin/sh\necho "stat: x: stat: No such file or directory" >&2\nexit 1\n' > "$STUBS/stat"; chmod +x "$STUBS/stat"
+    When run command zsh -f "$CM" sweep
+    The status should be success
+    The path "$MNT_ROOT/peer-mini" should be exist
+    The path "$SHELLSPEC_TMPBASE/calls" should not be exist
+  End
+
+  It 'sweep reaps a mounted volume whose daemon died (attr-cache trap: lookup gets ENXIO, not ENOENT)'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    # THE live regression this task fixes: a ROOT stat is answered from the
+    # kernel's attribute cache with no daemon round-trip at all, so the old
+    # probe (root stat) passed this corpse as healthy and `ls` then hit
+    # ENXIO. The new probe's lookup of a nonexistent CHILD forces a real
+    # round-trip; with the daemon gone, the kernel/fs layer answers ENXIO
+    # instead of ENOENT, and that must read as DEAD so sweep reaps it.
+    printf '#!/bin/sh\necho "stat: x: stat: Device not configured" >&2\nexit 1\n' > "$STUBS/stat"; chmod +x "$STUBS/stat"
+    When run command zsh -f "$CM" sweep
+    The status should be success
+    The path "$MNT_ROOT/peer-mini" should not be exist
+  End
+
+  It 'sweep leaves alone a probe that bizarrely succeeds (rc 0 -- the probe child exists)'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    # rc 0 can only mean the daemon answered a real lookup either way, so
+    # this counts as healthy even though the not-supposed-to-exist probe
+    # child apparently does.
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/stat"; chmod +x "$STUBS/stat"
     When run command zsh -f "$CM" sweep
     The status should be success
     The path "$MNT_ROOT/peer-mini" should be exist
@@ -189,7 +221,7 @@ Describe 'clipboard-mount: check'
     mkdir -p "$STUBS" "$MNT_ROOT"
     # $STUBS is shared across Describes: the sweep block's hung-volume example
     # leaves a sleeping `stat` stub behind, which would wedge cm::probe here.
-    rm -f "$STUBS/stat"
+    rm -f "$STUBS/stat" "$SHELLSPEC_TMPBASE/stat-argv"
     : > "$SHELLSPEC_TMPBASE/mount-table"
     printf '#!/bin/sh\ncat "%s"\n' "$SHELLSPEC_TMPBASE/mount-table" > "$STUBS/mount"
     printf '#!/bin/sh\nexit 0\n' > "$STUBS/umount"
@@ -202,9 +234,46 @@ Describe 'clipboard-mount: check'
   It 'prints the mountpoint and succeeds when mounted and answering'
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    # Healthy signature under the new probe: ENOENT on the child lookup.
+    printf '#!/bin/sh\necho "stat: x: stat: No such file or directory" >&2\nexit 1\n' > "$STUBS/stat"; chmod +x "$STUBS/stat"
     When run command zsh -f "$CM" check peer-mini
     The status should be success
     The output should equal "$MNT_ROOT/peer-mini"
+  End
+
+  It 'probes by looking up a nonexistent CHILD of the mountpoint, never the bare root (the attr-cache defeat mechanism)'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    # A recording stub that exits 0 reads as healthy under BOTH the old
+    # (root-stat) and new (child-lookup) probes, so the recorded argv is
+    # the only discriminator here — it pins the MECHANISM itself. A revert
+    # to stat-ing the bare mountpoint would record exactly
+    # $MNT_ROOT/peer-mini and fail the child-suffix assertions below while
+    # every classification example still passed.
+    cat > "$STUBS/stat" <<STUB
+#!/bin/sh
+printf '%s\n' "\$@" > "$SHELLSPEC_TMPBASE/stat-argv"
+exit 0
+STUB
+    chmod +x "$STUBS/stat"
+    When run command zsh -f "$CM" check peer-mini
+    The status should be success
+    The output should equal "$MNT_ROOT/peer-mini"
+    # probe invokes: stat -f %i -- <path>; line 4 of the recorded argv is
+    # the probed path.
+    The line 4 of contents of file "$SHELLSPEC_TMPBASE/stat-argv" should start with "$MNT_ROOT/peer-mini/.clipboard-mount-probe."
+    The line 4 of contents of file "$SHELLSPEC_TMPBASE/stat-argv" should not equal "$MNT_ROOT/peer-mini"
+  End
+
+  It 'fails when mounted but the daemon died (root-stat attr-cache trap: lookup gets ENXIO, not ENOENT)'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    printf '#!/bin/sh\necho "stat: x: stat: Device not configured" >&2\nexit 1\n' > "$STUBS/stat"; chmod +x "$STUBS/stat"
+    # the async sweep must reap the corpse; poll briefly for it
+    When run command sh -c 'zsh -f "$1" check peer-mini; rc=$?; i=0; while [ -d "$2" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done; exit $rc' _ "$CM" "$MNT_ROOT/peer-mini"
+    The status should be failure
+    The output should equal ""
+    The path "$MNT_ROOT/peer-mini" should not be exist
   End
 
   It 'fails instantly when the mountpoint dir does not exist'

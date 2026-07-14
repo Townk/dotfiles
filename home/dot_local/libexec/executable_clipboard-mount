@@ -36,6 +36,7 @@ emulate -L zsh
 setopt extended_glob
 set -uo pipefail
 zmodload zsh/system   # zsystem flock (ensure's serialization)
+zmodload zsh/datetime # EPOCHREALTIME (cm::probe's errfile uniqueness)
 
 MNT_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/mnt"
 LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/clipboard-mount"
@@ -84,26 +85,63 @@ cm::is_mounted() {
   mount 2>/dev/null | grep -qF " on $1 ("
 }
 
-# cm::probe <mp> [<timeout-s>=1] — bounded liveness stat. A stat against a
-# dead FUSE volume can wedge in the kernel where even SIGKILL doesn't reap it,
-# so this NEVER `wait`s a still-running probe: background the stat, poll its
-# liveness, and on timeout kill-9 and walk away (rc 1). `timeout(1)` is
-# deliberately not used here — it blocks in wait() on an unkillable child.
+# cm::probe <mp> [<timeout-s>=1] — bounded liveness LOOKUP. Stat-ing the
+# mountpoint ROOT is a trap: the kernel's attribute cache can answer a root
+# stat straight out of cache with NO daemon round-trip at all, so a mount
+# whose rclone daemon has died (dev-shell recycled, network drop, …) still
+# comes back rc 0 "healthy" — `ls` (readdir) then hits the daemon for real
+# and fails with ENXIO "Device not configured". To force an actual
+# round-trip, this probes a LOOKUP of a nonexistent CHILD instead: the attr
+# cache has nothing cached for a path that's never existed, so the kernel
+# has no choice but to ask the daemon.
+#
+# That trade means a bare rc can no longer discriminate health: ENOENT
+# (daemon alive, answered "no such file") and ENXIO/ENOTCONN/EIO (daemon
+# dead, kernel/fs layer answered instead) are BOTH non-zero rc from `stat`.
+# So the probe captures stderr and classifies the outcome:
+#   * rc!=0 and stderr contains "No such file" → HEALTHY (a real round-trip
+#     happened and the daemon answered ENOENT, the expected "empty" result)
+#   * rc==0 (the probe child bizarrely already exists)   → HEALTHY (rc 0 can
+#     only mean the daemon answered a real lookup either way)
+#   * rc!=0 with any other stderr (ENXIO, ENOTCONN, EIO, …) → DEAD
+#   * doesn't complete within the budget                    → DEAD
+# `LC_ALL=C` pins the stderr wording to the C locale so the ENOENT match
+# doesn't get fooled by a localized message.
+#
+# The timeout path is unchanged and just as load-bearing as before: a lookup
+# against a HUNG/dead FUSE volume can wedge in the kernel where even
+# SIGKILL doesn't reap it, so this NEVER `wait`s a still-running probe —
+# background the stat, poll its liveness, and on timeout kill-9 and walk
+# away (rc 1 / DEAD). `timeout(1)` is deliberately not used here — it
+# blocks in wait() on an unkillable child.
 cm::probe() {
   local mp=$1 timeout_s=${2:-1}
-  local pid
-  stat -f %i -- "$mp" >/dev/null 2>&1 &
+  local pid errfile
+  # $$ alone is NOT unique here: zsh subshells keep the parent's $$ while
+  # being distinct OS processes — check's async `( cm::sweep ) &!` kick
+  # would compute the SAME errfile path as its parent. Real per-invocation
+  # entropy (µs clock + $RANDOM) makes every probe's errfile its own, so
+  # even a timed-out probe's walked-away stat can't touch a later one's.
+  errfile="${TMPDIR:-/tmp}/.clipboard-mount-probe.$$.${EPOCHREALTIME/./}.$RANDOM.err"
+  LC_ALL=C stat -f %i -- "$mp/.clipboard-mount-probe.$$" >/dev/null 2>"$errfile" &
   pid=$!
   local -i waited_ms=0 budget_ms=$(( timeout_s * 1000 ))
   while (( waited_ms < budget_ms )); do
     if ! kill -0 "$pid" 2>/dev/null; then
       wait "$pid" 2>/dev/null
-      return $?
+      local -i rc=$?
+      if (( rc == 0 )) || grep -q 'No such file' "$errfile" 2>/dev/null; then
+        rm -f "$errfile"
+        return 0
+      fi
+      rm -f "$errfile"
+      return 1
     fi
     sleep 0.05
     (( waited_ms += 50 ))
   done
   kill -9 "$pid" 2>/dev/null
+  rm -f "$errfile"
   return 1
 }
 
@@ -242,6 +280,11 @@ cm::ensure() {
   : >> "$lock"
   zsystem flock -t "$CLIPBOARD_MOUNT_LOCK_TIMEOUT_S" "$lock" 2>/dev/null || { print -u2 -- "clipboard-mount: ensure '$host' busy"; return 1 }
 
+  # probe #1 of 2 (pre-check): strictly sequential with the post-mount probe
+  # below — same process, and cm::probe returns before anything else runs
+  # (even on timeout it walks away rather than waiting), so the two calls
+  # can never overlap; unique per-invocation errfiles cover the leftover
+  # hung-stat case regardless.
   if [[ -d "$mp" ]] && cm::is_mounted "$mp" && cm::probe "$mp"; then
     return 0
   fi
@@ -283,6 +326,9 @@ cm::ensure() {
     print -u2 -- "clipboard-mount: rclone mount of '$host' failed (see $LOG_DIR/${host}.log)"
     return 1
   fi
+  # probe #2 of 2 (post-mount verify): sequential with probe #1 above — see
+  # the comment there; a timed-out probe #1's lingering stat can't clobber
+  # this call's errfile (unique names per invocation).
   if cm::is_mounted "$mp" && cm::probe "$mp"; then
     return 0
   fi
