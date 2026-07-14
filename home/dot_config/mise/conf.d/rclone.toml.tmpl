@@ -1,5 +1,5 @@
 {{- /*
-  rclone — mise-managed, mount-capable (macOS personal profile only).
+  rclone — mise-managed, mount-capable (macOS, work + personal profiles).
 
   Homebrew's rclone formula hard-refuses `rclone mount` on macOS
   ("rclone mount is not supported on MacOS when rclone is installed via
@@ -26,11 +26,14 @@
   tool in without templating the main config (same pattern as
   cmake.toml.tmpl / dev-shell.toml.tmpl).
 
-  Scope: macOS, personal profile only — mount support needs macFUSE
-  (cask 'macfuse' in Brewfile.tmpl), which is personal-profile-only, and
-  rclone-for-mount has no reason to install anywhere else.
+  Scope: macOS, work + personal profiles (the same pair the zsh
+  custom-build targets) — the work laptop is a sit-at machine in the
+  clipboard pair and mounts its peers too. Mount support needs macFUSE;
+  the Brewfile cask is personal-gated but the work laptop carries macFUSE
+  already (restic scrub), and a machine without it just degrades to the
+  lazy rsync/Ctrl-Y flow (clipboard-mount fails soft).
 */ -}}
-{{- if and (eq .chezmoi.os "darwin") (eq .profile "personal") }}
+{{- if and (eq .chezmoi.os "darwin") (or (eq .profile "work") (eq .profile "personal")) }}
 [tools]
 rclone = "latest"
 {{- else }}
