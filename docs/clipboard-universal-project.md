@@ -190,8 +190,10 @@ is OS-agnostic.
 - **Wayland**: `wl-paste --watch <writer>` (genuinely event-driven) → same
   schema, text-only.
 - **X11**: xclip polling daemon → same.
-- **Headless / dev shell**: no GUI clipboard; its DB is fed by materialize-on-
-  use over the bridge (§11) + `pbcopy`/`clip-copy` shims + editor yanks.
+- **Headless / dev shell** *(live as of Phase 7)*: no GUI clipboard; the
+  bridge + store run locally (systemd user socket activation on 2489) and the
+  DB is fed by materialize-on-use over the bridge (§11) + `pbcopy`/`pbpaste`
+  shims + editor yanks. No watcher — capture stays out of scope by design.
 
 The skip-filter runs **before any forward** to the bridge, so sensitive
 content never leaves the originating machine.
@@ -634,6 +636,19 @@ where "you" is decided by bridge-up:
 > unused but harmless, in `clipboard-bridge-dispatch`'s
 > `clip::declare_origin_core` and `clipboard-history.lua`'s
 > `captured_origin()`.
+>
+> **As-built note (Phase 7, 2026-07-14)**: between Fix A above and Phase 7
+> landing, an interim on platforms with no local store (headless Linux,
+> before Phase 7's dev-shell store existed) had nothing for the local send to
+> persist to, so the peer `M` push was — in practice, if not in code intent —
+> the operative primary there ("peer push becomes primary", Phase 7 interim).
+> That gap is **retired**: design of record
+> `docs/superpowers/specs/2026-07-14-clipboard-phase7-linux-store-design.md`.
+> Every onboarded machine, macOS or headless Linux, now has its own local
+> bridge/store, so the local `M` send is the unconditional, hard-failing
+> primary everywhere exactly as Fix A describes; the peer push remains
+> strictly secondary and best-effort, with a self-heal (`systemctl --user
+> start`) covering a stopped socket on either end.
 > - `pbcopy --content <file>` — the file's *bytes* under a detected UTI
 >   (extension first, then `file --mime-type`) via the existing `C` op. This
 >   is the mode this section originally called `clip-copy`.
@@ -879,7 +894,23 @@ working.
 > receiver-side M enrichment — spec 2026-07-13) is built on top of Phase 6;
 > see the §12 as-built note.
 >
-> **Phase 7 (Linux capture) is not started.**
+> **Phase 7 — Linux dev-shell store & bridge — done (2026-07-14).** Scope was
+> the dev-shell flavor only (store + dispatcher + socket, **no capture** —
+> design of record:
+> `docs/superpowers/specs/2026-07-14-clipboard-phase7-linux-store-design.md`).
+> As built: the dispatcher split into `clipboard-store-core.zsh` + per-platform
+> `pb::*` backends (`clipboard-platform-{macos,linux-headless}.zsh`); on
+> headless Linux the store's latest row IS the clipboard (G/T/R/S answer from
+> it, C/U persist directly, every opcode supported). The listener is systemd
+> user socket activation (`clipboard-bridge.socket`, loopback 2489,
+> `Accept=yes` template service) — unit files + enable symlink live in the
+> homedir, so an image recycle restores the bridge at first login with no
+> chezmoi run. sqlite3 ships via mise (homedir; apt is wiped on reboot).
+> `pbcopy`'s store-less interim ("peer push becomes primary") is **retired**:
+> the local `M` is the unconditional hard-fail primary everywhere, and both
+> shims self-heal a stopped socket via `systemctl --user start`. GUI-Linux
+> capture (wl-paste/xclip watchers) remains the only unbuilt corner of the
+> original Phase 7 wording and is explicitly deferred.
 >
 > **Phase 5-R — self-contained clips (revision, supersedes the mirror).** The
 > Phase-5 pointer mirror is being replaced per §11: clips materialize in full
