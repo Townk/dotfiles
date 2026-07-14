@@ -139,6 +139,54 @@ EOF
     ;;
 esac
 
+# self_host — resolve the identity THIS machine compares manifest rows'
+# host field against (PF_HOST below). Deliberate DUPLICATE of pbcopy's
+# self_host() (these shims are standalone POSIX sh by design -- no library
+# sourcing, see pbcopy's "Standalone POSIX sh" rationale -- so shared logic
+# is mirrored, not imported; keep the two copies in sync). Why it exists
+# (R-batch Task B amendment): an ephemeral cloud dev-shell's `hostname -s`
+# changes daily, so manifest rows written by pbcopy carry the STABLE
+# self-name identity ssh-prepare-connection's step_mount pushed into
+# $XDG_STATE_HOME/clipboard/self-name -- if pbpaste --files on that same
+# machine kept resolving the raw ephemeral hostname, its own rows would
+# misclassify as REMOTE (PF_REMOTE=1) and route to the peer-fetch engine
+# instead of the local cp tiers. Preference order:
+#   1. $XDG_STATE_HOME/clipboard/self-name, if present, a SINGLE line, and
+#      containing only safe hostname characters with an alphanumeric first
+#      character -- validated defensively (shared dev box; the value is also
+#      a mount-key/ssh-target shape elsewhere).
+#   2. scutil --get LocalHostName.
+#   3. hostname -s.
+self_host() {
+  _sh_file="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/self-name"
+  if [ -f "$_sh_file" ]; then
+    _sh_name=$(cat "$_sh_file" 2>/dev/null) || _sh_name=""
+    # Embedded newline = a second line survived the command substitution
+    # (only TRAILING newlines are stripped): reject the whole file.
+    _sh_nl='
+'
+    case "$_sh_name" in
+      *"$_sh_nl"*) _sh_name="" ;;
+    esac
+    # Two NEGATIVE checks, not one positive [A-Za-z0-9][A-Za-z0-9.-]*
+    # pattern: in POSIX `case` syntax `*` is a WILDCARD (unlike zsh's `#`
+    # quantifier), so that positive pattern would anchor only the first two
+    # characters and let "ab; rm -rf /tmp" through. (a) no character outside
+    # the allowlist anywhere; (b) alphanumeric first character.
+    case "$_sh_name" in
+      *[!A-Za-z0-9.-]*) _sh_name="" ;;
+    esac
+    case "$_sh_name" in
+      [!A-Za-z0-9]*) _sh_name="" ;;
+    esac
+    if [ -n "$_sh_name" ]; then
+      printf '%s' "$_sh_name"
+      return 0
+    fi
+  fi
+  scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null
+}
+
 # --- --manifest (files-yazi design §5) --------------------------------------
 #
 # manifest_port: 2489 (this machine's own bridge) locally, else
@@ -818,7 +866,13 @@ pbpaste_files() {
 
   [ -d "$PF_DIR" ] || { echo "pbpaste: no such directory: $PF_DIR" >&2; exit 1; }
 
-  PF_HOST=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || true)
+  # self_host(), not raw scutil/hostname: rows written by pbcopy on an
+  # ephemeral-hostname box carry the pushed self-name identity, so the
+  # LOCAL/REMOTE comparison below must resolve the same way or this
+  # machine's own rows would misroute to the remote engine (see self_host's
+  # comment). The trailing `|| true` keeps the original guarantee that a
+  # host resolution failure leaves PF_HOST empty rather than tripping set -e.
+  PF_HOST=$(self_host 2>/dev/null || true)
   # Same port manifest_fetch already used for its own L frame (T13
   # requirement 4): 2489 locally, CLIPBOARD_BRIDGE_PORT (default 2490) over
   # SSH -- captured once here and reused by every F/A call below instead of

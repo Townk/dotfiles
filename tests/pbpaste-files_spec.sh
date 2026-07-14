@@ -234,6 +234,11 @@ exit 1
 EOF
     chmod +x "$BINDIR/scutil"
     export PATH="$BINDIR:$PATH"
+    # Hermetic self_host() resolution (R-batch Task B): PF_HOST now prefers
+    # $XDG_STATE_HOME/clipboard/self-name over the fake scutil above, so pin
+    # a fresh sandbox with no such file -- otherwise a real self-name file on
+    # the machine running this suite would override the pinned "mac-mini".
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-local"
 
     SRC="$SHELLSPEC_TMPBASE/src"; mkdir -p "$SRC"
     TARGET="$SHELLSPEC_TMPBASE/target"; mkdir -p "$TARGET"
@@ -412,6 +417,33 @@ EOF
     The status should be success
   End
 
+  # R-batch Task B amendment: PF_HOST resolves via self_host(), which prefers
+  # the pushed $XDG_STATE_HOME/clipboard/self-name identity over
+  # scutil/hostname. On an ephemeral-hostname dev-shell, pbcopy stamps
+  # manifest rows with that stable self-name -- if pbpaste --files kept
+  # resolving the raw (fake-scutil "mac-mini") hostname here, this row would
+  # misclassify as REMOTE and, with no SSH env in this Describe, die on the
+  # Mac-side refusal above instead of materializing. Success + real bytes in
+  # the target + no second nc call (only the one L fetch) proves the row took
+  # the LOCAL path.
+  It 'routes a manifest matching the self-name identity to the LOCAL materialization path'
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-selfname"
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf 'stable-devshell' > "$XDG_STATE_HOME/clipboard/self-name"
+    printf 'self-name routed\n' > "$SRC/selfname.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file stable-devshell 1752200000.62 "$SRC/selfname.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh -c '
+      sh "$1" --files "$2" >/dev/null 2>"$3" || { cat "$3" >&2; exit 1; }
+      diff "$4/selfname.txt" "$2/selfname.txt" || exit 2
+      lines=$(wc -l < "$5" | tr -d " ")
+      [ "$lines" -eq 1 ] || { echo "nclog lines=$lines" >&2; exit 3; }
+    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/err62" "$SRC" "$NCLOG"
+    The status should be success
+  End
+
   It 'errors pointing at plain pbpaste when the clipboard entry is not a files clip'
     pf="$SHELLSPEC_TMPBASE/payload"
     printf 'not-files' > "$pf"
@@ -490,6 +522,8 @@ exit 1
 EOF
     chmod +x "$BINDIR/scutil"
     export PATH="$BINDIR:$PATH"
+    # Hermetic self_host(): see the local-materialization Describe's setup.
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-interrupt"
 
     TARGET="$SHELLSPEC_TMPBASE/target"; mkdir -p "$TARGET"
 
@@ -631,6 +665,8 @@ exit 1
 EOF
     chmod +x "$BINDIR/scutil"
     export PATH="$BINDIR:$PATH"
+    # Hermetic self_host(): see the local-materialization Describe's setup.
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-remote"
 
     # A dedicated target subdir, NOT the "$SHELLSPEC_TMPBASE/target" the
     # Describes above use: $SHELLSPEC_TMPBASE is shared for the whole spec

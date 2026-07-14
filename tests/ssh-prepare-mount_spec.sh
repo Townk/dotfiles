@@ -28,19 +28,30 @@ Describe 'ssh-prepare-connection: mount step'
 
   setup() {
     CONF="$SHELLSPEC_TMPBASE/mini.conf"
-    rm -f "$SHELLSPEC_TMPBASE/cm-calls"
+    rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/ssh-calls" "$SHELLSPEC_TMPBASE/ssh-stdin"
     STUBS="$SHELLSPEC_TMPBASE/bin"
     export PATH="$STUBS:$PATH"
     mkdir -p "$STUBS"
     export CLIPBOARD_MOUNT_BIN="$STUBS/clipboard-mount"
     printf '#!/bin/sh\necho "$*" >> "%s"\n' "$SHELLSPEC_TMPBASE/cm-calls" > "$STUBS/clipboard-mount"
-    # the other prepare steps' externals, inert (prepare: mount runs only the
-    # mount step, but keep these for the prepare: all example)
-    printf '#!/bin/sh\nexit 0\n' > "$STUBS/ssh"
+    # the other prepare steps' externals. `ssh` records every invocation's
+    # argv (to ssh-calls) and stdin (to ssh-stdin) -- prepare: mount runs
+    # only step_mount, whose sole ssh caller is the new identity push below,
+    # so recording is unambiguous for those examples; the prepare: all
+    # example below never inspects these files, so step_gpg's own inert ssh
+    # call there is harmless noise.
+    printf '#!/bin/sh\ncat > "%s/ssh-stdin"\necho "$*" >> "%s/ssh-calls"\n' \
+      "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" > "$STUBS/ssh"
     printf '#!/bin/sh\nexit 0\n' > "$STUBS/rsync"
     chmod +x "$STUBS/clipboard-mount" "$STUBS/ssh" "$STUBS/rsync"
   }
   BeforeEach 'setup'
+
+  wait_for_ssh_calls() {
+    zsh -f "$SPC" "$CONF"
+    i=0; while [ ! -e "$SHELLSPEC_TMPBASE/ssh-calls" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+    return 0
+  }
 
   It 'ensures the peer mount, keyed by peer-hostname, ssh via the alias'
     write_conf thiago-mac-mini 1
@@ -90,5 +101,17 @@ Describe 'ssh-prepare-connection: mount step'
     } > "$CONF"
     When call run_and_wait
     The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure thiago-mac-mini mini"
+  End
+
+  # R-batch Task B amendment: the driven machine may not know its own stable
+  # clipboard identity (ephemeral cloud hostnames); peer-hostname IS that
+  # identity, and the sit-at machine (running this script, right now) is the
+  # one that knows it -- so it pushes a fail-soft, backgrounded self-name
+  # file to the target before the mount ensure call.
+  It 'pushes a stable self-name identity to the peer, keyed by peer-hostname, via ssh to the alias target'
+    write_conf thiago-mac-mini 1
+    When call wait_for_ssh_calls
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "mini"
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-stdin" should equal "thiago-mac-mini"
   End
 End

@@ -124,21 +124,47 @@ step_theme() {
 step_mount() {
   # Clipboard peer mount (clipboard-mount spec §3.2): mount <peer-hostname>'s
   # / read-only via rclone SFTP so a file copied on it lands here as a
-  # pasteable mount-relative file-url (Finder-native paste). Darwin-only
-  # (Finder is the point; MacFUSE/rclone are the Mac side), gated on the
+  # pasteable mount-relative file-url (Finder-native paste). Gated on the
   # fragment knowing the peer's LocalHostName (the store identity M rows
   # carry -- no peer-hostname, no mount key) AND on the clipboard bridge
   # being enabled for this host (the rendered RemoteForward line is the
-  # signal -- the mount is a clipboard feature). Backgrounded + disowned:
-  # the connection must never wait ~5s of rclone daemon-wait; a copy a few
-  # seconds after connecting finds the mount healthy, and the dispatcher's
-  # own self-heal covers the race. peer_hostname is re-validated here
-  # (defense in depth: front matter is hand-editable, and this value becomes
-  # both a mountpoint directory component and an ssh target) -- same shape
-  # rule as system-onboard's valid_peer_hostname.
-  [[ "$OSTYPE" == darwin* ]] || return 0
+  # signal -- both the mount below AND the identity push below it are
+  # clipboard features). peer_hostname is re-validated here (defense in
+  # depth: front matter is hand-editable, and this value becomes both a
+  # mountpoint directory component and an ssh target) -- same shape rule as
+  # system-onboard's valid_peer_hostname.
   [[ "$peer_hostname" == [A-Za-z0-9][A-Za-z0-9.-]# ]] || return 0
   grep -qE '^[[:space:]]*RemoteForward[[:space:]]+127\.0\.0\.1:2490[[:space:]]' "$config" || return 0
+
+  # Stable self-name identity push (R-batch Task B amendment): the DRIVEN
+  # machine may not know its own stable clipboard identity -- an ephemeral
+  # cloud dev-shell's `hostname -s` changes daily (e.g.
+  # cs-1j9nfzmx-medium-homedir-37836), so an M row carrying it would never
+  # match THIS fragment's own peer-hostname (the mount key the laptop side
+  # keys its mount on) or the `Host <name>` line its rsync pulls need.
+  # peer_hostname IS that stable identity, and the sit-at machine -- right
+  # here, right now -- is the one that knows it, so push it into the
+  # target's clipboard state dir for pbcopy/pbpaste's self_host() to prefer.
+  # Fail-soft, backgrounded/disowned exactly like step_gpg/step_theme's
+  # throwaway ssh (must never make the connection wait); deliberately
+  # UNCONDITIONAL on the Darwin/macfuse gate below -- identity matters even
+  # when the mount itself can never work here (e.g. this SIT-AT machine
+  # itself lacks rclone/MacFUSE), so it is pushed before that gate is even
+  # checked. On a Mac target this simply (re)writes the LocalHostName
+  # pbcopy/pbpaste already resolve on their own via scutil -- harmless, not
+  # a behavior change there.
+  print -rn -- "$peer_hostname" | ssh -o ControlPath=none -o ClearAllForwardings=yes \
+    -o BatchMode=yes -o ConnectTimeout=5 "$target" \
+    'd="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard"; mkdir -p "$d" && cat > "$d/self-name"' \
+    >/dev/null 2>&1 &!
+
+  # The mount itself (rclone/MacFUSE + Finder) is Darwin-only -- unlike the
+  # identity push above, THIS part really is conditional on that (Finder is
+  # the point; MacFUSE/rclone are the Mac side). Backgrounded + disowned:
+  # the connection must never wait ~5s of rclone daemon-wait; a copy a few
+  # seconds after connecting finds the mount healthy, and the dispatcher's
+  # own self-heal covers the race.
+  [[ "$OSTYPE" == darwin* ]] || return 0
   local cm="${CLIPBOARD_MOUNT_BIN:-$HOME/.local/libexec/clipboard-mount}"
   [[ -x "$cm" ]] || return 0
   "$cm" ensure "$peer_hostname" "$target" </dev/null >/dev/null 2>&1 &!

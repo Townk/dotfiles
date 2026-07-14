@@ -11,7 +11,17 @@ Describe 'pbcopy: file-object mode'
     # Force the local (non-SSH) branch regardless of the ambient shell.
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
     export PBCOPY_OSC52_SINK="$SHELLSPEC_TMPBASE/osc52"
+    # Hermetic self_host() resolution: a fresh sandbox with no clipboard/
+    # self-name file, so every example (unless it opts in below) exercises
+    # self_host()'s scutil/hostname fallback rather than risking a stray real
+    # self-name file on the machine actually running this suite.
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-default"
     BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
+    # A prior example may have stubbed `uname` (store-less-platform tests
+    # below) -- always start from the real one so unrelated examples keep
+    # seeing the ACTUAL platform (Darwin, in this suite's own CI/dev
+    # environment).
+    rm -f "$BINDIR/uname"
     NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
     # Fake nc: capture the raw framed request verbatim to a side file (a
     # shell variable would silently truncate at the first NUL byte, and the
@@ -297,6 +307,123 @@ EOF
     The status should be failure
     The stderr should include "this machine's own clipboard bridge"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should equal ""
+  End
+
+  # R-batch Task B: non-Darwin dev-shells have no local clipboard bridge/
+  # store at all (Phase 7 unbuilt) -- their primary M send to 127.0.0.1:2489
+  # can never succeed, so treating that identically to a real Darwin
+  # breakage would hard-fail file clips everywhere except the Mac. When the
+  # local M gets NO reply (bridge unreachable -- same fake nc as the
+  # hard-errors example just above) AND `uname` != Darwin, the peer push is
+  # promoted to the PRIMARY action and its own success decides the exit code.
+  It 'promotes the peer push to primary on a store-less (non-Darwin) platform when the local bridge is down, and warns'
+    export SSH_CONNECTION="x 1 y 22"
+    cat > "$BINDIR/uname" <<'EOF'
+#!/bin/sh
+echo Linux
+EOF
+    chmod +x "$BINDIR/uname"
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+if [ "\$1" = "-z" ]; then
+  exit 0
+fi
+port=\$3
+if [ "\$port" = "2489" ]; then
+  cat > /dev/null
+  exit 1
+fi
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+rm -f "\$raw"
+printf 'O\\000\\000\\000\\000'
+EOF
+    chmod +x "$BINDIR/nc"
+    f1="$SHELLSPEC_TMPBASE/storeless-ok.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
+    The status should be success
+    The stderr should include "no local clipboard store"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:M"
+  End
+
+  # Same store-less platform, but now the peer is ALSO unreachable: nothing
+  # anywhere could have recorded the clip, so this must be a loud, exit-1
+  # failure -- never a silent warning.
+  It 'hard-fails (exit 1) on a store-less (non-Darwin) platform when both the local bridge and the peer are down'
+    export SSH_CONNECTION="x 1 y 22"
+    cat > "$BINDIR/uname" <<'EOF'
+#!/bin/sh
+echo Linux
+EOF
+    chmod +x "$BINDIR/uname"
+    cat > "$BINDIR/nc" <<'EOF'
+#!/bin/sh
+if [ "$1" = "-z" ]; then
+  exit 1
+fi
+cat > /dev/null
+exit 1
+EOF
+    chmod +x "$BINDIR/nc"
+    f1="$SHELLSPEC_TMPBASE/storeless-bothdown.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
+    The status should be failure
+    The stderr should include "no local clipboard store"
+    The stderr should include "reverse bridge down"
+  End
+
+  # R-batch Task B amendment: ephemeral-hostname boxes (e.g. this dev-shell's
+  # own cloud hostname, which changes daily) can't rely on scutil/hostname -s
+  # for a STABLE identity matching the mount key the sit-at machine's
+  # peer-hostname front matter expects. ssh-prepare-connection's step_mount
+  # pushes a self-name file into $XDG_STATE_HOME/clipboard at connect time;
+  # self_host() prefers it when present and safely shaped.
+  It 'uses the self-name identity file for the M host field when present and safely shaped'
+    export SSH_CONNECTION="x 1 y 22"
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-good"
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf 'stable-devshell' > "$XDG_STATE_HOME/clipboard/self-name"
+    f1="$SHELLSPEC_TMPBASE/selfname-a.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "stable-devshell"
+  End
+
+  # Defense in depth: this file sits on a shared dev box and could be stale,
+  # hand-edited, or malicious -- it becomes both an M-row host field and (on
+  # whichever machine reads it back as a peer) a mount-key/ssh target, so an
+  # unsafe shape must fall back to the real hostname resolution rather than
+  # being trusted verbatim.
+  It 'falls back to the real hostname when the self-name file has an unsafe shape'
+    export SSH_CONNECTION="x 1 y 22"
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-evil"
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf '* evil' > "$XDG_STATE_HOME/clipboard/self-name"
+    expected_host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
+    f1="$SHELLSPEC_TMPBASE/selfname-b.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$expected_host"
+  End
+
+  # Regression (review Critical): the `* evil` fixture above only exercises
+  # FIRST-character rejection. In POSIX `case` syntax the naive positive
+  # pattern [A-Za-z0-9][A-Za-z0-9.-]* anchors only the first TWO characters
+  # (`*` is a wildcard, not zsh's `#` quantifier) -- so a value with a safe
+  # prefix and a shell-metacharacter TAIL sailed straight through it.
+  # self_host() must reject any disallowed character ANYWHERE in the value.
+  It 'falls back to the real hostname when the self-name file smuggles a mid-string injection after a safe prefix'
+    export SSH_CONNECTION="x 1 y 22"
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-midevil"
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf 'cruise; rm -rf /tmp' > "$XDG_STATE_HOME/clipboard/self-name"
+    expected_host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
+    f1="$SHELLSPEC_TMPBASE/selfname-c.txt"; touch "$f1"
+    When run command sh "$SCRIPT" "$f1"
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$expected_host"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "rm -rf"
   End
 
   It 'exits 1 naming a missing path over SSH with the bridge up, without sending a frame'

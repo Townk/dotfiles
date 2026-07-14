@@ -51,7 +51,26 @@
 #   reverse tunnel at all. A down/outdated/erroring peer bridge only warns on
 #   stderr and exits 0 — the local clip already succeeded, so a missing peer
 #   notification never fails the command. Only the LOCAL `M` (2489) can
-#   hard-fail this mode.
+#   hard-fail this mode -- EXCEPT on a platform with no local clipboard store
+#   to protect at all (R-batch Task B, Phase 7 interim): when the local `M`
+#   gets NO reply (bridge unreachable, as opposed to a reachable bridge
+#   replying `E`, which stays a hard fail on every platform unconditionally)
+#   AND `uname` != Darwin (Linux's own bridge/store is unbuilt), the peer push
+#   below is promoted from best-effort courtesy to the PRIMARY action: pbcopy
+#   warns "no local clipboard store on this platform (Phase 7 pending);
+#   recording on peer only" and falls through to the peer send, which now
+#   DECIDES this command's exit code instead of merely notifying. On Darwin
+#   nothing here changes: a Mac always has a bridge (part of every onboarded
+#   machine), so an unreachable 2489 there remains the unconditional hard
+#   failure described above.
+#
+#   Exit-code contract for file mode over SSH:
+#     local M reachable, O reply       -> 0 (peer push best-effort from here: its failure only warns)
+#     local M reachable, E reply       -> 1, every platform (bridge is up but broken -- never demoted)
+#     local M unreachable, Darwin      -> 1 (a Mac always has a bridge; unreachable is real breakage)
+#     local M unreachable, non-Darwin  -> peer push becomes PRIMARY:
+#                                            peer O reply       -> 0 (warned: recorded on peer only)
+#                                            peer down/E/timeout -> 1 (nothing was recorded anywhere)
 #
 # --content <file> (M3, files-yazi design): puts a file's raw BYTES on the
 # pasteboard under a detected UTI (extension map first, `file --mime-type -b`
@@ -107,6 +126,65 @@ fi
 abspath() {
   _p=$1
   (cd "$(dirname -- "$_p")" && printf '%s/%s' "$(pwd -P)" "$(basename -- "$_p")")
+}
+
+# self_host — resolve the identity THIS machine stamps on outgoing M/O/P
+# rows' host field (R-batch Task B amendment). Some boxes have no STABLE
+# `hostname -s`: an ephemeral cloud dev-shell's hostname changes daily (e.g.
+# cs-1j9nfzmx-medium-homedir-37836), so an M row carrying it would never
+# match the mount key the sit-at machine's peer-hostname front matter expects
+# (clipboard-mount spec §3.2), nor the `Host <name>` line its rsync pulls
+# need. The DRIVEN machine can't know its own stable name in that case -- but
+# the sit-at machine CAN, because it configured peer-hostname in its own ssh
+# config front matter to reach here. ssh-prepare-connection's step_mount
+# pushes that value into this state dir at connect time (fail-soft,
+# backgrounded -- see its comment for the full rationale). Preference order:
+#   1. $XDG_STATE_HOME/clipboard/self-name, if present, a SINGLE line, and
+#      shaped like a safe hostname/mount-key component
+#      ([A-Za-z0-9][A-Za-z0-9.-]*) -- validated defensively, not just parsed:
+#      this file sits on a shared dev box and could be stale, hand-edited, or
+#      multi-line garbage, and its value becomes both an M-row host field and
+#      (on whichever machine later reads it back as a peer) a mount-key/ssh
+#      target -- an unchecked value is a real hazard, not merely cosmetic.
+#   2. scutil --get LocalHostName (macOS's own stable-ish name -- what every
+#      call site here used before this function existed).
+#   3. hostname -s (last resort: the only thing guaranteed to exist,
+#      ephemeral or not).
+self_host() {
+  _sh_file="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/self-name"
+  if [ -f "$_sh_file" ]; then
+    _sh_name=$(cat "$_sh_file" 2>/dev/null) || _sh_name=""
+    # A literal embedded newline (command substitution above only strips
+    # TRAILING newlines, never internal ones) means the file has a second
+    # line -- reject rather than silently take just the first line, since a
+    # multi-line file is exactly the "someone/something wrote garbage here"
+    # shape this whole check exists to catch.
+    _sh_nl='
+'
+    case "$_sh_name" in
+      *"$_sh_nl"*) _sh_name="" ;;
+    esac
+    # Shape validation, in two NEGATIVE steps -- deliberately NOT the
+    # single positive pattern [A-Za-z0-9][A-Za-z0-9.-]* the zsh siblings
+    # use (with `#`, zsh's zero-or-more QUANTIFIER, which anchors the whole
+    # string). In POSIX `case` syntax `*` is a WILDCARD, not a quantifier:
+    # that positive pattern only anchors the first TWO characters, so
+    # "ab; rm -rf /tmp" would MATCH it. Instead: (a) reject any character
+    # outside the allowlist anywhere in the string, (b) require an
+    # alphanumeric first character -- together equivalent to the zsh
+    # pattern's intent.
+    case "$_sh_name" in
+      *[!A-Za-z0-9.-]*) _sh_name="" ;;
+    esac
+    case "$_sh_name" in
+      [!A-Za-z0-9]*) _sh_name="" ;;
+    esac
+    if [ -n "$_sh_name" ]; then
+      printf '%s' "$_sh_name"
+      return 0
+    fi
+  fi
+  scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null
 }
 
 # Emit a framed request <opcode><BE32 len><payload> to 127.0.0.1:<port>.
@@ -347,7 +425,12 @@ if [ $# -gt 0 ]; then
   # materialized on Ctrl-Y -- its live pasteboard must not be touched by this
   # push at all. So the peer send is now the SAME `M` op as the local send
   # above (record-only, no pasteboard write); no `N` frame is sent anymore.
-  host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
+  #
+  # host resolution: self_host() (see its definition near abspath() above),
+  # not a bare scutil/hostname call -- this is exactly the row this fragment's
+  # ephemeral-hostname dev-shells need a STABLE identity for (R-batch Task B
+  # amendment).
+  host=$(self_host)
 
   # Path canonicalization + existence check + NUL-join, done ONCE: both the
   # local M payload and the peer M payload carry the identical
@@ -394,16 +477,36 @@ if [ $# -gt 0 ]; then
     fi
     exit 1
   fi
+  # _no_local_store: set when the local M got NO reply at all (bridge
+  # unreachable -- as opposed to the reachable-but-erroring `E` case just
+  # above, which stays an unconditional hard fail on every platform) AND this
+  # platform has no local clipboard store to protect in the first place
+  # (`uname` != Darwin -- Linux's own bridge/store is Phase 7, unbuilt). On
+  # such a platform the peer push below stops being a best-effort courtesy
+  # and becomes the PRIMARY action instead: its own outcome now decides this
+  # command's exit code, since nothing else could have recorded the clip. On
+  # Darwin this flag is never set -- a Mac always has a bridge (part of every
+  # onboarded machine), so an unreachable 2489 there stays the unconditional
+  # hard failure it always was.
+  _no_local_store=0
   if [ "$_mstatus" != "O" ]; then
-    echo "pbcopy: this machine's own clipboard bridge is not reachable on 127.0.0.1:2489" >&2
-    exit 1
+    if [ "$(uname)" = Darwin ]; then
+      echo "pbcopy: this machine's own clipboard bridge is not reachable on 127.0.0.1:2489" >&2
+      exit 1
+    fi
+    echo "pbcopy: no local clipboard store on this platform (Phase 7 pending); recording on peer only" >&2
+    _no_local_store=1
   fi
 
   # 2. Peer manifest push: the SAME op `M` (record-only) to the
-  #    reverse-tunneled bridge (2490 / CLIPBOARD_BRIDGE_PORT) -- best-effort,
-  #    same payload as the local send above. The local record already
-  #    succeeded, so nothing past this point can fail the command; every
-  #    non-success outcome is a warning on stderr, not an error.
+  #    reverse-tunneled bridge (2490 / CLIPBOARD_BRIDGE_PORT) -- same payload
+  #    as the local send above. Ordinarily (_no_local_store=0) this is purely
+  #    best-effort: the local record already succeeded, so nothing past this
+  #    point can fail the command; every non-success outcome is a warning on
+  #    stderr, not an error. But when _no_local_store=1 (store-less platform,
+  #    local M unreachable above), THIS send is the only thing that can
+  #    record the clip anywhere -- so its failure modes below are promoted to
+  #    a loud, exit-1 error instead of a warning.
   #
   #    Fix A: this used to be op `N` (push-manifest), which also set the
   #    PEER's pasteboard to the paths as plain text -- files are lazy (§12),
@@ -411,11 +514,22 @@ if [ $# -gt 0 ]; then
   #    only persists the manifest row on the peer's own store.
   bridge_port="${CLIPBOARD_BRIDGE_PORT:-2490}"
   if ! nc -z -w1 127.0.0.1 "$bridge_port" >/dev/null 2>&1; then
+    if [ "$_no_local_store" -eq 1 ]; then
+      echo "pbcopy: no clipboard store reached on either end -- reverse bridge down" >&2
+      exit 1
+    fi
     echo "pbcopy: file copied to this machine's clipboard; peer not notified -- reverse bridge down" >&2
     exit 0
   fi
 
-  peer_replyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-mr2.XXXXXX") || { echo "pbcopy: file copied to this machine's clipboard; peer not notified -- mktemp failed" >&2; exit 0; }
+  peer_replyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-mr2.XXXXXX") || {
+    if [ "$_no_local_store" -eq 1 ]; then
+      echo "pbcopy: no clipboard store reached on either end -- mktemp failed" >&2
+      exit 1
+    fi
+    echo "pbcopy: file copied to this machine's clipboard; peer not notified -- mktemp failed" >&2
+    exit 0
+  }
   trap 'rm -f "$pathsfile" "$mn_payfile" "$m_replyfile" "$peer_replyfile"' EXIT INT TERM
 
   send_frame M "$bridge_port" "$mn_payfile" "$peer_replyfile"
@@ -426,11 +540,23 @@ if [ $# -gt 0 ]; then
   if [ "$_peerstatus" = "E" ]; then
     _peermsg=$(tail -c +6 "$peer_replyfile" 2>/dev/null)
     if [ "$_peermsg" = "unknown opcode" ]; then
+      if [ "$_no_local_store" -eq 1 ]; then
+        echo "pbcopy: no clipboard store reached on either end -- $(unknown_opcode_hint "$bridge_port")" >&2
+        exit 1
+      fi
       echo "pbcopy: $(unknown_opcode_hint "$bridge_port")" >&2
-    else
-      echo "pbcopy: file copied to this machine's clipboard; peer not notified -- ${_peermsg:-bridge reported an error}" >&2
+      exit 0
     fi
+    if [ "$_no_local_store" -eq 1 ]; then
+      echo "pbcopy: no clipboard store reached on either end -- ${_peermsg:-peer bridge reported an error}" >&2
+      exit 1
+    fi
+    echo "pbcopy: file copied to this machine's clipboard; peer not notified -- ${_peermsg:-bridge reported an error}" >&2
     exit 0
+  fi
+  if [ "$_no_local_store" -eq 1 ]; then
+    echo "pbcopy: no clipboard store reached on either end -- clipboard bridge is not reachable on 127.0.0.1:$bridge_port" >&2
+    exit 1
   fi
   echo "pbcopy: file copied to this machine's clipboard; peer not notified -- clipboard bridge is not reachable on 127.0.0.1:$bridge_port" >&2
   exit 0
@@ -448,7 +574,10 @@ tmp=$(mktemp "${TMPDIR:-/tmp}/pbcopy.XXXXXX") || { echo "pbcopy: mktemp failed" 
 trap 'rm -f "$tmp"' EXIT INT TERM
 cat > "$tmp"
 
-host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
+# host resolution: self_host() (R-batch Task B amendment) -- same stable-
+# identity concern as the file-mode host= above; see its definition near
+# abspath() for the full self-name-vs-scutil-vs-hostname rationale.
+host=$(self_host)
 
 # 1. Declare origin to the sit-Mac FIRST (before the bytes land, so its watcher
 #    tags the row remote(host)). Payload: <host> US <text>.
