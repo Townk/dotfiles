@@ -144,3 +144,101 @@ Describe 'clipboard-bridge-dispatch: linux-headless text ops'
     The output should include "héllo→"
   End
 End
+
+Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
+  DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    export PICK_CLIPBOARD_DB="$SHELLSPEC_TMPBASE/store/history.db"
+    mkdir -p "$XDG_STATE_HOME/clipboard" "$SHELLSPEC_TMPBASE/store"
+    setopt local_options nullglob
+    rm -f "$PICK_CLIPBOARD_DB"*
+    printf 'cruise-box' > "$XDG_STATE_HOME/clipboard/self-name"
+    REQ="$SHELLSPEC_TMPBASE/req"
+  }
+  BeforeEach 'setup'
+
+  run_dispatch() {
+    sh -c 'CLIPBOARD_PLATFORM=linux-headless zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+  }
+
+  It 'C persists a text-UTI rich clip with text_plain populated'
+    # uti "public.utf8-plain-text" = 22 bytes; blob "rich"; payload = 2+22+4 = 28
+    printf 'C\000\000\000\034\000\026public.utf8-plain-textrich' > "$REQ"
+    When run run_dispatch
+    The output should start with "O"
+    row=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT c.type_kind||'|'||c.text_plain||'|'||t.uti FROM clips c JOIN clip_types t ON t.clip_id=c.id;")
+    The variable row should equal "text|rich|public.utf8-plain-text"
+  End
+
+  It 'C maps public.png to kind image'
+    # uti "public.png" = 10 bytes; blob "PNGBYTES"; payload = 2+10+8 = 20
+    printf 'C\000\000\000\024\000\012public.pngPNGBYTES' > "$REQ"
+    When run run_dispatch
+    The output should start with "O"
+    kind=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT type_kind FROM clips;")
+    The variable kind should equal "image"
+  End
+
+  It 'U form A persists a files manifest row stamped with self-name'
+    # payload "/tmp/a\0/tmp/b" = 13 bytes
+    printf 'U\000\000\000\015/tmp/a\000/tmp/b' > "$REQ"
+    When run run_dispatch
+    The output should start with "O"
+    row=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT type_kind||'|'||source_host FROM clips;")
+    The variable row should equal "files|cruise-box"
+  End
+
+  It 'U form A rejects a relative path'
+    printf 'U\000\000\000\010tmp/rel!' > "$REQ"
+    When run run_dispatch
+    The output should start with "E"
+  End
+
+  It 'U form B bumps last_ts of an existing row'
+    printf 'U\000\000\000\006/tmp/a' > "$REQ"
+    run_dispatch >/dev/null
+    sqlite3 "$PICK_CLIPBOARD_DB" "UPDATE clips SET last_ts=1.0;"
+    printf 'U\000\000\000\004id:1' > "$REQ"
+    When run run_dispatch
+    The output should start with "O"
+    ts=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT CAST(last_ts AS INTEGER) > 1 FROM clips WHERE id=1;")
+    The variable ts should equal 1
+  End
+
+  It 'U form B on a missing row answers E'
+    printf 'T\000\000\000\006vhello' > "$REQ"
+    run_dispatch >/dev/null   # bootstrap the schema first
+    printf 'U\000\000\000\005id:99' > "$REQ"
+    When run run_dispatch
+    The output should start with "E"
+  End
+
+  It 'M then L round-trips a manifest through the store'
+    # M payload: "cruise-box" US "/tmp/a" = 10+1+6 = 17
+    printf 'M\000\000\000\021cruise-box\037/tmp/a' > "$REQ"
+    run_dispatch >/dev/null
+    printf 'L\000\000\000\000' > "$REQ"
+    When run run_dispatch
+    The output should start with "O"
+    The output should include "files"
+    The output should include "cruise-box"
+    The output should include "/tmp/a"
+  End
+
+  It 'P dedup bumps last_ts instead of inserting a twin'
+    # P payload: "otherhost" US "text" US "" US "v" RS "dup" = 9+1+4+1+0+1+1+1+3 = 21
+    printf 'P\000\000\000\025otherhost\037text\037\037v\036dup' > "$REQ"
+    run_dispatch >/dev/null
+    run_dispatch >/dev/null
+    count=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT COUNT(*) FROM clips;")
+    The variable count should equal 1
+  End
+
+  It 'H answers the self-name identity'
+    printf 'H\000\000\000\000' > "$REQ"
+    When run run_dispatch
+    The output should include "cruise-box"
+  End
+End

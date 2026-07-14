@@ -66,3 +66,85 @@ clip::op_get_regtype() {
   fi
   send_ok "$rt"
 }
+
+# C copy-rich: no pasteboard to write -- persist the representation
+# directly (spec §3). kind mapped from the UTI; text_plain populated only
+# for the plain-text UTI so G/R keep working on rich text clips.
+clip::op_copy() {
+  local payload=$1
+  clip::parse_rich_payload "$payload" || { send_err "$REPLY"; return }
+  local uti=$REPLY_UTI blob=$REPLY_BLOB
+  local kind
+  case "$uti" in
+    (public.utf8-plain-text)   kind=text ;;
+    (public.png|public.tiff)   kind=image ;;
+    (*)                        kind=mixed ;;
+  esac
+  local host; host=$(clip::self_host)
+  local hash; hash="$(print -rn -- "$blob" | clip::sha256)"
+  local ts=$EPOCHREALTIME
+  local eh=${host//\'/\'\'} eu=${uti//\'/\'\'}
+  local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-rich.XXXXXX") || { send_err "mktemp failed"; return }
+  local fd
+  exec {fd}> "$tmpd/blob"
+  syswrite -o $fd -- "$blob"
+  exec {fd}>&-
+  local existing
+  existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh' AND type_hash='$hash' AND type_kind='$kind' LIMIT 1;" 2>/dev/null)
+  local row_id
+  if [[ -n "$existing" ]]; then
+    sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null
+    row_id=$existing
+  else
+    local text_sql="NULL" preview_sql="NULL" len=$#blob
+    if [[ "$kind" == text ]]; then
+      text_sql="CAST(readfile('$tmpd/blob') AS TEXT)"
+      preview_sql="$text_sql"
+    fi
+    row_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips \
+      (text_preview, text_plain, len, first_ts, last_ts, type_kind, pinned, type_hash, source_host) \
+      VALUES ($preview_sql, $text_sql, $len, $ts, $ts, '$kind', 0, '$hash', '$eh'); \
+      SELECT last_insert_rowid();" 2>/dev/null)
+  fi
+  if [[ -z "$row_id" ]]; then
+    rm -rf -- "$tmpd"; send_err "store write failed"; return
+  fi
+  sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO clip_types (clip_id, uti, blob) VALUES ($row_id, '$eu', readfile('$tmpd/blob'));" 2>/dev/null
+  sqlite3 "$DB_FILE" "DELETE FROM clips WHERE pinned=0 AND id NOT IN \
+    (SELECT id FROM clips ORDER BY pinned DESC, last_ts DESC LIMIT $MAX_ROWS);" 2>/dev/null
+  sqlite3 "$DB_FILE" "DELETE FROM clip_types WHERE clip_id NOT IN (SELECT id FROM clips);" 2>/dev/null
+  rm -rf -- "$tmpd"
+  send_ok ""
+}
+
+# U set-file-urls: form A persists the manifest row (there is no pasteboard
+# to also write -- the row IS the clip); form B "restores" a stored row,
+# which on this platform is purely a recency fact: bump last_ts (spec §3).
+clip::op_set_file_urls() {
+  local payload=$1
+  if [[ "$payload" == id:<-> ]]; then
+    local id=${payload#id:}
+    local found
+    found=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE id=$id LIMIT 1;" 2>/dev/null)
+    [[ -n "$found" ]] || { send_err "no such row: $id"; return }
+    sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$EPOCHREALTIME WHERE id=$id;" 2>/dev/null
+    send_ok ""
+    return
+  fi
+  local -a paths=( "${(@ps:\0:)payload}" )
+  local p
+  for p in "${paths[@]}"; do
+    [[ "$p" == /* ]] || { send_err "not absolute: $p"; return }
+  done
+  if clip::persist_files_manifest_row "$(clip::self_host)" "$payload"; then
+    send_ok ""
+  else
+    send_err "$REPLY"
+  fi
+}
+
+# pb::parse_ns_filenames -- unreachable on Linux by construction (spec §3):
+# NSFilenamesPboardType blobs are only ever written by the macOS watcher;
+# Linux files rows always carry x-file-manifest, which op_list_files checks
+# FIRST. Defined to keep the pb::* contract total.
+pb::parse_ns_filenames() { REPLY=""; }
