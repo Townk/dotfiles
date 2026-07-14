@@ -4,7 +4,7 @@ command -v trip >/dev/null && alias trip="sudo trip"
 command -v tidy-viewer >/dev/null && alias tv="tidy-viewer"
 command -v bat >/dev/null && alias cat="bat -p"
 if command -v eza >/dev/null; then
-  alias ls="eza -F --group-directories-first --icons --hyperlink"
+  alias ls="eza -F --group-directories-first --icons --hyperlink=auto"
 else
   alias ls="ls -F -h --color=always"
 fi
@@ -18,7 +18,6 @@ alias diff='diff --color=auto'
 alias grep='grep --color=auto --exclude-dir={.bzr,CVS,.git,.hg,.svn}'
 alias h="history -1" # full histor
 alias history="fc -il 1"
-alias ls="eza -F --group-directories-first --icons --hyperlink"
 alias mkdir="mkdir -pv"
 alias mv="mv -i"
 alias pgrep="pgrep -lf" # long output, match against full args lis
