@@ -167,3 +167,86 @@ clip::read_file() {
   done
   exec {fd}<&-
 }
+
+# clip::sha256 -- stdin -> lowercase hex sha256 on stdout. macOS ships
+# shasum (perl) but not sha256sum; minimal Linux images ship sha256sum but
+# not always perl/shasum. Same hex output either way, so stores hashed on
+# one platform stay dedup-compatible on the other.
+clip::sha256() {
+  if (( $+commands[shasum] )); then
+    shasum -a 256 | awk '{print $1}'
+  else
+    sha256sum | awk '{print $1}'
+  fi
+}
+
+# clip::self_host -- the identity this machine stamps/answers (spec §2).
+# Precedence mirrors pbcopy's self_host() and mount_enrich's self-guard:
+#   1. validated FIRST LINE of $XDG_STATE_HOME/clipboard/self-name (the wire
+#      identity the sit-at machine pushes at connect -- ephemeral cloud
+#      hostnames make `hostname -s` useless as a stable name);
+#   2. scutil --get LocalHostName, where the command exists (macOS);
+#   3. hostname -s (last resort).
+# Shape rule: alnum first char, then alnum/dot/dash ([A-Za-z0-9][A-Za-z0-9.-]#,
+# extended_glob) -- the value becomes an M-row host field and, on a peer, a
+# mount-key/ssh target, so an unchecked value is a hazard, not cosmetics.
+clip::self_host() {
+  emulate -L zsh
+  setopt extended_glob
+  local f="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/self-name"
+  if [[ -r "$f" ]]; then
+    local -a lines; lines=( "${(f)"$(<"$f")"}" )
+    local name=${lines[1]:-}
+    if [[ "$name" == [A-Za-z0-9][A-Za-z0-9.-]# ]]; then
+      print -rn -- "$name"
+      return 0
+    fi
+  fi
+  local h
+  h=$(scutil --get LocalHostName 2>/dev/null) || h=""
+  [[ -n "$h" ]] || h=$(hostname -s 2>/dev/null)
+  print -rn -- "$h"
+}
+
+# clip::ensure_schema -- idempotent bootstrap of the store DDL (spec §3).
+# Mirrors clipboard-history.lua's ensure_schema() CREATE set exactly (WAL +
+# synchronous=NORMAL, clips incl. source_bundle_id, clip_types, 3 indexes).
+# CREATE IF NOT EXISTS only: the watcher's Lua owns column MIGRATIONS on
+# macOS; a headless store is always born current.
+clip::ensure_schema() {
+  mkdir -p "${DB_FILE:h}" 2>/dev/null
+  # >/dev/null: `PRAGMA journal_mode=WAL` is itself a query and the sqlite3
+  # CLI echoes its result ("wal") to stdout by default -- for --init-store
+  # invoked standalone that's just a stray line, but for any future caller
+  # sharing a framed connection's stdout it would corrupt the reply stream.
+  # No caller of this function depends on stdout; real failures still surface
+  # on stderr and via $?.
+  sqlite3 "$DB_FILE" >/dev/null <<'SQL'
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+CREATE TABLE IF NOT EXISTS clips (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  text_preview TEXT,
+  text_plain TEXT,
+  len INTEGER,
+  first_ts REAL,
+  last_ts REAL,
+  source_app TEXT,
+  source_bundle_id TEXT,
+  type_kind TEXT,
+  regtype TEXT,
+  pinned INTEGER DEFAULT 0,
+  type_hash TEXT,
+  source_host TEXT
+);
+CREATE TABLE IF NOT EXISTS clip_types (
+  clip_id INTEGER,
+  uti TEXT,
+  blob BLOB,
+  PRIMARY KEY (clip_id, uti)
+);
+CREATE INDEX IF NOT EXISTS idx_clips_type_hash ON clips(type_hash);
+CREATE INDEX IF NOT EXISTS idx_clips_last_ts ON clips(last_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_clips_pinned_ts ON clips(pinned DESC, last_ts DESC);
+SQL
+}

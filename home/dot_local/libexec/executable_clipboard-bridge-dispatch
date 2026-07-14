@@ -127,6 +127,14 @@ set -u
 # against) and the installed target (~/.local/libexec -> ~/.local/lib).
 LIB_DIR="${CLIPBOARD_LIB_DIR:-${0:A:h}/../lib}"
 source "$LIB_DIR/clipboard-store-core.zsh"
+
+# --init-store: run just the schema bootstrap and exit (validation + tests;
+# spec §3). Accepted on every platform -- the DDL is the same everywhere.
+if [[ "${1:-}" == --init-store ]]; then
+  clip::ensure_schema
+  exit $?
+fi
+
 REGTYPE_FILE="$STATE_DIR/current-regtype"
 
 # --- op implementations ---------------------------------------------------
@@ -194,7 +202,7 @@ clip::op_get_regtype() {
   if [[ -f "$REGTYPE_FILE" ]]; then
     local stored_rt stored_hash current_hash
     { read -r stored_rt; read -r stored_hash; } < "$REGTYPE_FILE"
-    current_hash="$(pbpaste 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+    current_hash="$(pbpaste 2>/dev/null | clip::sha256)"
     if [[ -n "$stored_rt" && "$stored_hash" == "$current_hash" ]]; then
       regtype=$stored_rt
     else
@@ -220,7 +228,7 @@ clip::op_get_regtype() {
 clip::set_pasteboard_core() {
   local regtype=$1 text=$2
   print -rn -- "$text" | pbcopy
-  local h; h="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  local h; h="$(print -rn -- "$text" | clip::sha256)"
   print -r -- "$regtype" > "$REGTYPE_FILE"
   print -r -- "$h" >> "$REGTYPE_FILE"
 }
@@ -604,13 +612,16 @@ clip::op_archive_stream() {
   exec {fd}<&-
 }
 
-# H  get-host: this machine's hostname, so a consumer can stamp the origin of
-# the clip it just read from here (materialization provenance, §11). Same
-# source the pickers use (scutil LocalHostName), falling back to hostname -s.
+# H  get-host: this machine's identity, so a consumer can stamp the origin of
+# the clip it just read from here (materialization provenance, §11).
+# Self-name-first (spec §5, Phase 7 change): clip::self_host prefers a
+# validated $XDG_STATE_HOME/clipboard/self-name over scutil/hostname -s, the
+# same precedence M-row stamping already uses -- so H and the store agree on
+# this machine's identity. With no self-name file (every pre-Phase-7 test
+# env and most macOS boxes today) it still answers scutil/hostname exactly
+# as before.
 clip::op_get_host() {
-  local h; h="$(scutil --get LocalHostName 2>/dev/null)"
-  [[ -n "$h" ]] || h="$(hostname -s 2>/dev/null)"
-  send_ok "$h"
+  send_ok "$(clip::self_host)"
 }
 
 # P  persist: materialize a used peer clip into THIS machine's store (§11) so a
@@ -633,7 +644,7 @@ clip::op_persist() {
   [[ "$regtype" == (v|l|b) ]] || regtype=""
   local -i len=$#text
   local preview=${text%%$'\n'*}
-  local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  local hash; hash="$(print -rn -- "$text" | clip::sha256)"
   local ts=$EPOCHREALTIME
   local eh=${host//\'/\'\'} ek=${kind//\'/\'\'}
   local rt_sql="NULL"; [[ -n "$regtype" ]] && rt_sql="'$regtype'"
@@ -698,7 +709,7 @@ clip::op_persist() {
 # seam shared with clipboard-history.lua's captured_origin().
 clip::declare_origin_core() {
   local host=$1 text=$2 suppress=${3:-}
-  local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  local hash; hash="$(print -rn -- "$text" | clip::sha256)"
   {
     print -r -- "$host"
     print -r -- "$hash"
@@ -775,7 +786,7 @@ clip::persist_files_manifest_row() {
   local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-manifest.XXXXXX") || { REPLY="mktemp failed"; return 1 }
   print -rn -- "$text"  > "$tmpd/preview"
   print -rn -- "$paths" > "$tmpd/manifest"
-  local hash; hash="$(print -rn -- "$text" | shasum -a 256 | awk '{print $1}')"
+  local hash; hash="$(print -rn -- "$text" | clip::sha256)"
   local eh=${host//\'/\'\'}
   local ts=$EPOCHREALTIME
   local -i len=$#text
