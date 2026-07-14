@@ -237,6 +237,12 @@ Describe 'clipboard-mount: ensure'
     MNT_ROOT="$XDG_STATE_HOME/clipboard/mnt"
     STUBS="$SHELLSPEC_TMPBASE/bin"
     export PATH="$STUBS:$PATH"
+    # rclone resolution now checks the shim BEFORE PATH; pin it to a path
+    # that can never exist so the plain PATH-stub examples below (which don't
+    # care about shim resolution at all) stay hermetic regardless of this
+    # real machine's own mise install state. Examples that DO exercise shim
+    # resolution override this per-invocation.
+    export CLIPBOARD_MOUNT_RCLONE_SHIM="$SHELLSPEC_TMPBASE/no-such-shim"
     mkdir -p "$STUBS" "$MNT_ROOT"
     : > "$SHELLSPEC_TMPBASE/mount-table"
     rm -f "$SHELLSPEC_TMPBASE/rclone-argv" "$SHELLSPEC_TMPBASE/rclone-env" \
@@ -324,6 +330,80 @@ STUB
     When run command zsh -f "$CM" ensure peer-mini
     The status should be failure
     The stderr should include "unhealthy"
+    The path "$MNT_ROOT/peer-mini" should not be exist
+  End
+
+  It "ensure's unhealthy path still tears down (umount runs) even when teardown's lock reacquire loses a race to a waiting contender (fcntl close-drops-all regression guard)"
+    # rclone "succeeds" but never lands a mount-table entry (the standard
+    # "came up unhealthy" fixture) -> ensure's unhealthy path calls
+    # cm::teardown INTERNALLY while ensure itself still holds the per-host
+    # lock. teardown's lockfile touch used to be an unconditional open+close
+    # (`: >> "$lock"`); under zsystem flock's fcntl semantics, closing ANY fd
+    # a process has open on a locked file drops ALL of that process's locks
+    # on it -- so that touch silently released ensure's own lock
+    # mid-teardown, and a contender that wins the freed lock in that instant
+    # makes teardown's own re-acquire (`-t 0`, non-blocking) lose and bail
+    # via `return 0` WITHOUT ever calling umount.
+    #
+    # The real touch-then-reacquire gap is two back-to-back syscalls in the
+    # SAME process with no scheduling opportunity in between (confirmed
+    # empirically: zsystem flock's default poll interval is 1s -- see
+    # zshmodules(1) -- so an external contender polling naturally never
+    # lands inside a microsecond-scale gap). To exercise the guard
+    # deterministically without touching production code, this example
+    # sources the script to get the real cm::teardown body (harmless
+    # `sweep` dispatch on source, same technique as the rclone_pids_for
+    # block above) and shadows the `zsystem` builtin with a function for the
+    # duration of this process only -- a plain zsh function always wins over
+    # a same-named builtin, and the wrapper delegates to the real thing via
+    # `builtin zsystem "$@"`, so every call except the one under test
+    # behaves identically. The wrapper recognizes ONLY teardown's exact
+    # non-blocking reacquire call (`flock -t 0 ...`) and, right before
+    # delegating to it, drops a ready sentinel and sleeps 1s -- giving a
+    # contender (already parked, polling every 20ms, woken by the sentinel)
+    # a wide, deterministic window to grab the lock IF (and only if) the
+    # preceding line actually dropped it.
+    #
+    # Discrimination evidence (see task report): reverting this fix line
+    # locally and re-running this example reproduces the bug every time --
+    # the contender grabs the lock, no umount call is recorded, and the
+    # mountpoint directory survives; restoring the fix flips it back to the
+    # contender never grabbing, with umount always recorded and the
+    # mountpoint gone.
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/rclone"; chmod +x "$STUBS/rclone"
+    printf '#!/bin/sh\necho "umount $*" >> "%s"\nexit 0\n' "$SHELLSPEC_TMPBASE/calls" > "$STUBS/umount"
+    chmod +x "$STUBS/umount"
+    rm -f "$SHELLSPEC_TMPBASE/ready" "$SHELLSPEC_TMPBASE/grabbed"
+    When run command zsh -f -c '
+      source "$1" sweep >/dev/null 2>&1
+      lock="$2/.peer-mini.lock"
+      : > "$lock"
+      ready="$3"; grabbed="$4"
+      zsh -fc "
+        zmodload zsh/system
+        while [ ! -f \"$ready\" ]; do sleep 0.01; done
+        if zsystem flock -t 3 -i 0.02 \"$lock\" 2>/dev/null; then
+          : > \"$grabbed\"
+          sleep 2
+        fi
+      " &
+      contender=$!
+      zsystem() {
+        if [[ "$1" == "flock" && "$2" == "-t" && "$3" == "0" ]]; then
+          : > "$ready"
+          sleep 1
+        fi
+        builtin zsystem "$@"
+      }
+      cm::ensure peer-mini
+      rc=$?
+      kill $contender 2>/dev/null
+      wait $contender 2>/dev/null
+      exit $rc
+    ' _ "$CM" "$MNT_ROOT" "$SHELLSPEC_TMPBASE/ready" "$SHELLSPEC_TMPBASE/grabbed"
+    The status should be failure
+    The stderr should include "unhealthy"
+    The contents of file "$SHELLSPEC_TMPBASE/calls" should include "umount $MNT_ROOT/peer-mini"
     The path "$MNT_ROOT/peer-mini" should not be exist
   End
 

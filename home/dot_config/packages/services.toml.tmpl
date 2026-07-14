@@ -88,7 +88,7 @@ error_log_path  = "~/.cache/clipboard-mount/sweep.log"
 # literally. ~/.local/libexec is where clipboard-mount lives; the rest of the
 # PATH exists for mount/umount/diskutil/pgrep in /sbin, /usr/sbin, /usr/bin —
 # sweep never execs rclone itself (that's cm::rclone_pids_for's job, driven by
-# pgrep/ps), and rclone now lives at ~/.local/bin via custom-builds anyway.
+# pgrep/ps), and rclone now lives under mise (aqua shims) anyway.
 PATH = "~/.local/libexec:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
 # (The former [clipboard-mirror] service was removed with the self-contained

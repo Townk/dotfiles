@@ -141,17 +141,26 @@ cm::teardown() {
   # concurrent flock-holding `ensure` was still in the middle of creating.
   # Take the SAME per-host lock ensure uses, non-blocking: if another process
   # holds it, an ensure is in flight and will settle the mount's health
-  # itself — never fight the winner, just bail. Empirically verified (zsh
-  # `zsystem flock`, BSD flock semantics): a process re-locking a file it
-  # ALREADY holds the lock on (e.g. `ensure` calling teardown internally,
-  # same process, different fd) succeeds immediately instead of blocking or
-  # failing — flock conflicts are per-process, not per-fd — so this guard is
-  # transparent to `ensure`'s own teardown calls and only ever turns away a
-  # genuinely different process. The fd is held open to process exit exactly
-  # like ensure's own lock fd; fine here too since unmount/sweep processes are
-  # short-lived.
+  # itself — never fight the winner, just bail. `zsystem flock` is backed by
+  # POSIX fcntl record locks, NOT BSD flock(2): locks are associated with the
+  # PROCESS (not the fd), so a process re-locking a file it already holds
+  # (e.g. `ensure` calling teardown internally, same process, different fd)
+  # succeeds immediately instead of blocking or failing. But fcntl's trap is
+  # the flip side of that: closing ANY fd the process has open on the file
+  # drops ALL of that process's locks on it — including the one `ensure` is
+  # currently holding. That's exactly why the lockfile touch below is
+  # conditional on the file not already existing: when `ensure` calls
+  # teardown, the lockfile was already created before `ensure` locked it, so
+  # skipping the touch here means no fd gets opened-then-closed and `ensure`'s
+  # lock survives; re-acquiring the lock on a fresh fd within the same process
+  # is safe under fcntl regardless. Only the standalone case (no lockfile yet
+  # — a bare `unmount`/`sweep` before any `ensure` ever ran for this host)
+  # takes the create-close path, and that's harmless there since this process
+  # holds no lock yet for it to drop. The fd is held open to process exit
+  # exactly like ensure's own lock fd; fine here too since unmount/sweep
+  # processes are short-lived.
   local lock="$MNT_ROOT/.$host.lock"
-  : >> "$lock" 2>/dev/null
+  [[ -e "$lock" ]] || : >> "$lock" 2>/dev/null
   zsystem flock -t 0 "$lock" 2>/dev/null || return 0
   if ! umount "$mp" 2>/dev/null; then
     diskutil unmount force "$mp" >/dev/null 2>&1 || true
@@ -240,16 +249,22 @@ cm::ensure() {
 
   # rclone lives under mise (aqua backend: the official, cmount-capable
   # binaries -- Homebrew's build hard-disables `rclone mount` on macOS).
-  # Interactive shells resolve the shim via PATH; headless callers (the
-  # clipboard-bridge launchd service driving the M-op self-heal) have no
-  # shims dir on PATH, so fall back to the shim's canonical location.
-  # mise shims are symlinks to the mise binary itself (argv[0] dispatch),
-  # so exec'ing the shim directly needs no PATH help at all.
+  # Check the shim FIRST, PATH second. On the interactive PATH, mise's shims
+  # dir already precedes /opt/homebrew/bin, so checking the shim first just
+  # makes that existing precedence explicit. It matters more headlessly: the
+  # clipboard-bridge launchd service's PATH has no shims dir at all, so a
+  # PATH-first check would let any stray Homebrew-built rclone sitting on
+  # that PATH win instead -- and brew's build hard-refuses `rclone mount` on
+  # macOS by construction, so every self-heal mount would fail. Shim-first
+  # gets the same resolution in both contexts. mise shims are symlinks to the
+  # mise binary itself (argv[0] dispatch), so exec'ing the shim directly
+  # needs no PATH help at all; `command -v rclone` remains the fallback for
+  # machines without a mise shim (or a non-mise rclone install).
   local rclone_bin
-  if rclone_bin=$(command -v rclone 2>/dev/null); then
-    :
-  elif [[ -x "$CLIPBOARD_MOUNT_RCLONE_SHIM" ]]; then
+  if [[ -x "$CLIPBOARD_MOUNT_RCLONE_SHIM" ]]; then
     rclone_bin="$CLIPBOARD_MOUNT_RCLONE_SHIM"
+  elif rclone_bin=$(command -v rclone 2>/dev/null); then
+    :
   else
     print -u2 -- "clipboard-mount: rclone not installed (mise); clips stay lazy"
     return 1
