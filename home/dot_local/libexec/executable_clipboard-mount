@@ -69,9 +69,89 @@ cm::map() {
   done
 }
 
+# cm::is_mounted <mp> — mount-table membership. macOS `mount` prints
+# "<devname> on <mp> (macfuse, …)"; the " on … (" frame makes prefix-sharing
+# mountpoints unambiguous.
+cm::is_mounted() {
+  mount 2>/dev/null | grep -qF " on $1 ("
+}
+
+# cm::probe <mp> [<timeout-s>=1] — bounded liveness stat. A stat against a
+# dead FUSE volume can wedge in the kernel where even SIGKILL doesn't reap it,
+# so this NEVER `wait`s a still-running probe: background the stat, poll its
+# liveness, and on timeout kill-9 and walk away (rc 1). `timeout(1)` is
+# deliberately not used here — it blocks in wait() on an unkillable child.
+cm::probe() {
+  local mp=$1 timeout_s=${2:-1}
+  local pid
+  stat -f %i -- "$mp" >/dev/null 2>&1 &
+  pid=$!
+  local -i waited_ms=0 budget_ms=$(( timeout_s * 1000 ))
+  while (( waited_ms < budget_ms )); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null
+      return $?
+    fi
+    sleep 0.05
+    (( waited_ms += 50 ))
+  done
+  kill -9 "$pid" 2>/dev/null
+  return 1
+}
+
+# cm::rclone_pids_for <mp> — pids of rclone mount daemons serving <mp>
+# (matched via ps command line; macOS has no /proc).
+cm::rclone_pids_for() {
+  local mp=$1
+  local -a pids=()
+  local pid cmdline
+  for pid in ${(f)"$(pgrep -f 'rclone mount' 2>/dev/null)"}; do
+    cmdline=$(ps -p "$pid" -o command= 2>/dev/null) || continue
+    [[ "$cmdline" == *"$mp"* ]] && pids+=("$pid")
+  done
+  (( ${#pids[@]} )) && print -r -- "${pids[@]}"
+  return 0
+}
+
+# cm::teardown <host> — force teardown, always rc 0 (teardown is fail-soft
+# cleanup; nothing above it can do better than "tried"). Escalation:
+# plain umount -> diskutil unmount force -> kill -9 the owning rclone.
+# rmdir LAST and best-effort-twice: removing the empty dir is what turns a
+# stale pasted file-url into an instant "no such file" instead of a beachball.
+cm::teardown() {
+  local host=$1 mp
+  mp=$(cm::mountpoint "$host") || return 0
+  if ! umount "$mp" 2>/dev/null; then
+    diskutil unmount force "$mp" >/dev/null 2>&1 || true
+  fi
+  local pid
+  for pid in ${(s: :)"$(cm::rclone_pids_for "$mp")"}; do
+    [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null || true
+  done
+  rmdir "$mp" 2>/dev/null || { sleep 0.5; rmdir "$mp" 2>/dev/null } || true
+  return 0
+}
+
+# cm::sweep — reap every unhealthy/orphaned mount under MNT_ROOT. Healthy
+# mounts to reachable peers are deliberately LEFT ALONE even with no ssh
+# session open (teardown is health-driven, not session-driven — spec §3.3):
+# a lingering healthy mount keeps an already-pasted file-url valid and costs
+# nothing.
+cm::sweep() {
+  local mp host
+  for mp in "$MNT_ROOT"/*(N/); do
+    host="${mp:t}"
+    cm::is_mounted "$mp" && cm::probe "$mp" && continue
+    cm::teardown "$host"
+  done
+  return 0
+}
+
 case "${1:-}" in
   map)     shift; cm::map "$@" ;;
-  ensure|check|unmount|sweep)
+  unmount) shift; cm::mountpoint "${1:-}" >/dev/null || exit 1; cm::teardown "$1" ;;
+  sweep)   cm::sweep ;;
+  ensure|check)
            print -u2 -- "clipboard-mount: $1 not implemented yet"; exit 2 ;;
   *)       usage ;;
 esac

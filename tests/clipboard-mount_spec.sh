@@ -48,3 +48,60 @@ Describe 'clipboard-mount: map + host validation'
     The stderr should include "usage"
   End
 End
+
+Describe 'clipboard-mount: unmount + sweep'
+  CM="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-mount"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    MNT_ROOT="$XDG_STATE_HOME/clipboard/mnt"
+    STUBS="$SHELLSPEC_TMPBASE/bin"
+    export PATH="$STUBS:$PATH"
+    mkdir -p "$STUBS" "$MNT_ROOT"
+    rm -f "$SHELLSPEC_TMPBASE/mount-table" "$SHELLSPEC_TMPBASE/calls"
+    : > "$SHELLSPEC_TMPBASE/mount-table"
+    # `mount` prints the fixture table; umount/diskutil/kill-targets record.
+    printf '#!/bin/sh\ncat "%s"\n' "$SHELLSPEC_TMPBASE/mount-table" > "$STUBS/mount"
+    printf '#!/bin/sh\necho "umount $*" >> "%s"\nexit 0\n' "$SHELLSPEC_TMPBASE/calls" > "$STUBS/umount"
+    printf '#!/bin/sh\necho "diskutil $*" >> "%s"\nexit 0\n' "$SHELLSPEC_TMPBASE/calls" > "$STUBS/diskutil"
+    printf '#!/bin/sh\nexit 1\n' > "$STUBS/pgrep"   # no rclone pids by default
+    chmod +x "$STUBS/mount" "$STUBS/umount" "$STUBS/diskutil" "$STUBS/pgrep"
+  }
+  BeforeEach 'setup'
+
+  It 'unmount tears down and removes the mountpoint dir'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    When run command zsh -f "$CM" unmount peer-mini
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/calls" should include "umount $MNT_ROOT/peer-mini"
+    The path "$MNT_ROOT/peer-mini" should not be exist
+  End
+
+  It 'sweep leaves a healthy mount alone'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    When run command zsh -f "$CM" sweep
+    The status should be success
+    The path "$MNT_ROOT/peer-mini" should be exist
+    The path "$SHELLSPEC_TMPBASE/calls" should not be exist
+  End
+
+  It 'sweep reaps a mountpoint dir with no mount-table entry (orphan)'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    When run command zsh -f "$CM" sweep
+    The status should be success
+    The path "$MNT_ROOT/peer-mini" should not be exist
+  End
+
+  It 'sweep reaps a mounted-but-hung volume (probe timeout) with force escalation'
+    mkdir -p "$MNT_ROOT/peer-mini"
+    printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
+    # stat hangs -> probe must time out (bounded), then teardown runs.
+    printf '#!/bin/sh\nsleep 20\n' > "$STUBS/stat"; chmod +x "$STUBS/stat"
+    # first umount "fails" so the diskutil force escalation is exercised
+    printf '#!/bin/sh\necho "umount $*" >> "%s"\nexit 1\n' "$SHELLSPEC_TMPBASE/calls" > "$STUBS/umount"
+    When run command zsh -f "$CM" sweep
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/calls" should include "diskutil unmount force $MNT_ROOT/peer-mini"
+  End
+End
