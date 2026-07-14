@@ -28,7 +28,7 @@ VALID_PROFILES=(personal work dev-shell)
 # ssh-prepare-connection steps a host's front matter may request (see
 # ~/.local/libexec/ssh-prepare-connection). `--prepare` also accepts the meta
 # values `none` (no pre-connect hook at all) and `all` (every step).
-readonly PREPARE_STEPS=(gpg symbols-db theme)
+readonly PREPARE_STEPS=(gpg symbols-db theme mount)
 
 usage() {
   cat <<EOF
