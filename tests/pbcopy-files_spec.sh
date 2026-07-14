@@ -309,14 +309,11 @@ EOF
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should equal ""
   End
 
-  # R-batch Task B: non-Darwin dev-shells have no local clipboard bridge/
-  # store at all (Phase 7 unbuilt) -- their primary M send to 127.0.0.1:2489
-  # can never succeed, so treating that identically to a real Darwin
-  # breakage would hard-fail file clips everywhere except the Mac. When the
-  # local M gets NO reply (bridge unreachable -- same fake nc as the
-  # hard-errors example just above) AND `uname` != Darwin, the peer push is
-  # promoted to the PRIMARY action and its own success decides the exit code.
-  It 'promotes the peer push to primary on a store-less (non-Darwin) platform when the local bridge is down, and warns'
+  # Phase 7: the store-less interim (peer push promoted to primary on
+  # non-Darwin) is retired -- every platform now has its own bridge/store, so
+  # an unreachable local M is an unconditional hard fail on Linux exactly
+  # like it always was on Darwin, and the peer is never even contacted.
+  It 'hard-fails (exit 1) on Linux too when the local bridge is unreachable -- interim retired, no peer push'
     export SSH_CONNECTION="x 1 y 22"
     cat > "$BINDIR/uname" <<'EOF'
 #!/bin/sh
@@ -342,15 +339,16 @@ EOF
     chmod +x "$BINDIR/nc"
     f1="$SHELLSPEC_TMPBASE/storeless-ok.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
-    The status should be success
-    The stderr should include "no local clipboard store"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:M"
+    The status should be failure
+    The stderr should include "this machine's own clipboard bridge is not reachable on 127.0.0.1:2489"
+    The stderr should not include "Phase 7 pending"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2490:M"
   End
 
-  # Same store-less platform, but now the peer is ALSO unreachable: nothing
-  # anywhere could have recorded the clip, so this must be a loud, exit-1
-  # failure -- never a silent warning.
-  It 'hard-fails (exit 1) on a store-less (non-Darwin) platform when both the local bridge and the peer are down'
+  # Same Linux platform, peer ALSO unreachable: outcome is identical to the
+  # peer-up case above -- the peer is never contacted once the local bridge
+  # is confirmed unreachable, so its own state can't change the verdict.
+  It 'hard-fails (exit 1) on Linux when both the local bridge and the peer are down, peer still uncontacted'
     export SSH_CONNECTION="x 1 y 22"
     cat > "$BINDIR/uname" <<'EOF'
 #!/bin/sh
@@ -369,8 +367,9 @@ EOF
     f1="$SHELLSPEC_TMPBASE/storeless-bothdown.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
     The status should be failure
-    The stderr should include "no local clipboard store"
-    The stderr should include "reverse bridge down"
+    The stderr should include "this machine's own clipboard bridge is not reachable on 127.0.0.1:2489"
+    The stderr should not include "no local clipboard store"
+    The stderr should not include "reverse bridge down"
   End
 
   # R-batch Task B amendment: ephemeral-hostname boxes (e.g. this dev-shell's
@@ -651,5 +650,74 @@ EOF
     The stderr should include "peer bridge doesn't support file clips yet"
     The stderr should include "unknown opcode"
     The stderr should include "update chezmoi on the other machine"
+  End
+End
+
+Describe 'pbcopy file mode: Phase 7 -- local M is the unconditional primary'
+  PBCOPY="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbcopy"
+
+  setup() {
+    STUBS="$SHELLSPEC_TMPBASE/stubs"; mkdir -p "$STUBS"
+    export PATH="$STUBS:$PATH"
+    export SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22"
+    touch "$SHELLSPEC_TMPBASE/afile"
+    # uname stub: pretend we are the dev-shell
+    printf '#!/bin/sh\necho Linux\n' > "$STUBS/uname"; chmod +x "$STUBS/uname"
+    # nc stub: EVERY endpoint down (probe -z fails, sends produce no reply)
+    printf '#!/bin/sh\nexit 1\n' > "$STUBS/nc"; chmod +x "$STUBS/nc"
+    # systemctl stub: record the kick, still report failure to start
+    printf '#!/bin/sh\necho "$@" >> "%s/systemctl.log"\nexit 0\n' "$SHELLSPEC_TMPBASE" > "$STUBS/systemctl"
+    chmod +x "$STUBS/systemctl"
+  }
+  BeforeEach 'setup'
+
+  It 'hard-fails on unreachable local bridge even on Linux (interim retired)'
+    When run command sh "$PBCOPY" "$SHELLSPEC_TMPBASE/afile"
+    The status should equal 1
+    The stderr should include "not reachable on 127.0.0.1:2489"
+    The stderr should not include "Phase 7 pending"
+  End
+
+  It 'kicks the systemd socket before giving up on Linux'
+    When run command sh "$PBCOPY" "$SHELLSPEC_TMPBASE/afile"
+    The status should equal 1
+    The stderr should include "not reachable on 127.0.0.1:2489"
+    The contents of file "$SHELLSPEC_TMPBASE/systemctl.log" should include "--user start clipboard-bridge.socket"
+  End
+End
+
+Describe 'pbcopy local text mode: Phase 7 store fallback'
+  PBCOPY="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbcopy"
+
+  setup() {
+    STUBS="$SHELLSPEC_TMPBASE/stubs"; mkdir -p "$STUBS"
+    # Restricted PATH, not prepend: a brew-installed xclip/wl-copy in
+    # /opt/homebrew/bin would otherwise win the command -v probes and skip
+    # the bridge branch under test.
+    export PATH="$STUBS:/usr/bin:/bin"
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    # Defeat the Darwin absolute-path branch on the Mac running this suite
+    # (test seam, same class as PBCOPY_OSC52_SINK).
+    export PBCOPY_DARWIN_BIN=/nonexistent
+    printf '#!/bin/sh\necho Linux\n' > "$STUBS/uname"; chmod +x "$STUBS/uname"
+    # nc stub: -z probe up; a framed T send gets an O reply and records the
+    # request bytes for inspection.
+    cat > "$STUBS/nc" <<EOF
+#!/bin/sh
+case "\$1" in
+  -z) exit 0 ;;
+esac
+cat > "$SHELLSPEC_TMPBASE/nc-request.bin"
+printf 'O\\000\\000\\000\\000'
+EOF
+    chmod +x "$STUBS/nc"
+  }
+  BeforeEach 'setup'
+
+  It 'falls back to op T against the local bridge when no display tool exists'
+    When run command sh -c 'printf hello | sh "$1"' _ "$PBCOPY"
+    The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/nc-request.bin" should start with "T"
+    The contents of file "$SHELLSPEC_TMPBASE/nc-request.bin" should include "vhello"
   End
 End

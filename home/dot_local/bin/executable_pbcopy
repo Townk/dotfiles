@@ -50,27 +50,16 @@
 #   (`nc -z`), not just "are we SSH'd in": an iPad/Blink session has no
 #   reverse tunnel at all. A down/outdated/erroring peer bridge only warns on
 #   stderr and exits 0 — the local clip already succeeded, so a missing peer
-#   notification never fails the command. Only the LOCAL `M` (2489) can
-#   hard-fail this mode -- EXCEPT on a platform with no local clipboard store
-#   to protect at all (R-batch Task B, Phase 7 interim): when the local `M`
-#   gets NO reply (bridge unreachable, as opposed to a reachable bridge
-#   replying `E`, which stays a hard fail on every platform unconditionally)
-#   AND `uname` != Darwin (Linux's own bridge/store is unbuilt), the peer push
-#   below is promoted from best-effort courtesy to the PRIMARY action: pbcopy
-#   warns "no local clipboard store on this platform (Phase 7 pending);
-#   recording on peer only" and falls through to the peer send, which now
-#   DECIDES this command's exit code instead of merely notifying. On Darwin
-#   nothing here changes: a Mac always has a bridge (part of every onboarded
-#   machine), so an unreachable 2489 there remains the unconditional hard
-#   failure described above.
+#   notification never fails the command. The LOCAL `M` (2489) is the
+#   unconditional primary on every platform as of Phase 7 (spec §5): every
+#   onboarded machine, macOS or Linux, has its own bridge/store, so an
+#   unreachable 2489 is always real breakage -- there is no more store-less
+#   platform for a peer push to stand in for.
 #
 #   Exit-code contract for file mode over SSH:
 #     local M reachable, O reply       -> 0 (peer push best-effort from here: its failure only warns)
-#     local M reachable, E reply       -> 1, every platform (bridge is up but broken -- never demoted)
-#     local M unreachable, Darwin      -> 1 (a Mac always has a bridge; unreachable is real breakage)
-#     local M unreachable, non-Darwin  -> peer push becomes PRIMARY:
-#                                            peer O reply       -> 0 (warned: recorded on peer only)
-#                                            peer down/E/timeout -> 1 (nothing was recorded anywhere)
+#     local M reachable, E reply       -> 1 (the local record is the primary action)
+#     local M unreachable              -> 1 (every platform has its own bridge as of Phase 7)
 #
 # --content <file> (M3, files-yazi design): puts a file's raw BYTES on the
 # pasteboard under a detected UTI (extension map first, `file --mime-type -b`
@@ -212,6 +201,19 @@ send_frame() {
       cat "$_payfile"
     } | nc -w2 127.0.0.1 "$_port" >/dev/null 2>&1 || true
   fi
+}
+
+# ensure_local_bridge -- 0 iff this machine's own bridge (127.0.0.1:2489)
+# answers a connect scan, self-healing on Linux first (Phase 7 spec §5): a
+# stopped clipboard-bridge.socket is restarted best-effort via systemd user
+# socket activation, then re-probed once. On macOS the bridge is launchd-
+# supervised -- no kick, the probe verdict stands.
+ensure_local_bridge() {
+  nc -z -w1 127.0.0.1 2489 >/dev/null 2>&1 && return 0
+  [ "$(uname)" = Darwin ] && return 1
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user start clipboard-bridge.socket >/dev/null 2>&1 || true
+  nc -z -w1 127.0.0.1 2489 >/dev/null 2>&1
 }
 
 # unknown_opcode_hint <port> -- rework R7: an E reply whose payload is
@@ -356,6 +358,7 @@ if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
       fi
     done
 
+    ensure_local_bridge || true   # self-heal a stopped socket; reply check below decides
     send_frame U 2489 "$payfile" "$replyfile"
     _status=$(head -c 1 "$replyfile" 2>/dev/null || true)
     if [ "$_status" = "O" ]; then
@@ -377,14 +380,37 @@ if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
   # Absolute path, not a PATH lookup: ~/.local/bin (this script's own home)
   # is prepended to PATH ahead of /usr/bin, so `command -v pbcopy` would
   # just resolve back to us and recurse forever.
-  if [ -x /usr/bin/pbcopy ]; then
-    exec /usr/bin/pbcopy
+  # PBCOPY_DARWIN_BIN: test seam (same class as PBCOPY_OSC52_SINK) -- lets
+  # the spec suite, which runs on a Mac where /usr/bin/pbcopy exists, force
+  # this branch to fall through to the Linux paths.
+  _darwin_pb="${PBCOPY_DARWIN_BIN:-/usr/bin/pbcopy}"
+  if [ -x "$_darwin_pb" ]; then
+    exec "$_darwin_pb"
   elif command -v wl-copy >/dev/null 2>&1; then
     exec wl-copy
   elif command -v xclip >/dev/null 2>&1; then
     exec xclip -selection clipboard
   else
-    echo "pbcopy: no local clipboard tool found (pbcopy/wl-copy/xclip)" >&2
+    # Headless Linux (Phase 7 spec §5): no display clipboard exists -- the
+    # store IS the clipboard. Send op T (regtype from the trailing-newline
+    # heuristic) to this machine's own bridge.
+    if ensure_local_bridge; then
+      _tmp=$(mktemp "${TMPDIR:-/tmp}/pbcopy-t.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
+      trap 'rm -f "$_tmp"' EXIT INT TERM
+      cat > "$_tmp"
+      if [ -n "$(tail -c1 "$_tmp")" ]; then _rt=v; else _rt=l; fi
+      _tpay=$(mktemp "${TMPDIR:-/tmp}/pbcopy-tp.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
+      trap 'rm -f "$_tmp" "$_tpay"' EXIT INT TERM
+      { printf '%s' "$_rt"; cat "$_tmp"; } > "$_tpay"
+      _trep=$(mktemp "${TMPDIR:-/tmp}/pbcopy-tr.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
+      trap 'rm -f "$_tmp" "$_tpay" "$_trep"' EXIT INT TERM
+      send_frame T 2489 "$_tpay" "$_trep"
+      _tst=$(head -c 1 "$_trep" 2>/dev/null || true)
+      [ "$_tst" = "O" ] && exit 0
+      echo "pbcopy: clipboard bridge rejected the copy" >&2
+      exit 1
+    fi
+    echo "pbcopy: no local clipboard tool found (pbcopy/wl-copy/xclip) and the clipboard bridge is not reachable on 127.0.0.1:2489" >&2
     exit 1
   fi
 fi
@@ -466,6 +492,7 @@ if [ $# -gt 0 ]; then
   m_replyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-mr.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
   trap 'rm -f "$pathsfile" "$mn_payfile" "$m_replyfile"' EXIT INT TERM
 
+  ensure_local_bridge || true   # self-heal a stopped socket; reply check below decides
   send_frame M 2489 "$mn_payfile" "$m_replyfile"
   _mstatus=$(head -c 1 "$m_replyfile" 2>/dev/null || true)
   if [ "$_mstatus" = "E" ]; then
@@ -477,36 +504,17 @@ if [ $# -gt 0 ]; then
     fi
     exit 1
   fi
-  # _no_local_store: set when the local M got NO reply at all (bridge
-  # unreachable -- as opposed to the reachable-but-erroring `E` case just
-  # above, which stays an unconditional hard fail on every platform) AND this
-  # platform has no local clipboard store to protect in the first place
-  # (`uname` != Darwin -- Linux's own bridge/store is Phase 7, unbuilt). On
-  # such a platform the peer push below stops being a best-effort courtesy
-  # and becomes the PRIMARY action instead: its own outcome now decides this
-  # command's exit code, since nothing else could have recorded the clip. On
-  # Darwin this flag is never set -- a Mac always has a bridge (part of every
-  # onboarded machine), so an unreachable 2489 there stays the unconditional
-  # hard failure it always was.
-  _no_local_store=0
   if [ "$_mstatus" != "O" ]; then
-    if [ "$(uname)" = Darwin ]; then
-      echo "pbcopy: this machine's own clipboard bridge is not reachable on 127.0.0.1:2489" >&2
-      exit 1
-    fi
-    echo "pbcopy: no local clipboard store on this platform (Phase 7 pending); recording on peer only" >&2
-    _no_local_store=1
+    echo "pbcopy: this machine's own clipboard bridge is not reachable on 127.0.0.1:2489" >&2
+    exit 1
   fi
 
   # 2. Peer manifest push: the SAME op `M` (record-only) to the
   #    reverse-tunneled bridge (2490 / CLIPBOARD_BRIDGE_PORT) -- same payload
-  #    as the local send above. Ordinarily (_no_local_store=0) this is purely
-  #    best-effort: the local record already succeeded, so nothing past this
-  #    point can fail the command; every non-success outcome is a warning on
-  #    stderr, not an error. But when _no_local_store=1 (store-less platform,
-  #    local M unreachable above), THIS send is the only thing that can
-  #    record the clip anywhere -- so its failure modes below are promoted to
-  #    a loud, exit-1 error instead of a warning.
+  #    as the local send above. This is purely best-effort: the local record
+  #    already succeeded (the only way to reach this point, per the hard
+  #    fail above), so nothing past this point can fail the command; every
+  #    non-success outcome here is a warning on stderr, not an error.
   #
   #    Fix A: this used to be op `N` (push-manifest), which also set the
   #    PEER's pasteboard to the paths as plain text -- files are lazy (§12),
@@ -514,19 +522,11 @@ if [ $# -gt 0 ]; then
   #    only persists the manifest row on the peer's own store.
   bridge_port="${CLIPBOARD_BRIDGE_PORT:-2490}"
   if ! nc -z -w1 127.0.0.1 "$bridge_port" >/dev/null 2>&1; then
-    if [ "$_no_local_store" -eq 1 ]; then
-      echo "pbcopy: no clipboard store reached on either end -- reverse bridge down" >&2
-      exit 1
-    fi
     echo "pbcopy: file copied to this machine's clipboard; peer not notified -- reverse bridge down" >&2
     exit 0
   fi
 
   peer_replyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-mr2.XXXXXX") || {
-    if [ "$_no_local_store" -eq 1 ]; then
-      echo "pbcopy: no clipboard store reached on either end -- mktemp failed" >&2
-      exit 1
-    fi
     echo "pbcopy: file copied to this machine's clipboard; peer not notified -- mktemp failed" >&2
     exit 0
   }
@@ -540,23 +540,11 @@ if [ $# -gt 0 ]; then
   if [ "$_peerstatus" = "E" ]; then
     _peermsg=$(tail -c +6 "$peer_replyfile" 2>/dev/null)
     if [ "$_peermsg" = "unknown opcode" ]; then
-      if [ "$_no_local_store" -eq 1 ]; then
-        echo "pbcopy: no clipboard store reached on either end -- $(unknown_opcode_hint "$bridge_port")" >&2
-        exit 1
-      fi
       echo "pbcopy: $(unknown_opcode_hint "$bridge_port")" >&2
       exit 0
     fi
-    if [ "$_no_local_store" -eq 1 ]; then
-      echo "pbcopy: no clipboard store reached on either end -- ${_peermsg:-peer bridge reported an error}" >&2
-      exit 1
-    fi
     echo "pbcopy: file copied to this machine's clipboard; peer not notified -- ${_peermsg:-bridge reported an error}" >&2
     exit 0
-  fi
-  if [ "$_no_local_store" -eq 1 ]; then
-    echo "pbcopy: no clipboard store reached on either end -- clipboard bridge is not reachable on 127.0.0.1:$bridge_port" >&2
-    exit 1
   fi
   echo "pbcopy: file copied to this machine's clipboard; peer not notified -- clipboard bridge is not reachable on 127.0.0.1:$bridge_port" >&2
   exit 0
