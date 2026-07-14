@@ -42,6 +42,16 @@ Describe 'clipboard-bridge-dispatch: M mount enrichment'
     export PATH="$STUBS:$PATH"
     mkdir -p "$STUBS"
     rm -f "$SHELLSPEC_TMPBASE"/hs-set-script "$SHELLSPEC_TMPBASE"/cm-calls "$SHELLSPEC_TMPBASE"/cc-value
+    # self-name file reset every example -- NOT just removed by the one
+    # example that writes it. $SHELLSPEC_TMPBASE (and so $XDG_STATE_HOME,
+    # which is a fixed subpath of it) is reused across every example in this
+    # run, not recreated per example (confirmed against shellspec's own
+    # dsl.sh: only $SHELLSPEC_WORKDIR is per-example). Left in place, a
+    # self-name written by one example would leak into every later example's
+    # mount_enrich call and silently flip its self-host guard whenever that
+    # later example's fixture host happens to match -- CRITICAL to clear
+    # here, not just at the point of use.
+    rm -f "$XDG_STATE_HOME/clipboard/self-name"
     # scutil stub: pinned to a fixed non-fixture hostname by DEFAULT, reset
     # every example -- NOT simply removed. mount_enrich's self-host guard
     # falls back to the real `scutil`/`hostname -s` when no stub is present,
@@ -177,6 +187,33 @@ STUB
     The path "$SHELLSPEC_TMPBASE/hs-set-script" should not be exist
     The path "$ORIGIN" should not be exist
   End
+
+  It 'self-host record via self-name file: pushed identity wins over a DIFFERING live scutil answer'
+    # This is the drift scenario the self-name file exists for (pbcopy's
+    # self_host(), executable_pbcopy near abspath()): the identity a machine
+    # STAMPS on its own outgoing M rows is whatever self_host() resolved at
+    # send time, which prefers the pushed self-name file over scutil --
+    # ssh-prepare-connection's step_mount pushes it precisely because
+    # LocalHostName can drift (hand-edited fragment, or macOS's own
+    # auto-rename on a hostname collision, e.g. thiago-mac-mini ->
+    # thiago-mac-mini-2). The guard here must resolve identity the SAME way,
+    # or a self-stamped row stops being recognized as self the moment the
+    # two diverge. scutil is left at setup()'s default stub
+    # ("test-suite-nonself") -- deliberately a DIFFERENT answer than the
+    # self-name file below, so this only goes green if the guard actually
+    # prefers the self-name file (pre-fix, scutil-only, it would not: see
+    # the red-verify note above the commit).
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf 'self-name-target' > "$XDG_STATE_HOME/clipboard/self-name"
+    build_m_req self-name-target /Users/thiago/big.bin
+    # 3s budget: none of these artifacts appear by design.
+    When call run_and_wait "$SHELLSPEC_TMPBASE/never-appears" 30
+    The contents of file "$RESP" should start with "O"
+    The result of function db_row_count should equal 1
+    The path "$SHELLSPEC_TMPBASE/cm-calls" should not be exist
+    The path "$SHELLSPEC_TMPBASE/hs-set-script" should not be exist
+    The path "$ORIGIN" should not be exist
+  End
 End
 
 # Second half of clipboard-mount spec §3.4 coverage: the self-heal branch
@@ -184,8 +221,9 @@ End
 # changeCount guard (a set that lands in the copy/paste gap must never
 # clobber whatever the user's pasteboard now holds). shellspec Describe
 # blocks don't share function scope, so build_m_req/run_and_wait/setup are
-# copied verbatim from the previous Describe (see its header comments for
-# the stub-fidelity rationale).
+# copied from the previous Describe (see its header comments for the
+# stub-fidelity rationale), with one divergence: this setup() has an extra
+# "$SHELLSPEC_TMPBASE"/mounted reset (the self-heal stub's own artifact).
 Describe 'clipboard-bridge-dispatch: M self-heal + changeCount guard'
   DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
 
@@ -225,6 +263,12 @@ Describe 'clipboard-bridge-dispatch: M self-heal + changeCount guard'
     export PATH="$STUBS:$PATH"
     mkdir -p "$STUBS"
     rm -f "$SHELLSPEC_TMPBASE"/hs-set-script "$SHELLSPEC_TMPBASE"/cm-calls "$SHELLSPEC_TMPBASE"/cc-value "$SHELLSPEC_TMPBASE"/mounted
+    # self-name file reset every example -- $SHELLSPEC_TMPBASE (and so this
+    # $XDG_STATE_HOME subpath) is shared across BOTH Describes' examples, so
+    # the previous Describe's self-name example would otherwise leak its
+    # file into every example here. See the matching comment in the previous
+    # Describe's setup() for the full rationale.
+    rm -f "$XDG_STATE_HOME/clipboard/self-name"
     # scutil stub pinned to a fixed non-fixture hostname -- see the matching
     # comment in the previous Describe's setup() for why this can't just be
     # removed (this file's fixture host collides with a real dev machine's

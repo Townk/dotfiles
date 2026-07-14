@@ -1019,8 +1019,39 @@ clip::mount_enrich() {
     # violates M's whole contract (record-only, no pasteboard side effect --
     # see the header opcode table). Bail before touching the mount helper at
     # all whenever the manifest's source_host resolves to us.
-    local self_host
-    self_host=$(scutil --get LocalHostName 2>/dev/null) || self_host=$(hostname -s 2>/dev/null)
+    #
+    # Identity resolution here MUST mirror pbcopy's self_host() precedence
+    # (executable_pbcopy, near abspath()) -- that function is what stamps an
+    # outgoing M row's host field in the first place, preferring the pushed
+    # $XDG_STATE_HOME/clipboard/self-name over scutil/hostname (a stable
+    # self-name can drift from live scutil output: a hand-edited fragment,
+    # or macOS auto-renaming LocalHostName on collision, e.g.
+    # thiago-mac-mini -> thiago-mac-mini-2). If this guard only checked
+    # scutil/hostname, a self-name-stamped row would stop matching THIS
+    # machine's own idea of itself the moment the two diverge, and the
+    # per-copy self-mount churn (or worse, a persistent self-mount) this
+    # guard exists to prevent would come right back.
+    local self_host="" sh_file sh_name
+    sh_file="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/self-name"
+    if [[ -r "$sh_file" ]]; then
+      # First line only (zsh flavor of pbcopy's single-line read) -- the
+      # file is written by a single `print -rn` (no trailing newline; see
+      # ssh-prepare-connection's step_mount), so this is normally the whole
+      # file anyway. Intentional divergence from pbcopy's self_host(),
+      # which rejects a multi-line file OUTRIGHT: here the validated first
+      # line is used even if garbage follows -- moot for the writer above,
+      # only observable on a hand-edited multi-line file.
+      local -a sh_lines; sh_lines=( "${(f)"$(<"$sh_file")"}" )
+      sh_name=$sh_lines[1]
+      # Same shape rule as pbcopy's self_host()/clipboard-mount's
+      # cm::valid_host/ssh-prepare-connection's peer_hostname check: alnum
+      # first char, then alnum/dot/dash. `#` (zero-or-more) needs
+      # extended_glob -- scoped to this disowned subshell, never the parent
+      # shell.
+      setopt extended_glob
+      [[ "$sh_name" == [A-Za-z0-9][A-Za-z0-9.-]# ]] && self_host=$sh_name
+    fi
+    [[ -n "$self_host" ]] || self_host=$(scutil --get LocalHostName 2>/dev/null) || self_host=$(hostname -s 2>/dev/null)
     [[ -n "$self_host" && "$host" == "$self_host" ]] && exit 0
     local cc; cc=$(clip::pb_changecount) || exit 0
     local mp
