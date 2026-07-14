@@ -159,7 +159,7 @@ export GOPATH="$XDG_DATA_HOME/go"
 export GOMODCACHE="$XDG_CACHE_HOME/go-mod"
 export GOCACHE="$XDG_CACHE_HOME/go-build"
 export GOBIN="$GOPATH/bin"
-export GOPROXY=direct
+export GOPROXY='https://proxy.golang.org,direct'
 
 export HOMEBREW_NO_ENV_HINTS=1
 export MANPAGER="less -R --use-color -Dd+r -Du+b"
