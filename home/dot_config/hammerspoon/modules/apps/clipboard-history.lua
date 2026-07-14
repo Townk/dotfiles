@@ -148,6 +148,10 @@ end
 -- would ever dedup it, and its later capture timestamp would shadow the
 -- manifest as the "latest" row). A 3-line file is exactly the pre-existing
 -- O-op format.
+-- The clipboard-mount M-op enrichment (clipboard-mount spec §6) arms the same
+-- flag with the hash taken over the newline-joined MOUNT-MAPPED paths it just
+-- wrote (a file-urls set has no text representation for the text-hash key) --
+-- consumed by capture_now's files-suppress block below.
 local function origin_file()
   local state = os.getenv("XDG_STATE_HOME") or ((os.getenv("HOME") or "") .. "/.local/state")
   return state .. "/pick-clipboard/current-origin"
@@ -583,6 +587,28 @@ function M.capture_now()
     -- entirely (same nil contract as the sensitive/deny-list skips above).
     os.remove(origin_file())
     return nil
+  end
+
+  -- Files-suppress (clipboard-mount spec §6): the dispatcher's M-op mount
+  -- enrichment sets a file-urls pasteboard (mount-mapped paths) right after
+  -- persisting the authoritative manifest row -- capturing that echo here
+  -- would land a twin row (host=this Mac, mount paths) next to the manifest.
+  -- A file-urls set carries no text UTI, so `plain` is nil and the text-hash
+  -- suppress above can never match; rebuild the identity the dispatcher
+  -- hashed instead: sha256 of the newline-joined captured paths (multi_paths
+  -- for a >=2-path clip, the resolved single path otherwise -- same order as
+  -- the NSFilenamesPboardType plist, which preserves the dispatcher's payload
+  -- order). Same one-shot consume-the-marker semantics as the text suppress.
+  if not origin_host and (kind == "files" or kind == "file" or kind == "directory") then
+    local idpaths = multi_paths or (resolvedPath and { resolvedPath }) or nil
+    if idpaths and #idpaths > 0 then
+      local fhost, fsup = parse_origin_file(origin_file(),
+        hash.SHA256(table.concat(idpaths, "\n")), now_ts())
+      if fhost and fsup then
+        os.remove(origin_file())
+        return nil
+      end
+    end
   end
   local host = origin_host or my_host()
 
