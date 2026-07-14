@@ -76,7 +76,8 @@ cask 'hammerspoon'                  # Keybindings controller (Keyboard Maestro b
 
 {{ if eq .profile "personal" -}}
 cask 'macfuse'                      # R/W ext3 partitions + restic mount (system-backup scrub sessions)
-brew 'rclone'                       # clipboard peer mounts — SFTP mount on MacFUSE (clipboard-mount)
+# rclone comes from custom-builds/rclone (downloads.rclone.org) — brew's
+# build disables mount support on macOS; see custom-builds/rclone/README.md
 cask 'paragon-extfs'                # ext3 FS manager
 {{- end }}
 
