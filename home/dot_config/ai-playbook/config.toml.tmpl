@@ -13,7 +13,7 @@
     - personal / else -> claude  (the default harness)
 */ -}}
 {{- $harness := "claude" -}}
-{{- if eq .profile "work" }}{{ $harness = "cursor" }}{{ end -}}
+{{- if ne .profile "personal" }}{{ $harness = "cursor" }}{{ end -}}
 [mux]
 # Enable the built-in zellij preset (ADR-0007): floating/docked panes and the
 # input widget open as zellij panes instead of the inline no-mux UX.
@@ -22,7 +22,7 @@ backend = "zellij"
 [agent]
 # Profile-selected: {{ .profile }} -> {{ $harness }}.
 harness = "{{ $harness }}"
-{{- if eq .profile "work" }}
+{{- if ne .profile "personal" }}
 # cursor's model catalog is subscription-scoped (`cursor-agent --list-models`).
 # Escalation on a capable, fast-served Opus; triage on a cheap flash model
 # (triage fires on every assist, so keep it cheap).
