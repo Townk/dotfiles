@@ -178,7 +178,7 @@ main() {
       require_config
       case "$cmd" in
         status)    bkp::ux::status ;;
-        now)       bkp::tick ;;
+        now)       BKP_CAPTURE_FORCE=1 bkp::tick ;;
         list)      { print -r -- $'ID\tTIME\tAGE\tTIER'; bkp::ux::list; } | column -t -s$'\t' ;;
         undo)      bkp::restore::undo ;;
         reconcile) bkp::reconcile::run ;;

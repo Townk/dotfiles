@@ -1404,6 +1404,12 @@ bkp::spin() {
 # + file list share the pass) -> git sidecars -> restic backup -> thin.
 # Sidecar files are appended to the file list explicitly, so fresh bundles
 # ride this very snapshot no matter where BKP_WIP_DIR lives.
+#
+# Scheduled ticks (launchd) no-op when the last successful capture is still
+# inside BKP_CAPTURE_CADENCE — wake/calendar near-misses stay cheap. Set
+# BKP_CAPTURE_FORCE=1 (system-backup now) to bypass. When a run proceeds
+# while already overdue, a `catchup` heartbeat stamp keeps the prompt banner
+# quiet until success or failure.
 bkp::capture::run() {
   local manifest="${1:-$BKP_MANIFEST}"
   local BKP_CONFIG="${2:-$BKP_CONFIG}"   # dynamic scope: bkp::restic sees it
@@ -1411,11 +1417,28 @@ bkp::capture::run() {
     log_info "bkp: capture already running — coalescing"
     return 0
   }
+
+  local hb epoch age=0 overdue=1
+  if hb=$(bkp::drift::last capture); then
+    epoch="${hb%% *}"
+    age=$(( EPOCHSECONDS - epoch ))
+    (( age < 0 )) && age=0
+    (( age < BKP_CAPTURE_CADENCE )) && overdue=0
+  fi
+  if (( ! overdue && ! ${BKP_CAPTURE_FORCE:-0} )); then
+    log_info "bkp: last capture ${age}s ago (< ${BKP_CAPTURE_CADENCE}s cadence) — skipping"
+    return 0
+  fi
+
   local staging
   staging=$(bkp::config::staging_path) || return 2
   bkp::capture::ensure_repo "$staging" || return 1
 
-  local sweep_file files_from
+  # About to do real work while the prompt would otherwise nag: announce
+  # catch-up so the banner stays quiet for BKP_CATCHUP_GRACE seconds.
+  (( overdue )) && bkp::drift::stamp catchup 0
+
+  local sweep_file files_from run_rc=0
   sweep_file=$(mktemp "${TMPDIR:-/tmp}/bkp-sweep.XXXXXX") || return 1
   files_from=$(mktemp "${TMPDIR:-/tmp}/bkp-files.XXXXXX") || return 1
   {
@@ -1425,7 +1448,10 @@ bkp::capture::run() {
     local sweep_rc=0
     bkp::spin "resolving capture set…" "$sweep_file" -- \
       bkp::manifest::sweep "$manifest" || sweep_rc=$?
-    (( sweep_rc )) && return 2
+    if (( sweep_rc )); then
+      run_rc=2
+      return 2
+    fi
 
     local repo bundle warn nrepos=0
     while IFS=$'\t' read -r repo bundle warn; do
@@ -1470,16 +1496,21 @@ bkp::capture::run() {
       # Return failure so this run's heartbeat stays stale and the next tick
       # starts clean instead of stacking behind a hang.
       log_error "bkp: capture exceeded ${BKP_CAPTURE_TIMEOUT}s wall-clock — restic killed (wedged run?)"
+      run_rc=1
       return 1
     elif (( backup_rc != 0 )); then
+      run_rc=1
       return 1
     fi
   } always {
     rm -f "$sweep_file" "$files_from"
+    # Failed catch-up: drop the silence marker so the banner can nag again.
+    (( run_rc )) && bkp::drift::clear catchup
   }
   # The snapshot exists now — stamp capture fresh BEFORE retention, so a
   # thin failure (retention only) never masks a successful capture.
   bkp::drift::stamp capture 0
+  bkp::drift::clear catchup
   log_info "bkp: applying retention"
   bkp::capture::thin "$staging" "$manifest"
 }

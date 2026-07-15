@@ -1233,6 +1233,81 @@ EOF
       The stdout should include ""
     End
 
+    It 'skips when the last capture is still inside the cadence'
+      throttle() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        : > "$FIX/calls"
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        [[ -s "$FIX/calls" ]] && print ran || print skipped
+      }
+      When run throttle
+      The line 1 should equal "skipped"
+    End
+
+    It 'BKP_CAPTURE_FORCE bypasses the cadence throttle'
+      forced() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        : > "$FIX/calls"
+        BKP_CAPTURE_FORCE=1 bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        grep -c backup "$FIX/calls"
+      }
+      When run forced
+      The output should equal 1
+    End
+
+    It 'stamps catchup while overdue work runs, then clears it on success'
+      catchup_ok() {
+        source "$LIB/backup.zsh"
+        mkdir -p "$BKP_STATE_DIR"
+        print -r -- "capture $(( EPOCHSECONDS - 7200 )) 0" > "$BKP_STATE_DIR/heartbeat"
+        bkp::restic() {
+          local repo="$1"; shift
+          print -r -- "$repo $*" >> "$FIX/calls"
+          case "$1 ${2:-}" in
+            'cat config') [ -e "$FIX/has-repo" ] ;;
+            backup*)
+              grep -c '^catchup ' "$BKP_STATE_DIR/heartbeat" > "$FIX/catchup-during"
+              return 0
+              ;;
+            'snapshots --json') printf '%s' '[]' ;;
+            *) return 0 ;;
+          esac
+        }
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        print -r -- "during:$(cat "$FIX/catchup-during")"
+        grep -c '^catchup ' "$BKP_STATE_DIR/heartbeat" || true
+        grep -c '^capture ' "$BKP_STATE_DIR/heartbeat"
+      }
+      When run catchup_ok
+      The line 1 should equal "during:1"
+      The line 2 should equal 0
+      The line 3 should equal 1
+    End
+
+    It 'clears catchup when an overdue capture fails'
+      catchup_fail() {
+        source "$LIB/backup.zsh"
+        mkdir -p "$BKP_STATE_DIR"
+        print -r -- "capture $(( EPOCHSECONDS - 7200 )) 0" > "$BKP_STATE_DIR/heartbeat"
+        bkp::restic() {
+          local repo="$1"; shift
+          case "$1 ${2:-}" in
+            'cat config') return 1 ;;
+            backup*)      return 1 ;;
+            *) return 0 ;;
+          esac
+        }
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null 2>&1 && return 1
+        grep -c '^catchup ' "$BKP_STATE_DIR/heartbeat" || true
+      }
+      When run catchup_fail
+      The output should equal 0
+    End
+
     It 'worker --help prints usage without touching restic'
       whelp() {
         BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" --help
@@ -2309,7 +2384,9 @@ JSON
       agents() {
         chezmoi execute-template < "$TMPL" | yq -p toml -o json '.' | jq -r '
           (."backup-capture".cmd | join(" ")),
-          ."backup-capture".start_interval,
+          (."backup-capture".start_calendar_interval | map("\(.Minute)") | join(",")),
+          (."backup-capture" | has("start_interval")),
+          ."backup-capture".run_at_load,
           ."backup-capture".process_type,
           ."backup-reconcile".cmd[0],
           (."backup-reconcile".watch_paths | join(",")),
@@ -2319,13 +2396,15 @@ JSON
       }
       When run agents
       The line 1 should equal "system-backup-capture --reconcile"
-      The line 2 should equal 1800
-      The line 3 should equal "Background"
-      The line 4 should equal "system-backup-reconcile"
-      The line 5 should equal "/Volumes"
-      The line 6 should equal 3600
-      The line 7 should equal "system-backup-reconcile --prune"
-      The line 8 should equal 3
+      The line 2 should equal "0,30"
+      The line 3 should equal "false"
+      The line 4 should equal "true"
+      The line 5 should equal "Background"
+      The line 6 should equal "system-backup-reconcile"
+      The line 7 should equal "/Volumes"
+      The line 8 should equal 3600
+      The line 9 should equal "system-backup-reconcile --prune"
+      The line 10 should equal 3
     End
   End
 
@@ -2346,7 +2425,9 @@ JSON
         printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
         printf '[staging]\npath = "%s/repo"\npassword_command = "echo smoke-pass"\n' "$FIX" > "$FIX/c.toml"
         run_tick() {  # fresh process per tick: the run-lock is process-lifetime
-          zsh -c 'source "$1/backup.zsh"; bkp::capture::run "$2" "$3"' _ "$LIB" "$FIX/m.toml" "$FIX/c.toml"
+          # FORCE: cadence throttle would no-op the second tick in this smoke.
+          zsh -c 'source "$1/backup.zsh"; BKP_CAPTURE_FORCE=1 bkp::capture::run "$2" "$3"' \
+            _ "$LIB" "$FIX/m.toml" "$FIX/c.toml"
         }
         run_tick >/dev/null || return 1
         print world >> "$FIX/root/f.txt"
