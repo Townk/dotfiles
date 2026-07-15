@@ -113,6 +113,31 @@ error_log_path = "~/.cache/system-images/automount.log"
 # yq/jq/hdiutil/diskutil. Mirror the dirs the omlx agent bakes in.
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
+# gpg-agent — pre-warm THIS machine's gpg-agent at login. It is the LOCAL target
+# of the SSH gpg-agent RemoteForward to dev shells: the forward's far end is our
+# ~/.config/gnupg/S.gpg-agent.extra, so the forward is only as live as this
+# agent. macOS has no systemd to keep it alive, so it dies on reboot/logout
+# while its stale socket inode survives on the persistent FS; an inbound forward
+# then connect()s a dead socket and the remote gpg reports "can't connect to the
+# agent: End of file". Launching at login means even the first connect finds a
+# live target. ssh-prepare-connection also launches it per-connect (the
+# authoritative fix at exactly the moment the forward binds); this is a cheap
+# pre-warm layer. One-shot: `gpgconf --launch` starts a dead agent (re-binding a
+# stale extra socket) and is a no-op when it is already healthy.
+[gpg-agent]
+description    = "Pre-warm the local gpg-agent (SSH gpg-forward target)"
+cmd            = ["gpgconf", "--launch", "gpg-agent"]
+run_at_load    = true
+keep_alive     = false
+log_path       = "~/.cache/gpg-agent/launch.log"
+error_log_path = "~/.cache/gpg-agent/launch.log"
+
+[gpg-agent.env]
+# launchd's minimal env carries no GNUPGHOME, so gpgconf would default to
+# ~/.gnupg and launch/manage the WRONG homedir. Pin it to the real one.
+GNUPGHOME = "{{ .chezmoi.homeDir }}/.config/gnupg"
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
 # backup-* — the Terminal Time Machine schedule (system-backup silo, spec §6).
 # Three agents: a 30-min capture tick (which chains a reconcile pass), a
 # mount-watching + hourly-safety reconcile, and the daily prune repack. All

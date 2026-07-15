@@ -83,6 +83,16 @@ parse_header() {
 
 # --- prepare steps -----------------------------------------------------------
 step_gpg() {
+  # Bring up THIS machine's gpg-agent FIRST — it is the forward's local target
+  # (the RemoteForward's far end is our ~/.config/gnupg/S.gpg-agent.extra). On
+  # macOS there is no systemd to keep the agent alive, so it dies on reboot/
+  # logout while its stale socket inode survives on the persistent FS. ssh then
+  # connect()s that dead socket and the remote gpg sees "can't connect to the
+  # agent: End of file". --launch starts a dead agent (re-binding a stale extra
+  # socket) and is a no-op when it is already healthy, so every connect finds a
+  # live target. Symmetric to the remote gpg-forward-prepare below.
+  GNUPGHOME="${GNUPGHOME:-$HOME/.config/gnupg}" gpgconf --launch gpg-agent >/dev/null 2>&1 || true
+
   # Throwaway, forwarding-suppressed ssh: neither joins the shared mux nor binds
   # forwards; the remote path is single-quoted so the REMOTE shell expands ~.
   # The caller's _SYNCREMOTE sentinel stops this nested ssh from re-triggering
