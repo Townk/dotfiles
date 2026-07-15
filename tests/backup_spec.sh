@@ -2322,7 +2322,7 @@ JSON
       The line 2 should equal 1800
       The line 3 should equal "Background"
       The line 4 should equal "system-backup-reconcile"
-      The line 5 should equal "/Volumes,~/Library/CloudStorage"
+      The line 5 should equal "/Volumes"
       The line 6 should equal 3600
       The line 7 should equal "system-backup-reconcile --prune"
       The line 8 should equal 3
