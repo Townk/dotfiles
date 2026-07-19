@@ -73,11 +73,20 @@ main() {
     pkill -f "$QL_MATCH" 2>/dev/null
     stage_for_panel "$@"
     open -n "$QL_APP" --args -p "${staged[@]}"
-    # Crash watchdog: the panel outlives 2s unless a generator aborted it
-    # (those die within ~0.5s of launch). Dead panel → floating-pane
-    # fallback below.
-    sleep 2
-    pgrep -f "$QL_MATCH" >/dev/null 2>&1 && return 0
+    # Crash watchdog: wait for the panel to appear (a cold LaunchServices
+    # spawn can be slow — a fixed check would misread it as crashed and
+    # double up the UI with the fallback pane), then confirm it survived
+    # its first render — the 26.5 generator aborts land within ~0.5s of
+    # rendering. Dead panel → floating-pane fallback below.
+    local -i i
+    for i in {1..8}; do
+      sleep 0.5
+      if pgrep -f "$QL_MATCH" >/dev/null 2>&1; then
+        sleep 1.5
+        pgrep -f "$QL_MATCH" >/dev/null 2>&1 && return 0
+        break
+      fi
+    done
   fi
 
   if [[ -n ${ZELLIJ:-} ]]; then
