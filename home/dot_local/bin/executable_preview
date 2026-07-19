@@ -162,6 +162,73 @@ function force-tty() {
   fi
 }
 
+# === Raster cache ===
+#
+# Expensive raster renders (PDF pages, video frames, font sheets, Adobe
+# renders, cover art) cache under $PREVIEW_CACHE_DIR, shared by the fzf
+# and yazi callers. Chafa output itself is never cached — it depends on
+# pane geometry and terminal protocol; only the intermediate PNG is.
+
+zmodload -F zsh/stat b:zstat 2>/dev/null
+PREVIEW_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/preview"
+
+# Deterministic cache path for a rendered raster of $1. Key = source path
+# + mtime + size + tag + skip, so touching the source invalidates and PDF
+# pages / video seeks get distinct entries.
+#
+# Args: $1 source path, $2 tag (handler name), $3 skip variant (default 0)
+function raster-cache-path() {
+  local src="$1" tag="$2" skip="${3:-0}" mt sz key
+  mt=$(zstat +mtime "$src" 2>/dev/null) || mt=0
+  sz=$(zstat +size "$src" 2>/dev/null) || sz=0
+  key=$(print -rn -- "$src|$mt|$sz|$tag|$skip" | shasum | cut -d' ' -f1)
+  print -rn -- "$PREVIEW_CACHE_DIR/$key.png"
+}
+
+# Run a render function only when the cache file is missing. The function
+# must write its raster to $RASTER_OUT — a temp path that keeps the .png
+# suffix (fontimage and pdftocairo key output format off the extension) —
+# which is then moved into place, so a killed render never leaves a
+# truncated raster to be served later.
+#
+# Args: $1 cache file (from raster-cache-path), $2+ render fn and its args
+function render-cached() {
+  local out="$1"
+  shift
+  [[ -s $out ]] && return 0
+  mkdir -p "${out:h}" 2>/dev/null || return 1
+  local tmp="$out.$$.png"
+  RASTER_OUT="$tmp" "$@" >/dev/null 2>&1
+  local exitcode=$?
+  if (( exitcode == 0 )) && [[ -s $tmp ]]; then
+    mv -f "$tmp" "$out"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# Chafa a raster at the current pane geometry (shared image-paint tail for
+# every raster handler on the fzf/text path).
+function preview-raster() {
+  command -v chafa >/dev/null 2>&1 || return 1
+  local chafa_format
+  chafa_format=(${(z)$(get_chafa_format_args)})
+  chafa "${chafa_format[@]}" -s "${w:-80}x${h:-24}" "$1" 2>/dev/null
+}
+
+# Opportunistic cache prune: at most once a day (stamp file), drop rasters
+# untouched for 30 days. Called backgrounded from main().
+function prune-raster-cache() {
+  [[ -d $PREVIEW_CACHE_DIR ]] || return 0
+  local stamp="$PREVIEW_CACHE_DIR/.prune-stamp" now mt
+  now=$(date +%s)
+  mt=$(zstat +mtime "$stamp" 2>/dev/null) || mt=0
+  ((now - mt < 86400)) && return 0
+  touch "$stamp"
+  find "$PREVIEW_CACHE_DIR" -type f -name '*.png' -mtime +30 -delete 2>/dev/null
+}
+
 function get_chafa_format_args() {
   local protocols
 
@@ -287,14 +354,7 @@ function preview-pdf() {
 }
 
 function preview-image() {
-  command -v chafa >/dev/null 2>&1 || return 1
-
-  local width="${w:-80}"
-  local height="${h:-24}"
-  local chafa_format
-  chafa_format=(${(z)$(get_chafa_format_args)})
-
-  chafa "${chafa_format[@]}" -s "${width}x${height}" "$1" 2>/dev/null
+  preview-raster "$1" || return 1
 
   # PREVIEW_IMAGE_ONLY (set by the zellij click-to-open image pane): show just
   # the image, no metadata, so it fills the pane without needing a scroll.
@@ -381,6 +441,7 @@ function main() {
   local target=${(Q)${1:-}}
 
   geometry
+  prune-raster-cache &!
 
   # --- Pre-dispatch guards ---
   # Each guard rules out a class of failure mode before committing to

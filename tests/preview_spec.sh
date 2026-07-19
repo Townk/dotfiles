@@ -55,3 +55,53 @@ Describe 'preview: geometry + CLI'
     The output should not equal ""
   End
 End
+
+Describe 'preview: raster cache'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/rcache"
+    rm -rf "$XDG_CACHE_HOME"
+    SRC="$SHELLSPEC_TMPBASE/rcache-src.txt"
+    print hello >"$SRC"
+  }
+  BeforeEach 'setup'
+
+  It 'produces a stable key for same src+tag+skip'
+    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
+      a=\$(raster-cache-path '$SRC' video 5)
+      b=\$(raster-cache-path '$SRC' video 5)
+      [[ \$a == \$b && \$a == *.png ]] && print same"
+    The output should equal "same"
+  End
+
+  It 'varies the key with tag and skip'
+    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
+      a=\$(raster-cache-path '$SRC' video 0)
+      b=\$(raster-cache-path '$SRC' video 5)
+      c=\$(raster-cache-path '$SRC' pdf 0)
+      [[ \$a != \$b && \$a != \$c && \$b != \$c ]] && print distinct"
+    The output should equal "distinct"
+  End
+
+  It 'renders once, then serves the cache'
+    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
+      count=0
+      fake-render() { count=\$((count+1)); print -n x >\"\$RASTER_OUT\"; }
+      cache=\$(raster-cache-path '$SRC' t)
+      render-cached \"\$cache\" fake-render
+      render-cached \"\$cache\" fake-render
+      print \$count; [[ -s \$cache ]] && print cached"
+    The line 1 of output should equal "1"
+    The line 2 of output should equal "cached"
+  End
+
+  It 'leaves no cache file when the render fails'
+    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
+      bad-render() { return 1; }
+      cache=\$(raster-cache-path '$SRC' t)
+      render-cached \"\$cache\" bad-render && print unexpected
+      [[ ! -e \$cache ]] && print clean"
+    The output should equal "clean"
+  End
+End
