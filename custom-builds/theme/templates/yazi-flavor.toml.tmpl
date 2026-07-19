@@ -221,9 +221,11 @@ conds = [
 
 # : Indicator (cursor pill; yazi 26 moved cursor-row styling here — the tab
 # palette drives it: white-on-active-tab for the cursor row, inactive-tab bg
-# for the preview-column hover. Permanent home of what the tm scrub overlay
+# for the preview-column hover. The preview pill sets no fg: it marks where
+# the cursor WILL land, so the entry keeps its own file color and only the
+# bg/pill signals the intent. Permanent home of what the tm scrub overlay
 # used to append per session.)
 
 [indicator]
 current = { fg = "#{{ $p.tab.active_fg }}", bg = "#{{ $p.tab.active_bg }}", bold = true }
-preview = { fg = "#{{ $p.tab.fg }}", bg = "#{{ $p.tab.bg }}" }
+preview = { bg = "#{{ $p.tab.bg }}" }
