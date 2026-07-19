@@ -611,7 +611,14 @@ function render-pdf-page() {
 }
 
 function preview-image() {
-  preview-raster "$1" || return 1
+  if ! preview-raster "$1"; then
+    # Formats chafa can't decode directly (icns, some raw formats): render
+    # through the conversion cache, then chafa the converted png.
+    local cache
+    cache=$(raster-cache-path "$1" imgconv) &&
+      render-cached "$cache" render-image-convert "$1" &&
+      preview-raster "$cache" || return 1
+  fi
 
   # PREVIEW_IMAGE_ONLY (set by the zellij click-to-open image pane): show just
   # the image, no metadata, so it fills the pane without needing a scroll.
@@ -697,8 +704,13 @@ function render-image-convert() {
   if [[ ${1:l} == *.svg ]] && command -v rsvg-convert >/dev/null 2>&1; then
     rsvg-convert --width 1024 --keep-aspect-ratio -o "$RASTER_OUT" "$1" && return 0
   fi
-  command -v magick >/dev/null 2>&1 || return 1
-  magick "$1[0]" -flatten "$RASTER_OUT"
+  if command -v magick >/dev/null 2>&1; then
+    magick "$1[0]" -flatten "$RASTER_OUT" 2>/dev/null && [[ -s $RASTER_OUT ]] && return 0
+  fi
+  # sips: macOS-native decoder for the Apple-side formats (icns, heic)
+  # this magick build has no delegate for.
+  command -v sips >/dev/null 2>&1 || return 1
+  sips -s format png "$1" --out "$RASTER_OUT" >/dev/null 2>&1 && [[ -s $RASTER_OUT ]]
 }
 
 # Machine half of the handlers: ensure the raster for <path> exists and
