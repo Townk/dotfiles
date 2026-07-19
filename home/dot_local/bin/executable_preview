@@ -672,8 +672,6 @@ function main() {
   # `.kbi` (custom JSON variants). Handlers return non-zero when the
   # required tool isn't installed, letting dispatch fall through to
   # the MIME pass (and ultimately to bat).
-  #
-  # Keep in sync with `prepend_previewers` in ~/.config/yazi/yazi.toml.
   case "${target:l}" in
     *.csv) preview-csv "$target" && return ;;
     *.md) preview-md "$target" && return ;;

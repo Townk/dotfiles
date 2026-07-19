@@ -12,37 +12,27 @@ prepend_fetchers = [
 ]
 
 prepend_preloaders = [
-  # Replace magick, image, video with mediainfo
-  { mime = "{audio,video,image}/*", run = "mediainfo" },
-  { mime = "application/subrip", run = "mediainfo" },
-  # Adobe Illustrator, Adobe Photoshop is image/adobe.photoshop, already handled above
-  { mime = "application/postscript", run = "mediainfo" },
+  # Warm the preview script's raster cache (frames, pages, sheets, covers).
+  { mime = "{image,video,audio}/*", run = "preview" },
+  { mime = "application/pdf", run = "preview" },
+  { mime = "font/*", run = "preview" },
+  { mime = "application/vnd.ms-opentype", run = "preview" },
+  { mime = "{image/vnd.adobe.photoshop,application/postscript}", run = "preview" },
 ]
 
 prepend_previewers = [
-  # Archive previewer
-  { mime = "application/*zip", run = "ouch" },
-  { mime = "application/x-tar", run = "ouch" },
-  { mime = "application/x-bzip2", run = "ouch" },
-  { mime = "application/x-7z-compressed", run = "ouch" },
-  { mime = "application/x-rar", run = "ouch" },
-  { mime = "application/x-xz", run = "ouch" },
-  # Replace magick, image, video with mediainfo
-  { mime = "{audio,video,image}/*", run = "mediainfo" },
-  { mime = "application/subrip", run = "mediainfo" },
-  # Adobe Illustrator, Adobe Photoshop is image/adobe.photoshop, already handled above
-  { mime = "application/postscript", run = "mediainfo" },
-  { url = "*.csv", run = 'piper -- rich -w $w -j --left --panel=rounded --guides --line-numbers --force-terminal "$1"' },
-  { url = "*.md", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
-  { url = "*.rst", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
-  { url = "*.ipynb", run = 'piper -- rich -w $w -j --left --panel=rounded --guides --line-numbers --force-terminal "$1"' },
-  { url = "*.json", run = 'piper -- rich -w $w -j --left --guides --line-numbers --force-terminal "$1"' },
-  { url = "*.{dmg,sparseimage,sparsebundle,cdr,img,iso}", run = 'piper -- "$HOME/.local/libexec/disk-image-view" -W $w "$1"' },
-  { url = "*.ics", run = 'piper -- "$HOME/.local/libexec/ics-view" -W $w "$1"' },
-  { url = "*.{db,sqlite,sqlite3}", run = 'piper -- "$HOME/.local/libexec/sqlite-view" -W $w "$1"' },
+  # Raster types → preview.yazi shim (script logic, native image painting).
+  { mime = "{image,video,audio}/*", run = "preview" },
+  { mime = "application/pdf", run = "preview" },
+  { mime = "font/*", run = "preview" },
+  { mime = "application/vnd.ms-opentype", run = "preview" },
+  { mime = "{image/vnd.adobe.photoshop,application/postscript}", run = "preview" },
+  { url = "*.{ttf,otf,woff,woff2,ttc,psd,ai,eps}", run = "preview" },
+  # Everything else (files only; the built-in folder previewer keeps
+  # directories) → the same script's text pipeline through piper, which
+  # provides line-based scroll via skip.
+  { url = "*", run = 'piper -- preview "$1"' },
 ]
-
-append_previewers = [{ url = "*", run = "hexyl" }]
 
 [preview]
 # Code preview syntax highlighting uses the generated `system` tmTheme (from
