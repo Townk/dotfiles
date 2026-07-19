@@ -428,21 +428,30 @@ function render-adobe() {
   magick "$1[0]" -flatten -background white -alpha remove "$RASTER_OUT"
 }
 
+# Clamped 1-based page from --skip (skip 0 = page 1). pdfinfo's page count
+# bounds it so seeking past the end sticks on the last page.
+function pdf-page() {
+  local pages page
+  pages=$(pdfinfo "$1" 2>/dev/null | awk '/^Pages:/{print $2}')
+  [[ -n $pages ]] || pages=1
+  page=$((${OPT_SKIP:-0} + 1))
+  ((page > pages)) && page=$pages
+  print -n -- "$page"
+}
+
 function preview-pdf() {
-  command -v chafa >/dev/null 2>&1 || return 1
   command -v pdftocairo >/dev/null 2>&1 || return 1
+  local page cache
+  page=$(pdf-page "$1")
+  cache=$(raster-cache-path "$1" pdf "$page") || return 1
+  render-cached "$cache" render-pdf-page "$1" "$page" || return 1
+  preview-raster "$cache"
+}
 
-  # Fallback to defaults if dimensions $w or $h are empty
-  local width="${w:-80}"
-  local height="${h:-24}"
-
-  # Generate the dynamic format flags as a Zsh-safe array
-  local chafa_format
-  chafa_format=(${(z)$(get_chafa_format_args)})
-
-  # Pipe the single-page rendered PNG stream into Chafa
-  pdftocairo -png -singlefile "$1" - 2>/dev/null |
-    chafa "${chafa_format[@]}" -s "${width}x${height}" - 2>/dev/null
+# pdftocairo -singlefile appends .png to its output prefix — strip the
+# suffix from $RASTER_OUT so the file lands exactly there.
+function render-pdf-page() {
+  pdftocairo -png -f "$2" -l "$2" -singlefile "$1" "${RASTER_OUT%.png}"
 }
 
 function preview-image() {

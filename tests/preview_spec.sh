@@ -201,6 +201,26 @@ Describe 'preview: audio'
   End
 End
 
+Describe 'preview: pdf paging'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/pcache"
+    rm -rf "$XDG_CACHE_HOME"
+    PDF="$SHELLSPEC_TMPBASE/two.pdf"
+    [ -f "$PDF" ] || magick -size 100x100 xc:red xc:blue "$PDF"
+  }
+  BeforeEach 'setup'
+
+  It 'caches pages; --skip past the end clamps to the last page'
+    When run zsh -f -c "zsh -f '$SCRIPT' -W 40 -H 12 '$PDF' >/dev/null
+      zsh -f '$SCRIPT' -W 40 -H 12 --skip 1 '$PDF' >/dev/null
+      zsh -f '$SCRIPT' -W 40 -H 12 --skip 99 '$PDF' >/dev/null
+      files=(\$XDG_CACHE_HOME/preview/*.png(N)); print \${#files}"
+    The output should equal "2"
+  End
+End
+
 Describe 'preview: adobe'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
 
