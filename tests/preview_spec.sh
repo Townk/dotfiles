@@ -265,3 +265,47 @@ Describe 'preview: archives'
     The output should include "f.txt"
   End
 End
+
+Describe 'preview: --pixels machine interface'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/xcache"
+    rm -rf "$XDG_CACHE_HOME"
+    export BAT_CACHE_PATH="$HOME/.cache/bat"
+    PNG="$SHELLSPEC_TMPBASE/dot.png"
+    [ -f "$PNG" ] || magick -size 8x8 xc:lime "$PNG"
+    VID2="$SHELLSPEC_TMPBASE/clip2.mp4"
+    [ -f "$VID2" ] || ffmpeg -v error -f lavfi -i testsrc=duration=1:size=128x96:rate=10 \
+      -pix_fmt yuv420p "$VID2"
+    TXT="$SHELLSPEC_TMPBASE/plain.txt"
+    print "plain text body" >"$TXT"
+  }
+  BeforeEach 'setup'
+
+  It 'returns the source path as raster for displayable images'
+    When run zsh -f "$SCRIPT" --pixels "$PNG"
+    The status should be success
+    The line 1 of output should equal "$PNG"
+    The output should include "Image"
+  End
+
+  It 'returns a cached frame as raster for video'
+    When run zsh -f -c "line=\$(zsh -f '$SCRIPT' --pixels '$VID2' | head -1)
+      [[ \$line == \$XDG_CACHE_HOME/preview/*.png && -s \$line ]] && print ok"
+    The output should equal "ok"
+  End
+
+  It 'returns an empty raster line plus text for text files'
+    When run zsh -f "$SCRIPT" --pixels "$TXT"
+    The status should be success
+    The line 1 of output should equal ""
+    The output should include "plain text body"
+  End
+
+  It 'exits 2 when --pixels has no path'
+    When run zsh -f "$SCRIPT" --pixels
+    The status should equal 2
+    The stderr should include "Usage"
+  End
+End
