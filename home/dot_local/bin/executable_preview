@@ -334,10 +334,15 @@ function preview-sqlite() {
 function preview-archive() {
   local out
   if command -v ouch >/dev/null 2>&1; then
-    out=$(force-tty ouch list -q -y -t "$1" 2>/dev/null)
-    if [[ -n ${out//[[:space:]]/} ]]; then
-      print -r -- "$out" | head -"$max_lines"
-      return 0
+    # Probe quietly first: force-tty's pty merges stderr into stdout, so a
+    # failed ouch (e.g. bare .gz — "not an archive") would otherwise leak
+    # its error banner as the "listing" and mask the 7zz fallback.
+    if ouch list -q -y -t "$1" >/dev/null 2>&1; then
+      out=$(force-tty ouch list -q -y -t "$1" 2>/dev/null)
+      if [[ -n ${out//[[:space:]]/} ]]; then
+        print -r -- "$out" | head -"$max_lines"
+        return 0
+      fi
     fi
   fi
   # Formats ouch can't read (lzh, cab, …): 7zz covers the long tail.
