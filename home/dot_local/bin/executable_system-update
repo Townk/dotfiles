@@ -400,4 +400,16 @@ fi
 
 update_pi_extensions
 update_zsh_plugins
+
+# Final convergence apply. The step-1 apply runs BEFORE brew/system-package
+# touch anything, so runtime-detected triggers (a font-fontawesome cask bump
+# feeding run_after_80's font-build prompt, a WezTerm upgrade shifting the
+# symbols-DB probe signature) are invisible to it and would otherwise wait
+# for the next manual `chezmoi apply`. Re-applying here, in the user's
+# terminal, surfaces those prompts inside the update run itself.
+if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
+  print -P -- "\n🏠 Final chezmoi convergence pass...\n"
+  chezmoi apply || log_warn "final chezmoi apply had failures"
+fi
+
 finalize_session
