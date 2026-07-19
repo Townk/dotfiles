@@ -118,7 +118,7 @@ Describe 'preview: fonts'
 
   It 'renders a glyph sheet instead of a hex dump'
     [ -n "$FONT" ] || skip "no .ttf font found on this machine"
-    When run zsh "$SCRIPT" -W 80 -H 24 "$FONT"
+    When run zsh -f "$SCRIPT" -W 80 -H 24 "$FONT"
     The status should be success
     The output should not equal ""
     The output should not include "┌────────┬"
@@ -126,7 +126,7 @@ Describe 'preview: fonts'
 
   It 'caches the rendered sheet'
     [ -n "$FONT" ] || skip "no .ttf font found on this machine"
-    When run zsh -f -c "zsh '$SCRIPT' -W 80 -H 24 '$FONT' >/dev/null; print -l \$XDG_CACHE_HOME/preview/*.png(N) | wc -l | tr -d ' '"
+    When run zsh -f -c "zsh -f '$SCRIPT' -W 80 -H 24 '$FONT' >/dev/null; files=(\$XDG_CACHE_HOME/preview/*.png(N)); print \${#files}"
     The output should equal "1"
   End
 End
