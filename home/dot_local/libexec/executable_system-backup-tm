@@ -78,9 +78,13 @@ tm_timeline() {
       return 0
     fi
     local key rest last_state="" rung focused height width interactive=1
-    local kc hc
-    kc=$(bkp::tm::_sgr fg "$C_ROLE_UI_KEY")
-    hc=$(bkp::tm::_sgr fg "$C_ROLE_UI_HINT")
+    # Footer hints through the canonical formatter (pick::hints + colorize),
+    # so this fallback pane matches the compiled pane / picker footers.
+    # Sourced here, not at the top: the compiled-pane path never needs it.
+    source "${PICK_COMMON_LIB:-$HOME/.local/lib/pick-common.zsh}"
+    local hints_scrub hints_actions
+    hints_scrub="$(pick::colorize_hints "$(pick::hints j/k scrub)")"
+    hints_actions="$(pick::colorize_hints "$(pick::hints a apply q quit)")"
     # No tty on stdin (headless run): read would return instantly on EOF
     # forever — wait on the closed flag instead of busy-polling keys.
     [[ -t 0 ]] || interactive=0
@@ -99,9 +103,7 @@ tm_timeline() {
         frame="$(
           printf ' %s⏱ tm%s %s%s%s\n\n' "$C_BWH" "$C_RES" "$C_DIM" "${anchor/#$HOME/~}" "$C_RES"
           bkp::tm::timeline_render "$s" "$height" "$width" "$focused"
-          printf '\n %sj/k%s%s : scrub%s\n %sa%s%s : apply%s %s·%s %sq%s%s : quit%s' \
-            "$kc" "$C_RES" "$hc" "$C_RES" \
-            "$kc" "$C_RES" "$hc" "$C_RES" "$hc" "$C_RES" "$kc" "$C_RES" "$hc" "$C_RES"
+          printf '\n %s\n %s' "$hints_scrub" "$hints_actions"
         )"
         for line in "${(@f)frame}"; do
           out+="$line"$'\e[K\n'

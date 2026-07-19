@@ -20,7 +20,7 @@
 #   Enter        paste the selected clip's text into the originating pane
 #                (zellij-modal captures pick-clipboard's stdout, so we print the
 #                re-fetched text after pick::start returns the id).
-#   Ctrl-O       keep open (--key-background): re-fetch + insert WITHOUT
+#   Ctrl-O       "sticky" (--key-background): re-fetch + insert WITHOUT
 #                dismissing. The GUI picker uses Ctrl-Enter for this, but fzf
 #                0.73.1's --bind parser has no "ctrl-enter" key name at all
 #                (confirmed: `fzf --bind ctrl-enter:accept` -> "unsupported
@@ -1433,7 +1433,9 @@ if [[ -n "${PICK_CLIPBOARD_NO_RUN:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
-hints="$(pick::hints "󰌑" paste "󰘵 󰌑" markdown "󰘴 O" "keep open" "󰘴 Y" copy "󰘴 D" del "󰘴 P" pin)"
+# The markdown accept's "label" is the 󰽛 markdown glyph (U+F0F5B), not a word —
+# it rides the label slot so it takes the hint/description foreground.
+hints="$(pick::hints "󰌑" paste "󰘵 󰌑" $'\U000F0F5B' "󰘴 O" sticky "󰘴 Y" copy "󰘴 D" remove "󰘴 P" pin)"
 
 pick_args=(
   --header "Clipboard history"

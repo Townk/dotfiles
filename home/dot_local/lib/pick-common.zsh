@@ -59,7 +59,7 @@
 #   pick::line "${host}  ${ip}" "$host" "$ip"
 #
 #   # 4. Configure common UI directly on pick::start.
-#   pick::start --header "Pick a host" --hints "󰌑 : open  ·  󱊷 : cancel"
+#   pick::start --header "Pick a host" --hints "$(pick::hints 󰌑 open 󱊷 cancel)"
 #
 #   # 5. Emit a different column per accept key. Enter uses --output; the
 #   #    mapped keys emit their own spec; unmapped keys are ignored so the
@@ -305,19 +305,22 @@ pick::add_selector_mode_binds() {
 # --- hint assembly + colorizing -----------------------------------
 
 # pick::hints KEY LABEL [KEY LABEL ...] — assemble a keybind-hint line from
-# key/label PAIRS in the canonical "KEY : label" shape, joined by the narrow
+# key/label PAIRS in the canonical "KEY label" shape, joined by the narrow
 # " · " separator. This is THE single place dialog hints are formatted, so every
 # picker (glyph, gitmoji, quick-launch, zj::pick consumers) renders identically:
 # callers pass structured pairs and never hand-roll separators/spacing. A key may
-# be a chord ("󰘴 U", "󰘵 󰌑"); quote it as one arg. pick::colorize_hints then
+# be a chord ("󰘴 U", "󰘵 󰌑"); quote it as one arg. The key/label gap is an NBSP:
+# it displays as a plain space, but stays distinguishable from a chord's inner
+# space so pick::colorize_hints can still find the key/label boundary when it
 # paints the keys (key role) and the labels/separators (hint role) for the footer.
 pick::hints() {
+  local NBSP=$'\u00a0'
   local out="" first=1 key label
   while (( $# >= 2 )); do
     key="$1"; label="$2"; shift 2
     (( first )) || out+=" · "
     first=0
-    out+="${key} : ${label}"
+    out+="${key}${NBSP}${label}"
   done
   print -rn -- "$out"
 }
@@ -329,12 +332,15 @@ pick::_sgr_fg() {
 }
 
 # Colorize a keybind-hint line for pty-frame's footer: the key chord(s) before
-# each ':' in the bright key color, the labels + separators in the hint color.
-# Sets only the foreground, so pty-frame's mantle footer background shows through.
-# Hints follow the `KEY : label  ·  KEY : label` shape pick::start emits.
+# each NBSP key/label gap in the bright key color, the labels + separators in
+# the hint color. Sets only the foreground, so pty-frame's mantle footer
+# background shows through. Hints follow the `KEY label · KEY label` shape
+# pick::hints emits (NBSP gap); a legacy `KEY : label` item from an external
+# --hints string is still recognized via its colon.
 pick::colorize_hints() {
   local s="$1"
   [[ -n "$s" ]] || return 0
+  local NBSP=$'\u00a0'
   local key_sgr lbl_sgr
   key_sgr="$(pick::_sgr_fg "$C_ROLE_UI_KEY")"
   lbl_sgr="$(pick::_sgr_fg "$C_ROLE_UI_HINT")"
@@ -348,7 +354,10 @@ pick::colorize_hints() {
   for item in "${items[@]}"; do
     (( first )) || out+="${lbl_sgr}·"
     first=0
-    if [[ "$item" == *:* ]]; then
+    if [[ "$item" == *${NBSP}* ]]; then
+      k="${item%%${NBSP}*}"; l="${item#*${NBSP}}"
+      out+="${key_sgr}${k}${lbl_sgr}${NBSP}${l}"
+    elif [[ "$item" == *:* ]]; then
       k="${item%%:*}"; l="${item#*:}"
       out+="${key_sgr}${k}${lbl_sgr}:${l}"
     else
