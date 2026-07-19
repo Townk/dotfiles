@@ -336,6 +336,22 @@ function preview-archive() {
   force-tty ouch list -q -y -t "$1" 2>&1 | head -"$max_lines"
 }
 
+function preview-font() {
+  local cache
+  cache=$(raster-cache-path "$1" font) || return 1
+  render-cached "$cache" render-font-sheet "$1" || return 1
+  preview-raster "$cache"
+}
+
+function render-font-sheet() {
+  if command -v fontimage >/dev/null 2>&1; then
+    fontimage --width 1200 --pixelsize 48 --fontname -o "$RASTER_OUT" "$1" && return 0
+  fi
+  command -v magick >/dev/null 2>&1 || return 1
+  magick -size 1200x -background black -fill white -font "$1" -pointsize 48 \
+    label:'AaBbCcDdEe FfGgHhIiJj\n0123456789 !@#$%&*(){}[]' "$RASTER_OUT"
+}
+
 function preview-pdf() {
   command -v chafa >/dev/null 2>&1 || return 1
   command -v pdftocairo >/dev/null 2>&1 || return 1
@@ -490,6 +506,7 @@ function main() {
     *.xml) preview-xml "$target" && return ;;
     *.dmg | *.sparseimage | *.cdr | *.img | *.iso) preview-disk-image "$target" && return ;;
     *.ics) preview-ics "$target" && return ;;
+    *.ttf | *.otf | *.woff | *.woff2 | *.ttc) preview-font "$target" && return ;;
     *.db | *.sqlite | *.sqlite3) preview-sqlite "$target" && return ;;
   esac
 
@@ -508,6 +525,9 @@ function main() {
       ;;
     application/pdf)
       preview-pdf "$target" && return
+      ;;
+    font/* | application/vnd.ms-opentype)
+      preview-font "$target" && return
       ;;
     image/*)
       # Reserve room below for mediainfo, unless we only want the image.

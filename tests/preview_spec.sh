@@ -105,3 +105,28 @@ Describe 'preview: raster cache'
     The output should equal "clean"
   End
 End
+
+Describe 'preview: fonts'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/fcache"
+    rm -rf "$XDG_CACHE_HOME"
+    FONT=$(zsh -c 'print -l /System/Library/Fonts/Supplemental/*.ttf(N) ~/Library/Fonts/*.ttf(N) 2>/dev/null | head -1')
+  }
+  BeforeEach 'setup'
+
+  It 'renders a glyph sheet instead of a hex dump'
+    [ -n "$FONT" ] || skip "no .ttf font found on this machine"
+    When run zsh "$SCRIPT" -W 80 -H 24 "$FONT"
+    The status should be success
+    The output should not equal ""
+    The output should not include "┌────────┬"
+  End
+
+  It 'caches the rendered sheet'
+    [ -n "$FONT" ] || skip "no .ttf font found on this machine"
+    When run zsh -f -c "zsh '$SCRIPT' -W 80 -H 24 '$FONT' >/dev/null; print -l \$XDG_CACHE_HOME/preview/*.png(N) | wc -l | tr -d ' '"
+    The output should equal "1"
+  End
+End
