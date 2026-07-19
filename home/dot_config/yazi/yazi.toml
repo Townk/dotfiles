@@ -39,3 +39,8 @@ prepend_previewers = [
 # .chezmoidata/theme.yaml, shared with bat), so previews follow the active theme
 # instead of a vendored flavor's tmtheme.
 syntect_theme = "~/.config/bat/themes/chezmoi-system.tmTheme"
+# The 600x900 defaults downscale every raster far below what a Retina-sized
+# preview pane can show — previews looked postage-stamp small. 2048² lets
+# ya.image_show fill the pane; it still never upscales past native size.
+max_width = 2048
+max_height = 2048

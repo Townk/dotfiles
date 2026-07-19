@@ -349,7 +349,7 @@ function preview-font() {
   local cache
   # Tag carries a sample-algorithm version: bumping it invalidates sheets
   # rendered by older sample logic (the font file itself rarely changes).
-  cache=$(raster-cache-path "$1" font-grid2) || return 1
+  cache=$(raster-cache-path "$1" font-grid4) || return 1
   render-cached "$cache" render-font-sheet "$1" || return 1
   preview-raster "$cache"
 }
@@ -413,7 +413,7 @@ function font-sample-text() {
 # No font-name header anywhere: renderers can only draw it with the font
 # under preview, which turns into .notdef tofu for symbol/emoji fonts.
 function render-font-sheet() {
-  local -a lines glyphs rows
+  local -a lines glyphs
   lines=("${(@f)$(font-sample-text "$1")}")
   local sep="  "
   if ((${#lines} > 1)); then
@@ -421,10 +421,55 @@ function render-font-sheet() {
     glyphs=("${(@)lines[2,-1]}")
   fi
 
-  # Grid layout: rows of 8 glyphs; glyph gaps use a double space only when
-  # the font maps U+0020 (else the space itself draws as tofu); row gaps
-  # come from hb-view's --line-space.
-  local -a row=()
+  # Preferred: per-glyph hb-view tiles composed with magick montage —
+  # uniform cells and real padding regardless of the font's metrics (a
+  # spacing character can't be used: emoji-only cmaps draw it as tofu),
+  # and HarfBuzz rasterizes color-glyph tables (COLR/SVG/CBDT) that
+  # fontimage renders blank.
+  if command -v hb-view >/dev/null 2>&1 && command -v magick >/dev/null 2>&1 &&
+    ((${#glyphs})); then
+    local tmpd
+    tmpd=$(mktemp -d) || return 1
+    {
+      local g i=0 tile
+      for g in "${glyphs[@]}"; do
+        [[ -n $g ]] || continue
+        tile=$(printf '%s/%02d.png' "$tmpd" "$i")
+        hb-view --font-file="$1" --font-size=96 --margin=4 \
+          --output-file="$tile" "$g" 2>/dev/null || rm -f "$tile"
+        ((i++))
+      done
+      local -a tiles=("$tmpd"/*.png(N))
+      if ((${#tiles} >= 8)); then
+        # Normalize each tile to a uniform padded cell (shrink-only), then
+        # append rows of 6 and stack them. montage(1) would be the obvious
+        # tool but it insists on resolving ImageMagick's annotation font
+        # even for unlabeled grids, which this build doesn't have.
+        local t
+        for t in "${tiles[@]}"; do
+          magick "$t" -resize '128x128>' -background white -gravity center \
+            -extent 176x176 "$t" 2>/dev/null
+        done
+        local -a rowfiles=()
+        local r rowf
+        for ((r = 1; r <= ${#tiles}; r += 6)); do
+          rowf="$tmpd/zrow$r.png"
+          magick "${tiles[@]:$((r - 1)):6}" +append "$rowf" 2>/dev/null || continue
+          rowfiles+=("$rowf")
+        done
+        ((${#rowfiles})) &&
+          magick "${rowfiles[@]}" -background white -append "$RASTER_OUT" \
+            2>/dev/null &&
+          return 0
+      fi
+    } always {
+      rm -rf "$tmpd"
+    }
+  fi
+
+  # Fallbacks: single-pass renderers (glyph gaps only when the cmap has a
+  # real space; row layout only in fontimage's --text lines).
+  local -a row rows
   local g
   for g in "${glyphs[@]}"; do
     [[ -n $g ]] || continue
@@ -436,14 +481,10 @@ function render-font-sheet() {
   done
   ((${#row})) && rows+=("${(pj.$sep.)row}")
 
-  # hb-view first: HarfBuzz rasterizes color-glyph tables (COLR/SVG/CBDT
-  # emoji fonts) that fontimage renders blank, and honors embedded
-  # newlines for the grid.
   if command -v hb-view >/dev/null 2>&1 && ((${#rows})); then
     hb-view --font-file="$1" --font-size=80 --margin=24 --line-space=40 \
       --output-file="$RASTER_OUT" "${(pj:\n:)rows}" 2>/dev/null && return 0
   fi
-
   if command -v fontimage >/dev/null 2>&1; then
     if ((${#rows})); then
       local -a targs=()
@@ -685,7 +726,7 @@ function raster-for() {
         print -rn -- "$cache"
       ;;
     font/* | application/vnd.ms-opentype)
-      cache=$(raster-cache-path "$target" font-grid2) &&
+      cache=$(raster-cache-path "$target" font-grid4) &&
         render-cached "$cache" render-font-sheet "$target" &&
         print -rn -- "$cache"
       ;;
@@ -702,6 +743,11 @@ function main-pixels() {
   local target=${1:-}
   [[ -e $target || -L $target ]] || target=${(Q)target}
   geometry
+  # geometry()'s max_lines is 3x the pane for fzf scroll-through. The yazi
+  # shim can't scroll the text under an image (skip drives pdf pages /
+  # video seek instead), and every emitted line shrinks the image area it
+  # computes — so cap the text block at exactly one pane.
+  max_lines=$h
   prune-raster-cache &!
 
   if [[ ! -e $target && ! -L $target ]]; then
