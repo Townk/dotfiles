@@ -46,4 +46,9 @@ Describe 'preview: geometry + CLI'
     The status should be failure
     The output should equal "0"
   End
+
+  It 'does not loop on a trailing valueless flag'
+    When run zsh "$SCRIPT" -W
+    The status should be success
+  End
 End
