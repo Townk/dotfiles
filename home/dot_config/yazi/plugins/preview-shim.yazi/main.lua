@@ -1,8 +1,13 @@
 --- @since 26.5.6
--- preview.yazi — thin shim over ~/.local/bin/preview (the single preview
--- brain shared with fzf). Asks the script for a raster (--pixels) and
--- paints it with yazi's native image API, with the script's text block
+-- preview-shim.yazi — thin shim over ~/.local/bin/preview (the single
+-- preview brain shared with fzf). Asks the script for a raster (--pixels)
+-- and paints it with yazi's native image API, with the script's text block
 -- below. Registered only for raster mimes; text types go through piper.
+--
+-- Named "preview-shim" deliberately: the name "preview" collides with a
+-- yazi-internal module, which silently shadows a user plugin — peek then
+-- dies with "error converting Lua nil to table" and preload tasks never
+-- complete.
 
 local M = {}
 
@@ -12,7 +17,7 @@ local function fail(job, s)
   ya.preview_widget(job, ui.Text.parse(s):area(job.area):wrap(ui.Wrap.YES))
 end
 
-function M:peek(job)
+local function peek_impl(job)
   local output, err = Command(SCRIPT)
     :arg({
       '--pixels',
@@ -60,6 +65,15 @@ function M:peek(job)
       :area(ui.Rect { x = area.x, y = area.y + image_h, w = area.w, h = area.h - image_h })
       :wrap(ui.Wrap.NO),
   })
+end
+
+-- pcall guard: a Lua error inside peek paints a readable traceback in the
+-- pane instead of yazi's terse "Lua error during peek" toast.
+function M:peek(job)
+  local ok, perr = pcall(peek_impl, job)
+  if not ok then
+    fail(job, 'preview-shim peek error:\n' .. tostring(perr))
+  end
 end
 
 -- Seek pages/frames: bump skip and re-peek (same shape as yazi's built-in

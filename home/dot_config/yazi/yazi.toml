@@ -13,21 +13,21 @@ prepend_fetchers = [
 
 prepend_preloaders = [
   # Warm the preview script's raster cache (frames, pages, sheets, covers).
-  { mime = "{image,video,audio}/*", run = "preview" },
-  { mime = "application/pdf", run = "preview" },
-  { mime = "font/*", run = "preview" },
-  { mime = "application/vnd.ms-opentype", run = "preview" },
-  { mime = "{image/vnd.adobe.photoshop,application/postscript}", run = "preview" },
+  { mime = "{image,video,audio}/*", run = "preview-shim" },
+  { mime = "application/pdf", run = "preview-shim" },
+  { mime = "font/*", run = "preview-shim" },
+  { mime = "application/vnd.ms-opentype", run = "preview-shim" },
+  { mime = "{image/vnd.adobe.photoshop,application/postscript}", run = "preview-shim" },
 ]
 
 prepend_previewers = [
   # Raster types → preview.yazi shim (script logic, native image painting).
-  { mime = "{image,video,audio}/*", run = "preview" },
-  { mime = "application/pdf", run = "preview" },
-  { mime = "font/*", run = "preview" },
-  { mime = "application/vnd.ms-opentype", run = "preview" },
-  { mime = "{image/vnd.adobe.photoshop,application/postscript}", run = "preview" },
-  { url = "*.{ttf,otf,woff,woff2,ttc,psd,ai,eps}", run = "preview" },
+  { mime = "{image,video,audio}/*", run = "preview-shim" },
+  { mime = "application/pdf", run = "preview-shim" },
+  { mime = "font/*", run = "preview-shim" },
+  { mime = "application/vnd.ms-opentype", run = "preview-shim" },
+  { mime = "{image/vnd.adobe.photoshop,application/postscript}", run = "preview-shim" },
+  { url = "*.{ttf,otf,woff,woff2,ttc,psd,ai,eps}", run = "preview-shim" },
   # Everything else (files only; the built-in folder previewer keeps
   # directories) → the same script's text pipeline through piper, which
   # provides line-based scroll via skip.
