@@ -352,6 +352,37 @@ function render-font-sheet() {
     label:'AaBbCcDdEe FfGgHhIiJj\n0123456789 !@#$%&*(){}[]' "$RASTER_OUT"
 }
 
+# Seek percent from --skip: 0 → ffmpegthumbnailer's 10% default, else 5%
+# per unit clamped to 95% (matches the granularity yazi's mediainfo plugin
+# used, so seek keys page through the file in sensible steps).
+function video-seek-pct() {
+  local skip="${OPT_SKIP:-0}"
+  if ((skip <= 0)); then
+    print -n 10
+  elif ((skip * 5 > 95)); then
+    print -n 95
+  else
+    print -n $((skip * 5))
+  fi
+}
+
+function preview-video() {
+  command -v ffmpegthumbnailer >/dev/null 2>&1 || return 1
+  local pct cache
+  pct=$(video-seek-pct)
+  cache=$(raster-cache-path "$1" video "$pct") || return 1
+  render-cached "$cache" render-video-frame "$1" "$pct" || return 1
+  # Reserve room below for mediainfo, unless we only want the image.
+  [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && h=$(((h * 6) / 10))
+  preview-raster "$cache"
+  [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && preview-mediainfo "$1"
+  return 0
+}
+
+function render-video-frame() {
+  ffmpegthumbnailer -i "$1" -o "$RASTER_OUT" -s 0 -t "$2%" -q 8
+}
+
 function preview-pdf() {
   command -v chafa >/dev/null 2>&1 || return 1
   command -v pdftocairo >/dev/null 2>&1 || return 1
@@ -534,7 +565,11 @@ function main() {
       [[ -n ${PREVIEW_IMAGE_ONLY:-} ]] || h=$(((h * 6) / 10))
       preview-image "$target" && return
       ;;
-    audio/* | video/* | application/subrip | application/postscript)
+    video/*)
+      preview-video "$target" && return
+      preview-mediainfo "$target" && return
+      ;;
+    audio/* | application/subrip)
       preview-mediainfo "$target" && return
       ;;
   esac

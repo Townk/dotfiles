@@ -130,3 +130,29 @@ Describe 'preview: fonts'
     The output should equal "1"
   End
 End
+
+Describe 'preview: video'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/vcache"
+    rm -rf "$XDG_CACHE_HOME"
+    VID="$SHELLSPEC_TMPBASE/clip.mp4"
+    [ -f "$VID" ] || ffmpeg -v error -f lavfi -i testsrc=duration=1:size=128x96:rate=10 \
+      -pix_fmt yuv420p "$VID"
+  }
+  BeforeEach 'setup'
+
+  It 'shows a frame thumbnail plus mediainfo metadata'
+    When run zsh -f "$SCRIPT" -W 80 -H 24 "$VID"
+    The status should be success
+    The output should include "Video"
+  End
+
+  It 'caches the extracted frame, distinct per seek position'
+    When run zsh -f -c "zsh -f '$SCRIPT' -W 80 -H 24 '$VID' >/dev/null
+      zsh -f '$SCRIPT' -W 80 -H 24 --skip 4 '$VID' >/dev/null
+      files=(\$XDG_CACHE_HOME/preview/*.png(N)); print \${#files}"
+    The output should equal "2"
+  End
+End
