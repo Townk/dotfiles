@@ -327,3 +327,32 @@ Describe 'preview: raw-path handling'
     The output should include "raw path body"
   End
 End
+
+Describe 'preview: svg + font sample (Mode B fixes)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/mcache"
+    rm -rf "$XDG_CACHE_HOME"
+    export BAT_CACHE_PATH="$HOME/.cache/bat"
+    SVG="$SHELLSPEC_TMPBASE/box.svg"
+    [ -f "$SVG" ] || printf '%s' '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="teal"/></svg>' >"$SVG"
+    FONT=$(zsh -c 'print -l /System/Library/Fonts/Supplemental/*.ttf(N) ~/Library/Fonts/*.ttf(N) 2>/dev/null | head -1')
+  }
+  BeforeEach 'setup'
+
+  It 'converts svg to a cached raster for --pixels (rsvg-convert path)'
+    command -v rsvg-convert >/dev/null || skip "rsvg-convert not installed"
+    When run zsh -f -c "line=\$(zsh -f '$SCRIPT' --pixels '$SVG' | head -1)
+      [[ \$line == \$XDG_CACHE_HOME/preview/*.png && -s \$line ]] && print ok"
+    The output should equal "ok"
+  End
+
+  It 'builds the font sample from the font cmap'
+    [ -n "$FONT" ] || skip "no .ttf font found on this machine"
+    command -v fc-query >/dev/null || skip "fc-query not installed"
+    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
+      s=\$(font-sample-text '$FONT') && [[ -n \$s ]] && print sampled"
+    The output should equal "sampled"
+  End
+End
