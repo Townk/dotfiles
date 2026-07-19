@@ -349,28 +349,32 @@ function preview-font() {
   local cache
   # Tag carries a sample-algorithm version: bumping it invalidates sheets
   # rendered by older sample logic (the font file itself rarely changes).
-  cache=$(raster-cache-path "$1" font-grid4) || return 1
+  cache=$(raster-cache-path "$1" font-grid5) || return 1
   render-cached "$cache" render-font-sheet "$1" || return 1
   preview-raster "$cache"
 }
 
-# Sample text drawn from the font's own cmap (fc-query charset), spread
-# evenly across its coverage — so symbol/icon fonts (e.g. Nerd Fonts
-# symbols-only builds) show real glyphs instead of .notdef tofu, while
-# text fonts still lead with their alphabet. Empty output → caller falls
-# back to fontimage's built-in Latin sample.
+# Sample glyphs for a font sheet, derived from the font's cmap (fc-query
+# charset). Text fonts — those covering most of basic Latin — get the
+# classic alphabet/digits/punctuation sample a human expects; symbol and
+# emoji fonts (no Latin coverage) get 36 glyphs spread evenly across
+# their cmap so they show real glyphs instead of .notdef tofu. Empty
+# output → caller falls back to fontimage's built-in Latin sample.
 #
 # Output: line 1 is "space"/"nospace" — whether the cmap covers U+0020
 # (fonts without it, e.g. emoji-only builds, render every space separator
-# as .notdef tofu, so the renderer must not join glyphs with spaces) —
-# followed by one glyph per line.
+# as .notdef tofu, so fallback renderers must not join glyphs with
+# spaces) — followed by one glyph per line.
 function font-sample-text() {
   command -v fc-query >/dev/null 2>&1 || return 1
   local -a ranges bounds
   ranges=($(fc-query --format '%{charset}' "$1" 2>/dev/null))
   ((${#ranges})) || return 1
 
-  local lo hi total=0 has_space=0
+  # NB: every local is declared once up here — `local x` on an
+  # already-local parameter makes zsh PRINT `x=value`, which would leak
+  # straight into this function's stdout contract.
+  local lo hi olo ohi s e total=0 has_space=0 letters=0
   for range in "${ranges[@]}"; do
     if [[ $range == *-* ]]; then
       lo=$((16#${range%-*})); hi=$((16#${range#*-}))
@@ -378,6 +382,12 @@ function font-sample-text() {
       lo=$((16#$range)); hi=$lo
     fi
     ((lo <= 0x20 && hi >= 0x20)) && has_space=1
+    # Basic-Latin letter coverage — the text-vs-symbol-font signal.
+    for s e in 0x41 0x5a 0x61 0x7a; do
+      ((olo = lo > s ? lo : s))
+      ((ohi = hi < e ? hi : e))
+      ((ohi >= olo)) && ((letters += ohi - olo + 1))
+    done
     ((hi < 0x21)) && continue                      # controls/space
     ((lo < 0x21)) && lo=0x21
     ((lo >= 0xd800 && hi <= 0xdfff)) && continue   # surrogates
@@ -388,23 +398,29 @@ function font-sample-text() {
   done
   ((total)) || return 1
 
-  local want=36 stride=$((total / 36)) idx=0 n=0 cp
   local -a out=()
-  ((stride < 1)) && stride=1
-  for b in "${bounds[@]}"; do
-    lo=${b%% *}; hi=${b##* }
-    for ((cp = lo; cp <= hi; cp++)); do
-      if ((idx % stride == 0 && n < want)); then
-        if ((cp < 0x7f || cp > 0xa0)); then        # skip DEL..NBSP block
-          out+=("${(#)cp}")
-          ((n++))
+  if ((letters >= 40)); then
+    # Text font: the sample a human expects from a type specimen.
+    out=(A B C D E F G H a b c d e f g h 0 1 2 3 4 5 6 7 8 9
+      '!' '@' '#' '$' '%' '&' '?' '*' '(' ')')
+  else
+    local want=36 stride=$((total / 36)) idx=0 n=0 cp
+    ((stride < 1)) && stride=1
+    for b in "${bounds[@]}"; do
+      lo=${b%% *}; hi=${b##* }
+      for ((cp = lo; cp <= hi; cp++)); do
+        if ((idx % stride == 0 && n < want)); then
+          if ((cp < 0x7f || cp > 0xa0)); then      # skip DEL..NBSP block
+            out+=("${(#)cp}")
+            ((n++))
+          fi
         fi
-      fi
-      ((idx++))
+        ((idx++))
+        ((n >= want)) && break
+      done
       ((n >= want)) && break
     done
-    ((n >= want)) && break
-  done
+  fi
   ((${#out})) || return 1
   ((has_space)) && print space || print nospace
   print -rl -- "${out[@]}"
@@ -726,7 +742,7 @@ function raster-for() {
         print -rn -- "$cache"
       ;;
     font/* | application/vnd.ms-opentype)
-      cache=$(raster-cache-path "$target" font-grid4) &&
+      cache=$(raster-cache-path "$target" font-grid5) &&
         render-cached "$cache" render-font-sheet "$target" &&
         print -rn -- "$cache"
       ;;
