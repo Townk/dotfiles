@@ -50,5 +50,8 @@ Describe 'preview: geometry + CLI'
   It 'does not loop on a trailing valueless flag'
     When run zsh "$SCRIPT" -W
     The status should be success
+    # The banner is figlet art, so no literal text to match — the flag
+    # consuming cleanly and the banner rendering at all is the assertion.
+    The output should not equal ""
   End
 End
