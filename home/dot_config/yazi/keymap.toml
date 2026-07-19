@@ -5,7 +5,7 @@ prepend_keymap = [
   { on = "Q",     run = "quit",               desc = "Quit the process" },
 
   { on = "<Enter>", run = "plugin nice-sidebar enter", desc = "Sidebar: confirm selection; else open / smart-enter" },
-  { on = "<C-Space>", run = 'shell -- qlmanage -p "$@"', desc = "Preview file with Quick Look" },
+  { on = "<C-Space>", run = 'shell -- "$HOME/.local/libexec/yazi-quick-look" "$@"', desc = "Quick Look (floating preview pane over SSH)" },
   { on = "<C-d>", run = "seek 5" },
   { on = "<C-u>", run = "seek -5" },
   { on = "<C-f>", run = "seek 10" },

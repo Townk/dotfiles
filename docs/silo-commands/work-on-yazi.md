@@ -32,7 +32,8 @@ You are working on the **Yazi** silo of this chezmoi dotfiles repo.
 - **`$NVIM` detection** — auto-toggles min-preview when nested under nvim
   (cooperates with **neovim**). Preserve this signal.
 - **keymap contract** — `K`/`J` parent-arrow, `H`/`L` bypass, color-tag keys
-  (r/o/y/g/b/p), `qlmanage -p` on Ctrl+Space.
+  (r/o/y/g/b/p), `yazi-quick-look` on Ctrl+Space (LaunchServices Quick Look
+  locally; floating zellij `preview` pane over SSH / non-macOS).
 
 ## What you consume read-only
 

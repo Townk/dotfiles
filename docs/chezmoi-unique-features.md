@@ -102,7 +102,7 @@ The central theme: Zellij as the multiplexer, hosted by WezTerm or Ghostty, with
 ## K. Yazi custom plugins
 73. **folder-rules auto-sort by cwd** — `yazi/plugins/folder-rules.yazi/main.lua`. On `cd`: Downloads→mtime reverse (dirs not first), else alphabetical (dirs first). Small.
 74. **parent-arrow parent-dir navigation** — `yazi/plugins/parent-arrow.yazi/main.lua` + keymap K/J. Moves parent-listing cursor and `cd`s into the target if it's a dir. Small.
-75. **macOS tag integration + smart-tab/switch** — `yazi/init.lua` + `keymap.toml`. `mactag` color keybindings (r/o/y/g/b/p) Catppuccin-matched; `smart-switch`/`smart-tab-switch` create-or-switch; `bypass` smart-enter/reverse; `confirm-quit`; `qlmanage -p` Quick Look on Ctrl+Space. Substantial.
+75. **macOS tag integration + smart-tab/switch** — `yazi/init.lua` + `keymap.toml`. `mactag` color keybindings (r/o/y/g/b/p) Catppuccin-matched; `smart-switch`/`smart-tab-switch` create-or-switch; `bypass` smart-enter/reverse; `confirm-quit`; `yazi-quick-look` Quick Look on Ctrl+Space (LaunchServices locally, floating zellij `preview` pane over SSH). Substantial.
 
 ## L. Notable chezmoiscript hooks (one-off clever mechanisms)
 76. **GPG-key-from-1Password import** — `run_after_25-setup-gpg-key.sh.tmpl`. Keys live as 1Password **Private** vault docs; a service account can NEVER read Private and the desktop app can't authorize over non-interactive SSH, so it `env -u OP_SERVICE_ACCOUNT_TOKEN` forces account mode. Three-way: present→no-op; missing+no-tty→**defer** (warn, exit 0, retry next interactive apply — deliberately `run_after` not `run_once`); missing+interactive→read+import. Completion marker keyed on `expected_key_spec` + keyring stat hash. Substantial.

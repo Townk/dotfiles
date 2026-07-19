@@ -362,7 +362,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **Previewer wiring** in `yazi.toml`/`init.lua` — prepend_previewers route to `ouch`/`mediainfo`/`rich`/the preview libexec viewers. The `preview` script (preview) is the backend.
 - **`cd` event plugins** (`folder-rules`) — Downloads→mtime reverse, else alphabetical dirs-first.
 - **`$NVIM` detection** — auto-toggles min-preview when nested under nvim (cooperates with neovim).
-- **keymap contract** — `K`/`J` parent-arrow, `H`/`L` bypass, color-tag keys, `qlmanage -p` on Ctrl+Space.
+- **keymap contract** — `K`/`J` parent-arrow, `H`/`L` bypass, color-tag keys, `yazi-quick-look` on Ctrl+Space (Quick Look locally, floating zellij `preview` pane over SSH).
 
 **Consumes from:** preview (preview + viewers), terminal-mux (zellij-open), neovim (`$NVIM`), external Yazi plugins.
 

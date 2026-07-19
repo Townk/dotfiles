@@ -21,6 +21,11 @@ absolute path from its caller, so it never needs to be on `PATH`:
 - `ics-view`, `sqlite-view`, `disk-image-view` — rich file preview renderers
   driven by `preview` and Yazi; they are implementation details, not general
   shell commands.
+- `yazi-quick-look` — Yazi's Ctrl+Space dispatcher: Quick Look via
+  LaunchServices on a local macOS session (`open -n qlmanage.app --args -p`
+  — direct `qlmanage -p` from a yazi task opens behind every window and
+  crashes on video under macOS 26.5), or a floating Zellij pane running
+  `preview` (`zellij-preview-file`) over SSH / non-macOS.
 - `ssh-prepare-connection` — the single entry point for pre-connect remote prep
   (gpg-agent socketdir, glyph-picker DB, WezTerm tint override) plus self-healing
   of token-less endpoints (e.g. the gpg agent-socket path). Takes the loose

@@ -1,0 +1,28 @@
+#!/usr/bin/env zsh
+#
+# zellij-preview-file — show any file's full `preview` render in a floating
+# Zellij pane, then wait for a single keypress before exiting (the pane is
+# launched with --close-on-exit, so quitting closes it).
+#
+# The Quick Look stand-in where the real panel can't reach the screen (SSH,
+# non-macOS): yazi's Ctrl+Space lands here via yazi-quick-look. Sibling of
+# zellij-preview-image, minus PREVIEW_IMAGE_ONLY — a Quick Look-style pane
+# wants the whole render (raster plus metadata block), not just the image.
+
+emulate -L zsh
+set -u
+
+# NB: don't name this `path` — in zsh that's the array tied to $PATH.
+target="${1:-}"
+[[ -n "$target" && -e "$target" ]] || exit 0
+
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# Render at the floating pane's full size.
+export FZF_PREVIEW_COLUMNS="$(tput cols 2>/dev/null || echo 80)"
+export FZF_PREVIEW_LINES="$(tput lines 2>/dev/null || echo 40)"
+
+preview "$target"
+
+print -n -- $'\n\e[2mpress any key to close\e[0m'
+read -k1 -s
