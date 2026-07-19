@@ -593,7 +593,11 @@ function raster-for() {
 # --pixels entry point: line 1 = raster path (empty when the type has no
 # raster), remainder = the text block. Consumed by the preview.yazi shim.
 function main-pixels() {
-  local target=${(Q)${1:-}}
+  # Same raw-path-first unquoting rule as main() — the yazi shim always
+  # passes raw paths, so only fall back to `${(Q)}` when the raw form
+  # doesn't exist (fzf-quoted display strings).
+  local target=${1:-}
+  [[ -e $target || -L $target ]] || target=${(Q)target}
   geometry
   prune-raster-cache &!
 
@@ -631,7 +635,11 @@ function main() {
   # $1 inherits those backslashes verbatim. `${(Q)var}` strips one level of
   # shell quoting — converting `2\ color\ sign\ .2mm.3mf` back to
   # `2 color sign .2mm.3mf` — so the subsequent stat checks find the file.
-  local target=${(Q)${1:-}}
+  # Yazi/piper hand over RAW paths, though — a real file whose name contains
+  # a backslash or quote must not be unquoted, so prefer the path as-given
+  # whenever it exists.
+  local target=${1:-}
+  [[ -e $target || -L $target ]] || target=${(Q)target}
 
   geometry
   prune-raster-cache &!

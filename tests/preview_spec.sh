@@ -309,3 +309,21 @@ Describe 'preview: --pixels machine interface'
     The stderr should include "Usage"
   End
 End
+
+Describe 'preview: raw-path handling'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/qcache"
+    export BAT_CACHE_PATH="$HOME/.cache/bat"
+    RAW="$SHELLSPEC_TMPBASE/back\\slash.txt"
+    print "raw path body" >"$RAW"
+  }
+  BeforeEach 'setup'
+
+  It 'prefers an existing raw path over fzf unquoting (yazi hands raw paths)'
+    When run zsh -f "$SCRIPT" -W 60 -H 20 "$RAW"
+    The status should be success
+    The output should include "raw path body"
+  End
+End
