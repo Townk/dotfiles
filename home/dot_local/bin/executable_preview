@@ -349,7 +349,7 @@ function preview-font() {
   local cache
   # Tag carries a sample-algorithm version: bumping it invalidates sheets
   # rendered by older sample logic (the font file itself rarely changes).
-  cache=$(raster-cache-path "$1" font-cmap) || return 1
+  cache=$(raster-cache-path "$1" font-grid) || return 1
   render-cached "$cache" render-font-sheet "$1" || return 1
   preview-raster "$cache"
 }
@@ -400,15 +400,43 @@ function font-sample-text() {
   print -rn -- "$sample"
 }
 
+# No font-name header anywhere: renderers can only draw it with the font
+# under preview, which turns into .notdef tofu for symbol/emoji fonts.
 function render-font-sheet() {
   local sample
   sample=$(font-sample-text "$1") || sample=""
+
+  # Grid layout: rows of 9 glyphs, double-spaced, blank line between rows.
+  local -a glyphs rows
+  glyphs=(${(s: :)sample})
+  local -a row=()
+  local g
+  for g in "${glyphs[@]}"; do
+    [[ -n $g ]] || continue
+    row+=("$g")
+    if ((${#row} == 9)); then
+      rows+=("${(j:  :)row}")
+      row=()
+    fi
+  done
+  ((${#row})) && rows+=("${(j:  :)row}")
+
+  # hb-view first: HarfBuzz rasterizes color-glyph tables (COLR/SVG/CBDT
+  # emoji fonts) that fontimage renders blank, and honors embedded
+  # newlines for the grid.
+  if command -v hb-view >/dev/null 2>&1 && ((${#rows})); then
+    hb-view --font-file="$1" --font-size=48 --margin=16 \
+      --output-file="$RASTER_OUT" "${(pj:\n\n:)rows}" 2>/dev/null && return 0
+  fi
+
   if command -v fontimage >/dev/null 2>&1; then
-    if [[ -n $sample ]]; then
-      fontimage --width 1200 --pixelsize 48 --fontname --text "$sample" \
+    if ((${#rows})); then
+      local -a targs=()
+      for g in "${rows[@]}"; do targs+=(--text "$g"); done
+      fontimage --width 1200 --pixelsize 48 "${targs[@]}" \
         -o "$RASTER_OUT" "$1" 2>/dev/null && return 0
     fi
-    fontimage --width 1200 --pixelsize 48 --fontname -o "$RASTER_OUT" "$1" \
+    fontimage --width 1200 --pixelsize 48 -o "$RASTER_OUT" "$1" \
       2>/dev/null && return 0
   fi
   command -v magick >/dev/null 2>&1 || return 1
@@ -641,7 +669,7 @@ function raster-for() {
         print -rn -- "$cache"
       ;;
     font/* | application/vnd.ms-opentype)
-      cache=$(raster-cache-path "$target" font-cmap) &&
+      cache=$(raster-cache-path "$target" font-grid) &&
         render-cached "$cache" render-font-sheet "$target" &&
         print -rn -- "$cache"
       ;;
