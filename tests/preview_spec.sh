@@ -356,3 +356,35 @@ Describe 'preview: svg + font sample (Mode B fixes)'
     The output should equal "sampled"
   End
 End
+
+Describe 'preview: office + iwork'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/ocache"
+    rm -rf "$XDG_CACHE_HOME"
+    export BAT_CACHE_PATH="$HOME/.cache/bat"
+    DOCX="$SHELLSPEC_TMPBASE/qa.docx"
+    [ -f "$DOCX" ] || printf '# Office QA\n\nhello\n' | pandoc -f markdown -o "$DOCX"
+    NUMBERS="$SHELLSPEC_TMPBASE/qa.numbers"
+    if [ ! -f "$NUMBERS" ]; then
+      magick -size 120x90 xc:orchid "$SHELLSPEC_TMPBASE/preview.jpg"
+      (cd "$SHELLSPEC_TMPBASE" && zip -q qa.numbers preview.jpg)
+    fi
+  }
+  BeforeEach 'setup'
+
+  It 'renders a docx first page via Quick Look into the cache'
+    command -v qlmanage >/dev/null || skip "qlmanage not available (macOS only)"
+    command -v pandoc >/dev/null || skip "pandoc not installed"
+    When run zsh -f -c "line=\$(zsh -f '$SCRIPT' --pixels '$DOCX' | head -1)
+      [[ \$line == \$XDG_CACHE_HOME/preview/*.png && -s \$line ]] && print ok"
+    The output should equal "ok"
+  End
+
+  It 'extracts the embedded iWork preview.jpg as the raster'
+    When run zsh -f -c "line=\$(zsh -f '$SCRIPT' --pixels '$NUMBERS' | head -1)
+      [[ \$line == \$XDG_CACHE_HOME/preview/*.png && -s \$line ]] && print ok"
+    The output should equal "ok"
+  End
+End

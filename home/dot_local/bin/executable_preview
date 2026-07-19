@@ -522,6 +522,57 @@ function render-font-sheet() {
     label:"${flat:-AaBbCcDdEe FfGgHhIiJj 0123456789}" "$RASTER_OUT"
 }
 
+# Shared raster-above-metadata shape: cached render on top (60/40 split
+# unless PREVIEW_IMAGE_ONLY), mediainfo below.
+#
+# Args: $1 path, $2 cache tag, $3 render fn (receives path, writes $RASTER_OUT)
+function preview-raster-with-meta() {
+  local target="$1" tag="$2" render="$3" cache
+  cache=$(raster-cache-path "$target" "$tag") || return 1
+  render-cached "$cache" "$render" "$target" || return 1
+  [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && h=$(((h * 6) / 10))
+  preview-raster "$cache"
+  [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && preview-mediainfo "$target"
+  return 0
+}
+
+# MS Office (and OpenDocument): Quick Look's generator renders the first
+# page — no extra dependencies. Page-accurate multi-page scrubbing would
+# need LibreOffice (`soffice --convert-to pdf`), deliberately not required.
+function preview-office() {
+  preview-raster-with-meta "$1" office render-office
+}
+
+function render-office() {
+  command -v qlmanage >/dev/null 2>&1 || return 1
+  local tmpd
+  tmpd=$(mktemp -d) || return 1
+  {
+    qlmanage -t -s 1600 -o "$tmpd" "$1" >/dev/null 2>&1
+    local -a made=("$tmpd"/*.png(N))
+    ((${#made})) || return 1
+    mv -f "${made[1]}" "$RASTER_OUT"
+  } always {
+    rm -rf "$tmpd"
+  }
+}
+
+# Apple iWork (.pages/.numbers/.key): the bundle is a zip that embeds a
+# full-size preview.jpg — extract and normalize it; Quick Look covers
+# bundles saved without a preview.
+function preview-iwork() {
+  preview-raster-with-meta "$1" iwork render-iwork
+}
+
+function render-iwork() {
+  if command -v magick >/dev/null 2>&1; then
+    unzip -p "$1" preview.jpg 2>/dev/null | magick - "$RASTER_OUT" 2>/dev/null
+    [[ -s $RASTER_OUT ]] && return 0
+    rm -f "$RASTER_OUT"
+  fi
+  render-office "$1"
+}
+
 # Seek percent from --skip: 0 → ffmpegthumbnailer's 10% default, else 5%
 # per unit clamped to 95% (matches the granularity yazi's mediainfo plugin
 # used, so seek keys page through the file in sensible steps).
@@ -763,6 +814,19 @@ function raster-for() {
         render-cached "$cache" render-font-sheet "$target" &&
         print -rn -- "$cache"
       ;;
+    application/vnd.openxmlformats-officedocument.* | application/msword | \
+      application/vnd.ms-excel | application/vnd.ms-powerpoint | \
+      application/vnd.oasis.opendocument.*)
+      cache=$(raster-cache-path "$target" office) &&
+        render-cached "$cache" render-office "$target" &&
+        print -rn -- "$cache"
+      ;;
+    application/vnd.apple.pages | application/vnd.apple.numbers | \
+      application/vnd.apple.keynote)
+      cache=$(raster-cache-path "$target" iwork) &&
+        render-cached "$cache" render-iwork "$target" &&
+        print -rn -- "$cache"
+      ;;
   esac
   return 0
 }
@@ -795,6 +859,11 @@ function main-pixels() {
   case "${target:l}" in
     *.ttf | *.otf | *.woff | *.woff2 | *.ttc) mime="font/generic" ;;
     *.psd | *.ai | *.eps) mime="image/vnd.adobe.photoshop" ;;
+    *.docx | *.xlsx | *.pptx | *.doc | *.xls | *.ppt | *.odt | *.ods | *.odp)
+      mime="application/msword" ;;
+    *.pages) mime="application/vnd.apple.pages" ;;
+    *.numbers) mime="application/vnd.apple.numbers" ;;
+    *.key) mime="application/vnd.apple.keynote" ;;
   esac
 
   raster-for "$target" "$mime"
@@ -802,7 +871,11 @@ function main-pixels() {
 
   case "$mime" in
     image/* | video/* | audio/* | application/pdf | \
-      font/* | application/vnd.ms-opentype | application/postscript)
+      font/* | application/vnd.ms-opentype | application/postscript | \
+      application/msword | application/vnd.apple.* | \
+      application/vnd.openxmlformats-officedocument.* | \
+      application/vnd.ms-excel | application/vnd.ms-powerpoint | \
+      application/vnd.oasis.opendocument.*)
       preview-mediainfo "$target"
       ;;
     *)
@@ -873,6 +946,10 @@ function main() {
     *.ics) preview-ics "$target" && return ;;
     *.ttf | *.otf | *.woff | *.woff2 | *.ttc) preview-font "$target" && return ;;
     *.psd | *.ai | *.eps) preview-adobe "$target" && return ;;
+    *.docx | *.xlsx | *.pptx | *.doc | *.xls | *.ppt | *.odt | *.ods | *.odp)
+      preview-office "$target" && return
+      ;;
+    *.pages | *.numbers | *.key) preview-iwork "$target" && return ;;
     *.db | *.sqlite | *.sqlite3) preview-sqlite "$target" && return ;;
   esac
 
@@ -899,6 +976,16 @@ function main() {
     image/vnd.adobe.photoshop | application/postscript)
       preview-adobe "$target" && return
       preview-mediainfo "$target" && return
+      ;;
+    application/vnd.openxmlformats-officedocument.* | application/msword | \
+      application/vnd.ms-excel | application/vnd.ms-powerpoint | \
+      application/vnd.oasis.opendocument.*)
+      preview-office "$target" && return
+      preview-mediainfo "$target" && return
+      ;;
+    application/vnd.apple.pages | application/vnd.apple.numbers | \
+      application/vnd.apple.keynote)
+      preview-iwork "$target" && return
       ;;
     image/*)
       # Reserve room below for mediainfo, unless we only want the image.
