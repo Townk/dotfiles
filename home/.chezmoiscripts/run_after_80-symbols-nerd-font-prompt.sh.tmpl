@@ -73,6 +73,19 @@ mark_runtime_change() {
   fi
 }
 
+# Re-snapshot a runtime signature after a successful build, so the next
+# apply's detect_runtime_triggers compares against post-build reality. The
+# font build replaces the installed TTFs, which shifts the wezterm probe
+# signature (it hashes resolved font file size+mtime); without this refresh
+# the next apply raises a false DB re-probe prompt for a state the DB
+# already reflects.
+refresh_dynamic_state() {
+  state="$1"
+  sig="$2"
+  [ -n "$sig" ] || return 0
+  printf '%s\n' "$sig" > "$state"
+}
+
 detect_runtime_triggers() {
   mkdir -p "$STATE_DIR"
 
@@ -178,6 +191,8 @@ EOF
             # re-probed against the current fallback, so any pending DB-only
             # marker is now satisfied.
             rm -f "$DB_MARKER"
+            refresh_dynamic_state "$FONT_DYNAMIC_STATE" "$FA_VERSION"
+            refresh_dynamic_state "$DB_DYNAMIC_STATE" "$(current_wezterm_signature)"
           else
             echo "[symbols-db] rebuild failed after font build; keeping DB marker." >&2
           fi
@@ -227,6 +242,7 @@ EOF
     y|Y|yes|YES)
       if run_db_build; then
         rm -f "$DB_MARKER"
+        refresh_dynamic_state "$DB_DYNAMIC_STATE" "$(current_wezterm_signature)"
         echo "[symbols-db] done."
       else
         echo "[symbols-db] rebuild failed; keeping DB marker for the next interactive apply." >&2
