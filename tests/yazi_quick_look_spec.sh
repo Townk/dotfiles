@@ -26,30 +26,58 @@ Describe 'yazi-quick-look: dispatch'
   }
   BeforeEach 'setup'
 
-  It 'local macOS session: replaces any open panel, then Quick Looks via LaunchServices'
+  It 'local macOS session: replaces any open panel, then Quick Looks the TMPDIR-staged hardlink'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
     When run zsh -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-      export STUB_PGREP_RC=0
+      export STUB_PGREP_RC=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
       main '$TARGET'"
     The status should be success
     The line 1 should equal "pkill -f qlmanage -p "
-    The line 2 should equal "open -n /System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app --args -p $TARGET"
+    The line 2 should equal "open -n /System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app --args -p $SHELLSPEC_TMPBASE/stage-root/yazi-quick-look/ql-target.txt"
     The output should not include "zellij"
   End
 
-  It 'local macOS session: passes every selected file to qlmanage'
+  It 'local macOS session: stages every selected file, deduping basename collisions'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
     When run zsh -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-      export STUB_PGREP_RC=0
+      export STUB_PGREP_RC=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
       main '$TARGET' '$TARGET'"
     The status should be success
-    The line 2 should equal "open -n /System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app --args -p $TARGET $TARGET"
+    The line 2 should equal "open -n /System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app --args -p $SHELLSPEC_TMPBASE/stage-root/yazi-quick-look/ql-target.txt $SHELLSPEC_TMPBASE/stage-root/yazi-quick-look/2-ql-target.txt"
+  End
+
+  It 'staged hardlink shares the source inode (no data copy)'
+    [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
+    When run zsh -c "
+      unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+      export STUB_PGREP_RC=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
+      YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
+      PATH='$STUBS':\$PATH
+      main '$TARGET' >/dev/null
+      zmodload zsh/stat
+      zstat -A a +inode '$TARGET'
+      zstat -A b +inode \"\$TMPDIR/yazi-quick-look/ql-target.txt\"
+      [[ \$a == \$b ]] && print same-inode"
+    The status should be success
+    The output should equal "same-inode"
+  End
+
+  It 'non-regular targets (directories) pass through unstaged'
+    [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
+    When run zsh -c "
+      unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+      export STUB_PGREP_RC=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
+      YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
+      PATH='$STUBS':\$PATH
+      main '$SHELLSPEC_TMPBASE'"
+    The status should be success
+    The line 2 should equal "open -n /System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app --args -p $SHELLSPEC_TMPBASE"
   End
 
   It 'local macOS session: falls back to the floating pane when qlmanage crashes'

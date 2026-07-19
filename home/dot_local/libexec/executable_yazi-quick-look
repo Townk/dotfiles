@@ -12,11 +12,15 @@
 # as its own app via LaunchServices both problems vanish, and `open`
 # returns at once so no yazi task lingers while the panel is up.
 #
-# Even open-launched, macOS 26.5's qlmanage still abort-crashes on some
-# file *content* (QLTryCatchAndCrash on generator NSExceptions — seen with
-# a plain 856x448 screenshot PNG that previews fine everywhere else). The
-# generators can't be enumerated, so a watchdog re-checks shortly after
-# launch and falls through to the floating pane when the panel died.
+# The LaunchServices launch severs TCC inheritance though: qlmanage owns
+# no file-access grants of its own, so in TCC-protected folders
+# (~/Downloads, ~/Documents, ...) it can't read the file — panels render
+# as bare metadata cards, and the image generators (jpeg, png) abort
+# outright (QLTryCatchAndCrash). Staging each file into unprotected
+# $TMPDIR by hardlink (same inode — free on the same APFS volume; cp as
+# the cross-volume fallback) restores real renders everywhere. A watchdog
+# still re-checks shortly after launch and falls through to the floating
+# pane if the panel died anyway.
 #
 # SSH or non-macOS: Quick Look can't reach this screen — float the unified
 # `preview` render in a Zellij pane instead (same UX as the fzf-tab
@@ -31,6 +35,34 @@ QL_APP="/System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlma
 # `qlmanage -t` office thumbnailers the `preview` script may be running.
 QL_MATCH='qlmanage -p '
 
+# Hardlink (or copy) regular files into a private stage dir and fill
+# $staged with the panel-safe paths. Non-regular targets and staging
+# failures pass the original path through. Basenames are kept (they title
+# the panel); collisions get an index prefix. The stage is rebuilt per
+# press — the previous panel is already dead (pkill) by the time it runs.
+typeset -ga staged
+stage_for_panel() {
+  local dir="${TMPDIR:-/tmp}/yazi-quick-look" f dst
+  local -i i=0
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  staged=()
+  for f in "$@"; do
+    (( ++i ))
+    if [[ ! -f "$f" ]]; then
+      staged+=("$f")
+      continue
+    fi
+    dst="$dir/${f:t}"
+    [[ -e "$dst" ]] && dst="$dir/$i-${f:t}"
+    if ln "$f" "$dst" 2>/dev/null || cp "$f" "$dst" 2>/dev/null; then
+      staged+=("$dst")
+    else
+      staged+=("$f")
+    fi
+  done
+}
+
 main() {
   (( $# )) || return 0
 
@@ -39,7 +71,8 @@ main() {
     # Replace any panel already up instead of stacking one instance per
     # keypress.
     pkill -f "$QL_MATCH" 2>/dev/null
-    open -n "$QL_APP" --args -p "$@"
+    stage_for_panel "$@"
+    open -n "$QL_APP" --args -p "${staged[@]}"
     # Crash watchdog: the panel outlives 2s unless a generator aborted it
     # (those die within ~0.5s of launch). Dead panel → floating-pane
     # fallback below.
