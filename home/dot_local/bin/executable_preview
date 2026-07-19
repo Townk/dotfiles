@@ -28,7 +28,7 @@
 
 set -u
 
-. ~/.local/lib/image-protocol-support.zsh
+[[ -r ~/.local/lib/image-protocol-support.zsh ]] && . ~/.local/lib/image-protocol-support.zsh
 
 # === Helpers ===
 
@@ -314,7 +314,7 @@ function preview-mediainfo() {
   command -v mediainfo >/dev/null 2>&1 || return 1
   mediainfo "$1" |
     bat --language=yaml --style=plain --color=always \
-      --theme="Catppuccin Mocha" --terminal-width="$w" |
+      --theme=chezmoi-system --terminal-width="$w" |
     head -"$max_lines"
 }
 
@@ -331,7 +331,7 @@ function preview-binary() {
 }
 
 function preview-text() {
-  bat --theme="Catppuccin Mocha" --style=numbers,changes --color=always \
+  bat --theme=chezmoi-system --style=numbers,changes --color=always \
     --terminal-width="$w" "$1" 2>/dev/null | head -"$max_lines"
 }
 
@@ -339,17 +339,31 @@ function preview-text() {
 
 # Width/height/cap globals consumed by every handler.
 #
-# fzf exports FZF_PREVIEW_{COLUMNS,LINES} for each preview invocation.
-# Subtract 1 from columns so fzf's overlaid scrollbar (rightmost
-# column once content exceeds the viewport) doesn't clip real content.
+# Precedence per source: explicit -W/-H flags (yazi shim, libexec callers)
+# → FZF_PREVIEW_{COLUMNS,LINES} (fzf exports per invocation; subtract 1
+# column for fzf's overlaid scrollbar) → piper's lowercase $w/$h env
+# (yazi piper previewer) → 80x40 defaults.
 #
 # FZF_PREVIEW_FULL is the toggle wired up via ctrl-f in zshrc — set,
 # it lifts the height cap so the whole file flows into the buffer.
 # Unset, max_lines is `h * 3` (one viewport + two screens of scroll).
 function geometry() {
-  h=${FZF_PREVIEW_LINES:-40}
-  w=${FZF_PREVIEW_COLUMNS:-80}
-  ((w > 4)) && ((w--))
+  if [[ -n ${OPT_H:-} ]]; then
+    h=$OPT_H
+  elif [[ -n ${FZF_PREVIEW_LINES:-} ]]; then
+    h=$FZF_PREVIEW_LINES
+  elif [[ -z ${h:-} ]]; then
+    h=40
+  fi
+
+  if [[ -n ${OPT_W:-} ]]; then
+    w=$OPT_W
+  elif [[ -n ${FZF_PREVIEW_COLUMNS:-} ]]; then
+    w=$FZF_PREVIEW_COLUMNS
+    ((w > 4)) && ((w--))
+  elif [[ -z ${w:-} ]]; then
+    w=80
+  fi
 
   if [[ -n ${FZF_PREVIEW_FULL:-} ]]; then
     max_lines=999999
@@ -454,18 +468,37 @@ function main() {
   preview-text "$target"
 }
 
-case "${1:-}" in
-  -h | --help | help)
-    cat <<'EOF'
-Render a preview for fzf's --preview hook, Yazi's shell previewer, or any tool
-that calls it with a file path. Routes by extension then MIME: images (chafa /
-Kitty graphics), audio/video (mediainfo), archives, PDFs, notebooks and data
-files, binary hex dump, and syntax-highlighted text via bat as the fallback.
+# Test escape hatch: `PREVIEW_NO_RUN=1 source preview` loads the functions
+# without parsing args or running main (see tests/preview_spec.sh).
+if [[ -n ${PREVIEW_NO_RUN:-} ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
-Usage: preview <path>
+# --- CLI ---
+typeset -g OPT_W='' OPT_H='' OPT_SKIP=0
+while (($#)); do
+  case "$1" in
+    -h | --help | help)
+      cat <<'EOF'
+Render a preview for fzf's --preview hook, Yazi's preview.yazi shim, or any
+tool that calls it with a file path. Routes by extension then MIME: images
+(chafa / Kitty graphics), audio/video (mediainfo), archives, PDFs, notebooks
+and data files, binary hex dump, and syntax-highlighted text via bat as the
+fallback.
+
+Usage: preview [-W cols] [-H lines] [--skip N] <path>
+
+  -W/-H     pane geometry (otherwise FZF_PREVIEW_* or piper's $w/$h env)
+  --skip N  PDF page (N+1) / video seek (N*5%, clamped to 95%)
 EOF
-    exit 0
-    ;;
-esac
+      exit 0
+      ;;
+    -W) OPT_W="${2:-}"; shift 2 ;;
+    -H) OPT_H="${2:-}"; shift 2 ;;
+    --skip) OPT_SKIP="${2:-0}"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
 
 main "$@"
