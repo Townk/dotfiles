@@ -206,12 +206,15 @@ brew 'git'
 brew '1broseidon/tap/cymbal'        # Code AST navigation for agents (for: pi.dev)
 brew 'autoconf'                     # Regenerate ./configure from a git clone (for: zsh custom-build)
 brew 'cairo'                        # Open source rendering engine (for: SKIM)
-brew 'chafa'                        # Terminal image viewer (for: yazi)
+brew 'chafa'                        # Terminal image viewer (for: preview)
 brew 'editorconfig'                 # Support for EditoConfig (for: nvim, JetBrains IDEs)
-brew 'exiftool'                     # Media file information (for: yazi)
+brew 'exiftool'                     # Media file information (for: yazi; unused since the mediainfo plugin removal — removal candidate)
 brew 'expect'                       # Tool to manipulate and automate terminal applications (for: preview)
-brew 'ffmpeg'                       # Audio and video manipulation utility (for: yazi)
-brew 'ffmpegthumbnailer'            # Generate thumbnails for videos (for: yazi)
+brew 'ffmpeg'                       # Audio/video manipulation; extracts embedded cover art (for: preview)
+brew 'ffmpegthumbnailer'            # Video frame thumbnails (for: preview)
+brew 'fontconfig'                   # fc-query reads font cmaps for glyph sampling (for: preview)
+brew 'fontforge'                    # fontimage glyph sheets (for: preview, nerd-fonts custom-build)
+brew 'ghostscript'                  # PostScript rasterizer behind magick's EPS/AI decode (for: preview)
 brew 'diffnav'                      # delta-based diff TUI with a file tree (for: system-backup tm --diff)
 brew 'git-cliff'                    # Changelog generator (for: git)
 brew 'git-delta'                    # A viewer for git and diff output (`diff` but better) (for: git)
@@ -219,23 +222,25 @@ brew 'git-extras'                   # Tons of extra commands for Git (for: git)
 brew 'git-lfs'                      # Helper to allow one to commit large files on Git (for: git)
 brew 'git-sizer'                    # Show metrics of your repository (for: git)
 brew 'graphviz'                     # Support for DOT language (draw graphs) (for: plantuml)
-brew 'hexyl'                        # Binary files viewer (for: yazi)
+brew 'harfbuzz'                     # hb-view renders glyph tiles incl. color emoji tables (for: preview)
+brew 'hexyl'                        # Binary files viewer (for: preview)
 # luajit stays under brew (not mise) because mise-plugins/mise-luaJIT fails
 # to build on macOS 26.x — its bundled luarocks 3.13.0 ships a rockspec
 # the lua parser rejects. NeoVim links against this. Allowlisted in
 # system-package-brew so the mise-leakage tripwire stays silent.
+brew 'librsvg'                      # rsvg-convert renders SVG rasters (for: preview)
 brew 'luajit'                       # Lua JIT runtime (for: nvim)
 {{ if ne .profile "dev-shell" -}}
 brew 'm1ddc'                        # Utility used by HammerSpoon to detect external display brightnes (for: hammerspoon)
 {{- end }}
-brew 'media-info'                   # Media files information (for: yazi)
+brew 'media-info'                   # Media files information (for: preview)
 brew 'onefetch'                     # Git repo terminal statistics like GitHub (for: git)
-brew 'ouch'                         # Univeral compressor wrapper (for: yazi)
+brew 'ouch'                         # Universal compressor wrapper (for: preview; yazi `C` compress keybinding)
 brew 'pandoc'                       # Convert files from one format to another (for: emacs, nvim)
 brew 'pcre2'                        # PCRE2 regex library for the zsh/pcre module (for: zsh custom-build)
-brew 'poppler'                      # PDF previewer (for: yazi)
+brew 'poppler'                      # PDF page rasters + page count (for: preview)
 brew 'restic'                       # Encrypted deduplicated backup engine (for: system-backup)
-brew 'resvg'                        # SVG renderer (for: yazi)
+brew 'resvg'                        # SVG renderer (for: yazi; preview uses librsvg instead — removal candidate)
 brew 'rtk'                          # Shell proxy for AI (for: pi.dev)
 brew 'socat'                        # Socket relay; EXECs pbpaste per connection (for: clipboard-bridge)
 brew 'tag'                          # MacOS tag on Yazi (for: yazi)
@@ -245,7 +250,7 @@ brew 'tree-sitter'                  # Tree Sitter CLI (for: emacs, nvim)
 # -----------------------
 brew 'age'                          # Modern file encryption (for: system-onboard/system-secrets)
 brew 'sops'                         # Encrypts secrets to age recipients (for: system-onboard/system-secrets)
-brew '7zip'                         # Compressor of 7z files
+brew '7zip'                         # Compressor of 7z files; archive-listing fallback (for: preview)
 brew 'ast-grep'                     # Grep that knows source code AST
 brew 'atuin'                        # Improved shell history
 brew 'bandwhich'                    # Network traffic analyser (must run as sudo on macOS)
@@ -261,14 +266,14 @@ brew 'fd'                           # Find entries in the file system (`find` bu
 brew 'fend'                         # Terminal unit conversion
 brew 'fzf'                          # Fuzzy Finder for CLI
 # `gh` lives in Brewfile.bootstrap (needed by .setup.sh)
-brew 'glow'                         # fast terminal markdown viewer
+brew 'glow'                         # fast terminal markdown viewer (for: preview)
 brew 'gpg-tui'                      # Manage GPG keys on terminal
 brew 'gping'                        # ping, but with graph
 brew 'grex'                         # RegEx generator from targets
 brew 'gron'                         # JSON to lists
 brew 'gum'                          # Shell script UI library
 brew 'hyperfine'                    # Terminal benchmark
-brew 'imagemagick'                  # Image conversion utility
+brew 'imagemagick'                  # Image conversion utility (for: preview)
 brew 'jless'                        # JSON visualizer
 brew 'lazygit'                      # Git TUA
 brew 'lazysql'                      # DB TUA
