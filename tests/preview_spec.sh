@@ -137,6 +137,10 @@ Describe 'preview: video'
   setup() {
     export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/vcache"
     rm -rf "$XDG_CACHE_HOME"
+    # The XDG sandbox hides bat's compiled-theme cache, making the
+    # chezmoi-system theme "unknown" (stderr warning → shellspec WARNED).
+    # Point bat at the real cache read-only; renders stay sandboxed.
+    export BAT_CACHE_PATH="$HOME/.cache/bat"
     VID="$SHELLSPEC_TMPBASE/clip.mp4"
     [ -f "$VID" ] || ffmpeg -v error -f lavfi -i testsrc=duration=1:size=128x96:rate=10 \
       -pix_fmt yuv420p "$VID"
