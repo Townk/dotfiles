@@ -655,15 +655,32 @@ function preview-pdf() {
   command -v pdftocairo >/dev/null 2>&1 || return 1
   local page cache
   page=$(pdf-page "$1")
-  cache=$(raster-cache-path "$1" pdf "$page") || return 1
+  cache=$(raster-cache-path "$1" pdf-fit "$page") || return 1
   render-cached "$cache" render-pdf-page "$1" "$page" || return 1
   preview-raster "$cache"
 }
 
 # pdftocairo -singlefile appends .png to its output prefix — strip the
-# suffix from $RASTER_OUT so the file lands exactly there.
+# suffix from $RASTER_OUT so the file lands exactly there. -scale-to
+# bounds the long side: unbounded DPI rendering takes seconds and tens of
+# megapixels on oversized pages (a real 2846x30000 single-page review doc
+# motivated this).
 function render-pdf-page() {
-  pdftocairo -png -f "$2" -l "$2" -singlefile "$1" "${RASTER_OUT%.png}"
+  local prefix="${RASTER_OUT%.png}"
+  pdftocairo -png -f "$2" -l "$2" -singlefile -scale-to 1600 "$1" "$prefix" || return 1
+  # Extreme-portrait pages (continuous-scroll docs) fit-to-1600 as an
+  # unreadable sliver — re-render width-bound and keep the top slice.
+  command -v magick >/dev/null 2>&1 || return 0
+  local dims w_px h_px
+  dims=$(magick identify -format '%w %h' "$RASTER_OUT" 2>/dev/null) || return 0
+  w_px=${dims%% *}; h_px=${dims##* }
+  if ((h_px > 0 && w_px > 0 && h_px > w_px * 5 / 2)); then
+    pdftocairo -png -f "$2" -l "$2" -singlefile -scale-to-x 1600 -scale-to-y -1 \
+      "$1" "$prefix" &&
+      magick "$RASTER_OUT" -gravity north -crop 1600x2000+0+0 +repage \
+        "$RASTER_OUT" 2>/dev/null
+  fi
+  return 0
 }
 
 function preview-image() {
@@ -805,7 +822,7 @@ function raster-for() {
     application/pdf)
       local page
       page=$(pdf-page "$target")
-      cache=$(raster-cache-path "$target" pdf "$page") &&
+      cache=$(raster-cache-path "$target" pdf-fit "$page") &&
         render-cached "$cache" render-pdf-page "$target" "$page" &&
         print -rn -- "$cache"
       ;;
