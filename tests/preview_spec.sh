@@ -233,14 +233,14 @@ Describe 'preview: archives'
   BeforeEach 'setup'
 
   It 'lists tar.zst contents instead of hex-dumping'
-    When run zsh "$SCRIPT" -W 80 -H 24 "$D/a.tar.zst"
+    When run zsh -f "$SCRIPT" -W 80 -H 24 "$D/a.tar.zst"
     The status should be success
     The output should include "f.txt"
     The output should not include "┌────────┬"
   End
 
   It 'lists gzip contents'
-    When run zsh "$SCRIPT" -W 80 -H 24 "$D/f.txt.gz"
+    When run zsh -f "$SCRIPT" -W 80 -H 24 "$D/f.txt.gz"
     The status should be success
     The output should include "f.txt"
   End
