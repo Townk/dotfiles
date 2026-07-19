@@ -18,6 +18,10 @@ prepend_preloaders = [
   { mime = "font/*", run = "preview-shim" },
   { mime = "application/vnd.ms-opentype", run = "preview-shim" },
   { mime = "{image/vnd.adobe.photoshop,application/postscript}", run = "preview-shim" },
+  { mime = "application/vnd.openxmlformats-officedocument.*", run = "preview-shim" },
+  { mime = "application/{msword,vnd.ms-excel,vnd.ms-powerpoint}", run = "preview-shim" },
+  { mime = "application/vnd.oasis.opendocument.*", run = "preview-shim" },
+  { url = "*.{docx,xlsx,pptx,doc,xls,ppt,odt,ods,odp,pages,numbers,key}", run = "preview-shim" },
 ]
 
 prepend_previewers = [
@@ -27,7 +31,13 @@ prepend_previewers = [
   { mime = "font/*", run = "preview-shim" },
   { mime = "application/vnd.ms-opentype", run = "preview-shim" },
   { mime = "{image/vnd.adobe.photoshop,application/postscript}", run = "preview-shim" },
+  { mime = "application/vnd.openxmlformats-officedocument.*", run = "preview-shim" },
+  { mime = "application/{msword,vnd.ms-excel,vnd.ms-powerpoint}", run = "preview-shim" },
+  { mime = "application/vnd.oasis.opendocument.*", run = "preview-shim" },
+  # Extension rules carry formats whose MIME lies: iWork bundles are plain
+  # zips, legacy Office is x-ole-storage.
   { url = "*.{ttf,otf,woff,woff2,ttc,psd,ai,eps}", run = "preview-shim" },
+  { url = "*.{docx,xlsx,pptx,doc,xls,ppt,odt,ods,odp,pages,numbers,key}", run = "preview-shim" },
   # Everything else (files only; the built-in folder previewer keeps
   # directories) → the same script's text pipeline through piper, which
   # provides line-based scroll via skip.
