@@ -332,8 +332,17 @@ function preview-sqlite() {
 }
 
 function preview-archive() {
-  command -v ouch >/dev/null 2>&1 || return 1
-  force-tty ouch list -q -y -t "$1" 2>&1 | head -"$max_lines"
+  local out
+  if command -v ouch >/dev/null 2>&1; then
+    out=$(force-tty ouch list -q -y -t "$1" 2>/dev/null)
+    if [[ -n ${out//[[:space:]]/} ]]; then
+      print -r -- "$out" | head -"$max_lines"
+      return 0
+    fi
+  fi
+  # Formats ouch can't read (lzh, cab, …): 7zz covers the long tail.
+  command -v 7zz >/dev/null 2>&1 || return 1
+  7zz l "$1" 2>/dev/null | head -"$max_lines"
 }
 
 function preview-font() {
@@ -586,9 +595,10 @@ function main() {
   encoding=$(file --mime-encoding --brief --dereference "$target" 2>/dev/null)
 
   case "$mime" in
-    application/zip | application/*zip* | \
-      application/x-tar | application/x-bzip2 | \
-      application/x-7z-compressed | application/x-rar | application/x-xz)
+    application/zip | application/*zip* | application/gzip | \
+      application/zstd | application/x-tar | application/x-bzip2 | \
+      application/x-7z-compressed | application/x-rar | application/x-xz | \
+      application/x-lzh-compressed | application/vnd.ms-cab-compressed)
       preview-archive "$target" && return
       ;;
     application/pdf)

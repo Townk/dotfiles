@@ -219,3 +219,29 @@ Describe 'preview: adobe'
     The output should equal "1"
   End
 End
+
+Describe 'preview: archives'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/arcache"
+    D="$SHELLSPEC_TMPBASE/ar"; mkdir -p "$D"
+    [ -f "$D/f.txt" ] || print "zstd archive member" >"$D/f.txt"
+    [ -f "$D/a.tar.zst" ] || (cd "$D" && ouch compress -q -y f.txt a.tar.zst)
+    [ -f "$D/f.txt.gz" ] || gzip -kf "$D/f.txt"
+  }
+  BeforeEach 'setup'
+
+  It 'lists tar.zst contents instead of hex-dumping'
+    When run zsh "$SCRIPT" -W 80 -H 24 "$D/a.tar.zst"
+    The status should be success
+    The output should include "f.txt"
+    The output should not include "┌────────┬"
+  End
+
+  It 'lists gzip contents'
+    When run zsh "$SCRIPT" -W 80 -H 24 "$D/f.txt.gz"
+    The status should be success
+    The output should include "f.txt"
+  End
+End
