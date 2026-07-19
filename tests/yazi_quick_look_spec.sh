@@ -5,9 +5,7 @@
 # executable_preview) that lets a test source the functions, prepend stub
 # binaries to PATH, and call main directly. Stubs echo their argv, so the
 # assertions read the dispatch decision straight from the output — nothing
-# GUI-facing (open/pkill/zellij) ever really runs. The crash watchdog is
-# driven by the pgrep stub: STUB_PGREP_RC=0 simulates a healthy panel,
-# STUB_PGREP_RC=1 a generator crash.
+# GUI-facing (open/pkill/zellij) ever really runs.
 Describe 'yazi-quick-look: dispatch'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_yazi-quick-look"
 
@@ -18,9 +16,6 @@ Describe 'yazi-quick-look: dispatch'
       printf '#!/bin/sh\necho "%s $@"\n' "$tool" >"$STUBS/$tool"
       chmod +x "$STUBS/$tool"
     done
-    printf '#!/bin/sh\nexit 0\n' >"$STUBS/sleep"
-    printf '#!/bin/sh\nexit "${STUB_PGREP_RC:-0}"\n' >"$STUBS/pgrep"
-    chmod +x "$STUBS/sleep" "$STUBS/pgrep"
     TARGET="$SHELLSPEC_TMPBASE/ql-target.txt"
     echo hello >"$TARGET"
   }
@@ -30,7 +25,7 @@ Describe 'yazi-quick-look: dispatch'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
     When run zsh -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-      export STUB_PGREP_RC=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
+      export TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
       main '$TARGET'"
@@ -44,7 +39,7 @@ Describe 'yazi-quick-look: dispatch'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
     When run zsh -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-      export STUB_PGREP_RC=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
+      export TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
       main '$TARGET' '$TARGET'"
@@ -56,10 +51,10 @@ Describe 'yazi-quick-look: dispatch'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
     When run zsh -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-      export STUB_PGREP_RC=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
+      export TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
-      main '$TARGET' >/dev/null
+      ( main '$TARGET' ) >/dev/null
       zmodload zsh/stat
       zstat -A a +inode '$TARGET'
       zstat -A b +inode \"\$TMPDIR/yazi-quick-look/ql-target.txt\"
@@ -72,7 +67,7 @@ Describe 'yazi-quick-look: dispatch'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
     When run zsh -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-      export STUB_PGREP_RC=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
+      export TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
       main '$SHELLSPEC_TMPBASE'"
@@ -80,29 +75,16 @@ Describe 'yazi-quick-look: dispatch'
     The line 2 should equal "open -n /System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app --args -p $SHELLSPEC_TMPBASE"
   End
 
-  It 'local macOS session: falls back to the floating pane when qlmanage crashes'
+  It 'local macOS session inside zellij: never opens the floating pane'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
     When run zsh -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-      export STUB_PGREP_RC=1 ZELLIJ=0
+      export ZELLIJ=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
       main '$TARGET'"
     The status should be success
     The line 2 should include "open -n"
-    The output should include "zellij action new-pane"
-    The output should include "zellij-preview-file $TARGET"
-  End
-
-  It 'local macOS session, crash outside zellij: quiet give-up after the attempt'
-    [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
-    When run zsh -c "
-      unset SSH_CONNECTION SSH_CLIENT SSH_TTY ZELLIJ
-      export STUB_PGREP_RC=1
-      YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
-      PATH='$STUBS':\$PATH
-      main '$TARGET'"
-    The status should be success
     The output should not include "zellij"
   End
 
