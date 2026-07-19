@@ -12,6 +12,12 @@
 # as its own app via LaunchServices both problems vanish, and `open`
 # returns at once so no yazi task lingers while the panel is up.
 #
+# Even open-launched, macOS 26.5's qlmanage still abort-crashes on some
+# file *content* (QLTryCatchAndCrash on generator NSExceptions — seen with
+# a plain 856x448 screenshot PNG that previews fine everywhere else). The
+# generators can't be enumerated, so a watchdog re-checks shortly after
+# launch and falls through to the floating pane when the panel died.
+#
 # SSH or non-macOS: Quick Look can't reach this screen — float the unified
 # `preview` render in a Zellij pane instead (same UX as the fzf-tab
 # floating preview). Outside zellij there is nowhere to draw either → quiet
@@ -21,6 +27,9 @@ emulate -L zsh
 set -u
 
 QL_APP="/System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app"
+# Matches our panel instances (and stale `qlmanage -p` ones) but not the
+# `qlmanage -t` office thumbnailers the `preview` script may be running.
+QL_MATCH='qlmanage -p '
 
 main() {
   (( $# )) || return 0
@@ -28,11 +37,14 @@ main() {
   if [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" \
         && "$OSTYPE" == darwin* && -d "$QL_APP" ]]; then
     # Replace any panel already up instead of stacking one instance per
-    # keypress. (This may rarely catch a concurrent `qlmanage -t` office
-    # thumbnail from `preview`; that handler just falls back for one
-    # render.)
-    pkill -x qlmanage 2>/dev/null
-    exec open -n "$QL_APP" --args -p "$@"
+    # keypress.
+    pkill -f "$QL_MATCH" 2>/dev/null
+    open -n "$QL_APP" --args -p "$@"
+    # Crash watchdog: the panel outlives 2s unless a generator aborted it
+    # (those die within ~0.5s of launch). Dead panel → floating-pane
+    # fallback below.
+    sleep 2
+    pgrep -f "$QL_MATCH" >/dev/null 2>&1 && return 0
   fi
 
   if [[ -n ${ZELLIJ:-} ]]; then
