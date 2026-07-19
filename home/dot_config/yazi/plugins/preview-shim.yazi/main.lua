@@ -47,11 +47,22 @@ local function peek_impl(job)
   local area = job.area
   local image_h = 0
   if raster ~= '' and fs.cha(Url(raster)) then
+    -- Give the image every row the text block doesn't need, floored at
+    -- half the pane (same split the old mediainfo plugin used).
+    local text_h = 0
+    if text ~= '' then
+      local _, newlines = text:gsub('\n', '')
+      text_h = newlines + 1
+    end
+    local img_h = area.h
+    if text_h > 0 then
+      img_h = math.max(math.floor(area.h / 2), area.h - text_h)
+    end
     local img_area = ui.Rect {
       x = area.x,
       y = area.y,
       w = area.w,
-      h = text ~= '' and math.floor(area.h * 6 / 10) or area.h,
+      h = img_h,
     }
     local rendered = ya.image_show(Url(raster), img_area)
     image_h = rendered and rendered.h or 0

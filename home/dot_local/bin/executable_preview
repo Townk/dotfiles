@@ -349,7 +349,7 @@ function preview-font() {
   local cache
   # Tag carries a sample-algorithm version: bumping it invalidates sheets
   # rendered by older sample logic (the font file itself rarely changes).
-  cache=$(raster-cache-path "$1" font-grid) || return 1
+  cache=$(raster-cache-path "$1" font-grid2) || return 1
   render-cached "$cache" render-font-sheet "$1" || return 1
   preview-raster "$cache"
 }
@@ -359,35 +359,44 @@ function preview-font() {
 # symbols-only builds) show real glyphs instead of .notdef tofu, while
 # text fonts still lead with their alphabet. Empty output → caller falls
 # back to fontimage's built-in Latin sample.
+#
+# Output: line 1 is "space"/"nospace" — whether the cmap covers U+0020
+# (fonts without it, e.g. emoji-only builds, render every space separator
+# as .notdef tofu, so the renderer must not join glyphs with spaces) —
+# followed by one glyph per line.
 function font-sample-text() {
   command -v fc-query >/dev/null 2>&1 || return 1
   local -a ranges bounds
   ranges=($(fc-query --format '%{charset}' "$1" 2>/dev/null))
   ((${#ranges})) || return 1
 
-  local lo hi total=0
+  local lo hi total=0 has_space=0
   for range in "${ranges[@]}"; do
     if [[ $range == *-* ]]; then
       lo=$((16#${range%-*})); hi=$((16#${range#*-}))
     else
       lo=$((16#$range)); hi=$lo
     fi
+    ((lo <= 0x20 && hi >= 0x20)) && has_space=1
     ((hi < 0x21)) && continue                      # controls/space
     ((lo < 0x21)) && lo=0x21
     ((lo >= 0xd800 && hi <= 0xdfff)) && continue   # surrogates
+    ((lo >= 0xfe00 && hi <= 0xfe0f)) && continue   # variation selectors
+    ((lo >= 0x1f3fb && hi <= 0x1f3ff)) && continue # skin-tone modifiers
     bounds+=("$lo $hi")
     ((total += hi - lo + 1))
   done
   ((total)) || return 1
 
-  local want=36 stride=$((total / 36)) idx=0 n=0 cp sample=""
+  local want=36 stride=$((total / 36)) idx=0 n=0 cp
+  local -a out=()
   ((stride < 1)) && stride=1
   for b in "${bounds[@]}"; do
     lo=${b%% *}; hi=${b##* }
     for ((cp = lo; cp <= hi; cp++)); do
       if ((idx % stride == 0 && n < want)); then
         if ((cp < 0x7f || cp > 0xa0)); then        # skip DEL..NBSP block
-          sample+="${(#)cp} "
+          out+=("${(#)cp}")
           ((n++))
         fi
       fi
@@ -396,52 +405,59 @@ function font-sample-text() {
     done
     ((n >= want)) && break
   done
-  [[ -n $sample ]] || return 1
-  print -rn -- "$sample"
+  ((${#out})) || return 1
+  ((has_space)) && print space || print nospace
+  print -rl -- "${out[@]}"
 }
 
 # No font-name header anywhere: renderers can only draw it with the font
 # under preview, which turns into .notdef tofu for symbol/emoji fonts.
 function render-font-sheet() {
-  local sample
-  sample=$(font-sample-text "$1") || sample=""
+  local -a lines glyphs rows
+  lines=("${(@f)$(font-sample-text "$1")}")
+  local sep="  "
+  if ((${#lines} > 1)); then
+    [[ ${lines[1]} == nospace ]] && sep=""
+    glyphs=("${(@)lines[2,-1]}")
+  fi
 
-  # Grid layout: rows of 9 glyphs, double-spaced, blank line between rows.
-  local -a glyphs rows
-  glyphs=(${(s: :)sample})
+  # Grid layout: rows of 8 glyphs; glyph gaps use a double space only when
+  # the font maps U+0020 (else the space itself draws as tofu); row gaps
+  # come from hb-view's --line-space.
   local -a row=()
   local g
   for g in "${glyphs[@]}"; do
     [[ -n $g ]] || continue
     row+=("$g")
-    if ((${#row} == 9)); then
-      rows+=("${(j:  :)row}")
+    if ((${#row} == 8)); then
+      rows+=("${(pj.$sep.)row}")
       row=()
     fi
   done
-  ((${#row})) && rows+=("${(j:  :)row}")
+  ((${#row})) && rows+=("${(pj.$sep.)row}")
 
   # hb-view first: HarfBuzz rasterizes color-glyph tables (COLR/SVG/CBDT
   # emoji fonts) that fontimage renders blank, and honors embedded
   # newlines for the grid.
   if command -v hb-view >/dev/null 2>&1 && ((${#rows})); then
-    hb-view --font-file="$1" --font-size=48 --margin=16 \
-      --output-file="$RASTER_OUT" "${(pj:\n\n:)rows}" 2>/dev/null && return 0
+    hb-view --font-file="$1" --font-size=80 --margin=24 --line-space=40 \
+      --output-file="$RASTER_OUT" "${(pj:\n:)rows}" 2>/dev/null && return 0
   fi
 
   if command -v fontimage >/dev/null 2>&1; then
     if ((${#rows})); then
       local -a targs=()
       for g in "${rows[@]}"; do targs+=(--text "$g"); done
-      fontimage --width 1200 --pixelsize 48 "${targs[@]}" \
+      fontimage --width 1600 --pixelsize 80 "${targs[@]}" \
         -o "$RASTER_OUT" "$1" 2>/dev/null && return 0
     fi
-    fontimage --width 1200 --pixelsize 48 -o "$RASTER_OUT" "$1" \
+    fontimage --width 1600 --pixelsize 80 -o "$RASTER_OUT" "$1" \
       2>/dev/null && return 0
   fi
   command -v magick >/dev/null 2>&1 || return 1
-  magick -size 1200x -background black -fill white -font "$1" -pointsize 48 \
-    label:"${sample:-AaBbCcDdEe FfGgHhIiJj 0123456789}" "$RASTER_OUT"
+  local flat="${(j: :)glyphs}"
+  magick -size 1600x -background black -fill white -font "$1" -pointsize 80 \
+    label:"${flat:-AaBbCcDdEe FfGgHhIiJj 0123456789}" "$RASTER_OUT"
 }
 
 # Seek percent from --skip: 0 → ffmpegthumbnailer's 10% default, else 5%
@@ -669,7 +685,7 @@ function raster-for() {
         print -rn -- "$cache"
       ;;
     font/* | application/vnd.ms-opentype)
-      cache=$(raster-cache-path "$target" font-grid) &&
+      cache=$(raster-cache-path "$target" font-grid2) &&
         render-cached "$cache" render-font-sheet "$target" &&
         print -rn -- "$cache"
       ;;
