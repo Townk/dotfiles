@@ -160,3 +160,43 @@ Describe 'preview: video'
     The output should equal "2"
   End
 End
+
+Describe 'preview: audio'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/acache"
+    rm -rf "$XDG_CACHE_HOME"
+    export BAT_CACHE_PATH="$HOME/.cache/bat"
+    ART="$SHELLSPEC_TMPBASE/art.mp3"
+    NOART="$SHELLSPEC_TMPBASE/noart.mp3"
+    if [ ! -f "$ART" ]; then
+      magick -size 64x64 xc:navy "$SHELLSPEC_TMPBASE/cover.png"
+      ffmpeg -v error -f lavfi -i sine=frequency=440:duration=1 \
+        -i "$SHELLSPEC_TMPBASE/cover.png" -map 0:a -map 1:v \
+        -c:a libmp3lame -c:v png -disposition:v:0 attached_pic \
+        -id3v2_version 3 "$ART"
+      ffmpeg -v error -f lavfi -i sine=frequency=440:duration=1 \
+        -c:a libmp3lame "$NOART"
+    fi
+  }
+  BeforeEach 'setup'
+
+  It 'extracts embedded cover art into the cache'
+    When run zsh -f -c "zsh -f '$SCRIPT' -W 80 -H 24 '$ART' >/dev/null
+      files=(\$XDG_CACHE_HOME/preview/*.png(N)); print \${#files}"
+    The output should equal "1"
+  End
+
+  It 'still shows metadata when there is no art'
+    When run zsh -f "$SCRIPT" -W 80 -H 24 "$NOART"
+    The status should be success
+    The output should include "Audio"
+  End
+
+  It 'caches nothing for artless audio'
+    When run zsh -f -c "zsh -f '$SCRIPT' -W 80 -H 24 '$NOART' >/dev/null
+      files=(\$XDG_CACHE_HOME/preview/*.png(N)); print \${#files}"
+    The output should equal "0"
+  End
+End

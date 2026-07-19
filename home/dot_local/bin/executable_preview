@@ -383,6 +383,24 @@ function render-video-frame() {
   ffmpegthumbnailer -i "$1" -o "$RASTER_OUT" -s 0 -t "$2%" -q 8
 }
 
+# Cover art above metadata when the file embeds any; metadata alone
+# otherwise. Artless files re-probe on every preview (~50ms ffmpeg exit)
+# rather than negative-caching — YAGNI until it shows up in practice.
+function preview-audio() {
+  local cache
+  cache=$(raster-cache-path "$1" cover) || return 1
+  if render-cached "$cache" render-audio-cover "$1"; then
+    [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && h=$(((h * 6) / 10))
+    preview-raster "$cache"
+  fi
+  preview-mediainfo "$1"
+}
+
+function render-audio-cover() {
+  command -v ffmpeg >/dev/null 2>&1 || return 1
+  ffmpeg -y -v error -i "$1" -an -frames:v 1 -update 1 "$RASTER_OUT"
+}
+
 function preview-pdf() {
   command -v chafa >/dev/null 2>&1 || return 1
   command -v pdftocairo >/dev/null 2>&1 || return 1
@@ -569,7 +587,11 @@ function main() {
       preview-video "$target" && return
       preview-mediainfo "$target" && return
       ;;
-    audio/* | application/subrip)
+    audio/*)
+      preview-audio "$target" && return
+      preview-mediainfo "$target" && return
+      ;;
+    application/subrip)
       preview-mediainfo "$target" && return
       ;;
   esac
