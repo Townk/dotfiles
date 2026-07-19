@@ -200,3 +200,22 @@ Describe 'preview: audio'
     The output should equal "0"
   End
 End
+
+Describe 'preview: adobe'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/adcache"
+    rm -rf "$XDG_CACHE_HOME"
+    export BAT_CACHE_PATH="$HOME/.cache/bat"
+    PSD="$SHELLSPEC_TMPBASE/pic.psd"
+    [ -f "$PSD" ] || magick -size 32x32 xc:tomato "$PSD"
+  }
+  BeforeEach 'setup'
+
+  It 'renders PSD visually (cached), not as a hex dump'
+    When run zsh -f -c "zsh -f '$SCRIPT' -W 80 -H 24 '$PSD' >/dev/null
+      files=(\$XDG_CACHE_HOME/preview/*.png(N)); print \${#files}"
+    The output should equal "1"
+  End
+End

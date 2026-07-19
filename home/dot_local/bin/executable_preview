@@ -401,6 +401,24 @@ function render-audio-cover() {
   ffmpeg -y -v error -i "$1" -an -frames:v 1 -update 1 "$RASTER_OUT"
 }
 
+# Adobe formats: magick renders the first page/layer-flatten (EPS needs
+# ghostscript behind magick — when that's missing the render fails and
+# dispatch falls through to text metadata).
+function preview-adobe() {
+  command -v magick >/dev/null 2>&1 || return 1
+  local cache
+  cache=$(raster-cache-path "$1" adobe) || return 1
+  render-cached "$cache" render-adobe "$1" || return 1
+  [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && h=$(((h * 6) / 10))
+  preview-raster "$cache"
+  [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && preview-mediainfo "$1"
+  return 0
+}
+
+function render-adobe() {
+  magick "$1[0]" -flatten -background white -alpha remove "$RASTER_OUT"
+}
+
 function preview-pdf() {
   command -v chafa >/dev/null 2>&1 || return 1
   command -v pdftocairo >/dev/null 2>&1 || return 1
@@ -556,6 +574,7 @@ function main() {
     *.dmg | *.sparseimage | *.cdr | *.img | *.iso) preview-disk-image "$target" && return ;;
     *.ics) preview-ics "$target" && return ;;
     *.ttf | *.otf | *.woff | *.woff2 | *.ttc) preview-font "$target" && return ;;
+    *.psd | *.ai | *.eps) preview-adobe "$target" && return ;;
     *.db | *.sqlite | *.sqlite3) preview-sqlite "$target" && return ;;
   esac
 
@@ -577,6 +596,10 @@ function main() {
       ;;
     font/* | application/vnd.ms-opentype)
       preview-font "$target" && return
+      ;;
+    image/vnd.adobe.photoshop | application/postscript)
+      preview-adobe "$target" && return
+      preview-mediainfo "$target" && return
       ;;
     image/*)
       # Reserve room below for mediainfo, unless we only want the image.
