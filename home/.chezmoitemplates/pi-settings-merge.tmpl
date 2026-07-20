@@ -3,6 +3,11 @@
 # rendered target settings JSON and confirmed jq is on PATH.
 #
 # Policy:
+#   MIGRATE - stale on-disk values in $migrate are rewritten once. KEEP keys
+#             normally stay Pi-owned, but when we rename a resource a KEEP key
+#             points at (e.g. a theme purged via .chezmoiremove), the stale
+#             value would make Pi fall back silently; map old value -> new.
+#             A value the user set to anything else is left alone.
 #   FORCE  - the keys in $forced are always taken from $desired (declaratively
 #            owned: structural config we choose deliberately).
 #   SEED   - any key in $desired that is absent on disk is written once.
@@ -19,8 +24,14 @@ cat > "$tmp"
 [ -s "$tmp" ] || printf '{}' > "$tmp"
 merged="$(jq \
   --argjson desired "$desired" \
-  --argjson forced '["extensions","skills","packages","npmCommand","observational-memory"]' '
-  . as $cur
+  --argjson forced '["extensions","skills","packages","npmCommand","observational-memory"]' \
+  --argjson migrate '{"theme":{"catppuccin-mocha":"chezmoi-system"}}' '
+  reduce ($migrate | keys_unsorted[]) as $k (.;
+      .[$k] as $v
+      | if ($v | type) == "string" and ($migrate[$k] | has($v))
+        then .[$k] = $migrate[$k][$v]
+        else . end)
+  | . as $cur
   | reduce ($desired | keys_unsorted[]) as $k ($cur;
       if   ($forced | index($k))  then .[$k] = $desired[$k]
       elif ($cur | has($k) | not) then .[$k] = $desired[$k]
