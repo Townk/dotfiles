@@ -1,0 +1,6 @@
+{
+  "profile": "gateway",
+  "autosave": "auto",
+  "autosaveQueueLowConfidence": false,
+  "contextPipeline": "compact"
+}
