@@ -1,5 +1,7 @@
 # Gofile — Go binaries installed via `go install`.
-# Entries are full module paths (NOT bare binary names).
+# Entries are full module paths (NOT bare binary names), optionally pinned
+# with `@<version>` (e.g. example.com/cmd/tool@v1.2.0-RC1). Unpinned entries
+# track @latest — which never resolves to a prerelease, so RCs must be pinned.
 # Synced by `system-package go sync`. Strict cleanup: removing a
 # line uninstalls the binary on next sync.
 
@@ -8,9 +10,9 @@
 # pager, and the diff viewer — all subcommands of the one binary; installs the
 # short `apb` alias too via cmd/apb, and the standalone `ask` dialog binary
 # for scripts (confirm/line/choose/form as a pure-I/O utility).
-github.com/Townk/ai-playbook/cmd/ai-playbook
-github.com/Townk/ai-playbook/cmd/apb
-github.com/Townk/ai-playbook/cmd/ask
+github.com/Townk/ai-playbook/cmd/ai-playbook@v1.0.0-RC2
+github.com/Townk/ai-playbook/cmd/apb@v1.0.0-RC2
+github.com/Townk/ai-playbook/cmd/ask@v1.0.0-RC2
 
 {{ if eq .profile "personal" -}}
 github.com/bscott/pm-cli/cmd/pm-cli

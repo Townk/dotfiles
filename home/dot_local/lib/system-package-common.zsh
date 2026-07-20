@@ -61,8 +61,12 @@ pkg::diff_only_in() {
 # need a service restart (the orphan service is handled at sync time).
 pkg::changed_versions() {
   local before="$1" after="$2"
-  awk -F'\t' '
-    NR==FNR { v[$1] = $2; next }
+  # FILENAME (not NR==FNR) distinguishes the two inputs: with an EMPTY before
+  # file the classic NR==FNR idiom misclassifies the after file's first rows
+  # as "before" and swallows them — fresh installs never registered as
+  # changes (so first-install service restarts/hooks silently skipped).
+  awk -F'\t' -v before="$before" '
+    FILENAME == before { v[$1] = $2; next }
     { if (!($1 in v) || v[$1] != $2) print $1 }
   ' "$before" "$after"
 }
@@ -94,6 +98,70 @@ pkg::restart_changed() {
     [ -n "$pkg" ] && changed+=("$pkg")
   done < <(pkg::changed_versions "$1" "$2")
   ((${#changed[@]} > 0)) && pkg::restart_services_for "${changed[@]}"
+  return 0
+}
+
+# ── Package hooks (hooks.toml) ─────────────────────────────────────────────
+# ~/.config/packages/hooks.toml maps a BINARY name to commands the sync runs
+# around lifecycle events, generalizing the services.toml restart pattern:
+#
+#   [ai-playbook]
+#   on-change = ["ai-playbook man install --force"]
+#   on-remove = ["ai-playbook man uninstall"]
+#
+# Keys: `on-change` fires post-sync for a binary that was installed, upgraded,
+# or downgraded (same version-diff pkg::restart_changed uses); `on-remove`
+# fires BEFORE the worker deletes a binary, so a hook may invoke the binary
+# itself (e.g. a self-uninstalling docs command). Parsing is a deliberate TOML
+# subset: single-line double-quoted string arrays only; commands must not
+# contain double quotes. Hooks soft-fail (logged, never fail the sync).
+
+# pkg::hooks_for <binary> <on-change|on-remove>
+# Print one configured hook command per line (nothing when the file or the
+# binary's section is absent).
+pkg::hooks_for() {
+  local hooks_file="$PKG_DIR/hooks.toml"
+  [[ -f "$hooks_file" ]] || return 0
+  awk -v want="$1" -v key="$2" '
+    /^[ \t]*\[/ {
+      sec = $0
+      gsub(/[\[\]]/, "", sec)
+      gsub(/^[ \t]+|[ \t]+$/, "", sec)
+      next
+    }
+    sec == want && $0 ~ "^[ \t]*" key "[ \t]*=" {
+      line = $0
+      sub(/\].*$/, "]", line)   # drop trailing comments after the array
+      while (match(line, /"[^"]*"/)) {
+        print substr(line, RSTART + 1, RLENGTH - 2)
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' "$hooks_file"
+}
+
+# pkg::run_hooks <binary> <on-change|on-remove>
+# Run each configured hook command for the binary via `zsh -c`. Soft-fails:
+# a failing hook is logged and the sync continues; always returns 0.
+pkg::run_hooks() {
+  local bin="$1" key="$2" cmd
+  while IFS= read -r cmd; do
+    [[ -z "$cmd" ]] && continue
+    log_info "hook [$bin] $key: $cmd"
+    zsh -c "$cmd" || log_warn "hook failed [$bin] $key: $cmd"
+  done < <(pkg::hooks_for "$bin" "$key")
+  return 0
+}
+
+# pkg::hooks_changed <before_file> <after_file>
+# The post-sync hooks tail (run it next to pkg::restart_changed): fire every
+# binary's on-change hooks when its version changed across the sync
+# (installed, upgraded, or downgraded — the same diff restart_changed uses).
+pkg::hooks_changed() {
+  local pkg
+  while IFS= read -r pkg; do
+    [[ -n "$pkg" ]] && pkg::run_hooks "$pkg" "on-change"
+  done < <(pkg::changed_versions "$1" "$2")
   return 0
 }
 

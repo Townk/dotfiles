@@ -1,6 +1,10 @@
 #!/usr/bin/env zsh
 # system-package-go — sync `go install`-installed binaries against
-# ~/.config/packages/Gofile. Manifest entries are full module paths.
+# ~/.config/packages/Gofile. Manifest entries are full module paths, with an
+# optional `@<version>` pin (e.g. `example.com/cmd/tool@v1.2.0-RC1`): pinned
+# entries install/upgrade to exactly that version; unpinned ones track
+# `@latest`. Note Go's `@latest` never resolves to a prerelease — an RC must
+# be pinned explicitly.
 
 set -eu -o pipefail
 
@@ -111,22 +115,35 @@ do_list() {
 do_sync() {
   log_info "Syncing go binaries..."
 
-  local declared installed pairs before_snap after_snap package_bin_dir go_executable
+  local declared declared_raw vers installed pairs before_snap after_snap package_bin_dir go_executable want
   package_bin_dir=$(go_bin_dir)
   export GOBIN="$package_bin_dir"
   go_executable="$(go env GOROOT)/bin/go"
   [[ -x "$go_executable" ]] || die "Go toolchain executable not found: $go_executable"
 
   declared=$(mktemp)
+  declared_raw=$(mktemp)
+  vers=$(mktemp)
   installed=$(mktemp)
   pairs=$(mktemp)
   before_snap=$(mktemp)
   after_snap=$(mktemp)
-  trap "rm -f '$declared' '$installed' '$pairs' '$before_snap' '$after_snap'" EXIT
+  trap "rm -f '$declared' '$declared_raw' '$vers' '$installed' '$pairs' '$before_snap' '$after_snap'" EXIT
 
   go_snapshot_versions >"$before_snap"
 
-  pkg::manifest_read "$GOFILE" >"$declared"
+  # Split optional `@<version>` pins off the manifest entries: $declared keeps
+  # the BARE module paths (the reconciliation identity — `go version -m`
+  # reports paths, never pins, so diffs/cleanup key on the path alone) and
+  # $vers maps path → pinned version ("latest" when unpinned).
+  pkg::manifest_read "$GOFILE" >"$declared_raw"
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    local pin_path="${entry%%@*}" pin_ver="latest"
+    [[ "$entry" == *@* ]] && pin_ver="${entry#*@}"
+    print -r -- "$pin_path" >>"$declared"
+    printf '%s\t%s\n' "$pin_path" "$pin_ver" >>"$vers"
+  done <"$declared_raw"
   go_installed_pairs >"$pairs"
   awk -F'\t' '{print $1}' "$pairs" >"$installed"
 
@@ -139,31 +156,46 @@ do_sync() {
     local bin=""
     bin=$(awk -F'\t' -v p="$pkg" '$1==p {print $2; exit}' "$pairs")
     [[ -n "$bin" && -f "$bin_dir/$bin" ]] || continue
+    # on-remove hooks run BEFORE the delete so a hook may invoke the binary
+    # itself (e.g. `ai-playbook man uninstall`). Soft-fail, never blocks rm.
+    pkg::run_hooks "$bin" "on-remove"
     rm -v "$bin_dir/$bin" || log_warn "failed to remove $bin_dir/$bin"
   done
 
-  # Install missing
+  # Install missing (at the pinned version when one is declared)
   pkg::diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
-    "$go_executable" install "$pkg@latest" || log_warn "failed to install $pkg"
+    want=$(awk -F'\t' -v p="$pkg" '$1==p {print $2; exit}' "$vers")
+    "$go_executable" install "$pkg@${want:-latest}" || log_warn "failed to install $pkg"
   done
 
-  # Upgrade everything still declared (re-running go install fetches latest)
+  # Upgrade everything still declared (re-running go install fetches the
+  # pinned version — a no-op when already on it — or latest when unpinned)
   while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
-    "$go_executable" install "$pkg@latest" || log_warn "failed to upgrade $pkg"
+    want=$(awk -F'\t' -v p="$pkg" '$1==p {print $2; exit}' "$vers")
+    "$go_executable" install "$pkg@${want:-latest}" || log_warn "failed to upgrade $pkg"
   done <"$declared"
 
   # Restart services whose backing binary changed version. Keyed on binary
   # basename (matches what `system-service restart-for` resolves cmd[0] to).
   go_snapshot_versions >"$after_snap"
   pkg::restart_changed "$before_snap" "$after_snap"
+  # Fire on-change hooks (hooks.toml) for every binary whose version changed
+  # this sync — installed, upgraded, or downgraded (e.g. regenerate the
+  # binary's self-installed man pages/completions).
+  pkg::hooks_changed "$before_snap" "$after_snap"
   return 0
 }
 
 usage() {
   cat <<EOF
 Syncs \`go install\`-managed binaries against ~/.config/packages/Gofile.
+
+Manifest entries are module paths, optionally pinned with \`@<version>\`
+(e.g. example.com/cmd/tool@v1.2.0-RC1). Pinned entries install/upgrade to
+exactly that version; unpinned ones track @latest (which never resolves to a
+prerelease — RCs must be pinned).
 
 Usage:
   system-package-go list [-u|--update]

@@ -1,0 +1,17 @@
+# hooks.toml — package lifecycle hooks, keyed by BINARY name (the same key the
+# version snapshots and services.toml use). Run by the system-package workers:
+#
+#   on-change  — post-sync, when the binary was installed/upgraded/downgraded.
+#   on-remove  — BEFORE the binary is deleted (hooks may invoke the binary).
+#
+# Parsing is a strict TOML subset: single-line double-quoted string arrays;
+# commands must not contain double quotes. Hooks soft-fail (logged, never
+# fail the sync).
+
+# ai-playbook renders its own man pages + zsh completions from the installed
+# binary (always version-matched); regenerate them whenever it changes and
+# remove them when it goes. One entry (not apb/ask): the three binaries move
+# in lockstep and one hook run installs the docs for all of them.
+[ai-playbook]
+on-change = ["ai-playbook man install --force", "ai-playbook completion install --force"]
+on-remove = ["ai-playbook man uninstall", "ai-playbook completion uninstall"]
