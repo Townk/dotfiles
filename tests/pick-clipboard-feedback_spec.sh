@@ -311,6 +311,35 @@ EOF
       The status should be success
       The contents of file "$HSLOG" should equal ""
     End
+
+    It 'stall: quiet gap emits a stalled repaint, next chunk snaps back past the throttle (§4.3)'
+      # STALL_SECS=0.3 keeps the test fast; the 0.8s quiet gap comfortably
+      # exceeds it (>=1 stall tick guaranteed, timing-tolerant). START=0
+      # puts every tick past the grace window.
+      When call zsh -f -c '
+        export PICK_CLIPBOARD_STALL_SECS=0.3
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        CLIP_PROGRESS_START=0
+        CLIP_PROGRESS_LAST_EMIT=0
+        { printf "  1,000  10%%\r"; sleep 0.8; printf "  5,000  50%%\r"; } | clip::progress_stream 0 1 work-laptop
+      '
+      The status should be success
+      # First emit: normal 10%. At least one stalled repaint carrying the
+      # last known pct. Final emit: the post-stall 50% arrives while the
+      # 300ms spacing window is still open -- only the stall bypass can
+      # let it through, so this line IS the bypass assertion.
+      # This shellspec (0.28.1) supports `The line N of contents of file`
+      # but not a `last`/negative-index line modifier ("Unknown word 'last'
+      # after contents modifier" / "parameter #1 of line modifier is not a
+      # number" -- verified empirically), so the final property below uses
+      # `should end_with` on the whole contents instead -- confirmed to
+      # discriminate (fails when the file doesn't actually end with this
+      # line, per a throwaway probe run before committing).
+      The line 1 of contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop")'
+      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop", true)'
+      The contents of file "$HSLOG" should end_with 'require("osd").progress("glyph:nf-md-download", 50, "work-laptop")'
+    End
   End
 
   Describe '--restore-id headless pull with progress plumbing (§4.2)'

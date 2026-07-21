@@ -618,6 +618,8 @@ local PROG_BAR_HEIGHT = 8
 local PROG_BAR_SEGMENTS = 16
 local PROG_PCT_WIDTH = 38
 local PROG_IDLE_TIMEOUT = 15
+local PROG_STALL_ALPHA = 0.45
+local PROG_STALL_ICON = "glyph:nf-fa-hourglass"
 
 local progressCanvas = nil
 local progressWatchdog = nil
@@ -642,9 +644,15 @@ end
 --- @param icon string|nil     glyph:/swatch:/SVG name (resolveNamedIcon forms)
 --- @param percent number      0-100
 --- @param label string|nil    short context label, e.g. the origin host
-function M.progress(icon, percent, label)
+--- @param stalled boolean|nil  true = transfer alive but no bytes flowing; hourglass icon + dimmed bar, geometry/watchdog unchanged
+function M.progress(icon, percent, label, stalled)
 	local pct = math.max(0, math.min(100, percent or 0))
-	local resolved = type(icon) == "string" and resolveNamedIcon(icon) or icon
+	local resolved
+	if stalled then
+		resolved = resolveNamedIcon(PROG_STALL_ICON)
+	else
+		resolved = type(icon) == "string" and resolveNamedIcon(icon) or icon
+	end
 
 	-- Top-right of the focused screen's usable frame (:frame() already
 	-- excludes the menu bar, unlike the main OSD's :fullFrame()).
@@ -665,6 +673,7 @@ function M.progress(icon, percent, label)
 	end
 
 	local elements = {}
+	local fillOn = stalled and { white = 1, alpha = PROG_STALL_ALPHA } or BAR_ON
 	local bw2 = BORDER_W / 2
 	elements[#elements + 1] = {
 		type = "rectangle",
@@ -690,7 +699,7 @@ function M.progress(icon, percent, label)
 			frame = iconFrame,
 			text = hs.styledtext.new(resolved.char, {
 				font = { name = NERD_FONT_NAME, size = PROG_ICON_SIZE },
-				color = BAR_ON,
+				color = fillOn,
 				paragraphStyle = { alignment = "center" },
 			}),
 		}
@@ -731,7 +740,7 @@ function M.progress(icon, percent, label)
 				w = segW,
 				h = PROG_BAR_HEIGHT,
 			},
-			fillColor = (pct > threshold) and BAR_ON or BAR_OFF,
+			fillColor = (pct > threshold) and fillOn or BAR_OFF,
 			roundedRectRadii = { xRadius = BAR_RADIUS, yRadius = BAR_RADIUS },
 		}
 	end
@@ -744,7 +753,7 @@ function M.progress(icon, percent, label)
 		frame = { x = PROG_WIDTH - PROG_PCT_WIDTH - PROG_PAD_H + 4, y = (PROG_HEIGHT - 16) / 2, w = PROG_PCT_WIDTH, h = 16 },
 		text = hs.styledtext.new(string.format("%d%%", pct), {
 			font = { name = ".AppleSystemUIFont", size = 12 },
-			color = BAR_ON,
+			color = fillOn,
 			paragraphStyle = { alignment = "right" },
 		}),
 	}

@@ -532,11 +532,20 @@ clip::progress_begin() {
   CLIP_PROGRESS_SHOWN=""
   CLIP_PROGRESS_HS="${PICK_CLIPBOARD_HS:-hs}"
   command -v "$CLIP_PROGRESS_HS" >/dev/null 2>&1 || CLIP_PROGRESS_HS=""
+  CLIP_PROGRESS_STALLED=0
+  CLIP_PROGRESS_STALL_SECS="${PICK_CLIPBOARD_STALL_SECS:-2}"
+  # zselect gives the stream sink a read timeout (stall detection, §4.3);
+  # without the module (minimal zsh build) reads stay blocking -- the
+  # pre-stall-indicator behavior, degraded but functional.
+  CLIP_PROGRESS_ZSELECT=0
+  zmodload zsh/zselect 2>/dev/null && CLIP_PROGRESS_ZSELECT=1
 }
 
-clip::progress_emit() {  # <pct> <label>
+clip::progress_emit() {  # <pct> <label> [stalled]
   [[ -n "${CLIP_PROGRESS_HS:-}" ]] || return 0
-  "$CLIP_PROGRESS_HS" -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"$2\")" >/dev/null 2>&1 || true
+  local stall_arg=""
+  [[ -n "${3:-}" ]] && stall_arg=", true"
+  "$CLIP_PROGRESS_HS" -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"$2\"${stall_arg})" >/dev/null 2>&1 || true
   CLIP_PROGRESS_SHOWN=1
   return 0
 }
@@ -544,21 +553,56 @@ clip::progress_emit() {  # <pct> <label>
 clip::progress_stream() {  # <completed-paths> <total-paths> <label>
   local -i completed=$1 total=$2
   local label=$3 chunk now
-  local -i agg
+  local -i agg rc stall_cs
   # No hs to drive: drain stdin so rsync never blocks on a full pipe.
   [[ -n "${CLIP_PROGRESS_HS:-}" ]] || { cat >/dev/null; return 0 }
-  # progress2 redraws its meter with bare CRs; read CR-delimited chunks and
-  # mine each for the percent field.
-  while IFS= read -r -d $'\r' chunk || [[ -n "$chunk" ]]; do
-    [[ "$chunk" =~ '([0-9]+)%' ]] || continue
-    agg=$(clip::progress_pct "$completed" "$total" "$match[1]")
-    (( agg < CLIP_PROGRESS_LAST_PCT )) && agg=$CLIP_PROGRESS_LAST_PCT
-    now=$EPOCHREALTIME
-    if [[ -n "$(clip::progress_decide "$now" "$CLIP_PROGRESS_START" "$CLIP_PROGRESS_LAST_EMIT" "$CLIP_PROGRESS_LAST_PCT" "$agg")" ]]; then
-      clip::progress_emit "$agg" "$label"
-      CLIP_PROGRESS_LAST_EMIT=$now
-      CLIP_PROGRESS_LAST_PCT=$agg
+  # progress2 redraws its meter with bare CRs -- and it redraws
+  # CONTINUOUSLY while bytes flow, so meter silence IS the stall signal
+  # (§4.3). zselect-timed reads turn each quiet window into a stalled
+  # repaint: capsule stays visible (hiding must mean done/dead, never
+  # waiting) and the Lua watchdog stays fed, leaving it to fire only for a
+  # genuinely dead driver. EOF makes the fd readable, so a closed pipe
+  # always exits through the read failure below, never a stall loop.
+  stall_cs=$(( CLIP_PROGRESS_STALL_SECS * 100 ))
+  while true; do
+    if (( CLIP_PROGRESS_ZSELECT )) && ! zselect -t $stall_cs -r 0; then
+      # Quiet window: repaint the last known percent as stalled (-100
+      # start value clamps to 0 -- a stall before any data still shows a
+      # capsule, at 0%). Refreshing LAST_EMIT here means only the STALLED
+      # flag below can let the resume chunk through the throttle.
+      clip::progress_emit "$(( CLIP_PROGRESS_LAST_PCT < 0 ? 0 : CLIP_PROGRESS_LAST_PCT ))" "$label" stalled
+      CLIP_PROGRESS_STALLED=1
+      CLIP_PROGRESS_LAST_EMIT=$EPOCHREALTIME
+      continue
     fi
+    # `read ...; rc=$?` (two bare statements) would trip this script's own
+    # `set -e`: the read failing on EOF is a plain statement, not part of an
+    # if/while condition or an && / || list ending in something else, so
+    # errexit fires on it BEFORE `rc=$?` ever runs -- verified empirically
+    # (a minimal `set -e; false; echo done` never reaches the echo either).
+    # `read ... || rc=$?` puts read on the non-final side of an || list,
+    # which IS exempt, and still captures its status the moment it fails.
+    rc=0
+    IFS= read -r -d $'\r' chunk || rc=$?
+    (( rc )) && [[ -z "$chunk" ]] && break
+    if [[ "$chunk" =~ '([0-9]+)%' ]]; then
+      agg=$(clip::progress_pct "$completed" "$total" "$match[1]")
+      (( agg < CLIP_PROGRESS_LAST_PCT )) && agg=$CLIP_PROGRESS_LAST_PCT
+      now=$EPOCHREALTIME
+      if (( CLIP_PROGRESS_STALLED )); then
+        # Resume after a stall: bypass the throttle so the capsule snaps
+        # back to the live look on the very first data chunk (§4.3).
+        clip::progress_emit "$agg" "$label"
+        CLIP_PROGRESS_STALLED=0
+        CLIP_PROGRESS_LAST_EMIT=$now
+        CLIP_PROGRESS_LAST_PCT=$agg
+      elif [[ -n "$(clip::progress_decide "$now" "$CLIP_PROGRESS_START" "$CLIP_PROGRESS_LAST_EMIT" "$CLIP_PROGRESS_LAST_PCT" "$agg")" ]]; then
+        clip::progress_emit "$agg" "$label"
+        CLIP_PROGRESS_LAST_EMIT=$now
+        CLIP_PROGRESS_LAST_PCT=$agg
+      fi
+    fi
+    (( rc )) && break
   done
   return 0
 }
