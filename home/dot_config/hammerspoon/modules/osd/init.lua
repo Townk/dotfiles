@@ -605,6 +605,164 @@ function M.notifyAnsi(icon, text, soundName)
 	playNotificationSound(soundName)
 end
 
+---------------------------------------------------------------------------
+-- Compact top-right progress HUD (clipboard copy-feedback design §5)
+---------------------------------------------------------------------------
+
+local PROG_WIDTH = 260
+local PROG_HEIGHT = 44
+local PROG_MARGIN = 12
+local PROG_PAD_H = 14
+local PROG_ICON_SIZE = 22
+local PROG_BAR_HEIGHT = 8
+local PROG_BAR_SEGMENTS = 16
+local PROG_PCT_WIDTH = 38
+local PROG_IDLE_TIMEOUT = 15
+
+local progressCanvas = nil
+local progressWatchdog = nil
+
+local function cancelProgressWatchdog()
+	if progressWatchdog then
+		progressWatchdog:stop()
+		progressWatchdog = nil
+	end
+end
+
+--- Show or update the compact top-right progress capsule.
+---
+--- Deliberately NOT the centered OSD: a progress indicator must not cover
+--- the center of the screen the user is working on, and it must not blink
+--- between ticks. Separate canvas from the main OSD so a completion toast
+--- can appear the moment this hides without the two fighting over state.
+--- It never auto-fades on update; it hides only via M.progressHide() or
+--- the idle watchdog (no update for PROG_IDLE_TIMEOUT seconds -> a dead
+--- driver can never leave a zombie capsule on screen).
+---
+--- @param icon string|nil     glyph:/swatch:/SVG name (resolveNamedIcon forms)
+--- @param percent number      0-100
+--- @param label string|nil    short context label, e.g. the origin host
+function M.progress(icon, percent, label)
+	local pct = math.max(0, math.min(100, percent or 0))
+	local resolved = type(icon) == "string" and resolveNamedIcon(icon) or icon
+
+	-- Top-right of the focused screen's usable frame (:frame() already
+	-- excludes the menu bar, unlike the main OSD's :fullFrame()).
+	local frame = targetScreen():frame()
+	local x = frame.x + frame.w - PROG_WIDTH - PROG_MARGIN
+	local y = frame.y + PROG_MARGIN
+
+	if not progressCanvas then
+		progressCanvas = hs.canvas.new({ x = x, y = y, w = PROG_WIDTH, h = PROG_HEIGHT })
+		if not progressCanvas then return end
+		progressCanvas:behavior( ---@diagnostic disable-line: undefined-field
+			hs.canvas.windowBehaviors.canJoinAllSpaces
+				+ hs.canvas.windowBehaviors.stationary
+		)
+		progressCanvas:level(hs.canvas.windowLevels.overlay) ---@diagnostic disable-line: undefined-field
+	else
+		progressCanvas:topLeft({ x = x, y = y })
+	end
+
+	local elements = {}
+	local bw2 = BORDER_W / 2
+	elements[#elements + 1] = {
+		type = "rectangle",
+		action = "strokeAndFill",
+		frame = { x = bw2, y = bw2, w = PROG_WIDTH - BORDER_W, h = PROG_HEIGHT - BORDER_W },
+		fillColor = BG_COLOR,
+		strokeColor = BORDER_COLOR,
+		strokeWidth = BORDER_W,
+		roundedRectRadii = { xRadius = PROG_HEIGHT / 2, yRadius = PROG_HEIGHT / 2 },
+	}
+
+	-- Icon at the left edge (glyph is the only production shape; image/
+	-- swatch handled for parity with resolveNamedIcon's other forms).
+	local iconFrame = {
+		x = PROG_PAD_H,
+		y = (PROG_HEIGHT - PROG_ICON_SIZE) / 2,
+		w = PROG_ICON_SIZE,
+		h = PROG_ICON_SIZE,
+	}
+	if type(resolved) == "table" and resolved.type == "glyphIcon" then
+		elements[#elements + 1] = {
+			type = "text",
+			frame = iconFrame,
+			text = hs.styledtext.new(resolved.char, {
+				font = { name = NERD_FONT_NAME, size = PROG_ICON_SIZE },
+				color = BAR_ON,
+				paragraphStyle = { alignment = "center" },
+			}),
+		}
+	elseif resolved ~= nil and type(resolved) ~= "table" then
+		elements[#elements + 1] = {
+			type = "image",
+			image = resolved,
+			frame = iconFrame,
+			imageScaling = "shrinkToFit",
+			imageAlignment = "center",
+		}
+	end
+
+	-- Segmented mini-bar between icon and percent label -- the main OSD's
+	-- bar language, miniaturized.
+	local barX = iconFrame.x + iconFrame.w + PROG_PAD_H / 2
+	local barW = PROG_WIDTH - barX - PROG_PCT_WIDTH - PROG_PAD_H
+	local barY = (PROG_HEIGHT - PROG_BAR_HEIGHT) / 2
+	local segW = (barW - (PROG_BAR_SEGMENTS - 1) * BAR_GAP) / PROG_BAR_SEGMENTS
+	for i = 1, PROG_BAR_SEGMENTS do
+		local threshold = (i - 1) / PROG_BAR_SEGMENTS * 100
+		elements[#elements + 1] = {
+			type = "rectangle",
+			action = "fill",
+			frame = {
+				x = barX + (i - 1) * (segW + BAR_GAP),
+				y = barY,
+				w = segW,
+				h = PROG_BAR_HEIGHT,
+			},
+			fillColor = (pct > threshold) and BAR_ON or BAR_OFF,
+			roundedRectRadii = { xRadius = BAR_RADIUS, yRadius = BAR_RADIUS },
+		}
+	end
+
+	-- Right-aligned percent label. `label` (origin host) is intentionally
+	-- unrendered at this size -- 260px is glyph + bar + percent territory;
+	-- the completion toast names the host.
+	elements[#elements + 1] = {
+		type = "text",
+		frame = { x = PROG_WIDTH - PROG_PCT_WIDTH - PROG_PAD_H + 4, y = (PROG_HEIGHT - 16) / 2, w = PROG_PCT_WIDTH, h = 16 },
+		text = hs.styledtext.new(string.format("%d%%", pct), {
+			font = { name = ".AppleSystemUIFont", size = 12 },
+			color = BAR_ON,
+			paragraphStyle = { alignment = "right" },
+		}),
+	}
+
+	while progressCanvas:elementCount() > 0 do
+		progressCanvas:removeElement(1)
+	end
+	for _, elem in ipairs(elements) do
+		progressCanvas:insertElement(elem)
+	end
+	progressCanvas:alpha(1)
+	progressCanvas:show()
+
+	cancelProgressWatchdog()
+	progressWatchdog = hs.timer.doAfter(PROG_IDLE_TIMEOUT, function()
+		progressWatchdog = nil
+		M.progressHide()
+	end)
+end
+
+--- Immediately hide the progress HUD (no animation).
+function M.progressHide()
+	cancelProgressWatchdog()
+	if progressCanvas then
+		progressCanvas:hide()
+	end
+end
+
 --- Immediately hide the OSD without animation.
 function M.hide()
 	cancelTimers()
@@ -620,6 +778,11 @@ function M.cleanup()
 	if canvas then
 		canvas:delete()
 		canvas = nil
+	end
+	M.progressHide()
+	if progressCanvas then
+		progressCanvas:delete()
+		progressCanvas = nil
 	end
 	if tickSound then
 		tickSound:stop()
