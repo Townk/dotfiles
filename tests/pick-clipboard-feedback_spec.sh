@@ -99,35 +99,49 @@ EOF
     ' _ "$@"
   }
 
+  # Exact-match checker for clip::toast_spec output: the expected string
+  # contains a raw US (0x1f) separator, which must never appear inside a
+  # shellspec DSL argument (it collides with shellspec's own internal
+  # field separator and corrupts the assertion). Comparison happens
+  # entirely in-shell instead.
+  check_toast_spec() {  # <kind> <host> <expected-icon> <expected-message>
+    local out
+    out=$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::toast_spec "$1" "$2"
+    ' _ "$1" "$2")
+    [ "$out" = "$3$(printf '\x1f')$4" ]
+  }
+
   Describe 'clip::toast_spec (§6 variant selection, pure)'
     It 'remote text row -> text glyph + Copied from <host>'
-      When call run_fn clip::toast_spec text work-laptop
-      The output should equal "glyph:nf-md-text_box$(printf '\x1f')Copied from work-laptop"
+      When call check_toast_spec text work-laptop glyph:nf-md-text_box "Copied from work-laptop"
+      The status should be success
     End
 
     It 'remote files row -> file_multiple glyph'
-      When call run_fn clip::toast_spec files work-laptop
-      The output should equal "glyph:nf-md-file_multiple$(printf '\x1f')Copied from work-laptop"
+      When call check_toast_spec files work-laptop glyph:nf-md-file_multiple "Copied from work-laptop"
+      The status should be success
     End
 
     It 'remote image/file/directory rows -> their kind glyphs'
-      When call run_fn clip::toast_spec image work-laptop
-      The output should equal "glyph:nf-md-image$(printf '\x1f')Copied from work-laptop"
+      When call check_toast_spec image work-laptop glyph:nf-md-image "Copied from work-laptop"
+      The status should be success
     End
 
     It 'unknown kind falls back to the text glyph'
-      When call run_fn clip::toast_spec url work-laptop
-      The output should equal "glyph:nf-md-text_box$(printf '\x1f')Copied from work-laptop"
+      When call check_toast_spec url work-laptop glyph:nf-md-text_box "Copied from work-laptop"
+      The status should be success
     End
 
     It 'own-host row -> local acknowledgment variant'
-      When call run_fn clip::toast_spec text mac-mini
-      The output should equal "glyph:fa-clipboard-list$(printf '\x1f')Clipboard moved to top"
+      When call check_toast_spec text mac-mini glyph:fa-clipboard-list "Clipboard moved to top"
+      The status should be success
     End
 
     It 'empty host (legacy row) reads as local'
-      When call run_fn clip::toast_spec files ''
-      The output should equal "glyph:fa-clipboard-list$(printf '\x1f')Clipboard moved to top"
+      When call check_toast_spec files '' glyph:fa-clipboard-list "Clipboard moved to top"
+      The status should be success
     End
   End
 
