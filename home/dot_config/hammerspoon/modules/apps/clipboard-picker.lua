@@ -688,7 +688,13 @@ local function headless_restore(id, onDone)
     return nil
   end
   local cmd = shell_quote(PICK_CLIPBOARD_BIN) .. " --restore-id " .. tostring(intId)
-  local task = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
+  local cancelled = false
+  local task
+  task = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
+    -- Fast transfers may finish inside the HUD grace window -- the capsule
+    -- (and its progressHide) never happens, so clear the registration here
+    -- unconditionally or it leaks into the next transfer.
+    osd.progressCancel(nil)
     -- Success is the exit code alone, never output presence: pick-clipboard
     -- can legitimately print nothing on stdout/stderr on a clean success,
     -- and conversely a captured failure reason on stderr must never be
@@ -700,7 +706,7 @@ local function headless_restore(id, onDone)
     print(string.format(
       "clipboard-picker: headless restore id=%d exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
       intId, tostring(exitCode), stdOut or "", stdErr or ""))
-    if not ok then
+    if not ok and not cancelled and exitCode ~= 130 then
       -- A transient toast's default ~2s lifetime was unreadably brief for a
       -- failure (live validation). hs.notify is a real Notification Center item;
       -- withdrawAfter=0 disables its own default auto-withdrawal (5s for
@@ -714,9 +720,21 @@ local function headless_restore(id, onDone)
         withdrawAfter = 0,
       }):send()
     end
+    -- exit 130 / cancelled: §4.4 cancel contract -- the engine already
+    -- cleaned up and toasted quietly; a cancel is not a failure.
     if onDone then onDone(ok) end
   end, { "-lc", cmd })
   task:start()
+  osd.progressCancel(function()
+    -- SIGTERM to the zsh wrapper alone is deferred until the foreground
+    -- rsync exits -- kill rsync (the wrapper's direct child) first; rsync
+    -- TERM-cleans its own temp file. Then terminate() fires the wrapper's
+    -- §4.4 trap.
+    cancelled = true
+    local pid = task and task:pid()
+    if pid then hs.execute("/usr/bin/pkill -TERM -P " .. tostring(pid)) end
+    if task then task:terminate() end
+  end)
   return task
 end
 

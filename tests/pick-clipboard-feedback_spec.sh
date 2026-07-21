@@ -354,4 +354,69 @@ EOF
       The contents of file "$NOTIFYLOG" should include "--icon glyph:nf-md-file_multiple --sound Frog Copied from work-laptop"
     End
   End
+
+  Describe 'cancellation + partial-cache cleanup (§4.4)'
+    It 'rsync failure removes the partial cache dir'
+      id=$(seed_remote_manifest_row)
+      cat > "$BINDIR/rsync-fail" <<EOF
+#!/bin/sh
+argc=\$#
+eval "dst=\\\${\$argc}"
+mkdir -p "\$dst/partial-dir"
+printf partial > "\$dst/partial-dir/chunk"
+exit 23
+EOF
+      chmod +x "$BINDIR/rsync-fail"
+      export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync-fail"
+      When call run_restore_id "$id"
+      The status should equal 1
+      The stderr should include 'rsync failed pulling'
+      The path "$HOME/.cache/pick-clipboard/files/$id/1" should not be exist
+      The contents of file "$NOTIFYLOG" should equal ""
+    End
+
+    It 'a failed pull does not poison the cache: the next pick re-pulls and succeeds'
+      id=$(seed_remote_manifest_row)
+      cat > "$BINDIR/rsync-fail" <<EOF
+#!/bin/sh
+argc=\$#
+eval "dst=\\\${\$argc}"
+mkdir -p "\$dst/partial-dir"
+exit 23
+EOF
+      chmod +x "$BINDIR/rsync-fail"
+      export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync-fail"
+      run_restore_id "$id" 2>/dev/null || true
+      export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync"
+      When call run_restore_id "$id"
+      The status should be success
+      The contents of file "$NOTIFYLOG" should include "Copied from work-laptop"
+    End
+
+    It 'TERM mid-pull runs the cancel path: exit 130, partial removed, quiet toast'
+      id=$(seed_remote_manifest_row)
+      cat > "$BINDIR/rsync-slow" <<EOF
+#!/bin/sh
+argc=\$#
+eval "dst=\\\${\$argc}"
+mkdir -p "\$dst/partial-dir"
+sleep 1
+exit 0
+EOF
+      chmod +x "$BINDIR/rsync-slow"
+      export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync-slow"
+      run_cancelled_restore() {
+        zsh -f "$SCRIPT" --restore-id "$1" &
+        _pid=$!
+        sleep 0.4
+        kill -TERM "$_pid" 2>/dev/null
+        wait "$_pid"
+      }
+      When call run_cancelled_restore "$id"
+      The status should equal 130
+      The path "$HOME/.cache/pick-clipboard/files/$id/1" should not be exist
+      The contents of file "$NOTIFYLOG" should include "--icon glyph:nf-md-close Transfer cancelled"
+      The contents of file "$NOTIFYLOG" should not include "Copied from"
+    End
+  End
 End

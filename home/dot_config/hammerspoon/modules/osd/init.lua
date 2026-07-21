@@ -617,12 +617,14 @@ local PROG_ICON_SIZE = 22
 local PROG_BAR_HEIGHT = 8
 local PROG_BAR_SEGMENTS = 16
 local PROG_PCT_WIDTH = 38
+local PROG_CANCEL_W = 24
 local PROG_IDLE_TIMEOUT = 15
 local PROG_STALL_ALPHA = 0.45
 local PROG_STALL_ICON = "glyph:nf-fa-hourglass"
 
 local progressCanvas = nil
 local progressWatchdog = nil
+local progressCancelFn = nil
 
 local function cancelProgressWatchdog()
 	if progressWatchdog then
@@ -668,12 +670,21 @@ function M.progress(icon, percent, label, stalled)
 				+ hs.canvas.windowBehaviors.stationary
 		)
 		progressCanvas:level(hs.canvas.windowLevels.overlay) ---@diagnostic disable-line: undefined-field
+		progressCanvas:canvasMouseEvents(true)
+		progressCanvas:mouseCallback(function(_, event, id)
+			if event == "mouseDown" and id == "progress-cancel" and progressCancelFn then
+				local fn = progressCancelFn
+				progressCancelFn = nil
+				fn()
+			end
+		end)
 	else
 		progressCanvas:topLeft({ x = x, y = y })
 	end
 
 	local elements = {}
 	local fillOn = stalled and { white = 1, alpha = PROG_STALL_ALPHA } or BAR_ON
+	local cancelW = progressCancelFn and PROG_CANCEL_W or 0
 	local bw2 = BORDER_W / 2
 	elements[#elements + 1] = {
 		type = "rectangle",
@@ -726,7 +737,7 @@ function M.progress(icon, percent, label, stalled)
 	-- Segmented mini-bar between icon and percent label -- the main OSD's
 	-- bar language, miniaturized.
 	local barX = iconFrame.x + iconFrame.w + PROG_PAD_H / 2
-	local barW = PROG_WIDTH - barX - PROG_PCT_WIDTH - PROG_PAD_H
+	local barW = PROG_WIDTH - barX - PROG_PCT_WIDTH - PROG_PAD_H - cancelW
 	local barY = (PROG_HEIGHT - PROG_BAR_HEIGHT) / 2
 	local segW = (barW - (PROG_BAR_SEGMENTS - 1) * BAR_GAP) / PROG_BAR_SEGMENTS
 	for i = 1, PROG_BAR_SEGMENTS do
@@ -750,13 +761,29 @@ function M.progress(icon, percent, label, stalled)
 	-- the completion toast names the host.
 	elements[#elements + 1] = {
 		type = "text",
-		frame = { x = PROG_WIDTH - PROG_PCT_WIDTH - PROG_PAD_H + 4, y = (PROG_HEIGHT - 16) / 2, w = PROG_PCT_WIDTH, h = 16 },
+		frame = { x = PROG_WIDTH - PROG_PCT_WIDTH - PROG_PAD_H + 4 - cancelW, y = (PROG_HEIGHT - 16) / 2, w = PROG_PCT_WIDTH, h = 16 },
 		text = hs.styledtext.new(string.format("%d%%", pct), {
 			font = { name = ".AppleSystemUIFont", size = 12 },
 			color = fillOn,
 			paragraphStyle = { alignment = "right" },
 		}),
 	}
+
+	if progressCancelFn then
+		elements[#elements + 1] = {
+			type = "text",
+			id = "progress-cancel",
+			trackMouseDown = true,
+			frame = { x = PROG_WIDTH - PROG_CANCEL_W - 6, y = (PROG_HEIGHT - 18) / 2, w = PROG_CANCEL_W, h = 18 },
+			-- BAR_ON at full alpha even in the stalled state: the escape
+			-- hatch never dims (§5b).
+			text = hs.styledtext.new("✕", {
+				font = { name = ".AppleSystemUIFont", size = 13 },
+				color = BAR_ON,
+				paragraphStyle = { alignment = "center" },
+			}),
+		}
+	end
 
 	while progressCanvas:elementCount() > 0 do
 		progressCanvas:removeElement(1)
@@ -774,12 +801,22 @@ function M.progress(icon, percent, label, stalled)
 	end)
 end
 
+--- Register (or clear, with nil) the cancel callback for the current
+--- transfer (§5b). The capsule renders its discrete ✕ only while one is
+--- registered; a mouse-down on the ✕ invokes the callback once and clears
+--- the registration. progressHide() also clears it.
+--- @param fn function|nil
+function M.progressCancel(fn)
+	progressCancelFn = fn
+end
+
 --- Immediately hide the progress HUD (no animation).
 function M.progressHide()
 	cancelProgressWatchdog()
 	if progressCanvas then
 		progressCanvas:hide()
 	end
+	progressCancelFn = nil
 end
 
 --- Immediately hide the OSD without animation.

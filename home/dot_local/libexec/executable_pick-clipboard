@@ -617,6 +617,24 @@ clip::progress_end() {
   return 0
 }
 
+# Cancellation (§4.4): the INT/TERM trap handler for the case-3 pull loop.
+# INT is the TUI's Ctrl+C; TERM is the GUI capsule's ✕. A cancel is NOT a
+# failure -- no restore_fail, no W2 hold, no persistent notification: clean
+# up the in-flight partial, hide the HUD, confirm quietly (no sound), and
+# exit 130 -- the cancel contract clipboard-picker.lua keys off.
+# if-form throughout, never `[[ ... ]] && cmd`: this runs under the
+# script's set -e, where a false left-hand test as a statement's final
+# status would errexit the handler before `exit 130` ever runs.
+clip::pull_cancelled() {
+  if [[ -n "${CLIP_PULL_SUB:-}" ]]; then rm -rf -- "$CLIP_PULL_SUB"; fi
+  clip::progress_end
+  local notify_bin="${PICK_CLIPBOARD_NOTIFY:-$HOME/.local/bin/notify}"
+  if [[ -x "$notify_bin" ]]; then
+    "$notify_bin" --icon "glyph:nf-md-close" "Transfer cancelled" >/dev/null 2>&1 || true
+  fi
+  exit 130
+}
+
 clip::copy_files_by_id() {
   local id=$1
   local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
@@ -729,12 +747,23 @@ clip::copy_files_by_id() {
   clip::has_live_tty && have_tty=1
   (( have_tty )) || clip::progress_begin
 
+  # Cancel trap (§4.4): localtraps scopes it to this function -- every
+  # return path restores the caller's disposition automatically, so the
+  # failure branches below need no explicit `trap -`. zsh defers the trap
+  # until the foreground rsync exits (killed by the same Ctrl+C group
+  # signal, or directly by the GUI's pkill), so the partial output is
+  # settled by the time the handler removes it.
+  setopt localoptions localtraps
+  CLIP_PULL_SUB=""
+  trap 'clip::pull_cancelled' INT TERM
+
   for rp in "${rpaths[@]}"; do
     (( idx += 1 ))
     sub="$cachedir/$idx"
     lp="$sub/${rp:t}"
     if [[ ! -e "$lp" ]]; then
       mkdir -p "$sub" || { clip::progress_end; clip::restore_fail "cannot create $sub"; return 1 }
+      CLIP_PULL_SUB="$sub"
       # spec R3: this pull's ssh session has no use for the clipboard bridge's
       # RemoteForward -- without ClearAllForwardings, a session multiplexed
       # onto the interactive connection's ControlMaster re-requests the same
@@ -770,7 +799,7 @@ clip::copy_files_by_id() {
         # writes the meter to STDOUT -- `1>&2` routes it to the pane's tty
         # (same move as pbpaste tier 2) while real errors still land in the
         # capture file for the one-line failure reason.
-        print -ru2 -- "Pulling ${rp:t} from ${host} (${idx}/${n_paths})…"
+        print -ru2 -- "Pulling ${rp:t} from ${host} (${idx}/${n_paths})… — Ctrl+C cancels"
         "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
       else
         # Headless: meter stdout feeds the throttled HUD sink; the sink is
@@ -782,6 +811,7 @@ clip::copy_files_by_id() {
       fi
       if (( rrc != 0 )); then
         clip::progress_end
+        rm -rf -- "$sub"
         if [[ "$rsync_err" == /dev/null ]]; then
           clip::restore_fail "rsync failed pulling $host:$rp"
         else
@@ -791,6 +821,7 @@ clip::copy_files_by_id() {
       fi
       if [[ "$rsync_err" != /dev/null ]]; then rm -f "$rsync_err"; fi
       (( pulled += 1 ))
+      CLIP_PULL_SUB=""
     fi
     local_paths+=("$lp")
   done
