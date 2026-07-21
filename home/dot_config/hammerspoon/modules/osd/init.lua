@@ -694,6 +694,16 @@ function M.progress(icon, percent, label)
 				paragraphStyle = { alignment = "center" },
 			}),
 		}
+	elseif type(resolved) == "table" and resolved.type == "swatchIcon" then
+		elements[#elements + 1] = {
+			type = "rectangle",
+			action = "strokeAndFill",
+			frame = iconFrame,
+			fillColor = resolved.color,
+			strokeColor = { white = 1, alpha = 0.65 },
+			strokeWidth = 1,
+			roundedRectRadii = { xRadius = 5, yRadius = 5 },
+		}
 	elseif resolved ~= nil and type(resolved) ~= "table" then
 		elements[#elements + 1] = {
 			type = "image",
