@@ -690,7 +690,7 @@ clip::copy_files_by_id() {
     sub="$cachedir/$idx"
     lp="$sub/${rp:t}"
     if [[ ! -e "$lp" ]]; then
-      mkdir -p "$sub" || { clip::restore_fail "cannot create $sub"; return 1 }
+      mkdir -p "$sub" || { clip::progress_end; clip::restore_fail "cannot create $sub"; return 1 }
       # spec R3: this pull's ssh session has no use for the clipboard bridge's
       # RemoteForward -- without ClearAllForwardings, a session multiplexed
       # onto the interactive connection's ControlMaster re-requests the same

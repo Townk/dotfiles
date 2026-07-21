@@ -794,8 +794,9 @@ local function handle_message(body)
     if needs_headless_restore(body.id) then
       headless_restore(body.id)
     else
-      history.restore_by_id(body.id)
-      copy_toast(body.id)
+      -- Success-gated (§6): a row deleted between render and Ctrl+Y must
+      -- not toast over a clipboard that was never touched.
+      if history.restore_by_id(body.id) then copy_toast(body.id) end
     end
     M.hide()
   elseif action == "accept" then
