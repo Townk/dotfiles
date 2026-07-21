@@ -450,6 +450,44 @@ clip::toast_spec() {
   print -rn -- "${icon}${us}Copied from ${host}"
 }
 
+# Fire the standard notify OSD for a completed Ctrl-Y copy. Best-effort by
+# design: no notify front-end on this box (Linux dev-shell, Hammerspoon
+# down) -> silent no-op, the copy itself already succeeded.
+# PICK_CLIPBOARD_NOTIFY is the test override, same convention as
+# PICK_CLIPBOARD_RSYNC.
+clip::copy_toast() {
+  local kind=$1 host=$2
+  local notify_bin="${PICK_CLIPBOARD_NOTIFY:-$HOME/.local/bin/notify}"
+  [[ -x "$notify_bin" ]] || return 0
+  local spec; spec=$(clip::toast_spec "$kind" "$host")
+  local icon="${spec%%$'\x1f'*}" msg="${spec#*$'\x1f'}"
+  "$notify_bin" --icon "$icon" --sound Frog "$msg" >/dev/null 2>&1 || true
+  return 0
+}
+
+# id -> toast, reading kind + origin host from the store. The ORIGINAL row's
+# source_host is the origin even when case 3 just wrote a localized
+# bookkeeping twin (the twin keeps source_host = origin too, files-yazi
+# design §12), so querying by the picked id always names the right machine.
+clip::copy_toast_for_id() {
+  local id=$1 kind host
+  kind=$(sqlite3 "$DB_FILE" "SELECT IFNULL(type_kind,'text') FROM clips WHERE id=$id;" 2>/dev/null) || kind=text
+  host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
+  clip::copy_toast "$kind" "$host"
+}
+
+# Success epilogue for clip::copy_by_id's non-files branches: the existing
+# fallback bookkeeping, plus the §6 toast -- but ONLY on a clean copy. When
+# a files restore already failed and this is the path-text fallback, the W2
+# hold screen owns the messaging; a cheery "Copied from X" over it would
+# misreport what happened.
+clip::copy_ok() {
+  local id=$1
+  clip::note_fallback_ok
+  [[ -z "$CLIP_RESTORE_FAILURE" ]] && clip::copy_toast_for_id "$id"
+  return 0
+}
+
 clip::copy_files_by_id() {
   local id=$1
   local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
@@ -672,7 +710,7 @@ if [[ "${1:-}" == --restore-id ]]; then
     print -ru2 -- "pick-clipboard: --restore-id requires a numeric clip id"
     exit 1
   fi
-  clip::copy_files_by_id "$restore_id" && exit 0
+  clip::copy_files_by_id "$restore_id" && { clip::copy_toast_for_id "$restore_id"; exit 0 }
   exit 1
 fi
 
@@ -691,22 +729,24 @@ clip::copy_by_id() {
   local id=$1
   local kind; kind=$(sqlite3 "$DB_FILE" "SELECT type_kind FROM clips WHERE id=$id;" 2>/dev/null) || kind=""
   if [[ "$kind" == (files|file|directory) ]]; then
-    clip::copy_files_by_id "$id" && return 0
+    clip::copy_files_by_id "$id" && { clip::copy_toast_for_id "$id"; return 0 }
   fi
   # Every success below marks the fallback (clip::note_fallback_ok is a no-op
   # unless a files-restore failure was captured above, so a plain text/image
   # row's ordinary copy never sets the flag): the hold screen (W2) uses it to
   # note that the clip's path text DID land on the clipboard despite the
-  # file-object restore failing.
+  # file-object restore failing. clip::copy_ok also fires the §6 toast, but
+  # only when CLIP_RESTORE_FAILURE is unset -- W2's hold screen owns the
+  # messaging for a failed-restore-then-successful-fallback copy.
   if (( bridge_up )); then
-    [[ "$kind" == image ]] && clip::ship_image_by_id "$id" && { clip::note_fallback_ok; return 0 }
-    clip::set_via_bridge "$BRIDGE_PORT" "$id" && { clip::note_fallback_ok; return 0 }
+    [[ "$kind" == image ]] && clip::ship_image_by_id "$id" && { clip::copy_ok "$id"; return 0 }
+    clip::set_via_bridge "$BRIDGE_PORT" "$id" && { clip::copy_ok "$id"; return 0 }
   elif [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]]; then
-    clip::set_via_bridge "$LOCAL_PORT" "$id" && { clip::note_fallback_ok; return 0 }
+    clip::set_via_bridge "$LOCAL_PORT" "$id" && { clip::copy_ok "$id"; return 0 }
   fi
   if command -v pbcopy >/dev/null 2>&1; then
     if clip::text_by_id "$id" | pbcopy; then
-      clip::note_fallback_ok
+      clip::copy_ok "$id"
     fi
   fi
 }
@@ -797,7 +837,7 @@ clip::copy_live() {
   { print -rn -- "$rt"; cat "$LIVE_TEXT_FILE"; } > "$pf"
   # bridge_up is a precondition of a live entry existing, so the copy target is
   # the machine I'm sitting at, over the reverse tunnel (T = set + record regtype).
-  clipbridge::send "$BRIDGE_HOST" "$BRIDGE_PORT" T "$pf"
+  clipbridge::send "$BRIDGE_HOST" "$BRIDGE_PORT" T "$pf" && clip::copy_toast text "$LIVE_HOST"
   rm -f "$pf"
 }
 

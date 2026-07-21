@@ -58,6 +58,30 @@ exit 1
 EOF
     chmod +x "$BINDIR/scutil"
 
+    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
+    # Fake nc: logs "<port>:<raw frame, NUL -> '|'>" then answers a bare 'O'
+    # status -- verbatim from tests/pick-clipboard-files_spec.sh.
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+argc=\$#
+eval "port=\\\${\$argc}"
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+rm -f "\$raw"
+printf 'O\\000\\000\\000\\000'
+EOF
+    chmod +x "$BINDIR/nc"
+
+    NOTIFYLOG="$SHELLSPEC_TMPBASE/notifylog"; : > "$NOTIFYLOG"
+    # Fake notify front-end: logs its argv, one line per call.
+    cat > "$BINDIR/notify" <<EOF
+#!/bin/sh
+echo "\$*" >> "$NOTIFYLOG"
+EOF
+    chmod +x "$BINDIR/notify"
+    export PICK_CLIPBOARD_NOTIFY="$BINDIR/notify"
+
     export PATH="$BINDIR:$PATH"
     export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
     export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
@@ -104,6 +128,40 @@ EOF
     It 'empty host (legacy row) reads as local'
       When call run_fn clip::toast_spec files ''
       The output should equal "glyph:fa-clipboard-list$(printf '\x1f')Clipboard moved to top"
+    End
+  End
+
+  Describe 'clip::copy_by_id toast wiring (§6)'
+    It 'remote text row: bridge copy succeeds and toasts Copied from <host>'
+      id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, source_host, last_ts) VALUES ('text','hello','work-laptop',100); SELECT last_insert_rowid();")
+      When call run_fn clip::copy_by_id "$id"
+      The status should be success
+      The contents of file "$NOTIFYLOG" should include "--icon glyph:nf-md-text_box --sound Frog Copied from work-laptop"
+    End
+
+    It 'local text row: toasts the moved-to-top acknowledgment'
+      id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, source_host, last_ts) VALUES ('text','hello','mac-mini',100); SELECT last_insert_rowid();")
+      When call run_fn clip::copy_by_id "$id"
+      The status should be success
+      The contents of file "$NOTIFYLOG" should include "--icon glyph:fa-clipboard-list --sound Frog Clipboard moved to top"
+    End
+
+    It 'missing notify binary is a silent no-op, copy still succeeds'
+      rm -f "$BINDIR/notify"
+      id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, source_host, last_ts) VALUES ('text','hello','work-laptop',100); SELECT last_insert_rowid();")
+      When call run_fn clip::copy_by_id "$id"
+      The status should be success
+      The contents of file "$NOTIFYLOG" should equal ""
+    End
+
+    It 'files-restore failure with text fallback does NOT toast (W2 hold owns that)'
+      # files kind + no recorded paths -> clip::copy_files_by_id fails fast,
+      # copy_by_id falls through to the text fallback (bridge copy succeeds
+      # via fake nc) -- CLIP_RESTORE_FAILURE is set, so no toast.
+      id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, source_host, last_ts) VALUES ('files','/tmp/x','work-laptop',100); SELECT last_insert_rowid();")
+      When call run_fn clip::copy_by_id "$id"
+      The stderr should include 'no file paths recorded'
+      The contents of file "$NOTIFYLOG" should equal ""
     End
   End
 End
