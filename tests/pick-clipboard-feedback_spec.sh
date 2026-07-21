@@ -82,6 +82,37 @@ EOF
     chmod +x "$BINDIR/notify"
     export PICK_CLIPBOARD_NOTIFY="$BINDIR/notify"
 
+    HSLOG="$SHELLSPEC_TMPBASE/hslog"; : > "$HSLOG"
+    # Fake hs CLI: logs the -c payload, one line per call.
+    cat > "$BINDIR/hs" <<EOF
+#!/bin/sh
+[ "\$1" = "-c" ] && echo "\$2" >> "$HSLOG"
+EOF
+    chmod +x "$BINDIR/hs"
+    export PICK_CLIPBOARD_HS="$BINDIR/hs"
+
+    RSYNCLOG="$SHELLSPEC_TMPBASE/rsynclog"; : > "$RSYNCLOG"
+    # Fake rsync: logs argv, emits three CR-separated progress2-style
+    # updates on stdout (like the real --info=progress2), then fabricates
+    # the pulled file -- same dst/base extraction as
+    # tests/pick-clipboard-files_spec.sh's fake.
+    cat > "$BINDIR/rsync" <<EOF
+#!/bin/sh
+echo "\$*" >> "$RSYNCLOG"
+printf '     1,000  10%%    1.00MB/s    0:00:09\\r'
+printf '     5,000  50%%    1.00MB/s    0:00:05\\r'
+printf '    10,000 100%%    1.00MB/s    0:00:00\\r'
+argc=\$#
+eval "src=\\\${\$((argc - 1))}"
+eval "dst=\\\${\$argc}"
+name="\${src##*:}"
+base="\${name##*/}"
+mkdir -p "\$dst"
+printf 'pulled:%s' "\$base" > "\$dst/\$base"
+EOF
+    chmod +x "$BINDIR/rsync"
+    export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync"
+
     export PATH="$BINDIR:$PATH"
     export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
     export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
@@ -97,6 +128,18 @@ EOF
       fn=$1; shift
       "$fn" "$@"
     ' _ "$@"
+  }
+
+  run_restore_id() {
+    zsh -f "$SCRIPT" --restore-id "$1"
+  }
+
+  # Seeds a remote files row with a single-path x-file-manifest.
+  seed_remote_manifest_row() {
+    _id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','work-laptop',100); SELECT last_insert_rowid();")
+    printf '/pick-clipboard-remote-src/big.bin' > "$SHELLSPEC_TMPBASE/manifest-blob"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($_id, 'x-file-manifest', readfile('$SHELLSPEC_TMPBASE/manifest-blob'));"
+    printf '%s' "$_id"
   }
 
   # Exact-match checker for clip::toast_spec output: the expected string
@@ -226,6 +269,60 @@ EOF
     It 'keep-alive: emits with NO delta after 1.5s of silence'
       When call run_fn clip::progress_decide 102.2 100.0 100.6 45 45
       The output should equal 1
+    End
+  End
+
+  Describe 'clip::progress_stream (§4.2 headless sink)'
+    It 'fast canned stream emits exactly one HUD update (throttle) once past grace'
+      # progress_begin stamps start=now; forcing CLIP_PROGRESS_START back
+      # to 0 puts every tick past the grace window deterministically. The
+      # three ticks arrive within 300ms, so only the first can emit.
+      When call zsh -f -c '
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        CLIP_PROGRESS_START=0
+        CLIP_PROGRESS_LAST_EMIT=0
+        printf "  1,000  10%%\r  5,000  50%%\r 10,000 100%%\r" | clip::progress_stream 0 1 work-laptop
+      '
+      The status should be success
+      The contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop")'
+    End
+
+    It 'aggregates over a multi-path manifest (path 3 of 4 at 50% -> 62)'
+      When call zsh -f -c '
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        CLIP_PROGRESS_START=0
+        CLIP_PROGRESS_LAST_EMIT=0
+        printf "  5,000  50%%\r" | clip::progress_stream 2 4 work-laptop
+      '
+      The status should be success
+      The contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 62, "work-laptop")'
+    End
+
+    It 'missing hs binary: sink drains stdin as a no-op'
+      rm -f "$BINDIR/hs"
+      When call zsh -f -c '
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        CLIP_PROGRESS_START=0
+        printf "  5,000  50%%\r" | clip::progress_stream 0 1 work-laptop
+      '
+      The status should be success
+      The contents of file "$HSLOG" should equal ""
+    End
+  End
+
+  Describe '--restore-id headless pull with progress plumbing (§4.2)'
+    It 'pull succeeds; sub-grace transfer emits no HUD calls; toast still fires'
+      id=$(seed_remote_manifest_row)
+      When call run_restore_id "$id"
+      The status should be success
+      # The fake rsync finishes instantly -- inside the 500ms grace window,
+      # so the HUD must never flash (and progressHide is skipped: nothing
+      # was shown).
+      The contents of file "$HSLOG" should equal ""
+      The contents of file "$NOTIFYLOG" should include "--icon glyph:nf-md-file_multiple --sound Frog Copied from work-laptop"
     End
   End
 End

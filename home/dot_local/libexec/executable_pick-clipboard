@@ -519,6 +519,60 @@ clip::progress_decide() {
   return 0
 }
 
+# Headless-sink state + IPC. clip::progress_begin resets it per
+# materialization; clip::progress_stream is the pipeline sink rsync's
+# stdout feeds (runs in the CURRENT shell -- zsh executes the last pipeline
+# segment in-process -- so the CLIP_PROGRESS_* globals genuinely carry
+# across manifest paths). Every hs call is best-effort: an OSD hiccup must
+# never fail a pull. PICK_CLIPBOARD_HS is the test override.
+clip::progress_begin() {
+  CLIP_PROGRESS_START=$EPOCHREALTIME
+  CLIP_PROGRESS_LAST_EMIT=$CLIP_PROGRESS_START
+  CLIP_PROGRESS_LAST_PCT=-100
+  CLIP_PROGRESS_SHOWN=""
+  CLIP_PROGRESS_HS="${PICK_CLIPBOARD_HS:-hs}"
+  command -v "$CLIP_PROGRESS_HS" >/dev/null 2>&1 || CLIP_PROGRESS_HS=""
+}
+
+clip::progress_emit() {  # <pct> <label>
+  [[ -n "${CLIP_PROGRESS_HS:-}" ]] || return 0
+  "$CLIP_PROGRESS_HS" -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"$2\")" >/dev/null 2>&1 || true
+  CLIP_PROGRESS_SHOWN=1
+  return 0
+}
+
+clip::progress_stream() {  # <completed-paths> <total-paths> <label>
+  local -i completed=$1 total=$2
+  local label=$3 chunk now
+  local -i agg
+  # No hs to drive: drain stdin so rsync never blocks on a full pipe.
+  [[ -n "${CLIP_PROGRESS_HS:-}" ]] || { cat >/dev/null; return 0 }
+  # progress2 redraws its meter with bare CRs; read CR-delimited chunks and
+  # mine each for the percent field.
+  while IFS= read -r -d $'\r' chunk || [[ -n "$chunk" ]]; do
+    [[ "$chunk" =~ '([0-9]+)%' ]] || continue
+    agg=$(clip::progress_pct "$completed" "$total" "$match[1]")
+    (( agg < CLIP_PROGRESS_LAST_PCT )) && agg=$CLIP_PROGRESS_LAST_PCT
+    now=$EPOCHREALTIME
+    if [[ -n "$(clip::progress_decide "$now" "$CLIP_PROGRESS_START" "$CLIP_PROGRESS_LAST_EMIT" "$CLIP_PROGRESS_LAST_PCT" "$agg")" ]]; then
+      clip::progress_emit "$agg" "$label"
+      CLIP_PROGRESS_LAST_EMIT=$now
+      CLIP_PROGRESS_LAST_PCT=$agg
+    fi
+  done
+  return 0
+}
+
+# Teardown (§4.2): every exit path of a headless pull hides the HUD before
+# any toast or failure surfaces. Guarded on SHOWN so the no-progress case
+# (grace window, cached rows) never spawns a process just to hide nothing.
+clip::progress_end() {
+  [[ -n "${CLIP_PROGRESS_SHOWN:-}" && -n "${CLIP_PROGRESS_HS:-}" ]] || return 0
+  "$CLIP_PROGRESS_HS" -c 'require("osd").progressHide()' >/dev/null 2>&1 || true
+  CLIP_PROGRESS_SHOWN=""
+  return 0
+}
+
 clip::copy_files_by_id() {
   local id=$1
   local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
@@ -623,6 +677,14 @@ clip::copy_files_by_id() {
   local -a local_paths
   local -i idx=0 pulled=0
   local sub lp
+
+  # Progress sinks (copy-feedback design §4): a live tty renders rsync's own
+  # meter in the pane (pbpaste tier-2 UX); headless (--restore-id from the
+  # GUI) drives the top-right OSD HUD instead.
+  local -i n_paths=${#rpaths[@]} have_tty=0
+  clip::has_live_tty && have_tty=1
+  (( have_tty )) || clip::progress_begin
+
   for rp in "${rpaths[@]}"; do
     (( idx += 1 ))
     sub="$cachedir/$idx"
@@ -658,7 +720,24 @@ clip::copy_files_by_id() {
       # raw zsh diagnostic onto stderr -- exactly the noise class this
       # capture exists to suppress.
       [[ -n "$rsync_err" && -w "$rsync_err" ]] || rsync_err=/dev/null
-      if ! "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes' "${host}:${rp}" "$sub/" >/dev/null 2>"$rsync_err"; then
+      local -i rrc=0
+      if (( have_tty )); then
+        # In-pane feedback: header line + rsync's own live meter. progress2
+        # writes the meter to STDOUT -- `1>&2` routes it to the pane's tty
+        # (same move as pbpaste tier 2) while real errors still land in the
+        # capture file for the one-line failure reason.
+        print -ru2 -- "Pulling ${rp:t} from ${host} (${idx}/${n_paths})…"
+        "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
+      else
+        # Headless: meter stdout feeds the throttled HUD sink; the sink is
+        # the LAST pipeline segment so it runs in this shell and the
+        # CLIP_PROGRESS_* state survives into the next manifest path.
+        # idx-1 == paths already done (cached ones count: they're complete).
+        "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes' "${host}:${rp}" "$sub/" 2>"$rsync_err" | clip::progress_stream $(( idx - 1 )) $n_paths "$host"
+        rrc=${pipestatus[1]}
+      fi
+      if (( rrc != 0 )); then
+        clip::progress_end
         if [[ "$rsync_err" == /dev/null ]]; then
           clip::restore_fail "rsync failed pulling $host:$rp"
         else
@@ -671,6 +750,7 @@ clip::copy_files_by_id() {
     fi
     local_paths+=("$lp")
   done
+  clip::progress_end
 
   # Best-effort bookkeeping: a new local row, source_host = the ORIGIN host
   # (spec §12), single-path rows via x-resolved-path (matching a genuine
@@ -715,6 +795,25 @@ clip::copy_files_by_id() {
   fi
   clip::restore_fail "localized files restore failed for row $id"
   return 1
+}
+
+# A real attempt to open /dev/tty for reading, not `[[ -e /dev/tty ]]` --
+# that special file exists on disk regardless of whether THIS process has a
+# controlling terminal (true even under this repo's own shellspec harness,
+# which has none), so an existence check alone would say "yes, hold" and
+# block a headless/CI run. Opening it is the honest test: with no
+# controlling terminal the open fails immediately (ENXIO) instead of
+# hanging, which is exactly the fast, safe "no tty" signal this needs.
+# Defined here -- ABOVE the --restore-id dispatch just below -- rather than
+# down in the restore-failure-hold section (W2) where it originally lived
+# alongside should_hold_on_restore_failure/render_restore_failure: case 3's
+# tty/headless progress-sink split (copy-feedback design §4) now calls this
+# from inside clip::copy_files_by_id, which --restore-id invokes at the top
+# level before this file's later definitions have been sourced -- defining
+# it any later would leave a direct (non---restore-id) run resolving to
+# "command not found" the first time a remote-manifest pull happens.
+clip::has_live_tty() {
+  { : < /dev/tty; } 2>/dev/null
 }
 
 # --restore-id <n> (headless CLI mode, spec R4): runs the SAME
@@ -785,29 +884,21 @@ clip::copy_by_id() {
 # --- restore-failure hold (Ctrl-Y files-restore path, W2) --------------------
 # CLIP_RESTORE_FAILURE (set by clip::restore_fail, above) is checked once, at
 # the very end of this script's interactive tail, after the accept-dispatch
-# case has run and fzf has released the tty. Split into three small pieces so
-# the DECISION is unit-testable without any fzf/floating-pane machinery (see
+# case has run and fzf has released the tty. Split into small pieces so the
+# DECISION is unit-testable without any fzf/floating-pane machinery (see
 # tests/pick-clipboard-files_spec.sh):
 #
 #   clip::has_live_tty              -- is a controlling terminal reachable at
-#                                       all right now?
+#                                       all right now? (defined earlier, right
+#                                       before the --restore-id dispatch --
+#                                       case 3's progress-sink split needs it
+#                                       sooner than this section runs)
 #   clip::should_hold_on_restore_failure -- pure decision, no I/O
 #   clip::render_restore_failure     -- the actual on-screen rendering
 #
 # The `read -k1 -s` hold itself still needs a real terminal to block on,
 # which a test harness never has -- that last mile stays exercised only by
 # live validation, not by the spec.
-
-# A real attempt to open /dev/tty for reading, not `[[ -e /dev/tty ]]` --
-# that special file exists on disk regardless of whether THIS process has a
-# controlling terminal (true even under this repo's own shellspec harness,
-# which has none), so an existence check alone would say "yes, hold" and
-# block a headless/CI run. Opening it is the honest test: with no
-# controlling terminal the open fails immediately (ENXIO) instead of
-# hanging, which is exactly the fast, safe "no tty" signal this needs.
-clip::has_live_tty() {
-  { : < /dev/tty; } 2>/dev/null
-}
 
 # Decide whether to hold the pane open: only when there IS a reason to show,
 # we're on the interactive path (headless=1 -- --restore-id / hs.task --
