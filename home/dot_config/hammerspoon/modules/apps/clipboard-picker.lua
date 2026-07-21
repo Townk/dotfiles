@@ -34,6 +34,7 @@ local M = {}
 local sqlite3 = require("hs.sqlite3")
 local history = require("apps.clipboard-history")
 local dismissOnBlur = require("system.dismiss-on-blur")
+local osd = require("osd")
 
 local ASSETS_DIR = hs.configdir .. "/Assets/html"
 
@@ -556,6 +557,40 @@ local function needs_headless_restore(id)
   return has_manifest or is_remote
 end
 
+-- §6 copy-confirmation toast for rows this picker restores IN-PROCESS
+-- (text/image via history.restore_by_id). Files rows never reach this:
+-- they go through the headless CLI, whose engine fires the same toast
+-- itself (clip::toast_spec in executable_pick-clipboard -- the kind->glyph
+-- table below mirrors it; keep the two in sync).
+local TOAST_GLYPHS = {
+  image = "glyph:nf-md-image",
+  file = "glyph:nf-md-file",
+  directory = "glyph:nf-md-folder",
+  files = "glyph:nf-md-file_multiple",
+}
+
+local function copy_toast(id)
+  local db = sqlite3.open(history._db_path())
+  if not db then return end
+  local kind, host
+  local s = db:prepare("SELECT type_kind, source_host FROM clips WHERE id=?;")
+  if s then
+    s:bind(1, id)
+    if s:step() == sqlite3.ROW then
+      kind = s:get_value(0)
+      host = s:get_value(1)
+    end
+    s:finalize()
+  end
+  db:close()
+  local my_host = history._my_host()
+  if host ~= nil and host ~= "" and host ~= my_host then
+    osd.notify(TOAST_GLYPHS[kind] or "glyph:nf-md-text_box", "Copied from " .. host, "Frog")
+  else
+    osd.notify("glyph:fa-clipboard-list", "Clipboard moved to top", "Frog")
+  end
+end
+
 local PICK_CLIPBOARD_BIN = (os.getenv("HOME") or "") .. "/.local/libexec/pick-clipboard"
 
 -- Single-quote a string for safe embedding in a shell command line: wrap in
@@ -665,11 +700,9 @@ local function headless_restore(id, onDone)
     print(string.format(
       "clipboard-picker: headless restore id=%d exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
       intId, tostring(exitCode), stdOut or "", stdErr or ""))
-    if ok then
-      hs.alert.show("Files restored")
-    else
-      -- hs.alert's default ~2s toast was unreadably brief for a failure
-      -- (live validation). hs.notify is a real Notification Center item;
+    if not ok then
+      -- A transient toast's default ~2s lifetime was unreadably brief for a
+      -- failure (live validation). hs.notify is a real Notification Center item;
       -- withdrawAfter=0 disables its own default auto-withdrawal (5s for
       -- the hs.notify.show() shorthand, per hs.notify docs) so it stays
       -- until the user dismisses it -- same durable-until-acknowledged
@@ -756,12 +789,13 @@ local function handle_message(body)
     -- (spec R4 -- a remote manifest, or a row the terminal picker already
     -- localized itself) go through the headless rsync-pull CLI instead,
     -- same as the terminal picker's own Ctrl-Y; dismiss now regardless (the
-    -- pull is async and best-effort from here on), success/failure surfaces
-    -- via hs.alert once it lands.
+    -- pull is async and best-effort from here on), success surfaces via the
+    -- engine's own notify toast; failure stays a persistent hs.notify item.
     if needs_headless_restore(body.id) then
       headless_restore(body.id)
     else
       history.restore_by_id(body.id)
+      copy_toast(body.id)
     end
     M.hide()
   elseif action == "accept" then
