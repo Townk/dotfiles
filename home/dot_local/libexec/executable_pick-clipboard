@@ -425,6 +425,31 @@ clip::note_fallback_ok() {
   return 0
 }
 
+# --- copy-confirmation toast (copy-feedback design §6) -----------------------
+# Every Ctrl-Y copy ends in a toast -- silence is indistinguishable from
+# failure once the other paths have feedback. Two variants, one sound:
+# remote rows say WHERE the clip came from (icon carries the WHAT), local
+# rows acknowledge the re-copy + bump. Pure mapping (no I/O) so the
+# shellspec suite can table-test variant selection directly; the GUI
+# picker's in-process restores implement this same table in Lua
+# (clipboard-picker.lua copy_toast) -- keep the two in sync.
+clip::toast_spec() {
+  local kind=$1 host=$2 us=$'\x1f'
+  if [[ -z "$host" || "$host" == "$MY_HOST" ]]; then
+    print -rn -- "glyph:fa-clipboard-list${us}Clipboard moved to top"
+    return 0
+  fi
+  local icon
+  case "$kind" in
+    image)     icon="glyph:nf-md-image" ;;
+    file)      icon="glyph:nf-md-file" ;;
+    directory) icon="glyph:nf-md-folder" ;;
+    files)     icon="glyph:nf-md-file_multiple" ;;
+    *)         icon="glyph:nf-md-text_box" ;;
+  esac
+  print -rn -- "${icon}${us}Copied from ${host}"
+}
+
 clip::copy_files_by_id() {
   local id=$1
   local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
