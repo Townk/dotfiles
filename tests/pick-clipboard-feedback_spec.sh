@@ -178,4 +178,54 @@ EOF
       The contents of file "$NOTIFYLOG" should equal ""
     End
   End
+
+  Describe 'clip::progress_pct (§4.2 aggregate, pure)'
+    It 'single path mirrors the current transfer percent'
+      When call run_fn clip::progress_pct 0 1 45
+      The output should equal 45
+    End
+
+    It 'aggregates completed paths over an N-path manifest'
+      # 2 of 4 paths done, current one at 50% -> (200+50)/4 = 62
+      When call run_fn clip::progress_pct 2 4 50
+      The output should equal 62
+    End
+
+    It 'zero total degrades to 0, not a division error'
+      When call run_fn clip::progress_pct 0 0 50
+      The output should equal 0
+    End
+  End
+
+  Describe 'clip::progress_decide (§4.2 throttle, pure)'
+    It 'suppresses everything inside the 500ms grace window'
+      When call run_fn clip::progress_decide 100.4 100.0 100.0 -100 45
+      The output should equal ""
+    End
+
+    It 'first post-grace tick emits (spacing satisfied since start)'
+      When call run_fn clip::progress_decide 100.6 100.0 100.0 -100 45
+      The output should equal 1
+    End
+
+    It 'suppresses a tick inside the 300ms spacing window'
+      When call run_fn clip::progress_decide 100.8 100.0 100.6 45 60
+      The output should equal ""
+    End
+
+    It 'suppresses a sub-1-point delta even after the spacing window'
+      When call run_fn clip::progress_decide 101.2 100.0 100.6 45 45
+      The output should equal ""
+    End
+
+    It 'emits on >=1pt delta past the spacing window'
+      When call run_fn clip::progress_decide 101.0 100.0 100.6 45 46
+      The output should equal 1
+    End
+
+    It 'keep-alive: emits with NO delta after 1.5s of silence'
+      When call run_fn clip::progress_decide 102.2 100.0 100.6 45 45
+      The output should equal 1
+    End
+  End
 End

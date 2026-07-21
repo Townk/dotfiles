@@ -488,6 +488,37 @@ clip::copy_ok() {
   return 0
 }
 
+# --- materialization progress (copy-feedback design §4.2) --------------------
+# Pure aggregate over an N-path manifest: completed whole paths + the
+# running rsync's own whole-invocation percent (--info=progress2 reports
+# recursive-total percent, so per-path progress is already whole-transfer).
+clip::progress_pct() {
+  local -i completed=$1 total=$2 cur=$3
+  (( total > 0 )) || { print -rn -- 0; return 0 }
+  print -rn -- $(( (completed * 100 + cur) / total ))
+}
+
+# Pure throttle decision: prints "1" to emit, nothing to skip. All inputs
+# as args (EPOCHREALTIME-style float seconds; integer percents) so the spec
+# suite can table-test every rule without sleeping:
+#   - 500ms grace from transfer start (tiny/cached pulls never flash a HUD)
+#   - then: >=1 point delta AND >=300ms since the last emit
+#   - keep-alive: >=1.5s of silence emits regardless of delta, so a slow
+#     link can't look like a dead widget
+clip::progress_decide() {
+  local now=$1 start=$2 last_emit=$3
+  local -i last_pct=$4 pct=$5
+  (( now - start >= 0.5 )) || return 0
+  if (( now - last_emit >= 1.5 )); then
+    print -rn -- 1
+    return 0
+  fi
+  if (( pct - last_pct >= 1 && now - last_emit >= 0.3 )); then
+    print -rn -- 1
+  fi
+  return 0
+}
+
 clip::copy_files_by_id() {
   local id=$1
   local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
