@@ -8,7 +8,7 @@ dotfiles repo.
 > pi (AI coding agent CLI) config for BOTH the cloud config home
 > (`dot_pi/agent/`) and the local 32K-context config home
 > (`dot_pi/agent-local/`). Custom subagents (Architect/Librarian/Reviewer),
-> custom skills (code-simplifier, commit), custom theme, a custom
+> shared-skill adapters, custom theme, a custom
 > `pi-rtk-optimizer` extension, dev-extension symlinks, and the declarative
 > `modify_settings.json.tmpl` → `pi-settings-merge.tmpl` settings-merge
 > contract. `agent-local/` shares extensions/lsp/skills/themes/Librarian
@@ -21,8 +21,8 @@ dotfiles repo.
   `private_models.json.tmpl`
 - `home/dot_pi/agent/agents/{Architect,Librarian,Reviewer}.md` — custom
   subagent definitions
-- `home/dot_pi/agent/skills/{code-simplifier,commit}/SKILL.md` — custom
-  skills
+- `home/dot_pi/agent/skills/*/symlink_SKILL.md.tmpl` — adapters to portable
+  skills canonically stored under `home/dot_config/agent-skills/`
 - `home/dot_pi/agent/themes/catppuccin-mocha.json` — custom theme
 - `home/dot_pi/agent/extensions/pi-rtk-optimizer/config.json` — CUSTOM
   extension with its own config

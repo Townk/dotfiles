@@ -103,6 +103,11 @@
 /README.md
 /.config/zellij/scripts/quick-launch-external
 
+# ── shared agent skills: pi commit renamed to code-commit ───────────────────
+# The portable shared skill uses one Agent Skills-standard name in every
+# harness. Remove pi's old harness-specific alias after deploying code-commit.
+/.pi/agent/skills/commit
+
 # ── ai-assist shell stack retired (→ ai-playbook binary) ────────────────────
 # The zsh ai-assist dispatcher + harness workers + shared lib were removed from
 # source when the input system was rebranded to the `ai-playbook` binary; the

@@ -423,8 +423,10 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 ## pi — pi coding agent config
 
 **Owner area (safe to edit):**
-- `home/dot_pi/agent/` — `AGENTS.md` (cloud baseline), `README.md`, `lsp.json`, `modify_settings.json.tmpl`, `private_models.json.tmpl`, `agents/{Architect,Librarian,Reviewer}.md`, `skills/{code-simplifier,commit}/SKILL.md`, `themes/catppuccin-mocha.json`, `extensions/pi-rtk-optimizer/config.json`, `extensions/symlink_pi-{cockpit,plannotator-bridge}.tmpl`
+- `home/dot_pi/agent/` — `AGENTS.md` (cloud baseline), `README.md`, `lsp.json`, `modify_settings.json.tmpl`, `private_models.json.tmpl`, `agents/{Architect,Librarian,Reviewer}.md`, shared-skill adapters under `skills/`, `themes/catppuccin-mocha.json`, `extensions/pi-rtk-optimizer/config.json`, `extensions/symlink_pi-{cockpit,plannotator-bridge}.tmpl`
 - `home/dot_pi/agent-local/` — `AGENTS.md` (local 32K-context variant), `agents/{Architect,Reviewer}.md`, `agents/symlink_Librarian.md.tmpl`, `modify_settings.json.tmpl`, `private_models.json.tmpl`, `symlink_{extensions,lsp.json,skills,themes}.tmpl`
+- `home/dot_config/agent-skills/` — canonical harness-neutral skills shared with Pi, Cursor, and Claude Code
+- `home/dot_claude/agents/reviewer.md` — Claude Code's harness-specific adapter for the shared `code-review` router
 - `home/dot_pi/web-search.json`
 - `home/.chezmoitemplates/pi-settings-merge.tmpl` (pi-specific FORCE/SEED/KEEP merge policy)
 - **pi-specific content blocks in shared chezmoi files** (pi owns the pi content; chezmoi owns the machinery — ordering, `run_once`/`run_after` mechanics, hash-baking, `.chezmoi*` scaffolding): the `[data.pi.devExtensions]` block in `.chezmoi.toml.tmpl`, the pi-cockpit/pi-plannotator-bridge suppression blocks in `.chezmoiignore.tmpl`, the consumer-machine `pi install` blocks in `run_once_after_10-setup-bootstrap-tools.sh.tmpl`, and the `~/.pi/agent-local` prune block in `run_after_90-prune-dev-shell-state.sh.tmpl`.
@@ -448,13 +450,13 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 ## cursor — Cursor coding agent config
 
-**Owner area (safe to edit):** `home/dot_cursor/` — `agents/{architect,librarian,reviewer}.md`, `skills/{code-commit,code-review,code-simplifier,handoff}/SKILL.md`, `rules/baseline.mdc`.
+**Owner area (safe to edit):** `home/dot_cursor/` — `agents/{architect,librarian,reviewer}.md`, shared-skill adapters under `skills/`, and `rules/baseline.mdc`; `home/dot_config/agent-skills/` contains the canonical portable skill content.
 
 **Out of scope:** the `ai-assist-cursor`/`ai-commit-cursor` wrappers (ai-harnesses) — they CALL cursor; cursor owns the agent's own config. The Cursor app/CLI (external).
 
 **Public contract (preserve):**
 - **MDC rule format**: `rules/baseline.mdc` uses Cursor's `.cursor/rules` MDC format — markdown body + YAML frontmatter (`description`, `alwaysApply: true`). `alwaysApply: true` injects the rule into every Cursor session's context. Preserve the frontmatter schema and the `alwaysApply` semantics.
-- **agents/skills parallel structure**: `agents/{architect,librarian,reviewer}.md` and `skills/*/SKILL.md` mirror `dot_pi/agent/`'s structure (pi). The subagent names (`architect`/"Dave", `librarian`, `reviewer`) and the `SKILL.md` `name`/`description` frontmatter are the contract Cursor's agent/skill discovery depends on. Keep the structure consistent with pi where the two configs should agree on behavior.
+- **agents/skills parallel structure**: `agents/{architect,librarian,reviewer}.md` mirrors `dot_pi/agent/`'s harness-specific subagent structure. Portable `skills/*/SKILL.md` files are symlinked from `~/.config/agent-skills/`, which is also exposed to Pi and Claude Code. Keep harness-specific tool/model metadata in each harness's agent definitions, not in shared skills.
 
 **Consumes from:** ai-harnesses (`ai-assist-cursor`/`ai-commit-cursor` wrappers — read-only consumers), external Cursor app/CLI.
 

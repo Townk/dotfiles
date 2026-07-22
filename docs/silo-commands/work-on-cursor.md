@@ -6,16 +6,16 @@ You are working on the **Cursor coding agent config** silo of this chezmoi
 dotfiles repo.
 
 > Cursor (AI coding agent) config: custom subagents
-> (architect/librarian/reviewer), custom skills (code-commit, code-review,
-> code-simplifier, handoff), and a global `alwaysApply` MDC baseline rule
+> (architect/librarian/reviewer), shared-skill adapters, and a global
+> `alwaysApply` MDC baseline rule
 > ("Verify, don't assume"). The parallel of `dot_pi/` for Cursor.
 
 ## Your scope (owner area — safe to edit)
 
 - `home/dot_cursor/agents/{architect,librarian,reviewer}.md` — custom
   subagent definitions
-- `home/dot_cursor/skills/{code-commit,code-review,code-simplifier,handoff}/SKILL.md`
-  — custom skills
+- `home/dot_cursor/skills/*/symlink_SKILL.md.tmpl` — adapters to portable
+  skills canonically stored under `home/dot_config/agent-skills/`
 - `home/dot_cursor/rules/baseline.mdc` — global baseline behavior rule
   (Cursor `.cursor/rules` MDC format: markdown body + YAML frontmatter
   `description` / `alwaysApply: true`)
