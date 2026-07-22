@@ -1,7 +1,10 @@
-{{- /* headless slot slot-686a5d: SOPS+age secrets, decrypted ONCE per apply into
-       a 0600 file (the private_ source prefix). The ciphertext blob lives at
-       repo-root secrets/slot-686a5d.sops.sh, outside the chezmoi source root, so
-       it is read by path and never rendered into $HOME. sops finds the age
-       identity through SOPS_AGE_KEY_FILE, set in chezmoi's [env] on headless
-       hosts. The decrypted bytes are already `export NAME=value` lines. */ -}}
-{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d.sops.sh") }}
+{{- /* headless slot slot-686a5d: SOPS+age secrets, decrypted ONCE per apply into a
+       0600 file (the private_ source prefix). One ciphertext blob per variable
+       at repo-root secrets/slot-686a5d/<NAME>.sops.sh, outside the chezmoi source
+       root, so each is read by path and never rendered into $HOME. sops finds
+       the age identity through SOPS_AGE_KEY_FILE, set in chezmoi's [env] on
+       headless hosts. Each blob decrypts to a single `export NAME=value`. */ -}}
+{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d" "ATLASSIAN_API_TOKEN.sops.sh") }}
+{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d" "CONTEXT7_API_KEY.sops.sh") }}
+{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d" "GH_TOKEN.sops.sh") }}
+{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d" "MISE_GITHUB_TOKEN.sops.sh") }}
