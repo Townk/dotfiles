@@ -13,6 +13,7 @@ get_terminal_image_protocol() {
   local iterm_sess="${ITERM_SESSION_ID:-}"
   local lc_term="${LC_TERMINAL:-}"
   local zellij_env="${ZELLIJ:-}"
+  local tmux_env="${TMUX:-}"
 
   # 1. STEP ONE: Accumulate ALL protocols natively supported by the Host
   if [ "$term_prog" = "Alacritty" ] || [ "$term_prog" = "Apple_Terminal" ]; then
@@ -27,8 +28,11 @@ get_terminal_image_protocol() {
     host_support+=("Sixel")
   fi
 
-  # 2. STEP TWO: Resolve capability through the Zellij multiplexer constraint
-  if [ -n "$zellij_env" ]; then
+  # 2. STEP TWO: Resolve capability through the multiplexer constraint.
+  # Zellij: only Sixel survives its VTE. tmux (D1): sixel is the guaranteed
+  # tier — kitty/iTerm2 payloads are not forwarded un-enveloped, so the same
+  # Sixel-only constraint applies.
+  if [ -n "$zellij_env" ] || [ -n "$tmux_env" ]; then
     local has_sixel=false
     for proto in "${host_support[@]}"; do
       if [ "$proto" = "Sixel" ]; then
