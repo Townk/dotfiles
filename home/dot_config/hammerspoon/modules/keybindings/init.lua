@@ -41,6 +41,7 @@ local template         = require("keybindings.template")
 local Dispatcher       = require("keybindings.dispatcher")
 local systemShortcuts  = require("keybindings.system_shortcuts")
 local dismissOnBlur    = require("system.dismiss-on-blur")
+local osd              = require("osd")
 
 local Keybindings = {}
 
@@ -629,6 +630,17 @@ end
 --- Pauses global hotkeys while the overlay is active.
 function Keybindings.show()
 	if not state.root or not state.overlayInstance then
+		return
+	end
+	-- macOS Secure Keyboard Entry (held by some app -- often a stuck
+	-- loginwindow after a lock-screen/password prompt) makes the OS block
+	-- ALL keyboard eventtaps. The leader still fires because it's a Carbon
+	-- hs.hotkey (unaffected), but the overlay's dispatcher (hs.eventtap)
+	-- would never see a single follow-up key. Opening a dead overlay is
+	-- worse than useless -- surface why instead. Verify with
+	-- `hs -c "return hs.eventtap.isSecureInputEnabled()"`.
+	if hs.eventtap.isSecureInputEnabled() then
+		osd.notify("glyph:nf-md-lock_alert", "Secure input is blocking keybindings", "Funk")
 		return
 	end
 	-- Mutual exclusion between our own managed panels (e.g. the clipboard
