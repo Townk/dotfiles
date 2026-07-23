@@ -60,6 +60,11 @@ render themes.sh.tmpl     ".config/zsh/themes.sh"
 # `chezmoi-system.kdl` (block `chezmoi-system`) by overlaying any session tint.
 render zellij-theme.kdl.tmpl ".config/zellij/themes/chezmoi-system-base.kdl"
 
+# --- tmux ---------------------------------------------------------------------
+# Pristine theme is `chezmoi-system-base.conf`; theme-apply derives the active
+# `chezmoi-system.conf` by overlaying any session tint (mirrors the zellij pair).
+render tmux-theme.conf.tmpl ".config/tmux/themes/chezmoi-system-base.conf"
+
 # --- pi agent ----------------------------------------------------------------
 render pi.json.tmpl ".pi/agent/themes/chezmoi-system.json"
 

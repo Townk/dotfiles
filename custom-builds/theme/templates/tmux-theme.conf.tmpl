@@ -1,0 +1,44 @@
+{{- $p := index .theme.palettes .theme.active -}}
+{{- $r := .theme.roles -}}
+# chezmoi-system tmux theme — GENERATED from .chezmoidata/theme.yaml. DO NOT EDIT.
+# ({{ $p.meta.name }})
+#
+# Canonical file: rendered to ~/.config/tmux/themes/chezmoi-system-base.conf by
+# custom-builds/theme/generate-theme.sh. theme-apply derives the effective
+# chezmoi-system.conf from it by substituting any per-machine override tokens
+# (#hex → #hex, remote sessions only) and live-reloads running tmux servers via
+# `source-file` (D15). Substitution contract: colors are lowercase #rrggbb
+# literals; every hex here MUST come from a theme.yaml slot so theme-apply can
+# map override tokens back to it.
+#
+# Phase 0 scope: dialogs/popups, panes, copy-mode, and a minimal status wash.
+# The real status bar (mode palette, widgets) is Phase 4 (D6).
+
+# Status line — minimal bg_dim wash so a bare tmux doesn't flash stock green.
+set -g status-style "bg=#{{ index $p $r.ui.bg_dim }},fg=#{{ index $p $r.ui.fg_dim }}"
+
+# Command prompt / messages (mirrors the dialog canvas).
+set -g message-style "bg=#{{ index $p $r.ui.dialog_bg }},fg=#{{ index $p $r.ui.fg }}"
+set -g message-command-style "bg=#{{ index $p $r.ui.dialog_bg }},fg=#{{ index $p $r.ui.fg }}"
+
+# Popups (display-popup) — the modal canvas: dialog_bg body, border_focus
+# frame, rounded corners (parity with zellij's ui.pane_frames.rounded_corners
+# on framed dialogs).
+set -g popup-style "bg=#{{ index $p $r.ui.dialog_bg }},fg=#{{ index $p $r.ui.fg }}"
+set -g popup-border-style "bg=#{{ index $p $r.ui.dialog_bg }},fg=#{{ index $p $r.ui.border_focus }}"
+set -g popup-border-lines rounded
+
+# Pane borders — focus follows ui.border_focus, rest are explicit-dim
+# (parity with zellij frame_selected / pane_frames false aesthetics).
+set -g pane-border-style "fg=#{{ index $p $r.ui.border_inactive }}"
+set -g pane-active-border-style "fg=#{{ index $p $r.ui.border_focus }}"
+
+# Copy-mode: selection + search-match washes (search dialog proper is D12).
+set -g mode-style "bg=#{{ index $p $r.ui.selection }},fg=#{{ index $p $r.ui.fg }}"
+set -g copy-mode-match-style "bg=#{{ $p.find_highlight }},fg=#{{ index $p $r.ui.fg }}"
+set -g copy-mode-current-match-style "bg=#{{ index $p $r.action.attention }},fg=#{{ index $p $r.ui.bg }}"
+
+# Misc chrome.
+set -g display-panes-active-colour "#{{ index $p $r.ui.border_focus }}"
+set -g display-panes-colour "#{{ index $p $r.ui.muted }}"
+setw -g clock-mode-colour "#{{ index $p $r.ui.accent }}"
