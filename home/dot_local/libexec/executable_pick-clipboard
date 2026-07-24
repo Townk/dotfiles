@@ -543,6 +543,7 @@ clip::progress_begin() {
   CLIP_PROGRESS_LAST_EMIT=$CLIP_PROGRESS_START
   CLIP_PROGRESS_LAST_PCT=-100
   CLIP_PROGRESS_SHOWN=""
+  CLIP_PROGRESS_EMIT_PID=""
   CLIP_PROGRESS_HS="${PICK_CLIPBOARD_HS:-hs}"
   command -v "$CLIP_PROGRESS_HS" >/dev/null 2>&1 || CLIP_PROGRESS_HS=""
   CLIP_PROGRESS_STALLED=0
@@ -565,7 +566,32 @@ clip::progress_emit() {  # <pct> <label> [stalled]
   label="${label//$'\n'/ }"
   label="${label//\\/\\\\}"
   label="${label//\"/\\\"}"
-  "$CLIP_PROGRESS_HS" -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"${label}\"${stall_arg})" >/dev/null 2>&1 || true
+  # §4.2b: NEVER wait on presentation IPC -- a hung hs -c (captured live:
+  # one stalled-repaint emit stuck for many seconds inside the hs.task
+  # child context) must cost one tick, not the transfer. Supervised
+  # fire-and-forget: at most one emitter in flight; a still-running
+  # predecessor carries an obsolete frame, so kill it before spawning the
+  # replacement -- which also makes out-of-order repaints impossible.
+  if [[ -n "${CLIP_PROGRESS_EMIT_PID:-}" ]] && kill -0 "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null; then
+    kill -TERM "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null || true
+  fi
+  # ( exec ... ) & : $! is the hs process itself, so the kill above always
+  # hits the real client, never a wrapper shell.
+  # Sanctioned deviation (empirically found, not in the design doc): a
+  # detached spawn must not inherit ANY open descriptor from its caller,
+  # only stdin/stdout/stderr are meant to cross the fork. Under the
+  # shellspec harness this shell's own multi-process pipe fds (3, 5, 9...)
+  # survive exec unless closed -- confirmed via lsof: a stalled `hs` grand-
+  # child (e.g. this file's own test fake) held one of those pipes open,
+  # which blocked shellspec's OWN executor in read() waiting for an EOF
+  # that could never arrive while the fake slept. Closing 3-9 covers every
+  # fd actually observed leaking. Single digits only: this build's zsh
+  # mis-parses a two-digit `exec N>&-` target as a bare command ("command
+  # not found: 10"), fatal even under `|| true` -- verified with a
+  # standalone `zsh -f -c 'exec 10>&-'` repro.
+  ( for _fd in {3..9}; do eval "exec $_fd>&-" 2>/dev/null || true; done
+    exec "$CLIP_PROGRESS_HS" -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"${label}\"${stall_arg})" ) >/dev/null 2>&1 &
+  CLIP_PROGRESS_EMIT_PID=$!
   CLIP_PROGRESS_SHOWN=1
   return 0
 }
@@ -628,11 +654,28 @@ clip::progress_stream() {  # <completed-paths> <total-paths> <label>
 }
 
 # Teardown (§4.2): every exit path of a headless pull hides the HUD before
-# any toast or failure surfaces. Guarded on SHOWN so the no-progress case
-# (grace window, cached rows) never spawns a process just to hide nothing.
+# any toast or failure surfaces. §4.2b: kill the outstanding emitter FIRST
+# (a straggler landing after the hide would repaint a dead capsule until
+# the watchdog), then spawn the hide fire-and-forget -- if the hide itself
+# hangs, the 15s watchdog is the backstop.
 clip::progress_end() {
+  # Sanctioned deviation (empirically found, not in the design doc): a
+  # straggler killed in the SAME instant it was forked can lose the
+  # exec-vs-kill race outright -- SIGTERM lands before the child ever
+  # reaches its `-c` payload write, not just before its sleep. 30ms is a
+  # fixed, unconditional grace (never waits ON the hs process -- it fires
+  # whether or not hs is alive, so it can never itself hang) that gives
+  # the OS one scheduling quantum to actually run the just-spawned emitter
+  # before it gets torn down.
+  sleep 0.03
+  if [[ -n "${CLIP_PROGRESS_EMIT_PID:-}" ]] && kill -0 "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null; then
+    kill -TERM "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null || true
+  fi
+  CLIP_PROGRESS_EMIT_PID=""
   [[ -n "${CLIP_PROGRESS_SHOWN:-}" && -n "${CLIP_PROGRESS_HS:-}" ]] || return 0
-  "$CLIP_PROGRESS_HS" -c 'require("osd").progressHide()' >/dev/null 2>&1 || true
+  # fd-closing loop: see clip::progress_emit -- same detached-spawn hygiene.
+  ( for _fd in {3..9}; do eval "exec $_fd>&-" 2>/dev/null || true; done
+    exec "$CLIP_PROGRESS_HS" -c 'require("osd").progressHide()' ) >/dev/null 2>&1 &
   CLIP_PROGRESS_SHOWN=""
   return 0
 }

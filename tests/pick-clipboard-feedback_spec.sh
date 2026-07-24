@@ -291,6 +291,10 @@ EOF
         printf "  1,000  10%%\r  5,000  50%%\r 10,000 100%%\r" | clip::progress_stream 0 1 work-laptop
       '
       The status should be success
+      # Emits are now supervised background spawns (§4.2b): the fake hs
+      # writes its line asynchronously, so give it a moment to land before
+      # reading HSLOG (this example was observed flaky without the pause).
+      sleep 0.2
       The contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop")'
     End
 
@@ -303,6 +307,9 @@ EOF
         printf "  5,000  50%%\r" | clip::progress_stream 2 4 work-laptop
       '
       The status should be success
+      # §4.2b: background spawn -- give the fake hs a moment to write
+      # (observed flaky without the pause).
+      sleep 0.2
       The contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 62, "work-laptop")'
     End
 
@@ -342,9 +349,44 @@ EOF
       # `should end_with` on the whole contents instead -- confirmed to
       # discriminate (fails when the file doesn't actually end with this
       # line, per a throwaway probe run before committing).
+      # §4.2b: the final (post-stall) emit is a background spawn with no
+      # subsequent progress_end in this example to synchronize on -- give
+      # it a moment to land (observed flaky without the pause).
+      sleep 0.2
       The line 1 of contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop")'
       The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop", true)'
       The contents of file "$HSLOG" should end_with 'require("osd").progress("glyph:nf-md-download", 50, "work-laptop")'
+    End
+
+    It 'a hung hs emit never blocks the sink; teardown reaps the straggler (§4.2b)'
+      # Fake hs that logs its payload then hangs forever: with synchronous
+      # emits this example would wedge until the shellspec timeout; with
+      # supervised background emits the whole pipeline finishes in ~1s.
+      cat > "$BINDIR/hs-hang" <<EOF
+#!/bin/sh
+[ "\$1" = "-c" ] && printf '%s\n' "\$2" >> "$HSLOG"
+sleep 300
+EOF
+      chmod +x "$BINDIR/hs-hang"
+      export PICK_CLIPBOARD_HS="$BINDIR/hs-hang"
+      When call zsh -f -c '
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        CLIP_PROGRESS_START=0
+        CLIP_PROGRESS_LAST_EMIT=0
+        { printf "  1,000  10%%\r"; sleep 0.4; printf "  5,000  50%%\r"; sleep 0.4; printf "  9,000  90%%\r"; } | clip::progress_stream 0 1 hang-probe
+        clip::progress_end
+        # Teardown killed the last emitter: its pid must be gone.
+        if [[ -n "${CLIP_PROGRESS_EMIT_PID:-}" ]] && kill -0 "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null; then
+          print -u2 -- "straggler-still-alive"
+          exit 90
+        fi
+      '
+      The status should be success
+      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 10, "hang-probe")'
+      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 50, "hang-probe")'
+      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 90, "hang-probe")'
+      The contents of file "$HSLOG" should include 'require("osd").progressHide()'
     End
   End
 
@@ -455,6 +497,9 @@ EOF
         clip::progress_emit 40 "we\"ird\\name"
       '
       The status should be success
+      # §4.2b: background spawn -- give the fake hs a moment to write
+      # (observed flaky without the pause).
+      sleep 0.2
       The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 40, "we\"ird\\name")'
     End
 
@@ -465,6 +510,9 @@ EOF
         clip::progress_emit 40 $'"'"'weird\rna\nme'"'"'
       '
       The status should be success
+      # §4.2b: background spawn -- give the fake hs a moment to write
+      # (observed flaky without the pause).
+      sleep 0.2
       The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 40, "weird na me")'
     End
   End

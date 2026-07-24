@@ -688,6 +688,10 @@ function M.progress(icon, percent, label, stalled)
 				fn()
 			end
 		end)
+		-- §4.2b: warm the hourglass into the glyph cache now -- a stalled
+		-- repaint must never do cold sqlite I/O mid-transfer (a font-sync
+		-- rsync touching symbols.db coincided with the captured hang).
+		resolveNamedIcon(PROG_STALL_ICON)
 	else
 		progressCanvas:topLeft({ x = x, y = y })
 	end
