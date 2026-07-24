@@ -558,7 +558,11 @@ clip::progress_begin() {
 clip::progress_emit() {  # <pct> <label> [stalled]
   [[ -n "${CLIP_PROGRESS_HS:-}" ]] || return 0
   local stall_arg=""
-  [[ -n "${3:-}" ]] && stall_arg=", true"
+  if [[ "${3:-}" == preparing ]]; then
+    stall_arg=', "preparing"'
+  elif [[ -n "${3:-}" ]]; then
+    stall_arg=", true"
+  fi
   # Lua-string escaping (§4.2a): backslash first, then double quote; CR/LF
   # in a filename would break the -c one-liner -> spaces.
   local label=$2
@@ -578,8 +582,11 @@ clip::progress_emit() {  # <pct> <label> [stalled]
   # ( exec ... ) & : $! is the hs process itself, so the kill above always
   # hits the real client, never a wrapper shell.
   # Sanctioned deviation (empirically found, not in the design doc): a
-  # detached spawn must not inherit ANY open descriptor from its caller,
-  # only stdin/stdout/stderr are meant to cross the fork. Under the
+  # detached spawn must not inherit ANY open descriptor from its caller.
+  # In particular, stdin is rsync's progress pipe here: the real hs CLI
+  # reads from stdin and was stealing most progress records from the sink
+  # (a fake hs that ignored stdin rendered a smooth 0→99 trace). Redirect it
+  # from /dev/null; stdout/stderr are discarded below. Under the
   # shellspec harness this shell's own multi-process pipe fds (3, 5, 9...)
   # survive exec unless closed -- confirmed via lsof: a stalled `hs` grand-
   # child (e.g. this file's own test fake) held one of those pipes open,
@@ -589,8 +596,13 @@ clip::progress_emit() {  # <pct> <label> [stalled]
   # mis-parses a two-digit `exec N>&-` target as a bare command ("command
   # not found: 10"), fatal even under `|| true` -- verified with a
   # standalone `zsh -f -c 'exec 10>&-'` repro.
+  # -q disables hs.ipc's console mirroring. Hammerspoon 1.1.1 has an upstream
+  # recursion bug in that mirror: an unrelated print while a CLI request is
+  # active can cascade hundreds of "already recursing" warnings, and laying
+  # them out in the HS Console blocks its main thread/event taps (captured live
+  # as pulsed keyboard and click stalls, worst during frequent live repaints).
   ( for _fd in {3..9}; do eval "exec $_fd>&-" 2>/dev/null || true; done
-    exec "$CLIP_PROGRESS_HS" -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"${label}\"${stall_arg})" ) >/dev/null 2>&1 &
+    exec "$CLIP_PROGRESS_HS" -q -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"${label}\"${stall_arg})" ) </dev/null >/dev/null 2>&1 &
   CLIP_PROGRESS_EMIT_PID=$!
   CLIP_PROGRESS_SHOWN=1
   return 0
@@ -616,7 +628,14 @@ clip::progress_stream() {  # <completed-paths> <total-paths> <label>
       # start value clamps to 0 -- a stall before any data still shows a
       # capsule, at 0%). Refreshing LAST_EMIT here means only the STALLED
       # flag below can let the resume chunk through the throttle.
-      clip::progress_emit "$(( CLIP_PROGRESS_LAST_PCT < 0 ? 0 : CLIP_PROGRESS_LAST_PCT ))" "$label" stalled
+      if (( CLIP_PROGRESS_LAST_PCT < 0 )); then
+        # Connection/setup before rsync's first progress record is not a
+        # transfer stall. Keep it bright and label it honestly; Lua renders
+        # the preparing state with the hourglass but without stall dimming.
+        clip::progress_emit 0 "Preparing to copy ${label#Copying }" preparing
+      else
+        clip::progress_emit "$CLIP_PROGRESS_LAST_PCT" "$label" stalled
+      fi
       CLIP_PROGRESS_STALLED=1
       CLIP_PROGRESS_LAST_EMIT=$EPOCHREALTIME
       continue
@@ -676,7 +695,7 @@ clip::progress_end() {
   [[ -n "${CLIP_PROGRESS_SHOWN:-}" && -n "${CLIP_PROGRESS_HS:-}" ]] || return 0
   # fd-closing loop: see clip::progress_emit -- same detached-spawn hygiene.
   ( for _fd in {3..9}; do eval "exec $_fd>&-" 2>/dev/null || true; done
-    exec "$CLIP_PROGRESS_HS" -c 'require("osd").progressHide()' ) >/dev/null 2>&1 &
+    exec "$CLIP_PROGRESS_HS" -q -c 'require("osd").progressHide()' ) </dev/null >/dev/null 2>&1 &
   CLIP_PROGRESS_SHOWN=""
   return 0
 }

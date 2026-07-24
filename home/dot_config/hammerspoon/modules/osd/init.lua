@@ -626,6 +626,7 @@ local PROG_STALL_ICON = "glyph:nf-fa-hourglass"
 local progressCanvas = nil
 local progressWatchdog = nil
 local progressCancelFn = nil
+local progressVisible = false
 
 local function cancelProgressWatchdog()
 	if progressWatchdog then
@@ -656,11 +657,13 @@ end
 --- @param label string|nil    the human line to render, e.g. "Copying
 ---                            <file> from <host>…" (clip::progress_label
 ---                            composes it; this module never guesses)
---- @param stalled boolean|nil  true = transfer alive but no bytes flowing; hourglass icon + dimmed bar, geometry/watchdog unchanged
+--- @param stalled boolean|string|nil  true = transfer alive but no bytes flowing; "preparing" = pre-transfer setup; both use the hourglass, only a real stall dims
 function M.progress(icon, percent, label, stalled)
 	local pct = math.max(0, math.min(100, percent or 0))
+	local isStalled = stalled == true
+	local isPreparing = stalled == "preparing"
 	local resolved
-	if stalled then
+	if isStalled or isPreparing then
 		resolved = resolveNamedIcon(PROG_STALL_ICON)
 	else
 		resolved = type(icon) == "string" and resolveNamedIcon(icon) or icon
@@ -697,7 +700,7 @@ function M.progress(icon, percent, label, stalled)
 	end
 
 	local elements = {}
-	local fillOn = stalled and { white = 1, alpha = PROG_STALL_ALPHA } or BAR_ON
+	local fillOn = isStalled and { white = 1, alpha = PROG_STALL_ALPHA } or BAR_ON
 	local cancelW = progressCancelFn and PROG_CANCEL_W or 0
 	local bw2 = BORDER_W / 2
 	elements[#elements + 1] = {
@@ -810,14 +813,28 @@ function M.progress(icon, percent, label, stalled)
 		}
 	end
 
-	while progressCanvas:elementCount() > 0 do
-		progressCanvas:removeElement(1)
+	-- Repaint existing slots in place. The old remove-all/insert-all/show
+	-- cycle made real hs.ipc calls slow enough for the engine to supersede
+	-- most frames, so a smooth 0→99 rsync stream rendered as a few jumps.
+	-- Re-showing an already visible non-keyable canvas also asked AppKit to
+	-- make it key on every tick and logged one warning per repaint.
+	local oldCount = progressCanvas:elementCount()
+	local commonCount = math.min(oldCount, #elements)
+	for i = 1, commonCount do
+		progressCanvas[i] = elements[i]
 	end
-	for _, elem in ipairs(elements) do
-		progressCanvas:insertElement(elem)
+	while oldCount > #elements do
+		progressCanvas:removeElement(oldCount)
+		oldCount = oldCount - 1
+	end
+	for i = oldCount + 1, #elements do
+		progressCanvas:insertElement(elements[i])
 	end
 	progressCanvas:alpha(1)
-	progressCanvas:show()
+	if not progressVisible then
+		progressCanvas:show()
+		progressVisible = true
+	end
 
 	cancelProgressWatchdog()
 	progressWatchdog = hs.timer.doAfter(PROG_IDLE_TIMEOUT, function()
@@ -841,6 +858,7 @@ function M.progressHide()
 	if progressCanvas then
 		progressCanvas:hide()
 	end
+	progressVisible = false
 	progressCancelFn = nil
 end
 
@@ -865,6 +883,7 @@ function M.cleanup()
 		progressCanvas:delete()
 		progressCanvas = nil
 	end
+	progressVisible = false
 	if tickSound then
 		tickSound:stop()
 		tickSound = nil

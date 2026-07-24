@@ -83,16 +83,21 @@ EOF
     export PICK_CLIPBOARD_NOTIFY="$BINDIR/notify"
 
     HSLOG="$SHELLSPEC_TMPBASE/hslog"; : > "$HSLOG"
-    # Fake hs CLI: logs the -c payload, one line per call. printf '%s\n', not
-    # echo: /bin/sh's echo builtin is XSI-compliant on this box (verified:
+    # Fake hs CLI: accepts only the production `-q -c` shape with stdin
+    # redirected from /dev/null, so every payload assertion regression-tests
+    # both isolation requirements. Hammerspoon 1.1.1's console mirror can
+    # recursively flood warnings from an unrelated print during a request,
+    # blocking its event taps; -q bypasses that mirror. The real CLI also
+    # reads stdin, which otherwise steals records from rsync's progress pipe.
+    # printf '%s\n', not echo: /bin/sh's echo builtin is XSI-compliant on this box (verified:
     # `sh -c 'x="a\\\\b"; echo "$x"'` prints a single backslash) and would
     # silently collapse the label-escaping test's literal backslash pairs
     # before they ever reach the log -- printf never reinterprets its
     # argument, so the log holds the exact -c payload byte-for-byte, same as
-    # what real Hammerspoon's `hs -c` would receive.
+    # what real Hammerspoon's `hs -q -c` would receive.
     cat > "$BINDIR/hs" <<EOF
 #!/bin/sh
-[ "\$1" = "-c" ] && printf '%s\n' "\$2" >> "$HSLOG"
+[ -c /dev/fd/0 ] && [ "\$1" = "-q" ] && [ "\$2" = "-c" ] && printf '%s\n' "\$3" >> "$HSLOG"
 EOF
     chmod +x "$BINDIR/hs"
     export PICK_CLIPBOARD_HS="$BINDIR/hs"
@@ -325,6 +330,21 @@ EOF
       The contents of file "$HSLOG" should equal ""
     End
 
+    It 'pre-first-record wait is bright preparing state, then first chunk switches to copying'
+      When call zsh -f -c '
+        export PICK_CLIPBOARD_STALL_SECS=0.3
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        CLIP_PROGRESS_START=0
+        CLIP_PROGRESS_LAST_EMIT=0
+        { sleep 0.8; printf "  1,000  10%%\r"; } | clip::progress_stream 0 1 "Copying report.zip from peer…"
+      '
+      The status should be success
+      sleep 0.2
+      The line 1 of contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 0, "Preparing to copy report.zip from peer…", "preparing")'
+      The contents of file "$HSLOG" should end_with 'require("osd").progress("glyph:nf-md-download", 10, "Copying report.zip from peer…")'
+    End
+
     It 'stall: quiet gap emits a stalled repaint, next chunk snaps back past the throttle (§4.3)'
       # STALL_SECS=0.3 keeps the test fast; the 0.8s quiet gap comfortably
       # exceeds it (>=1 stall tick guaranteed, timing-tolerant). START=0
@@ -364,7 +384,7 @@ EOF
       # supervised background emits the whole pipeline finishes in ~1s.
       cat > "$BINDIR/hs-hang" <<EOF
 #!/bin/sh
-[ "\$1" = "-c" ] && printf '%s\n' "\$2" >> "$HSLOG"
+[ -c /dev/fd/0 ] && [ "\$1" = "-q" ] && [ "\$2" = "-c" ] && printf '%s\n' "\$3" >> "$HSLOG"
 sleep 300
 EOF
       chmod +x "$BINDIR/hs-hang"
@@ -383,6 +403,8 @@ EOF
         fi
       '
       The status should be success
+      # progress_end launches hide fire-and-forget; allow its fake to log.
+      sleep 0.2
       The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 10, "hang-probe")'
       The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 50, "hang-probe")'
       The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 90, "hang-probe")'
