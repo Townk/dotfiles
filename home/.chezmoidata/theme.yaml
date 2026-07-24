@@ -216,7 +216,7 @@ theme:
     # nvim mode-line. tmux = "command"; rename covers rename_tab + rename_pane.
     mode: { normal: green, locked: peach, pane: blue, tab: green, resize: mauve,
             move: yellow, search: blue, scroll: lavender, rename: yellow,
-            session: red, prompt: red, tmux: red }
+            session: red, prompt: red, tmux: red, visual: mauve }
 
     diff: { added: green, removed: red, changed: peach }
 

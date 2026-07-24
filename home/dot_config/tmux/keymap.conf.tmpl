@@ -23,7 +23,13 @@ bind z resize-pane -Z                     # toggle zoom
 # format/colors in the theme; off by default in status.conf).
 bind f if -F '#{==:#{pane-border-status},off}' 'setw -g pane-border-status top' 'setw -g pane-border-status off'
 bind L set key-table locked               # locked mode (exit: M-Escape only)
-bind l copy-mode                          # scroll mode = copy-mode
+# Scroll vs Copy: one tmux copy-mode, two stack states via the @visual pane
+# option. Scroll (M-w l, Cmd+Up): j/k/arrows scroll the VIEWPORT and the
+# cursor is inert (tmux cannot hide it — ledger row). Copy/visual (v from
+# Scroll, or M-w V directly): normal vi cursor motions; v begins selection.
+# Entries always stamp the state, so a stale flag self-heals.
+bind l copy-mode \; set -p @visual 0      # scroll mode = copy-mode, viewport state
+bind V copy-mode \; set -p @visual 1      # straight into copy/visual mode
 bind o set key-table session
 bind p set key-table pane
 bind t set key-table tab
@@ -238,11 +244,23 @@ bind -T locked M-Escape set key-table root
 # search-forward keeps the old term, so we exit + re-enter copy-mode and
 # restore the viewport from #{scroll_position}; ledger row), otherwise it
 # pops Scroll back to the armed leader (Command).
+# Scroll-state motion: viewport scroll, not cursor (see @visual above).
+bind -T copy-mode-vi j if -F '#{@visual}' {send -X cursor-down} {send -X scroll-down}
+bind -T copy-mode-vi Down if -F '#{@visual}' {send -X cursor-down} {send -X scroll-down}
+bind -T copy-mode-vi k if -F '#{@visual}' {send -X cursor-up} {send -X scroll-up}
+bind -T copy-mode-vi Up if -F '#{@visual}' {send -X cursor-up} {send -X scroll-up}
+# v: Scroll → push Copy/visual at the current position; in Copy it begins
+# the selection as usual.
+bind -T copy-mode-vi v if -F '#{@visual}' {send -X begin-selection} {set -p @visual 1}
 bind -T copy-mode-vi Escape send -X cancel
 bind -T copy-mode-vi BSpace if -F '#{search_present}' {
   run-shell 'tmux send-keys -X cancel; tmux copy-mode; [ #{scroll_position} -gt 0 ] && tmux send-keys -X -N #{scroll_position} scroll-up; true'
 } {
-  send -X cancel ; switch-client -T prefix
+  if -F '#{@visual}' {
+    set -p @visual 0
+  } {
+    send -X cancel ; switch-client -T prefix
+  }
 }
 bind -T copy-mode-vi V run-shell 'f=$(mktemp /tmp/tmux-scrollback.XXXXXX); tmux capture-pane -p -S - >"$f"; tmux new-window -n scrollback "nvim +\$ $f"' \; send -X cancel
 # n/p — prompt jumps via OSC 133 marks (zj-prompt-jumper parity; the marks

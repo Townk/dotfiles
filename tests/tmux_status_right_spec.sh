@@ -10,7 +10,7 @@ Describe 'tmux-status-right'
     cat > "$TEST_TMP/theme.json" <<'EOS'
 {"roles":{"ui":{"bg":"#1e1e2e","fg":"#cdd6f4"},
   "mode":{"locked":"#fab387","resize":"#cba6f7","pane":"#89b4fa","tab":"#a6e3a1",
-          "move":"#f9e2af","scroll":"#b4befe","session":"#f38ba8","tmux":"#f38ba8","rename":"#f9e2af","search":"#89b4fa"},
+          "move":"#f9e2af","scroll":"#b4befe","session":"#f38ba8","tmux":"#f38ba8","rename":"#f9e2af","search":"#89b4fa","visual":"#cba6f7"},
   "action":{"attention":"#f9e2af"}},
  "extended":{"tab":{"bg":"#282c41","fg":"#9b9fc1","active_bg":"#656a83","active_fg":"#ffffff"}}}
 EOS
@@ -82,6 +82,12 @@ EOS
     When call zsh "$W" root 1 main 0 1
     The output should include "Search"
     The output should not include "Scroll"
+  End
+
+  It 'copy/visual state shows the Copy pill over Scroll'
+    When call zsh "$W" root 1 main 0 0 '' 1
+    The output should include "Copy"
+    The output should include "bg=#cba6f7"
   End
 
   It 'an open rename dialog tops the stack as Rename'
