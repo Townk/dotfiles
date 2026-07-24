@@ -91,13 +91,20 @@ fi
 _qlw_ssh="${SSH_CONNECTION:-}${SSH_CLIENT:-}"
 _qlw_term="${TERM_PROGRAM:-}"
 if [[ -n "${TMUX:-}" ]]; then
-  # Pin the lookup to the CLIENT's session: a bare show-environment resolves
-  # "most recently used", which right after a workspace build is the freshly
-  # created session (env stamped from the popup: TERM_PROGRAM=tmux) — the
-  # guard then tripped on first launch and passed on retry (Mode B find).
+  # Pin the lookup to the ORIGIN pane's session. Untargeted commands (and
+  # '#{session_name}' itself) resolve "most recently used", which right
+  # after a workspace build is the freshly created session (env stamped from
+  # the popup: TERM_PROGRAM=tmux) — the guard then tripped on first launch
+  # and passed on retry (Mode B find, twice). MUX_MODAL_TARGET_PANE is the
+  # origin pane tmux-modal captured at popup START, before any build; a pane
+  # id is a valid target-session (tmux resolves its containing session).
   _qlw_t=()
-  _qlw_sess="$(tmux display -p '#{session_name}' 2>/dev/null)" || _qlw_sess=""
-  [[ -n "$_qlw_sess" ]] && _qlw_t=(-t "$_qlw_sess")
+  if [[ -n "${MUX_MODAL_TARGET_PANE:-}" ]]; then
+    _qlw_t=(-t "$MUX_MODAL_TARGET_PANE")
+  else
+    _qlw_sess="$(tmux display -p '#{session_name}' 2>/dev/null)" || _qlw_sess=""
+    [[ -n "$_qlw_sess" ]] && _qlw_t=(-t "$_qlw_sess")
+  fi
   _qlw_v="$(tmux show-environment "${_qlw_t[@]}" SSH_CONNECTION 2>/dev/null)" || _qlw_v=""
   if [[ "$_qlw_v" == SSH_CONNECTION=* ]]; then _qlw_ssh="${_qlw_v#*=}"; else _qlw_ssh=""; fi
   _qlw_v="$(tmux show-environment "${_qlw_t[@]}" TERM_PROGRAM 2>/dev/null)" || _qlw_v=""
