@@ -52,6 +52,9 @@ set -s escape-time 0               # ESC is ESC, never a chord timeout (ESC canc
 set -g focus-events on             # nvim autoread & friends
 set -g mouse on
 setw -g mode-keys vi               # copy-mode motion parity with the zellij scroll keys
+set -g base-index 1                # zellij tabs are 1-based; keymap number jumps assume it
+setw -g pane-base-index 1
+set -g renumber-windows on         # closing a window renumbers the rest, like zellij tabs
 
 # Refresh these into a session's environment on attach: tmux overrides the
 # PANE env (TERM_PROGRAM=tmux), so the session env is the only truthful
