@@ -8,6 +8,11 @@
 
 _zsh_should_autoattach_zellij() {
   [[ -z "$ZELLIJ" ]] || return 1
+  # Cross-nesting guard (mux migration spec §2/D17, pulled forward in Phase 0):
+  # never autostart Zellij inside a tmux pane. tmux.conf scrubs the stale
+  # ZELLIJ* vars from pane envs (cross-mux hygiene), so without this check a
+  # tmux pane's shell would pass the ZELLIJ test above and nest a Zellij.
+  [[ -z "$TMUX" ]] || return 1
   [[ -t 0 && -t 1 ]] || return 1
 
   # GUI helpers can launch interactive zsh at login without a real terminal.

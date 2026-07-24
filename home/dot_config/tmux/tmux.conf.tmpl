@@ -52,10 +52,25 @@ set -s escape-time 0               # ESC is ESC, never a chord timeout (ESC canc
 set -g focus-events on             # nvim autoread & friends
 set -g mouse on
 
-# Refresh these into a session's environment on attach: scripts in later
-# phases (terminal-toggle-fullscreen, terminal-location) dispatch on which
-# host terminal the *current* client sits in.
-set -ga update-environment "TERM TERM_PROGRAM"
+# Refresh these into a session's environment on attach: tmux overrides the
+# PANE env (TERM_PROGRAM=tmux), so the session env is the only truthful
+# record of the outer terminal — image-protocol-support.zsh and yazi both
+# read it via `tmux show-environment`. NB: update-environment is an ARRAY
+# option — one variable per -ga append; a quoted "TERM TERM_PROGRAM" would
+# create a single bogus entry matching nothing.
+set -ga update-environment TERM
+set -ga update-environment TERM_PROGRAM
+
+# Cross-mux hygiene: if this server was started from a shell that descends
+# from a Zellij session (e.g. after a manual ZELLIJ=… autostart bypass), the
+# stale ZELLIJ* vars would be baked into every pane — and anything detecting
+# its mux by env (image-protocol-support.zsh, yazi's driver selection, zj::*)
+# would think it's inside Zellij. `-r` removes them from the environment of
+# every new pane process. A REAL Zellij nested inside a tmux pane re-exports
+# them itself, so nesting still works.
+set-environment -gr ZELLIJ
+set-environment -gr ZELLIJ_PANE_ID
+set-environment -gr ZELLIJ_SESSION_NAME
 
 # ---------------------------------------------------------------------------
 # Theme — every color comes from theme.yaml through the generated
