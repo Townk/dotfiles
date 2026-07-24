@@ -34,6 +34,8 @@ LIB_DIR="$SCRIPT_DIR/lib"
 . "$LIB_DIR/command.zsh"
 # shellcheck source=/dev/null
 . "$LIB_DIR/dispatch.zsh"
+# shellcheck source=/dev/null
+. "$LIB_DIR/dispatch-tmux.zsh"
 
 ql_die() {
   echo "quick-launch: $*" >&2

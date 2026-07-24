@@ -182,7 +182,9 @@ ql_session_exists() {
 # `normal` mode with `clear-defaults` keybinds, so every key except the local
 # picker chord passes through to the remote — see ql_nested_layout_file.
 ql_workspace_is_nested() {
-  [[ "$(jq -r '.nested_zellij // false' <<<"$1")" == true ]]
+  # nested_mux is the backend-neutral schema key (mux migration D14);
+  # nested_zellij is read as its alias so existing definitions keep working.
+  [[ "$(jq -r '.nested_mux // .nested_zellij // false' <<<"$1")" == true ]]
 }
 
 # Generate (and cache) the layout-with-config file for a nested workspace, and
@@ -367,6 +369,13 @@ ql_dispatch() {
     echo "quick-launch: no $kind target with id '$id'" >&2
     return 1
   fi
+  # Backend branch (mux migration Phase 3): a tmux session takes the
+  # ql_tx_* twins (lib/dispatch-tmux.zsh); everything below stays the
+  # untouched Zellij path (innermost mux wins, matching mux::backend).
+  if [[ -z "${ZELLIJ:-}" && -n "${TMUX:-}" ]]; then
+    ql_tx_dispatch_el "$kind" "$el"
+    return
+  fi
   case "$kind" in
     pane) ql_open_pane "$el" ;;
     tab) ql_open_tab "$el" ;;
@@ -385,6 +394,10 @@ ql_dispatch_window() {
   if [[ -z "$el" ]]; then
     echo "quick-launch: no workspace target with id '$id'" >&2
     return 1
+  fi
+  if [[ -z "${ZELLIJ:-}" && -n "${TMUX:-}" ]]; then
+    ql_tx_open_workspace_window "$el"
+    return
   fi
   ql_open_workspace_window "$el"
 }

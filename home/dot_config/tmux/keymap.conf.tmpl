@@ -234,3 +234,13 @@ bind -n C-S-g display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .ch
 bind U display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker (resumed)' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph --resume"
 bind G display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker (resumed)' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji --resume"
 bind c display-popup -E -B -w 70% -h 75% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Clipboard history' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-clipboard"
+
+# ---------------------------------------------------------------------------
+# Quick-launch (Phase 3) — pickers in popups, dispatch via the ql_tx_* twins.
+# Chords mirror the zellij mode chords: tab-T, pane-P, session-S. The picker
+# emits an id (or @window:<id> on Alt+Enter) and quick-launch dispatches.
+bind -T tab T set key-table root \; display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Quick Launch — Tab' --no-chrome -- {{ .chezmoi.homeDir }}/.config/zellij/scripts/quick-launch menu tab"
+bind -T pane P set key-table root \; display-popup -E -B -w 70% -h 70% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Quick Launch — Pane' --no-chrome -- {{ .chezmoi.homeDir }}/.config/zellij/scripts/quick-launch menu pane"
+bind -T session S set key-table root \; display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Quick Launch — Workspace' --no-chrome -- {{ .chezmoi.homeDir }}/.config/zellij/scripts/quick-launch menu workspace"
+# nested table (D14): the sole escape hatch from a nested-mux outer session.
+bind -T nested C-M-Space display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title 'Quick Launch — Workspace' --no-chrome -- {{ .chezmoi.homeDir }}/.config/zellij/scripts/quick-launch menu workspace"
