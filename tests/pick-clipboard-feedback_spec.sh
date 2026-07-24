@@ -299,7 +299,7 @@ EOF
       # Emits are now supervised background spawns (§4.2b): the fake hs
       # writes its line asynchronously, so give it a moment to land before
       # reading HSLOG (this example was observed flaky without the pause).
-      sleep 0.2
+      sleep 0.5
       The contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop")'
     End
 
@@ -425,7 +425,7 @@ EOF
     End
   End
 
-  Describe 'cancellation + partial-cache cleanup (§4.4)'
+  Describe 'cancellation + resumable staging lifecycle (§4.4)'
     It 'rsync failure removes the partial cache dir'
       id=$(seed_remote_manifest_row)
       cat > "$BINDIR/rsync-fail" <<EOF
@@ -463,13 +463,14 @@ EOF
       The contents of file "$NOTIFYLOG" should include "Copied from work-laptop"
     End
 
-    It 'TERM mid-pull runs the cancel path: exit 130, partial removed, quiet toast'
+    It 'TERM mid-pull runs the cancel path: exit 130, partial retained, quiet toast'
       id=$(seed_remote_manifest_row)
       cat > "$BINDIR/rsync-slow" <<EOF
 #!/bin/sh
 argc=\$#
 eval "dst=\\\${\$argc}"
-mkdir -p "\$dst/partial-dir"
+mkdir -p "\$dst/.rsync-partial"
+printf partial > "\$dst/.rsync-partial/chunk"
 sleep 1
 exit 0
 EOF
@@ -484,9 +485,60 @@ EOF
       }
       When call run_cancelled_restore "$id"
       The status should equal 130
-      The path "$HOME/.cache/pick-clipboard/files/$id/1" should not be exist
+      The path "$HOME/.cache/pick-clipboard/files/$id/1/.pick-clipboard-partial" should be exist
+      The path "$HOME/.cache/pick-clipboard/files/$id/1/.rsync-partial/chunk" should be exist
       The contents of file "$NOTIFYLOG" should include "--icon glyph:nf-md-close Transfer cancelled"
       The contents of file "$NOTIFYLOG" should not include "Copied from"
+    End
+
+    It 'the next pull reuses a retained partial and clears its staging marker'
+      id=$(seed_remote_manifest_row)
+      sub="$HOME/.cache/pick-clipboard/files/$id/1"
+      mkdir -p "$sub/.rsync-partial"
+      printf partial > "$sub/.rsync-partial/chunk"
+      : > "$sub/.pick-clipboard-partial"
+      cat > "$BINDIR/rsync-resume" <<EOF
+#!/bin/sh
+case " \$* " in
+  *" --partial-dir=.rsync-partial "*) ;;
+  *) exit 98 ;;
+esac
+argc=\$#
+eval "src=\\\${\$((argc - 1))}"
+eval "dst=\\\${\$argc}"
+[ -f "\$dst/.rsync-partial/chunk" ] || exit 97
+base="\${src##*/}"
+printf resumed > "\$dst/\$base"
+rm -f "\$dst/.rsync-partial/chunk"
+rmdir "\$dst/.rsync-partial"
+EOF
+      chmod +x "$BINDIR/rsync-resume"
+      export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync-resume"
+      When call run_restore_id "$id"
+      The status should be success
+      The path "$sub/big.bin" should be exist
+      The path "$sub/.pick-clipboard-partial" should not be exist
+      The contents of file "$NOTIFYLOG" should include "Copied from"
+    End
+
+    It '24-hour sweep removes expired bytes and their un-restorable localized row'
+      sub="$HOME/.cache/pick-clipboard/files/77/1"
+      mkdir -p "$sub"
+      printf staged > "$sub/report.bin"
+      printf '%s' "$sub/report.bin" > "$SHELLSPEC_TMPBASE/localized-blob"
+      localized_id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','peer',100); SELECT last_insert_rowid();")
+      sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($localized_id, 'x-resolved-path', readfile('$SHELLSPEC_TMPBASE/localized-blob'));"
+      touch -t 202001010000 "$sub"
+      export PICK_CLIPBOARD_CACHE_TTL=1
+      export LOCALIZED_ID="$localized_id"
+      When call zsh -f -c '
+        source "$SCRIPT_PATH"
+        clip::cache_sweep
+        sqlite3 "$DB_FILE" "SELECT count(*) FROM clips WHERE id=$LOCALIZED_ID;"
+      '
+      The status should be success
+      The output should equal "0"
+      The path "$sub" should not be exist
     End
   End
 

@@ -616,17 +616,23 @@ local PROG_PAD_H = 14
 local PROG_ICON_SIZE = 18
 local PROG_LABEL_SIZE = 11.5
 local PROG_BAR_HEIGHT = 8
-local PROG_BAR_SEGMENTS = 16
+local PROG_BAR_SEGMENTS = 32
+local PROG_BAR_GAP = 2
 local PROG_PCT_WIDTH = 38
 local PROG_CANCEL_W = 24
+local PROG_CANCEL_MARGIN = 12
+local PROG_CANCEL_RESERVE = 30
 local PROG_IDLE_TIMEOUT = 15
 local PROG_STALL_ALPHA = 0.45
 local PROG_STALL_ICON = "glyph:nf-fa-hourglass"
+local PROG_CANCEL_HOVER = { white = 1, alpha = 0.16 }
+local PROG_CANCEL_CLEAR = { white = 1, alpha = 0 }
 
 local progressCanvas = nil
 local progressWatchdog = nil
 local progressCancelFn = nil
 local progressVisible = false
+local progressCancelHovered = false
 
 local function cancelProgressWatchdog()
 	if progressWatchdog then
@@ -685,9 +691,16 @@ function M.progress(icon, percent, label, stalled)
 		progressCanvas:level(hs.canvas.windowLevels.overlay) ---@diagnostic disable-line: undefined-field
 		progressCanvas:canvasMouseEvents(true)
 		progressCanvas:mouseCallback(function(_, event, id)
-			if event == "mouseDown" and id == "progress-cancel" and progressCancelFn then
+			if id == "progress-cancel" and (event == "mouseEnter" or event == "mouseExit") then
+				progressCancelHovered = event == "mouseEnter"
+				if progressCanvas and progressCanvas["progress-cancel-bg"] then
+					progressCanvas["progress-cancel-bg"].fillColor =
+						progressCancelHovered and PROG_CANCEL_HOVER or PROG_CANCEL_CLEAR
+				end
+			elseif event == "mouseDown" and id == "progress-cancel" and progressCancelFn then
 				local fn = progressCancelFn
 				progressCancelFn = nil
+				progressCancelHovered = false
 				fn()
 			end
 		end)
@@ -701,7 +714,7 @@ function M.progress(icon, percent, label, stalled)
 
 	local elements = {}
 	local fillOn = isStalled and { white = 1, alpha = PROG_STALL_ALPHA } or BAR_ON
-	local cancelW = progressCancelFn and PROG_CANCEL_W or 0
+	local cancelW = progressCancelFn and PROG_CANCEL_RESERVE or 0
 	local bw2 = BORDER_W / 2
 	elements[#elements + 1] = {
 		type = "rectangle",
@@ -710,7 +723,7 @@ function M.progress(icon, percent, label, stalled)
 		fillColor = BG_COLOR,
 		strokeColor = BORDER_COLOR,
 		strokeWidth = BORDER_W,
-		roundedRectRadii = { xRadius = PROG_HEIGHT / 2, yRadius = PROG_HEIGHT / 2 },
+		roundedRectRadii = { xRadius = PROG_HEIGHT / 4, yRadius = PROG_HEIGHT / 4 },
 	}
 
 	-- Icon at the left edge (glyph is the only production shape; image/
@@ -770,14 +783,14 @@ function M.progress(icon, percent, label, stalled)
 	local barX = contentX
 	local barW = PROG_WIDTH - barX - PROG_PCT_WIDTH - PROG_PAD_H - cancelW
 	local barY = 33
-	local segW = (barW - (PROG_BAR_SEGMENTS - 1) * BAR_GAP) / PROG_BAR_SEGMENTS
+	local segW = (barW - (PROG_BAR_SEGMENTS - 1) * PROG_BAR_GAP) / PROG_BAR_SEGMENTS
 	for i = 1, PROG_BAR_SEGMENTS do
 		local threshold = (i - 1) / PROG_BAR_SEGMENTS * 100
 		elements[#elements + 1] = {
 			type = "rectangle",
 			action = "fill",
 			frame = {
-				x = barX + (i - 1) * (segW + BAR_GAP),
+				x = barX + (i - 1) * (segW + PROG_BAR_GAP),
 				y = barY,
 				w = segW,
 				h = PROG_BAR_HEIGHT,
@@ -799,10 +812,20 @@ function M.progress(icon, percent, label, stalled)
 
 	if progressCancelFn then
 		elements[#elements + 1] = {
+			type = "rectangle",
+			id = "progress-cancel-bg",
+			action = "fill",
+			frame = { x = PROG_WIDTH - PROG_CANCEL_W - PROG_CANCEL_MARGIN, y = (PROG_HEIGHT - PROG_CANCEL_W) / 2, w = PROG_CANCEL_W, h = PROG_CANCEL_W },
+			fillColor = progressCancelHovered and PROG_CANCEL_HOVER or PROG_CANCEL_CLEAR,
+			roundedRectRadii = { xRadius = PROG_CANCEL_W / 2, yRadius = PROG_CANCEL_W / 2 },
+		}
+		elements[#elements + 1] = {
 			type = "text",
 			id = "progress-cancel",
 			trackMouseDown = true,
-			frame = { x = PROG_WIDTH - PROG_CANCEL_W - 6, y = (PROG_HEIGHT - 18) / 2, w = PROG_CANCEL_W, h = 18 },
+			trackMouseEnterExit = true,
+			trackMouseByBounds = true,
+			frame = { x = PROG_WIDTH - PROG_CANCEL_W - PROG_CANCEL_MARGIN, y = (PROG_HEIGHT - 18) / 2, w = PROG_CANCEL_W, h = 18 },
 			-- BAR_ON at full alpha even in the stalled state: the escape
 			-- hatch never dims (§5b).
 			text = hs.styledtext.new("✕", {
@@ -850,6 +873,7 @@ end
 --- @param fn function|nil
 function M.progressCancel(fn)
 	progressCancelFn = fn
+	if not fn then progressCancelHovered = false end
 end
 
 --- Immediately hide the progress HUD (no animation).
@@ -860,6 +884,7 @@ function M.progressHide()
 	end
 	progressVisible = false
 	progressCancelFn = nil
+	progressCancelHovered = false
 end
 
 --- Immediately hide the OSD without animation.
@@ -884,6 +909,7 @@ function M.cleanup()
 		progressCanvas = nil
 	end
 	progressVisible = false
+	progressCancelHovered = false
 	if tickSound then
 		tickSound:stop()
 		tickSound = nil

@@ -50,7 +50,7 @@ Cmd+V is instant. All logic lives in the zsh engine
   `hs.notify` item. Cancel: exit 130 contract, quiet toast.
 
 Tests: `shellspec tests/pick-clipboard-feedback_spec.sh tests/pick-clipboard-files_spec.sh`
-(88 examples; shellspec runs with zsh per `.shellspec`).
+(90 examples; shellspec runs with zsh per `.shellspec`).
 
 ## 2. Symptom timeline (all on this laptop; another machine never reproduced anything)
 
@@ -324,6 +324,19 @@ honest toasts than a frozen machine.
   while later data-flow gaps still use the dim stalled state. The focused
   regression passes, bringing the clipboard suites to 88/88. A live synthetic
   preview confirmed the preparing icon and text are bright white.
+- Final HUD refinement: 32 narrow bar segments, a 14px capsule radius, and a
+  cancellable ✕ with reserved right-side spacing and a circular hover
+  highlight. Live pointer testing confirmed the hover and click target.
+- Staged copies now expire after 24 hours on an opportunistic engine-start
+  sweep. The sweep removes both expired bytes and localized history rows that
+  would otherwise point at missing cache paths. Interrupted transfers use
+  rsync's relative `.rsync-partial` directory and retain their partial bytes;
+  the next identical pull reuses them.
+- Terminal UX validation passed on a real large pull: the in-pane header,
+  progress meter, and Ctrl+C hint remained readable; Ctrl+C exited 130 with a
+  quiet cancellation message and retained a 305 MiB partial. The next terminal
+  run resumed and completed cleanly, removed its staging marker/partial
+  directory, and produced the expected final file.
 - This public-repository handoff was sanitized before tracking: machine roles
   and peer names are generic, with no employer, internal host, account, domain,
   or product identifiers.

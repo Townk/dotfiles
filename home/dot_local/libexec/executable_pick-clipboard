@@ -700,16 +700,63 @@ clip::progress_end() {
   return 0
 }
 
+# Staged file materializations are disposable, but not immortal. Sweep only
+# the exact numeric <clip-id>/<position> directories owned by this picker;
+# the strict shape check is the deletion boundary. Both completed and partial
+# copies use the same user-selected 24-hour retention. PICK_CLIPBOARD_CACHE_TTL
+# is a seconds override for deterministic tests.
+clip::cache_remove_sub() {  # <cache-root> <subdir>
+  local root=$1 sub=$2
+  [[ -n "$root" && "$root" != / ]] || return 1
+  [[ "${sub:h:h}" == "$root" && "${sub:h:t}" == <-> && "${sub:t}" == <-> ]] || return 1
+  rm -rf -- "$sub"
+}
+
+clip::cache_sweep() {
+  local root="${PICK_CLIPBOARD_CACHE_ROOT:-$HOME/.cache/pick-clipboard/files}"
+  local ttl_raw="${PICK_CLIPBOARD_CACHE_TTL:-86400}"
+  [[ "$ttl_raw" == <-> ]] || ttl_raw=86400
+  local -i ttl=$ttl_raw
+  [[ -d "$root" && "$root" != / ]] || return 0
+  (( ttl > 0 )) || return 0
+  zmodload zsh/stat 2>/dev/null || return 0
+
+  local sub iddir mt esub
+  for sub in "$root"/<->/<->(N/); do
+    mt=$(zstat +mtime "$sub" 2>/dev/null) || continue
+    (( EPOCHSECONDS - mt >= ttl )) || continue
+
+    # Localized bookkeeping rows point at staged paths. Remove those rows
+    # with the expired bytes so the picker never offers an un-restorable
+    # cache entry; the original remote-manifest row remains available.
+    esub="${sub//\'/\'\'}"
+    sqlite3 "$DB_FILE" "
+      DELETE FROM clips WHERE id IN (
+        SELECT clip_id FROM clip_types
+        WHERE instr(blob, CAST('$esub/' AS BLOB)) > 0
+      );
+      DELETE FROM clip_types
+      WHERE instr(blob, CAST('$esub/' AS BLOB)) > 0;
+    " >/dev/null 2>&1 || true
+    clip::cache_remove_sub "$root" "$sub" || true
+  done
+  for iddir in "$root"/<->(N/); do
+    rmdir -- "$iddir" 2>/dev/null || true
+  done
+}
+
 # Cancellation (§4.4): the INT/TERM trap handler for the case-3 pull loop.
 # INT is the TUI's Ctrl+C; TERM is the GUI capsule's ✕. A cancel is NOT a
 # failure -- no restore_fail, no W2 hold, no persistent notification: clean
-# up the in-flight partial, hide the HUD, confirm quietly (no sound), and
-# exit 130 -- the cancel contract clipboard-picker.lua keys off.
+# up presentation, retain the resumable partial for 24 hours, confirm quietly
+# (no sound), and exit 130 -- the cancel contract clipboard-picker.lua keys off.
 # if-form throughout, never `[[ ... ]] && cmd`: this runs under the
 # script's set -e, where a false left-hand test as a statement's final
 # status would errexit the handler before `exit 130` ever runs.
 clip::pull_cancelled() {
-  if [[ -n "${CLIP_PULL_SUB:-}" ]]; then rm -rf -- "$CLIP_PULL_SUB"; fi
+  if [[ -n "${CLIP_PULL_SUB:-}" ]]; then
+    touch "$CLIP_PULL_SUB/.pick-clipboard-partial" "$CLIP_PULL_SUB" 2>/dev/null || true
+  fi
   clip::progress_end
   local notify_bin="${PICK_CLIPBOARD_NOTIFY:-$HOME/.local/bin/notify}"
   if [[ -x "$notify_bin" ]]; then
@@ -720,6 +767,7 @@ clip::pull_cancelled() {
 
 clip::copy_files_by_id() {
   local id=$1
+  clip::cache_sweep
   local host; host=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || host=""
 
   # Recorded paths: x-file-manifest first (multi-path), else x-resolved-path
@@ -786,13 +834,14 @@ clip::copy_files_by_id() {
   # with those paths, no re-pull. The cache-root prefix requirement is what
   # keeps a coincidentally-existing non-cache path (Mac-to-Mac mirror rows)
   # from short-circuiting to a possibly-stale local twin.
-  local cacheroot="$HOME/.cache/pick-clipboard/files/"
+  local cacheroot="${PICK_CLIPBOARD_CACHE_ROOT:-$HOME/.cache/pick-clipboard/files}"
   local -i all_cached=1
   local rp
   for rp in "${rpaths[@]}"; do
-    [[ "$rp" == "$cacheroot"* && -e "$rp" ]] || { all_cached=0; break }
+    [[ "$rp" == "$cacheroot/"* && -e "$rp" ]] || { all_cached=0; break }
   done
   if (( all_cached )); then
+    for rp in "${rpaths[@]}"; do touch "${rp:h}" 2>/dev/null || true; done
     if clip::send_file_urls "${rpaths[@]}"; then
       clip::bump_last_ts_now "$id"   # spec R5c: bump-on-use
       return 0
@@ -818,7 +867,7 @@ clip::copy_files_by_id() {
   fi
   local kind; kind=$(sqlite3 "$DB_FILE" "SELECT IFNULL(type_kind,'files') FROM clips WHERE id=$id;" 2>/dev/null) || kind="files"
 
-  local cachedir="$HOME/.cache/pick-clipboard/files/$id"
+  local cachedir="$cacheroot/$id"
   local -a local_paths
   local -i idx=0 pulled=0
   local sub lp
@@ -849,6 +898,7 @@ clip::copy_files_by_id() {
     if [[ ! -e "$lp" ]]; then
       mkdir -p "$sub" || { clip::progress_end; clip::restore_fail "cannot create $sub"; return 1 }
       CLIP_PULL_SUB="$sub"
+      : > "$sub/.pick-clipboard-partial"
       # spec R3: this pull's ssh session has no use for the clipboard bridge's
       # RemoteForward -- without ClearAllForwardings, a session multiplexed
       # onto the interactive connection's ControlMaster re-requests the same
@@ -885,18 +935,18 @@ clip::copy_files_by_id() {
         # (same move as pbpaste tier 2) while real errors still land in the
         # capture file for the one-line failure reason.
         print -ru2 -- "Pulling ${rp:t} from ${host} (${idx}/${n_paths})… — Ctrl+C cancels"
-        "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
+        "$rsync_bin" -a --info=progress2 --partial-dir=.rsync-partial -e 'ssh -o ClearAllForwardings=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
       else
         # Headless: meter stdout feeds the throttled HUD sink; the sink is
         # the LAST pipeline segment so it runs in this shell and the
         # CLIP_PROGRESS_* state survives into the next manifest path.
         # idx-1 == paths already done (cached ones count: they're complete).
-        "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 2>"$rsync_err" | clip::progress_stream $(( idx - 1 )) $n_paths "$pull_label"
+        "$rsync_bin" -a --info=progress2 --partial-dir=.rsync-partial -e 'ssh -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 2>"$rsync_err" | clip::progress_stream $(( idx - 1 )) $n_paths "$pull_label"
         rrc=${pipestatus[1]}
       fi
       if (( rrc != 0 )); then
         clip::progress_end
-        rm -rf -- "$sub"
+        clip::cache_remove_sub "$cacheroot" "$sub" || true
         if [[ "$rsync_err" == /dev/null ]]; then
           clip::restore_fail "rsync failed pulling $host:$rp"
         else
@@ -905,8 +955,12 @@ clip::copy_files_by_id() {
         return 1
       fi
       if [[ "$rsync_err" != /dev/null ]]; then rm -f "$rsync_err"; fi
+      rm -f -- "$sub/.pick-clipboard-partial"
+      touch "$sub"
       (( pulled += 1 ))
       CLIP_PULL_SUB=""
+    else
+      touch "$sub" 2>/dev/null || true
     fi
     local_paths+=("$lp")
   done
@@ -1779,6 +1833,10 @@ EOF
 if [[ -n "${PICK_CLIPBOARD_NO_RUN:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
+
+# Expire staging before rendering rows, so localized entries whose bytes have
+# aged out never appear as selectable-but-unrestorable picker results.
+clip::cache_sweep
 
 # The markdown accept's "label" is the 󰽛 markdown glyph (U+F0F5B), not a word —
 # it rides the label slot so it takes the hint/description foreground.
