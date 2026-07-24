@@ -31,11 +31,11 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | `z` zoom | ToggleFocusFullscreen | `resize-pane -Z` | ✅ | |
 | `f` frame toggle | TogglePaneFrames | `set -w pane-border-status` | 🟡 | different affordance; frames are off-by-default both sides |
 | `L` locked / `l` scroll / `o` session / `p` pane / `t` tab | SwitchToMode | `set key-table` / `copy-mode` | ✅ | |
-| `q` quit | themed gum confirm (zellij-quit-confirm) | `confirm-before` native prompt | ⏳ tmux | Phase 2 swaps in mux::confirm dialog |
+| `q` quit | themed gum confirm (zellij-quit-confirm) | themed `input::confirm` popup (mux-quit-confirm) | ✅ | per-backend kill path; zellij keybind re-points at mux-quit-confirm in Phase 6 |
 | `Y` / `M-y` copy-pwd | context-keys `run copy-pwd {pid}` (flash-free) | `run-shell copy-pwd #{pane_pid}` | ✅ | same script, PID source per backend |
 | `,` terminal config | context-keys → edit-terminal-config | same script, tmux branch (focus-or-create window) | ✅ | outer terminal via tmux session env |
 | `i`/`u`/`k` alarms | zj-hud alarm pipes (bar renders) | `monitor-silence 30` / `monitor-activity` / clear + `display` | 🟡 | Phase 4 adds flag styling + HS notify (D6) |
-| `U`/`G` resume pickers, `c` clipboard | zellijModalRun floats | — | ⏳ tmux | Phase 2 pickers |
+| `U`/`G` resume pickers, `c` clipboard | zellijModalRun floats | display-popup via tmux-modal --inject | ✅ | libexec pickers called directly (zellij thins keep zellij glue) |
 | leader-again | exits mode | `send-prefix` (raw M-w to app) | 🟡 | closest useful equivalent |
 
 ## Root-table keys
@@ -49,14 +49,14 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | `Shift+Enter` | context-keys: kitty CSI-u to pi/claude, alt-enter to agents, tm apply route | `extended-keys always`: CSI-u to kitty-negotiating apps; plain apps get `\e[27;2;13~` | 🟡 | plain-app encodings differ (`\e[13;2u` vs xterm form); `extended-keys-format csi-u` is the alignment knob — decide Phase 5 |
 | `J/K/H/L`, `Shift+↑↓`, `A`, `S` tm-scrub routes | context-keys over yazi/hunk/diffnav/tm | NOT BOUND (would intercept bare capitals; no tmux tm consumer yet) | ⏳ tmux | Phase 6.4 binds against `@ctx` (wrapper already stamps) |
 | `Alt Enter` fullscreen toggle | context-keys → terminal-toggle-fullscreen | — | ⏳ tmux | Phase 6.1 |
-| `C-S-u/g` glyph/gitmoji pickers | zellijModalRun floats | — | ⏳ tmux | Phase 2 |
+| `C-S-u/g` glyph/gitmoji pickers | zellijModalRun floats | display-popup via tmux-modal --inject (-B, fzf owns the box) | ✅ | insert-without-dismiss works (pick sink tmux branch) |
 | `Alt /` search dialog | zj-hud role "search" float | copy-mode `/` incremental (stage 1) | 🟡 | D12 stage 2 hud owns the dialog |
 
 ## Mode tables
 
 | Behavior | Zellij | tmux | Status | Notes |
 |---|---|---|---|---|
-| tab: h/l/arrows, Tab, 1–0, n, N, x, s | native actions | previous/next-window, last-window, select-window, rename stopgap, new-window, kill-window, synchronize-panes | ✅ | rename via command-prompt until Phase 2 dialog |
+| tab: h/l/arrows, Tab, 1–0, n, N, x, s | native actions | previous/next-window, last-window, select-window, themed rename popup, new-window, kill-window, synchronize-panes | ✅ | mux-rename retires the command-prompt stopgap |
 | tab: `[`/`]` BreakPaneLeft/Right | native | `join-pane -h -t :-1/+1` | 🟡 | multi-pane windows fold differently |
 | tab: `T` quick-launch | modal float | — | ⏳ tmux | Phase 3 |
 | pane: focus/splits/zoom/kill/rename | native actions | select-pane, split-window ±b, resize -Z, kill-pane, select-pane -T stopgap | ✅ | |
