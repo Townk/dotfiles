@@ -1,0 +1,194 @@
+#!/usr/bin/env zsh
+# tmux-status-right — the ENTIRE right side of the status bar, rendered as
+# the zj-hud gradient ribbon (mux migration Phase 4, D6 — a faithful port
+# of zj-hud/src/bar/render.rs build_right_side + status segments).
+#
+#   tmux-status-right <client_key_table> <in_copy_mode:0|1> <session-name> \
+#                    <prefix_pending:0|1>
+#
+# Invoked from status-right as a #() whose ARGUMENTS are format-expanded:
+# when the key table / copy-mode state / session changes, the expanded
+# command string changes and tmux re-runs it immediately — the mode pill
+# updates instantly while the 10s status-interval refreshes widgets/clock.
+#
+# Anatomy (left to right): mode pill (hidden at rest, like zj-hud in
+# Normal) - locked/nested exit hint - session pill (hidden for "main",
+# kebab-case shown as Title Case) - info widgets (power/battery/wifi/host,
+# zj-hud visibility rules) - clock. Segment backgrounds run a gradient
+# from the mode color (tab chrome when no mode) at the RIGHT edge fading
+# toward the bar background leftward; every segment opens with a powerline
+# divider; text is an auto-darkened variant of its own pill (lightened on
+# the near-bar stops). As-built deviation: linear sRGB interpolation
+# approximates the plugin's OKLab gradient (visually close on these dark
+# ramps).
+#
+# All colors come from the theme JSON projection — no hex lives here.
+# Test seams: MUX_TMUX_BIN, PMSET_BIN, NETWORKSETUP_BIN,
+# WIDGETS_FULLSCREEN_STATE, WIDGETS_HOSTNAME_ALIAS, WIDGETS_THEME_JSON.
+
+emulate -L zsh
+setopt no_unset
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+PMSET="${PMSET_BIN:-/usr/bin/pmset}"
+NETWORKSETUP="${NETWORKSETUP_BIN:-/usr/sbin/networksetup}"
+FS_STATE="${WIDGETS_FULLSCREEN_STATE:-$HOME/.local/state/wezterm/fullscreen_state}"
+HOST_ALIAS="${WIDGETS_HOSTNAME_ALIAS:-$HOME/.hostname-alias}"
+THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
+
+key_table="${1:-root}"
+in_copy="${2:-0}"
+sess="${3:-}"
+prefix_on="${4:-0}"
+
+# ---- theme colors (one jq pass) -------------------------------------------
+# bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
+c=("${(@f)$(jq -r '
+  .roles.ui.bg, .roles.ui.fg, .extended.tab.bg,
+  .roles.mode.locked, .roles.mode.resize, .roles.mode.pane, .roles.mode.tab,
+  .roles.mode.move, .roles.mode.scroll, .roles.mode.session, .roles.mode.tmux
+' "$THEME_JSON" 2>/dev/null)}") || c=()
+(( ${#c} == 11 )) || exit 0
+bar_bg="${c[1]}" fg_hi="${c[2]}" tab_bg="${c[3]}"
+m_locked="${c[4]}" m_resize="${c[5]}" m_pane="${c[6]}" m_tab="${c[7]}"
+m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}"
+
+# ---- color math -----------------------------------------------------------
+hex_r() { print $(( 16#${1[2,3]} )) }
+hex_g() { print $(( 16#${1[4,5]} )) }
+hex_b() { print $(( 16#${1[6,7]} )) }
+to_hex() { printf '#%02x%02x%02x' "$1" "$2" "$3" }
+
+# lerp COLOR_A COLOR_B NUM DEN -> hex on the line A->B at NUM/DEN
+lerp() {
+  local a="$1" b="$2" i="$3" n="$4"
+  to_hex \
+    $(( $(hex_r "$a") + ( $(hex_r "$b") - $(hex_r "$a") ) * i / n )) \
+    $(( $(hex_g "$a") + ( $(hex_g "$b") - $(hex_g "$a") ) * i / n )) \
+    $(( $(hex_b "$a") + ( $(hex_b "$b") - $(hex_b "$a") ) * i / n ))
+}
+
+# Auto-contrast fg (plugin: darken(0.8), lighten(0.6) when contrast < 3.8):
+# dark pills get a lightened fg, colored pills a heavily darkened one.
+seg_fg() {
+  local bg="$1" r g b luma
+  r=$(hex_r "$bg"); g=$(hex_g "$bg"); b=$(hex_b "$bg")
+  luma=$(( (r * 299 + g * 587 + b * 114) / 1000 ))
+  if (( luma < 100 )); then
+    to_hex $(( r + (255 - r) * 60 / 100 )) $(( g + (255 - g) * 60 / 100 )) $(( b + (255 - b) * 60 / 100 ))
+  else
+    to_hex $(( r * 20 / 100 )) $(( g * 20 / 100 )) $(( b * 20 / 100 ))
+  fi
+}
+
+# ---- glyphs ---------------------------------------------------------------
+DIV=$'\Ue0ba'
+I_LOCKED=$'\U000F033E' I_RESIZE=$'\U000F0A68' I_PANE=$'\Uebc8'
+I_TAB=$'\U000F04E9'    I_MOVE=$'\U000F0655'   I_SCROLL=$'\U000F0A64'
+I_SESSION=$'\U000F0640'   I_TMUX=$'\U000F0633'
+I_ALT=$'\U000F0635' I_ESC=$'\U000F12B7'
+I_CLOCK=$'\U000F00F0'
+I_WIFI_ON=$'\U000F05A9' I_WIFI_OFF=$'\U000F092E'
+I_HOST=$'\U000F04CD'
+I_BATT=( $'\U000F008E' $'\U000F12A1' $'\U000F12A2' $'\U000F12A3' )
+
+# ---- mode resolution ------------------------------------------------------
+mode_color="" mode_body="" hint_body=""
+if [[ "$in_copy" == 1 ]]; then
+  mode_color="$m_scroll" mode_body="$I_SCROLL Scroll"
+else
+  # zellij "tmux" mode = the leader pending (client_prefix); a live key
+  # table wins over it (tables are entered FROM the leader).
+  if [[ "$key_table" == root && "$prefix_on" == 1 ]]; then
+    mode_color="$m_tmux" mode_body="$I_TMUX Command"
+  fi
+  case "$key_table" in
+    tab)     mode_color="$m_tab"     mode_body="$I_TAB Tab" ;;
+    pane)    mode_color="$m_pane"    mode_body="$I_PANE Pane" ;;
+    session) mode_color="$m_session" mode_body="$I_SESSION Session" ;;
+    resize)  mode_color="$m_resize"  mode_body="$I_RESIZE Resize" ;;
+    move)    mode_color="$m_move"    mode_body="$I_MOVE Move" ;;
+    locked)  mode_color="$m_locked"  mode_body="$I_LOCKED Locked" hint_body="exit" ;;
+    nested)  mode_color="$m_locked"  mode_body="$I_LOCKED Nested" hint_body="exit" ;;
+  esac
+fi
+
+# ---- ssh / fullscreen -----------------------------------------------------
+is_ssh=0
+if [[ -n "$sess" ]]; then
+  v="$("$TMUX_BIN" show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""
+  [[ "$v" == SSH_CONNECTION=* ]] && is_ssh=1
+fi
+is_fullscreen=0
+[[ "$(cat "$FS_STATE" 2>/dev/null)" == true ]] && is_fullscreen=1
+
+# ---- segment bodies (left to right) ---------------------------------------
+typeset -a bodies kinds
+
+[[ -n "$mode_body" ]] && { bodies+=("$mode_body"); kinds+=(mode); }
+[[ -n "$hint_body" ]] && { bodies+=("$I_ALT $I_ESC  exit"); kinds+=(hint); }
+
+if [[ -n "$sess" && "${(L)sess}" != main ]]; then
+  # kebab-case -> Title Case (zj-hud session_segment)
+  typeset -a words
+  words=(${(s:-:)sess})
+  bodies+=("$I_SESSION ${(j: :)${(C)words}}"); kinds+=(session)
+fi
+
+typeset -a w
+if (( ! is_ssh || is_fullscreen )); then
+  batt="$("$PMSET" -g batt 2>/dev/null)" || batt=""
+  pct="$(grep -Eo '[0-9]+%' <<<"$batt" | head -1)"; pct="${pct%\%}"
+  if [[ "$batt" == *"AC Power"* && -n "$pct" ]]; then
+    if (( pct == 100 )); then w+=($'\U000F0084')
+    elif (( pct <= 5 )); then w+=($'\U000F089F'" ${pct}%")
+    elif (( pct <= 39 )); then w+=($'\U000F12A4'" ${pct}%")
+    elif (( pct <= 89 )); then w+=($'\U000F12A5'" ${pct}%")
+    else w+=($'\U000F12A6'" ${pct}%")
+    fi
+  elif [[ "$batt" == *"Battery Power"* && -n "$pct" ]]; then
+    if (( pct <= 5 )); then w+=("${I_BATT[1]} ${pct}%")
+    elif (( pct <= 39 )); then w+=("${I_BATT[2]} ${pct}%")
+    elif (( pct <= 89 )); then w+=("${I_BATT[3]} ${pct}%")
+    else w+=("${I_BATT[4]} ${pct}%")
+    fi
+  fi
+  wifi="$("$NETWORKSETUP" -getairportpower en0 2>/dev/null)" || wifi=""
+  if [[ "${(L)wifi}" == *": on"* ]]; then w+=("$I_WIFI_ON"); else w+=("$I_WIFI_OFF"); fi
+fi
+if (( is_ssh )); then
+  h="$(cat "$HOST_ALIAS" 2>/dev/null)" || h=""
+  [[ -n "$h" ]] || h="$(hostname -s 2>/dev/null)" || h=""
+  [[ -n "$h" ]] && w+=("$I_HOST $h")
+fi
+(( ${#w} )) && { bodies+=("${(j:  :)w}"); kinds+=(widgets); }
+
+if (( ! is_ssh || is_fullscreen )); then
+  d="$(date '+%a %b')"; e="$(date '+%e')"; t="$(date '+%l:%M')"
+  ap="${(L)$(date '+%p')}"
+  bodies+=("$I_CLOCK $d ${e## } ${t## }$ap"); kinds+=(time)
+fi
+
+n=${#bodies}
+(( n )) || exit 0
+
+# ---- gradient + emission --------------------------------------------------
+base="${mode_color:-$tab_bg}"
+out="" prev_bg="$bar_bg"
+for (( i = 1; i <= n; i++ )); do
+  # segment i (1-based, left to right) gets stop n-i of 0..n (right edge =
+  # stop 0 = full base color; leftmost fades toward the bar background).
+  bg="$(lerp "$base" "$bar_bg" $(( n - i )) "$n")"
+  fg="$(seg_fg "$bg")"
+  body="${bodies[i]}"
+  if [[ "${kinds[i]}" == hint ]]; then
+    # two-tone hint: keycap glyphs pop white-ish, the label stays dark —
+    # zj-hud paints keycaps in hint_glyph_on over the mode color.
+    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${fg_hi}] ${I_ALT} ${I_ESC} #[fg=${fg}] exit "
+  else
+    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${fg}] ${body} "
+  fi
+  prev_bg="$bg"
+done
+print -rn -- "${out}#[default]"
+exit 0
