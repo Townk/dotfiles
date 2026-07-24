@@ -99,3 +99,19 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 5. Pickers/dialogs once Phase 2 lands: glyph/gitmoji/clipboard/quit/rename.
 6. Quick-launch (Phase 3+): pane/tab/workspace incl. nested.
 7. OSC 52 local+SSH, OSC 8 click, Shift+Enter per-app behavior.
+
+## Platform gotchas (Mode B, 2026-07-24 — durable facts for later phases)
+
+| Fact | Consequence |
+| --- | --- |
+| WezTerm folds shift into ctrl+shift letters (`C-S-h` arrives as `C-H`) | every ctrl+shift letter bind needs its uppercase twin |
+| `display-popup` never format-expands its shell-command (only `-T`) | no `#{...}` in popup commands; tmux-modal self-resolves origin (popup `TMUX_PANE` is unset ⇒ `display -p` = client's active pane) |
+| `display-popup` issued while a popup is open MODIFIES it and IGNORES `-w/-h/-d` | chain popups via `run-shell -b -d 0.2` (server-deferred, survives popup pty teardown) |
+| `display-popup` `%` sizes against full client height; zellij floats against the viewport (rows−2, floored) | tmux-popup shim converts to absolute cells |
+| foreground `run-shell` + `-E` popup deadlocks (popup blocks client, run-shell blocks server) | popup binds go through `run-shell -b` |
+| untargeted tmux commands (and `#{session_name}`) resolve most-recently-used — unstable right after `new-session -d` | anchor on `MUX_MODAL_TARGET_PANE` (a pane id is a valid target-session) |
+| the tmux server's process env is its birth env (ssh-born ⇒ `SSH_CONNECTION` forever; `TERM_PROGRAM=tmux`) | host/ssh + terminal-brand truth lives in the SESSION env (`update-environment`) |
+| `split-window`/`display-popup` default cwd = session start dir; zellij panes inherit the focused pane's cwd | QL resolves origin `#{pane_current_path}` when the target has no explicit cwd |
+| zsh (macOS wcwidth) counts VS16 emoji 1 cell, tmux renders 2; zellij agrees with zsh | tmux inject paths strip U+FE0F; manual VS16 pastes under tmux still corrupt ZLE (no fix available) |
+| `@pane-is-vim` can't gate nav keys (smart-splits lazy-loads on those keys); `pane_current_command` = pgroup leader (widget fzf ⇒ "zsh") | root nav uses the vim-tmux-navigator ps probe; `@pane-is-vim` gates only the resize chords |
+| p10k instant prompt redirects stdout during zshrc (load-time `-t 1` fails); transient prompt erases+rewrites marked lines | OSC 133 comes from p10k itself (`POWERLEVEL9K_TERM_SHELL_INTEGRATION`), not a bare precmd hook |
