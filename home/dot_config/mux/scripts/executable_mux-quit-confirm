@@ -1,0 +1,33 @@
+#!/usr/bin/env zsh
+# mux-quit-confirm — backend-neutral session-kill confirm dialog (mux
+# migration Phase 2; spec 2.3's "quit-confirm dialog per-backend kill path").
+#
+# Runs INSIDE the modal (zellij-modal action mode / tmux-modal action mode
+# via display-popup). Themed input::confirm widget; defaults to Cancel so
+# Enter/ESC are safe. Only the affirmative answer kills:
+#   zellij → `zellij kill-session $ZELLIJ_SESSION_NAME` (NOT `action quit`,
+#            which only quits the current client in some setups — same
+#            rationale as zellij-quit-confirm, which stays for the current
+#            Zellij keybind until the Phase 6 sweep re-points it here)
+#   tmux   → `tmux kill-session` (current session)
+
+set -euo pipefail
+
+source "$HOME/.local/lib/input-common.zsh"
+
+if [[ -n "${ZELLIJ:-}" ]]; then
+  session="${ZELLIJ_SESSION_NAME:-}"
+  kill_cmd() { "${ZELLIJ_BIN:-zellij}" kill-session "$session"; }
+elif [[ -n "${TMUX:-}" ]]; then
+  TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+  session="$("$TMUX_BIN" display -p '#{session_name}' 2>/dev/null)"
+  kill_cmd() { "$TMUX_BIN" kill-session; }
+else
+  echo "mux-quit-confirm: no multiplexer session detected" >&2
+  exit 1
+fi
+
+ans=$(input::confirm --title "Quit" \
+  "Kill this session?"$'\n\n'"Session: ${session:-?}") || exit 0
+[[ "$ans" == yes ]] || exit 0
+kill_cmd

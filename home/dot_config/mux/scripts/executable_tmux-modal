@@ -1,0 +1,135 @@
+#!/usr/bin/env zsh
+# tmux-modal — tmux backend of the shared floating-modal scaffolding
+# (mux migration Phase 2, spec D7). The interface mirrors zellij-modal
+# exactly; the mechanics differ because tmux popups DRIVE (this script runs
+# INSIDE `display-popup -E` and issues tmux commands) where Zellij panes
+# observe (§1's accepted architectural inversion).
+#
+# Usage:
+#   tmux-modal [--origin PANE_ID] --title TEXT [--inject | --capture FILE]
+#              [--no-chrome] -- CMD [ARGS...]
+#
+#   --origin PANE_ID  The pane the result is injected into / focused after.
+#                     Interpolated AT BIND TIME (`#{pane_id}`) by keymap
+#                     popups, or passed as $TMUX_PANE by mux.zsh spawns —
+#                     no discovery round-trips (D7), unlike zellij-modal's
+#                     list-tabs/list-panes dance.
+#   --title TEXT      Catppuccin header block (blank, "▓▓▓ <title>", rule);
+#                     with --no-chrome the title is handed to the target via
+#                     MUX_MODAL_TITLE (+ ZJ_MODAL_TITLE for pick-common's
+#                     current reader — old name kept as fallback per spec §3).
+#   --inject          Picker mode: capture CMD's stdout, strip the single
+#                     trailing newline, `send-keys -l` it into the origin.
+#   --capture FILE    Capture mode: write the result to FILE (a FIFO the
+#                     spawner blocks on) via an EXIT trap, so the reader
+#                     unblocks on every exit path including ESC/cancel.
+#   -- CMD ...        Target command; stdout is the payload, /dev/tty stays
+#                     with the target's interactive UI.
+#
+# Env overrides: MUX_TMUX_BIN (tests).
+
+set -euo pipefail
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+
+title=""
+inject=0
+capture=""
+no_chrome=0
+origin="${TMUX_PANE:-}"
+cmd=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --origin) origin="${2-}"; shift 2 ;;
+    --origin=*) origin="${1#*=}"; shift ;;
+    --title) title="${2-}"; shift 2 ;;
+    --title=*) title="${1#*=}"; shift ;;
+    --inject) inject=1; shift ;;
+    --no-chrome) no_chrome=1; shift ;;
+    --capture) capture="${2-}"; shift 2 ;;
+    --capture=*) capture="${1#*=}"; shift ;;
+    --) shift; cmd=("$@"); break ;;
+    *)
+      echo "tmux-modal: unknown option: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ ${#cmd[@]} -gt 0 ]] || {
+  echo "tmux-modal: no target command (expected '-- CMD ...')" >&2
+  exit 2
+}
+[[ -n "${TMUX:-}" ]] || {
+  echo "tmux-modal: not running inside a tmux session" >&2
+  exit 1
+}
+
+# Shared dialog theme — same single source zellij-modal uses.
+source "$HOME/.local/lib/theme-common.zsh"
+
+# NB: the popup body/border colors come from popup-style/popup-border-style
+# (the generated tmux theme, D15) — unlike Zellij, tmux CAN tint the popup
+# frame, so the framed dialogs keep their chrome native and only the title
+# block is painted here.
+if (( no_chrome )); then
+  # "fzf owns the box": hand the title to the target; draw nothing.
+  if [[ -n "$title" ]]; then
+    export MUX_MODAL_TITLE="$title"
+    export ZJ_MODAL_TITLE="$title"   # pick-common's current reader (Phase 6 renames)
+  fi
+else
+  dialog_bg="$(theme::sgr_bg "$C_ROLE_UI_DIALOG_BG")"
+  printf '%s\e[2J\e[H' "$dialog_bg"
+  if [[ -n "$title" ]]; then
+    rule="$(theme::rule)"
+    printf '%s\e[K\n' "$dialog_bg"
+    printf '%s  %s▓▓▓ %s%s\e[K\n' "$dialog_bg" "$THEME_H1" "$title" "$dialog_bg"
+    printf '%s  %s%s%s\e[K\n' "$dialog_bg" "$THEME_SEPARATOR" "$rule" "$dialog_bg"
+  fi
+  printf '\e[39;22m'
+fi
+
+if [[ -n "$capture" ]]; then
+  # Capture mode: EXIT trap writes the result on every exit path so the
+  # FIFO reader always unblocks (mirror of zellij-modal's contract).
+  result=""
+  tmp=$(mktemp "${TMPDIR:-/tmp}/tmuxmodal.XXXXXX")
+  trap 'printf "%s" "$result" > "$capture"; rm -f -- "$tmp"' EXIT
+  "${cmd[@]}" >"$tmp" || true
+  result=$(cat "$tmp")
+  result="${result%$'\n'}"
+  exit 0
+fi
+
+if ((!inject)); then
+  # Action mode: the target owns the outcome (quit dialogs etc.). Export the
+  # origin so per-backend kill/rename paths can address it.
+  [[ -z "$origin" ]] || export MUX_MODAL_TARGET_PANE="$origin"
+  exec "${cmd[@]}"
+fi
+
+# Picker mode: run the target with the background-sink env exported so
+# insert-without-dismiss binds write into the origin mid-session
+# (pick::background_sink's tmux branch), then inject the final selection.
+tmp=$(mktemp "${TMPDIR:-/tmp}/tmuxmodal.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+if [[ -n "$origin" ]]; then
+  PICK_INJECT_PANE="$origin" PICK_INJECT_TMUX="$TMUX_BIN" \
+    "${cmd[@]}" >"$tmp" || true
+else
+  "${cmd[@]}" >"$tmp" || true
+fi
+
+# Strip the single trailing newline so we don't auto-submit at a shell
+# prompt. Embedded newlines (multi-select concatenation) are preserved.
+result=$(cat "$tmp")
+result="${result%$'\n'}"
+
+[[ -n "$result" ]] || exit 0
+
+if [[ -n "$origin" ]]; then
+  "$TMUX_BIN" send-keys -t "$origin" -l -- "$result"
+else
+  "$TMUX_BIN" send-keys -l -- "$result"
+fi

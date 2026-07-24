@@ -1,0 +1,45 @@
+#!/usr/bin/env zsh
+# mux-rename <window|pane> — themed rename dialog for the tmux backend (mux
+# migration Phase 2; spec 2.4 — retires the Phase 1 command-prompt stopgap).
+#
+# Runs INSIDE tmux-modal action mode (display-popup): shows the themed
+# input::line widget pre-filled with the current name and applies the answer
+# to the ORIGIN pane's window/pane (MUX_MODAL_TARGET_PANE, exported by
+# tmux-modal from its bind-time-interpolated --origin).
+#
+# The Zellij backend keeps the zj-hud `role "rename"` dialog — this script is
+# tmux-only by design (ledger row).
+
+set -euo pipefail
+
+kind="${1:-window}"
+[[ -n "${TMUX:-}" ]] || {
+  echo "mux-rename: tmux only (zellij uses the zj-hud rename role)" >&2
+  exit 1
+}
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+target="${MUX_MODAL_TARGET_PANE:-}"
+typeset -a taddr=()
+[[ -n "$target" ]] && taddr=(-t "$target")
+
+source "$HOME/.local/lib/input-common.zsh"
+
+case "$kind" in
+  window)
+    current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{window_name}' 2>/dev/null)"
+    name=$(input::line --title "Rename Window" --value "$current" "New name") || exit 0
+    [[ -n "$name" ]] || exit 0
+    "$TMUX_BIN" rename-window "${taddr[@]}" -- "$name"
+    ;;
+  pane)
+    current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{pane_title}' 2>/dev/null)"
+    name=$(input::line --title "Rename Pane" --value "$current" "New name") || exit 0
+    [[ -n "$name" ]] || exit 0
+    "$TMUX_BIN" select-pane "${taddr[@]}" -T "$name"
+    ;;
+  *)
+    echo "mux-rename: expected 'window' or 'pane'" >&2
+    exit 2
+    ;;
+esac

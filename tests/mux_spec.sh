@@ -333,17 +333,62 @@ Describe 'mux.zsh — backend detection & knob'
   End
 End
 
-Describe 'mux.zsh — tmux backend inline fallback (pre-Phase-2)'
+Describe 'mux.zsh — tmux float backend (Phase 2)'
   Include home/dot_local/lib/mux.zsh
-  input::confirm() { printf 'confirm:%s' "$*"; }
 
-  setup() { unset ZELLIJ; export TMUX=/tmp/sock,1,0; }
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    TX_ARGS="$TEST_TMP/tx-args.txt"
+    unset ZELLIJ
+    export TMUX=/tmp/sock,1,0
+    # Stub tmux: record display-popup argv and deliver the answer through the
+    # --capture FIFO (O_RDWR trick — see the zellij stubs above), standing in
+    # for the popup + tmux-modal + widget chain.
+    stub="$TEST_TMP/tmux"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'if [[ "$1" == display-popup ]]; then'
+      echo "  echo \"\$*\" > \"$TEST_TMP/tx-args.txt\""
+      echo '  fifo=""; prev=""'
+      echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
+      echo '  [[ -n "$fifo" ]] && { { exec 3<>"$fifo"; printf "%s" "${TX_ANSWER:-yes}" >&3; sleep 0.5; exec 3>&- } &! }'
+      echo '  exit 0'
+      echo 'fi'
+      echo 'exit 0'
+    } > "$stub"
+    chmod +x "$stub"
+    export MUX_TMUX_BIN="$stub"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset MUX_TMUX_BIN TX_ANSWER; }
   BeforeEach 'setup'
+  AfterEach 'cleanup'
 
-  It 'mux::confirm renders inline under tmux (no float yet)'
-    When call mux::confirm "Proceed?"
-    The output should include "confirm:"
-    The output should include "Proceed?"
+  It 'mux::confirm floats via display-popup and returns the captured answer'
+    When call mux::confirm --title "Quit" "Really?"
+    The output should equal "yes"
+    The contents of file "$TX_ARGS" should include "display-popup"
+    The contents of file "$TX_ARGS" should include "--type confirm"
+    The status should be success
+  End
+
+  It 'mux::pick floats via a borderless popup and returns the selection'
+    export TX_ANSWER="claude"
+    Data
+      #|claude  Claude Code
+    End
+    When call mux::pick --output field:1 --header "Pick"
+    The output should equal "claude"
+    The contents of file "$TX_ARGS" should include "-B"
+    The contents of file "$TX_ARGS" should include "--no-chrome"
+    The status should be success
+  End
+
+  It 'mux::choose floats with --type choose'
+    export TX_ANSWER="alpha"
+    When call mux::choose --title "Pick one" "Select" alpha beta gamma
+    The output should equal "alpha"
+    The contents of file "$TX_ARGS" should include "--type choose"
+    The status should be success
   End
 End
 

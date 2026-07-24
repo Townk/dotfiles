@@ -1,0 +1,63 @@
+#!/usr/bin/env zsh
+# mux-modal — backend-neutral entry point for the floating-modal scaffolding
+# (mux migration Phase 2, spec §2/§3: `mux::modal`'s script-plane face).
+#
+# Dispatches on the runtime mux:
+#   zellij → exec zellij-modal (args passthrough — identical interface)
+#   tmux   → wrap the modal in `display-popup -E` running tmux-modal inside.
+#
+# Usage (superset of zellij-modal):
+#   mux-modal [--width W] [--height H] [--title TEXT]
+#             [--inject | --capture FILE] [--no-chrome] [--no-discover]
+#             -- CMD [ARGS...]
+#
+#   --width/--height  Popup geometry (percent or cells). On zellij these are
+#                     IGNORED — the zellij pane geometry belongs to the
+#                     spawner (`zellij action new-pane`/keybind Run block),
+#                     matching how zellij-modal is always launched today.
+#   --no-discover     zellij-only flag, passed through; a no-op on tmux
+#                     (origin is $TMUX_PANE, no discovery to skip — D7).
+#
+# Env overrides: MUX_TMUX_BIN (tests).
+
+set -euo pipefail
+
+width="70%"
+height="60%"
+typeset -a fwd=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --width) width="${2-}"; shift 2 ;;
+    --width=*) width="${1#*=}"; shift ;;
+    --height) height="${2-}"; shift 2 ;;
+    --height=*) height="${1#*=}"; shift ;;
+    --) fwd+=("$@"); break ;;
+    *) fwd+=("$1"); shift ;;
+  esac
+done
+
+if [[ -n "${ZELLIJ:-}" ]]; then
+  # --no-discover is zellij-modal vocabulary already; strip nothing.
+  exec "$HOME/.config/zellij/scripts/zellij-modal" "${fwd[@]}"
+fi
+
+[[ -n "${TMUX:-}" ]] || {
+  echo "mux-modal: no multiplexer session detected" >&2
+  exit 1
+}
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+# tmux side: --no-discover is meaningless (origin comes in as $TMUX_PANE /
+# --origin); drop it before handing to tmux-modal.
+typeset -a targs=()
+for a in "${fwd[@]}"; do
+  [[ "$a" == "--no-discover" ]] && continue
+  targs+=("$a")
+done
+
+# COLORTERM: display-popup children inherit the server env, which may lack
+# it — carry truecolor through explicitly (same gotcha as the zellij float
+# path; gum/lipgloss fall back to 256-color without it).
+exec "$TMUX_BIN" display-popup -E -w "$width" -h "$height" \
+  -e "COLORTERM=${COLORTERM:-truecolor}" -e "TMUX_PANE=${TMUX_PANE:-}" \
+  "$HOME/.config/mux/scripts/tmux-modal" --origin "${TMUX_PANE:-}" "${targs[@]}"

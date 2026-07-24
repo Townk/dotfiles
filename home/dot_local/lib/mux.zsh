@@ -71,11 +71,23 @@ mux::default_backend() {
 }
 
 # _mux::widgets_float — true when the current backend renders widgets as
-# floating modals. Phase 1: zellij only; Phase 2 adds the tmux display-popup
-# path. tmux/none render inline (identical UX to the historical no-Zellij
-# fallback).
-_mux::widgets_float() {
-  [[ "$(mux::backend)" == zellij ]] && _mux_zj_available
+# floating modals (Phase 2: both backends; "none" renders inline).
+_mux::widgets_float() { mux::available; }
+
+# Backend-dispatching float primitives (same argv contract both sides).
+_mux::float() {
+  case "$(mux::backend)" in
+    zellij) _mux_zj_float "$@" ;;
+    tmux) _mux_tx_float "$@" ;;
+    *) return 1 ;;
+  esac
+}
+_mux::pick_float() {
+  case "$(mux::backend)" in
+    zellij) _mux_zj_pick_float "$@" ;;
+    tmux) _mux_tx_pick_float "$@" ;;
+    *) return 1 ;;
+  esac
 }
 
 # mux::pick [pane opts] [pick::start opts...] — read picker rows on stdin,
@@ -140,7 +152,7 @@ mux::pick() {
     return
   fi
 
-  _mux_zj_pick_float "$pane_w" "$pane_h" "$header" "${pick_args[@]}"
+  _mux::pick_float "$pane_w" "$pane_h" "$header" "${pick_args[@]}"
 }
 
 # Each public widget: split off --pane-* (consumed by the float backend), keep
@@ -174,7 +186,7 @@ mux::confirm() {
   local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
   if ! _mux::widgets_float; then input::confirm "${_topt[@]}" "${PANE_REST[@]}"; return; fi
   local rc=0 ans
-  ans=$(_mux_zj_float --type confirm --borderless true --pane-width 54 \
+  ans=$(_mux::float --type confirm --borderless true --pane-width 54 \
         "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}") || rc=$?
   ((rc == 130)) && return 130
   [[ "$ans" == no ]] && { print -rn -- "no"; return 1; }
@@ -186,7 +198,7 @@ mux::line() {
   _mux::split_pane_opts "$@"
   local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
   if ! _mux::widgets_float; then input::line "${_topt[@]}" "${PANE_REST[@]}"; return; fi
-  _mux_zj_float --type line --borderless true --pane-width 64 \
+  _mux::float --type line --borderless true --pane-width 64 \
     "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}"
 }
 
@@ -219,7 +231,7 @@ mux::choose() {
     return
   fi
 
-  _mux_zj_float --type choose --borderless true "${_topt[@]}" \
+  _mux::float --type choose --borderless true "${_topt[@]}" \
     --pane-width 56 \
     "${reply[@]}" -- "${_topt[@]}" "${_extra[@]}" "${PANE_REST[@]}"
 }
@@ -232,7 +244,7 @@ mux::text() {
   _mux::split_pane_opts "$@"
   local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
   if ! _mux::widgets_float; then input::text "${_topt[@]}" "${PANE_REST[@]}"; return; fi
-  _mux_zj_float --type text --borderless true --pane-width 57 \
+  _mux::float --type text --borderless true --pane-width 57 \
     "${reply[@]}" -- --height 5 "${_topt[@]}" "${PANE_REST[@]}"
 }
 
@@ -241,7 +253,7 @@ mux::form() {
   _mux::split_pane_opts "$@"
   local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
   if ! _mux::widgets_float; then input::form "${_topt[@]}" "${PANE_REST[@]}"; return; fi
-  _mux_zj_float --type form --borderless true --pane-width 64 \
+  _mux::float --type form --borderless true --pane-width 64 \
     "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}"
 }
 

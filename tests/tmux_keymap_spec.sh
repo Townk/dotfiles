@@ -28,8 +28,16 @@ Describe 'tmux keymap tables'
   It 'binds the leader chords in the prefix table'
     When call keys prefix
     The output should include "split-window"
-    The output should include "kill-session"
+    The output should include "mux-quit-confirm"
     The output should include "copy-pwd"
+  End
+
+  It 'binds the Phase 2 picker and rename popups'
+    When call tmux -L kmspec list-keys
+    The output should include "pick-glyph"
+    The output should include "pick-clipboard"
+    The output should include "mux-rename window"
+    The output should include "mux-rename pane"
   End
 
   It 'enters the mode tables from the prefix'
