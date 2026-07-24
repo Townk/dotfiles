@@ -93,3 +93,18 @@ Describe 'tmux keymap tables'
     The output should include "client_key_table"
   End
 End
+
+Describe 'prompt-marks.sh (OSC 133 emitter)'
+  It 'is a silent no-op in a non-interactive shell'
+    When call zsh -c 'source home/dot_config/zsh/functions.d/prompt-marks.sh; echo ok'
+    The output should equal "ok"
+    The status should be success
+  End
+
+  # The -t 1 guard needs a real tty — script(1) provides one (the same
+  # serializer trick from the Phase 0 sixel debugging, repurposed).
+  It 'registers the precmd hook in an interactive tty shell'
+    When call script -q /dev/null zsh -fic 'source home/dot_config/zsh/functions.d/prompt-marks.sh; (( ${precmd_functions[(I)_prompt_mark_precmd]} )) && echo hooked'
+    The output should include "hooked"
+  End
+End
