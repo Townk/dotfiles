@@ -97,12 +97,12 @@ mode_color="" mode_body="" hint_body=""
 if [[ "$in_copy" == 1 ]]; then
   mode_color="$m_scroll" mode_body="$I_SCROLL Scroll"
 else
-  # zellij "tmux" mode = the leader pending (client_prefix); a live key
-  # table wins over it (tables are entered FROM the leader).
-  if [[ "$key_table" == root && "$prefix_on" == 1 ]]; then
-    mode_color="$m_tmux" mode_body="$I_TMUX Command"
-  fi
+  # zellij "tmux" mode = the leader armed. The leader is the prefix TABLE
+  # (root M-w -> switch-client -T prefix; see tmux.conf), so it arrives here
+  # as key_table=prefix. client_prefix (4th arg) kept as a fallback for a
+  # classic `set -g prefix` setup.
   case "$key_table" in
+    prefix)  mode_color="$m_tmux"    mode_body="$I_TMUX Command" ;;
     tab)     mode_color="$m_tab"     mode_body="$I_TAB Tab" ;;
     pane)    mode_color="$m_pane"    mode_body="$I_PANE Pane" ;;
     session) mode_color="$m_session" mode_body="$I_SESSION Session" ;;
@@ -111,6 +111,9 @@ else
     locked)  mode_color="$m_locked"  mode_body="$I_LOCKED Locked" hint_body="exit" ;;
     nested)  mode_color="$m_locked"  mode_body="$I_LOCKED Nested" hint_body="exit" ;;
   esac
+  if [[ -z "$mode_body" && "$prefix_on" == 1 ]]; then
+    mode_color="$m_tmux" mode_body="$I_TMUX Command"
+  fi
 fi
 
 # ---- ssh / fullscreen -----------------------------------------------------

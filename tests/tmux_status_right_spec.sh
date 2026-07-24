@@ -84,8 +84,8 @@ EOS
     The output should include "exit"
   End
 
-  It 'leader pending (client_prefix) shows the Command pill'
-    When call zsh "$W" root 0 main 1
+  It 'the armed leader (prefix table) shows the Command pill'
+    When call zsh "$W" prefix 0 main
     The output should include "Command"
     The output should include "bg=#f38ba8"
   End

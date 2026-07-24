@@ -41,7 +41,11 @@ bind u setw monitor-activity on \; display "alarm: activity"
 bind k setw monitor-silence 0 \; setw monitor-activity off \; display "alarms cleared"
 # Leader-again passes the chord through to the app (zellij: leader exits mode;
 # here the pane gets the raw M-w, which is the closest useful equivalent).
-bind M-w send-prefix
+# send-keys, not send-prefix: the leader is a table switch now (prefix None).
+bind M-w send-keys M-w
+# ESC cancels the armed leader without leaking into the app (zellij: Esc
+# exits tmux mode; ESC cancels — never conflate with Ctrl+C).
+bind Escape switch-client -T root
 
 # ---------------------------------------------------------------------------
 # Root table — vim/fzf-aware navigation (D4 fast lane / D13)

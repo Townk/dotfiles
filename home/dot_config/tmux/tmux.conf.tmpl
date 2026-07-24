@@ -10,7 +10,15 @@
 # Prefix — M-w mirrors the Zellij leader (D3): the ~40 WezTerm Cmd+…→Alt+w …
 # forwards and the Ghostty mirrors serve both backends verbatim.
 unbind C-b
-set -g prefix M-w
+# Leader: M-w arms the prefix TABLE for one key via a root bind, instead of
+# `set -g prefix M-w`. Identical semantics (press-release, sticky until the
+# next key), but the armed state is a key-table change — which tmux
+# reliably redraws the status for, so the bar's Command pill appears the
+# moment the leader is pressed (#{client_prefix} flips did NOT redraw the
+# status; Mode B find, 2026-07-24). All `bind X` chords land in the prefix
+# table as usual.
+set -g prefix None
+bind -n M-w switch-client -T prefix
 
 # ---------------------------------------------------------------------------
 # Terminal & protocol plumbing
