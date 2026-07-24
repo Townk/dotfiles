@@ -67,6 +67,13 @@ bind -n C-S-h if -F '#{@pane-is-vim}' 'send-keys C-S-h' 'resize-pane -L 2'
 bind -n C-S-j if -F '#{@pane-is-vim}' 'send-keys C-S-j' 'resize-pane -D 2'
 bind -n C-S-k if -F '#{@pane-is-vim}' 'send-keys C-S-k' 'resize-pane -U 2'
 bind -n C-S-l if -F '#{@pane-is-vim}' 'send-keys C-S-l' 'resize-pane -R 2'
+# WezTerm folds shift into the letter for ctrl+shift chords: the key arrives
+# named C-H, not C-S-h (Mode B probe, 2026-07-24). Bind the uppercase twins;
+# both names forward the canonical C-S-* form to vim.
+bind -n C-H if -F '#{@pane-is-vim}' 'send-keys C-S-h' 'resize-pane -L 2'
+bind -n C-J if -F '#{@pane-is-vim}' 'send-keys C-S-j' 'resize-pane -D 2'
+bind -n C-K if -F '#{@pane-is-vim}' 'send-keys C-S-k' 'resize-pane -U 2'
+bind -n C-L if -F '#{@pane-is-vim}' 'send-keys C-S-l' 'resize-pane -R 2'
 bind -n C-S-Left  if -F '#{@pane-is-vim}' 'send-keys C-S-Left'  'resize-pane -L 2'
 bind -n C-S-Down  if -F '#{@pane-is-vim}' 'send-keys C-S-Down'  'resize-pane -D 2'
 bind -n C-S-Up    if -F '#{@pane-is-vim}' 'send-keys C-S-Up'    'resize-pane -U 2'
