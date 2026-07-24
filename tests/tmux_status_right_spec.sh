@@ -142,7 +142,7 @@ EOS
   End
 
   It 'ssh keeps only the host segment (alias preferred) + no clock'
-    export SSH_CONNECTION="10.0.0.2 55000 10.0.0.9 22"
+    export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
     printf 'devbox' > "$TEST_TMP/hostname-alias"
     When call zsh "$W" root 0 main
     The output should include "$G_HOST devbox"
@@ -151,7 +151,7 @@ EOS
   End
 
   It 'ssh stays host-only even in fullscreen (conditions are ANDed)'
-    export SSH_CONNECTION="10.0.0.2 55000 10.0.0.9 22"
+    export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
     printf 'true' > "$TEST_TMP/fullscreen_state"
     printf 'devbox' > "$TEST_TMP/hostname-alias"
     When call zsh "$W" root 0 main

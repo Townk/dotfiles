@@ -101,7 +101,7 @@ bind -n C-S-Right if -F '#{@pane-is-vim}' 'send-keys C-S-Right' 'resize-pane -R 
 # M-/ — search straight from normal (zellij Alt+/): enter scroll-state
 # copy-mode with the incremental search prompt; the stack below Search is
 # empty, so popping Search (ESC/Backspace) lands back in normal.
-bind -n M-/ copy-mode \; set -p @visual 0 \; set -p @search_parent normal \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
+bind -n M-/ set -p @searching 1 \; copy-mode \; set -p @visual 0 \; set -p @search_parent normal \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
 
 # NB: the tm-scrub context routes (J/K/H/L, Shift+arrows, Shift+A/S over
 # yazi/hunk/diffnav panes) are deliberately NOT bound yet — bare capitals are
