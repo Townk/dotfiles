@@ -46,6 +46,13 @@ bind M-w send-keys M-w
 # ESC cancels the armed leader without leaking into the app (zellij: Esc
 # exits tmux mode; ESC cancels — never conflate with Ctrl+C).
 bind Escape switch-client -T root
+# Mode stack (zellij which-key trail parity): Backspace pops one level —
+# each table returns to the mode it was entered FROM. tmux has no stack,
+# but the entry graph has unique parents, so the pops are static:
+# resize/move → pane; tab/pane/session → the armed leader (Command, by
+# re-arming the one-shot prefix table); Command → root. Locked keeps its
+# single M-Escape exit; copy-mode keeps Backspace for search editing.
+bind BSpace switch-client -T root
 
 # ---------------------------------------------------------------------------
 # Root table — vim/fzf-aware navigation (D4 fast lane / D13)
@@ -94,6 +101,7 @@ bind -n C-S-Right if -F '#{@pane-is-vim}' 'send-keys C-S-Right' 'resize-pane -R 
 # tab table (zellij "tab" mode)
 # ---------------------------------------------------------------------------
 bind -T tab Escape set key-table root
+bind -T tab BSpace set key-table root \; switch-client -T prefix   # pop the mode stack
 bind -T tab h previous-window
 bind -T tab Left previous-window
 bind -T tab l next-window
@@ -126,6 +134,7 @@ bind -T tab s setw synchronize-panes \; set key-table root
 # pane table (zellij "pane" mode)
 # ---------------------------------------------------------------------------
 bind -T pane Escape set key-table root
+bind -T pane BSpace set key-table root \; switch-client -T prefix   # pop the mode stack
 bind -T pane m set key-table move
 bind -T pane r set key-table resize
 bind -T pane h select-pane -L
@@ -157,6 +166,7 @@ bind -T pane x kill-pane \; set key-table root
 # resize table (zellij "resize" mode; repeatable binds)
 # ---------------------------------------------------------------------------
 bind -T resize Escape set key-table root
+bind -T resize BSpace set key-table pane   # pop the mode stack
 bind -T resize h resize-pane -L 2
 bind -T resize j resize-pane -D 2
 bind -T resize k resize-pane -U 2
@@ -183,6 +193,7 @@ bind -T resize = resize-pane -U 2
 # tmux has no directional pane swap; swap-pane -U/-D walk the pane order.
 # Ledger row documents the divergence (h/l rotate the whole window).
 bind -T move Escape set key-table root
+bind -T move BSpace set key-table pane   # pop the mode stack
 bind -T move j swap-pane -D
 bind -T move k swap-pane -U
 bind -T move Down swap-pane -D
@@ -198,6 +209,7 @@ bind -T move BTab swap-pane -U
 # session table (zellij "session" mode)
 # ---------------------------------------------------------------------------
 bind -T session Escape set key-table root
+bind -T session BSpace set key-table root \; switch-client -T prefix   # pop the mode stack
 bind -T session d detach-client
 bind -T session w choose-tree -Zs \; set key-table root
 # S — quick-launch workspace picker lands here in Phase 3. The zellij-only
