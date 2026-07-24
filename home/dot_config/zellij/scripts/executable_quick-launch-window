@@ -91,9 +91,16 @@ fi
 _qlw_ssh="${SSH_CONNECTION:-}${SSH_CLIENT:-}"
 _qlw_term="${TERM_PROGRAM:-}"
 if [[ -n "${TMUX:-}" ]]; then
-  _qlw_v="$(tmux show-environment SSH_CONNECTION 2>/dev/null)" || _qlw_v=""
+  # Pin the lookup to the CLIENT's session: a bare show-environment resolves
+  # "most recently used", which right after a workspace build is the freshly
+  # created session (env stamped from the popup: TERM_PROGRAM=tmux) — the
+  # guard then tripped on first launch and passed on retry (Mode B find).
+  _qlw_t=()
+  _qlw_sess="$(tmux display -p '#{session_name}' 2>/dev/null)" || _qlw_sess=""
+  [[ -n "$_qlw_sess" ]] && _qlw_t=(-t "$_qlw_sess")
+  _qlw_v="$(tmux show-environment "${_qlw_t[@]}" SSH_CONNECTION 2>/dev/null)" || _qlw_v=""
   if [[ "$_qlw_v" == SSH_CONNECTION=* ]]; then _qlw_ssh="${_qlw_v#*=}"; else _qlw_ssh=""; fi
-  _qlw_v="$(tmux show-environment TERM_PROGRAM 2>/dev/null)" || _qlw_v=""
+  _qlw_v="$(tmux show-environment "${_qlw_t[@]}" TERM_PROGRAM 2>/dev/null)" || _qlw_v=""
   if [[ "$_qlw_v" == TERM_PROGRAM=* ]]; then _qlw_term="${_qlw_v#*=}"; else _qlw_term=""; fi
 fi
 if [[ -n "$_qlw_ssh" ]]; then

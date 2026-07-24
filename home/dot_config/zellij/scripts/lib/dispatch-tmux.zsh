@@ -68,7 +68,12 @@ ql_tx_open_pane() {
     [[ -n "$cwd" ]] && popup+=(-d "$cwd")
     [[ -n "$session" ]] && popup+=(-t "$session:")
     popup+=("${cmd:-$SHELL}")
-    "${popup[@]}" >/dev/null 2>&1 &
+    # We usually run INSIDE the quick-launch popup: opening a popup while one
+    # is up makes tmux MODIFY the existing popup and IGNORE -w/-h/-d (wrong
+    # geometry AND wrong cwd), and a plain backgrounded child can die with
+    # the popup's pty. Hand the spawn to the server, delayed past our own
+    # close (Mode B find, 2026-07-24).
+    "$QL_TX" run-shell -b -d 0.2 "${(j: :)${(@q)popup}}"
     return 0
   fi
 
