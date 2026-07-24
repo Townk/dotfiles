@@ -140,8 +140,8 @@ _mux_zj_float() {
 
   # `zellij action new-pane` does NOT propagate COLORTERM into the spawned pane
   # (it inherits TERM but not COLORTERM), so gum/lipgloss fall back to 256-color
-  # and the Catppuccin truecolor hex are approximated — mauve #cba6f7 lands on
-  # ~gum's default pink, reading as "unthemed". Carry our own COLORTERM through
+  # and the Catppuccin truecolor hex are approximated — mauve lands on ~gum's
+  # default pink, reading as "unthemed". Carry our own COLORTERM through
   # `env` so the dialog renders true 24-bit color, matching the keybind-spawned
   # quit pane (which inherits COLORTERM). Default to truecolor if we somehow lack
   # it (these are GUI terminals).
