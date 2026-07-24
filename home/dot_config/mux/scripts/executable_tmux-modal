@@ -135,6 +135,14 @@ fi
 result=$(cat "$tmp")
 result="${result%$'\n'}"
 
+# Strip VS16 (U+FE0F, the emoji-presentation selector): zsh (macOS wcwidth)
+# counts a VS16 emoji as 1 cell but tmux renders 2, so every ZLE redraw
+# drifts a column — phantom leading spaces, undeletable on backspace
+# (Mode B find, 2026-07-24). The bare codepoint is width-1 on both sides.
+# Zellij needs no strip: its grid agrees with zsh. Manual pastes of VS16
+# emoji into zsh-under-tmux still glitch — platform gotcha, ledger row.
+result="${result//$'\uFE0F'/}"
+
 [[ -n "$result" ]] || exit 0
 
 if [[ -n "$origin" ]]; then

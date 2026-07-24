@@ -771,7 +771,9 @@ pick::background_sink() {
   # beside PICK_INJECT_PANE (a tmux %pane id); send-keys -l is the literal
   # write-chars equivalent.
   if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_TMUX:-}" ]]; then
-    ${(z)PICK_INJECT_TMUX} send-keys -t "$PICK_INJECT_PANE" -l -- "$text"
+    # Strip VS16: zsh counts a VS16 emoji as 1 cell, tmux renders 2, and the
+    # width drift corrupts the ZLE line (see tmux-modal, same strip there).
+    ${(z)PICK_INJECT_TMUX} send-keys -t "$PICK_INJECT_PANE" -l -- "${text//$'\uFE0F'/}"
     return 0
   fi
   local clip; clip="$(pick::detect_clip)"
