@@ -12,6 +12,7 @@ Describe 'tmux-status-right'
   "mode":{"locked":"#fab387","resize":"#cba6f7","pane":"#89b4fa","tab":"#a6e3a1",
           "move":"#f9e2af","scroll":"#b4befe","session":"#f38ba8","tmux":"#f38ba8","rename":"#f9e2af","search":"#89b4fa","visual":"#cba6f7"},
   "action":{"attention":"#f9e2af"}},
+ "palette":{"white":"#ffffff"},
  "extended":{"tab":{"bg":"#282c41","fg":"#9b9fc1","active_bg":"#656a83","active_fg":"#ffffff"}}}
 EOS
 
@@ -37,6 +38,8 @@ print -- "Wi-Fi Power (en0): ${STUB_WIFI:-On}"
 EOS
     chmod +x "$TEST_TMP/tmux" "$TEST_TMP/pmset" "$TEST_TMP/networksetup"
 
+    # ribbon ssh truth = its own process env (zj-hud parity)
+    unset SSH_CONNECTION SSH_CLIENT
     export MUX_TMUX_BIN="$TEST_TMP/tmux"
     export PMSET_BIN="$TEST_TMP/pmset"
     export NETWORKSETUP_BIN="$TEST_TMP/networksetup"
@@ -51,7 +54,7 @@ EOS
   cleanup() {
     rm -rf "$TEST_TMP"
     unset MUX_TMUX_BIN PMSET_BIN NETWORKSETUP_BIN WIDGETS_FULLSCREEN_STATE \
-      WIDGETS_HOSTNAME_ALIAS WIDGETS_THEME_JSON STUB_SSH STUB_POWER STUB_PCT \
+      WIDGETS_HOSTNAME_ALIAS WIDGETS_THEME_JSON STUB_SSH SSH_CONNECTION SSH_CLIENT STUB_POWER STUB_PCT \
       STUB_WIFI G_DIV G_WIFI_ON G_WIFI_OFF G_CLOCK G_HOST
   }
   BeforeEach 'setup'
@@ -132,7 +135,7 @@ EOS
   End
 
   It 'ssh keeps only the host segment (alias preferred) + no clock'
-    export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
+    export SSH_CONNECTION="10.0.0.2 55000 10.0.0.9 22"
     printf 'devbox' > "$TEST_TMP/hostname-alias"
     When call zsh "$W" root 0 main
     The output should include "$G_HOST devbox"
@@ -141,7 +144,7 @@ EOS
   End
 
   It 'ssh + fullscreen restores the local widget set'
-    export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
+    export SSH_CONNECTION="10.0.0.2 55000 10.0.0.9 22"
     printf 'true' > "$TEST_TMP/fullscreen_state"
     printf 'devbox' > "$TEST_TMP/hostname-alias"
     When call zsh "$W" root 0 main

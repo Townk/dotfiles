@@ -38,21 +38,23 @@ if [[ "${1:-}" == --launch ]]; then
   cw="$("$TMUX_BIN" display -p '#{client_width}')" || exit 0
   ch="$("$TMUX_BIN" display -p '#{client_height}')" || exit 0
   exec "$TMUX_BIN" display-popup -E -B -w "$W" -h "$H" \
-    -x $(( cw - W - 1 )) -y $(( ch - H - 1 )) "${0:A}"
+    -x $(( cw - W - 1 )) -y $(( ch - 2 )) "${0:A}"
 fi
 
 # ---- theme colors ----------------------------------------------------------
 c=("${(@f)$(jq -r '
-  .extended.tab.bg, .roles.ui.bg, .roles.ui.dialog_bg, .roles.mode.search,
-  .roles.action.attention, .roles.ui.border_inactive
+  .extended.tab.bg, .roles.ui.bg, .roles.ui.dialog_bg,
+  .extended.dialog.search_accent, .roles.action.attention,
+  .roles.ui.border_inactive, .palette.white
 ' "$THEME_JSON" 2>/dev/null)}") || c=()
-(( ${#c} == 6 )) || exit 0
+(( ${#c} == 7 )) || exit 0
 hexfg() { print -rn -- $'\e[38;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
 hexbg() { print -rn -- $'\e[48;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
 BG="$(hexbg ${c[1]})"        # dialog canvas = tab chrome bg
 THEME_BG="$(hexbg ${c[2]})"  # behind the accent bar
 INPUT_BG="$(hexbg ${c[3]})"  # input field = dialog mantle
 ACCENT_FG="$(hexfg ${c[4]})" ACCENT_BG="$(hexbg ${c[4]})"
+WHITE_FG="$(hexfg ${c[7]})"
 ON_FG="$(hexfg ${c[5]})" OFF_FG="$(hexfg ${c[6]})"
 BOX_FG="$(hexfg ${c[3]})"    # box glyphs = input bg color over canvas
 RESET=$'\e[0m'
@@ -70,6 +72,9 @@ origin="$("$TMUX_BIN" display -p '#{pane_id}' 2>/dev/null)" || origin=""
 parent="$("$TMUX_BIN" display -p -t "$origin" '#{@search_parent}' 2>/dev/null)" || parent=""
 
 "$TMUX_BIN" set -p -t "$origin" @searching 1 2>/dev/null
+"$TMUX_BIN" set -p -t "$origin" @search_case 0 2>/dev/null
+"$TMUX_BIN" set -p -t "$origin" @search_word 0 2>/dev/null
+"$TMUX_BIN" set -p -t "$origin" @search_wrap 1 2>/dev/null
 "$TMUX_BIN" refresh-client -S 2>/dev/null
 cleanup() {
   "$TMUX_BIN" set -p -t "$origin" -u @searching 2>/dev/null
@@ -127,7 +132,7 @@ draw_static() {
   at 3 $(( INPUT_COL )); print -rn -- "${BG}${BOX_FG}𜺫$(rep '🮂' $interior)𜺨${RESET}"
   at 2 $(( INPUT_COL )); print -rn -- "${BG}${BOX_FG}▐${RESET}"
   at 2 $(( input_end + 3 )); print -rn -- "${BG}${BOX_FG}▌${RESET}"
-  at 2 $(( GLYPH_COL + 1 )); print -rn -- "${BG}${ACCENT_FG}${I_SEARCH}${RESET}"
+  at 2 $(( GLYPH_COL + 1 )); print -rn -- "${BG}${WHITE_FG}${I_SEARCH}${RESET}"
 }
 
 draw_input() {
@@ -162,9 +167,9 @@ while read -rsk1 key; do
       follow=""
       read -rsk1 -t 0.02 follow || follow=""
       case "$follow" in
-        c) (( case_on = ! case_on )); apply_search; draw_input ;;
-        b) (( word_on = ! word_on )); apply_search; draw_input ;;
-        p) (( wrap_on = ! wrap_on )); draw_input ;;
+        c) (( case_on = ! case_on )); "$TMUX_BIN" set -p -t "$origin" @search_case "$case_on" 2>/dev/null; "$TMUX_BIN" refresh-client -S 2>/dev/null; apply_search; draw_input ;;
+        b) (( word_on = ! word_on )); "$TMUX_BIN" set -p -t "$origin" @search_word "$word_on" 2>/dev/null; "$TMUX_BIN" refresh-client -S 2>/dev/null; apply_search; draw_input ;;
+        p) (( wrap_on = ! wrap_on )); "$TMUX_BIN" set -p -t "$origin" @search_wrap "$wrap_on" 2>/dev/null; "$TMUX_BIN" refresh-client -S 2>/dev/null; draw_input ;;
         "") pop_out; break ;;
         *) while read -rsk1 -t 0.01 _; do :; done ;;
       esac ;;

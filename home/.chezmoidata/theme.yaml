@@ -72,7 +72,7 @@ theme:
 
       # Dialog "loud" variants — a brighter red and a warmer yellow than the
       # base slots, tuned for filled dialog/button chrome.
-      dialog: { danger: "ff5555", warning: "e5bf7b" }
+      dialog: { danger: "ff5555", warning: "e5bf7b", search_accent: "61afef" }
 
       # git-diff (delta) highlight — bespoke, appearance-dependent: bright +/-
       # emphasis fg over dark wash bgs, plus line-number fg/bg pairs. A light
@@ -148,7 +148,7 @@ theme:
       tab: { bg: "ccd0da", fg: "6c6f85", active_bg: "acb0be", active_fg: "4c4f69" }
 
       # Dialog "loud" variants — latte red / amber.
-      dialog: { danger: "d20f39", warning: "df8e1d" }
+      dialog: { danger: "d20f39", warning: "df8e1d", search_accent: "1e66f5" }
 
       # git-diff (delta) — light wash bgs with dark emphasis fg.
       diff:

@@ -44,6 +44,7 @@ search_on="${5:-0}"
 renaming="${6:-}"
 visual_on="${7:-0}"
 searching_on="${8:-0}"
+search_toggles="${9:-}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
@@ -51,12 +52,12 @@ c=("${(@f)$(jq -r '
   .roles.ui.bg, .roles.ui.fg, .extended.tab.bg,
   .roles.mode.locked, .roles.mode.resize, .roles.mode.pane, .roles.mode.tab,
   .roles.mode.move, .roles.mode.scroll, .roles.mode.session, .roles.mode.tmux,
-  .roles.mode.rename, .roles.mode.search, .roles.mode.visual
+  .roles.mode.rename, .roles.mode.search, .roles.mode.visual, .palette.white
 ' "$THEME_JSON" 2>/dev/null)}") || c=()
-(( ${#c} == 14 )) || exit 0
+(( ${#c} == 15 )) || exit 0
 bar_bg="${c[1]}" fg_hi="${c[2]}" tab_bg="${c[3]}"
 m_locked="${c[4]}" m_resize="${c[5]}" m_pane="${c[6]}" m_tab="${c[7]}"
-m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}" m_rename="${c[12]}" m_search="${c[13]}" m_visual="${c[14]}"
+m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}" m_rename="${c[12]}" m_search="${c[13]}" m_visual="${c[14]}" c_white="${c[15]}"
 
 # ---- color math -----------------------------------------------------------
 hex_r() { print $(( 16#${1[2,3]} )) }
@@ -80,7 +81,8 @@ seg_fg() {
   r=$(hex_r "$bg"); g=$(hex_g "$bg"); b=$(hex_b "$bg")
   luma=$(( (r * 299 + g * 587 + b * 114) / 1000 ))
   if (( luma < 100 )); then
-    to_hex $(( r + (255 - r) * 60 / 100 )) $(( g + (255 - g) * 60 / 100 )) $(( b + (255 - b) * 60 / 100 ))
+    # bright white on the dark near-bar stops (Mode B: lighten(0.6) read grey)
+    print -rn -- "$c_white"
   else
     to_hex $(( r * 20 / 100 )) $(( g * 20 / 100 )) $(( b * 20 / 100 ))
   fi
@@ -92,6 +94,7 @@ I_LOCKED=$'\U000F033E' I_RESIZE=$'\U000F0A68' I_PANE=$'\Uebc8'
 I_TAB=$'\U000F04E9'    I_MOVE=$'\U000F0655'   I_SCROLL=$'\U000F0A64'
 I_SESSION=$'\U000F0640'   I_TMUX=$'\U000F0633'
 I_RENAME=$'\U000F0455'    I_SEARCH=$'\Uf002'    I_COPY=$'\U000F018F'
+I_TCASE=$'\Ueab1' I_TWORD=$'\Ueb7e' I_TWRAP=$'\U000F0547'
 I_ALT=$'\U000F0635' I_ESC=$'\U000F12B7'
 I_CLOCK=$'\U000F00F0'
 I_WIFI_ON=$'\U000F05A9' I_WIFI_OFF=$'\U000F092E'
@@ -105,7 +108,7 @@ if [[ -n "$renaming" ]]; then
   mode_color="$m_rename" mode_body="$I_RENAME Rename"
 elif [[ "$in_copy" == 1 ]]; then
   if [[ "$search_on" == 1 || "$searching_on" == 1 ]]; then
-    mode_color="$m_search" mode_body="$I_SEARCH Search"
+    mode_color="$m_search" mode_body="$I_SEARCH Search" hint_body="search"
   elif [[ "$visual_on" == 1 ]]; then
     mode_color="$m_visual" mode_body="$I_COPY Copy"
   else
@@ -132,11 +135,12 @@ else
 fi
 
 # ---- ssh / fullscreen -----------------------------------------------------
+# zj-hud parity: the widget "ssh" truth is the SERVER's own environment
+# (is_ssh_session() reads the plugin process env) — a session born over ssh
+# keeps the remote presentation even when later viewed locally (VNC). This
+# script is a server child, so its own env IS that truth.
 is_ssh=0
-if [[ -n "$sess" ]]; then
-  v="$("$TMUX_BIN" show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""
-  [[ "$v" == SSH_CONNECTION=* ]] && is_ssh=1
-fi
+[[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]] && is_ssh=1
 is_fullscreen=0
 [[ "$(cat "$FS_STATE" 2>/dev/null)" == true ]] && is_fullscreen=1
 
@@ -144,7 +148,12 @@ is_fullscreen=0
 typeset -a bodies kinds
 
 [[ -n "$mode_body" ]] && { bodies+=("$mode_body"); kinds+=(mode); }
-[[ -n "$hint_body" ]] && { bodies+=("$I_ALT $I_ESC  exit"); kinds+=(hint); }
+if [[ "$hint_body" == search ]]; then
+  # zj-hud search_hint_segment: case/word/wrap, glyph bright when on.
+  bodies+=("$I_TCASE case  $I_TWORD word  $I_TWRAP wrap"); kinds+=(shint)
+elif [[ -n "$hint_body" ]]; then
+  bodies+=("$I_ALT $I_ESC  exit"); kinds+=(hint)
+fi
 
 if [[ -n "$sess" && "${(L)sess}" != main ]]; then
   # kebab-case -> Title Case (zj-hud session_segment)
@@ -199,7 +208,13 @@ for (( i = 1; i <= n; i++ )); do
   bg="$(lerp "$base" "$bar_bg" $(( n - i )) "$n")"
   fg="$(seg_fg "$bg")"
   body="${bodies[i]}"
-  if [[ "${kinds[i]}" == hint ]]; then
+  if [[ "${kinds[i]}" == shint ]]; then
+    sc="${search_toggles[1]:-0}" sw="${search_toggles[2]:-0}" sp="${search_toggles[3]:-1}"
+    [[ "$sc" == 1 ]] && cg="$c_white" || cg="$fg"
+    [[ "$sw" == 1 ]] && wg="$c_white" || wg="$fg"
+    [[ "$sp" == 1 ]] && pg="$c_white" || pg="$fg"
+    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg}] #[fg=${cg}]${I_TCASE} #[fg=${fg}]case  #[fg=${wg}]${I_TWORD} #[fg=${fg}]word  #[fg=${pg}]${I_TWRAP} #[fg=${fg}]wrap "
+  elif [[ "${kinds[i]}" == hint ]]; then
     # two-tone hint: keycap glyphs pop white-ish, the label stays dark —
     # zj-hud paints keycaps in hint_glyph_on over the mode color.
     out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${fg_hi}] ${I_ALT} ${I_ESC} #[fg=${fg}] exit "
