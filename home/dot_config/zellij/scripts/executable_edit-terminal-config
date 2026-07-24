@@ -6,6 +6,14 @@ set -eu -o pipefail
 ZELLIJ=${commands[zellij]:-/opt/homebrew/bin/zellij}
 NVIM=${commands[nvim]:-${commands[vim]:-vi}}
 
+# Inside tmux TERM_PROGRAM lies (= "tmux"); the outer terminal's identity is
+# kept in the tmux SESSION env by update-environment (see tmux.conf — the
+# same trick image-protocol-support.zsh and yazi use).
+if [[ -n "${TMUX:-}" ]]; then
+  _outer=$(tmux show-environment TERM_PROGRAM 2>/dev/null) || _outer=""
+  [[ -n "${_outer#TERM_PROGRAM=}" ]] && TERM_PROGRAM="${_outer#TERM_PROGRAM=}"
+fi
+
 # 2. Environment Detection Logic
 if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
   ENV_TYPE="SSH"
@@ -40,9 +48,20 @@ case "$ENV_TYPE" in
     ;;
 esac
 
-# 4. Shared Zellij Action Logic (Runs globally for all terminal environments)
-if "$ZELLIJ" action query-tab-names 2>/dev/null | grep -Fxq "$TAB_NAME"; then
-  "$ZELLIJ" action go-to-tab-name "$TAB_NAME"
+# 4. Focus-or-create the config tab/window in whichever mux hosts us
+# (mux migration Phase 1: dual-path; the shared logic collapses onto
+# mux::* calls when the Panes group lands in Phase 6).
+if [[ -n "${TMUX:-}" ]]; then
+  TMUX_BIN=${commands[tmux]:-tmux}
+  if "$TMUX_BIN" list-windows -F '#{window_name}' 2>/dev/null | grep -Fxq "$TAB_NAME"; then
+    "$TMUX_BIN" select-window -t "=$TAB_NAME"
+  else
+    "$TMUX_BIN" new-window -n "$TAB_NAME" "$NVIM $TARGET_FILE"
+  fi
 else
-  "$ZELLIJ" action new-tab --name "$TAB_NAME" --close-on-exit -- "$NVIM" "$TARGET_FILE"
+  if "$ZELLIJ" action query-tab-names 2>/dev/null | grep -Fxq "$TAB_NAME"; then
+    "$ZELLIJ" action go-to-tab-name "$TAB_NAME"
+  else
+    "$ZELLIJ" action new-tab --name "$TAB_NAME" --close-on-exit -- "$NVIM" "$TARGET_FILE"
+  fi
 fi

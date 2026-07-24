@@ -8,6 +8,14 @@
 set -u -o pipefail
 source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
 
+# Both-mux context stamp (mux migration D4): Zellij context-keys matchers key
+# on this wrapper's comm in the process tree ("system-backup-tm"); the tmux
+# side has no process-tree matching, so future tmux context binds (Phase 6.4
+# routes) match the @ctx pane option instead. Stamp unconditionally-but-
+# guarded so one wrapper serves both muxes; a no-op outside tmux.
+[[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1 &&
+  tmux set -p @ctx tm 2>/dev/null || true
+
 # tl_focused — 1 when this pane is the zellij-focused pane, else 0.
 # (Outside zellij, always 1.) Cheap enough to poll once per loop tick.
 tl_focused() {
