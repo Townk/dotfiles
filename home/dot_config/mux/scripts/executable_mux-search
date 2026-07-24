@@ -1,24 +1,69 @@
 #!/usr/bin/env zsh
-# mux-search — the search INPUT as a popup dialog (mux migration Phase 4;
-# a D12-Stage-1 slice). tmux's command-prompt REPLACES the status line,
-# which would hide the Search mode pill while typing — zellij shows its
-# search dialog and the bar simultaneously, so the input lives in a popup
-# and the status line stays visible: @searching drives the pill from the
-# keystroke that pushes Search; search_present takes over after commit.
-# The case/word/wrap toggles land with the D12 search chrome — this
-# dialog is their future home.
+# mux-search — the zj-hud visual-search dialog, tmux edition (mux migration
+# Phase 4; a D12 Stage-1 slice — faithful port of zj-hud/src/search
+# render_field). tmux's command-prompt REPLACES the status line, which would
+# hide the Search pill and the mode stack while typing; like zellij, the
+# input is a floating dialog instead, anchored bottom-right one row above
+# the bar (geometry from the layout's `search {}` block: width 40, margin
+# right/bottom 1).
 #
-# Runs INSIDE display-popup: the origin (copy-mode) pane self-resolves the
-# tmux-modal way (popup TMUX_PANE is unset → client's active pane).
-# @search_parent (stamped by the keybind) decides where a pop lands:
-# 'normal' cancels copy-mode outright, otherwise the search is cleared by
-# exiting + re-entering copy-mode with the viewport restored (tmux 3.7 has
-# no search-cancel; ledger row).
+#   mux-search --launch   compute anchor from the client size and reopen
+#                         itself inside display-popup (run-shell -b path —
+#                         a foreground popup would deadlock; ledger row)
+#   mux-search            the dialog body (inside the popup)
+#
+# Chrome: tab-chrome background, left accent bar in the search color, the
+# input in an eighth-block box over the dialog mantle, block cursor, and
+# the case/word/wrap indicator glyphs at the input's right end. In-dialog
+# chords (zellij parity): Alt+c toggles case-sensitive, Alt+b whole-word,
+# Alt+p wrap. tmux's search is ERE regex, so the term is regex-escaped;
+# whole-word wraps it in [[:<:]]/[[:>:]] and case-INsensitive expands
+# alphabetics to character classes (tmux regex search is case-sensitive
+# and has no flags). Wrap is always on in tmux — the indicator reflects
+# it and the chord just flips the glyph (ledger row).
+#
+# Colors come from the theme JSON projection. As-built: the accent uses
+# roles.mode.search (the plugin hardcodes its own blue).
+# Test seams: MUX_TMUX_BIN, WIDGETS_THEME_JSON.
 
 emulate -L zsh
 setopt no_unset
 
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
+
+W=40 H=3
+
+if [[ "${1:-}" == --launch ]]; then
+  cw="$("$TMUX_BIN" display -p '#{client_width}')" || exit 0
+  ch="$("$TMUX_BIN" display -p '#{client_height}')" || exit 0
+  exec "$TMUX_BIN" display-popup -E -B -w "$W" -h "$H" \
+    -x $(( cw - W - 1 )) -y $(( ch - H - 1 )) "${0:A}"
+fi
+
+# ---- theme colors ----------------------------------------------------------
+c=("${(@f)$(jq -r '
+  .extended.tab.bg, .roles.ui.bg, .roles.ui.dialog_bg, .roles.mode.search,
+  .roles.action.attention, .roles.ui.border_inactive
+' "$THEME_JSON" 2>/dev/null)}") || c=()
+(( ${#c} == 6 )) || exit 0
+hexfg() { print -rn -- $'\e[38;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
+hexbg() { print -rn -- $'\e[48;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
+BG="$(hexbg ${c[1]})"        # dialog canvas = tab chrome bg
+THEME_BG="$(hexbg ${c[2]})"  # behind the accent bar
+INPUT_BG="$(hexbg ${c[3]})"  # input field = dialog mantle
+ACCENT_FG="$(hexfg ${c[4]})" ACCENT_BG="$(hexbg ${c[4]})"
+ON_FG="$(hexfg ${c[5]})" OFF_FG="$(hexfg ${c[6]})"
+BOX_FG="$(hexfg ${c[3]})"    # box glyphs = input bg color over canvas
+RESET=$'\e[0m'
+
+# ---- geometry (0-indexed cols, mirrors the plugin constants) ---------------
+GLYPH_COL=2 INPUT_COL=5 RIGHT_INSET=5 TOGGLE_W=6
+input_end=$(( W - RIGHT_INSET ))
+area_w=$(( input_end - INPUT_COL + 1 ))
+field_w=$(( area_w - TOGGLE_W - 1 ))
+
+I_SEARCH=$'\Uf002' I_CASE=$'\Ueab1' I_WORD=$'\Ueb7e' I_WRAP=$'\U000F0547'
 
 origin="$("$TMUX_BIN" display -p '#{pane_id}' 2>/dev/null)" || origin=""
 [[ -n "$origin" ]] || exit 0
@@ -32,7 +77,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Pop Search off the stack: clear the incremental search, land on the parent.
 pop_out() {
   local pos
   if [[ "$parent" == normal ]]; then
@@ -47,34 +91,93 @@ pop_out() {
   return 0
 }
 
-buf=""
-draw() { print -rn -- $'\r\e[K'"  󰍉 $buf█" }
+# ---- search application ----------------------------------------------------
+buf="" case_on=0 word_on=0 wrap_on=1
+
+apply_search() {
+  local pat="" ch
+  if [[ -z "$buf" ]]; then return 0; fi
+  for ch in ${(s::)buf}; do
+    case "$ch" in
+      [\\.\[\]\(\)\*\+\?\{\}\|\^\$]) pat+="\\\\$ch" ;;
+      [a-zA-Z])
+        if (( case_on )); then pat+="$ch"
+        else pat+="[${(L)ch}${(U)ch}]"
+        fi ;;
+      *) pat+="$ch" ;;
+    esac
+  done
+  (( word_on )) && pat="[[:<:]]${pat}[[:>:]]"
+  "$TMUX_BIN" send-keys -t "$origin" -X search-forward-incremental "$pat" 2>/dev/null
+}
+
+# ---- rendering (absolute CSI, mirrors render_field) ------------------------
+at() { print -rn -- $'\e['"$1;$2H" }  # 1-indexed row;col
+rep() { local out="" i; for (( i = 0; i < $2; i++ )); do out+="$1"; done; print -rn -- "$out" }
+
+draw_static() {
+  local row blank interior
+  blank="$(rep ' ' $W)"
+  for row in 1 2 3; do
+    at $row 1; print -rn -- "${BG}${blank}"
+    at $row 1; print -rn -- "${THEME_BG}${ACCENT_FG}┃${RESET}"
+  done
+  interior=$(( input_end - INPUT_COL + 2 ))
+  at 1 $(( INPUT_COL )); print -rn -- "${BG}${BOX_FG}𜺠$(rep '▂' $interior)𜺣${RESET}"
+  at 3 $(( INPUT_COL )); print -rn -- "${BG}${BOX_FG}𜺫$(rep '🮂' $interior)𜺨${RESET}"
+  at 2 $(( INPUT_COL )); print -rn -- "${BG}${BOX_FG}▐${RESET}"
+  at 2 $(( input_end + 3 )); print -rn -- "${BG}${BOX_FG}▌${RESET}"
+  at 2 $(( GLYPH_COL + 1 )); print -rn -- "${BG}${ACCENT_FG}${I_SEARCH}${RESET}"
+}
+
+draw_input() {
+  local shown cfg wfg pfg start
+  # tail-scroll the buffer into the field, cursor always at its end
+  shown="$buf"
+  if (( ${#shown} > field_w - 1 )); then
+    start=$(( ${#shown} - field_w + 2 ))
+    shown="${shown[$start,-1]}"
+  fi
+  at 2 $(( INPUT_COL + 1 ))
+  print -rn -- "${INPUT_BG}$(rep ' ' $(( area_w + 1 )))"  # clear area
+  at 2 $(( INPUT_COL + 1 ))
+  print -rn -- "${INPUT_BG}${shown}${ACCENT_BG}${BOX_FG} ${RESET}"
+  (( case_on )) && cfg="$ON_FG" || cfg="$OFF_FG"
+  (( word_on )) && wfg="$ON_FG" || wfg="$OFF_FG"
+  (( wrap_on )) && pfg="$ON_FG" || pfg="$OFF_FG"
+  at 2 $(( input_end - TOGGLE_W + 2 ))
+  print -rn -- "${INPUT_BG}${cfg}${I_CASE}${RESET}${INPUT_BG} ${wfg}${I_WORD}${RESET}${INPUT_BG}  ${pfg}${I_WRAP}${RESET}"
+}
+
 print -rn -- $'\e[?25l'
-draw
+draw_static
+draw_input
 
 while read -rsk1 key; do
   case "$key" in
     $'\r'|$'\n')
-      # Commit: the search stays live (search_present keeps the pill);
-      # n/N walk the matches from Scroll/Copy.
       break ;;
     $'\e')
-      # ESC pops Search (swallow any trailing CSI bytes from arrows etc).
-      while read -rsk1 -t 0.01 _; do :; done
-      pop_out; break ;;
+      # ESC alone pops Search; ESC+char = the in-dialog Alt chords.
+      follow=""
+      read -rsk1 -t 0.02 follow || follow=""
+      case "$follow" in
+        c) (( case_on = ! case_on )); apply_search; draw_input ;;
+        b) (( word_on = ! word_on )); apply_search; draw_input ;;
+        p) (( wrap_on = ! wrap_on )); draw_input ;;
+        "") pop_out; break ;;
+        *) while read -rsk1 -t 0.01 _; do :; done ;;
+      esac ;;
     $'\x7f'|$'\b')
-      # Backspace edits; on an empty buffer it pops Search instead.
       if [[ -z "$buf" ]]; then pop_out; break; fi
       buf="${buf[1,-2]}"
-      "$TMUX_BIN" send-keys -t "$origin" -X search-forward-incremental "$buf" 2>/dev/null
-      draw ;;
+      apply_search; draw_input ;;
     $'\x15')
       buf=""
-      draw ;;
+      draw_input ;;
     *)
       buf+="$key"
-      "$TMUX_BIN" send-keys -t "$origin" -X search-forward-incremental "$buf" 2>/dev/null
-      draw ;;
+      apply_search; draw_input ;;
   esac
 done
 exit 0

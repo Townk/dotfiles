@@ -101,7 +101,7 @@ bind -n C-S-Right if -F '#{@pane-is-vim}' 'send-keys C-S-Right' 'resize-pane -R 
 # M-/ — search straight from normal (zellij Alt+/): enter scroll-state
 # copy-mode with the incremental search prompt; the stack below Search is
 # empty, so popping Search (ESC/Backspace) lands back in normal.
-bind -n M-/ copy-mode \; set -p @visual 0 \; set -p @search_parent normal \; display-popup -E -B -w 44 -h 3 -x R -y 90% "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search"
+bind -n M-/ copy-mode \; set -p @visual 0 \; set -p @search_parent normal \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
 
 # NB: the tm-scrub context routes (J/K/H/L, Shift+arrows, Shift+A/S over
 # yazi/hunk/diffnav panes) are deliberately NOT bound yet — bare capitals are
@@ -302,7 +302,7 @@ bind -T copy-mode-vi N if -F '#{search_present}' { send -X search-reverse } { se
 bind -T copy-mode-vi p send -X previous-prompt
 # / — forward incremental search (D12 stage 1; the floating search dialog
 # with option toggles is the D12 stage 2 hud follow-up).
-bind -T copy-mode-vi / set -p @search_parent mode \; display-popup -E -B -w 44 -h 3 -x R -y 90% "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search"
+bind -T copy-mode-vi / set -p @search_parent mode \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
 
 # (Status v0 — the Phase 1 bare [key_table] indicator — was RETIRED by
 # Phase 4: the themed mode pill lives in status-right via the theme's
