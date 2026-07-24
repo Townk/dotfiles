@@ -60,7 +60,13 @@ EOS
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'root/local renders a neutral ribbon: widgets + clock, no mode, no main session'
+  It 'local windowed at rest renders nothing (system segments are fullscreen-only)'
+    When call zsh "$W" root 0 main
+    The output should equal ""
+  End
+
+  It 'local fullscreen shows power + wifi + clock, no mode, no main session'
+    printf 'true' > "$TEST_TMP/fullscreen_state"
     When call zsh "$W" root 0 main
     The output should include "$G_DIV"
     The output should include "$G_WIFI_ON"
@@ -128,6 +134,7 @@ EOS
   End
 
   It 'AC at 100% shows the plug glyph alone'
+    printf 'true' > "$TEST_TMP/fullscreen_state"
     export STUB_PCT=100
     When call zsh "$W" root 0 main
     The output should include "󰂄"
@@ -143,14 +150,14 @@ EOS
     The output should not include "$G_CLOCK"
   End
 
-  It 'ssh + fullscreen restores the local widget set'
+  It 'ssh stays host-only even in fullscreen (conditions are ANDed)'
     export SSH_CONNECTION="10.0.0.2 55000 10.0.0.9 22"
     printf 'true' > "$TEST_TMP/fullscreen_state"
     printf 'devbox' > "$TEST_TMP/hostname-alias"
     When call zsh "$W" root 0 main
     The output should include "$G_HOST devbox"
-    The output should include "󱊥 57%"
-    The output should include "$G_CLOCK"
+    The output should not include "󱊥"
+    The output should not include "$G_CLOCK"
   End
 
   It 'gradient: the rightmost segment carries the most saturated stop'

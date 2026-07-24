@@ -144,6 +144,17 @@ is_ssh=0
 is_fullscreen=0
 [[ "$(cat "$FS_STATE" 2>/dev/null)" == true ]] && is_fullscreen=1
 
+# System segments (power/battery/wifi/clock): the layout rule `!ssh|fullscreen`
+# is a condition LIST — local AND fullscreen (windowed local keeps them hidden;
+# the macOS menu bar already shows them). Fullscreen also requires the
+# client to clear fullscreen_min_cols (100), zj-hud parity.
+show_sys=0
+if (( ! is_ssh && is_fullscreen )); then
+  cw="$("$TMUX_BIN" display -p '#{client_width}' 2>/dev/null)" || cw=""
+  [[ "$cw" == <-> ]] || cw=999
+  (( cw >= 100 )) && show_sys=1
+fi
+
 # ---- segment bodies (left to right) ---------------------------------------
 typeset -a bodies kinds
 
@@ -163,7 +174,7 @@ if [[ -n "$sess" && "${(L)sess}" != main ]]; then
 fi
 
 typeset -a w
-if (( ! is_ssh || is_fullscreen )); then
+if (( show_sys )); then
   batt="$("$PMSET" -g batt 2>/dev/null)" || batt=""
   pct="$(grep -Eo '[0-9]+%' <<<"$batt" | head -1)"; pct="${pct%\%}"
   if [[ "$batt" == *"AC Power"* && -n "$pct" ]]; then
@@ -190,7 +201,7 @@ if (( is_ssh )); then
 fi
 (( ${#w} )) && { bodies+=("${(j:  :)w}"); kinds+=(widgets); }
 
-if (( ! is_ssh || is_fullscreen )); then
+if (( show_sys )); then
   d="$(date '+%a %b')"; e="$(date '+%e')"; t="$(date '+%l:%M')"
   ap="${(L)$(date '+%p')}"
   bodies+=("$I_CLOCK $d ${e## } ${t## }$ap"); kinds+=(time)
