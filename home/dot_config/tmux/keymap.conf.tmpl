@@ -26,7 +26,7 @@ bind p set key-table pane
 bind t set key-table tab
 # Quit: themed confirm dialog in a popup (Phase 2; parity with
 # zellij-quit-confirm). Geometry mirrors the zellij fixed-cell dialog.
-bind q display-popup -E -w 52 -h 13 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-quit-confirm"
+bind q display-popup -E -B -w 52 -h 13 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-quit-confirm"
 # copy-pwd: the script is already PID-parameterized (the zellij side passes
 # the plugin's {pid}); tmux hands it the pane's root process directly.
 bind Y run-shell 'zsh ~/.config/zellij/scripts/copy-pwd --relative #{pane_pid}'
@@ -103,7 +103,7 @@ bind -T tab 8 select-window -t :=8 \; set key-table root
 bind -T tab 9 select-window -t :=9 \; set key-table root
 bind -T tab 0 select-window -t :=10 \; set key-table root
 # Rename: themed input::line dialog in a popup (Phase 2.4).
-bind -T tab n set key-table root \; display-popup -E -w 66 -h 14 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-rename window"
+bind -T tab n set key-table root \; display-popup -E -B -w 66 -h 14 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-rename window"
 bind -T tab N new-window \; set key-table root
 bind -T tab P break-pane \; set key-table root
 bind -T tab x kill-window \; set key-table root
@@ -130,7 +130,7 @@ bind -T pane Down select-pane -D
 bind -T pane Up select-pane -U
 bind -T pane Right select-pane -R
 bind -T pane Tab select-pane -t :.+
-bind -T pane n set key-table root \; display-popup -E -w 66 -h 14 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-rename pane"
+bind -T pane n set key-table root \; display-popup -E -B -w 66 -h 14 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-rename pane"
 bind -T pane N split-window \; set key-table root
 bind -T pane H split-window -hb \; set key-table root
 bind -T pane J split-window -v \; set key-table root

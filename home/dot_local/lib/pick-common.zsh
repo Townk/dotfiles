@@ -624,7 +624,7 @@ pick::resume_pos() {
   [[ -n "${pick_resume_id:-}" ]] || return 0
   local idx
   idx=$( { pick::feed "$cache" \
-            | fzf --filter="${pick_resume_query:-}" --tiebreak=index \
+            | FZF_DEFAULT_OPTS= fzf --filter="${pick_resume_query:-}" --tiebreak=index \
                   --delimiter=$'\x1f' --with-nth=1 \
             | awk -v idf="${pick_id_field:-1}" -v want="$pick_resume_id" -v display_fields="${pick_display_fields:-1}" '
                 {
@@ -653,7 +653,10 @@ pick::run() {
   # In a borderless modal with pty-frame present, pick_finder_prefix is
   # (pty-frame … --) so the run becomes `… | pty-frame … -- fzf "${fzf_args[@]}"`;
   # otherwise it's empty and this is a plain `fzf "${fzf_args[@]}"`.
-  out=$(pick::feed "$cache" | "${pick_finder_prefix[@]}" fzf "${fzf_args[@]}") || exit 130
+  # FZF_DEFAULT_OPTS is cleared: the engine owns the whole UI. The var never
+  # reached the zellij modal panes, but tmux popups inherit the session env —
+  # completion.sh's always-visible preview leaked into the pickers there.
+  out=$(pick::feed "$cache" | FZF_DEFAULT_OPTS= "${pick_finder_prefix[@]}" fzf "${fzf_args[@]}") || exit 130
 
   # Output layout: line 1 = query (--print-query), line 2 = --expect
   # key, remaining lines = selection.

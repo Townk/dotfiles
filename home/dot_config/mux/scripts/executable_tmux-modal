@@ -65,6 +65,15 @@ done
   exit 1
 }
 
+# display-popup does NOT format-expand its shell-command (only -T is a
+# format), so keymap binds can only hand us the LITERAL '#{pane_id}'.
+# Self-resolve instead: inside a popup TMUX_PANE is unset, which makes
+# `display -p` fall back to the client's active pane — exactly the origin
+# the popup opened over (verified live, Mode B 2026-07-24).
+if [[ -z "$origin" || "$origin" == *'#{'* ]]; then
+  origin="$("$TMUX_BIN" display-message -p '#{pane_id}' 2>/dev/null)" || origin=""
+fi
+
 # Shared dialog theme — same single source zellij-modal uses.
 source "$HOME/.local/lib/theme-common.zsh"
 

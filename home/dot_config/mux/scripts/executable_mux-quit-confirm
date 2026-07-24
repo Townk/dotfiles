@@ -27,7 +27,10 @@ else
   exit 1
 fi
 
-ans=$(input::confirm --title "Quit" \
+# --danger: red destructive palette AND forces default=Cancel, so Enter/ESC
+# are safe — same contract as zellij-quit-confirm (parity checked Mode B).
+ans=$(input::confirm --title "Quit Session" --danger \
+  --affirmative "Quit" --negative "Cancel" \
   "Kill this session?"$'\n\n'"Session: ${session:-?}") || exit 0
 [[ "$ans" == yes ]] || exit 0
 kill_cmd
