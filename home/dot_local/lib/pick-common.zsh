@@ -764,6 +764,13 @@ pick::background_sink() {
     ${(z)PICK_INJECT_ZELLIJ} action write-chars --pane-id "$PICK_INJECT_PANE" -- "$text"
     return 0
   fi
+  # tmux twin (mux migration Phase 2): tmux-modal exports PICK_INJECT_TMUX
+  # beside PICK_INJECT_PANE (a tmux %pane id); send-keys -l is the literal
+  # write-chars equivalent.
+  if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_TMUX:-}" ]]; then
+    ${(z)PICK_INJECT_TMUX} send-keys -t "$PICK_INJECT_PANE" -l -- "$text"
+    return 0
+  fi
   local clip; clip="$(pick::detect_clip)"
   [[ -n "$clip" ]] && printf '%s' "$text" | ${(z)clip}
   return 0
