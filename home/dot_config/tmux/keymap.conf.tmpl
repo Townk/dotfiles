@@ -103,7 +103,7 @@ bind -T tab 8 select-window -t :=8 \; set key-table root
 bind -T tab 9 select-window -t :=9 \; set key-table root
 bind -T tab 0 select-window -t :=10 \; set key-table root
 # Rename: themed input::line dialog in a popup (Phase 2.4).
-bind -T tab n set key-table root \; display-popup -E -B -w 66 -h 14 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-rename window"
+bind -T tab n set key-table root \; display-popup -E -B -w 66 -h 13 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-rename window"
 bind -T tab N new-window \; set key-table root
 bind -T tab P break-pane \; set key-table root
 bind -T tab x kill-window \; set key-table root
@@ -130,7 +130,7 @@ bind -T pane Down select-pane -D
 bind -T pane Up select-pane -U
 bind -T pane Right select-pane -R
 bind -T pane Tab select-pane -t :.+
-bind -T pane n set key-table root \; display-popup -E -B -w 66 -h 14 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-rename pane"
+bind -T pane n set key-table root \; display-popup -E -B -w 66 -h 13 -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' -- {{ .chezmoi.homeDir }}/.config/mux/scripts/mux-rename pane"
 bind -T pane N split-window \; set key-table root
 bind -T pane H split-window -hb \; set key-table root
 bind -T pane J split-window -v \; set key-table root
@@ -239,14 +239,14 @@ set -g status-right ''
 # pickers are called directly — the pick-*-zellij thins carry zellij-only
 # glue; resume variants (prefix U/G) reopen with --resume like the leader
 # chords.
-bind -n C-S-u display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"
-bind -n C-S-g display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"
+bind -n C-S-u display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" -e "PICK_GLYPH_PADDING=0,2,0,2" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"
+bind -n C-S-g display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" -e "PICK_GITMOJI_PADDING=0,2,0,2" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"
 # Uppercase twins: WezTerm folds shift into the letter for ctrl+shift chords
 # (arrives as C-U / C-G — same finding as the resize binds above).
-bind -n C-U display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"
-bind -n C-G display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"
-bind U display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker (resumed)' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph --resume"
-bind G display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker (resumed)' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji --resume"
+bind -n C-U display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" -e "PICK_GLYPH_PADDING=0,2,0,2" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"
+bind -n C-G display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" -e "PICK_GITMOJI_PADDING=0,2,0,2" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"
+bind U display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" -e "PICK_GLYPH_PADDING=0,2,0,2" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker (resumed)' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph --resume"
+bind G display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" -e "PICK_GITMOJI_PADDING=0,2,0,2" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker (resumed)' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji --resume"
 bind c display-popup -E -B -w 70% -h 75% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Clipboard history' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-clipboard"
 
 # ---------------------------------------------------------------------------

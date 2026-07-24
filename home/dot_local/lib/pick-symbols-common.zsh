@@ -81,21 +81,44 @@ pick_symbols::require_db() {
   fi
   [[ -f "$DB_FILE" ]] || die "symbols DB not found: $DB_FILE
 Build it with: chezmoi apply (runs the symbols-db hook)"
+
+  # Per-picker recency (2026-07-24): the original symbols.last_used column is
+  # shared by every symbols picker, so picking a gitmoji floated it to the top
+  # of the glyph picker too. picker_recency is keyed (picker, symbol); it is
+  # created lazily here and seeded idempotently from the legacy column so the
+  # accumulated ordering carries over, then the pickers diverge. Extra seeded
+  # rows for a picker are harmless — each feed filters its own symbol set.
+  # The DB rebuild hook (build-symbols-db.py) only drops the tables it owns,
+  # so this one survives rebuilds; symbols.last_used stays as the frozen seed.
+  sqlite3 "$DB_FILE" "
+    CREATE TABLE IF NOT EXISTS picker_recency (
+      picker    TEXT NOT NULL,
+      symbol    TEXT NOT NULL,
+      last_used INTEGER NOT NULL,
+      PRIMARY KEY (picker, symbol)
+    );
+    INSERT OR IGNORE INTO picker_recency (picker, symbol, last_used)
+      SELECT '${PICK_NAME:-pick}', symbol, last_used
+      FROM symbols WHERE last_used > 0;" 2>/dev/null || true
 }
 
 # pick_symbols::record_recency <symbol>...
-# --on-items-picked hook: stamp last_used=now on every picked symbol so the
-# next launch floats it to the top (the streamed query orders by last_used).
-# The symbol is the symbols-table primary key.
+# --on-items-picked hook: stamp the pick into THIS picker's recency rows so
+# the next launch floats it to the top (feeds order by picker_recency).
+# symbols.last_used is deliberately no longer written — a shared stamp is
+# exactly the cross-picker bleed this table exists to prevent.
 pick_symbols::record_recency() {
   (($#)) || return 0
-  local now sym vals=""
+  local now sym vals="" picker="${PICK_NAME:-pick}"
   now=$(date +%s)
   for sym in "$@"; do
     [[ -z "$sym" ]] && continue
     sym=${sym//\'/\'\'} # SQL-escape single quotes
-    vals+="'${sym}',"
+    vals+="('${picker}','${sym}',${now}),"
   done
   [[ -z "$vals" ]] && return 0
-  sqlite3 "$DB_FILE" "UPDATE symbols SET last_used=$now WHERE symbol IN (${vals%,});"
+  sqlite3 "$DB_FILE" "
+    INSERT INTO picker_recency (picker, symbol, last_used)
+    VALUES ${vals%,}
+    ON CONFLICT(picker, symbol) DO UPDATE SET last_used=excluded.last_used;"
 }

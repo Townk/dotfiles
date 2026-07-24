@@ -128,7 +128,10 @@ sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "
       || CHAR(31)
       || symbol || CHAR(30)
       || ':' || shortcode || ':'
-  FROM symbols, palette, geom
+  FROM symbols CROSS JOIN palette CROSS JOIN geom
+  LEFT JOIN (SELECT symbol AS pr_symbol, last_used AS pr_last_used
+             FROM picker_recency WHERE picker = 'pick-gitmoji') pr
+    ON pr_symbol = symbol
   WHERE tags LIKE '%gitmoji%'
-  ORDER BY last_used DESC, shortcode ASC;
+  ORDER BY IFNULL(pr_last_used, 0) DESC, shortcode ASC;
 " | pick::start "${pick_args[@]}"

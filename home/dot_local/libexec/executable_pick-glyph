@@ -158,6 +158,9 @@ sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "
       || description || CHAR(30)
       || shortcode || ' ' || extra_shortcodes || ' ' || source_keys || ' ' || keywords || CHAR(30)
       || CASE WHEN shortcode <> '' THEN ':' || shortcode || ':' ELSE name END
-  FROM symbols, palette
-  ORDER BY last_used DESC, name ASC;
+  FROM symbols CROSS JOIN palette
+  LEFT JOIN (SELECT symbol AS pr_symbol, last_used AS pr_last_used
+             FROM picker_recency WHERE picker = 'pick-glyph') pr
+    ON pr_symbol = symbol
+  ORDER BY IFNULL(pr_last_used, 0) DESC, name ASC;
 " | pick::start "${pick_args[@]}"
