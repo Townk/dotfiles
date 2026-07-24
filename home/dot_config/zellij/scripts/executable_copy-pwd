@@ -89,6 +89,15 @@ fi
 # auto-execute if pasted at a shell prompt).
 printf '%s' "$out" | "$PBCOPY"
 
+# Under tmux the chord runs on the tmux HOST — pbcopy above only reaches this
+# machine's pasteboard, and the Hammerspoon OSD below only its screen. Mirror
+# the copy to the attached client's terminal via OSC 52 (set-clipboard on),
+# so an ssh client gets it on ITS clipboard, and surface client-visible
+# feedback in the status line. Local use is unaffected (same clipboard twice).
+if [[ -n "${TMUX:-}" ]]; then
+  printf '%s' "$out" | tmux load-buffer -w - 2>/dev/null || true
+fi
+
 # Keep the OSD focused on the action; the clipboard already carries the path.
 if [[ "$mode" == "absolute" ]]; then
   display="Absolute path copied to clipboard"
@@ -102,6 +111,12 @@ fi
 # Backgrounded so any OSD hiccup never delays or fails the clipboard copy.
 if source "$HOME/.local/lib/common.zsh" 2>/dev/null; then
   notify --icon "$COPY_PWD_ICON" --sound "$COPY_PWD_SOUND" "$display" >/dev/null 2>&1 &
+fi
+
+# tmux clients (possibly remote, where the OSD is invisible) get the message
+# in the status line instead.
+if [[ -n "${TMUX:-}" ]]; then
+  tmux display-message "$display" 2>/dev/null
 fi
 
 exit 0
