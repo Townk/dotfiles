@@ -659,16 +659,17 @@ clip::progress_stream() {  # <completed-paths> <total-paths> <label>
 # the watchdog), then spawn the hide fire-and-forget -- if the hide itself
 # hangs, the 15s watchdog is the backstop.
 clip::progress_end() {
-  # Sanctioned deviation (empirically found, not in the design doc): a
-  # straggler killed in the SAME instant it was forked can lose the
-  # exec-vs-kill race outright -- SIGTERM lands before the child ever
-  # reaches its `-c` payload write, not just before its sleep. 30ms is a
-  # fixed, unconditional grace (never waits ON the hs process -- it fires
-  # whether or not hs is alive, so it can never itself hang) that gives
-  # the OS one scheduling quantum to actually run the just-spawned emitter
-  # before it gets torn down.
-  sleep 0.03
   if [[ -n "${CLIP_PROGRESS_EMIT_PID:-}" ]] && kill -0 "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null; then
+    # Sanctioned deviation (empirically found, not in the design doc): a
+    # straggler killed in the SAME instant it was forked can lose the
+    # exec-vs-kill race outright -- SIGTERM lands before the child ever
+    # reaches its `-c` payload write, not just before its sleep. 30ms is a
+    # fixed grace (never waits ON the hs process -- it fires whether or
+    # not hs is alive, so it can never itself hang) that gives the OS one
+    # scheduling quantum to actually run the just-spawned emitter before
+    # it gets torn down. Gated on a live predecessor: the common cache-hit
+    # / no-progress-ever-shown teardown path must not pay this tax.
+    sleep 0.03
     kill -TERM "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null || true
   fi
   CLIP_PROGRESS_EMIT_PID=""
