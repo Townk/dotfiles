@@ -1,0 +1,30 @@
+#!/usr/bin/env zsh
+# tmux-popup — display-popup wrapper with zellij-parity percentage geometry
+# (mux migration Phase 3 polish).
+#
+# Zellij computes floating-pane percentages against the TAB VIEWPORT (client
+# rows minus its two chrome bars) with floor rounding; display-popup's own
+# -w/-h percentages use the full client size, so the same nominal percent
+# opened ~1 row taller than the zellij float (Mode B find, 2026-07-24).
+# Convert to absolute cells the zellij way, then exec display-popup.
+#
+# Invoked from keymap binds via `run-shell -b`: display-popup inside a
+# FOREGROUND run-shell deadlocks (the popup blocks the issuing client while
+# run-shell blocks the server on the command); backgrounded, the CLI call
+# resolves "the current client", which is unambiguous in this config's
+# single-client sessions.
+#
+# Usage: tmux-popup WIDTHPCT HEIGHTPCT [display-popup flags...] CMDSTRING
+
+set -euo pipefail
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+
+wp="$1" hp="$2"
+shift 2
+
+read -r cw ch <<<"$("$TMUX_BIN" display -p '#{client_width} #{client_height}')"
+(( w = cw * wp / 100 ))
+(( h = (ch - 2) * hp / 100 ))
+
+exec "$TMUX_BIN" display-popup -w "$w" -h "$h" "$@"
