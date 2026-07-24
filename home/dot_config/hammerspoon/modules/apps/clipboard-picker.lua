@@ -714,6 +714,10 @@ local function headless_restore(id, onDone)
       -- until the user dismisses it -- same durable-until-acknowledged
       -- intent as the terminal picker's own restore-failure hold (W2).
       local reason = last_line(stdErr) or "restore failed"
+      -- §4.2a: the NC item below is durable but Focus can swallow it
+      -- silently -- live validation watched a failed pull vanish with no
+      -- visible message. The OSD toast is the can't-miss immediate signal.
+      osd.notify("glyph:nf-md-alert", "Copy failed — " .. reason, "Basso")
       hs.notify.new(nil, {
         title = "Clipboard restore failed",
         informativeText = reason,

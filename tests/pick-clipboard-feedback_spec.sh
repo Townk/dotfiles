@@ -83,10 +83,16 @@ EOF
     export PICK_CLIPBOARD_NOTIFY="$BINDIR/notify"
 
     HSLOG="$SHELLSPEC_TMPBASE/hslog"; : > "$HSLOG"
-    # Fake hs CLI: logs the -c payload, one line per call.
+    # Fake hs CLI: logs the -c payload, one line per call. printf '%s\n', not
+    # echo: /bin/sh's echo builtin is XSI-compliant on this box (verified:
+    # `sh -c 'x="a\\\\b"; echo "$x"'` prints a single backslash) and would
+    # silently collapse the label-escaping test's literal backslash pairs
+    # before they ever reach the log -- printf never reinterprets its
+    # argument, so the log holds the exact -c payload byte-for-byte, same as
+    # what real Hammerspoon's `hs -c` would receive.
     cat > "$BINDIR/hs" <<EOF
 #!/bin/sh
-[ "\$1" = "-c" ] && echo "\$2" >> "$HSLOG"
+[ "\$1" = "-c" ] && printf '%s\n' "\$2" >> "$HSLOG"
 EOF
     chmod +x "$BINDIR/hs"
     export PICK_CLIPBOARD_HS="$BINDIR/hs"
@@ -417,6 +423,49 @@ EOF
       The path "$HOME/.cache/pick-clipboard/files/$id/1" should not be exist
       The contents of file "$NOTIFYLOG" should include "--icon glyph:nf-md-close Transfer cancelled"
       The contents of file "$NOTIFYLOG" should not include "Copied from"
+    End
+  End
+
+  Describe 'clip::progress_label (§4.2a, pure)'
+    It 'single path -> Copying <basename> from <host>…'
+      When call run_fn clip::progress_label 1 work-laptop /remote/src/big-clip.bin
+      The output should equal 'Copying big-clip.bin from work-laptop…'
+    End
+
+    It 'multi path -> Copying N files from <host>…'
+      When call run_fn clip::progress_label 3 work-laptop /remote/src/first.txt
+      The output should equal 'Copying 3 files from work-laptop…'
+    End
+  End
+
+  Describe 'clip::progress_emit label escaping (§4.2a)'
+    # Expected value has ONE escaped backslash (\\) ahead of "name": the
+    # label's single literal backslash is doubled once by clip::progress_emit
+    # for Lua-string embedding (a real `hs -c` evaluates the -c argument as
+    # Lua source, where "\\" decodes back to one literal backslash) -- this
+    # is the literal -c argument text, not a further-escaped rendering of it.
+    # Discrimination-verified: reverting the backslash-escape line in
+    # clip::progress_emit (so the label's `\` passes through unescaped)
+    # makes this assertion fail (the log then holds a single unescaped `\`
+    # ahead of "name" instead of the doubled `\\`).
+    It 'escapes backslash and double quote; CR/LF become spaces'
+      When call zsh -f -c '
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        clip::progress_emit 40 "we\"ird\\name"
+      '
+      The status should be success
+      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 40, "we\"ird\\name")'
+    End
+
+    It 'CR and LF in a label become spaces (a filename could carry either)'
+      When call zsh -f -c '
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        clip::progress_emit 40 $'"'"'weird\rna\nme'"'"'
+      '
+      The status should be success
+      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 40, "weird na me")'
     End
   End
 End

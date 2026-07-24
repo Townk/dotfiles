@@ -609,11 +609,12 @@ end
 -- Compact top-right progress HUD (clipboard copy-feedback design §5)
 ---------------------------------------------------------------------------
 
-local PROG_WIDTH = 260
-local PROG_HEIGHT = 44
+local PROG_WIDTH = 300
+local PROG_HEIGHT = 56
 local PROG_MARGIN = 12
 local PROG_PAD_H = 14
-local PROG_ICON_SIZE = 22
+local PROG_ICON_SIZE = 18
+local PROG_LABEL_SIZE = 11.5
 local PROG_BAR_HEIGHT = 8
 local PROG_BAR_SEGMENTS = 16
 local PROG_PCT_WIDTH = 38
@@ -643,9 +644,18 @@ end
 --- the idle watchdog (no update for PROG_IDLE_TIMEOUT seconds -> a dead
 --- driver can never leave a zombie capsule on screen).
 ---
+--- Two-row layout (§5 v2): an 18px icon at the left spans both rows;
+--- row 1 is the engine-composed label (middle-truncated so a long filename
+--- keeps its head and extension); row 2 is the segmented mini-bar with the
+--- right-aligned percent. `label` is genuinely rendered at this size (v1's
+--- 260x44/22px capsule had no room for it and left it unrendered -- v2's
+--- wider, taller capsule exists specifically to fit it).
+---
 --- @param icon string|nil     glyph:/swatch:/SVG name (resolveNamedIcon forms)
 --- @param percent number      0-100
---- @param label string|nil    short context label, e.g. the origin host
+--- @param label string|nil    the human line to render, e.g. "Copying
+---                            <file> from <host>…" (clip::progress_label
+---                            composes it; this module never guesses)
 --- @param stalled boolean|nil  true = transfer alive but no bytes flowing; hourglass icon + dimmed bar, geometry/watchdog unchanged
 function M.progress(icon, percent, label, stalled)
 	local pct = math.max(0, math.min(100, percent or 0))
@@ -734,11 +744,25 @@ function M.progress(icon, percent, label, stalled)
 		}
 	end
 
-	-- Segmented mini-bar between icon and percent label -- the main OSD's
-	-- bar language, miniaturized.
-	local barX = iconFrame.x + iconFrame.w + PROG_PAD_H / 2
+	local contentX = PROG_PAD_H + PROG_ICON_SIZE + 10
+
+	-- Row 1: the engine's label, middle-truncated so long filenames keep
+	-- their head and extension (§5 v2).
+	elements[#elements + 1] = {
+		type = "text",
+		frame = { x = contentX, y = 9, w = PROG_WIDTH - contentX - PROG_PAD_H - cancelW, h = 16 },
+		text = hs.styledtext.new(label or "", {
+			font = { name = ".AppleSystemUIFont", size = PROG_LABEL_SIZE },
+			color = fillOn,
+			paragraphStyle = { alignment = "left", lineBreak = "truncateMiddle" },
+		}),
+	}
+
+	-- Row 2: segmented mini-bar between icon and percent label -- the main
+	-- OSD's bar language, miniaturized -- plus the right-aligned percent.
+	local barX = contentX
 	local barW = PROG_WIDTH - barX - PROG_PCT_WIDTH - PROG_PAD_H - cancelW
-	local barY = (PROG_HEIGHT - PROG_BAR_HEIGHT) / 2
+	local barY = 33
 	local segW = (barW - (PROG_BAR_SEGMENTS - 1) * BAR_GAP) / PROG_BAR_SEGMENTS
 	for i = 1, PROG_BAR_SEGMENTS do
 		local threshold = (i - 1) / PROG_BAR_SEGMENTS * 100
@@ -756,12 +780,9 @@ function M.progress(icon, percent, label, stalled)
 		}
 	end
 
-	-- Right-aligned percent label. `label` (origin host) is intentionally
-	-- unrendered at this size -- 260px is glyph + bar + percent territory;
-	-- the completion toast names the host.
 	elements[#elements + 1] = {
 		type = "text",
-		frame = { x = PROG_WIDTH - PROG_PCT_WIDTH - PROG_PAD_H + 4 - cancelW, y = (PROG_HEIGHT - 16) / 2, w = PROG_PCT_WIDTH, h = 16 },
+		frame = { x = PROG_WIDTH - PROG_PCT_WIDTH - PROG_PAD_H - cancelW + 4, y = barY - 4, w = PROG_PCT_WIDTH, h = 16 },
 		text = hs.styledtext.new(string.format("%d%%", pct), {
 			font = { name = ".AppleSystemUIFont", size = 12 },
 			color = fillOn,

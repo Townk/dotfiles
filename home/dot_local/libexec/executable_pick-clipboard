@@ -498,6 +498,19 @@ clip::progress_pct() {
   print -rn -- $(( (completed * 100 + cur) / total ))
 }
 
+# Pure label composition (§4.2a): the human line the capsule renders.
+# Single path names the file; multi names the count. The GUI/TUI never
+# compose this themselves -- one brain.
+clip::progress_label() {
+  local -i total=$1
+  local host=$2 first=$3
+  if (( total > 1 )); then
+    print -rn -- "Copying ${total} files from ${host}…"
+  else
+    print -rn -- "Copying ${first:t} from ${host}…"
+  fi
+}
+
 # Pure throttle decision: prints "1" to emit, nothing to skip. All inputs
 # as args (EPOCHREALTIME-style float seconds; integer percents) so the spec
 # suite can table-test every rule without sleeping:
@@ -545,7 +558,14 @@ clip::progress_emit() {  # <pct> <label> [stalled]
   [[ -n "${CLIP_PROGRESS_HS:-}" ]] || return 0
   local stall_arg=""
   [[ -n "${3:-}" ]] && stall_arg=", true"
-  "$CLIP_PROGRESS_HS" -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"$2\"${stall_arg})" >/dev/null 2>&1 || true
+  # Lua-string escaping (§4.2a): backslash first, then double quote; CR/LF
+  # in a filename would break the -c one-liner -> spaces.
+  local label=$2
+  label="${label//$'\r'/ }"
+  label="${label//$'\n'/ }"
+  label="${label//\\/\\\\}"
+  label="${label//\"/\\\"}"
+  "$CLIP_PROGRESS_HS" -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"${label}\"${stall_arg})" >/dev/null 2>&1 || true
   CLIP_PROGRESS_SHOWN=1
   return 0
 }
@@ -747,6 +767,8 @@ clip::copy_files_by_id() {
   clip::has_live_tty && have_tty=1
   (( have_tty )) || clip::progress_begin
 
+  local pull_label; pull_label=$(clip::progress_label $n_paths "$host" "${rpaths[1]}")
+
   # Cancel trap (§4.4): localtraps scopes it to this function -- every
   # return path restores the caller's disposition automatically, so the
   # failure branches below need no explicit `trap -`. zsh defers the trap
@@ -800,13 +822,13 @@ clip::copy_files_by_id() {
         # (same move as pbpaste tier 2) while real errors still land in the
         # capture file for the one-line failure reason.
         print -ru2 -- "Pulling ${rp:t} from ${host} (${idx}/${n_paths})… — Ctrl+C cancels"
-        "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
+        "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
       else
         # Headless: meter stdout feeds the throttled HUD sink; the sink is
         # the LAST pipeline segment so it runs in this shell and the
         # CLIP_PROGRESS_* state survives into the next manifest path.
         # idx-1 == paths already done (cached ones count: they're complete).
-        "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes' "${host}:${rp}" "$sub/" 2>"$rsync_err" | clip::progress_stream $(( idx - 1 )) $n_paths "$host"
+        "$rsync_bin" -a --info=progress2 -e 'ssh -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 2>"$rsync_err" | clip::progress_stream $(( idx - 1 )) $n_paths "$pull_label"
         rrc=${pipestatus[1]}
       fi
       if (( rrc != 0 )); then
