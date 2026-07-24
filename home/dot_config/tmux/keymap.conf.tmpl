@@ -98,6 +98,11 @@ bind -n C-S-Left  if -F '#{@pane-is-vim}' 'send-keys C-S-Left'  'resize-pane -L 
 bind -n C-S-Down  if -F '#{@pane-is-vim}' 'send-keys C-S-Down'  'resize-pane -D 2'
 bind -n C-S-Up    if -F '#{@pane-is-vim}' 'send-keys C-S-Up'    'resize-pane -U 2'
 bind -n C-S-Right if -F '#{@pane-is-vim}' 'send-keys C-S-Right' 'resize-pane -R 2'
+# M-/ — search straight from normal (zellij Alt+/): enter scroll-state
+# copy-mode with the incremental search prompt; the stack below Search is
+# empty, so popping Search (ESC/Backspace) lands back in normal.
+bind -n M-/ copy-mode \; set -p @visual 0 \; set -p @search_parent normal \; command-prompt -i -p '/' 'send -X search-forward-incremental "%%%" ; refresh-client -S'
+
 # NB: the tm-scrub context routes (J/K/H/L, Shift+arrows, Shift+A/S over
 # yazi/hunk/diffnav panes) are deliberately NOT bound yet — bare capitals are
 # too hot to intercept before their consumer exists under tmux (Phase 6.4
@@ -254,11 +259,27 @@ bind -T copy-mode-vi Up if -F '#{@visual}' {send -X cursor-up} {send -X scroll-u
 # v: Scroll → push Copy/visual at the current position; in Copy it begins
 # the selection as usual.
 bind -T copy-mode-vi v if -F '#{@visual}' {send -X begin-selection} {set -p @visual 1 ; set -p @copy_parent scroll}
-bind -T copy-mode-vi Escape if -F '#{selection_present}' {send -X clear-selection} {send -X cancel}
+bind -T copy-mode-vi Escape if -F '#{selection_present}' {
+  send -X clear-selection
+} {
+  if -F '#{search_present}' {
+    if -F '#{==:#{@search_parent},normal}' {
+      send -X cancel
+    } {
+      run-shell 'tmux send-keys -X cancel; tmux copy-mode; [ #{scroll_position} -gt 0 ] && tmux send-keys -X -N #{scroll_position} scroll-up; true'
+    }
+  } {
+    send -X cancel
+  }
+}
 bind -T copy-mode-vi y send -X copy-pipe-and-cancel
 bind -T copy-mode-vi Enter send -X copy-pipe-and-cancel
 bind -T copy-mode-vi BSpace if -F '#{search_present}' {
-  run-shell 'tmux send-keys -X cancel; tmux copy-mode; [ #{scroll_position} -gt 0 ] && tmux send-keys -X -N #{scroll_position} scroll-up; true'
+  if -F '#{==:#{@search_parent},normal}' {
+    send -X cancel
+  } {
+    run-shell 'tmux send-keys -X cancel; tmux copy-mode; [ #{scroll_position} -gt 0 ] && tmux send-keys -X -N #{scroll_position} scroll-up; true'
+  }
 } {
   if -F '#{@visual}' {
     if -F '#{==:#{@copy_parent},scroll}' {
@@ -281,7 +302,7 @@ bind -T copy-mode-vi N if -F '#{search_present}' { send -X search-reverse } { se
 bind -T copy-mode-vi p send -X previous-prompt
 # / — forward incremental search (D12 stage 1; the floating search dialog
 # with option toggles is the D12 stage 2 hud follow-up).
-bind -T copy-mode-vi / command-prompt -i -p '/' 'send -X search-forward-incremental "%%%"'
+bind -T copy-mode-vi / set -p @search_parent mode \; command-prompt -i -p '/' 'send -X search-forward-incremental "%%%" ; refresh-client -S'
 
 # (Status v0 — the Phase 1 bare [key_table] indicator — was RETIRED by
 # Phase 4: the themed mode pill lives in status-right via the theme's
