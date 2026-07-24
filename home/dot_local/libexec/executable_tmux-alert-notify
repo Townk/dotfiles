@@ -1,0 +1,32 @@
+#!/usr/bin/env zsh
+# tmux-alert-notify <activity|silence|bell> <window-name> — host OSD for
+# tmux window alerts (mux migration Phase 4, D6). Mirrors the zellij
+# zj_hud_alarm notify UX through the shared common.zsh `notify` helper
+# (Hammerspoon OSD).
+#
+# Skipped over ssh: the OSD renders on the tmux HOST's screen, invisible
+# to a remote client — the status-bar flag icon still shows there (ledger
+# row). The ssh truth comes from the attached client's session env.
+
+set -euo pipefail
+
+kind="${1:-activity}"
+win="${2:-}"
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+
+sess="$("$TMUX_BIN" list-clients -F '#{client_session}' 2>/dev/null | head -1)" || sess=""
+if [[ -n "$sess" ]]; then
+  v="$("$TMUX_BIN" show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""
+  [[ "$v" == SSH_CONNECTION=* ]] && exit 0
+fi
+
+case "$kind" in
+  activity) icon="glyph:md-bell_ring"  msg="Activity in ${win:-a window}" ;;
+  silence)  icon="glyph:md-bell_sleep" msg="Idle: ${win:-a window} went quiet" ;;
+  bell)     icon="glyph:md-bell_alert" msg="Bell in ${win:-a window}" ;;
+  *)        icon="glyph:md-bell"       msg="Alert in ${win:-a window}" ;;
+esac
+
+source "$HOME/.local/lib/common.zsh" 2>/dev/null || exit 0
+notify --icon "$icon" "$msg" >/dev/null 2>&1 || true
+exit 0
