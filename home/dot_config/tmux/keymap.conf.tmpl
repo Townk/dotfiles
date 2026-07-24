@@ -29,7 +29,7 @@ bind L set key-table locked               # locked mode (exit: M-Escape only)
 # Scroll, or M-w V directly): normal vi cursor motions; v begins selection.
 # Entries always stamp the state, so a stale flag self-heals.
 bind l copy-mode \; set -p @visual 0      # scroll mode = copy-mode, viewport state
-bind V copy-mode \; set -p @visual 1      # straight into copy/visual mode
+bind V copy-mode \; set -p @visual 1 \; set -p @copy_parent command   # straight into copy/visual mode
 bind o set key-table session
 bind p set key-table pane
 bind t set key-table tab
@@ -238,12 +238,14 @@ bind -T locked M-Escape set key-table root
 # copy-mode additions (zellij scroll/search parity; D11/D12 stage 1)
 # ---------------------------------------------------------------------------
 # V — EditScrollback: dump history into nvim in a new window (zellij `V`).
-# Scroll-mode stack (zellij parity): ESC clears the WHOLE stack (straight
-# back to normal); Backspace pops one level — with a search active it pops
-# Search back to Scroll (tmux 3.7 has no search-cancel and even an empty
-# search-forward keeps the old term, so we exit + re-enter copy-mode and
-# restore the viewport from #{scroll_position}; ledger row), otherwise it
-# pops Scroll back to the armed leader (Command).
+# Scroll-mode stack (zellij parity). ESC: with a selection it only clears
+# the selection; otherwise it clears the WHOLE stack (straight to normal).
+# Backspace ALWAYS pops exactly one level: Search → back to Scroll/Copy
+# (tmux 3.7 has no search-cancel and even an empty search-forward keeps the
+# old term, so we exit + re-enter copy-mode and restore the viewport from
+# #{scroll_position}; ledger row); Copy → its entry parent (@copy_parent:
+# Scroll when pushed by v, the armed leader when entered via M-w V);
+# Scroll → the armed leader. y mirrors Enter exactly (copy-pipe + leave).
 # Scroll-state motion: viewport scroll, not cursor (see @visual above).
 bind -T copy-mode-vi j if -F '#{@visual}' {send -X cursor-down} {send -X scroll-down}
 bind -T copy-mode-vi Down if -F '#{@visual}' {send -X cursor-down} {send -X scroll-down}
@@ -251,13 +253,19 @@ bind -T copy-mode-vi k if -F '#{@visual}' {send -X cursor-up} {send -X scroll-up
 bind -T copy-mode-vi Up if -F '#{@visual}' {send -X cursor-up} {send -X scroll-up}
 # v: Scroll → push Copy/visual at the current position; in Copy it begins
 # the selection as usual.
-bind -T copy-mode-vi v if -F '#{@visual}' {send -X begin-selection} {set -p @visual 1}
-bind -T copy-mode-vi Escape send -X cancel
+bind -T copy-mode-vi v if -F '#{@visual}' {send -X begin-selection} {set -p @visual 1 ; set -p @copy_parent scroll}
+bind -T copy-mode-vi Escape if -F '#{selection_present}' {send -X clear-selection} {send -X cancel}
+bind -T copy-mode-vi y send -X copy-pipe-and-cancel
+bind -T copy-mode-vi Enter send -X copy-pipe-and-cancel
 bind -T copy-mode-vi BSpace if -F '#{search_present}' {
   run-shell 'tmux send-keys -X cancel; tmux copy-mode; [ #{scroll_position} -gt 0 ] && tmux send-keys -X -N #{scroll_position} scroll-up; true'
 } {
   if -F '#{@visual}' {
-    set -p @visual 0
+    if -F '#{==:#{@copy_parent},scroll}' {
+      set -p @visual 0
+    } {
+      send -X cancel ; switch-client -T prefix
+    }
   } {
     send -X cancel ; switch-client -T prefix
   }
