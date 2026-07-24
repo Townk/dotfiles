@@ -51,6 +51,7 @@ set -g history-limit 1000000       # scroll_buffer_size 1000000
 set -s escape-time 0               # ESC is ESC, never a chord timeout (ESC cancels; Ctrl+C aborts)
 set -g focus-events on             # nvim autoread & friends
 set -g mouse on
+setw -g mode-keys vi               # copy-mode motion parity with the zellij scroll keys
 
 # Refresh these into a session's environment on attach: tmux overrides the
 # PANE env (TERM_PROGRAM=tmux), so the session env is the only truthful
@@ -79,3 +80,8 @@ set-environment -gr ZELLIJ_SESSION_NAME
 # live-reloaded by theme-apply (D15). -q: silent on a fresh machine until
 # the first theme-apply run (shell init runs it before any mux starts).
 source-file -q "{{ .chezmoi.homeDir }}/.config/tmux/themes/chezmoi-system.conf"
+
+# ---------------------------------------------------------------------------
+# Keymap — key tables mirroring the Zellij modes (D2/D3). Hand-authored in
+# Phase 1; the Phase 5 YAML generator replaces the FILE, not this line.
+source-file "{{ .chezmoi.homeDir }}/.config/tmux/keymap.conf"
