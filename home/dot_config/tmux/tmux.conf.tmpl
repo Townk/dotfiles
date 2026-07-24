@@ -88,3 +88,8 @@ source-file -q "{{ .chezmoi.homeDir }}/.config/tmux/themes/chezmoi-system.conf"
 # Keymap — key tables mirroring the Zellij modes (D2/D3). Hand-authored in
 # Phase 1; the Phase 5 YAML generator replaces the FILE, not this line.
 source-file "{{ .chezmoi.homeDir }}/.config/tmux/keymap.conf"
+
+# ---------------------------------------------------------------------------
+# Status line assembly (Phase 4, D6) — MUST parse after the theme: it
+# composes status formats from the theme's %hidden color fragments.
+source-file "{{ .chezmoi.homeDir }}/.config/tmux/status.conf"

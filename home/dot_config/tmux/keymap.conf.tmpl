@@ -19,6 +19,9 @@
 bind v split-window -h                    # zellij leader v (split right)
 bind s split-window -v                    # zellij leader s (split down)
 bind z resize-pane -Z                     # toggle zoom
+# zellij leader f (TogglePaneFrames): pane-title frames on/off (Phase 4 —
+# format/colors in the theme; off by default in status.conf).
+bind f if -F '#{==:#{pane-border-status},off}' 'setw -g pane-border-status top' 'setw -g pane-border-status off'
 bind L set key-table locked               # locked mode (exit: M-Escape only)
 bind l copy-mode                          # scroll mode = copy-mode
 bind o set key-table session
@@ -226,11 +229,9 @@ bind -T copy-mode-vi p send -X previous-prompt
 # with option toggles is the D12 stage 2 hud follow-up).
 bind -T copy-mode-vi / command-prompt -i -p '/' 'send -X search-forward-incremental "%%%"'
 
-# ---------------------------------------------------------------------------
-# Status v0 — bare key-table mode indicator (the themed bar is Phase 4, D6)
-# ---------------------------------------------------------------------------
-set -g status-left '#{?#{==:#{client_key_table},root},,[#{client_key_table}] }'
-set -g status-right ''
+# (Status v0 — the Phase 1 bare [key_table] indicator — was RETIRED by
+# Phase 4: the themed mode pill lives in status-right via the theme's
+# %hidden fragments + status.conf.)
 
 # ---------------------------------------------------------------------------
 # Pickers (Phase 2) — glyph / gitmoji / clipboard popups via tmux-modal.

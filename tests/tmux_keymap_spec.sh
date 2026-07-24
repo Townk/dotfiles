@@ -10,7 +10,12 @@ Describe 'tmux keymap tables'
   setup_all() {
     KM_TMP=$(mktemp -d)
     chezmoi execute-template <home/dot_config/tmux/keymap.conf.tmpl >"$KM_TMP/keymap.conf" 2>/dev/null
-    printf 'source-file "%s"\n' "$KM_TMP/keymap.conf" >"$KM_TMP/tmux.conf"
+    # Phase 4: the theme's %hidden color fragments must parse BEFORE
+    # status.conf composes formats from them — same order as tmux.conf.
+    chezmoi execute-template <custom-builds/theme/templates/tmux-theme.conf.tmpl >"$KM_TMP/theme.conf" 2>/dev/null
+    chezmoi execute-template <home/dot_config/tmux/status.conf.tmpl >"$KM_TMP/status.conf" 2>/dev/null
+    printf 'source-file "%s"\nsource-file "%s"\nsource-file "%s"\n' \
+      "$KM_TMP/theme.conf" "$KM_TMP/keymap.conf" "$KM_TMP/status.conf" >"$KM_TMP/tmux.conf"
     # A detached session keeps the scratch server alive — a session-less tmux
     # server exits immediately, and any later tmux -L call would silently
     # start a fresh, CONFIG-LESS server (default binds only).
@@ -96,9 +101,27 @@ Describe 'tmux keymap tables'
     The output should include "capture-pane"
   End
 
-  It 'sets the status-v0 mode indicator'
-    When call tmux -L kmspec show -g status-left
+  It 'status-right carries the mode pill chain and the widgets call'
+    When call tmux -L kmspec show -g status-right
     The output should include "client_key_table"
+    The output should include "tmux-status-widgets"
+  End
+
+  It 'window pills carry the alarm flag icons'
+    When call tmux -L kmspec show -gw window-status-format
+    The output should include "window_activity_flag"
+    The output should include "window_silence_flag"
+  End
+
+  It 'prefix f toggles pane frames (zellij TogglePaneFrames twin)'
+    When call keys prefix
+    The output should include "pane-border-status"
+  End
+
+  It 'alert hooks route to the notifier'
+    When call tmux -L kmspec show-hooks -g
+    The output should include "tmux-alert-notify activity"
+    The output should include "tmux-alert-notify silence"
   End
 End
 
