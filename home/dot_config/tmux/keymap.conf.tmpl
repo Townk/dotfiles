@@ -241,6 +241,10 @@ set -g status-right ''
 # chords.
 bind -n C-S-u display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"
 bind -n C-S-g display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"
+# Uppercase twins: WezTerm folds shift into the letter for ctrl+shift chords
+# (arrives as C-U / C-G — same finding as the resize binds above).
+bind -n C-U display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"
+bind -n C-G display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"
 bind U display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Glyph Picker (resumed)' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph --resume"
 bind G display-popup -E -B -w 70% -h 60% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Gitmoji Picker (resumed)' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji --resume"
 bind c display-popup -E -B -w 70% -h 75% -e "COLORTERM=truecolor" "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --origin '#{pane_id}' --title 'Clipboard history' --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-clipboard"

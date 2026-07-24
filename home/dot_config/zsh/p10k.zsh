@@ -1731,6 +1731,14 @@
   #               typed after changing current working directory.
   typeset -g POWERLEVEL9K_TRANSIENT_PROMPT=always
 
+  # Emit FinalTerm/OSC 133 prompt marks from p10k itself. A plain precmd
+  # emitter (functions.d/prompt-marks.sh) is not enough here: transient
+  # prompt erases and rewrites accepted prompt lines, destroying any mark a
+  # hook placed there — p10k's own integration re-emits marks through its
+  # redraws. Consumers: tmux copy-mode n/N/p prompt jumps (mux D11);
+  # WezTerm semantic zones.
+  typeset -g POWERLEVEL9K_TERM_SHELL_INTEGRATION=true
+
   # Instant prompt mode.
   #
   #   - off:     Disable instant prompt. Choose this if you've tried instant prompt and found
