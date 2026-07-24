@@ -11,11 +11,33 @@
 # literals; every hex here MUST come from a theme.yaml slot so theme-apply can
 # map override tokens back to it.
 #
-# Phase 0 scope: dialogs/popups, panes, copy-mode, and a minimal status wash.
-# The real status bar (mode palette, widgets) is Phase 4 (D6).
+# Scope: dialogs/popups, panes, copy-mode (Phase 0) + the status-bar palette
+# (Phase 4, D6). Layout/assembly lives in status.conf — this file carries
+# every COLOR the bar uses, as %hidden fragments where color and content are
+# inseparable (mode pill, alarm flag icons, session pill).
 
-# Status line — minimal bg_dim wash so a bare tmux doesn't flash stock green.
+# Status line — bar canvas (bg_dim = the zj-hud bar wash).
 set -g status-style "bg=#{{ index $p $r.ui.bg_dim }},fg=#{{ index $p $r.ui.fg_dim }}"
+
+# Window "tab" pills: current = accent bold, rest dim; alarm-flagged windows
+# tint attention (yellow — matches the zj-hud alarm icon color).
+set -g window-status-style "fg=#{{ index $p $r.ui.fg_dim }}"
+set -g window-status-current-style "fg=#{{ index $p $r.ui.accent }},bold"
+set -g window-status-activity-style "fg=#{{ index $p $r.action.attention }}"
+set -g window-status-bell-style "fg=#{{ index $p $r.action.attention }}"
+
+# Mode pill — #{client_key_table} → icon/label/color from theme.yaml
+# roles.mode, the SAME block the zj-hud bar's modes {} renders from. Empty in
+# the root table (rest state — zj-hud hides the pill in Normal too);
+# copy-mode wins over the table (the table stays root inside copy-mode).
+# Parse-time %hidden: status.conf composes status-right from these.
+%hidden mode_pill="#{?#{pane_in_mode},#[fg=#{{ index $p $r.mode.scroll }}]󰩤 Scroll ,#{?#{==:#{client_key_table},tab},#[fg=#{{ index $p $r.mode.tab }}]󰓩 Tab ,#{?#{==:#{client_key_table},pane},#[fg=#{{ index $p $r.mode.pane }}] Pane ,#{?#{==:#{client_key_table},session},#[fg=#{{ index $p $r.mode.session }}]󰙀 Session ,#{?#{==:#{client_key_table},resize},#[fg=#{{ index $p $r.mode.resize }}]󰩨 Resize ,#{?#{==:#{client_key_table},move},#[fg=#{{ index $p $r.mode.move }}]󰆾 Move ,#{?#{==:#{client_key_table},locked},#[fg=#{{ index $p $r.mode.locked }}]󰌾 Locked ,#{?#{==:#{client_key_table},nested},#[fg=#{{ index $p $r.mode.locked }}]󰌾 Nested ,}}}}}}}}"
+
+# Alarm flag icons (replace stock #/~): 󰂞 activity, 󰂠 silence, 󰂚 bell.
+%hidden alarm_flags="#{?window_activity_flag,#[fg=#{{ index $p $r.action.attention }}]󰂞 ,}#{?window_silence_flag,#[fg=#{{ index $p $r.action.attention }}]󰂠 ,}#{?window_bell_flag,#[fg=#{{ index $p $r.action.attention }}]󰂚 ,}"
+
+# Session pill (zj-hud right-edge `󰙀 <session>`).
+%hidden session_pill="#[fg=#{{ index $p $r.mode.session }}]󰙀 #S#[default]"
 
 # Command prompt / messages (mirrors the dialog canvas).
 set -g message-style "bg=#{{ index $p $r.ui.dialog_bg }},fg=#{{ index $p $r.ui.fg }}"
@@ -32,6 +54,11 @@ set -g popup-border-lines rounded
 # (parity with zellij frame_selected / pane_frames false aesthetics).
 set -g pane-border-style "fg=#{{ index $p $r.ui.border_inactive }}"
 set -g pane-active-border-style "fg=#{{ index $p $r.ui.border_focus }}"
+
+# Pane-frame titles (prefix f toggle — zellij TogglePaneFrames twin; the
+# toggle + default-off live in status.conf/keymap). Active title follows
+# border_focus so the focused frame reads like zellij's selected frame.
+setw -g pane-border-format " #{?pane_active,#[fg=#{{ index $p $r.ui.border_focus }}],#[fg=#{{ index $p $r.ui.border_inactive }}]}#{pane_index} #{pane_title}#[default] "
 
 # Copy-mode: selection + search-match washes (search dialog proper is D12).
 set -g mode-style "bg=#{{ index $p $r.ui.selection }},fg=#{{ index $p $r.ui.fg }}"
