@@ -1,0 +1,80 @@
+#!/usr/bin/env zsh
+# mux-search — the search INPUT as a popup dialog (mux migration Phase 4;
+# a D12-Stage-1 slice). tmux's command-prompt REPLACES the status line,
+# which would hide the Search mode pill while typing — zellij shows its
+# search dialog and the bar simultaneously, so the input lives in a popup
+# and the status line stays visible: @searching drives the pill from the
+# keystroke that pushes Search; search_present takes over after commit.
+# The case/word/wrap toggles land with the D12 search chrome — this
+# dialog is their future home.
+#
+# Runs INSIDE display-popup: the origin (copy-mode) pane self-resolves the
+# tmux-modal way (popup TMUX_PANE is unset → client's active pane).
+# @search_parent (stamped by the keybind) decides where a pop lands:
+# 'normal' cancels copy-mode outright, otherwise the search is cleared by
+# exiting + re-entering copy-mode with the viewport restored (tmux 3.7 has
+# no search-cancel; ledger row).
+
+emulate -L zsh
+setopt no_unset
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+
+origin="$("$TMUX_BIN" display -p '#{pane_id}' 2>/dev/null)" || origin=""
+[[ -n "$origin" ]] || exit 0
+parent="$("$TMUX_BIN" display -p -t "$origin" '#{@search_parent}' 2>/dev/null)" || parent=""
+
+"$TMUX_BIN" set -p -t "$origin" @searching 1 2>/dev/null
+"$TMUX_BIN" refresh-client -S 2>/dev/null
+cleanup() {
+  "$TMUX_BIN" set -p -t "$origin" -u @searching 2>/dev/null
+  "$TMUX_BIN" refresh-client -S 2>/dev/null
+}
+trap cleanup EXIT
+
+# Pop Search off the stack: clear the incremental search, land on the parent.
+pop_out() {
+  local pos
+  if [[ "$parent" == normal ]]; then
+    "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
+    return 0
+  fi
+  pos="$("$TMUX_BIN" display -p -t "$origin" '#{scroll_position}' 2>/dev/null)" || pos=0
+  "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
+  "$TMUX_BIN" copy-mode -t "$origin" 2>/dev/null
+  [[ "$pos" == <-> ]] && (( pos > 0 )) && \
+    "$TMUX_BIN" send-keys -t "$origin" -X -N "$pos" scroll-up 2>/dev/null
+  return 0
+}
+
+buf=""
+draw() { print -rn -- $'\r\e[K'"  󰍉 $buf█" }
+print -rn -- $'\e[?25l'
+draw
+
+while read -rsk1 key; do
+  case "$key" in
+    $'\r'|$'\n')
+      # Commit: the search stays live (search_present keeps the pill);
+      # n/N walk the matches from Scroll/Copy.
+      break ;;
+    $'\e')
+      # ESC pops Search (swallow any trailing CSI bytes from arrows etc).
+      while read -rsk1 -t 0.01 _; do :; done
+      pop_out; break ;;
+    $'\x7f'|$'\b')
+      # Backspace edits; on an empty buffer it pops Search instead.
+      if [[ -z "$buf" ]]; then pop_out; break; fi
+      buf="${buf[1,-2]}"
+      "$TMUX_BIN" send-keys -t "$origin" -X search-forward-incremental "$buf" 2>/dev/null
+      draw ;;
+    $'\x15')
+      buf=""
+      draw ;;
+    *)
+      buf+="$key"
+      "$TMUX_BIN" send-keys -t "$origin" -X search-forward-incremental "$buf" 2>/dev/null
+      draw ;;
+  esac
+done
+exit 0

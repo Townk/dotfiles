@@ -84,6 +84,11 @@ EOS
     The output should not include "Scroll"
   End
 
+  It 'the open search input (typing) already shows Search'
+    When call zsh "$W" root 1 main 0 0 '' 0 1
+    The output should include "Search"
+  End
+
   It 'copy/visual state shows the Copy pill over Scroll'
     When call zsh "$W" root 1 main 0 0 '' 1
     The output should include "Copy"

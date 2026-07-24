@@ -43,6 +43,7 @@ prefix_on="${4:-0}"
 search_on="${5:-0}"
 renaming="${6:-}"
 visual_on="${7:-0}"
+searching_on="${8:-0}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
@@ -103,7 +104,7 @@ if [[ -n "$renaming" ]]; then
   # top of the stack: an open rename dialog (@renaming, set by mux-rename)
   mode_color="$m_rename" mode_body="$I_RENAME Rename"
 elif [[ "$in_copy" == 1 ]]; then
-  if [[ "$search_on" == 1 ]]; then
+  if [[ "$search_on" == 1 || "$searching_on" == 1 ]]; then
     mode_color="$m_search" mode_body="$I_SEARCH Search"
   elif [[ "$visual_on" == 1 ]]; then
     mode_color="$m_visual" mode_body="$I_COPY Copy"
