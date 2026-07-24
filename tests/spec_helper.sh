@@ -6,6 +6,9 @@
 # ZELLIJ=1 themselves in their BeforeEach/setup(), which runs per-example and
 # takes precedence over this module-level unset.
 unset ZELLIJ ZELLIJ_PANE_ID ZELLIJ_SESSION_NAME
+# Same hermetic guard for tmux (the mux.zsh shim dispatches on $TMUX): specs
+# that need the tmux backend export TMUX themselves in their setup().
+unset TMUX TMUX_PANE
 
 # tm scrub-session debounce: real sessions nap before each synthesis so a
 # held key only builds the rung the user settles on — specs step rapidly
