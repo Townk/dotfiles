@@ -40,18 +40,21 @@ key_table="${1:-root}"
 in_copy="${2:-0}"
 sess="${3:-}"
 prefix_on="${4:-0}"
+search_on="${5:-0}"
+renaming="${6:-}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
 c=("${(@f)$(jq -r '
   .roles.ui.bg, .roles.ui.fg, .extended.tab.bg,
   .roles.mode.locked, .roles.mode.resize, .roles.mode.pane, .roles.mode.tab,
-  .roles.mode.move, .roles.mode.scroll, .roles.mode.session, .roles.mode.tmux
+  .roles.mode.move, .roles.mode.scroll, .roles.mode.session, .roles.mode.tmux,
+  .roles.mode.rename, .roles.mode.search
 ' "$THEME_JSON" 2>/dev/null)}") || c=()
-(( ${#c} == 11 )) || exit 0
+(( ${#c} == 13 )) || exit 0
 bar_bg="${c[1]}" fg_hi="${c[2]}" tab_bg="${c[3]}"
 m_locked="${c[4]}" m_resize="${c[5]}" m_pane="${c[6]}" m_tab="${c[7]}"
-m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}"
+m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}" m_rename="${c[12]}" m_search="${c[13]}"
 
 # ---- color math -----------------------------------------------------------
 hex_r() { print $(( 16#${1[2,3]} )) }
@@ -86,6 +89,7 @@ DIV=$'\Ue0ba'
 I_LOCKED=$'\U000F033E' I_RESIZE=$'\U000F0A68' I_PANE=$'\Uebc8'
 I_TAB=$'\U000F04E9'    I_MOVE=$'\U000F0655'   I_SCROLL=$'\U000F0A64'
 I_SESSION=$'\U000F0640'   I_TMUX=$'\U000F0633'
+I_RENAME=$'\U000F0455'    I_SEARCH=$'\Uf002'
 I_ALT=$'\U000F0635' I_ESC=$'\U000F12B7'
 I_CLOCK=$'\U000F00F0'
 I_WIFI_ON=$'\U000F05A9' I_WIFI_OFF=$'\U000F092E'
@@ -94,8 +98,15 @@ I_BATT=( $'\U000F008E' $'\U000F12A1' $'\U000F12A2' $'\U000F12A3' )
 
 # ---- mode resolution ------------------------------------------------------
 mode_color="" mode_body="" hint_body=""
-if [[ "$in_copy" == 1 ]]; then
-  mode_color="$m_scroll" mode_body="$I_SCROLL Scroll"
+if [[ -n "$renaming" ]]; then
+  # top of the stack: an open rename dialog (@renaming, set by mux-rename)
+  mode_color="$m_rename" mode_body="$I_RENAME Rename"
+elif [[ "$in_copy" == 1 ]]; then
+  if [[ "$search_on" == 1 ]]; then
+    mode_color="$m_search" mode_body="$I_SEARCH Search"
+  else
+    mode_color="$m_scroll" mode_body="$I_SCROLL Scroll"
+  fi
 else
   # zellij "tmux" mode = the leader armed. The leader is the prefix TABLE
   # (root M-w -> switch-client -T prefix; see tmux.conf), so it arrives here

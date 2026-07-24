@@ -19,6 +19,12 @@ kind="${1:-window}"
 }
 
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+
+# Mode-stack pill: flag the open rename dialog for the status ribbon
+# (@renaming rides into tmux-status-right as an argument); cleared on every
+# exit path including ESC/cancel.
+"$TMUX_BIN" set -g @renaming 1 2>/dev/null || true
+trap '"$TMUX_BIN" set -gu @renaming 2>/dev/null || true' EXIT
 target="${MUX_MODAL_TARGET_PANE:-}"
 typeset -a taddr=()
 [[ -n "$target" ]] && taddr=(-t "$target")

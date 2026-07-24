@@ -10,7 +10,7 @@ Describe 'tmux-status-right'
     cat > "$TEST_TMP/theme.json" <<'EOS'
 {"roles":{"ui":{"bg":"#1e1e2e","fg":"#cdd6f4"},
   "mode":{"locked":"#fab387","resize":"#cba6f7","pane":"#89b4fa","tab":"#a6e3a1",
-          "move":"#f9e2af","scroll":"#b4befe","session":"#f38ba8","tmux":"#f38ba8"},
+          "move":"#f9e2af","scroll":"#b4befe","session":"#f38ba8","tmux":"#f38ba8","rename":"#f9e2af","search":"#89b4fa"},
   "action":{"attention":"#f9e2af"}},
  "extended":{"tab":{"bg":"#282c41","fg":"#9b9fc1","active_bg":"#656a83","active_fg":"#ffffff"}}}
 EOS
@@ -76,6 +76,18 @@ EOS
     When call zsh "$W" root 1 main
     The output should include "Scroll"
     The output should include "bg=#b4befe"
+  End
+
+  It 'an active search in copy-mode shows Search on top of the stack'
+    When call zsh "$W" root 1 main 0 1
+    The output should include "Search"
+    The output should not include "Scroll"
+  End
+
+  It 'an open rename dialog tops the stack as Rename'
+    When call zsh "$W" root 0 main 0 0 1
+    The output should include "Rename"
+    The output should include "bg=#f9e2af"
   End
 
   It 'locked mode adds the exit hint segment'

@@ -232,6 +232,18 @@ bind -T locked M-Escape set key-table root
 # copy-mode additions (zellij scroll/search parity; D11/D12 stage 1)
 # ---------------------------------------------------------------------------
 # V — EditScrollback: dump history into nvim in a new window (zellij `V`).
+# Scroll-mode stack (zellij parity): ESC clears the WHOLE stack (straight
+# back to normal); Backspace pops one level — with a search active it pops
+# Search back to Scroll (tmux 3.7 has no search-cancel and even an empty
+# search-forward keeps the old term, so we exit + re-enter copy-mode and
+# restore the viewport from #{scroll_position}; ledger row), otherwise it
+# pops Scroll back to the armed leader (Command).
+bind -T copy-mode-vi Escape send -X cancel
+bind -T copy-mode-vi BSpace if -F '#{search_present}' {
+  run-shell 'tmux send-keys -X cancel; tmux copy-mode; [ #{scroll_position} -gt 0 ] && tmux send-keys -X -N #{scroll_position} scroll-up; true'
+} {
+  send -X cancel ; switch-client -T prefix
+}
 bind -T copy-mode-vi V run-shell 'f=$(mktemp /tmp/tmux-scrollback.XXXXXX); tmux capture-pane -p -S - >"$f"; tmux new-window -n scrollback "nvim +\$ $f"' \; send -X cancel
 # n/p — prompt jumps via OSC 133 marks (zj-prompt-jumper parity; the marks
 # come from the zsh precmd emitter, functions.d/prompt-marks.sh). tmux has
