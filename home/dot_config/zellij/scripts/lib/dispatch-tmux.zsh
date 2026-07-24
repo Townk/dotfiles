@@ -48,6 +48,16 @@ ql_tx_open_pane() {
   [[ -n "$cwd" ]] && cwd="$(ql_expand_tilde "$cwd")"
   cmd="$(ql_action_command "$action")"
 
+  # Parity: zellij's new-pane inherits the focused pane's cwd; tmux's
+  # split-window/display-popup default to the session start dir, which broke
+  # cwd-sensitive targets like the git-log pane (Mode B find, 2026-07-24).
+  # display -p resolves the origin: the client's active pane from a popup,
+  # $TMUX_PANE from a plain shell. Session builds keep the explicit-cwd-only
+  # behavior (their targets define their own dirs).
+  if [[ -z "$cwd" && -z "$session" ]]; then
+    cwd="$("$QL_TX" display -p '#{pane_current_path}' 2>/dev/null)" || cwd=""
+  fi
+
   if ql_is_floating_direction "$dir"; then
     # Floats are popups on tmux (modal — D7's accepted inversion). Centered
     # via the shared percent math; backgrounded so dispatch returns while the
