@@ -232,13 +232,31 @@ function prune-raster-cache() {
 function get_chafa_format_args() {
   local protocols
 
+  # Inside tmux, chafa's defaults sabotage both viable tiers (chafa 1.18):
+  # `--passthrough auto` wraps sixel in the passthrough envelope, handing the
+  # image to the OUTER terminal as an overlay tmux wipes on its next repaint —
+  # native (unwrapped) sixel is what tmux ingests, owns, and redraws. And the
+  # active terminal probe can't complete through the mux, leaking query text
+  # (`]10;?`) into captured output. Pin passthrough explicitly per tier and
+  # disable probing whenever tmux is in the loop.
+  #   Sixel (WezTerm outer) → --passthrough none: tmux-native placement.
+  #   Kitty (Ghostty outer) → --passthrough tmux: unicode placeholders ARE
+  #   plain cells to tmux, but the image transmission needs the envelope.
   if protocols=$(get_terminal_image_protocol 2>/dev/null); then
     if [[ " $protocols " == *" Sixel "* ]]; then
-      echo "-f sixel"
+      if [[ -n "${TMUX:-}" ]]; then
+        echo "-f sixel --passthrough none --probe off"
+      else
+        echo "-f sixel"
+      fi
     elif [[ " $protocols " == *" iTerm2 "* ]]; then
       echo "-f iterm"
     elif [[ " $protocols " == *" Kitty "* ]]; then
-      echo "-f kitty"
+      if [[ -n "${TMUX:-}" ]]; then
+        echo "-f kitty --passthrough tmux --probe off"
+      else
+        echo "-f kitty"
+      fi
     else
       echo "-f symbols"
     fi

@@ -29,10 +29,20 @@ get_terminal_image_protocol() {
   fi
 
   # 2. STEP TWO: Resolve capability through the multiplexer constraint.
-  # Zellij: only Sixel survives its VTE. tmux (D1): sixel is the guaranteed
-  # tier — kitty/iTerm2 payloads are not forwarded un-enveloped, so the same
-  # Sixel-only constraint applies.
-  if [ -n "$zellij_env" ] || [ -n "$tmux_env" ]; then
+  # Zellij: only Sixel survives its VTE (host_support gates it).
+  # tmux: the pane env LIES — tmux sets TERM_PROGRAM=tmux — so the outer
+  # terminal comes from the tmux SESSION environment, which our tmux.conf
+  # keeps fresh via `update-environment TERM_PROGRAM` (same trick yazi's
+  # Mux::term_program uses). Per-outer choice, validated live (Phase 0.5):
+  #   WezTerm → native tmux sixel: tmux ingests the DCS, owns the placement,
+  #             redraws it, and keeps coordinates pane-local. Passthrough
+  #             tiers (iTerm2/kitty overlays) get wiped on tmux repaints,
+  #             and WezTerm lacks kitty unicode placeholders (wezterm#4531).
+  #   Ghostty → kitty unicode placeholders (placeholder cells are ordinary
+  #             text to tmux, so they persist; Ghostty has no sixel).
+  # Unknown outer (e.g. detached, or over SSH without the env) → no image
+  # protocol; consumers fall back to character art.
+  if [ -n "$zellij_env" ]; then
     local has_sixel=false
     for proto in "${host_support[@]}"; do
       if [ "$proto" = "Sixel" ]; then
@@ -44,6 +54,13 @@ get_terminal_image_protocol() {
     if [ "$has_sixel" = true ]; then
       final_capability+=("Sixel")
     fi
+  elif [ -n "$tmux_env" ]; then
+    local tmux_outer
+    tmux_outer=$(tmux show-environment TERM_PROGRAM 2>/dev/null)
+    case "${tmux_outer#TERM_PROGRAM=}" in
+      WezTerm) final_capability+=("Sixel") ;;
+      Ghostty) final_capability+=("Kitty") ;;
+    esac
   else
     # 3. STEP THREE: Direct Connection -> Inherit all natively supported protocols
     final_capability=("${host_support[@]}")
