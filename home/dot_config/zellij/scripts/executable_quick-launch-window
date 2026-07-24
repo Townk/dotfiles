@@ -82,11 +82,25 @@ else
 fi
 
 # Environment detection. An SSH session can't drive the host GUI.
-if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
+# Under tmux the PROCESS env is the server's birth env — a server born from
+# an ssh login carries SSH_CONNECTION forever, and TERM_PROGRAM is "tmux" —
+# so read the SESSION env instead: update-environment refreshes both
+# SSH_CONNECTION (tmux default list) and TERM_PROGRAM (added Phase 0) from
+# each attaching client, making it the attach-time truth (Mode B find,
+# 2026-07-24; same pattern as edit-terminal-config).
+_qlw_ssh="${SSH_CONNECTION:-}${SSH_CLIENT:-}"
+_qlw_term="${TERM_PROGRAM:-}"
+if [[ -n "${TMUX:-}" ]]; then
+  _qlw_v="$(tmux show-environment SSH_CONNECTION 2>/dev/null)" || _qlw_v=""
+  if [[ "$_qlw_v" == SSH_CONNECTION=* ]]; then _qlw_ssh="${_qlw_v#*=}"; else _qlw_ssh=""; fi
+  _qlw_v="$(tmux show-environment TERM_PROGRAM 2>/dev/null)" || _qlw_v=""
+  if [[ "$_qlw_v" == TERM_PROGRAM=* ]]; then _qlw_term="${_qlw_v#*=}"; else _qlw_term=""; fi
+fi
+if [[ -n "$_qlw_ssh" ]]; then
   ENV_TYPE="UNSUPPORTED"
-elif [[ "${TERM_PROGRAM:-}" == "Ghostty" || -n "${GHOSTTY_RESOURCES_DIR:-}" ]]; then
+elif [[ "$_qlw_term" == "Ghostty" || ( -z "${TMUX:-}" && -n "${GHOSTTY_RESOURCES_DIR:-}" ) ]]; then
   ENV_TYPE="GHOSTTY"
-elif [[ "${TERM_PROGRAM:-}" == "WezTerm" || -n "${WEZTERM_UNIX_SOCKET:-}" ]]; then
+elif [[ "$_qlw_term" == "WezTerm" || ( -z "${TMUX:-}" && -n "${WEZTERM_UNIX_SOCKET:-}" ) ]]; then
   ENV_TYPE="WEZTERM"
 else
   ENV_TYPE="UNSUPPORTED"
