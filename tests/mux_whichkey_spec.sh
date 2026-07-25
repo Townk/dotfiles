@@ -47,6 +47,20 @@ Describe 'mux-whichkey panel'
     The output should include "»"          # Command » Pane » Resize
   End
 
+  # The label colour IS the entry's disposition toward the mode stack:
+  # pink ends the mode, blue enters another one, green STAYS in this one.
+  colored() { zsh "$W" render "$1" "${2:-0}" "${3:-25}" | tr -d '\000'; }
+  It 'paints a sticky binding green, an ending one pink'
+    When call colored scroll
+    The output should include $'\e[38;2;166;227;161mscroll down'    # green
+    The output should include $'\e[38;2;245;194;231medit scrollback'  # pink
+  End
+
+  It 'still paints a mode switch blue'
+    When call colored scroll
+    The output should include $'\e[38;2;137;180;250mCopy mode'
+  End
+
   It 'closes with the heavy rule and the footer hints'
     When call plain pane
     The output should include "━━━"

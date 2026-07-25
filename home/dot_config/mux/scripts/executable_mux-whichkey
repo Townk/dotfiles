@@ -73,6 +73,7 @@ _bg() { print -rn -- $'\e[48;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#
 BG="$(_bg ${CFG[bg]})"
 C_BORDER="$(_fg ${CFG[border]})" C_KEY="$(_fg ${CFG[key]})"
 C_LABEL="$(_fg ${CFG[label]})" C_SWITCH="$(_fg ${CFG[switch]})"
+C_STICKY="$(_fg ${CFG[sticky]})"
 C_FOOTER="$(_fg ${CFG[footer]})" C_DIM="$(_fg ${CFG[dim]})"
 SOFT="${RESET}${BG}"
 
@@ -369,6 +370,9 @@ _paint() {
   for (( i = start; i <= last; i++ )); do
     local disp="${E_DISP[i]}" icon="${E_ICON[i]}" desc="${E_DESC[i]}"
     local kp=$(( W_KEYS - ${#disp} )) lcol="$C_LABEL"
+    # the label colour IS the disposition: pink ends the mode, blue enters
+    # another, green stays in this one (zj-hud parity + the sticky rows)
+    _has "${E_FLAGS[i]}" sticky && lcol="$C_STICKY"
     _has "${E_FLAGS[i]}" switch && lcol="$C_SWITCH"
     local cell="${(l:$kp:: :)PAD}${C_KEY}${disp}${SOFT}${C_DIM} ${SEP} ${SOFT}"
     if (( W_ICON > 0 )); then
@@ -425,6 +429,59 @@ _run_deferred() {      # after the popup closes (popup-in-popup mutates ours)
   f="$(mktemp "${TMPDIR:-/tmp}/wkcmd.XXXXXX")"
   print -r -- "$cmd" > "$f"
   "$TMUX_BIN" run-shell -b -d 0.3 "tmux source-file '$f'; rm -f '$f'" 2>/dev/null
+}
+# Hand the key to the PANE. An entry with no command of its own is one the
+# pane owns: the copy-mode motions are bound once, conditionally, in
+# copy-mode-vi (j is scroll-down in Scroll and cursor-down in Copy — one tmux
+# table serving two states), and duplicating that into the panel would be the
+# second definition this whole design exists to avoid. Measured: a key sent
+# to the pane reaches its copy-mode binding while the popup is still up.
+_forward() {
+  local key="$1" pane
+  pane="$("$TMUX_BIN" display -p '#{pane_id}' 2>/dev/null)"
+  [[ -n "$pane" && -n "$key" ]] || return 0
+  "$TMUX_BIN" send-keys -t "$pane" "$key" 2>/dev/null
+}
+_forward_deferred() {  # …once this popup is gone (the pane's own dialog needs
+  local key="$1" pane #  the screen: i/a prompt for the text object char)
+  pane="$("$TMUX_BIN" display -p '#{pane_id}' 2>/dev/null)"
+  [[ -n "$pane" && -n "$key" ]] || return 0
+  "$TMUX_BIN" run-shell -b -d 0.3 "tmux send-keys -t '$pane' '$key'" 2>/dev/null
+}
+
+# ---- the dispatch decision -------------------------------------------------
+# Two orthogonal answers for one keypress, and the only place that knows both:
+#   D_EXEC  run | defer | forward | ignore   who performs the entry
+#   D_STACK push:<state> | sticky | clear    what becomes of the mode stack
+# `dispatch` below prints them, so every row of the keymap is testable without
+# a tty — pressing j in the Scroll panel used to run nothing AND end the mode.
+_decide() {
+  local table="$1" key="$2" i k
+  D_EXEC=ignore D_STACK="" D_HIT=0 D_CMD=""
+  for (( i = 1; i <= ${#E_KEYS}; i++ )); do
+    for k in ${(s:|:)E_KEYS[i]}; do
+      [[ "$k" == "$key" ]] || continue
+      D_HIT=$i; break
+    done
+    (( D_HIT )) && break
+  done
+  (( D_HIT )) || return 1          # not ours: the panel is a closed surface
+  local flags="${E_FLAGS[D_HIT]}"
+  D_CMD="${E_CMD[D_HIT]}"
+  _has "$flags" numeric && D_CMD="${D_CMD//'#N'/$key}"
+  # `dialog` means the screen belongs to something else next, and a popup
+  # opened over a popup mutates the outer one — so the panel steps aside
+  # first and the work fires on a short server-side delay.
+  if [[ -z "$D_CMD" ]]; then
+    _has "$flags" dialog && D_EXEC=defer-forward || D_EXEC=forward
+  elif _has "$flags" dialog; then D_EXEC=defer
+  else D_EXEC=run
+  fi
+  if _stackable "${E_TO[D_HIT]}"; then D_STACK="push:${E_TO[D_HIT]}"
+  elif _has "$flags" sticky; then D_STACK=sticky
+  else D_STACK=clear
+  fi
+  return 0
 }
 
 # ---- key input ------------------------------------------------------------
@@ -498,36 +555,44 @@ _panel() {
       Escape) mux_stack::clear; return 0 ;;
       "${CFG[back]}") mux_stack::pop; return 0 ;;
       "${CFG[toggle]}") mux_stack::set_visible 0; return 0 ;;
-      "${CFG[next]}") (( page + 1 < PAGES )) && (( page++ )); continue ;;
-      "${CFG[prev]}") (( page > 0 )) && (( page-- )); continue ;;
+      # Paging only claims C-u/C-d when there IS more than one page — the
+      # copy tables bind them to half-page scroll, and a panel that fits on
+      # one page has no business swallowing them (the footer only offers
+      # the paging hint under the same condition).
+      # NB: the arm ENDS (`;;`) when there is nothing to page, so the key
+      # falls through to the dispatch below. `break` here would leave the
+      # panel loop, not the case.
+      "${CFG[next]}") if (( PAGES > 1 )); then
+                        (( page + 1 < PAGES )) && (( page++ )); continue
+                      fi ;;
+      "${CFG[prev]}") if (( PAGES > 1 )); then
+                        (( page > 0 )) && (( page-- )); continue
+                      fi ;;
     esac
-    # binding lookup
-    local i hit=0
-    for (( i = 1; i <= ${#E_KEYS}; i++ )); do
-      local k
-      for k in ${(s:|:)E_KEYS[i]}; do
-        [[ "$k" == "$KEY" ]] || continue
-        hit=$i; break
-      done
-      (( hit )) && break
-    done
-    (( hit )) || continue
-    local flags="${E_FLAGS[hit]}" cmd="${E_CMD[hit]}"
-    _has "$flags" numeric && cmd="${cmd//'#N'/$KEY}"
+    _decide "$mode" "$KEY" || continue      # unbound keys are swallowed
     # A dialog owns the screen next, and a popup opened over a popup mutates
     # the outer one — so its command fires on a short server-side delay, by
     # which time the stack operation below has taken this panel down.
-    if _has "$flags" dialog; then
-      _run_deferred "$cmd"
-    else
-      _run "$cmd"
-      _has "$flags" stay && continue
+    case "$D_EXEC" in
+      run)           _run "$D_CMD" ;;
+      defer)         _run_deferred "$D_CMD" ;;
+      forward)       _forward "$KEY" ;;
+      defer-forward) _forward_deferred "$KEY" ;;
+    esac
+    # A sticky entry (a motion, a focus move, a flag toggle) leaves the stack
+    # exactly as it was: the panel stays up and repaints, which is what it
+    # does with the panel hidden too — the tmux table is unchanged there.
+    if [[ "$D_STACK" == sticky ]]; then
+      # …unless something else needs the screen (the text objects prompt for
+      # their key): step aside, keep the mode, M-. brings the panel back.
+      [[ "$D_EXEC" == defer* ]] && { mux_stack::set_visible 0; return 0 }
+      continue
     fi
-    # ONE stack operation, then out: entering a mode pushes it, anything else
-    # ends the stack. The driver reopens whatever the new top asks for — a
-    # popup cannot resize itself, so each mode gets its own sized one.
-    if _stackable "${E_TO[hit]}"; then
-      mux_stack::push "${E_TO[hit]}"
+    # Otherwise ONE stack operation, then out: entering a mode pushes it,
+    # anything else ends the stack. The driver reopens whatever the new top
+    # asks for — a popup cannot resize itself, so each mode gets a sized one.
+    if [[ "$D_STACK" == push:* ]]; then
+      mux_stack::push "${D_STACK#push:}"
     else
       mux_stack::clear
     fi
@@ -542,6 +607,14 @@ case "${1:-}" in
     ROWS_MAX="${4:-${CFG[max_rows]}}"
     _paint "${2:-prefix}" "${3:-0}"
     print
+    ;;
+  dispatch) # what the panel WOULD do with this key, without a tty (tests)
+    _load "${2:-prefix}" || exit 0
+    if _decide "${2:-prefix}" "${3:-}"; then
+      print -r -- "$D_EXEC $D_STACK"
+    else
+      print -r -- ignore
+    fi
     ;;
   open)
     # THE PANEL DRIVER. It owns the popup for the whole time the stack has a

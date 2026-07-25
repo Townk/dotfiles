@@ -6,10 +6,18 @@
 #
 # entry fields: keys[] (tmux key names; several = variants shown merged,
 # e.g. Up + k → "↑,K"), desc, icon, color (palette slot), cmd (tmux command
-# line), switch (pushes another mode), stay (mode survives the action),
-# dialog (opens a popup — the panel closes first: popup-in-popup mutates
-# the outer one), panel_exit (leaves the panel's world entirely),
-# panel_only (documented here, bound in keymap-base.conf).
+# line), switch (pushes another mode), sticky (the mode SURVIVES the
+# action — motions, focus moves, flag toggles), dialog (opens a popup — the
+# panel closes first: popup-in-popup mutates the outer one), panel_exit
+# (leaves the panel's world entirely), panel_only (documented here, bound in
+# keymap-base.conf — not emitted into keymap.conf).
+#
+# Two orthogonal questions per entry. WHO RUNS IT: a non-empty cmd is the
+# panel's to run; an EMPTY cmd means the PANE owns the key and the panel
+# forwards the keystroke to it (the copy-mode motions, whose one real
+# binding is the conditional in copy-mode-vi — j is scroll-down in Scroll
+# and cursor-down in Copy). WHAT IT DOES TO THE MODE STACK: switch pushes
+# `to`, sticky keeps the mode, anything else ends it.
 #
 # which_key.groups mirrors the zellij layout's `which_key { groups { … } }`:
 # each group renders CONTIGUOUSLY in the listed order and is anchored — it
@@ -30,6 +38,7 @@ keymap:
     key_color: white
     label_color: pink
     switch_color: blue
+    sticky_color: green
     footer_color: overlay0
     dim_color: surface2
     start_hidden:
@@ -329,7 +338,7 @@ keymap:
         icon: 󰃇
         color: blue
         cmd: if -F '#{==:#{pane-border-status},off}' 'setw -g pane-border-status top' 'setw -g pane-border-status off'
-        stay: true
+        sticky: true
       - keys:
         - z
         desc: toggle pane zoom
@@ -431,7 +440,7 @@ keymap:
         icon: 󰅁
         color: teal
         cmd: previous-window
-        stay: true
+        sticky: true
       - keys:
         - Right
         - l
@@ -439,14 +448,14 @@ keymap:
         icon: 󰅂
         color: teal
         cmd: next-window
-        stay: true
+        sticky: true
       - keys:
         - Tab
         desc: last focused tab
         icon: 󰄹
         color: teal
         cmd: last-window
-        stay: true
+        sticky: true
       - keys:
         - '1'
         desc: go to tab 1
@@ -569,7 +578,7 @@ keymap:
         icon: 
         color: teal
         cmd: select-pane -U
-        stay: true
+        sticky: true
       - keys:
         - Down
         - j
@@ -577,7 +586,7 @@ keymap:
         icon: 
         color: teal
         cmd: select-pane -D
-        stay: true
+        sticky: true
       - keys:
         - Left
         - h
@@ -585,7 +594,7 @@ keymap:
         icon: 
         color: teal
         cmd: select-pane -L
-        stay: true
+        sticky: true
       - keys:
         - Right
         - l
@@ -593,21 +602,21 @@ keymap:
         icon: 
         color: teal
         cmd: select-pane -R
-        stay: true
+        sticky: true
       - keys:
         - Tab
         desc: switch focus
         icon: 
         color: teal
         cmd: select-pane -t :.+
-        stay: true
+        sticky: true
       - keys:
         - f
         desc: toggle pane borders
         icon: 󰃇
         color: blue
         cmd: if -F '#{==:#{pane-border-status},off}' 'setw -g pane-border-status top' 'setw -g pane-border-status off'
-        stay: true
+        sticky: true
       - keys:
         - z
         desc: toggle pane zoom
@@ -675,7 +684,7 @@ keymap:
         icon: 󰅃
         color: teal
         cmd: resize-pane -U 2
-        stay: true
+        sticky: true
       - keys:
         - Down
         - j
@@ -683,7 +692,7 @@ keymap:
         icon: 󰅀
         color: teal
         cmd: resize-pane -D 2
-        stay: true
+        sticky: true
       - keys:
         - Left
         - h
@@ -691,7 +700,7 @@ keymap:
         icon: 󰅁
         color: teal
         cmd: resize-pane -L 2
-        stay: true
+        sticky: true
       - keys:
         - Right
         - l
@@ -699,21 +708,21 @@ keymap:
         icon: 󰅂
         color: teal
         cmd: resize-pane -R 2
-        stay: true
+        sticky: true
       - keys:
         - +
         desc: grow
         icon: 󰐕
         color: teal
         cmd: resize-pane -U 2
-        stay: true
+        sticky: true
       - keys:
         - '-'
         desc: shrink
         icon: 󰍴
         color: teal
         cmd: resize-pane -D 2
-        stay: true
+        sticky: true
     move:
       title: Move
       icon: 󰙕
@@ -727,7 +736,7 @@ keymap:
         icon: 󰅀
         color: teal
         cmd: swap-pane -D
-        stay: true
+        sticky: true
       - keys:
         - Up
         - k
@@ -735,7 +744,7 @@ keymap:
         icon: 󰅃
         color: teal
         cmd: swap-pane -U
-        stay: true
+        sticky: true
       - keys:
         - Left
         - h
@@ -743,7 +752,7 @@ keymap:
         icon: 󰅁
         color: teal
         cmd: rotate-window -U
-        stay: true
+        sticky: true
       - keys:
         - Right
         - l
@@ -751,14 +760,14 @@ keymap:
         icon: 󰅂
         color: teal
         cmd: rotate-window -D
-        stay: true
+        sticky: true
       - keys:
         - Tab
         desc: swap with next
         icon: 󰄹
         color: teal
         cmd: swap-pane -D
-        stay: true
+        sticky: true
     session:
       title: Session
       icon: 󰙀
@@ -822,6 +831,7 @@ keymap:
       - keys:
         - n
         desc: next prompt
+        sticky: true
         icon: 
         color: mauve
         cmd: ''
@@ -829,6 +839,7 @@ keymap:
       - keys:
         - N
         desc: previous prompt
+        sticky: true
         icon: 
         color: mauve
         cmd: ''
@@ -838,6 +849,7 @@ keymap:
         - Up
         - k
         desc: scroll up
+        sticky: true
         icon: 󰅃
         color: teal
         cmd: ''
@@ -847,6 +859,7 @@ keymap:
         - Down
         - j
         desc: scroll down
+        sticky: true
         icon: 󰅀
         color: teal
         cmd: ''
@@ -855,6 +868,7 @@ keymap:
         keys:
         - C-u
         desc: half page scroll up
+        sticky: true
         icon: 󰄿
         color: teal
         cmd: ''
@@ -863,6 +877,7 @@ keymap:
         keys:
         - C-d
         desc: half page scroll down
+        sticky: true
         icon: 󰄼
         color: teal
         cmd: ''
@@ -872,6 +887,7 @@ keymap:
         - C-b
         - PageUp
         desc: page scroll up
+        sticky: true
         icon: 󰶼
         color: teal
         cmd: ''
@@ -881,6 +897,7 @@ keymap:
         - C-f
         - PageDown
         desc: page scroll down
+        sticky: true
         icon: 󰶹
         color: teal
         cmd: ''
@@ -890,6 +907,7 @@ keymap:
         - g
         - Home
         desc: scroll to top
+        sticky: true
         icon: 󱥩
         color: teal
         cmd: ''
@@ -899,6 +917,7 @@ keymap:
         - G
         - End
         desc: scroll to bottom
+        sticky: true
         icon: 󱥧
         color: teal
         cmd: ''
@@ -913,6 +932,7 @@ keymap:
       - keys:
         - v
         desc: begin selection
+        sticky: true
         icon: 󰆏
         color: mauve
         cmd: ''
@@ -932,6 +952,8 @@ keymap:
         color: green
         cmd: ''
         panel_only: true
+        dialog: true
+        sticky: true
       - keys:
         - a
         desc: around text object
@@ -939,6 +961,8 @@ keymap:
         color: green
         cmd: ''
         panel_only: true
+        dialog: true
+        sticky: true
       - keys:
         - /
         desc: Search scroll buffer …
@@ -953,6 +977,7 @@ keymap:
         - Up
         - k
         desc: cursor up
+        sticky: true
         icon: 󰅃
         color: teal
         cmd: ''
@@ -961,6 +986,7 @@ keymap:
         - Down
         - j
         desc: cursor down
+        sticky: true
         icon: 󰅀
         color: teal
         cmd: ''
@@ -969,6 +995,7 @@ keymap:
         - Left
         - h
         desc: cursor left
+        sticky: true
         icon: 󰅁
         color: teal
         cmd: ''
@@ -977,6 +1004,7 @@ keymap:
         - Right
         - l
         desc: cursor right
+        sticky: true
         icon: 󰅂
         color: teal
         cmd: ''
@@ -997,6 +1025,7 @@ keymap:
       - keys:
         - n
         desc: next match
+        sticky: true
         icon: 
         color: mauve
         cmd: ''
@@ -1004,6 +1033,7 @@ keymap:
       - keys:
         - N
         desc: previous match
+        sticky: true
         icon: 
         color: mauve
         cmd: ''
@@ -1011,6 +1041,7 @@ keymap:
       - keys:
         - M-c
         desc: toggle case sensitive
+        sticky: true
         icon: 
         color: yellow
         cmd: ''
@@ -1018,6 +1049,7 @@ keymap:
       - keys:
         - M-b
         desc: toggle word boundaries
+        sticky: true
         icon: 
         color: yellow
         cmd: ''
@@ -1025,6 +1057,7 @@ keymap:
       - keys:
         - M-p
         desc: toggle line wrap
+        sticky: true
         icon: 󰕇
         color: yellow
         cmd: ''

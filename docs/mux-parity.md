@@ -154,6 +154,23 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | `,` is a real binding, so a comma-separated key list loses it | keys are pipe-separated in whichkey.data |
 | a `j:…:` join-flag argument is literal — a parameter inside renders as text | the breadcrumb joins by hand |
 
+### The panel's dispatch — two orthogonal questions per key
+
+Answered together in `_decide` (and printable without a tty via
+`mux-whichkey dispatch <table> <key>`, which is what the spec drives).
+
+| Question | Values | Comes from |
+| --- | --- | --- |
+| **who runs it** | `run` (the panel sources the cmd) · `defer` (…after the popup closes) · `forward` (the PANE owns the key) · `defer-forward` · `ignore` | a non-empty `cmd` vs an empty one; `dialog` defers |
+| **what becomes of the mode** | `push:<state>` · `sticky` · `clear` | `to` + `sticky` in keymap.yaml |
+
+| Fact | Consequence |
+| --- | --- |
+| a key sent to the PANE reaches its copy-mode binding while the panel's popup is still open (measured) | entries with no cmd are forwarded, so `j` (scroll-down in Scroll, cursor-down in Copy — one tmux table, two states) keeps its single conditional binding in copy-mode-vi instead of being duplicated into the YAML |
+| an entry that neither switches nor sticks ENDS the mode — the panel's default | the copy tables were 42 entries with no cmd and no disposition: pressing `j` in the Scroll panel ran nothing AND ended Scroll, while the same key worked with the panel hidden |
+| `C-u`/`C-d` are both the panel's paging keys and the copy tables' half-page scroll | paging only claims them when there is more than one page (the same condition that shows the paging hint); otherwise they fall through to the binding |
+| the label colour IS the disposition | pink ends the mode, blue enters another, green stays in this one |
+
 ## The mode stack (Phase 5 refactor, 2026-07-25)
 
 `@mux_stack` = `"command:1 scroll:1 search:0"` (state:visible, bottom→top) is
