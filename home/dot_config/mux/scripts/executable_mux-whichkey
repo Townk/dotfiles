@@ -129,39 +129,46 @@ _mode_meta() {         # STATE -> M_TITLE M_ICON M_COLOR M_PARENT (+ M_TABLE)
   M_TITLE="${f[3]}" M_ICON="${f[4]}" M_COLOR="${f[5]}" M_PARENT="${f[6]:-}" M_TABLE="$1"
 }
 _load() {
-  local state="$1" mode tag m keys icon icol desc flags cmd
+  # NB: fields are split with ${(@ps:\t:)} rather than `IFS=$'\t' read`:
+  # tab is an IFS *whitespace* character, so read COLLAPSES consecutive
+  # tabs — an entry with no flags lost that field and its command shifted
+  # into it, which is why a plain action (M-w v) closed the panel without
+  # doing anything (Mode B find).
+  local state="$1" mode line
+  local -a F
   _mode_meta "$state"
   mode="${M_TABLE:-$state}"
   E_KEYS=() E_DISP=() E_ICON=() E_ICOL=() E_DESC=() E_FLAGS=() E_CMD=()
-  while IFS=$'\t' read -r tag m keys icon icol desc flags cmd; do
-    [[ "$tag" == E && "$m" == "$mode" ]] || continue
-    E_KEYS+=("$keys"); E_DISP+=("$(_keysdisplay "$keys")")
-    E_ICON+=("$icon"); E_ICOL+=("$icol"); E_DESC+=("$desc")
-    E_FLAGS+=(",${flags}"); E_CMD+=("$cmd")
+  while IFS= read -r line; do
+    [[ "$line" == E$'\t'* ]] || continue
+    F=("${(@ps:\t:)line}")
+    [[ "${F[2]}" == "$mode" ]] || continue
+    E_KEYS+=("${F[3]}"); E_DISP+=("$(_keysdisplay "${F[3]}")")
+    E_ICON+=("${F[4]}"); E_ICOL+=("${F[5]}"); E_DESC+=("${F[6]}")
+    E_FLAGS+=(",${F[7]}"); E_CMD+=("${F[8]}")
   done < "$DATA"
   (( ${#E_KEYS} )) || return 1
   _order "$mode"
   return 0
 }
 
-# Build display units — a lone binding, or a configured group rendered
-# contiguously in its listed order and anchored at its FIRST member's
-# natural sort position — then sort the units and flatten (labels.rs).
 _has() { [[ "$1" == *",$2,"* ]] }
 
 _order() {
   # NB: every local is declared ONCE here — re-running `local x=…` for a
   # name that already exists in the scope makes zsh PRINT it (typeset
   # behaviour), which would land in the panel's own output.
-  local mode="$1" tag gmode gmembers ekeys u sk m k entry
+  local mode="$1" line ekeys u sk m k entry
   local -i i j gi pos placed found
-  local -a G_MEMBERS members ordered_units NK ND NI NC NE NF NM
+  local -a F G_MEMBERS members ordered_units NK ND NI NC NE NF NM
   local -A unit_of unit_pos unit_anchor
 
   G_MEMBERS=()
-  while IFS=$'\t' read -r tag gmode gmembers; do
-    [[ "$tag" == '#group' && "$gmode" == "$mode" ]] || continue
-    G_MEMBERS+=("$gmembers")
+  while IFS= read -r line; do
+    [[ "$line" == '#group'$'\t'* ]] || continue
+    F=("${(@ps:\t:)line}")
+    [[ "${F[2]}" == "$mode" ]] || continue
+    G_MEMBERS+=("${F[3]}")
   done < "$DATA"
 
   for (( i = 1; i <= ${#E_KEYS}; i++ )); do
@@ -385,6 +392,7 @@ _run() {               # run a tmux command line (source-file handles quoting)
   f="$(mktemp "${TMPDIR:-/tmp}/wkcmd.XXXXXX")"
   print -r -- "$cmd" > "$f"
   "$TMUX_BIN" source-file "$f" 2>/dev/null
+  [[ -n "${WK_TRACE:-}" ]] && print -r -- "run cmd=<$cmd>" >> /tmp/wktrace.log
   rm -f "$f"
 }
 _reopen() {            # ask the driver for a correctly sized popup
@@ -394,6 +402,8 @@ _reopen() {            # ask the driver for a correctly sized popup
   [[ -n "${WK_TRACE:-}" ]] && print -r -- "panel: requesting $1 -> $NEXT_FILE" >> /tmp/wktrace.log
   print -r -- "$1" >| "$NEXT_FILE"
 }
+_leave_mode() { "$TMUX_BIN" set key-table root 2>/dev/null }
+
 _run_deferred() {      # after the popup closes (popup-in-popup mutates ours)
   local cmd="$1" f
   [[ -n "$cmd" ]] || return 0
@@ -462,7 +472,11 @@ _panel() {
   while true; do
     _load "$mode" || return 0
     print -rn -- "$(_paint "$mode" $page)"
-    _readkey || return 0
+    if ! _readkey; then
+      [[ -n "${WK_TRACE:-}" ]] && print -r -- "panel: readkey FAILED" >> /tmp/wktrace.log
+      return 0
+    fi
+    [[ -n "${WK_TRACE:-}" ]] && print -r -- "panel: key=<$KEY> mode=$mode" >> /tmp/wktrace.log
     [[ -n "$KEY" ]] || continue
     case "$KEY" in
       Escape) "$TMUX_BIN" set key-table root 2>/dev/null; return 0 ;;
@@ -515,10 +529,16 @@ _panel() {
     fi
     if _has "$flags" dialog; then
       _run_deferred "$cmd"
+      _leave_mode
       return 0
     fi
     _run "$cmd"
     _has "$flags" stay && continue
+    # An action ends the mode, like zellij. tmux's own one-shot prefix table
+    # resets itself, but the panel consumed the key, so the client is still
+    # armed unless we clear it here (Mode B find). Entries flagged `exit`
+    # own their target state (locked, copy-mode) — leave those alone.
+    _has "$flags" exit || _leave_mode
     return 0
   done
 }
