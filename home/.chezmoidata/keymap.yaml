@@ -83,6 +83,7 @@ keymap:
       - '7'
       - '8'
       - '9'
+      - '0'
     - mode: pane
       members:
       - K
@@ -108,10 +109,20 @@ keymap:
       - M-p
     - mode: copy
       members:
-      - u
-      - d
+      - Up
+      - k
+      - Down
+      - j
+      - C-u
+      - C-d
+      - C-b
+      - PageUp
+      - C-f
+      - PageDown
       - g
+      - Home
       - G
+      - End
   tables:
     prefix:
       title: Command
@@ -365,6 +376,12 @@ keymap:
         icon: 󰎠
         color: teal
         cmd: select-window -t :=9 ; set key-table root
+      - keys:
+        - '0'
+        desc: go to tab 10
+        icon: 󰎠
+        color: teal
+        cmd: select-window -t :=10 ; set key-table root
       - keys:
         - '['
         desc: tab to pane at left
@@ -713,21 +730,54 @@ keymap:
         cmd: ''
         panel_only: true
       - keys:
-        - u
-        desc: half page up
+        - Up
+        - k
+        desc: scroll up
+        icon: 󰅃
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
+        - Down
+        - j
+        desc: scroll down
+        icon: 󰅀
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
+        - C-u
+        desc: half page scroll up
         icon: 󰄿
         color: teal
         cmd: ''
         panel_only: true
       - keys:
-        - d
-        desc: half page down
+        - C-d
+        desc: half page scroll down
         icon: 󰄼
         color: teal
         cmd: ''
         panel_only: true
       - keys:
+        - C-b
+        - PageUp
+        desc: page scroll up
+        icon: 󰶼
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
+        - C-f
+        - PageDown
+        desc: page scroll down
+        icon: 󰶹
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
         - g
+        - Home
         desc: scroll to top
         icon: 󱥩
         color: teal
@@ -735,6 +785,7 @@ keymap:
         panel_only: true
       - keys:
         - G
+        - End
         desc: scroll to bottom
         icon: 󱥧
         color: teal

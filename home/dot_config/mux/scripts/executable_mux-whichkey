@@ -167,7 +167,10 @@ _order() {
     fi
   done
 
-  ordered_units=(${(f)"$(for u in $ordered_units; do print -r -- "${unit_anchor[$u]}	$u"; done | sort | cut -f2)"})
+  # LC_ALL=C: a UTF-8 locale collates punctuation together with digits and
+  # letters, which sorted '[' ahead of '1' and put the bracket group above
+  # the tab numbers.
+  ordered_units=(${(f)"$(for u in $ordered_units; do print -r -- "${unit_anchor[$u]}	$u"; done | LC_ALL=C sort | cut -f2)"})
 
   for u in $ordered_units; do
     members=()

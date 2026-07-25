@@ -113,3 +113,35 @@ Describe 'keymap.yaml is the single source'
     The status should be success
   End
 End
+
+Describe 'panel coverage vs the zellij which-key labels'
+  # Every label in the zellij layout must have a counterpart in keymap.yaml,
+  # except the features tmux genuinely does not have (spec §6 dispositions)
+  # and the n/N duality (tmux has ONE copy-mode, so those labels say
+  # "match / prompt").
+  It 'covers every zellij label except the documented non-equivalents'
+    When call python3 - "$PWD"
+      #|import re, sys, yaml, pathlib
+      #|root = pathlib.Path(sys.argv[1])
+      #|lay = (root/'home/dot_config/zellij/layouts/default.kdl.tmpl').read_text()
+      #|labels = re.findall(r'wk mode="([^"]+)"\s+binding="([^"]+)"\s+desc="([^"]+)"', lay)
+      #|ALLOW = {'about Zellij','configuration','layout manager','plugin manager','share',
+      #|         'split pane stack','toggle embed pane','toggle floating',
+      #|         'toggle floating (sticky)','toggle pinned pane',
+      #|         'next match','previous match'}
+      #|MAP = {'tmux':'prefix','tab':'tab','pane':'pane','session':'session',
+      #|       'scroll':'copy','search':'copy'}
+      #|d = yaml.safe_load((root/'home/.chezmoidata/keymap.yaml').read_text())['keymap']['tables']
+      #|missing = []
+      #|for mode, b, desc in labels:
+      #|    for m in mode.split(','):
+      #|        t = MAP.get(m.strip())
+      #|        if not t or desc in ALLOW: continue
+      #|        if desc not in {e['desc'] for e in d[t]['entries']}:
+      #|            missing.append(f'{m}:{b}={desc}')
+      #|print('\n'.join(sorted(set(missing))))
+      #|sys.exit(1 if missing else 0)
+    The status should be success
+    The output should equal ""
+  End
+End
