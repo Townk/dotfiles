@@ -12,5 +12,5 @@
 {{ range $name, $t := $km.tables }}{{ if ne $name "copy" }}
 # --- {{ $t.title }}{{ if hasKey $t "parent" }} (from {{ $t.parent }}){{ end }} ---
 {{ range $e := $t.entries }}{{ if not (hasKey $e "panel_only") }}{{ $flag := "" }}{{ if ne $name "prefix" }}{{ $flag = printf "-T %s " $name }}{{ end }}{{ if hasKey $e "numeric" }}{{ range $k := $e.keys }}bind {{ $flag }}{{ $k }} { {{ replace "#N" $k $e.cmd }} }
-{{ end }}{{ else }}{{ range $k := $e.keys }}bind {{ $flag }}{{ $k }} { {{ $e.cmd }} }
+{{ end }}{{ else }}{{ range $k := $e.keys }}bind {{ $flag }}{{ $k }} { {{ $e.cmd }}{{ if hasKey $e "to" }} ; run-shell -b "{{ $.chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open {{ $e.to }}"{{ end }} }
 {{ end }}{{ end }}{{ end }}{{ end }}{{ end }}{{ end }}

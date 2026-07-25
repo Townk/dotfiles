@@ -42,14 +42,14 @@
 bind M-w send-keys M-w
 # ESC cancels the armed leader without leaking into the app (zellij: Esc
 # exits tmux mode; ESC cancels — never conflate with Ctrl+C).
-bind Escape switch-client -T root
+bind Escape switch-client -T root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
 # Mode stack (zellij which-key trail parity): Backspace pops one level —
 # each table returns to the mode it was entered FROM. tmux has no stack,
 # but the entry graph has unique parents, so the pops are static:
 # resize/move → pane; tab/pane/session → the armed leader (Command, by
 # re-arming the one-shot prefix table); Command → root. Locked keeps its
 # single M-Escape exit; copy-mode keeps Backspace for search editing.
-bind BSpace switch-client -T root
+bind BSpace switch-client -T root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
 
 # ---------------------------------------------------------------------------
 # Retired bindings — tmux key tables are CUMULATIVE: `source-file` adds and
@@ -135,8 +135,8 @@ bind -n M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichke
 # ---------------------------------------------------------------------------
 # tab table (zellij "tab" mode)
 # ---------------------------------------------------------------------------
-bind -T tab Escape set key-table root
-bind -T tab BSpace set key-table root \; switch-client -T prefix   # pop the mode stack
+bind -T tab Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
+bind -T tab BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear tab" \; set key-table root \; switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open command"   # pop the mode stack
 bind -T tab 0 select-window -t :=10 \; set key-table root
 # Rename: themed input::line dialog in a popup (Phase 2.4).
 # BreakPaneLeft/Right approximation: fold this window's pane into the
@@ -147,8 +147,8 @@ bind -T tab 0 select-window -t :=10 \; set key-table root
 # ---------------------------------------------------------------------------
 # pane table (zellij "pane" mode)
 # ---------------------------------------------------------------------------
-bind -T pane Escape set key-table root
-bind -T pane BSpace set key-table root \; switch-client -T prefix   # pop the mode stack
+bind -T pane Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
+bind -T pane BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear pane" \; set key-table root \; switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open command"   # pop the mode stack
 # No stacked panes / pin / embed↔float toggle: no tmux equivalent needed
 # (§6 dispositions — stacked unused, pin only meaningful for non-modal
 # floats, popups are modal). P — quick-launch pane picker lands in Phase 3.
@@ -156,8 +156,8 @@ bind -T pane BSpace set key-table root \; switch-client -T prefix   # pop the mo
 # ---------------------------------------------------------------------------
 # resize table (zellij "resize" mode; repeatable binds)
 # ---------------------------------------------------------------------------
-bind -T resize Escape set key-table root
-bind -T resize BSpace set key-table pane   # pop the mode stack
+bind -T resize Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
+bind -T resize BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear resize" \; set key-table pane \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open pane"   # pop the mode stack
 bind -T resize H resize-pane -R 2
 bind -T resize J resize-pane -U 2
 bind -T resize K resize-pane -D 2
@@ -173,15 +173,15 @@ bind -T resize = resize-pane -U 2
 # ---------------------------------------------------------------------------
 # tmux has no directional pane swap; swap-pane -U/-D walk the pane order.
 # Ledger row documents the divergence (h/l rotate the whole window).
-bind -T move Escape set key-table root
-bind -T move BSpace set key-table pane   # pop the mode stack
+bind -T move Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
+bind -T move BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear move" \; set key-table pane \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open pane"   # pop the mode stack
 bind -T move BTab swap-pane -U
 
 # ---------------------------------------------------------------------------
 # session table (zellij "session" mode)
 # ---------------------------------------------------------------------------
-bind -T session Escape set key-table root
-bind -T session BSpace set key-table root \; switch-client -T prefix   # pop the mode stack
+bind -T session Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
+bind -T session BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear session" \; set key-table root \; switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open command"   # pop the mode stack
 # S — quick-launch workspace picker lands here in Phase 3. The zellij-only
 # chrome rows (about/configuration/plugin-manager/share) have no tmux
 # equivalent (§6 dispositions) — ledger.
@@ -241,7 +241,7 @@ bind -T copy-mode-vi v if -F '#{@visual}' {send -X begin-selection} {set -p @vis
 bind -T copy-mode-vi Escape if -F '#{selection_present}' {
   send -X clear-selection
 } {
-  send -X cancel
+  send -X cancel ; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
 }
 bind -T copy-mode-vi y send -X copy-pipe-and-cancel
 bind -T copy-mode-vi Enter send -X copy-pipe-and-cancel

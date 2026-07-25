@@ -234,6 +234,7 @@ keymap:
         cmd: set key-table locked
         switch: true
         panel_exit: true
+        to: locked
       - keys:
         - o
         desc: Session mode …
@@ -241,6 +242,7 @@ keymap:
         color: red
         cmd: set key-table session
         switch: true
+        to: session
       - keys:
         - t
         desc: Tab mode …
@@ -248,6 +250,7 @@ keymap:
         color: green
         cmd: set key-table tab
         switch: true
+        to: tab
       - keys:
         - p
         desc: Pane mode …
@@ -255,6 +258,7 @@ keymap:
         color: blue
         cmd: set key-table pane
         switch: true
+        to: pane
       - keys:
         - l
         desc: Scroll mode …
@@ -263,6 +267,7 @@ keymap:
         cmd: set -p @visual 0 ; copy-mode
         switch: true
         panel_exit: true
+        to: scroll
       - keys:
         - V
         desc: Copy mode …
@@ -271,6 +276,7 @@ keymap:
         cmd: set -p @visual 1 ; set -p @copy_parent command ; copy-mode
         switch: true
         panel_exit: true
+        to: copy
       - keys:
         - ','
         desc: terminal settings
@@ -376,6 +382,7 @@ keymap:
         cmd: set key-table root ; display-popup -E -B -w 66 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-rename window'
         switch: true
         dialog: true
+        to: rename
       - keys:
         - N
         desc: new tab
@@ -516,6 +523,7 @@ keymap:
         color: yellow
         cmd: set key-table move
         switch: true
+        to: move
       - keys:
         - n
         desc: Rename Pane …
@@ -524,6 +532,7 @@ keymap:
         cmd: set key-table root ; display-popup -E -B -w 66 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-rename pane'
         switch: true
         dialog: true
+        to: rename
       - keys:
         - r
         desc: Resize Pane …
@@ -531,6 +540,7 @@ keymap:
         color: mauve
         cmd: set key-table resize
         switch: true
+        to: resize
       - keys:
         - Up
         - k
@@ -770,6 +780,7 @@ keymap:
         cmd: ''
         panel_only: true
         switch: true
+        to: search
       - keys:
         - v
         desc: Copy mode …
@@ -778,6 +789,7 @@ keymap:
         cmd: ''
         panel_only: true
         switch: true
+        to: copy
       - keys:
         - V
         desc: edit scrollback
@@ -913,6 +925,7 @@ keymap:
         cmd: ''
         panel_only: true
         switch: true
+        to: search
       - keys:
         - Up
         - k
@@ -1001,6 +1014,7 @@ keymap:
         cmd: ''
         panel_only: true
         switch: true
+        to: search
       - *id008
       - *id009
       - *id002

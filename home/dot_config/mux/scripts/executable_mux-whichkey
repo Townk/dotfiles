@@ -69,6 +69,34 @@ C_LABEL="$(_fg ${CFG[label]})" C_SWITCH="$(_fg ${CFG[switch]})"
 C_FOOTER="$(_fg ${CFG[footer]})" C_DIM="$(_fg ${CFG[dim]})"
 SOFT="${RESET}${BG}"
 
+# ---- visibility: a PER-MODE, EPHEMERAL flag --------------------------------
+# Every mode carries its own which-key visibility (default shown, except the
+# start_hidden states like Scroll). The flag lives only while that mode is on
+# the stack: popping it — or ending the stack — restores the default. It is
+# deliberately NOT global; hiding the panel in Scroll used to leave Command
+# hidden the next time you armed the leader (Mode B find).
+_vis_default() {
+  local st="$1" sh
+  for sh in ${(s:,:)CFG[start_hidden]}; do
+    [[ -n "$sh" && "$sh" == "$st" ]] && { print -r -- 0; return 0 }
+  done
+  print -r -- 1
+}
+_vis() {
+  local st="$1" v
+  v="$("$TMUX_BIN" show -gv "@wk_vis_$st" 2>/dev/null)"
+  [[ "$v" == 0 || "$v" == 1 ]] && { print -r -- "$v"; return 0 }
+  _vis_default "$st"
+}
+_vis_set()   { "$TMUX_BIN" set -g "@wk_vis_$1" "$2" 2>/dev/null }
+_vis_clear() { "$TMUX_BIN" set -gu "@wk_vis_$1" 2>/dev/null }
+_vis_reset() {
+  local o
+  for o in ${(f)"$("$TMUX_BIN" show -g 2>/dev/null | grep -o '^@wk_vis_[a-z]*')"}; do
+    "$TMUX_BIN" set -gu "$o" 2>/dev/null
+  done
+}
+
 # ---- key glyphs (zj-hud's rendering) --------------------------------------
 G_SHIFT=$'\U000F0636' G_ALT=$'\U000F0635' G_CTRL=$'\U000F0634' G_SUPER=$'\U000F0633'
 # zj-hud's bare_key_glyph table — special keys read as SYMBOLS, never words.
@@ -116,7 +144,7 @@ _keysdisplay() {       # pipe-separated tmux keys -> "↑,K" (comma is a KEY)
 }
 
 # ---- data -----------------------------------------------------------------
-typeset -a E_KEYS E_DISP E_ICON E_ICOL E_DESC E_FLAGS E_CMD
+typeset -a E_KEYS E_DISP E_ICON E_ICOL E_DESC E_FLAGS E_CMD E_TO
 _mode_meta() {         # STATE -> M_TITLE M_ICON M_COLOR M_PARENT (+ M_TABLE)
   if mux_mode::meta "$1" 2>/dev/null; then
     M_TITLE="$MM_TITLE" M_ICON="$MM_ICON" M_COLOR="$MM_COLOR"
@@ -138,14 +166,14 @@ _load() {
   local -a F
   _mode_meta "$state"
   mode="${M_TABLE:-$state}"
-  E_KEYS=() E_DISP=() E_ICON=() E_ICOL=() E_DESC=() E_FLAGS=() E_CMD=()
+  E_KEYS=() E_DISP=() E_ICON=() E_ICOL=() E_DESC=() E_FLAGS=() E_CMD=() E_TO=()
   while IFS= read -r line; do
     [[ "$line" == E$'\t'* ]] || continue
     F=("${(@ps:\t:)line}")
     [[ "${F[2]}" == "$mode" ]] || continue
     E_KEYS+=("${F[3]}"); E_DISP+=("$(_keysdisplay "${F[3]}")")
     E_ICON+=("${F[4]}"); E_ICOL+=("${F[5]}"); E_DESC+=("${F[6]}")
-    E_FLAGS+=(",${F[7]}"); E_CMD+=("${F[8]}")
+    E_FLAGS+=(",${F[7]}"); E_CMD+=("${F[8]}"); E_TO+=("${F[9]:-}")
   done < "$DATA"
   (( ${#E_KEYS} )) || return 1
   _order "$mode"
@@ -160,7 +188,7 @@ _order() {
   # behaviour), which would land in the panel's own output.
   local mode="$1" line ekeys u sk m k entry
   local -i i j gi pos placed found
-  local -a F G_MEMBERS members ordered_units NK ND NI NC NE NF NM
+  local -a F G_MEMBERS members ordered_units NK ND NI NC NE NF NM NT
   local -A unit_of unit_pos unit_anchor
 
   G_MEMBERS=()
@@ -210,10 +238,12 @@ _order() {
       j="${entry#*:}"
       NK+=("${E_KEYS[j]}"); ND+=("${E_DISP[j]}"); NI+=("${E_ICON[j]}")
       NC+=("${E_ICOL[j]}"); NE+=("${E_DESC[j]}"); NF+=("${E_FLAGS[j]}"); NM+=("${E_CMD[j]}")
+      NT+=("${E_TO[j]}")
     done
   done
   E_KEYS=("$NK[@]"); E_DISP=("$ND[@]"); E_ICON=("$NI[@]")
   E_ICOL=("$NC[@]"); E_DESC=("$NE[@]"); E_FLAGS=("$NF[@]"); E_CMD=("$NM[@]")
+  E_TO=("$NT[@]")
 }
 
 # ---- panel sort (zj-hud labels.rs) ----------------------------------------
@@ -402,7 +432,17 @@ _reopen() {            # ask the driver for a correctly sized popup
   [[ -n "${WK_TRACE:-}" ]] && print -r -- "panel: requesting $1 -> $NEXT_FILE" >> /tmp/wktrace.log
   print -r -- "$1" >| "$NEXT_FILE"
 }
-_leave_mode() { "$TMUX_BIN" set key-table root 2>/dev/null }
+_arm_state() {         # put the client in the key table a state implies
+  case "$1" in
+    command) "$TMUX_BIN" set key-table root 2>/dev/null
+             "$TMUX_BIN" switch-client -T prefix 2>/dev/null ;;
+    tab|pane|session|resize|move|locked|nested)
+             "$TMUX_BIN" set key-table "$1" 2>/dev/null ;;
+    *) ;;              # scroll/copy/search live inside copy-mode
+  esac
+}
+
+_leave_mode() { _vis_reset; "$TMUX_BIN" set key-table root 2>/dev/null }
 
 _run_deferred() {      # after the popup closes (popup-in-popup mutates ours)
   local cmd="$1" f
@@ -479,21 +519,22 @@ _panel() {
     [[ -n "${WK_TRACE:-}" ]] && print -r -- "panel: key=<$KEY> mode=$mode" >> /tmp/wktrace.log
     [[ -n "$KEY" ]] || continue
     case "$KEY" in
-      Escape) "$TMUX_BIN" set key-table root 2>/dev/null; return 0 ;;
+      Escape) _vis_reset; "$TMUX_BIN" set key-table root 2>/dev/null; return 0 ;;
       "${CFG[back]}")
         _mode_meta "$mode"
         if [[ -n "$M_PARENT" ]]; then
+          _vis_clear "$mode"           # this mode just popped off the stack
           mode="$M_PARENT"
-          "$TMUX_BIN" set key-table "$([[ $mode == prefix ]] && print root || print $mode)" 2>/dev/null
-          [[ "$mode" == prefix ]] && "$TMUX_BIN" switch-client -T prefix 2>/dev/null
+          _arm_state "$mode"
           _reopen "$mode"
           return 0
         else
+          _vis_reset
           "$TMUX_BIN" set key-table root 2>/dev/null; return 0
         fi
         continue ;;
       "${CFG[toggle]}")
-        "$TMUX_BIN" set -g @wk_hidden 1 2>/dev/null; return 0 ;;
+        _vis_set "$mode" 0; return 0 ;;
       "${CFG[next]}") (( page + 1 < PAGES )) && (( page++ )); continue ;;
       "${CFG[prev]}") (( page > 0 )) && (( page-- )); continue ;;
     esac
@@ -513,15 +554,10 @@ _panel() {
     if _has "$flags" switch && ! _has "$flags" exit; then
       # push the next mode without tearing the popup down
       _run "$cmd"
-      local next=""
-      case "${E_DESC[hit]}" in
-        "Tab mode"*) next=tab ;;
-        "Pane mode"*) next=pane ;;
-        "Session mode"*) next=session ;;
-        "Move Pane"*) next=move ;;
-        "Resize Pane"*) next=resize ;;
-        *) return 0 ;;
-      esac
+      local next="${E_TO[hit]}"
+      # states without a panel of their own (locked, rename) just exit
+      [[ -n "$next" ]] && mux_mode::meta "$next" 2>/dev/null && [[ -n "$MM_TABLE" ]] || return 0
+      next="$MM_TABLE"
       # A popup cannot resize itself (the geometry flags are ignored when a
       # popup already exists), so each mode gets its own correctly sized one.
       _reopen "$next"
@@ -566,14 +602,7 @@ case "${1:-}" in
     [[ -n "$CLIENT" && "$CLIENT" == /dev/* ]] || \
       CLIENT="$("$TMUX_BIN" list-clients -F '#{client_tty}' 2>/dev/null | head -1)"
     typeset -a ct; ct=(); [[ -n "$CLIENT" ]] && ct=(-c "$CLIENT")
-    [[ "$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)" == 1 ]] && exit 0
-    # start_hidden states (zellij's `start_hidden "scroll"`) stay down until
-    # the toggle key forces them up for this visit.
-    if [[ "$("$TMUX_BIN" show -gv @wk_force 2>/dev/null)" != 1 ]]; then
-      for sh in ${(s:,:)CFG[start_hidden]}; do
-        [[ -n "$sh" && "$sh" == "$mode" ]] && exit 0
-      done
-    fi
+    [[ "$(_vis "$mode")" == 1 ]] || exit 0
     # size the popup to the panel's own geometry, anchored bottom-right
     _load "$mode" || exit 0
     _mode_meta "$mode"
@@ -593,6 +622,92 @@ case "${1:-}" in
     y=$(( rows - MARGIN[3] )); (( y > rows - 1 )) && y=$(( rows - 1 ))
     NEXT_FILE="${TMPDIR:-/tmp}/mux-whichkey-next.${CLIENT:t}"
     while true; do
+      # per-mode visibility is checked EVERY iteration: a mode switched into
+      # from inside the panel can be one the user has hidden.
+      [[ "$(_vis "$mode")" == 1 ]] || break
+      _load "$mode" || break
+      _mode_meta "$mode"
+      _measure
+      ROWS_MAX=${CFG[max_rows]}
+      avail=$(( rows - MARGIN[1] - MARGIN[3] - 4 ))
+      (( ROWS_MAX > avail )) && ROWS_MAX=$avail
+      (( ROWS_MAX < 3 )) && ROWS_MAX=3
+      _footer_text 0 1 1
+      w=$BODY_W; (( FOOT_W > w )) && w=$FOOT_W
+      w=$(( w + PADDING[2] + PADDING[4] + 2 ))
+      n=$ROWS_ALL; (( n > ROWS_MAX )) && n=$ROWS_MAX
+      h=$(( n + 4 + PADDING[1] + PADDING[3] ))
+      x=$(( cols - w - MARGIN[2] )); (( x < 0 )) && x=0
+      y=$(( rows - MARGIN[3] )); (( y > rows - 1 )) && y=$(( rows - 1 ))
+      : >| "$NEXT_FILE"
+      [[ -n "${WK_TRACE:-}" ]] && print -r -- "driver: opening $mode (${w}x${h}) next_file=$NEXT_FILE" >> /tmp/wktrace.log
+      "$TMUX_BIN" display-popup "${ct[@]}" -B -E -w "$w" -h "$h" -x "$x" -y "$y" \
+        "${0:A} panel $mode '$CLIENT' '$NEXT_FILE'"
+      # The panel writes the mode it wants next (empty = it is done).
+      next="$(cat "$NEXT_FILE" 2>/dev/null)"
+      [[ -n "${WK_TRACE:-}" ]] && print -r -- "driver: popup returned, next='$next'" >> /tmp/wktrace.log
+      rm -f "$NEXT_FILE"
+      [[ -n "$next" ]] || break
+      mode="$next"
+    done
+    ;;
+  toggle)
+    st="$("$TMUX_BIN" display -p '#{client_key_table}|#{?pane_in_mode,1,0}|#{?#{@visual},1,0}|#{?#{@searching},1,0}|#{?search_present,1,0}|#{?client_prefix,1,0}' 2>/dev/null)"
+    mux_mode::resolve "${(@s:|:)st}" || exit 0
+    [[ -n "$MM_TABLE" ]] || exit 0
+    if [[ "$(_vis "$MM_TABLE")" == 1 ]]; then
+      _vis_set "$MM_TABLE" 0
+    else
+      _vis_set "$MM_TABLE" 1
+      "${0:A}" open "$MM_TABLE" "$("$TMUX_BIN" display -p '#{client_tty}')" &
+    fi ;;
+  vis-clear) [[ -n "${2:-}" ]] && _vis_clear "$2" ;;
+  vis-reset) _vis_reset ;;
+  restore)
+    bar="$(_default_bar)"
+    "$TMUX_BIN" set -g status on 2>/dev/null
+    [[ -n "$bar" ]] && "$TMUX_BIN" set -g "status-format[0]" "$bar" 2>/dev/null
+    for i in 1 2 3 4; do "$TMUX_BIN" set -gu "status-format[$i]" 2>/dev/null; done
+    ;;
+  panel) _panel "${2:-prefix}" "${3:-}" "${4:-}" ;;
+  render)   # paint once and exit — tests + eyeballing without a popup
+    _load "${2:-prefix}" || exit 0
+    ROWS_MAX="${4:-${CFG[max_rows]}}"
+    _paint "${2:-prefix}" "${3:-0}"
+    print
+    ;;
+  open)
+    mode="${2:-prefix}"
+    CLIENT="${3:-}"
+    # A backgrounded run-shell does NOT format-expand #{client_tty} (and is
+    # itself client-less), so resolve the attached client here — the panel
+    # is per-client and this config has one client per server.
+    [[ -n "$CLIENT" && "$CLIENT" == /dev/* ]] || \
+      CLIENT="$("$TMUX_BIN" list-clients -F '#{client_tty}' 2>/dev/null | head -1)"
+    typeset -a ct; ct=(); [[ -n "$CLIENT" ]] && ct=(-c "$CLIENT")
+    [[ "$(_vis "$mode")" == 1 ]] || exit 0
+    # size the popup to the panel's own geometry, anchored bottom-right
+    _load "$mode" || exit 0
+    _mode_meta "$mode"
+    _measure
+    rows="$("$TMUX_BIN" display -p "${ct[@]}" '#{client_height}' 2>/dev/null)"; [[ "$rows" == <-> ]] || rows=40
+    cols="$("$TMUX_BIN" display -p "${ct[@]}" '#{client_width}' 2>/dev/null)"; [[ "$cols" == <-> ]] || cols=100
+    ROWS_MAX=${CFG[max_rows]}
+    avail=$(( rows - MARGIN[1] - MARGIN[3] - 4 ))
+    (( ROWS_MAX > avail )) && ROWS_MAX=$avail
+    (( ROWS_MAX < 3 )) && ROWS_MAX=3
+    _footer_text 0 1 1
+    w=$BODY_W; (( FOOT_W > w )) && w=$FOOT_W
+    w=$(( w + PADDING[2] + PADDING[4] + 2 ))
+    n=$ROWS_ALL; (( n > ROWS_MAX )) && n=$ROWS_MAX
+    h=$(( n + 4 + PADDING[1] + PADDING[3] ))
+    x=$(( cols - w - MARGIN[2] )); (( x < 0 )) && x=0
+    y=$(( rows - MARGIN[3] )); (( y > rows - 1 )) && y=$(( rows - 1 ))
+    NEXT_FILE="${TMPDIR:-/tmp}/mux-whichkey-next.${CLIENT:t}"
+    while true; do
+      # per-mode visibility is checked EVERY iteration: a mode switched into
+      # from inside the panel can be one the user has hidden.
+      [[ "$(_vis "$mode")" == 1 ]] || break
       _load "$mode" || break
       _mode_meta "$mode"
       _measure
