@@ -27,6 +27,10 @@ setopt no_unset
 
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
 DATA="${WK_DATA:-$HOME/.config/mux/whichkey.data}"
+WK_DATA="$DATA"
+# THE shared mode resolver — the status bar uses the very same one, so the
+# pill and the panel can never disagree about which mode is current.
+source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/mode.zsh"
 PAD=""
 [[ -r "$DATA" ]] || exit 0
 
@@ -103,13 +107,21 @@ _keysdisplay() {       # pipe-separated tmux keys -> "↑,K" (comma is a KEY)
 
 # ---- data -----------------------------------------------------------------
 typeset -a E_KEYS E_DISP E_ICON E_ICOL E_DESC E_FLAGS E_CMD
-_mode_meta() {         # -> M_TITLE M_ICON M_COLOR M_PARENT
+_mode_meta() {         # STATE -> M_TITLE M_ICON M_COLOR M_PARENT (+ M_TABLE)
+  if mux_mode::meta "$1" 2>/dev/null; then
+    M_TITLE="$MM_TITLE" M_ICON="$MM_ICON" M_COLOR="$MM_COLOR"
+    M_PARENT="$MM_PARENT" M_TABLE="${MM_TABLE:-$1}"
+    return 0
+  fi
+  # fall back to the panel-table rows (a table with no state of its own)
   local l; l="$(awk -F'\t' -v m="$1" '$1=="#mode" && $2==m {print; exit}' "$DATA")"
   local -a f; f=("${(@ps:\t:)l}")
-  M_TITLE="${f[3]}" M_ICON="${f[4]}" M_COLOR="${f[5]}" M_PARENT="${f[6]:-}"
+  M_TITLE="${f[3]}" M_ICON="${f[4]}" M_COLOR="${f[5]}" M_PARENT="${f[6]:-}" M_TABLE="$1"
 }
 _load() {
-  local mode="$1" tag m keys icon icol desc flags cmd
+  local state="$1" mode tag m keys icon icol desc flags cmd
+  _mode_meta "$state"
+  mode="${M_TABLE:-$state}"
   E_KEYS=() E_DISP=() E_ICON=() E_ICOL=() E_DESC=() E_FLAGS=() E_CMD=()
   while IFS=$'\t' read -r tag m keys icon icol desc flags cmd; do
     [[ "$tag" == E && "$m" == "$mode" ]] || continue
@@ -525,6 +537,13 @@ case "${1:-}" in
       CLIENT="$("$TMUX_BIN" list-clients -F '#{client_tty}' 2>/dev/null | head -1)"
     typeset -a ct; ct=(); [[ -n "$CLIENT" ]] && ct=(-c "$CLIENT")
     [[ "$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)" == 1 ]] && exit 0
+    # start_hidden states (zellij's `start_hidden "scroll"`) stay down until
+    # the toggle key forces them up for this visit.
+    if [[ "$("$TMUX_BIN" show -gv @wk_force 2>/dev/null)" != 1 ]]; then
+      for sh in ${(s:,:)CFG[start_hidden]}; do
+        [[ -n "$sh" && "$sh" == "$mode" ]] && exit 0
+      done
+    fi
     # size the popup to the panel's own geometry, anchored bottom-right
     _load "$mode" || exit 0
     _mode_meta "$mode"
@@ -571,12 +590,26 @@ case "${1:-}" in
     done
     ;;
   toggle)
-    if [[ "$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)" == 1 ]]; then
-      "$TMUX_BIN" set -g @wk_hidden 0
-      "${0:A}" open "$("$TMUX_BIN" display -p '#{client_key_table}' | sed 's/^root$/prefix/')" \
-        "$("$TMUX_BIN" display -p '#{client_tty}')" &
+    st="$("$TMUX_BIN" display -p '#{client_key_table}|#{?pane_in_mode,1,0}|#{?#{@visual},1,0}|#{?#{@searching},1,0}|#{?search_present,1,0}|#{?client_prefix,1,0}' 2>/dev/null)"
+    mux_mode::resolve "${(@s:|:)st}" || exit 0
+    [[ -n "$MM_TABLE" ]] || exit 0
+    # On screen? Only then does the toggle hide. Otherwise it SHOWS — which
+    # is what it must do in a start_hidden state like Scroll (pressing it
+    # there used to just re-hide an already-hidden panel).
+    onscreen=1
+    [[ "$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)" == 1 ]] && onscreen=0
+    if (( onscreen )); then
+      for sh in ${(s:,:)CFG[start_hidden]}; do
+        [[ -n "$sh" && "$sh" == "$MM_STATE" && "$("$TMUX_BIN" show -gv @wk_force 2>/dev/null)" != 1 ]] && onscreen=0
+      done
+    fi
+    if (( onscreen )); then
+      "$TMUX_BIN" set -g @wk_hidden 1 2>/dev/null
+      "$TMUX_BIN" set -g @wk_force 0 2>/dev/null
     else
-      "$TMUX_BIN" set -g @wk_hidden 1
+      "$TMUX_BIN" set -g @wk_hidden 0 2>/dev/null
+      "$TMUX_BIN" set -g @wk_force 1 2>/dev/null
+      "${0:A}" open "$MM_STATE" "$("$TMUX_BIN" display -p '#{client_tty}')" &
     fi ;;
 esac
 exit 0

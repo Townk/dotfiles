@@ -5,7 +5,8 @@
 # Runtime input for the which-key panel (mux-whichkey): the same entries and
 # commands that generate keymap.conf, with palette slots resolved to hex.
 #cfg	sort_by={{ $w.sort_by }}	width={{ $w.width }}	max_rows={{ $w.max_rows }}	margin={{ $w.margin }}	padding={{ $w.padding }}	sep={{ $w.binding_separator }}	bg=#{{ index $p (index $r.ui $w.background) }}	border=#{{ index $p (index $r.ui $w.border) }}	key=#{{ index $p $w.key_color }}	label=#{{ index $p $w.label_color }}	switch=#{{ index $p $w.switch_color }}	footer=#{{ index $p $w.footer_color }}	dim=#{{ index $p $w.dim_color }}	start_hidden={{ join "," $w.start_hidden }}	toggle={{ $w.toggle_key }}	back={{ $w.back_key }}	next={{ $w.next_page_key }}	prev={{ $w.prev_page_key }}
-{{ range $g := .keymap.which_key.groups }}#group	{{ $g.mode }}	{{ join "|" $g.members }}
+{{ range $n, $st := .keymap.which_key.states }}#state	{{ $n }}	{{ $st.title }}	{{ $st.icon }}	#{{ index $p (index $r.mode $st.color) }}	{{ $st.table }}	{{ $st.parent }}
+{{ end }}{{ range $g := .keymap.which_key.groups }}#group	{{ $g.mode }}	{{ join "|" $g.members }}
 {{ end }}{{ range $name, $t := .keymap.tables }}#mode	{{ $name }}	{{ $t.title }}	{{ $t.icon }}	#{{ index $p $t.color }}	{{ if hasKey $t "parent" }}{{ $t.parent }}{{ end }}
 {{ end }}{{ range $name, $t := .keymap.tables }}{{ range $e := $t.entries }}E	{{ $name }}	{{ join "|" $e.keys }}	{{ $e.icon }}	#{{ index $p $e.color }}	{{ $e.desc }}	{{ if hasKey $e "switch" }}switch,{{ end }}{{ if hasKey $e "stay" }}stay,{{ end }}{{ if hasKey $e "dialog" }}dialog,{{ end }}{{ if hasKey $e "panel_exit" }}exit,{{ end }}{{ if hasKey $e "numeric" }}numeric,{{ end }}{{ if hasKey $e "panel_only" }}only,{{ end }}	{{ $e.cmd }}
 {{ end }}{{ end }}

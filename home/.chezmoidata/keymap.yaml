@@ -123,6 +123,79 @@ keymap:
       - Home
       - G
       - End
+    states:
+      command:
+        title: Command
+        icon: 󰘳
+        color: tmux
+        table: prefix
+        parent: ''
+      tab:
+        title: Tab
+        icon: 󰓩
+        color: tab
+        table: tab
+        parent: command
+      pane:
+        title: Pane
+        icon: 
+        color: pane
+        table: pane
+        parent: command
+      session:
+        title: Session
+        icon: 󰙀
+        color: session
+        table: session
+        parent: command
+      resize:
+        title: Resize
+        icon: 󰩨
+        color: resize
+        table: resize
+        parent: pane
+      move:
+        title: Move
+        icon: 󰙕
+        color: move
+        table: move
+        parent: pane
+      locked:
+        title: Locked
+        icon: 󰌾
+        color: locked
+        table: ''
+        parent: ''
+      nested:
+        title: Nested
+        icon: 󰌾
+        color: locked
+        table: ''
+        parent: ''
+      scroll:
+        title: Scroll
+        icon: 󰩤
+        color: scroll
+        table: copy
+        parent: command
+      copy:
+        title: Copy
+        icon: 󰆏
+        color: visual
+        table: copy
+        parent: scroll
+      search:
+        title: Search
+        icon: 
+        color: search
+        table: copy
+        parent: scroll
+      rename:
+        title: Rename
+        icon: 󰑕
+        color: rename
+        table: ''
+        parent: ''
   tables:
     prefix:
       title: Command

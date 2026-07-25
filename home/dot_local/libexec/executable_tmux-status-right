@@ -35,6 +35,9 @@ NETWORKSETUP="${NETWORKSETUP_BIN:-/usr/sbin/networksetup}"
 FS_STATE="${WIDGETS_FULLSCREEN_STATE:-$HOME/.local/state/wezterm/fullscreen_state}"
 HOST_ALIAS="${WIDGETS_HOSTNAME_ALIAS:-$HOME/.hostname-alias}"
 THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
+# THE shared mode resolver (states, titles, icons, colors and the panel
+# table behind each) — the which-key panel resolves through the same one.
+source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/mode.zsh" 2>/dev/null || true
 
 key_table="${1:-root}"
 in_copy="${2:-0}"
@@ -209,37 +212,18 @@ I_WIFI_ON=$'\U000F05A9' I_WIFI_OFF=$'\U000F092E'
 I_HOST=$'\U000F04CD'
 I_BATT=( $'\U000F008E' $'\U000F12A1' $'\U000F12A2' $'\U000F12A3' )
 
-# ---- mode resolution ------------------------------------------------------
+# ---- mode resolution -------------------------------------------------------
 mode_color="" mode_body="" hint_body=""
-if [[ -n "$renaming" ]]; then
-  # top of the stack: an open rename dialog (@renaming, set by mux-rename)
-  mode_color="$m_rename" mode_body="$I_RENAME Rename"
-elif [[ "$in_copy" == 1 ]]; then
-  if [[ "$search_on" == 1 || "$searching_on" == 1 ]]; then
-    mode_color="$m_search" mode_body="$I_SEARCH Search" hint_body="search"
-  elif [[ "$visual_on" == 1 ]]; then
-    mode_color="$m_visual" mode_body="$I_COPY Copy"
-  else
-    mode_color="$m_scroll" mode_body="$I_SCROLL Scroll"
-  fi
-else
-  # zellij "tmux" mode = the leader armed. The leader is the prefix TABLE
-  # (root M-w -> switch-client -T prefix; see tmux.conf), so it arrives here
-  # as key_table=prefix. client_prefix (4th arg) kept as a fallback for a
-  # classic `set -g prefix` setup.
-  case "$key_table" in
-    prefix)  mode_color="$m_tmux"    mode_body="$I_TMUX Command" ;;
-    tab)     mode_color="$m_tab"     mode_body="$I_TAB Tab" ;;
-    pane)    mode_color="$m_pane"    mode_body="$I_PANE Pane" ;;
-    session) mode_color="$m_session" mode_body="$I_SESSION Session" ;;
-    resize)  mode_color="$m_resize"  mode_body="$I_RESIZE Resize" ;;
-    move)    mode_color="$m_move"    mode_body="$I_MOVE Move" ;;
-    locked)  mode_color="$m_locked"  mode_body="$I_LOCKED Locked" hint_body="exit" ;;
-    nested)  mode_color="$m_locked"  mode_body="$I_LOCKED Nested" hint_body="exit" ;;
+if mux_mode::resolve "$key_table" "$in_copy" "$visual_on" "$searching_on" \
+     "$search_on" "$prefix_on" 2>/dev/null; then
+  mode_color="$MM_COLOR" mode_body="$MM_ICON $MM_TITLE"
+  case "$MM_STATE" in
+    search) hint_body=search ;;
+    locked|nested) hint_body=exit ;;
   esac
-  if [[ -z "$mode_body" && "$prefix_on" == 1 ]]; then
-    mode_color="$m_tmux" mode_body="$I_TMUX Command"
-  fi
+fi
+if [[ -n "$renaming" ]]; then
+  mux_mode::meta rename 2>/dev/null && { mode_color="$MM_COLOR" mode_body="$MM_ICON $MM_TITLE" hint_body="" }
 fi
 
 # ---- ssh / fullscreen -----------------------------------------------------
@@ -271,6 +255,26 @@ fi
 typeset -a bodies kinds
 
 [[ -n "$mode_body" ]] && { bodies+=("$mode_body"); kinds+=(mode); }
+# zj-hud's which-key hint: while the panel is NOT on screen in a live mode
+# — hidden with M-. or a start_hidden mode like Scroll — the bar advertises
+# the toggle ("󰘵 . keys").
+wk_hidden="$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)"
+wk_cfg="$(grep -m1 '^#cfg' "${WK_DATA:-$HOME/.config/mux/whichkey.data}" 2>/dev/null)"
+wk_key="" wk_start_hidden=""
+for kv in ${(ps:\t:)wk_cfg}; do
+  case "$kv" in
+    toggle=*) wk_key="${kv#*=}" ;;
+    start_hidden=*) wk_start_hidden="${kv#*=}" ;;
+  esac
+done
+wk_suppressed=0
+[[ "$wk_hidden" == 1 ]] && wk_suppressed=1
+for sh in ${(s:,:)wk_start_hidden}; do
+  [[ -n "$sh" && "$sh" == "${MM_STATE:-}" ]] && wk_suppressed=1
+done
+if [[ -n "$mode_body" && -n "$wk_key" ]] && (( wk_suppressed )); then
+  bodies+=("@WKHINT@${wk_key}"); kinds+=(wkhint)
+fi
 if [[ "$hint_body" == search ]]; then
   # zj-hud search_hint_segment: case/word/wrap, glyph bright when on.
   bodies+=("$I_TCASE case  $I_TWORD word  $I_TWRAP wrap"); kinds+=(shint)
@@ -331,7 +335,12 @@ for (( i = 1; i <= n; i++ )); do
   bg="$(lerp "$base" "$bar_bg" $(( n - i )) "$n")"
   fg="$(seg_fg "$bg")"
   body="${bodies[i]}"
-  if [[ "${kinds[i]}" == shint ]]; then
+  if [[ "${kinds[i]}" == wkhint ]]; then
+    wkk="${bodies[i]#@WKHINT@}"
+    # glyphs like the panel's: M-. → 󰘵 .
+    wkk="${wkk/M-/${I_ALT} }"
+    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${c_white}] ${wkk}#[fg=${fg}] keys "
+  elif [[ "${kinds[i]}" == shint ]]; then
     sc="${search_toggles[1]:-0}" sw="${search_toggles[2]:-0}" sp="${search_toggles[3]:-1}"
     [[ "$sc" == 1 ]] && cg="$c_white" || cg="$fg"
     [[ "$sw" == 1 ]] && wg="$c_white" || wg="$fg"

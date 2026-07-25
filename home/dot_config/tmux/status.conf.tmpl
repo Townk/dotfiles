@@ -35,6 +35,7 @@ set -g status-right "#({{ .chezmoi.homeDir }}/.local/libexec/tmux-status-right '
 # over the panes and dispatches the mode's keys itself while open (tmux
 # popups swallow key-table input). Nothing to wire into the status stack.
 set -g @wk_hidden 0
+set -g @wk_force 0
 # Defensive: a server from the status-line era can still carry panel rows in
 # status-format; put the stack back to "bar only".
 run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey restore"
