@@ -8,18 +8,44 @@
 # makes that file generated from here (ratified duplication).
 keymap:
   menu_key: "M-."
+  # which-key panel config — mirrors the zellij layout's `which_key {}` block.
+  # Colors are palette slot names; geometry in cells. Rendered by
+  # mux-whichkey into status lines (tmux's only PASSIVE overlay: popups are
+  # modal and collide with our own dialogs). tmux caps the status stack at
+  # 5 lines, so max_rows tops out at 4 with the bar — pagination covers the
+  # rest (the panel's own designed mitigation).
+  which_key:
+    sort_by: row            # row | column
+    width: single           # single (snug) | fill
+    columns: auto           # auto | <int>
+    max_rows: 4             # panel rows incl. borders (tmux cap: 5 - bar)
+    margin: "0,2,0,6"       # top,right,bottom,left (cells from the edges)
+    padding: "0,1,0,1"      # interior inset: top,right,bottom,left
+    binding_separator: "➜"
+    background: dialog_bg   # panel canvas (mantle) — ui role slot
+    border: border_focus    # frame (blue) — ui role slot
+    key_color: white        # chord glyphs, bright white — palette slot
+    label_color: pink       # ordinary labels — palette slot
+    switch_color: blue      # labels that ENTER another mode — palette slot
+    footer_color: overlay0  # separator + footer words — palette slot
+    dim_color: surface2     # the ➜ separator — palette slot
+    start_hidden: [scroll]  # modes where the panel stays hidden until toggled
+    toggle_key: "M-."
+    back_key: "BSpace"
+    next_page_key: "C-d"
+    prev_page_key: "C-u"
   tables:
     prefix:
       title: Command
       icon: "󰘳"
       color: red
       entries:
-        - { key: L, desc: "Locked mode …", icon: "󰌾", color: peach, cmd: "set key-table locked" }
-        - { key: o, desc: "Session mode …", icon: "󰙀", color: red, cmd: "set key-table session" }
-        - { key: t, desc: "Tab mode …", icon: "󰓩", color: green, cmd: "set key-table tab" }
-        - { key: p, desc: "Pane mode …", icon: "", color: blue, cmd: "set key-table pane" }
-        - { key: l, desc: "Scroll mode …", icon: "󰩤", color: lavender, cmd: "set -p @visual 0 ; copy-mode" }
-        - { key: V, desc: "copy mode …", icon: "󰆏", color: mauve, cmd: "set -p @visual 1 ; set -p @copy_parent command ; copy-mode" }
+        - { key: L, desc: "Locked mode …", switch: true, icon: "󰌾", color: peach, cmd: "set key-table locked" }
+        - { key: o, desc: "Session mode …", switch: true, icon: "󰙀", color: red, cmd: "set key-table session" }
+        - { key: t, desc: "Tab mode …", switch: true, icon: "󰓩", color: green, cmd: "set key-table tab" }
+        - { key: p, desc: "Pane mode …", switch: true, icon: "", color: blue, cmd: "set key-table pane" }
+        - { key: l, desc: "Scroll mode …", switch: true, icon: "󰩤", color: lavender, cmd: "set -p @visual 0 ; copy-mode" }
+        - { key: V, desc: "copy mode …", switch: true, icon: "󰆏", color: mauve, cmd: "set -p @visual 1 ; set -p @copy_parent command ; copy-mode" }
         - sep: true
         - { key: s, desc: "split pane (horiz)", icon: "", color: blue, cmd: "split-window -v" }
         - { key: v, desc: "split pane (vert)", icon: "", color: blue, cmd: "split-window -h" }
@@ -40,11 +66,12 @@ keymap:
         - { key: ",", desc: "terminal settings", icon: "", color: teal, cmd: "run-shell 'zsh ~/.config/zellij/scripts/edit-terminal-config'" }
         - { key: q, desc: "kill current session", icon: "󰈆", color: red, menu_only: true }
     tab:
+      parent: prefix
       title: Tab
       icon: "󰓩"
       color: green
       entries:
-        - { key: n, desc: "Rename Tab …", icon: "󰑕", color: yellow, menu_only: true }
+        - { key: n, desc: "Rename Tab …", switch: true, icon: "󰑕", color: yellow, menu_only: true }
         - { key: N, desc: "new tab", icon: "󰝜", color: mauve, cmd: "new-window ; set key-table root" }
         - { key: T, desc: "quick launch new tab", icon: "󰓞", color: mauve, menu_only: true }
         - { key: x, desc: "close tab", icon: "󰱞", color: red, cmd: "kill-window ; set key-table root" }
@@ -58,13 +85,14 @@ keymap:
         - { key: P, desc: "pane to tab", icon: "", color: green, cmd: "break-pane ; set key-table root" }
         - { key: s, desc: "sync input all panes", icon: "", color: blue, cmd: "setw synchronize-panes ; set key-table root" }
     pane:
+      parent: prefix
       title: Pane
       icon: ""
       color: blue
       entries:
-        - { key: m, desc: "Move Pane …", icon: "󰙕", color: yellow, cmd: "set key-table move" }
-        - { key: r, desc: "Resize Pane …", icon: "󰩨", color: mauve, cmd: "set key-table resize" }
-        - { key: n, desc: "Rename Pane …", icon: "󰑕", color: yellow, menu_only: true }
+        - { key: m, desc: "Move Pane …", switch: true, icon: "󰙕", color: yellow, cmd: "set key-table move" }
+        - { key: r, desc: "Resize Pane …", switch: true, icon: "󰩨", color: mauve, cmd: "set key-table resize" }
+        - { key: n, desc: "Rename Pane …", switch: true, icon: "󰑕", color: yellow, menu_only: true }
         - sep: true
         - { key: h, desc: "focus left", icon: "󰅁", color: teal, cmd: "select-pane -L" }
         - { key: j, desc: "focus down", icon: "󰅀", color: teal, cmd: "select-pane -D" }
@@ -81,6 +109,7 @@ keymap:
         - { key: z, desc: "toggle pane zoom", icon: "󱀅", color: blue, cmd: "resize-pane -Z ; set key-table root" }
         - { key: x, desc: "close pane", icon: "󰅘", color: red, cmd: "kill-pane ; set key-table root" }
     resize:
+      parent: pane
       title: Resize
       icon: "󰩨"
       color: mauve
@@ -93,6 +122,7 @@ keymap:
         - { key: "+", desc: "grow", icon: "󰐕", color: teal, cmd: "resize-pane -U 2" }
         - { key: "-", desc: "shrink", icon: "󰍴", color: teal, cmd: "resize-pane -D 2" }
     move:
+      parent: pane
       title: Move
       icon: "󰙕"
       color: yellow
@@ -102,6 +132,7 @@ keymap:
         - { key: h, desc: "rotate window up", icon: "󰅁", color: teal, cmd: "rotate-window -U" }
         - { key: l, desc: "rotate window down", icon: "󰅂", color: teal, cmd: "rotate-window -D" }
     session:
+      parent: prefix
       title: Session
       icon: "󰙀"
       color: red
@@ -110,12 +141,13 @@ keymap:
         - { key: w, desc: "session manager", icon: "󰧨", color: red, cmd: "choose-tree -Zs ; set key-table root" }
         - { key: S, desc: "quick launch session", icon: "󰓟", color: red, menu_only: true }
     copy:
+      parent: prefix
       title: Scroll
       icon: "󰩤"
       color: lavender
       table: copy-mode-vi
       entries:
-        - { key: "/", desc: "Search scroll buffer …", icon: "", color: blue, menu_only: true }
+        - { key: "/", desc: "Search scroll buffer …", switch: true, icon: "", color: blue, menu_only: true }
         - { key: V, desc: "edit scrollback", icon: "", color: peach, menu_only: true }
         - { key: v, desc: "copy mode / select", icon: "󰆏", color: mauve, menu_only: true }
         - { key: y, desc: "yank selection", icon: "󰆏", color: yellow, cmd: "send -X copy-pipe-and-cancel" }

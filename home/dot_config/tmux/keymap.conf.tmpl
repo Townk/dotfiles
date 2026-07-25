@@ -108,6 +108,32 @@ bind -n M-/ set -p @searching 1 \; set -p @visual 0 \; set -p @search_parent nor
 # too hot to intercept before their consumer exists under tmux (Phase 6.4
 # wires them against the @ctx pane option the tm wrapper already stamps).
 
+
+# ---------------------------------------------------------------------------
+# Which-key panel controls (Phase 5, D5) — the panel itself is passive and
+# auto-shows with the mode stack (driven from the bar render); these are the
+# zellij panel chords: M-. hides/shows it, C-d/C-u page when it overflows.
+# ---------------------------------------------------------------------------
+bind M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+bind C-d run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page next"
+bind C-u run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page prev"
+bind -T tab M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+bind -T tab C-d run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page next"
+bind -T tab C-u run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page prev"
+bind -T pane M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+bind -T pane C-d run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page next"
+bind -T pane C-u run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page prev"
+bind -T session M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+bind -T session C-d run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page next"
+bind -T session C-u run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page prev"
+bind -T resize M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+bind -T resize C-d run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page next"
+bind -T resize C-u run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page prev"
+bind -T move M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+bind -T move C-d run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page next"
+bind -T move C-u run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey page prev"
+bind -T copy-mode-vi M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+
 # ---------------------------------------------------------------------------
 # tab table (zellij "tab" mode)
 # ---------------------------------------------------------------------------

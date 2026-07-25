@@ -45,6 +45,7 @@ renaming="${6:-}"
 visual_on="${7:-0}"
 searching_on="${8:-0}"
 search_toggles="${9:-}"
+cwidth="${10:-80}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
@@ -346,4 +347,11 @@ for (( i = 1; i <= n; i++ )); do
   prev_bg="$bg"
 done
 print -rn -- "${out}#[default]"
+
+# Drive the which-key panel from here: this script re-runs on every mode
+# change (its arguments are format-expanded), so a backgrounded idempotent
+# sync keeps the panel's status-line stack in step with the mode stack —
+# no per-bind wiring, and nothing happens when the state is unchanged.
+( "$HOME/.config/mux/scripts/mux-whichkey" sync "$key_table" "$in_copy" \
+    "$visual_on" "$searching_on" "$search_on" "$cwidth" >/dev/null 2>&1 & ) 2>/dev/null
 exit 0
