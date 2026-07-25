@@ -1,11 +1,15 @@
 #!/usr/bin/env zsh
-# mux-scroll-cursor <pane-id> — hide the terminal cursor in SCROLL state
-# (copy-mode with @visual unset), restore it everywhere else (mux migration
-# Phase 4; zellij scroll mode has no cursor). The copy-mode cursor is the
-# REAL terminal cursor (probe: no reverse-video cell in capture -e), so the
-# per-pane cursor-colour option painted to the canvas color hides it.
-# Driven by the pane-mode-changed hook (status.conf) plus the @visual
-# transitions in the keymap (v / Backspace inside copy-mode).
+# mux-scroll-cursor <pane-id> — sync the terminal cursor to the mode-stack
+# state (mux migration Phase 4). Rules (user-specified):
+#   Scroll                    cursor OFF
+#   Search (input dialog)     cursor ON
+#   Search (committed)        cursor OFF
+#   Copy/visual               cursor ON, BLOCK shape (not the shell's bar)
+#   not in copy-mode          everything restored
+# The copy-mode cursor is the REAL terminal cursor, so visibility is a
+# per-pane cursor-colour painted to the canvas color, and shape is the
+# per-pane cursor-style. Driven by the pane-mode-changed hook plus the
+# state transitions in the keymap and mux-search.
 
 emulate -L zsh
 setopt no_unset
@@ -16,14 +20,31 @@ THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
 pane="${1:-}"
 [[ -n "$pane" ]] || exit 0
 
-in_mode="$("$TMUX_BIN" display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" || exit 0
-vis="$("$TMUX_BIN" display -p -t "$pane" '#{@visual}' 2>/dev/null)" || vis=""
+st="$("$TMUX_BIN" display -p -t "$pane" \
+  '#{pane_in_mode} #{?#{@searching},1,0} #{?search_present,1,0} #{?#{@visual},1,0}' \
+  2>/dev/null)" || exit 0
+parts=(${(s: :)st})
+in_mode="${parts[1]:-0}" searching="${parts[2]:-0}" sp="${parts[3]:-0}" vis="${parts[4]:-0}"
 
-if [[ "$in_mode" == 1 && "$vis" != 1 ]]; then
-  bg="$(jq -r '.roles.ui.bg' "$THEME_JSON" 2>/dev/null)" || exit 0
-  [[ "$bg" == \#* ]] || exit 0
+hide() {
+  local bg
+  bg="$(jq -r '.roles.ui.bg' "$THEME_JSON" 2>/dev/null)" || return 0
+  [[ "$bg" == \#* ]] || return 0
   "$TMUX_BIN" set -p -t "$pane" cursor-colour "$bg" 2>/dev/null
+}
+show() { "$TMUX_BIN" set -p -t "$pane" -u cursor-colour 2>/dev/null }
+shape_block() { "$TMUX_BIN" set -p -t "$pane" cursor-style block 2>/dev/null }
+shape_reset() { "$TMUX_BIN" set -p -t "$pane" -u cursor-style 2>/dev/null }
+
+if [[ "$in_mode" != 1 ]]; then
+  show; shape_reset
+elif [[ "$searching" == 1 ]]; then
+  show; shape_reset
+elif [[ "$sp" == 1 ]]; then
+  hide; shape_reset
+elif [[ "$vis" == 1 ]]; then
+  show; shape_block
 else
-  "$TMUX_BIN" set -p -t "$pane" -u cursor-colour 2>/dev/null
+  hide; shape_reset
 fi
 exit 0
