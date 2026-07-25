@@ -128,7 +128,7 @@ Describe 'tmux keymap tables'
 
   It 'the which-key panel opens on the leader and toggles on M-. (Phase 5)'
     When call tmux -L kmspec list-keys
-    The output should include "mux-whichkey open prefix"
+    The output should include "mux-whichkey open command"
     The output should include "mux-whichkey toggle"
   End
 
