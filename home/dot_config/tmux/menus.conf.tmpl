@@ -1,0 +1,14 @@
+{{- $p := index .theme.palettes .theme.active -}}
+# menus.conf — GENERATED which-key menus (mux migration Phase 5, D5 Stage 1)
+# from home/.chezmoidata/keymap.yaml — edit the YAML, not this file.
+#
+# M-. inside any mode table pops that table's menu (zellij Alt+. toggle
+# parity; resting modes have no panel, so root deliberately has no bind).
+# Rows with a simple command EXECUTE on selection; rows whose real bind is
+# too gnarly to duplicate are DISABLED hint rows (leading '-') — which-key
+# is documentation first (the zellij panel is display-only too). Colors are
+# palette slots resolved at render (theme single-source holds).
+{{ range $name, $t := .keymap.tables -}}
+{{- $tbl := $name }}{{ if hasKey $t "table" }}{{ $tbl = $t.table }}{{ end -}}
+bind -T {{ $tbl }} {{ $.keymap.menu_key }} display-menu -T "#[fg=#{{ index $p $t.color }}]{{ $t.icon }} {{ $t.title }}" -x C -y C --{{ range $t.entries }}{{ if hasKey . "sep" }} ""{{ else if hasKey . "menu_only" }} "-#[fg=#{{ index $p .color }}]{{ .icon }} #[default]{{ .desc }}" "{{ .key }}" ""{{ else }} "#[fg=#{{ index $p .color }}]{{ .icon }} #[default]{{ .desc }}" "{{ .key }}" { {{ .cmd }} }{{ end }}{{ end }}
+{{ end -}}

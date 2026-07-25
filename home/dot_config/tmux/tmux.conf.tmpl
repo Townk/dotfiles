@@ -105,3 +105,7 @@ source-file "{{ .chezmoi.homeDir }}/.config/tmux/keymap.conf"
 # Status line assembly (Phase 4, D6) — MUST parse after the theme: it
 # composes status formats from the theme's %hidden color fragments.
 source-file "{{ .chezmoi.homeDir }}/.config/tmux/status.conf"
+
+# ---------------------------------------------------------------------------
+# Which-key menus (Phase 5, D5 Stage 1) — generated from keymap.yaml.
+source-file "{{ .chezmoi.homeDir }}/.config/tmux/menus.conf"

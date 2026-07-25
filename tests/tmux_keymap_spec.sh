@@ -14,8 +14,9 @@ Describe 'tmux keymap tables'
     # status.conf composes formats from them — same order as tmux.conf.
     chezmoi execute-template <custom-builds/theme/templates/tmux-theme.conf.tmpl >"$KM_TMP/theme.conf" 2>/dev/null
     chezmoi execute-template <home/dot_config/tmux/status.conf.tmpl >"$KM_TMP/status.conf" 2>/dev/null
-    printf 'source-file "%s"\nsource-file "%s"\nsource-file "%s"\n' \
-      "$KM_TMP/theme.conf" "$KM_TMP/keymap.conf" "$KM_TMP/status.conf" >"$KM_TMP/tmux.conf"
+    chezmoi execute-template <home/dot_config/tmux/menus.conf.tmpl >"$KM_TMP/menus.conf" 2>/dev/null
+    printf 'source-file "%s"\nsource-file "%s"\nsource-file "%s"\nsource-file "%s"\n' \
+      "$KM_TMP/theme.conf" "$KM_TMP/keymap.conf" "$KM_TMP/status.conf" "$KM_TMP/menus.conf" >"$KM_TMP/tmux.conf"
     # A detached session keeps the scratch server alive — a session-less tmux
     # server exits immediately, and any later tmux -L call would silently
     # start a fresh, CONFIG-LESS server (default binds only).
@@ -101,10 +102,16 @@ Describe 'tmux keymap tables'
     The output should include "capture-pane"
   End
 
-  It 'status-right carries the mode pill chain and the widgets call'
+  It 'status-right rides the ribbon renderer with live mode arguments'
     When call tmux -L kmspec show -g status-right
+    The output should include "tmux-status-right"
     The output should include "client_key_table"
-    The output should include "tmux-status-widgets"
+  End
+
+  It 'window pills are the zj-hud tab chrome'
+    When call tmux -L kmspec show -gw window-status-format
+    The output should include "▌"
+    The output should include "pane_current_path"
   End
 
   It 'window pills carry the alarm flag icons'
@@ -116,6 +123,16 @@ Describe 'tmux keymap tables'
   It 'prefix f toggles pane frames (zellij TogglePaneFrames twin)'
     When call keys prefix
     The output should include "pane-border-status"
+  End
+
+  It 'every mode table carries its which-key menu on M-. (Phase 5)'
+    # NB: asserted via the GLOBAL listing (the list-keys -T quirk; ledger).
+    When call tmux -L kmspec list-keys
+    The output should include "-T tab M-."
+    The output should include "-T pane M-."
+    The output should include "-T prefix M-."
+    The output should include "-T copy-mode-vi M-."
+    The output should include "display-menu"
   End
 
   It 'alert hooks route to the notifier'
