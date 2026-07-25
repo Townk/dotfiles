@@ -1,164 +1,623 @@
-# keymap.yaml — the shared mux keymap + which-key label data (migration
-# Phase 5, D5 Stage 1). Single source for: the tmux which-key menus
-# (menus.conf.tmpl), the deployed ~/.config/mux/keymap.yaml (the future
-# tmux-hud's runtime input), and — Phase 5.2/8 — the generated keymap.conf
-# and zellij KDL. Colors are PALETTE SLOT NAMES from theme.yaml (hex is
-# resolved at template render); icons/descs ported from the zellij
-# layout's which_key.labels. `cmd` mirrors keymap.conf verbatim until 5.2
-# makes that file generated from here (ratified duplication).
+# keymap.yaml — THE authoritative mux keymap (migration Phase 5/5.2).
+# Single source for: the generated tmux mode tables (keymap.conf.tmpl), the
+# which-key PANEL's own dispatcher + labels (whichkey.data → mux-whichkey),
+# and later the zellij KDL (Phase 8). Everything the panel shows and every
+# key it dispatches comes from here, so the two can never drift.
+#
+# entry fields: keys[] (tmux key names; several = variants shown merged,
+# e.g. Up + k → "↑,K"), desc, icon, color (palette slot), cmd (tmux command
+# line), switch (pushes another mode), stay (mode survives the action),
+# dialog (opens a popup — the panel closes first: popup-in-popup mutates
+# the outer one), panel_exit (leaves the panel's world entirely),
+# panel_only (documented here, bound in keymap-base.conf), numeric (the
+# 1..9 tab jumps — cmd "#N" templates the index).
 keymap:
-  menu_key: "M-."
-  # which-key panel config — mirrors the zellij layout's `which_key {}` block.
-  # Colors are palette slot names; geometry in cells. Rendered by
-  # mux-whichkey into status lines (tmux's only PASSIVE overlay: popups are
-  # modal and collide with our own dialogs). tmux caps the status stack at
-  # 5 lines, so max_rows tops out at 4 with the bar — pagination covers the
-  # rest (the panel's own designed mitigation).
   which_key:
-    sort_by: row            # row | column
-    width: single           # single (snug) | fill
-    columns: auto           # auto | <int>
-    max_rows: 4             # panel rows incl. borders (tmux cap: 5 - bar)
-    margin: "0,2,0,6"       # top,right,bottom,left (cells from the edges)
-    padding: "0,1,0,1"      # interior inset: top,right,bottom,left
-    binding_separator: "➜"
-    background: dialog_bg   # panel canvas (mantle) — ui role slot
-    border: border_focus    # frame (blue) — ui role slot
-    key_color: white        # chord glyphs, bright white — palette slot
-    label_color: pink       # ordinary labels — palette slot
-    switch_color: blue      # labels that ENTER another mode — palette slot
-    footer_color: overlay0  # separator + footer words — palette slot
-    dim_color: surface2     # the ➜ separator — palette slot
-    start_hidden: [scroll]  # modes where the panel stays hidden until toggled
-    toggle_key: "M-."
-    back_key: "BSpace"
-    next_page_key: "C-d"
-    prev_page_key: "C-u"
+    sort_by: row
+    width: single
+    max_rows: 25
+    margin: 1,2,2,6
+    padding: 0,1,0,1
+    binding_separator: '➜'
+    background: dialog_bg
+    border: border_focus
+    key_color: white
+    label_color: pink
+    switch_color: blue
+    footer_color: overlay0
+    dim_color: surface2
+    start_hidden:
+    - scroll
+    toggle_key: M-.
+    back_key: BSpace
+    next_page_key: C-d
+    prev_page_key: C-u
   tables:
     prefix:
       title: Command
-      icon: "󰘳"
+      icon: '󰘳'
       color: red
       entries:
-        - { key: L, desc: "Locked mode …", switch: true, icon: "󰌾", color: peach, cmd: "set key-table locked" }
-        - { key: o, desc: "Session mode …", switch: true, icon: "󰙀", color: red, cmd: "set key-table session" }
-        - { key: t, desc: "Tab mode …", switch: true, icon: "󰓩", color: green, cmd: "set key-table tab" }
-        - { key: p, desc: "Pane mode …", switch: true, icon: "", color: blue, cmd: "set key-table pane" }
-        - { key: l, desc: "Scroll mode …", switch: true, icon: "󰩤", color: lavender, cmd: "set -p @visual 0 ; copy-mode" }
-        - { key: V, desc: "copy mode …", switch: true, icon: "󰆏", color: mauve, cmd: "set -p @visual 1 ; set -p @copy_parent command ; copy-mode" }
-        - sep: true
-        - { key: s, desc: "split pane (horiz)", icon: "", color: blue, cmd: "split-window -v" }
-        - { key: v, desc: "split pane (vert)", icon: "", color: blue, cmd: "split-window -h" }
-        - { key: f, desc: "toggle pane borders", icon: "󰃇", color: blue, cmd: "if -F '#{==:#{pane-border-status},off}' 'setw -g pane-border-status top' 'setw -g pane-border-status off'" }
-        - { key: z, desc: "toggle pane zoom", icon: "󱀅", color: blue, cmd: "resize-pane -Z" }
-        - sep: true
-        - { key: u, desc: "alarm on updated", icon: "󰂞", color: yellow, cmd: "setw monitor-activity on ; display 'alarm: activity'" }
-        - { key: i, desc: "alarm on idle", icon: "󰂠", color: yellow, cmd: "setw monitor-silence 30 ; display 'alarm: idle 30s'" }
-        - { key: k, desc: "cancel all alarms", icon: "󰂛", color: yellow, cmd: "setw monitor-silence 0 ; setw monitor-activity off ; display 'alarms cleared'" }
-        - sep: true
-        - { key: Y, desc: "copy pwd", icon: "󰅇", color: yellow, cmd: "run-shell 'zsh ~/.config/zellij/scripts/copy-pwd --relative #{pane_pid}'" }
-        - { key: M-y, desc: "copy pwd (abs)", icon: "󰅇", color: yellow, cmd: "run-shell 'zsh ~/.config/zellij/scripts/copy-pwd --absolute #{pane_pid}'" }
-        - sep: true
-        - { key: U, desc: "glyph picker (repeat)", icon: "󰥸", color: mauve, menu_only: true }
-        - { key: G, desc: "gitmoji picker (repeat)", icon: "󰥸", color: mauve, menu_only: true }
-        - { key: c, desc: "clipboard history", icon: "󱛢", color: mauve, menu_only: true }
-        - sep: true
-        - { key: ",", desc: "terminal settings", icon: "", color: teal, cmd: "run-shell 'zsh ~/.config/zellij/scripts/edit-terminal-config'" }
-        - { key: q, desc: "kill current session", icon: "󰈆", color: red, menu_only: true }
+      - keys:
+        - L
+        desc: Locked mode …
+        icon: '󰌾'
+        color: peach
+        cmd: set key-table locked
+        switch: true
+        panel_exit: true
+      - keys:
+        - o
+        desc: Session mode …
+        icon: '󰙀'
+        color: red
+        cmd: set key-table session
+        switch: true
+      - keys:
+        - t
+        desc: Tab mode …
+        icon: '󰓩'
+        color: green
+        cmd: set key-table tab
+        switch: true
+      - keys:
+        - p
+        desc: Pane mode …
+        icon: ''
+        color: blue
+        cmd: set key-table pane
+        switch: true
+      - keys:
+        - l
+        desc: Scroll mode …
+        icon: '󰩤'
+        color: lavender
+        cmd: set -p @visual 0 ; copy-mode
+        switch: true
+        panel_exit: true
+      - keys:
+        - V
+        desc: Copy mode …
+        icon: '󰆏'
+        color: mauve
+        cmd: set -p @visual 1 ; set -p @copy_parent command ; copy-mode
+        switch: true
+        panel_exit: true
+      - keys:
+        - ','
+        desc: terminal settings
+        icon: ''
+        color: teal
+        cmd: run-shell 'zsh ~/.config/zellij/scripts/edit-terminal-config'
+      - keys:
+        - q
+        desc: kill current session
+        icon: '󰈆'
+        color: red
+        cmd: display-popup -E -B -w 52 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-quit-confirm'
+        dialog: true
+      - keys:
+        - s
+        desc: split pane (horiz)
+        icon: ''
+        color: blue
+        cmd: split-window -v
+      - keys:
+        - v
+        desc: split pane (vert)
+        icon: ''
+        color: blue
+        cmd: split-window -h
+      - keys:
+        - f
+        desc: toggle pane borders
+        icon: '󰃇'
+        color: blue
+        cmd: if -F '#{==:#{pane-border-status},off}' 'setw -g pane-border-status top' 'setw -g pane-border-status off'
+        stay: true
+      - keys:
+        - z
+        desc: toggle pane zoom
+        icon: '󱀅'
+        color: blue
+        cmd: resize-pane -Z
+      - keys:
+        - u
+        desc: alarm on updated
+        icon: '󰂞'
+        color: yellow
+        cmd: 'setw monitor-activity on ; display ''alarm: activity'''
+      - keys:
+        - i
+        desc: alarm on idle
+        icon: '󰂠'
+        color: yellow
+        cmd: 'setw monitor-silence 30 ; display ''alarm: idle 30s'''
+      - keys:
+        - k
+        desc: cancel all alarms
+        icon: '󰂛'
+        color: yellow
+        cmd: setw monitor-silence 0 ; setw monitor-activity off ; display 'alarms cleared'
+      - keys:
+        - U
+        desc: glyph picker (repeat)
+        icon: '󰥸'
+        color: mauve
+        cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GLYPH_PADDING=0,2,0,2 "$HOME/.config/mux/scripts/tmux-modal --title \"Glyph Picker (resumed)\"
+          --inject --no-chrome -- $HOME/.local/libexec/pick-glyph --resume"'
+        dialog: true
+      - keys:
+        - G
+        desc: gitmoji picker (repeat)
+        icon: '󰥸'
+        color: mauve
+        cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GITMOJI_PADDING=0,2,0,2 "$HOME/.config/mux/scripts/tmux-modal --title \"Gitmoji Picker (resumed)\"
+          --inject --no-chrome -- $HOME/.local/libexec/pick-gitmoji --resume"'
+        dialog: true
+      - keys:
+        - c
+        desc: clipboard history
+        icon: '󱛢'
+        color: mauve
+        cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 75 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Clipboard history\" --inject --no-chrome -- $HOME/.local/libexec/pick-clipboard"'
+        dialog: true
+      - keys:
+        - Y
+        desc: copy pwd
+        icon: '󰅇'
+        color: yellow
+        cmd: 'run-shell ''zsh ~/.config/zellij/scripts/copy-pwd --relative #{pane_pid}'''
+      - keys:
+        - M-y
+        desc: copy pwd (abs)
+        icon: '󰅇'
+        color: yellow
+        cmd: 'run-shell ''zsh ~/.config/zellij/scripts/copy-pwd --absolute #{pane_pid}'''
     tab:
-      parent: prefix
       title: Tab
-      icon: "󰓩"
+      icon: '󰓩'
       color: green
+      parent: prefix
       entries:
-        - { key: n, desc: "Rename Tab …", switch: true, icon: "󰑕", color: yellow, menu_only: true }
-        - { key: N, desc: "new tab", icon: "󰝜", color: mauve, cmd: "new-window ; set key-table root" }
-        - { key: T, desc: "quick launch new tab", icon: "󰓞", color: mauve, menu_only: true }
-        - { key: x, desc: "close tab", icon: "󰱞", color: red, cmd: "kill-window ; set key-table root" }
-        - sep: true
-        - { key: h, desc: "previous tab", icon: "󰅁", color: teal, cmd: "previous-window" }
-        - { key: l, desc: "next tab", icon: "󰅂", color: teal, cmd: "next-window" }
-        - { key: Tab, desc: "last focused tab", icon: "󰄹", color: teal, cmd: "last-window" }
-        - sep: true
-        - { key: "[", desc: "tab to pane at left", icon: "󰮹", color: green, cmd: "join-pane -h -t :-1 ; set key-table root" }
-        - { key: "]", desc: "tab to pane at right", icon: "󰮺", color: green, cmd: "join-pane -h -t :+1 ; set key-table root" }
-        - { key: P, desc: "pane to tab", icon: "", color: green, cmd: "break-pane ; set key-table root" }
-        - { key: s, desc: "sync input all panes", icon: "", color: blue, cmd: "setw synchronize-panes ; set key-table root" }
+      - keys:
+        - n
+        desc: Rename Tab …
+        icon: '󰑕'
+        color: yellow
+        cmd: set key-table root ; display-popup -E -B -w 66 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-rename window'
+        switch: true
+        dialog: true
+      - keys:
+        - N
+        desc: new tab
+        icon: '󰝜'
+        color: mauve
+        cmd: new-window ; set key-table root
+      - keys:
+        - T
+        desc: quick launch new tab
+        icon: '󰓞'
+        color: mauve
+        cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Tab\" --no-chrome --
+          $HOME/.config/zellij/scripts/quick-launch menu tab"'
+        dialog: true
+      - keys:
+        - x
+        desc: close tab
+        icon: '󰱞'
+        color: red
+        cmd: kill-window ; set key-table root
+      - keys:
+        - Left
+        - h
+        desc: previous tab
+        icon: '󰅁'
+        color: teal
+        cmd: previous-window
+        stay: true
+      - keys:
+        - Right
+        - l
+        desc: next tab
+        icon: '󰅂'
+        color: teal
+        cmd: next-window
+        stay: true
+      - keys:
+        - Tab
+        desc: last focused tab
+        icon: '󰄹'
+        color: teal
+        cmd: last-window
+        stay: true
+      - keys:
+        - '1'
+        - '2'
+        - '3'
+        - '4'
+        - '5'
+        - '6'
+        - '7'
+        - '8'
+        - '9'
+        desc: go to tab N
+        icon: '󰎠'
+        color: teal
+        cmd: select-window -t :=#N ; set key-table root
+        numeric: true
+      - keys:
+        - '['
+        desc: tab to pane at left
+        icon: '󰮹'
+        color: green
+        cmd: join-pane -h -t :-1 ; set key-table root
+      - keys:
+        - ']'
+        desc: tab to pane at right
+        icon: '󰮺'
+        color: green
+        cmd: join-pane -h -t :+1 ; set key-table root
+      - keys:
+        - P
+        desc: pane to tab
+        icon: ''
+        color: green
+        cmd: break-pane ; set key-table root
+      - keys:
+        - s
+        desc: sync input all panes
+        icon: ''
+        color: blue
+        cmd: setw synchronize-panes ; set key-table root
     pane:
-      parent: prefix
       title: Pane
-      icon: ""
+      icon: ''
       color: blue
+      parent: prefix
       entries:
-        - { key: m, desc: "Move Pane …", switch: true, icon: "󰙕", color: yellow, cmd: "set key-table move" }
-        - { key: r, desc: "Resize Pane …", switch: true, icon: "󰩨", color: mauve, cmd: "set key-table resize" }
-        - { key: n, desc: "Rename Pane …", switch: true, icon: "󰑕", color: yellow, menu_only: true }
-        - sep: true
-        - { key: h, desc: "focus left", icon: "󰅁", color: teal, cmd: "select-pane -L" }
-        - { key: j, desc: "focus down", icon: "󰅀", color: teal, cmd: "select-pane -D" }
-        - { key: k, desc: "focus up", icon: "󰅃", color: teal, cmd: "select-pane -U" }
-        - { key: l, desc: "focus right", icon: "󰅂", color: teal, cmd: "select-pane -R" }
-        - sep: true
-        - { key: H, desc: "split pane left", icon: "", color: mauve, cmd: "split-window -hb ; set key-table root" }
-        - { key: J, desc: "split pane down", icon: "", color: mauve, cmd: "split-window -v ; set key-table root" }
-        - { key: K, desc: "split pane up", icon: "", color: mauve, cmd: "split-window -vb ; set key-table root" }
-        - { key: L, desc: "split pane right", icon: "", color: mauve, cmd: "split-window -h ; set key-table root" }
-        - { key: N, desc: "new pane", icon: "󰯌", color: green, cmd: "split-window ; set key-table root" }
-        - { key: P, desc: "quick launch new pane", icon: "󰓞", color: green, menu_only: true }
-        - sep: true
-        - { key: z, desc: "toggle pane zoom", icon: "󱀅", color: blue, cmd: "resize-pane -Z ; set key-table root" }
-        - { key: x, desc: "close pane", icon: "󰅘", color: red, cmd: "kill-pane ; set key-table root" }
+      - keys:
+        - m
+        desc: Move Pane …
+        icon: '󰙕'
+        color: yellow
+        cmd: set key-table move
+        switch: true
+      - keys:
+        - n
+        desc: Rename Pane …
+        icon: '󰑕'
+        color: yellow
+        cmd: set key-table root ; display-popup -E -B -w 66 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-rename pane'
+        switch: true
+        dialog: true
+      - keys:
+        - r
+        desc: Resize Pane …
+        icon: '󰩨'
+        color: mauve
+        cmd: set key-table resize
+        switch: true
+      - keys:
+        - Up
+        - k
+        desc: focus up
+        icon: ''
+        color: teal
+        cmd: select-pane -U
+        stay: true
+      - keys:
+        - Down
+        - j
+        desc: focus down
+        icon: ''
+        color: teal
+        cmd: select-pane -D
+        stay: true
+      - keys:
+        - Left
+        - h
+        desc: focus left
+        icon: ''
+        color: teal
+        cmd: select-pane -L
+        stay: true
+      - keys:
+        - Right
+        - l
+        desc: focus right
+        icon: ''
+        color: teal
+        cmd: select-pane -R
+        stay: true
+      - keys:
+        - Tab
+        desc: switch focus
+        icon: ''
+        color: teal
+        cmd: select-pane -t :.+
+        stay: true
+      - keys:
+        - f
+        desc: toggle pane borders
+        icon: '󰃇'
+        color: blue
+        cmd: if -F '#{==:#{pane-border-status},off}' 'setw -g pane-border-status top' 'setw -g pane-border-status off'
+        stay: true
+      - keys:
+        - z
+        desc: toggle pane zoom
+        icon: '󱀅'
+        color: blue
+        cmd: resize-pane -Z ; set key-table root
+      - keys:
+        - x
+        desc: close pane
+        icon: '󰅘'
+        color: red
+        cmd: kill-pane ; set key-table root
+      - keys:
+        - S-Up
+        - K
+        desc: split pane up
+        icon: ''
+        color: mauve
+        cmd: split-window -vb ; set key-table root
+      - keys:
+        - S-Down
+        - J
+        desc: split pane down
+        icon: ''
+        color: mauve
+        cmd: split-window -v ; set key-table root
+      - keys:
+        - S-Left
+        - H
+        desc: split pane left
+        icon: ''
+        color: mauve
+        cmd: split-window -hb ; set key-table root
+      - keys:
+        - S-Right
+        - L
+        desc: split pane right
+        icon: ''
+        color: mauve
+        cmd: split-window -h ; set key-table root
+      - keys:
+        - N
+        desc: new pane
+        icon: '󰯌'
+        color: green
+        cmd: split-window ; set key-table root
+      - keys:
+        - P
+        desc: quick launch new pane
+        icon: '󰓞'
+        color: green
+        cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 70 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Pane\" --no-chrome
+          -- $HOME/.config/zellij/scripts/quick-launch menu pane"'
+        dialog: true
     resize:
-      parent: pane
       title: Resize
-      icon: "󰩨"
+      icon: '󰩨'
       color: mauve
-      entries:
-        - { key: h, desc: "grow left", icon: "󰅁", color: teal, cmd: "resize-pane -L 2" }
-        - { key: j, desc: "grow down", icon: "󰅀", color: teal, cmd: "resize-pane -D 2" }
-        - { key: k, desc: "grow up", icon: "󰅃", color: teal, cmd: "resize-pane -U 2" }
-        - { key: l, desc: "grow right", icon: "󰅂", color: teal, cmd: "resize-pane -R 2" }
-        - sep: true
-        - { key: "+", desc: "grow", icon: "󰐕", color: teal, cmd: "resize-pane -U 2" }
-        - { key: "-", desc: "shrink", icon: "󰍴", color: teal, cmd: "resize-pane -D 2" }
-    move:
       parent: pane
+      entries:
+      - keys:
+        - Up
+        - k
+        desc: grow up
+        icon: '󰅃'
+        color: teal
+        cmd: resize-pane -U 2
+        stay: true
+      - keys:
+        - Down
+        - j
+        desc: grow down
+        icon: '󰅀'
+        color: teal
+        cmd: resize-pane -D 2
+        stay: true
+      - keys:
+        - Left
+        - h
+        desc: grow left
+        icon: '󰅁'
+        color: teal
+        cmd: resize-pane -L 2
+        stay: true
+      - keys:
+        - Right
+        - l
+        desc: grow right
+        icon: '󰅂'
+        color: teal
+        cmd: resize-pane -R 2
+        stay: true
+      - keys:
+        - +
+        desc: grow
+        icon: '󰐕'
+        color: teal
+        cmd: resize-pane -U 2
+        stay: true
+      - keys:
+        - '-'
+        desc: shrink
+        icon: '󰍴'
+        color: teal
+        cmd: resize-pane -D 2
+        stay: true
+    move:
       title: Move
-      icon: "󰙕"
+      icon: '󰙕'
       color: yellow
+      parent: pane
       entries:
-        - { key: j, desc: "swap pane down", icon: "󰅀", color: teal, cmd: "swap-pane -D" }
-        - { key: k, desc: "swap pane up", icon: "󰅃", color: teal, cmd: "swap-pane -U" }
-        - { key: h, desc: "rotate window up", icon: "󰅁", color: teal, cmd: "rotate-window -U" }
-        - { key: l, desc: "rotate window down", icon: "󰅂", color: teal, cmd: "rotate-window -D" }
+      - keys:
+        - Down
+        - j
+        desc: swap pane down
+        icon: '󰅀'
+        color: teal
+        cmd: swap-pane -D
+        stay: true
+      - keys:
+        - Up
+        - k
+        desc: swap pane up
+        icon: '󰅃'
+        color: teal
+        cmd: swap-pane -U
+        stay: true
+      - keys:
+        - Left
+        - h
+        desc: rotate window up
+        icon: '󰅁'
+        color: teal
+        cmd: rotate-window -U
+        stay: true
+      - keys:
+        - Right
+        - l
+        desc: rotate window down
+        icon: '󰅂'
+        color: teal
+        cmd: rotate-window -D
+        stay: true
+      - keys:
+        - Tab
+        desc: swap with next
+        icon: '󰄹'
+        color: teal
+        cmd: swap-pane -D
+        stay: true
     session:
-      parent: prefix
       title: Session
-      icon: "󰙀"
+      icon: '󰙀'
       color: red
-      entries:
-        - { key: d, desc: "detach", icon: "󱟃", color: red, cmd: "detach-client" }
-        - { key: w, desc: "session manager", icon: "󰧨", color: red, cmd: "choose-tree -Zs ; set key-table root" }
-        - { key: S, desc: "quick launch session", icon: "󰓟", color: red, menu_only: true }
-    copy:
       parent: prefix
+      entries:
+      - keys:
+        - d
+        desc: detach
+        icon: '󱟃'
+        color: red
+        cmd: detach-client
+      - keys:
+        - w
+        desc: session manager
+        icon: '󰧨'
+        color: red
+        cmd: choose-tree -Zs ; set key-table root
+        dialog: true
+      - keys:
+        - S
+        desc: quick launch session
+        icon: '󰓟'
+        color: red
+        cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome
+          -- $HOME/.config/zellij/scripts/quick-launch menu workspace"'
+        dialog: true
+    copy:
       title: Scroll
-      icon: "󰩤"
+      icon: '󰩤'
       color: lavender
+      parent: prefix
       table: copy-mode-vi
       entries:
-        - { key: "/", desc: "Search scroll buffer …", switch: true, icon: "", color: blue, menu_only: true }
-        - { key: V, desc: "edit scrollback", icon: "", color: peach, menu_only: true }
-        - { key: v, desc: "copy mode / select", icon: "󰆏", color: mauve, menu_only: true }
-        - { key: y, desc: "yank selection", icon: "󰆏", color: yellow, cmd: "send -X copy-pipe-and-cancel" }
-        - sep: true
-        - { key: n, desc: "next match / prompt", icon: "", color: mauve, menu_only: true }
-        - { key: N, desc: "previous match / prompt", icon: "", color: mauve, menu_only: true }
-        - { key: M-c, desc: "toggle case sensitive", icon: "", color: yellow, menu_only: true }
-        - { key: M-b, desc: "toggle word boundaries", icon: "", color: yellow, menu_only: true }
-        - { key: M-p, desc: "toggle line wrap", icon: "󰕇", color: yellow, menu_only: true }
-        - sep: true
-        - { key: u, desc: "half page up", icon: "󰄿", color: teal, cmd: "send -X halfpage-up" }
-        - { key: d, desc: "half page down", icon: "󰄼", color: teal, cmd: "send -X halfpage-down" }
-        - { key: g, desc: "scroll to top", icon: "󱥩", color: teal, cmd: "send -X history-top" }
-        - { key: G, desc: "scroll to bottom", icon: "󱥧", color: teal, cmd: "send -X history-bottom" }
+      - keys:
+        - /
+        desc: Search scroll buffer …
+        icon: ''
+        color: blue
+        cmd: ''
+        switch: true
+        panel_only: true
+      - keys:
+        - v
+        desc: copy mode / select
+        icon: '󰆏'
+        color: mauve
+        cmd: ''
+        panel_only: true
+      - keys:
+        - V
+        desc: edit scrollback
+        icon: ''
+        color: peach
+        cmd: ''
+        panel_only: true
+      - keys:
+        - y
+        desc: yank selection
+        icon: '󰆏'
+        color: yellow
+        cmd: ''
+        panel_only: true
+      - keys:
+        - n
+        desc: next match / prompt
+        icon: ''
+        color: mauve
+        cmd: ''
+        panel_only: true
+      - keys:
+        - N
+        desc: previous match / prompt
+        icon: ''
+        color: mauve
+        cmd: ''
+        panel_only: true
+      - keys:
+        - M-c
+        desc: toggle case sensitive
+        icon: ''
+        color: yellow
+        cmd: ''
+        panel_only: true
+      - keys:
+        - M-b
+        desc: toggle word boundaries
+        icon: ''
+        color: yellow
+        cmd: ''
+        panel_only: true
+      - keys:
+        - M-p
+        desc: toggle line wrap
+        icon: '󰕇'
+        color: yellow
+        cmd: ''
+        panel_only: true
+      - keys:
+        - u
+        desc: half page up
+        icon: '󰄿'
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
+        - d
+        desc: half page down
+        icon: '󰄼'
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
+        - g
+        desc: scroll to top
+        icon: '󱥩'
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
+        - G
+        desc: scroll to bottom
+        icon: '󱥧'
+        color: teal
+        cmd: ''
+        panel_only: true

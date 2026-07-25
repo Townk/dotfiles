@@ -9,13 +9,15 @@
 Describe 'tmux keymap tables'
   setup_all() {
     KM_TMP=$(mktemp -d)
+    chezmoi execute-template <home/dot_config/tmux/keymap-base.conf.tmpl >"$KM_TMP/keymap-base.conf" 2>/dev/null
     chezmoi execute-template <home/dot_config/tmux/keymap.conf.tmpl >"$KM_TMP/keymap.conf" 2>/dev/null
     # Phase 4: the theme's %hidden color fragments must parse BEFORE
     # status.conf composes formats from them — same order as tmux.conf.
     chezmoi execute-template <custom-builds/theme/templates/tmux-theme.conf.tmpl >"$KM_TMP/theme.conf" 2>/dev/null
     chezmoi execute-template <home/dot_config/tmux/status.conf.tmpl >"$KM_TMP/status.conf" 2>/dev/null
-    printf 'source-file "%s"\nsource-file "%s"\nsource-file "%s"\n' \
-      "$KM_TMP/theme.conf" "$KM_TMP/keymap.conf" "$KM_TMP/status.conf" >"$KM_TMP/tmux.conf"
+    printf 'source-file "%s"\nsource-file "%s"\nsource-file "%s"\nsource-file "%s"\n' \
+      "$KM_TMP/theme.conf" "$KM_TMP/keymap-base.conf" "$KM_TMP/keymap.conf" \
+      "$KM_TMP/status.conf" >"$KM_TMP/tmux.conf"
     # A detached session keeps the scratch server alive — a session-less tmux
     # server exits immediately, and any later tmux -L call would silently
     # start a fresh, CONFIG-LESS server (default binds only).
@@ -124,17 +126,18 @@ Describe 'tmux keymap tables'
     The output should include "pane-border-status"
   End
 
-  # NB: global listing (the list-keys -T quirk; ledger) + awk to collapse
-  # list-keys' column padding.
-  panel_binds() { tmux -L kmspec list-keys | grep 'mux-whichkey' | awk '{print $2, $3, $4}'; }
+  It 'the which-key panel opens on the leader and toggles on M-. (Phase 5)'
+    When call tmux -L kmspec list-keys
+    The output should include "mux-whichkey open prefix"
+    The output should include "mux-whichkey toggle"
+  End
 
-  It 'every mode table carries the which-key panel controls (Phase 5)'
-    When call panel_binds
-    The output should include "-T tab M-."
-    The output should include "-T pane C-d"
-    The output should include "-T prefix M-."
-    The output should include "-T copy-mode-vi M-."
-    The lines of output should equal 19
+  It 'generated mode tables carry their commands in brace blocks'
+    # a bare `;` in a config file is a command SEPARATOR — the generator
+    # wraps every command so multi-command binds cannot self-execute.
+    When call keys tab
+    The output should include "new-window"
+    The output should include "select-window -t :=1"
   End
 
   It 'alert hooks route to the notifier'

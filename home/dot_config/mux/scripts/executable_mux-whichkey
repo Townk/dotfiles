@@ -1,503 +1,394 @@
 #!/usr/bin/env zsh
-# mux-whichkey — the which-key PANEL for tmux (mux migration Phase 5): a
-# faithful port of zj-hud's src/whichkey renderer, not a menu. It is
-# passive (no focus, no selection), auto-shows whenever a mode is on the
-# stack, paginates when the entries don't fit, and reads every label,
-# icon, color and geometry knob from keymap.yaml via the generated
-# whichkey.data.
+# mux-whichkey — the which-key PANEL (mux migration Phase 5): a port of
+# zj-hud's src/whichkey, vertical and passive-looking, floating over the
+# panes in a popup.
 #
-#   mux-whichkey row <idx> <table> <in_mode> <visual> <searching> <search> <width> <page>
-#   mux-whichkey sync            resize the status stack + (re)wire formats
-#   mux-whichkey toggle          hide/show (the toggle_key)
-#   mux-whichkey page next|prev
+#   mux-whichkey open [mode]   size + place the popup, then run the panel
+#   mux-whichkey panel <mode>  the panel itself (runs INSIDE the popup)
+#   mux-whichkey render <mode> [page] [rows]   paint once (tests/debug)
+#   mux-whichkey toggle        hide/show (M-.)
 #
-# WHY STATUS LINES: tmux's only passive overlay. Popups are modal — they
-# take the keyboard (a which-key panel must never eat the keys it
-# documents) and a popup-inside-a-popup silently mutates the outer one,
-# which would collide with our own dialogs. The cost: tmux caps the
-# status stack at 5 lines, so the panel gets 4 (bar included) and panes
-# shrink while it shows. Deviations from zj-hud, both forced by that cap:
-# the footer hints ride INSIDE the bottom border (zj-hud gives them their
-# own row + separator rule), and max_rows tops out at 4.
+# tmux popups swallow every keystroke (measured: key tables do not fire
+# while one is open), so the panel IS the mode's dispatcher while it is
+# open: it reads a key, looks it up in the very same keymap.yaml data that
+# generates keymap.conf, and runs that binding's command. Mode switches
+# happen inside the loop — no teardown, no flicker. Keys that open one of
+# our dialogs close the panel first (a popup opened over a popup silently
+# mutates the outer one) and fire on a short server-side delay. Hiding it
+# with M-. hands the same bindings back to tmux's key tables.
 #
-# Chrome is zj-hud's: rounded frame in blue with the mode breadcrumb as
-# the top-border label, mantle canvas, bright-white chords, a dim ➜
-# separator, per-binding icon colors, pink labels — blue for bindings
-# that push another mode — and grey footer chrome.
+# Chrome mirrors zj-hud exactly: rounded frame, mode breadcrumb as the
+# top-border label, one binding per row (right-aligned chord glyphs, dim
+# ➜, per-binding icon color, pink labels / blue for mode switches), a
+# heavy rule, then the footer hints.
 
 emulate -L zsh
 setopt no_unset
 
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
-# zsh pads a PARAMETER, so every fill expands this empty one (no forks —
-# the layout does hundreds of pads per render).
-WKPAD=""
 DATA="${WK_DATA:-$HOME/.config/mux/whichkey.data}"
-CACHE_DIR="${TMPDIR:-/tmp}/mux-whichkey-$UID"
-
+PAD=""
 [[ -r "$DATA" ]] || exit 0
 
-# ---- config ---------------------------------------------------------------
 typeset -A CFG
-_load_cfg() {
-  local line kv k v
-  line="$(grep -m1 '^#cfg ' "$DATA")" || return 1
-  for kv in ${(z)line#\#cfg }; do
-    k="${kv%%=*}"; v="${kv#*=}"
-    CFG[$k]="$v"
-  done
-  return 0
-}
-_load_cfg || exit 0
-
+line="$(grep -m1 '^#cfg' "$DATA")" || exit 0
+for kv in ${(ps:\t:)line}; do
+  [[ "$kv" == '#cfg' ]] && continue
+  CFG[${kv%%=*}]="${kv#*=}"
+done
 typeset -a MARGIN PADDING
-MARGIN=(${(s:,:)CFG[margin]})     # top right bottom left
+MARGIN=(${(s:,:)CFG[margin]})      # top right bottom left
 PADDING=(${(s:,:)CFG[padding]})
-
 SEP="${CFG[sep]}"
-C_BG="${CFG[bg]}" C_BORDER="${CFG[border]}" C_KEY="${CFG[key]}"
-C_LABEL="${CFG[label]}" C_SWITCH="${CFG[switch]}" C_FOOTER="${CFG[footer]}"
-C_DIM="${CFG[dim]}"
+RESET=$'\e[0m'
+_fg() { print -rn -- $'\e[38;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
+_bg() { print -rn -- $'\e[48;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
+BG="$(_bg ${CFG[bg]})"
+C_BORDER="$(_fg ${CFG[border]})" C_KEY="$(_fg ${CFG[key]})"
+C_LABEL="$(_fg ${CFG[label]})" C_SWITCH="$(_fg ${CFG[switch]})"
+C_FOOTER="$(_fg ${CFG[footer]})" C_DIM="$(_fg ${CFG[dim]})"
+SOFT="${RESET}${BG}"
 
-# ---- mode resolution (mirrors tmux-status-right) --------------------------
-# Echoes: <data-mode> <title> <icon> <color>
-_resolve_mode() {
-  local table="$1" in_mode="$2" visual="$3" searching="$4" search="$5"
-  local m title icon color
-  if [[ "$in_mode" == 1 ]]; then
-    m=copy
-    _mode_meta copy
-    if [[ "$searching" == 1 || "$search" == 1 ]]; then
-      title="Search"
-    elif [[ "$visual" == 1 ]]; then
-      title="Copy"
-    fi
-    print -r -- "$m|$title|$icon|$color"
-    return 0
-  fi
-  case "$table" in
-    prefix|tab|pane|session|resize|move) m="$table" ;;
-    *) return 1 ;;
+# ---- key glyphs (zj-hud's rendering) --------------------------------------
+G_SHIFT=$'\U000F0636' G_ALT=$'\U000F0635' G_CTRL=$'\U000F0634'
+G_TAB=$'\U000F0312'   G_ESC=$'\U000F12B7' G_BS=$'\U000F006E'
+_keyglyph() {          # tmux key name -> display glyphs
+  local k="$1" mods="" base
+  while true; do
+    case "$k" in
+      S-*) mods+="$G_SHIFT "; k="${k#S-}" ;;
+      M-*) mods+="$G_ALT ";   k="${k#M-}" ;;
+      C-*) mods+="$G_CTRL ";  k="${k#C-}" ;;
+      *) break ;;
+    esac
+  done
+  case "$k" in
+    Up) base="↑" ;;    Down) base="↓" ;;
+    Left) base="←" ;;  Right) base="→" ;;
+    Tab) base="$G_TAB" ;;
+    BTab) base="$G_SHIFT $G_TAB" ;;
+    Escape) base="$G_ESC" ;;
+    BSpace) base="$G_BS" ;;
+    Space) base="␣" ;;
+    [a-z]) base="${(U)k}" ;;
+    [A-Z]) base="$G_SHIFT ${k}" ;;      # an uppercase bind IS shift
+    *) base="$k" ;;
   esac
-  _mode_meta "$m"
-  print -r -- "$m|$title|$icon|$color"
+  print -rn -- "${mods}${base}"
+}
+_keysdisplay() {       # pipe-separated tmux keys -> "↑,K" (comma is a KEY)
+  local out="" k
+  for k in ${(s:|:)1}; do
+    [[ -n "$out" ]] && out+=","
+    out+="$(_keyglyph "$k")"
+  done
+  print -rn -- "$out"
 }
 
-# Sets title/icon/color/parent from the #mode rows.
-_mode_meta() {
-  local l
-  l="$(awk -F'\t' -v m="$1" '$1=="#mode" && $2==m {print; exit}' "$DATA")"
-  title="${${(s:	:)l}[3]}"
-  icon="${${(s:	:)l}[4]}"
-  color="${${(s:	:)l}[5]}"
-  parent="${${(s:	:)l}[6]:-}"
+# ---- data -----------------------------------------------------------------
+typeset -a E_KEYS E_DISP E_ICON E_ICOL E_DESC E_FLAGS E_CMD
+_mode_meta() {         # -> M_TITLE M_ICON M_COLOR M_PARENT
+  local l; l="$(awk -F'\t' -v m="$1" '$1=="#mode" && $2==m {print; exit}' "$DATA")"
+  local -a f; f=("${(@ps:\t:)l}")
+  M_TITLE="${f[3]}" M_ICON="${f[4]}" M_COLOR="${f[5]}" M_PARENT="${f[6]:-}"
 }
-
-# ---- display width (chars, like zj-hud's chars().count()) -----------------
-_w() { print -r -- ${#1} }
-
-# ---- layout ---------------------------------------------------------------
-# Fills PAGES (rendered body lines, page-separated by \x00) and PAGE_COUNT.
-typeset -a E_KEYS E_ICON E_ICOL E_LABEL E_SW
-typeset -a PAGE_ROWS
-PAGE_COUNT=1
-BOX_W=0
-
-_load_entries() {
-  local mode="$1" l
-  E_KEYS=() E_ICON=() E_ICOL=() E_LABEL=() E_SW=()
-  while IFS=$'\t' read -r m k ic icol lb sw; do
-    [[ "$m" == "$mode" ]] || continue
-    E_KEYS+=("$k"); E_ICON+=("$ic"); E_ICOL+=("$icol")
-    E_LABEL+=("$lb"); E_SW+=("$sw")
-  done < <(grep -v '^#' "$DATA")
+_load() {
+  local mode="$1" tag m keys icon icol desc flags cmd
+  E_KEYS=() E_DISP=() E_ICON=() E_ICOL=() E_DESC=() E_FLAGS=() E_CMD=()
+  while IFS=$'\t' read -r tag m keys icon icol desc flags cmd; do
+    [[ "$tag" == E && "$m" == "$mode" ]] || continue
+    E_KEYS+=("$keys"); E_DISP+=("$(_keysdisplay "$keys")")
+    E_ICON+=("$icon"); E_ICOL+=("$icol"); E_DESC+=("$desc")
+    E_FLAGS+=(",${flags}"); E_CMD+=("$cmd")
+  done < "$DATA"
   (( ${#E_KEYS} ))
 }
+_has() { [[ "$1" == *",$2,"* ]] }
 
-# Cell text + width for entry $1 given column key/icon widths $2/$3.
-_cell() {
-  local i="$1" kw="$2" iw="$3"
-  local keys="${E_KEYS[i]}" icon="${E_ICON[i]}" label="${E_LABEL[i]}"
-  local kpad=$(( kw - ${#keys} )) lcol
-  [[ "${E_SW[i]}" == 1 ]] && lcol="$C_SWITCH" || lcol="$C_LABEL"
-  local icol="${E_ICOL[i]:-$lcol}"
-  local txt="${(l:$kpad:: :)WKPAD}#[fg=${C_KEY}]${keys}#[fg=${C_DIM}] ${SEP} "
-  local w=$(( kpad + ${#keys} + 1 + ${#SEP} + 1 ))
-  if (( iw > 0 )); then
-    if [[ -n "$icon" ]]; then
-      txt+="#[fg=${icol}]${icon}${(l:$(( iw - ${#icon} )):: :)WKPAD} "
-    else
-      txt+="${(l:$(( iw + 1 )):: :)WKPAD}"
-    fi
-    (( w += iw + 1 ))
-  fi
-  txt+="#[fg=${lcol}]${label}"
-  (( w += ${#label} ))
-  CELL_TXT="$txt"; CELL_W=$w
-}
-
-# Plan + render pages for the current entry set into an inner width.
-_layout() {
-  local inner="$1" body_rows="$2"
-  local n=${#E_KEYS} sort="${CFG[sort_by]}"
-  local -i cols_cap=8
-  [[ "${CFG[columns]}" == <-> ]] && cols_cap=${CFG[columns]}
-  PAGE_ROWS=(); PAGE_COUNT=0; BOX_W=0
-
-  local -i off=1
-  while (( off <= n )); do
-    # Grow the column count while the snug plan still fits the inner width.
-    local -i best_cols=1 best_w=0 c r i idx kw iw cw total
-    local -a cwid
-    for (( c = 1; c <= cols_cap; c++ )); do
-      (( c * 1 > n - off + 1 + (c - 1) * body_rows )) && :
-      local -i take=$(( c * body_rows ))
-      (( take > n - off + 1 )) && take=$(( n - off + 1 ))
-      cwid=(); total=0
-      for (( i = 0; i < c; i++ )); do
-        kw=0; iw=0; cw=0
-        for (( r = 0; r < body_rows; r++ )); do
-          if [[ "$sort" == column ]]; then
-            idx=$(( off + i * body_rows + r ))
-          else
-            idx=$(( off + r * c + i ))
-          fi
-          (( idx > n || idx >= off + take )) && continue
-          (( ${#E_KEYS[idx]} > kw )) && kw=${#E_KEYS[idx]}
-          (( ${#E_ICON[idx]} > iw )) && iw=${#E_ICON[idx]}
-        done
-        for (( r = 0; r < body_rows; r++ )); do
-          if [[ "$sort" == column ]]; then
-            idx=$(( off + i * body_rows + r ))
-          else
-            idx=$(( off + r * c + i ))
-          fi
-          (( idx > n || idx >= off + take )) && continue
-          _cell $idx $kw $iw
-          (( CELL_W > cw )) && cw=$CELL_W
-        done
-        cwid+=($kw $iw $cw)
-        (( total += cw ))
-        (( i < c - 1 )) && (( total += 2 ))   # COL_GAP
-      done
-      if (( total <= inner )); then
-        best_cols=$c; best_w=$total
-        (( take >= n - off + 1 )) && break
-      else
-        break
-      fi
-    done
-
-    # Re-measure the winning plan and emit its rows.
-    local -i c=$best_cols
-    local -i take=$(( c * body_rows ))
-    (( take > n - off + 1 )) && take=$(( n - off + 1 ))
-    cwid=(); total=0
-    for (( i = 0; i < c; i++ )); do
-      kw=0; iw=0; cw=0
-      for (( r = 0; r < body_rows; r++ )); do
-        if [[ "$sort" == column ]]; then idx=$(( off + i * body_rows + r ))
-        else idx=$(( off + r * c + i )); fi
-        (( idx > n || idx >= off + take )) && continue
-        (( ${#E_KEYS[idx]} > kw )) && kw=${#E_KEYS[idx]}
-        (( ${#E_ICON[idx]} > iw )) && iw=${#E_ICON[idx]}
-      done
-      for (( r = 0; r < body_rows; r++ )); do
-        if [[ "$sort" == column ]]; then idx=$(( off + i * body_rows + r ))
-        else idx=$(( off + r * c + i )); fi
-        (( idx > n || idx >= off + take )) && continue
-        _cell $idx $kw $iw
-        (( CELL_W > cw )) && cw=$CELL_W
-      done
-      cwid+=($kw $iw $cw)
-      (( total += cw ))
-      (( i < c - 1 )) && (( total += 2 ))
-    done
-    (( total > BOX_W )) && BOX_W=$total
-
-    # NB: a re-executed `local -a` does NOT clear an array that already
-    # exists in this scope (zsh) — page 2 would inherit page 1's rows.
-    local -a rows_out; rows_out=()
-    for (( r = 0; r < body_rows; r++ )); do
-      local line="" lw=0 any=0
-      for (( i = 0; i < c; i++ )); do
-        if [[ "$sort" == column ]]; then idx=$(( off + i * body_rows + r ))
-        else idx=$(( off + r * c + i )); fi
-        (( idx > n || idx >= off + take )) && continue
-        any=1
-        kw=${cwid[$(( i * 3 + 1 ))]}; iw=${cwid[$(( i * 3 + 2 ))]}; cw=${cwid[$(( i * 3 + 3 ))]}
-        _cell $idx $kw $iw
-        line+="$CELL_TXT"; (( lw += CELL_W ))
-        if (( i < c - 1 )); then
-          local -i gap=$(( cw - CELL_W + 2 ))
-          line+="${(l:$gap:: :)WKPAD}"; (( lw += gap ))
-        fi
-      done
-      (( any )) || continue
-      rows_out+=("$line"$'\x01'"$lw")
-    done
-    PAGE_ROWS+=("${(pj:\x02:)rows_out}")
-    (( PAGE_COUNT++ ))
-    (( off += take ))
+# ---- geometry -------------------------------------------------------------
+_measure() {           # -> W_KEYS W_ICON W_LABEL BODY_W ROWS_ALL
+  local i
+  W_KEYS=0 W_ICON=0 W_LABEL=0
+  for (( i = 1; i <= ${#E_DISP}; i++ )); do
+    (( ${#E_DISP[i]} > W_KEYS )) && W_KEYS=${#E_DISP[i]}
+    (( ${#E_ICON[i]} > W_ICON )) && W_ICON=${#E_ICON[i]}
+    (( ${#E_DESC[i]} > W_LABEL )) && W_LABEL=${#E_DESC[i]}
   done
-  (( PAGE_COUNT )) || PAGE_COUNT=1
+  BODY_W=$(( W_KEYS + 1 + ${#SEP} + 1 + (W_ICON ? W_ICON + 1 : 0) + W_LABEL ))
+  ROWS_ALL=${#E_DISP}
 }
 
-# ---- breadcrumb + footer ---------------------------------------------------
-_breadcrumb() {
-  local mode="$1" cur_icon="$2" cur_color="$3"
-  local -a chain
-  local m="$mode" title icon color parent guard=0
-  chain=("#[fg=${cur_color}]${cur_icon}")
-  _mode_meta "$mode"; m="$parent"
-  while [[ -n "$m" ]] && (( guard++ < 4 )); do
-    _mode_meta "$m"
-    chain=("#[fg=${color}]${icon}" "$chain[@]")
-    m="$parent"
-  done
-  BREAD="${(pj:#[fg=$C_DIM] » :)chain}"
-  BREAD_W=$(( ${#chain} * 1 + (${#chain} - 1) * 3 ))
-}
-
-_footer() {
-  local page="$1" pages="$2" can_back="$3"
-  local -a segs
-  segs=("#[fg=${C_KEY}]Esc#[fg=${C_FOOTER}] close")
-  (( can_back )) && segs+=("#[fg=${C_KEY}]${CFG[back]}#[fg=${C_FOOTER}] back")
-  segs+=("#[fg=${C_KEY}]${CFG[toggle]}#[fg=${C_FOOTER}] hide")
-  FOOT_W=$(( 3 + 6 ))
-  (( can_back )) && (( FOOT_W += ${#CFG[back]} + 5 + 2 ))
-  (( FOOT_W += ${#CFG[toggle]} + 5 + 2 ))
-  if (( pages > 1 )); then
-    segs+=("#[fg=${C_KEY}]${CFG[prev]}/${CFG[next]}#[fg=${C_FOOTER}] scroll")
-    (( FOOT_W += ${#CFG[prev]} + ${#CFG[next]} + 8 + 2 ))
+_footer_text() {       # -> FOOT FOOT_W (colored) for page/pages
+  local page="$1" pages="$2" back="$3"
+  local -a segs; local w=0
+  segs+=("${C_KEY}${G_ESC}${SOFT}${C_FOOTER} close${SOFT}"); (( w += ${#G_ESC} + 6 ))
+  if (( back )); then
+    segs+=("${C_KEY}${G_BS}${SOFT}${C_FOOTER} back${SOFT}"); (( w += ${#G_BS} + 5 + 2 ))
   fi
-  FOOT="${(pj:  :)segs}"
+  local tg; tg="$(_keyglyph "${CFG[toggle]}")"
+  segs+=("${C_KEY}${tg}${SOFT}${C_FOOTER} hide${SOFT}"); (( w += ${#tg} + 5 + 2 ))
   if (( pages > 1 )); then
-    COUNTER="#[fg=${C_FOOTER}]$(( page + 1 ))/${pages}"
-    COUNTER_W=$(( ${#pages} + ${#pages} + 1 ))
-  else
-    COUNTER=""; COUNTER_W=0
+    local pg="$(_keyglyph "${CFG[prev]}")/$(_keyglyph "${CFG[next]}")"
+    segs+=("${C_KEY}${pg}${SOFT}${C_FOOTER} scroll${SOFT}"); (( w += ${#pg} + 7 + 2 ))
   fi
+  FOOT="${(pj:  :)segs}"; FOOT_W=$w
 }
 
-# ---- full render ----------------------------------------------------------
-# Renders every panel row into $CACHE (one per line, row 0 first).
-_render() {
-  local mode="$1" title="$2" icon="$3" color="$4" page="$5" width="$6"
-  local -i avail=$(( width - MARGIN[2] - MARGIN[4] ))
-  local -i max_rows=${CFG[max_rows]}
-  (( max_rows > 4 )) && max_rows=4
-  local -i body_rows=$(( max_rows - 2 ))
-  (( body_rows < 1 )) && body_rows=1
-  local -i inner_cap=$(( avail - 2 - PADDING[2] - PADDING[4] ))
-
-  _load_entries "$mode" || return 1
-  _layout $inner_cap $body_rows
-
-  local -i pages=$PAGE_COUNT
+# ---- paint ----------------------------------------------------------------
+_paint() {
+  local mode="$1" page="$2"
+  _mode_meta "$mode"
+  _measure
+  local -i per_page=$(( ROWS_MAX ))
+  local -i pages=$(( (ROWS_ALL + per_page - 1) / per_page ))
+  (( pages < 1 )) && pages=1
   (( page >= pages )) && page=$(( pages - 1 ))
-  (( page < 0 )) && page=0
+  PAGE=$page PAGES=$pages
 
-  local parent; _mode_meta "$mode"
-  local can_back=0; [[ -n "$parent" ]] && can_back=1
-  _breadcrumb "$mode" "$icon" "$color"
-  _footer $page $pages $can_back
+  # breadcrumb: every mode glyph up the parent chain, dim » between
+  local bread="" m="$mode"
+  local -i bw=0
+  local -a chain; chain=()
+  while [[ -n "$m" ]]; do
+    _mode_meta "$m"
+    chain=("$(_fg $M_COLOR)${M_ICON}" "$chain[@]")
+    (( bw += ${#M_ICON} ))
+    m="$M_PARENT"
+  done
+  (( ${#chain} > 1 )) && (( bw += (${#chain} - 1) * 3 ))
+  # NB: join by hand — a `j:...:` flag argument is literal, so a parameter
+  # inside it would render as the text "${C_DIM}".
+  local ci
+  for (( ci = 1; ci <= ${#chain}; ci++ )); do
+    (( ci > 1 )) && bread+="${C_DIM} » ${SOFT}"
+    bread+="${chain[ci]}"
+  done
+  _mode_meta "$mode"
 
-  # Box width: snug (single) or full (fill); never below the chrome needs.
-  local -i content_w=$BOX_W
-  local -i chrome_w=$(( BREAD_W + 3 ))
-  local -i foot_need=$(( FOOT_W + COUNTER_W + 2 ))
-  (( chrome_w > content_w )) && content_w=$chrome_w
-  (( foot_need > content_w )) && content_w=$foot_need
-  [[ "${CFG[width]}" == fill ]] && content_w=$inner_cap
-  (( content_w > inner_cap )) && content_w=$inner_cap
-  local -i box_w=$(( content_w + 2 + PADDING[2] + PADDING[4] ))
+  local back=0; [[ -n "$M_PARENT" ]] && back=1
+  _footer_text $page $pages $back
+  local -i content_w=$BODY_W
+  (( FOOT_W > content_w )) && content_w=$FOOT_W
+  local -i inner=$(( content_w + PADDING[2] + PADDING[4] ))
+  local -i box_w=$(( inner + 2 ))
+  local -i start=$(( page * per_page + 1 ))
+  local -i last=$(( start + per_page - 1 ))
+  (( last > ROWS_ALL )) && last=$ROWS_ALL
+  local -i body_n=$(( last - start + 1 ))
+  local -i box_h=$(( body_n + 4 + PADDING[1] + PADDING[3] ))
 
-  local pad_l="${(l:${PADDING[4]}:: :)WKPAD}" pad_r="${(l:${PADDING[2]}:: :)WKPAD}"
-  local -a out
-
-  # Top border: ╭ <breadcrumb> ───╮
-  local -i dashes=$(( box_w - 2 - BREAD_W - 2 ))
+  local out="" i r=1
+  local blank="${(l:$box_w:: :)PAD}"
+  for (( i = 1; i <= box_h; i++ )); do
+    out+=$'\e['"${i};1H${BG}${blank}"
+  done
+  # top border with breadcrumb
+  local -i dashes=$(( box_w - 3 - bw - 1 ))
   (( dashes < 0 )) && dashes=0
-  out+=("#[bg=${C_BG},fg=${C_BORDER}]╭ ${BREAD}#[bg=${C_BG},fg=${C_BORDER}] ${(l:$dashes::─:)WKPAD}╮")
-
-  # Body rows for this page.
-  local pagedata="${PAGE_ROWS[$(( page + 1 ))]}"
-  local -a rows
-  rows=("${(@ps:\x02:)pagedata}")
-  local -i r
-  for (( r = 1; r <= body_rows; r++ )); do
-    local line="" lw=0
-    if (( r <= ${#rows} )); then
-      line="${rows[r]%%$'\x01'*}"
-      lw="${rows[r]##*$'\x01'}"
+  out+=$'\e[1;1H'"${BG}${C_BORDER}╭ ${SOFT}${bread}${SOFT}${C_BORDER} ${(l:$dashes::─:)PAD}╮${SOFT}"
+  # body
+  local pl="${(l:${PADDING[4]}:: :)PAD}" pr="${(l:${PADDING[2]}:: :)PAD}"
+  r=$(( 2 + PADDING[1] ))
+  for (( i = start; i <= last; i++ )); do
+    local disp="${E_DISP[i]}" icon="${E_ICON[i]}" desc="${E_DESC[i]}"
+    local kp=$(( W_KEYS - ${#disp} )) lcol="$C_LABEL"
+    _has "${E_FLAGS[i]}" switch && lcol="$C_SWITCH"
+    local cell="${(l:$kp:: :)PAD}${C_KEY}${disp}${SOFT}${C_DIM} ${SEP} ${SOFT}"
+    if (( W_ICON > 0 )); then
+      if [[ -n "$icon" ]]; then
+        cell+="$(_fg ${E_ICOL[i]})${icon}${SOFT}${(l:$(( W_ICON - ${#icon} )):: :)PAD} "
+      else
+        cell+="${(l:$(( W_ICON + 1 )):: :)PAD}"
+      fi
     fi
-    local -i fill=$(( content_w - lw ))
-    (( fill < 0 )) && fill=0
-    out+=("#[bg=${C_BG},fg=${C_BORDER}]│#[bg=${C_BG}]${pad_l}${line}#[bg=${C_BG}]${(l:$fill:: :)WKPAD}${pad_r}#[fg=${C_BORDER}]│")
+    cell+="${lcol}${desc}${SOFT}"
+    local -i used=$(( W_KEYS + 1 + ${#SEP} + 1 + (W_ICON ? W_ICON + 1 : 0) + ${#desc} ))
+    out+=$'\e['"${r};1H${BG}${C_BORDER}│${SOFT}${pl}${cell}${(l:$(( content_w - used )):: :)PAD}${pr}${C_BORDER}│${SOFT}"
+    (( r++ ))
   done
-
-  # Bottom border carries the footer hints + page counter (tmux deviation:
-  # the status cap has no room for zj-hud's separate rule + footer rows).
-  local -i gap=$(( box_w - 2 - FOOT_W - COUNTER_W - 2 ))
-  (( gap < 1 )) && gap=1
-  local bottom="#[bg=${C_BG},fg=${C_BORDER}]╰─${FOOT}#[bg=${C_BG},fg=${C_BORDER}]${(l:$gap::─:)WKPAD}"
-  [[ -n "$COUNTER" ]] && bottom+="${COUNTER}#[bg=${C_BG},fg=${C_BORDER}]─"
-  bottom+="╯"
-  out+=("$bottom")
-
-  # Right/left margin + anchor.
-  local mr="${(l:${MARGIN[2]}:: :)WKPAD}"
-  local -a final
-  local o
-  for o in "$out[@]"; do
-    final+=("#[align=right]${o}#[bg=default,fg=default]${mr}")
-  done
-  print -rl -- "$final[@]" > "$CACHE"
-  print -r -- "${#final}" > "$CACHE.rows"
-  return 0
-}
-
-# ---- state ----------------------------------------------------------------
-_state_key() { print -r -- "${1}-${2}-${3}-${4}-${5}-${6}-${7}" }
-
-_visible_mode() {   # -> sets MODE/TITLE/ICON/COLOR, returns 1 when hidden
-  local table="$1" in_mode="$2" visual="$3" searching="$4" search="$5"
-  local hidden; hidden="$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)" || hidden=""
-  [[ "$hidden" == 1 ]] && return 1
-  local res; res="$(_resolve_mode "$table" "$in_mode" "$visual" "$searching" "$search")" || return 1
-  MODE="${res%%|*}"; res="${res#*|}"
-  TITLE="${res%%|*}"; res="${res#*|}"
-  ICON="${res%%|*}"; COLOR="${res#*|}"
-  # start_hidden modes: panel stays down until toggled on.
-  local sh
-  for sh in ${(s:,:)CFG[start_hidden]}; do
-    [[ "$sh" == "${(L)TITLE}" || "$sh" == "$MODE" ]] && return 1
-  done
-  return 0
-}
-
-# The built-in status-format[0] (the real bar) — needed because the panel
-# occupies the indices ABOVE it and the bar has to move to the last one.
-# `set -gu` on an array index DELETES the entry instead of restoring the
-# default (Mode B find), and `show` never reports a default that was once
-# touched — so read it from a pristine throwaway server, once, and cache.
-_default_bar() {
-  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/mux/tmux-status-format0"
-  if [[ ! -s "$cache" ]]; then
-    mkdir -p "${cache:h}" 2>/dev/null
-    "$TMUX_BIN" -L mux-wk-default -f /dev/null new-session -d -s p -x 40 -y 8 2>/dev/null
-    "$TMUX_BIN" -L mux-wk-default show -gv 'status-format[0]' >| "$cache" 2>/dev/null
-    "$TMUX_BIN" -L mux-wk-default kill-server 2>/dev/null
+  # heavy rule + footer, then the bottom border
+  out+=$'\e['"${r};1H${BG}${C_BORDER}│${SOFT}${pl}${C_FOOTER}${(l:$content_w::━:)PAD}${SOFT}${pr}${C_BORDER}│${SOFT}"
+  (( r++ ))
+  local counter="" cw=0
+  if (( PAGES > 1 )); then
+    counter="${C_FOOTER}$(( PAGE + 1 ))/${PAGES}${SOFT}"
+    cw=$(( ${#PAGES} + ${#PAGES} + 1 ))
   fi
-  [[ -s "$cache" ]] && cat "$cache"
+  local -i fgap=$(( content_w - FOOT_W - cw ))
+  (( fgap < 0 )) && fgap=0
+  out+=$'\e['"${r};1H${BG}${C_BORDER}│${SOFT}${pl}${FOOT}${(l:$fgap:: :)PAD}${counter}${pr}${C_BORDER}│${SOFT}"
+  (( r++ ))
+  out+=$'\e['"${r};1H${BG}${C_BORDER}╰${(l:$(( box_w - 2 ))::─:)PAD}╯${RESET}"
+  BOX_W=$box_w BOX_H=$box_h
+  print -rn -- "$out"
 }
 
-mkdir -p "$CACHE_DIR" 2>/dev/null
+# ---- command execution ----------------------------------------------------
+_run() {               # run a tmux command line (source-file handles quoting)
+  local cmd="$1" f
+  [[ -n "$cmd" ]] || return 0
+  f="$(mktemp "${TMPDIR:-/tmp}/wkcmd.XXXXXX")"
+  print -r -- "$cmd" > "$f"
+  "$TMUX_BIN" source-file "$f" 2>/dev/null
+  rm -f "$f"
+}
+_run_deferred() {      # after the popup closes (popup-in-popup mutates ours)
+  local cmd="$1" f
+  [[ -n "$cmd" ]] || return 0
+  f="$(mktemp "${TMPDIR:-/tmp}/wkcmd.XXXXXX")"
+  print -r -- "$cmd" > "$f"
+  "$TMUX_BIN" run-shell -b -d 0.3 "tmux source-file '$f'; rm -f '$f'" 2>/dev/null
+}
+
+# ---- key input ------------------------------------------------------------
+_readkey() {           # -> KEY (a tmux key name)
+  local k rest
+  read -rsk1 k || return 1
+  case "$k" in
+    $'\e')
+      if read -rsk1 -t 0.02 rest; then
+        case "$rest" in
+          '[')
+            local seq="" c
+            while read -rsk1 -t 0.05 c; do
+              seq+="$c"
+              [[ "$c" == [A-Za-z~] ]] && break
+            done
+            case "$seq" in
+              A) KEY=Up ;; B) KEY=Down ;; C) KEY=Right ;; D) KEY=Left ;;
+              Z) KEY=BTab ;;
+              '1;2A') KEY=S-Up ;; '1;2B') KEY=S-Down ;;
+              '1;2C') KEY=S-Right ;; '1;2D') KEY=S-Left ;;
+              *) KEY="" ;;
+            esac ;;
+          O) read -rsk1 -t 0.05 c
+             case "$c" in A) KEY=Up ;; B) KEY=Down ;; C) KEY=Right ;; D) KEY=Left ;; *) KEY="" ;; esac ;;
+          *) KEY="M-${rest}" ;;
+        esac
+      else
+        KEY=Escape
+      fi ;;
+    $'\t') KEY=Tab ;;
+    $'\r'|$'\n') KEY=Enter ;;
+    $'\x7f'|$'\b') KEY=BSpace ;;
+    [[:cntrl:]])
+      local n=$(( #k ))
+      if (( n >= 1 && n <= 26 )); then
+        KEY="C-$(printf "\\$(printf '%03o' $(( n + 96 )))")"
+      else KEY=""
+      fi ;;
+    *) KEY="$k" ;;
+  esac
+  return 0
+}
+
+# ---- the panel loop -------------------------------------------------------
+_panel() {
+  local mode="${1:-prefix}" page=0
+  local rows cols
+  rows="$("$TMUX_BIN" display -p '#{client_height}' 2>/dev/null)"; [[ "$rows" == <-> ]] || rows=40
+  ROWS_MAX=${CFG[max_rows]}
+  local avail=$(( rows - MARGIN[1] - MARGIN[3] - 4 ))
+  (( ROWS_MAX > avail )) && ROWS_MAX=$avail
+  (( ROWS_MAX < 3 )) && ROWS_MAX=3
+
+  print -rn -- $'\e[?25l'
+  while true; do
+    _load "$mode" || return 0
+    print -rn -- "$(_paint "$mode" $page)"
+    _readkey || return 0
+    [[ -n "$KEY" ]] || continue
+    case "$KEY" in
+      Escape) "$TMUX_BIN" set key-table root 2>/dev/null; return 0 ;;
+      "${CFG[back]}")
+        _mode_meta "$mode"
+        if [[ -n "$M_PARENT" ]]; then
+          mode="$M_PARENT"; page=0
+          "$TMUX_BIN" set key-table "$([[ $mode == prefix ]] && print root || print $mode)" 2>/dev/null
+          [[ "$mode" == prefix ]] && "$TMUX_BIN" switch-client -T prefix 2>/dev/null
+        else
+          "$TMUX_BIN" set key-table root 2>/dev/null; return 0
+        fi
+        continue ;;
+      "${CFG[toggle]}")
+        "$TMUX_BIN" set -g @wk_hidden 1 2>/dev/null; return 0 ;;
+      "${CFG[next]}") (( page + 1 < PAGES )) && (( page++ )); continue ;;
+      "${CFG[prev]}") (( page > 0 )) && (( page-- )); continue ;;
+    esac
+    # binding lookup
+    local i hit=0
+    for (( i = 1; i <= ${#E_KEYS}; i++ )); do
+      local k
+      for k in ${(s:|:)E_KEYS[i]}; do
+        [[ "$k" == "$KEY" ]] || continue
+        hit=$i; break
+      done
+      (( hit )) && break
+    done
+    (( hit )) || continue
+    local flags="${E_FLAGS[hit]}" cmd="${E_CMD[hit]}"
+    _has "$flags" numeric && cmd="${cmd//'#N'/$KEY}"
+    if _has "$flags" switch && ! _has "$flags" exit; then
+      # push the next mode without tearing the popup down
+      _run "$cmd"
+      case "${E_DESC[hit]}" in
+        "Tab mode"*) mode=tab ;;
+        "Pane mode"*) mode=pane ;;
+        "Session mode"*) mode=session ;;
+        "Move Pane"*) mode=move ;;
+        "Resize Pane"*) mode=resize ;;
+        *) return 0 ;;
+      esac
+      page=0
+      continue
+    fi
+    if _has "$flags" dialog; then
+      _run_deferred "$cmd"
+      return 0
+    fi
+    _run "$cmd"
+    _has "$flags" stay && continue
+    return 0
+  done
+}
 
 case "${1:-}" in
-  row)
-    idx="${2:-0}"; table="${3:-root}"; in_mode="${4:-0}"; visual="${5:-0}"
-    searching="${6:-0}"; search="${7:-0}"; width="${8:-80}"; page="${9:-0}"
-    _visible_mode "$table" "$in_mode" "$visual" "$searching" "$search" || exit 0
-    CACHE="$CACHE_DIR/$(_state_key "$MODE" "$TITLE" "$page" "$width" "$in_mode" "$visual" "$search").rows.cache"
-    [[ -s "$CACHE" ]] || _render "$MODE" "$TITLE" "$ICON" "$COLOR" "$page" "$width" || exit 0
-    sed -n "$(( idx + 1 ))p" "$CACHE" 2>/dev/null
+  panel) _panel "${2:-prefix}" ;;
+  render)   # paint once and exit — tests + eyeballing without a popup
+    _load "${2:-prefix}" || exit 0
+    ROWS_MAX="${4:-${CFG[max_rows]}}"
+    _paint "${2:-prefix}" "${3:-0}"
+    print
     ;;
-  rows)   # row count for the current state (used by sync)
-    table="${2:-root}"; in_mode="${3:-0}"; visual="${4:-0}"
-    searching="${5:-0}"; search="${6:-0}"; width="${7:-80}"; page="${8:-0}"
-    _visible_mode "$table" "$in_mode" "$visual" "$searching" "$search" || { print -r -- 0; exit 0 }
-    CACHE="$CACHE_DIR/$(_state_key "$MODE" "$TITLE" "$page" "$width" "$in_mode" "$visual" "$search").rows.cache"
-    [[ -s "$CACHE" ]] || _render "$MODE" "$TITLE" "$ICON" "$COLOR" "$page" "$width" || { print -r -- 0; exit 0 }
-    cat "$CACHE.rows" 2>/dev/null || print -r -- 0
-    ;;
-  sync)
-    # State arrives as ARGS from the bar renderer: a #() command runs
-    # server-side with NO client, so `display -p '#{client_*}'` is empty
-    # there (Mode B find). Key-bind callers (toggle/page) have a client and
-    # pass nothing, so fall back to querying.
-    table="${2:-}" in_mode="${3:-}" visual="${4:-}" searching="${5:-}"
-    search="${6:-}" width="${7:-}"
-    if [[ -z "$table$width" ]]; then
-      st="$("$TMUX_BIN" display -p '#{client_key_table}|#{?pane_in_mode,1,0}|#{?#{@visual},1,0}|#{?#{@searching},1,0}|#{?search_present,1,0}|#{client_width}' 2>/dev/null)" || exit 0
-      table="${st%%|*}"; st="${st#*|}"
-      in_mode="${st%%|*}"; st="${st#*|}"
-      visual="${st%%|*}"; st="${st#*|}"
-      searching="${st%%|*}"; st="${st#*|}"
-      search="${st%%|*}"; width="${st#*|}"
-    fi
-    [[ "$width" == <-> ]] || width=80
-    page="$("$TMUX_BIN" show -gv @wk_page 2>/dev/null)"; [[ "$page" == <-> ]] || page=0
-    # A new mode always opens on page 1.
-    sig="${table}-${in_mode}-${visual}-${searching}-${search}"
-    last="$("$TMUX_BIN" show -gv @wk_last 2>/dev/null)" || last=""
-    if [[ "$sig" != "$last" ]]; then
-      "$TMUX_BIN" set -g @wk_last "$sig" 2>/dev/null
-      (( page != 0 )) && { "$TMUX_BIN" set -g @wk_page 0 2>/dev/null; page=0 }
-    fi
-    rows="$("${0:A}" rows "$table" "$in_mode" "$visual" "$searching" "$search" "$width" "$page")"
-    [[ "$rows" == <-> ]] || rows=0
-    # `status` reads back as on/off for the 1/0 line counts (a literal 1 is
-    # not even a valid value to set — ledger row).
-    cur="$("$TMUX_BIN" show -gv status 2>/dev/null)"
-    case "$cur" in
-      on) cur=1 ;;
-      off) cur=0 ;;
-      <->) ;;
-      *) cur=1 ;;
-    esac
-    # IDEMPOTENT: this runs from the bar's own render, so touching options or
-    # refreshing when nothing changed would feed straight back into itself.
-    (( cur == rows + 1 )) && exit 0
-    if (( rows > 0 )); then
-      # Save the real bar format before we take index 0 (only ever read
-      # while the panel is down, so it can't capture a panel row).
-      bar="$(_default_bar)"
-      args="'#{client_key_table}' '#{?pane_in_mode,1,0}' '#{?#{@visual},1,0}' '#{?#{@searching},1,0}' '#{?search_present,1,0}' '#{client_width}' '#{@wk_page}'"
-      "$TMUX_BIN" set -g status $(( rows + 1 )) 2>/dev/null
-      for (( i = 0; i < rows; i++ )); do
-        "$TMUX_BIN" set -g "status-format[$i]" "#(${0:A} row $i $args)" 2>/dev/null
-      done
-      [[ -n "$bar" ]] && "$TMUX_BIN" set -g "status-format[$rows]" "$bar" 2>/dev/null
-    else
-      bar="$(_default_bar)"
-      "$TMUX_BIN" set -g status on 2>/dev/null
-      [[ -n "$bar" ]] && "$TMUX_BIN" set -g "status-format[0]" "$bar" 2>/dev/null
-      for (( i = 1; i <= 4; i++ )); do
-        "$TMUX_BIN" set -gu "status-format[$i]" 2>/dev/null
-      done
-    fi
-    "$TMUX_BIN" refresh-client -S 2>/dev/null
+  open)
+    mode="${2:-prefix}"
+    [[ "$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)" == 1 ]] && exit 0
+    # size the popup to the panel's own geometry, anchored bottom-right
+    _load "$mode" || exit 0
+    _mode_meta "$mode"
+    _measure
+    rows="$("$TMUX_BIN" display -p '#{client_height}' 2>/dev/null)"; [[ "$rows" == <-> ]] || rows=40
+    cols="$("$TMUX_BIN" display -p '#{client_width}' 2>/dev/null)"; [[ "$cols" == <-> ]] || cols=100
+    ROWS_MAX=${CFG[max_rows]}
+    avail=$(( rows - MARGIN[1] - MARGIN[3] - 4 ))
+    (( ROWS_MAX > avail )) && ROWS_MAX=$avail
+    (( ROWS_MAX < 3 )) && ROWS_MAX=3
+    _footer_text 0 1 1
+    w=$BODY_W; (( FOOT_W > w )) && w=$FOOT_W
+    w=$(( w + PADDING[2] + PADDING[4] + 2 ))
+    n=$ROWS_ALL; (( n > ROWS_MAX )) && n=$ROWS_MAX
+    h=$(( n + 4 + PADDING[1] + PADDING[3] ))
+    x=$(( cols - w - MARGIN[2] )); (( x < 0 )) && x=0
+    y=$(( rows - MARGIN[3] )); (( y > rows - 1 )) && y=$(( rows - 1 ))
+    exec "$TMUX_BIN" display-popup -B -E -w "$w" -h "$h" -x "$x" -y "$y" \
+      "${0:A} panel $mode"
     ;;
   toggle)
-    h="$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)"
-    if [[ "$h" == 1 ]]; then "$TMUX_BIN" set -g @wk_hidden 0
-    else "$TMUX_BIN" set -g @wk_hidden 1
-    fi
-    "${0:A}" sync
-    ;;
-  page)
-    p="$("$TMUX_BIN" show -gv @wk_page 2>/dev/null)"; [[ "$p" == <-> ]] || p=0
-    case "${2:-next}" in
-      next) (( p++ )) ;;
-      prev) (( p > 0 )) && (( p-- )) ;;
-    esac
-    "$TMUX_BIN" set -g @wk_page "$p"
-    "${0:A}" sync
-    ;;
-  restore)
-    bar="$(_default_bar)"
-    "$TMUX_BIN" set -g status on 2>/dev/null
-    [[ -n "$bar" ]] && "$TMUX_BIN" set -g "status-format[0]" "$bar" 2>/dev/null
-    for (( i = 1; i <= 4; i++ )); do "$TMUX_BIN" set -gu "status-format[$i]" 2>/dev/null; done
-    "$TMUX_BIN" set -g @wk_page 0 2>/dev/null
-    "$TMUX_BIN" set -gu @wk_last 2>/dev/null
-    ;;
-  reset)
-    "$TMUX_BIN" set -g @wk_page 0 2>/dev/null
-    "${0:A}" sync
-    ;;
+    if [[ "$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)" == 1 ]]; then
+      "$TMUX_BIN" set -g @wk_hidden 0
+      "${0:A}" open "$("$TMUX_BIN" display -p '#{client_key_table}' | sed 's/^root$/prefix/')" &
+    else
+      "$TMUX_BIN" set -g @wk_hidden 1
+    fi ;;
 esac
 exit 0

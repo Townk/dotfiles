@@ -31,18 +31,10 @@ setw -g window-status-current-format "$win_pill_current"
 set -g status-right-length 160
 set -g status-right "#({{ .chezmoi.homeDir }}/.local/libexec/tmux-status-right '#{client_key_table}' '#{?pane_in_mode,1,0}' '#S' '#{?client_prefix,1,0}' '#{?search_present,1,0}' '#{@renaming}' '#{?#{@visual},1,0}' '#{?#{@searching},1,0}' '#{@search_case}#{@search_word}#{@search_wrap}' '#{client_width}')"
 
-# Which-key panel (Phase 5, D5): mux-whichkey renders it into the status
-# lines ABOVE the bar — tmux's only passive overlay (popups are modal and
-# would eat the keys the panel documents). A conf reload starts from a
-# clean slate: bar alone at index 0, no saved format, panel shown, page 0.
-# NB: the one-line value is `on` — a literal 1 is rejected (2..5 are fine),
-# and `set -gu` on an array INDEX deletes the entry rather than restoring
-# the built-in default, so the bar format is restored from a cached copy of
-# a pristine server's default (mux-whichkey restore).
-set -g status on
+# Which-key panel (Phase 5, D5): a popup owned by mux-whichkey — it floats
+# over the panes and dispatches the mode's keys itself while open (tmux
+# popups swallow key-table input). Nothing to wire into the status stack.
 set -g @wk_hidden 0
-set -g @wk_page 0
-run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey restore"
 
 # Pane frames off by default (zellij pane_frames=false aesthetic); prefix f
 # toggles them (keymap.conf); format/colors in the theme.

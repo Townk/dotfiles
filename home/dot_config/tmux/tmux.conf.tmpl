@@ -18,7 +18,8 @@ unbind C-b
 # status; Mode B find, 2026-07-24). All `bind X` chords land in the prefix
 # table as usual.
 set -g prefix None
-bind -n M-w switch-client -T prefix
+# (the M-w root bind itself lives in keymap-base.conf, with the rest of the
+# key machinery)
 
 # ---------------------------------------------------------------------------
 # Terminal & protocol plumbing
@@ -99,6 +100,9 @@ source-file -q "{{ .chezmoi.homeDir }}/.config/tmux/themes/chezmoi-system.conf"
 # ---------------------------------------------------------------------------
 # Keymap — key tables mirroring the Zellij modes (D2/D3). Hand-authored in
 # Phase 1; the Phase 5 YAML generator replaces the FILE, not this line.
+source-file "{{ .chezmoi.homeDir }}/.config/tmux/keymap-base.conf"
+# …then the mode tables GENERATED from .chezmoidata/keymap.yaml — the same
+# data the which-key panel dispatches from (Phase 5.2).
 source-file "{{ .chezmoi.homeDir }}/.config/tmux/keymap.conf"
 
 # ---------------------------------------------------------------------------
