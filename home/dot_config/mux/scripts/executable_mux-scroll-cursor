@@ -34,7 +34,21 @@ hide() {
 }
 show() { "$TMUX_BIN" set -p -t "$pane" -u cursor-colour 2>/dev/null }
 shape_block() { "$TMUX_BIN" set -p -t "$pane" cursor-style block 2>/dev/null }
-shape_reset() { "$TMUX_BIN" set -p -t "$pane" -u cursor-style 2>/dev/null }
+shape_reset() {
+  "$TMUX_BIN" set -p -t "$pane" -u cursor-style 2>/dev/null
+  # tmux does not re-emit the cursor style outward when the computed shape
+  # returns to default (the outer terminal keeps showing the block; Mode B
+  # find) — inject DECSCUSR 0 through the pane tty to force the reset, but
+  # only when the app itself has no custom shape (nvim keeps its mode
+  # cursors).
+  local shape tty
+  shape="$("$TMUX_BIN" display -p -t "$pane" '#{cursor_shape}' 2>/dev/null)" || shape=""
+  if [[ "$shape" == default || -z "$shape" ]]; then
+    tty="$("$TMUX_BIN" display -p -t "$pane" '#{pane_tty}' 2>/dev/null)" || tty=""
+    [[ -w "$tty" ]] && printf '\033[0 q' > "$tty" 2>/dev/null
+  fi
+  return 0
+}
 
 if [[ "$in_mode" != 1 ]]; then
   show; shape_reset
