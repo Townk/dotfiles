@@ -131,3 +131,14 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | copy-mode text objects are an engine gap (fixed `send -X` vocabulary; no plugin can extend it) | i/a pseudo-objects macro select-word + jump pairs; V→nvim is full fidelity |
 | `display-menu` items accept `{ }` command blocks; a leading-`-` (disabled) first item needs `--` to end option parsing | the generated which-key menus |
 | `list-keys -T <table>` may render nothing for sparse custom tables (binds ARE registered) | assert via the global listing (extends the Phase 1 locked-table row) |
+
+## Which-key panel (Phase 5) — mechanism + ledger rows
+
+| Fact | Consequence |
+| --- | --- |
+| tmux has no passive overlay primitive: popups are modal (they take the keyboard the panel documents) and popup-in-popup mutates the outer one | the panel renders into STATUS LINES (`status 2..5`), the only passive surface |
+| the status stack caps at 5 lines | panel gets 4 rows incl. borders (footer hints ride inside the bottom border rather than their own row + rule); panes shrink while it shows; pagination covers the overflow |
+| a `#()` command runs server-side with NO client — `display -p '#{client_*}'` is empty there | the bar renderer passes its own format-expanded state into `mux-whichkey sync` as arguments |
+| `set -gu` on an array INDEX deletes the entry instead of restoring the built-in default; `show` never reports a default once touched | the real `status-format[0]` is read once from a pristine throwaway server (`-L … -f /dev/null`) and cached |
+| `status 1` is not a valid value (`on`/`off`/2..5 only), and reads back as `on` | height math normalizes both ways |
+| a re-executed `local -a` does NOT clear an array that already exists in the scope (zsh) | explicit `arr=()` per loop iteration — page 2 inherited page 1's rows without it |
