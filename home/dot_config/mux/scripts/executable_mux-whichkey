@@ -438,7 +438,9 @@ _arm_state() {         # put the client in the key table a state implies
              "$TMUX_BIN" switch-client -T prefix 2>/dev/null ;;
     tab|pane|session|resize|move|locked|nested)
              "$TMUX_BIN" set key-table "$1" 2>/dev/null ;;
-    *) ;;              # scroll/copy/search live inside copy-mode
+    scroll|copy|search|rename)
+             "$TMUX_BIN" set key-table root 2>/dev/null ;;
+    *) ;;
   esac
 }
 
@@ -574,7 +576,11 @@ _panel() {
     # resets itself, but the panel consumed the key, so the client is still
     # armed unless we clear it here (Mode B find). Entries flagged `exit`
     # own their target state (locked, copy-mode) — leave those alone.
-    _has "$flags" exit || _leave_mode
+    if _has "$flags" exit; then
+      _arm_state "${E_TO[hit]}"
+    else
+      _leave_mode
+    fi
     return 0
   done
 }

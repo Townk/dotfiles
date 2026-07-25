@@ -777,10 +777,11 @@ keymap:
         desc: Search scroll buffer …
         icon: 
         color: blue
-        cmd: ''
+        cmd: set -p @search_parent mode ; run-shell -b "$HOME/.config/mux/scripts/mux-search --launch"
         panel_only: true
         switch: true
         to: search
+        dialog: true
       - keys:
         - v
         desc: Copy mode …
@@ -922,10 +923,11 @@ keymap:
         desc: Search scroll buffer …
         icon: 
         color: blue
-        cmd: ''
+        cmd: set -p @search_parent mode ; run-shell -b "$HOME/.config/mux/scripts/mux-search --launch"
         panel_only: true
         switch: true
         to: search
+        dialog: true
       - keys:
         - Up
         - k
@@ -1011,10 +1013,11 @@ keymap:
         desc: edit search term …
         icon: 
         color: blue
-        cmd: ''
+        cmd: set -p @search_parent mode ; run-shell -b "$HOME/.config/mux/scripts/mux-search --launch"
         panel_only: true
         switch: true
         to: search
+        dialog: true
       - *id008
       - *id009
       - *id002
