@@ -3,8 +3,8 @@
 # zj-hud's src/whichkey, vertical and passive-looking, floating over the
 # panes in a popup.
 #
-#   mux-whichkey open [mode]   size + place the popup, then run the panel
-#   mux-whichkey panel <mode>  the panel itself (runs INSIDE the popup)
+#   mux-whichkey open <mode> <client>   size + place the popup, run the panel
+#   mux-whichkey panel <mode> <client>  the panel itself (inside the popup)
 #   mux-whichkey render <mode> [page] [rows]   paint once (tests/debug)
 #   mux-whichkey toggle        hide/show (M-.)
 #
@@ -29,6 +29,22 @@ TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
 DATA="${WK_DATA:-$HOME/.config/mux/whichkey.data}"
 PAD=""
 [[ -r "$DATA" ]] || exit 0
+
+# Restore the status stack to "bar only". `set -gu` on an array INDEX
+# DELETES the entry instead of restoring tmux's built-in default, so the
+# real status-format[0] is read once from a pristine throwaway server and
+# cached. Defensive: servers from the status-line era can still carry panel
+# rows in status-format.
+_default_bar() {
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/mux/tmux-status-format0"
+  if [[ ! -s "$cache" ]]; then
+    mkdir -p "${cache:h}" 2>/dev/null
+    "$TMUX_BIN" -L mux-wk-default -f /dev/null new-session -d -s p -x 40 -y 8 2>/dev/null
+    "$TMUX_BIN" -L mux-wk-default show -gv 'status-format[0]' >| "$cache" 2>/dev/null
+    "$TMUX_BIN" -L mux-wk-default kill-server 2>/dev/null
+  fi
+  [[ -s "$cache" ]] && cat "$cache"
+}
 
 typeset -A CFG
 line="$(grep -m1 '^#cfg' "$DATA")" || exit 0
@@ -232,6 +248,13 @@ _run() {               # run a tmux command line (source-file handles quoting)
   "$TMUX_BIN" source-file "$f" 2>/dev/null
   rm -f "$f"
 }
+_reopen() {            # ask the driver for a correctly sized popup
+  # A popup cannot resize itself (geometry flags are ignored once a popup
+  # exists), and a job scheduled from inside the popup DIES with it — so the
+  # next mode goes to the driver loop in `open`, which owns the sequence.
+  [[ -n "${WK_TRACE:-}" ]] && print -r -- "panel: requesting $1 -> $NEXT_FILE" >> /tmp/wktrace.log
+  print -r -- "$1" >| "$NEXT_FILE"
+}
 _run_deferred() {      # after the popup closes (popup-in-popup mutates ours)
   local cmd="$1" f
   [[ -n "$cmd" ]] || return 0
@@ -285,8 +308,12 @@ _readkey() {           # -> KEY (a tmux key name)
 # ---- the panel loop -------------------------------------------------------
 _panel() {
   local mode="${1:-prefix}" page=0
+  CLIENT="${2:-}"
+  NEXT_FILE="${3:-${TMPDIR:-/tmp}/mux-whichkey-next}"
+  : >| "$NEXT_FILE"
   local rows cols
-  rows="$("$TMUX_BIN" display -p '#{client_height}' 2>/dev/null)"; [[ "$rows" == <-> ]] || rows=40
+  local -a ct; [[ -n "$CLIENT" ]] && ct=(-c "$CLIENT")
+  rows="$("$TMUX_BIN" display -p "${ct[@]}" '#{client_height}' 2>/dev/null)"; [[ "$rows" == <-> ]] || rows=40
   ROWS_MAX=${CFG[max_rows]}
   local avail=$(( rows - MARGIN[1] - MARGIN[3] - 4 ))
   (( ROWS_MAX > avail )) && ROWS_MAX=$avail
@@ -303,9 +330,11 @@ _panel() {
       "${CFG[back]}")
         _mode_meta "$mode"
         if [[ -n "$M_PARENT" ]]; then
-          mode="$M_PARENT"; page=0
+          mode="$M_PARENT"
           "$TMUX_BIN" set key-table "$([[ $mode == prefix ]] && print root || print $mode)" 2>/dev/null
           [[ "$mode" == prefix ]] && "$TMUX_BIN" switch-client -T prefix 2>/dev/null
+          _reopen "$mode"
+          return 0
         else
           "$TMUX_BIN" set key-table root 2>/dev/null; return 0
         fi
@@ -331,16 +360,19 @@ _panel() {
     if _has "$flags" switch && ! _has "$flags" exit; then
       # push the next mode without tearing the popup down
       _run "$cmd"
+      local next=""
       case "${E_DESC[hit]}" in
-        "Tab mode"*) mode=tab ;;
-        "Pane mode"*) mode=pane ;;
-        "Session mode"*) mode=session ;;
-        "Move Pane"*) mode=move ;;
-        "Resize Pane"*) mode=resize ;;
+        "Tab mode"*) next=tab ;;
+        "Pane mode"*) next=pane ;;
+        "Session mode"*) next=session ;;
+        "Move Pane"*) next=move ;;
+        "Resize Pane"*) next=resize ;;
         *) return 0 ;;
       esac
-      page=0
-      continue
+      # A popup cannot resize itself (the geometry flags are ignored when a
+      # popup already exists), so each mode gets its own correctly sized one.
+      _reopen "$next"
+      return 0
     fi
     if _has "$flags" dialog; then
       _run_deferred "$cmd"
@@ -353,7 +385,13 @@ _panel() {
 }
 
 case "${1:-}" in
-  panel) _panel "${2:-prefix}" ;;
+  restore)
+    bar="$(_default_bar)"
+    "$TMUX_BIN" set -g status on 2>/dev/null
+    [[ -n "$bar" ]] && "$TMUX_BIN" set -g "status-format[0]" "$bar" 2>/dev/null
+    for i in 1 2 3 4; do "$TMUX_BIN" set -gu "status-format[$i]" 2>/dev/null; done
+    ;;
+  panel) _panel "${2:-prefix}" "${3:-}" "${4:-}" ;;
   render)   # paint once and exit — tests + eyeballing without a popup
     _load "${2:-prefix}" || exit 0
     ROWS_MAX="${4:-${CFG[max_rows]}}"
@@ -362,13 +400,20 @@ case "${1:-}" in
     ;;
   open)
     mode="${2:-prefix}"
+    CLIENT="${3:-}"
+    # A backgrounded run-shell does NOT format-expand #{client_tty} (and is
+    # itself client-less), so resolve the attached client here — the panel
+    # is per-client and this config has one client per server.
+    [[ -n "$CLIENT" && "$CLIENT" == /dev/* ]] || \
+      CLIENT="$("$TMUX_BIN" list-clients -F '#{client_tty}' 2>/dev/null | head -1)"
+    typeset -a ct; ct=(); [[ -n "$CLIENT" ]] && ct=(-c "$CLIENT")
     [[ "$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)" == 1 ]] && exit 0
     # size the popup to the panel's own geometry, anchored bottom-right
     _load "$mode" || exit 0
     _mode_meta "$mode"
     _measure
-    rows="$("$TMUX_BIN" display -p '#{client_height}' 2>/dev/null)"; [[ "$rows" == <-> ]] || rows=40
-    cols="$("$TMUX_BIN" display -p '#{client_width}' 2>/dev/null)"; [[ "$cols" == <-> ]] || cols=100
+    rows="$("$TMUX_BIN" display -p "${ct[@]}" '#{client_height}' 2>/dev/null)"; [[ "$rows" == <-> ]] || rows=40
+    cols="$("$TMUX_BIN" display -p "${ct[@]}" '#{client_width}' 2>/dev/null)"; [[ "$cols" == <-> ]] || cols=100
     ROWS_MAX=${CFG[max_rows]}
     avail=$(( rows - MARGIN[1] - MARGIN[3] - 4 ))
     (( ROWS_MAX > avail )) && ROWS_MAX=$avail
@@ -380,13 +425,39 @@ case "${1:-}" in
     h=$(( n + 4 + PADDING[1] + PADDING[3] ))
     x=$(( cols - w - MARGIN[2] )); (( x < 0 )) && x=0
     y=$(( rows - MARGIN[3] )); (( y > rows - 1 )) && y=$(( rows - 1 ))
-    exec "$TMUX_BIN" display-popup -B -E -w "$w" -h "$h" -x "$x" -y "$y" \
-      "${0:A} panel $mode"
+    NEXT_FILE="${TMPDIR:-/tmp}/mux-whichkey-next.${CLIENT:t}"
+    while true; do
+      _load "$mode" || break
+      _mode_meta "$mode"
+      _measure
+      ROWS_MAX=${CFG[max_rows]}
+      avail=$(( rows - MARGIN[1] - MARGIN[3] - 4 ))
+      (( ROWS_MAX > avail )) && ROWS_MAX=$avail
+      (( ROWS_MAX < 3 )) && ROWS_MAX=3
+      _footer_text 0 1 1
+      w=$BODY_W; (( FOOT_W > w )) && w=$FOOT_W
+      w=$(( w + PADDING[2] + PADDING[4] + 2 ))
+      n=$ROWS_ALL; (( n > ROWS_MAX )) && n=$ROWS_MAX
+      h=$(( n + 4 + PADDING[1] + PADDING[3] ))
+      x=$(( cols - w - MARGIN[2] )); (( x < 0 )) && x=0
+      y=$(( rows - MARGIN[3] )); (( y > rows - 1 )) && y=$(( rows - 1 ))
+      : >| "$NEXT_FILE"
+      [[ -n "${WK_TRACE:-}" ]] && print -r -- "driver: opening $mode (${w}x${h}) next_file=$NEXT_FILE" >> /tmp/wktrace.log
+      "$TMUX_BIN" display-popup "${ct[@]}" -B -E -w "$w" -h "$h" -x "$x" -y "$y" \
+        "${0:A} panel $mode '$CLIENT' '$NEXT_FILE'"
+      # The panel writes the mode it wants next (empty = it is done).
+      next="$(cat "$NEXT_FILE" 2>/dev/null)"
+      [[ -n "${WK_TRACE:-}" ]] && print -r -- "driver: popup returned, next='$next'" >> /tmp/wktrace.log
+      rm -f "$NEXT_FILE"
+      [[ -n "$next" ]] || break
+      mode="$next"
+    done
     ;;
   toggle)
     if [[ "$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)" == 1 ]]; then
       "$TMUX_BIN" set -g @wk_hidden 0
-      "${0:A}" open "$("$TMUX_BIN" display -p '#{client_key_table}' | sed 's/^root$/prefix/')" &
+      "${0:A}" open "$("$TMUX_BIN" display -p '#{client_key_table}' | sed 's/^root$/prefix/')" \
+        "$("$TMUX_BIN" display -p '#{client_tty}')" &
     else
       "$TMUX_BIN" set -g @wk_hidden 1
     fi ;;

@@ -56,7 +56,7 @@ bind BSpace switch-client -T root
 # tmux reliably redraws the status for — and opens the which-key panel (a
 # popup that dispatches the mode's keys itself; it no-ops when hidden).
 # ---------------------------------------------------------------------------
-bind -n M-w switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open prefix"
+bind -n M-w switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open prefix '#{client_tty}'"
 
 # ---------------------------------------------------------------------------
 # Root table — vim/fzf-aware navigation (D4 fast lane / D13)
