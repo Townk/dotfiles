@@ -13,31 +13,27 @@
 #
 # Scope: dialogs/popups, panes, copy-mode (Phase 0) + the status-bar palette
 # (Phase 4, D6). Layout/assembly lives in status.conf — this file carries
-# every COLOR the bar uses, as %hidden fragments where color and content are
-# inseparable (mode pill, alarm flag icons, session pill).
+# every static COLOR the bar uses, as %hidden window-pill fragments where
+# color and content are inseparable. The right-side gradient ribbon is
+# rendered live by tmux-status-right (colors from the theme JSON).
 
-# Status line — bar canvas (bg_dim = the zj-hud bar wash).
-set -g status-style "bg=#{{ index $p $r.ui.bg_dim }},fg=#{{ index $p $r.ui.fg_dim }}"
+# Status line (Phase 4, D6) — the zj-hud bar look. The bar canvas follows
+# the zellij bar's resolve_bar_bg (text_unselected background = ui.bg, the
+# BASE — not the dialog mantle).
+set -g status-style "bg=#{{ index $p $r.ui.bg }},fg=#{{ index $p $r.ui.fg_dim }}"
 
-# Window "tab" pills: current = accent bold, rest dim; alarm-flagged windows
-# tint attention (yellow — matches the zj-hud alarm icon color).
-set -g window-status-style "fg=#{{ index $p $r.ui.fg_dim }}"
-set -g window-status-current-style "fg=#{{ index $p $r.ui.accent }},bold"
-set -g window-status-activity-style "fg=#{{ index $p $r.action.attention }}"
-set -g window-status-bell-style "fg=#{{ index $p $r.action.attention }}"
-
-# Mode pill — #{client_key_table} → icon/label/color from theme.yaml
-# roles.mode, the SAME block the zj-hud bar's modes {} renders from. Empty in
-# the root table (rest state — zj-hud hides the pill in Normal too);
-# copy-mode wins over the table (the table stays root inside copy-mode).
-# Parse-time %hidden: status.conf composes status-right from these.
-%hidden mode_pill="#{?#{pane_in_mode},#[fg=#{{ index $p $r.mode.scroll }}]󰩤 Scroll ,#{?#{==:#{client_key_table},tab},#[fg=#{{ index $p $r.mode.tab }}]󰓩 Tab ,#{?#{==:#{client_key_table},pane},#[fg=#{{ index $p $r.mode.pane }}] Pane ,#{?#{==:#{client_key_table},session},#[fg=#{{ index $p $r.mode.session }}]󰙀 Session ,#{?#{==:#{client_key_table},resize},#[fg=#{{ index $p $r.mode.resize }}]󰩨 Resize ,#{?#{==:#{client_key_table},move},#[fg=#{{ index $p $r.mode.move }}]󰆾 Move ,#{?#{==:#{client_key_table},locked},#[fg=#{{ index $p $r.mode.locked }}]󰌾 Locked ,#{?#{==:#{client_key_table},nested},#[fg=#{{ index $p $r.mode.locked }}]󰌾 Nested ,}}}}}}}}"
-
-# Alarm flag icons (replace stock #/~): 󰂞 activity, 󰂠 silence, 󰂚 bell.
-%hidden alarm_flags="#{?window_activity_flag,#[fg=#{{ index $p $r.action.attention }}]󰂞 ,}#{?window_silence_flag,#[fg=#{{ index $p $r.action.attention }}]󰂠 ,}#{?window_bell_flag,#[fg=#{{ index $p $r.action.attention }}]󰂚 ,}"
-
-# Session pill (zj-hud right-edge `󰙀 <session>`).
-%hidden session_pill="#[fg=#{{ index $p $r.mode.session }}]󰙀 #S#[default]"
+# Window "tab" pills — zj-hud tab chrome ($p.tab: the SAME slots the zellij
+# bar uses): a bold pill closed by a ▌ edge glyph in the pill color over
+# the bar. Body mirrors compose_tab_title's priority: user-renamed window ->
+# tab icon + name; shell -> home/folder icon + ~-collapsed cwd (tail-kept
+# truncation); any other command -> run icon + name. Extra icons: zoom,
+# synced panes, alarm armed (monitor option set) / fired (alert flag, in
+# attention yellow). Composed into window-status-format by status.conf.
+%hidden win_alarm="#{?window_activity_flag, #[fg=#{{ index $p $r.action.attention }}]󰂞,#{?window_silence_flag, #[fg=#{{ index $p $r.action.attention }}]󰂠,#{?#{||:#{==:#{monitor-activity},on},#{!=:#{monitor-silence},0}}, ,}}}"
+%hidden win_extras="#{?window_zoomed_flag, 󰖯,}#{?#{==:#{synchronize-panes},on}, ,}$win_alarm"
+%hidden win_body="#{?#{automatic-rename},#{?#{||:#{==:#{pane_current_command},zsh},#{==:#{pane_current_command},bash}},#{?#{==:#{pane_current_path},{{ .chezmoi.homeDir }}},󰋜 ~,󰝰 #{=|-28|…:#{s|^{{ .chezmoi.homeDir }}|~|:#{pane_current_path}}}},󰜎 #W},󰓩 #W}"
+%hidden win_pill="#[bold,bg=#{{ $p.tab.bg }},fg=#{{ $p.tab.fg }}] #I $win_body$win_extras #[bg=#{{ index $p $r.ui.bg }},fg=#{{ $p.tab.bg }}]▌"
+%hidden win_pill_current="#[bold,bg=#{{ $p.tab.active_bg }},fg=#{{ $p.tab.active_fg }}] #I $win_body$win_extras #[bg=#{{ index $p $r.ui.bg }},fg=#{{ $p.tab.active_bg }}]▌"
 
 # Command prompt / messages (mirrors the dialog canvas).
 set -g message-style "bg=#{{ index $p $r.ui.dialog_bg }},fg=#{{ index $p $r.ui.fg }}"
@@ -61,6 +57,10 @@ set -g pane-active-border-style "fg=#{{ index $p $r.ui.border_focus }}"
 setw -g pane-border-format " #{?pane_active,#[fg=#{{ index $p $r.ui.border_focus }}],#[fg=#{{ index $p $r.ui.border_inactive }}]}#{pane_index} #{pane_title}#[default] "
 
 # Copy-mode: selection + search-match washes (search dialog proper is D12).
+# The mark line stays invisible: set-mark is the search dialog's incremental
+# anchor, never a user-facing highlight (tmux paints the marked line red by
+# default).
+set -g copy-mode-mark-style "default"
 set -g mode-style "bg=#{{ index $p $r.ui.selection }},fg=#{{ index $p $r.ui.fg }}"
 set -g copy-mode-match-style "bg=#{{ $p.find_highlight }},fg=#{{ index $p $r.ui.fg }}"
 set -g copy-mode-current-match-style "bg=#{{ index $p $r.action.attention }},fg=#{{ index $p $r.ui.bg }}"
