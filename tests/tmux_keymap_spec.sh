@@ -125,14 +125,17 @@ Describe 'tmux keymap tables'
     The output should include "pane-border-status"
   End
 
+  # NB: global listing (the list-keys -T quirk; ledger) + awk to collapse
+  # list-keys' column padding.
+  menu_binds() { tmux -L kmspec list-keys | grep 'M-\.' | awk '{print $2, $3, $4}'; }
+
   It 'every mode table carries its which-key menu on M-. (Phase 5)'
-    # NB: asserted via the GLOBAL listing (the list-keys -T quirk; ledger).
-    When call tmux -L kmspec list-keys
+    When call menu_binds
     The output should include "-T tab M-."
     The output should include "-T pane M-."
     The output should include "-T prefix M-."
     The output should include "-T copy-mode-vi M-."
-    The output should include "display-menu"
+    The lines of output should equal 7
   End
 
   It 'alert hooks route to the notifier'
