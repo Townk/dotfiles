@@ -788,7 +788,7 @@ keymap:
       - keys:
         - n
         desc: next prompt
-        icon: 
+        icon: 
         color: mauve
         cmd: ''
         panel_only: true
@@ -961,7 +961,7 @@ keymap:
       - keys:
         - n
         desc: next match
-        icon: 
+        icon: 
         color: mauve
         cmd: ''
         panel_only: true
