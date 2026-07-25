@@ -41,11 +41,19 @@ shape_reset() {
   # find) — inject DECSCUSR 0 through the pane tty to force the reset, but
   # only when the app itself has no custom shape (nvim keeps its mode
   # cursors).
-  local shape tty
+  local shape sess c
   shape="$("$TMUX_BIN" display -p -t "$pane" '#{cursor_shape}' 2>/dev/null)" || shape=""
   if [[ "$shape" == default || -z "$shape" ]]; then
-    tty="$("$TMUX_BIN" display -p -t "$pane" '#{pane_tty}' 2>/dev/null)" || tty=""
-    [[ -w "$tty" ]] && printf '\033[0 q' > "$tty" 2>/dev/null
+    # The OUTER terminal keeps the last DECSCUSR forever (it even survives a
+    # tmux restart) and tmux re-emits nothing for a default→default screen
+    # state — write the reset straight to the attached client ttys (the
+    # Phase 0 pane-tty bypass trick, client side).
+    sess="$("$TMUX_BIN" display -p -t "$pane" '#{session_name}' 2>/dev/null)" || sess=""
+    if [[ -n "$sess" ]]; then
+      for c in $("$TMUX_BIN" list-clients -t "$sess" -F '#{client_tty}' 2>/dev/null); do
+        [[ -w "$c" ]] && printf '\033[0 q' > "$c" 2>/dev/null
+      done
+    fi
   fi
   return 0
 }
