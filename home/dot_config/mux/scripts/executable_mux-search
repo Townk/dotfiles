@@ -173,6 +173,13 @@ cleanup() {
   "$TMUX_BIN" refresh-client -S 2>/dev/null
 }
 trap cleanup EXIT
+# C-c reaches the dialog as SIGINT, not a byte — same semantics as the
+# \x03 branch: abort the whole stack; the EXIT trap still runs.
+TRAPINT() {
+  "$TMUX_BIN" set -p -t "$origin" -u @search_term 2>/dev/null
+  "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
+  exit 0
+}
 
 pop_out() {
   local pos

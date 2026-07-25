@@ -35,6 +35,11 @@ set -g status-right "#({{ .chezmoi.homeDir }}/.local/libexec/tmux-status-right '
 # toggles them (keymap.conf); format/colors in the theme.
 setw -g pane-border-status off
 
+# Scroll state hides the terminal cursor (zellij parity); Copy shows it.
+# The hook covers every copy-mode entry/exit; the keymap's @visual
+# transitions (v / Backspace) call the helper directly.
+set-hook -g pane-mode-changed 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-scroll-cursor \"#{pane_id}\""'
+
 # Alarm alerts → host OSD (the same Hammerspoon notify the zellij
 # zj_hud_alarm path shows). The notifier gates itself on the session env's
 # ssh truth — a remote client can't see the host OSD; the bar flag still

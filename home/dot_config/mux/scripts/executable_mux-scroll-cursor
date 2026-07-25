@@ -1,0 +1,29 @@
+#!/usr/bin/env zsh
+# mux-scroll-cursor <pane-id> — hide the terminal cursor in SCROLL state
+# (copy-mode with @visual unset), restore it everywhere else (mux migration
+# Phase 4; zellij scroll mode has no cursor). The copy-mode cursor is the
+# REAL terminal cursor (probe: no reverse-video cell in capture -e), so the
+# per-pane cursor-colour option painted to the canvas color hides it.
+# Driven by the pane-mode-changed hook (status.conf) plus the @visual
+# transitions in the keymap (v / Backspace inside copy-mode).
+
+emulate -L zsh
+setopt no_unset
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
+
+pane="${1:-}"
+[[ -n "$pane" ]] || exit 0
+
+in_mode="$("$TMUX_BIN" display -p -t "$pane" '#{pane_in_mode}' 2>/dev/null)" || exit 0
+vis="$("$TMUX_BIN" display -p -t "$pane" '#{@visual}' 2>/dev/null)" || vis=""
+
+if [[ "$in_mode" == 1 && "$vis" != 1 ]]; then
+  bg="$(jq -r '.roles.ui.bg' "$THEME_JSON" 2>/dev/null)" || exit 0
+  [[ "$bg" == \#* ]] || exit 0
+  "$TMUX_BIN" set -p -t "$pane" cursor-colour "$bg" 2>/dev/null
+else
+  "$TMUX_BIN" set -p -t "$pane" -u cursor-colour 2>/dev/null
+fi
+exit 0
