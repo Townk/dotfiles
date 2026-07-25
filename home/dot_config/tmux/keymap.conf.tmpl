@@ -243,6 +243,16 @@ bind -T locked M-Escape set key-table root
 # copy-mode additions (zellij scroll/search parity; D11/D12 stage 1)
 # ---------------------------------------------------------------------------
 # V — EditScrollback: dump history into nvim in a new window (zellij `V`).
+# Pseudo text objects (viw-style): i/a capture one key via the prompt and
+# mux-copy-object macros it from jump/select primitives. True text objects
+# are an engine gap (fixed send -X vocabulary; ledger row) — V (scrollback
+# in nvim) is the full-fidelity fallback.
+bind -T copy-mode-vi i command-prompt -1 -k -p '(i)' {
+  run-shell "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-copy-object i '%%' '#{pane_id}'"
+}
+bind -T copy-mode-vi a command-prompt -1 -k -p '(a)' {
+  run-shell "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-copy-object a '%%' '#{pane_id}'"
+}
 # Scroll-mode stack (zellij parity). ESC: with a selection it only clears
 # the selection; otherwise it clears the WHOLE stack (straight to normal).
 # Backspace ALWAYS pops exactly one level: Search → back to Scroll/Copy

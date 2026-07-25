@@ -1,0 +1,57 @@
+#!/usr/bin/env zsh
+# mux-copy-object <i|a> <char> <pane-id> — pseudo text objects for tmux
+# copy-mode (mux migration Phase 4). True text objects are an engine gap
+# (the send -X vocabulary is fixed; no plugin can extend it — ledger row),
+# but the everyday cases decompose into jump/select primitives:
+#   w                select-word (vim-like word-separators)
+#   W                select-WORD (whitespace boundaries)
+#   " ' `            quote pair on the current line
+#   ( ) b  [ ]  { } B  < >   bracket pair on the current line
+# inner selects between the delimiters, around includes them. Line-local,
+# nearest-pair — the practical vim mental model; full-fidelity objects
+# live one keypress away (V opens the scrollback in nvim).
+
+emulate -L zsh
+setopt no_unset
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+kind="${1:-i}" ch="${2:-}" pane="${3:-}"
+[[ -n "$ch" && -n "$pane" ]] || exit 0
+
+X() { "$TMUX_BIN" send-keys -t "$pane" -X "$@" 2>/dev/null }
+
+open="" close=""
+case "$ch" in
+  w) X clear-selection; X select-word; exit 0 ;;
+  W)
+    # WORD: whitespace-only boundaries — flip word-separators around the
+    # select and restore the vim-like set afterwards.
+    sep="$("$TMUX_BIN" show -wv -t "$pane" word-separators 2>/dev/null)" || sep=""
+    "$TMUX_BIN" set -w -t "$pane" word-separators " " 2>/dev/null
+    X clear-selection; X select-word
+    if [[ -n "$sep" ]]; then
+      "$TMUX_BIN" set -w -t "$pane" word-separators "$sep" 2>/dev/null
+    else
+      "$TMUX_BIN" set -w -t "$pane" -u word-separators 2>/dev/null
+    fi
+    exit 0 ;;
+  \"|\'|\`) open="$ch" close="$ch" ;;
+  \(|\)|b) open="(" close=")" ;;
+  \[|\]) open="[" close="]" ;;
+  \{|\}|B) open="{" close="}" ;;
+  \<|\>) open="<" close=">" ;;
+  *) exit 0 ;;
+esac
+
+X clear-selection
+X jump-backward "$open"
+if [[ "$kind" == i ]]; then
+  X cursor-right
+  X begin-selection
+  X jump-forward "$close"
+  X cursor-left
+else
+  X begin-selection
+  X jump-forward "$close"
+fi
+exit 0

@@ -60,6 +60,10 @@ set -s escape-time 0               # ESC is ESC, never a chord timeout (ESC canc
 set -g focus-events on             # nvim autoread & friends
 set -g mouse on
 setw -g mode-keys vi               # copy-mode motion parity with the zellij scroll keys
+# vim-like word boundaries for w/b/e and the iw text object (tmux default is
+# space-only, which makes every word motion a WORD motion; iW flips this to
+# whitespace-only transiently via mux-copy-object).
+setw -g word-separators " !\"#$%&'()*+,-./:;<=>?@[]^\\\`{|}~"
 set -g base-index 1                # zellij tabs are 1-based; keymap number jumps assume it
 setw -g pane-base-index 1
 set -g renumber-windows on         # closing a window renumbers the rest, like zellij tabs
