@@ -3,7 +3,7 @@
 # Every binding that changes modes goes through this, so the hidden-panel
 # path and the panel path run the SAME logic (spec: one transition API).
 #
-#   mux-stack push <state> | pop | clear | show | vis 0|1 | sync
+#   mux-stack push <state> | pop | clear | show | vis 0|1 | sync | reconcile
 emulate -L zsh
 setopt no_unset
 source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/stack.zsh"
@@ -13,6 +13,8 @@ case "${1:-show}" in
   clear) mux_stack::clear ;;
   vis)   mux_stack::set_visible "${2:-1}" ;;
   sync)  mux_stack::sync ;;
+  # the pane-mode-changed hook: copy-mode may have ended without us
+  reconcile) mux_stack::reconcile ;;
   show)  mux_stack::top && print -r -- "$MS_STATE:$MS_VIS" || print -r -- "(empty)" ;;
 esac
 exit 0

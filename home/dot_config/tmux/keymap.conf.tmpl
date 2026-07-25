@@ -1,4 +1,5 @@
 {{- $km := .keymap -}}
+{{- $stack := printf "%s/.config/mux/scripts/mux-stack" .chezmoi.homeDir -}}
 # keymap.conf — GENERATED mode-table bindings (mux migration Phase 5.2).
 # Source of truth: home/.chezmoidata/keymap.yaml — the SAME data the
 # which-key panel dispatches from, so the panel and the key tables can
@@ -9,8 +10,22 @@
 # Every command rides in a BRACE BLOCK: a bare `;` in a config file is a
 # command separator, so `bind N new-window ; set key-table root` would bind
 # the first and RUN the second at load (Mode B find).
+#
+# Every bind ends in ONE mode-stack operation — the same one the panel runs
+# for that entry, so the hidden-panel path and the panel path cannot drift:
+#   entering a mode  → push it
+#   an action        → clear (zellij: an action ends the mode)
+#   a `stay` action  → nothing (the mode survives, like tmux's own table)
+# A `to` that names a state with neither a panel nor a key table (rename) is
+# a dialog's label, not a mode you can stand in: those clear too.
 {{ range $name, $t := $km.tables }}{{ if ne $name "copy" }}
 # --- {{ $t.title }}{{ if hasKey $t "parent" }} (from {{ $t.parent }}){{ end }} ---
-{{ range $e := $t.entries }}{{ if not (hasKey $e "panel_only") }}{{ $flag := "" }}{{ if ne $name "prefix" }}{{ $flag = printf "-T %s " $name }}{{ end }}{{ if hasKey $e "numeric" }}{{ range $k := $e.keys }}bind {{ $flag }}{{ $k }} { {{ replace "#N" $k $e.cmd }} }
-{{ end }}{{ else }}{{ range $k := $e.keys }}bind {{ $flag }}{{ $k }} { {{ $e.cmd }}{{ if hasKey $e "to" }} ; run-shell -b "{{ $.chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open {{ $e.to }}"{{ end }} }
+{{ range $e := $t.entries }}{{ if not (hasKey $e "panel_only") -}}
+{{ $flag := "" }}{{ if ne $name "prefix" }}{{ $flag = printf "-T %s " $name }}{{ end -}}
+{{ $op := printf " ; run-shell -b \"%s clear\"" $stack -}}
+{{ if hasKey $e "stay" }}{{ $op = "" }}{{ end -}}
+{{ if hasKey $e "to" }}{{ $st := index $km.which_key.states $e.to -}}
+{{ if or $st.table $st.key_table }}{{ $op = printf " ; run-shell -b \"%s push %s\"" $stack $e.to }}{{ end }}{{ end -}}
+{{ if hasKey $e "numeric" }}{{ range $k := $e.keys }}bind {{ $flag }}{{ $k }} { {{ replace "#N" $k $e.cmd }}{{ $op }} }
+{{ end }}{{ else }}{{ range $k := $e.keys }}bind {{ $flag }}{{ $k }} { {{ $e.cmd }}{{ $op }} }
 {{ end }}{{ end }}{{ end }}{{ end }}{{ end }}{{ end }}

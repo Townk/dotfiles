@@ -69,10 +69,14 @@ Describe 'tmux keymap tables'
     The output should include "key-table move"
   End
 
-  It 'gives every mode table an Escape back to root'
+  It 'gives every mode table the same two mode-stack pops'
+    # Escape ends the stack, Backspace pops one level — identical commands in
+    # every table, because the stack (not the table) knows where they lead.
     _missing=""
     for t in pane tab resize move session; do
-      tmux -L kmspec list-keys -T "$t" | grep -q "key-table root" || _missing="$_missing $t"
+      _b="$(tmux -L kmspec list-keys -T "$t")"
+      case "$_b" in *"mux-stack clear"*) ;; *) _missing="$_missing $t:Escape" ;; esac
+      case "$_b" in *"mux-stack pop"*) ;; *) _missing="$_missing $t:BSpace" ;; esac
     done
     When call test -z "$_missing"
     The status should be success
@@ -126,10 +130,21 @@ Describe 'tmux keymap tables'
     The output should include "pane-border-status"
   End
 
-  It 'the which-key panel opens on the leader and toggles on M-. (Phase 5)'
+  It 'the leader pushes Command on the stack and M-. toggles the panel (Phase 5)'
     When call tmux -L kmspec list-keys
-    The output should include "mux-whichkey open command"
+    The output should include "mux-stack push command"
     The output should include "mux-whichkey toggle"
+  End
+
+  It 'ends every generated bind in exactly one mode-stack operation'
+    # entering a mode pushes it, an action ends the stack, a `stay` action
+    # leaves it alone — the same rule the panel's own dispatcher follows.
+    When call keys pane
+    The output should include 'key-table resize \; run-shell -b "'      # push
+    The output should include 'mux-stack push resize'
+    The output should include 'kill-pane'
+    The output should include 'mux-stack clear'
+    The output should not include 'select-pane -L \; run-shell'          # stay
   End
 
   It 'generated mode tables carry their commands in brace blocks'

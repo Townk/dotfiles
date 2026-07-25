@@ -153,3 +153,20 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | the status stack caps at 5 lines | the panel cannot live there (it is vertical and tall) — hence the popup |
 | `,` is a real binding, so a comma-separated key list loses it | keys are pipe-separated in whichkey.data |
 | a `j:…:` join-flag argument is literal — a parameter inside renders as text | the breadcrumb joins by hand |
+
+## The mode stack (Phase 5 refactor, 2026-07-25)
+
+`@mux_stack` = `"command:1 scroll:1 search:0"` (state:visible, bottom→top) is
+the single source of truth; the key table, the pane's copy-mode and the popup
+are derived views. One API (`lib/mux/stack.zsh`, exposed to key bindings by
+`mux-stack`), so the panel path and the hidden-panel path run identical logic.
+
+| Fact | Consequence |
+| --- | --- |
+| a backgrounded child (`cmd &`) of a `run-shell` keeps that run-shell alive as long as it holds the pipe — with a popup on the end of it, the run-shell never returns | `sync` hands the panel launch to the SERVER (`tmux run-shell -b "…"`) and forks nothing |
+| zsh runs `TRAPEXIT` in every `$(…)` COMMAND SUBSTITUTION as well as at exit | the panel driver un-claimed itself on its first substitution — no exit trap; the claim is a PID (`@mux_wk_driver`) that anyone can test with `kill -0`, which also self-heals a driver killed with its popup |
+| `switch-client -T prefix` fails with "no current client" from a `run-shell -b` (client-less) and from inside a popup (no pane of its own) | every client-scoped command names the client: `switch-client -c "$(list-clients -F '#{client_tty}' \| head -1)"` |
+| `set key-table X` is a SESSION option and works client-less; `#{client_key_table}` needs a client | the stack sets the session option, and specs that assert the armed table attach a real client (nested tmux) |
+| `show -gv @foo` on an option removed with `set -gu` ERRORS ("invalid option") rather than printing empty | flags that are polled get an explicit `0`, never `set -gu` |
+| tmux has no search-cancel, and an empty `search-forward` keeps the old term | leaving a Search entry exits and re-enters copy-mode and restores the viewport from `#{scroll_position}` — the stack owns that teardown, so `/`, Backspace and the panel cannot disagree |
+| a popup cannot resize itself (geometry flags are ignored once one exists) | one DRIVER process owns the popup for the whole stack: the panel performs a stack operation and exits, the driver re-reads the stack and opens the next correctly sized popup |

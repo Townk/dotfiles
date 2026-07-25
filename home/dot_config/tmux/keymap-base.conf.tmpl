@@ -42,14 +42,13 @@
 bind M-w send-keys M-w
 # ESC cancels the armed leader without leaking into the app (zellij: Esc
 # exits tmux mode; ESC cancels — never conflate with Ctrl+C).
-bind Escape switch-client -T root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
-# Mode stack (zellij which-key trail parity): Backspace pops one level —
-# each table returns to the mode it was entered FROM. tmux has no stack,
-# but the entry graph has unique parents, so the pops are static:
-# resize/move → pane; tab/pane/session → the armed leader (Command, by
-# re-arming the one-shot prefix table); Command → root. Locked keeps its
-# single M-Escape exit; copy-mode keeps Backspace for search editing.
-bind BSpace switch-client -T root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
+bind Escape run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack clear"
+# Mode stack (zellij which-key trail parity): Backspace pops one level. The
+# stack is REAL now — @mux_stack, one entry per mode you walked through —
+# so every table below uses these same two commands and the pop lands where
+# you actually came from, panel up or panel down (before this, the pops were
+# inferred from a static parent map and each table re-implemented them).
+bind BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack pop"
 
 # ---------------------------------------------------------------------------
 # Retired bindings — tmux key tables are CUMULATIVE: `source-file` adds and
@@ -74,7 +73,7 @@ bind -T {{ $t }} M-. run-shell -b "{{ $.chezmoi.homeDir }}/.config/mux/scripts/m
 # tmux reliably redraws the status for — and opens the which-key panel (a
 # popup that dispatches the mode's keys itself; it no-ops when hidden).
 # ---------------------------------------------------------------------------
-bind -n M-w switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open command '#{client_tty}'"
+bind -n M-w switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack push command"
 
 # ---------------------------------------------------------------------------
 # Root table — vim/fzf-aware navigation (D4 fast lane / D13)
@@ -115,9 +114,10 @@ bind -n C-S-Down  if -F '#{@pane-is-vim}' 'send-keys C-S-Down'  'resize-pane -D 
 bind -n C-S-Up    if -F '#{@pane-is-vim}' 'send-keys C-S-Up'    'resize-pane -U 2'
 bind -n C-S-Right if -F '#{@pane-is-vim}' 'send-keys C-S-Right' 'resize-pane -R 2'
 # M-/ — search straight from normal (zellij Alt+/): enter scroll-state
-# copy-mode with the incremental search prompt; the stack below Search is
-# empty, so popping Search (ESC/Backspace) lands back in normal.
-bind -n M-/ set -p @searching 1 \; set -p @visual 0 \; set -p @search_parent normal \; copy-mode \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
+# copy-mode with the incremental search prompt. Search is the ONLY entry on
+# the stack, so popping it (ESC/Backspace) lands back in normal — no
+# @search_parent needed, the stack below it says so.
+bind -n M-/ set -p @searching 1 \; set -p @visual 0 \; copy-mode \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack push search" \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
 
 # NB: the tm-scrub context routes (J/K/H/L, Shift+arrows, Shift+A/S over
 # yazi/hunk/diffnav panes) are deliberately NOT bound yet — bare capitals are
@@ -135,8 +135,8 @@ bind -n M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichke
 # ---------------------------------------------------------------------------
 # tab table (zellij "tab" mode)
 # ---------------------------------------------------------------------------
-bind -T tab Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
-bind -T tab BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear tab" \; set key-table root \; switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open command"   # pop the mode stack
+bind -T tab Escape run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack clear"
+bind -T tab BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack pop"
 bind -T tab 0 select-window -t :=10 \; set key-table root
 # Rename: themed input::line dialog in a popup (Phase 2.4).
 # BreakPaneLeft/Right approximation: fold this window's pane into the
@@ -147,8 +147,8 @@ bind -T tab 0 select-window -t :=10 \; set key-table root
 # ---------------------------------------------------------------------------
 # pane table (zellij "pane" mode)
 # ---------------------------------------------------------------------------
-bind -T pane Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
-bind -T pane BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear pane" \; set key-table root \; switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open command"   # pop the mode stack
+bind -T pane Escape run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack clear"
+bind -T pane BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack pop"
 # No stacked panes / pin / embed↔float toggle: no tmux equivalent needed
 # (§6 dispositions — stacked unused, pin only meaningful for non-modal
 # floats, popups are modal). P — quick-launch pane picker lands in Phase 3.
@@ -156,8 +156,8 @@ bind -T pane BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux
 # ---------------------------------------------------------------------------
 # resize table (zellij "resize" mode; repeatable binds)
 # ---------------------------------------------------------------------------
-bind -T resize Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
-bind -T resize BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear resize" \; set key-table pane \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open pane"   # pop the mode stack
+bind -T resize Escape run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack clear"
+bind -T resize BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack pop"
 bind -T resize H resize-pane -R 2
 bind -T resize J resize-pane -U 2
 bind -T resize K resize-pane -D 2
@@ -173,15 +173,15 @@ bind -T resize = resize-pane -U 2
 # ---------------------------------------------------------------------------
 # tmux has no directional pane swap; swap-pane -U/-D walk the pane order.
 # Ledger row documents the divergence (h/l rotate the whole window).
-bind -T move Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
-bind -T move BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear move" \; set key-table pane \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open pane"   # pop the mode stack
+bind -T move Escape run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack clear"
+bind -T move BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack pop"
 bind -T move BTab swap-pane -U
 
 # ---------------------------------------------------------------------------
 # session table (zellij "session" mode)
 # ---------------------------------------------------------------------------
-bind -T session Escape set key-table root \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
-bind -T session BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-clear session" \; set key-table root \; switch-client -T prefix \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey open command"   # pop the mode stack
+bind -T session Escape run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack clear"
+bind -T session BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack pop"
 # S — quick-launch workspace picker lands here in Phase 3. The zellij-only
 # chrome rows (about/configuration/plugin-manager/share) have no tmux
 # equivalent (§6 dispositions) — ledger.
@@ -191,7 +191,7 @@ bind -T session BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/
 # ---------------------------------------------------------------------------
 # Every keypress including Escape flows to the app; the single exit is
 # M-Escape, a combo uncommon enough that no shell or TUI claims it.
-bind -T locked M-Escape set key-table root
+bind -T locked M-Escape run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack clear"
 
 # ---------------------------------------------------------------------------
 # nested table — D14: filled by the Phase 3 nested_mux builder (outer
@@ -224,12 +224,13 @@ bind -T copy-mode-vi a if -F '#{selection_present}' {
 }
 # Scroll-mode stack (zellij parity). ESC: with a selection it only clears
 # the selection; otherwise it clears the WHOLE stack (straight to normal).
-# Backspace ALWAYS pops exactly one level: Search → back to Scroll/Copy
-# (tmux 3.7 has no search-cancel and even an empty search-forward keeps the
-# old term, so we exit + re-enter copy-mode and restore the viewport from
-# #{scroll_position}; ledger row); Copy → its entry parent (@copy_parent:
-# Scroll when pushed by v, the armed leader when entered via M-w V);
-# Scroll → the armed leader. y mirrors Enter exactly (copy-pipe + leave).
+# Backspace ALWAYS pops exactly one level, and it is the SAME pop every
+# other table uses — mux-stack owns what leaving a copy state means (drop
+# @visual, clear a search by exiting and re-entering copy-mode since tmux
+# 3.7 has no search-cancel, cancel copy-mode when the last copy state
+# leaves). That teardown used to be inlined here, in mux-search and in the
+# panel, keyed off @copy_parent/@search_parent, and the three disagreed.
+# y mirrors Enter exactly (copy-pipe + leave).
 # Scroll-state motion: viewport scroll, not cursor (see @visual above).
 bind -T copy-mode-vi j if -F '#{@visual}' {send -X cursor-down} {send -X scroll-down}
 bind -T copy-mode-vi Down if -F '#{@visual}' {send -X cursor-down} {send -X scroll-down}
@@ -237,31 +238,15 @@ bind -T copy-mode-vi k if -F '#{@visual}' {send -X cursor-up} {send -X scroll-up
 bind -T copy-mode-vi Up if -F '#{@visual}' {send -X cursor-up} {send -X scroll-up}
 # v: Scroll → push Copy/visual at the current position; in Copy it begins
 # the selection as usual.
-bind -T copy-mode-vi v if -F '#{@visual}' {send -X begin-selection} {set -p @visual 1 ; set -p @copy_parent scroll ; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-scroll-cursor '#{pane_id}'"}
+bind -T copy-mode-vi v if -F '#{@visual}' {send -X begin-selection} {run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack push copy"}
 bind -T copy-mode-vi Escape if -F '#{selection_present}' {
   send -X clear-selection
 } {
-  send -X cancel ; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey vis-reset"
+  run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack clear"
 }
 bind -T copy-mode-vi y send -X copy-pipe-and-cancel
 bind -T copy-mode-vi Enter send -X copy-pipe-and-cancel
-bind -T copy-mode-vi BSpace if -F '#{search_present}' {
-  if -F '#{==:#{@search_parent},normal}' {
-    send -X cancel
-  } {
-    run-shell 'tmux send-keys -X cancel; tmux copy-mode; [ #{scroll_position} -gt 0 ] && tmux send-keys -X -N #{scroll_position} scroll-up; true'
-  }
-} {
-  if -F '#{@visual}' {
-    if -F '#{==:#{@copy_parent},scroll}' {
-      set -p @visual 0 ; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-scroll-cursor '#{pane_id}'"
-    } {
-      send -X cancel ; switch-client -T prefix
-    }
-  } {
-    send -X cancel ; switch-client -T prefix
-  }
-}
+bind -T copy-mode-vi BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack pop"
 bind -T copy-mode-vi V run-shell 'f=$(mktemp /tmp/tmux-scrollback.XXXXXX); tmux capture-pane -p -S - >"$f"; tmux new-window -n scrollback "nvim +\$ $f"' \; send -X cancel
 # n/p — prompt jumps via OSC 133 marks (zj-prompt-jumper parity; the marks
 # come from the zsh precmd emitter, functions.d/prompt-marks.sh). tmux has
@@ -273,12 +258,13 @@ bind -T copy-mode-vi N if -F '#{search_present}' { send -X search-reverse } { se
 bind -T copy-mode-vi p send -X previous-prompt
 # / — forward incremental search (D12 stage 1; the floating search dialog
 # with option toggles is the D12 stage 2 hud follow-up).
-# '/' opens (SearchInput); from (SearchMode) it reopens prefilled and the
-# original parent is preserved (popping still lands where Search began).
+# '/' opens (SearchInput) by pushing Search; from (SearchMode) it reopens
+# prefilled on the SAME entry (the two are one stack level — pushing again
+# would make Backspace need two presses, which is exactly what it used to do).
 bind -T copy-mode-vi / if -F '#{search_present}' {
   run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
 } {
-  set -p @search_parent mode ; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
+  run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack push search" ; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
 }
 # (SearchMode) flag toggles — mirror the in-dialog M-c/M-b/M-p.
 bind -T copy-mode-vi M-c if -F '#{search_present}' {run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle case '#{pane_id}'"}

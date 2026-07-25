@@ -258,7 +258,9 @@ typeset -a bodies kinds
 # zj-hud's which-key hint: while the panel is NOT on screen in a live mode
 # — hidden with M-. or a start_hidden mode like Scroll — the bar advertises
 # the toggle ("󰘵 . keys").
-wk_hidden="$("$TMUX_BIN" show -gv @wk_hidden 2>/dev/null)"
+# Visibility is a field of the top MODE-STACK entry (@mux_stack, see
+# lib/mux/stack.zsh) — the bar reads the very same source the panel does, so
+# the hint cannot contradict what is on screen.
 wk_cfg="$(grep -m1 '^#cfg' "${WK_DATA:-$HOME/.config/mux/whichkey.data}" 2>/dev/null)"
 wk_key="" wk_start_hidden=""
 for kv in ${(ps:\t:)wk_cfg}; do
@@ -268,10 +270,17 @@ for kv in ${(ps:\t:)wk_cfg}; do
   esac
 done
 wk_suppressed=0
-[[ "$wk_hidden" == 1 ]] && wk_suppressed=1
-for sh in ${(s:,:)wk_start_hidden}; do
-  [[ -n "$sh" && "$sh" == "${MM_STATE:-}" ]] && wk_suppressed=1
-done
+typeset -a wk_stack
+wk_stack=(${(s: :)"$("$TMUX_BIN" show -gv @mux_stack 2>/dev/null)"})
+if (( ${#wk_stack} )); then
+  [[ "${wk_stack[-1]##*:}" == 1 ]] || wk_suppressed=1
+else
+  # a mode entered outside the stack (a hook, an app): fall back to the
+  # start_hidden default for the state the resolver reports
+  for sh in ${(s:,:)wk_start_hidden}; do
+    [[ -n "$sh" && "$sh" == "${MM_STATE:-}" ]] && wk_suppressed=1
+  done
+fi
 if [[ -n "$mode_body" && -n "$wk_key" ]] && (( wk_suppressed )); then
   bodies+=("@WKHINT@${wk_key}"); kinds+=(wkhint)
 fi

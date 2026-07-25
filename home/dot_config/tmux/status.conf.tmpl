@@ -34,8 +34,11 @@ set -g status-right "#({{ .chezmoi.homeDir }}/.local/libexec/tmux-status-right '
 # Which-key panel (Phase 5, D5): a popup owned by mux-whichkey — it floats
 # over the panes and dispatches the mode's keys itself while open (tmux
 # popups swallow key-table input). Nothing to wire into the status stack.
-set -g @wk_hidden 0
-set -g @wk_force 0
+# The MODE STACK starts empty on every config load: a reload means the
+# server's key tables were just re-sourced, so any mode we thought we were
+# standing in is gone with them.
+set -g @mux_stack ""
+set -g @mux_wk_driver 0
 # Defensive: a server from the status-line era can still carry panel rows in
 # status-format; put the stack back to "bar only".
 run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey restore"
@@ -45,9 +48,12 @@ run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey restore"
 setw -g pane-border-status off
 
 # Scroll state hides the terminal cursor (zellij parity); Copy shows it.
-# The hook covers every copy-mode entry/exit; the keymap's @visual
-# transitions (v / Backspace) call the helper directly.
-set-hook -g pane-mode-changed 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-scroll-cursor \"#{pane_id}\""'
+# The hook covers every copy-mode entry/exit; the stack's own transitions
+# call the same helper directly.
+# It also RECONCILES the mode stack: copy-mode can end without any stack
+# operation (y's copy-pipe-and-cancel, tmux's own q, a mouse scroll out of
+# the buffer), and the Scroll/Copy/Search entries would linger.
+set-hook -g pane-mode-changed 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-scroll-cursor \"#{pane_id}\"" ; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack reconcile"'
 
 # Alarm alerts → host OSD (the same Hammerspoon notify the zellij
 # zj_hud_alarm path shows). The notifier gates itself on the session env's

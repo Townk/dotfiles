@@ -14,7 +14,8 @@
 #   mux_mode::resolve <key_table> <in_copy> <visual> <searching> <search> [prefix_armed]
 #     → MM_STATE MM_TITLE MM_ICON MM_COLOR MM_TABLE ; returns 1 when resting
 #   mux_mode::meta <state>  → the same fields (+ MM_PARENT, the breadcrumb
-#                             chain the panel walks) for a known state
+#                             chain the panel walks, and MM_KEYTABLE, the
+#                             tmux key table the state arms) for a known state
 
 MUX_MODE_DATA="${WK_DATA:-$HOME/.config/mux/whichkey.data}"
 
@@ -24,7 +25,7 @@ mux_mode::meta() {
   [[ -n "$l" ]] || return 1
   local -a f; f=("${(@ps:\t:)l}")
   MM_STATE="$1" MM_TITLE="${f[3]}" MM_ICON="${f[4]}" MM_COLOR="${f[5]}"
-  MM_TABLE="${f[6]:-}" MM_PARENT="${f[7]:-}"
+  MM_TABLE="${f[6]:-}" MM_PARENT="${f[7]:-}" MM_KEYTABLE="${f[8]:-}"
   return 0
 }
 

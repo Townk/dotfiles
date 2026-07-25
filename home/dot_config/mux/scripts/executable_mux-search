@@ -31,8 +31,23 @@ setopt no_unset
 
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
 THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
+MUX_STACK="${0:A:h}/mux-stack"
 
 W=40 H=3
+
+# The dialog is one entry on the MODE STACK (Search), pushed by whoever
+# opened it — (SearchInput) and (SearchMode) are the same level, which is why
+# `/` on a live search reopens rather than pushes. Leaving is a stack
+# operation like any other; the stack owns what leaving Search means (tmux
+# has no search-cancel, so it exits and re-enters copy-mode and restores the
+# viewport). This dialog used to keep a THIRD opinion, @search_parent.
+#
+# Deferred by a beat, always: we are inside a popup until this process exits,
+# and a popup opened over a popup silently mutates the outer one — the panel
+# the pop uncovers must not land on top of us.
+stack_op() {
+  "$TMUX_BIN" run-shell -b -d 0.2 "'$MUX_STACK' $1" 2>/dev/null
+}
 
 # Restore the anchored cursor position (@search_apos/ay/ax on the origin
 # pane): scroll delta first, then row from top-line, then column.
@@ -136,7 +151,6 @@ I_SEARCH=$'\Uf002' I_CASE=$'\Ueab1' I_WORD=$'\Ueb7e' I_WRAP=$'\U000F0547'
 
 origin="$("$TMUX_BIN" display -p '#{pane_id}' 2>/dev/null)" || origin=""
 [[ -n "$origin" ]] || exit 0
-parent="$("$TMUX_BIN" display -p -t "$origin" '#{@search_parent}' 2>/dev/null)" || parent=""
 
 "$TMUX_BIN" set -p -t "$origin" @searching 1 2>/dev/null
 # Reopen from (SearchMode) keeps the term + flags; a fresh dialog resets.
@@ -178,25 +192,11 @@ trap cleanup EXIT
 # C-c reaches the dialog as SIGINT, not a byte — same semantics as the
 # \x03 branch: abort the whole stack; the EXIT trap still runs.
 TRAPINT() {
-  "$TMUX_BIN" set -p -t "$origin" -u @search_term 2>/dev/null
-  "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
+  stack_op clear
   exit 0
 }
 
-pop_out() {
-  local pos
-  "$TMUX_BIN" set -p -t "$origin" -u @search_term 2>/dev/null
-  if [[ "$parent" == normal ]]; then
-    "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
-    return 0
-  fi
-  pos="$("$TMUX_BIN" display -p -t "$origin" '#{scroll_position}' 2>/dev/null)" || pos=0
-  "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
-  "$TMUX_BIN" copy-mode -t "$origin" 2>/dev/null
-  [[ "$pos" == <-> ]] && (( pos > 0 )) && \
-    "$TMUX_BIN" send-keys -t "$origin" -X -N "$pos" scroll-up 2>/dev/null
-  return 0
-}
+pop_out() { stack_op pop }
 
 # ---- search application ----------------------------------------------------
 # The *-incremental copy-mode commands are NO-OPS outside the command-prompt
@@ -266,14 +266,13 @@ draw_input
 while read -rsk1 key; do
   case "$key" in
     $'\r'|$'\n')
-      # (SearchInput) Enter -> (SearchMode): same Search entry on the stack.
-      # An empty term has nothing to confirm — pop instead.
+      # (SearchInput) Enter -> (SearchMode): the same Search entry, nothing to
+      # do to the stack. An empty term has nothing to confirm — pop instead.
       if [[ -z "$buf" ]]; then pop_out; fi
       break ;;
     $'\x03')
       # C-c aborts the whole stack -> normal.
-      "$TMUX_BIN" set -p -t "$origin" -u @search_term 2>/dev/null
-      "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
+      stack_op clear
       break ;;
     $'\e')
       # ESC alone pops Search; ESC+char = the in-dialog Alt chords.

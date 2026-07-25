@@ -34,6 +34,9 @@ keymap:
     dim_color: surface2
     start_hidden:
     - scroll
+    # Search comes up over the pane you are reading; the panel would cover
+    # the matches. Alt+. raises it (the bar carries the hint meanwhile).
+    - search
     toggle_key: M-.
     back_key: BSpace
     next_page_key: C-d
@@ -147,6 +150,12 @@ keymap:
       - M-p
     - mode: search
       members: *id001
+    # states: what the MODE STACK pushes. `table` is the PANEL table whose
+    # bindings the which-key panel lists (empty = the state has no panel);
+    # `key_table` is the tmux key table the state arms (empty = root — the
+    # copy-mode states are dispatched by copy-mode-vi, and `prefix` is armed
+    # one-shot with switch-client). lib/mux/stack.zsh derives both from here,
+    # so "which table am I in" has exactly one answer.
     states:
       command:
         title: Command
@@ -154,72 +163,84 @@ keymap:
         color: tmux
         table: prefix
         parent: ''
+        key_table: 'prefix'
       tab:
         title: Tab
         icon: 󰓩
         color: tab
         table: tab
         parent: command
+        key_table: 'tab'
       pane:
         title: Pane
         icon: 
         color: pane
         table: pane
         parent: command
+        key_table: 'pane'
       session:
         title: Session
         icon: 󰙀
         color: session
         table: session
         parent: command
+        key_table: 'session'
       resize:
         title: Resize
         icon: 󰩨
         color: resize
         table: resize
         parent: pane
+        key_table: 'resize'
       move:
         title: Move
         icon: 󰙕
         color: move
         table: move
         parent: pane
+        key_table: 'move'
       locked:
         title: Locked
         icon: 󰌾
         color: locked
         table: ''
         parent: ''
+        key_table: 'locked'
       nested:
         title: Nested
         icon: 󰌾
         color: locked
         table: ''
         parent: ''
+        key_table: 'nested'
       scroll:
         title: Scroll
         icon: 󰩤
         color: scroll
         table: scroll
         parent: command
+        key_table: ''
       copy:
         title: Copy
         icon: 󰆏
         color: visual
         table: copy
         parent: scroll
+        key_table: ''
       search:
         title: Search
         icon: 
         color: search
         table: search
         parent: scroll
+        key_table: ''
       rename:
         title: Rename
         icon: 󰑕
         color: rename
         table: ''
         parent: ''
+        key_table: ''
   tables:
     prefix:
       title: Command
@@ -273,7 +294,7 @@ keymap:
         desc: Copy mode …
         icon: 󰆏
         color: mauve
-        cmd: set -p @visual 1 ; set -p @copy_parent command ; copy-mode
+        cmd: set -p @visual 1 ; copy-mode
         switch: true
         panel_exit: true
         to: copy
@@ -777,7 +798,7 @@ keymap:
         desc: Search scroll buffer …
         icon: 
         color: blue
-        cmd: set -p @search_parent mode ; run-shell -b "$HOME/.config/mux/scripts/mux-search --launch"
+        cmd: run-shell -b "$HOME/.config/mux/scripts/mux-search --launch"
         panel_only: true
         switch: true
         to: search
@@ -923,7 +944,7 @@ keymap:
         desc: Search scroll buffer …
         icon: 
         color: blue
-        cmd: set -p @search_parent mode ; run-shell -b "$HOME/.config/mux/scripts/mux-search --launch"
+        cmd: run-shell -b "$HOME/.config/mux/scripts/mux-search --launch"
         panel_only: true
         switch: true
         to: search
@@ -1013,7 +1034,7 @@ keymap:
         desc: edit search term …
         icon: 
         color: blue
-        cmd: set -p @search_parent mode ; run-shell -b "$HOME/.config/mux/scripts/mux-search --launch"
+        cmd: run-shell -b "$HOME/.config/mux/scripts/mux-search --launch"
         panel_only: true
         switch: true
         to: search
