@@ -52,6 +52,24 @@ bind Escape switch-client -T root
 bind BSpace switch-client -T root
 
 # ---------------------------------------------------------------------------
+# Retired bindings — tmux key tables are CUMULATIVE: `source-file` adds and
+# overrides, but a bind that disappears from the config lives on in a running
+# server until it is unbound (Mode B find: the Phase-5 display-menu binds kept
+# shadowing the panel's M-. long after menus.conf was deleted). The paging
+# keys are gone for good (the panel pages itself); M-. is OVERWRITTEN in every
+# table below rather than unbound, which retires the stale menu and makes the
+# toggle reachable from any mode when the panel is hidden.
+# ---------------------------------------------------------------------------
+unbind -T prefix C-d
+unbind -T prefix C-u
+bind -T copy-mode-vi M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+bind -T prefix M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+{{ range $t := list "tab" "pane" "session" "resize" "move" -}}
+unbind -T {{ $t }} C-d
+unbind -T {{ $t }} C-u
+bind -T {{ $t }} M-. run-shell -b "{{ $.chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+{{ end }}
+# ---------------------------------------------------------------------------
 # Leader (D3): M-w arms the prefix TABLE for one key — a table change, which
 # tmux reliably redraws the status for — and opens the which-key panel (a
 # popup that dispatches the mode's keys itself; it no-ops when hidden).
