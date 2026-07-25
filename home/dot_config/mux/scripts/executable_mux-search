@@ -34,6 +34,26 @@ THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
 
 W=40 H=3
 
+# Restore the anchored cursor position (@search_apos/ay/ax on the origin
+# pane): scroll delta first, then row from top-line, then column.
+restore_anchor() {
+  local o="$1" pos y x cur
+  pos="$("$TMUX_BIN" display -p -t "$o" '#{@search_apos}' 2>/dev/null)"; [[ "$pos" == <-> ]] || pos=0
+  y="$("$TMUX_BIN" display -p -t "$o" '#{@search_ay}' 2>/dev/null)";   [[ "$y" == <-> ]] || y=0
+  x="$("$TMUX_BIN" display -p -t "$o" '#{@search_ax}' 2>/dev/null)";   [[ "$x" == <-> ]] || x=0
+  cur="$("$TMUX_BIN" display -p -t "$o" '#{scroll_position}' 2>/dev/null)"; [[ "$cur" == <-> ]] || cur=0
+  if (( cur > pos )); then
+    "$TMUX_BIN" send-keys -t "$o" -X -N $(( cur - pos )) scroll-down 2>/dev/null
+  elif (( pos > cur )); then
+    "$TMUX_BIN" send-keys -t "$o" -X -N $(( pos - cur )) scroll-up 2>/dev/null
+  fi
+  "$TMUX_BIN" send-keys -t "$o" -X top-line 2>/dev/null
+  (( y > 0 )) && "$TMUX_BIN" send-keys -t "$o" -X -N "$y" cursor-down 2>/dev/null
+  "$TMUX_BIN" send-keys -t "$o" -X start-of-line 2>/dev/null
+  (( x > 0 )) && "$TMUX_BIN" send-keys -t "$o" -X -N "$x" cursor-right 2>/dev/null
+  return 0
+}
+
 # Build the search regex from a term + flags. tmux search is SMART-CASE
 # (all-lowercase patterns match insensitively; any uppercase goes sensitive)
 # — so insensitive mode expands alphabetics into character classes, and
@@ -72,9 +92,9 @@ if [[ "${1:-}" == --toggle ]]; then
     case_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_case}' 2>/dev/null)"
     word_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_word}' 2>/dev/null)"
     build_pattern "$term" "$case_on" "$word_on"
-    # Step right before re-searching so the CURRENT match (whose start is
-    # then behind the cursor) is re-found in place — no highlight jump.
-    "$TMUX_BIN" send-keys -t "$origin" -X cursor-right 2>/dev/null
+    # Back to the original anchor before re-filtering — deterministic, no
+    # highlight hop (user-specified semantics).
+    restore_anchor "$origin"
     "$TMUX_BIN" send-keys -t "$origin" -X search-backward "$REPLY" 2>/dev/null
   fi
   "$TMUX_BIN" refresh-client -S 2>/dev/null
@@ -133,9 +153,20 @@ else
   "$TMUX_BIN" set -p -t "$origin" @search_wrap 1 2>/dev/null
   "$TMUX_BIN" set -p -t "$origin" -u @search_term 2>/dev/null
 fi
-# Anchor the incremental re-searches: each keystroke re-searches from this
-# mark, so a growing pattern doesn't drift the cursor upward.
-"$TMUX_BIN" send-keys -t "$origin" -X set-mark 2>/dev/null
+# Anchor the incremental re-searches on the CURSOR COORDINATES at dialog
+# open (a set-mark anchor paints the marked line and clobbers its cell
+# styles — Mode B find). Every re-search and every flag toggle restores
+# this exact position first, so a growing pattern or a re-filter never
+# drifts the highlight. Shared with the --toggle relay via pane options.
+a_pos="$("$TMUX_BIN" display -p -t "$origin" '#{scroll_position}' 2>/dev/null)" || a_pos=0
+a_y="$("$TMUX_BIN" display -p -t "$origin" '#{copy_cursor_y}' 2>/dev/null)" || a_y=0
+a_x="$("$TMUX_BIN" display -p -t "$origin" '#{copy_cursor_x}' 2>/dev/null)" || a_x=0
+[[ "$a_pos" == <-> ]] || a_pos=0
+[[ "$a_y" == <-> ]] || a_y=0
+[[ "$a_x" == <-> ]] || a_x=0
+"$TMUX_BIN" set -p -t "$origin" @search_apos "$a_pos" 2>/dev/null
+"$TMUX_BIN" set -p -t "$origin" @search_ay "$a_y" 2>/dev/null
+"$TMUX_BIN" set -p -t "$origin" @search_ax "$a_x" 2>/dev/null
 "$TMUX_BIN" refresh-client -S 2>/dev/null
 cleanup() {
   "$TMUX_BIN" set -p -t "$origin" -u @searching 2>/dev/null
@@ -169,20 +200,16 @@ apply_search() {
   "$TMUX_BIN" set -p -t "$origin" @search_term "$buf" 2>/dev/null
   if [[ -z "$buf" ]]; then clear_search; return 0; fi
   build_pattern "$buf" "$case_on" "$word_on"
-  "$TMUX_BIN" send-keys -t "$origin" -X jump-to-mark 2>/dev/null
+  restore_anchor "$origin"
   "$TMUX_BIN" send-keys -t "$origin" -X search-backward "$REPLY" 2>/dev/null
 }
 
 # tmux cannot clear an active search (no search-cancel) — exit and re-enter
 # copy-mode, restore the viewport, and re-plant the anchor mark.
 clear_search() {
-  local pos
-  pos="$("$TMUX_BIN" display -p -t "$origin" '#{scroll_position}' 2>/dev/null)" || pos=0
   "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
   "$TMUX_BIN" copy-mode -t "$origin" 2>/dev/null
-  [[ "$pos" == <-> ]] && (( pos > 0 )) && \
-    "$TMUX_BIN" send-keys -t "$origin" -X -N "$pos" scroll-up 2>/dev/null
-  "$TMUX_BIN" send-keys -t "$origin" -X set-mark 2>/dev/null
+  restore_anchor "$origin"
 }
 
 # ---- rendering (absolute CSI, mirrors render_field) ------------------------

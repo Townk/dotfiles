@@ -57,10 +57,6 @@ set -g pane-active-border-style "fg=#{{ index $p $r.ui.border_focus }}"
 setw -g pane-border-format " #{?pane_active,#[fg=#{{ index $p $r.ui.border_focus }}],#[fg=#{{ index $p $r.ui.border_inactive }}]}#{pane_index} #{pane_title}#[default] "
 
 # Copy-mode: selection + search-match washes (search dialog proper is D12).
-# The mark line stays invisible: set-mark is the search dialog's incremental
-# anchor, never a user-facing highlight (tmux paints the marked line red by
-# default).
-set -g copy-mode-mark-style "default"
 set -g mode-style "bg=#{{ index $p $r.ui.selection }},fg=#{{ index $p $r.ui.fg }}"
 set -g copy-mode-match-style "bg=#{{ $p.find_highlight }},fg=#{{ index $p $r.ui.fg }}"
 set -g copy-mode-current-match-style "bg=#{{ index $p $r.action.attention }},fg=#{{ index $p $r.ui.bg }}"
