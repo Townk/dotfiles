@@ -115,3 +115,19 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | zsh (macOS wcwidth) counts VS16 emoji 1 cell, tmux renders 2; zellij agrees with zsh | tmux inject paths strip U+FE0F; manual VS16 pastes under tmux still corrupt ZLE (no fix available) |
 | `@pane-is-vim` can't gate nav keys (smart-splits lazy-loads on those keys); `pane_current_command` = pgroup leader (widget fzf ⇒ "zsh") | root nav uses the vim-tmux-navigator ps probe; `@pane-is-vim` gates only the resize chords |
 | p10k instant prompt redirects stdout during zshrc (load-time `-t 1` fails); transient prompt erases+rewrites marked lines | OSC 133 comes from p10k itself (`POWERLEVEL9K_TERM_SHELL_INTEGRATION`), not a bare precmd hook |
+
+## Platform gotchas — Mode B session 2 + Phase 5 (2026-07-24)
+
+| Fact | Consequence |
+| --- | --- |
+| `#{client_prefix}` flips do not redraw the status line | the leader is a key-table switch (`prefix None` + root `M-w switch-client -T prefix`) — table changes DO redraw |
+| `search-*-incremental` are no-ops outside the command-prompt machinery | the search dialog drives plain `search-backward` re-searches from a coordinate anchor |
+| tmux search is SMART-CASE (any uppercase → sensitive) | case-sensitive mode on all-lowercase terms injects a matching-neutral `[A]{0}` atom |
+| `jump-to-*` are the t/T adjacent variants; `jump-*` are f/F on-char | text-object macros use `jump-backward`/`jump-forward` |
+| `set-mark` paints the marked line (any style override clobbers cell colors) | search anchors are cursor COORDINATES (`scroll_position` + `copy_cursor_x/y`), restored before every re-search |
+| the outer terminal keeps its last DECSCUSR forever (survives tmux restart); tmux emits nothing for default→default | cursor-shape restore writes `ESC[0 q` to the CLIENT tty (gated on `cursor_shape=default`) |
+| `display-popup -y` positions the BOTTOM edge | search-dialog anchor math |
+| C-c reaches a popup dialog as SIGINT, not a byte | popup input loops trap INT (an uncaught INT skips EXIT traps → stale pane options) |
+| copy-mode text objects are an engine gap (fixed `send -X` vocabulary; no plugin can extend it) | i/a pseudo-objects macro select-word + jump pairs; V→nvim is full fidelity |
+| `display-menu` items accept `{ }` command blocks; a leading-`-` (disabled) first item needs `--` to end option parsing | the generated which-key menus |
+| `list-keys -T <table>` may render nothing for sparse custom tables (binds ARE registered) | assert via the global listing (extends the Phase 1 locked-table row) |
