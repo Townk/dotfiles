@@ -142,3 +142,14 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | `set -gu` on an array INDEX deletes the entry instead of restoring the built-in default; `show` never reports a default once touched | the real `status-format[0]` is read once from a pristine throwaway server (`-L … -f /dev/null`) and cached |
 | `status 1` is not a valid value (`on`/`off`/2..5 only), and reads back as `on` | height math normalizes both ways |
 | a re-executed `local -a` does NOT clear an array that already exists in the scope (zsh) | explicit `arr=()` per loop iteration — page 2 inherited page 1's rows without it |
+
+## Which-key panel v2 — the real port (Phase 5 + 5.2)
+
+| Fact | Consequence |
+| --- | --- |
+| a tmux popup swallows ALL key input — key tables do not fire while one is open (measured with a real client) | the panel IS the mode dispatcher while open: it reads the key, looks it up in keymap.yaml and runs that binding's command; `M-.` hands the same bindings back to the key tables |
+| a popup opened over a popup mutates the outer one | dialog bindings close the panel first and fire via `run-shell -b -d 0.3` |
+| a bare `;` in a tmux CONFIG file is a command separator | every generated bind wraps its command in a `{ … }` block, or multi-command binds execute themselves at load |
+| the status stack caps at 5 lines | the panel cannot live there (it is vertical and tall) — hence the popup |
+| `,` is a real binding, so a comma-separated key list loses it | keys are pipe-separated in whichkey.data |
+| a `j:…:` join-flag argument is literal — a parameter inside renders as text | the breadcrumb joins by hand |
