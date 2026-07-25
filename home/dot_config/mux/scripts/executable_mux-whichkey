@@ -70,8 +70,11 @@ C_FOOTER="$(_fg ${CFG[footer]})" C_DIM="$(_fg ${CFG[dim]})"
 SOFT="${RESET}${BG}"
 
 # ---- key glyphs (zj-hud's rendering) --------------------------------------
-G_SHIFT=$'\U000F0636' G_ALT=$'\U000F0635' G_CTRL=$'\U000F0634'
-G_TAB=$'\U000F0312'   G_ESC=$'\U000F12B7' G_BS=$'\U000F006E'
+G_SHIFT=$'\U000F0636' G_ALT=$'\U000F0635' G_CTRL=$'\U000F0634' G_SUPER=$'\U000F0633'
+# zj-hud's bare_key_glyph table — special keys read as SYMBOLS, never words.
+G_ENTER=$'\U000F0311' G_ESC=$'\U000F12B7' G_TAB=$'\U000F0312'
+G_BTAB=$'\U000F0325'  G_BS=$'\U000F006E'  G_DEL=$'\U000F0E7E'
+G_SPACE=$'\U000F1050'
 _keyglyph() {          # tmux key name -> display glyphs
   local k="$1" mods="" base
   while true; do
@@ -79,17 +82,24 @@ _keyglyph() {          # tmux key name -> display glyphs
       S-*) mods+="$G_SHIFT "; k="${k#S-}" ;;
       M-*) mods+="$G_ALT ";   k="${k#M-}" ;;
       C-*) mods+="$G_CTRL ";  k="${k#C-}" ;;
+      D-*) mods+="$G_SUPER "; k="${k#D-}" ;;
       *) break ;;
     esac
   done
   case "$k" in
-    Up) base="↑" ;;    Down) base="↓" ;;
-    Left) base="←" ;;  Right) base="→" ;;
+    Up) base="↑" ;;      Down) base="↓" ;;
+    Left) base="←" ;;    Right) base="→" ;;
+    Home) base="↖" ;;    End) base="↘" ;;
+    PageUp|PgUp) base="⇞" ;;
+    PageDown|PgDn) base="⇟" ;;
     Tab) base="$G_TAB" ;;
-    BTab) base="$G_SHIFT $G_TAB" ;;
+    BTab) mods=""; base="$G_BTAB" ;;   # shift+tab has its own combined glyph
+    Enter) base="$G_ENTER" ;;
     Escape) base="$G_ESC" ;;
     BSpace) base="$G_BS" ;;
-    Space) base="␣" ;;
+    DC|Delete) base="$G_DEL" ;;
+    Space) base="$G_SPACE" ;;
+    F<->) base="$k" ;;
     [a-z]) base="${(U)k}" ;;
     [A-Z]) base="$G_SHIFT ${k}" ;;      # an uppercase bind IS shift
     *) base="$k" ;;

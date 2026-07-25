@@ -98,17 +98,8 @@ keymap:
       members:
       - f
       - z
-    - mode: copy
-      members:
-      - n
-      - N
-    - mode: copy
-      members:
-      - M-c
-      - M-b
-      - M-p
-    - mode: copy
-      members:
+    - mode: scroll
+      members: &id001
       - Up
       - k
       - Down
@@ -123,6 +114,39 @@ keymap:
       - Home
       - G
       - End
+    - mode: copy
+      members:
+      - Up
+      - k
+      - Down
+      - j
+      - Left
+      - h
+      - Right
+      - l
+    - mode: copy
+      members:
+      - C-u
+      - C-d
+      - C-b
+      - PageUp
+      - C-f
+      - PageDown
+      - g
+      - Home
+      - G
+      - End
+    - mode: search
+      members:
+      - n
+      - N
+    - mode: search
+      members:
+      - M-c
+      - M-b
+      - M-p
+    - mode: search
+      members: *id001
     states:
       command:
         title: Command
@@ -176,7 +200,7 @@ keymap:
         title: Scroll
         icon: 󰩤
         color: scroll
-        table: copy
+        table: scroll
         parent: command
       copy:
         title: Copy
@@ -188,7 +212,7 @@ keymap:
         title: Search
         icon: 
         color: search
-        table: copy
+        table: search
         parent: scroll
       rename:
         title: Rename
@@ -731,7 +755,7 @@ keymap:
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome
           -- $HOME/.config/zellij/scripts/quick-launch menu workspace"'
         dialog: true
-    copy:
+    scroll:
       title: Scroll
       icon: 󰩤
       color: lavender
@@ -744,15 +768,16 @@ keymap:
         icon: 
         color: blue
         cmd: ''
-        switch: true
         panel_only: true
+        switch: true
       - keys:
         - v
-        desc: copy mode / select
+        desc: Copy mode …
         icon: 󰆏
         color: mauve
         cmd: ''
         panel_only: true
+        switch: true
       - keys:
         - V
         desc: edit scrollback
@@ -761,22 +786,188 @@ keymap:
         cmd: ''
         panel_only: true
       - keys:
-        - y
-        desc: yank selection
-        icon: 󰆏
-        color: yellow
-        cmd: ''
-        panel_only: true
-      - keys:
         - n
-        desc: next match / prompt
+        desc: next prompt
         icon: 
         color: mauve
         cmd: ''
         panel_only: true
       - keys:
         - N
-        desc: previous match / prompt
+        desc: previous prompt
+        icon: 
+        color: mauve
+        cmd: ''
+        panel_only: true
+      - &id008
+        keys:
+        - Up
+        - k
+        desc: scroll up
+        icon: 󰅃
+        color: teal
+        cmd: ''
+        panel_only: true
+      - &id009
+        keys:
+        - Down
+        - j
+        desc: scroll down
+        icon: 󰅀
+        color: teal
+        cmd: ''
+        panel_only: true
+      - &id002
+        keys:
+        - C-u
+        desc: half page scroll up
+        icon: 󰄿
+        color: teal
+        cmd: ''
+        panel_only: true
+      - &id003
+        keys:
+        - C-d
+        desc: half page scroll down
+        icon: 󰄼
+        color: teal
+        cmd: ''
+        panel_only: true
+      - &id004
+        keys:
+        - C-b
+        - PageUp
+        desc: page scroll up
+        icon: 󰶼
+        color: teal
+        cmd: ''
+        panel_only: true
+      - &id005
+        keys:
+        - C-f
+        - PageDown
+        desc: page scroll down
+        icon: 󰶹
+        color: teal
+        cmd: ''
+        panel_only: true
+      - &id006
+        keys:
+        - g
+        - Home
+        desc: scroll to top
+        icon: 󱥩
+        color: teal
+        cmd: ''
+        panel_only: true
+      - &id007
+        keys:
+        - G
+        - End
+        desc: scroll to bottom
+        icon: 󱥧
+        color: teal
+        cmd: ''
+        panel_only: true
+    copy:
+      title: Copy
+      icon: 󰆏
+      color: visual
+      parent: scroll
+      table: copy-mode-vi
+      entries:
+      - keys:
+        - v
+        desc: begin selection
+        icon: 󰆏
+        color: mauve
+        cmd: ''
+        panel_only: true
+      - keys:
+        - y
+        - Enter
+        desc: yank selection
+        icon: 󰆏
+        color: yellow
+        cmd: ''
+        panel_only: true
+      - keys:
+        - i
+        desc: inner text object
+        icon: 󰭶
+        color: green
+        cmd: ''
+        panel_only: true
+      - keys:
+        - a
+        desc: around text object
+        icon: 󰭶
+        color: green
+        cmd: ''
+        panel_only: true
+      - keys:
+        - /
+        desc: Search scroll buffer …
+        icon: 
+        color: blue
+        cmd: ''
+        panel_only: true
+        switch: true
+      - keys:
+        - Up
+        - k
+        desc: cursor up
+        icon: 󰅃
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
+        - Down
+        - j
+        desc: cursor down
+        icon: 󰅀
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
+        - Left
+        - h
+        desc: cursor left
+        icon: 󰅁
+        color: teal
+        cmd: ''
+        panel_only: true
+      - keys:
+        - Right
+        - l
+        desc: cursor right
+        icon: 󰅂
+        color: teal
+        cmd: ''
+        panel_only: true
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      - *id006
+      - *id007
+    search:
+      title: Search
+      icon: 
+      color: search
+      parent: scroll
+      table: copy-mode-vi
+      entries:
+      - keys:
+        - n
+        desc: next match
+        icon: 
+        color: mauve
+        cmd: ''
+        panel_only: true
+      - keys:
+        - N
+        desc: previous match
         icon: 
         color: mauve
         cmd: ''
@@ -803,64 +994,18 @@ keymap:
         cmd: ''
         panel_only: true
       - keys:
-        - Up
-        - k
-        desc: scroll up
-        icon: 󰅃
-        color: teal
+        - /
+        desc: edit search term …
+        icon: 
+        color: blue
         cmd: ''
         panel_only: true
-      - keys:
-        - Down
-        - j
-        desc: scroll down
-        icon: 󰅀
-        color: teal
-        cmd: ''
-        panel_only: true
-      - keys:
-        - C-u
-        desc: half page scroll up
-        icon: 󰄿
-        color: teal
-        cmd: ''
-        panel_only: true
-      - keys:
-        - C-d
-        desc: half page scroll down
-        icon: 󰄼
-        color: teal
-        cmd: ''
-        panel_only: true
-      - keys:
-        - C-b
-        - PageUp
-        desc: page scroll up
-        icon: 󰶼
-        color: teal
-        cmd: ''
-        panel_only: true
-      - keys:
-        - C-f
-        - PageDown
-        desc: page scroll down
-        icon: 󰶹
-        color: teal
-        cmd: ''
-        panel_only: true
-      - keys:
-        - g
-        - Home
-        desc: scroll to top
-        icon: 󱥩
-        color: teal
-        cmd: ''
-        panel_only: true
-      - keys:
-        - G
-        - End
-        desc: scroll to bottom
-        icon: 󱥧
-        color: teal
-        cmd: ''
-        panel_only: true
+        switch: true
+      - *id008
+      - *id009
+      - *id002
+      - *id003
+      - *id004
+      - *id005
+      - *id006
+      - *id007
