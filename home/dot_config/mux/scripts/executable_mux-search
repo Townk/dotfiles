@@ -34,6 +34,38 @@ THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
 
 W=40 H=3
 
+# (SearchMode) toggle relay: flip a flag, rebuild the pattern from the
+# stored term, re-search — bound to M-c/M-b/M-p in copy-mode-vi.
+if [[ "${1:-}" == --toggle ]]; then
+  origin="${3:-}"; [[ -n "$origin" ]] || exit 0
+  flag="$2"
+  cur="$("$TMUX_BIN" display -p -t "$origin" "#{@search_${flag}}" 2>/dev/null)"
+  if [[ "$flag" == wrap ]]; then [[ "$cur" == 0 ]] && new=1 || new=0
+  else [[ "$cur" == 1 ]] && new=0 || new=1
+  fi
+  "$TMUX_BIN" set -p -t "$origin" "@search_${flag}" "$new" 2>/dev/null
+  term="$("$TMUX_BIN" display -p -t "$origin" '#{@search_term}' 2>/dev/null)"
+  if [[ -n "$term" && "$flag" != wrap ]]; then
+    case_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_case}' 2>/dev/null)"
+    word_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_word}' 2>/dev/null)"
+    pat="" 
+    for ch in ${(s::)term}; do
+      case "$ch" in
+        [\\.\[\]\(\)\*\+\?\{\}\|\^\$]) pat+="\\\\$ch" ;;
+        [a-zA-Z])
+          if [[ "$case_on" == 1 ]]; then pat+="$ch"
+          else pat+="[${(L)ch}${(U)ch}]"
+          fi ;;
+        *) pat+="$ch" ;;
+      esac
+    done
+    [[ "$word_on" == 1 ]] && pat="[[:<:]]${pat}[[:>:]]"
+    "$TMUX_BIN" send-keys -t "$origin" -X search-backward "$pat" 2>/dev/null
+  fi
+  "$TMUX_BIN" refresh-client -S 2>/dev/null
+  exit 0
+fi
+
 if [[ "${1:-}" == --launch ]]; then
   cw="$("$TMUX_BIN" display -p '#{client_width}')" || exit 0
   ch="$("$TMUX_BIN" display -p '#{client_height}')" || exit 0
@@ -72,9 +104,23 @@ origin="$("$TMUX_BIN" display -p '#{pane_id}' 2>/dev/null)" || origin=""
 parent="$("$TMUX_BIN" display -p -t "$origin" '#{@search_parent}' 2>/dev/null)" || parent=""
 
 "$TMUX_BIN" set -p -t "$origin" @searching 1 2>/dev/null
-"$TMUX_BIN" set -p -t "$origin" @search_case 0 2>/dev/null
-"$TMUX_BIN" set -p -t "$origin" @search_word 0 2>/dev/null
-"$TMUX_BIN" set -p -t "$origin" @search_wrap 1 2>/dev/null
+# Reopen from (SearchMode) keeps the term + flags; a fresh dialog resets.
+sp="$("$TMUX_BIN" display -p -t "$origin" '#{?search_present,1,0}' 2>/dev/null)" || sp=0
+if [[ "$sp" == 1 ]]; then
+  buf="$("$TMUX_BIN" display -p -t "$origin" '#{@search_term}' 2>/dev/null)" || buf=""
+  case_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_case}' 2>/dev/null)"; [[ "$case_on" == 1 ]] || case_on=0
+  word_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_word}' 2>/dev/null)"; [[ "$word_on" == 1 ]] || word_on=0
+  wrap_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_wrap}' 2>/dev/null)"; [[ "$wrap_on" == 0 ]] || wrap_on=1
+else
+  buf="" case_on=0 word_on=0 wrap_on=1
+  "$TMUX_BIN" set -p -t "$origin" @search_case 0 2>/dev/null
+  "$TMUX_BIN" set -p -t "$origin" @search_word 0 2>/dev/null
+  "$TMUX_BIN" set -p -t "$origin" @search_wrap 1 2>/dev/null
+  "$TMUX_BIN" set -p -t "$origin" -u @search_term 2>/dev/null
+fi
+# Anchor the incremental re-searches: each keystroke re-searches from this
+# mark, so a growing pattern doesn't drift the cursor upward.
+"$TMUX_BIN" send-keys -t "$origin" -X set-mark 2>/dev/null
 "$TMUX_BIN" refresh-client -S 2>/dev/null
 cleanup() {
   "$TMUX_BIN" set -p -t "$origin" -u @searching 2>/dev/null
@@ -84,6 +130,7 @@ trap cleanup EXIT
 
 pop_out() {
   local pos
+  "$TMUX_BIN" set -p -t "$origin" -u @search_term 2>/dev/null
   if [[ "$parent" == normal ]]; then
     "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
     return 0
@@ -97,10 +144,15 @@ pop_out() {
 }
 
 # ---- search application ----------------------------------------------------
-buf="" case_on=0 word_on=0 wrap_on=1
+# The *-incremental copy-mode commands are NO-OPS outside the command-prompt
+# machinery (send-keys -X sets nothing; ledger row) — each keystroke runs a
+# plain search-backward from the anchor mark instead: highlights every match
+# natively (current one in copy-mode-current-match-style) and jumps to the
+# nearest one above, which is where scrollback matches live.
 
 apply_search() {
   local pat="" ch
+  "$TMUX_BIN" set -p -t "$origin" @search_term "$buf" 2>/dev/null
   if [[ -z "$buf" ]]; then return 0; fi
   for ch in ${(s::)buf}; do
     case "$ch" in
@@ -113,7 +165,8 @@ apply_search() {
     esac
   done
   (( word_on )) && pat="[[:<:]]${pat}[[:>:]]"
-  "$TMUX_BIN" send-keys -t "$origin" -X search-forward-incremental "$pat" 2>/dev/null
+  "$TMUX_BIN" send-keys -t "$origin" -X jump-to-mark 2>/dev/null
+  "$TMUX_BIN" send-keys -t "$origin" -X search-backward "$pat" 2>/dev/null
 }
 
 # ---- rendering (absolute CSI, mirrors render_field) ------------------------
@@ -161,6 +214,14 @@ draw_input
 while read -rsk1 key; do
   case "$key" in
     $'\r'|$'\n')
+      # (SearchInput) Enter -> (SearchMode): same Search entry on the stack.
+      # An empty term has nothing to confirm — pop instead.
+      if [[ -z "$buf" ]]; then pop_out; fi
+      break ;;
+    $'\x03')
+      # C-c aborts the whole stack -> normal.
+      "$TMUX_BIN" set -p -t "$origin" -u @search_term 2>/dev/null
+      "$TMUX_BIN" send-keys -t "$origin" -X cancel 2>/dev/null
       break ;;
     $'\e')
       # ESC alone pops Search; ESC+char = the in-dialog Alt chords.

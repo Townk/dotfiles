@@ -262,15 +262,7 @@ bind -T copy-mode-vi v if -F '#{@visual}' {send -X begin-selection} {set -p @vis
 bind -T copy-mode-vi Escape if -F '#{selection_present}' {
   send -X clear-selection
 } {
-  if -F '#{search_present}' {
-    if -F '#{==:#{@search_parent},normal}' {
-      send -X cancel
-    } {
-      run-shell 'tmux send-keys -X cancel; tmux copy-mode; [ #{scroll_position} -gt 0 ] && tmux send-keys -X -N #{scroll_position} scroll-up; true'
-    }
-  } {
-    send -X cancel
-  }
+  send -X cancel
 }
 bind -T copy-mode-vi y send -X copy-pipe-and-cancel
 bind -T copy-mode-vi Enter send -X copy-pipe-and-cancel
@@ -302,7 +294,17 @@ bind -T copy-mode-vi N if -F '#{search_present}' { send -X search-reverse } { se
 bind -T copy-mode-vi p send -X previous-prompt
 # / — forward incremental search (D12 stage 1; the floating search dialog
 # with option toggles is the D12 stage 2 hud follow-up).
-bind -T copy-mode-vi / set -p @search_parent mode \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
+# '/' opens (SearchInput); from (SearchMode) it reopens prefilled and the
+# original parent is preserved (popping still lands where Search began).
+bind -T copy-mode-vi / if -F '#{search_present}' {
+  run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
+} {
+  set -p @search_parent mode ; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
+}
+# (SearchMode) flag toggles — mirror the in-dialog M-c/M-b/M-p.
+bind -T copy-mode-vi M-c if -F '#{search_present}' {run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle case '#{pane_id}'"}
+bind -T copy-mode-vi M-b if -F '#{search_present}' {run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle word '#{pane_id}'"}
+bind -T copy-mode-vi M-p if -F '#{search_present}' {run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle wrap '#{pane_id}'"}
 
 # (Status v0 — the Phase 1 bare [key_table] indicator — was RETIRED by
 # Phase 4: the themed mode pill lives in status-right via the theme's
