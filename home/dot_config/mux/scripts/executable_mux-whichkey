@@ -117,9 +117,123 @@ _load() {
     E_ICON+=("$icon"); E_ICOL+=("$icol"); E_DESC+=("$desc")
     E_FLAGS+=(",${flags}"); E_CMD+=("$cmd")
   done < "$DATA"
-  (( ${#E_KEYS} ))
+  (( ${#E_KEYS} )) || return 1
+  _order "$mode"
+  return 0
 }
+
+# Build display units — a lone binding, or a configured group rendered
+# contiguously in its listed order and anchored at its FIRST member's
+# natural sort position — then sort the units and flatten (labels.rs).
 _has() { [[ "$1" == *",$2,"* ]] }
+
+_order() {
+  # NB: every local is declared ONCE here — re-running `local x=…` for a
+  # name that already exists in the scope makes zsh PRINT it (typeset
+  # behaviour), which would land in the panel's own output.
+  local mode="$1" tag gmode gmembers ekeys u sk m k entry
+  local -i i j gi pos placed found
+  local -a G_MEMBERS members ordered_units NK ND NI NC NE NF NM
+  local -A unit_of unit_pos unit_anchor
+
+  G_MEMBERS=()
+  while IFS=$'\t' read -r tag gmode gmembers; do
+    [[ "$tag" == '#group' && "$gmode" == "$mode" ]] || continue
+    G_MEMBERS+=("$gmembers")
+  done < "$DATA"
+
+  for (( i = 1; i <= ${#E_KEYS}; i++ )); do
+    ekeys="${E_KEYS[i]}"; placed=0
+    for (( gi = 1; gi <= ${#G_MEMBERS}; gi++ )); do
+      pos=0
+      for m in ${(s:|:)G_MEMBERS[gi]}; do
+        (( pos++ )); found=0
+        for k in ${(s:|:)ekeys}; do
+          [[ "$k" == "$m" ]] && { found=1; break }
+        done
+        (( found )) || continue
+        unit_of[$i]="g$gi"; unit_pos[$i]=$pos; placed=1
+        break
+      done
+      (( placed )) && break
+    done
+    (( placed )) || { unit_of[$i]="e$i"; unit_pos[$i]=0 }
+    u="${unit_of[$i]}"
+    sk="$(_entry_sortkey "$ekeys" "${E_FLAGS[i]}")"
+    if [[ -z "${unit_anchor[$u]:-}" ]]; then
+      unit_anchor[$u]="$sk"; ordered_units+=("$u")
+    elif (( unit_pos[$i] == 1 )); then
+      unit_anchor[$u]="$sk"      # a group anchors on its FIRST member
+    fi
+  done
+
+  ordered_units=(${(f)"$(for u in $ordered_units; do print -r -- "${unit_anchor[$u]}	$u"; done | sort | cut -f2)"})
+
+  for u in $ordered_units; do
+    members=()
+    for (( i = 1; i <= ${#E_KEYS}; i++ )); do
+      [[ "${unit_of[$i]}" == "$u" ]] && members+=("${unit_pos[$i]}:$i")
+    done
+    for entry in ${(n)members}; do
+      j="${entry#*:}"
+      NK+=("${E_KEYS[j]}"); ND+=("${E_DISP[j]}"); NI+=("${E_ICON[j]}")
+      NC+=("${E_ICOL[j]}"); NE+=("${E_DESC[j]}"); NF+=("${E_FLAGS[j]}"); NM+=("${E_CMD[j]}")
+    done
+  done
+  E_KEYS=("$NK[@]"); E_DISP=("$ND[@]"); E_ICON=("$NI[@]")
+  E_ICOL=("$NC[@]"); E_DESC=("$NE[@]"); E_FLAGS=("$NF[@]"); E_CMD=("$NM[@]")
+}
+
+# ---- panel sort (zj-hud labels.rs) ----------------------------------------
+# Units sort by: bindings that ENTER another mode first, then unmodified
+# chords alphabetically, then modified ones by (modifier count, modifier
+# rank shift<super<alt<ctrl, key). An uppercase letter normalizes to
+# shift+lowercase, so `Y` sorts with the modified chords, not the bare ones.
+# Named keys (arrows, nav block, tab/space/enter/backspace/delete/esc) come
+# before character keys, in that curated reading order.
+typeset -a CURATED
+CURATED=(up down left right home end pageup pagedown tab space enter backspace delete esc)
+_sortkey() {           # tmux key name -> a sortable string
+  local k="$1" mods="" rank bare cls kr
+  local -a mr
+  while true; do
+    case "$k" in
+      S-*) mr+=(0); k="${k#S-}" ;;
+      M-*) mr+=(2); k="${k#M-}" ;;
+      C-*) mr+=(3); k="${k#C-}" ;;
+      *) break ;;
+    esac
+  done
+  case "$k" in
+    [A-Z]) mr+=(0); k="${(L)k}" ;;         # uppercase implies shift
+  esac
+  bare="${(L)k}"
+  case "$bare" in
+    btab) bare=tab ;;
+    escape) bare=esc ;;
+    bspace) bare=backspace ;;
+  esac
+  kr=${CURATED[(i)$bare]}
+  if (( kr <= ${#CURATED} )); then
+    cls=0; kr=$(( kr ))
+  elif [[ ${#bare} == 1 ]]; then
+    cls=1; kr=0
+  else
+    cls=0; kr=500
+  fi
+  mr=(${(on)mr})
+  printf '%d:%02d:%s:%d:%03d:%s' $(( ${#mr} > 0 )) ${#mr} "${(j::)mr}" $cls $kr "$bare"
+}
+_entry_sortkey() {     # smallest key of a (possibly merged) entry, + mode bias
+  local keys="$1" flags="$2" best="" k sk
+  for k in ${(s:|:)keys}; do
+    sk="$(_sortkey "$k")"
+    [[ -z "$best" || "$sk" < "$best" ]] && best="$sk"
+  done
+  local bias=1
+  _has "$flags" switch && bias=0
+  print -rn -- "${bias}|${best}"
+}
 
 # ---- geometry -------------------------------------------------------------
 _measure() {           # -> W_KEYS W_ICON W_LABEL BODY_W ROWS_ALL

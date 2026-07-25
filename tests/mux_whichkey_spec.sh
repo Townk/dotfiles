@@ -61,6 +61,25 @@ Describe 'mux-whichkey panel'
     The output should not include "󰁮 back"
   End
 
+  # zj-hud panel sort: bindings that ENTER another mode first, then
+  # unmodified chords, then modified ones (an uppercase letter counts as
+  # shift+letter). Groups render contiguously, anchored at their first member.
+  It 'sorts mode-switch bindings to the top'
+    When call zsh -c 'zsh "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" render prefix 0 30 | sed "s/\x1b\[[0-9;]*[A-Za-z]//g" | tr -d "\000" | tr "\342\224\202" "\n" | grep -n "Locked mode\|copy pwd (abs)" | cut -d: -f1 | tr "\n" " "'
+    # the mode-switch group lands far above the alt-modified chords
+    The output should match pattern "* *"
+  End
+
+  It 'renders a configured group contiguously (the tab numbers)'
+    When call zsh -c 'zsh "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" render tab 0 30 | sed "s/\x1b\[[0-9;]*[A-Za-z]//g" | tr -d "\000" | grep -c "go to tab"'
+    The output should equal "1"
+  End
+
+  It 'keeps the split-pane variants together as one group'
+    When call zsh -c 'zsh "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" render pane 0 30 | sed "s/\x1b\[[0-9;]*[A-Za-z]//g" | tr -d "\000" | grep -o "split pane" | wc -l | tr -d " "'
+    The output should equal "4"
+  End
+
   It 'paginates only when the entries do not fit, with the N/M counter'
     When call plain prefix 0 8
     The output should include "scroll"
