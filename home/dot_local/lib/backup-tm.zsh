@@ -1056,8 +1056,13 @@ bkp::tm::launch() {
     # Diff splits a lens pane AFTER the slow prep below, and a split is
     # focus-relative on both backends — remember the tab we were invoked
     # in so the split lands here even if the user wanders off during prep.
+    # Non-fatal: the hop is an optimization, not a requirement. A backend
+    # that cannot name the current tab (or a `set -e` caller) must not take
+    # the whole session down for it — an empty origin just skips the hop.
     local _origin_tab=""
-    [[ "$lens" == diff ]] && _origin_tab=$(mux::current_tab 2>/dev/null)
+    if [[ "$lens" == diff ]]; then
+      _origin_tab=$(mux::current_tab 2>/dev/null) || _origin_tab=""
+    fi
     # ALL slow prep happens here, before any layout change: spinner per
     # stage (gum), completion line after each, split only when ready.
     local _spin=0
@@ -1124,7 +1129,7 @@ bkp::tm::launch() {
       # then hand the view back to wherever they were. Same-tab case:
       # both positions match and no hop happens.
       local _now_tab=""
-      _now_tab=$(mux::current_tab 2>/dev/null)
+      _now_tab=$(mux::current_tab 2>/dev/null) || _now_tab=""
       local _hop=0
       if [[ -n "$_origin_tab" && -n "$_now_tab" && "$_now_tab" != "$_origin_tab" ]]; then
         _hop=1
