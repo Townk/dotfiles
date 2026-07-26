@@ -22,7 +22,13 @@ export FZF_PREVIEW_COLUMNS="$(tput cols 2>/dev/null || echo 80)"
 export FZF_PREVIEW_LINES="$(tput lines 2>/dev/null || echo 40)"
 export PREVIEW_IMAGE_ONLY=1
 
-preview "$img"
+rc=0
+preview "$img" || rc=$?
 
 print -n -- $'\n\e[2mpress any key to close\e[0m'
-read -k1 -s
+# The dismissal read's status is NOT the script's result — the render
+# already happened above. On tmux the popup runs under `display-popup -E`,
+# whose exit status IS the command's, and a non-zero one paints
+# "'…' returned N" over the session. Exit on the render's verdict instead.
+read -k1 -s || :
+exit $rc

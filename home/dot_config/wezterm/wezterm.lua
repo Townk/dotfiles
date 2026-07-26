@@ -518,13 +518,23 @@ wezterm.on("window-focus-changed", function(window, _pane)
 	write_fullscreen_state(window)
 end)
 
+-- 0.15s between chord keys, not the 0.02 zellij was happy with. On tmux the
+-- leader opens the which-key panel — a POPUP, which owns the keyboard while
+-- it is up — and each mode step tears that popup down and reopens it. A chord
+-- delivered faster than those transitions loses its later keys: measured
+-- through a real client, `M-w o S` opened the workspace picker 0/5 times at
+-- 20ms and 5/5 at 150ms. The proper fix is a hesitation delay before the
+-- panel appears (which-key everywhere works that way), so the chord completes
+-- in the key tables and the panel never sees it; until then the sender waits.
+local MUX_CHORD_GAP = 0.15
+
 local function perform_mux_keys(window, pane, keys)
 	for i, key in ipairs(keys) do
 		local action = wezterm.action.SendKey(key)
 		if i == 1 then
 			window:perform_action(action, pane)
 		else
-			wezterm.time.call_after((i - 1) * 0.02, function()
+			wezterm.time.call_after((i - 1) * MUX_CHORD_GAP, function()
 				window:perform_action(action, pane)
 			end)
 		end
