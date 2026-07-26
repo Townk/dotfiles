@@ -94,9 +94,17 @@ build_pattern() {  # term case_on word_on -> REPLY
 
 # (SearchMode) toggle relay: flip a flag, rebuild the pattern from the
 # stored term, re-search — bound to M-c/M-b/M-p in copy-mode-vi.
+#
+# The gate is the MODE STACK. It used to be tmux's `search_present`, which a
+# search with NO matches clears — so making a lowercase term case-sensitive
+# killed every match AND the chord that would undo it, stranding the user in
+# a Search they could not un-filter (Mode B).
 if [[ "${1:-}" == --toggle ]]; then
   origin="${3:-}"; [[ -n "$origin" ]] || exit 0
   flag="$2"
+  source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/stack.zsh"
+  mux_stack::top 2>/dev/null || exit 0
+  [[ "$MS_STATE" == search ]] || exit 0
   cur="$("$TMUX_BIN" display -p -t "$origin" "#{@search_${flag}}" 2>/dev/null)"
   if [[ "$flag" == wrap ]]; then [[ "$cur" == 0 ]] && new=1 || new=0
   else [[ "$cur" == 1 ]] && new=0 || new=1

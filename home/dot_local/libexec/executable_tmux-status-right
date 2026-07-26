@@ -219,15 +219,44 @@ I_HOST=$'\U000F04CD'
 I_BATT=( $'\U000F008E' $'\U000F12A1' $'\U000F12A2' $'\U000F12A3' )
 
 # ---- mode resolution -------------------------------------------------------
-mode_color="" mode_body="" hint_body=""
-if mux_mode::resolve "$key_table" "$in_copy" "$visual_on" "$searching_on" \
-     "$search_on" "$prefix_on" 2>/dev/null; then
-  mode_color="$MM_COLOR" mode_body="$MM_ICON $MM_TITLE"
-  case "$MM_STATE" in
-    search) hint_body=search ;;
-    locked|nested) hint_body=exit ;;
+# THE MODE IS THE TOP OF THE STACK. tmux state gets no vote on WHICH state it
+# is: the copy family is a single tmux fact (pane_in_mode) wearing three
+# faces, so a search that stops matching (M-c on a lowercase term) clears
+# search_present and used to read as Scroll — while the user was still
+# standing in Search, with the term and the toggles in hand.
+#
+# What tmux state DOES get to say is whether the stack has gone stale: an
+# entry nothing has popped, for a mode the client demonstrably left. Then
+# the bar falls back to resolving from tmux, which is also the answer for a
+# copy-mode entered outside the stack entirely (a hook, the app itself).
+typeset -a mstack
+mstack=(${(s: :)stack_raw})
+_stack_live() {           # is the top entry still true of this client?
+  local st="$1"
+  case "$st" in
+    scroll|copy|search)   [[ "$in_copy" == 1 ]] ;;
+    command)              [[ "$prefix_on" == 1 || "$key_table" == prefix ]] ;;
+    rename)               return 1 ;;   # the @renaming branch below owns it
+    *) mux_mode::meta "$st" 2>/dev/null || return 1
+       [[ -n "$MM_KEYTABLE" && "$key_table" == "$MM_KEYTABLE" ]] ;;
   esac
+}
+mode_color="" mode_body="" hint_body=""
+mode_state=""
+if (( ${#mstack} )); then
+  mode_state="${mstack[-1]%%:*}"
+  _stack_live "$mode_state" || mode_state=""
 fi
+if [[ -n "$mode_state" ]] && mux_mode::meta "$mode_state" 2>/dev/null; then
+  mode_color="$MM_COLOR" mode_body="$MM_ICON $MM_TITLE"
+elif mux_mode::resolve "$key_table" "$in_copy" "$visual_on" "$searching_on" \
+       "$search_on" "$prefix_on" 2>/dev/null; then
+  mode_color="$MM_COLOR" mode_body="$MM_ICON $MM_TITLE"
+fi
+case "${MM_STATE:-}" in
+  search) hint_body=search ;;
+  locked|nested) hint_body=exit ;;
+esac
 if [[ -n "$renaming" ]]; then
   mux_mode::meta rename 2>/dev/null && { mode_color="$MM_COLOR" mode_body="$MM_ICON $MM_TITLE" hint_body="" }
 fi
@@ -276,10 +305,8 @@ for kv in ${(ps:\t:)wk_cfg}; do
   esac
 done
 wk_suppressed=0
-typeset -a wk_stack
-wk_stack=(${(s: :)stack_raw})
-if (( ${#wk_stack} )); then
-  [[ "${wk_stack[-1]##*:}" == 1 ]] || wk_suppressed=1
+if (( ${#mstack} )); then
+  [[ "${mstack[-1]##*:}" == 1 ]] || wk_suppressed=1
 else
   # a mode entered outside the stack (a hook, an app): fall back to the
   # start_hidden default for the state the resolver reports

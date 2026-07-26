@@ -266,10 +266,13 @@ bind -T copy-mode-vi / if -F '#{search_present}' {
 } {
   run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack push search" ; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
 }
-# (SearchMode) flag toggles — mirror the in-dialog M-c/M-b/M-p.
-bind -T copy-mode-vi M-c if -F '#{search_present}' {run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle case '#{pane_id}'"}
-bind -T copy-mode-vi M-b if -F '#{search_present}' {run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle word '#{pane_id}'"}
-bind -T copy-mode-vi M-p if -F '#{search_present}' {run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle wrap '#{pane_id}'"}
+# (SearchMode) flag toggles — mirror the in-dialog M-c/M-b/M-p. NOT gated on
+# #{search_present}: a case-sensitive re-filter can drop every match, which
+# clears that flag, and the chord that undoes it has to outlive its own
+# effect. mux-search gates on the mode STACK instead.
+bind -T copy-mode-vi M-c run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle case '#{pane_id}'"
+bind -T copy-mode-vi M-b run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle word '#{pane_id}'"
+bind -T copy-mode-vi M-p run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --toggle wrap '#{pane_id}'"
 
 # (Status v0 — the Phase 1 bare [key_table] indicator — was RETIRED by
 # Phase 4: the themed mode pill lives in status-right via the theme's

@@ -102,6 +102,43 @@ EOS
     The output should include "Search"
   End
 
+  # The MODE PILL names the top of the mode STACK. tmux state cannot say
+  # WHICH state it is — the copy family is one tmux fact (pane_in_mode)
+  # wearing three faces — it only says whether the stack has gone stale.
+  Describe 'the mode pill'
+    It 'keeps Search when a search stops matching'
+      # Mode B find: M-c makes a lowercase term case-sensitive, every match
+      # disappears, tmux clears search_present — and the pill fell back to
+      # Scroll even though the user is still standing in Search
+      When call env STUB_STACK='search:0' zsh "$W" root 1 main 0 0 '' 0 0
+      The output should include "Search"
+      The output should not include "Scroll"
+    End
+
+    It 'names the copy face the stack chose, not the one tmux can see'
+      When call env STUB_STACK='command:1 scroll:1 copy:1' zsh "$W" root 1 main
+      The output should include "Copy"
+      The output should not include "Scroll"
+    End
+
+    It 'falls back to tmux state when the stack is stale'
+      # nothing pushed it and the pane is not in copy-mode: the entry is a
+      # leftover, so the bar must not advertise a mode the user is not in
+      When call env STUB_STACK='command:1 scroll:0' zsh "$W" root 0 main
+      The output should not include "Scroll"
+    End
+
+    It 'falls back when the stack names a table the client is not in'
+      When call env STUB_STACK='command:1 pane:1' zsh "$W" root 0 main
+      The output should not include "Pane"
+    End
+
+    It 'still resolves from tmux state when the stack is empty'
+      When call env STUB_STACK='' zsh "$W" root 1 main
+      The output should include "Scroll"
+    End
+  End
+
   # The which-key hint ("󰘵 . keys") advertises a key the user can actually
   # press: it appears only while the mode on top of the STACK has its panel
   # down, and never while a dialog owns the keyboard.
