@@ -38,7 +38,14 @@ _mux_self="${(%):-%x}"
 source "$(dirname "$_mux_self")/mux/tmux.zsh"
 unset _mux_self
 
+# $MUX_BACKEND is an explicit override for callers that are NOT in a session
+# and know better: WezTerm's hooks (mux-open, nested-session-check) and
+# tab-edit resolve the backend from the client PROCESS (mux::backend_for_pid)
+# and then set this so every mux::* call they make dispatches that way.
 mux::backend() {
+  case "${MUX_BACKEND:-}" in
+    zellij | tmux) print -r -- "$MUX_BACKEND"; return ;;
+  esac
   if [[ -n "${ZELLIJ:-}" ]]; then
     print -r -- zellij
   elif [[ -n "${TMUX:-}" ]]; then
@@ -258,8 +265,13 @@ mux::form() {
 }
 
 # --- session / screen (spec §3) --------------------------------------------
+# With a client PID the backend is read from that PROCESS (mux::backend_for_pid):
+# the callers that pass one — WezTerm's open-uri / nested-session hooks,
+# tab-edit — run outside any session, where our own env says nothing.
 mux::resolve_session() {
-  case "$(mux::backend)" in
+  local b
+  if [[ -n "${1:-}" ]]; then b="$(mux::backend_for_pid "$1")"; else b="$(mux::backend)"; fi
+  case "$b" in
     tmux) _mux_tx_resolve_session "$@" ;;
     *) resolve_session "$@" ;;   # zellij impl also serves "none" (socket scan)
   esac
@@ -283,6 +295,177 @@ mux::dump_screen() {
   case "$(mux::backend)" in
     tmux) _mux_tx_dump_screen ;;
     zellij) _mux_zj_dump_screen ;;
+    *) return 1 ;;
+  esac
+}
+
+# --- panes / tabs / info (spec §3, D19) ------------------------------------
+#
+# ONE parser per call, here: each backend receives the same normalized
+# positionals, so the two implementations cannot drift on what a flag means.
+# Every call returns non-zero outside a session rather than guessing a
+# backend — a consumer that can degrade (yazi-quick-look, tm-tab) tests
+# `mux::available` first and takes its own inline path.
+
+# mux::split <direction> [--size N] [--name NAME] [--close-on-exit]
+#            [--cwd DIR] -- <cmd...>
+#   direction: right | left | down | up
+#   --size is honoured natively by tmux (-l) and IGNORED by zellij, whose
+#   `run` cannot size a pane; a zellij caller resizes afterwards.
+mux::split() {
+  local dir="${1:-right}"; shift 2>/dev/null || :
+  local size="" name="" cwd="" close=0
+  while (($#)); do
+    case "$1" in
+      --size) size="${2-}"; shift 2 ;;
+      --name) name="${2-}"; shift 2 ;;
+      --cwd) cwd="${2-}"; shift 2 ;;
+      --close-on-exit) close=1; shift ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  case "$(mux::backend)" in
+    zellij) _mux_zj_split "$dir" "$size" "$name" "$close" "$cwd" -- "$@" ;;
+    tmux)   _mux_tx_split "$dir" "$size" "$name" "$close" "$cwd" -- "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+# mux::popup <width> <height> [--title T] [--name N] [--cwd DIR] -- <cmd...>
+#   Geometry: a bare integer is CELLS, an integer with % is a percentage of
+#   the tab viewport (both backends agree; the tmux side converts, since
+#   display-popup percentages measure the full client).
+#   --name and --title are the same thing (zellij pane name ↔ popup title);
+#   both spellings are accepted so call sites read naturally.
+#   --frame asks for a bordered, unpinned float (the image preview): on
+#   zellij it overrides the global `pane_frames false`; on tmux it is a
+#   no-op, since popups always own their border.
+mux::popup() {
+  local w="${1:-80%}" h="${2:-80%}"
+  shift 2 2>/dev/null || :
+  local title="" cwd="" session="" frame=0
+  while (($#)); do
+    case "$1" in
+      --title|--name) title="${2-}"; shift 2 ;;
+      --cwd) cwd="${2-}"; shift 2 ;;
+      --session) session="${2-}"; shift 2 ;;
+      --frame) frame=1; shift ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  case "$(mux::backend)" in
+    zellij) _mux_zj_popup "$w" "$h" "$title" "$cwd" "$session" "$frame" -- "$@" ;;
+    tmux)   _mux_tx_popup "$w" "$h" "$title" "$cwd" "$session" -- "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+# mux::new_tab [--session S] [--name N] [--cwd DIR] [-- <cmd...>]
+#   A tmux window IS a zellij tab. --session targets another session by name
+#   (tab-edit dispatches into the session its client is attached to).
+mux::new_tab() {
+  local session="" name="" cwd=""
+  while (($#)); do
+    case "$1" in
+      --session) session="${2-}"; shift 2 ;;
+      --name) name="${2-}"; shift 2 ;;
+      --cwd) cwd="${2-}"; shift 2 ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  case "$(mux::backend)" in
+    zellij) _mux_zj_new_tab "$session" "$name" "$cwd" -- "$@" ;;
+    tmux)   _mux_tx_new_tab "$session" "$name" "$cwd" -- "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+# mux::send_text <text> — inject literal text into the focused pane.
+mux::send_text() {
+  case "$(mux::backend)" in
+    zellij) _mux_zj_send_text "$1" ;;
+    tmux)   _mux_tx_send_text "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+# mux::send_key <key> — the shim's key vocabulary, deliberately small (only
+# what consumers write back): up down left right enter s-up s-down.
+mux::send_key() {
+  case "$1" in
+    up|down|left|right|enter|s-up|s-down) ;;
+    *) return 2 ;;
+  esac
+  case "$(mux::backend)" in
+    zellij) _mux_zj_send_key "$1" ;;
+    tmux)   _mux_tx_send_key "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+# mux::current_tab / mux::focus_tab <n> — 1-based tab index, both backends
+# (zellij's list-tabs is 0-based; the +1 lives in the backend, not in
+# callers — that arithmetic was duplicated at every zellij call site).
+mux::current_tab() {
+  case "$(mux::backend)" in
+    zellij) _mux_zj_current_tab ;;
+    tmux)   _mux_tx_current_tab ;;
+    *) return 1 ;;
+  esac
+}
+
+mux::focus_tab() {
+  [[ -n "${1:-}" ]] || return 2
+  case "$(mux::backend)" in
+    zellij) _mux_zj_focus_tab "$1" ;;
+    tmux)   _mux_tx_focus_tab "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+# mux::pane_cwd [pid] — working directory of the focused pane. tmux answers
+# from its own format; zellij has no such query, so there the pane's root
+# PID is required and the kernel answers (copy-pwd's resolution).
+mux::pane_cwd() {
+  case "$(mux::backend)" in
+    zellij) _mux_zj_pane_cwd "${1:-}" ;;
+    tmux)   _mux_tx_pane_cwd ;;
+    *) return 1 ;;
+  esac
+}
+
+# mux::terminal_size — "<cols> <rows>" usable by a new pane/float.
+mux::terminal_size() {
+  case "$(mux::backend)" in
+    tmux) _mux_tx_terminal_size ;;
+    *) _mux_zj_terminal_size ;;   # zellij impl also serves "none" (tty fallback)
+  esac
+}
+
+# mux::backend_for_pid <pid> — the backend a CLIENT process speaks, read
+# from the process itself. Our env says nothing here: the callers are
+# outside any session (WezTerm's tint/open-uri/nested-session hooks run in
+# the terminal, not in a pane). Falls back to env detection when the pid
+# tells us nothing, so an in-session caller still gets an answer.
+mux::backend_for_pid() {
+  local comm=""
+  [[ -n "${1:-}" ]] && comm=$(ps -p "$1" -o comm= 2>/dev/null)
+  case "$comm" in
+    *zellij*) print -r -- zellij ;;
+    *tmux*)   print -r -- tmux ;;
+    *) mux::backend ;;
+  esac
+}
+
+# mux::focused_command [client_pid] — foreground command of the focused
+# TILED pane (floats excluded: a transient modal is not the pane's context).
+mux::focused_command() {
+  case "$(mux::backend_for_pid "${1:-}")" in
+    zellij) _mux_zj_focused_command "${1:-}" ;;
+    tmux)   _mux_tx_focused_command "${1:-}" ;;
     *) return 1 ;;
   esac
 }

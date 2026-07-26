@@ -31,7 +31,10 @@ SLOW_SPECS := tests/backup_spec.sh tests/backup_changes_spec.sh \
               tests/zellij_spec.sh
 
 FAST_SPECS := $(filter-out $(SLOW_SPECS),$(SPECS))
-MUX_SPECS  := $(wildcard tests/mux_*_spec.sh) $(wildcard tests/tmux_*_spec.sh) \
+# tests/mux_spec.sh is named explicitly: `mux_*_spec.sh` needs a middle
+# segment, so the shim's OWN spec was missing from this lane.
+MUX_SPECS  := tests/mux_spec.sh tests/zellij_spec.sh \
+              $(wildcard tests/mux_*_spec.sh) $(wildcard tests/tmux_*_spec.sh) \
               tests/quick_launch_tmux_spec.sh tests/theme_apply_tmux_spec.sh
 
 # The one to run while working: ~55s, everything that does not need a daemon.

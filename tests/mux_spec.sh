@@ -409,6 +409,226 @@ Describe 'mux.zsh — zj:: permanent aliases'
   End
 End
 
+Describe 'mux.zsh — pane/tab/info API (Phase 6.0, zellij backend)'
+  Include home/dot_local/lib/mux.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    ZJ_ARGS="$TEST_TMP/zj-args.txt"
+    export ZELLIJ=1
+    unset TMUX
+    stub="$TEST_TMP/zellij"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo "echo \"\$*\" >> \"$TEST_TMP/zj-args.txt\""
+      echo 'if [[ "$*" == *"list-tabs"* ]]; then'
+      # list-tabs -s columns, as both existing consumers read them:
+      # $1 tab id, $2 position (0-based), $4 is_active.
+      echo '  print -- "ID  POSITION  NAME  ACTIVE"'
+      echo '  print -- "0  0  first  false"'
+      echo '  print -- "1  1  second  true"'
+      echo 'fi'
+      echo 'exit 0'
+    } > "$stub"
+    chmod +x "$stub"
+    export ZELLIJ_BIN="$stub"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'mux::split runs a directional pane with name and close-on-exit'
+    When call mux::split right --size 40 --name "tm lens" --close-on-exit -- /bin/echo hi
+    The status should be success
+    The contents of file "$ZJ_ARGS" should include "run --close-on-exit --direction right --name tm lens"
+    The contents of file "$ZJ_ARGS" should include "-- /bin/echo hi"
+  End
+
+  It 'mux::popup floats a borderless pinned pane at the given percentages'
+    When call mux::popup 90% 90% --name preview -- /bin/echo hi
+    The status should be success
+    The contents of file "$ZJ_ARGS" should include "new-pane --floating"
+    The contents of file "$ZJ_ARGS" should include "--width 90%"
+    The contents of file "$ZJ_ARGS" should include "--height 90%"
+    The contents of file "$ZJ_ARGS" should include "--borderless true"
+  End
+
+  It 'mux::new_tab opens a named tab with a cwd and a command'
+    When call mux::new_tab --name "edit" --cwd /tmp -- nvim foo
+    The status should be success
+    The contents of file "$ZJ_ARGS" should include "new-tab"
+    The contents of file "$ZJ_ARGS" should include "--name edit"
+    The contents of file "$ZJ_ARGS" should include "--cwd /tmp"
+    The contents of file "$ZJ_ARGS" should include "-- nvim foo"
+  End
+
+  It 'mux::new_tab targets an explicit session when asked'
+    When call mux::new_tab --session Main --name edit -- nvim
+    The status should be success
+    The contents of file "$ZJ_ARGS" should include "--session Main"
+  End
+
+  It 'mux::send_text writes the literal text'
+    When call mux::send_text "hello world"
+    The status should be success
+    The contents of file "$ZJ_ARGS" should include "write-chars -- hello world"
+  End
+
+  It 'mux::send_key writes the escape sequence for a named key'
+    When call mux::send_key s-up
+    The status should be success
+    The contents of file "$ZJ_ARGS" should include "write-chars"
+  End
+
+  It 'mux::current_tab reports the active tab, 1-based'
+    When call mux::current_tab
+    The output should equal "2"
+  End
+
+  It 'mux::focus_tab selects that 1-based index'
+    When call mux::focus_tab 2
+    The status should be success
+    The contents of file "$ZJ_ARGS" should include "go-to-tab 2"
+  End
+End
+
+Describe 'mux.zsh — pane/tab/info API (Phase 6.0, tmux backend)'
+  Include home/dot_local/lib/mux.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    TX_ARGS="$TEST_TMP/tx-args.txt"
+    unset ZELLIJ
+    export TMUX=/tmp/sock,1,0
+    stub="$TEST_TMP/tmux"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo "echo \"\$*\" >> \"$TEST_TMP/tx-args.txt\""
+      echo 'case "$1" in'
+      echo '  display) case "$*" in'
+      echo '    *window_index*)      print -- "2" ;;'
+      echo '    *pane_current_path*) print -- "/tmp/here" ;;'
+      echo '    *client_width*)      print -- "120 40" ;;'
+      echo '    *pane_current_command*) print -- "nvim" ;;'
+      echo '  esac ;;'
+      echo '  split-window) print -- "%7" ;;'
+      echo 'esac'
+      echo 'exit 0'
+    } > "$stub"
+    chmod +x "$stub"
+    export MUX_TMUX_BIN="$stub"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset MUX_TMUX_BIN; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'mux::split sizes the pane at split time (no resize convergence)'
+    When call mux::split right --size 40 --name "tm lens" --close-on-exit -- /bin/echo hi
+    The status should be success
+    The output should equal "%7"
+    The contents of file "$TX_ARGS" should include "split-window -h -l 40"
+    The contents of file "$TX_ARGS" should include "/bin/echo hi"
+  End
+
+  It 'mux::split maps left/up to the -b (before) flag'
+    When call mux::split left -- /bin/echo hi
+    The status should be success
+    The output should equal "%7"
+    The contents of file "$TX_ARGS" should include "-h -b"
+  End
+
+  It 'mux::split titles the new pane when given a name'
+    When call mux::split down --name "tm lens" -- /bin/echo hi
+    The status should be success
+    The output should equal "%7"
+    The contents of file "$TX_ARGS" should include "select-pane -t %7 -T tm lens"
+  End
+
+  It 'mux::popup defers to the server so it outlives the caller'
+    When call mux::popup 90% 90% --name preview -- /bin/echo hi
+    The status should be success
+    The contents of file "$TX_ARGS" should include "run-shell -b"
+    The contents of file "$TX_ARGS" should include "tmux-popup' 90 90"
+  End
+
+  It 'mux::popup in CELLS goes straight to display-popup (no percent math)'
+    When call mux::popup 54 18 -- /bin/echo hi
+    The status should be success
+    The contents of file "$TX_ARGS" should include "run-shell -b"
+    The contents of file "$TX_ARGS" should include "display-popup -w 54 -h 18"
+    The contents of file "$TX_ARGS" should include "-E"
+    The contents of file "$TX_ARGS" should not include "tmux-popup"
+  End
+
+  It 'mux::new_tab opens a named window with a cwd and a command'
+    When call mux::new_tab --name "edit" --cwd /tmp -- nvim foo
+    The status should be success
+    The contents of file "$TX_ARGS" should include "new-window -n edit -c /tmp"
+    The contents of file "$TX_ARGS" should include "nvim foo"
+  End
+
+  It 'mux::new_tab targets an explicit session when asked'
+    When call mux::new_tab --session Main --name edit -- nvim
+    The status should be success
+    The contents of file "$TX_ARGS" should include "-t =Main:"
+  End
+
+  It 'mux::send_text sends the text literally'
+    When call mux::send_text "hello world"
+    The status should be success
+    The contents of file "$TX_ARGS" should include "send-keys -l -- hello world"
+  End
+
+  It 'mux::send_key sends the tmux key name'
+    When call mux::send_key s-up
+    The status should be success
+    The contents of file "$TX_ARGS" should include "send-keys S-Up"
+  End
+
+  It 'mux::current_tab reports the window index'
+    When call mux::current_tab
+    The output should equal "2"
+  End
+
+  It 'mux::focus_tab selects that window'
+    When call mux::focus_tab 2
+    The status should be success
+    The contents of file "$TX_ARGS" should include "select-window -t"
+  End
+
+  It 'mux::pane_cwd reads the pane path'
+    When call mux::pane_cwd
+    The output should equal "/tmp/here"
+  End
+
+  It 'mux::terminal_size reports cols rows'
+    When call mux::terminal_size
+    The output should equal "120 40"
+  End
+
+  It 'mux::focused_command reports the active pane command'
+    When call mux::focused_command
+    The output should equal "nvim"
+  End
+End
+
+Describe 'mux.zsh — pane/tab API outside any mux'
+  Include home/dot_local/lib/mux.zsh
+
+  setup() { unset ZELLIJ TMUX; }
+  BeforeEach 'setup'
+
+  It 'mux::split fails rather than guessing'
+    When call mux::split right -- /bin/echo hi
+    The status should be failure
+  End
+
+  It 'mux::send_text fails rather than guessing'
+    When call mux::send_text hi
+    The status should be failure
+  End
+End
+
 Describe 'mux.zsh — session resolvers dispatch (tmux)'
   Include home/dot_local/lib/mux.zsh
 

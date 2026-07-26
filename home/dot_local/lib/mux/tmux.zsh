@@ -60,6 +60,130 @@ _mux_tx_client_sessions() {
 _mux_tx_dump_screen() { "$(_mux_tx_bin)" capture-pane -p -S - 2>/dev/null; }
 
 # ---------------------------------------------------------------------------
+# Phase 6.0: panes / tabs / info (spec §3 Panes+Info, D19)
+#
+# Argument contract: mux.zsh does ALL flag parsing and hands each backend the
+# same normalized positionals, so the two bodies can never disagree about a
+# flag's meaning.
+# ---------------------------------------------------------------------------
+
+# _mux_tx_split <dir> <size> <name> <close> <cwd> -- <cmd...>
+# tmux sizes a split AT CREATION (-l), so there is no resize-convergence loop
+# here — the zellij twin needs one because its resize step is coarser than a
+# column. <close> is accepted and ignored: remain-on-exit is off by default,
+# which IS close-on-exit.
+_mux_tx_split() {
+  local dir="$1" size="$2" name="$3" close="$4" cwd="$5"
+  shift 5
+  [[ "${1-}" == "--" ]] && shift
+
+  local -a flags
+  case "$dir" in
+    right) flags=(-h) ;;
+    left)  flags=(-h -b) ;;
+    down)  flags=(-v) ;;
+    up)    flags=(-v -b) ;;
+    *)     flags=(-h) ;;
+  esac
+  [[ -n "$size" ]] && flags+=(-l "$size")
+  [[ -n "$cwd" ]] && flags+=(-c "$cwd")
+
+  local pane
+  pane=$("$(_mux_tx_bin)" split-window "${flags[@]}" -P -F '#{pane_id}' \
+    ${1+"${(j: :)${(@q)@}}"} 2>/dev/null) || return 1
+  # Pane TITLE is tmux's nearest equivalent of a zellij pane name (the border
+  # renders it when pane-border-status is on).
+  [[ -n "$name" && -n "$pane" ]] &&
+    "$(_mux_tx_bin)" select-pane -t "$pane" -T "$name" 2>/dev/null
+  print -r -- "$pane"
+}
+
+# _mux_tx_popup <width> <height> <title> <cwd> -- <cmd...>
+# Geometry vocabulary (both backends): a bare integer is CELLS, an integer
+# with % is a percentage. Percentages go through tmux-popup, which owns the
+# zellij-viewport parity math (client rows − 2 chrome rows, floored); cells
+# need no conversion and go straight to display-popup.
+#
+# Both forms are deferred to the SERVER with `run-shell -b`: a popup started
+# from our own client dies with the caller (yazi runs quick-look as a task
+# that exits immediately), and a foreground run-shell + -E popup deadlocks.
+_mux_tx_popup() {
+  local w="$1" h="$2" title="$3" cwd="$4" session="$5"
+  shift 5
+  [[ "${1-}" == "--" ]] && shift
+
+  local -a popup_args=(-E -B)
+  [[ -n "$session" ]] && popup_args+=(-t "=$session:")
+  [[ -n "$title" ]] && popup_args+=(-T "$title")
+  [[ -n "$cwd" ]] && popup_args+=(-d "$cwd")
+  popup_args+=(-e "COLORTERM=${COLORTERM:-truecolor}")
+
+  # Single-quote everything ((qq), not (q)): the result is re-parsed by the
+  # tmux command parser, where a backslash-escaped `=Session:` would not
+  # survive but a quoted one does.
+  local cmdline="${(j: :)${(@qq)@}}"
+  local flags="${(j: :)${(@qq)popup_args}}"
+  local line
+  if [[ "$w" == *% || "$h" == *% ]]; then
+    # Percentages: tmux-popup owns the zellij-viewport parity math.
+    local popup="$HOME/.config/mux/scripts/tmux-popup"
+    line="${(qq)popup} ${w%\%} ${h%\%} $flags ${(qq)cmdline}"
+  else
+    line="${(qq)${MUX_TMUX_BIN:-tmux}} display-popup -w $w -h $h $flags ${(qq)cmdline}"
+  fi
+  "$(_mux_tx_bin)" run-shell -b "$line"
+}
+
+# _mux_tx_new_tab <session> <name> <cwd> -- <cmd...>
+# A tmux window IS a zellij tab. `-t =NAME:` targets a session by exact name.
+_mux_tx_new_tab() {
+  local session="$1" name="$2" cwd="$3"
+  shift 3
+  [[ "${1-}" == "--" ]] && shift
+
+  local -a flags
+  [[ -n "$session" ]] && flags+=(-t "=$session:")
+  [[ -n "$name" ]] && flags+=(-n "$name")
+  [[ -n "$cwd" ]] && flags+=(-c "$cwd")
+  "$(_mux_tx_bin)" new-window "${flags[@]}" ${1+"${(j: :)${(@q)@}}"}
+}
+
+_mux_tx_send_text() { "$(_mux_tx_bin)" send-keys -l -- "$1"; }
+
+# _mux_tx_send_key <neutral-key-name> — the shim's small key vocabulary
+# (mux.zsh validates the name; here it is just spelled tmux's way).
+_mux_tx_send_key() {
+  local key
+  case "$1" in
+    up) key=Up ;; down) key=Down ;; left) key=Left ;; right) key=Right ;;
+    enter) key=Enter ;; s-up) key=S-Up ;; s-down) key=S-Down ;;
+    *) return 1 ;;
+  esac
+  "$(_mux_tx_bin)" send-keys "$key"
+}
+
+_mux_tx_current_tab() { "$(_mux_tx_bin)" display -p '#{window_index}' 2>/dev/null; }
+_mux_tx_focus_tab() { "$(_mux_tx_bin)" select-window -t ":$1" 2>/dev/null; }
+_mux_tx_pane_cwd() { "$(_mux_tx_bin)" display -p '#{pane_current_path}' 2>/dev/null; }
+_mux_tx_terminal_size() {
+  "$(_mux_tx_bin)" display -p '#{client_width} #{client_height}' 2>/dev/null
+}
+
+# _mux_tx_focused_command [client_pid] — foreground command of the active
+# pane (of that client's session when a pid is given).
+_mux_tx_focused_command() {
+  local pid="${1:-}" tty
+  if [[ -z "$pid" ]]; then
+    "$(_mux_tx_bin)" display -p '#{pane_current_command}' 2>/dev/null
+    return
+  fi
+  tty=$("$(_mux_tx_bin)" list-clients -F '#{client_pid} #{client_tty}' 2>/dev/null |
+    awk -v p="$pid" '$1==p { print $2; exit }')
+  [[ -n "$tty" ]] || return 1
+  "$(_mux_tx_bin)" display -p -c "$tty" '#{pane_current_command}' 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
 # Phase 2: floating modal paths (display-popup + tmux-modal)
 # ---------------------------------------------------------------------------
 

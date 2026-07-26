@@ -7,8 +7,8 @@
 # ~/.config/zellij/scripts/lib/zellij-session.zsh (also now a compat shim
 # sourcing this file). The resolver names (resolve_session,
 # zellij_wezterm_sessions, zellij_attached_sessions) are a public contract
-# (silo map: consumed by zellij-open, quick-launch-window, tab-edit) and are
-# KEPT; mux.zsh layers the mux::* names on top.
+# (silo map: consumed by tab-edit, and by mux-open / quick-launch-window
+# through the mux:: names) and are KEPT; mux.zsh layers mux::* on top.
 #
 # Sourcing modes:
 #   - via mux.zsh (the full stack: pick-common + input-common already loaded);
@@ -165,6 +165,153 @@ _mux_zj_dump_screen() {
   "$bin" action dump-screen "$f" 2>/dev/null || { rm -f -- "$f"; return 1; }
   cat -- "$f"
   rm -f -- "$f"
+}
+
+# ---------------------------------------------------------------------------
+# Phase 6.0: panes / tabs / info (spec §3 Panes+Info, D19)
+#
+# mux.zsh parses every flag and hands both backends the same normalized
+# positionals — see the tmux twins in mux/tmux.zsh.
+# ---------------------------------------------------------------------------
+
+_mux_zj_bin() { print -r -- "${ZELLIJ_BIN:-$(command -v zellij)}"; }
+
+# _mux_zj_split <dir> <size> <name> <close> <cwd> -- <cmd...>
+# <size> is IGNORED here: `zellij run` cannot size the pane it creates, so a
+# caller that needs a width drives `action resize` afterwards (backup-tm's
+# convergence loop — the resize step is coarser than one column). The tmux
+# twin sizes at split time and needs no loop.
+_mux_zj_split() {
+  local dir="$1" size="$2" name="$3" close="$4" cwd="$5"
+  shift 5
+  [[ "${1-}" == "--" ]] && shift
+
+  local -a flags=(run)
+  (( close )) && flags+=(--close-on-exit)
+  flags+=(--direction "$dir")
+  [[ -n "$name" ]] && flags+=(--name "$name")
+  [[ -n "$cwd" ]] && flags+=(--cwd "$cwd")
+  "$(_mux_zj_bin)" "${flags[@]}" -- "$@"
+}
+
+# _mux_zj_popup <width> <height> <title> <cwd> -- <cmd...>
+# The zellij float: borderless + pinned, the geometry vocabulary passed
+# through unchanged (zellij accepts both "90%" and a cell count).
+_mux_zj_popup() {
+  local w="$1" h="$2" title="$3" cwd="$4" session="$5" frame="${6:-0}"
+  shift 6
+  [[ "${1-}" == "--" ]] && shift
+
+  local -a pre=()
+  [[ -n "$session" ]] && pre=(--session "$session")
+  # Default float: borderless + pinned (the modal/picker convention, where
+  # pty-frame draws the chrome). --frame flips both for the image preview,
+  # which wants zellij's own rounded frame and no pin decoration.
+  local border=true pinned=true
+  (( frame )) && { border=false; pinned=false; }
+  local -a flags=(action new-pane --floating --close-on-exit
+                  --name "$title" --borderless "$border" --pinned "$pinned"
+                  --width "$w" --height "$h")
+  [[ -n "$cwd" ]] && flags+=(--cwd "$cwd")
+  "$(_mux_zj_bin)" "${pre[@]}" "${flags[@]}" -- "$@"
+}
+
+# _mux_zj_new_tab <session> <name> <cwd> -- <cmd...>
+_mux_zj_new_tab() {
+  local session="$1" name="$2" cwd="$3"
+  shift 3
+  [[ "${1-}" == "--" ]] && shift
+
+  local -a pre=()
+  [[ -n "$session" ]] && pre=(--session "$session")
+  local -a flags=(action new-tab --close-on-exit)
+  [[ -n "$name" ]] && flags+=(--name "$name")
+  [[ -n "$cwd" ]] && flags+=(--cwd "$cwd")
+  if (($#)); then
+    "$(_mux_zj_bin)" "${pre[@]}" "${flags[@]}" -- "$@"
+  else
+    "$(_mux_zj_bin)" "${pre[@]}" "${flags[@]}"
+  fi
+}
+
+_mux_zj_send_text() { "$(_mux_zj_bin)" action write-chars -- "$1"; }
+
+# _mux_zj_send_key <neutral-key-name> — zellij has no key vocabulary, only
+# bytes: write the terminal's own encoding for the key.
+_mux_zj_send_key() {
+  local seq
+  case "$1" in
+    up) seq=$'\e[A' ;; down) seq=$'\e[B' ;;
+    left) seq=$'\e[D' ;; right) seq=$'\e[C' ;;
+    enter) seq=$'\r' ;; s-up) seq=$'\e[1;2A' ;; s-down) seq=$'\e[1;2B' ;;
+    *) return 1 ;;
+  esac
+  "$(_mux_zj_bin)" action write-chars -- "$seq"
+}
+
+# _mux_zj_current_tab — 1-based index of the active tab, the same number
+# _mux_zj_focus_tab takes (list-tabs -s reports a 0-based position).
+_mux_zj_current_tab() {
+  local pos
+  pos=$("$(_mux_zj_bin)" action list-tabs -s 2>/dev/null |
+    awk -F'  +' 'NR > 1 && $4 == "true" { print $2; exit }')
+  [[ -n "$pos" ]] || return 1
+  print -r -- $(( pos + 1 ))
+}
+
+_mux_zj_focus_tab() { "$(_mux_zj_bin)" action go-to-tab "$1" 2>/dev/null; }
+
+# _mux_zj_pane_cwd <pid> — zellij exposes no pane cwd, so it comes from the
+# kernel via the pane's root PID (the same resolution copy-pwd uses).
+_mux_zj_pane_cwd() {
+  local pid="${1:-}"
+  [[ -n "$pid" ]] || return 1
+  /usr/sbin/lsof -a -p "$pid" -d cwd -Fn 2>/dev/null |
+    awk '/^n/ { print substr($0, 2); exit }'
+}
+
+# _mux_zj_terminal_size — usable cols/rows of the focused tab: the extent of
+# its non-floating terminal panes (zellij has no client-size query). Falls
+# back to the controlling tty. MOVED from quick-launch's ql_terminal_size.
+_mux_zj_terminal_size() {
+  local bin tab_id size
+  bin="$(_mux_zj_bin)"
+  if [[ -x "$bin" ]]; then
+    tab_id="$("$bin" action list-tabs -s 2>/dev/null |
+      awk -F'  +' 'NR > 1 && $4 == "true" { print $1; exit }')" || tab_id=""
+    size="$(
+      "$bin" action list-panes -a 2>/dev/null | awk -F'  +' -v tab="$tab_id" '
+        NR == 1 { next }
+        tab != "" && $1 != tab { next }
+        $5 != "terminal" || $10 != "false" || $11 != "false" { next }
+        { right = $12 + $15; bottom = $13 + $14 }
+        right > cols { cols = right }
+        bottom > rows { rows = bottom }
+        END { if (cols > 0 && rows > 0) print cols, rows }
+      '
+    )" || size=""
+    if [[ -n "$size" ]]; then
+      printf '%s\n' "$size"
+      return
+    fi
+  fi
+  { stty size </dev/tty 2>/dev/null || printf '24 80\n'; } | awk '{ print $2, $1 }'
+}
+
+# _mux_zj_focused_command [client_pid] — command of the focused TILED pane.
+# Floating panes are excluded on purpose: our modals keep their own focus
+# while the originating tile stays focused in the tiled axis, so a transient
+# picker must never read as the pane's context (terminal-location's rule).
+_mux_zj_focused_command() {
+  local pid="${1:-}" session
+  if [[ -n "$pid" ]]; then
+    session=$(resolve_session "$pid") || return 1
+  else
+    session="${ZELLIJ_SESSION_NAME:-}"
+  fi
+  [[ -n "$session" ]] || return 1
+  "$(_mux_zj_bin)" -s "$session" action list-panes -a -j 2>/dev/null |
+    jq -r '[.[] | select(.is_plugin == false and .is_focused == true and .is_floating == false)] | .[0].pane_command // empty' 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
