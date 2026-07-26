@@ -70,6 +70,81 @@ restore_anchor() {
   return 0
 }
 
+# ---- the SEARCH's own position ---------------------------------------------
+# tmux ties "the current match" to the CURSOR: search-again looks from
+# wherever the cursor happens to be, so scrolling with j/k silently changes
+# which match comes next. The search keeps its own position instead
+# (@search_mpos/my/mx) — n/N restore it, search from there, and save where
+# they landed. Moving the cursor to READ the buffer no longer moves your
+# place in the search; n still goes to the match after the highlighted one.
+# n is a key people press repeatedly, so both of these read everything they
+# need in ONE round-trip and write in one batched command list.
+save_pos() {   # remember where the search is standing (values, or read them)
+  local o="$1" r="${2:-}"
+  [[ -n "$r" ]] || r="$(pos_key "$o")"
+  "$TMUX_BIN" set -p -t "$o" @search_mpos "${r%%:*}" ';' \
+              set -p -t "$o" @search_my "${${r#*:}%%:*}" ';' \
+              set -p -t "$o" @search_mx "${r##*:}" 2>/dev/null
+  return 0
+}
+restore_pos() {  # …and put the cursor back on it (same walk as restore_anchor)
+  local o="$1" r pos y x cur
+  r="$("$TMUX_BIN" display -p -t "$o" '#{@search_mpos}|#{@search_my}|#{@search_mx}|#{scroll_position}' 2>/dev/null)"
+  pos="${r%%|*}"; r="${r#*|}"
+  y="${r%%|*}";   r="${r#*|}"
+  x="${r%%|*}";   cur="${r##*|}"
+  [[ "$pos" == <-> ]] || return 1
+  [[ "$y" == <-> ]] || y=0
+  [[ "$x" == <-> ]] || x=0
+  [[ "$cur" == <-> ]] || cur=0
+  local -a walk
+  (( cur > pos )) && walk+=(send-keys -t "$o" -X -N $(( cur - pos )) scroll-down ';')
+  (( pos > cur )) && walk+=(send-keys -t "$o" -X -N $(( pos - cur )) scroll-up ';')
+  walk+=(send-keys -t "$o" -X top-line ';')
+  (( y > 0 )) && walk+=(send-keys -t "$o" -X -N "$y" cursor-down ';')
+  walk+=(send-keys -t "$o" -X start-of-line)
+  (( x > 0 )) && walk+=(';' send-keys -t "$o" -X -N "$x" cursor-right)
+  "$TMUX_BIN" "${walk[@]}" 2>/dev/null
+  return 0
+}
+pos_key() { "$TMUX_BIN" display -p -t "$1" '#{scroll_position}:#{copy_cursor_y}:#{copy_cursor_x}' 2>/dev/null }
+
+# Match 1 is the BOTTOM-most match, so the index of where the search is
+# standing = how many matches sit at or below it. tmux has no format for
+# this (its whole search vocabulary is count/present/partial/timed_out), so
+# it is counted once per re-search over the region below the cursor —
+# ~15ms, flat, and nothing moves on screen. Later n/N just add or subtract.
+count_index() {  # pane pattern -> REPLY_IDX (1-based, clamped to the count)
+  local o="$1" pat="$2" y h scr total n   # NB: not REPLY — build_pattern owns that
+  REPLY_IDX=1
+  y="$("$TMUX_BIN" display -p -t "$o" '#{copy_cursor_y}' 2>/dev/null)"; [[ "$y" == <-> ]] || return 0
+  h="$("$TMUX_BIN" display -p -t "$o" '#{pane_height}' 2>/dev/null)"; [[ "$h" == <-> ]] || return 0
+  scr="$("$TMUX_BIN" display -p -t "$o" '#{scroll_position}' 2>/dev/null)"; [[ "$scr" == <-> ]] || scr=0
+  total="$("$TMUX_BIN" display -p -t "$o" '#{search_count}' 2>/dev/null)"; [[ "$total" == <-> ]] || total=0
+  # -J joins wrapped lines, so a match spanning a wrap counts once, like tmux
+  n="$("$TMUX_BIN" capture-pane -p -J -t "$o" -S "$y" -E $(( h - 1 + scr )) 2>/dev/null \
+       | grep -cE -- "$pat" 2>/dev/null)" || n=1
+  [[ "$n" == <-> ]] && (( n > 0 )) || n=1
+  (( total > 0 && n > total )) && n=$total
+  REPLY_IDX=$n
+  return 0
+}
+set_index() { "$TMUX_BIN" set -p -t "$1" @search_idx "$2" 2>/dev/null; return 0 }
+
+# tmux paints the match UNDER THE CURSOR as the current one. That is true
+# exactly when the cursor is standing on the search's match — after a commit
+# or an n/N — and false the moment scrolling drags the cursor across the
+# buffer, which is why the scroll keys MUTE the colour (keymap-base). This
+# takes the mute off again, so the match you just landed on is the one
+# wearing it.
+# NB: call this BEFORE the search command. tmux resolves the match styles
+# when the SEARCH runs, so unmuting afterwards leaves the new match painted
+# with the muted style until something searches again.
+show_current_match() {
+  "$TMUX_BIN" set -p -t "$1" -u copy-mode-current-match-style 2>/dev/null
+  return 0
+}
+
 # The wrap INDICATOR and tmux's own per-pane wrap-search are one setting:
 # n/N (search-again / search-reverse) read the tmux option, so flipping the
 # glyph alone left them wrapping (Mode B).
@@ -132,9 +207,49 @@ if [[ "${1:-}" == --toggle ]]; then
     build_pattern "$term" "$case_on" "$word_on"
     # Back to the original anchor before re-filtering — deterministic, no
     # highlight hop (user-specified semantics).
+    show_current_match "$origin"
     restore_anchor "$origin"
     "$TMUX_BIN" send-keys -t "$origin" -X search-backward "$REPLY" 2>/dev/null
+    save_pos "$origin"
+    count_index "$origin" "$REPLY"; set_index "$origin" "$REPLY_IDX"
   fi
+  "$TMUX_BIN" refresh-client -S 2>/dev/null
+  exit 0
+fi
+
+# n / N. In Search they step the search's own position; anywhere else in
+# copy-mode they keep their other job, jumping between shell prompts (tmux
+# has ONE copy-mode where zellij has two modes — ledger row).
+if [[ "${1:-}" == --next || "${1:-}" == --prev ]]; then
+  dir="$1"; origin="${2:-}"; [[ -n "$origin" ]] || exit 0
+  source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/stack.zsh"
+  term=""
+  mux_stack::top 2>/dev/null && [[ "$MS_STATE" == search ]] && \
+    term="$("$TMUX_BIN" display -p -t "$origin" '#{@search_term}' 2>/dev/null)"
+  if [[ -z "$term" ]]; then
+    [[ "$dir" == --next ]] && "$TMUX_BIN" send-keys -t "$origin" -X next-prompt 2>/dev/null \
+                           || "$TMUX_BIN" send-keys -t "$origin" -X previous-prompt 2>/dev/null
+    exit 0
+  fi
+  show_current_match "$origin"      # …before the search, so it paints
+  restore_pos "$origin" || save_pos "$origin"
+  before="$(pos_key "$origin")"
+  [[ "$dir" == --next ]] && "$TMUX_BIN" send-keys -t "$origin" -X search-again 2>/dev/null \
+                         || "$TMUX_BIN" send-keys -t "$origin" -X search-reverse 2>/dev/null
+  # one trip for where we landed, the old index and the count
+  r="$("$TMUX_BIN" display -p -t "$origin" \
+       '#{scroll_position}:#{copy_cursor_y}:#{copy_cursor_x}|#{@search_idx}|#{search_count}' 2>/dev/null)"
+  after="${r%%|*}"; r="${r#*|}"
+  idx="${r%%|*}"; total="${r##*|}"
+  [[ "$idx" == <-> ]] || idx=1
+  [[ "$total" == <-> ]] || total=0
+  if [[ "$before" != "$after" ]] && (( total > 0 )); then
+    # n climbs toward older matches, N comes back down; both wrap exactly as
+    # tmux's own wrap-search just did
+    [[ "$dir" == --next ]] && idx=$(( idx % total + 1 )) || idx=$(( (idx - 2 + total) % total + 1 ))
+  fi
+  save_pos "$origin" "$after"
+  set_index "$origin" "$idx"
   "$TMUX_BIN" refresh-client -S 2>/dev/null
   exit 0
 fi
@@ -233,8 +348,12 @@ apply_search() {
   "$TMUX_BIN" set -p -t "$origin" @search_term "$buf" 2>/dev/null
   if [[ -z "$buf" ]]; then clear_search; return 0; fi
   build_pattern "$buf" "$case_on" "$word_on"
+  show_current_match "$origin"
   restore_anchor "$origin"
   "$TMUX_BIN" send-keys -t "$origin" -X search-backward "$REPLY" 2>/dev/null
+  # the search stands where it just landed, and X follows it
+  save_pos "$origin"
+  count_index "$origin" "$REPLY"; set_index "$origin" "$REPLY_IDX"
 }
 
 # tmux cannot clear an active search (no search-cancel) — exit and re-enter
@@ -292,7 +411,9 @@ while read -rsk1 key; do
     $'\r'|$'\n')
       # (SearchInput) Enter -> (SearchMode): the same Search entry, nothing to
       # do to the stack. An empty term has nothing to confirm — pop instead.
-      if [[ -z "$buf" ]]; then pop_out; fi
+      if [[ -z "$buf" ]]; then pop_out
+      else show_current_match "$origin"
+      fi
       break ;;
     $'\x03')
       # C-c aborts the whole stack -> normal.

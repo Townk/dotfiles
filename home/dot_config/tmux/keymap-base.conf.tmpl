@@ -232,10 +232,30 @@ bind -T copy-mode-vi a if -F '#{selection_present}' {
 # panel, keyed off @copy_parent/@search_parent, and the three disagreed.
 # y mirrors Enter exactly (copy-pipe + leave).
 # Scroll-state motion: viewport scroll, not cursor (see @visual above).
-bind -T copy-mode-vi j if -F '#{@visual}' {send -X cursor-down} {send -X scroll-down}
-bind -T copy-mode-vi Down if -F '#{@visual}' {send -X cursor-down} {send -X scroll-down}
-bind -T copy-mode-vi k if -F '#{@visual}' {send -X cursor-up} {send -X scroll-up}
-bind -T copy-mode-vi Up if -F '#{@visual}' {send -X cursor-up} {send -X scroll-up}
+# SCROLLING MUTES THE CURRENT-MATCH COLOUR. tmux paints the match under the
+# CURSOR as the current one, and scrolling drags the cursor across the buffer
+# (it is pinned to a screen row), so it lights up whatever match it passes —
+# a match that is emphatically not where the search is standing. Muting is a
+# style option pointing at another style option, so it costs no shell on a
+# key you might hold, and keeps every colour in the theme. n/N and a fresh
+# commit unmute, because there the cursor really is on the current match.
+# The mute goes FIRST in each binding: the movement is what repaints, so a
+# mute queued behind it arrives too late — with two matches on adjacent
+# lines the cursor had already lit the second one (Mode B).
+bind -T copy-mode-vi j if -F '#{@visual}' {send -X cursor-down} {set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-down}
+bind -T copy-mode-vi Down if -F '#{@visual}' {send -X cursor-down} {set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-down}
+bind -T copy-mode-vi k if -F '#{@visual}' {send -X cursor-up} {set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-up}
+bind -T copy-mode-vi Up if -F '#{@visual}' {send -X cursor-up} {set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-up}
+# …and the same for every other key that moves the viewport (these were
+# tmux's own defaults; they keep their action and gain the mute).
+bind -T copy-mode-vi C-u set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" \; send -X halfpage-up
+bind -T copy-mode-vi C-d set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" \; send -X halfpage-down
+bind -T copy-mode-vi C-b set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" \; send -X page-up
+bind -T copy-mode-vi C-f set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" \; send -X page-down
+bind -T copy-mode-vi PageUp set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" \; send -X page-up
+bind -T copy-mode-vi PageDown set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" \; send -X page-down
+bind -T copy-mode-vi g set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" \; send -X history-top
+bind -T copy-mode-vi G set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" \; send -X history-bottom
 # v: Scroll → push Copy/visual at the current position; in Copy it begins
 # the selection as usual.
 bind -T copy-mode-vi v if -F '#{@visual}' {send -X begin-selection} {run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack push copy"}
@@ -251,10 +271,15 @@ bind -T copy-mode-vi V run-shell 'f=$(mktemp /tmp/tmux-scrollback.XXXXXX); tmux 
 # n/p — prompt jumps via OSC 133 marks (zj-prompt-jumper parity; the marks
 # come from the zsh precmd emitter, functions.d/prompt-marks.sh). tmux has
 # ONE copy-mode where zellij splits scroll vs search, and `n` is also
-# search-next there: search-aware dispatch keeps both muscle memories
-# (search active → next match; else → next prompt). Ledger row.
-bind -T copy-mode-vi n if -F '#{search_present}' { send -X search-again } { send -X next-prompt }
-bind -T copy-mode-vi N if -F '#{search_present}' { send -X search-reverse } { send -X previous-prompt }
+# search-next there: mux-search dispatches on the mode STACK, keeping both
+# muscle memories (Search → next match; otherwise → next prompt).
+#
+# In Search they step the SEARCH's own position, not the cursor: tmux's
+# search-again looks from wherever the cursor is, so scrolling with j/k
+# silently changed which match came next. Now you can read anywhere in the
+# buffer and n still goes to the match after the highlighted one.
+bind -T copy-mode-vi n run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --next '#{pane_id}'"
+bind -T copy-mode-vi N run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --prev '#{pane_id}'"
 bind -T copy-mode-vi p send -X previous-prompt
 # / — forward incremental search (D12 stage 1; the floating search dialog
 # with option toggles is the D12 stage 2 hud follow-up).

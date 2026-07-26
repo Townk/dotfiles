@@ -100,10 +100,14 @@ Describe 'tmux keymap tables'
     The output should include "send-keys C-h"
   End
 
-  It 'copy-mode has the prompt-jump duality on n'
+  It 'routes n/N through the search stepper, which keeps the prompt-jump duality'
+    # n means "next MATCH" in Search and "next prompt" elsewhere in
+    # copy-mode. The choice moved into mux-search with the search's own
+    # position (tmux search-again looks from the CURSOR, so scrolling used
+    # to change which match came next) — mux_search_spec covers both arms.
     When call tmux -L kmspec list-keys -T copy-mode-vi
-    The output should include "next-prompt"
-    The output should include "search-again"
+    The output should include "mux-search --next"
+    The output should include "mux-search --prev"
     The output should include "capture-pane"
   End
 

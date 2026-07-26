@@ -64,6 +64,7 @@ stack_raw="${11-$("$TMUX_BIN" show -gv @mux_stack 2>/dev/null)}"
 # the feedback that was missing when a case toggle silently emptied the pane.
 search_count="${12:-}"
 search_partial="${13:-0}"
+search_idx="${14:-}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
@@ -335,11 +336,15 @@ fi
 if [[ "$hint_body" == search ]]; then
   # the count first, then zj-hud's search_hint_segment: case/word/wrap with
   # the glyph bright when on
+  # X / N — the search's position over the match count. tmux exposes no
+  # index (its whole search vocabulary is count/present/partial/timed_out),
+  # so X is mux-search's own: the cursor may wander without moving it.
   [[ "$search_count" == <-> ]] || search_count=0
-  n_word=matches; [[ "$search_count" == 1 ]] && n_word=match
+  [[ "$search_idx" == <-> ]] || search_idx=0
+  (( search_count == 0 )) && search_idx=0
   [[ "$search_partial" == 1 ]] && search_count="${search_count}+"
-  bodies+=("${search_count} ${n_word}"); kinds+=(count)
   bodies+=("$I_TCASE case  $I_TWORD word  $I_TWRAP wrap"); kinds+=(shint)
+  bodies+=("${search_idx} / ${search_count}"); kinds+=(count)
 elif [[ -n "$hint_body" ]]; then
   bodies+=("$I_ALT $I_ESC  exit"); kinds+=(hint)
 fi
