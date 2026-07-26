@@ -76,7 +76,7 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | `V` edit scrollback | EditScrollback | capture-pane → nvim new-window | ✅ | |
 | prompt jumps `n`/`p` | zj-prompt-jumper wasm (p10k prefix scan) | copy-mode next/previous-prompt on OSC 133 marks (zsh precmd emitter) | ✅ | emitter benefits both (D11); zellij keeps the wasm |
 | `n` after search | Search "down" in search mode | search-aware: `search-again` when `search_present`, else `next-prompt` | 🟡 | one copy-mode vs two zellij modes |
-| search option toggles (case/word/wrap) | zj-hud search role + MessagePlugin sync | — | ⏳ tmux | D12 stage 2 |
+| search option toggles (case/word/wrap) | zj-hud search role + MessagePlugin sync | M-c/M-b/M-p in the dialog and in (SearchMode): case + word rebuild the ERE pattern, wrap sets tmux's per-pane `wrap-search` | ✅ | gated on the Search STATE, not `#{search_present}` — a zero-match filter clears that flag and would kill the chord that undoes it |
 | which-key panel | zj-hud role "whichkey" (pages/trail) | — | ⏳ tmux | Phase 5 (menus → hud) |
 
 ## Session-level behaviors
@@ -187,6 +187,7 @@ are derived views. One API (`lib/mux/stack.zsh`, exposed to key bindings by
 | `switch-client -T prefix` fails with "no current client" from a `run-shell -b` (client-less) and from inside a popup (no pane of its own) | every client-scoped command names the client: `switch-client -c "$(list-clients -F '#{client_tty}' \| head -1)"` |
 | `set key-table X` is a SESSION option and works client-less; `#{client_key_table}` needs a client | the stack sets the session option, and specs that assert the armed table attach a real client (nested tmux) |
 | `show -gv @foo` on an option removed with `set -gu` ERRORS ("invalid option") rather than printing empty | flags that are polled get an explicit `0`, never `set -gu` |
+| `wrap-search` is a real per-pane option (3.7b) that `search-again`/`search-reverse` honour | the wrap chord sets it, not just the indicator glyph — flipping the glyph alone left n/N coming round the buffer (Mode B) |
 | a search that matches NOTHING clears `#{search_present}` — tmux keeps no "there is a term" flag of its own | the mode PILL names the top of the stack (tmux state only detects a stale entry), and the M-c/M-b/M-p toggles gate on the Search STATE: gating them on `search_present` killed the very chord that would undo a zero-match filter |
 | tmux has no search-cancel, and an empty `search-forward` keeps the old term | leaving a Search entry exits and re-enters copy-mode and restores the viewport from `#{scroll_position}` — the stack owns that teardown, so `/`, Backspace and the panel cannot disagree |
 | a popup cannot resize itself (geometry flags are ignored once one exists) | one DRIVER process owns the popup for the whole stack: the panel performs a stack operation and exits, the driver re-reads the stack and opens the next correctly sized popup |

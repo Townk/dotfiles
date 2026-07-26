@@ -19,8 +19,9 @@
 # Alt+p wrap. tmux's search is ERE regex, so the term is regex-escaped;
 # whole-word wraps it in [[:<:]]/[[:>:]] and case-INsensitive expands
 # alphabetics to character classes (tmux regex search is case-sensitive
-# and has no flags). Wrap is always on in tmux — the indicator reflects
-# it and the chord just flips the glyph (ledger row).
+# and has no flags). Wrap rides tmux's own per-pane `wrap-search` option —
+# with it off, search-again/search-reverse stop at the last match instead
+# of coming round the buffer (the chord used to flip only the glyph).
 #
 # Colors come from the theme JSON projection. As-built: the accent uses
 # roles.mode.search (the plugin hardcodes its own blue).
@@ -69,6 +70,16 @@ restore_anchor() {
   return 0
 }
 
+# The wrap INDICATOR and tmux's own per-pane wrap-search are one setting:
+# n/N (search-again / search-reverse) read the tmux option, so flipping the
+# glyph alone left them wrapping (Mode B).
+set_wrap() {  # pane on|off-as-1|0
+  "$TMUX_BIN" set -p -t "$1" @search_wrap "$2" 2>/dev/null
+  [[ "$2" == 1 ]] && "$TMUX_BIN" set -p -t "$1" wrap-search on 2>/dev/null \
+                  || "$TMUX_BIN" set -p -t "$1" wrap-search off 2>/dev/null
+  return 0
+}
+
 # Build the search regex from a term + flags. tmux search is SMART-CASE
 # (all-lowercase patterns match insensitively; any uppercase goes sensitive)
 # — so insensitive mode expands alphabetics into character classes, and
@@ -109,7 +120,11 @@ if [[ "${1:-}" == --toggle ]]; then
   if [[ "$flag" == wrap ]]; then [[ "$cur" == 0 ]] && new=1 || new=0
   else [[ "$cur" == 1 ]] && new=0 || new=1
   fi
-  "$TMUX_BIN" set -p -t "$origin" "@search_${flag}" "$new" 2>/dev/null
+  if [[ "$flag" == wrap ]]; then
+    set_wrap "$origin" "$new"
+  else
+    "$TMUX_BIN" set -p -t "$origin" "@search_${flag}" "$new" 2>/dev/null
+  fi
   term="$("$TMUX_BIN" display -p -t "$origin" '#{@search_term}' 2>/dev/null)"
   if [[ -n "$term" && "$flag" != wrap ]]; then
     case_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_case}' 2>/dev/null)"
@@ -168,11 +183,12 @@ if [[ "$sp" == 1 ]]; then
   case_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_case}' 2>/dev/null)"; [[ "$case_on" == 1 ]] || case_on=0
   word_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_word}' 2>/dev/null)"; [[ "$word_on" == 1 ]] || word_on=0
   wrap_on="$("$TMUX_BIN" display -p -t "$origin" '#{@search_wrap}' 2>/dev/null)"; [[ "$wrap_on" == 0 ]] || wrap_on=1
+  set_wrap "$origin" "$wrap_on"          # tmux's option follows the indicator
 else
   buf="" case_on=0 word_on=0 wrap_on=1
   "$TMUX_BIN" set -p -t "$origin" @search_case 0 2>/dev/null
   "$TMUX_BIN" set -p -t "$origin" @search_word 0 2>/dev/null
-  "$TMUX_BIN" set -p -t "$origin" @search_wrap 1 2>/dev/null
+  set_wrap "$origin" 1                   # a fresh search wraps again
   "$TMUX_BIN" set -p -t "$origin" -u @search_term 2>/dev/null
 fi
 # Anchor the incremental re-searches on the CURSOR COORDINATES at dialog
@@ -289,7 +305,7 @@ while read -rsk1 key; do
       case "$follow" in
         c) (( case_on = ! case_on )); "$TMUX_BIN" set -p -t "$origin" @search_case "$case_on" 2>/dev/null; "$TMUX_BIN" refresh-client -S 2>/dev/null; apply_search; draw_input ;;
         b) (( word_on = ! word_on )); "$TMUX_BIN" set -p -t "$origin" @search_word "$word_on" 2>/dev/null; "$TMUX_BIN" refresh-client -S 2>/dev/null; apply_search; draw_input ;;
-        p) (( wrap_on = ! wrap_on )); "$TMUX_BIN" set -p -t "$origin" @search_wrap "$wrap_on" 2>/dev/null; "$TMUX_BIN" refresh-client -S 2>/dev/null; draw_input ;;
+        p) (( wrap_on = ! wrap_on )); set_wrap "$origin" "$wrap_on"; "$TMUX_BIN" refresh-client -S 2>/dev/null; draw_input ;;
         "") pop_out; break ;;
         *) while read -rsk1 -t 0.01 _; do :; done ;;
       esac ;;

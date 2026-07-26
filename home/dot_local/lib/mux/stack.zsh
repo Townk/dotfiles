@@ -162,7 +162,8 @@ mux_stack::_leave() {
     "$MUX_TMUX_BIN" send-keys -t "$p" -X cancel ';' \
                     set -p -t "$p" -u @visual ';' \
                     set -p -t "$p" -u @searching ';' \
-                    set -p -t "$p" -u @search_term 2>/dev/null
+                    set -p -t "$p" -u @search_term ';' \
+                    set -p -t "$p" -u wrap-search 2>/dev/null
     MS_INCOPY=0               # leaving copy-mode fires the hook: it paints
   fi
 }
