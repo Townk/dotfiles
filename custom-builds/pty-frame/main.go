@@ -114,6 +114,7 @@ type grid struct {
 	penAttrs       uint8
 	cursorVisible  bool
 	cprRequested   bool
+	lastGraphic    rune // for REP (CSI Ps b) — the char it repeats
 
 	// parser state
 	pending []byte // incomplete trailing bytes carried across feeds
@@ -231,6 +232,7 @@ func (g *grid) put(r rune) {
 		g.cells[g.curY][g.curX+i] = cell{r: 0, fg: g.penFg, bg: g.penBg, attrs: g.penAttrs} // wide-char trailer
 	}
 	g.curX += w
+	g.lastGraphic = r
 }
 
 func (g *grid) feed(data []byte) {
@@ -383,6 +385,17 @@ func (g *grid) dispatchCSI(final byte) {
 		g.curX = clamp(g.curX+max1(arg(0, 1)), 0, g.w-1)
 	case 'D':
 		g.curX = clamp(g.curX-max1(arg(0, 1)), 0, g.w-1)
+	case 'b': // REP — repeat the last graphic character n times
+		// Bubbletea (diffnav's filter box) pads a row with one space plus
+		// `CSI n b` instead of n spaces. Dropping it collapsed the padding
+		// and drew the box's right border straight after the label.
+		if g.lastGraphic != 0 {
+			r := g.lastGraphic
+			for i := 0; i < max1(arg(0, 1)); i++ {
+				g.put(r)
+			}
+			g.lastGraphic = r // put() keeps it, but be explicit
+		}
 	case 'G': // CHA
 		g.curX = clamp(arg(0, 1)-1, 0, g.w-1)
 	case 'd': // VPA
