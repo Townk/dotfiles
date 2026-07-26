@@ -17,7 +17,8 @@ absolute path from its caller, so it never needs to be on `PATH`:
   `pick-{glyph,gitmoji}-zellij` adapters (`Ctrl+Shift+u` / `Ctrl+Shift+g`);
   backed by `pick-symbols-common.zsh` → `pick-common.zsh`.
 - `pick-list` — a generic standalone front-end to `pick::start`, used by
-  `zj::pick` (in `zellij.zsh`) to run a picker inside a Zellij floating pane.
+  `mux::pick` (in `mux.zsh`) to run a picker inside a floating pane on
+  either mux (`zj::pick` remains as a permanent alias).
 - `ics-view`, `sqlite-view`, `disk-image-view` — rich file preview renderers
   driven by `preview` and Yazi; they are implementation details, not general
   shell commands.
@@ -56,8 +57,10 @@ common.zsh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
    ├── prompt-common.zsh ......... prompt::required/default/secret/choice/confirm
    ├── pick-common.zsh ........... pick::*  (the fzf picker engine)
    │     ├── pick-symbols-common.zsh   pick_symbols::*  (glyph/gitmoji shared bits)
-   │     └── zellij.zsh ............ zj::*  (zj::pick: drop-in for pick::start
-   │                                 that floats the picker when zellij is present)
+   │     └── mux.zsh ............. mux::*  (the mux shim: pick/confirm/line/
+   │           ├── mux/zellij.zsh   choose/text/form + panes, tabs, sessions;
+   │           └── mux/tmux.zsh     floats the picker inside either mux, runs
+   │                                inline outside one. zj::* stay as aliases)
    ├── system-package-common.zsh .. pkg::*  (manifest parsing, version diff,
    │                              restart hook, outdated rows, table print)
    ├── system-secrets-common.zsh .. sec::*  (slots, SOPS/age, 1Password, leak audit)
