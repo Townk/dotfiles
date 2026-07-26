@@ -139,6 +139,40 @@ EOS
     End
   End
 
+  # tmux draws its own [copy_position/limit] (N results) box in the pane's
+  # top-right corner. It is foreign chrome — unthemed, and two raw numbers
+  # that read as a match counter but are not — so status.conf empties
+  # copy-mode-position-format and the fact worth keeping comes here instead.
+  Describe 'the search match count'
+    It 'counts the matches while searching'
+      When call env STUB_STACK='search:0' zsh "$W" root 1 main 0 1 '' 0 0 '' 120 'search:0' 6
+      The output should include "6 matches"
+    End
+
+    It 'says one match in the singular'
+      When call env STUB_STACK='search:0' zsh "$W" root 1 main 0 1 '' 0 0 '' 120 'search:0' 1
+      The output should include "1 match"
+      The output should not include "1 matches"
+    End
+
+    It 'says zero when the term stopped matching'
+      # the M-c case: tmux clears its search state, so the count comes back
+      # empty — "0 matches" is exactly the feedback that was missing
+      When call env STUB_STACK='search:0' zsh "$W" root 1 main 0 0 '' 0 0 '' 120 'search:0' ''
+      The output should include "0 matches"
+    End
+
+    It 'marks a count tmux could not finish'
+      When call env STUB_STACK='search:0' zsh "$W" root 1 main 0 1 '' 0 0 '' 120 'search:0' 6 1
+      The output should include "6+ matches"
+    End
+
+    It 'shows no count outside Search'
+      When call env STUB_STACK='command:1 scroll:1' zsh "$W" root 1 main 0 0 '' 0 0 '' 120 'command:1 scroll:1' 6
+      The output should not include "matches"
+    End
+  End
+
   # The which-key hint ("󰘵 . keys") advertises a key the user can actually
   # press: it appears only while the mode on top of the STACK has its panel
   # down, and never while a dialog owns the keyboard.

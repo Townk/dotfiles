@@ -55,6 +55,15 @@ cwidth="${10:-80}"
 # status-interval tick — raising the panel would not clear the hint.
 # `${11-…}` (no colon) keeps the fallback for callers that pass 10 args.
 stack_raw="${11-$("$TMUX_BIN" show -gv @mux_stack 2>/dev/null)}"
+# tmux draws its OWN [copy_position/copy_position_limit] (N results) box in
+# the pane's top-right corner; status.conf empties copy-mode-position-format
+# because it is unthemed chrome we do not own, and because those two numbers
+# read as a match counter while actually being scroll depth. The fact worth
+# keeping — how many matches the term has — rides in here instead. A search
+# that matches nothing leaves tmux's count EMPTY, and "0 matches" is exactly
+# the feedback that was missing when a case toggle silently emptied the pane.
+search_count="${12:-}"
+search_partial="${13:-0}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
@@ -324,7 +333,12 @@ if [[ -n "$mode_body" && -n "$wk_key" ]] && (( wk_suppressed && ! dialog_up )); 
   bodies+=("@WKHINT@${wk_key}"); kinds+=(wkhint)
 fi
 if [[ "$hint_body" == search ]]; then
-  # zj-hud search_hint_segment: case/word/wrap, glyph bright when on.
+  # the count first, then zj-hud's search_hint_segment: case/word/wrap with
+  # the glyph bright when on
+  [[ "$search_count" == <-> ]] || search_count=0
+  n_word=matches; [[ "$search_count" == 1 ]] && n_word=match
+  [[ "$search_partial" == 1 ]] && search_count="${search_count}+"
+  bodies+=("${search_count} ${n_word}"); kinds+=(count)
   bodies+=("$I_TCASE case  $I_TWORD word  $I_TWRAP wrap"); kinds+=(shint)
 elif [[ -n "$hint_body" ]]; then
   bodies+=("$I_ALT $I_ESC  exit"); kinds+=(hint)
@@ -388,6 +402,8 @@ for (( i = 1; i <= n; i++ )); do
     # glyphs like the panel's: M-. → 󰘵 .
     wkk="${wkk/M-/${I_ALT} }"
     out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${c_white}] ${wkk}#[fg=${fg}] keys "
+  elif [[ "${kinds[i]}" == count ]]; then
+    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${fg}] ${bodies[i]} "
   elif [[ "${kinds[i]}" == shint ]]; then
     sc="${search_toggles[1]:-0}" sw="${search_toggles[2]:-0}" sp="${search_toggles[3]:-1}"
     [[ "$sc" == 1 ]] && cg="$c_white" || cg="$fg"
