@@ -396,7 +396,7 @@ func (g *grid) dispatchCSI(final byte) {
 			}
 			g.lastGraphic = r // put() keeps it, but be explicit
 		}
-	case 'G': // CHA
+	case 'G', '`': // CHA / HPA — the same op, two spellings; diffnav uses both
 		g.curX = clamp(arg(0, 1)-1, 0, g.w-1)
 	case 'd': // VPA
 		g.curY = clamp(arg(0, 1)-1, 0, g.h-1)
