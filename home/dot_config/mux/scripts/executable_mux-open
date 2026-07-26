@@ -36,7 +36,14 @@ case "$uri" in file://*) ;; *) exit 0 ;; esac
 # file://[localhost]/path -> /path, then percent-decode (+ is a space in URLs).
 urldecode() {
   local s="${1//+/ }"
-  printf '%b' "${s//%/\\x}"
+  # `[%]`, NOT a bare `%`: as a substitution PATTERN a bare percent matches an
+  # empty position at the end of the string, so the replacement is appended —
+  # here that pinned a stray `\x` (an incomplete escape, i.e. a NUL byte) onto
+  # every decoded path. Harmless for the tab paths, which travel as argv, but
+  # the image popup travels as a tmux COMMAND STRING: tmux truncates it at the
+  # NUL, leaving an unterminated quote, and sh exits 2 ("returned 2", Mode B
+  # 2026-07-26). Reproduced in the system /bin/zsh too — not a build quirk.
+  printf '%b' "${s//[%]/\\x}"
 }
 # NB: the variable is `target`, NOT `path`. Under zsh `path` is the array tied
 # to `$PATH`, so `path=…` would clobber the PATH exported above and break the
