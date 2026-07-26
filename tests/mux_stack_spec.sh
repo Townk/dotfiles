@@ -12,8 +12,12 @@ Describe 'mux mode stack'
   setup_all() {
     MS_TMP=$(mktemp -d)
     chezmoi execute-template <home/dot_config/mux/whichkey.data.tmpl >"$MS_TMP/wk.data" 2>/dev/null
-    # MUX_TMUX_BIN is ONE word — the scratch socket rides in a wrapper.
-    printf '#!/bin/sh\nexec tmux -L mstack "$@"\n' >"$MS_TMP/tmux"
+    # Isolation by TMUX_TMPDIR, not by `-L`: MUX_TMUX_BIN is ONE word, so a
+    # scratch socket used to ride in a wrapper script — and every one of the
+    # ~20 tmux calls a stack operation makes then cost TWO processes (sh +
+    # tmux). Pointing TMUX_TMPDIR at the scratch dir lets plain `tmux` be the
+    # binary and still reach only this server.
+    export TMUX_TMPDIR="$MS_TMP"
     # Stand-in for mux-whichkey's panel driver: records that sync asked for a
     # panel, claims the driver flag for as long as `wksleep` says, and holds
     # its stdio open the whole time — a launch that is not fully detached
@@ -21,27 +25,38 @@ Describe 'mux mode stack'
     cat >"$MS_TMP/wk" <<EOS
 #!/bin/sh
 printf '%s\n' "\$*" >>"$MS_TMP/opened"
-tmux -L mstack set -g @mux_wk_driver \$\$
+tmux set -g @mux_wk_driver \$\$
 s=\$(cat "$MS_TMP/wksleep" 2>/dev/null) || s=0
 [ -n "\$s" ] || s=0
 sleep "\$s"
-tmux -L mstack set -g @mux_wk_driver 0
+tmux set -g @mux_wk_driver 0
 EOS
-    chmod +x "$MS_TMP/tmux" "$MS_TMP/wk"
-    tmux -L mstack -f /dev/null new-session -d -s s -x 80 -y 24
+    chmod +x "$MS_TMP/wk"
+    tmux -f /dev/null new-session -d -s s -x 80 -y 24
     # A real client: the outer server runs `attach` in a pane (the nested-tmux
     # technique from docs/mux-parity.md).
-    tmux -L mstack-outer -f /dev/null new-session -d -s o -x 100 -y 30 \
-      'tmux -L mstack attach -t s'
+    # `env -u TMUX`, and TMUX_TMPDIR spelled out: a pane inherits neither the
+    # scratch tmpdir nor an unset TMUX, so a bare `tmux attach` here looks in
+    # the real socket dir, finds no session, and dies without a word.
+    tmux -L outer -f /dev/null new-session -d -s o -x 100 -y 30 \
+      "env -u TMUX TMUX_TMPDIR=$MS_TMP tmux attach -t s"
+    # Wait for it, and SAY SO if it never arrives: without a client there is
+    # no client_key_table and no popup, and every example below would fail
+    # with an assertion message that hides the real cause. Ten seconds,
+    # because a loaded machine (the rest of the suite) can be slow to attach.
     i=0
-    while [ "$i" -lt 40 ] && [ -z "$(tmux -L mstack list-clients -F '#{client_tty}' 2>/dev/null)" ]; do
+    while [ "$i" -lt 200 ] && [ -z "$(tmux list-clients -F '#{client_tty}' 2>/dev/null)" ]; do
       sleep 0.05
       i=$((i + 1))
     done
+    if [ -z "$(tmux list-clients -F '#{client_tty}' 2>/dev/null)" ]; then
+      printf 'mux_stack_spec: no tmux client attached after 10s — cannot test\n' >&2
+      return 1
+    fi
   }
   cleanup_all() {
-    tmux -L mstack-outer kill-server 2>/dev/null
-    tmux -L mstack kill-server 2>/dev/null
+    tmux -L outer kill-server 2>/dev/null
+    tmux kill-server 2>/dev/null
     rm -rf "$MS_TMP"
   }
   BeforeAll 'setup_all'
@@ -51,37 +66,51 @@ EOS
     # let a stand-in panel from the previous example finish before its driver
     # flag is cleared under it
     i=0
-    while [ "$i" -lt 100 ] && [ "$(tmux -L mstack show -gv @mux_wk_driver 2>/dev/null)" -gt 0 ] 2>/dev/null; do
+    while [ "$i" -lt 100 ] && [ "$(tmux show -gv @mux_wk_driver 2>/dev/null)" -gt 0 ] 2>/dev/null; do
       sleep 0.05
       i=$((i + 1))
     done
-    tmux -L mstack set -gu @mux_stack 2>/dev/null
-    tmux -L mstack set -g @mux_wk_driver 0 2>/dev/null
-    tmux -L mstack set key-table root 2>/dev/null
-    tmux -L mstack send-keys -X cancel 2>/dev/null
-    tmux -L mstack set -pu @visual 2>/dev/null
+    tmux set -gu @mux_stack 2>/dev/null
+    tmux set -g @mux_wk_driver 0 2>/dev/null
+    tmux set key-table root 2>/dev/null
+    tmux send-keys -X cancel 2>/dev/null
+    tmux set -pu @visual 2>/dev/null
     rm -f "$MS_TMP/opened"
     printf '0' >"$MS_TMP/wksleep"
     true
   }
   BeforeEach 'reset_stack'
 
-  # the CLI under test, wired to the scratch server + the generated panel data
+  # The CLI, for the examples that are ABOUT the CLI (verb dispatch, and the
+  # run-shell integration). Everything else drives the library in-process.
   stack() {
-    MUX_TMUX_BIN="$MS_TMP/tmux" MUX_LIB_DIR="$PWD/home/dot_local/lib" \
+    MUX_TMUX_BIN=tmux MUX_LIB_DIR="$PWD/home/dot_local/lib" \
     WK_DATA="$MS_TMP/wk.data" MUX_WK="$MS_TMP/wk" \
       zsh "$PWD/home/dot_config/mux/scripts/executable_mux-stack" "$@"
   }
-  # a whole sequence, ending in `show` — the stack top as "state:visible"
+  # A whole sequence in ONE shell, ending in the stack top as "state:visible".
+  # Spawning the CLI per operation cost ~1.4s an example — nearly all of it
+  # process startup, since a single operation already makes ~20 tmux calls.
   seq() {
+    local op script="source $PWD/home/dot_local/lib/mux/stack.zsh"$'\n'
     for op in "$@"; do
-      stack ${=op} >/dev/null      # zsh does not word-split unquoted: ${=…}
+      case "${op%% *}" in
+        push)      script+="mux_stack::push ${op#* }"$'\n' ;;
+        vis)       script+="mux_stack::set_visible ${op#* }"$'\n' ;;
+        pop)       script+="mux_stack::pop"$'\n' ;;
+        clear)     script+="mux_stack::clear"$'\n' ;;
+        sync)      script+="mux_stack::sync"$'\n' ;;
+        reconcile) script+="mux_stack::reconcile"$'\n' ;;
+      esac
     done
-    stack show
+    script+='mux_stack::top && print -r -- "$MS_STATE:$MS_VIS" || print -r -- "(empty)"'
+    MUX_TMUX_BIN=tmux MUX_LIB_DIR="$PWD/home/dot_local/lib" \
+    WK_DATA="$MS_TMP/wk.data" MUX_WK="$MS_TMP/wk" \
+      zsh -c "$script"
   }
-  kt() { tmux -L mstack display -p '#{client_key_table}'; }
-  in_copy() { tmux -L mstack display -p '#{?pane_in_mode,1,0}'; }
-  visual() { tmux -L mstack display -p '#{?#{@visual},1,0}'; }
+  kt() { tmux display -p '#{client_key_table}'; }
+  in_copy() { tmux display -p '#{?pane_in_mode,1,0}'; }
+  visual() { tmux display -p '#{?#{@visual},1,0}'; }
 
   Describe 'push'
     It 'starts the stack shown'
@@ -109,7 +138,7 @@ EOS
       # editing a live search reopens the dialog on the SAME Search entry, and
       # M-w in Command re-arms the leader — a second entry would make
       # Backspace need two presses
-      depth() { tmux -L mstack show -gv @mux_stack; }
+      depth() { tmux show -gv @mux_stack; }
       When call seq 'push command' 'push search' 'push search'
       The output should equal 'search:0'
       The result of 'depth()' should equal 'command:1 search:0'
@@ -189,7 +218,7 @@ EOS
       # a hook, or the app itself, can put the pane in copy-mode without ever
       # touching the stack — Backspace must not strand the user there
       stray_copy() {
-        tmux -L mstack copy-mode
+        tmux copy-mode
         stack pop >/dev/null
         stack show
       }
@@ -209,7 +238,7 @@ EOS
     It 'still leaves a copy-mode entered from outside the stack'
       # Escape must end copy-mode even when nothing pushed it
       stray_clear() {
-        tmux -L mstack copy-mode
+        tmux copy-mode
         stack clear >/dev/null
         stack show
       }
@@ -261,7 +290,7 @@ EOS
       escaped_copy() {
         stack push command >/dev/null
         stack push copy >/dev/null              # @visual 1
-        tmux -L mstack send-keys -X cancel      # as `y` or `q` would
+        tmux send-keys -X cancel      # as `y` or `q` would
         stack reconcile >/dev/null
         stack show
       }
@@ -299,9 +328,9 @@ EOS
     # is never tied to the panel's lifetime.
     It 'does not wait for the panel it asks for'
       timed_push() {
-        printf '3' >"$MS_TMP/wksleep"     # a panel that stays up for 3s
+        printf '1.5' >"$MS_TMP/wksleep"   # a panel that stays up for 1.5s
         local t0=$SECONDS i=0
-        env timeout 8 tmux -L mstack run-shell "MUX_TMUX_BIN=$MS_TMP/tmux MUX_LIB_DIR=$PWD/home/dot_local/lib WK_DATA=$MS_TMP/wk.data MUX_WK=$MS_TMP/wk zsh $PWD/home/dot_config/mux/scripts/executable_mux-stack push command" >/dev/null
+        env timeout 8 tmux run-shell "TMUX_TMPDIR=$MS_TMP MUX_TMUX_BIN=tmux MUX_LIB_DIR=$PWD/home/dot_local/lib WK_DATA=$MS_TMP/wk.data MUX_WK=$MS_TMP/wk zsh $PWD/home/dot_config/mux/scripts/executable_mux-stack push command" >/dev/null
         local elapsed=$(( SECONDS - t0 ))
         while (( i < 60 )) && [[ ! -e "$MS_TMP/opened" ]]; do sleep 0.05; (( i++ )); done
         if (( elapsed < 2 )) && [[ -e "$MS_TMP/opened" ]]; then
@@ -333,10 +362,10 @@ EOS
       # the driver owns the popup for its whole loop; a second one would open
       # a popup over it and silently mutate the outer one
       second_push() {
-        printf '2' >"$MS_TMP/wksleep"
+        printf '1' >"$MS_TMP/wksleep"
         stack push command >/dev/null
         local i=0
-        while (( i < 40 )) && [[ "$(tmux -L mstack show -gv @mux_wk_driver 2>/dev/null)" == 0 ]]; do
+        while (( i < 40 )) && [[ "$(tmux show -gv @mux_wk_driver 2>/dev/null)" == 0 ]]; do
           sleep 0.05; (( i++ ))
         done
         stack push pane >/dev/null
