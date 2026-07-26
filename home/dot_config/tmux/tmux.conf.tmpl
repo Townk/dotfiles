@@ -75,8 +75,22 @@ set -g renumber-windows on         # closing a window renumbers the rest, like z
 # read it via `tmux show-environment`. NB: update-environment is an ARRAY
 # option — one variable per -ga append; a quoted "TERM TERM_PROGRAM" would
 # create a single bogus entry matching nothing.
+#
+# `set -gu` FIRST, because -ga appends on every source-file: after a day of
+# config reloads the array held 53 copies of TERM and TERM_PROGRAM. Unsetting
+# the whole option (not an index) restores tmux's built-in list, so the
+# appends below land exactly once however often this file is sourced.
+set -gu update-environment
 set -ga update-environment TERM
 set -ga update-environment TERM_PROGRAM
+# SSH_CLIENT and SSH_TTY join SSH_CONNECTION (already in tmux's default list)
+# so that ALL THREE follow the current attach. They are the vars powerlevel10k
+# reads to decide "this shell is remote", and it takes any one of them: with
+# only SSH_CONNECTION refreshed, a server that was ever attached over ssh kept
+# handing stale SSH_CLIENT/SSH_TTY to every new pane, so the prompt showed
+# `@user` forever — including on a local or VNC attach, which are not remote.
+set -ga update-environment SSH_CLIENT
+set -ga update-environment SSH_TTY
 
 # Cross-mux hygiene: if this server was started from a shell that descends
 # from a Zellij session (e.g. after a manual ZELLIJ=… autostart bypass), the

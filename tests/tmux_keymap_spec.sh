@@ -180,3 +180,48 @@ Describe 'prompt-marks.sh (OSC 133 emitter)'
     The output should include "hooked"
   End
 End
+
+# The session environment is the truthful record of the OUTER terminal and of
+# whether this attach is remote. update-environment is what refreshes it from
+# each attaching client — so what is in that array decides whether a shell
+# spawned later believes it is on SSH.
+Describe 'tmux update-environment'
+  setup_all() {
+    UE_TMP=$(mktemp -d)
+    chezmoi execute-template <home/dot_config/tmux/tmux.conf.tmpl 2>/dev/null \
+      | grep -E '^set -g[ua] update-environment' >"$UE_TMP/ue.conf"
+    tmux -L uespec -f /dev/null new-session -d -s ue -x 80 -y 24
+    tmux -L uespec source-file "$UE_TMP/ue.conf"
+  }
+  cleanup_all() { tmux -L uespec kill-server 2>/dev/null; rm -rf "$UE_TMP"; }
+  BeforeAll 'setup_all'
+  AfterAll 'cleanup_all'
+
+  ue() { tmux -L uespec show -gv update-environment; }
+  count_of() { tmux -L uespec show -gv update-environment | tr ' ' '\n' | grep -c "^$1\$"; }
+
+  It 'carries the outer terminal identity'
+    When call ue
+    The output should include "TERM_PROGRAM"
+  End
+
+  It 'refreshes every SSH variable the prompt reads, not just one'
+    # powerlevel10k calls a shell remote on ANY of these three. With only
+    # SSH_CONNECTION refreshed, a server once attached over ssh handed stale
+    # SSH_CLIENT/SSH_TTY to every new pane and the prompt showed `@user`
+    # forever — on local and VNC attaches too (Mode B).
+    When call ue
+    The output should include "SSH_CONNECTION"
+    The output should include "SSH_CLIENT"
+    The output should include "SSH_TTY"
+  End
+
+  It 'appends exactly once however often the config is sourced'
+    # `set -ga` on an ARRAY option appends every time: after a day of reloads
+    # the array held 53 copies of TERM. The `set -gu` reset makes it stable.
+    tmux -L uespec source-file "$UE_TMP/ue.conf"
+    tmux -L uespec source-file "$UE_TMP/ue.conf"
+    When call count_of TERM
+    The output should equal 1
+  End
+End
