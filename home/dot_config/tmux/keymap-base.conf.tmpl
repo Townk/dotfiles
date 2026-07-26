@@ -164,16 +164,16 @@ bind -n M-Enter if "$is_fzf" 'send-keys M-Enter' 'run-shell -b "{{ .chezmoi.home
 # lens.pid/timeline.pid, so a pid-matched route would silently never fire.
 # `#{m:tm*,#{@ctx}}` catches both routing classes in one format match.
 {{- $tm := printf "%s/.local/libexec/system-backup-tm" .chezmoi.homeDir }}
-{{- $route := printf "run-shell -b \"%s route --session '#{@tm_session}'" $tm }}
+{{- $route := printf "run-shell -b \"%s route --session '#{@tm_session}' --pane '#{pane_id}'" $tm }}
 %hidden in_tm="#{&&:#{m:tm*,#{@ctx}},#{!=:#{@ctx},tm-explore}}"
 # NB: `{ }` command blocks, not quoted strings — the command carries a
 # single-quoted '#{@tm_session}', which would end an outer single quote (a
 # tmux parse error that silently aborts the rest of the file).
-bind -n J      if -F "$in_tm" { {{ $route }} shift+down" } { send-keys J }
-bind -n K      if -F "$in_tm" { {{ $route }} shift+up" } { send-keys K }
-bind -n S-Down if -F "$in_tm" { {{ $route }} shift+down" } { send-keys S-Down }
-bind -n S-Up   if -F "$in_tm" { {{ $route }} shift+up" } { send-keys S-Up }
-bind -n A      if -F "$in_tm" { {{ $route }} apply" } { send-keys A }
+bind -n J      if -F "$in_tm" { {{ $route }} --send J shift+down" } { send-keys J }
+bind -n K      if -F "$in_tm" { {{ $route }} --send K shift+up" } { send-keys K }
+bind -n S-Down if -F "$in_tm" { {{ $route }} --send S-Down shift+down" } { send-keys S-Down }
+bind -n S-Up   if -F "$in_tm" { {{ $route }} --send S-Up shift+up" } { send-keys S-Up }
+bind -n A      if -F "$in_tm" { {{ $route }} --send A apply" } { send-keys A }
 # H/L move focus between the lens and the timeline (zellij: `do move_focus`).
 bind -n H if -F "$in_tm" 'select-pane -L' 'send-keys H'
 bind -n L if -F "$in_tm" 'select-pane -R' 'send-keys L'

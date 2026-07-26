@@ -773,12 +773,27 @@ EOF
       The contents of file "$FIX/sessions/s.test/rung" should equal 2
     End
 
-    It 'ignores --session pointing at no live session, without writing back'
-      route_dead() { TMUX=/tmp/sock,1,0 zsh "$BIN" route --session "$FIX/sessions/s.gone" shift+down; }
+    # A stamp can outlive its session (worker crash, pane reused after
+    # teardown). The route must then UNSTAMP the pane and deliver the key —
+    # silently returning left J/K/A dead in a plain shell (Mode B, 07-26).
+    It 'self-heals a stale stamp: unstamps the pane and sends the key on'
+      route_dead() {
+        TMUX=/tmp/sock,1,0 zsh "$BIN" route \
+          --session "$FIX/sessions/s.gone" --pane %7 --send J shift+down
+      }
       When run route_dead
       The status should be success
       The contents of file "$FIX/sessions/s.test/rung" should equal 1
-      The path "$FIX/tx.calls" should not be exist
+      The contents of file "$FIX/tx.calls" should include "set -p -t %7 @ctx"
+      # the LITERAL key, not the semantic one: J is a plain J in a shell
+      The contents of file "$FIX/tx.calls" should include "send-keys -t %7 J"
+    End
+
+    It 'drops a stale-stamp key only when it has no pane to send it to'
+      route_dead_nopane() { TMUX=/tmp/sock,1,0 zsh "$BIN" route --session "$FIX/sessions/s.gone" shift+down; }
+      When run route_dead_nopane
+      The status should be success
+      The contents of file "$FIX/sessions/s.test/rung" should equal 1
     End
   End
 

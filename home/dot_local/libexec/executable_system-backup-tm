@@ -173,6 +173,9 @@ tm_timeline() {
   } always {
     printf '\e[?25h\e[?1049l'
     [[ -n "$_stty" ]] && stty "$_stty" 2>/dev/null
+    # The pane goes back to being a plain shell pane — drop the context
+    # stamp, or the tm key routes keep claiming J/K/H/L/A in it forever.
+    tm_stamp "" ""
     bkp::tm::end "$s"
     bkp::tm::kill_lens "$s"
     tm_kill_refresh "$s"
@@ -305,10 +308,36 @@ tm_ctl() {
 # unknown session is a no-op — a stale stamp must not write the key back
 # into a pane that is no longer a lens.
 tm_route() {
-  local key pid="" sess=""
+  local key pid="" sess="" pane="" send=""
   if [[ "${1:-}" == --session ]]; then
-    sess="${2:-}"; key="${3:-}"
-    [[ -d "$sess" ]] || return 0
+    sess="${2:-}"; shift 2
+    while [[ "${1:-}" == --* ]]; do
+      case "$1" in
+        --pane) pane="${2:-}"; shift 2 ;;
+        # The LITERAL keystroke, so a self-heal replays what the user
+        # actually pressed: J is "scrub older" here but a plain J in a
+        # shell, and the route only ever sees the semantic name.
+        --send) send="${2:-}"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    key="${1:-}"
+    # A stamp that outlives its session (a crashed worker, a pane reused
+    # after teardown) must NEVER swallow the key: unstamp the pane so the
+    # binds stop matching, and deliver the keystroke the user actually
+    # pressed. Silence here meant dead J/K/A in a plain shell.
+    if [[ ! -d "$sess" ]]; then
+      [[ -n "$pane" ]] && {
+        tmux set -p -t "$pane" @ctx "" 2>/dev/null || :
+        tmux set -p -t "$pane" @tm_session "" 2>/dev/null || :
+        local _k="$send"
+        [[ -n "$_k" ]] || case "$key" in
+          shift+up) _k=S-Up ;; shift+down) _k=S-Down ;; apply) _k=A ;;
+        esac
+        [[ -n "$_k" ]] && tmux send-keys -t "$pane" "$_k" 2>/dev/null || :
+      }
+      return 0
+    fi
     _tm_route_session() {
       case "$key" in
         shift+up)   bkp::tm::step "$sess" newer ;;
