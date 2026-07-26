@@ -61,6 +61,19 @@ Describe 'mux-whichkey panel'
     The output should include $'\e[38;2;137;180;250mCopy mode'
   End
 
+  # _paint answers in REPLY and leaves PAGE/PAGES for its CALLER. It used to
+  # be called as `$(_paint …)`, and the subshell swallowed both — the panel
+  # loop read an unset PAGES, so C-d/C-u could never turn a page.
+  It 'leaves the page count visible to the caller'
+    When call zsh "$W" pages prefix 6
+    The output should equal "0/4"
+  End
+
+  It 'reports a single page when the table fits'
+    When call zsh "$W" pages scroll 25
+    The output should equal "0/1"
+  End
+
   It 'closes with the heavy rule and the footer hints'
     When call plain pane
     The output should include "━━━"

@@ -68,13 +68,23 @@ MARGIN=(${(s:,:)CFG[margin]})      # top right bottom left
 PADDING=(${(s:,:)CFG[padding]})
 SEP="${CFG[sep]}"
 RESET=$'\e[0m'
-_fg() { print -rn -- $'\e[38;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
-_bg() { print -rn -- $'\e[48;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
-BG="$(_bg ${CFG[bg]})"
-C_BORDER="$(_fg ${CFG[border]})" C_KEY="$(_fg ${CFG[key]})"
-C_LABEL="$(_fg ${CFG[label]})" C_SWITCH="$(_fg ${CFG[switch]})"
-C_STICKY="$(_fg ${CFG[sticky]})"
-C_FOOTER="$(_fg ${CFG[footer]})" C_DIM="$(_fg ${CFG[dim]})"
+# -> REPLY, memoised: a frame paints ~20 rows and the icon colours repeat.
+typeset -A FG_MEMO
+_fg() {
+  REPLY="${FG_MEMO[$1]:-}"
+  [[ -n "$REPLY" ]] && return 0
+  REPLY=$'\e[38;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m"
+  FG_MEMO[$1]="$REPLY"
+}
+_bg() { REPLY=$'\e[48;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
+_bg ${CFG[bg]};      BG="$REPLY"
+_fg ${CFG[border]};  C_BORDER="$REPLY"
+_fg ${CFG[key]};     C_KEY="$REPLY"
+_fg ${CFG[label]};   C_LABEL="$REPLY"
+_fg ${CFG[switch]};  C_SWITCH="$REPLY"
+_fg ${CFG[sticky]};  C_STICKY="$REPLY"
+_fg ${CFG[footer]};  C_FOOTER="$REPLY"
+_fg ${CFG[dim]};     C_DIM="$REPLY"
 SOFT="${RESET}${BG}"
 
 # Visibility is NOT kept here: it is a field of the stack entry (see
@@ -89,7 +99,10 @@ G_SHIFT=$'\U000F0636' G_ALT=$'\U000F0635' G_CTRL=$'\U000F0634' G_SUPER=$'\U000F0
 G_ENTER=$'\U000F0311' G_ESC=$'\U000F12B7' G_TAB=$'\U000F0312'
 G_BTAB=$'\U000F0325'  G_BS=$'\U000F006E'  G_DEL=$'\U000F0E7E'
 G_SPACE=$'\U000F1050'
-_keyglyph() {          # tmux key name -> display glyphs
+# NB: the hot helpers below answer in REPLY instead of printing. A `$(…)`
+# command substitution FORKS, and these run per key, per entry and per row —
+# ~150 forks for one frame, which was the panel's whole latency budget.
+_keyglyph() {          # tmux key name -> REPLY (display glyphs)
   local k="$1" mods="" base
   while true; do
     case "$k" in
@@ -118,15 +131,15 @@ _keyglyph() {          # tmux key name -> display glyphs
     [A-Z]) base="$G_SHIFT ${k}" ;;      # an uppercase bind IS shift
     *) base="$k" ;;
   esac
-  print -rn -- "${mods}${base}"
+  REPLY="${mods}${base}"
 }
-_keysdisplay() {       # pipe-separated tmux keys -> "↑,K" (comma is a KEY)
+_keysdisplay() {       # pipe-separated tmux keys -> REPLY ("↑,K": comma is a KEY)
   local out="" k
   for k in ${(s:|:)1}; do
     [[ -n "$out" ]] && out+=","
-    out+="$(_keyglyph "$k")"
+    _keyglyph "$k"; out+="$REPLY"
   done
-  print -rn -- "$out"
+  REPLY="$out"
 }
 
 # ---- data -----------------------------------------------------------------
@@ -157,7 +170,7 @@ _load() {
     [[ "$line" == E$'\t'* ]] || continue
     F=("${(@ps:\t:)line}")
     [[ "${F[2]}" == "$mode" ]] || continue
-    E_KEYS+=("${F[3]}"); E_DISP+=("$(_keysdisplay "${F[3]}")")
+    E_KEYS+=("${F[3]}"); _keysdisplay "${F[3]}"; E_DISP+=("$REPLY")
     E_ICON+=("${F[4]}"); E_ICOL+=("${F[5]}"); E_DESC+=("${F[6]}")
     E_FLAGS+=(",${F[7]}"); E_CMD+=("${F[8]}"); E_TO+=("${F[9]:-}")
   done < "$DATA"
@@ -202,7 +215,7 @@ _order() {
     done
     (( placed )) || { unit_of[$i]="e$i"; unit_pos[$i]=0 }
     u="${unit_of[$i]}"
-    sk="$(_entry_sortkey "$ekeys" "${E_FLAGS[i]}")"
+    _entry_sortkey "$ekeys" "${E_FLAGS[i]}"; sk="$REPLY"
     if [[ -z "${unit_anchor[$u]:-}" ]]; then
       unit_anchor[$u]="$sk"; ordered_units+=("$u")
     elif (( unit_pos[$i] == 1 )); then
@@ -241,7 +254,7 @@ _order() {
 # before character keys, in that curated reading order.
 typeset -a CURATED
 CURATED=(up down left right home end pageup pagedown tab space enter backspace delete esc)
-_sortkey() {           # tmux key name -> a sortable string
+_sortkey() {           # tmux key name -> REPLY (a sortable string)
   local k="$1" mods="" rank bare cls kr
   local -a mr
   while true; do
@@ -270,17 +283,19 @@ _sortkey() {           # tmux key name -> a sortable string
     cls=0; kr=500
   fi
   mr=(${(on)mr})
-  printf '%d:%02d:%s:%d:%03d:%s' $(( ${#mr} > 0 )) ${#mr} "${(j::)mr}" $cls $kr "$bare"
+  # printf -v, not $(printf …): the substitution would fork per key
+  printf -v REPLY '%d:%02d:%s:%d:%03d:%s' \
+    $(( ${#mr} > 0 )) ${#mr} "${(j::)mr}" $cls $kr "$bare"
 }
-_entry_sortkey() {     # smallest key of a (possibly merged) entry, + mode bias
-  local keys="$1" flags="$2" best="" k sk
+_entry_sortkey() {     # -> REPLY: smallest key of a (possibly merged) entry,
+  local keys="$1" flags="$2" best="" k sk   # plus the mode-switch bias
   for k in ${(s:|:)keys}; do
-    sk="$(_sortkey "$k")"
+    _sortkey "$k"; sk="$REPLY"
     [[ -z "$best" || "$sk" < "$best" ]] && best="$sk"
   done
   local bias=1
   _has "$flags" switch && bias=0
-  print -rn -- "${bias}|${best}"
+  REPLY="${bias}|${best}"
 }
 
 # ---- geometry -------------------------------------------------------------
@@ -303,10 +318,12 @@ _footer_text() {       # -> FOOT FOOT_W (colored) for page/pages
   if (( back )); then
     segs+=("${C_KEY}${G_BS}${SOFT}${C_FOOTER} back${SOFT}"); (( w += ${#G_BS} + 5 + 2 ))
   fi
-  local tg; tg="$(_keyglyph "${CFG[toggle]}")"
+  local tg; _keyglyph "${CFG[toggle]}"; tg="$REPLY"
   segs+=("${C_KEY}${tg}${SOFT}${C_FOOTER} hide${SOFT}"); (( w += ${#tg} + 5 + 2 ))
   if (( pages > 1 )); then
-    local pg="$(_keyglyph "${CFG[prev]}")/$(_keyglyph "${CFG[next]}")"
+    local pg pgp
+    _keyglyph "${CFG[prev]}"; pgp="$REPLY"
+    _keyglyph "${CFG[next]}"; pg="${pgp}/${REPLY}"
     segs+=("${C_KEY}${pg}${SOFT}${C_FOOTER} scroll${SOFT}"); (( w += ${#pg} + 7 + 2 ))
   fi
   FOOT="${(pj:  :)segs}"; FOOT_W=$w
@@ -329,7 +346,8 @@ _paint() {
   local -a chain; chain=()
   while [[ -n "$m" ]]; do
     _mode_meta "$m"
-    chain=("$(_fg $M_COLOR)${M_ICON}" "$chain[@]")
+    _fg $M_COLOR
+    chain=("${REPLY}${M_ICON}" "$chain[@]")
     (( bw += ${#M_ICON} ))
     m="$M_PARENT"
   done
@@ -377,7 +395,8 @@ _paint() {
     local cell="${(l:$kp:: :)PAD}${C_KEY}${disp}${SOFT}${C_DIM} ${SEP} ${SOFT}"
     if (( W_ICON > 0 )); then
       if [[ -n "$icon" ]]; then
-        cell+="$(_fg ${E_ICOL[i]})${icon}${SOFT}${(l:$(( W_ICON - ${#icon} )):: :)PAD} "
+        _fg ${E_ICOL[i]}
+        cell+="${REPLY}${icon}${SOFT}${(l:$(( W_ICON - ${#icon} )):: :)PAD} "
       else
         cell+="${(l:$(( W_ICON + 1 )):: :)PAD}"
       fi
@@ -401,7 +420,10 @@ _paint() {
   (( r++ ))
   out+=$'\e['"${r};1H${BG}${C_BORDER}╰${(l:$(( box_w - 2 ))::─:)PAD}╯${RESET}"
   BOX_W=$box_w BOX_H=$box_h
-  print -rn -- "$out"
+  # REPLY, not stdout: `$(_paint …)` forked a whole frame AND lost PAGE /
+  # PAGES / BOX_* with the subshell — the panel's paging branch was reading
+  # an unset PAGES and could never fire.
+  REPLY="$out"
 }
 
 # ---- command execution ----------------------------------------------------
@@ -544,7 +566,8 @@ _panel() {
   print -rn -- $'\e[?25l'
   while true; do
     _load "$mode" || return 0
-    print -rn -- "$(_paint "$mode" $page)"
+    _paint "$mode" $page
+    print -rn -- "$REPLY"
     if ! _readkey; then
       [[ -n "${WK_TRACE:-}" ]] && print -r -- "panel: readkey FAILED" >> /tmp/wktrace.log
       return 0
@@ -606,7 +629,16 @@ case "${1:-}" in
     _load "${2:-prefix}" || exit 0
     ROWS_MAX="${4:-${CFG[max_rows]}}"
     _paint "${2:-prefix}" "${3:-0}"
+    print -rn -- "$REPLY"
     print
+    ;;
+  pages)    # PAGE/PAGES as the CALLER sees them after a paint (tests): the
+            # panel's C-d/C-u read exactly these, and a `$(_paint …)` fork
+            # would hide them again
+    _load "${2:-prefix}" || exit 0
+    ROWS_MAX="${3:-${CFG[max_rows]}}"
+    _paint "${2:-prefix}" 0 >/dev/null
+    print -r -- "$PAGE/$PAGES"
     ;;
   dispatch) # what the panel WOULD do with this key, without a tty (tests)
     _load "${2:-prefix}" || exit 0

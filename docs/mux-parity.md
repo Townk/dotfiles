@@ -170,6 +170,8 @@ Answered together in `_decide` (and printable without a tty via
 | an entry that neither switches nor sticks ENDS the mode — the panel's default | the copy tables were 42 entries with no cmd and no disposition: pressing `j` in the Scroll panel ran nothing AND ended Scroll, while the same key worked with the panel hidden |
 | `C-u`/`C-d` are both the panel's paging keys and the copy tables' half-page scroll | paging only claims them when there is more than one page (the same condition that shows the paging hint); otherwise they fall through to the binding |
 | the label colour IS the disposition | pink ends the mode, blue enters another, green stays in this one |
+| a `$(…)` command substitution FORKS, and the panel's helpers ran per key, per entry and per row — ~150 forks a frame | the hot helpers answer in `REPLY`; a frame went 70ms → 30ms and the panel 250ms → 130ms end to end |
+| `$(_paint …)` also swallowed the globals `_paint` sets — a subshell's assignments die with it | `PAGE`/`PAGES` never reached the panel loop, so C-d/C-u could never turn a page; `_paint` answers in `REPLY` and the caller reads them (`mux-whichkey pages` pins it) |
 
 ## The mode stack (Phase 5 refactor, 2026-07-25)
 
