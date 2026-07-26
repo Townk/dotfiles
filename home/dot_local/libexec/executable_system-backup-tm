@@ -8,25 +8,53 @@
 set -u -o pipefail
 source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
 
-# Both-mux context stamp (mux migration D4): Zellij context-keys matchers key
-# on this wrapper's comm in the process tree ("system-backup-tm"); the tmux
-# side has no process-tree matching, so future tmux context binds (Phase 6.4
-# routes) match the @ctx pane option instead. Stamp unconditionally-but-
-# guarded so one wrapper serves both muxes; a no-op outside tmux.
-[[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1 &&
-  tmux set -p @ctx tm 2>/dev/null || true
+# Both-mux context stamp (D4/D20). Zellij context-keys matchers key on this
+# wrapper's comm in the process tree ("system-backup-tm"); tmux has no
+# process-tree matching, so its context binds match the @ctx PANE OPTION
+# this stamps. The vocabulary is what makes zellij's per-app clauses
+# expressible on tmux:
+#
+#   tm          the timeline pane          → J/K, Shift+arrows, A route here
+#   tm-explore  the yazi lens              → keys pass THROUGH (yazi binds them)
+#   tm-diff     the hunk/diffnav lens      → routes, plus S → `e s` (diffnav)
+#
+# @tm_session carries the session directory: the binds address the session by
+# path, because #{pane_pid} is the pane's root shell, not the worker that
+# wrote lens.pid/timeline.pid.
+#
+# Stamped per VERB (never at load): `route` runs in a run-shell that owns no
+# pane of its own, where `set -p` would stamp whatever pane happens to be
+# active. $TMUX_PANE is the guard — it is set only in a real pane.
+tm_stamp() {  # tm_stamp <ctx> [session-dir]
+  [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || return 0
+  command -v tmux >/dev/null 2>&1 || return 0
+  tmux set -p -t "$TMUX_PANE" @ctx "$1" 2>/dev/null || :
+  tmux set -p -t "$TMUX_PANE" @tm_session "${2:-}" 2>/dev/null || :
+}
 
-# tl_focused — 1 when this pane is the zellij-focused pane, else 0.
-# (Outside zellij, always 1.) Cheap enough to poll once per loop tick.
+# tl_focused — 1 when this pane is the focused one, else 0. (Outside any
+# mux, always 1.) Cheap enough to poll once per loop tick: one query per
+# backend, no shim sourcing on this hot path.
 tl_focused() {
-  [[ -n "${ZELLIJ:-}" && -n "${ZELLIJ_PANE_ID:-}" ]] || { print 1; return }
-  local f
-  f=$(zellij action list-clients 2>/dev/null | awk 'NR == 2 { print $2; exit }')
-  if [[ "$f" == "terminal_${ZELLIJ_PANE_ID}" ]]; then print 1; else print 0; fi
+  if [[ -n "${ZELLIJ:-}" && -n "${ZELLIJ_PANE_ID:-}" ]]; then
+    local f
+    f=$(zellij action list-clients 2>/dev/null | awk 'NR == 2 { print $2; exit }')
+    if [[ "$f" == "terminal_${ZELLIJ_PANE_ID}" ]]; then print 1; else print 0; fi
+    return
+  fi
+  if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
+    # Both halves matter: a pane can be its window's active pane while the
+    # window itself is in the background.
+    tmux display -p -t "$TMUX_PANE" '#{&&:#{pane_active},#{window_active}}' \
+      2>/dev/null || print 1
+    return
+  fi
+  print 1
 }
 
 tm_timeline() {
   local s="$1" staging anchor
+  tm_stamp tm "$s"
   staging=$(bkp::config::staging_path) || exit 2
   anchor=$(<"$s/anchor")
   print -r -- $$ > "$s/timeline.pid"
@@ -186,6 +214,7 @@ tm_kill_refresh() {
 tm_lens() {
   local s="$1" i lens
   lens=$(<"$s/lens")
+  tm_stamp "tm-$lens" "$s"
   print -r -- $$ > "$s/lens.pid"
   print -r -- $$ > "$s/yazi.id"
   if [[ ! -e "$s/ready" ]]; then
@@ -230,6 +259,7 @@ tm_lens() {
       break
     done
   } always {
+    tm_stamp "" ""   # the pane is a plain pane again (empty, never `set -u`)
     bkp::tm::end "$s"
     if [[ "$lens" == explore ]]; then
       tm_kill_refresh "$s"
@@ -269,8 +299,25 @@ tm_ctl() {
 # zj-context-keys fires this for Shift+Up/Down/Enter over yazi/hunk panes.
 # If the pane belongs to a scrub session, drive it; otherwise write the
 # original key through so non-session panes lose nothing.
+# tm_route <key> <pane-pid> | tm_route --session <dir> <key>
+# Zellij passes the focused pane's root pid ({pid}); tmux passes the pane's
+# @tm_session, because its pane pid is the shell, not the worker (D20). An
+# unknown session is a no-op — a stale stamp must not write the key back
+# into a pane that is no longer a lens.
 tm_route() {
-  local key="$1" pid="$2" s lpid tpid
+  local key pid="" sess=""
+  if [[ "${1:-}" == --session ]]; then
+    sess="${2:-}"; key="${3:-}"
+    [[ -d "$sess" ]] || return 0
+    case "$key" in
+      shift+up)   bkp::tm::step "$sess" newer ;;
+      shift+down) bkp::tm::step "$sess" older ;;
+      apply)      tm_apply "$sess" ;;
+    esac
+    return 0
+  fi
+  key="$1"; pid="$2"
+  local s lpid tpid
   for s in "$BKP_TM_SESSIONS"/s.*(/N); do
     lpid="" tpid=""
     [[ -f "$s/lens.pid" ]] && lpid=$(<"$s/lens.pid")
@@ -290,15 +337,23 @@ tm_route() {
     shift+down) seq=$'\e[1;2B' ;;
     apply)      seq=$'\r' ;;
   esac
-  [[ -n "$seq" ]] && zellij action write-chars -- "$seq" 2>/dev/null
+  # Sourced HERE, not at the top: route runs once per keypress, and only
+  # this write-back branch (a pane that is not a session's) needs the shim.
+  [[ -n "$seq" ]] && {
+    source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+    mux::send_text "$seq" 2>/dev/null
+  }
   return 0
 }
 
 # tm_apply <session> [selected-path…]
 # Assemble the apply selection (spec §6) and open the confirm gate in a
-# floating pane (inline when not under Zellij).
+# floating pane/popup (inline when not under a mux).
 tm_apply() {
   setopt local_options pipe_fail
+  # The shim carries mux::popup/pick AND the input::* widgets the float
+  # sizing measures with (mux.zsh sources input-common).
+  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
   local s="$1"; shift 2>/dev/null || :
   local lens="" REPLY
   [[ -f "$s/lens" ]] && lens=$(<"$s/lens")
@@ -331,23 +386,21 @@ tm_apply() {
       # Apply fires from the timeline pane's ctl, whose stderr is
       # /dev/null — a bare warning here IS "nothing happens". Show a
       # transient notice float instead.
-      if [[ -n "${ZELLIJ:-}" ]]; then
-        zellij action new-pane --floating --close-on-exit --name "" \
-          --borderless true --pinned true --width 52 --height 3 -- \
+      if mux::available; then
+        mux::popup 52 3 --name "" -- \
           zsh -c 'print; print -r -- "  this snapshot shows no changes — nothing to apply"; sleep 2' \
           2>/dev/null || :
       fi
       log_warn "bkp: this rung shows no changes — nothing to apply"
       return 0
     fi
-    if [[ -n "${ZELLIJ:-}" ]]; then
+    if mux::available; then
       # Floating picker: apply fires from the timeline pane's ctl, which
       # has no tty of its own — an inline fzf would die silently there.
-      source "$HOME/.local/lib/zellij.zsh"
       # Explicit hints: the defaults prepend open/cancel/clear, which
       # blows past the pane width — the multi-select trio is the part
       # that matters here.
-      picked=("${(@f)$(print -rl -- "${cands[@]}" | PICK_NAME=tm-apply zj::pick \
+      picked=("${(@f)$(print -rl -- "${cands[@]}" | PICK_NAME=tm-apply mux::pick \
         --pane-width 75 --pane-height 16 --multi \
         --hints "$(pick::hints "󰘴 󱁐" select ⭾ select-and-next "󰘴 A" select-all)" \
         --header "Restore from snapshot")}") || return 0
@@ -362,16 +415,15 @@ tm_apply() {
   fi
   (( ${#live} )) || return 0
   print -rl -- "${live[@]}" > "$s/apply.list"
-  if [[ -n "${ZELLIJ:-}" ]]; then
-    # Size the float from the ACTUAL prompt (the _zj::float convention):
+  if mux::available; then
+    # Size the float from the ACTUAL prompt (the float convention):
     # the confirm box grows to its longest content line and does not
     # clamp to the pane, so hardcoded geometry clips top and right.
     # Width = longest prompt line + chrome; height = --measure at that
     # width. Borderless: the dialog draws its own chrome, a pane frame
     # double-borders and misaligns it. COLORTERM must be carried through
-    # explicitly: new-pane doesn't propagate it, and gum falls back to
-    # 256-color approximations.
-    source "$HOME/.local/lib/input-common.zsh"
+    # explicitly: the zellij pane doesn't propagate it, and gum falls back
+    # to 256-color approximations (mux::popup exports it on the tmux side).
     local prompt line pane_w=0 pane_h
     prompt=$(tm_apply_prompt "$s") || return 1
     for line in ${(f)prompt}; do
@@ -384,9 +436,7 @@ tm_apply() {
       --default no --affirmative "Restore" --negative "Cancel" \
       --measure --width "$pane_w" </dev/null 2>/dev/null)
     [[ "$pane_h" == <-> ]] || pane_h=18
-    zellij action new-pane --floating --close-on-exit \
-      --name "" --borderless true --pinned true \
-      --width "$pane_w" --height "$pane_h" \
+    mux::popup "$pane_w" "$pane_h" --name "" \
       -- env "COLORTERM=${COLORTERM:-truecolor}" \
       "$HOME/.local/libexec/system-backup-tm" confirm-apply "$s"
   else

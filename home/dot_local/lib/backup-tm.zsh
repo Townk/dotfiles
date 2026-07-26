@@ -1039,27 +1039,25 @@ bkp::tm::anchor_captured() {
 }
 
 # bkp::tm::launch <lens> <anchor>
-# Entry point (spec §5): under Zellij the session lives in the CURRENT
-# tab. Explore is ONE pane — yazi takes over the invoking pane and the
-# timeline renders inside its parent column (tm-gate). Diff splits the
+# Entry point (spec §5): inside a mux the session lives in the CURRENT
+# tab/window. Explore is ONE pane — yazi takes over the invoking pane and
+# the timeline renders inside its parent column (tm-gate). Diff splits the
 # hunk lens off to the right and the timeline pane takes the invoking
 # pane. Either way the shell prompt returns when the session ends, and
-# the tab keeps its zj-hud chrome — a fresh layout-string tab loses it.
-# Outside Zellij: the sequential fallback.
+# the tab keeps its chrome — a fresh layout-string tab loses it.
+# Outside any mux: the sequential fallback.
 bkp::tm::launch() {
   local lens="$1" anchor="${2:A}"
   log_info "bkp: preparing scrub session for ${anchor/#$HOME/~}…"
   local s
   s=$(bkp::tm::session_new "$lens" "$anchor") || return $?
-  if [[ -n "${ZELLIJ:-}" ]]; then
-    # Diff splits a lens pane AFTER the slow prep below, but zellij run
-    # is focus-relative — remember the tab we were invoked in so the
-    # split lands here even if the user wanders off during prep.
+  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+  if mux::available; then
+    # Diff splits a lens pane AFTER the slow prep below, and a split is
+    # focus-relative on both backends — remember the tab we were invoked
+    # in so the split lands here even if the user wanders off during prep.
     local _origin_tab=""
-    if [[ "$lens" == diff ]]; then
-      _origin_tab=$(zellij action list-tabs -s 2>/dev/null |
-        awk -F'  +' 'NR > 1 && $4 == "true" { print $2; exit }')
-    fi
+    [[ "$lens" == diff ]] && _origin_tab=$(mux::current_tab 2>/dev/null)
     # ALL slow prep happens here, before any layout change: spinner per
     # stage (gum), completion line after each, split only when ready.
     local _spin=0
@@ -1126,42 +1124,54 @@ bkp::tm::launch() {
       # then hand the view back to wherever they were. Same-tab case:
       # both positions match and no hop happens.
       local _now_tab=""
-      _now_tab=$(zellij action list-tabs -s 2>/dev/null |
-        awk -F'  +' 'NR > 1 && $4 == "true" { print $2; exit }')
+      _now_tab=$(mux::current_tab 2>/dev/null)
       local _hop=0
       if [[ -n "$_origin_tab" && -n "$_now_tab" && "$_now_tab" != "$_origin_tab" ]]; then
         _hop=1
-        zellij action go-to-tab $(( _origin_tab + 1 )) 2>/dev/null || :
+        mux::focus_tab "$_origin_tab" 2>/dev/null || :
       fi
-      zellij run --close-on-exit --direction right --name "tm lens" \
-        -- "$BKP_TM_BIN" lens "$s" >/dev/null || { rm -rf "$s"; return 1 }
-      # The new pane takes focus; grow it leftward until THIS pane (the
+      # tmux sizes a split at creation, so the lens is born correct and the
+      # convergence loop below never runs there. `stty size` reads THIS pane
+      # (the timeline-to-be); the lens gets everything except the 21-col
+      # design width and the divider column.
+      local -a _split=(right --name "tm lens" --close-on-exit)
+      if [[ "$(mux::backend)" == tmux && -t 0 ]]; then
+        local _here
+        _here=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
+        [[ -n "$_here" ]] && (( _here > 24 )) && _split+=(--size $(( _here - 22 )))
+      fi
+      mux::split "${_split[@]}" -- "$BKP_TM_BIN" lens "$s" >/dev/null ||
+        { rm -rf "$s"; return 1 }
+      # ZELLIJ ONLY: `zellij run` cannot size the pane it creates, so the
+      # new pane takes focus and is grown leftward until THIS pane (the
       # timeline-to-be) converges on its 21-col design width. Geometry
       # must settle HERE, while the origin tab is guaranteed active —
       # the timeline verb can't do it later, since resize acts on the
       # focused pane and the user may be on another tab by then. Focus
       # STAYS on the lens: scrubbing works from inside it, and a focused
       # timeline reads as two active panes with no visual tiebreaker.
-      zellij action resize increase left 2>/dev/null || :
-      if [[ -t 0 ]]; then   # /dev/tty redirection aborts headless runs
-        local i _cols
-        for i in {1..30}; do
-          _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
-          [[ -n "$_cols" ]] && (( _cols > 22 )) || break
-          zellij action resize increase left 2>/dev/null || break
-          sleep 0.05
-        done
-        # Overshoot correction: zellij's resize step is coarser than one
-        # column, so the last shrink can land below the 21-col floor —
-        # nudge the lens's left edge back until we're in the 21..22 band.
-        for i in 1 2 3 4; do
-          _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
-          [[ -n "$_cols" ]] && (( _cols < 21 )) || break
-          zellij action resize decrease left 2>/dev/null || break
-          sleep 0.05
-        done
+      if [[ "$(mux::backend)" == zellij ]]; then
+        zellij action resize increase left 2>/dev/null || :
+        if [[ -t 0 ]]; then   # /dev/tty redirection aborts headless runs
+          local i _cols
+          for i in {1..30}; do
+            _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
+            [[ -n "$_cols" ]] && (( _cols > 22 )) || break
+            zellij action resize increase left 2>/dev/null || break
+            sleep 0.05
+          done
+          # Overshoot correction: zellij's resize step is coarser than one
+          # column, so the last shrink can land below the 21-col floor —
+          # nudge the lens's left edge back until we're in the 21..22 band.
+          for i in 1 2 3 4; do
+            _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
+            [[ -n "$_cols" ]] && (( _cols < 21 )) || break
+            zellij action resize decrease left 2>/dev/null || break
+            sleep 0.05
+          done
+        fi
       fi
-      (( _hop )) && zellij action go-to-tab $(( _now_tab + 1 )) 2>/dev/null || :
+      (( _hop )) && mux::focus_tab "$_now_tab" 2>/dev/null || :
       "$BKP_TM_BIN" timeline "$s" || return $?
     fi
   else

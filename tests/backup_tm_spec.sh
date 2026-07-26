@@ -727,9 +727,18 @@ EOF
       STUB="$FIX/stub"; mkdir -p "$STUB"
       printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
       chmod +x "$STUB/zellij"
+      printf '#!/bin/sh\necho "tmux $*" >> "%s/tx.calls"\n' "$FIX" > "$STUB/tmux"
+      chmod +x "$STUB/tmux"
       PATH="$STUB:$PATH"
+      # The write-through path goes through the shim now (mux::send_text).
+      export MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+      export ZELLIJ_BIN="$STUB/zellij" MUX_TMUX_BIN="$STUB/tmux"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG BKP_MANIFEST; }
+    cleanup_fix() {
+      rm -rf "$FIX"
+      unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG BKP_MANIFEST MUX_LIB \
+            ZELLIJ_BIN MUX_TMUX_BIN ZELLIJ TMUX
+    }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -739,11 +748,37 @@ EOF
       The contents of file "$FIX/sessions/s.test/rung" should equal 2
     End
 
-    It 'writes the key through when no session owns the pid'
-      When run zsh "$BIN" route shift+down 9999
+    It 'writes the key through when no session owns the pid (zellij)'
+      route_through() { ZELLIJ=1 zsh "$BIN" route shift+down 9999; }
+      When run route_through
       The status should be success
       The contents of file "$FIX/zj.calls" should include "action write-chars"
       The contents of file "$FIX/sessions/s.test/rung" should equal 1
+    End
+
+    It 'writes the key through when no session owns the pid (tmux)'
+      route_through() { TMUX=/tmp/sock,1,0 zsh "$BIN" route shift+down 9999; }
+      When run route_through
+      The status should be success
+      The contents of file "$FIX/tx.calls" should include "send-keys -l"
+      The contents of file "$FIX/sessions/s.test/rung" should equal 1
+    End
+
+    # D20: on tmux the pane carries the SESSION (@tm_session), not a pid —
+    # #{pane_pid} is the pane's root shell, never the worker that wrote
+    # lens.pid, so a pid-matched route would silently never fire.
+    It 'steps the session named by --session'
+      When run zsh "$BIN" route --session "$FIX/sessions/s.test" shift+down
+      The status should be success
+      The contents of file "$FIX/sessions/s.test/rung" should equal 2
+    End
+
+    It 'ignores --session pointing at no live session, without writing back'
+      route_dead() { TMUX=/tmp/sock,1,0 zsh "$BIN" route --session "$FIX/sessions/s.gone" shift+down; }
+      When run route_dead
+      The status should be success
+      The contents of file "$FIX/sessions/s.test/rung" should equal 1
+      The path "$FIX/tx.calls" should not be exist
     End
   End
 
@@ -902,6 +937,37 @@ EOF
       The output should not include "new-tab"
       # focus deliberately STAYS on the lens pane — no move-focus back
       The output should not include "move-focus"
+    End
+
+    # tmux twin of the two launches above (mux migration Phase 6.2): the same
+    # session shapes, but the split is SIZED AT CREATION — tmux takes -l, so
+    # the zellij resize-convergence loop must not run at all.
+    It 'splits the diff window on tmux with the lens sized at split time'
+      run_it() {
+        unset ZELLIJ ZELLIJ_PANE_ID
+        export TMUX=/tmp/sock,1,0
+        export MUX_TMUX_BIN="$STUB/tmux"
+        cat > "$STUB/tmux" <<EOF
+#!/bin/sh
+echo "tmux \$*" >> "$FIX/tx.calls"
+case "\$1" in
+  split-window) echo "%9" ;;
+  display) echo "2" ;;
+esac
+EOF
+        chmod +x "$STUB/tmux"
+        source "$LIB/backup-tm.zsh"; stub_restic
+        bkp::mount() { mkdir -p "$2/snapshots"; REPLY=$$; }
+        bkp::tm::launch diff "$FIX/anchor"
+        cat "$FIX/tx.calls"
+        cat "$FIX/tm.calls"
+      }
+      When run run_it
+      The status should be success
+      The output should include "split-window -h"
+      The output should include "tm timeline"
+      The output should not include "resize increase left"
+      The output should not include "new-window"
     End
 
     It 'fallback survives a failing lens under set -e and still tears down'
@@ -1079,10 +1145,33 @@ EOF
       The output should include "browse $FIX"
     End
 
-    It 'degrades to an inline session outside zellij'
+    # tmux needs no layout at all: a window takes its command directly, so
+    # the chrome-preservation dance (a layout derived from default.kdl) is
+    # zellij-only.
+    It 'opens a plain tmux window with the command, no layout file'
+      run_it() {
+        cat > "$FIX/stub/tmux" <<EOF
+#!/bin/sh
+echo "tmux \$*" >> "$FIX/tmux.calls"
+EOF
+        chmod +x "$FIX/stub/tmux"
+        PATH="$FIX/stub:$PATH" TMUX=/tmp/sock,1,0 ZELLIJ= \
+          MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
+          MUX_TMUX_BIN="$FIX/stub/tmux" zsh "$BIN" "$FIX/some dir"
+        cat "$FIX/tmux.calls"
+        [[ -f "$FIX/layout.kdl" ]] && print layout-was-written || print no-layout
+      }
+      When run run_it
+      The status should be success
+      The output should include "new-window -n tm: some dir"
+      The output should include "system-backup"
+      The output should include "no-layout"
+    End
+
+    It 'degrades to an inline session outside any mux'
       run_it() {
         cd "$FIX"
-        PATH="$FIX/stub:$PATH" ZELLIJ= zsh "$BIN" --diff "$FIX"
+        PATH="$FIX/stub:$PATH" ZELLIJ= TMUX= zsh "$BIN" --diff "$FIX"
         cat "$FIX/sb.calls"
         [[ -f "$FIX/zellij.calls" ]] && print zellij-was-called || print no-zellij
       }

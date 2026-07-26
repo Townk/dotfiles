@@ -1,13 +1,17 @@
 #!/usr/bin/env zsh
-# tm-tab [tm-args…] — open a Terminal Time Machine session in a NEW zellij
-# tab (yazi's `g t` lands here; works from any shell inside zellij too).
+# tm-tab [tm-args…] — open a Terminal Time Machine session in a NEW tab
+# (yazi's `g t` lands here; works from any shell inside a mux too).
 # Args are tm's: a path (dir = explore, file = scoped diff), --diff, etc.
 #
-# The tab is spawned WITH the session command baked into a generated
+# ZELLIJ: the tab is spawned WITH the session command baked into a generated
 # layout — nothing is typed into panes (the old write-chars route raced
 # tab-construction focus, spraying keys into plugin panes or the origin
 # yazi). The layout derives from the deployed default.kdl, so the tab
 # keeps the full zj-hud chrome its default_tab_template provides.
+#
+# TMUX: none of that is needed — `new-window` takes the command directly and
+# the window inherits the session's chrome, so the whole layout dance is
+# skipped (migration Phase 6.6).
 emulate -L zsh
 set -u
 
@@ -24,8 +28,10 @@ fi
 # Empty positionals happen (yazi's "$0" in an empty directory) — drop them.
 set -- "${(@)@:#}"
 
-# Outside zellij there is no tab to make: degrade to an inline session.
-if [[ -z "${ZELLIJ:-}" ]]; then
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+
+# Outside any mux there is no tab to make: degrade to an inline session.
+if ! mux::available; then
   exec system-backup browse "${@:-$PWD}"
 fi
 
@@ -35,6 +41,13 @@ for a in "$@"; do
   [[ "$a" == --* ]] || anchor="$a"
 done
 local name="${${anchor:a}:t}"
+
+# tmux: a window takes the command directly — no layout, no escaping dance.
+if [[ "$(mux::backend)" == tmux ]]; then
+  mux::new_tab --name "tm: $name" \
+    -- "$HOME/.local/bin/system-backup" browse "${@:-$PWD}"
+  return $?
+fi
 
 # The pane runs zsh -c so the session sees the full user environment
 # (.zshenv always runs); (q) shell-quotes each arg into that command
