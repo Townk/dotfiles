@@ -18,6 +18,10 @@ EOS
 
     cat > "$TEST_TMP/tmux" <<'EOS'
 #!/usr/bin/env zsh
+if [[ "$1" == "show" && "$3" == "@mux_stack" ]]; then
+  print -r -- "${STUB_STACK:-}"
+  exit 0
+fi
 if [[ "$1" == "show-environment" ]]; then
   if [[ -n "${STUB_SSH:-}" ]]; then
     print -- "SSH_CONNECTION=$STUB_SSH"
@@ -96,6 +100,58 @@ EOS
   It 'the open search input (typing) already shows Search'
     When call zsh "$W" root 1 main 0 0 '' 0 1
     The output should include "Search"
+  End
+
+  # The which-key hint ("󰘵 . keys") advertises a key the user can actually
+  # press: it appears only while the mode on top of the STACK has its panel
+  # down, and never while a dialog owns the keyboard.
+  Describe 'the which-key hint'
+    It 'advertises the toggle while the mode panel is down'
+      When call env STUB_STACK='command:1 scroll:0' zsh "$W" root 1 main
+      The output should include "keys"
+      The output should include "Scroll"
+    End
+
+    It 'takes the stack from its ARGUMENT when the bar passes one'
+      # status-right is a #(): tmux re-runs it when the format-expanded
+      # ARGUMENTS change, so the stack has to be one of them — otherwise
+      # raising the panel does not repaint the bar until the next tick.
+      When call env STUB_STACK='command:1 scroll:0' zsh "$W" root 1 main 0 0 '' 0 0 '' 80 'command:1 scroll:1'
+      The output should not include "keys"
+      The output should include "Scroll"
+    End
+
+    It 'drops the hint once the panel is up'
+      When call env STUB_STACK='command:1 scroll:1' zsh "$W" root 1 main
+      The output should not include "keys"
+      The output should include "Scroll"
+    End
+
+    It 'stays quiet while the search INPUT owns the keyboard'
+      # the dialog is a popup: it swallows M-. , so advertising it lies
+      When call env STUB_STACK='command:1 scroll:1 search:0' zsh "$W" root 1 main 0 0 '' 0 1
+      The output should not include "keys"
+      The output should include "Search"
+    End
+
+    It 'advertises it again once the term is committed'
+      # (SearchMode): the dialog is gone, the panel is down, M-. works
+      When call env STUB_STACK='command:1 scroll:1 search:0' zsh "$W" root 1 main 0 1
+      The output should include "keys"
+      The output should include "Search"
+    End
+
+    It 'drops it when the Search panel is raised'
+      When call env STUB_STACK='command:1 scroll:1 search:1' zsh "$W" root 1 main 0 1
+      The output should not include "keys"
+      The output should include "Search"
+    End
+
+    It 'stays quiet while the rename dialog owns the keyboard'
+      When call env STUB_STACK='command:1 pane:0' zsh "$W" root 0 main 0 0 1
+      The output should not include "keys"
+      The output should include "Rename"
+    End
   End
 
   It 'copy/visual state shows the Copy pill over Scroll'

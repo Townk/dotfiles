@@ -49,6 +49,12 @@ visual_on="${7:-0}"
 searching_on="${8:-0}"
 search_toggles="${9:-}"
 cwidth="${10:-80}"
+# The MODE STACK arrives as an ARGUMENT, not a lookup: status-right is a
+# #() and tmux re-runs it when the format-expanded arguments change, so a
+# stack read inside the script would leave the bar stale until the next
+# status-interval tick — raising the panel would not clear the hint.
+# `${11-…}` (no colon) keeps the fallback for callers that pass 10 args.
+stack_raw="${11-$("$TMUX_BIN" show -gv @mux_stack 2>/dev/null)}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
@@ -271,7 +277,7 @@ for kv in ${(ps:\t:)wk_cfg}; do
 done
 wk_suppressed=0
 typeset -a wk_stack
-wk_stack=(${(s: :)"$("$TMUX_BIN" show -gv @mux_stack 2>/dev/null)"})
+wk_stack=(${(s: :)stack_raw})
 if (( ${#wk_stack} )); then
   [[ "${wk_stack[-1]##*:}" == 1 ]] || wk_suppressed=1
 else
@@ -281,7 +287,13 @@ else
     [[ -n "$sh" && "$sh" == "${MM_STATE:-}" ]] && wk_suppressed=1
   done
 fi
-if [[ -n "$mode_body" && -n "$wk_key" ]] && (( wk_suppressed )); then
+# …and never while a DIALOG owns the keyboard. The search input and the
+# rename prompt are popups: they swallow every key, M-. included, so the
+# hint would be advertising something the user cannot press. (SearchInput)
+# stays quiet; (SearchMode) — term committed, dialog gone — advertises again.
+dialog_up=0
+[[ "$searching_on" == 1 || -n "$renaming" ]] && dialog_up=1
+if [[ -n "$mode_body" && -n "$wk_key" ]] && (( wk_suppressed && ! dialog_up )); then
   bodies+=("@WKHINT@${wk_key}"); kinds+=(wkhint)
 fi
 if [[ "$hint_body" == search ]]; then
