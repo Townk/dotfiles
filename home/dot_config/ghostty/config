@@ -163,18 +163,21 @@ quit-after-last-window-closed = true
 # ---------------------------------------------------------------
 # Keybindings
 # ---------------------------------------------------------------
-# Pane/tab/split bindings live in zellij (~/.config/zellij/config.kdl).
-# Only Ghostty-specific shortcuts stay here so they don't get swallowed
-# before reaching the multiplexer.
+# Pane/tab/split bindings live in the multiplexer (zellij's config.kdl /
+# tmux's keymap). Only Ghostty-specific shortcuts stay here so they don't
+# get swallowed before reaching it.
 
-# Cmd+F triggers zellij's search. We send ESC + / (`Alt+/`), which is bound
-# in zellij to SwitchToMode("entersearch"). Done this way because zellij's
-# scrollback is the relevant buffer when zellij is running.
+# Cmd+F triggers the mux's search. We send ESC + / (`Alt+/`), which BOTH
+# backends bind to their search entry (zellij: SwitchToMode "entersearch";
+# tmux: copy-mode + the search dialog), so this needs no per-backend branch
+# (migration D22). Done this way because the mux's scrollback is the
+# relevant buffer whenever one is running.
 keybind = cmd+f=text:\x1b/
 
-# App-level shortcuts forwarded into zellij as chord sequences starting with
-# the leader (`Alt w` = `\x1bw`), then the existing mode keys. This reuses
-# zellij's current chord vocabulary — no new bindings needed on that side.
+# App-level shortcuts forwarded into the mux as chord sequences starting with
+# the leader (`Alt w` = `\x1bw`), then the existing mode keys. The chord
+# vocabulary is identical on both backends (D3: the tmux prefix mirrors the
+# zellij leader), so these serve either one unchanged.
 #
 # Chord map (leader → mode → action):
 #   Cmd+t        → leader, tab,    n   → NewTab

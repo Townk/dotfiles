@@ -200,7 +200,7 @@ end
 local terminal_tint_palette = load_tint_palette()
 
 local resolve_terminal_location_helper =
-	os.getenv("HOME") .. "/.config/zellij/scripts/resolve-terminal-location"
+	os.getenv("HOME") .. "/.config/mux/scripts/resolve-terminal-location"
 
 local function colors_equal(a, b)
 	return a == b
@@ -386,25 +386,34 @@ wezterm.on("window-config-reloaded", function(window, _)
 	notify_config_reloaded()
 end)
 
--- CMD+click on a file:// link inside Zellij opens it locally: directories in a
--- Yazi tab, images in a floating preview pane, text/code in an nvim tab (see
--- ~/.config/zellij/scripts/zellij-open). The clicked pane's foreground process is the Zellij
--- client; zellij-open resolves which session it's attached to and dispatches
--- there. Non-file links (and panes not running Zellij) fall through to WezTerm's
--- default open. Requires `osc8_hyperlinks true` in the Zellij config so file://
--- links survive to WezTerm.
+-- Is this pane's foreground process a mux client? Both backends are first
+-- class here (migration Phase 6): the helpers below take the client's pid and
+-- resolve the backend from the process itself, so WezTerm only has to decide
+-- "mux or not". Matched on the executable path, like every other gate here.
+local function is_mux_client(exe)
+	return exe:find("zellij") ~= nil or exe:find("tmux") ~= nil
+end
+
+-- CMD+click on a file:// link inside a mux opens it locally: directories in a
+-- Yazi tab, images in a floating preview, text/code in an nvim tab (see
+-- ~/.config/mux/scripts/mux-open). The clicked pane's foreground process is the
+-- mux client — zellij or tmux; mux-open reads the backend from that process,
+-- resolves which session it is attached to, and dispatches there. Non-file
+-- links (and panes running neither mux) fall through to WezTerm's default
+-- open. Requires OSC 8 forwarding on the mux side (zellij `osc8_hyperlinks
+-- true`, tmux `terminal-features hyperlinks`) so file:// links reach WezTerm.
 wezterm.on("open-uri", function(_, pane, uri)
 	if not uri:find("^file://") then
 		return true
 	end
 	local info = pane and pane:get_foreground_process_info()
 	local exe = info and info.argv and info.argv[1] or ""
-	if not exe:find("zellij") then
+	if not is_mux_client(exe) then
 		return true
 	end
 	local dims = pane:get_dimensions()
 	wezterm.background_child_process({
-		os.getenv("HOME") .. "/.config/zellij/scripts/zellij-open",
+		os.getenv("HOME") .. "/.config/mux/scripts/mux-open",
 		tostring(info.pid),
 		uri,
 		tostring(dims and dims.cols or 0),
@@ -509,7 +518,7 @@ wezterm.on("window-focus-changed", function(window, _pane)
 	write_fullscreen_state(window)
 end)
 
-local function perform_zellij_keys(window, pane, keys)
+local function perform_mux_keys(window, pane, keys)
 	for i, key in ipairs(keys) do
 		local action = wezterm.action.SendKey(key)
 		if i == 1 then
@@ -522,25 +531,28 @@ local function perform_zellij_keys(window, pane, keys)
 	end
 end
 
-local function send_zellij_keys(keys)
+-- The chord vocabulary is identical on both backends (D3: the tmux prefix
+-- mirrors the zellij leader), so one sender serves both.
+local function send_mux_keys(keys)
 	return wezterm.action_callback(function(window, pane)
-		perform_zellij_keys(window, pane, keys)
+		perform_mux_keys(window, pane, keys)
 	end)
 end
 
--- True when the focused pane is a Zellij client attached to a nested_zellij
--- session. The pane's foreground process is the Zellij client; nested-session-check
--- resolves which session it is on (live, so it tracks in-place swaps) and tests it
--- against the registry quick-launch maintains. Drives the Cmd+Shift+P /
--- Cmd+Shift+Alt+P split: inside a nested session those reach the local picker and
--- the remote picker respectively; elsewhere only Cmd+Shift+P is meaningful.
+-- True when the focused pane is a mux client attached to a nested workspace
+-- session. The pane's foreground process is the mux client (zellij or tmux);
+-- nested-session-check resolves which session it is on through the shim (live,
+-- so it tracks in-place swaps) and tests it against the registry quick-launch
+-- maintains. Drives the Cmd+Shift+P / Cmd+Shift+Alt+P split: inside a nested
+-- session those reach the local picker and the remote picker respectively;
+-- elsewhere only Cmd+Shift+P is meaningful.
 local function pane_session_is_nested(pane)
 	local info = pane and pane:get_foreground_process_info()
 	local exe = info and info.argv and info.argv[1] or ""
-	if not exe:find("zellij") then
+	if not is_mux_client(exe) then
 		return false
 	end
-	local helper = os.getenv("HOME") .. "/.config/zellij/scripts/nested-session-check"
+	local helper = os.getenv("HOME") .. "/.config/mux/scripts/nested-session-check"
 	local call_ok, success = pcall(wezterm.run_child_process, { helper, tostring(info.pid) })
 	return call_ok and success
 end
@@ -584,7 +596,7 @@ config.keys = {
 	{
 		key = ",",
 		mods = "CMD",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "," },
 		}),
@@ -599,7 +611,7 @@ config.keys = {
 	{
 		key = "w",
 		mods = "CMD",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "p" },
 			{ key = "x" },
@@ -609,7 +621,7 @@ config.keys = {
 	{
 		key = "w",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "t" },
 			{ key = "x" },
@@ -619,7 +631,7 @@ config.keys = {
 	{
 		key = "UpArrow",
 		mods = "CMD",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "l" },
 			{ key = "UpArrow" },
@@ -629,7 +641,7 @@ config.keys = {
 	{
 		key = "DownArrow",
 		mods = "CMD",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "l" },
 			{ key = "DownArrow" },
@@ -639,7 +651,7 @@ config.keys = {
 	{
 		key = "k",
 		mods = "CMD",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "l" },
 			{ key = "k" },
@@ -649,7 +661,7 @@ config.keys = {
 	{
 		key = "j",
 		mods = "CMD",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "l" },
 			{ key = "j" },
@@ -659,7 +671,7 @@ config.keys = {
 	{
 		key = "UpArrow",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "l" },
 			{ key = "p" },
@@ -669,7 +681,7 @@ config.keys = {
 	{
 		key = "DownArrow",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "l" },
 			{ key = "n" },
@@ -679,7 +691,7 @@ config.keys = {
 	{
 		key = "k",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "l" },
 			{ key = "p" },
@@ -689,7 +701,7 @@ config.keys = {
 	{
 		key = "j",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "l" },
 			{ key = "n" },
@@ -699,7 +711,7 @@ config.keys = {
 	{
 		key = "f",
 		mods = "CMD",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "/", mods = "ALT" },
 		}),
 	},
@@ -707,7 +719,7 @@ config.keys = {
 	{
 		key = "f",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "l" },
 			{ key = "V" },
@@ -717,7 +729,7 @@ config.keys = {
 	{
 		key = "c",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "Y" },
 		}),
@@ -726,7 +738,7 @@ config.keys = {
 	{
 		key = "c",
 		mods = "CMD|SHIFT|ALT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "y", mods = "ALT" },
 		}),
@@ -735,7 +747,7 @@ config.keys = {
 	{
 		key = "t",
 		mods = "CMD",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "t" },
 			{ key = "N" },
@@ -745,55 +757,55 @@ config.keys = {
 	{
 		key = "1",
 		mods = "CMD",
-		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "1" } }),
+		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "1" } }),
 	},
 	-- `⌘2`: Focus on tab 2 => `⌥w t 2`
 	{
 		key = "2",
 		mods = "CMD",
-		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "2" } }),
+		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "2" } }),
 	},
 	-- `⌘3`: Focus on tab 3 => `⌥w t 3`
 	{
 		key = "3",
 		mods = "CMD",
-		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "3" } }),
+		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "3" } }),
 	},
 	-- `⌘4`: Focus on tab 4 => `⌥w t 4`
 	{
 		key = "4",
 		mods = "CMD",
-		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "4" } }),
+		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "4" } }),
 	},
 	-- `⌘5`: Focus on tab 5 => `⌥w t 5`
 	{
 		key = "5",
 		mods = "CMD",
-		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "5" } }),
+		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "5" } }),
 	},
 	-- `⌘6`: Focus on tab 6 => `⌥w t 6`
 	{
 		key = "6",
 		mods = "CMD",
-		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "6" } }),
+		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "6" } }),
 	},
 	-- `⌘7`: Focus on tab 7 => `⌥w t 7`
 	{
 		key = "7",
 		mods = "CMD",
-		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "7" } }),
+		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "7" } }),
 	},
 	-- `⌘8`: Focus on tab 8 => `⌥w t 8`
 	{
 		key = "8",
 		mods = "CMD",
-		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "8" } }),
+		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "8" } }),
 	},
 	-- `⌘9`: Focus on tab 9 => `⌥w t 9`
 	{
 		key = "9",
 		mods = "CMD",
-		action = send_zellij_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "9" } }),
+		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "9" } }),
 	},
 	-- `⌘⇧P`: Show the workspace/project picker. In a normal session that's the
 	-- `⌥w o S` chord. In a nested session those keys are cleared and pass through
@@ -809,7 +821,7 @@ config.keys = {
 			if pane_session_is_nested(pane) then
 				window:perform_action(wezterm.action.SendString("\x1b[32;7u"), pane)
 			else
-				perform_zellij_keys(window, pane, {
+				perform_mux_keys(window, pane, {
 					{ key = "w", mods = "ALT" },
 					{ key = "o" },
 					{ key = "S" },
@@ -826,7 +838,7 @@ config.keys = {
 		mods = "CMD|SHIFT|ALT",
 		action = wezterm.action_callback(function(window, pane)
 			if pane_session_is_nested(pane) then
-				perform_zellij_keys(window, pane, {
+				perform_mux_keys(window, pane, {
 					{ key = "w", mods = "ALT" },
 					{ key = "o" },
 					{ key = "S" },
@@ -838,7 +850,7 @@ config.keys = {
 	{
 		key = "t",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "t" },
 			{ key = "T" },
@@ -848,7 +860,7 @@ config.keys = {
 	{
 		key = "s",
 		mods = "CMD|SHIFT",
-		action = send_zellij_keys({
+		action = send_mux_keys({
 			{ key = "w", mods = "ALT" },
 			{ key = "p" },
 			{ key = "P" },
