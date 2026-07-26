@@ -310,7 +310,7 @@ keymap:
       - keys:
         - ','
         desc: terminal settings
-        icon: 
+        icon: 
         color: teal
         cmd: run-shell 'zsh ~/.config/zellij/scripts/edit-terminal-config'
       - keys:
@@ -323,13 +323,13 @@ keymap:
       - keys:
         - s
         desc: split pane (horiz)
-        icon: 
+        icon: 
         color: blue
         cmd: split-window -v
       - keys:
         - v
         desc: split pane (vert)
-        icon: 
+        icon: 
         color: blue
         cmd: split-window -h
       - keys:
@@ -407,7 +407,7 @@ keymap:
       - keys:
         - n
         desc: Rename Tab …
-        icon: 󰑕
+        icon: 
         color: yellow
         cmd: set key-table root ; display-popup -E -B -w 66 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-rename window'
         switch: true
@@ -422,7 +422,7 @@ keymap:
       - keys:
         - T
         desc: quick launch new tab
-        icon: 󰓞
+        icon: 󱓞
         color: mauve
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Tab\" --no-chrome --
           $HOME/.config/zellij/scripts/quick-launch menu tab"'
@@ -531,13 +531,13 @@ keymap:
       - keys:
         - P
         desc: pane to tab
-        icon: 
+        icon: 
         color: green
         cmd: break-pane ; set key-table root
       - keys:
         - s
         desc: sync input all panes
-        icon: 
+        icon: 
         color: blue
         cmd: setw synchronize-panes ; set key-table root
     pane:
@@ -549,7 +549,7 @@ keymap:
       - keys:
         - m
         desc: Move Pane …
-        icon: 󰙕
+        icon: 󰆾
         color: yellow
         cmd: set key-table move
         switch: true
@@ -557,7 +557,7 @@ keymap:
       - keys:
         - n
         desc: Rename Pane …
-        icon: 󰑕
+        icon: 
         color: yellow
         cmd: set key-table root ; display-popup -E -B -w 66 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-rename pane'
         switch: true
@@ -640,21 +640,21 @@ keymap:
         - S-Down
         - J
         desc: split pane down
-        icon: 
+        icon: 
         color: mauve
         cmd: split-window -v ; set key-table root
       - keys:
         - S-Left
         - H
         desc: split pane left
-        icon: 
+        icon: 
         color: mauve
         cmd: split-window -hb ; set key-table root
       - keys:
         - S-Right
         - L
         desc: split pane right
-        icon: 
+        icon: 
         color: mauve
         cmd: split-window -h ; set key-table root
       - keys:
@@ -666,7 +666,7 @@ keymap:
       - keys:
         - P
         desc: quick launch new pane
-        icon: 󰓞
+        icon: 󱓞
         color: green
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 70 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Pane\" --no-chrome
           -- $HOME/.config/zellij/scripts/quick-launch menu pane"'
@@ -790,7 +790,7 @@ keymap:
       - keys:
         - S
         desc: quick launch session
-        icon: 󰓟
+        icon: 󱓟
         color: red
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome
           -- $HOME/.config/zellij/scripts/quick-launch menu workspace"'
@@ -824,7 +824,7 @@ keymap:
       - keys:
         - V
         desc: edit scrollback
-        icon: 
+        icon: 
         color: peach
         cmd: ''
         panel_only: true
@@ -1026,7 +1026,7 @@ keymap:
         - n
         desc: next match
         sticky: true
-        icon: 
+        icon: 
         color: mauve
         cmd: ''
         panel_only: true
@@ -1034,7 +1034,7 @@ keymap:
         - N
         desc: previous match
         sticky: true
-        icon: 
+        icon: 
         color: mauve
         cmd: ''
         panel_only: true
