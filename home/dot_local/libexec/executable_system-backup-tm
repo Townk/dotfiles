@@ -309,11 +309,24 @@ tm_route() {
   if [[ "${1:-}" == --session ]]; then
     sess="${2:-}"; key="${3:-}"
     [[ -d "$sess" ]] || return 0
-    case "$key" in
-      shift+up)   bkp::tm::step "$sess" newer ;;
-      shift+down) bkp::tm::step "$sess" older ;;
-      apply)      tm_apply "$sess" ;;
-    esac
+    _tm_route_session() {
+      case "$key" in
+        shift+up)   bkp::tm::step "$sess" newer ;;
+        shift+down) bkp::tm::step "$sess" older ;;
+        apply)      tm_apply "$sess" ;;
+      esac
+    }
+    # Under tmux the work is DETACHED. A held scrub key fires one route per
+    # key repeat, and the refresh debounce supersedes the previous one by
+    # KILLING it (backup-tm's fork-storm guard) — if the victim is tmux's
+    # own run-shell child, tmux reports "terminated by signal 15" across
+    # the session on every held key. Forking hands tmux an immediate exit 0
+    # and leaves the kill where it belongs, between our own workers.
+    if [[ -n "${TMUX:-}" ]]; then
+      ( _tm_route_session ) >/dev/null 2>&1 &!
+    else
+      _tm_route_session
+    fi
     return 0
   fi
   key="$1"; pid="$2"

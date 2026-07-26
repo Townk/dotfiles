@@ -103,6 +103,9 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | a tmux client needs ~2–3s to finish attaching before it routes keys | nested-tmux probes settle before the first send, and use a warm-up key |
 | `#{pane_pid}` is the pane's ROOT process (the shell), not the foreground worker | tm routes address the session by path (`@tm_session`); a pid-matched route matches nothing on tmux |
 | `run-shell` inherits the SERVER's birth environment (the same rule as `SSH_CONNECTION`) | fixtures export `BKP_*` before starting the scratch server, not into the session env |
+| tmux REPORTS a run-shell child that dies by a signal (`'…' terminated by signal 15`) | the tm route's own supersede logic kills the previous route — which under tmux IS tmux's child, so a held scrub key papered the session with the message. The `--session` route forks and hands tmux an immediate exit (2.4s of exposure → 107ms) |
+| the zellij resize loop stops as soon as the timeline is ≤ 22 cols, so 22 — not the nominal 21 — is the width it always delivered | the tmux split takes `W-23`; at 21 the footer hint line wraps, because the nerd-font key glyphs measure 2 cells under tmux and 1 under zellij (the VS16 width split, again) |
+| `tm-timeline` sized its rows region `h-5` but wrote only as many rows as the ladder has | a ladder shorter than the pane left the footer floating under the last rung; the region is padded now. Latent under zellij (2 chrome rows), visible under tmux (1) |
 
 ## Mode B validation checklist (both backends, per phase)
 

@@ -1137,13 +1137,19 @@ bkp::tm::launch() {
       fi
       # tmux sizes a split at creation, so the lens is born correct and the
       # convergence loop below never runs there. `stty size` reads THIS pane
-      # (the timeline-to-be); the lens gets everything except the 21-col
-      # design width and the divider column.
+      # (the timeline-to-be); the lens gets everything except the timeline's
+      # width and the divider column.
+      #
+      # 22, not the nominal 21: the zellij loop below stops as soon as the
+      # timeline is <= 22, so that is the width it has been delivering all
+      # along — and the footer hint line needs every one of those columns
+      # under tmux, where the nerd-font key glyphs measure 2 cells. At 21 it
+      # wraps and spills past the pane edge (Mode B find, 2026-07-26).
       local -a _split=(right --name "tm lens" --close-on-exit)
       if [[ "$(mux::backend)" == tmux && -t 0 ]]; then
         local _here
         _here=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
-        [[ -n "$_here" ]] && (( _here > 24 )) && _split+=(--size $(( _here - 22 )))
+        [[ -n "$_here" ]] && (( _here > 25 )) && _split+=(--size $(( _here - 23 )))
       fi
       mux::split "${_split[@]}" -- "$BKP_TM_BIN" lens "$s" >/dev/null ||
         { rm -rf "$s"; return 1 }

@@ -202,6 +202,12 @@ func (u *ui) frame() string {
 			b.WriteString(rows[i].text + "\x1b[K\r\n")
 		}
 	}
+	// A ladder shorter than the pane leaves the rest of the rows region
+	// empty — pad it, or the footer floats up under the last rung instead
+	// of sitting on the bottom edge (the whole frame is sized h-5 for it).
+	for i := last - first; i < height; i++ {
+		b.WriteString("\x1b[K\r\n")
+	}
 
 	// Hints mirror the explore lens footer verbatim (session-wide
 	// contract: Shift+K/J scrub from ANY pane, so the shift glyphs are
