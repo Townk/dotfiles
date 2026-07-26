@@ -100,6 +100,40 @@ Describe 'tmux keymap tables'
     The output should include "send-keys C-h"
   End
 
+  # Phase 6.4 (D21): agents want Down/Up where vim wants the raw key, and
+  # both differ from "move focus". Three outcomes, so the probes chain —
+  # a single run-shell classifier would put zsh startup on a held nav key.
+  It 'root C-j/C-k reach an agent as Down/Up before the vim/fzf lane'
+    When call keys root
+    The output should include "(cursor-)?agent"
+    The output should include "send-keys Down"
+    The output should include "send-keys Up"
+  End
+
+  # Phase 6.1/6.4: Alt+Enter toggles the host terminal's fullscreen, but an
+  # fzf pane owns the key (the quick-launch "separate window" accept).
+  It 'root M-Enter toggles fullscreen unless fzf owns the pane'
+    When call keys root
+    The output should include "terminal-toggle-fullscreen"
+    The output should include "M-Enter"
+  End
+
+  # Phase 6.3 (D20): tm routes address the SESSION the pane is stamped with,
+  # never a pid, and only fire on a stamped pane.
+  It 'root tm-scrub routes fire on the @ctx stamp and pass through elsewhere'
+    When call keys root
+    The output should include "@ctx"
+    The output should include "@tm_session"
+    The output should include "system-backup-tm"
+    The output should include "route --session"
+  End
+
+  It 'the explore lens passes its keys through to yazi'
+    When call keys root
+    # tm-explore is the pass-through class: yazi binds J/K/A itself.
+    The output should include "tm-explore"
+  End
+
   It 'routes n/N through the search stepper, which keeps the prompt-jump duality'
     # n means "next MATCH" in Search and "next prompt" elsewhere in
     # copy-mode. The choice moved into mux-search with the search's own

@@ -32,7 +32,8 @@
 # Scroll, or M-w V directly): normal vi cursor motions; v begins selection.
 # Entries always stamp the state, so a stale flag self-heals.
 # Quit: themed confirm dialog in a popup (Phase 2; parity with
-# zellij-quit-confirm). Geometry mirrors the zellij fixed-cell dialog.
+# mux-quit-confirm — Phase 6 pointed the zellij keybind at the SAME
+# script). Geometry mirrors the zellij fixed-cell dialog.
 # copy-pwd: the script is already PID-parameterized (the zellij side passes
 # the plugin's {pid}); tmux hands it the pane's root process directly.
 # Alarms (D6 basics — flag styling + Hammerspoon notify land in Phase 4).
@@ -63,10 +64,18 @@ unbind -T prefix C-d
 unbind -T prefix C-u
 bind -T copy-mode-vi M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
 bind -T prefix M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
+{{/* ORDER IS LOAD-BEARING: bind first, unbind second. A custom key table
+     only exists once something is bound into it, and `unbind -T tab` on a
+     server that has not sourced keymap.conf yet is an ERROR — ten of them,
+     one per line. That is not cosmetic: a config error puts the client in a
+     message overlay, and the first keypresses after startup are consumed
+     dismissing those messages instead of reaching the key tables (measured
+     on a fresh server, 2026-07-26). Binding M-. first creates the table, so
+     the unbinds are quiet and a fresh server takes its first key. */ -}}
 {{ range $t := list "tab" "pane" "session" "resize" "move" -}}
+bind -T {{ $t }} M-. run-shell -b "{{ $.chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
 unbind -T {{ $t }} C-d
 unbind -T {{ $t }} C-u
-bind -T {{ $t }} M-. run-shell -b "{{ $.chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle"
 {{ end }}
 # ---------------------------------------------------------------------------
 # Leader (D3): M-w arms the prefix TABLE for one key — a table change, which
@@ -119,10 +128,60 @@ bind -n C-S-Right if -F '#{@pane-is-vim}' 'send-keys C-S-Right' 'resize-pane -R 
 # @search_parent needed, the stack below it says so.
 bind -n M-/ set -p @searching 1 \; set -p @visual 0 \; copy-mode \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack push search" \; run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --launch"
 
-# NB: the tm-scrub context routes (J/K/H/L, Shift+arrows, Shift+A/S over
-# yazi/hunk/diffnav panes) are deliberately NOT bound yet — bare capitals are
-# too hot to intercept before their consumer exists under tmux (Phase 6.4
-# wires them against the @ctx pane option the tm wrapper already stamps).
+# Agent lane (Phase 6.4, D21): `agent`/`cursor-agent` want Down/Up where vim
+# wants the raw C-j/C-k and everything else wants focus movement — three
+# outcomes, so the probes CHAIN. Deliberately not one run-shell classifier:
+# that would put zsh startup (~30ms) on a held navigation key, where the ps
+# probe costs ~5ms. Same shape as the zellij `when agent,cursor-agent: key
+# down` clause on the context-keys bind.
+%hidden is_agent="ps -o state= -o comm= -t '#{pane_tty}' | grep -iqE '^[^TXZ ]+ +(\\S+\\/)?(cursor-)?agent$'"
+bind -n C-j if "$is_agent" 'send-keys Down' { if "$is_passthru" 'send-keys C-j' 'select-pane -D' }
+bind -n C-k if "$is_agent" 'send-keys Up'   { if "$is_passthru" 'send-keys C-k' 'select-pane -U' }
+
+# Alt+Enter (Phase 6.1) — toggle the HOST terminal's native fullscreen via the
+# workspace-rename side channel. fzf owns the key when it has the pane: the
+# quick-launch workspace picker binds it to "open in a separate window"
+# (zellij's `when fzf: $source` clause).
+%hidden is_fzf="ps -o state= -o comm= -t '#{pane_tty}' | grep -iqE '^[^TXZ ]+ +(\\S+\\/)?fzf$'"
+bind -n M-Enter if "$is_fzf" 'send-keys M-Enter' 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/terminal-toggle-fullscreen"'
+
+# ---------------------------------------------------------------------------
+# tm-scrub context routes (Phase 6.3, D4/D20)
+# ---------------------------------------------------------------------------
+# Bare capitals are far too hot to intercept globally, so every one of these
+# is gated on the @ctx PANE OPTION that system-backup-tm stamps, and falls
+# through to the pane otherwise. The stamp vocabulary is what makes zellij's
+# per-app clauses expressible here (zellij matches process-tree comms, tmux
+# cannot):
+#
+#   @ctx = tm          the timeline pane  → J/K + Shift+arrows step, A applies
+#   @ctx = tm-diff     hunk/diffnav lens  → same, plus S (see below)
+#   @ctx = tm-explore  the yazi lens      → everything passes through: yazi
+#                                           binds these keys itself
+#
+# The route addresses the session by PATH (@tm_session), not by pid: a tmux
+# pane's #{pane_pid} is its root shell, never the worker that wrote
+# lens.pid/timeline.pid, so a pid-matched route would silently never fire.
+# `#{m:tm*,#{@ctx}}` catches both routing classes in one format match.
+{{- $tm := printf "%s/.local/libexec/system-backup-tm" .chezmoi.homeDir }}
+{{- $route := printf "run-shell -b \"%s route --session '#{@tm_session}'" $tm }}
+%hidden in_tm="#{&&:#{m:tm*,#{@ctx}},#{!=:#{@ctx},tm-explore}}"
+# NB: `{ }` command blocks, not quoted strings — the command carries a
+# single-quoted '#{@tm_session}', which would end an outer single quote (a
+# tmux parse error that silently aborts the rest of the file).
+bind -n J      if -F "$in_tm" { {{ $route }} shift+down" } { send-keys J }
+bind -n K      if -F "$in_tm" { {{ $route }} shift+up" } { send-keys K }
+bind -n S-Down if -F "$in_tm" { {{ $route }} shift+down" } { send-keys S-Down }
+bind -n S-Up   if -F "$in_tm" { {{ $route }} shift+up" } { send-keys S-Up }
+bind -n A      if -F "$in_tm" { {{ $route }} apply" } { send-keys A }
+# H/L move focus between the lens and the timeline (zellij: `do move_focus`).
+bind -n H if -F "$in_tm" 'select-pane -L' 'send-keys H'
+bind -n L if -F "$in_tm" 'select-pane -R' 'send-keys L'
+# S in a DIFF lens only: diffnav cannot couple its own `e` (file tree) and
+# `s` (side-by-side) toggles, so write both. ORDER IS LOAD-BEARING — hide the
+# tree first so the pane grows, THEN switch to side-by-side, or delta lays
+# out narrow halves that never expand.
+bind -n S if -F '#{==:#{@ctx},tm-diff}' 'send-keys e s' 'send-keys S'
 
 
 # ---------------------------------------------------------------------------
@@ -322,4 +381,4 @@ bind -n C-G run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 
 # Chords mirror the zellij mode chords: tab-T, pane-P, session-S. The picker
 # emits an id (or @window:<id> on Alt+Enter) and quick-launch dispatches.
 # nested table (D14): the sole escape hatch from a nested-mux outer session.
-bind -T nested C-M-Space run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome -- {{ .chezmoi.homeDir }}/.config/zellij/scripts/quick-launch menu workspace"'
+bind -T nested C-M-Space run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome -- {{ .chezmoi.homeDir }}/.config/mux/scripts/quick-launch menu workspace"'
