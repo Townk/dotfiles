@@ -83,8 +83,8 @@ probe_available() {
 }
 
 # pick_harness — pick among AVAILABLE, printing the chosen harness name.
-# zellij.zsh is sourced lazily (it pulls in pick-common.zsh for pick::line) so
-# an explicit-harness run never needs fzf. zj::pick is a drop-in for
+# mux.zsh is sourced lazily (it pulls in pick-common.zsh for pick::line) so
+# an explicit-harness run never needs fzf. mux::pick is a drop-in for
 # pick::start that floats the picker in a Zellij pane when one is available,
 # and runs it inline otherwise. --selector opens in browse (selection) mode.
 #
@@ -95,7 +95,7 @@ probe_available() {
 # are hardcoded — not common.zsh's C_* — because this loop's stdout is a pipe, so
 # common.zsh blanks its palette, and fzf renders these via --ansi.
 pick_harness() {
-  source "$HOME/.local/lib/zellij.zsh"
+  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
   local -A icons=(pi $'\U0010FB02' claude $'\U0010E861' cursor $'\U0010FB00')
   local c_icon=$'\e[38;2;255;255;255m' c_name=$'\e[38;2;137;180;250m'
   local c_desc=$'\e[38;2;127;132;156m' c_off=$'\e[0m'
@@ -103,7 +103,7 @@ pick_harness() {
   for h in "${AVAILABLE[@]}"; do ((${#h} > w)) && w=${#h}; done
   for h in "${AVAILABLE[@]}"; do
     pick::line "${c_icon}${icons[$h]:-$'\uf013'}${c_off}  ${c_name}${(r:$w:)h}${c_off}  ${c_desc}${LABELS[$h]}${c_off}" "$h"
-  done | PICK_NAME=ai-commit zj::pick \
+  done | PICK_NAME=ai-commit mux::pick \
     --pane-width 63 --pane-height 12 \
     --output field:1 --selector --selector-nav \
     --header "Commit harness" \

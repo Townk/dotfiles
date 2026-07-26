@@ -14,14 +14,14 @@
 #   field 1 = run:<slug>    emitted on Enter      (--output field:1)
 #   field 2 = edit:<slug>   emitted on Alt+Enter  (--key-output alt-enter:field:2)
 #
-# zj::pick is the float-aware drop-in for pick::start: a zellij floating pane
+# mux::pick is the float-aware drop-in for pick::start: a zellij floating pane
 # inside zellij, an inline fzf otherwise — returning the single selected value
 # through one channel, so the action-in-the-value scheme works in both. We then
 # run or edit the chosen playbook in the foreground (ai-playbook is no-mux by
 # default, so run/edit take over this terminal, then return).
 set -euo pipefail
 
-source "$HOME/.local/lib/zellij.zsh" # → zj::pick (+ the pick-common engine)
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" # → mux::pick (+ pick-common)
 
 # Resolve the ai-playbook binary. As a `#!/usr/bin/env zsh` SCRIPT this runs
 # non-interactively: zsh sources only ~/.zshenv (+ /etc/zprofile path_helper),
@@ -55,7 +55,7 @@ emit_rows() {
 }
 
 picked=""
-picked="$(emit_rows | PICK_NAME=pick-playbook zj::pick \
+picked="$(emit_rows | PICK_NAME=pick-playbook mux::pick \
   --header 'playbook' \
   --output field:1 \
   --key-output alt-enter:field:2)" || exit 0 # non-zero == cancel (130)

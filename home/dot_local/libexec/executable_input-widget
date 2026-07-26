@@ -2,7 +2,7 @@
 # input-widget — the pane-process entry point for the input stdlib. Sources
 # input-common.zsh and routes --type to the matching input::* widget, forwarding
 # its stdout and exit code. This is what zellij-modal runs inside the float (the
-# role pick-list plays for zj::pick); it is also directly usable from any script.
+# role pick-list plays for mux::pick); it is also directly usable from any script.
 #
 # Usage: input-widget --type confirm|line|text|choose|form [widget opts] -- "Q" [CHOICE...]
 set -uo pipefail

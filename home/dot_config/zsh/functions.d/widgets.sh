@@ -92,7 +92,7 @@ zle -N ai-assist-trigger
 
 # ── ai-playbook store picker (Ctrl+Alt+P) ──────────────────────────────────
 # Thin ZLE delegate to the libexec picker (~/.local/libexec/pick-playbook),
-# which sources the zj::pick framework (a zellij float in zellij, inline fzf
+# which sources the mux::pick framework (a float inside a mux, inline fzf
 # otherwise) and acts on the choice: Enter runs the playbook (adapt-on-run),
 # Alt+Enter edits it. Both take over the terminal in the foreground (ai-playbook
 # runs no-mux by default), then we redraw the prompt. Cancel/empty just resets.

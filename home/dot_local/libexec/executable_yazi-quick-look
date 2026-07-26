@@ -27,9 +27,9 @@
 # Look can't reach the screen at all.
 #
 # SSH or non-macOS: Quick Look can't reach this screen — float the unified
-# `preview` render in a Zellij pane instead (same UX as the fzf-tab
-# floating preview). Outside zellij there is nowhere to draw either → quiet
-# no-op.
+# `preview` render in the mux instead (same UX as the fzf-tab floating
+# preview): a zellij float or a tmux popup, whichever backend this pane is
+# in. Outside any mux there is nowhere to draw either → quiet no-op.
 
 emulate -L zsh
 set -u
@@ -79,12 +79,13 @@ main() {
     exec open -n "$QL_APP" --args -p "${staged[@]}"
   fi
 
-  if [[ -n ${ZELLIJ:-} ]]; then
-    exec zellij action new-pane \
-      --floating --close-on-exit \
-      --name "${1:t}" --borderless false --pinned false \
-      --width 90% --height 90% \
-      -- "$HOME/.config/zellij/scripts/zellij-preview-file" "$1"
+  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+  if mux::available; then
+    # --frame: the zellij float keeps its own rounded frame and no pin
+    # decoration (a tmux popup always owns its border).
+    mux::popup 90% 90% --name "${1:t}" --frame \
+      -- "$HOME/.config/mux/scripts/mux-preview-file" "$1"
+    return $?
   fi
 
   return 0

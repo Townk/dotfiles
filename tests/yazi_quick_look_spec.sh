@@ -12,7 +12,7 @@ Describe 'yazi-quick-look: dispatch'
   setup() {
     STUBS="$SHELLSPEC_TMPBASE/ql-stubs"
     mkdir -p "$STUBS"
-    for tool in open pkill zellij; do
+    for tool in open pkill zellij tmux; do
       printf '#!/bin/sh\necho "%s $@"\n' "$tool" >"$STUBS/$tool"
       chmod +x "$STUBS/$tool"
     done
@@ -91,20 +91,41 @@ Describe 'yazi-quick-look: dispatch'
   It 'SSH session inside zellij: floats the unified preview instead of Quick Look'
     When run zsh -c "
       export SSH_TTY=/dev/ttys000 ZELLIJ=0
+      export MUX_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'
+      export ZELLIJ_BIN='$STUBS/zellij'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
       main '$TARGET'"
     The status should be success
     The output should include "zellij action new-pane"
     The output should include "--floating"
-    The output should include "zellij-preview-file $TARGET"
+    The output should include "mux-preview-file $TARGET"
     The output should not include "qlmanage.app"
   End
 
-  It 'SSH session outside zellij: quiet no-op'
+  # Same UX on tmux: a popup at the same 90% geometry, deferred to the server
+  # so it outlives this yazi task.
+  It 'SSH session inside tmux: pops the unified preview up'
+    When run zsh -c "
+      export SSH_TTY=/dev/ttys000 TMUX=/tmp/sock,1,0
+      unset ZELLIJ
+      export MUX_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'
+      export MUX_TMUX_BIN='$STUBS/tmux'
+      YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
+      PATH='$STUBS':\$PATH
+      main '$TARGET'"
+    The status should be success
+    The output should include "run-shell -b"
+    The output should include "tmux-popup"
+    The output should include "mux-preview-file"
+    The output should not include "qlmanage.app"
+  End
+
+  It 'SSH session outside any mux: quiet no-op'
     When run zsh -c "
       export SSH_TTY=/dev/ttys000
-      unset ZELLIJ
+      unset ZELLIJ TMUX
+      export MUX_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
       main '$TARGET'"

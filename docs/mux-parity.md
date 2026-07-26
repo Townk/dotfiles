@@ -31,7 +31,7 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | `z` zoom | ToggleFocusFullscreen | `resize-pane -Z` | ✅ | |
 | `f` frame toggle | TogglePaneFrames | `set -w pane-border-status` | 🟡 | different affordance; frames are off-by-default both sides |
 | `L` locked / `l` scroll / `o` session / `p` pane / `t` tab | SwitchToMode | `set key-table` / `copy-mode` | ✅ | |
-| `q` quit | themed gum confirm (zellij-quit-confirm) | themed `input::confirm` popup (mux-quit-confirm) | ✅ | per-backend kill path; zellij keybind re-points at mux-quit-confirm in Phase 6 |
+| `q` quit | themed gum confirm (zellij-quit-confirm) | themed `input::confirm` popup (mux-quit-confirm) | ✅ | per-backend kill path; ONE script — the zellij keybind now runs mux-quit-confirm too (Phase 6; zellij-quit-confirm retired) |
 | `Y` / `M-y` copy-pwd | context-keys `run copy-pwd {pid}` (flash-free) | `run-shell copy-pwd #{pane_pid}` | ✅ | same script, PID source per backend |
 | `,` terminal config | context-keys → edit-terminal-config | same script, tmux branch (focus-or-create window) | ✅ | outer terminal via tmux session env |
 | `i`/`u`/`k` alarms | zj-hud alarm pipes (bar renders) | `monitor-silence 30` / `monitor-activity` / clear + `display` | 🟡 | Phase 4 adds flag styling + HS notify (D6) |
@@ -45,12 +45,14 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | `C-hjkl`/arrows focus | vim-navigator wasm (smart-splits protocol) | `if -F @pane-is-vim∥fzf` → send / select-pane | ✅ | D4/D13; same nvim plugin both sides |
 | `C-S-hjkl`/arrows resize | vim-navigator resize | vim-aware `resize-pane 2` | ✅ | |
 | `C-j/k` in fzf | context-keys `when fzf: $source` | fzf comm match in the same `if -F` | ✅ | fast lane, no fork |
-| `C-j/k` in agents | `when agent,cursor-agent: key down/up` | — | ⏳ tmux | Phase 6 context routes |
+| `C-j/k` in agents | `when agent,cursor-agent: key down/up` | `is_agent` ps probe → `send-keys Down/Up`, chained before the vim/fzf lane | ✅ | D21; verified with real keystrokes (nested tmux): an `agent` pane receives `ESC[B`/`ESC[A` |
 | `Shift+Enter` | context-keys: kitty CSI-u to pi/claude, alt-enter to agents, tm apply route | `extended-keys always`: CSI-u to kitty-negotiating apps; plain apps get `\e[27;2;13~` | 🟡 | plain-app encodings differ (`\e[13;2u` vs xterm form); `extended-keys-format csi-u` is the alignment knob — decide Phase 5 |
-| `J/K/H/L`, `Shift+↑↓`, `A`, `S` tm-scrub routes | context-keys over yazi/hunk/diffnav/tm | NOT BOUND (would intercept bare capitals; no tmux tm consumer yet) | ⏳ tmux | Phase 6.4 binds against `@ctx` (wrapper already stamps) |
-| `Alt Enter` fullscreen toggle | context-keys → terminal-toggle-fullscreen | — | ⏳ tmux | Phase 6.1 |
+| `J/K/H/L`, `Shift+↑↓`, `A`, `S` tm-scrub routes | context-keys over yazi/hunk/diffnav/tm | `if -F` on the `@ctx` pane option → `system-backup-tm route --session '#{@tm_session}'`; `H/L` → `select-pane`; `S` → `send-keys e s` on `tm-diff` | ✅ | D20 stamp vocabulary (`tm` / `tm-explore` / `tm-diff`); routes address the SESSION, not a pid |
+| `Alt Enter` fullscreen toggle | context-keys → terminal-toggle-fullscreen | `is_fzf` ps probe → raw key, else `run-shell -b terminal-toggle-fullscreen` | ✅ | same script both backends; the fzf clause keeps the QL "separate window" accept key |
 | `C-S-u/g` glyph/gitmoji pickers | zellijModalRun floats | display-popup via tmux-modal --inject (-B, fzf owns the box) | ✅ | insert-without-dismiss works (pick sink tmux branch) |
 | `Alt /` search dialog | zj-hud role "search" float | copy-mode `/` incremental (stage 1) | 🟡 | D12 stage 2 hud owns the dialog |
+| `Cmd+F` (terminal → mux search) | WezTerm/Ghostty send `\x1b/` | same bytes — `M-/` is the search entry here too | ✅ | D22: no per-backend branch needed, the chord parity of D3 covers it |
+| `Cmd+F` (terminal) | `text:\x1b/` → Alt+/ | same bytes → `M-/` | ✅ | D22: both backends bind `M-/` as the search entry, so the terminal needs no per-backend branch |
 
 ## Mode tables
 
@@ -77,7 +79,7 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | prompt jumps `n`/`p` | zj-prompt-jumper wasm (p10k prefix scan) | copy-mode next/previous-prompt on OSC 133 marks (zsh precmd emitter) | ✅ | emitter benefits both (D11); zellij keeps the wasm |
 | `n` after search | Search "down" in search mode | search-aware: `search-again` when `search_present`, else `next-prompt` | 🟡 | one copy-mode vs two zellij modes |
 | search option toggles (case/word/wrap) | zj-hud search role + MessagePlugin sync | M-c/M-b/M-p in the dialog and in (SearchMode): case + word rebuild the ERE pattern, wrap sets tmux's per-pane `wrap-search` | ✅ | gated on the Search STATE, not `#{search_present}` — a zero-match filter clears that flag and would kill the chord that undoes it |
-| which-key panel | zj-hud role "whichkey" (pages/trail) | — | ⏳ tmux | Phase 5 (menus → hud) |
+| which-key panel | zj-hud role "whichkey" (pages/trail) | `mux-whichkey` popup (pages, trail, icons, colors) driven by the mode stack | 🟡 | Phase 5 as-built: tmux has no PASSIVE overlay, so the panel is a modal popup that dispatches the mode's keys itself while open |
 
 ## Session-level behaviors
 
@@ -89,6 +91,18 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | Scrollback size | `scroll_buffer_size 1000000` | `history-limit 1000000` | ✅ | |
 | Session serialization | off | no resurrect plugin | ✅ | D17 |
 | Cross-mux hygiene | n/a (zellij sets its own env) | scrubs stale `ZELLIJ*`; zshrc guard blocks nested autostart | ✅ | Phase 0 as-built |
+
+## Platform gotchas — Phase 6 (2026-07-26)
+
+| Fact | Consequence |
+| --- | --- |
+| `send-keys` injects a key straight into the pane — it never traverses the key tables | a bind can only be verified through a REAL client: nested tmux (outer `send-keys` → inner attach). Three "the bind never fires" findings this phase were the harness, not the config |
+| a tmux config parse error ABORTS the rest of the source chain, silently | a single-quoted `'#{@tm_session}'` inside a single-quoted if-shell argument killed every later `source-file` (the panel binds vanished). Command commands go in `{ }` blocks, never nested quotes |
+| a copy of a SIP-signed binary (`cp /bin/cat`) runs but produces nothing on macOS 26 | fixtures that need a process with a chosen `comm` copy a Homebrew binary (zsh) instead; a symlink does NOT change `comm` |
+| `cat > file` is block-buffered when stdout is a file, not a tty | keystroke-capture fixtures use `cat -u`, or the evidence appears only after the process dies |
+| a tmux client needs ~2–3s to finish attaching before it routes keys | nested-tmux probes settle before the first send, and use a warm-up key |
+| `#{pane_pid}` is the pane's ROOT process (the shell), not the foreground worker | tm routes address the session by path (`@tm_session`); a pid-matched route matches nothing on tmux |
+| `run-shell` inherits the SERVER's birth environment (the same rule as `SSH_CONNECTION`) | fixtures export `BKP_*` before starting the scratch server, not into the session env |
 
 ## Mode B validation checklist (both backends, per phase)
 
@@ -196,3 +210,15 @@ are derived views. One API (`lib/mux/stack.zsh`, exposed to key bindings by
 | a search that matches NOTHING clears `#{search_present}` — tmux keeps no "there is a term" flag of its own | the mode PILL names the top of the stack (tmux state only detects a stale entry), and the M-c/M-b/M-p toggles gate on the Search STATE: gating them on `search_present` killed the very chord that would undo a zero-match filter |
 | tmux has no search-cancel, and an empty `search-forward` keeps the old term | leaving a Search entry exits and re-enters copy-mode and restores the viewport from `#{scroll_position}` — the stack owns that teardown, so `/`, Backspace and the panel cannot disagree |
 | a popup cannot resize itself (geometry flags are ignored once one exists) | one DRIVER process owns the popup for the whole stack: the panel performs a stack operation and exits, the driver re-reads the stack and opens the next correctly sized popup |
+
+## Platform gotchas — Phase 6 (consumer rewire, 2026-07-26)
+
+| Fact | Consequence |
+| --- | --- |
+| a tmux config ERROR (ours: `unbind -T tab C-d` before anything created the `tab` table) leaves the client in a message overlay, and the first keypresses are consumed DISMISSING those messages | not cosmetic after all — a fresh server swallowed its first ~10 keys. The generated block binds `M-.` into each table BEFORE unbinding, so the table exists and the load is silent |
+| `send-keys` injects into the PANE, bypassing key tables entirely | a bind can never be tested with plain `send-keys`. `send-keys -K -c <client-tty>` looks the key up in the client's key table (it needs a real client, so the nested-tmux attach still earns its keep); pass-through has no `-K` answer — it falls out of the table and reaches nothing |
+| `cat > file` in a probe pane is BLOCK-buffered — bytes sit in libc until exit | key-capture harnesses read empty files and "prove" a key was swallowed. `zsh -c 'while read -k 1 c; do print -n -- "$c" >> f; done'` flushes per key |
+| a tmux command string is re-parsed, so an outer `'…'` is ended by an inner `'#{@tm_session}'` | route binds use `{ }` command blocks; the shim's popup args are quoted with zsh `(qq)` (single quotes survive the parser, `(q)`'s backslash escapes do not) |
+| `display-popup` from our own client dies when the caller exits (yazi runs quick-look as a task that returns immediately) | `mux::popup` hands every popup to the SERVER via `run-shell -b` |
+| `#{pane_pid}` is the pane's root shell, never the worker inside it | tm routes address the session by path (`@tm_session`), not by pid — a pid-matched route silently never fires |
+| zellij `run` cannot size the pane it creates; tmux `split-window -l` can | the 30-iteration resize-convergence loop in the tm launcher is now zellij-only |

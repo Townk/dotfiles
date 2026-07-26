@@ -46,16 +46,15 @@ fi
 
 debug_log "target=$target"
 [[ -n "$target" && -f "$target" ]] || { debug_log "skip=not-file"; exit 0; }
-[[ -n ${ZELLIJ:-} ]] || { debug_log "skip=not-zellij"; exit 0; }
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+mux::available || { debug_log "skip=no-mux"; exit 0; }
 
 mime="$(file -b --mime-type -L "$target" 2>/dev/null)"
 debug_log "mime=$mime"
 [[ "$mime" == image/* ]] || { debug_log "skip=not-image"; exit 0; }
 
-zellij_cmd="${FZF_TAB_PREVIEW_OPEN_ZELLIJ:-zellij}"
 debug_log "open=$target"
-exec "$zellij_cmd" action new-pane \
-  --floating --close-on-exit \
-  --name "" --borderless false --pinned false \
-  --width 90% --height 90% \
-  -- "$HOME/.config/zellij/scripts/zellij-preview-image" "$target"
+# --frame: zellij's own rounded frame, unpinned (tmux popups always own a
+# border). 90% of the tab viewport on both backends.
+mux::popup 90% 90% --name "" --frame \
+  -- "$HOME/.config/mux/scripts/mux-preview-image" "$target"

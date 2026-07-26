@@ -4,7 +4,7 @@
 # Off-PATH backend helper (reached by absolute path, never typed), so it lives
 # in ~/.local/libexec/ beside pick-glyph / pick-gitmoji. Its sole purpose is to
 # give callers that do NOT source pick-common.zsh a way to run pick::start in a
-# fresh process — in particular the zj::pick floating-pane child (see
+# fresh process — in particular the mux::pick floating-pane child (see
 # ~/.local/lib/zellij.zsh), which spawns a separate process inside a Zellij
 # float and so cannot reuse the parent's sourced functions.
 #
