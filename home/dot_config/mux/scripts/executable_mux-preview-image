@@ -1,6 +1,7 @@
 #!/usr/bin/env zsh
 #
-# zellij-preview-image — show an image in a floating Zellij pane, then wait for
+# mux-preview-image — show an image in a floating pane/popup (whichever the
+# caller's backend floats), then wait for
 # a single keypress before exiting (the pane is launched with --close-on-exit,
 # so quitting closes it).
 #

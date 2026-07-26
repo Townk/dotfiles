@@ -312,7 +312,7 @@ keymap:
         desc: terminal settings
         icon: 
         color: teal
-        cmd: run-shell 'zsh ~/.config/zellij/scripts/edit-terminal-config'
+        cmd: run-shell 'zsh ~/.config/mux/scripts/edit-terminal-config'
       - keys:
         - q
         desc: kill current session
@@ -391,13 +391,13 @@ keymap:
         desc: copy pwd
         icon: 󰅇
         color: yellow
-        cmd: 'run-shell ''zsh ~/.config/zellij/scripts/copy-pwd --relative #{pane_pid}'''
+        cmd: 'run-shell ''zsh ~/.config/mux/scripts/copy-pwd --relative #{pane_pid}'''
       - keys:
         - M-y
         desc: copy pwd (abs)
         icon: 󰅇
         color: yellow
-        cmd: 'run-shell ''zsh ~/.config/zellij/scripts/copy-pwd --absolute #{pane_pid}'''
+        cmd: 'run-shell ''zsh ~/.config/mux/scripts/copy-pwd --absolute #{pane_pid}'''
     tab:
       title: Tab
       icon: 󰓩
@@ -425,7 +425,7 @@ keymap:
         icon: 󱓞
         color: mauve
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Tab\" --no-chrome --
-          $HOME/.config/zellij/scripts/quick-launch menu tab"'
+          $HOME/.config/mux/scripts/quick-launch menu tab"'
         dialog: true
       - keys:
         - x
@@ -669,7 +669,7 @@ keymap:
         icon: 󱓞
         color: green
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 70 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Pane\" --no-chrome
-          -- $HOME/.config/zellij/scripts/quick-launch menu pane"'
+          -- $HOME/.config/mux/scripts/quick-launch menu pane"'
         dialog: true
     resize:
       title: Resize
@@ -793,7 +793,7 @@ keymap:
         icon: 󱓟
         color: red
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome
-          -- $HOME/.config/zellij/scripts/quick-launch menu workspace"'
+          -- $HOME/.config/mux/scripts/quick-launch menu workspace"'
         dialog: true
     scroll:
       title: Scroll

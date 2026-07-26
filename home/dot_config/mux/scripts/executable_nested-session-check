@@ -1,0 +1,24 @@
+#!/usr/bin/env zsh
+# nested-session-check <client_pid>
+#
+# Exit 0 if the mux client process <client_pid> is attached to a nested
+# workspace session, else exit non-zero. WezTerm's Lua (Cmd+Shift+P) calls
+# this with the focused pane's foreground-process pid (the mux client) to
+# decide whether to send Ctrl+Alt+Space — summoning the local workspace picker
+# from inside a nested, locked-passthrough session — instead of the normal
+# `Alt+w o S` sequence (which would otherwise pass straight through to the
+# remote's own Zellij).
+#
+# The session is resolved LIVE through the shim (mux::resolve_session, which
+# reads the backend from the client PROCESS — this runs in WezTerm's GUI
+# environment, where $ZELLIJ/$TMUX say nothing), so it tracks a switch in
+# place. Membership is checked against the registry quick-launch writes
+# whenever it launches a nested workspace.
+emulate -L zsh
+set -u
+
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+
+name="$(mux::resolve_session "${1:?usage: nested-session-check <client_pid>}" 2>/dev/null)" || exit 1
+reg="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/nested-sessions"
+grep -Fxq "$name" "$reg" 2>/dev/null

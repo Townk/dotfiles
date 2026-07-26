@@ -7,7 +7,7 @@
 # Enter/ESC are safe. Only the affirmative answer kills:
 #   zellij → `zellij kill-session $ZELLIJ_SESSION_NAME` (NOT `action quit`,
 #            which only quits the current client in some setups — same
-#            rationale as zellij-quit-confirm, which stays for the current
+#            rationale zellij-quit-confirm had before Phase 6 retired it (the
 #            Zellij keybind until the Phase 6 sweep re-points it here)
 #   tmux   → `tmux kill-session` (current session)
 
@@ -28,7 +28,7 @@ else
 fi
 
 # --danger: red destructive palette AND forces default=Cancel, so Enter/ESC
-# are safe — same contract as zellij-quit-confirm (parity checked Mode B).
+# are safe — the contract zellij-quit-confirm had (parity checked Mode B).
 ans=$(input::confirm --title "Quit Session" --danger \
   --affirmative "Quit" --negative "Cancel" \
   "Kill this session?"$'\n\n'"Session: ${session:-?}") || exit 0

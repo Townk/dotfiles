@@ -2,8 +2,9 @@
 # copy-pwd — copy the focused zellij pane's working directory to the macOS
 #            clipboard, then show a Hammerspoon OSD (and play a short sound).
 #
-# Lives under ~/.config/zellij/scripts/ — it's a zellij-internal helper,
-# not a shell command. It is invoked *headlessly* by the zj-context-keys
+# Lives under ~/.config/mux/scripts/ — a mux-internal helper, not a shell
+# command; both backends call it (zellij through the context-keys plugin,
+# tmux through a run-shell bind). It is invoked *headlessly* by the zj-context-keys
 # ("context-keys") plugin via its `run` action, wired to the `Alt+w Y`
 # (and `Alt+w Ctrl+y`) leader chords in ~/.config/zellij/config.kdl.
 # Because the plugin runs the command through Zellij's host `run_command`

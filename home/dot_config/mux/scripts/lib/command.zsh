@@ -444,7 +444,7 @@ keybinds clear-defaults=true {
         bind "Alt Enter" {
             MessagePlugin "context-keys" {
                 name "alt+enter"
-                payload "default: run $home/.config/zellij/scripts/terminal-toggle-fullscreen; when fzf: \$source"
+                payload "default: run $home/.config/mux/scripts/terminal-toggle-fullscreen; when fzf: \$source"
             }
         }
     }

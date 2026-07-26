@@ -13,7 +13,12 @@
     title   Header text shown in the modal's title block.
     inject  true  → picker mode  (capture stdout, inject into the tile)
             false → action mode  (target owns its outcome, e.g. quit)
-    script  Basename of the target under ~/.config/zellij/scripts/.
+    script  Basename of the target under ~/.config/zellij/scripts/ (the
+            backend-private helpers; the neutral entry points moved to
+            ~/.config/mux/scripts/ in migration Phase 6).
+    dir     OPTIONAL $HOME-relative directory holding `script`. Defaults to
+            ".config/zellij/scripts"; pass ".config/mux/scripts" for a
+            backend-neutral target (the quit dialog, shared with tmux).
     width   Floating-pane width  (e.g. "70%" or a cell count like "50").
     height  Floating-pane height (e.g. "60%" or a cell count like "14").
     args    OPTIONAL extra args passed to the target script, already
@@ -41,7 +46,7 @@
   zellij frames the modal or pty-frame owns the chrome.
 */ -}}
 {{- define "zellijModalRun" -}}
-            Run "env" "COLORTERM=truecolor" "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }}{{ if and (hasKey . "no_chrome") .no_chrome }} "--no-chrome"{{ end }}{{ if and (hasKey . "no_discover") .no_discover }} "--no-discover"{{ end }} "--" "{{ joinPath .home ".config/zellij/scripts" .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
+            Run "env" "COLORTERM=truecolor" "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }}{{ if and (hasKey . "no_chrome") .no_chrome }} "--no-chrome"{{ end }}{{ if and (hasKey . "no_discover") .no_discover }} "--no-discover"{{ end }} "--" "{{ joinPath .home (dig "dir" ".config/zellij/scripts" .) .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
                 name ""
                 close_on_exit true
                 floating true
@@ -80,7 +85,7 @@ keybinds clear-defaults=true {
         bind "Alt Enter" {
             MessagePlugin "context-keys" {
                 name "alt+enter"
-                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/terminal-toggle-fullscreen" }}; when fzf: $source"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/mux/scripts/terminal-toggle-fullscreen" }}; when fzf: $source"
             }
         }
 
@@ -452,8 +457,10 @@ keybinds clear-defaults=true {
                      "height" "75%") }}
         }
 
-        // Quit zellij — Catppuccin Mocha-themed `gum confirm` dialog
-        // (see scripts/zellij-quit-confirm) drawn inside a compact,
+        // Quit the session — themed confirm dialog (see
+        // ~/.config/mux/scripts/mux-quit-confirm, the SAME script the
+        // tmux leader-q popup runs; it picks the kill path per backend)
+        // drawn inside a compact,
         // pinned floating pane with a (rounded) frame but no title
         // text (`name ""`). The script defaults to Cancel, so
         // Enter/Esc are safe; only the affirmative button (or `y`)
@@ -465,8 +472,7 @@ keybinds clear-defaults=true {
         //
         // Pane geometry is fixed in cells rather than percentages so
         // the dialog renders identically across terminal sizes. See
-        // scripts/zellij-quit-confirm for the line-by-line layout
-        // breakdown.
+        // mux-quit-confirm for the line-by-line layout breakdown.
         //   width   50  — 2 frame cols + 2 left-padding cells (set
         //                 in gum via --padding) + 46 cells of usable
         //                 content area. Rule is intentionally 44
@@ -490,7 +496,8 @@ keybinds clear-defaults=true {
                      "title" ""
                      "borderless" true
                      "inject" false
-                     "script" "zellij-quit-confirm"
+                     "script" "mux-quit-confirm"
+                     "dir" ".config/mux/scripts"
                      "width" "50"
                      "height" "13") }}
         }
@@ -516,14 +523,14 @@ keybinds clear-defaults=true {
         bind "Y" {
             MessagePlugin "context-keys" {
                 name "copy-pwd"
-                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/copy-pwd" }} --relative {pid}"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/mux/scripts/copy-pwd" }} --relative {pid}"
             }
             SwitchToMode "normal"
         }
         bind "Alt y" {
             MessagePlugin "context-keys" {
                 name "copy-pwd-abs"
-                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/copy-pwd" }} --absolute {pid}"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/mux/scripts/copy-pwd" }} --absolute {pid}"
             }
             SwitchToMode "normal"
         }
@@ -554,7 +561,7 @@ keybinds clear-defaults=true {
             SwitchToMode "normal"
             MessagePlugin "context-keys" {
                 name "open-terminal-config"
-                payload "default: run {{ joinPath .chezmoi.homeDir ".config/zellij/scripts/edit-terminal-config" }}"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/mux/scripts/edit-terminal-config" }}"
             }
         }
 
@@ -1025,7 +1032,7 @@ pane_frames false
 // it's this global UI setting only. Since `pane_frames false` above keeps
 // every tiled pane frameless, the only panes that draw a zellij frame are
 // the framed dialogs that keep the default `borderless false` (e.g. the
-// gum confirm prompts) and zellij-open's image preview — so this rounds
+// gum confirm prompts) and mux-open's image preview — so this rounds
 // just those. fzf pickers pass `borderless true` and let pty-frame draw
 // their own rounded chrome.
 ui {

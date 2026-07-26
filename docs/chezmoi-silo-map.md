@@ -78,7 +78,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 **Owner area (safe to edit):**
 - `home/dot_config/wezterm/` (all lua)
 - `home/dot_config/ghostty/config`
-- `home/dot_config/zellij/config.kdl.tmpl`, `layouts/default.kdl.tmpl`, `quick-launch/`, `scripts/` (quick-launch, zellij-modal, zellij-open, pick-*-zellij, copy-pwd, edit-terminal-config, terminal-toggle-fullscreen, ensure-plugins, nested-session-check, lib/{config,command,dispatch,zellij-session}.zsh)
+- `home/dot_config/zellij/config.kdl.tmpl`, `layouts/default.kdl.tmpl`, `quick-launch/`, `scripts/` (backend-private: zellij-modal, pick-*-zellij, quick-launch-zellij, ensure-plugins, lib/zellij-session.zsh); `home/dot_config/mux/scripts/` (backend-neutral: quick-launch{,-pick,-window}, mux-open, mux-preview-{file,image}, mux-quit-confirm, the mux-*/tmux-* helpers, copy-pwd, edit-terminal-config, terminal-toggle-fullscreen, nested-session-check, resolve-terminal-location, lib/{config,command,dispatch,dispatch-tmux,terminal-location}.zsh); `home/dot_config/tmux/`
 - `home/dot_local/lib/zellij.zsh` (`zj::*`), `home/dot_local/lib/image-protocol-support.zsh`
 - Zellij chezmoiscripts in chezmoi: `run_after_45-grant-zellij-plugin-permissions`, `run_onchange_after_40-install-snaps` (snap is system's data, the hook wiring is shared — coordinate)
 
@@ -86,7 +86,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 **Public contract (preserve):**
 - `zj::pick` — drop-in for `pick::start` (pick). Same argv, floats in a Zellij pane when `$ZELLIJ` set, else inline. Consumed by `ai-assist`/`ai-commit` (ai-harnesses) and `quick-launch-pick`.
-- `resolve_session <client_pid>` / `zellij_wezterm_sessions` in `zellij/scripts/lib/zellij-session.zsh` — unix-socket session resolver. Consumed by `zellij-open`, `tab-edit` (utils), quick-launch.
+- `mux::resolve_session <client_pid>` / `mux::client_sessions` in `~/.local/lib/mux.zsh` — backend-dispatching session resolvers (the zellij half is the unix-socket scan; the tmux half asks the server). Consumed by `mux-open`, `tab-edit` (utils), quick-launch.
 - **OSC 52 clipboard protocol**: `copy_command` intentionally unset in `config.kdl.tmpl`; copy is origin-relative via re-emitted OSC 52. The SSH paste-back reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` (served by system's `clipboard-bridge` agent). nvim implements the client.
 - **Workspace-rename side-channel**: `__TOGGLE_FULLSCREEN__` / `__QL_FOCUS__=<id>` workspace names drive WezTerm handlers. `terminal-toggle-fullscreen` (this silo) and quick-launch depend on these exact sentinel strings.
 - **Fullscreen-state mirror file**: `~/.local/state/wezterm/fullscreen_state` (atomic write-on-change) — read by the zj-hud bar.
@@ -97,7 +97,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 **Entry points to start an investigation:** `wezterm.lua`, `config.kdl.tmpl`, `zellij.zsh`, `zellij-session.zsh`, `scripts/lib/dispatch.zsh`.
 
-**Dispatch example:** *"Review the Zellij quick-launch dispatcher for correctness/performance. You own terminal-mux's `dot_config/zellij/scripts/quick-launch*` and `lib/dispatch.zsh`. Preserve `zj::pick`/`resolve_session`/`@window:<id>` contracts. Don't touch the wasm plugin sources (outside repo) or `services.toml` (system)."*
+**Dispatch example:** *"Review the Zellij quick-launch dispatcher for correctness/performance. You own terminal-mux's `dot_config/mux/scripts/quick-launch*` and `lib/dispatch.zsh`. Preserve `zj::pick`/`resolve_session`/`@window:<id>` contracts. Don't touch the wasm plugin sources (outside repo) or `services.toml` (system)."*
 
 ---
 
@@ -356,7 +356,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 **Owner area:** `home/dot_config/yazi/` — `init.lua`, `yazi.toml`, `keymap.toml`, `plugins/{folder-rules,parent-arrow}.yazi/`.
 
-**Out of scope:** the `zellij-open` script (terminal-mux) that opens dirs in a Yazi tab. The `preview` backend + libexec viewers (preview). The `mactag`/`bypass`/`smart-switch`/`full-border`/`git` plugins (external Yazi plugins — only config here).
+**Out of scope:** the `mux-open` script (terminal-mux) that opens dirs in a Yazi tab. The `preview` backend + libexec viewers (preview). The `mactag`/`bypass`/`smart-switch`/`full-border`/`git` plugins (external Yazi plugins — only config here).
 
 **Public contract (preserve):**
 - **Previewer wiring** in `yazi.toml`/`init.lua` — prepend_previewers route to `ouch`/`mediainfo`/`rich`/the preview libexec viewers. The `preview` script (preview) is the backend.
@@ -364,7 +364,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **`$NVIM` detection** — auto-toggles min-preview when nested under nvim (cooperates with neovim).
 - **keymap contract** — `K`/`J` parent-arrow, `H`/`L` bypass, color-tag keys, `yazi-quick-look` on Ctrl+Space (Quick Look locally, floating zellij `preview` pane over SSH).
 
-**Consumes from:** preview (preview + viewers), terminal-mux (zellij-open), neovim (`$NVIM`), external Yazi plugins.
+**Consumes from:** preview (preview + viewers), terminal-mux (mux-open), neovim (`$NVIM`), external Yazi plugins.
 
 **Entry points:** `init.lua`, `yazi.toml`, `keymap.toml`, `plugins/`.
 
@@ -495,7 +495,7 @@ owner area, don't parallelize.
 2. **terminal-mux↔system**: `services.toml.tmpl` `clipboard-bridge` section — system owns the file, terminal-mux owns the socket protocol the nvim client uses. Pre-agree: system edits the plist fields, terminal-mux edits the `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` protocol; both touching `[clipboard-bridge]` = collision.
 3. **terminal-mux↔shell**: Zellij auto-attach in `dot_zshrc` (shell) calls into terminal-mux's quick-launch recency seeding; `notify` (shell lib) is called by terminal-mux's `copy-pwd`. Different files, but the *call contract* must stay in sync.
 4. **terminal-mux↔preview**: `image-protocol-support.zsh` is owned by terminal-mux, sourced read-only by preview. Safe if preview only *calls* `get_terminal_image_protocol`; collision if preview needs to edit it (→ hand back to terminal-mux).
-5. **terminal-mux↔yazi**: `zellij-open` (terminal-mux) opens dirs in a Yazi tab (yazi). Contract is the Yazi invocation; different files.
+5. **terminal-mux↔yazi**: `mux-open` (terminal-mux) opens dirs in a Yazi tab (yazi). Contract is the Yazi invocation; different files.
 6. **chezmoi↔{terminal-mux,custom-builds,secrets,system,shell}**: the `.chezmoiscripts/run_*` triggers. Each run-script is a distinct file, so **per-file** parallelism is fine; the collision is only if two agents renumber/reorder the prefix sequence. Rule: chezmoi owns ordering; feature silos own the *content* of their own run-script.
 7. **utils↔{terminal-mux,hammerspoon,shell}**: `common.zsh` (`notify` primitive) + `platform*.zsh` are shared. Any new shared primitive = serialize.
 8. **neovim↔preview/yazi**: nvim's filetype registry is queried by chezmoi's app generator and nvim's `$NVIM` env is read by yazi. Contract-level, different files.

@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
 #
-# zellij-preview-file — show any file's full `preview` render in a floating
+# mux-preview-file — show any file's full `preview` render in a floating
 # Zellij pane, then wait for a single keypress before exiting (the pane is
 # launched with --close-on-exit, so quitting closes it).
 #
 # The Quick Look stand-in where the real panel can't reach the screen (SSH,
 # non-macOS): yazi's Ctrl+Space lands here via yazi-quick-look. Sibling of
-# zellij-preview-image, minus PREVIEW_IMAGE_ONLY — a Quick Look-style pane
+# mux-preview-image, minus PREVIEW_IMAGE_ONLY — a Quick Look-style pane
 # wants the whole render (raster plus metadata block), not just the image.
 
 emulate -L zsh

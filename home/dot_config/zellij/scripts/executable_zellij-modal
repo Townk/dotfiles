@@ -26,11 +26,11 @@
 #                 pane that was focused before the modal opened (with a
 #                 focus-previous-pane fallback). Without it ("action"
 #                 mode) CMD runs in the foreground and owns its own
-#                 outcome — e.g. zellij-quit-confirm calls kill-session.
+#                 outcome — e.g. mux-quit-confirm calls kill-session.
 #   --capture FILE  Capture mode. Like --inject, capture CMD's stdout and
 #                 strip the single trailing newline, but instead of
 #                 injecting it into a tile, write it to FILE — a FIFO the
-#                 spawning process blocks on (see zj::pick in
+#                 spawning process blocks on (see mux::pick in
 #                 ~/.local/lib/zellij.zsh). The result is written via an
 #                 EXIT trap so the reader unblocks even on cancel/ESC.
 #                 No tile discovery: the originating pane is a blocked

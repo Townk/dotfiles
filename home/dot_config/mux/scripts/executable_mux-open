@@ -1,0 +1,103 @@
+#!/usr/bin/env zsh
+# mux-open — open a clicked file:// link inside the right mux session.
+#
+# Invoked by WezTerm's `open-uri` handler (see ~/.config/wezterm/wezterm.lua)
+# as:  mux-open <client_pid> <uri> [cols] [rows]
+#
+# <client_pid> is the foreground process of the clicked WezTerm pane (the
+# mux client — zellij or tmux). The backend is read from that PROCESS and
+# pinned via $MUX_BACKEND, because this script runs in WezTerm's GUI
+# environment where $ZELLIJ/$TMUX say nothing. Then:
+#   - directory  -> new tab running Yazi at that dir
+#   - image      -> floating popup running our preview wrapper
+#   - text/code  -> new tab running nvim (CWD = git root, else the file's dir)
+#   - anything else (binary, etc.) -> ignored
+# Tabs/popups close on exit, so they vanish when the program quits.
+#
+# Runs from WezTerm's GUI environment, so it sets a sane PATH up front (lsof,
+# ps, file, git, zellij, tmux, nvim, yazi may otherwise be missing).
+set -uo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+pid="${1:-}"
+uri="${2:-}"
+# Full display size (the clicked WezTerm pane), used to size the image
+# float in absolute cells. 0 when unknown -> percentage fallback below.
+term_cols="${3:-0}"
+term_rows="${4:-0}"
+[ -n "$pid" ] && [ -n "$uri" ] || {
+  echo "usage: mux-open <pid> <uri> [cols] [rows]" >&2
+  exit 2
+}
+
+# Only handle local file links; everything else is left to WezTerm/the browser.
+case "$uri" in file://*) ;; *) exit 0 ;; esac
+
+# file://[localhost]/path -> /path, then percent-decode (+ is a space in URLs).
+urldecode() {
+  local s="${1//+/ }"
+  printf '%b' "${s//%/\\x}"
+}
+# NB: the variable is `target`, NOT `path`. Under zsh `path` is the array tied
+# to `$PATH`, so `path=…` would clobber the PATH exported above and break the
+# bare `file`/`git`/`basename`/`yazi`/`nvim` lookups below.
+target="$(urldecode "${uri#file://}")"
+target="${target#localhost}"
+[ -e "$target" ] || exit 0
+
+# --- Resolve the client's backend and session ------------------------------
+# The shim reads the backend from the client PROCESS (mux::backend_for_pid)
+# and every mux::* call below dispatches on the pinned value; the session
+# lookup is each backend's own (zellij: the client's unix socket; tmux: ask
+# the server). Tracks live session switches and needs no --session in argv.
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+
+MUX_BACKEND="$(mux::backend_for_pid "$pid")"
+[ "$MUX_BACKEND" = none ] && exit 0
+export MUX_BACKEND
+
+session="$(mux::resolve_session "$pid")" || exit 0
+[ -n "$session" ] || exit 0
+
+name="$(basename -- "$target")"
+
+# --- Directory: Yazi in a new tab -----------------------------------------
+if [ -d "$target" ]; then
+  # No exec: mux::new_tab is a shell function, not a command.
+  mux::new_tab --session "$session" --cwd "$target" --name "$name" \
+    -- yazi "$target"
+  exit $?
+fi
+
+# --- File: classify by MIME -----------------------------------------------
+mime=$(file -b --mime-type -L "$target" 2>/dev/null)
+case "$mime" in
+  image/*)
+    # Big floating preview with a frame but no title text (--frame: on
+    # zellij a bordered, unpinned float overriding the global
+    # `pane_frames false`; tmux popups always own their border). Sized in
+    # absolute cells: 28 columns narrower and 5 rows shorter than the full
+    # display (falls back to 90% when the size isn't known). The wrapper
+    # renders the image at that size and waits for a keypress; the float
+    # closes on exit.
+    if [ "$term_cols" -gt 28 ] 2>/dev/null && [ "$term_rows" -gt 5 ] 2>/dev/null; then
+      size=($((term_cols - 28)) $((term_rows - 5)))
+    else
+      size=(90% 90%)
+    fi
+    mux::popup "${size[@]}" --session "$session" --name "" --frame \
+      -- "$HOME/.config/mux/scripts/mux-preview-image" "$target"
+    exit $?
+    ;;
+  *)
+    # Treat anything non-binary as editable text/code; ignore real binaries.
+    enc=$(file -b --mime-encoding -L "$target" 2>/dev/null)
+    [ "$enc" = "binary" ] && exit 0
+    dir="$(dirname -- "$target")"
+    root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root=""
+    [ -n "$root" ] || root="$dir"
+    mux::new_tab --session "$session" --cwd "$root" --name "$name" \
+      -- nvim "$target"
+    exit $?
+    ;;
+esac

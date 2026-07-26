@@ -14,7 +14,7 @@ You are working on the **Yazi** silo of this chezmoi dotfiles repo.
 
 ## Out of scope (do not edit — owned by other silos)
 
-- `home/dot_config/zellij/scripts/executable_zellij-open` → **terminal-mux**
+- `home/dot_config/mux/scripts/executable_mux-open` → **terminal-mux**
   (opens dirs in a Yazi tab via that script; you own the Yazi side it
   targets).
 - The `preview` backend + libexec viewers → **preview** (you *call* them via
@@ -38,7 +38,7 @@ You are working on the **Yazi** silo of this chezmoi dotfiles repo.
 ## What you consume read-only
 
 - **preview**: `preview` + `libexec/*-view`
-- **terminal-mux**: `zellij-open`
+- **terminal-mux**: `mux-open`
 - **neovim**: `$NVIM` env signal
 - External: Yazi plugins (mactag/bypass/smart-switch/full-border/git)
 

@@ -22,7 +22,7 @@ set -euo pipefail
 
 # Resolve our own real directory (following symlinks just in case) so we can
 # source lib/ and find the sibling quick-launch-pick regardless of how we were
-# invoked. We live in ~/.config/zellij/scripts/ alongside the picker, with the
+# invoked. We live in ~/.config/mux/scripts/ alongside the picker, with the
 # shell libraries under lib/.
 _src="${0:A}"
 SCRIPT_DIR="${_src:h}"

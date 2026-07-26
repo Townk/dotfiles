@@ -3,7 +3,7 @@
 {{- $hasZellijPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-context-keys/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-prompt-jumper/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-hud")) -}}
 # default.yaml — managed quick-launch targets for Zellij.
 #
-# Consumed by ~/.config/zellij/scripts/quick-launch via the Alt+w P/T/W leader
+# Consumed by ~/.config/mux/scripts/quick-launch via the Alt+w P/T/W leader
 # binds. Every target is focus-or-create. Schema + merge rules:
 #   ~/.config/zellij/quick-launch/quick-launch-schema.md
 #

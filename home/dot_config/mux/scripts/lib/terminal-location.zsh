@@ -27,7 +27,11 @@ set -u
 [[ -n "${__TERMINAL_LOCATION_ZSH:-}" ]] && return 0
 typeset -g __TERMINAL_LOCATION_ZSH=1
 
-[[ -n "${__ZELLIJ_SESSION_ZSH:-}" ]] || source "${0:A:h}/zellij-session.zsh"
+# The mux shim answers "which backend is this client, and what is running in
+# its focused pane" for BOTH backends (mux::backend_for_pid /
+# mux::focused_command); it also re-exports the zellij session resolvers this
+# file used before Phase 6.
+(( ${+functions[mux::backend]} )) || source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
 
 # Profile → default palette color name. Used when a machine has no explicit
 # `color`. Names must exist in wezterm.lua's palette.
@@ -153,36 +157,13 @@ tl_hex_for_colorname() {
   print -r -- "$hex"
 }
 
-tl_zellij_bin() {
-  local z="${ZELLIJ_BIN:-${commands[zellij]:-}}"
-  [[ -n "$z" && -x "$z" ]] && {
-    print -r -- "$z"
-    return 0
-  }
-  for z in /opt/homebrew/bin/zellij /usr/local/bin/zellij "$HOME/.local/bin/zellij"; do
-    [[ -x "$z" ]] && {
-      print -r -- "$z"
-      return 0
-    }
-  done
-  return 1
-}
-
-# Focused terminal pane command via list-panes JSON. A floating modal (our
-# pickers/dialogs) keeps its own focus while the originating tile stays focused
-# in the tiled axis, so `is_focused` matches both; exclude floating panes so a
-# transient modal never hijacks the window tint — the tiled pane is the context.
-tl_focused_pane_command() {
-  local session="$1" zj
-  zj="$(tl_zellij_bin)" || return 1
-  "$zj" -s "$session" action list-panes -a -j 2>/dev/null |
-    jq -r '[.[] | select(.is_plugin == false and .is_focused == true and .is_floating == false)] | .[0].pane_command // empty' 2>/dev/null
-}
-
-# RUNNING_COMMAND of the sole client (fallback when no focused terminal pane).
+# RUNNING_COMMAND of the sole client (zellij fallback when no focused
+# terminal pane; tmux has no equivalent and needs none — its focused-pane
+# query never comes up empty for a live client).
 tl_client_running_command() {
   local session="$1" zj count
-  zj="$(tl_zellij_bin)" || return 1
+  zj="${ZELLIJ_BIN:-${commands[zellij]:-}}"
+  [[ -n "$zj" && -x "$zj" ]] || return 1
   count=$("$zj" -s "$session" action list-clients 2>/dev/null | awk 'NR > 1 { c++ } END { print c + 0 }')
   ((count == 1)) || return 1
   "$zj" -s "$session" action list-clients 2>/dev/null |
@@ -205,29 +186,35 @@ tl_classify_command() {
 #   Prints: local | <palette color name>
 resolve_terminal_location() {
   local client_pid="${1:?usage: resolve_terminal_location <client_pid>}"
-  local session cmd exe args
+  local session cmd exe args backend
 
   exe=$(ps -p "$client_pid" -o comm= 2>/dev/null) || {
     print -r -- local
     return 0
   }
 
-  # Bare ssh (or anything non-Zellij) in the pane: classify its own argv.
-  if [[ "$exe" != *zellij* ]]; then
-    args=$(ps -p "$client_pid" -o args= 2>/dev/null) || args=""
-    tl_classify_command "$args" && return 0
-    print -r -- local
-    return 0
+  # Which mux (if any) the clicked pane is running — read from the PROCESS,
+  # since this runs in WezTerm's environment, not in a pane.
+  backend="$(mux::backend_for_pid "$client_pid")"
+  case "$exe" in
+    *zellij*|*tmux*) ;;
+    # Bare ssh (or anything that is not a mux client): classify its own argv.
+    *)
+      args=$(ps -p "$client_pid" -o args= 2>/dev/null) || args=""
+      tl_classify_command "$args" && return 0
+      print -r -- local
+      return 0
+      ;;
+  esac
+
+  # A mux client: ask the shim what its focused (tiled) pane is running.
+  cmd="$(MUX_BACKEND="$backend" mux::focused_command "$client_pid")"
+  if [[ -z "$cmd" && "$backend" == zellij ]]; then
+    # Zellij-only fallback: a single client's RUNNING_COMMAND, for the case
+    # where no terminal pane is focused (a plugin pane holds focus).
+    session="$(resolve_session "$client_pid" 2>/dev/null)" &&
+      cmd="$(tl_client_running_command "$session")" || cmd=""
   fi
-
-  # Zellij client: find its session, then the focused pane's command.
-  session="$(resolve_session "$client_pid" 2>/dev/null)" || {
-    print -r -- local
-    return 0
-  }
-
-  cmd="$(tl_focused_pane_command "$session")"
-  [[ -n "$cmd" ]] || cmd="$(tl_client_running_command "$session")" || cmd=""
 
   tl_classify_command "$cmd" && return 0
   print -r -- local

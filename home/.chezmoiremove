@@ -103,6 +103,30 @@
 /README.md
 /.config/zellij/scripts/quick-launch-external
 
+# ── mux migration Phase 6: neutral entry points left ~/.config/zellij ───────
+# The backend-NEUTRAL scripts (both muxes call them) moved to
+# ~/.config/mux/scripts/; the backend-private ones (zellij-modal, the
+# pick-*-zellij thins, quick-launch-zellij) stayed put. zellij-quit-confirm
+# was retired outright — both backends now run mux-quit-confirm. Each pattern
+# is the exact old basename, so a relocated equivalent is never matched.
+/.config/zellij/scripts/copy-pwd
+/.config/zellij/scripts/edit-terminal-config
+/.config/zellij/scripts/nested-session-check
+/.config/zellij/scripts/resolve-terminal-location
+/.config/zellij/scripts/terminal-toggle-fullscreen
+/.config/zellij/scripts/quick-launch
+/.config/zellij/scripts/quick-launch-pick
+/.config/zellij/scripts/quick-launch-window
+/.config/zellij/scripts/zellij-open
+/.config/zellij/scripts/zellij-preview-file
+/.config/zellij/scripts/zellij-preview-image
+/.config/zellij/scripts/zellij-quit-confirm
+/.config/zellij/scripts/lib/command.zsh
+/.config/zellij/scripts/lib/config.zsh
+/.config/zellij/scripts/lib/dispatch.zsh
+/.config/zellij/scripts/lib/dispatch-tmux.zsh
+/.config/zellij/scripts/lib/terminal-location.zsh
+
 # ── shared agent skills: pi commit renamed to code-commit ───────────────────
 # The portable shared skill uses one Agent Skills-standard name in every
 # harness. Remove pi's old harness-specific alias after deploying code-commit.

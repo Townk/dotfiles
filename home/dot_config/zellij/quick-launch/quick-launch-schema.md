@@ -66,11 +66,11 @@ the `zj-hud` bar and floating which-key/search panes are present). A command
 target (`Edit`/`Run`/`Remote`) runs as the tab's initial command and the tab
 closes when that command exits; a `Shell` tab is a plain interactive shell.
 
-To run a target that hosts its **own** Zellij (e.g. a remote machine over SSH),
-make it a `workspace` with `nested_zellij: true` and a `Run`/`Remote` action —
-the bar-less, key-passthrough session avoids a doubled status bar and lets the
-remote's keybinds work, while staying a real, swappable session. Open it in a
-separate OS window with the picker's Alt+Enter.
+To run a target that hosts its **own** multiplexer (e.g. a remote machine over
+SSH), make it a `workspace` with `nested_mux: true` and a `Run`/`Remote` action
+— the bar-less, key-passthrough session avoids a doubled status bar and lets
+the remote's keybinds work, while staying a real, swappable session. Open it in
+a separate OS window with the picker's Alt+Enter.
 
 ## Pane-Only Fields
 
@@ -85,7 +85,7 @@ separate OS window with the picker's Alt+Enter.
 
 | key             | type | description                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `nested_zellij` | bool | When true, the session is built for hosting another full Zellij (e.g. a remote over SSH). It launches from a generated bar-less layout — the workspace's `Run`/`Remote` action runs directly as the sole pane's command (no login-shell tab, so no MOTD flash) — in plain `normal` mode with `clear-defaults=true` keybinds, so every key is forwarded verbatim to the inner Zellij. (Locked mode is unreachable for a custom-layout session in Zellij 0.44, so passthrough is achieved by clearing bindings instead.) The one local binding is `Ctrl+Alt+Space`, which summons the workspace picker (also reachable via WezTerm `Cmd+Shift+P`). |
+| `nested_mux` | bool | When true, the session is built for hosting another full multiplexer (e.g. a remote over SSH). The workspace's `Run`/`Remote` action runs directly as the sole pane's command (no login-shell tab, so no MOTD flash) and every key is forwarded verbatim to the inner mux. **Zellij**: a generated bar-less layout in plain `normal` mode with `clear-defaults=true` keybinds (Locked mode is unreachable for a custom-layout session in Zellij 0.44, so passthrough is achieved by clearing bindings instead). **tmux** (D14): `prefix None` plus the `nested` key table. Either way the one local binding is `Ctrl+Alt+Space`, which summons the workspace picker (also reachable via WezTerm `Cmd+Shift+P`). The old key `nested_zellij` is still read as an alias, so existing definitions keep working. |
 
 ## Nesting
 

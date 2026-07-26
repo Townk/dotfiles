@@ -15,9 +15,15 @@ chezmoi dotfiles repo.
 - `home/dot_config/ghostty/config`
 - `home/dot_config/zellij/config.kdl.tmpl`, `layouts/default.kdl.tmpl`,
   `quick-launch/` (incl. `default.yaml.tmpl`, `launch.d/`),
-  `scripts/` (quick-launch, zellij-modal, zellij-open, pick-*-zellij,
-  copy-pwd, edit-terminal-config, terminal-toggle-fullscreen, ensure-plugins,
-  nested-session-check, `lib/{config,command,dispatch,zellij-session}.zsh`)
+  `scripts/` (backend-private: zellij-modal, pick-*-zellij,
+  quick-launch-zellij, `lib/zellij-session.zsh`)
+- `home/dot_config/mux/scripts/` (backend-neutral: quick-launch{,-pick,-window},
+  mux-open, mux-preview-{file,image}, mux-quit-confirm, mux-modal, tmux-modal,
+  tmux-popup, mux-{search,stack,whichkey,rename,copy-object,scroll-cursor},
+  copy-pwd, edit-terminal-config, terminal-toggle-fullscreen,
+  nested-session-check, resolve-terminal-location,
+  `lib/{config,command,dispatch,dispatch-tmux,terminal-location}.zsh`)
+- `home/dot_config/tmux/` (tmux.conf, keymap-base, keymap, status)
 - `home/dot_local/lib/zellij.zsh` (`zj::*`)
 - `home/dot_local/lib/image-protocol-support.zsh`
 - `home/dot_config/zellij/zellij-plugin-path.tmpl` (shared resolver —
@@ -52,7 +58,7 @@ chezmoi dotfiles repo.
   `ai-commit` (**ai-harnesses**) and `quick-launch-pick`.
 - **`resolve_session <client_pid>`** / **`zellij_wezterm_sessions`** in
   `zellij/scripts/lib/zellij-session.zsh` — unix-socket session resolver.
-  Consumed by `zellij-open`, `tab-edit` (**utils**), quick-launch.
+  Consumed by `mux-open`, `tab-edit` (**utils**), quick-launch.
 - **OSC 52 clipboard protocol**: `copy_command` intentionally unset in
   `config.kdl.tmpl`; copy is origin-relative via re-emitted OSC 52. The SSH
   paste-back reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`
@@ -84,7 +90,7 @@ chezmoi dotfiles repo.
 
 ## Where to start
 
-`wezterm.lua`, `config.kdl.tmpl`, `zellij.zsh`, `zellij/scripts/lib/dispatch.zsh`,
+`wezterm.lua`, `config.kdl.tmpl`, `zellij.zsh`, `mux/scripts/lib/dispatch.zsh`,
 `zellij/scripts/lib/zellij-session.zsh`.
 
 ## Setup — branch from the freshest master tip into an isolated worktree
@@ -141,7 +147,7 @@ $ARGUMENTS
 
 ## Verify before claiming done
 - Reproduce the behavior you changed (don't guess).
-- If you touched `lib/zellij.zsh` or `zellij/scripts/lib/*.zsh`, run
+- If you touched `lib/mux.zsh`, `lib/mux/*.zsh` or `mux/scripts/lib/*.zsh`, run
   `make test` (ShellSpec, pinned `--shell zsh`).
 - Confirm `zj::pick`/`resolve_session`/`@window:<id>`/sentinel-string
   contracts still hold.

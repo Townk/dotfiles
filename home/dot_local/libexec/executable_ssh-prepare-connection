@@ -108,7 +108,7 @@ step_symbols_db() {
 }
 
 step_theme() {
-  local loc_lib="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/scripts/lib/terminal-location.zsh"
+  local loc_lib="${XDG_CONFIG_HOME:-$HOME/.config}/mux/scripts/lib/terminal-location.zsh"
   [[ -r "$loc_lib" ]] || return 0
   source "$loc_lib"
 

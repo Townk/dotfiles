@@ -11,7 +11,7 @@
 #
 # Which window hosts a session is resolved LIVE from the unix sockets the
 # Zellij client holds (lib/zellij-session.zsh — the same file-socket trick
-# zellij-open uses): for each WezTerm pane we find the zellij client on its tty
+# mux-open uses): for each WezTerm pane we find the zellij client on its tty
 # and ask which session that client is attached to, yielding the WezTerm
 # window id.
 #
@@ -27,7 +27,7 @@
 
 set -eu -o pipefail
 
-source "${0:A:h}/lib/zellij-session.zsh"
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
 
 WEZTERM=${commands[wezterm]:-/opt/homebrew/bin/wezterm}
 GHOSTTY=${commands[ghostty]:-/Applications/Ghostty.app/Contents/MacOS/ghostty}
@@ -38,9 +38,12 @@ FOCUS_WORKSPACE_PREFIX="__QL_FOCUS__="
 # Capture the (expensive) enumeration once, then match over a here-string — a
 # `… | awk '…exit'` pipe would SIGPIPE the producer mid-write, and with
 # pipefail+errexit that would abort the whole script before we ever focus.
+# mux::client_sessions, not the zellij-only resolver: on tmux the mapping is
+# client tty ↔ WezTerm pane tty (Phase 1 deferred item — without this a
+# re-launch spawned a SECOND mirrored window instead of focusing the first).
 wezterm_window_id_for_session() {
   local out s wid rest
-  out=$(zellij_wezterm_sessions) || true
+  out=$(mux::client_sessions) || true
   while IFS=$'\t' read -r s wid rest; do
     [[ "$s" == "$1" ]] && {
       print -r -- "$wid"

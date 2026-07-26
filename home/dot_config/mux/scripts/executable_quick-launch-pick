@@ -116,7 +116,7 @@ elif [[ "$kind" == workspace ]]; then
   # (zellij_attached_sessions) — the precise WezTerm window is resolved lazily at
   # dispatch by quick-launch-window, so the menu doesn't pay for it. Empty on
   # Ghostty / when nothing is attached → all live workspaces read as "(detached)".
-  source "${0:A:h}/lib/zellij-session.zsh" 2>/dev/null || true
+  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" 2>/dev/null || true
   windowed_json="$({ zellij_attached_sessions 2>/dev/null | sed '/^$/d' | jq -R . | jq -s -c .; } 2>/dev/null || true)"
   [[ -n "$windowed_json" ]] || windowed_json='[]'
 else

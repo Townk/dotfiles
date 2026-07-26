@@ -24,11 +24,11 @@ Describe 'quick-launch tmux dispatch'
     export MUX_TMUX_BIN="$stub"
 
     # Minimal QL world: config/command libs loaded for the shared helpers.
-    export SCRIPT_DIR="$PWD/home/dot_config/zellij/scripts"
-    source home/dot_config/zellij/scripts/lib/config.zsh
-    source home/dot_config/zellij/scripts/lib/command.zsh
-    source home/dot_config/zellij/scripts/lib/dispatch.zsh
-    source home/dot_config/zellij/scripts/lib/dispatch-tmux.zsh
+    export SCRIPT_DIR="$PWD/home/dot_config/mux/scripts"
+    source home/dot_config/mux/scripts/lib/config.zsh
+    source home/dot_config/mux/scripts/lib/command.zsh
+    source home/dot_config/mux/scripts/lib/dispatch.zsh
+    source home/dot_config/mux/scripts/lib/dispatch-tmux.zsh
     QL_JSON='{"panes":[{"id":"logs","name":"Logs","direction":"down","action":{"type":"Run","args":["tail","-f","/tmp/x"]}}],"tabs":[{"id":"dev","name":"Dev","action":{"type":"Shell"}}],"workspaces":[{"id":"proj","name":"Proj","tabs":[{"id":"t1","name":"Edit","action":{"type":"Shell"}}]},{"id":"remote","name":"Remote","nested_mux":true,"action":{"type":"Run","args":["ssh","box"]}}]}'
   }
   cleanup() { rm -rf "$TEST_TMP"; unset MUX_TMUX_BIN STUB_SESSIONS; }

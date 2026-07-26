@@ -22,7 +22,7 @@ EOF
     mkdir -p "$TERMINAL_LOCATION_SSH_CONFIG_DIR"
     printf 'Host macmini\n    HostName macmini-aa-bbbb.local\n' \
       > "$TERMINAL_LOCATION_SSH_CONFIG_DIR/macmini.conf"
-    . "$SHELLSPEC_PROJECT_ROOT/home/dot_config/zellij/scripts/lib/terminal-location.zsh"
+    . "$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/lib/terminal-location.zsh"
   }
   cleanup() { rm -rf "$TEST_TMP"; }
   BeforeEach 'setup'
@@ -100,15 +100,24 @@ EOF
     It 'classifies a nested zellij session by its ssh target'
       ps() { case "$*" in *"-p 5555"*comm=*) print -r -- "zellij"; return 0 ;; esac; command ps "$@"; }
       resolve_session() { print -r -- "Some Dev Session"; }
-      tl_focused_pane_command() { print -r -- "ssh devbox"; }
+      mux::focused_command() { print -r -- "ssh devbox"; }
       When call resolve_terminal_location 5555
+      The output should equal "blue"
+    End
+
+    # Same question, tmux client: the focused command comes from the shim
+    # (which asks the tmux server), not from a zellij list-panes scrape.
+    It 'classifies a tmux client by the focused pane ssh target'
+      ps() { case "$*" in *"-p 7777"*comm=*) print -r -- "tmux"; return 0 ;; esac; command ps "$@"; }
+      mux::focused_command() { print -r -- "ssh devbox"; }
+      When call resolve_terminal_location 7777
       The output should equal "blue"
     End
 
     It 'classifies a nested session that sshes to a real hostname'
       ps() { case "$*" in *"-p 5556"*comm=*) print -r -- "zellij"; return 0 ;; esac; command ps "$@"; }
       resolve_session() { print -r -- "Home Session"; }
-      tl_focused_pane_command() { print -r -- "ssh macmini-aa-bbbb.local"; }
+      mux::focused_command() { print -r -- "ssh macmini-aa-bbbb.local"; }
       When call resolve_terminal_location 5556
       The output should equal "teal"
     End
@@ -116,7 +125,7 @@ EOF
     It 'returns the remote default for a session to a non-onboarded host'
       ps() { case "$*" in *"-p 5557"*comm=*) print -r -- "zellij"; return 0 ;; esac; command ps "$@"; }
       resolve_session() { print -r -- "Some Session"; }
-      tl_focused_pane_command() { print -r -- "ssh elsewhere"; }
+      mux::focused_command() { print -r -- "ssh elsewhere"; }
       When call resolve_terminal_location 5557
       The output should equal "grey"
     End

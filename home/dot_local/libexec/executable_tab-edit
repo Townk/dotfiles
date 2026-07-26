@@ -11,7 +11,7 @@
 #
 # HOW
 #   Zellij path: ask WezTerm for the active pane TTY, find the Zellij client
-#   running there, resolve its session via ~/.config/zellij/scripts/lib, and
+#   running there, resolve its session through the mux shim, and
 #   run `zellij --session <name> action new-tab -- nvim "$@"`.
 #   Fallback path: raise the app (platform::raise_app), `wezterm cli spawn --
 #   nvim "$@"` (which auto-connects to the running GUI), capture the spawned
@@ -41,9 +41,8 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/us
 
 WEZTERM_BIN="${WEZTERM_BIN:-$(command -v wezterm)}"
 NVIM_BIN="${NVIM_BIN:-$(command -v nvim)}"
-ZELLIJ_BIN="${ZELLIJ_BIN:-$(command -v zellij)}"
 JQ_BIN="${JQ_BIN:-$(command -v jq)}"
-ZELLIJ_SESSION_LIB="${ZELLIJ_SESSION_LIB:-$HOME/.config/zellij/scripts/lib/zellij-session.zsh}"
+MUX_SHIM="${MUX_SHIM:-${MUX_LIB:-$HOME/.local/lib}/mux.zsh}"
 
 # Shared base (die/log_*) + the platform:: module (launch_gui / raise_app).
 source "$HOME/.local/lib/common.zsh"
@@ -78,10 +77,10 @@ if [ "$COUNT" -gt 0 ]; then
 fi
 
 WEZTERM_CWD_ARGS=()
-ZELLIJ_CWD_ARGS=()
+MUX_CWD_ARGS=()
 if [ -n "$CWD" ]; then
   WEZTERM_CWD_ARGS=(--cwd "$CWD")
-  ZELLIJ_CWD_ARGS=(--cwd "$CWD")
+  MUX_CWD_ARGS=(--cwd "$CWD")
 fi
 
 active_wezterm_pane() {
@@ -91,8 +90,11 @@ active_wezterm_pane() {
     sed -n '1p'
 }
 
-active_zellij_session() {
-  [ -x "$ZELLIJ_BIN" ] && [ -r "$ZELLIJ_SESSION_LIB" ] || return 1
+# The mux session (if any) behind WezTerm's active pane, plus which backend
+# it speaks. Sets MUX_SESSION/MUX_BACKEND; non-zero when the active pane is
+# not a mux client (migration Phase 6.6 — either backend qualifies now).
+active_mux_session() {
+  [ -r "$MUX_SHIM" ] || return 1
 
   PANE_INFO=$(active_wezterm_pane) || return 1
   [ -n "$PANE_INFO" ] || return 1
@@ -103,21 +105,25 @@ EOF
   [ -n "$ACTIVE_TTY" ] || return 1
 
   CLIENT_PID=$(ps -t "${ACTIVE_TTY#/dev/}" -o pid=,comm= 2>/dev/null |
-    awk '$2 ~ /zellij/ {print $1; exit}')
+    awk '$2 ~ /zellij|tmux/ {print $1; exit}')
   [ -n "$CLIENT_PID" ] || return 1
 
   # shellcheck source=/dev/null
-  . "$ZELLIJ_SESSION_LIB"
-  resolve_session "$CLIENT_PID" 2>/dev/null
+  . "$MUX_SHIM"
+  # The backend comes from the CLIENT PROCESS: this runs from a desktop
+  # handler, outside any session, where $ZELLIJ/$TMUX say nothing.
+  MUX_BACKEND=$(mux::backend_for_pid "$CLIENT_PID")
+  export MUX_BACKEND
+  MUX_SESSION=$(mux::resolve_session "$CLIENT_PID" 2>/dev/null) || return 1
+  [ -n "$MUX_SESSION" ] || return 1
 }
 
-open_in_active_zellij() {
-  SESSION=$(active_zellij_session) || return 1
-  [ -n "$SESSION" ] || return 1
+open_in_active_mux() {
+  active_mux_session || return 1
 
   platform::raise_app WezTerm org.wezfurlong.wezterm
-  "$ZELLIJ_BIN" --session "$SESSION" action new-tab \
-    "${ZELLIJ_CWD_ARGS[@]}" --name "$TAB_TITLE" --close-on-exit -- "$NVIM_BIN" "$@"
+  mux::new_tab --session "$MUX_SESSION" "${MUX_CWD_ARGS[@]}" \
+    --name "$TAB_TITLE" -- "$NVIM_BIN" "$@"
 }
 
 open_in_wezterm() {
@@ -157,4 +163,4 @@ open_in_wezterm() {
   fi
 }
 
-open_in_active_zellij "$@" || open_in_wezterm "$@"
+open_in_active_mux "$@" || open_in_wezterm "$@"
