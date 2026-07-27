@@ -82,33 +82,34 @@ fi
 _out=$(mktemp "${TMPDIR:-/tmp}/muximg.XXXXXX") || exit 1
 trap 'rm -f -- "$_out"' EXIT INT TERM HUP
 
-# Breathing room via chafa's OWN margin machinery: --margin-right /
-# --margin-bottom reserve cells when chafa detects the terminal, and it then
-# fits and centres the image in what is left. That keeps chafa's auto-sizing
-# — the thing that produced correct full-size renders — instead of my
-# bounding the image with -s, which shrank every picture and threw the
-# centring off (Mode B 2026-07-26).
+# Breathing room, both sides. chafa's --margin-* only reserve the RIGHT and
+# BOTTOM, so the left and top are ours: we park the cursor before handing
+# over, and a sixel is drawn wherever the cursor happens to be.
 #
-# The reservation is DOUBLE the wanted padding: centring inside the reduced
-# view puts half of the remainder on the left, so `--margin-right 12` reads
-# as ~6 either side. Exactly symmetric only when the image has slack in that
-# axis — an image constrained by width sits against the left edge with the
-# whole margin on the right. Symmetric minima would need -s, which costs the
-# auto-sizing; that trade is the reason this is the way round it is.
+# The reservation is DOUBLE the padding on purpose. chafa fits the image
+# into (width - margin), so reserving only 6 while shifting 6 would push a
+# width-constrained image straight off the right edge. Reserving 12 makes
+# chafa fit into W-12; the 6-column shift then lands it at 6 either side,
+# and --align keeps any slack split evenly.
 _padx="${MUX_PREVIEW_IMAGE_PAD_X:-6}"
 _pady="${MUX_PREVIEW_IMAGE_PAD_Y:-2}"
 
 _render() {  # _render [cell-box]  — the box is only used by the shrink path
   local -a size=()
   [[ -n "${1:-}" ]] && size=(-s "$1")
-  if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
-    chafa ${=MUX_PREVIEW_IMAGE_ARGS} --margin-right $(( _padx * 2 )) \
-      --margin-bottom $(( _pady * 2 )) --align center,center \
-      "${size[@]}" "$img" >"$_out" 2>/dev/null
-  else
-    chafa --margin-right $(( _padx * 2 )) --margin-bottom $(( _pady * 2 )) \
-      --align center,center "${size[@]}" "$img" >"$_out" 2>/dev/null
-  fi
+  {
+    # top padding, then park at the left padding column; chafa draws here
+    repeat $_pady print ""
+    print -n -- "${(l:$_padx:: :)}"
+    if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
+      chafa ${=MUX_PREVIEW_IMAGE_ARGS} --margin-right $(( _padx * 2 )) \
+        --margin-bottom $(( _pady * 2 )) --align center,center \
+        "${size[@]}" "$img" 2>/dev/null
+    else
+      chafa --margin-right $(( _padx * 2 )) --margin-bottom $(( _pady * 2 )) \
+        --align center,center "${size[@]}" "$img" 2>/dev/null
+    fi
+  } >"$_out"
 }
 
 _size() { wc -c < "$_out" 2>/dev/null | tr -d " " || print 0 }
