@@ -17,54 +17,30 @@ img="${1:-}"
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-# Geometry: the picture gets 75% of the pane's height, centred in what is
-# left after the hint row. The slack is the point — chafa emits exactly the
-# rows you ask for, and a render that FILLS the pane scrolls it by the time
-# the hint lands. tmux holds images in the grid, so a single scrolled row
-# drags the whole picture out of it and the pane goes blank (Mode B
-# 2026-07-26). Leaving a quarter of the height free means no write in this
-# script can ever push the pane, whatever the image's aspect.
+# NO -s, NO computed geometry, NO text in the pane. This mirrors the one
+# invocation proven to render here — a bare `chafa <img>` in a fresh window
+# (Mode B 2026-07-26). With an explicit -s box the same image came back
+# blank above ~15 rows, and the sixel canvas does not explain it: bare emits
+# 480x480 and renders, -s 130x21 emits a SMALLER 420x420 and does not. Until
+# that is understood, the viewer does not second-guess chafa: chafa knows
+# the terminal it is drawing to, and --align only centres, leaving the
+# canvas identical to bare (measured).
 #
-# Vertical centring is ours (blank rows above); horizontal is chafa's
-# (--align center,top). NOT center,center: chafa aligns vertically against
-# the DETECTED TERMINAL rather than the -s box, so it pads past the budget —
-# 10 requested rows came back as 17.
-_cols="$(tput cols 2>/dev/null || echo 80)"
-_rows="$(tput lines 2>/dev/null || echo 24)"
-# _avail: the rows this script may touch — everything but the hint row and
-# one row of slack, so a renderer that emits its own trailing newline (some
-# do) still cannot push the pane.
-_avail=$(( _rows - 2 ))
-_img_h=$(( _avail * 75 / 100 ))
-(( _img_h < 3 )) && _img_h=$_avail
-(( _img_h < 1 )) && _img_h=1
-_pad=$(( (_avail - _img_h) / 2 ))
+# The hint lives in the WINDOW NAME instead of the pane, so nothing but the
+# image is ever written here — tmux drops images when their region is
+# written again, and the window name costs no pane cells at all.
 
-# ORDER IS LOAD-BEARING: nothing may be written after the image. tmux keeps
-# images in the pane's grid and drops them when the region is written again,
-# so the hint that used to be placed after the render took the picture with
-# it — a bare `chafa <img>` in the same window renders fine, which is what
-# isolated this (Mode B 2026-07-26). So: clear, paint the hint on the last
-# row, park the cursor at the image's first row, and let the render be the
-# LAST thing this script emits before it blocks on the key.
+if [[ -n "${TMUX:-}" ]]; then
+  tmux rename-window "${img:t} · any key to close" 2>/dev/null || :
+fi
+
 print -n -- $'\e[2J\e[H'
-print -n -- "\e[${_rows};1H"
-print -n -- $'\e[2mpress any key to close\e[0m'
-print -n -- "\e[$(( _pad + 1 ));1H"
 
-# chafa DIRECTLY, not through `preview` (Mode B 2026-07-26). preview pins
-# the tier for the mux — `-f sixel --passthrough none` so tmux ingests the
-# DCS natively instead of handing WezTerm an overlay — and under that tier
-# the pane came up blank while a bare `chafa <img>` in the same window
-# rendered fine. Bare chafa auto-detects (its default --passthrough auto),
-# which is the invocation proven to work here. $MUX_PREVIEW_IMAGE_ARGS
-# overrides the argument list for experiments.
 rc=0
 if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
-  chafa ${=MUX_PREVIEW_IMAGE_ARGS} --align center,top \
-    -s "${_cols}x${_img_h}" "$img" || rc=$?
+  chafa ${=MUX_PREVIEW_IMAGE_ARGS} "$img" || rc=$?
 else
-  chafa --align center,top -s "${_cols}x${_img_h}" "$img" || rc=$?
+  chafa --align center,center "$img" || rc=$?
 fi
 
 # NOTHING below this line may write to the pane.
