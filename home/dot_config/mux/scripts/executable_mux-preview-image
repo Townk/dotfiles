@@ -167,7 +167,6 @@ cat -- "$_out"
 # grid. The frame never writes into the image's own cells.
 source "$HOME/.local/lib/theme-common.zsh" 2>/dev/null || :
 _fg() { theme::sgr_fg "$1" 2>/dev/null || : }
-_c_frame="$(_fg "${C_HEX_SURFACE2:-}")"
 _c_name="$(_fg "${C_HEX_MAUVE:-}")"
 _c_size="$(_fg "${C_HEX_GREEN:-}")"
 _c_dims="$(_fg "${C_HEX_YELLOW:-}")"
@@ -188,24 +187,15 @@ _dims="$(sips -g pixelWidth -g pixelHeight "$img" 2>/dev/null |
   awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{ if (w && h) print w"x"h }')"
 [[ -n "$_dims" ]] || _dims="$(magick identify -format '%wx%h' "$img" 2>/dev/null)" || _dims=""
 
-_hline() { printf '─%.0s' {1..$1}; }
 {
-  # border
-  printf '\e[1;1H%s┌%s┐' "$_c_frame" "$(_hline $(( _cols - 2 )))"
-  printf '\e[%d;1H%s└%s┘%s' "$_rows" "$_c_frame" "$(_hline $(( _cols - 2 )))" "$_rst"
-  local _r
-  for (( _r = 2; _r < _rows; _r++ )); do
-    printf '\e[%d;1H%s│\e[%d;%dH│%s' "$_r" "$_c_frame" "$_r" "$_cols" "$_rst"
-  done
-
-  # header: name left, size + dimensions right
+  # header on the second row: name left, size + dimensions right
   local _right="" _rlen=0
   [[ -n "$_hsize" ]] && { _right="${_c_size}${_hsize}${_rst}"; _rlen=${#_hsize} }
   [[ -n "$_dims" ]] && { _right="$_right ${_c_dims}(${_dims})${_rst}"; _rlen=$(( _rlen + ${#_dims} + 3 )) }
-  printf '\e[3;4H%s󰋩 %s%s' "$_c_name" "${img:t}" "$_rst"
-  (( _rlen )) && printf '\e[3;%dH%s' "$(( _cols - 3 - _rlen ))" "$_right"
+  printf '\e[2;%dH%s󰋩 %s%s' "$_padx" "$_c_name" "${img:t}" "$_rst"
+  (( _rlen )) && printf '\e[2;%dH%s' "$(( _cols - _padx - _rlen + 1 ))" "$_right"
 
-  # footer, centred
+  # hint, centred, two rows off the bottom
   local _hint="Press any key to dismiss"
   printf '\e[%d;%dH%s%s%s' "$(( _rows - 2 ))" "$(( (_cols - ${#_hint}) / 2 + 1 ))" "$_c_hint" "$_hint" "$_rst"
 
