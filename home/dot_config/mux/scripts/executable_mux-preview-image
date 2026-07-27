@@ -54,6 +54,13 @@ _settle
 
 print -n -- $'\e[2J\e[H'
 
+# One row down before handing over. chafa centres vertically inside a view
+# ONE ROW SHORTER than the pane (it keeps the last row clear), so its own
+# maths always lands the picture a row high: a 29-row image in a 33-row pane
+# came out 1 above and 3 below. The offset is structural — every height gives
+# top = bottom - 1 — so a single newline squares it up (Mode B 2026-07-26).
+print ""
+
 # Render to a FILE first, then check its size. tmux ingests a sixel image as
 # one DCS string and DISCARDS the whole thing past its input-buffer limit, so
 # an image that is merely big renders as a blank pane with no error anywhere.
