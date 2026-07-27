@@ -486,6 +486,37 @@ end
 -- Global hotkey tap
 ---------------------------------------------------------------------------
 
+--- Bundle IDs whose frontmost-ness means "these keys are not ours".
+--- Screen Sharing forwards the whole keyboard to ANOTHER machine, which is
+--- very likely running this same config: without the gate both Hammerspoons
+--- claim the chord, the LOCAL one wins because it sees the event first, and
+--- the remote never gets it. Symptom when it bit: ⇧⌘v opened the laptop's
+--- clipboard picker while the mac-mini being driven saw nothing, and the
+--- paste that followed arrived at the remote shell as a bare "v".
+--- @private
+local PASSTHROUGH_APPS = {
+	["com.apple.ScreenSharing"] = true,      -- Screen Sharing.app
+	["com.apple.RemoteDesktop"] = true,      -- Apple Remote Desktop
+	["com.realvnc.vncviewer"] = true,
+	["com.teamviewer.TeamViewer"] = true,
+}
+
+--- True when the frontmost app is forwarding the keyboard elsewhere, so every
+--- binding here must yield. Extend via `passthroughApps` in setup()'s config.
+--- @private
+local function keysBelongElsewhere()
+	local app = hs.application.frontmostApplication()
+	if not app then
+		return false
+	end
+	local id = app:bundleID()
+	if id and (PASSTHROUGH_APPS[id] or (state.passthroughApps or {})[id]) then
+		return true
+	end
+	local name = app:name()
+	return name ~= nil and (state.passthroughApps or {})[name] == true
+end
+
 --- Build and start the global hotkey eventtap.
 --- Scans root-level children for modifier-based bindings and intercepts
 --- their keyDown events via CGEventTap to bypass macOS system shortcut conflicts.
@@ -517,6 +548,12 @@ local function setupGlobalTap()
 	state.globalTap = hs.eventtap.new(
 		{ hs.eventtap.event.types.keyDown },
 		function(event)
+			-- Yield the whole keyboard while a screen-sharing client is front:
+			-- those keystrokes are addressed to the machine on the other end.
+			if keysBelongElsewhere() then
+				return false
+			end
+
 			local keyCode = event:getKeyCode()
 			local keyName = hs.keycodes.map[keyCode]
 			if not keyName then
@@ -577,11 +614,21 @@ function Keybindings.setup(config)
 		findChild = findChild,
 	})
 
+	state.passthroughApps = state.config.passthroughApps or {}
+
 	if state.config.leader then
+		-- The leader is an hs.hotkey, not part of the eventtap, so it needs the
+		-- gate applied separately or ⌥⌘space would still be swallowed locally
+		-- while driving a remote machine.
 		state.leaderHotkey = hs.hotkey.bind(
 			state.config.leader.mods or {},
 			state.config.leader.key,
-			Keybindings.show
+			function()
+				if keysBelongElsewhere() then
+					return
+				end
+				Keybindings.show()
+			end
 		)
 	end
 
