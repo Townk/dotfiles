@@ -52,10 +52,18 @@ fi
 # raises it, so ASK the server rather than hard-coding: the shrink below is
 # then a safety net for a machine whose config has not been applied, not a
 # quality ceiling. 5% margin covers the clear/cursor bytes around it.
+#
+# The cap is TMUX'S, and only tmux's. Zellij has no equivalent DCS limit, so
+# applying one there is pure loss: a 2.2MB stream got shrunk to 70% and the
+# picture came out visibly small inside a correctly-sized frame (zellij pass,
+# 2026-07-27 — the debug log said `SHRINKING: 2285652 > 1000000` while
+# `pane=` and `box=` were both right, which is what separated this from the
+# sizing bug it looked like). 0 means no ceiling.
 _max="${TERM_QUICK_VIEW_MAX_BYTES:-}"
 if [[ -z "$_max" ]]; then
-  _max=1000000
+  _max=0
   if [[ -n "${TMUX:-}" ]]; then
+    _max=1000000
     _lim="$(tmux show -sv input-buffer-size 2>/dev/null)"
     [[ "$_lim" == <-> ]] && (( _lim > 1000 )) && _max=$(( _lim * 95 / 100 ))
   fi
@@ -95,10 +103,26 @@ _pady="${TERM_QUICK_VIEW_PAD_Y:-2}"
 # image to a 68x20 box in a 130x33 window: ~40% small, on every render
 # (Mode B 2026-07-26, caught by the debug log). tmux knows the real size
 # immediately; tput is the fallback outside a mux.
+#
+# Zellij has the SAME problem and needed its own answer: it has no client-size
+# query at all, so the shim derives the tab's usable extent from its
+# non-floating panes (_mux_zj_terminal_size). Without this branch $TMUX is
+# unset under zellij, tput answers with the unsettled default, and the chrome
+# lays itself out for 80x24 inside a much larger tab — the image still
+# rendered, the frame around it did not fit (zellij pass, 2026-07-27).
+#
+# The shim is sourced HERE rather than at the top so the tmux and no-mux paths
+# pay nothing for it.
 _cols="" _rows=""
 if [[ -n "${TMUX:-}" ]]; then
   _geo="$(tmux display -p -t "${TMUX_PANE:-}" '#{pane_width} #{pane_height}' 2>/dev/null)"
   [[ "$_geo" == <->" "<-> ]] && { _cols="${_geo%% *}"; _rows="${_geo##* }" }
+elif [[ -n "${ZELLIJ:-}" ]]; then
+  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" 2>/dev/null || true
+  if (( ${+functions[mux::terminal_size]} )); then
+    _geo="$(mux::terminal_size 2>/dev/null)"
+    [[ "$_geo" == <->" "<-> ]] && { _cols="${_geo%% *}"; _rows="${_geo##* }" }
+  fi
 fi
 [[ -n "$_cols" ]] || _cols="$(tput cols 2>/dev/null || echo 80)"
 [[ -n "$_rows" ]] || _rows="$(tput lines 2>/dev/null || echo 24)"
@@ -169,7 +193,7 @@ _log() { [[ -e "$_dbg.debug" ]] && print -r -- "$(date +%T) $*" >> "$_dbg.log" 2
 rc=0
 _render || rc=$?
 _log "img=${file:t} pane=${_cols}x${_rows} box=${_box_w}x${_box_h} bytes=$(_size) max=$_max"
-if (( $(_size) > _max )); then
+if (( _max > 0 )) && (( $(_size) > _max )); then
   _log "  SHRINKING: $(_size) > $_max"
   # Only when the stream would overrun tmux's input-buffer-size (rare now
   # that tmux.conf raises it): bound the cells until it fits.
@@ -223,7 +247,11 @@ _dims="$(sips -g pixelWidth -g pixelHeight "$file" 2>/dev/null |
   local _right="" _rlen=0
   [[ -n "$_hsize" ]] && { _right="${_c_size}${_hsize}${_rst}"; _rlen=${#_hsize} }
   [[ -n "$_dims" ]] && { _right="$_right ${_c_dims}(${_dims})${_rst}"; _rlen=$(( _rlen + ${#_dims} + 3 )) }
-  printf '\e[2;%dH%s%s %s%s' "$_padx" "$_c_name" "$_icon" "${file:t}" "$_rst"
+  # Column is 1-BASED: positioning at $_padx leaves _padx-1 cells before the
+  # text, so the title sat one column left of the frame it is supposed to line
+  # up with. The right-hand side below already had the +1 (it computes an END
+  # column), which is why only the left edge looked wrong.
+  printf '\e[2;%dH%s%s %s%s' "$(( _padx + 1 ))" "$_c_name" "$_icon" "${file:t}" "$_rst"
   (( _rlen )) && printf '\e[2;%dH%s' "$(( _cols - _padx - _rlen + 1 ))" "$_right"
 
   # hint, centred, two rows off the bottom
