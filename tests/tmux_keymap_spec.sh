@@ -246,6 +246,16 @@ Describe 'tmux keymap tables'
     The output should include "C-M-)"
   End
 
+  # b/f complete the pair with C-b/C-f (page): prompt in Scroll state, but the
+  # vi meanings survive in Copy state, the same @visual split j/k use.
+  It 'binds b/f to prompt jumps in Scroll and vi motions in Copy'
+    When call keys copy-mode-vi
+    The output should include "previous-word"
+    The output should include "jump-forward"
+    The output should include "top-line ; send-keys -X previous-prompt"
+    The output should include "bottom-line ; send-keys -X next-prompt"
+  End
+
   # Batch 3: the only STATEFUL MEH binds. They enter copy-mode, so they carry
   # @visual, the mode-stack push and a guard — and `#{pane_in_mode}` splits
   # entry from repeat so three presses do not stack three `scroll` entries.

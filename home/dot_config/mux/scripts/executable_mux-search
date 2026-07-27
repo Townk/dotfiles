@@ -227,8 +227,19 @@ if [[ "${1:-}" == --next || "${1:-}" == --prev ]]; then
   mux_stack::top 2>/dev/null && [[ "$MS_STATE" == search ]] && \
     term="$("$TMUX_BIN" display -p -t "$origin" '#{@search_term}' 2>/dev/null)"
   if [[ -z "$term" ]]; then
-    [[ "$dir" == --next ]] && "$TMUX_BIN" send-keys -t "$origin" -X next-prompt 2>/dev/null \
-                           || "$TMUX_BIN" send-keys -t "$origin" -X previous-prompt 2>/dev/null
+    # Anchor to the viewport edge first, so the prompts already ON SCREEN are
+    # skipped. next-prompt/previous-prompt move the CURSOR and do not scroll
+    # while the target mark is still visible, so without this the view sits
+    # still for the first few presses and the jump looks broken. Same treatment
+    # as the b/f and MEH-b/MEH-f paths — every route to a prompt jump behaves
+    # identically.
+    if [[ "$dir" == --next ]]; then
+      "$TMUX_BIN" send-keys -t "$origin" -X bottom-line 2>/dev/null
+      "$TMUX_BIN" send-keys -t "$origin" -X next-prompt 2>/dev/null
+    else
+      "$TMUX_BIN" send-keys -t "$origin" -X top-line 2>/dev/null
+      "$TMUX_BIN" send-keys -t "$origin" -X previous-prompt 2>/dev/null
+    fi
     exit 0
   fi
   show_current_match "$origin"      # …before the search, so it paints

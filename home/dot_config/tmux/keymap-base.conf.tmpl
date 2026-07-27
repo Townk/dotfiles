@@ -484,7 +484,17 @@ bind -T copy-mode-vi V run-shell 'f=$(mktemp /tmp/tmux-scrollback.XXXXXX); tmux 
 # buffer and n still goes to the match after the highlighted one.
 bind -T copy-mode-vi n run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --next '#{pane_id}'"
 bind -T copy-mode-vi N run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-search --prev '#{pane_id}'"
-bind -T copy-mode-vi p send -X previous-prompt
+bind -T copy-mode-vi p if -F '#{@visual}' { send -X previous-prompt } { send -X top-line ; send -X previous-prompt }
+# b/f — prompt jumps in SCROLL state, completing the pair with C-b/C-f (page).
+# Both keep their vi meanings in Copy/visual state, the same @visual split j/k
+# use: `b` is previous-word and `f` is the find-char prompt, and neither makes
+# sense while the cursor is inert.
+#
+# Anchored like every other prompt jump: `previous-prompt` moves the CURSOR and
+# does not scroll while the mark is still on screen, so without `top-line` first
+# it walks the visible prompts and the view never moves.
+bind -T copy-mode-vi b if -F '#{@visual}' { send -X previous-word } { send -X top-line ; send -X previous-prompt }
+bind -T copy-mode-vi f if -F '#{@visual}' { command-prompt -1 -p "(jump forward)" { send -X jump-forward -- "%%" } } { send -X bottom-line ; send -X next-prompt }
 # / — forward incremental search (D12 stage 1; the floating search dialog
 # with option toggles is the D12 stage 2 hud follow-up).
 # '/' opens (SearchInput) by pushing Search; from (SearchMode) it reopens

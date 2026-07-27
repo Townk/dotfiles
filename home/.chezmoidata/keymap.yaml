@@ -829,6 +829,7 @@ keymap:
         cmd: ''
         panel_only: true
       - keys:
+        - f
         - n
         desc: next prompt
         sticky: true
@@ -837,6 +838,7 @@ keymap:
         cmd: ''
         panel_only: true
       - keys:
+        - b
         - N
         desc: previous prompt
         sticky: true
