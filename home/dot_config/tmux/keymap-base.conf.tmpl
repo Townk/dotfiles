@@ -273,16 +273,21 @@ bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { set -p copy-mode
 bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-down } { set -p @visual 0 ; copy-mode ; set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-down ; run-shell -b "{{ $home }}/.config/mux/scripts/mux-stack push scroll" } }
 {{- end }}
 
-# MEH-b — previous prompt (b for back). OSC 133 marks, from the zsh precmd
-# emitter in functions.d/prompt-marks.sh. `p`/`n` were already spent on the
-# project picker and new tab, hence back/forward.
+# MEH-b / MEH-f — previous / next shell prompt (back and forward; `p`/`n` were
+# already spent on the project picker and new tab). OSC 133 marks, from the zsh
+# precmd emitter in functions.d/prompt-marks.sh.
+#
+# Each jump moves the CURSOR to the edge of the viewport first (`top-line` /
+# `bottom-line`) so the prompts already ON SCREEN are skipped. Without that,
+# `previous-prompt` walks prompt-by-prompt through the visible screen and
+# `scroll_position` never changes — measured: three presses moved the cursor
+# PROMPT-20 → 19 → 18 with the view completely still. Anchoring to the edge
+# first makes every press move the view to the next prompt you cannot see.
 {{- range list "C-M-B" "C-M-S-B" "C-M-S-b" }}
-bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { send -X previous-prompt } { set -p @visual 0 ; copy-mode ; send -X previous-prompt ; run-shell -b "{{ $home }}/.config/mux/scripts/mux-stack push scroll" } }
+bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { send -X top-line ; send -X previous-prompt } { set -p @visual 0 ; copy-mode ; send -X top-line ; send -X previous-prompt ; run-shell -b "{{ $home }}/.config/mux/scripts/mux-stack push scroll" } }
 {{- end }}
-
-# MEH-f — next prompt (f for forward).
 {{- range list "C-M-F" "C-M-S-F" "C-M-S-f" }}
-bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { send -X next-prompt } { set -p @visual 0 ; copy-mode ; send -X next-prompt ; run-shell -b "{{ $home }}/.config/mux/scripts/mux-stack push scroll" } }
+bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { send -X bottom-line ; send -X next-prompt } { set -p @visual 0 ; copy-mode ; send -X bottom-line ; send -X next-prompt ; run-shell -b "{{ $home }}/.config/mux/scripts/mux-stack push scroll" } }
 {{- end }}
 
 # ---------------------------------------------------------------------------

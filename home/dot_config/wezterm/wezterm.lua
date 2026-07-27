@@ -661,6 +661,11 @@ config.keys = {
 	--
 	-- `p`/`n` were already spent on the project picker and new tab, so the prompt
 	-- jumps are MEH-b (back) and MEH-f (forward).
+	-- The PHYSICAL MEH+↑/↓ chords must be bound explicitly: WezTerm ships
+	-- `SHIFT|ALT|CTRL Up/DownArrow -> AdjustPaneSize`, which swallows them
+	-- before they can reach the mux. Same bytes as ⌘↑/⌘↓ below.
+	{ key = "UpArrow", mods = "CTRL|ALT|SHIFT", action = wezterm.action.SendString("\x1b[1;8A") },
+	{ key = "DownArrow", mods = "CTRL|ALT|SHIFT", action = wezterm.action.SendString("\x1b[1;8B") },
 	-- `⌘↑` / `⌘k`: scroll one line up => MEH+Up / MEH-k
 	{ key = "UpArrow", mods = "CMD", action = wezterm.action.SendString("\x1b[1;8A") },
 	{ key = "k", mods = "CMD", action = send_meh("K") },

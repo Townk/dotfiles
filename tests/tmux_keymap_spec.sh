@@ -255,6 +255,10 @@ Describe 'tmux keymap tables'
     The output should include "send-keys -X scroll-down"
     The output should include "send-keys -X previous-prompt"
     The output should include "send-keys -X next-prompt"
+    # Anchor to the viewport edge FIRST, so prompts already on screen are
+    # skipped — otherwise the cursor walks them and the view never moves.
+    The output should include "send-keys -X top-line"
+    The output should include "send-keys -X bottom-line"
     The output should include "pane_in_mode"
     The output should include "mux-stack push scroll"
     The output should include "@visual"
