@@ -17,27 +17,48 @@ img="${1:-}"
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-# Render at the pane's real size, image only (no metadata), CENTRED — this
-# pane exists to show one picture. One row is held back for the hint line
-# below: rendering into the full height and then printing scrolls the top row
-# off. tput reads the pane's own winsize, which is correct in a real pane
-# (a tmux popup reports 80x24 no matter its geometry — another reason images
-# live in a pane now).
+# Geometry: the picture gets 75% of the pane's height, centred in what is
+# left after the hint row. The slack is the point — chafa emits exactly the
+# rows you ask for, and a render that FILLS the pane scrolls it by the time
+# the hint lands. tmux holds images in the grid, so a single scrolled row
+# drags the whole picture out of it and the pane goes blank (Mode B
+# 2026-07-26). Leaving a quarter of the height free means no write in this
+# script can ever push the pane, whatever the image's aspect.
+#
+# Vertical centring is ours (blank rows above); horizontal is chafa's
+# (--align center,top). NOT center,center: chafa aligns vertically against
+# the DETECTED TERMINAL rather than the -s box, so it pads past the budget —
+# 10 requested rows came back as 17.
 _cols="$(tput cols 2>/dev/null || echo 80)"
-_lines="$(tput lines 2>/dev/null || echo 40)"
-(( _lines > 2 )) && _lines=$(( _lines - 1 ))
+_rows="$(tput lines 2>/dev/null || echo 24)"
+# _avail: the rows this script may touch — everything but the hint row and
+# one row of slack, so a renderer that emits its own trailing newline (some
+# do) still cannot push the pane.
+_avail=$(( _rows - 2 ))
+_img_h=$(( _avail * 75 / 100 ))
+(( _img_h < 3 )) && _img_h=$_avail
+(( _img_h < 1 )) && _img_h=1
+_pad=$(( (_avail - _img_h) / 2 ))
+
 export FZF_PREVIEW_COLUMNS="$_cols"
-export FZF_PREVIEW_LINES="$_lines"
-export PREVIEW_IMAGE_ALIGN="center,center"
+export FZF_PREVIEW_LINES="$_img_h"
+export PREVIEW_IMAGE_ALIGN="center,top"
 export PREVIEW_IMAGE_ONLY=1
+
+# Own the pane: clear, then drop to the first image row.
+print -n -- $'\e[2J\e[H'
+(( _pad > 0 )) && repeat $_pad print ""
 
 rc=0
 preview "$img" || rc=$?
 
-print -n -- $'\n\e[2mpress any key to close\e[0m'
-# The dismissal read's status is NOT the script's result — the render
-# already happened above. On tmux the popup runs under `display-popup -E`,
-# whose exit status IS the command's, and a non-zero one paints
-# "'…' returned N" over the session. Exit on the render's verdict instead.
+# The hint is PLACED on the last row, never printed after the image: a
+# trailing newline is exactly the scroll this whole layout avoids.
+print -n -- "\e[${_rows};1H"
+print -n -- $'\e[2mpress any key to close\e[0m'
+# The dismissal read's status is NOT the script's result — the render already
+# happened above. On tmux a popup runs under `display-popup -E`, whose exit
+# status IS the command's, and a non-zero one paints "'…' returned N" over
+# the session. Exit on the render's verdict instead.
 read -k1 -s || :
 exit $rc
