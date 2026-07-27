@@ -54,7 +54,15 @@ debug_log "mime=$mime"
 [[ "$mime" == image/* ]] || { debug_log "skip=not-image"; exit 0; }
 
 debug_log "open=$target"
-# --frame: zellij's own rounded frame, unpinned (tmux popups always own a
-# border). 90% of the tab viewport on both backends.
-mux::popup 90% 90% --name "" --frame \
-  -- "$HOME/.config/mux/scripts/mux-preview-image" "$target"
+# A tmux POPUP cannot hold an image: tmux attaches images to a pane's
+# grid and a popup is an overlay drawn over it, so the sixel never lands
+# and the popup renders blank (Mode B 2026-07-26). Images get a real
+# window there; zellij's float IS a pane, so it keeps the float.
+if [[ "$(mux::backend)" == tmux ]]; then
+  mux::new_tab --name "${target:t}" \
+    -- "$HOME/.config/mux/scripts/mux-preview-image" "$target"
+else
+  # --frame: zellij's own rounded frame, unpinned. 90% of the tab viewport.
+  mux::popup 90% 90% --name "" --frame \
+    -- "$HOME/.config/mux/scripts/mux-preview-image" "$target"
+fi

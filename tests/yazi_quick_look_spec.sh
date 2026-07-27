@@ -103,9 +103,10 @@ Describe 'yazi-quick-look: dispatch'
     The output should not include "qlmanage.app"
   End
 
-  # Same UX on tmux: a popup at the same 90% geometry, deferred to the server
-  # so it outlives this yazi task.
-  It 'SSH session inside tmux: pops the unified preview up'
+  # tmux gets a real WINDOW, not a popup: an image lives in a pane's grid and
+  # a popup is an overlay drawn over it, so a popup preview renders blank
+  # (Mode B 2026-07-26). Zellij's float IS a pane, so it keeps the float.
+  It 'SSH session inside tmux: opens the unified preview in a window'
     When run zsh -c "
       export SSH_TTY=/dev/ttys000 TMUX=/tmp/sock,1,0
       unset ZELLIJ
@@ -115,9 +116,9 @@ Describe 'yazi-quick-look: dispatch'
       PATH='$STUBS':\$PATH
       main '$TARGET'"
     The status should be success
-    The output should include "run-shell -b"
-    The output should include "tmux-popup"
+    The output should include "new-window"
     The output should include "mux-preview-file"
+    The output should not include "display-popup"
     The output should not include "qlmanage.app"
   End
 
