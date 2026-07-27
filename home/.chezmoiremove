@@ -118,6 +118,8 @@
 /.config/zellij/scripts/quick-launch-pick
 /.config/zellij/scripts/quick-launch-window
 /.config/zellij/scripts/zellij-open
+/.config/mux/scripts/mux-preview-file
+/.config/mux/scripts/mux-preview-image
 /.config/zellij/scripts/zellij-preview-file
 /.config/zellij/scripts/zellij-preview-image
 /.config/zellij/scripts/zellij-quit-confirm

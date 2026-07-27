@@ -1,88 +1,60 @@
 #!/usr/bin/env zsh
 #
-# mux-preview-image — show an image in a floating pane/popup (whichever the
-# caller's backend floats), then wait for
-# a single keypress before exiting (the pane is launched with --close-on-exit,
-# so quitting closes it).
+# term-quick-view [--render] <path> — a single-file quick look in the terminal.
 #
-# Reuses the `preview` script's image handler, which sizes its output from
-# FZF_PREVIEW_{COLUMNS,LINES}; we set those to the live pane geometry.
+# Two modes:
+#   (default)  open the "Quick View" tab and render <path> in it. One tab at a
+#              time: a second call reuses the one already open (mux::new_tab
+#              --singleton on tmux) rather than stacking tabs. Outside a mux
+#              it renders inline, right here.
+#   --render   BE the viewer: paint the chrome and the file into THIS pane and
+#              wait for a key. The launcher re-execs itself this way inside the
+#              tab; nothing else should need it.
+#
+# Images render through chafa; everything else through `preview`. Consumers:
+# WezTerm's CMD+click (mux-open), fzf-tab's Ctrl+O, and yazi's Ctrl+Space when
+# Quick Look cannot reach the screen (SSH, non-macOS).
 
 emulate -L zsh
 set -u
 
-# NB: don't name this `path` — in zsh that's the array tied to $PATH.
-img="${1:-}"
-[[ -n "$img" && -e "$img" ]] || exit 0
+TERM_QUICK_VIEW_NAME="${TERM_QUICK_VIEW_NAME:-Quick View}"
+
+_mode=view
+[[ "${1:-}" == --render ]] && { _mode=render; shift }
+# NB: not `path` — in zsh that is the array tied to $PATH.
+file="${1:-}"
+[[ -n "$file" && -e "$file" ]] || exit 0
+file="${file:A}"
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-# NO -s, NO computed geometry, NO text in the pane. This mirrors the one
-# invocation proven to render here — a bare `chafa <img>` in a fresh window
-# (Mode B 2026-07-26). With an explicit -s box the same image came back
-# blank above ~15 rows, and the sixel canvas does not explain it: bare emits
-# 480x480 and renders, -s 130x21 emits a SMALLER 420x420 and does not. Until
-# that is understood, the viewer does not second-guess chafa: chafa knows
-# the terminal it is drawing to, and --align only centres, leaving the
-# canvas identical to bare (measured).
-#
-# The hint lives in the WINDOW NAME instead of the pane, so nothing but the
-# image is ever written here — tmux drops images when their region is
-# written again, and the window name costs no pane cells at all.
-
-if [[ -n "${TMUX:-}" ]]; then
-  # The pill prefixes a manually-named window with its own tab glyph, so the
-  # icon goes in @win_icon (which the theme's win_body prefers) rather than
-  # into the name — otherwise the status bar shows two icons.
-  tmux rename-window "Previewer" 2>/dev/null || :
-  tmux set -w @win_icon "󰛐" 2>/dev/null || :
+if [[ "$_mode" == view ]]; then
+  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+  _self="${0:A}"
+  if [[ "$(mux::backend)" == tmux ]]; then
+    # The NAME is the identity of the singleton — it must match what the
+    # renderer renames the window to, or a second call opens a second tab.
+    mux::new_tab --name "$TERM_QUICK_VIEW_NAME" --singleton \
+      -- "$_self" --render "$file"
+    exit $?
+  elif mux::available; then
+    # zellij: a float, as before — its floating pane IS a real pane, so an
+    # image renders there (a tmux popup cannot hold one).
+    mux::popup 90% 90% --name "${file:t}" --frame -- "$_self" --render "$file"
+    exit $?
+  fi
+  # No mux: render inline in the caller's terminal.
+  exec "$_self" --render "$file"
 fi
 
-# Wait for the pane geometry to STOP MOVING before drawing. A window is
-# created, then resized as the client settles, and a sixel that lands during
-# that window is invalidated with it — which is why the same command renders
-# on one run and not the next (Mode B 2026-07-26: a bare chafa that had
-# rendered came back blank, unchanged, on a later run). Poll until two reads
-# agree, with a short ceiling so a genuinely resizing pane cannot hang this.
-_settle() {
-  local a b i
-  a="$(stty size 2>/dev/null)"
-  for i in {1..10}; do
-    sleep 0.05
-    b="$(stty size 2>/dev/null)"
-    [[ "$a" == "$b" ]] && return 0
-    a="$b"
-  done
-}
-_settle
-
-print -n -- $'\e[2J\e[H'
-
-# One row down before handing over. chafa centres vertically inside a view
-# ONE ROW SHORTER than the pane (it keeps the last row clear), so its own
-# maths always lands the picture a row high: a 29-row image in a 33-row pane
-# came out 1 above and 3 below. The offset is structural — every height gives
-# top = bottom - 1 — so a single newline squares it up (Mode B 2026-07-26).
-print ""
-
-# Render to a FILE first, then check its size. tmux ingests a sixel image as
-# one DCS string and DISCARDS the whole thing past its input-buffer limit, so
-# an image that is merely big renders as a blank pane with no error anywhere.
-# Measured in this terminal (Mode B 2026-07-26, captured with pipe-pane): a
-# 774KB stream renders, a 2.45MB one does not. Nothing about the IMAGE
-# predicts it — 255-colour photos and 13-colour line art land on both sides —
-# because chafa renders at the terminal's true cell resolution, so the
-# stream size is what varies, not any property of the file.
-#
-# Shrink by asking for fewer CELLS (chafa scales the pixels with them) until
-# the stream fits, then paint it in one write.
 # A sixel image is ONE DCS string and tmux discards any string sequence
 # larger than its `input-buffer-size` (a SERVER option, default 1 MiB —
 # measured: 1,032,961 bytes rendered, 1,174,685 did not). Our tmux.conf
 # raises it, so ASK the server rather than hard-coding: the shrink below is
 # then a safety net for a machine whose config has not been applied, not a
 # quality ceiling. 5% margin covers the clear/cursor bytes around it.
-_max="${MUX_PREVIEW_IMAGE_MAX_BYTES:-}"
+_max="${TERM_QUICK_VIEW_MAX_BYTES:-}"
 if [[ -z "$_max" ]]; then
   _max=1000000
   if [[ -n "${TMUX:-}" ]]; then
@@ -90,7 +62,16 @@ if [[ -z "$_max" ]]; then
     [[ "$_lim" == <-> ]] && (( _lim > 1000 )) && _max=$(( _lim * 95 / 100 ))
   fi
 fi
-_out=$(mktemp "${TMPDIR:-/tmp}/muximg.XXXXXX") || exit 1
+# Name the tab and give it its own glyph. The window pill prefixes a
+# manually-named window with a generic tab icon, so the glyph goes in
+# @win_icon (which the theme's win_body prefers) rather than into the name —
+# otherwise the status bar shows two.
+if [[ -n "${TMUX:-}" ]]; then
+  tmux rename-window "$TERM_QUICK_VIEW_NAME" 2>/dev/null || :
+  tmux set -w @win_icon "󰛐" 2>/dev/null || :
+fi
+
+_out=$(mktemp "${TMPDIR:-/tmp}/quickview.XXXXXX") || exit 1
 trap 'rm -f -- "$_out"' EXIT INT TERM HUP
 
 # Breathing room: BOUND the image, then let chafa centre it in the real
@@ -105,8 +86,8 @@ trap 'rm -f -- "$_out"' EXIT INT TERM HUP
 #
 # --view-size is deliberately absent too: it made chafa centre inside a box
 # that was not the pane, so the picture sat off-centre AND smaller.
-_padx="${MUX_PREVIEW_IMAGE_PAD_X:-6}"
-_pady="${MUX_PREVIEW_IMAGE_PAD_Y:-2}"
+_padx="${TERM_QUICK_VIEW_PAD_X:-6}"
+_pady="${TERM_QUICK_VIEW_PAD_Y:-2}"
 # Ask TMUX for the pane size, not the tty. In a window created by mux-open —
 # spawned from WezTerm's environment rather than by a client — the pane's
 # winsize is still 80x24 when the command starts, so `tput` bounded every
@@ -127,30 +108,41 @@ _chrome_v=8
 _box_w=$(( _cols - 2 * _padx )); (( _box_w < 8 )) && _box_w=8
 _box_h=$(( _rows - _chrome_v )); (( _box_h < 4 )) && _box_h=4
 
+# Images go through chafa; anything else through `preview`, which owns the
+# per-type renderers (bat, mediainfo, archives, …).
+_is_image=0
+[[ "$(file -b --mime-type -L "$file" 2>/dev/null)" == image/* ]] && _is_image=1
+_icon="󰈔"; (( _is_image )) && _icon="󰋩"
+
 _render() {  # _render [percent-of-box] — the percent is only the shrink path
   local pct="${1:-100}"
   local w=$(( _box_w * pct / 100 )) h=$(( _box_h * pct / 100 ))
   (( w < 8 )) && w=8
   (( h < 4 )) && h=4
-  if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
-    chafa ${=MUX_PREVIEW_IMAGE_ARGS} --align center,center -s "${w}x${h}" \
-      "$img" >"$_out" 2>/dev/null
+  if (( ! _is_image )); then
+    FZF_PREVIEW_COLUMNS="$w" FZF_PREVIEW_LINES="$h" \
+      preview "$file" >"$_out" 2>/dev/null
+    return
+  fi
+  if [[ -n "${TERM_QUICK_VIEW_ARGS:-}" ]]; then
+    chafa ${=TERM_QUICK_VIEW_ARGS} --align center,center -s "${w}x${h}" \
+      "$file" >"$_out" 2>/dev/null
   else
-    chafa --align center,center -s "${w}x${h}" "$img" >"$_out" 2>/dev/null
+    chafa --align center,center -s "${w}x${h}" "$file" >"$_out" 2>/dev/null
   fi
 }
 
 _size() { wc -c < "$_out" 2>/dev/null | tr -d " " || print 0 }
 
 # Diagnostics on demand, the tm-tab convention: `touch
-# $XDG_STATE_HOME/mux-preview-image.debug` and every render appends what it
+# $XDG_STATE_HOME/term-quick-view.debug` and every render appends what it
 # decided — geometry, stream size, the cap, and whether it shrank.
-_dbg="${XDG_STATE_HOME:-$HOME/.local/state}/mux-preview-image"
+_dbg="${XDG_STATE_HOME:-$HOME/.local/state}/term-quick-view"
 _log() { [[ -e "$_dbg.debug" ]] && print -r -- "$(date +%T) $*" >> "$_dbg.log" 2>/dev/null || : }
 
 rc=0
 _render || rc=$?
-_log "img=${img:t} pane=${_cols}x${_rows} box=${_box_w}x${_box_h} bytes=$(_size) max=$_max"
+_log "img=${file:t} pane=${_cols}x${_rows} box=${_box_w}x${_box_h} bytes=$(_size) max=$_max"
 if (( $(_size) > _max )); then
   _log "  SHRINKING: $(_size) > $_max"
   # Only when the stream would overrun tmux's input-buffer-size (rare now
@@ -178,7 +170,7 @@ _c_hint="$(_fg "${C_HEX_OVERLAY0:-}")"
 _rst="${C_RES:-$'\e[0m'}"
 
 # file size, humanised
-_bytes=$(stat -f%z "$img" 2>/dev/null || stat -c%s "$img" 2>/dev/null || wc -c <"$img" 2>/dev/null | tr -d ' ')
+_bytes=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || wc -c <"$file" 2>/dev/null | tr -d ' ')
 if [[ "$_bytes" == <-> ]] && (( _bytes >= 1048576 )); then
   _hsize="$(( _bytes / 104858 ))"; _hsize="${_hsize%?}.${_hsize: -1}MB"
 elif [[ "$_bytes" == <-> ]]; then
@@ -187,16 +179,16 @@ else
   _hsize=""
 fi
 # pixel dimensions, when a tool can tell us
-_dims="$(sips -g pixelWidth -g pixelHeight "$img" 2>/dev/null |
+_dims="$(sips -g pixelWidth -g pixelHeight "$file" 2>/dev/null |
   awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{ if (w && h) print w"x"h }')"
-[[ -n "$_dims" ]] || _dims="$(magick identify -format '%wx%h' "$img" 2>/dev/null)" || _dims=""
+[[ -n "$_dims" ]] || _dims="$(magick identify -format '%wx%h' "$file" 2>/dev/null)" || _dims=""
 
 {
   # header on the second row: name left, size + dimensions right
   local _right="" _rlen=0
   [[ -n "$_hsize" ]] && { _right="${_c_size}${_hsize}${_rst}"; _rlen=${#_hsize} }
   [[ -n "$_dims" ]] && { _right="$_right ${_c_dims}(${_dims})${_rst}"; _rlen=$(( _rlen + ${#_dims} + 3 )) }
-  printf '\e[2;%dH%s󰋩 %s%s' "$_padx" "$_c_name" "${img:t}" "$_rst"
+  printf '\e[2;%dH%s%s %s%s' "$_padx" "$_c_name" "$_icon" "${file:t}" "$_rst"
   (( _rlen )) && printf '\e[2;%dH%s' "$(( _cols - _padx - _rlen + 1 ))" "$_right"
 
   # hint, centred, two rows off the bottom

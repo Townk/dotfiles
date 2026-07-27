@@ -365,20 +365,25 @@ mux::popup() {
 # mux::new_tab [--session S] [--name N] [--cwd DIR] [-- <cmd...>]
 #   A tmux window IS a zellij tab. --session targets another session by name
 #   (tab-edit dispatches into the session its client is attached to).
+#   --singleton reuses a tab of the same NAME when one is already open —
+#   respawning its command in place and focusing it — instead of stacking a
+#   second one. Only tmux can replace a running tab's command, so zellij
+#   falls back to opening one (documented divergence, ledger row).
 mux::new_tab() {
-  local session="" name="" cwd=""
+  local session="" name="" cwd="" singleton=0
   while (($#)); do
     case "$1" in
       --session) session="${2-}"; shift 2 ;;
       --name) name="${2-}"; shift 2 ;;
       --cwd) cwd="${2-}"; shift 2 ;;
+      --singleton) singleton=1; shift ;;
       --) shift; break ;;
       *) break ;;
     esac
   done
   case "$(mux::backend)" in
     zellij) _mux_zj_new_tab "$session" "$name" "$cwd" -- "$@" ;;
-    tmux)   _mux_tx_new_tab "$session" "$name" "$cwd" -- "$@" ;;
+    tmux)   _mux_tx_new_tab "$session" "$name" "$cwd" "$singleton" -- "$@" ;;
     *) return 1 ;;
   esac
 }

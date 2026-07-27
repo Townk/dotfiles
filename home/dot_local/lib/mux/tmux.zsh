@@ -137,15 +137,39 @@ _mux_tx_popup() {
 # _mux_tx_new_tab <session> <name> <cwd> -- <cmd...>
 # A tmux window IS a zellij tab. `-t =NAME:` targets a session by exact name.
 _mux_tx_new_tab() {
-  local session="$1" name="$2" cwd="$3"
-  shift 3
+  local session="$1" name="$2" cwd="$3" singleton="${4:-0}"
+  shift 4
   [[ "${1-}" == "--" ]] && shift
+
+  local cmdline=""
+  (($#)) && cmdline="${(j: :)${(@q)@}}"
+
+  # Singleton: if a window of this name is already open, replace what it is
+  # running and focus it. respawn-window -k keeps the window (and its name,
+  # index and any @options) and swaps the command — which is what "reuse the
+  # tab" means; a kill-and-create would move it to the end and lose them.
+  if (( singleton )) && [[ -n "$name" ]]; then
+    local target="=$name"
+    [[ -n "$session" ]] && target="=$session:=$name"
+    # An ARRAY, not ${session:+-t "…"}: zsh does not word-split a substitution,
+    # so that form hands tmux a single argument `-t =Main:` and the lookup
+    # fails silently — which reads exactly like "no such window" and stacks a
+    # second one (Mode B 2026-07-27).
+    local -a wsel=()
+    [[ -n "$session" ]] && wsel=(-t "=$session:")
+    if "$(_mux_tx_bin)" list-windows "${wsel[@]}" -F '#{window_name}' 2>/dev/null |
+         grep -Fxq -- "$name"; then
+      "$(_mux_tx_bin)" respawn-window -k -t "$target" ${cmdline:+"$cmdline"} 2>/dev/null || return 1
+      "$(_mux_tx_bin)" select-window -t "$target" 2>/dev/null
+      return 0
+    fi
+  fi
 
   local -a flags
   [[ -n "$session" ]] && flags+=(-t "=$session:")
   [[ -n "$name" ]] && flags+=(-n "$name")
   [[ -n "$cwd" ]] && flags+=(-c "$cwd")
-  "$(_mux_tx_bin)" new-window "${flags[@]}" ${1+"${(j: :)${(@q)@}}"}
+  "$(_mux_tx_bin)" new-window "${flags[@]}" ${cmdline:+"$cmdline"}
 }
 
 _mux_tx_send_text() { "$(_mux_tx_bin)" send-keys -l -- "$1"; }

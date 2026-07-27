@@ -28,7 +28,7 @@ absolute path from its caller, so it never needs to be on `PATH`:
   crashes on video under macOS 26.5), previewing $TMPDIR-staged hardlinks
   (open-launched qlmanage has no TCC grants, so files in ~/Downloads etc.
   rendered as metadata cards or crashed the image generators), or a
-  floating pane running `preview` (`mux-preview-file`) over
+  tab or float running `term-quick-view` over
   SSH / non-macOS.
 - `ssh-prepare-connection` — the single entry point for pre-connect remote prep
   (gpg-agent socketdir, glyph-picker DB, WezTerm tint override) plus self-healing

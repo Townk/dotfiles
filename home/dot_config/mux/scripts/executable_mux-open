@@ -80,28 +80,10 @@ fi
 mime=$(file -b --mime-type -L "$target" 2>/dev/null)
 case "$mime" in
   image/*)
-    # An image needs a real PANE, and the two backends spell that
-    # differently. Zellij floats one: bordered, unpinned, sized in absolute
-    # cells — 28 columns narrower and 5 rows shorter than the display (90%
-    # when the size is unknown). tmux has no non-popup float, and a popup
-    # CANNOT hold an image: tmux attaches images to a pane's grid, while a
-    # popup is an overlay drawn over it, so the sixel never lands and the
-    # popup renders blank (Mode B 2026-07-26). There the preview opens as a
-    # window instead — the same shape the text/directory branches use.
-    # Either way the wrapper renders at the pane size, waits for a keypress,
-    # and the pane closes on exit.
-    if [ "$MUX_BACKEND" = tmux ]; then
-      mux::new_tab --session "$session" --name "$name" \
-        -- "$HOME/.config/mux/scripts/mux-preview-image" "$target"
-      exit $?
-    fi
-    if [ "$term_cols" -gt 28 ] 2>/dev/null && [ "$term_rows" -gt 5 ] 2>/dev/null; then
-      size=($((term_cols - 28)) $((term_rows - 5)))
-    else
-      size=(90% 90%)
-    fi
-    mux::popup "${size[@]}" --session "$session" --name "" --frame \
-      -- "$HOME/.config/mux/scripts/mux-preview-image" "$target"
+    # term-quick-view owns the whole quick-look: the "Quick View" singleton
+    # tab on tmux, a float on zellij, the chrome, and the render. It is a
+    # command in its own right (fzf's Ctrl+O and yazi's Ctrl+Space use it too).
+    term-quick-view "$target"
     exit $?
     ;;
   *)

@@ -573,6 +573,26 @@ Describe 'mux.zsh — pane/tab/info API (Phase 6.0, tmux backend)'
     The contents of file "$TX_ARGS" should include "-t =Main:"
   End
 
+  # --singleton: one window of that name, reused. The image previewer wants
+  # a second Cmd+click to land in the window already open, not stack another.
+  It 'mux::new_tab --singleton respawns and selects an existing window'
+    # the stub lists a window already called Previewer
+    printf '#!/usr/bin/env zsh\necho "$*" >> %s\ncase "$1 $2" in\n  "list-windows -F") print -- "Previewer" ;;\nesac\nexit 0\n' "$TX_ARGS" > "$TEST_TMP/tmux"
+    chmod +x "$TEST_TMP/tmux"
+    When call mux::new_tab --singleton --name Previewer -- viewer img.png
+    The status should be success
+    The contents of file "$TX_ARGS" should include "respawn-window -k"
+    The contents of file "$TX_ARGS" should include "select-window"
+    The contents of file "$TX_ARGS" should not include "new-window"
+  End
+
+  It 'mux::new_tab --singleton creates the window when none exists'
+    When call mux::new_tab --singleton --name Previewer -- viewer img.png
+    The status should be success
+    The contents of file "$TX_ARGS" should include "new-window"
+    The contents of file "$TX_ARGS" should not include "respawn-window"
+  End
+
   It 'mux::send_text sends the text literally'
     When call mux::send_text "hello world"
     The status should be success

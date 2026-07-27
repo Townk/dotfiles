@@ -12,7 +12,7 @@ Describe 'yazi-quick-look: dispatch'
   setup() {
     STUBS="$SHELLSPEC_TMPBASE/ql-stubs"
     mkdir -p "$STUBS"
-    for tool in open pkill zellij tmux; do
+    for tool in open pkill zellij tmux term-quick-view; do
       printf '#!/bin/sh\necho "%s $@"\n' "$tool" >"$STUBS/$tool"
       chmod +x "$STUBS/$tool"
     done
@@ -97,16 +97,13 @@ Describe 'yazi-quick-look: dispatch'
       PATH='$STUBS':\$PATH
       main '$TARGET'"
     The status should be success
-    The output should include "zellij action new-pane"
-    The output should include "--floating"
-    The output should include "mux-preview-file $TARGET"
+    The output should include "term-quick-view $TARGET"
     The output should not include "qlmanage.app"
   End
 
-  # tmux gets a real WINDOW, not a popup: an image lives in a pane's grid and
-  # a popup is an overlay drawn over it, so a popup preview renders blank
-  # (Mode B 2026-07-26). Zellij's float IS a pane, so it keeps the float.
-  It 'SSH session inside tmux: opens the unified preview in a window'
+  # One viewer for every entry point now: yazi hands off to term-quick-view,
+  # which owns the tab-or-float choice per backend.
+  It 'SSH session inside tmux: hands off to the shared terminal viewer'
     When run zsh -c "
       export SSH_TTY=/dev/ttys000 TMUX=/tmp/sock,1,0
       unset ZELLIJ
@@ -116,9 +113,7 @@ Describe 'yazi-quick-look: dispatch'
       PATH='$STUBS':\$PATH
       main '$TARGET'"
     The status should be success
-    The output should include "new-window"
-    The output should include "mux-preview-file"
-    The output should not include "display-popup"
+    The output should include "term-quick-view $TARGET"
     The output should not include "qlmanage.app"
   End
 

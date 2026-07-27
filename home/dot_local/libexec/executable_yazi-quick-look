@@ -79,21 +79,12 @@ main() {
     exec open -n "$QL_APP" --args -p "${staged[@]}"
   fi
 
-  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
-  if mux::available; then
-    # A tmux POPUP cannot hold an image: tmux attaches images to a pane's
-    # grid and a popup is an overlay drawn over it, so the sixel never lands
-    # and the popup renders blank (Mode B 2026-07-26). Images get a real
-    # window there; zellij's float IS a pane, so it keeps the float.
-    if [[ "$(mux::backend)" == tmux ]]; then
-      mux::new_tab --name "${1:t}" \
-        -- "$HOME/.config/mux/scripts/mux-preview-file" "$1"
-      return $?
-    fi
-    # --frame: the zellij float keeps its own rounded frame and no pin
-    # decoration.
-    mux::popup 90% 90% --name "${1:t}" --frame \
-      -- "$HOME/.config/mux/scripts/mux-preview-file" "$1"
+  # Quick Look cannot reach this screen (SSH or non-macOS): fall back to the
+  # terminal viewer, the same one Ctrl+O and CMD+click use. Only INSIDE a mux
+  # though — with no tab or float to put it in, term-quick-view would render
+  # inline over yazi's own UI. Outside one this stays a quiet no-op.
+  if [[ -n "${TMUX:-}${ZELLIJ:-}" ]] && command -v term-quick-view >/dev/null 2>&1; then
+    term-quick-view "$1"
     return $?
   fi
 
