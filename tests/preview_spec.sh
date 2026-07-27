@@ -15,22 +15,22 @@ Describe 'preview: geometry + CLI'
   BeforeEach 'setup'
 
   It 'uses FZF vars, minus the scrollbar column'
-    When run zsh -c "FZF_PREVIEW_COLUMNS=100 FZF_PREVIEW_LINES=50 PREVIEW_NO_RUN=1; source '$SCRIPT'; geometry; print \$w \$h"
+    When run zsh -c "FZF_PREVIEW_COLUMNS=100 FZF_PREVIEW_LINES=50 PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; geometry; print \$w \$h"
     The output should equal "99 50"
   End
 
   It 'falls back to piper w/h env, no scrollbar adjustment'
-    When run zsh -c "w=90 h=30 PREVIEW_NO_RUN=1; source '$SCRIPT'; geometry; print \$w \$h"
+    When run zsh -c "w=90 h=30 PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; geometry; print \$w \$h"
     The output should equal "90 30"
   End
 
   It 'prefers explicit -W/-H flags over FZF vars'
-    When run zsh -c "FZF_PREVIEW_COLUMNS=100 FZF_PREVIEW_LINES=50 PREVIEW_NO_RUN=1; source '$SCRIPT'; OPT_W=70 OPT_H=20; geometry; print \$w \$h"
+    When run zsh -c "FZF_PREVIEW_COLUMNS=100 FZF_PREVIEW_LINES=50 PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; OPT_W=70 OPT_H=20; geometry; print \$w \$h"
     The output should equal "70 20"
   End
 
   It 'defaults to 80x40'
-    When run zsh -c "PREVIEW_NO_RUN=1; source '$SCRIPT'; geometry; print \$w \$h"
+    When run zsh -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; geometry; print \$w \$h"
     The output should equal "80 40"
   End
 
@@ -68,39 +68,39 @@ Describe 'preview: raster cache'
   BeforeEach 'setup'
 
   It 'produces a stable key for same src+tag+skip'
-    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
-      a=\$(raster-cache-path '$SRC' video 5)
-      b=\$(raster-cache-path '$SRC' video 5)
+    When run zsh -f -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'
+      a=\$(raster::cache_path '$SRC' video 5)
+      b=\$(raster::cache_path '$SRC' video 5)
       [[ \$a == \$b && \$a == *.png ]] && print same"
     The output should equal "same"
   End
 
   It 'varies the key with tag and skip'
-    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
-      a=\$(raster-cache-path '$SRC' video 0)
-      b=\$(raster-cache-path '$SRC' video 5)
-      c=\$(raster-cache-path '$SRC' pdf 0)
+    When run zsh -f -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'
+      a=\$(raster::cache_path '$SRC' video 0)
+      b=\$(raster::cache_path '$SRC' video 5)
+      c=\$(raster::cache_path '$SRC' pdf 0)
       [[ \$a != \$b && \$a != \$c && \$b != \$c ]] && print distinct"
     The output should equal "distinct"
   End
 
   It 'renders once, then serves the cache'
-    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
+    When run zsh -f -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'
       count=0
       fake-render() { count=\$((count+1)); print -n x >\"\$RASTER_OUT\"; }
-      cache=\$(raster-cache-path '$SRC' t)
-      render-cached \"\$cache\" fake-render
-      render-cached \"\$cache\" fake-render
+      cache=\$(raster::cache_path '$SRC' t)
+      raster::cached \"\$cache\" fake-render
+      raster::cached \"\$cache\" fake-render
       print \$count; [[ -s \$cache ]] && print cached"
     The line 1 of output should equal "1"
     The line 2 of output should equal "cached"
   End
 
   It 'leaves no cache file when the render fails'
-    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
+    When run zsh -f -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'
       bad-render() { return 1; }
-      cache=\$(raster-cache-path '$SRC' t)
-      render-cached \"\$cache\" bad-render && print unexpected
+      cache=\$(raster::cache_path '$SRC' t)
+      raster::cached \"\$cache\" bad-render && print unexpected
       [[ ! -e \$cache ]] && print clean"
     The output should equal "clean"
   End
@@ -351,7 +351,7 @@ Describe 'preview: svg + font sample (Mode B fixes)'
   It 'builds the font sample from the font cmap'
     [ -n "$FONT" ] || skip "no .ttf font found on this machine"
     command -v fc-query >/dev/null || skip "fc-query not installed"
-    When run zsh -f -c "PREVIEW_NO_RUN=1; source '$SCRIPT'
+    When run zsh -f -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'
       s=\$(font-sample-text '$FONT') && [[ -n \$s ]] && print sampled"
     The output should equal "sampled"
   End

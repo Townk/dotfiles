@@ -108,11 +108,34 @@ _chrome_v=8
 _box_w=$(( _cols - 2 * _padx )); (( _box_w < 8 )) && _box_w=8
 _box_h=$(( _rows - _chrome_v )); (( _box_h < 4 )) && _box_h=4
 
-# Images go through chafa; anything else through `preview`, which owns the
-# per-type renderers (bat, mediainfo, archives, …).
+# Anything that can BE an image becomes one: PDFs, office documents, iWork
+# bundles, fonts, videos, cover art, and the raster formats chafa cannot
+# decode itself. That pipeline lives in raster-common.zsh — the same one
+# `preview` uses — so this script never learns a converter, and a format
+# taught there shows up here for free.
+#
+# Resolved next to this script: bin/ and lib/ sit side by side in the repo
+# and deployed alike.
+_lib="${TERM_QUICK_VIEW_LIB:-${0:A:h}/../lib}"
+[[ -r "$_lib/raster-common.zsh" ]] || _lib="$HOME/.local/lib"
+source "$_lib/raster-common.zsh"
+
+_raster="$(raster::for_file "$file" "${TERM_QUICK_VIEW_PAGE:-0}" 2>/dev/null)" || _raster=""
 _is_image=0
-[[ "$(file -b --mime-type -L "$file" 2>/dev/null)" == image/* ]] && _is_image=1
-_icon="󰈔"; (( _is_image )) && _icon="󰋩"
+[[ -n "$_raster" && -r "$_raster" ]] && _is_image=1
+
+# Header glyph follows the SOURCE, not the raster it became.
+case "$(file -b --mime-type -L "$file" 2>/dev/null):${file:l:e}" in
+  image/*) _icon="󰋩" ;;
+  application/pdf*|*:pdf) _icon="󰈦" ;;
+  *:docx|*:doc|*:odt|*:pages) _icon="󰈬" ;;
+  *:xlsx|*:xls|*:ods|*:numbers) _icon="󰈛" ;;
+  *:pptx|*:ppt|*:odp|*:key) _icon="󰈧" ;;
+  video/*) _icon="󰈫" ;;
+  audio/*) _icon="󰈣" ;;
+  font/*|*:ttf|*:otf|*:woff|*:woff2|*:ttc) _icon="󰛖" ;;
+  *) _icon="󰈔" ;;
+esac
 
 _render() {  # _render [percent-of-box] — the percent is only the shrink path
   local pct="${1:-100}"
@@ -120,15 +143,17 @@ _render() {  # _render [percent-of-box] — the percent is only the shrink path
   (( w < 8 )) && w=8
   (( h < 4 )) && h=4
   if (( ! _is_image )); then
+    # Not rasterisable (text, archives, binaries): `preview` still has a
+    # renderer for it, and it paints its own way.
     FZF_PREVIEW_COLUMNS="$w" FZF_PREVIEW_LINES="$h" \
       preview "$file" >"$_out" 2>/dev/null
     return
   fi
   if [[ -n "${TERM_QUICK_VIEW_ARGS:-}" ]]; then
     chafa ${=TERM_QUICK_VIEW_ARGS} --align center,center -s "${w}x${h}" \
-      "$file" >"$_out" 2>/dev/null
+      "$_raster" >"$_out" 2>/dev/null
   else
-    chafa --align center,center -s "${w}x${h}" "$file" >"$_out" 2>/dev/null
+    chafa --align center,center -s "${w}x${h}" "$_raster" >"$_out" 2>/dev/null
   fi
 }
 
@@ -186,8 +211,10 @@ else
   _hsize=""
 fi
 # pixel dimensions, when a tool can tell us
+# %d, not the raw field: sips reports PDF page size in POINTS with three
+# decimals ("612.000x792.000"), which reads like noise in a header.
 _dims="$(sips -g pixelWidth -g pixelHeight "$file" 2>/dev/null |
-  awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{ if (w && h) print w"x"h }')"
+  awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{ if (w && h) printf "%dx%d", w, h }')"
 [[ -n "$_dims" ]] || _dims="$(magick identify -format '%wx%h' "$file" 2>/dev/null)" || _dims=""
 
 {
