@@ -770,59 +770,72 @@ config.keys = {
 		mods = "CMD",
 		action = send_meh("N"),
 	},
-	-- `⌘1`: Focus on tab 1 => `⌥w t 1`
+	-- `⌘1`..`⌘9`, `⌘0`: focus tab 1..10 => MEH+<digit> (was `⌥w t N` replays).
+	--
+	-- Shift does not fold a digit to a digit — it folds it to the layout's
+	-- SHIFTED PUNCTUATION, so tmux names these `C-M-!` … `C-M-)`. That is a
+	-- US-layout mapping, which would matter if we depended on the physical
+	-- chord; we do not. WezTerm synthesises the bytes here, so they are the
+	-- same whatever the keyboard underneath is doing.
+	-- `⌘1`: Focus on tab 1 => MEH+1 (!)
 	{
 		key = "1",
 		mods = "CMD",
-		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "1" } }),
+		action = send_meh("!"),
 	},
-	-- `⌘2`: Focus on tab 2 => `⌥w t 2`
+	-- `⌘2`: Focus on tab 2 => MEH+2 (@)
 	{
 		key = "2",
 		mods = "CMD",
-		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "2" } }),
+		action = send_meh("@"),
 	},
-	-- `⌘3`: Focus on tab 3 => `⌥w t 3`
+	-- `⌘3`: Focus on tab 3 => MEH+3 (#)
 	{
 		key = "3",
 		mods = "CMD",
-		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "3" } }),
+		action = send_meh("#"),
 	},
-	-- `⌘4`: Focus on tab 4 => `⌥w t 4`
+	-- `⌘4`: Focus on tab 4 => MEH+4 ($)
 	{
 		key = "4",
 		mods = "CMD",
-		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "4" } }),
+		action = send_meh("$"),
 	},
-	-- `⌘5`: Focus on tab 5 => `⌥w t 5`
+	-- `⌘5`: Focus on tab 5 => MEH+5 (%)
 	{
 		key = "5",
 		mods = "CMD",
-		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "5" } }),
+		action = send_meh("%"),
 	},
-	-- `⌘6`: Focus on tab 6 => `⌥w t 6`
+	-- `⌘6`: Focus on tab 6 => MEH+6 (^)
 	{
 		key = "6",
 		mods = "CMD",
-		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "6" } }),
+		action = send_meh("^"),
 	},
-	-- `⌘7`: Focus on tab 7 => `⌥w t 7`
+	-- `⌘7`: Focus on tab 7 => MEH+7 (&)
 	{
 		key = "7",
 		mods = "CMD",
-		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "7" } }),
+		action = send_meh("&"),
 	},
-	-- `⌘8`: Focus on tab 8 => `⌥w t 8`
+	-- `⌘8`: Focus on tab 8 => MEH+8 (*)
 	{
 		key = "8",
 		mods = "CMD",
-		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "8" } }),
+		action = send_meh("*"),
 	},
-	-- `⌘9`: Focus on tab 9 => `⌥w t 9`
+	-- `⌘9`: Focus on tab 9 => MEH+9 (()
 	{
 		key = "9",
 		mods = "CMD",
-		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "9" } }),
+		action = send_meh("("),
+	},
+	-- `⌘0`: Focus on tab 10 => MEH+0 ())
+	{
+		key = "0",
+		mods = "CMD",
+		action = send_meh(")"),
 	},
 	-- `⌘⇧P`: Show the workspace/project picker. In a normal session that is now
 	-- the single MEH-p keypress (was the `⌥w o S` chord). In a nested session

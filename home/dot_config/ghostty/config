@@ -218,6 +218,12 @@ keybind = cmd+shift+s=text:\x1b[27;8;83~
 # selected text.
 keybind = cmd+shift+c=text:\x1b[27;8;67~
 keybind = cmd+shift+alt+c=text:\x1b[27;8;68~
+# Cmd+1..9 and Cmd+0 → tabs 1..10 as MEH+<digit>, a single tmux root bind each
+# (was the `⌥w t N` replay). Shift folds a digit to the layout's SHIFTED
+# PUNCTUATION, not to a digit, so these carry `!@#$%^&*()` codepoints — 33, 64,
+# 35, 36, 37, 94, 38, 42, 40, 41. US-layout, which would matter if we depended
+# on the physical chord; Ghostty synthesises the bytes, so it does not.
+#
 # Ghostty's defaults register `super+N=goto_tab:N` and `super+digit_N=goto_tab:N`
 # for digits 1..8 (super+9=last_tab, super+0=reset_font_size). Both must be
 # overridden — physical key bindings take precedence over codepoint bindings,
@@ -228,24 +234,26 @@ keybind = cmd+shift+alt+c=text:\x1b[27;8;68~
 # system-level handling. Performable keybinds are excluded from the menu,
 # letting the keypress go through Ghostty's normal keybind dispatch and
 # reach our `text:` action.
-keybind = performable:cmd+1=text:\x1bwt1
-keybind = performable:cmd+2=text:\x1bwt2
-keybind = performable:cmd+3=text:\x1bwt3
-keybind = performable:cmd+4=text:\x1bwt4
-keybind = performable:cmd+5=text:\x1bwt5
-keybind = performable:cmd+6=text:\x1bwt6
-keybind = performable:cmd+7=text:\x1bwt7
-keybind = performable:cmd+8=text:\x1bwt8
-keybind = performable:cmd+9=text:\x1bwt9
-keybind = performable:cmd+digit_1=text:\x1bwt1
-keybind = performable:cmd+digit_2=text:\x1bwt2
-keybind = performable:cmd+digit_3=text:\x1bwt3
-keybind = performable:cmd+digit_4=text:\x1bwt4
-keybind = performable:cmd+digit_5=text:\x1bwt5
-keybind = performable:cmd+digit_6=text:\x1bwt6
-keybind = performable:cmd+digit_7=text:\x1bwt7
-keybind = performable:cmd+digit_8=text:\x1bwt8
-keybind = performable:cmd+digit_9=text:\x1bwt9
+keybind = performable:cmd+1=text:\x1b[27;8;33~
+keybind = performable:cmd+2=text:\x1b[27;8;64~
+keybind = performable:cmd+3=text:\x1b[27;8;35~
+keybind = performable:cmd+4=text:\x1b[27;8;36~
+keybind = performable:cmd+5=text:\x1b[27;8;37~
+keybind = performable:cmd+6=text:\x1b[27;8;94~
+keybind = performable:cmd+7=text:\x1b[27;8;38~
+keybind = performable:cmd+8=text:\x1b[27;8;42~
+keybind = performable:cmd+9=text:\x1b[27;8;40~
+keybind = performable:cmd+0=text:\x1b[27;8;41~
+keybind = performable:cmd+digit_1=text:\x1b[27;8;33~
+keybind = performable:cmd+digit_2=text:\x1b[27;8;64~
+keybind = performable:cmd+digit_3=text:\x1b[27;8;35~
+keybind = performable:cmd+digit_4=text:\x1b[27;8;36~
+keybind = performable:cmd+digit_5=text:\x1b[27;8;37~
+keybind = performable:cmd+digit_6=text:\x1b[27;8;94~
+keybind = performable:cmd+digit_7=text:\x1b[27;8;38~
+keybind = performable:cmd+digit_8=text:\x1b[27;8;42~
+keybind = performable:cmd+digit_9=text:\x1b[27;8;40~
+keybind = performable:cmd+digit_0=text:\x1b[27;8;41~
 
 # Cmd+Up/Down (and vim-style aliases Cmd+K/J): enter scroll mode and scroll
 # one line, using zellij's existing scroll-mode `k`/`j` bindings.

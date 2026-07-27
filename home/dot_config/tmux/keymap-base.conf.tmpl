@@ -204,6 +204,32 @@ bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 75 -E -B -
 bind -n {{ . }} new-window
 {{- end }}
 
+# MEH-<digit> — jump to tab 1..10 (⌘1..⌘9, ⌘0). Shift does NOT fold a digit to
+# a digit: it folds it to the SHIFTED PUNCTUATION of the layout, so tmux names
+# these `C-M-!` … `C-M-)` rather than `C-M-1`. That mapping is US-layout, which
+# would be a liability if we depended on the physical chord — we do not. The
+# TERMINAL synthesises these bytes for ⌘N, so they are deterministic whatever
+# the keyboard does. Pressing MEH+1 by hand happens to work too, on a layout
+# where Shift+1 is `!`.
+#
+# Third spelling per digit is the kitty form, which shifts neither the bit nor
+# the codepoint and so stays a digit (`C-M-S-1`).
+{{- range $t := list
+      (dict "d" "1" "p" "!" "w" "1")
+      (dict "d" "2" "p" "@" "w" "2")
+      (dict "d" "3" "p" "#" "w" "3")
+      (dict "d" "4" "p" "$" "w" "4")
+      (dict "d" "5" "p" "%" "w" "5")
+      (dict "d" "6" "p" "^" "w" "6")
+      (dict "d" "7" "p" "&" "w" "7")
+      (dict "d" "8" "p" "*" "w" "8")
+      (dict "d" "9" "p" "(" "w" "9")
+      (dict "d" "0" "p" ")" "w" "10") }}
+{{- range list (printf "C-M-%s" $t.p) (printf "C-M-S-%s" $t.p) (printf "C-M-S-%s" $t.d) }}
+bind -n {{ . }} select-window -t :={{ $t.w }}
+{{- end }}
+{{- end }}
+
 # MEH-c / MEH-d — Copy CWD, relative and absolute. Two letters because MEH has
 # no shifted variant left to spend: it already IS Ctrl+Alt+Shift.
 {{- range list "C-M-C" "C-M-S-C" "C-M-S-c" }}
