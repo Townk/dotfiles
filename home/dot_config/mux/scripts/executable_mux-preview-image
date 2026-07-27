@@ -197,7 +197,7 @@ _dims="$(sips -g pixelWidth -g pixelHeight "$img" 2>/dev/null |
 
   # hint, centred, two rows off the bottom
   local _hint="Press any key to dismiss"
-  printf '\e[%d;%dH%s%s%s' "$(( _rows - 2 ))" "$(( (_cols - ${#_hint}) / 2 + 1 ))" "$_c_hint" "$_hint" "$_rst"
+  printf '\e[%d;%dH%s%s%s' "$(( _rows - 1 ))" "$(( (_cols - ${#_hint}) / 2 + 1 ))" "$_c_hint" "$_hint" "$_rst"
 
   # keep the cursor hidden — chafa turns it back on at the end of its stream
   printf '\e[?25l'
