@@ -49,9 +49,12 @@ debug_log "target=$target"
 source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
 mux::available || { debug_log "skip=no-mux"; exit 0; }
 
-mime="$(file -b --mime-type -L "$target" 2>/dev/null)"
-debug_log "mime=$mime"
-[[ "$mime" == image/* ]] || { debug_log "skip=not-image"; exit 0; }
+# Ask the raster pipeline what it can show — images, PDFs, office and iWork
+# documents, fonts, video frames, cover art — instead of gating on image/*,
+# which left Ctrl+O silent on everything else it can actually render.
+# rasterisable answers WITHOUT converting, so a no is cheap.
+source "${RASTER_LIB:-$HOME/.local/lib}/raster-common.zsh"
+raster::rasterisable "$target" || { debug_log "skip=not-rasterisable"; exit 0; }
 
 debug_log "open=$target"
 # One quick-look implementation for every entry point (Ctrl+O here, CMD+click
