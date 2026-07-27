@@ -17,9 +17,18 @@ img="${1:-}"
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-# Render the image at the floating pane's full size, image only (no metadata).
-export FZF_PREVIEW_COLUMNS="$(tput cols 2>/dev/null || echo 80)"
-export FZF_PREVIEW_LINES="$(tput lines 2>/dev/null || echo 40)"
+# Render at the pane's real size, image only (no metadata), CENTRED — this
+# pane exists to show one picture. One row is held back for the hint line
+# below: rendering into the full height and then printing scrolls the top row
+# off. tput reads the pane's own winsize, which is correct in a real pane
+# (a tmux popup reports 80x24 no matter its geometry — another reason images
+# live in a pane now).
+_cols="$(tput cols 2>/dev/null || echo 80)"
+_lines="$(tput lines 2>/dev/null || echo 40)"
+(( _lines > 2 )) && _lines=$(( _lines - 1 ))
+export FZF_PREVIEW_COLUMNS="$_cols"
+export FZF_PREVIEW_LINES="$_lines"
+export PREVIEW_IMAGE_ALIGN="center,center"
 export PREVIEW_IMAGE_ONLY=1
 
 rc=0

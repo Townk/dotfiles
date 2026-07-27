@@ -388,3 +388,40 @@ Describe 'preview: office + iwork'
     The output should equal "ok"
   End
 End
+
+# The standalone image viewer centres its picture; the fzf/yazi preview panes
+# must NOT (the image sits above the metadata there). The knob is an env var,
+# so the contract is "chafa gets --align only when it is set".
+Describe 'preview: image alignment knob'
+  setup() {
+    T=$(mktemp -d); mkdir -p "$T/bin"
+    printf '#!/bin/sh\necho "chafa $*" >> %s/chafa.calls\n' "$T" > "$T/bin/chafa"
+    chmod +x "$T/bin/chafa"
+    printf 'x' > "$T/img.png"
+  }
+  cleanup() { rm -rf "$T"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'passes --align through when PREVIEW_IMAGE_ALIGN is set'
+    run_it() {
+      PATH="$T/bin:$PATH" PREVIEW_IMAGE_ALIGN="center,center" \
+        zsh -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
+        "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview" "$T/img.png" 2>/dev/null || true
+      cat "$T/chafa.calls" 2>/dev/null
+    }
+    When call run_it
+    The output should include "--align center,center"
+  End
+
+  It 'omits --align when the knob is unset (the fzf preview pane)'
+    run_it() {
+      PATH="$T/bin:$PATH" \
+        zsh -c 'unset PREVIEW_IMAGE_ALIGN; w=100 h=25; source "$1"; preview-raster "$2"' _ \
+        "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview" "$T/img.png" 2>/dev/null || true
+      cat "$T/chafa.calls" 2>/dev/null
+    }
+    When call run_it
+    The output should not include "--align"
+  End
+End

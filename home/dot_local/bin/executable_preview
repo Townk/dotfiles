@@ -214,7 +214,13 @@ function preview-raster() {
   command -v chafa >/dev/null 2>&1 || return 1
   local chafa_format
   chafa_format=(${(z)$(get_chafa_format_args)})
-  chafa "${chafa_format[@]}" -s "${w:-80}x${h:-24}" "$1" 2>/dev/null
+  # $PREVIEW_IMAGE_ALIGN (e.g. "center,center") centres the picture inside the
+  # -s box. Unset for the fzf/yazi preview panes, where the image belongs at
+  # the top-left against the metadata below it; the standalone image VIEWER
+  # sets it, because there the picture is the whole point of the pane.
+  local -a align=()
+  [[ -n "${PREVIEW_IMAGE_ALIGN:-}" ]] && align=(--align "$PREVIEW_IMAGE_ALIGN")
+  chafa "${chafa_format[@]}" "${align[@]}" -s "${w:-80}x${h:-24}" "$1" 2>/dev/null
 }
 
 # Opportunistic cache prune: at most once a day (stamp file), drop rasters
