@@ -252,6 +252,29 @@ raster::video_pct() {
 
 # --- the dispatch -----------------------------------------------------------
 
+# raster::rasterisable <path> — true when raster::for_file would produce
+# something, WITHOUT doing the conversion. Callers that route a file
+# somewhere (WezTerm's CMD+click deciding viewer-vs-editor) need the answer
+# before they commit, and converting a 300-page PDF to find out is not it.
+raster::rasterisable() {
+  local f="$1" mime
+  [[ -n "$f" && -r "$f" ]] || return 1
+  case "${f:l}" in
+    *.ttf|*.otf|*.woff|*.woff2|*.ttc|*.psd|*.ai|*.eps) return 0 ;;
+    *.docx|*.xlsx|*.pptx|*.doc|*.xls|*.ppt|*.odt|*.ods|*.odp) return 0 ;;
+    *.pages|*.numbers|*.key) return 0 ;;
+  esac
+  mime=$(file --mime-type --brief --dereference "$f" 2>/dev/null)
+  case "$mime" in
+    image/*|video/*|audio/*|application/pdf) return 0 ;;
+    font/*|application/vnd.ms-opentype|application/postscript) return 0 ;;
+    application/vnd.openxmlformats-officedocument.*|application/msword) return 0 ;;
+    application/vnd.ms-excel|application/vnd.ms-powerpoint) return 0 ;;
+    application/vnd.oasis.opendocument.*|application/vnd.apple.*) return 0 ;;
+  esac
+  return 1
+}
+
 # raster::for_file <path> [variant] — the one call a consumer needs. Prints
 # the path of a cached PNG; non-zero when nothing here can rasterise it (text,
 # archives, binaries — the caller's own business).

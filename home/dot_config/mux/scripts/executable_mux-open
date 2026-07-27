@@ -76,25 +76,31 @@ if [ -d "$target" ]; then
   exit $?
 fi
 
-# --- File: classify by MIME -----------------------------------------------
-mime=$(file -b --mime-type -L "$target" 2>/dev/null)
-case "$mime" in
-  image/*)
-    # term-quick-view owns the whole quick-look: the "Quick View" singleton
-    # tab on tmux, a float on zellij, the chrome, and the render. It is a
-    # command in its own right (fzf's Ctrl+O and yazi's Ctrl+Space use it too).
+# --- File: viewer or editor ------------------------------------------------
+# Anything the raster pipeline can turn into a picture — images, PDFs, office
+# and iWork documents, fonts, video frames, cover art — opens in the quick
+# view. Asking the pipeline (raster::rasterisable, which answers WITHOUT
+# converting) beats keeping a second list of extensions here that would drift
+# from the one in the library.
+_rlib="$HOME/.local/lib/raster-common.zsh"
+[ -r "$_rlib" ] && . "$_rlib"
+
+if command -v raster::rasterisable >/dev/null 2>&1 || (( ${+functions[raster::rasterisable]} )); then
+  if raster::rasterisable "$target"; then
+    # term-quick-view owns the quick look: the "Quick View" singleton tab on
+    # tmux, a float on zellij, the chrome, and the render. It is a command in
+    # its own right (fzf's Ctrl+O and yazi's Ctrl+Space use it too).
     term-quick-view "$target"
     exit $?
-    ;;
-  *)
-    # Treat anything non-binary as editable text/code; ignore real binaries.
-    enc=$(file -b --mime-encoding -L "$target" 2>/dev/null)
-    [ "$enc" = "binary" ] && exit 0
-    dir="$(dirname -- "$target")"
-    root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root=""
-    [ -n "$root" ] || root="$dir"
-    mux::new_tab --session "$session" --cwd "$root" --name "$name" \
-      -- nvim "$target"
-    exit $?
-    ;;
-esac
+  fi
+fi
+
+# Everything else: text and code go to the editor, real binaries are ignored.
+enc=$(file -b --mime-encoding -L "$target" 2>/dev/null)
+[ "$enc" = "binary" ] && exit 0
+dir="$(dirname -- "$target")"
+root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || root=""
+[ -n "$root" ] || root="$dir"
+mux::new_tab --session "$session" --cwd "$root" --name "$name" \
+  -- nvim "$target"
+exit $?
