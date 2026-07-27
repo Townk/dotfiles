@@ -82,36 +82,36 @@ fi
 _out=$(mktemp "${TMPDIR:-/tmp}/muximg.XXXXXX") || exit 1
 trap 'rm -f -- "$_out"' EXIT INT TERM HUP
 
-# Breathing room, both sides. chafa's --margin-* only reserve the RIGHT and
-# BOTTOM, so the left and top are ours: we park the cursor before handing
-# over, and a sixel is drawn wherever the cursor happens to be.
+# Breathing room: BOUND the image, then let chafa centre it in the real
+# terminal. The padding is the remainder, symmetric by construction.
 #
-# The reservation is DOUBLE the padding on purpose. chafa fits the image
-# into (width - margin), so reserving only 6 while shifting 6 would push a
-# width-constrained image straight off the right edge. Reserving 12 makes
-# chafa fit into W-12; the 6-column shift then lands it at 6 either side,
-# and --align keeps any slack split evenly.
+# Neither of the obvious alternatives works. chafa's --margin-* reserve the
+# RIGHT and BOTTOM only. And printing our own left padding before handing
+# over is cancelled the moment chafa centres vertically: it does that with
+# NEWLINES, and every newline resets the column to 1 — which is why a
+# width-constrained image (nothing to centre horizontally) came out flush
+# left while square ones looked fine (Mode B 2026-07-26).
+#
+# --view-size is deliberately absent too: it made chafa centre inside a box
+# that was not the pane, so the picture sat off-centre AND smaller.
 _padx="${MUX_PREVIEW_IMAGE_PAD_X:-6}"
 _pady="${MUX_PREVIEW_IMAGE_PAD_Y:-2}"
+_cols="$(tput cols 2>/dev/null || echo 80)"
+_rows="$(tput lines 2>/dev/null || echo 24)"
+_box_w=$(( _cols - 2 * _padx )); (( _box_w < 8 )) && _box_w=8
+_box_h=$(( _rows - 2 * _pady )); (( _box_h < 4 )) && _box_h=4
 
-_render() {  # _render [cell-box]  — the box is only used by the shrink path
-  local -a size=()
-  [[ -n "${1:-}" ]] && size=(-s "$1")
-  {
-    # top padding, then park at the left padding column; chafa draws here
-    repeat $_pady print ""
-    # printf, not ${(l:N:: :)} — the latter pads an EMPTY parameter name,
-    # which `set -u` rejects outright ("parameter not set").
-    printf '%*s' "$_padx" ""
-    if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
-      chafa ${=MUX_PREVIEW_IMAGE_ARGS} --margin-right $(( _padx * 2 )) \
-        --margin-bottom $(( _pady * 2 )) --align center,center \
-        "${size[@]}" "$img" 2>/dev/null
-    else
-      chafa --margin-right $(( _padx * 2 )) --margin-bottom $(( _pady * 2 )) \
-        --align center,center "${size[@]}" "$img" 2>/dev/null
-    fi
-  } >"$_out"
+_render() {  # _render [percent-of-box] — the percent is only the shrink path
+  local pct="${1:-100}"
+  local w=$(( _box_w * pct / 100 )) h=$(( _box_h * pct / 100 ))
+  (( w < 8 )) && w=8
+  (( h < 4 )) && h=4
+  if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
+    chafa ${=MUX_PREVIEW_IMAGE_ARGS} --align center,center -s "${w}x${h}" \
+      "$img" >"$_out" 2>/dev/null
+  else
+    chafa --align center,center -s "${w}x${h}" "$img" >"$_out" 2>/dev/null
+  fi
 }
 
 _size() { wc -c < "$_out" 2>/dev/null | tr -d " " || print 0 }
@@ -121,9 +121,8 @@ _render || rc=$?
 if (( $(_size) > _max )); then
   # Only when the stream would overrun tmux's input-buffer-size (rare now
   # that tmux.conf raises it): bound the cells until it fits.
-  _c="$(tput cols 2>/dev/null || echo 80)" _r="$(tput lines 2>/dev/null || echo 24)"
   for _pct in 70 50 35 25; do
-    _render "$(( _c * _pct / 100 ))x$(( _r * _pct / 100 ))" || rc=$?
+    _render "$_pct" || rc=$?
     (( $(_size) <= _max )) && break
   done
 fi
