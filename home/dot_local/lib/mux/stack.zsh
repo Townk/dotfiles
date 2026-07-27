@@ -262,6 +262,17 @@ mux_stack::reconcile() {
   local -a keep
   [[ "$("$MUX_TMUX_BIN" show -gv @mux_stack_busy 2>/dev/null)" == 1 ]] && return 0
   mux_stack::_in_copy && return 0
+  # Past that guard the pane is NOT in copy-mode, so its copy-mode flags are
+  # stale whatever the stack says — and they must be cleared BEFORE the
+  # no-entries early return below. A mouse selection (drag, double-click)
+  # enters copy-mode without ever pushing an entry, so that return fires and
+  # used to leave @visual set behind: the next Scroll entry then read as Copy,
+  # which is exactly the drift this clearing exists to prevent.
+  mux_stack::_probe
+  [[ -n "$MS_PANE" ]] && \
+    "$MUX_TMUX_BIN" set -p -t "$MS_PANE" -u @visual ';' \
+                    set -p -t "$MS_PANE" -u @searching ';' \
+                    set -p -t "$MS_PANE" -u @search_term 2>/dev/null
   mux_stack::_get
   keep=()
   for e in $MS_ENTRIES; do
@@ -271,13 +282,6 @@ mux_stack::reconcile() {
   (( changed )) || return 0
   MS_ENTRIES=("${keep[@]}")
   mux_stack::_put
-  # the pane flags go with the entries: a stale @visual would make the next
-  # copy-mode entry read as Copy instead of Scroll
-  mux_stack::_probe
-  [[ -n "$MS_PANE" ]] && \
-    "$MUX_TMUX_BIN" set -p -t "$MS_PANE" -u @visual ';' \
-                    set -p -t "$MS_PANE" -u @searching ';' \
-                    set -p -t "$MS_PANE" -u @search_term 2>/dev/null
   mux_stack::sync
 }
 

@@ -154,10 +154,13 @@ bind -n M-Enter if "$is_fzf" 'send-keys M-Enter' 'run-shell -b "{{ .chezmoi.home
 # screen. Removing it outright makes the copy land silently, which reads as
 # "double-click does nothing" even though the word is on the clipboard.
 #
-# So it is shortened, not deleted: 0.3 → 0.12. Still a visible flash, less
-# than half the latency. The copy itself needs no delay at all (select-word
-# has already set the selection), so this number is purely how long you see
-# the highlight — turn it down to taste.
+# It stays. The copy itself needs no delay at all (select-word has already set
+# the selection), so this number is purely HOW LONG THE HIGHLIGHT SHOWS — it
+# costs nothing but visibility. Tuned by hand: 0.3 is tmux's own default and
+# what we settled on. Shortening it does NOT make the gesture feel faster,
+# because the lag is in front of it: tmux holds a double-click ~300ms to see
+# whether a triple-click follows (17ms for a single click vs 328ms for a
+# double, measured), and no tmux option changes that.
 #
 # @visual 1 makes the bar say COPY. The resolver reads copy-mode with @visual
 # unset as SCROLL, which is what a word-select used to announce — wrong, since
@@ -172,8 +175,18 @@ bind -n M-Enter if "$is_fzf" 'send-keys M-Enter' 'run-shell -b "{{ .chezmoi.home
 # Everything else is stock: `select-pane -t =` keeps click-to-focus, and the
 # `pane_in_mode`/`mouse_any_flag` arm still forwards the event to an app that
 # is capturing the mouse (fzf, vim) or to a pane already in copy-mode.
-bind -n DoubleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; copy-mode -H ; send -X select-word ; run-shell -d 0.12 ; send -X copy-pipe-and-cancel ; set -p -u @visual ; set -p -u @mouse_select }
-bind -n TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; copy-mode -H ; send -X select-line ; run-shell -d 0.12 ; send -X copy-pipe-and-cancel ; set -p -u @visual ; set -p -u @mouse_select }
+# Drag-select gets the same @visual 1 for the same reason: stock
+# `MouseDrag1Pane` is a bare `copy-mode -M`, so dragging out a selection put
+# the bar in SCROLL. Unlike the click gestures this one LEAVES you in
+# copy-mode holding the selection, so there is nothing to clear here — the
+# pane-mode-changed hook (not gated: no @mouse_select) runs reconcile on the
+# way out, which is exactly what unsets @visual.
+#
+# The WHEEL binding is deliberately untouched: `WheelUpPane` → `copy-mode -e`
+# with @visual unset reads as Scroll, and scrolling IS scrolling.
+bind -n MouseDrag1Pane if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @visual 1 ; copy-mode -M }
+bind -n DoubleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; copy-mode -H ; send -X select-word ; run-shell -d 0.3 ; send -X copy-pipe-and-cancel ; set -p -u @visual ; set -p -u @mouse_select }
+bind -n TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; copy-mode -H ; send -X select-line ; run-shell -d 0.3 ; send -X copy-pipe-and-cancel ; set -p -u @visual ; set -p -u @mouse_select }
 
 # ---------------------------------------------------------------------------
 # MEH direct bindings — Ctrl+Alt+Shift (spec 2026-07-27-meh-direct-bindings)
