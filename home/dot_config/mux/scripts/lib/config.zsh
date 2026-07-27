@@ -12,11 +12,11 @@
 # "read any of yaml/json/toml" behavior the Lua plugin had via
 # wezterm.serde.*_decode.
 
-# Targets directory (default ~/.config/zellij/quick-launch), overridable via
+# Targets directory (default ~/.config/mux/quick-launch), overridable via
 # $QUICK_LAUNCH_DIR. Holds the managed `default.yaml` plus an optional
 # `launch.d/` of host-local fragments.
 ql_config_dir() {
-  echo "${QUICK_LAUNCH_DIR:-$HOME/.config/zellij/quick-launch}"
+  echo "${QUICK_LAUNCH_DIR:-$HOME/.config/mux/quick-launch}"
 }
 
 # A single-file override (used by the picker's merged cache and by tests). When

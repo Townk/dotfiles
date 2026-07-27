@@ -1,6 +1,6 @@
 # Quick-Launch Targets Schema
 
-Targets live in a directory (`~/.config/zellij/quick-launch` by default,
+Targets live in a directory (`~/.config/mux/quick-launch` by default,
 override via `$QUICK_LAUNCH_DIR`): the chezmoi-managed `default.yaml` plus any
 host-local fragments under `launch.d/`. Each file has three top-level lists plus
 an optional `tools` table. YAML is the default; `.json` and `.toml` files are
@@ -31,7 +31,7 @@ Every workspace / tab / pane shares:
 | key    | type   | description                                                 |
 | ------ | ------ | ----------------------------------------------------------- |
 | `id`   | string | Stable key; `quick-launch open <kind> <id>` and dedup       |
-| `name` | string | Display label + Zellij tab/session name (default: `id`)     |
+| `name` | string | Display label + the mux's tab/session name (default: `id`)  |
 | `icon` | string | Menu glyph; falls back to the action-type icon when omitted |
 
 ## `action`

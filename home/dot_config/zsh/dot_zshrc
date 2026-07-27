@@ -104,7 +104,7 @@ if _zsh_should_autoattach_zellij; then
   # path doesn't go through quick-launch — which is what normally records a
   # pick — so we prepend it by hand (dedupe, cap at 50, like pick::record).
   # "default" is the workspace *id* whose session name is "Main"
-  # (~/.config/zellij/quick-launch/default.yaml); the recency file keys on id.
+  # (~/.config/mux/quick-launch/default.yaml); the recency file keys on id.
   _ql_seed_main() {
     local f="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/usage-workspace"
     mkdir -p "${f:h}" 2>/dev/null || return 0

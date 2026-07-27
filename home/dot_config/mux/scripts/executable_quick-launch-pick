@@ -15,7 +15,7 @@
 # 130 with no output (pick-common's clean-cancel convention).
 #
 # Targets are read from $QUICK_LAUNCH_TARGETS (default
-# ~/.config/zellij/quick-launch/default.yaml; yaml/json/toml accepted). When
+# ~/.config/mux/quick-launch/default.yaml; yaml/json/toml accepted). When
 # launched via `quick-launch menu` this points at a pre-merged JSON cache
 # (default.yaml + launch.d/*), so the picker shows the same merged set the
 # dispatcher acts on.
@@ -65,7 +65,7 @@ done
 require_cmd yq
 require_cmd jq
 
-TARGETS="${QUICK_LAUNCH_TARGETS:-$HOME/.config/zellij/quick-launch/default.yaml}"
+TARGETS="${QUICK_LAUNCH_TARGETS:-$HOME/.config/mux/quick-launch/default.yaml}"
 [[ -r "$TARGETS" ]] || die "cannot read targets file: $TARGETS"
 
 case "$kind" in

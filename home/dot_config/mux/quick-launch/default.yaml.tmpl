@@ -1,16 +1,22 @@
 {{- $hasQmk := and (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk")) (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk-config")) -}}
 {{- $hasWeztermPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/quicklaunch.wezterm")) (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/statusbar.wezterm")) -}}
 {{- $hasZellijPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-context-keys/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-prompt-jumper/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-hud")) -}}
-# default.yaml — managed quick-launch targets for Zellij.
+# default.yaml — managed quick-launch targets, backend-agnostic.
+#
+# These live under ~/.config/mux/, not ~/.config/zellij/, because the picker
+# and the dispatcher serve zellij and tmux from the same file: a "workspace" is
+# a session and a "tab" is a tab or a window, whichever mux the calling pane is
+# in. Only entries that edit a backend's OWN config (config.kdl, the zellij
+# plugins) are zellij-specific, and they say so in their labels.
 #
 # Consumed by ~/.config/mux/scripts/quick-launch via the Alt+w P/T/W leader
 # binds. Every target is focus-or-create. Schema + merge rules:
-#   ~/.config/zellij/quick-launch/quick-launch-schema.md
+#   ~/.config/mux/quick-launch/quick-launch-schema.md
 #
 # This file is a chezmoi template: machine-specific workspaces are gated on the
 # existence (at `chezmoi apply` time) of their project directories, so an entry
 # only renders on a machine that actually has the project checked out. Drop
-# unmanaged, host-local targets into ~/.config/zellij/quick-launch/launch.d/;
+# unmanaged, host-local targets into ~/.config/mux/quick-launch/launch.d/;
 # they are merged over these defaults (matching `id`s in launch.d win).
 
 tools:
@@ -146,8 +152,8 @@ tabs:
     icon: "󱓟 "
     action:
       type: Edit
-      label: Edit Zellij QuickLaunch items
-      cwd: ~/.config/zellij/quick-launch
+      label: Edit Quick Launch items
+      cwd: ~/.config/mux/quick-launch
       args: ["default.yaml"]
 
   - id: launcher-local-items
@@ -155,8 +161,8 @@ tabs:
     icon: "󱓟 "
     action:
       type: Edit
-      label: Edit Zellij QuickLaunch local items
-      cwd: ~/.config/zellij/quick-launch/launch.d
+      label: Edit Quick Launch local items
+      cwd: ~/.config/mux/quick-launch/launch.d
       args: ["home.yaml"]
 
   - id: brew-pkgs

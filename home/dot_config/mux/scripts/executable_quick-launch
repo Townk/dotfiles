@@ -8,7 +8,7 @@
 #   quick-launch list  [pane|tab|workspace]    # list defined targets
 #
 # Targets are read from a directory ($QUICK_LAUNCH_DIR, default
-# ~/.config/zellij/quick-launch): the managed default.yaml plus optional
+# ~/.config/mux/quick-launch): the managed default.yaml plus optional
 # host-local fragments under launch.d/. A single file can be forced via
 # $QUICK_LAUNCH_TARGETS. YAML/JSON/TOML are accepted.
 #
