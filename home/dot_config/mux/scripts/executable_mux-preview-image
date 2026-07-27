@@ -82,11 +82,33 @@ fi
 _out=$(mktemp "${TMPDIR:-/tmp}/muximg.XXXXXX") || exit 1
 trap 'rm -f -- "$_out"' EXIT INT TERM HUP
 
-_render() {  # _render [chafa args…]
+# Breathing room: at least 6 columns each side and 2 rows top and bottom
+# ($MUX_PREVIEW_IMAGE_PAD_X / _PAD_Y). The image is bounded by -s and centred
+# by chafa, so the padding is the remainder — never less than these, more
+# when the aspect ratio leaves slack.
+#
+# --view-size is one row SHORTER than the pane on purpose: chafa centres
+# within the view, and a render that reaches the last row ends with a
+# newline that scrolls the pane — which drags a sixel out of tmux's grid.
+_padx="${MUX_PREVIEW_IMAGE_PAD_X:-6}"
+_pady="${MUX_PREVIEW_IMAGE_PAD_Y:-2}"
+_cols="$(tput cols 2>/dev/null || echo 80)"
+_rows="$(tput lines 2>/dev/null || echo 24)"
+_box_w=$(( _cols - 2 * _padx )); (( _box_w < 8 )) && _box_w=$(( _cols > 8 ? _cols : 8 ))
+_box_h=$(( _rows - 2 * _pady )); (( _box_h < 4 )) && _box_h=$(( _rows > 4 ? _rows : 4 ))
+_view_h=$(( _rows > 1 ? _rows - 1 : _rows ))
+
+_render() {  # _render [scale-percent]
+  local pct="${1:-100}"
+  local w=$(( _box_w * pct / 100 )) h=$(( _box_h * pct / 100 ))
+  (( w < 8 )) && w=8
+  (( h < 4 )) && h=4
   if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
-    chafa ${=MUX_PREVIEW_IMAGE_ARGS} --align center,center "$@" "$img" >"$_out" 2>/dev/null
+    chafa ${=MUX_PREVIEW_IMAGE_ARGS} --view-size "${_cols}x${_view_h}" \
+      --align center,center -s "${w}x${h}" "$img" >"$_out" 2>/dev/null
   else
-    chafa --align center,center "$@" "$img" >"$_out" 2>/dev/null
+    chafa --view-size "${_cols}x${_view_h}" --align center,center \
+      -s "${w}x${h}" "$img" >"$_out" 2>/dev/null
   fi
 }
 # zstat needs its module loaded; wc is one fork and always there.
@@ -95,9 +117,8 @@ _size() { wc -c < "$_out" 2>/dev/null | tr -d " " || print 0 }
 rc=0
 _render || rc=$?
 if (( $(_size) > _max )); then
-  _c="$(tput cols 2>/dev/null || echo 80)" _r="$(tput lines 2>/dev/null || echo 24)"
   for _pct in 70 50 35 25; do
-    _render -s "$(( _c * _pct / 100 ))x$(( _r * _pct / 100 ))" || rc=$?
+    _render "$_pct" || rc=$?
     (( $(_size) <= _max )) && break
   done
 fi
