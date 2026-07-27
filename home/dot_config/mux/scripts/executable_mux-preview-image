@@ -40,25 +40,33 @@ _img_h=$(( _avail * 75 / 100 ))
 (( _img_h < 1 )) && _img_h=1
 _pad=$(( (_avail - _img_h) / 2 ))
 
-export FZF_PREVIEW_COLUMNS="$_cols"
-export FZF_PREVIEW_LINES="$_img_h"
-export PREVIEW_IMAGE_ALIGN="center,top"
-export PREVIEW_IMAGE_ONLY=1
-
-# Own the pane: clear, then drop to the first image row.
+# ORDER IS LOAD-BEARING: nothing may be written after the image. tmux keeps
+# images in the pane's grid and drops them when the region is written again,
+# so the hint that used to be placed after the render took the picture with
+# it — a bare `chafa <img>` in the same window renders fine, which is what
+# isolated this (Mode B 2026-07-26). So: clear, paint the hint on the last
+# row, park the cursor at the image's first row, and let the render be the
+# LAST thing this script emits before it blocks on the key.
 print -n -- $'\e[2J\e[H'
-(( _pad > 0 )) && repeat $_pad print ""
-
-rc=0
-preview "$img" || rc=$?
-
-# The hint is PLACED on the last row, never printed after the image: a
-# trailing newline is exactly the scroll this whole layout avoids.
 print -n -- "\e[${_rows};1H"
 print -n -- $'\e[2mpress any key to close\e[0m'
-# The dismissal read's status is NOT the script's result — the render already
-# happened above. On tmux a popup runs under `display-popup -E`, whose exit
-# status IS the command's, and a non-zero one paints "'…' returned N" over
-# the session. Exit on the render's verdict instead.
+print -n -- "\e[$(( _pad + 1 ));1H"
+
+# chafa DIRECTLY, not through `preview` (Mode B 2026-07-26). preview pins
+# the tier for the mux — `-f sixel --passthrough none` so tmux ingests the
+# DCS natively instead of handing WezTerm an overlay — and under that tier
+# the pane came up blank while a bare `chafa <img>` in the same window
+# rendered fine. Bare chafa auto-detects (its default --passthrough auto),
+# which is the invocation proven to work here. $MUX_PREVIEW_IMAGE_ARGS
+# overrides the argument list for experiments.
+rc=0
+if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
+  chafa ${=MUX_PREVIEW_IMAGE_ARGS} --align center,top \
+    -s "${_cols}x${_img_h}" "$img" || rc=$?
+else
+  chafa --align center,top -s "${_cols}x${_img_h}" "$img" || rc=$?
+fi
+
+# NOTHING below this line may write to the pane.
 read -k1 -s || :
 exit $rc
