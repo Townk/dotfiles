@@ -186,7 +186,8 @@ keybind = cmd+f=text:\x1b/
 #   Cmd+Shift+f  → leader, scroll, e   → EditScrollback
 #   Cmd+1..9     → leader, <digit>     → GoToTab N
 #   Cmd+0        → leader, 0           → GoToTab 10    (needs new bind, see kdl)
-keybind = cmd+t=text:\x1bwtN
+# Cmd+T → MEH-n (N=78): a single tmux root bind, not the `⌥w t N` replay.
+keybind = cmd+t=text:\x1b[27;8;78~
 keybind = cmd+w=text:\x1bwpx
 keybind = cmd+shift+w=text:\x1bwtx
 keybind = cmd+shift+f=text:\x1bwlV

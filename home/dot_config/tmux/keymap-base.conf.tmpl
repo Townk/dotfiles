@@ -198,6 +198,12 @@ bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 70 -E -B -
 bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 75 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Clipboard history\" --inject --no-chrome -- $HOME/.local/libexec/pick-clipboard"'
 {{- end }}
 
+# MEH-n — New tab. `n` for new, so p/t/s stay the picker family; the terminals
+# already separate ⌘t (new) from ⌘⇧T (pick), and this keeps that split.
+{{- range list "C-M-N" "C-M-S-N" "C-M-S-n" }}
+bind -n {{ . }} new-window
+{{- end }}
+
 # MEH-c / MEH-d — Copy CWD, relative and absolute. Two letters because MEH has
 # no shifted variant left to spend: it already IS Ctrl+Alt+Shift.
 {{- range list "C-M-C" "C-M-S-C" "C-M-S-c" }}

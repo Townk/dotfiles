@@ -764,15 +764,11 @@ config.keys = {
 		mods = "CMD|SHIFT|ALT",
 		action = send_meh("D"),
 	},
-	-- `⌘t`: New tab => `⌥w t N`
+	-- `⌘t`: New tab => MEH-n (was `⌥w t N`)
 	{
 		key = "t",
 		mods = "CMD",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "t" },
-			{ key = "N" },
-		}),
+		action = send_meh("N"),
 	},
 	-- `⌘1`: Focus on tab 1 => `⌥w t 1`
 	{

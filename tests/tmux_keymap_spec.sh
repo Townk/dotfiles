@@ -205,9 +205,9 @@ Describe 'tmux keymap tables'
   # codepoint (C-M-S-P), and the kitty protocol shifts neither (C-M-S-p).
   meh() { tmux -L kmspec list-keys -T root | grep -E '^bind-key +-T root +C-M-'; }
 
-  It 'binds all six MEH chords in all three terminal spellings'
+  It 'binds all seven MEH chords in all three terminal spellings'
     When call meh
-    The lines of output should equal 18
+    The lines of output should equal 21
   End
 
   It 'maps every spelling of MEH-p to the project picker'
@@ -225,6 +225,7 @@ Describe 'tmux keymap tables'
     The output should include "pick-clipboard"
     The output should include "copy-pwd --relative"
     The output should include "copy-pwd --absolute"
+    The output should include "new-window"
   End
 
   # Fired from the ROOT table there is no key-table to reset and no stack entry
