@@ -116,8 +116,12 @@ if [[ -n "${TMUX:-}" ]]; then
 fi
 [[ -n "$_cols" ]] || _cols="$(tput cols 2>/dev/null || echo 80)"
 [[ -n "$_rows" ]] || _rows="$(tput lines 2>/dev/null || echo 24)"
+# The frame owns 4 rows top (border, blank, header, blank) and 4 bottom
+# (blank, footer, blank, border), plus a column of border either side on top
+# of the padding.
+_chrome_v=8
 _box_w=$(( _cols - 2 * _padx )); (( _box_w < 8 )) && _box_w=8
-_box_h=$(( _rows - 2 * _pady )); (( _box_h < 4 )) && _box_h=4
+_box_h=$(( _rows - _chrome_v )); (( _box_h < 4 )) && _box_h=4
 
 _render() {  # _render [percent-of-box] — the percent is only the shrink path
   local pct="${1:-100}"
@@ -156,6 +160,60 @@ fi
 
 cat -- "$_out"
 
+# Chrome LAST, positioned absolutely. It has to come after the image because
+# chafa centres horizontally with leading SPACES, which paint over whatever
+# is under them — including the left border. Absolute addressing (no
+# newlines) means nothing scrolls, which is what drags a sixel out of tmux's
+# grid. The frame never writes into the image's own cells.
+source "$HOME/.local/lib/theme-common.zsh" 2>/dev/null || :
+_fg() { theme::sgr_fg "$1" 2>/dev/null || : }
+_c_frame="$(_fg "${C_HEX_SURFACE2:-}")"
+_c_name="$(_fg "${C_HEX_MAUVE:-}")"
+_c_size="$(_fg "${C_HEX_GREEN:-}")"
+_c_dims="$(_fg "${C_HEX_YELLOW:-}")"
+_c_hint="$(_fg "${C_HEX_OVERLAY0:-}")"
+_rst="${C_RES:-$'\e[0m'}"
+
+# file size, humanised
+_bytes=$(stat -f%z "$img" 2>/dev/null || stat -c%s "$img" 2>/dev/null || wc -c <"$img" 2>/dev/null | tr -d ' ')
+if [[ "$_bytes" == <-> ]] && (( _bytes >= 1048576 )); then
+  _hsize="$(( _bytes / 104858 ))"; _hsize="${_hsize%?}.${_hsize: -1}MB"
+elif [[ "$_bytes" == <-> ]]; then
+  _hsize="$(( (_bytes + 1023) / 1024 ))KB"
+else
+  _hsize=""
+fi
+# pixel dimensions, when a tool can tell us
+_dims="$(sips -g pixelWidth -g pixelHeight "$img" 2>/dev/null |
+  awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{ if (w && h) print w"x"h }')"
+[[ -n "$_dims" ]] || _dims="$(magick identify -format '%wx%h' "$img" 2>/dev/null)" || _dims=""
+
+_hline() { printf '─%.0s' {1..$1}; }
+{
+  # border
+  printf '\e[1;1H%s┌%s┐' "$_c_frame" "$(_hline $(( _cols - 2 )))"
+  printf '\e[%d;1H%s└%s┘%s' "$_rows" "$_c_frame" "$(_hline $(( _cols - 2 )))" "$_rst"
+  local _r
+  for (( _r = 2; _r < _rows; _r++ )); do
+    printf '\e[%d;1H%s│\e[%d;%dH│%s' "$_r" "$_c_frame" "$_r" "$_cols" "$_rst"
+  done
+
+  # header: name left, size + dimensions right
+  local _right="" _rlen=0
+  [[ -n "$_hsize" ]] && { _right="${_c_size}${_hsize}${_rst}"; _rlen=${#_hsize} }
+  [[ -n "$_dims" ]] && { _right="$_right ${_c_dims}(${_dims})${_rst}"; _rlen=$(( _rlen + ${#_dims} + 3 )) }
+  printf '\e[3;4H%s󰋩 %s%s' "$_c_name" "${img:t}" "$_rst"
+  (( _rlen )) && printf '\e[3;%dH%s' "$(( _cols - 3 - _rlen ))" "$_right"
+
+  # footer, centred
+  local _hint="Press any key to dismiss"
+  printf '\e[%d;%dH%s%s%s' "$(( _rows - 2 ))" "$(( (_cols - ${#_hint}) / 2 + 1 ))" "$_c_hint" "$_hint" "$_rst"
+
+  # keep the cursor hidden — chafa turns it back on at the end of its stream
+  printf '\e[?25l'
+}
+
 # NOTHING below this line may write to the pane.
 read -k1 -s || :
+printf '\e[?25h'   # the pane is going away, but leave the cursor as we found it
 exit $rc
