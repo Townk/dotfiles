@@ -154,6 +154,13 @@ if (( $(_size) > _max )); then
   done
 fi
 
+# Own the pane, then drop ONE row before painting. chafa centres vertically
+# inside a view one row shorter than the pane (it keeps the last row clear),
+# so its own arithmetic always lands the picture a row high — for any height,
+# top = bottom - 1. The newline squares it up.
+print -n -- $'\e[2J\e[H'
+print ""
+
 cat -- "$_out"
 
 # Chrome LAST, positioned absolutely. It has to come after the image because
