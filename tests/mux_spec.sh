@@ -796,3 +796,42 @@ Describe 'mux.zsh — live session/tab state (tmux)'
     The line 2 of output should equal "scratch"
   End
 End
+
+Describe 'mux.zsh — dump_screen (zellij)'
+  Include home/dot_local/lib/mux.zsh
+
+  # The stub ECHOES its argv so the assertions are about the command SHAPE.
+  # This verb had NO zellij coverage, which is how it survived being written
+  # against an older CLI: it passed the dump path as a POSITIONAL, but zellij
+  # takes `--path <PATH>` and prints to stdout when it is omitted — so the
+  # real call was rejected and the verb returned nothing at all.
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    unset TMUX
+    export ZELLIJ=1 ZELLIJ_SESSION_NAME=spec
+    stub="$TEST_TMP/zellij"
+    { echo '#!/usr/bin/env zsh'; echo 'print -r -- "zellij $*"'; } > "$stub"
+    chmod +x "$stub"
+    export ZELLIJ_BIN="$stub"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset ZELLIJ_BIN ZELLIJ ZELLIJ_SESSION_NAME; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'dumps the viewport to stdout, with no path argument'
+    When call mux::dump_screen
+    The output should equal "zellij action dump-screen"
+  End
+
+  It 'adds --full for the whole scrollback'
+    When call mux::dump_screen --full
+    The output should equal "zellij action dump-screen --full"
+  End
+
+  # The regression guard: a positional path is what broke it.
+  It 'never passes the dump target positionally'
+    When call mux::dump_screen
+    The output should not include "/muxdump"
+    The output should not include "--path"
+  End
+End

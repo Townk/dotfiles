@@ -157,18 +157,22 @@ _mux_zj_float() {
   print -rn -- "$result"
 }
 
-# _mux_zj_dump_screen <full> — Screen group (spec §3): zellij dumps to a file
-# argument; normalize to stdout like tmux's capture-pane -p. full=1 asks for
-# the whole scrollback (--full), matching tmux's `capture-pane -S -`; the
-# default is the viewport.
+# _mux_zj_dump_screen <full> — Screen group (spec §3). full=1 asks for the
+# whole scrollback (--full), matching tmux's `capture-pane -S -`; the default
+# is the viewport.
+#
+# The file is NOT a positional: this zellij takes `--path <PATH>` and prints
+# to STDOUT when it is omitted, which is exactly the contract we want. The
+# old code passed a mktemp'd path positionally — written against an older CLI
+# — so zellij rejected the call and the verb returned NOTHING on both
+# backends' behalf (found in the zellij pass, 2026-07-27: viewport=0 lines,
+# --full=0 lines from a real pane). Dumping straight to stdout also retires
+# the temp file and its cleanup.
 _mux_zj_dump_screen() {
-  local bin="${ZELLIJ_BIN:-$(command -v zellij)}" f
+  local bin="${ZELLIJ_BIN:-$(command -v zellij)}"
   local -a hist=()
   [[ "${1:-0}" == 1 ]] && hist=(--full)
-  f=$(mktemp "${TMPDIR:-/tmp}/muxdump.XXXXXX") || return 1
-  "$bin" action dump-screen "${hist[@]}" "$f" 2>/dev/null || { rm -f -- "$f"; return 1; }
-  cat -- "$f"
-  rm -f -- "$f"
+  "$bin" action dump-screen "${hist[@]}" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
