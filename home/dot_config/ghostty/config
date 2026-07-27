@@ -191,21 +191,32 @@ keybind = cmd+w=text:\x1bwpx
 keybind = cmd+shift+w=text:\x1bwtx
 keybind = cmd+shift+f=text:\x1bwlV
 
-# Quick Launch shortcuts
-keybind = cmd+shift+p=text:\x1bwoS
-keybind = cmd+shift+t=text:\x1bwtT
-keybind = cmd+shift+s=text:\x1bwpP
+# Quick Launch shortcuts — each sends the MEH (Ctrl+Alt+Shift) chord tmux binds
+# directly in its root table, instead of replaying the `⌥w …` leader sequence.
+# The leader opens the which-key popup, which owns the keyboard and drops a
+# chord delivered faster than it can transition — and `text:` has no inter-key
+# delay at all, so the replay was the least reliable form of these.
+#
+# These bytes are exactly what Ghostty emits for the PHYSICAL chord: it sets the
+# shift bit AND shifts the codepoint (`CSI 27;8;<UPPER>~`), where WezTerm only
+# shifts the codepoint (`;7;`). tmux binds both spellings, so the ⌘ path and the
+# physical MEH path land on one bind and cannot drift. P=80 T=84 S=83.
+keybind = cmd+shift+p=text:\x1b[27;8;80~
+keybind = cmd+shift+t=text:\x1b[27;8;84~
+keybind = cmd+shift+s=text:\x1b[27;8;83~
 
-# Cmd+Shift+C → leader, Y (yank). Copies the focused zellij pane's cwd to
-# the clipboard as a $HOME-relative path (~/…), with a notification + sound.
-# Cmd+Shift+Alt+C → leader, Alt+y (ESC y): same, but the ABSOLUTE path.
-# Both route to the headless context-keys plugin (see the `bind "Y"` /
-# `bind "Alt y"` blocks in zellij's tmux mode) — no pane, no flash.
+# Cmd+Shift+C → MEH-c (C=67). Copies the focused pane's cwd to the clipboard
+# as a $HOME-relative path (~/…), with a notification + sound.
+# Cmd+Shift+Alt+C → MEH-d (D=68): same, but the ABSOLUTE path.
+# Both now reach copy-pwd through a single tmux root bind rather than replaying
+# the leader (`⌥w Y` / `⌥w ⌥y`). copy-pwd resolves the cwd from `#{pane_pid}`,
+# the pane's ROOT process, so it reports the shell's directory even when nvim
+# or a pager owns the pane — no pane, no flash, no guard needed.
 # We rebind Cmd+Shift+C (not Cmd+C) so Ghostty's own copy_to_clipboard on
 # Cmd+C — plus `copy-on-select = clipboard` above — keep working for
 # selected text.
-keybind = cmd+shift+c=text:\x1bwY
-keybind = cmd+shift+alt+c=text:\x1bw\x1by
+keybind = cmd+shift+c=text:\x1b[27;8;67~
+keybind = cmd+shift+alt+c=text:\x1b[27;8;68~
 # Ghostty's defaults register `super+N=goto_tab:N` and `super+digit_N=goto_tab:N`
 # for digits 1..8 (super+9=last_tab, super+0=reset_font_size). Both must be
 # overridden — physical key bindings take precedence over codepoint bindings,

@@ -549,6 +549,23 @@ local function send_mux_keys(keys)
 	end)
 end
 
+-- send_meh — emit the MEH (Ctrl+Alt+Shift) chord for an UPPERCASE letter as a
+-- SINGLE keypress, which tmux binds directly in its root table (see the "MEH
+-- direct bindings" block in keymap-base.conf).
+--
+-- This is byte-for-byte what WezTerm sends when the physical chord is pressed:
+-- it folds Shift into the CODEPOINT and leaves the modifier field at 7
+-- (measured through a real client — Ghostty instead sets the shift bit *and*
+-- shifts the codepoint, which is why tmux binds both spellings). Synthesising
+-- the real encoding means the ⌘ path and the physical MEH path cannot drift.
+--
+-- Replaces a send_mux_keys replay of the ⌥w leader: the leader opens the
+-- which-key popup, which owns the keyboard and drops a chord sent faster than
+-- MUX_CHORD_GAP (0/5 at 20ms, 5/5 at 150ms). One keystroke has no tail to lose.
+local function send_meh(letter)
+	return wezterm.action.SendString(string.format("\x1b[27;7;%d~", string.byte(letter)))
+end
+
 -- True when the focused pane is a mux client attached to a nested workspace
 -- session. The pane's foreground process is the mux client (zellij or tmux);
 -- nested-session-check resolves which session it is on through the shim (live,
@@ -735,23 +752,17 @@ config.keys = {
 			{ key = "V" },
 		}),
 	},
-	-- `⇧⌘c`: Copy current working directory to clipboard => `⌥w Y`
+	-- `⇧⌘c`: Copy current working directory to clipboard => MEH-c (was `⌥w Y`)
 	{
 		key = "c",
 		mods = "CMD|SHIFT",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "Y" },
-		}),
+		action = send_meh("C"),
 	},
-	-- `⇧⌘⌥c`: Copy absolute path of current working directory to clipboard => `⌥w ⌥y`
+	-- `⇧⌘⌥c`: Copy absolute path of the cwd to clipboard => MEH-d (was `⌥w ⌥y`)
 	{
 		key = "c",
 		mods = "CMD|SHIFT|ALT",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "y", mods = "ALT" },
-		}),
+		action = send_meh("D"),
 	},
 	-- `⌘t`: New tab => `⌥w t N`
 	{
@@ -817,13 +828,14 @@ config.keys = {
 		mods = "CMD",
 		action = send_mux_keys({ { key = "w", mods = "ALT" }, { key = "t" }, { key = "9" } }),
 	},
-	-- `⌘⇧P`: Show the workspace/project picker. In a normal session that's the
-	-- `⌥w o S` chord. In a nested session those keys are cleared and pass through
-	-- to the remote, so instead send the kitty-protocol bytes for the local
-	-- `Ctrl+Alt+Space` summon bound in the generated nested layout. We send the
-	-- raw CSI-u sequence (`ESC [ 32;7 u`) rather than SendKey because WezTerm's
-	-- SendKey mis-encodes the `Ctrl+Alt`+Space combination (Ctrl+Space collapses
-	-- to NUL), so the synthesized keypress never matches Zellij's bind.
+	-- `⌘⇧P`: Show the workspace/project picker. In a normal session that is now
+	-- the single MEH-p keypress (was the `⌥w o S` chord). In a nested session
+	-- those keys are cleared and pass through to the remote, so instead send the
+	-- kitty-protocol bytes for the local `Ctrl+Alt+Space` summon bound in the
+	-- generated nested layout. We send the raw CSI-u sequence (`ESC [ 32;7 u`)
+	-- rather than SendKey because WezTerm's SendKey mis-encodes the `Ctrl+Alt`
+	-- +Space combination (Ctrl+Space collapses to NUL), so the synthesized
+	-- keypress never matches Zellij's bind.
 	{
 		key = "p",
 		mods = "CMD|SHIFT",
@@ -831,11 +843,7 @@ config.keys = {
 			if pane_session_is_nested(pane) then
 				window:perform_action(wezterm.action.SendString("\x1b[32;7u"), pane)
 			else
-				perform_mux_keys(window, pane, {
-					{ key = "w", mods = "ALT" },
-					{ key = "o" },
-					{ key = "S" },
-				})
+				window:perform_action(send_meh("P"), pane)
 			end
 		end),
 	},
@@ -856,25 +864,17 @@ config.keys = {
 			end
 		end),
 	},
-	-- `⌘⇧T`: Show new tab picker => `⌥w t T`
+	-- `⌘⇧T`: Show the tab picker => MEH-t (was `⌥w t T`)
 	{
 		key = "t",
 		mods = "CMD|SHIFT",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "t" },
-			{ key = "T" },
-		}),
+		action = send_meh("T"),
 	},
-	-- `⌘⇧S`: Show new tab picker => `⌥w p P`
+	-- `⌘⇧S`: Show the split picker => MEH-s (was `⌥w p P`)
 	{
 		key = "s",
 		mods = "CMD|SHIFT",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "p" },
-			{ key = "P" },
-		}),
+		action = send_meh("S"),
 	},
 }
 

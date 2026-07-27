@@ -198,6 +198,43 @@ Describe 'tmux keymap tables'
     The output should include "tmux-alert-notify activity"
     The output should include "tmux-alert-notify silence"
   End
+
+  # ---- MEH direct bindings (spec 2026-07-27-meh-direct-bindings) -----------
+  # Ctrl+Alt+Shift root binds. Three spellings each, because WezTerm folds
+  # Shift into the CODEPOINT (C-M-P), Ghostty sets the shift bit AND shifts the
+  # codepoint (C-M-S-P), and the kitty protocol shifts neither (C-M-S-p).
+  meh() { tmux -L kmspec list-keys -T root | grep -E '^bind-key +-T root +C-M-'; }
+
+  It 'binds all six MEH chords in all three terminal spellings'
+    When call meh
+    The lines of output should equal 18
+  End
+
+  It 'maps every spelling of MEH-p to the project picker'
+    When call meh
+    The output should include "C-M-P     "
+    The output should include "C-M-S-P   "
+    The output should include "C-M-S-p   "
+    The output should include "quick-launch menu workspace"
+  End
+
+  It 'covers the other five actions'
+    When call meh
+    The output should include "quick-launch menu tab"
+    The output should include "quick-launch menu pane"
+    The output should include "pick-clipboard"
+    The output should include "copy-pwd --relative"
+    The output should include "copy-pwd --absolute"
+  End
+
+  # Fired from the ROOT table there is no key-table to reset and no stack entry
+  # to pop; carrying the leader's plumbing over would corrupt @mux_stack.
+  It 'strips the mode plumbing the leader versions carry'
+    When call meh
+    The output should not include "key-table root"
+    The output should not include "mux-stack"
+  End
+
 End
 
 Describe 'prompt-marks.sh (OSC 133 emitter)'

@@ -146,6 +146,68 @@ bind -n C-k if "$is_agent" 'send-keys Up'   { if "$is_passthru" 'send-keys C-k' 
 bind -n M-Enter if "$is_fzf" 'send-keys M-Enter' 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/terminal-toggle-fullscreen"'
 
 # ---------------------------------------------------------------------------
+# MEH direct bindings — Ctrl+Alt+Shift (spec 2026-07-27-meh-direct-bindings)
+# ---------------------------------------------------------------------------
+# Single-keystroke access to actions that otherwise cost a leader chord. These
+# are ROOT binds, which is why they live here and not in keymap.yaml (that file
+# owns the mode tables and the panel; the root table has always been ours).
+#
+# THREE SPELLINGS PER CHORD, because the terminals disagree about where Shift
+# goes and tmux believes them (all measured through a real client):
+#   WezTerm  Ctrl+Alt+Shift+P -> CSI 27;7;80~  (shifted CODEPOINT, no shift bit)
+#            -> tmux calls it C-M-P
+#   Ghostty  Ctrl+Alt+Shift+P -> CSI 27;8;80~  (shift bit AND shifted codepoint)
+#            -> tmux calls it C-M-S-P
+#   kitty    CSI 112;8u       (shift bit, UNshifted codepoint)
+#            -> tmux calls it C-M-S-p
+# The first two are what our terminals actually send; C-M-S-p costs one line
+# and covers any client that speaks the kitty protocol instead.
+#
+# NEVER give one of these an `if` whose else-branch is `send-keys C-M-P`:
+# C-M-P, C-M-p and C-M-S-P ALL encode to \e^P on the way to a pane (the legacy
+# control byte has no Shift bit), and \e^P is ai-playbook-pick in zsh. A
+# guarded MEH bind is "act, or do nothing" — it can never pass through.
+#
+# The commands are the keymap.yaml originals MINUS the mode plumbing: fired
+# from the root table there is no key-table to reset and no @mux_stack entry to
+# pop, so `set key-table root` and the `mux-stack clear` are both omitted.
+# Carrying them over would corrupt the stack.
+#
+# Unguarded on purpose. The pickers draw a popup OVER whatever owns the pane
+# and type nothing into it; copy-pwd reads `#{pane_pid}` — the pane's ROOT
+# process — so it reports the shell's cwd from inside nvim, fzf or a pager
+# without ever consulting the foreground app.
+
+# MEH-p — Project picker (a workspace is a session on either backend).
+{{- range list "C-M-P" "C-M-S-P" "C-M-S-p" }}
+bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome -- $HOME/.config/mux/scripts/quick-launch menu workspace"'
+{{- end }}
+
+# MEH-t — Tab picker.
+{{- range list "C-M-T" "C-M-S-T" "C-M-S-t" }}
+bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Tab\" --no-chrome -- $HOME/.config/mux/scripts/quick-launch menu tab"'
+{{- end }}
+
+# MEH-s — Split picker. `s` is "split", from before floating panes existed.
+{{- range list "C-M-S" "C-M-S-S" "C-M-S-s" }}
+bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 70 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Pane\" --no-chrome -- $HOME/.config/mux/scripts/quick-launch menu pane"'
+{{- end }}
+
+# MEH-v — Clipboard picker. --inject: the pick is typed into the pane.
+{{- range list "C-M-V" "C-M-S-V" "C-M-S-v" }}
+bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 75 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Clipboard history\" --inject --no-chrome -- $HOME/.local/libexec/pick-clipboard"'
+{{- end }}
+
+# MEH-c / MEH-d — Copy CWD, relative and absolute. Two letters because MEH has
+# no shifted variant left to spend: it already IS Ctrl+Alt+Shift.
+{{- range list "C-M-C" "C-M-S-C" "C-M-S-c" }}
+bind -n {{ . }} run-shell 'zsh ~/.config/mux/scripts/copy-pwd --relative #{pane_pid}'
+{{- end }}
+{{- range list "C-M-D" "C-M-S-D" "C-M-S-d" }}
+bind -n {{ . }} run-shell 'zsh ~/.config/mux/scripts/copy-pwd --absolute #{pane_pid}'
+{{- end }}
+
+# ---------------------------------------------------------------------------
 # tm-scrub context routes (Phase 6.3, D4/D20)
 # ---------------------------------------------------------------------------
 # Bare capitals are far too hot to intercept globally, so every one of these
