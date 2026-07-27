@@ -96,8 +96,19 @@ trap 'rm -f -- "$_out"' EXIT INT TERM HUP
 # that was not the pane, so the picture sat off-centre AND smaller.
 _padx="${MUX_PREVIEW_IMAGE_PAD_X:-6}"
 _pady="${MUX_PREVIEW_IMAGE_PAD_Y:-2}"
-_cols="$(tput cols 2>/dev/null || echo 80)"
-_rows="$(tput lines 2>/dev/null || echo 24)"
+# Ask TMUX for the pane size, not the tty. In a window created by mux-open —
+# spawned from WezTerm's environment rather than by a client — the pane's
+# winsize is still 80x24 when the command starts, so `tput` bounded every
+# image to a 68x20 box in a 130x33 window: ~40% small, on every render
+# (Mode B 2026-07-26, caught by the debug log). tmux knows the real size
+# immediately; tput is the fallback outside a mux.
+_cols="" _rows=""
+if [[ -n "${TMUX:-}" ]]; then
+  _geo="$(tmux display -p -t "${TMUX_PANE:-}" '#{pane_width} #{pane_height}' 2>/dev/null)"
+  [[ "$_geo" == <->" "<-> ]] && { _cols="${_geo%% *}"; _rows="${_geo##* }" }
+fi
+[[ -n "$_cols" ]] || _cols="$(tput cols 2>/dev/null || echo 80)"
+[[ -n "$_rows" ]] || _rows="$(tput lines 2>/dev/null || echo 24)"
 _box_w=$(( _cols - 2 * _padx )); (( _box_w < 8 )) && _box_w=8
 _box_h=$(( _rows - 2 * _pady )); (( _box_h < 4 )) && _box_h=4
 
@@ -116,13 +127,22 @@ _render() {  # _render [percent-of-box] — the percent is only the shrink path
 
 _size() { wc -c < "$_out" 2>/dev/null | tr -d " " || print 0 }
 
+# Diagnostics on demand, the tm-tab convention: `touch
+# $XDG_STATE_HOME/mux-preview-image.debug` and every render appends what it
+# decided — geometry, stream size, the cap, and whether it shrank.
+_dbg="${XDG_STATE_HOME:-$HOME/.local/state}/mux-preview-image"
+_log() { [[ -e "$_dbg.debug" ]] && print -r -- "$(date +%T) $*" >> "$_dbg.log" 2>/dev/null || : }
+
 rc=0
 _render || rc=$?
+_log "img=${img:t} pane=${_cols}x${_rows} box=${_box_w}x${_box_h} bytes=$(_size) max=$_max"
 if (( $(_size) > _max )); then
+  _log "  SHRINKING: $(_size) > $_max"
   # Only when the stream would overrun tmux's input-buffer-size (rare now
   # that tmux.conf raises it): bound the cells until it fits.
   for _pct in 70 50 35 25; do
     _render "$_pct" || rc=$?
+    _log "  retry ${_pct}% -> $(_size) bytes"
     (( $(_size) <= _max )) && break
   done
 fi
