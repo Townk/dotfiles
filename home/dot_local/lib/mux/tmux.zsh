@@ -146,7 +146,14 @@ _mux_tx_popup() {
   else
     line="${(qq)${MUX_TMUX_BIN:-tmux}} display-popup -w $w -h $h $flags ${(qq)cmdline}"
   fi
-  "$(_mux_tx_bin)" run-shell -b "$line"
+  # `display-popup -E` exits with the COMMAND's status, and run-shell paints any
+  # non-zero one over the client as `… returned N`. 130 is our clean-cancel
+  # convention (pick-common; ESC and Ctrl+C both land there), so dismissing a
+  # modal papered the pane with an error overlay. Swallow exactly 130 and let
+  # every other status through — a popup whose command genuinely broke should
+  # still say so, and tmux failures are hard enough to see already.
+  # zellij needs none of this: closing a float reports nothing.
+  "$(_mux_tx_bin)" run-shell -b "$line || [ \$? -eq 130 ]"
 }
 
 # _mux_tx_new_tab <session> <name> <cwd> -- <cmd...>

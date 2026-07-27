@@ -560,6 +560,15 @@ Describe 'mux.zsh — pane/tab/info API (Phase 6.0, tmux backend)'
     The contents of file "$TX_ARGS" should not include "tmux-popup"
   End
 
+  # `display-popup -E` exits with its command's status and run-shell paints any
+  # non-zero one over the client. 130 is the clean-cancel convention, so ESC on
+  # a modal used to leave a "returned 130" error overlay behind.
+  It 'mux::popup swallows a 130 cancel but not a real failure'
+    When call mux::popup 54 18 -- /bin/echo hi
+    The status should be success
+    The contents of file "$TX_ARGS" should include '|| [ $? -eq 130 ]'
+  End
+
   It 'mux::new_tab opens a named window with a cwd and a command'
     When call mux::new_tab --name "edit" --cwd /tmp -- nvim foo
     The status should be success
