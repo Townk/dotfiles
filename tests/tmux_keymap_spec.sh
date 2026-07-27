@@ -206,10 +206,13 @@ Describe 'tmux keymap tables'
   # `"?` matters: tmux QUOTES a key name containing #, $ or % when listing it,
   # so C-M-# comes back as "C-M-#" and an unquoted pattern silently undercounts.
   meh() { tmux -L kmspec list-keys -T root | grep -E '^bind-key +-T root +"?C-M-'; }
+  # The scroll/prompt binds are the stateful ones — they alone test pane_in_mode.
+  meh_scroll() { meh | grep pane_in_mode; }
+  meh_stateless() { meh | grep -v pane_in_mode; }
 
-  It 'binds all seventeen MEH chords in all three terminal spellings'
+  It 'binds every MEH chord in all its terminal spellings'
     When call meh
-    The lines of output should equal 51
+    The lines of output should equal 65
   End
 
   It 'maps every spelling of MEH-p to the project picker'
@@ -243,10 +246,42 @@ Describe 'tmux keymap tables'
     The output should include "C-M-)"
   End
 
+  # Batch 3: the only STATEFUL MEH binds. They enter copy-mode, so they carry
+  # @visual, the mode-stack push and a guard — and `#{pane_in_mode}` splits
+  # entry from repeat so three presses do not stack three `scroll` entries.
+  It 'scrolls and jumps prompts, entering copy-mode once'
+    When call meh
+    The output should include "send-keys -X scroll-up"
+    The output should include "send-keys -X scroll-down"
+    The output should include "send-keys -X previous-prompt"
+    The output should include "send-keys -X next-prompt"
+    The output should include "pane_in_mode"
+    The output should include "mux-stack push scroll"
+    The output should include "@visual"
+  End
+
+  # Arrows carry modifiers numerically, so Shift cannot fold into a codepoint:
+  # ONE spelling, no per-terminal dialect.
+  It 'binds the arrow forms of the scroll pair'
+    When call meh
+    The output should include "C-M-S-Up"
+    The output should include "C-M-S-Down"
+  End
+
+  # Scrolling tmux's buffer under nvim/fzf is wrong — they own their own. And
+  # the false branch must be ABSENT: a MEH bind can never send-keys its own
+  # chord through, it would arrive as a different key entirely.
+  It 'guards the scroll binds and never falls through to the pane'
+    When call meh_scroll
+    The output should include "pane_tty"
+    The output should include "fzf"
+    The output should not include "send-keys C-M-"
+  End
+
   # Fired from the ROOT table there is no key-table to reset and no stack entry
   # to pop; carrying the leader's plumbing over would corrupt @mux_stack.
   It 'strips the mode plumbing the leader versions carry'
-    When call meh
+    When call meh_stateless
     The output should not include "key-table root"
     The output should not include "mux-stack"
   End

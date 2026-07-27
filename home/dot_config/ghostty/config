@@ -255,30 +255,38 @@ keybind = performable:cmd+digit_8=text:\x1b[27;8;42~
 keybind = performable:cmd+digit_9=text:\x1b[27;8;40~
 keybind = performable:cmd+digit_0=text:\x1b[27;8;41~
 
-# Cmd+Up/Down (and vim-style aliases Cmd+K/J): enter scroll mode and scroll
-# one line, using zellij's existing scroll-mode `k`/`j` bindings.
+# Cmd+Up/Down (and vim-style aliases Cmd+K/J): scroll one line, as MEH+Up/Down
+# and MEH-k/j — a single tmux root bind each, not the `⌥w l k` replay. The bind
+# enters copy-mode on first press and just scrolls on the next, so holding the
+# chord walks the buffer without flapping the mode.
+#
+# The ARROW forms send `CSI 1;8A/B` rather than a `27;8;<cp>~` sequence: arrows
+# carry their modifiers in a numeric field, so Shift has no codepoint to fold
+# into and tmux sees one unambiguous `C-M-S-Up`. K=75, J=74 for the letters.
+#
 # Arrow keys must use `arrow_up`/`arrow_down` (physical) — Ghostty's
 # defaults bind `super+arrow_up=jump_to_prompt:-1` and physical takes
 # precedence over the `up`/`down` codepoint form. Letter keys can stay
 # logical; they override the default `super+k=clear_screen` /
 # `super+j=scroll_to_selection`.
-keybind = cmd+arrow_up=text:\x1bwlk
-keybind = cmd+arrow_down=text:\x1bwlj
-keybind = cmd+k=text:\x1bwlk
-keybind = cmd+j=text:\x1bwlj
+keybind = cmd+arrow_up=text:\x1b[1;8A
+keybind = cmd+arrow_down=text:\x1b[1;8B
+keybind = cmd+k=text:\x1b[27;8;75~
+keybind = cmd+j=text:\x1b[27;8;74~
 
-# Cmd+Shift+Up/Down: jump to previous/next shell prompt. The chord is the
-# same shape as Cmd+Up/Down — leader (`Alt+w`) → scroll mode (`l`) →
-# action (`p`/`n`). In zellij those last two letters are bound to the
-# zj-promptjump plugin (see ~/.config/zellij/config.kdl scroll block).
+# Cmd+Shift+Up/Down: jump to previous/next shell prompt, via OSC 133 marks the
+# zsh precmd emitter writes (functions.d/prompt-marks.sh). Now MEH-b (back,
+# B=66) and MEH-f (forward, F=70) — `p`/`n` were already spent on the project
+# picker and new tab.
 #
-# Re-entrant by design: in scroll mode `Alt+w` is intentionally not bound
-# (see the `shared_except … "scroll" …` block in zellij config) and `l`
-# is unbound there too, so a second press of Cmd+Shift+Up doesn't flap
-# the mode — it just re-fires the plugin from inside scroll mode and
-# walks one prompt further.
-keybind = cmd+shift+arrow_up=text:\x1bwlp
-keybind = cmd+shift+arrow_down=text:\x1bwln
+# Re-entrant like the scroll pair: the tmux bind tests `#{pane_in_mode}`, so a
+# second press walks one prompt further instead of re-entering the mode and
+# stacking a duplicate entry on @mux_stack.
+#
+# NOTE: WezTerm also binds the ⇧⌘k / ⇧⌘j letter twins for these; Ghostty has
+# only the arrow forms. Left as-is rather than silently adding bindings.
+keybind = cmd+shift+arrow_up=text:\x1b[27;8;66~
+keybind = cmd+shift+arrow_down=text:\x1b[27;8;70~
 
 # Cmd+N opens a fresh Ghostty window. Because zellij's config sets
 # `attach_to_session true` without a `session_name`, each new shell that

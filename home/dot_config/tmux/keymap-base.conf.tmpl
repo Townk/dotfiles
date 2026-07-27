@@ -239,6 +239,52 @@ bind -n {{ . }} run-shell 'zsh ~/.config/mux/scripts/copy-pwd --relative #{pane_
 bind -n {{ . }} run-shell 'zsh ~/.config/mux/scripts/copy-pwd --absolute #{pane_pid}'
 {{- end }}
 
+# --- MEH scroll + prompt jumps (batch 3) -----------------------------------
+# These are the only MEH binds that are STATEFUL: they enter copy-mode, so they
+# must also set @visual (0 = Scroll, not Copy) and push the mode stack, or the
+# panel and the pane disagree and a stale entry eats later keys.
+#
+# `#{pane_in_mode}` splits entry from repeat. A root bind DOES still fire while
+# the pane is in copy-mode (measured), so one bind serves both: already in the
+# mode, just act; otherwise enter, act, and push ONCE. Without that test three
+# presses would stack three `scroll` entries.
+#
+# GUARDED, unlike every other MEH bind: scrolling tmux's buffer under nvim or
+# fzf is wrong — they own their own. `$is_scrollable` is `$is_passthru`
+# negated (same ps probe on the pane's tty, NOT pane_current_command, which
+# reports "zsh" for a widget-spawned fzf). The false branch is ABSENT, not a
+# `send-keys` fall-through: C-M-K would reach the pane as `\e^K`, and a MEH
+# bind can never pass its own chord through.
+#
+# The `copy-mode-current-match-style` set mirrors the native j/k binds below,
+# so scrolling by MEH highlights search matches exactly like scrolling by k.
+# The prompt jumps skip it, exactly as the native `p` bind does.
+{{- $home := .chezmoi.homeDir }}
+%hidden is_scrollable="! ps -o state= -o comm= -t '#{pane_tty}' | grep -iqE '^[^TXZ ]+ +(\\S+\\/)?(g?(view|l?n?vim?x?)(diff)?|fzf)$'"
+
+# MEH-k / MEH-↑ — scroll one line up. Arrows need only ONE spelling: they carry
+# modifiers in a numeric field, so Shift has no codepoint to fold into.
+{{- range list "C-M-K" "C-M-S-K" "C-M-S-k" "C-M-S-Up" }}
+bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-up } { set -p @visual 0 ; copy-mode ; set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-up ; run-shell -b "{{ $home }}/.config/mux/scripts/mux-stack push scroll" } }
+{{- end }}
+
+# MEH-j / MEH-↓ — scroll one line down.
+{{- range list "C-M-J" "C-M-S-J" "C-M-S-j" "C-M-S-Down" }}
+bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-down } { set -p @visual 0 ; copy-mode ; set -p copy-mode-current-match-style "#{E:copy-mode-match-style}" ; send -X scroll-down ; run-shell -b "{{ $home }}/.config/mux/scripts/mux-stack push scroll" } }
+{{- end }}
+
+# MEH-b — previous prompt (b for back). OSC 133 marks, from the zsh precmd
+# emitter in functions.d/prompt-marks.sh. `p`/`n` were already spent on the
+# project picker and new tab, hence back/forward.
+{{- range list "C-M-B" "C-M-S-B" "C-M-S-b" }}
+bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { send -X previous-prompt } { set -p @visual 0 ; copy-mode ; send -X previous-prompt ; run-shell -b "{{ $home }}/.config/mux/scripts/mux-stack push scroll" } }
+{{- end }}
+
+# MEH-f — next prompt (f for forward).
+{{- range list "C-M-F" "C-M-S-F" "C-M-S-f" }}
+bind -n {{ . }} if "$is_scrollable" { if -F '#{pane_in_mode}' { send -X next-prompt } { set -p @visual 0 ; copy-mode ; send -X next-prompt ; run-shell -b "{{ $home }}/.config/mux/scripts/mux-stack push scroll" } }
+{{- end }}
+
 # ---------------------------------------------------------------------------
 # tm-scrub context routes (Phase 6.3, D4/D20)
 # ---------------------------------------------------------------------------

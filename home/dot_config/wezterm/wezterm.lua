@@ -654,86 +654,25 @@ config.keys = {
 			{ key = "x" },
 		}),
 	},
-	-- `⌘↑`: Scroll back-buffer one line up => `⌥w l ↑`
-	{
-		key = "UpArrow",
-		mods = "CMD",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "l" },
-			{ key = "UpArrow" },
-		}),
-	},
-	-- `⌘↓`: Scroll back-buffer one line down => `⌥w l ↓`
-	{
-		key = "DownArrow",
-		mods = "CMD",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "l" },
-			{ key = "DownArrow" },
-		}),
-	},
-	-- `⌘k`: Scroll back-buffer one line up => `⌥w l k`
-	{
-		key = "k",
-		mods = "CMD",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "l" },
-			{ key = "k" },
-		}),
-	},
-	-- `⌘j`: Scroll back-buffer one line down => `⌥w l j`
-	{
-		key = "j",
-		mods = "CMD",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "l" },
-			{ key = "j" },
-		}),
-	},
-	-- `⇧⌘↑`: Scroll back-buffer back to previous prompt => `⌥w l p`
-	{
-		key = "UpArrow",
-		mods = "CMD|SHIFT",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "l" },
-			{ key = "p" },
-		}),
-	},
-	-- `⇧⌘↓`: Scroll back-buffer forward to next prompt => `⌥w l n`
-	{
-		key = "DownArrow",
-		mods = "CMD|SHIFT",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "l" },
-			{ key = "n" },
-		}),
-	},
-	-- `⇧⌘k`: Scroll back-buffer back to previous prompt => `⌥w l p`
-	{
-		key = "k",
-		mods = "CMD|SHIFT",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "l" },
-			{ key = "p" },
-		}),
-	},
-	-- `⇧⌘j`: Scroll back-buffer forward to next prompt => `⌥w l n`
-	{
-		key = "j",
-		mods = "CMD|SHIFT",
-		action = send_mux_keys({
-			{ key = "w", mods = "ALT" },
-			{ key = "l" },
-			{ key = "n" },
-		}),
-	},
+	-- Scroll + prompt jumps => MEH chords (was `⌥w l …` replays). The arrow
+	-- forms send MEH+Up/Down directly: arrows carry their modifiers in a numeric
+	-- field (CSI 1;8A/B), so Shift has no codepoint to fold into and there is
+	-- only ONE spelling for tmux to bind — no per-terminal dialect.
+	--
+	-- `p`/`n` were already spent on the project picker and new tab, so the prompt
+	-- jumps are MEH-b (back) and MEH-f (forward).
+	-- `⌘↑` / `⌘k`: scroll one line up => MEH+Up / MEH-k
+	{ key = "UpArrow", mods = "CMD", action = wezterm.action.SendString("\x1b[1;8A") },
+	{ key = "k", mods = "CMD", action = send_meh("K") },
+	-- `⌘↓` / `⌘j`: scroll one line down => MEH+Down / MEH-j
+	{ key = "DownArrow", mods = "CMD", action = wezterm.action.SendString("\x1b[1;8B") },
+	{ key = "j", mods = "CMD", action = send_meh("J") },
+	-- `⇧⌘↑` / `⇧⌘k`: jump to the previous shell prompt => MEH-b
+	{ key = "UpArrow", mods = "CMD|SHIFT", action = send_meh("B") },
+	{ key = "k", mods = "CMD|SHIFT", action = send_meh("B") },
+	-- `⇧⌘↓` / `⇧⌘j`: jump to the next shell prompt => MEH-f
+	{ key = "DownArrow", mods = "CMD|SHIFT", action = send_meh("F") },
+	{ key = "j", mods = "CMD|SHIFT", action = send_meh("F") },
 	-- `⌘f`: Start search mode on back-buffer => `⌥/`
 	{
 		key = "f",
