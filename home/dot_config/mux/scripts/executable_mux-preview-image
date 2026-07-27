@@ -31,7 +31,11 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 # written again, and the window name costs no pane cells at all.
 
 if [[ -n "${TMUX:-}" ]]; then
-  tmux rename-window "${img:t} · any key to close" 2>/dev/null || :
+  # The pill prefixes a manually-named window with its own tab glyph, so the
+  # icon goes in @win_icon (which the theme's win_body prefers) rather than
+  # into the name — otherwise the status bar shows two icons.
+  tmux rename-window "Previewer" 2>/dev/null || :
+  tmux set -w @win_icon "󰛐" 2>/dev/null || :
 fi
 
 # Wait for the pane geometry to STOP MOVING before drawing. A window is
