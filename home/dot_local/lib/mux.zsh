@@ -284,6 +284,30 @@ mux::attached_sessions() {
   esac
 }
 
+# mux::current_session — the name of the session we are IN, one line. Distinct
+# from mux::resolve_session, which answers for someone else's client pid: this
+# one reads our own context, which is the only thing a picker running inside a
+# pane can trust.
+mux::current_session() {
+  case "$(mux::backend)" in
+    tmux) _mux_tx_resolve_session ;;
+    zellij) [[ -n "${ZELLIJ_SESSION_NAME:-}" ]] && print -r -- "$ZELLIJ_SESSION_NAME" ;;
+    *) return 1 ;;
+  esac
+}
+
+# mux::list_sessions — every session the backend knows about, one per line.
+# NOT the same set on both sides, and deliberately so: zellij also lists
+# EXITED sessions, because it can resurrect them, while tmux only has live
+# ones. Callers that mean "sessions I could switch to" want exactly that.
+mux::list_sessions() {
+  case "$(mux::backend)" in
+    tmux) _mux_tx_list_sessions ;;
+    zellij) _mux_zj_list_sessions ;;
+    *) return 1 ;;
+  esac
+}
+
 mux::client_sessions() {
   case "$(mux::backend)" in
     tmux) _mux_tx_client_sessions ;;
@@ -430,6 +454,16 @@ mux::current_tab() {
   case "$(mux::backend)" in
     zellij) _mux_zj_current_tab ;;
     tmux)   _mux_tx_current_tab ;;
+    *) return 1 ;;
+  esac
+}
+
+# mux::current_tab_name — the active tab's TITLE, not its index. Quick-launch
+# scopes tab-nested entries by title, so the index cannot stand in for it.
+mux::current_tab_name() {
+  case "$(mux::backend)" in
+    zellij) _mux_zj_current_tab_name ;;
+    tmux)   _mux_tx_current_tab_name ;;
     *) return 1 ;;
   esac
 }

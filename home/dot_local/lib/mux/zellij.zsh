@@ -285,6 +285,13 @@ _mux_zj_current_tab() {
   print -r -- $(( pos + 1 ))
 }
 
+# _mux_zj_current_tab_name — current-tab-info reports the title directly;
+# list-tabs would need the active-row hunt _mux_zj_current_tab does.
+_mux_zj_current_tab_name() {
+  "$(_mux_zj_bin)" action current-tab-info 2>/dev/null |
+    sed -n 's/^name: //p' | head -n1
+}
+
 _mux_zj_focus_tab() { "$(_mux_zj_bin)" action go-to-tab "$1" 2>/dev/null; }
 
 # _mux_zj_pane_cwd <pid> — zellij exposes no pane cwd, so it comes from the
@@ -394,6 +401,13 @@ _resolve_session_in() {
     }
   done
   return 1
+}
+
+# _mux_zj_list_sessions — every session zellij knows, one name per line. This
+# INCLUDES exited ones, which zellij keeps as resurrectable; that is the set
+# the workspace picker wants, since selecting one revives it.
+_mux_zj_list_sessions() {
+  "$(_mux_zj_bin)" list-sessions -s 2>/dev/null | sed '/^$/d'
 }
 
 # zellij_wezterm_sessions

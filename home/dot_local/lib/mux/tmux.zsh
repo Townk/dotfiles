@@ -27,6 +27,13 @@ _mux_tx_resolve_session() {
     awk -v p="$pid" '$1==p { $1=""; sub(/^ /,""); print; exit }'
 }
 
+# _mux_tx_list_sessions — every live session, one name per line. tmux has no
+# equivalent of zellij's exited-but-resurrectable sessions, so this is simply
+# what is running.
+_mux_tx_list_sessions() {
+  "$(_mux_tx_bin)" list-sessions -F '#{session_name}' 2>/dev/null
+}
+
 # _mux_tx_attached_sessions — sessions with a connected client, one per line
 # (contract of zellij_attached_sessions).
 _mux_tx_attached_sessions() {
@@ -201,6 +208,7 @@ _mux_tx_send_key() {
 }
 
 _mux_tx_current_tab() { "$(_mux_tx_bin)" display -p '#{window_index}' 2>/dev/null; }
+_mux_tx_current_tab_name() { "$(_mux_tx_bin)" display -p '#{window_name}' 2>/dev/null; }
 _mux_tx_focus_tab() { "$(_mux_tx_bin)" select-window -t ":$1" 2>/dev/null; }
 _mux_tx_pane_cwd() { "$(_mux_tx_bin)" display -p '#{pane_current_path}' 2>/dev/null; }
 _mux_tx_terminal_size() {

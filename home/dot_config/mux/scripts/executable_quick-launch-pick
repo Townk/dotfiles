@@ -74,18 +74,23 @@ case "$kind" in
   workspace) key="workspaces" ;;
 esac
 
+# The shim, sourced up front: every question this script asks about live
+# sessions and tabs has to be asked of the backend the CALLING PANE is in.
+# Until Phase 6 Mode B these were direct `zellij …` calls, which is the
+# dangerous kind of off-backend call — zellij keeps answering under tmux, with
+# its own (resurrectable, therefore stale) sessions, so the workspace list
+# described a mux the user was not in and its "(other window)" tag could never
+# clear.
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" 2>/dev/null || true
+
 # Active scope (panes only). Wezterm's make_panes_choices offers the active
 # tab's panes + the active workspace's panes + the global top-level panes — so
 # a pane nested under a workspace is reachable only while that workspace is
-# live. A zellij workspace == a session, so the active workspace name is
-# $ZELLIJ_SESSION_NAME; the active tab title comes from current-tab-info. When
-# we're not inside zellij (e.g. standalone testing) both stay empty and only
-# the global panes are offered.
-active_ws="${ZELLIJ_SESSION_NAME:-}"
-active_tab=""
-if [[ -n "${ZELLIJ:-}${ZELLIJ_SESSION_NAME:-}" ]]; then
-  active_tab="$(zellij action current-tab-info 2>/dev/null | sed -n 's/^name: //p' | head -n1)"
-fi
+# live. A workspace == a session on either backend (a zellij session, a tmux
+# session), and a tab == a zellij tab or a tmux window. Outside any mux (e.g.
+# standalone testing) both stay empty and only the global panes are offered.
+active_ws="$(mux::current_session 2>/dev/null || true)"
+active_tab="$(mux::current_tab_name 2>/dev/null || true)"
 
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch"
 mkdir -p "$CACHE_DIR"
@@ -108,16 +113,14 @@ elif [[ "$kind" == workspace ]]; then
   # session state without leaking per-launch temp files.
   LINES_CACHE="$CACHE_DIR/lines-$kind.txt"
   force_build=1
-  live_json="$(zellij list-sessions -s 2>/dev/null | sed '/^$/d' | jq -R . | jq -s -c . 2>/dev/null)"
+  live_json="$({ mux::list_sessions 2>/dev/null | sed '/^$/d' | jq -R . | jq -s -c .; } 2>/dev/null || true)"
   [[ -n "$live_json" ]] || live_json='[]'
   # Which live sessions currently have a client attached (i.e. own an OS window):
   # tagged "(other window)" instead of "(detached)", and selecting one raises
-  # that window. Resolved cheaply from a single ps+lsof snapshot
-  # (zellij_attached_sessions) — the precise WezTerm window is resolved lazily at
-  # dispatch by quick-launch-window, so the menu doesn't pay for it. Empty on
-  # Ghostty / when nothing is attached → all live workspaces read as "(detached)".
-  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" 2>/dev/null || true
-  windowed_json="$({ zellij_attached_sessions 2>/dev/null | sed '/^$/d' | jq -R . | jq -s -c .; } 2>/dev/null || true)"
+  # that window. The precise WezTerm window is resolved lazily at dispatch by
+  # quick-launch-window, so the menu doesn't pay for it. Empty on Ghostty /
+  # when nothing is attached → all live workspaces read as "(detached)".
+  windowed_json="$({ mux::attached_sessions 2>/dev/null | sed '/^$/d' | jq -R . | jq -s -c .; } 2>/dev/null || true)"
   [[ -n "$windowed_json" ]] || windowed_json='[]'
 else
   LINES_CACHE="$CACHE_DIR/lines-$kind.txt"

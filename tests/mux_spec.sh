@@ -734,3 +734,56 @@ Describe 'mux.zsh — dump_screen / send_text targeting (tmux)'
     The output should equal "tmux send-keys -t %3 -l -- ls -la"
   End
 End
+
+Describe 'mux.zsh — live session/tab state (tmux)'
+  Include home/dot_local/lib/mux.zsh
+
+  # An ARG-AWARE stub: the point of these verbs is which tmux format they ask
+  # for, so a stub that ignores its arguments would assert nothing.
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    unset ZELLIJ
+    export TMUX=/tmp/sock,1,0
+    stub="$TEST_TMP/tmux"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'case "$1" in'
+      echo '  list-sessions)'
+      echo '    case "$*" in'
+      echo '      *session_attached*) print -- "1 Main-tmux"; print -- "0 scratch" ;;'
+      echo '      *) print -- "Main-tmux"; print -- "scratch" ;;'
+      echo '    esac ;;'
+      echo '  display)'
+      echo '    case "$*" in'
+      echo '      *window_name*)   print -- "editor" ;;'
+      echo '      *session_name*)  print -- "Main-tmux" ;;'
+      echo '    esac ;;'
+      echo 'esac'
+    } > "$stub"
+    chmod +x "$stub"
+    export MUX_TMUX_BIN="$stub"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset MUX_TMUX_BIN; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'mux::current_session names the session we are in'
+    When call mux::current_session
+    The output should equal "Main-tmux"
+  End
+
+  # quick-launch scopes tab-nested entries by TITLE, so the index will not do.
+  It 'mux::current_tab_name reports the title, not the index'
+    When call mux::current_tab_name
+    The output should equal "editor"
+  End
+
+  # The workspace picker asks "which sessions exist" — every one, not just the
+  # attached ones it separately asks mux::attached_sessions about.
+  It 'mux::list_sessions lists every session'
+    When call mux::list_sessions
+    The lines of output should equal 2
+    The line 1 of output should equal "Main-tmux"
+    The line 2 of output should equal "scratch"
+  End
+End
