@@ -210,9 +210,23 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
       # "(detached)" — followed by the not-yet-created ones, both in file order.
       # The --cache-usage recency in pick-common then floats the most-recently-
       # picked rows above this baseline (and since a picked workspace becomes
-      # live, recents stay within the live group).
+      # live, recents stay within the live group). Ad-hoc live sessions sit
+      # between the two groups: they ARE live, so they belong with the live
+      # ones, but after the workspaces you actually configured.
+      #
+      # AD-HOC sessions: a live session with no entry in the targets file was
+      # unreachable from here — you could see it in `list-sessions` but not
+      # switch to it. They are synthesised as minimal workspaces {id, name} =
+      # the session name, and carry NO icon field on purpose, so they fall
+      # through to the same default a defined workspace without one gets.
+      # Dispatch resolves an id it cannot find in the file the same way (the
+      # live-session fallback in ql_get_element).
       ( [ .workspaces[]? | select(sname != $cur) ] ) as $wss
+      | ( $wss | map(sname) ) as $defined
+      | ( [ $live[] | select(. != $cur) | select(IN($defined[]) | not)
+            | { id: ., name: . } ] ) as $adhoc
       | ( ( $wss | map(select(is_live)) )
+          + $adhoc
           + ( $wss | map(select(is_live | not)) ) )
       | .[]
       # Field 2 (@window:<id>) is what Alt+Enter (--key-output) emits so the

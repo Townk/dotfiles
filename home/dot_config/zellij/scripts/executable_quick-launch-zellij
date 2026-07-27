@@ -10,7 +10,9 @@
 # hands the pane over and disposes of it (`close_on_exit`) when we return.
 #
 # All this adapter does is set the floating-pane fzf geometry and exec the
-# `quick-launch` dispatcher that lives next to it in this same scripts/ dir.
+# `quick-launch` dispatcher. That dispatcher is BACKEND-NEUTRAL and moved to
+# ~/.config/mux/scripts/ in migration Phase 6.1; only this adapter stayed
+# behind, so it can no longer be found as a sibling.
 # The single positional arg is the target kind (pane | tab | workspace),
 # forwarded to `quick-launch menu`.
 #
@@ -19,7 +21,7 @@
 #
 # Env-var overrides:
 #   QUICK_LAUNCH_BIN      Absolute path to quick-launch
-#                         (default: the sibling in this scripts/ dir)
+#                         (default: ~/.config/mux/scripts/quick-launch)
 #   QUICK_LAUNCH_HEIGHT   fzf height inside the pane. Default -4: zellij-modal
 #                         prints a 3-row title block, so fzf fills the pane
 #                         height minus that block (plus the bottom frame row).
@@ -28,7 +30,7 @@
 
 set -euo pipefail
 
-QUICK_LAUNCH_BIN="${QUICK_LAUNCH_BIN:-${0:A:h}/quick-launch}"
+QUICK_LAUNCH_BIN="${QUICK_LAUNCH_BIN:-$HOME/.config/mux/scripts/quick-launch}"
 [[ -x "$QUICK_LAUNCH_BIN" ]] || {
   echo "quick-launch-zellij: missing or non-executable: $QUICK_LAUNCH_BIN" >&2
   exit 1

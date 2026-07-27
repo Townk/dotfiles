@@ -19,7 +19,30 @@ ql_get_element() {
       ' <<<"$QL_JSON"
       ;;
     tab) jq -c --arg id "$id" '.tabs[]? | select(.id == $id)' <<<"$QL_JSON" | head -n1 ;;
-    workspace) jq -c --arg id "$id" '.workspaces[]? | select(.id == $id)' <<<"$QL_JSON" | head -n1 ;;
+    workspace)
+      local el
+      el="$(jq -c --arg id "$id" '.workspaces[]? | select(.id == $id)' <<<"$QL_JSON" | head -n1)"
+      # AD-HOC session: the picker also offers LIVE sessions with no entry in
+      # the targets file (before this they were visible in list-sessions but
+      # unreachable from the picker). Their id IS the session name, so a
+      # minimal {id, name} is everything the workspace path needs — it joins on
+      # `name // id`, finds the session already running, and takes the
+      # focus-or-switch branch. Deliberately no `icon`, so they render with the
+      # same default a configured workspace without one gets.
+      # Backend-aware, same test the dispatcher itself uses below: the tmux
+      # twin lives in dispatch-tmux.zsh and ql_session_exists is zellij-only
+      # ($ZJ). This runs BEFORE the backend branch, so it cannot rely on it.
+      if [[ -z "$el" ]]; then
+        local _live=1
+        if [[ -z "${ZELLIJ:-}" && -n "${TMUX:-}" ]]; then
+          ql_tx_session_exists "$id" || _live=0
+        else
+          ql_session_exists "$id" || _live=0
+        fi
+        (( _live )) && el="$(jq -nc --arg id "$id" '{id: $id, name: $id}')"
+      fi
+      print -r -- "$el"
+      ;;
     *) return 1 ;;
   esac
 }
