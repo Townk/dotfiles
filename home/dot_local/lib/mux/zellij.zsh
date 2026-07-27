@@ -216,11 +216,27 @@ _mux_zj_popup() {
   "$(_mux_zj_bin)" "${pre[@]}" "${flags[@]}" -- "$@"
 }
 
-# _mux_zj_new_tab <session> <name> <cwd> -- <cmd...>
+# _mux_zj_new_tab <session> <name> <cwd> <singleton> -- <cmd...>
+#
+# Singleton on zellij is CLOSE-then-open, not respawn: zellij has no verb that
+# swaps a tab's running command (tmux's respawn-window -k does), so the tab is
+# focused, closed, and recreated with the new command. The consequence is that
+# it moves to the end of the tab bar, which tmux's does not — a documented
+# divergence rather than a hidden one.
 _mux_zj_new_tab() {
-  local session="$1" name="$2" cwd="$3"
-  shift 3
+  local session="$1" name="$2" cwd="$3" singleton="${4:-0}"
+  shift 4
   [[ "${1-}" == "--" ]] && shift
+
+  if (( singleton )) && [[ -n "$name" ]]; then
+    local -a pre_q=()
+    [[ -n "$session" ]] && pre_q=(--session "$session")
+    if "$(_mux_zj_bin)" "${pre_q[@]}" action query-tab-names 2>/dev/null |
+         grep -Fxq -- "$name"; then
+      "$(_mux_zj_bin)" "${pre_q[@]}" action go-to-tab-name "$name" 2>/dev/null &&
+        "$(_mux_zj_bin)" "${pre_q[@]}" action close-tab 2>/dev/null
+    fi
+  fi
 
   local -a pre=()
   [[ -n "$session" ]] && pre=(--session "$session")

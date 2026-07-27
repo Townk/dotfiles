@@ -32,16 +32,14 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 if [[ "$_mode" == view ]]; then
   source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
   _self="${0:A}"
-  if [[ "$(mux::backend)" == tmux ]]; then
-    # The NAME is the identity of the singleton — it must match what the
-    # renderer renames the window to, or a second call opens a second tab.
+  if mux::available; then
+    # A TAB on BOTH backends. The zellij float predates this viewer; a full
+    # tab reads better for a picture and — more to the point — keeps one
+    # implementation instead of two. The NAME is the singleton's identity: it
+    # must match what the renderer names the tab, or a second call opens a
+    # second one.
     mux::new_tab --name "$TERM_QUICK_VIEW_NAME" --singleton \
       -- "$_self" --render "$file"
-    exit $?
-  elif mux::available; then
-    # zellij: a float, as before — its floating pane IS a real pane, so an
-    # image renders there (a tmux popup cannot hold one).
-    mux::popup 90% 90% --name "${file:t}" --frame -- "$_self" --render "$file"
     exit $?
   fi
   # No mux: render inline in the caller's terminal.
@@ -69,6 +67,9 @@ fi
 if [[ -n "${TMUX:-}" ]]; then
   tmux rename-window "$TERM_QUICK_VIEW_NAME" 2>/dev/null || :
   tmux set -w @win_icon "󰛐" 2>/dev/null || :
+elif [[ -n "${ZELLIJ:-}" ]]; then
+  # zellij has no per-tab icon option, so the glyph rides in the tab name.
+  zellij action rename-tab "󰛐 $TERM_QUICK_VIEW_NAME" 2>/dev/null || :
 fi
 
 _out=$(mktemp "${TMPDIR:-/tmp}/quickview.XXXXXX") || exit 1
