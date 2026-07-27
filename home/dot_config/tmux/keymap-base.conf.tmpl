@@ -149,21 +149,30 @@ bind -n M-Enter if "$is_fzf" 'send-keys M-Enter' 'run-shell -b "{{ .chezmoi.home
 # Mouse word/line select — without tmux's 300ms pause
 # ---------------------------------------------------------------------------
 # tmux's stock DoubleClick1Pane/TripleClick1Pane sit on `run-shell -d 0.3`
-# between selecting and copying, purely so the highlight is visible for a
-# moment. That pause IS the sluggishness a double-click has under tmux
-# (measured: 326ms with it, 18ms without — the copy itself needs no delay,
-# select-word has already set the selection).
+# between selecting and copying. The pause is NOT dead weight — it is the only
+# feedback the gesture has: while it runs, the selection highlight is on
+# screen. Removing it outright makes the copy land silently, which reads as
+# "double-click does nothing" even though the word is on the clipboard.
 #
-# It also causes the mode flash. While the pause runs the pane sits in
-# copy-mode, and the bar resolves copy-mode with @visual unset as SCROLL — so
-# double-clicking a word announced a mode you never asked for, for a third of
-# a second. At 18ms there is nothing left to see.
+# So it is shortened, not deleted: 0.3 → 0.12. Still a visible flash, less
+# than half the latency. The copy itself needs no delay at all (select-word
+# has already set the selection), so this number is purely how long you see
+# the highlight — turn it down to taste.
+#
+# @mouse_select marks the gesture for the rest of the config:
+#   - the bar suppresses its mode pill (status.conf folds this into the
+#     in_copy argument). Without it the pane sits in copy-mode with @visual
+#     unset, which the resolver reads as SCROLL — so a word-select announced
+#     a mode nobody asked for.
+#   - the pane-mode-changed hook skips entirely, instead of firing twice and
+#     spawning four zsh scripts (~40ms each) for a mode nobody is in.
+# It is unset again on the way out, so nothing leaks into the next entry.
 #
 # Everything else is stock: `select-pane -t =` keeps click-to-focus, and the
 # `pane_in_mode`/`mouse_any_flag` arm still forwards the event to an app that
 # is capturing the mouse (fzf, vim) or to a pane already in copy-mode.
-bind -n DoubleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { copy-mode -H ; send -X select-word ; send -X copy-pipe-and-cancel }
-bind -n TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { copy-mode -H ; send -X select-line ; send -X copy-pipe-and-cancel }
+bind -n DoubleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; copy-mode -H ; send -X select-word ; run-shell -d 0.12 ; send -X copy-pipe-and-cancel ; set -p -u @mouse_select }
+bind -n TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; copy-mode -H ; send -X select-line ; run-shell -d 0.12 ; send -X copy-pipe-and-cancel ; set -p -u @mouse_select }
 
 # ---------------------------------------------------------------------------
 # MEH direct bindings — Ctrl+Alt+Shift (spec 2026-07-27-meh-direct-bindings)
