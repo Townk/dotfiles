@@ -553,17 +553,22 @@ end
 -- SINGLE keypress, which tmux binds directly in its root table (see the "MEH
 -- direct bindings" block in keymap-base.conf).
 --
--- This is byte-for-byte what WezTerm sends when the physical chord is pressed:
--- it folds Shift into the CODEPOINT and leaves the modifier field at 7
--- (measured through a real client — Ghostty instead sets the shift bit *and*
--- shifts the codepoint, which is why tmux binds both spellings). Synthesising
--- the real encoding means the ⌘ path and the physical MEH path cannot drift.
+-- KITTY encoding (CSI <codepoint>;8u), not the modifyOtherKeys form WezTerm
+-- emits for the physical chord. Both reach the same tmux bind — tmux resolves
+-- the kitty form to C-M-S-<key>, which is already bound — but ZELLIJ only
+-- parses the kitty one: fed modifyOtherKeys it hands the raw bytes to the
+-- shell (measured in the zellij pass, 2026-07-27). One encoding both muxes
+-- understand is worth more than matching what the physical key sends.
+--
+-- Modifier 8 = 1 + shift(1) + alt(2) + ctrl(4). The codepoint is the
+-- UNSHIFTED character, which is why the digits below are digits and not the
+-- shifted punctuation the other encoding forced.
 --
 -- Replaces a send_mux_keys replay of the ⌥w leader: the leader opens the
 -- which-key popup, which owns the keyboard and drops a chord sent faster than
 -- MUX_CHORD_GAP (0/5 at 20ms, 5/5 at 150ms). One keystroke has no tail to lose.
-local function send_meh(letter)
-	return wezterm.action.SendString(string.format("\x1b[27;7;%d~", string.byte(letter)))
+local function send_meh(ch)
+	return wezterm.action.SendString(string.format("\x1b[%d;8u", string.byte(ch)))
 end
 
 -- True when the focused pane is a mux client attached to a nested workspace
@@ -668,16 +673,16 @@ config.keys = {
 	{ key = "DownArrow", mods = "CTRL|ALT|SHIFT", action = wezterm.action.SendString("\x1b[1;8B") },
 	-- `⌘↑` / `⌘k`: scroll one line up => MEH+Up / MEH-k
 	{ key = "UpArrow", mods = "CMD", action = wezterm.action.SendString("\x1b[1;8A") },
-	{ key = "k", mods = "CMD", action = send_meh("K") },
+	{ key = "k", mods = "CMD", action = send_meh("k") },
 	-- `⌘↓` / `⌘j`: scroll one line down => MEH+Down / MEH-j
 	{ key = "DownArrow", mods = "CMD", action = wezterm.action.SendString("\x1b[1;8B") },
-	{ key = "j", mods = "CMD", action = send_meh("J") },
+	{ key = "j", mods = "CMD", action = send_meh("j") },
 	-- `⇧⌘↑` / `⇧⌘k`: jump to the previous shell prompt => MEH-b
-	{ key = "UpArrow", mods = "CMD|SHIFT", action = send_meh("B") },
-	{ key = "k", mods = "CMD|SHIFT", action = send_meh("B") },
+	{ key = "UpArrow", mods = "CMD|SHIFT", action = send_meh("b") },
+	{ key = "k", mods = "CMD|SHIFT", action = send_meh("b") },
 	-- `⇧⌘↓` / `⇧⌘j`: jump to the next shell prompt => MEH-f
-	{ key = "DownArrow", mods = "CMD|SHIFT", action = send_meh("F") },
-	{ key = "j", mods = "CMD|SHIFT", action = send_meh("F") },
+	{ key = "DownArrow", mods = "CMD|SHIFT", action = send_meh("f") },
+	{ key = "j", mods = "CMD|SHIFT", action = send_meh("f") },
 	-- `⌘f`: Start search mode on back-buffer => `⌥/`
 	{
 		key = "f",
@@ -700,19 +705,19 @@ config.keys = {
 	{
 		key = "c",
 		mods = "CMD|SHIFT",
-		action = send_meh("C"),
+		action = send_meh("c"),
 	},
 	-- `⇧⌘⌥c`: Copy absolute path of the cwd to clipboard => MEH-d (was `⌥w ⌥y`)
 	{
 		key = "c",
 		mods = "CMD|SHIFT|ALT",
-		action = send_meh("D"),
+		action = send_meh("d"),
 	},
 	-- `⌘t`: New tab => MEH-n (was `⌥w t N`)
 	{
 		key = "t",
 		mods = "CMD",
-		action = send_meh("N"),
+		action = send_meh("n"),
 	},
 	-- `⌘1`..`⌘9`, `⌘0`: focus tab 1..10 => MEH+<digit> (was `⌥w t N` replays).
 	--
@@ -725,61 +730,61 @@ config.keys = {
 	{
 		key = "1",
 		mods = "CMD",
-		action = send_meh("!"),
+		action = send_meh("1"),
 	},
 	-- `⌘2`: Focus on tab 2 => MEH+2 (@)
 	{
 		key = "2",
 		mods = "CMD",
-		action = send_meh("@"),
+		action = send_meh("2"),
 	},
 	-- `⌘3`: Focus on tab 3 => MEH+3 (#)
 	{
 		key = "3",
 		mods = "CMD",
-		action = send_meh("#"),
+		action = send_meh("3"),
 	},
 	-- `⌘4`: Focus on tab 4 => MEH+4 ($)
 	{
 		key = "4",
 		mods = "CMD",
-		action = send_meh("$"),
+		action = send_meh("4"),
 	},
 	-- `⌘5`: Focus on tab 5 => MEH+5 (%)
 	{
 		key = "5",
 		mods = "CMD",
-		action = send_meh("%"),
+		action = send_meh("5"),
 	},
 	-- `⌘6`: Focus on tab 6 => MEH+6 (^)
 	{
 		key = "6",
 		mods = "CMD",
-		action = send_meh("^"),
+		action = send_meh("6"),
 	},
 	-- `⌘7`: Focus on tab 7 => MEH+7 (&)
 	{
 		key = "7",
 		mods = "CMD",
-		action = send_meh("&"),
+		action = send_meh("7"),
 	},
 	-- `⌘8`: Focus on tab 8 => MEH+8 (*)
 	{
 		key = "8",
 		mods = "CMD",
-		action = send_meh("*"),
+		action = send_meh("8"),
 	},
 	-- `⌘9`: Focus on tab 9 => MEH+9 (()
 	{
 		key = "9",
 		mods = "CMD",
-		action = send_meh("("),
+		action = send_meh("9"),
 	},
 	-- `⌘0`: Focus on tab 10 => MEH+0 ())
 	{
 		key = "0",
 		mods = "CMD",
-		action = send_meh(")"),
+		action = send_meh("0"),
 	},
 	-- `⌘⇧P`: Show the workspace/project picker. In a normal session that is now
 	-- the single MEH-p keypress (was the `⌥w o S` chord). In a nested session
@@ -796,7 +801,7 @@ config.keys = {
 			if pane_session_is_nested(pane) then
 				window:perform_action(wezterm.action.SendString("\x1b[32;7u"), pane)
 			else
-				window:perform_action(send_meh("P"), pane)
+				window:perform_action(send_meh("p"), pane)
 			end
 		end),
 	},
@@ -821,13 +826,13 @@ config.keys = {
 	{
 		key = "t",
 		mods = "CMD|SHIFT",
-		action = send_meh("T"),
+		action = send_meh("t"),
 	},
 	-- `⌘⇧S`: Show the split picker => MEH-s (was `⌥w p P`)
 	{
 		key = "s",
 		mods = "CMD|SHIFT",
-		action = send_meh("S"),
+		action = send_meh("s"),
 	},
 }
 

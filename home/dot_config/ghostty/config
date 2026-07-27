@@ -186,8 +186,8 @@ keybind = cmd+f=text:\x1b/
 #   Cmd+Shift+f  → leader, scroll, e   → EditScrollback
 #   Cmd+1..9     → leader, <digit>     → GoToTab N
 #   Cmd+0        → leader, 0           → GoToTab 10    (needs new bind, see kdl)
-# Cmd+T → MEH-n (N=78): a single tmux root bind, not the `⌥w t N` replay.
-keybind = cmd+t=text:\x1b[27;8;78~
+# Cmd+T → MEH-n (n=110): a single mux bind, not the `⌥w t N` replay.
+keybind = cmd+t=text:\x1b[110;8u
 keybind = cmd+w=text:\x1bwpx
 keybind = cmd+shift+w=text:\x1bwtx
 keybind = cmd+shift+f=text:\x1bwlV
@@ -198,17 +198,19 @@ keybind = cmd+shift+f=text:\x1bwlV
 # chord delivered faster than it can transition — and `text:` has no inter-key
 # delay at all, so the replay was the least reliable form of these.
 #
-# These bytes are exactly what Ghostty emits for the PHYSICAL chord: it sets the
-# shift bit AND shifts the codepoint (`CSI 27;8;<UPPER>~`), where WezTerm only
-# shifts the codepoint (`;7;`). tmux binds both spellings, so the ⌘ path and the
-# physical MEH path land on one bind and cannot drift. P=80 T=84 S=83.
-keybind = cmd+shift+p=text:\x1b[27;8;80~
-keybind = cmd+shift+t=text:\x1b[27;8;84~
-keybind = cmd+shift+s=text:\x1b[27;8;83~
+# KITTY encoding (`CSI <codepoint>;8u`), not the modifyOtherKeys form Ghostty
+# emits for the physical chord. Both reach the same tmux bind, but ZELLIJ only
+# parses the kitty one — fed modifyOtherKeys it hands the raw bytes to the
+# shell (zellij pass, 2026-07-27). One encoding both muxes understand beats
+# matching what the physical key sends. Modifier 8 = 1+shift+alt+ctrl, and the
+# codepoint is UNSHIFTED: p=112 t=116 s=115.
+keybind = cmd+shift+p=text:\x1b[112;8u
+keybind = cmd+shift+t=text:\x1b[116;8u
+keybind = cmd+shift+s=text:\x1b[115;8u
 
-# Cmd+Shift+C → MEH-c (C=67). Copies the focused pane's cwd to the clipboard
+# Cmd+Shift+C → MEH-c (c=99). Copies the focused pane's cwd to the clipboard
 # as a $HOME-relative path (~/…), with a notification + sound.
-# Cmd+Shift+Alt+C → MEH-d (D=68): same, but the ABSOLUTE path.
+# Cmd+Shift+Alt+C → MEH-d (d=100): same, but the ABSOLUTE path.
 # Both now reach copy-pwd through a single tmux root bind rather than replaying
 # the leader (`⌥w Y` / `⌥w ⌥y`). copy-pwd resolves the cwd from `#{pane_pid}`,
 # the pane's ROOT process, so it reports the shell's directory even when nvim
@@ -216,13 +218,12 @@ keybind = cmd+shift+s=text:\x1b[27;8;83~
 # We rebind Cmd+Shift+C (not Cmd+C) so Ghostty's own copy_to_clipboard on
 # Cmd+C — plus `copy-on-select = clipboard` above — keep working for
 # selected text.
-keybind = cmd+shift+c=text:\x1b[27;8;67~
-keybind = cmd+shift+alt+c=text:\x1b[27;8;68~
-# Cmd+1..9 and Cmd+0 → tabs 1..10 as MEH+<digit>, a single tmux root bind each
-# (was the `⌥w t N` replay). Shift folds a digit to the layout's SHIFTED
-# PUNCTUATION, not to a digit, so these carry `!@#$%^&*()` codepoints — 33, 64,
-# 35, 36, 37, 94, 38, 42, 40, 41. US-layout, which would matter if we depended
-# on the physical chord; Ghostty synthesises the bytes, so it does not.
+keybind = cmd+shift+c=text:\x1b[99;8u
+keybind = cmd+shift+alt+c=text:\x1b[100;8u
+# Cmd+1..9 and Cmd+0 → tabs 1..10 as MEH+<digit>, a single mux bind each (was
+# the `⌥w t N` replay). In the kitty encoding the codepoint is the UNSHIFTED
+# character, so these are plain digits 49..57,48 — the layout-dependent
+# `!@#$%^&*()` the modifyOtherKeys form forced is gone with it.
 #
 # Ghostty's defaults register `super+N=goto_tab:N` and `super+digit_N=goto_tab:N`
 # for digits 1..8 (super+9=last_tab, super+0=reset_font_size). Both must be
@@ -234,26 +235,26 @@ keybind = cmd+shift+alt+c=text:\x1b[27;8;68~
 # system-level handling. Performable keybinds are excluded from the menu,
 # letting the keypress go through Ghostty's normal keybind dispatch and
 # reach our `text:` action.
-keybind = performable:cmd+1=text:\x1b[27;8;33~
-keybind = performable:cmd+2=text:\x1b[27;8;64~
-keybind = performable:cmd+3=text:\x1b[27;8;35~
-keybind = performable:cmd+4=text:\x1b[27;8;36~
-keybind = performable:cmd+5=text:\x1b[27;8;37~
-keybind = performable:cmd+6=text:\x1b[27;8;94~
-keybind = performable:cmd+7=text:\x1b[27;8;38~
-keybind = performable:cmd+8=text:\x1b[27;8;42~
-keybind = performable:cmd+9=text:\x1b[27;8;40~
-keybind = performable:cmd+0=text:\x1b[27;8;41~
-keybind = performable:cmd+digit_1=text:\x1b[27;8;33~
-keybind = performable:cmd+digit_2=text:\x1b[27;8;64~
-keybind = performable:cmd+digit_3=text:\x1b[27;8;35~
-keybind = performable:cmd+digit_4=text:\x1b[27;8;36~
-keybind = performable:cmd+digit_5=text:\x1b[27;8;37~
-keybind = performable:cmd+digit_6=text:\x1b[27;8;94~
-keybind = performable:cmd+digit_7=text:\x1b[27;8;38~
-keybind = performable:cmd+digit_8=text:\x1b[27;8;42~
-keybind = performable:cmd+digit_9=text:\x1b[27;8;40~
-keybind = performable:cmd+digit_0=text:\x1b[27;8;41~
+keybind = performable:cmd+1=text:\x1b[49;8u
+keybind = performable:cmd+2=text:\x1b[50;8u
+keybind = performable:cmd+3=text:\x1b[51;8u
+keybind = performable:cmd+4=text:\x1b[52;8u
+keybind = performable:cmd+5=text:\x1b[53;8u
+keybind = performable:cmd+6=text:\x1b[54;8u
+keybind = performable:cmd+7=text:\x1b[55;8u
+keybind = performable:cmd+8=text:\x1b[56;8u
+keybind = performable:cmd+9=text:\x1b[57;8u
+keybind = performable:cmd+0=text:\x1b[48;8u
+keybind = performable:cmd+digit_1=text:\x1b[49;8u
+keybind = performable:cmd+digit_2=text:\x1b[50;8u
+keybind = performable:cmd+digit_3=text:\x1b[51;8u
+keybind = performable:cmd+digit_4=text:\x1b[52;8u
+keybind = performable:cmd+digit_5=text:\x1b[53;8u
+keybind = performable:cmd+digit_6=text:\x1b[54;8u
+keybind = performable:cmd+digit_7=text:\x1b[55;8u
+keybind = performable:cmd+digit_8=text:\x1b[56;8u
+keybind = performable:cmd+digit_9=text:\x1b[57;8u
+keybind = performable:cmd+digit_0=text:\x1b[48;8u
 
 # Cmd+Up/Down (and vim-style aliases Cmd+K/J): scroll one line, as MEH+Up/Down
 # and MEH-k/j — a single tmux root bind each, not the `⌥w l k` replay. The bind
@@ -262,7 +263,7 @@ keybind = performable:cmd+digit_0=text:\x1b[27;8;41~
 #
 # The ARROW forms send `CSI 1;8A/B` rather than a `27;8;<cp>~` sequence: arrows
 # carry their modifiers in a numeric field, so Shift has no codepoint to fold
-# into and tmux sees one unambiguous `C-M-S-Up`. K=75, J=74 for the letters.
+# into and tmux sees one unambiguous `C-M-S-Up`. k=107, j=106 for the letters.
 #
 # Arrow keys must use `arrow_up`/`arrow_down` (physical) — Ghostty's
 # defaults bind `super+arrow_up=jump_to_prompt:-1` and physical takes
@@ -271,12 +272,12 @@ keybind = performable:cmd+digit_0=text:\x1b[27;8;41~
 # `super+j=scroll_to_selection`.
 keybind = cmd+arrow_up=text:\x1b[1;8A
 keybind = cmd+arrow_down=text:\x1b[1;8B
-keybind = cmd+k=text:\x1b[27;8;75~
-keybind = cmd+j=text:\x1b[27;8;74~
+keybind = cmd+k=text:\x1b[107;8u
+keybind = cmd+j=text:\x1b[106;8u
 
 # Cmd+Shift+Up/Down: jump to previous/next shell prompt, via OSC 133 marks the
 # zsh precmd emitter writes (functions.d/prompt-marks.sh). Now MEH-b (back,
-# B=66) and MEH-f (forward, F=70) — `p`/`n` were already spent on the project
+# b=98) and MEH-f (forward, f=102) — `p`/`n` were already spent on the project
 # picker and new tab.
 #
 # Re-entrant like the scroll pair: the tmux bind tests `#{pane_in_mode}`, so a
@@ -285,8 +286,8 @@ keybind = cmd+j=text:\x1b[27;8;74~
 #
 # NOTE: WezTerm also binds the ⇧⌘k / ⇧⌘j letter twins for these; Ghostty has
 # only the arrow forms. Left as-is rather than silently adding bindings.
-keybind = cmd+shift+arrow_up=text:\x1b[27;8;66~
-keybind = cmd+shift+arrow_down=text:\x1b[27;8;70~
+keybind = cmd+shift+arrow_up=text:\x1b[98;8u
+keybind = cmd+shift+arrow_down=text:\x1b[102;8u
 
 # Cmd+N opens a fresh Ghostty window. Because zellij's config sets
 # `attach_to_session true` without a `session_name`, each new shell that

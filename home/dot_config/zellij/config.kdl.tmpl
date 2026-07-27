@@ -823,6 +823,134 @@ keybinds clear-defaults=true {
         // (`esc` → normal and `enter` → normal come from the `shared_except`
         // blocks below; native `n`/`N` above navigate matches.)
     }
+    // -----------------------------------------------------------------
+    // MEH (Ctrl+Alt+Shift) — the direct bindings, zellij half
+    // -----------------------------------------------------------------
+    // tmux binds these in its ROOT table, so they fire from any mode; the
+    // zellij equivalent is shared_except "locked", which is why they live
+    // here rather than in `normal`. Locked is the deliberate passthrough
+    // mode and keeps its promise.
+    //
+    // WezTerm and Ghostty synthesise these for the ⌘ chords (⌘⇧P, ⌘t,
+    // ⌘1..⌘0, ⇧⌘c, ⌘↑ …) as the KITTY encoding, `CSI <codepoint>;8u`.
+    // That choice is forced by this side: zellij parses the kitty form but
+    // hands the modifyOtherKeys form straight to the shell as raw bytes
+    // (measured in the zellij pass, 2026-07-27 — every ⌘ chord was dead
+    // here, beeping, because it was being sent the other encoding). tmux
+    // resolves the kitty form to C-M-S-<key>, which it already binds, so
+    // one encoding serves both.
+    //
+    // Phase 8 generates this block from keymap.yaml; until then it mirrors
+    // the leader chords by hand, and any change there needs the twin here.
+    shared_except "locked" {
+        // Pickers — the same modal runs the leader chords use.
+        bind "Ctrl Alt Shift p" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Quick Launch — Workspace"
+                     "inject" false
+                     "borderless" true
+                     "no_chrome" true
+                     "no_discover" true
+                     "script" "quick-launch-zellij"
+                     "args" "\"workspace\""
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+        bind "Ctrl Alt Shift t" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Quick Launch — Tab"
+                     "inject" false
+                     "borderless" true
+                     "no_chrome" true
+                     "no_discover" true
+                     "script" "quick-launch-zellij"
+                     "args" "\"tab\""
+                     "width" "70%"
+                     "height" "60%") }}
+        }
+        bind "Ctrl Alt Shift s" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Quick Launch — Pane"
+                     "inject" false
+                     "borderless" true
+                     "no_chrome" true
+                     "script" "quick-launch-zellij"
+                     "args" "\"pane\""
+                     "width" "70%"
+                     "height" "70%") }}
+        }
+        bind "Ctrl Alt Shift v" {
+            SwitchToMode "normal"
+            {{ template "zellijModalRun"
+               (dict "home" .chezmoi.homeDir
+                     "title" "Clipboard history"
+                     "inject" true
+                     "borderless" true
+                     "no_chrome" true
+                     "script" "pick-clipboard-zellij"
+                     "width" "70%"
+                     "height" "75%") }}
+        }
+
+        // Copy CWD — the plugin substitutes {pid} with the focused pane's
+        // root process, exactly as the ⌥w Y / ⌥w ⌥y chords do.
+        bind "Ctrl Alt Shift c" {
+            MessagePlugin "context-keys" {
+                name "copy-pwd"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/mux/scripts/copy-pwd" }} --relative {pid}"
+            }
+            SwitchToMode "normal"
+        }
+        bind "Ctrl Alt Shift d" {
+            MessagePlugin "context-keys" {
+                name "copy-pwd-abs"
+                payload "default: run {{ joinPath .chezmoi.homeDir ".config/mux/scripts/copy-pwd" }} --absolute {pid}"
+            }
+            SwitchToMode "normal"
+        }
+
+        // New tab, and the ten tab jumps (⌘t, ⌘1..⌘9, ⌘0).
+        bind "Ctrl Alt Shift n" { SwitchToMode "normal"; NewTab; }
+{{- range $i, $d := list "1" "2" "3" "4" "5" "6" "7" "8" "9" "0" }}
+        bind "Ctrl Alt Shift {{ $d }}" { SwitchToMode "normal"; GoToTab {{ add $i 1 }}; }
+{{- end }}
+
+        // Scroll a line, and walk shell prompts (the zj-prompt-jumper
+        // plugin, the same one scroll mode's p/n drive). Unlike tmux these
+        // do NOT enter a mode first — zellij scrolls from wherever you are,
+        // so a repeat needs no mode juggling.
+        // Arrows as well as the vim pair: ⌘↑/⌘↓ send `CSI 1;8A/B` (arrows carry
+        // their modifiers numerically, so there is no kitty codepoint form for
+        // them). zellij parses that fine — it just needs the bind, which is
+        // why only the arrows were dead when k/j already worked.
+        bind "Ctrl Alt Shift k" { ScrollUp; }
+        bind "Ctrl Alt Shift j" { ScrollDown; }
+        bind "Ctrl Alt Shift up" { ScrollUp; }
+        bind "Ctrl Alt Shift down" { ScrollDown; }
+        // SwitchToMode "scroll" FIRST, matching the leader path (`⌥w l p`),
+        // which reaches the plugin from scroll mode. Messaging it from normal
+        // mode cost a tap: the first press did nothing visible and only the
+        // second jumped. tmux's twin enters copy-mode for the same reason.
+        bind "Ctrl Alt Shift b" {
+            SwitchToMode "scroll"
+            MessagePlugin "prompt-jumper" {
+                name "prev"
+            }
+        }
+        bind "Ctrl Alt Shift f" {
+            SwitchToMode "scroll"
+            MessagePlugin "prompt-jumper" {
+                name "next"
+            }
+        }
+    }
+
     shared_except "normal" "locked" "entersearch" "renametab" "renamepane" {
         bind "esc" { SwitchToMode "normal"; }
     }
