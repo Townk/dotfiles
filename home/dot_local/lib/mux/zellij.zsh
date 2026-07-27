@@ -21,7 +21,14 @@
 # the lookup; otherwise PATH resolution keeps this portable across the
 # homebrew / dev-shell split instead of hardcoding /opt/homebrew.
 _mux_zj_available() {
-  [[ -n "${ZELLIJ:-}" ]] || return 1
+  # $ZELLIJ means we are INSIDE a session. MUX_BACKEND means a caller
+  # resolved the backend for us from OUTSIDE one — mux-open does exactly
+  # that from WezTerm's GUI, where no session variable exists. Honouring
+  # only the former made mux::available disagree with mux::backend, which
+  # already honours the pin: term-quick-view then took its "no mux" arm and
+  # rendered inline into a terminal nobody was looking at, on BOTH backends
+  # (zellij pass, 2026-07-27).
+  [[ -n "${ZELLIJ:-}" || "${MUX_BACKEND:-}" == zellij ]] || return 1
   local bin="${ZELLIJ_BIN:-$(command -v zellij 2>/dev/null)}"
   [[ -n "$bin" && -x "$bin" ]]
 }

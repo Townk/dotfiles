@@ -835,3 +835,44 @@ Describe 'mux.zsh — dump_screen (zellij)'
     The output should not include "--path"
   End
 End
+
+Describe 'mux.zsh — mux::available honours a PINNED backend'
+  Include home/dot_local/lib/mux.zsh
+
+  # mux::backend already honours $MUX_BACKEND — that is how callers outside any
+  # session (mux-open, from WezTerm's GUI) say which mux to drive. Availability
+  # used to re-derive from $ZELLIJ/$TMUX instead, so it disagreed with the
+  # dispatch it guards: term-quick-view took its "no mux" arm and rendered
+  # inline into a terminal nobody was looking at, on BOTH backends.
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    unset ZELLIJ ZELLIJ_SESSION_NAME TMUX
+    for b in zellij tmux; do
+      { echo '#!/usr/bin/env zsh'; echo 'exit 0'; } > "$TEST_TMP/$b"
+      chmod +x "$TEST_TMP/$b"
+    done
+    export ZELLIJ_BIN="$TEST_TMP/zellij" MUX_TMUX_BIN="$TEST_TMP/tmux"
+    PATH="$TEST_TMP:$PATH"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset ZELLIJ_BIN MUX_TMUX_BIN MUX_BACKEND; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'is available for a pinned zellij with no $ZELLIJ in the environment'
+    export MUX_BACKEND=zellij
+    When call mux::available
+    The status should be success
+  End
+
+  It 'is available for a pinned tmux with no $TMUX in the environment'
+    export MUX_BACKEND=tmux
+    When call mux::available
+    The status should be success
+  End
+
+  It 'is still unavailable with no session and no pin'
+    unset MUX_BACKEND
+    When call mux::available
+    The status should be failure
+  End
+End

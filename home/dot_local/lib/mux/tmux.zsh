@@ -9,7 +9,14 @@
 _mux_tx_bin() { print -r -- "${MUX_TMUX_BIN:-tmux}"; }
 
 _mux_tx_available() {
-  [[ -n "${TMUX:-}" ]] || return 1
+  # $TMUX means we are INSIDE a session. MUX_BACKEND means a caller
+  # resolved the backend for us from OUTSIDE one — mux-open does exactly
+  # that from WezTerm's GUI, where no session variable exists. Honouring
+  # only the former made mux::available disagree with mux::backend, which
+  # already honours the pin: term-quick-view then took its "no mux" arm and
+  # rendered inline into a terminal nobody was looking at, on BOTH backends
+  # (zellij pass, 2026-07-27).
+  [[ -n "${TMUX:-}" || "${MUX_BACKEND:-}" == tmux ]] || return 1
   command -v "$(_mux_tx_bin)" >/dev/null 2>&1
 }
 
