@@ -159,20 +159,21 @@ bind -n M-Enter if "$is_fzf" 'send-keys M-Enter' 'run-shell -b "{{ .chezmoi.home
 # has already set the selection), so this number is purely how long you see
 # the highlight — turn it down to taste.
 #
-# @mouse_select marks the gesture for the rest of the config:
-#   - the bar suppresses its mode pill (status.conf folds this into the
-#     in_copy argument). Without it the pane sits in copy-mode with @visual
-#     unset, which the resolver reads as SCROLL — so a word-select announced
-#     a mode nobody asked for.
-#   - the pane-mode-changed hook skips entirely, instead of firing twice and
-#     spawning four zsh scripts (~40ms each) for a mode nobody is in.
-# It is unset again on the way out, so nothing leaks into the next entry.
+# @visual 1 makes the bar say COPY. The resolver reads copy-mode with @visual
+# unset as SCROLL, which is what a word-select used to announce — wrong, since
+# this gesture is a copy. We clear it again on the way out ourselves: the
+# pane-mode-changed hook normally does that, and we are skipping it (below), so
+# a stale @visual would make the NEXT copy-mode entry read as Copy.
+#
+# @mouse_select gates that hook off. The gesture enters and leaves copy-mode in
+# one command sequence, so the hook would otherwise fire TWICE and spawn four
+# zsh scripts (~40ms each) for something that never touches the mode stack.
 #
 # Everything else is stock: `select-pane -t =` keeps click-to-focus, and the
 # `pane_in_mode`/`mouse_any_flag` arm still forwards the event to an app that
 # is capturing the mouse (fzf, vim) or to a pane already in copy-mode.
-bind -n DoubleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; copy-mode -H ; send -X select-word ; run-shell -d 0.12 ; send -X copy-pipe-and-cancel ; set -p -u @mouse_select }
-bind -n TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; copy-mode -H ; send -X select-line ; run-shell -d 0.12 ; send -X copy-pipe-and-cancel ; set -p -u @mouse_select }
+bind -n DoubleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; copy-mode -H ; send -X select-word ; run-shell -d 0.12 ; send -X copy-pipe-and-cancel ; set -p -u @visual ; set -p -u @mouse_select }
+bind -n TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; copy-mode -H ; send -X select-line ; run-shell -d 0.12 ; send -X copy-pipe-and-cancel ; set -p -u @visual ; set -p -u @mouse_select }
 
 # ---------------------------------------------------------------------------
 # MEH direct bindings — Ctrl+Alt+Shift (spec 2026-07-27-meh-direct-bindings)
