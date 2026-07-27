@@ -34,14 +34,62 @@ if [[ -n "${TMUX:-}" ]]; then
   tmux rename-window "${img:t} · any key to close" 2>/dev/null || :
 fi
 
+# Wait for the pane geometry to STOP MOVING before drawing. A window is
+# created, then resized as the client settles, and a sixel that lands during
+# that window is invalidated with it — which is why the same command renders
+# on one run and not the next (Mode B 2026-07-26: a bare chafa that had
+# rendered came back blank, unchanged, on a later run). Poll until two reads
+# agree, with a short ceiling so a genuinely resizing pane cannot hang this.
+_settle() {
+  local a b i
+  a="$(stty size 2>/dev/null)"
+  for i in {1..10}; do
+    sleep 0.05
+    b="$(stty size 2>/dev/null)"
+    [[ "$a" == "$b" ]] && return 0
+    a="$b"
+  done
+}
+_settle
+
 print -n -- $'\e[2J\e[H'
 
+# Render to a FILE first, then check its size. tmux ingests a sixel image as
+# one DCS string and DISCARDS the whole thing past its input-buffer limit, so
+# an image that is merely big renders as a blank pane with no error anywhere.
+# Measured in this terminal (Mode B 2026-07-26, captured with pipe-pane): a
+# 774KB stream renders, a 2.45MB one does not. Nothing about the IMAGE
+# predicts it — 255-colour photos and 13-colour line art land on both sides —
+# because chafa renders at the terminal's true cell resolution, so the
+# stream size is what varies, not any property of the file.
+#
+# Shrink by asking for fewer CELLS (chafa scales the pixels with them) until
+# the stream fits, then paint it in one write.
+_max="${MUX_PREVIEW_IMAGE_MAX_BYTES:-900000}"
+_out=$(mktemp "${TMPDIR:-/tmp}/muximg.XXXXXX") || exit 1
+trap 'rm -f -- "$_out"' EXIT INT TERM HUP
+
+_render() {  # _render [chafa args…]
+  if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
+    chafa ${=MUX_PREVIEW_IMAGE_ARGS} --align center,center "$@" "$img" >"$_out" 2>/dev/null
+  else
+    chafa --align center,center "$@" "$img" >"$_out" 2>/dev/null
+  fi
+}
+# zstat needs its module loaded; wc is one fork and always there.
+_size() { wc -c < "$_out" 2>/dev/null | tr -d " " || print 0 }
+
 rc=0
-if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
-  chafa ${=MUX_PREVIEW_IMAGE_ARGS} "$img" || rc=$?
-else
-  chafa --align center,center "$img" || rc=$?
+_render || rc=$?
+if (( $(_size) > _max )); then
+  _c="$(tput cols 2>/dev/null || echo 80)" _r="$(tput lines 2>/dev/null || echo 24)"
+  for _pct in 70 50 35 25; do
+    _render -s "$(( _c * _pct / 100 ))x$(( _r * _pct / 100 ))" || rc=$?
+    (( $(_size) <= _max )) && break
+  done
 fi
+
+cat -- "$_out"
 
 # NOTHING below this line may write to the pane.
 read -k1 -s || :
