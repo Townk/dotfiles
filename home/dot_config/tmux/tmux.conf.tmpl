@@ -57,6 +57,14 @@ set -as terminal-features '*:extkeys'
 # ---------------------------------------------------------------------------
 # Behavior parity with the Zellij setup
 set -g history-limit 1000000       # scroll_buffer_size 1000000
+# A sixel image arrives as ONE DCS string, and tmux DISCARDS any string
+# sequence larger than input-buffer-size — the pane goes blank with no error
+# and nothing in the log. The 1 MiB default is small for an image at this
+# terminal's resolution: measured by catting pre-rendered streams, 1,032,961
+# bytes rendered and 1,174,685 did not, while a full-pane photo runs 2-3 MB.
+# 16 MiB is a ceiling for pathological input, not an allocation — tmux grows
+# the buffer as needed and frees it with the sequence.
+set -s input-buffer-size 16777216
 set -s escape-time 0               # ESC is ESC, never a chord timeout (ESC cancels; Ctrl+C aborts)
 set -g focus-events on             # nvim autoread & friends
 set -g mouse on

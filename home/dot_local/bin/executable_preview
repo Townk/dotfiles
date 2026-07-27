@@ -220,7 +220,32 @@ function preview-raster() {
   # sets it, because there the picture is the whole point of the pane.
   local -a align=()
   [[ -n "${PREVIEW_IMAGE_ALIGN:-}" ]] && align=(--align "$PREVIEW_IMAGE_ALIGN")
-  chafa "${chafa_format[@]}" "${align[@]}" -s "${w:-80}x${h:-24}" "$1" 2>/dev/null
+
+  # A sixel image reaches tmux as ONE DCS string, and tmux DISCARDS a string
+  # sequence past INPUT_BUF_LIMIT (1 MiB) — the preview goes blank with no
+  # error. Measured by catting pre-rendered streams: 1,032,961 bytes renders,
+  # 1,174,685 does not. Render to a file, and if it overruns, ask for fewer
+  # cells (chafa scales the pixels with them) until it fits. Only oversized
+  # images pay the retry; everything else pays one temp write.
+  local out max="${PREVIEW_IMAGE_MAX_BYTES:-}" pct lim
+  if [[ -z "$max" ]]; then
+    max=1000000
+    if [[ -n "${TMUX:-}" ]]; then
+      lim="$(tmux show -sv input-buffer-size 2>/dev/null)"
+      [[ "$lim" == <-> ]] && ((lim > 1000)) && max=$(( lim * 95 / 100 ))
+    fi
+  fi
+  out=$(mktemp "${TMPDIR:-/tmp}/pvraster.XXXXXX") || return 1
+  chafa "${chafa_format[@]}" "${align[@]}" -s "${w:-80}x${h:-24}" "$1" >"$out" 2>/dev/null
+  if [[ "$(wc -c <"$out" | tr -d ' ')" -gt "$max" ]]; then
+    for pct in 70 50 35 25; do
+      chafa "${chafa_format[@]}" "${align[@]}" \
+        -s "$(( ${w:-80} * pct / 100 ))x$(( ${h:-24} * pct / 100 ))" "$1" >"$out" 2>/dev/null
+      [[ "$(wc -c <"$out" | tr -d ' ')" -le "$max" ]] && break
+    done
+  fi
+  cat -- "$out"
+  rm -f -- "$out"
 }
 
 # Opportunistic cache prune: at most once a day (stamp file), drop rasters

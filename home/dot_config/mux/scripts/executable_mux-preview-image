@@ -65,7 +65,20 @@ print -n -- $'\e[2J\e[H'
 #
 # Shrink by asking for fewer CELLS (chafa scales the pixels with them) until
 # the stream fits, then paint it in one write.
-_max="${MUX_PREVIEW_IMAGE_MAX_BYTES:-900000}"
+# A sixel image is ONE DCS string and tmux discards any string sequence
+# larger than its `input-buffer-size` (a SERVER option, default 1 MiB —
+# measured: 1,032,961 bytes rendered, 1,174,685 did not). Our tmux.conf
+# raises it, so ASK the server rather than hard-coding: the shrink below is
+# then a safety net for a machine whose config has not been applied, not a
+# quality ceiling. 5% margin covers the clear/cursor bytes around it.
+_max="${MUX_PREVIEW_IMAGE_MAX_BYTES:-}"
+if [[ -z "$_max" ]]; then
+  _max=1000000
+  if [[ -n "${TMUX:-}" ]]; then
+    _lim="$(tmux show -sv input-buffer-size 2>/dev/null)"
+    [[ "$_lim" == <-> ]] && (( _lim > 1000 )) && _max=$(( _lim * 95 / 100 ))
+  fi
+fi
 _out=$(mktemp "${TMPDIR:-/tmp}/muximg.XXXXXX") || exit 1
 trap 'rm -f -- "$_out"' EXIT INT TERM HUP
 
