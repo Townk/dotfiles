@@ -21,10 +21,10 @@ if [[ -n "$sess" ]]; then
 fi
 
 case "$kind" in
-  activity) icon="glyph:md-bell_ring"  msg="Activity in ${win:-a window}" ;;
-  silence)  icon="glyph:md-bell_sleep" msg="Idle: ${win:-a window} went quiet" ;;
-  bell)     icon="glyph:md-bell_alert" msg="Bell in ${win:-a window}" ;;
-  *)        icon="glyph:md-bell"       msg="Alert in ${win:-a window}" ;;
+  activity) icon="glyph:nf-md-bell_ring"  msg="Activity in ${win:-a window}" ;;
+  silence)  icon="glyph:nf-md-bell_sleep" msg="Idle: ${win:-a window} went quiet" ;;
+  bell)     icon="glyph:nf-md-bell_alert" msg="Bell in ${win:-a window}" ;;
+  *)        icon="glyph:nf-md-bell"       msg="Alert in ${win:-a window}" ;;
 esac
 
 source "$HOME/.local/lib/common.zsh" 2>/dev/null || exit 0

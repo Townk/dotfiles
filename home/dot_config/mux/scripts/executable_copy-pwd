@@ -30,7 +30,7 @@
 #
 # Env overrides:
 #   COPY_PWD_ICON    OSD icon spec (SVG name, glyph:<name>, or swatch:#RRGGBB).
-#                    Default: glyph:cod-folder.
+#                    Default: glyph:nf-cod-folder.
 #   COPY_PWD_SOUND   Notification sound name (as shown in System Settings →
 #                    Sound, e.g. Frog/Glass/Tink, or `default`). Default: Frog.
 #                    Set empty to show the notification silently.
@@ -40,7 +40,7 @@ set -euo pipefail
 LSOF="/usr/sbin/lsof"
 PBCOPY="/usr/bin/pbcopy"
 
-COPY_PWD_ICON="${COPY_PWD_ICON:-glyph:cod-folder}"
+COPY_PWD_ICON="${COPY_PWD_ICON:-glyph:nf-cod-folder}"
 COPY_PWD_SOUND="${COPY_PWD_SOUND-Frog}"
 
 # Parse an optional path-mode flag in any position; the lone positional is
@@ -106,17 +106,31 @@ else
   display="Path copied to clipboard"
 fi
 
-# Hammerspoon owns the custom OSD, driven by the shared `notify` helper (it
-# resolves `hs` and quotes the Lua call). Sourced AFTER the clipboard write
-# above so the copy itself never depends on the library being present.
-# Backgrounded so any OSD hiccup never delays or fails the clipboard copy.
+# Feedback goes to the OSD when it will actually be SEEN, and to the tmux
+# status line otherwise — never BOTH. Locally the pair painted the message over
+# the status bar on top of a Hammerspoon OSD already saying the same thing.
+#
+# "Seen" is two conditions: `hs` has to exist, and the client has to be local.
+# The OSD draws on the tmux HOST's screen, so an ssh client never sees it — the
+# same rule (and the same session-env probe) tmux-alert-notify uses.
+osd=""
 if source "$HOME/.local/lib/common.zsh" 2>/dev/null; then
-  notify --icon "$COPY_PWD_ICON" --sound "$COPY_PWD_SOUND" "$display" >/dev/null 2>&1 &
+  osd="${HS:-/opt/homebrew/bin/hs}"
+  [[ -x "$osd" ]] || osd="$(command -v hs 2>/dev/null || true)"
+  [[ -n "$osd" && -x "$osd" ]] || osd=""
+fi
+if [[ -n "$osd" && -n "${TMUX:-}" ]]; then
+  sess="$(tmux list-clients -F '#{client_session}' 2>/dev/null | head -1)" || sess=""
+  if [[ -n "$sess" ]]; then
+    v="$(tmux show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""
+    [[ "$v" == SSH_CONNECTION=* ]] && osd=""
+  fi
 fi
 
-# tmux clients (possibly remote, where the OSD is invisible) get the message
-# in the status line instead.
-if [[ -n "${TMUX:-}" ]]; then
+# Backgrounded so any OSD hiccup never delays or fails the clipboard copy.
+if [[ -n "$osd" ]]; then
+  notify --icon "$COPY_PWD_ICON" --sound "$COPY_PWD_SOUND" "$display" >/dev/null 2>&1 &
+elif [[ -n "${TMUX:-}" ]]; then
   tmux display-message "$display" 2>/dev/null
 fi
 

@@ -44,7 +44,7 @@ Show a transient on-screen notification via Hammerspoon's OSD.
 
 Examples:
   notify "Build finished"
-  notify --icon glyph:cod-check --sound Glass "Deploy complete"
+  notify --icon glyph:nf-cod-check --sound Glass "Deploy complete"
   notify --icon swatch:#ff5f87 --sound Frog "Path copied to clipboard"
 EOF
 }
