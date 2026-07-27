@@ -38,7 +38,12 @@ if [[ "$_mode" == view ]]; then
     # implementation instead of two. The NAME is the singleton's identity: it
     # must match what the renderer names the tab, or a second call opens a
     # second one.
-    mux::new_tab --name "$TERM_QUICK_VIEW_NAME" --singleton \
+    # --session only when a caller handed us one. Inside a pane $ZELLIJ/$TMUX
+    # answer for themselves; from WezTerm's GUI (mux-open) there is no session
+    # in the environment at all, and zellij refuses an untargeted new-tab.
+    local -a _sess=()
+    [[ -n "${MUX_SESSION:-}" ]] && _sess=(--session "$MUX_SESSION")
+    mux::new_tab "${_sess[@]}" --name "$TERM_QUICK_VIEW_NAME" --singleton \
       -- "$_self" --render "$file"
     exit $?
   fi

@@ -90,7 +90,15 @@ if command -v raster::rasterisable >/dev/null 2>&1 || (( ${+functions[raster::ra
     # term-quick-view owns the quick look: the "Quick View" singleton tab on
     # tmux, a float on zellij, the chrome, and the render. It is a command in
     # its own right (fzf's Ctrl+O and yazi's Ctrl+Space use it too).
-    term-quick-view "$target"
+    # MUX_SESSION, alongside MUX_BACKEND above: we run in WezTerm's GUI
+    # environment, so term-quick-view has no $ZELLIJ/$TMUX of its own to
+    # target. Zellij REFUSES an untargeted `action new-tab` ("Please specify
+    # the session name"), which is why CMD+click never opened the quick view
+    # there while the nvim branch below — which passes --session explicitly —
+    # always worked. tmux hid the same gap: an untargeted command picks the
+    # most-recently-used session, so it worked by luck and would have opened
+    # the view in the WRONG session with two of them about.
+    MUX_SESSION="$session" term-quick-view "$target"
     exit $?
   fi
 fi
