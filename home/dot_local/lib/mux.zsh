@@ -291,10 +291,16 @@ mux::client_sessions() {
   esac
 }
 
+# mux::dump_screen [--full] — pane text to stdout. Default is the VIEWPORT on
+# both backends; --full prepends the scrollback. Until this had a consumer the
+# two sides disagreed silently (zellij returned the viewport, tmux the whole
+# history), so the flag exists to make the contract say which one you meant.
 mux::dump_screen() {
+  local full=0
+  [[ "${1:-}" == --full ]] && full=1
   case "$(mux::backend)" in
-    tmux) _mux_tx_dump_screen ;;
-    zellij) _mux_zj_dump_screen ;;
+    tmux) _mux_tx_dump_screen "$full" ;;
+    zellij) _mux_zj_dump_screen "$full" ;;
     *) return 1 ;;
   esac
 }
@@ -388,11 +394,17 @@ mux::new_tab() {
   esac
 }
 
-# mux::send_text <text> — inject literal text into the focused pane.
+# mux::send_text [--pane P] <text> — inject literal text into a pane. Without
+# --pane the write lands in the FOCUSED pane, which is wrong whenever a float
+# is up: the id keeps the write on the pane the caller meant even while a
+# closing modal owns focus. P is the backend's own id spelling (zellij
+# "terminal_N", tmux "%N") — the caller already has one or the other.
 mux::send_text() {
+  local pane=""
+  [[ "${1:-}" == --pane ]] && { pane="${2-}"; shift 2; }
   case "$(mux::backend)" in
-    zellij) _mux_zj_send_text "$1" ;;
-    tmux)   _mux_tx_send_text "$1" ;;
+    zellij) _mux_zj_send_text "$1" "$pane" ;;
+    tmux)   _mux_tx_send_text "$1" "$pane" ;;
     *) return 1 ;;
   esac
 }

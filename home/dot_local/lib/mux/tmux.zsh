@@ -56,8 +56,16 @@ _mux_tx_client_sessions() {
     done
 }
 
-# _mux_tx_dump_screen — full scrollback + screen to stdout (spec §3 Screen).
-_mux_tx_dump_screen() { "$(_mux_tx_bin)" capture-pane -p -S - 2>/dev/null; }
+# _mux_tx_dump_screen <full> — pane text to stdout (spec §3 Screen).
+# full=1 prepends the whole scrollback (-S -); the default is the VIEWPORT
+# only, which is what zellij's `dump-screen` has always returned. The two
+# backends disagreed here until a consumer (ai-playbook's scrollback capture)
+# needed them to mean the same thing.
+_mux_tx_dump_screen() {
+  local -a hist=()
+  [[ "${1:-0}" == 1 ]] && hist=(-S -)
+  "$(_mux_tx_bin)" capture-pane -p "${hist[@]}" 2>/dev/null
+}
 
 # ---------------------------------------------------------------------------
 # Phase 6.0: panes / tabs / info (spec §3 Panes+Info, D19)
@@ -172,7 +180,13 @@ _mux_tx_new_tab() {
   "$(_mux_tx_bin)" new-window "${flags[@]}" ${cmdline:+"$cmdline"}
 }
 
-_mux_tx_send_text() { "$(_mux_tx_bin)" send-keys -l -- "$1"; }
+# _mux_tx_send_text <text> [pane] — pane is a tmux pane id (%N); empty writes
+# to the focused pane.
+_mux_tx_send_text() {
+  local -a target=()
+  [[ -n "${2:-}" ]] && target=(-t "$2")
+  "$(_mux_tx_bin)" send-keys "${target[@]}" -l -- "$1"
+}
 
 # _mux_tx_send_key <neutral-key-name> — the shim's small key vocabulary
 # (mux.zsh validates the name; here it is just spelled tmux's way).

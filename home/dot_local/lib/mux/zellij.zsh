@@ -157,12 +157,16 @@ _mux_zj_float() {
   print -rn -- "$result"
 }
 
-# _mux_zj_dump_screen — Screen group (spec §3): zellij dumps to a file
-# argument; normalize to stdout like tmux's capture-pane -p.
+# _mux_zj_dump_screen <full> — Screen group (spec §3): zellij dumps to a file
+# argument; normalize to stdout like tmux's capture-pane -p. full=1 asks for
+# the whole scrollback (--full), matching tmux's `capture-pane -S -`; the
+# default is the viewport.
 _mux_zj_dump_screen() {
   local bin="${ZELLIJ_BIN:-$(command -v zellij)}" f
+  local -a hist=()
+  [[ "${1:-0}" == 1 ]] && hist=(--full)
   f=$(mktemp "${TMPDIR:-/tmp}/muxdump.XXXXXX") || return 1
-  "$bin" action dump-screen "$f" 2>/dev/null || { rm -f -- "$f"; return 1; }
+  "$bin" action dump-screen "${hist[@]}" "$f" 2>/dev/null || { rm -f -- "$f"; return 1; }
   cat -- "$f"
   rm -f -- "$f"
 }
@@ -250,7 +254,13 @@ _mux_zj_new_tab() {
   fi
 }
 
-_mux_zj_send_text() { "$(_mux_zj_bin)" action write-chars -- "$1"; }
+# _mux_zj_send_text <text> [pane] — pane is zellij's own id spelling
+# ("terminal_N"), passed through verbatim; empty writes to the focused pane.
+_mux_zj_send_text() {
+  local -a target=()
+  [[ -n "${2:-}" ]] && target=(--pane-id "$2")
+  "$(_mux_zj_bin)" action write-chars "${target[@]}" -- "$1"
+}
 
 # _mux_zj_send_key <neutral-key-name> — zellij has no key vocabulary, only
 # bytes: write the terminal's own encoding for the key.

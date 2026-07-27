@@ -2,11 +2,11 @@
   ai-playbook config — chezmoi-managed template.
   Target: ~/.config/ai-playbook/config.toml
 
-  Selects the model harness per machine profile and turns on the zellij mux
-  integration. Only the keys set here override ai-playbook's baked-in defaults;
-  everything else (models, thinking, kb, driver) falls through to the
-  per-harness defaults. Edit THIS template, not the rendered file, then
-  `chezmoi apply`.
+  Selects the model harness per machine profile and points the mux integration
+  at our backend-agnostic shim. Only the keys set here override ai-playbook's
+  baked-in defaults; everything else (models, thinking, kb, driver) falls
+  through to the per-harness defaults. Edit THIS template, not the rendered
+  file, then `chezmoi apply`.
 
   Harness by profile:
     - work            -> cursor  (the company-sanctioned CLI; FULL tier)
@@ -14,10 +14,26 @@
 */ -}}
 {{- $harness := "claude" -}}
 {{- if ne .profile "personal" }}{{ $harness = "cursor" }}{{ end -}}
+{{- $mp := printf "%s/.config/mux/scripts/mux-playbook" .chezmoi.homeDir -}}
 [mux]
-# Enable the built-in zellij preset (ADR-0007): floating/docked panes and the
-# input widget open as zellij panes instead of the inline no-mux UX.
-backend = "zellij"
+# ai-playbook's mux is opt-in by config and ships ONE preset — zellij, hardcoded
+# as `zellij action …` with no runtime detection (its ADR-0007). Under tmux every
+# action silently did nothing, so Ctrl+Alt+A opened a blank pane. `backend` is
+# only a tier-1 on/off selector, and any name other than "zellij" simply requires
+# all five templates to be overridden — which is what we do here: every action
+# goes through our shim wrapper, which resolves zellij-vs-tmux PER CALL from the
+# pane it is invoked in. One config, both backends, no knob to flip.
+#
+# These are argv templates, not shell — no ~ expansion, hence the absolute path.
+backend = "mux"
+open-floating-pane = "{{ $mp }} float --width {width} --height {height} {cwdarg} {namearg} -- {cmd}"
+open-input-float = "{{ $mp }} input --width {width} --height {height} {cwdarg} -- {cmd}"
+open-docked-pane = "{{ $mp }} docked {cwdarg} {namearg} -- {cmd}"
+dump-screen = "{{ $mp }} dump {panearg}"
+# --pane-id keeps the play action off the focused pane (a closing float) and on
+# the pane the request came from. ai-playbook strips the flag AND its value when
+# it cannot resolve an origin pane, so this never degrades into a dangling flag.
+type-into-pane = "{{ $mp }} type --pane-id {pane} {text}"
 
 [agent]
 # Profile-selected: {{ .profile }} -> {{ $harness }}.

@@ -45,6 +45,13 @@ command -v atuin >/dev/null && bindkey '^R' atuin-search
 # pane (verified via `cat -v`), so no Zellij bind / plugin routing is needed —
 # just this bindkey. (Ctrl+Shift+/ was unusable: no distinct legacy encoding for
 # zsh, and Zellij can't bind Ctrl+punctuation.)
+#
+# tmux does NOT change this, despite `extended-keys always`: measured by feeding
+# a real client all three encodings WezTerm can emit (legacy \e^A, xterm
+# modifyOtherKeys CSI 27;7;97~, kitty CSI 97;7u) — tmux decodes each and
+# re-emits the SAME legacy \e^A, because `always` only means "use CSI-u where
+# there is no other way to send the key", and this key has one. So one bindkey
+# covers both backends; do not add a CSI-u twin for it.
 bindkey '\e^A' ai-assist-trigger
 
 # Ctrl+Alt+P — pick a saved playbook from the ai-playbook store (fzf). Arrives as

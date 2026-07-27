@@ -688,3 +688,49 @@ Describe 'mux.zsh — session resolvers dispatch (tmux)'
     The output should equal "screen-line"
   End
 End
+
+Describe 'mux.zsh — dump_screen / send_text targeting (tmux)'
+  Include home/dot_local/lib/mux.zsh
+
+  # The stub ECHOES its argv, so each example asserts on the command the shim
+  # actually built rather than on a canned reply.
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    unset ZELLIJ
+    export TMUX=/tmp/sock,1,0
+    stub="$TEST_TMP/tmux"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'print -r -- "tmux $*"'
+    } > "$stub"
+    chmod +x "$stub"
+    export MUX_TMUX_BIN="$stub"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset MUX_TMUX_BIN; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # zellij's dump-screen has always returned the viewport; tmux's side used to
+  # return the whole scrollback, so the one verb meant two things.
+  It 'mux::dump_screen captures the VIEWPORT by default'
+    When call mux::dump_screen
+    The output should equal "tmux capture-pane -p"
+  End
+
+  It 'mux::dump_screen --full adds the scrollback'
+    When call mux::dump_screen --full
+    The output should equal "tmux capture-pane -p -S -"
+  End
+
+  It 'mux::send_text writes to the focused pane with no --pane'
+    When call mux::send_text 'ls -la'
+    The output should equal "tmux send-keys -l -- ls -la"
+  End
+
+  # Without a target the write lands wherever focus happens to be — which is
+  # the closing float, not the pane the caller meant.
+  It 'mux::send_text --pane targets that pane'
+    When call mux::send_text --pane '%3' 'ls -la'
+    The output should equal "tmux send-keys -t %3 -l -- ls -la"
+  End
+End

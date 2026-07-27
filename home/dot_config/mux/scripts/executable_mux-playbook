@@ -1,0 +1,143 @@
+#!/usr/bin/env zsh
+# mux-playbook — the mux adapter ai-playbook drives its [mux] actions through.
+#
+# ai-playbook is CONFIG-DRIVEN: each multiplexer action is an argv template in
+# ~/.config/ai-playbook/config.toml, and it ships exactly one preset — zellij,
+# hardcoded as `zellij action …`. There is no tmux preset and no runtime
+# detection (its ADR-0007: the mux is opt-in by config only), so under tmux
+# every one of those commands did nothing and Ctrl+Alt+A summoned a blank pane.
+#
+# Rather than pick a backend statically, the config points every template at
+# THIS script and we resolve the backend per invocation through the shim —
+# the same rule as every other consumer: whichever mux the calling pane is in
+# wins, so a zellij session and a tmux session work side by side.
+#
+# Subcommands map 1:1 onto ai-playbook's five templates:
+#
+#   float  --width W --height H [--cwd D] [--name N] -- <cmd...>
+#            open-floating-pane — the framed float (view-diff).
+#   input  --width W --height H [--cwd D] [--name N] -- <cmd...>
+#            open-input-float — the borderless+pinned request widget. This is
+#            the Ctrl+Alt+A path.
+#   docked [--cwd D] [--name N] -- <cmd...>
+#            open-docked-pane — the answer pager and the session pane.
+#   dump   [-p PANE]
+#            dump-screen — the origin pane's VIEWPORT on stdout, which is what
+#            ai-playbook slices for a failed command's scrollback context.
+#   type   <text>
+#            type-into-pane — the play action.
+#
+# Every spawn must RETURN PROMPTLY: ai-playbook runs the template with
+# cmd.Run() and waits for it, so anything that blocks would hang the assist.
+# The shim already satisfies this (tmux popups go out via `run-shell -b`,
+# splits return as soon as the pane exists), which is most of why this is a
+# dispatcher and not an implementation.
+#
+# Flag spellings are ai-playbook's, not ours: {cwdarg} expands to `--cwd D`,
+# {namearg} to `--name N` and {panearg} to `-p PANE`, all fixed in its Go
+# substituter. We accept those and translate.
+set -uo pipefail
+
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" || exit 1
+
+cmd="${1:-}"
+(($#)) && shift
+
+# parse_common — consumes the flags the spawn subcommands share and leaves the
+# post-`--` command in $SPAWN_CMD. ai-playbook always emits `--` before {cmd}.
+# NOT named `argv`: inside a zsh function that name IS the function's own
+# positional parameters, so assigning it would never reach the caller.
+typeset width="" height="" cwd="" name="" pane=""
+typeset -a SPAWN_CMD=()
+parse_common() {
+  while (($#)); do
+    case "$1" in
+      --width)  width="${2-}";  shift 2 ;;
+      --height) height="${2-}"; shift 2 ;;
+      --cwd)    cwd="${2-}";    shift 2 ;;
+      --name)   name="${2-}";   shift 2 ;;
+      -p)       pane="${2-}";   shift 2 ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  SPAWN_CMD=("$@")
+}
+
+# Optional flags are built as ARRAY ELEMENTS, never as `${name:+--title $name}`:
+# that form is a single word in zsh, so the flag and its value would arrive
+# glued together as one argument.
+typeset -a opts
+
+case "$cmd" in
+  # A framed, unpinned float. mux::popup takes a bare integer as CELLS and an
+  # integer with % as a percentage of the tab viewport; ai-playbook emits the
+  # percent form here ("90%") and bare cells for `input`, and both spellings
+  # land on the same call.
+  float)
+    parse_common "$@"
+    (($#SPAWN_CMD)) || { print -u2 "mux-playbook float: no command"; exit 2; }
+    opts=(--frame)
+    [[ -n "$name" ]] && opts+=(--title "$name")
+    [[ -n "$cwd" ]] && opts+=(--cwd "$cwd")
+    mux::popup "${width:-90%}" "${height:-90%}" "${opts[@]}" -- "${SPAWN_CMD[@]}"
+    ;;
+
+  # The request/ask input widget. NO --frame: the shim's default float is
+  # borderless and pinned, which is exactly the shape ai-playbook's zellij
+  # preset asked for by hand (--borderless true --pinned true --name "").
+  # The widget draws its own border, so a second one would double it.
+  input)
+    parse_common "$@"
+    (($#SPAWN_CMD)) || { print -u2 "mux-playbook input: no command"; exit 2; }
+    opts=()
+    [[ -n "$cwd" ]] && opts+=(--cwd "$cwd")
+    mux::popup "${width:-57}" "${height:-10}" "${opts[@]}" -- "${SPAWN_CMD[@]}"
+    ;;
+
+  # zellij's preset docks with `--direction right`, and it passes no size (its
+  # template has no {width}/{height} at all), so neither do we — the split
+  # lands at the backend's default half.
+  docked)
+    parse_common "$@"
+    (($#SPAWN_CMD)) || { print -u2 "mux-playbook docked: no command"; exit 2; }
+    opts=(--close-on-exit)
+    [[ -n "$name" ]] && opts+=(--name "$name")
+    [[ -n "$cwd" ]] && opts+=(--cwd "$cwd")
+    mux::split right "${opts[@]}" -- "${SPAWN_CMD[@]}"
+    ;;
+
+  # -p carries the origin pane id resolved from ai-playbook's [mux] pane-id
+  # template, which can only name ONE backend's env var — it is zellij's
+  # ("terminal_{ZELLIJ_PANE_ID}"), and it resolves to empty whenever
+  # $ZELLIJ_PANE_ID is unset, i.e. always under tmux. So we ignore it and let
+  # the shim target our own pane: we are a direct child of the ai-playbook
+  # process running in the origin pane, so $TMUX_PANE / $ZELLIJ_PANE_ID are
+  # inherited and correct on either backend. Accepting the flag keeps the
+  # zellij template valid rather than making it an error.
+  dump)
+    parse_common "$@"
+    mux::dump_screen
+    ;;
+
+  # The play action. --pane-id is ai-playbook's own spelling and it STRIPS the
+  # flag+value pair itself when the origin pane is unknown, so we either get a
+  # real id or nothing — never a dangling flag. Targeting matters here: at play
+  # time the closing float still owns focus, so an untargeted write can land in
+  # the wrong pane. Best-effort like ai-playbook's own TypeInto — a mux we
+  # can't reach is not worth an error, the command is still on the clipboard.
+  type)
+    if [[ "${1:-}" == --pane-id ]]; then
+      pane="${2-}"; shift 2
+    fi
+    [[ -n "${1:-}" ]] || exit 0
+    opts=()
+    [[ -n "$pane" ]] && opts+=(--pane "$pane")
+    mux::send_text "${opts[@]}" "$1"
+    ;;
+
+  *)
+    print -u2 "usage: mux-playbook {float|input|docked|dump|type} …"
+    exit 2
+    ;;
+esac

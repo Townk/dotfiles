@@ -65,20 +65,24 @@ zle -N cd-up
 zle -N cd-down
 
 # ── ai-playbook assist trigger (Ctrl+Alt+A) ────────────────────────────────
-# Delegate the flow to `ai-playbook assist`. With the multiplexer integration
-# OFF (the default), assist runs INLINE in this pane: it captures the origin
-# context (last command/exit via atuin, cwd, scrollback), renders its input box
-# directly on /dev/tty, and drives the user's REAL interactive shell under a pty
-# (loading this .zshrc). When the request classifies to a COMMAND it prints that
-# command to STDOUT; an ANSWER or a playbook takes over the screen itself (the
-# fullscreen viewer on /dev/tty) and returns nothing on stdout.
+# Delegate the flow to `ai-playbook assist`: it captures the origin context
+# (last command/exit via atuin, cwd, scrollback), puts up its input widget, and
+# drives the user's REAL interactive shell under a pty (loading this .zshrc).
+# When the request classifies to a COMMAND it prints that command to STDOUT; an
+# ANSWER or a playbook takes over the screen itself and returns nothing on
+# stdout.
 #
 # So we run it in the FOREGROUND (not backgrounded) and capture stdout: a
 # COMMAND result fills the command line for the user to review and run; anything
-# else leaves the line untouched. Because the UI is on /dev/tty, capturing
-# stdout doesn't suppress it. (The old backgrounded + stdio-detached form was for
-# the zellij float UI, which no longer activates by default — opt back in with
-# `[mux] backend = "zellij"` in the ai-playbook config.)
+# else leaves the line untouched. Capturing stdout does not suppress the UI,
+# which draws on /dev/tty (inline) or in a float of its own.
+#
+# The float is a mux action, and ai-playbook's [mux] preset is STATIC (one
+# backend, chosen in its config, no runtime detection). Ours points every
+# action at ~/.config/mux/scripts/mux-playbook, which resolves zellij-vs-tmux
+# per call — so this widget behaves the same in either, and neither needs a
+# knob. Before that the config named zellij outright, and under tmux every
+# action silently did nothing: Ctrl+Alt+A opened a blank pane.
 ai-assist-trigger() {
   local cmd
   cmd="$(ai-playbook assist)"
