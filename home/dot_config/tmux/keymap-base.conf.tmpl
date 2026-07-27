@@ -146,6 +146,26 @@ bind -n C-k if "$is_agent" 'send-keys Up'   { if "$is_passthru" 'send-keys C-k' 
 bind -n M-Enter if "$is_fzf" 'send-keys M-Enter' 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/terminal-toggle-fullscreen"'
 
 # ---------------------------------------------------------------------------
+# Mouse word/line select — without tmux's 300ms pause
+# ---------------------------------------------------------------------------
+# tmux's stock DoubleClick1Pane/TripleClick1Pane sit on `run-shell -d 0.3`
+# between selecting and copying, purely so the highlight is visible for a
+# moment. That pause IS the sluggishness a double-click has under tmux
+# (measured: 326ms with it, 18ms without — the copy itself needs no delay,
+# select-word has already set the selection).
+#
+# It also causes the mode flash. While the pause runs the pane sits in
+# copy-mode, and the bar resolves copy-mode with @visual unset as SCROLL — so
+# double-clicking a word announced a mode you never asked for, for a third of
+# a second. At 18ms there is nothing left to see.
+#
+# Everything else is stock: `select-pane -t =` keeps click-to-focus, and the
+# `pane_in_mode`/`mouse_any_flag` arm still forwards the event to an app that
+# is capturing the mouse (fzf, vim) or to a pane already in copy-mode.
+bind -n DoubleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { copy-mode -H ; send -X select-word ; send -X copy-pipe-and-cancel }
+bind -n TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { copy-mode -H ; send -X select-line ; send -X copy-pipe-and-cancel }
+
+# ---------------------------------------------------------------------------
 # MEH direct bindings — Ctrl+Alt+Shift (spec 2026-07-27-meh-direct-bindings)
 # ---------------------------------------------------------------------------
 # Single-keystroke access to actions that otherwise cost a leader chord. These
