@@ -14,6 +14,30 @@ kind="${1:-activity}"
 win="${2:-}"
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
 
+# The BELL is gated; the alarms are not. They are different in kind:
+#
+#   activity / silence  are ALARMS the user armed by hand (`⌥w` → "alarm on
+#                       updated" / "alarm on idle", which set monitor-activity
+#                       / monitor-silence). You asked to be told, so tell you.
+#   bell                nobody armed. monitor-bell is on by default and any
+#                       program can ring it, and it is already reported twice
+#                       without an OSD — the terminal rings it (that audible
+#                       path is the emulator's; we pass no --sound) and the
+#                       window's status entry takes window-status-bell-style.
+#                       A third, screen-centre popup for it is noise.
+#
+# `set -g @bell_osd on` opts the bell back in.
+if [[ "$kind" == bell ]]; then
+  osd="$("$TMUX_BIN" show -gv @bell_osd 2>/dev/null)" || osd=""
+  case "${osd:l}" in
+    on | 1 | true | yes) ;;
+    *) exit 0 ;;
+  esac
+fi
+
+# Skipped over ssh even when enabled: the OSD renders on the tmux HOST's
+# screen. Note `-SSH_CONNECTION` (a leading dash) is what a LOCAL session
+# reports — only the `SSH_CONNECTION=` prefix means a remote client.
 sess="$("$TMUX_BIN" list-clients -F '#{client_session}' 2>/dev/null | head -1)" || sess=""
 if [[ -n "$sess" ]]; then
   v="$("$TMUX_BIN" show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""

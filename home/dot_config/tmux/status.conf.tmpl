@@ -66,6 +66,15 @@ set-hook -g pane-mode-changed 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/
 # zj_hud_alarm path shows). The notifier gates itself on the session env's
 # ssh truth — a remote client can't see the host OSD; the bar flag still
 # shows there.
+#
+# The two ALARMS (activity/silence) always notify — the user armed them by
+# hand via the leader, so the OSD is the answer to a question they asked.
+#
+# The BELL does not, by default: nobody armed it (monitor-bell is on out of
+# the box and any program can ring it), and it is already reported twice —
+# the terminal rings it, and the window's status entry takes
+# window-status-bell-style. `on`/`1`/`true`/`yes` opt it back in.
+set -g @bell_osd off
 set-hook -g alert-activity 'run-shell -b "{{ .chezmoi.homeDir }}/.local/libexec/tmux-alert-notify activity \"#{window_name}\""'
 set-hook -g alert-silence 'run-shell -b "{{ .chezmoi.homeDir }}/.local/libexec/tmux-alert-notify silence \"#{window_name}\""'
 set-hook -g alert-bell 'run-shell -b "{{ .chezmoi.homeDir }}/.local/libexec/tmux-alert-notify bell \"#{window_name}\""'
