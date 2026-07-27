@@ -100,7 +100,9 @@ _render() {  # _render [cell-box]  — the box is only used by the shrink path
   {
     # top padding, then park at the left padding column; chafa draws here
     repeat $_pady print ""
-    print -n -- "${(l:$_padx:: :)}"
+    # printf, not ${(l:N:: :)} — the latter pads an EMPTY parameter name,
+    # which `set -u` rejects outright ("parameter not set").
+    printf '%*s' "$_padx" ""
     if [[ -n "${MUX_PREVIEW_IMAGE_ARGS:-}" ]]; then
       chafa ${=MUX_PREVIEW_IMAGE_ARGS} --margin-right $(( _padx * 2 )) \
         --margin-bottom $(( _pady * 2 )) --align center,center \
