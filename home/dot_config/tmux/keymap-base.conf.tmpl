@@ -118,6 +118,13 @@ bind -n C-H if -F '#{@pane-is-vim}' 'send-keys C-S-h' 'resize-pane -L 2'
 bind -n C-J if -F '#{@pane-is-vim}' 'send-keys C-S-j' 'resize-pane -D 2'
 bind -n C-K if -F '#{@pane-is-vim}' 'send-keys C-S-k' 'resize-pane -U 2'
 bind -n C-L if -F '#{@pane-is-vim}' 'send-keys C-S-l' 'resize-pane -R 2'
+# Ghostty's THIRD spelling: it sends the shift bit AND the shifted codepoint,
+# which tmux names C-S-H (see the picker block below for the full table).
+# Without these, resize was dead under Ghostty exactly as the pickers were.
+bind -n C-S-H if -F '#{@pane-is-vim}' 'send-keys C-S-h' 'resize-pane -L 2'
+bind -n C-S-J if -F '#{@pane-is-vim}' 'send-keys C-S-j' 'resize-pane -D 2'
+bind -n C-S-K if -F '#{@pane-is-vim}' 'send-keys C-S-k' 'resize-pane -U 2'
+bind -n C-S-L if -F '#{@pane-is-vim}' 'send-keys C-S-l' 'resize-pane -R 2'
 bind -n C-S-Left  if -F '#{@pane-is-vim}' 'send-keys C-S-Left'  'resize-pane -L 2'
 bind -n C-S-Down  if -F '#{@pane-is-vim}' 'send-keys C-S-Down'  'resize-pane -D 2'
 bind -n C-S-Up    if -F '#{@pane-is-vim}' 'send-keys C-S-Up'    'resize-pane -U 2'
@@ -634,10 +641,21 @@ bind -T copy-mode-vi M-p run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/script
 # chords.
 bind -n C-S-u run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GLYPH_PADDING=0,2,0,2 "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Glyph Picker\" --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"'
 bind -n C-S-g run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GITMOJI_PADDING=0,2,0,2 "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Gitmoji Picker\" --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"'
-# Uppercase twins: WezTerm folds shift into the letter for ctrl+shift chords
-# (arrives as C-U / C-G — same finding as the resize binds above).
+# THREE SPELLINGS PER CHORD — the terminals disagree about where Shift goes
+# and tmux believes them, the same lesson the MEH block above records
+# (measured through a real client, 2026-07-28):
+#   kitty form   CSI 117;6u / CSI 27;6;117~  (shift bit, UNshifted codepoint)
+#                -> tmux calls it C-S-u   (bound above)
+#   WezTerm      folds shift into the letter, no shift bit
+#                -> tmux calls it C-U     (below)
+#   Ghostty      CSI 27;6;85~ (shift bit AND the SHIFTED codepoint 'U')
+#                -> tmux calls it C-S-U   (below)
+# Only the first two were bound, so both pickers were dead in Ghostty while
+# working everywhere else.
 bind -n C-U run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GLYPH_PADDING=0,2,0,2 "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Glyph Picker\" --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"'
 bind -n C-G run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GITMOJI_PADDING=0,2,0,2 "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Gitmoji Picker\" --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"'
+bind -n C-S-U run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GLYPH_PADDING=0,2,0,2 "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Glyph Picker\" --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"'
+bind -n C-S-G run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GITMOJI_PADDING=0,2,0,2 "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Gitmoji Picker\" --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"'
 
 # ---------------------------------------------------------------------------
 # Quick-launch (Phase 3) — pickers in popups, dispatch via the ql_tx_* twins.

@@ -39,6 +39,32 @@ Describe 'tmux keymap tables'
     The output should include "copy-pwd"
   End
 
+  # Three spellings per ctrl+shift chord, because the terminals disagree about
+  # where Shift goes and tmux believes them (the same lesson the MEH block
+  # learned): WezTerm folds shift into the letter (C-U), Ghostty sends the
+  # shift bit AND the shifted codepoint (C-S-U), kitty sends the shift bit
+  # with the unshifted one (C-S-u). Only two were bound, so the pickers were
+  # dead in Ghostty.
+  It 'binds every ctrl+shift spelling the terminals emit for the pickers'
+    When call keys root
+    The output should include "C-S-u"
+    The output should include "C-U"
+    The output should include "C-S-U"
+    The output should include "C-S-g"
+    The output should include "C-G"
+    The output should include "C-S-G"
+  End
+
+  It 'binds every ctrl+shift spelling for the resize chords too'
+    # Same three-spelling rule as the pickers — resize was dead in Ghostty
+    # for exactly the same reason.
+    When call keys root
+    The output should include "C-S-H"
+    The output should include "C-S-J"
+    The output should include "C-S-K"
+    The output should include "C-S-L"
+  End
+
   It 'binds the Phase 2 picker and rename popups'
     When call tmux -L kmspec list-keys
     The output should include "pick-glyph"
