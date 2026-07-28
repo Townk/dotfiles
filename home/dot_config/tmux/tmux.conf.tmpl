@@ -77,6 +77,31 @@ set -g base-index 1                # zellij tabs are 1-based; keymap number jump
 setw -g pane-base-index 1
 set -g renumber-windows on         # closing a window renumbers the rest, like zellij tabs
 
+# Window name = what the app CALLS itself, when it says anything (zj-hud
+# compose_body priority 2: `pane_osc_title(...) ?? process name`). Agents
+# publish their session and their progress through OSC 0/2, which tmux
+# records in #{pane_title} — it just never named windows after it, so a
+# claude/cursor session read as "node" and never moved.
+#
+# Put in automatic-rename-format rather than in the pill: tmux re-evaluates
+# this as the title changes and renames the window (measured: a new title
+# lands in #{window_name} in ~1s and fires window-renamed, which redraws the
+# status). Reading #{pane_title} in the pill instead would only repaint on
+# status-interval — up to 10s late for a progress counter.
+#
+# Three guards, all of them load-bearing (zj-hud's pane_osc_title):
+#   * empty                     — nothing to show
+#   * == the hostname           — tmux SEEDS pane_title with it, so every
+#                                 idle shell would wear the machine name
+#   * == the process name       — no new information; keep the process name
+#                                 so the icon lookup and the shell branch
+#                                 below keep working
+# `#{host}` and `#{host_short}` are both checked: which one a pane's seed
+# matches depends on the terminal that opened it.
+%hidden win_osc_title="#{?#{&&:#{!=:#{pane_title},},#{&&:#{!=:#{pane_title},#{host}},#{&&:#{!=:#{pane_title},#{host_short}},#{!=:#{pane_title},#{pane_current_command}}}}},#{pane_title},#{pane_current_command}}"
+# The copy-mode / dead-pane markers are tmux's own default format, kept.
+setw -g automatic-rename-format "#{?pane_in_mode,[tmux],$win_osc_title}#{?pane_dead,[dead],}"
+
 # Refresh these into a session's environment on attach: tmux overrides the
 # PANE env (TERM_PROGRAM=tmux), so the session env is the only truthful
 # record of the outer terminal — image-protocol-support.zsh and yazi both

@@ -13,3 +13,47 @@
 # Keep in sync with mux::default_backend's fallback in
 # home/dot_local/lib/mux.zsh — tests/mux_autostart_spec.sh pins the two together.
 muxBackend: tmux
+
+# Per-process tab icons — the tmux half of zj-hud's icons::process_icon
+# (src/shared/icons.rs). The pill shows the icon for the window's foreground
+# command; anything unlisted falls back to the generic run glyph, exactly as
+# the plugin's `unwrap_or_else(tab_process)` does.
+#
+# Keys are matched against #{pane_current_command}, so they are process
+# BASENAMES. A command that runs under an interpreter reports the
+# interpreter (a node-based CLI is "node"), which is why node has an entry
+# of its own — the window NAME still comes from the app's OSC title.
+#
+# Ported 1:1 from the plugin so both bars speak the same glyph vocabulary;
+# Phase 8 is where the two stop being separate lists.
+muxTabIcons:
+  agent: "\U0010FB00"
+  cursor-agent: "\U0010FB00"
+  claude: "\U0010E861"
+  pi: "\U0010FB02"
+  pi-coding-agent: "\U0010FB02"
+  nvim: ""
+  vim: ""
+  git: ""
+  gh: ""
+  lazygit: ""
+  docker: ""
+  docker-compose: ""
+  kubectl: ""
+  kuberlr: ""
+  lazydocker: ""
+  node: ""
+  go: ""
+  cargo: ""
+  lua: ""
+  ruby: ""
+  make: ""
+  brew: "\U000F007B"
+  pacman: "\U000F0BAF"
+  paru: "\U000F0BAF"
+  htop: "\U000F0531"
+  btop: "\U000F0531"
+  psql: ""
+  curl: ""
+  wget: ""
+  sudo: "\U000F0292"

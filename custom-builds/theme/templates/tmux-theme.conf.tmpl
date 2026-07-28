@@ -31,7 +31,17 @@ set -g status-style "bg=#{{ index $p $r.ui.bg }},fg=#{{ index $p $r.ui.fg_dim }}
 # attention yellow). Composed into window-status-format by status.conf.
 %hidden win_alarm="#{?window_activity_flag, #[fg=#{{ index $p $r.action.attention }}]󰂞,#{?window_silence_flag, #[fg=#{{ index $p $r.action.attention }}]󰂠,#{?#{||:#{==:#{monitor-activity},on},#{!=:#{monitor-silence},0}}, ,}}}"
 %hidden win_extras="#{?window_zoomed_flag, 󰖯,}#{?#{==:#{synchronize-panes},on}, ,}$win_alarm"
-%hidden win_body="#{?#{automatic-rename},#{?#{||:#{==:#{pane_current_command},zsh},#{==:#{pane_current_command},bash}},#{?#{==:#{pane_current_path},{{ .chezmoi.homeDir }}},󰋜 ~,󰝰 #{=|-28|…:#{s|^{{ .chezmoi.homeDir }}|~|:#{pane_current_path}}}},󰜎 #W},#{?#{@win_icon},#{@win_icon} #W,󰓩 #W}}"
+{{/* Per-process icon, generated from .muxTabIcons — the tmux half of
+     zj-hud's icons::process_icon. A nested #{?} chain rather than a #()
+     lookup: the pill is expanded for every window on every redraw, and a
+     format costs nothing where a fork would cost one process per window.
+     Unlisted commands fall through to the generic run glyph. */ -}}
+{{- $icon := "󰜎" -}}
+{{- range $proc, $glyph := .muxTabIcons -}}
+{{- $icon = printf "#{?#{==:#{pane_current_command},%s},%s,%s}" $proc $glyph $icon -}}
+{{- end -}}
+%hidden win_proc_icon="{{ $icon }}"
+%hidden win_body="#{?#{automatic-rename},#{?#{||:#{==:#{pane_current_command},zsh},#{==:#{pane_current_command},bash}},#{?#{==:#{pane_current_path},{{ .chezmoi.homeDir }}},󰋜 ~,󰝰 #{=|-28|…:#{s|^{{ .chezmoi.homeDir }}|~|:#{pane_current_path}}}},$win_proc_icon #W},#{?#{@win_icon},#{@win_icon} #W,󰓩 #W}}"
 %hidden win_pill="#[bold,bg=#{{ $p.tab.bg }},fg=#{{ $p.tab.fg }}] #I $win_body$win_extras #[bg=#{{ index $p $r.ui.bg }},fg=#{{ $p.tab.bg }}]▌"
 %hidden win_pill_current="#[bold,bg=#{{ $p.tab.active_bg }},fg=#{{ $p.tab.active_fg }}] #I $win_body$win_extras #[bg=#{{ index $p $r.ui.bg }},fg=#{{ $p.tab.active_bg }}]▌"
 # Reassemble these here as well as in status.conf: theme-apply live-reloads
