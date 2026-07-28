@@ -17,7 +17,10 @@
 # Runs from WezTerm's GUI environment, so it sets a sane PATH up front (lsof,
 # ps, file, git, zellij, tmux, nvim, yazi may otherwise be missing).
 set -uo pipefail
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# User-managed tools must precede the fixed GUI-safe fallback paths. On the dev
+# shell fzf and tmux come from mise; hiding fzf aborted while sourcing mux.zsh,
+# and selecting the older system tmux made its newer server exit the request.
+export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/mise/shims:$HOME/.local/bin${PATH:+:$PATH}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 pid="${1:-}"
 uri="${2:-}"

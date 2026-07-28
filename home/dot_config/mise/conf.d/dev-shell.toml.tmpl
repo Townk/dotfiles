@@ -12,7 +12,8 @@
   Names that resolve in mise's registry are used bare; the rest pin an
   explicit backend — aqua: (curated registry) for tools it covers, else
   github: (the successor to the now-deprecated ubi backend) straight off
-  GitHub releases, or cargo: when there's no usable release asset.
+  GitHub releases, http: for binaries hosted elsewhere, or cargo: when
+  there's no usable release asset.
   `[exe=...]` overrides the installed binary name when it differs from
   the repo name.
 */ -}}
@@ -26,9 +27,10 @@ use_versions_host = false
 [tools]
 # Registry-resolved (prebuilt binaries)
 "zellij" = "latest"
-# Second mux backend (aqua:tmux/tmux-builds static binaries). D1 sixel gate
-# still applies on this box — run custom-builds/tmux/verify-sixel.sh live.
-"tmux" = "latest"
+# Build tmux locally because upstream publishes source only and the Aqua
+# binaries omit native Sixel support. The asdf backend compiles the pinned
+# release and owns the resulting mise shim.
+"asdf:mise-plugins/mise-tmux" = { version = "3.7b", install_env = { TMUX_EXTRA_CONFIGURE_OPTIONS = "--enable-sixel" } }
 "neovim" = "latest"
 "bat" = "latest"
 "eza" = "latest"
@@ -73,6 +75,10 @@ use_versions_host = false
 # alt-page-up), which made TAB-completion error out. Pin the backend so
 # we always get current upstream.
 "github:junegunn/fzf" = "latest"
+
+# Upstream's GitHub release only contains source. Install the official static
+# binary directly; Ubuntu 22.04's chafa package is too old for tmux passthrough.
+"http:chafa" = { version = "1.18.2", url = "https://hpjansson.org/chafa/releases/static/chafa-{{`{{ version }}`}}-1-x86_64-linux-gnu.tar.gz", checksum = "sha256:deb149bc8823589f635f24db3ecc83b7daa86e4c20d8a9f58e9ce53bd97bdda9" }
 
 # Not in the registry — pinned to a GitHub-release backend.
 "aqua:dalance/procs" = "latest"

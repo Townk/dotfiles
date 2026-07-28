@@ -5,8 +5,10 @@
 #   quick-launch-window <session> -- <cmd> [args...]
 #       Open: if a WezTerm window is already attached to <session>, focus it;
 #       else spawn a new window running <cmd…>.
-#   quick-launch-window --new <session> -- <cmd> [args...]
+#   quick-launch-window --new [--tint <name>] <session> -- <cmd> [args...]
 #       Always spawn a new window, skipping WezTerm's session-focus lookup.
+#       --tint explicitly selects a generated palette color for commands whose
+#       remote destination is hidden behind a wrapper.
 #   quick-launch-window --focus <session>
 #       Focus only: focus the window attached to <session> (exit 0), else exit
 #       3 so the caller can fall back (e.g. switch the session in place).
@@ -72,7 +74,11 @@ ghostty_terminal_tint() {
   REPLY=""
   [[ -r "$lib" ]] || return 0
   source "$lib" || return 0
-  name="$(tl_classify_command "${(j: :)cmd}")" || return 0
+  if [[ -n "$TINT_NAME" ]]; then
+    name="$TINT_NAME"
+  else
+    name="$(tl_classify_command "${(j: :)cmd}")" || return 0
+  fi
   hex="$(tl_hex_for_colorname "$name")" || return 0
   [[ "$hex" =~ '^#[[:xdigit:]]{6}$' ]] || return 0
   REPLY="$hex"
@@ -128,6 +134,7 @@ APPLESCRIPT
 
 # Argument parsing → MODE (open|focus), KEY (session), and (open) the cmd array.
 FORCE_NEW=0
+TINT_NAME=""
 if [[ "${1:-}" == "--focus" ]]; then
   MODE=focus
   KEY="${2:-}"
@@ -137,12 +144,22 @@ if [[ "${1:-}" == "--focus" ]]; then
   }
 else
   MODE=open
-  if [[ "${1:-}" == "--new" ]]; then
-    FORCE_NEW=1
-    shift
-  fi
+  while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+      --new) FORCE_NEW=1; shift ;;
+      --tint)
+        [[ -n "${2:-}" ]] || {
+          print -ru2 -- "$0: --tint requires a palette color name"
+          exit 2
+        }
+        TINT_NAME="$2"
+        shift 2
+        ;;
+      *) break ;;
+    esac
+  done
   if [[ $# -lt 3 || "$2" != "--" ]]; then
-    print -ru2 -- "usage: $0 [--new] <session> -- <cmd> [args...]"
+    print -ru2 -- "usage: $0 [--new] [--tint <name>] <session> -- <cmd> [args...]"
     exit 2
   fi
   KEY=$1

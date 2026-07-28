@@ -34,7 +34,7 @@ EOF
     source home/dot_config/mux/scripts/lib/command.zsh
     source home/dot_config/mux/scripts/lib/dispatch.zsh
     source home/dot_config/mux/scripts/lib/dispatch-tmux.zsh
-    QL_JSON='{"panes":[{"id":"logs","name":"Logs","direction":"down","action":{"type":"Run","args":["tail","-f","/tmp/x"]}}],"tabs":[{"id":"dev","name":"Dev","action":{"type":"Shell"}}],"workspaces":[{"id":"proj","name":"Proj","tabs":[{"id":"t1","name":"Edit","action":{"type":"Shell"}}]},{"id":"remote","name":"Remote","nested_mux":true,"action":{"type":"Remote","args":["box"]}}]}'
+    QL_JSON='{"panes":[{"id":"logs","name":"Logs","direction":"down","action":{"type":"Run","args":["tail","-f","/tmp/x"]}}],"tabs":[{"id":"dev","name":"Dev","action":{"type":"Shell"}}],"workspaces":[{"id":"proj","name":"Proj","tabs":[{"id":"t1","name":"Edit","action":{"type":"Shell"}}]},{"id":"remote","name":"Remote","color":"blue","nested_mux":true,"action":{"type":"Remote","args":["box"]}}]}'
   }
   cleanup() { rm -rf "$TEST_TMP"; unset MUX_TMUX_BIN STUB_SESSIONS SCRIPT_DIR; }
   BeforeEach 'setup'
@@ -84,7 +84,7 @@ EOF
 
   It 'opens a nested workspace directly without an outer tmux session'
     When call ql_dispatch_window remote
-    The contents of file "$WINDOW_LOG" should include "--new Remote --"
+    The contents of file "$WINDOW_LOG" should include "--new --tint blue Remote --"
     The contents of file "$WINDOW_LOG" should include "ssh box"
     The contents of file "$WINDOW_LOG" should not include "attach"
     The contents of file "$TX_LOG" should not include "new-session"
@@ -137,7 +137,7 @@ slot-aaaaaa:
   profile: personal
   kind: human
 EOF
-    printf 'cyan = "#112233"\ngrey = "#333333"\n' \
+    printf 'cyan = "#112233"\nblue = "#223344"\ngrey = "#333333"\n' \
       >"$TERMINAL_LOCATION_TINT_PALETTE"
     unset SSH_CONNECTION SSH_CLIENT GHOSTTY_RESOURCES_DIR WEZTERM_UNIX_SOCKET
   }
@@ -165,6 +165,13 @@ EOF
     The contents of file "$OSASCRIPT_LOG" should include "ssh"
     The contents of file "$OSASCRIPT_LOG" should include "box"
     The contents of file "$OSASCRIPT_LOG" should not include "Ghostty.app --args -e"
+    The status should be success
+  End
+
+  It 'honors an explicit tint when the command hides its destination'
+    When call zsh home/dot_config/mux/scripts/executable_quick-launch-window \
+      --new --tint blue Target -- wrapper connect
+    The contents of file "$OSASCRIPT_LOG" should include "#223344"
     The status should be success
   End
 

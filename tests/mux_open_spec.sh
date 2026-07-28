@@ -23,6 +23,7 @@ Describe 'mux-open'
     MO_TMP=$(mktemp -d)
     MO_SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_mux-open"
     export HOME="$MO_TMP/home"
+    export XDG_DATA_HOME="$HOME/.local/share"
     mkdir -p "$HOME/.local/bin" "$HOME/.local/lib"
     # Stub the system opener so a non-file scheme cannot reach a real browser.
     { echo '#!/bin/sh'; echo 'echo "OPEN: $*" >>"'"$MO_TMP"'/opened"'; } >"$HOME/.local/bin/open"
@@ -32,7 +33,10 @@ Describe 'mux-open'
     cat >"$HOME/.local/lib/mux.zsh" <<EOS
 mux::backend_for_pid() { echo "probed:\$1" >>"$MO_TMP/probed"; print -r -- none }
 mux::resolve_session() { print -r -- "" }
-mux::new_tab() { print -r -- "NEW_TAB: \$*" >>"$MO_TMP/tabs" }
+mux::new_tab() {
+  print -r -- "NEW_TAB: \$*" >>"$MO_TMP/tabs"
+  print -r -- "\$PATH" >>"$MO_TMP/path"
+}
 EOS
   }
   cleanup() { [ -n "$MO_TMP" ] && rm -rf "$MO_TMP"; }
@@ -42,6 +46,8 @@ EOS
   opened() { cat "$MO_TMP/opened" 2>/dev/null; }
   tabs()   { cat "$MO_TMP/tabs" 2>/dev/null; }
   probed() { cat "$MO_TMP/probed" 2>/dev/null; }
+  path_seen() { cat "$MO_TMP/path" 2>/dev/null; }
+  path_first() { cut -d: -f1 "$MO_TMP/path" 2>/dev/null; }
 
   Describe 'scheme dispatch'
     # Once Ghostty's own link handling is off (mouse-shift-capture = always),
@@ -111,6 +117,16 @@ EOS
       mkdir -p "$MO_TMP/adir"
       When run zsh "$MO_SCRIPT" 77 "file://$MO_TMP/adir"
       The result of function probed should include "probed:77"
+    End
+
+    It 'keeps tool-manager paths supplied by the caller'
+      export MUX_BACKEND=tmux MUX_SESSION=Main
+      export PATH="$MO_TMP/tool-shims:$PATH"
+      mkdir -p "$MO_TMP/adir"
+      When run zsh "$MO_SCRIPT" 0 "file://$MO_TMP/adir"
+      The result of function path_seen should include "$MO_TMP/tool-shims"
+      The result of function path_first should equal "$HOME/.local/share/mise/shims"
+      The status should be success
     End
   End
 End

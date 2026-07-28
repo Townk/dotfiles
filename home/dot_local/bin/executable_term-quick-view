@@ -27,7 +27,7 @@ file="${1:-}"
 [[ -n "$file" && -e "$file" ]] || exit 0
 file="${file:A}"
 
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/mise/shims:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 if [[ "$_mode" == view ]]; then
   source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
@@ -94,9 +94,15 @@ if [[ -z "${TERM_QUICK_VIEW_ARGS:-}" ]]; then
   [[ -n "${TMUX:-}" ]] && _outer="$(tmux display -p '#{client_termname}' 2>/dev/null)"
   if [[ "$_outer" == *ghostty* ]]; then
     if [[ -n "${TMUX:-}" ]]; then
-      TERM_QUICK_VIEW_ARGS="-f kitty --passthrough tmux"
+      # Chafa added tmux passthrough in 1.14. A stale system Chafa must not
+      # turn an otherwise usable preview into a blank pane.
+      if chafa --help 2>&1 | command grep -q -- '--passthrough'; then
+        TERM_QUICK_VIEW_ARGS="-f kitty --passthrough tmux"
+      else
+        TERM_QUICK_VIEW_ARGS="-f symbols"
+      fi
     else
-      TERM_QUICK_VIEW_ARGS="-f kitty --passthrough none"
+      TERM_QUICK_VIEW_ARGS="-f kitty"
     fi
   fi
 fi
@@ -273,6 +279,7 @@ fi
 _dims="$(sips -g pixelWidth -g pixelHeight "$file" 2>/dev/null |
   awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{ if (w && h) printf "%dx%d", w, h }')"
 [[ -n "$_dims" ]] || _dims="$(magick identify -format '%wx%h' "$file" 2>/dev/null)" || _dims=""
+[[ -n "$_dims" ]] || _dims="$(identify -format '%wx%h' "$file" 2>/dev/null)" || _dims=""
 
 {
   # header on the second row: name left, size + dimensions right

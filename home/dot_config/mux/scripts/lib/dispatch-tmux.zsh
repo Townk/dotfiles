@@ -259,8 +259,11 @@ ql_tx_open_workspace() {
 # after `--` is backend-provided; its zellij --focus fast-path is skipped —
 # Phase 6 rewires it onto mux::client_sessions).
 ql_tx_open_workspace_window() {
-  local ws="$1" sname win action cmd
+  local ws="$1" sname win action cmd tint
+  local -a tint_args=()
   sname="$(jq -r '.name // .id' <<<"$ws")"
+  tint="$(jq -r '.color // empty' <<<"$ws")"
+  [[ -n "$tint" ]] && tint_args=(--tint "$tint")
   win="${SCRIPT_DIR:-${${(%):-%x}:A:h:h}}/quick-launch-window"
 
   if ql_workspace_is_nested "$ws"; then
@@ -275,7 +278,7 @@ ql_tx_open_workspace_window() {
       echo "quick-launch: nested workspace '$sname' has no command" >&2
       return 1
     }
-    "$win" --new "$sname" -- "$SHELL" -c "$cmd"
+    "$win" --new "${tint_args[@]}" "$sname" -- "$SHELL" -c "$cmd"
     return $?
   fi
 

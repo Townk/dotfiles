@@ -297,9 +297,25 @@ autoload -Uz zmv
 # the aliases that point at these functions resolve.
 source ~/.config/zsh/functions.sh
 
-# Re-export every abbreviation as a real alias so abbreviation usage is
-# syntax-highlighted even when it isn't the first word on the line.
-eval "$(abbr export-aliases)"
+# Mirror the already-loaded abbreviation maps into real aliases so syntax
+# highlighting sees them even when they are not the first word on the line.
+# Do this in-memory: `abbr export-aliases` acquires zsh-abbr's cross-session
+# job queue on every shell startup. tmux starts and tears down shells close
+# together, and a shell killed while exporting leaves a stale queue job that
+# reports a timeout on a later login.
+for _abbr_name in ${(iko)ABBR_GLOBAL_USER_ABBREVIATIONS}; do
+  alias -g -- "${(Q)_abbr_name}=${(Q)ABBR_GLOBAL_USER_ABBREVIATIONS[$_abbr_name]}"
+done
+for _abbr_name in ${(iko)ABBR_REGULAR_USER_ABBREVIATIONS}; do
+  alias -- "${(Q)_abbr_name}=${(Q)ABBR_REGULAR_USER_ABBREVIATIONS[$_abbr_name]}"
+done
+for _abbr_name in ${(iko)ABBR_GLOBAL_SESSION_ABBREVIATIONS}; do
+  alias -g -- "${(Q)_abbr_name}=${(Q)ABBR_GLOBAL_SESSION_ABBREVIATIONS[$_abbr_name]}"
+done
+for _abbr_name in ${(iko)ABBR_REGULAR_SESSION_ABBREVIATIONS}; do
+  alias -- "${(Q)_abbr_name}=${(Q)ABBR_REGULAR_SESSION_ABBREVIATIONS[$_abbr_name]}"
+done
+unset _abbr_name
 # Then load my aliases, which may override anything from the abbreviations.
 source ~/.config/zsh/aliases.sh
 
