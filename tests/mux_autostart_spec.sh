@@ -6,14 +6,19 @@
 # would need to fix it. It is also unusually hard to test, because the block
 # ends in `exec` and hard-codes absolute binary paths.
 #
-# The technique: extract the block VERBATIM from the rendered .zshrc, rewrite
-# only the two binary-search lists to point at a stub, and let it exec into
-# that stub — which prints the argv it was launched with instead of starting a
-# multiplexer. So each case asserts on the real command the real block builds.
+# The technique: extract the block VERBATIM from the rendered .zshrc, source
+# the shim it now calls, and let it exec into a stub multiplexer — which prints
+# the argv it was launched with instead of starting anything. So each case
+# asserts on the real command the real block builds.
 #
-# Rewriting the lists is line-scoped on purpose. A `${block//for _tmux in *; do/}`
-# pattern looks right and is not: zsh's `*` matches across newlines, so it
-# swallows the whole loop body and silently tests nothing.
+# The stub is injected through $MUX_TMUX_BIN / $ZELLIJ_BIN, the backends' own
+# documented binary-override seams, so nothing in the block's source is
+# rewritten except the baked default. Before the launch moved behind mux::*,
+# this had to line-edit the two hard-coded binary-search loops out of the
+# block — a rewrite that was easy to get subtly wrong (a
+# `${block//for _tmux in *; do/}` pattern looks right and is not: zsh's `*`
+# matches across newlines, so it swallows the loop body and silently tests
+# nothing).
 #
 # The three-way "Main" reuse dance (absent / idle / has-a-client) is asserted
 # on BOTH backends. Mirroring it was the point of the phase — the knob is meant
@@ -31,6 +36,9 @@ Describe 'zshrc mux autostart'
     # indistinguishable from $1/$2 alone.
     cat >"$AS_TMP/mux" <<'EOS'
 #!/usr/bin/env zsh
+# Log every invocation next to the stub, so a case can assert on the PROBES
+# the shim made and not only on the command it finally exec'd.
+print -r -- "$*" >>"${0:h}/argv.log"
 case "$*" in
   "has-session -t=Main")  [[ "$CASE" == none ]] && exit 1 || exit 0 ;;
   "list-clients -t=Main") [[ "$CASE" == attached ]] && print -r -- "/dev/ttys00 ..." ; exit 0 ;;
@@ -66,7 +74,8 @@ EOS
   # command it execs. Also drops the recency-seed verdict in $AS_TMP/seeded.
   launch() {
     _bk=$1 _case=$2 _pin=${3-}
-    rm -rf "$AS_TMP/cfg" "$AS_TMP/cache"; mkdir -p "$AS_TMP/cfg/mux"
+    rm -rf "$AS_TMP/cfg" "$AS_TMP/cache"; rm -f "$AS_TMP/argv.log"
+    mkdir -p "$AS_TMP/cfg/mux"
     [ -n "$_pin" ] && print -r -- "$_pin" >"$AS_TMP/cfg/mux/backend"
     {
       print -r -- '_zsh_should_autoattach_mux() { return 0 }'
@@ -74,13 +83,16 @@ EOS
       # so it does not glue itself onto the captured line.
       print -r -- 'SSH_CONNECTION='
       print -r -- "XDG_CACHE_HOME=$AS_TMP/cache"
+      # Also points _mux_zj_ensure_plugins at an empty tree, so a zellij case
+      # cannot reach into the real ~/.config and fetch plugin wasms.
       print -r -- "XDG_CONFIG_HOME=$AS_TMP/cfg"
+      # Both backends resolve their binary through these seams, so the block
+      # execs into the stub with none of its own source rewritten.
+      print -r -- "MUX_TMUX_BIN=$AS_TMP/mux"
+      print -r -- "ZELLIJ_BIN=$AS_TMP/mux"
+      print -r -- "source $PWD/home/dot_local/lib/mux-bootstrap.zsh"
       awk '/^if _zsh_should_autoattach_mux; then$/,/^unset -f _zsh_should_autoattach_mux/' "$AS_TMP/zshrc" \
-        | awk -v stub="$AS_TMP/mux" '
-            /for _tmux in /   { print "    for _tmux in \"" stub "\"; do";   next }
-            /for _zellij in / { print "    for _zellij in \"" stub "\"; do"; next }
-                              { print }' \
-        | sed -E "s/_mux_backend=\"(zellij|tmux)\"/_mux_backend=\"$_bk\"/"
+        | sed -E "s/mux::default_backend (zellij|tmux)/mux::default_backend $_bk/"
     } >"$AS_TMP/case.zsh"
     CASE=$_case zsh "$AS_TMP/case.zsh" 2>&1 | grep '^EXEC:'
     if [ -s "$AS_TMP/cache/quick-launch/usage-workspace" ]; then
@@ -110,11 +122,12 @@ EOS
     End
 
     # `-t=` is an exact match. A bare `-t Main` prefix-matches, so a session
-    # called "Main2" would answer for "Main".
+    # called "Main2" would answer for "Main". Asserted on the probe the stub
+    # actually received, since the anchoring now lives in the tmux backend.
     It 'anchors the session lookup exactly'
       When call launch tmux none
       The output should include '-s Main'
-      The contents of file "$AS_TMP/case.zsh" should include 'has-session -t=Main'
+      The contents of file "$AS_TMP/argv.log" should include 'has-session -t=Main'
     End
   End
 

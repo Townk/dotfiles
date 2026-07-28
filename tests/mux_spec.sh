@@ -1009,6 +1009,111 @@ Describe 'mux-bootstrap.zsh — flavor boundary'
   End
 End
 
+Describe 'mux-bootstrap.zsh — mux::in_session'
+  Include home/dot_local/lib/mux-bootstrap.zsh
+
+  It 'is true inside zellij'
+    export ZELLIJ=1
+    unset TMUX
+    When call mux::in_session
+    The status should be success
+  End
+
+  It 'is true inside tmux'
+    unset ZELLIJ
+    export TMUX=/tmp/sock,1,0
+    When call mux::in_session
+    The status should be success
+  End
+
+  It 'is false outside any session'
+    unset ZELLIJ TMUX MUX_BACKEND
+    When call mux::in_session
+    The status should be failure
+  End
+
+  # Why this is not `[[ "$(mux::backend)" != none ]]`: mux-open exports
+  # MUX_BACKEND from the terminal's GUI, where no session exists. Reading that
+  # as "already nested" would make .zshrc's autostart gate decline to launch a
+  # multiplexer at all, leaving the terminal with a bare shell.
+  It 'is false when only MUX_BACKEND is pinned'
+    unset ZELLIJ TMUX
+    export MUX_BACKEND=tmux
+    When call mux::in_session
+    The status should be failure
+  End
+End
+
+Describe 'mux-bootstrap.zsh — mux::default_backend fallback argument'
+  Include home/dot_local/lib/mux-bootstrap.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    export XDG_CONFIG_HOME="$TEST_TMP"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # .zshrc passes chezmoi's .muxBackend here, which is what keeps the data file
+  # the single source of the baked default instead of a second copy of it.
+  It 'takes the caller fallback when no loose pin exists'
+    When call mux::default_backend zellij
+    The output should equal "zellij"
+  End
+
+  It 'lets the loose pin beat the caller fallback'
+    mkdir -p "$XDG_CONFIG_HOME/mux"
+    print -r -- tmux >"$XDG_CONFIG_HOME/mux/backend"
+    When call mux::default_backend zellij
+    The output should equal "tmux"
+  End
+
+  It 'ignores an unrecognised fallback rather than obeying it'
+    When call mux::default_backend nonsense
+    The output should equal "tmux"
+  End
+End
+
+# .zshrc's autostart runs BEFORE it extends $PATH and before mise activates,
+# so the backends must find their binary unaided. That property is precisely
+# what let the launch dance move behind mux::*; without it the block would
+# still need to carry its own hard-coded search loops.
+Describe 'mux-bootstrap.zsh — binary resolution without $PATH'
+  Include home/dot_local/lib/mux-bootstrap.zsh
+
+  setup() { unset MUX_TMUX_BIN ZELLIJ_BIN; }
+  BeforeEach 'setup'
+
+  # Subshell bodies: the PATH change must not leak into the example.
+  tx_no_path() ( PATH=/nonexistent; _mux_tx_bin )
+  zj_no_path() ( PATH=/nonexistent; _mux_zj_bin )
+
+  no_tmux() { [[ ! -x /opt/homebrew/bin/tmux && ! -x /usr/local/bin/tmux && ! -x /usr/bin/tmux ]]; }
+  no_zellij() { [[ ! -x /opt/homebrew/bin/zellij && ! -x /usr/local/bin/zellij ]]; }
+
+  It 'finds tmux at a known install location'
+    Skip if 'tmux is not installed where the shim looks' no_tmux
+    When call tx_no_path
+    The output should start with "/"
+    The status should be success
+  End
+
+  It 'finds zellij at a known install location'
+    Skip if 'zellij is not installed where the shim looks' no_zellij
+    When call zj_no_path
+    The output should start with "/"
+    The status should be success
+  End
+
+  # The override seam the specs inject stubs through still wins over both.
+  It 'honours the explicit binary override'
+    export MUX_TMUX_BIN=/some/stub/tmux
+    When call tx_no_path
+    The output should equal "/some/stub/tmux"
+  End
+End
+
 Describe 'mux.zsh — full flavor still exposes everything'
   Include home/dot_local/lib/mux.zsh
 

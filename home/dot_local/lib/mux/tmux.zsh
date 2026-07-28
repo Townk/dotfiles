@@ -6,7 +6,21 @@
 # inline under tmux — same UX as the no-mux path). MUX_TMUX_BIN overrides
 # the binary (test seam, mirroring ZELLIJ_BIN on the zellij side).
 
-_mux_tx_bin() { print -r -- "${MUX_TMUX_BIN:-tmux}"; }
+# _mux_tx_bin — the tmux binary, or non-zero when there is none. $PATH first,
+# then the known install locations: .zshrc's autostart calls this BEFORE it
+# extends $PATH and before mise activates (both happen further down the file),
+# so at that point a login $PATH may not carry tmux at all. In-session callers
+# hit the $PATH branch and never walk the list.
+_mux_tx_bin() {
+  [[ -n "${MUX_TMUX_BIN:-}" ]] && { print -r -- "$MUX_TMUX_BIN"; return; }
+  local b
+  b=$(command -v tmux 2>/dev/null) && { print -r -- "$b"; return; }
+  for b in /opt/homebrew/bin/tmux /usr/local/bin/tmux \
+    "$HOME/.local/share/mise/shims/tmux" "$HOME/.local/bin/tmux" /usr/bin/tmux; do
+    [[ -x "$b" ]] && { print -r -- "$b"; return; }
+  done
+  return 1
+}
 
 # _mux_tx_run <tmux args...> — invoke this backend's server. The socket
 # override is needed by out-of-session callers such as after-new-session hooks
@@ -27,6 +41,41 @@ _mux_tx_available() {
   # (zellij pass, 2026-07-27).
   [[ -n "${TMUX:-}" || "${MUX_BACKEND:-}" == tmux ]] || return 1
   command -v "$(_mux_tx_bin)" >/dev/null 2>&1
+}
+
+# --- autostart halves (spec §2, D17) ---------------------------------------
+# tmux tears a session down as soon as its last process exits, so there is no
+# EXITED record to sweep the way zellij needs — has-session is the entire
+# liveness test. `-t=` anchors an exact match; a bare `-t Main` prefix-matches,
+# so a session called "Main2" would answer for "Main".
+
+_mux_tx_session_state() {
+  local name="$1" bin
+  bin="$(_mux_tx_bin)" || return 1
+  "$bin" has-session -t="$name" 2>/dev/null || { print -r -- missing; return; }
+  if "$bin" list-clients -t="$name" 2>/dev/null | grep -q .; then
+    print -r -- busy
+  else
+    print -r -- idle
+  fi
+}
+
+_mux_tx_exec_attach() {
+  local bin
+  bin="$(_mux_tx_bin)" || return 1
+  exec "$bin" attach-session -t="$1"
+}
+
+_mux_tx_exec_new() {
+  local bin
+  bin="$(_mux_tx_bin)" || return 1
+  exec "$bin" new-session -s "$1"
+}
+
+_mux_tx_exec_anonymous() {
+  local bin
+  bin="$(_mux_tx_bin)" || return 1
+  exec "$bin" new-session
 }
 
 # _mux_tx_resolve_session [client_pid] — session of the given CLIENT pid

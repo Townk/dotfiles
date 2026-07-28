@@ -62,21 +62,37 @@ mux::available() {
   esac
 }
 
-# Knob (§2): the default backend for OUTSIDE-a-session launches. The loose,
-# untracked per-machine file wins (theme-override pattern). Runtime detection
-# above always beats this inside a session.
+# mux::in_session — true when this shell is running INSIDE a mux pane.
 #
-# The fallback below duplicates chezmoi's .muxBackend (home/.chezmoidata/mux.yaml),
-# which .zshrc's autostart bakes in directly — this file is sourced by tests
-# that Include it raw, so it cannot be a template. tests/mux_autostart_spec.sh
-# fails if the two drift: disagreeing halves show up as the picker thinking
-# you are on one backend while you are sitting in the other.
+# Deliberately NOT `[[ "$(mux::backend)" != none ]]`: mux::backend honours
+# $MUX_BACKEND, which callers outside any session export to say which mux they
+# want driven (mux-open, from the terminal's GUI). Such a shell is not nested,
+# and reading it as nested would make .zshrc's autostart gate refuse to launch
+# a multiplexer at all. This asks only the question the env vars can answer.
+mux::in_session() { [[ -n "${ZELLIJ:-}" || -n "${TMUX:-}" ]]; }
+
+# Knob (§2): the default backend for OUTSIDE-a-session launches, in priority
+# order — the loose, untracked per-machine file (theme-override pattern), then
+# the caller's baked default, then tmux. Runtime detection always beats this
+# inside a session.
+#
+# .zshrc's autostart passes chezmoi's .muxBackend (home/.chezmoidata/mux.yaml)
+# as the fallback, so the data file stays the single source of the baked
+# default and only ONE copy of the loose-pin parsing exists. This file is
+# sourced by tests that Include it raw, so it cannot be a template and cannot
+# read the chezmoi value itself; the no-argument literal below is the last
+# resort, and tests/mux_autostart_spec.sh pins it against the data file.
 mux::default_backend() {
   local f="${XDG_CONFIG_HOME:-$HOME/.config}/mux/backend" b=""
   [[ -r "$f" ]] && b="$(<"$f")"
   b="${b//[[:space:]]/}"
   case "$b" in
-    zellij | tmux) print -r -- "$b" ;;
+    zellij | tmux) print -r -- "$b"; return ;;
+  esac
+  # An unrecognised value in either place is IGNORED rather than obeyed: a typo
+  # must not leave the login shell with no multiplexer at all.
+  case "${1:-}" in
+    zellij | tmux) print -r -- "$1" ;;
     *) print -r -- tmux ;;
   esac
 }
@@ -98,6 +114,76 @@ mux::attached_sessions() {
   case "$(mux::backend)" in
     tmux) _mux_tx_attached_sessions ;;
     *) zellij_attached_sessions ;;
+  esac
+}
+
+# --- autostart (spec §2, D17) ----------------------------------------------
+#
+# The four verbs .zshrc's autostart needs, and the highest-consequence code
+# here: they run on every interactive shell, and a mistake locks the user out
+# of the terminal they would need to fix it.
+#
+# Split into a QUERY plus three EXEC verbs rather than one do-everything call,
+# for two reasons: the caller needs to act between the two (it records "Main"
+# in the quick-launch recency cache on the paths that land in Main, but not on
+# the anonymous one), and a single verb would have to re-probe the server to
+# rediscover what the query already established.
+#
+# The three-way reuse policy is the caller's; both backends merely implement
+# it. Keeping it mirrored is the whole point of the knob — it is meant to
+# change which mux starts, never how the system behaves.
+
+# _mux::launch_backend [backend] — which mux these verbs drive. The caller
+# resolves it ONCE via mux::default_backend and passes it to each verb, so the
+# loose pin file is read a single time per login rather than four times; an
+# omitted or unrecognised value resolves it here instead.
+_mux::launch_backend() {
+  case "${1:-}" in
+    zellij | tmux) print -r -- "$1" ;;
+    *) mux::default_backend ;;
+  esac
+}
+
+# mux::session_state <name> [backend] — missing | idle | busy.
+#   missing  no live session by that name (zellij: an EXITED record counts as
+#            missing, since it must be swept before a fresh one can be made)
+#   idle     the session is live with no client attached → reattach it
+#   busy     the session already has a client → the caller wants its own
+mux::session_state() {
+  [[ -n "${1:-}" ]] || return 2
+  case "$(_mux::launch_backend "${2:-}")" in
+    zellij) _mux_zj_session_state "$1" ;;
+    *) _mux_tx_session_state "$1" ;;
+  esac
+}
+
+# mux::exec_attach <name> [backend] — reattach a live, idle session.
+# mux::exec_new <name> [backend]    — create that session and attach to it.
+# mux::exec_anonymous [backend]     — create an unnamed session (so a second
+#                                     window gets its own mux, not a mirror).
+#
+# All three REPLACE the shell and do not return. Anything that must happen
+# first — the quick-launch recency seed — happens in the caller.
+mux::exec_attach() {
+  [[ -n "${1:-}" ]] || return 2
+  case "$(_mux::launch_backend "${2:-}")" in
+    zellij) _mux_zj_exec_attach "$1" ;;
+    *) _mux_tx_exec_attach "$1" ;;
+  esac
+}
+
+mux::exec_new() {
+  [[ -n "${1:-}" ]] || return 2
+  case "$(_mux::launch_backend "${2:-}")" in
+    zellij) _mux_zj_exec_new "$1" ;;
+    *) _mux_tx_exec_new "$1" ;;
+  esac
+}
+
+mux::exec_anonymous() {
+  case "$(_mux::launch_backend "${1:-}")" in
+    zellij) _mux_zj_exec_anonymous ;;
+    *) _mux_tx_exec_anonymous ;;
   esac
 }
 

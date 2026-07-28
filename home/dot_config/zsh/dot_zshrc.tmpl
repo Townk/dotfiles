@@ -28,13 +28,20 @@ if [[ -n "${MUX_INITIAL_COMMAND:-}" ]]; then
   exit $_mux_initial_status
 fi
 
+# The mux shim, in its BOOTSTRAP flavor: backend detection and the session /
+# pane query verbs, ~1.5ms, no external tools. Sourced this early because the
+# autostart below is one of its callers — the full mux.zsh cannot go here, as
+# pick-common runs `require_cmd fzf` at source time and die()s, which would
+# exit the login shell on a machine without fzf.
+source ~/.local/lib/mux-bootstrap.zsh
+
 _zsh_should_autoattach_mux() {
   # Cross-nesting guard (mux migration spec §2/D17, pulled forward in Phase 0):
-  # never autostart a multiplexer inside *either* mux's pane. tmux.conf scrubs
-  # the stale ZELLIJ* vars from pane envs (cross-mux hygiene), so without the
-  # $TMUX check a tmux pane's shell would pass the $ZELLIJ test and nest.
-  [[ -z "$ZELLIJ" ]] || return 1
-  [[ -z "$TMUX" ]] || return 1
+  # never autostart a multiplexer inside *either* mux's pane. mux::in_session
+  # tests $ZELLIJ and $TMUX both: tmux.conf scrubs the stale ZELLIJ* vars from
+  # pane envs (cross-mux hygiene), so a $ZELLIJ test alone would let a tmux
+  # pane's shell through and nest.
+  ! mux::in_session || return 1
   [[ -t 0 && -t 1 ]] || return 1
 
   # GUI helpers can launch interactive zsh at login without a real terminal.
@@ -75,10 +82,14 @@ source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-sy
 # healed forward (its heal then finds nothing to change and never re-arms); Stay
 # drops you into this (stale-forward) session. Colors come from the system
 # palette loaded just above (C_HEX_*), with named fallbacks. Gated to the
-# pre-attach login shell (ZELLIJ unset ⇒ once per connection; panes re-run .zshrc
-# with ZELLIJ set and skip) on a real TTY.
+# pre-attach login shell — mux::in_session false ⇒ once per connection; panes
+# re-run .zshrc inside a mux and skip — on a real TTY. That gate used to read
+# `-z "$ZELLIJ"`, which stopped meaning "not in a mux" once tmux became the
+# default: a tmux pane has $ZELLIJ unset, so it passed, and the Reconnect
+# branch's bare `exit 0` would have closed that PANE instead of the connection.
 _gpgfwd_marker="${XDG_STATE_HOME:-$HOME/.local/state}/ssh/new-socket"
-if [[ -o interactive && -z "$ZELLIJ" && -n "${SSH_CONNECTION:-}" && -t 2 && -f "$_gpgfwd_marker" ]]; then
+if [[ -o interactive ]] && ! mux::in_session &&
+   [[ -n "${SSH_CONNECTION:-}" && -t 2 && -f "$_gpgfwd_marker" ]]; then
   rm -f "$_gpgfwd_marker"
   _gpgfwd_msg='gpg-agent socket moved since this box was provisioned — reconnect to refresh the gpg forward.'
   if command -v gum >/dev/null 2>&1; then
@@ -141,67 +152,29 @@ if _zsh_should_autoattach_mux; then
       | head -n 50 >| "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null
     return 0
   }
-  # Resolve the knob: loose per-machine file wins, chezmoi data is the default.
-  # Anything unrecognised in the loose file is ignored rather than obeyed — a
-  # typo there must not leave the login shell with no multiplexer at all.
-  _mux_backend="{{ .muxBackend }}"
-  if [[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/mux/backend" ]]; then
-    _mux_pin="$(<"${XDG_CONFIG_HOME:-$HOME/.config}/mux/backend")"
-    _mux_pin="${_mux_pin//[[:space:]]/}"
-    [[ "$_mux_pin" == (tmux|zellij) ]] && _mux_backend="$_mux_pin"
-    unset _mux_pin
-  fi
+  # Resolve the knob ONCE and hand it to each verb below. The loose per-machine
+  # file wins and mux::default_backend owns parsing it (including the "ignore an
+  # unrecognised value rather than obey it" rule); the chezmoi default is passed
+  # in as the fallback, so .chezmoidata/mux.yaml stays the single source of it.
+  _mux_backend="$(mux::default_backend {{ .muxBackend }})"
 
-  if [[ "$_mux_backend" == tmux ]]; then
-    for _tmux in /opt/homebrew/bin/tmux /usr/local/bin/tmux "$HOME/.local/share/mise/shims/tmux" ~/.local/bin/tmux /usr/bin/tmux; do
-      [[ -x "$_tmux" ]] || continue
-      # tmux tears a session down as soon as its last process exits, so there
-      # is no EXITED record to sweep the way Zellij needs — has-session is the
-      # entire liveness test. `-t=` anchors an exact match; a bare `-t Main`
-      # would also match a session called "Main2".
-      if "$_tmux" has-session -t=Main 2>/dev/null; then
-        if "$_tmux" list-clients -t=Main 2>/dev/null | grep -q .; then
-          exec "$_tmux" new-session
-        else
-          _ql_seed_main
-          exec "$_tmux" attach-session -t=Main
-        fi
-      else
-        _ql_seed_main
-        exec "$_tmux" new-session -s Main
-      fi
-    done
-  else
-    for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij "$HOME/.local/share/mise/shims/zellij" ~/.local/bin/zellij; do
-      [[ -x "$_zellij" ]] || continue
-      # Make sure the managed plugin wasms exist before launch. We fetch them
-      # ourselves (config.kdl loads them via file:) instead of trusting Zellij's
-      # downloader, which caches transient 404/504 error pages as the plugin and
-      # never retries. No-op once the wasms are present.
-      [[ -x ~/.config/zellij/ensure-plugins ]] && ~/.config/zellij/ensure-plugins
-      if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
-        if "$_zellij" --session Main action list-clients 2>/dev/null \
-             | tail -n +2 | grep -q .; then
-          exec "$_zellij" --new-session-with-layout default
-        else
-          # Main is idle → reattach. If the session record is stale, discard it
-          # and create a fresh Main with the configured default layout.
-          _ql_seed_main
-          exec "$_zellij" attach Main || {
-            "$_zellij" delete-session Main -f &>/dev/null
-            exec "$_zellij" --session Main --new-session-with-layout default
-          }
-        fi
-      else
-        "$_zellij" delete-session Main -f &>/dev/null
-        _ql_seed_main
-        exec "$_zellij" --session Main --new-session-with-layout default
-      fi
-    done
-  fi
+  # The reuse dance. Every backend-specific command lives behind these verbs —
+  # binary lookup (which must not assume $PATH: it is extended further down this
+  # file), Zellij's EXITED-record sweep and plugin prefetch, tmux's exact-match
+  # `-t=` anchoring. The exec_* calls replace this shell and do not return, so
+  # the recency seed has to happen before them, and only on the two paths that
+  # actually land in Main.
+  # Matching the three states EXPLICITLY, with no default arm: when no backend
+  # binary exists mux::session_state prints nothing, and that empty string must
+  # fall through to a plain shell without seeding a workspace we never opened.
+  case "$(mux::session_state Main "$_mux_backend")" in
+    busy)    mux::exec_anonymous "$_mux_backend" ;;
+    idle)    _ql_seed_main; mux::exec_attach Main "$_mux_backend" ;;
+    missing) _ql_seed_main; mux::exec_new Main "$_mux_backend" ;;
+  esac
   # Reached only when no backend binary was found — fall through to a plain
   # shell rather than leaving the terminal with nothing.
-  unset _zellij _tmux _mux_backend
+  unset _mux_backend
   unset -f _ql_seed_main 2>/dev/null
 fi
 unset -f _zsh_should_autoattach_mux 2>/dev/null
@@ -345,15 +318,6 @@ zsh-defer eval 'command -v wezterm >/dev/null && eval "$(wezterm shell-completio
 zsh-defer eval '[[ -r ${HOMEBREW_PREFIX:-/opt/homebrew}/Library/Taps/homebrew/homebrew-command-not-found/handler.sh ]] && source ${HOMEBREW_PREFIX:-/opt/homebrew}/Library/Taps/homebrew/homebrew-command-not-found/handler.sh'
 
 zsh-defer source ~/.config/zsh/keybindings.sh
-
-# ── mux shim ───────────────────────────────────────────────────────────────
-# The BOOTSTRAP flavor, deliberately: the full mux.zsh pulls in
-# pick/input/theme-common, which cost ~50ms and whose `require_cmd fzf` runs
-# at source time and `die`s — i.e. exits the login shell — on a box without
-# fzf. Neither belongs on a startup path. This half is backend detection plus
-# the query verbs, ~1.5ms, no external tools, and it leaves mux::* defined for
-# interactive use.
-source ~/.local/lib/mux-bootstrap.zsh
 
 # ── Welcome screen ─────────────────────────────────────────────────────────
 # Shown only when this is the lone pane of the current session (i.e. just

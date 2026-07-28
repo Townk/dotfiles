@@ -29,7 +29,8 @@ _mux_zj_available() {
   # rendered inline into a terminal nobody was looking at, on BOTH backends
   # (zellij pass, 2026-07-27).
   [[ -n "${ZELLIJ:-}" || "${MUX_BACKEND:-}" == zellij ]] || return 1
-  local bin="${ZELLIJ_BIN:-$(command -v zellij 2>/dev/null)}"
+  local bin
+  bin="$(_mux_zj_bin)" || return 1
   [[ -n "$bin" && -x "$bin" ]]
 }
 
@@ -189,7 +190,77 @@ _mux_zj_dump_screen() {
 # positionals — see the tmux twins in mux/tmux.zsh.
 # ---------------------------------------------------------------------------
 
-_mux_zj_bin() { print -r -- "${ZELLIJ_BIN:-$(command -v zellij)}"; }
+# _mux_zj_bin — the zellij binary, or non-zero when there is none. $PATH
+# first, then the known install locations: .zshrc's autostart calls this
+# BEFORE it extends $PATH and before mise activates (both happen further down
+# the file), so at that point a login $PATH may not carry zellij at all.
+_mux_zj_bin() {
+  [[ -n "${ZELLIJ_BIN:-}" ]] && { print -r -- "$ZELLIJ_BIN"; return; }
+  local b
+  b=$(command -v zellij 2>/dev/null) && { print -r -- "$b"; return; }
+  for b in /opt/homebrew/bin/zellij /usr/local/bin/zellij \
+    "$HOME/.local/share/mise/shims/zellij" "$HOME/.local/bin/zellij"; do
+    [[ -x "$b" ]] && { print -r -- "$b"; return; }
+  done
+  return 1
+}
+
+# --- autostart halves (spec §2, D17) ---------------------------------------
+# The zellij twin of the tmux halves. Two things differ, and both are why the
+# policy could not simply be "run the same commands with a different binary":
+# zellij keeps EXITED sessions as resurrectable records, which must be swept
+# before a name can be reused, and it needs its managed plugins on disk before
+# a session with the default layout will render.
+
+# _mux_zj_ensure_plugins — fetch the managed plugin wasms before launch. We do
+# it ourselves (config.kdl loads them via file:) instead of trusting zellij's
+# downloader, which caches a transient 404/504 error page as the plugin and
+# then never retries. A no-op once the wasms are present.
+_mux_zj_ensure_plugins() {
+  local ep="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/ensure-plugins"
+  [[ -x "$ep" ]] && "$ep"
+  return 0
+}
+
+_mux_zj_session_state() {
+  local name="$1" bin
+  bin="$(_mux_zj_bin)" || return 1
+  # An EXITED record is not a session you can attach to, so it reads as
+  # missing; _mux_zj_exec_new is what clears it.
+  "$bin" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE "^${name}\b" ||
+    { print -r -- missing; return; }
+  # list-clients prints a header row even with no clients, hence the tail.
+  if "$bin" --session "$name" action list-clients 2>/dev/null | tail -n +2 | grep -q .; then
+    print -r -- busy
+  else
+    print -r -- idle
+  fi
+}
+
+_mux_zj_exec_attach() {
+  local name="$1" bin
+  bin="$(_mux_zj_bin)" || return 1
+  _mux_zj_ensure_plugins
+  exec "$bin" attach "$name" || {
+    "$bin" delete-session "$name" -f &>/dev/null
+    exec "$bin" --session "$name" --new-session-with-layout default
+  }
+}
+
+_mux_zj_exec_new() {
+  local name="$1" bin
+  bin="$(_mux_zj_bin)" || return 1
+  _mux_zj_ensure_plugins
+  "$bin" delete-session "$name" -f &>/dev/null
+  exec "$bin" --session "$name" --new-session-with-layout default
+}
+
+_mux_zj_exec_anonymous() {
+  local bin
+  bin="$(_mux_zj_bin)" || return 1
+  _mux_zj_ensure_plugins
+  exec "$bin" --new-session-with-layout default
+}
 
 # _mux_zj_split <dir> <size> <name> <close> <cwd> -- <cmd...>
 # <size> is IGNORED here: `zellij run` cannot size the pane it creates, so a
