@@ -836,10 +836,24 @@ config.keys = {
 	},
 }
 
+-- Move the mouse-reporting bypass OFF shift, so SHIFT+mouse reaches the mux.
+-- tmux binds S-DoubleClick1Pane to a WORD select (`viW` — the whole run of
+-- non-space characters, vs the plain double-click's `viw`), and that chord can
+-- only get there if WezTerm stops treating shift as its own escape hatch.
+--
+-- ⌥ was not available for it: a double-click's first click fires
+-- M-MouseDown1Pane, which opens the link under the pointer.
+--
+-- Parked on CTRL rather than disabled, so the native-selection escape hatch
+-- still exists — CTRL+drag now, where it used to be SHIFT+drag. Matches the
+-- Ghostty side, where `mouse-shift-capture = always` forwards shift for the
+-- same reason (there the bypass is lost outright; WezTerm can keep one).
+config.bypass_mouse_reporting_modifiers = "CTRL"
+
 -- Mouse bindings. Left/right clicks are intentionally left to WezTerm's
--- defaults: when Zellij has mouse reporting on, WezTerm forwards them to Zellij
+-- defaults: when the mux has mouse reporting on, WezTerm forwards them
 -- automatically, and when it's off (scrollback, bare shell) the defaults give
--- native text selection plus the SHIFT+drag selection escape hatch.
+-- native text selection plus the CTRL+drag selection escape hatch.
 config.mouse_bindings = {
 	-- Middle-click pastes the system clipboard (select-to-copy fills it: pbcopy
 	-- locally, OSC 52 → WezTerm from a remote Zellij over ssh). Injects the bytes

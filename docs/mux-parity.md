@@ -87,7 +87,7 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 |---|---|---|---|---|
 | OSC 52 copy | re-emit to focused client (no copy_command) | `set-clipboard on` re-emit | ✅ | validated Phase 0 incl. SSH |
 | OSC 8 links | `osc8_hyperlinks true` | `terminal-features hyperlinks` | ✅ | |
-| Images | sixel-only through VTE | native sixel (WezTerm) / kitty placeholders (Ghostty) via preview stack | ✅ | Phase 0 as-built §10 |
+| Images | sixel-only through VTE | sixel (WezTerm) / kitty (Ghostty) via preview stack | ✅ | Phase 0 as-built §10; the Ghostty half was ASPIRATIONAL until 2026-07-27 — nothing set a format, chafa auto-detected sixel through tmux, and Ghostty rendered nothing. term-quick-view now picks `-f kitty --passthrough tmux` off `#{client_termname}` |
 | Scrollback size | `scroll_buffer_size 1000000` | `history-limit 1000000` | ✅ | |
 | Session serialization | off | no resurrect plugin | ✅ | D17 |
 | Autostart "Main" reuse | absent→create, idle→attach, has-client→anonymous | same three ways | ✅ | Phase 7; `.zshrc`, both branches asserted in `tests/mux_autostart_spec.sh` |
@@ -329,3 +329,82 @@ while new windows come up as tmux, and `zj attach Main` still reaches it.
 | in zsh, `*` in a pattern substitution matches ACROSS NEWLINES | `${block//for _tmux in *; do/...}`, rewriting a binary list to point at a test stub, silently ate the entire loop body up to the next `; do` — the test then exercised nothing and still "passed" the parse. Rewrite line-scoped. This is a testing-harness trap, and it cost a full debug cycle |
 | a spec that pins a value by `sed`-ing for its literal (`_mux_backend="zellij"`) breaks the moment the default flips | three Zellij regression tests failed on the flip for that reason and looked like real breakage. Match the alternation (`(zellij|tmux)`) so the fence survives the thing it is fencing |
 | `XDG_CONFIG_HOME=/scratch zsh -c '...'` does NOT isolate config: `.zshenv` runs first and `environment.sh` resets the variable to the real `~/.config` | a "the loose pin overrides the baked default" check quietly read the REAL `~/.config/mux/backend` and reported the baked value — passing by luck exactly when the two agreed. Use `zsh -f`, or set the variable as the first line of the script TEXT so it lands after the rc files. Any test isolating via an XDG var has this hole |
+
+## Click-to-open — ⌥+click (2026-07-27)
+
+Opening the thing under the pointer moved OUT of the terminal and INTO tmux.
+WezTerm resolved it in an `open-uri` Lua hook; tmux stores OSC 8 hyperlinks
+itself and exposes the one under the pointer as `#{mouse_hyperlink}`, so one
+root-table binding now serves both terminals — and knows exactly which pane
+was clicked, which the Lua hook had to infer.
+
+Ghostty forced this: it has no scripting hook of any kind. `link` (regex →
+action) is a stubbed config key — `error.NotImplemented`, "TODO: This can't
+currently be set!" — unimplemented in every release, no timeline, and a
+collaborator has called arbitrary script-running out of scope. Nothing in
+`+list-actions` runs a command.
+
+Ghostty's own link handling is switched OFF (`mouse-shift-capture = always`)
+so there is exactly one way to open a link rather than two half-working ones.
+WezTerm keeps its ⌘+click, which still works there and is the only path on
+zellij.
+
+| Behavior | Zellij | tmux | Status | Notes |
+|---|---|---|---|---|
+| Click to open a link | WezTerm `open-uri` Lua only | `M-MouseDown1Pane` → `mux-open` via `#{mouse_hyperlink}` | 🟡 | tmux works on BOTH terminals; zellij has no scriptable mouse binding and no hyperlink format, so Ghostty+zellij cannot do this at all |
+| Hover cue | terminal-native | terminal-native | 🟡 | WezTerm underlines on plain hover; Ghostty's is off by choice (it required ⌘⇧ and only ever opened the wrong app) |
+
+| Gotcha | Consequence |
+|---|---|
+| the SGR mouse protocol encodes only Shift(+4), Meta(+8) and Ctrl(+16) — there is NO Cmd bit — and tmux's modifier vocabulary is `C-`/`S-`/`M-` with no Super | ⌘+click can never reach tmux, on any terminal. WezTerm's ⌘+click works only because WezTerm resolves it internally and never forwards it. Of the three modifiers that do travel, ⌃ is macOS's secondary-click and ⇧ is the mouse-capture bypass, which leaves ⌥ as the only free one. Note this does NOT generalise from the MEH work: those ⌘ chords reach tmux because the terminal REWRITES them (`keybind = cmd+shift+p=text:\x1b[112;8u`), and a click cannot be rewritten that way because a `text:` action carries no coordinates |
+| tmux has no `MouseMove` event — the complete list is Wheel/Down/Up/Drag/DragEnd/Second/Double/TripleClick | hover is not a bindable thing in tmux, so a hover effect cannot be built there at any price. It also has no command that restyles content cells; copy-mode selection is its only in-content highlight. Hover cues are the terminal's job, always |
+| Ghostty's `link-url = false` does NOT disable OSC 8 hyperlinks — MEASURED, hover and click both survived it | it governs the regex URL MATCHER only; explicit OSC 8 links take a separate path with no config of its own. The only lever that reaches them is `mouse-shift-capture`, because Ghostty suppresses its link handling entirely while an app captures the mouse, and ⇧ is the bypass that re-enables it |
+| `mouse-shift-capture = always` forwards ⇧+mouse to tmux, and tmux ships NO shift-modified mouse bindings in either the root or copy-mode-vi table | every ⇧ gesture goes inert at once — click-to-focus, drag-select, double/triple-click, wheel-scroll, and the copy-mode-vi drag-END that performs the copy. Accepted deliberately here (one selection engine), but if it ever needs undoing, emit `S-` twins from shared template variables in `keymap-base.conf.tmpl` — hand-duplicating those command strings is how they drift |
+| `mux::backend_for_pid` wants the mux CLIENT process; a pane's `#{pane_pid}` is its SHELL, whose parent is the server | it answers `none` for a pane pid, so a tmux-side caller cannot reuse the pid contract WezTerm's GUI hook uses. `mux-open` now takes `MUX_BACKEND`+`MUX_SESSION` from the environment and skips the probes — but only when BOTH are set, since a session with no backend is not an answer |
+| `mailto:a@b` is a valid URI with no double slash | a `*://*` glob for "is this a link" silently drops it. Match the scheme (`^[a-zA-Z][a-zA-Z0-9+.-]*:`) instead. Caught by a test, not by review |
+| chezmoi source files carry their executable bit in the `executable_` PREFIX, so the file in the repo is mode 644 | a spec that runs one directly gets status 126 and every example fails at once, which reads as a broken script rather than a broken harness. Invoke as `zsh <path>` |
+| `mux-open` exports its OWN `PATH` before doing anything, to survive a GUI environment | a test that stubs a binary by prepending to `PATH` is silently overridden and runs the REAL command — stubbing `open` that way launches a browser instead of failing. Point `HOME` at a scratch dir and put stubs in `$HOME/.local/bin`, which is first in the PATH the script sets |
+
+## Click-to-open, round 2 — plain URLs and Ghostty images (2026-07-27)
+
+Two gaps that only surfaced under real use, both from the same root: the first
+version assumed the terminal's job and tmux's job were interchangeable.
+
+| Gotcha | Consequence |
+|---|---|
+| `#{mouse_hyperlink}` is populated ONLY for OSC 8 links. URL-shaped TEXT (`echo https://example.com`) is not a link to tmux — nothing linkifies it | ⌥+click did nothing on a printed URL while WezTerm's ⌘+click opened it, because WezTerm regex-matches URLs itself (`config.hyperlink_rules`). Moving the gesture into tmux is a DOWNGRADE on WezTerm unless the fallback is built. `mux-click` scans `#{mouse_line}` for a URL containing `#{mouse_x}` |
+| `#{mouse_word}` cannot stand in for that scan: `word-separators` here is `" !\"#$%&'()*+,-./:;<=>?@[]^\\\`{|}~"`, which includes `:` and `/` | the "word" under `https://google.com` is `https`. Loosening the option to keep URLs whole would break double-click word-select in code, which is used far more often — so the line+column route is the cheaper trade |
+| GHOSTTY DOES NOT SUPPORT SIXEL AND NEVER WILL — a stated decision by its maintainer, not a missing feature. Its Kitty graphics implementation is among the most complete outside Kitty itself | chafa was called with no `--format`, so it auto-detected: kitty when it can see `xterm-ghostty`, sixel through tmux (tmux advertises sixel), and Ghostty drew nothing. The `TERM_QUICK_VIEW_ARGS` hook had existed unused the whole time — the fix was wiring, not machinery |
+| inside a pane `$TERM` is TMUX'S (`tmux-256color`) and says nothing about what will finally draw the pixels | the graphics protocol must be chosen from `#{client_termname}` (the attached client's terminal), not the environment. Same class of error as sizing from `tput` instead of asking the mux |
+| zsh sets `$0` to the FUNCTION NAME inside a function (`FUNCTION_ARGZERO`, on by default), so `${0:A:h}` there is the CALLER'S CWD, not the script's directory | a sibling-script lookup written inside a helper function resolved to `$PWD/mux-open` and failed from a binding whose CWD is arbitrary — i.e. a click that silently does nothing. Resolve the script directory at top level and close over it |
+| `${var%%[.,;:!?]##}` needs `extended_glob`, which is OFF in a plain script | without it `##` is literal, the trim silently does nothing, and a URL at the end of a sentence keeps its full stop. Silent because a slightly-wrong URL still "works" often enough to pass a casual look. The trim must also survive `a.tar.gz` — strip trailing punctuation, never all dots |
+
+## Click-to-open, round 3 — what real use found (2026-07-27)
+
+Three defects that every existing test passed straight through. All three were
+in the seams: tmux→sh quoting, the key-table guard, and the physical modifier.
+
+| Gotcha | Consequence |
+|---|---|
+| `'#{q:mouse_line}'` — `q:` escapes with BACKSLASHES for UNQUOTED use, and inside single quotes a backslash is literal while `\'` ENDS the string | `eza` quotes filenames containing spaces, so a real `ls` line carries single quotes and the command sh received was malformed: exit 2, click does nothing. It failed for exactly the files whose names have spaces, which made it look like a PDF/Office/graphics problem and sent the diagnosis chasing the kitty protocol. THE ERROR TEXT NAMED THE CAUSE — read the failing command string before theorising |
+| the obvious fix (drop the quotes, keep `#{q:…}`) is also broken: an EMPTY value expands to NOTHING rather than an empty word | a click with no hyperlink shifted every later argument by one. Pass click values as unquoted `#{q:…}` ENVIRONMENT assignments instead — `FOO=` stays valid when empty, and `q:` keeps a hostile value one word. Verified against `$HOME`, backticks, quotes, `;`, `&`, `\|` |
+| `#{pane_in_mode}` is TRUE in copy/scroll mode, so copying the drag-bind's guard verbatim swallowed the click there | scrolling back to find a filename and clicking it is a MAIN use of the gesture. The guard for click-to-open is `#{mouse_any_flag}` ALONE — an application capturing the mouse should take the event, a pane merely in copy-mode should not. Confirmed by synthesising the click both ways: old guard fires nothing in copy mode, new guard resolves the hyperlink in both |
+| `#{mouse_x}` is ZERO-based — an SGR report of column 3 arrives as 2 | measured, not assumed. The single-URL path deliberately ignores the column so an off-by-one cannot produce a dead click, which is indistinguishable from an unbound key |
+| a GUI app COLD-STARTED while OPTION is held reads it as a safe-mode request — Firefox pops "Open in Troubleshoot Mode?" instead of the page | ⌥ is the click modifier, so every ⌥+click on a URL hit it. `mux-open` waits for ⌥ to come up before calling `open` (`hs -c 'hs.eventtap.checkKeyboardModifiers().alt'`, ~9ms a query, bounded ~1.4s then opens anyway). Only the browser path is affected — the file branches open tabs inside tmux and launch nothing |
+| a mouse event CAN be synthesised: the nested-tmux probe plus `send-keys -H` writing raw SGR bytes (`\e[<8;COL;ROWM`, where 8 = button0 + meta) into the inner client, which parses them as a real click | this is the only kind of test that sees these bugs. Tests that call the helper script directly pass while the gesture is completely broken, because the defects live in the binding and the quoting around it. `tests/mux_click_spec.sh` now drives real clicks in both normal and copy mode |
+
+## Mouse word vs WORD select (2026-07-27)
+
+| Behavior | Zellij | tmux | Status | Notes |
+|---|---|---|---|---|
+| double-click select | native word select | `select-word` under tmux.conf's `word-separators` (`viw`) | ✅ | |
+| ⇧+double-click select | none | same `select-word` with `word-separators` narrowed to a space (`viW`) | 🟡 | tmux-only; needs the terminal to FORWARD shift rather than keep it as its bypass |
+
+| Gotcha | Consequence |
+|---|---|
+| word vs WORD is not two commands — `select-word` reads `word-separators`, so narrowing that option to a single space for the duration turns the SAME command into `viW`. `foo-bar_baz.txt/qux` comes back whole instead of `bar_baz` | the alternative (`previous-space` + `begin-selection` + `next-space-end`) mis-handles a cursor already sitting on the first character, the way vim's `B` does. Restore with `setw -u`, never by restating the list — the global in tmux.conf stays the single source of truth |
+| the narrowed option must be UNSET again on the way out, and nothing shouts if it is not | a leaked value silently turns every later PLAIN double-click into a WORD select: the new gesture looks perfect while the old one quietly breaks. Mutation-checked — dropping the restore leaves `word-separators` as `" "` on the window |
+| `word-separators` is a WINDOW option, so it is narrowed for sibling panes too during the ~0.3s highlight | accepted: only a CONCURRENT double-click in another pane of the same window could observe it |
+| ⌥ cannot carry a double-click gesture here — the FIRST click of a double fires `MouseDown1Pane`, and `M-MouseDown1Pane` opens the link under the pointer | ⌥+double-click on a filename would open it AND select it. ⇧ is free precisely because `S-MouseDown1Pane` is unbound (the inert-shift tradeoff), so nothing fires on the way in |
+| ⇧ only reaches tmux if the terminal stops using it as the mouse-reporting bypass | Ghostty: `mouse-shift-capture = always` (bypass lost outright). WezTerm: `bypass_mouse_reporting_modifiers = 'CTRL'` — parked rather than disabled, so WezTerm keeps a native-selection escape hatch on ⌃+drag |
+| a double-click can be SYNTHESISED: two rapid press/release pairs of raw SGR bytes through the nested-tmux probe, with the modifier in the button code (0 plain, 4 shift, 8 meta) | `tests/mux_select_spec.sh` drives both gestures for real and asserts the paste buffer, which is the only level at which a swallowed click or a leaked option is visible |
