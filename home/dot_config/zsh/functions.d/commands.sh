@@ -62,7 +62,7 @@ function terminal_commands() {
   print -P -- "$C_BLU Available Commands$C_RES
 
   ${C_YEL} SYSTEM${C_RES}                         ${C_YEL}󰇺 PROCESSORS${C_RES}                     ${C_YEL} UTILITIES${C_RES}
-  ${C_YEL}------${C_RES}                           ${C_YEL}----------${C_RES}                       ${C_YEL}---------${C_RES}
+  ${C_YEL}--------${C_RES}                         ${C_YEL}------------${C_RES}                     ${C_YEL}-----------${C_RES}
   ${C_BWH}btm${C_RES}       - 'top' (bottom)       ${C_BWH}jq${C_RES}      - JSON processor         ${C_BWH}7zz${C_RES}       - 7-Zip cli
   ${C_BWH}duf${C_RES}       - Disk usage 'du'      ${C_BWH}pandoc${C_RES}  - Any text processor     ${C_BWH}eva${C_RES}       - Calculator
   ${C_BWH}y${C_RES}         - Files (yazi)         ${C_BWH}gron${C_RES}    - JSON to list assign    ${C_BWH}fd${C_RES}        - 'find'
@@ -70,7 +70,7 @@ function terminal_commands() {
   ${C_BWH}tldr${C_RES}      - Extra help           ${C_BWH}yq${C_RES}      - YAML processor         ${C_BWH}gh${C_RES}        - GitHub cli
                                                                     ${C_BWH}git${C_RES}       - Version control
   ${C_YEL} NETWORK                        ${C_YEL}󰊪 VISUALIZERS                    ${C_BWH}grex${C_RES}      - RegEx generator
-  ${C_YEL}-------                          ${C_YEL}-----------                      ${C_BWH}hyperfine${C_RES} - Benchmark
+  ${C_YEL}---------                        ${C_YEL}-------------                    ${C_BWH}hyperfine${C_RES} - Benchmark
   ${C_BWH}bandwhich${C_RES} - Network use          ${C_BWH}jless${C_RES}   - JSON tree              ${C_BWH}rg${C_RES}        - 'grep' (ripgrep)
   ${C_BWH}doggo${C_RES}     - DNS look-up          ${C_BWH}tokei${C_RES}   - Code metrics           ${C_BWH}t-rec${C_RES}     - Terminal recorder
   ${C_BWH}gping${C_RES}     - Latency graph        ${C_BWH}tv${C_RES}      - csv (tidy-viewer)      ${C_BWH}unrar${C_RES}     - Handle .rar format
