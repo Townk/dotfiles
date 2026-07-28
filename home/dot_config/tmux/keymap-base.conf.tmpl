@@ -683,5 +683,21 @@ bind -n C-S-G run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popu
 # Quick-launch (Phase 3) — pickers in popups, dispatch via the ql_tx_* twins.
 # Chords mirror the zellij mode chords: tab-T, pane-P, session-S. The picker
 # emits an id (or @window:<id> on Alt+Enter) and quick-launch dispatches.
-# nested table (D14): the sole escape hatch from a nested-mux outer session.
+# nested table (D14): the escape hatches from a nested-mux outer session —
+# everything NOT bound here passes to the remote's own mux. Measured: a session
+# whose `key-table` is `nested` never falls back to the root table, so a root
+# MEH bind does not fire while nested.
+#
+# C-M-Space is the hand-typed hatch, and the bytes WezTerm's Lua substitutes for
+# ⌘⇧S once nested-session-check says the pane is nested. Ghostty has no
+# scripting and cannot ask "am I nested?", so it sends MEH-s either way and the
+# split has to live HERE — the same three spellings the root table binds,
+# caught before they can reach the remote. Without them ⌘⇧S showed the REMOTE's
+# workspace picker from Ghostty, the one picker that chord must never show.
+#
+# It is also why ⌘⇧⌥S (deliberately reaching the REMOTE's picker) forwards the
+# LEADER chord rather than MEH-s: identical bytes would be eaten right here.
 bind -T nested C-M-Space run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome -- {{ .chezmoi.homeDir }}/.config/mux/scripts/quick-launch menu workspace"'
+{{- range list "C-M-S" "C-M-S-S" "C-M-S-s" }}
+bind -T nested {{ . }} run-shell -b '{{ $.chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "{{ $.chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome -- {{ $.chezmoi.homeDir }}/.config/mux/scripts/quick-launch menu workspace"'
+{{- end }}

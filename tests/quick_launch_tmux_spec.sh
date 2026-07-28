@@ -34,9 +34,13 @@ EOF
     source home/dot_config/mux/scripts/lib/command.zsh
     source home/dot_config/mux/scripts/lib/dispatch.zsh
     source home/dot_config/mux/scripts/lib/dispatch-tmux.zsh
-    QL_JSON='{"panes":[{"id":"logs","name":"Logs","direction":"down","action":{"type":"Run","args":["tail","-f","/tmp/x"]}}],"tabs":[{"id":"dev","name":"Dev","action":{"type":"Shell"}}],"workspaces":[{"id":"proj","name":"Proj","tabs":[{"id":"t1","name":"Edit","action":{"type":"Shell"}}]},{"id":"remote","name":"Remote","color":"blue","nested_mux":true,"action":{"type":"Remote","args":["box"]}}]}'
+    QL_JSON='{"panes":[{"id":"logs","name":"Logs","direction":"down","action":{"type":"Run","args":["tail","-f","/tmp/x"]}}],"tabs":[{"id":"dev","name":"Dev","action":{"type":"Shell"}}],"workspaces":[{"id":"proj","name":"Proj","tabs":[{"id":"t1","name":"Edit","action":{"type":"Shell"}}]},{"id":"remote","name":"Remote","color":"blue","nested_mux":true,"action":{"type":"Remote","args":["box"]}},{"id":"bare","name":"Bare","nested_mux":true,"action":{"type":"Remote","args":["box"]}},{"id":"localnest","name":"Localnest","nested_mux":true,"action":{"type":"Run","args":["htop"]}}]}'
   }
-  cleanup() { rm -rf "$TEST_TMP"; unset MUX_TMUX_BIN STUB_SESSIONS SCRIPT_DIR; }
+  cleanup() {
+    rm -rf "$TEST_TMP"
+    unset MUX_TMUX_BIN STUB_SESSIONS SCRIPT_DIR
+    unset TERMINAL_LOCATION_ONBOARD_MAP TERMINAL_LOCATION_SSH_CONFIG_DIR
+  }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -82,12 +86,48 @@ EOF
     The status should be success
   End
 
-  It 'opens a nested workspace directly without an outer tmux session'
+  # The window used to run the ssh directly, with no outer tmux at all — which
+  # left it without a local mux, so the workspace picker was unreachable from a
+  # remote window on either terminal. Zellij's window path always attached to
+  # the bar-less nested layout; this is the tmux twin of that.
+  It 'wraps a nested workspace window in a bar-less outer tmux session'
     When call ql_dispatch_window remote
-    The contents of file "$WINDOW_LOG" should include "--new --tint blue Remote --"
-    The contents of file "$WINDOW_LOG" should include "ssh box"
-    The contents of file "$WINDOW_LOG" should not include "attach"
+    The contents of file "$TX_LOG" should include "new-session -d -s Remote"
+    The contents of file "$TX_LOG" should include "key-table nested"
+    The contents of file "$TX_LOG" should include "status off"
+    The contents of file "$WINDOW_LOG" should include "--tint blue Remote --"
+    The contents of file "$WINDOW_LOG" should include "attach -t Remote"
+    The status should be success
+  End
+
+  It 'attaches an existing nested session instead of recreating it'
+    export STUB_SESSIONS="Remote"
+    When call ql_dispatch_window remote
     The contents of file "$TX_LOG" should not include "new-session"
+    The contents of file "$WINDOW_LOG" should include "attach -t Remote"
+    The status should be success
+  End
+
+  # The window tint is classified from the command the window runs, and the
+  # attach hides the ssh destination behind it — so a workspace with no `color`
+  # would have come out untinted. An un-onboarded host falls to the remote
+  # default (grey), which is enough to prove the ssh command was the one read.
+  It 'tints a nested window from the ssh command when no color is named'
+    export TERMINAL_LOCATION_ONBOARD_MAP="$TEST_TMP/absent.yaml"
+    export TERMINAL_LOCATION_SSH_CONFIG_DIR="$TEST_TMP/absent.d"
+    When call ql_dispatch_window bare
+    The contents of file "$WINDOW_LOG" should include "--tint grey Bare --"
+    The status should be success
+  End
+
+  # "not an ssh command" is an ANSWER, not a failure — and the dispatcher runs
+  # under `set -e`, where an unguarded classification would abort the launch.
+  It 'opens an untinted nested window when the command is not ssh'
+    export TERMINAL_LOCATION_ONBOARD_MAP="$TEST_TMP/absent.yaml"
+    export TERMINAL_LOCATION_SSH_CONFIG_DIR="$TEST_TMP/absent.d"
+    When call ql_dispatch_window localnest
+    The contents of file "$WINDOW_LOG" should include "Localnest --"
+    The contents of file "$WINDOW_LOG" should not include "--tint"
     The status should be success
   End
 End

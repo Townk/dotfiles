@@ -237,6 +237,19 @@ keybind = cmd+shift+p=text:\x1b[112;8u
 keybind = cmd+shift+t=text:\x1b[116;8u
 keybind = cmd+shift+s=text:\x1b[115;8u
 
+# Cmd+Shift+Alt+S → the REMOTE's own workspace picker, for when a nested-mux
+# session is attached. MEH-s cannot serve here: the outer session's `nested`
+# key table binds those exact bytes so ⌘⇧S keeps reaching the LOCAL picker, and
+# a second chord sending them would simply open it again. The leader sequence
+# passes through instead — a nested session has `prefix None` and its root
+# `⌥w` bind cannot fire from the `nested` table — so `⌥w s S` arrives at the
+# remote and means whatever the remote's keymap says (leader → Session → pick).
+#
+# Unlike WezTerm's, this one is unconditional: Ghostty cannot test whether the
+# pane is nested, so outside a nested session it reaches the local picker by
+# the long road rather than doing nothing.
+keybind = cmd+shift+alt+s=text:\x1bwsS
+
 # Cmd+Shift+C → MEH-c (c=99). Copies the focused pane's cwd to the clipboard
 # as a $HOME-relative path (~/…), with a notification + sound.
 # Cmd+Shift+Alt+C → MEH-d (d=100): same, but the ABSOLUTE path.

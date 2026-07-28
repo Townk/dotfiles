@@ -197,6 +197,36 @@ Describe 'tmux keymap tables'
     The lines of output should equal 1
   End
 
+  # The nested table is what a nested_mux outer session runs in: everything it
+  # does NOT bind reaches the remote's own mux. Measured on a scratch server —
+  # a session whose key-table is `nested` never falls back to root, so the root
+  # MEH binds are silent there. WezTerm's Lua can swap ⌘⇧S for C-M-Space when
+  # the pane is nested; Ghostty has no scripting and sends MEH-s regardless, so
+  # the workspace picker has to be caught in THIS table or it opens the remote's.
+  nested_binds() { tmux -L kmspec list-keys | grep -- "-T nested"; }
+  nested_bind() { nested_binds | grep -E "^bind-key +-T nested +\"?$1\"? " || true; }
+
+  Describe 'the nested table keeps the workspace picker local'
+    Parameters
+      C-M-Space
+      C-M-S
+      C-M-S-S
+      C-M-S-s
+    End
+
+    It "maps $1 to the local picker"
+      When call nested_bind "$1"
+      The output should include "menu workspace"
+    End
+  End
+
+  It 'binds nothing else in the nested table'
+    # Every extra bind is a key the remote stops receiving. ⌘⇧⌥S reaches the
+    # remote's own picker precisely because the leader chord is NOT here.
+    When call nested_binds
+    The lines of output should equal 4
+  End
+
   It 'root nav is vim/fzf-aware'
     When call keys root
     The output should include "C-h"

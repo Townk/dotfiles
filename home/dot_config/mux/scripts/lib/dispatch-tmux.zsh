@@ -14,7 +14,8 @@
 #   float direction       → display-popup (modal — the accepted popup
 #                           inversion; backgrounded so dispatch returns)
 #   --close-on-exit       → tmux default (remain-on-exit off)
-#   nested (D14)          → prefix None + key-table nested on the session
+#   nested (D14)          → prefix None + key-table nested + status off on
+#                           the session (bar-less, like zellij's layout)
 
 QL_TX="${MUX_TMUX_BIN:-tmux}"
 
@@ -212,11 +213,14 @@ ql_tx_workspace_build() {
 # nested_mux (D14; old nested_zellij key read as alias — see
 # ql_workspace_is_nested in dispatch.zsh): the outer tmux session gets
 # prefix None + key-table nested, so every key except the nested-table
-# escape hatch (C-M-Space → workspace picker) passes to the inner mux.
+# escape hatches (C-M-Space and the MEH-s spellings → workspace picker)
+# passes to the inner mux. `status off` makes it bar-less like zellij's
+# generated nested layout: the inner mux is the only one drawing a bar.
 ql_tx_apply_nested() {
   local sname="$1"
   "$QL_TX" set -t "$sname" prefix None
   "$QL_TX" set -t "$sname" key-table nested
+  "$QL_TX" set -t "$sname" status off
 }
 
 ql_tx_open_workspace() {
@@ -268,17 +272,34 @@ ql_tx_open_workspace_window() {
 
   if ql_workspace_is_nested "$ws"; then
     ql_register_nested "$sname"
-    # A separate window does not need an outer tmux session: run the nested
-    # workspace command directly so only the remote/inner mux draws a status
-    # bar. --new prevents WezTerm from focusing a window attached to the local
-    # nested session instead of spawning this direct command.
     action="$(jq -c '.action // {}' <<<"$ws")"
     cmd="$(ql_action_command "$action")"
     [[ -n "$cmd" ]] || {
       echo "quick-launch: nested workspace '$sname' has no command" >&2
       return 1
     }
-    "$win" --new "${tint_args[@]}" "$sname" -- "$SHELL" -c "$cmd"
+    # The window's tint is classified from the command it runs, and `attach`
+    # hides the ssh destination behind it — so resolve the color from the REAL
+    # command here unless the workspace names one. In a subshell because the
+    # lib sets `set -u` for whatever scope sources it; `|| tint=""` because a
+    # non-ssh command is a legitimate answer (no tint) and the caller runs
+    # under `set -e`.
+    if [[ -z "$tint" ]]; then
+      tint="$({ source "${${(%):-%x}:A:h}/terminal-location.zsh"; tl_classify_command "$cmd"; } 2>/dev/null)" || tint=""
+      [[ -n "$tint" ]] && tint_args=(--tint "$tint")
+    fi
+    # An outer session, not the bare command. Running the ssh directly leaves
+    # the window with no local mux at all, and the workspace picker is then
+    # unreachable from it on either terminal — the migration lost this, since
+    # zellij's window path always attached to the bar-less nested layout.
+    ql_tx_session_exists "$sname" || {
+      "$QL_TX" new-session -d -s "$sname" "$SHELL -c ${(q)cmd}" || {
+        echo "quick-launch: failed to create session '$sname'" >&2
+        return 1
+      }
+      ql_tx_apply_nested "$sname"
+    }
+    "$win" "${tint_args[@]}" "$sname" -- "$QL_TX" attach -t "$sname"
     return $?
   fi
 

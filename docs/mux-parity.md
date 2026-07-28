@@ -68,7 +68,7 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | move table: hjkl directional | MovePane directional | `swap-pane -U/-D` + `rotate-window` for h/l | 🟡 | tmux has no directional swap |
 | session: `d` detach, `w` manager | native + session-manager plugin | detach-client, `choose-tree -Zs` | ✅ | |
 | session: `a/c/p/s` about/config/plugins/share | zellij built-in plugins | none | ❌ | zellij-only chrome |
-| session: `S` quick-launch workspace | modal float | popup → new-session -d + switch-client | ✅ | @window: separate-OS-window path shared; nested_mux = prefix None + nested table (D14) |
+| session: `S` quick-launch workspace | modal float | popup → new-session -d + switch-client | ✅ | @window: separate-OS-window path shared (nested included — the window attaches an outer session, it does not run the ssh bare); nested_mux = prefix None + status off + nested table (D14), which binds the picker chord itself so ⌘⇧S stays local |
 
 ## Scrollback / search / prompts
 
@@ -457,6 +457,7 @@ Why rename ever lived on `n`, and what it cost to move it. Full map in
 | the which-key panel reads keys from TWO places in `keymap.yaml` — the entries, and `which_key.groups`, which lists keys by name for the panel's layout | updating the entries alone left the panel still dispatching `s` to the old split while the tmux table had already moved on. The panel is a separate process reading the DEPLOYED `whichkey.data`, so a scratch server with fresh binds still dispatches from stale data — which is what a verification run caught |
 | `zellij setup --check` validates syntax and input modes but NOT action names — it accepts `TotallyBogusAction` without complaint | the only honest oracle is booting Zellij with the config (inside a scratch tmux pane). That is how `NewSession` turned out to be "Unsupported action" while `RenameSession` parses — a distinction no amount of reading the config would have settled |
 | a spec that asserts two strings appear in one listing does NOT pin which one belongs to which key | the MEH test held `C-M-P` and `menu workspace` in the same output; swapping the two pickers kept every string present and the test green. Per-chord assertions are the only kind that can fail |
+| a session whose `key-table` is `nested` never falls back to the ROOT table (measured: CSI-u MEH-s into a real nested client fired the root bind before the switch and nothing after it) | every chord the terminal sends unconditionally has to be bound in the `nested` table too, or it reaches the remote. WezTerm's Lua can branch on `nested-session-check` and substitute `C-M-Space`; Ghostty has no scripting, so ⌘⇧S opened the REMOTE's workspace picker there for the whole migration. A per-terminal split cannot fix a per-terminal blind spot — the key table can |
 
 ## The running server vs the deployed config (2026-07-28)
 
