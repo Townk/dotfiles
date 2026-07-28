@@ -13,9 +13,11 @@
 ---
 --- Usage:
 ---   local drag = require("windows.drag")
----   drag.setup({ mods = { "cmd" }, threshold = 5 })
+---   drag.setup({ mods = { "cmd" }, threshold = 5, passthroughApps = {} })
 ---   -- on shutdown:
 ---   drag.cleanup()
+
+local inputPassthrough = require("system.input-passthrough")
 
 local M = {}
 
@@ -37,6 +39,7 @@ local state = {
 	threshold = DEFAULT_THRESHOLD,
 	mods = { "cmd" },
 	debug = false,
+	passthroughApps = {},
 
 	pending = nil,        -- { pos, flags } while we're undecided click vs drag
 	window = nil,         -- the window currently being moved, if any
@@ -164,6 +167,13 @@ local function onEvent(ev)
 		local matched = modsMatchExactly(flags, state.mods)
 		log("mouseDown flags=%s matched=%s", flagsToString(flags), tostring(matched))
 		if matched then
+			-- Screen-sharing clients forward this gesture to another machine.
+			-- Yield before buffering the down event so the remote Hammerspoon
+			-- receives a complete Cmd+drag sequence.
+			if inputPassthrough.isFrontmost(state.passthroughApps) then
+				log("mouseDown belongs to frontmost input-forwarding app")
+				return false
+			end
 			local pos = ev:location()
 			state.pending = { pos = pos, flags = flags }
 			state.startMousePos = pos
@@ -239,11 +249,13 @@ end
 --- @param opts table|nil  Options:
 ---   - mods:      string[] modifiers that must be held (default `{ "cmd" }`)
 ---   - threshold: number   pixels of movement before a drag engages (default 5)
+---   - passthroughApps: table additional bundle IDs or app names to yield to
 function M.setup(opts)
 	opts = opts or {}
 	state.mods = opts.mods or { "cmd" }
 	state.threshold = opts.threshold or DEFAULT_THRESHOLD
 	state.debug = opts.debug == true
+	state.passthroughApps = opts.passthroughApps or {}
 
 	M.cleanup()
 	state.tap = hs.eventtap.new({
