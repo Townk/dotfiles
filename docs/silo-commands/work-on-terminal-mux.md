@@ -5,9 +5,15 @@ argument-hint: <task description>
 You are working on the **terminal & multiplexer integration** silo of this
 chezmoi dotfiles repo.
 
-> WezTerm + Ghostty + Zellij cooperation: clipboard bridges, link dispatch,
-> fullscreen/status side-channels, plugin loading, floating modal pickers,
-> nested-session passthrough, image-protocol negotiation.
+> WezTerm + Ghostty over **tmux or Zellij**: clipboard bridges, link dispatch,
+> fullscreen/status side-channels, the mode stack and which-key panel, floating
+> modal pickers, nested-session passthrough, image-protocol negotiation.
+>
+> **tmux is the default backend** (Phase 7, 2026-07-27); Zellij is one knob
+> away (`print -r -- zellij > ~/.config/mux/backend`) and stays fully
+> supported. Anything you add to one backend needs an answer for the other —
+> `docs/mux-parity.md` is the ledger where those answers live, including the
+> gotchas that cost real debugging time.
 
 ## Your scope (owner area — safe to edit)
 
@@ -23,8 +29,17 @@ chezmoi dotfiles repo.
   copy-pwd, edit-terminal-config, terminal-toggle-fullscreen,
   nested-session-check, resolve-terminal-location,
   `lib/{config,command,dispatch,dispatch-tmux,terminal-location}.zsh`)
-- `home/dot_config/tmux/` (tmux.conf, keymap-base, keymap, status)
-- `home/dot_local/lib/zellij.zsh` (`zj::*`)
+- `home/dot_config/tmux/` (tmux.conf, keymap-base, keymap, status, themes)
+- `home/.chezmoidata/keymap.yaml` — the SINGLE SOURCE for the tmux key tables
+  *and* the which-key panel. Never hand-edit the generated `keymap.conf` or
+  `whichkey.data`; note the panel reads keys from two places in this file
+  (the entries, and `which_key.groups` for layout)
+- `home/dot_local/lib/mux.zsh` (`mux::*` — the public shim) and
+  `home/dot_local/lib/mux/{tmux,zellij,stack,mode,dialog}.zsh` (backends and
+  the shared mode-stack / compact-dialog machinery)
+- `home/dot_local/lib/zellij.zsh` — a COMPAT SHIM that sources `mux.zsh`;
+  the `zj::*` names are permanent aliases. Nothing new should call them
+- `home/dot_local/libexec/tmux-status-right` — the ribbon renderer
 - `home/dot_local/lib/image-protocol-support.zsh`
 - `home/dot_config/zellij/zellij-plugin-path.tmpl` (shared resolver —
   coordinate with the **chezmoi** silo if you change the path resolution
@@ -45,20 +60,22 @@ chezmoi dotfiles repo.
   own the `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`
   protocol; **system-services** owns the plist fields.
 - The `pick::` engine and `pick-glyph`/`pick-gitmoji` libexec → **pick**. You
-  own the `zj::pick` adapter and the `pick-*-zellij` modal adapters that call
-  them.
+  own the `mux::pick` adapter and the modal adapters that call it.
 - chezmoi run-scripts under `home/.chezmoiscripts/` → **chezmoi** (the
   `run_after_45-grant-zellij-plugin-permissions` and
   `run_onchange_after_40-install-snaps` triggers).
 
 ## Contracts you must preserve
 
-- **`zj::pick`** — drop-in for `pick::start` (**pick**). Same argv; floats in
-  a Zellij pane when `$ZELLIJ` set, else inline. Consumed by `ai-assist`/
-  `ai-commit` (**ai-harnesses**) and `quick-launch-pick`.
-- **`resolve_session <client_pid>`** / **`zellij_wezterm_sessions`** in
-  `zellij/scripts/lib/zellij-session.zsh` — unix-socket session resolver.
-  Consumed by `mux-open`, `tab-edit` (**utils**), quick-launch.
+- **`mux::pick`** — drop-in for `pick::start` (**pick**). Same argv; floats in
+  a popup on either backend, else inline. Consumed by `ai-assist`/`ai-commit`
+  (**ai-harnesses**) and `quick-launch-pick`. `zj::pick` remains as a
+  permanent alias — keep it working, do not build on it.
+- **`mux::resolve_session <client_pid>`** / **`mux::client_sessions`** in
+  `~/.local/lib/mux.zsh` — backend-dispatching session resolvers (Zellij scans
+  unix sockets; tmux asks the server). Consumed by `mux-open`, `tab-edit`
+  (**utils**), quick-launch. The Zellij half still lives in
+  `zellij/scripts/lib/zellij-session.zsh`.
 - **OSC 52 clipboard protocol**: `copy_command` intentionally unset in
   `config.kdl.tmpl`; copy is origin-relative via re-emitted OSC 52. The SSH
   paste-back reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`
@@ -68,12 +85,23 @@ chezmoi dotfiles repo.
   `__QL_FOCUS__=<id>` workspace names drive WezTerm handlers. Your
   `terminal-toggle-fullscreen` and quick-launch depend on these exact
   sentinel strings.
-- **Fullscreen-state mirror file**:
-  `~/.local/state/wezterm/fullscreen_state` (atomic write-on-change) — read
-  by the zj-hud bar.
+- **Fullscreen-state mirrors** — one per terminal, both read by the tmux
+  ribbon and the zj-hud bar, both written atomically:
+  `~/.local/state/wezterm/fullscreen_state` (pushed by `wezterm.lua` on every
+  window event) and `~/.local/state/mux/ghostty_fullscreen` (Ghostty has no
+  such hook, so `mux-fullscreen-probe` fills it from the `client-resized`
+  tmux hook). **Nothing in the ribbon renderer may ask the system a question
+  that blocks**: tmux will not re-run a `#()` job while one is in flight, so a
+  slow render stops the bar being re-expanded at all — a 4-11s accessibility
+  probe there made every mode pill vanish (`docs/mux-parity.md`).
+- **`W` window opcode** on the clipboard bridge — `fullscreen-toggle
+  <ghostty|wezterm>` and `fullscreen-state`, letting a session reach the
+  terminal on the machine it came from over SSH. You own the mux half; the
+  wire protocol is **clipboard**'s (`docs/clipboard-universal-project.md`).
 - **`get_terminal_image_protocol()`** in `image-protocol-support.zsh` —
-  returns Kitty/iTerm2/Sixel capability list constrained through Zellij.
-  Consumed by `preview` (**preview**).
+  returns the Kitty/iTerm2/Sixel capability list as constrained by whichever
+  multiplexer is in play (the two clamp differently). Consumed by `preview`
+  (**preview**).
 - **`zellij-plugin-path.tmpl`** — resolves managed plugin `file:` paths; the
   **chezmoi** silo's permission-grant hook and your `ensure-plugins` must
   agree with `config.kdl`'s loaded paths.
@@ -90,8 +118,15 @@ chezmoi dotfiles repo.
 
 ## Where to start
 
-`wezterm.lua`, `config.kdl.tmpl`, `zellij.zsh`, `mux/scripts/lib/dispatch.zsh`,
-`zellij/scripts/lib/zellij-session.zsh`.
+`lib/mux.zsh` (what every consumer sees), `lib/mux/{tmux,zellij}.zsh` (how each
+backend answers), `.chezmoidata/keymap.yaml` (both key planes),
+`mux/scripts/lib/dispatch.zsh`, `wezterm.lua`, `config.kdl.tmpl`.
+
+Read `docs/mux-parity.md` before changing behaviour: it is the parity ledger
+AND the gotcha record — popups are client-side overlays that `capture-pane`
+cannot see, `send-keys -K` does not reliably traverse key tables, a `#()` job
+that blocks freezes the whole bar, and terminals disagree about ctrl+shift
+encodings (three spellings per chord).
 
 ## Setup — branch from the freshest master tip into an isolated worktree
 ```sh
@@ -149,8 +184,12 @@ $ARGUMENTS
 - Reproduce the behavior you changed (don't guess).
 - If you touched `lib/mux.zsh`, `lib/mux/*.zsh` or `mux/scripts/lib/*.zsh`, run
   `make test` (ShellSpec, pinned `--shell zsh`).
-- Confirm `zj::pick`/`resolve_session`/`@window:<id>`/sentinel-string
-  contracts still hold.
+- Confirm `mux::pick`/`mux::resolve_session`/`@window:<id>`/sentinel-string
+  contracts still hold, and that `zj::*` aliases still resolve.
+- Behaviour changes need an answer on BOTH backends, or an explicit ledger row
+  saying why not. Drive the real thing: a nested client for tmux, and boot
+  Zellij with the config rather than trusting `zellij setup --check`, which
+  accepts unknown action names without complaint.
 - Your diff stays within the owner area above.
 
 ## Reference

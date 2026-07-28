@@ -36,7 +36,7 @@ and "remote" when reached over SSH. Evolves the **existing**
 
 ## 1. Goals
 
-- Browse clipboard history from the terminal (a Zellij floating picker) and
+- Browse clipboard history from the terminal (a floating picker — a Zellij pane or a tmux popup) and
   from the macOS GUI (a Hammerspoon `hs.chooser`), both reading the **same**
   store.
 - Paste selected items directly into the terminal pane (inject) or copy them
@@ -112,7 +112,7 @@ Same socket, same tunnel — stop throwing the type away.
                       │                              │             │
    ┌──────────────────┴────────┐    ┌────────────────┴──┐   ┌──────┴──────┐
    │ Capture shim (per OS)     │    │ pick-clipboard    │   │ Hammerspoon  │
-   │  macOS: hs.pasteboard.    │    │  (fzf, in Zellij) │   │ hs.chooser   │
+   │  macOS: hs.pasteboard.    │    │  (fzf, in the mux) │   │ hs.chooser   │
    │   watcher  (rich)         │    │  Alt+w v          │   │ Cmd+Shift+V  │
    │  Wayland: wl-paste --watch│    └───────────────────┘   └──────────────┘
    │  X11: xclip-poll          │
@@ -226,7 +226,7 @@ into `pick::start` (no assembled-lines cache, no jq),
   `<preview>\x1f<content>\x1e<id>`. Preview = first line (newlines → `⏎`,
   truncated ~60 cols) + dim `· {len}c · {app} · {reltime} · {type_kind}`.
 - **Keys**:
-  - `Enter` → `--output field:1` → emit content (inject into pane in Zellij).
+  - `Enter` → `--output field:1` → emit content (injected into the pane on either backend).
   - `Alt-Enter` → `--key-background` insert-without-dismiss (existing FIFO
     broker → `PICK_INJECT_PANE`).
   - `Ctrl-Y` → **accept + dismiss**: copy the selected item to *my*
@@ -766,7 +766,7 @@ claimed before Phase 6 — see §18/STATUS.
   OSC 52 at all — they only reach your *local machine* via the reverse
   bridge, never an iPad.
 - **zellij OSC 52 passthrough — verify first**. The picker and provider run
-  inside a Zellij pane, so OSC 52 must pass through Zellij to reach the host
+  inside a mux pane, so OSC 52 must pass through the multiplexer to reach the host
   terminal (Blink/ghostty/wezterm). Zellij has OSC 52 support but
   passthrough from a pane must be confirmed against the installed
   Zellij version/config. **This is the first implementation verification** —
@@ -958,7 +958,7 @@ working.
     `quick-launch-pick` (terminal-mux) and the `ai-assist`/`ai-commit`
     pickers (ai-harnesses) still work unchanged after the `--preview`
     passthrough.
-  - `zj::pick` floating adapter.
+  - `mux::pick` floating adapter (popup on either backend).
   - The existing `clipboard-bridge` socket path and the `options.lua`
     SSH-gating (`SSH_CONNECTION`/`SSH_CLIENT`/`SSH_TTY`) — local NeoVim
     keeps `pbcopy`/`pbpaste`.
@@ -1052,7 +1052,7 @@ Critical context the spec depends on (read these files):
 - home/dot_config/zellij/scripts/executable_zellij-modal and
   home/dot_config/zellij/config.kdl.tmpl (the zellijModalRun template) —
   the floating-modal scaffolding and keybind pattern.
-- home/dot_local/lib/zellij.zsh — zj::pick (the floating adapter).
+- home/dot_local/lib/mux.zsh — mux::pick (the floating adapter; `zj::pick` survives as an alias).
 - home/dot_config/hammerspoon/modules/apps/clipboard-history.lua and
   apps/clipboard-picker.lua — the landed Phase 2/4 code you're extending.
 - home/dot_config/nvim/lua/clipboard/universal.lua — the landed Phase 1
@@ -1080,7 +1080,7 @@ Contracts you MUST NOT break (load-bearing for >=3 silos):
 - pick::start flag set and the \x1f/\x1e wire format — confirm
   quick-launch-pick (terminal-mux) and any ai-assist/ai-commit pickers
   still work unchanged.
-- zj::pick.
+- mux::pick.
 - The clipboard-bridge socket path and the SSH_CONNECTION/SSH_CLIENT/SSH_TTY
   gating — local (non-SSH) NeoVim keeps pbcopy/pbpaste.
 

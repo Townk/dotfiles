@@ -17,7 +17,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 ## Global rules (read first)
 
 1. **Naming convention** (`common.zsh`): *bare* = stdlib (`die`, `log_info`),
-   `module::fn` = a library module (`pkg::*`, `sec::*`, `pick::*`, `zj::*`,
+   `module::fn` = a library module (`pkg::*`, `sec::*`, `pick::*`, `mux::*`,
    `platform::*`, `cagent::*`, `assist::*`, `prompt::*`), `MODULE_UPPER` =
    module constant. An agent adding a function to a silo's library MUST follow
    the silo's `::` prefix.
@@ -48,7 +48,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 | Silo | Area | Owner root | Library | Flagship contract |
 |---|------|-----------|---------|-------------------|
-| terminal-mux | Terminal & mux integration | `dot_config/{wezterm,ghostty}/`, `dot_config/zellij/` | `lib/zellij.zsh`, `lib/image-protocol-support.zsh` | `zj::pick`, `resolve_session`, OSC-52 clipboard, workspace-rename side-channel |
+| terminal-mux | Terminal & mux integration (tmux default, Zellij one knob away) | `dot_config/{wezterm,ghostty}/`, `dot_config/{tmux,zellij,mux}/`, `.chezmoidata/keymap.yaml` | `lib/mux.zsh` + `lib/mux/*`, `libexec/tmux-status-right`, `lib/image-protocol-support.zsh` | `mux::pick`, `mux::resolve_session`, OSC-52 clipboard, fullscreen mirrors, workspace-rename side-channel |
 | neovim | NeoVim config | `dot_config/nvim/` | (lua, none in `lib/`) | filetype registry (consumed by chezmoi), chezmoi auto-apply (consumes utils) |
 | hammerspoon | Hammerspoon | `dot_config/hammerspoon/` | (lua, in-process) | `hs` CLI `notify`/`notifyAnsi` globals (consumed by shell/terminal-mux) |
 | pick | pick framework + symbols pickers | `dot_local/lib/pick-common.zsh`, `pick-symbols-common.zsh`, `libexec/pick-*` | `pick::*`, `pick_symbols::*` | `pick::start` wire format (consumed by terminal-mux/custom-builds/ai-harnesses) |
@@ -79,25 +79,26 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - `home/dot_config/wezterm/` (all lua)
 - `home/dot_config/ghostty/config`
 - `home/dot_config/zellij/config.kdl.tmpl`, `layouts/default.kdl.tmpl`, `quick-launch/`, `scripts/` (backend-private: zellij-modal, pick-*-zellij, quick-launch-zellij, ensure-plugins, lib/zellij-session.zsh); `home/dot_config/mux/scripts/` (backend-neutral: quick-launch{,-pick,-window}, mux-open, mux-preview-{file,image}, mux-quit-confirm, the mux-*/tmux-* helpers, copy-pwd, edit-terminal-config, terminal-toggle-fullscreen, nested-session-check, resolve-terminal-location, lib/{config,command,dispatch,dispatch-tmux,terminal-location}.zsh); `home/dot_config/tmux/`
-- `home/dot_local/lib/zellij.zsh` (`zj::*`), `home/dot_local/lib/image-protocol-support.zsh`
+- `home/dot_local/lib/mux.zsh` (`mux::*`) + `home/dot_local/lib/mux/{tmux,zellij,stack,mode,dialog}.zsh`; `home/dot_local/lib/zellij.zsh` is a compat shim sourcing it (`zj::*` survive as permanent aliases); `home/dot_local/libexec/tmux-status-right`; `home/.chezmoidata/keymap.yaml` (single source for the tmux tables AND the which-key panel); `home/dot_local/lib/image-protocol-support.zsh`
 - Zellij chezmoiscripts in chezmoi: `run_after_45-grant-zellij-plugin-permissions`, `run_onchange_after_40-install-snaps` (snap is system's data, the hook wiring is shared — coordinate)
 
 **Out of scope:** the custom wasm plugin *source* (`zj-hud`, `zj-promptjump`, `zj-context-keys`, `vim-navigator`) lives **outside** this repo in `~/Projects/apps/zellij/`. This silo owns only the KDL that *loads* them and the scripts they *invoke*. The patched font/Symbols DB are custom-builds. nvim's SSH-paste consumer is neovim. The `clipboard-bridge` launchd *service definition* lives in `services.toml.tmpl` (system) — terminal-mux owns the nvim→socket protocol, system owns the agent plist.
 
 **Public contract (preserve):**
-- `zj::pick` — drop-in for `pick::start` (pick). Same argv, floats in a Zellij pane when `$ZELLIJ` set, else inline. Consumed by `ai-assist`/`ai-commit` (ai-harnesses) and `quick-launch-pick`.
+- `mux::pick` — drop-in for `pick::start` (pick). Same argv, floats in a popup on either backend, else inline. Consumed by `ai-assist`/`ai-commit` (ai-harnesses) and `quick-launch-pick`. `zj::pick` remains as a permanent alias; nothing new should call it.
 - `mux::resolve_session <client_pid>` / `mux::client_sessions` in `~/.local/lib/mux.zsh` — backend-dispatching session resolvers (the zellij half is the unix-socket scan; the tmux half asks the server). Consumed by `mux-open`, `tab-edit` (utils), quick-launch.
 - **OSC 52 clipboard protocol**: `copy_command` intentionally unset in `config.kdl.tmpl`; copy is origin-relative via re-emitted OSC 52. The SSH paste-back reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` (served by system's `clipboard-bridge` agent). nvim implements the client.
 - **Workspace-rename side-channel**: `__TOGGLE_FULLSCREEN__` / `__QL_FOCUS__=<id>` workspace names drive WezTerm handlers. `terminal-toggle-fullscreen` (this silo) and quick-launch depend on these exact sentinel strings.
-- **Fullscreen-state mirror file**: `~/.local/state/wezterm/fullscreen_state` (atomic write-on-change) — read by the zj-hud bar.
-- `get_terminal_image_protocol()` in `image-protocol-support.zsh` — returns Kitty/iTerm2/Sixel capability list constrained through Zellij. Consumed by `preview` (preview).
+- **Fullscreen-state mirrors** (atomic write-on-change), read by the tmux ribbon and the zj-hud bar: `~/.local/state/wezterm/fullscreen_state` pushed by `wezterm.lua`; `~/.local/state/mux/ghostty_fullscreen` filled by `mux-fullscreen-probe` off the tmux `client-resized` hook, because Ghostty has no equivalent hook and asking costs seconds. The ribbon renderer is a `#()` job: nothing in it may block, or the bar stops being re-expanded at all.
+- **`W` window opcode** on the clipboard bridge (`fullscreen-toggle <ghostty|wezterm>`, `fullscreen-state`) — lets a session act on the terminal of the machine it came from over SSH. terminal-mux owns the mux half, clipboard owns the wire protocol.
+- `get_terminal_image_protocol()` in `image-protocol-support.zsh` — returns the Kitty/iTerm2/Sixel capability list as constrained by whichever multiplexer is in play (they clamp differently). Consumed by `preview` (preview).
 - `zellij-plugin-path.tmpl` (in this dir, shared with chezmoi) — resolves managed plugin `file:` paths; the permission-grant hook and `ensure-plugins` must agree with `config.kdl`'s loaded paths.
 
 **Consumes from:** pick (`pick::start`), custom-builds (patched font + symbols.db for glyph pickers), shell (`environment.sh` XDG vars, `notify`), utils (`notify`, `tab-edit`, `platform::`), system (`services.toml` clipboard-bridge agent), chezmoi (chezmoi hooks trigger plugin perms / snaps).
 
-**Entry points to start an investigation:** `wezterm.lua`, `config.kdl.tmpl`, `zellij.zsh`, `zellij-session.zsh`, `scripts/lib/dispatch.zsh`.
+**Entry points to start an investigation:** `lib/mux.zsh`, `lib/mux/{tmux,zellij}.zsh`, `.chezmoidata/keymap.yaml`, `scripts/lib/dispatch.zsh`, `wezterm.lua`, `config.kdl.tmpl`. Read `docs/mux-parity.md` first — parity ledger and gotcha record in one.
 
-**Dispatch example:** *"Review the Zellij quick-launch dispatcher for correctness/performance. You own terminal-mux's `dot_config/mux/scripts/quick-launch*` and `lib/dispatch.zsh`. Preserve `zj::pick`/`resolve_session`/`@window:<id>` contracts. Don't touch the wasm plugin sources (outside repo) or `services.toml` (system)."*
+**Dispatch example:** *"Review the Zellij quick-launch dispatcher for correctness/performance. You own terminal-mux's `dot_config/mux/scripts/quick-launch*` and `lib/dispatch.zsh`. Preserve `mux::pick`/`mux::resolve_session`/`@window:<id>` contracts. Don't touch the wasm plugin sources (outside repo) or `services.toml` (system)."*
 
 ---
 
@@ -150,7 +151,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - `home/dot_local/lib/pick-symbols-common.zsh` (`pick_symbols::*`)
 - `home/dot_local/libexec/executable_pick-list`, `pick-glyph`, `pick-gitmoji`
 
-**Out of scope:** `zj::pick` (terminal-mux — the Zellij floating adapter, but it's a thin drop-in that *calls* `pick-list`/`pick::start`). The Zellij modal adapters `pick-{glyph,gitmoji}-zellij` (terminal-mux). The symbols.db *builder* (custom-builds). Consumers in ai-harnesses (`ai-assist`/`ai-commit` pickers) and terminal-mux (`quick-launch-pick`).
+**Out of scope:** `mux::pick` (terminal-mux — the floating adapter, but it's a thin drop-in that *calls* `pick-list`/`pick::start`). The Zellij modal adapters `pick-{glyph,gitmoji}-zellij` (terminal-mux). The symbols.db *builder* (custom-builds). Consumers in ai-harnesses (`ai-assist`/`ai-commit` pickers) and terminal-mux (`quick-launch-pick`).
 
 **Public contract (preserve — load-bearing for ≥3 silos):**
 - **`pick::start [flags] LINES_CACHE_OR_STDIN`** — the core entry. Flags include `--cache-usage` (recency), `--cache-state`/`--resume` (cursor restore), `--selector`/`--selector-shortcuts`/`--selector-nav`, `--key-background` (insert-without-dismiss FIFO broker), `--key-output <key>:<kind>:<field>`, `--multi[=SEP]`, `--copy-only`, `--on-items-picked <cmd>`, `--output`, `--name`. Also `pick::line`, `pick::run`, `pick::feed`, `pick::clipboard`, `pick::record`.
@@ -159,11 +160,11 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **`PICK_INJECT_PANE` / `PICK_INJECT_ZELLIJ`** env — the `--key-background` FIFO broker injects into these.
 - **`PICK_GLYPH_DB`** env (default `${XDG_DATA_HOME:-~/.local/share}/fonts/nerd-font/symbols.db`) — the DB path contract with custom-builds.
 
-**Consumes from:** custom-builds (symbols.db at `PICK_GLYPH_DB`), shell (`common.zsh` stdlib), terminal-mux (`zj::pick` adapter, `zellij-modal --capture` FIFO for floating pickers).
+**Consumes from:** custom-builds (symbols.db at `PICK_GLYPH_DB`), shell (`common.zsh` stdlib), terminal-mux (`mux::pick` adapter, `zellij-modal --capture` FIFO for floating pickers).
 
 **Entry points:** `pick-common.zsh` (`pick::start` at line ~650), `pick.jq`, `pick-glyph`.
 
-**Dispatch example:** *"Review the `pick::` engine for performance. You own `lib/pick-common.zsh` + `pick.jq` + `libexec/pick-list`. The wire format (`\x1f`/`\x1e`) and the `pick::start` flag set are a public contract consumed by terminal-mux (quick-launch-pick, zj::pick) and ai-harnesses (ai-assist/ai-commit pickers) — preserve them. The symbols.db path (`PICK_GLYPH_DB`) is owned by custom-builds; treat the DB as read-only."*
+**Dispatch example:** *"Review the `pick::` engine for performance. You own `lib/pick-common.zsh` + `pick.jq` + `libexec/pick-list`. The wire format (`\x1f`/`\x1e`) and the `pick::start` flag set are a public contract consumed by terminal-mux (quick-launch-pick, mux::pick) and ai-harnesses (ai-assist/ai-commit pickers) — preserve them. The symbols.db path (`PICK_GLYPH_DB`) is owned by custom-builds; treat the DB as read-only."*
 
 ---
 
@@ -199,7 +200,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - `home/dot_local/libexec/ai-assist-{summon,popup,render,input,action-broker}` (the popup is a `zellij-modal --capture` adapter)
 - The ZLE widget `ai-assist-trigger` in `home/dot_config/zsh/functions.d/widgets.sh` (shared file with shell — coordinate) bound to `Ctrl+Shift+/` (kitty `CSI 47;6u`, delivered by terminal-mux's `zj-context-keys`)
 
-**Out of scope:** the `zj::pick`/`pick::start` framework (pick) — harnesses *call* it for the harness picker. The Zellij docked-pane spawn (`assist::spawn_pane`) uses terminal-mux's `zellij action` API. Atuin and the LLM harness CLIs (claude/cursor/pi) are external.
+**Out of scope:** the `mux::pick`/`pick::start` framework (pick) — harnesses *call* it for the harness picker. The Zellij docked-pane spawn (`assist::spawn_pane`) uses terminal-mux's `zellij action` API. Atuin and the LLM harness CLIs (claude/cursor/pi) are external.
 
 **Public contract (preserve):**
 - **Harness `--probe` contract**: each `ai-assist-*`/`ai-commit-*` worker answers `--probe` with a label iff its CLI is present. The dispatcher discovers workers by globbing `ai-assist-*`/`ai-commit-*` siblings and probing. Adding a harness = add a sibling respecting `--probe`.
@@ -208,11 +209,11 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **Session pin**: `$XDG_STATE_HOME/ai-assist/sessions/<session>/harness`.
 - **Per-project KB**: `$XDG_DATA_HOME/ai-assist/projects/<sha1(root)>/knowledge.md`.
 
-**Consumes from:** pick (`zj::pick`/`pick::start` for harness + plan pickers), terminal-mux (Zellij docked pane, `zellij-modal` for popup), shell (`prompt::confirm`, `common.zsh`), utils (`notify`), external Atuin + LLM CLIs.
+**Consumes from:** pick (`mux::pick`/`pick::start` for harness + plan pickers), terminal-mux (Zellij docked pane, `zellij-modal` for popup), shell (`prompt::confirm`, `common.zsh`), utils (`notify`), external Atuin + LLM CLIs.
 
 **Entry points:** `assist-agent-common.zsh`, `commit-agent-common.zsh`, `bin/ai-assist`, `bin/ai-commit`.
 
-**Dispatch example:** *"Review the `ai-commit` plan-cache + stage/commit loop for robustness. You own `lib/commit-agent-common.zsh` + `bin/ai-commit*`. Preserve the `{commits:[{files,message}]}` plan JSON shape and the 'agent plans, script owns all git' invariant. You consume `zj::pick` (pick) and `prompt::confirm` (shell) — read-only. Don't touch the ZLE widget file (shared with shell)."*
+**Dispatch example:** *"Review the `ai-commit` plan-cache + stage/commit loop for robustness. You own `lib/commit-agent-common.zsh` + `bin/ai-commit*`. Preserve the `{commits:[{files,message}]}` plan JSON shape and the 'agent plans, script owns all git' invariant. You consume `mux::pick` (pick) and `prompt::confirm` (shell) — read-only. Don't touch the ZLE widget file (shared with shell)."*
 
 ---
 
