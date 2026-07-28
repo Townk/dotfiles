@@ -81,6 +81,10 @@ keymap:
       - c
     - mode: tab
       members:
+      - t
+      - T
+    - mode: tab
+      members:
       - '['
       - ']'
       - P
@@ -98,6 +102,10 @@ keymap:
       - '0'
     - mode: pane
       members:
+      - p
+      - P
+    - mode: pane
+      members:
       - K
       - S-Up
       - J
@@ -110,6 +118,10 @@ keymap:
       members:
       - f
       - z
+    - mode: session
+      members:
+      - s
+      - S
     - mode: scroll
       members: &id001
       - Up

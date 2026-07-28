@@ -66,6 +66,38 @@ Describe 'mux-whichkey panel'
     The output should include "  S ➜"     # lowercase s shown uppercase
   End
 
+  # Create and pick belong together. `p` makes a pane and `P` picks what to
+  # make — but an uppercase letter normalizes to shift+lowercase for sorting,
+  # so the two land in different halves of the panel (bare letters, then
+  # modified chords) and the pair reads as unrelated. A `#group` row makes
+  # them one unit anchored on the lowercase key, which is the only thing that
+  # keeps them adjacent as the surrounding entries change.
+  Describe 'create sits next to pick'
+    # The panel positions each row with a cursor escape, not a newline, so a
+    # de-ANSI'd frame is ONE line — split on the border glyph to get rows.
+    rows() { plain "$1" | tr '│' '\n' | grep "➜"; }
+    adjacent() {
+      rows "$1" | awk -v a="$2" -v b="$3" '
+        # "new tab" is a SUBSTRING of "quick launch new tab" — without this
+        # guard the create match lands on the picker row and both indexes
+        # collapse onto it.
+        index($0, a) && !index($0, "quick launch") { first = NR }
+        index($0, b) { second = NR }
+        END { print (first && second && second == first + 1) ? "adjacent" : "first=" first " second=" second }'
+    }
+
+    Parameters
+      session  "new session"  "quick launch session"
+      tab      "new tab"      "quick launch new tab"
+      pane     "new pane"     "quick launch new pane"
+    End
+
+    It "puts $3 straight after $2 in the $1 panel"
+      When call adjacent "$1" "$2" "$3"
+      The output should equal "adjacent"
+    End
+  End
+
   It 'merges key variants onto one row, zj-hud style'
     When call plain pane
     The output should include "↑,K ➜"
