@@ -445,3 +445,19 @@ in the seams: tmux→sh quoting, the key-table guard, and the physical modifier.
 | ⌥ cannot carry a double-click gesture here — the FIRST click of a double fires `MouseDown1Pane`, and `M-MouseDown1Pane` opens the link under the pointer | ⌥+double-click on a filename would open it AND select it. ⇧ is free precisely because `S-MouseDown1Pane` is unbound (the inert-shift tradeoff), so nothing fires on the way in |
 | ⇧ only reaches tmux if the terminal stops using it as the mouse-reporting bypass | Ghostty: `mouse-shift-capture = always` (bypass lost outright). WezTerm: `bypass_mouse_reporting_modifiers = 'CTRL'` — parked rather than disabled, so WezTerm keeps a native-selection escape hatch on ⌃+drag |
 | a double-click can be SYNTHESISED: two rapid press/release pairs of raw SGR bytes through the nested-tmux probe, with the modifier in the button code (0 plain, 4 shift, 8 meta) | `tests/mux_select_spec.sh` drives both gestures for real and asserts the paste buffer, which is the only level at which a swallowed click or a leaked option is visible |
+
+## The running server vs the deployed config (2026-07-28)
+
+Chasing "the statusbar is not updating for any mode anymore" through a config
+that turned out to be correct the whole time. What the hunt actually
+established, in the order it stopped being a suspect:
+
+| Gotcha | Consequence |
+|---|---|
+| a tmux server holds its config in MEMORY — `chezmoi apply` rewrites `~/.config/tmux/*.conf`, and a server started before that keeps the old key tables, hooks and `status-right` until something says `source-file` | the drift is silent and reads as a bug in the file you just edited: the bar still paints, the keys still do *something*. `run_onchange_after_58-reload-tmux.sh` now re-sources into every running server, walking the socket dir (`-L` servers included) rather than assuming the default socket |
+| the mode pill is repainted by tmux ITSELF when the key table moves; an OPTION change earns no redraw | `@renaming` had to ask for its own `refresh-client -S` on the way in, or the pill waits for the next `status-interval` tick (10s) with the dialog already on screen. The exit path had one; the entry path did not |
+| `send-keys -K -c <tty>` does NOT reliably traverse the key tables — the same sequence that leaves `client_key_table` stuck at `prefix` under `send-keys` walks Command → Tab → Rename perfectly when the bytes arrive as real input | cost a false diagnosis ("the `t` bind never fires"). Drive a nested client's terminal instead: `tmux -L outer send-keys -t host M-w` types into the pane that IS the inner client's tty |
+| `set key-table X` (session option) and `switch-client -T X` (client) are BOTH in play here and are not the same knob — the leader arms the client, every mode bind moves the session default | reading only `client_key_table` while the option moved, or the reverse, makes a working chain look broken |
+| a nested attach refuses while `$TMUX` is set, even for a DIFFERENT socket | `unset TMUX; tmux attach -t …`; and a half-typed line means the keys you send land in the shell instead of the client — check the pane before believing the bar |
+| the renderer tolerates a short argv (11/13/14/15 args all render), so an appended argument is NOT what breaks a stale server | ruled out early; the arg list has grown 11 → 15 across the phase and stayed backward-compatible by appending only |
+| probing bindings against the server the user is SITTING IN is how a working setup gets broken | a malformed `\;` chain left the live leader damaged and produced the very report being investigated. Scratch socket (`-L probe`) for experiments; a throwaway session + nested client when the LIVE server itself must be verified |

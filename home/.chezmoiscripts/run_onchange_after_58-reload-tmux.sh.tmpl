@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+# Re-source the tmux config into every RUNNING server whenever the generated
+# config changes.
+#
+# A tmux server holds its config in memory: `chezmoi apply` rewrites
+# ~/.config/tmux/*.conf, but a server started yesterday keeps yesterday's key
+# tables, hooks and status-right until someone says `source-file`. The two
+# then drift, and the drift is invisible — the bar still paints, the keys
+# still do *something*, and every symptom points at the file you just edited
+# rather than at the copy that is actually running. That cost a debugging
+# session: a live server whose bindings no longer matched the deployed
+# keymap, chased through a config that was correct the whole time.
+#
+# So the reload happens where the change happens. tmux.conf is the single
+# entry point (it sources keymap-base, keymap, status and the theme), so one
+# source-file per server is the whole job.
+#
+# Hashes below are the inputs that can change what a server should be running:
+# the four templates, the keymap data they are generated from, and the palette
+# the theme conf is rendered from.
+#
+# tmux.conf:        {{ include "dot_config/tmux/tmux.conf.tmpl" | sha256sum }}
+# status.conf:      {{ include "dot_config/tmux/status.conf.tmpl" | sha256sum }}
+# keymap.conf:      {{ include "dot_config/tmux/keymap.conf.tmpl" | sha256sum }}
+# keymap-base.conf: {{ include "dot_config/tmux/keymap-base.conf.tmpl" | sha256sum }}
+# keymap data:      {{ include ".chezmoidata/keymap.yaml" | sha256sum }}
+# theme data:       {{ include ".chezmoidata/theme.yaml" | sha256sum }}
+
+conf="$HOME/.config/tmux/tmux.conf"
+
+command -v tmux >/dev/null 2>&1 || exit 0
+[ -f "$conf" ] || exit 0
+
+# Where tmux keeps its sockets — one directory per uid, one socket per server
+# (`-L name`). A plain `tmux source-file` would only reach the default socket.
+sockdir="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
+[ -d "$sockdir" ] || exit 0
+
+reloaded=0
+for sock in "$sockdir"/*; do
+  [ -S "$sock" ] || continue
+  name="${sock##*/}"
+  # A socket file outlives its server, so ask before sourcing: has-session
+  # fails fast on a dead one and we leave the corpse alone (removing it is
+  # not this script's business).
+  tmux -L "$name" has-session >/dev/null 2>&1 || continue
+  if tmux -L "$name" source-file "$conf" >/dev/null 2>&1; then
+    reloaded=$((reloaded + 1))
+  else
+    echo "⚠️  tmux server '$name' rejected the new config; reload it by hand." >&2
+  fi
+done
+
+[ "$reloaded" -eq 0 ] || echo "🔁  Reloaded tmux config in $reloaded running server(s)."
+
+# vim:ft=sh
