@@ -107,6 +107,16 @@ set -g renumber-windows on         # closing a window renumbers the rest, like z
 # The copy-mode / dead-pane markers are tmux's own default format, kept.
 setw -g automatic-rename-format "#{?pane_in_mode,[tmux],$win_osc_title}#{?pane_dead,[dead],}"
 
+# tmux names anonymous sessions 0, 1, ...; Zellij gives them memorable
+# adjective-noun names. Rename only those numeric defaults after creation, so
+# explicit names (Main and quick-launch workspaces) stay authoritative.
+# Background the helper: calling tmux from a foreground hook would block this
+# command queue while the helper waits for its rename-session command.
+# Pass socket_path explicitly: a detached server's run-shell environment does
+# not identify a non-default socket (tmux -L/-S), so a bare tmux call could
+# otherwise rename a session on the wrong server or find none at all.
+set-hook -g after-new-session 'if-shell -F "#{m/r:^[0-9]+$,#{session_name}}" { run-shell -b "MUX_BACKEND=tmux MUX_TMUX_SOCKET=#{q:socket_path} {{ .chezmoi.homeDir }}/.local/bin/mux-random-session-name --apply #{q:session_name} >/dev/null" }'
+
 # Refresh these into a session's environment on attach: tmux overrides the
 # PANE env (TERM_PROGRAM=tmux), so the session env is the only truthful
 # record of the outer terminal — image-protocol-support.zsh and yazi both

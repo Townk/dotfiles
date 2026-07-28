@@ -1,0 +1,34 @@
+#compdef mux-random-session-name
+#
+# Completion for the random mux session-name generator. Named application
+# completes sessions live through the same mux abstraction as the command, in
+# a child zsh so sourcing the mux libraries does not pollute the interactive
+# completion environment.
+
+__mux-random-session-name-sessions() {
+  local lib="${MUX_LIB:-$HOME/.local/lib/mux.zsh}"
+  local output
+  local -a sessions
+
+  [[ -r "$lib" ]] || return 0
+  output="$(
+    MUX_BACKEND="${MUX_BACKEND:-}" MUX_LIB="$lib" zsh -f -c '
+      source "$MUX_LIB"
+      if [[ "$(mux::backend)" == none ]]; then
+        export MUX_BACKEND="$(mux::default_backend)"
+      fi
+      mux::list_sessions 2>/dev/null
+    ' 2>/dev/null
+  )"
+  sessions=("${(@f)output}")
+  (( ${#sessions} )) && _describe -t mux-sessions 'mux session' sessions
+}
+
+_mux-random-session-name() {
+  _arguments -s \
+    '(- *)'{-h,--help}'[show detailed help and exit]' \
+    '(-h --help --apply)--apply-current[generate and apply a name to the current session]' \
+    '(-h --help --apply-current)--apply[generate and apply a name to a named session]:session:__mux-random-session-name-sessions'
+}
+
+_mux-random-session-name "$@"

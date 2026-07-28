@@ -421,6 +421,16 @@ _mux_zj_list_sessions() {
   "$(_mux_zj_bin)" list-sessions -s 2>/dev/null | sed '/^$/d'
 }
 
+# _mux_zj_rename_session <new-name> [target-session] — Zellij's global
+# --session selector lets the same API rename either the caller's current
+# session or a named session from outside it.
+_mux_zj_rename_session() {
+  local new_name="$1" target="${2:-}"
+  local -a pre=()
+  [[ -n "$target" ]] && pre=(--session "$target")
+  "$(_mux_zj_bin)" "${pre[@]}" action rename-session "$new_name"
+}
+
 # zellij_wezterm_sessions
 #   Print "<session>\t<window_id>\t<pane_id>" (TAB-separated) for every WezTerm
 #   pane running a Zellij client — i.e. which sessions are live in their own OS

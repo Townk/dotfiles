@@ -8,6 +8,15 @@
 
 _mux_tx_bin() { print -r -- "${MUX_TMUX_BIN:-tmux}"; }
 
+# _mux_tx_run <tmux args...> — invoke this backend's server. The socket
+# override is needed by out-of-session callers such as after-new-session hooks
+# on isolated/non-default servers; normal in-session calls inherit $TMUX.
+_mux_tx_run() {
+  local -a cmd=("${MUX_TMUX_BIN:-tmux}")
+  [[ -n "${MUX_TMUX_SOCKET:-}" ]] && cmd+=(-S "$MUX_TMUX_SOCKET")
+  "${cmd[@]}" "$@"
+}
+
 _mux_tx_available() {
   # $TMUX means we are INSIDE a session. MUX_BACKEND means a caller
   # resolved the backend for us from OUTSIDE one — mux-open does exactly
@@ -38,7 +47,20 @@ _mux_tx_resolve_session() {
 # equivalent of zellij's exited-but-resurrectable sessions, so this is simply
 # what is running.
 _mux_tx_list_sessions() {
-  "$(_mux_tx_bin)" list-sessions -F '#{session_name}' 2>/dev/null
+  _mux_tx_run list-sessions -F '#{session_name}' 2>/dev/null
+}
+
+# _mux_tx_rename_session <new-name> [target-session] — target omitted means
+# the caller's current session. Refresh every attached client so status-right's
+# session-name-dependent #() command is rerun immediately.
+_mux_tx_rename_session() {
+  local new_name="$1" target="${2:-}" client
+  local -a t=()
+  [[ -n "$target" ]] && t=(-t "=$target")
+  _mux_tx_run rename-session "${t[@]}" "$new_name" || return
+  for client in "${(@f)$(_mux_tx_run list-clients -t "=$new_name" -F '#{client_tty}' 2>/dev/null)}"; do
+    [[ -n "$client" ]] && _mux_tx_run refresh-client -S -t "$client" 2>/dev/null || true
+  done
 }
 
 # _mux_tx_attached_sessions — sessions with a connected client, one per line

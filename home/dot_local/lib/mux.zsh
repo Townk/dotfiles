@@ -313,6 +313,18 @@ mux::list_sessions() {
   esac
 }
 
+# mux::rename_session <new-name> [target-session] — rename the current session
+# when target is omitted, or a specific session when supplied. Backend syntax,
+# socket routing, and redraw behavior stay behind this boundary.
+mux::rename_session() {
+  [[ -n "${1:-}" ]] || return 2
+  case "$(mux::backend)" in
+    tmux) _mux_tx_rename_session "$1" "${2:-}" ;;
+    zellij) _mux_zj_rename_session "$1" "${2:-}" ;;
+    *) return 1 ;;
+  esac
+}
+
 mux::client_sessions() {
   case "$(mux::backend)" in
     tmux) _mux_tx_client_sessions ;;

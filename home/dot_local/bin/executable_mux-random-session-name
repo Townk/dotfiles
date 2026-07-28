@@ -1,0 +1,177 @@
+#!/usr/bin/env zsh
+# Generate an unused Zellij-style adjective-noun name for a mux session.
+#
+#   mux-random-session-name                   print an unused name (no mutation)
+#   mux-random-session-name --apply-current   generate and rename the current session
+#   mux-random-session-name --apply SESSION   generate and rename a named session
+
+set -euo pipefail
+
+source "${MUX_LIB:-$HOME/.local/lib/mux.zsh}"
+
+usage() {
+  cat <<'EOF'
+mux-random-session-name — generate an unused random mux session name
+
+USAGE
+  mux-random-session-name
+  mux-random-session-name --apply-current
+  mux-random-session-name --apply SESSION
+
+DESCRIPTION
+  Generates a lowercase adjective-noun name from Zellij's curated vocabulary
+  and checks that the name is unused by the selected multiplexer backend.
+
+  With no options, only the generated name is printed; no session is changed.
+  Applying a name is always explicit and retries if another process claims the
+  generated name before the rename completes.
+
+MUTATING MODES
+  --apply-current
+      Generate a name and rename the current tmux or Zellij session.
+      This option must be run from inside a multiplexer session.
+
+  --apply SESSION
+      Generate a name and rename SESSION. This also works outside that session
+      and is used by the automatic tmux anonymous-session hook.
+
+BACKEND SELECTION
+  Inside a session, the active tmux or Zellij backend is used.
+  Outside a session, MUX_BACKEND overrides the configured default backend;
+  otherwise the configured default is used.
+
+  Name availability follows mux::list_sessions: tmux checks live sessions,
+  while Zellij also checks exited sessions that can be resurrected.
+
+OUTPUT
+  On success, prints exactly one generated name to standard output.
+
+OPTIONS
+  -h, --help
+      Show this help and exit.
+
+EXIT STATUS
+  0  A name was generated, and applied when requested.
+  1  The backend, session, or unused-name operation failed.
+  2  Command-line usage was invalid.
+
+EXAMPLES
+  mux-random-session-name
+  name=$(mux-random-session-name)
+  mux-random-session-name --apply-current
+  mux-random-session-name --apply Main
+  MUX_BACKEND=zellij mux-random-session-name --apply scratch
+EOF
+}
+
+mode=generate
+target=""
+case "${1:-}" in
+  "")
+    ;;
+  --apply-current)
+    mode=apply-current
+    (($# == 1)) || {
+      print -ru2 -- "mux-random-session-name: --apply-current takes no arguments"
+      exit 2
+    }
+    ;;
+  --apply)
+    mode=apply
+    [[ -n "${2:-}" && $# == 2 ]] || {
+      print -ru2 -- "mux-random-session-name: --apply requires exactly one session name"
+      exit 2
+    }
+    target="$2"
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    print -ru2 -- "mux-random-session-name: unknown argument: $1"
+    exit 2
+    ;;
+esac
+
+active_backend="$(mux::backend)"
+if [[ "$mode" == apply-current && "$active_backend" == none ]]; then
+  print -ru2 -- "mux-random-session-name: --apply-current requires a mux session"
+  exit 1
+fi
+
+# Outside a session, generation and named application use the configured
+# default backend. MUX_BACKEND remains an explicit caller override.
+if [[ "$active_backend" == none ]]; then
+  export MUX_BACKEND="$(mux::default_backend)"
+fi
+
+if [[ "$mode" == apply-current ]]; then
+  target_name="$(mux::current_session 2>/dev/null)" || target_name=""
+  [[ -n "$target_name" ]] || {
+    print -ru2 -- "mux-random-session-name: could not resolve the current session"
+    exit 1
+  }
+else
+  target_name="$target"
+fi
+
+# Synced with Zellij's curated lists:
+# https://github.com/zellij-org/zellij/blob/main/zellij-utils/src/sessions.rs
+adjectives=(
+  adamant adept adventurous arcadian auspicious awesome blossoming brave
+  charming chatty circular considerate cubic curious delighted didactic
+  diligent effulgent erudite excellent exquisite fabulous fascinating friendly
+  glowing gracious gregarious hopeful implacable inventive joyous judicious
+  jumping kind likable loyal lucky marvellous mellifluous nautical oblong
+  outstanding polished polite profound quadratic quiet rectangular remarkable
+  rusty sensible sincere sparkling splendid stellar tenacious tremendous
+  triangular undulating unflappable unique verdant vitreous wise zippy
+)
+nouns=(
+  aardvark accordion apple apricot bee brachiosaur cactus capsicum clarinet
+  cowbell crab cuckoo cymbal diplodocus donkey drum duck echidna elephant
+  foxglove galaxy glockenspiel goose hill horse iguanadon jellyfish kangaroo
+  lake lemon lemur magpie megalodon mountain mouse muskrat newt oboe ocelot
+  orange panda peach pepper petunia pheasant piano pigeon platypus quasar
+  rhinoceros river rustacean salamander sitar stegosaurus tambourine tiger
+  tomato triceratops ukulele viola weasel xylophone yak zebra
+)
+
+sessions=("${(@f)$(mux::list_sessions 2>/dev/null || true)}")
+name_used() {
+  local existing
+  for existing in "${sessions[@]}"; do
+    [[ "$existing" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+for _attempt in {1..1000}; do
+  candidate="${adjectives[$(( RANDOM % ${#adjectives} + 1 ))]}-${nouns[$(( RANDOM % ${#nouns} + 1 ))]}"
+  name_used "$candidate" && continue
+
+  if [[ "$mode" == generate ]]; then
+    print -r -- "$candidate"
+    exit 0
+  fi
+
+  rename_target=()
+  [[ "$mode" == apply ]] && rename_target=("$target")
+  if mux::rename_session "$candidate" "${rename_target[@]}"; then
+    print -r -- "$candidate"
+    exit 0
+  fi
+
+  # A racing creator may have claimed the candidate between list and rename.
+  # Retry only while the original session still exists; otherwise surface the
+  # real target failure instead of issuing 1000 doomed rename requests.
+  sessions=("${(@f)$(mux::list_sessions 2>/dev/null || true)}")
+  name_used "$target_name" || {
+    print -ru2 -- "mux-random-session-name: session not found: $target_name"
+    exit 1
+  }
+done
+
+print -ru2 -- "mux-random-session-name: could not find an unused name"
+exit 1

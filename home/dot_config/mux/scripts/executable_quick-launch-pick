@@ -180,6 +180,13 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
       else
         .[$k][]?
       end;
+    # Match the tmux-status-right session treatment: kebab-case -> Title Case.
+    # A configured action label remains authoritative; this transforms the
+    # underlying session name used by ad-hoc/live workspace rows.
+    def session_title:
+      split("-")
+      | map(if length == 0 then . else (.[0:1] | ascii_upcase) + .[1:] end)
+      | join(" ");
     # One picker line for an element, with an optional trailing $suffix
     # (already colour-wrapped) appended to the visible label and an explicit
     # hidden-tail $fields array. Prefers the element icon field (trailing space
@@ -190,7 +197,10 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
       (.action.type // "") as $t
       | ((.icon // "") | sub("\\s+$"; "")) as $cfg_icon
       | (if ($cfg_icon | length) > 0 then $cfg_icon else icon($t) end) as $ic
-      | (.action.label // .name // .id) as $label
+      | (if $k == "workspaces"
+           then (.action.label // ((.name // .id) | session_title))
+           else (.action.label // .name // .id)
+         end) as $label
       | emit_line(
           ($ic | paint(c_glyph)) + "  " + ($label | paint(c_key)) + $suffix;
           $fields
@@ -203,6 +213,21 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
     def sname: .name // .id;
     def is_live: . as $w | ($live | index($w.name // $w.id)) != null;
     def in_window: . as $w | ($windowed | index($w.name // $w.id)) != null;
+    # Workspace metadata is assembled as independent facts, then rendered as
+    # one comma-separated parenthesized suffix. Synthesized live sessions are
+    # ad-hoc; every live session also says whether it is detached or attached
+    # in another terminal window.
+    def info_suffix:
+      [ if (.ad_hoc // false) then "ad-hoc" else empty end,
+        if ((.ad_hoc // false) or is_live)
+          then (if in_window then "other window" else "detached" end)
+          else empty
+        end
+      ]
+      | if length > 0
+        then "  " + (("(" + join(", ") + ")") | paint(c_code))
+        else ""
+        end;
     if $k == "workspaces" then
       # Drop the session we are in (matched on session name, the key dispatch
       # uses to create/switch sessions), then list the live workspaces first —
@@ -219,12 +244,14 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
       # switch to it. They are synthesised as minimal workspaces {id, name} =
       # the session name, and carry NO icon field on purpose, so they fall
       # through to the same default a defined workspace without one gets.
+      # `ad_hoc` is presentation metadata only; id/name remain the raw session
+      # name used for dispatch.
       # Dispatch resolves an id it cannot find in the file the same way (the
       # live-session fallback in ql_get_element).
       ( [ .workspaces[]? | select(sname != $cur) ] ) as $wss
       | ( $wss | map(sname) ) as $defined
       | ( [ $live[] | select(. != $cur) | select(IN($defined[]) | not)
-            | { id: ., name: . } ] ) as $adhoc
+            | { id: ., name: ., ad_hoc: true } ] ) as $adhoc
       | ( ( $wss | map(select(is_live)) )
           + $adhoc
           + ( $wss | map(select(is_live | not)) ) )
@@ -232,9 +259,7 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
       # Field 2 (@window:<id>) is what Alt+Enter (--key-output) emits so the
       # caller can route the pick to the separate-window path.
       | entry_line(
-          (if is_live
-             then "  " + ((if in_window then "(other window)" else "(detached)" end) | paint(c_code))
-             else "" end);
+          info_suffix;
           [ .id, "@window:" + .id ]
         )
     else
