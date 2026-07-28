@@ -49,10 +49,12 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 | Silo | Area | Owner root | Library | Flagship contract |
 |---|------|-----------|---------|-------------------|
 | terminal-mux | Terminal & mux integration (tmux default, Zellij one knob away) | `dot_config/{wezterm,ghostty}/`, `dot_config/{tmux,zellij,mux}/`, `.chezmoidata/keymap.yaml` | `lib/mux.zsh` + `lib/mux/*`, `libexec/tmux-status-right`, `lib/image-protocol-support.zsh` | `mux::pick`, `mux::resolve_session`, OSC-52 clipboard, fullscreen mirrors, workspace-rename side-channel |
+| clipboard | Universal clipboard (store + bridge + mount) | `dot_local/bin/pb{copy,paste}`, `libexec/clipboard-*`, `libexec/pick-clipboard` | `lib/clipboard-{store-core,bridge-client,platform-*}.zsh` | the framed wire protocol (opcode/BE32-length), ports 2489 local / 2490 peer |
 | neovim | NeoVim config | `dot_config/nvim/` | (lua, none in `lib/`) | filetype registry (consumed by chezmoi), chezmoi auto-apply (consumes utils) |
 | hammerspoon | Hammerspoon | `dot_config/hammerspoon/` | (lua, in-process) | `hs` CLI `notify`/`notifyAnsi` globals (consumed by shell/terminal-mux) |
 | pick | pick framework + symbols pickers | `dot_local/lib/pick-common.zsh`, `pick-symbols-common.zsh`, `libexec/pick-*` | `pick::*`, `pick_symbols::*` | `pick::start` wire format (consumed by terminal-mux/custom-builds/ai-harnesses) |
 | custom-builds | Custom builds | `custom-builds/` | (shell/python builders) | `symbols.db` schema+path (consumed by pick/hammerspoon), patched font (consumed by terminal-mux/hammerspoon) |
+| theme | Single-source theming | `.chezmoidata/theme.yaml`, `custom-builds/theme/` | `lib/theme-common.zsh`, `libexec/theme-apply` | slot vocabulary + "no raw hex outside theme.yaml" (lint-enforced) |
 | ai-harnesses | AI agent harnesses | `dot_local/bin/ai-assist*`, `ai-commit*` | `lib/{assist,commit}-agent-common.zsh` | `request.json` shape, harness `--probe` contract (consumed by terminal-mux pane render) |
 | secrets | Secrets & onboarding | `dot_local/bin/system-secrets`, `system-onboard` | `lib/system-secrets-common.zsh` | `sec::*` slot API, `.leak-patterns` audit, `secrets.yaml` manifest |
 | system | System management | `dot_local/bin/system-{package,service,images,update}*` | `lib/system-package-common.zsh` | `pkg::restart_services_for` → `system-service restart-for` (system internal seam), `services.toml.tmpl` |
@@ -102,6 +104,31 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 ---
 
+## clipboard — Universal clipboard
+
+**Owner area (safe to edit):**
+- `home/dot_local/bin/executable_pb{copy,paste}` (the CLI surface, incl. the SSH branches)
+- `home/dot_local/libexec/executable_clipboard-bridge-dispatch` (per-connection handler; socat EXECs it per connection, so changes need no restart), `executable_clipboard-mount` (FUSE), `executable_pick-clipboard`
+- `home/dot_local/lib/clipboard-store-core.zsh` (store + framing + every `clip::op_*`), `clipboard-bridge-client.zsh` (`clipbridge::*`), `clipboard-platform-{macos,linux-headless}.zsh` (`pb::*`)
+- `home/dot_config/systemd/user/clipboard-bridge{@.service,.socket}`, `run_onchange_after_37-setup-clipboard-bridge.sh.tmpl` (logic only)
+- `docs/clipboard-universal-project.md` (the wire record — keep in step with the code)
+
+**Out of scope:** `nvim/lua/clipboard/**` (neovim owns the Lua, clipboard owns the protocol it speaks); the Hammerspoon clipboard modules + picker HTML (hammerspoon owns the UI); `pick-clipboard-zellij` (terminal-mux modal adapter); the `clipboard-bridge` agent *definition* in `services.toml.tmpl` (system-services owns the plist); `pick::start` (pick); the `W` opcode's *window* half — `terminal-toggle-fullscreen` / `mux-fullscreen-probe` (terminal-mux).
+
+**Public contract (preserve):**
+- **Wire protocol**: `<opcode><BE32 len><payload>` → `<'O'|'E'><BE32 len><payload>`. Opcode table in `docs/clipboard-universal-project.md` §11 and the dispatcher header — both must agree. Adding an opcode is additive; changing one is a cross-machine break, because the two ends update independently.
+- **Ports**: 2489 = this machine's own bridge, 2490 = the reverse-forwarded peer. 2490 listening is also the honest "am I the remote end" test.
+- **TCP, not a unix socket** — macOS OpenSSH ignores `StreamLocalBindUnlink` for remote unix-socket forwards, stranding a stale socket that kills later forwards.
+- `clipbridge::probe|send|request`; `CLIPBRIDGE_TIMEOUT_S` (2s default suits a read answered from memory, not an op that makes the origin *act*).
+- Legacy bare-connect grace path; byte-safe framing (`sysread`, never `$(...)`, because manifests are NUL-joined).
+- `x-file-manifest` UTI + `source_host` provenance; `clip::self_host` identity.
+
+**Consumes from:** pick (`pick::start`), terminal-mux (`mux::pick`/popup mechanics), utils (`notify`, `common.zsh`), system-services (the socat agent), shell (XDG vars).
+
+**Entry points:** `docs/clipboard-universal-project.md`, `lib/clipboard-store-core.zsh`, `libexec/clipboard-bridge-dispatch`, `bin/pbcopy`.
+
+**Dispatch example:** *"Add an opcode for X. You own the dispatcher, the store core and the bridge client. Preserve the framing and the legacy grace path; an old peer must get a loud `E`, never a hang. Don't edit the nvim provider or the Hammerspoon picker — they're consumers."*
+
 ## neovim — NeoVim config
 
 **Owner area:** `home/dot_config/nvim/` — `init.lua`, `lua/config/{options,autocmds,keymaps,lazy}.lua`, `lua/plugins/*.lua`, `lua/lualine/`, `lua/utils/*.lua`, `after/`, `local-plugins/smart-comment-wrap/`, `spell/`, `lazyvim.json`, `lazy-lock.json`, `dot_luarc.json`, `dot_editorconfig`.
@@ -150,6 +177,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - `home/dot_local/lib/pick-common.zsh` (`pick::*`), `pick.jq`
 - `home/dot_local/lib/pick-symbols-common.zsh` (`pick_symbols::*`)
 - `home/dot_local/libexec/executable_pick-list`, `pick-glyph`, `pick-gitmoji`
+- `home/dot_local/lib/input-common.zsh` + `libexec/executable_input-widget` — the modal INPUT widget (adopted 2026-07-28): a picker with the list removed, same modal plumbing, same callers
 
 **Out of scope:** `mux::pick` (terminal-mux — the floating adapter, but it's a thin drop-in that *calls* `pick-list`/`pick::start`). The Zellij modal adapters `pick-{glyph,gitmoji}-zellij` (terminal-mux). The symbols.db *builder* (custom-builds). Consumers in ai-harnesses (`ai-assist`/`ai-commit` pickers) and terminal-mux (`quick-launch-pick`).
 
@@ -190,6 +218,27 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 **Dispatch example (matches your stated need):** *"The custom Nerd Font build is too slow — investigate. You own `custom-builds/nerd-fonts/build-updated-font.sh` + `recalibrate-fa.sh` + `symbols-db/build-symbols-db.py`. The build is triggered by chezmoi's `run_onchange_after_70`/`run_after_80` hooks (read-only for you — the trigger hashes live there). You must preserve the output contract: `symbols.db` schema+path (consumed read-only by pick pickers and hammerspoon OSD) and the patched font family name + custom-icon `code` pins (consumed by terminal-mux font chains). Don't touch the consumers."*
 
 ---
+
+## theme — Single-source theming
+
+**Owner area (safe to edit):**
+- `home/.chezmoidata/theme.yaml` — the single source; slot names (`roles.*`, `extended.*`, `palette.*`) are an API referenced by path from shell, Lua and Rust
+- `custom-builds/theme/generate-theme.sh` + `templates/` (one per projection)
+- `home/dot_local/lib/theme-common.zsh`, `libexec/executable_theme-apply`, `bin/executable_theme-reset`
+- `run_onchange_after_54-generate-theme.sh.tmpl` (logic only), `tests/lint-theme.sh`
+
+**Out of scope:** the *consumers* that read a projection (terminal-mux, yazi, neovim, preview, shell, pi, cursor own their own files — a wrong colour is usually a slot or template here, but the reader belongs to them); generated outputs under `~/.config/theme/` and `~/.config/*/themes/` (build products); the rest of `custom-builds/`.
+
+**Public contract (preserve):**
+- **No raw hex outside `theme.yaml`** — `lint-theme.sh` runs in `make test` and is the reason the palette can move at all.
+- **The projections and their paths** (see `generate-theme.sh`): ~14 outputs incl. `~/.config/theme/chezmoi-system.{json,zsh,lua}`, per-terminal themes, bat/glow/yazi/zsh/pi/Claude Code. The JSON is the machine-readable one (POSIX consumers read it with `jq`).
+- Regeneration is automatic on `chezmoi apply` via the onchange hook; a tmux/Zellij *reload* is a separate concern (terminal-mux).
+
+**Consumes from:** chezmoi (template rendering + hash triggers), shell (`common.zsh`, XDG), utils (`notify`).
+
+**Entry points:** `.chezmoidata/theme.yaml`, `custom-builds/theme/generate-theme.sh`, then the consumer's template.
+
+**Dispatch example:** *"Add a slot for X and project it into tmux and yazi. You own theme.yaml, the generator and its templates. Don't edit the files that read the projection — and don't hand-edit a generated output."*
 
 ## ai-harnesses — AI agent harnesses
 
@@ -472,6 +521,18 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 Which silos can run agents **in parallel** without file collisions. `✓` = safe to
 run concurrently; `⚠` = shared file, serialize or pre-agree ownership; `✗` = same
 owner area, don't parallelize.
+
+> **Matrix coverage.** The grid below predates `system-backup`, `clipboard`
+> and `theme` and has not been extended to them — the cells are per-pair
+> judgements about shared files, and inventing 50 of them would look like
+> knowledge it isn't. What IS known about the newer silos: **clipboard**
+> collides with terminal-mux (the `W` opcode, `pick-clipboard-zellij`),
+> neovim (the provider), hammerspoon (the picker UI) and system-services
+> (the agent plist); **theme** writes into terminal-mux's, yazi's, neovim's
+> and preview's trees as *generated outputs*, so the collision is on the
+> template, never the product; **system-backup** collides with terminal-mux
+> on the scrub session's chrome. Treat those pairs as ⚠ and the rest as ✓
+> until someone does the pairwise pass.
 
 |  | terminal-mux | neovim | hammerspoon | pick | custom-builds | ai-harnesses | secrets | system | shell | preview | yazi | chezmoi | utils | pi | cursor |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

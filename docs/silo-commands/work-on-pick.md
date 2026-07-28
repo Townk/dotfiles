@@ -14,6 +14,11 @@ chezmoi dotfiles repo.
 - `home/dot_local/lib/pick-common.zsh` (`pick::*`), `pick.jq`
 - `home/dot_local/lib/pick-symbols-common.zsh` (`pick_symbols::*`)
 - `home/dot_local/libexec/executable_pick-list`, `pick-glyph`, `pick-gitmoji`
+- `home/dot_local/lib/input-common.zsh` + `libexec/executable_input-widget` —
+  the modal INPUT widget (adopted 2026-07-28). It is the same idea as a picker
+  with the list removed: one framed prompt, one answer, the same modal
+  plumbing and the same callers. It had no owner, and it belongs beside the
+  engine it mirrors rather than in a silo of its own.
 
 ## Out of scope (do not edit — owned by other silos)
 

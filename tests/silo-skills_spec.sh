@@ -6,7 +6,7 @@
 # LOAD these skills (not read a bare markdown path), so this spec pins both
 # the skill structure and that the templates reference the skills by name.
 
-Describe 'silo skills — reconcile & validate'
+Describe 'silo skills — reconcile, validate & cross-silo'
   # Resolve a frontmatter field from a SKILL.md. $1=file $2=field.
   frontmatter_field() {
     awk -v want="$2" '
@@ -32,6 +32,22 @@ Describe 'silo skills — reconcile & validate'
 
     It 'reconcile has a name field matching its directory'
       When call test "$(frontmatter_field docs/silo-commands/reconcile/SKILL.md name)" = "reconcile"
+      The status should be success
+    End
+
+    It 'cross-silo/SKILL.md exists and has required frontmatter'
+      When call test -f docs/silo-commands/cross-silo/SKILL.md
+      The status should be success
+    End
+
+    It 'cross-silo has a name field matching its directory'
+      When call test "$(frontmatter_field docs/silo-commands/cross-silo/SKILL.md name)" = "cross-silo"
+      The status should be success
+    End
+
+    It 'cross-silo has a non-empty description under 1024 chars'
+      desc=$(frontmatter_field docs/silo-commands/cross-silo/SKILL.md description)
+      When call test -n "$desc" -a ${#desc} -le 1024
       The status should be success
     End
 
@@ -91,6 +107,46 @@ Describe 'silo skills — reconcile & validate'
     It '.claude/skills/validate is a symlink'
       When call test -L .claude/skills/validate
       The status should be success
+    End
+
+    It '.pi/skills/cross-silo is a symlink'
+      When call test -L .pi/skills/cross-silo
+      The status should be success
+    End
+
+    It '.claude/skills/cross-silo is a symlink'
+      When call test -L .claude/skills/cross-silo
+      The status should be success
+    End
+  End
+
+  # The skill's whole answer to "how do I span two silos" is ONE worktree
+  # holding a declared set, not one worktree per silo. That choice is what
+  # keeps the seam testable: half a contract either fails or — worse — passes
+  # vacuously because nothing calls the other half yet. If someone later
+  # rewrites this toward per-silo worktrees, these should fail loudly.
+  Describe 'cross-silo pins the one-worktree decision'
+    src() { cat docs/silo-commands/cross-silo/SKILL.md; }
+
+    It 'claims the silo set in the branch name'
+      When call src
+      The output should include 'cross-silo-$SILOS-$suffix'
+    End
+
+    It 'checks for a competing claim before starting'
+      When call src
+      The output should include "git worktree list"
+    End
+
+    It 'lands through the normal /end-work, adding no second path'
+      When call src
+      The output should include "/end-work"
+      The output should include "reconcile"
+    End
+
+    It 'requires the seam to be exercised, not just the halves'
+      When call src
+      The output should include "Verify the seam"
     End
   End
 

@@ -94,6 +94,7 @@ templates; the `reconcile` skill remains the reusable capability it invokes.
 | Command | Domain | One-line purpose |
 |---------|--------|------------------|
 | `/work-on-terminal-mux` | terminal & multiplexer integration | WezTerm/Ghostty/Zellij integration & cross-tool bridges |
+| `/work-on-clipboard` | universal clipboard | store + framed bridge protocol + FUSE mount, across machines |
 | `/work-on-neovim` | NeoVim config | LazyVim config + custom autocmds/plugins |
 | `/work-on-hammerspoon` | Hammerspoon | macOS automation: keybindings, Stream Deck, OSD, controls |
 | `/work-on-pick` | pick framework + symbols pickers | `pick::` fzf picker engine + symbols pickers |
@@ -104,6 +105,8 @@ templates; the `reconcile` skill remains the reusable capability it invokes.
 | `/work-on-system-services` | system services | launchd+brew service manager, `services.toml` |
 | `/work-on-system-images` | system disk images | APFS sparse disk-image manager |
 | `/work-on-system-update` | system update orchestrator | "everything at latest" update orchestrator |
+| `/work-on-theme` | single-source theming | `theme.yaml` → ~14 generated projections; no raw hex anywhere else |
+| `/work-on-system-backup` | Terminal Time Machine backups | tiered encrypted restic snapshots + the scrub/restore UX |
 | `/work-on-shell` | shell (zsh) bootstrap & widgets | zsh bootstrap, ZLE widgets, `common.zsh`/`prompt::*`/`platform::*` |
 | `/work-on-preview` | file preview & terminal viewers | `preview` engine + terminal "card" viewers |
 | `/work-on-yazi` | Yazi | Yazi config + custom plugins |
@@ -131,6 +134,28 @@ dir); safe because chezmoi only stores its own state files (`.sig`/hash/bolt
 files) there and never scans a `worktrees/` subdir. Worktree checkout paths
 are machine-local and never committed. Each template's Setup block defines
 `WT_ROOT` and `mkdir -p`s it.
+
+## Features that span silos — the `cross-silo` skill
+
+Some features *are* the seam between two silos: a new bridge opcode, a shared
+file format, a side-channel both ends must agree on. There is no
+`/work-on-<two-silos>`, and there deliberately isn't one — load the
+**`cross-silo`** skill instead (`/skill:cross-silo` in pi, `/cross-silo` in
+Claude Code).
+
+It keeps the model intact rather than working around it: **one** worktree
+holding a **declared** set of silos, on a branch that names the claim
+(`cross-silo-<a>+<b>-<suffix>`), after checking that no other worktree already
+holds one of them. It lands through the normal `/end-work` — one branch, so
+nothing about integration changes.
+
+One worktree rather than one per silo, because you cannot test half a
+contract: the half without its partner either fails, or passes *vacuously*
+because nothing calls it yet — and a vacuous pass reads as done.
+
+Use `/work-on-<silo>` instead when a neighbour merely *follows* your change
+(a rename rippling into a caller). Directories are not silos; if the other
+silo's contract is unchanged, you are working in one silo.
 
 ## Parallel safety
 
@@ -187,9 +212,9 @@ frontmatter, `$ARGUMENTS`, markdown body) — no tool-specific features.
 
 ### Skills sharing mechanism — pi + Claude Code
 
-`reconcile` and `validate` are **Agent Skills** (a directory with a
-`SKILL.md` carrying `name` + `description` frontmatter), not slash-command
-prompt templates. Each canonical skill directory lives once in
+`reconcile`, `validate` and `cross-silo` are **Agent Skills** (a directory
+with a `SKILL.md` carrying `name` + `description` frontmatter), not
+slash-command prompt templates. Each canonical skill directory lives once in
 `docs/silo-commands/` and is symlinked into both tools' skill directories so
 pi auto-discovers it under `.pi/skills/` and Claude Code auto-discovers it
 under `.claude/skills/` (where it also exposes a `/reconcile` / `/validate`

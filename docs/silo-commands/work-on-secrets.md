@@ -22,6 +22,12 @@ repo.
 - GPG chezmoiscript `run_after_25-setup-gpg-key.sh.tmpl` + the op-daemon
   reaper `run_before_05-reap-stale-op-daemon.sh.tmpl` (trigger wiring is
   **chezmoi**; the *logic* is this silo)
+- **Agent forwarding** (adopted 2026-07-28):
+  `home/dot_local/libexec/executable_gpg-agent-forward-provision`,
+  `gpg-forward-prepare`, `ssh-prepare-connection`, and
+  `home/dot_config/private_gnupg/`. These decide which key material reaches a
+  remote machine and how — the same question the rest of this silo answers for
+  secrets at rest, so they belong here rather than in a silo of their own.
 
 ## Out of scope (do not edit — owned by other silos)
 
