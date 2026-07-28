@@ -398,6 +398,15 @@ clip::op_window_action() {
       # reason: this service may itself have been started from an ssh login,
       # and the toggle reads them as "you are not the local machine".
       if err="$(SSH_CONNECTION= SSH_CLIENT= MUX_TERMINAL="$arg" "$toggle" 2>&1)"; then
+        # Record it HERE too. The window that just moved is this machine's,
+        # so this machine's own mirror is now wrong — and any tmux running
+        # locally reads that mirror for its ribbon. --flip rather than a
+        # fresh probe: we just inverted the state deliberately, and asking
+        # the accessibility API again would cost seconds while the caller
+        # waits. The local client-resized hook still re-asks authoritatively
+        # a moment later, so a flip that guessed wrong is self-correcting.
+        local probe="${MUX_FULLSCREEN_PROBE:-$HOME/.config/mux/scripts/mux-fullscreen-probe}"
+        [[ -x "$probe" ]] && "$probe" --flip >/dev/null 2>&1
         send_ok ""
       else
         send_err "${err:-fullscreen toggle failed}"

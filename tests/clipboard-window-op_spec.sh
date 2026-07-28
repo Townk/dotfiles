@@ -17,6 +17,7 @@ Describe 'clip::op_window_action'
       print '[[ -z "${STUB_TOGGLE_FAILS:-}" ]] || { print -u2 "Ghostty has no windows"; exit 1 }'
     } > "$W_TMP/toggle"
     { print '#!/usr/bin/env zsh'
+      print '[[ "${1:-}" == --flip ]] && { print -r -- "flip" >> '"$W_TMP/probe.log"'; exit 0 }'
       print 'print -rn -- "${STUB_PROBE_ANSWER-true}"'
     } > "$W_TMP/probe"
     chmod +x "$W_TMP/toggle" "$W_TMP/probe"
