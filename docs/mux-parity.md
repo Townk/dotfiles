@@ -17,7 +17,7 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | Behavior | Zellij impl | tmux impl | Status | Notes |
 |---|---|---|---|---|
 | Leader | `Alt w` → "tmux" mode (config.kdl) | real `prefix M-w` | ✅ | D3 — WezTerm/Ghostty chord forwards serve both verbatim |
-| Mode persistence | per-client modes | `set key-table` (session-scoped) | 🟡 | D2; multi-client-same-session sees shared mode |
+| Mode persistence | per-client modes | `set key-table` (session-scoped) | 🟡 | D2; multi-client-same-session sees shared mode. The PANEL is per-client: every binding hands `#{client_tty}` down so the popup, its geometry and the armed prefix table follow the client that pressed the key |
 | Leader from non-normal modes | unavailable (leader only from Normal) | prefix unavailable in non-root tables | ✅ | R4 verified by construction |
 | Mode exit | `esc` → normal (shared_except) | `Escape` → `set key-table root` in every table | ✅ | ESC cancels, never Ctrl+C |
 | Locked mode | locked table; only `Alt esc` exits | `key-table locked`; only `M-Escape` exits | ✅ | max passthrough |
@@ -235,6 +235,7 @@ are derived views. One API (`lib/mux/stack.zsh`, exposed to key bindings by
 | `display-popup` from our own client dies when the caller exits (yazi runs quick-look as a task that returns immediately) | `mux::popup` hands every popup to the SERVER via `run-shell -b` |
 | `#{pane_pid}` is the pane's root shell, never the worker inside it | tm routes address the session by path (`@tm_session`), not by pid — a pid-matched route silently never fires |
 | zellij `run` cannot size the pane it creates; tmux `split-window -l` can | the 30-iteration resize-convergence loop in the tm launcher is now zellij-only |
+| `#{client_tty}` DOES expand in a `run-shell`, backgrounded or not, and names the client that pressed the key even with several attached (measured; a comment in stack.zsh claimed the opposite) | the panel stops guessing with `list-clients \| head -1`, which opened it in whichever terminal attached FIRST — press the leader in WezTerm, watch the panel appear in the Ghostty window |
 | the which-key panel runs its commands with `source-file` from inside a POPUP, where tmux has no current pane — so `#{pane_current_path}` expands EMPTY and a new tab silently landed in the session's start dir (the identical key-table bind inherited correctly) | the panel resolves that one format itself before sourcing (`display -p` from a popup does answer for the client's active pane); a blanket expansion is wrong, since other commands carry `#W` / `%%` that tmux must still see |
 
 ## Platform gotchas — Phase 6 Mode B session 2 (2026-07-27)

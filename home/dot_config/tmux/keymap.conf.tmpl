@@ -22,10 +22,10 @@
 # --- {{ $t.title }}{{ if hasKey $t "parent" }} (from {{ $t.parent }}){{ end }} ---
 {{ range $e := $t.entries }}{{ if not (hasKey $e "panel_only") -}}
 {{ $flag := "" }}{{ if ne $name "prefix" }}{{ $flag = printf "-T %s " $name }}{{ end -}}
-{{ $op := printf " ; run-shell -b \"%s clear\"" $stack -}}
+{{ $op := printf " ; run-shell -b \"%s clear '#{client_tty}'\"" $stack -}}
 {{ if hasKey $e "sticky" }}{{ $op = "" }}{{ end -}}
 {{ if hasKey $e "to" }}{{ $st := index $km.which_key.states $e.to -}}
-{{ if or $st.table $st.key_table }}{{ $op = printf " ; run-shell -b \"%s push %s\"" $stack $e.to }}{{ end }}{{ end -}}
+{{ if or $st.table $st.key_table }}{{ $op = printf " ; run-shell -b \"%s push %s '#{client_tty}'\"" $stack $e.to }}{{ end }}{{ end -}}
 {{ if hasKey $e "numeric" }}{{ range $k := $e.keys }}bind {{ $flag }}{{ $k }} { {{ replace "#N" $k $e.cmd }}{{ $op }} }
 {{ end }}{{ else }}{{ range $k := $e.keys }}bind {{ $flag }}{{ $k }} { {{ $e.cmd }}{{ $op }} }
 {{ end }}{{ end }}{{ end }}{{ end }}{{ end }}{{ end }}

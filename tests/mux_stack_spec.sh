@@ -112,6 +112,36 @@ EOS
   in_copy() { tmux display -p '#{?pane_in_mode,1,0}'; }
   visual() { tmux display -p '#{?#{@visual},1,0}'; }
 
+  # Two terminals attached at once (Ghostty + WezTerm) is a supported setup,
+  # and every client-scoped command has to name the client that pressed the
+  # key. The fallback — `list-clients | head -1` — picks whichever attached
+  # first, which is how pressing the leader in WezTerm opened the panel in
+  # the Ghostty window.
+  Describe 'multiple clients'
+    seq_as() {   # seq_as <client-tty> <state>
+      local c="$1" state="$2"
+      MUX_CLIENT="$c" MUX_TMUX_BIN=tmux MUX_LIB_DIR="$PWD/home/dot_local/lib" \
+      WK_DATA="$MS_TMP/wk.data" MUX_WK="$MS_TMP/wk" \
+        zsh -c "source $PWD/home/dot_local/lib/mux/stack.zsh
+                mux_stack::push $state"
+      i=0
+      while [ "$i" -lt 40 ] && [ ! -s "$MS_TMP/opened" ]; do sleep 0.05; i=$((i + 1)); done
+      cat "$MS_TMP/opened" 2>/dev/null
+    }
+
+    It 'opens the panel on the client that invoked it'
+      When call seq_as /dev/ttyINVOKER command
+      The output should include "/dev/ttyINVOKER"
+      The status should be success
+    End
+
+    It 'still works for callers that cannot name a client'
+      When call seq_as "" command
+      The output should include "open"
+      The status should be success
+    End
+  End
+
   Describe 'push'
     It 'starts the stack shown'
       When call seq 'push command'

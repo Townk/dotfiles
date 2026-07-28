@@ -297,10 +297,24 @@ mux_stack::sync() {
   # The client is named EXPLICITLY below: sync runs from run-shell
   # (client-less) and from inside a popup (no pane of its own), and
   # switch-client without a target fails with "no current client" in both.
-  # Its tty and the driver claim come back in one trip — user options are
-  # format variables too.
-  local cd; cd="$("$MUX_TMUX_BIN" list-clients -F '#{client_tty}|#{@mux_wk_driver}' 2>/dev/null | head -1)"
-  client="${cd%%|*}" MS_DRIVER="${cd##*|}"
+  #
+  # $MUX_CLIENT is the client that pressed the key, handed down by the
+  # binding — `#{client_tty}` DOES expand in a run-shell, backgrounded or
+  # not (measured 2026-07-28; an older comment here claimed otherwise). It
+  # matters as soon as a second terminal attaches: the fallback below takes
+  # whichever client list-clients returns first, so pressing the leader in
+  # WezTerm opened the panel in the Ghostty window and the key table was
+  # armed for the wrong client.
+  local cd
+  if [[ "${MUX_CLIENT:-}" == /dev/* ]]; then
+    client="$MUX_CLIENT"
+    MS_DRIVER="$("$MUX_TMUX_BIN" show -gv @mux_wk_driver 2>/dev/null)"
+  else
+    # Its tty and the driver claim come back in one trip — user options are
+    # format variables too.
+    cd="$("$MUX_TMUX_BIN" list-clients -F '#{client_tty}|#{@mux_wk_driver}' 2>/dev/null | head -1)"
+    client="${cd%%|*}" MS_DRIVER="${cd##*|}"
+  fi
   ct=(); [[ -n "$client" ]] && ct=(-c "$client")
   if [[ "$kt" == prefix ]]; then
     # the leader is tmux's ONE-SHOT prefix table, armed per client

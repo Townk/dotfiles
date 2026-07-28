@@ -29,6 +29,15 @@ emulate -L zsh
 setopt no_unset
 
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+
+# A trailing client tty (bindings pass '#{client_tty}') names the client that
+# pressed the key — everything client-scoped downstream reads $MUX_CLIENT, so
+# a second attached terminal cannot steal the panel. `open`/`panel` take the
+# client as a positional already; this covers `toggle` and friends.
+if [[ "${@[-1]:-}" == /dev/* && "${1:-}" != open && "${1:-}" != panel ]]; then
+  export MUX_CLIENT="${@[-1]}"
+  set -- "${@[1,-2]}"
+fi
 DATA="${WK_DATA:-$HOME/.config/mux/whichkey.data}"
 WK_DATA="$DATA"
 # THE shared mode resolver — the status bar uses the very same one, so the
@@ -647,7 +656,11 @@ _panel() {
 }
 
 case "${1:-}" in
-  panel) _panel "${2:-prefix}" "${3:-}" ;;
+  # The panel inherits the driver's client: its own stack operations (and the
+  # commands it dispatches) must act on the client the popup is drawn on, not
+  # on whichever one attached first.
+  panel) [[ "${3:-}" == /dev/* ]] && export MUX_CLIENT="$3"
+         _panel "${2:-prefix}" "${3:-}" ;;
   render)   # paint once and exit — tests + eyeballing without a popup
     _load "${2:-prefix}" || exit 0
     ROWS_MAX="${4:-${CFG[max_rows]}}"

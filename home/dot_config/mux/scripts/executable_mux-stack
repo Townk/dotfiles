@@ -4,9 +4,24 @@
 # path and the panel path run the SAME logic (spec: one transition API).
 #
 #   mux-stack push <state> | pop | clear | show | vis 0|1 | sync | reconcile
+#
+# Every verb takes an OPTIONAL trailing client tty. Bindings pass
+# '#{client_tty}' so the key table and the panel land on the client that
+# pressed the key: with two terminals attached, resolving the client by
+# `list-clients | head -1` picked whichever attached first.
 emulate -L zsh
 setopt no_unset
 source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/stack.zsh"
+
+# The client is the last argument when it looks like a tty (verbs take at
+# most one other argument, so this can never eat a state name).
+_ms_client=""
+if [[ "${@[-1]:-}" == /dev/* ]]; then
+  _ms_client="${@[-1]}"
+  set -- "${@[1,-2]}"
+fi
+[[ -n "$_ms_client" ]] && export MUX_CLIENT="$_ms_client"
+
 case "${1:-show}" in
   push)  mux_stack::push "${2:-}" ;;
   pop)   mux_stack::pop ;;
