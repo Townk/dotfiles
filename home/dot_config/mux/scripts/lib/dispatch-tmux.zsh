@@ -259,12 +259,24 @@ ql_tx_open_workspace() {
 # after `--` is backend-provided; its zellij --focus fast-path is skipped —
 # Phase 6 rewires it onto mux::client_sessions).
 ql_tx_open_workspace_window() {
-  local ws="$1" sname win
+  local ws="$1" sname win action cmd
   sname="$(jq -r '.name // .id' <<<"$ws")"
   win="${SCRIPT_DIR:-${${(%):-%x}:A:h:h}}/quick-launch-window"
 
   if ql_workspace_is_nested "$ws"; then
     ql_register_nested "$sname"
+    # A separate window does not need an outer tmux session: run the nested
+    # workspace command directly so only the remote/inner mux draws a status
+    # bar. --new prevents WezTerm from focusing a window attached to the local
+    # nested session instead of spawning this direct command.
+    action="$(jq -c '.action // {}' <<<"$ws")"
+    cmd="$(ql_action_command "$action")"
+    [[ -n "$cmd" ]] || {
+      echo "quick-launch: nested workspace '$sname' has no command" >&2
+      return 1
+    }
+    "$win" --new "$sname" -- "$SHELL" -c "$cmd"
+    return $?
   fi
 
   if ql_tx_session_exists "$sname"; then

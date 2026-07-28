@@ -326,10 +326,11 @@ keybind = cmd+n=new_window
 # Reload Ghostty config from disk without restarting.
 keybind = cmd+r=reload_config
 
-# Toggle fullscreen (matches wezterm's Alt+Enter). Honors
-# `macos-non-native-fullscreen = true` above, so this gives the non-native
-# (no-animation, no-space-switch) fullscreen.
-keybind = alt+enter=toggle_fullscreen
+# Forward Alt+Enter to the mux. tmux toggles the host terminal's fullscreen
+# unless fzf owns the pane, where the workspace picker uses it to open the
+# selected item in a separate window. A Ghostty fullscreen action here would
+# consume the key before tmux can make that distinction.
+keybind = alt+enter=text:\x1b\r
 
 # Open Ghostty's config in nvim in a new zellij tab of the current session.
 # Forwarded as the leader chord `Alt+w ,`; zellij's `,` chord uses the

@@ -49,6 +49,19 @@ EOS
   BeforeAll setup_all
   AfterAll cleanup_all
 
+  scripted_launch() {
+    awk '/^_zsh_should_autoattach_mux\(\)/ { exit } { print }' \
+      "$AS_TMP/zshrc" >"$AS_TMP/scripted-launch.zsh"
+    MUX_INITIAL_COMMAND='print -r -- launched' \
+      zsh "$AS_TMP/scripted-launch.zsh"
+  }
+
+  It 'runs a scripted surface command before rendering a prompt'
+    When call scripted_launch
+    The output should equal "launched"
+    The status should be success
+  End
+
   # launch <baked-backend> <case> [loose-pin] — run the real block, print the
   # command it execs. Also drops the recency-seed verdict in $AS_TMP/seeded.
   launch() {

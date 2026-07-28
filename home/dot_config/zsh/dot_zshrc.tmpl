@@ -6,6 +6,28 @@
 # prompt keeps the perceived startup at ~zero; the heavy work (compinit,
 # ZLE plugins, tool init) runs asynchronously right after.
 
+# A scripted Ghostty surface carries its direct command in the environment so
+# it can run before any prompt or shell input is painted. quick-launch-window
+# supplies a shell-quoted command and an optional validated tint. Clear both
+# before launching so the remote process cannot inherit/replay them.
+if [[ -n "${MUX_INITIAL_COMMAND:-}" ]]; then
+  _mux_initial_command="$MUX_INITIAL_COMMAND"
+  _mux_initial_tint="${MUX_INITIAL_TINT:-}"
+  unset MUX_INITIAL_COMMAND MUX_INITIAL_TINT
+
+  if [[ "$_mux_initial_tint" =~ '^#[[:xdigit:]]{6}$' ]]; then
+    printf '\e]11;%s\e\\' "$_mux_initial_tint"
+  else
+    _mux_initial_tint=""
+  fi
+
+  eval "$_mux_initial_command"
+  _mux_initial_status=$?
+  [[ -z "$_mux_initial_tint" ]] || printf '\e]111\e\\'
+  unset _mux_initial_command _mux_initial_tint
+  exit $_mux_initial_status
+fi
+
 _zsh_should_autoattach_mux() {
   # Cross-nesting guard (mux migration spec §2/D17, pulled forward in Phase 0):
   # never autostart a multiplexer inside *either* mux's pane. tmux.conf scrubs

@@ -34,7 +34,13 @@ PMSET="${PMSET_BIN:-/usr/bin/pmset}"
 NETWORKSETUP="${NETWORKSETUP_BIN:-/usr/sbin/networksetup}"
 FS_STATE="${WIDGETS_FULLSCREEN_STATE:-$HOME/.local/state/wezterm/fullscreen_state}"
 HOST_ALIAS="${WIDGETS_HOSTNAME_ALIAS:-$HOME/.hostname-alias}"
-THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
+if [[ -n "${WIDGETS_THEME_JSON:-}" ]]; then
+  THEME_JSON="$WIDGETS_THEME_JSON"
+elif [[ -r "$HOME/.cache/theme/chezmoi-system.json" ]]; then
+  THEME_JSON="$HOME/.cache/theme/chezmoi-system.json"
+else
+  THEME_JSON="$HOME/.config/theme/chezmoi-system.json"
+fi
 # THE shared mode resolver (states, titles, icons, colors and the panel
 # table behind each) — the which-key panel resolves through the same one.
 source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/mode.zsh" 2>/dev/null || true
@@ -69,7 +75,7 @@ search_idx="${14:-}"
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
 c=("${(@f)$(jq -r '
-  .roles.ui.bg, .roles.ui.fg, .extended.tab.bg,
+  .palette.base, .roles.ui.fg, .extended.tab.bg,
   .roles.mode.locked, .roles.mode.resize, .roles.mode.pane, .roles.mode.tab,
   .roles.mode.move, .roles.mode.scroll, .roles.mode.session, .roles.mode.tmux,
   .roles.mode.rename, .roles.mode.search, .roles.mode.visual, .palette.white
@@ -225,7 +231,7 @@ I_TCASE=$'\Ueab1' I_TWORD=$'\Ueb7e' I_TWRAP=$'\U000F0547'
 I_ALT=$'\U000F0635' I_ESC=$'\U000F12B7'
 I_CLOCK=$'\U000F00F0'
 I_WIFI_ON=$'\U000F05A9' I_WIFI_OFF=$'\U000F092E'
-I_HOST=$'\U000F04CD'
+I_HOST=$'\U000F048D'
 I_BATT=( $'\U000F008E' $'\U000F12A1' $'\U000F12A2' $'\U000F12A3' )
 
 # ---- mode resolution -------------------------------------------------------

@@ -5,6 +5,8 @@
 #   quick-launch-window <session> -- <cmd> [args...]
 #       Open: if a WezTerm window is already attached to <session>, focus it;
 #       else spawn a new window running <cmd…>.
+#   quick-launch-window --new <session> -- <cmd> [args...]
+#       Always spawn a new window, skipping WezTerm's session-focus lookup.
 #   quick-launch-window --focus <session>
 #       Focus only: focus the window attached to <session> (exit 0), else exit
 #       3 so the caller can fall back (e.g. switch the session in place).
@@ -29,8 +31,10 @@ set -eu -o pipefail
 
 source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
 
+QLW_SCRIPT_DIR="${0:A:h}"
 WEZTERM=${commands[wezterm]:-/opt/homebrew/bin/wezterm}
 GHOSTTY=${commands[ghostty]:-/Applications/Ghostty.app/Contents/MacOS/ghostty}
+OSASCRIPT=${commands[osascript]:-/usr/bin/osascript}
 export WEZTERM_BIN="$WEZTERM"
 FOCUS_WORKSPACE_PREFIX="__QL_FOCUS__="
 
@@ -61,7 +65,69 @@ wezterm_focus_window() {
   "$WEZTERM" cli rename-workspace "${FOCUS_WORKSPACE_PREFIX}$1" >/dev/null 2>&1 || true
 }
 
+# Resolve the direct command's Ghostty background from the same onboard map +
+# generated tint palette WezTerm uses. Leaves REPLY empty for a local command.
+ghostty_terminal_tint() {
+  local lib="$QLW_SCRIPT_DIR/lib/terminal-location.zsh" name hex
+  REPLY=""
+  [[ -r "$lib" ]] || return 0
+  source "$lib" || return 0
+  name="$(tl_classify_command "${(j: :)cmd}")" || return 0
+  hex="$(tl_hex_for_colorname "$name")" || return 0
+  [[ "$hex" =~ '^#[[:xdigit:]]{6}$' ]] || return 0
+  REPLY="$hex"
+}
+
+# Linux still launches the command directly, so wrap it with the dynamic
+# background OSCs there. macOS uses a normal configured shell plus the
+# environment startup hook below to avoid Ghostty's custom-command exit path.
+ghostty_apply_terminal_tint() {
+  local hex runner
+  ghostty_terminal_tint
+  hex="$REPLY"
+  [[ -n "$hex" ]] || return 0
+  runner='tint=$1
+shift
+reset_tint() { printf "\033]111\033\\"; }
+trap reset_tint EXIT
+printf "\033]11;%s\033\\" "$tint"
+"$@"'
+  cmd=("${commands[zsh]:-/bin/zsh}" -f -c "$runner" ql-tint "$hex" "${cmd[@]}")
+}
+
+# Create one surface in the already-running macOS app. `open -n ... -e` starts a
+# fresh Ghostty instance, whose automatic initial surface appears alongside the
+# requested command surface; -e also triggers Ghostty's mandatory execute
+# confirmation. The AppleScript API is Ghostty's supported IPC path and creates
+# exactly the configured window.
+#
+# Run the configured shell rather than setting a custom command: Ghostty can
+# classify its AppleScript command wrapper as an abnormal sub-250ms exit and
+# leave the "[exited]" screen up regardless of wait-after-command. Pass the
+# command through the surface environment; .zshrc consumes it before rendering
+# a prompt, so neither the tint printf nor the SSH command flashes on screen.
+ghostty_new_macos_window() {
+  local command_text="${(j: :)${(@q)cmd}}" hex
+  ghostty_terminal_tint
+  hex="$REPLY"
+
+  "$OSASCRIPT" - "$command_text" "$hex" <<'APPLESCRIPT'
+on run argv
+    tell application "Ghostty"
+        set cfg to new surface configuration
+        set launchCommand to "MUX_INITIAL_COMMAND=" & item 1 of argv
+        set launchTint to "MUX_INITIAL_TINT=" & item 2 of argv
+        set environment variables of cfg to {launchCommand, launchTint}
+        set wait after command of cfg to false
+        set win to new window with configuration cfg
+        activate window win
+    end tell
+end run
+APPLESCRIPT
+}
+
 # Argument parsing → MODE (open|focus), KEY (session), and (open) the cmd array.
+FORCE_NEW=0
 if [[ "${1:-}" == "--focus" ]]; then
   MODE=focus
   KEY="${2:-}"
@@ -71,8 +137,12 @@ if [[ "${1:-}" == "--focus" ]]; then
   }
 else
   MODE=open
+  if [[ "${1:-}" == "--new" ]]; then
+    FORCE_NEW=1
+    shift
+  fi
   if [[ $# -lt 3 || "$2" != "--" ]]; then
-    print -ru2 -- "usage: $0 <session> -- <cmd> [args...]"
+    print -ru2 -- "usage: $0 [--new] <session> -- <cmd> [args...]"
     exit 2
   fi
   KEY=$1
@@ -115,9 +185,9 @@ if [[ -n "${TMUX:-}" ]]; then
 fi
 if [[ -n "$_qlw_ssh" ]]; then
   ENV_TYPE="UNSUPPORTED"
-elif [[ "$_qlw_term" == "Ghostty" || ( -z "${TMUX:-}" && -n "${GHOSTTY_RESOURCES_DIR:-}" ) ]]; then
+elif [[ "${_qlw_term:l}" == "ghostty" || ( -z "${TMUX:-}" && -n "${GHOSTTY_RESOURCES_DIR:-}" ) ]]; then
   ENV_TYPE="GHOSTTY"
-elif [[ "$_qlw_term" == "WezTerm" || ( -z "${TMUX:-}" && -n "${WEZTERM_UNIX_SOCKET:-}" ) ]]; then
+elif [[ "${_qlw_term:l}" == "wezterm" || ( -z "${TMUX:-}" && -n "${WEZTERM_UNIX_SOCKET:-}" ) ]]; then
   ENV_TYPE="WEZTERM"
 else
   ENV_TYPE="UNSUPPORTED"
@@ -125,10 +195,12 @@ fi
 
 case "$ENV_TYPE" in
   WEZTERM)
-    wid=$(wezterm_window_id_for_session "$KEY")
-    if [[ -n "$wid" ]]; then
-      wezterm_focus_window "$wid"
-      exit 0
+    if ((!FORCE_NEW)); then
+      wid=$(wezterm_window_id_for_session "$KEY")
+      if [[ -n "$wid" ]]; then
+        wezterm_focus_window "$wid"
+        exit 0
+      fi
     fi
     [[ "$MODE" == focus ]] && exit 3
     env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE \
@@ -139,7 +211,12 @@ case "$ENV_TYPE" in
     # No window-query CLI: can't focus, so --focus is a no-op and open always
     # spawns a fresh window running the command.
     [[ "$MODE" == focus ]] && exit 3
-    exec "$GHOSTTY" +open "${cmd[@]}"
+    if [[ "$(uname -s)" == Darwin ]]; then
+      ghostty_new_macos_window
+      exit $?
+    fi
+    ghostty_apply_terminal_tint
+    exec "$GHOSTTY" +new-window -e "${cmd[@]}"
     ;;
 
   UNSUPPORTED | *)

@@ -12,7 +12,7 @@ Describe 'tmux-status-right'
   "mode":{"locked":"#fab387","resize":"#cba6f7","pane":"#89b4fa","tab":"#a6e3a1",
           "move":"#f9e2af","scroll":"#b4befe","session":"#f38ba8","tmux":"#f38ba8","rename":"#f9e2af","search":"#89b4fa","visual":"#cba6f7"},
   "action":{"attention":"#f9e2af"}},
- "palette":{"white":"#ffffff"},
+ "palette":{"base":"#1e1e2e","white":"#ffffff"},
  "extended":{"tab":{"bg":"#282c41","fg":"#9b9fc1","active_bg":"#656a83","active_fg":"#ffffff"}}}
 EOS
 
@@ -53,7 +53,7 @@ EOS
 
     export G_DIV=$'\Ue0ba'
     export G_WIFI_ON=$'\U000F05A9' G_WIFI_OFF=$'\U000F092E'
-    export G_CLOCK=$'\U000F00F0' G_HOST=$'\U000F04CD'
+    export G_CLOCK=$'\U000F00F0' G_HOST=$'\U000F048D'
   }
   cleanup() {
     rm -rf "$TEST_TMP"
@@ -296,6 +296,14 @@ EOS
     The output should include "$G_HOST devbox"
     The output should not include "󱊥"
     The output should not include "$G_CLOCK"
+  End
+
+  It 'uses the effective palette base behind pill dividers'
+    jq '.palette.base = "#101020"' "$TEST_TMP/theme.json" \
+      >"$TEST_TMP/theme.tmp" && mv "$TEST_TMP/theme.tmp" "$TEST_TMP/theme.json"
+    When call zsh "$W" root 0 other-session
+    The output should include "bg=#101020"
+    The output should not include "bg=#1e1e2e"
   End
 
   It 'gradient: the rightmost segment carries the most saturated stop'

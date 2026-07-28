@@ -16,7 +16,7 @@ Describe 'theme-apply (tmux branch)'
       >"$XDG_CONFIG_HOME/theme/chezmoi-system.json"
     printf 'C_HEX_BASE="#1e1e2e"\nif [ -t 1 ]; then\n:\nfi\n' \
       >"$XDG_CONFIG_HOME/theme/chezmoi-system.zsh"
-    printf 'set -g status-style "bg=#1e1e2e,fg=#cdd6f4"\n' \
+    printf 'set -g status-style "bg=#1e1e2e,fg=#cdd6f4"\n%%hidden win_pill="#[bg=#1e1e2e]▌"\nsetw -g window-status-format "$win_pill"\n' \
       >"$XDG_CONFIG_HOME/tmux/themes/chezmoi-system-base.conf"
     export TMUX_SHIM_LOG="$SANDBOX/tmux.log"
     cat >"$SANDBOX/bin/tmux" <<'SHIM'
@@ -59,6 +59,14 @@ SHIM
   It 'live-reloads a running tmux server via source-file'
     When call apply
     The contents of file "$TMUX_SHIM_LOG" should include "source-file"
+  End
+
+  It 'carries the rebuilt window pill into the live-reloaded theme'
+    printf 'base = "#101020"\n' >"$XDG_CONFIG_HOME/theme/override.toml"
+    export SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22"
+    When call apply
+    The contents of file "$XDG_CONFIG_HOME/tmux/themes/chezmoi-system.conf" should include '#[bg=#101020]▌'
+    The contents of file "$XDG_CONFIG_HOME/tmux/themes/chezmoi-system.conf" should include 'window-status-format'
   End
 
   It 'ignores the override in a local (non-SSH) session'
