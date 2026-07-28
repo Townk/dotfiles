@@ -83,8 +83,8 @@ Describe 'tmux keymap tables'
     When call tmux -L kmspec list-keys
     The output should include "pick-glyph"
     The output should include "pick-clipboard"
-    The output should include "mux-rename window"
-    The output should include "mux-rename pane"
+    The output should include "mux-rename --launch window"
+    The output should include "mux-rename --launch pane"
   End
 
   It 'enters the mode tables from the prefix'

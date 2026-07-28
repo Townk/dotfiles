@@ -409,7 +409,7 @@ keymap:
         desc: Rename Tab …
         icon: 
         color: yellow
-        cmd: set key-table root ; display-popup -E -B -w 66 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-rename window'
+        cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/mux-rename --launch window'
         switch: true
         dialog: true
         to: rename
@@ -559,7 +559,7 @@ keymap:
         desc: Rename Pane …
         icon: 
         color: yellow
-        cmd: set key-table root ; display-popup -E -B -w 66 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-rename pane'
+        cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/mux-rename --launch pane'
         switch: true
         dialog: true
         to: rename

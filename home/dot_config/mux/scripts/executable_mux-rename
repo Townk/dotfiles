@@ -1,51 +1,99 @@
 #!/usr/bin/env zsh
-# mux-rename <window|pane> — themed rename dialog for the tmux backend (mux
-# migration Phase 2; spec 2.4 — retires the Phase 1 command-prompt stopgap).
+# mux-rename <window|pane> — the rename dialog for the tmux backend.
 #
-# Runs INSIDE tmux-modal action mode (display-popup): shows the themed
-# input::line widget pre-filled with the current name and applies the answer
-# to the ORIGIN pane's window/pane (MUX_MODAL_TARGET_PANE, exported by
-# tmux-modal from its bind-time-interpolated --origin).
+#   mux-rename --launch <kind>   anchor + reopen inside display-popup (the
+#                                run-shell -b path; a foreground popup
+#                                deadlocks — ledger row)
+#   mux-rename <kind>            the dialog body (inside the popup)
 #
-# The Zellij backend keeps the zj-hud `role "rename"` dialog — this script is
-# tmux-only by design (ledger row).
+# zj-hud's `role "rename"` (src/rename/mod.rs) and its search role draw the
+# SAME compact dialog with a different accent, glyph and payload, so this
+# owns none of that: lib/mux/dialog.zsh draws the frame and the field, and
+# what is left here is the rename itself — read the current name, apply the
+# answer, carry the mode pill.
+#
+# The Zellij backend keeps the plugin's own dialog; this is tmux-only.
 
 set -euo pipefail
 
-kind="${1:-window}"
-[[ -n "${TMUX:-}" ]] || {
-  echo "mux-rename: tmux only (zellij uses the zj-hud rename role)" >&2
-  exit 1
-}
-
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+source "${MUX_LIB:-$HOME/.local/lib}/mux/dialog.zsh"
 
-# Mode-stack pill: flag the open rename dialog for the status ribbon
-# (@renaming rides into tmux-status-right as an argument); cleared on every
-# exit path including ESC/cancel.
-"$TMUX_BIN" set -g @renaming 1 2>/dev/null || true
-trap '"$TMUX_BIN" set -gu @renaming 2>/dev/null || true' EXIT
-target="${MUX_MODAL_TARGET_PANE:-}"
-typeset -a taddr=()
-[[ -n "$target" ]] && taddr=(-t "$target")
+if [[ "${1:-}" == --launch ]]; then
+  mux_dialog::launch "${0:A}" "${2:-window}"
+  exit 0
+fi
 
-source "$HOME/.local/lib/input-common.zsh"
-
+kind="${1:-window}"
 case "$kind" in
-  window)
-    current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{window_name}' 2>/dev/null)"
-    name=$(input::line --title "Rename Window" --value "$current" "New name") || exit 0
-    [[ -n "$name" ]] || exit 0
-    "$TMUX_BIN" rename-window "${taddr[@]}" -- "$name"
-    ;;
-  pane)
-    current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{pane_title}' 2>/dev/null)"
-    name=$(input::line --title "Rename Pane" --value "$current" "New name") || exit 0
-    [[ -n "$name" ]] || exit 0
-    "$TMUX_BIN" select-pane "${taddr[@]}" -T "$name"
-    ;;
+  window | pane) ;;
   *)
     echo "mux-rename: expected 'window' or 'pane'" >&2
     exit 2
     ;;
 esac
+
+[[ -n "${TMUX:-}" ]] || {
+  echo "mux-rename: tmux only (zellij uses the zj-hud rename role)" >&2
+  exit 1
+}
+
+# The pane we came from: a popup owns no pane of its own, so `display -p`
+# answers for the client's active pane — the one whose window we rename.
+origin="$("$TMUX_BIN" display -p '#{pane_id}' 2>/dev/null)" || origin=""
+[[ -n "$origin" ]] || exit 0
+typeset -a taddr=(-t "$origin")
+
+# Mode pill: the status ribbon reads @renaming; cleared on every exit path.
+"$TMUX_BIN" set -g @renaming 1 2>/dev/null || true
+cleanup() {
+  "$TMUX_BIN" set -gu @renaming 2>/dev/null || true
+  "$TMUX_BIN" refresh-client -S 2>/dev/null || true
+}
+trap cleanup EXIT
+# C-c reaches a popup dialog as SIGINT, not a byte — an uncaught INT would
+# skip the EXIT trap and leave the pill lit (ledger row).
+TRAPINT() { exit 0 }
+
+case "$kind" in
+  window) current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{window_name}' 2>/dev/null)" || current="" ;;
+  pane)   current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{pane_title}' 2>/dev/null)" || current="" ;;
+esac
+
+# dialog.warning is the plugin's RENAME_RGB; md_rename is its MODE_RENAME.
+mux_dialog::init '.extended.dialog.warning' || exit 0
+I_RENAME=$'\U000F0455'
+
+buf="$current"
+
+apply() {
+  [[ -n "$buf" ]] || return 0
+  case "$kind" in
+    # A renamed window stops following the app's OSC title — that is what a
+    # rename means, and tmux enforces it by turning automatic-rename off.
+    window) "$TMUX_BIN" rename-window "${taddr[@]}" -- "$buf" 2>/dev/null || true ;;
+    pane)   "$TMUX_BIN" select-pane "${taddr[@]}" -T "$buf" 2>/dev/null || true ;;
+  esac
+}
+
+print -rn -- $'\e[?25l'
+mux_dialog::frame "$I_RENAME"
+mux_dialog::field "$buf"
+
+while read -rsk1 key; do
+  case "$key" in
+    $'\r' | $'\n') apply; break ;;
+    $'\x03') break ;;                 # C-c abandons, as ESC does
+    $'\e')   break ;;                 # ESC cancels — never Ctrl+C (house rule)
+    $'\x7f' | $'\b') buf="${buf[1,-2]}"; mux_dialog::field "$buf" ;;
+    $'\x15') buf=""; mux_dialog::field "$buf" ;;   # C-u clears, as elsewhere
+    *)
+      # Printable only: a stray control byte would corrupt the field.
+      [[ "$key" == [[:print:]] ]] || continue
+      buf+="$key"
+      mux_dialog::field "$buf"
+      ;;
+  esac
+done
+print -rn -- $'\e[?25h'
+exit 0

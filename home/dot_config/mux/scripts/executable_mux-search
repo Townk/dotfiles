@@ -31,10 +31,10 @@ emulate -L zsh
 setopt no_unset
 
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+source "${MUX_LIB:-$HOME/.local/lib}/mux/dialog.zsh"
 THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
 MUX_STACK="${0:A:h}/mux-stack"
 
-W=40 H=3
 
 # The dialog is one entry on the MODE STACK (Search), pushed by whoever
 # opened it — (SearchInput) and (SearchMode) are the same level, which is why
@@ -266,35 +266,18 @@ if [[ "${1:-}" == --next || "${1:-}" == --prev ]]; then
 fi
 
 if [[ "${1:-}" == --launch ]]; then
-  cw="$("$TMUX_BIN" display -p '#{client_width}')" || exit 0
-  ch="$("$TMUX_BIN" display -p '#{client_height}')" || exit 0
-  exec "$TMUX_BIN" display-popup -E -B -w "$W" -h "$H" \
-    -x $(( cw - W - 1 )) -y $(( ch - 2 )) "${0:A}"
+  mux_dialog::launch "${0:A}"
+  exit 0
 fi
 
-# ---- theme colors ----------------------------------------------------------
-c=("${(@f)$(jq -r '
-  .extended.tab.bg, .roles.ui.bg, .roles.ui.dialog_bg,
-  .extended.dialog.search_accent, .roles.action.attention,
-  .roles.ui.border_inactive, .palette.white
-' "$THEME_JSON" 2>/dev/null)}") || c=()
-(( ${#c} == 7 )) || exit 0
-hexfg() { print -rn -- $'\e[38;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
-hexbg() { print -rn -- $'\e[48;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
-BG="$(hexbg ${c[1]})"        # dialog canvas = tab chrome bg
-THEME_BG="$(hexbg ${c[2]})"  # behind the accent bar
-INPUT_BG="$(hexbg ${c[3]})"  # input field = dialog mantle
-ACCENT_FG="$(hexfg ${c[4]})" ACCENT_BG="$(hexbg ${c[4]})"
-WHITE_FG="$(hexfg ${c[7]})"
-ON_FG="$(hexfg ${c[5]})" OFF_FG="$(hexfg ${c[6]})"
-BOX_FG="$(hexfg ${c[3]})"    # box glyphs = input bg color over canvas
-RESET=$'\e[0m'
+# ---- theme + geometry ------------------------------------------------------
+# The dialog itself (frame, field, colours, anchor) is lib/mux/dialog.zsh —
+# the same object the rename dialog draws, with search's accent and glyph.
+# What stays here is search's own chrome: the three toggle indicators that
+# ride in the right-hand reserve.
+mux_dialog::init '.extended.dialog.search_accent' || exit 0
 
-# ---- geometry (0-indexed cols, mirrors the plugin constants) ---------------
-GLYPH_COL=2 INPUT_COL=5 RIGHT_INSET=5 TOGGLE_W=6
-input_end=$(( W - RIGHT_INSET ))
-area_w=$(( input_end - INPUT_COL + 1 ))
-field_w=$(( area_w - TOGGLE_W - 1 ))
+TOGGLE_W=6          # cells reserved on the right for case/word/wrap
 
 I_SEARCH=$'\Uf002' I_CASE=$'\Ueab1' I_WORD=$'\Ueb7e' I_WRAP=$'\U000F0547'
 
@@ -375,42 +358,19 @@ clear_search() {
   restore_anchor "$origin"
 }
 
-# ---- rendering (absolute CSI, mirrors render_field) ------------------------
-at() { print -rn -- $'\e['"$1;$2H" }  # 1-indexed row;col
-rep() { local out="" i; for (( i = 0; i < $2; i++ )); do out+="$1"; done; print -rn -- "$out" }
+# ---- rendering -------------------------------------------------------------
+at() { mux_dialog::at "$@" }
 
-draw_static() {
-  local row blank interior
-  blank="$(rep ' ' $W)"
-  for row in 1 2 3; do
-    at $row 1; print -rn -- "${BG}${blank}"
-    at $row 1; print -rn -- "${THEME_BG}${ACCENT_FG}┃${RESET}"
-  done
-  interior=$(( input_end - INPUT_COL + 2 ))
-  at 1 $(( INPUT_COL )); print -rn -- "${BG}${BOX_FG}𜺠$(rep '▂' $interior)𜺣${RESET}"
-  at 3 $(( INPUT_COL )); print -rn -- "${BG}${BOX_FG}𜺫$(rep '🮂' $interior)𜺨${RESET}"
-  at 2 $(( INPUT_COL )); print -rn -- "${BG}${BOX_FG}▐${RESET}"
-  at 2 $(( input_end + 3 )); print -rn -- "${BG}${BOX_FG}▌${RESET}"
-  at 2 $(( GLYPH_COL + 1 )); print -rn -- "${BG}${WHITE_FG}${I_SEARCH}${RESET}"
-}
+draw_static() { mux_dialog::frame "$I_SEARCH" }
 
 draw_input() {
-  local shown cfg wfg pfg start
-  # tail-scroll the buffer into the field, cursor always at its end
-  shown="$buf"
-  if (( ${#shown} > field_w - 1 )); then
-    start=$(( ${#shown} - field_w + 2 ))
-    shown="${shown[$start,-1]}"
-  fi
-  at 2 $(( INPUT_COL + 1 ))
-  print -rn -- "${INPUT_BG}$(rep ' ' $(( area_w + 1 )))"  # clear area
-  at 2 $(( INPUT_COL + 1 ))
-  print -rn -- "${INPUT_BG}${shown}${ACCENT_BG}${BOX_FG} ${RESET}"
-  (( case_on )) && cfg="$ON_FG" || cfg="$OFF_FG"
-  (( word_on )) && wfg="$ON_FG" || wfg="$OFF_FG"
-  (( wrap_on )) && pfg="$ON_FG" || pfg="$OFF_FG"
-  at 2 $(( input_end - TOGGLE_W + 2 ))
-  print -rn -- "${INPUT_BG}${cfg}${I_CASE}${RESET}${INPUT_BG} ${wfg}${I_WORD}${RESET}${INPUT_BG}  ${pfg}${I_WRAP}${RESET}"
+  local cfg wfg pfg
+  mux_dialog::field "$buf" $(( TOGGLE_W + 1 ))
+  (( case_on )) && cfg="$MD_ON_FG" || cfg="$MD_OFF_FG"
+  (( word_on )) && wfg="$MD_ON_FG" || wfg="$MD_OFF_FG"
+  (( wrap_on )) && pfg="$MD_ON_FG" || pfg="$MD_OFF_FG"
+  at 2 $(( MD_INPUT_END - TOGGLE_W + 2 ))
+  print -rn -- "${MD_INPUT_BG}${cfg}${I_CASE}${MD_RESET}${MD_INPUT_BG} ${wfg}${I_WORD}${MD_RESET}${MD_INPUT_BG}  ${pfg}${I_WRAP}${MD_RESET}"
 }
 
 print -rn -- $'\e[?25l'

@@ -92,6 +92,24 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | project-aware path abbreviation | `abbreviated_project_path` | `mux-tab-path`, pushed onto `@win_path` | ✅ | segments above the project root shrink to an initial, then collapse to `…`; the root and the tail stay whole |
 | zoom / sync / alarm icons | extra_icons | `win_extras` | ✅ | Phase 4 |
 
+## The compact dialog (zj-hud search/rename roles ↔ lib/mux/dialog.zsh)
+
+Both floating dialogs are ONE object with a different accent, glyph and
+payload — as they are in the plugin, which draws each with the same
+`render_field`. `lib/mux/dialog.zsh` owns the geometry, the frame, the field
+and the anchor; `mux-search` adds its toggle reserve, `mux-rename` adds
+nothing but the rename itself.
+
+## Rename dialog (zj-hud `role "rename"` ↔ mux-rename)
+
+| Behavior | Zellij impl | tmux impl | Status | Notes |
+|---|---|---|---|---|
+| geometry | floating pane, 40×3, right-inset, pinned | `display-popup -w 40 -h 3 -x (cw-41) -y (ch-2)` | ✅ | the plugin's PANE_WIDTH/PANE_HEIGHT/RIGHT_INSET; `-y` is the BOTTOM edge |
+| chrome | rename-coloured `┃` rule, md_rename glyph, half-block field | same glyphs, same columns (GLYPH_COL 2 / INPUT_COL 5) | ✅ | colours from the theme JSON (`dialog.warning` = the plugin's RENAME_RGB), never literals |
+| prefill | current tab/pane title in the field | `#{window_name}` / `#{pane_title}` of the ORIGIN pane | ✅ | a popup owns no pane, so `display -p` answers for the client's active pane |
+| apply / cancel | Enter renames, Esc leaves it | `rename-window` / `select-pane -T`; ESC and C-c abandon | ✅ | ESC cancels — never conflated with Ctrl+C |
+| mode pill | zj-hud rename role lights the bar | `@renaming` read by tmux-status-right | ✅ | cleared on every exit path, including SIGINT |
+
 ## Session-level behaviors
 
 | Behavior | Zellij | tmux | Status | Notes |
