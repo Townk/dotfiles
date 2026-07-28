@@ -325,13 +325,13 @@ keymap:
         desc: split pane (horiz)
         icon: 
         color: blue
-        cmd: split-window -v
+        cmd: split-window -v -c "#{pane_current_path}"
       - keys:
         - v
         desc: split pane (vert)
         icon: 
         color: blue
-        cmd: split-window -h
+        cmd: split-window -h -c "#{pane_current_path}"
       - keys:
         - f
         desc: toggle pane borders
@@ -418,7 +418,7 @@ keymap:
         desc: new tab
         icon: 󰝜
         color: mauve
-        cmd: new-window ; set key-table root
+        cmd: new-window -c "#{pane_current_path}" ; set key-table root
       - keys:
         - T
         desc: quick launch new tab
@@ -635,34 +635,34 @@ keymap:
         desc: split pane up
         icon: 
         color: mauve
-        cmd: split-window -vb ; set key-table root
+        cmd: split-window -vb -c "#{pane_current_path}" ; set key-table root
       - keys:
         - S-Down
         - J
         desc: split pane down
         icon: 
         color: mauve
-        cmd: split-window -v ; set key-table root
+        cmd: split-window -v -c "#{pane_current_path}" ; set key-table root
       - keys:
         - S-Left
         - H
         desc: split pane left
         icon: 
         color: mauve
-        cmd: split-window -hb ; set key-table root
+        cmd: split-window -hb -c "#{pane_current_path}" ; set key-table root
       - keys:
         - S-Right
         - L
         desc: split pane right
         icon: 
         color: mauve
-        cmd: split-window -h ; set key-table root
+        cmd: split-window -h -c "#{pane_current_path}" ; set key-table root
       - keys:
         - N
         desc: new pane
         icon: 󰯌
         color: green
-        cmd: split-window ; set key-table root
+        cmd: split-window -c "#{pane_current_path}" ; set key-table root
       - keys:
         - P
         desc: quick launch new pane

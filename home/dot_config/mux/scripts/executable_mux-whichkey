@@ -427,8 +427,27 @@ _paint() {
 }
 
 # ---- command execution ----------------------------------------------------
+# The panel runs its commands with `source-file`, which tmux evaluates with NO
+# current pane — we are inside a popup, and a popup is not a pane. Any format
+# meaning "where I came from" therefore expands EMPTY, and a bind like
+# `new-window -c "#{pane_current_path}"` silently fell back to the session's
+# start directory (measured: pressing the chord with the panel up landed in
+# the session dir, firing the same bind from the key table landed in the
+# pane's cwd). `display -p` from a popup DOES resolve to the client's active
+# pane — the same trick _forward already uses for the pane id — so resolve it
+# here and substitute. Deliberately ONE format, not a blanket expansion: the
+# other commands carry #-sequences (`#W`, `%%`) that tmux must see intact.
+_expand_origin() {
+  local cmd="$1" path
+  [[ "$cmd" == *'#{pane_current_path}'* ]] || { print -r -- "$cmd"; return }
+  path="$("$TMUX_BIN" display -p '#{pane_current_path}' 2>/dev/null)"
+  [[ -n "$path" ]] || { print -r -- "$cmd"; return }
+  print -r -- "${cmd//\#\{pane_current_path\}/$path}"
+}
+
 _run() {               # run a tmux command line (source-file handles quoting)
-  local cmd="$1" f
+  local cmd f
+  cmd="$(_expand_origin "$1")"
   [[ -n "$cmd" ]] || return 0
   f="$(mktemp "${TMPDIR:-/tmp}/wkcmd.XXXXXX")"
   print -r -- "$cmd" > "$f"
@@ -446,7 +465,11 @@ _stackable() {
 }
 
 _run_deferred() {      # after the popup closes (popup-in-popup mutates ours)
-  local cmd="$1" f
+  local cmd f
+  # Resolved HERE, while the popup is still up and the client's active pane is
+  # still the one you came from — by the time the deferred command runs the
+  # answer may be a pane the command itself created.
+  cmd="$(_expand_origin "$1")"
   [[ -n "$cmd" ]] || return 0
   f="$(mktemp "${TMPDIR:-/tmp}/wkcmd.XXXXXX")"
   print -r -- "$cmd" > "$f"

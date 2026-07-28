@@ -41,6 +41,11 @@
 # here the pane gets the raw M-w, which is the closest useful equivalent).
 # send-keys, not send-prefix: the leader is a table switch now (prefix None).
 bind M-w send-keys M-w
+# tmux's stock `"` / `%` splits live in the PREFIX table, which is our leader
+# table — so they are reachable by muscle memory and must inherit the cwd like
+# every split we define ourselves (tmux defaults to the session start dir).
+bind '"' split-window -v -c "#{pane_current_path}"
+bind '%' split-window -h -c "#{pane_current_path}"
 # ESC cancels the armed leader without leaking into the app (zellij: Esc
 # exits tmux mode; ESC cancels — never conflate with Ctrl+C).
 bind Escape run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack clear"
@@ -316,7 +321,7 @@ bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 75 -E -B -
 # MEH-n — New tab. `n` for new, so p/t/s stay the picker family; the terminals
 # already separate ⌘t (new) from ⌘⇧T (pick), and this keeps that split.
 {{- range list "C-M-N" "C-M-S-N" "C-M-S-n" }}
-bind -n {{ . }} new-window
+bind -n {{ . }} new-window -c "#{pane_current_path}"
 {{- end }}
 
 # MEH-<digit> — jump to tab 1..10 (⌘1..⌘9, ⌘0). Shift does NOT fold a digit to

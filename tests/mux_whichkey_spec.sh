@@ -16,6 +16,36 @@ Describe 'mux-whichkey panel'
   # strip CSI positioning + SGR so assertions read the visible text
   plain() { zsh "$W" render "$1" "${2:-0}" "${3:-25}" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -d '\000'; }
 
+  # A popup has no current pane, so tmux expands "where I came from" formats
+  # to nothing when the panel source-files a command: `new-window -c
+  # "#{pane_current_path}"` fell back to the session's start directory when
+  # dispatched from the panel, while the identical key-table bind inherited
+  # the pane's cwd. The panel resolves that ONE format itself.
+  # The script ends in a dispatcher, so lift just the function under test
+  # (same technique the quick-launch cache spec uses).
+  expand() {
+    STUB="$WK_TMP/tmux"
+    { print '#!/bin/sh'
+      print 'case "$*" in *pane_current_path*) printf "/origin/dir\n" ;; esac'
+    } > "$STUB"
+    chmod +x "$STUB"
+    ARG="$1" WKBIN="$W" TMUX_STUB="$STUB" zsh -c '
+      TMUX_BIN="$TMUX_STUB"
+      eval "$(sed -n "/^_expand_origin()/,/^}/p" "$WKBIN")"
+      _expand_origin "$ARG"
+    '
+  }
+
+  It 'resolves the origin cwd into a command the popup would expand empty'
+    When call expand 'new-window -c "#{pane_current_path}"'
+    The output should equal 'new-window -c "/origin/dir"'
+  End
+
+  It 'leaves other #-sequences alone (tmux must still see #W and %%)'
+    When call expand 'command-prompt -F -I "#W" { rename-window "%%" }'
+    The output should equal 'command-prompt -F -I "#W" { rename-window "%%" }'
+  End
+
   It 'draws the rounded frame with the mode breadcrumb as the top-border label'
     When call plain prefix
     The output should include "╭ 󰘳"

@@ -65,6 +65,20 @@ Describe 'tmux keymap tables'
     The output should include "C-S-L"
   End
 
+  # zellij panes inherit the focused pane's cwd; tmux defaults to the SESSION
+  # start dir unless every creation site says otherwise (parity ledger).
+  It 'creates panes and windows in the active pane cwd'
+    # Checked against OUR rendered config rather than `list-keys`, which also
+    # carries tmux's built-in binds and mouse menus. The scrollback window is
+    # exempt: it opens nvim on a temp capture, where a cwd is meaningless.
+    _bad="$(cat "$KM_TMP/keymap.conf" "$KM_TMP/keymap-base.conf" \
+            | grep -E '^bind[^#]*(split-window|new-window)' \
+            | grep -v 'pane_current_path' \
+            | grep -v 'scrollback' || true)"
+    When call test -z "$_bad"
+    The status should be success
+  End
+
   It 'binds the Phase 2 picker and rename popups'
     When call tmux -L kmspec list-keys
     The output should include "pick-glyph"

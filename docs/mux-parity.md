@@ -27,7 +27,7 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 
 | Chord | Zellij | tmux | Status | Notes |
 |---|---|---|---|---|
-| `v` / `s` splits | NewPane right/down | `split-window -h` / `-v` | ✅ | |
+| `v` / `s` splits | NewPane right/down | `split-window -h` / `-v` `-c "#{pane_current_path}"` | ✅ | tmux defaults a new pane to the SESSION start dir where zellij inherits the focused pane's cwd — every creation site passes the cwd, including the stock `"`/`%` prefix splits |
 | `z` zoom | ToggleFocusFullscreen | `resize-pane -Z` | ✅ | |
 | `f` frame toggle | TogglePaneFrames | `set -w pane-border-status` | 🟡 | different affordance; frames are off-by-default both sides |
 | `L` locked / `l` scroll / `o` session / `p` pane / `t` tab | SwitchToMode | `set key-table` / `copy-mode` | ✅ | |
@@ -58,7 +58,7 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 
 | Behavior | Zellij | tmux | Status | Notes |
 |---|---|---|---|---|
-| tab: h/l/arrows, Tab, 1–0, n, N, x, s | native actions | previous/next-window, last-window, select-window, themed rename popup, new-window, kill-window, synchronize-panes | ✅ | mux-rename retires the command-prompt stopgap |
+| tab: h/l/arrows, Tab, 1–0, n, N, x, s | native actions | previous/next-window, last-window, select-window, themed rename popup, `new-window -c "#{pane_current_path}"`, kill-window, synchronize-panes | ✅ | mux-rename retires the command-prompt stopgap; the new tab inherits the pane's cwd (zellij parity) |
 | tab: `[`/`]` BreakPaneLeft/Right | native | `join-pane -h -t :-1/+1` | 🟡 | multi-pane windows fold differently |
 | tab: `T` quick-launch | modal float | popup via tmux-modal → ql_tx dispatch | ✅ | focus-or-create by @ql_id / =name |
 | pane: focus/splits/zoom/kill/rename | native actions | select-pane, split-window ±b, resize -Z, kill-pane, select-pane -T stopgap | ✅ | |
@@ -235,6 +235,7 @@ are derived views. One API (`lib/mux/stack.zsh`, exposed to key bindings by
 | `display-popup` from our own client dies when the caller exits (yazi runs quick-look as a task that returns immediately) | `mux::popup` hands every popup to the SERVER via `run-shell -b` |
 | `#{pane_pid}` is the pane's root shell, never the worker inside it | tm routes address the session by path (`@tm_session`), not by pid — a pid-matched route silently never fires |
 | zellij `run` cannot size the pane it creates; tmux `split-window -l` can | the 30-iteration resize-convergence loop in the tm launcher is now zellij-only |
+| the which-key panel runs its commands with `source-file` from inside a POPUP, where tmux has no current pane — so `#{pane_current_path}` expands EMPTY and a new tab silently landed in the session's start dir (the identical key-table bind inherited correctly) | the panel resolves that one format itself before sourcing (`display -p` from a popup does answer for the client's active pane); a blanket expansion is wrong, since other commands carry `#W` / `%%` that tmux must still see |
 
 ## Platform gotchas — Phase 6 Mode B session 2 (2026-07-27)
 
