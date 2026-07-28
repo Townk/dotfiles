@@ -48,11 +48,20 @@ ql_die() {
 # how the picker consumes the directory/launch.d merge without re-implementing
 # it: we hand it a single pre-merged .json file.
 ql_write_merged_cache() {
-  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/merged.json"
+  local cache sources_file
+  cache="$(ql_cache_path)"
+  sources_file="$(ql_cache_sources_path)"
   mkdir -p "${cache%/*}"
   if [[ ! -f "$cache" ]] || [[ "$(cat "$cache" 2>/dev/null)" != "$QL_JSON" ]]; then
     printf '%s\n' "$QL_JSON" >|"$cache"
   fi
+  # The source SET the cache was built from — ql_load compares against it, so
+  # a fragment that appears (or disappears) invalidates the cache even when
+  # its mtime says nothing changed.
+  local -a files=()
+  local f
+  while IFS= read -r f; do [[ -n "$f" ]] && files+=("$f"); done < <(ql_source_files)
+  printf '%s\n' "${(F)files}" >|"$sources_file"
   printf '%s\n' "$cache"
 }
 

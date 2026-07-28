@@ -38,6 +38,16 @@ ql_file_to_json() {
   esac
 }
 
+# Where the merged cache and its source-set fingerprint live. Both the reader
+# (ql_load) and the writer (ql_write_merged_cache) go through these, so they
+# can never disagree about the path.
+ql_cache_path() {
+  printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/merged.json"
+}
+ql_cache_sources_path() {
+  printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/merged.sources"
+}
+
 # Ordered list of source files: default.yaml first, then every launch.d
 # fragment in C-collation order. Later files win on `id` collisions.
 ql_source_files() {
@@ -83,12 +93,23 @@ ql_load() {
   # file (the menu writes it via ql_write_merged_cache). Skips the per-file yq +
   # jq merge — the dominant cost of opening the menu — whenever configs are
   # unchanged. A touched-but-unchanged source just forces one harmless re-merge.
-  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch/merged.json"
+  local cache sources_file
+  cache="$(ql_cache_path)"
+  sources_file="$(ql_cache_sources_path)"
   if [[ -s "$cache" ]]; then
     local stale=0
-    for f in "${files[@]}"; do
-      [[ "$f" -nt "$cache" ]] && { stale=1; break; }
-    done
+    # The SET of sources first, then their mtimes. mtime alone is not enough:
+    # `mv` preserves it, so a fragment can ARRIVE older than the cache (that
+    # is exactly how the ~/.config/mux move stranded launch.d — the machines
+    # were sitting in the directory, unread, indefinitely), and a REMOVED
+    # fragment has no mtime left to compare at all.
+    if [[ ! -r "$sources_file" ]] || [[ "$(<"$sources_file")" != "${(F)files}" ]]; then
+      stale=1
+    else
+      for f in "${files[@]}"; do
+        [[ "$f" -nt "$cache" ]] && { stale=1; break; }
+      done
+    fi
     if (( ! stale )); then
       QL_JSON="$(<"$cache")"
       [[ -n "$QL_JSON" ]] && return 0
