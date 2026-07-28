@@ -73,6 +73,33 @@ if [[ -z "$_max" ]]; then
     [[ "$_lim" == <-> ]] && (( _lim > 1000 )) && _max=$(( _lim * 95 / 100 ))
   fi
 fi
+
+# Graphics protocol. Left to chafa's auto-detection everywhere EXCEPT Ghostty,
+# which does not support sixel and never will — that is a stated decision by
+# its maintainer, not a gap waiting to be filled. Its Kitty graphics support
+# is excellent, so ask for that explicitly; auto-detection through tmux lands
+# on sixel (tmux advertises it) and Ghostty renders nothing at all.
+#
+# The outer terminal, not $TERM: inside a pane $TERM is tmux's own
+# (tmux-256color), which says nothing about what will finally draw the pixels.
+# tmux knows the attached client's terminal as #{client_termname}.
+#
+# --passthrough tmux wraps the APC payload so the server forwards it instead
+# of eating it; tmux.conf already sets `allow-passthrough on`, which is the
+# other half of that. Outside tmux there is nothing to pass through.
+#
+# TERM_QUICK_VIEW_ARGS stays a caller override — only defaulted when unset.
+if [[ -z "${TERM_QUICK_VIEW_ARGS:-}" ]]; then
+  _outer="${TERM:-}"
+  [[ -n "${TMUX:-}" ]] && _outer="$(tmux display -p '#{client_termname}' 2>/dev/null)"
+  if [[ "$_outer" == *ghostty* ]]; then
+    if [[ -n "${TMUX:-}" ]]; then
+      TERM_QUICK_VIEW_ARGS="-f kitty --passthrough tmux"
+    else
+      TERM_QUICK_VIEW_ARGS="-f kitty --passthrough none"
+    fi
+  fi
+fi
 # Name the tab and give it its own glyph. The window pill prefixes a
 # manually-named window with a generic tab icon, so the glyph goes in
 # @win_icon (which the theme's win_body prefers) rather than into the name —
