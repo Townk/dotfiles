@@ -1,0 +1,48 @@
+#!/bin/bash
+set -eufo pipefail
+
+# Carry LOOSE quick-launch entries across the Phase-6 directory move.
+#
+# The quick-launch data moved from ~/.config/zellij/quick-launch/ to
+# ~/.config/mux/quick-launch/ (both backends had been reading it since Phase
+# 3; the path claimed otherwise). chezmoi moved what chezmoi owns —
+# default.yaml, the schema doc, launch.d/.keep — but launch.d/*.yaml are
+# LOOSE, machine-local files it has never managed, so they stayed behind at
+# a path nothing reads any more. On a machine whose remote-host workspaces
+# lived there, the picker silently lost every one of them.
+#
+# Idempotent and non-destructive: existing files at the destination win, the
+# old directory is only removed once it holds nothing but .keep, and a
+# machine that never had loose entries does nothing at all.
+
+OLD="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/quick-launch/launch.d"
+NEW="${XDG_CONFIG_HOME:-$HOME/.config}/mux/quick-launch/launch.d"
+
+[ -d "$OLD" ] || exit 0
+
+# `set -f` (from the -eufo above) disables globbing, so the patterns below
+# would never expand — re-enable it just for this loop.
+set +f
+
+moved=0
+for f in "$OLD"/*.yaml "$OLD"/*.yml "$OLD"/*.json "$OLD"/*.toml; do
+  [ -e "$f" ] || continue
+  base="$(basename "$f")"
+  if [ -e "$NEW/$base" ]; then
+    echo "󱓟  quick-launch: $base already exists in launch.d — left at $OLD"
+    continue
+  fi
+  mkdir -p "$NEW"
+  mv "$f" "$NEW/$base"
+  echo "󱓟  quick-launch: recovered local entries → launch.d/$base"
+  moved=$((moved + 1))
+done
+
+# Retire the old directory only when nothing of value is left in it.
+if [ -z "$(find "$OLD" -mindepth 1 ! -name '.keep' -print -quit 2>/dev/null)" ]; then
+  rm -rf "$OLD"
+  rmdir "$(dirname "$OLD")" 2>/dev/null || true
+fi
+
+[ "$moved" -gt 0 ] && echo "󱓟  quick-launch: $moved file(s) migrated; the picker sees them again"
+exit 0

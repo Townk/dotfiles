@@ -72,7 +72,34 @@ ql_menu() {
   # reads exactly what we dispatch from, without re-implementing the merge.
   local chosen targets
   targets="$(ql_write_merged_cache)"
-  chosen="$(QUICK_LAUNCH_TARGETS="$targets" "$SCRIPT_DIR/quick-launch-pick" "$kind")" || return 0
+
+  # Diagnostics on demand (same convention as tm-tab): `touch
+  # ~/.cache/quick-launch/debug` and every menu run appends one line to
+  # debug.log beside it. The line answers the questions a misbehaving picker
+  # raises — did it draw at all (ms), how many rows did it have (a single row
+  # makes fzf's --select-1 accept without drawing), what did it return, and
+  # was there a tty. Off by default, one `[[ -e ]]` when it is.
+  # QUICK_LAUNCH_CACHE is a spec seam: the user zshenv re-exports the XDG
+  # vars, so an XDG_CACHE_HOME override dies at zsh startup (the gotcha
+  # tm-tab documents for TM_TAB_*).
+  local _dbg_dir="${QUICK_LAUNCH_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/quick-launch}"
+  local _dbg=0 _t0=0
+  if [[ -e "$_dbg_dir/debug" ]]; then
+    # EPOCHREALTIME lives in zsh/datetime, which nothing here loads otherwise.
+    zmodload -F zsh/datetime +p:EPOCHREALTIME 2>/dev/null
+    _dbg=1 _t0=$EPOCHREALTIME
+  fi
+
+  local _rc=0
+  chosen="$(QUICK_LAUNCH_TARGETS="$targets" "$SCRIPT_DIR/quick-launch-pick" "$kind")" || _rc=$?
+  if (( _dbg )); then
+    printf '%s kind=%s rc=%d ms=%.0f rows=%s tty=%s chosen=%s\n' \
+      "$(date +%T)" "$kind" "$_rc" "$(( (EPOCHREALTIME - _t0) * 1000 ))" \
+      "$(wc -l < "$_dbg_dir/lines-$kind.txt" 2>/dev/null | tr -d ' ' || echo '?')" \
+      "$([[ -t 0 ]] && echo yes || echo no)" "${chosen:-<none>}" \
+      >> "$_dbg_dir/debug.log" 2>/dev/null
+  fi
+  (( _rc )) && return 0
   [[ -n "$chosen" ]] || return 0
   # Alt+Enter in the workspace picker emits "@window:<id>" (field 2) to request
   # opening the workspace in a separate OS window instead of switching the

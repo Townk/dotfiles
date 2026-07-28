@@ -453,8 +453,6 @@ pick::build_fzf_args() {
     --filepath-word
     --layout=reverse
     --info="${pick_ui[info]:-inline-right}"
-    --exit-0
-    --select-1
     --ansi
     --margin="${pick_ui[margin]:-0,0,0,0}"
     --padding="${pick_ui[padding]:-0,0,0,0}"
@@ -476,6 +474,11 @@ pick::build_fzf_args() {
     --bind 'ctrl-f:page-down'
     --bind 'ctrl-b:page-up'
   )
+  # Default: a lone row needs no prompt (symbol pickers). Launchers pass
+  # --no-auto-single so the list is always drawn — see the option comment.
+  if (( ! ${pick_ui[no_auto_single]:-0} )); then
+    fzf_args+=(--exit-0 --select-1)
+  fi
 
   # --height: inline by default; "full" (fzf-owns-the-box modal) omits it so fzf
   # runs full-screen and fills the borderless pane edge-to-edge.
@@ -943,6 +946,16 @@ pick::start() {
         ;;
       --no-border)
         pick_ui[no_border]=1; shift
+        ;;
+      # LAUNCHERS opt out of fzf's "one row needs no prompt" shortcuts.
+      # --select-1 accepts a single-row list WITHOUT DRAWING IT and --exit-0
+      # quits on an empty one, so a picker whose list happened to collapse
+      # (the work laptop renders one quick-launch workspace: the rest are
+      # gated on personal project dirs) fired its action invisibly, with no
+      # way to reach anything else. A chooser that launches must always show
+      # what it is about to launch.
+      --no-auto-single)
+        pick_ui[no_auto_single]=1; shift
         ;;
       --no-hints)
         pick_ui[no_hints]=1; shift

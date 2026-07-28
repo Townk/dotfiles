@@ -263,6 +263,12 @@ pick_start_args=(
   --selector-shortcuts
   --selector-nav
   --output field:1
+  # Never auto-fire on a one-row list: every row here LAUNCHES something (a
+  # session, a tab, an ssh workspace). Where the list collapses to one entry
+  # — the work laptop renders a single workspace, the rest are gated on
+  # personal project dirs — fzf's --select-1 connected to it instantly,
+  # without ever drawing the picker.
+  --no-auto-single
 )
 # Workspaces: opt into file recency, and add the Alt+Enter "open in a separate
 # window" accept action. Enter emits field 1 (the id); Alt+Enter emits field 2
