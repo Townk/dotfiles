@@ -161,12 +161,16 @@ Describe 'silo skills — reconcile, validate & cross-silo'
     # `grep -ql` over many files returns success if ANY file matches, so to
     # assert "every template references X" we count the files that match and
     # compare against the total count.
-    n_templates=$(ls docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
-    n_validate=$(grep -l 'the `validate` skill' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
-    n_endwork=$(grep -l '`/end-work`' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
-    n_stop=$(grep -l 'Stop here — do not integrate' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+    #
+    # The glob is `work-on*.md`, not `work-on-*.md`: the cross-silo dispatcher
+    # is `work-on.md` with no suffix, and the tighter glob let it escape every
+    # compliance check the other templates are held to.
+    n_templates=$(ls docs/silo-commands/work-on*.md | wc -l | tr -d ' ')
+    n_validate=$(grep -l 'the `validate` skill' docs/silo-commands/work-on*.md | wc -l | tr -d ' ')
+    n_endwork=$(grep -l '`/end-work`' docs/silo-commands/work-on*.md | wc -l | tr -d ' ')
+    n_stop=$(grep -l 'Stop here — do not integrate' docs/silo-commands/work-on*.md | wc -l | tr -d ' ')
     # The old auto-integrate bullet must be gone from every template.
-    n_oldint=$(grep -l 'Integrate (non-UX work):' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+    n_oldint=$(grep -l 'Integrate (non-UX work):' docs/silo-commands/work-on*.md | wc -l | tr -d ' ')
 
     It 'every template references the validate skill'
       When call test "$n_validate" -eq "$n_templates"
@@ -189,13 +193,13 @@ Describe 'silo skills — reconcile, validate & cross-silo'
     End
 
     It 'no template references the removed validate.md path'
-      n=$(grep -l 'docs/silo-commands/validate\.md' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+      n=$(grep -l 'docs/silo-commands/validate\.md' docs/silo-commands/work-on*.md | wc -l | tr -d ' ')
       When call test "$n" -eq 0
       The status should be success
     End
 
     It 'no template references the removed reconcile.md path'
-      n=$(grep -l 'docs/silo-commands/reconcile\.md' docs/silo-commands/work-on-*.md | wc -l | tr -d ' ')
+      n=$(grep -l 'docs/silo-commands/reconcile\.md' docs/silo-commands/work-on*.md | wc -l | tr -d ' ')
       When call test "$n" -eq 0
       The status should be success
     End

@@ -10,6 +10,11 @@ opcode, a shared file format, a side-channel both ends must agree on. The
 tell is simple — if you can describe the change without naming two silos, you
 do not need this skill.
 
+**Two ways in.** The human dispatches with `/work-on <a>+<b> <task>` when they
+know up front; an agent already mid-task loads this skill directly on
+discovering the work spans silos. Either way the procedure below is the same,
+and step 1's declaration is already made for you in the first case.
+
 ## Why one worktree, not one per silo
 
 The silo model exists to stop two *agents* colliding, not to stop one agent

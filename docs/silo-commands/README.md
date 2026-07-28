@@ -114,6 +114,7 @@ templates; the `reconcile` skill remains the reusable capability it invokes.
 | `/work-on-cursor` | Cursor coding agent config | Cursor agents/skills + `alwaysApply` MDC baseline rule |
 | `/work-on-chezmoi` | chezmoi orchestration & run-scripts | `.setup.sh`, `.chezmoiscripts/`, run-script ordering & hash triggers |
 | `/work-on-utils` | cross-cutting utilities | `notify`, `wait-until`, `chezmoi-reverse`, `tab-edit`, `common.zsh` |
+| `/work-on <a>+<b> <task>` | features spanning silos | one worktree, a declared silo set; loads the `cross-silo` skill |
 | `/end-work` | session integration | Lands a completed `work-on-<silo>-<suffix>` branch onto `master` via the `reconcile` skill |
 
 The four `/work-on-system-*` commands are sub-silos of the system management
@@ -135,13 +136,34 @@ files) there and never scans a `worktrees/` subdir. Worktree checkout paths
 are machine-local and never committed. Each template's Setup block defines
 `WT_ROOT` and `mkdir -p`s it.
 
-## Features that span silos — the `cross-silo` skill
+## Features that span silos — `/work-on` + the `cross-silo` skill
 
 Some features *are* the seam between two silos: a new bridge opcode, a shared
-file format, a side-channel both ends must agree on. There is no
-`/work-on-<two-silos>`, and there deliberately isn't one — load the
-**`cross-silo`** skill instead (`/skill:cross-silo` in pi, `/cross-silo` in
-Claude Code).
+file format, a side-channel both ends must agree on.
+
+**When you know that up front**, dispatch with the parameterized command:
+
+```
+/work-on clipboard+terminal-mux add a W opcode for window actions
+```
+
+The silo set is ONE `+`-joined token. Silo names are ordinary English words —
+`theme`, `pick`, `preview`, `shell`, `pi`, `cursor`, `utils`, `secrets` — so a
+space-separated set cannot be told from the start of a task description
+(`pick preview shell out to X` has three readings). The `+` removes the guess,
+and it is the same set the branch name carries.
+
+There is no `/work-on-<two-silos>` template and there cannot be: 21 silos mean
+210 pairs and 1,330 triples. The trade is that `/work-on` cannot inline the
+briefings the per-silo templates carry — it sends the agent to read each
+silo's section of the map instead. For a **single** silo, always prefer
+`/work-on-<silo>`: the briefing is better.
+
+**When an agent discovers mid-task that the work spans silos**, it loads the
+same procedure directly — the **`cross-silo`** skill (`/skill:cross-silo` in
+pi, `/cross-silo` in Claude Code). The command is the entry point; the skill
+is the procedure, exactly as every per-silo template delegates `validate` and
+`reconcile` rather than inlining them.
 
 It keeps the model intact rather than working around it: **one** worktree
 holding a **declared** set of silos, on a branch that names the claim
