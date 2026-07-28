@@ -1,0 +1,15 @@
+# Which multiplexer .zshrc autostarts for interactive shells (mux migration
+# spec §2 "Backend selection", D17).
+#
+# This is the *outside a session* default only. Inside a session the shim
+# never consults it — mux::backend detects tmux/zellij from $TMUX/$ZELLIJ at
+# runtime, so a tmux session and a Zellij session work side by side on the
+# same machine.
+#
+# Per-machine override: write "tmux" or "zellij" into ~/.config/mux/backend
+# (loose, untracked, mirrors the theme-override pattern). It wins over this
+# baked default, so a single box can dissent without a chezmoi edit.
+#
+# Keep in sync with mux::default_backend's fallback in
+# home/dot_local/lib/mux.zsh — tests/mux_autostart_spec.sh pins the two together.
+muxBackend: zellij

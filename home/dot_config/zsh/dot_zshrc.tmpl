@@ -6,12 +6,12 @@
 # prompt keeps the perceived startup at ~zero; the heavy work (compinit,
 # ZLE plugins, tool init) runs asynchronously right after.
 
-_zsh_should_autoattach_zellij() {
-  [[ -z "$ZELLIJ" ]] || return 1
+_zsh_should_autoattach_mux() {
   # Cross-nesting guard (mux migration spec §2/D17, pulled forward in Phase 0):
-  # never autostart Zellij inside a tmux pane. tmux.conf scrubs the stale
-  # ZELLIJ* vars from pane envs (cross-mux hygiene), so without this check a
-  # tmux pane's shell would pass the ZELLIJ test above and nest a Zellij.
+  # never autostart a multiplexer inside *either* mux's pane. tmux.conf scrubs
+  # the stale ZELLIJ* vars from pane envs (cross-mux hygiene), so without the
+  # $TMUX check a tmux pane's shell would pass the $ZELLIJ test and nest.
+  [[ -z "$ZELLIJ" ]] || return 1
   [[ -z "$TMUX" ]] || return 1
   [[ -t 0 && -t 1 ]] || return 1
 
@@ -82,17 +82,23 @@ if [[ -o interactive && -z "$ZELLIJ" && -n "${SSH_CONNECTION:-}" && -t 2 && -f "
 fi
 unset _gpgfwd_marker
 
-# Auto-attach Zellij for interactive shells.
+# Auto-attach the multiplexer for interactive shells.
 # Done before the rest of init so the outer shell doesn't pay for setup
-# twice — the shell spawned inside Zellij re-runs .zshrc with $ZELLIJ set,
-# skipping this block.
+# twice — the shell spawned inside the mux re-runs .zshrc with $ZELLIJ or
+# $TMUX set, so the guard above short-circuits this block.
 #
-# "Main" session reuse:
+# WHICH mux starts here is the "outside a session" knob (spec §2): the loose
+# ~/.config/mux/backend file if it names one, else the chezmoi .muxBackend
+# default baked in below. This is *only* about what a bare terminal launches
+# — dispatch inside a live session is runtime detection (mux::backend reading
+# $TMUX/$ZELLIJ), so flipping this knob never strands an open session.
+#
+# "Main" session reuse, mirrored on both backends:
 #   - doesn't exist (or only as EXITED) → wipe stale record, create+attach
 #   - live, no clients                  → reattach (resume the existing one)
 #   - live, has a client                → spawn a fresh anonymous session
 #                                         (so Cmd+N etc. get their own mux)
-if _zsh_should_autoattach_zellij; then
+if _zsh_should_autoattach_mux; then
   # Remote logins print a full-screen MOTD (pam_motd) before Zellij grabs the
   # alternate screen. Wipe the primary buffer + scrollback first so it doesn't
   # flash on attach, nor reappear when Zellij restores the primary buffer on
@@ -113,36 +119,70 @@ if _zsh_should_autoattach_zellij; then
       | head -n 50 >| "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null
     return 0
   }
-  for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij "$HOME/.local/share/mise/shims/zellij" ~/.local/bin/zellij; do
-    [[ -x "$_zellij" ]] || continue
-    # Make sure the managed plugin wasms exist before launch. We fetch them
-    # ourselves (config.kdl loads them via file:) instead of trusting Zellij's
-    # downloader, which caches transient 404/504 error pages as the plugin and
-    # never retries. No-op once the wasms are present.
-    [[ -x ~/.config/zellij/ensure-plugins ]] && ~/.config/zellij/ensure-plugins
-    if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
-      if "$_zellij" --session Main action list-clients 2>/dev/null \
-           | tail -n +2 | grep -q .; then
-        exec "$_zellij" --new-session-with-layout default
+  # Resolve the knob: loose per-machine file wins, chezmoi data is the default.
+  # Anything unrecognised in the loose file is ignored rather than obeyed — a
+  # typo there must not leave the login shell with no multiplexer at all.
+  _mux_backend="{{ .muxBackend }}"
+  if [[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/mux/backend" ]]; then
+    _mux_pin="$(<"${XDG_CONFIG_HOME:-$HOME/.config}/mux/backend")"
+    _mux_pin="${_mux_pin//[[:space:]]/}"
+    [[ "$_mux_pin" == (tmux|zellij) ]] && _mux_backend="$_mux_pin"
+    unset _mux_pin
+  fi
+
+  if [[ "$_mux_backend" == tmux ]]; then
+    for _tmux in /opt/homebrew/bin/tmux /usr/local/bin/tmux "$HOME/.local/share/mise/shims/tmux" ~/.local/bin/tmux /usr/bin/tmux; do
+      [[ -x "$_tmux" ]] || continue
+      # tmux tears a session down as soon as its last process exits, so there
+      # is no EXITED record to sweep the way Zellij needs — has-session is the
+      # entire liveness test. `-t=` anchors an exact match; a bare `-t Main`
+      # would also match a session called "Main2".
+      if "$_tmux" has-session -t=Main 2>/dev/null; then
+        if "$_tmux" list-clients -t=Main 2>/dev/null | grep -q .; then
+          exec "$_tmux" new-session
+        else
+          _ql_seed_main
+          exec "$_tmux" attach-session -t=Main
+        fi
       else
-        # Main is idle → reattach. If the session record is stale, discard it
-        # and create a fresh Main with the configured default layout.
         _ql_seed_main
-        exec "$_zellij" attach Main || {
-          "$_zellij" delete-session Main -f &>/dev/null
-          exec "$_zellij" --session Main --new-session-with-layout default
-        }
+        exec "$_tmux" new-session -s Main
       fi
-    else
-      "$_zellij" delete-session Main -f &>/dev/null
-      _ql_seed_main
-      exec "$_zellij" --session Main --new-session-with-layout default
-    fi
-  done
-  unset _zellij
+    done
+  else
+    for _zellij in /opt/homebrew/bin/zellij /usr/local/bin/zellij "$HOME/.local/share/mise/shims/zellij" ~/.local/bin/zellij; do
+      [[ -x "$_zellij" ]] || continue
+      # Make sure the managed plugin wasms exist before launch. We fetch them
+      # ourselves (config.kdl loads them via file:) instead of trusting Zellij's
+      # downloader, which caches transient 404/504 error pages as the plugin and
+      # never retries. No-op once the wasms are present.
+      [[ -x ~/.config/zellij/ensure-plugins ]] && ~/.config/zellij/ensure-plugins
+      if "$_zellij" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE '^Main\b'; then
+        if "$_zellij" --session Main action list-clients 2>/dev/null \
+             | tail -n +2 | grep -q .; then
+          exec "$_zellij" --new-session-with-layout default
+        else
+          # Main is idle → reattach. If the session record is stale, discard it
+          # and create a fresh Main with the configured default layout.
+          _ql_seed_main
+          exec "$_zellij" attach Main || {
+            "$_zellij" delete-session Main -f &>/dev/null
+            exec "$_zellij" --session Main --new-session-with-layout default
+          }
+        fi
+      else
+        "$_zellij" delete-session Main -f &>/dev/null
+        _ql_seed_main
+        exec "$_zellij" --session Main --new-session-with-layout default
+      fi
+    done
+  fi
+  # Reached only when no backend binary was found — fall through to a plain
+  # shell rather than leaving the terminal with nothing.
+  unset _zellij _tmux _mux_backend
   unset -f _ql_seed_main 2>/dev/null
 fi
-unset -f _zsh_should_autoattach_zellij 2>/dev/null
+unset -f _zsh_should_autoattach_mux 2>/dev/null
 
 # Powerlevel10k instant prompt. Must stay near the top, before anything
 # that prints to the terminal, so the cached prompt can render immediately

@@ -64,9 +64,14 @@ mux::available() {
 }
 
 # Knob (§2): the default backend for OUTSIDE-a-session launches. The loose,
-# untracked per-machine file wins (theme-override pattern); the baked default
-# stays "zellij" until the Phase 7 flip templates it from chezmoi data
-# (.muxBackend). Runtime detection above always beats this inside a session.
+# untracked per-machine file wins (theme-override pattern). Runtime detection
+# above always beats this inside a session.
+#
+# The fallback below duplicates chezmoi's .muxBackend (home/.chezmoidata/mux.yaml),
+# which .zshrc's autostart bakes in directly — this file is sourced by tests
+# that Include it raw, so it cannot be a template. tests/mux_autostart_spec.sh
+# fails if the two drift: disagreeing halves show up as the picker thinking
+# you are on one backend while you are sitting in the other.
 mux::default_backend() {
   local f="${XDG_CONFIG_HOME:-$HOME/.config}/mux/backend" b=""
   [[ -r "$f" ]] && b="$(<"$f")"
