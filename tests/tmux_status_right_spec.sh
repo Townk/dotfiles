@@ -361,14 +361,45 @@ EOS
     The output should not include "$G_CLOCK"
   End
 
-  It 'ssh stays host-only even in fullscreen (conditions are ANDed)'
+  # The whole reason the fullscreen rule exists is that FULLSCREEN HIDES THE
+  # MACOS MENU BAR. Over ssh the menu bar that just disappeared belongs to the
+  # machine at the other end, so the two halves part company: the clock is
+  # machine-independent and is precisely what was lost, while battery and wifi
+  # measure THIS machine — a mac-mini's mains reading says nothing about the
+  # laptop you are sitting at. (Before fullscreen was knowable over ssh, this
+  # distinction could not arise: the group was suppressed for remote clients
+  # outright.)
+  It 'ssh in fullscreen gains the clock but not this machines battery or wifi'
     export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
     printf 'true' > "$TEST_TMP/fullscreen_state"
     printf 'devbox' > "$TEST_TMP/hostname-alias"
     When call zsh "$W" root 0 main
     The output should include "$G_HOST devbox"
-    The output should not include "󱊥"
+    The output should include "$G_CLOCK"
+    The output should not include "$G_WIFI_ON"
+    The output should not include "$G_WIFI_OFF"
+    The output should not include "%"
+  End
+
+  It 'ssh windowed stays host-only, as before'
+    export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
+    printf 'false' > "$TEST_TMP/fullscreen_state"
+    printf 'devbox' > "$TEST_TMP/hostname-alias"
+    When call zsh "$W" root 0 main
+    The output should include "$G_HOST devbox"
     The output should not include "$G_CLOCK"
+    The output should not include "$G_WIFI_ON"
+  End
+
+  # The remote case is driven by the mirror the bridge fills, so a Ghostty
+  # client over ssh reacts to the laptop's window going fullscreen.
+  It 'follows the ghostty mirror for a remote client'
+    export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
+    printf 'true' > "$TEST_TMP/ghostty_fullscreen"
+    printf 'devbox' > "$TEST_TMP/hostname-alias"
+    When call zsh "$W" root 0 main 0 0 '' 0 0 '' 120 '' '' 0 '' xterm-ghostty
+    The output should include "$G_CLOCK"
+    The output should not include "$G_WIFI_ON"
   End
 
   It 'uses the effective palette base behind pill dividers'

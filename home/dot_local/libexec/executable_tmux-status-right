@@ -314,15 +314,29 @@ elif [[ "$(cat "$FS_STATE" 2>/dev/null)" == true ]]; then
   is_fullscreen=1
 fi
 
-# System segments (power/battery/wifi/clock): the layout rule `!ssh|fullscreen`
-# is a condition LIST — local AND fullscreen (windowed local keeps them hidden;
-# the macOS menu bar already shows them). Fullscreen also requires the
-# client to clear fullscreen_min_cols (100), zj-hud parity.
+# System segments. The rule exists because FULLSCREEN HIDES THE MACOS MENU
+# BAR: windowed, the menu bar already shows the clock and the battery, so the
+# ribbon stays out of the way; fullscreen, it takes over. Width gate
+# (fullscreen_min_cols 100) is zj-hud parity.
+#
+# Over ssh the two halves part company, because the menu bar that just
+# disappeared belongs to the machine at the OTHER end of the tunnel:
+#   clock          — machine-independent, and exactly what you just lost
+#   battery/wifi   — these measure THIS machine, which is not the one you are
+#                    sitting at. A mac-mini's mains-power reading tells you
+#                    nothing about the laptop in front of you, so they stay
+#                    hidden until they can be fetched from the origin.
+# Before fullscreen was knowable over ssh this distinction could not arise —
+# the whole group was simply suppressed for remote clients.
 show_sys=0
-if (( ! is_ssh && is_fullscreen )); then
+show_clock=0
+if (( is_fullscreen )); then
   cw="$("$TMUX_BIN" display -p '#{client_width}' 2>/dev/null)" || cw=""
   [[ "$cw" == <-> ]] || cw=999
-  (( cw >= 100 )) && show_sys=1
+  if (( cw >= 100 )); then
+    show_clock=1
+    (( is_ssh )) || show_sys=1
+  fi
 fi
 
 # ---- segment bodies (left to right) ---------------------------------------
@@ -420,7 +434,7 @@ if (( is_ssh )); then
 fi
 (( ${#w} )) && { bodies+=("${(j:  :)w}"); kinds+=(widgets); }
 
-if (( show_sys )); then
+if (( show_clock )); then
   d="$(date '+%a %b')"; e="$(date '+%e')"; t="$(date '+%l:%M')"
   ap="${(L)$(date '+%p')}"
   bodies+=("$I_CLOCK $d ${e## } ${t## }$ap"); kinds+=(time)
