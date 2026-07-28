@@ -323,13 +323,17 @@ Describe 'mux.zsh — backend detection & knob'
     The output should equal "tmux"
   End
 
-  It 'default_backend falls back to zellij on garbage'
+  # Garbage in the loose pin falls back to the BAKED default, which Phase 7
+  # flipped to tmux. Read it from chezmoi data rather than repeating the word:
+  # this assertion existed to prove the knob rejects nonsense, and hard-coding
+  # the value made it fail on the flip as if the rejection had broken.
+  It 'default_backend falls back to the baked default on garbage'
     TEST_TMP=$(mktemp -d)
     export XDG_CONFIG_HOME="$TEST_TMP"
     mkdir -p "$TEST_TMP/mux"
     printf 'screen\n' >"$TEST_TMP/mux/backend"
     When call mux::default_backend
-    The output should equal "zellij"
+    The output should equal "$(awk '/^muxBackend:/{print $2}' "$SHELLSPEC_PROJECT_ROOT/home/.chezmoidata/mux.yaml")"
   End
 End
 

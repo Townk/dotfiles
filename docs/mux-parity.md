@@ -90,6 +90,7 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | Images | sixel-only through VTE | native sixel (WezTerm) / kitty placeholders (Ghostty) via preview stack | ✅ | Phase 0 as-built §10 |
 | Scrollback size | `scroll_buffer_size 1000000` | `history-limit 1000000` | ✅ | |
 | Session serialization | off | no resurrect plugin | ✅ | D17 |
+| Autostart "Main" reuse | absent→create, idle→attach, has-client→anonymous | same three ways | ✅ | Phase 7; `.zshrc`, both branches asserted in `tests/mux_autostart_spec.sh` |
 | Cross-mux hygiene | n/a (zellij sets its own env) | scrubs stale `ZELLIJ*`; zshrc guard blocks nested autostart | ✅ | Phase 0 as-built |
 
 ## Platform gotchas — Phase 6 (2026-07-26)
@@ -299,3 +300,32 @@ are derived views. One API (`lib/mux/stack.zsh`, exposed to key bindings by
 | `mux-open` runs in WezTerm's GUI environment, where there is no `$ZELLIJ`/`$TMUX` — it resolves the session itself and passed `--session` to its nvim branch but NOT to `term-quick-view` | zellij REFUSES an untargeted `action new-tab` ("Please specify the session name"), so CMD+click never opened the quick view there while opening files and directories worked fine. tmux hid the identical gap: an untargeted command picks the most-recently-used session, so it worked by luck and would have opened the view in the WRONG session with two of them about. The session travels as `MUX_SESSION`, alongside the existing `MUX_BACKEND` |
 | `mux::available` re-derived the backend from `$ZELLIJ`/`$TMUX` while `mux::backend` honours the `MUX_BACKEND` pin — two functions guarding the same decision, disagreeing | a caller OUTSIDE any session (mux-open, from WezTerm's GUI) pins the backend and dispatch obeys, but availability said "no mux", so `term-quick-view` took its inline arm and painted into a terminal nobody was looking at. Broken on BOTH backends, which is why the CMD+click quick view opened nothing on zellij and — despite the Phase 6 claim — was never really working on tmux either |
 | **Mode B over SCREEN SHARING is not a valid test of a keybinding**: both machines run this config, the LOCAL Hammerspoon sees the keystroke first, swallows it, and the remote never gets it | cost five rounds of debugging a clipboard paste that was never broken — ⇧⌘v opened the LAPTOP's picker while the mac-mini logged nothing, and the paste arrived at the remote shell as a bare "v". `keysBelongElsewhere()` now yields the whole keyboard (eventtap + leader hotkey) whenever a screen-sharing client is frontmost. When a key "does nothing" on a remote machine, check WHICH machine is claiming it before touching any config |
+
+## Phase 7 — the default flip (2026-07-27)
+
+tmux is now what a bare terminal launches. The knob lives in two halves that
+must agree: chezmoi's `.muxBackend` (`home/.chezmoidata/mux.yaml`), which
+`.zshrc` bakes in, and `mux::default_backend`'s fallback in
+`home/dot_local/lib/mux.zsh`, which answers the same question for callers that
+are not the login shell. `mux.zsh` cannot be a template — 17 specs `Include` it
+raw — hence the duplication, and hence the test that fails when they drift.
+
+**Reverting is a one-liner, no chezmoi edit and no rebuild:**
+
+```sh
+print -r -- zellij > ~/.config/mux/backend   # new terminals launch Zellij again
+```
+
+The loose file wins over the baked default on that machine only. Nothing about
+this strands a running session: dispatch *inside* a session is runtime
+detection off `$TMUX`/`$ZELLIJ`, so a live Zellij keeps behaving like Zellij
+while new windows come up as tmux, and `zj attach Main` still reaches it.
+
+| Gotcha | Consequence |
+|---|---|
+| `tmux new -A -s Main` — the obvious one-liner, and what D17 sketched — is NOT equivalent to the Zellij dance it replaces | `-A` collapses the has-a-client case into "attach", so a second window joins Main and MIRRORS it instead of getting its own session. The three states have to be probed separately (`has-session` → `list-clients` → attach/anonymous/create) for ⌘N to keep meaning what it means on Zellij |
+| tmux needs no EXITED sweep, Zellij does | tmux destroys a session when its last process exits, so `has-session` is the whole liveness test; Zellij keeps a dead record that must be `delete-session -f`'d before a fresh Main can take the name |
+| `-t Main` PREFIX-matches in tmux; `-t=Main` is exact | without the `=`, a session called "Main2" answers for "Main". Session names are case-sensitive, so a lowercase `main` is a different session and does not collide |
+| in zsh, `*` in a pattern substitution matches ACROSS NEWLINES | `${block//for _tmux in *; do/...}`, rewriting a binary list to point at a test stub, silently ate the entire loop body up to the next `; do` — the test then exercised nothing and still "passed" the parse. Rewrite line-scoped. This is a testing-harness trap, and it cost a full debug cycle |
+| a spec that pins a value by `sed`-ing for its literal (`_mux_backend="zellij"`) breaks the moment the default flips | three Zellij regression tests failed on the flip for that reason and looked like real breakage. Match the alternation (`(zellij|tmux)`) so the fence survives the thing it is fencing |
+| `XDG_CONFIG_HOME=/scratch zsh -c '...'` does NOT isolate config: `.zshenv` runs first and `environment.sh` resets the variable to the real `~/.config` | a "the loose pin overrides the baked default" check quietly read the REAL `~/.config/mux/backend` and reported the baked value — passing by luck exactly when the two agreed. Use `zsh -f`, or set the variable as the first line of the script TEXT so it lands after the rc files. Any test isolating via an XDG var has this hole |

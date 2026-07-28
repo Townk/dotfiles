@@ -5,7 +5,7 @@ argument-hint: <task description>
 You are working on the **shell (zsh) bootstrap & widgets** silo of this
 chezmoi dotfiles repo.
 
-> Framework-free, XDG-hardened zsh bootstrap with Zellij auto-attach; custom
+> Framework-free, XDG-hardened zsh bootstrap with multiplexer auto-attach; custom
 > ZLE widgets (dir-navigation ring, smart-space, `super-cd`); the shared
 > `common.zsh` stdlib, `prompt::*`, and `platform::*`.
 
@@ -58,13 +58,13 @@ chezmoi dotfiles repo.
 - **ZLE widgets**: dir-navigation ring (`_dir_ring`),
   `smart-space-expansion`, `super-cd` (aliased to `cd`). Bound to raw CSI
   sequences (WezTerm/Ghostty Shift+arrows, Shift+Tab=undo, Option+/=redo).
-- **Zellij auto-attach** in `dot_zshrc` — "Main" session reuse logic,
+- **Mux auto-attach** in `dot_zshrc` — tmux or Zellij per the `.muxBackend` knob, "Main" session reuse logic,
   over-SSH scrollback wipe to suppress pam_motd flash, quick-launch recency
   seeding (calls into **terminal-mux**).
 
 ## What you consume read-only
 
-- **terminal-mux**: Zellij auto-attach, quick-launch recency seeding
+- **terminal-mux**: mux auto-attach, quick-launch recency seeding
 - **pick**: pick widget
 - **preview**: fzf wired to `preview`
 - **utils**: `notify`, `wait-until`

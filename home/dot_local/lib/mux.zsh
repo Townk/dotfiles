@@ -78,7 +78,7 @@ mux::default_backend() {
   b="${b//[[:space:]]/}"
   case "$b" in
     zellij | tmux) print -r -- "$b" ;;
-    *) print -r -- zellij ;;
+    *) print -r -- tmux ;;
   esac
 }
 

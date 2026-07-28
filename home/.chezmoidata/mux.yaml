@@ -12,4 +12,4 @@
 #
 # Keep in sync with mux::default_backend's fallback in
 # home/dot_local/lib/mux.zsh — tests/mux_autostart_spec.sh pins the two together.
-muxBackend: zellij
+muxBackend: tmux

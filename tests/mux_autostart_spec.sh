@@ -172,11 +172,15 @@ EOS
   # thinks I am on Zellij while I am sitting in tmux".
   Describe 'the shim default agrees with the chezmoi default'
     baked_zshrc() { grep -oE 'muxBackend: [a-z]+' home/.chezmoidata/mux.yaml | awk '{print $2}'; }
+    # `zsh -f`: without it .zshenv runs and resets XDG_CONFIG_HOME back to the
+    # real ~/.config, where a loose pin file would answer instead of the baked
+    # fallback this asserts on. Passed as `-c` text rather than the environment
+    # for the same reason — the rc files win over anything exported in.
     baked_shim()  {
       unset ZELLIJ ZELLIJ_SESSION_NAME TMUX MUX_BACKEND
-      XDG_CONFIG_HOME=$(mktemp -d) zsh -c '
-        source home/dot_local/lib/mux.zsh
-        mux::default_backend'
+      zsh -f -c "XDG_CONFIG_HOME=$(mktemp -d)
+                 source home/dot_local/lib/mux.zsh
+                 mux::default_backend"
     }
 
     It 'has the same fallback in both places'

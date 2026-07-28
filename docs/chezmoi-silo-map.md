@@ -321,9 +321,9 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **`prompt::*`** (`prompt-common.zsh`) — `required`/`default`/`secret`/`choice`/`confirm`, read from `/dev/tty`. `prompt::secret` does masked entry via `-echo -icanon` + `read -rk 1`. Consumed by ai-harnesses (`cagent`), secrets (`sec`).
 - **`platform::*`** — `launch_gui`/`raise_app`; macOS `open -a`+AppleScript, Linux detached exec + hyprctl/swaymsg/wmctrl/xdotool. Consumed by utils `tab-edit`.
 - **ZLE widgets**: dir-navigation ring (`_dir_ring`), `smart-space-expansion`, `super-cd` (aliased to `cd`). Bound to raw CSI sequences (WezTerm/Ghostty Shift+arrows, Shift+Tab=undo, Option+/=redo).
-- **Zellij auto-attach** in `dot_zshrc` — "Main" session reuse logic, over-SSH scrollback wipe to suppress pam_motd flash, quick-launch recency seeding (calls into terminal-mux).
+- **Mux auto-attach** in `dot_zshrc` — tmux or Zellij per the `.muxBackend` knob, "Main" session reuse logic, over-SSH scrollback wipe to suppress pam_motd flash, quick-launch recency seeding (calls into terminal-mux).
 
-**Consumes from:** terminal-mux (Zellij auto-attach, quick-launch recency seeding), pick (pick widget), preview (fzf wired to `preview`), utils (`notify`, `wait-until`), external z4h/p10k/zsh-defer/fzf/zoxide/atuin.
+**Consumes from:** terminal-mux (mux auto-attach, quick-launch recency seeding), pick (pick widget), preview (fzf wired to `preview`), utils (`notify`, `wait-until`), external z4h/p10k/zsh-defer/fzf/zoxide/atuin.
 
 **Entry points:** `dot_zshrc`, `environment.sh`, `functions.d/widgets.sh`, `lib/common.zsh`, `lib/prompt-common.zsh`.
 
@@ -493,7 +493,7 @@ owner area, don't parallelize.
 **Footnotes (the shared files behind each `⚠`):**
 1. **terminal-mux↔custom-builds**: built font family name + custom-icon `code` pins are custom-builds's output, terminal-mux's font chain references them. Safe if custom-builds preserves the contract; risky if either changes the pin set.
 2. **terminal-mux↔system**: `services.toml.tmpl` `clipboard-bridge` section — system owns the file, terminal-mux owns the socket protocol the nvim client uses. Pre-agree: system edits the plist fields, terminal-mux edits the `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` protocol; both touching `[clipboard-bridge]` = collision.
-3. **terminal-mux↔shell**: Zellij auto-attach in `dot_zshrc` (shell) calls into terminal-mux's quick-launch recency seeding; `notify` (shell lib) is called by terminal-mux's `copy-pwd`. Different files, but the *call contract* must stay in sync.
+3. **terminal-mux↔shell**: mux auto-attach in `dot_zshrc` (shell) calls into terminal-mux's quick-launch recency seeding; `notify` (shell lib) is called by terminal-mux's `copy-pwd`. Different files, but the *call contract* must stay in sync.
 4. **terminal-mux↔preview**: `image-protocol-support.zsh` is owned by terminal-mux, sourced read-only by preview. Safe if preview only *calls* `get_terminal_image_protocol`; collision if preview needs to edit it (→ hand back to terminal-mux).
 5. **terminal-mux↔yazi**: `mux-open` (terminal-mux) opens dirs in a Yazi tab (yazi). Contract is the Yazi invocation; different files.
 6. **chezmoi↔{terminal-mux,custom-builds,secrets,system,shell}**: the `.chezmoiscripts/run_*` triggers. Each run-script is a distinct file, so **per-file** parallelism is fine; the collision is only if two agents renumber/reorder the prefix sequence. Rule: chezmoi owns ordering; feature silos own the *content* of their own run-script.
