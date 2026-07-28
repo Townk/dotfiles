@@ -93,7 +93,12 @@ toggle_over_bridge() {
   local req
   req=$(mktemp "${TMPDIR:-/tmp}/mux-fs-toggle.XXXXXX") || fail "mktemp failed"
   print -rn -- "fullscreen-toggle $term" > "$req"
-  if ! clipbridge::send 127.0.0.1 "$port" W "$req"; then
+  # Longer than the clipboard default: this makes the origin DO something.
+  # A window animation takes a moment, and the FIRST toggle blocks on macOS's
+  # Automation consent dialog until a human clicks it — timing out there
+  # reports "refused" for a toggle that actually happened (measured).
+  if ! CLIPBRIDGE_TIMEOUT_S="${MUX_BRIDGE_TIMEOUT_S:-20}" \
+       clipbridge::send 127.0.0.1 "$port" W "$req"; then
     rm -f "$req"
     fail "the terminal on the other end refused the fullscreen toggle"
   fi

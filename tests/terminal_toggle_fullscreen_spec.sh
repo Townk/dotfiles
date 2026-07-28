@@ -58,7 +58,7 @@ EOF
       # a stand-in bridge client: records the call, reports the port live
       { print 'clipbridge::probe() { [[ -n "${STUB_BRIDGE_UP:-}" ]] }'
         print 'clipbridge::send() {'
-        print '  print -r -- "send $3 [$(cat $4)]" >> '"$BR_TMP/calls"
+        print '  print -r -- "send $3 [$(cat $4)] timeout=${CLIPBRIDGE_TIMEOUT_S:-unset}" >> '"$BR_TMP/calls"
         print '  [[ -z "${STUB_SEND_FAILS:-}" ]]'
         print '}'
       } > "$BR_TMP/clipboard-bridge-client.zsh"
@@ -88,6 +88,16 @@ EOF
       When call run_it
       The output should include "rc=0"
       The output should include "send W [fullscreen-toggle ghostty]"
+    End
+
+    # A toggle makes the far machine DO something: a window animation, and on
+    # the very first use a macOS Automation consent dialog that blocks until
+    # a human clicks it. The clipboard's 2s wire timeout reported "refused"
+    # for a toggle that had actually happened (measured, 2026-07-28).
+    It 'waits longer than a clipboard read would'
+      export STUB_BRIDGE_UP=1
+      When call run_it
+      The output should include "timeout=20"
     End
 
     # The state just inverted and we asked for it — re-asking would cost

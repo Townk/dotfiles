@@ -20,6 +20,14 @@
 # binary payload (an image blob) are counted/written as raw bytes; the request
 # is assembled in a temp file, never a $(...) capture (which truncates NULs).
 
+# CLIPBRIDGE_TIMEOUT_S overrides the wire timeout (default 2s). Two seconds
+# is right for a clipboard read — the far end answers from memory — but an op
+# that makes the ORIGIN DO something can legitimately take longer: a window
+# animation, or a first-use macOS Automation consent dialog that blocks the
+# AppleScript until a human clicks it. Timing out there reports "refused" for
+# an action that actually happened, which is worse than waiting (observed on
+# the very first `W fullscreen-toggle`).
+
 # clipbridge::probe <host> <port>
 #   0 iff something is accepting on host:port (a live forward). Cheap connect
 #   scan — this is the honest "bridge-up" test (a down/stale tunnel refuses).
@@ -46,7 +54,7 @@ clipbridge::send() {
     printf "\\$(printf %03o $(( (plen >> 24) & 255 )))\\$(printf %03o $(( (plen >> 16) & 255 )))\\$(printf %03o $(( (plen >> 8) & 255 )))\\$(printf %03o $(( plen & 255 )))"
     cat "$payload_file"
   } > "$reqf"
-  nc -w 2 "$host" "$port" < "$reqf" > "$respf" 2>/dev/null
+  nc -w "${CLIPBRIDGE_TIMEOUT_S:-2}" "$host" "$port" < "$reqf" > "$respf" 2>/dev/null
   local status_byte
   status_byte=$(dd if="$respf" bs=1 count=1 2>/dev/null)
   rm -f "$reqf" "$respf"
@@ -79,7 +87,7 @@ clipbridge::request() {
     printf "\\$(printf %03o $(( (plen >> 24) & 255 )))\\$(printf %03o $(( (plen >> 16) & 255 )))\\$(printf %03o $(( (plen >> 8) & 255 )))\\$(printf %03o $(( plen & 255 )))"
     (( plen > 0 )) && cat "$payload_file"
   } > "$reqf"
-  nc -w 2 "$host" "$port" < "$reqf" > "$respf" 2>/dev/null
+  nc -w "${CLIPBRIDGE_TIMEOUT_S:-2}" "$host" "$port" < "$reqf" > "$respf" 2>/dev/null
   local st; st=$(head -c 1 "$respf" 2>/dev/null)
   if [[ "$st" != "O" ]]; then rm -f "$reqf" "$respf"; return 1; fi
   tail -c +6 "$respf" 2>/dev/null
