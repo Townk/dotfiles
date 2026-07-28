@@ -701,6 +701,30 @@ where "you" is decided by bridge-up:
 > `F` (fetch-file) predates Phase 6 as a caller-less opcode; Phase 6 gave it
 > its first real callers.
 >
+> **`W` window action (2026-07-28)** — the first op that is not about the
+> clipboard at all. The bridge had quietly become the general wire between a
+> remote mux session and the machine its TERMINAL lives on; the clipboard was
+> just the first thing to need it. Payloads:
+> - `fullscreen-toggle <ghostty|wezterm>` — runs the origin's own
+>   `terminal-toggle-fullscreen`, so there is one implementation of "how does
+>   this terminal go fullscreen", not a second copy behind the wire. The
+>   terminal is named by the CALLER: the service has no terminal environment
+>   to detect from, while the remote end knows exactly what it is talking to
+>   (`TERM` is the one thing ssh carries). `MUX_TERMINAL` short-circuits
+>   detection, and `SSH_*` are cleared so the origin doesn't decide it is
+>   itself remote.
+> - `fullscreen-state` — `true` / `false` / **empty when unknowable**. Empty
+>   travels all the way back: the asker leaves its mirror untouched rather
+>   than writing a wrong `false`, because a `NOT_RUNNING` verdict from a
+>   plainly-running Ghostty means the *asker* lacks the Accessibility grant.
+>
+> Before this, `Alt+Enter` over SSH failed with "cannot control the local
+> terminal from an SSH-hosted session" — a statement about the plumbing of
+> the day rather than about what was possible. The ribbon's fullscreen mirror
+> follows the same route, but only ever from `mux-fullscreen-probe` on the
+> `client-resized` hook: a round trip in the status renderer would repeat the
+> 5s stall that made every mode pill vanish (see `docs/mux-parity.md`).
+>
 > **Store**: new synthetic UTI `x-file-manifest` (NUL-joined absolute
 > paths), following the `x-resolved-path` precedent (§5). Rows carry
 > `type_kind='files'` and `source_host=<origin host>`; a manifest row is

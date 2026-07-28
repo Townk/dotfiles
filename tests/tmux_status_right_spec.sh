@@ -121,11 +121,14 @@ EOS
 
     It 'renders far faster than a status tick'
       timed() {
-        s=$(date +%s)
+        # EPOCHREALTIME, not `date +%s`: whole seconds make this a coin flip
+        # on where the second boundary falls, not a measurement.
+        zmodload zsh/datetime
+        local s=$EPOCHREALTIME
         zsh "$W" root 0 main 0 0 '' 0 0 '' 120 '' '' 0 '' xterm-ghostty >/dev/null
-        e=$(date +%s)
-        # a whole second is already 10x the budget; the regression was 5-11s
-        [ $((e - s)) -lt 1 ] && echo fast || echo "slow: $((e - s))s"
+        local -F elapsed=$(( EPOCHREALTIME - s ))
+        # half a second is already ~20x the budget; the regression was 5-11s
+        (( elapsed < 0.5 )) && echo fast || printf 'slow: %.2fs\n' $elapsed
       }
       When call timed
       The output should equal "fast"

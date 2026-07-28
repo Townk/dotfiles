@@ -1,19 +1,25 @@
 #!/usr/bin/env zsh
-# mux-fullscreen-probe — refresh Ghostty's fullscreen mirror, off the hot path.
+# mux-fullscreen-probe — the terminal's fullscreen state, off the hot path.
+#
+#   mux-fullscreen-probe          refresh the mirror the ribbon reads
+#   mux-fullscreen-probe --print  print true|false (empty if unknowable)
 #
 # WezTerm pushes its fullscreen state into a state file from wezterm.lua on
 # every window event, and the ribbon just reads it. Ghostty offers no such
 # hook, so the state has to be ASKED for — and asking is expensive: a round
-# trip through System Events' accessibility API measured 4-11 seconds on this
-# machine. Doing that from the ribbon renderer (which is a tmux `#()` job)
-# stalled the entire status bar, because tmux will not re-run a job while the
-# previous one is still going: every mode pill came and went inside a single
-# render and the bar never showed one.
+# trip through the accessibility API measured 4-11 seconds on this machine.
+# Doing that from the ribbon renderer (a tmux `#()` job) stalled the whole
+# status bar, because tmux will not re-run a job while the previous one is
+# still going: every mode pill came and went inside a single render.
 #
 # So the question is asked HERE, in the background, driven by the tmux hook
 # for the only event that can change the answer — a client resize, which
 # every fullscreen transition produces — and the answer is left in a file the
 # renderer reads for free.
+#
+# OVER SSH the window lives on the other machine, so the question travels the
+# clipboard bridge (opcode W, `fullscreen-state`) to the origin, which answers
+# by running THIS script with --print. Same code, both ends.
 
 emulate -L zsh
 setopt no_unset
@@ -21,16 +27,15 @@ setopt no_unset
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
 OSASCRIPT="${WIDGETS_OSASCRIPT_BIN:-/usr/bin/osascript}"
 STATE="${WIDGETS_GHOSTTY_FULLSCREEN_STATE:-$HOME/.local/state/mux/ghostty_fullscreen}"
+LIB="${MUX_LIB_DIR:-$HOME/.local/lib}"
+BRIDGE_PORT="${CLIPBOARD_BRIDGE_PORT:-2490}"
 
-# A resize arrives as a BURST — dragging a window edge fires the hook for
-# every intermediate size, and each probe is seconds long. mkdir is the
-# atomic test-and-set: whoever wins probes, the rest drop out, and the
-# survivor's answer covers the whole burst because it runs after it.
-LOCK="${TMPDIR:-/tmp}/mux-fullscreen-probe.lock"
-mkdir "$LOCK" 2>/dev/null || exit 0
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+mode="${1:-refresh}"
 
-state="$("$OSASCRIPT" <<'APPLESCRIPT' 2>/dev/null
+# Ask the window manager directly. Answers with the raw verdict word so the
+# caller can tell "windowed" from "could not tell" — they are not the same.
+probe_local() {
+  "$OSASCRIPT" <<'APPLESCRIPT' 2>/dev/null
 tell application "System Events"
     if not (exists process "Ghostty") then return "NOT_RUNNING"
     set p to first process whose name is "Ghostty"
@@ -47,17 +52,66 @@ tell application "System Events"
     return "WINDOWED"
 end tell
 APPLESCRIPT
-)" || exit 0
+}
 
 # NOT_RUNNING from a Ghostty that is plainly running means the asker was not
 # granted Accessibility, not that the window went away. An untrustworthy
-# answer must leave the mirror ALONE — overwriting it with `false` would
-# quietly disable the fullscreen segments and look like a rendering bug.
-case "$state" in
-  NATIVE_FULLSCREEN | NON_NATIVE_FULLSCREEN) answer=true ;;
-  WINDOWED) answer=false ;;
-  *) exit 0 ;;
-esac
+# answer must stay EMPTY all the way up: writing `false` for it would quietly
+# disable the fullscreen segments and look like a rendering bug.
+verdict_to_answer() {
+  case "$1" in
+    NATIVE_FULLSCREEN | NON_NATIVE_FULLSCREEN) print -rn -- true ;;
+    WINDOWED) print -rn -- false ;;
+    *) return 1 ;;
+  esac
+}
+
+# We are the REMOTE end of a reverse forward exactly when the peer bridge port
+# is accepting — that port only exists on the far side of the tunnel. The
+# terminal is then over there, and so is the only machine that can answer.
+is_remote() {
+  [[ -r "$LIB/clipboard-bridge-client.zsh" ]] || return 1
+  source "$LIB/clipboard-bridge-client.zsh" 2>/dev/null || return 1
+  clipbridge::probe 127.0.0.1 "$BRIDGE_PORT"
+}
+
+ask_peer() {
+  local req
+  req=$(mktemp "${TMPDIR:-/tmp}/mux-fs-req.XXXXXX") || return 1
+  print -rn -- "fullscreen-state" > "$req"
+  local out
+  out="$(clipbridge::request 127.0.0.1 "$BRIDGE_PORT" W "$req" 2>/dev/null)" || { rm -f "$req"; return 1; }
+  rm -f "$req"
+  [[ -n "$out" ]] || return 1
+  print -rn -- "$out"
+}
+
+if [[ "$mode" == --print ]]; then
+  verdict_to_answer "$(probe_local)" || exit 0
+  exit 0
+fi
+
+# --flip: the state is KNOWN to have just inverted because we asked for it and
+# the toggle succeeded. Used by terminal-toggle-fullscreen over the bridge,
+# where re-asking would cost another round trip to answer what we already know.
+if [[ "$mode" == --flip ]]; then
+  [[ "$(cat "$STATE" 2>/dev/null)" == true ]] && answer=false || answer=true
+else
+  # A resize arrives as a BURST — dragging a window edge fires the hook for
+  # every intermediate size, and each probe is seconds long. mkdir is the
+  # atomic test-and-set: whoever wins probes, the rest drop out, and the
+  # survivor's answer covers the whole burst because it runs after it.
+  LOCK="${TMPDIR:-/tmp}/mux-fullscreen-probe.lock"
+  mkdir "$LOCK" 2>/dev/null || exit 0
+  trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+
+  if is_remote; then
+    answer="$(ask_peer)" || exit 0
+  else
+    answer="$(verdict_to_answer "$(probe_local)")" || exit 0
+  fi
+  [[ "$answer" == true || "$answer" == false ]] || exit 0
+fi
 
 mkdir -p "${STATE:h}" 2>/dev/null || exit 0
 # Written whole, so a repaint mid-write cannot read half a word.

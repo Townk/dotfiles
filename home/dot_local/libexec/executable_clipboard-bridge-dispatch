@@ -20,6 +20,13 @@
 # Opcodes:
 #   G  get            req: empty                    resp: clipboard text
 #   R  get-regtype    req: empty                     resp: 1 byte v|l|b
+#   W  window action  req: <action>[ <arg>]          resp: empty | state | error
+#      Acts on the TERMINAL WINDOW on this machine for a session running at
+#      the far end of the tunnel: `fullscreen-toggle <ghostty|wezterm>` and
+#      `fullscreen-state` (true|false|empty). The bridge is already the wire
+#      between a remote mux and the machine its terminal lives on; fullscreen
+#      used to be refused over SSH, which described the plumbing rather than
+#      what was possible. See clip::op_window_action.
 #   H  get-host       req: empty                     resp: this machine's hostname
 #      Lets a consumer stamp the origin of the clip it just read from here, so
 #      it can materialize a self-contained copy with correct provenance (§11).
@@ -182,5 +189,6 @@ case "$opcode" in
   U) clip::op_set_file_urls "$payload" ;;
   L) clip::op_list_files ;;
   M) clip::op_manifest_persist_local "$payload" ;;
+  W) clip::op_window_action "$payload" ;;
   *) send_err "unknown opcode" ;;
 esac

@@ -363,6 +363,57 @@ clip::op_get_host() {
   send_ok "$(clip::self_host)"
 }
 
+# W  window action: do something to the TERMINAL WINDOW on this machine, on
+# behalf of a session running on the other end of the tunnel.
+#
+#   fullscreen-toggle <ghostty|wezterm>   toggle that terminal's fullscreen
+#   fullscreen-state                      answer true | false | "" (unknown)
+#
+# The bridge is already the wire between a remote mux session and the machine
+# its terminal actually lives on — the clipboard just happened to be the first
+# thing to need it. Fullscreen used to be REFUSED over SSH ("cannot control
+# the local terminal"), which was a statement about the old plumbing rather
+# than about what is possible.
+#
+# Both actions delegate to the same scripts the local path uses, so there is
+# one implementation of "how does this terminal go fullscreen", not two. The
+# terminal is named by the CALLER because this service has no terminal
+# environment of its own to detect from.
+clip::op_window_action() {
+  local payload=$1
+  local action="${payload%% *}" arg=""
+  [[ "$payload" == *" "* ]] && arg="${payload#* }"
+
+  case "$action" in
+    fullscreen-toggle)
+      case "$arg" in
+        ghostty | wezterm) ;;
+        *) send_err "unsupported terminal: ${arg:-<none>}"; return ;;
+      esac
+      local toggle="${MUX_TOGGLE_FULLSCREEN_BIN:-$HOME/.config/mux/scripts/terminal-toggle-fullscreen}"
+      [[ -x "$toggle" ]] || { send_err "no fullscreen toggle on this machine"; return }
+      local err
+      # MUX_TERMINAL short-circuits detect_terminal, which would otherwise see
+      # no TERM_PROGRAM here and give up. SSH_* are cleared for the same
+      # reason: this service may itself have been started from an ssh login,
+      # and the toggle reads them as "you are not the local machine".
+      if err="$(SSH_CONNECTION= SSH_CLIENT= MUX_TERMINAL="$arg" "$toggle" 2>&1)"; then
+        send_ok ""
+      else
+        send_err "${err:-fullscreen toggle failed}"
+      fi
+      ;;
+    fullscreen-state)
+      local probe="${MUX_FULLSCREEN_PROBE:-$HOME/.config/mux/scripts/mux-fullscreen-probe}"
+      [[ -x "$probe" ]] || { send_err "no fullscreen probe on this machine"; return }
+      send_ok "$("$probe" --print 2>/dev/null)"
+      ;;
+    *)
+      send_err "unknown window action: ${action:-<none>}"
+      ;;
+  esac
+}
+
 # L  list-files: the manifest of the CURRENT clipboard entry, resolved
 # through the store's latest row (see the header comment). Pure store query
 # -- no pasteboard access, no payload in.

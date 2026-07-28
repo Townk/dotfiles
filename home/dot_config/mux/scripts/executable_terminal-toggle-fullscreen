@@ -11,6 +11,15 @@ detect_terminal() {
   local term_program="${TERM_PROGRAM:-}"
   local term_program_lower="${term_program:l}"
 
+  # An explicit answer wins. The bridge runs this on the ORIGIN from a socket
+  # service whose environment has no TERM_PROGRAM at all — but the remote end
+  # knows perfectly well which terminal it is talking to (the tmux client's
+  # TERM says so), and sends it along with the request.
+  if [[ -n "${MUX_TERMINAL:-}" ]]; then
+    print "${MUX_TERMINAL:l}"
+    return
+  fi
+
   if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
     print "ssh"
   elif [[ "$term_program_lower" == "ghostty" || -n "${GHOSTTY_RESOURCES_DIR:-}" ]]; then
@@ -56,6 +65,46 @@ toggle_ghostty_linux_fullscreen() {
   fail "Ghostty fullscreen toggle on Linux requires hyprctl, swaymsg, or wmctrl"
 }
 
+# Which terminal is on the far end: TERM is the one thing SSH does carry, and
+# tmux hands it through untouched (xterm-ghostty / wezterm). The origin needs
+# telling because its bridge service has no terminal environment of its own.
+peer_terminal() {
+  local t="${MUX_PEER_TERM:-$TERM}"
+  case "${t:l}" in
+    *ghostty*) print ghostty ;;
+    *wezterm*) print wezterm ;;
+    *) print "" ;;
+  esac
+}
+
+toggle_over_bridge() {
+  local lib="${MUX_LIB_DIR:-$HOME/.local/lib}/clipboard-bridge-client.zsh"
+  [[ -r "$lib" ]] || fail "no clipboard bridge client; cannot reach the local terminal"
+  source "$lib"
+
+  local port="${CLIPBOARD_BRIDGE_PORT:-2490}"
+  clipbridge::probe 127.0.0.1 "$port" ||
+    fail "the bridge to your terminal is down (port $port); fullscreen needs that forward"
+
+  local term
+  term="$(peer_terminal)"
+  [[ -n "$term" ]] || fail "cannot tell which terminal is on the other end (TERM=$TERM)"
+
+  local req
+  req=$(mktemp "${TMPDIR:-/tmp}/mux-fs-toggle.XXXXXX") || fail "mktemp failed"
+  print -rn -- "fullscreen-toggle $term" > "$req"
+  if ! clipbridge::send 127.0.0.1 "$port" W "$req"; then
+    rm -f "$req"
+    fail "the terminal on the other end refused the fullscreen toggle"
+  fi
+  rm -f "$req"
+
+  # It just inverted, and we know it without paying for another round trip —
+  # so the ribbon's fullscreen segments follow immediately instead of waiting
+  # for the resize hook to ask again.
+  "${MUX_FULLSCREEN_PROBE:-$HOME/.config/mux/scripts/mux-fullscreen-probe}" --flip 2>/dev/null || true
+}
+
 case "$(detect_terminal)" in
   wezterm)
     toggle_wezterm_fullscreen
@@ -74,7 +123,11 @@ case "$(detect_terminal)" in
     esac
     ;;
   ssh)
-    fail "cannot control the local terminal from an SSH-hosted Zellij session"
+    # The window is on the machine we came FROM, and we already have a wire to
+    # it: the clipboard bridge's reverse forward. Fullscreen rides the same
+    # channel (opcode W) rather than being refused for being remote — the only
+    # thing SSH really costs us is the ability to ask the local window server.
+    toggle_over_bridge
     ;;
   *)
     fail "unsupported terminal: TERM_PROGRAM=${TERM_PROGRAM:-unset}"
