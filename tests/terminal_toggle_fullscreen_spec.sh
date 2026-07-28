@@ -108,10 +108,53 @@ EOF
       The output should include "flip --flip"
     End
 
-    It 'names the terminal from TERM, which is what ssh actually carries'
+    It 'names the terminal from an explicit override when given one'
       export STUB_BRIDGE_UP=1 MUX_PEER_TERM=wezterm-256color
       When call run_it
       The output should include "fullscreen-toggle wezterm"
+    End
+
+    # THE bug the keybinding hit: inside tmux, $TERM is tmux-256color and
+    # TERM_PROGRAM is "tmux" — tmux overwrites both, so a run-shell (which is
+    # how the binding gets here) can identify nothing from its own env. tmux
+    # itself knows: the client's termname, and the session env that
+    # update-environment refreshes on attach.
+    Describe 'inside tmux, where TERM is tmux own' 
+      tmux_setup() {
+        { print '#!/usr/bin/env zsh'
+          print 'if [[ "$1" == display ]]; then print -r -- "${STUB_CLIENT_TERM-xterm-ghostty}"; exit 0; fi'
+          print 'if [[ "$1" == show-environment ]]; then'
+          print '  [[ -n "${STUB_SESSION_TERM:-}" ]] && print -r -- "TERM=$STUB_SESSION_TERM" || print -r -- "-TERM"'
+          print '  exit 0'
+          print 'fi'
+        } > "$BR_TMP/tmux"
+        chmod +x "$BR_TMP/tmux"
+        export MUX_TMUX_BIN="$BR_TMP/tmux" TMUX=/tmp/sock,1,0 TERM=tmux-256color
+        export STUB_BRIDGE_UP=1
+        unset MUX_PEER_TERM
+      }
+      BeforeEach 'tmux_setup'
+      AfterEach 'unset MUX_TMUX_BIN TMUX STUB_CLIENT_TERM STUB_SESSION_TERM'
+
+      It 'asks tmux for the client terminal instead of believing TERM'
+        When call run_it
+        The output should include "fullscreen-toggle ghostty"
+        The output should not include "tmux-256color"
+      End
+
+      It 'falls back to the session environment tmux refreshes on attach'
+        export STUB_CLIENT_TERM= STUB_SESSION_TERM=wezterm-256color
+        When call run_it
+        The output should include "fullscreen-toggle wezterm"
+      End
+
+      It 'still fails honestly when tmux knows of no outer terminal'
+        export STUB_CLIENT_TERM= STUB_SESSION_TERM=
+        err() { zsh home/dot_config/mux/scripts/executable_terminal-toggle-fullscreen 2>&1 >/dev/null }
+        When call err
+        The output should include "cannot tell which terminal"
+        The status should be failure
+      End
     End
 
     # A down forward is the one case where remote fullscreen genuinely cannot

@@ -65,11 +65,24 @@ toggle_ghostty_linux_fullscreen() {
   fail "Ghostty fullscreen toggle on Linux requires hyprctl, swaymsg, or wmctrl"
 }
 
-# Which terminal is on the far end: TERM is the one thing SSH does carry, and
-# tmux hands it through untouched (xterm-ghostty / wezterm). The origin needs
-# telling because its bridge service has no terminal environment of its own.
+# Which terminal is on the far end. The origin needs telling, because its
+# bridge service has no terminal environment of its own.
+#
+# TERM is what ssh carries — but INSIDE tmux $TERM is TMUX'S terminal
+# (tmux-256color), never the outer one, and TERM_PROGRAM is likewise
+# overwritten with "tmux". Reading them from a run-shell (which is how the
+# keybinding gets here) therefore identifies nothing at all. tmux keeps the
+# truth in two places: the client's own termname, and the session
+# environment that update-environment refreshes on every attach.
 peer_terminal() {
-  local t="${MUX_PEER_TERM:-$TERM}"
+  local t="${MUX_PEER_TERM:-}"
+  if [[ -z "$t" && -n "${TMUX:-}" ]]; then
+    local tmux_bin="${MUX_TMUX_BIN:-tmux}"
+    t="$("$tmux_bin" display -p '#{client_termname}' 2>/dev/null)" || t=""
+    [[ -n "$t" ]] || t="$("$tmux_bin" show-environment TERM 2>/dev/null)" || t=""
+    t="${t#TERM=}"            # show-environment answers "TERM=xterm-ghostty"
+  fi
+  [[ -n "$t" ]] || t="$TERM"
   case "${t:l}" in
     *ghostty*) print ghostty ;;
     *wezterm*) print wezterm ;;
