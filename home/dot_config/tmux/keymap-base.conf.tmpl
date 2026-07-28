@@ -184,9 +184,74 @@ bind -n M-Enter if "$is_fzf" 'send-keys M-Enter' 'run-shell -b "{{ .chezmoi.home
 #
 # The WHEEL binding is deliberately untouched: `WheelUpPane` → `copy-mode -e`
 # with @visual unset reads as Scroll, and scrolling IS scrolling.
+# ---------------------------------------------------------------------------
+# ⌥+click opens the hyperlink under the pointer
+# ---------------------------------------------------------------------------
+# The terminal-agnostic replacement for WezTerm's `open-uri` Lua hook: tmux
+# already stores OSC 8 hyperlinks (eza --hyperlink emits them) and exposes the
+# one under the pointer as #{mouse_hyperlink}, so the whole gesture lives here
+# and behaves identically on WezTerm and Ghostty.
+#
+# ⌥ and not ⌘, which is what WezTerm uses: ⌘ CANNOT reach tmux. The SGR mouse
+# protocol encodes only Shift(+4)/Meta(+8)/Ctrl(+16) — there is no Cmd bit —
+# and tmux's modifier vocabulary is C-/S-/M- with no Super. ⌘+click works in
+# WezTerm only because WezTerm resolves it internally and never forwards it.
+# Of the three that DO travel, ⌃ is macOS's secondary-click and ⇧ is the
+# terminal's mouse-capture bypass, which leaves ⌥ as the only free modifier.
+#
+# The line and column travel alongside the hyperlink because URL-shaped TEXT
+# (`echo https://example.com`) is not a hyperlink to tmux — nothing linkifies
+# it, so #{mouse_hyperlink} is empty and the click would die. mux-click falls
+# back to finding a URL at the clicked column. #{mouse_word} cannot serve:
+# word-separators includes `:` and `/`, so the word under a URL is `https`.
+#
+# Guarded on #{mouse_any_flag} ALONE, deliberately unlike the drag and
+# click-select binds below, which also bail on #{pane_in_mode}. Copying that
+# guard verbatim was wrong: scroll mode IS a pane mode, so ⌥+click did nothing
+# there — and scrolling back to find a filename and then clicking it is one of
+# the main ways this gesture gets used. Only an APPLICATION capturing the mouse
+# (fzf, vim) should take the event; a pane in copy/scroll mode should not.
+#
+# MUX_BACKEND/MUX_SESSION are passed explicitly: mux-open normally derives both
+# from the mux CLIENT pid that WezTerm hands it, and #{pane_pid} is the pane's
+# SHELL, which backend_for_pid answers "none" for. We know both here anyway.
+# Client, not pane, dimensions — term-quick-view sizes the image against the
+# whole display, which is what WezTerm passed.
+# Every value travels as an unquoted #{q:…} ENVIRONMENT assignment. Both argv
+# spellings are broken: quoted '#{q:…}' is malformed (q: escapes with
+# backslashes, which are literal inside single quotes, and `\'` ends the
+# string — an `ls` line for a filename with spaces carries quotes, so sh exited
+# 2), and unquoted #{q:…} drops an EMPTY value entirely, shifting every later
+# argument. `FOO=` is valid when empty, and q: keeps it one word.
+bind -n M-MouseDown1Pane if -F "#{mouse_any_flag}" { send -M } { run-shell -b "MUX_BACKEND=tmux MUX_SESSION=#{q:session_name} MUX_CLICK_URI=#{q:mouse_hyperlink} MUX_CLICK_LINE=#{q:mouse_line} MUX_CLICK_COL=#{mouse_x} ~/.config/mux/scripts/mux-click #{client_width} #{client_height}" }
+
 bind -n MouseDrag1Pane if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @visual 1 ; copy-mode -M }
 bind -n DoubleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; copy-mode -H ; send -X select-word ; run-shell -d 0.3 ; send -X copy-pipe-and-cancel ; set -p -u @visual ; set -p -u @mouse_select }
 bind -n TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; copy-mode -H ; send -X select-line ; run-shell -d 0.3 ; send -X copy-pipe-and-cancel ; set -p -u @visual ; set -p -u @mouse_select }
+
+# ⇧+double-click selects a WORD, the way `viW` does — the whole run of
+# non-space characters — where the plain gesture selects a word (`viw`).
+# `foo-bar_baz.txt/qux` comes back whole instead of just `bar_baz`.
+#
+# Same `select-word` command; only `word-separators` differs. It is narrowed to
+# a single space for the duration and unset again after, which restores the
+# global from tmux.conf rather than restating it here (one source of truth for
+# the real separator list). Window-scoped for the ~0.3s highlight, so a
+# CONCURRENT double-click in a sibling pane of the same window would see the
+# narrowed set — the only shared-state window here, and not worth a lock.
+#
+# ⇧ and not ⌥: a double-click's FIRST click fires MouseDown1Pane, and
+# M-MouseDown1Pane is the open-the-link binding — ⌥+double-click on a filename
+# would open it AND select it. S-MouseDown1Pane is unbound (see the
+# mouse-shift-capture note in ghostty/config), so nothing fires on the way in.
+# Reaching tmux at all requires the terminal to forward ⇧ rather than keep it
+# as its mouse-reporting bypass: Ghostty via `mouse-shift-capture = always`,
+# WezTerm via `bypass_mouse_reporting_modifiers = 'CTRL'`.
+bind -n S-DoubleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; setw -t = word-separators " " ; copy-mode -H ; send -X select-word ; run-shell -d 0.3 ; send -X copy-pipe-and-cancel ; setw -t = -u word-separators ; set -p -u @visual ; set -p -u @mouse_select }
+# Line-select has no word/WORD distinction, so ⇧+triple-click is the plain
+# gesture. Bound anyway: without it the chord lands in the inert S- gap and
+# reads as "shift broke triple-click".
+bind -n S-TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send -M } { set -p @mouse_select 1 ; set -p @visual 1 ; copy-mode -H ; send -X select-line ; run-shell -d 0.3 ; send -X copy-pipe-and-cancel ; set -p -u @visual ; set -p -u @mouse_select }
 
 # ---------------------------------------------------------------------------
 # MEH direct bindings — Ctrl+Alt+Shift (spec 2026-07-27-meh-direct-bindings)

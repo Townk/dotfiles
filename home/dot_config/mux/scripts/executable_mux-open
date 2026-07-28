@@ -25,13 +25,55 @@ uri="${2:-}"
 # float in absolute cells. 0 when unknown -> percentage fallback below.
 term_cols="${3:-0}"
 term_rows="${4:-0}"
+# The pid is only ever used to derive the backend and the session. A caller
+# that already knows both — tmux's own ⌥+click binding, which runs inside the
+# server — passes them in the environment and a placeholder pid. It cannot
+# supply a useful one: backend_for_pid expects the mux CLIENT process (what
+# WezTerm hands us), and a pane's shell answers "none" (measured), because its
+# parent is the server rather than a client.
+[ -n "${MUX_BACKEND:-}" ] && [ -n "${MUX_SESSION:-}" ] && pid="${pid:-0}"
 [ -n "$pid" ] && [ -n "$uri" ] || {
   echo "usage: mux-open <pid> <uri> [cols] [rows]" >&2
+  echo "       (or MUX_BACKEND=… MUX_SESSION=… mux-open 0 <uri> …)" >&2
   exit 2
 }
 
-# Only handle local file links; everything else is left to WezTerm/the browser.
-case "$uri" in file://*) ;; *) exit 0 ;; esac
+# Anything that is not a local file is somebody else's job — hand it to the
+# system opener (browser, mail client). WezTerm reaches this script only for
+# file:// because its Lua handler filters first; tmux's binding does not
+# filter, and once Ghostty's own link handling is off (mouse-shift-capture =
+# always) this is the ONLY thing that will open an http(s) link there.
+# Scheme test is a regex, not a `*://*` glob: `mailto:a@b` is a perfectly good
+# URI with no double slash, and a glob that demands one silently drops it.
+# A GUI app cold-started while OPTION is held reads that as a request for safe
+# mode — Firefox pops "Open in Troubleshoot Mode?" instead of the page. ⌥ IS
+# the click modifier, so every ⌥+click on a URL lands in that trap unless the
+# key has come up by the time the app starts. (Only the browser path can hit
+# this; the file branches below open tabs inside tmux and launch nothing.)
+#
+# Bounded poll, ~9ms per query: a still-held key costs a few hundred ms of
+# nothing, and an absent or wedged Hammerspoon costs at most ~1.4s and then
+# opens anyway. Never a hard failure — a slow link beats no link.
+_wait_alt_release() {
+  command -v hs >/dev/null 2>&1 || { sleep 0.4; return 0 }
+  local i
+  for i in {1..40}; do
+    [[ "$(hs -c 'hs.eventtap.checkKeyboardModifiers().alt' 2>/dev/null)" == true ]] || return 0
+    sleep 0.025
+  done
+  return 0
+}
+
+case "$uri" in
+  file://*) ;;
+  *)
+    if [[ "$uri" =~ '^[a-zA-Z][a-zA-Z0-9+.-]*:' ]]; then
+      _wait_alt_release
+      exec open -- "$uri"
+    fi
+    exit 0
+    ;;
+esac
 
 # file://[localhost]/path -> /path, then percent-decode (+ is a space in URLs).
 urldecode() {
@@ -59,11 +101,15 @@ target="${target#localhost}"
 # the server). Tracks live session switches and needs no --session in argv.
 source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
 
-MUX_BACKEND="$(mux::backend_for_pid "$pid")"
-[ "$MUX_BACKEND" = none ] && exit 0
+if [ -n "${MUX_BACKEND:-}" ] && [ -n "${MUX_SESSION:-}" ]; then
+  # Caller already knows (tmux's ⌥+click binding) — trust it, skip the probes.
+  session="$MUX_SESSION"
+else
+  MUX_BACKEND="$(mux::backend_for_pid "$pid")"
+  [ "$MUX_BACKEND" = none ] && exit 0
+  session="$(mux::resolve_session "$pid")" || exit 0
+fi
 export MUX_BACKEND
-
-session="$(mux::resolve_session "$pid")" || exit 0
 [ -n "$session" ] || exit 0
 
 name="$(basename -- "$target")"

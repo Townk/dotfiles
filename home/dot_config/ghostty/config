@@ -156,6 +156,35 @@ confirm-close-surface = false
 scrollback-limit = 10000000
 link-url = true
 
+# Hand ⇧+mouse to the running program (tmux) instead of keeping it for Ghostty.
+# This takes Ghostty out of the link business entirely, leaving ⌥+click —
+# handled by tmux, which reads #{mouse_hyperlink} — as the ONE way to open
+# whatever is under the pointer.
+#
+# Why: ⌘ cannot reach tmux. The SGR mouse protocol has no Cmd bit and tmux has
+# no Super modifier, so Ghostty's link handling can only ever fire as ⌘⇧ (⇧
+# being the bypass for tmux's mouse capture) — and all it does then is hand the
+# file to the macOS opener, which picks the wrong app. Keeping it would mean
+# "hold ⌘⇧ to see a link, hold ⌥ to open it", with the ⌘⇧ path also doing the
+# wrong thing on click. Deliberate choice to drop it: ONE selection engine
+# (tmux) and one open path, rather than two half-working ones.
+#
+# `always`, not `true`: `true` lets the program hand ⇧ back with XTSHIFTESCAPE,
+# which would make the behaviour depend on what tmux happens to ask for.
+#
+# `link-url` above is NOT the lever — measured: with it false, OSC 8 hyperlinks
+# still hovered and still opened. It governs Ghostty's regex URL MATCHER; OSC 8
+# links are explicit and handled on a separate path with no config of its own.
+#
+# Consequence, accepted: ⇧+mouse is now inert. tmux ships no shift-modified
+# mouse bindings in either the root or copy-mode-vi table, so ⇧+click, ⇧+drag,
+# ⇧+double-click and ⇧+wheel do nothing rather than falling back to their
+# unmodified behaviour. Plain drag / double-click (keymap-base.conf) are the
+# selection gestures. If a dead ⇧ gesture ever starts to grate, the fix is to
+# emit S- twins from the same template variables in keymap-base.conf.tmpl —
+# do NOT hand-duplicate those command strings, they drift.
+mouse-shift-capture = always
+
 # Quit Ghostty entirely when the last window is closed, instead of leaving
 # the app running in the background with only the menu bar.
 quit-after-last-window-closed = true

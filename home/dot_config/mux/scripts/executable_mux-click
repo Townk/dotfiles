@@ -1,0 +1,101 @@
+#!/usr/bin/env zsh
+# mux-click — decide what a click was aimed at, then hand it to mux-open.
+#
+# Invoked by tmux's ⌥+click binding as:
+#     MUX_CLICK_URI=… MUX_CLICK_LINE=… MUX_CLICK_COL=… \
+#     MUX_BACKEND=… MUX_SESSION=… mux-click [cols] [rows]
+#
+# The three click values travel in the ENVIRONMENT rather than argv, because
+# neither of the argv spellings survives real screen content:
+#
+#   '#{q:mouse_line}'  — `q:` escapes with BACKSLASHES for unquoted use, and a
+#       backslash is literal inside single quotes while `\'` ends the string
+#       outright. An `ls` line for a filename with spaces contains quotes (eza
+#       quotes those names), so this produced a malformed command and sh exited
+#       2. It failed for exactly the files whose names have spaces, which is
+#       what made it look like a PDF/Office problem.
+#   #{q:mouse_line}    — correct escaping, but an EMPTY value expands to
+#       nothing at all rather than an empty word, so a click with no hyperlink
+#       silently shifts every later argument by one.
+#
+# `FOO=` is a valid assignment when empty and `q:` makes the value one word, so
+# the environment has neither failure mode.
+#
+# Two kinds of "link" exist on a terminal screen and only one of them is real:
+#
+#   * an OSC 8 hyperlink, which tmux stores and reports as #{mouse_hyperlink}.
+#     `eza --hyperlink` emits these, so every filename in an `ls` is one.
+#   * URL-shaped TEXT, e.g. the output of `echo https://example.com`. tmux has
+#     no concept of this — nothing linkifies it — so #{mouse_hyperlink} is
+#     empty and the click would do nothing. WezTerm's ⌘+click DOES open these,
+#     because WezTerm regex-matches them (config.hyperlink_rules), so without
+#     this fallback the tmux binding is a downgrade on that terminal.
+#
+# Why the whole line and a column, rather than #{mouse_word}: word-separators
+# in tmux.conf includes `:` and `/` (it is tuned for double-click word-select
+# in code), so the "word" under a URL is a fragment like `https`. Loosening it
+# to keep URLs whole would break word-select, which is used far more often.
+set -uo pipefail
+# extended_glob for the `[...]##` (one-or-more) in the trailing-punctuation
+# trim below. Without it `##` is literal, the trim silently does nothing, and
+# a URL at the end of a sentence keeps its full stop.
+setopt extended_glob
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+hyperlink="${MUX_CLICK_URI:-}"
+line="${MUX_CLICK_LINE:-}"
+col="${MUX_CLICK_COL:-0}"
+term_cols="${1:-0}"
+term_rows="${2:-0}"
+[[ "$col" == <-> ]] || col=0
+
+# Resolved HERE, not inside _open: zsh sets $0 to the FUNCTION NAME inside a
+# function (FUNCTION_ARGZERO, on by default), so `${0:A:h}` in there is the
+# caller's CWD — and mux-open is then "not found" from a binding whose CWD is
+# arbitrary, i.e. a click that silently does nothing.
+_self="${0:A:h}"
+_open() { exec "$_self/mux-open" 0 "$1" "$term_cols" "$term_rows" }
+
+# A real hyperlink always wins — it is exact, and it carries a target that may
+# differ from the text shown (OSC 8 allows that).
+[[ -n "$hyperlink" ]] && _open "$hyperlink"
+
+[[ -n "$line" ]] || exit 0
+
+# Scan the line for URL-shaped runs and remember where each one sits.
+# `mailto:` has no double slash, hence the alternation rather than a single
+# `://` pattern. Trailing punctuation is trimmed so a URL at the end of a
+# sentence does not swallow the full stop.
+local -a urls starts ends
+local rest="$line" base=0 m
+while [[ "$rest" =~ '(https?|ftp|file)://[^[:space:]]+|mailto:[^[:space:]]+' ]]; do
+  m="$MATCH"
+  # MBEGIN/MEND are 1-based indices into $rest; convert to 0-based columns.
+  starts+=( $(( base + MBEGIN - 1 )) )
+  m="${m%%[.,;:!?\)\]\}\'\"]##}"
+  urls+=( "$m" )
+  ends+=( $(( base + MBEGIN - 1 + ${#m} - 1 )) )
+  rest="${rest[$(( MEND + 1 )),-1]}"
+  base=$(( base + MEND ))
+done
+
+(( ${#urls} )) || exit 0
+
+# One URL on the line is unambiguous — open it wherever the click landed.
+# This is also the forgiving path for any off-by-one in how the column is
+# reported, which matters because a click that silently does nothing is
+# indistinguishable from a broken binding.
+if (( ${#urls} == 1 )); then
+  _open "${urls[1]}"
+fi
+
+# Several: pick the one the click actually landed in, with a cell of slack at
+# each edge.
+local i
+for i in {1..${#urls}}; do
+  if (( col >= starts[i] - 1 && col <= ends[i] + 1 )); then
+    _open "${urls[i]}"
+  fi
+done
+
+exit 0
