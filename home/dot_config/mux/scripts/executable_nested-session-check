@@ -2,12 +2,15 @@
 # nested-session-check <client_pid>
 #
 # Exit 0 if the mux client process <client_pid> is attached to a nested
-# workspace session, else exit non-zero. WezTerm's Lua (Cmd+Shift+P) calls
+# workspace session, else exit non-zero. WezTerm's Lua (Cmd+Shift+S) calls
 # this with the focused pane's foreground-process pid (the mux client) to
 # decide whether to send Ctrl+Alt+Space — summoning the local workspace picker
-# from inside a nested, locked-passthrough session — instead of the normal
-# `Alt+w o S` sequence (which would otherwise pass straight through to the
-# remote's own Zellij).
+# from inside a nested, locked-passthrough session — instead of MEH-s (which
+# would otherwise pass straight through to the remote's own mux).
+#
+# The chord was Cmd+Shift+P until 2026-07-28: the split belongs to whichever
+# key opens the WORKSPACE picker, and that is now Cmd+Shift+S. Reaching the
+# REMOTE's picker deliberately is Cmd+Shift+Alt+S.
 #
 # The session is resolved LIVE through the shim (mux::resolve_session, which
 # reads the backend from the client PROCESS — this runs in WezTerm's GUI

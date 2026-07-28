@@ -786,29 +786,21 @@ config.keys = {
 		mods = "CMD",
 		action = send_meh("0"),
 	},
-	-- `⌘⇧P`: Show the workspace/project picker. In a normal session that is now
-	-- the single MEH-p keypress (was the `⌥w o S` chord). In a nested session
-	-- those keys are cleared and pass through to the remote, so instead send the
-	-- kitty-protocol bytes for the local `Ctrl+Alt+Space` summon bound in the
-	-- generated nested layout. We send the raw CSI-u sequence (`ESC [ 32;7 u`)
-	-- rather than SendKey because WezTerm's SendKey mis-encodes the `Ctrl+Alt`
-	-- +Space combination (Ctrl+Space collapses to NUL), so the synthesized
-	-- keypress never matches Zellij's bind.
+	-- `⌘⇧P`: Show the PANE picker => MEH-p. No nested special case: in a nested
+	-- session the local binds are cleared, so this passes through to the remote
+	-- and picks a pane over there — which is the session you are working in.
+	-- (It carried the workspace picker, and its nested split, until the
+	-- 2026-07-28 rebinding moved that to ⌘⇧S.)
 	{
 		key = "p",
 		mods = "CMD|SHIFT",
-		action = wezterm.action_callback(function(window, pane)
-			if pane_session_is_nested(pane) then
-				window:perform_action(wezterm.action.SendString("\x1b[32;7u"), pane)
-			else
-				window:perform_action(send_meh("p"), pane)
-			end
-		end),
+		action = send_meh("p"),
 	},
-	-- `⌘⇧⌥P`: Only meaningful in a nested session — forward the *normal* picker
+	-- `⌘⇧⌥S`: Only meaningful in a nested session — forward the *normal* picker
 	-- chord (`⌥w s S`). Since the nested layout clears its own binds, those keys
-	-- pass straight through to the REMOTE Zellij, opening the remote's own
-	-- quick-launch. In a non-nested session there's no remote, so it's a no-op.
+	-- pass straight through to the REMOTE, opening the remote's own quick-launch
+	-- rather than the local one ⌘⇧S summons. In a non-nested session there is no
+	-- remote, so it is a no-op.
 	--
 	-- These are LITERAL KEYS, not an action: they mean whatever the remote's
 	-- keymap says they mean. Session mode moved from `o` to `s` on 2026-07-28
@@ -816,7 +808,7 @@ config.keys = {
 	-- into a remote that no longer binds it, doing nothing, with nothing to
 	-- connect the silence to the rebinding.
 	{
-		key = "p",
+		key = "s",
 		mods = "CMD|SHIFT|ALT",
 		action = wezterm.action_callback(function(window, pane)
 			if pane_session_is_nested(pane) then
@@ -835,10 +827,29 @@ config.keys = {
 		action = send_meh("t"),
 	},
 	-- `⌘⇧S`: Show the split picker => MEH-s (was `⌥w p P`)
+	-- `⌘⇧S`: Show the SESSION/workspace picker => MEH-s. In a nested session the
+	-- local binds are cleared and every key passes through to the remote, so the
+	-- LOCAL picker would be unreachable — send instead the kitty-protocol bytes
+	-- for `Ctrl+Alt+Space`, the one binding a nested layout keeps local (see the
+	-- `nested` key table / the generated bar-less Zellij layout). Raw CSI-u
+	-- (`ESC [ 32;7 u`) rather than SendKey, because WezTerm mis-encodes
+	-- Ctrl+Alt+Space (Ctrl+Space collapses to NUL) and the synthesized keypress
+	-- never matches the bind.
+	--
+	-- This split lived on ⌘⇧P until 2026-07-28, when the picker chords were
+	-- rebound to carry the initial of what they pick. It belongs to whichever
+	-- chord opens the WORKSPACE picker, which is now this one — left on ⌘⇧P it
+	-- summoned the workspace picker from the key that had become "pane".
 	{
 		key = "s",
 		mods = "CMD|SHIFT",
-		action = send_meh("s"),
+		action = wezterm.action_callback(function(window, pane)
+			if pane_session_is_nested(pane) then
+				window:perform_action(wezterm.action.SendString("\x1b[32;7u"), pane)
+			else
+				window:perform_action(send_meh("s"), pane)
+			end
+		end),
 	},
 }
 
