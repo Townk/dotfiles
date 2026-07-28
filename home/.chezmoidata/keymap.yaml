@@ -54,14 +54,14 @@ keymap:
     - mode: prefix
       members:
       - L
-      - o
+      - s
       - t
       - p
       - l
       - V
     - mode: prefix
       members:
-      - s
+      - h
       - v
       - f
       - z
@@ -272,7 +272,7 @@ keymap:
         panel_exit: true
         to: locked
       - keys:
-        - o
+        - s
         desc: Session mode …
         icon: 󰙀
         color: red
@@ -327,7 +327,7 @@ keymap:
         cmd: display-popup -E -B -w 52 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-quit-confirm'
         dialog: true
       - keys:
-        - s
+        - h
         desc: split pane (horiz)
         icon: 
         color: blue
@@ -411,7 +411,7 @@ keymap:
       parent: prefix
       entries:
       - keys:
-        - n
+        - r
         desc: Rename Tab …
         icon: 
         color: yellow
@@ -420,7 +420,7 @@ keymap:
         dialog: true
         to: rename
       - keys:
-        - N
+        - t
         desc: new tab
         icon: 󰝜
         color: mauve
@@ -561,7 +561,7 @@ keymap:
         switch: true
         to: move
       - keys:
-        - n
+        - r
         desc: Rename Pane …
         icon: 
         color: yellow
@@ -570,7 +570,7 @@ keymap:
         dialog: true
         to: rename
       - keys:
-        - r
+        - s
         desc: Resize Pane …
         icon: 󰩨
         color: mauve
@@ -664,7 +664,7 @@ keymap:
         color: mauve
         cmd: split-window -h -c "#{pane_current_path}" ; set key-table root
       - keys:
-        - N
+        - p
         desc: new pane
         icon: 󰯌
         color: green
@@ -787,7 +787,7 @@ keymap:
         color: red
         cmd: detach-client
       - keys:
-        - n
+        - r
         desc: Rename Session …
         icon: 󰑕
         color: yellow
@@ -795,6 +795,12 @@ keymap:
         switch: true
         dialog: true
         to: rename
+      - keys:
+        - s
+        desc: new session
+        icon: 󰝜
+        color: mauve
+        cmd: new-session -c "#{pane_current_path}" ; set key-table root
       - keys:
         - w
         desc: session manager

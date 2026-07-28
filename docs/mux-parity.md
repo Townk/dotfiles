@@ -446,6 +446,18 @@ in the seams: tmux→sh quoting, the key-table guard, and the physical modifier.
 | ⇧ only reaches tmux if the terminal stops using it as the mouse-reporting bypass | Ghostty: `mouse-shift-capture = always` (bypass lost outright). WezTerm: `bypass_mouse_reporting_modifiers = 'CTRL'` — parked rather than disabled, so WezTerm keeps a native-selection escape hatch on ⌃+drag |
 | a double-click can be SYNTHESISED: two rapid press/release pairs of raw SGR bytes through the nested-tmux probe, with the modifier in the button code (0 plain, 4 shift, 8 meta) | `tests/mux_select_spec.sh` drives both gestures for real and asserts the paste buffer, which is the only level at which a swallowed click or a leaked option is visible |
 
+## The mnemonic rebinding (2026-07-28)
+
+Why rename ever lived on `n`, and what it cost to move it. Full map in
+`docs/superpowers/specs/2026-07-28-keymap-rebinding-design.md`.
+
+| Gotcha | Consequence |
+|---|---|
+| retiring a key in the PREFIX table does not silence it — that table is tmux's own, so the key reverts to tmux's DEFAULT | `o` carried Session mode; left alone it would have started cycling panes (`select-pane -t :.+`) for anyone with ten months of muscle memory. Needs an explicit `unbind -T prefix o`. The custom mode tables have no defaults beneath them and need no such care |
+| the which-key panel reads keys from TWO places in `keymap.yaml` — the entries, and `which_key.groups`, which lists keys by name for the panel's layout | updating the entries alone left the panel still dispatching `s` to the old split while the tmux table had already moved on. The panel is a separate process reading the DEPLOYED `whichkey.data`, so a scratch server with fresh binds still dispatches from stale data — which is what a verification run caught |
+| `zellij setup --check` validates syntax and input modes but NOT action names — it accepts `TotallyBogusAction` without complaint | the only honest oracle is booting Zellij with the config (inside a scratch tmux pane). That is how `NewSession` turned out to be "Unsupported action" while `RenameSession` parses — a distinction no amount of reading the config would have settled |
+| a spec that asserts two strings appear in one listing does NOT pin which one belongs to which key | the MEH test held `C-M-P` and `menu workspace` in the same output; swapping the two pickers kept every string present and the test green. Per-chord assertions are the only kind that can fail |
+
 ## The running server vs the deployed config (2026-07-28)
 
 Chasing "the statusbar is not updating for any mode anymore" through a config

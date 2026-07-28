@@ -32,6 +32,63 @@ Describe 'tmux keymap tables'
 
   keys() { tmux -L kmspec list-keys -T "$1"; }
 
+  # The mnemonic map (2026-07-28 rebinding). Every assertion above this block
+  # checks a COMMAND, which is exactly why the letters could drift for months
+  # without a single test noticing: `r` went to resize because `s` looked
+  # taken on the Zellij side, which pushed rename onto `n` — a letter nothing
+  # about renaming suggests. These pin the letters themselves.
+  #
+  # The rule the whole table now follows: LOWER CASE ACTS, UPPER CASE PICKS.
+  # `|| true`: an unbound key is a legitimate ANSWER here, not a failure.
+  bound() { tmux -L kmspec list-keys -T "$1" | grep -E "^bind-key +-T $1 +$2 " || true; }
+
+  Describe 'the mnemonic map'
+    Parameters
+      # table    key  what it must do
+      prefix     s    "key-table session"
+      prefix     h    "split-window -v"
+      prefix     v    "split-window -h"
+      session    r    "mux-rename --launch session"
+      session    s    "new-session"
+      session    S    "menu workspace"
+      tab        r    "mux-rename --launch window"
+      tab        t    "new-window"
+      tab        T    "menu tab"
+      pane       m    "key-table move"
+      pane       s    "key-table resize"
+      pane       r    "mux-rename --launch pane"
+      pane       p    "split-window -c"
+      pane       P    "menu pane"
+    End
+
+    It "binds $2 in the $1 table"
+      When call bound "$1" "$2"
+      The output should include "$3"
+    End
+  End
+
+  # The letters these replaced are left UNBOUND rather than reused, so ten
+  # months of muscle memory does nothing instead of something surprising.
+  Describe 'the letters that moved are silent'
+    Parameters
+      # `o` needs an explicit unbind, not just an absence: the prefix table is
+      # tmux's OWN, so a key we stop binding reverts to tmux's default
+      # (select-pane) rather than falling silent. The mode tables are ours and
+      # have no defaults to fall back to.
+      prefix   o    # was Session mode
+      session  n    # was rename
+      tab      n    # was rename
+      tab      N    # was new tab
+      pane     n    # was rename
+      pane     N    # was new pane
+    End
+
+    It "leaves $2 unbound in the $1 table"
+      When call bound "$1" "$2"
+      The output should equal ""
+    End
+  End
+
   It 'binds the leader chords in the prefix table'
     When call keys prefix
     The output should include "split-window"
@@ -262,18 +319,35 @@ Describe 'tmux keymap tables'
     The lines of output should equal 65
   End
 
-  It 'maps every spelling of MEH-p to the project picker'
-    When call meh
-    The output should include "C-M-P     "
-    The output should include "C-M-S-P   "
-    The output should include "C-M-S-p   "
-    The output should include "quick-launch menu workspace"
+  # PER CHORD, not per output. Asserting that both "C-M-P" and "menu workspace"
+  # appear SOMEWHERE in the listing passed happily when the two pickers were
+  # swapped — every string was still present, just wired to the other key. The
+  # picker chords now carry the initial of what they pick (s session, t tab,
+  # p pane); the old pairing said the opposite, which made the two chords a
+  # hand reaches for blind the two most likely to be wrong.
+  meh_chord() { meh | grep -E "^bind-key +-T root +\"?$1\"? " || true; }
+
+  Describe 'each picker chord picks its own initial'
+    Parameters
+      C-M-S      "menu workspace"
+      C-M-S-S    "menu workspace"
+      C-M-S-s    "menu workspace"
+      C-M-T      "menu tab"
+      C-M-S-T    "menu tab"
+      C-M-S-t    "menu tab"
+      C-M-P      "menu pane"
+      C-M-S-P    "menu pane"
+      C-M-S-p    "menu pane"
+    End
+
+    It "maps $1 to $2"
+      When call meh_chord "$1"
+      The output should include "$2"
+    End
   End
 
-  It 'covers the other five actions'
+  It 'covers the other four actions'
     When call meh
-    The output should include "quick-launch menu tab"
-    The output should include "quick-launch menu pane"
     The output should include "pick-clipboard"
     The output should include "copy-pwd --relative"
     The output should include "copy-pwd --absolute"

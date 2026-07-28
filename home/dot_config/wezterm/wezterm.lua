@@ -806,9 +806,15 @@ config.keys = {
 		end),
 	},
 	-- `⌘⇧⌥P`: Only meaningful in a nested session — forward the *normal* picker
-	-- chord (`⌥w o S`). Since the nested layout clears its own binds, those keys
+	-- chord (`⌥w s S`). Since the nested layout clears its own binds, those keys
 	-- pass straight through to the REMOTE Zellij, opening the remote's own
 	-- quick-launch. In a non-nested session there's no remote, so it's a no-op.
+	--
+	-- These are LITERAL KEYS, not an action: they mean whatever the remote's
+	-- keymap says they mean. Session mode moved from `o` to `s` on 2026-07-28
+	-- and this had to move with it — a stale chord here would keep typing `o`
+	-- into a remote that no longer binds it, doing nothing, with nothing to
+	-- connect the silence to the rebinding.
 	{
 		key = "p",
 		mods = "CMD|SHIFT|ALT",
@@ -816,7 +822,7 @@ config.keys = {
 			if pane_session_is_nested(pane) then
 				perform_mux_keys(window, pane, {
 					{ key = "w", mods = "ALT" },
-					{ key = "o" },
+					{ key = "s" },
 					{ key = "S" },
 				})
 			end

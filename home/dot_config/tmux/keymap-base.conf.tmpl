@@ -67,6 +67,12 @@ bind BSpace run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-stack p
 # ---------------------------------------------------------------------------
 unbind -T prefix C-d
 unbind -T prefix C-u
+# `o` carried Session mode until 2026-07-28, when Session moved to `s`. Left
+# alone it does NOT fall silent: the prefix table is tmux's own, so the key
+# reverts to tmux's default `select-pane -t :.+` and ten months of muscle
+# memory would start cycling panes instead of opening a mode. A retired key
+# should do nothing, not something else.
+unbind -T prefix o
 bind -T copy-mode-vi M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle '#{client_tty}'"
 bind -T prefix M-. run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-whichkey toggle '#{client_tty}'"
 {{/* ORDER IS LOAD-BEARING: bind first, unbind second. A custom key table
@@ -301,8 +307,16 @@ bind -n S-TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mou
 # process — so it reports the shell's cwd from inside nvim, fzf or a pager
 # without ever consulting the foreground app.
 
-# MEH-p — Project picker (a workspace is a session on either backend).
-{{- range list "C-M-P" "C-M-S-P" "C-M-S-p" }}
+# The picker chords carry the INITIAL of what they pick: s session, t tab,
+# p pane. They used to say the opposite — `p` opened the session picker and
+# `s` the pane one, `s` meaning "split" from before floating panes existed —
+# which meant the two global chords a hand reaches for blind were the two
+# most likely to be wrong. The terminals need no change for this: ⌘⇧S sends
+# the LETTER s (Ghostty CSI-u 115;8u, WezTerm send_meh("s")), so only the
+# meaning on this side moved.
+
+# MEH-s — Session picker (a workspace is a session on either backend).
+{{- range list "C-M-S" "C-M-S-S" "C-M-S-s" }}
 bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome -- $HOME/.config/mux/scripts/quick-launch menu workspace"'
 {{- end }}
 
@@ -311,8 +325,8 @@ bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -
 bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Tab\" --no-chrome -- $HOME/.config/mux/scripts/quick-launch menu tab"'
 {{- end }}
 
-# MEH-s — Split picker. `s` is "split", from before floating panes existed.
-{{- range list "C-M-S" "C-M-S-S" "C-M-S-s" }}
+# MEH-p — Pane picker.
+{{- range list "C-M-P" "C-M-S-P" "C-M-S-p" }}
 bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 70 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Pane\" --no-chrome -- $HOME/.config/mux/scripts/quick-launch menu pane"'
 {{- end }}
 

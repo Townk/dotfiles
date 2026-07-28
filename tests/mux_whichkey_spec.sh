@@ -63,7 +63,7 @@ Describe 'mux-whichkey panel'
     When call plain prefix
     The output should include "󰘶 L ➜"     # uppercase bind = shift
     The output should include "󰘵 Y ➜"     # M-y
-    The output should include "  O ➜"     # lowercase o shown uppercase
+    The output should include "  S ➜"     # lowercase s shown uppercase
   End
 
   It 'merges key variants onto one row, zj-hud style'

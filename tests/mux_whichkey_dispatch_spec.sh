@@ -77,7 +77,9 @@ Describe 'mux-whichkey dispatch'
     End
 
     It 'ends the stack on a plain action'
-      When call d prefix s
+      # `h` splits — `s` used to, and now opens Session mode, so this example
+      # had to move with the 2026-07-28 rebinding rather than be deleted.
+      When call d prefix h
       The output should equal 'run clear'
     End
   End
@@ -119,12 +121,12 @@ Describe 'mux-whichkey dispatch'
     # mode is real on the RIBBON (pill + key hints) for as long as the dialog
     # is up — see tmux_status_right_spec.
     It 'ends the mode for a rename, whose dialog owns the screen'
-      When call d pane n
+      When call d pane r
       The output should equal 'defer clear'
     End
 
     It 'does the same for a session rename'
-      When call d session n
+      When call d session r
       The output should equal 'defer clear'
     End
   End

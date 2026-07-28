@@ -389,7 +389,7 @@ keybinds clear-defaults=true {
     tmux {
         // Splits (wezterm: SplitHorizontal → right, SplitVertical → down)
         bind "v" { NewPane "right"; SwitchToMode "normal"; }
-        bind "s" { NewPane "down";  SwitchToMode "normal"; }
+        bind "h" { NewPane "down";  SwitchToMode "normal"; }
 
         // Toggle zoom (wezterm LEADER+z)
         bind "z" { ToggleFocusFullscreen; SwitchToMode "normal"; }
@@ -397,7 +397,7 @@ keybinds clear-defaults=true {
         // Modes reachable via leader (wezterm LEADER+r/l/t/W)
         bind "L" { SwitchToMode "locked"; }
         bind "l" { SwitchToMode "scroll"; }
-        bind "o" { SwitchToMode "session"; }
+        bind "s" { SwitchToMode "session"; }
         bind "p" { SwitchToMode "pane"; }
         bind "t" { SwitchToMode "tab"; }
 
@@ -611,8 +611,34 @@ keybinds clear-defaults=true {
             }
             SwitchToMode "normal"
         }
-        bind "s" {
+        // Share moved off `s` to make room for "new session". `u` for the
+        // share URL that panel exists to hand you — it keeps its place
+        // beside the other plugin panels (a about, c config, l layout,
+        // p plugin-manager).
+        bind "u" {
             LaunchOrFocusPlugin "zellij:share" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        // Rename and new-session both answer with the session-manager,
+        // because Zellij has a keybinding action for NEITHER: `NewSession`
+        // is rejected outright by the config parser, and `RenameSession`
+        // exists only in the form that takes a name (there is no
+        // `renamesession` input mode to type one into — measured against
+        // 0.44.3, both ways). The session-manager is where each operation
+        // actually lives, so the mnemonic keys open it rather than doing
+        // nothing. tmux answers the same two keys with its own dialog.
+        bind "r" {
+            LaunchOrFocusPlugin "session-manager" {
+                floating true
+                move_to_focused_tab true
+            }
+            SwitchToMode "normal"
+        }
+        bind "s" {
+            LaunchOrFocusPlugin "session-manager" {
                 floating true
                 move_to_focused_tab true
             }
@@ -662,11 +688,11 @@ keybinds clear-defaults=true {
         bind "0" { SwitchToMode "normal"; GoToTab 10; }
 
         // Tab manipulation (rename)
-        bind "n" { SwitchToMode "renametab"; TabNameInput 0; }
+        bind "r" { SwitchToMode "renametab"; TabNameInput 0; }
 
         // Tab manipulation (create)
         bind "P" { SwitchToMode "normal"; BreakPane; }  // make a pane become a tab
-        bind "N" { SwitchToMode "normal"; NewTab; }     // new tab
+        bind "t" { SwitchToMode "normal"; NewTab; }     // new tab
         bind "T" {
             SwitchToMode "normal"
             {{ template "zellijModalRun"
@@ -692,10 +718,10 @@ keybinds clear-defaults=true {
     }
     pane {
         bind "m" { SwitchToMode "move"; }
-        bind "r" { SwitchToMode "resize"; }
+        bind "s" { SwitchToMode "resize"; }
 
         // Pane manipulation (rename)
-        bind "n" { SwitchToMode "renamepane"; PaneNameInput 0; }
+        bind "r" { SwitchToMode "renamepane"; PaneNameInput 0; }
 
         // Move focus around
         bind "left" { MoveFocus "left"; }
@@ -710,7 +736,7 @@ keybinds clear-defaults=true {
         bind "tab" { SwitchFocus; } // Cycle through panes
 
         // Pane creation (mode-ending bindings)
-        bind "N" { NewPane; SwitchToMode "normal"; }
+        bind "p" { NewPane; SwitchToMode "normal"; }
         bind "Shift left" { NewPane "left"; SwitchToMode "normal"; }
         bind "Shift down" { NewPane "down"; SwitchToMode "normal"; }
         bind "Shift up" { NewPane "up"; SwitchToMode "normal"; }
@@ -735,7 +761,10 @@ keybinds clear-defaults=true {
         }
 
         // Pane manipulation (mode-ending binding)
-        bind "p" { TogglePanePinned; SwitchToMode "normal"; }
+        // Pinning only means anything for a FLOATING pane, and floating-pane
+        // operations already live on Alt chords (see "Alt t" below), so pin
+        // joins that family rather than competing for the letter p.
+        bind "Alt p" { TogglePanePinned; }
         bind "e" { TogglePaneEmbedOrFloating; SwitchToMode "normal"; }
         bind "z" { ToggleFocusFullscreen; SwitchToMode "normal"; }
         bind "t" { ToggleFloatingPanes; SwitchToMode "normal"; }
