@@ -98,7 +98,12 @@ set -g renumber-windows on         # closing a window renumbers the rest, like z
 #                                 below keep working
 # `#{host}` and `#{host_short}` are both checked: which one a pane's seed
 # matches depends on the terminal that opened it.
-%hidden win_osc_title="#{?#{&&:#{!=:#{pane_title},},#{&&:#{!=:#{pane_title},#{host}},#{&&:#{!=:#{pane_title},#{host_short}},#{!=:#{pane_title},#{pane_current_command}}}}},#{pane_title},#{pane_current_command}}"
+# Normalised command (see the theme's win_cmd — %hidden is per-file, so it is
+# declared in both): a trailing .exe is stripped, so the fallback name reads
+# "claude", not "claude.exe", and the "title says nothing new" guard compares
+# against the same spelling the icon lookup uses.
+%hidden win_cmd='#{s|\.exe$||:#{pane_current_command}}'
+%hidden win_osc_title="#{?#{&&:#{!=:#{pane_title},},#{&&:#{!=:#{pane_title},#{host}},#{&&:#{!=:#{pane_title},#{host_short}},#{!=:#{pane_title},$win_cmd}}}},#{pane_title},$win_cmd}"
 # The copy-mode / dead-pane markers are tmux's own default format, kept.
 setw -g automatic-rename-format "#{?pane_in_mode,[tmux],$win_osc_title}#{?pane_dead,[dead],}"
 

@@ -62,6 +62,39 @@ Describe 'tmux window titles'
     The output should include "name="
   End
 
+  # Upstream renamed claude-code's binary to claude.exe, which broke the icon
+  # lookup keyed on the bare name. The command is normalised once — a
+  # trailing .exe is stripped — so a vendor's platform suffix cannot cost us
+  # an icon, and nothing else is touched (weird.exec keeps its name).
+  Describe 'command normalisation'
+    norm() {
+      tmux -L wtspec set -g @__c "$1" 2>/dev/null
+      tmux -L wtspec display -p '#{s|\.exe$||:#{@__c}}'
+    }
+
+    It 'strips a trailing .exe so claude.exe still finds its icon'
+      When call norm "claude.exe"
+      The output should equal "claude"
+    End
+
+    It 'leaves an ordinary command alone'
+      When call norm "nvim"
+      The output should equal "nvim"
+    End
+
+    It 'is anchored — a .exec suffix is not an .exe'
+      When call norm "weird.exec"
+      The output should equal "weird.exec"
+    End
+
+    It 'keys the generated icon chain off the normalised command'
+      chain() { chezmoi execute-template <custom-builds/theme/templates/tmux-theme.conf.tmpl | grep '^%hidden win_proc_icon='; }
+      When call chain
+      The output should include 'win_cmd'
+      The output should not include '==:#{pane_current_command},claude}'
+    End
+  End
+
   # zj-hud gives each process its own glyph (icons::process_icon); the tmux
   # chain is generated from .muxTabIcons so the two speak one vocabulary.
   Describe 'per-process icons'
@@ -70,11 +103,11 @@ Describe 'tmux window titles'
     It 'maps the agents, editors and tools zj-hud maps'
       chain() { chezmoi execute-template <custom-builds/theme/templates/tmux-theme.conf.tmpl | grep '^%hidden win_proc_icon='; }
       When call chain
-      The output should include "pane_current_command},claude"
-      The output should include "pane_current_command},cursor-agent"
-      The output should include "pane_current_command},nvim"
-      The output should include "pane_current_command},node"
-      The output should include "pane_current_command},lazygit"
+      The output should include '==:$win_cmd,claude}'
+      The output should include '==:$win_cmd,cursor-agent}'
+      The output should include '==:$win_cmd,nvim}'
+      The output should include '==:$win_cmd,node}'
+      The output should include '==:$win_cmd,lazygit}'
     End
 
     It 'keeps the generic run glyph as the fallback'
