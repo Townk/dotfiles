@@ -28,23 +28,11 @@ toggle_wezterm_fullscreen() {
 }
 
 toggle_ghostty_macos_fullscreen() {
-  osascript <<'APPLESCRIPT'
-tell application "System Events"
-    set candidates to {"Ghostty", "ghostty"}
-    repeat with candidate in candidates
-        set process_name to candidate as text
-        if exists process process_name then
-            tell first process whose name is process_name
-                if (count of windows) = 0 then error "Ghostty has no windows"
-                tell window 1
-                    set current_state to value of attribute "AXFullScreen"
-                    set value of attribute "AXFullScreen" to not current_state
-                end tell
-            end tell
-            return
-        end if
-    end repeat
-    error "Ghostty process not found"
+  osascript >/dev/null <<'APPLESCRIPT'
+tell application "Ghostty"
+    if (count of windows) = 0 then error "Ghostty has no windows"
+    set active_terminal to focused terminal of selected tab of front window
+    perform action "toggle_fullscreen" on active_terminal
 end tell
 APPLESCRIPT
 }

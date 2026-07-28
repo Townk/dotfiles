@@ -32,6 +32,7 @@ setopt no_unset
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
 PMSET="${PMSET_BIN:-/usr/bin/pmset}"
 NETWORKSETUP="${NETWORKSETUP_BIN:-/usr/sbin/networksetup}"
+OSASCRIPT="${WIDGETS_OSASCRIPT_BIN:-/usr/bin/osascript}"
 FS_STATE="${WIDGETS_FULLSCREEN_STATE:-$HOME/.local/state/wezterm/fullscreen_state}"
 HOST_ALIAS="${WIDGETS_HOSTNAME_ALIAS:-$HOME/.hostname-alias}"
 if [[ -n "${WIDGETS_THEME_JSON:-}" ]]; then
@@ -71,6 +72,7 @@ stack_raw="${11-$("$TMUX_BIN" show -gv @mux_stack 2>/dev/null)}"
 search_count="${12:-}"
 search_partial="${13:-0}"
 search_idx="${14:-}"
+client_term="${15:-}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
@@ -288,8 +290,35 @@ if [[ -n "$sess" ]]; then
   v="$("$TMUX_BIN" show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""
   [[ "$v" == SSH_CONNECTION=* ]] && is_ssh=1
 fi
+ghostty_is_fullscreen() {
+  local state
+  state="$("$OSASCRIPT" <<'APPLESCRIPT'
+tell application "System Events"
+    if not (exists process "Ghostty") then return "NOT_RUNNING"
+    set p to first process whose name is "Ghostty"
+    if (count of windows of p) = 0 then return "NO_WINDOWS"
+    tell window 1 of p
+        if value of attribute "AXFullScreen" is true then return "NATIVE_FULLSCREEN"
+        set window_size to size
+    end tell
+    tell application "Finder" to set screen_bounds to bounds of window of desktop
+    if (item 1 of window_size) >= (item 3 of screen_bounds) and ¬
+        (item 2 of window_size) >= (item 4 of screen_bounds) then
+        return "NON_NATIVE_FULLSCREEN"
+    end if
+    return "WINDOWED"
+end tell
+APPLESCRIPT
+  )" || return 1
+  [[ "$state" == NATIVE_FULLSCREEN || "$state" == NON_NATIVE_FULLSCREEN ]]
+}
+
 is_fullscreen=0
-[[ "$(cat "$FS_STATE" 2>/dev/null)" == true ]] && is_fullscreen=1
+if [[ "${client_term:l}" == *ghostty* ]]; then
+  ghostty_is_fullscreen && is_fullscreen=1
+elif [[ "$(cat "$FS_STATE" 2>/dev/null)" == true ]]; then
+  is_fullscreen=1
+fi
 
 # System segments (power/battery/wifi/clock): the layout rule `!ssh|fullscreen`
 # is a condition LIST — local AND fullscreen (windowed local keeps them hidden;

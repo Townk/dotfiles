@@ -40,13 +40,20 @@ EOS
 #!/usr/bin/env zsh
 print -- "Wi-Fi Power (en0): ${STUB_WIFI:-On}"
 EOS
-    chmod +x "$TEST_TMP/tmux" "$TEST_TMP/pmset" "$TEST_TMP/networksetup"
+    cat > "$TEST_TMP/osascript" <<'EOS'
+#!/usr/bin/env zsh
+while IFS= read -r _line; do :; done
+print -- "${STUB_GHOSTTY_FULLSCREEN:-WINDOWED}"
+EOS
+    chmod +x "$TEST_TMP/tmux" "$TEST_TMP/pmset" "$TEST_TMP/networksetup" \
+      "$TEST_TMP/osascript"
 
     # ribbon ssh truth = its own process env (zj-hud parity)
     unset SSH_CONNECTION SSH_CLIENT
     export MUX_TMUX_BIN="$TEST_TMP/tmux"
     export PMSET_BIN="$TEST_TMP/pmset"
     export NETWORKSETUP_BIN="$TEST_TMP/networksetup"
+    export WIDGETS_OSASCRIPT_BIN="$TEST_TMP/osascript"
     export WIDGETS_FULLSCREEN_STATE="$TEST_TMP/fullscreen_state"
     export WIDGETS_HOSTNAME_ALIAS="$TEST_TMP/hostname-alias"
     export WIDGETS_THEME_JSON="$TEST_TMP/theme.json"
@@ -57,9 +64,9 @@ EOS
   }
   cleanup() {
     rm -rf "$TEST_TMP"
-    unset MUX_TMUX_BIN PMSET_BIN NETWORKSETUP_BIN WIDGETS_FULLSCREEN_STATE \
+    unset MUX_TMUX_BIN PMSET_BIN NETWORKSETUP_BIN WIDGETS_OSASCRIPT_BIN WIDGETS_FULLSCREEN_STATE \
       WIDGETS_HOSTNAME_ALIAS WIDGETS_THEME_JSON STUB_SSH SSH_CONNECTION SSH_CLIENT STUB_POWER STUB_PCT \
-      STUB_WIFI G_DIV G_WIFI_ON G_WIFI_OFF G_CLOCK G_HOST
+      STUB_WIFI STUB_GHOSTTY_FULLSCREEN G_DIV G_WIFI_ON G_WIFI_OFF G_CLOCK G_HOST
   }
   BeforeEach 'setup'
   AfterEach 'cleanup'
@@ -77,6 +84,20 @@ EOS
     The output should include "$G_CLOCK"
     The output should not include "Tab"
     The output should not include "Main"
+  End
+
+  It 'detects Ghostty non-native fullscreen independently of WezTerm state'
+    printf 'false' > "$TEST_TMP/fullscreen_state"
+    export STUB_GHOSTTY_FULLSCREEN=NON_NATIVE_FULLSCREEN
+    When call zsh "$W" root 0 main 0 0 '' 0 0 '' 120 '' '' 0 '' xterm-ghostty
+    The output should include "$G_CLOCK"
+  End
+
+  It 'does not reuse stale WezTerm fullscreen state for Ghostty'
+    printf 'true' > "$TEST_TMP/fullscreen_state"
+    export STUB_GHOSTTY_FULLSCREEN=WINDOWED
+    When call zsh "$W" root 0 main 0 0 '' 0 0 '' 120 '' '' 0 '' xterm-ghostty
+    The output should equal ""
   End
 
   It 'a key table adds the mode pill and re-tints the ribbon to the mode color'
