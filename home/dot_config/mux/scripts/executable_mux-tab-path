@@ -1,0 +1,138 @@
+#!/usr/bin/env zsh
+# mux-tab-path <cwd> [max-width] — the tab pill's path body.
+#
+# The tmux port of zj-hud's render_path_body / abbreviated_project_path
+# (zj-hud src/bar/tabs/mod.rs). tmux's format language can truncate a string
+# but cannot walk path segments, so this is the one place in the pill that
+# costs a process — called through #() in window-status-format, where tmux
+# caches the result per expanded command string (so it re-runs on a cd, not
+# on every redraw).
+#
+# The rule, in zj-hud's order:
+#   1. $HOME is "~"; everything is ~-collapsed.
+#   2. If it fits, print it whole.
+#   3. Otherwise shrink the segments ABOVE the project root, one at a time,
+#      left to right, each to its initial + "…" (dot-segments keep two
+#      characters so .config is ".c…"), stopping as soon as it fits. The
+#      project-root segment and the LAST segment are never abbreviated:
+#      which project, and where you are inside it, are the two things worth
+#      keeping.
+#   4. If that is still too wide, collapse everything before the project
+#      root into a single "…".
+#   5. With no project root in sight, keep the tail (the old behaviour).
+#
+# The project root is the nearest ancestor holding a marker —
+# zj-hud's DEFAULT_PROJECT_MARKERS, kept in the same order.
+emulate -L zsh
+set -u
+
+# Everything below renders; --stamp (at the end) reuses it in-process.
+typeset -ga MARKERS=(.git .jj package.json Cargo.toml go.mod pyproject.toml flake.nix Makefile .project-root)
+
+mux_tab_path::render() {
+  local cwd="${1:-$PWD}" max="${2:-28}"
+  [[ "$max" == <-> ]] || max=28
+
+  # --- ~-collapse ------------------------------------------------------------
+  local disp="$cwd"
+  if [[ "$cwd" == "$HOME" ]]; then
+  print -r -- "~"
+  return 0
+  fi
+  [[ "$cwd" == "$HOME"/* ]] && disp="~${cwd#$HOME}"
+
+  (( ${#disp} <= max )) && { print -r -- "$disp"; return 0 }
+
+  # --- project root: nearest ancestor with a marker --------------------------
+  local root="" dir="$cwd" marker
+  while [[ -n "$dir" && "$dir" != / ]]; do
+  for marker in "${MARKERS[@]}"; do
+    if [[ -e "$dir/$marker" ]]; then root="$dir"; break 2; fi
+  done
+  dir="${dir:h}"
+  done
+
+  # Tail-keeping truncation, the fallback when no project frames the path.
+  _plain() {
+  local s="$1"
+  (( ${#s} <= max )) && { print -r -- "$s"; return }
+  print -r -- "…${s[-$((max - 1)),-1]}"
+  }
+
+  if [[ -z "$root" ]]; then
+  _plain "$disp"
+  return 0
+  fi
+
+  local root_disp="$root"
+  [[ "$root" == "$HOME" ]] && root_disp="~"
+  [[ "$root" == "$HOME"/* ]] && root_disp="~${root#$HOME}"
+
+  # --- segment arithmetic ----------------------------------------------------
+  local -a segs=("${(@s:/:)disp}")
+  local -a root_segs=("${(@s:/:)root_disp}")
+  local project_idx=${#root_segs}          # 1-based index of the root's own segment
+  local last_idx=${#segs}
+
+  # The root must actually be a prefix of the path, and there must be something
+  # below it — otherwise there is nothing this can do that _plain cannot.
+  if (( project_idx < 1 || project_idx > last_idx )); then
+  _plain "$disp"
+  return 0
+  fi
+
+  _join() { local IFS=/; print -r -- "${*}"; }
+
+  _abbrev() {   # first character (two for a dot-segment) + …
+  local s="$1"
+  [[ -z "$s" ]] && { print -r -- "$s"; return }
+  local keep=1
+  [[ "$s" == .* ]] && keep=2
+  print -r -- "${s[1,$keep]}…"
+  }
+
+  # 3. shrink above the root, then between the root and the last segment
+  local -a out=("${segs[@]}")
+  local -a order=()
+  local i
+  for (( i = 1; i < project_idx; i++ )); do order+=($i); done
+  for (( i = project_idx + 1; i < last_idx; i++ )); do order+=($i); done
+
+  local idx rendered
+  for idx in "${order[@]}"; do
+  # never abbreviate what is already short enough to be its own initial
+  (( ${#out[$idx]} > 2 )) || continue
+  out[$idx]="$(_abbrev "${segs[$idx]}")"
+  rendered="$(_join "${out[@]}")"
+  (( ${#rendered} <= max )) && { print -r -- "$rendered"; return 0 }
+  done
+
+  # 4. collapse the whole head into one ellipsis
+  if (( project_idx > 1 )); then
+  local -a collapsed=("…" "${segs[@]:$((project_idx - 1))}")
+  rendered="$(_join "${collapsed[@]}")"
+  (( ${#rendered} <= max )) && { print -r -- "$rendered"; return 0 }
+  fi
+
+  # 5. nothing fits: keep the tail
+  _plain "$(_join "${out[@]}")"
+}
+
+# --stamp <window-id> <cwd>: park the rendered body on the WINDOW as
+# @win_path, which the tab pill reads. tmux does NOT evaluate
+# #(shell-command) inside window-status-format (measured: the same #() runs
+# from status-right and never from the pill), so the pill cannot pull this —
+# it has to be pushed, from the two places the answer changes: the shell's
+# chpwd hook and tmux's pane-focus-in.
+if [[ "${1:-}" == --stamp ]]; then
+  win="${2:-}"; dir="${3:-$PWD}"
+  tmux_bin="${MUX_TMUX_BIN:-tmux}"
+  [[ -n "${TMUX:-}" || -n "$win" ]] || exit 0
+  command -v "$tmux_bin" >/dev/null 2>&1 || exit 0
+  typeset -a target=(); [[ -n "$win" ]] && target=(-t "$win")
+  "$tmux_bin" set -w "${target[@]}" @win_path \
+    "$(mux_tab_path::render "$dir" "${MUX_TAB_PATH_WIDTH:-28}")" 2>/dev/null
+  exit 0
+fi
+
+mux_tab_path::render "${1:-$PWD}" "${2:-28}"

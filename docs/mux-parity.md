@@ -81,6 +81,17 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | search option toggles (case/word/wrap) | zj-hud search role + MessagePlugin sync | M-c/M-b/M-p in the dialog and in (SearchMode): case + word rebuild the ERE pattern, wrap sets tmux's per-pane `wrap-search` | ✅ | gated on the Search STATE, not `#{search_present}` — a zero-match filter clears that flag and would kill the chord that undoes it |
 | which-key panel | zj-hud role "whichkey" (pages/trail) | `mux-whichkey` popup (pages, trail, icons, colors) driven by the mode stack | 🟡 | Phase 5 as-built: tmux has no PASSIVE overlay, so the panel is a modal popup that dispatches the mode's keys itself while open |
 
+## Tab titles (zj-hud compose_body ↔ tmux window pill)
+
+| Behavior | Zellij impl | tmux impl | Status | Notes |
+|---|---|---|---|---|
+| user-renamed tab | tab icon + name | `@win_icon`/󰓩 + `#W` (automatic-rename off) | ✅ | |
+| app's own title (agents' session + progress) | `pane_osc_title(...)` beats the process name | OSC 0/2 → `#{pane_title}` → `automatic-rename-format` → `#W` | ✅ | tmux re-evaluates the format as the title changes and fires window-renamed, so progress repaints without shortening status-interval |
+| per-process glyph | `icons::process_icon` | generated `#{?}` chain from `.muxTabIcons` | ✅ | ported 1:1; one list feeds the tmux side, Phase 8 merges the two |
+| shell → cwd | home/dir icon + pretty cwd | same | ✅ | |
+| project-aware path abbreviation | `abbreviated_project_path` | `mux-tab-path`, pushed onto `@win_path` | ✅ | segments above the project root shrink to an initial, then collapse to `…`; the root and the tail stay whole |
+| zoom / sync / alarm icons | extra_icons | `win_extras` | ✅ | Phase 4 |
+
 ## Session-level behaviors
 
 | Behavior | Zellij | tmux | Status | Notes |
@@ -236,6 +247,8 @@ are derived views. One API (`lib/mux/stack.zsh`, exposed to key bindings by
 | `#{pane_pid}` is the pane's root shell, never the worker inside it | tm routes address the session by path (`@tm_session`), not by pid — a pid-matched route silently never fires |
 | zellij `run` cannot size the pane it creates; tmux `split-window -l` can | the 30-iteration resize-convergence loop in the tm launcher is now zellij-only |
 | `#{client_tty}` DOES expand in a `run-shell`, backgrounded or not, and names the client that pressed the key even with several attached (measured; a comment in stack.zsh claimed the opposite) | the panel stops guessing with `list-clients \| head -1`, which opened it in whichever terminal attached FIRST — press the leader in WezTerm, watch the panel appear in the Ghostty window |
+| `#(shell-command)` is NOT evaluated inside `window-status-format` — the same `#()` runs from `status-right` and never from the pill (measured) | anything the pill needs from a script has to be PUSHED onto a window option (`@win_path`), from the moments the answer changes: the shell's chpwd hook and tmux's `pane-focus-in` |
+| tmux SEEDS `#{pane_title}` with the hostname, and its automatic-rename samples the pane's PROCESS — a command started via `$SHELL -c` can leave the window named after the shell (stock tmux names a `node -e …` window "zsh" permanently) | the title guards reject the hostname; the OSC title bypasses process sampling altogether |
 | the which-key panel runs its commands with `source-file` from inside a POPUP, where tmux has no current pane — so `#{pane_current_path}` expands EMPTY and a new tab silently landed in the session's start dir (the identical key-table bind inherited correctly) | the panel resolves that one format itself before sourcing (`display -p` from a popup does answer for the client's active pane); a blanket expansion is wrong, since other commands carry `#W` / `%%` that tmux must still see |
 
 ## Platform gotchas — Phase 6 Mode B session 2 (2026-07-27)

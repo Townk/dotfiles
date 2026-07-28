@@ -41,7 +41,7 @@ set -g status-style "bg=#{{ index $p $r.ui.bg }},fg=#{{ index $p $r.ui.fg_dim }}
 {{- $icon = printf "#{?#{==:#{pane_current_command},%s},%s,%s}" $proc $glyph $icon -}}
 {{- end -}}
 %hidden win_proc_icon="{{ $icon }}"
-%hidden win_body="#{?#{automatic-rename},#{?#{||:#{==:#{pane_current_command},zsh},#{==:#{pane_current_command},bash}},#{?#{==:#{pane_current_path},{{ .chezmoi.homeDir }}},󰋜 ~,󰝰 #{=|-28|…:#{s|^{{ .chezmoi.homeDir }}|~|:#{pane_current_path}}}},$win_proc_icon #W},#{?#{@win_icon},#{@win_icon} #W,󰓩 #W}}"
+%hidden win_body="#{?#{automatic-rename},#{?#{||:#{==:#{pane_current_command},zsh},#{==:#{pane_current_command},bash}},#{?#{==:#{pane_current_path},{{ .chezmoi.homeDir }}},󰋜 ~,󰝰 #{?#{@win_path},#{@win_path},#{=|-28|…:#{s|^{{ .chezmoi.homeDir }}|~|:#{pane_current_path}}}}},$win_proc_icon #W},#{?#{@win_icon},#{@win_icon} #W,󰓩 #W}}"
 %hidden win_pill="#[bold,bg=#{{ $p.tab.bg }},fg=#{{ $p.tab.fg }}] #I $win_body$win_extras #[bg=#{{ index $p $r.ui.bg }},fg=#{{ $p.tab.bg }}]▌"
 %hidden win_pill_current="#[bold,bg=#{{ $p.tab.active_bg }},fg=#{{ $p.tab.active_fg }}] #I $win_body$win_extras #[bg=#{{ index $p $r.ui.bg }},fg=#{{ $p.tab.active_bg }}]▌"
 # Reassemble these here as well as in status.conf: theme-apply live-reloads

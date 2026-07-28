@@ -80,6 +80,13 @@ set-hook -g pane-mode-changed 'if -F "#{@mouse_select}" "" { run-shell -b "{{ .c
 # the terminal rings it, and the window's status entry takes
 # window-status-bell-style. `on`/`1`/`true`/`yes` opt it back in.
 set -g @bell_osd off
+# The tab pill's path (zj-hud parity): the FOCUSED pane owns the tab title,
+# so re-stamp @win_path when focus moves. The shell's chpwd hook covers the
+# other half (see functions.d/mux-tab-path.sh). Pushed, not pulled: tmux does
+# not run #(shell-command) inside window-status-format.
+set-hook -g pane-focus-in 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-tab-path --stamp \"#{window_id}\" \"#{pane_current_path}\""'
+set-hook -g after-select-window 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-tab-path --stamp \"#{window_id}\" \"#{pane_current_path}\""'
+
 set-hook -g alert-activity 'run-shell -b "{{ .chezmoi.homeDir }}/.local/libexec/tmux-alert-notify activity \"#{window_name}\""'
 set-hook -g alert-silence 'run-shell -b "{{ .chezmoi.homeDir }}/.local/libexec/tmux-alert-notify silence \"#{window_name}\""'
 set-hook -g alert-bell 'run-shell -b "{{ .chezmoi.homeDir }}/.local/libexec/tmux-alert-notify bell \"#{window_name}\""'
