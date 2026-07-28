@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# mux-rename <window|pane> — the rename dialog for the tmux backend.
+# mux-rename <window|pane|session> — the rename dialog for the tmux backend.
 #
 #   mux-rename --launch <kind>   anchor + reopen inside display-popup (the
 #                                run-shell -b path; a foreground popup
@@ -26,7 +26,7 @@ fi
 
 kind="${1:-window}"
 case "$kind" in
-  window | pane) ;;
+  window | pane | session) ;;
   *)
     echo "mux-rename: expected 'window' or 'pane'" >&2
     exit 2
@@ -56,8 +56,9 @@ trap cleanup EXIT
 TRAPINT() { exit 0 }
 
 case "$kind" in
-  window) current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{window_name}' 2>/dev/null)" || current="" ;;
-  pane)   current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{pane_title}' 2>/dev/null)" || current="" ;;
+  window)  current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{window_name}' 2>/dev/null)" || current="" ;;
+  pane)    current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{pane_title}' 2>/dev/null)" || current="" ;;
+  session) current="$("$TMUX_BIN" display -p "${taddr[@]}" '#{session_name}' 2>/dev/null)" || current="" ;;
 esac
 
 # dialog.warning is the plugin's RENAME_RGB; md_rename is its MODE_RENAME.
@@ -66,6 +67,23 @@ I_RENAME=$'\U000F0455'
 
 buf="$current"
 
+# Right-hand reserve: the session dialog shows a dice, so the Alt+r roll is
+# discoverable the way search's toggles are. The other kinds reserve nothing.
+if [[ "$kind" == session ]]; then
+  RESERVE=2
+  I_ROLL=$'\U000F01D5'   # md_dice_multiple
+else
+  RESERVE=0
+  I_ROLL=""
+fi
+
+draw_field() {
+  mux_dialog::field "$buf" "$RESERVE"
+  [[ -n "$I_ROLL" ]] || return 0
+  mux_dialog::at 2 $(( MD_INPUT_END - RESERVE + 2 ))
+  print -rn -- "${MD_INPUT_BG}${MD_ACCENT_FG}${I_ROLL}${MD_RESET}"
+}
+
 apply() {
   [[ -n "$buf" ]] || return 0
   case "$kind" in
@@ -73,25 +91,65 @@ apply() {
     # rename means, and tmux enforces it by turning automatic-rename off.
     window) "$TMUX_BIN" rename-window "${taddr[@]}" -- "$buf" 2>/dev/null || true ;;
     pane)   "$TMUX_BIN" select-pane "${taddr[@]}" -T "$buf" 2>/dev/null || true ;;
+    # Through the shim: renaming a session has to refresh every attached
+    # client, or the ribbon keeps showing the old name until something else
+    # redraws it. Sourced HERE so the dialog still opens at popup speed.
+    session)
+      source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+      mux::rename_session "$buf" 2>/dev/null || true
+      ;;
   esac
+}
+
+# Alt+r — a name you do not have to invent. mux-random-session-name returns an
+# unused adjective-noun pair (the same vocabulary zellij named sessions with),
+# so the field can be re-rolled until one reads well. Sessions only: a window
+# or a pane is named after what is IN it, and a random word would be a lie.
+random_name() {
+  local bin="${MUX_RANDOM_NAME_BIN:-$HOME/.local/bin/mux-random-session-name}"
+  [[ -x "$bin" ]] || return 1
+  local name
+  name="$("$bin" 2>/dev/null)" || return 1
+  [[ -n "$name" ]] || return 1
+  print -r -- "$name"
 }
 
 print -rn -- $'\e[?25l'
 mux_dialog::frame "$I_RENAME"
-mux_dialog::field "$buf"
+draw_field
 
-while read -rsk1 key; do
+# `-u 0`: zsh's `read -k` reads from the TERMINAL unless a descriptor is
+# named. Inside the popup stdin IS the terminal, so this changes nothing
+# there — and it lets the dialog be driven by a byte stream in a spec.
+while read -rsk1 -u 0 key; do
   case "$key" in
     $'\r' | $'\n') apply; break ;;
     $'\x03') break ;;                 # C-c abandons, as ESC does
-    $'\e')   break ;;                 # ESC cancels — never Ctrl+C (house rule)
-    $'\x7f' | $'\b') buf="${buf[1,-2]}"; mux_dialog::field "$buf" ;;
-    $'\x15') buf=""; mux_dialog::field "$buf" ;;   # C-u clears, as elsewhere
+    $'\e')
+      # ESC alone cancels (house rule: ESC cancels, never Ctrl+C); ESC+char is
+      # an Alt chord. The short timeout is what tells them apart — the same
+      # discrimination the search dialog makes for its M-c/M-b/M-p toggles.
+      follow=""
+      read -rsk1 -u 0 -t 0.02 follow || follow=""
+      case "$follow" in
+        r)
+          [[ "$kind" == session ]] || continue
+          if rolled="$(random_name)"; then
+            buf="$rolled"
+            draw_field
+          fi
+          ;;
+        "") break ;;
+        *) continue ;;
+      esac
+      ;;
+    $'\x7f' | $'\b') buf="${buf[1,-2]}"; draw_field ;;
+    $'\x15') buf=""; draw_field ;;   # C-u clears, as elsewhere
     *)
       # Printable only: a stray control byte would corrupt the field.
       [[ "$key" == [[:print:]] ]] || continue
       buf+="$key"
-      mux_dialog::field "$buf"
+      draw_field
       ;;
   esac
 done

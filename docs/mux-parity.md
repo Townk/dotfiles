@@ -109,6 +109,8 @@ nothing but the rename itself.
 | prefill | current tab/pane title in the field | `#{window_name}` / `#{pane_title}` of the ORIGIN pane | ✅ | a popup owns no pane, so `display -p` answers for the client's active pane |
 | apply / cancel | Enter renames, Esc leaves it | `rename-window` / `select-pane -T`; ESC and C-c abandon | ✅ | ESC cancels — never conflated with Ctrl+C |
 | mode pill | zj-hud rename role lights the bar | `@renaming` read by tmux-status-right | ✅ | cleared on every exit path, including SIGINT |
+| what can be renamed | tab, pane | window, pane, SESSION | 🟢 tmux-ahead | `n` in the session table; zellij's role has no session arm |
+| Alt+r in the session dialog | — | fills the field from `mux-random-session-name` | 🟢 tmux-ahead | the generator is called with NO arguments (its `--apply*` modes are never used here); the rename still only happens on Enter |
 
 ## Session-level behaviors
 

@@ -76,6 +76,80 @@ Describe 'mux-rename'
     End
   End
 
+  # Renaming a SESSION is the third payload for the same dialog, plus one
+  # affordance the other two do not want: Alt+r drops an unused
+  # adjective-noun name into the field (mux-random-session-name), so naming a
+  # session is a keypress rather than an invention.
+  Describe 'session'
+    setup() {
+      RS_TMP=$(mktemp -d)
+      STUB="$RS_TMP/tmux"
+      { print '#!/bin/sh'
+        print 'echo "$*" >> '"$RS_TMP/calls"
+        print 'case "$*" in'
+        print '  *session_name*) echo "old-session" ;;'
+        print '  *pane_id*)      echo "%1" ;;'
+        print 'esac'
+      } > "$STUB"; chmod +x "$STUB"
+      RAND="$RS_TMP/rand"
+      { print '#!/bin/sh'; print 'echo lucky-otter' } > "$RAND"; chmod +x "$RAND"
+      THEME="$RS_TMP/theme.json"
+      print '{"extended":{"tab":{"bg":"#282c41"},"dialog":{"warning":"#e5bf7b","search_accent":"#61afef"}},"roles":{"ui":{"bg":"#1e1e2e","dialog_bg":"#181825","border_inactive":"#45475a"},"action":{"attention":"#f9e2af"}},"palette":{"white":"#ffffff"}}' > "$THEME"
+    }
+    cleanup() { rm -rf "$RS_TMP"; }
+    BeforeEach 'setup'
+    AfterEach 'cleanup'
+
+    # Feed the dialog raw bytes on stdin, exactly as a terminal would.
+    drive() {
+      printf '%b' "$1" | MUX_TMUX_BIN="$STUB" TMUX=/tmp/s,1,0 \
+        THEME_JSON="$THEME" MUX_RANDOM_NAME_BIN="$RAND" \
+        MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
+        zsh "$BIN" session >/dev/null 2>&1
+      cat "$RS_TMP/calls"
+    }
+
+    It 'prefills with the current session name and renames on Enter'
+      When call drive '\r'
+      The output should include "rename-session"
+      The output should include "old-session"
+    End
+
+    It 'replaces the field with a random name on Alt+r'
+      When call drive '\033r\r'
+      The output should include "lucky-otter"
+    End
+
+    # The roll FILLS THE FIELD and nothing else: the script is called with no
+    # arguments (it has --apply/--apply-current modes that must never be used
+    # from here), and the rename still only happens on Enter. Alt+r followed
+    # by a cancel must leave the session exactly as it was.
+    It 'does not rename when a rolled name is then cancelled'
+      When call drive '\033r\033'
+      The output should not include "rename-session"
+    End
+
+    It 'asks the generator for a name, never for a rename'
+      calls() {
+        RAND_LOG="$RS_TMP/randargs"
+        { print '#!/bin/sh'; print 'echo "[$*]" >> '"$RS_TMP/randargs"; print 'echo lucky-otter' } > "$RAND"
+        printf '%b' '\033r\r' | MUX_TMUX_BIN="$STUB" TMUX=/tmp/s,1,0 \
+          THEME_JSON="$THEME" MUX_RANDOM_NAME_BIN="$RAND" \
+          MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
+          zsh "$BIN" session >/dev/null 2>&1
+        cat "$RS_TMP/randargs"
+      }
+      When call calls
+      # invoked with NO arguments — never --apply or --apply-current
+      The output should equal "[]"
+    End
+
+    It 'still cancels on a bare ESC'
+      When call drive '\033'
+      The output should not include "rename-session"
+    End
+  End
+
   # One compact dialog, two callers. If a third ever appears, it goes through
   # here too — the plugin draws search and rename with the same render_field.
   Describe 'the shared dialog'

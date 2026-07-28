@@ -781,6 +781,13 @@ keymap:
         color: red
         cmd: detach-client
       - keys:
+        - n
+        desc: rename session
+        icon: 󰑕
+        color: red
+        cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/mux-rename --launch session'
+        dialog: true
+      - keys:
         - w
         desc: session manager
         icon: 󰧨

@@ -79,6 +79,13 @@ Describe 'tmux keymap tables'
     The status should be success
   End
 
+  # `n` renames in every table it appears in: the window, the pane, and now
+  # the session the two live in.
+  It 'renames a session from the session table'
+    When call keys session
+    The output should include "mux-rename --launch session"
+  End
+
   It 'binds the Phase 2 picker and rename popups'
     When call tmux -L kmspec list-keys
     The output should include "pick-glyph"
