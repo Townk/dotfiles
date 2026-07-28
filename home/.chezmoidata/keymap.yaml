@@ -247,6 +247,12 @@ keymap:
         title: Rename
         icon: 󰑕
         color: rename
+        # No panel table ON PURPOSE. Rename's UI is its dialog, and the mode
+        # stack's driver owns exactly one popup: a stackable rename made the
+        # driver close the dialog microseconds after opening it (the entry is
+        # pushed hidden, and sync closes popups for a hidden top). The MODE is
+        # real where it is visible — the ribbon reads @renaming and wears the
+        # pill and the key hints — without a second popup owner.
         table: ''
         parent: ''
         key_table: ''
@@ -782,11 +788,13 @@ keymap:
         cmd: detach-client
       - keys:
         - n
-        desc: rename session
+        desc: Rename Session …
         icon: 󰑕
-        color: red
+        color: yellow
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/mux-rename --launch session'
+        switch: true
         dialog: true
+        to: rename
       - keys:
         - w
         desc: session manager

@@ -113,8 +113,18 @@ Describe 'mux-whichkey dispatch'
       The output should equal 'defer-forward sticky'
     End
 
-    It 'ends the mode for a dialog whose target is not a mode you stand in'
+    # Rename's dialog owns the screen, so entering it ENDS the panel's mode
+    # rather than standing on the stack: the stack driver owns one popup, and
+    # a stackable rename had it closing the dialog it had just opened. The
+    # mode is real on the RIBBON (pill + key hints) for as long as the dialog
+    # is up — see tmux_status_right_spec.
+    It 'ends the mode for a rename, whose dialog owns the screen'
       When call d pane n
+      The output should equal 'defer clear'
+    End
+
+    It 'does the same for a session rename'
+      When call d session n
       The output should equal 'defer clear'
     End
   End

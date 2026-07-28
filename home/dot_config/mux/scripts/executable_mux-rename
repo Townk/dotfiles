@@ -44,8 +44,13 @@ origin="$("$TMUX_BIN" display -p '#{pane_id}' 2>/dev/null)" || origin=""
 [[ -n "$origin" ]] || exit 0
 typeset -a taddr=(-t "$origin")
 
-# Mode pill: the status ribbon reads @renaming; cleared on every exit path.
-"$TMUX_BIN" set -g @renaming 1 2>/dev/null || true
+# Rename is a MODE as far as the ribbon is concerned: @renaming carries the
+# KIND, and tmux-status-right turns that into the mode pill plus the keys
+# this kind actually has. It is deliberately NOT a mode-stack entry — the
+# stack's driver owns exactly one popup, and a stackable rename had it
+# closing this dialog the moment it opened. Cleared on every exit path, so
+# leaving by ESC, Enter or C-c all end the mode the same way.
+"$TMUX_BIN" set -g @renaming "$kind" 2>/dev/null || true
 cleanup() {
   "$TMUX_BIN" set -gu @renaming 2>/dev/null || true
   "$TMUX_BIN" refresh-client -S 2>/dev/null || true
@@ -67,22 +72,11 @@ I_RENAME=$'\U000F0455'
 
 buf="$current"
 
-# Right-hand reserve: the session dialog shows a dice, so the Alt+r roll is
-# discoverable the way search's toggles are. The other kinds reserve nothing.
-if [[ "$kind" == session ]]; then
-  RESERVE=2
-  I_ROLL=$'\U000F01D5'   # md_dice_multiple
-else
-  RESERVE=0
-  I_ROLL=""
-fi
-
-draw_field() {
-  mux_dialog::field "$buf" "$RESERVE"
-  [[ -n "$I_ROLL" ]] || return 0
-  mux_dialog::at 2 $(( MD_INPUT_END - RESERVE + 2 ))
-  print -rn -- "${MD_INPUT_BG}${MD_ACCENT_FG}${I_ROLL}${MD_RESET}"
-}
+# The field is the NAME and nothing else — the Alt+r affordance is advertised
+# by the ribbon's hint pill (tmux-status-right reads @renaming), where the
+# other modes put their bindings too. A glyph inside the input would compete
+# with the text it sits next to.
+draw_field() { mux_dialog::field "$buf" }
 
 apply() {
   [[ -n "$buf" ]] || return 0
@@ -118,10 +112,20 @@ print -rn -- $'\e[?25l'
 mux_dialog::frame "$I_RENAME"
 draw_field
 
-# `-u 0`: zsh's `read -k` reads from the TERMINAL unless a descriptor is
-# named. Inside the popup stdin IS the terminal, so this changes nothing
-# there — and it lets the dialog be driven by a byte stream in a spec.
-while read -rsk1 -u 0 key; do
+# zsh's `read -k` reads from the TERMINAL (/dev/tty), which inside a popup is
+# the keyboard — stdin is NOT: a `cat` in a display-popup receives nothing
+# (measured). Reading fd 0 unconditionally therefore made the dialog deaf to
+# every key including ESC. So: the terminal when we have one, fd 0 only when
+# stdin is a pipe, which is how a spec drives this.
+if [[ -t 0 ]]; then
+  read_key() { read -rsk1 "$1" }
+  read_follow() { read -rsk1 -t 0.02 "$1" }
+else
+  read_key() { read -rsk1 -u 0 "$1" }
+  read_follow() { read -rsk1 -u 0 -t 0.02 "$1" }
+fi
+
+while read_key key; do
   case "$key" in
     $'\r' | $'\n') apply; break ;;
     $'\x03') break ;;                 # C-c abandons, as ESC does
@@ -130,7 +134,7 @@ while read -rsk1 -u 0 key; do
       # an Alt chord. The short timeout is what tells them apart — the same
       # discrimination the search dialog makes for its M-c/M-b/M-p toggles.
       follow=""
-      read -rsk1 -u 0 -t 0.02 follow || follow=""
+      read_follow follow || follow=""
       case "$follow" in
         r)
           [[ "$kind" == session ]] || continue

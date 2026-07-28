@@ -111,6 +111,7 @@ nothing but the rename itself.
 | mode pill | zj-hud rename role lights the bar | `@renaming` read by tmux-status-right | ✅ | cleared on every exit path, including SIGINT |
 | what can be renamed | tab, pane | window, pane, SESSION | 🟢 tmux-ahead | `n` in the session table; zellij's role has no session arm |
 | Alt+r in the session dialog | — | fills the field from `mux-random-session-name` | 🟢 tmux-ahead | the generator is called with NO arguments (its `--apply*` modes are never used here); the rename still only happens on Enter |
+| rename as a MODE | zj-hud role lights the bar | `@renaming` carries the KIND → ribbon shows the Rename pill + that kind's key hints (`⌥r random` only for a session) | ✅ | NOT a mode-stack entry: the stack's driver owns exactly one popup, and a stackable rename had it closing the dialog it had just opened |
 
 ## Session-level behaviors
 
@@ -269,6 +270,7 @@ are derived views. One API (`lib/mux/stack.zsh`, exposed to key bindings by
 | `#{client_tty}` DOES expand in a `run-shell`, backgrounded or not, and names the client that pressed the key even with several attached (measured; a comment in stack.zsh claimed the opposite) | the panel stops guessing with `list-clients \| head -1`, which opened it in whichever terminal attached FIRST — press the leader in WezTerm, watch the panel appear in the Ghostty window |
 | `#(shell-command)` is NOT evaluated inside `window-status-format` — the same `#()` runs from `status-right` and never from the pill (measured) | anything the pill needs from a script has to be PUSHED onto a window option (`@win_path`), from the moments the answer changes: the shell's chpwd hook and tmux's `pane-focus-in` |
 | tmux SEEDS `#{pane_title}` with the hostname, and its automatic-rename samples the pane's PROCESS — a command started via `$SHELL -c` can leave the window named after the shell (stock tmux names a `node -e …` window "zsh" permanently) | the title guards reject the hostname; the OSC title bypasses process sampling altogether |
+| a `display-popup` command's STDIN is not the keyboard — a `cat` in a popup receives nothing; zsh's `read -k` reads /dev/tty, which is | dialogs must read the terminal, never fd 0. Reading fd 0 made the rename dialog deaf to every key including ESC, while its piped specs passed (a pipe is not a tty) |
 | the which-key panel runs its commands with `source-file` from inside a POPUP, where tmux has no current pane — so `#{pane_current_path}` expands EMPTY and a new tab silently landed in the session's start dir (the identical key-table bind inherited correctly) | the panel resolves that one format itself before sourcing (`display -p` from a popup does answer for the client's active pane); a blanket expansion is wrong, since other commands carry `#W` / `%%` that tmux must still see |
 
 ## Platform gotchas — Phase 6 Mode B session 2 (2026-07-27)

@@ -276,7 +276,12 @@ case "${MM_STATE:-}" in
   locked|nested) hint_body=exit ;;
 esac
 if [[ -n "$renaming" ]]; then
-  mux_mode::meta rename 2>/dev/null && { mode_color="$MM_COLOR" mode_body="$MM_ICON $MM_TITLE" hint_body="" }
+  # @renaming carries the KIND, so the hint can advertise the keys this
+  # rename actually has: only a SESSION can be rolled a random name.
+  mux_mode::meta rename 2>/dev/null && {
+    mode_color="$MM_COLOR" mode_body="$MM_ICON $MM_TITLE"
+    [[ "$renaming" == session ]] && hint_body=rename_session || hint_body=rename
+  }
 fi
 
 # ---- ssh / fullscreen -----------------------------------------------------
@@ -380,6 +385,13 @@ if [[ "$hint_body" == search ]]; then
   [[ "$search_partial" == 1 ]] && search_count="${search_count}+"
   bodies+=("$I_TCASE case  $I_TWORD word  $I_TWRAP wrap"); kinds+=(shint)
   bodies+=("${search_idx} / ${search_count}"); kinds+=(count)
+elif [[ "$hint_body" == rename_session ]]; then
+  # The roll is advertised HERE rather than inside the input field: bindings
+  # belong with the other bindings. khint bodies are KEYCAP\tLABEL pairs so
+  # the paint below can two-tone them like the fixed `exit` hint.
+  bodies+=("$I_ALT r"$'\t'"random"$'\t'"$I_ESC"$'\t'"cancel"); kinds+=(khint)
+elif [[ "$hint_body" == rename ]]; then
+  bodies+=("$I_ESC"$'\t'"cancel"); kinds+=(khint)
 elif [[ -n "$hint_body" ]]; then
   bodies+=("$I_ALT $I_ESC  exit"); kinds+=(hint)
 fi
@@ -450,6 +462,16 @@ for (( i = 1; i <= n; i++ )); do
     [[ "$sw" == 1 ]] && wg="$c_white" || wg="$fg"
     [[ "$sp" == 1 ]] && pg="$c_white" || pg="$fg"
     out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg}] #[fg=${cg}]${I_TCASE} #[fg=${fg}]case  #[fg=${wg}]${I_TWORD} #[fg=${fg}]word  #[fg=${pg}]${I_TWRAP} #[fg=${fg}]wrap "
+  elif [[ "${kinds[i]}" == khint ]]; then
+    # KEYCAP\tLABEL pairs: keycaps pop, labels stay dark — the same two-tone
+    # zj-hud uses, but the CONTENT comes from the caller instead of being
+    # fixed, so each mode can advertise its own keys.
+    typeset -a hp; hp=("${(@ps:\t:)bodies[i]}")
+    seg=""
+    for (( j = 1; j <= ${#hp}; j += 2 )); do
+      seg+="#[fg=${fg_hi}] ${hp[j]}#[fg=${fg}] ${hp[j+1]} "
+    done
+    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg}]${seg}"
   elif [[ "${kinds[i]}" == hint ]]; then
     # two-tone hint: keycap glyphs pop white-ish, the label stays dark —
     # zj-hud paints keycaps in hint_glyph_on over the mode color.

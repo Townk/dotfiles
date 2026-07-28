@@ -106,6 +106,23 @@ EOS
     The output should include "bg=#a6e3a1"
   End
 
+  # Rename is a MODE, so it wears a pill — and its hint advertises the keys
+  # that kind of rename actually has. The roll is a SESSION affordance; a
+  # window or pane rename must not claim it.
+  It 'a session rename shows the Rename pill and the random-name hint'
+    When call zsh "$W" root 0 main 0 0 session
+    The output should include "Rename"
+    The output should include "random"
+    The output should include "cancel"
+  End
+
+  It 'a window rename offers cancel and nothing about rolling'
+    When call zsh "$W" root 0 main 0 0 window
+    The output should include "Rename"
+    The output should include "cancel"
+    The output should not include "random"
+  End
+
   It 'copy-mode wins as Scroll'
     When call zsh "$W" root 1 main
     The output should include "Scroll"
