@@ -67,6 +67,18 @@ Describe 'mux-rename'
       The output should not include "38;2;"
     End
 
+    # Every other mode's pill arrives free: tmux redraws the status line when
+    # the key table moves. Rename moves an OPTION instead, and an option
+    # change earns no redraw — without an explicit refresh the pill waits for
+    # the next status-interval tick (10s) while the dialog is already up.
+    It 'asks for a repaint when it lights the mode, not only when it leaves'
+      refreshes() {
+        grep -c "refresh-client -S" "$BIN"
+      }
+      When call refreshes
+      The output should equal "2"
+    End
+
     It 'styles that dialog with the rename accent and glyph'
       src() { cat "$BIN"; }
       When call src

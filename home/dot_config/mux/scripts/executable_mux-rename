@@ -50,7 +50,14 @@ typeset -a taddr=(-t "$origin")
 # stack's driver owns exactly one popup, and a stackable rename had it
 # closing this dialog the moment it opened. Cleared on every exit path, so
 # leaving by ESC, Enter or C-c all end the mode the same way.
+#
+# tmux redraws the status line by itself when the KEY TABLE moves, which is
+# how every other mode's pill arrives; an option changing earns no redraw at
+# all, so this one asks — otherwise the pill waits for the next
+# status-interval tick (10s) and the dialog is on screen without the mode
+# showing. The exit path already refreshes for the same reason.
 "$TMUX_BIN" set -g @renaming "$kind" 2>/dev/null || true
+"$TMUX_BIN" refresh-client -S 2>/dev/null || true
 cleanup() {
   "$TMUX_BIN" set -gu @renaming 2>/dev/null || true
   "$TMUX_BIN" refresh-client -S 2>/dev/null || true
