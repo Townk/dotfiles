@@ -346,15 +346,23 @@ zsh-defer eval '[[ -r ${HOMEBREW_PREFIX:-/opt/homebrew}/Library/Taps/homebrew/ho
 
 zsh-defer source ~/.config/zsh/keybindings.sh
 
+# ── mux shim ───────────────────────────────────────────────────────────────
+# The BOOTSTRAP flavor, deliberately: the full mux.zsh pulls in
+# pick/input/theme-common, which cost ~50ms and whose `require_cmd fzf` runs
+# at source time and `die`s — i.e. exits the login shell — on a box without
+# fzf. Neither belongs on a startup path. This half is backend detection plus
+# the query verbs, ~1.5ms, no external tools, and it leaves mux::* defined for
+# interactive use.
+source ~/.local/lib/mux-bootstrap.zsh
+
 # ── Welcome screen ─────────────────────────────────────────────────────────
-# Shown only when this is the lone pane of the current Zellij session (i.e.
-# just opened a terminal). Summing every tab's selectable tiled + floating
-# panes ignores HUD/which-key/notify plugin panes, so the count is 1 only on a
-# fresh session; new tabs, panes, and reattaches read > 1 and stay quiet. A new
-# window (Cmd+N) is a new session, so it shows again.
-if [[ -n "$ZELLIJ" ]] && \
-   [[ "$(zellij action list-tabs -p --json 2>/dev/null \
-         | jq 'map(.selectable_tiled_panes_count + .selectable_floating_panes_count) | add' 2>/dev/null)" -eq 1 ]]; then
+# Shown only when this is the lone pane of the current session (i.e. just
+# opened a terminal). mux::pane_count sums the panes of every tab/window in
+# the session, so the count is 1 only on a fresh one; new tabs, panes, and
+# reattaches read > 1 and stay quiet. A new window (Cmd+N) is a new session,
+# so it shows again. Backend-neutral since the tmux migration — gating on
+# $ZELLIJ left this silent under tmux, which is the default backend.
+if mux::available && [[ "$(mux::pane_count)" -eq 1 ]]; then
   type motd >/dev/null 2>&1 && motd
   print -P -- "                                        %F{$C_HEX_OVERLAY0}━━━━━━━━ ❖ ━━━━━━━━%f\n"
   type terminal_commands >/dev/null 2>&1 && terminal_commands

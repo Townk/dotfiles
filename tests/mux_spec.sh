@@ -880,3 +880,145 @@ Describe 'mux.zsh — mux::available honours a PINNED backend'
     The status should be failure
   End
 End
+
+# mux::pane_count backs the .zshrc welcome screen, which shows itself only in a
+# session's lone pane. It was a raw `zellij action list-tabs` call in .zshrc
+# until the tmux migration, so under the (default) tmux backend the whole
+# welcome screen silently stopped rendering. Include the BOOTSTRAP flavor
+# here, not mux.zsh: that is the one .zshrc sources, so this also pins that the
+# lean half can answer the question on its own.
+Describe 'mux-bootstrap.zsh — mux::pane_count (zellij)'
+  Include home/dot_local/lib/mux-bootstrap.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    unset TMUX MUX_BACKEND
+    export ZELLIJ=1
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset ZELLIJ_BIN ZELLIJ; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # Emit the `list-tabs -p --json` shape with the given per-tab counts.
+  zj_tabs() {
+    { echo '#!/usr/bin/env zsh'; echo "print -r -- '$1'"; } > "$TEST_TMP/zellij"
+    chmod +x "$TEST_TMP/zellij"
+    export ZELLIJ_BIN="$TEST_TMP/zellij"
+  }
+
+  It 'counts 1 for a fresh single-pane session'
+    zj_tabs '[{"selectable_tiled_panes_count":1,"selectable_floating_panes_count":0}]'
+    When call mux::pane_count
+    The output should equal "1"
+  End
+
+  It 'sums tiled and floating panes across every tab'
+    zj_tabs '[{"selectable_tiled_panes_count":2,"selectable_floating_panes_count":1},{"selectable_tiled_panes_count":3,"selectable_floating_panes_count":0}]'
+    When call mux::pane_count
+    The output should equal "6"
+  End
+
+  # `add` on an empty array is null, which would compare as neither 1 nor >1.
+  It 'reports 0 rather than null when there are no tabs'
+    zj_tabs '[]'
+    When call mux::pane_count
+    The output should equal "0"
+  End
+End
+
+Describe 'mux-bootstrap.zsh — mux::pane_count (tmux)'
+  Include home/dot_local/lib/mux-bootstrap.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    unset ZELLIJ MUX_BACKEND
+    export TMUX=/tmp/sock,1,0
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset MUX_TMUX_BIN TMUX; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  tx_panes() {
+    { echo '#!/usr/bin/env zsh'
+      echo "echo \"\$*\" >> \"$TEST_TMP/tx-args.txt\""
+      echo "[[ \"\$1\" == list-panes ]] && printf '%s' '$1'"
+      echo 'exit 0'
+    } > "$TEST_TMP/tmux"
+    chmod +x "$TEST_TMP/tmux"
+    export MUX_TMUX_BIN="$TEST_TMP/tmux"
+  }
+
+  It 'counts 1 for a fresh single-pane session'
+    tx_panes '%0
+'
+    When call mux::pane_count
+    The output should equal "1"
+  End
+
+  # -s is the whole session, not just the current window: a second window is as
+  # much proof of an existing session as a second pane, and the welcome screen
+  # must stay quiet for both.
+  It 'counts panes across every window of the session'
+    tx_panes '%0
+%1
+%2
+'
+    When call mux::pane_count
+    The output should equal "3"
+    The contents of file "$TEST_TMP/tx-args.txt" should include "list-panes -s"
+  End
+
+  # BSD wc pads its count with leading blanks, which broke a numeric compare.
+  It 'emits a bare integer with no padding'
+    tx_panes '%0
+%1
+'
+    When call mux::pane_count
+    The output should equal "2"
+  End
+
+  It 'reads 0 when the server answers nothing'
+    tx_panes ''
+    When call mux::pane_count
+    The output should equal "0"
+  End
+End
+
+# The split exists so a shell STARTUP path can load the shim: pick-common runs
+# `require_cmd fzf` at source time and die()s the shell when fzf is missing,
+# and the three *-common libraries cost ~50ms. Pin the boundary so a later
+# edit cannot quietly drag the widget stack back into the lean flavor.
+Describe 'mux-bootstrap.zsh — flavor boundary'
+  Include home/dot_local/lib/mux-bootstrap.zsh
+
+  It 'defines the query verbs'
+    When call whence -w mux::pane_count
+    The output should include "function"
+  End
+
+  It 'does not pull in the widget layer'
+    When call whence -w mux::pick
+    The output should equal "mux::pick: none"
+    The status should be failure
+  End
+
+  It 'does not pull in pick-common'
+    When call whence -w pick::start
+    The output should equal "pick::start: none"
+    The status should be failure
+  End
+End
+
+Describe 'mux.zsh — full flavor still exposes everything'
+  Include home/dot_local/lib/mux.zsh
+
+  It 'has the widget layer'
+    When call whence -w mux::pick
+    The output should include "function"
+  End
+
+  It 'has the bootstrap query verbs too'
+    When call whence -w mux::pane_count
+    The output should include "function"
+  End
+End

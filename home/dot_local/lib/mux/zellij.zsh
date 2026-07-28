@@ -305,6 +305,16 @@ _mux_zj_current_tab_name() {
 
 _mux_zj_focus_tab() { "$(_mux_zj_bin)" action go-to-tab "$1" 2>/dev/null; }
 
+# _mux_zj_pane_count — selectable panes summed over every tab of the session.
+# "selectable" is what excludes the HUD / which-key / notify plugin panes:
+# they are panes to zellij but not to a human, so counting them would make a
+# freshly opened session read as an already-busy one. The tmux twin needs no
+# such filter — its floats are display-popups, which are not panes at all.
+_mux_zj_pane_count() {
+  "$(_mux_zj_bin)" action list-tabs -p --json 2>/dev/null |
+    jq 'map(.selectable_tiled_panes_count + .selectable_floating_panes_count) | add // 0' 2>/dev/null
+}
+
 # _mux_zj_pane_cwd <pid> — zellij exposes no pane cwd, so it comes from the
 # kernel via the pane's root PID (the same resolution copy-pwd uses).
 _mux_zj_pane_cwd() {

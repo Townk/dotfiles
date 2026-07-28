@@ -246,6 +246,14 @@ _mux_tx_send_key() {
 _mux_tx_current_tab() { "$(_mux_tx_bin)" display -p '#{window_index}' 2>/dev/null; }
 _mux_tx_current_tab_name() { "$(_mux_tx_bin)" display -p '#{window_name}' 2>/dev/null; }
 _mux_tx_focus_tab() { "$(_mux_tx_bin)" select-window -t ":$1" 2>/dev/null; }
+
+# _mux_tx_pane_count — panes across every window of the session (-s), the
+# twin of _mux_zj_pane_count. awk rather than `wc -l` because wc pads its
+# output with leading blanks on BSD, and the caller compares the result
+# numerically. No output at all (no server, not in a session) reads as 0.
+_mux_tx_pane_count() {
+  "$(_mux_tx_bin)" list-panes -s -F '#{pane_id}' 2>/dev/null | awk 'END { print NR }'
+}
 _mux_tx_pane_cwd() { "$(_mux_tx_bin)" display -p '#{pane_current_path}' 2>/dev/null; }
 _mux_tx_terminal_size() {
   "$(_mux_tx_bin)" display -p '#{client_width} #{client_height}' 2>/dev/null
