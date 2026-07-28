@@ -32,8 +32,12 @@ setopt no_unset
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
 PMSET="${PMSET_BIN:-/usr/bin/pmset}"
 NETWORKSETUP="${NETWORKSETUP_BIN:-/usr/sbin/networksetup}"
-OSASCRIPT="${WIDGETS_OSASCRIPT_BIN:-/usr/bin/osascript}"
 FS_STATE="${WIDGETS_FULLSCREEN_STATE:-$HOME/.local/state/wezterm/fullscreen_state}"
+# Ghostty's own mirror. WezTerm pushes its state from wezterm.lua on every
+# window event; Ghostty has no such hook, so mux-fullscreen-probe fills this
+# one from the client-resized hook — asynchronously, because ASKING costs
+# seconds (see below) and this file is read on every repaint.
+GHOSTTY_FS_STATE="${WIDGETS_GHOSTTY_FULLSCREEN_STATE:-$HOME/.local/state/mux/ghostty_fullscreen}"
 HOST_ALIAS="${WIDGETS_HOSTNAME_ALIAS:-$HOME/.hostname-alias}"
 if [[ -n "${WIDGETS_THEME_JSON:-}" ]]; then
   THEME_JSON="$WIDGETS_THEME_JSON"
@@ -295,32 +299,17 @@ if [[ -n "$sess" ]]; then
   v="$("$TMUX_BIN" show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""
   [[ "$v" == SSH_CONNECTION=* ]] && is_ssh=1
 fi
-ghostty_is_fullscreen() {
-  local state
-  state="$("$OSASCRIPT" <<'APPLESCRIPT'
-tell application "System Events"
-    if not (exists process "Ghostty") then return "NOT_RUNNING"
-    set p to first process whose name is "Ghostty"
-    if (count of windows of p) = 0 then return "NO_WINDOWS"
-    tell window 1 of p
-        if value of attribute "AXFullScreen" is true then return "NATIVE_FULLSCREEN"
-        set window_size to size
-    end tell
-    tell application "Finder" to set screen_bounds to bounds of window of desktop
-    if (item 1 of window_size) >= (item 3 of screen_bounds) and ¬
-        (item 2 of window_size) >= (item 4 of screen_bounds) then
-        return "NON_NATIVE_FULLSCREEN"
-    end if
-    return "WINDOWED"
-end tell
-APPLESCRIPT
-  )" || return 1
-  [[ "$state" == NATIVE_FULLSCREEN || "$state" == NON_NATIVE_FULLSCREEN ]]
-}
-
+# NOTHING in here may ask the system a question that can BLOCK. tmux runs
+# this as a `#()` job and will not start another while one is in flight, so
+# a slow render does not merely lag the bar — it stops the bar being
+# re-rendered at all between runs. Asking the accessibility API whether
+# Ghostty is fullscreen cost 4-11 SECONDS a repaint (measured), so every mode
+# pill was gone before the ribbon was next expanded: Alt+w lit nothing,
+# because the whole mode began and ended inside one render. Both terminals
+# therefore read a MIRROR that someone else keeps up to date.
 is_fullscreen=0
 if [[ "${client_term:l}" == *ghostty* ]]; then
-  ghostty_is_fullscreen && is_fullscreen=1
+  [[ "$(cat "$GHOSTTY_FS_STATE" 2>/dev/null)" == true ]] && is_fullscreen=1
 elif [[ "$(cat "$FS_STATE" 2>/dev/null)" == true ]]; then
   is_fullscreen=1
 fi

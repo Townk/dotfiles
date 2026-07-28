@@ -1,0 +1,69 @@
+#!/usr/bin/env zsh
+# mux-fullscreen-probe — refresh Ghostty's fullscreen mirror, off the hot path.
+#
+# WezTerm pushes its fullscreen state into a state file from wezterm.lua on
+# every window event, and the ribbon just reads it. Ghostty offers no such
+# hook, so the state has to be ASKED for — and asking is expensive: a round
+# trip through System Events' accessibility API measured 4-11 seconds on this
+# machine. Doing that from the ribbon renderer (which is a tmux `#()` job)
+# stalled the entire status bar, because tmux will not re-run a job while the
+# previous one is still going: every mode pill came and went inside a single
+# render and the bar never showed one.
+#
+# So the question is asked HERE, in the background, driven by the tmux hook
+# for the only event that can change the answer — a client resize, which
+# every fullscreen transition produces — and the answer is left in a file the
+# renderer reads for free.
+
+emulate -L zsh
+setopt no_unset
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+OSASCRIPT="${WIDGETS_OSASCRIPT_BIN:-/usr/bin/osascript}"
+STATE="${WIDGETS_GHOSTTY_FULLSCREEN_STATE:-$HOME/.local/state/mux/ghostty_fullscreen}"
+
+# A resize arrives as a BURST — dragging a window edge fires the hook for
+# every intermediate size, and each probe is seconds long. mkdir is the
+# atomic test-and-set: whoever wins probes, the rest drop out, and the
+# survivor's answer covers the whole burst because it runs after it.
+LOCK="${TMPDIR:-/tmp}/mux-fullscreen-probe.lock"
+mkdir "$LOCK" 2>/dev/null || exit 0
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+
+state="$("$OSASCRIPT" <<'APPLESCRIPT' 2>/dev/null
+tell application "System Events"
+    if not (exists process "Ghostty") then return "NOT_RUNNING"
+    set p to first process whose name is "Ghostty"
+    if (count of windows of p) = 0 then return "NO_WINDOWS"
+    tell window 1 of p
+        if value of attribute "AXFullScreen" is true then return "NATIVE_FULLSCREEN"
+        set window_size to size
+    end tell
+    tell application "Finder" to set screen_bounds to bounds of window of desktop
+    if (item 1 of window_size) >= (item 3 of screen_bounds) and ¬
+        (item 2 of window_size) >= (item 4 of screen_bounds) then
+        return "NON_NATIVE_FULLSCREEN"
+    end if
+    return "WINDOWED"
+end tell
+APPLESCRIPT
+)" || exit 0
+
+# NOT_RUNNING from a Ghostty that is plainly running means the asker was not
+# granted Accessibility, not that the window went away. An untrustworthy
+# answer must leave the mirror ALONE — overwriting it with `false` would
+# quietly disable the fullscreen segments and look like a rendering bug.
+case "$state" in
+  NATIVE_FULLSCREEN | NON_NATIVE_FULLSCREEN) answer=true ;;
+  WINDOWED) answer=false ;;
+  *) exit 0 ;;
+esac
+
+mkdir -p "${STATE:h}" 2>/dev/null || exit 0
+# Written whole, so a repaint mid-write cannot read half a word.
+print -rn -- "$answer" > "$STATE.tmp" 2>/dev/null || exit 0
+mv -f "$STATE.tmp" "$STATE" 2>/dev/null || exit 0
+
+# The mirror moved; the bar is showing the old answer until something asks
+# for a repaint.
+"$TMUX_BIN" refresh-client -S 2>/dev/null || true

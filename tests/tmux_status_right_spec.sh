@@ -55,6 +55,7 @@ EOS
     export NETWORKSETUP_BIN="$TEST_TMP/networksetup"
     export WIDGETS_OSASCRIPT_BIN="$TEST_TMP/osascript"
     export WIDGETS_FULLSCREEN_STATE="$TEST_TMP/fullscreen_state"
+    export WIDGETS_GHOSTTY_FULLSCREEN_STATE="$TEST_TMP/ghostty_fullscreen"
     export WIDGETS_HOSTNAME_ALIAS="$TEST_TMP/hostname-alias"
     export WIDGETS_THEME_JSON="$TEST_TMP/theme.json"
 
@@ -65,6 +66,7 @@ EOS
   cleanup() {
     rm -rf "$TEST_TMP"
     unset MUX_TMUX_BIN PMSET_BIN NETWORKSETUP_BIN WIDGETS_OSASCRIPT_BIN WIDGETS_FULLSCREEN_STATE \
+      WIDGETS_GHOSTTY_FULLSCREEN_STATE \
       WIDGETS_HOSTNAME_ALIAS WIDGETS_THEME_JSON STUB_SSH SSH_CONNECTION SSH_CLIENT STUB_POWER STUB_PCT \
       STUB_WIFI STUB_GHOSTTY_FULLSCREEN G_DIV G_WIFI_ON G_WIFI_OFF G_CLOCK G_HOST
   }
@@ -88,16 +90,46 @@ EOS
 
   It 'detects Ghostty non-native fullscreen independently of WezTerm state'
     printf 'false' > "$TEST_TMP/fullscreen_state"
-    export STUB_GHOSTTY_FULLSCREEN=NON_NATIVE_FULLSCREEN
+    printf 'true' > "$TEST_TMP/ghostty_fullscreen"
     When call zsh "$W" root 0 main 0 0 '' 0 0 '' 120 '' '' 0 '' xterm-ghostty
     The output should include "$G_CLOCK"
   End
 
   It 'does not reuse stale WezTerm fullscreen state for Ghostty'
     printf 'true' > "$TEST_TMP/fullscreen_state"
-    export STUB_GHOSTTY_FULLSCREEN=WINDOWED
+    printf 'false' > "$TEST_TMP/ghostty_fullscreen"
     When call zsh "$W" root 0 main 0 0 '' 0 0 '' 120 '' '' 0 '' xterm-ghostty
     The output should equal ""
+  End
+
+  # tmux runs this renderer as a `#()` job and will not start another while
+  # one is in flight, so anything slow in here does not lag the bar — it
+  # stops the bar being re-expanded at all between runs. A System Events
+  # probe for Ghostty's fullscreen state cost 4-11 SECONDS a repaint, which
+  # meant a mode began and ended inside one render and no pill ever
+  # appeared. Nothing in the render path may ask a question that blocks.
+  Describe 'the render path'
+    src() { cat "$W"; }
+
+    It 'asks the system nothing that can block'
+      When call src
+      # the mirrors are files; refreshing them is somebody else's job
+      The output should not include "osascript"
+      The output should not include "System Events"
+      The output should not include "AXFullScreen"
+    End
+
+    It 'renders far faster than a status tick'
+      timed() {
+        s=$(date +%s)
+        zsh "$W" root 0 main 0 0 '' 0 0 '' 120 '' '' 0 '' xterm-ghostty >/dev/null
+        e=$(date +%s)
+        # a whole second is already 10x the budget; the regression was 5-11s
+        [ $((e - s)) -lt 1 ] && echo fast || echo "slow: $((e - s))s"
+      }
+      When call timed
+      The output should equal "fast"
+    End
   End
 
   It 'a key table adds the mode pill and re-tints the ribbon to the mode color'

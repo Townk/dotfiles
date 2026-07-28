@@ -117,6 +117,16 @@ setw -g automatic-rename-format "#{?pane_in_mode,[tmux],$win_osc_title}#{?pane_d
 # otherwise rename a session on the wrong server or find none at all.
 set-hook -g after-new-session 'if-shell -F "#{m/r:^[0-9]+$,#{session_name}}" { run-shell -b "MUX_BACKEND=tmux MUX_TMUX_SOCKET=#{q:socket_path} {{ .chezmoi.homeDir }}/.local/bin/mux-random-session-name --apply #{q:session_name} >/dev/null" }'
 
+# Ghostty's fullscreen state, refreshed on the only event that can change it.
+# WezTerm pushes its own state from wezterm.lua; Ghostty has no hook, and
+# ASKING costs seconds through the accessibility API — far too slow for the
+# ribbon renderer, which is a `#()` job tmux will not re-run while one is in
+# flight (that is how a 5s probe stopped every mode pill from ever showing).
+# A fullscreen transition always resizes the client, so the resize is the
+# trigger, backgrounded so it never blocks the command queue.
+set-hook -g client-resized 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-fullscreen-probe"'
+set-hook -g client-attached 'run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/scripts/mux-fullscreen-probe"'
+
 # Refresh these into a session's environment on attach: tmux overrides the
 # PANE env (TERM_PROGRAM=tmux), so the session env is the only truthful
 # record of the outer terminal — image-protocol-support.zsh and yazi both
