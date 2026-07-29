@@ -1,0 +1,45 @@
+# mux-tab-proc.sh — tell the tmux tab pill what the pane is really running.
+#
+# #{pane_current_command} is not "the command you ran": tmux names a pane
+# after a process it picks out of the pane's foreground process GROUP, and on
+# macOS that is not the group leader. An `agent` pane (leader
+# ~/.local/bin/agent, five node/npm children sharing its pgid) reads as
+# "node" — measured 2026-07-29 — so the pill drew node's hexagon instead of
+# the Cursor cube. zj-hud is handed the pane's running command by zellij and
+# never had to guess.
+#
+# The shell is the one place that knows for certain, because preexec has the
+# line it is about to run. The name is PUSHED onto the pane as @win_proc,
+# which the pill prefers over #{pane_current_command} (win_cmd), and dropped
+# in precmd, when the pane is a shell at a prompt again — the pill's cwd
+# branch depends on that being true.
+#
+# Only .chezmoidata/mux.yaml's muxHiddenProcs are stamped. A `tmux set`
+# round-trip costs ~10ms (measured), which belongs on the launch of a
+# long-running agent and not on every command tmux already names correctly.
+# Synchronous for the same reason the list is short: a backgrounded set and a
+# backgrounded clear can land out of order, and a stamp that outlives its
+# command would keep the cwd out of the pill.
+[[ -o interactive ]] || return 0
+
+typeset -ga _MUX_HIDDEN_PROCS=({{ range .muxHiddenProcs }}{{ . | quote }} {{ end }})
+
+_mux_tab_proc_stamp() {
+  [[ -n "${TMUX:-}" ]] || return 0
+  local -a words=(${(z)1})
+  local name="${words[1]:t}"
+  (( ${_MUX_HIDDEN_PROCS[(Ie)$name]} )) || return 0
+  "${MUX_TMUX_BIN:-tmux}" set -p -t "${TMUX_PANE:-}" @win_proc "$name" 2>/dev/null
+  _MUX_TAB_PROC_STAMPED=1
+  return 0
+}
+
+_mux_tab_proc_clear() {
+  (( ${_MUX_TAB_PROC_STAMPED:-0} )) || return 0
+  _MUX_TAB_PROC_STAMPED=0
+  "${MUX_TMUX_BIN:-tmux}" set -up -t "${TMUX_PANE:-}" @win_proc 2>/dev/null
+  return 0
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec _mux_tab_proc_stamp
+add-zsh-hook precmd _mux_tab_proc_clear

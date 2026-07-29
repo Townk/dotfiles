@@ -88,7 +88,8 @@ Status legend: ✅ parity · 🟡 approximation (documented divergence) ·
 | user-renamed tab | tab icon + name | `@win_icon`/󰓩 + `#W` (automatic-rename off) | ✅ | |
 | app's own title (agents' session + progress) | `pane_osc_title(...)` beats the process name | OSC 0/2 → `#{pane_title}` → `automatic-rename-format` → `#W` | ✅ | tmux re-evaluates the format as the title changes and fires window-renamed, so progress repaints without shortening status-interval |
 | per-process glyph | `icons::process_icon` | generated `#{?}` chain from `.muxTabIcons` | ✅ | ported 1:1; one list feeds the tmux side, Phase 8 merges the two |
-| shell → cwd | home/dir icon + pretty cwd | same | ✅ | |
+| which process the glyph is FOR | zellij hands the plugin the pane's running command (`get_pane_running_command`) | `@win_proc` (shell `preexec`) preferred over `#{pane_current_command}` | ✅ | tmux picks a process out of the pane's foreground process GROUP, not the leader — an agent with node children reads as "node". `.muxHiddenProcs` is what the shell stamps |
+| shell → cwd | home/dir icon + pretty cwd | same | ✅ | the pill's shell branch carries `is_shell`'s four names (bash/zsh/fish/nu), which is also why the icon table has no shell keys |
 | project-aware path abbreviation | `abbreviated_project_path` | `mux-tab-path`, pushed onto `@win_path` | ✅ | segments above the project root shrink to an initial, then collapse to `…`; the root and the tail stay whole |
 | zoom / sync / alarm icons | extra_icons | `win_extras` | ✅ | Phase 4 |
 

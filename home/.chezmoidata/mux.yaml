@@ -19,10 +19,16 @@ muxBackend: tmux
 # command; anything unlisted falls back to the generic run glyph, exactly as
 # the plugin's `unwrap_or_else(tab_process)` does.
 #
-# Keys are matched against #{pane_current_command}, so they are process
-# BASENAMES. A command that runs under an interpreter reports the
-# interpreter (a node-based CLI is "node"), which is why node has an entry
-# of its own — the window NAME still comes from the app's OSC title.
+# Keys are matched against the pill's normalised command — @win_proc when the
+# shell has stamped one, else #{pane_current_command} — so they are process
+# BASENAMES. node keeps an entry of its own: a node-based CLI that is NOT in
+# muxHiddenProcs below still reports the interpreter.
+#
+# Shells are deliberately absent even though icons.rs lists bash/zsh/fish:
+# the plugin's compose_body returns before process_icon for anything is_shell
+# says is a shell, so those three entries can never render. The pill's own
+# shell branch (win_body in the theme) shows the cwd for is_shell's four
+# names instead — bash, zsh, fish, nu.
 #
 # Ported 1:1 from the plugin so both bars speak the same glyph vocabulary;
 # Phase 8 is where the two stop being separate lists.
@@ -56,4 +62,27 @@ muxTabIcons:
   psql: ""
   curl: ""
   wget: ""
-  sudo: "\U000F0292"
+  sudo: "\U0000F292"
+
+# Commands tmux cannot name, so the shell names them for it.
+#
+# #{pane_current_command} is not "the command you ran": tmux picks a process
+# out of the pane's foreground process GROUP, and on macOS that is not the
+# group leader. Measured 2026-07-29 on an `agent` pane — leader
+# ~/.local/bin/agent, five node/npm children sharing its pgid — tmux reported
+# "node", so the pill drew node's hexagon instead of the Cursor cube. zj-hud
+# never had to guess: zellij hands it the pane's running command
+# (get_pane_running_command / Event::CommandChanged).
+#
+# functions.d/mux-tab-proc.sh stamps these onto the pane as @win_proc in
+# preexec and drops it again in precmd; the pill prefers @win_proc over
+# #{pane_current_command} (win_cmd, declared in both tmux.conf and the theme).
+# Only the commands listed here are stamped: a `tmux set` round-trip costs
+# ~10ms (measured), worth paying once when a long-running agent starts and not
+# on every command tmux already names correctly.
+muxHiddenProcs:
+  - agent
+  - cursor-agent
+  - claude
+  - pi
+  - pi-coding-agent
