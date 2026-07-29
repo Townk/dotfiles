@@ -18,11 +18,17 @@
 #   a `sticky` action → nothing (the mode survives, like tmux's own table)
 # A `to` that names a state with neither a panel nor a key table (rename) is
 # a dialog's label, not a mode you can stand in: those clear too.
+#
+# A `dialog` entry clears with MUX_STACK_KEEP_POPUP=1: its command and this
+# clear are two independent jobs, so the clear's popup teardown would race the
+# dialog's own popup and close it (the picker's "returned 129" — see
+# mux_stack::sync). The dialog owns the screen from here on.
 {{ range $name, $t := $km.tables }}{{ if ne $name "copy" }}
 # --- {{ $t.title }}{{ if hasKey $t "parent" }} (from {{ $t.parent }}){{ end }} ---
 {{ range $e := $t.entries }}{{ if not (hasKey $e "panel_only") -}}
 {{ $flag := "" }}{{ if ne $name "prefix" }}{{ $flag = printf "-T %s " $name }}{{ end -}}
 {{ $op := printf " ; run-shell -b \"%s clear '#{client_tty}'\"" $stack -}}
+{{ if hasKey $e "dialog" }}{{ $op = printf " ; run-shell -b \"MUX_STACK_KEEP_POPUP=1 %s clear '#{client_tty}'\"" $stack }}{{ end -}}
 {{ if hasKey $e "sticky" }}{{ $op = "" }}{{ end -}}
 {{ if hasKey $e "to" }}{{ $st := index $km.which_key.states $e.to -}}
 {{ if or $st.table $st.key_table }}{{ $op = printf " ; run-shell -b \"%s push %s '#{client_tty}'\"" $stack $e.to }}{{ end }}{{ end -}}

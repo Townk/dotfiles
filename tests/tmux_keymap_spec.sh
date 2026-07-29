@@ -319,6 +319,20 @@ Describe 'tmux keymap tables'
     The output should not include 'select-pane -L \; run-shell'          # stay
   End
 
+  It 'lets a dialog entry keep the popup its own command opens'
+    # A bind's command and its clear are two independent jobs, so the clear's
+    # popup teardown raced the dialog's popup and closed it — the clipboard
+    # picker's "tmux-popup … returned 129" (see mux_stack::sync). Only the
+    # dialogs opt out: an ordinary action still hands its popup teardown to
+    # the stack.
+    dialogs() { tmux -L kmspec list-keys | grep MUX_STACK_KEEP_POPUP; }
+    When call dialogs
+    The output should include 'pick-clipboard'          # prefix c
+    The output should include 'mux-quit-confirm'        # prefix q
+    The output should include 'mux-rename'              # the rename dialogs
+    The output should not include 'kill-pane'           # an action, not a dialog
+  End
+
   It 'generated mode tables carry their commands in brace blocks'
     # a bare `;` in a config file is a command SEPARATOR — the generator
     # wraps every command so multi-command binds cannot self-execute.

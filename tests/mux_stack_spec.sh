@@ -406,6 +406,85 @@ EOS
       The output should equal '1'
     End
 
+    # The teardown is the ONE call here that cannot be aimed at a particular
+    # popup, only at a client — so it closes whatever popup that client has up.
+    # A `dialog` key-table bind fires its own popup and this clear as two
+    # independent run-shell -b jobs; the dialog reaches display-popup in one
+    # round trip while clear needs several, so the -C landed on the DIALOG and
+    # its waiting client exited 129 — the clipboard picker's "tmux-popup …
+    # returned 129".
+    ms_tty() { tmux list-clients -F '#{client_tty}' | head -1; }
+    hold_popup() {         # a real popup on the real client + a live driver
+      tmux set -g @mux_wk_driver $$ 2>/dev/null
+      rm -f "$MS_TMP/popup"
+      tmux display-popup -c "$(ms_tty)" -E \
+        "sh -c 'touch $MS_TMP/popup; sleep 10'" >/dev/null 2>&1 &
+      MS_POPUP=$!
+      local i=0
+      while (( i < 100 )) && [[ ! -e "$MS_TMP/popup" ]]; do sleep 0.05; (( i++ )); done
+    }
+    popup_state() {        # the waiting client is what -C makes exit
+      sleep 0.5
+      kill -0 $MS_POPUP 2>/dev/null && print -r -- survived || print -r -- closed
+    }
+    end_popup() {          # or reset_stack waits out a driver claim that lives
+      tmux display-popup -C -c "$(ms_tty)" 2>/dev/null
+      tmux set -g @mux_wk_driver 0 2>/dev/null
+      wait $MS_POPUP 2>/dev/null
+      true
+    }
+    clear_as() {           # clear_as <keep-popup> <client>
+      MUX_STACK_KEEP_POPUP="$1" MUX_TMUX_BIN=tmux MUX_LIB_DIR="$PWD/home/dot_local/lib" \
+      WK_DATA="$MS_TMP/wk.data" MUX_WK="$MS_TMP/wk" \
+        zsh "$PWD/home/dot_config/mux/scripts/executable_mux-stack" clear "$2"
+    }
+
+    It 'takes the panel popup down when the mode ends'
+      torn_down() { hold_popup; clear_as '' "$(ms_tty)"; popup_state; end_popup }
+      When call torn_down
+      The output should equal 'closed'
+    End
+
+    It 'leaves the popup alone for a caller opening one of its own'
+      # MUX_STACK_KEEP_POPUP: the dialog owns the screen from here on, and the
+      # -C would close the dialog rather than the panel it was meant for.
+      kept() { hold_popup; clear_as 1 "$(ms_tty)"; popup_state; end_popup }
+      When call kept
+      The output should equal 'survived'
+    End
+
+    It 'aims the teardown at the client whose mode ended'
+      # Untargeted, -C reaches for tmux's idea of the current client — which,
+      # with a second terminal attached, is somebody else's popup.
+      elsewhere() { hold_popup; clear_as '' /dev/ttyNOBODY; popup_state; end_popup }
+      When call elsewhere
+      The output should equal 'survived'
+    End
+
+    # Skipping the teardown strands nothing: a panel that lands after the mode
+    # ended has nobody left to close it, so it reads the stack it was drawn for
+    # and exits on finding the mode gone. Tty-less here, so a panel that DID
+    # paint shows up as bytes on stdout.
+    panel_bytes() {
+      [[ -n "$1" ]] && tmux set -g @mux_stack "$1"
+      MUX_TMUX_BIN=tmux TMUX_BIN=tmux MUX_LIB_DIR="$PWD/home/dot_local/lib" \
+      WK_DATA="$MS_TMP/wk.data" \
+        zsh "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" panel prefix \
+        </dev/null | wc -c | tr -d ' '
+    }
+
+    It 'closes a panel that arrives after the mode ended'
+      When call panel_bytes ''
+      The output should equal '0'
+      The stderr should equal ''        # it never even reached the keyread
+    End
+
+    It 'still draws the panel for a mode that is standing'
+      When call panel_bytes 'command:1'
+      The output should not equal '0'
+      The stderr should include 'terminal'   # painted, then read: no tty here
+    End
+
     It 'leaves the popup to the driver when the panel itself moved the stack'
       # inside the panel a popup is ALREADY up; it may not open a second one
       # (a popup over a popup silently mutates the outer one)

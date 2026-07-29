@@ -337,8 +337,21 @@ mux_stack::sync() {
     # run-shell that triggered sync then never returned (Mode B find).
     (( driver )) || \
       "$MUX_TMUX_BIN" run-shell -b "'$MUX_WK' open '$client'" 2>/dev/null
-  else
-    (( driver )) && "$MUX_TMUX_BIN" display-popup -C 2>/dev/null
+  # The teardown closes whatever popup that CLIENT has up — named, because an
+  # untargeted -C reaches for the wrong terminal as soon as a second one
+  # attaches — and tmux offers no way to aim it at the panel's popup in
+  # particular. So a caller that is opening a popup of its own says
+  # MUX_STACK_KEEP_POPUP=1 and takes the teardown on itself, or the -C kills
+  # that popup: a `dialog` key-table bind fires the dialog and this clear as
+  # two independent run-shell -b jobs, the dialog reaches display-popup in one
+  # round trip while clear needs several, and the -C then lands on the dialog
+  # — whose waiting client exits exactly 129 (measured: that was the clipboard
+  # picker's "returned 129"). Skipping it strands nothing, because a panel
+  # arriving after the dialog cannot draw over it (tmux runs no command for a
+  # popup aimed at a client that already has one, measured) and a panel that
+  # gets there first closes itself on the empty stack it reads.
+  elif (( driver )) && [[ -z "${MUX_STACK_KEEP_POPUP:-}" ]]; then
+    "$MUX_TMUX_BIN" display-popup "${ct[@]}" -C 2>/dev/null
   fi
   return 0
 }

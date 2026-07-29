@@ -587,6 +587,14 @@ _panel() {
   # A popup is already up (this one) and the driver owns it — the stack must
   # not try to open another from in here.
   export MUX_STACK_INPANEL=1
+  # This popup was asked for before the mode ended, and the mode may have
+  # ended while it was opening: a key pressed before the panel is up goes to
+  # the KEY TABLE (a popup swallows keys, so the table only ever wins this
+  # race), and a `dialog` bind there clears the stack without tearing the
+  # popup down — that teardown is what used to kill the dialog's own popup.
+  # So nobody else will close a stale panel: it reads the stack it was drawn
+  # for and, finding the mode gone, exits. The exit IS the teardown.
+  mux_stack::top || return 0
   local rows cols
   local -a ct; [[ -n "$CLIENT" ]] && ct=(-c "$CLIENT")
   rows="$("$TMUX_BIN" display -p "${ct[@]}" '#{client_height}' 2>/dev/null)"; [[ "$rows" == <-> ]] || rows=40
