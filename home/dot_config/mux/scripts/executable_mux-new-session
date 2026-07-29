@@ -1,0 +1,42 @@
+#!/usr/bin/env zsh
+# mux-new-session [client-tty] [cwd] — create a session and move the CALLING
+# client to it. Bound to `s` in the session mode.
+#
+# Not a plain `new-session`: the which-key panel dispatches a binding with
+# `tmux source-file` from INSIDE its popup, and an attaching new-session takes
+# the terminal of the tmux process that issued it — which is the popup's pty.
+# The new session was therefore drawn inside the panel (measured: the client
+# ended up on a session the popup owned). Creating it detached and switching
+# afterwards never touches the caller's tty, so the panel path and the key
+# table path do the same thing.
+#
+# The name is generated here rather than left to tmux: an auto-named session is
+# "1", and the after-new-session hook in tmux.conf renames numeric names the
+# moment they appear, so a name captured from `new-session -P` could already be
+# gone by the time switch-client asked for it.
+#
+# tmux only — Zellij's session mode answers `s` with the session-manager plugin.
+
+set -euo pipefail
+
+TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+client="${1:-}"
+cwd="${2:-}"
+
+name="$("${MUX_RANDOM_NAME_BIN:-$HOME/.local/bin/mux-random-session-name}")"
+
+typeset -a start_dir target
+start_dir=()
+if [[ -n "$cwd" ]]; then
+  start_dir=(-c "$cwd")
+fi
+# switch-client's -c is the CLIENT (new-session's is the start directory). It
+# is passed rather than left to tmux because run-shell has no client of its
+# own: with a second terminal attached, tmux would be free to move that one.
+target=()
+if [[ -n "$client" ]]; then
+  target=(-c "$client")
+fi
+
+"$TMUX_BIN" new-session -d -s "$name" "${start_dir[@]}"
+"$TMUX_BIN" switch-client "${target[@]}" -t "$name"

@@ -812,7 +812,7 @@ keymap:
         desc: new session
         icon: 󰝜
         color: mauve
-        cmd: new-session -c "#{pane_current_path}" ; set key-table root
+        cmd: run-shell -b "$HOME/.config/mux/scripts/mux-new-session '#{client_tty}' '#{pane_current_path}'" ; set key-table root
       - keys:
         - w
         desc: session manager

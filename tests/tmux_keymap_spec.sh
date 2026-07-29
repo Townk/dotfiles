@@ -49,7 +49,7 @@ Describe 'tmux keymap tables'
       prefix     h    "split-window -v"
       prefix     v    "split-window -h"
       session    r    "mux-rename --launch session"
-      session    s    "new-session"
+      session    s    "mux-new-session"
       session    S    "menu workspace"
       tab        r    "mux-rename --launch window"
       tab        t    "new-window"
