@@ -484,7 +484,8 @@
       "input" : "k",
       "action" : {
         "type" : "hex",
-        "value" : "1B5B39383B3875"
+        "value" : "1B5B32373B383B39387E",
+        "stringInput" : "\\x1b[27;8;98~"
       },
       "modifiers" : 1179648
     },
@@ -492,7 +493,8 @@
       "input" : "j",
       "action" : {
         "type" : "hex",
-        "value" : "1B5B3130323B3875"
+        "value" : "1B5B32373B383B3130327E",
+        "stringInput" : "\\x1b[27;8;102~"
       },
       "modifiers" : 1179648
     },
@@ -508,7 +510,8 @@
       "input" : "j",
       "action" : {
         "type" : "hex",
-        "value" : "1B5B3130363B3675"
+        "value" : "1B5B3130363B3675",
+        "stringInput" : "\\x1b[106;6u"
       },
       "modifiers" : 393216
     },
