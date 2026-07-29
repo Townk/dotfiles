@@ -26,35 +26,62 @@ st="$("$TMUX_BIN" display -p -t "$pane" \
 parts=(${(s: :)st})
 in_mode="${parts[1]:-0}" searching="${parts[2]:-0}" sp="${parts[3]:-0}" vis="${parts[4]:-0}"
 
+# Write raw bytes to every client attached to this pane's session — the Phase 0
+# pane-tty bypass trick, client side. Both resets below need it: the OUTER
+# terminal keeps the last cursor state it was given forever (it even survives a
+# tmux restart), and what tmux emits when its own state returns to default is
+# not enough to undo it.
+# Append rather than truncate: identical on a tty, and it lets the colour and
+# the shape reset both land when one call follows the other.
+to_clients() {
+  local sess c
+  sess="$("$TMUX_BIN" display -p -t "$pane" '#{session_name}' 2>/dev/null)" || return 0
+  [[ -n "$sess" ]] || return 0
+  for c in $("$TMUX_BIN" list-clients -t "$sess" -F '#{client_tty}' 2>/dev/null); do
+    [[ -w "$c" ]] && printf '%s' "$1" >> "$c" 2>/dev/null
+  done
+  return 0
+}
+
 hide() {
   local bg
   bg="$(jq -r '.roles.ui.bg' "$THEME_JSON" 2>/dev/null)" || return 0
   [[ "$bg" == \#* ]] || return 0
   "$TMUX_BIN" set -p -t "$pane" cursor-colour "$bg" 2>/dev/null
 }
-show() { "$TMUX_BIN" set -p -t "$pane" -u cursor-colour 2>/dev/null }
+# Unsetting the option is necessary but NOT sufficient. tmux does emit Cr on
+# it (`OSC 112`, reset cursor colour — measured on a scratch server), so the
+# tmux half is right; but OSC 112 is a request the outer terminal may not
+# implement, and one that ignores it keeps the background colour hide() painted
+# — the cursor never comes back, in any pane, until the terminal is restarted
+# (Blink/hterm, 2026-07-29). Same shape as the DECSCUSR gotcha below: tmux is
+# correct and the terminal still has to be told explicitly.
+#
+# So repaint the theme's cursor colour outright instead of trusting the reset.
+# Guarded exactly like shape_reset, on the pane's OWN colour: `none` means
+# nothing in the pane is driving OSC 12 and the theme colour is the right
+# answer, while an app-set colour (nvim's per-mode cursors) is tmux's to
+# re-emit and must not be painted over.
+show() {
+  "$TMUX_BIN" set -p -t "$pane" -u cursor-colour 2>/dev/null
+  local cc cur
+  cc="$("$TMUX_BIN" display -p -t "$pane" '#{cursor_colour}' 2>/dev/null)" || cc=""
+  [[ -z "$cc" || "$cc" == none ]] || return 0
+  cur="$(jq -r '.roles.ui.cursor' "$THEME_JSON" 2>/dev/null)" || return 0
+  [[ "$cur" == \#* ]] || return 0
+  to_clients $'\033]12;'"$cur"$'\007'
+}
 shape_block() { "$TMUX_BIN" set -p -t "$pane" cursor-style block 2>/dev/null }
 shape_reset() {
   "$TMUX_BIN" set -p -t "$pane" -u cursor-style 2>/dev/null
   # tmux does not re-emit the cursor style outward when the computed shape
   # returns to default (the outer terminal keeps showing the block; Mode B
-  # find) — inject DECSCUSR 0 through the pane tty to force the reset, but
+  # find) — inject DECSCUSR 0 through the client ttys to force the reset, but
   # only when the app itself has no custom shape (nvim keeps its mode
   # cursors).
-  local shape sess c
+  local shape
   shape="$("$TMUX_BIN" display -p -t "$pane" '#{cursor_shape}' 2>/dev/null)" || shape=""
-  if [[ "$shape" == default || -z "$shape" ]]; then
-    # The OUTER terminal keeps the last DECSCUSR forever (it even survives a
-    # tmux restart) and tmux re-emits nothing for a default→default screen
-    # state — write the reset straight to the attached client ttys (the
-    # Phase 0 pane-tty bypass trick, client side).
-    sess="$("$TMUX_BIN" display -p -t "$pane" '#{session_name}' 2>/dev/null)" || sess=""
-    if [[ -n "$sess" ]]; then
-      for c in $("$TMUX_BIN" list-clients -t "$sess" -F '#{client_tty}' 2>/dev/null); do
-        [[ -w "$c" ]] && printf '\033[0 q' > "$c" 2>/dev/null
-      done
-    fi
-  fi
+  [[ "$shape" == default || -z "$shape" ]] && to_clients $'\033[0 q'
   return 0
 }
 
