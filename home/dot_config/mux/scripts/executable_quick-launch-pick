@@ -15,7 +15,7 @@
 # 130 with no output (pick-common's clean-cancel convention).
 #
 # Two INTERNAL modes serve the workspace picker's Ctrl+D (kill a session):
-# `--kill <id>` ends that session and `--emit` re-prints the row stream. fzf
+# `--kill <tail>` ends that row's session and `--emit` re-prints the rows. fzf
 # runs both itself, in a fresh child shell, as an execute-silent + reload pair
 # — so they are re-entries into this script rather than functions.
 #
@@ -101,20 +101,25 @@ esac
 source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" 2>/dev/null || true
 
 # --kill (internal): Ctrl+D on a workspace row. fzf hands us the whole hidden
-# tail — "<id>\x1e@window:<id>" — so the RS suffix comes off here. The row is
-# gone from the reload that follows either way: an ad-hoc session disappears
-# with its session, and a configured workspace comes back without the
-# "(detached)" / "(other window)" suffix, since both are derived from the live
-# session list. The session WE are in is not offered as a row, but a race (or
-# a hand-typed call) must not take the terminal down with it.
+# tail — "<id>\x1e@window:<id>\x1e<session>" — and it is the THIRD field that
+# dies: the id is the dispatch key, the session name is what the backend knows
+# (see the field list in the assembler). The row is gone from the reload that
+# follows either way: an ad-hoc session disappears with its session, and a
+# configured workspace comes back without the "(detached)" / "(other window)"
+# suffix, since both are derived from the live session list. The session WE are
+# in is not offered as a row, but a race (or a hand-typed call) must not take
+# the terminal down with it.
 #
-# The mode is a FLAG, not "did we get an id": with a search query that matches
-# nothing fzf still fires the bind, with an empty {3}, and an id test alone
+# The mode is a FLAG, not "did we get a name": with a search query that matches
+# nothing fzf still fires the bind, with an empty {3}, and a name test alone
 # would fall through and start a second, interactive picker in the background.
 if ((do_kill)); then
-  kill_id="${kill_id%%$'\x1e'*}"
-  [[ -n "$kill_id" && "$kill_id" != "$(mux::current_session 2>/dev/null || true)" ]] || exit 0
-  mux::kill_session "$kill_id" || true
+  local -a kill_fields
+  local victim
+  kill_fields=("${(@ps:\x1e:)kill_id}")
+  victim="${kill_fields[3]:-}"
+  [[ -n "$victim" && "$victim" != "$(mux::current_session 2>/dev/null || true)" ]] || exit 0
+  mux::kill_session "$victim" || true
   exit 0
 fi
 
@@ -294,10 +299,14 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
           + ( $wss | map(select(is_live | not)) ) )
       | .[]
       # Field 2 (@window:<id>) is what Alt+Enter (--key-output) emits so the
-      # caller can route the pick to the separate-window path.
+      # caller can route the pick to the separate-window path. Field 3 is the
+      # SESSION name, which Ctrl+D kills — not the same string as the id: a
+      # configured workspace is keyed by `id` (`default`) and its session is
+      # named after `name` (`Main`), so a kill aimed at field 1 asked tmux for
+      # a session that never existed. Ad-hoc rows carry the name in both.
       | entry_line(
           info_suffix;
-          [ .id, "@window:" + .id ]
+          [ .id, "@window:" + .id, sname ]
         )
     else
       collect | entry_line(""; [ .id ])

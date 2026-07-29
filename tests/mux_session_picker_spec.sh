@@ -111,8 +111,12 @@ Describe 'mux workspace session picker — Ctrl+D kill'
     KSP_PICKER="$PWD/home/dot_config/mux/scripts/executable_quick-launch-pick"
     mkdir -p "$KSP_TMP/.config/theme" "$KSP_TMP/cache"
 
+    # `id` and `name` DIFFER, as they do in every real entry (`default` /
+    # `Main`): the id is the dispatch key, the name is what the session is
+    # called. A fixture where they matched let a kill aimed at the id pass here
+    # while killing nothing on a real machine.
     cat >"$KSP_TMP/targets.json" <<'JSON'
-{"workspaces":[{"id":"awesome-platypus","name":"awesome-platypus"}]}
+{"workspaces":[{"id":"platypus-ws","name":"awesome-platypus"}]}
 JSON
     cat >"$KSP_TMP/.config/theme/chezmoi-system.json" <<'JSON'
 {"palette":{"white":"#ffffff","blue":"#89b4fa","mauve":"#cba6f7","overlay1":"#7f849c","subtext0":"#a6adc8"}}
@@ -159,40 +163,55 @@ EOF
   # Field 3 of an emitted row is the hidden tail — the field the Ctrl+D bind
   # passes to --kill as fzf's {3}. Fields 1 and 2 are the selector and search
   # display columns pick::feed prepends in selector-shortcut mode.
-  reload_tail_field() { picker --emit | perl -pe 's/^[^\x1f]*\x1f[^\x1f]*\x1f//; s/\x1e.*$//'; }
+  tail_subfield() { picker --emit | perl -pe 's/^[^\x1f]*\x1f[^\x1f]*\x1f//' | cut -d $'\036' -f "$1"; }
+  # The exact string fzf hands to --kill: the whole tail of the row carrying
+  # this label, taken from the picker's own output rather than hand-built.
+  tail_for() {
+    picker --emit |
+      KSP_LABEL="$1" perl -ne 's/\e\[[0-9;]*m//g; my @f = split /\x1f/; print $f[2] if $f[1] =~ /\Q$ENV{KSP_LABEL}\E/'
+  }
 
-  It 'emits the dispatch id as the field the kill bind reads'
-    When call reload_tail_field
+  It 'emits the dispatch id first — the field Enter accepts'
+    When call tail_subfield 1
+    The line 1 of output should equal "platypus-ws"
+  End
+
+  # The bug this fences: a configured workspace's session is named after its
+  # `name`, so a kill aimed at the id half asked tmux to end "platypus-ws" and
+  # the row kept its "(detached)" tag forever.
+  It 'emits the session name as the field the kill bind reads'
+    When call tail_subfield 3
     The line 1 of output should equal "awesome-platypus"
   End
 
   # Its row survives — it is still a workspace you can launch — but with no
   # parenthesized info suffix at all, since nothing about it is live any more.
   It 'keeps a configured workspace but drops its live tag once killed'
-    picker --kill awesome-platypus
+    picker --kill "$(tail_for 'Awesome Platypus')"
     When call row_for "Awesome Platypus"
     The lines of output should equal 1
     The output should not include "("
   End
 
   It 'drops an ad-hoc session row entirely once killed'
-    picker --kill 'stray-mongoose'
+    picker --kill "$(tail_for 'Stray Mongoose')"
     When call rows
     The output should not include "Stray Mongoose"
     The output should include "Awesome Platypus"
   End
 
-  # fzf hands over the whole tail field, "<id>\x1e@window:<id>".
-  It 'kills by the id half of the tail field fzf passes'
-    picker --kill "$(printf 'stray-mongoose\036@window:stray-mongoose')"
-    When call rows
-    The output should not include "Stray Mongoose"
+  # fzf hands over the whole tail, "<id>\x1e@window:<id>\x1e<session>".
+  It 'kills the session the tail names, not the id it leads with'
+    picker --kill "$(printf 'platypus-ws\036@window:platypus-ws\036awesome-platypus')"
+    When call cat "$KSP_TMP/sessions"
+    The output should not include "awesome-platypus"
+    The output should include "stray-mongoose"
   End
 
   # Ctrl+D on a search that matches nothing: fzf fires the bind anyway, with
-  # an empty {3}. Treating "no id" as "no kill mode" would fall through and
-  # start a SECOND, interactive picker behind the first one.
-  It 'no-ops on an empty id instead of falling through to the picker'
+  # an empty {3}. Treating "no session" as "no kill mode" would fall through
+  # and start a SECOND, interactive picker behind the first one.
+  It 'no-ops on an empty tail instead of falling through to the picker'
     When call picker --kill ""
     The status should be success
     The output should equal ""
@@ -201,7 +220,7 @@ EOF
   # The current session is never offered as a row, but neither half of this
   # may take the terminal down if it ever reaches one.
   It 'refuses to kill the session the picker is running in'
-    picker --kill Main
+    picker --kill "$(printf 'main-ws\036@window:main-ws\036Main')"
     When call cat "$KSP_TMP/sessions"
     The lines of output should equal 2
   End
