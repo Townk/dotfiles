@@ -1,0 +1,634 @@
+{
+  "command" : {
+    "right" : {
+      "mod" : "",
+      "code" : {
+        "keyCode" : 93,
+        "code" : "MetaRight",
+        "key" : "Meta",
+        "id" : "93:2"
+      },
+      "up" : "",
+      "ignoreAccents" : true,
+      "down" : ""
+    },
+    "left" : {
+      "mod" : "",
+      "code" : {
+        "keyCode" : 91,
+        "code" : "MetaLeft",
+        "key" : "Meta",
+        "id" : "91:1"
+      },
+      "up" : "",
+      "ignoreAccents" : true,
+      "down" : ""
+    },
+    "same" : true
+  },
+  "cursor" : {
+    "action" : {
+      "type" : "none"
+    },
+    "keys" : [
+      "91:1"
+    ],
+    "controlLoc" : 0,
+    "commandLoc" : 0,
+    "optionLoc" : 0,
+    "shiftLoc" : 0
+  },
+  "shift" : {
+    "right" : {
+      "mod" : "Shift",
+      "code" : {
+        "keyCode" : 16,
+        "code" : "ShiftRight",
+        "key" : "Shift",
+        "id" : "16:2"
+      },
+      "up" : "",
+      "ignoreAccents" : true,
+      "down" : ""
+    },
+    "left" : {
+      "mod" : "Shift",
+      "code" : {
+        "keyCode" : 16,
+        "code" : "ShiftLeft",
+        "key" : "Shift",
+        "id" : "16:1"
+      },
+      "up" : "",
+      "ignoreAccents" : true,
+      "down" : ""
+    },
+    "same" : true
+  },
+  "option" : {
+    "right" : {
+      "mod" : "Escape",
+      "code" : {
+        "keyCode" : 18,
+        "code" : "AltRight",
+        "key" : "Alt",
+        "id" : "18:2"
+      },
+      "up" : "",
+      "ignoreAccents" : true,
+      "down" : ""
+    },
+    "left" : {
+      "mod" : "Escape",
+      "code" : {
+        "keyCode" : 18,
+        "code" : "AltLeft",
+        "key" : "Alt",
+        "id" : "18:1"
+      },
+      "up" : "",
+      "ignoreAccents" : true,
+      "down" : ""
+    },
+    "same" : true
+  },
+  "control" : {
+    "right" : {
+      "mod" : "Control",
+      "code" : {
+        "keyCode" : 17,
+        "code" : "ControlRight",
+        "key" : "Control",
+        "id" : "17:2"
+      },
+      "up" : "",
+      "ignoreAccents" : true,
+      "down" : ""
+    },
+    "left" : {
+      "mod" : "Control",
+      "code" : {
+        "keyCode" : 17,
+        "code" : "ControlLeft",
+        "key" : "Control",
+        "id" : "17:1"
+      },
+      "up" : "",
+      "ignoreAccents" : true,
+      "down" : ""
+    },
+    "same" : true
+  },
+  "shortcuts" : [
+    {
+      "input" : "c",
+      "action" : {
+        "type" : "command",
+        "value" : "clipboardCopy"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "v",
+      "action" : {
+        "type" : "command",
+        "value" : "clipboardPaste"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "n",
+      "action" : {
+        "type" : "command",
+        "value" : "windowNew"
+      },
+      "modifiers" : 1966080
+    },
+    {
+      "input" : "w",
+      "action" : {
+        "type" : "command",
+        "value" : "windowClose"
+      },
+      "modifiers" : 1966080
+    },
+    {
+      "input" : "o",
+      "action" : {
+        "type" : "command",
+        "value" : "windowFocusOther"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "n",
+      "action" : {
+        "type" : "command",
+        "value" : "tabNew"
+      },
+      "modifiers" : 1835008
+    },
+    {
+      "input" : "w",
+      "action" : {
+        "type" : "command",
+        "value" : "tabClose"
+      },
+      "modifiers" : 1835008
+    },
+    {
+      "input" : "]",
+      "action" : {
+        "type" : "command",
+        "value" : "tabNext"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "[",
+      "action" : {
+        "type" : "command",
+        "value" : "tabPrev"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "",
+      "action" : {
+        "type" : "command",
+        "value" : "tabMoveToOtherWindow"
+      },
+      "modifiers" : 0
+    },
+    {
+      "input" : "+",
+      "action" : {
+        "type" : "command",
+        "value" : "zoomIn"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "-",
+      "action" : {
+        "type" : "command",
+        "value" : "zoomOut"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "=",
+      "action" : {
+        "type" : "command",
+        "value" : "zoomReset"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : ",",
+      "action" : {
+        "type" : "command",
+        "value" : "configShow"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : ",",
+      "action" : {
+        "type" : "command",
+        "value" : "snippetsShow"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "",
+      "action" : {
+        "type" : "command",
+        "value" : "clipboardCopyRaw"
+      },
+      "modifiers" : 0
+    },
+    {
+      "input" : ".",
+      "action" : {
+        "type" : "command",
+        "value" : "scratchShow"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "t",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3131303B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "w",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B777078"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "w",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B777478"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "1",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B34393B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "2",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B35303B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "3",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B35313B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "4",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B35323B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "5",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B35333B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "6",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B35343B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "7",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B35353B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "8",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B35363B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "9",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B35373B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "0",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B34383B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "t",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3131363B3875"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "p",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3131323B3875"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "s",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3131353B3875"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "s",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B777353"
+      },
+      "modifiers" : 1703936
+    },
+    {
+      "input" : "v",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3131383B3875"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "c",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B39393B3875"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "c",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130303B3875"
+      },
+      "modifiers" : 1703936
+    },
+    {
+      "input" : "f",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B2F"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "f",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B776C56"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "UIKeyInputUpArrow",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B313B3841"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "UIKeyInputDownArrow",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B313B3842"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "k",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130373B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "j",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130363B3875"
+      },
+      "modifiers" : 1048576
+    },
+    {
+      "input" : "UIKeyInputUpArrow",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B39383B3875"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "UIKeyInputDownArrow",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130323B3875"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "k",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B39383B3875"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "j",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130323B3875"
+      },
+      "modifiers" : 1179648
+    },
+    {
+      "input" : "h",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130343B3675"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "j",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130363B3675"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "k",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130373B3675"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "l",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130383B3675"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "UIKeyInputLeftArrow",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B313B3644"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "UIKeyInputDownArrow",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B313B3642"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "UIKeyInputUpArrow",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B313B3641"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "UIKeyInputRightArrow",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B313B3643"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "u",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3131373B3675"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "g",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B3130333B3675"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : "\/",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B34373B3675"
+      },
+      "modifiers" : 393216
+    },
+    {
+      "input" : " ",
+      "action" : {
+        "key" : {
+          "code" : "Space",
+          "key" : "Space",
+          "keyCode" : 32,
+          "id" : "32:0"
+        },
+        "mods" : 262144,
+        "type" : "press"
+      },
+      "modifiers" : 262144
+    },
+    {
+      "input" : "\r",
+      "action" : {
+        "type" : "hex",
+        "value" : "1B5B31333B3275"
+      },
+      "modifiers" : 131072
+    }
+  ],
+  "fn" : {
+    "action" : {
+      "type" : "none"
+    },
+    "keys" : [
+
+    ],
+    "controlLoc" : 0,
+    "commandLoc" : 0,
+    "optionLoc" : 0,
+    "shiftLoc" : 0
+  },
+  "capsLock" : {
+    "ignoreAccents" : true,
+    "down" : "",
+    "mod" : "Control",
+    "code" : {
+      "code" : "CapsLock",
+      "key" : "CapsLock",
+      "keyCode" : 20,
+      "id" : "20:0"
+    },
+    "up" : ""
+  }
+}
