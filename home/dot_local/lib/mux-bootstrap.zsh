@@ -211,6 +211,19 @@ mux::list_sessions() {
   esac
 }
 
+# mux::kill_session <name> — end that session for good. "For good" is the
+# contract, not just "kill": after this returns, mux::list_sessions must no
+# longer report the name, so the session picker's row can clear. That costs
+# zellij an extra step (see _mux_zj_kill_session) and tmux none.
+mux::kill_session() {
+  [[ -n "${1:-}" ]] || return 2
+  case "$(mux::backend)" in
+    tmux) _mux_tx_kill_session "$1" ;;
+    zellij) _mux_zj_kill_session "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
 # mux::rename_session <new-name> [target-session] — rename the current session
 # when target is omitted, or a specific session when supplied. Backend syntax,
 # socket routing, and redraw behavior stay behind this boundary.

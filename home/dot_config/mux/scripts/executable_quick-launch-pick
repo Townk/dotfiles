@@ -14,6 +14,11 @@
 # captures that and performs the actual zellij action. On cancel it exits
 # 130 with no output (pick-common's clean-cancel convention).
 #
+# Two INTERNAL modes serve the workspace picker's Ctrl+D (kill a session):
+# `--kill <id>` ends that session and `--emit` re-prints the row stream. fzf
+# runs both itself, in a fresh child shell, as an execute-silent + reload pair
+# — so they are re-entries into this script rather than functions.
+#
 # Targets are read from $QUICK_LAUNCH_TARGETS (default
 # ~/.config/mux/quick-launch/default.yaml; yaml/json/toml accepted). When
 # launched via `quick-launch menu` this points at a pre-merged JSON cache
@@ -37,6 +42,9 @@ source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" ||
   }
 
 kind=""
+emit=0
+do_kill=0
+kill_id=""
 no_border="${QUICK_LAUNCH_NO_BORDER:+1}"
 no_border="${no_border:-0}"
 while (($# > 0)); do
@@ -48,6 +56,15 @@ while (($# > 0)); do
     --no-border)
       no_border=1
       shift
+      ;;
+    --emit)
+      emit=1
+      shift
+      ;;
+    --kill)
+      do_kill=1
+      kill_id="${2-}"
+      shift 2
       ;;
     -h | --help)
       print -r -- "usage: quick-launch-pick <pane|tab|workspace> [--no-border]"
@@ -83,6 +100,24 @@ esac
 # clear.
 source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" 2>/dev/null || true
 
+# --kill (internal): Ctrl+D on a workspace row. fzf hands us the whole hidden
+# tail — "<id>\x1e@window:<id>" — so the RS suffix comes off here. The row is
+# gone from the reload that follows either way: an ad-hoc session disappears
+# with its session, and a configured workspace comes back without the
+# "(detached)" / "(other window)" suffix, since both are derived from the live
+# session list. The session WE are in is not offered as a row, but a race (or
+# a hand-typed call) must not take the terminal down with it.
+#
+# The mode is a FLAG, not "did we get an id": with a search query that matches
+# nothing fzf still fires the bind, with an empty {3}, and an id test alone
+# would fall through and start a second, interactive picker in the background.
+if ((do_kill)); then
+  kill_id="${kill_id%%$'\x1e'*}"
+  [[ -n "$kill_id" && "$kill_id" != "$(mux::current_session 2>/dev/null || true)" ]] || exit 0
+  mux::kill_session "$kill_id" || true
+  exit 0
+fi
+
 # Active scope (panes only). Wezterm's make_panes_choices offers the active
 # tab's panes + the active workspace's panes + the global top-level panes — so
 # a pane nested under a workspace is reachable only while that workspace is
@@ -102,6 +137,7 @@ mkdir -p "$CACHE_DIR"
 force_build=0
 live_json='[]'
 windowed_json='[]'
+usage_file=""
 current_ws="${active_ws}"
 if [[ "$kind" == pane ]]; then
   scope_ws="${active_ws//[^A-Za-z0-9._-]/_}"
@@ -113,6 +149,7 @@ elif [[ "$kind" == workspace ]]; then
   # session state without leaking per-launch temp files.
   LINES_CACHE="$CACHE_DIR/lines-$kind.txt"
   force_build=1
+  usage_file="$CACHE_DIR/usage-workspace"
   live_json="$({ mux::list_sessions 2>/dev/null | sed '/^$/d' | jq -R . | jq -s -c .; } 2>/dev/null || true)"
   [[ -n "$live_json" ]] || live_json='[]'
   # Which live sessions currently have a client attached (i.e. own an OS window):
@@ -272,6 +309,19 @@ fi
 
 [[ -s "$LINES_CACHE" ]] || die "no $kind targets defined in $TARGETS"
 
+# --emit (internal): the row stream fzf reloads after a Ctrl+D kill. It must
+# match what pick::feed produces for the initial run — recency-ordered AND
+# selector-decorated — or the reloaded rows would lose their 1-9 shortcut
+# column and shift the hidden tail out from under pick-common's accept-time
+# field parsing (which skips two display fields in selector-shortcut mode).
+if ((emit)); then
+  pick_input=(cat)
+  pick_selector_wrap=1
+  pick_usage_file="$usage_file"
+  pick::feed "$LINES_CACHE"
+  exit 0
+fi
+
 # Panes/tabs stay in their defined (file) order — no recency/resume flags, since
 # launching a target isn't a text-insert flow. Workspaces opt into the library's
 # file recency (--cache-usage): pick::record floats the most-recently-picked
@@ -306,12 +356,20 @@ pick_start_args=(
 if [[ "$kind" == workspace ]]; then
   # Hints are assembled from structured key/label pairs via pick::hints, so the
   # separator/spacing matches every other dialog (no hand-rolled separators).
-  # 󰘵 󰌑 = Alt+Enter (open in a separate window); 󰌑 = Enter, 󱊷 = Esc.
+  # 󰘵 󰌑 = Alt+Enter (open in a separate window); 󰌑 = Enter, 󱊷 = Esc,
+  # 󰘴 D = Ctrl+D (kill the session under the cursor, list stays open).
+  #
+  # Ctrl+D is an execute-silent + reload pair (pick-common's --key-reload), so
+  # both halves re-enter THIS script from fzf's child shell: {3} is the hidden
+  # tail (field 1 and 2 are the selector/search display columns), and the
+  # reload re-derives every row from the now-shorter live session list.
   pick_start_args+=(
-    --cache-usage="$CACHE_DIR/usage-workspace"
+    --cache-usage="$usage_file"
     --key-output "alt-enter:field:2"
-    --selector-hints "$(pick::hints 󰌑 open "󰘵 󰌑" "new window" 󱊷 cancel 1-9 open j/k move / search)"
-    --search-hints "$(pick::hints 󰌑 open "󰘵 󰌑" "new window" 󱊷 cancel "󰘴 U" clear/back)"
+    --reload-cmd "${(qq)SCRIPT_PATH:a} workspace --emit"
+    --key-reload "ctrl-d:${(qq)SCRIPT_PATH:a} workspace --kill {3}"
+    --selector-hints "$(pick::hints 󰌑 open "󰘵 󰌑" "new window" "󰘴 D" kill 󱊷 cancel 1-9 open j/k move / search)"
+    --search-hints "$(pick::hints 󰌑 open "󰘵 󰌑" "new window" "󰘴 D" kill 󱊷 cancel "󰘴 U" clear/back)"
   )
 fi
 ((no_border)) && pick_start_args+=(--no-border)

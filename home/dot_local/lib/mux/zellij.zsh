@@ -502,6 +502,16 @@ _mux_zj_list_sessions() {
   "$(_mux_zj_bin)" list-sessions -s 2>/dev/null | sed '/^$/d'
 }
 
+# _mux_zj_kill_session <name> — end the session AND drop its record.
+# `kill-session` alone would not do: zellij keeps a killed session as an
+# EXITED, resurrectable record that _mux_zj_list_sessions still reports, so a
+# picker row killed that way would never clear. `delete-session -f` is the
+# kill-and-forget pair, and it is what _mux_zj_exec_new already relies on to
+# free a name for reuse.
+_mux_zj_kill_session() {
+  "$(_mux_zj_bin)" delete-session "$1" -f &>/dev/null
+}
+
 # _mux_zj_rename_session <new-name> [target-session] — Zellij's global
 # --session selector lets the same API rename either the caller's current
 # session or a named session from outside it.

@@ -317,7 +317,7 @@ bind -n S-TripleClick1Pane select-pane -t = \; if -F "#{||:#{pane_in_mode},#{mou
 
 # MEH-s — Session picker (a workspace is a session on either backend).
 {{- range list "C-M-S" "C-M-S-S" "C-M-S-s" }}
-bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome -- $HOME/.config/mux/scripts/quick-launch menu workspace"'
+bind -n {{ . }} run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Session\" --no-chrome -- $HOME/.config/mux/scripts/quick-launch menu workspace"'
 {{- end }}
 
 # MEH-t — Tab picker.
@@ -697,7 +697,7 @@ bind -n C-S-G run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popu
 #
 # It is also why ⌘⇧⌥S (deliberately reaching the REMOTE's picker) forwards the
 # LEADER chord rather than MEH-s: identical bytes would be eaten right here.
-bind -T nested C-M-Space run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome -- {{ .chezmoi.homeDir }}/.config/mux/scripts/quick-launch menu workspace"'
+bind -T nested C-M-Space run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Quick Launch — Session\" --no-chrome -- {{ .chezmoi.homeDir }}/.config/mux/scripts/quick-launch menu workspace"'
 {{- range list "C-M-S" "C-M-S-S" "C-M-S-s" }}
-bind -T nested {{ . }} run-shell -b '{{ $.chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "{{ $.chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome -- {{ $.chezmoi.homeDir }}/.config/mux/scripts/quick-launch menu workspace"'
+bind -T nested {{ . }} run-shell -b '{{ $.chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "{{ $.chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Quick Launch — Session\" --no-chrome -- {{ $.chezmoi.homeDir }}/.config/mux/scripts/quick-launch menu workspace"'
 {{- end }}

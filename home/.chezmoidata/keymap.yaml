@@ -825,7 +825,7 @@ keymap:
         desc: quick launch session
         icon: 󱓟
         color: red
-        cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Workspace\" --no-chrome
+        cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Session\" --no-chrome
           -- $HOME/.config/mux/scripts/quick-launch menu workspace"'
         dialog: true
     scroll:

@@ -99,6 +99,13 @@ _mux_tx_list_sessions() {
   _mux_tx_run list-sessions -F '#{session_name}' 2>/dev/null
 }
 
+# _mux_tx_kill_session <name> — `=` anchors an exact match, so killing "Main"
+# cannot take "Main2" with it. No resurrectable record to sweep afterwards:
+# tmux drops the session the moment it dies.
+_mux_tx_kill_session() {
+  _mux_tx_run kill-session -t "=$1" 2>/dev/null
+}
+
 # _mux_tx_rename_session <new-name> [target-session] — target omitted means
 # the caller's current session. Refresh every attached client so status-right's
 # session-name-dependent #() command is rerun immediately.

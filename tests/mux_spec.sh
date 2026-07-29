@@ -801,6 +801,47 @@ Describe 'mux.zsh — live session/tab state (tmux)'
   End
 End
 
+Describe 'mux.zsh — kill_session'
+  Include home/dot_local/lib/mux.zsh
+
+  # Both stubs LOG their argv rather than echo it: the zellij side swallows
+  # its own output, so an echoing stub would assert nothing there.
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    KILL_LOG="$TEST_TMP/calls.log"
+    unset ZELLIJ ZELLIJ_SESSION_NAME TMUX MUX_BACKEND
+    local b
+    for b in tmux zellij; do
+      {
+        echo '#!/usr/bin/env zsh'
+        echo "print -r -- \"\$*\" >> \"$KILL_LOG\""
+      } > "$TEST_TMP/$b"
+      chmod +x "$TEST_TMP/$b"
+    done
+    export MUX_TMUX_BIN="$TEST_TMP/tmux" ZELLIJ_BIN="$TEST_TMP/zellij"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset MUX_TMUX_BIN ZELLIJ_BIN ZELLIJ ZELLIJ_SESSION_NAME TMUX; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # A bare `-t Main` prefix-matches, so "Main2" would answer for "Main".
+  It 'tmux kills the named session by EXACT name'
+    export TMUX=/tmp/sock,1,0
+    When call mux::kill_session Main
+    The contents of file "$KILL_LOG" should include "kill-session -t =Main"
+  End
+
+  # `kill-session` alone would leave an EXITED, resurrectable record that
+  # mux::list_sessions still reports — so the session picker's row, which is
+  # derived from that list, would never clear.
+  It 'zellij DELETES the session rather than merely killing it'
+    export ZELLIJ=1 ZELLIJ_SESSION_NAME=spec
+    When call mux::kill_session Main
+    The contents of file "$KILL_LOG" should include "delete-session Main -f"
+    The contents of file "$KILL_LOG" should not include "kill-session"
+  End
+End
+
 Describe 'mux.zsh — dump_screen (zellij)'
   Include home/dot_local/lib/mux.zsh
 
