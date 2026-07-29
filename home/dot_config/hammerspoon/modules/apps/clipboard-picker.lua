@@ -186,6 +186,10 @@ local function query_items()
       sourceHost = host,
       group     = group_label(last_ts, now, pinned),
       age       = age_string(last_ts, now),
+      -- Raw recency, alongside the pre-formatted `group`/`age` strings: the
+      -- client re-sorts the list itself after a pin toggle, and the ORDER BY
+      -- above is not something it can recover from those strings.
+      ts        = last_ts,
     }
   end
   s:finalize()

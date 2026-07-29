@@ -371,10 +371,18 @@
       q = (q || '').toLowerCase();
       var prevId = selectId != null ? selectId
         : (keepSelection && filtered[selectedIndex] ? filtered[selectedIndex].id : null);
-      // Pinned-first, otherwise preserve the server-side pinned/last_ts order.
+      // Pinned first, then most recent first -- the same total order as the
+      // store's own `ORDER BY pinned DESC, last_ts DESC`.
+      //
+      // Sorting on `ts` rather than falling back to ITEMS order is what makes
+      // an UNPIN put the clip back where it belongs. ITEMS arrives already
+      // pinned-hoisted, so a clip that was pinned when the picker opened sits
+      // near the front of it; with a stable sort and no tiebreaker, clearing
+      // its `pinned` flag left it stranded at the top of the unpinned block
+      // instead of dropping back to its place in the timeline.
       var base = ITEMS.slice().sort(function (a, b) {
         if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-        return 0;
+        return b.ts - a.ts;
       });
       filtered = q === '' ? base : base.filter(function (it) {
         return it.preview.toLowerCase().indexOf(q) !== -1
