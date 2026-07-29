@@ -477,3 +477,31 @@ established, in the order it stopped being a suspect:
 | the give-away was that the ribbon repainted on a ~3.5s heartbeat and NOTHING — not a key-table change, not `refresh-client -S` — could make it repaint sooner | `refresh-client -S` forces a status REDRAW, not a job re-run: with a job in flight the redraw reuses the stale cached output. "Explicit refresh does nothing, but it updates on its own every few seconds" is the signature of a slow `#()`, and timing the renderer directly is the one-line diagnosis |
 | an untrustworthy probe answer must not overwrite the mirror | the accessibility call returns `NOT_RUNNING` for a plainly-running Ghostty when the asker lacks the Accessibility grant. Writing `false` there silently disables the fullscreen segments and reads as a rendering bug — so only `WINDOWED`/`*_FULLSCREEN` are believed |
 | probing bindings against the server the user is SITTING IN is how a working setup gets broken | a malformed `\;` chain left the live leader damaged and produced the very report being investigated. Scratch socket (`-L probe`) for experiments; a throwaway session + nested client when the LIVE server itself must be verified |
+
+## Blink Shell — the third terminal (2026-07-29)
+
+The iPad client is a mux CONSUMER like WezTerm and Ghostty, and it had been
+carrying pre-MEH chords through two rebindings without anything noticing.
+Bringing it current turned up facts about the chord layer that outlive it.
+Map in `docs/superpowers/specs/2026-07-28-blink-keymap-design.md`; the file
+itself is `assets/blink-shell/blink-kb.json` (hand-authored, so committed —
+the directory's `.gitignore` excludes only the generated font/theme artifacts).
+
+**Three layers, and only the middle one is Phase 8's.** `keymap.yaml` owns the
+MODE TABLES; `keymap-base.conf` owns the root binds ("the root table has always
+been ours"); and the terminal chord layer — `⌘⇧S` → `CSI 115;8u` — is
+hand-written three times over, in `ghostty/config`, `wezterm.lua` and now
+`blink-kb.json`. Phase 8 generates the two MUX config planes and touches none
+of that, so waiting for it to fix terminal-chord drift is waiting for the
+wrong thing.
+
+| Gotcha | Consequence |
+|---|---|
+| **hiding the cursor and restoring it are two different sequences, and only one is universally supported.** `hide()` paints `cursor-colour` the canvas bg, which tmux emits as `OSC 12`; unsetting the option makes tmux emit `Cr` — `OSC 112`, reset cursor colour. Both measured off a scratch server through a pty. hterm implements the first and ignores the second | the cursor never came back — not in that pane, not in that session, not until the terminal restarted. Copy/visual was hit identically: a block cursor painted the background, in the one state whose point is showing a cursor. `show()` now repaints `roles.ui.cursor` outright rather than trusting a reset to land. Not a Blink special case — it restores through the SAME `OSC 12` that demonstrably hides the cursor there, so it cannot fail for a reason that would not also break hiding |
+| the fix has a twin five lines below it: `shape_reset` already injects DECSCUSR 0 because tmux's shape reset does not reach the outer terminal either | the pattern is "tmux is correct AND the terminal still has to be told explicitly" — worth reaching for whenever a cursor attribute is restored rather than set. Both now share one `to_clients` helper, which APPENDS: identical on a tty, and it lets the colour and the shape both land when one call follows the other |
+| `#{cursor_colour}` reports `none` when nothing in the pane drives `OSC 12`, and the app's value when something does — even while the pane OPTION is set to something else | that is the guard that keeps the repaint from painting over nvim's per-mode cursors, and the exact analogue of `shape_reset`'s `#{cursor_shape} == default` test. Verify the theme sets no GLOBAL `cursor-colour`, or the guard reads a hex instead of `none` and the repaint silently never fires |
+| Blink maps Option to Escape — which is what makes `⌥w`, `⌥/`, `⌥.` and `⌥Enter` work with no binding at all | the same setting means it can never produce a MEH chord physically, so on Blink EVERY MEH action is Cmd-only. A root bind with no `⌘` chord is simply unreachable there, which is why the clipboard picker (`MEH-v`, unbound in both desktop terminals because the physical chord covers it) needed one. `C-M-Space`, the hand-typed nested hatch, is unreachable for the same reason |
+| Blink folds Ctrl+Shift+letter down to the plain control byte. The evidence was already in the file: the glyph and gitmoji pickers were bound to explicit `CSI 117;6u` / `CSI 103;6u` by hand, which would be redundant if the native encoding carried shift | the resize row was not DEAD, it was WRONG — `⌃⇧J` arrived as `C-j` and moved focus instead of resizing. A chord that silently does something else is worse than one that does nothing, and it cannot be found by reading the terminal's config |
+| Blink is `text:`-only — no scripting, no way to ask "is this pane nested?" | it mirrors GHOSTTY, not WezTerm: send unconditional bytes and let the outer session's `nested` table make the distinction (the row above, 2026-07-28). WezTerm's two Lua-branching chords are inexpressible, so `⌘⌥⇧S` forwards the leader `⌥w s S` — which must NOT be MEH-s, since identical bytes are eaten by the `nested` table before reaching the inner mux |
+| `⌘,` means "open THIS terminal's config", and on Blink the settings UI *is* the config — there is no file | forwarding it as `⌥w ,` would open the remote's `~/.ssh/config` (`edit-terminal-config` resolves `ENV_TYPE=SSH` for any Blink session) and cost the only route into Blink's own settings. Left native; a ledger divergence from both desktop terminals, not an oversight |
+| a chord table can be verified STRUCTURALLY without the device: decode every hex to its sequence, map each `CSI <cp>;<mod>u` to the tmux key name it will arrive as, and grep the RENDERED `keymap-base.conf` for that bind | caught the whole stale set before import (35 sequences, 0 missing) and is the cheap half of a drift detector — the terminal chord layer has no generator, so nothing else notices when a rebinding lands. It cannot catch what the TERMINAL does with a chord, which is where both real bugs lived |
