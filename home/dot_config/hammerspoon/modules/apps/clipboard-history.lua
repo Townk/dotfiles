@@ -300,13 +300,56 @@ local function type_hash(data_by_uti)
   return hash.SHA256(table.concat(parts, "\n")), total
 end
 
--- First line, newlines collapsed, truncated for the preview column.
+local PREVIEW_MAX_BYTES = 100
+
+-- Truncate to at most `budget` bytes without splitting a UTF-8 sequence:
+-- back off while the byte just past the cut is a continuation byte
+-- (0x80-0xBF), which would mean the cut lands mid-codepoint. Hammerspoon
+-- runs Lua 5.4 (which has `utf8`), but the spec harness runs 5.1 (which
+-- does not), so this stays on plain byte arithmetic.
+local function clip_bytes(s, budget)
+  if #s <= budget then return s end
+  local cut = budget
+  while cut > 0 do
+    local b = s:byte(cut + 1)
+    if not b or b < 0x80 or b > 0xBF then break end
+    cut = cut - 1
+  end
+  return s:sub(1, cut)
+end
+
+-- One-line snippet for the preview column: blank lines are dropped, every
+-- other line is trimmed and joined with a single space.
+--
+-- This used to take only the text up to the first newline, which rendered a
+-- clip that OPENS with a blank line as an empty row in the picker's list --
+-- the whole snippet was the empty string before that first newline.
+-- Flattening also puts more of a multi-line clip in the row, since the
+-- budget is now spent on content rather than on whatever happened to sit on
+-- line one. Pure -- see M._preview_of.
 local function preview_of(text)
   if text == nil then return nil end
-  local first = text:match("^[^\r\n]*") or ""
-  if #first > 100 then first = first:sub(1, 100) .. "…" end
-  return first
+  local parts, len = {}, 0
+  for line in text:gmatch("[^\r\n]+") do
+    local trimmed = line:match("^%s*(.-)%s*$")
+    if trimmed ~= "" then
+      parts[#parts + 1] = trimmed
+      -- +1 for the joining space. Stop once the budget is covered: a
+      -- multi-megabyte clip must not be flattened in full to show 100 bytes.
+      len = len + #trimmed + 1
+      if len > PREVIEW_MAX_BYTES then break end
+    end
+  end
+  local flat = table.concat(parts, " ")
+  if #flat > PREVIEW_MAX_BYTES then
+    return clip_bytes(flat, PREVIEW_MAX_BYTES) .. "…"
+  end
+  return flat
 end
+-- Not only a test seam: the picker calls this to re-derive a snippet for
+-- rows stored before the flattening above existed (clipboard-picker.lua's
+-- query_items).
+M._preview_of = preview_of
 
 -- Build the text_preview for a genuine multi-file "files" clip: full paths
 -- newline-joined, staying inside preview_of()'s own ~100-char budget so the

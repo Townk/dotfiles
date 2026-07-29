@@ -162,9 +162,19 @@ local function query_items()
     -- Provenance (§11): remote iff copied on a different host. NULL source_host
     -- (legacy rows) reads as local.
     local host = s:get_value(9)
+    -- Rows captured before preview_of() learned to skip leading blank lines
+    -- hold an empty text_preview on file and would render as a blank list
+    -- row; re-derive the snippet from text_plain for those. Falls through to
+    -- the "[kind]" badge when there is no plain text either (a files row
+    -- whose bytes were never pulled locally).
+    local preview = s:get_value(1)
+    if preview == nil or preview:match("^%s*$") then
+      preview = history._preview_of(plain)
+    end
+    if preview == nil or preview == "" then preview = "[" .. kind .. "]" end
     items[#items + 1] = {
       id        = s:get_value(0),
-      preview   = s:get_value(1) or ("[" .. kind .. "]"),
+      preview   = preview,
       kind      = kind,
       kindLabel = KIND_LABELS[kind] or kind,
       app       = s:get_value(4) or "?",
