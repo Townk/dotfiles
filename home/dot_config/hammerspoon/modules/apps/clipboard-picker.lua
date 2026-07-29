@@ -877,16 +877,36 @@ local function handle_message(body)
   end
 end
 
+local PICKER_W, PICKER_H = 780, 570 -- +50px vs. the pre-keybinding-hints-row height
+
+-- Centred frame on the screen the user is actually working on: the screen
+-- holding the focused app's window (the only meaningful answer with more
+-- than one display attached), falling back to the main screen when nothing
+-- is focused. Mirrors modules/osd/init.lua's targetScreen().
+--
+-- Must be recomputed on every show(), not baked in at creation: the webview
+-- is built once and reused for the process's lifetime, so a display
+-- connected/disconnected (or the user simply moving to another screen)
+-- afterwards would otherwise keep centring the panel on the arrangement
+-- that happened to be in place the first time it opened.
+local function picker_frame(win)
+  win = win or hs.window.focusedWindow()
+  local screen = (win and win:screen()) or hs.screen.mainScreen()
+  local sf = screen:fullFrame()
+  return {
+    x = sf.x + (sf.w - PICKER_W) / 2,
+    y = sf.y + (sf.h - PICKER_H) / 2,
+    w = PICKER_W,
+    h = PICKER_H,
+  }
+end
+
 local function ensure_webview()
   if webview then return end
   ucc = hs.webview.usercontent.new("clipboardPicker")
   ucc:setCallback(function(msg) handle_message(msg.body) end)
 
-  local sf = hs.screen.mainScreen():fullFrame()
-  local w, h = 780, 570 -- +50px vs. the pre-keybinding-hints-row height
-  local rect = { x = sf.x + (sf.w - w) / 2, y = sf.y + (sf.h - h) / 2, w = w, h = h }
-
-  webview = hs.webview.new(rect, {}, ucc)
+  webview = hs.webview.new(picker_frame(), {}, ucc)
   webview:transparent(true)
   webview:windowStyle({ "borderless" })
   -- modalPanel (not WhichKey's "overlay" + nonactivating): this picker needs
@@ -908,6 +928,7 @@ function M.show()
   dismissOnBlur.dismissOthers(DISMISS_ON_BLUR_ID)
   ensure_webview()
   savedWindow = hs.window.focusedWindow()
+  webview:frame(picker_frame(savedWindow))
   webview:html(build_html(query_items()))
   webview:show()
   webview:bringToFront(true)
