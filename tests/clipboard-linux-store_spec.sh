@@ -215,10 +215,10 @@ Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
   End
 
   # Fix 1 (final-review): the store-wide single-line-preview invariant
-  # (clip::persist_text_row's ${text%%$'\n'*}, and the Hammerspoon watcher's
-  # own equivalent) applies to op_copy's text-UTI branch too -- text_preview
-  # must collapse to the first line even though text_plain keeps the full
-  # multi-line blob, since pick-clipboard renders text-kind previews raw.
+  # (clip::persist_text_row via clip::preview_of, and the Hammerspoon
+  # watcher's own equivalent) applies to op_copy's text-UTI branch too --
+  # text_preview must collapse to ONE line even though text_plain keeps the
+  # full multi-line blob, since pick-clipboard renders text-kind previews raw.
   It 'C collapses a multi-line text-UTI blob to a single-line text_preview'
     # uti "public.utf8-plain-text" = 22 bytes; blob "first\nsecond" = 12
     # bytes (5 + 1 newline + 6); payload = 2 + 22 + 12 = 36
@@ -228,7 +228,19 @@ Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
     plain=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT text_plain FROM clips;")
     preview=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT text_preview FROM clips;")
     The variable plain should equal "$(printf 'first\nsecond')"
-    The variable preview should equal "first"
+    The variable preview should equal "first second"
+  End
+
+  # A blob whose FIRST character is a newline used to store an empty preview
+  # (the old ${blob%%$'\n'*}) and render as a blank picker row; the flattening
+  # drops the blank line and trims the indented one that follows.
+  It 'C flattens a blob that opens with a blank line instead of storing an empty preview'
+    # blob "\n  indented\nnext" = 16 bytes; payload = 2 + 22 + 16 = 40 (\050)
+    printf 'C\000\000\000\050\000\026public.utf8-plain-text\n  indented\nnext' > "$REQ"
+    When run run_dispatch
+    The output should start with "O"
+    preview=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT text_preview FROM clips;")
+    The variable preview should equal "indented next"
   End
 
   It 'U form A persists a files manifest row stamped with self-name'

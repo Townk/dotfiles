@@ -1256,3 +1256,125 @@ Describe 'pick-clipboard: MY_HOST portability (Phase 7)'
     The output should equal "cruise-box"
   End
 End
+
+# The content column used to render the stored text_preview raw, so a row
+# whose preview was captured before the writers learned to flatten showed
+# whatever whitespace happened to be there: a clip that OPENS with a blank
+# line stored an EMPTY preview (${text%%$'\n'*}) and rendered as a blank row
+# with nothing to identify it by, and an indented first line rendered pushed
+# off its column. clip::sql_flatten/$SNIPPET_EXPR repair those rows at render
+# time, the way clipboard-picker.lua's query_items does for the GUI picker.
+Describe 'pick-clipboard: the content column trims and flattens its snippet'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
+  LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  setup() {
+    # No SSH_CONNECTION -> no live row, so the output is exactly the seeded rows.
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    export HOME="$SHELLSPEC_TMPBASE/snippet-home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    export XDG_STATE_HOME="$HOME/.local/state"
+    export TMPDIR="$SHELLSPEC_TMPBASE/snippet-tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/snippet-data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    export PICK_CLIPBOARD_DB="$DB"
+    rm -f "$DB"
+    sqlite3 "$DB" '
+      CREATE TABLE clips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text_preview TEXT,
+        text_plain TEXT,
+        len INTEGER,
+        first_ts REAL,
+        last_ts REAL,
+        source_app TEXT,
+        source_bundle_id TEXT,
+        type_kind TEXT,
+        regtype TEXT,
+        pinned INTEGER DEFAULT 0,
+        type_hash TEXT,
+        source_host TEXT
+      );
+      CREATE TABLE clip_types (clip_id INTEGER, uti TEXT, blob BLOB, PRIMARY KEY (clip_id, uti));
+    '
+    export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
+    export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    export PICK_CLIPBOARD_NO_RUN=1
+    export SCRIPT_PATH="$SCRIPT"
+    export PICK_CLIPBOARD_CONTENT_WIDTH=40
+  }
+  BeforeEach 'setup'
+
+  # Same harness as the X8 Describe above: the visible content column of every
+  # emitted row (everything before the first \x1f tail field), ANSI stripped.
+  run_list_content() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      emit_rows | while IFS= read -r line; do
+        vis=${line%%$'"'"'\x1f'"'"'*}
+        print -r -- "$vis"
+      done | sed -E $'"'"'s/\x1b\[[0-9;]*m//g'"'"'
+    '
+  }
+
+  It 'a legacy row whose preview opens with a blank line gets a real snippet from text_plain'
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, text_plain, source_host, last_ts) VALUES ('text','','
+
+    function foo() {
+        return 1
+    }','mac-mini',100);"
+
+    When call run_list_content
+    The status should be success
+    The output should include "function foo() { return 1 }"
+  End
+
+  It 'a legacy preview with leading/trailing whitespace renders trimmed'
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, text_plain, source_host, last_ts) VALUES ('text','   indented legacy   ','   indented legacy   ','mac-mini',100);"
+
+    When call run_list_content
+    The status should be success
+    # The column is left-padded only by the icon+separator, so a leading space
+    # in the snippet would show up as a 3-space run ahead of the text.
+    The output should include "  indented legacy"
+    The output should not include "   indented legacy"
+  End
+
+  It 'a row with no usable preview and no plain text falls back to the [kind] badge'
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, text_plain, source_host, last_ts) VALUES ('text','','  ','mac-mini',100);"
+
+    When call run_list_content
+    The status should be success
+    The output should include "[text]"
+  End
+
+  # The files/file/directory branch reaches the badge through its own
+  # expression (the paths stay raw there for X8's tail truncation), and an
+  # EMPTY preview has to hit it too -- IFNULL alone only caught NULL.
+  It 'a files row with an empty preview falls back to the [files] badge'
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('files','','mac-mini',100);"
+
+    When call run_list_content
+    The status should be success
+    The output should include "[files]"
+  End
+
+  # The row SQL is duplicated into the --reload-cmd script (fzf reloads with a
+  # fresh shell after a delete/pin), so the repair has to be in that copy too
+  # -- otherwise the first Ctrl-P/Ctrl-D would bring the blank rows back.
+  It 'the reload script renders the same repaired snippet as the initial stream'
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, text_plain, source_host, last_ts) VALUES ('text','','
+   reloaded snippet','mac-mini',100);"
+
+    # Only the visible content column: the row's \x1f-prefixed tail fields
+    # carry control bytes that have no business in a shellspec assertion.
+    result="$(zsh -f -c '
+      source "$SCRIPT_PATH"
+      FZF_COLUMNS=100 bash "$emit_script" | while IFS= read -r line; do
+        print -r -- "${line%%$'"'"'\x1f'"'"'*}"
+      done | sed -E $'"'"'s/\x1b\[[0-9;]*m//g'"'"'
+    ')"
+    When call test -n "$result"
+    The status should be success
+    The variable result should include "reloaded snippet"
+  End
+End

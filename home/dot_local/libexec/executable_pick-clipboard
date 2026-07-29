@@ -1322,14 +1322,55 @@ ROWS=${LINES:-$(tput lines 2>/dev/null || echo 24)}
 CW=${PICK_CLIPBOARD_CONTENT_WIDTH:-$(( (COLS - 2) * 55 / 100 - 12 ))}
 (( CW < 10 )) && CW=10
 
+# --- the content column's snippet -------------------------------------------
+# The stored text_preview lands in the content column raw, so whatever
+# whitespace the writer captured is what the list shows: a clip that OPENS
+# with a blank line stored an EMPTY preview (every writer used to keep only
+# the text up to the first newline) and rendered as a blank row with nothing
+# to identify it by, and an indented first line rendered pushed off its
+# column. The writers now flatten instead (clip::preview_of), but rows
+# captured before that keep their stored preview on file -- 8 blank and 59
+# untrimmed of the 991 rows on this store when this was written -- so the
+# snippet is repaired at render time too, the way the GUI picker does it in
+# clipboard-picker.lua's query_items.
+#
+# clip::sql_flatten <sql-expr> -- prints a SQL expression that flattens that
+# expression to one trimmed line: tabs/CR/LF become spaces, runs of spaces
+# collapse, then TRIM drops what a leading blank line left behind. SQLite has
+# no regex, so the collapse is nested replace() passes -- each one halves a
+# run, so 6 covers the 64-space indent no real clip reaches. Only the head of
+# the text is scanned: the column is ~150 columns at its widest, and a
+# multi-megabyte clip must not be rewritten six times over to fill one row.
+clip::sql_flatten() {
+  local e="replace(replace(replace(substr($1,1,400), char(9),' '), char(13),' '), char(10),' ')"
+  local -i i
+  for (( i = 0; i < 6; i++ )); do e="replace($e,'  ',' ')"; done
+  print -r -- "TRIM($e)"
+}
+# A preview with content is only trimmed (the store-wide invariant is that
+# text_preview is a single line -- see clipboard-platform-linux-headless.zsh);
+# a blank one has its snippet re-derived from text_plain, and a row with no
+# plain text either falls back to the "[kind]" badge, same as the GUI.
+SNIPPET_EXPR="COALESCE(NULLIF(TRIM(text_preview, ' '||char(9)||char(10)||char(13)),''),
+                       NULLIF($(clip::sql_flatten text_plain),''),
+                       '['||type_kind||']')"
+# The files/file/directory branch keeps the raw newline-joined paths (X8
+# tail-truncates them in the shell), but an empty preview there has to reach
+# the badge fallback too: IFNULL only catches NULL, and the localized
+# bookkeeping row (spec R5b, clip::copy_files_by_id) inserts '$epv' -- the
+# empty string, not NULL, when the path join comes back empty.
+FILE_RAW_EXPR="COALESCE(NULLIF(text_preview,''), '['||type_kind||']')"
+
 # Pre-render the synthetic LIVE row (§22.3) once, into a temp file the emit path
 # cats above the stored rows. Rendered via sqlite3 so the glyph/ANSI/printf are
 # byte-identical to the DB rows; the peer text comes from LIVE_TEXT_FILE via
 # readfile (no DB row exists for it). Kind glyph is nf-md-access-point (char 983043,
 # U+F0003) in the mauve origin color (c_origin) — radiating waves that read as
 # live/not-from-here at a glance.
-# Preview = first line only, same CW truncation + ellipsis as stored rows. Tail
-# id is the sentinel LIVE (not numeric): field1=LIVE, field2=MD:LIVE, field3=CP:LIVE.
+# Preview = the same flattened one-line snippet a stored row gets (this used to
+# be the first line alone, so a peer clipboard opening with a blank line
+# rendered the row blank), same CW truncation + ellipsis as stored rows. Tail id
+# is the sentinel LIVE (not numeric): field1=LIVE, field2=MD:LIVE, field3=CP:LIVE.
 if [[ -n "$LIVE_TEXT_FILE" ]]; then
   live_row_file=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-liverow.XXXXXX")
   sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "WITH palette AS (
@@ -1338,9 +1379,7 @@ if [[ -n "$LIVE_TEXT_FILE" ]]; then
                CHAR(27)||'[38;2;203;166;247m' AS c_origin
       ),
       live AS ( SELECT CAST(readfile('$LIVE_TEXT_FILE') AS TEXT) AS body ),
-      l AS ( SELECT CASE WHEN instr(body, char(10)) > 0
-                         THEN substr(body, 1, instr(body, char(10)) - 1)
-                         ELSE body END AS oneline FROM live )
+      l AS ( SELECT $(clip::sql_flatten body) AS oneline FROM live )
       SELECT c_origin || char(983043) || reset || '  '
         || text_color
         || printf('%-${CW}s', substr(oneline,1,$((CW-1))) || CASE WHEN length(oneline) > $((CW-1)) THEN '…' ELSE '' END)
@@ -1587,8 +1626,8 @@ EMIT_ROW_BODY="WITH palette AS (
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
       || CASE WHEN type_kind IN ('files','file','directory')
-              THEN char(2) || type_kind || char(2) || replace(IFNULL(text_preview,'['||type_kind||']'), char(10), char(1)) || char(3)
-              ELSE printf('%-${CW}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,$((CW-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > $((CW-1)) THEN '…' ELSE '' END)
+              THEN char(2) || type_kind || char(2) || replace(${FILE_RAW_EXPR}, char(10), char(1)) || char(3)
+              ELSE printf('%-${CW}s', substr(${SNIPPET_EXPR},1,$((CW-1))) || CASE WHEN length(${SNIPPET_EXPR}) > $((CW-1)) THEN '…' ELSE '' END)
          END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
@@ -1647,7 +1686,6 @@ cat > "$emit_script" <<EOF
 # minus ~6 (padding + gutter) + 5 (icon + sep + pin) -> CW = fc*55/100 - 11.
 fc=\${PTY_FRAME_COLUMNS:-\${FZF_COLUMNS:-80}}
 cw=\$((fc * 55 / 100 - 12)); [ \$cw -lt 10 ] && cw=10
-echo "[\$(date +%s)] PTY_FRAME_COLUMNS=\${PTY_FRAME_COLUMNS:-?} fc=\$fc cw=\$cw" >> /tmp/pick-clipboard-dims.log
 # X8: clip::shorten_path/render_file_content/filter_file_rows, pasted
 # verbatim (this is a fresh shell -- see the temp-scripts comment above) so
 # the \x02-marked files/file/directory rows below get the SAME tail-aware
@@ -1705,8 +1743,8 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
       || CASE WHEN type_kind IN ('files','file','directory')
-              THEN char(2) || type_kind || char(2) || replace(IFNULL(text_preview,'['||type_kind||']'), char(10), char(1)) || char(3)
-              ELSE printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
+              THEN char(2) || type_kind || char(2) || replace(${FILE_RAW_EXPR}, char(10), char(1)) || char(3)
+              ELSE printf('%-\${cw}s', substr(${SNIPPET_EXPR},1,\$((cw-1))) || CASE WHEN length(${SNIPPET_EXPR}) > \$((cw-1)) THEN '…' ELSE '' END)
          END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
@@ -1762,8 +1800,8 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       || '  '
       || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
       || CASE WHEN type_kind IN ('files','file','directory')
-              THEN char(2) || type_kind || char(2) || replace(IFNULL(text_preview,'['||type_kind||']'), char(10), char(1)) || char(3)
-              ELSE printf('%-\${cw}s', substr(IFNULL(text_preview,'['||type_kind||']'),1,\$((cw-1))) || CASE WHEN length(IFNULL(text_preview,'['||type_kind||']')) > \$((cw-1)) THEN '…' ELSE '' END)
+              THEN char(2) || type_kind || char(2) || replace(${FILE_RAW_EXPR}, char(10), char(1)) || char(3)
+              ELSE printf('%-\${cw}s', substr(${SNIPPET_EXPR},1,\$((cw-1))) || CASE WHEN length(${SNIPPET_EXPR}) > \$((cw-1)) THEN '…' ELSE '' END)
          END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '

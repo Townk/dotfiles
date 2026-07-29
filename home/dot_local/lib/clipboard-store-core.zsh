@@ -41,6 +41,7 @@ ORIGIN_FILE="$STATE_DIR/current-origin"
 LEGACY_GRACE_S=0.2
 READ_TIMEOUT_S=5
 MAX_ROWS=1000   # op_persist sweep cap (mirrors the HS watcher's row retention)
+PREVIEW_MAX=200 # clip::preview_of's soft budget, in bytes
 
 mkdir -p "$STATE_DIR" 2>/dev/null
 
@@ -266,6 +267,37 @@ clip::parse_rich_payload() {
   return 0
 }
 
+# clip::preview_of <text> -- $REPLY = the single-line snippet that goes in
+# text_preview: blank lines dropped, every other line trimmed, the rest joined
+# with a single space.
+#
+# This used to keep only the text up to the first newline (${text%%$'\n'*}),
+# so a clip that OPENS with a blank line stored an EMPTY preview and rendered
+# as a blank row -- nothing in the list to identify it by -- in both pickers.
+# Flattening also puts more of a multi-line clip in the row, since the column
+# is spent on content rather than on whatever happened to sit on line one.
+# Mirrors preview_of() in clipboard-history.lua, the macOS watcher's writer.
+#
+# Lines stop being collected once PREVIEW_MAX bytes are covered, so a
+# multi-megabyte clip is not flattened in full to fill one list row. The cut
+# lands on a line boundary rather than mid-string, which is why there is no
+# codepoint back-off here (the Lua side truncates to an exact byte budget and
+# needs one); both pickers truncate to their own column width at render time.
+clip::preview_of() {
+  setopt local_options extended_glob
+  local line trimmed
+  local -a parts
+  local -i len=0
+  for line in ${(f)1}; do
+    trimmed=${${line##[[:space:]]##}%%[[:space:]]##}
+    [[ -n "$trimmed" ]] || continue
+    parts+=( "$trimmed" )
+    (( len += $#trimmed + 1 ))   # +1 for the joining space
+    (( len > PREVIEW_MAX )) && break
+  done
+  REPLY=${(j: :)parts}
+}
+
 # clip::persist_text_row <host> <kind> <app> <regtype> <text> -- the
 # dedup-scoped INSERT/UPDATE + retention sweep extracted from op_persist
 # (byte-safe: temp files + readfile(), never SQL literals). 0 on success;
@@ -274,7 +306,7 @@ clip::persist_text_row() {
   local host=$1 kind=${2:-text} app=${3:-} regtype=${4:-} text=$5
   [[ "$regtype" == (v|l|b) ]] || regtype=""
   local -i len=$#text
-  local preview=${text%%$'\n'*}
+  local preview; clip::preview_of "$text"; preview=$REPLY
   local hash; hash="$(print -rn -- "$text" | clip::sha256)"
   local ts=$EPOCHREALTIME
   local eh=${host//\'/\'\'} ek=${kind//\'/\'\'}
