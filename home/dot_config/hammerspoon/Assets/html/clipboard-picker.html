@@ -467,6 +467,16 @@
       if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'k')) { e.preventDefault(); move(-1); return; }
       if (e.ctrlKey && e.key === 'f') { e.preventDefault(); pageMove(1); return; }
       if (e.ctrlKey && e.key === 'b') { e.preventDefault(); pageMove(-1); return; }
+      // vim's gg/G, which need a modifier here because a bare letter goes to
+      // the search field. Direction comes off shiftKey rather than the letter's
+      // case so Caps Lock can't invert it. A delta of the whole list length is
+      // always enough to hit either end -- move() clamps, re-renders and
+      // scrolls the selection back into view.
+      if (e.ctrlKey && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault();
+        move(e.shiftKey ? filtered.length : -filtered.length);
+        return;
+      }
       if (e.ctrlKey && e.key === 'y') { e.preventDefault(); copyClip(); return; }
       if (e.ctrlKey && e.key === 'd') { e.preventDefault(); del(); return; }
       if (e.ctrlKey && e.key === 'p') { e.preventDefault(); pin(); return; }
