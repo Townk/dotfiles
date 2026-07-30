@@ -155,28 +155,33 @@ spin::wait() {
 spin::stream() {
   local pid="$1" file="$2" title="${3:-}"
   local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-  local start=$SECONDS s=1 elapsed off=1 size spinning=1
-  spin::active || spinning=0
+  local start=$SECONDS s=1 elapsed off=1 size spinning=1 active=1 stall=0
+  spin::active || { spinning=0; active=0 }
   # `[[ -s ]]` costs no fork, so the common silent case never pays for the
   # size arithmetic below — that starts only once there IS output to mirror.
   while kill -0 "$pid" 2>/dev/null; do
-    if [[ ! -s "$file" ]]; then
-      if ((spinning)); then
-        elapsed=$((SECONDS - start))
-        print -nu2 -- "\r  ${C_BLU}${frames[s]}${C_RES} ${title:+$title }${elapsed}s  "
-        s=$((s % 10 + 1))
+    if [[ -s "$file" ]]; then
+      size=$(wc -c <"$file" 2>/dev/null) || size=0
+      if ((size >= off)); then
+        if ((spinning)); then
+          print -nu2 -- "\r\e[K"
+          spinning=0
+        fi
+        tail -c "+$off" "$file"
+        off=$((size + 1))
+        stall=0
+      elif ((active && ++stall >= 5)); then
+        # Quiet for ~0.5s mid-stream, so bring the spinner BACK rather than
+        # retiring it at the first byte: `brew bundle` announces "Upgrading
+        # google-chrome" and then downloads it in silence for minutes, which
+        # is exactly the dead air the spinner exists to cover.
+        spinning=1
       fi
-      sleep 0.1
-      continue
     fi
     if ((spinning)); then
-      print -nu2 -- "\r\e[K"
-      spinning=0
-    fi
-    size=$(wc -c <"$file" 2>/dev/null) || size=0
-    if ((size >= off)); then
-      tail -c "+$off" "$file"
-      off=$((size + 1))
+      elapsed=$((SECONDS - start))
+      print -nu2 -- "\r  ${C_BLU}${frames[s]}${C_RES} ${title:+$title }${elapsed}s  "
+      s=$((s % 10 + 1))
     fi
     sleep 0.1
   done
