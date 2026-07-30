@@ -344,7 +344,7 @@ EOF
     "$AI_COMMIT_CLAUDE_BIN" "${claude_args[@]}" "$prompt" >>"$log_file" 2>&1 &
     claude_pid=$!
 
-    cagent::spinner "$claude_pid"
+    spin::wait "$claude_pid" "thinking"
     wait "$claude_pid"
     rc=$?
     claude_pid=""

@@ -31,6 +31,19 @@ npm_snapshot_versions() {
              | "\(.key)\t\(.value.version)"' 2>/dev/null || true
 }
 
+# npm_outdated_names
+# Names of global packages with a newer version available, one per line.
+# Returns non-zero when the QUERY failed, so a caller can tell "nothing is
+# outdated" from "we don't know": `npm outdated` exits 1 when it FINDS
+# something, so the exit code is useless and a parseable JSON object (it prints
+# `{}` when nothing is outdated) is the only honest success signal.
+npm_outdated_names() {
+  local json=""
+  json=$(npm outdated -g --json 2>/dev/null || true)
+  printf '%s' "$json" | jq -e 'type == "object"' >/dev/null 2>&1 || return 1
+  printf '%s' "$json" | jq -r 'keys[]' 2>/dev/null || true
+}
+
 # npm_list_rows <outdated:true|false>
 # Output one "name\tversion[annotation]" TSV row per installed global package.
 npm_list_rows() {
@@ -45,11 +58,17 @@ npm_list_rows() {
   if [[ "$outdated" == true ]]; then
     local outdated_json=""
     outdated_json=$(npm outdated -g --json 2>/dev/null || true)
-    if [[ -n "$outdated_json" ]]; then
+    # `npm outdated` exits 1 when it FINDS something outdated, so the exit code
+    # can't tell success from failure — a parseable JSON object is the only
+    # honest signal (it prints `{}` when nothing is outdated). Treating a failed
+    # query as an empty map would render every global package as current.
+    if printf '%s' "$outdated_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
       while IFS=$'\t' read -r name ver; do
         [[ -n "$name" ]] && outdated_map[$name]="$ver"
       done < <(printf '%s' "$outdated_json" |
         jq -r 'to_entries[] | "\(.key)\t\(.value.latest)"' 2>/dev/null || true)
+    else
+      pkg::warn_update_check_failed "npm outdated -g --json"
     fi
   fi
 
@@ -117,6 +136,7 @@ npm_build_global_if_needed() {
 }
 
 do_sync() {
+  pkg::sync_parse_args "$@"
   log_info "Syncing npm globals..."
 
   local declared_full declared installed before_snap after_snap line
@@ -152,17 +172,54 @@ do_sync() {
     done <"$declared_full"
   done
 
+  # `npm update -g` re-resolves the whole global tree and costs the better part
+  # of a minute whether or not anything moved — the same on a routine sync where
+  # every package is current. `npm outdated -g` answers "does anything actually
+  # need updating?" in well under a second, so ask that first and update only
+  # what it names. When the query itself fails we can't narrow safely, so fall
+  # back to updating everything declared rather than silently skipping updates.
+  local outdated_raw="" narrow=1
+  outdated_raw=$(npm_outdated_names) || narrow=0
+  local -A outdated_set=()
+  if ((narrow)); then
+    local n
+    for n in ${(f)outdated_raw}; do
+      [[ -n "$n" ]] && outdated_set[$n]=1
+    done
+  else
+    pkg::warn_update_check_failed "npm outdated -g --json"
+  fi
+
+  # Registry packages go to npm in ONE call — `--` install-spec lines have no
+  # registry entry to update and only need their post-install build check.
+  local -a to_update=()
+  local canon=""
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
+    canon=$(pkg::line_canonical "$line")
     if pkg::line_has_spec "$line"; then
-      npm_build_global_if_needed "$(pkg::line_canonical "$line")"
-    else
-      npm update -g "${NPM_SYNC_FLAGS[@]}" "$(pkg::line_canonical "$line")" || true
+      npm_build_global_if_needed "$canon"
+      continue
     fi
+    ((narrow)) && [[ -z "${outdated_set[$canon]:-}" ]] && continue
+    to_update+=("$canon")
   done <"$declared_full"
+
+  # --silent: npm reports "change <pkg> X => X" and "changed N packages" even
+  # when the version is identical, so its output says nothing about what
+  # actually happened. report::changes answers that from version snapshots,
+  # and spin::quiet still surfaces npm's output if the update fails. Under
+  # --verbose that chatter is what was asked for, so --silent comes off.
+  if ((${#to_update} > 0)); then
+    local -a npm_quiet=(--silent)
+    ((PKG_VERBOSE)) && npm_quiet=()
+    pkg::run_tool "npm: updating globals" \
+      npm update -g "${NPM_SYNC_FLAGS[@]}" "${npm_quiet[@]}" "${to_update[@]}" || true
+  fi
 
   # Restart services whose backing global package changed version.
   npm_snapshot_versions >"$after_snap"
+  report::changes "$before_snap" "$after_snap" package
   pkg::restart_changed "$before_snap" "$after_snap"
   return 0
 }
@@ -173,7 +230,7 @@ Syncs globally-installed npm packages against ~/.config/packages/Npmfile.
 
 Usage:
   system-package-npm list [-u|--update]
-  system-package-npm sync
+  system-package-npm sync [-v|--verbose]
   system-package-npm -h | --help | help
 
 Manifest lines may use \`<name> -- <install-spec>\` for non-registry installs;
@@ -186,6 +243,9 @@ of both the list output and the install/uninstall diff.
 list flags:
   -u, --update   annotate packages with available updates
   -a, --all      no-op (npm has no transient-dep concept here)
+
+sync flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes
 
 After sync, services whose backing global package changed version and are
 currently running are restarted.
@@ -210,14 +270,20 @@ EOF
 usage_sync() {
   cat <<EOF
 Usage:
-  system-package-npm sync
+  system-package-npm sync [-v|--verbose]
+
+Flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
+                 sync keeps quiet
 
 Reconciles ~/.config/packages/Npmfile against \`npm ls -g\`:
 
   • Globals in the manifest but not installed → \`npm install -g\`
   • Globals installed but not in the manifest → \`npm uninstall -g\`
     (runtime packages are exempt from removal)
-  • Registry packages are updated individually via \`npm update -g <name>\`;
+  • Registry packages that \`npm outdated -g\` reports as behind are updated in
+    one batched \`npm update -g <name...>\`; when nothing is behind, that call
+    is skipped entirely (it costs ~a minute even as a no-op).
     \`--\` install-spec lines are not passed to \`npm update\` (no registry).
 
 After sync, services whose backing global package was just upgraded and
@@ -245,7 +311,7 @@ main() {
         usage_sync
         exit 0
       }
-      do_sync
+      do_sync "$@"
       ;;
     *)
       usage >&2

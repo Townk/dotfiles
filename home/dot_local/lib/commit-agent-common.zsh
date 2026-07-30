@@ -14,23 +14,6 @@ source "$(dirname "$_cagent_self")/common.zsh"
 source "$(dirname "$_cagent_self")/prompt-common.zsh"
 unset _cagent_self
 
-# cagent::spinner <pid>
-# Braille spinner with elapsed seconds while <pid> runs, so the user knows the
-# model is still thinking. No-op when stderr isn't a TTY (piped/non-interactive).
-cagent::spinner() {
-  local pid="$1"
-  [[ -t 2 ]] || return 0
-  local spinner=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-  local start=$SECONDS s=1 elapsed
-  while kill -0 "$pid" 2>/dev/null; do
-    elapsed=$((SECONDS - start))
-    print -nu2 -- "\r  ${C_BLU}${spinner[s]}${C_RES} ${elapsed}s  "
-    sleep 0.1
-    s=$((s % 10 + 1))
-  done
-  print -nu2 -- "\r\e[K"
-}
-
 # cagent::print_plan_summary <plan_file> <commit_count>
 # The "Planned N commit(s)" header + one subject/file-list block per commit.
 cagent::print_plan_summary() {

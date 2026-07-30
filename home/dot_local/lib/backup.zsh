@@ -1376,27 +1376,20 @@ bkp::ux::interactive() {
 }
 
 # bkp::spin <title> <outfile> -- <cmd...>
-# Run <cmd> with its stdout redirected to <outfile>, animating a gum spinner
-# titled <title> while it works — but ONLY when a human is watching
-# (bkp::ux::interactive) and the real gum binary is present. Otherwise run it
-# plainly, so scheduled/piped runs stay silent and gum-free. Returns <cmd>'s
+# Run <cmd> with its stdout redirected to <outfile>, animating the shared
+# spinner while it works — but ONLY when a human is watching
+# (bkp::ux::interactive), so scheduled/piped runs stay silent. Returns <cmd>'s
 # exit status. Use it to keep an otherwise-silent long restic op — one we run
 # --quiet to suppress its output flood — from looking frozen.
+#
+# Stdout only: <outfile> is DATA here (the sweep's capture set is parsed
+# downstream), so restic's stderr must not be folded into it.
 bkp::spin() {
   local title="$1" outfile="$2"; shift 2
   [[ "${1:-}" == -- ]] && shift
-  local rc=0
-  # Real binary only: a gum FUNCTION is the tests' opt-out seam.
-  if bkp::ux::interactive && command -v gum >/dev/null 2>&1 && (( ! ${+functions[gum]} )); then
-    "$@" > "$outfile" &
-    local pid=$!
-    gum spin --spinner dot --title "$title" -- \
-      zsh -c 'while kill -0 "$1" 2>/dev/null; do sleep 0.2; done' _ "$pid" || :
-    wait "$pid" || rc=$?
-  else
-    "$@" > "$outfile" || rc=$?
-  fi
-  return $rc
+  local prog=0
+  bkp::ux::interactive && prog=1
+  SPIN_PROGRESS="$prog" spin::run "$title" "$outfile" -- "$@"
 }
 
 # bkp::capture::run [<manifest>] [<config>]

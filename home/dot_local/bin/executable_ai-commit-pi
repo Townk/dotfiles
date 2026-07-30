@@ -271,7 +271,7 @@ if [[ "$verbose" -eq 1 ]]; then
 else
   pi "${pi_args[@]}" "$prompt" >>"$log_file" 2>&1 &
   pi_pid=$!
-  cagent::spinner "$pi_pid"
+  spin::wait "$pi_pid" "thinking"
   wait "$pi_pid"
   rc=$?
   pi_pid=""

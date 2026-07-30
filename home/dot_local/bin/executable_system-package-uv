@@ -8,6 +8,7 @@ source "$HOME/.local/lib/system-package-common.zsh"
 
 UVFILE="$PKG_DIR/Uvfile"
 PYTHON_STAMP="$PKG_STATE_DIR/uv.python"
+UV_MANIFEST_STAMP="$PKG_STATE_DIR/uv.manifest"
 
 uv_list_installed() {
   # `uv tool list` prints one tool name per "block"; the tool name is the
@@ -84,6 +85,7 @@ do_list() {
 }
 
 do_sync() {
+  pkg::sync_parse_args "$@"
   log_info "Syncing uv tools..."
 
   local declared_full declared installed before_snap after_snap
@@ -98,7 +100,10 @@ do_sync() {
 
   if uv_python_drifted; then
     log_warn "Python version changed since last sync — rebuilding uv tool venvs"
-    uv tool upgrade --all --reinstall || true
+    local -a uv_quiet=(-q)
+    ((PKG_VERBOSE)) && uv_quiet=()
+    pkg::run_tool "uv: rebuilding tool venvs" \
+      uv tool upgrade --all --reinstall "${uv_quiet[@]}" || true
   fi
 
   # Each Uvfile line is `<tool> [uv-tool-install-args...]`. The first
@@ -140,30 +145,55 @@ do_sync() {
     uv tool install "${args[@]}" || log_warn "failed to install $tool"
   done
 
-  # Tools with extra args (e.g. `--with extra-pkg`) get reinstalled every
-  # sync so that changes to those args land. Reinstall is a no-op when args
-  # haven't actually changed, so the cost is one fast metadata check per
-  # tool.
+  # Tools with extra args (e.g. `--with extra-pkg`) are reinstalled so changes
+  # to those args land — but ONLY when the manifest line actually moved.
+  # `--reinstall` is emphatically not a cheap no-op: uv documents it as
+  # "reinstall all packages, regardless of whether they're already installed,
+  # implies --refresh", so running it unconditionally tore down and rebuilt
+  # every such tool's entire environment on every sync (mlx-vlm alone is 55
+  # distributions) to re-apply a flag that changes maybe once a year.
+  # `uv tool upgrade --all` below keeps versions current either way.
   #
   # `--`-form entries (git / local / editable installs) are deliberately
   # SKIPPED here — re-resolving a git source every sync is expensive (think
   # omlx pulling MLX/transformers), and `uv tool upgrade --all` below
   # already handles drift for those.
+  #
+  # This loop reads a FILE (not a pipe), so it runs in the current shell and
+  # its failure tally survives — which is what gates the manifest stamp below.
+  local reinstall_failed=0
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     [[ "$line" == "${line%% *}" ]] && continue # no extras → skip
     local -a args=(${(z)line})
     pkg::line_has_spec "$line" && continue # `--` form → skip
-    uv tool install --reinstall "${args[@]}" || log_warn "failed to reinstall ${line%% *}"
+    local tool="${line%% *}"
+    pkg::manifest_line_changed "$UV_MANIFEST_STAMP" "$tool" "$line" || continue
+    log_info "$tool: install flags changed, reinstalling"
+    uv tool install --reinstall "${args[@]}" || {
+      log_warn "failed to reinstall $tool"
+      reinstall_failed=1
+    }
   done <"$declared_full"
 
-  uv tool upgrade --all || true
+  # Silenced: uv narrates every resolved/prepared/installed distribution, which
+  # is a wall of transient dependencies even when nothing moves.
+  # report::changes states the outcome from version snapshots instead, and
+  # spin::quiet still dumps uv's output if the upgrade fails. Under --verbose
+  # the wall is exactly what was asked for, so -q comes off and it streams.
+  local -a uv_quiet=(-q)
+  ((PKG_VERBOSE)) && uv_quiet=()
+  pkg::run_tool "uv: upgrading tools" uv tool upgrade --all "${uv_quiet[@]}" || true
+
+  ((reinstall_failed == 0)) &&
+    pkg::write_manifest_stamp "$UV_MANIFEST_STAMP" "$declared_full"
 
   uv_write_stamp
 
   # Restart services whose backing uv tool changed version (or was newly
   # installed). Skipped on first-run no-changes since the diff is empty.
   uv_snapshot_versions >"$after_snap"
+  report::changes "$before_snap" "$after_snap" tool
   pkg::restart_changed "$before_snap" "$after_snap"
   return 0
 }
@@ -174,12 +204,15 @@ Syncs uv-tool-installed Python tools against ~/.config/packages/Uvfile.
 
 Usage:
   system-package-uv list [-u|--update]
-  system-package-uv sync
+  system-package-uv sync [-v|--verbose]
   system-package-uv -h | --help | help
 
 list flags:
   -u, --update   annotate packages with available updates (queries pypi.org)
   -a, --all      no-op (uv has no transient-dep concept here)
+
+sync flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes
 
 When the active Python version drifts since the last sync, all uv tool
 venvs are rebuilt before the install/upgrade pass. After sync, any system
@@ -205,7 +238,11 @@ EOF
 usage_sync() {
   cat <<EOF
 Usage:
-  system-package-uv sync
+  system-package-uv sync [-v|--verbose]
+
+Flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
+                 sync keeps quiet
 
 Reconciles ~/.config/packages/Uvfile against \`uv tool list\`:
 
@@ -244,7 +281,7 @@ main() {
         usage_sync
         exit 0
       }
-      do_sync
+      do_sync "$@"
       ;;
     *)
       usage >&2

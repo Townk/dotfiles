@@ -88,8 +88,14 @@ go_list_rows() {
     if [[ "$outdated" == true ]]; then
       latest=$(go list -m -versions "$mod_path" 2>/dev/null |
         awk '{print $NF}' || true)
-      # When there are no tagged versions, $NF is just the module path — skip it
-      if [[ -n "$latest" && "$latest" != "$mod_path" && "$latest" != "$ver" ]]; then
+      # No output means the proxy query failed; $NF being the module path
+      # itself means the module has no tagged versions. Both leave the latest
+      # version UNKNOWN, which has to render differently from "current" —
+      # otherwise an unreachable module proxy reports the whole $GOBIN as
+      # up to date.
+      if [[ -z "$latest" || "$latest" == "$mod_path" ]]; then
+        ver="${ver} ${C_DIM}(update check failed)${C_RES}"
+      elif [[ "$latest" != "$ver" ]]; then
         ver="${ver} ${C_YEL}(update available: ${latest})${C_RES}"
       fi
     fi
@@ -113,6 +119,7 @@ do_list() {
 }
 
 do_sync() {
+  pkg::sync_parse_args "$@"
   log_info "Syncing go binaries..."
 
   local declared declared_raw vers installed pairs before_snap after_snap package_bin_dir go_executable want
@@ -166,20 +173,25 @@ do_sync() {
   pkg::diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     want=$(awk -F'\t' -v p="$pkg" '$1==p {print $2; exit}' "$vers")
-    "$go_executable" install "$pkg@${want:-latest}" || log_warn "failed to install $pkg"
+    spin::streamed "go: ${pkg##*/}" \
+      "$go_executable" install "$pkg@${want:-latest}" || log_warn "failed to install $pkg"
   done
 
   # Upgrade everything still declared (re-running go install fetches the
-  # pinned version — a no-op when already on it — or latest when unpinned)
+  # pinned version — a no-op when already on it — or latest when unpinned).
+  # `go install` prints nothing at all until something goes wrong or a build
+  # starts talking, so each module gets a spinner through its silent stretch.
   while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     want=$(awk -F'\t' -v p="$pkg" '$1==p {print $2; exit}' "$vers")
-    "$go_executable" install "$pkg@${want:-latest}" || log_warn "failed to upgrade $pkg"
+    spin::streamed "go: ${pkg##*/}" \
+      "$go_executable" install "$pkg@${want:-latest}" || log_warn "failed to upgrade $pkg"
   done <"$declared"
 
   # Restart services whose backing binary changed version. Keyed on binary
   # basename (matches what `system-service restart-for` resolves cmd[0] to).
   go_snapshot_versions >"$after_snap"
+  report::changes "$before_snap" "$after_snap" binary
   pkg::restart_changed "$before_snap" "$after_snap"
   # Fire on-change hooks (hooks.toml) for every binary whose version changed
   # this sync — installed, upgraded, or downgraded (e.g. regenerate the
@@ -199,7 +211,7 @@ prerelease — RCs must be pinned).
 
 Usage:
   system-package-go list [-u|--update]
-  system-package-go sync
+  system-package-go sync [-v|--verbose]
   system-package-go -h | --help | help
 
 Manifest entries are full module paths (e.g. \`github.com/x/y/cmd/foo\`);
@@ -208,6 +220,9 @@ binaries land in \$GOBIN (\`go env GOPATH\`/bin by default).
 list flags:
   -u, --update   annotate packages with available updates (queries the module proxy)
   -a, --all      no-op (go has no transient-dep concept here)
+
+sync flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes
 
 After sync, services whose backing binary changed version and are currently
 running are restarted. Matching is by binary basename, since that is what
@@ -233,7 +248,11 @@ EOF
 usage_sync() {
   cat <<EOF
 Usage:
-  system-package-go sync
+  system-package-go sync [-v|--verbose]
+
+Flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
+                 sync keeps quiet
 
 Reconciles ~/.config/packages/Gofile against the installed binaries in
 \$GOBIN. Every declared module is re-installed at \`@latest\`; any binary
@@ -264,7 +283,7 @@ main() {
         usage_sync
         exit 0
       }
-      do_sync
+      do_sync "$@"
       ;;
     *)
       usage >&2

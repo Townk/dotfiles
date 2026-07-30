@@ -31,7 +31,13 @@ machine converges to the same end state as a steady-state run.
 
 Usage:
   system-update                    run a full update pass
+  system-update -v | --verbose     show each tool's own output
   system-update -h | --help | help show this help
+
+By default the steps this script drives directly (mise, Yazi, NeoVim, Pi)
+run quiet behind a spinner and report what actually changed, measured from
+before/after snapshots rather than from the tools' own prose. --verbose
+streams their raw output instead, and is forwarded to `system-package sync`.
 
 Update order (each step is best-effort; failures are reported but never
 block later steps unless explicitly fatal):
@@ -53,11 +59,15 @@ block later steps unless explicitly fatal):
 EOF
 }
 
+VERBOSE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h | --help | help)
       usage
       exit 0
+      ;;
+    -v | --verbose)
+      VERBOSE=1
       ;;
     *)
       usage >&2
@@ -70,6 +80,107 @@ done
 
 # Colors / logging come from the shared base (C_*, log_warn/die).
 source "$HOME/.local/lib/common.zsh"
+
+# Flags forwarded to `system-package sync`, so one --verbose covers the whole
+# run rather than only the steps this script drives itself.
+sync_flags=()
+((VERBOSE)) && sync_flags=(--verbose)
+
+# run_step <title> <cmd...>
+# Run one directly-driven update step: quiet behind a spinner by default (the
+# per-step report says what moved), streamed raw under --verbose. Mirrors
+# pkg::run_tool in the package workers.
+run_step() {
+  if ((VERBOSE)); then
+    spin::streamed "$@"
+  else
+    spin::quiet "$@"
+  fi
+}
+
+# snapshot_mise / snapshot_yazi / snapshot_nvim / snapshot_pi
+# "name<TAB>version" TSV for report::changes. Each is cheap enough (tens of
+# milliseconds) to run twice per step. All are best-effort: a missing tool
+# yields an empty snapshot, which reports as "nothing changed" rather than
+# failing the update.
+# step_snapshot <snapshot_fn>
+# Take a "before" snapshot into a temp file and print its path. Snapshot
+# failures are swallowed: an empty before-file makes report::changes treat
+# everything as newly installed, which is noisy but never wrong, whereas
+# aborting the update over a failed status query would be.
+step_snapshot() {
+  local f
+  f=$(mktemp)
+  "$1" >"$f" 2>/dev/null || true
+  print -r -- "$f"
+}
+
+# step_report <before_file> <snapshot_fn> <singular_noun>
+# Take the matching "after" snapshot, report what moved, and clean up.
+step_report() {
+  local before="$1" fn="$2" noun="$3" after
+  after=$(mktemp)
+  "$fn" >"$after" 2>/dev/null || true
+  report::changes "$before" "$after" "$noun"
+  rm -f "$before" "$after"
+}
+
+snapshot_mise() {
+  mise ls --installed 2>/dev/null | awk 'NF >= 2 {print $1 "\t" $2}'
+}
+
+snapshot_yazi() {
+  # `ya pkg list` prints "  owner/repo:plugin (hash)" under Plugins:/Flavors:
+  # headers; keep the indented entries and split name from hash.
+  ya pkg list 2>/dev/null |
+    awk '/^\t| {2,}/ { gsub(/^[ \t]+/, ""); if (match($0, /\(([^)]+)\)$/)) {
+           hash = substr($0, RSTART + 1, RLENGTH - 2)
+           name = $1
+           print name "\t" hash
+         } }'
+}
+
+snapshot_zsh_plugins() {
+  local dir="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins" p
+  [[ -d "$dir" ]] || return 0
+  for p in "$dir"/*(/N); do
+    [[ -d "$p/.git" ]] || continue
+    printf '%s\t%s\n' "${p:t}" \
+      "$(git -C "$p" rev-parse --short HEAD 2>/dev/null || print '?')"
+  done
+}
+
+snapshot_nvim() {
+  local lock="$HOME/.config/nvim/lazy-lock.json"
+  [[ -f "$lock" ]] || return 0
+  jq -r 'to_entries[] | "\(.key)\t\(.value.commit // .value.version // "?")"' \
+    "$lock" 2>/dev/null || true
+}
+
+snapshot_pi() {
+  # `pi list` alternates "  npm:<name>" with the install path on the next line;
+  # the version lives in that directory's package.json.
+  #
+  # NB: the loop variable must NOT be named `path` — in zsh that is the array
+  # tied to $PATH, so reading a directory into it wipes the command search path
+  # for the rest of the function (awk/jq stop resolving).
+  local home_dir="${1:-}" pkg_dir
+  {
+    if [[ -n "$home_dir" ]]; then
+      PI_CODING_AGENT_DIR="$home_dir" timeout 30 pi list </dev/null 2>/dev/null
+    else
+      timeout 30 pi list </dev/null 2>/dev/null
+    fi
+  } |
+    awk '/^ +\// { print $1 }' |
+    while IFS= read -r pkg_dir; do
+      [[ -f "$pkg_dir/package.json" ]] || continue
+      # Everything after node_modules/, so a scoped package keeps its @scope.
+      printf '%s\t%s\n' "${pkg_dir#*/node_modules/}" \
+        "$(jq -r '.version // "?"' "$pkg_dir/package.json" 2>/dev/null)"
+    done
+  return 0
+}
 
 # The Rust XDG migration moved Cargo/Rustup state out of ~/.cargo. Machines that
 # had already installed mise-managed Rust can be left with install entries
@@ -126,12 +237,21 @@ update_zsh_plugins() {
   local dir="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins"
   [[ -d "$dir" ]] || return 0
   print -P -- "\n🔌 Update zsh plugins...\n"
-  local p
+  # Each --quiet pull is a silent ~0.6s network round-trip, so the whole loop
+  # is several seconds of dead air. Head commits are the snapshot, so the
+  # report names the plugins that actually moved. --verbose drops --quiet and
+  # lets git narrate instead.
+  local before p
+  local -a git_quiet=(--quiet)
+  ((VERBOSE)) && git_quiet=()
+  before=$(step_snapshot snapshot_zsh_plugins)
   for p in "$dir"/*(/N); do
     [[ -d "$p/.git" ]] || continue
-    git -C "$p" pull --ff-only --recurse-submodules --quiet \
+    run_step "zsh: ${p:t}" \
+      git -C "$p" pull --ff-only --recurse-submodules "${git_quiet[@]}" \
       || log_warn "zsh plugin update failed: ${p:t}"
   done
+  step_report "$before" snapshot_zsh_plugins plugin
 }
 
 # Update Pi coding-agent extensions for both config homes — the cloud default
@@ -145,11 +265,24 @@ update_zsh_plugins() {
 update_pi_extensions() {
   command -v pi >/dev/null 2>&1 || return 0
   print -P -- "\n🥧 Upgrade Pi extensions...\n"
-  pi update --extensions || log_warn "pi extension upgrade (cloud home) had failures"
+  local before
+  before=$(step_snapshot snapshot_pi)
+  run_step "pi: upgrading extensions (cloud home)" pi update --extensions \
+    || log_warn "pi extension upgrade (cloud home) had failures"
+  step_report "$before" snapshot_pi extension
   if [[ -d "$HOME/.pi/agent-local" ]]; then
-    PI_CODING_AGENT_DIR="$HOME/.pi/agent-local" pi update --extensions \
+    before=$(step_snapshot snapshot_pi_local)
+    run_step "pi: upgrading extensions (local home)" \
+      env PI_CODING_AGENT_DIR="$HOME/.pi/agent-local" pi update --extensions \
       || log_warn "pi extension upgrade (local home) had failures"
+    step_report "$before" snapshot_pi_local extension
   fi
+}
+
+# snapshot_pi bound to the local config home, so step_report can call it with
+# the single-argument signature it expects.
+snapshot_pi_local() {
+  snapshot_pi "$HOME/.pi/agent-local"
 }
 
 # Wrap up a successful run. The interactive zsh wrapper owns any parent-shell
@@ -263,11 +396,15 @@ if ! command -v brew >/dev/null 2>&1; then
     repair_mise_rust_legacy_links
     # install first so a declared-but-missing toolchain (e.g. `go`, needed by
     # the package workers below) exists before `system-package sync` runs.
-    mise install && mise upgrade && mise prune -y || log_warn "mise sync had failures"
+    mise_before=$(step_snapshot snapshot_mise)
+    run_step "mise: converging toolchains" \
+      zsh -c 'mise install && mise upgrade && mise prune -y' \
+      || log_warn "mise sync had failures"
+    step_report "$mise_before" snapshot_mise tool
   fi
   if command -v system-package >/dev/null 2>&1; then
     print -P -- "\n📦 Sync system packages...\n"
-    system-package sync || die "Failed to sync system packages!"
+    system-package sync "${sync_flags[@]}" || die "Failed to sync system packages!"
     system_package_synced=1
   fi
   if [[ "$system_package_synced" -ne 1 ]] && command -v snap >/dev/null 2>&1; then
@@ -278,8 +415,12 @@ if ! command -v brew >/dev/null 2>&1; then
     print -P -- "\n📝 Upgrade NeoVim plugins...\n"
     # Bounded with `timeout`: headless plugin sync can hang indefinitely
     # if a background task (e.g. a treesitter parser build) never settles.
-    timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
+    # Report covers Lazy plugins only (see the Homebrew path's note).
+    nvim_before=$(step_snapshot snapshot_nvim)
+    run_step "nvim: syncing plugins" \
+      timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
       log_warn "NeoVim plugin upgrade timed out or had failures"
+    step_report "$nvim_before" snapshot_nvim plugin
   fi
   update_pi_extensions
   update_zsh_plugins
@@ -287,8 +428,8 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 0
 fi
 
-print -P -- "\n  Updating Homebrew sources...\n"
-brew update || die "Failed to update Homebrew!"
+print -P -- "\n🍺 Updating Homebrew sources...\n"
+run_step "brew: updating sources" brew update || die "Failed to update Homebrew!"
 
 # Converge mise-managed toolchains BEFORE the package syncs, for two reasons:
 #   1. Package workers shell out to tools mise provides (e.g. the Go worker
@@ -307,19 +448,22 @@ brew update || die "Failed to update Homebrew!"
 if command -v mise >/dev/null 2>&1; then
   print -P -- "\n🛠️ Converging mise toolchains...\n"
   repair_mise_rust_legacy_links
-  mise install || log_warn "mise install had failures"
-  mise upgrade || log_warn "mise upgrade had failures"
-  mise prune -y || log_warn "mise prune had failures"
+  mise_before=$(step_snapshot snapshot_mise)
+  run_step "mise: installing declared tools" mise install || log_warn "mise install had failures"
+  run_step "mise: upgrading tools" mise upgrade || log_warn "mise upgrade had failures"
+  run_step "mise: pruning old installs" mise prune -y || log_warn "mise prune had failures"
+  step_report "$mise_before" snapshot_mise tool
 fi
 
 # Install/upgrade declared packages across every ecosystem. This is the
 # only step that turns a fresh machine into a populated one. Everything
 # below assumes the binaries it touches now exist on PATH.
 print -P -- "\n📦 Sync system packages...\n"
-system-package sync || die "Failed to sync system packages!"
+system-package sync "${sync_flags[@]}" || die "Failed to sync system packages!"
 
 print -P -- "\n🧹 Cleaning up Homebrew artifacts...\n"
-brew cleanup -q --prune=all || die "Failed to clean up Homebrew files!"
+run_step "brew: cleaning artifacts" brew cleanup -q --prune=all \
+  || die "Failed to clean up Homebrew files!"
 
 # Re-assert pinentry-touchid's pinentry-mac backend after `system-package sync`
 # may have run `brew upgrade pinentry`, which reverts the gpgconf `pinentry`
@@ -340,6 +484,9 @@ fi
 # worker that owns them (see pkg::restart_services_for in common.zsh).
 if command -v system-service >/dev/null 2>&1; then
   print -P -- "\n📡 Sync system services...\n"
+  # Deliberately unwrapped: system-service narrates every service immediately,
+  # so there is no dead air for a spinner to cover, and capturing its stdout
+  # would cost the colored log output (common.zsh only paints on a TTY).
   system-service sync || log_warn "system-service sync had failures"
 fi
 
@@ -348,7 +495,14 @@ if command -v ya >/dev/null 2>&1; then
   # --discard: drop any local edits inside cloned plugin dirs before pulling,
   # so stray dirt (e.g. a plugin that wrote a cache/log into its own tree)
   # can't make `ya pkg upgrade` fail mid-update and block everything after it.
-  ya pkg upgrade --discard || die "Failed to upgrade Yazi plugins!"
+  #
+  # Fetching ten plugin repos is a slow, mostly silent stretch. The commit
+  # hashes in `ya pkg list` are the snapshot, so the report names the plugins
+  # that actually moved and --verbose is there when the raw log is wanted.
+  yazi_before=$(step_snapshot snapshot_yazi)
+  run_step "yazi: upgrading plugins" ya pkg upgrade --discard \
+    || die "Failed to upgrade Yazi plugins!"
+  step_report "$yazi_before" snapshot_yazi plugin
 
   # Capture any rev/hash bumps `ya pkg upgrade` just wrote into the
   # live package.toml back into the chezmoi source, then commit and
@@ -394,8 +548,14 @@ if command -v nvim >/dev/null 2>&1; then
   print -P -- "\n📝 Upgrade NeoVim plugins...\n"
   # Bounded with `timeout`: headless plugin sync can hang indefinitely
   # if a background task (e.g. a treesitter parser build) never settles.
-  timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
+  #
+  # The report is built from lazy-lock.json, so it covers Lazy plugins only —
+  # the Mason tool updates this same command performs are NOT reflected there.
+  nvim_before=$(step_snapshot snapshot_nvim)
+  run_step "nvim: syncing plugins" \
+    timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
     log_warn "NeoVim plugin upgrade timed out or had failures"
+  step_report "$nvim_before" snapshot_nvim plugin
 fi
 
 update_pi_extensions

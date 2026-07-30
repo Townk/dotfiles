@@ -46,6 +46,9 @@ list flags:
   -u, --update   show available updates
   -a, --all      include brew transient dependencies (no-op for other tools)
 
+sync flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes
+
 Per-form help:
   system-package <subcommand>  --help    aggregated subcommand help
   system-package <ecosystem>   --help    ecosystem-specific help
@@ -75,8 +78,13 @@ EOF
 usage_sync() {
   cat <<EOF
 Usage:
-  system-package sync                       sync every ecosystem
-  system-package <ecosystem> sync           sync one ecosystem
+  system-package sync [-v|--verbose]              sync every ecosystem
+  system-package <ecosystem> sync [-v|--verbose]  sync one ecosystem
+
+Flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
+                 sync keeps quiet (an extra formula another package still
+                 needs, a tap still in use, snap being unavailable)
 
 Reconciles installed packages by running every discovered
 \`system-package-<ecosystem>\` worker next to this dispatcher. Each worker owns

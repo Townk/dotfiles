@@ -46,10 +46,16 @@ snap_list_rows() {
   local outdated="${1:-false}"
   local -A avail
   if [[ "$outdated" == true ]]; then
-    local n="" v=""
-    while IFS=$'\t' read -r n v; do
-      [[ -n "$n" ]] && avail[$n]="$v"
-    done < <(snap refresh --list 2>/dev/null | awk 'NR>1 {print $1 "\t" $2}')
+    local n="" v="" refresh_out=""
+    # One query covers every snap, so a failure has no row to annotate and
+    # would otherwise leave an empty map that reads as "everything current".
+    if refresh_out=$(snap refresh --list 2>/dev/null); then
+      while IFS=$'\t' read -r n v; do
+        [[ -n "$n" ]] && avail[$n]="$v"
+      done < <(printf '%s\n' "$refresh_out" | awk 'NR>1 {print $1 "\t" $2}')
+    else
+      pkg::warn_update_check_failed "snap refresh --list"
+    fi
   fi
   snap_snapshot_versions |
     while IFS=$'\t' read -r name ver; do
@@ -94,10 +100,11 @@ _snap_refresh_one() {
 }
 
 do_sync() {
+  pkg::sync_parse_args "$@"
   log_info "Syncing snap packages..."
 
   if ! command -v snap >/dev/null 2>&1; then
-    log_warn "snap not available; skipping."
+    pkg::warn_verbose "snap not available; skipping."
     return 0
   fi
 
@@ -129,6 +136,7 @@ do_sync() {
 
   # Restart services whose backing snap changed version.
   snap_snapshot_versions >"$after_snap"
+  report::changes "$before_snap" "$after_snap" snap
   pkg::restart_changed "$before_snap" "$after_snap"
   return "$failed"
 }
@@ -139,7 +147,7 @@ Syncs snap packages against ~/.config/packages/Snapfile (linux dev-shell only).
 
 Usage:
   system-package-snap list [-u|--update]
-  system-package-snap sync
+  system-package-snap sync [-v|--verbose]
   system-package-snap -h | --help | help
 
 Manifest lines are \`<name> [snap flags]\`; the first word is the canonical
@@ -148,6 +156,9 @@ snap name, the rest is forwarded to \`snap install\` (\`--classic\`, etc.).
 list flags:
   -u, --update   annotate packages with available updates (\`snap refresh --list\`)
   -a, --all      no-op (snap has no transient-dep concept here)
+
+sync flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes
 
 sync installs declared-but-missing snaps and refreshes declared snaps; it does
 NOT remove undeclared snaps (base/platform snaps are dependencies snapd owns).
@@ -173,7 +184,11 @@ EOF
 usage_sync() {
   cat <<EOF
 Usage:
-  system-package-snap sync
+  system-package-snap sync [-v|--verbose]
+
+Flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
+                 sync keeps quiet
 
 Reconciles ~/.config/packages/Snapfile against \`snap list\`:
 
@@ -207,7 +222,7 @@ main() {
         usage_sync
         exit 0
       }
-      do_sync
+      do_sync "$@"
       ;;
     *)
       usage >&2

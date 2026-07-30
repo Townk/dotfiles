@@ -110,6 +110,223 @@ require_cmd() {
 # the prompt helpers and any tool deciding whether to show interactive UI.
 have_tty() { [ -t 0 ] || [ -e /dev/tty ]; }
 
+# --- spinner ----------------------------------------------------------------
+# One spinner for the whole tree. Everything animates on STDERR, so a caller's
+# stdout stays pipeable and the frames never contaminate captured data.
+#
+# spin::active
+# True when a human is watching. SPIN_PROGRESS forces it on (1) or off (0) —
+# the seam for tests, schedulers, and callers with their own progress policy.
+spin::active() {
+  case "${SPIN_PROGRESS:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [ -t 2 ]
+}
+
+# spin::wait <pid> [title]
+# Animate a braille spinner with elapsed seconds while <pid> runs, so a silent
+# long job never looks frozen. Returns as soon as the process is gone; the
+# CALLER still has to `wait` for its exit status. No-op when nobody's watching.
+spin::wait() {
+  local pid="$1" title="${2:-}"
+  spin::active || return 0
+  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local start=$SECONDS s=1 elapsed
+  while kill -0 "$pid" 2>/dev/null; do
+    elapsed=$((SECONDS - start))
+    print -nu2 -- "\r  ${C_BLU}${frames[s]}${C_RES} ${title:+$title }${elapsed}s  "
+    sleep 0.1
+    s=$((s % 10 + 1))
+  done
+  print -nu2 -- "\r\e[K"
+}
+
+# spin::stream <pid> <file> [title]
+# Animate the spinner while <file> stays empty, then — the moment <pid> writes
+# its first byte — clear the spinner and mirror <file> to stdout as it grows.
+# A silent command shows life; a talking one streams live instead of being
+# buffered to the end. Returns once <pid> is gone (after flushing the tail);
+# the CALLER still has to `wait` for its exit status.
+#
+# Mirroring happens even when nobody is watching (no TTY): the animation is
+# optional, delivering the command's output never is.
+spin::stream() {
+  local pid="$1" file="$2" title="${3:-}"
+  local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+  local start=$SECONDS s=1 elapsed off=1 size spinning=1
+  spin::active || spinning=0
+  # `[[ -s ]]` costs no fork, so the common silent case never pays for the
+  # size arithmetic below — that starts only once there IS output to mirror.
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ ! -s "$file" ]]; then
+      if ((spinning)); then
+        elapsed=$((SECONDS - start))
+        print -nu2 -- "\r  ${C_BLU}${frames[s]}${C_RES} ${title:+$title }${elapsed}s  "
+        s=$((s % 10 + 1))
+      fi
+      sleep 0.1
+      continue
+    fi
+    if ((spinning)); then
+      print -nu2 -- "\r\e[K"
+      spinning=0
+    fi
+    size=$(wc -c <"$file" 2>/dev/null) || size=0
+    if ((size >= off)); then
+      tail -c "+$off" "$file"
+      off=$((size + 1))
+    fi
+    sleep 0.1
+  done
+  ((spinning)) && print -nu2 -- "\r\e[K"
+  # Whatever landed between the last poll and exit. Without this the final
+  # lines of a fast-finishing command would be dropped.
+  size=$(wc -c <"$file" 2>/dev/null) || size=0
+  ((size >= off)) && tail -c "+$off" "$file"
+  return 0
+}
+
+# spin::run [--merge-stderr] [--stream] <title> <outfile> <-- cmd...>
+# Run <cmd> with its stdout captured to <outfile> while the spinner animates,
+# and return <cmd>'s exit status. Only stdout is redirected by default, so
+# <outfile> stays clean when it is DATA the caller parses; --merge-stderr folds
+# stderr in too, for callers silencing a command purely to cut noise.
+#
+# Without --stream a captured command that fails dies SILENTLY — the caller
+# owns surfacing <outfile> on a non-zero return, or the error is simply lost.
+# With --stream the output is mirrored live (see spin::stream) and <outfile> is
+# just the conduit, so there is nothing left for the caller to surface.
+spin::run() {
+  local merge=0 stream=0
+  while true; do
+    case "${1:-}" in
+      --merge-stderr)
+        merge=1
+        shift
+        ;;
+      --stream)
+        stream=1
+        shift
+        ;;
+      *) break ;;
+    esac
+  done
+  local title="$1" outfile="$2"
+  shift 2
+  [[ "${1:-}" == -- ]] && shift
+  local rc=0 pid
+  if ((merge)); then
+    "$@" >"$outfile" 2>&1 &
+  else
+    "$@" >"$outfile" &
+  fi
+  pid=$!
+  if ((stream)); then
+    spin::stream "$pid" "$outfile" "$title"
+  else
+    spin::wait "$pid" "$title"
+  fi
+  wait "$pid" || rc=$?
+  return $rc
+}
+
+# spin::quiet <title> <cmd...>
+# Run a command behind a spinner with its output captured, surfacing that
+# output ONLY if it fails. For tools whose SUCCESS output is pure noise — npm
+# announcing "changed 1 package" when the version is identical, uv listing every
+# resolved transitive dependency — where the caller reports the real outcome by
+# other means. A failure must never be silenced along with the noise, hence the
+# dump. Returns the command's exit status.
+spin::quiet() {
+  local title="$1"
+  shift
+  local out rc=0
+  out=$(mktemp)
+  spin::run --merge-stderr "$title" "$out" -- "$@" || rc=$?
+  ((rc == 0)) || cat "$out" >&2
+  rm -f "$out"
+  return $rc
+}
+
+# spin::streamed <title> <cmd...>
+# Run a command that is SILENT when there is nothing to do but narrates real
+# work (brew bundle, cargo, go install, ya pkg upgrade). Spins through the dead
+# air, then streams the output live the instant it speaks, so a long build
+# reports progress as it happens instead of arriving in one lump at the end.
+# Returns the command's exit status.
+#
+# Prefer this over spin::quiet whenever the output is signal rather than noise:
+# nothing is withheld, so there is nothing for the caller to surface on failure.
+spin::streamed() {
+  local title="$1"
+  shift
+  local out rc=0
+  out=$(mktemp)
+  spin::run --merge-stderr --stream "$title" "$out" -- "$@" || rc=$?
+  rm -f "$out"
+  return $rc
+}
+
+# --- change reporting -------------------------------------------------------
+# report::changes <before_file> <after_file> [singular_noun]
+# The post-update status report. Both files are "name<TAB>version" TSV
+# snapshots taken either side of the work — versions, git hashes, lockfile
+# commits, whatever identifies a thing's state. This is what lets a caller
+# silence a chatty tool: the report states the outcome from observed fact
+# rather than from parsing the tool's prose.
+#
+# Prints a line per entry that actually moved, then a single tally for the
+# rest. Unchanged entries deliberately get NO line of their own: on a
+# Homebrew-sized ecosystem they bury the handful of lines that matter.
+#
+# Transitions are reported without claiming a direction — a version that moves
+# backwards (a pin, a downgrade) is as real a change as an upgrade, and
+# comparing arbitrary version strings to tell them apart isn't worth it.
+report::changes() {
+  local before="$1" after="$2" noun="${3:-package}"
+  local unchanged=0 name verb detail
+  # awk classifies and pre-formats, emitting "name<TAB>verb<TAB>detail". No
+  # INTERIOR field may be empty: tab counts as IFS whitespace, so `read` folds
+  # a run of tabs into one delimiter and an empty middle column would silently
+  # shift every field after it left.
+  #
+  # FILENAME (not NR==FNR) for the same reason as pkg::changed_versions: with
+  # an EMPTY before file the classic idiom reads the after file's first rows as
+  # "before" and swallows them.
+  while IFS=$'\t' read -r name verb detail; do
+    case "$verb" in
+      +) log_ok "$name installed: $detail" ;;
+      -) log_ok "$name removed: $detail" ;;
+      '~') log_ok "$name $detail" ;;
+      =) unchanged=$((unchanged + 1)) ;;
+    esac
+  done < <(awk -F'\t' -v before="$before" '
+      FILENAME == before { old[$1] = $2; next }
+      {
+        seen[$1] = 1
+        if (!($1 in old))        printf "%s\t+\t%s\n", $1, $2
+        else if (old[$1] != $2)  printf "%s\t~\t%s → %s\n", $1, old[$1], $2
+        else                     printf "%s\t=\t%s\n", $1, $2
+      }
+      END { for (n in old) if (!(n in seen)) printf "%s\t-\t%s\n", n, old[n] }
+    ' "$before" "$after" | sort)
+  if ((unchanged > 0)); then
+    # <noun> arrives singular; the -y/-ies rule covers every caller's word
+    # (crate, tool, package, formula, binary, snap, plugin, extension).
+    if ((unchanged != 1)); then
+      if [[ "$noun" == *y ]]; then
+        noun="${noun%y}ies"
+      else
+        noun="${noun}s"
+      fi
+    fi
+    log_info "$unchanged $noun already up to date"
+  fi
+  return 0
+}
+
 # --- iteration with a failure tally -----------------------------------------
 # for_each <label> <fn>   (items on stdin, one per line)
 # Run <fn> "<item>" for each non-empty line, counting the ones that return

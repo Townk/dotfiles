@@ -12,7 +12,7 @@ _system-package() {
   local context state state_descr line
   typeset -A opt_args
 
-  local -a help_flag list_flags
+  local -a help_flag list_flags sync_flags
   # `(- *)` makes -h/--help mutually exclusive with the rest of the command —
   # zsh will stop offering anything else once one of them is present.
   help_flag=(
@@ -21,6 +21,9 @@ _system-package() {
   list_flags=(
     '(-u --update)'{-u,--update}'[annotate packages with available updates]'
     '(-a --all)'{-a,--all}'[include brew transient deps (no-op for other ecosystems)]'
+  )
+  sync_flags=(
+    '(-v --verbose)'{-v,--verbose}'[also report expected, nothing-to-do outcomes]'
   )
 
   _arguments -C \
@@ -48,9 +51,12 @@ _system-package() {
       ;;
     level2)
       case "$words[1]" in
-        list|sync)
-          # `system-package list|sync ...` — only flags from here on.
+        list)
+          # `system-package list ...` — only flags from here on.
           _arguments $help_flag $list_flags
+          ;;
+        sync)
+          _arguments $help_flag $sync_flags
           ;;
         brew|uv|npm|go|cargo)
           # `system-package <eco> ...` — descend one more level.
@@ -68,7 +74,7 @@ _system-package() {
             ecosubarg)
               case "$words[1]" in
                 list) _arguments $help_flag $list_flags ;;
-                sync) _arguments $help_flag ;;
+                sync) _arguments $help_flag $sync_flags ;;
               esac
               ;;
           esac

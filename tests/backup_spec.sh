@@ -1169,9 +1169,9 @@ EOF
       narrated() {
         source "$LIB/backup.zsh"
         stub_restic
-        # keep gum out of the interactive path: the spinner is untestable
-        # TUI noise here; the log-line fallback is the assertable behavior
-        gum() { return 127 }
+        # keep the spinner out of the interactive path: its frames are
+        # untestable TUI noise here; the log lines are the assertable behavior
+        spin::wait() { : }
         export BKP_PROGRESS=1
         bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" || return 1
         print -r -- "quiet-count:$(grep -- backup "$FIX/calls" | grep -c -- --quiet || true)"

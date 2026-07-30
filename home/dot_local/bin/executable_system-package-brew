@@ -152,6 +152,17 @@ brew_formula_has_installed_dependents() {
 brew_cleanup_packages() {
   local bundle_file="$1"
   log_info "Cleaning Homebrew packages missing from Brewfile..."
+  # Several seconds of dead air on a converged system: `brew uses --installed`
+  # costs ~0.7s for every undeclared formula and `brew autoremove` another ~0.8s,
+  # all of it silent now that the "still required by another package" notes are
+  # verbose-only. Stream so any uninstall it does perform still reports live.
+  spin::streamed "brew: cleaning packages" _brew_cleanup_run "$bundle_file"
+}
+
+# The body of brew_cleanup_packages, split out so it can be handed to
+# spin::streamed as a single command.
+_brew_cleanup_run() {
+  local bundle_file="$1"
 
   local tmpdir
   tmpdir=$(mktemp -d)
@@ -179,8 +190,11 @@ brew_cleanup_packages() {
 
     pkg::diff_only_in "$installed_formulae" "$declared_formulae" | while IFS= read -r formula; do
       [[ -z "$formula" ]] && continue
+      # Expected on most runs: an undeclared formula another installed package
+      # still depends on isn't ours to remove, and `brew autoremove` below
+      # collects it once the last dependent goes away. Verbose-only.
       if brew_formula_has_installed_dependents "$formula"; then
-        log_warn "skipped extra formula still required by another package: $formula"
+        pkg::warn_verbose "skipped extra formula still required by another package: $formula"
         continue
       fi
       brew uninstall --formula --force "$formula" \
@@ -190,7 +204,7 @@ brew_cleanup_packages() {
 
     pkg::diff_only_in "$installed_taps" "$declared_taps" | while IFS= read -r tap; do
       [[ -z "$tap" || "$tap" == "homebrew/core" ]] && continue
-      brew untap "$tap" || log_warn "skipped tap still in use: $tap"
+      brew untap "$tap" || pkg::warn_verbose "skipped tap still in use: $tap"
     done
   } always {
     rm -rf "$tmpdir"
@@ -274,35 +288,52 @@ brew_list_rows() {
   # Build outdated map (only if -u)
   if [[ "$outdated" == true ]]; then
     local formula_json="" cask_json=""
-    formula_json=$(brew outdated --json --formula 2>/dev/null || printf '[]')
-    cask_json=$(brew outdated --json --cask 2>/dev/null || printf '[]')
+    formula_json=$(brew outdated --json --formula 2>/dev/null || true)
+    cask_json=$(brew outdated --json --cask 2>/dev/null || true)
 
-    # Parse formulas
+    # `brew outdated --json` answers with an OBJECT keyed by kind
+    # ({"formulae":[...],"casks":[...]}), not the bare array this used to
+    # assume: `.[]` iterated it into those two ARRAYS, jq died indexing an
+    # array with "name", and the map came out empty — every outdated package
+    # rendered as current. `jq -e 'type == "object"'` is also the reachability
+    # probe, since it rejects empty and unparseable output alike.
     local name="" ver=""
-    while IFS=$'\t' read -r name ver; do
-      [[ -n "$name" ]] && outdated_map[$name]="$ver"
-    done < <(printf '%s' "$formula_json" \
-             | jq -r '.[] | "\(.name)\t\(.current_version)"' 2>/dev/null || true)
+    if printf '%s' "$formula_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      while IFS=$'\t' read -r name ver; do
+        [[ -n "$name" ]] && outdated_map[$name]="$ver"
+      done < <(printf '%s' "$formula_json" \
+               | jq -r '.formulae[] | "\(.name)\t\(.current_version)"' 2>/dev/null || true)
+    else
+      pkg::warn_update_check_failed "brew outdated --json --formula"
+    fi
 
-    # Parse casks
-    while IFS=$'\t' read -r name ver; do
-      [[ -n "$name" ]] && outdated_map[$name]="$ver"
-    done < <(printf '%s' "$cask_json" \
-             | jq -r '.[] | "\(.name)\t\(.current_version)"' 2>/dev/null || true)
+    if printf '%s' "$cask_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      while IFS=$'\t' read -r name ver; do
+        [[ -n "$name" ]] && outdated_map[$name]="$ver"
+      done < <(printf '%s' "$cask_json" \
+               | jq -r '.casks[] | "\(.name)\t\(.current_version)"' 2>/dev/null || true)
+    else
+      pkg::warn_update_check_failed "brew outdated --json --cask"
+    fi
 
     # MAS outdated: lines like "id name (oldver -> newver)"
     if command -v mas >/dev/null 2>&1; then
-      local line="" mas_name="" mas_newver=""
-      while IFS= read -r line; do
-        mas_name=$(printf '%s' "$line" \
-                   | sed 's/^[[:space:]]*[0-9][0-9 ]*//' \
-                   | sed 's/ ([^)]*->[ ]*[^)]*) *$//')
-        mas_newver=$(printf '%s' "$line" \
-                     | grep -oE '\(.*->[ ]*([^)]+)\)$' \
-                     | grep -oE '[^> ]+\)$' \
-                     | tr -d ')' || true)
-        [[ -n "$mas_name" && -n "$mas_newver" ]] && outdated_map[$mas_name]="$mas_newver"
-      done < <(mas outdated 2>/dev/null || true)
+      local line="" mas_name="" mas_newver="" mas_out=""
+      if mas_out=$(mas outdated 2>/dev/null); then
+        while IFS= read -r line; do
+          [[ -n "$line" ]] || continue
+          mas_name=$(printf '%s' "$line" \
+                     | sed 's/^[[:space:]]*[0-9][0-9 ]*//' \
+                     | sed 's/ ([^)]*->[ ]*[^)]*) *$//')
+          mas_newver=$(printf '%s' "$line" \
+                       | grep -oE '\(.*->[ ]*([^)]+)\)$' \
+                       | grep -oE '[^> ]+\)$' \
+                       | tr -d ')' || true)
+          [[ -n "$mas_name" && -n "$mas_newver" ]] && outdated_map[$mas_name]="$mas_newver"
+        done <<< "$mas_out"
+      else
+        pkg::warn_update_check_failed "mas outdated"
+      fi
     fi
   fi
 
@@ -389,6 +420,7 @@ brew_snapshot_versions() {
 }
 
 do_sync() {
+  pkg::sync_parse_args "$@"
   log_info "Syncing Homebrew packages..."
 
   local before_snap after_snap bundle_file
@@ -400,7 +432,11 @@ do_sync() {
   brew_write_bundle_file "$bundle_file"
   brew_check_trusted_taps "$bundle_file"
 
-  HOMEBREW_NO_AUTO_UPDATE=1 brew bundle install -q --upgrade --file="$bundle_file" \
+  # Silent for several seconds when everything is current, then loud once it
+  # actually downloads and pours — spin::streamed spins through the dead air
+  # and hands over to live output the moment brew starts narrating.
+  spin::streamed "brew: installing bundle" \
+    env HOMEBREW_NO_AUTO_UPDATE=1 brew bundle install -q --upgrade --file="$bundle_file" \
     || die "brew bundle install failed"
   brew_cleanup_packages "$bundle_file"
 
@@ -413,6 +449,8 @@ do_sync() {
   # services on its own, so a freshly-upgraded daemon keeps running the
   # old binary until we kick it.
   brew_snapshot_versions > "$after_snap"
+  # Formulas only — that's brew_snapshot_versions' scope (see its comment).
+  report::changes "$before_snap" "$after_snap" formula
   pkg::restart_changed "$before_snap" "$after_snap"
   return 0
 }
@@ -425,12 +463,15 @@ Syncs Homebrew formulas, casks, and MAS apps against:
 
 Usage:
   system-package-brew list [-u|--update] [-a|--all]
-  system-package-brew sync
+  system-package-brew sync [-v|--verbose]
   system-package-brew -h | --help | help
 
 list flags:
   -u, --update   annotate packages with available updates
   -a, --all      include transient (non-direct) dependencies
+
+sync flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes
 
 After sync, any brew service whose formula version changed and is currently
 running is restarted.
@@ -454,7 +495,11 @@ EOF
 usage_sync() {
   cat <<EOF
 Usage:
-  system-package-brew sync
+  system-package-brew sync [-v|--verbose]
+
+Flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
+                 sync keeps quiet
 
 Runs \`brew bundle install --upgrade\` against the concatenation of
 ~/.config/packages/Brewfile.bootstrap and ~/.config/packages/Brewfile, cleans
@@ -479,7 +524,7 @@ main() {
       ;;
     sync)
       args_contain_help "$@" && { usage_sync; exit 0; }
-      do_sync
+      do_sync "$@"
       ;;
     *) usage >&2; die "unknown subcommand: $cmd" ;;
   esac

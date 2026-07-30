@@ -9,7 +9,7 @@ _system-package-eco() {
   local context state state_descr line
   typeset -A opt_args
 
-  local -a help_flag list_flags
+  local -a help_flag list_flags sync_flags
   help_flag=(
     '(- *)'{-h,--help}'[show help and exit]'
   )
@@ -18,6 +18,9 @@ _system-package-eco() {
     # brew uses -a/--all to surface transient deps; the other workers accept
     # the flag as a no-op so the unified `system-package list -a` still works.
     '(-a --all)'{-a,--all}'[include transient deps (brew only; no-op elsewhere)]'
+  )
+  sync_flags=(
+    '(-v --verbose)'{-v,--verbose}'[also report expected, nothing-to-do outcomes]'
   )
 
   _arguments -C \
@@ -35,7 +38,7 @@ _system-package-eco() {
     subarg)
       case "$words[1]" in
         list) _arguments $help_flag $list_flags ;;
-        sync) _arguments $help_flag ;;
+        sync) _arguments $help_flag $sync_flags ;;
       esac
       ;;
   esac

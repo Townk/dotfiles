@@ -50,14 +50,17 @@ cargo_installed_versions() {
 # cargo_list_rows <outdated:true|false>
 # Output one "name\tversion[annotation]" TSV row per installed crate.
 # Outdated check hits the crates.io v1 API (in parallel via pkg::outdated_rows);
-# crates installed from git or a local path won't be on crates.io and silently
-# skip the annotation.
+# crates installed from git or a local path won't be on crates.io and come back
+# annotated "(update check failed)".
+#
+# The User-Agent is REQUIRED: crates.io answers 403 to a request without one,
+# which the fetcher turns into an empty (unknown) latest version.
 cargo_list_rows() {
   local outdated="${1:-false}"
   if [[ "$outdated" == true ]]; then
     cargo_installed_versions |
       pkg::outdated_rows \
-        'curl -fsSL "https://crates.io/api/v1/crates/$1" 2>/dev/null | jq -r ".crate.max_stable_version // empty"' |
+        'curl -fsSL -A "system-package-cargo" "https://crates.io/api/v1/crates/$1" 2>/dev/null | jq -r ".crate.max_stable_version // empty"' |
       sort
   else
     cargo_installed_versions | sort
@@ -96,6 +99,12 @@ do_list() {
 # prebuilt path can't honor. They only use `--force` when the manifest line
 # changed since the last successful sync, so normal runs can let cargo skip
 # crates already at the latest version.
+#
+# binstall runs at `--log-level warn`: its INFO chatter is one "vX is already
+# installed, use --force to override" line per up-to-date crate, which reads
+# like a skipped upgrade but only ever means "the version binstall resolved from
+# the registry is the one you have". do_sync's report::changes states that
+# outcome in our own terms instead. Warnings and errors still come through.
 cargo_provision() {
   local line="$1"
   local force="${2:-false}"
@@ -107,25 +116,10 @@ cargo_provision() {
       cargo install "${args[@]}"
     fi
   elif ((HAVE_BINSTALL)); then
-    cargo binstall --no-confirm "${args[@]}"
+    cargo binstall --no-confirm --log-level warn "${args[@]}"
   else
     cargo install "${args[@]}"
   fi
-}
-
-cargo_manifest_line_changed() {
-  local crate="$1" line="$2"
-  [[ -f "$CARGO_MANIFEST_STAMP" ]] || return 1
-
-  local previous=""
-  previous=$(awk -v c="$crate" '$1 == c {print; exit}' "$CARGO_MANIFEST_STAMP")
-  [[ -n "$previous" && "$previous" != "$line" ]]
-}
-
-cargo_write_manifest_stamp() {
-  local manifest="$1"
-  mkdir -p "$PKG_STATE_DIR"
-  cp "$manifest" "$CARGO_MANIFEST_STAMP"
 }
 
 # Per-crate actions for the for_each loops in do_sync. They read do_sync's
@@ -134,21 +128,22 @@ cargo_write_manifest_stamp() {
 _cargo_install_one() {
   local crate="$1" line
   line=$(awk -v c="$crate" '$1 == c {print; exit}' "$declared_full")
-  cargo_provision "$line" || {
+  spin::streamed "cargo: $crate" cargo_provision "$line" || {
     log_warn "failed to install $crate"
     return 1
   }
 }
 _cargo_upgrade_one() {
   local line="$1" crate="${1%% *}" force=false
-  cargo_manifest_line_changed "$crate" "$line" && force=true
-  cargo_provision "$line" "$force" || {
+  pkg::manifest_line_changed "$CARGO_MANIFEST_STAMP" "$crate" "$line" && force=true
+  spin::streamed "cargo: $crate" cargo_provision "$line" "$force" || {
     log_warn "failed to upgrade $crate"
     return 1
   }
 }
 
 do_sync() {
+  pkg::sync_parse_args "$@"
   log_info "Syncing cargo crates..."
 
   # Prefer prebuilt binaries for bare crates when cargo-binstall is present
@@ -187,10 +182,11 @@ do_sync() {
   # the latest version, so the cost is one fast registry check per crate.
   for_each "cargo upgrade" _cargo_upgrade_one <"$declared_full" || had_failures=1
 
-  ((had_failures == 0)) && cargo_write_manifest_stamp "$declared_full"
+  ((had_failures == 0)) && pkg::write_manifest_stamp "$CARGO_MANIFEST_STAMP" "$declared_full"
 
   # Restart services whose backing crate changed version.
   cargo_installed_versions >"$after_snap"
+  report::changes "$before_snap" "$after_snap" crate
   pkg::restart_changed "$before_snap" "$after_snap"
   return 0
 }
@@ -201,12 +197,15 @@ Syncs \`cargo install\`-managed binaries against ~/.config/packages/Cargofile.
 
 Usage:
   system-package-cargo list [-u|--update]
-  system-package-cargo sync
+  system-package-cargo sync [-v|--verbose]
   system-package-cargo -h | --help | help
 
 list flags:
   -u, --update   annotate packages with available updates (queries crates.io)
   -a, --all      no-op (cargo has no transient-dep concept here)
+
+sync flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes
 
 After sync, any system service whose backing crate changed version and is
 currently running is restarted.
@@ -222,7 +221,8 @@ Emits TSV "<name>\t<version>" rows for every \`cargo install\`-installed crate.
 
 Flags:
   -u, --update   annotate each row with the latest stable version
-                 (queried from crates.io's v1 API; git/local crates skip)
+                 (queried from crates.io's v1 API; crates that aren't on
+                 crates.io are annotated "update check failed")
   -a, --all      no-op (cargo has no transient-dep concept)
 EOF
 }
@@ -230,19 +230,27 @@ EOF
 usage_sync() {
   cat <<EOF
 Usage:
-  system-package-cargo sync
+  system-package-cargo sync [-v|--verbose]
+
+Flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
+                 sync keeps quiet
 
 Reconciles ~/.config/packages/Cargofile against \`cargo install --list\`:
 
   • Lines are \`<crate> [cargo-install-args...]\`. The first word is the
     canonical crate name; the rest is forwarded to \`cargo install\` (works
     with \`--locked\`, \`--features=...\`, \`--git=...\`, etc.).
-  • Crates with extra args are reinstalled with \`--force\` so flag changes
-    take effect; bare entries get a regular \`cargo install\` (no-op when
-    already up-to-date).
+  • Crates with extra args are reinstalled with \`--force\` when their
+    manifest line changed since the last successful sync, so flag changes
+    take effect. Otherwise every entry is provisioned normally — bare
+    entries via \`cargo binstall\` when available, the rest via
+    \`cargo install\` — which is a no-op when already at the latest version.
 
-After sync, services whose backing crate was just upgraded and are
-currently running are restarted.
+Crates whose version actually moved are reported individually; the rest
+are summarized as one "already up to date" tally. After sync, services
+whose backing crate was just upgraded and are currently running are
+restarted.
 EOF
 }
 
@@ -266,7 +274,7 @@ main() {
         usage_sync
         exit 0
       }
-      do_sync
+      do_sync "$@"
       ;;
     *)
       usage >&2

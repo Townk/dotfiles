@@ -12,6 +12,83 @@ unset _pkg_common_self
 PKG_DIR="${PKG_DIR:-$HOME/.config/packages}"
 PKG_STATE_DIR="$PKG_DIR/.state"
 
+# --- sync verbosity ---------------------------------------------------------
+# Some sync warnings are real but routinely uninteresting: the expected,
+# nothing-to-do outcomes almost every run hits (an undeclared formula another
+# package still needs, a tap still in use). They stay WARNINGS rather than
+# becoming info — nothing about them is merely informational, they just aren't
+# worth interrupting a clean run for. `sync --verbose` is how you ask to see
+# them. Genuine failures are never gated.
+PKG_VERBOSE="${PKG_VERBOSE:-0}"
+
+# pkg::sync_parse_args [args...]
+# Shared `sync` flag parsing. Every worker runs this, so `system-package sync
+# --verbose` fans out uniformly and an unknown flag errors instead of being
+# silently dropped (the dispatcher forwards sync args to each worker verbatim).
+pkg::sync_parse_args() {
+  PKG_VERBOSE=0
+  while (($# > 0)); do
+    case "$1" in
+      -v | --verbose)
+        PKG_VERBOSE=1
+        shift
+        ;;
+      *) die "unknown flag for sync: $1" ;;
+    esac
+  done
+}
+
+# pkg::warn_verbose <message>
+# Emit a warning only when the sync was asked for verbose output.
+pkg::warn_verbose() {
+  ((PKG_VERBOSE)) || return 0
+  log_warn "$@"
+}
+
+# pkg::run_tool <title> <cmd...>
+# Run a package manager whose success output is noise, routing by verbosity:
+# discarded behind a spinner by default (report::changes states the real
+# outcome), streamed live under --verbose. Callers must ALSO drop the tool's own
+# quiet flag when verbose — suppression happens at the source (`uv -q`, `npm
+# --silent`), so routing alone would stream a stream with nothing in it.
+pkg::run_tool() {
+  if ((PKG_VERBOSE)); then
+    spin::streamed "$@"
+  else
+    spin::quiet "$@"
+  fi
+}
+
+# --- manifest stamps --------------------------------------------------------
+# A worker re-applies a package's install FLAGS by reinstalling it, which is
+# expensive (uv tears down and rebuilds the whole environment; cargo rebuilds
+# from source). Doing that every sync to catch the rare flag edit wastes minutes
+# and floods the output. Instead each worker records the manifest it last synced
+# successfully, and reinstalls only the entries whose line actually moved.
+
+# pkg::manifest_line_changed <stamp_file> <name> <line>
+# True when <name>'s manifest line differs from the one recorded at the last
+# successful sync. False when no stamp exists yet or the name is absent from it:
+# a first sync has nothing to RE-apply, and treating "unknown" as "changed"
+# would force a full rebuild on every fresh machine.
+pkg::manifest_line_changed() {
+  local stamp="$1" name="$2" line="$3"
+  [[ -f "$stamp" ]] || return 1
+  local previous=""
+  previous=$(awk -v c="$name" '$1 == c {print; exit}' "$stamp")
+  [[ -n "$previous" && "$previous" != "$line" ]]
+}
+
+# pkg::write_manifest_stamp <stamp_file> <manifest>
+# Record <manifest> as the baseline for the next sync's line-changed check.
+# Call this ONLY after a fully successful sync: stamping a partial run adopts
+# lines that never got applied, so the pending work is silently forgotten.
+pkg::write_manifest_stamp() {
+  local stamp="$1" manifest="$2"
+  mkdir -p "${stamp:h}"
+  cp "$manifest" "$stamp"
+}
+
 # pkg::manifest_read <file>
 # Print one tool per line: strips #-comments (full-line and inline trailing),
 # trims leading/trailing whitespace, skips blank lines.
@@ -168,23 +245,42 @@ pkg::hooks_changed() {
 # pkg::outdated_rows <fetcher_sh> [jobs]
 # stdin: "name<TAB>version" rows. <fetcher_sh> is a /bin/sh snippet that, given
 # a package name in $1, prints its latest version on stdout (empty = unknown).
-# Emits "name<TAB>version[ (update available: X)]" rows, running up to <jobs>
-# fetches concurrently (default 8) — a big speedup over a serial per-package
-# HTTP loop for `list --update`. Output order is NOT preserved; pipe to `sort`.
+# Emits "name<TAB>version[ (update available: X)|(update check failed)]" rows,
+# running up to <jobs> fetches concurrently (default 8) — a big speedup over a
+# serial per-package HTTP loop for `list --update`. Output order is NOT
+# preserved; pipe to `sort`.
+#
+# An unknown latest version gets its OWN annotation rather than falling through
+# to a bare row: rendering "we could not check" identically to "up to date" is
+# how a broken fetcher (a registry rejecting the request, no network) passes for
+# a clean bill of health indefinitely.
+#
 # The $1 guard makes empty input a clean no-op on both GNU xargs (which would
 # otherwise run once with no args) and BSD xargs.
 pkg::outdated_rows() {
   local jobs="${2:-8}"
-  PKG_FETCHER="$1" C_YEL="$C_YEL" C_RES="$C_RES" \
+  PKG_FETCHER="$1" C_YEL="$C_YEL" C_DIM="$C_DIM" C_RES="$C_RES" \
     xargs -P "$jobs" -L 1 sh -c '
     [ -n "$1" ] || exit 0
     latest=$(sh -c "$PKG_FETCHER" _ "$1" 2>/dev/null || true)
-    if [ -n "$latest" ] && [ "$latest" != "$2" ]; then
+    if [ -z "$latest" ]; then
+      printf "%s\t%s %s(update check failed)%s\n" "$1" "$2" "$C_DIM" "$C_RES"
+    elif [ "$latest" != "$2" ]; then
       printf "%s\t%s %s(update available: %s)%s\n" "$1" "$2" "$C_YEL" "$latest" "$C_RES"
     else
       printf "%s\t%s\n" "$1" "$2"
     fi
   ' _
+}
+
+# pkg::warn_update_check_failed <source>
+# The bulk-query counterpart to the "(update check failed)" row annotation.
+# npm/brew/snap answer `list --update` with ONE query covering every package,
+# so a failure has no single row to attach to — and silently yields an empty
+# "nothing is outdated" map. Warn instead, so a broken check can never read as
+# a clean bill of health.
+pkg::warn_update_check_failed() {
+  log_warn "update check failed ($1); the versions below may be out of date"
 }
 
 # pkg::table_print <header> [group_col]
