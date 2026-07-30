@@ -126,7 +126,15 @@ step_report() {
 }
 
 snapshot_mise() {
-  mise ls --installed 2>/dev/null | awk 'NF >= 2 {print $1 "\t" $2}'
+  # mise prints one row per installed VERSION, and a tool legitimately carries
+  # several at once (python 3.9 / 3.12 / 3.14). report::changes keys its map on
+  # the first field, so duplicate names would keep only the last version and
+  # misreport every other one as a change — identical snapshots would claim
+  # "python 3.14.6 → 3.9.25". Collapse to one row per tool so the key is unique
+  # and the tool tally stays a count of tools.
+  mise ls --installed 2>/dev/null |
+    awk 'NF >= 2 { v[$1] = ($1 in v) ? v[$1] ", " $2 : $2 }
+         END { for (t in v) print t "\t" v[t] }'
 }
 
 snapshot_yazi() {
