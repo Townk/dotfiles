@@ -104,7 +104,16 @@ npm_build_global_if_needed() {
   [[ "$main" == dist/index.js && ! -f "$dir/$main" ]] || return 0
   command jq -e '.scripts.build' "$dir/package.json" >/dev/null 2>&1 || return 0
   log_info "Building global npm package: $name"
-  (cd "$dir" && npm run build) || log_warn "build failed for $name"
+  # A global install omits devDependencies, so the package's own build
+  # toolchain is absent and `npm run build` falls through to whatever is on
+  # PATH — e.g. the global `typescript`, whose major may reject the package's
+  # tsconfig. Install devDeps, build against them, then prune them back out.
+  (
+    cd "$dir" &&
+      npm install "${NPM_SYNC_FLAGS[@]}" --no-audit --include=dev &&
+      npm run build
+  ) || log_warn "build failed for $name"
+  (cd "$dir" && npm prune --omit=dev "${NPM_SYNC_FLAGS[@]}" --no-audit) >/dev/null 2>&1 || true
 }
 
 do_sync() {
