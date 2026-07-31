@@ -132,9 +132,12 @@ snapshot_mise() {
   # misreport every other one as a change — identical snapshots would claim
   # "python 3.14.6 → 3.9.25". Collapse to one row per tool so the key is unique
   # and the tool tally stays a count of tools.
+  # Bracket only the multi-version tools: "rust nightly, 1.97.1 → 1.97.1" reads
+  # as a no-op change, while "rust [nightly, 1.97.1] → [1.97.1]" shows a version
+  # being dropped. Single-version tools stay bare, which is nearly all of them.
   mise ls --installed 2>/dev/null |
-    awk 'NF >= 2 { v[$1] = ($1 in v) ? v[$1] ", " $2 : $2 }
-         END { for (t in v) print t "\t" v[t] }'
+    awk 'NF >= 2 { v[$1] = ($1 in v) ? v[$1] ", " $2 : $2; n[$1]++ }
+         END { for (t in v) print t "\t" (n[t] > 1 ? "[" v[t] "]" : v[t]) }'
 }
 
 snapshot_yazi() {
