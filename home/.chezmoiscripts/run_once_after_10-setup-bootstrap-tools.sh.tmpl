@@ -33,12 +33,6 @@ mise install
 # environment.sh.
 eval "$(mise activate bash --shims)"
 
-# Rust nightly isn't pinned in any tool manifest, so `mise install`
-# above (which reads config.toml) doesn't catch it. Install it
-# explicitly once mise itself is installed.
-echo "🦀  Installing Rust nightly..."
-mise install rust@nightly -q
-
 # system-update is the canonical "everything at latest" implementation
 # (also exposed as the user-facing `system-update` command). On a fresh
 # machine it installs Brewfile contents + Yazi plugins + NeoVim plugins,

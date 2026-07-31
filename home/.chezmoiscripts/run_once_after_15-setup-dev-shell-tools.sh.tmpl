@@ -40,8 +40,6 @@ chmod 0700 "$RUNTIME_DIR"
 if command -v mise >/dev/null 2>&1; then
   echo "🛠️  Installing mise-managed runtimes and CLI toolbox..."
   mise install -y || failures+=("mise install (some tools failed; rerun 'mise install')")
-  echo "🦀  Installing Rust nightly..."
-  mise install rust@nightly -q || failures+=("mise install rust@nightly")
 else
   failures+=("mise not found on PATH")
 fi

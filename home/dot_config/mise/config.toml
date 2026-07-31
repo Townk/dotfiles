@@ -6,7 +6,11 @@ kotlin = "latest"
 lua = "5.1"
 node = "latest"
 python = "latest"
-rust = { version = "latest", components = "rust-analyzer,rust-src,rustfmt,clippy" }
+# nightly is pinned next to latest because the bootstrap scripts install it
+# explicitly, and every system-update runs `mise prune -y` — which deletes any
+# installed version no manifest declares. Unpinned, nightly was removed within
+# seconds of being installed and never survived a single update.
+rust = [{ version = "latest", components = "rust-analyzer,rust-src,rustfmt,clippy" }, "nightly"]
 
 # Tools
 cargo-binstall = "latest"  # prebuilt-binary installer; lets the Cargofile worker skip source builds

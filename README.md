@@ -26,7 +26,7 @@ source can later coexist with a Linux machine without polluting it.
 | `../assets/open-in-neovim/` | Icons used by the generated "Open in NeoVim" Finder app. |
 | `Library/private_Application Support/` | macOS symlinks to XDG paths (e.g. tealdeer's config). |
 | `home/.chezmoiscripts/` | Chezmoi run scripts, kept out of `$HOME` while still participating in script ordering. |
-| `home/.chezmoiscripts/run_once_after_10-setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, `mise install`, install `rust@nightly`, then run `system-update`. |
+| `home/.chezmoiscripts/run_once_after_10-setup-bootstrap-tools.sh.tmpl` | Fresh-machine: runtime dir, `mise install` (Rust nightly included, pinned in `config.toml`), then run `system-update`. |
 | `home/.chezmoiscripts/run_once_after_15-setup-dev-shell-tools.sh.tmpl` | Linux dev-shell: mise toolbox, apt libraries, runtime dir, and convergence. |
 | `home/.chezmoiscripts/run_once_after_20-setup-system-settings.sh.tmpl` | macOS `defaults`, Finder, Dock, login items. |
 | `home/.chezmoiscripts/run_after_25-setup-gpg-key.sh.tmpl` | Imports OpenPGP keys from 1Password if they are missing locally; exits from a local completion marker on steady-state applies. |
@@ -112,7 +112,7 @@ End to end, the script:
     fires the bootstrap scripts:
     - `setup-bootstrap-tools.sh.tmpl` runs `mise install` (now that
       `~/.config/mise/config.toml` is on disk) to provision
-      Python/Node/Go/Rust/uv, installs `rust@nightly`, then calls
+      Python/Node/Go/Rust (nightly included)/uv, then calls
       `~/.local/bin/system-update` to converge everything else.
     - `setup-gpg-key.sh.tmpl` imports OpenPGP keys from 1Password Documents
       when they are not already present in `~/.config/gnupg`, then applies
