@@ -299,6 +299,13 @@ snapshot_pi_local() {
 # Wrap up a successful run. The interactive zsh wrapper owns any parent-shell
 # refresh (`exec zsh`); this external script must always return to its caller.
 finalize_session() {
+  # When this run was started by the bootstrap inside an outer system-update's
+  # `chezmoi apply`, tell the waiting outer process that full convergence is
+  # already complete. The outer process can then return instead of repeating
+  # this entire update pass.
+  if [[ -n "${SYSTEM_UPDATE_HANDOFF_FILE:-}" ]]; then
+    print -r -- complete >"$SYSTEM_UPDATE_HANDOFF_FILE"
+  fi
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
 }
 
@@ -374,7 +381,23 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
       exit 1
     fi
   ); then
-    chezmoi apply || log_warn "chezmoi apply failed after pull (continuing)"
+    # A changed run_once bootstrap may invoke system-update from inside this
+    # apply. Pass it a private handoff file: if that nested run completes, it
+    # has already performed every update step and this outer run must not
+    # repeat them after apply returns.
+    _apply_handoff=$(mktemp)
+    print -r -- pending >"$_apply_handoff"
+    _apply_ok=1
+    SYSTEM_UPDATE_HANDOFF_FILE="$_apply_handoff" chezmoi apply || {
+      _apply_ok=0
+      log_warn "chezmoi apply failed after pull (continuing)"
+    }
+    if ((_apply_ok)) && [[ "$(<"$_apply_handoff")" == complete ]]; then
+      rm -f "$_apply_handoff"
+      finalize_session
+      exit 0
+    fi
+    rm -f "$_apply_handoff"
 
     # Hand off to the freshly-applied script when the source actually
     # advanced. A running shell keeps executing the code it loaded at
@@ -408,7 +431,7 @@ if ! command -v brew >/dev/null 2>&1; then
     # install first so a declared-but-missing toolchain (e.g. `go`, needed by
     # the package workers below) exists before `system-package sync` runs.
     mise_before=$(step_snapshot snapshot_mise)
-    run_step "mise: converging toolchains" \
+    spin::streamed "mise: converging toolchains" \
       zsh -c 'mise install && mise upgrade && mise prune -y' \
       || log_warn "mise sync had failures"
     step_report "$mise_before" snapshot_mise tool
@@ -460,9 +483,12 @@ if command -v mise >/dev/null 2>&1; then
   print -P -- "\n🛠️ Converging mise toolchains...\n"
   repair_mise_rust_legacy_links
   mise_before=$(step_snapshot snapshot_mise)
-  run_step "mise: installing declared tools" mise install || log_warn "mise install had failures"
-  run_step "mise: upgrading tools" mise upgrade || log_warn "mise upgrade had failures"
-  run_step "mise: pruning old installs" mise prune -y || log_warn "mise prune had failures"
+  # Mise's success output includes download/build progress that users need
+  # during long runtime installs. Stream it once it speaks; the spinner returns
+  # automatically during quiet stretches.
+  spin::streamed "mise: installing declared tools" mise install || log_warn "mise install had failures"
+  spin::streamed "mise: upgrading tools" mise upgrade || log_warn "mise upgrade had failures"
+  spin::streamed "mise: pruning old installs" mise prune -y || log_warn "mise prune had failures"
   step_report "$mise_before" snapshot_mise tool
 fi
 
