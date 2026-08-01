@@ -164,7 +164,7 @@ build_pattern() {  # term case_on word_on -> REPLY
   local term="$1" c="$2" w="$3" pat="" ch has_upper=0
   for ch in ${(s::)term}; do
     case "$ch" in
-      [\\.\[\]\(\)\*\+\?\{\}\|\^\$]) pat+="\\\\$ch" ;;
+      [\\.\[\]\(\)\*\+\?\{\}\|\^\$]) pat+="\\$ch" ;;
       [A-Z]) has_upper=1; pat+="$ch" ;;
       [a-z])
         if [[ "$c" == 1 ]]; then pat+="$ch"

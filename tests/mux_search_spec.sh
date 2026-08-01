@@ -183,3 +183,75 @@ EOS
     The result of 'logged()' should include 'previous-prompt'
   End
 End
+
+# build_pattern must emit a SINGLE backslash before each ERE metacharacter.
+# The pattern is handed verbatim to `send-keys -X search-backward` (and to
+# `grep -cE` in count_index); a DOUBLED backslash makes tmux match a literal
+# backslash-then-char, so any term containing `. * + ? [ ] ( ) { } | ^ $ \`
+# matched NOTHING (typing `config.zsh` found nothing). The M-c relay rebuilds
+# the pattern from the stored term and hands it to `search-backward`, so
+# pinning that line pins the escaping — the seam this block closes (the
+# --toggle block above only asserts that search-backward was called at all).
+Describe 'mux-search build_pattern escaping'
+  setup() {
+    MS_TMP=$(mktemp -d)
+    LOG="$MS_TMP/calls.log"
+    # A tmux stub that pins case-sensitive (letters stay literal) and
+    # whole-word off (no [[:<:]] boundary wrap), so the only transformation
+    # left in the built pattern is metacharacter escaping.
+    cat > "$MS_TMP/tmux" <<'EOS'
+#!/usr/bin/env zsh
+print -r -- "$*" >> "$LOG"
+if [[ "$1" == show && "$3" == @mux_stack ]]; then print -r -- "$STUB_STACK"; exit 0; fi
+if [[ "$1" == display ]]; then
+  case "$*" in
+    *@search_idx*)   print -r -- "9:9:9|1|3" ;;
+    *@search_mpos*)  print -r -- "0|0|0|0" ;;
+    *copy_cursor_x*) print -r -- "0:0:0" ;;
+    *@search_case*)  print -r -- 1 ;;
+    *@search_word*)  print -r -- 0 ;;
+    *@search_term*)  print -r -- "$STUB_TERM" ;;
+    *)               print -r -- 0 ;;
+  esac
+fi
+exit 0
+EOS
+    chmod +x "$MS_TMP/tmux"
+    export LOG MUX_TMUX_BIN="$MS_TMP/tmux" MUX_LIB_DIR="$PWD/home/dot_local/lib"
+    S="$PWD/home/dot_config/mux/scripts/executable_mux-search"
+  }
+  cleanup() { rm -rf "$MS_TMP"; unset LOG MUX_TMUX_BIN MUX_LIB_DIR S STUB_STACK STUB_TERM; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # Rebuild the pattern from the stored term via the M-c relay (standing in
+  # Search) and read back what reached search-backward. Case-sensitive above
+  # keeps letters literal, so a term of plain letters + one metacharacter
+  # shows the escaping directly; the trailing smart-case atom ([A]{0}) is not
+  # asserted here.
+  pattern() { STUB_STACK='search:0' STUB_TERM="$1" zsh "$S" --toggle case '%1'; }
+  logged()  { cat "$LOG"; }
+
+  It 'escapes a dot with exactly one backslash (config.zsh)'
+    When call pattern 'config.zsh'
+    # single backslash before the dot, plain letters left untouched
+    The result of 'logged()' should include 'search-backward config\.zsh'
+    # and NOT the double-backslash the bug emitted
+    The result of 'logged()' should not include 'config\\.zsh'
+  End
+
+  It 'escapes a bare dot between plain letters (a.b)'
+    When call pattern 'a.b'
+    The result of 'logged()' should include 'search-backward a\.b'
+  End
+
+  It 'single-escapes each parenthesis (foo(1))'
+    When call pattern 'foo(1)'
+    The result of 'logged()' should include 'search-backward foo\(1\)'
+  End
+
+  It 'single-escapes every dot in an IP address'
+    When call pattern '192.168.1.1'
+    The result of 'logged()' should include 'search-backward 192\.168\.1\.1'
+  End
+End
