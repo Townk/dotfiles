@@ -103,4 +103,80 @@ Describe 'system-package-common.zsh'
       The status should be success
     End
   End
+
+  # mas 7.0.0 replaced the "id name (ver)" text output these helpers used to
+  # parse with per-app JSON (`mas list --json` / `mas outdated --json`, one
+  # object per line). `mas` is stubbed here to emit representative JSON; jq is
+  # real. Payloads live in $TEST_TMP/mas-<subcommand>.out and the exit code in
+  # $TEST_TMP/mas-<subcommand>.rc (default 0).
+  Describe 'mas 7 JSON parsing'
+    mas_bin() {
+      BINDIR="$TEST_TMP/bin"
+      mkdir -p "$BINDIR"
+      cat >"$BINDIR/mas" <<STUB
+#!/bin/sh
+sub="\$1"
+out="$TEST_TMP/mas-\$sub.out"
+rc="$TEST_TMP/mas-\$sub.rc"
+[ -f "\$out" ] && cat "\$out"
+[ -f "\$rc" ] && exit "\$(cat "\$rc")"
+exit 0
+STUB
+      chmod +x "$BINDIR/mas"
+      export PATH="$BINDIR:$PATH"
+    }
+    BeforeEach 'mas_bin'
+
+    Describe 'pkg::mas_installed_rows'
+      It 'parses names exactly (no leading-digit mangling) with versions'
+        printf '%s\n%s\n' \
+          '{"adamID":1569813296,"name":"1Password for Safari","version":"8.12.29"}' \
+          '{"adamID":497799835,"name":"Xcode","version":"16.0"}' \
+          >"$TEST_TMP/mas-list.out"
+        When call pkg::mas_installed_rows
+        The line 1 of output should equal "$(printf '1Password for Safari\t8.12.29')"
+        The line 2 of output should equal "$(printf 'Xcode\t16.0')"
+      End
+
+      It 'emits nothing when no App Store apps are installed'
+        : >"$TEST_TMP/mas-list.out"
+        When call pkg::mas_installed_rows
+        The output should equal ""
+      End
+    End
+
+    Describe 'pkg::mas_outdated_rows'
+      It 'populates the outdated map from newVersion'
+        printf '%s\n%s\n' \
+          '{"adamID":1569813296,"name":"1Password for Safari","version":"8.12.29","newVersion":"8.13.0"}' \
+          '{"adamID":497799835,"name":"Xcode","version":"16.0","newVersion":"16.1"}' \
+          >"$TEST_TMP/mas-outdated.out"
+        When call pkg::mas_outdated_rows
+        The line 1 of output should equal "$(printf '1Password for Safari\t8.13.0')"
+        The line 2 of output should equal "$(printf 'Xcode\t16.1')"
+        The stderr should equal ""
+      End
+
+      It 'stays silent when nothing is outdated (empty output, exit 0)'
+        : >"$TEST_TMP/mas-outdated.out"
+        When call pkg::mas_outdated_rows
+        The output should equal ""
+        The stderr should equal ""
+      End
+
+      It 'warns instead of reporting all-current when mas errors'
+        printf '2\n' >"$TEST_TMP/mas-outdated.rc"
+        When call pkg::mas_outdated_rows
+        The output should equal ""
+        The stderr should include "update check failed"
+      End
+
+      It 'warns when mas emits unparseable output (e.g. the pre-7 text format)'
+        printf '%s\n' '497799835  Xcode (16.0 -> 16.1)' >"$TEST_TMP/mas-outdated.out"
+        When call pkg::mas_outdated_rows
+        The output should equal ""
+        The stderr should include "update check failed"
+      End
+    End
+  End
 End

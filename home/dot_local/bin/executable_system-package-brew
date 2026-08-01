@@ -316,25 +316,11 @@ brew_list_rows() {
       pkg::warn_update_check_failed "brew outdated --json --cask"
     fi
 
-    # MAS outdated: lines like "id name (oldver -> newver)"
-    if command -v mas >/dev/null 2>&1; then
-      local line="" mas_name="" mas_newver="" mas_out=""
-      if mas_out=$(mas outdated 2>/dev/null); then
-        while IFS= read -r line; do
-          [[ -n "$line" ]] || continue
-          mas_name=$(printf '%s' "$line" \
-                     | sed 's/^[[:space:]]*[0-9][0-9 ]*//' \
-                     | sed 's/ ([^)]*->[ ]*[^)]*) *$//')
-          mas_newver=$(printf '%s' "$line" \
-                       | grep -oE '\(.*->[ ]*([^)]+)\)$' \
-                       | grep -oE '[^> ]+\)$' \
-                       | tr -d ')' || true)
-          [[ -n "$mas_name" && -n "$mas_newver" ]] && outdated_map[$mas_name]="$mas_newver"
-        done <<< "$mas_out"
-      else
-        pkg::warn_update_check_failed "mas outdated"
-      fi
-    fi
+    # MAS outdated (mas 7 JSON): "name<TAB>newVersion" rows. The helper routes a
+    # failed/unparseable `mas outdated --json` through warn_update_check_failed.
+    while IFS=$'\t' read -r name ver; do
+      [[ -n "$name" ]] && outdated_map[$name]="$ver"
+    done < <(pkg::mas_outdated_rows)
   fi
 
   # Collect installed packages with their type
@@ -360,22 +346,13 @@ brew_list_rows() {
     }
   done < <(brew list --versions --cask 2>/dev/null || true)
 
-  # MAS apps: "id name (version)"
-  if command -v mas >/dev/null 2>&1; then
-    local line="" mas_name="" mas_ver=""
-    while IFS= read -r line; do
-      mas_name=$(printf '%s' "$line" \
-                 | sed 's/^[[:space:]]*[0-9][0-9 ]*//' \
-                 | sed 's/ ([^)]*) *$//')
-      mas_ver=$(printf '%s' "$line" \
-                | grep -oE '\([^)]+\)$' \
-                | tr -d '()')
-      [[ -n "$mas_name" && -n "$mas_ver" ]] && {
-        pkg_map[$mas_name]="$mas_ver"
-        type_map[$mas_name]="mas"
-      }
-    done < <(mas list 2>/dev/null || true)
-  fi
+  # MAS apps (mas 7 JSON): "name<TAB>version" rows.
+  while IFS=$'\t' read -r name ver; do
+    [[ -n "$name" && -n "$ver" ]] && {
+      pkg_map[$name]="$ver"
+      type_map[$name]="mas"
+    }
+  done < <(pkg::mas_installed_rows)
 
   # Emit rows sorted by (type rank, name). Type rank: formula=1, dep=2, cask=3,
   # mas=4 — so formulas appear first, then transient deps, casks, App Store apps.

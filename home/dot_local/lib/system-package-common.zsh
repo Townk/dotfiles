@@ -283,6 +283,51 @@ pkg::warn_update_check_failed() {
   log_warn "update check failed ($1); the versions below may be out of date"
 }
 
+# pkg::mas_installed_rows
+# Emit installed App Store apps as "name<TAB>version" from mas 7's JSON.
+# `mas list --json` streams one JSON object per line (JSONL), each carrying
+# .name (the display name, ".app" stripped) and .version. The pre-7 text parser
+# ("id name (ver)") mangled names — its `[0-9 ]*` sed ate a leading digit and
+# it kept the column padding — so parse the JSON instead. jq -s slurps the
+# JSONL stream into an array we iterate. A mas that is absent or errors yields
+# no rows without warning: an installed-listing failure is not an update check.
+pkg::mas_installed_rows() {
+  command -v mas >/dev/null 2>&1 || return 0
+  local out=""
+  out=$(mas list --json 2>/dev/null) || return 0
+  printf '%s' "$out" \
+    | jq -s -r '.[] | select(.name and .version) | "\(.name)\t\(.version)"' 2>/dev/null \
+    || true
+}
+
+# pkg::mas_outdated_rows
+# Emit outdated App Store apps as "name<TAB>newVersion" from mas 7's JSON.
+# `mas outdated --json` streams the same per-app objects as `mas list --json`
+# plus a .newVersion field. Empty output is the normal "nothing is outdated"
+# case and stays silent; but a mas that errors OR emits unparseable output is
+# routed through pkg::warn_update_check_failed so a broken check can never read
+# as "everything is current". (mas 7 broke the pre-7 text parser this replaced:
+# it matched nothing against the new JSON yet `mas outdated` still exited 0, so
+# every App Store app reported current forever.)
+pkg::mas_outdated_rows() {
+  command -v mas >/dev/null 2>&1 || return 0
+  local out=""
+  if ! out=$(mas outdated --json 2>/dev/null); then
+    pkg::warn_update_check_failed "mas outdated --json"
+    return 0
+  fi
+  # jq -s turns the JSONL stream (or empty input) into an array; output that is
+  # not valid JSON fails the parse and trips the update-check-failed warning
+  # rather than silently yielding an empty (all-current) map.
+  if ! printf '%s' "$out" | jq -e -s 'type == "array"' >/dev/null 2>&1; then
+    pkg::warn_update_check_failed "mas outdated --json"
+    return 0
+  fi
+  printf '%s' "$out" \
+    | jq -s -r '.[] | select(.name and .newVersion) | "\(.name)\t\(.newVersion)"' 2>/dev/null \
+    || true
+}
+
 # pkg::table_print <header> [group_col]
 # Read tab-separated rows from stdin and emit a formatted table:
 #   - header (bright blue), padded to each column's full width
