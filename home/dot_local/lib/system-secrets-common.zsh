@@ -350,7 +350,10 @@ EOF
     for pair in "$@"; do
       name="${pair%%=*}"
       ref="${pair#*=}"
-      printf 'export %s="{{ output "op" "read" "--no-newline" "%s" }}"\n' "$name" "$ref"
+      # Single-quote the assignment so $, backtick, and \ in the resolved value
+      # are inert; the Go-template `replace` turns each embedded ' into '"'"' so
+      # a value with a single quote still closes/reopens cleanly (SEC-1).
+      printf 'export %s='\''{{ output "op" "read" "--no-newline" "%s" | replace "'\''" "'\''\\"'\''\\"'\''" }}'\''\n' "$name" "$ref"
     done
     printf '%s\n' "{{ end -}}"
   } >"$frag"
