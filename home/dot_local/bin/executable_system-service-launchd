@@ -27,7 +27,9 @@ source "$HOME/.local/lib/system-package-common.zsh"
 # services.toml lives in $PKG_DIR (~/.config/packages by default) so all
 # system-package-* state stays in one directory.
 SVCFILE="${SVCFILE:-$PKG_DIR/services.toml}"
-LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+# Overridable (like SVCFILE/PKG_DIR) so the suite can point plist writes and the
+# orphan sweep at a throwaway dir instead of the real ~/Library/LaunchAgents.
+LAUNCH_AGENTS="${LAUNCH_AGENTS:-$HOME/Library/LaunchAgents}"
 LABEL_PREFIX="com.system-service"
 DOMAIN="gui/$(id -u)"
 
@@ -367,7 +369,18 @@ do_sync() {
     local changed
     changed=$(svc::write_plist "$name")
     if [[ "$changed" == "wrote" ]] && svc::is_bootstrapped "$name"; then
+      # Plist drifted on a bootstrapped service. Capture whether it was
+      # actually running BEFORE we boot it out: bootstrap only re-registers the
+      # new plist, so an on-demand service (RunAtLoad=false) that was running
+      # would come back idle and its endpoint would silently go down. Kickstart
+      # it back — but only if it was running, never a stopped/errored one (that
+      # matches do_start's tail and honours the "don't resurrect" contract).
+      local was_running=""
+      [[ "$(svc::status "$name")" == running ]] && was_running=1
       svc::bootout "$name"
+      svc::bootstrap "$name" || log_warn "failed to bootstrap $(svc::label "$name")"
+      [[ -n "$was_running" ]] && svc::kickstart "$name"
+      continue
     fi
     svc::bootstrap "$name" || log_warn "failed to bootstrap $(svc::label "$name")"
   done

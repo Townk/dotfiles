@@ -228,6 +228,71 @@ EOF
     End
   End
 
+  Describe 'sync (drift on a running on-demand service)'
+    # An on-demand service (RunAtLoad=false) is registered by `bootstrap` but
+    # stays idle until something kickstarts it. When its plist drifts, do_sync
+    # boots out the running instance and re-bootstraps the new plist — which
+    # leaves it idle. `start` follows bootstrap with kickstart; sync must do the
+    # same for the drift branch ONLY when the service was running, so editing a
+    # manually-started service's config and re-syncing doesn't silently kill it.
+    # A service that was already stopped must be left stopped (the contract).
+    #
+    # Stateful stub: `up` = bootstrapped, `pid` = has a live PID (running).
+    #   bootout   drops both (drained)   bootstrap re-registers idle (no pid)
+    #   kickstart sets pid (now running) print reports running iff pid present
+    # The plist on disk is absent, so write_plist always reports "wrote" (drift).
+    setup_sync() {
+      export SVCFILE="$TEST_TMP/services.toml"
+      cat > "$SVCFILE" <<'EOF'
+[mlx-gemma]
+cmd = ["/bin/echo", "serve"]
+EOF
+      export LAUNCH_AGENTS="$TEST_TMP/LaunchAgents"
+      STUB_STATE="$TEST_TMP/state"; mkdir -p "$STUB_STATE"
+      export STUB_STATE
+      cat >"$STUB_DIR/launchctl" <<'STUB'
+#!/bin/sh
+ST="$STUB_STATE"
+case "$1" in
+  bootout)   rm -f "$ST/up" "$ST/pid" ;;
+  bootstrap) : > "$ST/up"; rm -f "$ST/pid" ;;
+  kickstart) : > "$ST/pid" ;;
+  print)
+    [ -f "$ST/up" ] || exit 1
+    if [ -f "$ST/pid" ]; then
+      printf 'state = running\n\tpid = 4242\n\tlast exit code = (never exited)\n'
+    else
+      printf 'state = not running\n\tlast exit code = 0\n'
+    fi
+    exit 0
+    ;;
+esac
+exit 0
+STUB
+      chmod +x "$STUB_DIR/launchctl"
+    }
+    BeforeEach 'setup_sync'
+    AfterEach 'unset SVCFILE LAUNCH_AGENTS STUB_STATE'
+
+    # sync, then ask the tool its own status — kickstart re-runs the service.
+    sync_then_status() {
+      zsh "$LAUNCHD" sync >/dev/null 2>&1
+      zsh "$LAUNCHD" status mlx-gemma
+    }
+
+    It 'kickstarts a running on-demand service back up after a drift'
+      : > "$STUB_STATE/up"; : > "$STUB_STATE/pid"   # bootstrapped + running
+      When run sync_then_status
+      The output should equal "running"
+    End
+
+    It 'leaves an already-stopped service stopped'
+      : > "$STUB_STATE/up"                           # bootstrapped, idle
+      When run sync_then_status
+      The output should equal "stopped"
+    End
+  End
+
   Describe 'clipboard trusted endpoint contract'
     no_socat() { ! command -v socat >/dev/null 2>&1; }
 
