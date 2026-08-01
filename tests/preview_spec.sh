@@ -425,3 +425,48 @@ Describe 'preview: image alignment knob'
     The output should not include "--align"
   End
 End
+
+# MED-16: fzf terminates the preview process on every selection change. The
+# raster path renders through a temp file (pvraster.XXXXXX); without
+# signal-scoped cleanup each kill strands one temp — raster::prune only reaps
+# *.png under the cache dir, never these. The temp must be removed even when
+# the process is killed mid-render.
+Describe 'preview: raster temp cleanup on kill (MED-16)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    T=$(mktemp -d); mkdir -p "$T/bin" "$T/tmp"
+    # chafa stub: emits a small raster to stdout (redirected to the temp by
+    # preview-raster), then blocks so the test can kill it mid-render.
+    printf '#!/bin/sh\necho raster-bytes\nsleep 10\n' > "$T/bin/chafa"
+    chmod +x "$T/bin/chafa"
+    printf 'x' > "$T/img.png"
+  }
+  cleanup() { pkill -f "$T/bin/chafa" 2>/dev/null; rm -rf "$T"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'removes the temp file when the preview is killed mid-render'
+    run_it() {
+      TMPDIR="$T/tmp" PATH="$T/bin:$PATH" \
+        zsh -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
+        "$SCRIPT" "$T/img.png" >/dev/null 2>&1 &
+      local pid=$! n=0
+      local -a f
+      while (( n < 60 )); do
+        f=("$T"/tmp/pvraster.*(N))
+        (( ${#f} )) && break
+        sleep 0.05; (( n++ ))
+      done
+      # Kill the preview (pending TERM), then the blocked stub so the shell's
+      # wait returns and it acts on the signal — mirrors fzf tearing the pane.
+      kill -TERM "$pid" 2>/dev/null
+      pkill -f "$T/bin/chafa" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      f=("$T"/tmp/pvraster.*(N))
+      (( ${#f} )) && echo leaked || echo clean
+    }
+    When call run_it
+    The output should equal "clean"
+  End
+End

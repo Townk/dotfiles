@@ -227,16 +227,24 @@ function preview-raster() {
     fi
   fi
   out=$(mktemp "${TMPDIR:-/tmp}/pvraster.XXXXXX") || return 1
-  chafa "${chafa_format[@]}" "${align[@]}" -s "${w:-80}x${h:-24}" "$1" >"$out" 2>/dev/null
-  if [[ "$(wc -c <"$out" | tr -d ' ')" -gt "$max" ]]; then
-    for pct in 70 50 35 25; do
-      chafa "${chafa_format[@]}" "${align[@]}" \
-        -s "$(( ${w:-80} * pct / 100 ))x$(( ${h:-24} * pct / 100 ))" "$1" >"$out" 2>/dev/null
-      [[ "$(wc -c <"$out" | tr -d ' ')" -le "$max" ]] && break
-    done
-  fi
-  cat -- "$out"
-  rm -f -- "$out"
+  # fzf terminates the preview on every selection change, so a plain trailing
+  # `rm` is skipped and each arrow-key press strands one pvraster.* (which
+  # raster::prune, scoped to *.png, never reaps). `always` covers the normal
+  # return path; the trap covers a mid-render kill.
+  trap 'rm -f -- "$out"' INT TERM
+  {
+    chafa "${chafa_format[@]}" "${align[@]}" -s "${w:-80}x${h:-24}" "$1" >"$out" 2>/dev/null
+    if [[ "$(wc -c <"$out" | tr -d ' ')" -gt "$max" ]]; then
+      for pct in 70 50 35 25; do
+        chafa "${chafa_format[@]}" "${align[@]}" \
+          -s "$(( ${w:-80} * pct / 100 ))x$(( ${h:-24} * pct / 100 ))" "$1" >"$out" 2>/dev/null
+        [[ "$(wc -c <"$out" | tr -d ' ')" -le "$max" ]] && break
+      done
+    fi
+    cat -- "$out"
+  } always {
+    rm -f -- "$out"
+  }
 }
 
 # Opportunistic cache prune: at most once a day (stamp file), drop rasters
