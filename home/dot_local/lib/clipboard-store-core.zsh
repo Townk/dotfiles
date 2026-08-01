@@ -212,6 +212,18 @@ clip::self_host() {
   print -rn -- "$h"
 }
 
+# clip::valid_host <host> -- true iff <host> matches the wire identity shape
+# rule enforced on the self-name file above (alnum first char, then
+# alnum/dot/dash; single line, no US/space/newline/leading punctuation). A host
+# reaching a store row, the origin file, or a mount/ssh key from a network-
+# facing peer is a hazard (spec §2), so the O/M/P handlers validate an untrusted
+# host through here before it is ever written.
+clip::valid_host() {
+  emulate -L zsh
+  setopt extended_glob
+  [[ "$1" == [A-Za-z0-9][A-Za-z0-9.-]# ]]
+}
+
 # clip::ensure_schema -- idempotent bootstrap of the store DDL (spec §3).
 # Mirrors clipboard-history.lua's ensure_schema() CREATE set exactly (WAL +
 # synchronous=NORMAL, clips incl. source_bundle_id, clip_types, file authority
@@ -979,6 +991,7 @@ clip::op_persist() {
   IFS=$us read -rA f <<< "$meta"
   local host=${f[1]:-} kind=${f[2]:-text} app=${f[3]:-} regtype=${f[4]:-}
   [[ -n "$host" ]] || { send_err "no source_host"; return }
+  clip::valid_host "$host" || { send_err "bad source_host"; return }
   [[ "$kind" != (files|file|directory) ]] ||
     { send_err "P cannot persist file kinds"; return }
   if clip::persist_text_row "$host" "$kind" "$app" "$regtype" "$text"; then
@@ -1035,6 +1048,7 @@ clip::op_declare_origin() {
   local host=${payload%%${us}*}
   local text=${payload#*${us}}
   [[ -n "$host" && "$host" != "$payload" ]] || { send_err "bad origin payload"; return }
+  clip::valid_host "$host" || { send_err "bad origin payload"; return }
   clip::declare_origin_core "$host" "$text"
   send_ok ""
 }
@@ -1056,6 +1070,10 @@ clip::parse_manifest_payload() {
   local host=${payload%%${us}*}
   local paths=${payload#*${us}}
   if [[ -z "$host" || "$host" == "$payload" || -z "$paths" ]]; then
+    REPLY="bad manifest payload"
+    return 1
+  fi
+  if ! clip::valid_host "$host"; then
     REPLY="bad manifest payload"
     return 1
   fi

@@ -51,6 +51,33 @@ Describe 'clipboard-bridge-dispatch: O declare-origin'
     lines=$(wc -l < "$ORIGINFILE" | tr -d ' ')
     The variable lines should equal 3
   End
+
+  # SEC-2: the O op is reachable from the network-facing bridge listener, so a
+  # peer's host field is untrusted. It must pass the SAME shape rule
+  # clip::self_host enforces on the self-name file (alnum first char, then
+  # alnum/dot/dash, single line). A valid dotted host still writes the normal
+  # 3-line origin file.
+  It 'accepts a valid dotted host and writes a 3-line origin file (SEC-2)'
+    # payload: "good.host.local" US "hi" = 15 + 1 + 2 = 18 = 0x12
+    printf 'O\000\000\000\022good.host.local\037hi' > "$REQ"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "O"
+    The contents of file "$ORIGINFILE" should include "good.host.local"
+    lines=$(wc -l < "$ORIGINFILE" | tr -d ' ')
+    The variable lines should equal 3
+  End
+
+  # SEC-2 (the exploit): a host carrying an embedded newline would forge extra
+  # origin-file lines (hash/ts/suppress-echo the HS watcher trusts). It must be
+  # rejected with an error frame and MUST NOT write a multi-line origin file.
+  It 'rejects a host with an embedded newline and writes no origin file (SEC-2)'
+    rm -f "$ORIGINFILE"
+    # payload: "evil\nforged" US "hi" = 11 + 1 + 2 = 14 = 0x0e
+    printf 'O\000\000\000\016evil\nforged\037hi' > "$REQ"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The path "$ORIGINFILE" should not be exist
+  End
 End
 
 # Tests for the S (get-current-ts) op, X9: the CURRENT clipboard's copy-time,
