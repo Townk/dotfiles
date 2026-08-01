@@ -71,12 +71,36 @@ raster::prune() {
 
 # --- converters (each writes $RASTER_OUT) -----------------------------------
 
+# Every format that reaches raster::office is a CONTAINER: zip (openxml,
+# OpenDocument, iWork bundles) or OLE compound file (legacy .doc/.xls/.ppt).
+# Callers dispatch on extension, which lies — a plain-text API key named
+# `foo.key` arrives here claiming to be Keynote — and Quick Look's document
+# generators BLOCK FOREVER on such a file (0% CPU, no error, no exit), which
+# strands the yazi preload task that spawned them and makes yazi refuse to
+# quit. Checking the magic bytes costs one `od` and rules that out.
+raster::office_container() {
+  local magic
+  magic=$(od -An -tx1 -N4 -- "$1" 2>/dev/null | tr -d ' \n') || return 1
+  [[ $magic == 504b0304 || $magic == d0cf11e0 ]]
+}
+
 raster::office() {
   command -v qlmanage >/dev/null 2>&1 || return 1
+  raster::office_container "$1" || return 1
   local tmpd
   tmpd=$(mktemp -d) || return 1
+  # A genuine container can still stall the generator (corrupt innards,
+  # network-backed cloud storage), and qlmanage has no timeout of its own, so
+  # cap it — same guard notify() puts on `hs` in common.zsh. Preview panes are
+  # interactive; 10s is already far past useful.
+  local -a tmo=()
+  if command -v gtimeout >/dev/null 2>&1; then
+    tmo=(gtimeout 10)
+  elif command -v timeout >/dev/null 2>&1; then
+    tmo=(timeout 10)
+  fi
   {
-    qlmanage -t -s 1600 -o "$tmpd" "$1" >/dev/null 2>&1
+    "${tmo[@]}" qlmanage -t -s 1600 -o "$tmpd" "$1" >/dev/null 2>&1
     local -a made=("$tmpd"/*.png(N))
     ((${#made})) || return 1
     mv -f "${made[1]}" "$RASTER_OUT"
