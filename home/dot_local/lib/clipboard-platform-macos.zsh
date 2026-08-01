@@ -42,21 +42,28 @@ clip::op_get() {
 # nothing else has copied since (self-invalidating, no dependency on
 # Hammerspoon's own change-tracking).
 clip::op_get_regtype() {
-  local regtype='v'
+  # Stored-regtype lookup ONLY when the state file exists; a hash mismatch (or
+  # a missing/absent file, e.g. fresh Mac or cleared state) falls through to
+  # the sentinel heuristic below. The heuristic MUST be the unconditional
+  # fallback -- when it lived inside the `-f` branch, a missing state file
+  # short-circuited to the 'v' initializer and never consulted the pasteboard
+  # (LOW-1).
+  local regtype=""
   if [[ -f "$REGTYPE_FILE" ]]; then
     local stored_rt stored_hash current_hash
     { read -r stored_rt; read -r stored_hash; } < "$REGTYPE_FILE"
     current_hash="$(pbpaste 2>/dev/null | clip::sha256)"
     if [[ -n "$stored_rt" && "$stored_hash" == "$current_hash" ]]; then
       regtype=$stored_rt
-    else
-      # Command substitution strips trailing newlines, so a bare
-      # "$(pbpaste)" can never end in \n even when the real clipboard does
-      # -- append a sentinel after it so the real trailing byte (if any)
-      # isn't the last character being stripped.
-      local sentinel; sentinel="$(pbpaste 2>/dev/null; print -n x)"
-      [[ "$sentinel" == *$'\n''x' ]] && regtype='l' || regtype='v'
     fi
+  fi
+  if [[ -z "$regtype" ]]; then
+    # Command substitution strips trailing newlines, so a bare
+    # "$(pbpaste)" can never end in \n even when the real clipboard does
+    # -- append a sentinel after it so the real trailing byte (if any)
+    # isn't the last character being stripped.
+    local sentinel; sentinel="$(pbpaste 2>/dev/null; print -n x)"
+    [[ "$sentinel" == *$'\n''x' ]] && regtype='l' || regtype='v'
   fi
   send_ok "$regtype"
 }

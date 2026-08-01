@@ -61,4 +61,32 @@ EOF
     hdr=$(od -An -tx1 "$RESP" | tr -s ' \n' ' ')
     The variable hdr should include "4f 00 00 00 06 66 6f 6f 0a 0a 0a"
   End
+
+  # LOW-1: the trailing-newline l/v heuristic lived INSIDE the
+  # `[[ -f "$REGTYPE_FILE" ]]` branch, so a missing state file (fresh Mac, or
+  # state cleared) short-circuited to the 'v' initializer instead of falling
+  # back to the sentinel heuristic. With no state file and a pasteboard ending
+  # in "\n", R must answer 'l', not 'v'.
+  It 'R falls back to the newline heuristic when no state file exists (LOW-1)'
+    rm -f "$REGTYPE_FILE"
+    printf 'a line\n' > "$PBPASTE_FIXTURE"
+    printf 'R\000\000\000\000' > "$REQ"
+    When call run_dispatch
+    The status should be success
+    The contents of file "$RESP" should start with "O"
+    # payload is the single regtype byte after the 5-byte frame header
+    rt=$(tail -c +6 "$RESP")
+    The variable rt should equal "l"
+  End
+
+  # LOW-1 companion: no state file and a pasteboard NOT ending in "\n" -> 'v'.
+  It 'R falls back to v with no state file and no trailing newline (LOW-1)'
+    rm -f "$REGTYPE_FILE"
+    printf 'a line' > "$PBPASTE_FIXTURE"
+    printf 'R\000\000\000\000' > "$REQ"
+    When call run_dispatch
+    The status should be success
+    rt=$(tail -c +6 "$RESP")
+    The variable rt should equal "v"
+  End
 End
