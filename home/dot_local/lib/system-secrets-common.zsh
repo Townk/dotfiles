@@ -214,6 +214,40 @@ sec::map_clear_color() {
   slot="$1" yq -i 'del(.[strenv(slot)].color)' "$OPERATOR_MAP"
 }
 
+# ---------------------------------------------------------------------------
+# Rotation stamp (HI-10). A human slot's cache signature (see
+# sec::write_human_fragment) is computed from the name=ref pairs ALONE, but a
+# rotate changes the 1Password VALUE while leaving the ref set byte-identical:
+# the regenerated fragment matched the old sig, the commit was empty, and every
+# OTHER machine's next apply hit its op-cache and re-emitted the STALE value. So
+# a rotated/compromised credential never propagated. We fold a per-slot,
+# monotonically-increasing rotation stamp into the sig: a rotate advances it,
+# which changes the committed fragment, so every target's next apply misses its
+# cache and re-resolves the NEW value. A normal apply (no rotation) leaves the
+# stamp — and thus the sig — untouched, so the Touch-ID-avoiding cache still hits.
+# The stamp lives in the loose operator map (unmanaged) as the slot's `rotated`
+# field; sec::map_set MERGES, so it survives a re-onboard just like `color`.
+# ---------------------------------------------------------------------------
+# sec::rotation_stamp <slot> — the slot's rotation stamp (empty if never rotated).
+sec::rotation_stamp() { sec::map_get "$1" rotated; }
+
+# sec::set_rotation_stamp <slot> <stamp> — persist the rotation stamp (loose map).
+sec::set_rotation_stamp() {
+  sec::map_init
+  slot="$1" stamp="$2" yq -i '.[strenv(slot)].rotated = strenv(stamp)' "$OPERATOR_MAP"
+}
+
+# sec::bump_rotation_stamp <slot> — advance the stamp to the wall clock, forced
+# STRICTLY greater than any prior value so two rotations in the same second still
+# produce distinct sigs (EPOCHSECONDS needs zsh/datetime; `date +%s` is portable).
+sec::bump_rotation_stamp() {
+  local prev now
+  prev="$(sec::rotation_stamp "$1")"
+  now="$(date +%s)"
+  [[ -n "$prev" && "$prev" -ge "$now" ]] && now=$((prev + 1))
+  sec::set_rotation_stamp "$1" "$now"
+}
+
 # sec::map_slot_for_alias <alias> — print the slot mapped to <alias> (or empty).
 # Read-only: never creates the map.
 sec::map_slot_for_alias() {
@@ -331,9 +365,14 @@ EOF
 sec::write_human_fragment() {
   local slot="$1"
   shift
-  local frag pair name ref sig
+  local frag pair name ref sig stamp
   frag="$(sec::fragment_path "$slot")"
-  sig="$(printf '%s\n' "$@" | shasum -a 256 | cut -d ' ' -f 1)"
+  # HI-10: fold the slot's rotation stamp into the sig so a rotate (which leaves
+  # the name=ref set unchanged) still changes the sig, invalidating every
+  # target's op-cache; an unrotated slot keeps a stable stamp, so the sig — and
+  # the cache hit — is unchanged. Empty stamp for a never-rotated slot.
+  stamp="$(sec::rotation_stamp "$slot")"
+  sig="$(printf '%s\n' "$stamp" "$@" | shasum -a 256 | cut -d ' ' -f 1)"
   mkdir -p "${frag:h}"
   {
     cat <<EOF
@@ -606,6 +645,9 @@ sec::op_set_field() {
       sec::op_upsert_field "$vault" "$name" "$hash" "$val" >/dev/null ||
         die "could not update $ref ($auth_hint)"
       val=""
+      # HI-10: a value actually changed — advance the slot's rotation stamp so
+      # the regenerated fragment gets a fresh sig and every target re-resolves.
+      sec::bump_rotation_stamp "slot-${hash}"
       log_ok "    updated $ref"
     else
       log_info "    keeping existing $ref"
@@ -615,6 +657,8 @@ sec::op_set_field() {
     sec::op_upsert_field "$vault" "$name" "$hash" "$val" >/dev/null ||
       die "could not write $ref ($auth_hint)"
     val=""
+    # HI-10: first write of this field is also a value change — stamp the slot.
+    sec::bump_rotation_stamp "slot-${hash}"
     log_ok "    wrote $ref"
   fi
 }

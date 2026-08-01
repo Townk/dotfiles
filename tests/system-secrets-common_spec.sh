@@ -185,4 +185,45 @@ YAML
       The output should equal "$1"
     End
   End
+
+  # HI-10: rotating a human slot's secret leaves the name=ref set byte-identical,
+  # so the OLD cache signature was reproduced verbatim, the commit was empty, and
+  # every OTHER machine's next `chezmoi apply` matched its op-cache and re-emitted
+  # the STALE value — a rotated/compromised credential never propagated. The fix
+  # folds a per-slot rotation stamp into the cache signature: a rotate advances the
+  # stamp, which changes the committed fragment's sig, so every target's next apply
+  # misses its cache and re-resolves the NEW value. A NORMAL apply (no rotation)
+  # must still reproduce the identical sig so the Touch-ID-avoiding cache still hits.
+  Describe 'sec::write_human_fragment (HI-10: rotation invalidates target cache)'
+    # First byte-word of the op-cache-v1 signature line inside the fragment.
+    cache_sig() { sed -n 's/^# chezmoi: op-cache-v1 //p' "$1" | head -n1; }
+
+    It 'produces a DIFFERENT cache signature after a rotation stamp bump (same refs)'
+      frag="$FRAGMENT_DIR/private_slot-abc123.sh.tmpl"
+      sec::write_human_fragment slot-abc123 "FOO=op://Vault/FOO/deadbe"
+      before="$(cache_sig "$frag")"
+      sec::bump_rotation_stamp slot-abc123
+      sec::write_human_fragment slot-abc123 "FOO=op://Vault/FOO/deadbe"
+      When call cache_sig "$frag"
+      The output should not equal "$before"
+    End
+
+    It 'reproduces the IDENTICAL cache signature without a rotation (cache still hits)'
+      frag="$FRAGMENT_DIR/private_slot-abc123.sh.tmpl"
+      sec::write_human_fragment slot-abc123 "FOO=op://Vault/FOO/deadbe"
+      before="$(cache_sig "$frag")"
+      sec::write_human_fragment slot-abc123 "FOO=op://Vault/FOO/deadbe"
+      When call cache_sig "$frag"
+      The output should equal "$before"
+    End
+
+    It 'advances the rotation stamp strictly, even within one second'
+      sec::bump_rotation_stamp slot-abc123
+      first="$(sec::rotation_stamp slot-abc123)"
+      sec::bump_rotation_stamp slot-abc123
+      second="$(sec::rotation_stamp slot-abc123)"
+      When call test "$second" -gt "$first"
+      The status should be success
+    End
+  End
 End
