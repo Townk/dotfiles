@@ -1283,6 +1283,50 @@ EOF
       The output should equal 1
     End
 
+    It 'runs a normal scheduled tick even though the previous capture landed under a full interval ago'
+      # The launchd agent fires one cadence apart; the previous capture took
+      # ~30s, so its COMPLETION stamp is CADENCE-30 old — still under a full
+      # interval. That tick is genuinely due and must proceed, or the effective
+      # cadence doubles (every other slot no-ops). This is the HI-5 regression.
+      scheduled_tick() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        mkdir -p "$BKP_STATE_DIR"
+        print -r -- "capture $(( EPOCHSECONDS - (BKP_CAPTURE_CADENCE - 30) )) 0" \
+          > "$BKP_STATE_DIR/heartbeat"
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        [[ -s "$FIX/calls" ]] && print ran || print skipped
+      }
+      When run scheduled_tick
+      The output should equal "ran"
+    End
+
+    It 'skips a tick that fires well within the cadence (no double-capture)'
+      recent_skip() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        mkdir -p "$BKP_STATE_DIR"
+        print -r -- "capture $(( EPOCHSECONDS - 60 )) 0" > "$BKP_STATE_DIR/heartbeat"
+        bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        [[ -s "$FIX/calls" ]] && print ran || print skipped
+      }
+      When run recent_skip
+      The output should equal "skipped"
+    End
+
+    It 'BKP_CAPTURE_FORCE proceeds even for a capture that just ran'
+      forced_recent() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        mkdir -p "$BKP_STATE_DIR"
+        print -r -- "capture $(( EPOCHSECONDS - 60 )) 0" > "$BKP_STATE_DIR/heartbeat"
+        BKP_CAPTURE_FORCE=1 bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
+        [[ -s "$FIX/calls" ]] && print ran || print skipped
+      }
+      When run forced_recent
+      The output should equal "ran"
+    End
+
     It 'stamps catchup while overdue work runs, then clears it on success'
       catchup_ok() {
         source "$LIB/backup.zsh"

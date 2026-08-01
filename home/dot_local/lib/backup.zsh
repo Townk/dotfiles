@@ -1416,7 +1416,12 @@ bkp::capture::run() {
     epoch="${hb%% *}"
     age=$(( EPOCHSECONDS - epoch ))
     (( age < 0 )) && age=0
-    (( age < BKP_CAPTURE_CADENCE )) && overdue=0
+    # Slack: the completion stamp lands D seconds (capture duration) AFTER its
+    # slot, so a scheduled tick exactly one cadence later sees age = cadence-D
+    # and would wrongly no-op — halving the effective cadence. 3/4 of a cadence
+    # is comfortably past any real capture duration but well short of the next
+    # slot, so a just-finished capture won't double-fire yet a due tick proceeds.
+    (( age < BKP_CAPTURE_CADENCE * 3 / 4 )) && overdue=0
   fi
   if (( ! overdue && ! ${BKP_CAPTURE_FORCE:-0} )); then
     log_info "bkp: last capture ${age}s ago (< ${BKP_CAPTURE_CADENCE}s cadence) — skipping"
