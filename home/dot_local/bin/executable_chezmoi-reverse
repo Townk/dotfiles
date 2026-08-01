@@ -95,7 +95,13 @@ reverse_one() {
     emit failed "$file"
     return 1
   fi
-  if diff -U0 "$rendered" "$file" >"$patch"; then
+  # -U3 (not -U0): insertion-only hunks carry no context under -U0, so `patch`
+  # applies them at the diff's line number, which drifts from the source
+  # whenever a `{{ }}` directive shifts line numbers between render and source —
+  # landing the edit on the wrong line while still exiting 0. Three lines of
+  # context anchor every hunk on surrounding content; hunks that then genuinely
+  # cannot be placed fail cleanly and fall through to the conflict path below.
+  if diff -U3 "$rendered" "$file" >"$patch"; then
     emit clean "$file"
     return 0
   fi

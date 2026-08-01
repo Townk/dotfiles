@@ -49,7 +49,12 @@ Describe 'chezmoi-reverse'
   End
 
   It 'applied: a change to a literal line is patched into the template'
-    printf 'name = thiago\nrole = {{ .role }}\n' > "$TEST_TMP/src/dot_foo.tmpl"
+    # The literal line sits clear (>3 lines) of the `{{ .role }}` directive, so
+    # the -U3 context is all literal text that matches the source verbatim and
+    # the hunk patches cleanly. (An edit within three lines of a directive whose
+    # render differs from its source form instead defers to merge — see the
+    # 'merged' example below.)
+    printf 'name = thiago\nline a\nline b\nline c\nline d\nrole = {{ .role }}\n' > "$TEST_TMP/src/dot_foo.tmpl"
     chezmoi apply
     sed -i.bak 's/^name = thiago$/name = alice/' "$HOME/.foo"; rm "$HOME/.foo.bak"
     When run script "$SCRIPT" "$HOME/.foo"
@@ -57,6 +62,25 @@ Describe 'chezmoi-reverse'
     The output should include "applied"
     The contents of file "$TEST_TMP/src/dot_foo.tmpl" should include "name = alice"
     The contents of file "$TEST_TMP/src/dot_foo.tmpl" should include "role = {{ .role }}"
+    The path "$TEST_TMP/merge-invoked" should not be exist
+  End
+
+  It 'applied: an inserted line lands on the correct source line despite a template guard shifting line numbers'
+    # `{{ if true -}}` trims its trailing newline, so the rendered body sits one
+    # line ABOVE the same content in the source. An insertion-only hunk carries
+    # no context under diff -U0, so patch applies it at the rendered line number
+    # — the WRONG source line — and still exits 0 with no .rej. diff -U3 anchors
+    # the hunk on surrounding content so it lands where it belongs.
+    printf '{{ if true -}}\nalpha\nbeta\ngamma\ndelta\n{{- end }}\n' > "$TEST_TMP/src/dot_foo.tmpl"
+    chezmoi apply
+    awk '{ print } /^beta$/ { print "INSERTED" }' "$HOME/.foo" > "$HOME/.foo.new"
+    mv "$HOME/.foo.new" "$HOME/.foo"
+    When run script "$SCRIPT" "$HOME/.foo"
+    The status should be success
+    The output should include "applied"
+    The line 3 of contents of file "$TEST_TMP/src/dot_foo.tmpl" should equal "beta"
+    The line 4 of contents of file "$TEST_TMP/src/dot_foo.tmpl" should equal "INSERTED"
+    The path "$TEST_TMP/src/dot_foo.tmpl.rej" should not be exist
     The path "$TEST_TMP/merge-invoked" should not be exist
   End
 
