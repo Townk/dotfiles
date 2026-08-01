@@ -27,6 +27,10 @@ local get_yanked = ya.sync(function()
 	return urls, is_cut
 end)
 
+local get_cwd = ya.sync(function()
+	return tostring(cx.active.current.cwd)
+end)
+
 -- mtime <path> -- epoch seconds, or 0 if the marker doesn't exist / stat
 -- fails (matches the brief's "missing marker = 0" rule). BSD/macOS stat uses
 -- `-f %m`; GNU stat uses `-c %Y`.
@@ -228,7 +232,11 @@ end
 -- error notify instead of another dialog.
 local MAX_CAP_CONFIRMS = 3
 
--- run_remote_once(args, env_max) -- spawns `pbpaste --files --porcelain`
+local function pbpaste_command(cwd, args)
+	return Command("pbpaste"):cwd(cwd):arg(args)
+end
+
+-- run_remote_once(args, env_max, cwd) -- spawns `pbpaste --files --porcelain`
 -- once (optionally with CLIP_FILE_MAX raised to env_max for a cap-refusal
 -- retry) and streams it to completion, exactly the loop paste_system_remote
 -- used to run inline before it grew a retry wrapper. Returns
@@ -236,8 +244,8 @@ local MAX_CAP_CONFIRMS = 3
 -- spawn itself failed), `summary` is the parsed `done` line (nil if the run
 -- failed before one arrived), `stderr_lines` is every stderr line seen (or
 -- a single synthetic entry naming the spawn error).
-local function run_remote_once(args, env_max)
-	local cmd = Command("pbpaste"):arg(args)
+local function run_remote_once(args, env_max, cwd)
+	local cmd = pbpaste_command(cwd, args)
 	if env_max then
 		cmd = cmd:env("CLIP_FILE_MAX", tostring(env_max))
 	end
@@ -324,7 +332,7 @@ end
 -- size (via `Command:env`, verified against types.yazi -- no shell prefix
 -- needed). See MAX_CAP_CONFIRMS above for how repeats across multiple
 -- over-cap items in one paste are bounded.
-local function paste_system_remote(force)
+local function paste_system_remote(force, cwd)
 	local args = { "--files", "--porcelain" }
 	if force then
 		args[#args + 1] = "--force"
@@ -336,7 +344,7 @@ local function paste_system_remote(force)
 	local confirms = 0
 
 	while true do
-		local ok, summary, stderr_lines = run_remote_once(args, env_max)
+		local ok, summary, stderr_lines = run_remote_once(args, env_max, cwd)
 		if ok and summary then
 			ya.notify({
 				title = "Clipboard",
@@ -401,7 +409,7 @@ local function paste_system_remote(force)
 	end
 end
 
--- paste_system(force, remote) -- the system-clipboard branch: materializes
+-- paste_system(force, remote, cwd) -- the system-clipboard branch: materializes
 -- the current file clip into cwd via `pbpaste --files`. Both branches now
 -- run as a background `Command` (R1: the remote branch no longer leaves
 -- yazi's alternate screen -- see paste_system_remote above).
@@ -409,9 +417,9 @@ end
 --   tiers are instant, so a single ya.notify on completion/failure is
 --   enough -- no porcelain stream needed.
 --   Remote manifest (remote == true): see paste_system_remote.
-local function paste_system(force, remote)
+local function paste_system(force, remote, cwd)
 	if remote then
-		paste_system_remote(force)
+		paste_system_remote(force, cwd)
 		touch_last_paste()
 		return
 	end
@@ -420,7 +428,7 @@ local function paste_system(force, remote)
 	if force then
 		args[#args + 1] = "--force"
 	end
-	local out = Command("pbpaste"):arg(args):output()
+	local out = pbpaste_command(cwd, args):output()
 	-- Stamp the guard regardless of outcome: a failed paste must not be
 	-- silently retried by a reflexive second `p` once the underlying cause
 	-- (e.g. a name conflict) is fixed by hand -- the marker only guards
@@ -488,13 +496,18 @@ local function resolve(force)
 		last_yank = mtime(d .. "/last-yank")
 	end
 	if choose_source(yanked, m, last_paste, last_yank) == "system" then
-		return paste_system(force, is_remote_manifest(m))
+		return paste_system(force, is_remote_manifest(m), get_cwd())
 	end
 	return native_paste(force)
 end
 
 return {
-	_test = { choose_source = choose_source, mtime = mtime },
+	_test = {
+		choose_source = choose_source,
+		get_cwd = get_cwd,
+		mtime = mtime,
+		pbpaste_command = pbpaste_command,
+	},
 	entry = function(_, job)
 		local force = (job.args and job.args.force) or false
 		-- Fallback safety: any unexpected error anywhere in resolution (a

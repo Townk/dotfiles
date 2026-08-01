@@ -7,11 +7,18 @@ Describe 'smart-paste.yazi'
     HARNESS="$SHELLSPEC_TMPBASE/smart-paste-test.lua"
     cat > "$HARNESS" <<'LUA'
 ya = { sync = function(fn) return fn end }
-cx = { yanked = { is_cut = false } }
+cx = {
+  active = { current = { cwd = "/active/yazi/dir" } },
+  yanked = { is_cut = false },
+}
 
 local calls = {}
 Command = function(name)
   local cmd = { name = name }
+  function cmd:cwd(dir)
+    self.cwd_value = dir
+    return self
+  end
   function cmd:arg(args)
     self.args = args
     calls[#calls + 1] = args[1] .. ":" .. args[2]
@@ -34,9 +41,16 @@ end
 local plugin = assert(dofile(assert(os.getenv("SMART_PASTE_PLUGIN"))))
 local test = assert(plugin._test)
 
-if os.getenv("SMART_TEST_OP") == "mtime" then
+local op = os.getenv("SMART_TEST_OP")
+if op == "mtime" then
   print(test.mtime("/marker"))
   print(table.concat(calls, ","))
+elseif op == "cwd" then
+  assert(test.get_cwd() == "/active/yazi/dir")
+  local cmd = test.pbpaste_command(test.get_cwd(), { "--files", "--porcelain" })
+  assert(cmd.cwd_value == "/active/yazi/dir")
+  assert(cmd.args[1] == "--files" and cmd.args[2] == "--porcelain")
+  print(cmd.cwd_value)
 else
   local choose = test.choose_source
   local function manifest(ts, ...)
@@ -61,6 +75,11 @@ LUA
 
   run_decision() {
     SMART_TEST_OP=decision SMART_PASTE_PLUGIN="$PLUGIN" \
+      nvim --headless -u NONE -l "$HARNESS" 2>&1
+  }
+
+  run_cwd() {
+    SMART_TEST_OP=cwd SMART_PASTE_PLUGIN="$PLUGIN" \
       nvim --headless -u NONE -l "$HARNESS" 2>&1
   }
 
@@ -95,6 +114,12 @@ LUA
   It 'pins all five source-resolution rules'
     When call run_decision
     The output should equal "decision-ok"
+    The status should be success
+  End
+
+  It 'pins pbpaste to the active Yazi tab directory'
+    When call run_cwd
+    The output should equal "/active/yazi/dir"
     The status should be success
   End
 End
