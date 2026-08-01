@@ -99,40 +99,30 @@ be32_to_int() {
 
 # int_to_be32 <n> -> writes the 4-byte big-endian scalar to $REPLY.
 #
-# NOTE: ${(e)string} does NOT interpret \NNN octal escapes the way $'...'
-# does (confirmed empirically -- it left the literal backslash-digit text
-# untouched). printf's OWN format-string handling of \NNN is standard and
-# reliable, but its result must reach us via a real file descriptor, not
-# $(command substitution), which truncates embedded NULs (relevant here:
-# any byte in a length can legitimately be 0x00). Round-tripping through a
-# small temp file is the verified-safe way to land raw computed bytes in a
-# zsh scalar.
+# Under this file's `setopt nomultibyte`, ${(#)var} (arithmetic-to-character)
+# produces each byte directly from its integer value -- INCLUDING 0x00, which
+# a length byte can legitimately be -- so the raw big-endian bytes assemble in
+# a zsh scalar with no temp file, fd juggling, or $(...) (which would truncate
+# at an embedded NUL). Each byte is extracted to its own integer first, as
+# ${(#)...} evaluates a parameter's value, not an inline expression.
 int_to_be32() {
   local -i n=$1
-  local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/clipboard-bridge-be32.XXXXXX")
-  printf "\\$(printf %03o $(( (n >> 24) & 255 )))\\$(printf %03o $(( (n >> 16) & 255 )))\\$(printf %03o $(( (n >> 8) & 255 )))\\$(printf %03o $(( n & 255 )))" > "$tmpf"
-  local fd
-  exec {fd}< "$tmpf"
-  sysread -s 4 -i $fd REPLY
-  exec {fd}<&-
-  rm -f "$tmpf"
+  local -i b1=$(( (n >> 24) & 255 )) b2=$(( (n >> 16) & 255 ))
+  local -i b3=$(( (n >> 8) & 255 )) b4=$(( n & 255 ))
+  REPLY="${(#)b1}${(#)b2}${(#)b3}${(#)b4}"
 }
 
 # int_to_be64 <n> -> writes the 8-byte big-endian scalar to $REPLY. Same
-# mktemp round-trip as int_to_be32 above (same note applies -- ${(e)string}
-# doesn't do \NNN escapes, printf's does but only survives via a real fd, not
-# a $(...) that would truncate an embedded NUL byte). Needed for op a's
-# BE64 total-byte-count header: a directory's `du`-based byte count can
+# ${(#)var} byte assembly as int_to_be32 above (see its note). Needed for op
+# a's BE64 total-byte-count header: a directory's `du`-based byte count can
 # exceed 4 GiB, overflowing BE32.
 int_to_be64() {
   local -i n=$1
-  local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/clipboard-bridge-be64.XXXXXX")
-  printf "\\$(printf %03o $(( (n >> 56) & 255 )))\\$(printf %03o $(( (n >> 48) & 255 )))\\$(printf %03o $(( (n >> 40) & 255 )))\\$(printf %03o $(( (n >> 32) & 255 )))\\$(printf %03o $(( (n >> 24) & 255 )))\\$(printf %03o $(( (n >> 16) & 255 )))\\$(printf %03o $(( (n >> 8) & 255 )))\\$(printf %03o $(( n & 255 )))" > "$tmpf"
-  local fd
-  exec {fd}< "$tmpf"
-  sysread -s 8 -i $fd REPLY
-  exec {fd}<&-
-  rm -f "$tmpf"
+  local -i b1=$(( (n >> 56) & 255 )) b2=$(( (n >> 48) & 255 ))
+  local -i b3=$(( (n >> 40) & 255 )) b4=$(( (n >> 32) & 255 ))
+  local -i b5=$(( (n >> 24) & 255 )) b6=$(( (n >> 16) & 255 ))
+  local -i b7=$(( (n >> 8) & 255 )) b8=$(( n & 255 ))
+  REPLY="${(#)b1}${(#)b2}${(#)b3}${(#)b4}${(#)b5}${(#)b6}${(#)b7}${(#)b8}"
 }
 
 # send_frame <status-byte> <payload-scalar>

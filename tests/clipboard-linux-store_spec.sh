@@ -43,6 +43,34 @@ Describe 'clipboard-store-core: portable helpers'
     The output should not equal ""
   End
 
+  # LOW-2: int_to_be32/int_to_be64 encode a big-endian byte sequence into
+  # $REPLY. Characterization of the byte-exact contract (expected derived from
+  # the big-endian encoding by hand, NOT from the code): 65546 = 0x0001000A ->
+  # 00 01 00 0a, exercising interior 0x00 bytes; 4295032842 = 0x00000001_0001000A
+  # -> 00 00 00 01 00 01 00 0a, exercising a set byte above the 32-bit boundary
+  # plus 0x00 bytes. $REPLY holds NULs, so it is written out with syswrite (the
+  # module zmodloads zsh/system) and read back via od -- never a $(...) capture,
+  # which would truncate at the first NUL.
+  It 'int_to_be32 encodes big-endian bytes incl. interior 0x00 (65546 -> 00 01 00 0a)'
+    out="$SHELLSPEC_TMPBASE/be32.bin"
+    When run command sh -c 'zsh -f -c "source \"$1\"; int_to_be32 65546; syswrite -- \"\$REPLY\"" > "$2"' _ "$CORE" "$out"
+    The status should be success
+    size=$(wc -c < "$out" | tr -d ' ')
+    The variable size should equal 4
+    hex=$(od -An -tx1 "$out" | tr -s ' \n' ' ')
+    The variable hex should include "00 01 00 0a"
+  End
+
+  It 'int_to_be64 encodes big-endian bytes incl. interior 0x00 (4295032842 -> 00 00 00 01 00 01 00 0a)'
+    out="$SHELLSPEC_TMPBASE/be64.bin"
+    When run command sh -c 'zsh -f -c "source \"$1\"; int_to_be64 4295032842; syswrite -- \"\$REPLY\"" > "$2"' _ "$CORE" "$out"
+    The status should be success
+    size=$(wc -c < "$out" | tr -d ' ')
+    The variable size should equal 8
+    hex=$(od -An -tx1 "$out" | tr -s ' \n' ' ')
+    The variable hex should include "00 00 00 01 00 01 00 0a"
+  End
+
   It '--init-store creates the schema'
     When run command sh -c 'CLIPBOARD_PLATFORM=linux-headless zsh -f "$1" --init-store' _ "$DISPATCH"
     The status should be success
