@@ -109,23 +109,49 @@ brew bundle install --file="$HOME/.local/share/chezmoi/home/dot_config/packages/
 # Interactive auth gates. Front-loaded so the user clears them while
 # their attention is on the install. After these, the run_once
 # bootstrap can run unattended.
-while ! op account list &>/dev/null; do
-  echo "--------------------------------------------------------"
-  echo "⚠️  ACTION REQUIRED: Manual Step Needed"
-  echo "1. Open 1Password for Mac."
-  echo "2. Go to Settings > Developer."
-  echo "3. Check 'Integrate with 1Password CLI'."
-  echo "4. Check 'Use the SSH provider'."
-  echo "--------------------------------------------------------"
-  read -r -p "Press [Enter] once you have enabled these settings to continue..."
-done
-echo "✅ 1Password CLI is already integrated and authenticated."
+#
+# Both gates are inherently interactive: the 1Password gate needs the
+# desktop app plus a manual settings toggle, and `gh auth login` drives a
+# browser/device flow. Under `curl … | bash` stdin IS the piped script
+# text, so a bare `read` in these loops would swallow the rest of the
+# script and — under `set -e` — exit silently at EOF, before `chezmoi
+# apply` ever runs. So gate the loops on an interactive TTY (mirroring the
+# secrets self-onboard below): with no terminal, print an actionable hint
+# and skip rather than block; with a TTY, read the prompt from /dev/tty so
+# even a piped stdin can never be consumed.
+if op account list &>/dev/null; then
+  echo "✅ 1Password CLI is already integrated and authenticated."
+elif [ -t 0 ]; then
+  while ! op account list &>/dev/null; do
+    echo "--------------------------------------------------------"
+    echo "⚠️  ACTION REQUIRED: Manual Step Needed"
+    echo "1. Open 1Password for Mac."
+    echo "2. Go to Settings > Developer."
+    echo "3. Check 'Integrate with 1Password CLI'."
+    echo "4. Check 'Use the SSH provider'."
+    echo "--------------------------------------------------------"
+    read -r -p "Press [Enter] once you have enabled these settings to continue..." </dev/tty
+  done
+  echo "✅ 1Password CLI is already integrated and authenticated."
+else
+  echo "ℹ️  No TTY: skipping the 1Password CLI auth gate."
+  echo "    After setup, enable 'Integrate with 1Password CLI' and 'Use the SSH"
+  echo "    provider' in 1Password for Mac (Settings > Developer), then run:"
+  echo "        op signin"
+fi
 
-while ! gh auth token &>/dev/null; do
-  echo "ℹ️  GitHub not authenticated. Please, complete the GitHub login now..."
-  gh auth login
-done
-echo "✅  GitHub CLI is authenticated and ready to use."
+if gh auth token &>/dev/null; then
+  echo "✅  GitHub CLI is authenticated and ready to use."
+elif [ -t 0 ]; then
+  while ! gh auth token &>/dev/null; do
+    echo "ℹ️  GitHub not authenticated. Please, complete the GitHub login now..."
+    gh auth login
+  done
+  echo "✅  GitHub CLI is authenticated and ready to use."
+else
+  echo "ℹ️  No TTY: skipping the GitHub CLI auth gate."
+  echo "    After setup, run: gh auth login"
+fi
 
 # Self-onboard this machine's secrets BEFORE the heavy apply. The first
 # run_once install (mise install → system-update) hits GitHub hard and wants
