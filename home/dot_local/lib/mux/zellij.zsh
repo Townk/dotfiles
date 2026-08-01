@@ -227,7 +227,20 @@ _mux_zj_session_state() {
   bin="$(_mux_zj_bin)" || return 1
   # An EXITED record is not a session you can attach to, so it reads as
   # missing; _mux_zj_exec_new is what clears it.
-  "$bin" list-sessions -n 2>/dev/null | grep -v EXITED | grep -qE "^${name}\b" ||
+  #
+  # Match the session NAME field EXACTLY, as a fixed string. The old
+  # `grep -qE "^${name}\b"` interpolated $name raw into an ERE and used `\b`
+  # (a word boundary, not a field anchor), so "Main" matched "Main-work",
+  # metacharacter names ("Project(1)") broke the regex, and `grep -v EXITED`
+  # dropped a LIVE session whose name merely contained "EXITED". Instead, awk
+  # strips each line's " [Created …]" metadata down to the bare name and drops
+  # only records carrying the trailing "(EXITED …)" resurrection marker (by
+  # field, not a whole-line substring); `grep -Fxq` then matches the name as a
+  # fixed, whole-line string. This mirrors the tmux twin's exact `has-session
+  # -t=`.
+  "$bin" list-sessions -n 2>/dev/null |
+    awk '!/\(EXITED[^)]*\)[[:space:]]*$/ { sub(/ \[Created[^]]*\].*$/, ""); print }' |
+    grep -Fxq -- "$name" ||
     { print -r -- missing; return; }
   # list-clients prints a header row even with no clients, hence the tail.
   if "$bin" --session "$name" action list-clients 2>/dev/null | tail -n +2 | grep -q .; then
