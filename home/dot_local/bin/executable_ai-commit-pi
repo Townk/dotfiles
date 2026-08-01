@@ -266,14 +266,20 @@ pi_args=(
 )
 
 if [[ "$verbose" -eq 1 ]]; then
-  pi "${pi_args[@]}" "$prompt" 2>&1 | tee -a "$log_file"
-  rc=${pipestatus[1]}
+  # `|| rc=…` keeps a non-zero agent from tripping errexit before rc is read,
+  # so the diagnostic below is reachable. pipestatus[1] is the agent's status
+  # (tee is [2]); reading it in the `||` branch is safe — a bare `|| true`
+  # would reset pipestatus and mask the failure as rc=0.
+  rc=0
+  { pi "${pi_args[@]}" "$prompt" 2>&1 | tee -a "$log_file" } || rc=${pipestatus[1]}
 else
   pi "${pi_args[@]}" "$prompt" >>"$log_file" 2>&1 &
   pi_pid=$!
   spin::wait "$pi_pid" "thinking"
-  wait "$pi_pid"
-  rc=$?
+  # `|| rc=$?` keeps a non-zero agent from tripping errexit at `wait`, which
+  # would abort before the diagnostic below and leave the user with silence.
+  rc=0
+  wait "$pi_pid" || rc=$?
   pi_pid=""
 fi
 

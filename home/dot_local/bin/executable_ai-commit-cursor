@@ -370,15 +370,21 @@ EOF
   [[ -n "$sandbox" ]] && cursor_args+=(--sandbox "$sandbox")
 
   if [[ "$verbose" -eq 1 ]]; then
-    "$AI_COMMIT_CURSOR_BIN" "${cursor_args[@]}" "$prompt" 2>&1 | tee -a "$log_file"
-    rc=${pipestatus[1]}
+    # `|| rc=…` keeps a non-zero agent from tripping errexit before rc is read,
+    # so the diagnostic below is reachable. pipestatus[1] is the agent's status
+    # (tee is [2]); reading it in the `||` branch is safe — a bare `|| true`
+    # would reset pipestatus and mask the failure as rc=0.
+    rc=0
+    { "$AI_COMMIT_CURSOR_BIN" "${cursor_args[@]}" "$prompt" 2>&1 | tee -a "$log_file" } || rc=${pipestatus[1]}
   else
     "$AI_COMMIT_CURSOR_BIN" "${cursor_args[@]}" "$prompt" >>"$log_file" 2>&1 &
     cursor_pid=$!
 
     spin::wait "$cursor_pid" "thinking"
-    wait "$cursor_pid"
-    rc=$?
+    # `|| rc=$?` keeps a non-zero agent from tripping errexit at `wait`, which
+    # would abort before the diagnostic below and leave the user with silence.
+    rc=0
+    wait "$cursor_pid" || rc=$?
     cursor_pid=""
   fi
 
