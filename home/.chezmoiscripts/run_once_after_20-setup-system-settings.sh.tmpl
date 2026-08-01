@@ -4,7 +4,7 @@ set -eufo pipefail
 {{- if eq .chezmoi.os "darwin" }}
 echo "🍏  Setting macOS defaults"
 
-osascript -e 'tell application "System Settings" to quit'
+osascript -e 'tell application "System Settings" to quit' 2>/dev/null || true
 
 # Keyboard
 echo "⌨️  Set AppleEnabledInputSources (US Keyboard Layout)"
@@ -139,8 +139,11 @@ for app in "${loginItems[@]}"; do
   if printf '%s\n' "$existingLoginItems" | tr ',' '\n' | grep -qx " *$app *"; then
     echo "ℹ️  $app already in login items"
   elif [ -d "/Applications/$app.app" ]; then
-    osascript -e "tell application \"System Events\" to make login item at end with properties {name: \"$app\", path: \"/Applications/$app.app\", hidden:true}"
-    echo "✅  $app added to login items"
+    if osascript -e "tell application \"System Events\" to make login item at end with properties {name: \"$app\", path: \"/Applications/$app.app\", hidden:true}" 2>/dev/null; then
+      echo "✅  $app added to login items"
+    else
+      echo "⚠️  $app login-item registration skipped (Automation permission denied)" >&2
+    fi
   else
     echo "❌  $app not found in /Applications"
   fi
