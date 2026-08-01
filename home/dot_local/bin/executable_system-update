@@ -309,6 +309,55 @@ finalize_session() {
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
 }
 
+# publish_yazi_bump <repo> <source_rel> <target>
+# Copy the live yazi package.toml back into the chezmoi source, commit just
+# that file, and publish the bump so the next `chezmoi update` on another
+# machine reproduces it. Extracted from the inline Yazi step so its push
+# gating is unit-testable against a throwaway repo (SYSTEM_UPDATE_NO_RUN).
+publish_yazi_bump() {
+  local repo="$1" source_rel="$2" target="$3"
+  [[ -n "$repo" && -f "$target" ]] || return 0
+  if ! cp "$target" "$repo/$source_rel"; then
+    log_warn "Failed to copy yazi/package.toml into chezmoi source"
+    return 0
+  fi
+  (
+    cd "$repo" || exit 0
+    # Nothing changed vs HEAD → no bump to publish.
+    if git diff --quiet HEAD -- "$source_rel" 2>/dev/null; then
+      exit 0
+    fi
+    print -P -- "\n📤 Publishing yazi package state...\n"
+    git commit -m "chore(yazi): update dependencies" -- "$source_rel" ||
+      log_warn "Failed to commit yazi/package.toml"
+    # Gate the push on ahead-count. A bare `git push` (push.default=simple)
+    # publishes the WHOLE branch, and this repo commonly carries unrelated
+    # local commits/merges before they're pushed (see the source-sync note
+    # above): a routine yazi bump would drag them all upstream. Only auto-push
+    # when the just-made bump is the sole unpushed commit; otherwise keep
+    # everything local and say so. `rev-list --count @{upstream}..HEAD` needs a
+    # configured upstream — on a branch without one it exits non-zero, so we
+    # fall through to the guarded push (which no-ops or warns as before).
+    local ahead
+    ahead=$(git rev-list --count '@{upstream}..HEAD' 2>/dev/null || true)
+    if [[ -n "$ahead" ]] && ((ahead > 1)); then
+      log_warn "commit kept locally; ${ahead} unpushed commits, not auto-pushing"
+      exit 0
+    fi
+    git push 2>/dev/null || log_warn "Push failed (commit kept locally)"
+  )
+}
+
+# SYSTEM_UPDATE_NO_RUN (test-only escape hatch, same convention as
+# SYSTEM_ONBOARD_NO_RUN / PICK_CLIPBOARD_NO_RUN): a test harness sources this
+# file with it set so it can call helpers like publish_yazi_bump directly,
+# without the main update body running (no brew, mise, git pull, or push of the
+# real repo). Every helper above is already defined; the main body follows.
+# `return` unwinds a sourced file; `exit` covers running the script directly.
+if [[ -n "${SYSTEM_UPDATE_NO_RUN:-}" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 # Resolve chezmoi source dir once. Returns "" only when neither chezmoi
 # nor the standard layout produces a git repo (so the sync hooks no-op
 # safely on truly-unmanaged machines).
@@ -564,21 +613,7 @@ if command -v ya >/dev/null 2>&1; then
   if [[ -f "$chezmoi_repo/.chezmoiroot" ]]; then
     yazi_pkg_source_rel="$(<"$chezmoi_repo/.chezmoiroot")/$yazi_pkg_source_rel"
   fi
-  if [[ -n "$chezmoi_repo" && -f "$yazi_pkg_target" ]]; then
-    if cp "$yazi_pkg_target" "$chezmoi_repo/$yazi_pkg_source_rel"; then
-      (
-        cd "$chezmoi_repo"
-        if ! git diff --quiet HEAD -- "$yazi_pkg_source_rel" 2>/dev/null; then
-          print -P -- "\n📤 Publishing yazi package state...\n"
-          git commit -m "chore(yazi): update dependencies" -- "$yazi_pkg_source_rel" ||
-            log_warn "Failed to commit yazi/package.toml"
-          git push 2>/dev/null || log_warn "Push failed (commit kept locally)"
-        fi
-      )
-    else
-      log_warn "Failed to copy yazi/package.toml into chezmoi source"
-    fi
-  fi
+  publish_yazi_bump "$chezmoi_repo" "$yazi_pkg_source_rel" "$yazi_pkg_target"
 fi
 
 if command -v nvim >/dev/null 2>&1; then
