@@ -28,13 +28,16 @@ local get_yanked = ya.sync(function()
 end)
 
 -- mtime <path> -- epoch seconds, or 0 if the marker doesn't exist / stat
--- fails (matches the brief's "missing marker = 0" rule).
+-- fails (matches the brief's "missing marker = 0" rule). BSD/macOS stat uses
+-- `-f %m`; GNU stat uses `-c %Y`.
 local function mtime(path)
 	local out = Command("stat"):arg({ "-f", "%m", path }):output()
-	if out and out.status.success then
-		return tonumber(out.stdout) or 0
+	local value = out and out.status.success and tonumber(out.stdout) or nil
+	if not value then
+		out = Command("stat"):arg({ "-c", "%Y", path }):output()
+		value = out and out.status.success and tonumber(out.stdout) or nil
 	end
-	return 0
+	return value or 0
 end
 
 -- manifest() -- parses `pbpaste --manifest`'s four-line format (kind/host/ts/
@@ -292,7 +295,8 @@ end
 -- validation session found the ORIGINAL implementation -- a blocking
 -- foreground `shell --block` -- pulled yazi off its alternate screen for the
 -- whole transfer, so a FAST paste read as a blank-screen crash). Bytes cross
--- machines via the bridge's F/A streams, which can take a while, so this
+-- machines via the bridge's capability-bound f/a streams, which can take a
+-- while, so this
 -- streams `pbpaste --files --porcelain` INCREMENTALLY off a background
 -- `Command` -- `Command:spawn()` + `Child:read_line()` in a loop, verified
 -- against yazi 26.5.6's types.yazi package (`Child:read_line` -> `string?,
@@ -304,7 +308,7 @@ end
 -- surfaces via throttled `ya.notify` updates -- one per completed item, or
 -- every ~10% of a large in-flight item -- never per 64 KiB tick (the shim's
 -- own internal cadence; a toast per tick would spam the screen far worse
--- than the blank flash this replaces). Percent is clamped at 100: an `A`
+-- than the blank flash this replaces). Percent is clamped at 100: an `a`
 -- (directory) total is only a `du` estimate, so an in-flight item's `done`
 -- can transiently exceed `total`. `touch_last_paste` runs after this
 -- returns, same "regardless of outcome" rule as the local branch below.
@@ -441,6 +445,21 @@ local function native_paste(force)
 	return ya.emit("paste", { force = force })
 end
 
+-- choose_source(...) -- pure form of the five-rule table below. Kept free of
+-- Yazi/Command state so platform and ordering behavior can be unit-tested.
+local function choose_source(yanked, m, last_paste, last_yank)
+	if not m then
+		return "native"
+	end
+	if #yanked > 0 and same_set(yanked, m.paths) then
+		return "native"
+	end
+	if #yanked == 0 then
+		return m.ts > last_paste and "system" or "native"
+	end
+	return m.ts > last_yank and "system" or "native"
+end
+
 -- resolve(force) -- the spec §6 five-rule table, first match wins:
 --   1. Manifest query fails (bridge down / no bridge)        -> native paste
 --   2. Current clipboard entry is not a files clip            -> native paste
@@ -458,26 +477,24 @@ end
 local function resolve(force)
 	local yanked, _is_cut = get_yanked()
 	local m = manifest()
-	if not m then -- rules 1 + 2
-		return native_paste(force)
-	end
-	if #yanked > 0 and same_set(yanked, m.paths) then -- rule 3
+	if not m or (#yanked > 0 and same_set(yanked, m.paths)) then -- rules 1–3
 		return native_paste(force)
 	end
 	local d = state_dir()
-	if #yanked == 0 then -- rule 4 (+ stale guard)
-		if m.ts > mtime(d .. "/last-paste") then
-			return paste_system(force, is_remote_manifest(m))
-		end
-		return native_paste(force)
+	local last_paste, last_yank = 0, 0
+	if #yanked == 0 then
+		last_paste = mtime(d .. "/last-paste")
+	else
+		last_yank = mtime(d .. "/last-yank")
 	end
-	if m.ts > mtime(d .. "/last-yank") then -- rule 5
+	if choose_source(yanked, m, last_paste, last_yank) == "system" then
 		return paste_system(force, is_remote_manifest(m))
 	end
 	return native_paste(force)
 end
 
 return {
+	_test = { choose_source = choose_source, mtime = mtime },
 	entry = function(_, job)
 		local force = (job.args and job.args.force) or false
 		-- Fallback safety: any unexpected error anywhere in resolution (a

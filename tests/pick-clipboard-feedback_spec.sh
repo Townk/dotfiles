@@ -43,6 +43,12 @@ Describe 'pick-clipboard: copy feedback'
         blob BLOB,
         PRIMARY KEY (clip_id, uti)
       );
+      CREATE TABLE file_authorities (
+        clip_id INTEGER,
+        item_index INTEGER,
+        path BLOB,
+        PRIMARY KEY (clip_id, item_index)
+      );
     '
 
     # Fake scutil pins THIS host to mac-mini (same convention as
@@ -127,6 +133,7 @@ EOF
     export PATH="$BINDIR:$PATH"
     export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
     export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    export PICK_CLIPBOARD_CORE_LIB="$LIB_DIR/clipboard-store-core.zsh"
     export PICK_CLIPBOARD_NO_RUN=1
     export SCRIPT_PATH="$SCRIPT"
   }
@@ -467,10 +474,11 @@ EOF
       id=$(seed_remote_manifest_row)
       cat > "$BINDIR/rsync-slow" <<EOF
 #!/bin/sh
-argc=\$#
-eval "dst=\\\${\$argc}"
-mkdir -p "\$dst/.rsync-partial"
-printf partial > "\$dst/.rsync-partial/chunk"
+for arg in "\$@"; do
+  case "\$arg" in --partial-dir=*) partial=\${arg#*=} ;; esac
+done
+mkdir -p "\$partial"
+printf partial > "\$partial/chunk"
 sleep 1
 exit 0
 EOF
@@ -485,8 +493,8 @@ EOF
       }
       When call run_cancelled_restore "$id"
       The status should equal 130
-      The path "$HOME/.cache/pick-clipboard/files/$id/1/.pick-clipboard-partial" should be exist
-      The path "$HOME/.cache/pick-clipboard/files/$id/1/.rsync-partial/chunk" should be exist
+      The path "$HOME/.cache/pick-clipboard/files/$id/.partial/1" should be exist
+      The path "$HOME/.cache/pick-clipboard/files/$id/.partial-data/1/chunk" should be exist
       The contents of file "$NOTIFYLOG" should include "--icon glyph:nf-md-close Transfer cancelled"
       The contents of file "$NOTIFYLOG" should not include "Copied from"
     End
@@ -494,37 +502,44 @@ EOF
     It 'the next pull reuses a retained partial and clears its staging marker'
       id=$(seed_remote_manifest_row)
       sub="$HOME/.cache/pick-clipboard/files/$id/1"
-      mkdir -p "$sub/.rsync-partial"
-      printf partial > "$sub/.rsync-partial/chunk"
-      : > "$sub/.pick-clipboard-partial"
+      partial="$HOME/.cache/pick-clipboard/files/$id/.partial-data/1"
+      marker="$HOME/.cache/pick-clipboard/files/$id/.partial/1"
+      mkdir -p "$sub" "$partial" "${marker:h}"
+      printf partial > "$partial/chunk"
+      : > "$marker"
       cat > "$BINDIR/rsync-resume" <<EOF
 #!/bin/sh
-case " \$* " in
-  *" --partial-dir=.rsync-partial "*) ;;
-  *) exit 98 ;;
-esac
+partial=""
+for arg in "\$@"; do
+  case "\$arg" in --partial-dir=*) partial=\${arg#*=} ;; esac
+done
+[ "\$partial" = "$partial" ] || exit 98
 argc=\$#
 eval "src=\\\${\$((argc - 1))}"
 eval "dst=\\\${\$argc}"
-[ -f "\$dst/.rsync-partial/chunk" ] || exit 97
+[ -f "\$partial/chunk" ] || exit 97
 base="\${src##*/}"
 printf resumed > "\$dst/\$base"
-rm -f "\$dst/.rsync-partial/chunk"
-rmdir "\$dst/.rsync-partial"
+rm -f "\$partial/chunk"
 EOF
       chmod +x "$BINDIR/rsync-resume"
       export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync-resume"
       When call run_restore_id "$id"
       The status should be success
       The path "$sub/big.bin" should be exist
-      The path "$sub/.pick-clipboard-partial" should not be exist
+      The path "$marker" should not be exist
+      The path "$partial" should not be exist
       The contents of file "$NOTIFYLOG" should include "Copied from"
     End
 
     It '24-hour sweep removes expired bytes and their un-restorable localized row'
       sub="$HOME/.cache/pick-clipboard/files/77/1"
-      mkdir -p "$sub"
+      iddir="${sub:h}"
+      mkdir -p "$sub" "$iddir/.authorized" "$iddir/.partial" "$iddir/.partial-data/1"
       printf staged > "$sub/report.bin"
+      : > "$iddir/.authorized/1"
+      : > "$iddir/.partial/1"
+      printf partial > "$iddir/.partial-data/1/chunk"
       printf '%s' "$sub/report.bin" > "$SHELLSPEC_TMPBASE/localized-blob"
       localized_id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','peer',100); SELECT last_insert_rowid();")
       sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($localized_id, 'x-resolved-path', readfile('$SHELLSPEC_TMPBASE/localized-blob'));"
@@ -539,6 +554,7 @@ EOF
       The status should be success
       The output should equal "0"
       The path "$sub" should not be exist
+      The path "$iddir" should not be exist
     End
   End
 

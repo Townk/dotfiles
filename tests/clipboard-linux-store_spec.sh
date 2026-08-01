@@ -200,6 +200,23 @@ Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
     sh -c 'CLIPBOARD_PLATFORM=linux-headless zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
   }
 
+  build_u() {
+    pay="$SHELLSPEC_TMPBASE/u-payload"
+    first=1
+    : > "$pay"
+    for p in "$@"; do
+      if [ "$first" -eq 1 ]; then printf '%s' "$p" >> "$pay"; first=0
+      else printf '\000%s' "$p" >> "$pay"
+      fi
+    done
+    n=$(wc -c < "$pay" | tr -d ' ')
+    {
+      printf U
+      printf "\\$(printf %03o $(((n>>24)&255)))\\$(printf %03o $(((n>>16)&255)))\\$(printf %03o $(((n>>8)&255)))\\$(printf %03o $((n&255)))"
+      cat "$pay"
+    } > "$REQ"
+  }
+
   It 'C persists a text-UTI rich clip with text_plain populated'
     # uti "public.utf8-plain-text" = 22 bytes; blob "rich"; payload = 2+22+4 = 28
     printf 'C\000\000\000\034\000\026public.utf8-plain-textrich' > "$REQ"
@@ -248,8 +265,9 @@ Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
   End
 
   It 'U form A persists a files manifest row stamped with self-name'
-    # payload "/tmp/a\0/tmp/b" = 13 bytes
-    printf 'U\000\000\000\015/tmp/a\000/tmp/b' > "$REQ"
+    a="$SHELLSPEC_TMPBASE/a"; printf 'a\n' > "$a"
+    b="$SHELLSPEC_TMPBASE/b"; printf 'b\n' > "$b"
+    build_u "$a" "$b"
     When run run_dispatch
     The output should start with "O"
     row=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT type_kind||'|'||source_host FROM clips;")
@@ -265,7 +283,8 @@ Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
   End
 
   It 'U form B bumps last_ts of an existing row'
-    printf 'U\000\000\000\006/tmp/a' > "$REQ"
+    a="$SHELLSPEC_TMPBASE/a"; printf 'a\n' > "$a"
+    build_u "$a"
     run_dispatch >/dev/null
     sqlite3 "$PICK_CLIPBOARD_DB" "UPDATE clips SET last_ts=1.0;"
     printf 'U\000\000\000\004id:1' > "$REQ"

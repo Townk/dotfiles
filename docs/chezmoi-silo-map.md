@@ -405,7 +405,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 ## yazi — Yazi
 
-**Owner area:** `home/dot_config/yazi/` — `init.lua`, `yazi.toml`, `keymap.toml`, `plugins/{folder-rules,parent-arrow}.yazi/`.
+**Owner area:** `home/dot_config/yazi/` — `init.lua`, `yazi.toml`, `keymap.toml`, `plugins/{folder-rules,parent-arrow,smart-paste}.yazi/`.
 
 **Out of scope:** the `mux-open` script (terminal-mux) that opens dirs in a Yazi tab. The `preview` backend + libexec viewers (preview). The `mactag`/`bypass`/`smart-switch`/`full-border`/`git` plugins (external Yazi plugins — only config here).
 
@@ -414,8 +414,13 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **`cd` event plugins** (`folder-rules`) — Downloads→mtime reverse, else alphabetical dirs-first.
 - **`$NVIM` detection** — auto-toggles min-preview when nested under nvim (cooperates with neovim).
 - **keymap contract** — `K`/`J` parent-arrow, `H`/`L` bypass, color-tag keys, `yazi-quick-look` on Ctrl+Space (Quick Look locally, floating zellij `preview` pane over SSH).
+- **smart paste contract** — `y` mirrors file manifests through `pbcopy` and
+  stamps `last-yank`; `p`/`P` choose native cut-preserving paste versus
+  `pbpaste --files` from the five-rule timestamp/path table. Marker mtimes
+  must work with both BSD and GNU stat; remote Mac manifests materialize
+  through the clipboard peer mount.
 
-**Consumes from:** preview (preview + viewers), terminal-mux (mux-open), neovim (`$NVIM`), external Yazi plugins.
+**Consumes from:** clipboard (`pbcopy`/`pbpaste` manifest and file contracts), preview (preview + viewers), terminal-mux (mux-open), neovim (`$NVIM`), external Yazi plugins.
 
 **Entry points:** `init.lua`, `yazi.toml`, `keymap.toml`, `plugins/`.
 

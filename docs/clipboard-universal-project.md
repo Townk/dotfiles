@@ -502,12 +502,14 @@ materialized by pulling the bytes down **at use time**, then stored locally.
 > name uses rename-aside (moves the existing item out of the way first),
 > never `rm` followed by `mv`.
 >
-> The Mac-side `pbpaste --files` rsync-from-`source_host` branch (a Mac,
-> sitting at itself, pulling a remote-manifest clip straight down via
-> rsync) was deferred/descoped: it was never built. `pbpaste --files` on a
-> remote manifest while sitting at the Mac (no SSH env) now refuses with a
-> pointer to `pick-clipboard`'s `Ctrl-Y`, which remains the supported
-> Mac-side localization path for a remote-origin file clip.
+> A Mac sitting locally resolves a remote manifest through the healthy
+> read-only peer mount and feeds those mapped paths into the same staged local
+> copy engine. This is the path Yazi smart-paste uses for dev-shell → Mac
+> `y`/`p`. When the mount is absent or unhealthy, `pbpaste --files` refuses
+> with a pointer to `pick-clipboard`'s `Ctrl-Y`; that picker's rsync pull
+> remains the explicit no-mount fallback. Picker-localized cache rows carry
+> file authority, so a same-shaped public pointer can never claim an existing
+> cache path. Mounted sizes/caps are preflighted before any item is placed.
 >
 > **As-built note (R2)**: `rsync -e ssh <source_host>:...` only resolves if
 > the puller's own ssh config knows `source_host` by that exact name — and
@@ -526,8 +528,8 @@ materialized by pulling the bytes down **at use time**, then stored locally.
 > by the `mount` prepare step at ssh connect, health-swept by launchd, spec:
 > `docs/superpowers/specs/2026-07-13-clipboard-mount-subsystem-design.md` —
 > the bridge's `M` handler additionally sets the home pasteboard with
-> **mount-relative file-urls** right after the manifest row lands (echo-
-> suppressed, changeCount-guarded, self-healing remount when the mount died
+> **mount-relative file-urls** right after the manifest row lands (marked
+> untrusted, changeCount-guarded, self-healing remount when the mount died
 > mid-session). Cmd+V in Finder is then a native Finder copy off the mounted
 > volume — progress window, ETA, Cancel — with the bytes still moving only at
 > paste time. The store row stays the lazy manifest: `Ctrl-Y` rsync
@@ -757,10 +759,10 @@ consumer of the shims above — no clipboard protocol logic lives in Lua:
   the yank list against the current clipboard manifest, host, and the
   `last-yank`/`last-paste` marker timestamps to choose between yazi's native
   paste (internal yank — preserves cut/move semantics) and
-  `pbpaste --files` (system clipboard). Local manifests paste in the
-  background; remote manifests (bytes must cross machines) run
-  `pbpaste --files` via a blocking `shell --block` so the shim's own
-  progress renders in the foreground, same renderer as zsh.
+  `pbpaste --files` (system clipboard). Marker mtimes use BSD stat on macOS
+  and GNU stat on Linux. Remote manifests run asynchronously with porcelain
+  progress surfaced as Yazi notifications, whether bytes stream through f/a
+  or copy through the Mac's peer mount.
 - zsh got a matching `Alt+p` ZLE widget (`smart-paste`, bound in
   `keybindings.sh`): a text clip is inserted at the cursor; a files clip
   fills the buffer with `pbpaste --files` and accepts it as a normal,
@@ -800,6 +802,9 @@ claimed before Phase 6 — see §18/STATUS.
   env-overridable): cross-machine fetches above the cap prompt for
   confirmation on an interactive TTY; non-interactive callers fail with the
   limit named, rather than silently pulling an arbitrarily large transfer.
+  Mounted manifests preflight every item before placing any, so Yazi's
+  confirm-and-retry loop cannot collide with an item placed by an earlier
+  partial attempt.
 - **`a` (archive-stream) sizes are estimates** (Phase 6), computed via a
   pre-flight `du` before the tar stream starts — not a byte-exact guarantee
   in either direction (§12's as-built note). Clients clamp progress at 100%
@@ -838,6 +843,10 @@ claimed before Phase 6 — see §18/STATUS.
   hard-expire after 24 hours. Clipboard changes and row retention cannot
   retarget an issued token. Historical rows receive no inferred authority;
   they must be explicitly recopied.
+- Top-level symlinks and non-regular file types are never granted or streamed:
+  following a localized symlink could otherwise escape the cache/mount and
+  read a same-shaped path on the receiving machine. Nested directory symlinks
+  remain archive metadata and are not followed by tar.
 - Public `M` cannot claim this machine's own hostname or deduplicate into an
   authoritative row; `P` cannot persist file kinds. Self-host manifest restore
   through the trusted socket also requires an authority row.

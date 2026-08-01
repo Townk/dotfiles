@@ -6,6 +6,7 @@
 # safe to source from any zsh — sets its own modules, options, and defaults.
 zmodload zsh/system
 zmodload zsh/datetime   # $EPOCHREALTIME for op_persist timestamps
+zmodload zsh/stat       # descriptor type/size checks for capability streams
 
 # This handler speaks a raw BYTE protocol end to end: every length prefix,
 # loop counter, and substring split below is meant to count/index bytes, not
@@ -334,6 +335,11 @@ clip::replace_file_authority() {
       REPLY="unsafe authority path"
       return 1
     fi
+    if [[ -L "$p" || ( ! -f "$p" && ! -d "$p" ) ]]; then
+      rm -rf -- "$tmpd"
+      REPLY="unsupported authority path type"
+      return 1
+    fi
     (( idx += 1 ))
     pf="$tmpd/path.$idx"
     print -rn -- "$p" > "$pf"
@@ -377,6 +383,8 @@ clip::load_file_authority() {
       WHERE clip_id=$clip_id AND item_index=$idx;" >/dev/null 2>&1
     [[ -f "$pf" ]] || { rm -rf -- "$tmpd"; return 1 }
     clip::read_file "$pf"; p=$REPLY
+    [[ ! -L "$p" && ( -f "$p" || -d "$p" ) ]] ||
+      { rm -rf -- "$tmpd"; return 1 }
     (( idx > 1 )) && REPLY_PATHS+=$'\0'
     REPLY_PATHS+="$p"
   done
@@ -787,25 +795,38 @@ clip::stream_file_path() {
   # M3: a directory can't be read/streamed as flat bytes -- reply with this
   # EXACT string (not just "starts with E"). Task 13's remote pbpaste greps
   # for it to know "retry this capability as an a archive-stream instead."
-  # Checked before the -r test: a
-  # directory usually passes -r (it's listable), so without this check
-  # `wc -c < "$fpath"` below would instead fail on "is a directory" and
-  # muddy the error.
-  if [[ -d "$fpath" ]]; then
+  # Open once with O_NOFOLLOW, then inspect and stream that SAME descriptor.
+  # Separate lstat/open calls leave a symlink-swap gap.
+  local fd
+  if ! sysopen -r -o nofollow -u fd "$fpath" 2>/dev/null; then
+    [[ -L "$fpath" ]] && send_err "unsupported-file-type" ||
+      send_err "cannot read: $fpath"
+    return
+  fi
+  local -a mode size
+  if ! zstat -A mode -f $fd +mode || ! zstat -A size -f $fd +size; then
+    exec {fd}<&-
+    send_err "cannot stat: $fpath"
+    return
+  fi
+  # POSIX S_IFMT/S_IFDIR/S_IFREG in decimal (the theme linter reserves #...).
+  local -i file_type=$(( mode[1] & 61440 ))
+  if (( file_type == 16384 )); then
+    exec {fd}<&-
     send_err "is-directory"
     return
   fi
-  if [[ ! -r "$fpath" ]]; then
-    send_err "cannot read: $fpath"
+  if (( file_type != 32768 )); then
+    exec {fd}<&-
+    send_err "unsupported-file-type"
     return
   fi
-  local bytes; bytes=$(wc -c < "$fpath" | tr -d ' ')
+  local -i bytes=${size[1]}
   if (( bytes > 4294967295 )); then
+    exec {fd}<&-
     send_err "file-too-large"
     return
   fi
-  local fd
-  exec {fd}< "$fpath"
   int_to_be32 "$bytes"
   syswrite -- "O$REPLY"
   local -i remaining=$bytes
@@ -864,6 +885,10 @@ clip::stream_archive_path() {
   local dir=$1
   if [[ "$dir" != /* ]]; then
     send_err "not absolute: $dir"
+    return
+  fi
+  if [[ -L "$dir" ]]; then
+    send_err "unsupported-file-type"
     return
   fi
   if [[ ! -e "$dir" ]]; then

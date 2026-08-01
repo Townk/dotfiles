@@ -26,7 +26,9 @@ Describe 'pbpaste: --manifest'
   setup() {
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
     BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
+    rm -f "$BINDIR/du" "$BINDIR/wc"
     NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
+    rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/check-count"
     REPLY_FRAME="$SHELLSPEC_TMPBASE/reply.frame"
     export REPLY_FRAME
     # Fake nc: capture the raw framed request to a side file (a shell
@@ -166,6 +168,14 @@ EOF
     The stderr should include "malformed frame"
   End
 
+  It 'documents every supported file-materialization route'
+    When run command sh "$SCRIPT" --help
+    The status should be success
+    The output should include "SSH clients stream authorized files"
+    The output should include "healthy peer mount"
+    The output should not include "later milestone"
+  End
+
   It 'never touches the bridge and stays byte-identical for a plain paste (no flags)'
     sentinel="pbpaste-manifest-untouched-sentinel-$$"
     printf '%s' "$sentinel" | /usr/bin/pbcopy
@@ -223,7 +233,9 @@ Describe 'pbpaste: --files (local materialization)'
   setup() {
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
     BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
+    rm -f "$BINDIR/du" "$BINDIR/wc"
     NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
+    rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/check-count" "$SHELLSPEC_TMPBASE/du-count"
     REPLY_FRAME="$SHELLSPEC_TMPBASE/reply.frame"
     export REPLY_FRAME
     cat > "$BINDIR/nc" <<EOF
@@ -414,56 +426,372 @@ EOF
     The output should equal ""
   End
 
-  # A manifest from a DIFFERENT host used to hit T5's "later milestone"
-  # error here; T13 replaces that with a real remote engine (its own
-  # dedicated "pbpaste: --files (remote engine)" Describe below, with an
-  # opcode-aware fake `nc` that can actually answer f/a). This Describe's
-  # fake `nc` only ever answers the `K` manifest fetch, so the one thing
-  # worth asserting HERE is the negative: the OLD milestone string is gone.
-  # It's since ALSO become a same-shape case of the Mac-side-no-SSH refusal
-  # (see the dedicated regression test right below this one) -- still
-  # failure, but for the NEW reason, never the old milestone message.
-  It 'no longer refuses a manifest from a different host with the old milestone message'
-    printf 'x\n' > "$SRC/r.txt"
+  It 'reports the picker fallback when a remote manifest mount is unavailable'
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
     pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.6 "$SRC/r.txt"
+    build_manifest "$pf" file some-other-mac 1752200000.6 "/remote/missing.txt"
     build_frame O "$pf" "$REPLY_FRAME"
 
     When run command sh "$SCRIPT" --files "$TARGET"
     The status should be failure
-    The stderr should not include "later milestone"
+    The stderr should include "mount is unavailable"
+    The stderr should include "pick-clipboard Ctrl-Y"
   End
 
-  # Regression: sitting at the Mac (no SSH_* env at all -- this Describe's
-  # setup() unsets them) with a manifest whose source_host differs from this
-  # machine's own (fake scutil says "mac-mini"; manifest says
-  # "some-other-mac") used to fall through to PF_REMOTE's stream engine anyway
-  # -- talking to THIS Mac's own bridge (port 2489) for paths that live on a
-  # DIFFERENT host. This Describe's fake `nc` only ever answers the `K`
-  # manifest fetch (never f/a), so the old behavior would have produced a
-  # per-item bridge/connection failure instead of a clean refusal -- and on
-  # a real machine, whenever the remote path happens to also exist locally
-  # (the Mac-to-Mac mirror case), it would silently materialize that STALE
-  # LOCAL TWIN instead. Assert the exact refusal message, exit 1, and that
-  # no SECOND `nc` call (an f/a frame) was ever made -- only the initial `K`
-  # manifest fetch appears in the log.
-  It 'refuses --files on a remote manifest when sitting at the Mac (no SSH): exact error, no f/a frames'
+  It 'materializes Yazi-style --porcelain remote paste through a healthy peer mount'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT/remote/dir with space"
+    printf 'mounted file\n' > "$MOUNT/remote/file with space.txt"
+    printf 'mounted nested\n' > "$MOUNT/remote/dir with space/nested.txt"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+echo "\$*" >> "$SHELLSPEC_TMPBASE/cm-calls"
+case "\$1" in
+  check) [ "\$2" = some-other-mac ] && { printf '%s\\n' "$MOUNT"; exit 0; } ;;
+  map)   [ "\$2" = some-other-mac ] && { printf '%s%s\\n' "$MOUNT" "\$3"; exit 0; } ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
     pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.61 "/remote/mirror.txt"
+    build_manifest "$pf" files some-other-mac 1752200000.61 \
+      "/remote/file with space.txt" "/remote/dir with space"
     build_frame O "$pf" "$REPLY_FRAME"
+    printf 'old file\n' > "$TARGET/file with space.txt"
+    mkdir -p "$TARGET/dir with space"
+    printf 'stale\n' > "$TARGET/dir with space/stale.txt"
 
     When run command sh -c '
-      sh "$1" --files "$2" >"$3" 2>"$4"
-      rc=$?
-      [ "$rc" -eq 1 ] || { echo "rc=$rc" >&2; exit 9; }
-      exp="pbpaste: manifest lives on some-other-mac -- use pick-clipboard Ctrl-Y to localize it on this Mac"
-      got=$(cat "$4")
-      [ "$got" = "$exp" ] || { echo "stderr=[$got]" >&2; exit 8; }
-      [ -s "$3" ] && { echo "unexpected stdout" >&2; exit 7; }
+      sh "$1" --files --force --porcelain "$2" >"$3" || exit 9
+      [ "$(cat "$2/file with space.txt")" = "mounted file" ] || exit 8
+      [ "$(cat "$2/dir with space/nested.txt")" = "mounted nested" ] || exit 7
+      [ ! -e "$2/dir with space/stale.txt" ] || exit 6
+      grep -q "^done" "$3" || exit 5
       lines=$(wc -l < "$5" | tr -d " ")
-      [ "$lines" -eq 1 ] || { echo "nclog lines=$lines" >&2; exit 6; }
-    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/out61" "$SHELLSPEC_TMPBASE/err61" "$NCLOG"
+      [ "$lines" -eq 1 ] || { echo "nclog lines=$lines" >&2; exit 4; }
+    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/out61" "$SHELLSPEC_TMPBASE/unused" "$NCLOG"
     The status should be success
+    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should include "check some-other-mac"
+    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should include "map some-other-mac /remote/file with space.txt"
+  End
+
+  It 'keeps internal size metadata separate from an item named .sizes'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT/remote"
+    printf 'literal sizes file\n' > "$MOUNT/remote/.sizes"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+case "\$1" in
+  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
+  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.611 "/remote/.sizes"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be success
+    The contents of file "$TARGET/.sizes" should equal "literal sizes file"
+  End
+
+  It 'uses an existing picker-localized remote row without remapping it'
+    export PICK_CLIPBOARD_CACHE_ROOT="$SHELLSPEC_TMPBASE/cache/files"
+    cached="$PICK_CLIPBOARD_CACHE_ROOT/42/1/cached.txt"
+    mkdir -p "$(dirname "$cached")"
+    printf 'already local\n' > "$cached"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+echo "\$*" >> "$SHELLSPEC_TMPBASE/cm-calls"
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.612 "$cached"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be success
+    The contents of file "$TARGET/cached.txt" should equal "already local"
+    The path "$SHELLSPEC_TMPBASE/cm-calls" should not be exist
+  End
+
+  It 'does not trust a cache-shaped remote row without a capability'
+    export PICK_CLIPBOARD_CACHE_ROOT="$SHELLSPEC_TMPBASE/cache/files"
+    cached="$PICK_CLIPBOARD_CACHE_ROOT/43/1/untrusted.txt"
+    mkdir -p "$(dirname "$cached")"
+    printf 'stale local\n' > "$cached"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+echo "\$*" >> "$SHELLSPEC_TMPBASE/cm-calls"
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.6125 "$cached"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "mount is unavailable"
+    The file "$TARGET/untrusted.txt" should not be exist
+    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should include "check some-other-mac"
+  End
+
+  It 'enforces CLIP_FILE_MAX for mounted cross-machine copies'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT/remote"
+    printf 'small\n' > "$MOUNT/remote/small.txt"
+    printf '0123456789012345678901234567890123456789' > "$MOUNT/remote/large.txt"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+case "\$1" in
+  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
+  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" files some-other-mac 1752200000.613 \
+      "/remote/small.txt" "/remote/large.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command env CLIP_FILE_MAX=10 sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "exceeds size cap"
+    The stderr should include "CLIP_FILE_MAX=10"
+    The file "$TARGET/small.txt" should not be exist
+    The file "$TARGET/large.txt" should not be exist
+  End
+
+  It 'rechecks staged mounted sizes before placing any item'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT/remote/growing-dir"
+    printf 'small\n' > "$MOUNT/remote/small-first.txt"
+    printf 'initial\n' > "$MOUNT/remote/growing-dir/a.txt"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+case "\$1" in
+  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
+  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    cat > "$BINDIR/du" <<EOF
+#!/bin/sh
+n=0
+[ -f "$SHELLSPEC_TMPBASE/du-count" ] && n=\$(cat "$SHELLSPEC_TMPBASE/du-count")
+n=\$((n + 1))
+printf '%s\\n' "\$n" > "$SHELLSPEC_TMPBASE/du-count"
+if [ "\$n" -le 2 ]; then echo "1 \$2"; else echo "2 \$2"; fi
+EOF
+    chmod +x "$BINDIR/du"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" files some-other-mac 1752200000.6135 \
+      "/remote/small-first.txt" "/remote/growing-dir"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command env CLIP_FILE_MAX=1500 sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "exceeds size cap"
+    The file "$TARGET/small-first.txt" should not be exist
+    The path "$TARGET/growing-dir" should not be exist
+  End
+
+  It 'fails closed when a mounted source size cannot be measured'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT/remote"
+    printf 'unreadable\n' > "$MOUNT/remote/unreadable.txt"
+    chmod 000 "$MOUNT/remote/unreadable.txt"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+case "\$1" in
+  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
+  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.614 "/remote/unreadable.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    chmod 600 "$MOUNT/remote/unreadable.txt"
+    The status should be failure
+    The stderr should include "could not determine source size"
+    The file "$TARGET/unreadable.txt" should not be exist
+  End
+
+  It 'does not follow a top-level symlink from the peer mount'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT/remote"
+    printf 'local target\n' > "$SHELLSPEC_TMPBASE/local-target.txt"
+    ln -s "$SHELLSPEC_TMPBASE/local-target.txt" "$MOUNT/remote/link.txt"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+case "\$1" in
+  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
+  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.6141 "/remote/link.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "could not determine source size"
+    The file "$TARGET/link.txt" should not be exist
+  End
+
+  It 'rejects a partial directory size when du exits nonzero'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT/remote/partial-dir"
+    printf 'partial\n' > "$MOUNT/remote/partial-dir/a.txt"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+case "\$1" in
+  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
+  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    cat > "$BINDIR/du" <<'EOF'
+#!/bin/sh
+echo "123 partial"
+exit 1
+EOF
+    chmod +x "$BINDIR/du"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" directory some-other-mac 1752200000.6145 "/remote/partial-dir"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "could not determine source size"
+    The file "$TARGET/partial-dir" should not be exist
+  End
+
+  It 'reports the picker fallback when the mount dies during size measurement'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT/remote"
+    printf 'raced\n' > "$MOUNT/remote/raced.txt"
+    chmod 000 "$MOUNT/remote/raced.txt"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+case "\$1" in
+  check)
+    n=0
+    [ -f "$SHELLSPEC_TMPBASE/check-count" ] && n=\$(cat "$SHELLSPEC_TMPBASE/check-count")
+    n=\$((n + 1))
+    printf '%s\\n' "\$n" > "$SHELLSPEC_TMPBASE/check-count"
+    [ "\$n" -eq 1 ] && { printf '%s\\n' "$MOUNT"; exit 0; }
+    exit 1
+    ;;
+  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.6146 "/remote/raced.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    chmod 600 "$MOUNT/remote/raced.txt"
+    The status should be failure
+    The stderr should include "mount is unavailable"
+    The stderr should not include "could not determine source size"
+  End
+
+  It 'fails closed when a remote mount path cannot be mapped'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+case "\$1" in
+  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
+  map) exit 1 ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.615 "/remote/unsafe.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "cannot map remote clipboard path"
+    The file "$TARGET/unsafe.txt" should not be exist
+  End
+
+  It 'reports the picker fallback when the mount dies after the health check'
+    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+    mkdir -p "$MOUNT"
+    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+case "\$1" in
+  check)
+    n=0
+    [ -f "$SHELLSPEC_TMPBASE/check-count" ] && n=\$(cat "$SHELLSPEC_TMPBASE/check-count")
+    n=\$((n + 1))
+    printf '%s\\n' "\$n" > "$SHELLSPEC_TMPBASE/check-count"
+    [ "\$n" -eq 1 ] && { printf '%s\\n' "$MOUNT"; exit 0; }
+    exit 1
+    ;;
+  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file some-other-mac 1752200000.616 "/remote/vanished.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "mount is unavailable"
+    The stderr should include "pick-clipboard Ctrl-Y"
+    The stderr should not include "source no longer exists"
   End
 
   # R-batch Task B amendment: PF_HOST resolves via self_host(), which prefers
@@ -471,9 +799,9 @@ EOF
   # scutil/hostname. On an ephemeral-hostname dev-shell, pbcopy stamps
   # manifest rows with that stable self-name -- if pbpaste --files kept
   # resolving the raw (fake-scutil "mac-mini") hostname here, this row would
-  # misclassify as REMOTE and, with no SSH env in this Describe, die on the
-  # Mac-side refusal above instead of materializing. Success + real bytes in
-  # the target + no second nc call (only the one L fetch) proves the row took
+  # misclassify as REMOTE and, with no SSH env in this Describe, require a
+  # peer mount instead of materializing. Success + real bytes in
+  # the target + no second nc call (only the one K fetch) proves the row took
   # the LOCAL path.
   It 'routes a manifest matching the self-name identity to the LOCAL materialization path'
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-selfname"

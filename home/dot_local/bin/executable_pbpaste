@@ -31,9 +31,11 @@
 #
 # `pbpaste --files [--force] [--quiet|--progress|--porcelain] [dir]` (T5,
 # design §5/§8): materializes the CURRENT file clip into `dir` (default cwd).
-# This task implements ONLY manifests whose host is THIS host -- a manifest
-# from a different host exits 1 pointing at the future cross-machine
-# milestone (T13). Local engine, tiered (§8):
+# Same-host paths use the local engine below. Over SSH, remote bytes stream
+# through capability-bound f/a. A Mac sitting locally maps a remote manifest
+# through its healthy read-only peer mount, then uses this same local engine;
+# when that mount is unavailable, pick-clipboard's rsync pull remains the
+# explicit fallback. Local engine, tiered (§8):
 #   1. darwin: `cp -Rc` (APFS clonefile). Per `man cp`, `-c` transparently
 #      falls back to a plain byte copy when cloning isn't possible
 #      (cross-volume, non-APFS) and STILL returns success -- tier 2 is only
@@ -128,10 +130,10 @@ clip isn't a files clip, or the bridge is down.
 
 --files [--force] [--quiet|--progress|--porcelain] [dir]: materialize the
 current file clip into dir (default: cwd). Refuses existing names unless
---force. Only manifests originating on this host are supported so far
-(remote hosts land in a later milestone). TTY prints a line per item plus a
-summary; --porcelain prints a stable machine-readable progress/done stream;
---quiet is silent; non-TTY is silent by default.
+--force. Same-host files copy locally; SSH clients stream authorized files;
+a local Mac reads remote manifests through its healthy peer mount. TTY prints
+a line per item plus a summary; --porcelain prints a stable machine-readable
+progress/done stream; --quiet is silent; non-TTY is silent by default.
 
 Usage: text=$(pbpaste)
        pbpaste --manifest
@@ -371,14 +373,22 @@ pbpaste_manifest() {
 # figure itself is only an estimate.
 pbpaste_files_size() {
   _p=$1
+  [ -L "$_p" ] && return 1
   if [ -d "$_p" ]; then
-    _sz=$(du -sk -- "$_p" 2>/dev/null | awk '{print $1*1024}')
+    _size_raw=$(du -sk -- "$_p" 2>/dev/null) || return 1
+    _sz=$(printf '%s\n' "$_size_raw" | awk '{print $1*1024}')
   else
-    _sz=$(wc -c < "$_p" 2>/dev/null | tr -d ' ')
+    [ -f "$_p" ] || return 1
+    _sz=$(wc -c < "$_p" 2>/dev/null) || return 1
+    _sz=$(printf '%s' "$_sz" | tr -d ' ')
   fi
-  # An unreadable subtree (permissions, a mid-copy race) can make `du`/`wc`
-  # come back empty; that must not blow up the caller's arithmetic.
-  printf '%s' "${_sz:-0}"
+  # Fail closed when a race/unreadable subtree leaves no trustworthy size.
+  case $_sz in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$_sz"
+}
+
+pbpaste_mount_fallback() {
+  echo "pbpaste: manifest lives on $MANIFEST_HOST and its mount is unavailable -- use pick-clipboard Ctrl-Y to localize it on this Mac" >&2
 }
 
 # pbpaste_files_human <bytes> -- compact human size for the TTY per-item line
@@ -974,45 +984,6 @@ pbpaste_files() {
     PF_REMOTE=1
   fi
 
-  # Mac-side pbpaste --files on a remote manifest, NOT over SSH: refuse. The
-  # capability streaming engine only exists on the ORIGIN machine's own
-  # bridge (port 2489, reachable over the loopback reverse tunnel from an
-  # SSH'd-in dev shell) -- sitting at this Mac directly, `manifest_port`
-  # would still resolve to 2489, i.e. THIS Mac's own bridge, which has never
-  # heard of a path that lives on $MANIFEST_HOST. The spec §12 "Mac-side
-  # pbpaste rsync-from-source_host" branch was descoped (quietly, see the
-  # §12 as-built note); without it this used to fall through to the stream
-  # engine anyway, producing a confusing per-item "cannot read" at best and,
-  # whenever the manifest's absolute path happens to also exist on this
-  # Mac (the Mac-to-Mac mirror case), silently materializing a STALE LOCAL
-  # TWIN at worst. pick-clipboard's own Ctrl-Y (clip::copy_files_by_id's
-  # rsync pull) is the supported Mac-side localization path.
-  if [ "$PF_REMOTE" -eq 1 ] && [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
-    echo "pbpaste: manifest lives on $MANIFEST_HOST -- use pick-clipboard Ctrl-Y to localize it on this Mac" >&2
-    rm -f "$MANIFEST_PATHFILE"
-    exit 1
-  fi
-
-  PF_REQUIRE_CAP=0
-  if [ "$PF_REMOTE" -eq 1 ] ||
-     [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
-    PF_REQUIRE_CAP=1
-  fi
-  if [ "$PF_REQUIRE_CAP" -eq 1 ]; then
-    case "$MANIFEST_TOKEN" in
-      ''|*[!0-9a-f]*)
-        echo "pbpaste: origin did not authorize this manifest for remote file transfer; copy the files again on the origin" >&2
-        rm -f "$MANIFEST_PATHFILE"
-        exit 1
-        ;;
-    esac
-    if [ "${#MANIFEST_TOKEN}" -ne 64 ]; then
-      echo "pbpaste: origin bridge returned an invalid file capability" >&2
-      rm -f "$MANIFEST_PATHFILE"
-      exit 1
-    fi
-  fi
-
   # NUL -> newline, same rule as pbpaste_manifest's own final print: real
   # paths never carry NULs, so this is a lossless, safe split; a path with a
   # literal newline is a known, accepted limit (see manifest_parse's header).
@@ -1022,6 +993,83 @@ pbpaste_files() {
   }
   tr '\000' '\n' < "$MANIFEST_PATHFILE" > "$PF_PATHLIST"
   rm -f "$MANIFEST_PATHFILE"
+
+  PF_TOKEN_VALID=0
+  case "$MANIFEST_TOKEN" in
+    ''|*[!0-9a-f]*) ;;
+    *) [ "${#MANIFEST_TOKEN}" -eq 64 ] && PF_TOKEN_VALID=1 ;;
+  esac
+
+  # Mac-side remote manifest: prefer an already-localized picker cache row;
+  # otherwise map origin paths through the healthy read-only peer mount. The
+  # origin's f/a endpoint is not reverse-forwarded back to this Mac.
+  PF_MOUNT_REMOTE=0
+  PF_LOCALIZED_REMOTE=0
+  PF_MOUNT_BIN="${CLIPBOARD_MOUNT_BIN:-$HOME/.local/libexec/clipboard-mount}"
+  if [ "$PF_REMOTE" -eq 1 ] && [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+    PF_CACHE_ROOT="${PICK_CLIPBOARD_CACHE_ROOT:-$HOME/.cache/pick-clipboard/files}"
+    PF_ALL_CACHED=1
+    while IFS= read -r PF_P || [ -n "$PF_P" ]; do
+      [ -n "$PF_P" ] || continue
+      case "$PF_P" in
+        "$PF_CACHE_ROOT/"*)
+          case "$PF_P" in */../*|*/..) PF_ALL_CACHED=0; break ;; esac
+          [ -e "$PF_P" ] || { PF_ALL_CACHED=0; break; }
+          ;;
+        *) PF_ALL_CACHED=0; break ;;
+      esac
+    done < "$PF_PATHLIST"
+
+    if [ "$PF_ALL_CACHED" -eq 1 ] && [ "$PF_TOKEN_VALID" -eq 1 ]; then
+      PF_LOCALIZED_REMOTE=1
+      PF_REMOTE=0
+    elif [ -x "$PF_MOUNT_BIN" ] &&
+         PF_MOUNT_POINT=$("$PF_MOUNT_BIN" check "$MANIFEST_HOST" 2>/dev/null) &&
+         [ -n "$PF_MOUNT_POINT" ]; then
+      PF_MOUNT_REMOTE=1
+      PF_REMOTE_PATHLIST=$PF_PATHLIST
+      PF_PATHLIST=$(mktemp "${TMPDIR:-/tmp}/pbpaste-files-mounted.XXXXXX") || {
+        rm -f "$PF_REMOTE_PATHLIST"
+        echo "pbpaste: mktemp failed" >&2
+        exit 1
+      }
+      while IFS= read -r PF_P || [ -n "$PF_P" ]; do
+        [ -n "$PF_P" ] || continue
+        "$PF_MOUNT_BIN" map "$MANIFEST_HOST" "$PF_P" >> "$PF_PATHLIST" || {
+          rm -f "$PF_REMOTE_PATHLIST" "$PF_PATHLIST"
+          echo "pbpaste: cannot map remote clipboard path: $PF_P" >&2
+          exit 1
+        }
+      done < "$PF_REMOTE_PATHLIST"
+      rm -f "$PF_REMOTE_PATHLIST"
+      PF_REMOTE=0
+    else
+      pbpaste_mount_fallback
+      rm -f "$PF_PATHLIST"
+      exit 1
+    fi
+  fi
+
+  PF_REQUIRE_CAP=0
+  if [ "$PF_MOUNT_REMOTE" -eq 0 ] && [ "$PF_LOCALIZED_REMOTE" -eq 0 ] &&
+     { [ "$PF_REMOTE" -eq 1 ] ||
+       [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; }; then
+    PF_REQUIRE_CAP=1
+  fi
+  if [ "$PF_REQUIRE_CAP" -eq 1 ]; then
+    case "$MANIFEST_TOKEN" in
+      ''|*[!0-9a-f]*)
+        echo "pbpaste: origin did not authorize this manifest for remote file transfer; copy the files again on the origin" >&2
+        rm -f "$PF_PATHLIST"
+        exit 1
+        ;;
+    esac
+    if [ "${#MANIFEST_TOKEN}" -ne 64 ]; then
+      echo "pbpaste: origin bridge returned an invalid file capability" >&2
+      rm -f "$PF_PATHLIST"
+      exit 1
+    fi
+  fi
 
   # Sweep any staging dir orphaned by a previous SIGKILLed run (untrappable,
   # so its own EXIT trap never fired) before this run creates its own. PID-
@@ -1055,9 +1103,29 @@ pbpaste_files() {
     # f/a opcode's own reply instead (missing source there is just another
     # bridge error, surfaced per-item during materialization below).
     if [ "$PF_REMOTE" -eq 0 ] && [ ! -e "$PF_P" ]; then
-      echo "pbpaste: source no longer exists: $PF_P" >&2
+      if [ "$PF_MOUNT_REMOTE" -eq 1 ] &&
+         ! "$PF_MOUNT_BIN" check "$MANIFEST_HOST" >/dev/null 2>&1; then
+        pbpaste_mount_fallback
+      else
+        echo "pbpaste: source no longer exists: $PF_P" >&2
+      fi
       PF_MISSING=1
       continue
+    fi
+    if [ "$PF_MOUNT_REMOTE" -eq 1 ]; then
+      if ! PF_PREFLIGHT_SIZE=$(pbpaste_files_size "$PF_P"); then
+        if ! "$PF_MOUNT_BIN" check "$MANIFEST_HOST" >/dev/null 2>&1; then
+          pbpaste_mount_fallback
+        else
+          echo "pbpaste: could not determine source size: $PF_P" >&2
+        fi
+        rm -f "$PF_PATHLIST"
+        exit 1
+      fi
+      if ! pbpaste_files_cap_check "$PF_DIR/$(basename -- "$PF_P")" "$PF_PREFLIGHT_SIZE"; then
+        rm -f "$PF_PATHLIST"
+        exit 1
+      fi
     fi
     PF_NAME=$(basename -- "$PF_P")
     case "$PF_SEEN" in
@@ -1107,7 +1175,8 @@ $PF_NAME
   # Catchable interrupt (Ctrl+C, a plain TERM) cleans up on the spot. An
   # untrappable SIGKILL skips this -- the sweep at the top of the NEXT
   # invocation is what handles that case (see above).
-  trap 'rm -rf -- "$PF_STAGING" 2>/dev/null' EXIT INT TERM
+  PF_SIZE_LIST=""
+  trap 'rm -rf -- "$PF_STAGING" 2>/dev/null; [ -z "${PF_SIZE_LIST:-}" ] || rm -f -- "$PF_SIZE_LIST" 2>/dev/null' EXIT INT TERM
 
   PF_IS_TTY=0
   [ -t 1 ] && PF_IS_TTY=1
@@ -1128,6 +1197,14 @@ $PF_NAME
   PF_IDX=0
 
   PF_INFLIGHT_PRINTED=0
+  PF_DEFER_PLACE=$PF_MOUNT_REMOTE
+  if [ "$PF_DEFER_PLACE" -eq 1 ]; then
+    PF_SIZE_LIST=$(mktemp "${TMPDIR:-/tmp}/pbpaste-mounted-sizes.XXXXXX") || {
+      echo "pbpaste: mktemp failed" >&2
+      rm -f "$PF_PATHLIST"
+      exit 1
+    }
+  fi
 
   while IFS= read -r PF_P || [ -n "$PF_P" ]; do
     [ -n "$PF_P" ] || continue
@@ -1143,9 +1220,28 @@ $PF_NAME
       fi
       PF_SIZE=$PF_STREAM_DONE
     else
-      PF_SIZE=$(pbpaste_files_size "$PF_P")
+      if ! PF_SIZE=$(pbpaste_files_size "$PF_P"); then
+        if [ "$PF_MOUNT_REMOTE" -eq 1 ] &&
+           ! "$PF_MOUNT_BIN" check "$MANIFEST_HOST" >/dev/null 2>&1; then
+          pbpaste_mount_fallback
+        else
+          echo "pbpaste: could not determine source size: $PF_P" >&2
+        fi
+        rm -f "$PF_PATHLIST"
+        exit 1
+      fi
+      if [ "$PF_MOUNT_REMOTE" -eq 1 ] &&
+         ! pbpaste_files_cap_check "$PF_FINAL" "$PF_SIZE"; then
+        rm -f "$PF_PATHLIST"
+        exit 1
+      fi
       if ! pbpaste_files_copy "$PF_P" "$PF_STAGE_TARGET"; then
-        echo "pbpaste: failed to copy $PF_P" >&2
+        if [ "$PF_MOUNT_REMOTE" -eq 1 ] &&
+           ! "$PF_MOUNT_BIN" check "$MANIFEST_HOST" >/dev/null 2>&1; then
+          pbpaste_mount_fallback
+        else
+          echo "pbpaste: failed to copy $PF_P" >&2
+        fi
         rm -f "$PF_PATHLIST"
         exit 1
       fi
@@ -1162,8 +1258,52 @@ $PF_NAME
     # next run's stale-staging sweep) reaps it from there. The `.replaced.`
     # names can't collide with staged items ($$ + index) and die with the
     # staging dir. (See pbpaste_files_place, shared by both engines.)
-    pbpaste_files_place "$PF_NAME" "$PF_SIZE" "$PF_STAGE_TARGET" "$PF_FINAL"
+    if [ "$PF_DEFER_PLACE" -eq 0 ]; then
+      pbpaste_files_place "$PF_NAME" "$PF_SIZE" "$PF_STAGE_TARGET" "$PF_FINAL"
+    fi
   done < "$PF_PATHLIST"
+
+  if [ "$PF_DEFER_PLACE" -eq 1 ]; then
+    : > "$PF_SIZE_LIST"
+    PF_IDX=0
+    while IFS= read -r PF_P || [ -n "$PF_P" ]; do
+      [ -n "$PF_P" ] || continue
+      PF_IDX=$((PF_IDX + 1))
+      PF_NAME=$(basename -- "$PF_P")
+      PF_STAGE_TARGET="$PF_STAGING/$PF_NAME"
+      PF_FINAL="$PF_DIR/$PF_NAME"
+      if ! PF_SIZE=$(pbpaste_files_size "$PF_STAGE_TARGET"); then
+        echo "pbpaste: could not determine staged item size: $PF_FINAL" >&2
+        rm -f "$PF_PATHLIST"
+        exit 1
+      fi
+      if ! pbpaste_files_cap_check "$PF_FINAL" "$PF_SIZE"; then
+        rm -f "$PF_PATHLIST"
+        exit 1
+      fi
+      printf '%s\n' "$PF_SIZE" >> "$PF_SIZE_LIST"
+    done < "$PF_PATHLIST"
+
+    PF_IDX=0
+    exec 3< "$PF_SIZE_LIST"
+    while IFS= read -r PF_P || [ -n "$PF_P" ]; do
+      [ -n "$PF_P" ] || continue
+      IFS= read -r PF_SIZE <&3 || {
+        exec 3<&-
+        echo "pbpaste: internal mounted-size mismatch" >&2
+        rm -f "$PF_PATHLIST"
+        exit 1
+      }
+      PF_IDX=$((PF_IDX + 1))
+      PF_NAME=$(basename -- "$PF_P")
+      PF_STAGE_TARGET="$PF_STAGING/$PF_NAME"
+      PF_FINAL="$PF_DIR/$PF_NAME"
+      pbpaste_files_place "$PF_NAME" "$PF_SIZE" "$PF_STAGE_TARGET" "$PF_FINAL"
+    done < "$PF_PATHLIST"
+    exec 3<&-
+    rm -f "$PF_SIZE_LIST"
+    PF_SIZE_LIST=""
+  fi
 
   rm -f "$PF_PATHLIST"
 

@@ -140,6 +140,7 @@ EOF
     export PATH="$BINDIR:$PATH"
     export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
     export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    export PICK_CLIPBOARD_CORE_LIB="$LIB_DIR/clipboard-store-core.zsh"
     export PICK_CLIPBOARD_NO_RUN=1
     # Test-only override (documented in clip::copy_files_by_id): production
     # pins /opt/homebrew/bin/rsync exactly like pbpaste's tier 2 -- an
@@ -306,6 +307,8 @@ EOF
     The variable row_count should equal 1
     blob_uti=$(sqlite3 "$DB" "SELECT uti FROM clip_types WHERE clip_id = (SELECT MAX(id) FROM clips) AND uti IN ('x-file-manifest','x-resolved-path');")
     The variable blob_uti should equal "x-file-manifest"
+    authority_count=$(sqlite3 "$DB" "SELECT count(*) FROM file_authorities WHERE clip_id=(SELECT MAX(id) FROM clips);")
+    The variable authority_count should equal 2
   End
 
   It 'remote manifest row: a second Ctrl-Y on the same row does not re-rsync an already-cached path'
@@ -319,6 +322,50 @@ EOF
     When call run_copy "$id"
     The status should be success
     The contents of file "$RSYNCLOG" should equal ""
+    The file "$HOME/.cache/pick-clipboard/files/$id/.authorized/1" should be exist
+  End
+
+  It 're-pulls cache bytes left without an authority marker'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',203.5); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/interrupted-manifest.bin"
+    printf '%s/remote-a.txt' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+    sub="$HOME/.cache/pick-clipboard/files/$id/1"
+    mkdir -p "$sub"
+    printf 'interrupted stale bytes\n' > "$sub/remote-a.txt"
+
+    When call run_copy "$id"
+    The status should be success
+    The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/remote-a.txt"
+    The contents of file "$sub/remote-a.txt" should equal "pulled:remote-a.txt"
+    The file "$HOME/.cache/pick-clipboard/files/$id/.authorized/1" should be exist
+  End
+
+  It 'keeps authorization metadata separate from an identically named item'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',203.6); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/marker-name-manifest.bin"
+    printf '%s/.pick-clipboard-authorized' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    item="$HOME/.cache/pick-clipboard/files/$id/1/.pick-clipboard-authorized"
+    The contents of file "$item" should equal "pulled:.pick-clipboard-authorized"
+    The file "$HOME/.cache/pick-clipboard/files/$id/.authorized/1" should be exist
+  End
+
+  It 'keeps partial-state metadata separate from an identically named item'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',203.7); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/partial-name-manifest.bin"
+    printf '%s/.pick-clipboard-partial' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The status should be success
+    item="$HOME/.cache/pick-clipboard/files/$id/1/.pick-clipboard-partial"
+    The contents of file "$item" should equal "pulled:.pick-clipboard-partial"
+    The file "$HOME/.cache/pick-clipboard/files/$id/.authorized/1" should be exist
+    The path "$HOME/.cache/pick-clipboard/files/$id/.partial" should not be exist
   End
 
   # Reviewer finding 2 (important): re-picking a row the picker itself
@@ -330,15 +377,17 @@ EOF
   #     source_host=origin; the old code tried `rsync origin:<local-path>`.
   # Fix under test: when a remote-origin row's recorded paths ALL live under
   # the picker's own cache root (~/.cache/pick-clipboard/files/ -- the only
-  # place localization ever records) AND exist on disk, send U with those
-  # paths directly (form A) -- no id:, no rsync.
+  # place localization ever records), exist on disk, AND carry trusted
+  # file_authorities, send U with those paths directly (form A) -- no id:,
+  # no rsync.
   It 'localized single-path row (x-resolved-path cache path, remote origin, file on disk): sends U with the path, no id:, no rsync'
     locdir="$HOME/.cache/pick-clipboard/files/77/1"; mkdir -p "$locdir"
     printf 'already local\n' > "$locdir/doc.txt"
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',220); SELECT last_insert_rowid();")
     pathfile="$SHELLSPEC_TMPBASE/resolved-path"
     printf '%s' "$locdir/doc.txt" > "$pathfile"
-    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-resolved-path', readfile('$pathfile'));"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-resolved-path', readfile('$pathfile'));
+      INSERT INTO file_authorities (clip_id,item_index,path) VALUES ($id,1,readfile('$pathfile'));"
 
     When call run_copy "$id"
     The status should be success
@@ -356,6 +405,10 @@ EOF
     mf="$SHELLSPEC_TMPBASE/manifest.bin"
     printf '%s/1/a.txt\000%s/2/b.txt' "$locdir" "$locdir" > "$mf"
     sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+    p1="$SHELLSPEC_TMPBASE/localized-authority-1"; printf '%s/1/a.txt' "$locdir" > "$p1"
+    p2="$SHELLSPEC_TMPBASE/localized-authority-2"; printf '%s/2/b.txt' "$locdir" > "$p2"
+    sqlite3 "$DB" "INSERT INTO file_authorities (clip_id,item_index,path) VALUES
+      ($id,1,readfile('$p1')),($id,2,readfile('$p2'));"
 
     When call run_copy "$id"
     The status should be success
@@ -364,6 +417,47 @@ EOF
     The contents of file "$NCLOG" should include "$locdir/2/b.txt"
     The contents of file "$NCLOG" should not include "id:$id"
     The contents of file "$RSYNCLOG" should equal ""
+  End
+
+  It 'does not trust a cache-shaped remote row without authority'
+    locdir="$HOME/.cache/pick-clipboard/files/79/1"; mkdir -p "$locdir"
+    printf 'stale local\n' > "$locdir/stale.txt"
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('file','devbox',221.5,'fallback'); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/untrusted-cache-manifest.bin"
+    printf '%s/stale.txt' "$locdir" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+    cat > "$BINDIR/rsync" <<EOF
+#!/bin/sh
+echo "\$*" >> "$RSYNCLOG"
+exit 1
+EOF
+    chmod +x "$BINDIR/rsync"
+
+    When call run_copy "$id"
+    The contents of file "$RSYNCLOG" should include "devbox:$locdir/stale.txt"
+    The contents of file "$NCLOG" should not include "cb.sock:U"
+    The stderr should include "rsync failed"
+  End
+
+  It 'rejects a top-level symlink localized from a remote manifest'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('file','devbox',221.6,'fallback'); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/remote-symlink-manifest.bin"
+    printf '%s/link.txt' "$REMOTE_SRC" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+    cat > "$BINDIR/rsync" <<EOF
+#!/bin/sh
+argc=\$#
+eval "dst=\\\${\$argc}"
+mkdir -p "\$dst"
+ln -s "$HOME/.ssh/id_rsa" "\$dst/link.txt"
+EOF
+    chmod +x "$BINDIR/rsync"
+
+    When call run_copy "$id"
+    The contents of file "$NCLOG" should not include "cb.sock:U"
+    authority_count=$(sqlite3 "$DB" "SELECT count(*) FROM file_authorities;")
+    The variable authority_count should equal 0
+    The stderr should include "unsupported localized file type"
   End
 
   # Re-review follow-up 1: the guard must be RESTRICTED to the cache root.
@@ -598,7 +692,8 @@ EOF
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',404); SELECT last_insert_rowid();")
     pathfile="$SHELLSPEC_TMPBASE/resolved-path"
     printf '%s' "$locdir/doc.txt" > "$pathfile"
-    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-resolved-path', readfile('$pathfile'));"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-resolved-path', readfile('$pathfile'));
+      INSERT INTO file_authorities (clip_id,item_index,path) VALUES ($id,1,readfile('$pathfile'));"
 
     When call run_copy "$id"
     The status should be success

@@ -309,8 +309,10 @@ Describe 'clipboard-bridge-dispatch: L list-files'
   It 'K issues a 256-bit token for a trusted authority snapshot'
     zsh -f "$DISPATCH" --init-store >/dev/null
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','laptop',500.0); SELECT last_insert_rowid();")
+    authorized="$SHELLSPEC_TMPBASE/authorized.txt"
+    printf 'authorized\n' > "$authorized"
     pathfile="$SHELLSPEC_TMPBASE/k-path"
-    printf '/tmp/authorized.txt' > "$pathfile"
+    printf '%s' "$authorized" > "$pathfile"
     sqlite3 "$DB" "INSERT INTO clip_types (clip_id,uti,blob) VALUES ($id,'x-resolved-path',readfile('$pathfile'));
       INSERT INTO file_authorities (clip_id,item_index,path) VALUES ($id,1,readfile('$pathfile'));"
     printf 'K\000\000\000\000' > "$REQ"
@@ -516,7 +518,9 @@ Describe 'clipboard-bridge-dispatch: M manifest-persist-local'
   It 'authorizes a self-host M only on the trusted endpoint'
     mkdir -p "$XDG_STATE_HOME/clipboard"
     printf 'thismac\n' > "$XDG_STATE_HOME/clipboard/self-name"
-    build_req thismac /tmp/trusted-a.txt /tmp/trusted-b.txt
+    a="$SHELLSPEC_TMPBASE/trusted-a.txt"; printf 'a\n' > "$a"
+    b="$SHELLSPEC_TMPBASE/trusted-b.txt"; printf 'b\n' > "$b"
+    build_req thismac "$a" "$b"
     When run command sh -c 'CLIPBOARD_BRIDGE_ENDPOINT=trusted zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     The status should be success
     The output should start with "O"
@@ -527,7 +531,8 @@ Describe 'clipboard-bridge-dispatch: M manifest-persist-local'
   It 'rejects public M claiming this machine instead of reactivating authority'
     mkdir -p "$XDG_STATE_HOME/clipboard"
     printf 'thismac\n' > "$XDG_STATE_HOME/clipboard/self-name"
-    build_req thismac /tmp/no-reactivate.txt
+    p="$SHELLSPEC_TMPBASE/no-reactivate.txt"; printf 'safe\n' > "$p"
+    build_req thismac "$p"
     CLIPBOARD_BRIDGE_ENDPOINT=trusted zsh -f "$DISPATCH" < "$REQ" > "$RESP"
     zsh -f "$DISPATCH" < "$REQ" > "$RESP"
     frame_status=$(head -c 1 "$RESP")
@@ -792,6 +797,25 @@ Describe 'clipboard-bridge-dispatch: capability-bound file streams'
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     The output should start with "E"
     The output should include "invalid or expired capability"
+  End
+
+  It 'does not follow an authorized top-level file symlink'
+    printf 'safe target\n' > "$SHELLSPEC_TMPBASE/symlink-target.txt"
+    ln -s "$SHELLSPEC_TMPBASE/symlink-target.txt" "$SHELLSPEC_TMPBASE/file-link"
+    grant_path "$SHELLSPEC_TMPBASE/file-link"
+    build_req f
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "unsupported-file-type"
+  End
+
+  It 'does not archive an authorized top-level directory symlink'
+    ln -s "$DIR" "$SHELLSPEC_TMPBASE/dir-link"
+    grant_path "$SHELLSPEC_TMPBASE/dir-link"
+    build_req a
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "unsupported-file-type"
   End
 
   It 'rejects a valid token with an item index outside its grant'

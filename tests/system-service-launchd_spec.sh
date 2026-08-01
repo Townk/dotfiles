@@ -287,7 +287,13 @@ EOF
           i=$((i + 1))
         done
         [ -S "$sock" ] || exit 9
-        printf "U\000\000\000\006/tmp/a" | nc -U -w 2 "$sock" > "$root/response"
+        file="$root/a"; printf "socket file\n" > "$file"
+        n=$(printf "%s" "$file" | wc -c | tr -d " ")
+        {
+          printf U
+          printf "\\$(printf %03o $(((n>>24)&255)))\\$(printf %03o $(((n>>16)&255)))\\$(printf %03o $(((n>>8)&255)))\\$(printf %03o $((n&255)))"
+          printf "%s" "$file"
+        } | nc -U -w 2 "$sock" > "$root/response"
         [ "$(head -c 1 "$root/response")" = O ] || exit 8
         [ "$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT count(*) FROM file_authorities;")" = 1 ] || exit 7
         mode=$(stat -f %Lp "$sock" 2>/dev/null || stat -c %a "$sock")

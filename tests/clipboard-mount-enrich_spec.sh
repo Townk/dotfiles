@@ -185,7 +185,8 @@ STUB
 echo thiago-test-self
 STUB
     chmod +x "$STUBS/scutil"
-    build_m_req thiago-test-self /Users/thiago/big.bin
+    self_file="$SHELLSPEC_TMPBASE/self-local.bin"; printf 'self\n' > "$self_file"
+    build_m_req thiago-test-self "$self_file"
     # 3s budget: none of these artifacts appear by design.
     When call run_and_wait "$SHELLSPEC_TMPBASE/never-appears" 30
     The contents of file "$RESP" should start with "O"
@@ -213,7 +214,8 @@ STUB
     # the red-verify note above the commit).
     mkdir -p "$XDG_STATE_HOME/clipboard"
     printf 'self-name-target' > "$XDG_STATE_HOME/clipboard/self-name"
-    build_m_req self-name-target /Users/thiago/big.bin
+    self_file="$SHELLSPEC_TMPBASE/self-name-local.bin"; printf 'self\n' > "$self_file"
+    build_m_req self-name-target "$self_file"
     # 3s budget: none of these artifacts appear by design.
     When call run_and_wait "$SHELLSPEC_TMPBASE/never-appears" 30
     The contents of file "$RESP" should start with "O"

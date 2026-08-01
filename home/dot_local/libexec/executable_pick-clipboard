@@ -72,6 +72,7 @@ source "${PICK_BRIDGE_CLIENT_LIB:-$PICK_LIB_DIR/clipboard-bridge-client.zsh}" ||
   { print -ru2 -- "pick-clipboard: cannot source clipboard-bridge-client.zsh from $PICK_LIB_DIR"; exit 1; }
 
 DB_FILE="${PICK_CLIPBOARD_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/pick-clipboard/history.db}"
+CORE_LIB="${PICK_CLIPBOARD_CORE_LIB:-$PICK_LIB_DIR/clipboard-store-core.zsh}"
 require_cmd sqlite3
 require_cmd pbcopy 2>/dev/null || true   # copy target; optional in odd envs
 
@@ -713,6 +714,14 @@ clip::cache_remove_sub() {  # <cache-root> <subdir>
   rm -rf -- "$sub"
 }
 
+clip::cache_remove_meta_sub() {  # <cache-root> <root/id/.partial-data/index>
+  local root=$1 sub=$2
+  [[ -n "$root" && "$root" != / ]] || return 1
+  [[ "${sub:h:h:h}" == "$root" && "${sub:h:h:t}" == <-> &&
+     "${sub:h:t}" == .partial-data && "${sub:t}" == <-> ]] || return 1
+  rm -rf -- "$sub"
+}
+
 clip::cache_sweep() {
   local root="${PICK_CLIPBOARD_CACHE_ROOT:-$HOME/.cache/pick-clipboard/files}"
   local ttl_raw="${PICK_CLIPBOARD_CACHE_TTL:-86400}"
@@ -739,6 +748,12 @@ clip::cache_sweep() {
       DELETE FROM clip_types
       WHERE instr(blob, CAST('$esub/' AS BLOB)) > 0;
     " >/dev/null 2>&1 || true
+    iddir=${sub:h}
+    rm -f -- "$iddir/.authorized/${sub:t}" 2>/dev/null || true
+    rm -f -- "$iddir/.partial/${sub:t}" 2>/dev/null || true
+    clip::cache_remove_meta_sub "$root" "$iddir/.partial-data/${sub:t}" || true
+    rmdir -- "$iddir/.authorized" 2>/dev/null || true
+    rmdir -- "$iddir/.partial" "$iddir/.partial-data" 2>/dev/null || true
     clip::cache_remove_sub "$root" "$sub" || true
   done
   for iddir in "$root"/<->(N/); do
@@ -756,7 +771,11 @@ clip::cache_sweep() {
 # status would errexit the handler before `exit 130` ever runs.
 clip::pull_cancelled() {
   if [[ -n "${CLIP_PULL_SUB:-}" ]]; then
-    touch "$CLIP_PULL_SUB/.pick-clipboard-partial" "$CLIP_PULL_SUB" 2>/dev/null || true
+    [[ -n "${CLIP_PULL_MARKER:-}" ]] && {
+      mkdir -p "${CLIP_PULL_MARKER:h}" 2>/dev/null || true
+      touch "$CLIP_PULL_MARKER" 2>/dev/null || true
+    }
+    touch "$CLIP_PULL_SUB" 2>/dev/null || true
   fi
   clip::progress_end
   local notify_bin="${PICK_CLIPBOARD_NOTIFY:-$HOME/.local/bin/notify}"
@@ -839,17 +858,36 @@ clip::copy_files_by_id() {
   # Remote-origin row from here on.
   (( ${#rpaths[@]} > 0 )) || { clip::restore_fail "no file paths recorded for row $id"; return 1 }
 
-  # Case 2: every recorded path is one of the picker's OWN cache paths and
-  # exists (a row this picker localized earlier, either shape) -> form A
-  # with those paths, no re-pull. The cache-root prefix requirement is what
-  # keeps a coincidentally-existing non-cache path (Mac-to-Mac mirror rows)
-  # from short-circuiting to a possibly-stale local twin.
+  # Case 2: every recorded path is one of the picker's OWN cache paths,
+  # exists, and has a matching authority row (a row this picker localized
+  # earlier) -> form A with those paths, no re-pull. Prefix + authority keeps
+  # a public pointer or coincidentally-existing path from short-circuiting to
+  # a stale local twin.
   local cacheroot="${PICK_CLIPBOARD_CACHE_ROOT:-$HOME/.cache/pick-clipboard/files}"
   local -i all_cached=1
   local rp
   for rp in "${rpaths[@]}"; do
     [[ "$rp" == "$cacheroot/"* && -e "$rp" ]] || { all_cached=0; break }
   done
+  local rowpathsf authorityf
+  rowpathsf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-rowpaths.XXXXXX")
+  authorityf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-authority.XXXXXX")
+  local -i first_path=1 authority_matches=0
+  { for rp in "${rpaths[@]}"; do
+      if (( first_path )); then print -rn -- "$rp"; first_path=0
+      else print -rn -- $'\0'"$rp"; fi
+    done
+  } > "$rowpathsf"
+  if PICK_CLIPBOARD_DB="$DB_FILE" zsh -f -c '
+       source "$1" || exit 1
+       clip::load_file_authority "$2" || exit 1
+       syswrite -- "$REPLY_PATHS"
+     ' _ "$CORE_LIB" "$id" > "$authorityf" 2>/dev/null &&
+     cmp -s "$rowpathsf" "$authorityf"; then
+    authority_matches=1
+  fi
+  rm -f "$rowpathsf" "$authorityf"
+  (( authority_matches )) || all_cached=0
   if (( all_cached )); then
     for rp in "${rpaths[@]}"; do touch "${rp:h}" 2>/dev/null || true; done
     if clip::send_file_urls "${rpaths[@]}"; then
@@ -880,7 +918,7 @@ clip::copy_files_by_id() {
   local cachedir="$cacheroot/$id"
   local -a local_paths
   local -i idx=0 pulled=0
-  local sub lp
+  local sub lp auth_marker partial_marker partial_dir
 
   # Progress sinks (copy-feedback design §4): a live tty renders rsync's own
   # meter in the pane (pbpaste tier-2 UX); headless (--restore-id from the
@@ -899,16 +937,24 @@ clip::copy_files_by_id() {
   # settled by the time the handler removes it.
   setopt localoptions localtraps
   CLIP_PULL_SUB=""
+  CLIP_PULL_MARKER=""
   trap 'clip::pull_cancelled' INT TERM
 
   for rp in "${rpaths[@]}"; do
     (( idx += 1 ))
     sub="$cachedir/$idx"
     lp="$sub/${rp:t}"
-    if [[ ! -e "$lp" ]]; then
-      mkdir -p "$sub" || { clip::progress_end; clip::restore_fail "cannot create $sub"; return 1 }
+    auth_marker="$cachedir/.authorized/$idx"
+    partial_marker="$cachedir/.partial/$idx"
+    partial_dir="$cachedir/.partial-data/$idx"
+    if [[ ! -e "$lp" || ! -e "$auth_marker" ]]; then
+      [[ -d "$sub" ]] && clip::cache_remove_sub "$cacheroot" "$sub" || true
+      mkdir -p "$sub" "$cachedir/.authorized" "$cachedir/.partial" "$partial_dir" ||
+        { clip::progress_end; clip::restore_fail "cannot create $sub"; return 1 }
       CLIP_PULL_SUB="$sub"
-      : > "$sub/.pick-clipboard-partial"
+      CLIP_PULL_MARKER="$partial_marker"
+      rm -f "$auth_marker"
+      : > "$partial_marker"
       # spec R3: this pull's ssh session has no use for the clipboard bridge's
       # RemoteForward -- without ClearAllForwardings, a session multiplexed
       # onto the interactive connection's ControlMaster re-requests the same
@@ -945,18 +991,20 @@ clip::copy_files_by_id() {
         # (same move as pbpaste tier 2) while real errors still land in the
         # capture file for the one-line failure reason.
         print -ru2 -- "Pulling ${rp:t} from ${host} (${idx}/${n_paths})… — Ctrl+C cancels"
-        "$rsync_bin" -a --info=progress2 --partial-dir=.rsync-partial -e 'ssh -o ClearAllForwardings=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
+        "$rsync_bin" -a --info=progress2 --partial-dir="$partial_dir" -e 'ssh -o ClearAllForwardings=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
       else
         # Headless: meter stdout feeds the throttled HUD sink; the sink is
         # the LAST pipeline segment so it runs in this shell and the
         # CLIP_PROGRESS_* state survives into the next manifest path.
         # idx-1 == paths already done (cached ones count: they're complete).
-        "$rsync_bin" -a --info=progress2 --partial-dir=.rsync-partial -e 'ssh -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 2>"$rsync_err" | clip::progress_stream $(( idx - 1 )) $n_paths "$pull_label"
+        "$rsync_bin" -a --info=progress2 --partial-dir="$partial_dir" -e 'ssh -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 2>"$rsync_err" | clip::progress_stream $(( idx - 1 )) $n_paths "$pull_label"
         rrc=${pipestatus[1]}
       fi
       if (( rrc != 0 )); then
         clip::progress_end
         clip::cache_remove_sub "$cacheroot" "$sub" || true
+        clip::cache_remove_meta_sub "$cacheroot" "$partial_dir" || true
+        rm -f "$partial_marker" 2>/dev/null || true
         if [[ "$rsync_err" == /dev/null ]]; then
           clip::restore_fail "rsync failed pulling $host:$rp"
         else
@@ -965,10 +1013,13 @@ clip::copy_files_by_id() {
         return 1
       fi
       if [[ "$rsync_err" != /dev/null ]]; then rm -f "$rsync_err"; fi
-      rm -f -- "$sub/.pick-clipboard-partial"
+      rm -f -- "$partial_marker"
+      clip::cache_remove_meta_sub "$cacheroot" "$partial_dir" || true
+      rmdir -- "$cachedir/.partial" "$cachedir/.partial-data" 2>/dev/null || true
       touch "$sub"
       (( pulled += 1 ))
       CLIP_PULL_SUB=""
+      CLIP_PULL_MARKER=""
     else
       touch "$sub" 2>/dev/null || true
     fi
@@ -976,43 +1027,82 @@ clip::copy_files_by_id() {
   done
   clip::progress_end
 
-  # Best-effort bookkeeping: a new local row, source_host = the ORIGIN host
-  # (spec §12), single-path rows via x-resolved-path (matching a genuine
-  # file/directory capture), multi-path via x-file-manifest (matching a
-  # genuine files capture) -- the same distinction op_list_files reads back.
-  # Re-picking this new row later lands in case 2 above. Skipped when
-  # nothing was pulled (every position already cached by an earlier pick of
-  # this same row): the localized row for this pull already exists, and
-  # these rows carry no type_hash, so re-inserting would pile up an
-  # identical row on every re-pick with nothing to dedup it.
-  if (( pulled > 0 )); then
+  for lp in "${local_paths[@]}"; do
+    if [[ -L "$lp" || ( ! -f "$lp" && ! -d "$lp" ) ]]; then
+      clip::restore_fail "unsupported localized file type: $lp"
+      return 1
+    fi
+  done
+
+  # Authoritative bookkeeping for the exact cache-path set. A durable local
+  # marker prevents an interrupted pull from treating unverified existing
+  # bytes as cached; the DB lookup prevents duplicate rows on re-pick.
+  local blobf; blobf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-localize-blob.XXXXXX")
+  local uti="x-resolved-path" first=1
+  if (( ${#local_paths[@]} > 1 )); then
+    uti="x-file-manifest"
+    { for lp in "${local_paths[@]}"; do
+        if (( first )); then print -rn -- "$lp"; first=0
+        else print -rn -- $'\0'"$lp"; fi
+      done
+    } > "$blobf"
+  else
+    print -rn -- "${local_paths[1]}" > "$blobf"
+  fi
+  local eblob="${blobf//\'/\'\'}"
+  local ek="${kind//\'/\'\'}" eh="${host//\'/\'\'}"
+  local localized_id
+  localized_id=$(sqlite3 "$DB_FILE" "SELECT c.id FROM clips c
+    JOIN clip_types t ON t.clip_id=c.id AND t.uti='$uti'
+    WHERE c.source_host='$eh' AND c.type_kind='$ek'
+      AND t.blob=readfile('$eblob')
+      AND EXISTS (SELECT 1 FROM file_authorities fa WHERE fa.clip_id=c.id)
+    ORDER BY c.id DESC LIMIT 1;" 2>/dev/null) || localized_id=""
+
+  local -i localized_new=0 localized_authorized=0
+  if [[ -z "$localized_id" ]] && (( pulled > 0 )); then
     local ts; ts=$(date +%s)
-    local ek="${kind//\'/\'\'}" eh="${host//\'/\'\'}"
-    # spec R5b: give the bookkeeping row a real text_preview (newline-joined
-    # LOCALIZED paths) instead of leaving it NULL -- a NULL text_preview
-    # rendered as an anonymous, content-less row in both pickers.
     local preview; preview="$(clip::localized_preview "${local_paths[@]}")"
     local epv="${preview//\'/\'\'}"
-    local new_id
-    new_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips (type_kind, first_ts, last_ts, source_host, text_preview) VALUES ('$ek', $ts, $ts, '$eh', '$epv'); SELECT last_insert_rowid();") 2>/dev/null || new_id=""
-    if [[ -n "$new_id" ]]; then
-      local blobf; blobf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-localize-blob.XXXXXX")
-      local uti="x-resolved-path" first=1
-      if (( ${#local_paths[@]} > 1 )); then
-        uti="x-file-manifest"
-        { for lp in "${local_paths[@]}"; do
-            if (( first )); then print -rn -- "$lp"; first=0
-            else print -rn -- $'\0'"$lp"; fi
-          done
-        } > "$blobf"
-      else
-        print -rn -- "${local_paths[1]}" > "$blobf"
-      fi
-      sqlite3 "$DB_FILE" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($new_id, '$uti', readfile('$blobf'));" >/dev/null 2>&1
-      rm -f "$blobf"
+    localized_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips
+      (type_kind, first_ts, last_ts, source_host, text_preview)
+      VALUES ('$ek', $ts, $ts, '$eh', '$epv');
+      SELECT last_insert_rowid();") 2>/dev/null || localized_id=""
+    local inserted_id=$localized_id
+    if [[ -n "$localized_id" ]] &&
+       sqlite3 "$DB_FILE" "INSERT INTO clip_types (clip_id, uti, blob)
+         VALUES ($localized_id, '$uti', readfile('$eblob'));" >/dev/null 2>&1; then
+      localized_new=1
+    else
+      [[ -n "$inserted_id" ]] &&
+        sqlite3 "$DB_FILE" "DELETE FROM clips WHERE id=$inserted_id;" >/dev/null 2>&1
+      localized_id=""
     fi
   fi
 
+  if [[ -n "$localized_id" ]] &&
+     PICK_CLIPBOARD_DB="$DB_FILE" zsh -f -c '
+       source "$1" || exit 1
+       clip::read_file "$3"
+       clip::replace_file_authority "$2" "$REPLY"
+     ' _ "$CORE_LIB" "$localized_id" "$blobf" >/dev/null 2>&1; then
+    localized_authorized=1
+    local -i auth_idx=0
+    for lp in "${local_paths[@]}"; do
+      (( auth_idx += 1 ))
+      mkdir -p "$cachedir/.authorized" 2>/dev/null || true
+      touch "$cachedir/.authorized/$auth_idx" 2>/dev/null || true
+    done
+  elif (( localized_new )); then
+    sqlite3 "$DB_FILE" "DELETE FROM clip_types WHERE clip_id=$localized_id;
+      DELETE FROM clips WHERE id=$localized_id;" >/dev/null 2>&1
+  fi
+  rm -f "$blobf"
+
+  if (( ! localized_authorized )); then
+    clip::restore_fail "localized file type cannot be authorized safely"
+    return 1
+  fi
   if clip::send_file_urls "${local_paths[@]}"; then
     clip::bump_last_ts_now "$id"   # spec R5c: bump-on-use
     return 0
