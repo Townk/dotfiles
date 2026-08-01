@@ -25,7 +25,7 @@ set -eu -o pipefail
 
 source "$HOME/.local/lib/system-package-common.zsh"
 
-require_cmd yq jq hdiutil
+require_cmd yq jq hdiutil plutil
 
 # images.toml lives in $PKG_DIR (~/.config/packages) alongside the other
 # system-* manifests. The images themselves live in XDG state.
@@ -151,17 +151,50 @@ img::automount() {
   [[ "$(img::field "$1" automount)" == "true" ]]
 }
 
-# img::is_mounted <name> → 0 iff the mount dir is a live mount point.
-# Compares the dir's device id to its parent's: a mount root sits on a
-# different device than the directory it's mounted over. Robust to path
-# symlinks (e.g. /tmp → /private/tmp) that defeat matching `mount` text.
+# img::attach_info <name> → the single source of truth for "is this image
+# attached, and where". Matches the image by its image-path (NOT by any
+# declared/derived mount directory), so an image the user attached by any
+# means — Finder double-click, `open x.sparseimage`, or a bare
+# `hdiutil attach` (all of which mount at /Volumes/<volname>) — is seen too.
+#
+# On success prints one line, "<dev-node>\t<mount-point>":
+#   * <dev-node>    the image's whole-disk /dev entry — what `hdiutil detach`
+#                   wants (a device, never a mount point).
+#   * <mount-point> the first mounted volume's mount point, or empty when the
+#                   image is attached with no mounted volume (e.g. ejected in
+#                   Finder while the /dev/diskN device lingers).
+# Returns 0 iff the image is attached at all, 1 otherwise. Shared by
+# img::is_mounted and `remove` so both agree on attach state.
+img::attach_info() {
+  local img js line
+  img=$(img::imgpath "$1")
+  js=$(hdiutil info -plist 2>/dev/null | plutil -convert json -o - -- - 2>/dev/null) || return 1
+  line=$(printf '%s' "$js" | jq -r --arg p "$img" '
+    .images[]? | select(."image-path" == $p)
+    | ([.["system-entities"][]?["dev-entry"]] | map(select(. != null)) | .[0] // "")
+      + "\t"
+      + ([.["system-entities"][]? | select(has("mount-point")) | .["mount-point"]] | .[0] // "")
+  ') || return 1
+  [[ -n "$line" ]] || return 1
+  printf '%s\n' "$line"
+}
+
+# img::is_mounted <name> → 0 iff the image is attached AND has a mounted
+# volume, wherever that volume sits. Delegates to img::attach_info, so a
+# volume mounted outside the declared <mountdir>/<name> is reported mounted
+# rather than silently unmounted.
 img::is_mounted() {
-  local dir d_dev p_dev
-  dir=$(img::mountdir "$1")
-  [[ -d "$dir" ]] || return 1
-  d_dev=$(stat -f '%d' "$dir" 2>/dev/null) || return 1
-  p_dev=$(stat -f '%d' "$dir/.." 2>/dev/null) || return 1
-  [[ "$d_dev" != "$p_dev" ]]
+  local info
+  info=$(img::attach_info "$1") || return 1
+  [[ -n "${info#*$'\t'}" ]]
+}
+
+# img::mount_point <name> → the actual mount point when attached+mounted,
+# else empty. Returns 1 when the image is not attached at all.
+img::mount_point() {
+  local info
+  info=$(img::attach_info "$1") || return 1
+  printf '%s\n' "${info#*$'\t'}"
 }
 
 # img::du <file> → human-readable real on-disk usage
@@ -218,8 +251,16 @@ img::mount_one() {
   local img
   img=$(img::imgpath "$name")
   [[ -e "$img" ]] || die "image file missing (run 'system-images create $name' or 'sync'): $img"
-  if img::is_mounted "$name"; then
-    log_info "$name already mounted at $(img::mountdir "$name")"
+  # Skip if the image is attached AT ALL (anywhere) — re-running `hdiutil
+  # attach` on an already-attached image fails, which aborts under set -e.
+  local info
+  if info=$(img::attach_info "$name"); then
+    local mp="${info#*$'\t'}"
+    if [[ -n "$mp" ]]; then
+      log_info "$name already mounted at $mp"
+    else
+      log_info "$name already attached (no mounted volume)"
+    fi
     return 0
   fi
   local dir
@@ -240,7 +281,7 @@ img::mount_all() {
       log_warn "skip $name: image file missing ($img)"
       continue
     }
-    img::is_mounted "$name" && continue
+    img::attach_info "$name" >/dev/null && continue   # already attached anywhere
     local dir
     dir=$(img::mountdir "$name")
     mkdir -p "$dir"
@@ -268,14 +309,17 @@ do_unmount() {
   [[ $# -eq 1 ]] || die "usage: unmount <name>"
   local name="$1"
   img::declared "$name" || die "no such image in $IMGFILE: $name"
-  if ! img::is_mounted "$name"; then
+  # Detach by DEVICE, resolved from the image itself, so a volume mounted
+  # outside the declared dir (Finder / `open` / bare attach) is still torn
+  # down — detaching the declared dir would be a no-op there.
+  local info
+  if ! info=$(img::attach_info "$name"); then
     log_info "$name not mounted"
     return 0
   fi
-  local dir
-  dir=$(img::mountdir "$name")
-  hdiutil detach "$dir" >/dev/null
-  log_ok "unmounted $name ($dir)"
+  local dev="${info%%$'\t'*}" mp="${info#*$'\t'}"
+  hdiutil detach "$dev" >/dev/null
+  log_ok "unmounted $name (${mp:-$dev})"
 }
 
 do_sync() {
@@ -299,17 +343,28 @@ do_status() {
   printf '  image:      %s%s\n' "$img" "$([[ -e "$img" ]] && printf '' || printf '  (missing)')"
   printf '  volname:    %s\n' "$name"
   printf '  mountpoint: %s\n' "$(img::mountdir "$name")"
-  printf '  mounted:    %s\n' "$(img::is_mounted "$name" && printf 'yes' || printf 'no')"
+  local st_info st_mounted='no'
+  if st_info=$(img::attach_info "$name"); then
+    local st_mp="${st_info#*$'\t'}"
+    if [[ -n "$st_mp" ]]; then
+      st_mounted="yes (at $st_mp)"
+    else
+      st_mounted="attached (no mounted volume)"
+    fi
+  fi
+  printf '  mounted:    %s\n' "$st_mounted"
   printf '  automount:  %s\n' "$(img::automount "$name" && printf 'yes' || printf 'no')"
   printf '  manifest entry:\n'
   img::toml_json | jq --arg n "$name" '.[$n]' | sed 's/^/    /'
 }
 
 # do_list — emit TSV rows: Image\tState\tSize\tMountpoint (piped to
-# pkg::table_print by the caller). State: mounted | unmounted | missing
-# (declared, no file) | undeclared (file on disk but not in images.toml).
+# pkg::table_print by the caller). State: mounted | attached (device present,
+# no mounted volume) | unmounted | missing (declared, no file) | undeclared
+# (file on disk but not in images.toml). When mounted, the Mountpoint column
+# shows the ACTUAL mount point, which may differ from the declared dir.
 do_list() {
-  local name img dir state size f base
+  local name img dir state size f base info mp
   for name in ${(f)"$(img::names)"}; do
     [[ -z "$name" ]] && continue
     img=$(img::imgpath "$name")
@@ -317,9 +372,15 @@ do_list() {
     if [[ ! -e "$img" ]]; then
       state="missing"
       size="-"
-    elif img::is_mounted "$name"; then
-      state="mounted"
+    elif info=$(img::attach_info "$name"); then
+      mp="${info#*$'\t'}"
       size=$(img::du "$img")
+      if [[ -n "$mp" ]]; then
+        state="mounted"
+        dir="$mp"            # report the ACTUAL mount point
+      else
+        state="attached"     # /dev/diskN present but no mounted volume
+      fi
     else
       state="unmounted"
       size=$(img::du "$img")
@@ -405,4 +466,11 @@ main() {
   esac
 }
 
-main "$@"
+# Run main only when executed as a script, not when sourced — this lets the
+# ShellSpec suite source the file to drive the img:: helpers in-process. When
+# run as `zsh system-images …`, $zsh_eval_context is exactly "toplevel"; a
+# `source` from another shell/function appends ":file", so the guard is a
+# no-op change for every real invocation.
+if [[ "$zsh_eval_context" == toplevel ]]; then
+  main "$@"
+fi
