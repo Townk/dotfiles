@@ -811,8 +811,14 @@ EOF
       printf '%s\n' "$FIX/anchor" > "$S/anchor"
       mkdir -p "$FIX/anchor"
       STUB="$FIX/stub"; mkdir -p "$STUB"
-      # recorder restic: apply must call restore --force via bkp::restore::paths
-      printf '#!/bin/sh\necho "restic $*" >> "%s/restic.calls"\nexit 0\n' "$FIX" > "$STUB/restic"
+      # recorder restic: apply must call restore --force via bkp::restore::paths.
+      # `restore` also emits restic's --json summary so bkp::restore::paths sees a
+      # real restore (files_restored > 0) rather than its 0-file no-op guard.
+      { printf '#!/bin/sh\n'
+        printf 'echo "restic $*" >> "%s/restic.calls"\n' "$FIX"
+        printf 'case "$1" in restore) echo '\''{"message_type":"summary","total_files":1,"files_restored":7}'\'' ;; esac\n'
+        printf 'exit 0\n'
+      } > "$STUB/restic"
       chmod +x "$STUB/restic"
       PATH="$STUB:$PATH"
       unset ZELLIJ

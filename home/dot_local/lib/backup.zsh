@@ -1998,6 +1998,32 @@ bkp::ux::changes_cmd() {
   fi
 }
 
+# bkp::restic::glob_escape <path>
+# restic hands --include values to Go's filepath.Match, so a concrete live path
+# that contains a glob metacharacter (\ * ? [) is read as a PATTERN, not a
+# filename. A real captured path like .../chat/[id]/+page.svelte becomes a
+# character class that matches ZERO files while restic still exits 0 — a silent
+# no-op restore. Escape each metacharacter with a leading backslash so the path
+# matches itself literally (a ] is only special inside a class, so it is left
+# alone). Backslash is escaped first so we never re-escape our own escapes.
+# Result in REPLY.
+bkp::restic::glob_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\*/\\*}"
+  s="${s//\?/\\?}"
+  s="${s//\[/\\[}"
+  REPLY="$s"
+}
+
+# bkp::restic::restore_count — read `restic restore --json` on stdin and print
+# the summary's files_restored (0 when the summary omits it, which is exactly
+# how restic reports a restore that matched nothing). Lets callers tell a real
+# restore from restic's "Restored 0 files/dirs, rc 0" no-op.
+bkp::restic::restore_count() {
+  jq -rs '[.[] | select(.message_type == "summary")] | last | .files_restored // 0' 2>/dev/null
+}
+
 # bkp::restore::undo_snapshot <path…>
 # The pre-restore safety net (spec §7): capture the live state of the paths
 # about to be overwritten, tagged bkp-undo, so a bad restore is one
@@ -2035,12 +2061,23 @@ bkp::restore::paths() {
     bkp::restore::undo_snapshot "${live[@]}" || return 1
   fi
   local -a includes=()
+  local esc
   for p in "$@"; do
-    includes+=(--include "$p")
+    bkp::restic::glob_escape "$p"; esc="$REPLY"
+    includes+=(--include "$esc")
   done
-  # --quiet: restore's header echoes the snapshot's recorded paths — tens of
-  # thousands of files-from entries for capture snapshots.
-  bkp::restic "$staging" restore "$snap" --target / "${includes[@]}" --quiet || return 1
+  # --json (not --quiet): restore's plain header echoes the snapshot's recorded
+  # paths — tens of thousands of files-from entries for capture snapshots — and
+  # --json both silences that and lets us read files_restored. restic exits 0
+  # even when an --include matches nothing, so the count is the only proof the
+  # restore was real.
+  local json restored
+  json=$(bkp::restic "$staging" restore "$snap" --target / "${includes[@]}" --json) || return 1
+  restored=$(print -r -- "$json" | bkp::restic::restore_count)
+  if (( restored <= 0 )); then
+    log_error "bkp: restore matched no files in snapshot ${snap[1,8]} — nothing restored (paths absent from that snapshot?)"
+    return 1
+  fi
   log_ok "bkp: restored $# path(s) from snapshot ${snap[1,8]} (undo with \`system-backup undo\`)"
 }
 
@@ -2064,11 +2101,23 @@ bkp::restore::undo() {
   }
   local id="${sel%%$'\t'*}" joined="${sel#*$'\t'}"
   local -a includes=()
-  local p
+  local p esc
   for p in "${(@ps:\x1f:)joined}"; do
-    [[ -n "$p" ]] && includes+=(--include "$p")
+    [[ -n "$p" ]] || continue
+    bkp::restic::glob_escape "$p"; esc="$REPLY"
+    includes+=(--include "$esc")
   done
-  bkp::restic "$staging" restore "$id" --target / "${includes[@]}" --quiet || return 1
+  # Gate the forget on an actual restore: restic exits 0 even when the includes
+  # match nothing (e.g. a bracketed path read as a glob). Forgetting the undo
+  # snapshot after a 0-file no-op would delete the ONLY record of the content
+  # the earlier restore overwrote — so preserve it and fail instead.
+  local json restored
+  json=$(bkp::restic "$staging" restore "$id" --target / "${includes[@]}" --json) || return 1
+  restored=$(print -r -- "$json" | bkp::restic::restore_count)
+  if (( restored <= 0 )); then
+    log_error "bkp: undo restored no files from snapshot ${id[1,8]} — keeping it (safety net preserved, not forgotten)"
+    return 1
+  fi
   bkp::restic "$staging" forget --quiet "$id" || return 1
   log_ok "bkp: undid the last restore ($(( ${#includes} / 2 )) path(s))"
 }

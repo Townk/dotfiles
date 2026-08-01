@@ -763,6 +763,30 @@ EOF
     End
   End
 
+  Describe 'bkp::restic::glob_escape'
+    # restic feeds --include values to Go's filepath.Match, whose metacharacters
+    # are exactly \ * ? [ (a ] is only special INSIDE a class, so it stays
+    # literal). Escaping each with a leading backslash makes a live path match
+    # itself. Expected strings below are derived from that Match grammar, not
+    # from the function.
+    esc() { source "$LIB/backup.zsh"; bkp::restic::glob_escape "$1" && print -r -- "$REPLY"; }
+
+    It 'arms the character-class case: [ becomes \[ (] left literal)'
+      When run esc "/a/[id]/b.svelte"
+      The output should equal '/a/\[id]/b.svelte'
+    End
+
+    It 'leaves a metacharacter-free path unchanged'
+      When run esc "/plain/path/file.txt"
+      The output should equal "/plain/path/file.txt"
+    End
+
+    It 'escapes all four metacharacters, backslash first (no double-escaping)'
+      When run esc 'a*b?c\d[e'
+      The output should equal 'a\*b\?c\\d\[e'
+    End
+  End
+
   Describe 'bkp::config'
     setup_fix() { FIX=$(mktemp -d); }
     cleanup_fix() { rm -rf "$FIX"; }
@@ -1945,12 +1969,19 @@ EOF
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
+    # restore emits restic's --json summary so the code can read files_restored.
+    # Default: a real restore (files_restored > 0). A test that needs the
+    # 0-file no-op (a bracketed path read as a glob) sets BKP_STUB_RESTORE_SUMMARY
+    # to restic's actual empty summary, '{"message_type":"summary"}'.
     stub_restic() {
       bkp::restic() {
         local repo="$1"; shift
         print -r -- "$repo $*" >> "$FIX/calls"
+        local summary="${BKP_STUB_RESTORE_SUMMARY:-}"
+        [ -n "$summary" ] || summary='{"message_type":"summary","total_files":1,"files_restored":7}'
         case "$1 ${2:-}" in
           'snapshots --json') cat "$FIX/stg.json" 2>/dev/null || printf '[]' ;;
+          restore*) printf '%s\n' "$summary" ;;
           *) return 0 ;;
         esac
       }
@@ -2016,6 +2047,51 @@ EOF
       When run nothing
       The status should equal 1
       The stderr should include "nothing to undo"
+    End
+
+    It 'escapes glob metacharacters in the restored path (DATA-1)'
+      # A real captured path with brackets would be read by restic as a
+      # character class matching zero files; the include must be escaped.
+      brackets() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        mkdir -p "$FIX/chat/[id]"
+        print live > "$FIX/chat/[id]/+page.svelte"
+        bkp::restore::paths abc123 --force "$FIX/chat/[id]/+page.svelte" >/dev/null || return 1
+        grep -F -- "--include $FIX/chat/\\[id]/+page.svelte" "$FIX/calls" >/dev/null && print escaped
+      }
+      When run brackets
+      The output should equal "escaped"
+    End
+
+    It 'reports failure when restic restores nothing (DATA-1)'
+      noop() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        export BKP_STUB_RESTORE_SUMMARY='{"message_type":"summary"}'
+        bkp::restore::paths abc123 "$FIX/new-file.txt"
+      }
+      When run noop
+      The status should equal 1
+      The stderr should include "nothing restored"
+    End
+
+    It 'undo does NOT forget the safety net when the restore was a no-op (DATA-1)'
+      # The core data-loss guard: a 0-file restore must abort BEFORE forget, so
+      # the pre-restore snapshot (the only copy of overwritten content) survives.
+      preserve() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        export BKP_STUB_RESTORE_SUMMARY='{"message_type":"summary"}'
+        printf '%s' '[{"id":"u-new","time":"2026-01-02T09:00:00Z","tags":["bkp-undo"]}]' > "$FIX/stg.json"
+        bkp::restore::undo; local rc=$?
+        print "rc:$rc"
+        print "forgets:$(grep -c -- forget "$FIX/calls" || true)"
+      }
+      When run preserve
+      The line 1 should equal "rc:1"
+      The line 2 should equal "forgets:0"
+      The stderr should include "safety net preserved"
     End
 
     It 'thin excludes undo snapshots from the ladder and expires old ones'
