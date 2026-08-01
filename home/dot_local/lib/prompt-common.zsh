@@ -37,9 +37,11 @@ prompt::default() {
 # prompt::secret <varname> <prompt> — masked entry: echoes a '*' per keystroke
 # instead of the usual blind no-echo read, so there's visual feedback while
 # typing/pasting a secret. Supports Backspace and ^U (clear). Reads raw, one
-# char at a time, with the tty put in -echo -icanon; the terminal is always
-# restored, including on ^C. Falls back to a plain no-echo read when there is
-# no controlling terminal (pipelines/tests). Loops until non-empty.
+# char at a time, with the tty put in -echo -icanon; the terminal is restored
+# on normal completion and on ^C, and on a terminating signal (TERM/HUP/QUIT)
+# or process exit so a kill/timeout at the prompt can't leave echo off. Falls
+# back to a plain no-echo read when there is no controlling terminal
+# (pipelines/tests). Loops until non-empty.
 prompt::secret() {
   local __var="$1" __prompt="$2" __val=""
 
@@ -64,7 +66,13 @@ prompt::secret() {
     printf -v "$__var" '%s' "$__val"
     return 0
   fi
+  # Restore the tty on ANY exit, not just ^C: a TERM/HUP/QUIT (kill/timeout) or
+  # a normal EXIT at the masked prompt would otherwise leave echo off, forcing
+  # the user to blind-type `stty sane`. INT additionally reports the abort; the
+  # other dispositions restore without dying so they don't clobber a normal
+  # return's value (the traps are cleared before the successful return below).
   trap 'stty "$__saved" </dev/tty 2>/dev/null; printf "\n" >/dev/tty; die "input aborted"' INT
+  trap 'stty "$__saved" </dev/tty 2>/dev/null' EXIT TERM HUP QUIT
   while :; do
     printf '%s%s%s ' "$C_BWH" "$__prompt" "$C_RES" >/dev/tty
     __val=""
@@ -95,7 +103,7 @@ prompt::secret() {
     [[ -n "$__val" ]] && break
     log_warn "a value is required"
   done
-  trap - INT
+  trap - INT EXIT TERM HUP QUIT
   printf -v "$__var" '%s' "$__val"
 }
 
