@@ -106,6 +106,56 @@ Describe 'preview: raster cache'
   End
 End
 
+# LOW-6: two silent-failure holes in the raster library's contracts.
+#   * raster::cache_path builds its key from `… | shasum | cut`. When shasum is
+#     absent (headless Linux) the key is empty and EVERY source collapses to
+#     $RASTER_CACHE_DIR/.png — one cache entry serving stale renders for
+#     unrelated docs. It must fail instead.
+#   * raster::by_mime / raster::for_file end with an unconditional `return 0`,
+#     so an unrasterizable type (plain text) reports success with empty output,
+#     contradicting the header's rc-1 contract.
+Describe 'preview: raster failure contracts (LOW-6)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+  LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/lcache"
+    rm -rf "$XDG_CACHE_HOME"
+    SRC="$SHELLSPEC_TMPBASE/low6-src.txt"
+    print hello >"$SRC"
+    # A plain-text file: nothing in the library can rasterise it.
+    TXT="$SHELLSPEC_TMPBASE/low6-plain.txt"
+    print "plain body" >"$TXT"
+    # A stub PATH whose shasum fails, mimicking a box without shasum.
+    STUB="$SHELLSPEC_TMPBASE/low6-bin"
+    mkdir -p "$STUB"
+    printf '#!/bin/sh\nexit 127\n' >"$STUB/shasum"
+    chmod +x "$STUB/shasum"
+  }
+  BeforeEach 'setup'
+
+  It 'raster::cache_path fails rather than collapsing to one key when shasum is unavailable'
+    When run zsh -f -c "PATH='$STUB':\$PATH PREVIEW_NO_RUN=1 PREVIEW_LIB='$LIB'
+      source '$SCRIPT'
+      if raster::cache_path '$SRC' t >/dev/null; then print bad; else print rc\$?; fi"
+    The output should equal "rc1"
+  End
+
+  It 'raster::by_mime returns rc 1 for an unrasterizable mime'
+    When run zsh -f -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$LIB'
+      source '$SCRIPT'
+      if raster::by_mime '$TXT' text/plain >/dev/null; then print bad; else print rc\$?; fi"
+    The output should equal "rc1"
+  End
+
+  It 'raster::for_file returns rc 1 for an unrasterizable file'
+    When run zsh -f -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$LIB'
+      source '$SCRIPT'
+      if raster::for_file '$TXT' >/dev/null; then print bad; else print rc\$?; fi"
+    The output should equal "rc1"
+  End
+End
+
 Describe 'preview: fonts'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
 

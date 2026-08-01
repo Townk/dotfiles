@@ -36,7 +36,10 @@ raster::cache_path() {
   local src="$1" tag="$2" variant="${3:-0}" mt sz key
   mt=$(zstat +mtime "$src" 2>/dev/null) || mt=0
   sz=$(zstat +size "$src" 2>/dev/null) || sz=0
-  key=$(print -rn -- "$src|$mt|$sz|$tag|$variant" | shasum | cut -d' ' -f1)
+  key=$(print -rn -- "$src|$mt|$sz|$tag|$variant" | shasum | cut -d' ' -f1) || return 1
+  # No shasum (headless Linux) → empty key → every source collapses to
+  # $RASTER_CACHE_DIR/.png, serving one file's render for all. Fail instead.
+  [[ -n $key ]] || return 1
   print -rn -- "$RASTER_CACHE_DIR/$key.png"
 }
 
@@ -408,6 +411,9 @@ raster::by_mime() {
         raster::cached "$cache" raster::iwork "$target" &&
         print -rn -- "$cache"
       ;;
+    # Nothing here can rasterise it (text, archives, binaries). The header's
+    # contract is rc 1 for that case; a matched-but-failed branch above also
+    # falls through with its own non-zero status rather than a masking rc 0.
+    *) return 1 ;;
   esac
-  return 0
 }
