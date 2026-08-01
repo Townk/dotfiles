@@ -1563,6 +1563,43 @@ bkp::reconcile::one() {
       pull$'\t'*) pull+=("${line#pull$'\t'}") ;;
     esac
   done
+  # Gate the pull through the LOCAL retention plan (spec §4/§5). Union
+  # convergence alone repopulates staging forever: a snapshot capture::thin
+  # just dropped still lives on the target, so a naive pull drags it straight
+  # back (paired "retention dropped N" + "pulled 1"); and a master holds the
+  # whole archive by design, so its pull = every snapshot staging lacks. So:
+  # never pull from a master, and otherwise pull only the target-only
+  # snapshots the ladder would keep — the ones bkp::thin retains when they sit
+  # alongside staging's current set. Push and convergence are untouched.
+  if (( ${#pull} )); then
+    if [[ "$role" == master ]]; then
+      pull=()
+    else
+      local policy s_pairs t_pairs pl id
+      policy=$(bkp::manifest::thin_policy "$manifest") || return 1
+      s_pairs=$(bkp::restic "$staging" snapshots --json | bkp::restic::parse_snapshots) || return 1
+      t_pairs=$(bkp::restic "$tpath" snapshots --json | bkp::restic::parse_snapshots) || return 1
+      local -A t_epoch=()
+      for line in ${(f)t_pairs}; do t_epoch[${line%%$'\t'*}]="${line##*$'\t'}"; done
+      local -a thin_lines=()
+      [[ -n "$s_pairs" ]] && thin_lines=(${(f)s_pairs})
+      for id in "${pull[@]}"; do
+        [[ -n "${t_epoch[$id]:-}" ]] && thin_lines+=("$id"$'\t'"${t_epoch[$id]}")
+      done
+      local -A keep=()
+      if (( ${#thin_lines} )); then
+        pl=$(printf '%s\n' "${thin_lines[@]}" | bkp::thin "$EPOCHSECONDS" "$policy") || return 1
+        for line in ${(f)pl}; do
+          [[ "$line" == keep$'\t'* ]] && keep[${line#keep$'\t'}]=1
+        done
+      fi
+      local -a filtered=()
+      for id in "${pull[@]}"; do
+        [[ -n "${keep[$id]:-}" ]] && filtered+=("$id")
+      done
+      pull=("${filtered[@]}")
+    fi
+  fi
   if (( ${#push} )); then
     bkp::spin "target '$name': pushing ${#push} snapshot(s)…" /dev/null -- \
       bkp::restic::copy "$staging" "$tpath" "${push[@]}" || return 1

@@ -1560,7 +1560,10 @@ EOF
       When run mirror
       The line 1 should equal 1
       The line 2 should equal 1
-      The line 3 should equal 1
+      # MED-18: t9 (Jan-1) shares the monthly cell of the newer s1/s2 (Jan-2),
+      # so the local ladder would not keep it — it is no longer pulled back
+      # into staging, only forgotten from the target by the mirror's retention.
+      The line 3 should equal 0
       The line 4 should equal "$FIX/tgt forget --quiet t9"
     End
 
@@ -1573,7 +1576,10 @@ EOF
         grep -c forget "$FIX/calls" || true
       }
       When run master
-      The line 1 should equal 2
+      # MED-18: a master is pushed to (s2) but never pulled from — pulling its
+      # archive would repopulate staging forever. One copy (the push), never
+      # a forget.
+      The line 1 should equal 1
       The line 2 should equal 0
     End
 
@@ -1589,6 +1595,58 @@ EOF
       }
       When run converged
       The output should equal 0
+    End
+
+    # MED-18: retention gates the pull, or capture::thin's work is undone every
+    # pass — a snapshot staging just dropped still lives on the target and the
+    # naive union-convergence pulls it straight back (paired "retention dropped
+    # N" + "pulled 1"). Pull only what the local ladder would keep.
+    It 'does not pull back a snapshot the local ladder just thinned'
+      no_pullback() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        # staging kept Y (Jan-2 10:14); X (Jan-1, same monthly cell, older) is
+        # the one capture-thin just dropped from staging — the target still
+        # holds it, and retention would NOT keep it, so it must not be pulled.
+        printf '%s' '[{"id":"Y","time":"2026-01-02T10:14:00Z"}]' > "$FIX/stg.json"
+        printf '%s' '[{"id":"Yc","original":"Y","time":"2026-01-02T10:14:00Z"},{"id":"X","time":"2026-01-01T09:00:00Z"}]' > "$FIX/tgt.json"
+        bkp::reconcile::one "$FIX/stg" tgt "$FIX/tgt" mirror "$FIX/m.toml" >/dev/null || return 1
+        grep -- "copy --from-repo $FIX/tgt" "$FIX/calls" | grep -c " X$" || true
+      }
+      When run no_pullback
+      The output should equal 0
+    End
+
+    # MED-18: a master holds the full archive by design; pulling from it
+    # repopulates staging with everything, forever. Never pull from a master.
+    It 'a master target performs no pull'
+      no_master_pull() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        printf '%s' '[{"id":"s1","time":"2026-01-02T10:14:00Z"}]' > "$FIX/stg.json"
+        printf '%s' '[{"id":"s1c","original":"s1","time":"2026-01-02T10:14:00Z"},{"id":"arch","time":"2020-01-01T00:00:00Z"}]' > "$FIX/tgt.json"
+        bkp::reconcile::one "$FIX/stg" tgt "$FIX/tgt" master "$FIX/m.toml" >/dev/null || return 1
+        grep -c -- "copy --from-repo $FIX/tgt" "$FIX/calls" || true
+      }
+      When run no_master_pull
+      The output should equal 0
+    End
+
+    # MED-18: the filter must not over-drop — a target-only snapshot the local
+    # ladder WOULD keep still gets pulled (e.g. one another machine pushed).
+    It 'still pulls a target-only snapshot the local ladder would keep'
+      pulls_kept() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        local fresh_ts
+        TZ=UTC strftime -s fresh_ts '%Y-%m-%dT%H:%M:%SZ' $(( EPOCHSECONDS - 600 ))
+        printf '[]' > "$FIX/stg.json"
+        printf '[{"id":"fresh","time":"%s"}]' "$fresh_ts" > "$FIX/tgt.json"
+        bkp::reconcile::one "$FIX/stg" tgt "$FIX/tgt" mirror "$FIX/m.toml" >/dev/null || return 1
+        grep -- "copy --from-repo $FIX/tgt" "$FIX/calls" | grep -c " fresh$" || true
+      }
+      When run pulls_kept
+      The output should equal 1
     End
 
     It 'run skips absent targets and reconciles present ones'
@@ -1608,7 +1666,9 @@ EOF
       }
       When run pass
       The line 1 should equal 1
-      The line 2 should equal 2
+      # MED-18: one copy — the push of s2 to tgt. t9 is out of the local
+      # ladder, so the union pull-back no longer fires.
+      The line 2 should equal 1
     End
 
     It 'prune hits staging + present initialized mirrors only'
