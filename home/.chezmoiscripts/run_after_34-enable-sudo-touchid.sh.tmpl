@@ -19,7 +19,7 @@ if [ -f "$pam_local" ] && has_touchid_line "$pam_local"; then
   exit 0
 fi
 
-tmp="${TMPDIR:-/tmp}/sudo_local.$$"
+tmp="$(mktemp "${TMPDIR:-/tmp}/sudo_local.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
 if [ -f "$pam_template" ]; then
