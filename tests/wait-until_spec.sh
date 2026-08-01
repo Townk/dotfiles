@@ -38,4 +38,26 @@ Describe 'wait-until'
     The status should be success
     The output should include "Usage:"
   End
+
+  It 'bounds total time by the wall-clock timeout, not attempts * interval'
+    # A condition slower than the interval (0.3s each) under a 0.6s budget. The
+    # old code fixed the attempt COUNT up front (ceil(0.6/0.1)+1 = 7) and never
+    # consulted the clock, so it ran all seven checks (~2.7s), overshooting the
+    # budget by >4x. A wall-clock bound stops within about one interval of the
+    # deadline. Time it with EPOCHREALTIME (whole seconds would be a coin flip
+    # on the second boundary), and assert only a generous ceiling the buggy
+    # path cannot meet but the fixed path clears with room to spare.
+    timed() {
+      zmodload zsh/datetime
+      local s=$EPOCHREALTIME
+      sh "$SCRIPT" --timeout 0.6s --interval 0.1 --quiet -- sh -c 'sleep 0.3; exit 1'
+      local rc=$?
+      local -F elapsed=$(( EPOCHREALTIME - s ))
+      (( elapsed < 1.5 )) && echo bounded || printf 'over: %.2fs\n' $elapsed
+      return $rc
+    }
+    When call timed
+    The status should eq 1
+    The output should equal "bounded"
+  End
 End

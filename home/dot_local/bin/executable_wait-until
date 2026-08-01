@@ -110,23 +110,37 @@ done
 timeout_s=$(to_seconds "$timeout")
 interval_s=$(to_seconds "$interval")
 
-# attempts = ceil(timeout / interval) + 1. The +1 is the immediate pre-sleep
-# check; a zero/negative interval collapses to a single attempt.
-attempts=$(awk -v t="$timeout_s" -v i="$interval_s" 'BEGIN {
-  if (i <= 0) { print 1; exit }
-  n = t / i
-  print (n == int(n) ? n : int(n) + 1) + 1
-}')
+# Fractional epoch seconds. The budget is a WALL CLOCK, so a slow condition
+# (say `wezterm cli list` at ~1s/call against a dead server) cannot balloon a
+# "8s" wait into 89s. Prefer a sub-second clock; on a date(1) that treats %N as
+# a literal (BSD) fall back to whole seconds — coarser, but still a real bound.
+now() {
+  _t=$(date +%s.%N 2>/dev/null)
+  case "$_t" in
+    *[!0-9.]* | '') date +%s ;;
+    *) printf '%s\n' "$_t" ;;
+  esac
+}
 
-n=0
-while :; do
-  if "$@"; then
-    exit 0
-  fi
-  n=$((n + 1))
-  [ "$n" -ge "$attempts" ] && break
-  sleep "$interval_s"
-done
+# A non-positive interval is not a polling cadence: check the condition exactly
+# once (the degenerate case the old attempt count also collapsed to).
+if awk -v i="$interval_s" 'BEGIN { exit !(i <= 0) }'; then
+  "$@" && exit 0
+else
+  start=$(now)
+  while :; do
+    if "$@"; then
+      exit 0
+    fi
+    # Consult the clock BEFORE the next nap, so a condition that itself already
+    # overran the budget does not add one more interval on the way out.
+    if awk -v s="$start" -v n="$(now)" -v t="$timeout_s" \
+      'BEGIN { exit !((n - s) >= t) }'; then
+      break
+    fi
+    sleep "$interval_s"
+  done
+fi
 
 [ "$quiet" -eq 1 ] || printf '%s: timed out after %s waiting for: %s\n' "$prog" "$timeout" "$*" >&2
 exit 1
