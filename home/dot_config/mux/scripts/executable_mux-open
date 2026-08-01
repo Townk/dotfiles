@@ -78,9 +78,11 @@ case "$uri" in
     ;;
 esac
 
-# file://[localhost]/path -> /path, then percent-decode (+ is a space in URLs).
+# file://[localhost]/path -> /path, then percent-decode. NB: a file:// URL is
+# an RFC 3986 path, not a form-urlencoded query string — a literal `+` is a
+# plus, NOT a space (the +→space rule broke note+draft.md). Percent-decode only.
 urldecode() {
-  local s="${1//+/ }"
+  local s="$1"
   # `[%]`, NOT a bare `%`: as a substitution PATTERN a bare percent matches an
   # empty position at the end of the string, so the replacement is appended —
   # here that pinned a stray `\x` (an incomplete escape, i.e. a NUL byte) onto

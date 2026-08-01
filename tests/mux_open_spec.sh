@@ -129,4 +129,27 @@ EOS
       The status should be success
     End
   End
+
+  # A file:// URL is an RFC 3986 path, NOT a form-urlencoded query string: a
+  # literal `+` is a plus, never a space. Decoding it to a space made the path
+  # nonexistent, so the click silently no-op'd (`[ -e ] || exit 0`).
+  Describe 'path decoding'
+    It 'keeps a literal + in a path rather than turning it into a space'
+      export MUX_BACKEND=tmux MUX_SESSION=Main
+      mkdir -p "$MO_TMP/note+draft"
+      When run zsh "$MO_SCRIPT" 0 "file://$MO_TMP/note+draft"
+      The result of function tabs should include "$MO_TMP/note+draft"
+      The status should be success
+    End
+
+    # …while true percent-encoding still decodes: %2B is the encoding of a
+    # literal + and must survive as one (guards that the fix kept the decode).
+    It 'still percent-decodes %2B to a literal +'
+      export MUX_BACKEND=tmux MUX_SESSION=Main
+      mkdir -p "$MO_TMP/a+b"
+      When run zsh "$MO_SCRIPT" 0 "file://$MO_TMP/a%2Bb"
+      The result of function tabs should include "$MO_TMP/a+b"
+      The status should be success
+    End
+  End
 End
