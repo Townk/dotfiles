@@ -6,14 +6,14 @@
 # completion environment.
 
 __mux-random-session-name-sessions() {
-  local lib="${MUX_LIB:-$HOME/.local/lib/mux.zsh}"
+  local lib="${MUX_LIB:-$HOME/.local/lib}"
   local output
   local -a sessions
 
   [[ -r "$lib" ]] || return 0
   output="$(
     MUX_BACKEND="${MUX_BACKEND:-}" MUX_LIB="$lib" zsh -f -c '
-      source "$MUX_LIB"
+      source "$MUX_LIB/mux.zsh"
       if [[ "$(mux::backend)" == none ]]; then
         export MUX_BACKEND="$(mux::default_backend)"
       fi

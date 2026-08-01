@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-source "${MUX_LIB:-$HOME/.local/lib/mux.zsh}"
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
 
 usage() {
   cat <<'EOF'

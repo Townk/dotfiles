@@ -5,7 +5,7 @@ Describe 'mux-random-session-name'
     MSN_TMP=$(mktemp -d)
     MSN_SCRIPT="$PWD/home/dot_local/bin/executable_mux-random-session-name"
     MSN_COMPLETION="$PWD/home/dot_local/share/zsh/site-functions/_mux-random-session-name"
-    MSN_LIB="$PWD/home/dot_local/lib/mux.zsh"
+    MSN_LIB="$PWD/home/dot_local/lib"
     export MSN_LOG="$MSN_TMP/mux.log"
     export STUB_SESSIONS=old-name
     : >"$MSN_LOG"
@@ -135,6 +135,21 @@ ZSH
     The output should match pattern "*-*"
     The output should not equal "old-name"
     The contents of file "$MSN_LOG" should equal ""
+  End
+
+  # MUX_LIB is a DIRECTORY everywhere else (mux-rename's Alt+r roll,
+  # mux-new-session export it as the lib dir). Treating it as a file here made
+  # an inherited directory-shaped MUX_LIB source nothing, so the first mux::*
+  # call died with `command not found: mux::backend`.
+  It 'loads the library when MUX_LIB is the directory it is elsewhere'
+    generate_dir_lib() {
+      env MUX_LIB="$PWD/home/dot_local/lib" MUX_BACKEND=tmux \
+        MUX_TMUX_BIN="$MSN_TMP/tmux" zsh "$MSN_SCRIPT"
+    }
+    When call generate_dir_lib
+    The status should be success
+    The output should match pattern "*-*"
+    The error should not include "command not found"
   End
 
   It 'renames the current tmux session only with explicit mutation'
