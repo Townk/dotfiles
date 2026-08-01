@@ -18,6 +18,27 @@
 emulate -L zsh
 set -u
 
+# _tqv_humanize_size BYTES -> a human size on stdout (empty for a non-number).
+# >=1 MiB is rendered in tenths of a MiB ("1.0MB", "2.1MB"); below that, KiB
+# rounded up. The tenths are computed directly as bytes * 10 / 1MiB, so an exact
+# 1 MiB reads "1.0MB" — the old `bytes / 104858` split reported exact-MiB files
+# a tenth low and rendered 1 MiB as ".9MB".
+_tqv_humanize_size() {
+  local _bytes="$1" _hsize
+  if [[ "$_bytes" == <-> ]] && (( _bytes >= 1048576 )); then
+    _hsize="$(( _bytes * 10 / 1048576 ))"
+    printf '%s.%sMB\n' "${_hsize%?}" "${_hsize: -1}"
+  elif [[ "$_bytes" == <-> ]]; then
+    printf '%sKB\n' "$(( (_bytes + 1023) / 1024 ))"
+  fi
+}
+
+# Sourcing seam: the spec loads this file with TERM_QUICK_VIEW_LIB set to pull
+# in the helpers above without running the viewer. `return` works only in a
+# sourced file, so the guard variable (set by the test alone) keeps normal
+# execution from ever reaching it.
+[[ -n "${TERM_QUICK_VIEW_LIB:-}" ]] && return 0
+
 TERM_QUICK_VIEW_NAME="${TERM_QUICK_VIEW_NAME:-Quick View}"
 
 _mode=view
@@ -266,13 +287,7 @@ _rst="${C_RES:-$'\e[0m'}"
 
 # file size, humanised
 _bytes=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || wc -c <"$file" 2>/dev/null | tr -d ' ')
-if [[ "$_bytes" == <-> ]] && (( _bytes >= 1048576 )); then
-  _hsize="$(( _bytes / 104858 ))"; _hsize="${_hsize%?}.${_hsize: -1}MB"
-elif [[ "$_bytes" == <-> ]]; then
-  _hsize="$(( (_bytes + 1023) / 1024 ))KB"
-else
-  _hsize=""
-fi
+_hsize="$(_tqv_humanize_size "$_bytes")"
 # pixel dimensions, when a tool can tell us
 # %d, not the raw field: sips reports PDF page size in POINTS with three
 # decimals ("612.000x792.000"), which reads like noise in a header.
