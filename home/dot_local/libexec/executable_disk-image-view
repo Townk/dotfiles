@@ -390,12 +390,22 @@ class CardRenderer:
 
 
 def run_imageinfo(path: Path) -> dict[str, Any]:
-    proc = subprocess.run(
-        ["/usr/bin/hdiutil", "imageinfo", "-plist", str(path)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    # An encrypted image makes `hdiutil imageinfo` prompt for a passphrase, but a
+    # preview is speculative — nobody is there to answer it, and inheriting a
+    # terminal's stdin would block the render forever. Closed stdin turns the
+    # prompt into a prompt failure; the timeout covers stalls on damaged or
+    # network-backed media.
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/hdiutil", "imageinfo", "-plist", str(path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("hdiutil imageinfo timed out") from None
     if proc.returncode != 0:
         err = proc.stderr.decode("utf-8", "replace").strip() or "hdiutil imageinfo failed"
         raise RuntimeError(err)

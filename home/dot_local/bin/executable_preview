@@ -404,7 +404,7 @@ function preview-font() {
 function font-sample-text() {
   command -v fc-query >/dev/null 2>&1 || return 1
   local -a ranges bounds
-  ranges=($(fc-query --format '%{charset}' "$1" 2>/dev/null))
+  ranges=($(raster::bounded 10 fc-query --format '%{charset}' "$1" 2>/dev/null))
   ((${#ranges})) || return 1
 
   # NB: every local is declared once up here — `local x` on an

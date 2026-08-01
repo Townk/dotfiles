@@ -13,6 +13,51 @@ local M = {}
 
 local SCRIPT = os.getenv 'HOME' .. '/.local/bin/preview'
 
+-- Outer wall-clock cap on the script, in seconds. The converters inside it
+-- carry their own per-tool budgets (raster::bounded), so this only fires for a
+-- handler that has none — a new one, or a text path nobody thought to bound.
+-- It earns its keep because yazi WAITS on this child: an unbounded stall leaves
+-- a peek or preload task that never completes, and yazi then refuses to quit
+-- without being told to kill it. Overrunning surfaces as "preview exited 124"
+-- in the pane, which is visible and recoverable rather than a wedge. Set above
+-- the largest inner budget so the specific tool reports first.
+local BUDGET = 30
+
+-- Absolute path to a coreutils timeout(1), probed once per session (same shape
+-- as use_tty_sixel below). false = none installed, so the script runs
+-- unbounded rather than not at all.
+local timeout_bin -- nil = undecided
+local function find_timeout()
+  if timeout_bin == nil then
+    timeout_bin = false
+    local out = Command('zsh')
+      :arg({ '-fc', 'command -v timeout || command -v gtimeout' })
+      :stdout(Command.PIPED)
+      :stderr(Command.NULL)
+      :output()
+    if out and out.status.success then
+      local path = out.stdout:match '^%s*(.-)%s*$'
+      if path ~= '' then
+        timeout_bin = path
+      end
+    end
+  end
+  return timeout_bin
+end
+
+-- The preview script invoked with `args`, under timeout(1) when one was found.
+local function script_cmd(args)
+  local tmo = find_timeout()
+  if not tmo then
+    return Command(SCRIPT):arg(args)
+  end
+  local wrapped = { tostring(BUDGET), SCRIPT }
+  for _, a in ipairs(args) do
+    wrapped[#wrapped + 1] = a
+  end
+  return Command(tmo):arg(wrapped)
+end
+
 local function fail(job, s)
   ya.preview_widget(job, ui.Text.parse(s):area(job.area):wrap(ui.Wrap.YES))
 end
@@ -75,17 +120,16 @@ local function draw_tty_sixel(raster, rect)
 end
 
 local function peek_impl(job)
-  local output, err = Command(SCRIPT)
-    :arg({
-      '--pixels',
-      '--skip',
-      tostring(job.skip),
-      '-W',
-      tostring(job.area.w),
-      '-H',
-      tostring(job.area.h),
-      tostring(job.file.path),
-    })
+  local output, err = script_cmd({
+    '--pixels',
+    '--skip',
+    tostring(job.skip),
+    '-W',
+    tostring(job.area.w),
+    '-H',
+    tostring(job.area.h),
+    tostring(job.file.path),
+  })
     :stdout(Command.PIPED)
     :stderr(Command.PIPED)
     :output()
@@ -179,8 +223,7 @@ end
 -- Preloader: warm the raster cache while the file is still just hovered
 -- nearby (replaces the mediainfo plugin's preloader role).
 function M:preload(job)
-  local output = Command(SCRIPT)
-    :arg({ '--pixels', '--skip', '0', tostring(job.file.path) })
+  local output = script_cmd({ '--pixels', '--skip', '0', tostring(job.file.path) })
     :stdout(Command.NULL)
     :stderr(Command.NULL)
     :output()

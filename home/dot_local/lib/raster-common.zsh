@@ -71,13 +71,37 @@ raster::prune() {
 
 # --- converters (each writes $RASTER_OUT) -----------------------------------
 
+# raster::bounded <secs> <cmd> [args…] — run a converter under a wall-clock cap.
+#
+# Every tool below decodes a file chosen by whoever is browsing, and a preview
+# is speculative: nobody asked for this render, so nothing may block on it.
+# Several of these stall instead of failing — Quick Look's generators sit
+# forever on a file whose extension lies about its contents, ffmpeg spins on a
+# truncated stream, ghostscript behind magick can chew on a malformed page
+# indefinitely. Unbounded, one such file strands whatever asked for the
+# preview: a yazi preload task that then refuses to let yazi quit, or an fzf
+# pane that never repaints. timeout(1) signals the whole process group, so a
+# stalled tool takes its own children down with it rather than leaving
+# stragglers. Budgets are per-tool: a full render gets 20s, a cheap probe 10s.
+raster::bounded() {
+  local secs=$1
+  shift
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+  elif command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+
 # Every format that reaches raster::office is a CONTAINER: zip (openxml,
 # OpenDocument, iWork bundles) or OLE compound file (legacy .doc/.xls/.ppt).
 # Callers dispatch on extension, which lies — a plain-text API key named
 # `foo.key` arrives here claiming to be Keynote — and Quick Look's document
-# generators BLOCK FOREVER on such a file (0% CPU, no error, no exit), which
-# strands the yazi preload task that spawned them and makes yazi refuse to
-# quit. Checking the magic bytes costs one `od` and rules that out.
+# generators BLOCK FOREVER on such a file (0% CPU, no error, no exit).
+# Checking the magic bytes costs one `od` and turns an impostor away before
+# Quick Look is ever spawned.
 raster::office_container() {
   local magic
   magic=$(od -An -tx1 -N4 -- "$1" 2>/dev/null | tr -d ' \n') || return 1
@@ -89,18 +113,10 @@ raster::office() {
   raster::office_container "$1" || return 1
   local tmpd
   tmpd=$(mktemp -d) || return 1
-  # A genuine container can still stall the generator (corrupt innards,
-  # network-backed cloud storage), and qlmanage has no timeout of its own, so
-  # cap it — same guard notify() puts on `hs` in common.zsh. Preview panes are
-  # interactive; 10s is already far past useful.
-  local -a tmo=()
-  if command -v gtimeout >/dev/null 2>&1; then
-    tmo=(gtimeout 10)
-  elif command -v timeout >/dev/null 2>&1; then
-    tmo=(timeout 10)
-  fi
   {
-    "${tmo[@]}" qlmanage -t -s 1600 -o "$tmpd" "$1" >/dev/null 2>&1
+    # A genuine container can still stall the generator, on corrupt innards or
+    # network-backed cloud storage.
+    raster::bounded 10 qlmanage -t -s 1600 -o "$tmpd" "$1" >/dev/null 2>&1
     local -a made=("$tmpd"/*.png(N))
     ((${#made})) || return 1
     mv -f "${made[1]}" "$RASTER_OUT"
@@ -113,29 +129,34 @@ raster::office() {
 # the ones saved without it.
 raster::iwork() {
   if command -v magick >/dev/null 2>&1; then
-    unzip -p "$1" preview.jpg 2>/dev/null | magick - "$RASTER_OUT" 2>/dev/null
+    raster::bounded 10 unzip -p "$1" preview.jpg 2>/dev/null |
+      raster::bounded 20 magick - "$RASTER_OUT" 2>/dev/null
     [[ -s $RASTER_OUT ]] && return 0
     rm -f "$RASTER_OUT"
   fi
   raster::office "$1"
 }
 
-raster::video_frame() { ffmpegthumbnailer -i "$1" -o "$RASTER_OUT" -s 0 -t "${2:-10}%" -q 8; }
+raster::video_frame() {
+  raster::bounded 20 ffmpegthumbnailer -i "$1" -o "$RASTER_OUT" -s 0 -t "${2:-10}%" -q 8
+}
 
 raster::audio_cover() {
   command -v ffmpeg >/dev/null 2>&1 || return 1
-  ffmpeg -y -v error -i "$1" -an -frames:v 1 -update 1 "$RASTER_OUT"
+  raster::bounded 20 ffmpeg -y -v error -i "$1" -an -frames:v 1 -update 1 "$RASTER_OUT"
 }
 
 # EPS needs ghostscript behind magick; without it the render fails and the
 # caller falls through to metadata.
-raster::adobe() { magick "$1[0]" -flatten -background white -alpha remove "$RASTER_OUT"; }
+raster::adobe() {
+  raster::bounded 20 magick "$1[0]" -flatten -background white -alpha remove "$RASTER_OUT"
+}
 
 # raster::pdf_page_no <pdf> [skip] — 1-based page, clamped to the page count
 # so seeking past the end sticks on the last page.
 raster::pdf_page_no() {
   local pages page
-  pages=$(pdfinfo "$1" 2>/dev/null | awk '/^Pages:/{print $2}')
+  pages=$(raster::bounded 10 pdfinfo "$1" 2>/dev/null | awk '/^Pages:/{print $2}')
   [[ -n $pages ]] || pages=1
   page=$(( ${2:-0} + 1 ))
   ((page > pages)) && page=$pages
@@ -144,7 +165,8 @@ raster::pdf_page_no() {
 
 raster::pdf_page() {
   local prefix="${RASTER_OUT%.png}"
-  pdftocairo -png -f "$2" -l "$2" -singlefile -scale-to 1600 "$1" "$prefix" || return 1
+  raster::bounded 20 pdftocairo -png -f "$2" -l "$2" -singlefile -scale-to 1600 \
+    "$1" "$prefix" || return 1
   # Extreme-portrait pages (continuous-scroll docs) fit-to-1600 as an
   # unreadable sliver — re-render width-bound and keep the top slice.
   command -v magick >/dev/null 2>&1 || return 0
@@ -152,8 +174,8 @@ raster::pdf_page() {
   dims=$(magick identify -format '%w %h' "$RASTER_OUT" 2>/dev/null) || return 0
   w_px=${dims%% *}; h_px=${dims##* }
   if ((h_px > 0 && w_px > 0 && h_px > w_px * 5 / 2)); then
-    pdftocairo -png -f "$2" -l "$2" -singlefile -scale-to-x 1600 -scale-to-y -1 \
-      "$1" "$prefix" &&
+    raster::bounded 20 pdftocairo -png -f "$2" -l "$2" -singlefile \
+      -scale-to-x 1600 -scale-to-y -1 "$1" "$prefix" &&
       magick "$RASTER_OUT" -gravity north -crop 1600x2000+0+0 +repage \
         "$RASTER_OUT" 2>/dev/null
   fi
@@ -163,15 +185,18 @@ raster::pdf_page() {
 # Formats chafa cannot decode directly (icns, heic, svg, raw).
 raster::convert() {
   if [[ ${1:l} == *.svg ]] && command -v rsvg-convert >/dev/null 2>&1; then
-    rsvg-convert --width 1024 --keep-aspect-ratio -o "$RASTER_OUT" "$1" && return 0
+    raster::bounded 20 rsvg-convert --width 1024 --keep-aspect-ratio \
+      -o "$RASTER_OUT" "$1" && return 0
   fi
   if command -v magick >/dev/null 2>&1; then
-    magick "$1[0]" -flatten "$RASTER_OUT" 2>/dev/null && [[ -s $RASTER_OUT ]] && return 0
+    raster::bounded 20 magick "$1[0]" -flatten "$RASTER_OUT" 2>/dev/null &&
+      [[ -s $RASTER_OUT ]] && return 0
   fi
   # sips: the macOS-native decoder for Apple-side formats this magick build
   # has no delegate for.
   command -v sips >/dev/null 2>&1 || return 1
-  sips -s format png "$1" --out "$RASTER_OUT" >/dev/null 2>&1 && [[ -s $RASTER_OUT ]]
+  raster::bounded 20 sips -s format png "$1" --out "$RASTER_OUT" >/dev/null 2>&1 &&
+    [[ -s $RASTER_OUT ]]
 }
 
 raster::font_sheet() {
@@ -197,7 +222,7 @@ raster::font_sheet() {
       for g in "${glyphs[@]}"; do
         [[ -n $g ]] || continue
         tile=$(printf '%s/%02d.png' "$tmpd" "$i")
-        hb-view --font-file="$1" --font-size=96 --margin=4 \
+        raster::bounded 10 hb-view --font-file="$1" --font-size=96 --margin=4 \
           --output-file="$tile" "$g" 2>/dev/null || rm -f "$tile"
         ((i++))
       done
@@ -244,23 +269,24 @@ raster::font_sheet() {
   ((${#row})) && rows+=("${(pj.$sep.)row}")
 
   if command -v hb-view >/dev/null 2>&1 && ((${#rows})); then
-    hb-view --font-file="$1" --font-size=80 --margin=24 --line-space=40 \
-      --output-file="$RASTER_OUT" "${(pj:\n:)rows}" 2>/dev/null && return 0
+    raster::bounded 20 hb-view --font-file="$1" --font-size=80 --margin=24 \
+      --line-space=40 --output-file="$RASTER_OUT" "${(pj:\n:)rows}" 2>/dev/null &&
+      return 0
   fi
   if command -v fontimage >/dev/null 2>&1; then
     if ((${#rows})); then
       local -a targs=()
       for g in "${rows[@]}"; do targs+=(--text "$g"); done
-      fontimage --width 1600 --pixelsize 80 "${targs[@]}" \
+      raster::bounded 20 fontimage --width 1600 --pixelsize 80 "${targs[@]}" \
         -o "$RASTER_OUT" "$1" 2>/dev/null && return 0
     fi
-    fontimage --width 1600 --pixelsize 80 -o "$RASTER_OUT" "$1" \
+    raster::bounded 20 fontimage --width 1600 --pixelsize 80 -o "$RASTER_OUT" "$1" \
       2>/dev/null && return 0
   fi
   command -v magick >/dev/null 2>&1 || return 1
   local flat="${(j: :)glyphs}"
-  magick -size 1600x -background black -fill white -font "$1" -pointsize 80 \
-    label:"${flat:-AaBbCcDdEe FfGgHhIiJj 0123456789}" "$RASTER_OUT"
+  raster::bounded 20 magick -size 1600x -background black -fill white -font "$1" \
+    -pointsize 80 label:"${flat:-AaBbCcDdEe FfGgHhIiJj 0123456789}" "$RASTER_OUT"
 }
 
 raster::video_pct() {
