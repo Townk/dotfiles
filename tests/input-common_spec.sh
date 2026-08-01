@@ -258,6 +258,32 @@ beta"
     End
   End
 
+  Describe 'value-flag arity guard (MED-5)'
+    # A value-taking flag given with no value must NOT spin forever. The buggy
+    # code did `shift 2` with one positional left, which is a hard error in zsh
+    # (shifts nothing) so `while (($#))` never terminates. Guard with a real
+    # timeout so a regression cannot hang the whole suite.
+    src="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/input-common.zsh"
+
+    # stderr is discarded: a regressed (spinning) parser floods it with zsh
+    # `shift count must be <= $#` errors, which would otherwise fill the
+    # buffer for the whole timeout window.
+    It 'does not hang when --title is given with no value'
+      export AII_OUT="ok"
+      When run timeout 5 zsh -f -c 'source "'"$src"'"; input::line "x" --title 2>/dev/null'
+      The status should be success
+      The output should equal "ok"
+    End
+
+    It 'still parses a well-formed --title value'
+      export AII_OUT="ok"
+      When run timeout 5 zsh -f -c 'source "'"$src"'"; input::line "x" --title foo 2>/dev/null'
+      The status should be success
+      The output should equal "ok"
+      The contents of file "$TEST_TMP/aii.args" should include "--title foo"
+    End
+  End
+
   Describe 'input::form'
     make_spec() {
       # Minimal 2-field spec: name<US>line<US>Your name<RS>subscribe<US>confirm<US>Subscribe?

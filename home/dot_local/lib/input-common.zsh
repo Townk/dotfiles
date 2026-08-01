@@ -34,17 +34,17 @@ input::confirm() {
   local danger=0 warning=0 title="" padding="" inset="" measure=0 width=""
   while (($#)); do
     case "$1" in
-      --default)     default="${2:-yes}"; shift 2 ;;
-      --affirmative) affirmative="${2:-Yes}"; shift 2 ;;
-      --negative)    negative="${2:-No}"; shift 2 ;;
+      --default)     default="${2:-yes}"; shift; (($#)) && shift ;;
+      --affirmative) affirmative="${2:-Yes}"; shift; (($#)) && shift ;;
+      --negative)    negative="${2:-No}"; shift; (($#)) && shift ;;
       --danger)      danger=1; shift ;;
       --warning)     warning=1; shift ;;
-      --title)       title="${2-}"; shift 2 ;;
-      --padding)     padding="${2-}"; shift 2 ;;
-      --inset)       inset="${2-}"; shift 2 ;;
+      --title)       title="${2-}"; shift; (($#)) && shift ;;
+      --padding)     padding="${2-}"; shift; (($#)) && shift ;;
+      --inset)       inset="${2-}"; shift; (($#)) && shift ;;
       --measure)     measure=1; shift ;;
-      --width)       width="${2-}"; shift 2 ;;
-      --icon|--margin|--header) shift 2 ;;
+      --width)       width="${2-}"; shift; (($#)) && shift ;;
+      --icon|--margin|--header) shift; (($#)) && shift ;;
       --) shift; break ;;
       -*) shift ;;
       *)  [[ -z "$prompt" ]] && prompt="$1"; shift ;;
@@ -87,15 +87,15 @@ input::line() {
   local prompt="" placeholder="" value="" width="" title="" padding="" inset="" measure=0
   while (($#)); do
     case "$1" in
-      --placeholder) placeholder="${2-}"; shift 2 ;;
-      --value)       value="${2-}"; shift 2 ;;
-      --width)       width="${2-}"; shift 2 ;;
-      --title)       title="${2-}"; shift 2 ;;
-      --padding)     padding="${2-}"; shift 2 ;;
-      --inset)       inset="${2-}"; shift 2 ;;
-      --header)      prompt="${2-}"; shift 2 ;;
+      --placeholder) placeholder="${2-}"; shift; (($#)) && shift ;;
+      --value)       value="${2-}"; shift; (($#)) && shift ;;
+      --width)       width="${2-}"; shift; (($#)) && shift ;;
+      --title)       title="${2-}"; shift; (($#)) && shift ;;
+      --padding)     padding="${2-}"; shift; (($#)) && shift ;;
+      --inset)       inset="${2-}"; shift; (($#)) && shift ;;
+      --header)      prompt="${2-}"; shift; (($#)) && shift ;;
       --measure)     measure=1; shift ;;
-      --icon|--margin) shift 2 ;;
+      --icon|--margin) shift; (($#)) && shift ;;
       --) shift; break ;;
       -*) shift ;;
       *)  [[ -z "$prompt" ]] && prompt="$1"; shift ;;
@@ -133,14 +133,14 @@ input::text() {
   local prompt="" value="" height="" title="" width="" icon="" measure=0
   while (($#)); do
     case "$1" in
-      --value)   value="${2-}"; shift 2 ;;
-      --height)  height="${2-}"; shift 2 ;;
-      --title)   title="${2-}"; shift 2 ;;
-      --header)  prompt="${2-}"; shift 2 ;;
-      --width)   width="${2-}"; shift 2 ;;
-      --icon)    icon="${2-}"; shift 2 ;;
+      --value)   value="${2-}"; shift; (($#)) && shift ;;
+      --height)  height="${2-}"; shift; (($#)) && shift ;;
+      --title)   title="${2-}"; shift; (($#)) && shift ;;
+      --header)  prompt="${2-}"; shift; (($#)) && shift ;;
+      --width)   width="${2-}"; shift; (($#)) && shift ;;
+      --icon)    icon="${2-}"; shift; (($#)) && shift ;;
       --measure) measure=1; shift ;;
-      --margin|--padding) shift 2 ;;
+      --margin|--padding) shift; (($#)) && shift ;;
       --) shift; break ;;
       -*) shift ;;
       *)  [[ -z "$prompt" ]] && prompt="$1"; shift ;;
@@ -182,12 +182,12 @@ input::choose() {
     case "$1" in
       --multi)        multi=1; shift ;;
       --multi=*)      multi=1; shift ;;
-      --other)        other="${2-}"; shift 2 ;;
-      --title)        title="${2-}"; shift 2 ;;
-      --header)       [[ -z "$question" ]] && question="${2-}"; shift 2 ;;
+      --other)        other="${2-}"; shift; (($#)) && shift ;;
+      --title)        title="${2-}"; shift; (($#)) && shift ;;
+      --header)       [[ -z "$question" ]] && question="${2-}"; shift; (($#)) && shift ;;
       --measure)      measure=1; shift ;;
-      --width)        width="${2-}"; shift 2 ;;
-      --icon|--margin|--padding) shift 2 ;;
+      --width)        width="${2-}"; shift; (($#)) && shift ;;
+      --icon|--margin|--padding) shift; (($#)) && shift ;;
       --) shift; choices+=("$@"); break ;;
       -*) shift ;;
       *)  if (( ! _got_prompt )); then question="$1"; _got_prompt=1; else choices+=("$1"); fi; shift ;;
@@ -232,10 +232,10 @@ input::form() {
   local title="" spec_file="" _tmp_spec="" measure=0 width=""
   while (($#)); do
     case "$1" in
-      --title)   title="${2-}"; shift 2 ;;
-      --spec)    spec_file="${2-}"; shift 2 ;;
+      --title)   title="${2-}"; shift; (($#)) && shift ;;
+      --spec)    spec_file="${2-}"; shift; (($#)) && shift ;;
       --measure) measure=1; shift ;;
-      --width)   width="${2-}"; shift 2 ;;
+      --width)   width="${2-}"; shift; (($#)) && shift ;;
       --) shift; break ;;
       -*) shift ;;
       *) shift ;;
