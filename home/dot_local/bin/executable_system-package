@@ -170,11 +170,16 @@ sync_one() {
 # Run sync for every ecosystem, with a banner before each one. Banners stay
 # in the merged-output flow because sync emits log-style output, not a table.
 sync_all() {
-  local eco
+  local eco rc=0
   for eco in "${ECOSYSTEMS[@]}"; do
     log_info "${C_BWH}── $eco ──${C_RES}"
-    sync_one "$eco" "$@"
+    # Isolate each worker: one ecosystem's failure (a 404'd cask, a missing
+    # TOOL before mise provisions it) must not abort the ecosystems that
+    # follow. Record the failure and press on; propagate an overall non-zero
+    # so callers (system-update) still see that something went wrong.
+    sync_one "$eco" "$@" || { rc=1; log_warn "$eco sync failed"; }
   done
+  return $rc
 }
 
 main() {
