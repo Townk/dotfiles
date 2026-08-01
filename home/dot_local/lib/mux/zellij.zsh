@@ -241,10 +241,16 @@ _mux_zj_exec_attach() {
   local name="$1" bin
   bin="$(_mux_zj_bin)" || return 1
   _mux_zj_ensure_plugins
-  exec "$bin" attach "$name" || {
-    "$bin" delete-session "$name" -f &>/dev/null
-    exec "$bin" --session "$name" --new-session-with-layout default
-  }
+  # Run attach as a CHILD, not via `exec`: a clean attach hands the terminal
+  # over and `exit 0` ends this shell, but a FAILED attach (Main killed or
+  # re-grabbed between the state probe and here) must fall through to the
+  # self-heal. `exec attach || { ... }` could never do that — exec replaces the
+  # process image, so the `||` recovery ran only when the binary was missing,
+  # which _mux_zj_bin already ruled out. A failed attach then took the login
+  # shell down with it (C-1).
+  "$bin" attach "$name" && exit 0
+  "$bin" delete-session "$name" -f &>/dev/null
+  exec "$bin" --session "$name" --new-session-with-layout default
 }
 
 _mux_zj_exec_new() {
