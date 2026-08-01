@@ -1,16 +1,16 @@
 {{- /* human slot slot-1c8e4d: cached after first materialization; set CHEZMOI_REFRESH_SECRETS=1 to force 1Password resolution. */ -}}
 {{- $target := joinPath .chezmoi.homeDir ".config" "zsh" "secrets.d" "slot-1c8e4d.sh" -}}
-{{- $cacheHeader := "# chezmoi: op-cache-v1 dd9b6b7ad7c1fa701e68eff4b6be8c85f6ec28275fb94feb54c49e7de329dbee" -}}
+{{- $cacheHeader := "# chezmoi: op-cache-v1 c2002486cf90ebbe44409b2ccf205c37c306ba27621b53b8c287b09cd1a5a2db" -}}
 {{- $cachedHeader := "" -}}
 {{- if stat $target -}}{{ $cachedHeader = output "sh" "-c" (printf "sed -n '1p' %q" $target) | trim }}{{- end -}}
 {{- if and (ne (env "CHEZMOI_REFRESH_SECRETS") "1") (eq $cachedHeader $cacheHeader) -}}
 {{ output "cat" $target -}}
 {{- else -}}
-# chezmoi: op-cache-v1 dd9b6b7ad7c1fa701e68eff4b6be8c85f6ec28275fb94feb54c49e7de329dbee
-export MISE_GITHUB_TOKEN="{{ output "op" "read" "--no-newline" "op://Tokens/MISE_GITHUB_TOKEN/1c8e4d" }}"
-export HOMEBREW_GITHUB_API_TOKEN="{{ output "op" "read" "--no-newline" "op://Tokens/HOMEBREW_GITHUB_API_TOKEN/1c8e4d" }}"
-export OPENCODE_GO_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/OPENCODE_GO_API_KEY/1c8e4d" }}"
-export OPENROUTER_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/OPENROUTER_API_KEY/1c8e4d" }}"
-export CONTEXT7_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/CONTEXT7_API_KEY/1c8e4d" }}"
-export BACKUP_REPO_PASSPHRASE="{{ output "op" "read" "--no-newline" "op://Tokens/BACKUP_REPO_PASSPHRASE/1c8e4d" }}"
+# chezmoi: op-cache-v1 c2002486cf90ebbe44409b2ccf205c37c306ba27621b53b8c287b09cd1a5a2db
+export MISE_GITHUB_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/MISE_GITHUB_TOKEN/1c8e4d" | replace "'" "'\"'\"'" }}'
+export HOMEBREW_GITHUB_API_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/HOMEBREW_GITHUB_API_TOKEN/1c8e4d" | replace "'" "'\"'\"'" }}'
+export OPENCODE_GO_API_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/OPENCODE_GO_API_KEY/1c8e4d" | replace "'" "'\"'\"'" }}'
+export OPENROUTER_API_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/OPENROUTER_API_KEY/1c8e4d" | replace "'" "'\"'\"'" }}'
+export CONTEXT7_API_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/CONTEXT7_API_KEY/1c8e4d" | replace "'" "'\"'\"'" }}'
+export BACKUP_REPO_PASSPHRASE='{{ output "op" "read" "--no-newline" "op://Tokens/BACKUP_REPO_PASSPHRASE/1c8e4d" | replace "'" "'\"'\"'" }}'
 {{ end -}}

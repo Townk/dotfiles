@@ -1,15 +1,15 @@
 {{- /* human slot slot-0c90ee: cached after first materialization; set CHEZMOI_REFRESH_SECRETS=1 to force 1Password resolution. */ -}}
 {{- $target := joinPath .chezmoi.homeDir ".config" "zsh" "secrets.d" "slot-0c90ee.sh" -}}
-{{- $cacheHeader := "# chezmoi: op-cache-v1 2cfd1fb7a9ff78d81b097aa6b8e214a4f7ab2dfb30a1d22342a476b31252b50b" -}}
+{{- $cacheHeader := "# chezmoi: op-cache-v1 7640109b59139111ec232dd8f5950d0f9f3dee8839cb261e4903d8ae2345eead" -}}
 {{- $cachedHeader := "" -}}
 {{- if stat $target -}}{{ $cachedHeader = output "sh" "-c" (printf "sed -n '1p' %q" $target) | trim }}{{- end -}}
 {{- if and (ne (env "CHEZMOI_REFRESH_SECRETS") "1") (eq $cachedHeader $cacheHeader) -}}
 {{ output "cat" $target -}}
 {{- else -}}
-# chezmoi: op-cache-v1 2cfd1fb7a9ff78d81b097aa6b8e214a4f7ab2dfb30a1d22342a476b31252b50b
-export MISE_GITHUB_TOKEN="{{ output "op" "read" "--no-newline" "op://Tokens/MISE_GITHUB_TOKEN/0c90ee" }}"
-export HOMEBREW_GITHUB_API_TOKEN="{{ output "op" "read" "--no-newline" "op://Tokens/HOMEBREW_GITHUB_API_TOKEN/0c90ee" }}"
-export CONTEXT7_API_KEY="{{ output "op" "read" "--no-newline" "op://Tokens/CONTEXT7_API_KEY/0c90ee" }}"
-export BACKUP_REPO_PASSPHRASE="{{ output "op" "read" "--no-newline" "op://Tokens/BACKUP_REPO_PASSPHRASE/0c90ee" }}"
-export ATLASSIAN_API_TOKEN="{{ output "op" "read" "--no-newline" "op://Tokens/ATLASSIAN_API_TOKEN/0c90ee" }}"
+# chezmoi: op-cache-v1 7640109b59139111ec232dd8f5950d0f9f3dee8839cb261e4903d8ae2345eead
+export MISE_GITHUB_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/MISE_GITHUB_TOKEN/0c90ee" | replace "'" "'\"'\"'" }}'
+export HOMEBREW_GITHUB_API_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/HOMEBREW_GITHUB_API_TOKEN/0c90ee" | replace "'" "'\"'\"'" }}'
+export CONTEXT7_API_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/CONTEXT7_API_KEY/0c90ee" | replace "'" "'\"'\"'" }}'
+export BACKUP_REPO_PASSPHRASE='{{ output "op" "read" "--no-newline" "op://Tokens/BACKUP_REPO_PASSPHRASE/0c90ee" | replace "'" "'\"'\"'" }}'
+export ATLASSIAN_API_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/ATLASSIAN_API_TOKEN/0c90ee" | replace "'" "'\"'\"'" }}'
 {{ end -}}
