@@ -5,10 +5,17 @@ REGTYPE_FILE="$STATE_DIR/current-regtype"
 
 pb::init() { :; }
 
-# pb::get_text -- current clipboard text into $REPLY, the exact way op_get
-# has always read it (a bare pbpaste; empty on failure).
+# pb::get_text -- current clipboard text into $REPLY, byte-exact (pbpaste to a
+# temp file + clip::read_file -- NEVER a $(...) capture, which strips ALL
+# trailing newlines and truncates at the first embedded NUL). Mirrors the
+# linux backend's pb::get_text, which reaches for the same seam precisely for
+# byte-exactness. Empty $REPLY on failure / empty clipboard.
 pb::get_text() {
-  REPLY="$(pbpaste 2>/dev/null)" || REPLY=""
+  REPLY=""
+  local tmpf; tmpf=$(mktemp "${TMPDIR:-/tmp}/clipboard-bridge-get.XXXXXX") || return 0
+  pbpaste > "$tmpf" 2>/dev/null
+  [[ -s "$tmpf" ]] && clip::read_file "$tmpf"
+  rm -f "$tmpf"
 }
 
 # pb::legacy_dump -- the pre-Phase-5 bare-connect contract: dump pbpaste,
@@ -26,9 +33,8 @@ clip::hs_run() {
 }
 
 clip::op_get() {
-  local text
-  text="$(pbpaste 2>/dev/null)" || text=""
-  send_ok "$text"
+  pb::get_text
+  send_ok "$REPLY"
 }
 
 # See the header comment on op T: a hash of the clipboard text at set-time
