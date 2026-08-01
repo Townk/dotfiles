@@ -5,6 +5,22 @@
 # completions, compinit (with a compiled, cached dump), completion zstyles,
 # and the fzf shell integration wired to the `preview` script.
 
+# True when $1 is a compdump refreshed within the last 24h — the signal that
+# compinit may skip its slow insecure-directory audit (compinit -C). The glob
+# qualifier MUST be expanded here, in command position: zsh performs NO filename
+# generation inside [[ ... ]], so a qualifier written there never fires and `-n`
+# ends up testing a non-empty literal string — always true, even for a missing
+# dump. That pinned compinit to -C forever, skipping the staleness/insecure-dir
+# checks and never picking up newly added completions. (Nmh-24): N=nullglob so a
+# missing path yields no match; mh-24 = modified within the last 24h.
+_compdump_is_fresh() {
+  local -a _dump=("$1"(Nmh-24))
+  (( $#_dump ))
+}
+# Test seam: source only the helper above without paying for (or side-effecting
+# from) the full compinit + fzf + fzf-tab wiring below.
+[[ -n ${ZSH_COMPLETION_LIB_ONLY:-} ]] && return 0
+
 plugin_dir="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins"
 
 # Completion search path — set BEFORE compinit so the dump picks these up.
@@ -21,7 +37,7 @@ ZSH_COMPDUMP="${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump-${ZSH_VERSION}"
 [[ -d "${ZSH_COMPDUMP:h}" ]] || mkdir -p "${ZSH_COMPDUMP:h}"
 # Skip the insecure-directory audit (-C) when the dump was refreshed in the
 # last 24h; do the full check (which can rebuild the dump) otherwise.
-if [[ -n ${ZSH_COMPDUMP}(#qNmh-24) ]]; then
+if _compdump_is_fresh "$ZSH_COMPDUMP"; then
   compinit -C -d "$ZSH_COMPDUMP"
 else
   compinit -d "$ZSH_COMPDUMP"
