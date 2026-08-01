@@ -1024,6 +1024,76 @@ EOS
     End
   End
 
+  # MED-17: when the diff lens split fails, the session must be torn down the
+  # way every other failure path does — unmount the live FUSE mount FIRST,
+  # then rm -rf. A bare `rm -rf "$s"` descends into the mounted repo,
+  # materializing every snapshot tree and leaking the mount.
+  Describe 'diff-split teardown (MED-17)'
+    setup_fix() {
+      FIX=$(mktemp -d)
+      export TZ=UTC BKP_CONFIG="$FIX/c.toml" BKP_TM_SESSIONS="$FIX/sessions"
+      export BKP_MANIFEST="$FIX/m.toml" BKP_HAS_FUSE=1
+      printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
+      printf 'roots = []\n' > "$FIX/m.toml"
+      mkdir -p "$FIX/anchor" "$FIX/sessions"
+      STUB="$FIX/stub"; mkdir -p "$STUB"
+      printf '#!/bin/sh\necho "tm $*" >> "%s/tm.calls"\n' "$FIX" > "$STUB/system-backup-tm"
+      chmod +x "$STUB/system-backup-tm"
+      export BKP_TM_BIN="$STUB/system-backup-tm"
+      PATH="$STUB:$PATH"
+      # A fake mux backend whose split ALWAYS fails, so launch takes the
+      # teardown branch under test. MUX_LIB points launch's own
+      # `source .../mux.zsh` at this stub instead of the real shim.
+      export MUX_LIB="$FIX/muxlib"; mkdir -p "$MUX_LIB"
+      cat > "$MUX_LIB/mux.zsh" <<'EOF'
+mux::available()   { return 0; }
+mux::backend()     { print -r -- zellij; }
+mux::current_tab() { print -r -- tab1; }
+mux::focus_tab()   { return 0; }
+mux::split()       { return 1; }   # the failure under test
+EOF
+    }
+    cleanup_fix() {
+      rm -rf "$FIX"
+      unset BKP_CONFIG BKP_TM_SESSIONS BKP_MANIFEST BKP_HAS_FUSE BKP_TM_BIN MUX_LIB
+    }
+    BeforeEach 'setup_fix'
+    AfterEach 'cleanup_fix'
+
+    It 'unmounts the live mount before removing the session dir when the split fails'
+      run_it() {
+        source "$LIB/backup-tm.zsh"
+        # Stubs for the slow prep the teardown must survive: a mount that
+        # writes mount.pid + builds the mnt tree, a passing anchor check, a
+        # no-op ladder/refresh.
+        bkp::mount()               { mkdir -p "$2/snapshots"; REPLY=4242; }
+        bkp::tm::anchor_captured() { return 0; }
+        bkp::tm::ladder_fill()     { print -r -- x > "$1/ladder"; return 0; }
+        bkp::tm::refresh()         { return 0; }
+        # Recorder umount: log the args AND whether the mount tree still
+        # exists at call time — proof it ran BEFORE the rm -rf.
+        bkp::umount() {
+          print -r -- "umount $1 $2" >> "$FIX/umount.calls"
+          [[ -d "$2" ]] && print -r -- "mnt-present-at-umount" >> "$FIX/umount.calls"
+        }
+        bkp::tm::launch diff "$FIX/anchor" >/dev/null 2>&1; local rc=$?
+        print -r -- "rc=$rc"
+        if [[ -f "$FIX/umount.calls" ]]; then cat "$FIX/umount.calls"; else print -r -- "NO-UMOUNT"; fi
+        if [[ -n "$(ls -A "$FIX/sessions" 2>/dev/null)" ]]; then
+          print -r -- "session-left"
+        else
+          print -r -- "session-removed"
+        fi
+      }
+      When run run_it
+      The line 1 should equal "rc=1"
+      The line 2 should start with "umount 4242 "
+      The line 2 should include "/mnt"
+      The line 3 should equal "mnt-present-at-umount"
+      The line 4 should equal "session-removed"
+    End
+  End
+
   Describe 'bkp::tm::halt: refusals stay readable'
     It 'logs a flattened message and returns without blocking when there is no TTY'
       run_it() {

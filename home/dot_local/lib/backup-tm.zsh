@@ -1152,7 +1152,7 @@ bkp::tm::launch() {
         [[ -n "$_here" ]] && (( _here > 25 )) && _split+=(--size $(( _here - 23 )))
       fi
       mux::split "${_split[@]}" -- "$BKP_TM_BIN" lens "$s" >/dev/null ||
-        { rm -rf "$s"; return 1 }
+        { [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"; rm -rf "$s"; return 1 }
       # ZELLIJ ONLY: `zellij run` cannot size the pane it creates, so the
       # new pane takes focus and is grown leftward until THIS pane (the
       # timeline-to-be) converges on its 21-col design width. Geometry
