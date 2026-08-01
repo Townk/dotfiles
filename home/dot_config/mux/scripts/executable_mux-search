@@ -377,7 +377,20 @@ print -rn -- $'\e[?25l'
 draw_static
 draw_input
 
-while read -rsk1 key; do
+# zsh's `read -k` reads from the TERMINAL (/dev/tty), which inside a popup is
+# the keyboard — stdin is NOT: a `cat` in a display-popup receives nothing
+# (measured). Reading fd 0 unconditionally therefore makes the dialog deaf to
+# every key including ESC. So: the terminal when we have one, fd 0 only when
+# stdin is a pipe, which is how a spec drives this. Mirrors mux-rename.
+if [[ -t 0 ]]; then
+  read_key()    { read -rsk1 "$1" }
+  read_follow() { read -rsk1 -t 0.02 "$1" }
+else
+  read_key()    { read -rsk1 -u 0 "$1" }
+  read_follow() { read -rsk1 -u 0 -t 0.02 "$1" }
+fi
+
+while read_key key; do
   case "$key" in
     $'\r'|$'\n')
       # (SearchInput) Enter -> (SearchMode): the same Search entry, nothing to
@@ -393,13 +406,13 @@ while read -rsk1 key; do
     $'\e')
       # ESC alone pops Search; ESC+char = the in-dialog Alt chords.
       follow=""
-      read -rsk1 -t 0.02 follow || follow=""
+      read_follow follow || follow=""
       case "$follow" in
         c) (( case_on = ! case_on )); "$TMUX_BIN" set -p -t "$origin" @search_case "$case_on" 2>/dev/null; "$TMUX_BIN" refresh-client -S 2>/dev/null; apply_search; draw_input ;;
         b) (( word_on = ! word_on )); "$TMUX_BIN" set -p -t "$origin" @search_word "$word_on" 2>/dev/null; "$TMUX_BIN" refresh-client -S 2>/dev/null; apply_search; draw_input ;;
         p) (( wrap_on = ! wrap_on )); set_wrap "$origin" "$wrap_on"; "$TMUX_BIN" refresh-client -S 2>/dev/null; draw_input ;;
         "") pop_out; break ;;
-        *) while read -rsk1 -t 0.01 _; do :; done ;;
+        *) while read_follow _; do :; done ;;
       esac ;;
     $'\x7f'|$'\b')
       if [[ -z "$buf" ]]; then pop_out; break; fi
@@ -409,6 +422,10 @@ while read -rsk1 key; do
       buf=""
       apply_search; draw_input ;;
     *)
+      # Printable only: a stray control byte (C-w, C-a, Tab, …) is not a
+      # character to type — appending it corrupts @search_term, and the
+      # corruption survives a reopen. Same guard as mux-rename.
+      [[ "$key" == [[:print:]] ]] || continue
       buf+="$key"
       apply_search; draw_input ;;
   esac

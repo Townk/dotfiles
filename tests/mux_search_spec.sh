@@ -255,3 +255,56 @@ EOS
     The result of 'logged()' should include 'search-backward 192\.168\.1\.1'
   End
 End
+
+# The interactive input loop reads raw bytes and appends printable ones to the
+# term. A stray control byte (C-w, C-a, Tab, …) is NOT a character to type: it
+# must be swallowed, never appended, or it corrupts @search_term — and the
+# corruption survives dialog reopen (the term is restored from the pane
+# option). The sibling rename dialog already guards this; this pins the same
+# guard on search's catch-all.
+Describe 'mux-search dialog input loop'
+  setup() {
+    MS_TMP=$(mktemp -d)
+    LOG="$MS_TMP/calls.log"
+    # A tmux that logs every call, hands out the pane id the dialog anchors on,
+    # and answers a FRESH search (search_present 0) so the buffer starts empty.
+    cat > "$MS_TMP/tmux" <<'EOS'
+#!/usr/bin/env zsh
+print -r -- "$*" >> "$LOG"
+if [[ "$1" == display ]]; then
+  case "$*" in
+    *pane_id*)        print -r -- "%1" ;;
+    *search_present*) print -r -- 0 ;;
+    *) print -r -- 0 ;;
+  esac
+fi
+exit 0
+EOS
+    chmod +x "$MS_TMP/tmux"
+    THEME="$MS_TMP/theme.json"
+    print '{"extended":{"tab":{"bg":"#282c41"},"dialog":{"warning":"#e5bf7b","search_accent":"#61afef"}},"roles":{"ui":{"bg":"#1e1e2e","dialog_bg":"#181825","border_inactive":"#45475a"},"action":{"attention":"#f9e2af"}},"palette":{"white":"#ffffff"}}' > "$THEME"
+    export LOG MUX_TMUX_BIN="$MS_TMP/tmux" WIDGETS_THEME_JSON="$THEME" \
+      MUX_LIB="$PWD/home/dot_local/lib"
+    S="$PWD/home/dot_config/mux/scripts/executable_mux-search"
+  }
+  cleanup() { rm -rf "$MS_TMP"; unset LOG MUX_TMUX_BIN WIDGETS_THEME_JSON MUX_LIB S; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # Feed the dialog raw bytes on stdin, exactly as a terminal would.
+  drive()  { printf '%b' "$1" | zsh "$S" >/dev/null 2>&1; cat "$LOG"; }
+  logged() { cat "$LOG"; }
+
+  It 'does not append a control byte to the term'
+    # C-w, then two printable letters, then Enter: only the letters survive.
+    When call drive '\x17ab\r'
+    The result of 'logged()' should include 'set -p -t %1 @search_term ab'
+  End
+
+  It 'writes no term at all for a lone control byte'
+    # C-w alone then Enter: the byte is swallowed, the empty term pops out and
+    # the value form of @search_term is never written (only the setup unset).
+    When call drive '\x17\r'
+    The result of 'logged()' should not include 'set -p -t %1 @search_term'
+  End
+End
