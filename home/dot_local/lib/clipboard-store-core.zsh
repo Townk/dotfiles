@@ -555,13 +555,24 @@ clip::persist_text_row() {
   # (a files manifest of the same text hashes identically to plain text).
   existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh' AND type_hash='$hash' AND type_kind='$ek' LIMIT 1;" 2>/dev/null)
   if [[ -n "$existing" ]]; then
-    sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null
+    # DATA-2: a refused UPDATE (read-only DB, or a lock a concurrent BEGIN
+    # IMMEDIATE writer holds) must surface, not report a phantom success.
+    if ! sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null; then
+      rm -rf -- "$tmpd"; REPLY="store write failed"; return 1
+    fi
     rm -rf -- "$tmpd"; REPLY=""; return 0
   fi
-  sqlite3 "$DB_FILE" "INSERT INTO clips \
+  # DATA-2: capture the new rowid so a refused INSERT (empty rowid) fails loudly
+  # instead of returning 0 with nothing written.
+  local row_id
+  row_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips \
     (text_preview, text_plain, len, first_ts, last_ts, source_app, type_kind, regtype, pinned, type_hash, source_host) \
     VALUES (CAST(readfile('$tmpd/preview') AS TEXT), CAST(readfile('$tmpd/text') AS TEXT), \
-    $len, $ts, $ts, CAST(readfile('$tmpd/app') AS TEXT), '$ek', $rt_sql, 0, '$hash', '$eh');" 2>/dev/null
+    $len, $ts, $ts, CAST(readfile('$tmpd/app') AS TEXT), '$ek', $rt_sql, 0, '$hash', '$eh'); \
+    SELECT last_insert_rowid();" 2>/dev/null)
+  if [[ -z "$row_id" ]]; then
+    rm -rf -- "$tmpd"; REPLY="store write failed"; return 1
+  fi
   sqlite3 "$DB_FILE" "DELETE FROM clips WHERE pinned=0 AND id NOT IN \
     (SELECT id FROM clips ORDER BY pinned DESC, last_ts DESC LIMIT $MAX_ROWS);" 2>/dev/null
   sqlite3 "$DB_FILE" "DELETE FROM clip_types WHERE clip_id NOT IN (SELECT id FROM clips);" 2>/dev/null
@@ -1142,7 +1153,10 @@ clip::persist_files_manifest_row() {
     LIMIT 1;" 2>/dev/null)
   local row_id
   if [[ -n "$existing" ]]; then
-    sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null
+    # DATA-2: a refused UPDATE must surface, not report a phantom success.
+    if ! sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null; then
+      rm -rf -- "$tmpd"; REPLY="store write failed"; return 1
+    fi
     row_id=$existing
   else
     row_id=$(sqlite3 "$DB_FILE" "INSERT INTO clips \
@@ -1150,12 +1164,15 @@ clip::persist_files_manifest_row() {
       VALUES (CAST(readfile('$tmpd/preview') AS TEXT), $len, $ts, $ts, 'files', 0, '$hash', '$eh'); \
       SELECT last_insert_rowid();" 2>/dev/null)
   fi
-  if [[ -n "$row_id" ]]; then
-    sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO clip_types (clip_id, uti, blob) VALUES ($row_id, 'x-file-manifest', readfile('$tmpd/manifest'));" 2>/dev/null
-    if (( trusted )) && ! clip::replace_file_authority "$row_id" "$paths"; then
-      rm -rf -- "$tmpd"
-      return 1
-    fi
+  # DATA-2: an empty rowid means the INSERT was refused -- the manifest blob and
+  # authority below would be silently skipped, so fail loudly instead.
+  if [[ -z "$row_id" ]]; then
+    rm -rf -- "$tmpd"; REPLY="store write failed"; return 1
+  fi
+  sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO clip_types (clip_id, uti, blob) VALUES ($row_id, 'x-file-manifest', readfile('$tmpd/manifest'));" 2>/dev/null
+  if (( trusted )) && ! clip::replace_file_authority "$row_id" "$paths"; then
+    rm -rf -- "$tmpd"
+    return 1
   fi
   sqlite3 "$DB_FILE" "DELETE FROM clips WHERE pinned=0 AND id NOT IN \
     (SELECT id FROM clips ORDER BY pinned DESC, last_ts DESC LIMIT $MAX_ROWS);" 2>/dev/null

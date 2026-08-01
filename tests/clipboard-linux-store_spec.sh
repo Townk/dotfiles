@@ -99,6 +99,21 @@ Describe 'clipboard-bridge-dispatch: linux-headless text ops'
     The output should include "hello"
   End
 
+  # DATA-2: a row-write SQLite refuses (a read-only DB, or a lock a concurrent
+  # BEGIN IMMEDIATE writer holds) used to report success -- the T reply was
+  # still O while nothing landed. Bootstrap the schema in an ISOLATED db (its
+  # own path, so leaving it read-only can't contaminate a later example), then
+  # make the DB file read-only so the INSERT is refused (rc 8) while reads
+  # still succeed; the T op must answer an E frame, not O.
+  It 'T answers an error frame when the store write is refused (DATA-2)'
+    RODB="$SHELLSPEC_TMPBASE/store/ro-store.db"
+    sh -c 'PICK_CLIPBOARD_DB="$2" CLIPBOARD_PLATFORM=linux-headless zsh -f "$1" --init-store' _ "$DISPATCH" "$RODB" >/dev/null
+    chmod a-w "$RODB"
+    printf 'T\000\000\000\006vhello' > "$REQ"
+    When run command sh -c 'PICK_CLIPBOARD_DB="$3" CLIPBOARD_PLATFORM=linux-headless zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ" "$RODB"
+    The output should start with "E"
+  End
+
   It 'G on an empty store answers an empty O frame'
     printf 'G\000\000\000\000' > "$REQ"
     When run command sh -c 'CLIPBOARD_PLATFORM=linux-headless zsh -f "$1" < "$2" | wc -c | tr -d " "' _ "$DISPATCH" "$REQ"

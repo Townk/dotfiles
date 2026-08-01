@@ -558,6 +558,23 @@ Describe 'clipboard-bridge-dispatch: M manifest-persist-local'
     The output should start with "E"
   End
 
+  # DATA-2: a files-manifest row-write SQLite refuses (a read-only DB, or a
+  # lock a concurrent BEGIN IMMEDIATE writer holds) used to report success --
+  # the M reply was still O while the row, manifest blob, and authority never
+  # landed. Bootstrap the full schema in an ISOLATED db (its own path, so
+  # leaving it read-only can't contaminate a later example; the file-security
+  # tables are created too, so ensure_file_security_schema's own CREATE IF NOT
+  # EXISTS needs no write), then make the DB file read-only so the INSERT is
+  # refused (rc 8) while reads still succeed; the M op must answer E, not O.
+  It 'errors when the store write is refused (DATA-2)'
+    RODB="$SHELLSPEC_TMPBASE/ro-manifest.db"
+    sh -c 'PICK_CLIPBOARD_DB="$2" zsh -f "$1" --init-store' _ "$DISPATCH" "$RODB" >/dev/null
+    chmod a-w "$RODB"
+    build_req thismac /tmp/ro-manifest.txt
+    When run command sh -c 'PICK_CLIPBOARD_DB="$3" zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ" "$RODB"
+    The output should start with "E"
+  End
+
   It 'errors on a malformed payload (empty host)'
     build_req "" /tmp/local-d.txt
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
