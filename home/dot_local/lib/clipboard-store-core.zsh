@@ -42,6 +42,8 @@ LEGACY_GRACE_S=0.2
 READ_TIMEOUT_S=5
 MAX_ROWS=1000   # op_persist sweep cap (mirrors the HS watcher's row retention)
 PREVIEW_MAX=200 # clip::preview_of's soft budget, in bytes
+GRANT_IDLE_S=1800
+GRANT_HARD_S=86400
 
 mkdir -p "$STATE_DIR" 2>/dev/null
 
@@ -118,7 +120,7 @@ int_to_be32() {
 # int_to_be64 <n> -> writes the 8-byte big-endian scalar to $REPLY. Same
 # mktemp round-trip as int_to_be32 above (same note applies -- ${(e)string}
 # doesn't do \NNN escapes, printf's does but only survives via a real fd, not
-# a $(...) that would truncate an embedded NUL byte). Needed for op A's
+# a $(...) that would truncate an embedded NUL byte). Needed for op a's
 # BE64 total-byte-count header: a directory's `du`-based byte count can
 # exceed 4 GiB, overflowing BE32.
 int_to_be64() {
@@ -149,7 +151,7 @@ send_err() { send_frame E "$1"; }
 # clip::read_file <path> -> sets $REPLY to the file's raw bytes, byte-exact
 # (may contain embedded NULs -- e.g. a NUL-joined multi-path manifest). Never
 # use $(<file)/$(cat file) for this: command substitution truncates at the
-# first embedded NUL. Mirrors op_fetch_file's own sysread loop, just reading
+# first embedded NUL. Mirrors stream_file_path's own sysread loop, just reading
 # a whole local file into a scalar instead of streaming it over the wire.
 clip::read_file() {
   local f=$1
@@ -211,7 +213,8 @@ clip::self_host() {
 
 # clip::ensure_schema -- idempotent bootstrap of the store DDL (spec §3).
 # Mirrors clipboard-history.lua's ensure_schema() CREATE set exactly (WAL +
-# synchronous=NORMAL, clips incl. source_bundle_id, clip_types, 3 indexes).
+# synchronous=NORMAL, clips incl. source_bundle_id, clip_types, file authority
+# + grant tables, and indexes).
 # CREATE IF NOT EXISTS only: the watcher's Lua owns column MIGRATIONS on
 # macOS; a headless store is always born current.
 clip::ensure_schema() {
@@ -246,10 +249,222 @@ CREATE TABLE IF NOT EXISTS clip_types (
   blob BLOB,
   PRIMARY KEY (clip_id, uti)
 );
+CREATE TABLE IF NOT EXISTS file_authorities (
+  clip_id INTEGER NOT NULL,
+  item_index INTEGER NOT NULL,
+  path BLOB NOT NULL,
+  PRIMARY KEY (clip_id, item_index)
+);
+CREATE TABLE IF NOT EXISTS file_grants (
+  token TEXT NOT NULL,
+  item_index INTEGER NOT NULL,
+  path BLOB NOT NULL,
+  created_ts REAL NOT NULL,
+  last_used_ts REAL NOT NULL,
+  hard_expires_ts REAL NOT NULL,
+  PRIMARY KEY (token, item_index)
+);
 CREATE INDEX IF NOT EXISTS idx_clips_type_hash ON clips(type_hash);
 CREATE INDEX IF NOT EXISTS idx_clips_last_ts ON clips(last_ts DESC);
 CREATE INDEX IF NOT EXISTS idx_clips_pinned_ts ON clips(pinned DESC, last_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_file_grants_expiry
+  ON file_grants(hard_expires_ts, last_used_ts);
 SQL
+}
+
+# Existing macOS stores are normally migrated by clipboard-history.lua, but the
+# bridge can receive a request before Hammerspoon reloads. File-boundary ops
+# call this narrow idempotent DDL so rollout fails closed without requiring a
+# schema check on unrelated text/window requests.
+clip::ensure_file_security_schema() {
+  sqlite3 "$DB_FILE" >/dev/null <<'SQL'
+CREATE TABLE IF NOT EXISTS file_authorities (
+  clip_id INTEGER NOT NULL,
+  item_index INTEGER NOT NULL,
+  path BLOB NOT NULL,
+  PRIMARY KEY (clip_id, item_index)
+);
+CREATE TABLE IF NOT EXISTS file_grants (
+  token TEXT NOT NULL,
+  item_index INTEGER NOT NULL,
+  path BLOB NOT NULL,
+  created_ts REAL NOT NULL,
+  last_used_ts REAL NOT NULL,
+  hard_expires_ts REAL NOT NULL,
+  PRIMARY KEY (token, item_index)
+);
+CREATE INDEX IF NOT EXISTS idx_file_grants_expiry
+  ON file_grants(hard_expires_ts, last_used_ts);
+SQL
+}
+
+# Delete authority rows whose owning history row is gone and grants that are
+# no longer usable. Grants deliberately survive row retention until their own
+# expiry so an in-flight multi-item paste remains stable across clipboard churn.
+clip::prune_file_security_state() {
+  local now=$EPOCHREALTIME
+  sqlite3 "$DB_FILE" "DELETE FROM file_authorities
+    WHERE clip_id NOT IN (SELECT id FROM clips);
+    DELETE FROM file_grants
+    WHERE hard_expires_ts <= $now
+       OR last_used_ts < ($now - $GRANT_IDLE_S);" >/dev/null 2>&1
+}
+
+# clip::replace_file_authority <clip-id> <NUL-joined-paths>
+# Atomically replaces one trusted row's immutable path snapshot. Each path is
+# stored as its own BLOB so filenames containing newlines never cross SQL text.
+clip::replace_file_authority() {
+  local clip_id=$1 paths=$2
+  clip::ensure_file_security_schema || { REPLY="schema update failed"; return 1 }
+  [[ "$clip_id" == <-> ]] || { REPLY="bad clip id"; return 1 }
+  local -a items=( "${(@ps:\0:)paths}" )
+  (( ${#items[@]} > 0 )) || { REPLY="empty authority"; return 1 }
+
+  local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-authority.XXXXXX") ||
+    { REPLY="mktemp failed"; return 1 }
+  local sqlf="$tmpd/authority.sql"
+  print -r -- "BEGIN IMMEDIATE;" > "$sqlf"
+  print -r -- "DELETE FROM file_authorities WHERE clip_id=$clip_id;" >> "$sqlf"
+
+  local p pf ep
+  local -i idx=0
+  for p in "${items[@]}"; do
+    if [[ -z "$p" || "$p" != /* || "$p" == */../* || "$p" == */.. ]]; then
+      rm -rf -- "$tmpd"
+      REPLY="unsafe authority path"
+      return 1
+    fi
+    (( idx += 1 ))
+    pf="$tmpd/path.$idx"
+    print -rn -- "$p" > "$pf"
+    ep=${pf//\'/\'\'}
+    print -r -- "INSERT INTO file_authorities (clip_id,item_index,path)
+      VALUES ($clip_id,$idx,readfile('$ep'));" >> "$sqlf"
+  done
+  print -r -- "COMMIT;" >> "$sqlf"
+
+  if sqlite3 "$DB_FILE" < "$sqlf" >/dev/null 2>&1; then
+    rm -rf -- "$tmpd"
+    REPLY=""
+    return 0
+  fi
+  rm -rf -- "$tmpd"
+  REPLY="authority write failed"
+  return 1
+}
+
+# clip::load_file_authority <clip-id> -> $REPLY_PATHS (NUL-joined).
+clip::load_file_authority() {
+  local clip_id=$1
+  clip::ensure_file_security_schema || return 1
+  [[ "$clip_id" == <-> ]] || return 1
+  local indexes
+  indexes="$(sqlite3 "$DB_FILE" "SELECT item_index FROM file_authorities
+    WHERE clip_id=$clip_id ORDER BY item_index;" 2>/dev/null)"
+  [[ -n "$indexes" ]] || return 1
+
+  local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-authority-read.XXXXXX") ||
+    return 1
+  local idx pf ep p
+  local -i expected=0
+  REPLY_PATHS=""
+  for idx in ${(f)indexes}; do
+    (( expected += 1 ))
+    [[ "$idx" == "$expected" ]] || { rm -rf -- "$tmpd"; return 1 }
+    pf="$tmpd/path.$idx"
+    ep=${pf//\'/\'\'}
+    sqlite3 "$DB_FILE" "SELECT writefile('$ep',path) FROM file_authorities
+      WHERE clip_id=$clip_id AND item_index=$idx;" >/dev/null 2>&1
+    [[ -f "$pf" ]] || { rm -rf -- "$tmpd"; return 1 }
+    clip::read_file "$pf"; p=$REPLY
+    (( idx > 1 )) && REPLY_PATHS+=$'\0'
+    REPLY_PATHS+="$p"
+  done
+  rm -rf -- "$tmpd"
+  [[ -n "$REPLY_PATHS" ]]
+}
+
+# clip::random_token -> $REPLY_TOKEN (256 random bits as lowercase hex).
+clip::random_token() {
+  local token
+  token="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null |
+    od -An -tx1 | tr -d ' \n')"
+  if (( $#token != 64 )) || [[ "$token" == *[^0-9a-f]* ]]; then
+    REPLY="random token generation failed"
+    return 1
+  fi
+  REPLY_TOKEN=$token
+}
+
+# clip::create_file_grant <clip-id> -> $REPLY_TOKEN. The grant copies the
+# authority BLOBs so clipboard changes and row retention cannot change what an
+# already-issued token means.
+clip::create_file_grant() {
+  local clip_id=$1
+  clip::ensure_file_security_schema || { REPLY="schema update failed"; return 1 }
+  [[ "$clip_id" == <-> ]] || return 1
+  clip::prune_file_security_state
+  local -i attempt
+  local token inserted
+  local now hard
+  for attempt in 1 2 3; do
+    clip::random_token || return 1
+    token=$REPLY_TOKEN
+    now=$EPOCHREALTIME
+    hard=$(( EPOCHREALTIME + GRANT_HARD_S ))
+    inserted="$(sqlite3 "$DB_FILE" "BEGIN IMMEDIATE;
+      INSERT INTO file_grants
+        (token,item_index,path,created_ts,last_used_ts,hard_expires_ts)
+      SELECT '$token',item_index,path,$now,$now,$hard
+      FROM file_authorities
+      WHERE clip_id=$clip_id
+        AND NOT EXISTS (SELECT 1 FROM file_grants WHERE token='$token');
+      SELECT changes();
+      COMMIT;" 2>/dev/null)" || inserted=0
+    if [[ "$inserted" == <1-> ]]; then
+      REPLY_TOKEN=$token
+      return 0
+    fi
+    sqlite3 "$DB_FILE" "DELETE FROM file_grants WHERE token='$token';" \
+      >/dev/null 2>&1
+  done
+  REPLY="grant creation failed"
+  return 1
+}
+
+# clip::resolve_file_grant <token US item-index> -> $REPLY_PATH. Refreshes the
+# whole manifest token's idle clock when any item opens; a hard expiry remains.
+clip::resolve_file_grant() {
+  local payload=$1 us=$'\x1f'
+  clip::ensure_file_security_schema || { REPLY="schema update failed"; return 1 }
+  local token=${payload%%${us}*} idx=${payload#*${us}}
+  if [[ "$token" == "$payload" || $#token != 64 ||
+        "$token" == *[^0-9a-f]* || "$idx" != <1-> || "$idx" == *${us}* ]]; then
+    REPLY="invalid capability"
+    return 1
+  fi
+
+  local now=$EPOCHREALTIME
+  clip::prune_file_security_state
+  local tmpd; tmpd=$(mktemp -d "${TMPDIR:-/tmp}/clip-grant-read.XXXXXX") ||
+    { REPLY="mktemp failed"; return 1 }
+  local tmpf="$tmpd/path"
+  local ep=${tmpf//\'/\'\'}
+  sqlite3 "$DB_FILE" "SELECT writefile('$ep',path) FROM file_grants
+    WHERE token='$token' AND item_index=$idx
+      AND hard_expires_ts > $now
+      AND last_used_ts >= ($now - $GRANT_IDLE_S);" >/dev/null 2>&1
+  if [[ ! -f "$tmpf" ]]; then
+    rm -rf -- "$tmpd"
+    REPLY="invalid or expired capability"
+    return 1
+  fi
+  clip::read_file "$tmpf"
+  REPLY_PATH=$REPLY
+  rm -rf -- "$tmpd"
+  sqlite3 "$DB_FILE" "UPDATE file_grants SET last_used_ts=$now
+    WHERE token='$token' AND hard_expires_ts > $now;" >/dev/null 2>&1
+  return 0
 }
 
 # clip::parse_rich_payload <payload> -- op C's wire parse (<2 bytes uti_len>
@@ -455,10 +670,9 @@ clip::op_window_action() {
   esac
 }
 
-# L  list-files: the manifest of the CURRENT clipboard entry, resolved
-# through the store's latest row (see the header comment). Pure store query
-# -- no pasteboard access, no payload in.
-clip::op_list_files() {
+# Resolve the CURRENT file manifest once for both L (display only) and K
+# (capability issuance). On success, sets REPLY_CLIP_ID/KIND/HOST/TS/PATHS.
+clip::resolve_current_file_manifest() {
   local us=$'\x1f'
   local id kind host ts row
   local -a f
@@ -466,8 +680,8 @@ clip::op_list_files() {
   for attempt in 1 2; do
     row="$(sqlite3 -separator "$us" "$DB_FILE" "SELECT id, type_kind, source_host, last_ts FROM clips ORDER BY last_ts DESC LIMIT 1;" 2>/dev/null)"
     if [[ -z "$row" ]]; then
-      send_err "empty-store"
-      return
+      REPLY="empty-store"
+      return 1
     fi
     f=()
     IFS=$us read -rA f <<< "$row"
@@ -481,15 +695,17 @@ clip::op_list_files() {
       sleep 0.3
       continue
     fi
-    send_err "not-files"
-    return
+    REPLY="not-files"
+    return 1
   done
 
-  local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-listfiles.XXXXXX") || { send_err "mktemp failed"; return }
+  local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-listfiles.XXXXXX") ||
+    { REPLY="mktemp failed"; return 1 }
   local paths=""
 
   local manifestfile="$tmpdir/x-file-manifest"
-  sqlite3 "$DB_FILE" "SELECT writefile('$manifestfile', blob) FROM clip_types WHERE clip_id=$id AND uti='x-file-manifest';" >/dev/null 2>&1
+  local emanifest=${manifestfile//\'/\'\'}
+  sqlite3 "$DB_FILE" "SELECT writefile('$emanifest', blob) FROM clip_types WHERE clip_id=$id AND uti='x-file-manifest';" >/dev/null 2>&1
   if [[ -s "$manifestfile" ]]; then
     clip::read_file "$manifestfile"
     paths=$REPLY
@@ -508,13 +724,15 @@ clip::op_list_files() {
     # never write a NSFilenamesPboardType blob -- only x-resolved-path -- so
     # they fall through to the fallback below exactly as before.
     local nsfile="$tmpdir/ns-filenames"
-    sqlite3 "$DB_FILE" "SELECT writefile('$nsfile', blob) FROM clip_types WHERE clip_id=$id AND uti='NSFilenamesPboardType';" >/dev/null 2>&1
+    local ensfile=${nsfile//\'/\'\'}
+    sqlite3 "$DB_FILE" "SELECT writefile('$ensfile', blob) FROM clip_types WHERE clip_id=$id AND uti='NSFilenamesPboardType';" >/dev/null 2>&1
     if [[ -s "$nsfile" ]]; then
       pb::parse_ns_filenames "$nsfile" "$tmpdir"
       paths=$REPLY
     else
       local resolvedfile="$tmpdir/x-resolved-path"
-      sqlite3 "$DB_FILE" "SELECT writefile('$resolvedfile', blob) FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';" >/dev/null 2>&1
+      local eresolved=${resolvedfile//\'/\'\'}
+      sqlite3 "$DB_FILE" "SELECT writefile('$eresolved', blob) FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';" >/dev/null 2>&1
       if [[ -s "$resolvedfile" ]]; then
         clip::read_file "$resolvedfile"
         paths=$REPLY
@@ -524,18 +742,52 @@ clip::op_list_files() {
   rm -rf -- "$tmpdir"
 
   if [[ -z "$paths" ]]; then
-    send_err "not-files"
-    return
+    REPLY="not-files"
+    return 1
   fi
-  send_ok "${kind}${us}${host}${us}${ts}${us}${paths}"
+  REPLY_CLIP_ID=$id
+  REPLY_KIND=$kind
+  REPLY_HOST=$host
+  REPLY_TS=$ts
+  REPLY_PATHS=$paths
+  return 0
 }
 
-clip::op_fetch_file() {
+# L  list-files: display-only manifest. It deliberately contains no authority.
+clip::op_list_files() {
+  local us=$'\x1f'
+  clip::resolve_current_file_manifest || { send_err "$REPLY"; return }
+  send_ok "${REPLY_KIND}${us}${REPLY_HOST}${us}${REPLY_TS}${us}${REPLY_PATHS}"
+}
+
+# K  grant-files: current manifest plus an opaque authority token. A pointer-only
+# peer M row returns "-" so a client on the source host can still use its paths
+# locally, while cross-machine streaming fails closed.
+clip::op_grant_files() {
+  local us=$'\x1f'
+  clip::resolve_current_file_manifest || { send_err "$REPLY"; return }
+  local clip_id=$REPLY_CLIP_ID kind=$REPLY_KIND host=$REPLY_HOST ts=$REPLY_TS
+  local paths=$REPLY_PATHS token="-"
+  if clip::load_file_authority "$clip_id"; then
+    paths=$REPLY_PATHS
+    if clip::create_file_grant "$clip_id"; then
+      token=$REPLY_TOKEN
+    else
+      send_err "${REPLY:-grant creation failed}"
+      return
+    fi
+  fi
+  send_ok "${kind}${us}${host}${us}${ts}${us}${token}${us}${paths}"
+}
+
+# Stream a server-resolved path. Wire callers must enter through
+# clip::op_fetch_authorized; this helper never consumes caller path text.
+clip::stream_file_path() {
   local fpath=$1
   # M3: a directory can't be read/streamed as flat bytes -- reply with this
   # EXACT string (not just "starts with E"). Task 13's remote pbpaste greps
-  # for it to know "retry this path as an A archive-stream instead" (see
-  # clip::op_archive_stream just below). Checked before the -r test: a
+  # for it to know "retry this capability as an a archive-stream instead."
+  # Checked before the -r test: a
   # directory usually passes -r (it's listable), so without this check
   # `wc -c < "$fpath"` below would instead fail on "is a directory" and
   # muddy the error.
@@ -548,6 +800,10 @@ clip::op_fetch_file() {
     return
   fi
   local bytes; bytes=$(wc -c < "$fpath" | tr -d ' ')
+  if (( bytes > 4294967295 )); then
+    send_err "file-too-large"
+    return
+  fi
   local fd
   exec {fd}< "$fpath"
   int_to_be32 "$bytes"
@@ -571,10 +827,17 @@ clip::op_fetch_file() {
   exec {fd}<&-
 }
 
-# A  archive-stream: F's directory sibling (M3, files-yazi design §4) -- F
-# can only handle a flat file, so a directory pull goes through `tar` here
+# f  fetch-authorized-file: resolve token/index, then retain the exact-size
+# file response used by the retired F.
+clip::op_fetch_authorized() {
+  clip::resolve_file_grant "$1" || { send_err "$REPLY"; return }
+  clip::stream_file_path "$REPLY_PATH"
+}
+
+# a  archive-authorized-directory: f's directory sibling. The file stream
+# handles only flat bytes, so a directory pull goes through `tar` here
 # instead. Reply: O + BE32 len=8 + BE64 total-byte-count, then the raw
-# `tar -cf - -C <parent> <basename>` stream until EOF -- unlike F's reply,
+# `tar -cf - -C <parent> <basename>` stream until EOF -- unlike f's reply,
 # there is NO trailing frame.
 #
 # BE64 size semantics: `du -sk <dir>` (the filesystem's own KiB block
@@ -597,7 +860,7 @@ clip::op_fetch_file() {
 # header is already out and EOF is the only terminator, so the client just
 # sees a short-but-clean stream. Client-side mitigation (treating tar
 # extraction failure as the error signal) lands in Task 13's pbpaste.
-clip::op_archive_stream() {
+clip::stream_archive_path() {
   local dir=$1
   if [[ "$dir" != /* ]]; then
     send_err "not absolute: $dir"
@@ -657,7 +920,7 @@ clip::op_archive_stream() {
   local fd
   exec {fd}< <(tar -cf - -C "$parent" -- "$base" 2>/dev/null)
   # `chunk` declared once, outside the loop -- see the matching gotcha
-  # comment on read_n()/op_fetch_file above: a bare `local chunk` re-run
+  # comment on read_n()/stream_file_path above: a bare `local chunk` re-run
   # inside the loop on a later iteration gets parsed by zsh as a request to
   # DISPLAY the parameter instead of declaring it, which here would inject
   # `chunk=$'...'` text into the middle of the tar stream.
@@ -667,6 +930,11 @@ clip::op_archive_stream() {
     syswrite -- "$chunk"
   done
   exec {fd}<&-
+}
+
+clip::op_archive_authorized() {
+  clip::resolve_file_grant "$1" || { send_err "$REPLY"; return }
+  clip::stream_archive_path "$REPLY_PATH"
 }
 
 # P  persist: materialize a used peer clip into THIS machine's store (§11) so a
@@ -686,6 +954,8 @@ clip::op_persist() {
   IFS=$us read -rA f <<< "$meta"
   local host=${f[1]:-} kind=${f[2]:-text} app=${f[3]:-} regtype=${f[4]:-}
   [[ -n "$host" ]] || { send_err "no source_host"; return }
+  [[ "$kind" != (files|file|directory) ]] ||
+    { send_err "P cannot persist file kinds"; return }
   if clip::persist_text_row "$host" "$kind" "$app" "$regtype" "$text"; then
     send_ok ""
   else
@@ -776,13 +1046,17 @@ clip::parse_manifest_payload() {
       REPLY="not absolute: $p"
       return 1
     fi
+    if [[ "$p" == */../* || "$p" == */.. ]]; then
+      REPLY="unsafe path: $p"
+      return 1
+    fi
   done
   REPLY_HOST=$host
   REPLY_PATHS=$paths
   return 0
 }
 
-# clip::persist_files_manifest_row <host> <paths> -- the row-insert core used
+# clip::persist_files_manifest_row <host> <paths> [trusted=0] -- the row-insert core used
 # by M (manifest-persist-local, X2-redo; Fix A): a dedup-scoped INSERT/UPDATE
 # of a `files` store row carrying the text_preview (newline-joined paths, X3)
 # + x-file-manifest blob (NUL-joined paths -- <paths> is stored verbatim).
@@ -794,7 +1068,8 @@ clip::parse_manifest_payload() {
 # only failure mode once the caller has already validated host/paths via
 # clip::parse_manifest_payload).
 clip::persist_files_manifest_row() {
-  local host=$1 paths=$2
+  local host=$1 paths=$2 trusted=${3:-0}
+  clip::ensure_file_security_schema || { REPLY="schema update failed"; return 1 }
   local -a f
   f=( "${(@ps:\0:)paths}" )
   local text="${(pj:\n:)f}"
@@ -813,7 +1088,15 @@ clip::persist_files_manifest_row() {
   # an old text clip verbatim). Without this filter the dedup would bump that
   # text row's last_ts instead of inserting/updating the files manifest,
   # leaving both pickers showing "text" and nothing to paste as files.
-  existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh' AND type_hash='$hash' AND type_kind='files' LIMIT 1;" 2>/dev/null)
+  local authority_predicate
+  if (( trusted )); then
+    authority_predicate="EXISTS (SELECT 1 FROM file_authorities fa WHERE fa.clip_id=clips.id)"
+  else
+    authority_predicate="NOT EXISTS (SELECT 1 FROM file_authorities fa WHERE fa.clip_id=clips.id)"
+  fi
+  existing=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$eh'
+    AND type_hash='$hash' AND type_kind='files' AND $authority_predicate
+    LIMIT 1;" 2>/dev/null)
   local row_id
   if [[ -n "$existing" ]]; then
     sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$ts WHERE id=$existing;" 2>/dev/null
@@ -826,11 +1109,17 @@ clip::persist_files_manifest_row() {
   fi
   if [[ -n "$row_id" ]]; then
     sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO clip_types (clip_id, uti, blob) VALUES ($row_id, 'x-file-manifest', readfile('$tmpd/manifest'));" 2>/dev/null
+    if (( trusted )) && ! clip::replace_file_authority "$row_id" "$paths"; then
+      rm -rf -- "$tmpd"
+      return 1
+    fi
   fi
   sqlite3 "$DB_FILE" "DELETE FROM clips WHERE pinned=0 AND id NOT IN \
     (SELECT id FROM clips ORDER BY pinned DESC, last_ts DESC LIMIT $MAX_ROWS);" 2>/dev/null
   sqlite3 "$DB_FILE" "DELETE FROM clip_types WHERE clip_id NOT IN (SELECT id FROM clips);" 2>/dev/null
+  clip::prune_file_security_state
   rm -rf -- "$tmpd"
+  REPLY_ROW_ID=$row_id
   REPLY=""
   return 0
 }
@@ -847,13 +1136,23 @@ clip::persist_files_manifest_row() {
 # it only P-persists to the store, so this brings files-over-SSH in line with
 # that. Fix A: pbcopy's SSH files branch now ALSO sends this same op to the
 # peer bridge (see the header opcode table's note on the retired `N` op) --
-# so this handler runs for both the local (2489) and peer (2490) sends, with
-# no pasteboard side effect on either machine.
+# so this handler runs for both trusted local-socket and public peer sends,
+# with no direct pasteboard side effect on either machine.
 clip::op_manifest_persist_local() {
-  local payload=$1
+  local payload=$1 trusted=${2:-0}
   clip::parse_manifest_payload "$payload" || { send_err "$REPLY"; return }
   local host=$REPLY_HOST paths=$REPLY_PATHS
-  if clip::persist_files_manifest_row "$host" "$paths"; then
+  local self_host; self_host=$(clip::self_host)
+  if (( trusted )); then
+    if [[ "$host" != "$self_host" ]]; then
+      send_err "source host does not match this machine"
+      return
+    fi
+  elif [[ -n "$self_host" && "$host" == "$self_host" ]]; then
+    send_err "public M cannot claim this machine"
+    return
+  fi
+  if clip::persist_files_manifest_row "$host" "$paths" "$trusted"; then
     send_ok ""
     # Mount enrichment AFTER the reply (spec §3.4): backgrounded + disowned,
     # so pbcopy's reply window never stretches and a dead mount can't hang

@@ -14,3 +14,4 @@ StandardInput=socket
 StandardOutput=socket
 StandardError=journal
 Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+Environment=CLIPBOARD_BRIDGE_ENDPOINT=public

@@ -23,11 +23,11 @@
 # the machine whose bytes it is, so this ALWAYS records a local origin clip
 # first — SSH only adds a second, best-effort step.
 #   Local (no SSH) → send op `U` (NUL-joined absolute paths) to this
-#   machine's own bridge on 127.0.0.1:2489, and — unlike the fire-and-forget
+#   machine's trusted mode-0600 Unix socket, and — unlike the fire-and-forget
 #   O/P frames below — actually check the reply, since there is no local-tool
 #   fallback for a file clip: `E` status fails loudly.
 #   Over SSH → send op `M` (manifest-persist-local: this host US NUL-joined
-#   absolute paths) to THIS machine's own bridge (127.0.0.1:2489) first — the
+#   absolute paths) to THIS machine's trusted socket first — the
 #   primary action, reply-checked exactly like the local branch's `U` above —
 #   then best-effort send the SAME op `M` (same payload) to the
 #   reverse-tunneled peer bridge (CLIPBOARD_BRIDGE_PORT, default 2490 — same
@@ -50,10 +50,10 @@
 #   (`nc -z`), not just "are we SSH'd in": an iPad/Blink session has no
 #   reverse tunnel at all. A down/outdated/erroring peer bridge only warns on
 #   stderr and exits 0 — the local clip already succeeded, so a missing peer
-#   notification never fails the command. The LOCAL `M` (2489) is the
+#   notification never fails the command. The LOCAL trusted `M` is the
 #   unconditional primary on every platform as of Phase 7 (spec §5): every
 #   onboarded machine, macOS or Linux, has its own bridge/store, so an
-#   unreachable 2489 is always real breakage -- there is no more store-less
+#   unreachable local socket is always real breakage -- there is no more store-less
 #   platform for a peer push to stand in for.
 #
 #   Exit-code contract for file mode over SSH:
@@ -203,6 +203,38 @@ send_frame() {
   fi
 }
 
+LOCAL_BRIDGE_SOCKET="${CLIPBOARD_BRIDGE_LOCAL_SOCKET:-$HOME/.local/state/cb.sock}"
+
+# Trusted-local sibling of send_frame. The service, not this request, assigns
+# trust by accepting it on a mode-0600 Unix socket that SSH never forwards.
+send_frame_unix() {
+  _op=$1 _sock=$2 _payfile=$3 _replyfile=${4:-}
+  _len=$(wc -c < "$_payfile" | tr -d ' ')
+  if [ -n "$_replyfile" ]; then
+    {
+      printf '%s' "$_op"
+      printf "\\$(printf %03o $(((_len>>24)&255)))\\$(printf %03o $(((_len>>16)&255)))\\$(printf %03o $(((_len>>8)&255)))\\$(printf %03o $((_len&255)))"
+      cat "$_payfile"
+    } | nc -U -w2 "$_sock" > "$_replyfile" 2>/dev/null || true
+  else
+    {
+      printf '%s' "$_op"
+      printf "\\$(printf %03o $(((_len>>24)&255)))\\$(printf %03o $(((_len>>16)&255)))\\$(printf %03o $(((_len>>8)&255)))\\$(printf %03o $((_len&255)))"
+      cat "$_payfile"
+    } | nc -U -w2 "$_sock" >/dev/null 2>&1 || true
+  fi
+}
+
+# The socket file is a cheap macOS readiness check. On Linux, start the
+# socket-activated unit once when absent, then let the request/reply decide.
+ensure_trusted_bridge() {
+  [ -S "$LOCAL_BRIDGE_SOCKET" ] && return 0
+  [ "$(uname)" = Darwin ] && return 1
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user start clipboard-bridge-trusted.socket >/dev/null 2>&1 || true
+  [ -S "$LOCAL_BRIDGE_SOCKET" ]
+}
+
 # ensure_local_bridge -- 0 iff this machine's own bridge (127.0.0.1:2489)
 # answers a connect scan, self-healing on Linux first (Phase 7 spec §5): a
 # stopped clipboard-bridge.socket is restarted best-effort via systemd user
@@ -220,10 +252,9 @@ ensure_local_bridge() {
 # EXACTLY "unknown opcode" means one side's clipboard-bridge predates file
 # clips (U/M/C are newer than the always-supported plain-text G/O/P) --
 # the bare relayed "pbcopy: unknown opcode" left no clue which machine
-# needed the update. Port 2489 is always THIS machine's own bridge (U's
-# local port, and --content's local branch); anything else is the
-# reverse-tunneled PEER bridge (M's peer port, and --content's SSH branch)
-# -- so the port alone decides which side the hint should name.
+# needed the update. Callers pass 2489 as the local-machine tag even when U/M
+# traveled over the trusted Unix socket; anything else names the
+# reverse-tunneled peer. The tag decides which side the hint should name.
 unknown_opcode_hint() {
   if [ "$1" = 2489 ]; then
     printf '%s' "this machine's clipboard bridge is outdated (unknown opcode) -- chezmoi apply + restart clipboard-bridge"
@@ -358,8 +389,8 @@ if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
       fi
     done
 
-    ensure_local_bridge || true   # self-heal a stopped socket; reply check below decides
-    send_frame U 2489 "$payfile" "$replyfile"
+    ensure_trusted_bridge || true # self-heal on Linux; reply check decides
+    send_frame_unix U "$LOCAL_BRIDGE_SOCKET" "$payfile" "$replyfile"
     _status=$(head -c 1 "$replyfile" 2>/dev/null || true)
     if [ "$_status" = "O" ]; then
       exit 0
@@ -373,7 +404,7 @@ if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
       fi
       exit 1
     fi
-    echo "pbcopy: clipboard bridge is not reachable on 127.0.0.1:2489" >&2
+    echo "pbcopy: trusted clipboard bridge is not reachable at $LOCAL_BRIDGE_SOCKET" >&2
     exit 1
   fi
 
@@ -494,15 +525,15 @@ if [ $# -gt 0 ]; then
   trap 'rm -f "$pathsfile" "$mn_payfile"' EXIT INT TERM
   { printf '%s\037' "$host"; cat "$pathsfile"; } > "$mn_payfile"
 
-  # 1. Local origin record: `M` to this machine's own bridge (2489), reply
+  # 1. Local origin record: `M` to this machine's trusted Unix socket, reply
   #    checked exactly like the non-SSH local branch's `U` above (E status
   #    fails loudly; unreachable is a hard error -- no local-tool fallback
   #    exists for a file clip).
   m_replyfile=$(mktemp "${TMPDIR:-/tmp}/pbcopy-mr.XXXXXX") || { echo "pbcopy: mktemp failed" >&2; exit 1; }
   trap 'rm -f "$pathsfile" "$mn_payfile" "$m_replyfile"' EXIT INT TERM
 
-  ensure_local_bridge || true   # self-heal a stopped socket; reply check below decides
-  send_frame M 2489 "$mn_payfile" "$m_replyfile"
+  ensure_trusted_bridge || true # self-heal on Linux; reply check below decides
+  send_frame_unix M "$LOCAL_BRIDGE_SOCKET" "$mn_payfile" "$m_replyfile"
   _mstatus=$(head -c 1 "$m_replyfile" 2>/dev/null || true)
   if [ "$_mstatus" = "E" ]; then
     _mmsg=$(tail -c +6 "$m_replyfile" 2>/dev/null)
@@ -514,7 +545,7 @@ if [ $# -gt 0 ]; then
     exit 1
   fi
   if [ "$_mstatus" != "O" ]; then
-    echo "pbcopy: this machine's own clipboard bridge is not reachable on 127.0.0.1:2489" >&2
+    echo "pbcopy: this machine's trusted clipboard bridge is not reachable at $LOCAL_BRIDGE_SOCKET" >&2
     exit 1
   fi
 

@@ -40,18 +40,18 @@
 #
 # socat listens on loopback TCP 2489 and, on every accepted connection, EXECs
 # a fresh clipboard-bridge-dispatch — the Phase 5 per-connection handler that
-# speaks a length-prefixed binary framing protocol (get/get-regtype/get-host/
-# set/persist/copy/fetch-file; see docs/clipboard-universal-project.md §11). It is
-# backward compatible: an old bare-`nc -U` client that connects and sends
+# speaks a length-prefixed binary framing protocol (get/set/persist/copy plus
+# capability-bound file grants/streams; see clipboard-universal-project.md
+# §11). It is backward compatible: an old bare client that connects and sends
 # nothing hits the dispatcher's short first-byte timeout and falls through to
 # `exec pbpaste`, exactly the pre-Phase-5 behavior, so the *live* clipboard is
 # still served (a `pbpaste | nc -l` loop would snapshot at listen time and
 # serve stale text). `fork` handles concurrent/repeated pastes; the remote
-# reaches it through a user-only unix socket forwarded by SSH (see
-# ~/.ssh/config.d/clipboard.config). macOS only: pbpaste is the source of
-# truth off-host there's nothing to serve.
+# reaches this loopback TCP listener through SSH's reverse forward. Privileged
+# local file operations use the separate mode-0600 socket below. macOS only:
+# pbpaste is the source of truth off-host; there's nothing else to serve.
 [clipboard-bridge]
-description    = "Serve the Mac clipboard to remote nvim over an SSH reverse tunnel"
+description    = "Serve clipboard and authorized files over an SSH reverse tunnel"
 cmd            = ["socat", "TCP-LISTEN:2489,bind=127.0.0.1,fork,reuseaddr", "EXEC:{{ .chezmoi.homeDir }}/.local/libexec/clipboard-bridge-dispatch"]
 keep_alive     = true
 run_at_load    = true
@@ -64,6 +64,23 @@ error_log_path = "~/.cache/clipboard-bridge/listener.log"
 # launchd's minimal PATH. Mirror the images-automount PATH so /opt/homebrew/bin
 # (hs) and /usr/bin (sqlite3, pbpaste, pbcopy) resolve.
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+CLIPBOARD_BRIDGE_ENDPOINT = "public"
+
+# clipboard-bridge-trusted — local-only authority boundary for U and the
+# origin-side M. This socket is NEVER forwarded by SSH; the stale socket bug
+# fixed by the TCP migration applied to ssh -R's socket, not to a service-owned
+# listener. socat owns cleanup and permissions here.
+[clipboard-bridge-trusted]
+description    = "Trusted local clipboard file-authority endpoint"
+cmd            = ["socat", "UNIX-LISTEN:{{ .chezmoi.homeDir }}/.local/state/cb.sock,fork,unlink-early,mode=0600", "EXEC:{{ .chezmoi.homeDir }}/.local/libexec/clipboard-bridge-dispatch"]
+keep_alive     = true
+run_at_load    = true
+log_path       = "~/.cache/clipboard-bridge/trusted-listener.log"
+error_log_path = "~/.cache/clipboard-bridge/trusted-listener.log"
+
+[clipboard-bridge-trusted.env]
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+CLIPBOARD_BRIDGE_ENDPOINT = "trusted"
 
 # clipboard-mount-sweep — belt-and-braces reaper for clipboard peer mounts
 # (clipboard-mount spec §3.3): every 60s, force-unmount any rclone SFTP mount

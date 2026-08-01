@@ -150,6 +150,22 @@ EOF
     The stderr should include "bridge"
   End
 
+  It 'rejects a truncated O frame instead of reporting an empty manifest success'
+    printf 'O' > "$REPLY_FRAME"
+    When run command sh "$SCRIPT" --manifest
+    The status should be failure
+    The output should equal ""
+    The stderr should include "truncated frame"
+  End
+
+  It 'rejects a frame whose declared payload is longer than the bytes received'
+    printf 'O\000\000\000\012short' > "$REPLY_FRAME"
+    When run command sh "$SCRIPT" --manifest
+    The status should be failure
+    The output should equal ""
+    The stderr should include "malformed frame"
+  End
+
   It 'never touches the bridge and stays byte-identical for a plain paste (no flags)'
     sentinel="pbpaste-manifest-untouched-sentinel-$$"
     printf '%s' "$sentinel" | /usr/bin/pbcopy
@@ -168,6 +184,7 @@ End
 # exercise the actual copy engine and assert on real bytes landing in TARGET.
 Describe 'pbpaste: --files (local materialization)'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+  TOKEN=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
   # build_frame <status> <payload_file> <outfile> -- same wire-exact
   # <status><BE32 len><payload> framing helper as the --manifest Describe
@@ -184,13 +201,13 @@ Describe 'pbpaste: --files (local materialization)'
   }
 
   # build_manifest <outfile> <kind> <host> <ts> <path>... -- writes the raw
-  # `L`-reply payload manifest_parse expects: kind US host US ts US path NUL
+  # `K`-reply payload manifest_parse expects: kind US host US ts US "-" US path NUL
   # path NUL path ...
   build_manifest() {
     outfile=$1 kind=$2 host=$3 ts=$4
     shift 4
     {
-      printf '%s\037%s\037%s\037' "$kind" "$host" "$ts"
+      printf '%s\037%s\037%s\037%s\037' "$kind" "$host" "$ts" "$TOKEN"
       first=1
       for p in "$@"; do
         if [ "$first" -eq 1 ]; then
@@ -258,6 +275,38 @@ EOF
       diff -r "$4/a.txt" "$2/a.txt" || exit 2
       diff -r "$4/adir" "$2/adir" || exit 3
     ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/err" "$SRC"
+    The status should be success
+  End
+
+  It 'refuses a local self-host manifest that has no authority token'
+    TOKEN=-
+    printf 'untrusted local\n' > "$SRC/untrusted-local.txt"
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752200000.11 "$SRC/untrusted-local.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "did not authorize"
+    The file "$TARGET/untrusted-local.txt" should not be exist
+  End
+
+  It 'preserves a literal US byte in a path instead of splitting a new item'
+    When run command sh -c '
+      us=$(printf "\037")
+      name="unit${us}separator.txt"
+      src="$3/$name"
+      printf "control-byte path\n" > "$src"
+      payload="$4/us-payload"
+      printf "file\037mac-mini\0371752200000.15\037%s\037%s" "$6" "$src" > "$payload"
+      len=$(wc -c < "$payload" | tr -d " ")
+      {
+        printf O
+        printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
+        cat "$payload"
+      } > "$5"
+      sh "$1" --files "$2" >/dev/null &&
+      cmp "$src" "$2/$name"
+    ' _ "$SCRIPT" "$TARGET" "$SRC" "$SHELLSPEC_TMPBASE" "$REPLY_FRAME" "$TOKEN"
     The status should be success
   End
 
@@ -368,8 +417,8 @@ EOF
   # A manifest from a DIFFERENT host used to hit T5's "later milestone"
   # error here; T13 replaces that with a real remote engine (its own
   # dedicated "pbpaste: --files (remote engine)" Describe below, with an
-  # opcode-aware fake `nc` that can actually answer F/A). This Describe's
-  # fake `nc` only ever answers the `L` manifest fetch, so the one thing
+  # opcode-aware fake `nc` that can actually answer f/a). This Describe's
+  # fake `nc` only ever answers the `K` manifest fetch, so the one thing
   # worth asserting HERE is the negative: the OLD milestone string is gone.
   # It's since ALSO become a same-shape case of the Mac-side-no-SSH refusal
   # (see the dedicated regression test right below this one) -- still
@@ -388,17 +437,17 @@ EOF
   # Regression: sitting at the Mac (no SSH_* env at all -- this Describe's
   # setup() unsets them) with a manifest whose source_host differs from this
   # machine's own (fake scutil says "mac-mini"; manifest says
-  # "some-other-mac") used to fall through to PF_REMOTE's F/A engine anyway
+  # "some-other-mac") used to fall through to PF_REMOTE's stream engine anyway
   # -- talking to THIS Mac's own bridge (port 2489) for paths that live on a
-  # DIFFERENT host. This Describe's fake `nc` only ever answers the `L`
-  # manifest fetch (never F/A), so the old behavior would have produced a
+  # DIFFERENT host. This Describe's fake `nc` only ever answers the `K`
+  # manifest fetch (never f/a), so the old behavior would have produced a
   # per-item bridge/connection failure instead of a clean refusal -- and on
   # a real machine, whenever the remote path happens to also exist locally
   # (the Mac-to-Mac mirror case), it would silently materialize that STALE
   # LOCAL TWIN instead. Assert the exact refusal message, exit 1, and that
-  # no SECOND `nc` call (an F/A frame) was ever made -- only the initial `L`
+  # no SECOND `nc` call (an f/a frame) was ever made -- only the initial `K`
   # manifest fetch appears in the log.
-  It 'refuses --files on a remote manifest when sitting at the Mac (no SSH): exact error, exit 1, no F/A frames sent'
+  It 'refuses --files on a remote manifest when sitting at the Mac (no SSH): exact error, no f/a frames'
     pf="$SHELLSPEC_TMPBASE/payload"
     build_manifest "$pf" file some-other-mac 1752200000.61 "/remote/mirror.txt"
     build_frame O "$pf" "$REPLY_FRAME"
@@ -467,6 +516,7 @@ End
 # instant -- without needing to fake/skip any real binary.
 Describe 'pbpaste: --files interrupt safety'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+  TOKEN=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 
   build_frame() {
     st=$1 payload_file=$2 outfile=$3
@@ -482,7 +532,7 @@ Describe 'pbpaste: --files interrupt safety'
     outfile=$1 kind=$2 host=$3 ts=$4
     shift 4
     {
-      printf '%s\037%s\037%s\037' "$kind" "$host" "$ts"
+      printf '%s\037%s\037%s\037%s\037' "$kind" "$host" "$ts" "$TOKEN"
       first=1
       for p in "$@"; do
         if [ "$first" -eq 1 ]; then
@@ -580,6 +630,7 @@ End
 # instead -- see the explicit host-comparison this task added).
 Describe 'pbpaste: --files (remote engine)'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+  TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
   build_frame() {
     st=$1 payload_file=$2 outfile=$3
@@ -595,7 +646,7 @@ Describe 'pbpaste: --files (remote engine)'
     outfile=$1 kind=$2 host=$3 ts=$4
     shift 4
     {
-      printf '%s\037%s\037%s\037' "$kind" "$host" "$ts"
+      printf '%s\037%s\037%s\037%s\037' "$kind" "$host" "$ts" "$TOKEN"
       first=1
       for p in "$@"; do
         if [ "$first" -eq 1 ]; then
@@ -610,7 +661,7 @@ Describe 'pbpaste: --files (remote engine)'
 
   # build_a_frame <est_bytes> <tar_body_file> <outfile> -- an A-reply frame:
   # O + BE32(8) + BE64(est_bytes), then <tar_body_file>'s bytes RAW (no
-  # further framing -- op_archive_stream's contract: read to EOF).
+  # further framing -- stream_archive_path's contract: read to EOF).
   build_a_frame() {
     est=$1 body=$2 outfile=$3
     {
@@ -648,9 +699,9 @@ op=\$(dd bs=1 count=1 2>/dev/null < "\$raw")
 { printf '%s:%s:' "\$port" "\$op"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
 rm -f "\$raw"
 case "\$op" in
-  L) cat "$REPLY_L" ;;
-  F) cat "$REPLY_F" ;;
-  A) cat "$REPLY_A" ;;
+  K) cat "$REPLY_L" ;;
+  f) cat "$REPLY_F" ;;
+  a) cat "$REPLY_A" ;;
 esac
 EOF
     chmod +x "$BINDIR/nc"
@@ -677,6 +728,27 @@ EOF
   }
   BeforeEach 'setup'
 
+  It 'fails closed with an upgrade hint when the origin does not support K'
+    errf="$SHELLSPEC_TMPBASE/k-unknown"
+    printf 'unknown opcode' > "$errf"
+    build_frame E "$errf" "$REPLY_L"
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "origin clipboard bridge is outdated"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include ":f:"
+  End
+
+  It 'refuses a remote pointer-only manifest instead of falling back to raw paths'
+    TOKEN=-
+    pf="$SHELLSPEC_TMPBASE/payload"
+    build_manifest "$pf" file mac-mini 1752300000.0 "/remote/not-authorized.txt"
+    build_frame O "$pf" "$REPLY_L"
+    When run command sh "$SCRIPT" --files "$TARGET"
+    The status should be failure
+    The stderr should include "did not authorize"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include ":f:"
+  End
+
   It 'materializes a regular file via F, byte-identical to the source bytes'
     pf="$SHELLSPEC_TMPBASE/payload"
     build_manifest "$pf" file mac-mini 1752300000.1 "/remote/a.txt"
@@ -701,8 +773,10 @@ EOF
 
     When run command sh "$SCRIPT" --files "$TARGET"
     The status should be success
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:L:"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:F:"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:K:"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:f:"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$TOKEN"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "/remote/b.txt"
   End
 
   It 'refuses to overwrite an existing target name without --force (same conflict semantics as local)'
@@ -716,9 +790,9 @@ EOF
     The stderr should include "dup.txt"
     The contents of file "$TARGET/dup.txt" should equal "old"
     # The conflict check runs BEFORE any transfer -- only the manifest's own
-    # `L` fetch happened, never an `F`/`A` call for the conflicting item.
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:L:"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include ":F:"
+    # `K` fetch happened, never an `f`/`a` call for the conflicting item.
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:K:"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include ":f:"
   End
 
   It "retries as A on the dispatcher's exact is-directory error, extracting the directory correctly"
@@ -751,8 +825,8 @@ EOF
       diff -r "$3" "$2/adir" || exit 2
     ' _ "$SCRIPT" "$TARGET" "$src"
     The status should be success
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include ":F:"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include ":A:"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include ":f:"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include ":a:"
   End
 
   # Integrity check per T13/design §4: a mid-stream I/O error on the far end
@@ -929,8 +1003,8 @@ EOF
     build_frame O "$truncbody" "$fullframe"
     head -c 45 "$fullframe" > "$SHELLSPEC_TMPBASE/reply.F-trunc"
 
-    # Per-path F replies: this test's own nc picks the canned reply by
-    # grepping the request payload for the item's basename -- the
+    # Per-item f replies: this test's own nc picks the canned reply by
+    # reading the request's final decimal item index -- the
     # setup-provided nc serves ONE canned file per opcode, which can't
     # distinguish the two F calls this run makes.
     cat > "$BINDIR/nc" <<EOF
@@ -942,9 +1016,10 @@ cat > "\$raw"
 op=\$(dd bs=1 count=1 2>/dev/null < "\$raw")
 { printf '%s:%s:' "\$port" "\$op"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
 case "\$op" in
-  L) cat "$SHELLSPEC_TMPBASE/reply.L" ;;
-  F)
-    if LC_ALL=C grep -q "trunc.txt" "\$raw"; then
+  K) cat "$SHELLSPEC_TMPBASE/reply.L" ;;
+  f)
+    index=\$(tail -c 1 "\$raw")
+    if [ "\$index" = "2" ]; then
       cat "$SHELLSPEC_TMPBASE/reply.F-trunc"
     else
       cat "$SHELLSPEC_TMPBASE/reply.F-ok"

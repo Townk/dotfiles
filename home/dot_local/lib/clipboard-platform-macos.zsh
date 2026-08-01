@@ -106,14 +106,15 @@ clip::op_copy() {
   rm -rf -- "$tmpdir"
 }
 
-# clip::set_file_urls_core <NUL-joined-abs-paths> -- the form-A pasteboard
+# clip::set_file_urls_core <NUL-joined-abs-paths> [untrusted=0] [expected-change-count]
+# -- the form-A pasteboard
 # write extracted from op_set_file_urls so the M handler's mount enrichment
 # (clip::mount_enrich below) can reuse it verbatim: generates the
 # writeAllData Lua (NSFilenamesPboardType = all paths as an XML plist,
 # public.file-url = the first path, urlencoded) and runs it through hs.
 # No framing/validation/reply -- callers own those. rc 0 on success.
 clip::set_file_urls_core() {
-  local payload=$1
+  local payload=$1 untrusted=${2:-0} expected_cc=${3:-}
   local tmpdir; tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-fileurls.XXXXXX") || return 1
   local script="$tmpdir/set-file-urls.lua"
   # Paths go via a NUL-joined side file, not string-interpolated into Lua
@@ -131,10 +132,20 @@ clip::set_file_urls_core() {
     print -r -- "for _, p in ipairs(paths) do xml[#xml+1] = '<string>' .. esc(p) .. '</string>' end"
     print -r -- "xml[#xml+1] = '</array></plist>'"
     print -r -- "local function urlenc(s) return (s:gsub('[^%w%-%._~/]', function(c) return string.format('%%%02X', c:byte()) end)) end"
-    print -r -- "hs.pasteboard.writeAllData({"
+    print -r -- "local data = {"
     print -r -- "  ['NSFilenamesPboardType'] = table.concat(xml, '\\n'),"
     print -r -- "  ['public.file-url'] = 'file://' .. urlenc(paths[1]),"
-    print -r -- "})"
+    if (( untrusted )); then
+      # Change-bound provenance: unlike the old TTL file, this marker travels
+      # in the exact pasteboard change the watcher observes and cannot be
+      # overwritten by a concurrent public O request.
+      print -r -- "  ['org.chezmoi.clipboard.UntrustedFileURLs'] = '1',"
+    fi
+    print -r -- "}"
+    if [[ -n "$expected_cc" ]]; then
+      print -r -- "if hs.pasteboard.changeCount() ~= $expected_cc then return end"
+    fi
+    print -r -- "if not hs.pasteboard.writeAllData(data) then error('writeAllData failed') end"
   } > "$script"
   local rc=0
   clip::hs_run "$script" || rc=1
@@ -266,11 +277,10 @@ clip::pb_changecount() {
 #    without this every copy would silently stay lazy until a fresh
 #    connection] -> map paths (inline prefix concat; clipboard-mount map's
 #    line output can't carry NUL-joined path lists) -> first-path existence ->
-#    changeCount unchanged? (the guard that makes a LATE set unable to
-#    clobber anything the user copied in the gap) -> arm one-shot
-#    suppress-echo (hash over the newline-joined MAPPED paths -- the exact
-#    identity clipboard-history.lua's files capture derives, see its
-#    files-suppress note) -> set_file_urls_core.
+#    one Hammerspoon script atomically checks changeCount and writes standard
+#    file URLs plus the private UntrustedFileURLs marker. The marker belongs
+#    to that exact pasteboard change, so the watcher cannot turn a public M
+#    pointer into file authority and a concurrent O request cannot erase it.
 # Every failure anywhere just exits: the lazy row is already the fallback.
 # CLIPBOARD_MOUNT_BIN overrides the helper path (tests stub it; unset+missing
 # file = enrichment compiled out, byte-identical legacy behavior).
@@ -279,9 +289,10 @@ clip::mount_enrich() {
   (
     local cm="${CLIPBOARD_MOUNT_BIN:-$HOME/.local/libexec/clipboard-mount}"
     [[ -x "$cm" ]] || exit 0
-    # M runs for BOTH the origin's own local send (port 2489) and the peer
-    # push (port 2490, Fix A) -- the SAME payload, same <host>. When <host> IS
-    # this machine (the 2489 leg), enriching would try to mount OURSELVES over
+    # M runs for BOTH the origin's trusted local-socket send and the public
+    # peer push (seen by that peer through port 2490) -- the SAME payload,
+    # same <host>. When <host> IS this machine (the trusted leg), enriching
+    # would try to mount OURSELVES over
     # SFTP: needless per-copy ssh churn, log growth, and if self-ssh ever
     # authenticates, a persistent self-mount + a pasteboard write that
     # violates M's whole contract (record-only, no pasteboard side effect --
@@ -332,16 +343,10 @@ clip::mount_enrich() {
     local p
     for p in "${f[@]}"; do mapped+=( "${mp}${p}" ); done
     [[ -e "${mapped[1]}" ]] || exit 0
-    local now_cc; now_cc=$(clip::pb_changecount) || exit 0
-    [[ "$now_cc" == "$cc" ]] || exit 0
-    # The suppress marker is stamped here, BEFORE set_file_urls_core runs --
-    # but that call's hs_run can take up to 10s (its own timeout) against
-    # ORIGIN_TTL=5 in the watcher. A pathologically slow hs invocation can
-    # let the marker expire before the pasteboard write actually lands, so
-    # the watcher captures a twin row. Rare and self-limiting (nothing to
-    # re-stamp automatically; revisit only if ever seen live).
-    clip::declare_origin_core "$host" "${(pj:\n:)mapped}" suppress-echo
-    clip::set_file_urls_core "${(pj:\0:)mapped}"
+    # The final changeCount comparison and write happen in ONE Hammerspoon
+    # script. A shell-side recheck followed by a second hs invocation left a
+    # multi-second gap in which a newer user copy could be overwritten.
+    clip::set_file_urls_core "${(pj:\0:)mapped}" 1 "$cc"
   ) </dev/null >/dev/null 2>&1 &!
 }
 

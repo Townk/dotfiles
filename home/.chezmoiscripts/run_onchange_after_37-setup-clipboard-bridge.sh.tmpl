@@ -11,14 +11,21 @@ set -eu
 # Re-run when the units or the dispatcher stack changes:
 # clipboard-bridge.socket: {{ include "dot_config/systemd/user/clipboard-bridge.socket" | sha256sum }}
 # clipboard-bridge@.service: {{ include "dot_config/systemd/user/clipboard-bridge@.service" | sha256sum }}
+# clipboard-bridge-trusted.socket: {{ include "dot_config/systemd/user/clipboard-bridge-trusted.socket" | sha256sum }}
+# clipboard-bridge-trusted@.service: {{ include "dot_config/systemd/user/clipboard-bridge-trusted@.service" | sha256sum }}
 # clipboard-bridge-dispatch: {{ include "dot_local/libexec/executable_clipboard-bridge-dispatch" | sha256sum }}
 # clipboard-store-core.zsh: {{ include "dot_local/lib/clipboard-store-core.zsh" | sha256sum }}
 # clipboard-platform-linux-headless.zsh: {{ include "dot_local/lib/clipboard-platform-linux-headless.zsh" | sha256sum }}
 
+if ! nc -h 2>&1 | grep -q -- '-U'; then
+  echo "clipboard-bridge: nc lacks Unix-socket support; install netcat-openbsd." >&2
+  exit 1
+fi
+
 if systemctl --user show-environment >/dev/null 2>&1; then
   systemctl --user daemon-reload
-  systemctl --user enable clipboard-bridge.socket
-  systemctl --user restart clipboard-bridge.socket
+  systemctl --user enable clipboard-bridge.socket clipboard-bridge-trusted.socket
+  systemctl --user restart clipboard-bridge.socket clipboard-bridge-trusted.socket
 else
   echo "clipboard-bridge: no user systemd instance reachable; will activate at next login/boot." >&2
 fi

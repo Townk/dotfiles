@@ -151,7 +151,7 @@ clip::op_set_file_urls() {
   for p in "${paths[@]}"; do
     [[ "$p" == /* ]] || { send_err "not absolute: $p"; return }
   done
-  if clip::persist_files_manifest_row "$(clip::self_host)" "$payload"; then
+  if clip::persist_files_manifest_row "$(clip::self_host)" "$payload" 1; then
     send_ok ""
   else
     send_err "$REPLY"

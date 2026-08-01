@@ -11,6 +11,7 @@ Describe 'pbcopy: file-object mode'
     # Force the local (non-SSH) branch regardless of the ambient shell.
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
     export PBCOPY_OSC52_SINK="$SHELLSPEC_TMPBASE/osc52"
+    export CLIPBOARD_BRIDGE_LOCAL_SOCKET="$SHELLSPEC_TMPBASE/trusted.sock"
     # Hermetic self_host() resolution: a fresh sandbox with no clipboard/
     # self-name file, so every example (unless it opts in below) exercises
     # self_host()'s scutil/hostname fallback rather than risking a stray real
@@ -60,7 +61,7 @@ EOF
   }
   BeforeEach 'setup'
 
-  It 'sends a U frame to :2489 with the NUL-joined absolute paths'
+  It 'sends a U frame to the trusted local socket with NUL-joined absolute paths'
     f1="$SHELLSPEC_TMPBASE/a.txt"; touch "$f1"
     f2="$SHELLSPEC_TMPBASE/b.txt"; touch "$f2"
     # Expected canonical form: pbcopy resolves symlinks (pwd -P), and
@@ -71,7 +72,7 @@ EOF
     cf2=$(cd "$(dirname "$f2")" && pwd -P)/$(basename "$f2")
     When run command sh "$SCRIPT" "$f1" "$f2"
     The status should be success
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:U"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "trusted.sock:U"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$cf1|$cf2"
   End
 
@@ -155,7 +156,7 @@ EOF
   # pasteboard, on either end. Host field: replicate pbcopy's own
   # scutil-then-hostname fallback here rather than stubbing either, so the
   # assertion tracks whatever this machine actually resolves to.
-  It 'sends an M frame to BOTH :2489 (local origin record) and :2490 (peer manifest), in that order, and never a U or N frame'
+  It 'sends M to the trusted local socket then :2490, and never sends U or N publicly'
     export SSH_CONNECTION="x 1 y 22"
     expected_host=$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)
     f1="$SHELLSPEC_TMPBASE/rem-a.txt"; touch "$f1"
@@ -165,17 +166,17 @@ EOF
     export NC_BRIDGE_UP=1
     When run command sh "$SCRIPT" "$f1" "$f2"
     The status should be success
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "trusted.sock:M"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:M"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$expected_host"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$cf1|$cf2"
     # Order matters: the local M (origin record, primary) must precede the
     # peer M (best-effort secondary) in the log.
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should match pattern "*2489:M*2490:M*"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should match pattern "*trusted.sock:M*2490:M*"
     # The bug this whole rework exists to fix: no `U` frame is sent anymore
     # (it set the pasteboard and relied on a watcher that can't see a
     # locked/headless origin over SSH).
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2489:U"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "trusted.sock:U"
     # Fix A: no `N` frame is sent anymore either -- it set the PEER's
     # pasteboard to the paths as text, which is exactly the reflected
     # "remote text" twin this fix exists to stop.
@@ -219,7 +220,7 @@ raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
 cat > "\$raw"
 { printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
 rm -f "\$raw"
-if [ "\$port" = "2489" ]; then
+if [ "\$port" = "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" ]; then
   printf 'O\\000\\000\\000\\000'
 else
   printf 'E\\000\\000\\000\\004boom'
@@ -230,7 +231,7 @@ EOF
     When run command sh "$SCRIPT" "$f1"
     The status should be success
     The stderr should include "boom"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "trusted.sock:M"
   End
 
   # Rework R7 (still true under X2-redo): an "unknown opcode" E-reply on the
@@ -249,7 +250,7 @@ raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
 cat > "\$raw"
 { printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
 rm -f "\$raw"
-if [ "\$port" = "2489" ]; then
+if [ "\$port" = "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" ]; then
   printf 'O\\000\\000\\000\\000'
 else
   printf 'E\\000\\000\\000\\016unknown opcode'
@@ -262,11 +263,11 @@ EOF
     The stderr should include "peer bridge doesn't support file clips yet"
     The stderr should include "unknown opcode"
     The stderr should include "update chezmoi on the other machine"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "trusted.sock:M"
   End
 
-  # X2-redo: a down reverse bridge no longer fails the command -- the local
-  # origin record (M to 2489) is the primary action and still lands; only
+  # X2-redo: a down reverse bridge no longer fails the command -- the trusted
+  # local origin M is the primary action and still lands; only
   # the peer notification (N to 2490) is skipped, with a warning naming why.
   It 'still records the local origin clip and warns (exit 0) when the peer bridge (2490) is down'
     export SSH_CONNECTION="x 1 y 22"
@@ -276,14 +277,14 @@ EOF
     The status should be success
     The stderr should include "peer"
     The stderr should include "not notified"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:M"
+    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "trusted.sock:M"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2490:M"
   End
 
   # X2-redo: this machine's OWN bridge (2489) is the primary action -- if
   # IT is unreachable, that's a hard error (there is no local-tool fallback
   # for a file clip), regardless of the peer bridge's state.
-  It 'hard-errors (exit 1) when this machine'"'"'s own bridge (2489) is unreachable'
+  It 'hard-errors when this machine'"'"'s trusted socket is unreachable'
     export SSH_CONNECTION="x 1 y 22"
     cat > "$BINDIR/nc" <<EOF
 #!/bin/sh
@@ -291,7 +292,7 @@ if [ "\$1" = "-z" ]; then
   exit 0
 fi
 port=\$3
-if [ "\$port" = "2489" ]; then
+if [ "\$port" = "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" ]; then
   cat > /dev/null
   exit 1
 fi
@@ -305,7 +306,7 @@ EOF
     f1="$SHELLSPEC_TMPBASE/rem-local-down.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
     The status should be failure
-    The stderr should include "this machine's own clipboard bridge"
+    The stderr should include "trusted clipboard bridge"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should equal ""
   End
 
@@ -326,7 +327,7 @@ if [ "\$1" = "-z" ]; then
   exit 0
 fi
 port=\$3
-if [ "\$port" = "2489" ]; then
+if [ "\$port" = "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" ]; then
   cat > /dev/null
   exit 1
 fi
@@ -340,7 +341,7 @@ EOF
     f1="$SHELLSPEC_TMPBASE/storeless-ok.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
     The status should be failure
-    The stderr should include "this machine's own clipboard bridge is not reachable on 127.0.0.1:2489"
+    The stderr should include "trusted clipboard bridge is not reachable"
     The stderr should not include "Phase 7 pending"
     The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "2490:M"
   End
@@ -367,7 +368,7 @@ EOF
     f1="$SHELLSPEC_TMPBASE/storeless-bothdown.txt"; touch "$f1"
     When run command sh "$SCRIPT" "$f1"
     The status should be failure
-    The stderr should include "this machine's own clipboard bridge is not reachable on 127.0.0.1:2489"
+    The stderr should include "trusted clipboard bridge is not reachable"
     The stderr should not include "no local clipboard store"
     The stderr should not include "reverse bridge down"
   End
@@ -660,6 +661,7 @@ Describe 'pbcopy file mode: Phase 7 -- local M is the unconditional primary'
     STUBS="$SHELLSPEC_TMPBASE/stubs"; mkdir -p "$STUBS"
     export PATH="$STUBS:$PATH"
     export SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22"
+    export CLIPBOARD_BRIDGE_LOCAL_SOCKET="$SHELLSPEC_TMPBASE/trusted.sock"
     touch "$SHELLSPEC_TMPBASE/afile"
     # uname stub: pretend we are the dev-shell
     printf '#!/bin/sh\necho Linux\n' > "$STUBS/uname"; chmod +x "$STUBS/uname"
@@ -674,15 +676,15 @@ Describe 'pbcopy file mode: Phase 7 -- local M is the unconditional primary'
   It 'hard-fails on unreachable local bridge even on Linux (interim retired)'
     When run command sh "$PBCOPY" "$SHELLSPEC_TMPBASE/afile"
     The status should equal 1
-    The stderr should include "not reachable on 127.0.0.1:2489"
+    The stderr should include "trusted clipboard bridge is not reachable"
     The stderr should not include "Phase 7 pending"
   End
 
   It 'kicks the systemd socket before giving up on Linux'
     When run command sh "$PBCOPY" "$SHELLSPEC_TMPBASE/afile"
     The status should equal 1
-    The stderr should include "not reachable on 127.0.0.1:2489"
-    The contents of file "$SHELLSPEC_TMPBASE/systemctl.log" should include "--user start clipboard-bridge.socket"
+    The stderr should include "trusted clipboard bridge is not reachable"
+    The contents of file "$SHELLSPEC_TMPBASE/systemctl.log" should include "--user start clipboard-bridge-trusted.socket"
   End
 End
 

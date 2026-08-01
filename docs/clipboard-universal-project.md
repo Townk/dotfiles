@@ -65,23 +65,20 @@ and "remote" when reached over SSH. Evolves the **existing**
 The repo already contains a working clipboard bridge for NeoVim over SSH.
 Read these before designing anything:
 
-- `home/dot_config/nvim/lua/config/options.lua` lines 50–92 — the SSH-gated
+- `home/dot_config/nvim/lua/clipboard/universal.lua` — the SSH-gated
   NeoVim clipboard provider:
   - `clipboard = unnamedplus` on SSH.
   - **copy** = bundled `vim.ui.clipboard.osc52` (write-only; avoids the
     Zellij OSC 52 *read* hang).
-  - **paste** = `nc -U -w 1 <socket>` against
-    `$HOME/.local/state/runtime/chezmoi-system/clipboard-bridge.sock`,
-    served by a macOS launchd `clipboard-bridge` service that returns
-    `pbpaste`; brought up by a reverse SSH tunnel declared in the loose,
-    untracked `~/.ssh/config.d/clipboard.config`.
-  - Fallback: the unnamed register `""` when the socket/`nc` is unavailable.
+  - **paste** = framed `G`/`R` requests to reverse-forwarded loopback TCP
+    `127.0.0.1:2490` (origin listener `2489`).
+  - Fallback: the last local cache/unnamed register when the bridge is absent.
   - Local (non-SSH): default `pbcopy`/`pbpaste`.
 - The macOS `clipboard-bridge` launchd service (read its plist + the service
   script as the first implementation step — it is the existing transport to
   extend, not duplicate).
 - `~/.ssh/config.d/clipboard.config` (loose, untracked, never committed —
-  may reference work SSH aliases) — the existing reverse `StreamLocalForward`.
+  may reference work SSH aliases) — the reverse TCP `RemoteForward`.
 
 ### The E5108 root cause, pinpointed in existing code
 
@@ -477,10 +474,12 @@ materialized by pulling the bytes down **at use time**, then stored locally.
 > localization hop first.
 >
 > The reverse direction — a dev shell pasting a Mac-origin clip, which has no
-> ssh path back to the Mac — uses two new framed bridge ops instead of rsync:
-> `F` (fetch-file; replies with an exact `is-directory` error frame when the
-> path is a directory, signaling the client to fall back to `A`) for
-> individual files, and `A` (archive-stream) for directories: a `tar` stream
+> ssh path back to the Mac — uses capability-bound bridge ops instead of rsync.
+> `K` snapshots the current trusted file manifest and returns a short-lived
+> opaque token plus its display paths. `f` fetches one token-indexed file
+> (replying with the exact `is-directory` error that makes the client retry
+> the same token/index through `a`), while `a` streams a directory as a `tar`
+> archive
 > whose reply carries a `BE64` size prefix computed from a pre-flight
 > `du -sk` — an **estimate for progress display only, with no directional
 > guarantee** (block-accounting rounding and sparse files can push the real
@@ -596,7 +595,8 @@ where "you" is decided by bridge-up:
 > ALWAYS true for a machine reached over SSH (locked/headless). Confirmed
 > live: `U` set the pasteboard (a real file-url landed) but no store row
 > ever appeared. The fix: `pbcopy`'s SSH files branch now sends a new op `M`
-> (manifest-persist-local) to 127.0.0.1:2489 instead of `U` — same payload
+> (manifest-persist-local) to the trusted local Unix socket instead of `U` —
+> same payload
 > shape as `N` (`<host> US path NUL path …`), but record-only: it inserts
 > the `files` store row DIRECTLY via SQL (dedup-scoped exactly like `N`),
 > bypassing the watcher entirely, and never touches the pasteboard at all.
@@ -628,7 +628,8 @@ where "you" is decided by bridge-up:
 > current clipboard). `pbcopy` was the only caller of `N`, so the op has been
 > retired from the dispatcher entirely — both the local and peer sends in
 > `pbcopy`'s SSH files branch are now `M`, byte-identical payload, sent to
-> 127.0.0.1:2489 then (best-effort) `CLIPBOARD_BRIDGE_PORT`/2490. The
+> `~/.local/state/cb.sock` then (best-effort)
+> `CLIPBOARD_BRIDGE_PORT`/2490. The
 > `M`-inserted row's `source_host` is what tells the two sides apart: on the
 > origin it equals the local host (a local clip); on the peer it differs (a
 > remote clip) — same distinction the picker already made, just without a
@@ -692,14 +693,24 @@ where "you" is decided by bridge-up:
 >   locked/headless over SSH and the Hammerspoon watcher can't capture a
 >   pasteboard write there) and the reverse-tunneled peer bridge (remote
 >   manifest push, so the peer's live pasteboard is never touched — see the
->   X2-redo and Fix A as-built notes above). Supersedes the original
+>   X2-redo and Fix A as-built notes above). Only the trusted local-socket form
+>   authorizes those paths for later `K` grants; the public peer form is a
+>   pointer row only. Supersedes the original
 >   `N` push-manifest op (removed): `N` did the same row-insert but also set
 >   the peer's pasteboard to the paths as plain TEXT, which reflected back
 >   as a confusing "remote text" twin on the origin's own TUI picker.
-> - `A` archive-stream — directory tar stream (§12's as-built note above).
+> - `K` grant-files — no payload; returns
+>   `type_kind US source_host US last_ts US token-or-- US <path NUL path …>`.
+>   A 256-bit token names an immutable trusted path snapshot, not a caller-
+>   supplied path. `-` means the manifest remains usable only by a client for
+>   which its paths are already local.
+> - `f` fetch-authorized-file — payload `token US item-index`; response framing
+>   matches the retired `F`, including exact `is-directory`.
+> - `a` archive-authorized-directory — payload `token US item-index`; directory
+>   tar stream as described in §12.
 >
-> `F` (fetch-file) predates Phase 6 as a caller-less opcode; Phase 6 gave it
-> its first real callers.
+> Uppercase `F`/`A` raw-path requests are retired and fail with an actionable
+> capability-required error. Clients never send a filesystem path as authority.
 >
 > **`W` window action (2026-07-28)** — the first op that is not about the
 > clipboard at all. The bridge had quietly become the general wire between a
@@ -789,7 +800,7 @@ claimed before Phase 6 — see §18/STATUS.
   env-overridable): cross-machine fetches above the cap prompt for
   confirmation on an interactive TTY; non-interactive callers fail with the
   limit named, rather than silently pulling an arbitrarily large transfer.
-- **`A` (archive-stream) sizes are estimates** (Phase 6), computed via a
+- **`a` (archive-stream) sizes are estimates** (Phase 6), computed via a
   pre-flight `du` before the tar stream starts — not a byte-exact guarantee
   in either direction (§12's as-built note). Clients clamp progress at 100%
   rather than overshoot and treat the tar stream's own exit status, not the
@@ -805,8 +816,8 @@ claimed before Phase 6 — see §18/STATUS.
   copy race inside that window can pick the wrong source. Documented, not
   hidden.
 - **Mid-stream truncation** (Phase 6): a dropped connection or I/O fault
-  during an `F` or `A` stream can't be caught from the byte count (an
-  estimate for `A`) — it surfaces client-side, as a short `F` file or a
+  during an `f` or `a` stream can't be caught from the byte count (an
+  estimate for `a`) — it surfaces client-side, as a short `f` file or a
   tar stream that fails to extract cleanly.
 
 ## 15. Security
@@ -816,9 +827,27 @@ claimed before Phase 6 — see §18/STATUS.
   `nvim-clipboard` cache file.
 - Capture skips `Concealed`/`Transient`/`AutoGenerated` pasteboard types and
   a password-manager app deny-list, **before** any bridge forward.
-- The reverse bridge only runs over your own SSH session to your own
-  machines. The local receiver writes to the pasteboard only from the
-  socket — no network listener.
+- The reverse bridge is loopback TCP because SSH-forwarded Unix sockets leave
+  stale pathnames on macOS. It is still an unauthenticated RPC endpoint to
+  every process that can reach the forwarded port.
+- File reads therefore use capabilities, not paths. A public client can ask
+  `K` only for the latest manifest that a trusted local capture authorized,
+  then use the returned token with an item index. Public `M`, `U`, rich
+  file-reference UTIs, and raw `F`/`A` cannot mint or exercise file authority.
+- Grants copy the authorized path snapshot, idle-expire after 30 minutes, and
+  hard-expire after 24 hours. Clipboard changes and row retention cannot
+  retarget an issued token. Historical rows receive no inferred authority;
+  they must be explicitly recopied.
+- Public `M` cannot claim this machine's own hostname or deduplicate into an
+  authoritative row; `P` cannot persist file kinds. Self-host manifest restore
+  through the trusted socket also requires an authority row.
+- Mount enrichment marks its exact pasteboard write with
+  `org.chezmoi.clipboard.UntrustedFileURLs`; the watcher skips that change.
+  Its final `changeCount` comparison and `writeAllData` happen in one
+  Hammerspoon script, so a newer user copy cannot be overwritten in between.
+- Privileged local file operations use a separate mode-0600 Unix socket owned
+  by socat/systemd and never forwarded by SSH. TCP remains the cross-machine
+  transport; this does not reintroduce the stale remote-socket failure.
 - The loose `~/.ssh/config.d/clipboard.config` is never committed (it may
   reference work SSH aliases).
 
@@ -919,6 +948,11 @@ working.
 > receiver-side M enrichment — spec 2026-07-13) is built on top of Phase 6;
 > see the §12 as-built note.
 >
+> **Capability hardening (2026-07-31)** supersedes Phase 6's raw-path `F/A`
+> transport: trusted local captures mint authority; `K/f/a` exercise it;
+> public path-bearing operations cannot. The trusted local socket is separate
+> from, and never replaces, the TCP SSH forward.
+>
 > **Phase 7 — Linux dev-shell store & bridge — done (2026-07-14).** Scope was
 > the dev-shell flavor only (store + dispatcher + socket, **no capture** —
 > design of record:
@@ -926,9 +960,10 @@ working.
 > As built: the dispatcher split into `clipboard-store-core.zsh` + per-platform
 > `pb::*` backends (`clipboard-platform-{macos,linux-headless}.zsh`); on
 > headless Linux the store's latest row IS the clipboard (G/T/R/S answer from
-> it, C/U persist directly, every opcode supported). The listener is systemd
-> user socket activation (`clipboard-bridge.socket`, loopback 2489,
-> `Accept=yes` template service) — unit files + enable symlink live in the
+> it, C/U persist directly, every opcode supported). The listeners are systemd
+> user socket activation (`clipboard-bridge.socket`, loopback 2489, plus
+> `clipboard-bridge-trusted.socket`, mode-0600 Unix,
+> both `Accept=yes`) — unit files + enable symlinks live in the
 > homedir, so an image recycle restores the bridge at first login with no
 > chezmoi run. sqlite3 ships via mise (homedir; apt is wiped on reboot).
 > `pbcopy`'s store-less interim ("peer push becomes primary") is **retired**:
@@ -1039,11 +1074,10 @@ Hard rules (read these files before touching anything):
   explicitly approves; ask when unclear.
 
 Critical context the spec depends on (read these files):
-- home/dot_config/nvim/lua/config/options.lua lines 50-92 — the EXISTING
-  clipboard bridge (SSH-gated provider: OSC 52 copy out, nc -U paste in via
-  ~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock served by a
-  macOS launchd clipboard-bridge service over a reverse SSH tunnel). The
-  E5108 root cause is line 82 returning regtype hardcoded to "v". You are
+- home/dot_config/nvim/lua/clipboard/universal.lua — the EXISTING
+  clipboard bridge (SSH-gated provider: OSC 52 copy out, framed TCP paste in
+  via reverse-forwarded 2490 → 2489, served by the macOS launchd
+  clipboard-bridge service). You are
   EVOLVING this bridge, not rebuilding it. Read the launchd service + the
   loose ~/.ssh/config.d/clipboard.config as your first step.
 - home/dot_local/lib/pick-common.zsh — the pick::start engine and the

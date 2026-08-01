@@ -74,6 +74,8 @@ cm::map() {
   local p
   for p in "$@"; do
     [[ "$p" == /* ]] || { print -u2 -- "clipboard-mount: not absolute: $p"; return 1 }
+    [[ "$p" != */../* && "$p" != */.. ]] ||
+      { print -u2 -- "clipboard-mount: unsafe path: $p"; return 1 }
     print -r -- "${mp}${p}"
   done
 }

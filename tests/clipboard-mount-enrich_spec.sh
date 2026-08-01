@@ -1,10 +1,12 @@
 # Dispatcher M-handler mount enrichment (clipboard-mount spec §3.4): after the
 # lazy manifest row persists, a healthy mount turns the copy into a live
-# pasteboard file-url set (mount-mapped paths), echo-suppressed. The chain is
+# pasteboard file-url set (mount-mapped paths), carrying a change-bound
+# untrusted marker so the watcher never turns a public pointer into authority.
 # backgrounded+disowned, so every example runs the dispatcher THEN polls for
 # the artifact the stub chain writes.
 Describe 'clipboard-bridge-dispatch: M mount enrichment'
   DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+  HISTORY="$SHELLSPEC_PROJECT_ROOT/home/dot_config/hammerspoon/modules/apps/clipboard-history.lua"
 
   # build_m_req <host> <path>...: writes the framed M request to $REQ
   build_m_req() {
@@ -26,6 +28,7 @@ Describe 'clipboard-bridge-dispatch: M mount enrichment'
   }
 
   setup() {
+    export CLIPBOARD_BRIDGE_ENDPOINT=public
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
     mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
@@ -77,7 +80,7 @@ STUB
     printf '1' > "$SHELLSPEC_TMPBASE/cc-value"
     cat > "$STUBS/hs" <<STUB
 #!/bin/sh
-if grep -q changeCount "\$1" 2>/dev/null; then
+if grep -q '^print(hs\.pasteboard\.changeCount())$' "\$1" 2>/dev/null; then
   cat "$SHELLSPEC_TMPBASE/cc-value"
 else
   # Write ATOMICALLY (temp + mv): run_and_wait polls for this file's
@@ -126,24 +129,27 @@ STUB
   # sees it fine).
   db_row_count() { sqlite3 "$DB" "SELECT COUNT(*) FROM clips WHERE type_kind='files';"; }
 
-  It 'healthy mount: replies O, persists the manifest row, sets mapped file-urls, arms suppress'
+  It 'healthy mount: persists the row and marks the mapped file-url change untrusted'
     build_m_req thiago-mac-mini /Users/thiago/big.bin
     When call run_and_wait "$SHELLSPEC_TMPBASE/hs-set-script"
     The contents of file "$RESP" should start with "O"
     The result of function db_row_count should equal 1
     The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "$MP/Users/thiago/big.bin"
     The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "NSFilenamesPboardType"
-    The line 1 of contents of file "$ORIGIN" should equal "thiago-mac-mini"
-    The line 2 of contents of file "$ORIGIN" should equal "$(printf '%s' "$MP/Users/thiago/big.bin" | shasum -a 256 | awk '{print $1}')"
-    The line 4 of contents of file "$ORIGIN" should equal "suppress-echo"
+    The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "org.chezmoi.clipboard.UntrustedFileURLs"
+    The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "if hs.pasteboard.changeCount() ~= 1 then return end"
+    The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "if not hs.pasteboard.writeAllData(data)"
+    The contents of file "$HISTORY" should include '["org.chezmoi.clipboard.UntrustedFileURLs"] = true'
+    The path "$ORIGIN" should not be exist
   End
 
-  It 'maps and sets ALL paths of a multi-file clip, suppress hash over the newline-join'
+  It 'maps and marks ALL paths of a multi-file clip'
     touch "$MP/Users/thiago/two.txt"
     build_m_req thiago-mac-mini /Users/thiago/big.bin /Users/thiago/two.txt
     When call run_and_wait "$SHELLSPEC_TMPBASE/hs-set-script"
     The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "$MP/Users/thiago/big.bin"
-    The line 2 of contents of file "$ORIGIN" should equal "$(printf '%s\n%s' "$MP/Users/thiago/big.bin" "$MP/Users/thiago/two.txt" | shasum -a 256 | awk '{print $1}')"
+    The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "$MP/Users/thiago/two.txt"
+    The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "org.chezmoi.clipboard.UntrustedFileURLs"
   End
 
   It 'skips enrichment when the first mapped path does not exist on the mount'
@@ -167,6 +173,7 @@ STUB
   End
 
   It 'self-host record: M payload host IS this machine -- record-only, no mount attempt at all'
+    export CLIPBOARD_BRIDGE_ENDPOINT=trusted
     # scutil stubbed to answer the SAME host the M payload carries, so
     # mount_enrich's self-host guard fires as the very first thing inside the
     # backgrounded subshell -- before it even execs $cm. Row still persists
@@ -189,6 +196,7 @@ STUB
   End
 
   It 'self-host record via self-name file: pushed identity wins over a DIFFERING live scutil answer'
+    export CLIPBOARD_BRIDGE_ENDPOINT=trusted
     # This is the drift scenario the self-name file exists for (pbcopy's
     # self_host(), executable_pbcopy near abspath()): the identity a machine
     # STAMPS on its own outgoing M rows is whatever self_host() resolved at
@@ -247,6 +255,7 @@ Describe 'clipboard-bridge-dispatch: M self-heal + changeCount guard'
   }
 
   setup() {
+    export CLIPBOARD_BRIDGE_ENDPOINT=public
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
     mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
@@ -289,7 +298,7 @@ STUB
     printf '1' > "$SHELLSPEC_TMPBASE/cc-value"
     cat > "$STUBS/hs" <<STUB
 #!/bin/sh
-if grep -q changeCount "\$1" 2>/dev/null; then
+if grep -q '^print(hs\.pasteboard\.changeCount())$' "\$1" 2>/dev/null; then
   cat "$SHELLSPEC_TMPBASE/cc-value"
 else
   # Write ATOMICALLY (temp + mv): run_and_wait polls for this file's
@@ -353,9 +362,10 @@ STUB
     The contents of file "$RESP" should start with "O"
     The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should include "ensure thiago-mac-mini"
     The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "$MP/Users/thiago/big.bin"
+    The contents of file "$SHELLSPEC_TMPBASE/hs-set-script" should include "org.chezmoi.clipboard.UntrustedFileURLs"
   End
 
-  It 'remount fails: clip stays lazy, no pasteboard set, no suppress armed'
+  It 'remount fails: clip stays lazy with no untrusted pasteboard set'
     cat > "$STUBS/clipboard-mount" <<STUB
 #!/bin/sh
 echo "\$*" >> "$SHELLSPEC_TMPBASE/cm-calls"
@@ -371,12 +381,16 @@ STUB
   End
 
   It 'changeCount moved during the heal gap: the retroactive set is skipped'
-    # hs changeCount personality increments per call: snapshot=1, re-read=2
+    # The first hs call snapshots 1 and advances the simulated pasteboard to
+    # 2. The second script must carry and enforce expected changeCount 1.
     cat > "$STUBS/hs" <<STUB
 #!/bin/sh
-if grep -q changeCount "\$1" 2>/dev/null; then
+if grep -q '^print(hs\.pasteboard\.changeCount())$' "\$1" 2>/dev/null; then
   n=\$(cat "$SHELLSPEC_TMPBASE/cc-value"); echo "\$n"; echo \$((n+1)) > "$SHELLSPEC_TMPBASE/cc-value"
 else
+  expected=\$(sed -n 's/.*changeCount() ~= \([0-9][0-9]*\).*/\1/p' "\$1")
+  current=\$(cat "$SHELLSPEC_TMPBASE/cc-value")
+  if [ -n "\$expected" ] && [ "\$current" != "\$expected" ]; then exit 0; fi
   # Write ATOMICALLY (temp + mv): run_and_wait polls for this file's
   # EXISTENCE, and a two-step write let assertions read a half-written
   # artifact under load (observed live: multi-file paths missing). mv within

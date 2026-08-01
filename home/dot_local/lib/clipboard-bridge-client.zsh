@@ -4,13 +4,12 @@
 #   <1-byte opcode><4-byte BE length><payload>
 # to a loopback TCP endpoint and reports whether the server answered 'O' (ok).
 #
-# TCP, not a unix socket, on purpose: the bridge channel is carried by an SSH
-# forward, and macOS's OpenSSH silently ignores StreamLocalBindUnlink for remote
-# unix-socket forwards — so an unclean disconnect strands a stale socket file
-# that kills every later forward until it's manually removed. A forwarded TCP
-# port is owned by the ssh process and freed by the OS when the session ends, so
-# there is nothing to go stale. Endpoints: 2490 = reverse-forwarded peer
-# clipboard, 2489 = this machine's own bridge (local set / materialize).
+# Cross-machine transport stays TCP: macOS OpenSSH silently ignores
+# StreamLocalBindUnlink for remote Unix-socket forwards, so an unclean
+# disconnect strands a stale socket file. Endpoints: 2490 = reverse-forwarded
+# peer, 2489 = public local listener. Privileged local file operations are the
+# deliberate exception: they use the service-owned mode-0600 cb.sock, which is
+# never forwarded and whose lifecycle is controlled by socat/systemd.
 #
 # Used by pick-clipboard's Ctrl-Y (T set-with-regtype, C ship-rich to the peer).
 # Response *payloads* (G/R) are consumed by
@@ -35,6 +34,12 @@ clipbridge::probe() {
   nc -z -w 1 "$1" "$2" >/dev/null 2>&1
 }
 
+# clipbridge::local_socket -> trusted endpoint path. This socket is owned by
+# socat/systemd, mode 0600, and is never an SSH forwarding endpoint.
+clipbridge::local_socket() {
+  print -rn -- "${CLIPBOARD_BRIDGE_LOCAL_SOCKET:-$HOME/.local/state/cb.sock}"
+}
+
 # clipbridge::send <host> <port> <opcode> <payload_file>
 #   Streams <opcode><BE32 len><payload-bytes> to host:port via `nc` and returns
 #   0 iff the response begins with the 'O' status byte. Non-zero on an
@@ -55,6 +60,33 @@ clipbridge::send() {
     cat "$payload_file"
   } > "$reqf"
   nc -w "${CLIPBRIDGE_TIMEOUT_S:-2}" "$host" "$port" < "$reqf" > "$respf" 2>/dev/null
+  local status_byte
+  status_byte=$(dd if="$respf" bs=1 count=1 2>/dev/null)
+  rm -f "$reqf" "$respf"
+  [[ "$status_byte" == "O" ]]
+}
+
+# clipbridge::send_unix <socket> <opcode> <payload_file>
+# Trusted-local sibling of clipbridge::send. The framing is identical; only
+# the transport differs, so no secret or caller-asserted trust bit crosses
+# the wire.
+clipbridge::send_unix() {
+  emulate -L zsh
+  setopt nomultibyte
+  local sock=$1 opcode=$2 payload_file=$3
+  [[ -r "$payload_file" ]] || return 1
+  local -i plen
+  plen=$(wc -c < "$payload_file" | tr -d ' ')
+  local reqf respf
+  reqf=$(mktemp "${TMPDIR:-/tmp}/clipbridge-req.XXXXXX") || return 1
+  respf=$(mktemp "${TMPDIR:-/tmp}/clipbridge-resp.XXXXXX") ||
+    { rm -f "$reqf"; return 1; }
+  {
+    printf '%s' "$opcode"
+    printf "\\$(printf %03o $(( (plen >> 24) & 255 )))\\$(printf %03o $(( (plen >> 16) & 255 )))\\$(printf %03o $(( (plen >> 8) & 255 )))\\$(printf %03o $(( plen & 255 )))"
+    cat "$payload_file"
+  } > "$reqf"
+  nc -U -w "${CLIPBRIDGE_TIMEOUT_S:-2}" "$sock" < "$reqf" > "$respf" 2>/dev/null
   local status_byte
   status_byte=$(dd if="$respf" bs=1 count=1 2>/dev/null)
   rm -f "$reqf" "$respf"

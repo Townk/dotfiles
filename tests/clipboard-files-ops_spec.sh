@@ -4,6 +4,7 @@ Describe 'clipboard-bridge-dispatch: U set-file-urls'
   DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
 
   setup() {
+    export CLIPBOARD_BRIDGE_ENDPOINT=trusted
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
     mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
@@ -38,6 +39,7 @@ Describe 'clipboard-bridge-dispatch: U set-file-urls'
     The output should start with "O"
     The contents of file "$SHELLSPEC_TMPBASE/hs-script" should include "NSFilenamesPboardType"
     The contents of file "$SHELLSPEC_TMPBASE/hs-script" should include "public.file-url"
+    The contents of file "$SHELLSPEC_TMPBASE/hs-script" should not include "UntrustedFileURLs"
   End
 
   It 'rejects a relative path'
@@ -52,6 +54,29 @@ Describe 'clipboard-bridge-dispatch: U set-file-urls'
     The output should start with "O"
     The contents of file "$SHELLSPEC_TMPBASE/hs-script" should include "restore_by_id(7)"
   End
+
+  It 'rejects U on the public endpoint'
+    f1="$SHELLSPEC_TMPBASE/public.txt"; touch "$f1"
+    len=${#f1}
+    { printf 'U'; printf '\000\000\000'; printf "\\$(printf %03o "$len")"; printf '%s' "$f1"; } \
+      > "$SHELLSPEC_TMPBASE/req"
+    When run command sh -c 'CLIPBOARD_BRIDGE_ENDPOINT=public zsh -f "$1" < "$2"' _ "$DISPATCH" "$SHELLSPEC_TMPBASE/req"
+    The output should start with "E"
+    The output should include "trusted-endpoint-required"
+  End
+
+  It 'rejects a file-reference rich UTI on the public endpoint'
+    printf 'C\000\000\000\025\000\017public.file-url/etc' > "$SHELLSPEC_TMPBASE/req"
+    When run command sh -c 'CLIPBOARD_BRIDGE_ENDPOINT=public zsh -f "$1" < "$2"' _ "$DISPATCH" "$SHELLSPEC_TMPBASE/req"
+    The output should start with "E"
+    The output should include "rich type not allowed"
+  End
+
+  It 'keeps the supported public.png rich copy on the public endpoint'
+    printf 'C\000\000\000\020\000\012public.pngDATA' > "$SHELLSPEC_TMPBASE/req"
+    When run command sh -c 'CLIPBOARD_BRIDGE_ENDPOINT=public zsh -f "$1" < "$2"' _ "$DISPATCH" "$SHELLSPEC_TMPBASE/req"
+    The output should start with "O"
+  End
 End
 
 # L list-files: resolves the manifest of the current clipboard entry through
@@ -63,6 +88,7 @@ Describe 'clipboard-bridge-dispatch: L list-files'
   DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
 
   setup() {
+    export CLIPBOARD_BRIDGE_ENDPOINT=public
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
     mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
@@ -279,6 +305,61 @@ Describe 'clipboard-bridge-dispatch: L list-files'
     The output should include "STATUS:E"
     The output should include "empty-store"
   End
+
+  It 'K issues a 256-bit token for a trusted authority snapshot'
+    zsh -f "$DISPATCH" --init-store >/dev/null
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','laptop',500.0); SELECT last_insert_rowid();")
+    pathfile="$SHELLSPEC_TMPBASE/k-path"
+    printf '/tmp/authorized.txt' > "$pathfile"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id,uti,blob) VALUES ($id,'x-resolved-path',readfile('$pathfile'));
+      INSERT INTO file_authorities (clip_id,item_index,path) VALUES ($id,1,readfile('$pathfile'));"
+    printf 'K\000\000\000\000' > "$REQ"
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP"
+    token=$(tail -c +6 "$RESP" | tr '\037' '\n' | sed -n '4p')
+    token_len=${#token}
+    grant_count=$(sqlite3 "$DB" "SELECT count(*) FROM file_grants WHERE token='$token';")
+    When call printf '%s:%s' "$token_len" "$grant_count"
+    The output should equal "64:1"
+    The status should be success
+  End
+
+  It 'K returns no token for a pointer-only manifest'
+    zsh -f "$DISPATCH" --init-store >/dev/null
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','peerbox',600.0); SELECT last_insert_rowid();")
+    pathfile="$SHELLSPEC_TMPBASE/k-pointer"
+    printf '/tmp/pointer.txt' > "$pathfile"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id,uti,blob) VALUES ($id,'x-file-manifest',readfile('$pathfile'));"
+    printf 'K\000\000\000\000' > "$REQ"
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP"
+    token=$(tail -c +6 "$RESP" | tr '\037' '\n' | sed -n '4p')
+    When call printf '%s' "$token"
+    The output should equal "-"
+    The status should be success
+  End
+
+  It 'keeps an issued snapshot usable after clipboard change and row retention'
+    zsh -f "$DISPATCH" --init-store >/dev/null
+    sourcefile="$SHELLSPEC_TMPBASE/granted-before-change.txt"
+    printf 'snapshot bytes' > "$sourcefile"
+    pathfile="$SHELLSPEC_TMPBASE/k-stable-path"
+    printf '%s' "$sourcefile" > "$pathfile"
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','laptop',700.0); SELECT last_insert_rowid();")
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id,uti,blob) VALUES ($id,'x-resolved-path',readfile('$pathfile'));
+      INSERT INTO file_authorities (clip_id,item_index,path) VALUES ($id,1,readfile('$pathfile'));"
+    printf 'K\000\000\000\000' > "$REQ"
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP"
+    token=$(tail -c +6 "$RESP" | tr '\037' '\n' | sed -n '4p')
+    sqlite3 "$DB" "DELETE FROM file_authorities WHERE clip_id=$id;
+      DELETE FROM clip_types WHERE clip_id=$id;
+      DELETE FROM clips WHERE id=$id;
+      INSERT INTO clips (type_kind,source_host,last_ts,text_plain) VALUES ('text','laptop',800.0,'new clipboard');"
+    printf 'f\000\000\000\102%s\0371' "$token" > "$REQ"
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP"
+    body=$(tail -c +6 "$RESP")
+    When call printf '%s' "$body"
+    The output should equal "snapshot bytes"
+    The status should be success
+  End
 End
 
 # M manifest-persist-local (X2-redo; Fix A -- see below): record-only, for
@@ -296,14 +377,14 @@ End
 # back and shown as a confusing "remote text" twin on the origin's own TUI
 # picker (files are lazy, §12 -- the peer should only ever get a manifest
 # pointer, never a live pasteboard write). N has been retired: pbcopy's SSH
-# files branch now sends this SAME `M` op to both the local (2489) AND peer
-# (2490) bridges, so every test below applies equally to both destinations --
-# there is nothing left that distinguishes a "local" M from a "peer" M at the
-# dispatcher level, by design.
+# files branch sends this SAME `M` payload to the trusted local socket and
+# public peer port. Endpoint identity now deliberately distinguishes them:
+# only the trusted self-host form creates file authority.
 Describe 'clipboard-bridge-dispatch: M manifest-persist-local'
   DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
 
   setup() {
+    export CLIPBOARD_BRIDGE_ENDPOINT=public
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
     # clip::mount_enrich (clipboard-mount-enrich_spec.sh) now runs, backgrounded
@@ -317,7 +398,8 @@ Describe 'clipboard-bridge-dispatch: M manifest-persist-local'
     # very first guard (`[[ -x "$cm" ]] || exit 0`) fire unconditionally,
     # independent of what's installed on the machine running the tests.
     export CLIPBOARD_MOUNT_BIN="$SHELLSPEC_TMPBASE/no-clipboard-mount-here"
-    mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
+    mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_STATE_HOME/clipboard" "$XDG_DATA_HOME/pick-clipboard"
+    rm -f "$XDG_STATE_HOME/clipboard/self-name"
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     rm -f "$DB"
     sqlite3 "$DB" '
@@ -422,6 +504,39 @@ Describe 'clipboard-bridge-dispatch: M manifest-persist-local'
     The path "$SHELLSPEC_TMPBASE/hs-script" should not be exist
   End
 
+  It 'keeps a public M pointer-only with no file authority'
+    build_req peerbox /tmp/public-pointer.txt
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+    authority_count=$(sqlite3 "$DB" "SELECT count(*) FROM file_authorities;")
+    The variable authority_count should equal "0"
+  End
+
+  It 'authorizes a self-host M only on the trusted endpoint'
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf 'thismac\n' > "$XDG_STATE_HOME/clipboard/self-name"
+    build_req thismac /tmp/trusted-a.txt /tmp/trusted-b.txt
+    When run command sh -c 'CLIPBOARD_BRIDGE_ENDPOINT=trusted zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should start with "O"
+    authority_count=$(sqlite3 "$DB" "SELECT count(*) FROM file_authorities;")
+    The variable authority_count should equal "2"
+  End
+
+  It 'rejects public M claiming this machine instead of reactivating authority'
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf 'thismac\n' > "$XDG_STATE_HOME/clipboard/self-name"
+    build_req thismac /tmp/no-reactivate.txt
+    CLIPBOARD_BRIDGE_ENDPOINT=trusted zsh -f "$DISPATCH" < "$REQ" > "$RESP"
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP"
+    frame_status=$(head -c 1 "$RESP")
+    row_count=$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='thismac' AND type_kind='files';")
+    When call printf '%s:%s' "$frame_status" "$row_count"
+    The output should equal "E:1"
+    The status should be success
+  End
+
   It 'does not declare an origin file (no O-style provenance write)'
     originfile="$XDG_STATE_HOME/pick-clipboard/current-origin"
     rm -f "$originfile"
@@ -448,6 +563,13 @@ Describe 'clipboard-bridge-dispatch: M manifest-persist-local'
     build_req thismac relative/path.txt
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     The output should start with "E"
+  End
+
+  It 'rejects an absolute path containing parent traversal'
+    build_req thismac /tmp/../../../../etc/passwd
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "unsafe path"
   End
 
   # Kind-scoped dedup (X1 regression): a repeated M of the same host+paths
@@ -578,54 +700,39 @@ Describe 'clipboard-bridge-dispatch: P persist'
     total=$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='pdup';")
     The variable total should equal "2"
   End
-End
 
-# F fetch-file: M3 extends the existing raw-bytes op with one new error case
-# -- handed a DIRECTORY it must reply `E is-directory` (exact string, not
-# just "starts with E") rather than trying to `wc -c`/stream a directory as
-# if it were a file. Task 13's remote pbpaste greps for this exact string to
-# decide "retry this path as an A archive-stream instead" (files-yazi design
-# §4/§8) -- a looser string would silently break that retry.
-Describe 'clipboard-bridge-dispatch: F fetch-file'
-  DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
-
-  setup() {
-    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
-    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
-    mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
-  }
-  BeforeEach 'setup'
-
-  It 'errors is-directory when handed a directory path'
-    dir="$SHELLSPEC_TMPBASE/f-is-a-dir"
-    mkdir -p "$dir"
-    payload=$(printf '%s' "$dir")
-    len=${#payload}
-    { printf 'F'; printf '\000\000\000'; printf "\\$(printf %03o "$len")"; printf '%s' "$payload"; } \
-      > "$SHELLSPEC_TMPBASE/f-req"
-    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$SHELLSPEC_TMPBASE/f-req"
-    The status should be success
-    The output should equal "$(printf 'E\000\000\000\014is-directory')"
+  It 'rejects a file-kind P before it can reactivate an authoritative row'
+    zsh -f "$DISPATCH" --init-store >/dev/null
+    text="/tmp/authorized-again.txt"
+    collide_hash=$(printf '%s' "$text" | shasum -a 256 | awk '{print $1}')
+    files_id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind,source_host,type_hash,last_ts)
+      VALUES ('files','pdup','$collide_hash',77.0); SELECT last_insert_rowid();")
+    pathfile="$SHELLSPEC_TMPBASE/p-authority-path"
+    printf '%s' "$text" > "$pathfile"
+    sqlite3 "$DB" "INSERT INTO file_authorities (clip_id,item_index,path)
+      VALUES ($files_id,1,readfile('$pathfile'));"
+    build_req pdup files someapp "" "$text"
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "cannot persist file kinds"
+    files_ts=$(sqlite3 "$DB" "SELECT last_ts FROM clips WHERE id=$files_id;")
+    The variable files_ts should equal "77.0"
   End
 End
 
-# A archive-stream: M3's directory-pull sibling of F (files-yazi design §4).
-# Reply on success: O + BE32 len=8 + BE64 total-byte-count -- a `du -sk`-
-# based size ESTIMATE for progress display only, with NO directional
-# guarantee (tar header/padding overhead and sparse files can push the real
-# stream above OR below it -- empirically, this very fixture reports du 8192
-# vs a 20480-byte real archive); see the header comment on
-# clip::op_archive_stream.
-# Then the raw `tar -cf -` stream of the directory until EOF, no trailing
-# frame. Error frames (bad path, unreadable entries) look exactly like any
-# other op's E frame and arrive BEFORE any stream bytes.
-Describe 'clipboard-bridge-dispatch: A archive-stream'
+# Capability-bound f/a replace raw-path F/A. f retains F's exact file framing
+# and is-directory retry; a retains A's archive stream.
+Describe 'clipboard-bridge-dispatch: capability-bound file streams'
   DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+  TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
   setup() {
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
     mkdir -p "$XDG_STATE_HOME/pick-clipboard" "$XDG_DATA_HOME/pick-clipboard"
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    rm -f "$DB"
+    zsh -f "$DISPATCH" --init-store >/dev/null
     DIR="$SHELLSPEC_TMPBASE/archive-src"
     rm -rf "$DIR"
     mkdir -p "$DIR/sub"
@@ -636,19 +743,103 @@ Describe 'clipboard-bridge-dispatch: A archive-stream'
   }
   BeforeEach 'setup'
 
-  # be32 <n> -- mirrors the dispatcher's own int_to_be32 (see the M describe
-  # block above for the identical helper/rationale).
+  grant_path() {
+    _path=$1
+    _pathfile="$SHELLSPEC_TMPBASE/grant-path"
+    printf '%s' "$_path" > "$_pathfile"
+    _now=$(date +%s)
+    sqlite3 "$DB" "DELETE FROM file_grants;
+      INSERT INTO file_grants
+        (token,item_index,path,created_ts,last_used_ts,hard_expires_ts)
+      VALUES ('$TOKEN',1,readfile('$_pathfile'),$_now,$_now,9999999999);"
+  }
+
   be32() {
     n=$1
     printf "\\$(printf %03o $(( (n >> 24) & 255 )))\\$(printf %03o $(( (n >> 16) & 255 )))\\$(printf %03o $(( (n >> 8) & 255 )))\\$(printf %03o $(( n & 255 )))"
   }
 
   build_req() {
-    _path=$1
-    _len=${#_path}
-    { printf 'A'; be32 "$_len"; printf '%s' "$_path"; } > "$REQ"
+    _op=$1
+    _index=${2:-1}
+    _payload=$(printf '%s\037%s' "$TOKEN" "$_index")
+    _len=${#_payload}
+    { printf '%s' "$_op"; be32 "$_len"; printf '%s' "$_payload"; } > "$REQ"
   }
 
+  It 'retires uppercase raw-path F and A'
+    printf 'F\000\000\000\004/etc' > "$REQ"
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP"
+    fmsg=$(tail -c +6 "$RESP")
+    printf 'A\000\000\000\004/etc' > "$REQ"
+    zsh -f "$DISPATCH" < "$REQ" > "$RESP"
+    amsg=$(tail -c +6 "$RESP")
+    When call printf '%s:%s' "$fmsg" "$amsg"
+    The output should equal "capability-required; update pbpaste:capability-required; update pbpaste"
+    The status should be success
+  End
+
+  It 'f errors is-directory for an authorized directory'
+    grant_path "$DIR"
+    build_req f
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The status should be success
+    The output should equal "$(printf 'E\000\000\000\014is-directory')"
+  End
+
+  It 'rejects an unknown capability without reading its payload as a path'
+    build_req f
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "invalid or expired capability"
+  End
+
+  It 'rejects a valid token with an item index outside its grant'
+    grant_path "$DIR/a.txt"
+    build_req f 2
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "invalid or expired capability"
+  End
+
+  It 'rejects an idle-expired token'
+    grant_path "$DIR/a.txt"
+    sqlite3 "$DB" "UPDATE file_grants SET last_used_ts=0;"
+    build_req f
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "invalid or expired capability"
+  End
+
+  It 'rejects a hard-expired token even when recently used'
+    grant_path "$DIR/a.txt"
+    sqlite3 "$DB" "UPDATE file_grants SET hard_expires_ts=0;"
+    build_req f
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "invalid or expired capability"
+  End
+
+  It 'rejects a 4 GiB file instead of wrapping its length to zero'
+    big="$SHELLSPEC_TMPBASE/exactly-4g.bin"
+    dd if=/dev/null of="$big" bs=1 seek=4294967296 2>/dev/null
+    grant_path "$big"
+    build_req f
+    When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
+    The output should start with "E"
+    The output should include "file-too-large"
+  End
+
+# a archive-stream: capability-authorized directory sibling of f.
+# Reply on success: O + BE32 len=8 + BE64 total-byte-count -- a `du -sk`-
+# based size ESTIMATE for progress display only, with NO directional
+# guarantee (tar header/padding overhead and sparse files can push the real
+# stream above OR below it -- empirically, this very fixture reports du 8192
+# vs a 20480-byte real archive); see the header comment on
+# clip::stream_archive_path.
+# Then the raw `tar -cf -` stream of the directory until EOF, no trailing
+# frame. Error frames (bad path, unreadable entries) look exactly like any
+# other op's E frame and arrive BEFORE any stream bytes.
   # be_n_to_int <byte-offset> <nbytes> -- decodes the big-endian integer at
   # that offset in $RESP (byte-exact via `od`, no `$(<file)` truncation risk
   # since these offsets never straddle a NUL -- length/count headers only).
@@ -659,7 +850,8 @@ Describe 'clipboard-bridge-dispatch: A archive-stream'
 
   # -f: see the matching note on the U describe block above.
   It 'replies O + BE32(8) + a sane BE64 estimate, then a tar stream of the seeded dir'
-    build_req "$DIR"
+    grant_path "$DIR"
+    build_req a
     When run command sh -c 'zsh -f "$1" < "$2" > "$3"' _ "$DISPATCH" "$REQ" "$RESP"
     The status should be success
 
@@ -699,7 +891,8 @@ Describe 'clipboard-bridge-dispatch: A archive-stream'
   # possible, before any stream byte.
   It 'errors unreadable-entries BEFORE any stream bytes when a nested file is unreadable'
     chmod 000 "$DIR/sub/b.txt"
-    build_req "$DIR"
+    grant_path "$DIR"
+    build_req a
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     The status should be success
     The output should start with "E"
@@ -709,7 +902,8 @@ Describe 'clipboard-bridge-dispatch: A archive-stream'
 
   It 'errors unreadable-entries when a nested DIRECTORY is untraversable'
     chmod 000 "$DIR/sub"
-    build_req "$DIR"
+    grant_path "$DIR"
+    build_req a
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     # Restore before assertions so the next example's setup() can rm -rf it.
     chmod 755 "$DIR/sub"
@@ -720,7 +914,8 @@ Describe 'clipboard-bridge-dispatch: A archive-stream'
   End
 
   It 'errors on a nonexistent path'
-    build_req "$SHELLSPEC_TMPBASE/does-not-exist-at-all"
+    grant_path "$SHELLSPEC_TMPBASE/does-not-exist-at-all"
+    build_req a
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     The output should start with "E"
   End
@@ -728,14 +923,16 @@ Describe 'clipboard-bridge-dispatch: A archive-stream'
   It 'errors on a FILE path (not a directory)'
     f="$SHELLSPEC_TMPBASE/a-plain-file.txt"
     printf 'just a file' > "$f"
-    build_req "$f"
+    grant_path "$f"
+    build_req a
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     The output should start with "E"
     The output should include "not a directory"
   End
 
   It 'errors on a relative path'
-    build_req "relative/dir"
+    grant_path "relative/dir"
+    build_req a
     When run command sh -c 'zsh -f "$1" < "$2"' _ "$DISPATCH" "$REQ"
     The output should start with "E"
   End

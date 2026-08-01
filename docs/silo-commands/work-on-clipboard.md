@@ -30,7 +30,7 @@ repo.
 - `home/dot_local/lib/clipboard-bridge-client.zsh` — `clipbridge::*`
 - `home/dot_local/lib/clipboard-platform-macos.zsh`,
   `clipboard-platform-linux-headless.zsh` — the `pb::*` backends
-- `home/dot_config/systemd/user/clipboard-bridge{@.service,.socket}`
+- `home/dot_config/systemd/user/clipboard-bridge{,-trusted}{@.service,.socket}`
 - `home/.chezmoiscripts/run_onchange_after_37-setup-clipboard-bridge.sh.tmpl`
   (the *logic*; hook ordering and hash triggers are **chezmoi**'s)
 - `docs/clipboard-universal-project.md` — the project record, including the
@@ -64,10 +64,17 @@ repo.
 - **Ports**: `2489` is always *this machine's own* bridge; `2490` is the
   reverse-forwarded *peer*. The peer port listening is also the honest test
   for "am I the remote end of a tunnel".
-- **TCP, not a unix socket** — macOS OpenSSH ignores `StreamLocalBindUnlink`
-  for remote unix-socket forwards, so an unclean disconnect strands a stale
-  socket that kills every later forward. A forwarded TCP port is freed by the
-  OS. Do not "simplify" this back.
+- **Cross-machine TCP, trusted-local Unix socket** — macOS OpenSSH ignores
+  `StreamLocalBindUnlink` for remote Unix-socket forwards, so `2489`/`2490`
+  stay TCP. Privileged local `U`/origin-`M` calls use the separate mode-0600
+  `~/.local/state/cb.sock`, owned by socat/systemd and never SSH-forwarded.
+- **Capability-bound file reads** — `L` is display-only; `K` grants one trusted
+  path snapshot; lowercase `f`/`a` accept only its opaque token + item index.
+  Raw-path `F`/`A` are retired. Public `M` is pointer-only and may not claim
+  this machine's own hostname.
+- **Hammerspoon authority seam** — native file captures populate
+  `file_authorities`; public-M mount enrichment carries
+  `org.chezmoi.clipboard.UntrustedFileURLs`, which the watcher must skip.
 - **`clipbridge::probe|send|request`** in `clipboard-bridge-client.zsh`.
   `CLIPBRIDGE_TIMEOUT_S` overrides the 2s wire timeout: 2s is right for a read
   the far end answers from memory, and wrong for an op that makes the origin

@@ -89,7 +89,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 **Public contract (preserve):**
 - `mux::pick` — drop-in for `pick::start` (pick). Same argv, floats in a popup on either backend, else inline. Consumed by `ai-assist`/`ai-commit` (ai-harnesses) and `quick-launch-pick`. `zj::pick` remains as a permanent alias; nothing new should call it.
 - `mux::resolve_session <client_pid>` / `mux::client_sessions` in `~/.local/lib/mux.zsh` — backend-dispatching session resolvers (the zellij half is the unix-socket scan; the tmux half asks the server). Consumed by `mux-open`, `tab-edit` (utils), quick-launch.
-- **OSC 52 clipboard protocol**: `copy_command` intentionally unset in `config.kdl.tmpl`; copy is origin-relative via re-emitted OSC 52. The SSH paste-back reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` (served by system's `clipboard-bridge` agent). nvim implements the client.
+- **OSC 52 + framed clipboard protocol**: `copy_command` intentionally unset in `config.kdl.tmpl`; copy is origin-relative via re-emitted OSC 52. SSH paste-back uses framed requests to reverse-forwarded TCP 2490 (served by system's public `clipboard-bridge` listener on 2489). nvim implements the client.
 - **Workspace-rename side-channel**: `__TOGGLE_FULLSCREEN__` / `__QL_FOCUS__=<id>` workspace names drive WezTerm handlers. `terminal-toggle-fullscreen` (this silo) and quick-launch depend on these exact sentinel strings.
 - **Fullscreen-state mirrors** (atomic write-on-change), read by the tmux ribbon and the zj-hud bar: `~/.local/state/wezterm/fullscreen_state` pushed by `wezterm.lua`; `~/.local/state/mux/ghostty_fullscreen` filled by `mux-fullscreen-probe` off the tmux `client-resized` hook, because Ghostty has no equivalent hook and asking costs seconds. The ribbon renderer is a `#()` job: nothing in it may block, or the bar stops being re-expanded at all.
 - **`W` window opcode** on the clipboard bridge (`fullscreen-toggle <ghostty|wezterm>`, `fullscreen-state`) — lets a session act on the terminal of the machine it came from over SSH. terminal-mux owns the mux half, clipboard owns the wire protocol.
@@ -110,7 +110,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - `home/dot_local/bin/executable_pb{copy,paste}` (the CLI surface, incl. the SSH branches)
 - `home/dot_local/libexec/executable_clipboard-bridge-dispatch` (per-connection handler; socat EXECs it per connection, so changes need no restart), `executable_clipboard-mount` (FUSE), `executable_pick-clipboard`
 - `home/dot_local/lib/clipboard-store-core.zsh` (store + framing + every `clip::op_*`), `clipboard-bridge-client.zsh` (`clipbridge::*`), `clipboard-platform-{macos,linux-headless}.zsh` (`pb::*`)
-- `home/dot_config/systemd/user/clipboard-bridge{@.service,.socket}`, `run_onchange_after_37-setup-clipboard-bridge.sh.tmpl` (logic only)
+- `home/dot_config/systemd/user/clipboard-bridge{,-trusted}{@.service,.socket}`, `run_onchange_after_37-setup-clipboard-bridge.sh.tmpl` (logic only)
 - `docs/clipboard-universal-project.md` (the wire record — keep in step with the code)
 
 **Out of scope:** `nvim/lua/clipboard/**` (neovim owns the Lua, clipboard owns the protocol it speaks); the Hammerspoon clipboard modules + picker HTML (hammerspoon owns the UI); `pick-clipboard-zellij` (terminal-mux modal adapter); the `clipboard-bridge` agent *definition* in `services.toml.tmpl` (system-services owns the plist); `pick::start` (pick); the `W` opcode's *window* half — `terminal-toggle-fullscreen` / `mux-fullscreen-probe` (terminal-mux).
@@ -118,7 +118,8 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 **Public contract (preserve):**
 - **Wire protocol**: `<opcode><BE32 len><payload>` → `<'O'|'E'><BE32 len><payload>`. Opcode table in `docs/clipboard-universal-project.md` §11 and the dispatcher header — both must agree. Adding an opcode is additive; changing one is a cross-machine break, because the two ends update independently.
 - **Ports**: 2489 = this machine's own bridge, 2490 = the reverse-forwarded peer. 2490 listening is also the honest "am I the remote end" test.
-- **TCP, not a unix socket** — macOS OpenSSH ignores `StreamLocalBindUnlink` for remote unix-socket forwards, stranding a stale socket that kills later forwards.
+- **Cross-machine TCP, trusted-local Unix socket** — 2489 remains the SSH-forward target because macOS OpenSSH ignores `StreamLocalBindUnlink` for remote unix-socket forwards. Privileged local file operations use the separate mode-0600 `~/.local/state/cb.sock`, owned by socat/systemd and never forwarded.
+- **Capability-bound file reads** — `L` remains the human manifest view; `K` returns an opaque grant over one trusted path snapshot; lowercase `f`/`a` accept only that token plus an item index. Raw-path `F`/`A` are retired. Public `M` is pointer-only, while trusted local `M`/`U` and native file captures create authority.
 - `clipbridge::probe|send|request`; `CLIPBRIDGE_TIMEOUT_S` (2s default suits a read answered from memory, not an op that makes the origin *act*).
 - Legacy bare-connect grace path; byte-safe framing (`sysread`, never `$(...)`, because manifests are NUL-joined).
 - `x-file-manifest` UTI + `source_host` provenance; `clip::self_host` identity.
@@ -137,7 +138,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 **Public contract (preserve):**
 - **Filetype registry**: `vim.filetype.add` patterns (`.json.tmpl`→`json.gotmpl`, etc.) and `vim.filetype.inspect().extension` — the chezmoi "Open in NeoVim" app generator queries this headlessly to build UTI lists. Adding/removing filetype mappings changes Finder's "Open With" coverage.
-- **SSH clipboard client** (`options.lua`): `vim.g.clipboard` custom paste reads `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` via `nc -U`; copy uses OSC 52. Gated to SSH. The socket path and the `nc -U` read protocol are the seam with terminal-mux/system.
+- **SSH clipboard client** (`lua/clipboard/universal.lua`): `vim.g.clipboard` custom paste uses framed `G`/`R` requests on reverse-forwarded TCP 2490; copy uses OSC 52 / framed writes. Gated to SSH. The framed protocol is owned by clipboard.
 - **Chezmoi auto-apply** (`autocmds.lua`): `BufReadPre` redirect → `chezmoi-reverse --no-merge` (utils); `BufWritePost` debounced `chezmoi apply --force`. Depends on `chezmoi-reverse`'s `needs-merge` exit semantics (utils).
 - **Harper shared dictionary**: `spell/en.utf-8.add` is chezmoi `create_`-prefixed (so apply never reverts). The `uv.new_fs_event` watcher + `workspace/didChangeConfiguration` ping to harper-ls.
 - **gotmpl treesitter injection**: `after/queries/gotmpl/injections.scm` + custom `inject-inner-ft!` directive.
@@ -554,7 +555,7 @@ owner area, don't parallelize.
 
 **Footnotes (the shared files behind each `⚠`):**
 1. **terminal-mux↔custom-builds**: built font family name + custom-icon `code` pins are custom-builds's output, terminal-mux's font chain references them. Safe if custom-builds preserves the contract; risky if either changes the pin set.
-2. **terminal-mux↔system**: `services.toml.tmpl` `clipboard-bridge` section — system owns the file, terminal-mux owns the socket protocol the nvim client uses. Pre-agree: system edits the plist fields, terminal-mux edits the `~/.local/state/runtime/chezmoi-system/clipboard-bridge.sock` protocol; both touching `[clipboard-bridge]` = collision.
+2. **clipboard↔system-services**: `services.toml.tmpl` owns the public TCP and trusted-local Unix listeners; clipboard owns their shared frame/opcode contract. Changes to endpoint trust or transport require both silos.
 3. **terminal-mux↔shell**: mux auto-attach in `dot_zshrc` (shell) calls into terminal-mux's quick-launch recency seeding; `notify` (shell lib) is called by terminal-mux's `copy-pwd`. Different files, but the *call contract* must stay in sync.
 4. **terminal-mux↔preview**: `image-protocol-support.zsh` is owned by terminal-mux, sourced read-only by preview. Safe if preview only *calls* `get_terminal_image_protocol`; collision if preview needs to edit it (→ hand back to terminal-mux).
 5. **terminal-mux↔yazi**: `mux-open` (terminal-mux) opens dirs in a Yazi tab (yazi). Contract is the Yazi invocation; different files.

@@ -49,6 +49,7 @@ Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
     # suite relies on for deterministic local/remote comparisons. Pointing
     # it inside the just-wiped HOME guarantees no self-name file exists.
     export XDG_STATE_HOME="$HOME/.local/state"
+    export CLIPBOARD_BRIDGE_LOCAL_SOCKET="$XDG_STATE_HOME/cb.sock"
     # A dedicated TMPDIR (spec R3): the rsync-failure test below globs for the
     # stderr-capture temp file clip::copy_files_by_id leaves behind on a
     # failed pull, which needs a clean, known directory rather than whatever
@@ -79,6 +80,12 @@ Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
         uti TEXT,
         blob BLOB,
         PRIMARY KEY (clip_id, uti)
+      );
+      CREATE TABLE file_authorities (
+        clip_id INTEGER,
+        item_index INTEGER,
+        path BLOB,
+        PRIMARY KEY (clip_id, item_index)
       );
     '
 
@@ -170,7 +177,7 @@ EOF
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "cb.sock:U"
     The contents of file "$NCLOG" should include "id:$id"
     The contents of file "$RSYNCLOG" should equal ""
   End
@@ -180,7 +187,7 @@ EOF
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "cb.sock:U"
     The contents of file "$NCLOG" should include "id:$id"
   End
 
@@ -202,13 +209,29 @@ EOF
     mf="$SHELLSPEC_TMPBASE/local-manifest.bin"
     printf '%s/local-a.txt\000%s/local-b.txt' "$HOME" "$HOME" > "$mf"
     sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+    p1="$SHELLSPEC_TMPBASE/local-authority-1"; printf '%s/local-a.txt' "$HOME" > "$p1"
+    p2="$SHELLSPEC_TMPBASE/local-authority-2"; printf '%s/local-b.txt' "$HOME" > "$p2"
+    sqlite3 "$DB" "INSERT INTO file_authorities (clip_id,item_index,path) VALUES
+      ($id,1,readfile('$p1')),($id,2,readfile('$p2'));"
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "cb.sock:U"
     The contents of file "$NCLOG" should include "$HOME/local-a.txt|$HOME/local-b.txt"
     The contents of file "$NCLOG" should not include "id:$id"
     The contents of file "$RSYNCLOG" should equal ""
+  End
+
+  It 'does not trust a self-host x-file-manifest row without authority'
+    id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','mac-mini',151); SELECT last_insert_rowid();")
+    mf="$SHELLSPEC_TMPBASE/untrusted-local-manifest.bin"
+    printf '%s/sensitive.txt' "$HOME" > "$mf"
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
+
+    When call run_copy "$id"
+    The contents of file "$NCLOG" should not include "cb.sock:U"
+    The contents of file "$NCLOG" should not include "$HOME/sensitive.txt"
+    The stderr should include "not authorized"
   End
 
   It 'remote manifest row: rsyncs each manifest path into its per-position cache subdir'
@@ -235,7 +258,7 @@ EOF
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "cb.sock:U"
     The contents of file "$NCLOG" should not include "id:$id"
     The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/remote-a.txt"
     The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/2/remote-b.txt"
@@ -319,7 +342,7 @@ EOF
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "cb.sock:U"
     The contents of file "$NCLOG" should include "$locdir/doc.txt"
     The contents of file "$NCLOG" should not include "id:$id"
     The contents of file "$RSYNCLOG" should equal ""
@@ -336,7 +359,7 @@ EOF
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "cb.sock:U"
     The contents of file "$NCLOG" should include "$locdir/1/a.txt"
     The contents of file "$NCLOG" should include "$locdir/2/b.txt"
     The contents of file "$NCLOG" should not include "id:$id"
@@ -398,7 +421,7 @@ EOF
     The stderr should include "rsync"
     The contents of file "$RSYNCLOG" should equal ""
     The contents of file "$NCLOG" should include "2489:T"
-    The contents of file "$NCLOG" should not include "2489:U"
+    The contents of file "$NCLOG" should not include "cb.sock:U"
   End
 
   It 'local restore failure falls back to the current text-copy behavior'
@@ -434,7 +457,7 @@ EOF
     The status should be success
     The stderr should include "rsync failed"
     The contents of file "$NCLOG" should include "2489:T"
-    The contents of file "$NCLOG" should not include "2489:U"
+    The contents of file "$NCLOG" should not include "cb.sock:U"
   End
 
   # --- spec R3: readable pull failures + warning suppression -----------------
@@ -601,7 +624,7 @@ EOF
 
     When call run_restore_id "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "cb.sock:U"
     The contents of file "$NCLOG" should include "id:$id"
   End
 
@@ -614,7 +637,7 @@ EOF
     When call run_restore_id "$id"
     The status should be success
     The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/remote-a.txt"
-    The contents of file "$NCLOG" should include "2489:U"
+    The contents of file "$NCLOG" should include "cb.sock:U"
     The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/remote-a.txt"
   End
 

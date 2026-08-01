@@ -6,6 +6,7 @@ Describe 'clipboard-store-core: portable helpers'
   CORE="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/clipboard-store-core.zsh"
 
   setup() {
+    export CLIPBOARD_BRIDGE_ENDPOINT=trusted
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
     export PICK_CLIPBOARD_DB="$SHELLSPEC_TMPBASE/store/history.db"
@@ -48,6 +49,8 @@ Describe 'clipboard-store-core: portable helpers'
     result=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
     The variable result should include "clip_types"
     The variable result should include "clips"
+    The variable result should include "file_authorities"
+    The variable result should include "file_grants"
   End
 
   It '--init-store is idempotent'
@@ -182,6 +185,7 @@ Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
   DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
 
   setup() {
+    export CLIPBOARD_BRIDGE_ENDPOINT=trusted
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     export PICK_CLIPBOARD_DB="$SHELLSPEC_TMPBASE/store/history.db"
     mkdir -p "$XDG_STATE_HOME/clipboard" "$SHELLSPEC_TMPBASE/store"
@@ -250,6 +254,8 @@ Describe 'clipboard-bridge-dispatch: linux-headless rich/file ops'
     The output should start with "O"
     row=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT type_kind||'|'||source_host FROM clips;")
     The variable row should equal "files|cruise-box"
+    authority_count=$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT count(*) FROM file_authorities;")
+    The variable authority_count should equal "2"
   End
 
   It 'U form A rejects a relative path'

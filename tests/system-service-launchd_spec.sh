@@ -227,4 +227,73 @@ EOF
       The output should equal "stopped"
     End
   End
+
+  Describe 'clipboard trusted endpoint contract'
+    no_socat() { ! command -v socat >/dev/null 2>&1; }
+
+    It 'keeps SSH forwarding on TCP and makes the local socket service-owned mode 0600'
+      services="$SHELLSPEC_PROJECT_ROOT/home/dot_config/packages/services.toml.tmpl"
+      public_socket="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge.socket"
+      trusted_socket="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge-trusted.socket"
+      When run command sh -c '
+        grep -F "TCP-LISTEN:2489,bind=127.0.0.1" "$1" >/dev/null &&
+        grep -F "UNIX-LISTEN:{{ .chezmoi.homeDir }}/.local/state/cb.sock,fork,unlink-early,mode=0600" "$1" >/dev/null &&
+        grep -F "ListenStream=127.0.0.1:2489" "$2" >/dev/null &&
+        grep -F "ListenStream=%h/.local/state/cb.sock" "$3" >/dev/null &&
+        grep -F "SocketMode=0600" "$3" >/dev/null &&
+        grep -F "RemoveOnStop=yes" "$3" >/dev/null
+      ' _ "$services" "$public_socket" "$trusted_socket"
+      The status should be success
+    End
+
+    It 'assigns endpoint trust in service configuration and enables both sockets'
+      services="$SHELLSPEC_PROJECT_ROOT/home/dot_config/packages/services.toml.tmpl"
+      public_service="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge@.service"
+      trusted_service="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge-trusted@.service"
+      setup_hook="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_37-setup-clipboard-bridge.sh.tmpl"
+      ignore_template="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiignore.tmpl"
+      When run command sh -c '
+        grep -F "CLIPBOARD_BRIDGE_ENDPOINT = \"public\"" "$1" >/dev/null &&
+        grep -F "CLIPBOARD_BRIDGE_ENDPOINT = \"trusted\"" "$1" >/dev/null &&
+        grep -F "CLIPBOARD_BRIDGE_ENDPOINT=public" "$2" >/dev/null &&
+        grep -F "CLIPBOARD_BRIDGE_ENDPOINT=trusted" "$3" >/dev/null &&
+        grep -F "enable clipboard-bridge.socket clipboard-bridge-trusted.socket" "$4" >/dev/null &&
+        grep -F ".config/systemd/user/clipboard-bridge-trusted.socket" "$5" >/dev/null &&
+        grep -F ".config/systemd/user/clipboard-bridge-trusted@.service" "$5" >/dev/null
+      ' _ "$services" "$public_service" "$trusted_service" "$setup_hook" "$ignore_template"
+      The status should be success
+    End
+
+    It 'round-trips a trusted U over a real mode-0600 Unix socket'
+      Skip if 'socat is unavailable' no_socat
+      dispatch="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+      When run command sh -c '
+        root=$1
+        dispatch=$2
+        sock="$root/cb.sock"
+        export XDG_STATE_HOME="$root/state"
+        export XDG_DATA_HOME="$root/data"
+        export PICK_CLIPBOARD_DB="$root/data/history.db"
+        export CLIPBOARD_PLATFORM=linux-headless
+        export CLIPBOARD_BRIDGE_ENDPOINT=trusted
+        mkdir -p "$XDG_STATE_HOME/clipboard" "$XDG_DATA_HOME"
+        printf "socket-test\n" > "$XDG_STATE_HOME/clipboard/self-name"
+        socat "UNIX-LISTEN:$sock,fork,unlink-early,mode=0600" "EXEC:$dispatch" 2>"$root/socat.err" &
+        listener=$!
+        trap "kill $listener 2>/dev/null || true; wait $listener 2>/dev/null || true" EXIT
+        i=0
+        while [ ! -S "$sock" ] && [ "$i" -lt 100 ]; do
+          sleep 0.02
+          i=$((i + 1))
+        done
+        [ -S "$sock" ] || exit 9
+        printf "U\000\000\000\006/tmp/a" | nc -U -w 2 "$sock" > "$root/response"
+        [ "$(head -c 1 "$root/response")" = O ] || exit 8
+        [ "$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT count(*) FROM file_authorities;")" = 1 ] || exit 7
+        mode=$(stat -f %Lp "$sock" 2>/dev/null || stat -c %a "$sock")
+        [ "$mode" = 600 ] || exit 6
+      ' _ "$TEST_TMP" "$dispatch"
+      The status should be success
+    End
+  End
 End

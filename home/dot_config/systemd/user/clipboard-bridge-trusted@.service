@@ -1,0 +1,13 @@
+# Per-connection handler for clipboard-bridge-trusted.socket. Endpoint trust is
+# assigned by this service environment, never by request payload data.
+[Unit]
+Description=Trusted local clipboard bridge connection handler
+CollectMode=inactive-or-failed
+
+[Service]
+ExecStart=%h/.local/libexec/clipboard-bridge-dispatch
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+Environment=CLIPBOARD_BRIDGE_ENDPOINT=trusted

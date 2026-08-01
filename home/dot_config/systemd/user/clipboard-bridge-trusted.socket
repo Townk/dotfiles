@@ -1,0 +1,14 @@
+# Trusted local clipboard file-authority endpoint. It is never forwarded over
+# SSH; the public reverse bridge remains loopback TCP 2489.
+[Unit]
+Description=Trusted local clipboard bridge socket
+
+[Socket]
+ListenStream=%h/.local/state/cb.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
+Accept=yes
+
+[Install]
+WantedBy=sockets.target

@@ -30,6 +30,12 @@ Describe 'clipboard-mount: map + host validation'
     The stderr should include "not absolute"
   End
 
+  It 'rejects parent traversal in an absolute peer path'
+    When run command zsh -f "$CM" map peer-mini /tmp/../../../../etc/passwd
+    The status should be failure
+    The stderr should include "unsafe path"
+  End
+
   It 'rejects a traversal-shaped host (defense: host comes off the wire)'
     When run command zsh -f "$CM" map "../evil" /tmp/x
     The status should be failure

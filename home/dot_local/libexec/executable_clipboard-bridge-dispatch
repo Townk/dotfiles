@@ -1,8 +1,9 @@
 #!/usr/bin/env zsh
 # clipboard-bridge-dispatch — the clipboard-bridge service's per-connection
 # handler (Phase 5, universal-clipboard project spec §11). socat EXECs this
-# once per accepted connection on 127.0.0.1:2489, with the connection's
-# bytes wired to our stdin/stdout — see services.toml.tmpl.
+# once per accepted connection on public 127.0.0.1:2489 or the trusted-local
+# mode-0600 Unix socket, with the connection's bytes wired to stdin/stdout.
+# The owning service sets CLIPBOARD_BRIDGE_ENDPOINT=public|trusted.
 #
 # Backward compatible with the pre-Phase-5 bridge: the OLD client (`pbpaste`
 # / universal.lua's paste(), both doing a bare `nc -U -w1 <socket>` with NO
@@ -40,24 +41,31 @@
 #      Materialize a used peer clip into THIS machine's store (§11). Sent to the
 #      LOCAL bridge by the nvim provider on paste-over-tunnel. resp: empty | err.
 #   C  copy (rich)    req: <2 bytes uti_len><uti><blob>  resp: empty | error text
-#   F  fetch-file     req: absolute path (UTF-8)     resp: file bytes | error text
-#      Handed a directory instead of a file, replies the EXACT error text
-#      "is-directory" (M3) -- a remote pbpaste greps for that string to know
-#      to retry the same path as an A archive-stream. See clip::op_fetch_file.
-#   A  archive-stream req: absolute directory path (UTF-8)
+#      Public TCP accepts only the seven UTIs emitted by pbcopy --content;
+#      trusted local calls retain the generic UTI behavior.
+#   K  grant-files    req: empty
+#                     resp: kind US host US ts US token-or-- US NUL-paths
+#      Issues an opaque short-lived token only for a trusted local path
+#      snapshot. Pointer-only peer M rows return "-" plus their display paths.
+#   f  fetch-authorized-file req: token US item-index
+#                     resp: file bytes | error text
+#      Handed a directory, replies the EXACT "is-directory" error so pbpaste
+#      retries the same capability/index through `a`.
+#   a  archive-authorized-directory req: token US item-index
 #                     resp: BE64 byte-count header + raw tar stream | err
-#      F's directory sibling (M3, files-yazi design §4): replies `O` + BE32
+#      f's directory sibling: replies `O` + BE32
 #      len=8 + a BE64 total-byte-count -- a `du`-based size ESTIMATE for
 #      progress display only, NO directional guarantee -- then the raw
 #      `tar -cf -` stream of the directory until EOF: no trailing frame,
 #      the client just reads until the peer closes. Unreadable entries are
-#      rejected up front with an E frame; see clip::op_archive_stream for
+#      rejected up front with an E frame; see clip::stream_archive_path for
 #      the full size/error semantics.
 #   O  declare-origin req: source_host US text        resp: empty | err
 #      Records that the NEXT pasteboard change hashing to sha256(text) was
 #      really copied on source_host (§23) -- sent by a machine SSH'd into the
 #      peer just before it sets the peer clipboard. See clip::op_declare_origin.
 #   U  set-file-urls req: <path NUL path ...> | "id:<rowid>"  resp: empty | err
+#      Trusted-local endpoint only.
 #      Puts a real file clip on THIS Mac's pasteboard (files-yazi design §4):
 #      form A writes NSFilenamesPboardType (all paths) + public.file-url
 #      (first path) via hs.pasteboard.writeAllData; form B does a full-
@@ -98,7 +106,9 @@
 #      retired `N` op (see below) -- files are lazy (§12), so the peer must
 #      only get a record of the manifest, never a pasteboard write. Callers:
 #      pbcopy (files-yazi X2-redo, SSH files branch, both the local AND
-#      peer halves as of Fix A).
+#      peer halves as of Fix A). Trusted local M authorizes self-host paths;
+#      public peer M remains a pointer row and cannot mint file authority.
+#   F/A raw-path file operations -- RETIRED. Both return capability-required.
 #
 #   N  push-manifest -- RETIRED (Fix A). Used to be the cross-machine sibling
 #      of U (files-yazi design §5, T11): declared origin + set the PEER's
@@ -108,7 +118,8 @@
 #      clipboard and showed up as a confusing "remote text" twin of the same
 #      clip on the origin's own TUI picker. pbcopy's SSH files branch was the
 #      only caller (grepped repo-wide) and now sends `M` (record-only, see
-#      above) to both ports instead, so the opcode itself has been removed
+#      above) to the trusted local socket and public peer port instead, so
+#      the opcode itself has been removed
 #      from the dispatch table below. clip::declare_origin_core's optional
 #      suppress-echo 3rd arg (only ever passed by this retired op) and
 #      clipboard-history.lua's matching consumption of it are left in place,
@@ -127,6 +138,12 @@
 # core APIs (verified reliable) for the actual pasteboard write.
 
 set -u
+
+CLIPBOARD_BRIDGE_ENDPOINT=${CLIPBOARD_BRIDGE_ENDPOINT:-public}
+case "$CLIPBOARD_BRIDGE_ENDPOINT" in
+  public|trusted) ;;
+  *) CLIPBOARD_BRIDGE_ENDPOINT=public ;;
+esac
 
 # Core library: framing + store ops + portable helpers (Phase 7 spec §2).
 # ${0:A:h}/../lib resolves correctly in BOTH layouts: the repo checkout
@@ -183,12 +200,39 @@ case "$opcode" in
   T) clip::op_set "$payload" ;;
   P) clip::op_persist "$payload" ;;
   O) clip::op_declare_origin "$payload" ;;
-  C) clip::op_copy "$payload" ;;
-  F) clip::op_fetch_file "$payload" ;;
-  A) clip::op_archive_stream "$payload" ;;
-  U) clip::op_set_file_urls "$payload" ;;
+  C)
+    if [[ "$CLIPBOARD_BRIDGE_ENDPOINT" == trusted ]]; then
+      clip::op_copy "$payload"
+    elif clip::parse_rich_payload "$payload"; then
+      case "$REPLY_UTI" in
+        public.png|public.jpeg|public.tiff|com.adobe.pdf|public.utf8-plain-text|com.compuserve.gif|org.webmproject.webp)
+          clip::op_copy "$payload"
+          ;;
+        *) send_err "rich type not allowed on public endpoint" ;;
+      esac
+    else
+      send_err "$REPLY"
+    fi
+    ;;
+  K) clip::op_grant_files ;;
+  f) clip::op_fetch_authorized "$payload" ;;
+  a) clip::op_archive_authorized "$payload" ;;
+  F|A) send_err "capability-required; update pbpaste" ;;
+  U)
+    if [[ "$CLIPBOARD_BRIDGE_ENDPOINT" == trusted ]]; then
+      clip::op_set_file_urls "$payload"
+    else
+      send_err "trusted-endpoint-required"
+    fi
+    ;;
   L) clip::op_list_files ;;
-  M) clip::op_manifest_persist_local "$payload" ;;
+  M)
+    if [[ "$CLIPBOARD_BRIDGE_ENDPOINT" == trusted ]]; then
+      clip::op_manifest_persist_local "$payload" 1
+    else
+      clip::op_manifest_persist_local "$payload" 0
+    fi
+    ;;
   W) clip::op_window_action "$payload" ;;
   *) send_err "unknown opcode" ;;
 esac
