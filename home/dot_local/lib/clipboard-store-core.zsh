@@ -918,7 +918,7 @@ clip::stream_archive_path() {
   syswrite -- "O$len_hdr$REPLY"
 
   local fd
-  exec {fd}< <(tar -cf - -C "$parent" -- "$base" 2>/dev/null)
+  exec {fd}< <(tar --no-xattrs -cf - -C "$parent" -- "$base" 2>/dev/null)
   # `chunk` declared once, outside the loop -- see the matching gotcha
   # comment on read_n()/stream_file_path above: a bare `local chunk` re-run
   # inside the loop on a later iteration gets parsed by zsh as a request to
