@@ -34,7 +34,14 @@ set -eu
 
 sshcfg="$HOME/.ssh/config"
 
-if [ ! -f "$sshcfg" ] || ! grep -Eq '^[[:space:]]*Include[[:space:]]+.*\.ssh/config\.d/\*' "$sshcfg"; then
+# The invariant is BOTH: a top-level `Match all` AND the config.d Include below
+# it. Grepping only for the Include misses a work-tooling rewrite that keeps the
+# Include inside a `Host <work>` block or drops the `Match all` -- either leaves
+# config.d/* inert. Require both lines; append the pair when EITHER is missing.
+# A duplicate trailing pair is harmless: ssh takes first-obtained values.
+if [ ! -f "$sshcfg" ] \
+  || ! grep -Eq '^[[:space:]]*Include[[:space:]]+.*\.ssh/config\.d/\*' "$sshcfg" \
+  || ! grep -Eq '^[[:space:]]*Match[[:space:]]+all([[:space:]]|$)' "$sshcfg"; then
   mkdir -p "$HOME/.ssh"
   chmod 700 "$HOME/.ssh"
   printf '\nMatch all\nInclude ~/.ssh/config.d/*\n' >> "$sshcfg"
