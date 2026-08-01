@@ -108,7 +108,7 @@ require_cmd() {
 # have_tty: true when we can reach a controlling terminal for interaction —
 # stdin is a tty, or /dev/tty is openable even when stdin is a pipe. Used by
 # the prompt helpers and any tool deciding whether to show interactive UI.
-have_tty() { [ -t 0 ] || [ -e /dev/tty ]; }
+have_tty() { [ -t 0 ] || { : </dev/tty; } 2>/dev/null; }
 
 # --- spinner ----------------------------------------------------------------
 # One spinner for the whole tree. Everything animates on STDERR, so a caller's
