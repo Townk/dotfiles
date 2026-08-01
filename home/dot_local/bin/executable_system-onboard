@@ -622,6 +622,13 @@ assign_slot() {
       fi
     fi
     log_info "reusing slot $SLOT for $ALIAS"
+  elif [[ -n "$REMOTE_SELF_SLOT" ]]; then
+    # The target already carries this slot in its OWN chezmoi config (a prior
+    # operator onboarded it). This operator's loose map has no entry yet, but
+    # the box's slot is authoritative — reuse it rather than mint a second one
+    # (MED-4). sec::map_set below records it into this operator's map.
+    SLOT="$REMOTE_SELF_SLOT"
+    log_info "reusing $ALIAS's authoritative slot $SLOT (from its chezmoi config)"
   else
     # Allocate a fresh, collision-free opaque slot.
     while :; do
@@ -832,14 +839,19 @@ converge_local() {
   fi
 }
 
-# --- remote self-onboard detection (human) -----------------------------------
-# A human Mac owns its slot via `--local`. Read the target's own chezmoi config
-# over SSH: a non-empty secretsSlot means it already self-onboarded, so the
-# operator must NOT mint/rebuild a slot — only reconcile connectivity. An empty
-# slot (or a headless target) falls back to today's operator-driven flow.
+# --- remote self-onboard detection -------------------------------------------
+# Read the target's OWN chezmoi config over SSH. `chezmoi data` is the
+# authoritative record of the slot a box already carries, and it is
+# kind-agnostic — so we read it for BOTH kinds:
+#   - human: a non-empty secretsSlot means it self-onboarded via `--local`; the
+#     operator must NOT mint/rebuild, only reconcile connectivity (see main).
+#   - headless: the alias->slot record is the per-operator loose map, so a
+#     DIFFERENT operator's empty map would otherwise look "unallocated" and mint
+#     a SECOND slot, orphaning the box's existing secrets/<slot> tree (MED-4).
+#     The box's own secretsSlot is authoritative; assign_slot reuses it.
+# An empty slot on either kind falls back to the operator-driven mint flow.
 REMOTE_SELF_SLOT="" REMOTE_SELF_PROFILE=""
 detect_remote_self_onboard() {
-  [[ "$KIND" == human ]] || return 0
   if ((DRY_RUN)); then
     log_info "[dry-run] would read $ALIAS's chezmoi secretsSlot to detect self-onboarding"
     return 0
@@ -1097,12 +1109,20 @@ main() {
   reconcile_peer_hostname
   reconcile_remote_basics
 
-  # If a human target already self-onboarded, it owns its slot: reconcile
-  # connectivity + bring it current, but never mint/rebuild secrets.
+  # Read the target's authoritative slot (both kinds; see detect_...). A profile
+  # mismatch is a hard stop regardless of kind.
   detect_remote_self_onboard
   if [[ -n "$REMOTE_SELF_SLOT" ]]; then
     [[ -z "$REMOTE_SELF_PROFILE" || "$PROFILE" == "$REMOTE_SELF_PROFILE" ]] ||
       die "$ALIAS self-onboarded with profile '$REMOTE_SELF_PROFILE', not '$PROFILE' (hard stop)"
+  fi
+
+  # A human target that already self-onboarded OWNS its slot via `--local`:
+  # reconcile connectivity + bring it current, but never mint/rebuild secrets.
+  # (Headless boxes are always operator-managed — their secrets are encrypted to
+  # the box's PUBLIC key here — so they fall through to the flow below, where
+  # assign_slot reuses REMOTE_SELF_SLOT instead of minting a second one.)
+  if [[ "$KIND" == human && -n "$REMOTE_SELF_SLOT" ]]; then
     SLOT="$REMOTE_SELF_SLOT"
     log_info "$ALIAS already self-onboarded (slot $SLOT); reconciling connectivity only"
     if ((DRY_RUN)); then
@@ -1116,7 +1136,7 @@ main() {
     return 0
   fi
 
-  # Operator-driven: target not self-onboarded, or headless.
+  # Operator-driven: mint a new slot, or reuse the box's authoritative one.
   reconcile_age_identity
   assign_slot
   apply_slot_color

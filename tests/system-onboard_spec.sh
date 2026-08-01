@@ -241,3 +241,65 @@ Describe 'system-onboard: write_ssh_conf (alias lists / R-batch Task A)'
     The contents of file "$conf" should include 'Match originalhost mac-mini,mini,thiago-mac-mini,thiago-mac-mini.local exec'
   End
 End
+
+# MED-4: a headless box a PRIOR operator onboarded already carries an
+# authoritative `secretsSlot` in its own chezmoi config, but the alias->slot
+# record is per-operator (the loose operator map, never committed). A SECOND
+# operator laptop — whose map has no entry for the box — must NOT treat the box
+# as unallocated and mint a FRESH slot (which adds a second .sops.yaml rule and
+# a new secrets/<slot> tree, orphaning the old and letting the box source BOTH
+# fragments). detect_remote_self_onboard reads the box's own `chezmoi data`
+# .secretsSlot (kind-agnostic), and assign_slot must reuse that slot instead of
+# minting. These examples source the script (main() suppressed) and drive the
+# operator-driven headless path (detect + assign_slot) with the remote read and
+# slot minting stubbed, exactly as main() sequences them.
+Describe 'system-onboard: headless slot reuse (MED-4)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/onboard-med4.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT"
+    export STUB_SLOT="slot-d00d42"        # the box's authoritative slot
+    export MAP="$WORK/onboard-map.yaml"   # absent => this operator's map is empty
+    export SOPS="$WORK/.sops.yaml"
+    export MINTED="$WORK/minted.log"      # touched iff sec::gen_slot is called
+  }
+  BeforeEach 'setup'
+
+  # rexec is stubbed to serve the box's `chezmoi data` (secretsSlot + profile);
+  # sec::gen_slot is instrumented so a mint leaves evidence. KIND/ALIAS/PROFILE/
+  # RECIPIENT and the loose-layer paths are set AFTER sourcing (the script's own
+  # top-level assignments would otherwise reset them).
+  run_assign() {
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      rexec() { case "$*" in
+        (*"chezmoi data"*) printf "secretsSlot: %s\nprofile: dev-shell\n" "$STUB_SLOT" ;;
+        (*) return 0 ;;
+      esac }
+      sec::gen_slot() { print -r -- minted >>"$MINTED"; printf "slot-badf00"; }
+      KIND=headless ALIAS=test-box PROFILE=dev-shell
+      RECIPIENT="age1exampleexampleexampleexampleexampleexampleexam00000"
+      OPERATOR_MAP="$MAP" SOPS_YAML="$SOPS"
+      detect_remote_self_onboard
+      assign_slot
+      print -r -- "SLOT=$SLOT"
+    ' _
+  }
+
+  It 'reuses the box own secretsSlot and never mints a fresh one'
+    When call run_assign
+    The status should be success
+    The output should include "SLOT=slot-d00d42"
+    The path "$MINTED" should not be exist
+  End
+
+  It 'sets the sops rule for the reused slot only (no second rule)'
+    When call run_assign
+    The status should be success
+    The output should include "SLOT=slot-d00d42"
+    The contents of file "$SOPS" should include "secrets/slot-d00d42/"
+    The contents of file "$SOPS" should not include "slot-badf00"
+  End
+End
