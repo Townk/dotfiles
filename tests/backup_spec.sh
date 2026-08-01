@@ -2234,6 +2234,37 @@ EOF
       The line 3 should equal "keeps-fresh-undo"
       The line 4 should equal "keeps-new1"
     End
+
+    # LOW-8: restic snapshots --json carries each snapshot's whole paths array
+    # (tens of MB for capture snapshots). capture::thin must enumerate ONCE and
+    # project it down immediately, reusing the small doc for both the retention
+    # ladder and the undo-expiry pass — never re-decoding the full document.
+    # Characterization: the drop set is identical and snapshots --json is
+    # invoked exactly once per thin, regardless of paths bulk.
+    It 'enumerates snapshots once and yields the same drop set (LOW-8)'
+      once() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        # each snapshot carries a big paths array — the payload the old code
+        # re-piped through jq twice. Build it with jq so it stays valid JSON.
+        local big
+        big=$(jq -cn '[range(0;500) | "/home/u/file\(.).txt"]')
+        cat > "$FIX/stg.json" <<EOF
+[{"id":"old1","time":"2026-01-02T10:01:00Z","paths":$big},
+ {"id":"new1","time":"2026-01-02T10:14:00Z","paths":$big}]
+EOF
+        bkp::capture::thin "$FIX/stg" "$FIX/m.toml" >/dev/null || return 1
+        local forget
+        forget=$(grep -- forget "$FIX/calls")
+        case "$forget" in *old1*) print drops-old1 ;; *) print BAD ;; esac
+        case "$forget" in *new1*) print BAD ;; *) print keeps-new1 ;; esac
+        grep -c 'snapshots --json' "$FIX/calls"
+      }
+      When run once
+      The line 1 should equal "drops-old1"
+      The line 2 should equal "keeps-new1"
+      The line 3 should equal 1
+    End
   End
 
   Describe 'bkp::ux — browse/diff plumbing'

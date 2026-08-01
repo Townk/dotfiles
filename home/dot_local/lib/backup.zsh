@@ -1301,13 +1301,19 @@ bkp::capture::ensure_repo() {
 # forgotten once older than 7 days.
 bkp::capture::thin() {
   local repo="$1" manifest="$2"
-  local policy json snaps undo plan
+  local policy proj snaps undo plan
   policy=$(bkp::manifest::thin_policy "$manifest") || return 2
-  json=$(bkp::restic "$repo" snapshots --json) || return 2
-  snaps=$(print -r -- "$json" |
+  # Enumerate once and project immediately: `restic snapshots --json` embeds
+  # each snapshot's entire paths array (tens of MB for capture snapshots).
+  # Decode it a SINGLE time into a small doc, then reuse that for both the
+  # retention ladder and the undo-expiry pass — instead of holding the full
+  # document in a shell var and re-piping it through jq twice.
+  proj=$(bkp::restic "$repo" snapshots --json |
+    jq -c 'map({id, time, tree, original, tags})' 2>/dev/null) || return 2
+  snaps=$(print -r -- "$proj" |
     jq '[(. // [])[] | select(((.tags // []) | index("bkp-undo")) | not)]' 2>/dev/null |
     bkp::restic::parse_snapshots) || return 2
-  undo=$(print -r -- "$json" |
+  undo=$(print -r -- "$proj" |
     jq '[(. // [])[] | select((.tags // []) | index("bkp-undo"))]' 2>/dev/null |
     bkp::restic::parse_snapshots) || return 2
   local line
