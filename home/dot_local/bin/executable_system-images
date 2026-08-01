@@ -394,6 +394,21 @@ do_list() {
   done
 }
 
+# img::confirm_name <name> → the interactive "type the name" gate for the
+# destructive `remove`. Factored into its own seam so do_remove's teardown +
+# delete logic is unit-testable without a controlling terminal. Returns 0 on
+# a correct confirmation; dies otherwise (or when there is no tty).
+img::confirm_name() {
+  local name="$1"
+  have_tty || die "remove needs an interactive terminal (it is destructive)"
+  printf '%s⚠ this permanently deletes %s and ALL its contents.%s\n' \
+    "$C_YEL" "$(img::imgpath "$name")" "$C_RES" >&2
+  printf 'Type the image name (%s) to confirm: ' "$name" >&2
+  local ans=""
+  IFS= read -r ans </dev/tty || true
+  [[ "$ans" == "$name" ]] || die "aborted (got '$ans')"
+}
+
 do_remove() {
   [[ $# -eq 1 ]] || die "usage: remove <name>"
   local name="$1"
@@ -401,13 +416,21 @@ do_remove() {
   local img
   img=$(img::imgpath "$name")
   [[ -e "$img" ]] || die "image file does not exist: $img"
-  have_tty || die "remove needs an interactive terminal (it is destructive)"
-  printf '%s⚠ this permanently deletes %s and ALL its contents.%s\n' "$C_YEL" "$img" "$C_RES" >&2
-  printf 'Type the image name (%s) to confirm: ' "$name" >&2
-  local ans=""
-  IFS= read -r ans </dev/tty || true
-  [[ "$ans" == "$name" ]] || die "aborted (got '$ans')"
-  img::is_mounted "$name" && hdiutil detach "$(img::mountdir "$name")" >/dev/null
+  img::confirm_name "$name"
+  # Detach by DEVICE, resolved from the image itself — never by the declared
+  # mount dir. If the image is attached elsewhere (Finder / open) or ejected
+  # in Finder with the /dev/diskN device still live, a mount-dir detach is a
+  # silent no-op and `rm -f` would unlink the backing store of a LIVE device
+  # (unrecoverable). Detach the device, then REFUSE to delete unless the image
+  # is confirmed no longer attached.
+  local info dev
+  if info=$(img::attach_info "$name"); then
+    dev="${info%%$'\t'*}"
+    [[ -n "$dev" ]] && hdiutil detach "$dev" >/dev/null 2>&1 || true
+    if img::attach_info "$name" >/dev/null 2>&1; then
+      die "image '$name' is still attached (detach failed); refusing to delete $img"
+    fi
+  fi
   rm -f "$img"
   log_ok "removed $img"
 }

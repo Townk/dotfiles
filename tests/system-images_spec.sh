@@ -224,4 +224,54 @@ STUB
       End
     End
   End
+
+  Describe 'MED-3: remove never unlinks a live device'
+    # `remove` runs its confirmation gate against /dev/tty, so drive it in
+    # process: source the tool (the source-guard skips main) and neutralise
+    # the confirmation seam, exercising the real detach-then-delete logic.
+    run_remove() {
+      source "$HOME/.local/bin/system-images"
+      img::confirm_name() { :; }   # bypass the interactive gate
+      do_remove "$1"
+    }
+
+    Context 'image attached at /Volumes/work (NOT the declared dir)'
+      before() { attach_at "/Volumes/work"; }
+      BeforeEach 'before'
+
+      It 'detaches the DEVICE (/dev/diskN, not the mount point) then deletes'
+        When run run_remove work
+        The status should be success
+        The output should include "removed"
+        The contents of file "$HDIUTIL_LOG" should include "detach /dev/disk4"
+        # backing file gone only AFTER a successful detach
+        The path "$IMG" should not be exist
+      End
+    End
+
+    Context 'image not attached at all'
+      It 'deletes the backing file (no detach needed)'
+        When run run_remove work
+        The status should be success
+        The output should include "removed"
+        The path "$IMG" should not be exist
+        The contents of file "$HDIUTIL_LOG" should not include "detach"
+      End
+    End
+
+    Context 'image still attached after the detach attempt'
+      # A device that will not go away (e.g. busy) — the stub keeps reporting
+      # it attached even after `detach`. remove MUST abort, not rm the backing
+      # store of a live device.
+      before() { attach_at "/Volumes/work"; export HDIUTIL_STUBBORN=1; }
+      BeforeEach 'before'
+
+      It 'aborts without deleting the backing file'
+        When run run_remove work
+        The status should be failure
+        The stderr should include "still attached"
+        The path "$IMG" should be exist
+      End
+    End
+  End
 End
