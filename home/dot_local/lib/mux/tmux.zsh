@@ -350,26 +350,54 @@ _mux_tx_pick_float() {
   local modal="$HOME/.config/mux/scripts/tmux-modal"
   local picklist="$HOME/.local/libexec/pick-list"
 
-  local tmp fifo
+  local tmp fifo out
   tmp=$(mktemp "${TMPDIR:-/tmp}/txpick.XXXXXX") || return 1
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/txpick-fifo.XXXXXX")
   if ! mkfifo -m 600 "$fifo" 2>/dev/null; then
     rm -f -- "$tmp"
     return 1
   fi
+  out=$(mktemp "${TMPDIR:-/tmp}/txpick-out.XXXXXX") || { rm -f -- "$tmp" "$fifo"; return 1; }
+  # Clean up on an interrupt mid-run, when these locals are still in scope. (An
+  # EXIT trap is no help here: these float helpers are always called inside a
+  # `$(...)`, so an EXIT trap fires only when that command substitution exits —
+  # after the function has returned and its locals are gone. Each return path
+  # below therefore removes the temps explicitly.)
+  trap 'rm -f -- "$fifo" "$tmp" "$out"' INT TERM
 
   # Stage rows to a file: the popup child cannot read our stdin pipe.
   cat >"$tmp"
+
+  # HI-7: the popup MUST be backgrounded (display-popup -E blocks until the
+  # popup closes, and the modal only writes the capture FIFO once a reader has
+  # opened it), so the read runs concurrently in a background reader while we
+  # wait on the popup. If the popup fails to launch (no client, a client that
+  # already owns a popup, …) no writer ever opens the FIFO; without the wait,
+  # `cat "$fifo"` would block on open(2) forever and leak these temps.
+  cat "$fifo" >"$out" 2>/dev/null &
+  local reader_pid=$!
 
   "$(_mux_tx_bin)" display-popup -E -B -w "$pane_w" -h "$pane_h" \
     -e "COLORTERM=${COLORTERM:-truecolor}" -e "TMUX_PANE=${TMUX_PANE:-}" \
     "$modal" --origin "${TMUX_PANE:-}" --title "$header" --no-chrome --capture "$fifo" \
     -- "$picklist" "${pick_args[@]}" --no-border --height -1 --margin 0,0,0,0 --padding 0,2,0,2 -- "$tmp" \
     >/dev/null 2>&1 &
+  local popup_pid=$!
+
+  wait "$popup_pid"
+  local rc=$?
+  if (( rc != 0 )); then
+    # Launch failed: no writer will ever come, so unblock and reap the reader.
+    kill "$reader_pid" 2>/dev/null
+    wait "$reader_pid" 2>/dev/null
+    rm -f -- "$fifo" "$tmp" "$out"
+    return "$rc"
+  fi
+  wait "$reader_pid"
 
   local result
-  result=$(cat "$fifo")
-  rm -f -- "$fifo" "$tmp"
+  result=$(cat "$out")
+  rm -f -- "$fifo" "$tmp" "$out"
 
   [[ -n "$result" ]] || return 130
   print -r -- "$result"
@@ -400,9 +428,13 @@ _mux_tx_float() {
   local modal="$HOME/.config/mux/scripts/tmux-modal"
   local widget="$HOME/.local/libexec/input-widget"
 
-  local fifo
+  local fifo out
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/txinput-fifo.XXXXXX")
   mkfifo -m 600 "$fifo" 2>/dev/null || return 1
+  out=$(mktemp "${TMPDIR:-/tmp}/txinput-out.XXXXXX") || { rm -f -- "$fifo"; return 1; }
+  # See _mux_tx_pick_float: EXIT traps don't fire until the enclosing `$(...)`
+  # ends, so clean up explicitly on each return and trap only INT/TERM.
+  trap 'rm -f -- "$fifo" "$out"' INT TERM
 
   # Same measured-height contract as the zellij float (input-common's
   # --measure); fall back to the per-type defaults.
@@ -431,15 +463,32 @@ _mux_tx_float() {
   [[ -n "$pane_x" ]] && geom+=(-x "$pane_x")
   [[ -n "$pane_y" ]] && geom+=(-y "$pane_y")
 
+  # HI-7: read concurrently via a background reader and wait on the popup, so a
+  # failed launch returns promptly instead of blocking forever on `cat "$fifo"`
+  # (see _mux_tx_pick_float for the full rationale).
+  cat "$fifo" >"$out" 2>/dev/null &
+  local reader_pid=$!
+
   "$(_mux_tx_bin)" display-popup -E "${geom[@]}" \
     -e "COLORTERM=${COLORTERM:-truecolor}" -e "TMUX_PANE=${TMUX_PANE:-}" \
     "$modal" --origin "${TMUX_PANE:-}" --capture "$fifo" \
     -- "$widget" --type "$type" -- "${wargs[@]}" \
     >/dev/null 2>&1 &
+  local popup_pid=$!
+
+  wait "$popup_pid"
+  local rc=$?
+  if (( rc != 0 )); then
+    kill "$reader_pid" 2>/dev/null
+    wait "$reader_pid" 2>/dev/null
+    rm -f -- "$fifo" "$out"
+    return "$rc"
+  fi
+  wait "$reader_pid"
 
   local result
-  result=$(cat "$fifo")
-  rm -f -- "$fifo"
+  result=$(cat "$out")
+  rm -f -- "$fifo" "$out"
   [[ -n "$result" ]] || return 130
   print -rn -- "$result"
 }

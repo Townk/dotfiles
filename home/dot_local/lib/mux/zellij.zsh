@@ -57,6 +57,11 @@ _mux_zj_pick_float() {
     rm -f -- "$tmp"
     return 1
   fi
+  # Clean up on an interrupt mid-run, while these locals are in scope. (An EXIT
+  # trap would fire only when the enclosing `$(...)` exits — after the function
+  # returned and its locals vanished — so each return path removes the temps
+  # explicitly.)
+  trap 'rm -f -- "$fifo" "$tmp"' INT TERM
 
   # Stage the picker rows to a file: the float child is a separate process and
   # cannot read our stdin pipe, so it takes the rows as a file argument.
@@ -66,11 +71,19 @@ _mux_zj_pick_float() {
   # stdout. mux::pick's stdout IS its return channel (a caller does
   # `sel=$(mux::pick ...)`), so that id must be discarded here — otherwise it is
   # prepended to the FIFO selection and the caller receives "terminal_<n>\n<sel>".
-  "$bin" action new-pane --floating --close-on-exit \
+  #
+  # HI-7: `new-pane` runs synchronously (it just hands the pane to the running
+  # session and returns), so check its exit status. If the spawn fails, no
+  # writer will ever open the FIFO, and the `cat "$fifo"` below would block on
+  # open(2) forever while leaking these temps — bail before reading.
+  if ! "$bin" action new-pane --floating --close-on-exit \
     --name "" --borderless true --pinned true \
     --width "$pane_w" --height "$pane_h" --cwd "$PWD" \
     -- "$modal" --title "$header" --no-chrome --capture "$fifo" \
-    -- "$picklist" "${pick_args[@]}" --no-border --height -4 --margin 0,0,0,0 --padding 0,2,0,2 -- "$tmp" >/dev/null
+    -- "$picklist" "${pick_args[@]}" --no-border --height -4 --margin 0,0,0,0 --padding 0,2,0,2 -- "$tmp" >/dev/null; then
+    rm -f -- "$fifo" "$tmp"
+    return 1
+  fi
 
   # Block until the modal writes the captured selection (exactly as long as the
   # user browses); empty means the user cancelled.
@@ -112,6 +125,9 @@ _mux_zj_float() {
   local fifo
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/zjinput-fifo.XXXXXX")
   mkfifo -m 600 "$fifo" 2>/dev/null || return 1
+  # See _mux_zj_pick_float: EXIT traps don't fire until the enclosing `$(...)`
+  # ends, so clean up explicitly on each return and trap only INT/TERM.
+  trap 'rm -f -- "$fifo"' INT TERM
 
   # Measure the exact rendered height from the binary (fast, TTY-less).
   # Stdin is redirected from /dev/null so any shim that reads stdin (e.g.
@@ -153,10 +169,16 @@ _mux_zj_float() {
   # `env` so the dialog renders true 24-bit color, matching the keybind-spawned
   # quit pane (which inherits COLORTERM). Default to truecolor if we somehow lack
   # it (these are GUI terminals).
-  "$bin" action new-pane --floating --close-on-exit \
+  # HI-7: `new-pane` returns as soon as the pane is handed to the session, so
+  # check its status; a failed spawn means no writer, and the `cat "$fifo"`
+  # below would otherwise block on open(2) forever and leak the FIFO.
+  if ! "$bin" action new-pane --floating --close-on-exit \
     --name "" --borderless "$borderless" --pinned true "${pane_geom[@]}" --cwd "$PWD" \
     -- env "COLORTERM=${COLORTERM:-truecolor}" "$modal" "${modal_args[@]}" \
-    -- "$widget" --type "$type" -- "${wargs[@]}" >/dev/null
+    -- "$widget" --type "$type" -- "${wargs[@]}" >/dev/null; then
+    rm -f -- "$fifo"
+    return 1
+  fi
 
   local result
   result=$(cat "$fifo")
