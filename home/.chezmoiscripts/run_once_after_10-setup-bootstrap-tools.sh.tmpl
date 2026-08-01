@@ -15,7 +15,7 @@ exit 0
 [ -r "$HOME/.config/zsh/secrets.sh" ] && . "$HOME/.config/zsh/secrets.sh"
 
 echo "🔧  Ensuring user directory for system sockets exists..."
-RUNTIME_DIR="$TMPDIR/runtime-$UID"
+RUNTIME_DIR="${TMPDIR:-/tmp}/runtime-${UID:-$(id -u)}"
 \mkdir -p "$RUNTIME_DIR"
 \chmod 0700 "$RUNTIME_DIR"
 
