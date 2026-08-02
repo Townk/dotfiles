@@ -131,6 +131,10 @@ fi
 # override tints the bar; KDL color values sit at end-of-line, so anchor on
 # " R G B$" to avoid matching a longer number. ---------------------------------
 if [[ -r "$canon_kdl" ]]; then
+  # Inline twin of theme::hex_rgb (theme-common.zsh) — same "R G B" output. Kept
+  # inline for the same reason as the remote-detection triple above: theme-apply
+  # runs as a bare `zsh` with a sandboxed $HOME and deliberately loads no lib
+  # layer, so it must not `source theme-common.zsh`. Keep the two in lockstep.
   rgb() { local h="${1#\#}"; print -r -- "$(( 16#${h:0:2} )) $(( 16#${h:2:2} )) $(( 16#${h:4:2} ))"; }
   # Rename the block to `chezmoi-system` (the name config.kdl loads), then substitute
   # each overridden token's "R G B" triple (KDL color values sit at end-of-line).
