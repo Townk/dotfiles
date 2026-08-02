@@ -115,7 +115,9 @@ cm::is_mounted() {
 # SIGKILL doesn't reap it, so this NEVER `wait`s a still-running probe —
 # background the stat, poll its liveness, and on timeout kill-9 and walk
 # away (rc 1 / DEAD). `timeout(1)` is deliberately not used here — it
-# blocks in wait() on an unkillable child.
+# blocks in wait() on an unkillable child. NOT a poll::until (common.zsh)
+# candidate either: this polls a backgrounded process's LIVENESS and kill-9s
+# it, not a predicate's return — a different shape, so it stays bespoke.
 cm::probe() {
   local mp=$1 timeout_s=${2:-1}
   local pid errfile
@@ -176,6 +178,13 @@ cm::rclone_pids_for() {
 cm::teardown() {
   local host=$1 mp
   mp=$(cm::mountpoint "$host") || return 0
+  # This per-host flock is the SAME conditional-touch contract as lock::hold
+  # (common.zsh); kept INLINE rather than calling the shared helper because
+  # clipboard-mount is a deliberately self-contained headless daemon that sources
+  # no libs — `ensure` runs per remote-clip, so pulling all of common.zsh in for
+  # one helper is a poor trade, and the daemon stays isolated from the shell
+  # layer. (The shebang is plain `zsh`, not `zsh -f` — only the spec runs it -f.)
+  # The conditional touch is load-bearing; full rationale:
   # teardown used to run lock-free, so check's async sweep-kick (and the 60s
   # launchd sweep agent) could force-unmount/kill/rmdir a mount that a
   # concurrent flock-holding `ensure` was still in the middle of creating.
