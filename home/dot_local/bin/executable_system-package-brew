@@ -401,8 +401,7 @@ do_sync() {
   log_info "Syncing Homebrew packages..."
 
   local before_snap after_snap bundle_file
-  before_snap=$(mktemp); after_snap=$(mktemp); bundle_file=$(mktemp)
-  trap "rm -f '$before_snap' '$after_snap' '$bundle_file'" EXIT
+  pkg::tmpset before_snap after_snap bundle_file
 
   brew_snapshot_versions > "$before_snap"
 

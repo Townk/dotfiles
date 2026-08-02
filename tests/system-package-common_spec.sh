@@ -104,6 +104,46 @@ Describe 'system-package-common.zsh'
     End
   End
 
+  Describe 'pkg::tmpset'
+    # The EXIT trap only fires when the shell actually exits, so these run the
+    # helper in a CHILD zsh (which sources the lib fresh), record the paths it
+    # created, let the child exit, then assert from the parent that every file
+    # is gone. Two calls in the one child model the additive-trap fix: the
+    # second pkg::tmpset must not clobber the first's cleanup.
+
+    It 'creates distinct temp files and removes all of them (additively) on EXIT'
+      tmpset_lifecycle() {
+        local paths="$TEST_TMP/paths"
+        zsh -c '
+          source home/dot_local/lib/system-package-common.zsh
+          pkg::tmpset a b
+          pkg::tmpset c
+          [[ -f $a && -f $b && -f $c ]] || exit 3          # all created
+          [[ $a != $b && $b != $c && $a != $c ]] || exit 4 # all distinct
+          print -l -- "$a" "$b" "$c"
+        ' >"$paths"
+        local rc=$? p
+        ((rc == 0)) || { echo "child exited $rc"; return "$rc"; }
+        while IFS= read -r p; do
+          [[ -e "$p" ]] && { echo "leaked: $p"; return 1; }
+        done <"$paths"
+        return 0
+      }
+      When call tmpset_lifecycle
+      The status should be success
+      The output should equal ""
+    End
+
+    # Spot-check the uv backend actually routes its temp files through the
+    # helper, with its var names preserved: the block it replaced created
+    # exactly these five, and the sync body still reads them by name.
+    It 'is wired into the uv backend with its temp-var names'
+      uv_backend="home/dot_local/bin/executable_system-package-uv"
+      When call cat "$uv_backend"
+      The output should include "pkg::tmpset declared_full declared installed before_snap after_snap"
+    End
+  End
+
   # mas 7.0.0 replaced the "id name (ver)" text output these helpers used to
   # parse with per-app JSON (`mas list --json` / `mas outdated --json`, one
   # object per line). `mas` is stubbed here to emit representative JSON; jq is

@@ -59,6 +59,75 @@ pkg::run_tool() {
   fi
 }
 
+# --- scratch temp files -----------------------------------------------------
+# Every sync worker needs a handful of temp files (declared/installed snapshots,
+# before/after version maps) that must be cleaned up when the process exits.
+# The workers used to inline the same `mktemp` × N + `trap "rm -f …" EXIT` block.
+# That trap was UNCONDITIONAL: were two backends ever to run in one process the
+# last-registered trap would win and orphan the others' files. pkg::tmpset
+# replaces the block; a SINGLE shared EXIT handler drains one accumulating list,
+# so every call's files are freed no matter how many calls or backends ran.
+
+# _pkg_tmpset_files holds every path pkg::tmpset has handed out this process.
+typeset -ga _pkg_tmpset_files
+
+# _pkg_tmpset_cleanup — the shared EXIT handler. Removes every accumulated path
+# (not just the most recent call's): draining one list is what makes repeated
+# pkg::tmpset calls additive instead of clobbering one another.
+_pkg_tmpset_cleanup() {
+  ((${#_pkg_tmpset_files})) && rm -f -- "${_pkg_tmpset_files[@]}"
+  _pkg_tmpset_files=()
+}
+
+# Arm the cleanup on shell EXIT — ONCE, at source time. This must run at the top
+# level, not inside a function: in zsh a `trap … EXIT` set within a function is
+# local to it and fires when that function returns (which is exactly why the old
+# inline trap had to live in each worker's do_sync, and why pkg::tmpset can only
+# accumulate paths, never arm the trap itself). We APPEND to any EXIT trap the
+# sourcing shell already has rather than overwrite it (e.g. ShellSpec Includes us
+# into its own harness shell). `trap` lists the current handler as a re-runnable
+# `trap -- 'BODY' EXIT` line; read it through a redirect, since `$(trap)` would
+# run in a subshell where zsh has already cleared the traps and report none.
+if [[ -z "${_pkg_tmpset_trap_armed:-}" ]]; then
+  typeset -g _pkg_tmpset_trap_armed=1
+  _pkg_tmpset_capture=$(mktemp) || _pkg_tmpset_capture=""
+  _pkg_tmpset_prev=""
+  if [[ -n "$_pkg_tmpset_capture" ]]; then
+    trap >|"$_pkg_tmpset_capture" 2>/dev/null
+    _pkg_tmpset_prev_line=$(awk '/ EXIT$/{print; exit}' "$_pkg_tmpset_capture")
+    rm -f "$_pkg_tmpset_capture"
+    if [[ -n "$_pkg_tmpset_prev_line" ]]; then
+      _pkg_tmpset_prev_line=${_pkg_tmpset_prev_line#trap -- }  # -> 'BODY' EXIT
+      _pkg_tmpset_prev_line=${_pkg_tmpset_prev_line% EXIT}     # -> 'BODY'
+      # BODY is zsh-quoted; eval-assign turns it back into the raw handler text.
+      eval "_pkg_tmpset_prev=${_pkg_tmpset_prev_line}"
+    fi
+  fi
+  if [[ -n "$_pkg_tmpset_prev" ]]; then
+    trap "${_pkg_tmpset_prev}; _pkg_tmpset_cleanup" EXIT
+  else
+    trap '_pkg_tmpset_cleanup' EXIT
+  fi
+  unset _pkg_tmpset_capture _pkg_tmpset_prev _pkg_tmpset_prev_line
+fi
+
+# pkg::tmpset <var1> [var2 …]
+# Create one fresh temp file per named variable, assigning each path back to the
+# caller's variable by name (via a nameref — so the caller's existing `local`
+# declarations keep the values scoped to its function). Every created path is
+# added to the list the shared EXIT handler removes, so all of a process's temp
+# files are cleaned up on exit regardless of how many calls or backends ran.
+pkg::tmpset() {
+  local __pkg_tmpset_name __pkg_tmpset_path
+  for __pkg_tmpset_name in "$@"; do
+    __pkg_tmpset_path=$(mktemp) || return 1
+    local -n __pkg_tmpset_ref="$__pkg_tmpset_name"
+    __pkg_tmpset_ref="$__pkg_tmpset_path"
+    unset -n __pkg_tmpset_ref
+    _pkg_tmpset_files+=("$__pkg_tmpset_path")
+  done
+}
+
 # --- manifest stamps --------------------------------------------------------
 # A worker re-applies a package's install FLAGS by reinstalling it, which is
 # expensive (uv tears down and rebuilds the whole environment; cargo rebuilds

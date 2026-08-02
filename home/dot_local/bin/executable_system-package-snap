@@ -109,12 +109,7 @@ do_sync() {
   fi
 
   local declared_full declared installed before_snap after_snap failed=0
-  declared_full=$(mktemp)
-  declared=$(mktemp)
-  installed=$(mktemp)
-  before_snap=$(mktemp)
-  after_snap=$(mktemp)
-  trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
+  pkg::tmpset declared_full declared installed before_snap after_snap
 
   snap_snapshot_versions >"$before_snap"
 

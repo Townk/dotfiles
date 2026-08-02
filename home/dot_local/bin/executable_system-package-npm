@@ -140,12 +140,7 @@ do_sync() {
   log_info "Syncing npm globals..."
 
   local declared_full declared installed before_snap after_snap line
-  declared_full=$(mktemp)
-  declared=$(mktemp)
-  installed=$(mktemp)
-  before_snap=$(mktemp)
-  after_snap=$(mktemp)
-  trap "rm -f '$declared_full' '$declared' '$installed' '$before_snap' '$after_snap'" EXIT
+  pkg::tmpset declared_full declared installed before_snap after_snap
 
   npm_snapshot_versions >"$before_snap"
 
