@@ -145,9 +145,23 @@ windowed_json='[]'
 usage_file=""
 current_ws="${active_ws}"
 if [[ "$kind" == pane ]]; then
+  # The sanitized tokens keep the filename human-readable, but sanitization is
+  # LOSSY — two distinct scopes can collapse to the same token (workspace `a/b`
+  # vs `a b` both → `a_b`). The cache CONTENTS use the RAW scope and
+  # pick::cache_stale only compares mtimes, so a collision served the second
+  # scope the first's pane list. Fold a hash of the RAW pair into the identity
+  # so distinct scopes never share a file, while an identical scope still lands
+  # on the same file (cache hit unchanged). shasum (perl, macOS) or sha256sum
+  # (minimal Linux) — either gives a stable hex digest; the first 16 chars are
+  # ample to separate scopes on one machine.
   scope_ws="${active_ws//[^A-Za-z0-9._-]/_}"
   scope_tab="${active_tab//[^A-Za-z0-9._-]/_}"
-  LINES_CACHE="$CACHE_DIR/lines-$kind-${scope_ws}-${scope_tab}.txt"
+  if (( $+commands[shasum] )); then
+    scope_hash="$(printf '%s\0%s' "$active_ws" "$active_tab" | shasum | cut -c1-16)"
+  else
+    scope_hash="$(printf '%s\0%s' "$active_ws" "$active_tab" | sha256sum | cut -c1-16)"
+  fi
+  LINES_CACHE="$CACHE_DIR/lines-$kind-${scope_ws}-${scope_tab}-${scope_hash}.txt"
 elif [[ "$kind" == workspace ]]; then
   # Fixed path, but force_build=1 rebuilds it every launch (the assembler
   # writes atomically via a temp + mv), so it always reflects current live
