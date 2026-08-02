@@ -145,8 +145,9 @@ command -v pi >/dev/null 2>&1 || die "pi-coding-agent (pi) not on PATH"
 command -v git >/dev/null 2>&1 || die "git not on PATH"
 command -v jq >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
 
-git rev-parse --git-dir >/dev/null 2>&1 ||
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
   die "not inside a git repository"
+builtin cd "$repo_root" || die "could not cd to repository root: $repo_root"
 
 # Refuse pre-existing staged changes — keeps dry-run / no-commit / default
 # modes from getting tangled with whatever the user had half-staged. The
@@ -292,7 +293,7 @@ if [[ ! -s "$plan_file" ]]; then
   die "no plan written (see $log_file)"
 fi
 
-if ! jq -e '.commits | type == "array" and length > 0' "$plan_file" >/dev/null 2>&1; then
+if ! cagent::validate_plan "$plan_file"; then
   die "agent produced an invalid plan (see $log_file and $plan_file)"
 fi
 
