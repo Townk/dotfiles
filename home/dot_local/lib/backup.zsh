@@ -1133,10 +1133,8 @@ bkp::project::warn_large() {
 # holder to finish instead — for callers that must eventually run, like
 # the nightly prune.
 bkp::lock() {
-  local lockfile="$BKP_STATE_DIR/$1.lock"
   mkdir -p "$BKP_STATE_DIR"
-  : >> "$lockfile"
-  zsystem flock -t "${2:-0}" "$lockfile" 2>/dev/null
+  lock::hold "$BKP_STATE_DIR/$1.lock" "${2:-0}"
 }
 
 # bkp::project::sidecar <repo> <bundle_unpushed> <warn_size>

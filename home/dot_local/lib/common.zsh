@@ -382,6 +382,33 @@ poll::until() {
   done
 }
 
+# --- run locks --------------------------------------------------------------
+# lock::hold <lockfile> [timeout_s]
+# Acquire a run-lock via `zsystem flock`, held until the process exits (flock
+# keeps the fd open). timeout defaults to 0 = NON-BLOCKING: rc 1 when the lock
+# is already held (callers coalesce/skip rather than queue). A positive timeout
+# waits up to that many seconds for the current holder to finish. Returns the
+# `zsystem flock` status (0 on acquire, non-zero on busy/timeout).
+#
+# The lockfile touch is CONDITIONAL (only when the file is absent) — NOT an
+# unconditional `: >> file`. This is load-bearing under fcntl: `zsystem flock`
+# is backed by POSIX fcntl record locks, which are owned by the PROCESS, so
+# opening-then-closing ANY fd on the file (which `: >> file` does) drops EVERY
+# lock that process already holds on it. A caller re-locking a file it already
+# holds on another fd — e.g. clipboard-mount's `ensure` (holding the lock)
+# calling `teardown` (which re-locks) in the same process — would have its
+# outer lock silently dropped by an unconditional touch, opening a window a
+# concurrent process can steal. Skipping the touch when the file exists never
+# opens that fd, so the existing hold survives; when the file is absent the
+# process holds no lock on it yet, so creating it is safe. (See the
+# clipboard-mount cm::teardown comment, which this shared default preserves.)
+lock::hold() {
+  local lockfile="$1" timeout="${2:-0}"
+  zmodload zsh/system 2>/dev/null
+  [[ -e "$lockfile" ]] || : >> "$lockfile" 2>/dev/null
+  zsystem flock -t "$timeout" "$lockfile" 2>/dev/null
+}
+
 # --- notifications ----------------------------------------------------------
 # notify::available [--path]
 # True when the running Hammerspoon's `hs` CLI is reachable, i.e. an OSD

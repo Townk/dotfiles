@@ -222,6 +222,88 @@ Describe 'common.zsh'
     End
   End
 
+  Describe 'lock::hold (zsystem flock run-lock)'
+    LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh"
+    setup_lock() { LKDIR=$(mktemp -d "$SHELLSPEC_TMPBASE/lock.XXXXXX"); }
+    cleanup_lock() { rm -rf "$LKDIR"; }
+    BeforeEach 'setup_lock'
+    AfterEach 'cleanup_lock'
+
+    It 'acquires an unheld lock (rc 0)'
+      acq() { lock::hold "$LKDIR/a.lock"; }
+      When call acq
+      The status should be success
+    End
+
+    It 'a second process cannot take a held lock (non-blocking default)'
+      contend() {
+        lock::hold "$LKDIR/a.lock" || return 1
+        print first
+        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"' && print oops || print blocked
+      }
+      When run contend
+      The line 1 should equal "first"
+      The line 2 should equal "blocked"
+    End
+
+    It 'the lock dies with its holder'
+      afterlife() {
+        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"'   # exits, releasing
+        lock::hold "$LKDIR/a.lock" && print free
+      }
+      When run afterlife
+      The output should equal "free"
+    End
+
+    It 'a positive timeout waits for the holder to finish, then acquires'
+      waits() {
+        # A background holder releases after ~0.3s; a 3s-timeout acquire must
+        # succeed once it lets go (a non-blocking acquire would fail here).
+        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"; sleep 0.3' &
+        local bg=$!
+        sleep 0.1   # let the holder take it first
+        lock::hold "$LKDIR/a.lock" 3 && print acquired || print timedout
+        wait "$bg" 2>/dev/null
+      }
+      When run waits
+      The output should equal "acquired"
+    End
+
+    # fcntl record locks are owned by the PROCESS: closing ANY fd on the file
+    # drops EVERY lock that process holds on it. An unconditional `: >> file`
+    # opens-then-closes an fd, so it drops a lock the process is holding — the
+    # exact hazard clipboard-mount documents. This pins that fcntl behavior, and
+    # the next example pins that lock::hold's conditional touch avoids it.
+    It 'the unconditional touch idiom drops an fcntl lock the process holds (the hazard)'
+      hazard() {
+        zmodload zsh/system
+        local lk="$LKDIR/hz.lock"; : >> "$lk"
+        zsystem flock -t 0 "$lk"   # hold via this call's fd
+        : >> "$lk"                 # unconditional touch: opens+closes another fd → drops it
+        zsh -c 'zmodload zsh/system; zsystem flock -t 0 "'"$lk"'"' && print DROPPED || print HELD
+      }
+      When run hazard
+      The output should equal "DROPPED"
+    End
+
+    It 'lock::hold keeps a held lock (conditional touch) — clipboard-mount ensure→teardown'
+      # Model ensure holding the lock, then calling teardown (an inner
+      # lock::hold on the same file). The conditional touch must not open+close
+      # an fd on the existing file, so the process keeps exclusive hold and a
+      # separate process still sees it busy.
+      survives() {
+        source "$LIB"
+        zmodload zsh/system
+        local lk="$LKDIR/re.lock"; : >> "$lk"
+        zsystem flock -t 0 "$lk"    # outer hold (ensure)
+        lock::hold "$lk"            # inner re-lock (teardown) — must not orphan the hold
+        zsh -c 'zmodload zsh/system; zsystem flock -t 0 "'"$lk"'" 2>/dev/null' && print LOST || print HELD
+      }
+      When run survives
+      The output should equal "HELD"
+    End
+  End
+
   Describe 'have_tty'
     It 'is callable and yields a boolean (0/1) status'
       yields_boolean() { have_tty; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; }
