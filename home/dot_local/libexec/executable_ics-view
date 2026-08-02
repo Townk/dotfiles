@@ -23,45 +23,21 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 # ── Catppuccin Mocha Palette ──────────────────────────────────────
-# Loaded from ~/.config/theme/chezmoi-system.json (generated from theme.yaml); falls
-# back to the built-in Catppuccin Mocha values if it is unreadable. Read at
-# import, so a future theme override is picked up on the next invocation.
-import json
+# The truecolor palette comes from the shared theme_palette module (deployed to
+# ~/.local/lib/theme_palette.py). It resolves the palette JSON in the same order
+# as theme::json_path — $THEME_PALETTE_JSON, then the effective cache copy if
+# readable, then the canonical config copy — so a viewer launched without the
+# env inherited still reads the effective (SSH-tinted) palette instead of the
+# untinted config copy. THEME_PYLIB_DIR overrides the lib dir (the test suite
+# points it at the repo copy). Read at import, so a theme override is picked up
+# on the next invocation.
 import os
 
-_PALETTE_FALLBACK = {
-    "base": "#1e1e2e", "mantle": "#181825", "crust": "#11111b",
-    "surface0": "#313244", "surface1": "#45475a", "surface2": "#585b70",
-    "overlay0": "#6c7086", "overlay1": "#7f849c", "overlay2": "#9399b2",
-    "text": "#cdd6f4", "subtext1": "#bac2de", "subtext0": "#a6adc8",
-    "lavender": "#b4befe", "blue": "#89b4fa", "sapphire": "#74c7ec",
-    "sky": "#89dceb", "teal": "#94e2d5", "green": "#a6e3a1",
-    "yellow": "#f9e2af", "peach": "#fab387", "maroon": "#eba0ac",
-    "red": "#f38ba8", "mauve": "#cba6f7", "pink": "#f5c2e7",
-    "flamingo": "#f2cdcd", "rosewater": "#f5e0dc", "white": "#ffffff",
-}
+sys.path.insert(0, os.environ.get("THEME_PYLIB_DIR", os.path.expanduser("~/.local/lib")))
+from theme_palette import palette_type
 
-
-def _load_palette() -> dict:
-    pal = dict(_PALETTE_FALLBACK)
-    path = os.path.expanduser(
-        os.environ.get("THEME_PALETTE_JSON", "~/.config/theme/chezmoi-system.json")
-    )
-    try:
-        with open(path, encoding="utf-8") as _fh:
-            pal.update(json.load(_fh).get("palette", {}))
-    except (OSError, ValueError):
-        pass
-
-    def _rgb(value: str) -> tuple:
-        value = value.lstrip("#")
-        return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
-
-    return {name.upper(): _rgb(hexval) for name, hexval in pal.items()}
-
-
-# Catppuccin Mocha truecolor palette, built from the single source above.
-CTP = type("CTP", (), _load_palette())
+# Catppuccin Mocha truecolor palette, built from the shared source above.
+CTP = palette_type()
 
 
 # ── ANSI Helpers ──────────────────────────────────────────────────
