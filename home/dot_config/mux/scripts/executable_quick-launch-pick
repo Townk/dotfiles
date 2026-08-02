@@ -196,7 +196,7 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
   print -r -- "$ql_json" | jq -r -L "$PICK_LIB_DIR" \
     --arg k "$key" --arg ws "$active_ws" --arg tab "$active_tab" \
     --arg cur "$current_ws" --argjson live "$live_json" --argjson windowed "$windowed_json" \
-    --argjson palette "$(cat "${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.json")" '
+    --argjson palette "$(cat "$(theme::json_path)")" '
     include "pick";
     def icon($t):
       if   $t == "Shell"  then "\uf07c"

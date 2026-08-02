@@ -115,7 +115,7 @@ Describe 'mux-rename'
     # Feed the dialog raw bytes on stdin, exactly as a terminal would.
     drive() {
       printf '%b' "$1" | MUX_TMUX_BIN="$STUB" TMUX=/tmp/s,1,0 \
-        THEME_JSON="$THEME" MUX_RANDOM_NAME_BIN="$RAND" \
+        THEME_PALETTE_JSON="$THEME" MUX_RANDOM_NAME_BIN="$RAND" \
         MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
         zsh "$BIN" session >/dev/null 2>&1
       cat "$RS_TMP/calls"
@@ -146,7 +146,7 @@ Describe 'mux-rename'
         RAND_LOG="$RS_TMP/randargs"
         { print '#!/bin/sh'; print 'echo "[$*]" >> '"$RS_TMP/randargs"; print 'echo lucky-otter' } > "$RAND"
         printf '%b' '\033r\r' | MUX_TMUX_BIN="$STUB" TMUX=/tmp/s,1,0 \
-          THEME_JSON="$THEME" MUX_RANDOM_NAME_BIN="$RAND" \
+          THEME_PALETTE_JSON="$THEME" MUX_RANDOM_NAME_BIN="$RAND" \
           MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
           zsh "$BIN" session >/dev/null 2>&1
         cat "$RS_TMP/randargs"

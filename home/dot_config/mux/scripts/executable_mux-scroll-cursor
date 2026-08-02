@@ -15,7 +15,12 @@ emulate -L zsh
 setopt no_unset
 
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
-THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
+# THE single palette JSON every reader shares (C2, theme::json_path):
+# $THEME_PALETTE_JSON -> effective cache copy -> canonical config. Retires the
+# old WIDGETS_THEME_JSON seam so the cursor colour tracks the same palette the
+# status bar and dialogs do under SSH+override.
+source "${MUX_LIB:-$HOME/.local/lib}/theme-common.zsh" 2>/dev/null || true
+THEME_JSON="$(theme::json_path)"
 
 pane="${1:-}"
 [[ -n "$pane" ]] || exit 0

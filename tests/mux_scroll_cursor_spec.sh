@@ -54,7 +54,8 @@ Describe 'mux-scroll-cursor'
     STUB_CURSOR_COLOUR="${2:-none}" \
     STUB_CURSOR_SHAPE="${3:-default}" \
     MUX_TMUX_BIN="$SC_TMP/tmux" \
-    WIDGETS_THEME_JSON="${SC_THEME_OVERRIDE:-$THEME}" \
+    MUX_LIB="$PWD/home/dot_local/lib" \
+    THEME_PALETTE_JSON="${SC_THEME_OVERRIDE:-$THEME}" \
       zsh "$BIN" '%1' >/dev/null 2>&1
     cat "$SC_TMP/calls" 2>/dev/null
     print -n 'WIRE:'; cat -v "$CLIENT" 2>/dev/null; print

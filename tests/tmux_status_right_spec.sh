@@ -57,7 +57,7 @@ EOS
     export WIDGETS_FULLSCREEN_STATE="$TEST_TMP/fullscreen_state"
     export WIDGETS_GHOSTTY_FULLSCREEN_STATE="$TEST_TMP/ghostty_fullscreen"
     export WIDGETS_HOSTNAME_ALIAS="$TEST_TMP/hostname-alias"
-    export WIDGETS_THEME_JSON="$TEST_TMP/theme.json"
+    export THEME_PALETTE_JSON="$TEST_TMP/theme.json"
 
     export G_DIV=$'\Ue0ba'
     export G_WIFI_ON=$'\U000F05A9' G_WIFI_OFF=$'\U000F092E'
@@ -67,7 +67,8 @@ EOS
     rm -rf "$TEST_TMP"
     unset MUX_TMUX_BIN PMSET_BIN NETWORKSETUP_BIN WIDGETS_OSASCRIPT_BIN WIDGETS_FULLSCREEN_STATE \
       WIDGETS_GHOSTTY_FULLSCREEN_STATE \
-      WIDGETS_HOSTNAME_ALIAS WIDGETS_THEME_JSON STUB_SSH SSH_CONNECTION SSH_CLIENT STUB_POWER STUB_PCT \
+      WIDGETS_HOSTNAME_ALIAS THEME_PALETTE_JSON XDG_CONFIG_HOME XDG_CACHE_HOME \
+      STUB_SSH SSH_CONNECTION SSH_CLIENT STUB_POWER STUB_PCT \
       STUB_WIFI STUB_GHOSTTY_FULLSCREEN G_DIV G_WIFI_ON G_WIFI_OFF G_CLOCK G_HOST
   }
   BeforeEach 'setup'
@@ -414,5 +415,21 @@ EOS
     When call zsh "$W" tab 0 main
     # last bg= occurrence should be the full mode color (stop 0 = base)
     The output should include "bg=#a6e3a1,"
+  End
+
+  # C2 split-palette fix: the bar resolves via theme::json_path, so the override
+  # ($THEME_PALETTE_JSON — the tinted cache copy .zshrc exports under SSH) wins
+  # over the canonical config tier. The bar and the dialogs read the SAME file,
+  # never two palettes on one screen. Retires the old WIDGETS_THEME_JSON seam.
+  It 'reads $THEME_PALETTE_JSON, never a decoy canonical config palette'
+    export XDG_CONFIG_HOME="$TEST_TMP/config" XDG_CACHE_HOME="$TEST_TMP/cache"
+    mkdir -p "$XDG_CONFIG_HOME/theme" "$XDG_CACHE_HOME/theme"
+    jq '.palette.base = "#decafe"' "$TEST_TMP/theme.json" \
+      >"$XDG_CONFIG_HOME/theme/chezmoi-system.json"   # decoy: must be ignored
+    jq '.palette.base = "#101020"' "$TEST_TMP/theme.json" \
+      >"$TEST_TMP/theme.tmp" && mv "$TEST_TMP/theme.tmp" "$TEST_TMP/theme.json"
+    When call zsh "$W" root 0 other-session
+    The output should include "bg=#101020"
+    The output should not include "bg=#decafe"
   End
 End

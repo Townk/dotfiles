@@ -283,11 +283,11 @@ EOS
     chmod +x "$MS_TMP/tmux"
     THEME="$MS_TMP/theme.json"
     print '{"extended":{"tab":{"bg":"#282c41"},"dialog":{"warning":"#e5bf7b","search_accent":"#61afef"}},"roles":{"ui":{"bg":"#1e1e2e","dialog_bg":"#181825","border_inactive":"#45475a"},"action":{"attention":"#f9e2af"}},"palette":{"white":"#ffffff"}}' > "$THEME"
-    export LOG MUX_TMUX_BIN="$MS_TMP/tmux" WIDGETS_THEME_JSON="$THEME" \
+    export LOG MUX_TMUX_BIN="$MS_TMP/tmux" THEME_PALETTE_JSON="$THEME" \
       MUX_LIB="$PWD/home/dot_local/lib"
     S="$PWD/home/dot_config/mux/scripts/executable_mux-search"
   }
-  cleanup() { rm -rf "$MS_TMP"; unset LOG MUX_TMUX_BIN WIDGETS_THEME_JSON MUX_LIB S; }
+  cleanup() { rm -rf "$MS_TMP"; unset LOG MUX_TMUX_BIN THEME_PALETTE_JSON MUX_LIB S; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 

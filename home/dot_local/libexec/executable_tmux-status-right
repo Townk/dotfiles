@@ -24,7 +24,7 @@
 #
 # All colors come from the theme JSON projection — no hex lives here.
 # Test seams: MUX_TMUX_BIN, PMSET_BIN, NETWORKSETUP_BIN,
-# WIDGETS_FULLSCREEN_STATE, WIDGETS_HOSTNAME_ALIAS, WIDGETS_THEME_JSON.
+# WIDGETS_FULLSCREEN_STATE, WIDGETS_HOSTNAME_ALIAS, THEME_PALETTE_JSON.
 
 emulate -L zsh
 setopt no_unset
@@ -39,22 +39,19 @@ FS_STATE="${WIDGETS_FULLSCREEN_STATE:-$HOME/.local/state/wezterm/fullscreen_stat
 # seconds (see below) and this file is read on every repaint.
 GHOSTTY_FS_STATE="${WIDGETS_GHOSTTY_FULLSCREEN_STATE:-$HOME/.local/state/mux/ghostty_fullscreen}"
 HOST_ALIAS="${WIDGETS_HOSTNAME_ALIAS:-$HOME/.hostname-alias}"
-if [[ -n "${WIDGETS_THEME_JSON:-}" ]]; then
-  THEME_JSON="$WIDGETS_THEME_JSON"
-elif [[ -r "$HOME/.cache/theme/chezmoi-system.json" ]]; then
-  THEME_JSON="$HOME/.cache/theme/chezmoi-system.json"
-else
-  THEME_JSON="$HOME/.config/theme/chezmoi-system.json"
-fi
-# THE shared mode resolver (states, titles, icons, colors and the panel
-# table behind each) — the which-key panel resolves through the same one.
-source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/mode.zsh" 2>/dev/null || true
-# theme::hex_rgb — the canonical hex→"R G B" split the OKLab color math uses
-# (C1). Resolved relative to this script (../lib) so it tracks the same tree as
-# the executable, not a stale $HOME copy.
+# theme::json_path (C2) + theme::hex_rgb (C1). Resolved relative to this script
+# (../lib) so it tracks the same tree as the executable, not a stale $HOME copy.
 _tsr_self="${(%):-%x}"
 source "${_tsr_self:h:h}/lib/theme-common.zsh" 2>/dev/null || true
 unset _tsr_self
+# THE single palette JSON every reader shares (C2): $THEME_PALETTE_JSON ->
+# effective cache copy if readable -> canonical config. Retires this reader's
+# old WIDGETS_THEME_JSON seam so the status bar (cache tier) and the mux dialogs
+# can never render different palettes on one screen under SSH+override.
+THEME_JSON="$(theme::json_path)"
+# THE shared mode resolver (states, titles, icons, colors and the panel
+# table behind each) — the which-key panel resolves through the same one.
+source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/mode.zsh" 2>/dev/null || true
 
 key_table="${1:-root}"
 in_copy="${2:-0}"

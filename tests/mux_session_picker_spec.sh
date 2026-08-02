@@ -38,6 +38,9 @@ pick::cache_stale() { return 0; }
 pick::hints() { print -r -- ""; }
 pick::start() { command cat "${@[-1]}"; }
 ZSH
+    # The real pick-common sources theme-common (for theme::json_path); the stub
+    # must too, so quick-launch-pick can resolve its palette via the shared order.
+    print -r -- "source \"$PWD/home/dot_local/lib/theme-common.zsh\"" >>"$MSP_TMP/pick-common.zsh"
     cat >"$MSP_TMP/mux-wrapper.zsh" <<ZSH
 source "$PWD/home/dot_local/lib/mux.zsh"
 source "$MSP_TMP/pick-common.zsh"

@@ -25,14 +25,15 @@
 #
 # Colors come from the theme JSON projection. As-built: the accent uses
 # roles.mode.search (the plugin hardcodes its own blue).
-# Test seams: MUX_TMUX_BIN, WIDGETS_THEME_JSON.
+# Test seams: MUX_TMUX_BIN, THEME_PALETTE_JSON.
 
 emulate -L zsh
 setopt no_unset
 
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
+# The palette JSON is resolved by mux_dialog::init via theme::json_path (C2,
+# honoring $THEME_PALETTE_JSON); this reader no longer resolves it itself.
 source "${MUX_LIB:-$HOME/.local/lib}/mux/dialog.zsh"
-THEME_JSON="${WIDGETS_THEME_JSON:-$HOME/.config/theme/chezmoi-system.json}"
 MUX_STACK="${0:A:h}/mux-stack"
 
 

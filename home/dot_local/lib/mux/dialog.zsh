@@ -42,7 +42,11 @@ typeset -g MD_TMUX="${MUX_TMUX_BIN:-tmux}"
 # to move both backends together.
 mux_dialog::init() {
   local accent_path="${1:-.extended.dialog.search_accent}"
-  local theme_json="${THEME_JSON:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.json}"
+  # THE single palette JSON every reader shares (C2, theme::json_path):
+  # $THEME_PALETTE_JSON -> effective cache copy -> canonical config. This closes
+  # the split-palette bug — the dialog now reads the SAME tinted file the status
+  # bar does under SSH+override (retires the old THEME_JSON seam).
+  local theme_json="$(theme::json_path)"
   local -a c
   c=("${(@f)$(jq -r "
     .extended.tab.bg, .roles.ui.bg, .roles.ui.dialog_bg,
