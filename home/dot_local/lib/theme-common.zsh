@@ -122,6 +122,71 @@ theme::args() {
   )
 }
 
+# theme::gum_confirm_env [--role warning|danger] — export the canonical
+# GUM_CONFIRM_* palette so any zsh caller themes `gum confirm` identically from
+# ONE place (Wave 2 consolidation). A caller just sources this lib and calls this
+# before `gum confirm`; the palette carries VALUES (never the C_HEX_* vars, which
+# are shell-local and must not be exported per the theming rule). COLORTERM is
+# forced truecolor because zellij/tmux panes drop it and lipgloss then degrades
+# the hex to 256-color.
+#
+# The FIELD -> palette map (kept in lockstep with pbpaste's POSIX jq mirror,
+# pbpaste_cap_theme, which cannot source this lib):
+#   PROMPT_FOREGROUND    = the ACCENT (role: warning|danger)      [dialog.warning]
+#   SELECTED_BACKGROUND  = the ACCENT                             [dialog.warning]
+#   SELECTED_FOREGROUND  = crust                                  [palette.crust]
+#   UNSELECTED_FOREGROUND= subtext0                               [palette.subtext0]
+#   UNSELECTED_BACKGROUND= surface0                               [palette.surface0]
+# --role warning (default) is the size-cap / gpg-fwd confirm; --role danger is
+# the same shape with the danger accent. Two-level fallbacks mirror the former
+# dot_zshrc inline env prefix so a renamed/absent token still yields a named
+# color, never black-on-black.
+theme::gum_confirm_env() {
+  emulate -L zsh
+  local role=warning
+  while (( $# )); do
+    case $1 in
+      --role) role=$2; shift 2 ;;
+      --role=*) role=${1#--role=}; shift ;;
+      *) shift ;;
+    esac
+  done
+  local accent
+  case $role in
+    danger) accent="${C_HEX_DIALOG_DANGER:-${C_HEX_RED:-red}}" ;;
+    *)      accent="${C_HEX_DIALOG_WARNING:-${C_HEX_YELLOW:-yellow}}" ;;
+  esac
+  export COLORTERM=truecolor
+  export GUM_CONFIRM_PROMPT_FOREGROUND="$accent"
+  export GUM_CONFIRM_SELECTED_BACKGROUND="$accent"
+  export GUM_CONFIRM_SELECTED_FOREGROUND="${C_HEX_CRUST:-${C_HEX_BASE:-black}}"
+  export GUM_CONFIRM_UNSELECTED_FOREGROUND="${C_HEX_SUBTEXT:-white}"
+  export GUM_CONFIRM_UNSELECTED_BACKGROUND="${C_HEX_SURFACE0:-black}"
+}
+
+# theme::gum_style_env [--role danger|warning] — the `gum style` sibling of
+# theme::gum_confirm_env: exports GUM_STYLE_FOREGROUND / GUM_STYLE_BORDER_FOREGROUND
+# for a bordered notice box (pick-clipboard's restore-failure). Defaults to the
+# danger accent. Same never-export-C_HEX_* rule and two-level fallback.
+theme::gum_style_env() {
+  emulate -L zsh
+  local role=danger
+  while (( $# )); do
+    case $1 in
+      --role) role=$2; shift 2 ;;
+      --role=*) role=${1#--role=}; shift ;;
+      *) shift ;;
+    esac
+  done
+  local accent
+  case $role in
+    warning) accent="${C_HEX_DIALOG_WARNING:-${C_HEX_YELLOW:-yellow}}" ;;
+    *)       accent="${C_HEX_DIALOG_DANGER:-${C_HEX_RED:-red}}" ;;
+  esac
+  export GUM_STYLE_FOREGROUND="$accent"
+  export GUM_STYLE_BORDER_FOREGROUND="$accent"
+}
+
 # theme::rule [COLS] — print a horizontal rule of ━, width = COLS-4 (the modal's
 # 2-cell inset on each side). With no COLS, read the live tty width via stty
 # (zellij doesn't reliably export COLUMNS), falling back to $COLUMNS or 80.

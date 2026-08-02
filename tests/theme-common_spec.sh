@@ -145,4 +145,86 @@ Describe 'theme-common.zsh'
       The output should equal "$HOME/.config/theme/chezmoi-system.json"
     End
   End
+
+  # ── themed gum env (Wave 2 consolidation) ───────────────────────────────────
+  # theme::gum_confirm_env exports the canonical GUM_CONFIRM_* palette so every
+  # zsh caller (dot_zshrc gpg-fwd confirm, backup-tm halt) themes `gum confirm`
+  # from ONE place; pbpaste mirrors the SAME field->palette map through its POSIX
+  # jq detour. theme::gum_style_env is the sibling for `gum style` (pick-clipboard
+  # restore-failure box). Values below are HAND-DERIVED from a known palette
+  # (sentinels set per-example, independent of theme.yaml). Raw hex is fine in a
+  # spec — lint-theme.sh only scans home/.
+  Describe 'theme::gum_confirm_env'
+    known_palette() {
+      C_HEX_DIALOG_WARNING='#e5bf7b'; C_HEX_DIALOG_DANGER='#ff5555'
+      C_HEX_CRUST='#11111b'; C_HEX_SUBTEXT='#a6adc8'; C_HEX_SURFACE0='#313244'
+    }
+
+    warning_env() { known_palette; theme::gum_confirm_env; }
+    It 'exports the warning confirm palette by default'
+      When call warning_env
+      The variable GUM_CONFIRM_PROMPT_FOREGROUND should equal '#e5bf7b'
+      The variable GUM_CONFIRM_SELECTED_BACKGROUND should equal '#e5bf7b'
+      The variable GUM_CONFIRM_SELECTED_FOREGROUND should equal '#11111b'
+      The variable GUM_CONFIRM_UNSELECTED_FOREGROUND should equal '#a6adc8'
+      The variable GUM_CONFIRM_UNSELECTED_BACKGROUND should equal '#313244'
+      The variable COLORTERM should equal 'truecolor'
+    End
+
+    warning_role_env() { known_palette; theme::gum_confirm_env --role warning; }
+    It 'treats --role warning as the default'
+      When call warning_role_env
+      The variable GUM_CONFIRM_PROMPT_FOREGROUND should equal '#e5bf7b'
+      The variable GUM_CONFIRM_SELECTED_BACKGROUND should equal '#e5bf7b'
+    End
+
+    danger_env() { known_palette; theme::gum_confirm_env --role danger; }
+    It 'swaps ONLY the accent (prompt + selected bg) for --role danger'
+      When call danger_env
+      The variable GUM_CONFIRM_PROMPT_FOREGROUND should equal '#ff5555'
+      The variable GUM_CONFIRM_SELECTED_BACKGROUND should equal '#ff5555'
+      The variable GUM_CONFIRM_SELECTED_FOREGROUND should equal '#11111b'
+      The variable GUM_CONFIRM_UNSELECTED_FOREGROUND should equal '#a6adc8'
+      The variable GUM_CONFIRM_UNSELECTED_BACKGROUND should equal '#313244'
+    End
+
+    # The two-level fallback chain must survive a renamed/empty palette token,
+    # exactly as dot_zshrc's former inline env prefix did.
+    empty_env() {
+      C_HEX_DIALOG_WARNING=''; C_HEX_YELLOW=''; C_HEX_CRUST=''; C_HEX_BASE=''
+      C_HEX_SUBTEXT=''; C_HEX_SURFACE0=''
+      theme::gum_confirm_env
+    }
+    It 'falls back to named colors when palette tokens are empty'
+      When call empty_env
+      The variable GUM_CONFIRM_PROMPT_FOREGROUND should equal 'yellow'
+      The variable GUM_CONFIRM_SELECTED_BACKGROUND should equal 'yellow'
+      The variable GUM_CONFIRM_SELECTED_FOREGROUND should equal 'black'
+      The variable GUM_CONFIRM_UNSELECTED_FOREGROUND should equal 'white'
+      The variable GUM_CONFIRM_UNSELECTED_BACKGROUND should equal 'black'
+    End
+  End
+
+  Describe 'theme::gum_style_env'
+    danger_style() { C_HEX_DIALOG_DANGER='#ff5555'; C_HEX_RED='#f38ba8'; theme::gum_style_env; }
+    It 'exports the danger style palette by default'
+      When call danger_style
+      The variable GUM_STYLE_FOREGROUND should equal '#ff5555'
+      The variable GUM_STYLE_BORDER_FOREGROUND should equal '#ff5555'
+    End
+
+    warning_style() { C_HEX_DIALOG_WARNING='#e5bf7b'; theme::gum_style_env --role warning; }
+    It 'swaps the accent for --role warning'
+      When call warning_style
+      The variable GUM_STYLE_FOREGROUND should equal '#e5bf7b'
+      The variable GUM_STYLE_BORDER_FOREGROUND should equal '#e5bf7b'
+    End
+
+    danger_fallback() { C_HEX_DIALOG_DANGER=''; C_HEX_RED=''; theme::gum_style_env; }
+    It 'falls back to red when the danger token is empty'
+      When call danger_fallback
+      The variable GUM_STYLE_FOREGROUND should equal 'red'
+      The variable GUM_STYLE_BORDER_FOREGROUND should equal 'red'
+    End
+  End
 End
