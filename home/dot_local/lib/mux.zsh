@@ -153,8 +153,12 @@ mux::confirm() {
   local rc=0 ans
   ans=$(_mux::float --type confirm --borderless true --pane-width 54 \
         "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}") || rc=$?
-  ((rc == 130)) && return 130
-  [[ "$ans" == no ]] && { print -rn -- "no"; return 1; }
+  # Fail CLOSED: ANY non-zero rc means "not confirmed" — including _mux::float
+  # returning 1 when it cannot even render (mkfifo failure). A confirm that
+  # answers "yes" when it never asked is the wrong default for its destructive
+  # callers. Preserve the explicit user-cancel(130) path.
+  ((rc == 0)) || { print -rn -- "no"; return $(( rc == 130 ? 130 : 1 )); }
+  [[ "$ans" == yes ]] || { print -rn -- "no"; return 1; }
   print -rn -- "yes"; return 0
 }
 

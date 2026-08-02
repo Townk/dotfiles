@@ -94,6 +94,58 @@ Describe 'mux.zsh — mux::confirm borderless float'
   End
 End
 
+# MED-1 regression: mux::confirm must FAIL CLOSED. The destructive callers
+# that gate on it read a "yes" as consent to proceed, so a confirmation dialog
+# that cannot even render (e.g. _mux::float returning 1 when mkfifo fails on a
+# non-writable TMPDIR / inode exhaustion / name collision — both float backends
+# return 1 there) must answer "no", never fall through to an unconditional
+# "yes". Seam: stub _mux::float (defined after Include so it overrides the
+# sourced dispatcher) and drive mux::confirm through the float path (ZELLIJ=1
+# makes _mux::widgets_float true). mux::line/text/form already propagate the
+# failure; confirm was the one that inverted it.
+Describe 'mux.zsh — mux::confirm fails closed (MED-1)'
+  Include home/dot_local/lib/mux.zsh
+
+  setup() { export ZELLIJ=1; unset TMUX; }
+  BeforeEach 'setup'
+
+  Context 'when _mux::float cannot render (mkfifo failure, rc 1)'
+    _mux::float() { return 1; }
+    It 'answers "no" and returns non-zero — never fails open to yes'
+      When call mux::confirm --title "Delete" "Really delete everything?"
+      The output should equal "no"
+      The status should be failure
+    End
+  End
+
+  Context 'when the user confirms (rc 0, prints "yes")'
+    _mux::float() { print -rn -- "yes"; return 0; }
+    It 'answers yes and succeeds'
+      When call mux::confirm "Proceed?"
+      The output should equal "yes"
+      The status should be success
+    End
+  End
+
+  Context 'when the user declines (rc 0, prints "no")'
+    _mux::float() { print -rn -- "no"; return 0; }
+    It 'answers no and returns 1'
+      When call mux::confirm "Proceed?"
+      The output should equal "no"
+      The status should equal 1
+    End
+  End
+
+  Context 'when the user cancels the modal (rc 130)'
+    _mux::float() { return 130; }
+    It 'propagates the 130 cancel and does not answer yes'
+      When call mux::confirm "Proceed?"
+      The output should not equal "yes"
+      The status should equal 130
+    End
+  End
+End
+
 Describe 'mux.zsh — mux::choose borderless float'
   Include home/dot_local/lib/mux.zsh
 
