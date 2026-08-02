@@ -32,9 +32,12 @@ fi
 # local; the SSH branch there was already best-effort.)
 if mux::session_is_remote; then
   ENV_TYPE="SSH"
-elif [[ "${TERM_PROGRAM:-}" == "Ghostty" ]]; then
+# Match TERM_PROGRAM case-INSENSITIVELY: Ghostty sets it to `ghostty` (lowercase)
+# — the value the tmux session env carries and we recover above — so a literal
+# `== "Ghostty"` fell through to UNKNOWN → exit 1. (${(L)…} lowercases; zsh.)
+elif [[ "${(L)TERM_PROGRAM:-}" == "ghostty" ]]; then
   ENV_TYPE="GHOSTTY"
-elif [[ "${TERM_PROGRAM:-}" == "WezTerm" || -n "${WEZTERM_UNIX_SOCKET:-}" ]]; then
+elif [[ "${(L)TERM_PROGRAM:-}" == "wezterm" || -n "${WEZTERM_UNIX_SOCKET:-}" ]]; then
   ENV_TYPE="WEZTERM"
 else
   ENV_TYPE="UNKNOWN"

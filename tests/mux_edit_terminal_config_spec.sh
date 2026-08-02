@@ -23,7 +23,7 @@ if [[ "$1" == show-environment ]]; then
     SSH_CONNECTION)
       if [[ -n "${STUB_SSH:-}" ]]; then print -- "SSH_CONNECTION=$STUB_SSH"
       else print -- "-SSH_CONNECTION"; fi ;;
-    TERM_PROGRAM) print -- "TERM_PROGRAM=${STUB_TERM_PROGRAM:-Ghostty}" ;;
+    TERM_PROGRAM) print -- "TERM_PROGRAM=${STUB_TERM_PROGRAM:-ghostty}" ;;
   esac
   exit 0
 fi
@@ -60,11 +60,29 @@ EOS
     The status should be success
   End
 
-  It 'opens the Ghostty config when the SESSION env is local (server birth env ignored)'
-    export STUB_TERM_PROGRAM="Ghostty"
+  # Ghostty actually sets TERM_PROGRAM=ghostty (lowercase) — the value the tmux
+  # session env carries and the script recovers. The match must be
+  # case-insensitive; a literal "== Ghostty" fell through to UNKNOWN → exit 1
+  # (the Cmd+, regression once Decision 4 stopped masking it as SSH).
+  It 'opens the Ghostty config for the real lowercase TERM_PROGRAM=ghostty'
+    export STUB_TERM_PROGRAM="ghostty"
     When call zsh "$SCRIPT"
     The contents of file "$NEWWIN_LOG" should include "Ghostty Config"
     The contents of file "$NEWWIN_LOG" should not include ".ssh/config"
+    The status should be success
+  End
+
+  It 'still matches a capitalized TERM_PROGRAM (case-insensitive)'
+    export STUB_TERM_PROGRAM="Ghostty"
+    When call zsh "$SCRIPT"
+    The contents of file "$NEWWIN_LOG" should include "Ghostty Config"
+    The status should be success
+  End
+
+  It 'opens the Wezterm config for TERM_PROGRAM=WezTerm'
+    export STUB_TERM_PROGRAM="WezTerm"
+    When call zsh "$SCRIPT"
+    The contents of file "$NEWWIN_LOG" should include "Wezterm Config"
     The status should be success
   End
 End
