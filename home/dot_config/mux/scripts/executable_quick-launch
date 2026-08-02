@@ -15,8 +15,10 @@
 # The fuzzy picker is plain `fzf`; inside Zellij it is meant to run in a
 # floating modal pane (see the quick-launch-zellij adapter), but it works
 # standalone too. Geometry is taken from QUICK_LAUNCH_HEIGHT / _MARGIN /
-# _PADDING and a presence flag QUICK_LAUNCH_NO_BORDER, mirroring the
-# pick-glyph / pick-gitmoji convention.
+# _PADDING; `menu` also accepts a --no-border flag (borderless render for an
+# embedder that draws its own frame) and forwards it to the picker on the
+# command line, matching the pick-glyph / pick-gitmoji convention. The legacy
+# QUICK_LAUNCH_NO_BORDER env var is still read by quick-launch-pick itself.
 
 set -euo pipefail
 
@@ -68,14 +70,20 @@ ql_write_merged_cache() {
 # Show the fuzzy picker for a kind and dispatch the chosen target. The
 # picker itself is quick-launch-pick (zsh), built on the shared
 # pick-common.zsh facility so it matches pick-glyph / pick-gitmoji; it
-# prints the selected id (or exits 130 on cancel). Geometry / no-border are
-# inherited from the environment (set by the quick-launch-zellij adapter).
+# prints the selected id (or exits 130 on cancel). Geometry is inherited from
+# the environment (set by the quick-launch-zellij adapter); no-border arrives
+# as the --no-border CLI flag (2nd arg) and is forwarded to the picker on its
+# command line, matching pick-glyph / pick-gitmoji (Wave 2, group C5,
+# Decision 1).
 ql_menu() {
   local kind="$1"
+  local no_border="${2:-0}"
   case "$kind" in
     pane | tab | workspace) ;;
     *) ql_die "unknown kind '$kind' (want pane|tab|workspace)" ;;
   esac
+  local -a pick_flags=()
+  (( no_border )) && pick_flags=(--no-border)
 
   # Hand the picker a single merged JSON view (default.yaml + launch.d/*) so it
   # reads exactly what we dispatch from, without re-implementing the merge.
@@ -100,7 +108,7 @@ ql_menu() {
   fi
 
   local _rc=0
-  chosen="$(QUICK_LAUNCH_TARGETS="$targets" "$SCRIPT_DIR/quick-launch-pick" "$kind")" || _rc=$?
+  chosen="$(QUICK_LAUNCH_TARGETS="$targets" "$SCRIPT_DIR/quick-launch-pick" "$kind" "${pick_flags[@]}")" || _rc=$?
   if (( _dbg )); then
     printf '%s kind=%s rc=%d ms=%.0f rows=%s tty=%s chosen=%s\n' \
       "$(date +%T)" "$kind" "$_rc" "$(( (EPOCHREALTIME - _t0) * 1000 ))" \
@@ -158,6 +166,19 @@ usage() {
 }
 
 main() {
+  # --no-border is a borderless-render hint for the picker (menu only). The
+  # quick-launch-zellij adapter execs `quick-launch --no-border menu <kind>`,
+  # so it arrives ahead of the subcommand; accept it anywhere on the line and
+  # strip it out before dispatch (harmless for the other, picker-less
+  # subcommands, which never draw a border).
+  local no_border=0
+  local -a args=()
+  local a
+  for a in "$@"; do
+    if [[ "$a" == --no-border ]]; then no_border=1; else args+=("$a"); fi
+  done
+  set -- "${args[@]}"
+
   if [[ $# -eq 0 ]]; then
     usage
     exit 2
@@ -168,7 +189,7 @@ main() {
     menu)
       [[ $# -ge 1 ]] || ql_die "usage: quick-launch menu pane|tab|workspace"
       ql_load
-      ql_menu "$1"
+      ql_menu "$1" "$no_border"
       ;;
     open)
       [[ $# -ge 2 ]] || ql_die "usage: quick-launch open pane|tab|workspace ID"
