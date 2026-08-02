@@ -874,6 +874,50 @@ pbpaste_remote_materialize() {
   return 0
 }
 
+# pbpaste_recover_dir <recovery-dir> -- crash recovery for --force replacement
+# (bug #2). Forced replacement displaces the existing destination by renaming
+# it ASIDE into <recovery-dir> BEFORE the staged replacement is renamed into
+# place, so the displaced original lives OUTSIDE the disposable item-staging dir
+# that the EXIT/INT/TERM trap blindly `rm -rf`s. Each displacement records a
+# `bak.<idx>` (the original, moved aside) plus a `final.<idx>` sidecar naming
+# the destination -- the sidecar is written BEFORE the displacing rename, so a
+# signal/kill at ANY point leaves enough on disk to recover. For every recorded
+# backup whose destination is currently ABSENT (the original was displaced but
+# its replacement never landed -- a kill struck between the two renames), the
+# original is restored; where the destination is present (the replacement
+# landed, or it was never displaced) the backup is stale and dropped with the
+# dir. Idempotent: a missing dir is a no-op, so it is safe to call from the EXIT
+# trap after an INT/TERM handler already ran, and from a later run's sweep.
+pbpaste_recover_dir() {
+  _rd=$1
+  [ -d "$_rd" ] || return 0
+  for _bf in "$_rd"/bak.*; do
+    [ -e "$_bf" ] || continue
+    _fidx=${_bf##*/bak.}
+    _ffile="$_rd/final.$_fidx"
+    [ -f "$_ffile" ] || continue
+    _fdst=$(cat "$_ffile" 2>/dev/null) || _fdst=""
+    [ -n "$_fdst" ] || continue
+    if [ ! -e "$_fdst" ]; then
+      mv -- "$_bf" "$_fdst" 2>/dev/null || true
+    fi
+  done
+  rm -rf -- "$_rd" 2>/dev/null || true
+}
+
+# pbpaste_files_cleanup -- the EXIT/INT/TERM handler for pbpaste_files. Order is
+# load-bearing: RESTORE any displaced original whose destination is missing
+# FIRST (pbpaste_recover_dir), THEN discard the disposable staging + size-list.
+# The INT/TERM traps run this and then EXIT rather than resuming -- a trapped
+# shell that fell through would carry on the materialization loop in a half-done
+# state (bug #2). Re-entrant by design (INT/TERM exit re-fires the EXIT trap):
+# every step no-ops once its target is gone.
+pbpaste_files_cleanup() {
+  pbpaste_recover_dir "${PF_RECOVERY:-}"
+  rm -rf -- "$PF_STAGING" 2>/dev/null
+  [ -z "${PF_SIZE_LIST:-}" ] || rm -f -- "$PF_SIZE_LIST" 2>/dev/null
+}
+
 # pbpaste_files_place <name> <size> <stage> <final> -- the shared atomic-move
 # tail for BOTH the local (pbpaste_files_copy) and remote
 # (pbpaste_remote_materialize/_dir) engines: renames <stage> into <final>
@@ -888,19 +932,48 @@ pbpaste_files_place() {
   _name=$1 _size=$2 _stage=$3 _final=$4
   _bak=""
   if [ -e "$_final" ]; then
-    _bak="$PF_STAGING/.replaced.$$.$PF_IDX"
+    # Forced replacement, crash-recoverable (bug #2): displace the existing
+    # destination by renaming it ASIDE into PF_RECOVERY -- a SIBLING of the
+    # staging dir, so the trap's `rm -rf "$PF_STAGING"` can never carry the
+    # displaced original away with it. The `final.<idx>` sidecar recording the
+    # destination is written BEFORE the displacing rename, so pbpaste_recover_dir
+    # (from the EXIT/INT/TERM trap, or a later run's stale sweep) can restore the
+    # original whenever a signal/kill leaves the destination missing.
+    mkdir -p "$PF_RECOVERY" || {
+      echo "pbpaste: could not create recovery dir under $PF_DIR" >&2
+      rm -f "$PF_PATHLIST"
+      exit 1
+    }
+    _bak="$PF_RECOVERY/bak.$PF_IDX"
+    printf '%s' "$_final" > "$PF_RECOVERY/final.$PF_IDX" || {
+      echo "pbpaste: failed to record replacement of $_name in $PF_DIR" >&2
+      rm -f "$PF_PATHLIST"
+      exit 1
+    }
     mv -- "$_final" "$_bak" || {
+      rm -f "$PF_RECOVERY/final.$PF_IDX"
       echo "pbpaste: failed to displace existing $_name in $PF_DIR" >&2
       rm -f "$PF_PATHLIST"
       exit 1
     }
   fi
   mv -- "$_stage" "$_final" || {
-    [ -n "$_bak" ] && mv -- "$_bak" "$_final" 2>/dev/null
+    if [ -n "$_bak" ]; then
+      mv -- "$_bak" "$_final" 2>/dev/null
+      rm -f "$PF_RECOVERY/final.$PF_IDX" 2>/dev/null
+    fi
     echo "pbpaste: failed to move $_name into $PF_DIR" >&2
     rm -f "$PF_PATHLIST"
     exit 1
   }
+  # Replacement landed: the displaced original is now stale. Drop it and its
+  # sidecar so a later interrupt/sweep never "restores" it over the new content
+  # (the recover pass keys on the destination being ABSENT, which it no longer
+  # is -- but leaving the backup around is needless residue).
+  if [ -n "$_bak" ]; then
+    rm -rf -- "$_bak" 2>/dev/null
+    rm -f "$PF_RECOVERY/final.$PF_IDX" 2>/dev/null
+  fi
 
   PF_TOTAL_BYTES=$((PF_TOTAL_BYTES + _size))
   PF_TOTAL_FILES=$((PF_TOTAL_FILES + 1))
@@ -1095,6 +1168,22 @@ pbpaste_files() {
     fi
   fi
 
+  # Recover before reaping: a previous run SIGKILLed mid-replacement
+  # (untrappable, so its EXIT trap never fired) can leave a recovery dir holding
+  # a displaced original whose replacement never landed. RESTORE those originals
+  # (pbpaste_recover_dir only moves a backup back when its destination is
+  # missing) BEFORE the staging sweep below deletes anything (bug #2). Same
+  # PID-gating as the staging sweep: a genuinely concurrent run's live
+  # `.pbpaste-recovery.<pid>` is left untouched.
+  for PF_STALE in "$PF_DIR"/.pbpaste-recovery.*; do
+    [ -e "$PF_STALE" ] || continue
+    PF_STALE_PID=${PF_STALE##*.}
+    case "$PF_STALE_PID" in
+      '' | *[!0-9]*) pbpaste_recover_dir "$PF_STALE" ;;
+      *) kill -0 "$PF_STALE_PID" 2>/dev/null || pbpaste_recover_dir "$PF_STALE" ;;
+    esac
+  done
+
   # Sweep any staging dir orphaned by a previous SIGKILLed run (untrappable,
   # so its own EXIT trap never fired) before this run creates its own. PID-
   # gated, not a blind wildcard rm: a SECOND, genuinely concurrent `pbpaste
@@ -1191,16 +1280,25 @@ $PF_NAME
 
   # --- materialize: stage every item, then mv each into place. ---
   PF_STAGING="$PF_DIR/.pbpaste-staging.$$"
+  # Recovery dir for --force replacement backups (bug #2): a SIBLING of staging,
+  # not a child, so the trap's staging `rm -rf` never reaps a displaced original.
+  # Created lazily by pbpaste_files_place only when a conflict is actually
+  # replaced; set here so the trap/cleanup can reference it unconditionally.
+  PF_RECOVERY="$PF_DIR/.pbpaste-recovery.$$"
   mkdir -p "$PF_STAGING" || {
     echo "pbpaste: could not create staging dir under $PF_DIR" >&2
     rm -f "$PF_PATHLIST"
     exit 1
   }
-  # Catchable interrupt (Ctrl+C, a plain TERM) cleans up on the spot. An
-  # untrappable SIGKILL skips this -- the sweep at the top of the NEXT
-  # invocation is what handles that case (see above).
+  # Catchable interrupt (Ctrl+C, a plain TERM): RESTORE any displaced original,
+  # then clean up, then EXIT -- never resume the loop half-done (bug #2). An
+  # untrappable SIGKILL skips this; the sweep at the top of the NEXT invocation
+  # handles that case (see above). EXIT alone (normal end, or an internal
+  # `exit 1`) runs the same cleanup without forcing a status.
   PF_SIZE_LIST=""
-  trap 'rm -rf -- "$PF_STAGING" 2>/dev/null; [ -z "${PF_SIZE_LIST:-}" ] || rm -f -- "$PF_SIZE_LIST" 2>/dev/null' EXIT INT TERM
+  trap 'pbpaste_files_cleanup' EXIT
+  trap 'pbpaste_files_cleanup; exit 130' INT
+  trap 'pbpaste_files_cleanup; exit 143' TERM
 
   PF_IS_TTY=0
   [ -t 1 ] && PF_IS_TTY=1
@@ -1275,13 +1373,13 @@ $PF_NAME
     # a directory target is a recursive, non-atomic delete, so a kill inside
     # that window would leave a half-shredded old tree in the destination --
     # exactly the partial state staging exists to prevent. Instead the old
-    # item is renamed INTO the staging dir (same filesystem, atomic), so
-    # every destination-visible step is a rename: a kill between the two
-    # renames leaves the name briefly absent but the old tree fully intact
-    # inside staging, and the EXIT/INT/TERM trap (or, after SIGKILL, the
-    # next run's stale-staging sweep) reaps it from there. The `.replaced.`
-    # names can't collide with staged items ($$ + index) and die with the
-    # staging dir. (See pbpaste_files_place, shared by both engines.)
+    # item is renamed into the RECOVERY dir (a staging sibling, same
+    # filesystem, atomic), so every destination-visible step is a rename: a
+    # kill between the two renames leaves the name briefly absent but the old
+    # tree fully intact in recovery, and the EXIT/INT/TERM trap (or, after
+    # SIGKILL, the next run's stale-recovery sweep) RESTORES it from there
+    # whenever the destination is missing -- it is not reaped blindly with the
+    # staging dir (bug #2). (See pbpaste_recover_dir / pbpaste_files_place.)
     if [ "$PF_DEFER_PLACE" -eq 0 ]; then
       pbpaste_files_place "$PF_NAME" "$PF_SIZE" "$PF_STAGE_TARGET" "$PF_FINAL"
     fi

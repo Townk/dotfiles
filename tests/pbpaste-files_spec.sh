@@ -945,6 +945,197 @@ EOF
   End
 End
 
+# Forced-replacement crash recovery (bug #2). `--force` replaces an existing
+# destination by renaming it ASIDE (mv final -> backup) and only THEN renaming
+# the staged replacement into place (mv stage -> final). A signal/kill landing
+# BETWEEN those two renames leaves the destination momentarily absent with the
+# only copy of the original in the backup -- so the backup MUST live somewhere
+# the cleanup path restores rather than blindly deletes, and the sweep of a
+# SIGKILLed run must restore it too.
+#
+# These probes are DETERMINISTIC: a fake `mv` on PATH fires exactly one signal
+# at a chosen seam in pbpaste_files_place's rename pair (guarded by a one-shot
+# marker so the recovery/restore renames that follow run for real). It keys the
+# seam off the destination path -- a backup destination (inside the staging or
+# recovery dir) is the FIRST rename (the displace), the target destination is
+# the SECOND (the place) -- so it works unchanged against both the old
+# backup-in-staging layout and the fixed recovery-dir layout. `between`/`sweep`
+# reproduce the data-loss window; `before`/`after` are guards that the original
+# (resp. the new content) survives the adjacent windows.
+Describe 'pbpaste: --files forced-replacement crash recovery'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+  TOKEN=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+
+  build_frame() {
+    st=$1 payload_file=$2 outfile=$3
+    len=$(wc -c < "$payload_file" | tr -d ' ')
+    {
+      printf '%s' "$st"
+      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
+      cat "$payload_file"
+    } > "$outfile"
+  }
+
+  build_manifest() {
+    outfile=$1 kind=$2 host=$3 ts=$4
+    shift 4
+    {
+      printf '%s\037%s\037%s\037%s\037' "$kind" "$host" "$ts" "$TOKEN"
+      first=1
+      for p in "$@"; do
+        if [ "$first" -eq 1 ]; then
+          printf '%s' "$p"
+          first=0
+        else
+          printf '\000%s' "$p"
+        fi
+      done
+    } > "$outfile"
+  }
+
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
+    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
+    REPLY_FRAME="$SHELLSPEC_TMPBASE/reply.frame"
+    export REPLY_FRAME
+    cat > "$BINDIR/nc" <<EOF
+#!/bin/sh
+argc=\$#
+eval "port=\\\${\$argc}"
+raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
+cat > "\$raw"
+{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
+rm -f "\$raw"
+cat "$REPLY_FRAME"
+EOF
+    chmod +x "$BINDIR/nc"
+    cat > "$BINDIR/scutil" <<'EOF'
+#!/bin/sh
+if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
+  echo mac-mini
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$BINDIR/scutil"
+
+    # One-shot interrupt harness for pbpaste_files_place's rename pair. Reads
+    # PBPASTE_MV_MODE (before|between|after|sweep) and PBPASTE_MV_MARKER from
+    # the environment pbpaste passes down. place() always calls `mv -- SRC DST`,
+    # so $3 is the destination: a staging/recovery/.replaced destination is the
+    # displacing FIRST rename, anything else is the placing SECOND rename.
+    cat > "$BINDIR/mv" <<EOF
+#!/bin/sh
+real=/bin/mv
+[ -x "\$real" ] || real=/usr/bin/mv
+dst=\$3
+case "\$dst" in
+  *.pbpaste-recovery.*|*.pbpaste-staging.*|*.replaced.*) displace=1 ;;
+  *) displace=0 ;;
+esac
+if [ -n "\${PBPASTE_MV_MODE:-}" ] && [ ! -f "\${PBPASTE_MV_MARKER:-/nonexistent}" ]; then
+  fire=0
+  case "\$PBPASTE_MV_MODE" in
+    before) [ "\$displace" = 1 ] && fire=1 ;;
+    between|after|sweep) [ "\$displace" = 0 ] && fire=1 ;;
+  esac
+  if [ "\$fire" = 1 ]; then
+    : > "\$PBPASTE_MV_MARKER"
+    [ "\$PBPASTE_MV_MODE" = after ] && "\$real" "\$@"
+    case "\$PBPASTE_MV_MODE" in
+      sweep) kill -KILL \$PPID ;;
+      *) kill -TERM \$PPID ;;
+    esac
+    exit 0
+  fi
+fi
+exec "\$real" "\$@"
+EOF
+    chmod +x "$BINDIR/mv"
+    export PATH="$BINDIR:$PATH"
+    # Hermetic self_host(): see the local-materialization Describe's setup.
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-recover"
+    MVMARKER="$SHELLSPEC_TMPBASE/mv-marker"; rm -f "$MVMARKER"
+
+    SRC="$SHELLSPEC_TMPBASE/src-recover"; mkdir -p "$SRC"
+    TARGET="$SHELLSPEC_TMPBASE/target-recover"; rm -rf "$TARGET"; mkdir -p "$TARGET"
+    printf 'NEWCONTENT\n' > "$SRC/keep.txt"
+    printf 'ORIGINAL\n' > "$TARGET/keep.txt"
+    pf="$SHELLSPEC_TMPBASE/payload-recover"
+    build_manifest "$pf" file mac-mini 1752400000.1 "$SRC/keep.txt"
+    build_frame O "$pf" "$REPLY_FRAME"
+  }
+  BeforeEach 'setup'
+
+  # Guard window: a signal immediately BEFORE the first rename never displaced
+  # anything, so the original is untouched at its destination.
+  It 'keeps the original when interrupted immediately before the first rename'
+    When run command env PBPASTE_MV_MODE=before PBPASTE_MV_MARKER="$MVMARKER" sh -c '
+      sh "$1" --files --force "$2" >/dev/null 2>&1
+      [ "$(cat "$2/keep.txt" 2>/dev/null)" = "ORIGINAL" ] || exit 6
+      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 && exit 5
+      ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1 && exit 4
+      exit 0
+    ' _ "$SCRIPT" "$TARGET"
+    The status should be success
+  End
+
+  # THE BUG: a signal BETWEEN the two renames -- the original has been displaced
+  # into the backup and the replacement has not landed yet. The trap must
+  # RESTORE the displaced original (destination missing), not delete it with the
+  # staging dir. Red on the old backup-in-staging layout (original lost), green
+  # once the backup lives in a recovery dir the trap restores from.
+  It 'restores the displaced original when interrupted between the two renames'
+    When run command env PBPASTE_MV_MODE=between PBPASTE_MV_MARKER="$MVMARKER" sh -c '
+      sh "$1" --files --force "$2" >/dev/null 2>&1
+      [ -e "$2/keep.txt" ] || exit 7
+      [ "$(cat "$2/keep.txt")" = "ORIGINAL" ] || exit 6
+      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 && exit 5
+      ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1 && exit 4
+      exit 0
+    ' _ "$SCRIPT" "$TARGET"
+    The status should be success
+  End
+
+  # Guard window: a signal immediately AFTER the replacement landed must keep
+  # the NEW content (never "restore" the stale original over it) and leave no
+  # residue.
+  It 'keeps the new content when interrupted immediately after the replacement'
+    When run command env PBPASTE_MV_MODE=after PBPASTE_MV_MARKER="$MVMARKER" sh -c '
+      sh "$1" --files --force "$2" >/dev/null 2>&1
+      [ "$(cat "$2/keep.txt" 2>/dev/null)" = "NEWCONTENT" ] || exit 6
+      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 && exit 5
+      ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1 && exit 4
+      exit 0
+    ' _ "$SCRIPT" "$TARGET"
+    The status should be success
+  End
+
+  # SIGKILL (untrappable) between the two renames leaves the displaced original
+  # only in the on-disk recovery dir. The NEXT run's stale-sweep must restore it
+  # (destination missing) BEFORE anything else -- here the plain follow-up paste
+  # then refuses the now-present conflict, leaving the restored original intact.
+  It 'restores a SIGKILLed run''s displaced original on the next run''s stale-sweep'
+    When run command sh -c '
+      # Background + wait so the shell reaps the SIGKILLed run silently (the
+      # same pattern the mid-copy interrupt test uses) -- a foreground kill
+      # would print a "Killed: 9" job notice to stderr, which shellspec flags.
+      PBPASTE_MV_MODE=sweep PBPASTE_MV_MARKER="$3" sh "$1" --files --force "$2" >/dev/null 2>&1 &
+      wait "$!" 2>/dev/null
+      [ ! -e "$2/keep.txt" ] || exit 9
+      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 || exit 8
+      sh "$1" --files "$2" >/dev/null 2>&1
+      [ -e "$2/keep.txt" ] || exit 7
+      [ "$(cat "$2/keep.txt")" = "ORIGINAL" ] || exit 6
+      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 && exit 5
+      ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1 && exit 4
+      exit 0
+    ' _ "$SCRIPT" "$TARGET" "$MVMARKER"
+    The status should be success
+  End
+End
+
 # Tests for pbpaste's REMOTE file-materialization engine (T13, design
 # §5/§8): manifest host != this host -> stream each item over F (files) /
 # A (directories, via the dispatcher's `E is-directory` retry) instead of
