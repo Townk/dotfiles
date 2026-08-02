@@ -8,8 +8,8 @@
 #
 # The allowlist below exempts files where a raw hex is legitimate:
 #   * runtime FALLBACKS that load the palette bridge and fall back to literals
-#     only if it is missing (nvim lualine, the file viewers, wezterm.lua, yazi
-#     init.lua);
+#     only if it is missing (nvim lualine, the file viewers, the viewers' shared
+#     theme_palette.py loader, wezterm.lua, yazi init.lua);
 #   * NON-theme subsystems (Hammerspoon Stream Deck, the notify swatch, icon
 #     assets) that are not terminal-theme surfaces;
 #   * COMMENTS/examples that merely mention a hex (theme-apply override example,
@@ -29,6 +29,7 @@ matches=$(rg -n '#[0-9a-fA-F]{6}' home/ \
   -g '!**/libexec/executable_ics-view' \
   -g '!**/libexec/executable_sqlite-view' \
   -g '!**/libexec/executable_disk-image-view' \
+  -g '!**/lib/theme_palette.py' \
   -g '!**/bin/executable_pbpaste' \
   -g '!**/wezterm/wezterm.lua' \
   -g '!**/yazi/init.lua' \
