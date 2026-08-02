@@ -100,4 +100,49 @@ Describe 'theme-common.zsh'
       The output should equal ''
     End
   End
+
+  # ── single palette JSON path (C2 canonical) ─────────────────────────────────
+  # theme::json_path is THE resolver every reader shares, so the status bar and
+  # the dialogs can never render different palettes on one screen (the split-
+  # palette-under-SSH bug). ONE order: $THEME_PALETTE_JSON (the sole override
+  # .zshrc exports) -> the effective cache copy if readable -> the canonical
+  # config copy. The retired WIDGETS_THEME_JSON / THEME_JSON seams collapse here.
+  Describe 'theme::json_path'
+    setup() {
+      TJ_TMP=$(mktemp -d)
+      export HOME="$TJ_TMP/home"
+      export XDG_CACHE_HOME="$TJ_TMP/cache" XDG_CONFIG_HOME="$TJ_TMP/config"
+      # The ambient login shell exports THEME_PALETTE_JSON (see .zshrc); drop it
+      # so the fallback tiers are exercised hermetically.
+      unset THEME_PALETTE_JSON
+      mkdir -p "$XDG_CACHE_HOME/theme" "$XDG_CONFIG_HOME/theme" "$HOME/.cache" "$HOME/.config"
+    }
+    cleanup() { rm -rf "$TJ_TMP"; unset TJ_TMP XDG_CACHE_HOME XDG_CONFIG_HOME THEME_PALETTE_JSON; }
+    BeforeEach 'setup'
+    AfterEach 'cleanup'
+
+    It 'returns $THEME_PALETTE_JSON verbatim when set (the sole override)'
+      export THEME_PALETTE_JSON="$TJ_TMP/explicit.json"
+      : >"$XDG_CACHE_HOME/theme/chezmoi-system.json"   # present, but the override wins
+      When call theme::json_path
+      The output should equal "$TJ_TMP/explicit.json"
+    End
+
+    It 'falls back to the effective cache copy when unset and the cache is readable'
+      : >"$XDG_CACHE_HOME/theme/chezmoi-system.json"
+      When call theme::json_path
+      The output should equal "$XDG_CACHE_HOME/theme/chezmoi-system.json"
+    End
+
+    It 'falls back to the canonical config copy when neither override nor cache is present'
+      When call theme::json_path
+      The output should equal "$XDG_CONFIG_HOME/theme/chezmoi-system.json"
+    End
+
+    It 'honours the $HOME defaults when XDG_* are unset'
+      unset XDG_CACHE_HOME XDG_CONFIG_HOME
+      When call theme::json_path
+      The output should equal "$HOME/.config/theme/chezmoi-system.json"
+    End
+  End
 End

@@ -71,6 +71,29 @@ theme::hex_rgb() {
   printf '%d %d %d' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
 }
 
+# theme::json_path — resolve THE single palette JSON every reader must agree on
+# (C2 consolidation). One resolution order, so the status bar (cache tier) and
+# the dialogs (formerly canonical tier) can never render DIFFERENT palettes on
+# one screen — the split-palette-under-SSH bug:
+#   1. $THEME_PALETTE_JSON  — the sole override going forward (.zshrc exports it,
+#      pointing at the effective/SSH-tinted cache copy). This RETIRES the old
+#      per-reader seams WIDGETS_THEME_JSON / THEME_JSON (Decision 3).
+#   2. else the effective cache copy $XDG_CACHE_HOME/theme/chezmoi-system.json
+#      if readable — theme-apply writes the override-tinted palette there.
+#   3. else the canonical config copy $XDG_CONFIG_HOME/theme/chezmoi-system.json.
+# Prints the resolved path; never fails (the config tier is unconditional).
+# The POSIX-sh consumers that cannot source this (pbpaste) inline the SAME order.
+theme::json_path() {
+  emulate -L zsh
+  if [[ -n "${THEME_PALETTE_JSON:-}" ]]; then
+    print -r -- "$THEME_PALETTE_JSON"
+  elif [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.json" ]]; then
+    print -r -- "${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.json"
+  else
+    print -r -- "${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.json"
+  fi
+}
+
 # theme::args — fill the global AI_THEME_ARGS with the --theme-* flags for
 # ai-playbook input (and the pager) from the shared SEMANTIC roles (C_ROLE_*).
 # One source for the dialog colors; the binary keeps its own defaults if these
