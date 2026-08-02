@@ -1161,6 +1161,22 @@ if [[ "${1:-}" == --restore-id ]]; then
   exit 1
 fi
 
+# --no-border (front-end CLI flag, shared-lib Wave 2, group C5, Decision 1) -----
+# The zellij floating pane draws its own frame, so the modal wants fzf rendered
+# borderless. This is now accepted as a --no-border CLI flag -- matching
+# pick-glyph / pick-gitmoji, so all four zellij picker adapters drive the
+# borderless look through the flag form -- and forwarded into the pick::start
+# args below. PICK_CLIPBOARD_NO_BORDER is still honored as harmless back-compat
+# (the adapter no longer sets it). --restore-id is dispatched above and never
+# reaches here; every other positional arg stays ignored (this entrypoint has
+# always been lenient, reserving room for a future --resume), so a scan -- not a
+# strict parser that would die on the unknown -- is what preserves that.
+no_border=0
+[[ -n "${PICK_CLIPBOARD_NO_BORDER:-}" ]] && no_border=1
+for _nb_arg in "$@"; do
+  if [[ "$_nb_arg" == --no-border ]]; then no_border=1; fi
+done
+
 # Copy a clip's content to *my* clipboard, carrying the register type so a block
 # clip stays block-pasteable. Self-contained model (§11): the clip already lives
 # in this store, so there is no cross-machine restore — copy is always a local
@@ -2011,7 +2027,7 @@ pick_args=(
 [[ -n "${PICK_CLIPBOARD_PADDING:-}" ]] && pick_args+=(--padding "${PICK_CLIPBOARD_PADDING}")
 [[ -n "${PICK_CLIPBOARD_HEIGHT:-}" ]]   && pick_args+=(--height "${PICK_CLIPBOARD_HEIGHT}")
 [[ -n "${PICK_CLIPBOARD_RESUME:-}" ]] && pick_args+=(--resume)
-[[ -n "${PICK_CLIPBOARD_NO_BORDER:-}" ]] && pick_args+=(--no-border)
+(( no_border )) && pick_args+=(--no-border)   # --no-border flag or the back-compat env, resolved above
 
 # pick::start prints one accept marker on stdout: the plain id (Enter), "MD:id"
 # (Alt-Enter, markdown), or "CP:id" (Ctrl-Y, copy). We re-fetch by id and print
