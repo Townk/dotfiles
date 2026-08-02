@@ -38,7 +38,13 @@
 set -euo pipefail
 
 LSOF="/usr/sbin/lsof"
-PBCOPY="/usr/bin/pbcopy"
+# Route the copy through the pbcopy SHIM, which owns the tier logic (local
+# pasteboard, and under SSH the bridge/OSC-52 mirror to the attached client) —
+# so this no longer hand-rolls a `tmux load-buffer` OSC-52 copy. The shim is
+# addressed by ABSOLUTE path because copy-pwd runs headlessly (zellij/tmux
+# run_command) with no PATH; /usr/bin/pbcopy is the fallback when it's missing.
+PBCOPY="$HOME/.local/bin/pbcopy"
+[[ -x "$PBCOPY" ]] || PBCOPY="/usr/bin/pbcopy"
 
 COPY_PWD_ICON="${COPY_PWD_ICON:-glyph:nf-cod-folder}"
 COPY_PWD_SOUND="${COPY_PWD_SOUND-Frog}"
@@ -87,17 +93,10 @@ if [[ "$mode" == "relative" ]]; then
 fi
 
 # Clipboard gets the chosen path with no trailing newline (so it doesn't
-# auto-execute if pasted at a shell prompt).
+# auto-execute if pasted at a shell prompt). The shim above handles the SSH
+# case — under tmux on a remote HOST it mirrors to the attached client via the
+# bridge/OSC-52 tiers, so there's no hand-rolled `tmux load-buffer` mirror here.
 printf '%s' "$out" | "$PBCOPY"
-
-# Under tmux the chord runs on the tmux HOST — pbcopy above only reaches this
-# machine's pasteboard, and the Hammerspoon OSD below only its screen. Mirror
-# the copy to the attached client's terminal via OSC 52 (set-clipboard on),
-# so an ssh client gets it on ITS clipboard, and surface client-visible
-# feedback in the status line. Local use is unaffected (same clipboard twice).
-if [[ -n "${TMUX:-}" ]]; then
-  printf '%s' "$out" | tmux load-buffer -w - 2>/dev/null || true
-fi
 
 # Keep the OSD focused on the action; the clipboard already carries the path.
 if [[ "$mode" == "absolute" ]]; then
