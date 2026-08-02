@@ -226,4 +226,34 @@ YAML
       The status should be success
     End
   End
+
+  # sec::op_use_service is the resolution-time analog of environment.sh's
+  # over-SSH block: both must fire on the FULL canonical remote triple
+  # (SSH_TTY / SSH_CONNECTION / SSH_CLIENT), the identity of mux::is_remote.
+  # The regression these guard: an SSH_TTY-only `ssh -T` login (no pty) was
+  # misclassified as local because SSH_TTY was dropped. Each var is set
+  # explicitly (including to "") so ambient SSH state cannot leak in.
+  Describe 'sec::op_use_service (mirror of environment.sh / mux::is_remote)'
+    use_service() { SSH_TTY="$1" SSH_CONNECTION="$2" SSH_CLIENT="$3" sec::op_use_service; }
+
+    It 'selects service mode for an SSH_TTY-only (ssh -T) session'
+      When call use_service /dev/pts/3 "" ""
+      The status should be success
+    End
+
+    It 'selects service mode when only SSH_CONNECTION is set'
+      When call use_service "" "10.0.0.1 5 10.0.0.2 22" ""
+      The status should be success
+    End
+
+    It 'selects service mode when only SSH_CLIENT is set'
+      When call use_service "" "" "10.0.0.1 5 22"
+      The status should be success
+    End
+
+    It 'stays in account mode locally (no SSH vars)'
+      When call use_service "" "" ""
+      The status should be failure
+    End
+  End
 End

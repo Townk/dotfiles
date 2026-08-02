@@ -97,9 +97,18 @@ export PATH
 # subprocess gets the same env. See `system-onboard`/`system-secrets`.
 [ -r "$HOME/.config/zsh/secrets.sh" ] && . "$HOME/.config/zsh/secrets.sh"
 
-# Over-SSH adjustments. Empty in launchd/GUI shells (no SSH_CONNECTION), so GUI
-# apps and local sessions are unaffected.
-if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ]; then
+# Over-SSH adjustments. Empty in launchd/GUI shells (no SSH_* vars), so GUI
+# apps and local sessions are unaffected. The remote test uses the full
+# canonical triple (SSH_TTY / SSH_CONNECTION / SSH_CLIENT non-empty) — a no-pty
+# `ssh -T` login can leave only a subset (e.g. just SSH_TTY) set, and dropping
+# SSH_TTY misclassified those as local, steering the wrong pinentry / op mode.
+# This mirrors mux::is_remote (mux-bootstrap.zsh) and its resolution-time analog
+# sec::op_use_service (system-secrets-common.zsh), but MUST stay inlined here:
+# environment.sh is sourced very early (by ~/.zshenv and the launchd agent,
+# under /bin/sh) before ~/.local/lib is loadable, so it cannot source that zsh
+# layer. Hence POSIX `[` + string concatenation, not the zsh-only `[[ ]]`. Keep
+# the triple in sync.
+if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]; then
   # Steer gpg-agent's pinentry to the terminal. gpg forwards this to the agent,
   # which hands it to our pinentry-auto dispatcher; USE_CURSES is the value
   # pinentry-mac honors too. Unset locally so Touch ID stays the default.
