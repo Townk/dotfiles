@@ -160,7 +160,15 @@ cache_file="$(git rev-parse --git-path ai-commit-claude-plan.json)" ||
 cache_file="${cache_file:a}"
 use_cached_plan=0
 if [[ -s "$cache_file" && "$force_refresh" -eq 0 ]]; then
-  use_cached_plan=1
+  # A cache is only honoured when its stored fingerprint still matches the
+  # current tree + scope (bug #4a); a stale cache is discarded so we re-plan
+  # rather than staging bytes the plan was never generated for.
+  if cagent::cache_is_fresh "$cache_file" "$include_untracked"; then
+    use_cached_plan=1
+  else
+    log_info "cached commit plan is stale (working tree or scope changed); re-planning"
+    rm -f "$cache_file"
+  fi
 fi
 
 # Refuse pre-existing staged changes — keeps dry-run / no-commit / default
@@ -200,19 +208,30 @@ trap cleanup EXIT INT TERM
 plan_file="$tmpdir/plan.json"
 
 save_plan_cache() {
+  local tmp_cache fp
   mkdir -p "${cache_file:h}"
-  cp "$plan_file" "$cache_file"
+  # Bind the cache to the state it was generated for (bug #4a): stamp the
+  # current fingerprint into the cached plan so a later run can detect a
+  # drifted tree/scope and re-plan.
+  fp="$(cagent::plan_fingerprint "$include_untracked")"
+  tmp_cache="${cache_file}.$$"
+  jq --arg fp "$fp" '. + {fingerprint: $fp}' "$plan_file" >"$tmp_cache"
+  mv "$tmp_cache" "$cache_file"
   log_ok "saved commit plan cache: $cache_file"
 }
 
 clear_plan_cache() {
+  # `[[ -e ]] && rm` returns non-zero when the cache is already gone (e.g. it
+  # was discarded as stale on load), which trips the script's `set -e` if this
+  # is the last command in a caller. Force a zero return.
   [[ -e "$cache_file" ]] && rm -f "$cache_file"
+  return 0
 }
 
 save_remaining_plan_cache() {
   local next_idx="$1"
   local remaining=$((commit_count - next_idx))
-  local tmp_cache
+  local tmp_cache fp
 
   if [[ "$remaining" -le 0 ]]; then
     clear_plan_cache
@@ -220,8 +239,13 @@ save_remaining_plan_cache() {
   fi
 
   mkdir -p "${cache_file:h}"
+  # A commit just landed, so the tree changed: re-stamp the fingerprint for
+  # the NOW-current state so the remaining-plan cache is re-verified against
+  # the post-commit tree on the next run (bug #4a).
+  fp="$(cagent::plan_fingerprint "$include_untracked")"
   tmp_cache="${cache_file}.$$"
-  jq --argjson start "$next_idx" '{commits: .commits[$start:]}' "$plan_file" >"$tmp_cache"
+  jq --argjson start "$next_idx" --arg fp "$fp" \
+    '{fingerprint: $fp, commits: .commits[$start:]}' "$plan_file" >"$tmp_cache"
   mv "$tmp_cache" "$cache_file"
   log_info "updated commit plan cache with ${remaining} remaining commit(s)"
 }

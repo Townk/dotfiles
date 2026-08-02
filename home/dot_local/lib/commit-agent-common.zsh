@@ -30,6 +30,58 @@ cagent::validate_plan() {
   ' "$plan_file" >/dev/null 2>&1
 }
 
+# cagent::plan_fingerprint <include_untracked>
+# A content-sensitive digest of the exact git state a plan was generated for,
+# used to bind the plan cache to that state (bug #4a). It folds together, into
+# a single stable hash:
+#   * HEAD (so a landed commit invalidates a cached "remaining" plan),
+#   * the scope flag in effect (tracked-only vs +untracked), and
+#   * the CONTENT of every in-scope change — the full `git diff HEAD` of
+#     tracked modifications, plus the path list and per-file blob hash of
+#     untracked files when they are in scope.
+# Editing a planned file changes its diff/blob hash, so the fingerprint
+# changes and the cache is rejected. `emulate -L zsh` keeps the caller's
+# `set -e`/`pipefail` from aborting mid-helper on an expected non-zero probe.
+cagent::plan_fingerprint() {
+  emulate -L zsh
+  local include_untracked="${1:-0}"
+  local head
+  head="$(git rev-parse HEAD 2>/dev/null)" || head=""
+  {
+    print -r -- "head=$head"
+    print -r -- "scope_untracked=$include_untracked"
+    print -r -- "--- tracked ---"
+    # HEAD vs working tree (the index equals HEAD — the workers refuse
+    # pre-existing staged changes). Falls back to `git diff` in a repo with
+    # no commits yet.
+    git --no-pager -c core.quotepath=false diff --no-color --no-ext-diff HEAD 2>/dev/null ||
+      git --no-pager -c core.quotepath=false diff --no-color --no-ext-diff 2>/dev/null
+    if [[ "$include_untracked" -eq 1 ]]; then
+      print -r -- "--- untracked ---"
+      git ls-files --others --exclude-standard 2>/dev/null
+      git ls-files --others --exclude-standard -z 2>/dev/null |
+        xargs -0 git hash-object 2>/dev/null
+    fi
+  } | git hash-object --stdin 2>/dev/null
+}
+
+# cagent::cache_is_fresh <cache_file> <include_untracked>
+# The load-time guard: a cached plan is only honoured when its stored
+# `fingerprint` still equals the fingerprint recomputed against the CURRENT
+# tree + scope. A missing/empty cache, a cache with no stored fingerprint
+# (legacy/bare), or a fingerprint mismatch all return non-zero so the caller
+# re-plans instead of staging stale bytes.
+cagent::cache_is_fresh() {
+  emulate -L zsh
+  local cache_file="$1" include_untracked="${2:-0}"
+  [[ -s "$cache_file" ]] || return 1
+  local stored current
+  stored="$(jq -r '.fingerprint // empty' "$cache_file" 2>/dev/null)"
+  [[ -n "$stored" ]] || return 1
+  current="$(cagent::plan_fingerprint "$include_untracked")"
+  [[ "$stored" == "$current" ]]
+}
+
 # cagent::print_plan_summary <plan_file> <commit_count>
 # The "Planned N commit(s)" header + one subject/file-list block per commit.
 cagent::print_plan_summary() {
@@ -74,7 +126,11 @@ cagent::stage_commit() {
     log_warn "commit $((idx + 1)) has no files; skipping"
     return 1
   }
-  git add -- "${files[@]}"
+  # `--` stops OPTION parsing but does NOT disable pathspec MAGIC, so a
+  # model-emitted `:(top,glob)**`, `:(exclude)…`, etc. would expand beyond the
+  # named files (bug #4b). `--literal-pathspecs` treats every plan path as a
+  # literal filename, neutralising all `:(…)` / `:/` magic.
+  git --literal-pathspecs add -- "${files[@]}"
 }
 
 # cagent::execute_plan <plan_file> <commit_count> <tmpdir> <no_commit> [post_commit_hook]
