@@ -59,21 +59,21 @@ function motd() {
 #   gping     - Latency graph        tv      - csv (tidy-viewer)      unrar     - Handle .rar format
 # --------------------------------------------------------------------------------------------------
 function terminal_commands() {
-  print -P -- "$C_BLU Available Commands$C_RES
+  print -P -- "$P_BLU Available Commands$P_RES
 
-  ${C_YEL} SYSTEM${C_RES}                         ${C_YEL}󰇺 PROCESSORS${C_RES}                     ${C_YEL} UTILITIES${C_RES}
-  ${C_YEL}--------${C_RES}                         ${C_YEL}------------${C_RES}                     ${C_YEL}-----------${C_RES}
-  ${C_BWH}btm${C_RES}       - 'top' (bottom)       ${C_BWH}jq${C_RES}      - JSON processor         ${C_BWH}7zz${C_RES}       - 7-Zip cli
-  ${C_BWH}duf${C_RES}       - Disk usage 'du'      ${C_BWH}pandoc${C_RES}  - Any text processor     ${C_BWH}eva${C_RES}       - Calculator
-  ${C_BWH}y${C_RES}         - Files (yazi)         ${C_BWH}gron${C_RES}    - JSON to list assign    ${C_BWH}fd${C_RES}        - 'find'
-  ${C_BWH}procs${C_RES}     - Processes 'ps'       ${C_BWH}xq${C_RES}      - XML processor          ${C_BWH}fend${C_RES}      - Unit conversion
-  ${C_BWH}tldr${C_RES}      - Extra help           ${C_BWH}yq${C_RES}      - YAML processor         ${C_BWH}gh${C_RES}        - GitHub cli
-                                                                    ${C_BWH}git${C_RES}       - Version control
-  ${C_YEL} NETWORK                        ${C_YEL}󰊪 VISUALIZERS                    ${C_BWH}grex${C_RES}      - RegEx generator
-  ${C_YEL}---------                        ${C_YEL}-------------                    ${C_BWH}hyperfine${C_RES} - Benchmark
-  ${C_BWH}bandwhich${C_RES} - Network use          ${C_BWH}jless${C_RES}   - JSON tree              ${C_BWH}rg${C_RES}        - 'grep' (ripgrep)
-  ${C_BWH}doggo${C_RES}     - DNS look-up          ${C_BWH}tokei${C_RES}   - Code metrics           ${C_BWH}t-rec${C_RES}     - Terminal recorder
-  ${C_BWH}gping${C_RES}     - Latency graph        ${C_BWH}tv${C_RES}      - csv (tidy-viewer)      ${C_BWH}unrar${C_RES}     - Handle .rar format
+  ${P_YEL} SYSTEM${P_RES}                         ${P_YEL}󰇺 PROCESSORS${P_RES}                     ${P_YEL} UTILITIES${P_RES}
+  ${P_YEL}--------${P_RES}                         ${P_YEL}------------${P_RES}                     ${P_YEL}-----------${P_RES}
+  ${P_BWH}btm${P_RES}       - 'top' (bottom)       ${P_BWH}jq${P_RES}      - JSON processor         ${P_BWH}7zz${P_RES}       - 7-Zip cli
+  ${P_BWH}duf${P_RES}       - Disk usage 'du'      ${P_BWH}pandoc${P_RES}  - Any text processor     ${P_BWH}eva${P_RES}       - Calculator
+  ${P_BWH}y${P_RES}         - Files (yazi)         ${P_BWH}gron${P_RES}    - JSON to list assign    ${P_BWH}fd${P_RES}        - 'find'
+  ${P_BWH}procs${P_RES}     - Processes 'ps'       ${P_BWH}xq${P_RES}      - XML processor          ${P_BWH}fend${P_RES}      - Unit conversion
+  ${P_BWH}tldr${P_RES}      - Extra help           ${P_BWH}yq${P_RES}      - YAML processor         ${P_BWH}gh${P_RES}        - GitHub cli
+                                                                    ${P_BWH}git${P_RES}       - Version control
+  ${P_YEL} NETWORK                        ${P_YEL}󰊪 VISUALIZERS                    ${P_BWH}grex${P_RES}      - RegEx generator
+  ${P_YEL}---------                        ${P_YEL}-------------                    ${P_BWH}hyperfine${P_RES} - Benchmark
+  ${P_BWH}bandwhich${P_RES} - Network use          ${P_BWH}jless${P_RES}   - JSON tree              ${P_BWH}rg${P_RES}        - 'grep' (ripgrep)
+  ${P_BWH}doggo${P_RES}     - DNS look-up          ${P_BWH}tokei${P_RES}   - Code metrics           ${P_BWH}t-rec${P_RES}     - Terminal recorder
+  ${P_BWH}gping${P_RES}     - Latency graph        ${P_BWH}tv${P_RES}      - csv (tidy-viewer)      ${P_BWH}unrar${P_RES}     - Handle .rar format
   "
 }
 
@@ -138,16 +138,16 @@ function super-cd {
   local next_dir=""
   if [[ $# -eq 0 ]]; then
     # cd with no parameter should change to $HOME dir
-    \builtin cd ~ || die "${C_RED}Error${C_RES}: Failed to change current directory to '$HOME'" || return
+    \builtin cd ~ || die "${P_RED}Error${P_RES}: Failed to change current directory to '$HOME'" || return
   elif [[ "$1" == "-/" ]]; then
     # cd with a '-' parameter plus a '/' at the end skips the "super-cd
     # previous dir" mechanism
-    \builtin cd - || die "${C_RED}Error${C_RES}: Failed to change current directory to the previous one" || return
+    \builtin cd - || die "${P_RED}Error${P_RES}: Failed to change current directory to the previous one" || return
   elif [[ "$1" == "-" ]]; then
     # cd with a '-' parameter allows the user to select the previous directory
     # among the dirstack plus the zoxide last accessed
     if ! command -v fzf >/dev/null 2>&1; then
-      die "${C_RED}Error${C_RES}: fzf is required for this operation"
+      die "${P_RED}Error${P_RES}: fzf is required for this operation"
       return 1
     fi
     typeset -a prev_stack
@@ -158,7 +158,7 @@ function super-cd {
     prev_stack=(${(u)prev_stack[@]})
 
     if [[ "${#prev_stack[@]}" -eq 0 ]]; then
-      die "${C_YEL}No previous directories available${C_RES}"
+      die "${P_YEL}No previous directories available${P_RES}"
       return 1
     elif [[ "${#prev_stack[@]}" -gt 1 ]]; then
       # Inherit FZF_DEFAULT_OPTS (glyph prompt, colours, binds) so this matches
@@ -172,17 +172,17 @@ function super-cd {
       next_dir="${prev_stack[1]}"
     fi
     if [[ -n "$next_dir" ]]; then
-      \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
+      \builtin cd "$next_dir" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
     fi
   elif [[ "$1" == ".." ]]; then
     # cd with a '..' parameter allows the user to select anyone of the parent
     # directories to go
     if [[ "$PWD" == "/" ]]; then
-      die "${C_YEL}Already at root directory${C_RES}"
+      die "${P_YEL}Already at root directory${P_RES}"
       return 0
     fi
     if ! command -v fzf >/dev/null 2>&1; then
-      die "${C_RED}Error${C_RES}: fzf is required for this operation"
+      die "${P_RED}Error${P_RES}: fzf is required for this operation"
       return 1
     fi
     typeset -a dir_stack
@@ -196,7 +196,7 @@ function super-cd {
     next_dir=$(print -l -- "${dir_stack[@]}" | fzf --preview-window=hidden)
     next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
     if [[ -n "$next_dir" ]]; then
-      \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
+      \builtin cd "$next_dir" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
     fi
   elif [[ ${#all_dots} -gt 2 ]] && [[ ${#1} -eq ${#all_dots} ]]; then
     # cd with 3 or more consecutive '.' characters as parameter will traverse
@@ -206,19 +206,19 @@ function super-cd {
     for ((i = 2; i < ${#1}; i++)); do
       next_dir="${next_dir}../"
     done
-    \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
+    \builtin cd "$next_dir" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
   elif [[ -d "$*" ]]; then
     # when the parameter given to `super-cd` is a known directory, we use the
     # builtin `cd` command to go there
-    \builtin cd "$@" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$*'" || return
+    \builtin cd "$@" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$*'" || return
   else
     # when the given parameter was not match by any of the previous criterias,
     # we fallback to use Zoxide to try to change directories
     next_dir="$(\command zoxide query --exclude "$PWD" -- "$@" 2>/dev/null)"
     if [[ -n "$next_dir" ]]; then
-      \builtin cd "$next_dir" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$next_dir'" || return
+      \builtin cd "$next_dir" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
     else
-      die "${C_RED}Error${C_RES}: Failed to change current directory to '$*'"
+      die "${P_RED}Error${P_RES}: Failed to change current directory to '$*'"
       return 1
     fi
   fi
@@ -227,7 +227,7 @@ compdef _directories super-cd
 
 # Helper function to create a directory and enter on it with one command
 function take() {
-  [[ $# == 1 ]] && mkdir -p -- "$1" && cd -- "$1" || die "${C_RED}Error${C_RES}: Failed to change current directory to '$1'" || return
+  [[ $# == 1 ]] && mkdir -p -- "$1" && cd -- "$1" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$1'" || return
 }
 compdef _directories take
 
@@ -276,7 +276,7 @@ function y() {
   rm -f -- "$tmp"
   if [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
     \builtin cd -- "$cwd" ||
-      die "${C_RED}Error${C_RES}: Failed to change current directory to '$cwd'" ||
+      die "${P_RED}Error${P_RES}: Failed to change current directory to '$cwd'" ||
       return
   fi
 }
