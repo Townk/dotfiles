@@ -8,16 +8,15 @@ Describe 'fzf-tab-rich.zsh'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  Describe 'ftb_rich::_esc'
-    It 'converts a hex color to a truecolor escape'
-      esc() { ftb_rich::_esc '#f9e2af'; }
-      When call esc
-      The output should equal "$(printf '\033[38;2;249;226;175m')"
-    End
-    It 'emits nothing for an invalid hex'
-      esc() { ftb_rich::_esc 'nope'; }
-      When call esc
-      The output should equal ''
+  # C1 consolidation: ftb_rich::_esc was the xdigit-guarded copy; its guard was
+  # folded into the canonical theme::sgr_fg and this module now builds its
+  # colors through it (see theme-common_spec for the conversion + guard
+  # characterization). Confirm the redirect: the value color is the canonical
+  # escape for C_HEX_BLUE.
+  Describe 'color helper (via theme::sgr_fg)'
+    It 'builds the value color from C_HEX_BLUE through the canonical'
+      When call test "$_ftb_rich_value" = "$(theme::sgr_fg "$C_HEX_BLUE")"
+      The status should be success
     End
   End
 

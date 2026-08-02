@@ -234,3 +234,45 @@ Describe 'panel coverage vs the zellij which-key labels'
     The output should equal ""
   End
 End
+
+# C1 consolidation: mux-whichkey's _fg/_bg used zsh slices ${1[2,3]} that
+# REQUIRE a leading '#'. _fg now keeps its FG_MEMO cache as a thin wrapper
+# AROUND theme::sgr_fg (and _bg around theme::sgr_bg), which strip an optional
+# '#' — so a bare hex converts correctly (the latent slice bug) and a
+# #-prefixed hex is unchanged. Lift the function out of the script (the same
+# sed technique the origin-expand test uses) and drive it directly.
+Describe 'mux-whichkey _fg / _bg (C1)'
+  W="$PWD/home/dot_config/mux/scripts/executable_mux-whichkey"
+
+  # e5bf7b -> 229;191;123
+  fg() {
+    ARG="$1" WKBIN="$W" zsh -c '
+      source home/dot_local/lib/theme-common.zsh
+      typeset -A FG_MEMO
+      eval "$(sed -n "/^_fg()/,/^}/p" "$WKBIN")"
+      _fg "$ARG"; print -rn -- "$REPLY"'
+  }
+  bg() {
+    # _bg is a single-line function, so lift just that line (a ,/^}/ range
+    # would run on past it to the next closing brace).
+    ARG="$1" WKBIN="$W" zsh -c '
+      source home/dot_local/lib/theme-common.zsh
+      eval "$(sed -n "/^_bg()/p" "$WKBIN")"
+      _bg "$ARG"; print -rn -- "$REPLY"'
+  }
+
+  It 'converts a bare (no-#) hex correctly through the memo wrapper'
+    When call fg 'e5bf7b'
+    The output should equal "$(printf '\033[38;2;229;191;123m')"
+  End
+
+  It 'converts a #-prefixed hex to the same foreground escape'
+    When call fg '#e5bf7b'
+    The output should equal "$(printf '\033[38;2;229;191;123m')"
+  End
+
+  It 'converts a bare (no-#) hex for the background'
+    When call bg 'e5bf7b'
+    The output should equal "$(printf '\033[48;2;229;191;123m')"
+  End
+End

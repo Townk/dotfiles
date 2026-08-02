@@ -118,6 +118,8 @@
 # base. Source it relative to THIS file.
 _pick_common_self="${(%):-%x}"
 source "$(dirname "$_pick_common_self")/common.zsh"
+# theme::sgr_fg (the canonical hex→SGR helper pick::colorize_hints uses).
+source "$(dirname "$_pick_common_self")/theme-common.zsh"
 unset _pick_common_self
 
 require_cmd fzf
@@ -325,12 +327,6 @@ pick::hints() {
   print -rn -- "$out"
 }
 
-# "#rrggbb" -> a 24-bit set-foreground SGR.
-pick::_sgr_fg() {
-  local h="${1#\#}"
-  printf '\e[38;2;%d;%d;%dm' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
-}
-
 # Colorize a keybind-hint line for pty-frame's footer: the key chord(s) before
 # each NBSP key/label gap in the bright key color, the labels + separators in
 # the hint color. Sets only the foreground, so pty-frame's mantle footer
@@ -342,8 +338,8 @@ pick::colorize_hints() {
   [[ -n "$s" ]] || return 0
   local NBSP=$'\u00a0'
   local key_sgr lbl_sgr
-  key_sgr="$(pick::_sgr_fg "$C_ROLE_UI_KEY")"
-  lbl_sgr="$(pick::_sgr_fg "$C_ROLE_UI_HINT")"
+  key_sgr="$(theme::sgr_fg "$C_ROLE_UI_KEY")"
+  lbl_sgr="$(theme::sgr_fg "$C_ROLE_UI_HINT")"
   # Split on the middle-dot separator itself (the surrounding spaces stay inside
   # each item), so this is robust to BOTH the wide "  ·  " and the tight " · "
   # separators different pickers use (e.g. the workspace picker's long selector

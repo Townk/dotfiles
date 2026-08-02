@@ -13,13 +13,12 @@
 # lookups still resolve.
 
 # ── color helper ─────────────────────────────────────────────────────────────
-# ftb_rich::_esc <#rrggbb> -> truecolor SGR escape (nothing if hex is invalid).
-ftb_rich::_esc() {
-  emulate -L zsh -o extended_glob
-  local h=${1#\#}
-  [[ $h == [[:xdigit:]](#c6) ]] || return 0
-  print -rn -- $'\e['"38;2;$((16#${h[1,2]}));$((16#${h[3,4]}));$((16#${h[5,6]}))m"
-}
+# The hex→SGR conversion (with the xdigit guard that used to live here as
+# ftb_rich::_esc) is now the canonical theme::sgr_fg (C1). Source it relative to
+# this file; idempotent if completion.sh already pulled theme-common in.
+_ftb_rich_self="${(%):-%x}"
+source "${_ftb_rich_self:h}/theme-common.zsh"
+unset _ftb_rich_self
 
 typeset -g FTB_RICH_RESET=$'\e[0m'
 
@@ -48,13 +47,13 @@ typeset -gA _ftb_rich_color=()
 () {
   local t
   for t in ${(k)_ftb_rich_glyph}; do
-    _ftb_rich_color[$t]="$(ftb_rich::_esc "${(P)_ftb_rich_role[$t]}")"
+    _ftb_rich_color[$t]="$(theme::sgr_fg "${(P)_ftb_rich_role[$t]}")"
   done
 }
 
 # Value (candidate) color = blue; description half = muted grey.
-typeset -g _ftb_rich_value="$(ftb_rich::_esc "${C_HEX_BLUE:-}")"
-typeset -g _ftb_rich_dim="$(ftb_rich::_esc "${C_ROLE_UI_MUTED:-}")"
+typeset -g _ftb_rich_value="$(theme::sgr_fg "${C_HEX_BLUE:-}")"
+typeset -g _ftb_rich_dim="$(theme::sgr_fg "${C_ROLE_UI_MUTED:-}")"
 
 # ── display styling ───────────────────────────────────────────────────────────
 # zsh renders a described match as "value<pad>-- description" (-- is the default

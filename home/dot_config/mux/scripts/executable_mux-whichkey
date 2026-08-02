@@ -47,6 +47,9 @@ source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/mode.zsh"
 # keypress into ONE stack operation and exits; the stack decides the key
 # table and the driver below decides whether a panel comes back.
 source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/stack.zsh"
+# theme::sgr_fg/theme::sgr_bg — the canonical hex→SGR pair (C1). Neither
+# mux/mode.zsh nor mux/stack.zsh pulls in theme-common, so source it here.
+source "${MUX_LIB_DIR:-$HOME/.local/lib}/theme-common.zsh"
 PAD=""
 [[ -r "$DATA" ]] || exit 0
 
@@ -78,14 +81,17 @@ PADDING=(${(s:,:)CFG[padding]})
 SEP="${CFG[sep]}"
 RESET=$'\e[0m'
 # -> REPLY, memoised: a frame paints ~20 rows and the icon colours repeat.
+# The conversion goes through the canonical theme::sgr_fg/_bg (C1) — which also
+# strips an optional '#', fixing the old ${1[2,3]} slice's bare-hex mis-parse;
+# FG_MEMO stays as a thin cache around it.
 typeset -A FG_MEMO
 _fg() {
   REPLY="${FG_MEMO[$1]:-}"
   [[ -n "$REPLY" ]] && return 0
-  REPLY=$'\e[38;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m"
+  REPLY="$(theme::sgr_fg "$1")"
   FG_MEMO[$1]="$REPLY"
 }
-_bg() { REPLY=$'\e[48;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
+_bg() { REPLY="$(theme::sgr_bg "$1")" }
 _bg ${CFG[bg]};      BG="$REPLY"
 _fg ${CFG[border]};  C_BORDER="$REPLY"
 _fg ${CFG[key]};     C_KEY="$REPLY"

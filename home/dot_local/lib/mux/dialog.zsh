@@ -20,6 +20,12 @@
 # toggles) passes the cell count as the second argument to ::field and draws
 # into that reserve itself.
 
+# theme::sgr_fg/theme::sgr_bg — the canonical hex→SGR pair (C1). Resolved
+# relative to this file (../theme-common.zsh); idempotent if already loaded.
+_mux_dialog_self="${(%):-%x}"
+source "${_mux_dialog_self:h:h}/theme-common.zsh"
+unset _mux_dialog_self
+
 # ---- geometry (zj-hud's PANE_WIDTH/PANE_HEIGHT and column constants) -------
 typeset -g MD_W=40 MD_H=3
 typeset -g MD_GLYPH_COL=2 MD_INPUT_COL=5 MD_RIGHT_INSET=5
@@ -45,20 +51,17 @@ mux_dialog::init() {
   " "$theme_json" 2>/dev/null)}") || c=()
   (( ${#c} == 7 )) || return 1
 
-  typeset -g MD_BG="$(mux_dialog::_bg ${c[1]})"
-  typeset -g MD_THEME_BG="$(mux_dialog::_bg ${c[2]})"
-  typeset -g MD_INPUT_BG="$(mux_dialog::_bg ${c[3]})"
-  typeset -g MD_ACCENT_FG="$(mux_dialog::_fg ${c[4]})"
-  typeset -g MD_ACCENT_BG="$(mux_dialog::_bg ${c[4]})"
-  typeset -g MD_WHITE_FG="$(mux_dialog::_fg ${c[5]})"
-  typeset -g MD_ON_FG="$(mux_dialog::_fg ${c[6]})"
-  typeset -g MD_OFF_FG="$(mux_dialog::_fg ${c[7]})"
-  typeset -g MD_BOX_FG="$(mux_dialog::_fg ${c[3]})"
+  typeset -g MD_BG="$(theme::sgr_bg ${c[1]})"
+  typeset -g MD_THEME_BG="$(theme::sgr_bg ${c[2]})"
+  typeset -g MD_INPUT_BG="$(theme::sgr_bg ${c[3]})"
+  typeset -g MD_ACCENT_FG="$(theme::sgr_fg ${c[4]})"
+  typeset -g MD_ACCENT_BG="$(theme::sgr_bg ${c[4]})"
+  typeset -g MD_WHITE_FG="$(theme::sgr_fg ${c[5]})"
+  typeset -g MD_ON_FG="$(theme::sgr_fg ${c[6]})"
+  typeset -g MD_OFF_FG="$(theme::sgr_fg ${c[7]})"
+  typeset -g MD_BOX_FG="$(theme::sgr_fg ${c[3]})"
   typeset -g MD_RESET=$'\e[0m'
 }
-
-mux_dialog::_fg() { print -rn -- $'\e[38;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
-mux_dialog::_bg() { print -rn -- $'\e[48;2;'"$(( 16#${1[2,3]} ));$(( 16#${1[4,5]} ));$(( 16#${1[6,7]} ))m" }
 
 # ---- primitives ------------------------------------------------------------
 mux_dialog::at()  { print -rn -- $'\e['"$1;$2H" }   # 1-indexed row;col

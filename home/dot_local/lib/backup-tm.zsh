@@ -5,6 +5,8 @@
 
 _bkp_tm_self="${(%):-%x}"
 source "$(dirname "$_bkp_tm_self")/backup.zsh"
+# theme::sgr_fg/theme::sgr_bg — the canonical hex→SGR pair bkp::tm::_sgr delegates to.
+source "$(dirname "$_bkp_tm_self")/theme-common.zsh"
 unset _bkp_tm_self
 
 : ${BKP_TM_SESSIONS:="${BKP_STATE_DIR:-$HOME/.local/state/terminal-backup}/sessions"}
@@ -327,13 +329,16 @@ bkp::tm::kill_lens() {
 }
 
 # bkp::tm::_sgr <fg|bg> <#rrggbb>
-# Truecolor SGR from a palette hex var — emits nothing when stdout isn't
-# being styled (C_RES empty), so captured output stays plain.
+# Truecolor SGR from a palette hex var, via the canonical theme::sgr_fg/_bg
+# (C1). Keeps the extra capture-gate: emits nothing when stdout isn't being
+# styled (C_RES empty), so captured output stays plain.
 bkp::tm::_sgr() {
   [[ -n "$C_RES" ]] || return 0
-  local h="${2#\#}" mode=38
-  [[ "$1" == bg ]] && mode=48
-  printf '\e[%d;2;%d;%d;%dm' "$mode" "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
+  if [[ "$1" == bg ]]; then
+    theme::sgr_bg "$2"
+  else
+    theme::sgr_fg "$2"
+  fi
 }
 
 # bkp::tm::timeline_render <session> <height> [<width>] [<focused 0|1>]
