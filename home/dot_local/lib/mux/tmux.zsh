@@ -130,16 +130,13 @@ _mux_tx_attached_sessions() {
 # WezTerm pane hosting a tmux client (output contract mirrors
 # zellij_wezterm_sessions). Mapping: tmux client tty (list-clients) ↔ WezTerm
 # pane tty (wezterm cli list). Prints nothing when WezTerm isn't reachable,
-# so callers degrade gracefully; WEZTERM_BIN overrides.
+# so callers degrade gracefully; the pane probe is mux::wezterm_panes.
 _mux_tx_client_sessions() {
-  local wez="${WEZTERM_BIN:-/opt/homebrew/bin/wezterm}"
-  command -v "$wez" >/dev/null 2>&1 || wez=wezterm
   local clients
   clients=$("$(_mux_tx_bin)" list-clients -F '#{client_tty}	#{session_name}' 2>/dev/null)
   [[ -n "$clients" ]] || return 0
   local tty wid pane ctty sess
-  env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE "$wez" cli --no-auto-start list --format json 2>/dev/null |
-    jq -r '.[] | [(.tty_name // ""), (.window_id|tostring), (.pane_id|tostring)] | @tsv' 2>/dev/null |
+  mux::wezterm_panes |
     while IFS=$'\t' read -r tty wid pane; do
       [[ -n "$tty" && "$tty" != null ]] || continue
       printf '%s\n' "$clients" | while IFS=$'\t' read -r ctty sess; do

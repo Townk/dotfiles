@@ -569,17 +569,14 @@ _mux_zj_rename_session() {
 #   window, and which WezTerm window/pane hosts each. The pane's tty (from
 #   `wezterm cli list`) leads to its zellij client PID via `ps -t`, which
 #   resolve_session maps to a session name. Prints nothing when WezTerm isn't
-#   reachable (e.g. on Ghostty), so callers degrade gracefully. WEZTERM_BIN
-#   overrides the binary.
+#   reachable (e.g. on Ghostty), so callers degrade gracefully. The pane probe
+#   itself (WEZTERM_BIN override, the env -u scrub) is mux::wezterm_panes.
 zellij_wezterm_sessions() {
-  local wez tty wid pane cpid s snap
-  wez="${WEZTERM_BIN:-/opt/homebrew/bin/wezterm}"
-  command -v "$wez" >/dev/null 2>&1 || wez=wezterm
+  local tty wid pane cpid s snap
   # One ps+lsof pass shared across every pane (the lsof is what's slow); without
   # this, resolve_session would re-snapshot per pane and cost N× as much.
   snap="$(_zj_socket_snapshot)" || return 0
-  env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE "$wez" cli --no-auto-start list --format json 2>/dev/null |
-    jq -r '.[] | [(.tty_name // ""), (.window_id|tostring), (.pane_id|tostring)] | @tsv' 2>/dev/null |
+  mux::wezterm_panes |
     while IFS="$(printf '\t')" read -r tty wid pane; do
       [ -n "$tty" ] && [ "$tty" != null ] || continue
       cpid=$(ps -t "${tty#/dev/}" -o pid=,comm= 2>/dev/null | awk '$2 ~ /zellij/ {print $1; exit}')

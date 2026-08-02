@@ -5,21 +5,15 @@
 # Port of quicklaunch.wezterm's plugin/quick-launch/utils.lua
 # (cmd_prefix + make_spawn_command + the split/layout logic).
 
-ql_zellij_bin() {
-  local z
-  z="${ZELLIJ_BIN:-${commands[zellij]:-}}"
-  [[ -n "$z" && -x "$z" ]] && {
-    print -r -- "$z"
-    return 0
-  }
-  for z in /opt/homebrew/bin/zellij /usr/local/bin/zellij "$HOME/.local/share/mise/shims/zellij" "$HOME/.local/bin/zellij"; do
-    [[ -x "$z" ]] && {
-      print -r -- "$z"
-      return 0
-    }
-  done
-  return 1
-}
+# The dependency-free mux layer, for the shared zellij binary resolver. Sourced
+# here (this is the first quick-launch lib that needs a multiplexer path) so
+# both this file and dispatch.zsh — which calls ql_zellij_bin at source time —
+# see mux::bin.
+source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+
+# ql_zellij_bin — the zellij binary, via the shared resolver (honours
+# $ZELLIJ_BIN, then command -v, then the known install dirs).
+ql_zellij_bin() { mux::bin zellij; }
 
 # Read a JSON array's `.args[]` into a bash array named by $1 (nameref-free
 # so it works on bash 3.2: we assign to the caller's variable via printf).

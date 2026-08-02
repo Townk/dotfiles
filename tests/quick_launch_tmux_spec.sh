@@ -30,6 +30,9 @@ EOF
 
     # Minimal QL world: config/command libs loaded for the shared helpers.
     export SCRIPT_DIR="$TEST_TMP"
+    # command.zsh now sources mux-bootstrap for the shared mux::bin resolver;
+    # point it at the repo copy so the suite stays hermetic (not the deployed one).
+    export MUX_LIB="$PWD/home/dot_local/lib"
     source home/dot_config/mux/scripts/lib/config.zsh
     source home/dot_config/mux/scripts/lib/command.zsh
     source home/dot_config/mux/scripts/lib/dispatch.zsh
@@ -38,7 +41,7 @@ EOF
   }
   cleanup() {
     rm -rf "$TEST_TMP"
-    unset MUX_TMUX_BIN STUB_SESSIONS SCRIPT_DIR
+    unset MUX_TMUX_BIN STUB_SESSIONS SCRIPT_DIR MUX_LIB
     unset TERMINAL_LOCATION_ONBOARD_MAP TERMINAL_LOCATION_SSH_CONFIG_DIR
   }
   BeforeEach 'setup'

@@ -154,6 +154,47 @@ mux::session_is_remote() {
   [[ "$v" == SSH_CONNECTION=* ]]
 }
 
+# --- binary resolution & wezterm probe (spec §3, C4) -----------------------
+#
+# The ONE public entry to the two backend resolvers, replacing the hand-rolled
+# install-dir searches that had drifted across standalone scripts (zellij-modal,
+# quick-launch's command.zsh, edit-terminal-config — the last of which was
+# DEGRADED, missing the mise-shim and /usr/local tiers).
+
+# mux::bin <zellij|tmux> — absolute path to that multiplexer binary, or non-zero
+# when none is found. Delegates to the backend resolvers, which honour
+# $ZELLIJ_BIN / $MUX_TMUX_BIN, then $PATH (command -v), then the known install
+# dirs (homebrew, /usr/local, the mise shim, ~/.local/bin — plus /usr/bin for
+# tmux). That last-resort list is why the .zshrc autostart can find its binary
+# BEFORE it extends $PATH or activates mise.
+mux::bin() {
+  case "${1:-}" in
+    zellij) _mux_zj_bin ;;
+    tmux)   _mux_tx_bin ;;
+    *) return 2 ;;
+  esac
+}
+
+# mux::wezterm_panes — one TSV row per WezTerm pane: "<tty>\t<window_id>\t<pane_id>".
+# Backend-neutral: both client-session mappers (zellij_wezterm_sessions and
+# _mux_tx_client_sessions) enumerate WezTerm panes this way, then join the tty
+# against their own client list. The `env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE`
+# scrub is REQUIRED — a `cli list` made from inside a WezTerm pane targets that
+# pane's own mux domain, returning just the local pane, unless those vars are
+# cleared so it addresses the GUI. Prints nothing when WezTerm is unreachable
+# (Ghostty, headless), so callers degrade gracefully. WEZTERM_BIN overrides.
+#
+# Its callers live in mux/zellij.zsh and mux/tmux.zsh, both of which are sourced
+# by THIS file above mux::* — and both are only ever reached through
+# mux::client_sessions (defined here), so mux::wezterm_panes is always defined
+# by the time either fires.
+mux::wezterm_panes() {
+  local wez="${WEZTERM_BIN:-/opt/homebrew/bin/wezterm}"
+  command -v "$wez" >/dev/null 2>&1 || wez=wezterm
+  env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE "$wez" cli --no-auto-start list --format json 2>/dev/null |
+    jq -r '.[] | [(.tty_name // ""), (.window_id|tostring), (.pane_id|tostring)] | @tsv' 2>/dev/null
+}
+
 # --- session / screen (spec §3) --------------------------------------------
 # With a client PID the backend is read from that PROCESS (mux::backend_for_pid):
 # the callers that pass one — WezTerm's open-uri / nested-session hooks,

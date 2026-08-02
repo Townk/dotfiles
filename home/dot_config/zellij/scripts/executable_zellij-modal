@@ -51,23 +51,12 @@
 
 set -euo pipefail
 
-resolve_zellij_bin() {
-  local z
-  z="${commands[zellij]:-}"
-  [[ -n "$z" && -x "$z" ]] && {
-    print -r -- "$z"
-    return 0
-  }
-  for z in /opt/homebrew/bin/zellij /usr/local/bin/zellij "$HOME/.local/share/mise/shims/zellij" "$HOME/.local/bin/zellij"; do
-    [[ -x "$z" ]] && {
-      print -r -- "$z"
-      return 0
-    }
-  done
-  return 1
-}
+# The dependency-free mux layer: mux::bin is the single install-dir resolver the
+# modal scripts share (it honours $ZELLIJ_BIN, then command -v, then the known
+# install locations — homebrew, /usr/local, the mise shim, ~/.local/bin).
+source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
 
-ZELLIJ_BIN="${ZELLIJ_BIN:-$(resolve_zellij_bin || true)}"
+ZELLIJ_BIN="${ZELLIJ_BIN:-$(mux::bin zellij || true)}"
 
 title=""
 inject=0

@@ -3,11 +3,14 @@
 set -eu -o pipefail
 
 # 1. Dynamic path lookups for cross-platform compatibility
-ZELLIJ=${commands[zellij]:-/opt/homebrew/bin/zellij}
 NVIM=${commands[nvim]:-${commands[vim]:-vi}}
 
-# The dependency-free mux layer: the canonical remote-detection pair lives here.
+# The dependency-free mux layer: the canonical remote-detection pair AND the
+# shared zellij binary resolver (mux::bin) live here. The old inline default
+# (`${commands[zellij]:-/opt/homebrew/bin/zellij}`) was degraded — it missed the
+# mise-shim and /usr/local tiers the resolver covers.
 source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+ZELLIJ="$(mux::bin zellij || true)"
 
 # Inside tmux TERM_PROGRAM lies (= "tmux"); the outer terminal's identity is
 # kept in the tmux SESSION env by update-environment (see tmux.conf — the
