@@ -14,6 +14,10 @@ kind="${1:-activity}"
 win="${2:-}"
 TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
 
+# Canonical session-env probe (mux::session_is_remote) from the dependency-free
+# mux layer; tolerant so a missing lib never blocks a notification.
+source "$HOME/.local/lib/mux-bootstrap.zsh" 2>/dev/null || true
+
 # The BELL is gated; the alarms are not. They are different in kind:
 #
 #   activity / silence  are ALARMS the user armed by hand (`⌥w` → "alarm on
@@ -36,12 +40,12 @@ if [[ "$kind" == bell ]]; then
 fi
 
 # Skipped over ssh even when enabled: the OSD renders on the tmux HOST's
-# screen. Note `-SSH_CONNECTION` (a leading dash) is what a LOCAL session
-# reports — only the `SSH_CONNECTION=` prefix means a remote client.
+# screen. The ssh truth is the attached client's session env; probe it via the
+# shared helper, pinned to THIS client's session (list-clients) so the
+# resolution is preserved exactly.
 sess="$("$TMUX_BIN" list-clients -F '#{client_session}' 2>/dev/null | head -1)" || sess=""
-if [[ -n "$sess" ]]; then
-  v="$("$TMUX_BIN" show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""
-  [[ "$v" == SSH_CONNECTION=* ]] && exit 0
+if [[ -n "$sess" ]] && mux::session_is_remote "$sess"; then
+  exit 0
 fi
 
 case "$kind" in

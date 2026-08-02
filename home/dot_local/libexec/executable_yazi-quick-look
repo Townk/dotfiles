@@ -70,6 +70,9 @@ stage_for_panel() {
 main() {
   (( $# )) || return 0
 
+  # Local GUI only (a remote client can't drive LaunchServices). The negated
+  # canonical remote-detection triple (== mux::is_remote, mux-bootstrap.zsh),
+  # inlined: this dispatcher runs before that layer is in scope.
   if [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" \
         && "$OSTYPE" == darwin* && -d "$QL_APP" ]]; then
     # Replace any panel already up instead of stacking one instance per

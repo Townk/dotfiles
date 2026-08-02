@@ -337,6 +337,10 @@ if [ "${1:-}" = "--content" ]; then
     cat "$content_file"
   } > "$payfile"
 
+  # Local-vs-remote: the canonical remote-detection triple (the identity of
+  # mux::is_remote in mux-bootstrap.zsh). Inlined because this is POSIX /bin/sh
+  # and cannot source the zsh lib; keep it in sync (all three vars, incl.
+  # SSH_TTY). Same test recurs below and in manifest_port().
   if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
     content_port=2489
   else

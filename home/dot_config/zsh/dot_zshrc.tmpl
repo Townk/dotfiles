@@ -49,7 +49,7 @@ _zsh_should_autoattach_mux() {
   [[ -n "${TERM_PROGRAM:-}" ]] && return 0
   [[ -n "${WEZTERM_PANE:-}" || -n "${WEZTERM_UNIX_SOCKET:-}" ]] && return 0
   [[ -n "${GHOSTTY_RESOURCES_DIR:-}" ]] && return 0
-  [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]] && return 0
+  mux::is_remote && return 0   # canonical SSH triple (mux-bootstrap.zsh, sourced above)
 
   return 1
 }

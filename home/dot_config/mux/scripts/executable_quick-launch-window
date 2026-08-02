@@ -178,6 +178,12 @@ fi
 # SSH_CONNECTION (tmux default list) and TERM_PROGRAM (added Phase 0) from
 # each attaching client, making it the attach-time truth (Mode B find,
 # 2026-07-24; same pattern as edit-terminal-config).
+#
+# This hardened SSH_CONNECTION probe is the canonical implementation extracted
+# to mux::session_is_remote (mux-bootstrap.zsh). It is kept inline here — rather
+# than a call — because this runs under `set -eu` and the TERM_PROGRAM lookup
+# below needs the same pane-pinned target ($_qlw_t) anyway, so folding both
+# through the helper would duplicate the resolution. Keep the two in sync.
 _qlw_ssh="${SSH_CONNECTION:-}${SSH_CLIENT:-}"
 _qlw_term="${TERM_PROGRAM:-}"
 if [[ -n "${TMUX:-}" ]]; then

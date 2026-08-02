@@ -80,6 +80,8 @@ done
 
 # Colors / logging come from the shared base (C_*, log_warn/die).
 source "$HOME/.local/lib/common.zsh"
+# Canonical remote detection (mux::is_remote): the dependency-free mux layer.
+source "$HOME/.local/lib/mux-bootstrap.zsh"
 
 # Flags forwarded to `system-package sync`, so one --verbose covers the whole
 # run rather than only the steps this script drives itself.
@@ -559,7 +561,7 @@ run_step "brew: cleaning artifacts" brew cleanup -q --prune=all \
 # SKIP over SSH: the repair only matters for a LOCAL Touch ID / GUI session, and
 # keeping it off remote/notty runs avoids any chance of a pinentry GUI on a
 # headless desktop. Leave it to the next interactive run.
-if [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]]; then
+if ! mux::is_remote; then
   reassert_pinentry_mac_backend
 fi
 

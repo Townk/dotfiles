@@ -294,6 +294,10 @@ fi
 # (a VNC/local attach is local; an ssh attach is remote). zj-hud checks
 # its server's own env instead, which is static per server — per-attach
 # is the intended semantic here (as-built deviation, user-ratified).
+# The session-env probe canonicalized as mux::session_is_remote "$sess"
+# (mux-bootstrap.zsh). Kept inline here: this is a tmux `#()` job that must
+# NEVER block or error (see the note below), so it avoids sourcing an extra lib
+# on the hot repaint path. Keep it in sync with the shared helper.
 is_ssh=0
 if [[ -n "$sess" ]]; then
   v="$("$TMUX_BIN" show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""

@@ -197,6 +197,10 @@ self_host() {
 # CLIPBOARD_BRIDGE_PORT (default 2490, the reverse-tunneled peer bridge --
 # same var the plain-paste G frame below honors).
 manifest_port() {
+  # Local-vs-remote: the canonical remote-detection triple (the identity of
+  # mux::is_remote in mux-bootstrap.zsh). Inlined because this is POSIX /bin/sh
+  # and cannot source the zsh lib; keep it in sync (all three vars, incl.
+  # SSH_TTY). The same test recurs at the other bridge-port decisions below.
   if [ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
     echo 2489
   else

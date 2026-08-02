@@ -115,15 +115,19 @@ fi
 # same rule (and the same session-env probe) tmux-alert-notify uses.
 osd=""
 if source "$HOME/.local/lib/common.zsh" 2>/dev/null; then
+  source "$HOME/.local/lib/mux-bootstrap.zsh" 2>/dev/null || true
   osd="${HS:-/opt/homebrew/bin/hs}"
   [[ -x "$osd" ]] || osd="$(command -v hs 2>/dev/null || true)"
   [[ -n "$osd" && -x "$osd" ]] || osd=""
 fi
 if [[ -n "$osd" && -n "${TMUX:-}" ]]; then
+  # A remote client can't see the OSD (it renders on the tmux HOST's screen),
+  # so fall back to the status line. Shared session-env probe pinned to THIS
+  # client's session (list-clients), preserving copy-pwd's own resolution:
+  # mux::session_is_remote (mux-bootstrap.zsh).
   sess="$(tmux list-clients -F '#{client_session}' 2>/dev/null | head -1)" || sess=""
-  if [[ -n "$sess" ]]; then
-    v="$(tmux show-environment -t "$sess" SSH_CONNECTION 2>/dev/null)" || v=""
-    [[ "$v" == SSH_CONNECTION=* ]] && osd=""
+  if [[ -n "$sess" ]] && mux::session_is_remote "$sess"; then
+    osd=""
   fi
 fi
 

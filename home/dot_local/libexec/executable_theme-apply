@@ -70,6 +70,9 @@ reload_tmux() {
 # unchanged; the host has no override file. The flag rides the staleness key so
 # switching local<->remote regenerates the effective files.
 remote=0
+# The canonical remote-detection triple (== mux::is_remote, mux-bootstrap.zsh);
+# kept inline here since theme-apply runs as a bare `zsh` with a sandboxed $HOME
+# and does not otherwise load that layer.
 [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] && remote=1
 
 # --- staleness: skip when inputs unchanged and outputs present ---------------
