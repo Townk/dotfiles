@@ -134,6 +134,24 @@ Describe 'system-package-common.zsh'
       The output should equal ""
     End
 
+    # Portability guard (regression: `system-package sync` died on the Linux
+    # dev-shell with "pkg::tmpset:local:4: bad option: -n"). The caller-write
+    # MUST NOT use a `local -n`/`typeset -n` nameref — namerefs are a zsh-5.9-ism
+    # and the dev-shell runs a leaner zsh that rejects `-n`. Keep it on the
+    # portable ${(P)name::=value} form. (This Mac's zsh supports namerefs, so
+    # only a source-level guard can catch a reintroduction here.)
+    It 'writes without a nameref so it is portable to pre-5.9 zsh'
+      # Match CODE only — strip full-line comments first, else this trips on the
+      # helper's own comment that names the `local -n` it deliberately avoids.
+      nameref_in_code() {
+        grep -vE '^[[:space:]]*#' home/dot_local/lib/system-package-common.zsh \
+          | grep -nE '(local|typeset|declare)[[:space:]]+-[A-Za-z]*n\b'
+      }
+      When call nameref_in_code
+      The status should be failure
+      The output should equal ""
+    End
+
     # Spot-check the uv backend actually routes its temp files through the
     # helper, with its var names preserved: the block it replaced created
     # exactly these five, and the sync body still reads them by name.

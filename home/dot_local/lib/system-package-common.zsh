@@ -113,17 +113,19 @@ fi
 
 # pkg::tmpset <var1> [var2 …]
 # Create one fresh temp file per named variable, assigning each path back to the
-# caller's variable by name (via a nameref — so the caller's existing `local`
-# declarations keep the values scoped to its function). Every created path is
-# added to the list the shared EXIT handler removes, so all of a process's temp
-# files are cleaned up on exit regardless of how many calls or backends ran.
+# caller's variable by name. The caller's existing `local` declarations keep the
+# values scoped to its function via zsh's dynamic scoping, so this writes with
+# ${(P)name::=value} (assign to the parameter NAMED by $name in the current
+# scope) rather than a `local -n` nameref: `local -n` is not portable — a leaner
+# zsh (the Linux dev-shell runs one that predates the 5.9 nameref) rejects `-n`
+# with "bad option: -n". Every created path is added to the list the shared EXIT
+# handler removes, so all of a process's temp files are cleaned up on exit
+# regardless of how many calls or backends ran.
 pkg::tmpset() {
   local __pkg_tmpset_name __pkg_tmpset_path
   for __pkg_tmpset_name in "$@"; do
     __pkg_tmpset_path=$(mktemp) || return 1
-    local -n __pkg_tmpset_ref="$__pkg_tmpset_name"
-    __pkg_tmpset_ref="$__pkg_tmpset_path"
-    unset -n __pkg_tmpset_ref
+    : ${(P)__pkg_tmpset_name::=$__pkg_tmpset_path}
     _pkg_tmpset_files+=("$__pkg_tmpset_path")
   done
 }
