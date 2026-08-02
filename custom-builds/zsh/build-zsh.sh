@@ -57,6 +57,13 @@ BINLINK="${ZSH_BUILD_BINLINK:-$HOME/.local/bin/zsh}"
 ZSH_BIN="$PREFIX/bin/zsh"
 STAMP="$PREFIX/.source-commit"
 
+# Staging + backup siblings of $PREFIX (same filesystem, so mv is atomic). The
+# new build is installed AND validated in $STAGE, and only then swapped over the
+# live $PREFIX; the previous tree is parked in $BACKUP for rollback. The live
+# $PREFIX is never removed before a validated replacement is in place.
+STAGE="${ZSH_BUILD_STAGE:-$PREFIX.new}"
+BACKUP="${ZSH_BUILD_BACKUP:-$PREFIX.old}"
+
 log() { printf '[zsh-build] %s\n' "$*"; }
 die() { printf '[zsh-build] error: %s\n' "$*" >&2; exit 1; }
 
@@ -102,6 +109,89 @@ ensure_login_shell() {
   chsh -s "$BINLINK" || log "chsh failed; set manually: chsh -s $BINLINK"
 }
 
+# install_stage <dir> — populate <dir> with a complete zsh prefix (bin/, lib/,
+# share/). Overriding `prefix` at install time redirects bindir/libdir/datadir
+# (they cascade from ${prefix} in the generated Makefile); the binary's baked
+# module_path/fpath still point at the FINAL $PREFIX, which is why
+# validate_stage injects the staged paths explicitly below. Must run from $REPO.
+# Split out as a seam so the atomic swap logic can be unit-tested with the heavy
+# real install stubbed.
+install_stage() {
+  local dir="$1"
+  make install.bin install.modules install.fns prefix="$dir" \
+    >"$BUILD_ROOT/install.log" 2>&1
+}
+
+# validate_stage <dir> — return 0 iff the zsh prefix at <dir> passes every
+# self-test (width / modules / functions). The staged binary was compiled with
+# the FINAL $PREFIX baked in, and zsh ignores the MODULE_PATH/FPATH *env* vars
+# for module_path, so we inject the staged module_path/fpath arrays directly in
+# the probe snippets. This same function re-validates the tree AFTER the swap
+# (natural, in-place paths) as the authoritative gate before the backup is
+# dropped.
+validate_stage() {
+  local dir="$1" bin="$1/bin/zsh"
+  [[ -x "$bin" ]] || return 1
+
+  local moddir fnroot fpdirs
+  moddir="$(find "$dir/lib/zsh" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)"
+  fnroot="$(find "$dir/share/zsh" -type d -name functions 2>/dev/null | head -1)"
+  [[ -n "$moddir" && -n "$fnroot" ]] || return 1
+  # install.fns groups functions into subdirs; fpath needs every one of them.
+  fpdirs="$(find "$fnroot" -type d 2>/dev/null | tr '\n' ' ')"
+
+  # width: pure ZLE metric, needs neither modules nor fpath.
+  [[ "$("$bin" -fc 's=${(#):-0x1FAC0}; print -rn -- ${(m)#s}' 2>/dev/null)" == 2 ]] \
+    || return 1
+  # modules: probe with the staged module_path injected.
+  "$bin" -fc "module_path=('$moddir'); zmodload -s zsh/terminfo zsh/zselect" 2>/dev/null \
+    || return 1
+  # functions: probe with the staged fpath injected.
+  "$bin" -fc "fpath=($fpdirs); autoload +X _autocd _files edit-command-line" 2>/dev/null \
+    || return 1
+}
+
+# stage_and_swap — install the freshly compiled tree into $STAGE, validate it,
+# then atomically replace $PREFIX, keeping $BACKUP for rollback. The live
+# $PREFIX is only moved aside (never removed) and is restored on any failure, so
+# a failed install/validate/swap can never leave the machine without a working
+# shell. Relies on install_stage + validate_stage (both stubbable in tests).
+stage_and_swap() {
+  rm -rf -- "$STAGE" "$BACKUP"
+
+  if ! install_stage "$STAGE"; then
+    rm -rf -- "$STAGE"
+    die "install into staging prefix failed; live install left intact"
+  fi
+  if ! validate_stage "$STAGE"; then
+    rm -rf -- "$STAGE"
+    die "staged build failed validation; live install left intact"
+  fi
+
+  # Atomic swap: park the live tree, move staging into place, and only then, on
+  # confirmed success, drop the backup. A failed final move rolls back.
+  if [[ -e "$PREFIX" ]]; then
+    mv -- "$PREFIX" "$BACKUP" || die "could not park live prefix; live install left intact"
+  fi
+  if ! mv -- "$STAGE" "$PREFIX"; then
+    [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"
+    die "could not move staged build into place; rolled back to previous install"
+  fi
+
+  # Authoritative post-swap re-validation with natural, baked-in paths. If it
+  # fails, roll the previous tree back so the live install is never broken.
+  if ! validate_stage "$PREFIX"; then
+    rm -rf -- "$PREFIX"
+    [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"
+    die "post-swap validation failed; rolled back to previous install"
+  fi
+  rm -rf -- "$BACKUP"
+}
+
+# main — the build pipeline. Wrapped in a function with the source-guard at the
+# bottom so specs can source this file to unit-test stage_and_swap (with
+# install_stage/validate_stage stubbed) without triggering a real compile.
+main() {
 # 1. Fast path: healthy install built from the clone's current commit, and not
 #    explicitly updating. rev-parse is local/offline; we only hit the network
 #    to clone or when ZSH_UPDATE is set.
@@ -184,19 +274,24 @@ log "compiling (this takes ~1 min)"
 make -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)" >"$BUILD_ROOT/make.log" 2>&1 \
   || { tail -25 "$BUILD_ROOT/make.log" >&2; die "make failed"; }
 
-# Install only binary + modules + shell functions. Docs need yodl (not a build
-# dep) and the system already ships zsh man pages.
-rm -rf "$PREFIX"
-make install.bin install.modules install.fns >"$BUILD_ROOT/install.log" 2>&1 \
-  || { tail -25 "$BUILD_ROOT/install.log" >&2; die "make install failed"; }
+# Install only binary + modules + shell functions (docs need yodl, not a build
+# dep, and the system already ships zsh man pages) into a STAGING prefix,
+# validate it there, and atomically swap it over the live $PREFIX with rollback.
+# The live install is never removed before the new one is validated and in
+# place, so a failed install/validate/swap leaves a working shell behind.
+log "installing + validating into staging prefix, then swapping"
+stage_and_swap
+
 printf '%s\n' "$commit" > "$STAMP"
-
 relink
-
-width_ok   "$ZSH_BIN" || die "post-build width self-test failed (expected width 2 for U+1FAC0)"
-modules_ok "$ZSH_BIN" || die "post-build module self-test failed (zsh/terminfo + zsh/zselect)"
-fns_ok     "$ZSH_BIN" || die "post-build function-set self-test failed (incomplete install.fns: _autocd/_files/edit-command-line missing)"
 
 log "installed $("$ZSH_BIN" --version) @ $commit"
 log "linked $BINLINK -> $ZSH_BIN"
 ensure_login_shell
+}
+
+# Run the pipeline only when executed, not when sourced (specs source this file
+# to unit-test stage_and_swap with install/validate stubbed).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

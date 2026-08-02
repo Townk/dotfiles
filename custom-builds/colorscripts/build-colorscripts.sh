@@ -55,14 +55,97 @@ INSTALLED_BIN="$PREFIX/bin/colorscript"
 INSTALLED_DATA="$PREFIX/share/colorscripts"
 STAMP="$PREFIX/.source-commit"
 
+# Staging + backup siblings of $PREFIX (same filesystem, so mv is atomic). The
+# CLI + data are copied AND self-tested in $STAGE, then atomically swapped over
+# the live $PREFIX; the previous tree is parked in $BACKUP for rollback. The
+# live $PREFIX is never removed before a validated replacement is in place.
+STAGE="${COLORSCRIPTS_STAGE:-$PREFIX.new}"
+BACKUP="${COLORSCRIPTS_BACKUP:-$PREFIX.old}"
+
 STATIC_PATH='DIR_COLORSCRIPTS="/opt/shell-color-scripts/colorscripts"'
-PATCHED_PATH='DIR_COLORSCRIPTS="$HOME/.local/opt/colorscripts/share/colorscripts"'
+# Patched form honors a DIR_COLORSCRIPTS env override (falling back to the final
+# per-user path), so the staged CLI can be self-tested against the STAGED data
+# dir before the swap, while normal callers (nvim's dashboard) still resolve the
+# installed data with no env set.
+PATCHED_PATH='DIR_COLORSCRIPTS="${DIR_COLORSCRIPTS:-$HOME/.local/opt/colorscripts/share/colorscripts}"'
 
 log() { printf '[colorscripts-build] %s\n' "$*"; }
 die() { printf '[colorscripts-build] error: %s\n' "$*" >&2; exit 1; }
 repo_commit() { git -C "$REPO" rev-parse --short HEAD 2>/dev/null; }
 relink() { mkdir -p -- "$(dirname "$BINLINK")"; ln -sfn "$INSTALLED_BIN" "$BINLINK"; }
 
+# install_stage <dir> — copy the CLI + colorscripts data into <dir> (bin/ +
+# share/colorscripts/) and apply the DIR_COLORSCRIPTS patch. Returns non-zero
+# (leaving the caller to discard <dir>) if the upstream layout changed or the
+# patch did not take. Split out as a seam so the atomic swap can be unit-tested
+# with the real copy stubbed.
+install_stage() {
+  local dir="$1" bin="$1/bin/colorscript" data="$1/share/colorscripts"
+  mkdir -p -- "$dir/bin" "$data"
+  cp -- "$REPO/colorscript.sh" "$bin"
+  chmod +x "$bin"
+  cp -R -- "$REPO/colorscripts/." "$data/"
+
+  # Patch the static /opt data dir to a DIR_COLORSCRIPTS-overridable per-user
+  # path (see PATCHED_PATH). $HOME/$DIR_COLORSCRIPTS expand at runtime.
+  if ! grep -qF -- "$STATIC_PATH" "$bin"; then
+    log "upstream layout changed: '$STATIC_PATH' not found in $bin — update the patch"
+    return 1
+  fi
+  perl -0pi -e 's{DIR_COLORSCRIPTS="/opt/shell-color-scripts/colorscripts"}{DIR_COLORSCRIPTS="\${DIR_COLORSCRIPTS:-\$HOME/.local/opt/colorscripts/share/colorscripts}"}' "$bin"
+  if ! grep -qF -- "$PATCHED_PATH" "$bin"; then
+    log "patch failed: DIR_COLORSCRIPTS not rewritten in $bin"
+    return 1
+  fi
+}
+
+# validate_stage <dir> — return 0 iff the CLI at <dir> passes the exact self-test
+# nvim's dashboard uses (`colorscript -e square`), reading the colocated STAGED
+# data via the DIR_COLORSCRIPTS override. Reused after the swap (pointed at the
+# in-place data) as the authoritative gate before the backup is dropped.
+validate_stage() {
+  local dir="$1" bin="$1/bin/colorscript" data="$1/share/colorscripts"
+  [[ -x "$bin" ]] || return 1
+  DIR_COLORSCRIPTS="$data" "$bin" -e square >/dev/null 2>&1
+}
+
+# stage_and_swap — install into $STAGE, validate there, then atomically replace
+# $PREFIX, keeping $BACKUP for rollback. The live $PREFIX is only moved aside
+# (never removed) and is restored on any failure, so a stale/renamed upstream
+# script or a failed self-test can never leave nvim without a working
+# colorscript. Relies on install_stage + validate_stage (both stubbable).
+stage_and_swap() {
+  rm -rf -- "$STAGE" "$BACKUP"
+
+  if ! install_stage "$STAGE"; then
+    rm -rf -- "$STAGE"
+    die "install into staging prefix failed; live install left intact"
+  fi
+  if ! validate_stage "$STAGE"; then
+    rm -rf -- "$STAGE"
+    die "staged self-test ('colorscript -e square') failed; live install left intact"
+  fi
+
+  if [[ -e "$PREFIX" ]]; then
+    mv -- "$PREFIX" "$BACKUP" || die "could not park live prefix; live install left intact"
+  fi
+  if ! mv -- "$STAGE" "$PREFIX"; then
+    [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"
+    die "could not move staged install into place; rolled back to previous install"
+  fi
+
+  # Authoritative post-swap re-validation against the in-place tree.
+  if ! validate_stage "$PREFIX"; then
+    rm -rf -- "$PREFIX"
+    [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"
+    die "post-swap self-test failed; rolled back to previous install"
+  fi
+  rm -rf -- "$BACKUP"
+}
+
+# main — the install pipeline. Wrapped so specs can source this file to
+# unit-test stage_and_swap with install/validate stubbed, without a real clone.
+main() {
 # 1. Fast path: installed bin + data exist, clone present, stamp matches the
 #    clone's current commit, and we're not explicitly updating. rev-parse is
 #    local/offline; we only hit the network to clone or on COLORSCRIPTS_UPDATE.
@@ -90,39 +173,24 @@ else
 fi
 commit="$(repo_commit)"
 
-# 3. Install: verbatim copy of the CLI + the colorscripts data dir into PREFIX.
-#    There's no compile step — these are shell scripts — so "install" is a
-#    copy, then the one-line patch below. rm -rf first so a stale data script
-#    removed upstream doesn't linger.
-log "installing into $PREFIX"
-rm -rf "$PREFIX"
-mkdir -p -- "$PREFIX/bin" "$INSTALLED_DATA"
-cp -- "$REPO/colorscript.sh" "$INSTALLED_BIN"
-chmod +x "$INSTALLED_BIN"
-cp -R -- "$REPO/colorscripts/." "$INSTALLED_DATA/"
-
-# 4. Patch the static data dir reference. Upstream line 8 hardcodes
-#    /opt/shell-color-scripts/colorscripts; redirect it to this user-owned
-#    install. $HOME expands at runtime, so the patched script stays correct
-#    regardless of who invokes it (per-user install). The DEV branch
-#    (`./colorscripts`, used for upstream hacking) is left untouched.
-log "patching DIR_COLORSCRIPTS -> $INSTALLED_DATA"
-if ! grep -qF -- "$STATIC_PATH" "$INSTALLED_BIN"; then
-  die "upstream layout changed: '$STATIC_PATH' not found in $INSTALLED_BIN — update the patch"
-fi
-perl -0pi -e 's{DIR_COLORSCRIPTS="/opt/shell-color-scripts/colorscripts"}{DIR_COLORSCRIPTS="\$HOME/.local/opt/colorscripts/share/colorscripts"}' "$INSTALLED_BIN"
-
-grep -qF -- "$PATCHED_PATH" "$INSTALLED_BIN" \
-  || die "patch failed: DIR_COLORSCRIPTS not rewritten in $INSTALLED_BIN"
+# 3. Install: verbatim copy of the CLI + the colorscripts data dir, patched, into
+#    a STAGING prefix; self-test it there; then atomically swap it over the live
+#    $PREFIX with rollback. There's no compile step — these are shell scripts —
+#    so "install" is a copy + one-line patch, all done in staging so a stale/
+#    removed-upstream data script or a failed self-test never destroys the live
+#    install before its validated replacement is in place.
+log "installing + self-testing into staging prefix, then swapping"
+stage_and_swap
 
 printf '%s\n' "$commit" > "$STAMP"
-
 relink
 
-# 5. Self-test: the exact invocation nvim's dashboard uses must succeed.
-if "$INSTALLED_BIN" -e square >/dev/null 2>&1; then
-  log "installed colorscripts @ $commit"
-  log "linked $BINLINK -> $INSTALLED_BIN"
-else
-  die "post-install self-test failed: 'colorscript -e square' returned non-zero"
+log "installed colorscripts @ $commit"
+log "linked $BINLINK -> $INSTALLED_BIN"
+}
+
+# Run the pipeline only when executed, not when sourced (specs source this file
+# to unit-test stage_and_swap with install/validate stubbed).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
 fi
