@@ -49,6 +49,12 @@ fi
 # THE shared mode resolver (states, titles, icons, colors and the panel
 # table behind each) — the which-key panel resolves through the same one.
 source "${MUX_LIB_DIR:-$HOME/.local/lib}/mux/mode.zsh" 2>/dev/null || true
+# theme::hex_rgb — the canonical hex→"R G B" split the OKLab color math uses
+# (C1). Resolved relative to this script (../lib) so it tracks the same tree as
+# the executable, not a stale $HOME copy.
+_tsr_self="${(%):-%x}"
+source "${_tsr_self:h:h}/lib/theme-common.zsh" 2>/dev/null || true
+unset _tsr_self
 
 key_table="${1:-root}"
 in_copy="${2:-0}"
@@ -92,10 +98,9 @@ m_locked="${c[4]}" m_resize="${c[5]}" m_pane="${c[6]}" m_tab="${c[7]}"
 m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}" m_rename="${c[12]}" m_search="${c[13]}" m_visual="${c[14]}" c_white="${c[15]}"
 
 # ---- color math -----------------------------------------------------------
-hex_r() { print $(( 16#${1[2,3]} )) }
-hex_g() { print $(( 16#${1[4,5]} )) }
-hex_b() { print $(( 16#${1[6,7]} )) }
-to_hex() { printf '#%02x%02x%02x' "$1" "$2" "$3" }
+# The per-channel hex split is theme::hex_rgb (C1) — "#rrggbb" -> "R G B";
+# the consumers below read it once into an array. (The old to_hex inverse
+# helper had no callers and retired with this consolidation.)
 
 # Faithful zj-hud color math (OKLab gradient, HSL darken/lighten, WCAG
 # contrast) — ported 1:1 from zj-hud/src/shared/color.rs. The earlier
@@ -117,9 +122,10 @@ _unlin() {  # linear 0..1 -> srgb channel 0..255 (REPLY, rounded+clamped)
 }
 oklab_of() {  # "#rrggbb" -> reply=(L a b)
   local -F r g b l m s l_ m_ s_
-  _lin $(hex_r "$1"); r=$REPLY
-  _lin $(hex_g "$1"); g=$REPLY
-  _lin $(hex_b "$1"); b=$REPLY
+  local -a rgb; rgb=( ${(s: :)"$(theme::hex_rgb "$1")"} )
+  _lin $rgb[1]; r=$REPLY
+  _lin $rgb[2]; g=$REPLY
+  _lin $rgb[3]; b=$REPLY
   l=$(( 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b ))
   m=$(( 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b ))
   s=$(( 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b ))
@@ -157,7 +163,8 @@ lerp() {
 }
 to_hsl() {  # "#rrggbb" -> reply=(h s l)
   local -F r g b mx mn d h s l
-  r=$(( $(hex_r "$1") / 255.0 )); g=$(( $(hex_g "$1") / 255.0 )); b=$(( $(hex_b "$1") / 255.0 ))
+  local -a rgb; rgb=( ${(s: :)"$(theme::hex_rgb "$1")"} )
+  r=$(( rgb[1] / 255.0 )); g=$(( rgb[2] / 255.0 )); b=$(( rgb[3] / 255.0 ))
   mx=$r; (( g > mx )) && mx=$g; (( b > mx )) && mx=$b
   mn=$r; (( g < mn )) && mn=$g; (( b < mn )) && mn=$b
   d=$(( mx - mn ))
@@ -196,9 +203,10 @@ from_hsl() {  # h s l -> REPLY="#rrggbb"
 }
 _rel_lum() {  # "#rrggbb" -> REPLY (WCAG relative luminance)
   local -F r g b
-  _lin $(hex_r "$1"); r=$REPLY
-  _lin $(hex_g "$1"); g=$REPLY
-  _lin $(hex_b "$1"); b=$REPLY
+  local -a rgb; rgb=( ${(s: :)"$(theme::hex_rgb "$1")"} )
+  _lin $rgb[1]; r=$REPLY
+  _lin $rgb[2]; g=$REPLY
+  _lin $rgb[3]; b=$REPLY
   REPLY=$(( 0.2126 * r + 0.7152 * g + 0.0722 * b ))
 }
 contrast() {  # A B -> REPLY (ratio)
