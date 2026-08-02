@@ -460,6 +460,12 @@ _mux_tx_float() {
   [[ -n "$pane_x" ]] && geom+=(-x "$pane_x")
   [[ -n "$pane_y" ]] && geom+=(-y "$pane_y")
 
+  # Mirror the zellij twin (_mux_zj_float): forward --title to tmux-modal so it
+  # renders the ▓▓▓ header block; omit it entirely when no title was given so no
+  # empty --title reaches the modal.
+  local -a modal_args=(--capture "$fifo")
+  [[ -n "$title" ]] && modal_args=(--title "$title" "${modal_args[@]}")
+
   # HI-7: read concurrently via a background reader and wait on the popup, so a
   # failed launch returns promptly instead of blocking forever on `cat "$fifo"`
   # (see _mux_tx_pick_float for the full rationale).
@@ -468,7 +474,7 @@ _mux_tx_float() {
 
   "$(_mux_tx_bin)" display-popup -E "${geom[@]}" \
     -e "COLORTERM=${COLORTERM:-truecolor}" -e "TMUX_PANE=${TMUX_PANE:-}" \
-    "$modal" --origin "${TMUX_PANE:-}" --capture "$fifo" \
+    "$modal" --origin "${TMUX_PANE:-}" "${modal_args[@]}" \
     -- "$widget" --type "$type" -- "${wargs[@]}" \
     >/dev/null 2>&1 &
   local popup_pid=$!

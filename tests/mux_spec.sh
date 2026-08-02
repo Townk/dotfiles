@@ -446,6 +446,24 @@ Describe 'mux.zsh — tmux float backend (Phase 2)'
     The contents of file "$TX_ARGS" should include "--type choose"
     The status should be success
   End
+
+  It 'forwards --title to tmux-modal so it renders the header block'
+    export TX_ANSWER="alpha"
+    When call mux::choose --title "Pick one" "Select" alpha beta gamma
+    The output should equal "alpha"
+    # The modal invocation carries the title (modal_args = --title … --capture …),
+    # not just the widget after the `--`; assert on that exact adjacency.
+    The contents of file "$TX_ARGS" should include "--title Pick one --capture"
+    The status should be success
+  End
+
+  It 'passes no stray --title to tmux-modal when none given'
+    export TX_ANSWER="alpha"
+    When call mux::choose "Select" alpha beta gamma
+    The output should equal "alpha"
+    The contents of file "$TX_ARGS" should not include "--title"
+    The status should be success
+  End
 End
 
 Describe 'mux.zsh — zj:: permanent aliases'
