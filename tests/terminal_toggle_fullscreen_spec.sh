@@ -16,7 +16,10 @@ EOF
     chmod +x "$TEST_TMP/osascript" "$TEST_TMP/uname"
     ORIGINAL_PATH="$PATH"
     export PATH="$TEST_TMP:$PATH"
-    unset SSH_CONNECTION SSH_CLIENT
+    # All three of the canonical remote-detection triple: detect_terminal now
+    # honors SSH_TTY too (the no-pty `ssh -T` fix), so the local-session cases
+    # must clear it as well or an ambient SSH_TTY misreads them as remote.
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
   }
   cleanup() {
     PATH="$ORIGINAL_PATH"

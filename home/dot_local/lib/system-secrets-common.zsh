@@ -427,9 +427,15 @@ sec::op_available() { command -v op >/dev/null 2>&1 && command -v jq >/dev/null 
 sec::op_have_token() { [[ -s "$OP_SA_TOKEN_FILE" ]]; }
 
 # sec::op_use_service — 0 iff op must use the loose service-account token instead
-# of the desktop app: i.e. over SSH, where there is no GUI for Touch ID. Mirrors
-# environment.sh so provisioning matches apply-time resolution.
-sec::op_use_service() { [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; }
+# of the desktop app: i.e. over SSH, where there is no GUI for Touch ID. Uses
+# the canonical remote-detection triple (the identity of mux::is_remote in
+# mux-bootstrap.zsh) — a bare zsh lib cannot source that zsh layer, so the
+# triple is inlined here; keep it in sync. This previously dropped SSH_TTY,
+# which misclassified a no-pty `ssh -T` login as local (apply-time analog:
+# environment.sh's over-SSH block).
+sec::op_use_service() {
+  [[ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]]
+}
 
 # sec::op_sa <args…> — force SERVICE-ACCOUNT mode using the loose token.
 sec::op_sa() { OP_SERVICE_ACCOUNT_TOKEN="$(cat "$OP_SA_TOKEN_FILE")" op "$@"; }

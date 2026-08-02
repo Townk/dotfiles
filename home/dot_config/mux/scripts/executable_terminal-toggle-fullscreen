@@ -20,7 +20,11 @@ detect_terminal() {
     return
   fi
 
-  if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
+  # Canonical remote-detection triple (the identity of mux::is_remote in
+  # mux-bootstrap.zsh); inlined because this runs under `set -eu` before any
+  # shared lib is sourced. Previously dropped SSH_TTY, so a no-pty `ssh -T`
+  # login was misread as local.
+  if [[ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]]; then
     print "ssh"
   elif [[ "$term_program_lower" == "ghostty" || -n "${GHOSTTY_RESOURCES_DIR:-}" ]]; then
     print "ghostty"
