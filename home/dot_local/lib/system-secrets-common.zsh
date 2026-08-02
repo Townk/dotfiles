@@ -704,6 +704,30 @@ $names"
 # encrypted only to its own slot's recipient.
 # ---------------------------------------------------------------------------
 
+# sec::arm_plain_scrub <path> — arm traps that shred PATH (a decrypted-secret
+# staging file or dir) on normal completion AND on every terminating signal.
+# C1 (same root cause as prompt-common's MED-15, different site). Three zsh
+# facts force this exact shape:
+#   1. the EXIT trap does NOT run on SIGTERM, so a kill/timeout/supervisor TERM
+#      during interactive entry would strand cleartext under $TMPDIR;
+#   2. after a bare signal trap zsh RESUMES the interrupted code, so the signal
+#      handler must scrub AND exit — falling back into the entry loop would
+#      re-stage cleartext; and
+#   3. prompt::secret installs then clears the shell's traps on every call (its
+#      tty-restore teardown), which wipes any trap set before it — so callers
+#      RE-ARM after each prompt, before any plaintext is written.
+# PATH is expanded into the handlers NOW (not deref'd at signal time), so a trap
+# still shreds the right path after the caller's locals go out of scope. Exit
+# codes follow the 128+signal convention so the process still dies by signal.
+sec::arm_plain_scrub() {
+  local __p="$1"
+  trap "rm -rf -- ${(q)__p}" EXIT
+  trap "rm -rf -- ${(q)__p}; exit 130" INT
+  trap "rm -rf -- ${(q)__p}; exit 143" TERM
+  trap "rm -rf -- ${(q)__p}; exit 131" QUIT
+  trap "rm -rf -- ${(q)__p}; exit 129" HUP
+}
+
 # sec::rebuild_slot <slot> — regenerate the fragment and the FULL per-secret blob
 # set from freshly prompted values. Reads kind/profile/recipient from the map,
 # and clears any legacy monolithic blob/rule it replaces.
@@ -730,18 +754,19 @@ sec::rebuild_slot() {
     local tmpd
     tmpd="$(mktemp -d "${TMPDIR:-/tmp}/sec-plain.XXXXXX")"
     chmod 0700 "$tmpd"
-    trap 'rm -rf "$tmpd"' EXIT
+    sec::arm_plain_scrub "$tmpd"
     mkdir -p "$(sec::blob_dir "$slot")"
     sec::sops_rule_set "$slot" "$recipient"
     log_info "Enter values for the '$profile' secrets (hidden). Headless slot $slot:"
     for n in "${names[@]}"; do
       prompt::secret val "  $n — $(sec::manifest_prompt "$n"):"
+      sec::arm_plain_scrub "$tmpd"   # re-arm: prompt::secret cleared the traps
       printf 'export %s=%s\n' "$n" "${(qq)val}" >"$tmpd/$n"
       val=""
       sec::sops_encrypt "$recipient" "$tmpd/$n" "$(sec::blob_path "$slot" "$n")"
     done
     rm -rf "$tmpd"
-    trap - EXIT
+    trap - EXIT INT TERM QUIT HUP
     # A full rebuild is authoritative: drop any legacy monolithic blob/rule now
     # that per-secret blobs cover the set.
     [[ -f "$(sec::legacy_blob_path "$slot")" ]] && rm -f "$(sec::legacy_blob_path "$slot")"
@@ -802,15 +827,16 @@ sec::materialize_secret() {
     local val plain
     plain="$(mktemp "${TMPDIR:-/tmp}/sec-plain.XXXXXX")"
     chmod 0600 "$plain"
-    trap 'rm -f "$plain"' EXIT
+    sec::arm_plain_scrub "$plain"
     prompt::secret val "  $name — $(sec::manifest_prompt "$name") (headless slot $slot):"
+    sec::arm_plain_scrub "$plain"   # re-arm: prompt::secret cleared the traps
     printf 'export %s=%s\n' "$name" "${(qq)val}" >"$plain"
     val=""
     mkdir -p "$(sec::blob_dir "$slot")"
     sec::sops_rule_set "$slot" "$recipient"
     sec::sops_encrypt "$recipient" "$plain" "$(sec::blob_path "$slot" "$name")"
     rm -f "$plain"
-    trap - EXIT
+    trap - EXIT INT TERM QUIT HUP
     local slot_names
     slot_names=("${(@f)$(sec::headless_slot_names "$slot")}")
     slot_names=(${slot_names:#})

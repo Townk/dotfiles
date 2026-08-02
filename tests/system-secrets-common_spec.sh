@@ -256,4 +256,90 @@ YAML
       The status should be failure
     End
   End
+
+  # C1 (SAME root cause as MED-15, different site): sec::rebuild_slot and
+  # sec::materialize_secret stage DECRYPTED secrets as plaintext files under
+  # $TMPDIR (sec-plain.XXXXXX) while encrypting them. zsh does NOT run the EXIT
+  # trap on SIGTERM, and prompt::secret clears the shell's traps on every call,
+  # so an EXIT-only trap left cleartext in /tmp when a kill/timeout/supervisor
+  # TERM hit during interactive entry over SSH. The fix arms the terminating
+  # signals too, re-arms after each prompt, and scrubs-then-exits (never resumes
+  # the entry loop, which would re-stage cleartext).
+  #
+  # We drive sec::materialize_secret in a stubbed `zsh -f` subprocess (no real
+  # secret material — a dummy value under a sandboxed TMPDIR): prompt::secret is
+  # stubbed to yield a dummy AND to clear the traps exactly as the real one does,
+  # and sec::sops_encrypt is stubbed to raise a real SIGTERM at the precise
+  # moment cleartext is staged and unscrubbed. Deterministic: the signal is
+  # raised synchronously by the process against itself, no timing sleep.
+  Describe 'plaintext scrub on SIGTERM (C1)'
+    sig_setup() {
+      SIG_TMP="$TEST_TMP/sig"
+      mkdir -p "$SIG_TMP"
+      export SEC_TEST_ROOT="$SHELLSPEC_PROJECT_ROOT"
+      export SEC_TEST_TMPDIR="$SIG_TMP"
+      inner="$SIG_TMP/inner.zsh"
+      cat >"$inner" <<'INNER'
+        TMPDIR="$SEC_TEST_TMPDIR"; export TMPDIR
+        source "$SEC_TEST_ROOT/home/dot_local/lib/system-secrets-common.zsh"
+        # Silence the shared logger; keep the subprocess output clean.
+        log_info() { :; }; log_ok() { :; }; log_warn() { :; }
+        # Minimal operator-map / manifest stubs so materialize_secret reaches the
+        # headless staging path with a known name.
+        sec::map_get() {
+          case "$2" in
+            kind)      print -r -- headless ;;
+            profile)   print -r -- personal ;;
+            recipient) print -r -- age1dummyrecipient ;;
+            *)         print -r -- "" ;;
+          esac
+        }
+        sec::manifest_names_for_profile() { print -r -- DUMMY_SECRET; }
+        sec::manifest_prompt()            { print -r -- "a dummy secret"; }
+        sec::legacy_blob_path()           { print -r -- "$SEC_TEST_TMPDIR/no-legacy"; }
+        sec::blob_dir()                   { print -r -- "$SEC_TEST_TMPDIR/blobs"; }
+        sec::blob_path()                  { print -r -- "$SEC_TEST_TMPDIR/blobs/$2.sops.sh"; }
+        sec::headless_slot_names()        { print -r -- DUMMY_SECRET; }
+        sec::write_headless_fragment()    { :; }
+        sec::sops_rule_set()              { :; }
+        # Mimic the real prompt::secret: yield a value AND clear the shell traps
+        # (its tty-restore teardown), which is what wipes any trap set before it.
+        prompt::secret() {
+          printf -v "$1" '%s' "DUMMY-CLEARTEXT-VALUE"
+          trap - INT EXIT TERM HUP QUIT
+        }
+        # The leak window: cleartext is on disk ($2), not yet scrubbed. Record
+        # that we reached it, then raise a real SIGTERM. If control ever returns
+        # here the signal was swallowed into a resume (a bug) — record that too.
+        sec::sops_encrypt() {
+          print -r -- REACHED >>"$SEC_TEST_TMPDIR/marker"
+          kill -TERM $$
+          print -r -- RESUMED >>"$SEC_TEST_TMPDIR/marker"
+        }
+        sec::materialize_secret slot-abc123 DUMMY_SECRET
+        print -r -- RETURNED >>"$SEC_TEST_TMPDIR/marker"
+INNER
+    }
+    sig_cleanup() {
+      rm -rf "$SIG_TMP"
+      unset SEC_TEST_ROOT SEC_TEST_TMPDIR
+    }
+    BeforeEach 'sig_setup'
+    AfterEach 'sig_cleanup'
+
+    leftover_plaintext() { find "$SIG_TMP" -name 'sec-plain.*' 2>/dev/null; }
+    marker()             { cat "$SIG_TMP/marker" 2>/dev/null; }
+
+    It 'shreds the staged cleartext when a SIGTERM lands mid-materialize'
+      When run zsh -f "$inner"
+      # Integrity: the run actually reached the leak window...
+      The value "$(marker)" should include "REACHED"
+      # ...and the signal terminated the process rather than resuming the loop.
+      The value "$(marker)" should not include "RESUMED"
+      The value "$(marker)" should not include "RETURNED"
+      # The bug and its fix: no decrypted secret is left behind under TMPDIR.
+      The value "$(leftover_plaintext)" should equal ""
+      The status should equal 143
+    End
+  End
 End
