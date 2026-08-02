@@ -1015,14 +1015,18 @@ bkp::tm::halt() {
   source "$HOME/.local/lib/theme-common.zsh"
   local body
   body=$(print -r -- "$msg" | fold -s -w 58 | sed 's/[[:space:]]*$//')
-  # COLORTERM explicit: zellij panes don't inherit it, and without it
-  # gum/lipgloss degrade the hex palette to 256-color approximations.
-  # --no-show-help drops the key-hint line; a leading blank line insets
-  # the body from the top edge to match the rest of the dialog chrome.
-  COLORTERM=truecolor gum confirm \
+  # Shared warning env (theme::gum_confirm_env, Wave 2 consolidation): sets
+  # COLORTERM=truecolor (zellij panes don't inherit it, and without it gum
+  # degrades the hex palette to 256-color) plus the warning accent on the OK
+  # button's background. This is a single-OK NOTICE, not the two-button warning
+  # confirm, so it DELIBERATELY diverges on the rest — message in normal fg, the
+  # dark tokens on dialog-bg — kept as explicit flag overrides ON TOP of the env
+  # rather than flattening the notice onto the confirm palette. --no-show-help
+  # drops the key-hint line; a leading blank line insets the body from the top.
+  theme::gum_confirm_env --role warning
+  gum confirm \
     --affirmative "  OK  " --negative "" --no-show-help \
     "--prompt.foreground=$C_ROLE_UI_FG" \
-    "--selected.background=$C_HEX_DIALOG_WARNING" \
     "--selected.foreground=$C_ROLE_UI_DIALOG_BG" \
     "--unselected.foreground=$C_ROLE_UI_MUTED" \
     "--unselected.background=$C_ROLE_UI_DIALOG_BG" \
