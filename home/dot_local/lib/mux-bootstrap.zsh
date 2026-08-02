@@ -97,6 +97,63 @@ mux::default_backend() {
   esac
 }
 
+# --- remote detection (spec §3, C3) ----------------------------------------
+#
+# The one canonical "am I remote?" pair, replacing 12+ scattered copies. Two
+# distinct questions, deliberately kept apart:
+#
+#   mux::is_remote          — was THIS process reached over SSH? Read from the
+#                             process env. Used by callers whose own env is the
+#                             truth (a login shell, a one-shot tool).
+#   mux::session_is_remote  — is the tmux SESSION being driven by a remote
+#                             client right now? Read from the session env, the
+#                             attach-time truth. Used by callers that run in the
+#                             tmux server context (status bar, alert hooks, a
+#                             popup) where the process env is the server's stale
+#                             BIRTH env.
+
+# mux::is_remote — true when the process env says this shell was reached over
+# SSH: ANY of SSH_TTY / SSH_CONNECTION / SSH_CLIENT non-empty. All three are
+# checked on purpose — a non-interactive `ssh -T host cmd` can leave a subset
+# set, and three call sites that dropped SSH_TTY misclassified those as local.
+mux::is_remote() {
+  [[ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]]
+}
+
+# mux::session_is_remote [target] — true when the tmux SESSION env reports an
+# SSH client. update-environment refreshes SSH_CONNECTION from each attaching
+# client, so the session env is the ATTACH-TIME truth — unlike a tmux server
+# born over ssh, which carries SSH_CONNECTION in its process env forever.
+#
+# Target resolution is the HARDENED, pane-pinned form from quick-launch-window
+# (it "fixed Mode B twice"): an explicit [target] — a session name OR a pane id,
+# which tmux resolves to its containing session — wins; else the origin pane a
+# modal captured in $MUX_MODAL_TARGET_PANE before any build; else `display -p
+# '#{session_name}'` (the most-recently-used session, the last resort that right
+# after a workspace build names the freshly created session, hence the pin).
+#
+# With no explicit target this must run inside tmux (an out-of-session caller
+# has no "current" session to ask about); WITH one it also serves callers in
+# the server context — a #() status job or a hook — that resolved the session
+# some other way (e.g. `list-clients`) and just want the SSH verdict.
+mux::session_is_remote() {
+  local tx sess v
+  local -a t=()
+  tx="$(_mux_tx_bin)" || return 1
+  if [[ -n "${1:-}" ]]; then
+    t=(-t "$1")
+  elif [[ -n "${MUX_MODAL_TARGET_PANE:-}" ]]; then
+    t=(-t "$MUX_MODAL_TARGET_PANE")
+  elif [[ -n "${TMUX:-}" ]]; then
+    sess="$("$tx" display -p '#{session_name}' 2>/dev/null)" || sess=""
+    [[ -n "$sess" ]] && t=(-t "$sess")
+  else
+    return 1
+  fi
+  v="$("$tx" show-environment "${t[@]}" SSH_CONNECTION 2>/dev/null)" || v=""
+  [[ "$v" == SSH_CONNECTION=* ]]
+}
+
 # --- session / screen (spec §3) --------------------------------------------
 # With a client PID the backend is read from that PROCESS (mux::backend_for_pid):
 # the callers that pass one — WezTerm's open-uri / nested-session hooks,
