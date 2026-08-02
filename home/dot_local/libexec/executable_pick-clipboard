@@ -1232,18 +1232,18 @@ clip::should_hold_on_restore_failure() {
 }
 
 # Render the captured reason clearly and hold for one keypress. gum-styled
-# (themed via the Catppuccin C_HEX_*/C_ROLE_* palette already in scope
-# through common.zsh -- pick-common.zsh sources it transitively, so unlike
-# pbpaste's standalone-POSIX-sh JSON-palette detour, the zsh vars are simply
-# there) when gum is on PATH; otherwise a plain ANSI fallback using
-# common.zsh's own gated C_DANGER/C_DIM/C_RES (gated on an interactive
-# stdout, so this degrades to plain text under a captured/piped stdout).
+# via the shared theme::gum_style_env (Wave 2 consolidation) -- the danger
+# accent for the box fg/border now lives in ONE place (theme-common.zsh),
+# which pick-common.zsh sources transitively, so unlike pbpaste's standalone-
+# POSIX-sh JSON-palette detour the helper is simply in scope. When gum is on
+# PATH; otherwise a plain ANSI fallback using common.zsh's own gated
+# C_DANGER/C_DIM/C_RES (gated on an interactive stdout, so this degrades to
+# plain text under a captured/piped stdout).
 clip::render_restore_failure() {
   local reason=$1 fallback_ok=${2:-}
   if command -v gum >/dev/null 2>&1; then
-    GUM_STYLE_FOREGROUND="${C_HEX_DIALOG_DANGER:-${C_HEX_RED:-red}}" \
-    GUM_STYLE_BORDER_FOREGROUND="${C_HEX_DIALOG_DANGER:-${C_HEX_RED:-red}}" \
-      gum style --border rounded --padding "0 1" --bold -- "$reason" >/dev/tty 2>/dev/null
+    theme::gum_style_env --role danger
+    gum style --border rounded --padding "0 1" --bold -- "$reason" >/dev/tty 2>/dev/null
   else
     printf '%s%s%s\n' "$C_DANGER" "$reason" "$C_RES" >/dev/tty
   fi

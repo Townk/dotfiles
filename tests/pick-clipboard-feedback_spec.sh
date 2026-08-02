@@ -606,4 +606,33 @@ EOF
       The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 40, "weird na me")'
     End
   End
+
+  # Wave 2 consolidation: the restore-failure box routes its gum styling through
+  # the shared theme::gum_style_env (danger role) instead of an inline GUM_STYLE_*
+  # env. The gum call itself writes to /dev/tty (untestable headless, same as
+  # pbpaste's size-cap dialog), but the SHARED ENV it exports is what matters:
+  # run the real function (gum stubbed, its /dev/tty write allowed to fail and be
+  # swallowed) and assert the GUM_STYLE_* it exported equals the canonical danger
+  # accent (C_HEX_DIALOG_DANGER) — i.e. the caller renders with the shared env.
+  Describe 'clip::render_restore_failure (Wave 2: shared gum_style env)'
+    # Returns 0 iff the GUM_STYLE_* the function exported both equal the
+    # canonical danger accent (C_HEX_DIALOG_DANGER). The gum stub's /dev/tty
+    # write is expected to fail headless and is swallowed — the export happens
+    # first, which is the point of the assertion.
+    render_uses_shared_env() {
+      printf '#!/bin/sh\nexit 0\n' > "$BINDIR/gum"; chmod +x "$BINDIR/gum"
+      local out fg rest border canon
+      out=$(zsh -f -c '
+        source "$SCRIPT_PATH"
+        clip::render_restore_failure "boom" 2>/dev/null || true
+        print -r -- "$GUM_STYLE_FOREGROUND|$GUM_STYLE_BORDER_FOREGROUND|$C_HEX_DIALOG_DANGER"
+      ')
+      fg=${out%%|*}; rest=${out#*|}; border=${rest%%|*}; canon=${rest#*|}
+      [ -n "$canon" ] && [ "$fg" = "$canon" ] && [ "$border" = "$canon" ]
+    }
+    It 'exports GUM_STYLE_* set to the canonical danger accent'
+      When call render_uses_shared_env
+      The status should be success
+    End
+  End
 End

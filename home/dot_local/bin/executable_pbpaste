@@ -498,10 +498,18 @@ pbpaste_read_n() {
 }
 
 # pbpaste_cap_theme <field> -- resolves one hex color for the size-cap gum
-# dialog below. This is standalone POSIX sh, so it can't see the zsh-only
-# C_HEX_* palette vars (dot_zshrc:57-65's own themed-gum-confirm idiom) --
-# they're never exported. Instead this reads the SAME generated JSON palette
-# those vars come from (resolved by the theme::json_path order below,
+# dialog below. This is the POSIX-sh MIRROR of theme::gum_confirm_env --role
+# warning (theme-common.zsh, Wave 2): it maps the SAME fields to the SAME
+# GUM_CONFIRM_* vars, but pbpaste is standalone /bin/sh and cannot source the
+# zsh lib nor see the never-exported zsh-only C_HEX_* palette vars, so it reads
+# the values from the generated JSON projection instead. The FIELD -> palette
+# path -> GUM_CONFIRM_* var table (keep in lockstep with the helper's own):
+#   dialog_warning -> .extended.dialog.warning -> PROMPT_FOREGROUND + SELECTED_BACKGROUND (the accent)
+#   crust          -> .palette.crust           -> SELECTED_FOREGROUND
+#   subtext0       -> .palette.subtext0        -> UNSELECTED_FOREGROUND
+#   surface0       -> .palette.surface0        -> UNSELECTED_BACKGROUND
+# It reads the SAME generated JSON palette the zsh C_HEX_* come from (resolved
+# by the theme::json_path order below,
 # shape `{"palette": {...}, "extended": {"dialog": {...}}}` -- see
 # ics-view's _PALETTE_FALLBACK/_load_palette for the identical
 # read-json-or-fall-back-to-literals precedent for a non-zsh consumer) via
@@ -576,9 +584,9 @@ pbpaste_files_cap_check() {
   [ "$_bytes" -gt "$_cap" ] || return 0
   if [ -t 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
     if command -v gum >/dev/null 2>&1; then
-      # Same env-prefix theming idiom as dot_zshrc's own gum confirm
-      # (dot_zshrc:57-65), just resolved from the JSON palette instead of
-      # C_HEX_* (see pbpaste_cap_theme above for why).
+      # The POSIX-sh mirror of theme::gum_confirm_env --role warning: the SAME
+      # GUM_CONFIRM_* field set, resolved from the JSON palette instead of the
+      # zsh C_HEX_* (see pbpaste_cap_theme above for the field table + why).
       if COLORTERM=truecolor \
          GUM_CONFIRM_PROMPT_FOREGROUND="$(pbpaste_cap_theme dialog_warning)" \
          GUM_CONFIRM_SELECTED_BACKGROUND="$(pbpaste_cap_theme dialog_warning)" \
