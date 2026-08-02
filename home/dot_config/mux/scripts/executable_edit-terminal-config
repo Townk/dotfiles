@@ -6,6 +6,9 @@ set -eu -o pipefail
 ZELLIJ=${commands[zellij]:-/opt/homebrew/bin/zellij}
 NVIM=${commands[nvim]:-${commands[vim]:-vi}}
 
+# The dependency-free mux layer: the canonical remote-detection pair lives here.
+source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+
 # Inside tmux TERM_PROGRAM lies (= "tmux"); the outer terminal's identity is
 # kept in the tmux SESSION env by update-environment (see tmux.conf — the
 # same trick image-protocol-support.zsh and yazi use).
@@ -15,7 +18,16 @@ if [[ -n "${TMUX:-}" ]]; then
 fi
 
 # 2. Environment Detection Logic
-if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
+#
+# Read SSH state from the tmux SESSION env (mux::session_is_remote), the
+# attach-time truth, NOT this process's env. As a tmux keybinding this runs in
+# the server's BIRTH env, so the old process-triple test opened ~/.ssh/config
+# for a locally-attached session whose server merely happened to be born over
+# ssh (and vice versa). DECISION 4 (2026-08-01): accept that behavior change —
+# a server-vs-client SSH mismatch now edits the config the CLIENT is really on.
+# (Worth a Mode B eyeball. Outside tmux — e.g. a zellij pane — this reports
+# local; the SSH branch there was already best-effort.)
+if mux::session_is_remote; then
   ENV_TYPE="SSH"
 elif [[ "${TERM_PROGRAM:-}" == "Ghostty" ]]; then
   ENV_TYPE="GHOSTTY"
