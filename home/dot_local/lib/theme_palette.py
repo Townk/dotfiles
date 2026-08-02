@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import cast
 
 # Built-in Catppuccin Mocha values. Used when no palette JSON is readable, and
 # as the default for any key a resolved palette omits.
@@ -61,7 +62,7 @@ def palette_json_path() -> str:
     return os.path.expanduser(os.path.join(config_home, "theme", "chezmoi-system.json"))
 
 
-def load_palette() -> dict:
+def load_palette() -> dict[str, tuple[int, int, int]]:
     """Return ``{NAME_UPPER: (r, g, b)}`` for the resolved palette.
 
     Every built-in key is present; the resolved JSON's ``palette`` object
@@ -69,14 +70,23 @@ def load_palette() -> dict:
     tolerated — the built-in Catppuccin Mocha values are returned instead of
     raising (the same fallback the viewers' private _load_palette had).
     """
-    pal = dict(_PALETTE_FALLBACK)
+    pal: dict[str, str] = dict(_PALETTE_FALLBACK)
     try:
         with open(palette_json_path(), encoding="utf-8") as _fh:
-            pal.update(json.load(_fh).get("palette", {}))
+            # json.load is typed Any by design; we validate the shape below.
+            data: object = json.load(_fh)  # pyright: ignore[reportAny]
+        # Guard the shape: a JSON that isn't an object (or whose `palette` isn't
+        # one) must not raise or poison the fallback — same tolerance as a
+        # missing/invalid file. The palette is name→hex-string by contract, so
+        # once the shape is checked the cast is safe.
+        if isinstance(data, dict):
+            overrides = cast("dict[str, object]", data).get("palette")
+            if isinstance(overrides, dict):
+                pal.update(cast("dict[str, str]", overrides))
     except (OSError, ValueError):
         pass
 
-    def _rgb(value: str) -> tuple:
+    def _rgb(value: str) -> tuple[int, int, int]:
         value = value.lstrip("#")
         return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
 
