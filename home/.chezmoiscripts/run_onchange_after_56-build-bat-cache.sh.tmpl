@@ -21,8 +21,16 @@ set -uo pipefail
 command -v bat >/dev/null 2>&1 || { echo "bat not found; skipping cache build" >&2; exit 0; }
 [ -r "${XDG_CONFIG_HOME:-$HOME/.config}/bat/themes/chezmoi-system.tmTheme" ] || exit 0
 
-if bat cache --build >/dev/null 2>&1; then
-  echo "🦇  Rebuilt bat theme cache (chezmoi-system)"
-else
-  echo "bat cache --build failed (non-fatal)" >&2
+# The chezmoi-system tmTheme exists (guard above), so a failed cache build — or a
+# build that "succeeds" without actually registering the theme — means bat/delta
+# would silently fall back to a wrong theme. Make both FATAL so `chezmoi apply`
+# surfaces the broken cache instead of masking it behind a non-fatal echo.
+if ! bat cache --build >/dev/null 2>&1; then
+  echo "bat cache --build failed" >&2
+  exit 1
 fi
+if ! bat --list-themes 2>/dev/null | grep -q 'chezmoi-system'; then
+  echo "bat cache built but the chezmoi-system theme was not registered" >&2
+  exit 1
+fi
+echo "🦇  Rebuilt bat theme cache (chezmoi-system)"

@@ -30,11 +30,15 @@
 set -euo pipefail
 
 command -v chezmoi >/dev/null 2>&1 || { echo "[generate-theme] chezmoi not found; skipping." >&2; exit 0; }
-GEN="{{ joinPath .chezmoi.workingTree "custom-builds/theme/generate-theme.sh" }}"
+# GENERATE_THEME_BIN overrides the generator path (test seam); defaults to the
+# in-tree generator.
+GEN="${GENERATE_THEME_BIN:-{{ joinPath .chezmoi.workingTree "custom-builds/theme/generate-theme.sh" }}}"
 [ -x "$GEN" ] || { echo "[generate-theme] generator missing at $GEN; skipping." >&2; exit 0; }
 
 echo "[generate-theme] rendering chezmoi-system theme from theme.yaml…"
-"$GEN" || echo "[generate-theme] generation reported errors (non-fatal)." >&2
-exit 0
+# The generator is now atomic (renders + swaps with rollback), so a failure
+# means a genuinely broken theme build — propagate it (FATAL) so `chezmoi apply`
+# surfaces it instead of masking it behind a non-fatal echo + exit 0.
+"$GEN"
 
 # vim:ft=sh
