@@ -22,7 +22,11 @@
 
 set -eu -o pipefail
 
-source "$HOME/.local/lib/system-package-common.zsh"
+# SYS_PKG_LIB overrides the shared-lib dir (like backup's BKP_LIB) so the
+# ShellSpec suite can point this at the worktree copy — needed now that
+# svc::bootout relies on poll::until from common.zsh, which the suite must see
+# before it is applied. Default unchanged.
+source "${SYS_PKG_LIB:-$HOME/.local/lib}/system-package-common.zsh"
 
 # services.toml lives in $PKG_DIR (~/.config/packages by default) so all
 # system-package-* state stays in one directory.
@@ -238,11 +242,10 @@ svc::bootout() {
   local target="$DOMAIN/$(svc::label "$name")"
   svc::is_bootstrapped "$name" || return 0
   launchctl bootout "$target" 2>/dev/null || true
-  local i
-  for i in {1..50}; do
-    svc::is_bootstrapped "$name" || return 0
-    sleep 0.1
-  done
+  # Poll until launchd really has dropped it (≤5s) so callers can safely
+  # re-bootstrap. svc::_dropped closes over $name via dynamic scope.
+  svc::_dropped() { ! svc::is_bootstrapped "$name" }
+  poll::until 5 0.1 svc::_dropped
   return 0
 }
 

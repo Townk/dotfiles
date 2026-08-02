@@ -351,6 +351,37 @@ for_each() {
   return "$failures"
 }
 
+# --- bounded polling --------------------------------------------------------
+# poll::until <timeout_s> <interval_s> <cmd...>
+# Run <cmd> repeatedly until it succeeds (rc 0) or <timeout_s> wall-clock
+# seconds elapse. The IN-PROCESS twin of the `wait-until` bin: <cmd> runs in
+# THIS shell, so it can be a shell function closing over the caller's locals
+# (dynamic scope) — where `wait-until` execs an external program and is the
+# right tool for an external-command condition. Same contract otherwise:
+#
+#   * <cmd> is checked ONCE before the first sleep, so an already-true
+#     condition returns immediately (rc 0);
+#   * the budget is a WALL CLOCK — the elapsed check happens BEFORE each nap,
+#     so a slow condition cannot overrun the timeout by more than one probe;
+#   * a non-positive interval is not a cadence: check exactly once.
+#
+# Returns 0 the instant <cmd> succeeds, 1 on timeout. Both args accept floats.
+poll::until() {
+  local timeout="$1" interval="$2"
+  shift 2
+  zmodload zsh/datetime 2>/dev/null
+  if (( interval <= 0 )); then
+    "$@" && return 0
+    return 1
+  fi
+  local -F start=$EPOCHREALTIME
+  while true; do
+    "$@" && return 0
+    (( (EPOCHREALTIME - start) >= timeout )) && return 1
+    sleep "$interval"
+  done
+}
+
 # --- notifications ----------------------------------------------------------
 # notify::available [--path]
 # True when the running Hammerspoon's `hs` CLI is reachable, i.e. an OSD

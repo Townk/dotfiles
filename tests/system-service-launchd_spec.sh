@@ -14,6 +14,9 @@
 
 Describe 'system-service-launchd'
   LAUNCHD="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-service-launchd"
+  # Source the shared lib from the worktree, not the installed copy, so the
+  # suite exercises the code under test (e.g. svc::bootout's poll::until).
+  export SYS_PKG_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
   setup() {
     TEST_TMP="$(mktemp -d)"

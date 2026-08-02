@@ -165,6 +165,63 @@ Describe 'common.zsh'
     End
   End
 
+  Describe 'poll::until (bounded in-process wall-clock poll)'
+    # The in-process twin of the `wait-until` bin: run a shell command/function
+    # until it succeeds or the wall-clock budget elapses. Checked once before
+    # the first sleep; wall-clock bounded; a non-positive interval collapses to
+    # one check.
+    setup_poll() { PDIR=$(mktemp -d "$SHELLSPEC_TMPBASE/poll.XXXXXX"); }
+    BeforeEach 'setup_poll'
+
+    It 'returns 0 as soon as the condition becomes true within budget'
+      # True on the 3rd probe (counter in a file).
+      becomes_true() {
+        local n; n=$(( $(cat "$PDIR/c" 2>/dev/null || echo 0) + 1 ))
+        print -r -- "$n" >"$PDIR/c"
+        (( n >= 3 ))
+      }
+      drive() { poll::until 5 0.01 becomes_true; }
+      When call drive
+      The status should be success
+    End
+
+    It 'returns non-zero when the condition never holds, bounded by the wall clock'
+      # 0.2s budget on an always-false condition returns promptly (not hung);
+      # the guard turns a runaway wait into a distinct failure instead of a hang.
+      never() { false; }
+      drive() {
+        zmodload zsh/datetime
+        local -F t0=$EPOCHREALTIME
+        poll::until 0.2 0.01 never
+        local rc=$?
+        (( (EPOCHREALTIME - t0) < 2 )) || return 3
+        return $rc
+      }
+      When call drive
+      The status should equal 1
+    End
+
+    It 'checks once before sleeping (an already-true condition returns immediately)'
+      # A huge interval would hang here if the first check came after a sleep.
+      yes_now() { true; }
+      drive() { poll::until 5 999 yes_now; }
+      When call drive
+      The status should be success
+    End
+
+    It 'respects the interval — a coarser interval means far fewer probes'
+      bump() { printf x >>"$PDIR/probes"; false; }
+      probe_count() {
+        poll::until 0.3 0.1 bump
+        local n; n=$(wc -c <"$PDIR/probes" | tr -d ' ')
+        # ~3-4 probes at 0.1s over 0.3s; a 0.01s poll would be ~30.
+        [ "$n" -ge 1 ] && [ "$n" -le 6 ]
+      }
+      When call probe_count
+      The status should be success
+    End
+  End
+
   Describe 'have_tty'
     It 'is callable and yields a boolean (0/1) status'
       yields_boolean() { have_tty; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; }
