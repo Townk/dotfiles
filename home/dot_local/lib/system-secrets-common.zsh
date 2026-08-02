@@ -319,13 +319,6 @@ sec::sops_encrypt() {
   mv "$tmp" "$blob"
 }
 
-# sec::sops_updatekeys <blob_path> — re-encrypt the data key to whatever
-# recipients .sops.yaml now lists (used after a recipient rotation).
-sec::sops_updatekeys() {
-  (cd "$REPO_ROOT" && sops updatekeys --yes "$1") ||
-    die "sops updatekeys failed for $1"
-}
-
 # ---------------------------------------------------------------------------
 # Fragment template writers. Each writes home/.../private_secrets.d/
 # private_<slot>.sh.tmpl, which chezmoi renders to ~/.config/zsh/secrets.d/

@@ -162,15 +162,6 @@ mux::confirm() {
   print -rn -- "yes"; return 0
 }
 
-mux::line() {
-  local -a reply PANE_REST; local PANE_TITLE
-  _mux::split_pane_opts "$@"
-  local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
-  if ! _mux::widgets_float; then input::line "${_topt[@]}" "${PANE_REST[@]}"; return; fi
-  _mux::float --type line --borderless true --pane-width 64 \
-    "${reply[@]}" -- "${_topt[@]}" "${PANE_REST[@]}"
-}
-
 mux::choose() {
   # Pre-parse --multi and --other before _mux::split_pane_opts so they don't
   # corrupt PANE_TITLE (split_pane_opts puts unknown args into PANE_REST).
@@ -205,18 +196,9 @@ mux::choose() {
     "${reply[@]}" -- "${_topt[@]}" "${_extra[@]}" "${PANE_REST[@]}"
 }
 
-# text/form: the widget owns its chrome, so the title goes to the widget (not
-# the modal) via --title. ai-playbook input / input::form treat an explicit
+# form: the widget owns its chrome, so the title goes to the widget (not the
+# modal) via --title. ai-playbook input / input::form treat an explicit
 # --title as authoritative over a positional.
-mux::text() {
-  local -a reply PANE_REST; local PANE_TITLE
-  _mux::split_pane_opts "$@"
-  local -a _topt=(); [[ -n "$PANE_TITLE" ]] && _topt=(--title "$PANE_TITLE")
-  if ! _mux::widgets_float; then input::text "${_topt[@]}" "${PANE_REST[@]}"; return; fi
-  _mux::float --type text --borderless true --pane-width 57 \
-    "${reply[@]}" -- --height 5 "${_topt[@]}" "${PANE_REST[@]}"
-}
-
 mux::form() {
   local -a reply PANE_REST; local PANE_TITLE
   _mux::split_pane_opts "$@"
@@ -230,7 +212,5 @@ mux::form() {
 zj::available() { [[ "$(mux::backend)" == zellij ]] && _mux_zj_available; }
 zj::pick() { mux::pick "$@"; }
 zj::confirm() { mux::confirm "$@"; }
-zj::line() { mux::line "$@"; }
 zj::choose() { mux::choose "$@"; }
-zj::text() { mux::text "$@"; }
 zj::form() { mux::form "$@"; }

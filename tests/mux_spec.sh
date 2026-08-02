@@ -101,7 +101,7 @@ End
 # return 1 there) must answer "no", never fall through to an unconditional
 # "yes". Seam: stub _mux::float (defined after Include so it overrides the
 # sourced dispatcher) and drive mux::confirm through the float path (ZELLIJ=1
-# makes _mux::widgets_float true). mux::line/text/form already propagate the
+# makes _mux::widgets_float true). mux::choose/form already propagate the
 # failure; confirm was the one that inverted it.
 Describe 'mux.zsh — mux::confirm fails closed (MED-1)'
   Include home/dot_local/lib/mux.zsh

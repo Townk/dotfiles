@@ -86,7 +86,6 @@ mux_stack::_probe() {                # -> MS_PANE MS_INCOPY (cached per call)
   [[ "$MS_INCOPY" == 1 ]] || MS_INCOPY=0
   return 0
 }
-mux_stack::_pane()    { mux_stack::_probe; print -rn -- "$MS_PANE" }
 mux_stack::_in_copy() { mux_stack::_probe; [[ "$MS_INCOPY" == 1 ]] }
 # The copy-mode cursor is the REAL terminal cursor — one script owns its
 # visibility/shape and reads the state back off tmux (idempotent), but it

@@ -1925,22 +1925,6 @@ bkp::umount() {
   return 1
 }
 
-# bkp::ux::browse_fzf <repo> <path>
-# FUSE-less fallback: pick a version of <path> across snapshots and restore
-# it AS A COPY next to the live file (<path>.<snapid>) — in-place restores go
-# through the undoable `restore` verb, never through the picker.
-bkp::ux::browse_fzf() {
-  local repo="$1" p="$2"
-  local sel
-  sel=$(bkp::restic "$repo" find --json -- "$p" 2>/dev/null |
-    jq -r '.[]? | (.snapshot[0:8]) as $s | .matches[]? | [$s, .path] | @tsv' 2>/dev/null |
-    fzf --with-nth=1 --prompt="versions of ${p:t}> ") || return 1
-  [[ -n "$sel" ]] || return 0
-  local snap="${sel%%$'\t'*}"
-  bkp::restic "$repo" dump "$snap" "${sel##*$'\t'}" > "$p.$snap" || return 1
-  log_ok "bkp: restored copy -> $p.$snap"
-}
-
 # bkp::ux::diff <path> <snapA> [<snapB>]
 # File diff across snapshots (spec §7): dump A (and B; default = the live
 # file) and view via hunk, falling back to plain unified diff.
