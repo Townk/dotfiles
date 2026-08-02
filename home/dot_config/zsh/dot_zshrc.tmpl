@@ -93,17 +93,19 @@ if [[ -o interactive ]] && ! mux::in_session &&
   rm -f "$_gpgfwd_marker"
   _gpgfwd_msg='gpg-agent socket moved since this box was provisioned — reconnect to refresh the gpg forward.'
   if command -v gum >/dev/null 2>&1; then
-    if COLORTERM=truecolor \
-       GUM_CONFIRM_PROMPT_FOREGROUND="${C_HEX_DIALOG_WARNING:-${C_HEX_YELLOW:-yellow}}" \
-       GUM_CONFIRM_SELECTED_BACKGROUND="${C_HEX_DIALOG_WARNING:-${C_HEX_YELLOW:-yellow}}" \
-       GUM_CONFIRM_SELECTED_FOREGROUND="${C_HEX_CRUST:-${C_HEX_BASE:-black}}" \
-       GUM_CONFIRM_UNSELECTED_FOREGROUND="${C_HEX_SUBTEXT:-white}" \
-       GUM_CONFIRM_UNSELECTED_BACKGROUND="${C_HEX_SURFACE0:-black}" \
-       gum confirm --default --affirmative='Reconnect' --negative='Stay' \
+    # Canonical warning-confirm palette from the shared helper (Wave 2). Scoped
+    # to this one prompt: the GUM_CONFIRM_* exports are cleared right after so
+    # they don't leak into the mux the auto-attach below execs into.
+    source ~/.local/lib/theme-common.zsh
+    theme::gum_confirm_env --role warning
+    if gum confirm --default --affirmative='Reconnect' --negative='Stay' \
          "$_gpgfwd_msg" </dev/tty >/dev/tty 2>&1; then
       unset _gpgfwd_msg _gpgfwd_marker
       exit 0
     fi
+    unset GUM_CONFIRM_PROMPT_FOREGROUND GUM_CONFIRM_SELECTED_BACKGROUND \
+          GUM_CONFIRM_SELECTED_FOREGROUND GUM_CONFIRM_UNSELECTED_FOREGROUND \
+          GUM_CONFIRM_UNSELECTED_BACKGROUND
   else
     print -u2 -P -- "%F{yellow}⚠ ${_gpgfwd_msg}%f"
     if read -q "?Reconnect now? [y/N] " </dev/tty; then
