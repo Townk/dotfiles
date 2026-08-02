@@ -14,6 +14,22 @@ source "$(dirname "$_cagent_self")/common.zsh"
 source "$(dirname "$_cagent_self")/prompt-common.zsh"
 unset _cagent_self
 
+# cagent::validate_plan <plan_file>
+# The shared plan-shape contract every worker enforces before staging:
+# `.commits` is a non-empty array AND every group carries a non-empty `files`
+# array and a non-empty `message` string. Rejecting a message-less group here
+# is what stops `.commits[i].message` from resolving to null and committing a
+# real commit with the literal subject "null". Returns non-zero for any
+# violation (and swallows jq's diagnostic — callers print their own).
+cagent::validate_plan() {
+  local plan_file="$1"
+  jq -e '
+    .commits | type == "array" and length > 0 and
+    all(.[]; (.files | type == "array" and length > 0) and
+             (.message | type == "string" and length > 0))
+  ' "$plan_file" >/dev/null 2>&1
+}
+
 # cagent::print_plan_summary <plan_file> <commit_count>
 # The "Planned N commit(s)" header + one subject/file-list block per commit.
 cagent::print_plan_summary() {

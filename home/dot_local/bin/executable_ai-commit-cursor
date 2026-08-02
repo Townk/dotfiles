@@ -221,15 +221,6 @@ trap cleanup EXIT INT TERM
 
 plan_file="$tmpdir/plan.json"
 
-validate_plan() {
-  local file="$1"
-  jq -e '
-    .commits | type == "array" and length > 0 and
-    all(.[]; (.files | type == "array" and length > 0) and
-             (.message | type == "string" and length > 0))
-  ' "$file" >/dev/null 2>&1
-}
-
 save_plan_cache() {
   mkdir -p "${cache_file:h}"
   cp "$plan_file" "$cache_file"
@@ -404,7 +395,7 @@ if [[ ! -s "$plan_file" ]]; then
   die "no plan written (see $log_file)"
 fi
 
-if ! validate_plan "$plan_file"; then
+if ! cagent::validate_plan "$plan_file"; then
   if [[ "$use_cached_plan" -eq 1 ]]; then
     die "cached commit plan is invalid; rerun with --force-refresh (cache: $cache_file)"
   fi
