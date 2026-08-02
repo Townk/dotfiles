@@ -707,7 +707,7 @@ commit_and_push() {
 # (e.g. "X changed since chezmoi last wrote it") over SSH.
 converge_remote() {
   if ((DRY_RUN)); then
-    log_info "[dry-run] would: ssh $ALIAS — pull source, chezmoi init (profile=$PROFILE, slot=$SLOT), chezmoi apply --force, record slot $SLOT in $ALIAS's own operator map"
+    log_info "[dry-run] would: ssh $ALIAS — pull source, chezmoi init (profile=$PROFILE, slot=$SLOT), chezmoi apply --force, prune any stale ~/.config/zsh/secrets.d/*.sh that is not $SLOT.sh, record slot $SLOT in $ALIAS's own operator map"
     return 0
   fi
 
@@ -771,6 +771,11 @@ converge_remote() {
     log_warn "secret fragment not found on $ALIAS after apply — check the SA token (~/$OP_TOKEN_REL) and the op:// references"
   fi
 
+  # Reconcile a box left dual-fragment by a prior operator: drop every
+  # secrets.d/*.sh that is not the active slot's, so secrets.sh no longer sources
+  # a stale slot's vars alongside the live one (MED-4 follow-up).
+  prune_remote_fragments
+
   log_info "remote status:"
   rexec "${pre}chezmoi status --exclude scripts" || true
 
@@ -802,6 +807,85 @@ reconcile_remote_map() {
     rexec 'f="$HOME/.config/chezmoi/onboard-map.yaml"; mkdir -p "$HOME/.config/chezmoi"; [ -f "$f" ] || { printf "{}\n" > "$f"; chmod 600 "$f"; }; m="$(yq ea "select(fileIndex==0) * select(fileIndex==1)" "$f" -)" && printf "%s\n" "$m" > "$f" && chmod 600 "$f"' &&
     log_ok "recorded slot $SLOT in $ALIAS's own operator map (it can self-manage)" ||
     log_warn "could not record $SLOT in $ALIAS's operator map (its local system-secrets won't list the slot)"
+}
+
+# --- step 9.6: prune stale secret fragments (MED-4 follow-up) ----------------
+# MED-4 stopped a re-onboard from MINTING a second slot; this reconciles a box
+# ALREADY left in the dual-fragment state. secrets.sh globs
+# ~/.config/zsh/secrets.d/*.sh and sources EVERY match, so a box that carries a
+# prior operator's <old-slot>.sh alongside the active <slot>.sh sources both,
+# and the alphabetically-later slot silently wins overlapping vars. chezmoi will
+# not clean this up: the non-active fragment is .chezmoiignore'd on this box, so
+# chezmoi neither manages nor prunes it. After apply has materialized the ACTIVE
+# fragment, remove every OTHER secrets.d/*.sh over the same rexec channel.
+#
+# SAFETY (this deletes files on a remote):
+#   - Guard on a NON-EMPTY active slot FIRST — a bug that left SLOT empty must
+#     never fall through and match every fragment as "not the active slot".
+#   - Gate on the ACTIVE fragment actually being present on the remote: a broken
+#     apply that never materialized it must NOT let this strip the box of every
+#     fragment (total secret loss). No active fragment ⇒ prune nothing.
+#   - Only ever the SLOT-shaped rendered name ~/.config/zsh/secrets.d/slot-*.sh:
+#     an outer path-safety regex first rejects anything with a slash / '..' /
+#     oddball char, then a slot-fragment regex (slot-<id>.sh) gates removal, so a
+#     hand-placed custom.sh is left untouched and nothing outside that dir is
+#     ever reachable by the rm below.
+#   - Never the active slot's own fragment.
+#   - Honors --dry-run (logs the intent, deletes nothing).
+#   - Fail-soft: a listing or removal hiccup is logged and skipped, never fatal
+#     — a stale-fragment cleanup must not abort an otherwise-good onboarding.
+prune_remote_fragments() {
+  # Load-bearing guard: an empty active slot wipes NOTHING.
+  if [[ -z "$SLOT" ]]; then
+    log_warn "active slot is empty — skipping stale-fragment cleanup (refusing to touch $ALIAS's secrets.d)"
+    return 0
+  fi
+  local active="$SLOT.sh"
+
+  # Gate: only prune once the ACTIVE fragment is confirmed in place. If a broken
+  # apply left it missing, pruning the others would strip the box of ALL secrets
+  # — far worse than the dual-fragment state we're reconciling — so bail.
+  if ! rexec "test -r ~/.config/zsh/secrets.d/$active" 2>/dev/null; then
+    log_warn "active fragment $active not present on $ALIAS — skipping stale-fragment cleanup (refusing to prune without the live fragment in place)"
+    return 0
+  fi
+
+  # Enumerate the remote's fragment basenames. The `[ -e ]` guard makes an empty
+  # dir (glob stays literal) print nothing rather than the pattern itself.
+  local listing
+  listing="$(rexec 'for f in ~/.config/zsh/secrets.d/*.sh; do [ -e "$f" ] && printf "%s\n" "${f##*/}"; done' 2>/dev/null)" || {
+    log_warn "could not list secret fragments on $ALIAS — skipping stale-fragment cleanup"
+    return 0
+  }
+
+  local frag
+  while IFS= read -r frag; do
+    [[ -n "$frag" ]] || continue
+    # Outer path-safety guard: only ever a bare <name>.sh basename from that one
+    # dir. A slash, '..', or any other shape is skipped so nothing outside
+    # secrets.d can ever be reached by the rm below.
+    if [[ "$frag" == */* || ! "$frag" =~ '^[A-Za-z0-9._-]+\.sh$' ]]; then
+      log_warn "skipping unexpected entry '$frag' in $ALIAS's secrets.d (not a plain fragment name)"
+      continue
+    fi
+    # Never the active slot's own fragment.
+    [[ "$frag" == "$active" ]] && continue
+    # Inner shape gate: only the rendered slot-fragment name (slot-<id>.sh) is
+    # ever removed, so a hand-placed custom.sh in secrets.d is left alone.
+    if [[ ! "$frag" =~ '^slot-[A-Za-z0-9]+\.sh$' ]]; then
+      log_info "leaving non-slot fragment '$frag' in $ALIAS's secrets.d untouched (only slot-*.sh fragments are pruned)"
+      continue
+    fi
+    if ((DRY_RUN)); then
+      log_info "[dry-run] would remove stale secret fragment ~/.config/zsh/secrets.d/$frag on $ALIAS"
+      continue
+    fi
+    if rexec "rm -f ~/.config/zsh/secrets.d/$frag"; then
+      log_ok "removed stale secret fragment $frag on $ALIAS (kept $active)"
+    else
+      log_warn "could not remove stale secret fragment $frag on $ALIAS — remove it by hand"
+    fi
+  done <<< "$listing"
 }
 
 # --- step 9 (local): converge this machine -----------------------------------

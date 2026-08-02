@@ -303,3 +303,98 @@ Describe 'system-onboard: headless slot reuse (MED-4)'
     The contents of file "$SOPS" should not include "slot-badf00"
   End
 End
+
+# MED-4 follow-up: MED-4 stopped a re-onboard from MINTING a second slot, but a
+# box ALREADY left in the dual-fragment state still physically carries BOTH
+# ~/.config/zsh/secrets.d/<slot>.sh fragments — secrets.sh globs *.sh and
+# sources both, and the alphabetically-later slot silently wins overlapping
+# vars. chezmoi never prunes the stale one (it is .chezmoiignore'd on this box,
+# so chezmoi neither manages nor removes it). converge_remote's prune step
+# removes every stale slot-*.sh that is NOT the box's active slot, over the same
+# rexec channel onboarding already uses. SAFETY: an empty active slot must wipe
+# NOTHING; the active fragment must be confirmed present before anything is
+# pruned (a broken apply must not strip ALL secrets); only slot-shaped names are
+# ever removed (a hand-placed custom.sh is left alone); --dry-run removes
+# nothing; failures are logged, never fatal. These examples source the script
+# (main() suppressed), stub rexec so the `test -r` active-fragment probe and the
+# enumerate call are served from env (ACTIVE_PRESENT/FRAGS) and every rm is
+# RECORDED (never run), then call prune_remote_fragments directly.
+Describe 'system-onboard: prune stale secret fragments (MED-4 follow-up)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/onboard-prune.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT"
+    export REMOVED="$WORK/removed.log"          # each stubbed rm records its target here
+    export ACTIVE_PRESENT=1                      # `test -r <active>.sh` result (1=present)
+    export FRAGS="slot-AAA.sh slot-BBB.sh"       # what the enumerate call lists
+  }
+  BeforeEach 'setup'
+
+  # rexec is stubbed: the `test -r` probe returns per $ACTIVE_PRESENT, the
+  # enumerate call lists $FRAGS (one per line), and every `rm` is recorded to
+  # $REMOVED instead of touching a real remote. SLOT/DRY_RUN/ALIAS are set AFTER
+  # sourcing (the script's own top-level assignments would otherwise reset them).
+  # $1=active slot, $2=DRY_RUN.
+  run_prune() {
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      rexec() { case "$*" in
+        (*"test -r ~/.config/zsh/secrets.d/"*)
+          [ "${ACTIVE_PRESENT:-1}" = 1 ] && return 0 || return 1 ;;
+        (*"for f in ~/.config/zsh/secrets.d"*)
+          for x in ${=FRAGS}; do print -r -- "$x"; done ;;
+        (*"rm -f ~/.config/zsh/secrets.d/"*) print -r -- "$*" >>"$REMOVED" ;;
+        (*) return 0 ;;
+      esac }
+      SLOT="$1"; DRY_RUN="$2"; ALIAS=test-box
+      prune_remote_fragments
+    ' _ "$@"
+  }
+
+  It 'removes only the non-active fragment and keeps the active slot'
+    When call run_prune slot-AAA 0
+    The status should be success
+    The stdout should include "removed stale secret fragment slot-BBB.sh"
+    The path "$REMOVED" should be exist
+    The contents of file "$REMOVED" should include "rm -f ~/.config/zsh/secrets.d/slot-BBB.sh"
+    The contents of file "$REMOVED" should not include "slot-AAA.sh"
+  End
+
+  It 'removes NOTHING when the active slot is empty (guard against a wipe)'
+    When call run_prune "" 0
+    The status should be success
+    The stderr should include "active slot is empty"
+    The path "$REMOVED" should not be exist
+  End
+
+  It 'removes NOTHING when the active fragment is absent on the remote (broken apply)'
+    export ACTIVE_PRESENT=0
+    When call run_prune slot-AAA 0
+    The status should be success
+    The stderr should include "not present on"
+    The stderr should include "refusing to prune"
+    The path "$REMOVED" should not be exist
+  End
+
+  It 'prunes only slot-shaped fragments and leaves a hand-placed custom.sh alone'
+    export FRAGS="slot-AAA.sh slot-BBB.sh custom.sh"
+    When call run_prune slot-AAA 0
+    The status should be success
+    The stdout should include "removed stale secret fragment slot-BBB.sh"
+    The stdout should include "leaving non-slot fragment 'custom.sh'"
+    The path "$REMOVED" should be exist
+    The contents of file "$REMOVED" should include "rm -f ~/.config/zsh/secrets.d/slot-BBB.sh"
+    The contents of file "$REMOVED" should not include "custom.sh"
+    The contents of file "$REMOVED" should not include "slot-AAA.sh"
+  End
+
+  It 'removes nothing and logs the intent under --dry-run'
+    When call run_prune slot-AAA 1
+    The status should be success
+    The stdout should include "[dry-run] would remove"
+    The stdout should include "slot-BBB.sh"
+    The path "$REMOVED" should not be exist
+  End
+End
