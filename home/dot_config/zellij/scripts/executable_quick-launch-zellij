@@ -33,14 +33,16 @@ set -euo pipefail
 # Shared picker-adapter shell: bin resolution + -x guard + the -4/margin/padding
 # geometry + no-border + exec. See lib/pick-adapter.zsh.
 #
-# No --flag-no-border here: the adapter runs the `quick-launch` dispatcher, whose
-# `menu` command forwards no-border to the real picker (quick-launch-pick) through
-# the environment only — it drops any CLI flag on its `menu` command line. So the
-# adapter stays on the env form (zj_adapter::exec exports QUICK_LAUNCH_NO_BORDER=1).
-# The single positional arg (pane|tab|workspace) rides after `menu`.
+# --flag-no-border: the `quick-launch` dispatcher's `menu` command now accepts a
+# --no-border flag and forwards it to the real picker (quick-launch-pick) on the
+# command line (Wave 2, group C5, Decision 1), so the adapter passes the flag
+# instead of exporting QUICK_LAUNCH_NO_BORDER. zj_adapter::exec prepends the flag
+# to `menu "$@"`, so the dispatcher sees `--no-border menu <kind>` and strips the
+# flag out before dispatch. The single positional arg (pane|tab|workspace) rides
+# after `menu`.
 _pa_lib="${0:A:h}/lib/pick-adapter.zsh"
 [[ -r "$_pa_lib" ]] || _pa_lib="$HOME/.config/zellij/scripts/lib/pick-adapter.zsh"
 source "$_pa_lib"
 unset _pa_lib
 
-zj_adapter::exec QUICK_LAUNCH "$HOME/.config/mux/scripts/quick-launch" -- menu "$@"
+zj_adapter::exec QUICK_LAUNCH "$HOME/.config/mux/scripts/quick-launch" --flag-no-border -- menu "$@"

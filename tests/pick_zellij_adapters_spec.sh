@@ -6,13 +6,12 @@
 #
 # Each adapter resolves its picker binary, exports the -4 title-block geometry
 # (the zellij-modal contract), forwards its args, and requests the borderless
-# look in the form its picker actually understands:
-#   * pick-glyph / pick-gitmoji parse a --no-border CLI flag  -> flag form
-#   * pick-clipboard reads PICK_CLIPBOARD_NO_BORDER (line ~2011, no CLI flag)
-#     and the quick-launch dispatcher forwards QUICK_LAUNCH_NO_BORDER to
-#     quick-launch-pick but drops a CLI flag                  -> env form
-# These are the safety net for the shared-lib (C5) refactor: behavior must be
-# identical before and after the adapters are reduced to zj_adapter::exec calls.
+# look via the --no-border CLI flag. All four now use the flag form (Wave 2,
+# group C5, Decision 1): pick-glyph / pick-gitmoji always parsed it; pick-clipboard
+# gained a --no-border flag and the quick-launch dispatcher gained --no-border
+# forwarding into `menu`, so the *_NO_BORDER env form is no longer used here.
+# These are the safety net for the shared-lib (C5) refactor: the borderless
+# render + -4 geometry must be identical before and after the migration.
 Describe 'zellij picker adapters'
   setup() {
     TEST_TMP=$(mktemp -d)
@@ -65,29 +64,28 @@ Describe 'zellij picker adapters'
   End
 
   Describe 'pick-clipboard-zellij'
-    It 'execs pick-clipboard with the *_NO_BORDER env (its picker reads env, not a flag)'
+    It 'execs pick-clipboard with the --no-border flag and -4 geometry (no env var)'
       export PICK_CLIPBOARD_BIN="$STUB"
       When run zsh "$SDIR/executable_pick-clipboard-zellij"
       The status should be success
-      The contents of file "$REC" should include "PICK_CLIPBOARD_NO_BORDER=1"
+      The contents of file "$REC" should include "ARGV: --no-border"
       The contents of file "$REC" should include "PICK_CLIPBOARD_HEIGHT=-4"
       The contents of file "$REC" should include "PICK_CLIPBOARD_MARGIN=0,0,0,0"
       The contents of file "$REC" should include "PICK_CLIPBOARD_PADDING=0,2,0,2"
-      The contents of file "$REC" should not include "ARGV: --no-border"
+      The contents of file "$REC" should not include "PICK_CLIPBOARD_NO_BORDER"
     End
   End
 
   Describe 'quick-launch-zellij'
-    It 'execs quick-launch menu <kind> with the *_NO_BORDER env (dispatcher forwards env, not a flag)'
+    It 'execs quick-launch menu <kind> with the --no-border flag and -4 geometry (no env var)'
       export QUICK_LAUNCH_BIN="$STUB"
       When run zsh "$SDIR/executable_quick-launch-zellij" pane
       The status should be success
-      The contents of file "$REC" should include "ARGV: menu pane"
-      The contents of file "$REC" should include "QUICK_LAUNCH_NO_BORDER=1"
+      The contents of file "$REC" should include "ARGV: --no-border menu pane"
       The contents of file "$REC" should include "QUICK_LAUNCH_HEIGHT=-4"
       The contents of file "$REC" should include "QUICK_LAUNCH_MARGIN=0,0,0,0"
       The contents of file "$REC" should include "QUICK_LAUNCH_PADDING=0,2,0,2"
-      The contents of file "$REC" should not include "ARGV: menu pane --no-border"
+      The contents of file "$REC" should not include "QUICK_LAUNCH_NO_BORDER"
     End
   End
 End

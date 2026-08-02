@@ -14,14 +14,13 @@
 # modal header — keep it -4 (see executable_zellij-modal's title-block note).
 #
 # no-border style (shared-lib consolidation Wave 2, group C5, Decision 1): the
-# preferred form is the --no-border CLI flag. Pass --flag-no-border and the
-# adapter puts --no-border on the picker's command line — pick-glyph and
-# pick-gitmoji parse it directly. Omit --flag-no-border and the adapter exports
-# <PREFIX>_NO_BORDER=1 instead: the env form, for pickers whose reachable
-# entrypoint only reads the env var. pick-clipboard reads PICK_CLIPBOARD_NO_BORDER
-# (it recognizes no --no-border CLI flag), and the quick-launch dispatcher
-# forwards QUICK_LAUNCH_NO_BORDER to quick-launch-pick through the environment
-# but drops any CLI flag on its `menu` command line.
+# form is the --no-border CLI flag. Pass --flag-no-border and the adapter puts
+# --no-border on the picker's command line — all four pickers now parse it
+# (pick-glyph / pick-gitmoji always did; pick-clipboard gained the flag and the
+# quick-launch dispatcher's `menu` forwards it to quick-launch-pick). The env
+# form is retained as a generic fallback: omit --flag-no-border and the adapter
+# exports <PREFIX>_NO_BORDER=1 instead, for any future picker whose reachable
+# entrypoint only reads the env var.
 #
 # Usage:
 #   zj_adapter::exec <ENV_PREFIX> <default_bin> [--flag-no-border] -- <args…>
