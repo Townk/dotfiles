@@ -35,17 +35,40 @@ THEME_ICON_TAB_SEP="▏"
 # the C_*/THEME_* SGR vars are empty when a script's stdout is a captured file
 # (e.g. input-widget under zellij-modal), but C_HEX_* are always set. The
 # input::confirm hint always prints to /dev/tty, so it builds its colors here.
+#
+# THE single hex→SGR pair (C1 consolidation): the former pick / backup-tm /
+# mux_dialog / mux-whichkey / fzf-tab-rich copies route here. A leading '#' is
+# optional (some copies REQUIRED it and mis-parsed a bare hex). The xdigit
+# guard — folded in from fzf-tab-rich's copy — emits NOTHING for empty/invalid
+# input, so a renamed/absent palette token no longer paints black-on-black
+# (\e[38;2;0;0;0m) in a dialog footer.
 theme::sgr_fg() {
+  emulate -L zsh -o extended_glob
   local h="${1#\#}"
+  [[ $h == [[:xdigit:]](#c6) ]] || return 0
   printf '\e[38;2;%d;%d;%dm' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
 }
 
 # theme::sgr_bg "#rrggbb" — a 24-bit set-background SGR. Used to paint a modal's
 # canvas (e.g. the dialog/which-key background) so a whole line/region fills the
 # color, not just the glyphs. Pair with `\e[K` (erase to EOL) to flood a row.
+# Same '#'-optional + xdigit-guard rules as theme::sgr_fg.
 theme::sgr_bg() {
+  emulate -L zsh -o extended_glob
   local h="${1#\#}"
+  [[ $h == [[:xdigit:]](#c6) ]] || return 0
   printf '\e[48;2;%d;%d;%dm' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
+}
+
+# theme::hex_rgb "#rrggbb" — the decimal component triple "R G B" (space
+# separated), for consumers that do color math on the channels rather than
+# emit an SGR (the status-bar OKLab gradient). Same '#'-optional + xdigit-guard
+# rules as theme::sgr_fg; emits nothing on invalid/empty input.
+theme::hex_rgb() {
+  emulate -L zsh -o extended_glob
+  local h="${1#\#}"
+  [[ $h == [[:xdigit:]](#c6) ]] || return 0
+  printf '%d %d %d' "$(( 0x${h:0:2} ))" "$(( 0x${h:2:2} ))" "$(( 0x${h:4:2} ))"
 }
 
 # theme::args — fill the global AI_THEME_ARGS with the --theme-* flags for
