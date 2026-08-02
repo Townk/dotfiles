@@ -34,6 +34,7 @@ FAST_SPECS := $(filter-out $(SLOW_SPECS),$(SPECS))
 # tests/mux_spec.sh is named explicitly: `mux_*_spec.sh` needs a middle
 # segment, so the shim's OWN spec was missing from this lane.
 MUX_SPECS  := tests/mux_spec.sh tests/zellij_spec.sh \
+              tests/pick_adapter_spec.sh tests/pick_zellij_adapters_spec.sh \
               $(wildcard tests/mux_*_spec.sh) $(wildcard tests/tmux_*_spec.sh) \
               tests/quick_launch_tmux_spec.sh tests/theme_apply_tmux_spec.sh
 

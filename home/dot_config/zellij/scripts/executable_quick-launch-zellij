@@ -30,17 +30,17 @@
 
 set -euo pipefail
 
-QUICK_LAUNCH_BIN="${QUICK_LAUNCH_BIN:-$HOME/.config/mux/scripts/quick-launch}"
-[[ -x "$QUICK_LAUNCH_BIN" ]] || {
-  echo "quick-launch-zellij: missing or non-executable: $QUICK_LAUNCH_BIN" >&2
-  exit 1
-}
+# Shared picker-adapter shell: bin resolution + -x guard + the -4/margin/padding
+# geometry + no-border + exec. See lib/pick-adapter.zsh.
+#
+# No --flag-no-border here: the adapter runs the `quick-launch` dispatcher, whose
+# `menu` command forwards no-border to the real picker (quick-launch-pick) through
+# the environment only — it drops any CLI flag on its `menu` command line. So the
+# adapter stays on the env form (zj_adapter::exec exports QUICK_LAUNCH_NO_BORDER=1).
+# The single positional arg (pane|tab|workspace) rides after `menu`.
+_pa_lib="${0:A:h}/lib/pick-adapter.zsh"
+[[ -r "$_pa_lib" ]] || _pa_lib="$HOME/.config/zellij/scripts/lib/pick-adapter.zsh"
+source "$_pa_lib"
+unset _pa_lib
 
-export QUICK_LAUNCH_HEIGHT="${QUICK_LAUNCH_HEIGHT:--4}"
-export QUICK_LAUNCH_MARGIN="${QUICK_LAUNCH_MARGIN:-0,0,0,0}"
-export QUICK_LAUNCH_PADDING="${QUICK_LAUNCH_PADDING:-0,2,0,2}"
-# --no-border: the floating pane already draws its own frame; a second fzf
-# border would just shave columns off the usable width.
-export QUICK_LAUNCH_NO_BORDER=1
-
-exec "$QUICK_LAUNCH_BIN" menu "$@"
+zj_adapter::exec QUICK_LAUNCH "$HOME/.config/mux/scripts/quick-launch" -- menu "$@"

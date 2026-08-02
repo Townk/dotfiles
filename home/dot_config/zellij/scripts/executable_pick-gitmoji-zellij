@@ -31,16 +31,12 @@
 
 set -euo pipefail
 
-PICK_GITMOJI_BIN="${PICK_GITMOJI_BIN:-$HOME/.local/libexec/pick-gitmoji}"
-[[ -x "$PICK_GITMOJI_BIN" ]] || {
-  echo "pick-gitmoji-zellij: missing or non-executable: $PICK_GITMOJI_BIN" >&2
-  exit 1
-}
+# Shared picker-adapter shell: bin resolution + -x guard + the -4/margin/padding
+# geometry + no-border + exec. --flag-no-border: pick-gitmoji parses --no-border
+# on the command line. See lib/pick-adapter.zsh.
+_pa_lib="${0:A:h}/lib/pick-adapter.zsh"
+[[ -r "$_pa_lib" ]] || _pa_lib="$HOME/.config/zellij/scripts/lib/pick-adapter.zsh"
+source "$_pa_lib"
+unset _pa_lib
 
-export PICK_GITMOJI_HEIGHT="${PICK_GITMOJI_HEIGHT:--4}"
-export PICK_GITMOJI_MARGIN="${PICK_GITMOJI_MARGIN:-0,0,0,0}"
-export PICK_GITMOJI_PADDING="${PICK_GITMOJI_PADDING:-0,2,0,2}"
-
-# --no-border: the floating pane already draws its own frame; a second
-# fzf border would just shave columns off the usable width.
-exec "$PICK_GITMOJI_BIN" --no-border "$@"
+zj_adapter::exec PICK_GITMOJI "$HOME/.local/libexec/pick-gitmoji" --flag-no-border -- "$@"

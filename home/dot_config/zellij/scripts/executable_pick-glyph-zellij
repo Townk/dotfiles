@@ -33,16 +33,12 @@
 
 set -euo pipefail
 
-PICK_GLYPH_BIN="${PICK_GLYPH_BIN:-$HOME/.local/libexec/pick-glyph}"
-[[ -x "$PICK_GLYPH_BIN" ]] || {
-  echo "pick-glyph-zellij: missing or non-executable: $PICK_GLYPH_BIN" >&2
-  exit 1
-}
+# Shared picker-adapter shell: bin resolution + -x guard + the -4/margin/padding
+# geometry + no-border + exec. --flag-no-border: pick-glyph parses --no-border on
+# the command line. See lib/pick-adapter.zsh.
+_pa_lib="${0:A:h}/lib/pick-adapter.zsh"
+[[ -r "$_pa_lib" ]] || _pa_lib="$HOME/.config/zellij/scripts/lib/pick-adapter.zsh"
+source "$_pa_lib"
+unset _pa_lib
 
-export PICK_GLYPH_HEIGHT="${PICK_GLYPH_HEIGHT:--4}"
-export PICK_GLYPH_MARGIN="${PICK_GLYPH_MARGIN:-0,0,0,0}"
-export PICK_GLYPH_PADDING="${PICK_GLYPH_PADDING:-0,2,0,2}"
-
-# --no-border: the floating pane already draws its own frame; a second
-# fzf border would just shave columns off the usable width.
-exec "$PICK_GLYPH_BIN" --no-border "$@"
+zj_adapter::exec PICK_GLYPH "$HOME/.local/libexec/pick-glyph" --flag-no-border -- "$@"
