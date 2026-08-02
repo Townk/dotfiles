@@ -352,6 +352,21 @@ for_each() {
 }
 
 # --- notifications ----------------------------------------------------------
+# notify::available [--path]
+# True when the running Hammerspoon's `hs` CLI is reachable, i.e. an OSD
+# notification can actually be shown. Honors $HS as an explicit override, then
+# falls back to PATH. With --path it also prints the resolved hs path on stdout
+# (nothing + rc 1 when unavailable). This is the probe `notify` uses to bail
+# quietly with no `hs`, shared so OSD callers (e.g. copy-pwd deciding whether
+# an OSD will be SEEN) resolve it exactly the same way.
+notify::available() {
+  local hs="${HS:-/opt/homebrew/bin/hs}"
+  [ -x "$hs" ] || hs="$(command -v hs 2>/dev/null || true)"
+  [ -n "$hs" ] && [ -x "$hs" ] || return 1
+  [ "${1:-}" = --path ] && printf '%s' "$hs"
+  return 0
+}
+
 # notify [--icon SPEC] [--sound NAME] [--ansi] MESSAGE...
 #
 # Show a transient on-screen notification through the already-running
@@ -411,9 +426,8 @@ notify() {
   local text="$*"
   [ -n "$text" ] || [ -n "$icon" ] || return 2
 
-  local hs="${HS:-/opt/homebrew/bin/hs}"
-  [ -x "$hs" ] || hs="$(command -v hs 2>/dev/null || true)"
-  [ -n "$hs" ] && [ -x "$hs" ] || return 1
+  local hs
+  hs="$(notify::available --path)" || return 1
 
   # `hs -c` runs inside the already-running Hammerspoon process, so client
   # environment variables are invisible there; pass every argument as a Lua

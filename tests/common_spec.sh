@@ -130,6 +130,41 @@ Describe 'common.zsh'
     End
   End
 
+  Describe 'notify::available (Hammerspoon OSD probe)'
+    # The probe `notify` uses to decide whether the running Hammerspoon's `hs`
+    # CLI is reachable — extracted so copy-pwd (and any OSD caller) shares the
+    # one implementation. $HS overrides the path; PATH is the fallback.
+    # A fresh dir per example — TMPBASE is shared across examples, so a stub
+    # left by one example must not leak onto the next one's PATH.
+    setup_hs() { HSDIR=$(mktemp -d "$SHELLSPEC_TMPBASE/hsbin.XXXXXX"); }
+    BeforeEach 'setup_hs'
+
+    It 'is true when the hs CLI is present and executable'
+      present() {
+        printf '#!/bin/sh\nexit 0\n' >"$HSDIR/hs"; chmod +x "$HSDIR/hs"
+        HS="$HSDIR/hs" notify::available
+      }
+      When call present
+      The status should be success
+    End
+
+    It 'prints the resolved hs path with --path'
+      with_path() {
+        printf '#!/bin/sh\n' >"$HSDIR/hs"; chmod +x "$HSDIR/hs"
+        HS="$HSDIR/hs" notify::available --path
+      }
+      When call with_path
+      The status should be success
+      The output should equal "$HSDIR/hs"
+    End
+
+    It 'is false when hs is absent (no override, none on PATH)'
+      absent() { HS="$HSDIR/nope" PATH="$HSDIR" notify::available; }
+      When call absent
+      The status should be failure
+    End
+  End
+
   Describe 'have_tty'
     It 'is callable and yields a boolean (0/1) status'
       yields_boolean() { have_tty; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; }

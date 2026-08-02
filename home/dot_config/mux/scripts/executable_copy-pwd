@@ -116,9 +116,9 @@ fi
 osd=""
 if source "$HOME/.local/lib/common.zsh" 2>/dev/null; then
   source "$HOME/.local/lib/mux-bootstrap.zsh" 2>/dev/null || true
-  osd="${HS:-/opt/homebrew/bin/hs}"
-  [[ -x "$osd" ]] || osd="$(command -v hs 2>/dev/null || true)"
-  [[ -n "$osd" && -x "$osd" ]] || osd=""
+  # Shared Hammerspoon-OSD probe (common.zsh); same $HS-then-PATH resolution
+  # notify itself uses. `osd` stays a plain availability flag below.
+  notify::available && osd=1
 fi
 if [[ -n "$osd" && -n "${TMUX:-}" ]]; then
   # A remote client can't see the OSD (it renders on the tmux HOST's screen),
