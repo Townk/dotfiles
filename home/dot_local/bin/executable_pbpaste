@@ -501,7 +501,7 @@ pbpaste_read_n() {
 # dialog below. This is standalone POSIX sh, so it can't see the zsh-only
 # C_HEX_* palette vars (dot_zshrc:57-65's own themed-gum-confirm idiom) --
 # they're never exported. Instead this reads the SAME generated JSON palette
-# those vars come from (${THEME_PALETTE_JSON:-~/.config/theme/chezmoi-system.json},
+# those vars come from (resolved by the theme::json_path order below,
 # shape `{"palette": {...}, "extended": {"dialog": {...}}}` -- see
 # ics-view's _PALETTE_FALLBACK/_load_palette for the identical
 # read-json-or-fall-back-to-literals precedent for a non-zsh consumer) via
@@ -516,7 +516,19 @@ pbpaste_cap_theme() {
     subtext0) _ct_path=.palette.subtext0 _ct_fallback='#a6adc8' ;;
     surface0) _ct_path=.palette.surface0 _ct_fallback='#313244' ;;
   esac
-  _ct_file=${THEME_PALETTE_JSON:-$HOME/.config/theme/chezmoi-system.json}
+  # Inline mirror of theme::json_path (theme-common.zsh, C2) — pbpaste is POSIX
+  # /bin/sh and CANNOT source the zsh lib, so keep this the SAME resolution
+  # order so it agrees with every zsh reader: $THEME_PALETTE_JSON (the sole
+  # override) -> the effective cache copy if readable -> the canonical config.
+  # Honoring the cache tier here is what keeps the size-cap dialog on the same
+  # (SSH-tinted) palette the status bar and dialogs use.
+  if [ -n "${THEME_PALETTE_JSON:-}" ]; then
+    _ct_file=$THEME_PALETTE_JSON
+  elif [ -r "${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.json" ]; then
+    _ct_file=${XDG_CACHE_HOME:-$HOME/.cache}/theme/chezmoi-system.json
+  else
+    _ct_file=${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.json
+  fi
   _ct_val=""
   if command -v jq >/dev/null 2>&1 && [ -r "$_ct_file" ]; then
     _ct_val=$(jq -r "${_ct_path} // empty" "$_ct_file" 2>/dev/null) || _ct_val=""

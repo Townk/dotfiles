@@ -1417,6 +1417,33 @@ EOF
     The status should be success
     The output should equal "warn=#e5bf7b crust=#11111b subtext0=#a6adc8 surface0=#313244"
   End
+
+  # C2: pbpaste is POSIX /bin/sh and cannot source theme-common, but its inline
+  # resolution now honours the SAME order as theme::json_path -- with
+  # $THEME_PALETTE_JSON unset it reads the effective cache copy
+  # ($XDG_CACHE_HOME/theme/chezmoi-system.json), the SSH-tinted file the shell
+  # exports, so the size-cap dialog agrees with the status bar and dialogs.
+  It 'reads the effective cache copy when the override is unset (theme::json_path order)'
+    cachedir="$SHELLSPEC_TMPBASE/xdgcache/theme"
+    mkdir -p "$cachedir"
+    cat > "$cachedir/chezmoi-system.json" <<'EOF'
+{
+  "palette": {"crust": "#0c0c0c", "subtext0": "#0d0d0d", "surface0": "#0e0e0e"},
+  "extended": {"dialog": {"warning": "#0f0f0f"}}
+}
+EOF
+    When run command env PBPASTE_TEST_SOURCE_ONLY=1 THEME_PALETTE_JSON= \
+      XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/xdgcache" sh -c '
+      . "$1"
+      printf "warn=%s crust=%s subtext0=%s surface0=%s\n" \
+        "$(pbpaste_cap_theme dialog_warning)" \
+        "$(pbpaste_cap_theme crust)" \
+        "$(pbpaste_cap_theme subtext0)" \
+        "$(pbpaste_cap_theme surface0)"
+    ' _ "$SCRIPT"
+    The status should be success
+    The output should equal "warn=#0f0f0f crust=#0c0c0c subtext0=#0d0d0d surface0=#0e0e0e"
+  End
 End
 
 Describe 'pbpaste local mode: Phase 7 store fallback'
