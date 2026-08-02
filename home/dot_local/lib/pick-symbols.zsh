@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
-# pick-symbols-common.zsh — shared scaffolding for the symbols.db-backed
+# pick-symbols.zsh — shared scaffolding for the symbols.db-backed
 # pickers (pick-glyph, pick-gitmoji). They differ only in the SQL projection
 # and their key map; everything else — option parsing, the DB-not-found guard,
 # and the recency recorder — lived identically in both and now lives here.
 #
 # SOURCED, never executed. Pulls in pick-common.zsh (and transitively the base
 # common.zsh) for require_cmd / die / pick::start, so a picker only needs to
-#   source "$PICK_LIB_DIR/pick-symbols-common.zsh"
+#   source "$PICK_LIB_DIR/pick-symbols.zsh"
 # instead of pick-common.zsh directly.
 
 # Source pick-common relative to THIS file.

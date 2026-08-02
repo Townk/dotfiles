@@ -15,7 +15,7 @@ absolute path from its caller, so it never needs to be on `PATH`:
 - `pinentry-auto` — gpg-agent's `pinentry-program` (set in `gpg-agent.conf`);
 - `pick-glyph`, `pick-gitmoji` — the fzf symbol pickers, driven by the zellij
   `pick-{glyph,gitmoji}-zellij` adapters (`Ctrl+Shift+u` / `Ctrl+Shift+g`);
-  backed by `pick-symbols-common.zsh` → `pick-common.zsh`.
+  backed by `pick-symbols.zsh` → `pick-common.zsh`.
 - `pick-list` — a generic standalone front-end to `pick::start`, used by
   `mux::pick` (in `mux.zsh`) to run a picker inside a floating pane on
   either mux (`zj::pick` remains as a permanent alias).
@@ -56,7 +56,7 @@ common.zsh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
                         have_tty, for_each
    ├── prompt-common.zsh ......... prompt::required/default/secret/choice/confirm
    ├── pick-common.zsh ........... pick::*  (the fzf picker engine)
-   │     ├── pick-symbols-common.zsh   pick_symbols::*  (glyph/gitmoji shared bits)
+   │     ├── pick-symbols.zsh          pick_symbols::*  (glyph/gitmoji shared bits)
    │     └── mux.zsh ............. mux::*  (the mux shim: pick/confirm/line/
    │           ├── mux/zellij.zsh   choose/text/form + panes, tabs, sessions;
    │           └── mux/tmux.zsh     floats the picker inside either mux, runs

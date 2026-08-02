@@ -35,9 +35,9 @@ set -eu -o pipefail
 
 PICK_NAME=pick-glyph
 PICK_LIB_DIR="${PICK_LIB_DIR:-$HOME/.local/lib}"
-source "${PICK_SYMBOLS_LIB:-$PICK_LIB_DIR/pick-symbols-common.zsh}" ||
+source "${PICK_SYMBOLS_LIB:-$PICK_LIB_DIR/pick-symbols.zsh}" ||
   {
-    print -ru2 -- "pick-glyph: cannot source pick-symbols-common.zsh from $PICK_LIB_DIR"
+    print -ru2 -- "pick-glyph: cannot source pick-symbols.zsh from $PICK_LIB_DIR"
     exit 1
   }
 

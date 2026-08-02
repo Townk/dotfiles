@@ -52,7 +52,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 | clipboard | Universal clipboard (store + bridge + mount) | `dot_local/bin/pb{copy,paste}`, `libexec/clipboard-*`, `libexec/pick-clipboard` | `lib/clipboard-{store-core,bridge-client,platform-*}.zsh` | the framed wire protocol (opcode/BE32-length), ports 2489 local / 2490 peer |
 | neovim | NeoVim config | `dot_config/nvim/` | (lua, none in `lib/`) | filetype registry (consumed by chezmoi), chezmoi auto-apply (consumes utils) |
 | hammerspoon | Hammerspoon | `dot_config/hammerspoon/` | (lua, in-process) | `hs` CLI `notify`/`notifyAnsi` globals (consumed by shell/terminal-mux) |
-| pick | pick framework + symbols pickers | `dot_local/lib/pick-common.zsh`, `pick-symbols-common.zsh`, `libexec/pick-*` | `pick::*`, `pick_symbols::*` | `pick::start` wire format (consumed by terminal-mux/custom-builds/ai-harnesses) |
+| pick | pick framework + symbols pickers | `dot_local/lib/pick-common.zsh`, `pick-symbols.zsh`, `libexec/pick-*` | `pick::*`, `pick_symbols::*` | `pick::start` wire format (consumed by terminal-mux/custom-builds/ai-harnesses) |
 | custom-builds | Custom builds | `custom-builds/` | (shell/python builders) | `symbols.db` schema+path (consumed by pick/hammerspoon), patched font (consumed by terminal-mux/hammerspoon) |
 | theme | Single-source theming | `.chezmoidata/theme.yaml`, `custom-builds/theme/` | `lib/theme-common.zsh`, `libexec/theme-apply` | slot vocabulary + "no raw hex outside theme.yaml" (lint-enforced) |
 | ai-harnesses | AI agent harnesses | `dot_local/bin/ai-assist*`, `ai-commit*` | `lib/{assist,commit}-agent-common.zsh` | `request.json` shape, harness `--probe` contract (consumed by terminal-mux pane render) |
@@ -176,7 +176,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 **Owner area:**
 - `home/dot_local/lib/pick-common.zsh` (`pick::*`), `pick.jq`
-- `home/dot_local/lib/pick-symbols-common.zsh` (`pick_symbols::*`)
+- `home/dot_local/lib/pick-symbols.zsh` (`pick_symbols::*`)
 - `home/dot_local/libexec/executable_pick-list`, `pick-glyph`, `pick-gitmoji`
 - `home/dot_local/lib/input-common.zsh` + `libexec/executable_input-widget` — the modal INPUT widget (adopted 2026-07-28): a picker with the list removed, same modal plumbing, same callers
 

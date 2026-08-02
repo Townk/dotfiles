@@ -12,7 +12,7 @@ chezmoi dotfiles repo.
 ## Your scope (owner area — safe to edit)
 
 - `home/dot_local/lib/pick-common.zsh` (`pick::*`), `pick.jq`
-- `home/dot_local/lib/pick-symbols-common.zsh` (`pick_symbols::*`)
+- `home/dot_local/lib/pick-symbols.zsh` (`pick_symbols::*`)
 - `home/dot_local/libexec/executable_pick-list`, `pick-glyph`, `pick-gitmoji`
 - `home/dot_local/lib/input-common.zsh` + `libexec/executable_input-widget` —
   the modal INPUT widget (adopted 2026-07-28). It is the same idea as a picker
