@@ -71,4 +71,48 @@ Describe 'prompt-common.zsh'
       The output should include "RESTORE-CALLED"
     End
   End
+
+  Describe 'prompt::secret preserves caller traps (follow-up)'
+    # prompt::secret must not clobber a trap the CALLER set. The old code cleared
+    # its own traps with a global `trap - INT EXIT TERM HUP QUIT` on return, which
+    # (zsh traps are not function-local by default) also wiped the caller's TERM
+    # handler. The fix sets `local_options local_traps` so its traps auto-restore
+    # the caller's prior disposition on return. Drive the full masked path to a
+    # NORMAL return (feed a secret + newline via the pty; stub stty without the
+    # kill), then dump the caller-scope traps and assert the caller's survived.
+    setup() {
+      TEST_TMP="$(mktemp -d)"
+      TRAPFILE="$TEST_TMP/traps-after"
+      inner="$TEST_TMP/inner.zsh"
+      runner="$TEST_TMP/runner.zsh"
+      {
+        printf 'source "%s/home/dot_local/lib/prompt-common.zsh"\n' "$SHELLSPEC_PROJECT_ROOT"
+        printf 'have_tty() { return 0; }\n'
+        printf 'stty() { case "$1" in -g) print -r -- SAVEDMODES ;; *) return 0 ;; esac }\n'
+        printf 'trap "print -r -- CALLER_TERM_FIRED" TERM\n'
+        printf 'prompt::secret SECRETVAR "Secret:"\n'
+        printf 'trap > "%s"\n' "$TRAPFILE"
+      } > "$inner"
+      {
+        printf 'zmodload zsh/zpty || exit 3\n'
+        printf 'zpty T "zsh -f %s"\n' "$inner"
+        printf 'zpty -w T "hunter2"\n'
+        printf 'zpty -w -n T $'"'"'\\n'"'"'\n'
+        printf 'while zpty -r T _l; do :; done\n'
+        printf 'zpty -d T 2>/dev/null\n'
+        printf 'print -r -- "===TRAPS-AFTER==="\n'
+        printf 'cat "%s" 2>/dev/null\n' "$TRAPFILE"
+      } > "$runner"
+    }
+    cleanup() { rm -rf "$TEST_TMP"; }
+    BeforeEach 'setup'
+    AfterEach 'cleanup'
+
+    It 'restores the caller trap disposition on return (no clobber)'
+      When run timeout 10 zsh -f "$runner"
+      The status should be success
+      # The caller's TERM handler is still installed after prompt::secret returns.
+      The output should include "CALLER_TERM_FIRED"
+    End
+  End
 End

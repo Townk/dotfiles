@@ -44,6 +44,11 @@ prompt::default() {
 # (pipelines/tests). Loops until non-empty.
 prompt::secret() {
   local __var="$1" __prompt="$2" __val=""
+  # local_traps scopes the tty-restore traps below to THIS function: on return
+  # (or a handled signal) zsh auto-restores the caller's prior trap disposition,
+  # so we never clobber a trap the caller set around us. local_options keeps this
+  # setopt itself local (no global leak).
+  setopt local_options local_traps
 
   if ! have_tty; then
     IFS= read -rs __val </dev/tty 2>/dev/null || IFS= read -rs __val ||
@@ -70,7 +75,7 @@ prompt::secret() {
   # a normal EXIT at the masked prompt would otherwise leave echo off, forcing
   # the user to blind-type `stty sane`. INT additionally reports the abort; the
   # other dispositions restore without dying so they don't clobber a normal
-  # return's value (the traps are cleared before the successful return below).
+  # return's value (local_traps above restores the caller's dispositions on return).
   trap 'stty "$__saved" </dev/tty 2>/dev/null; printf "\n" >/dev/tty; die "input aborted"' INT
   trap 'stty "$__saved" </dev/tty 2>/dev/null' EXIT TERM HUP QUIT
   while :; do
@@ -103,7 +108,6 @@ prompt::secret() {
     [[ -n "$__val" ]] && break
     log_warn "a value is required"
   done
-  trap - INT EXIT TERM HUP QUIT
   printf -v "$__var" '%s' "$__val"
 }
 
