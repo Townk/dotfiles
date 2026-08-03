@@ -151,49 +151,11 @@ validate_stage() {
     || return 1
 }
 
-# stage_and_swap — install the freshly compiled tree into $STAGE, validate it,
-# then atomically replace $PREFIX, keeping $BACKUP for rollback. The live
-# $PREFIX is only moved aside (never removed) and is restored on any failure, so
-# a failed install/validate/swap can never leave the machine without a working
-# shell. Relies on install_stage + validate_stage (both stubbable in tests).
-stage_and_swap() {
-  rm -rf -- "$STAGE" "$BACKUP"
-
-  if ! install_stage "$STAGE"; then
-    rm -rf -- "$STAGE"
-    die "install into staging prefix failed; live install left intact"
-  fi
-  if ! validate_stage "$STAGE"; then
-    rm -rf -- "$STAGE"
-    die "staged build failed validation; live install left intact"
-  fi
-
-  # Atomic swap: park the live tree, move staging into place, and only then, on
-  # confirmed success, drop the backup. A failed final move rolls back.
-  if [[ -e "$PREFIX" ]]; then
-    mv -- "$PREFIX" "$BACKUP" || die "could not park live prefix; live install left intact"
-  fi
-  if ! mv -- "$STAGE" "$PREFIX"; then
-    [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"
-    die "could not move staged build into place; rolled back to previous install"
-  fi
-
-  # Authoritative post-swap re-validation with natural, baked-in paths. If it
-  # fails, secure the rollback BEFORE discarding anything: park the failed tree
-  # back in $STAGE (vacated by the swap above), restore the backup, and only
-  # then drop the parked tree. Deleting first would leave the machine with no
-  # login shell if the restore then failed or was interrupted.
-  if ! validate_stage "$PREFIX"; then
-    mv -- "$PREFIX" "$STAGE" || die "post-swap validation failed; could not park the failed tree, leaving it at $PREFIX"
-    if [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"; then
-      rm -rf -- "$STAGE"
-      die "post-swap validation failed; rolled back to previous install"
-    fi
-    mv -- "$STAGE" "$PREFIX" || true
-    die "post-swap validation failed; no previous install to roll back to (failed tree left at $PREFIX)"
-  fi
-  rm -rf -- "$BACKUP"
-}
+# stage_and_swap comes from the shared atomic-install lib (the swap policy is
+# identical across the custom builds; only the validate seams differ).
+# SWAP_LABEL names this builder's validate step in the lib's die messages.
+SWAP_LABEL="validation"
+. "$SCRIPT_DIR/../lib/bash/atomic-install.sh"
 
 # main — the build pipeline. Wrapped in a function with the source-guard at the
 # bottom so specs can source this file to unit-test stage_and_swap (with

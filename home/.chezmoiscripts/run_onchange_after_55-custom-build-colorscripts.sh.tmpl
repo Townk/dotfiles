@@ -25,14 +25,19 @@
 */ -}}
 {{- $target := and (eq .chezmoi.os "darwin") (or (eq .profile "work") (eq .profile "personal")) -}}
 {{- $buildSHA := "" -}}
+{{- $swapSHA := "" -}}
 {{- if $target -}}
   {{- $buildSHA = output "shasum" "-a" "256" (joinPath .chezmoi.workingTree "custom-builds/colorscripts/build-colorscripts.sh") | trim -}}
+  {{- /* The builder sources the shared swap lib; its SHA must ride the
+         signature too, or editing the swap logic stops re-firing this hook. */ -}}
+  {{- $swapSHA = output "shasum" "-a" "256" (joinPath .chezmoi.workingTree "custom-builds/lib/bash/atomic-install.sh") | trim -}}
 {{- end -}}
 #!/bin/bash
 # shell-color-scripts — build hook.
 #
-# Re-runs whenever the builder changes:
+# Re-runs whenever the builder (or the shared swap lib it sources) changes:
 #   build-colorscripts.sh sha256 : {{ if $buildSHA }}{{ $buildSHA }}{{ else }}(out of scope){{ end }}
+#   atomic-install.sh sha256 : {{ if $swapSHA }}{{ $swapSHA }}{{ else }}(out of scope){{ end }}
 #
 # To pull upstream + reinstall:
 #   COLORSCRIPTS_UPDATE=1 bash ~/.local/share/chezmoi/custom-builds/colorscripts/build-colorscripts.sh

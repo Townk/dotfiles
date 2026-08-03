@@ -109,45 +109,11 @@ validate_stage() {
   DIR_COLORSCRIPTS="$data" "$bin" -e square >/dev/null 2>&1
 }
 
-# stage_and_swap — install into $STAGE, validate there, then atomically replace
-# $PREFIX, keeping $BACKUP for rollback. The live $PREFIX is only moved aside
-# (never removed) and is restored on any failure, so a stale/renamed upstream
-# script or a failed self-test can never leave nvim without a working
-# colorscript. Relies on install_stage + validate_stage (both stubbable).
-stage_and_swap() {
-  rm -rf -- "$STAGE" "$BACKUP"
-
-  if ! install_stage "$STAGE"; then
-    rm -rf -- "$STAGE"
-    die "install into staging prefix failed; live install left intact"
-  fi
-  if ! validate_stage "$STAGE"; then
-    rm -rf -- "$STAGE"
-    die "staged self-test ('colorscript -e square') failed; live install left intact"
-  fi
-
-  if [[ -e "$PREFIX" ]]; then
-    mv -- "$PREFIX" "$BACKUP" || die "could not park live prefix; live install left intact"
-  fi
-  if ! mv -- "$STAGE" "$PREFIX"; then
-    [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"
-    die "could not move staged install into place; rolled back to previous install"
-  fi
-
-  # Authoritative post-swap re-validation against the in-place tree. Park the
-  # failed tree back in $STAGE (vacated by the swap) before restoring — never
-  # delete before the rollback is secured.
-  if ! validate_stage "$PREFIX"; then
-    mv -- "$PREFIX" "$STAGE" || die "post-swap self-test failed; could not park the failed tree, leaving it at $PREFIX"
-    if [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"; then
-      rm -rf -- "$STAGE"
-      die "post-swap self-test failed; rolled back to previous install"
-    fi
-    mv -- "$STAGE" "$PREFIX" || true
-    die "post-swap self-test failed; no previous install to roll back to (failed tree left at $PREFIX)"
-  fi
-  rm -rf -- "$BACKUP"
-}
+# stage_and_swap comes from the shared atomic-install lib (the swap policy is
+# identical across the custom builds; only the validate seams differ).
+# SWAP_LABEL names this builder's validate step in the lib's die messages.
+SWAP_LABEL="self-test ('colorscript -e square')"
+. "$SCRIPT_DIR/../lib/bash/atomic-install.sh"
 
 # main — the install pipeline. Wrapped so specs can source this file to
 # unit-test stage_and_swap with install/validate stubbed, without a real clone.
