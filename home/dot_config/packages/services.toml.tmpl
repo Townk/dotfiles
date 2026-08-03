@@ -28,6 +28,16 @@
 # Brew-installed services live under `brew services` and stay declared in
 # the formula; they are NOT listed here. `system-service list` aggregates
 # both sources.
+#
+# This manifest also drives systemd --user units on Linux, via the
+# system-service-systemd worker. A Linux section is either RENDERED
+# (`cmd = [...]`, same schema as above — the worker generates and owns the
+# unit file) or ADOPTED (`unit = "name.service"` — lifecycle-only; the unit
+# file itself is chezmoi-managed and never written or deleted here). A
+# section must be one kind or the other; declaring both dies loudly. "Strict
+# cleanup" (removing a section boots-out/stops and deletes the generated
+# artifact on the next sync) applies to rendered entries only — adopted
+# files are untouchable.
 
 {{ if eq .profile "personal" -}}
 # Add personal-only services
@@ -220,8 +230,11 @@ error_log_path  = "~/.local/state/terminal-backup/prune.log"
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 {{ end }}
 
-{{ if ne .profile "dev-shell" -}}
-# mlx-gemma — DIRECT mlx_vlm.server for pi-local's single-model setup.
+{{ if and (eq .chezmoi.os "darwin") (ne .profile "dev-shell") -}}
+# mlx-gemma — DIRECT mlx_vlm.server for pi-local's single-model setup. macOS
+# only: mlx runs on Apple Silicon via MLX, so this block is gated to darwin
+# (and off the headless dev-shell profile) — it has no business rendering
+# into a Linux manifest.
 # pi-local was repointed off the old headroom→gateway→llama-swap chain to talk
 # straight to mlx_vlm.server on :8799 (one model, so the hot-swap and
 # local-agent-auto routing layers had no job). This entry is the lifecycle
@@ -297,6 +310,8 @@ description = "Trusted local clipboard file-authority endpoint"
 [gpg-forward-socketdir]
 unit = "gpg-forward-socketdir.service"
 description = "gpg-agent SSH forwarding provisioning (oneshot)"
+
+# Rendered Linux services (cmd = [...]) go here as rack hosts arrive.
 {{- end }}
 
 # vim:ft=toml.gotmpl

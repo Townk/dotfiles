@@ -180,6 +180,17 @@ TOML
       When run zsh "$SYSTEMD_BIN" render envtilde
       The output should include "Environment=\"DATA_DIR=$HOME/data\""
     End
+
+    It 'dies when a section declares both unit and cmd'
+      cat >"$SVCFILE" <<'TOML'
+[confused]
+unit = "confused.service"
+cmd = ["/bin/true"]
+TOML
+      When run zsh "$SYSTEMD_BIN" render confused
+      The status should be failure
+      The stderr should include "BOTH"
+    End
   End
 
   Describe 'start/stop/restart'
@@ -262,7 +273,7 @@ TOML
       The output should include "Syncing"
       The path "$SYSTEMD_USER_DIR/com.system-service.demo.service" should be file
       The contents of file "$STUB_CALLS" should include "daemon-reload"
-      The contents of file "$STUB_CALLS" should include "start"
+      The contents of file "$STUB_CALLS" should include " start "
     End
 
     It 'restarts a drifted unit only when it was running'

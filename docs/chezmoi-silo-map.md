@@ -300,11 +300,12 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - `home/dot_local/bin/executable_system-service`, `system-service-{launchd,brew,systemd}`
 - `home/dot_local/bin/executable_system-images`, `executable_system-update`
 - `home/dot_local/lib/system-package-common.zsh` (`pkg::*` — also backs `system-service` and `system-images` per `bin/README.md`)
+- `home/dot_local/lib/system-service-common.zsh` (`svc::*` manifest parsing shared by the launchd/systemd workers)
 - `home/dot_config/packages/{Brewfile,Brewfile.bootstrap,Cargofile,Gofile,Npmfile,Snapfile,Uvfile}.tmpl`, `services.toml.tmpl`, `images.toml.example`
 
 **Sub-silos (independently dispatchable, shared `pkg::*` lib):**
 - **system-packages packages** — `system-package*` + `pkg::*` + `*file.tmpl` (not `services.toml`/`images.toml`)
-- **system-services services** — `system-service*` + `services.toml.tmpl`. Dispatcher routes by `SERVICE_OS`: launchd agents (macOS user domain), Homebrew services (macOS), systemd units (Linux user domain only). Linux worker renders `com.system-service.*.service` files and manages adopted units — existing systemd services (e.g., `clipboard-bridge.socket`, `clipboard-bridge-trusted.socket`, `gpg-forward-socketdir.service` on dev-shell) declared via `unit = "servicename"` that are lifecycle-only and chezmoi-managed. Run-scripts 36/37 still own unit bootstrap; `system-service sync` is idempotent on top.
+- **system-services services** — `system-service*` + `system-service-common.zsh` + `services.toml.tmpl`. Dispatcher routes by `SERVICE_OS`: launchd agents (macOS user domain), Homebrew services (macOS), systemd units (Linux user domain only). Linux worker renders `com.system-service.*.service` files and manages adopted units — existing systemd services (e.g., `clipboard-bridge.socket`, `clipboard-bridge-trusted.socket`, `gpg-forward-socketdir.service` on dev-shell) declared via `unit = "servicename"` that are lifecycle-only and chezmoi-managed. Run-scripts 36/37 still own unit bootstrap; `system-service sync` is idempotent on top.
 - **system-images images** — `system-images` + `images.toml.example`
 - **system-update update orchestrator** — `system-update` (orchestrates system-packages/system-services + external brew/mise/yazi/nvim/pi)
 

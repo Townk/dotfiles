@@ -99,7 +99,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | Editor/terminal glue | `tab-edit`² | `platform.zsh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |
 | Package management | `system-package` + `system-package-{brew,cargo,go,npm,snap,uv}` | `system-package-common.zsh` |
-| Service management | `system-service`, `system-service-{launchd,brew,systemd}` | `system-package-common.zsh` |
+| Service management | `system-service`, `system-service-{launchd,brew,systemd}` | `system-package-common.zsh`, `system-service-common.zsh` |
 | Disk images | `system-images`¹ | `system-package-common.zsh` |
 | Secrets & onboarding | `system-secrets`, `system-onboard` | `system-secrets-common.zsh` |
 | Orchestration | `system-update` | — |

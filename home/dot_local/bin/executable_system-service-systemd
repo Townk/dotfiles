@@ -39,6 +39,17 @@ svc::is_adopted() {
   svc::toml_json | jq -e --arg n "$1" '.[$n] | has("unit")' >/dev/null 2>&1
 }
 
+# svc::assert_one_kind <name> — a section is adopted (unit=) XOR rendered
+# (cmd=); both at once is a manifest authoring error (spec: "die loudly on
+# conflict"). Called by every per-name verb before acting.
+svc::assert_one_kind() {
+  local name="$1"
+  svc::toml_json | jq -e --arg n "$name" \
+    '.[$n] | (has("unit") and has("cmd"))' >/dev/null 2>&1 &&
+    die "service '$name' declares BOTH unit= (adopted) and cmd= (rendered) in $SVCFILE — pick one"
+  return 0
+}
+
 # svc::unit_name <name> → the systemd unit this entry maps to.
 # Adopted entries name their unit file verbatim; rendered entries get the
 # generated com.system-service.<name>.service.
@@ -128,7 +139,7 @@ svc::render_unit() {
   done
 
   local desc keep run_at wd lp elp
-  desc=$(printf '%s' "$json" | jq -r ".description // \"$name\"")
+  desc=$(printf '%s' "$json" | jq -r --arg name "$name" '.description // $name')
   keep=$(printf '%s' "$json" | jq -r '.keep_alive // false')
   run_at=$(printf '%s' "$json" | jq -r '.run_at_load // false')
   wd=$(printf '%s' "$json" | jq -r --arg home "$HOME" '(.working_dir // empty) | sub("^~"; $home)')
@@ -159,6 +170,7 @@ svc::render_unit() {
 
 do_render() {
   [[ $# -eq 1 ]] || die "usage: render <name>"
+  svc::assert_one_kind "$1"
   svc::render_unit "$1"
 }
 
@@ -210,6 +222,7 @@ do_start() {
   [[ $# -eq 1 ]] || die "usage: start <name>"
   local name="$1"
   svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  svc::assert_one_kind "$name"
   local unit
   unit=$(svc::unit_name "$name")
   if svc::is_adopted "$name"; then
@@ -235,6 +248,7 @@ do_stop() {
   [[ $# -eq 1 ]] || die "usage: stop <name>"
   local name="$1"
   svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  svc::assert_one_kind "$name"
   local unit
   unit=$(svc::unit_name "$name")
   "${SYSCTL[@]}" stop -- "$unit" 2>/dev/null || true
@@ -247,6 +261,7 @@ do_stop() {
 
 do_restart() {
   [[ $# -eq 1 ]] || die "usage: restart <name>"
+  svc::assert_one_kind "$1"
   do_stop "$1"
   do_start "$1"
 }
@@ -266,6 +281,7 @@ do_info() {
   [[ $# -eq 1 ]] || die "usage: info <name>"
   local name="$1"
   svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  svc::assert_one_kind "$name"
   printf '%s%s%s\n' "$C_BWH" "$(svc::unit_name "$name")" "$C_RES"
   printf '  status:   %s\n' "$(svc::status "$name")"
   printf '  unit:     %s\n' "$(svc::unit_path "$name")"
@@ -299,6 +315,7 @@ do_sync() {
   local -A pre_status changed
   for name in "${declared[@]}"; do
     [[ -z "$name" ]] && continue
+    svc::assert_one_kind "$name"
     svc::is_adopted "$name" && continue
     pre_status[$name]=$(svc::status "$name")
     svc::ensure_dirs "$name"
