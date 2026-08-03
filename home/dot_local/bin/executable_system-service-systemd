@@ -162,6 +162,95 @@ do_render() {
   svc::render_unit "$1"
 }
 
+# svc::write_unit <name>
+# Render and write atomically to the user unit dir. Prints "wrote" or
+# "unchanged" so callers can decide whether a daemon-reload + restart is
+# needed (the launchd write_plist contract).
+# NOTE: printf '%s\n' (trailing newline) must match on both the diff side and
+# the write side, or drift detection false-positives forever.
+svc::write_unit() {
+  local name="$1"
+  local target
+  target=$(svc::unit_path "$name")
+  mkdir -p "$SYSTEMD_USER_DIR"
+  local rendered
+  rendered=$(svc::render_unit "$name")
+  if [[ -f "$target" ]] && diff -q <(printf '%s\n' "$rendered") "$target" >/dev/null 2>&1; then
+    printf 'unchanged\n'
+    return 0
+  fi
+  local tmp
+  tmp=$(mktemp)
+  printf '%s\n' "$rendered" >"$tmp"
+  mv "$tmp" "$target"
+  printf 'wrote\n'
+}
+
+# svc::has_install <name> → rendered entry wants [Install] (run_at_load)?
+# Adopted units answer via their file: chezmoi ships them with [Install].
+svc::has_install() {
+  local name="$1"
+  if svc::is_adopted "$name"; then
+    return 0
+  fi
+  [[ "$(svc::entry_json "$name" | jq -r '.run_at_load // false')" == true ]]
+}
+
+# svc::enable <name> — idempotent; only for units with an [Install] section
+# (enable fails loudly on install-less units).
+svc::enable() {
+  local unit
+  unit=$(svc::unit_name "$1")
+  svc::has_install "$1" || return 0
+  "${SYSCTL[@]}" enable --quiet -- "$unit" 2>/dev/null ||
+    log_warn "failed to enable $unit"
+}
+
+do_start() {
+  [[ $# -eq 1 ]] || die "usage: start <name>"
+  local name="$1"
+  svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  local unit
+  unit=$(svc::unit_name "$name")
+  if svc::is_adopted "$name"; then
+    svc::enable "$name"
+    "${SYSCTL[@]}" start -- "$unit"
+  else
+    svc::ensure_dirs "$name"
+    local changed
+    changed=$(svc::write_unit "$name")
+    if [[ "$changed" == "wrote" ]]; then
+      "${SYSCTL[@]}" daemon-reload
+      svc::enable "$name"
+      "${SYSCTL[@]}" restart -- "$unit"
+    else
+      svc::enable "$name"
+      "${SYSCTL[@]}" start -- "$unit"
+    fi
+  fi
+  log_info "started $unit"
+}
+
+do_stop() {
+  [[ $# -eq 1 ]] || die "usage: stop <name>"
+  local name="$1"
+  svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  local unit
+  unit=$(svc::unit_name "$name")
+  "${SYSCTL[@]}" stop -- "$unit" 2>/dev/null || true
+  # disable only if enabled — `disable` on a never-enabled unit warns.
+  if "${SYSCTL[@]}" is-enabled --quiet -- "$unit" 2>/dev/null; then
+    "${SYSCTL[@]}" disable --quiet -- "$unit" 2>/dev/null || true
+  fi
+  log_info "stopped $unit"
+}
+
+do_restart() {
+  [[ $# -eq 1 ]] || die "usage: restart <name>"
+  do_stop "$1"
+  do_start "$1"
+}
+
 # --- subcommands ------------------------------------------------------------
 
 do_status() {
@@ -174,6 +263,18 @@ case "${1:-}" in
   status)
     shift
     do_status "$@"
+    ;;
+  start)
+    shift
+    do_start "$@"
+    ;;
+  stop)
+    shift
+    do_stop "$@"
+    ;;
+  restart)
+    shift
+    do_restart "$@"
     ;;
   declared)
     shift

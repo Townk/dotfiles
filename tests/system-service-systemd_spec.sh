@@ -181,4 +181,50 @@ TOML
       The output should include "Environment=\"DATA_DIR=$HOME/data\""
     End
   End
+
+  Describe 'start/stop/restart'
+    It 'start on a rendered entry writes the unit, reloads, enables, restarts'
+      write_manifest
+      export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nExecMainStatus=0')"
+      When run zsh "$SYSTEMD_BIN" start demo
+      The status should be success
+      The output should include "started"
+      The path "$SYSTEMD_USER_DIR/com.system-service.demo.service" should be file
+      The contents of file "$STUB_CALLS" should include "daemon-reload"
+      The contents of file "$STUB_CALLS" should include "enable"
+      The contents of file "$STUB_CALLS" should include "restart"
+    End
+
+    It 'start on an unchanged unit skips daemon-reload'
+      write_manifest
+      zsh "$SYSTEMD_BIN" render demo >"$SYSTEMD_USER_DIR/com.system-service.demo.service"
+      export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nExecMainStatus=0')"
+      When run zsh "$SYSTEMD_BIN" start demo
+      The status should be success
+      The output should include "started"
+      The contents of file "$STUB_CALLS" should not include "daemon-reload"
+      The contents of file "$STUB_CALLS" should include "start"
+    End
+
+    It 'start on an adopted entry only enables and starts (never writes)'
+      write_manifest
+      export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nExecMainStatus=0')"
+      When run zsh "$SYSTEMD_BIN" start clipboard-bridge
+      The status should be success
+      The output should include "started"
+      The path "$SYSTEMD_USER_DIR/clipboard-bridge.socket" should not be exist
+      The contents of file "$STUB_CALLS" should include "enable"
+      The contents of file "$STUB_CALLS" should include "clipboard-bridge.socket"
+    End
+
+    It 'stop stops and disables'
+      write_manifest
+      export STUB_ENABLED=yes
+      When run zsh "$SYSTEMD_BIN" stop demo
+      The status should be success
+      The output should include "stopped"
+      The contents of file "$STUB_CALLS" should include "stop"
+      The contents of file "$STUB_CALLS" should include "disable"
+    End
+  End
 End
