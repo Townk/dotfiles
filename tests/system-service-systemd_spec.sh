@@ -170,6 +170,17 @@ TOML
       The stderr should include "timer"
     End
 
+    It 'escapes backslash and quote in env values like ExecStart tokens'
+      cat >"$SVCFILE" <<'TOML'
+[envesc]
+cmd = ["/bin/true"]
+[envesc.env]
+PATTERN = 'a\b"c'
+TOML
+      When run zsh "$SYSTEMD_BIN" render envesc
+      The output should include 'Environment="PATTERN=a\\b\"c"'
+    End
+
     It 'expands tilde in env values, not just paths'
       cat >"$SVCFILE" <<'TOML'
 [envtilde]

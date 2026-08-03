@@ -160,8 +160,13 @@ svc::render_unit() {
     | "\(.key)=\(.value | if type == "string" then sub("^~"; $home) else . end)"' |
     while IFS= read -r kv; do
       [[ -z "$kv" ]] && continue
+      # Same escape set as ExecStart tokens: backslash first (so the later
+      # quote-escape's own backslashes are not re-doubled), then quote, then
+      # the %-specifier doubling.
+      kv="${kv//\\/\\\\}"
+      kv="${kv//\"/\\\"}"
       kv="${kv//\%/%%}"
-      printf 'Environment="%s"\n' "${kv//\"/\\\"}"
+      printf 'Environment="%s"\n' "$kv"
     done
   if [[ "$run_at" == true ]]; then
     printf '\n[Install]\nWantedBy=default.target\n'
@@ -192,7 +197,9 @@ svc::write_unit() {
     return 0
   fi
   local tmp
-  tmp=$(mktemp)
+  # Colocate the temp file with the unit dir: on Linux /tmp is tmpfs, so a
+  # cross-filesystem mv degrades to copy+unlink and loses atomicity.
+  tmp=$(mktemp "$SYSTEMD_USER_DIR/.tmp.XXXXXX")
   printf '%s\n' "$rendered" >"$tmp"
   mv "$tmp" "$target"
   printf 'wrote\n'
