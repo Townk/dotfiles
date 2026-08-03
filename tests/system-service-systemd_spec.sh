@@ -169,5 +169,16 @@ TOML
       The status should be failure
       The stderr should include "timer"
     End
+
+    It 'expands tilde in env values, not just paths'
+      cat >"$SVCFILE" <<'TOML'
+[envtilde]
+cmd = ["/bin/true"]
+[envtilde.env]
+DATA_DIR = "~/data"
+TOML
+      When run zsh "$SYSTEMD_BIN" render envtilde
+      The output should include "Environment=\"DATA_DIR=$HOME/data\""
+    End
   End
 End

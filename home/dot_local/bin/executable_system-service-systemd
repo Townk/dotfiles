@@ -144,11 +144,12 @@ svc::render_unit() {
   [[ -n "$lp" ]] && printf 'StandardOutput=append:%s\n' "$(printf '%s' "$lp" | sed 's/%/%%/g')"
   [[ -n "$elp" ]] && printf 'StandardError=append:%s\n' "$(printf '%s' "$elp" | sed 's/%/%%/g')"
   # Environment lines: one per key, systemd-quoted, % doubled.
-  printf '%s' "$json" | jq -r '(.env // {}) | to_entries[] | "\(.key)=\(.value)"' |
+  printf '%s' "$json" | jq -r --arg home "$HOME" '
+    (.env // {}) | to_entries[]
+    | "\(.key)=\(.value | if type == "string" then sub("^~"; $home) else . end)"' |
     while IFS= read -r kv; do
       [[ -z "$kv" ]] && continue
       kv="${kv//\%/%%}"
-      kv="${kv/#\~/$HOME}"
       printf 'Environment="%s"\n' "${kv//\"/\\\"}"
     done
   if [[ "$run_at" == true ]]; then
