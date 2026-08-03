@@ -99,6 +99,17 @@
 .config/zellij/themes/catppuccin-mocha-dialog.kdl
 .pi/agent/themes/catppuccin-mocha.json
 
+# ── ~/Library: never should have left macOS ─────────────────────────────────
+# The Library tree (launchd environment agent + Application Support tealdeer
+# symlink) deployed on every Linux profile because .chezmoiignore.tmpl never
+# excluded it off-darwin. Prune the two strays; the now-empty parent dirs are
+# left for a one-time manual rmdir. Gated so macOS — where these are
+# legitimately managed — never removes its own files.
+{{ if ne .chezmoi.os "darwin" -}}
+Library/LaunchAgents/my.environment.variables.plist
+Library/Application Support/tealdeer
+{{- end }}
+
 # ── stray leftovers from removed/renamed source entries ─────────────────────
 # ~/README.md: an early deployed copy of the repo README, no longer a source
 # entry. quick-launch-external: renamed to quick-launch{,-pick,-window,-zellij}.

@@ -44,6 +44,12 @@
 .chezmoiscripts/*-symbols-nerd-font.sh
 .chezmoiscripts/*-setup-system-settings.sh
 .chezmoiscripts/*-setup-gpg-key.sh
+{{/* ~/Library is macOS territory: the launchd environment agent has no
+     launchd to load it off a Mac, and the Application Support tealdeer
+     symlink only papers over macOS tealdeer ignoring XDG (Linux tealdeer
+     reads ~/.config/tealdeer directly). */}}
+Library
+Library/**
 {{- end }}
 {{/* tab-edit ships on macOS and graphical Linux (it needs a GUI WezTerm + a
      file manager to be useful); skip it on the headless dev-shell and any
