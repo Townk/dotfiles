@@ -27,14 +27,11 @@ set -eu -o pipefail
 # svc::bootout relies on poll::until from common.zsh, which the suite must see
 # before it is applied. Default unchanged.
 source "${SYS_PKG_LIB:-$HOME/.local/lib}/system-package-common.zsh"
+source "${SYS_PKG_LIB:-$HOME/.local/lib}/system-service-common.zsh"
 
-# services.toml lives in $PKG_DIR (~/.config/packages by default) so all
-# system-package-* state stays in one directory.
-SVCFILE="${SVCFILE:-$PKG_DIR/services.toml}"
 # Overridable (like SVCFILE/PKG_DIR) so the suite can point plist writes and the
 # orphan sweep at a throwaway dir instead of the real ~/Library/LaunchAgents.
 LAUNCH_AGENTS="${LAUNCH_AGENTS:-$HOME/Library/LaunchAgents}"
-LABEL_PREFIX="com.system-service"
 DOMAIN="gui/$(id -u)"
 
 # svc::label <name> → fully-qualified launchd label
@@ -42,42 +39,6 @@ svc::label() { printf '%s.%s\n' "$LABEL_PREFIX" "$1"; }
 
 # svc::plist_path <name> → absolute path to the plist for a service
 svc::plist_path() { printf '%s/%s.plist\n' "$LAUNCH_AGENTS" "$(svc::label "$1")"; }
-
-# svc::toml_json — cached JSON view of services.toml. Empty `{}` if the
-# manifest doesn't exist (chezmoi may not have rendered it yet on a
-# fresh machine).
-svc::toml_json() {
-  if [[ -f "$SVCFILE" ]]; then
-    yq -p toml -o json '.' "$SVCFILE"
-  else
-    printf '{}\n'
-  fi
-}
-
-# svc::names — top-level keys of services.toml, one per line
-svc::names() {
-  svc::toml_json | jq -r 'keys[]' 2>/dev/null || true
-}
-
-# svc::declared <name> → returns 0 iff <name> exists in services.toml
-svc::declared() {
-  svc::toml_json | jq -e --arg n "$1" 'has($n)' >/dev/null 2>&1
-}
-
-# svc::resolve_cmd0 <cmd0_token>
-# Resolve the first cmd token (typically a bare binary name like "omlx") to
-# an absolute path. `launchctl` cannot search PATH; ProgramArguments[0]
-# must resolve as-given. Falls back to the literal value when `command -v`
-# can't find it — that error surfaces at bootstrap time rather than here
-# so the user gets a clean message.
-svc::resolve_cmd0() {
-  local cmd0="$1"
-  if [[ "$cmd0" == /* ]]; then
-    printf '%s\n' "$cmd0"
-  else
-    command -v "$cmd0" 2>/dev/null || printf '%s\n' "$cmd0"
-  fi
-}
 
 # svc::render_json <name>
 # Build the plist's JSON representation from the TOML entry. `~` prefixes
@@ -150,26 +111,6 @@ svc::write_plist() {
   printf '%s' "$rendered" >"$tmp"
   mv "$tmp" "$target"
   printf 'wrote\n'
-}
-
-# svc::ensure_dirs <name>
-# Make sure WorkingDirectory and the parent dirs of StandardOut/ErrorPath
-# exist before bootstrapping — launchd errors out with EX_NOENT (78) when
-# these don't exist, and the error surfaces as a cryptic "spawn failed"
-# instead of "missing dir".
-svc::ensure_dirs() {
-  local name="$1"
-  svc::toml_json | jq -r --arg n "$name" --arg home "$HOME" '
-    .[$n] as $s
-    | ($s.working_dir, $s.log_path, $s.error_log_path)
-    | select(. != null)
-    | sub("^~"; $home)
-  ' | while IFS= read -r p; do
-    [[ -z "$p" ]] && continue
-    # log/error paths point at the file itself — strip the basename.
-    [[ "$p" == *.log || "$p" == *.out || "$p" == *.err ]] && p="${p:h}"
-    mkdir -p "$p"
-  done
 }
 
 # svc::is_bootstrapped <name>
@@ -411,14 +352,7 @@ do_sync() {
 # upgraded package name back to the services it owns.
 do_matching() {
   [[ $# -eq 1 ]] || die "usage: matching <pkg>"
-  local pkg="$1"
-  svc::toml_json | jq -r --arg p "$pkg" '
-    to_entries[]
-    | select(
-        .key == $p
-        or ((.value.cmd[0] // "") | split("/") | .[length-1] == $p)
-      )
-    | .key'
+  svc::matching "$1"
 }
 
 # do_status <name>
