@@ -315,7 +315,9 @@ do_sync() {
   for name in "${declared[@]}"; do
     [[ -z "$name" ]] && continue
     svc::ensure_dirs "$name"
-    local changed
+    # local WITH assignment: a bare `local` re-declared on later loop
+    # iterations prints name=value in zsh.
+    local changed=""
     changed=$(svc::write_plist "$name")
     if [[ "$changed" == "wrote" ]] && svc::is_bootstrapped "$name"; then
       # Plist drifted on a bootstrapped service. Capture whether it was

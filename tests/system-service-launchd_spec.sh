@@ -295,6 +295,9 @@ STUB
       : > "$STUB_STATE/up"; : > "$STUB_STATE/pid"   # bootstrapped + running
       When run sync_then_status
       The output should equal "running"
+      # zsh regression pin: bare in-loop `local changed` reprinted
+      # changed=wrote|unchanged from the 2nd declared service on.
+      The output should not include "changed="
     End
 
     It 'leaves an already-stopped service stopped'

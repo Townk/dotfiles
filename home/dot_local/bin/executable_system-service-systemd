@@ -327,7 +327,9 @@ do_sync() {
   # Phase 1b: activate.
   for name in "${declared[@]}"; do
     [[ -z "$name" ]] && continue
-    local unit
+    # local WITH assignment: a bare `local` re-declared on later loop
+    # iterations prints name=value in zsh.
+    local unit=""
     unit=$(svc::unit_name "$name")
     if svc::is_adopted "$name"; then
       svc::enable "$name"

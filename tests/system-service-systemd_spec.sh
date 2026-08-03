@@ -271,6 +271,9 @@ TOML
       When run zsh "$SYSTEMD_BIN" sync
       The status should be success
       The output should include "Syncing"
+      # zsh regression pin: a bare in-loop `local` reprints name=value from
+      # the 2nd declared service on (seen live on the dev-shell as unit=...).
+      The output should not include "unit="
       The path "$SYSTEMD_USER_DIR/com.system-service.demo.service" should be file
       The contents of file "$STUB_CALLS" should include "daemon-reload"
       The contents of file "$STUB_CALLS" should include " start "
