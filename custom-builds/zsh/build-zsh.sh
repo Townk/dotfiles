@@ -179,11 +179,18 @@ stage_and_swap() {
   fi
 
   # Authoritative post-swap re-validation with natural, baked-in paths. If it
-  # fails, roll the previous tree back so the live install is never broken.
+  # fails, secure the rollback BEFORE discarding anything: park the failed tree
+  # back in $STAGE (vacated by the swap above), restore the backup, and only
+  # then drop the parked tree. Deleting first would leave the machine with no
+  # login shell if the restore then failed or was interrupted.
   if ! validate_stage "$PREFIX"; then
-    rm -rf -- "$PREFIX"
-    [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"
-    die "post-swap validation failed; rolled back to previous install"
+    mv -- "$PREFIX" "$STAGE" || die "post-swap validation failed; could not park the failed tree, leaving it at $PREFIX"
+    if [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"; then
+      rm -rf -- "$STAGE"
+      die "post-swap validation failed; rolled back to previous install"
+    fi
+    mv -- "$STAGE" "$PREFIX" || true
+    die "post-swap validation failed; no previous install to roll back to (failed tree left at $PREFIX)"
   fi
   rm -rf -- "$BACKUP"
 }

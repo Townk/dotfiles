@@ -89,6 +89,19 @@ Describe 'build-zsh.sh stage_and_swap (atomic install)'
     The contents of file "$ZSH_BUILD_PREFIX/marker" should equal 'LIVE'
     The path "$ZSH_BUILD_BACKUP" should not be exist
   End
+
+  It 'parks (never deletes) the failed tree when there is no backup (first install)'
+    # First install: no live prefix ever existed, so no backup is parked. The
+    # failed tree must survive — deleting it before securing a rollback is the
+    # exact "no login shell left" hazard — and the message must not claim a
+    # rollback that never happened.
+    rm -rf "$ZSH_BUILD_PREFIX"
+    When run swap postswap-fail
+    The status should be failure
+    The stderr should include 'no previous install'
+    The stderr should not include 'rolled back to previous install'
+    The contents of file "$ZSH_BUILD_PREFIX/marker" should equal 'NEW'
+  End
 End
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -128,6 +141,11 @@ Describe 'build-colorscripts.sh stage_and_swap (atomic install)'
           install_stage()  { mkdir -p "$1/bin"; echo NEW >"$1/marker"; return 0; }
           validate_stage() { [ -f "$1/marker" ]; }
           ;;
+        postswap-fail)
+          install_stage()  { mkdir -p "$1/bin"; echo NEW >"$1/marker"; return 0; }
+          # pass on the staging dir, fail on the in-place re-validation.
+          validate_stage() { case "$1" in *.new) return 0;; *) return 1;; esac; }
+          ;;
       esac
       stage_and_swap
     ' _ "$SCRIPT"
@@ -155,6 +173,23 @@ Describe 'build-colorscripts.sh stage_and_swap (atomic install)'
     The contents of file "$COLORSCRIPTS_PREFIX/marker" should equal 'NEW'
     The path "$COLORSCRIPTS_BACKUP" should not be exist
     The path "$COLORSCRIPTS_STAGE" should not be exist
+  End
+
+  It 'rolls back to the previous install when the post-swap self-test fails'
+    When run swap postswap-fail
+    The status should be failure
+    The stderr should include 'rolled back'
+    The contents of file "$COLORSCRIPTS_PREFIX/marker" should equal 'LIVE'
+    The path "$COLORSCRIPTS_BACKUP" should not be exist
+  End
+
+  It 'parks (never deletes) the failed tree when there is no backup (first install)'
+    rm -rf "$COLORSCRIPTS_PREFIX"
+    When run swap postswap-fail
+    The status should be failure
+    The stderr should include 'no previous install'
+    The stderr should not include 'rolled back to previous install'
+    The contents of file "$COLORSCRIPTS_PREFIX/marker" should equal 'NEW'
   End
 End
 

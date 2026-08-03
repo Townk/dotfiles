@@ -134,11 +134,17 @@ stage_and_swap() {
     die "could not move staged install into place; rolled back to previous install"
   fi
 
-  # Authoritative post-swap re-validation against the in-place tree.
+  # Authoritative post-swap re-validation against the in-place tree. Park the
+  # failed tree back in $STAGE (vacated by the swap) before restoring — never
+  # delete before the rollback is secured.
   if ! validate_stage "$PREFIX"; then
-    rm -rf -- "$PREFIX"
-    [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"
-    die "post-swap self-test failed; rolled back to previous install"
+    mv -- "$PREFIX" "$STAGE" || die "post-swap self-test failed; could not park the failed tree, leaving it at $PREFIX"
+    if [[ -e "$BACKUP" ]] && mv -- "$BACKUP" "$PREFIX"; then
+      rm -rf -- "$STAGE"
+      die "post-swap self-test failed; rolled back to previous install"
+    fi
+    mv -- "$STAGE" "$PREFIX" || true
+    die "post-swap self-test failed; no previous install to roll back to (failed tree left at $PREFIX)"
   fi
   rm -rf -- "$BACKUP"
 }
