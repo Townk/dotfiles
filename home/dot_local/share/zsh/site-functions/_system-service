@@ -1,17 +1,19 @@
 #compdef system-service
 #
-# Completion for system-service, the unified launchd + brew services dispatcher.
-# Service-name completions are sourced LIVE from the workers (cheap: the
-# launchd side is a TOML key read; the brew side is `brew services list --json`
-# which the user has already paid for if they're shelling here).
+# Completion for system-service, the unified manifest + brew services
+# dispatcher. Service-name completions are sourced LIVE from the workers
+# (cheap: each manifest side is a TOML key read; the brew side is
+# `brew services list --json`, which the user has already paid for if
+# they're shelling here).
 
-# __system-service-all-names — combined launchd + brew service name list.
+# __system-service-all-names — combined manifest + brew service name list.
 # Used by start/stop/restart/info, where either source is a valid target.
 __system-service-all-names() {
-  local -a launchd brew names
-  launchd=( ${(f)"$(system-service-launchd declared 2>/dev/null)"} )
+  local -a manifest brew names
+  manifest=( ${(f)"$(system-service-launchd declared 2>/dev/null)"}
+             ${(f)"$(system-service-systemd declared 2>/dev/null)"} )
   brew=(    ${(f)"$(system-service-brew    names    2>/dev/null)"} )
-  names=( $launchd $brew )
+  names=( $manifest $brew )
   (( ${#names} )) && _describe -t services 'service' names
 }
 
@@ -32,12 +34,12 @@ _system-service() {
   case "$state" in
     cmd)
       _values 'subcommand' \
-        'list[aggregate launchd + brew services into one table]' \
+        'list[aggregate manifest + brew services into one table]' \
         'start[start a service]' \
         'stop[stop a service]' \
         'restart[restart a service]' \
-        'info[show resolved manifest + launchctl/brew detail]' \
-        'sync[reconcile launchd plists with services.toml]' \
+        'info[show resolved manifest + launchctl/systemctl/brew detail]' \
+        'sync[reconcile manifest-declared services with services.toml]' \
         'restart-for[internal: restart services tied to a package]' \
         'help[show help]'
       ;;

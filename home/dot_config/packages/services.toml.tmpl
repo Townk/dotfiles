@@ -276,4 +276,27 @@ APC_HASH = "sha256"
 APC_DISK_PATH = "{{ .chezmoi.homeDir }}/.local/state/mlx-gemma/apc"
 {{ end }}
 
+{{ if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+# ── Linux dev-shell: adopted systemd user units ─────────────────────────────
+# `unit = "..."` marks an ADOPTED entry: the unit file is chezmoi-managed
+# (home/dot_config/systemd/user/), so system-service-systemd manages
+# lifecycle only — sync enables+starts, and the orphan sweep can never touch
+# a file outside the com.system-service.* prefix. The Accept=yes template
+# instances (clipboard-bridge@.service) are the sockets' children and are
+# deliberately NOT declared.
+# When the mini-rack profile lands, revisit this gate (own design session).
+
+[clipboard-bridge]
+unit = "clipboard-bridge.socket"
+description = "Universal clipboard bridge (framed TCP 2489, loopback)"
+
+[clipboard-bridge-trusted]
+unit = "clipboard-bridge-trusted.socket"
+description = "Trusted local clipboard file-authority endpoint"
+
+[gpg-forward-socketdir]
+unit = "gpg-forward-socketdir.service"
+description = "gpg-agent SSH forwarding provisioning (oneshot)"
+{{- end }}
+
 # vim:ft=toml.gotmpl

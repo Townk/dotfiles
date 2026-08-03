@@ -1,0 +1,48 @@
+#compdef system-service-systemd
+#
+# Completion for system-service-systemd. Most callers go through the
+# top-level `system-service` dispatcher, but the worker is a useful direct
+# target for debugging (`render <name>` to inspect generated unit text, etc.).
+
+__system-service-systemd-names() {
+  local -a names
+  names=( ${(f)"$(system-service-systemd declared 2>/dev/null)"} )
+  (( ${#names} )) && _describe -t services 'systemd service' names
+}
+
+_system-service-systemd() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  _arguments -C \
+    '1: :->cmd' \
+    '*:: :->cmdargs'
+
+  case "$state" in
+    cmd)
+      _values 'subcommand' \
+        'list[show declared systemd services]' \
+        'start[enable + start a unit]' \
+        'stop[stop + disable a unit]' \
+        'restart[stop + start]' \
+        'info[show unit + systemctl detail]' \
+        'sync[reconcile user units with services.toml]' \
+        'render[emit generated unit text on stdout]' \
+        'declared[print declared service names]' \
+        'matching[print services whose key or cmd-zero basename matches a pkg]' \
+        'status[print normalized status (running/stopped/error/none)]'
+      ;;
+    cmdargs)
+      case "$words[1]" in
+        start|stop|restart|info|render|status)
+          _arguments ':service:__system-service-systemd-names'
+          ;;
+        # `matching <pkg>` takes an arbitrary package name (binary basename or
+        # service key) — no completion source.
+        # `list|sync|declared` take no positional args.
+      esac
+      ;;
+  esac
+}
+
+_system-service-systemd "$@"
