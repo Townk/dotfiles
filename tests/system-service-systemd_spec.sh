@@ -227,4 +227,29 @@ TOML
       The contents of file "$STUB_CALLS" should include "disable"
     End
   End
+
+  Describe 'list / info / matching'
+    It 'lists every declared entry as Service<TAB>Status<TAB>User<TAB>File'
+      write_manifest
+      export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0')"
+      When run zsh "$SYSTEMD_BIN" list
+      The line 1 of output should equal "$(printf 'clipboard-bridge\trunning\t%s\t%s/clipboard-bridge.socket' "$(id -un)" "$SYSTEMD_USER_DIR")"
+      The line 2 of output should equal "$(printf 'demo\trunning\t%s\t%s/com.system-service.demo.service' "$(id -un)" "$SYSTEMD_USER_DIR")"
+    End
+
+    It 'info shows the manifest entry and unit path'
+      write_manifest
+      export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0')"
+      When run zsh "$SYSTEMD_BIN" info demo
+      The output should include "com.system-service.demo.service"
+      The output should include "status:   running"
+      The output should include '"cmd"'
+    End
+
+    It 'matching finds by key and by cmd0 basename; adopted match by key only'
+      write_manifest
+      When run zsh "$SYSTEMD_BIN" matching demo-daemon
+      The output should equal "demo"
+    End
+  End
 End

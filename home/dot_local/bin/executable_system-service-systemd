@@ -251,6 +251,36 @@ do_restart() {
   do_start "$1"
 }
 
+do_list() {
+  # NB: "st", not "status" — status is zsh's read-only alias for $?.
+  local user st name
+  user=$(id -un)
+  svc::names | while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
+    st=$(svc::status "$name")
+    printf '%s\t%s\t%s\t%s\n' "$name" "$st" "$user" "$(svc::unit_path "$name")"
+  done
+}
+
+do_info() {
+  [[ $# -eq 1 ]] || die "usage: info <name>"
+  local name="$1"
+  svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  printf '%s%s%s\n' "$C_BWH" "$(svc::unit_name "$name")" "$C_RES"
+  printf '  status:   %s\n' "$(svc::status "$name")"
+  printf '  unit:     %s\n' "$(svc::unit_path "$name")"
+  svc::is_adopted "$name" && printf '  kind:     adopted (file is chezmoi-managed)\n'
+  printf '  manifest entry:\n'
+  svc::toml_json | jq --arg n "$name" '.[$n]' | sed 's/^/    /'
+  printf '\n  systemctl show:\n'
+  "${SYSCTL[@]}" show -p LoadState,ActiveState,SubState,Result,ExecMainStatus,MainPID,FragmentPath -- "$(svc::unit_name "$name")" 2>/dev/null | sed 's/^/    /' || true
+}
+
+do_matching() {
+  [[ $# -eq 1 ]] || die "usage: matching <pkg>"
+  svc::matching "$1"
+}
+
 # --- subcommands ------------------------------------------------------------
 
 do_status() {
@@ -275,6 +305,18 @@ case "${1:-}" in
   restart)
     shift
     do_restart "$@"
+    ;;
+  list)
+    shift
+    do_list "$@"
+    ;;
+  info)
+    shift
+    do_info "$@"
+    ;;
+  matching)
+    shift
+    do_matching "$@"
     ;;
   declared)
     shift
