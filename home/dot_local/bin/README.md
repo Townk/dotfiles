@@ -177,16 +177,17 @@ represent services already managed by the OS (e.g., `clipboard-bridge.socket`,
 `gpg-forward-socketdir.service` on dev-shell).
 
 - **`system-service-launchd`** (macOS): Renders launchd property lists from
-  manifest entries and manages user-domain agents; orchestrates Homebrew
-  services via `system-service-brew`.
+  manifest entries and manages user-domain agents (GUI domain) declared in
+  `services.toml`.
 - **`system-service-brew`** (macOS): Manages Homebrew-installed daemons and
   schedules tap-installed agents through launchd.
 - **`system-service-systemd`** (Linux): Renders user systemd units
   (`~/.config/systemd/user/*.service`) from manifest entries; manages adopted
-  units for services already defined by the OS. User domain only (no
-  system-wide services). Three dev-shell adopted units manage clipboard bridge
-  and GPG socket forwarding. Run-scripts 36/37 still own initial unit
-  bootstrap; `system-service sync` is idempotent on top.
+  units — chezmoi-authored unit files it lifecycle-manages without rendering,
+  rewriting, or sweeping. User domain only (no system-wide services). Three
+  dev-shell adopted units manage clipboard bridge and GPG socket forwarding.
+  Run-scripts 36/37 still own initial unit bootstrap; `system-service sync` is
+  idempotent on top.
 
 `system-service sync` applies the manifest across all platforms; it detects
 the platform via `SERVICE_OS` (defaults to `uname -s`) and dispatches to the
