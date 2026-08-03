@@ -1,4 +1,20 @@
 # Tests for the extended truecolor palette in common.zsh.
+
+# The palette file is a generated artifact (run_onchange_after_54); on a fresh
+# machine .setup.sh deploys common.zsh consumers (system-onboard) BEFORE the
+# full apply that renders it. The stdlib must tolerate that window under the
+# strict mode those consumers run with (set -eu -o pipefail).
+Describe 'common.zsh — missing palette (fresh-machine bootstrap window)'
+  It 'sources cleanly when the palette file does not exist yet'
+    When run zsh -c 'set -eu -o pipefail
+      THEME_PALETTE_FILE=/nonexistent/chezmoi-system.zsh
+      source home/dot_local/lib/common.zsh
+      print -r -- sourced'
+    The status should be success
+    The output should equal 'sourced'
+  End
+End
+
 Describe 'common.zsh — extended palette'
   Include home/dot_local/lib/common.zsh
 

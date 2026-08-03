@@ -54,7 +54,15 @@ fi
 # single styling source of truth. THEME_* tokens (theme-common.zsh) compose from
 # these. THEME_PALETTE_FILE overrides the path; the ShellSpec suite renders the
 # palette to a temp and points it there, so tests don't require `chezmoi apply`.
-source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.zsh}"
+# The palette is a GENERATED artifact: on a fresh machine .setup.sh runs
+# system-onboard (which sources this lib under set -eu) before the full apply
+# renders it, so tolerate the pre-generation window — consumers degrade to
+# empty C_HEX_* until the theme exists.
+_common_palette="${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.zsh}"
+if [[ -r "$_common_palette" ]]; then
+  source "$_common_palette"
+fi
+unset _common_palette
 
 # --- logging ----------------------------------------------------------------
 # One house style across every tool. info/ok go to stdout; warnings and errors

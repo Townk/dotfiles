@@ -161,15 +161,26 @@ fi
 # makes this machine an operator; --no-apply leaves the single heavy apply
 # below to render the fragment with the tokens live.
 #
-# system-onboard and its shared lib aren't on disk until chezmoi applies them,
-# so deploy just those first (a targeted apply runs no run_* scripts). It's
-# interactive (SA token / op:// prompts); under `curl | bash` there's no TTY,
-# so skip with a hint. Never block bootstrap on its outcome.
-chezmoi apply "$HOME/.local/lib/system-secrets-common.zsh" \
+# system-onboard and its dependency chain aren't on disk until chezmoi applies
+# them, so deploy exactly that chain first (a targeted apply runs no run_*
+# scripts and resolves no dependencies itself): system-onboard sources
+# system-secrets-common.zsh, which sources common.zsh and prompt-common.zsh.
+# It's interactive (SA token / op:// prompts); under `curl | bash` there's no
+# TTY, so skip with a hint. Never block bootstrap on its outcome.
+# --no-commit: git identity and the GPG signing key are provisioned by the full
+# apply below, so committing the rendered fragment here would fail (or sign
+# with an auto-detected hostname identity); the uncommitted .tmpl still lands
+# in the source dir and the heavy apply renders it with the tokens live.
+# The mkdir matters: a targeted apply does not create parent directories, and
+# on a fresh machine ~/.local/{lib,bin} don't exist yet.
+mkdir -p "$HOME/.local/lib" "$HOME/.local/bin"
+chezmoi apply "$HOME/.local/lib/common.zsh" \
+              "$HOME/.local/lib/prompt-common.zsh" \
+              "$HOME/.local/lib/system-secrets-common.zsh" \
               "$HOME/.local/bin/system-onboard" 2>/dev/null || true
 if [ -t 0 ] && [ -x "$HOME/.local/bin/system-onboard" ]; then
   echo "🔑  Self-onboarding this machine's secrets..."
-  if "$HOME/.local/bin/system-onboard" --local --no-apply; then
+  if "$HOME/.local/bin/system-onboard" --local --no-apply --no-commit; then
     echo "✅  Secrets provisioned"
   else
     echo "⚠️  Self-onboarding did not complete; finish later with: system-onboard --local"
