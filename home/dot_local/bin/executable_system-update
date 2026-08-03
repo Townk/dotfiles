@@ -482,7 +482,8 @@ fi
 
 # Homebrew-less hosts (e.g. the Linux dev-shell profile) have no brew /
 # Brewfile pipeline. Converge the package ecosystems rendered for this
-# host, then skip the brew/launchd-specific steps.
+# host and reconcile services (systemd worker), then skip the
+# brew-specific steps.
 if ! command -v brew >/dev/null 2>&1; then
   log_warn "Homebrew not found — running the Homebrew-less update path."
   system_package_synced=0
@@ -505,6 +506,14 @@ if ! command -v brew >/dev/null 2>&1; then
   if [[ "$system_package_synced" -ne 1 ]] && command -v snap >/dev/null 2>&1; then
     print -P -- "\n📦 Refresh snap packages...\n"
     sudo snap refresh || log_warn "snap refresh had failures"
+  fi
+  if command -v system-service >/dev/null 2>&1; then
+    print -P -- "\n📡 Sync system services...\n"
+    # Deliberately unwrapped, matching the Homebrew path: system-service
+    # narrates every service immediately, so there is no dead air for a
+    # spinner to cover, and capturing its stdout would cost the colored log
+    # output (common.zsh only paints on a TTY).
+    system-service sync || log_warn "system-service sync had failures"
   fi
   if command -v nvim >/dev/null 2>&1; then
     print -P -- "\n📝 Upgrade NeoVim plugins...\n"
