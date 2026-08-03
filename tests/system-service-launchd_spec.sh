@@ -201,6 +201,13 @@ start_interval = 1800
 cmd = ["/bin/echo", "repack"]
 start_calendar_interval = {Hour = 3, Minute = 17}
 
+# launchd also accepts an ARRAY of calendar dicts (several fire times a
+# day) — backup-capture uses this form. The label must render every fire
+# time, not die with "Cannot index array with string" and truncate list.
+[thrice-daily]
+cmd = ["/bin/echo", "snap"]
+start_calendar_interval = [{Hour = 9, Minute = 0}, {Hour = 21, Minute = 30}]
+
 [watcher]
 cmd = ["/bin/echo", "sync"]
 watch_paths = ["/Volumes"]
@@ -221,6 +228,7 @@ EOF
       When run rows
       The output should include "half-hourly	idle (every 30m)"
       The output should include "nightly	idle (daily 03:17)"
+      The output should include "thrice-daily	idle (daily 09:00 + daily 21:30)"
       The output should include "watcher	idle (every 1h + watch)"
       The output should include "classic	stopped"
     End

@@ -269,7 +269,12 @@ svc::schedule_label() {
             end)
          else empty end),
         (if $s.start_calendar_interval then
-           "daily \($s.start_calendar_interval.Hour // 0 | pad2):\($s.start_calendar_interval.Minute // 0 | pad2)"
+           # launchd accepts a dict OR an array of dicts (several fire
+           # times); normalize to an array so both render.
+           ($s.start_calendar_interval
+            | if type == "array" then . else [.] end
+            | map("daily \(.Hour // 0 | pad2):\(.Minute // 0 | pad2)")
+            | join(" + "))
          else empty end),
         (if $s.watch_paths then "watch" else empty end) ]
     | join(" + ")'
