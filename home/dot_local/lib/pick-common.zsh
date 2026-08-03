@@ -855,6 +855,10 @@ pick::selector_shortcut_count() {
 # KEY:SPEC + --on-key-background FUNC add insert-without-dismiss (a FIFO broker
 # bridges fzf's child-shell binds back to an in-process hook).
 pick::start() {
+  # EXIT traps set below are function-scoped in zsh, but INT/TERM dispositions
+  # are process-global: local_traps restores the caller's INT/TERM handlers on
+  # return, so a same-shell caller's own traps survive the engine.
+  setopt local_options local_traps
   local output="raw"
   local source="/dev/stdin"
   local tmp_source=""
@@ -1149,7 +1153,12 @@ pick::start() {
 
   if [[ "$source" == "/dev/stdin" ]]; then
     tmp_source="$(mktemp "${TMPDIR:-/tmp}/pick-start.XXXXXX")" || die "could not create temp input"
-    trap '[[ -n "${tmp_source:-}" ]] && rm -f -- "$tmp_source"' EXIT INT TERM
+    # Bake the path into the trap string: zsh pops a function's locals BEFORE
+    # running its function-scoped EXIT trap, so a handler that dereferences
+    # $tmp_source fires with it empty and the file leaks on cancel
+    # (pick::run's `exit 130`). The trap owns cleanup on every path — it also
+    # fires on normal function return, so no explicit rm at the end.
+    trap "rm -f -- ${(q)tmp_source}" EXIT INT TERM
     cat > "$tmp_source"
     source="$tmp_source"
   fi
@@ -1163,13 +1172,17 @@ pick::start() {
     pick::resume_pos "$source"
   fi
 
-  # --key-background: stand up the FIFO broker + binds, and ensure the broker and
-  # FIFO are reaped on cancel (pick::run does `exit 130`) as well as normal
-  # return. The trap also preserves the tmp_source cleanup.
+  # --key-background: stand up the FIFO broker + binds, and ensure the broker
+  # and FIFO are reaped on cancel (pick::run does `exit 130`) as well as normal
+  # return. Replaces the tmp_source trap above, so it re-bakes that cleanup.
   if (( ${#background_binds[@]} )); then
     [[ -n "$on_background" ]] || on_background="pick::background_sink"
     pick::background_setup "$on_background" "${background_binds[@]}"
-    trap 'pick::background_teardown; [[ -n "${tmp_source:-}" ]] && rm -f -- "${tmp_source}"' EXIT INT TERM
+    if [[ -n "$tmp_source" ]]; then
+      trap "pick::background_teardown; rm -f -- ${(q)tmp_source}" EXIT INT TERM
+    else
+      trap 'pick::background_teardown' EXIT INT TERM
+    fi
   fi
 
   # --key-reload: binds that run a command AND reload the list (e.g. delete or
@@ -1244,11 +1257,10 @@ pick::start() {
     "$on_picked" "${sel_ids[@]}"
   fi
 
-  pick::background_teardown
-  if [[ -n "$tmp_source" ]]; then
-    rm -f -- "$tmp_source"
-  fi
-  trap - EXIT INT TERM
+  # No explicit cleanup here: the function-scoped EXIT trap installed above
+  # fires on this return and owns the broker/FIFO teardown and tmp_source
+  # removal (pick::background_teardown is guarded, so a bind-less run that
+  # never armed a trap loses nothing).
 }
 
 # --- output --------------------------------------------------------
