@@ -99,6 +99,7 @@ TOML
       write_manifest
       export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=active\nSubState=listening\nResult=success\nExecMainStatus=0')"
       When run zsh "$SYSTEMD_BIN" status clipboard-bridge
+      The output should equal "running"
       The status should be success
       The contents of file "$STUB_CALLS" should include "clipboard-bridge.socket"
     End
