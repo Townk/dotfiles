@@ -363,3 +363,22 @@ PY
     End
   End
 End
+
+# spin::nap's zselect exits 1 on timeout — its NORMAL outcome with no fds.
+# Left as a plain statement it trips a caller's `set -e` on the very first
+# nap, so a BARE (non-condition-context) poll::until or spinner call dies
+# silently (bit system-service-launchd's synchronous bootout drain).
+Describe 'poll::until under a bare set -e call'
+  It 'survives errexit when called outside a condition context'
+    When run zsh -c '
+      set -eu -o pipefail
+      source home/dot_local/lib/common.zsh
+      n=0
+      probe() { n=$((n+1)); (( n >= 3 )); }
+      poll::until 5 0.1 probe
+      print -r -- "polls=$n"
+    '
+    The status should be success
+    The output should equal 'polls=3'
+  End
+End

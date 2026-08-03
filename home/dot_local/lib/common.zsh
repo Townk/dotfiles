@@ -145,7 +145,11 @@ zmodload zsh/zselect 2>/dev/null && typeset -g _common_have_zselect=1 \
 spin::nap() {
   local cs="${1:-10}"
   if (( _common_have_zselect )); then
-    zselect -t "$cs" 2>/dev/null
+    # zselect exits 1 on timeout — its NORMAL outcome with no fds. The `||`
+    # anchors it in a condition so a BARE spin::nap/poll::until under a
+    # caller's `set -e` survives (a trailing `return 0` alone never runs:
+    # errexit fires on the zselect statement itself).
+    zselect -t "$cs" 2>/dev/null || true
     return 0
   fi
   sleep "$(( cs / 100.0 ))"
