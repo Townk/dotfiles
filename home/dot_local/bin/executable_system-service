@@ -87,7 +87,7 @@ Usage:
 
 Routes to the worker that owns <name>:
   • manifest (services.toml entry) → system-service-$MANIFEST_WORKER $1 <name>
-  • brew     (brew services)       → system-service-brew            $1 <name>
+  • brew     (brew services, macOS only) → system-service-brew     $1 <name>
 
 For manifest services, \`start\` writes the unit (re-rendered from the TOML
 entry), bootstraps/enables it, and ensures any working_dir / log_path /
@@ -102,7 +102,7 @@ Usage:
 
 Prints the resolved manifest entry / unit path / normalized status, plus the
 full backend detail (\`launchctl print\` on macOS, \`systemctl --user show\` on
-Linux) or \`brew services info\` (brew) output.
+Linux) or \`brew services info\` (brew, macOS only) output.
 EOF
       ;;
     sync)
@@ -128,7 +128,7 @@ Internal hook called by \`system-package-* sync\` after a version bump.
 For each <pkg>:
   • manifest: restart services whose top-level key OR cmd[0] basename
     equals <pkg>, but only if currently running.
-  • brew:     restart the brew service named <pkg>, but only if started
+  • brew:     restart the brew service named <pkg>, but only if started (macOS only)
     (macOS only).
 
 Manually-stopped services stay stopped — an upgrade never auto-resurrects
@@ -180,11 +180,15 @@ route() {
 
 # do_list — merge manifest + brew rows into one Source/Service/Status/User/File table
 do_list() {
+  # Both probes BEFORE the pipe group: a missing worker must die before any
+  # partial table output has been emitted.
   worker_check "$MANIFEST_WORKER"
+  if ((HAVE_BREW)); then
+    worker_check brew
+  fi
   {
     "system-service-$MANIFEST_WORKER" list | awk -F'\t' -v w="$MANIFEST_WORKER" '{print w "\t" $0}'
     if ((HAVE_BREW)); then
-      worker_check brew
       system-service-brew list | awk -F'\t' '{print "brew\t" $0}'
     fi
   } | pkg::table_print $'Source\tService\tStatus\tUser\tFile' 1

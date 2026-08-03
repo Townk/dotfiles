@@ -79,7 +79,7 @@ svc::unit_path() { printf '%s/%s\n' "$SYSTEMD_USER_DIR" "$(svc::unit_name "$1")"
 svc::status() {
   local name="$1"
   local props
-  props=$("${SYSCTL[@]}" show -p LoadState,ActiveState,SubState,Result,ExecMainStatus -- "$(svc::unit_name "$name")" 2>/dev/null) || {
+  props=$("${SYSCTL[@]}" show -p LoadState,ActiveState -- "$(svc::unit_name "$name")" 2>/dev/null) || {
     printf 'none\n'
     return
   }
@@ -319,11 +319,17 @@ do_sync() {
   # Phase 1a: write all rendered units first, capturing pre-write status,
   # so one daemon-reload covers every file change.
   local name="" reload_needed=0
-  local -A pre_status changed
+  local -A pre_status changed adopted
   for name in "${declared[@]}"; do
     [[ -z "$name" ]] && continue
     svc::assert_one_kind "$name"
-    svc::is_adopted "$name" && continue
+    # Cache the adoption verdict: svc::is_adopted re-parses the manifest
+    # (yq+jq) on every call, and phase 1b needs the same answer.
+    if svc::is_adopted "$name"; then
+      adopted[$name]=1
+      continue
+    fi
+    adopted[$name]=""
     pre_status[$name]=$(svc::status "$name")
     svc::ensure_dirs "$name"
     changed[$name]=$(svc::write_unit "$name")
@@ -338,7 +344,7 @@ do_sync() {
     # iterations prints name=value in zsh.
     local unit=""
     unit=$(svc::unit_name "$name")
-    if svc::is_adopted "$name"; then
+    if [[ -n "${adopted[$name]}" ]]; then
       svc::enable "$name"
       if [[ "$(svc::status "$name")" != running ]]; then
         "${SYSCTL[@]}" start -- "$unit" 2>/dev/null ||
@@ -346,6 +352,8 @@ do_sync() {
       fi
       continue
     fi
+    # Runs for unchanged entries too, deliberately: enable is idempotent and
+    # re-asserts [Install] linkage for a unit disabled out-of-band.
     svc::enable "$name"
     if [[ "${changed[$name]}" == "wrote" ]]; then
       if [[ "${pre_status[$name]}" == running ]]; then
