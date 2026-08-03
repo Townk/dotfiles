@@ -76,11 +76,10 @@ CORE_LIB="${PICK_CLIPBOARD_CORE_LIB:-$PICK_LIB_DIR/clipboard-store-core.zsh}"
 require_cmd sqlite3
 require_cmd pbcopy 2>/dev/null || true   # copy target; optional in odd envs
 
-# `-escape off` (sqlite >= 3.46) keeps the raw ANSI + US field bytes intact.
-typeset -ga PICK_SQLITE_RAW; PICK_SQLITE_RAW=()
-if sqlite3 -escape off ':memory:' 'SELECT 1;' >/dev/null 2>&1; then
-  PICK_SQLITE_RAW=(-escape off)
-fi
+# Probe the sqlite CLI's -escape support (shared pick::sqlite_raw; the
+# generated child scripts below still hardcode `-escape off` — see the
+# reload/preview heredocs — so pre-3.46 hosts remain unsupported there).
+pick::sqlite_raw
 
 [[ -f "$DB_FILE" ]] || die "clipboard store not found: $DB_FILE
 It is created by the Hammerspoon clipboard-history watcher (chezmoi apply)."

@@ -139,6 +139,24 @@ pick::cache_stale() {
   return 1
 }
 
+# --- sqlite --------------------------------------------------------
+
+# Populate PICK_SQLITE_RAW with the flags that keep raw bytes intact.
+# `-escape off` (sqlite ≥ 3.46) disables the CLI's newer control-character
+# output escaping so the raw ANSI colour + US/RS field bytes the projections
+# emit pass through untouched. Older builds (e.g. Ubuntu's 3.37) emit raw
+# bytes already and reject the unknown flag, so only pass it when supported.
+# A CALLED function, deliberately not file-scope: pick-common is sourced by
+# many non-sqlite consumers (mux dialogs, per-repaint fzf-tab previews) that
+# must not pay the probe's sqlite3 fork at source time.
+pick::sqlite_raw() {
+  typeset -ga PICK_SQLITE_RAW
+  PICK_SQLITE_RAW=()
+  if sqlite3 -escape off ':memory:' 'SELECT 1;' >/dev/null 2>&1; then
+    PICK_SQLITE_RAW=(-escape off)
+  fi
+}
+
 # --- clipboard -----------------------------------------------------
 
 # Echo the first available clipboard-copy command (for the key-background
@@ -152,13 +170,13 @@ pick::detect_clip() {
 
 # Copy a string to the clipboard via the first available helper. No
 # trailing newline so a paste at a shell prompt doesn't auto-execute.
+# The ${(z)} split is safe: detect_clip emits only hardcoded literals,
+# never resolved paths (same consumption as pick::background_sink).
 pick::clipboard() {
-  local s=$1
-  if   command -v pbcopy  >/dev/null 2>&1; then printf '%s' "$s" | pbcopy
-  elif command -v wl-copy >/dev/null 2>&1; then printf '%s' "$s" | wl-copy
-  elif command -v xclip   >/dev/null 2>&1; then printf '%s' "$s" | xclip -selection clipboard
-  else die "no clipboard helper found (pbcopy / wl-copy / xclip)"
-  fi
+  local clip
+  clip="$(pick::detect_clip)"
+  [[ -n "$clip" ]] || die "no clipboard helper found (pbcopy / wl-copy / xclip)"
+  printf '%s' "$1" | ${(z)clip}
 }
 
 # Prefix each line with a selector-mode display field when 1-9 shortcuts
@@ -427,6 +445,9 @@ pick::build_fzf_args() {
     --color=bg+:"$C_ROLE_UI_SURFACE"
     --color=fg:"$C_ROLE_UI_FG"
     --color=fg+:"regular:$C_ROLE_UI_FG"
+    # hl = yellow, NOT completion.sh's error-red: on the mantle dialog bg,
+    # red-on-dark reads as an error state — the picker highlights matches,
+    # not failures. Intentional divergence from the inline-completion canvas.
     --color=hl:"$C_HEX_YELLOW"
     --color=hl+:"regular:$C_HEX_YELLOW"
     --color=prompt:"$C_ROLE_UI_ACCENT"
@@ -442,6 +463,8 @@ pick::build_fzf_args() {
     --color=header-bg:"$pick_bg"
     --color=preview-bg:"$pick_bg"
     --color=footer-bg:"$pick_bg"
+    # header = hint role (the dialog's keybind line), not completion.sh's
+    # error-red header. Intentional divergence, same rationale as hl above.
     --color=header:"$C_ROLE_UI_HINT"
     --color=label:"$C_ROLE_UI_ACCENT"
     --color=spinner:"$C_ROLE_UI_CURSOR"

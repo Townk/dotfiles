@@ -70,15 +70,7 @@ pick_symbols::parse_args() {
 # the consistent "build it with chezmoi apply" hint.
 pick_symbols::require_db() {
   require_cmd sqlite3
-  # `-escape off` (sqlite ≥ 3.46) disables the CLI's newer control-character
-  # output escaping so the raw ANSI colour + US/RS field bytes the projections
-  # emit pass through untouched. Older builds (e.g. Ubuntu's 3.37) emit raw
-  # bytes already and reject the unknown flag, so only pass it when supported.
-  typeset -ga PICK_SQLITE_RAW
-  PICK_SQLITE_RAW=()
-  if sqlite3 -escape off ':memory:' 'SELECT 1;' >/dev/null 2>&1; then
-    PICK_SQLITE_RAW=(-escape off)
-  fi
+  pick::sqlite_raw
   [[ -f "$DB_FILE" ]] || die "symbols DB not found: $DB_FILE
 Build it with: chezmoi apply (runs the symbols-db hook)"
 
