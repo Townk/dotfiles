@@ -233,7 +233,33 @@ EMOJI_WIDE_ADJUST="${EMOJI_WIDE_ADJUST:-96}"       # width-2 emoji -> two cells
 # different release. Set NOTO_EMOJI_OTF="" + unreachable URL to skip (emoji then
 # fall back to the system colour-emoji font via WebKit's last resort).
 NOTO_EMOJI_OTF="${NOTO_EMOJI_OTF:-}"
-NOTO_EMOJI_URL="${NOTO_EMOJI_URL:-https://github.com/adobe-fonts/noto-emoji-svg/releases/download/2.100/NotoColorEmoji-SVG.otf}"
+NOTO_EMOJI_URL_DEFAULT="https://github.com/adobe-fonts/noto-emoji-svg/releases/download/2.100/NotoColorEmoji-SVG.otf"
+NOTO_EMOJI_URL="${NOTO_EMOJI_URL:-${NOTO_EMOJI_URL_DEFAULT}}"
+# Downloaded artifacts are hash-pinned: TLS only authenticates the host, not
+# the asset — a pinned SHA-256 makes the build tamper-evident against an
+# upstream release-account compromise and catches truncated downloads.
+# Overriding the URL/version without the matching *_SHA256 skips verification
+# with a warning. The FA pair replaces the old float-on-latest behavior so the
+# build is reproducible; bump both together to take a new release.
+NOTO_EMOJI_SHA256="${NOTO_EMOJI_SHA256:-}"
+if [[ -z "${NOTO_EMOJI_SHA256}" && "${NOTO_EMOJI_URL}" == "${NOTO_EMOJI_URL_DEFAULT}" ]]; then
+  NOTO_EMOJI_SHA256="a0838b22da1c7c59a3363dde157f08de24ac42bd4d10377c7b2ccf868f8e16cc"
+fi
+FA_VERSION="${FA_VERSION:-7.3.1}"
+FA_SHA256="${FA_SHA256:-}"
+if [[ -z "${FA_SHA256}" && "${FA_VERSION}" == "7.3.1" ]]; then
+  FA_SHA256="c61edde261707f33376a28e9a30bb8c70c1a20bf0bd975206b809f3b3b70add5"
+fi
+
+# sha256_of <file> — one hex digest on stdout (macOS ships shasum, Linux
+# sha256sum).
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
 
 # Resolve JetBrains Mono Regular for the embedded Blink font (and the patch
 # pass that produces it). Honours an explicit JETBRAINS_TTF, else probes the
@@ -267,19 +293,41 @@ resolve_jetbrains_ttf() {
 # Resolve the embedded colour-emoji font. Honours an explicit NOTO_EMOJI_OTF,
 # else uses the cached download, else fetches NOTO_EMOJI_URL into WORK_ROOT/emoji.
 # Leaves NOTO_EMOJI_OTF empty on failure; the CSS then omits the embedded emoji.
+# noto_emoji_ok <file> — verify against NOTO_EMOJI_SHA256 when pinned. A
+# mismatch (tampering OR a truncated interrupted download) discards the file so
+# no later run can wedge on it; emoji then degrade to the system font.
+noto_emoji_ok() {
+  [[ -n "${NOTO_EMOJI_SHA256}" ]] || {
+    warn "NOTO_EMOJI_URL overridden without NOTO_EMOJI_SHA256; skipping verification."
+    return 0
+  }
+  local actual
+  actual="$(sha256_of "$1")"
+  if [[ "${actual}" != "${NOTO_EMOJI_SHA256}" ]]; then
+    warn "Noto OT-SVG SHA-256 mismatch (expected ${NOTO_EMOJI_SHA256}, got ${actual}); discarding it."
+    rm -f -- "$1"
+    return 1
+  fi
+  return 0
+}
+
 resolve_noto_emoji() {
   [[ -n "${NOTO_EMOJI_OTF}" && -f "${NOTO_EMOJI_OTF}" ]] && return 0
   local cache="${WORK_ROOT}/emoji/NotoColorEmoji-SVG.otf"
-  if [[ -f "${cache}" ]]; then NOTO_EMOJI_OTF="${cache}"; return 0; fi
+  # Pre-pinning caches were never verified; check (and self-heal) rather than
+  # trust — a stale truncated cache otherwise poisons every future build.
+  if [[ -f "${cache}" ]] && noto_emoji_ok "${cache}"; then
+    NOTO_EMOJI_OTF="${cache}"; return 0
+  fi
   if ! command -v curl >/dev/null 2>&1; then
     warn "curl not found; cannot fetch Noto OT-SVG colour-emoji font."; return 1
   fi
   mkdir -p "$(dirname "${cache}")"
   info "downloading Noto OT-SVG colour-emoji font ..."
-  if curl -fL --progress-bar -o "${cache}" "${NOTO_EMOJI_URL}"; then
+  if curl -fL --progress-bar -o "${cache}" "${NOTO_EMOJI_URL}" && noto_emoji_ok "${cache}"; then
     NOTO_EMOJI_OTF="${cache}"; info "Noto OT-SVG -> ${cache}"; return 0
   fi
-  warn "Noto download failed (${NOTO_EMOJI_URL}); emoji fall back to the system font."
+  warn "Noto download failed or unverified (${NOTO_EMOJI_URL}); emoji fall back to the system font."
   rm -f "${cache}"; return 1
 }
 
@@ -374,26 +422,31 @@ resolve_fa() {
     info "auto-detected FA otfs at ${FA_SRC_DIR}"
     return 0
   fi
-  # Fall back to downloading the latest Font Awesome Free desktop release.
-  if ! ask "No Font Awesome found locally. Download the latest FA Free desktop archive?"; then
+  # Fall back to downloading the PINNED Font Awesome Free desktop release
+  # (FA_VERSION + FA_SHA256; no float-on-latest — see the pin block up top).
+  if ! ask "No Font Awesome found locally. Download FA Free desktop v${FA_VERSION}?"; then
     die "Font Awesome assets required."
   fi
   command -v curl  >/dev/null 2>&1 || die "curl not found on PATH."
   command -v unzip >/dev/null 2>&1 || die "unzip not found on PATH."
 
   mkdir -p "${FA_DIR}"
-  log "querying GitHub for latest FA release..."
-  local api_url="https://api.github.com/repos/FortAwesome/Font-Awesome/releases/latest"
-  local zip_url
-  zip_url=$(curl -fsSL "${api_url}" \
-    | grep -Eo '"browser_download_url"[^"]*"[^"]*fontawesome-free-[0-9.]+-desktop\.zip"' \
-    | head -n1 \
-    | sed -E 's/.*"(https:[^"]+)"$/\1/')
-  [[ -n "${zip_url}" ]] || die "could not find latest FA desktop zip in GitHub API response."
+  local zip_url="https://github.com/FortAwesome/Font-Awesome/releases/download/${FA_VERSION}/fontawesome-free-${FA_VERSION}-desktop.zip"
   local zip_path="${FA_DIR}/$(basename "${zip_url}")"
   log "downloading ${zip_url}"
   curl -fL --progress-bar -o "${zip_path}" "${zip_url}" \
     || die "FA download failed."
+  if [[ -n "${FA_SHA256}" ]]; then
+    local fa_actual
+    fa_actual="$(sha256_of "${zip_path}")"
+    if [[ "${fa_actual}" != "${FA_SHA256}" ]]; then
+      rm -f -- "${zip_path}"
+      die "FA archive SHA-256 mismatch (expected ${FA_SHA256}, got ${fa_actual}); download discarded."
+    fi
+    info "FA archive SHA-256 verified"
+  else
+    warn "FA_VERSION overridden without FA_SHA256; archive not verified."
+  fi
   log "unzipping..."
   ( cd "${FA_DIR}" && unzip -q -o "${zip_path}" ) || die "FA unzip failed."
   FA_SRC_DIR=$(ls -1d "${FA_DIR}/fontawesome-free-"*"-desktop/otfs" | sort -V | tail -n1)
@@ -1092,7 +1145,21 @@ else
   resolve_noto_emoji || true
   if [[ -n "${NOTO_EMOJI_OTF}" && -f "${NOTO_EMOJI_OTF}" && -n "${PY_VENV_BIN}" && -x "${PY_VENV_BIN}" ]]; then
     EMOJI_OUT_DIR="${WORK_DIR}/emoji-split"
-    EMOJI_SPLIT="$(fontbuild emoji-split "${NOTO_EMOJI_OTF}" "${EMOJI_OUT_DIR}")"
+    # A bad emoji font must degrade like every other emoji failure here (warn +
+    # system fallback), not kill the whole build via set -e — a plain
+    # assignment's failing command substitution is fatal under errexit. This
+    # bites for real: an interrupted download leaves a truncated OTF in the
+    # cache, which resolve_noto_emoji then accepts on every subsequent run.
+    # Drop the cached copy so the next run re-fetches; a user-pinned
+    # NOTO_EMOJI_OTF outside the cache is left alone.
+    if ! EMOJI_SPLIT="$(fontbuild emoji-split "${NOTO_EMOJI_OTF}" "${EMOJI_OUT_DIR}")"; then
+      warn "fontbuild emoji-split failed for ${NOTO_EMOJI_OTF}"
+      if [[ "${NOTO_EMOJI_OTF}" == "${WORK_ROOT}/emoji/NotoColorEmoji-SVG.otf" ]]; then
+        warn "discarding the cached Noto OT-SVG so the next run re-downloads it"
+        rm -f -- "${NOTO_EMOJI_OTF}"
+      fi
+      EMOJI_SPLIT=""
+    fi
     EMOJI_WIDE="$(printf '%s\n' "${EMOJI_SPLIT}" | sed -n 1p)"
     EMOJI_NARROW="$(printf '%s\n' "${EMOJI_SPLIT}" | sed -n 2p)"
     EMOJI_WIDE_WOFF2="$(printf '%s\n' "${EMOJI_SPLIT}" | sed -n 3p)"
