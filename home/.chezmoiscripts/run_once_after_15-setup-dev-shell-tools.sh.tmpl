@@ -73,14 +73,21 @@ APT_PACKAGES=(
   libclang-dev           # libclang development files for bindgen
 )
 
+# sudo runs with env_reset, so these have to ride on the command line rather
+# than be exported. DEBIAN_FRONTEND stops debconf from opening a dialog;
+# NEEDRESTART_SUSPEND stops apt's post-invoke hook from asking which daemons to
+# restart. Either prompt blocks the run forever when chezmoi is attached to a
+# tty, and restarting system daemons is not this script's business.
+APT_ENV=(DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1)
+
 if command -v apt-get >/dev/null 2>&1; then
-  echo "📦  Installing system libraries via apt..."
-  sudo apt-get update -qq || failures+=("apt-get update")
-  if ! sudo apt-get install -y -qq "${APT_PACKAGES[@]}"; then
+  echo "📦  Installing system libraries via apt (this can take several minutes)..."
+  sudo "${APT_ENV[@]}" apt-get update -qq || failures+=("apt-get update")
+  if ! sudo "${APT_ENV[@]}" apt-get install -y -qq "${APT_PACKAGES[@]}"; then
     failures+=("apt: batch install")
     echo "📦  apt batch install failed; retrying packages individually..."
     for pkg in "${APT_PACKAGES[@]}"; do
-      if ! sudo apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
+      if ! sudo "${APT_ENV[@]}" apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
         failures+=("apt: $pkg")
       fi
     done
