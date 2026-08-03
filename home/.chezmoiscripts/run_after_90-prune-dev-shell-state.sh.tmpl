@@ -4,11 +4,20 @@ set -eu
 
 # These paths are intentionally ignored on headless dev shells. Because ignored
 # targets are skipped by .chezmoiremove, prune stale copies explicitly.
+#   - ~/Library: the launchd environment agent + Application Support tealdeer
+#     symlink deployed before the off-darwin ignore existed (2026-08-03).
+#   - system-service-{launchd,brew} + completions: macOS service workers that
+#     deployed before workers became per-platform (systemd worker era).
 rm -rf -- \
   "$HOME/.pi/agent-local" \
   "$HOME/.config/espanso" \
   "$HOME/.config/ghostty" \
   "$HOME/.config/hammerspoon" \
   "$HOME/.config/homebrew" \
-  "$HOME/.config/wezterm"
+  "$HOME/.config/wezterm" \
+  "$HOME/Library" \
+  "$HOME/.local/bin/system-service-launchd" \
+  "$HOME/.local/bin/system-service-brew" \
+  "$HOME/.local/share/zsh/site-functions/_system-service-launchd" \
+  "$HOME/.local/share/zsh/site-functions/_system-service-brew"
 {{- end }}

@@ -7,6 +7,12 @@
 # ~/.config/zsh/.zshrc (unlike gitignore, a bare name never floats to deeper
 # levels). Leading slashes are NOT allowed — chezmoi ≥ v2.72.0 rejects them as
 # invalid paths. Removing only affects machines that still have the targets.
+#
+# HARD RULE: a target matched by .chezmoiignore is INVISIBLE to this file —
+# chezmoi skips ignored targets entirely, removal included (verified
+# empirically, chezmoi v2.72.0). Never pair an entry here with an ignore
+# match for the same host set; platform-gated cleanup of ignored paths
+# belongs in the 90-prune-dev-shell-state run script instead.
 
 # ── zsh: de-zsh4humans migration ────────────────────────────────────────────
 # .zshrc + p10k.zsh moved under ~/.config/zsh (via ZDOTDIR); also drop p10k's
@@ -99,17 +105,6 @@
 .config/zellij/themes/catppuccin-mocha-dialog.kdl
 .pi/agent/themes/catppuccin-mocha.json
 
-# ── ~/Library: never should have left macOS ─────────────────────────────────
-# The Library tree (launchd environment agent + Application Support tealdeer
-# symlink) deployed on every Linux profile because .chezmoiignore.tmpl never
-# excluded it off-darwin. Prune the two strays; the now-empty parent dirs are
-# left for a one-time manual rmdir. Gated so macOS — where these are
-# legitimately managed — never removes its own files.
-{{ if ne .chezmoi.os "darwin" -}}
-Library/LaunchAgents/my.environment.variables.plist
-Library/Application Support/tealdeer
-{{- end }}
-
 # ── stray leftovers from removed/renamed source entries ─────────────────────
 # ~/README.md: an early deployed copy of the repo README, no longer a source
 # entry. quick-launch-external: renamed to quick-launch{,-pick,-window,-zellij}.
@@ -146,16 +141,6 @@ README.md
 # The portable shared skill uses one Agent Skills-standard name in every
 # harness. Remove pi's old harness-specific alias after deploying code-commit.
 .pi/agent/skills/commit
-
-# ── service workers: launchd/brew are macOS-only ────────────────────────────
-# The dispatcher discovers workers by `command -v`; pruning the macOS
-# workers off Linux hosts is what makes that discovery truthful.
-{{ if ne .chezmoi.os "darwin" -}}
-.local/bin/system-service-launchd
-.local/bin/system-service-brew
-.local/share/zsh/site-functions/_system-service-launchd
-.local/share/zsh/site-functions/_system-service-brew
-{{- end }}
 
 # ── ai-assist shell stack retired (→ ai-playbook binary) ────────────────────
 # The zsh ai-assist dispatcher + harness workers + shared lib were removed from
