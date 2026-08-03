@@ -1,75 +1,77 @@
 # Prune targets orphaned by the 2026-06 refactors. chezmoi converges files
 # that exist in the source but never deletes targets whose source entry was
 # renamed or removed — so without this, other machines would keep stale copies
-# alongside the new ones. Each pattern is gitignore-style relative to $HOME and
-# ALL are anchored (leading slash) so they match ONLY the old path, never a
-# relocated equivalent (e.g. an unanchored ".zshrc" would also hit the new
-# ~/.config/zsh/.zshrc). Removing only affects machines that still have them.
+# alongside the new ones. Each pattern is a doublestar glob matched against the
+# FULL path relative to $HOME, so every pattern is inherently anchored:
+# ".zshrc" matches ONLY ~/.zshrc, never a relocated equivalent like
+# ~/.config/zsh/.zshrc (unlike gitignore, a bare name never floats to deeper
+# levels). Leading slashes are NOT allowed — chezmoi ≥ v2.72.0 rejects them as
+# invalid paths. Removing only affects machines that still have the targets.
 
 # ── zsh: de-zsh4humans migration ────────────────────────────────────────────
 # .zshrc + p10k.zsh moved under ~/.config/zsh (via ZDOTDIR); also drop p10k's
 # stale z4h-era wordcode.
-/.zshrc
-/.p10k.zsh
-/.p10k.zsh.zwc
+.zshrc
+.p10k.zsh
+.p10k.zsh.zwc
 
 # ── ~/.local/bin: scripts renamed / moved to libexec ────────────────────────
-/.local/bin/nvim-wez.sh
-/.local/bin/commit-ai
-/.local/bin/commit-cursor
-/.local/bin/pick-gitmoji
-/.local/bin/pick-glyph
-/.local/bin/pinentry-auto
-/.local/bin/local-llm-bench
-/.local/bin/local-llm-gateway
-/.local/bin/ics-view
-/.local/bin/sqlite-view
-/.local/bin/disk-image-view
-/.local/bin/tm-tab
-/.local/bin/tab-edit
-/.local/bin/fzf-tab-preview-open
-/.local/bin/system-backup-tm
+.local/bin/nvim-wez.sh
+.local/bin/commit-ai
+.local/bin/commit-cursor
+.local/bin/pick-gitmoji
+.local/bin/pick-glyph
+.local/bin/pinentry-auto
+.local/bin/local-llm-bench
+.local/bin/local-llm-gateway
+.local/bin/ics-view
+.local/bin/sqlite-view
+.local/bin/disk-image-view
+.local/bin/tm-tab
+.local/bin/tab-edit
+.local/bin/fzf-tab-preview-open
+.local/bin/system-backup-tm
 # tab-edit's completion was removed outright — it was never a typed command.
-/.local/share/zsh/site-functions/_tab-edit
+.local/share/zsh/site-functions/_tab-edit
 
 # ── clipboard reverse-forward folded into system-onboard ────────────────────
 # The committed clipboard.config (a hardcoded Host + RemoteForward) is gone; the
 # forward is now written per-alias into the loose ~/.ssh/config.d/<alias>.conf by
 # system-onboard (default on; --no-clipboard / `onboard update <alias>
 # --clipboard|--no-clipboard` to toggle). Prune the old committed copy.
-/.ssh/config.d/clipboard.config
+.ssh/config.d/clipboard.config
 
 # ── local-LLM stack retired (llama-swap/gateway/headroom → mlx-gemma direct) ──
 # pi-local was repointed to the [mlx-gemma] launchd service talking straight to
 # mlx_vlm.server on :8799, orphaning the old chain. Drop the libexec helpers and
 # the llama-swap config dir (the services.toml sections, brew formula, and uv
 # tools are removed in their own manifests).
-/.local/libexec/local-llm-bench
-/.local/libexec/local-llm-gateway
-/.config/llama-swap
+.local/libexec/local-llm-bench
+.local/libexec/local-llm-gateway
+.config/llama-swap
 
 # ── ~/.local/libexec: sync-remote-assets renamed to ssh-prepare-connection ──
 # The pre-connect helper gained a gpg-socketdir-prep step (beyond the glyph DB +
 # theme rsyncs), so it was renamed to reflect the wider scope. Drop the old name.
-/.local/libexec/sync-remote-assets
+.local/libexec/sync-remote-assets
 
 # ── ~/.local/lib: helpers renamed (.sh → .zsh) / removed ────────────────────
-/.local/lib/image-protocol-support
-/.local/lib/system-package-common.sh
-/.local/lib/system-secrets-common.sh
+.local/lib/image-protocol-support
+.local/lib/system-package-common.sh
+.local/lib/system-secrets-common.sh
 
 # ── ~/.config/zellij/scripts/lib: consolidated to zsh (.sh → .zsh) ──────────
-/.config/zellij/scripts/lib/command.sh
-/.config/zellij/scripts/lib/config.sh
-/.config/zellij/scripts/lib/dispatch.sh
-/.config/zellij/scripts/lib/zellij-session.sh
+.config/zellij/scripts/lib/command.sh
+.config/zellij/scripts/lib/config.sh
+.config/zellij/scripts/lib/dispatch.sh
+.config/zellij/scripts/lib/zellij-session.sh
 
 # ── z4h-era leftovers (never chezmoi-managed) ───────────────────────────────
 # HISTFILE is now ~/.local/state/zsh/history and the compdump ~/.cache/zsh; the
 # old default-path files are dead. NOTE: ~/.zsh_history is a real history file —
 # removing it on a machine whose atuin hasn't imported it yet loses that history.
-/.zsh_history
-/.zcompdump
+.zsh_history
+.zcompdump
 
 # ── cursor: isolated to the work profile ────────────────────────────────────
 # The whole cursor footprint now deploys ONLY on the work profile (see
@@ -78,9 +80,9 @@
 # from before the split. Gated so the work profile — where these are
 # legitimately managed — never removes its own files.
 {{ if ne .profile "work" -}}
-/.cursor
-/.local/bin/ai-commit-cursor
-/.local/share/zsh/site-functions/_ai-commit-cursor
+.cursor
+.local/bin/ai-commit-cursor
+.local/share/zsh/site-functions/_ai-commit-cursor
 {{- end }}
 
 # ── theme outputs: old names superseded by chezmoi-system.* ──────────────────
@@ -88,20 +90,20 @@
 # chezmoi-system.* everywhere; the previous palette.* / system / catppuccin-mocha.*
 # outputs are left beside the new files since chezmoi never wrote them itself.
 # Anchored to the exact stale basenames so the live chezmoi-system.* copies stay.
-/.config/theme/palette.json
-/.config/theme/palette.lua
-/.config/theme/palette.zsh
-/.config/wezterm/colors/system.toml
-/.config/ghostty/themes/system
-/.config/glow/catppuccin-mocha.json
-/.config/zellij/themes/catppuccin-mocha-dialog.kdl
-/.pi/agent/themes/catppuccin-mocha.json
+.config/theme/palette.json
+.config/theme/palette.lua
+.config/theme/palette.zsh
+.config/wezterm/colors/system.toml
+.config/ghostty/themes/system
+.config/glow/catppuccin-mocha.json
+.config/zellij/themes/catppuccin-mocha-dialog.kdl
+.pi/agent/themes/catppuccin-mocha.json
 
 # ── stray leftovers from removed/renamed source entries ─────────────────────
 # ~/README.md: an early deployed copy of the repo README, no longer a source
 # entry. quick-launch-external: renamed to quick-launch{,-pick,-window,-zellij}.
-/README.md
-/.config/zellij/scripts/quick-launch-external
+README.md
+.config/zellij/scripts/quick-launch-external
 
 # ── mux migration Phase 6: neutral entry points left ~/.config/zellij ───────
 # The backend-NEUTRAL scripts (both muxes call them) moved to
@@ -109,30 +111,30 @@
 # pick-*-zellij thins, quick-launch-zellij) stayed put. zellij-quit-confirm
 # was retired outright — both backends now run mux-quit-confirm. Each pattern
 # is the exact old basename, so a relocated equivalent is never matched.
-/.config/zellij/scripts/copy-pwd
-/.config/zellij/scripts/edit-terminal-config
-/.config/zellij/scripts/nested-session-check
-/.config/zellij/scripts/resolve-terminal-location
-/.config/zellij/scripts/terminal-toggle-fullscreen
-/.config/zellij/scripts/quick-launch
-/.config/zellij/scripts/quick-launch-pick
-/.config/zellij/scripts/quick-launch-window
-/.config/zellij/scripts/zellij-open
-/.config/mux/scripts/mux-preview-file
-/.config/mux/scripts/mux-preview-image
-/.config/zellij/scripts/zellij-preview-file
-/.config/zellij/scripts/zellij-preview-image
-/.config/zellij/scripts/zellij-quit-confirm
-/.config/zellij/scripts/lib/command.zsh
-/.config/zellij/scripts/lib/config.zsh
-/.config/zellij/scripts/lib/dispatch.zsh
-/.config/zellij/scripts/lib/dispatch-tmux.zsh
-/.config/zellij/scripts/lib/terminal-location.zsh
+.config/zellij/scripts/copy-pwd
+.config/zellij/scripts/edit-terminal-config
+.config/zellij/scripts/nested-session-check
+.config/zellij/scripts/resolve-terminal-location
+.config/zellij/scripts/terminal-toggle-fullscreen
+.config/zellij/scripts/quick-launch
+.config/zellij/scripts/quick-launch-pick
+.config/zellij/scripts/quick-launch-window
+.config/zellij/scripts/zellij-open
+.config/mux/scripts/mux-preview-file
+.config/mux/scripts/mux-preview-image
+.config/zellij/scripts/zellij-preview-file
+.config/zellij/scripts/zellij-preview-image
+.config/zellij/scripts/zellij-quit-confirm
+.config/zellij/scripts/lib/command.zsh
+.config/zellij/scripts/lib/config.zsh
+.config/zellij/scripts/lib/dispatch.zsh
+.config/zellij/scripts/lib/dispatch-tmux.zsh
+.config/zellij/scripts/lib/terminal-location.zsh
 
 # ── shared agent skills: pi commit renamed to code-commit ───────────────────
 # The portable shared skill uses one Agent Skills-standard name in every
 # harness. Remove pi's old harness-specific alias after deploying code-commit.
-/.pi/agent/skills/commit
+.pi/agent/skills/commit
 
 # ── ai-assist shell stack retired (→ ai-playbook binary) ────────────────────
 # The zsh ai-assist dispatcher + harness workers + shared lib were removed from
@@ -140,19 +142,19 @@
 # Ctrl+Alt+A widget now runs `ai-playbook assist`. Their source entries were
 # deleted but never listed here, so chezmoi left the rendered copies behind.
 # Nothing live invokes them — pure dead code. Anchored to the exact basenames.
-/.local/bin/ai-assist
-/.local/bin/ai-assist-claude
-/.local/bin/ai-assist-cursor
-/.local/bin/ai-assist-pi
-/.local/bin/ai-assist-test
-/.local/libexec/ai-assist-action-broker
-/.local/libexec/ai-assist-ask
-/.local/libexec/ai-assist-docs
-/.local/libexec/ai-assist-popup
-/.local/libexec/ai-assist-remember
-/.local/libexec/ai-assist-render
-/.local/libexec/ai-assist-run
-/.local/libexec/ai-assist-shell
-/.local/libexec/ai-assist-summon
-/.local/libexec/ai-assist-triage
-/.local/lib/assist-agent-common.zsh
+.local/bin/ai-assist
+.local/bin/ai-assist-claude
+.local/bin/ai-assist-cursor
+.local/bin/ai-assist-pi
+.local/bin/ai-assist-test
+.local/libexec/ai-assist-action-broker
+.local/libexec/ai-assist-ask
+.local/libexec/ai-assist-docs
+.local/libexec/ai-assist-popup
+.local/libexec/ai-assist-remember
+.local/libexec/ai-assist-render
+.local/libexec/ai-assist-run
+.local/libexec/ai-assist-shell
+.local/libexec/ai-assist-summon
+.local/libexec/ai-assist-triage
+.local/lib/assist-agent-common.zsh
