@@ -41,9 +41,19 @@ add-zsh-hook chpwd _dir_ring_record
 _dir_ring_go() {  # $1 = target position in the ring
   local pos=$1
   (( pos >= 1 && pos <= $#_dir_ring )) || { zle -R; return; }
+  local prev_pos=$_dir_ring_pos
   _dir_ring_pos=$pos
   _dir_ring_nav=1
-  \builtin cd -- "${_dir_ring[pos]}" 2>/dev/null
+  \builtin cd -- "${_dir_ring[pos]}" 2>/dev/null || {
+    # The ring entry vanished (deleted since it was recorded): no chpwd fired,
+    # so undo the bookkeeping armed above — a surviving _dir_ring_nav makes the
+    # hook swallow the NEXT legitimate cd, and pos would point at a directory
+    # never reached.
+    _dir_ring_nav=''
+    _dir_ring_pos=$prev_pos
+    zle -R
+    return
+  }
   zle reset-prompt
 }
 
