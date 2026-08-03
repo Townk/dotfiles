@@ -342,4 +342,40 @@ INNER
       The status should equal 143
     End
   End
+
+  # The audit's stated job is keeping work/company identifiers out of a PUBLIC
+  # repo, but it only scanned staged added-lines + file names — never the
+  # commit AUTHOR. A git auto-detected identity (user@<hostname>.local, the
+  # fallback when user.email is unset) would land a hostname in the repo
+  # through a field the audit never looked at.
+  Describe 'sec::leak_audit (author identity)'
+    setup_audit() {
+      AREPO="$TEST_TMP/audit-repo"
+      mkdir -p "$AREPO"
+      git -C "$AREPO" init -q
+      git -C "$AREPO" config user.email safe@example.com
+      git -C "$AREPO" config user.name tester
+      printf 'corp[.]internal\n' > "$AREPO/.leak-patterns"
+      printf 'clean content\n' > "$AREPO/file.txt"
+      git -C "$AREPO" add file.txt
+      REPO_ROOT="$AREPO"
+      LEAK_PATTERNS="$AREPO/.leak-patterns"
+    }
+    BeforeEach 'setup_audit'
+
+    audit() ( sec::leak_audit )
+
+    It 'passes a clean staged set with a clean identity'
+      When call audit
+      The status should be success
+    End
+
+    It 'dies when the commit author identity matches a leak pattern'
+      export GIT_AUTHOR_NAME="user"
+      export GIT_AUTHOR_EMAIL="user@corp.internal"
+      When call audit
+      The status should be failure
+      The stderr should include 'leak patterns'
+    End
+  End
 End

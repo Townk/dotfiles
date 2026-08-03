@@ -663,19 +663,28 @@ sec::op_set_field() {
 }
 
 # ---------------------------------------------------------------------------
-# Leak audit. Mirrors the local pre-commit hook: scan STAGED added lines and
-# staged file names against the gitignored .leak-patterns. Run this in-tool
-# right before committing so a leak fails early with a clear message instead of
-# being caught (more opaquely) by the hook. No patterns file -> allow.
+# Leak audit. Mirrors the local pre-commit hook: scan STAGED added lines,
+# staged file names, AND the commit author identity against the gitignored
+# .leak-patterns. The identity matters because git falls back to
+# user@<hostname>.local when no user.email is configured (fresh machine,
+# bootstrap window) — a hostname would land in the repo through a field the
+# diff scan never sees. Run this in-tool right before committing so a leak
+# fails early with a clear message instead of being caught (more opaquely) by
+# the hook. No patterns file -> allow.
 # ---------------------------------------------------------------------------
 sec::leak_audit() {
   [[ -r "$LEAK_PATTERNS" ]] || return 0
-  local added names haystack pat hits=""
+  local added names ident haystack pat hits=""
   added="$(git -C "$REPO_ROOT" diff --cached -U0 --no-color --diff-filter=AM |
     grep '^+' | grep -v '^+++' || true)"
   names="$(git -C "$REPO_ROOT" diff --cached --name-only --diff-filter=ACMR || true)"
+  # Exactly what a commit would record (env overrides included); errors (e.g.
+  # undetectable identity on a dotless hostname) fall through empty — the
+  # commit itself will fail with git's own message.
+  ident="$(git -C "$REPO_ROOT" var GIT_AUTHOR_IDENT 2>/dev/null || true)"
   haystack="$added
-$names"
+$names
+$ident"
   [[ -n "${haystack//[[:space:]]/}" ]] || return 0
   while IFS= read -r pat; do
     case "$pat" in '' | \#*) continue ;; esac
