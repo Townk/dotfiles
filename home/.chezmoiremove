@@ -147,6 +147,16 @@ README.md
 # harness. Remove pi's old harness-specific alias after deploying code-commit.
 .pi/agent/skills/commit
 
+# ── service workers: launchd/brew are macOS-only ────────────────────────────
+# The dispatcher discovers workers by `command -v`; pruning the macOS
+# workers off Linux hosts is what makes that discovery truthful.
+{{ if ne .chezmoi.os "darwin" -}}
+.local/bin/system-service-launchd
+.local/bin/system-service-brew
+.local/share/zsh/site-functions/_system-service-launchd
+.local/share/zsh/site-functions/_system-service-brew
+{{- end }}
+
 # ── ai-assist shell stack retired (→ ai-playbook binary) ────────────────────
 # The zsh ai-assist dispatcher + harness workers + shared lib were removed from
 # source when the input system was rebranded to the `ai-playbook` binary; the

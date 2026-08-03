@@ -51,7 +51,7 @@ block later steps unless explicitly fatal):
                               then restart services tied to upgraded
                               packages (see `system-service --help`)
   5. `brew cleanup --prune=all`
-  6. `system-service sync`    reconcile launchd plists with services.toml
+  6. `system-service sync`    reconcile services with services.toml (launchd/systemd)
   7. `ya pkg upgrade --discard`  + commit any package.toml bumps to chezmoi
   8. NeoVim: `Lazy! sync` + `MasonToolsUpdateSync`
   9. Pi: `pi update --extensions` for the cloud + local config homes
@@ -575,7 +575,7 @@ if ! mux::is_remote; then
   reassert_pinentry_mac_backend
 fi
 
-# Reconcile launchd-managed services with ~/.config/packages/services.toml.
+# Reconcile services (launchd/systemd) with ~/.config/packages/services.toml.
 # Soft failure — a misconfigured service shouldn't block the rest of
 # system-update. Note: services tied to packages just upgraded by the
 # preceding `system-package sync` have already been restarted by the
