@@ -240,6 +240,16 @@ reassert_pinentry_mac_backend() {
   else
     pinentry-touchid -fix >/dev/null 2>&1 </dev/null || log_warn "pinentry-touchid -fix failed"
   fi
+  # Verify the repair actually took: `-fix` can exit 0 without re-pointing the
+  # symlink, and fire-and-forget surfaced that only as a future curses prompt
+  # (or a blocked signed commit). Same re-check run_after_26 already does.
+  link="$(gpgconf --list-components 2>/dev/null | awk -F: '$1 == "pinentry" { print $3 }' || true)"
+  [[ -n "$link" ]] || link="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/opt/pinentry/bin/pinentry"
+  if [[ "$(realpath "$link" 2>/dev/null || true)" == "$(realpath "$mac" 2>/dev/null || true)" ]]; then
+    log_info "pinentry backend repaired -> pinentry-mac"
+  else
+    log_warn "pinentry backend still not pinentry-mac after -fix; run 'pinentry-touchid -fix' manually"
+  fi
 }
 
 # Bring the git-cloned zsh plugins to latest. These live in

@@ -91,3 +91,70 @@ Describe 'system-update: publish_yazi_bump push gating (MED-2)'
     The result of function origin_log should not include "unrelated local work"
   End
 End
+
+# reassert_pinentry_mac_backend must VERIFY the repair: `pinentry-touchid
+# -fix` can exit 0 without actually re-pointing the symlink, and the old
+# fire-and-forget shape surfaced that only as a future curses prompt (or a
+# blocked commit). Mirrors run_after_26's backend_ok re-check.
+Describe 'system-update: pinentry reassert verifies the repair'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-update"
+
+  setup_pinentry() {
+    export SCRIPT_PATH="$SCRIPT"
+    PSTAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/pinentry.XXXXXX")"
+    mkdir -p "$PSTAGE/home/.local" "$PSTAGE/bin" "$PSTAGE/ctl"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$PSTAGE/home/.local/lib"
+
+    # The "backend" symlink starts pointed at a fake curses binary.
+    export P_MAC="$PSTAGE/bin/pinentry-mac"
+    export P_LINK="$PSTAGE/link"
+    export P_CTL="$PSTAGE/ctl"
+    printf '#!/bin/sh\nexit 0\n' > "$P_MAC"; chmod +x "$P_MAC"
+    printf '#!/bin/sh\nexit 0\n' > "$PSTAGE/bin/pinentry-curses"
+    chmod +x "$PSTAGE/bin/pinentry-curses"
+    ln -sf "$PSTAGE/bin/pinentry-curses" "$P_LINK"
+
+    # -fix repairs the symlink only when the control file says so.
+    cat > "$PSTAGE/bin/pinentry-touchid" <<'SH'
+#!/bin/sh
+[ "$1" = "-fix" ] || exit 0
+[ -f "$P_CTL/repair" ] && ln -sf "$P_MAC" "$P_LINK"
+exit 0
+SH
+    chmod +x "$PSTAGE/bin/pinentry-touchid"
+
+    cat > "$PSTAGE/bin/gpgconf" <<'SH'
+#!/bin/sh
+printf 'pinentry:Passphrase Entry:%s\n' "$P_LINK"
+SH
+    chmod +x "$PSTAGE/bin/gpgconf"
+  }
+  cleanup_pinentry() { rm -rf "$PSTAGE"; unset P_MAC P_LINK P_CTL PSTAGE; }
+  BeforeEach 'setup_pinentry'
+  AfterEach 'cleanup_pinentry'
+
+  run_reassert() {
+    HOME="$PSTAGE/home" PATH="$PSTAGE/bin:$PATH" \
+      zsh -f -c '
+        set --
+        export SYSTEM_UPDATE_NO_RUN=1
+        source "$SCRIPT_PATH"
+        reassert_pinentry_mac_backend
+      '
+  }
+
+  It 'reports success when -fix actually re-points the backend'
+    touch "$P_CTL/repair"
+    When call run_reassert
+    The status should be success
+    The stdout should include 'repaired'
+    The stderr should equal ''
+  End
+
+  It 'warns when -fix exits 0 but the backend is still wrong'
+    # no repair control file: the stub -fix succeeds without fixing anything
+    When call run_reassert
+    The status should be success
+    The stderr should include 'still not pinentry-mac'
+  End
+End
