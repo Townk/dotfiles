@@ -69,7 +69,7 @@ Describe 'shared agent skills'
     End
 
     It 'chezmoi prunes the old pi commit path'
-      When call grep -q '^/\.pi/agent/skills/commit$' home/.chezmoiremove
+      When call grep -q '^\.pi/agent/skills/commit$' home/.chezmoiremove
       The status should be success
     End
   End
