@@ -31,6 +31,9 @@ print(load_palette()[sys.argv[1]])' "$1"
 Describe 'theme_palette.py: resolution order'
   setup() {
     export THEME_PYLIB_DIR="$LIB"
+    # Keep CPython from writing __pycache__ into the SOURCE tree (chezmoi
+    # deploys from disk, so stray bytecode would ship to every machine).
+    export PYTHONDONTWRITEBYTECODE=1
     ROOT="$SHELLSPEC_TMPBASE/tp"
     export HOME="$ROOT/home"
     export XDG_CACHE_HOME="$ROOT/cache"
@@ -89,6 +92,9 @@ Describe 'viewers: shared module + cache-tier fix'
 
   setup() {
     export THEME_PYLIB_DIR="$LIB"
+    # Keep CPython from writing __pycache__ into the SOURCE tree (chezmoi
+    # deploys from disk, so stray bytecode would ship to every machine).
+    export PYTHONDONTWRITEBYTECODE=1
     ROOT="$SHELLSPEC_TMPBASE/vw"
     export HOME="$ROOT/home"
     export XDG_CACHE_HOME="$ROOT/cache"
