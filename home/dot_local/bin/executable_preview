@@ -673,6 +673,11 @@ function main-pixels() {
   # doesn't exist (fzf-quoted display strings).
   local target=${1:-}
   [[ -e $target || -L $target ]] || target=${(Q)target}
+  # Anchor relative names: fd/fzf emit bare `name`, and a file named `-s` or
+  # `--color=always` would otherwise reach chafa/bat/eza/magick as an option.
+  if [[ -n $target && $target != /* && $target != ./* ]]; then
+    target=./$target
+  fi
   geometry
   # geometry()'s max_lines is 3x the pane for fzf scroll-through. The yazi
   # shim can't scroll the text under an image (skip drives pdf pages /
@@ -729,6 +734,10 @@ function main() {
   # whenever it exists.
   local target=${1:-}
   [[ -e $target || -L $target ]] || target=${(Q)target}
+  # Same anchoring as main-pixels: no relative name may reach a tool as `-…`.
+  if [[ -n $target && $target != /* && $target != ./* ]]; then
+    target=./$target
+  fi
 
   geometry
   raster::prune &!
@@ -859,7 +868,9 @@ fi
 typeset -g OPT_W='' OPT_H='' OPT_SKIP=0 OPT_PIXELS=0
 while (($#)); do
   case "$1" in
-    -h | --help | help)
+    # No bare `help` alternative: that's a legitimate filename (fzf passes
+    # relative names), and flags-only is the convention everywhere else.
+    -h | --help)
       cat <<'EOF'
 Render a preview for fzf's --preview hook, Yazi's preview.yazi shim, or any
 tool that calls it with a file path. Routes by extension then MIME: images

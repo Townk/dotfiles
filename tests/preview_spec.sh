@@ -520,3 +520,37 @@ Describe 'preview: raster temp cleanup on kill (MED-16)'
     The output should equal "clean"
   End
 End
+
+# fzf preview {} hands over RAW relative names (fd emits no ./ prefix), so a
+# file literally named `-s` or `--color=always` arrives as $1 and used to be
+# parsed as an option — by preview's own CLI loop (`help` matched the help
+# arm) or by the downstream tool (bat swallowed `-s` and read empty stdin).
+# The entry points normalize relative targets to ./<name> so no downstream
+# tool ever sees a leading dash, and the help arm only matches real flags.
+Describe 'preview: option-shaped filenames'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+  LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  setup() {
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/cache"
+    ADV_TMP=$(mktemp -d)
+    printf 'REAL DASH CONTENT\n'  > "$ADV_TMP/-s"
+    printf 'REAL HELP CONTENT\n'  > "$ADV_TMP/help"
+  }
+  cleanup() { rm -rf "$ADV_TMP"; unset ADV_TMP; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'previews a relative file named -s as content, not as a tool flag'
+    When run zsh -c 'cd "$1" && PREVIEW_LIB="$2" zsh "$3" -W 60 -H 20 "-s"' _ "$ADV_TMP" "$LIB" "$SCRIPT"
+    The status should be success
+    The output should include 'REAL DASH CONTENT'
+  End
+
+  It 'previews a file named help instead of printing the usage text'
+    When run zsh -c 'cd "$1" && PREVIEW_LIB="$2" zsh "$3" -W 60 -H 20 help' _ "$ADV_TMP" "$LIB" "$SCRIPT"
+    The status should be success
+    The output should include 'REAL HELP CONTENT'
+    The output should not include 'Usage: preview'
+  End
+End
