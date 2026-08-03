@@ -281,6 +281,84 @@ do_matching() {
   svc::matching "$1"
 }
 
+# do_sync — reconcile declared (services.toml) ↔ unit state.
+#   rendered, fresh          → write + enable (+ start iff run_at_load)
+#   rendered, drifted        → write + re-enable + restart iff it was running
+#   adopted                  → enable + start if not running
+#   generated file, undeclared → stop + disable + rm (adopted files are
+#                                untouchable: sweep is scoped to LABEL_PREFIX)
+do_sync() {
+  log_info "Syncing systemd user services..."
+
+  local -a declared
+  declared=(${(f)"$(svc::names)"})
+
+  # Phase 1a: write all rendered units first, capturing pre-write status,
+  # so one daemon-reload covers every file change.
+  local name="" reload_needed=0
+  local -A pre_status changed
+  for name in "${declared[@]}"; do
+    [[ -z "$name" ]] && continue
+    svc::is_adopted "$name" && continue
+    pre_status[$name]=$(svc::status "$name")
+    svc::ensure_dirs "$name"
+    changed[$name]=$(svc::write_unit "$name")
+    [[ "${changed[$name]}" == "wrote" ]] && reload_needed=1
+  done
+  ((reload_needed)) && "${SYSCTL[@]}" daemon-reload
+
+  # Phase 1b: activate.
+  for name in "${declared[@]}"; do
+    [[ -z "$name" ]] && continue
+    local unit
+    unit=$(svc::unit_name "$name")
+    if svc::is_adopted "$name"; then
+      svc::enable "$name"
+      if [[ "$(svc::status "$name")" != running ]]; then
+        "${SYSCTL[@]}" start -- "$unit" 2>/dev/null ||
+          log_warn "failed to start $unit"
+      fi
+      continue
+    fi
+    svc::enable "$name"
+    if [[ "${changed[$name]}" == "wrote" ]]; then
+      if [[ "${pre_status[$name]}" == running ]]; then
+        "${SYSCTL[@]}" restart -- "$unit" 2>/dev/null ||
+          log_warn "failed to restart $unit"
+      elif [[ "${pre_status[$name]}" == none ]]; then
+        # Fresh install: honor run_at_load the way bootstrap+RunAtLoad does.
+        if [[ "$(svc::entry_json "$name" | jq -r '.run_at_load // false')" == true ]]; then
+          "${SYSCTL[@]}" start -- "$unit" 2>/dev/null ||
+            log_warn "failed to start $unit"
+        fi
+      fi
+      # drifted-but-stopped/errored: leave it down (never resurrect).
+    fi
+  done
+
+  # Phase 2: orphan sweep — generated files only.
+  local unit_file="" base="" swept=0
+  for unit_file in "$SYSTEMD_USER_DIR"/${LABEL_PREFIX}.*.service(N); do
+    base="${unit_file:t}"                       # com.system-service.foo.service
+    name="${${base#${LABEL_PREFIX}.}%.service}" # foo
+    local found=0 d=""
+    for d in "${declared[@]}"; do [[ "$d" == "$name" ]] && {
+      found=1
+      break
+    }; done
+    ((found)) && continue
+    log_info "removing orphan $base"
+    "${SYSCTL[@]}" stop -- "$base" 2>/dev/null || true
+    if "${SYSCTL[@]}" is-enabled --quiet -- "$base" 2>/dev/null; then
+      "${SYSCTL[@]}" disable --quiet -- "$base" 2>/dev/null || true
+    fi
+    rm -f "$unit_file"
+    swept=1
+  done
+  ((swept)) && "${SYSCTL[@]}" daemon-reload
+  return 0
+}
+
 # --- subcommands ------------------------------------------------------------
 
 do_status() {
@@ -317,6 +395,10 @@ case "${1:-}" in
   matching)
     shift
     do_matching "$@"
+    ;;
+  sync)
+    shift
+    do_sync "$@"
     ;;
   declared)
     shift

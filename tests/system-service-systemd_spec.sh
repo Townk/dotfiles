@@ -252,4 +252,49 @@ TOML
       The output should equal "demo"
     End
   End
+
+  Describe 'sync'
+    It 'installs a fresh rendered entry and starts it (run_at_load)'
+      write_manifest
+      export STUB_SHOW="$(printf 'LoadState=not-found\nActiveState=inactive\nSubState=dead\nResult=success\nExecMainStatus=0')"
+      When run zsh "$SYSTEMD_BIN" sync
+      The status should be success
+      The output should include "Syncing"
+      The path "$SYSTEMD_USER_DIR/com.system-service.demo.service" should be file
+      The contents of file "$STUB_CALLS" should include "daemon-reload"
+      The contents of file "$STUB_CALLS" should include "start"
+    End
+
+    It 'restarts a drifted unit only when it was running'
+      write_manifest
+      printf 'stale unit text\n' >"$SYSTEMD_USER_DIR/com.system-service.demo.service"
+      export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0')"
+      When run zsh "$SYSTEMD_BIN" sync
+      The status should be success
+      The output should include "Syncing"
+      The contents of file "$STUB_CALLS" should include "restart"
+    End
+
+    It 'leaves a drifted-but-stopped unit stopped'
+      write_manifest
+      printf 'stale unit text\n' >"$SYSTEMD_USER_DIR/com.system-service.demo.service"
+      export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nExecMainStatus=0')"
+      When run zsh "$SYSTEMD_BIN" sync
+      The status should be success
+      The output should include "Syncing"
+      The contents of file "$STUB_CALLS" should not include " restart "
+    End
+
+    It 'sweeps orphaned generated units but never adopted files'
+      write_manifest
+      printf 'orphan\n' >"$SYSTEMD_USER_DIR/com.system-service.ghost.service"
+      printf 'adopted file\n' >"$SYSTEMD_USER_DIR/clipboard-bridge.socket"
+      export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0')"
+      When run zsh "$SYSTEMD_BIN" sync
+      The status should be success
+      The output should include "removing orphan"
+      The path "$SYSTEMD_USER_DIR/com.system-service.ghost.service" should not be exist
+      The path "$SYSTEMD_USER_DIR/clipboard-bridge.socket" should be file
+    End
+  End
 End
