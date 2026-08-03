@@ -60,6 +60,9 @@ Library/**
 .local/bin/system-service-brew
 .local/share/zsh/site-functions/_system-service-launchd
 .local/share/zsh/site-functions/_system-service-brew
+{{/* clipboard-bridge-dispatch sources the pb::* backend by uname; the macOS
+     pasteboard/Hammerspoon backend is dead code off a Mac. */}}
+.local/lib/clipboard-platform-macos.zsh
 {{- end }}
 {{/* tab-edit ships on macOS and graphical Linux (it needs a GUI WezTerm + a
      file manager to be useful); skip it on the headless dev-shell and any
@@ -110,6 +113,10 @@ Library/**
 {{/* Homebrew is not available in the dev-shell profile. Omit the worker so
      system-package discovers only ecosystems this host can run. */}}
 .local/bin/system-package-brew
+{{/* The brew manifests are equally meaningless without brew — the Snapfile's
+     mirror image (it hides on every non-dev-shell host). */}}
+.config/packages/Brewfile
+.config/packages/Brewfile.bootstrap
 {{- end }}
 {{ if eq .profile "dev-shell" -}}
 {{/* Terminal Time Machine (system-backup silo) is not provisioned for the
@@ -170,6 +177,22 @@ Library/**
 .cursor/**
 .local/bin/ai-commit-cursor
 .local/share/zsh/site-functions/_ai-commit-cursor
+{{/* Atlassian (acli) agent skills are work tooling; keep them off personal
+     and dev-shell agent homes. Stale copies: dev-shell prunes via the
+     90-prune script; personal Macs were cleaned by hand once (ignored
+     targets are invisible to .chezmoiremove). */}}
+.claude/skills/jira-acli
+.claude/skills/jira-acli/**
+.claude/skills/confluence-acli
+.claude/skills/confluence-acli/**
+.config/agent-skills/jira-acli
+.config/agent-skills/jira-acli/**
+.config/agent-skills/confluence-acli
+.config/agent-skills/confluence-acli/**
+.pi/agent/skills/jira-acli
+.pi/agent/skills/jira-acli/**
+.pi/agent/skills/confluence-acli
+.pi/agent/skills/confluence-acli/**
 {{- end }}
 
 # pi-coding-agent: paths managed by pi itself at runtime, or sensitive.
