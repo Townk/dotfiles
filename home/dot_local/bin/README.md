@@ -99,7 +99,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | Editor/terminal glue | `tab-edit`² | `platform.zsh` (tab-edit) |
 | chezmoi tooling | `chezmoi-reverse` | — |
 | Package management | `system-package` + `system-package-{brew,cargo,go,npm,snap,uv}` | `system-package-common.zsh` |
-| Service management | `system-service`, `system-service-{launchd,brew}` | `system-package-common.zsh` |
+| Service management | `system-service`, `system-service-{launchd,brew,systemd}` | `system-package-common.zsh` |
 | Disk images | `system-images`¹ | `system-package-common.zsh` |
 | Secrets & onboarding | `system-secrets`, `system-onboard` | `system-secrets-common.zsh` |
 | Orchestration | `system-update` | — |
@@ -166,6 +166,31 @@ Runs `CMD` until it exits 0 or the timeout elapses, checking once before the
 first sleep (so an already-true condition returns immediately). It's a
 standalone bin kept in POSIX `sh` on purpose: a dependency-free polling
 primitive any caller can `exec`, regardless of the caller's shell.
+
+## `system-service` — Service management dispatcher
+
+Platform-routed dispatcher that manages system services through a common
+manifest (`services.toml.tmpl`). Renders generated service files and manages
+adopted units — existing services that are lifecycle-managed through chezmoi
+but not generated. Adopted units use `unit = "servicename"` declarations and
+represent services already managed by the OS (e.g., `clipboard-bridge.socket`,
+`gpg-forward-socketdir.service` on dev-shell).
+
+- **`system-service-launchd`** (macOS): Renders launchd property lists from
+  manifest entries and manages user-domain agents; orchestrates Homebrew
+  services via `system-service-brew`.
+- **`system-service-brew`** (macOS): Manages Homebrew-installed daemons and
+  schedules tap-installed agents through launchd.
+- **`system-service-systemd`** (Linux): Renders user systemd units
+  (`~/.config/systemd/user/*.service`) from manifest entries; manages adopted
+  units for services already defined by the OS. User domain only (no
+  system-wide services). Three dev-shell adopted units manage clipboard bridge
+  and GPG socket forwarding. Run-scripts 36/37 still own initial unit
+  bootstrap; `system-service sync` is idempotent on top.
+
+`system-service sync` applies the manifest across all platforms; it detects
+the platform via `SERVICE_OS` (defaults to `uname -s`) and dispatches to the
+appropriate worker.
 
 ## Tests
 
