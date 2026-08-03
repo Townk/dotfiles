@@ -1,18 +1,204 @@
 #!/usr/bin/env zsh
 # commit-agent-common.zsh — shared engine for the AI-driven commit harnesses
-# (ai-commit-pi, ai-commit-cursor) behind the `ai-commit` dispatcher. They
-# differ in how they invoke their agent and whether they cache the plan;
-# everything from the plan onward — the thinking spinner, the plan summary, the
-# dry-run dump, and the stage/commit loop — was duplicated and now lives here.
+# (ai-commit-claude, ai-commit-cursor, ai-commit-pi) behind the `ai-commit`
+# dispatcher. The workers differ only in how they build their prompt and
+# invoke their agent; everything else — argument parsing, pre-flight, the
+# fingerprint-bound plan cache, the plan summary, the dry-run dump, and the
+# stage/commit loop — lives here so the three can never drift again (the pi
+# worker shipped for months without the cache subsystem its siblings had).
 #
 # SOURCED, never executed. Pulls in the base (C_*, log_*, die) and the prompt
 # module (prompt::confirm), so a front-end only needs to source THIS file.
+#
+# Worker contract (zsh dynamic scope — the cagent:: helpers read and set the
+# caller's conventionally-named globals rather than threading a dozen args):
+#   usage            function printing the worker's help (parse_args calls it)
+#   cagent::worker_flag  OPTIONAL hook for worker-specific flags — called with
+#                    the remaining argv on an unrecognized `-…`; consume by
+#                    setting REPLY=<arg count> and returning 0, or return
+#                    non-zero for "not mine" (parse_args then dies).
+#   parse_args sets: include_untracked dry_run no_commit force_refresh
+#                    verbose extra_guidance
+#   preflight sets:  repo_root cache_file use_cached_plan have_modified
+#                    have_untracked
+#   cache trio read: cache_file plan_file include_untracked commit_count
 
 # Source the base + prompt module relative to THIS file.
 _cagent_self="${(%):-%x}"
 source "$(dirname "$_cagent_self")/common.zsh"
 source "$(dirname "$_cagent_self")/prompt-common.zsh"
 unset _cagent_self
+
+# cagent::parse_args "$@"
+# The universal worker CLI (every flag here is part of the cross-harness
+# contract the `ai-commit` dispatcher forwards verbatim). Worker-specific
+# flags ride the cagent::worker_flag hook — see the header contract. `-m` is
+# universal but the model DEFAULT is per-worker: initialize `model` before
+# calling.
+cagent::parse_args() {
+  include_untracked=0
+  dry_run=0
+  no_commit=0
+  force_refresh=0
+  verbose=0
+  extra_guidance=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -u | --untracked)
+        include_untracked=1
+        shift
+        ;;
+      -d | --dry-run)
+        dry_run=1
+        shift
+        ;;
+      -n | --no-commit)
+        no_commit=1
+        shift
+        ;;
+      -f | --force-refresh | --replan)
+        force_refresh=1
+        shift
+        ;;
+      -m | --model)
+        [[ $# -ge 2 ]] || die "--model needs a value"
+        model="$2"
+        shift 2
+        ;;
+      -v | --verbose)
+        verbose=1
+        shift
+        ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      --)
+        shift
+        extra_guidance=("$@")
+        break
+        ;;
+      -*)
+        if typeset -f cagent::worker_flag >/dev/null && cagent::worker_flag "$@"; then
+          shift "$REPLY"
+        else
+          usage >&2
+          die "unknown flag: $1"
+        fi
+        ;;
+      *)
+        extra_guidance=("$@")
+        break
+        ;;
+    esac
+  done
+
+  [[ "$dry_run" -eq 1 && "$no_commit" -eq 1 ]] &&
+    die "--dry-run and --no-commit are mutually exclusive"
+  return 0
+}
+
+# cagent::preflight <worker-name>
+# Everything between arg parsing and prompt building: tool checks, repo-root
+# cd, the per-worker plan-cache resolution + freshness gate, the staged-changes
+# refusal, and change detection with the two clean/untracked-only early exits.
+# <worker-name> keys the cache path (.git/<worker-name>-plan.json — unchanged
+# from the pre-consolidation per-worker paths, so existing caches stay valid).
+cagent::preflight() {
+  local _cagent_worker="$1"
+  command -v git >/dev/null 2>&1 || die "git not on PATH"
+  command -v jq >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
+
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+    die "not inside a git repository"
+  builtin cd "$repo_root" || die "could not cd to repository root: $repo_root"
+
+  cache_file="$(git rev-parse --git-path "${_cagent_worker}-plan.json")" ||
+    die "could not resolve git cache path"
+  cache_file="${cache_file:a}"
+  use_cached_plan=0
+  if [[ -s "$cache_file" && "$force_refresh" -eq 0 ]]; then
+    # A cache is only honoured when its stored fingerprint still matches the
+    # current tree + scope (bug #4a); a stale cache is discarded so we re-plan
+    # rather than staging bytes the plan was never generated for.
+    if cagent::cache_is_fresh "$cache_file" "$include_untracked"; then
+      use_cached_plan=1
+    else
+      log_info "cached commit plan is stale (working tree or scope changed); re-planning"
+      rm -f "$cache_file"
+    fi
+  fi
+
+  # Refuse pre-existing staged changes — keeps dry-run / no-commit / default
+  # modes from getting tangled with whatever the user had half-staged. The
+  # user can `git reset` (to unstage) or `git commit` (to commit them) first.
+  if ! git diff --cached --quiet; then
+    die "you already have staged changes; \`git reset\` to unstage (or commit them) first"
+  fi
+
+  have_modified=0
+  git diff --quiet || have_modified=1
+
+  have_untracked=0
+  [[ -n "$(git ls-files --others --exclude-standard)" ]] && have_untracked=1
+
+  if [[ "$have_modified" -eq 0 && "$have_untracked" -eq 0 ]]; then
+    [[ -e "$cache_file" ]] && rm -f "$cache_file"
+    log_ok "nothing to commit, working tree clean"
+    exit 0
+  fi
+  if [[ "$have_modified" -eq 0 && "$include_untracked" -eq 0 && "$use_cached_plan" -eq 0 ]]; then
+    log_warn "only untracked files present; pass -u/--untracked to include them"
+    exit 0
+  fi
+  return 0
+}
+
+# cagent::save_plan_cache — persist the current plan, fingerprint-stamped.
+cagent::save_plan_cache() {
+  local tmp_cache fp
+  mkdir -p "${cache_file:h}"
+  # Bind the cache to the state it was generated for (bug #4a): stamp the
+  # current fingerprint into the cached plan so a later run can detect a
+  # drifted tree/scope and re-plan.
+  fp="$(cagent::plan_fingerprint "$include_untracked")"
+  tmp_cache="${cache_file}.$$"
+  jq --arg fp "$fp" '. + {fingerprint: $fp}' "$plan_file" >"$tmp_cache"
+  mv "$tmp_cache" "$cache_file"
+  log_ok "saved commit plan cache: $cache_file"
+}
+
+cagent::clear_plan_cache() {
+  # `[[ -e ]] && rm` returns non-zero when the cache is already gone (e.g. it
+  # was discarded as stale on load), which trips the script's `set -e` if this
+  # is the last command in a caller. Force a zero return.
+  [[ -e "$cache_file" ]] && rm -f "$cache_file"
+  return 0
+}
+
+# cagent::save_remaining_plan_cache <next_idx> — the execute_plan post-commit
+# hook: shrink the cache to the not-yet-landed groups (or clear it when done).
+cagent::save_remaining_plan_cache() {
+  local next_idx="$1"
+  local remaining=$((commit_count - next_idx))
+  local tmp_cache fp
+
+  if [[ "$remaining" -le 0 ]]; then
+    cagent::clear_plan_cache
+    return 0
+  fi
+
+  mkdir -p "${cache_file:h}"
+  # A commit just landed, so the tree changed: re-stamp the fingerprint for
+  # the NOW-current state so the remaining-plan cache is re-verified against
+  # the post-commit tree on the next run (bug #4a).
+  fp="$(cagent::plan_fingerprint "$include_untracked")"
+  tmp_cache="${cache_file}.$$"
+  jq --argjson start "$next_idx" --arg fp "$fp" \
+    '{fingerprint: $fp, commits: .commits[$start:]}' "$plan_file" >"$tmp_cache"
+  mv "$tmp_cache" "$cache_file"
+  log_info "updated commit plan cache with ${remaining} remaining commit(s)"
+}
 
 # cagent::validate_plan <plan_file>
 # The shared plan-shape contract every worker enforces before staging:
@@ -137,8 +323,9 @@ cagent::stage_commit() {
 # Stage + commit each group in turn. With no_commit=1, open $EDITOR on the
 # message and prompt::confirm before committing (an empty message or a "no"
 # aborts cleanly). After each successful commit, the optional post_commit_hook
-# is called with the NEXT index (commit-cursor uses it to shrink its plan
-# cache; commit-ai passes the no-op `:`).
+# is called with the NEXT index — every worker passes
+# cagent::save_remaining_plan_cache so an aborted multi-commit run resumes
+# from the surviving groups.
 cagent::execute_plan() {
   local plan_file="$1" commit_count="$2" tmpdir="$3" no_commit="$4" post_hook="${5:-:}"
   local i=0 msg_file

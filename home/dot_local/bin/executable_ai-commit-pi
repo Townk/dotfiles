@@ -4,8 +4,8 @@
 #
 # Asks pi to analyze the working tree, group changes into logical commits,
 # and produce Conventional Commits-format messages. The script owns every
-# git operation, so --dry-run and --no-commit reuse the same plan that
-# default mode executes — there is no second code path that could drift.
+# git operation. Dry-runs and --no-commit save the plan in .git so a later
+# run can execute the same plan without asking the model again.
 #
 # Agent contract: pi reads the diff, writes a JSON plan to a tempfile,
 # then exits. It never runs `git add` or `git commit`. The script reads
@@ -53,6 +53,9 @@ Options:
   -n, --no-commit     For each planned commit: stage the files, open
                       \$EDITOR with the message, then prompt to commit.
                       Saying No aborts without creating the commit.
+  -f, --force-refresh
+      --replan        Ignore any cached commit plan and ask pi to
+                      analyze the current working tree again.
   -m, --model <id>    Override model (default: \$AI_COMMIT_MODEL or
                       opencode-go/deepseek-v4-flash). Supports pi's
                       provider/id and fuzzy patterns.
@@ -77,99 +80,30 @@ EOF
 }
 
 # ────────────────────────────────────────────────────────────────────
-# Parse args
+# Parse args — shared parser; --thinking is this worker's only extra flag.
 # ────────────────────────────────────────────────────────────────────
-include_untracked=0
-dry_run=0
-no_commit=0
-verbose=0
 model="$AI_COMMIT_MODEL"
 thinking="$AI_COMMIT_THINKING"
-extra_guidance=()
 
-while [[ $# -gt 0 ]]; do
+cagent::worker_flag() {
   case "$1" in
-    -u | --untracked)
-      include_untracked=1
-      shift
-      ;;
-    -d | --dry-run)
-      dry_run=1
-      shift
-      ;;
-    -n | --no-commit)
-      no_commit=1
-      shift
-      ;;
-    -m | --model)
-      [[ $# -ge 2 ]] || die "--model needs a value"
-      model="$2"
-      shift 2
-      ;;
     --thinking)
       [[ $# -ge 2 ]] || die "--thinking needs a value"
       thinking="$2"
-      shift 2
-      ;;
-    -v | --verbose)
-      verbose=1
-      shift
-      ;;
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    --)
-      shift
-      extra_guidance=("$@")
-      break
-      ;;
-    -*)
-      usage >&2
-      die "unknown flag: $1"
-      ;;
-    *)
-      extra_guidance=("$@")
-      break
+      REPLY=2
+      return 0
       ;;
   esac
-done
+  return 1
+}
 
-[[ "$dry_run" -eq 1 && "$no_commit" -eq 1 ]] &&
-  die "--dry-run and --no-commit are mutually exclusive"
+cagent::parse_args "$@"
 
 # ────────────────────────────────────────────────────────────────────
-# Pre-flight
+# Pre-flight (shared): repo cd, plan-cache freshness, staged-changes
+# refusal, change detection.
 # ────────────────────────────────────────────────────────────────────
-command -v pi >/dev/null 2>&1 || die "pi-coding-agent (pi) not on PATH"
-command -v git >/dev/null 2>&1 || die "git not on PATH"
-command -v jq >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
-
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
-  die "not inside a git repository"
-builtin cd "$repo_root" || die "could not cd to repository root: $repo_root"
-
-# Refuse pre-existing staged changes — keeps dry-run / no-commit / default
-# modes from getting tangled with whatever the user had half-staged. The
-# user can `git reset` (to unstage) or `git commit` (to commit them) first.
-if ! git diff --cached --quiet; then
-  die "you already have staged changes; \`git reset\` to unstage (or commit them) first"
-fi
-
-have_modified=0
-git diff --quiet || have_modified=1
-
-have_untracked=0
-[[ -n "$(git ls-files --others --exclude-standard)" ]] && have_untracked=1
-
-if [[ "$have_modified" -eq 0 && "$have_untracked" -eq 0 ]]; then
-  log_ok "nothing to commit, working tree clean"
-  exit 0
-fi
-if [[ "$have_modified" -eq 0 && "$include_untracked" -eq 0 ]]; then
-  log_warn "only untracked files present; pass -u/--untracked to include them"
-  exit 0
-fi
+cagent::preflight ai-commit-pi
 
 # ────────────────────────────────────────────────────────────────────
 # Build prompt
@@ -192,8 +126,18 @@ if [[ ${#extra_guidance[@]} -gt 0 ]]; then
   extra_block=$'\n\nAdditional guidance from the caller:\n'"${extra_guidance[*]}"
 fi
 
-prompt=$(
-  cat <<EOF
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ai-commit-pi"
+mkdir -p "$state_dir"
+log_file="$state_dir/errors.log"
+
+if [[ "$use_cached_plan" -eq 1 ]]; then
+  cp "$cache_file" "$plan_file"
+  log_info "Using cached commit plan: $cache_file"
+else
+  command -v pi >/dev/null 2>&1 || die "pi-coding-agent (pi) not on PATH"
+
+  prompt=$(
+    cat <<EOF
 You are PLANNING a series of git commits. Use the project's **commit**
 skill for message-format conventions (Conventional Commits subject,
 optional Markdown body, comment-character preflight, etc.), but DO NOT
@@ -237,63 +181,69 @@ Rules:
 - When you are done, reply with the literal text \`PLAN_WRITTEN\` and
   nothing else.${extra_block}
 EOF
-)
+  )
 
-# ────────────────────────────────────────────────────────────────────
-# Run agent
-# ────────────────────────────────────────────────────────────────────
-# Always capture pi's stdout+stderr to a persistent log. pi runs a TUI
-# in text mode and clears the screen on exit, so any error it printed
-# would otherwise be gone before the user could read it — even with
-# --verbose.
-state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ai-commit-pi"
-mkdir -p "$state_dir"
-log_file="$state_dir/errors.log"
+  # ────────────────────────────────────────────────────────────────────
+  # Run agent
+  # ────────────────────────────────────────────────────────────────────
+  # Always capture pi's stdout+stderr to a persistent log. pi runs a TUI
+  # in text mode and clears the screen on exit, so any error it printed
+  # would otherwise be gone before the user could read it — even with
+  # --verbose.
+  {
+    print -- ""
+    print -- "─── $(date '+%Y-%m-%d %H:%M:%S') ─────────────────────────"
+    print -- "model=$model thinking=$thinking untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit force_refresh=$force_refresh cache=$cache_file"
+  } >>"$log_file"
 
-{
-  print -- ""
-  print -- "─── $(date '+%Y-%m-%d %H:%M:%S') ─────────────────────────"
-  print -- "model=$model thinking=$thinking untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit"
-} >>"$log_file"
+  log_info "Planning commits with ${C_BWH}${model}${C_RES} (thinking: ${thinking})…"
 
-log_info "Planning commits with ${C_BWH}${model}${C_RES} (thinking: ${thinking})…"
+  pi_args=(
+    --print
+    --mode json
+    --no-session
+    --model "$model"
+    --thinking "$thinking"
+  )
 
-pi_args=(
-  --print
-  --mode json
-  --no-session
-  --model "$model"
-  --thinking "$thinking"
-)
+  if [[ "$verbose" -eq 1 ]]; then
+    # `|| rc=…` keeps a non-zero agent from tripping errexit before rc is read,
+    # so the diagnostic below is reachable. pipestatus[1] is the agent's status
+    # (tee is [2]); reading it in the `||` branch is safe — a bare `|| true`
+    # would reset pipestatus and mask the failure as rc=0.
+    rc=0
+    { pi "${pi_args[@]}" "$prompt" 2>&1 | tee -a "$log_file" } || rc=${pipestatus[1]}
+  else
+    pi "${pi_args[@]}" "$prompt" >>"$log_file" 2>&1 &
+    pi_pid=$!
+    spin::wait "$pi_pid" "thinking"
+    # `|| rc=$?` keeps a non-zero agent from tripping errexit at `wait`, which
+    # would abort before the diagnostic below and leave the user with silence.
+    rc=0
+    wait "$pi_pid" || rc=$?
+    pi_pid=""
+  fi
 
-if [[ "$verbose" -eq 1 ]]; then
-  # `|| rc=…` keeps a non-zero agent from tripping errexit before rc is read,
-  # so the diagnostic below is reachable. pipestatus[1] is the agent's status
-  # (tee is [2]); reading it in the `||` branch is safe — a bare `|| true`
-  # would reset pipestatus and mask the failure as rc=0.
-  rc=0
-  { pi "${pi_args[@]}" "$prompt" 2>&1 | tee -a "$log_file" } || rc=${pipestatus[1]}
-else
-  pi "${pi_args[@]}" "$prompt" >>"$log_file" 2>&1 &
-  pi_pid=$!
-  spin::wait "$pi_pid" "thinking"
-  # `|| rc=$?` keeps a non-zero agent from tripping errexit at `wait`, which
-  # would abort before the diagnostic below and leave the user with silence.
-  rc=0
-  wait "$pi_pid" || rc=$?
-  pi_pid=""
+  [[ "$rc" -eq 0 ]] || die "pi-coding-agent failed (see $log_file)"
 fi
 
-[[ "$rc" -eq 0 ]] || die "pi-coding-agent failed (see $log_file)"
-
 if [[ ! -s "$plan_file" ]]; then
-  log_warn "the model returned a reply but did not call the Write tool to"
-  log_warn "create $plan_file. Try a stricter model:"
-  log_warn "  AI_COMMIT_MODEL=anthropic/claude-sonnet-4.6 ai-commit-pi $*"
+  if [[ "$use_cached_plan" -eq 1 ]]; then
+    log_warn "the cached commit plan disappeared or is empty: $cache_file"
+    log_warn "Regenerate it with:"
+    log_warn "  ai-commit-pi --force-refresh $*"
+  else
+    log_warn "the model returned a reply but did not call the Write tool to"
+    log_warn "create $plan_file. Try a stricter model:"
+    log_warn "  AI_COMMIT_MODEL=anthropic/claude-sonnet-4.6 ai-commit-pi $*"
+  fi
   die "no plan written (see $log_file)"
 fi
 
 if ! cagent::validate_plan "$plan_file"; then
+  if [[ "$use_cached_plan" -eq 1 ]]; then
+    die "cached commit plan is invalid; rerun with --force-refresh (cache: $cache_file)"
+  fi
   die "agent produced an invalid plan (see $log_file and $plan_file)"
 fi
 
@@ -307,6 +257,10 @@ commit_count=$(jq -r '.commits | length' "$plan_file")
 # ────────────────────────────────────────────────────────────────────
 cagent::print_plan_summary "$plan_file" "$commit_count"
 
+if [[ "$dry_run" -eq 1 || "$no_commit" -eq 1 ]]; then
+  cagent::save_plan_cache
+fi
+
 # ────────────────────────────────────────────────────────────────────
 # Execute
 # ────────────────────────────────────────────────────────────────────
@@ -315,4 +269,4 @@ if [[ "$dry_run" -eq 1 ]]; then
   exit 0
 fi
 
-cagent::execute_plan "$plan_file" "$commit_count" "$tmpdir" "$no_commit"
+cagent::execute_plan "$plan_file" "$commit_count" "$tmpdir" "$no_commit" cagent::save_remaining_plan_cache

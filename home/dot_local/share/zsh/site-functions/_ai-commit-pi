@@ -11,6 +11,7 @@ _ai-commit-pi() {
     '(-u --untracked)'{-u,--untracked}'[also include untracked files]' \
     '(-d --dry-run -n --no-commit)'{-d,--dry-run}'[print the plan without staging or committing]' \
     '(-n --no-commit -d --dry-run)'{-n,--no-commit}'[stage + open \$EDITOR + prompt per commit]' \
+    '(-f --force-refresh --replan)'{-f,--force-refresh,--replan}'[ignore any cached plan and replan]' \
     '(-m --model)'{-m,--model}'[override model]:model' \
     '--thinking[thinking level]:level:(off minimal low medium high xhigh)' \
     '(-v --verbose)'{-v,--verbose}'[show pi-coding-agent output as it plans]' \

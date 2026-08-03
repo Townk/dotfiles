@@ -85,76 +85,30 @@ EOF
 }
 
 # ────────────────────────────────────────────────────────────────────
-# Parse args
+# Parse args — shared parser; -L/--sandbox are this worker's extra flags.
 # ────────────────────────────────────────────────────────────────────
-include_untracked=0
-dry_run=0
-no_commit=0
-force_refresh=0
-verbose=0
 list_models=0
 model="$AI_COMMIT_MODEL"
 sandbox="$AI_COMMIT_CURSOR_SANDBOX"
-extra_guidance=()
 
-while [[ $# -gt 0 ]]; do
+cagent::worker_flag() {
   case "$1" in
-    -u | --untracked)
-      include_untracked=1
-      shift
-      ;;
-    -d | --dry-run)
-      dry_run=1
-      shift
-      ;;
-    -n | --no-commit)
-      no_commit=1
-      shift
-      ;;
-    -f | --force-refresh | --replan)
-      force_refresh=1
-      shift
-      ;;
-    -m | --model)
-      [[ $# -ge 2 ]] || die "--model needs a value"
-      model="$2"
-      shift 2
-      ;;
     -L | --list-models)
       list_models=1
-      shift
+      REPLY=1
+      return 0
       ;;
     --sandbox)
       [[ $# -ge 2 ]] || die "--sandbox needs a value"
       sandbox="$2"
-      shift 2
-      ;;
-    -v | --verbose)
-      verbose=1
-      shift
-      ;;
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    --)
-      shift
-      extra_guidance=("$@")
-      break
-      ;;
-    -*)
-      usage >&2
-      die "unknown flag: $1"
-      ;;
-    *)
-      extra_guidance=("$@")
-      break
+      REPLY=2
+      return 0
       ;;
   esac
-done
+  return 1
+}
 
-[[ "$dry_run" -eq 1 && "$no_commit" -eq 1 ]] &&
-  die "--dry-run and --no-commit are mutually exclusive"
+cagent::parse_args "$@"
 
 case "$sandbox" in
   "" | enabled | disabled) ;;
@@ -168,53 +122,10 @@ if [[ "$list_models" -eq 1 ]]; then
 fi
 
 # ────────────────────────────────────────────────────────────────────
-# Pre-flight
+# Pre-flight (shared): repo cd, plan-cache freshness, staged-changes
+# refusal, change detection.
 # ────────────────────────────────────────────────────────────────────
-command -v git >/dev/null 2>&1 || die "git not on PATH"
-command -v jq >/dev/null 2>&1 || die "jq is required to parse the agent's plan"
-
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" ||
-  die "not inside a git repository"
-builtin cd "$repo_root" || die "could not cd to repository root: $repo_root"
-
-cache_file="$(git rev-parse --git-path ai-commit-cursor-plan.json)" ||
-  die "could not resolve git cache path"
-cache_file="${cache_file:a}"
-use_cached_plan=0
-if [[ -s "$cache_file" && "$force_refresh" -eq 0 ]]; then
-  # A cache is only honoured when its stored fingerprint still matches the
-  # current tree + scope (bug #4a); a stale cache is discarded so we re-plan
-  # rather than staging bytes the plan was never generated for.
-  if cagent::cache_is_fresh "$cache_file" "$include_untracked"; then
-    use_cached_plan=1
-  else
-    log_info "cached commit plan is stale (working tree or scope changed); re-planning"
-    rm -f "$cache_file"
-  fi
-fi
-
-# Refuse pre-existing staged changes — keeps dry-run / no-commit / default
-# modes from getting tangled with whatever the user had half-staged. The
-# user can `git reset` (to unstage) or `git commit` (to commit them) first.
-if ! git diff --cached --quiet; then
-  die "you already have staged changes; \`git reset\` to unstage (or commit them) first"
-fi
-
-have_modified=0
-git diff --quiet || have_modified=1
-
-have_untracked=0
-[[ -n "$(git ls-files --others --exclude-standard)" ]] && have_untracked=1
-
-if [[ "$have_modified" -eq 0 && "$have_untracked" -eq 0 ]]; then
-  [[ -e "$cache_file" ]] && rm -f "$cache_file"
-  log_ok "nothing to commit, working tree clean"
-  exit 0
-fi
-if [[ "$have_modified" -eq 0 && "$include_untracked" -eq 0 && "$use_cached_plan" -eq 0 ]]; then
-  log_warn "only untracked files present; pass -u/--untracked to include them"
-  exit 0
-fi
+cagent::preflight ai-commit-cursor
 
 # ────────────────────────────────────────────────────────────────────
 # Build prompt
@@ -228,49 +139,6 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 plan_file="$tmpdir/plan.json"
-
-save_plan_cache() {
-  local tmp_cache fp
-  mkdir -p "${cache_file:h}"
-  # Bind the cache to the state it was generated for (bug #4a): stamp the
-  # current fingerprint into the cached plan so a later run can detect a
-  # drifted tree/scope and re-plan.
-  fp="$(cagent::plan_fingerprint "$include_untracked")"
-  tmp_cache="${cache_file}.$$"
-  jq --arg fp "$fp" '. + {fingerprint: $fp}' "$plan_file" >"$tmp_cache"
-  mv "$tmp_cache" "$cache_file"
-  log_ok "saved commit plan cache: $cache_file"
-}
-
-clear_plan_cache() {
-  # `[[ -e ]] && rm` returns non-zero when the cache is already gone (e.g. it
-  # was discarded as stale on load), which trips the script's `set -e` if this
-  # is the last command in a caller. Force a zero return.
-  [[ -e "$cache_file" ]] && rm -f "$cache_file"
-  return 0
-}
-
-save_remaining_plan_cache() {
-  local next_idx="$1"
-  local remaining=$((commit_count - next_idx))
-  local tmp_cache fp
-
-  if [[ "$remaining" -le 0 ]]; then
-    clear_plan_cache
-    return 0
-  fi
-
-  mkdir -p "${cache_file:h}"
-  # A commit just landed, so the tree changed: re-stamp the fingerprint for
-  # the NOW-current state so the remaining-plan cache is re-verified against
-  # the post-commit tree on the next run (bug #4a).
-  fp="$(cagent::plan_fingerprint "$include_untracked")"
-  tmp_cache="${cache_file}.$$"
-  jq --argjson start "$next_idx" --arg fp "$fp" \
-    '{fingerprint: $fp, commits: .commits[$start:]}' "$plan_file" >"$tmp_cache"
-  mv "$tmp_cache" "$cache_file"
-  log_info "updated commit plan cache with ${remaining} remaining commit(s)"
-}
 
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ai-commit-cursor"
 mkdir -p "$state_dir"
@@ -437,7 +305,7 @@ commit_count=$(jq -r '.commits | length' "$plan_file")
 cagent::print_plan_summary "$plan_file" "$commit_count"
 
 if [[ "$dry_run" -eq 1 || "$no_commit" -eq 1 ]]; then
-  save_plan_cache
+  cagent::save_plan_cache
 fi
 
 # ────────────────────────────────────────────────────────────────────
@@ -448,4 +316,4 @@ if [[ "$dry_run" -eq 1 ]]; then
   exit 0
 fi
 
-cagent::execute_plan "$plan_file" "$commit_count" "$tmpdir" "$no_commit" save_remaining_plan_cache
+cagent::execute_plan "$plan_file" "$commit_count" "$tmpdir" "$no_commit" cagent::save_remaining_plan_cache
