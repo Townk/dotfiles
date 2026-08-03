@@ -50,7 +50,13 @@ ql_cmd_prefix() {
   local prefix="" cwd venv mise_env mise_bin
   cwd="$(jq -r '.cwd // empty' <<<"$action")"
   if [[ -n "$cwd" ]]; then
-    prefix="cd $(ql_expand_tilde "$cwd"); "
+    # Quoted: the prefix string is eval'd by a shell downstream ($SHELL -c /
+    # zellij args), so a spaced cwd must stay one word. This also makes the
+    # "no $VAR expansion" contract documented on ql_expand_tilde actually hold
+    # at eval time.
+    local cwd_abs
+    cwd_abs="$(ql_expand_tilde "$cwd")"
+    prefix="cd ${(q)cwd_abs}; "
   fi
 
   venv="$(jq -r '.python_venv // empty' <<<"$action")"
@@ -103,14 +109,23 @@ ql_action_command() {
       if ((${#args[@]} > 0)); then
         for f in "${args[@]}"; do
           case "$f" in
-            /* | "~"* | \\*) abs="$f" ;;
+            # Tilde entries are expanded HERE (not left for the downstream
+            # eval): the flatten below quotes every element, and a quoted
+            # leading ~ would stay literal.
+            "~" | "~/"*) abs="$(ql_expand_tilde "$f")" ;;
+            /* | \\*) abs="$f" ;;
             *) if [[ -n "$cwd" ]]; then abs="$(ql_expand_tilde "$cwd")/$f"; else abs="$f"; fi ;;
           esac
           files+=("$abs")
         done
       fi
       if ((${#files[@]} > 0)); then
-        printf '%s%s %s' "$prefix" "$editor" "${files[*]}"
+        # Each path is quoted individually — the string is eval'd by a shell
+        # downstream, and an unquoted flatten word-splits spaced paths and
+        # glob-expands bracketed ones. The editor is deliberately NOT quoted:
+        # tools.editor may be multi-word ("code --wait").
+        printf '%s%s' "$prefix" "$editor"
+        printf ' %s' "${(@q)files}"
       else
         printf '%s%s' "$prefix" "$editor"
       fi
