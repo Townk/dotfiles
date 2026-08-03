@@ -33,7 +33,13 @@ run_and_report() {
   # orphans cannot hold shellspec's error pipe open and drag the run out.
   ( "$@" <"$tmpin" >"$outf" 2>/dev/null ) &
   local p=$!
-  ( sleep "$secs"; kill -TERM "$p" 2>/dev/null; sleep 0.3; kill -KILL "$p" 2>/dev/null ) &
+  # kill -$p can't reach the float's descendants (monitor/process-groups are
+  # unavailable in shellspec's non-interactive context), so after killing the
+  # subshell also reap anything still referencing this example's unique sandbox
+  # (an orphaned `cat "$fifo"` reader) — otherwise it stalls shellspec forever.
+  ( sleep "$secs"; kill -TERM "$p" 2>/dev/null; sleep 0.3
+    kill -KILL "$p" 2>/dev/null
+    pkill -KILL -f "$TEST_TMP" 2>/dev/null ) &
   local w=$!
   wait "$p"; local rc=$?
   kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
@@ -65,7 +71,11 @@ Describe 'mux/tmux.zsh — float launch guard (HI-7)'
       echo '  if [[ "${STUB_MODE:-ok}" == fail ]]; then exit 1; fi'
       echo '  fifo=""; prev=""'
       echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
-      echo '  [[ -n "$fifo" ]] && { { exec 3<>"$fifo"; printf "%s" "${STUB_ANSWER:-picked}" >&3; sleep 0.5; exec 3>&- } &! }'
+      echo '  # Write-only open BLOCKS until the float opens the fifo for read — a'
+      echo '  # race-free rendezvous. (The old `3<>` + `sleep 0.5` hoped the reader'
+      echo '  # opened within 0.5s; on a slow box it did not, the buffer was freed on'
+      echo '  # close, and the reader hung — stalling the whole suite. HI-7 harness.)'
+      echo '  [[ -n "$fifo" ]] && { { exec 3>"$fifo"; printf "%s" "${STUB_ANSWER:-picked}" >&3; exec 3>&- } &! }'
       echo '  exit 0'
       echo 'fi'
       echo 'exit 0'
@@ -132,7 +142,11 @@ Describe 'mux/zellij.zsh — float launch guard (HI-7)'
       echo '  if [[ "${STUB_MODE:-ok}" == fail ]]; then exit 1; fi'
       echo '  fifo=""; prev=""'
       echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
-      echo '  [[ -n "$fifo" ]] && { { exec 3<>"$fifo"; printf "%s" "${STUB_ANSWER:-picked}" >&3; sleep 0.5; exec 3>&- } &! }'
+      echo '  # Write-only open BLOCKS until the float opens the fifo for read — a'
+      echo '  # race-free rendezvous. (The old `3<>` + `sleep 0.5` hoped the reader'
+      echo '  # opened within 0.5s; on a slow box it did not, the buffer was freed on'
+      echo '  # close, and the reader hung — stalling the whole suite. HI-7 harness.)'
+      echo '  [[ -n "$fifo" ]] && { { exec 3>"$fifo"; printf "%s" "${STUB_ANSWER:-picked}" >&3; exec 3>&- } &! }'
       echo '  print -- "terminal_99"'
       echo '  exit 0'
       echo 'fi'
