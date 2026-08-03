@@ -79,13 +79,17 @@ bkp::drift::last() {
 }
 
 # bkp::drift::assess <now> <epoch> <rc> <cadence> [<catchup_epoch> [<grace>]]
-# PURE drift verdict. Prints "<level>\t<message>" (level = warn|crit) when the
-# last capture is overdue or failed; prints nothing (rc 0) when healthy.
+# PURE drift verdict. Sets REPLY to "<level>\t<message>" (level = warn|crit)
+# when the last capture is overdue or failed; REPLY is empty (rc 0) when
+# healthy. REPLY-based, not printed: the banner runs on every prompt, and a
+# $(…) capture of even a pure function forks a subshell — the per-prompt fork
+# this library's header promises not to pay (same pattern as _age).
 # Optional catchup_epoch/grace: age-based nagging is suppressed while a
 # catch-up stamp is still inside the grace window (failed rc still warns).
 bkp::drift::assess() {
   local now="$1" epoch="$2" rc="${3:-0}" cadence="${4:-1800}"
-  local catchup="${5:-0}" grace="${6:-${BKP_CATCHUP_GRACE:-300}}" REPLY
+  local catchup="${5:-0}" grace="${6:-${BKP_CATCHUP_GRACE:-300}}"
+  REPLY=""
   local age=$(( now - epoch ))
   (( age < 0 )) && age=0
   local level=""
@@ -112,7 +116,7 @@ bkp::drift::assess() {
   else
     msg="backup: last capture $age_h ago (expected every $cad_h)"
   fi
-  print -r -- "$level"$'\t'"$msg"
+  REPLY="$level"$'\t'"$msg"
 }
 
 # bkp::drift::banner — the precmd hook. Reads the capture heartbeat and, only
@@ -131,11 +135,11 @@ bkp::drift::banner() {
     esac
   done < "$f"
   [[ "$epoch" == <-> && "$epoch" -gt 0 ]] || return 0
-  local out
-  out=$(bkp::drift::assess "$EPOCHSECONDS" "$epoch" "$rc" "$BKP_CAPTURE_CADENCE" \
-    "$catchup" "$BKP_CATCHUP_GRACE") || return 0
-  [[ -n "$out" ]] || return 0
-  local level="${out%%$'\t'*}" msg="${out#*$'\t'}"
+  local REPLY=""
+  bkp::drift::assess "$EPOCHSECONDS" "$epoch" "$rc" "$BKP_CAPTURE_CADENCE" \
+    "$catchup" "$BKP_CATCHUP_GRACE" || return 0
+  [[ -n "$REPLY" ]] || return 0
+  local level="${REPLY%%$'\t'*}" msg="${REPLY#*$'\t'}"
   # Palette vars (C_HEX_*) are exported into interactive shells; named
   # fallbacks keep the banner readable if the prompt runs before they load.
   local color="${C_HEX_YELLOW:-yellow}"

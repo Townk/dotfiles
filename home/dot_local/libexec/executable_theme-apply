@@ -76,9 +76,25 @@ remote=0
 [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] && remote=1
 
 # --- staleness: skip when inputs unchanged and outputs present ---------------
-mt() { date -r "$1" +%s 2>/dev/null || echo 0; }
-key="o:$(mt "$override") p:$(mt "$canon_json") k:$(mt "$canon_kdl") t:$(mt "$canon_tmux") s:$remote"
-if [[ -f "$eff_json" && -f "$eff_zsh" && "$(cat "$stamp" 2>/dev/null)" == "$key" \
+# mtimes via zstat into REPLY: this runs on every interactive shell start, and
+# the $(date -r …) form paid five fork+execs on the common unchanged path —
+# with zstat the header's "a few stats" claim is literal. date(1) remains as
+# the fallback for a zsh built without the module.
+if zmodload -F zsh/stat b:zstat 2>/dev/null; then
+  mt() { local -a s; zstat -A s +mtime -- "$1" 2>/dev/null && REPLY=$s[1] || REPLY=0; }
+else
+  mt() { REPLY="$(date -r "$1" +%s 2>/dev/null || echo 0)"; }
+fi
+mt "$override";   key="o:$REPLY"
+mt "$canon_json"; key+=" p:$REPLY"
+mt "$canon_kdl";  key+=" k:$REPLY"
+mt "$canon_tmux"; key+=" t:$REPLY"
+key+=" s:$remote"
+# $(<f) reads in-process (no fork); the -r guard replaces cat's 2>/dev/null —
+# an inline redirect on $(<f) would spawn $NULLCMD and defeat the whole point.
+stamp_val=""
+[[ -r "$stamp" ]] && stamp_val="$(<"$stamp")"
+if [[ -f "$eff_json" && -f "$eff_zsh" && "$stamp_val" == "$key" \
    && ( ! -r "$canon_kdl" || -f "$eff_kdl" ) \
    && ( ! -r "$canon_tmux" || -f "$eff_tmux" ) ]]; then
   exit 0

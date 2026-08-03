@@ -18,12 +18,33 @@ Describe 'backup-drift.zsh'
   Describe 'bkp::drift::assess (pure, fake clock)'
     # NOW is a fixed wall clock; epochs are offsets back from it.
     NOW=1000000
+    # The verdict comes back in REPLY, not on stdout: the banner runs on every
+    # prompt, and capturing even a pure function with $(…) forks a subshell —
+    # the exact per-prompt fork the library header promises not to pay.
+    # assess_out adapts REPLY to stdout for the assertions below.
+    assess_out() {
+      source "$LIB/backup-drift.zsh"
+      bkp::drift::assess "$@" || return $?
+      [[ -z "${REPLY:-}" ]] || print -r -- "$REPLY"
+    }
+
+    It 'reports through REPLY, printing nothing itself'
+      run_it() {
+        source "$LIB/backup-drift.zsh"
+        out="$(bkp::drift::assess $NOW $(( NOW - 14400 )) 0 1800)"
+        bkp::drift::assess $NOW $(( NOW - 14400 )) 0 1800
+        print -r -- "stdout=${out:-empty} reply=${REPLY:-unset}"
+      }
+      When run run_it
+      The status should be success
+      The output should include "stdout=empty"
+      The output should include "reply=warn"
+    End
 
     It 'is silent within the cadence window'
       run_it() {
-        source "$LIB/backup-drift.zsh"
         # 20 min old, cadence 30 min → healthy
-        bkp::drift::assess $NOW $(( NOW - 1200 )) 0 1800
+        assess_out $NOW $(( NOW - 1200 )) 0 1800
       }
       When run run_it
       The status should be success
@@ -32,9 +53,8 @@ Describe 'backup-drift.zsh'
 
     It 'warns once capture is over 2x the cadence overdue'
       run_it() {
-        source "$LIB/backup-drift.zsh"
         # 4h old → warn
-        bkp::drift::assess $NOW $(( NOW - 14400 )) 0 1800
+        assess_out $NOW $(( NOW - 14400 )) 0 1800
       }
       When run run_it
       The status should be success
@@ -44,8 +64,7 @@ Describe 'backup-drift.zsh'
 
     It 'escalates to crit past 24h'
       run_it() {
-        source "$LIB/backup-drift.zsh"
-        bkp::drift::assess $NOW $(( NOW - 100000 )) 0 1800
+        assess_out $NOW $(( NOW - 100000 )) 0 1800
       }
       When run run_it
       The status should be success
@@ -54,9 +73,8 @@ Describe 'backup-drift.zsh'
 
     It 'is crit and named a failure when the last phase rc is nonzero'
       run_it() {
-        source "$LIB/backup-drift.zsh"
         # recent but failed → crit, even inside the window
-        bkp::drift::assess $NOW $(( NOW - 60 )) 1 1800
+        assess_out $NOW $(( NOW - 60 )) 1 1800
       }
       When run run_it
       The status should be success
@@ -66,9 +84,8 @@ Describe 'backup-drift.zsh'
 
     It 'is silent for age nag while a catch-up stamp is inside the grace window'
       run_it() {
-        source "$LIB/backup-drift.zsh"
         # 4h stale, but catchup started 30s ago with 300s grace → silent
-        bkp::drift::assess $NOW $(( NOW - 14400 )) 0 1800 $(( NOW - 30 )) 300
+        assess_out $NOW $(( NOW - 14400 )) 0 1800 $(( NOW - 30 )) 300
       }
       When run run_it
       The status should be success
@@ -77,8 +94,7 @@ Describe 'backup-drift.zsh'
 
     It 'still warns for age nag after the catch-up grace expires'
       run_it() {
-        source "$LIB/backup-drift.zsh"
-        bkp::drift::assess $NOW $(( NOW - 14400 )) 0 1800 $(( NOW - 400 )) 300
+        assess_out $NOW $(( NOW - 14400 )) 0 1800 $(( NOW - 400 )) 300
       }
       When run run_it
       The status should be success
@@ -87,8 +103,7 @@ Describe 'backup-drift.zsh'
 
     It 'still surfaces a failed stamp even during catch-up'
       run_it() {
-        source "$LIB/backup-drift.zsh"
-        bkp::drift::assess $NOW $(( NOW - 60 )) 1 1800 $(( NOW - 10 )) 300
+        assess_out $NOW $(( NOW - 60 )) 1 1800 $(( NOW - 10 )) 300
       }
       When run run_it
       The status should be success

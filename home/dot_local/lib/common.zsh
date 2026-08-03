@@ -133,6 +133,24 @@ spin::active() {
   [ -t 2 ]
 }
 
+# spin::nap [centiseconds]
+# One animation tick (default 0.1s) without forking: `sleep` is external in
+# zsh, so a spinner would otherwise fork+exec 10×/second for its whole life —
+# the only fork in the common silent case. zselect times out with rc 1 and no
+# ready fds, so module presence is probed once (same guarded pattern as
+# pick-clipboard's CLIP_PROGRESS_ZSELECT); a zsh built without the module
+# falls back to `sleep`.
+zmodload zsh/zselect 2>/dev/null && typeset -g _common_have_zselect=1 \
+  || typeset -g _common_have_zselect=0
+spin::nap() {
+  local cs="${1:-10}"
+  if (( _common_have_zselect )); then
+    zselect -t "$cs" 2>/dev/null
+    return 0
+  fi
+  sleep "$(( cs / 100.0 ))"
+}
+
 # spin::wait <pid> [title]
 # Animate a braille spinner with elapsed seconds while <pid> runs, so a silent
 # long job never looks frozen. Returns as soon as the process is gone; the
@@ -145,7 +163,7 @@ spin::wait() {
   while kill -0 "$pid" 2>/dev/null; do
     elapsed=$((SECONDS - start))
     print -nu2 -- "\r  ${C_BLU}${frames[s]}${C_RES} ${title:+$title }${elapsed}s  "
-    sleep 0.1
+    spin::nap
     s=$((s % 10 + 1))
   done
   print -nu2 -- "\r\e[K"
@@ -191,7 +209,7 @@ spin::stream() {
       print -nu2 -- "\r  ${C_BLU}${frames[s]}${C_RES} ${title:+$title }${elapsed}s  "
       s=$((s % 10 + 1))
     fi
-    sleep 0.1
+    spin::nap
   done
   ((spinning)) && print -nu2 -- "\r\e[K"
   # Whatever landed between the last poll and exit. Without this the final
@@ -382,11 +400,15 @@ poll::until() {
     "$@" && return 0
     return 1
   fi
+  # Fork-free nap via spin::nap (centiseconds, min 1 so a tiny float interval
+  # can't degenerate into a busy loop).
+  local -i interval_cs=$(( interval * 100 ))
+  (( interval_cs < 1 )) && interval_cs=1
   local -F start=$EPOCHREALTIME
   while true; do
     "$@" && return 0
     (( (EPOCHREALTIME - start) >= timeout )) && return 1
-    sleep "$interval"
+    spin::nap "$interval_cs"
   done
 }
 

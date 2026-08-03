@@ -316,10 +316,12 @@ fi
 # pill was gone before the ribbon was next expanded: Alt+w lit nothing,
 # because the whole mode began and ended inside one render. Both terminals
 # therefore read a MIRROR that someone else keeps up to date.
+# $(<f) reads in-process (no cat fork); the -r guard is required — an inline
+# 2>/dev/null on $(<f) would run $NULLCMD and fork after all.
 is_fullscreen=0
 if [[ "${client_term:l}" == *ghostty* ]]; then
-  [[ "$(cat "$GHOSTTY_FS_STATE" 2>/dev/null)" == true ]] && is_fullscreen=1
-elif [[ "$(cat "$FS_STATE" 2>/dev/null)" == true ]]; then
+  [[ -r "$GHOSTTY_FS_STATE" && "$(<"$GHOSTTY_FS_STATE")" == true ]] && is_fullscreen=1
+elif [[ -r "$FS_STATE" && "$(<"$FS_STATE")" == true ]]; then
   is_fullscreen=1
 fi
 
@@ -437,15 +439,25 @@ if (( show_sys )); then
   if [[ "${(L)wifi}" == *": on"* ]]; then w+=("$I_WIFI_ON"); else w+=("$I_WIFI_OFF"); fi
 fi
 if (( is_ssh )); then
-  h="$(cat "$HOST_ALIAS" 2>/dev/null)" || h=""
+  h=""
+  [[ -r "$HOST_ALIAS" ]] && h="$(<"$HOST_ALIAS")"
   [[ -n "$h" ]] || h="$(hostname -s 2>/dev/null)" || h=""
   [[ -n "$h" ]] && w+=("$I_HOST $h")
 fi
 (( ${#w} )) && { bodies+=("${(j:  :)w}"); kinds+=(widgets); }
 
 if (( show_clock )); then
-  d="$(date '+%a %b')"; e="$(date '+%e')"; t="$(date '+%l:%M')"
-  ap="${(L)$(date '+%p')}"
+  # One strftime (fork-free) instead of four date forks — which were also
+  # non-atomic: crossing 12:00 between the %l:%M and %p reads rendered
+  # "11:59PM" for a repaint. The | separator survives every field (%e/%l are
+  # space-padded, never pipe-containing).
+  if zmodload -F zsh/datetime b:strftime p:EPOCHSECONDS 2>/dev/null; then
+    strftime -s dt '%a %b|%e|%l:%M|%p' "$EPOCHSECONDS"
+  else
+    dt="$(date '+%a %b|%e|%l:%M|%p')"
+  fi
+  dtp=("${(@s:|:)dt}")
+  d="$dtp[1]"; e="$dtp[2]"; t="$dtp[3]"; ap="${(L)dtp[4]}"
   bodies+=("$I_CLOCK $d ${e## } ${t## }$ap"); kinds+=(time)
 fi
 
