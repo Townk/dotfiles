@@ -79,18 +79,6 @@
 .zsh_history
 .zcompdump
 
-# ── cursor: isolated to the work profile ────────────────────────────────────
-# The whole cursor footprint now deploys ONLY on the work profile (see
-# .chezmoiignore.tmpl): ~/.cursor (agent config) plus the ai-commit-cursor
-# harness and its completion. Prune any copy left behind on non-work machines
-# from before the split. Gated so the work profile — where these are
-# legitimately managed — never removes its own files.
-{{ if ne .profile "work" -}}
-.cursor
-.local/bin/ai-commit-cursor
-.local/share/zsh/site-functions/_ai-commit-cursor
-{{- end }}
-
 # ── theme outputs: old names superseded by chezmoi-system.* ──────────────────
 # The theme generator (custom-builds/theme/generate-theme.sh) now renders
 # chezmoi-system.* everywhere; the previous palette.* / system / catppuccin-mocha.*
