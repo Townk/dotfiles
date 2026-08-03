@@ -67,9 +67,12 @@ prepend_keymap = [
   { on = [ "b", "r", ], run = "plugin mactag remove", desc = "Untag selected files" },
   { on = [ "b", "p", ], run = "plugin nice-sidebar pin", desc = "Sidebar: pin/unpin this directory" },
 
+{{ if ne .profile "dev-shell" -}}
   # Terminal Time Machine on the hovered path, in its own zellij tab
   # (dir = explore session, file = diff session scoped to that file).
+  # Dev-shell skips it: the backup stack does not deploy there.
   { on = [ "g", "t", ], run = 'shell --orphan -- "$HOME/.local/libexec/tm-tab" "$0"', desc = "Time Machine here, in a new tab" },
+{{- end }}
 
   # I would love to use these, but they do not work in my environment
   # { on = [ "g", "f", ], run = "plugin fzf", desc = "Jump to a file/directory via fzf" },

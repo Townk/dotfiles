@@ -8,6 +8,12 @@
 # Thin front-end over `system-backup browse`; scrub sessions (timeline +
 # lens panes) live there.
 tm() {
+  # The backup stack does not deploy on every profile (dev-shell skips it);
+  # fail with a pointer instead of zsh's bare "command not found".
+  if ! command -v system-backup >/dev/null 2>&1; then
+    print -u2 "tm: the backup stack is not deployed on this host (system-backup silo)"
+    return 127
+  fi
   case "${1:-}" in
     --diff)    system-backup browse --diff "${2:-$PWD}" ;;
     --deleted) system-backup browse --deleted "${2:-$PWD}" ;;
