@@ -1,0 +1,155 @@
+#!/usr/bin/env zsh
+# pick-command — fzf picker over the curated command index.
+#
+# The index is ~/.config/zsh/commands.tsv (rendered from commands.tsv.tmpl, so
+# it holds only the commands THIS machine's profile installs). The welcome
+# screen prints 18 of its rows; this picker offers all of them, with the long
+# description as the searchable text. Two front ends put the result on the edit
+# buffer: the `cmds` function inline, and the Alt+x ZLE widget (command-pick)
+# with --float.
+#
+# --float swaps pick::start for mux::pick — a floating pane inside zellij or
+# tmux, inline with no mux, the selection coming back on stdout either way (the
+# pick-playbook pattern). pick-glyph is floated the other way round: a mux chord
+# runs it inside zellij-modal, which injects the glyph into the origin pane,
+# because a chord has no shell to return a value to. This has one, so the
+# drop-in wins and the tmux side works too.
+#
+# Each line shows:
+#   <group icon>  <command>  #<group> <description>
+# The icon and its colour come from the row's GROUP field, so the list reads as
+# nine visually distinct blocks while staying one flat, fuzzy-searchable list.
+#
+# The `#group` tag repeats what the icon says because an icon is not typeable:
+# fzf searches the visible text only — the engine pins --with-nth=1, and the
+# hidden tail is not searched — so `#system` narrows to a group only if the word
+# is on the line. Same idiom, same dim colour as pick-glyph's #tags/@groups.
+#
+# Enter prints the bare command name. Ctrl-Space toggles the preview, which is
+# off by default: the point of the picker is remembering the NAME, and the
+# preview is the follow-up question. It shows the tldr page, else the command's
+# own --help, else the index description (my own scripts have no tldr page, and
+# shell functions have neither — the preview runs in a plain sh where they do
+# not exist, hence the `command -v` guard).
+#
+# The list is alphabetical by command name, with recently picked commands
+# floating above it (--cache-usage, keyed on the command name).
+
+set -eu -o pipefail
+
+PICK_NAME=pick-command
+source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" # → mux::pick (+ pick-common)
+
+INDEX="${PICK_COMMAND_INDEX:-${XDG_CONFIG_HOME:-$HOME/.config}/zsh/commands.tsv}"
+[[ -r "$INDEX" ]] || die "cannot read the command index: $INDEX"
+
+# --float picks the engine: mux::pick (a floating pane in zellij or tmux, inline
+# with no mux) instead of a plain inline pick::start. Only the Alt+x widget asks
+# for it — a modal suits a keystroke, while `cmds` is a command you typed and
+# stays in the flow of the terminal you typed it in. Everything else is
+# forwarded to the engine untouched.
+typeset -i float=0
+typeset -a fwd=()
+typeset arg
+for arg in "$@"; do
+  case "$arg" in
+    --float) float=1 ;;
+    *) fwd+=("$arg") ;;
+  esac
+done
+
+# Pane geometry rides along only on the float path: pick::start has no
+# --pane-* options and dies on them.
+typeset -a launch=( pick::start )
+(( float )) && launch=( mux::pick --pane-width 80% --pane-height 70% )
+
+# One icon + colour per GROUP key in the index. Written as codepoint escapes
+# rather than literal glyphs: the name in the comment is the only readable
+# form of a Private Use Area character, and an escape survives an editor or a
+# patch that would mangle the glyph itself. The first two match the welcome
+# screen's own column headings.
+typeset -A GROUP_ICON=(
+  system    $'\uec19'    # nf-cod-chip
+  data      $'\U0F01FA'  # nf-md-engine
+  files     $'\uea98'    # nf-cod-archive
+  shell     $'\uea85'    # nf-cod-terminal
+  code      $'\ue702'    # nf-dev-git
+  secrets   $'\U0F0306'  # nf-md-key
+  agents    $'\U0F06A9'  # nf-md-robot
+  ops       $'\U0F0493'  # nf-md-cog
+  shortcuts $'\U0F0295'  # nf-md-function
+)
+typeset -A GROUP_HEX=(
+  system    "$C_HEX_BLUE"
+  data      "$C_HEX_YELLOW"
+  files     "$C_HEX_PEACH"
+  shell     "$C_HEX_MAUVE"
+  code      "$C_HEX_GREEN"
+  secrets   "$C_HEX_RED"
+  agents    "$C_HEX_PINK"
+  ops       "$C_HEX_LAVENDER"
+  shortcuts "$C_HEX_SAPPHIRE"
+)
+
+typeset -A GROUP_SGR=()
+typeset name group desc
+for group in "${(k)GROUP_ICON[@]}"; do
+  GROUP_SGR[$group]="$(theme::sgr_fg "${GROUP_HEX[$group]}")"
+done
+typeset SGR_NAME SGR_META SGR_RESET
+SGR_NAME="$(theme::sgr_fg "$C_HEX_TEXT")"
+SGR_META="$(theme::sgr_fg "$C_HEX_OVERLAY1")"
+SGR_RESET=$'\e[0m'
+
+typeset -a rows
+typeset -i name_w=0
+typeset line
+typeset -a field
+while IFS= read -r line; do
+  [[ -z "$line" || "$line" == '#'* ]] && continue
+  field=( "${(@ps:\t:)line}" )
+  (( ${#field[@]} == 5 )) || die "malformed index row: $line"
+  [[ -n "${GROUP_ICON[${field[2]}]:-}" ]] ||
+    die "unknown group '${field[2]}' for '${field[1]}' in $INDEX"
+  rows+=( "${field[1]}"$'\t'"${field[2]}"$'\t'"${field[5]}" )
+  (( ${#field[1]} > name_w )) && name_w=${#field[1]}
+done < "$INDEX"
+
+# Alphabetical by command name, not in index order: the index is grouped by
+# theme for editing, but a name you only half-remember is easier to find where
+# the alphabet says it should be. The recency the engine layers on top
+# (--cache-usage) is what breaks the tie in practice.
+rows=( "${(@oi)rows}" )
+
+# tldr, then --help, then the row's own description. --help is fenced with a
+# /dev/null stdin and a timeout so a cold tldr cache — which sends every row
+# down this branch — cannot hang the preview on a BSD tool that takes the
+# unknown flag as a file and then reads stdin (fmt, column, strings).
+typeset preview_cmd="tldr --color=always {2} 2>/dev/null"
+preview_cmd+=" || { command -v {2} >/dev/null 2>&1 &&"
+preview_cmd+=" timeout 2 {2} --help </dev/null 2>&1; }"
+preview_cmd+=" || awk -F'\t' -v c={2} '\$1 == c { print \$5 }' ${INDEX:q}"
+
+typeset -a pick_args=(
+  --header "Pick a command"
+  --hints "$(pick::hints "󰌑" buffer "󰘴 󱁐" preview)"
+  --height 60%
+  --input-border 1
+  --output field:1
+  --preview "$preview_cmd"
+  --preview-window "right:50%,noinfo,hidden"
+  # Spelled out rather than plain --cache-usage, which derives the path from
+  # PICK_NAME: in a float the picker runs as pick-list in a pane the mux
+  # spawned, and PICK_NAME does not survive that (tmux's popup forwards only
+  # the env it is told to). Recency would then land in pick-list's shared
+  # namespace when floating and here when inline — two histories for one picker.
+  --cache-usage="${XDG_CACHE_HOME:-$HOME/.cache}/pick/pick-command/usage"
+)
+
+for line in "${rows[@]}"; do
+  field=( "${(@ps:\t:)line}" )
+  name="${field[1]}" group="${field[2]}" desc="${field[3]}"
+  pick::line \
+    "${GROUP_SGR[$group]}${GROUP_ICON[$group]}${SGR_RESET}  ${SGR_NAME}${(r:$name_w:)name}${SGR_RESET}  ${SGR_META}#${group} ${desc}${SGR_RESET}" \
+    "$name"
+done | "${launch[@]}" "${pick_args[@]}" "${fwd[@]}"

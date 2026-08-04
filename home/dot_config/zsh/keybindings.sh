@@ -62,3 +62,9 @@ bindkey '\e^P' ai-playbook-pick
 # Alt+p — smart paste: files clip runs `pbpaste --files` as a visible command,
 # anything else inserts the clipboard text at the cursor.
 bindkey '\ep' smart-paste
+
+# Alt+x — pick a command from the curated index and insert its name at the
+# cursor. This displaces zsh's default `execute-named-cmd` (the `execute:`
+# prompt for running a ZLE widget by name), which \ez / execute-last-named-cmd
+# still reaches; \ep above already overrides a default the same way.
+bindkey '\ex' command-pick

@@ -36,57 +36,57 @@ function motd() {
   macchina
 }
 
-# The tool index behind the welcome screen and `cmds`.
+# The tool index behind the welcome screen and `cmds` is data, not code: see
+# ../commands.tsv for the format, and tests/commands-index_spec.sh for the
+# geometry it has to respect. Resolved here because `$0` inside a function is
+# the function's name, not this file.
 #
-# One array per column, and the geometry is why each holds exactly nine entries:
-# the welcome screen budget is 10 lines (a group title plus 9 tools) by 78
-# columns (3 cells of 26 — a 9-wide name, a space, a 16-wide blurb). `bandwhich`
-# and `hyperfine` are what set the name width. A tenth entry in any column, or a
-# blurb past 16 characters, silently overflows that budget — so adding a tool
-# means trading one out, or leaving it to `cmds`, which has no size limit.
+# Overridable because the source of that file is a chezmoi TEMPLATE, gated per
+# profile: the spec has to render it and point this at the result, the way
+# spec_helper does with THEME_PALETTE_FILE.
+typeset -g _CMDS_INDEX="${_CMDS_INDEX:-${0:A:h:h}/commands.tsv}"
+
+# Column headings are chrome rather than per-command data, so they stay here.
 typeset -ga _CMDS_GROUPS=(
   " SYSTEM & NETWORK"
   "󰇺 DATA & TEXT"
   " FILES & MISC"
 )
-typeset -ga _CMDS_COL1=(
-  "btm|'top'"
-  "procs|'ps'"
-  "duf|disk usage"
-  "y|files (yazi)"
-  "tldr|cheat sheets"
-  "bandwhich|net usage"
-  "doggo|DNS lookup"
-  "gping|ping graph"
-  "hyperfine|benchmark"
-)
-typeset -ga _CMDS_COL2=(
-  "jq|JSON"
-  "yq|YAML"
-  "xq|XML"
-  "gron|JSON to lines"
-  "jless|JSON viewer"
-  "pandoc|convert docs"
-  "tv|view CSV"
-  "tokei|code stats"
-  "grex|regex builder"
-)
-typeset -ga _CMDS_COL3=(
-  "fd|'find'"
-  "rg|'grep'"
-  "7zz|7-Zip"
-  "unrar|.rar archives"
-  "eva|calculator"
-  "fend|unit convert"
-  "gh|GitHub"
-  "git|version control"
-  "t-rec|term recorder"
-)
+# Load the three fields the screen needs into parallel arrays. The group and
+# description fields are the picker's business (see ~/.local/libexec/pick-command).
+#
+# Tab is an IFS *whitespace* character, so `IFS=$'\t' read -r a b c` silently
+# collapses runs of tabs: on a picker-only row, whose blurb is empty, the
+# description would land in the blurb. Hence whole-line reads split with
+# `(@ps)`, which preserves empty fields.
+typeset -ga _cmds_name _cmds_col _cmds_blurb
+function _cmds_read() {
+  local line
+  local -a field
+  _cmds_name=() _cmds_col=() _cmds_blurb=()
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == '#'* ]] && continue
+    field=("${(@ps:\t:)line}")
+    _cmds_name+=("$field[1]")
+    _cmds_col+=("$field[3]")
+    _cmds_blurb+=("$field[4]")
+  done < "$_CMDS_INDEX"
+}
 
-# The static index the welcome screen prints: 10 lines, never past 78 columns.
+# The static index the welcome screen prints: 7 lines, never past 78 columns.
 function terminal_commands() {
-  local -i row col
-  local line entry name desc title
+  local -a c1 c2 c3
+  local -i i row col
+  local line entry name blurb title
+
+  _cmds_read
+  for (( i = 1; i <= ${#_cmds_name[@]}; i++ )); do
+    case "${_cmds_col[i]}" in
+      1) c1+=("${_cmds_name[i]}"$'\t'"${_cmds_blurb[i]}") ;;
+      2) c2+=("${_cmds_name[i]}"$'\t'"${_cmds_blurb[i]}") ;;
+      3) c3+=("${_cmds_name[i]}"$'\t'"${_cmds_blurb[i]}") ;;
+    esac
+  done
 
   # The third column is never padded — trailing blanks would push every line to
   # a full 78 and wrap a terminal exactly that wide.
@@ -98,39 +98,53 @@ function terminal_commands() {
   done
   print -P -- "$line"
 
-  for (( row = 1; row <= 9; row++ )); do
+  for (( row = 1; row <= ${#c1[@]}; row++ )); do
     line=""
     for col in 1 2 3; do
-      entry="${${(P)${:-_CMDS_COL$col}}[row]}"
-      name="${entry%%|*}"
-      desc="${entry#*|}"
-      (( col < 3 )) && desc="${(r:16:)desc}"
-      line+="${P_BWH}${(r:9:)name}${P_RES} ${P_GRA}${desc}${P_RES}"
+      entry="${${(P)${:-c$col}}[row]}"
+      name="${entry%%$'\t'*}"
+      blurb="${entry#*$'\t'}"
+      (( col < 3 )) && blurb="${(r:16:)blurb}"
+      line+="${P_BWH}${(r:9:)name}${P_RES} ${P_GRA}${blurb}${P_RES}"
     done
     print -P -- "$line"
   done
 }
 
-# `cmds` searches the same index instead of printing it. The grid is for
-# glancing; this is for what the grid is worst at — you remember what a tool
-# does but not what it's called, so you search the blurbs. Enter puts the
-# command on the buffer rather than running it, since most of these need args.
-# The tldr page is the preview, falling back to the blurb where there is none
-# (`y` is a function here, not a documented command).
+# `cmds` searches the whole index rather than printing the shortlist of it. The
+# grid is for glancing; this is for what the grid is worst at — you remember
+# what a tool does but not what it is called, so you search the descriptions.
+#
+# The picker itself is pick-command, in the same engine as every other picker
+# here. This stays a function only because it writes the edit buffer, which a
+# child process cannot do: the pick lands on the line instead of running, since
+# most of these commands need arguments. The trailing space is where you would
+# type the first one.
+#
+# ONE function, two entry points: typed as a command, and bound as the Alt+x
+# widget (`zle -N command-pick cmds`, declared in widgets.sh). $WIDGET is set
+# only inside ZLE and is the whole difference between them:
+#
+#   from the prompt   `print -z` pushes a fresh line; inline, in the flow of the
+#                     terminal you typed the command in.
+#   from Alt+x        inserted at the cursor, so it works mid-command
+#                     (`git log | ` → Alt+x), and --float makes it a modal,
+#                     which is what suits a keystroke.
+#
+# Delivery is the only fork; everything above it — and the whole picker — is
+# shared, so a change like that trailing space happens once.
 function cmds() {
-  local -a entries
-  local entry pick
-  for entry in "${_CMDS_COL1[@]}" "${_CMDS_COL2[@]}" "${_CMDS_COL3[@]}"; do
-    entries+=("${(r:9:)${entry%%|*}} ${entry#*|}")
-  done
+  local pick
+  local -a float=()
+  [[ -n "${WIDGET:-}" ]] && float=(--float)
+  pick=$("$HOME/.local/libexec/pick-command" "${float[@]}" "$@") || pick=""
 
-  # Own the preview: the inherited FZF_DEFAULT_OPTS one runs the `preview`
-  # script, which expects a path. Repeated flags let the last occurrence win.
-  pick=$(print -l -- "${entries[@]}" |
-    fzf --no-sort \
-      --preview 'tldr --color=always {1} 2>/dev/null || echo {2..}') || return 0
-
-  [[ -n "$pick" ]] && print -z -- "${pick%% *}"
+  if [[ -n "${WIDGET:-}" ]]; then
+    [[ -n "$pick" ]] && LBUFFER+="$pick "
+    zle reset-prompt
+  else
+    [[ -n "$pick" ]] && print -z -- "$pick "
+  fi
 }
 
 # Helper utility to print a big and noticeable banner in the terminal.

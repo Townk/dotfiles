@@ -1,0 +1,203 @@
+# The curated command index behind the welcome screen and `cmds`.
+#
+# Tab-separated, five fields: COMMAND, GROUP, COLUMN, BLURB, DESCRIPTION.
+#
+#   GROUP        which icon and colour `cmds` shows the row with. One of the
+#                keys in pick-command's table: system, data, files, shell,
+#                code, secrets, agents, ops, shortcuts. The section comments
+#                below mirror it for readability, but the field is what counts.
+#   COLUMN       0 = `cmds` only. 1-3 = also printed on the welcome screen, in
+#                that column, in the order the lines appear below.
+#   BLURB        the welcome screen cell text. Empty when COLUMN is 0.
+#   DESCRIPTION  what `cmds` searches, and its preview fallback.
+#
+# One file so the screen cannot drift from the picker: the screen is a view of
+# this list, not a second copy of it. The screen's geometry is a hard budget —
+# 7 lines by 78 columns, three cells of 26 (a 9-wide name, a space, a 16-wide
+# blurb) — so a fourth entry in any column, a name past 9 characters or a blurb
+# past 16 silently overflows it. tests/commands-index_spec.sh pins all of that,
+# and that every command here still resolves.
+#
+# What belongs here: anything you would type at a prompt and might forget the
+# name of. Not servers, LSPs or GUI apps; not libraries or the plumbing behind
+# preview/yazi/nvim; not names you could never forget (`curl`, `make`, `grep`).
+#
+# Descriptions are the one line tldr cannot give you — why this is on the
+# machine and when to reach for it. `cmds` previews the tldr page or `--help`
+# output for the how-to, and falls back to this text when there is neither.
+#
+# Rows for a tool that only some machines install are gated on the SAME
+# condition its package manifest uses, so this source stays the union of every
+# profile and each machine renders only what it actually has. Copy the
+# condition from the manifest rather than inventing one — if they disagree, the
+# row is offered on a box where the command does not exist.
+#
+# The welcome-screen rows (columns 1-3) are deliberately never gated: that
+# keeps the 7-line by 78-column budget identical on every profile, so the
+# geometry test on one machine speaks for all of them.
+
+# ─── the welcome screen: column 1, system & network ───────────────────────────
+procs	system	1	'ps'	Process list as a readable table, with tree view and colour
+duf	system	1	disk usage	Disk usage and free space per mount, as a table
+bandwhich	system	1	net usage	Live per-process network bandwidth (needs sudo on macOS)
+doggo	system	1	DNS lookup	DNS lookup with readable output — a modern dig
+gping	system	1	ping graph	Ping as a live graph, several hosts at once
+hyperfine	system	1	benchmark	Benchmark a command with warmups, statistics and comparison
+
+# ─── the welcome screen: column 2, data & text ────────────────────────────────
+jq	data	2	JSON	Query and transform JSON
+gron	data	2	JSON to lines	Flatten JSON into grep-able lines, and rebuild it after
+jless	data	2	JSON viewer	Page, fold and search large JSON interactively
+tv	data	2	view CSV	Pretty-print CSV and TSV as an aligned table (tidy-viewer)
+tokei	data	2	code stats	Count lines of code per language across a tree
+grex	data	2	regex builder	Build a regex from example strings it has to match
+
+# ─── the welcome screen: column 3, files & misc ───────────────────────────────
+7zz	files	3	7-Zip	Create and extract 7z archives, and most other formats
+unrar	files	3	.rar archives	Extract .rar archives
+eva	data	3	calculator	Evaluate arithmetic at the prompt, with variables and units
+fend	data	3	unit convert	Convert between units and currencies, with arithmetic
+gh	code	3	GitHub	GitHub from the terminal: PRs, issues, releases, CI runs
+t-rec	files	3	term recorder	Record the terminal to an animated GIF
+
+# ─── system & network ─────────────────────────────────────────────────────────
+btm	system	0		Graphical process and system monitor — a better top
+mole	system	0		Clean up junk: caches, logs and stale build directories
+rmlint	system	0		Find duplicate files, empty directories and broken symlinks
+macchina	system	0		The machine summary the welcome screen prints
+gdisk	system	0		GPT partition editor — fdisk for GPT disks
+sgdisk	system	0		Scriptable GPT partitioning, for use inside scripts
+strings	system	0		Print the printable text embedded in a binary
+column	system	0		Align whitespace-separated input into columns
+getopt	system	0		Parse short and long option flags in shell scripts
+fmt	system	0		Re-wrap text to a given width
+zstd	system	0		Compress and decompress with zstd
+{{ if eq .profile "personal" -}}
+mas	system	0		Install and update Mac App Store apps from the terminal
+dos2unix	system	0		Convert line endings between DOS/Windows and Unix
+{{ end -}}
+trip	system	0		Traceroute and ping together in one live TUI (trippy)
+mosh	system	0		SSH that survives roaming and flaky connections
+rclone	system	0		Sync files to and from cloud storage providers
+{{ if eq .profile "personal" -}}
+pm-cli	system	0		Read Proton Mail email from the terminal
+{{ end -}}
+
+# ─── data & text ──────────────────────────────────────────────────────────────
+yq	data	0		Query and transform YAML, and convert it to JSON
+xq	data	0		Query XML and HTML the way jq queries JSON
+rg	data	0		Search file contents fast, respecting .gitignore
+rga	data	0		rg inside PDFs, e-books, archives and office documents
+fd	data	0		Find files by name fast, with sane defaults
+ast-grep	data	0		Search and rewrite code by AST pattern instead of by text
+bat	data	0		cat with syntax highlighting, git marks and paging
+glow	data	0		Render Markdown readably in the terminal
+rich	data	0		Render Markdown, JSON, code and tables with Rich
+hexyl	data	0		Hex viewer with colour-coded byte categories
+pandoc	data	0		Convert documents between markup formats
+typst	data	0		Typeset documents from plain text — a modern LaTeX
+plantuml	data	0		Render UML and other diagrams from a text description
+dot	data	0		Draw graphs from DOT language descriptions (graphviz)
+aspell	data	0		Spell-check a file or stdin interactively
+hunspell	data	0		Spell-check using Hunspell dictionaries
+figlet	data	0		Print big ASCII-art banner text
+lolcat	data	0		Rainbow-colour any terminal output
+colorscript	data	0		Print one of the terminal colour scripts
+
+# ─── files, archives & media ──────────────────────────────────────────────────
+eza	files	0		Directory listing with icons, git status and a tree mode
+ouch	files	0		Compress and extract any archive format with one command
+unar	files	0		Extract almost any archive format
+lsar	files	0		List what is inside an archive without extracting it
+tag	files	0		Read and set macOS Finder tags from the terminal
+chafa	files	0		Display an image as terminal graphics
+magick	files	0		Convert, resize and inspect images (ImageMagick)
+ffmpeg	files	0		Convert and manipulate audio and video
+mediainfo	files	0		Report the codecs, streams and metadata of a media file
+restic	files	0		Encrypted deduplicated backups — the engine under system-backup
+{{ if eq .profile "personal" -}}
+skim	files	0		Render presentable images of your Svalboard keymaps (qmk-skim)
+{{ end -}}
+
+# ─── shell & session ──────────────────────────────────────────────────────────
+fzf	shell	0		Fuzzy-find from any list — the engine behind these pickers
+atuin	shell	0		Searchable, synced shell history
+zoxide	shell	0		The frecency database behind directory jumping
+tldr	shell	0		Concise, example-first command help — the preview here
+gum	shell	0		Prompts, spinners and styled output for shell scripts
+tmux	shell	0		Terminal multiplexer — the default mux backend
+zellij	shell	0		Terminal multiplexer — the second mux backend
+nvim	shell	0		Editor
+
+# ─── git & code ───────────────────────────────────────────────────────────────
+lazygit	code	0		Stage, commit, rebase and browse git history in a TUI
+delta	code	0		Syntax-highlighted, side-by-side git and diff output
+diffnav	code	0		Browse a diff with a file tree beside it
+hunkdiff	code	0		Terminal diff viewer built for reviewing agent changesets
+git-cliff	code	0		Generate a changelog from Conventional Commits
+git-lfs	code	0		Track large files in git through LFS
+git-sizer	code	0		Report what makes a repository slow or oversized
+git-extras	code	0		Extra git subcommands: summary, changelog, ignore and more
+onefetch	code	0		Repository summary and language stats, fetch-style
+lazysql	code	0		Browse and query databases in a TUI
+shellspec	code	0		Run this repo's BDD test suite under zsh
+just	code	0		Run project task recipes from a justfile
+uv	code	0		Manage Python versions, virtualenvs and installed tools
+cargo-binstall	code	0		Install Rust binaries without compiling them
+tsc	code	0		Compile TypeScript
+{{ if eq .profile "work" -}}
+acli	code	0		Atlassian CLI: Jira and Confluence from the terminal
+{{ end -}}
+{{ if eq .profile "personal" -}}
+clang-format	code	0		Reformat C, C++, Java, JavaScript and Protobuf source
+{{ end -}}
+
+# ─── security & secrets ───────────────────────────────────────────────────────
+gpg-tui	secrets	0		Manage GPG keys in a terminal UI
+age	secrets	0		Encrypt a file to a public key or a passphrase
+sops	secrets	0		Encrypt the values inside a config file to age recipients
+
+# ─── agents & models ──────────────────────────────────────────────────────────
+claude	agents	0		Claude Code agent in the terminal
+pi	agents	0		Pi coding agent, cloud configuration
+pi-local	agents	0		Pi coding agent against the local 32K-context config
+cursor-agent	agents	0		Cursor Agent in the terminal
+ai-playbook	agents	0		Capture, author and run terminal playbooks
+apb	agents	0		Short form of ai-playbook
+ask	agents	0		Themed terminal dialogs for scripts: confirm, line, choose, form
+{{ if ne .profile "dev-shell" -}}
+hf	agents	0		Hugging Face Hub: download and manage models
+tiny-agents	agents	0		Run composable Hugging Face agents over MCP
+mlx_vlm.generate	agents	0		Run a local vision-language model over an image
+mlx_vlm.chat	agents	0		Chat with a local vision-language model
+mlx_vlm.convert	agents	0		Convert a model to MLX format
+{{ end -}}
+
+# ─── ops: this machine's own control surface ──────────────────────────────────
+chezmoi	ops	0		Manage these dotfiles: diff, apply, resolve source paths
+chezmoi-reverse	ops	0		Propagate edits made in $HOME back into the chezmoi source
+system-update	ops	0		Bring every externally-managed tool up to its latest version
+system-package	ops	0		Sync installed packages against the per-ecosystem manifests
+system-service	ops	0		Manage the services declared in services.toml
+system-secrets	ops	0		Manage this machine's secret values
+system-onboard	ops	0		Reconcile a machine into this dotfiles system
+system-backup	ops	0		Tiered, encrypted restic backups of this machine
+system-images	ops	0		Create, mount and manage the local sparse disk images
+tm	ops	0		Terminal Time Machine: browse and diff snapshots of this directory
+ai-commit	ops	0		Group the working tree into logical Conventional Commits
+notify	ops	0		Send a desktop notification from a script
+preview	ops	0		Render a file preview for fzf, Yazi or the terminal
+term-quick-view	ops	0		Quick Look one file in the terminal, in a singleton tab
+theme-reset	ops	0		Drop this session's tint override, back to the canonical theme
+wait-until	ops	0		Poll a command until it succeeds or the timeout elapses
+
+# ─── shortcuts: my own shell functions ────────────────────────────────────────
+y	shortcuts	0		Yazi file manager; the shell follows its cwd on exit
+g	shortcuts	0		Short form of git; bare g runs git status
+gg	shortcuts	0		Gradle wrapper that prefers the project's own gradlew
+take	shortcuts	0		Create a directory and cd into it in one step
+super-cd	shortcuts	0		cd that falls back to zoxide when the path is not literal
+cmds	shortcuts	0		This picker
+motd	shortcuts	0		Reprint the welcome screen's machine summary
+terminal_commands	shortcuts	0		Reprint the welcome screen's tool index
+lolbanner	shortcuts	0		Print a big, hard-to-miss banner between long commands

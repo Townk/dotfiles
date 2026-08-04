@@ -118,6 +118,14 @@ ai-playbook-pick() {
 }
 zle -N ai-playbook-pick
 
+# ── Command index picker (Alt+x) ────────────────────────────────────────────
+# No body here: the widget IS `cmds` (functions.d/commands.sh). One function
+# serves both entry points and branches on $WIDGET, which zsh sets only inside
+# ZLE — from the prompt the pick goes to `print -z`, from Alt+x it is inserted
+# at the cursor and the picker floats. Declared here so this file stays the
+# index of every widget.
+zle -N command-pick cmds
+
 # ── Clipboard: smart paste (Alt+p) ──────────────────────────────────────────
 # Alt+p — smart paste: files clip → run `pbpaste --files` as a visible,
 # cancellable command; anything else → insert clipboard text at the cursor.
