@@ -1,0 +1,50 @@
+---
+description: Recover from and prevent the "no exit status" shell wedge caused by deleting the persistent shell's working directory. Applies to every Agent session.
+alwaysApply: true
+---
+
+# Shell cwd hygiene
+
+The Shell tool keeps **one persistent shell** whose cwd survives between
+calls. If that directory stops existing, every later spawn dies before the
+command runs, and the tool reports `no exit status` — which reads like a hang
+but is not one.
+
+## The error lies to you
+
+The terminal file shows:
+
+```
+cwd: "/private/tmp/some-dir-you-deleted"
+error: "spawn /path/to/zsh ENOENT"
+```
+
+`ENOENT` names the **shell binary**, so it looks like zsh is missing. It
+almost never is — `spawn` reports `ENOENT` for a missing *cwd* too. Three
+prior sessions (2026-06-10, 2026-07-02, 2026-08-04) each burned several turns
+verifying the binary before finding the real cause. Check the `cwd:` line
+first; only then check the binary.
+
+## Recovery
+
+On the **first** `no exit status`, don't retry blindly:
+
+1. Read the terminal file for this shell (`terminals/<id>.txt`) and look at
+   `cwd:` and `error:`.
+2. If `ENOENT`, re-issue the same command with `working_directory` pinned to
+   the workspace root from your session context. That alone fixes it — no
+   session restart, no user intervention.
+
+## Prevention
+
+- **Never delete the directory the shell is sitting in.** Both `rm -rf` and
+  `git worktree remove` have caused this — the latter when an automated
+  land/integration flow removed a worktree the shell still sat in. On
+  2026-08-04 it was an `rm -rf` of a `/tmp` scratch dir the shell had `cd`'d
+  into.
+- **Don't `cd` into scratch or worktree dirs at all.** Run throwaway scripts
+  by absolute path, or pass `working_directory` per call, so the persistent
+  shell never sits anywhere disposable.
+- Before any command that removes a directory, confirm it is not the cwd or
+  an ancestor of it. This complements the `rm` safety gate: that rule guards
+  *what* you delete, this one guards *where you are standing* when you do.
