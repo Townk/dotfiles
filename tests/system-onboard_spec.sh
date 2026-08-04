@@ -398,3 +398,59 @@ Describe 'system-onboard: prune stale secret fragments (MED-4 follow-up)'
     The path "$REMOVED" should not be exist
   End
 End
+
+# Profile validation for the server profile (headless, operator-onboarded).
+# validate_inputs is called directly in a fresh zsh -f via the
+# SYSTEM_ONBOARD_NO_RUN escape hatch; no SSH, no chezmoi state is touched.
+Describe 'system-onboard: server profile validation'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() { export SCRIPT_PATH="$SCRIPT"; }
+  BeforeEach 'setup'
+
+  # run_validate <profile> [kind] — remote-onboarding arg validation; prints
+  # the resolved kind on success.
+  run_validate() {
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      ALIAS=box HOSTNAME=box.local PROFILE="$1" KIND="${2:-}" LOCAL=0 PREPARE=""
+      validate_inputs
+      print -r -- "kind=$KIND"
+    ' _ "$@"
+  }
+
+  It 'accepts --profile server and defaults kind to headless'
+    When call run_validate server
+    The status should be success
+    The output should include "kind=headless"
+  End
+
+  It 'still defaults dev-shell to headless and personal to human'
+    When call run_validate dev-shell
+    The output should include "kind=headless"
+  End
+
+  It 'defaults personal to human'
+    When call run_validate personal
+    The output should include "kind=human"
+  End
+
+  It 'rejects unknown profiles'
+    When call run_validate laptop
+    The status should be failure
+    The stderr should include "invalid profile"
+  End
+
+  It 'refuses --local for the server profile (operator-onboarded over SSH)'
+    When call zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      chezmoi() { print "profile: server" }   # stub: this machine claims server
+      ALIAS="" HOSTNAME="" PROFILE=server KIND="" LOCAL=1 PREPARE=""
+      validate_inputs
+    ' _
+    The status should be failure
+    The stderr should include "human-only"
+  End
+End

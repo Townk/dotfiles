@@ -3,7 +3,7 @@
 #
 # Usage:
 #   system-onboard --alias <ssh-alias> --hostname <ssh-host> \
-#                  --profile <personal|work|dev-shell> [--kind human|headless]
+#                  --profile <personal|work|dev-shell|server> [--kind human|headless]
 #
 # Idempotent and safe to rerun after partial failure. With no args on a TTY it
 # runs an interactive form. Run from an already-trusted operator host that has
@@ -24,7 +24,7 @@ source "$HOME/.local/lib/system-secrets-common.zsh"
 ALIAS="" HOSTNAME="" PROFILE="" KIND="" COLOR="" PREPARE=""
 DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0 LOCAL=0 NO_APPLY=0 SECRETS_REBUILT=0
 NO_CLIPBOARD=0
-VALID_PROFILES=(personal work dev-shell)
+VALID_PROFILES=(personal work dev-shell server)
 # ssh-prepare-connection steps a host's front matter may request (see
 # ~/.local/libexec/ssh-prepare-connection). `--prepare` also accepts the meta
 # values `none` (no pre-connect hook at all) and `all` (every step).
@@ -38,7 +38,7 @@ host, or use --local to self-onboard this machine.
 
 Usage:
   system-onboard --alias <ssh-alias> --hostname <ssh-host> \\
-                 --profile <personal|work|dev-shell> [--kind human|headless]
+                 --profile <personal|work|dev-shell|server> [--kind human|headless]
   system-onboard --local [--alias <name>] [--profile <p>] [--color <name>] [--no-apply]
   system-onboard update <alias> --color <name>   set a machine's window tint
   system-onboard update <alias> --clear          clear it (revert to default)
@@ -54,9 +54,9 @@ Flags:
   --alias <name>       SSH alias for a remote target, or (with --local) the friendly
                        operator-map key (default: this host's short name). Loose only.
   --hostname <host>    real SSH endpoint (loose only; never committed)
-  --profile <p>        personal | work | dev-shell (with --local, defaults to this
+  --profile <p>        personal | work | dev-shell | server (with --local, defaults to this
                        machine's configured chezmoi profile)
-  --kind <k>           human | headless (default: dev-shell→headless, else human)
+  --kind <k>           human | headless (default: dev-shell/server→headless, else human)
   --color <name>       optional WezTerm window tint for this machine (a palette
                        name; list them with \`system-onboard colors\`). Unknown
                        names fall back to grey. Loose only (operator map).
@@ -202,8 +202,11 @@ validate_local_inputs() {
   fi
   is_valid_profile "$PROFILE" || die "invalid profile: $PROFILE"
   KIND="human"
-  [[ "$PROFILE" != "dev-shell" ]] ||
-    die "--local is human-only; a dev-shell/headless box is onboarded by an operator over SSH"
+  case "$PROFILE" in
+    dev-shell | server)
+      die "--local is human-only; a headless box ($PROFILE) is onboarded by an operator over SSH"
+      ;;
+  esac
 }
 
 validate_inputs() {
@@ -221,7 +224,10 @@ validate_inputs() {
     die "alias must be filename-safe ([A-Za-z0-9._-]): $ALIAS"
   is_valid_profile "$PROFILE" || die "invalid profile: $PROFILE"
   if [[ -z "$KIND" ]]; then
-    [[ "$PROFILE" == "dev-shell" ]] && KIND="headless" || KIND="human"
+    case "$PROFILE" in
+      dev-shell | server) KIND="headless" ;;
+      *) KIND="human" ;;
+    esac
   fi
   [[ "$KIND" == human || "$KIND" == headless ]] ||
     die "invalid kind: $KIND (human|headless)"
