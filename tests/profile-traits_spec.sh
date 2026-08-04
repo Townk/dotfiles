@@ -52,3 +52,35 @@ Describe 'profile-traits.tmpl'
     The stderr should include "profile-traits: unknown profile"
   End
 End
+
+# The init template must emit the SOPS_AGE_KEY_FILE [env] block for every
+# headless profile (dev-shell AND server), and for no human profile.
+Describe '.chezmoi.toml.tmpl headless SOPS gate'
+  SRC="$SHELLSPEC_PROJECT_ROOT/home"
+
+  render_init() {
+    # --init gives the template promptString; CHEZMOI_PROFILE must not leak.
+    unset CHEZMOI_PROFILE
+    chezmoi execute-template --init --promptString profile="$1" \
+      < "$SRC/.chezmoi.toml.tmpl"
+  }
+
+  It 'emits SOPS_AGE_KEY_FILE for server'
+    When call render_init server
+    The status should be success
+    The output should include "SOPS_AGE_KEY_FILE"
+    The output should include 'profile = "server"'
+  End
+
+  It 'emits SOPS_AGE_KEY_FILE for dev-shell'
+    When call render_init dev-shell
+    The status should be success
+    The output should include "SOPS_AGE_KEY_FILE"
+  End
+
+  It 'does not emit SOPS_AGE_KEY_FILE for personal'
+    When call render_init personal
+    The status should be success
+    The output should not include "SOPS_AGE_KEY_FILE"
+  End
+End
