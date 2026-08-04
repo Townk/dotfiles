@@ -10,8 +10,7 @@ else
 fi
 
 ## basic commands
-alias cmds="terminal_commands"
-alias commands="terminal_commands"
+alias commands="cmds" # `cmds` itself is a function (functions.d/commands.sh)
 alias cd="super-cd"
 alias cp="cp -i"
 alias diff='diff --color=auto'

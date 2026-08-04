@@ -330,6 +330,15 @@ zsh-defer source ~/.config/zsh/keybindings.sh
 # $ZELLIJ left this silent under tmux, which is the default backend.
 if mux::available && [[ "$(mux::pane_count)" -eq 1 ]]; then
   type motd >/dev/null 2>&1 && motd
+  # chezmoi drift warning — silent when there is nothing to say. `chezmoi
+  # status` costs ~0.9s even with scripts excluded, far too slow for the
+  # startup path, so print the *previous* run's verdict from a stamp and
+  # refresh it in the background for the next new window. Scripts must be
+  # excluded: plain `run_` scripts are pending on every apply by design, so
+  # including them would make this fire forever.
+  [[ -s ${XDG_CACHE_HOME:-$HOME/.cache}/chezmoi-drift ]] \
+    && print -P -- "%F{$C_HEX_YELLOW}↻ chezmoi drift: \$HOME differs from source — run %Bchezmoi diff%b%f"
+  ( chezmoi status --exclude=scripts >| ${XDG_CACHE_HOME:-$HOME/.cache}/chezmoi-drift 2>/dev/null & )
   print -P -- "                                        %F{$C_HEX_OVERLAY0}━━━━━━━━ ❖ ━━━━━━━━%f\n"
   type terminal_commands >/dev/null 2>&1 && terminal_commands
 fi

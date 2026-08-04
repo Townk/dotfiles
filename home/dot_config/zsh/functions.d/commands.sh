@@ -36,45 +36,101 @@ function motd() {
   macchina
 }
 
-# Quick function to print my outstanding additions to my terminal
+# The tool index behind the welcome screen and `cmds`.
 #
-# Here is the command template with no color markers to make it easy to change:
-#
-# 0                                                                                               98
-# --------------------------------------------------------------------------------------------------
-#  Available Commands%f
-#
-#  SYSTEM                         󰇺 PROCESSORS                      UTILITIES
-#   ------                           ----------                       ---------
-#   tldr      - Extra help           jq      - JSON processor         7zz       - 7-Zip cli
-#   btm       - 'top' (bottom)       gron    - JSON to list assign    eva       - Calculator
-#   procs     - Processes 'ps'       xq      - XML processor          fd        - 'find'
-#   duf       - Disk usage           yq      - YAML processor         fend      - Unit conversion
-#   y         - Files (yazi)         pandoc  - Any text processor     gh        - GitHub cli
-#                                                                     git       - Version control
-#  NETWORK                        󰊪 VISUALIZERS                      grex      - RegEx generator
-#   -------                          -----------                      hyperfine - Benchmark
-#   bandwhich - Network use          jless   - JSON tree              rg        - 'grep' (ripgrep)
-#   doggo     - DNS look-up          tokei   - Code metrics           t-rec     - Terminal recorder
-#   gping     - Latency graph        tv      - csv (tidy-viewer)      unrar     - Handle .rar format
-# --------------------------------------------------------------------------------------------------
-function terminal_commands() {
-  print -P -- "$P_BLU Available Commands$P_RES
+# One array per column, and the geometry is why each holds exactly nine entries:
+# the welcome screen budget is 10 lines (a group title plus 9 tools) by 78
+# columns (3 cells of 26 — a 9-wide name, a space, a 16-wide blurb). `bandwhich`
+# and `hyperfine` are what set the name width. A tenth entry in any column, or a
+# blurb past 16 characters, silently overflows that budget — so adding a tool
+# means trading one out, or leaving it to `cmds`, which has no size limit.
+typeset -ga _CMDS_GROUPS=(
+  " SYSTEM & NETWORK"
+  "󰇺 DATA & TEXT"
+  " FILES & MISC"
+)
+typeset -ga _CMDS_COL1=(
+  "btm|'top'"
+  "procs|'ps'"
+  "duf|disk usage"
+  "y|files (yazi)"
+  "tldr|cheat sheets"
+  "bandwhich|net usage"
+  "doggo|DNS lookup"
+  "gping|ping graph"
+  "hyperfine|benchmark"
+)
+typeset -ga _CMDS_COL2=(
+  "jq|JSON"
+  "yq|YAML"
+  "xq|XML"
+  "gron|JSON to lines"
+  "jless|JSON viewer"
+  "pandoc|convert docs"
+  "tv|view CSV"
+  "tokei|code stats"
+  "grex|regex builder"
+)
+typeset -ga _CMDS_COL3=(
+  "fd|'find'"
+  "rg|'grep'"
+  "7zz|7-Zip"
+  "unrar|.rar archives"
+  "eva|calculator"
+  "fend|unit convert"
+  "gh|GitHub"
+  "git|version control"
+  "t-rec|term recorder"
+)
 
-  ${P_YEL} SYSTEM${P_RES}                         ${P_YEL}󰇺 PROCESSORS${P_RES}                     ${P_YEL} UTILITIES${P_RES}
-  ${P_YEL}--------${P_RES}                         ${P_YEL}------------${P_RES}                     ${P_YEL}-----------${P_RES}
-  ${P_BWH}btm${P_RES}       - 'top' (bottom)       ${P_BWH}jq${P_RES}      - JSON processor         ${P_BWH}7zz${P_RES}       - 7-Zip cli
-  ${P_BWH}duf${P_RES}       - Disk usage 'du'      ${P_BWH}pandoc${P_RES}  - Any text processor     ${P_BWH}eva${P_RES}       - Calculator
-  ${P_BWH}y${P_RES}         - Files (yazi)         ${P_BWH}gron${P_RES}    - JSON to list assign    ${P_BWH}fd${P_RES}        - 'find'
-  ${P_BWH}procs${P_RES}     - Processes 'ps'       ${P_BWH}xq${P_RES}      - XML processor          ${P_BWH}fend${P_RES}      - Unit conversion
-  ${P_BWH}tldr${P_RES}      - Extra help           ${P_BWH}yq${P_RES}      - YAML processor         ${P_BWH}gh${P_RES}        - GitHub cli
-                                                                    ${P_BWH}git${P_RES}       - Version control
-  ${P_YEL} NETWORK                        ${P_YEL}󰊪 VISUALIZERS                    ${P_BWH}grex${P_RES}      - RegEx generator
-  ${P_YEL}---------                        ${P_YEL}-------------                    ${P_BWH}hyperfine${P_RES} - Benchmark
-  ${P_BWH}bandwhich${P_RES} - Network use          ${P_BWH}jless${P_RES}   - JSON tree              ${P_BWH}rg${P_RES}        - 'grep' (ripgrep)
-  ${P_BWH}doggo${P_RES}     - DNS look-up          ${P_BWH}tokei${P_RES}   - Code metrics           ${P_BWH}t-rec${P_RES}     - Terminal recorder
-  ${P_BWH}gping${P_RES}     - Latency graph        ${P_BWH}tv${P_RES}      - csv (tidy-viewer)      ${P_BWH}unrar${P_RES}     - Handle .rar format
-  "
+# The static index the welcome screen prints: 10 lines, never past 78 columns.
+function terminal_commands() {
+  local -i row col
+  local line entry name desc title
+
+  # The third column is never padded — trailing blanks would push every line to
+  # a full 78 and wrap a terminal exactly that wide.
+  line=""
+  for col in 1 2 3; do
+    title="${_CMDS_GROUPS[col]}"
+    (( col < 3 )) && title="${(r:26:)title}"
+    line+="${P_YEL}${title}${P_RES}"
+  done
+  print -P -- "$line"
+
+  for (( row = 1; row <= 9; row++ )); do
+    line=""
+    for col in 1 2 3; do
+      entry="${${(P)${:-_CMDS_COL$col}}[row]}"
+      name="${entry%%|*}"
+      desc="${entry#*|}"
+      (( col < 3 )) && desc="${(r:16:)desc}"
+      line+="${P_BWH}${(r:9:)name}${P_RES} ${P_GRA}${desc}${P_RES}"
+    done
+    print -P -- "$line"
+  done
+}
+
+# `cmds` searches the same index instead of printing it. The grid is for
+# glancing; this is for what the grid is worst at — you remember what a tool
+# does but not what it's called, so you search the blurbs. Enter puts the
+# command on the buffer rather than running it, since most of these need args.
+# The tldr page is the preview, falling back to the blurb where there is none
+# (`y` is a function here, not a documented command).
+function cmds() {
+  local -a entries
+  local entry pick
+  for entry in "${_CMDS_COL1[@]}" "${_CMDS_COL2[@]}" "${_CMDS_COL3[@]}"; do
+    entries+=("${(r:9:)${entry%%|*}} ${entry#*|}")
+  done
+
+  # Own the preview: the inherited FZF_DEFAULT_OPTS one runs the `preview`
+  # script, which expects a path. Repeated flags let the last occurrence win.
+  pick=$(print -l -- "${entries[@]}" |
+    fzf --no-sort \
+      --preview 'tldr --color=always {1} 2>/dev/null || echo {2..}') || return 0
+
+  [[ -n "$pick" ]] && print -z -- "${pick%% *}"
 }
 
 # Helper utility to print a big and noticeable banner in the terminal.

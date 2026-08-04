@@ -1,0 +1,35 @@
+# Behavior only. The visual side is left at macchina's defaults on purpose: the
+# built-in big ASCII art is wanted, and no theme file means nothing to keep in
+# sync with the palette.
+#
+# `show` is the line budget. macchina renders `1 + max(15, <info rows>)` lines
+# and the big apple is 15 rows tall, so every row up to the fifteenth is free;
+# the 12 readouts below leave 3 rows of headroom beside the art.
+#
+# Deliberately absent:
+#   Host                 user@hostname — ends up in every screenshot
+#   Resolution           one row per display, so 3 rows here
+#   Distribution         warns on macOS: no distribution to read
+#   LocalIP, Backlight   fail on this machine (see `macchina --doctor`)
+#   GPU                  not implemented on this platform by libmacchina
+#   DesktopEnvironment   always "Aqua" on a Mac
+#   WindowManager        always "Quartz Compositor" on a Mac
+
+# DiskSpace renders nothing unless `disks` is set, even though the readout
+# itself fetches fine (`--doctor` reports no failure for it).
+disks = ["/"]
+
+show = [
+  "Machine",
+  "Kernel",
+  "OperatingSystem",
+  "Packages",
+  "Shell",
+  "Terminal",
+  "Uptime",
+  "Processor",
+  "ProcessorLoad",
+  "Memory",
+  "Battery",
+  "DiskSpace",
+]
