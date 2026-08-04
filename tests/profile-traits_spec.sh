@@ -182,3 +182,23 @@ Describe 'template gates for the server profile'
     The output should not include "mlx-vlm"
   End
 End
+
+# The server's secret set, straight from the committed manifest with the same
+# filter sec::manifest_names_for_profile uses.
+Describe 'secrets.yaml server requiredFor'
+  MANIFEST="$SHELLSPEC_PROJECT_ROOT/home/.chezmoidata/secrets.yaml"
+
+  server_secrets() {
+    profile=server yq -r \
+      '.secrets[] | select(.requiredFor[] == strenv(profile)) | .name' \
+      "$MANIFEST" | sort
+  }
+
+  It 'grants server exactly MISE_GITHUB_TOKEN, CONTEXT7_API_KEY, GH_TOKEN'
+    When call server_secrets
+    The status should be success
+    The output should equal "CONTEXT7_API_KEY
+GH_TOKEN
+MISE_GITHUB_TOKEN"
+  End
+End
