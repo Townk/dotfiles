@@ -1,0 +1,39 @@
+{{- /*
+  profile-traits — the single source of truth mapping a profile to its
+  traits. Usage (any file template, run-script, or .chezmoiignore):
+
+      {{`{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}`}}
+      {{`{{- if $traits.headless }}…{{ end }}`}}
+
+  Traits:
+    headless   no interactive human desktop session. Gates GUI-app configs
+               (WezTerm/Ghostty/espanso/Hammerspoon), tab-edit, .desktop
+               registration, the TM scrub UX, and the human-machine pi
+               home. A JetKVM console or a kiosk/status side-screen does
+               NOT flip this — it is about a human driving a desktop
+               session, not about attached displays.
+    ephemeral  disposable work sandbox (dev-shell): prunable state, snap
+               ecosystem, the 90-prune script.
+
+  Work tooling (Cursor, acli skills) is deliberately NOT a trait here:
+  those gates stay as positive `eq .profile "work"` checks, which already
+  fail closed.
+
+  Unknown profiles FAIL the render: a typo'd or future profile must be
+  added here deliberately, picking each trait. This is the fail-closed
+  guarantee that replaced the old `ne .profile "dev-shell"`-style gates.
+
+  The init template (.chezmoi.toml.tmpl) keeps a local two-line headless
+  derivation instead of including this file — at init time the data this
+  helper is fed from does not exist yet. Keep the two in sync.
+*/ -}}
+{{- $p := .profile -}}
+{{- if eq $p "personal" "work" -}}
+{"headless": false, "ephemeral": false}
+{{- else if eq $p "dev-shell" -}}
+{"headless": true, "ephemeral": true}
+{{- else if eq $p "server" -}}
+{"headless": true, "ephemeral": false}
+{{- else -}}
+{{- fail (printf "profile-traits: unknown profile %q" $p) -}}
+{{- end -}}
