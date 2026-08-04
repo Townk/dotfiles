@@ -26,15 +26,16 @@
   tool in without templating the main config (same pattern as
   cmake.toml.tmpl / dev-shell.toml.tmpl).
 
-  Scope: every profile except dev-shell — the gate is "could someone SIT
-  at this machine", not "which OS consumes it today". macOS sit-at machines
-  (work + personal) are the live consumers; a future Linux sit-at (Phase 7)
-  gets rclone mount natively via fuse3, no kext saga, so pre-installing
-  costs one static binary and makes that phase a runtime-gate change only.
-  The dev-shell is the one structurally driven-only box (it is what you ssh
-  INTO; ephemeral, bootstrap-weight-sensitive), so it alone opts out. On
-  macOS, mount support additionally needs macFUSE; a machine without it
-  just degrades to the lazy rsync/Ctrl-Y flow (clipboard-mount fails soft).
+  Scope: every profile except headless (dev-shell + server) — the gate is
+  "could someone SIT at this machine", not "which OS consumes it today".
+  macOS sit-at machines (work + personal) are the live consumers; a future
+  Linux sit-at (Phase 7) gets rclone mount natively via fuse3, no kext saga,
+  so pre-installing costs one static binary and makes that phase a
+  runtime-gate change only. Headless hosts are structurally driven-only
+  (dev-shell is what you ssh INTO; ephemeral, bootstrap-weight-sensitive;
+  server has no interactive user), so they opt out. On macOS, mount support
+  additionally needs macFUSE; a machine without it just degrades to the lazy
+  rsync/Ctrl-Y flow (clipboard-mount fails soft).
 */ -}}
 {{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 {{- if not $traits.headless }}
