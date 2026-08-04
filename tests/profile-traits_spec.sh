@@ -45,6 +45,32 @@ Describe 'profile-traits.tmpl'
     The output should include "\"headless\": $2"
     The output should include "\"ephemeral\": $3"
   End
+End
+
+Describe 'profile-traits.tmpl fail-closed'
+  SRC="$SHELLSPEC_PROJECT_ROOT/home"
+
+  setup() {
+    CZTMP="$(mktemp -d "$SHELLSPEC_TMPBASE/profile-traits.XXXXXX")"
+    mkdir -p "$CZTMP/dest"
+    {
+      printf '[data]\n'
+      printf '    profile = "personal"\n'
+      printf '    secretsSlot = ""\n'
+      printf '    [data.pi]\n'
+      printf '        [data.pi.devExtensions]\n'
+      printf '            pi-cockpit = ""\n'
+      printf '            pi-plannotator-bridge = ""\n'
+    } > "$CZTMP/chezmoi.toml"
+    unset CHEZMOI_PROFILE
+  }
+  BeforeEach 'setup'
+
+  traits_for() {
+    printf '{{ includeTemplate "profile-traits.tmpl" (dict "profile" "%s") }}' "$1" |
+      chezmoi --config "$CZTMP/chezmoi.toml" --source "$SRC" \
+        --destination "$CZTMP/dest" execute-template
+  }
 
   It 'fails the render on an unknown profile (fail-closed)'
     When call traits_for laptop
@@ -98,7 +124,7 @@ Describe '.chezmoiignore profile gating'
   ignored_for() {
     "$SHELLSPEC_PROJECT_ROOT/tests/render-matrix.sh" \
       --source "$SHELLSPEC_PROJECT_ROOT/home" --profile "$1" --out "$MTMP/$1" \
-      >/dev/null
+      >/dev/null || return $?
     cat "$MTMP/$1/ignored.txt"
   }
 
