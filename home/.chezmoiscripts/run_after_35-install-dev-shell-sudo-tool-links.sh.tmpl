@@ -1,12 +1,13 @@
 #!/bin/sh
 set -eu
+{{ $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 {{/*
   On the Linux dev shell, a couple of mise-managed network tools need root
   privileges. Running their mise shims under sudo is wrong: the shim executes
   mise as root, which uses root's trust/config/install context. Instead, expose
   root-visible links to the actual installed binaries.
 */}}
-{{ if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
+{{ if and (eq .chezmoi.os "linux") $traits.headless }}
 install_sudo_link() {
   name="$1"
   backend_dir="$2"

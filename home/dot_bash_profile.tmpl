@@ -1,4 +1,4 @@
-{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+{{- if eq .chezmoi.os "linux" -}}
 # ~/.bash_profile - let the POSIX profile decide whether to hand SSH to zsh.
 [ -r "$HOME/.profile" ] && . "$HOME/.profile"
 {{- end }}

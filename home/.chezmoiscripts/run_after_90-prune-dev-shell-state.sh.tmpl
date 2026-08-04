@@ -1,4 +1,5 @@
-{{- if eq .profile "dev-shell" -}}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- if $traits.ephemeral -}}
 #!/bin/sh
 set -eu
 

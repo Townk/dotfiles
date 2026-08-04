@@ -1,5 +1,5 @@
 {{- /*
-  dev-shell tool provisioning (Linux only).
+  headless-Linux tool provisioning (dev-shell + server).
 
   Owns the Linux dev-shell equivalent of
   run_once_after_10-setup-bootstrap-tools:
@@ -16,9 +16,10 @@
   never abort the run (and thus block later chezmoi scripts). Failures
   are collected and reported at the end.
 
-  Only runs on linux + dev-shell.
+  Only runs on headless Linux.
 */ -}}
-{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- if and (eq .chezmoi.os "linux") $traits.headless -}}
 #!/bin/bash
 set -uo pipefail
 

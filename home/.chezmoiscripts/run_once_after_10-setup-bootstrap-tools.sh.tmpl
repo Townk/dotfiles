@@ -1,6 +1,7 @@
 #!/bin/bash
 set -eufo pipefail
-{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- if and (eq .chezmoi.os "linux") $traits.headless }}
 
 # The Linux dev-shell profile provisions tools via
 # run_once_after_15-setup-dev-shell-tools (mise + apt). The brew-based

@@ -10,7 +10,8 @@ set -eu
   only fires again when ITS OWN template content changes — which it wouldn't,
   even though /etc had been wiped underneath it.
 */ -}}
-{{ if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{ if and (eq .chezmoi.os "linux") $traits.headless }}
 # Re-run when the unit or its script changes:
 # gpg-forward-socketdir.service: {{ include "dot_config/systemd/user/gpg-forward-socketdir.service" | sha256sum }}
 # gpg-agent-forward-provision: {{ include "dot_local/libexec/executable_gpg-agent-forward-provision" | sha256sum }}

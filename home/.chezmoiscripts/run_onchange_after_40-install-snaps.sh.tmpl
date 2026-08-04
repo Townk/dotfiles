@@ -9,7 +9,8 @@
 
   Linux + dev-shell only.
 */ -}}
-{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- if and (eq .chezmoi.os "linux") $traits.ephemeral -}}
 #!/bin/bash
 # Snapfile hash: {{ include "dot_config/packages/Snapfile" | sha256sum }}
 # (changing the Snapfile changes this line, so chezmoi re-runs the script)

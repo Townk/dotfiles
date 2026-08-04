@@ -1,4 +1,4 @@
-{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+{{- if eq .chezmoi.os "linux" -}}
 # ~/.profile - first-login bridge for headless dev shells.
 #
 # Some hosted SSH shells can start the initial session in the provider default

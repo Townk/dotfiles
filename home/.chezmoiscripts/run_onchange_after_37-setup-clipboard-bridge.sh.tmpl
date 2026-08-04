@@ -7,7 +7,8 @@ set -eu
   symlink live under ~/.config/systemd/user (homedir persists), so the user
   manager rebinds 127.0.0.1:2489 at first login with no chezmoi run.
 */ -}}
-{{ if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{ if and (eq .chezmoi.os "linux") $traits.headless }}
 # Re-run when the units or the dispatcher stack changes:
 # clipboard-bridge.socket: {{ include "dot_config/systemd/user/clipboard-bridge.socket" | sha256sum }}
 # clipboard-bridge@.service: {{ include "dot_config/systemd/user/clipboard-bridge@.service" | sha256sum }}

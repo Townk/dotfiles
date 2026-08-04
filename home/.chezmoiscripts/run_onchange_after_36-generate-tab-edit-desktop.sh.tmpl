@@ -1,4 +1,5 @@
-{{- $guiLinux := and (eq .chezmoi.os "linux") (ne .profile "dev-shell") -}}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- $guiLinux := and (eq .chezmoi.os "linux") (not $traits.headless) -}}
 #!/bin/sh
 set -eu
 

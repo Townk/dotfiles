@@ -1,4 +1,4 @@
-{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
+{{- if eq .chezmoi.os "linux" -}}
 # ~/.bashrc - env + backup bridge for SSH shells. Bash reads this file for
 # interactive SSH shells AND (via its sshd stdin detection) for non-interactive
 # `ssh host 'cmd'` invocations.
