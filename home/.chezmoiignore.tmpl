@@ -6,7 +6,9 @@
       new WezTerm/Zellij tab; OS-specific bits live behind the platform::
       module). Only the headless dev-shell and other non-GUI hosts skip it.
 */ -}}
-{{- $guiLinux := and (eq .chezmoi.os "linux") (ne .profile "dev-shell") -}}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- $guiLinux := and (eq .chezmoi.os "linux") (not $traits.headless) -}}
+{{- $headlessLinux := and (eq .chezmoi.os "linux") $traits.headless -}}
 .config/nvim/lazy-lock.json
 {{/* bin/README.md documents the scripts in-repo; it must never deploy to
      ~/.local/bin (it's reference material, not a runtime artifact). */}}
@@ -76,15 +78,17 @@ Library/**
 {{ if not $guiLinux -}}
 .chezmoiscripts/*-generate-tab-edit-desktop.sh
 {{- end }}
-{{ if not (and (eq .chezmoi.os "linux") (eq .profile "dev-shell")) -}}
-{{/* Linux dev-shell artifacts. Keep these off Macs and other profiles. */}}
+{{ if ne .chezmoi.os "linux" -}}
+{{/* Linux login-shell shims. Every Linux host gets them (bash is the
+     distro default shell until zsh takes over); keep them off Macs. */}}
 .bash_profile
 .bashrc
 .profile
-.config/mise/conf.d/dev-shell.toml
-.config/packages/Snapfile
-{{/* gpg-agent SSH forwarding only applies to the headless dev shell (the box
-     keys are forwarded TO); the unit + its scripts are useless elsewhere. */}}
+{{- end }}
+{{ if not $headlessLinux -}}
+{{/* Headless-Linux stack (dev-shell + server): SSH-ergonomics units and the
+     mise+apt provisioning path. gpg-agent is forwarded TO these boxes over
+     SSH; the clipboard bridge store serves the laptop→remote mirror. */}}
 .config/systemd/user/gpg-forward-socketdir.service
 .config/systemd/user/clipboard-bridge.socket
 .config/systemd/user/clipboard-bridge@.service
@@ -95,6 +99,12 @@ Library/**
 .chezmoiscripts/*-setup-dev-shell-tools.sh
 .chezmoiscripts/*-setup-clipboard-bridge.sh
 .chezmoiscripts/*-install-dev-shell-sudo-tool-links.sh
+{{- end }}
+{{ if not (and (eq .chezmoi.os "linux") $traits.ephemeral) -}}
+{{/* Ephemeral (dev-shell) only: the snap ecosystem, the mise 403-workaround
+     conf, and the state prune that compensates ignore-vs-remove gaps. */}}
+.config/mise/conf.d/dev-shell.toml
+.config/packages/Snapfile
 .chezmoiscripts/*-install-snaps.sh
 .chezmoiscripts/*-prune-dev-shell-state.sh
 {{/* snap only exists on the dev-shell; omit the worker elsewhere so the
@@ -109,8 +119,8 @@ Library/**
 .local/bin/system-service-systemd
 .local/share/zsh/site-functions/_system-service-systemd
 {{- end }}
-{{ if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") -}}
-{{/* Homebrew is not available in the dev-shell profile. Omit the worker so
+{{ if eq .chezmoi.os "linux" -}}
+{{/* Homebrew is macOS-only in this system (no linuxbrew). Omit the worker so
      system-package discovers only ecosystems this host can run. */}}
 .local/bin/system-package-brew
 {{/* The brew manifests are equally meaningless without brew — the Snapfile's
@@ -118,9 +128,9 @@ Library/**
 .config/packages/Brewfile
 .config/packages/Brewfile.bootstrap
 {{- end }}
-{{ if eq .profile "dev-shell" -}}
-{{/* Terminal Time Machine (system-backup silo) is not provisioned for the
-     dev shell: BACKUP_REPO_PASSPHRASE is requiredFor personal+work only, so
+{{ if $traits.headless -}}
+{{/* Terminal Time Machine (system-backup silo) is not provisioned for
+     headless profiles: BACKUP_REPO_PASSPHRASE is requiredFor personal+work only, so
      the stack can never run there. The launchd agents are darwin-gated in
      services.toml already; this hides the tools, libs, completions, config,
      and the tm-timeline build. Consumers are guarded: tm() probes
@@ -205,8 +215,8 @@ Library/**
 .pi/agent/git
 .pi/agent/npm
 .pi/agent/sessions
-{{ if eq .profile "dev-shell" -}}
-{{/* The local/32K Pi home is for human machines; headless dev shells only
+{{ if $traits.headless -}}
+{{/* The local/32K Pi home is for human machines; headless hosts only
      keep the primary ~/.pi/agent home. */}}
 .pi/agent-local
 .pi/agent-local/**

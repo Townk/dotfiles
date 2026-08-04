@@ -84,3 +84,55 @@ Describe '.chezmoi.toml.tmpl headless SOPS gate'
     The output should not include "SOPS_AGE_KEY_FILE"
   End
 End
+
+# Semantic fail-closed assertions on the ignore list per profile. Renders go
+# through tests/render-matrix.sh (executed, never sourced). OS-dependent
+# expectations are gated on the host OS: the suite runs on both the Macs and
+# the Linux dev-shell, so both branches get exercised across machines.
+Describe '.chezmoiignore profile gating'
+  setup_matrix() {
+    MTMP="$(mktemp -d "$SHELLSPEC_TMPBASE/render-matrix.XXXXXX")"
+  }
+  BeforeEach 'setup_matrix'
+
+  ignored_for() {
+    "$SHELLSPEC_PROJECT_ROOT/tests/render-matrix.sh" \
+      --source "$SHELLSPEC_PROJECT_ROOT/home" --profile "$1" --out "$MTMP/$1" \
+      >/dev/null
+    cat "$MTMP/$1/ignored.txt"
+  }
+
+  It 'server: work tooling, TM stack, GUI configs, and the local pi home stay off'
+    When call ignored_for server
+    The status should be success
+    The output should include ".cursor"
+    The output should include ".local/bin/system-backup"
+    The output should include ".config/wezterm"
+    The output should include ".pi/agent-local"
+  End
+
+  It 'server on Linux: not GUI Linux, no brew, no snap, but keeps systemd worker and bash shims'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call ignored_for server
+    The status should be success
+    The output should include ".local/libexec/tab-edit"
+    The output should include ".local/bin/system-package-brew"
+    The output should include ".local/bin/system-package-snap"
+    The output should not include ".local/bin/system-service-systemd"
+    The output should not include ".bashrc"
+  End
+
+  It 'dev-shell: still ephemeral (snap stays, prune stays)'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call ignored_for dev-shell
+    The status should be success
+    The output should not include ".local/bin/system-package-snap"
+  End
+
+  It 'personal: unchanged human-Mac posture (cursor off, backup stack on)'
+    When call ignored_for personal
+    The status should be success
+    The output should include ".cursor"
+    The output should not include ".local/bin/system-backup"
+  End
+End
