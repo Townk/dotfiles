@@ -68,8 +68,8 @@ a human; then runs `chezmoi apply`.
 
 ### Profile
 
-This repo uses a single `profile` data value (`personal`, `work`, or
-`dev-shell`) to gate profile-specific entries. The `.chezmoi.toml.tmpl` init
+This repo uses a single `profile` data value (`personal`, `work`,
+`dev-shell`, or `server`) to gate profile-specific entries. The `.chezmoi.toml.tmpl` init
 template reads the `CHEZMOI_PROFILE` env var; `.setup.sh` sets it based on the
 `--work` / `--personal` flag for Macs. When no flag is given and a TTY is
 available, chezmoi prompts. When no flag is given and there's no TTY (e.g.
@@ -93,6 +93,8 @@ then run `chezmoi apply` on the Linux host. The dev-shell bootstrap script
 installs the mise toolbox, apt libraries, Rust nightly, creates
 `XDG_RUNTIME_DIR`, then calls the Homebrew-less `system-update` path to sync
 package manifests and Neovim plugins.
+
+The `server` profile is for headless, long-lived Linux hosts (hypervisor/NAS class machines). Like `dev-shell` it is onboarded by an operator via `system-onboard --profile server` (kind defaults to `headless`), never through `.setup.sh`. Profile→trait gating (headless/ephemeral) lives in `home/.chezmoitemplates/profile-traits.tmpl`, which fails the render on any unknown profile.
 
 End to end, the script:
 

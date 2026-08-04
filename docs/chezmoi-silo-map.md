@@ -33,12 +33,12 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
    path. An agent changing a library MUST run the relevant spec file(s).
 5. **chezmoi rendering**: most config files are `*.tmpl` (chezmoi templates
    with `{{ }}`). An agent editing config must understand the template data
-   (`os`, `profile` personal/work/dev-shell, `chezmoi.*`) — see
+   (`os`, `profile` personal/work/dev-shell/server, `chezmoi.*`) — see
    `.chezmoidata/` and `.chezmoiignore.tmpl`. Don't strip template guards.
 6. **macOS vs Linux vs dev-shell**: behavior is gated by `os`/`profile` in
    templates and `otherword` guards in scripts. An agent must preserve these
    guards — the dev-shell profile is headless and `.chezmoiignore`s most GUI
-   config (`hammerspoon`, `wezterm`, `ghostty`).
+   config (`hammerspoon`, `wezterm`, `ghostty`); trait gates (headless/ephemeral) resolve through `.chezmoitemplates/profile-traits.tmpl`, which fails closed on unknown profiles.
 7. **Custom-build outputs are not in the repo.** Built artifacts
    (`symbols.db`, the patched font, the custom `zsh` binary) land under
    `$XDG_DATA_HOME/fonts/nerd-font/`, `~/.local/opt/zsh`, etc. The repo holds
@@ -442,7 +442,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **Numeric prefix ordering** (`run_*_after_NN-…`): chezmoi runs `after` scripts in alphabetical order, so the prefix fixes execution order. Current map (don't renumber without tracing deps): `05` op-daemon reaper (secrets), `08` ssh config.d Include (chezmoi; mirrors onboard's `reconcile_ssh`), `10` bootstrap-tools, `15` dev-shell tools, `20` system-settings, `25` GPG key (secrets), `30` env LaunchAgent reload, `34` sudo touchid, `35` open-in-neovim app (terminal-mux/neovim) + dev-shell sudo links, `36` tab-edit desktop (terminal-mux/utils), `40` snaps (system), `45` zellij plugin perms (terminal-mux), `50` custom zsh build (custom-builds), `60` symbols-db mark (custom-builds), `70` symbols-nerd-font mark (custom-builds), `80` symbols font/DB prompt (custom-builds), `90` dev-shell prune.
 - **Hash-baking**: `run_onchange` scripts bake a SHA256 of their inputs (builder, donor glyphs, custom-SVG `code` pins, manifest content) into rendered comments so chezmoi re-runs on change. Editing a builder (custom-builds) without updating the baked hash logic breaks the trigger.
 - **Open-in-NeoVim app generator** (`run_onchange_after_35`): builds the `.app` via `osacompile`, stamps `neovim-hicontrast.icns`, registers `CFBundleDocumentTypes`, and **queries nvim's filetype registry headlessly** (`vim.filetype.inspect().extension` + `mdls`) — this is a hard dependency on neovim's filetype map.
-- **`.chezmoiignore.tmpl`** — the profile/os gating that makes dev-shell headless (excludes `hammerspoon`/`wezterm`/`ghostty`/`espanso` etc. on dev-shell).
+- **`.chezmoiignore.tmpl`** — the profile/os gating that makes dev-shell and server headless (via `profile-traits.tmpl`).
 
 **Consumes from:** every feature silo (the run-scripts trigger their builds/imports/permissions).
 
@@ -494,7 +494,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **agent-local ↔ agent symlink sharing**: `agent-local/symlink_{extensions,lsp.json,skills,themes}.tmpl` → `~/.pi/agent/{extensions,lsp.json,skills,themes}` and `agent-local/agents/symlink_Librarian.md.tmpl` → `~/.pi/agent/agents/Librarian.md`. A change to a shared resource in `agent/` propagates to `agent-local/` (and `pi-local`). Do not duplicate a shared resource into `agent-local/` as a real file (would shadow the symlink).
 - **`modify_settings.json.tmpl` declarative-keys merge**: the `modify_` script declaratively owns STRUCTURAL keys of `~/.pi/agent/settings.json` (theme, `extensions`/`skills`/`packages` lists, defaultProvider/model, thinking by profile, `npmCommand` via mise, observational-memory). Pi rewrites settings.json at runtime. The merge policy in `pi-settings-merge.tmpl`: FORCE (`extensions`,`skills`,`packages`,`npmCommand`,`observational-memory` — always from `$desired`), SEED (absent keys written once), KEEP (Pi-owned runtime toggles). Byte-identical result → emit ORIGINAL BYTES so chezmoi reports no diff. Do not move a key between FORCE and KEEP without understanding the consequence.
 - **`.pi.devExtensions` dev-extension symlink resolution**: `agent/extensions/symlink_pi-{cockpit,plannotator-bridge}.tmpl` resolve from `.pi.devExtensions` (declared in the `[data.pi]` block of `.chezmoi.toml.tmpl`, pi-owned). Dev machine → value is a path → symlink to live working tree. Consumer machine → value empty → symlink suppressed by the pi-owned `.chezmoiignore.tmpl` block and the pi-owned `run_once_after_10` block runs `pi install git:…` instead. Adding/removing a dev extension touches FOUR places, all pi-owned: the `.chezmoi.toml.tmpl` data block, the `.chezmoiignore.tmpl` suppression, the `run_once_after_10` install block, and a `symlink_*.tmpl` under `dot_pi/agent/extensions/`. (Coordinate with chezmoi only for an ordering number if a brand-new run-script file is added.)
-- **Profile gating**: `modify_settings.json.tmpl`/`private_models.json.tmpl` are profile-gated (`work`/`dev-shell`/personal) — preserve the guards.
+- **Profile gating**: `modify_settings.json.tmpl`/`private_models.json.tmpl` are profile-gated (`work`/`dev-shell`/`server`/`personal`) — preserve the guards.
 - **`packages`/`extensions`/`skills` array pinning**: FORCE keys; changing them changes what pi loads on every machine.
 
 **Consumes from:** ai-harnesses (`ai-assist-pi`/`ai-commit-pi` wrappers — read-only consumers), shell (the `pi-local` function — points at pi's config), chezmoi (the *machinery* of the shared files the pi blocks live in — pi owns the pi content, chezmoi owns the mechanics), external pi CLI + `pi-cockpit`/`pi-plannotator-bridge` repos.
