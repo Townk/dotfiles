@@ -1,3 +1,7 @@
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- /* mlx-vlm feeds the mlx-gemma/pi-local stack, a human-machine feature —
+       headless hosts skip it (fail-closed trait gate, not a literal-profile
+       check). */ -}}
 # Uvfile — Python tools managed via `uv tool install`.
 # Synced by `system-package uv sync`. Strict cleanup: removing a
 # line uninstalls the tool on next sync.
@@ -15,7 +19,7 @@
 {{ if eq .profile "personal" -}}
 qmk-skim
 {{- end }}
-{{ if and (eq .chezmoi.os "darwin") (ne .profile "dev-shell") -}}
+{{ if and (eq .chezmoi.os "darwin") (not $traits.headless) -}}
 # mlx-vlm — Apple's MLX multimodal inference server: the sanctioned, fastest
 # path on Apple Silicon. The [mlx-gemma] launchd user agent (see services.toml)
 # runs mlx_vlm.server directly on :8799. Python 3.13 has full mlx wheel
