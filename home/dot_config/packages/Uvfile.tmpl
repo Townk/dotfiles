@@ -15,7 +15,7 @@
 {{ if eq .profile "personal" -}}
 qmk-skim
 {{- end }}
-{{ if ne .profile "dev-shell" -}}
+{{ if and (eq .chezmoi.os "darwin") (ne .profile "dev-shell") -}}
 # mlx-vlm — Apple's MLX multimodal inference server: the sanctioned, fastest
 # path on Apple Silicon. The [mlx-gemma] launchd user agent (see services.toml)
 # runs mlx_vlm.server directly on :8799. Python 3.13 has full mlx wheel

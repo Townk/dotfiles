@@ -36,7 +36,8 @@
   macOS, mount support additionally needs macFUSE; a machine without it
   just degrades to the lazy rsync/Ctrl-Y flow (clipboard-mount fails soft).
 */ -}}
-{{- if ne .profile "dev-shell" }}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- if not $traits.headless }}
 [tools]
 rclone = "latest"
 {{- else }}

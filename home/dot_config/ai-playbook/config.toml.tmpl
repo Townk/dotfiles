@@ -8,12 +8,12 @@
   through to the per-harness defaults. Edit THIS template, not the rendered
   file, then `chezmoi apply`.
 
-  Harness by profile:
-    - work            -> cursor  (the company-sanctioned CLI; FULL tier)
-    - personal / else -> claude  (the default harness)
+  Harness per profile — an explicit map so a new profile picks
+  deliberately (default claude). work + dev-shell drive cursor;
+  personal + server use claude (cursor never deploys there).
 */ -}}
 {{- $harness := "claude" -}}
-{{- if ne .profile "personal" }}{{ $harness = "cursor" }}{{ end -}}
+{{- if or (eq .profile "work") (eq .profile "dev-shell") }}{{ $harness = "cursor" }}{{ end -}}
 {{- $mp := printf "%s/.config/mux/scripts/mux-playbook" .chezmoi.homeDir -}}
 [mux]
 # ai-playbook's mux is opt-in by config and ships ONE preset — zellij, hardcoded
@@ -38,7 +38,7 @@ type-into-pane = "{{ $mp }} type --pane-id {pane} {text}"
 [agent]
 # Profile-selected: {{ .profile }} -> {{ $harness }}.
 harness = "{{ $harness }}"
-{{- if ne .profile "personal" }}
+{{- if eq $harness "cursor" }}
 # cursor's model catalog is subscription-scoped (`cursor-agent --list-models`).
 # Escalation on a capable, fast-served Opus; triage on a cheap flash model
 # (triage fires on every assist, so keep it cheap).

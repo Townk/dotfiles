@@ -136,3 +136,49 @@ Describe '.chezmoiignore profile gating'
     The output should not include ".local/bin/system-backup"
   End
 End
+
+Describe 'template gates for the server profile'
+  setup_matrix() {
+    MTMP="$(mktemp -d "$SHELLSPEC_TMPBASE/render-matrix.XXXXXX")"
+  }
+  BeforeEach 'setup_matrix'
+
+  rendered() {  # rendered <profile> <flattened-template-name>
+    "$SHELLSPEC_PROJECT_ROOT/tests/render-matrix.sh" \
+      --source "$SHELLSPEC_PROJECT_ROOT/home" --profile "$1" --out "$MTMP/$1" \
+      >/dev/null || return $?
+    cat "$MTMP/$1/rendered/$2"
+  }
+
+  It 'server: ai-playbook drives the claude harness (cursor never deploys there)'
+    When call rendered server dot_config__ai-playbook__config.toml.tmpl
+    The status should be success
+    The output should include 'harness = "claude"'
+  End
+
+  It 'work: ai-playbook still drives cursor'
+    When call rendered work dot_config__ai-playbook__config.toml.tmpl
+    The status should be success
+    The output should include 'harness = "cursor"'
+  End
+
+  It 'server: gpg.conf carries the forwarded-agent posture'
+    When call rendered server dot_config__private_gnupg__private_gpg.conf.tmpl
+    The status should be success
+    The output should include "no-autostart"
+  End
+
+  It 'server: pi settings omit the GUI extension and cursor provider'
+    When call rendered server dot_pi__agent__modify_settings.json.tmpl
+    The status should be success
+    The output should not include "glimpseui"
+    The output should not include "pi-cursor-provider"
+  End
+
+  It 'Linux: Uvfile never ships mlx-vlm (Apple-Silicon-only)'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call rendered server dot_config__packages__Uvfile.tmpl
+    The status should be success
+    The output should not include "mlx-vlm"
+  End
+End

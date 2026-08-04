@@ -1,3 +1,4 @@
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 #!/bin/sh
 # chezmoi modify_ script — ~/.pi/agent/settings.json (cloud home).
 # Pi rewrites settings.json at runtime (model/theme/thinking toggles, changelog
@@ -50,7 +51,7 @@ desired=$(cat <<'__PI_DESIRED__'
     "npm:pi-web-access",
     "npm:pi-cymbal",
     "npm:pi-lsp",
-{{- if ne .profile "dev-shell" }}
+{{- if not $traits.headless }}
     "npm:glimpseui",
 {{- end }}
     "npm:@tintinweb/pi-subagents",
