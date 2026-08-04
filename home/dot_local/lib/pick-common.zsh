@@ -98,6 +98,9 @@
 #   #     emission; default sink injects into the zellij pane / clipboard)
 #   #   --header TEXT, --hints TEXT, --query TEXT, --height N, --margin SPEC,
 #   #   --padding SPEC, --input-border LABEL, --no-border, --no-hints
+#   #   --preview CMD, --preview-window SPEC (ctrl-space toggles the preview
+#   #     whenever --preview is set and --multi is not, so a `…,hidden` window
+#   #     can be revealed on demand)
 #   #   --selector, --selector-shortcuts, --selector-nav,
 #   #   --selector-hints TEXT, --search-hints TEXT,
 #   #   --selector-search-key KEY, --selector-back-key KEY
@@ -610,6 +613,12 @@ pick::build_fzf_args() {
   # Additive: callers that don't pass --preview are unaffected.
   if [[ -n "${pick_ui[preview]:-}" ]]; then
     fzf_args+=( "--preview=${pick_ui[preview]}" )
+    # ctrl-space toggles the preview, matching what FZF_DEFAULT_OPTS binds
+    # everywhere OUTSIDE the engine — which pickers never see, since the run
+    # clears that variable. Without this a `--preview-window=…,hidden` picker
+    # would have no key to reveal its preview at all. Skipped under --multi,
+    # where ctrl-space is already the select-marker toggle.
+    (( ${pick_ui[multi]:-0} )) || fzf_args+=( --bind 'ctrl-space:toggle-preview' )
   fi
   # --preview-window SPEC: fzf preview-window geometry (e.g. "right:40%").
   # Additive; callers that don't pass it get fzf's default.
