@@ -1335,14 +1335,16 @@ clip::markdown_url() {
 # escape the "/" separators) -- mirrors path_to_file_url in
 # clipboard-history.lua.
 #
-# NOTE: the parameter is named "fpath", not "path" -- zsh's lowercase $path
-# is a special array tied to $PATH; a plain-string `local path=...` shadows
-# it and silently breaks command lookup (sqlite3 et al.) for the rest of
-# this function's scope. Confirmed empirically. Same reasoning in
-# clip::markdown_path_link below.
+# NOTE: the parameter is named "srcpath" -- NEITHER "path" NOR "fpath". Both
+# of those are special arrays tied to an environment value, and `local` on
+# either silently rebinds it for the rest of this function's scope: `local
+# path=...` empties $PATH and breaks command lookup (sqlite3 et al.), and
+# `local fpath=...` empties the autoload search path and makes ${#fpath} the
+# array element count rather than the string length. Confirmed empirically.
+# Same reasoning in clip::markdown_path_link below and in clip::shorten_path.
 clip::path_to_file_url() {
-  local fpath=$1 seg encoded=""
-  for seg in "${(s:/:)fpath}"; do
+  local srcpath=$1 seg encoded=""
+  for seg in "${(s:/:)srcpath}"; do
     [[ -z "$seg" ]] && continue
     encoded+="/$(jq -rn --arg s "$seg" '$s|@uri')"
   done
@@ -1354,10 +1356,10 @@ clip::path_to_file_url() {
 # "x-resolved-path" UTI (clipboard-history.lua resolves macOS's opaque
 # file-reference URLs there; nothing to re-resolve here).
 clip::markdown_path_link() {
-  local id=$1 fpath
-  fpath="$(sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "SELECT blob FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';")"
-  if [[ -n "$fpath" ]]; then
-    printf '[%s](%s)' "${fpath##*/}" "$(clip::path_to_file_url "$fpath")"
+  local id=$1 srcpath
+  srcpath="$(sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "SELECT blob FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';")"
+  if [[ -n "$srcpath" ]]; then
+    printf '[%s](%s)' "${srcpath##*/}" "$(clip::path_to_file_url "$srcpath")"
   else
     clip::text_by_id "$id"
   fi
@@ -1573,13 +1575,12 @@ clip::shorten_path() {
   # doesn't error, it just silently makes ${#fpath} return the ARRAY
   # element count (1) instead of the string length, which is exactly the
   # bug this function exists to avoid for the path it's given (confirmed
-  # empirically; clip::path_to_file_url elsewhere in this file gets away
-  # with "fpath" only because it never takes ${#fpath}). Every other local
-  # here is `local` for the same reason one level down: undeclared
-  # assignments inside a zsh function walk UP the call stack to the
-  # nearest existing scope of that name (or global) -- this runs nested
-  # inside clip::filter_file_rows/clip::render_file_content, so an
-  # undeclared `width` etc. here would clobber theirs.
+  # empirically). Every other local here is `local` for the same reason
+  # one level down: undeclared assignments inside a zsh function walk UP
+  # the call stack to the nearest existing scope of that name (or global)
+  # -- this runs nested inside clip::filter_file_rows and
+  # clip::render_file_content, so an undeclared `width` etc. here would
+  # clobber theirs.
   local LC_ALL= LC_CTYPE=en_US.UTF-8
   local srcpath=$1 width=$2 base kept rest seg cand prevrest off tail_len
   [ "$width" -lt 1 ] && width=1

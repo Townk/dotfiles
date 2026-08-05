@@ -46,9 +46,12 @@ if [[ -z "$APB" ]]; then
 fi
 
 emit_rows() {
-  local US=$'\x1f' display slug path
+  # "row_path", not "path" -- zsh's lowercase $path is a special array tied to
+  # $PATH, so `local path` empties PATH for this scope AND for everything it
+  # execs (here, $APB and anything it shells out to). Confirmed empirically.
+  local US=$'\x1f' display slug row_path
   "$APB" list --format fuzzy-data-source |
-    while IFS="$US" read -r display slug path; do
+    while IFS="$US" read -r display slug row_path; do
       [[ -n "$slug" ]] || continue
       pick::line "$display" "run:$slug" "edit:$slug"
     done
