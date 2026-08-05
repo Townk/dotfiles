@@ -100,6 +100,38 @@ run_step() {
   fi
 }
 
+# preauthorize_sudo
+# Take the sudo password ONCE, here, where the prompt is legible — then hold the
+# timestamp for the rest of the run.
+#
+# The steps below shell out to sudo from deep inside a spinner: `chezmoi apply`
+# writes /etc/pam.d/sudo_local, and Homebrew's cask upgrades run `launchctl` as
+# root. sudo asks on the terminal device rather than on the captured streams, so
+# down there the ask is repainted over within 100ms and the run just sits
+# there. spin::stream now notices and stands down, but that is the safety net;
+# this is the fix.
+#
+# Best-effort throughout. Nothing here is required for the run to work — a
+# declined or impossible authorization only means the later sudo asks for
+# itself, exactly as it does today.
+preauthorize_sudo() {
+  command -v sudo >/dev/null 2>&1 || return 0
+  # Already authorized (or passwordless): nothing to ask, just hold it.
+  if ! sudo -n true 2>/dev/null; then
+    # No terminal to ask on (cron, the launchd agent, a chezmoi run_once with
+    # stdin closed). Prompting is impossible, so don't try.
+    [[ -t 0 ]] || return 0
+    log_info "Authorizing sudo up front, so nothing stalls behind a spinner later..."
+    sudo -v || { log_warn "sudo not authorized; steps that need it will ask on their own"; return 0 }
+  fi
+  # sudo forgets the timestamp after timestamp_timeout (5 minutes by default),
+  # and a full run outlasts that many times over. Refresh well inside the
+  # window. `kill -0 $$` — $$ stays the PARENT's pid inside a subshell — bounds
+  # the keeper's life to the run's, so it needs no trap to be torn down, and it
+  # gives up the moment the timestamp stops being renewable (e.g. `sudo -k`).
+  ( while kill -0 $$ 2>/dev/null; do sudo -n true 2>/dev/null || break; sleep 30; done ) &!
+}
+
 # snapshot_mise / snapshot_yazi / snapshot_nvim / snapshot_pi
 # "name<TAB>version" TSV for report::changes. Each is cheap enough (tens of
 # milliseconds) to run twice per step. All are best-effort: a missing tool
@@ -112,7 +144,7 @@ run_step() {
 # aborting the update over a failed status query would be.
 step_snapshot() {
   local f
-  f=$(mktemp)
+  f=$(common::tmpfile)
   "$1" >"$f" 2>/dev/null || true
   print -r -- "$f"
 }
@@ -121,7 +153,7 @@ step_snapshot() {
 # Take the matching "after" snapshot, report what moved, and clean up.
 step_report() {
   local before="$1" fn="$2" noun="$3" after
-  after=$(mktemp)
+  after=$(common::tmpfile)
   "$fn" >"$after" 2>/dev/null || true
   report::changes "$before" "$after" "$noun"
   rm -f "$before" "$after"
@@ -401,6 +433,8 @@ running_under_chezmoi=0
 [[ -n "${CHEZMOI:-}" ]] && running_under_chezmoi=1
 
 print -P -- "\n${C_BLU}System Update\n-------------${C_RES}"
+
+preauthorize_sudo
 
 # Fetch latest chezmoi source and apply, so cross-machine updates (e.g.
 # another machine bumped a tracked lockfile) land BEFORE the package syncs

@@ -118,6 +118,72 @@ require_cmd() {
 # the prompt helpers and any tool deciding whether to show interactive UI.
 have_tty() { [ -t 0 ] || { : </dev/tty; } 2>/dev/null; }
 
+# --- scratch temp files -----------------------------------------------------
+# spin::quiet, spin::streamed and system-update's step snapshots each need a
+# scratch file that must not outlive the process, and each removes its own on
+# the normal return path. An interrupt skips that — and a run parked on an
+# unanswered sudo prompt is precisely the case people Ctrl-C. The EXIT handler
+# below is what makes the removal unconditional.
+
+# One scratch DIRECTORY per process rather than a registry of paths: callers
+# take their file with `f=$(common::tmpfile)`, and a command substitution runs
+# in a SUBSHELL — appending to an array there would be discarded along with the
+# subshell, leaving the parent's handler with nothing to remove. A directory
+# sidesteps that, because its name is derived from $$, which zsh keeps pointing
+# at the MAIN shell inside subshells: a subshell's file lands in the same dir
+# the parent sweeps. (This is also why the path is recomputed rather than
+# cached in a variable — a variable set in a subshell doesn't survive either.)
+_common_tmpdir() { print -r -- "${TMPDIR:-/tmp}/zsh-common-$$" }
+
+_common_tmpdir_cleanup() {
+  local dir
+  dir=$(_common_tmpdir)
+  [[ -d "$dir" ]] && rm -rf -- "$dir"
+  return 0
+}
+
+# common::tmpfile — mktemp inside this process's scratch dir; prints the path.
+# Callers may still rm their file early; the sweep is the backstop for the ones
+# they never reach. The dir is created lazily: most scripts that source this
+# file never take a temp file and shouldn't pay a mkdir for the privilege.
+common::tmpfile() {
+  local dir
+  dir=$(_common_tmpdir)
+  mkdir -p -- "$dir" || return 1
+  mktemp "$dir/XXXXXX"
+}
+
+# Arm at source time, not inside a function: in zsh a `trap … EXIT` set within a
+# function is local to it and fires when that function returns. APPEND to any
+# EXIT handler the sourcing shell already has — this file reaches interactive
+# shells (transitively via theme-common.zsh) and the ShellSpec harness, and
+# neither trap is ours to drop. `trap` lists the current handler as a
+# re-runnable `trap -- 'BODY' EXIT` line; read it through a redirect, since
+# `$(trap)` would run in a subshell where zsh has already cleared the traps and
+# report none. (A script that arms its own bare EXIT trap AFTER sourcing us
+# replaces this one — system-package-common.zsh appends for that reason.)
+if [[ -z "${_common_tmpdir_trap_armed:-}" ]]; then
+  typeset -g _common_tmpdir_trap_armed=1
+  _common_trap_prev=""
+  _common_trap_capture=$(mktemp) || _common_trap_capture=""
+  if [[ -n "$_common_trap_capture" ]]; then
+    trap >|"$_common_trap_capture" 2>/dev/null
+    _common_trap_line=$(awk '/ EXIT$/{print; exit}' "$_common_trap_capture")
+    rm -f "$_common_trap_capture"
+    if [[ -n "$_common_trap_line" ]]; then
+      _common_trap_line=${_common_trap_line#trap -- }  # -> 'BODY' EXIT
+      _common_trap_line=${_common_trap_line% EXIT}     # -> 'BODY'
+      eval "_common_trap_prev=${_common_trap_line}"
+    fi
+  fi
+  if [[ -n "$_common_trap_prev" ]]; then
+    trap "${_common_trap_prev}; _common_tmpdir_cleanup" EXIT
+  else
+    trap '_common_tmpdir_cleanup' EXIT
+  fi
+  unset _common_trap_capture _common_trap_prev _common_trap_line
+fi
+
 # --- spinner ----------------------------------------------------------------
 # One spinner for the whole tree. Everything animates on STDERR, so a caller's
 # stdout stays pipeable and the frames never contaminate captured data.
@@ -173,6 +239,30 @@ spin::wait() {
   print -nu2 -- "\r\e[K"
 }
 
+# _spin_sudo_pending <root_pid>
+# True when a `sudo` is running somewhere below <root_pid>. sudo asks for the
+# password on the TERMINAL DEVICE, not on the stdout/stderr spin::run captured,
+# so the ask lands on the very line the spinner repaints ten times a second: it
+# is scribbled out within 100ms and the run reads as frozen while it is really
+# waiting on input. Callers stand the spinner down while this holds.
+_spin_sudo_pending() {
+  ps -Ao pid=,ppid=,comm= 2>/dev/null | awk -v root="$1" '
+    { parent[$1] = $2; command[$1] = $3 }
+    END {
+      for (p in command) {
+        if (command[p] !~ /(^|\/)sudo$/) continue
+        q = p
+        # The hop cap guards against a cycle in a torn ps snapshot, where a
+        # walk up the tree would otherwise never terminate.
+        for (hops = 0; (q in parent) && q + 0 > 1 && hops < 64; hops++) {
+          q = parent[q]
+          if (q == root) exit 0
+        }
+      }
+      exit 1
+    }'
+}
+
 # spin::stream <pid> <file> [title]
 # Animate the spinner while <file> stays empty, then — the moment <pid> writes
 # its first byte — clear the spinner and mirror <file> to stdout as it grows.
@@ -186,6 +276,7 @@ spin::stream() {
   local pid="$1" file="$2" title="${3:-}"
   local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
   local start=$SECONDS s=1 elapsed off=1 size spinning=1 active=1 stall=0
+  local sudo_poll=0 sudo_pending=0 sudo_shown=0
   spin::active || { spinning=0; active=0 }
   # `[[ -s ]]` costs no fork, so the common silent case never pays for the
   # size arithmetic below — that starts only once there IS output to mirror.
@@ -210,8 +301,27 @@ spin::stream() {
     fi
     if ((spinning)); then
       elapsed=$((SECONDS - start))
-      print -nu2 -- "\r  ${C_BLU}${frames[s]}${C_RES} ${title:+$title }${elapsed}s  "
-      s=$((s % 10 + 1))
+      # _spin_sudo_pending costs a fork, so keep it off the common path: poll
+      # every ~2s, and only once a spin has already outlasted the short silences
+      # that make up almost every call.
+      if ((elapsed >= 5 && ++sudo_poll >= 20)); then
+        sudo_poll=0
+        _spin_sudo_pending "$pid" && sudo_pending=1 || sudo_pending=0
+      fi
+      if ((sudo_pending)); then
+        # sudo already printed its own prompt and we overwrote it, and it cannot
+        # be asked to print again — so say what is wanted and stop repainting.
+        # Typing lands in sudo either way; echo is off, hence "you won't see it".
+        if ((!sudo_shown)); then
+          print -nu2 -- "\r\e[K"
+          print -u2 -- "  ${C_YEL}waiting for your sudo password — type it here (input is hidden)${C_RES}"
+          sudo_shown=1
+        fi
+      else
+        sudo_shown=0
+        print -nu2 -- "\r  ${C_BLU}${frames[s]}${C_RES} ${title:+$title }${elapsed}s  "
+        s=$((s % 10 + 1))
+      fi
     fi
     spin::nap
   done
@@ -278,7 +388,7 @@ spin::quiet() {
   local title="$1"
   shift
   local out rc=0
-  out=$(mktemp)
+  out=$(common::tmpfile)
   spin::run --merge-stderr "$title" "$out" -- "$@" || rc=$?
   ((rc == 0)) || cat "$out" >&2
   rm -f "$out"
@@ -298,7 +408,7 @@ spin::streamed() {
   local title="$1"
   shift
   local out rc=0
-  out=$(mktemp)
+  out=$(common::tmpfile)
   spin::run --merge-stderr --stream "$title" "$out" -- "$@" || rc=$?
   rm -f "$out"
   return $rc
