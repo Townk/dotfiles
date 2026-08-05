@@ -17,7 +17,8 @@
 #   list-panes` from here could fail or target the wrong session. The
 #   plugin instead passes the focused pane's ROOT PROCESS PID (its
 #   `{pid}` placeholder). We resolve that PID's current working directory
-#   straight from the kernel via `lsof`, which needs no zellij context.
+#   straight from the kernel (/proc on Linux, `lsof` on macOS), which needs no
+#   zellij context.
 #   For a normal shell pane the root process IS the shell, so its cwd is
 #   exactly the pane's $PWD (and tracks every `cd`).
 #
@@ -37,6 +38,9 @@
 
 set -euo pipefail
 
+# macOS has no /proc, so the cwd comes from lsof at its ABSOLUTE path (this runs
+# headless, with no PATH). Linux resolves it from /proc instead — the Linux
+# dev-shell keeps lsof in /usr/bin, so a hardcoded /usr/sbin was a silent 127.
 LSOF="/usr/sbin/lsof"
 # Route the copy through the pbcopy SHIM, which owns the tier logic (local
 # pasteboard, and under SSH the bridge/OSC-52 mirror to the attached client) —
@@ -66,12 +70,22 @@ done
   exit 1
 }
 
-# Pull the process's cwd from lsof's field output. `-Fn` emits one field
-# per line; the cwd's path is the `n`-prefixed line of the `cwd` fd row.
-cwd=$(
-  "$LSOF" -a -p "$pid" -d cwd -Fn 2>/dev/null |
-    awk '/^n/ { print substr($0, 2); exit }'
-)
+# On Linux the kernel hands the cwd over directly as a symlink (readable by the
+# owning uid, and a pane's root process is always ours). Elsewhere, pull it from
+# lsof's field output: `-Fn` emits one field per line, and the cwd's path is the
+# `n`-prefixed line of the `cwd` fd row.
+#
+# Both forms end in `|| cwd=""` so a failure lands on the "could not resolve"
+# message below instead of tripping errexit — a missing lsof exits 127 through
+# pipefail, and with stderr silenced that reaches tmux as a bare exit code.
+if [[ -L "/proc/$pid/cwd" ]]; then
+  cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) || cwd=""
+else
+  cwd=$(
+    "$LSOF" -a -p "$pid" -d cwd -Fn 2>/dev/null |
+      awk '/^n/ { print substr($0, 2); exit }'
+  ) || cwd=""
+fi
 
 [[ -n "$cwd" ]] || {
   echo "copy-pwd: could not resolve cwd for pid $pid" >&2

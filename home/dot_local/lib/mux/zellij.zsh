@@ -432,8 +432,14 @@ _mux_zj_pane_count() {
 _mux_zj_pane_cwd() {
   local pid="${1:-}"
   [[ -n "$pid" ]] || return 1
-  /usr/sbin/lsof -a -p "$pid" -d cwd -Fn 2>/dev/null |
-    awk '/^n/ { print substr($0, 2); exit }'
+  # Linux answers from /proc; macOS needs lsof, whose absolute path differs
+  # between the two (only /usr/sbin exists on a Mac).
+  if [[ -L "/proc/$pid/cwd" ]]; then
+    readlink "/proc/$pid/cwd" 2>/dev/null
+  else
+    /usr/sbin/lsof -a -p "$pid" -d cwd -Fn 2>/dev/null |
+      awk '/^n/ { print substr($0, 2); exit }'
+  fi
 }
 
 # _mux_zj_terminal_size — usable cols/rows of the focused tab: the extent of

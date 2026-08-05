@@ -1,8 +1,9 @@
 # Tests for copy-pwd — copies the focused pane's cwd to the clipboard.
 #
-# copy-pwd resolves a pane's cwd from a PID via the real /usr/sbin/lsof (a
-# hardcoded absolute path — it runs headless with no PATH), so these tests hand
-# it a live background process whose cwd we control and let lsof do its job.
+# copy-pwd resolves a pane's cwd from a PID straight from the kernel (/proc on
+# Linux, /usr/sbin/lsof on macOS — an absolute path, since it runs headless with
+# no PATH), so these tests hand it a live background process whose cwd we
+# control and let that resolution do its job. cp_cwd_of mirrors it.
 #
 # Group D of the shared-lib consolidation: the clipboard write must route
 # through the pbcopy SHIM ($HOME/.local/bin/pbcopy, absolute — the shim owns the
@@ -11,6 +12,17 @@
 # shim is missing.
 Describe 'copy-pwd (clipboard shim routing)'
   CP_SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_copy-pwd"
+
+  # Same resolution copy-pwd uses, so the readiness probes below agree with the
+  # script under test on either platform.
+  cp_cwd_of() {
+    if [ -L "/proc/$1/cwd" ]; then
+      readlink "/proc/$1/cwd" 2>/dev/null
+    else
+      /usr/sbin/lsof -a -p "$1" -d cwd -Fn 2>/dev/null |
+        awk '/^n/{print substr($0,2);exit}'
+    fi
+  }
 
   setup() {
     # Canonicalize to the PHYSICAL path (macOS symlinks /var → /private/var):
@@ -21,13 +33,13 @@ Describe 'copy-pwd (clipboard shim routing)'
     mkdir -p "$HOME/.local/bin"
     CP_KNOWN="$CP_TMP/known"
     mkdir -p "$CP_KNOWN"
-    # A live process whose cwd is CP_KNOWN, so lsof(1) resolves it for copy-pwd.
+    # A live process whose cwd is CP_KNOWN, so the kernel resolves it for copy-pwd.
     zsh -c 'cd "$1"; exec sleep 30' _ "$CP_KNOWN" &
     CP_PID=$!
     # Wait until the exec'd process actually reports the cwd (bounded).
     i=0
     while [ "$i" -lt 50 ]; do
-      seen=$(/usr/sbin/lsof -a -p "$CP_PID" -d cwd -Fn 2>/dev/null | awk '/^n/{print substr($0,2);exit}')
+      seen=$(cp_cwd_of "$CP_PID")
       [ "$seen" = "$CP_KNOWN" ] && break
       sleep 0.05; i=$((i + 1))
     done
@@ -71,7 +83,7 @@ Describe 'copy-pwd (clipboard shim routing)'
     CP_PID=$!
     i=0
     while [ "$i" -lt 50 ]; do
-      seen=$(/usr/sbin/lsof -a -p "$CP_PID" -d cwd -Fn 2>/dev/null | awk '/^n/{print substr($0,2);exit}')
+      seen=$(cp_cwd_of "$CP_PID")
       [ "$seen" = "$UNDER" ] && break
       sleep 0.05; i=$((i + 1))
     done
