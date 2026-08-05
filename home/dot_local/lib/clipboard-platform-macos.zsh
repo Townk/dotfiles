@@ -369,3 +369,48 @@ clip::mount_enrich() {
 pb::enrich_manifest() {
   clip::mount_enrich "$1" "$2"
 }
+
+# n  notify: raise an OSD on THIS Mac on behalf of a remote caller, so a
+# notification fires where the human is sitting rather than on the screen of
+# whichever box ran the command. Same class of op as W (a GUI side effect for
+# a caller who has no GUI of its own), and ungated on public for the same
+# reason: an OSD is annoyance, not exfiltration.
+#
+# The origin host is prefixed onto the text whenever it is not this machine.
+# That is provenance, not decoration -- the public endpoint is reachable from
+# every host the user ssh'es into, and an unlabelled toast is indistinguishable
+# from one this Mac raised itself.
+#
+# Values reach Lua through side files, never string interpolation. The
+# established reason (clip::set_file_urls_core) is that quotes and brackets
+# break a Lua literal; here it is also the injection boundary, since the text
+# arrives from the network. `rd` returns nil for an absent-or-empty file, which
+# is exactly the `nil` the local notify() path passes for an empty icon/sound.
+clip::op_notify() {
+  local payload=$1
+  if ! clip::parse_notify_payload "$payload"; then
+    send_err "$REPLY"
+    return
+  fi
+  local text=$REPLY_NOTIFY_TEXT
+  [[ "$REPLY_NOTIFY_HOST" == "$(clip::self_host)" ]] ||
+    text="${REPLY_NOTIFY_HOST}: ${text}"
+
+  local tmpdir
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/clipboard-bridge-notify.XXXXXX") ||
+    { send_err "mktemp failed"; return }
+  print -rn -- "$text" > "$tmpdir/text"
+  print -rn -- "$REPLY_NOTIFY_ICON" > "$tmpdir/icon"
+  print -rn -- "$REPLY_NOTIFY_SOUND" > "$tmpdir/sound"
+  local script="$tmpdir/notify.lua"
+  {
+    print -r -- "local function rd(p) local f=io.open(p,'rb'); if not f then return nil end; local c=f:read('*a'); f:close(); if c=='' then return nil end; return c end"
+    print -r -- "${REPLY_NOTIFY_FN}(rd([[$tmpdir/icon]]), rd([[$tmpdir/text]]), rd([[$tmpdir/sound]]))"
+  } > "$script"
+  if clip::hs_run "$script"; then
+    send_ok ""
+  else
+    send_err "hs run failed"
+  fi
+  rm -rf -- "$tmpdir"
+}

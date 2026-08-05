@@ -252,3 +252,131 @@ EOF
     The output should equal "$expected"
   End
 End
+
+# n -- notify: the bridge raising an OSD on the machine it runs on, for a
+# caller at the far end of the tunnel. Same shape as W (a GUI side effect for a
+# caller with no GUI of its own) and, like W, ungated on the public endpoint:
+# a toast is annoyance, not exfiltration.
+#
+# This Describe covers the BRIDGE contract -- that n is dispatched at all, that
+# a remote-origin toast is labelled with where it came from, that the untrusted
+# fields are refused, and that a host with no OSD says so instead of silently
+# swallowing the notification. `hs` is stubbed, so nothing here reaches a real
+# Hammerspoon.
+Describe 'clipboard-bridge-dispatch: n notify'
+  DISPATCH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/nstate"
+    rm -rf "$XDG_STATE_HOME"
+    mkdir -p "$XDG_STATE_HOME/clipboard" "$SHELLSPEC_TMPBASE/nbin"
+    # Pins clip::self_host so "is this toast from somewhere else" is decidable.
+    printf 'thismac\n' > "$XDG_STATE_HOME/clipboard/self-name"
+
+    # The stub copies out the side files the generated Lua would have read --
+    # values reach Hammerspoon through files, never interpolated into the
+    # script, so the files ARE the payload under test.
+    SEEN="$SHELLSPEC_TMPBASE/seen"
+    rm -rf "$SEEN"; mkdir -p "$SEEN"
+    cat > "$SHELLSPEC_TMPBASE/nbin/hs" <<EOF
+#!/bin/sh
+d=\$(dirname "\$1")
+cp "\$d/text" "$SEEN/text" 2>/dev/null
+cp "\$d/icon" "$SEEN/icon" 2>/dev/null
+cp "\$d/sound" "$SEEN/sound" 2>/dev/null
+cp "\$1" "$SEEN/script.lua" 2>/dev/null
+exit 0
+EOF
+    chmod +x "$SHELLSPEC_TMPBASE/nbin/hs"
+    export PATH="$SHELLSPEC_TMPBASE/nbin:$PATH"
+    REQ="$SHELLSPEC_TMPBASE/nreq"
+    RESP="$SHELLSPEC_TMPBASE/nresp"
+  }
+  BeforeEach 'setup'
+
+  US=$(printf '\037')
+
+  # <opcode><BE32 len><payload>, length computed the same way the client does.
+  mkreq() {
+    printf '%s' "$2" > "$SHELLSPEC_TMPBASE/npayload"
+    len=$(wc -c < "$SHELLSPEC_TMPBASE/npayload" | tr -d ' ')
+    {
+      printf '%s' "$1"
+      printf "\\$(printf %03o $(( (len >> 24) & 255 )))\\$(printf %03o $(( (len >> 16) & 255 )))\\$(printf %03o $(( (len >> 8) & 255 )))\\$(printf %03o $(( len & 255 )))"
+      cat "$SHELLSPEC_TMPBASE/npayload"
+    } > "$REQ"
+  }
+
+  # -f for the same reason as the O Describe above: an unguarded ~/.zshenv
+  # re-export of XDG_STATE_HOME would replace the sandbox with the real one.
+  run_n() {
+    sh -c 'CLIPBOARD_PLATFORM=macos zsh -f "$1" < "$2" > "$3"' \
+      _ "$DISPATCH" "$REQ" "$RESP"
+  }
+  run_n_headless() {
+    sh -c 'CLIPBOARD_PLATFORM=linux zsh -f "$1" < "$2" > "$3"' \
+      _ "$DISPATCH" "$REQ" "$RESP"
+  }
+
+  It 'accepts a well-formed frame'
+    mkreq n "mac-mini${US}notify${US}${US}${US}build finished"
+    When call run_n
+    The status should be success
+    The contents of file "$RESP" should start with "O"
+  End
+
+  # Provenance, not decoration: the public endpoint is reachable from every
+  # host the user ssh'es into, so an unlabelled toast is indistinguishable
+  # from one this machine raised itself.
+  It 'labels a toast that came from another host'
+    mkreq n "mac-mini${US}notify${US}${US}${US}build finished"
+    run_n
+    When call cat "$SEEN/text"
+    The output should equal "mac-mini: build finished"
+  End
+
+  It 'leaves a toast from this same host unlabelled'
+    mkreq n "thismac${US}notify${US}${US}${US}build finished"
+    run_n
+    When call cat "$SEEN/text"
+    The output should equal "build finished"
+  End
+
+  # `fn` names a Lua global to call, so anything outside the pair is a
+  # code-execution question rather than a formatting one.
+  It 'refuses a function name outside notify/notifyAnsi'
+    mkreq n "mac-mini${US}os.execute${US}${US}${US}pwned"
+    When call run_n
+    The contents of file "$RESP" should start with "E"
+    The path "$SEEN/script.lua" should not be exist
+  End
+
+  # Same shape rule the O and M handlers enforce: the host is rendered into
+  # the toast, and one carrying a newline could forge a second line.
+  It 'refuses a host that fails the wire identity shape'
+    mkreq n "-nothost${US}notify${US}${US}${US}hi"
+    When call run_n
+    The contents of file "$RESP" should start with "E"
+  End
+
+  It 'refuses a text field past the size cap'
+    big=$(awk 'BEGIN { while (i++ < 1025) printf "x" }')
+    mkreq n "mac-mini${US}notify${US}${US}${US}${big}"
+    When call run_n
+    The contents of file "$RESP" should start with "E"
+  End
+
+  It 'refuses a payload without all five fields'
+    mkreq n "mac-mini${US}notify${US}hi"
+    When call run_n
+    The contents of file "$RESP" should start with "E"
+  End
+
+  # A dev-shell answering O would swallow the notification instead of letting
+  # the client learn its bridge points at the wrong end of the tunnel.
+  It 'is refused on a host with no OSD rather than silently accepted'
+    mkreq n "mac-mini${US}notify${US}${US}${US}hi"
+    When call run_n_headless
+    The contents of file "$RESP" should start with "E"
+  End
+End

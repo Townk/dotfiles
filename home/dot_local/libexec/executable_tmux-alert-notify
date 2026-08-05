@@ -4,9 +4,10 @@
 # zj_hud_alarm notify UX through the shared common.zsh `notify` helper
 # (Hammerspoon OSD).
 #
-# Skipped over ssh: the OSD renders on the tmux HOST's screen, invisible
-# to a remote client — the status-bar flag icon still shows there (ledger
-# row). The ssh truth comes from the attached client's session env.
+# Over ssh the OSD is routed to the CLIENT's machine over the clipboard
+# bridge, labelled with this host's name, rather than being painted on the
+# tmux host's own screen where no one is looking. The ssh truth comes from the
+# attached client's session env, not from this process.
 
 set -euo pipefail
 
@@ -39,13 +40,14 @@ if [[ "$kind" == bell ]]; then
   esac
 fi
 
-# Skipped over ssh even when enabled: the OSD renders on the tmux HOST's
-# screen. The ssh truth is the attached client's session env; probe it via the
-# shared helper, pinned to THIS client's session (list-clients) so the
-# resolution is preserved exactly.
+# Where is the human? Not answerable from this process's own SSH_* — the tmux
+# server that spawned us was born from some earlier session and carries its
+# environment, not the current client's. The attached client's session env is
+# the only truth here, so probe it via the shared helper, pinned to THIS
+# client's session (list-clients), and hand the verdict to notify.
 sess="$("$TMUX_BIN" list-clients -F '#{client_session}' 2>/dev/null | head -1)" || sess=""
 if [[ -n "$sess" ]] && mux::session_is_remote "$sess"; then
-  exit 0
+  export NOTIFY_VIA_BRIDGE=1
 fi
 
 case "$kind" in

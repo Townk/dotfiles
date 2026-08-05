@@ -28,6 +28,15 @@
 #      between a remote mux and the machine its terminal lives on; fullscreen
 #      used to be refused over SSH, which described the plumbing rather than
 #      what was possible. See clip::op_window_action.
+#   n  notify        req: origin_host US fn US icon US sound US text
+#                    resp: empty | error
+#      Raises a Hammerspoon OSD on THIS machine for a caller at the far end of
+#      the tunnel — the same "GUI side effect for a caller without a GUI"
+#      shape as W, and ungated on public for the same reason. `fn` is
+#      notify|notifyAnsi. Remote-origin toasts are prefixed with the origin
+#      host, so a notification raised across the bridge can never be mistaken
+#      for a local one. Lowercase because uppercase N is retired (below), not
+#      because it is a variant of it. See clip::op_notify.
 #   H  get-host       req: empty                     resp: this machine's hostname
 #      Lets a consumer stamp the origin of the clip it just read from here, so
 #      it can materialize a self-contained copy with correct provenance (§11).
@@ -234,5 +243,6 @@ case "$opcode" in
     fi
     ;;
   W) clip::op_window_action "$payload" ;;
+  n) clip::op_notify "$payload" ;;
   *) send_err "unknown opcode" ;;
 esac

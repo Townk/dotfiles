@@ -105,34 +105,36 @@ else
   display="Path copied to clipboard"
 fi
 
-# Feedback goes to the OSD when it will actually be SEEN, and to the tmux
-# status line otherwise — never BOTH. Locally the pair painted the message over
-# the status bar on top of a Hammerspoon OSD already saying the same thing.
+# Feedback goes to the OSD when it lands somewhere the user can see, and to the
+# tmux status line otherwise — never BOTH. Locally the pair painted the message
+# over the status bar on top of a Hammerspoon OSD already saying the same thing.
 #
-# "Seen" is two conditions: `hs` has to exist, and the client has to be local.
-# The OSD draws on the tmux HOST's screen, so an ssh client never sees it — the
-# same rule (and the same session-env probe) tmux-alert-notify uses.
-osd=""
+# Which of the two applies is notify's call, not this script's: over ssh it now
+# routes the OSD to the CLIENT's machine across the clipboard bridge, so "does
+# a local hs exist" no longer decides anything. The one fact notify cannot
+# learn by itself is whether the attached client is remote — the tmux server's
+# own environment predates that client — so pass it in, pinned to THIS client's
+# session (list-clients) via the shared mux::session_is_remote probe.
+have_notify=""
 if source "$HOME/.local/lib/common.zsh" 2>/dev/null; then
+  have_notify=1
   source "$HOME/.local/lib/mux-bootstrap.zsh" 2>/dev/null || true
-  # Shared Hammerspoon-OSD probe (common.zsh); same $HS-then-PATH resolution
-  # notify itself uses. `osd` stays a plain availability flag below.
-  notify::available && osd=1
 fi
-if [[ -n "$osd" && -n "${TMUX:-}" ]]; then
-  # A remote client can't see the OSD (it renders on the tmux HOST's screen),
-  # so fall back to the status line. Shared session-env probe pinned to THIS
-  # client's session (list-clients), preserving copy-pwd's own resolution:
-  # mux::session_is_remote (mux-bootstrap.zsh).
+if [[ -n "$have_notify" && -n "${TMUX:-}" ]]; then
   sess="$(tmux list-clients -F '#{client_session}' 2>/dev/null | head -1)" || sess=""
   if [[ -n "$sess" ]] && mux::session_is_remote "$sess"; then
-    osd=""
+    export NOTIFY_VIA_BRIDGE=1
   fi
 fi
 
-# Backgrounded so any OSD hiccup never delays or fails the clipboard copy.
-if [[ -n "$osd" ]]; then
-  notify --icon "$COPY_PWD_ICON" --sound "$COPY_PWD_SOUND" "$display" >/dev/null 2>&1 &
+# Backgrounded so any OSD hiccup never delays or fails the clipboard copy. The
+# status-line fallback rides along inside the background job, driven by what
+# notify actually did rather than by a guess made before trying.
+if [[ -n "$have_notify" ]]; then
+  {
+    notify --icon "$COPY_PWD_ICON" --sound "$COPY_PWD_SOUND" "$display" >/dev/null 2>&1 ||
+      { [[ -n "${TMUX:-}" ]] && tmux display-message "$display" 2>/dev/null }
+  } &
 elif [[ -n "${TMUX:-}" ]]; then
   tmux display-message "$display" 2>/dev/null
 fi

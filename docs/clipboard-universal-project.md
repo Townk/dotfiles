@@ -710,6 +710,16 @@ where "you" is decided by bridge-up:
 >   matches the retired `F`, including exact `is-directory`.
 > - `a` archive-authorized-directory — payload `token US item-index`; directory
 >   tar stream as described in §12.
+> - `n` notify — payload `origin_host US fn US icon US sound US text`; raises a
+>   Hammerspoon OSD on the machine running the dispatcher, for a caller at the
+>   far end of the tunnel. Not clipboard traffic at all: it rides this wire for
+>   the same reason `W` does, because the bridge is already the link between a
+>   remote session and the machine whose screen the human is watching. `fn` is
+>   `notify` or `notifyAnsi`; a toast whose `origin_host` is not the dispatcher's
+>   own host is prefixed with that host, so remote-raised OSDs are always
+>   distinguishable from local ones. Refused on the Linux headless backend
+>   rather than accepted and dropped. Lowercase because uppercase `N` is retired
+>   (above), not because it is a variant of it.
 >
 > Uppercase `F`/`A` raw-path requests are retired and fail with an actionable
 > capability-required error. Clients never send a filesystem path as authority.

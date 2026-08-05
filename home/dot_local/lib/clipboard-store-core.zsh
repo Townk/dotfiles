@@ -1100,6 +1100,56 @@ clip::parse_manifest_payload() {
   return 0
 }
 
+# clip::parse_notify_payload <payload> -- parse+validate n's wire payload
+# (<origin_host> US <fn> US <icon> US <sound> US <text>). On success returns 0
+# with $REPLY_NOTIFY_HOST/_FN/_ICON/_SOUND/_TEXT set; on failure returns 1 with
+# $REPLY set to the caller-facing error message.
+#
+# Every field is untrusted: `n` is reachable on the public endpoint, so this is
+# the whole trust boundary for the op. The host goes through clip::valid_host
+# (same shape rule as O/M) because it is rendered as the origin label, and a
+# host carrying newlines or US could forge a second line of the toast. `fn` is
+# an allow-list rather than a pattern -- it names a Lua global to call, so
+# anything but an exact match is a code-execution question, not a formatting
+# one. The size caps exist because the far end is a GUI: text is bounded by
+# what an OSD can show, and the rest are identifiers, not content.
+#
+# Text may legitimately contain newlines (multi-line toasts) and ANSI escapes
+# (the --ansi/notifyAnsi path), so it is NOT shape-checked -- it never reaches
+# a shell or a Lua literal, only a side file the Lua reads back (see
+# clip::op_notify).
+clip::parse_notify_payload() {
+  emulate -L zsh
+  setopt extended_glob
+  local payload=$1
+  local us=$'\x1f'
+  local -a f
+  f=( "${(@ps:$us:)payload}" )
+  if (( ${#f[@]} != 5 )); then
+    REPLY="bad notify payload"
+    return 1
+  fi
+  local host=$f[1] fn=$f[2] icon=$f[3] sound=$f[4] text=$f[5]
+  if ! clip::valid_host "$host"; then
+    REPLY="bad notify payload"
+    return 1
+  fi
+  case "$fn" in
+    notify | notifyAnsi) ;;
+    *) REPLY="bad notify payload"; return 1 ;;
+  esac
+  if (( ${#host} > 253 || ${#icon} > 256 || ${#sound} > 64 || ${#text} > 1024 )); then
+    REPLY="notify payload too large"
+    return 1
+  fi
+  REPLY_NOTIFY_HOST=$host
+  REPLY_NOTIFY_FN=$fn
+  REPLY_NOTIFY_ICON=$icon
+  REPLY_NOTIFY_SOUND=$sound
+  REPLY_NOTIFY_TEXT=$text
+  return 0
+}
+
 # clip::persist_files_manifest_row <host> <paths> [trusted=0] -- the row-insert core used
 # by M (manifest-persist-local, X2-redo; Fix A): a dedup-scoped INSERT/UPDATE
 # of a `files` store row carrying the text_preview (newline-joined paths, X3)

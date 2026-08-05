@@ -163,3 +163,10 @@ clip::op_set_file_urls() {
 # Linux files rows always carry x-file-manifest, which op_list_files checks
 # FIRST. Defined to keep the pb::* contract total.
 pb::parse_ns_filenames() { REPLY=""; }
+
+# n  notify: refused here on purpose. This host has no OSD, and accepting the
+# op would make it a silent sink -- a dev-shell that answered O would swallow
+# notifications instead of letting the client learn the bridge is pointed at
+# the wrong end. A dev-shell client's own notify goes one hop further, to the
+# laptop's macOS dispatcher, which is where the human is.
+clip::op_notify() { send_err "no OSD on this host"; }

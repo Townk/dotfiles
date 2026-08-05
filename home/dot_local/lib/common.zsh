@@ -586,14 +586,78 @@ lock::hold() {
 # notification can actually be shown. Honors $HS as an explicit override, then
 # falls back to PATH. With --path it also prints the resolved hs path on stdout
 # (nothing + rc 1 when unavailable). This is the probe `notify` uses to bail
-# quietly with no `hs`, shared so OSD callers (e.g. copy-pwd deciding whether
-# an OSD will be SEEN) resolve it exactly the same way.
+# quietly with no `hs`. It answers "can this machine paint an OSD", NOT "will
+# the user see one" — over ssh those differ, and only notify itself knows which
+# screen a message is bound for, so callers should call notify and read its rc
+# rather than pre-flighting with this.
 notify::available() {
   local hs="${HS:-/opt/homebrew/bin/hs}"
   [ -x "$hs" ] || hs="$(command -v hs 2>/dev/null || true)"
   [ -n "$hs" ] && [ -x "$hs" ] || return 1
   [ "${1:-}" = --path ] && printf '%s' "$hs"
   return 0
+}
+
+# Directory holding this file, for the sibling libs the bridge route pulls in
+# lazily. Resolved the same way pick-common.zsh does (`%x` is the file being
+# sourced), so it is correct in the repo checkout, the installed tree and the
+# ShellSpec sandbox alike.
+_COMMON_LIB_DIR="${${(%):-%x}:A:h}"
+
+# _notify_bridge_target — true when this notification belongs on ANOTHER
+# machine's screen.
+#
+# Whether `hs` exists is not the question: on a Mac reached over SSH it exists
+# and it is the wrong screen. The question is only where the human is, which is
+# the canonical remote test (mux::is_remote).
+#
+# Deliberately does NOT probe the bridge. Folding reachability into this gate
+# would make an unreachable bridge fall through to the local `hs` and paint the
+# OSD on the remote box's screen — the precise bug this route exists to remove.
+# Destination and deliverability are separate questions; only the first one
+# chooses a path.
+#
+# NOTIFY_VIA_BRIDGE exists because a tmux server does not inherit SSH_* — it
+# was born from whatever session started it, possibly days ago. Callers running
+# in that context (tmux-alert-notify, copy-pwd) already resolve remoteness the
+# only way that works there, per attached client via mux::session_is_remote,
+# and pass the verdict in. It is that helper's answer, not a second probe.
+_notify_bridge_target() {
+  [ -n "${NOTIFY_VIA_BRIDGE:-}" ] && return 0
+  [ -r "$_COMMON_LIB_DIR/mux-bootstrap.zsh" ] || return 1
+  source "$_COMMON_LIB_DIR/mux-bootstrap.zsh" 2>/dev/null || return 1
+  mux::is_remote
+}
+
+# _notify_bridge_send FN ICON SOUND TEXT — ship one `n` frame to the origin.
+# The payload is US-joined (the O/M convention) and written to a file because
+# clipbridge::send streams from one; the text may carry newlines and ANSI, and
+# a file keeps them byte-exact.
+#
+# No pre-flight probe: the send IS the reachability test, and against loopback
+# a missing listener refuses immediately rather than burning the timeout.
+#
+# The payload file is a bare mktemp owned by this function, NOT common::tmpfile
+# — deliberately, and the same way clipbridge::send handles its own request and
+# response files. notify's contract invites callers to background it
+# (`notify … &`), and a backgrounded caller usually outlives its parent; the
+# process scratch dir is torn down by the parent's EXIT trap, which would
+# delete this file mid-flight and make the send fail with nothing on the wire.
+# Confirmed by copy-pwd, whose feedback OSD is backgrounded exactly that way.
+_notify_bridge_send() {
+  local fn="$1" icon="$2" sound="$3" text="$4"
+  [ -r "$_COMMON_LIB_DIR/clipboard-bridge-client.zsh" ] || return 1
+  source "$_COMMON_LIB_DIR/clipboard-bridge-client.zsh" 2>/dev/null || return 1
+  local us=$'\x1f' host payloadf
+  host=$(source "$_COMMON_LIB_DIR/clipboard-store-core.zsh" 2>/dev/null && clip::self_host) || return 1
+  [ -n "$host" ] || return 1
+  payloadf=$(mktemp "${TMPDIR:-/tmp}/notify-bridge.XXXXXX") || return 1
+  print -rn -- "${host}${us}${fn}${us}${icon}${us}${sound}${us}${text}" > "$payloadf"
+  clipbridge::send "${CLIPBOARD_BRIDGE_HOST:-127.0.0.1}" \
+    "${CLIPBOARD_BRIDGE_PORT:-2490}" n "$payloadf"
+  local rc=$?
+  rm -f -- "$payloadf"
+  return $rc
 }
 
 # notify [--icon SPEC] [--sound NAME] [--ansi] MESSAGE...
@@ -616,6 +680,12 @@ notify::available() {
 # and 2 when there is nothing to show, so callers on hot paths can ignore the
 # result. Synchronous — background it (`notify ... &`) where a stray OSD hiccup
 # must never delay the caller.
+#
+# Over SSH the notification is sent to the machine the human is sitting at,
+# through the clipboard bridge's `n` op, instead of being painted on the remote
+# box's own screen. That route is exclusive: once taken, the local `hs` is not
+# consulted even on failure, because falling back would reintroduce exactly the
+# wrong-screen OSD the route exists to avoid.
 notify() {
   local icon="" sound="" fn="notify"
   while [ $# -gt 0 ]; do
@@ -654,6 +724,11 @@ notify() {
 
   local text="$*"
   [ -n "$text" ] || [ -n "$icon" ] || return 2
+
+  if _notify_bridge_target; then
+    _notify_bridge_send "$fn" "$icon" "$sound" "$text" && return 0
+    return 1
+  fi
 
   local hs
   hs="$(notify::available --path)" || return 1
