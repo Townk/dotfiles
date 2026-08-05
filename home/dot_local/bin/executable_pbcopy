@@ -671,11 +671,15 @@ fi
 
 # 3. Record a local row on THIS machine (the origin).
 #    Payload: host US "text" US "" US rt RS text.
+#
+#    Backgrounded: nothing waits on this row -- it is this machine's own history,
+#    and the clipboard the caller asked for is already set. Synchronously it cost
+#    the caller a full local frame (~125ms measured). The `rm` moves INSIDE the
+#    job, or the payload would be deleted out from under the child that reads it.
 if [ -n "$host" ]; then
   ppersist=$(mktemp "${TMPDIR:-/tmp}/pbcopy-p.XXXXXX" 2>/dev/null) || ppersist=""
   if [ -n "$ppersist" ]; then
     { printf '%s\037text\037\037%s\036' "$host" "$rt"; cat "$tmp"; } > "$ppersist"
-    send_frame P 2489 "$ppersist"
-    rm -f "$ppersist"
+    { send_frame P 2489 "$ppersist"; rm -f "$ppersist"; } >/dev/null 2>&1 &
   fi
 fi

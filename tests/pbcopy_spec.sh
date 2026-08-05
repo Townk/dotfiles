@@ -41,6 +41,19 @@ EOF
     chmod +x "$BINDIR/nc"
   }
 
+  # The P row is sent from a BACKGROUND job (nothing waits on this machine's own
+  # history record), so its log line can appear after the script has exited.
+  # Poll for it rather than asserting against a snapshot.
+  wait_for_log() {
+    i=0
+    while [ "$i" -lt 100 ]; do
+      grep -q "$1" "$SHELLSPEC_TMPBASE/nclog" 2>/dev/null && return 0
+      sleep 0.02
+      i=$((i + 1))
+    done
+    return 1
+  }
+
   It 'sets the far clipboard with a T frame to :2490 when the bridge answers'
     answering_nc
     Data 'hello'
@@ -54,9 +67,10 @@ EOF
 
   It 'still records the local P row when the bridge delivered'
     answering_nc
+    persisted() { sh "$SCRIPT" >/dev/null 2>&1; wait_for_log '2489:P'; }
     Data 'hello'
-    When run command sh "$SCRIPT"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:P"
+    When call persisted
+    The status should be success
   End
 
   It 'fails loudly when neither the bridge nor the sink can deliver'
@@ -83,9 +97,10 @@ EOF
   End
 
   It 'records a local row via a P frame to :2489'
+    persisted() { sh "$SCRIPT" >/dev/null 2>&1; wait_for_log '2489:P'; }
     Data 'hello'
-    When run command sh "$SCRIPT"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:P"
+    When call persisted
+    The status should be success
   End
 
   # Best-effort/no-hang invariant: if the O/P temp files can't be created, the

@@ -31,10 +31,12 @@
 #
 # Env overrides:
 #   COPY_PWD_ICON    OSD icon spec (SVG name, glyph:<name>, or swatch:#RRGGBB).
-#                    Default: glyph:nf-cod-folder.
+#                    Default: glyph:nf-cod-copy. Used by both toasts of the
+#                    over-bridge pair; a failure switches to glyph:nf-cod-error.
 #   COPY_PWD_SOUND   Notification sound name (as shown in System Settings →
 #                    Sound, e.g. Frog/Glass/Tink, or `default`). Default: Frog.
-#                    Set empty to show the notification silently.
+#                    Set empty to show the notification silently. Plays on the
+#                    keypress; the completion toast is silent, a failure is Basso.
 
 set -euo pipefail
 
@@ -50,7 +52,7 @@ LSOF="/usr/sbin/lsof"
 PBCOPY="$HOME/.local/bin/pbcopy"
 [[ -x "$PBCOPY" ]] || PBCOPY="/usr/bin/pbcopy"
 
-COPY_PWD_ICON="${COPY_PWD_ICON:-glyph:nf-cod-folder}"
+COPY_PWD_ICON="${COPY_PWD_ICON:-glyph:nf-cod-copy}"
 COPY_PWD_SOUND="${COPY_PWD_SOUND-Frog}"
 
 # Parse an optional path-mode flag in any position; the lone positional is
@@ -106,12 +108,6 @@ if [[ "$mode" == "relative" ]]; then
   fi
 fi
 
-# Clipboard gets the chosen path with no trailing newline (so it doesn't
-# auto-execute if pasted at a shell prompt). The shim above handles the SSH
-# case — under tmux on a remote HOST it mirrors to the attached client via the
-# bridge/OSC-52 tiers, so there's no hand-rolled `tmux load-buffer` mirror here.
-printf '%s' "$out" | "$PBCOPY"
-
 # Keep the OSD focused on the action; the clipboard already carries the path.
 if [[ "$mode" == "absolute" ]]; then
   display="Absolute path copied to clipboard"
@@ -129,6 +125,10 @@ fi
 # learn by itself is whether the attached client is remote — the tmux server's
 # own environment predates that client — so pass it in, pinned to THIS client's
 # session (list-clients) via the shared mux::session_is_remote probe.
+#
+# Resolved BEFORE the copy: the same verdict decides whether the copy is slow
+# enough to deserve a progress toast (below), and these tmux queries cost a few
+# ms against the ~750ms of bridge round trips the copy itself pays.
 have_notify=""
 if source "$HOME/.local/lib/common.zsh" 2>/dev/null; then
   have_notify=1
@@ -141,16 +141,66 @@ if [[ -n "$have_notify" && -n "${TMUX:-}" ]]; then
   fi
 fi
 
+# A copy that crosses the bridge costs ~750ms (frames to the far machine), so the
+# completion toast on its own reads as a dead key. Announce FIRST and let the
+# completion toast replace it: the OSD owns a single canvas and repaints it in
+# place, cancelling the pending dismiss, so the second call updates the visible
+# toast instead of stacking a second one. The SOUND rides on this first toast —
+# it is the acknowledgement of the keypress, not of the result.
+#
+# Only over the bridge. Sitting at the machine the copy is ~10ms and the two
+# toasts would land together as a flicker, so the local path stays single-shot.
+phase1=""
+if [[ -n "$have_notify" && -n "${NOTIFY_VIA_BRIDGE:-}" ]]; then
+  notify --icon "$COPY_PWD_ICON" --sound "$COPY_PWD_SOUND" "Copying path…" >/dev/null 2>&1 &
+  phase1=$!
+fi
+
+# Clipboard gets the chosen path with no trailing newline (so it doesn't
+# auto-execute if pasted at a shell prompt). The shim owns the tier logic — over
+# ssh it sets the attached client's clipboard through the bridge.
+#
+# The failure is CAUGHT rather than left to errexit: a copy that fails is exactly
+# when the user needs telling, and dying here would take the toast down with it.
+copy_ok=1
+if ! copy_err=$(printf '%s' "$out" | "$PBCOPY" 2>&1); then
+  copy_ok=0
+fi
+
+# The announcement must never land AFTER the result, which would leave "Copying
+# path…" on screen as the last word. It has normally finished long before the
+# copy has; this only bites when the OSD path itself is slow.
+if [[ -n "$phase1" ]]; then
+  wait "$phase1" 2>/dev/null || true
+fi
+
+if (( copy_ok )); then
+  final_icon="$COPY_PWD_ICON"
+  final_display="$display"
+  # Silent only when the announcement already played the sound. On the local
+  # single-toast path this IS the acknowledgement, so it keeps it.
+  if [[ -n "$phase1" ]]; then
+    final_sound=""
+  else
+    final_sound="$COPY_PWD_SOUND"
+  fi
+else
+  final_icon="glyph:nf-cod-error"
+  final_sound="Basso"
+  final_display="Copy failed${copy_err:+: $copy_err}"
+fi
+
 # Backgrounded so any OSD hiccup never delays or fails the clipboard copy. The
 # status-line fallback rides along inside the background job, driven by what
 # notify actually did rather than by a guess made before trying.
 if [[ -n "$have_notify" ]]; then
   {
-    notify --icon "$COPY_PWD_ICON" --sound "$COPY_PWD_SOUND" "$display" >/dev/null 2>&1 ||
-      { [[ -n "${TMUX:-}" ]] && tmux display-message "$display" 2>/dev/null }
+    notify --icon "$final_icon" --sound "$final_sound" "$final_display" >/dev/null 2>&1 ||
+      { [[ -n "${TMUX:-}" ]] && tmux display-message "$final_display" 2>/dev/null }
   } &
 elif [[ -n "${TMUX:-}" ]]; then
-  tmux display-message "$display" 2>/dev/null
+  tmux display-message "$final_display" 2>/dev/null
 fi
 
+(( copy_ok )) || exit 1
 exit 0
