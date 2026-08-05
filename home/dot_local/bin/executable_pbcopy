@@ -7,15 +7,25 @@
 # Local (no SSH): delegates straight to the real platform clipboard tool
 # (macOS's own /usr/bin/pbcopy, or wl-copy/xclip on Linux).
 #
-# Over SSH: base64-encodes stdin and writes an OSC 52 "set clipboard"
-# sequence directly to the controlling terminal. Zellij re-emits OSC 52 to
-# the focused client's terminal (copy_command is intentionally unset in
-# config.kdl.tmpl), so it rides up through WezTerm to the Mac's system
-# clipboard. Write-only — no terminal round-trip, so unlike an OSC 52
-# *read* (which Zellij refuses to answer) this never hangs. See pbpaste for
-# the read side of this bridge, and the RemoteForward that system-onboard writes
-# into ~/.ssh/config.d/<alias>.conf (default on; --no-clipboard to skip) for the
-# reverse SSH tunnel it depends on.
+# Over SSH: sets the sit-at machine's clipboard through the reverse-tunneled
+# bridge with op `T` (text + regtype), which is what universal.lua's copy()
+# already does — the bridge carries the register TYPE, and its reply says
+# whether the copy landed. OSC 52 is the FALLBACK for when that bridge is not
+# there (an iPad/Blink session has no reverse tunnel at all): base64-encode
+# stdin and write a "set clipboard" sequence to the controlling terminal, which
+# Zellij re-emits to the focused client's terminal (copy_command is
+# intentionally unset in config.kdl.tmpl) so it rides up through WezTerm to the
+# Mac's system clipboard. Write-only — no terminal round-trip, so unlike an OSC
+# 52 *read* (which Zellij refuses to answer) this never hangs.
+#
+# The bridge comes first because OSC 52 needs a controlling terminal and a
+# HEADLESS caller has none: copy-pwd runs from the tmux server via run-shell,
+# where /dev/tty exists as a device node but cannot be opened. Back when OSC 52
+# was the only tier, that write failed with ENXIO and took dash down with it.
+#
+# See pbpaste for the read side of this bridge, and the RemoteForward that
+# system-onboard writes into ~/.ssh/config.d/<alias>.conf (default on;
+# --no-clipboard to skip) for the reverse SSH tunnel it depends on.
 #
 # Path args (files-yazi Phase 6 design §5, corrected by X2, corrected again
 # by X2-redo, corrected again by Fix A): `pbcopy <path>…` puts a real file
@@ -595,10 +605,6 @@ if [ $# -gt 0 ]; then
 fi
 
 sink="${PBCOPY_OSC52_SINK:-/dev/tty}"
-[ "$sink" != /dev/tty ] || [ -e /dev/tty ] || {
-  echo "pbcopy: no controlling terminal to send OSC 52 through" >&2
-  exit 1
-}
 
 # Buffer stdin ONCE so the O declaration, the OSC 52 delivery, and the local P
 # record all hash over identical bytes (spec §23 hash-domain invariant).
@@ -611,6 +617,10 @@ cat > "$tmp"
 # abspath() for the full self-name-vs-scutil-vs-hostname rationale.
 host=$(self_host)
 
+# regtype for both the T payload and the P row below: linewise iff the text
+# ends in a newline, else charwise (non-empty last byte => no trailing \n).
+if [ -n "$(tail -c1 "$tmp")" ]; then rt=v; else rt=l; fi
+
 # 1. Declare origin to the sit-Mac FIRST (before the bytes land, so its watcher
 #    tags the row remote(host)). Payload: <host> US <text>.
 if [ -n "$host" ]; then
@@ -622,14 +632,46 @@ if [ -n "$host" ]; then
   fi
 fi
 
-# 2. Deliver the bytes (unchanged OSC 52 semantics).
-data=$(base64 < "$tmp" | tr -d '\n')
-printf '\033]52;c;%s\033\\' "$data" > "$sink"
+# 2. Deliver the bytes: bridge first (op T, reply-checked -- it carries the
+#    regtype and needs no terminal), OSC 52 only if that didn't land.
+delivered=0
+tpay=$(mktemp "${TMPDIR:-/tmp}/pbcopy-st.XXXXXX" 2>/dev/null) || tpay=""
+if [ -n "$tpay" ]; then
+  trep=$(mktemp "${TMPDIR:-/tmp}/pbcopy-str.XXXXXX" 2>/dev/null) || trep=""
+  if [ -n "$trep" ]; then
+    { printf '%s' "$rt"; cat "$tmp"; } > "$tpay"
+    send_frame T 2490 "$tpay" "$trep"
+    if [ "$(head -c 1 "$trep" 2>/dev/null || true)" = "O" ]; then
+      delivered=1
+    fi
+    rm -f "$trep"
+  fi
+  rm -f "$tpay"
+fi
 
-# 3. Record a local row on THIS machine (the origin). regtype: linewise iff the
-#    text ends in a newline, else charwise. Payload: host US "text" US "" US rt RS text.
+# An E reply or a down bridge both land here and stay quiet: OSC 52 is about to
+# carry the same bytes, and a warning on a copy that then succeeds is noise.
+#
+# The write IS the openability test. `[ -e /dev/tty ]` was not one -- the device
+# node exists even when there is no controlling terminal to open, so the guard
+# passed and the redirect failed later, taking dash down with exit 2. A failing
+# redirect inside an `if` condition is exempt from errexit (measured under
+# dash), so this probes and delivers in one step.
+if [ "$delivered" -eq 0 ]; then
+  data=$(base64 < "$tmp" | tr -d '\n')
+  if printf '\033]52;c;%s\033\\' "$data" > "$sink" 2>/dev/null; then
+    delivered=1
+  fi
+fi
+
+if [ "$delivered" -eq 0 ]; then
+  echo "pbcopy: cannot deliver the copy -- the clipboard bridge is not reachable on 127.0.0.1:2490 and $sink cannot be opened for OSC 52" >&2
+  exit 1
+fi
+
+# 3. Record a local row on THIS machine (the origin).
+#    Payload: host US "text" US "" US rt RS text.
 if [ -n "$host" ]; then
-  if [ -n "$(tail -c1 "$tmp")" ]; then rt=v; else rt=l; fi   # non-empty last byte => no trailing \n => charwise
   ppersist=$(mktemp "${TMPDIR:-/tmp}/pbcopy-p.XXXXXX" 2>/dev/null) || ppersist=""
   if [ -n "$ppersist" ]; then
     { printf '%s\037text\037\037%s\036' "$host" "$rt"; cat "$tmp"; } > "$ppersist"
