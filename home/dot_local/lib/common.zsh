@@ -142,14 +142,41 @@ _common_tmpdir_cleanup() {
   return 0
 }
 
+# _common_tmpdir_sweep — drop scratch dirs whose owning process is gone.
+#
+# The EXIT handler cannot be the whole story: zsh skips EXIT traps on SIGTERM,
+# and SIGKILL, a kernel panic or a power cut run nothing at all. Repairing
+# after the fact covers every one of those, where a signal trap covers only
+# some — and it costs no change to any script's signal semantics. It matters
+# because $TMPDIR here is /private/tmp, which macOS never sweeps (dirhelper
+# only clears the per-user /var/folders temp), so an orphan would otherwise
+# sit there forever.
+#
+# The `U` glob qualifier keeps us to dirs we own: /private/tmp is shared, and
+# another user's pid is unsignalable, which would otherwise read as "dead".
+# A dead pid whose number has since been recycled reads as alive, so it is
+# left alone — declining to clean is always the safe direction here.
+_common_tmpdir_sweep() {
+  local dir
+  for dir in "${TMPDIR:-/tmp}"/zsh-common-<->(NU/); do
+    kill -0 "${dir##*-}" 2>/dev/null || rm -rf -- "$dir"
+  done
+  return 0
+}
+
 # common::tmpfile — mktemp inside this process's scratch dir; prints the path.
-# Callers may still rm their file early; the sweep is the backstop for the ones
-# they never reach. The dir is created lazily: most scripts that source this
-# file never take a temp file and shouldn't pay a mkdir for the privilege.
+# Callers may still rm their file early; the dir sweep is the backstop for the
+# ones they never reach. The dir is created lazily: most scripts that source
+# this file never take a temp file and shouldn't pay a mkdir for the privilege.
+# Creating it is also the once-per-process seam for the stale sweep — after the
+# first call the dir exists, including for subshell callers.
 common::tmpfile() {
   local dir
   dir=$(_common_tmpdir)
-  mkdir -p -- "$dir" || return 1
+  if [[ ! -d "$dir" ]]; then
+    mkdir -p -- "$dir" || return 1
+    _common_tmpdir_sweep
+  fi
   mktemp "$dir/XXXXXX"
 }
 
