@@ -6,8 +6,25 @@ pam_sudo=/etc/pam.d/sudo
 pam_local=/etc/pam.d/sudo_local
 pam_template=/etc/pam.d/sudo_local.template
 
+# pam_tid can only reach the Touch ID prompt from the user's login session.
+# A tmux or screen server runs detached from it, so sudo there falls straight
+# through to the password prompt. pam_reattach moves sudo back into that
+# session first. It stays "optional" so a missing or broken module degrades to
+# the password prompt rather than locking sudo out.
+reattach_line=
+for so in /opt/homebrew/lib/pam/pam_reattach.so /usr/local/lib/pam/pam_reattach.so; do
+  if [ -f "$so" ]; then
+    reattach_line="auth       optional       $so ignore_ssh"
+    break
+  fi
+done
+
 has_touchid_line() {
   /usr/bin/grep -Eq '^[[:space:]]*auth[[:space:]]+sufficient[[:space:]]+pam_tid\.so([[:space:]]|$)' "$1"
+}
+
+has_reattach_line() {
+  [ -z "$reattach_line" ] || /usr/bin/grep -Fqx "$reattach_line" "$1"
 }
 
 if ! /usr/bin/grep -Eq '^[[:space:]]*auth[[:space:]]+include[[:space:]]+sudo_local([[:space:]]|$)' "$pam_sudo"; then
@@ -15,20 +32,30 @@ if ! /usr/bin/grep -Eq '^[[:space:]]*auth[[:space:]]+include[[:space:]]+sudo_loc
   exit 0
 fi
 
-if [ -f "$pam_local" ] && has_touchid_line "$pam_local"; then
+if [ -f "$pam_local" ] && has_touchid_line "$pam_local" && has_reattach_line "$pam_local"; then
   exit 0
 fi
 
 tmp="$(mktemp "${TMPDIR:-/tmp}/sudo_local.XXXXXX")"
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+trap 'rm -f "$tmp" "$tmp.next"' EXIT HUP INT TERM
 
-if [ -f "$pam_template" ]; then
+# An existing sudo_local is the better base than the pristine template: it
+# carries whatever this script (or the user) already put there.
+if [ -f "$pam_local" ]; then
+  src="$pam_local"
+elif [ -f "$pam_template" ]; then
+  src="$pam_template"
+else
+  src=
+fi
+
+if [ -n "$src" ]; then
   /usr/bin/awk '
     /^[[:space:]]*#[[:space:]]*auth[[:space:]]+sufficient[[:space:]]+pam_tid\.so([[:space:]]|$)/ {
       sub(/^[[:space:]]*#[[:space:]]*/, "")
     }
     { print }
-  ' "$pam_template" > "$tmp"
+  ' "$src" > "$tmp"
 else
   {
     echo "# sudo_local: local config file which survives system update and is included for sudo"
@@ -36,7 +63,18 @@ else
   } > "$tmp"
 fi
 
-if ! has_touchid_line "$tmp"; then
+if ! has_reattach_line "$tmp"; then
+  /usr/bin/awk -v line="$reattach_line" '
+    !inserted && /^[[:space:]]*auth[[:space:]]+sufficient[[:space:]]+pam_tid\.so([[:space:]]|$)/ {
+      print line
+      inserted = 1
+    }
+    { print }
+  ' "$tmp" > "$tmp.next"
+  /bin/mv "$tmp.next" "$tmp"
+fi
+
+if ! has_touchid_line "$tmp" || ! has_reattach_line "$tmp"; then
   echo "sudo Touch ID: failed to render a valid $pam_local" >&2
   exit 1
 fi
