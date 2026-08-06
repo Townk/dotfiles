@@ -1,0 +1,27 @@
+[package]
+name = "recobd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# probes/ is its own standalone package (its README explains why it is kept);
+# bench/ is zsh. Neither belongs to this package's build.
+[workspace]
+exclude = ["probes", "bench"]
+
+# No dependencies. Phase 1 is the wire codec, the accept loop and the recording
+# seam, all of which std covers: threads for the per-connection task boundary
+# (docs/recob-protocol-spec.md §3.4), SO_RCVTIMEO/SO_SNDTIMEO for §5.2's
+# timeouts, and FromRawFd for §3.2's socket activation. The only libc call the
+# daemon makes by hand is umask(), declared in listen.rs.
+
+[lib]
+name = "recobd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "recobd"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
