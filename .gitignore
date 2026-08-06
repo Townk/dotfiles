@@ -29,8 +29,8 @@ HAND-OFF.md
 
 # Local agent runtime memory, CCR caches, and benchmark logs.
 home/dot_headroom/
-home/dot_local/state/headroom/
-home/dot_local/state/local-llm/
+home/dot_local/private_state/headroom/
+home/dot_local/private_state/local-llm/
 
 # Superpowers planning/spec artifacts (agent working notes, kept on disk only)
 docs/superpowers/
