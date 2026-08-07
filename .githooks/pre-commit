@@ -1,0 +1,74 @@
+#!/usr/bin/env zsh
+# Company-info leak guard. THIS REPO IS PUBLIC and history is permanent.
+#
+# Scans STAGED added lines, staged file NAMES, and the commit author identity
+# against a pattern list, and refuses the commit on a match. Mirrors
+# sec::leak_audit (home/dot_local/lib/system-secrets-common.zsh), which runs the
+# same check on the secrets tooling's own commit paths.
+#
+# The author identity is in scope because git falls back to
+# user@<hostname>.local when user.email is unset (a fresh machine, mid
+# bootstrap), and a hostname would then reach the repo through a field the diff
+# scan never sees.
+#
+# WHY THIS FILE IS TRACKED AND THE PATTERNS ARE NOT
+#
+# This script holds no identifiers, so tracking it is safe and makes it survive
+# a fresh clone. `.leak-patterns` holds the real strings and is gitignored —
+# committing it would re-leak exactly what it exists to block.
+#
+# Tracking is a fix for an observed failure, not tidiness: on 2026-08-06 both
+# this hook and `.leak-patterns` were found missing, with nothing reporting
+# their absence. The guard had been inert since at least 2026-07-02 — a work
+# account path was committed on that date, three weeks after the guard was
+# added, and sat in a public repo until it was found by restoring the guard.
+# Hence the loud warning below rather than a silent pass, and hence this file
+# living in git.
+#
+# A fresh clone still needs one command, because core.hooksPath is local config:
+#
+#   git config core.hooksPath .githooks
+#
+# KNOWN GAP: a pre-commit hook cannot see the commit message, and the policy
+# covers messages too. A commit-msg hook is the missing half.
+
+emulate -L zsh
+setopt pipefail
+
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+patterns="$repo_root/.leak-patterns"
+
+if [[ ! -r "$patterns" ]]; then
+  print -ru2 -- "pre-commit: WARNING — $patterns is missing, so the leak guard is"
+  print -ru2 -- "pre-commit: doing NOTHING. This repo is public. Recreate it before"
+  print -ru2 -- "pre-commit: committing anything that might carry work identifiers."
+  exit 0
+fi
+
+added=$(git diff --cached -U0 --no-color --diff-filter=AM | grep '^+' | grep -v '^+++')
+names=$(git diff --cached --name-only --diff-filter=ACMR)
+ident=$(git var GIT_AUTHOR_IDENT 2>/dev/null)
+haystack="$added
+$names
+$ident"
+
+[[ -n "${haystack//[[:space:]]/}" ]] || exit 0
+
+typeset -a hits
+while IFS= read -r pat || [[ -n "$pat" ]]; do
+  [[ -z "$pat" || "$pat" == \#* ]] && continue
+  if print -r -- "$haystack" | grep -iEq -- "$pat"; then
+    hits+=("$pat")
+  fi
+done < "$patterns"
+
+if (( $#hits )); then
+  print -ru2 -- "pre-commit: staged changes match work/company leak patterns:"
+  for pat in $hits; do print -ru2 -- "  - $pat"; done
+  print -ru2 -- ""
+  print -ru2 -- "Move work-specific data to the loose/unmanaged layer. Do not bypass"
+  print -ru2 -- "with --no-verify without explicit thought: a leak here is permanent."
+  exit 1
+fi
+
+exit 0

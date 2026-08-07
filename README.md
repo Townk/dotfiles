@@ -267,7 +267,21 @@ from one sees the env var.
 Committed artifacts identify a machine only by an **opaque slot id** (e.g.
 `slot-7f3a9c`) — never an alias, hostname, username, or work tool name. Real
 endpoints and the alias↔slot map live only in the loose, unmanaged layer. See
-`.cursor/rules/no-company-info.mdc` and the local `pre-commit` leak guard.
+`.cursor/rules/no-company-info.mdc` and the `pre-commit` leak guard.
+
+**On a fresh clone, arm the guard — it is inert until you do.** The hook lives
+in `.githooks/pre-commit` (tracked, holds no identifiers) but reads its patterns
+from `.leak-patterns` (gitignored, holds the real ones), and `core.hooksPath` is
+local config:
+
+```sh
+git config core.hooksPath .githooks     # otherwise git never runs the hook
+$EDITOR .leak-patterns                  # otherwise the hook warns and passes
+```
+
+Both were once missing at the same time, which let a work account path reach a
+public commit and stay there for five weeks. The hook now says so loudly when
+the pattern list is absent, rather than passing in silence.
 
 | Fact | Lives in |
 | ---- | -------- |
