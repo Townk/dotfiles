@@ -135,3 +135,53 @@ fn the_lua_length_prefix_matches_at_a_size_a_shell_would_get_wrong() {
     );
     assert_eq!(printed, hex(&258u32.to_be_bytes()));
 }
+
+/// §14.4's sole-writer requirement, as a regression guard rather than a live
+/// check: `hs.sqlite3` exists only inside Hammerspoon, so the staged module
+/// cannot be exercised here — but the property that matters is textual. If a
+/// write, a schema statement or the watcher ever reappears in it, two writers
+/// exist again and the store quietly doubles, which is precisely the failure
+/// §14.4 says is most likely to be skipped because everything appears to work.
+#[test]
+fn the_staged_history_module_can_no_longer_write() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("clients/clipboard-history.lua"),
+    )
+    .expect("the staged read-path module");
+
+    // Only the doc comment may mention these; code must not.
+    let code: String = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for forbidden in [
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "CREATE TABLE",
+        "ALTER TABLE",
+        "pasteboard.watcher",
+        "capture_now",
+    ] {
+        assert!(
+            !code.contains(forbidden),
+            "the read-path module reintroduced {forbidden}: two writers again (§14.4)"
+        );
+    }
+    assert!(
+        code.contains("OPEN_READONLY"),
+        "the store must be opened read-only, so a reintroduced write fails loudly"
+    );
+    // The picker's call sites are unchanged, which is what keeps this a
+    // one-file change rather than a picker rewrite.
+    for kept in [
+        "restore_by_id",
+        "restore_plain_by_id",
+        "_preview_of",
+        "_my_host",
+    ] {
+        assert!(code.contains(kept), "the read surface lost {kept}");
+    }
+}

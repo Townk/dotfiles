@@ -127,3 +127,25 @@ fn a_missing_subcommand_prints_usage() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("usage"));
 }
+
+#[test]
+fn restore_validates_its_clip_id_before_dialing() {
+    let dir = testutil::tempdir("clip-restore-args");
+    // A socket that does not exist: if the id were accepted, the failure would
+    // be about the connection instead of the argument.
+    let mut cmd = clip();
+    cmd.arg("restore").arg("id:12").env(
+        "CLIPBOARD_BRIDGE_LOCAL_SOCKET",
+        dir.path().join("absent.sock"),
+    );
+    let out = cmd.output().unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("not a clip id"),
+        "the bare rowid replaced the id: prefix (§6.1)"
+    );
+
+    let out = clip().arg("restore").output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("usage"));
+}

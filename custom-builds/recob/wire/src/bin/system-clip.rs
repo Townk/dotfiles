@@ -32,8 +32,9 @@ fn main() -> ExitCode {
     match args.get(1).map(String::as_str) {
         Some("copy") => pbcopy(&args[2..]),
         Some("paste") => pbpaste(&args[2..]),
+        Some("restore") => restore(&args[2..]),
         _ => {
-            eprintln!("usage: system-clip copy|paste [args]");
+            eprintln!("usage: system-clip copy|paste|restore [args]");
             ExitCode::FAILURE
         }
     }
@@ -574,6 +575,59 @@ fn detect_uti(path: &str) -> Option<String> {
         _ => return None,
     };
     Some(uti.to_string())
+}
+
+// --- restore ----------------------------------------------------------------
+
+/// `system-clip restore <clip_id> [--plain]` — §14.5's operation, for the GUI
+/// picker.
+///
+/// The picker used to restore in process, which made Hammerspoon a second
+/// writer of the pasteboard; sole-writer means sole-writer, so it now asks the
+/// daemon. It asks through this binary rather than speaking the wire from Lua:
+/// a third hand-written implementation of the framing is exactly what §8
+/// exists to prevent, and a picker action can afford one exec of a static
+/// binary.
+fn restore(args: &[String]) -> ExitCode {
+    let mut clip_id = None;
+    let mut plain_only = false;
+    for arg in args {
+        match arg.as_str() {
+            "--plain" => plain_only = true,
+            other if other.starts_with('-') => {
+                return fail(format!("system-clip restore: unknown option: {other}"))
+            }
+            other => {
+                if clip_id.replace(other.to_string()).is_some() {
+                    return fail("system-clip restore: one clip id".to_string());
+                }
+            }
+        }
+    }
+    let Some(clip_id) = clip_id else {
+        return fail("usage: system-clip restore <clip_id> [--plain]".to_string());
+    };
+    if clip_id.is_empty() || !clip_id.bytes().all(|b| b.is_ascii_digit()) {
+        return fail(format!("system-clip restore: not a clip id: {clip_id}"));
+    }
+
+    // `clip.restore` is tier `local`: restoring an arbitrary stored clip onto
+    // this machine's pasteboard is not something a peer has any business
+    // doing, so it goes over the trusted socket and nowhere else.
+    let mut session = match trusted_session("system-clip") {
+        Ok(session) => session,
+        Err(e) => return fail(e),
+    };
+    let mut request = Fields::new()
+        .with("op", b"clip.restore".to_vec())
+        .with("clip_id", clip_id.into_bytes());
+    if plain_only {
+        request.push("plain_only", b"1".to_vec());
+    }
+    match exchange_ok(&mut session, &request, false, "system-clip") {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => fail(e),
+    }
 }
 
 // --- pbpaste ----------------------------------------------------------------
