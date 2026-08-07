@@ -1,4 +1,4 @@
-//! The staged Lua client's codec against the Rust one.
+//! The Lua client's codec against the Rust one.
 //!
 //! §11's reasoning is that the Lua provider is a *second* implementation of
 //! the wire and that a rule only one implementation obeys has not been
@@ -13,9 +13,12 @@ mod common;
 use common::testutil;
 use recob_wire::wire::{self, Fields, Kind};
 
-/// The staged client, which Phase 8 installs over the nvim provider.
+/// The nvim provider, in the chezmoi source tree where it now lives. Tested
+/// from its installed location rather than from a staging copy: two copies of
+/// a client is exactly the drift this project keeps warning about.
 fn staged_client() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("clients/universal.lua")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../home/dot_config/nvim/lua/clipboard/universal.lua")
 }
 
 fn nvim_available() -> bool {
@@ -137,17 +140,18 @@ fn the_lua_length_prefix_matches_at_a_size_a_shell_would_get_wrong() {
 }
 
 /// §14.4's sole-writer requirement, as a regression guard rather than a live
-/// check: `hs.sqlite3` exists only inside Hammerspoon, so the staged module
+/// check: `hs.sqlite3` exists only inside Hammerspoon, so the module
 /// cannot be exercised here — but the property that matters is textual. If a
 /// write, a schema statement or the watcher ever reappears in it, two writers
 /// exist again and the store quietly doubles, which is precisely the failure
 /// §14.4 says is most likely to be skipped because everything appears to work.
 #[test]
-fn the_staged_history_module_can_no_longer_write() {
+fn the_history_module_can_no_longer_write() {
     let source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("clients/clipboard-history.lua"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../home/dot_config/hammerspoon/modules/apps/clipboard-history.lua"),
     )
-    .expect("the staged read-path module");
+    .expect("the read-path module");
 
     // Only the doc comment may mention these; code must not.
     let code: String = source
