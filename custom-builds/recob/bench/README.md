@@ -52,6 +52,31 @@ shaped the spec and remain requirements even though the daemon is now Rust:
   0700 parent directory, all three (§3.3). This applies to the Rust daemon
   unchanged.
 
+## Socket activation, for real: `verify-activation-systemd.sh`
+
+The other half of the Q2 finding above. Q2 says a zsh listener *cannot* accept
+on a descriptor it did not create; this checks that `recobd` can, against real
+systemd rather than against a stand-in.
+
+The daemon's own suite reproduces systemd's contract by hand — descriptors from
+fd 3 up, `LISTEN_PID` set to the daemon's pid — so the check runs on macOS too.
+That is a model of systemd, written by the same person as the code it tests.
+This script needs a Linux box with a systemd user session and is the thing that
+actually settles §3.2.
+
+```sh
+./verify-activation-systemd.sh          # scratch units, removed on exit
+./verify-activation-systemd.sh --keep   # leave them up to poke at
+```
+
+It also checks the refusal path, because the first manual run of this hit it by
+accident: `DirectoryMode=` applies only to a directory systemd *creates*, so a
+pre-existing 0775 one arrives at the daemon untouched and is refused. That is
+the empirical reason §3.3 has the daemon assert the mode it was handed rather
+than trust the unit.
+
+Output is redacted — home path, hostname, username — so it is safe to paste.
+
 ## Worked example: `verify-worked-example.zsh`
 
 Encodes §4.4's frame from the spec's own field grammar and prints the bytes, so
