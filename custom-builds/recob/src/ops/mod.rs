@@ -3,6 +3,7 @@
 //! a port of the zsh dispatcher path it replaces, with the §6.2 collapses
 //! applied.
 
+pub mod clip;
 pub mod files;
 pub mod gui;
 pub mod persist;

@@ -182,6 +182,29 @@ pub fn persist_files(fields: &Fields, trusted: bool, ctx: &Ctx) -> Result<Respon
     }
 
     let store = open_store(ctx)?;
+    persist_files_row(&store, host, &paths, trusted)?;
+
+    // Mount enrichment, after the row stands (macOS): when this Mac holds a
+    // healthy rclone mount of `host`, the pasteboard additionally gets
+    // mount-relative file URLs so Cmd+V in Finder is a native copy. The spec
+    // does not mention this M behavior either way; dropping it silently at
+    // cutover would regress a validated feature, so it is carried across and
+    // the gap is reported with this phase. Detached: a wedged FUSE stat can
+    // never hang the handler, and every failure just leaves the lazy row.
+    #[cfg(target_os = "macos")]
+    enrich::spawn(ctx, host.to_string(), self_host, paths);
+
+    Ok(Fields::new().into())
+}
+
+/// The manifest-row core, shared with `clip.set.files`' Linux half — where
+/// there is no pasteboard, the row *is* the clip. Returns the row id.
+pub(crate) fn persist_files_row(
+    store: &Store,
+    host: &str,
+    paths: &[String],
+    trusted: bool,
+) -> Result<i64, ProtoError> {
     let joined = paths.join("\n");
     let manifest = paths.join("\0");
     let hash = sha256_hex(joined.as_bytes());
@@ -233,7 +256,7 @@ pub fn persist_files(fields: &Fields, trusted: bool, ctx: &Ctx) -> Result<Respon
         .map_err(internal)?;
 
     if trusted {
-        replace_file_authority_strict(store.conn(), row_id, &paths)?;
+        replace_file_authority_strict(store.conn(), row_id, paths)?;
     }
     sweep(store.conn())?;
     store
@@ -254,18 +277,7 @@ pub fn persist_files(fields: &Fields, trusted: bool, ctx: &Ctx) -> Result<Respon
             [],
         )
         .map_err(internal)?;
-
-    // Mount enrichment, after the row stands (macOS): when this Mac holds a
-    // healthy rclone mount of `host`, the pasteboard additionally gets
-    // mount-relative file URLs so Cmd+V in Finder is a native copy. The spec
-    // does not mention this M behavior either way; dropping it silently at
-    // cutover would regress a validated feature, so it is carried across and
-    // the gap is reported with this phase. Detached: a wedged FUSE stat can
-    // never hang the handler, and every failure just leaves the lazy row.
-    #[cfg(target_os = "macos")]
-    enrich::spawn(ctx, host.to_string(), self_host, paths);
-
-    Ok(Fields::new().into())
+    Ok(row_id)
 }
 
 /// The strict authority validation the persist path applies — beyond §6.6's
@@ -328,7 +340,7 @@ mod enrich {
     use std::time::Duration;
 
     use crate::ops::run_with_deadline;
-    use crate::platform::macos::Pasteboard;
+    use crate::platform::macos::{filenames_plist, url_encode, Pasteboard};
     use crate::session::Ctx;
 
     pub fn spawn(ctx: &Ctx, host: String, self_host: String, paths: Vec<String>) {
@@ -410,39 +422,6 @@ mod enrich {
         } else {
             Some(out)
         }
-    }
-
-    /// The XML plist the zsh generated, escape rules included.
-    fn filenames_plist(paths: &[String]) -> Vec<u8> {
-        let mut xml = String::from(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
-             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-             <plist version=\"1.0\"><array>\n",
-        );
-        for path in paths {
-            let escaped = path
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;");
-            xml.push_str(&format!("<string>{escaped}</string>\n"));
-        }
-        xml.push_str("</array></plist>\n");
-        xml.into_bytes()
-    }
-
-    /// Percent-encode everything outside `[A-Za-z0-9-._~/]`, byte-wise — the
-    /// zsh `urlenc`.
-    pub fn url_encode(path: &str) -> String {
-        let mut out = String::with_capacity(path.len());
-        for byte in path.bytes() {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
-                out.push(byte as char);
-            } else {
-                out.push_str(&format!("%{byte:02X}"));
-            }
-        }
-        out
     }
 }
 

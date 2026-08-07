@@ -103,12 +103,13 @@ fn an_unknown_op_names_itself_and_leaves_the_connection_open() {
     client.hello_default();
     client.expect_caps();
 
-    let (kind, fields) = client.request("clip.set");
+    // Phase 4 made clip.set real, so the probe names an op no build has.
+    let (kind, fields) = client.request("clip.telemetry");
     assert_eq!(kind, Kind::Error);
     assert_eq!(text(&fields, "code"), "unknown-op");
     // §10: `unknown-op` carries op, proto and impl, so two builds sharing a
     // proto are still distinguishable (§7.1).
-    assert_eq!(text(&fields, "op"), "clip.set");
+    assert_eq!(text(&fields, "op"), "clip.telemetry");
     assert_eq!(text(&fields, "proto"), PROTO.to_string());
     assert_eq!(text(&fields, "impl"), "test-impl");
 

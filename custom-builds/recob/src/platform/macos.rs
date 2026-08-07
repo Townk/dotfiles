@@ -185,6 +185,91 @@ fn parse_filenames_plist(blob: &NSData) -> Option<Vec<String>> {
     }
 }
 
+/// The XML property list the pasteboard's `NSFilenamesPboardType` carries —
+/// the shape the zsh generated, escape rules included.
+pub fn filenames_plist(paths: &[String]) -> Vec<u8> {
+    let mut xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+         \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\"><array>\n",
+    );
+    for path in paths {
+        let escaped = path
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        xml.push_str(&format!("<string>{escaped}</string>\n"));
+    }
+    xml.push_str("</array></plist>\n");
+    xml.into_bytes()
+}
+
+/// Percent-encode everything outside `[A-Za-z0-9-._~/]`, byte-wise — the zsh
+/// `urlenc`, for `public.file-url` values.
+pub fn url_encode(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// Which rich representation [`attributed_to_text`] is decoding.
+#[derive(Clone, Copy)]
+pub enum RichDoc {
+    Html,
+    Rtf,
+    Rtfd,
+}
+
+/// HTML/RTF/RTFD to plain text via `NSAttributedString`, the riskiest API in
+/// the absorbed set (`probes/attrstr.rs`): the options dictionary must carry
+/// the exported document-type *statics* — the equivalent string literals
+/// compile and then fail at runtime with the unhelpful "Cocoa error 65806".
+pub fn attributed_to_text(bytes: &[u8], doc: RichDoc) -> Option<String> {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::{
+        NSAttributedStringDocumentFormats, NSDocumentTypeDocumentAttribute, NSHTMLTextDocumentType,
+        NSRTFDTextDocumentType, NSRTFTextDocumentType,
+    };
+    use objc2_foundation::{NSAttributedString, NSDictionary};
+
+    /// The exported statics are typed as plain `NSObject`; they are NSString
+    /// constants (probe-verified), and passing anything else — a literal above
+    /// all — fails at runtime with "Cocoa error 65806".
+    unsafe fn cast_static(object: &objc2_foundation::NSObject) -> &NSString {
+        unsafe { std::mem::transmute::<&objc2_foundation::NSObject, &NSString>(object) }
+    }
+
+    let data = NSData::with_bytes(bytes);
+    let doctype: &NSString = unsafe {
+        match doc {
+            RichDoc::Html => cast_static(NSHTMLTextDocumentType),
+            RichDoc::Rtf => cast_static(NSRTFTextDocumentType),
+            RichDoc::Rtfd => cast_static(NSRTFDTextDocumentType),
+        }
+    };
+    let key: &NSString = unsafe { cast_static(NSDocumentTypeDocumentAttribute) };
+    let opts: Retained<NSDictionary<NSString, AnyObject>> =
+        NSDictionary::from_slices(&[key], &[doctype as &AnyObject]);
+    let parsed = unsafe {
+        NSAttributedString::initWithData_options_documentAttributes_error(
+            NSAttributedString::alloc(),
+            &data,
+            std::mem::transmute::<&NSDictionary<NSString, AnyObject>, &NSDictionary<_, _>>(&opts),
+            None,
+        )
+    };
+    parsed.ok().map(|s| s.string().to_string())
+}
+
 /// The frontmost application, from a non-GUI process (probe Q7): what
 /// `source_app`, `source_bundle_id` and the password-manager deny-list all
 /// depend on. `None` — no frontmost application, or one with no name — is the

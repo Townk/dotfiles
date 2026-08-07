@@ -166,6 +166,20 @@ pub struct Capture {
 /// row's register type is unknown — the sidecar file the Lua consulted is
 /// deleted by §14.6.
 pub fn decide(snap: &Snapshot) -> Result<Capture, Skip> {
+    decide_inner(snap, true)
+}
+
+/// The same pipeline for a clip the daemon is *writing* (`clip.set` and
+/// friends): the GUI guards do not apply — there is no frontmost application
+/// in the loop, `snap.frontmost` carries the caller-declared `app` — but every
+/// content refusal does. A refusal here means the pasteboard write stands and
+/// no row is recorded, which is exactly what the watcher's refusal produced
+/// for the same content.
+pub fn decide_direct(snap: &Snapshot) -> Result<Capture, Skip> {
+    decide_inner(snap, false)
+}
+
+fn decide_inner(snap: &Snapshot, observed: bool) -> Result<Capture, Skip> {
     if snap.item_utis.is_empty() {
         return Err(Skip::NoTypes);
     }
@@ -175,18 +189,20 @@ pub fn decide(snap: &Snapshot) -> Result<Capture, Skip> {
         }
     }
 
-    let app_name = snap.frontmost.as_ref().map(|app| app.name.as_str());
-    if let Some(name) = app_name {
-        if DENY_APPS.contains(&name) {
-            return Err(Skip::DeniedApp);
+    if observed {
+        let app_name = snap.frontmost.as_ref().map(|app| app.name.as_str());
+        if let Some(name) = app_name {
+            if DENY_APPS.contains(&name) {
+                return Err(Skip::DeniedApp);
+            }
         }
-    }
-    // Echo guard: when no interactive GUI user owns the session, a pasteboard
-    // change is a bridge write echoing a remote machine's clip, not a local
-    // copy. The origin machine holds its own row.
-    match app_name {
-        None | Some("loginwindow") => return Err(Skip::NoGuiSession),
-        Some(_) => {}
+        // Echo guard: when no interactive GUI user owns the session, a
+        // pasteboard change is a bridge write echoing a remote machine's clip,
+        // not a local copy. The origin machine holds its own row.
+        match app_name {
+            None | Some("loginwindow") => return Err(Skip::NoGuiSession),
+            Some(_) => {}
+        }
     }
 
     if snap.data.is_empty() {
