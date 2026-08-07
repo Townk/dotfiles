@@ -437,6 +437,27 @@ mod tests {
         ctx
     }
 
+    // §7.1: the wire crate carries its own copy of the registry's names and
+    // `since` values, because a client renders "and <op> needs proto <n>"
+    // from its OWN registry. This table is the authority; the copy may not
+    // drift from it in either direction.
+    #[test]
+    fn the_client_registry_copy_matches_this_table() {
+        assert_eq!(
+            OPS.len(),
+            recob_wire::registry::OPS.len(),
+            "the wire registry copy has a different operation count"
+        );
+        for op in OPS {
+            assert_eq!(
+                recob_wire::registry::since(op.name),
+                Some(op.since),
+                "the wire registry copy disagrees about {}",
+                op.name
+            );
+        }
+    }
+
     // §9.4 assertion 1. With one table this is structural — a row cannot be
     // written without a tier — so the test's job is to fail if someone later
     // splits the table in two and reintroduces the drift it guards against.

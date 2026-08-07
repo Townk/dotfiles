@@ -93,6 +93,10 @@ pub enum ClientError {
     /// §9.2: the endpoint failed to prove itself; nothing it sent may be
     /// believed and nothing carrying user data may be sent.
     Untrusted(String),
+    /// §8 rule 7: the operation is absent from the server's `caps`, refused
+    /// client-side with §7.1's skew diagnostic. The string is the complete
+    /// sentence in the client's voice, ready for the program-name prefix.
+    Unsupported(String),
     Io(std::io::Error),
 }
 
@@ -103,8 +107,51 @@ impl std::fmt::Display for ClientError {
             ClientError::Protocol(what) => write!(out, "protocol error: {what}"),
             ClientError::Server { code, message } => write!(out, "{code}: {message}"),
             ClientError::Untrusted(what) => write!(out, "untrusted endpoint: {what}"),
+            ClientError::Unsupported(what) => write!(out, "{what}"),
             ClientError::Io(e) => write!(out, "i/o error: {e}"),
         }
+    }
+}
+
+/// §7.1's two side labels: naming the machine is the client's job, because
+/// only the client knows which address it dialed.
+pub const SIDE_LOCAL: &str = "this machine";
+pub const SIDE_TUNNEL: &str = "the machine at the other end of the SSH tunnel";
+
+/// §7.1's message shapes, in the client's voice, without the program-name
+/// prefix. `server_proto` is the server's from its hello; `None` (an
+/// unparseable or absent field) falls through to the caps-authoritative
+/// shape, since asserting a version comparison would assert something false.
+fn skew_message(op: &str, server_proto: Option<u32>, side: &str) -> String {
+    let client_proto = wire::PROTO;
+    // "this machine's clipboard bridge" reads as the spec writes it; every
+    // other side gets the prepositional form.
+    let subject = if side == SIDE_LOCAL {
+        "this machine's clipboard bridge".to_string()
+    } else {
+        format!("the clipboard bridge on {side}")
+    };
+    match server_proto {
+        Some(sp) if sp < client_proto => {
+            // The clause is dropped when `since` is not the reason the
+            // operation is missing (§7.1).
+            let clause = match crate::registry::since(op) {
+                Some(since) if since > sp => format!(", and {op} needs proto {since}"),
+                _ => String::new(),
+            };
+            let remedy = if side == SIDE_LOCAL { "here" } else { "there" };
+            format!(
+                "{subject} is behind — it speaks RECOB proto {sp}, this client \
+                 speaks proto {client_proto}{clause}. Run chezmoi apply {remedy}."
+            )
+        }
+        Some(sp) if sp > client_proto => format!(
+            "{subject} is ahead of this client (proto {sp} vs {client_proto}) — \
+             run chezmoi apply here."
+        ),
+        // Versions equal (or unknown): the caps set is authoritative over the
+        // version integer (§7.1).
+        _ => format!("{subject} does not support {op}"),
     }
 }
 
@@ -175,6 +222,10 @@ pub struct Session<S: ClientStream> {
     stream: S,
     pub caps: Vec<String>,
     pub endpoint: String,
+    /// The server's `proto` from its hello, for §7.1's comparison.
+    pub server_proto: Option<u32>,
+    /// §7.1's side label; [`SIDE_LOCAL`] unless the dialer said otherwise.
+    side: String,
     timeouts: Timeouts,
 }
 
@@ -238,6 +289,10 @@ impl<S: ClientStream> Session<S> {
 
         stream.set_timeout(Some(timeouts.exchange))?;
         let banner = read_fields(&mut stream, Kind::Hello)?;
+        let server_proto = banner
+            .get("proto")
+            .and_then(|raw| std::str::from_utf8(raw).ok())
+            .and_then(|text| text.trim().parse::<u32>().ok());
 
         let mut hello = Fields::new()
             .with("proto", wire::PROTO.to_string().into_bytes())
@@ -321,8 +376,17 @@ impl<S: ClientStream> Session<S> {
             stream,
             caps,
             endpoint,
+            server_proto,
+            side: SIDE_LOCAL.to_string(),
             timeouts,
         })
+    }
+
+    /// §7.1: name the machine by the address dialed. The dialer of the
+    /// forwarded tunnel port calls this with [`SIDE_TUNNEL`]; everything else
+    /// keeps the [`SIDE_LOCAL`] default.
+    pub fn set_side(&mut self, side: &str) {
+        self.side = side.to_string();
     }
 
     /// §8 rule 7: after the first exchange, an operation absent from `caps`
@@ -331,9 +395,33 @@ impl<S: ClientStream> Session<S> {
         self.caps.iter().any(|name| name == op)
     }
 
+    /// §8 rule 7's enforcement point: this client reads `caps` during
+    /// establish, so every exchange is a "second and later" one and the
+    /// pre-flight always applies. An empty caps list means the server
+    /// declared nothing — there is no inventory to check against, and the
+    /// server's own `unknown-op` remains the diagnostic (§7.2).
+    fn preflight(&self, fields: &Fields) -> Result<(), ClientError> {
+        if self.caps.iter().all(|name| name.is_empty()) {
+            return Ok(());
+        }
+        let Some(op) = fields.get("op") else {
+            return Ok(());
+        };
+        let op = String::from_utf8_lossy(op);
+        if self.supports(&op) {
+            return Ok(());
+        }
+        Err(ClientError::Unsupported(skew_message(
+            &op,
+            self.server_proto,
+            &self.side,
+        )))
+    }
+
     /// One request, one `R` — the exchange shape every operation but
     /// `files.fetch` uses. `action` selects §5.2's longer deadline.
     pub fn exchange(&mut self, fields: &Fields, action: bool) -> Result<Fields, ClientError> {
+        self.preflight(fields)?;
         let timeout = if action {
             self.timeouts.action
         } else {
@@ -358,6 +446,7 @@ impl<S: ClientStream> Session<S> {
         fields: &Fields,
         sink: &mut dyn StreamSink,
     ) -> Result<Fields, ClientError> {
+        self.preflight(fields)?;
         self.stream.set_timeout(Some(self.timeouts.action))?;
         self.stream
             .write_all(&wire::encode(Kind::Request, fields))?;
@@ -462,6 +551,56 @@ fn fill_some<S: ClientStream>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_skew_diagnostic_takes_the_specified_shapes() {
+        // §7.1's worked example, far side behind, clause included: proto 0
+        // does not exist, so a v1 op against a proto-0 server carries the
+        // "needs proto 1" clause.
+        assert_eq!(
+            skew_message("clip.set.files", Some(0), SIDE_TUNNEL),
+            "the clipboard bridge on the machine at the other end of the SSH \
+             tunnel is behind — it speaks RECOB proto 0, this client speaks \
+             proto 1, and clip.set.files needs proto 1. Run chezmoi apply there."
+        );
+        // An operation this client's registry does not know cannot claim an
+        // age: the clause drops rather than asserting something false.
+        assert_eq!(
+            skew_message("no.such.op", Some(0), SIDE_LOCAL),
+            "this machine's clipboard bridge is behind — it speaks RECOB \
+             proto 0, this client speaks proto 1. Run chezmoi apply here."
+        );
+        // This side behind: the remedy is updating the client, always here.
+        assert_eq!(
+            skew_message("clip.get", Some(2), SIDE_LOCAL),
+            "this machine's clipboard bridge is ahead of this client \
+             (proto 2 vs 1) — run chezmoi apply here."
+        );
+        // Versions equal: the caps set is authoritative over the integer.
+        assert_eq!(
+            skew_message("osd.notify", Some(1), SIDE_TUNNEL),
+            "the clipboard bridge on the machine at the other end of the SSH \
+             tunnel does not support osd.notify"
+        );
+        // An unparseable server proto must not invent a comparison.
+        assert_eq!(
+            skew_message("clip.get", None, SIDE_LOCAL),
+            "this machine's clipboard bridge does not support clip.get"
+        );
+    }
+
+    #[test]
+    fn every_registry_operation_declares_since_one_at_proto_one() {
+        // Until the first proto bump, a `since` above PROTO could only be a
+        // typo — the daemon's registry has the same assertion on its side.
+        for (op, since) in crate::registry::OPS {
+            assert!(
+                *since >= 1 && *since <= wire::PROTO,
+                "{op} declares since {since} against proto {}",
+                wire::PROTO
+            );
+        }
+    }
 
     #[test]
     fn a_pushed_token_is_validated_before_use() {
