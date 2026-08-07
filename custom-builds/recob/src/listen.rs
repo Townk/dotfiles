@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::limits::{Admission, Limits};
 use crate::log;
 use crate::session::{self, Ctx};
 
@@ -116,16 +117,19 @@ fn prepare_parent(path: &Path) -> io::Result<()> {
             format!("trusted socket path {} has no parent", path.display()),
         )
     })?;
+    ensure_private_dir(parent)
+}
+
+/// A directory at 0700, created if absent and tightened if looser. Used for the
+/// trusted socket's parent (§3.3) and for the credential's state directory
+/// (§9.2), which carry the same requirement for the same reason.
+pub fn ensure_private_dir(parent: &Path) -> io::Result<()> {
     match fs::metadata(parent) {
         Ok(meta) if meta.is_dir() => {
             let mode = meta.permissions().mode() & 0o777;
             if mode != 0o700 {
                 fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
-                log!(
-                    "tightened {} from {:04o} to 0700 (§3.3: the trusted socket's parent)",
-                    parent.display(),
-                    mode
-                );
+                log!("tightened {} from {:04o} to 0700", parent.display(), mode);
             }
             Ok(())
         }
@@ -138,6 +142,21 @@ fn prepare_parent(path: &Path) -> io::Result<()> {
             .mode(0o700)
             .create(parent),
     }
+}
+
+/// Writes a file no other uid can read: umask before the write so it is never
+/// created permissive, an explicit chmod after so the mode does not depend on
+/// the ambient umask. Both, for the reason §3.3 gives about the socket and §9.2
+/// gives about the token push.
+pub fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        ensure_private_dir(parent)?;
+    }
+    {
+        let _guard = UmaskGuard::set(0o077);
+        fs::write(path, bytes)?;
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
 /// A socket file left behind by a dead daemon blocks bind with EADDRINUSE.
@@ -349,24 +368,16 @@ pub fn serve_forever(bound: Bound, ctx: Arc<Ctx>) -> io::Result<()> {
 fn accept_public(listener: TcpListener, ctx: Arc<Ctx>) {
     loop {
         match listener.accept() {
-            Ok((stream, peer)) => {
-                let ctx = Arc::clone(&ctx);
+            Ok((mut stream, peer)) => {
                 let peer = peer.to_string();
+                let Some(admission) = admit(&mut stream, Endpoint::Public, &peer, &ctx) else {
+                    continue;
+                };
+                let ctx = Arc::clone(&ctx);
                 let label = peer.clone();
                 let spawned = thread::Builder::new()
                     .name("conn-public".into())
-                    .spawn(move || {
-                        let mut stream = stream;
-                        if let Err(e) = set_timeouts(
-                            |d| stream.set_read_timeout(d),
-                            |d| stream.set_write_timeout(d),
-                            ctx.exchange_timeout,
-                        ) {
-                            log!("public {peer}: cannot set timeouts: {e}");
-                            return;
-                        }
-                        session::serve(&mut stream, Endpoint::Public, &peer, &ctx);
-                    });
+                    .spawn(move || serve_one(stream, Endpoint::Public, &peer, &ctx, admission));
                 if let Err(e) = spawned {
                     log!("public {label}: cannot spawn handler: {e}");
                 }
@@ -379,21 +390,16 @@ fn accept_public(listener: TcpListener, ctx: Arc<Ctx>) {
 fn accept_trusted(listener: UnixListener, ctx: Arc<Ctx>) {
     loop {
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok((mut stream, _)) => {
+                let Some(admission) = admit(&mut stream, Endpoint::Trusted, "same-uid", &ctx)
+                else {
+                    continue;
+                };
                 let ctx = Arc::clone(&ctx);
                 let spawned = thread::Builder::new()
                     .name("conn-trusted".into())
                     .spawn(move || {
-                        let mut stream = stream;
-                        if let Err(e) = set_timeouts(
-                            |d| stream.set_read_timeout(d),
-                            |d| stream.set_write_timeout(d),
-                            ctx.exchange_timeout,
-                        ) {
-                            log!("trusted: cannot set timeouts: {e}");
-                            return;
-                        }
-                        session::serve(&mut stream, Endpoint::Trusted, "same-uid", &ctx);
+                        serve_one(stream, Endpoint::Trusted, "same-uid", &ctx, admission)
                     });
                 if let Err(e) = spawned {
                     log!("trusted: cannot spawn handler: {e}");
@@ -404,14 +410,78 @@ fn accept_trusted(listener: UnixListener, ctx: Arc<Ctx>) {
     }
 }
 
-fn set_timeouts(
-    read: impl FnOnce(Option<Duration>) -> io::Result<()>,
-    write: impl FnOnce(Option<Duration>) -> io::Result<()>,
-    timeout: Duration,
-) -> io::Result<()> {
-    read(Some(timeout))?;
-    write(Some(timeout))
+fn serve_one<S: Socket>(
+    mut stream: S,
+    endpoint: Endpoint,
+    peer: &str,
+    ctx: &Ctx,
+    admission: Admission,
+) {
+    if let Err(e) = stream
+        .write_timeout(Some(ctx.exchange_timeout))
+        .and_then(|()| stream.read_timeout(Some(ctx.exchange_timeout)))
+    {
+        log!("{} {peer}: cannot set timeouts: {e}", endpoint.as_str());
+        return;
+    }
+    session::serve(&mut stream, endpoint, peer, ctx, admission);
 }
+
+/// §3.5's accept-time limits, applied **before the connection is dispatched** —
+/// which is the whole point of them, since authorization is evaluated per
+/// operation, long after the descriptor is spent.
+///
+/// A refusal still identifies itself. §3.5 is emphatic about why: §5.2 tells a
+/// client that a connection closed without a `RECOB` preamble means no bridge is
+/// present, which is the one condition under which `pbcopy` may fall back to
+/// unauthenticated OSC 52. A silent close here would let a local attacker who
+/// merely opens eight idle connections push every one of the victim's copies onto
+/// an unauthenticated transport — the limits meant to protect the listener would
+/// become the authentication bypass.
+fn admit<S: Socket>(
+    stream: &mut S,
+    endpoint: Endpoint,
+    peer: &str,
+    ctx: &Arc<Ctx>,
+) -> Option<Admission> {
+    match Limits::admit(&ctx.limits, endpoint) {
+        Ok(admission) => Some(admission),
+        Err(refusal) => {
+            let retry_after = ctx.limits.retry_after(endpoint, refusal);
+            log!(
+                "{} {peer}: refused at accept ({}), retry_after {retry_after}s",
+                endpoint.as_str(),
+                refusal.as_str()
+            );
+            write_busy(stream, retry_after);
+            None
+        }
+    }
+}
+
+/// The preamble and an `E{code=busy}` and nothing else — never the banner of
+/// §5.1, since there is no nonce to issue for a connection that will not be
+/// authenticated.
+///
+/// The write is unconditionally non-blocking: a listener that can be made to
+/// block on a write to a hostile peer is worse than one that occasionally drops a
+/// diagnostic. A dropped or truncated `busy` is a normal outcome, not an error
+/// path, which is why §5.2 keys the client's fallback on the connect result
+/// rather than on bytes received.
+fn write_busy<S: Socket>(stream: &mut S, retry_after: u64) {
+    let err = crate::wire::ProtoError::new("busy", "the endpoint is at capacity")
+        .with("retry_after", retry_after.to_string().into_bytes());
+    let mut bytes = crate::wire::preamble().to_vec();
+    bytes.extend_from_slice(&err.frame());
+    if stream.nonblocking(true).is_err() {
+        return;
+    }
+    let _ = stream.write(&bytes);
+}
+
+/// Everything the accept loops need from a connected socket. Implemented for both
+/// stream types by `session`.
+pub use crate::session::Socket;
 
 /// §3.4: the accept loop survives a connection reset. A descriptor exhaustion
 /// error would otherwise spin, so it costs a short pause.

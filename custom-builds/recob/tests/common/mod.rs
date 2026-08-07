@@ -113,11 +113,15 @@ pub fn text(fields: &Fields, name: &str) -> String {
 
 /// A served connection with no listener in the way: the daemon's own
 /// `session::serve` on one end of a socket pair, a test client on the other.
+///
+/// The admission comes from the real limiter, so §3.5's accounting is exercised
+/// here rather than bypassed.
 pub fn served(ctx: Arc<Ctx>, endpoint: Endpoint) -> Client<std::os::unix::net::UnixStream> {
     let (server, client) = std::os::unix::net::UnixStream::pair().unwrap();
+    let admission = recobd::limits::Limits::admit(&ctx.limits, endpoint).expect("admitted");
     std::thread::spawn(move || {
         let mut server = server;
-        session::serve(&mut server, endpoint, "test", &ctx);
+        session::serve(&mut server, endpoint, "test", &ctx, admission);
     });
     Client::open(client)
 }

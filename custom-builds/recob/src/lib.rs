@@ -7,7 +7,9 @@
 //! later phase's field or check belongs, this build says so rather than stubbing
 //! it.
 
+pub mod exposure;
 pub mod host;
+pub mod limits;
 pub mod listen;
 pub mod record;
 pub mod registry;

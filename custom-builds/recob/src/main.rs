@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use recobd::exposure::Exposure;
 use recobd::host::HostIdentity;
 use recobd::listen::{self, Bound, DEFAULT_PUBLIC_PORT};
 use recobd::log;
@@ -116,10 +117,14 @@ fn main() -> ExitCode {
         IMPL.to_string(),
         exchange_timeout(),
     );
+    // The operator's own configuration, opted into explicitly here: `Ctx::new`
+    // leaves it inert so a test can never pick this file up by accident.
+    ctx.exposure = Exposure::default();
     if args.record {
         ctx.recorder = Some(Recorder::from_env());
         log!("recording mode (§11.1): decoding with the production decoder");
     }
+
     log!(
         "wire {WIRE_VERSION} proto {PROTO} impl {IMPL} host {}",
         ctx.host.current().unwrap_or_else(|| "<unresolved>".into())

@@ -93,8 +93,7 @@ impl Recorder {
     }
 }
 
-/// One directive per exchange (§11.1). `no-proof`, `bad-proof` and `deny-auth`
-/// arrive with authentication in Phase 2; they are not silently accepted here.
+/// One directive per exchange (§11.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Directive {
     Ok(Fields),
@@ -112,6 +111,13 @@ pub enum Directive {
 #[derive(Default)]
 pub struct Script {
     hello_proto: Option<u32>,
+    /// Connection-level directives (§11.1). Unlike a reply directive these are
+    /// not consumed one per exchange: they change how the connection itself is
+    /// answered, which is the only way to exercise a client's
+    /// untrusted-endpoint and `unauthorized` paths deliberately.
+    deny_auth: bool,
+    no_proof: bool,
+    bad_proof: bool,
     directives: VecDeque<String>,
 }
 
@@ -141,6 +147,23 @@ impl Script {
                 }
                 continue;
             }
+            // The three authentication directives are connection-level for the
+            // same reason: they alter the handshake, which happens once.
+            match line {
+                "deny-auth" => {
+                    script.deny_auth = true;
+                    continue;
+                }
+                "no-proof" => {
+                    script.no_proof = true;
+                    continue;
+                }
+                "bad-proof" => {
+                    script.bad_proof = true;
+                    continue;
+                }
+                _ => {}
+            }
             script.directives.push_back(line.to_string());
         }
         script
@@ -148,6 +171,22 @@ impl Script {
 
     pub fn hello_proto(&self) -> Option<u32> {
         self.hello_proto
+    }
+
+    /// §11.1: exercise the client's `unauthorized` path without a wrong token.
+    pub fn deny_auth(&self) -> bool {
+        self.deny_auth
+    }
+
+    /// §11.1: withhold the proof, so a client's untrusted-endpoint path runs.
+    pub fn no_proof(&self) -> bool {
+        self.no_proof
+    }
+
+    /// §11.1: answer the client's challenge wrongly, which is the case a client
+    /// that merely checks for *presence* of `proof` would pass and must not.
+    pub fn bad_proof(&self) -> bool {
+        self.bad_proof
     }
 
     /// The next directive, or `None` when the script is absent or spent — in

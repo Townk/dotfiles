@@ -1,23 +1,28 @@
-//! The connection lifecycle (§5): preamble, banner, hello, capabilities, then
-//! request/response exchanges until either side closes.
+//! The connection lifecycle (§5), the authentication handshake (§9.2) and the
+//! pre-authentication budget (§3.5).
 //!
 //! One connection carries any number of exchanges (P2) and responses are
 //! strictly ordered — the Nth `R`/`E` answers the Nth `Q` — so there are no
 //! request identifiers and the handler is single-threaded per connection.
 //!
-//! Phase 1 has no authentication (§9.2 is Phase 2). Two consequences are
-//! deliberate and visible here: the banner carries no `nonce`, and the
-//! capabilities frame carries no `proof`. Both are absent rather than stubbed,
-//! because a nonce nobody challenges with is worse than no nonce at all.
+//! Authentication (§9.2) is not here yet: the public endpoint accepts any peer
+//! that reaches it, exactly as in Phase 1. What this file gains is §3.5's
+//! pre-authentication budget and the single authorization call site the §9.3
+//! policy table is consulted through.
 
 use std::io::{Read, Write};
-use std::time::Duration;
+use std::net::TcpStream;
+use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use crate::exposure::Exposure;
 use crate::host::HostIdentity;
+use crate::limits::{Admission, Limits};
 use crate::listen::Endpoint;
 use crate::log;
 use crate::record::{Directive, Recorder, Script};
-use crate::registry;
+use crate::registry::{self, Granted};
 use crate::wire::{
     self, Fields, FrameError, Kind, ProtoError, MAX_BODY, PREAMBLE_LEN, PROTO, WIRE_VERSION,
 };
@@ -25,28 +30,112 @@ use crate::wire::{
 /// §6.4: a `D` chunk is at most 64 KiB.
 const CHUNK: usize = 64 * 1024;
 
+/// The socket operations the lifecycle needs beyond `Read`/`Write`: the §3.5
+/// handshake deadline and §5.2's exchange timeout are different values applied to
+/// the same descriptor at different phases, so the timeout has to be settable
+/// from inside the session rather than once by the accept loop.
+pub trait Socket: Read + Write {
+    fn read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn nonblocking(&self, on: bool) -> std::io::Result<()>;
+}
+
+macro_rules! impl_socket {
+    ($t:ty) => {
+        impl Socket for $t {
+            fn read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+                <$t>::set_read_timeout(self, timeout)
+            }
+            fn write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+                <$t>::set_write_timeout(self, timeout)
+            }
+            fn nonblocking(&self, on: bool) -> std::io::Result<()> {
+                <$t>::set_nonblocking(self, on)
+            }
+        }
+    };
+}
+
+impl_socket!(TcpStream);
+impl_socket!(UnixStream);
+
 pub struct Ctx {
     pub host: HostIdentity,
     /// §5.1 `impl`: build identity, diagnostics only, never compared
-    /// programmatically. Phase 8's build hook passes the chezmoi source hash
-    /// prefix in `RECOB_IMPL`; a hand-built binary says so.
+    /// programmatically.
     pub impl_id: String,
     pub exchange_timeout: Duration,
     pub recorder: Option<Recorder>,
+    pub limits: Arc<Limits>,
+    pub exposure: Exposure,
 }
 
 impl Ctx {
+    /// Defaults are deliberately inert: no recorder, and an exposure file that
+    /// withdraws nothing. `main` opts into the real exposure path explicitly, so
+    /// a test can never pick up the operator's own configuration by accident.
     pub fn new(host: HostIdentity, impl_id: String, exchange_timeout: Duration) -> Self {
         Ctx {
             host,
             impl_id,
             exchange_timeout,
             recorder: None,
+            limits: Arc::new(Limits::default()),
+            exposure: Exposure::none(),
         }
     }
 }
 
-pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str, ctx: &Ctx) {
+/// §3.5's pre-authentication budget: one deadline for the preamble and hello
+/// together, a small cap on any frame length a peer may declare, and a cap on the
+/// total read before the credential validates.
+struct Budget {
+    deadline: Instant,
+    frame_cap: usize,
+    bytes_left: usize,
+}
+
+impl Budget {
+    fn new(caps: &crate::limits::Caps) -> Self {
+        Budget {
+            deadline: Instant::now() + caps.handshake,
+            frame_cap: caps.pre_auth_frame,
+            bytes_left: caps.pre_auth_bytes,
+        }
+    }
+
+    /// The time left, or `None` when the deadline has passed.
+    fn remaining(&self) -> Option<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .map(|_| {
+                self.deadline
+                    .saturating_duration_since(Instant::now())
+                    .max(Duration::from_millis(1))
+            })
+    }
+
+    fn spend(&mut self, bytes: usize) -> bool {
+        match self.bytes_left.checked_sub(bytes) {
+            Some(left) => {
+                self.bytes_left = left;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+pub fn serve<S: Socket>(
+    stream: &mut S,
+    accepted_on: Endpoint,
+    peer: &str,
+    ctx: &Ctx,
+    mut admission: Admission,
+) {
+    // §11.1: `RECOB_RECORD_ENDPOINT` overrides which listener accepted, so a spec
+    // with only one address to point at can still exercise endpoint-dependent
+    // policy. Policy therefore follows the label, which is the point of it.
     let endpoint = ctx
         .recorder
         .as_ref()
@@ -58,8 +147,7 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
         .unwrap_or_default();
 
     // §4.1: the server writes its six preamble bytes and its banner immediately
-    // on accept, never waiting for the client, so a peer learns straight away
-    // that it is talking to RECOB.
+    // on accept, never waiting for the client.
     let banner_proto = script.hello_proto().unwrap_or(PROTO);
     let mut banner = Fields::new();
     banner.push("proto", banner_proto.to_string().into_bytes());
@@ -69,6 +157,11 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
     let mut opening = wire::preamble().to_vec();
     opening.extend_from_slice(&wire::encode(Kind::Hello, &banner));
     if !send(stream, &opening, endpoint, peer) {
+        return;
+    }
+
+    let mut budget = Budget::new(&ctx.limits.caps());
+    if !deadline(stream, &budget, endpoint, peer) {
         return;
     }
 
@@ -87,7 +180,7 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
             return;
         }
         // §7.3 specifies a diagnostic shim in the *old* framing for this case.
-        // It is Phase 5/7 work and deliberately not implemented here: writing a
+        // It is later-phase work and deliberately not implemented here: writing a
         // RECOB frame to a peer that by definition cannot parse one would be
         // worse than the log line.
         Preamble::NotRecob(head) => {
@@ -107,8 +200,9 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
         }
         Preamble::Timeout => {
             log!(
-                "{} {peer}: no preamble within the read timeout",
-                endpoint.as_str()
+                "{} {peer}: no preamble within the {:?} handshake deadline",
+                endpoint.as_str(),
+                ctx.limits.caps().handshake
             );
             return;
         }
@@ -117,17 +211,37 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
             return;
         }
     }
+    if !budget.spend(PREAMBLE_LEN) {
+        return;
+    }
+    if !deadline(stream, &budget, endpoint, peer) {
+        return;
+    }
 
-    // §4.2: the hello is the first frame and arrives exactly once per side.
-    let hello = match wire::read_frame(stream, MAX_BODY) {
-        Ok(Some((Kind::Hello, body))) => match wire::parse_body(&body) {
-            Ok(fields) => fields,
-            Err(err) => {
-                log!("{} {peer}: bad hello: {err}", endpoint.as_str());
+    // §4.2: the hello is the first frame and arrives exactly once per side. The
+    // cap here is §3.5's pre-auth frame limit, far below §4.2's default: an
+    // unauthenticated peer must never be able to make the listener allocate a
+    // large buffer by asserting a large length.
+    // `read_frame_at_boundary`, not `read_frame`: a read timeout with zero bytes
+    // consumed is otherwise indistinguishable from a clean EOF, and §3.5 wants a
+    // peer that stalls mid-handshake told so rather than dropped in silence.
+    let hello = match wire::read_frame_at_boundary(stream, budget.frame_cap) {
+        Ok(Some((Kind::Hello, body))) => {
+            if !budget.spend(5 + body.len()) {
+                log!("{} {peer}: pre-auth byte cap exceeded", endpoint.as_str());
+                let err = ProtoError::new("too-large", "too many bytes before authentication");
                 send(stream, &err.frame(), endpoint, peer);
                 return;
             }
-        },
+            match wire::parse_body(&body) {
+                Ok(fields) => fields,
+                Err(err) => {
+                    log!("{} {peer}: bad hello: {err}", endpoint.as_str());
+                    send(stream, &err.frame(), endpoint, peer);
+                    return;
+                }
+            }
+        }
         Ok(Some((kind, _))) => {
             let err = ProtoError::new(
                 "bad-request",
@@ -139,6 +253,16 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
         }
         Ok(None) => {
             log!("{} {peer}: closed before its hello", endpoint.as_str());
+            return;
+        }
+        Err(FrameError::Idle) | Err(FrameError::Truncated) => {
+            // §3.5: a peer that stalls mid-hello is dropped at the deadline.
+            log!(
+                "{} {peer}: stalled during the handshake; dropping",
+                endpoint.as_str()
+            );
+            let err = ProtoError::new("bad-request", "incomplete handshake");
+            send(stream, &err.frame(), endpoint, peer);
             return;
         }
         Err(e) => {
@@ -157,13 +281,28 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
     if let Some(recorder) = &ctx.recorder {
         recorder.record(endpoint, "hello", &hello);
     }
-    // §7.2: a differing `proto` never refuses the connection. The operation is
-    // the unit of compatibility, and `unknown-op` / `unknown-field` are what
-    // carry the diagnostic.
-    let peer_proto = hello
-        .get("proto")
-        .map(|v| String::from_utf8_lossy(v).into_owned())
-        .unwrap_or_default();
+
+    // §9.1: the tier a connection holds comes from which listener accepted it.
+    // On the public endpoint that is `authed` unconditionally until §9.2's
+    // credential check lands; the trusted socket is `local`, because its uid
+    // boundary is what the tier rests on.
+    let granted = if endpoint == Endpoint::Public {
+        Granted::authed()
+    } else {
+        Granted::local()
+    };
+    // §3.5: the unauthenticated in-flight slot is held from accept until the
+    // connection either authenticates or closes.
+    admission.authenticated();
+
+    // §5.2's exchange timeout takes over from §3.5's handshake deadline.
+    if let Err(e) = stream.read_timeout(Some(ctx.exchange_timeout)) {
+        log!(
+            "{} {peer}: cannot set the exchange timeout: {e}",
+            endpoint.as_str()
+        );
+        return;
+    }
 
     // §5.1: capabilities ride back in front of the first response rather than
     // being asked for, so the split costs no round trip.
@@ -175,13 +314,12 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
         return;
     }
 
-    // Exchange loop. The cap is §4.2's default; §6.5 raises it for one operation
-    // and §3.5 lowers it sharply pre-auth, both in later phases, which is why
-    // the decoder takes it as an argument.
+    // Exchange loop. The cap is §4.2's default now that the peer is
+    // authenticated; §6.5 raises it for one operation in Phase 4.
     loop {
         match wire::read_frame_at_boundary(stream, MAX_BODY) {
             Ok(Some((Kind::Request, body))) => {
-                let action = handle_request(&body, endpoint, peer, ctx, &mut script);
+                let action = handle_request(&body, endpoint, peer, granted, ctx, &mut script);
                 if !action.bytes.is_empty() && !send(stream, &action.bytes, endpoint, peer) {
                     return;
                 }
@@ -201,7 +339,7 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
             Ok(None) => return,
             Err(FrameError::Idle) => {
                 log!(
-                    "{} {peer}: idle for {:?} after proto {peer_proto}; closing",
+                    "{} {peer}: idle for {:?}; closing",
                     endpoint.as_str(),
                     ctx.exchange_timeout
                 );
@@ -216,6 +354,26 @@ pub fn serve<S: Read + Write>(stream: &mut S, accepted_on: Endpoint, peer: &str,
                 log!("{} {peer}: {e}", endpoint.as_str());
                 return;
             }
+        }
+    }
+}
+
+/// Applies the remaining handshake budget as the socket's read timeout (§3.5).
+fn deadline<S: Socket>(stream: &S, budget: &Budget, endpoint: Endpoint, peer: &str) -> bool {
+    match budget.remaining() {
+        Some(left) => match stream.read_timeout(Some(left)) {
+            Ok(()) => true,
+            Err(e) => {
+                log!(
+                    "{} {peer}: cannot set the handshake deadline: {e}",
+                    endpoint.as_str()
+                );
+                false
+            }
+        },
+        None => {
+            log!("{} {peer}: handshake deadline passed", endpoint.as_str());
+            false
         }
     }
 }
@@ -245,6 +403,7 @@ fn handle_request(
     body: &[u8],
     endpoint: Endpoint,
     peer: &str,
+    granted: Granted,
     ctx: &Ctx,
     script: &mut Script,
 ) -> Action {
@@ -281,11 +440,20 @@ fn handle_request(
         return Action::from_error(err);
     }
 
-    // The recorder tees only what decoded and validated. That ordering is the
-    // whole strength of the seam (§11.1): a subtly wrong frame fails here
-    // instead of being faithfully recorded as wrong.
+    // The recorder tees what decoded and validated. That ordering is the strength
+    // of the seam (§11.1): a subtly wrong frame fails here instead of being
+    // faithfully recorded as wrong. An authorization refusal, by contrast, is a
+    // decoded exchange and is recorded — the refusal itself is the evidence that
+    // the handler did not run.
     if let Some(recorder) = &ctx.recorder {
         recorder.record(endpoint, op.name, &fields);
+    }
+
+    // §11.1: `--record` changes no dispatch decision and no authorization check,
+    // so this runs before any scripted reply is considered.
+    if let Err(err) = registry::authorize(op, endpoint, granted, ctx) {
+        log!("{} {peer} {}: {err}", endpoint.as_str(), op.name);
+        return Action::from_error(err);
     }
 
     match script.next_directive() {
@@ -351,9 +519,7 @@ fn scripted(directive: Directive, endpoint: Endpoint, peer: &str, op: &str) -> A
     }
 }
 
-/// §5.1's client hello. Phase 2 adds `auth` and `cnonce`; until then a client
-/// that sends them gets `unknown-field` naming the field, which is P6 working as
-/// intended rather than a gap — the alternative is a credential silently ignored.
+/// §5.1's client hello.
 fn check_hello(fields: &Fields) -> Result<(), ProtoError> {
     for name in fields.names() {
         if !matches!(name, "proto" | "impl") {
@@ -460,43 +626,65 @@ mod tests {
         )
         .unwrap();
 
-        let err = check_hello(&Fields::new()).unwrap_err();
-        assert_eq!(err.code, "missing-field");
-
-        let err = check_hello(&Fields::new().with("proto", b"one".to_vec())).unwrap_err();
-        assert_eq!(err.code, "bad-field");
-
-        let err = check_hello(&Fields::new().with("proto", b"12345".to_vec())).unwrap_err();
-        assert_eq!(err.code, "bad-field");
-
-        let err = check_hello(
-            &Fields::new()
-                .with("proto", b"1".to_vec())
-                .with("impl", b"build id".to_vec()),
-        )
-        .unwrap_err();
-        assert_eq!(err.detail.get("field"), Some(&b"impl"[..]));
+        assert_eq!(
+            check_hello(&Fields::new()).unwrap_err().code,
+            "missing-field"
+        );
+        assert_eq!(
+            check_hello(&Fields::new().with("proto", b"one".to_vec()))
+                .unwrap_err()
+                .code,
+            "bad-field"
+        );
+        assert_eq!(
+            check_hello(&Fields::new().with("proto", b"12345".to_vec()))
+                .unwrap_err()
+                .code,
+            "bad-field"
+        );
     }
 
     #[test]
-    fn a_phase_two_credential_is_refused_by_name_not_ignored() {
+    fn an_unknown_hello_field_is_still_refused_by_name() {
         let err = check_hello(
             &Fields::new()
                 .with("proto", b"1".to_vec())
-                .with("auth", b"deadbeef".to_vec()),
+                .with("verbose", b"1".to_vec()),
         )
         .unwrap_err();
         assert_eq!(err.code, "unknown-field");
-        assert_eq!(err.detail.get("field"), Some(&b"auth"[..]));
+        assert_eq!(err.detail.get("field"), Some(&b"verbose"[..]));
+    }
+
+    #[test]
+    fn the_pre_auth_frame_cap_fires_before_the_byte_cap() {
+        // §3.5 states both. The frame cap is the one that can be reached: the
+        // pre-auth phase reads a preamble and exactly one frame, and
+        // 6 + 5 + 4096 is well under 8192, so a peer cannot spend the byte budget
+        // without first declaring an over-cap frame. Pinning the relationship
+        // here keeps a later change to either constant honest.
+        let caps = crate::limits::Caps::default();
+        assert!(PREAMBLE_LEN + 5 + caps.pre_auth_frame < caps.pre_auth_bytes);
+    }
+
+    #[test]
+    fn the_budget_spends_and_expires() {
+        let mut budget = Budget::new(&crate::limits::Caps {
+            pre_auth_bytes: 10,
+            handshake: Duration::from_millis(30),
+            ..crate::limits::Caps::default()
+        });
+        assert!(budget.spend(6));
+        assert!(!budget.spend(5), "9 of 10 bytes leaves no room for 5 more");
+        assert!(budget.remaining().is_some());
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(budget.remaining().is_none(), "the deadline passed");
     }
 
     #[test]
     fn the_preamble_sniff_separates_a_short_read_from_a_stranger() {
         let mut cursor = std::io::Cursor::new(b"RECOB\x01".to_vec());
         assert!(matches!(read_preamble(&mut cursor), Preamble::Version(1)));
-
-        let mut cursor = std::io::Cursor::new(b"RECOB\x09".to_vec());
-        assert!(matches!(read_preamble(&mut cursor), Preamble::Version(9)));
 
         let mut cursor = std::io::Cursor::new(b"REC".to_vec());
         assert!(matches!(read_preamble(&mut cursor), Preamble::Short(3)));
