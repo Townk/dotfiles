@@ -26,28 +26,53 @@ make test      # cargo fmt --check, clippy -D warnings, cargo test
 make install   # → ~/.local/libexec/recobd
 ```
 
-The daemon takes no dependencies. Threads are the per-connection task boundary
-(§3.4), socket timeouts are §5.2's, and `FromRawFd` is all §3.2's socket
-activation needs; the one libc call made by hand is `umask`, in `listen.rs`.
+Two dependencies, `sha2` and `subtle`, both required by §9.2 and both pinned by
+`probes/` first. Everything else is std: threads are the per-connection task
+boundary (§3.4), socket timeouts are §5.2's, `FromRawFd` is all §3.2's socket
+activation needs, and `/dev/urandom` is the CSPRNG §9.2 names. The one libc call
+made by hand is `umask`, in `listen.rs`.
 
-## What Phase 1 builds, and what it deliberately does not
+The credential lives at `$XDG_STATE_HOME/clipboard/accepted-token`, created at
+startup if absent or invalid, mode 0600 under a 0700 directory. A daemon serving
+the public endpoint refuses to start without one rather than serving
+unauthenticated; a `--no-trusted`-only daemon needs none, because the trusted
+socket's uid boundary is its credential.
 
-Implemented: the wire format (§4) including the §4.4 worked example byte-exact,
-the connection lifecycle (§5) with banner, capabilities frame and timeouts, both
+`$XDG_CONFIG_HOME/clipboard/exposure` withdraws operations per endpoint, one
+`<endpoint> <operation>` per line. It can only subtract, never restore what the
+policy table denies, and it never changes the advertised `caps`.
+
+## What is built, and what deliberately is not
+
+Phase 1 — the wire format (§4) including the §4.4 worked example byte-exact, the
+connection lifecycle (§5) with banner, capabilities frame and timeouts, both
 endpoints with the launch shape, concurrency and socket permissions of §3.1–§3.4,
-and `recobd --record` (§11.1). The operation registry holds `host.identity` and
-nothing else, as proof that named dispatch works.
+and `recobd --record` (§11.1).
+
+Phase 2 — mutual challenge-response authentication (§9.2: the credential never
+crosses the wire, nonces come from the OS CSPRNG, comparison is constant-time),
+the tier and policy table with a single enforcement call site (§9.1, §9.3, §9.4),
+pre-authentication limits (§3.5), per-endpoint rate buckets (§9.5), and
+subtractive exposure (§9.6).
+
+The operation registry holds `host.identity` and nothing else, as proof that
+named dispatch works. Its §9.3 policy row lives on the registry row itself, so an
+operation cannot exist without a tier.
 
 Not implemented, by phase rather than by omission — where a later phase's field
 or check belongs, the code says so rather than stubbing it:
 
 | Absent | Lands in |
 | --- | --- |
-| `auth`, `nonce`, `cnonce`, `proof`; the policy table; §3.5's pre-auth limits | Phase 2 |
 | the pasteboard, the store, the absorbed watcher | Phase 3 |
-| the other thirteen operations, streaming, per-field validation | Phase 4 |
-| `pbcopy` / `pbpaste` and the §7.3 old-client shim | Phase 5 |
+| the other thirteen operations and their policy rows, `grant` checking, streaming, per-field validation | Phase 4 |
+| `pbcopy` / `pbpaste`, proof verification client-side, and the §7.3 old-client shim | Phase 5 |
 | the `run_onchange` build hook and the unit changes | Phase 8 |
+
+The thirteen remaining policy rows wait for Phase 4 because they arrive *with*
+their handlers: `caps` advertises what this build can dispatch (§5.1), and a
+policy row without a handler would put a lie in it — which §7.1's skew diagnostic
+is built on not happening.
 
 ## Running it
 
