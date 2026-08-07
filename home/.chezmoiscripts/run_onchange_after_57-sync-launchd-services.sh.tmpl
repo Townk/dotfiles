@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+{{/*
+  Reconcile launchd with services.toml whenever the manifest changes, so
+  `chezmoi apply` swaps services the way docs/recob-migration.md promises --
+  before this hook, a manifest edit sat inert until the next `system-update`
+  ran `system-service sync`, and the RECOB cutover would have deleted the
+  dispatcher out from under the still-loaded socat services, leaving loud
+  NotRecob failures (not the OSC 52 fallback: the listener still accepts)
+  until a human intervened.
+
+  Ordered after 56-build-recob: the manifest points launchd at binaries that
+  hook installs.
+*/ -}}
+{{ if eq .chezmoi.os "darwin" -}}
+# Re-run when the service manifest changes:
+# services.toml.tmpl: {{ include "dot_config/packages/services.toml.tmpl" | sha256sum }}
+
+# RECOB transition guard, self-neutralizing: do_sync applies declared entries
+# before sweeping orphans, so the drifted clipboard-bridge would kickstart
+# recobd while the ORPHANED clipboard-bridge-trusted socat still holds
+# cb.sock -- recobd refuses (AddrInUse) and crash-loops on launchd's throttle
+# until the sweep runs. Boot the orphan out first; once it is gone this is a
+# no-op.
+launchctl bootout "gui/$(id -u)/com.system-service.clipboard-bridge-trusted" 2>/dev/null || true
+
+if [ -x "$HOME/.local/bin/system-service" ]; then
+  "$HOME/.local/bin/system-service" sync
+else
+  echo "system-service not installed yet; services reconcile at the next system-update." >&2
+fi
+{{ end -}}
+
+# vim:ft=sh

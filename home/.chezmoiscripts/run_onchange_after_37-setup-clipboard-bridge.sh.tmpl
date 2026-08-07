@@ -1,31 +1,38 @@
 #!/bin/sh
 set -eu
 {{/*
-  Enable the clipboard-bridge socket unit and (re)start it immediately, so
-  `chezmoi apply` has instant effect. The unit itself -- not this script --
-  is what makes the bridge survive an image recycle: unit file + enable
-  symlink live under ~/.config/systemd/user (homedir persists), so the user
-  manager rebinds 127.0.0.1:2489 at first login with no chezmoi run.
+  Enable the clipboard-bridge socket units and (re)start them immediately, so
+  `chezmoi apply` has instant effect. The units themselves -- not this script
+  -- are what make the bridge survive an image recycle: unit files + enable
+  symlinks live under ~/.config/systemd/user (homedir persists), so the user
+  manager rebinds the endpoints at first login with no chezmoi run.
+
+  RECOB shape (spec §3.2): both sockets are Accept=no and activate the ONE
+  persistent clipboard-bridge.service running recobd, which adopts the fds
+  and classifies them by type. The old Accept=yes per-connection dispatcher
+  templates are gone; .chezmoiremove sweeps their unit files.
 */ -}}
 {{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 {{ if and (eq .chezmoi.os "linux") $traits.headless }}
-# Re-run when the units or the dispatcher stack changes:
+# Re-run when the units change (the daemon binary has its own build hook):
 # clipboard-bridge.socket: {{ include "dot_config/systemd/user/clipboard-bridge.socket" | sha256sum }}
-# clipboard-bridge@.service: {{ include "dot_config/systemd/user/clipboard-bridge@.service" | sha256sum }}
+# clipboard-bridge.service: {{ include "dot_config/systemd/user/clipboard-bridge.service" | sha256sum }}
 # clipboard-bridge-trusted.socket: {{ include "dot_config/systemd/user/clipboard-bridge-trusted.socket" | sha256sum }}
-# clipboard-bridge-trusted@.service: {{ include "dot_config/systemd/user/clipboard-bridge-trusted@.service" | sha256sum }}
-# clipboard-bridge-dispatch: {{ include "dot_local/libexec/executable_clipboard-bridge-dispatch" | sha256sum }}
-# clipboard-store-core.zsh: {{ include "dot_local/lib/clipboard-store-core.zsh" | sha256sum }}
-# clipboard-platform-linux-headless.zsh: {{ include "dot_local/lib/clipboard-platform-linux-headless.zsh" | sha256sum }}
 
-if ! nc -h 2>&1 | grep -q -- '-U'; then
-  echo "clipboard-bridge: nc lacks Unix-socket support; install netcat-openbsd." >&2
-  exit 1
-fi
+# The daemon refuses an adopted trusted socket whose parent is not 0700
+# (fail-closed, §3.3). When it binds for itself it tightens the directory the
+# same way; systemd's DirectoryMode= only applies to directories it creates,
+# so an existing ~/.local/state needs the tightening done here.
+mkdir -p "$HOME/.local/state"
+chmod 0700 "$HOME/.local/state"
 
 if systemctl --user show-environment >/dev/null 2>&1; then
   systemctl --user daemon-reload
   systemctl --user enable clipboard-bridge.socket clipboard-bridge-trusted.socket
+  # Stop the service too: sockets alone re-listen, but a daemon started
+  # under the previous unit definition keeps running with the old fds until
+  # told otherwise. The next connection re-activates it under the new one.
+  systemctl --user stop clipboard-bridge.service 2>/dev/null || true
   systemctl --user restart clipboard-bridge.socket clipboard-bridge-trusted.socket
 else
   echo "clipboard-bridge: no user systemd instance reachable; will activate at next login/boot." >&2

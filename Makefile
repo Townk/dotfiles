@@ -17,8 +17,8 @@ SPECS      := $(wildcard tests/*_spec.sh)
 # few seconds it belongs here, and if one gets cheaper it should come out.
 SLOW_SPECS := tests/backup_spec.sh tests/backup_changes_spec.sh \
               tests/backup_tm_spec.sh tests/chezmoi-reverse_spec.sh \
-              tests/clipboard-files-ops_spec.sh tests/clipboard-linux-store_spec.sh \
-              tests/clipboard-mount_spec.sh tests/clipboard-mount-enrich_spec.sh \
+              tests/clipboard-files-ops_spec.sh \
+              tests/clipboard-mount_spec.sh \
               tests/input-common_spec.sh tests/mux_search_spec.sh \
               tests/mux_spec.sh tests/mux_stack_spec.sh \
               tests/mux_whichkey_dispatch_spec.sh tests/mux_whichkey_spec.sh \

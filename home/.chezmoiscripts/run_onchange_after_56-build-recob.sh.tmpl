@@ -17,27 +17,20 @@
 {{- $lockSHA := include "../custom-builds/recob/Cargo.lock" | sha256sum -}}
 {{- $manifestSHA := include "../custom-builds/recob/Cargo.toml" | sha256sum -}}
 {{- $wireManifestSHA := include "../custom-builds/recob/wire/Cargo.toml" | sha256sum -}}
-{{- $srcSHA := include "../custom-builds/recob/src/main.rs" | sha256sum -}}
-{{- $sessionSHA := include "../custom-builds/recob/src/session.rs" | sha256sum -}}
-{{- $registrySHA := include "../custom-builds/recob/src/registry.rs" | sha256sum -}}
-{{- $wireSHA := include "../custom-builds/recob/wire/src/wire.rs" | sha256sum -}}
-{{- $clientSHA := include "../custom-builds/recob/wire/src/client.rs" | sha256sum -}}
-{{- $clipSHA := include "../custom-builds/recob/wire/src/bin/system-clip.rs" | sha256sum -}}
-{{- $bridgeSHA := include "../custom-builds/recob/wire/src/bin/system-bridge.rs" | sha256sum -}}
-{{- $cliSHA := include "../custom-builds/recob/wire/src/cli.rs" | sha256sum -}}
+{{- $wt := .chezmoi.workingTree -}}
 #!/usr/bin/env bash
 # RECOB clipboard bridge — rebuild-on-change hook.
 #   Cargo.lock       : {{ $lockSHA }}
 #   Cargo.toml       : {{ $manifestSHA }}
 #   wire/Cargo.toml  : {{ $wireManifestSHA }}
-#   src/main.rs      : {{ $srcSHA }}
-#   src/session.rs   : {{ $sessionSHA }}
-#   src/registry.rs  : {{ $registrySHA }}
-#   wire/wire.rs     : {{ $wireSHA }}
-#   wire/client.rs   : {{ $clientSHA }}
-#   wire/cli.rs      : {{ $cliSHA }}
-#   bin/system-clip  : {{ $clipSHA }}
-#   bin/system-bridge: {{ $bridgeSHA }}
+# Every crate source, GLOBBED rather than enumerated — an enumerated list
+# rotted: it missed wire/src/paste_files.rs, the very file the cutover
+# branch fixed three client bugs in, so a fix-only commit would not have
+# re-fired this hook on other machines.
+{{- range concat (glob (joinPath $wt "custom-builds/recob/src/**/*.rs")) (glob (joinPath $wt "custom-builds/recob/wire/src/**/*.rs")) }}
+{{- $rel := trimPrefix (printf "%s/" $wt) . }}
+#   {{ trimPrefix "custom-builds/recob/" $rel }}: {{ include (printf "../%s" $rel) | sha256sum }}
+{{- end }}
 #
 # To rebuild manually:
 #   make -C ~/.local/share/chezmoi/custom-builds/recob install

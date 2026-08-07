@@ -343,6 +343,53 @@ mod macos {
         }
     }
 
+    /// §14.6's other half: a pasteboard change the daemon did *not* perform
+    /// has no tracker record, so `clip.get` answers the register type from
+    /// the trailing-newline heuristic — `l` for a clip ending in a newline,
+    /// `v` otherwise.
+    #[test]
+    fn clip_get_regtype_falls_back_to_the_trailing_newline_heuristic() {
+        let dir = testutil::tempdir("clip-get-heuristic");
+        let ctx = std::sync::Arc::new(common::ctx_mut(dir.path(), "boxA"));
+        let name = ctx.pasteboard_name.clone().unwrap();
+        let mut client = trusted(ctx.clone());
+
+        // A direct write to the test's private pasteboard — the shape of a
+        // copy some other program made. Nothing lands on the tracker.
+        let pasteboard = Pasteboard::with_name(&name);
+        let mut data = std::collections::BTreeMap::new();
+        data.insert(
+            "public.utf8-plain-text".to_string(),
+            b"a whole line\n".to_vec(),
+        );
+        pasteboard.write_all(&data);
+        assert_eq!(
+            ctx.tracker.regtype_at(pasteboard.change_count()),
+            None,
+            "precondition: the daemon has no record of this change"
+        );
+        let (kind, fields) = client.request("clip.get");
+        assert_eq!(kind, Kind::Response);
+        assert_eq!(fields.get("text"), Some(&b"a whole line\n"[..]));
+        assert_eq!(
+            text(&fields, "regtype"),
+            "l",
+            "§14.6: trailing newline means linewise"
+        );
+
+        let mut data = std::collections::BTreeMap::new();
+        data.insert("public.utf8-plain-text".to_string(), b"a fragment".to_vec());
+        pasteboard.write_all(&data);
+        let (kind, fields) = client.request("clip.get");
+        assert_eq!(kind, Kind::Response);
+        assert_eq!(fields.get("text"), Some(&b"a fragment"[..]));
+        assert_eq!(
+            text(&fields, "regtype"),
+            "v",
+            "§14.6: no trailing newline means characterwise"
+        );
+    }
+
     #[test]
     fn set_files_writes_the_manifest_and_mints_authority() {
         let dir = testutil::tempdir("clip-set-files");
@@ -471,5 +518,172 @@ mod linux {
             )
             .unwrap();
         assert_eq!(newest, "old", "the restored row is the newest again");
+    }
+
+    /// An empty store is a well-formed answer, not an error: empty text, the
+    /// heuristic regtype for empty bytes, no timestamp — the shape a fresh
+    /// machine's first `clip.get` sees.
+    #[test]
+    fn clip_get_on_an_empty_store_answers_empty_not_an_error() {
+        let dir = testutil::tempdir("clip-linux-empty");
+        let ctx = std::sync::Arc::new(common::ctx_mut(dir.path(), "boxA"));
+        let mut client = trusted(ctx);
+        let (kind, fields) = client.request("clip.get");
+        assert_eq!(kind, Kind::Response, "an empty store is not an error");
+        assert_eq!(fields.get("text"), Some(&b""[..]));
+        assert_eq!(
+            text(&fields, "regtype"),
+            "v",
+            "empty text has no trailing newline: characterwise"
+        );
+        assert_eq!(text(&fields, "timestamp"), "", "no rows, no timestamp");
+        assert_eq!(text(&fields, "host"), "boxA");
+    }
+
+    /// §14.6 on the headless half: a newest row with no regtype column value
+    /// (the shape pre-daemon zsh rows have) answers from the trailing-newline
+    /// heuristic instead of erroring or inventing a value.
+    #[test]
+    fn clip_get_regtype_falls_back_to_the_heuristic_when_the_row_has_none() {
+        let dir = testutil::tempdir("clip-linux-null-regtype");
+        let ctx = std::sync::Arc::new(common::ctx_mut(dir.path(), "boxA"));
+        let db = ctx.db_path.clone();
+        let mut client = trusted(ctx);
+        // A first write through the daemon creates the schema; the rows under
+        // test are seeded directly so their regtype is NULL.
+        set_text(&mut client, b"schema seed", "v", None);
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO clips (text_preview, text_plain, type_kind, first_ts, last_ts, \
+             type_hash, source_host) \
+             VALUES ('legacy', ?1, 'text', 9000000000.0, 9000000000.0, 'legacy-l', 'boxA');",
+            rusqlite::params!["a legacy line\n"],
+        )
+        .unwrap();
+        let (kind, fields) = client.request("clip.get");
+        assert_eq!(kind, Kind::Response);
+        assert_eq!(fields.get("text"), Some(&b"a legacy line\n"[..]));
+        assert_eq!(
+            text(&fields, "regtype"),
+            "l",
+            "NULL regtype falls back to the trailing-newline heuristic"
+        );
+
+        conn.execute(
+            "INSERT INTO clips (text_preview, text_plain, type_kind, first_ts, last_ts, \
+             type_hash, source_host) \
+             VALUES ('legacy', ?1, 'text', 9000000001.0, 9000000001.0, 'legacy-v', 'boxA');",
+            rusqlite::params!["a legacy fragment"],
+        )
+        .unwrap();
+        let (kind, fields) = client.request("clip.get");
+        assert_eq!(kind, Kind::Response);
+        assert_eq!(fields.get("text"), Some(&b"a legacy fragment"[..]));
+        assert_eq!(
+            text(&fields, "regtype"),
+            "v",
+            "no trailing newline: characterwise"
+        );
+    }
+
+    /// Byte-exactness through the store: an embedded NUL survives the round
+    /// trip. Invalid UTF-8 does NOT — `store.persist.text` runs the bytes
+    /// through `from_utf8_lossy`, so they come back with U+FFFD replacements.
+    /// The old zsh store was byte-exact here; this test pins what IS, and the
+    /// divergence is reported with this phase rather than silently absorbed.
+    #[test]
+    fn clip_text_keeps_embedded_nuls_but_lossy_replaces_invalid_utf8() {
+        let dir = testutil::tempdir("clip-linux-nul");
+        let ctx = std::sync::Arc::new(common::ctx_mut(dir.path(), "boxA"));
+        let db = ctx.db_path.clone();
+        let mut client = trusted(ctx);
+
+        set_text(&mut client, b"nul\0inside", "v", None);
+        let (kind, fields) = client.request("clip.get");
+        assert_eq!(kind, Kind::Response);
+        assert_eq!(
+            fields.get("text"),
+            Some(&b"nul\0inside"[..]),
+            "the embedded NUL round-trips byte-exact"
+        );
+        let stored: Vec<u8> = Connection::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT CAST(text_plain AS BLOB) FROM clips ORDER BY last_ts DESC LIMIT 1;",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored,
+            b"nul\0inside".to_vec(),
+            "the row itself holds the NUL byte-exact"
+        );
+
+        set_text(&mut client, b"bad \xff byte", "v", None);
+        let (kind, fields) = client.request("clip.get");
+        assert_eq!(kind, Kind::Response);
+        assert_eq!(
+            fields.get("text"),
+            Some(&b"bad \xef\xbf\xbd byte"[..]),
+            "pinned divergence: from_utf8_lossy replaced the invalid byte \
+             (the zsh store kept it byte-exact)"
+        );
+    }
+
+    /// The Linux `clip.set.rich` halves: the plain-text UTI populates
+    /// text_plain byte-exact plus the flattened preview, and an image UTI
+    /// classifies the row as an image.
+    #[test]
+    fn linux_persist_rich() {
+        let dir = testutil::tempdir("clip-linux-rich");
+        let ctx = std::sync::Arc::new(common::ctx_mut(dir.path(), "boxA"));
+        let db = ctx.db_path.clone();
+        let mut client = trusted(ctx);
+
+        client.send_request(
+            &Fields::new()
+                .with("op", b"clip.set.rich".to_vec())
+                .with("uti", b"public.utf8-plain-text".to_vec())
+                .with("blob", b"  rich\n\n text  \n".to_vec()),
+        );
+        let (kind, _) = client.next().expect("rich answer");
+        assert_eq!(kind, Kind::Response);
+        let conn = Connection::open(&db).unwrap();
+        let (kind_col, preview, plain): (String, String, String) = conn
+            .query_row(
+                "SELECT type_kind, text_preview, text_plain FROM clips \
+                 ORDER BY id DESC LIMIT 1;",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kind_col, "text");
+        assert_eq!(
+            plain, "  rich\n\n text  \n",
+            "the plain-text UTI populates text_plain byte-exact"
+        );
+        assert_eq!(
+            preview, "rich text",
+            "and the flattened single-line preview"
+        );
+
+        client.send_request(
+            &Fields::new()
+                .with("op", b"clip.set.rich".to_vec())
+                .with("uti", b"public.png".to_vec())
+                .with("blob", b"fakepng".to_vec()),
+        );
+        let (kind, _) = client.next().expect("rich answer");
+        assert_eq!(kind, Kind::Response);
+        let (kind_col, plain): (String, Option<String>) = conn
+            .query_row(
+                "SELECT type_kind, text_plain FROM clips ORDER BY id DESC LIMIT 1;",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind_col, "image", "public.png classifies as an image row");
+        assert_eq!(plain, None, "an image row has no plain text");
     }
 }

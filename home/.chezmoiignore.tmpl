@@ -62,9 +62,6 @@ Library/**
 .local/bin/system-service-brew
 .local/share/zsh/site-functions/_system-service-launchd
 .local/share/zsh/site-functions/_system-service-brew
-{{/* clipboard-bridge-dispatch sources the pb::* backend by uname; the macOS
-     pasteboard/Hammerspoon backend is dead code off a Mac. */}}
-.local/lib/clipboard-platform-macos.zsh
 {{- end }}
 {{/* tab-edit ships on macOS and graphical Linux (it needs a GUI WezTerm + a
      file manager to be useful); skip it on the headless dev-shell and any
@@ -91,9 +88,8 @@ Library/**
      SSH; the clipboard bridge store serves the laptop→remote mirror. */}}
 .config/systemd/user/gpg-forward-socketdir.service
 .config/systemd/user/clipboard-bridge.socket
-.config/systemd/user/clipboard-bridge@.service
+.config/systemd/user/clipboard-bridge.service
 .config/systemd/user/clipboard-bridge-trusted.socket
-.config/systemd/user/clipboard-bridge-trusted@.service
 .local/libexec/gpg-agent-forward-provision
 .chezmoiscripts/*-setup-gpg-agent-forwarding.sh
 .chezmoiscripts/*-setup-dev-shell-tools.sh

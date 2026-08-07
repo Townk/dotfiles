@@ -1,9 +1,12 @@
 # Notify over the clipboard bridge — plan
 
-> **Status**: implemented. See "As built" at the end for the three places the
-> implementation departs from the design below; the rest landed as written.
-> Public repo; no employer/work identifiers. The personal Mac mini is
-> `mac-mini` where a concrete host name is needed.
+> **Status**: implemented; wire since replaced. The ROUTING in this document —
+> destination-aware `notify()`, the `NOTIFY_VIA_BRIDGE` override, the three
+> as-built corrections — is still exactly how it works. The WIRE it rides
+> (opcode `n`, the US payload, the `fn` field, the zsh dispatcher) was
+> retired by the RECOB cutover; see "RECOB update" at the end for what
+> replaced each piece. Public repo; no employer/work identifiers. The
+> personal Mac mini is `mac-mini` where a concrete host name is needed.
 
 ---
 
@@ -227,3 +230,27 @@ in `clipboard-bridge_spec.sh`.
 Verified: (1)–(7) as stated. **Corrections:** SSH skip is at `tmux-alert-notify:46-49`,
 not `:1-25` (header comment at `:7-9` only). **`copy-pwd:122-131` duplicates
 the same gate** — in scope, not in the seven facts.
+
+---
+
+## RECOB update (2026-08-07)
+
+The cutover to the RECOB daemon (`docs/recob-protocol-spec.md`) replaced this
+feature's wire without touching its routing. Piece by piece:
+
+| This document says | Since the cutover |
+| --- | --- |
+| opcode `n`, US-joined `origin_host \x1f fn \x1f icon \x1f sound \x1f text` | operation `osd.notify` with named fields `origin_host`, `style`, `icon`, `sound`, `text` (§6.1) |
+| `fn`: the Lua global `notify`/`notifyAnsi` on the wire | the closed enum `style: plain\|ansi` — the wire never carries a symbol (P5); the handler maps the enum internally (`src/ops/gui.rs`) |
+| `clipbridge::send … n "$payloadf"` + a temp payload file | `clipbridge::notify <style> <icon> <sound> <origin_host>` with the text on stdin — the invoker (`system-bridge`) owns the wire, and the temp-file dance (as-built §2) is gone with the file |
+| dispatcher `n` handler in `clipboard-platform-macos.zsh` | `osd.notify` handler in the daemon; Linux still answers a named error, never a sink |
+| caps: host ≤253, icon ≤256, sound ≤64, text ≤1024 | unchanged, enforced by the daemon (§6.6) |
+| "no rate limit — revisit only if abused" | revisited: the `osd` bucket rate-limits it, 20 per 10 s (§9.5) |
+| the `public` endpoint is reachable from every SSH host, ungated | it now demands the §9.2 credential; a host without the pushed token gets `unauthorized`, not an OSD |
+
+The as-built corrections all stand: remoteness alone selects the route and the
+send is its own reachability test (§1 — `clipbridge::probe` is still not
+called here); backgrounded delivery survives the parent's exit (§2 — pinned by
+the converted `tests/notify_bridge_spec.sh`, now waiting on the recorded
+operation instead of a sleep); copy-pwd's fallback still lives inside the
+background job (§3).

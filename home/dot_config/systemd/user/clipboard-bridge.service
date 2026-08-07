@@ -1,0 +1,17 @@
+# The RECOB clipboard bridge daemon (docs/recob-protocol-spec.md), replacing
+# the per-connection dispatcher templates: one persistent recobd adopts both
+# listeners from socket activation (§3.2 — LISTEN_FDS, fds classified by
+# type) and serves them until stopped. No `--capture` here: capture observes
+# the macOS pasteboard and is refused off-Mac (§14.7); on a headless box the
+# store is written by the operations peers invoke, and recobd is still its
+# sole writer. The service NAME is unchanged from the socat era (spec D3).
+[Unit]
+Description=RECOB clipboard bridge daemon
+
+[Service]
+ExecStart=%h/.local/libexec/recobd
+Sockets=clipboard-bridge.socket clipboard-bridge-trusted.socket
+StandardError=journal
+# The daemon spawns no shell tooling on Linux (SQLite is bundled), but a sane
+# PATH keeps any future tool dispatch honest rather than launchd-lesson-bitten.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin

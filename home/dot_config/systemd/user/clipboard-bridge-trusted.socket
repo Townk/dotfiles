@@ -1,14 +1,17 @@
-# Trusted local clipboard file-authority endpoint. It is never forwarded over
-# SSH; the public reverse bridge remains loopback TCP 2489.
+# Trusted local clipboard endpoint. It is never forwarded over SSH; the
+# public reverse bridge remains loopback TCP 2489. Both sockets activate the
+# SAME persistent daemon (Service= below): recobd classifies each adopted fd
+# by type — Unix here means trusted, TCP means public — so endpoint trust
+# comes from which listener accepted, never from an environment bit.
 [Unit]
-Description=Trusted local clipboard bridge socket
+Description=RECOB clipboard bridge, trusted local socket
 
 [Socket]
 ListenStream=%h/.local/state/cb.sock
 SocketMode=0600
 DirectoryMode=0700
 RemoveOnStop=yes
-Accept=yes
+Service=clipboard-bridge.service
 
 [Install]
 WantedBy=sockets.target

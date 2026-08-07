@@ -345,12 +345,26 @@ mod enrich {
 
     pub fn spawn(ctx: &Ctx, host: String, self_host: String, paths: Vec<String>) {
         let mount_bin = ctx.tools.clipboard_mount.clone();
+        // The pasteboard seam rides into the thread: an enrichment running
+        // under a test daemon must write the test's private pasteboard, never
+        // the general one — the same rule every other pasteboard path obeys.
+        let pasteboard_name = ctx.pasteboard_name.clone();
         let _ = std::thread::Builder::new()
             .name("enrich".to_string())
-            .spawn(move || run(&mount_bin, &host, &self_host, &paths));
+            .spawn(move || run(&mount_bin, &pasteboard_name, &host, &self_host, &paths));
     }
 
-    fn run(mount_bin: &PathBuf, host: &str, self_host: &str, paths: &[String]) {
+    fn run(
+        mount_bin: &PathBuf,
+        pasteboard_name: &Option<String>,
+        host: &str,
+        self_host: &str,
+        paths: &[String],
+    ) {
+        let open = || match pasteboard_name {
+            Some(name) => Pasteboard::with_name(name),
+            None => Pasteboard::general(),
+        };
         if !mount_bin.is_file() {
             return;
         }
@@ -361,7 +375,7 @@ mod enrich {
         }
         // The guard token: a change between here and the write means a newer
         // user copy, which must not be overwritten.
-        let cc = Pasteboard::general().change_count();
+        let cc = open().change_count();
 
         let mount_point = match check(mount_bin, host) {
             Some(mp) => Some(mp),
@@ -386,7 +400,7 @@ mod enrich {
             return;
         }
 
-        let pasteboard = Pasteboard::general();
+        let pasteboard = open();
         if pasteboard.change_count() != cc {
             return;
         }

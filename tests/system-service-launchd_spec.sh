@@ -308,15 +308,16 @@ STUB
   End
 
   Describe 'clipboard trusted endpoint contract'
-    no_socat() { ! command -v socat >/dev/null 2>&1; }
+    RECOBD_BIN="${RECOB_BIN:-$SHELLSPEC_PROJECT_ROOT/custom-builds/recob/target/release/recobd}"
+    BRIDGE_BIN="${SYSTEM_BRIDGE_BIN:-$SHELLSPEC_PROJECT_ROOT/custom-builds/recob/target/release/system-bridge}"
+    no_recobd() { [ ! -x "$RECOBD_BIN" ] || [ ! -x "$BRIDGE_BIN" ]; }
 
     It 'keeps SSH forwarding on TCP and makes the local socket service-owned mode 0600'
       services="$SHELLSPEC_PROJECT_ROOT/home/dot_config/packages/services.toml.tmpl"
       public_socket="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge.socket"
       trusted_socket="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge-trusted.socket"
       When run command sh -c '
-        grep -F "TCP-LISTEN:2489,bind=127.0.0.1" "$1" >/dev/null &&
-        grep -F "UNIX-LISTEN:{{ .chezmoi.homeDir }}/.local/state/cb.sock,fork,unlink-early,mode=0600" "$1" >/dev/null &&
+        grep -F "libexec/recobd\", \"--capture\"" "$1" >/dev/null &&
         grep -F "ListenStream=127.0.0.1:2489" "$2" >/dev/null &&
         grep -F "ListenStream=%h/.local/state/cb.sock" "$3" >/dev/null &&
         grep -F "SocketMode=0600" "$3" >/dev/null &&
@@ -325,59 +326,74 @@ STUB
       The status should be success
     End
 
-    It 'assigns endpoint trust in service configuration and enables both sockets'
+    It 'derives endpoint trust from the listener, never from configuration'
+      # The RECOB inversion of the old CLIPBOARD_BRIDGE_ENDPOINT env bit: one
+      # persistent daemon adopts both sockets and classifies them by TYPE, so
+      # no unit or plist may carry a trust assignment for a request to inherit.
       services="$SHELLSPEC_PROJECT_ROOT/home/dot_config/packages/services.toml.tmpl"
-      public_service="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge@.service"
-      trusted_service="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge-trusted@.service"
+      bridge_service="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge.service"
+      trusted_socket="$SHELLSPEC_PROJECT_ROOT/home/dot_config/systemd/user/clipboard-bridge-trusted.socket"
       setup_hook="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_37-setup-clipboard-bridge.sh.tmpl"
       ignore_template="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiignore.tmpl"
       When run command sh -c '
-        grep -F "CLIPBOARD_BRIDGE_ENDPOINT = \"public\"" "$1" >/dev/null &&
-        grep -F "CLIPBOARD_BRIDGE_ENDPOINT = \"trusted\"" "$1" >/dev/null &&
-        grep -F "CLIPBOARD_BRIDGE_ENDPOINT=public" "$2" >/dev/null &&
-        grep -F "CLIPBOARD_BRIDGE_ENDPOINT=trusted" "$3" >/dev/null &&
+        ! grep -F "CLIPBOARD_BRIDGE_ENDPOINT" "$1" >/dev/null &&
+        ! grep -F "CLIPBOARD_BRIDGE_ENDPOINT" "$2" >/dev/null &&
+        grep -F "Sockets=clipboard-bridge.socket clipboard-bridge-trusted.socket" "$2" >/dev/null &&
+        grep -F "Service=clipboard-bridge.service" "$3" >/dev/null &&
         grep -F "enable clipboard-bridge.socket clipboard-bridge-trusted.socket" "$4" >/dev/null &&
+        grep -F ".config/systemd/user/clipboard-bridge.service" "$5" >/dev/null &&
         grep -F ".config/systemd/user/clipboard-bridge-trusted.socket" "$5" >/dev/null &&
-        grep -F ".config/systemd/user/clipboard-bridge-trusted@.service" "$5" >/dev/null
-      ' _ "$services" "$public_service" "$trusted_service" "$setup_hook" "$ignore_template"
+        ! grep -F "clipboard-bridge@.service" "$5" >/dev/null
+      ' _ "$services" "$bridge_service" "$trusted_socket" "$setup_hook" "$ignore_template"
       The status should be success
     End
 
-    It 'round-trips a trusted U over a real mode-0600 Unix socket'
-      Skip if 'socat is unavailable' no_socat
-      dispatch="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-bridge-dispatch"
+    It 'reconciles launchd on apply whenever the manifest changes'
+      # chezmoi apply must SWAP the services, not merely rewrite the manifest
+      # (docs/recob-migration.md's apply-order promise): the hook re-fires on
+      # the manifest hash and runs the reconciler — after booting out the
+      # orphaned trusted service, whose socat would otherwise still hold
+      # cb.sock when the drifted clipboard-bridge kickstarts recobd.
+      sync_hook="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_57-sync-launchd-services.sh.tmpl"
       When run command sh -c '
-        root=$1
-        dispatch=$2
-        sock="$root/cb.sock"
+        grep -F "services.toml.tmpl: {{ include \"dot_config/packages/services.toml.tmpl\" | sha256sum }}" "$1" >/dev/null &&
+        grep -F "system-service\" sync" "$1" >/dev/null &&
+        bootout_line=$(grep -nF "launchctl bootout" "$1" | head -1 | cut -d: -f1) &&
+        sync_line=$(grep -nF "system-service\" sync" "$1" | head -1 | cut -d: -f1) &&
+        [ "$bootout_line" -lt "$sync_line" ]
+      ' _ "$sync_hook"
+      The status should be success
+    End
+
+    It 'answers the trusted contract over a real service-owned mode-0600 socket'
+      Skip if 'recob binaries are not built' no_recobd
+      # The real daemon, self-binding exactly as the launchd service does:
+      # it tightens the socket parent to 0700, hardens the socket to 0600,
+      # and answers the trusted endpoint with no credential — the uid
+      # boundary is the credential. host.identity is read-only, so nothing
+      # here can touch a pasteboard or a real store.
+      When run command sh -c '
+        root=$1; recobd=$2; bridge=$3
+        sock="$root/state/cb.sock"
         export XDG_STATE_HOME="$root/state"
         export XDG_DATA_HOME="$root/data"
-        export PICK_CLIPBOARD_DB="$root/data/history.db"
-        export CLIPBOARD_PLATFORM=linux-headless
-        export CLIPBOARD_BRIDGE_ENDPOINT=trusted
         mkdir -p "$XDG_STATE_HOME/clipboard" "$XDG_DATA_HOME"
+        chmod 700 "$XDG_STATE_HOME/clipboard"
         printf "socket-test\n" > "$XDG_STATE_HOME/clipboard/self-name"
-        socat "UNIX-LISTEN:$sock,fork,unlink-early,mode=0600" "EXEC:$dispatch" 2>"$root/socat.err" &
-        listener=$!
-        trap "kill $listener 2>/dev/null || true; wait $listener 2>/dev/null || true" EXIT
+        "$recobd" --no-public --socket "$sock" > "$root/daemon.log" 2>&1 &
+        daemon=$!
+        trap "kill $daemon 2>/dev/null || true; wait $daemon 2>/dev/null || true" EXIT
         i=0
         while [ ! -S "$sock" ] && [ "$i" -lt 100 ]; do
           sleep 0.02
           i=$((i + 1))
         done
-        [ -S "$sock" ] || exit 9
-        file="$root/a"; printf "socket file\n" > "$file"
-        n=$(printf "%s" "$file" | wc -c | tr -d " ")
-        {
-          printf U
-          printf "\\$(printf %03o $(((n>>24)&255)))\\$(printf %03o $(((n>>16)&255)))\\$(printf %03o $(((n>>8)&255)))\\$(printf %03o $((n&255)))"
-          printf "%s" "$file"
-        } | nc -U -w 2 "$sock" > "$root/response"
-        [ "$(head -c 1 "$root/response")" = O ] || exit 8
-        [ "$(sqlite3 "$PICK_CLIPBOARD_DB" "SELECT count(*) FROM file_authorities;")" = 1 ] || exit 7
+        [ -S "$sock" ] || { cat "$root/daemon.log" >&2; exit 9; }
+        out=$(CLIPBOARD_BRIDGE_LOCAL_SOCKET="$sock" "$bridge" call host.identity) || exit 8
+        [ "$out" = "host=$(printf socket-test | xxd -p)" ] || { echo "got: $out" >&2; exit 7; }
         mode=$(stat -f %Lp "$sock" 2>/dev/null || stat -c %a "$sock")
         [ "$mode" = 600 ] || exit 6
-      ' _ "$TEST_TMP" "$dispatch"
+      ' _ "$TEST_TMP" "$RECOBD_BIN" "$BRIDGE_BIN"
       The status should be success
     End
   End

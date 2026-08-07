@@ -1,17 +1,18 @@
-# Universal clipboard bridge listener (Phase 7 spec §4). systemd IS the
-# listener: Accept=yes spawns one clipboard-bridge@ instance per connection
-# with the socket as stdin/stdout -- the exact socat EXEC: semantics the
-# macOS launchd service uses. Loopback-only is load-bearing: the store holds
-# clipboard history and must never be reachable off-box.
+# Universal clipboard bridge, public endpoint (RECOB §3.2). systemd owns the
+# listener and hands it to ONE persistent recobd (clipboard-bridge.service)
+# via socket activation — Accept=no, unlike the retired per-connection
+# dispatcher template: the daemon holds state (the store, the rate buckets,
+# §3.5's connection caps) that a process-per-connection cannot. Loopback-only
+# is load-bearing: the store holds clipboard history and must never be
+# reachable off-box; the credential (§9.2) guards the on-box boundary.
 # Survives image recycles via $HOME: this file + the enable symlink live
 # under ~/.config/systemd/user, so the user manager rebinds 2489 at first
 # login with no chezmoi run.
 [Unit]
-Description=Universal clipboard bridge (framed TCP, loopback only)
+Description=RECOB clipboard bridge, public endpoint (loopback only)
 
 [Socket]
 ListenStream=127.0.0.1:2489
-Accept=yes
 
 [Install]
 WantedBy=sockets.target

@@ -160,3 +160,17 @@ README.md
 .local/libexec/ai-assist-summon
 .local/libexec/ai-assist-triage
 .local/lib/assist-agent-common.zsh
+
+# ── RECOB cutover: the zsh dispatcher stack retired (→ recobd) ──────────────
+# The per-connection zsh dispatcher and its Accept=yes systemd templates were
+# replaced by the persistent recobd daemon (docs/recob-protocol-spec.md; the
+# service NAMES did not change, spec D3). The dispatcher shipped everywhere;
+# the template units only ever existed on headless Linux, where they are NOT
+# ignored, so these entries fire exactly there (the ignore/remove hard rule
+# above is satisfied: on hosts where the units are ignored, the targets were
+# never installed).
+.local/libexec/clipboard-bridge-dispatch
+.config/systemd/user/clipboard-bridge@.service
+.config/systemd/user/clipboard-bridge-trusted@.service
+.local/lib/clipboard-platform-macos.zsh
+.local/lib/clipboard-platform-linux-headless.zsh
