@@ -234,3 +234,70 @@ confirm by re-running.
 access existed on the machine this was built on. Every platform-specific path
 is `cfg`-gated and the shared code is std-only, but the suite has not been run
 there. Do that first on the next Linux touchpoint.
+
+## Update — Phase 6 complete (2026-08-07, `recob-cutover`)
+
+Phase 6 is **done**. Every spec file that drives the shims, the dispatcher or
+the third client is converted to the recorder harness — ten files, 315
+examples, 0 failures, 1 deliberate macOS skip — and the three client bugs the
+conversion surfaced are fixed. All of it lives on `recob-cutover` (unpushed);
+`master` is untouched.
+
+### What exists now, beyond the update above
+
+**`system-bridge`**, the generic op invoker (operator's decisions, 2026-08-07:
+generic invoker over `system-clip` subcommands; installed to
+`~/.local/libexec` — it is plumbing the zsh wrapper execs, and `system-clip`
+stays the only PATH-visible RECOB binary). `call` sends any §6.1 operation
+(`name=value` fields, one `--stdin` field, `--peer` for the tunnel endpoint,
+`--action` for the long §5.2 deadline, replies as `name=<hex>` lines or one
+`--raw` field); `probe` is §6.1's ruling that reachability is the §5.2
+connect result. Design record:
+`docs/superpowers/specs/2026-08-07-recob-generic-invoker-design.md`
+(gitignored, local).
+
+**`clipboard-bridge-client.zsh` is op wrappers now** — no opcode, frame byte
+or payload layout survives in shell — and all four callers are rewired:
+`notify` puts the `style` enum on the wire (P5; the Lua-global mapping
+survives only on the local `hs` route), the mux scripts speak
+`window.fullscreen.*`, and `pick-clipboard`'s eight opcodes became six op
+wrappers (the `id:` prefix and the LOCAL_PORT plumbing died; a new
+`RECOB_ACTION_TIMEOUT_S` knob carries `MUX_BRIDGE_TIMEOUT_S`'s meaning).
+
+**§8 rule 7 is implemented.** `Session::exchange`/`fetch` pre-flight the op
+against `caps` and render §7.1's three message shapes, side named from the
+address dialed; the wire crate carries its own registry copy
+(`recob_wire::registry`), pinned to the daemon's table by a test beside that
+table. The endpoint/credential plumbing both binaries share moved to
+`recob_wire::cli`.
+
+**The auth-nonce flake is dead, not dodged.** It was the test racing §3.5's
+8-slot unauthenticated cap: `join()` proves client-side completion, but the
+slots are released by the server's teardown. The test now honors
+`busy`/`retry_after` exactly as §5.2 tells a real client to. Retract this
+document's earlier "deserves its own diagnosis" — it got one.
+
+### Hazards found the hard way, since
+
+**A workspace `cargo build --release` does not relink `recob-wire`'s bins.**
+A stale `target/release/system-clip` silently fails spec assertions that the
+library fix provably satisfies. Build with `--workspace` (what `make build`
+does) or `-p recob-wire --bins`.
+
+**`make test | grep …; echo $?` reports grep's exit, not make's.** A
+`cargo fmt --check` failure printed nothing the grep matched and five commits
+claimed green suites that were fmt-red. The branch history was repaired by
+autosquash and every commit re-verified in a worktree with real exit codes;
+capture `$?` from `make`, never from a pipe tail.
+
+### What remains, in order
+
+1. **Phase 8, the services swap** — still not written, still the single edit
+   that can leave a machine with no bridge at all. Write it and validate it
+   Mode B **with the operator present**; service names must not change (D3).
+   `tests/clipboard-window-op_spec.sh` is deleted with the dispatcher in that
+   same commit, and `docs/notify-over-bridge.md` needs its dead-wire sections
+   refreshed then too.
+2. **The Linux dev-shell run** — now covers the five newly-converted files
+   too; still the first execution for every `cfg!`-gated branch.
+3. Push, once the cutover lands.
