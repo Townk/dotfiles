@@ -93,8 +93,16 @@ fi
 # mistake is what made the first manual run of this check fail.
 rm -rf "$RUN"
 mkdir -p "$RUN/clipboard"
-chmod 700 "$RUN"
+chmod 700 "$RUN" "$RUN/clipboard"
 printf 'boxA\n' > "$RUN/clipboard/self-name"
+
+# §9.2's credential, pre-created rather than left to the daemon's bootstrap: the
+# client has to know the value to answer the challenge, and a known value also
+# lets the run assert afterwards that a valid file was reused rather than rotated.
+# umask before the write and chmod after, so it is never briefly readable.
+TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 -v | tr -d ' \n')"
+( umask 077; printf '%s\n' "$TOKEN" > "$RUN/clipboard/accepted-token" )
+chmod 600 "$RUN/clipboard/accepted-token"
 
 write_units() {
   mkdir -p "$UNIT_DIR"
@@ -132,9 +140,11 @@ journal_since() {
 }
 
 # --- the client ---------------------------------------------------------------
-# Written from spec §4.1-§4.3 alone; shares no code with the daemon.
+# Written from spec §4.1-§4.3 and §9.2 alone; shares no code with the daemon, so
+# a divergence between the document and the implementation fails here rather than
+# two copies of one mistake agreeing.
 cat > "$RUN/client.py" <<'PY'
-import os, socket, sys
+import hashlib, os, socket, sys
 
 def field(n, v): return bytes([len(n)]) + n + len(v).to_bytes(4, 'big') + v
 
@@ -161,27 +171,52 @@ def rframe(s):
         out.append((name.decode(), body[i:i + vl])); i += vl
     return chr(h[0]), dict(out)
 
-def exchange(label, sock):
+def digest(token, domain, nonce):
+    # §9.2: auth = SHA256(token || ":c:" || nonce), proof = the same with ":s:".
+    # The two separators are what defeat reflection.
+    return hashlib.sha256(token.encode() + domain + nonce).hexdigest().encode()
+
+
+def exchange(label, sock, token):
     sock.settimeout(5)
     pre = rd(sock, 6)
     assert pre[:5] == b'RECOB', f'{label}: bad magic {pre!r}'
     kind, banner = rframe(sock)
     assert kind == 'H', f'{label}: first frame was {kind}, expected the banner'
-    sock.sendall(b'RECOB\x01' + frame(b'H', [(b'proto', b'1'), (b'impl', b'linux-check')]))
+
+    fields = [(b'proto', b'1'), (b'impl', b'linux-check')]
+    cnonce = os.urandom(32)
+    # The public endpoint challenges; the trusted socket's uid boundary is its
+    # credential, so it issues no nonce and takes no auth (§9.2).
+    authenticated = b'nonce' in [k.encode() for k in banner]
+    if authenticated:
+        fields += [(b'auth', digest(token, b':c:', banner['nonce'])),
+                   (b'cnonce', cnonce)]
+    sock.sendall(b'RECOB\x01' + frame(b'H', fields))
+
     kind, caps = rframe(sock)
-    assert kind == 'C', f'{label}: expected the capabilities frame, got {kind}'
+    assert kind == 'C', (f'{label}: expected the capabilities frame, got {kind} '
+                         f'{ {k: v[:40] for k, v in caps.items()} }')
+    proven = 'n/a'
+    if authenticated:
+        # Recomputed from the challenge *this* client chose: an endpoint echoing
+        # the client's own digest back cannot satisfy this.
+        expected = digest(token, b':s:', cnonce)
+        assert caps.get('proof') == expected, f'{label}: the endpoint did not prove itself'
+        proven = 'yes'
+
     sock.sendall(frame(b'Q', [(b'op', b'host.identity')]))
     kind, resp = rframe(sock)
     assert kind == 'R', f'{label}: expected a response, got {kind} {resp}'
     print(f"RESULT {label} wire={pre[5]} proto={banner['proto'].decode()} "
           f"endpoint={caps['endpoint'].decode()} caps={caps['caps'].decode()} "
-          f"host={resp['host'].decode()}")
+          f"host={resp['host'].decode()} proof={proven}")
     sock.close()
 
-port, path = int(sys.argv[1]), sys.argv[2]
-exchange('tcp', socket.create_connection(('127.0.0.1', port)))
+port, path, token = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+exchange('tcp', socket.create_connection(('127.0.0.1', port)), token)
 u = socket.socket(socket.AF_UNIX); u.connect(path)
-exchange('unix', u)
+exchange('unix', u, token)
 PY
 
 # --- check 1: both endpoints adopted -----------------------------------------
@@ -192,7 +227,7 @@ restart_socket
 sleep 0.3
 
 client_out=""
-if client_out="$(python3 "$RUN/client.py" "$PORT" "$RUN/cb.sock" 2>&1)"; then
+if client_out="$(python3 "$RUN/client.py" "$PORT" "$RUN/cb.sock" "$TOKEN" 2>&1)"; then
   printf '%s\n' "$client_out" | sed 's/^/  /' | redact
   grep -q 'RESULT tcp .*endpoint=public .*host=boxA' <<<"$client_out" \
     && ok "public endpoint answered host.identity" \
@@ -200,10 +235,22 @@ if client_out="$(python3 "$RUN/client.py" "$PORT" "$RUN/cb.sock" 2>&1)"; then
   grep -q 'RESULT unix .*endpoint=trusted .*host=boxA' <<<"$client_out" \
     && ok "trusted endpoint answered host.identity" \
     || bad "trusted endpoint did not answer as expected"
+  # §9.2: the client answered a challenge and the endpoint answered the client's,
+  # both recomputed by an implementation that shares no code with the daemon.
+  grep -q 'RESULT tcp .*proof=yes' <<<"$client_out" \
+    && ok "mutual authentication completed on the public endpoint" \
+    || bad "the public endpoint did not prove itself"
+  grep -q 'RESULT unix .*proof=n/a' <<<"$client_out" \
+    && ok "the trusted socket required no credential" \
+    || bad "the trusted socket challenged a same-uid caller"
 else
   bad "the client could not complete an exchange"
   printf '%s\n' "$client_out" | sed 's/^/  /' | redact
 fi
+
+[ "$(cat "$RUN/clipboard/accepted-token")" = "$TOKEN" ] \
+  && ok "the existing credential was reused, not rotated" \
+  || bad "the daemon replaced a valid credential"
 
 sleep 0.2
 log="$(journal_since "$mark")"

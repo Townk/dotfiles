@@ -77,6 +77,12 @@ than trust the unit.
 
 Output is redacted — home path, hostname, username — so it is safe to paste.
 
+Phase 2 extended it: the embedded client now completes §9.2's mutual handshake —
+it answers the banner's challenge and recomputes the endpoint's `proof` from the
+challenge it chose itself — so the run also confirms authentication works under
+real systemd. A client that did not authenticate would now be refused, which is
+how this script came to be updated.
+
 Verified 2026-08-06 on Linux under a systemd user session: 13 checks passed.
 Both listeners adopted from `LISTEN_FDS`, neither bound by the daemon, each
 identified by address family rather than by fd order, socket 0600 under a 0700
