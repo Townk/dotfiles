@@ -173,14 +173,16 @@ fn main() -> ExitCode {
         }
     }
 
-    // §14.2: the capture loop, opted into with --capture. The tracker is
-    // shared so the loop recognizes the daemon's own future writes (§6.2);
-    // Phase 4's clip operations take the other end of it.
+    // §14.2: the capture loop, opted into with --capture. The tracker and the
+    // last-observed changeCount are shared with the sessions: the loop skips
+    // the daemon's own writes (§6.2), and §6.5's no-race capture knows what
+    // the loop has already stored.
     #[cfg(target_os = "macos")]
     if args.capture {
-        let tracker = std::sync::Arc::new(recobd::platform::RegtypeTracker::default());
         let config = recobd::platform::macos::CaptureConfig::from_env();
-        if let Err(e) = recobd::platform::macos::start_capture(config, tracker) {
+        if let Err(e) =
+            recobd::platform::macos::start_capture(config, ctx.tracker.clone(), ctx.last_cc.clone())
+        {
             log!("cannot start the capture loop: {e}");
             return ExitCode::FAILURE;
         }

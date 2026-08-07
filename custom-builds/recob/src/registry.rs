@@ -224,12 +224,42 @@ pub fn credential_refusal(outcome: &AuthOutcome) -> ProtoError {
         .closing()
 }
 
-pub fn dispatch(op: &Op, _request: &Fields, ctx: &Ctx) -> Result<Fields, ProtoError> {
+/// What a handler answers with: one `R` frame, or — for `files.fetch` alone
+/// (§6.4) — an `R` head followed by a `D` stream the session writes chunk by
+/// chunk, so a directory archive is never buffered whole.
+pub enum Response {
+    Fields(Fields),
+    Stream {
+        head: Fields,
+        source: Box<dyn StreamSource>,
+    },
+}
+
+impl From<Fields> for Response {
+    fn from(fields: Fields) -> Self {
+        Response::Fields(fields)
+    }
+}
+
+/// §6.4's producer half. `Ok(Some(chunk))` is the next `D` payload (the session
+/// enforces the 64 KiB split), `Ok(None)` is the clean end the empty `D` frame
+/// announces, and `Err` becomes the mid-stream `E` that terminates the exchange
+/// while leaving the connection reusable.
+pub trait StreamSource: Send {
+    fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, ProtoError>;
+}
+
+pub fn dispatch(
+    op: &Op,
+    _request: &Fields,
+    _endpoint: Endpoint,
+    ctx: &Ctx,
+) -> Result<Response, ProtoError> {
     match op.name {
         // §6.1: no request fields, one response field. Re-read per request rather
         // than cached, per §3.4.
         "host.identity" => match ctx.host.current() {
-            Some(host) => Ok(Fields::new().with("host", host.into_bytes())),
+            Some(host) => Ok(Fields::new().with("host", host.into_bytes()).into()),
             None => Err(ProtoError::new(
                 "internal",
                 "cannot resolve this machine's wire identity",
@@ -247,11 +277,18 @@ mod tests {
     use crate::testutil;
 
     fn ctx() -> Ctx {
-        Ctx::new(
+        let mut ctx = Ctx::new(
             crate::host::HostIdentity::with_paths("/nonexistent".into(), Some("boxA".into())),
             "test-impl".to_string(),
             std::time::Duration::from_secs(2),
-        )
+        );
+        // Dispatch reachability drives real handlers; none may ever open the
+        // live store from a test.
+        ctx.db_path = std::env::temp_dir().join(format!(
+            "recobd-registry-test-{}/history.db",
+            std::process::id()
+        ));
+        ctx
     }
 
     // §9.4 assertion 1. With one table this is structural — a row cannot be
@@ -285,13 +322,10 @@ mod tests {
     fn every_policy_entry_names_a_dispatchable_operation() {
         for op in OPS {
             // A row whose handler is missing would reach dispatch's unreachable!
-            // arm, so dispatching every row is what proves the pair exists.
-            let result = dispatch(op, &Fields::new(), &ctx());
-            assert!(
-                result.is_ok(),
-                "{} has a row but no working handler",
-                op.name
-            );
+            // arm. Reaching it — not a successful answer — is what this asserts:
+            // an op with request fields answers missing-field here, which still
+            // proves the row has a handler.
+            let _ = dispatch(op, &Fields::new(), Endpoint::Trusted, &ctx());
         }
     }
 

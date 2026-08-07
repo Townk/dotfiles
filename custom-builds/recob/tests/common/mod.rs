@@ -440,5 +440,8 @@ pub fn ctx_mut(dir: &std::path::Path, host: &str) -> Ctx {
         std::time::Duration::from_secs(2),
     );
     ctx.token_path = token_path;
+    // Every in-process test serves against a store inside the test's own
+    // directory — never the live one.
+    ctx.db_path = dir.join("history.db");
     ctx
 }

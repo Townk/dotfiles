@@ -34,6 +34,14 @@ use crate::wire::{
 /// §6.4: a `D` chunk is at most 64 KiB.
 const CHUNK: usize = 64 * 1024;
 
+/// §6.5: `clip.set.rich`'s blob cap, the largest per-operation limit.
+pub const RICH_BLOB_CAP: usize = 128 * 1024 * 1024;
+
+/// What the exchange loop will read: the largest per-operation cap plus room
+/// for the operation's other fields. Every operation except `clip.set.rich` is
+/// still held to the 64 MiB default in `handle_request` (§6.5).
+const REQUEST_CAP: usize = RICH_BLOB_CAP + 4096;
+
 /// The socket operations the lifecycle needs beyond `Read`/`Write`: the §3.5
 /// handshake deadline and §5.2's exchange timeout are different values applied to
 /// the same descriptor at different phases, so the timeout has to be settable
@@ -76,6 +84,18 @@ pub struct Ctx {
     pub token_path: PathBuf,
     pub limits: Arc<Limits>,
     pub exposure: Exposure,
+    /// §14.6: the register type of the daemon's last pasteboard write, keyed by
+    /// `changeCount`. Shared with the capture loop, which uses the same record
+    /// to recognize its own writes (§6.2).
+    pub tracker: Arc<crate::platform::RegtypeTracker>,
+    /// The store the handlers write (§14.2). A path, not a connection — each
+    /// request opens its own, which is still far cheaper than the `sqlite3`
+    /// spawn every store operation paid before (§1.1).
+    pub db_path: PathBuf,
+    /// The last pasteboard `changeCount` whose store row exists, shared between
+    /// the capture loop and §6.5's synchronous no-race capture. `None` until
+    /// something has observed the pasteboard.
+    pub last_cc: Arc<std::sync::Mutex<Option<isize>>>,
 }
 
 impl Ctx {
@@ -91,6 +111,9 @@ impl Ctx {
             token_path: auth::accepted_token_path(),
             limits: Arc::new(Limits::default()),
             exposure: Exposure::none(),
+            tracker: Arc::new(crate::platform::RegtypeTracker::default()),
+            db_path: crate::store::default_db_path(),
+            last_cc: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }
@@ -387,14 +410,55 @@ pub fn serve<S: Socket>(
         return;
     }
 
-    // Exchange loop. The cap is §4.2's default now that the peer is
-    // authenticated; §6.5 raises it for one operation in Phase 4.
+    // Exchange loop. The read cap is §6.5's raised per-operation limit — the
+    // frame arrives before the operation is known, so the loop accepts up to
+    // the largest per-operation cap plus field overhead and `handle_request`
+    // enforces the 64 MiB default for every operation but `clip.set.rich`.
     loop {
-        match wire::read_frame_at_boundary(stream, MAX_BODY) {
+        match wire::read_frame_at_boundary(stream, REQUEST_CAP) {
             Ok(Some((Kind::Request, body))) => {
                 let action = handle_request(&body, endpoint, peer, granted, ctx, &mut script);
                 if !action.bytes.is_empty() && !send(stream, &action.bytes, endpoint, peer) {
                     return;
+                }
+                if let Some(mut source) = action.stream {
+                    // §6.4: `D` chunks as they are produced, a mid-stream error
+                    // as an `E` in place of the next `D` (terminating the
+                    // exchange, not the connection), and an explicit empty `D`
+                    // as the clean end truncation is measured against.
+                    loop {
+                        match source.next_chunk() {
+                            Ok(Some(chunk)) => {
+                                // An empty produced chunk yields no frames at
+                                // all — only `Ok(None)` may emit the empty `D`
+                                // the protocol reads as the clean end.
+                                for part in chunk.chunks(CHUNK) {
+                                    if !send(
+                                        stream,
+                                        &wire::encode_raw(Kind::Data, part),
+                                        endpoint,
+                                        peer,
+                                    ) {
+                                        return;
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                if !send(stream, &wire::encode_raw(Kind::Data, &[]), endpoint, peer)
+                                {
+                                    return;
+                                }
+                                break;
+                            }
+                            Err(err) => {
+                                log!("{} {peer}: mid-stream: {err}", endpoint.as_str());
+                                if !send(stream, &err.frame(), endpoint, peer) {
+                                    return;
+                                }
+                                break;
+                            }
+                        }
+                    }
                 }
                 if action.close {
                     return;
@@ -467,6 +531,9 @@ fn deadline<S: Socket>(stream: &S, budget: &Budget, endpoint: Endpoint, peer: &s
 
 struct Action {
     bytes: Vec<u8>,
+    /// §6.4: the `D` stream to write after `bytes` (the `R` head), produced
+    /// chunk by chunk so a large archive is never buffered whole.
+    stream: Option<Box<dyn registry::StreamSource>>,
     close: bool,
 }
 
@@ -474,6 +541,7 @@ impl Action {
     fn reply(bytes: Vec<u8>) -> Self {
         Action {
             bytes,
+            stream: None,
             close: false,
         }
     }
@@ -481,6 +549,7 @@ impl Action {
     fn from_error(err: ProtoError) -> Self {
         Action {
             bytes: err.frame(),
+            stream: None,
             close: err.closes,
         }
     }
@@ -508,6 +577,16 @@ fn handle_request(
         return Action::from_error(err);
     };
     let name = String::from_utf8_lossy(raw_op).into_owned();
+    // §6.5: the 64 MiB frame default binds every operation except
+    // `clip.set.rich`, whose 128 MiB cap the read loop already admitted.
+    if body.len() > MAX_BODY && name != "clip.set.rich" {
+        let err = ProtoError::new(
+            "too-large",
+            format!("{name} takes at most {MAX_BODY} bytes"),
+        );
+        log!("{} {peer}: {err}", endpoint.as_str());
+        return Action::from_error(err);
+    }
     let Some(op) = registry::find(&name) else {
         // §10: `unknown-op` carries `op`, `proto` and `impl`, so two builds
         // sharing a proto are still distinguishable (§7.1).
@@ -545,8 +624,15 @@ fn handle_request(
 
     match script.next_directive() {
         Some(directive) => scripted(directive, endpoint, peer, op.name),
-        None => match registry::dispatch(op, &fields, ctx) {
-            Ok(response) => Action::reply(wire::encode(Kind::Response, &response)),
+        None => match registry::dispatch(op, &fields, endpoint, ctx) {
+            Ok(registry::Response::Fields(response)) => {
+                Action::reply(wire::encode(Kind::Response, &response))
+            }
+            Ok(registry::Response::Stream { head, source }) => Action {
+                bytes: wire::encode(Kind::Response, &head),
+                stream: Some(source),
+                close: false,
+            },
             Err(err) => {
                 log!("{} {peer} {}: {err}", endpoint.as_str(), op.name);
                 Action::from_error(err)
@@ -591,6 +677,7 @@ fn scripted(directive: Directive, endpoint: Endpoint, peer: &str, op: &str) -> A
         // declares a body, and then nothing.
         Directive::Close => Action {
             bytes: vec![Kind::Response.byte(), 0, 0, 0, 32],
+            stream: None,
             close: true,
         },
         Directive::Malformed(why) => {

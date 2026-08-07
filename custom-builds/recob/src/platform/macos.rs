@@ -222,16 +222,23 @@ impl CaptureConfig {
 
 /// Spawn the capture thread: poll `changeCount`, and on every change the
 /// daemon did not make itself, run the §14.2 pipeline and write the store row.
+/// `last_cc` is the shared record of what has been observed, which §6.5's
+/// synchronous no-race capture in `files.list`/`files.grant` reads.
 pub fn start_capture(
     config: CaptureConfig,
     tracker: Arc<RegtypeTracker>,
+    last_cc: Arc<std::sync::Mutex<Option<isize>>>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("capture".to_string())
-        .spawn(move || run_capture(&config, &tracker))
+        .spawn(move || run_capture(&config, &tracker, &last_cc))
 }
 
-fn run_capture(config: &CaptureConfig, tracker: &RegtypeTracker) {
+fn run_capture(
+    config: &CaptureConfig,
+    tracker: &RegtypeTracker,
+    last_cc: &std::sync::Mutex<Option<isize>>,
+) {
     let host = HostIdentity::resolve();
     let pasteboard = match &config.pasteboard {
         Some(name) => Pasteboard::with_name(name),
@@ -254,6 +261,7 @@ fn run_capture(config: &CaptureConfig, tracker: &RegtypeTracker) {
         config.db_path.display()
     );
     let mut last = pasteboard.change_count();
+    *last_cc.lock().unwrap() = Some(last);
     loop {
         std::thread::sleep(config.poll);
         last = capture_step(
@@ -264,6 +272,7 @@ fn run_capture(config: &CaptureConfig, tracker: &RegtypeTracker) {
             last,
             &frontmost_app,
         );
+        *last_cc.lock().unwrap() = Some(last);
     }
 }
 
