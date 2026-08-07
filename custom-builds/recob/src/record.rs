@@ -93,6 +93,32 @@ impl Recorder {
     }
 }
 
+/// §11.1's credential fixture: "a one-call setup that writes a throwaway token
+/// into a sandboxed `$XDG_STATE_HOME/clipboard/`, points `accepted-token` and
+/// `tunnel-tokens/<host>` at the same value, and answers the mutual challenge
+/// correctly by default."
+///
+/// Without it every converted public-endpoint spec would hand-roll the handshake,
+/// and the first one to get it slightly wrong would be "fixed" by weakening the
+/// assertion. The daemon already holds a valid `accepted-token` by the time this
+/// runs (§9.2's bootstrap), so the fixture is the *client* half: the same value,
+/// where a client looks for it.
+pub fn install_credential_fixture(
+    token: &crate::auth::Token,
+    owner_host: &str,
+) -> std::io::Result<()> {
+    if !crate::host::valid_host(owner_host) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{owner_host:?} is not a valid host name for a token file"),
+        ));
+    }
+    let path = crate::auth::tunnel_token_path(owner_host);
+    crate::listen::write_private(&path, format!("{}\n", token.as_str()).as_bytes())?;
+    log!("credential fixture: {}", path.display());
+    Ok(())
+}
+
 /// One directive per exchange (§11.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Directive {

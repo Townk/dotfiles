@@ -10,6 +10,7 @@
 use std::io::{Read, Write};
 use std::sync::Arc;
 
+use recobd::auth::Token;
 use recobd::listen::Endpoint;
 use recobd::session::{self, Ctx};
 use recobd::wire::{self, Fields, FrameError, Kind, MAX_BODY, PREAMBLE_LEN};
@@ -17,10 +18,18 @@ use recobd::wire::{self, Fields, FrameError, Kind, MAX_BODY, PREAMBLE_LEN};
 #[path = "../../src/testutil.rs"]
 pub mod testutil;
 
+/// A fixed credential for the in-process tests, so an assertion can name the
+/// value the daemon is checking against. Tests that spawn the binary read the
+/// token the daemon bootstrapped instead — the value is not the point, and
+/// hard-coding one there would test the fixture rather than the daemon.
+pub const TEST_TOKEN: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
 pub struct Client<S: Read + Write> {
     pub stream: S,
     pub wire_version: u8,
     pub banner: Fields,
+    /// The client's own challenge (§9.2 step 2), kept so `proof` can be checked.
+    pub cnonce: Vec<u8>,
 }
 
 impl<S: Read + Write> Client<S> {
@@ -36,6 +45,7 @@ impl<S: Read + Write> Client<S> {
             stream,
             wire_version: pre[5],
             banner: wire::parse_body(&body).unwrap(),
+            cnonce: recobd::auth::random_bytes(recobd::auth::NONCE_BYTES).unwrap(),
         }
     }
 
@@ -45,12 +55,51 @@ impl<S: Read + Write> Client<S> {
         self.stream.write_all(&out).unwrap();
     }
 
+    /// The trusted socket's hello: no credential, since its uid boundary is the
+    /// credential (§9.2).
     pub fn hello_default(&mut self) {
         self.hello(
             &Fields::new()
                 .with("proto", b"1".to_vec())
                 .with("impl", b"spec-test".to_vec()),
         );
+    }
+
+    /// The public endpoint's hello (§9.2 step 2): answer the banner's challenge
+    /// and issue one of our own.
+    pub fn hello_authenticated(&mut self, token: &str) {
+        let auth = Token::from_hex(token)
+            .expect("test token")
+            .client_digest(self.nonce());
+        let cnonce = self.cnonce.clone();
+        self.hello(
+            &Fields::new()
+                .with("proto", b"1".to_vec())
+                .with("impl", b"spec-test".to_vec())
+                .with("auth", auth.into_bytes())
+                .with("cnonce", cnonce),
+        );
+    }
+
+    /// The server's challenge, from the banner.
+    pub fn nonce(&self) -> &[u8] {
+        self.banner.get("nonce").expect("banner without a nonce")
+    }
+
+    /// §9.2 step 3, from the client's side: the capabilities frame must answer the
+    /// challenge *this* client chose, or the peer is a squatter.
+    pub fn expect_caps_proven(&mut self, token: &str) -> Fields {
+        let caps = self.expect_caps();
+        let expected = Token::from_hex(token)
+            .expect("test token")
+            .server_proof(&self.cnonce);
+        assert_eq!(
+            caps.get("proof")
+                .map(|p| String::from_utf8_lossy(p).into_owned()),
+            Some(expected),
+            "the endpoint did not prove itself"
+        );
+        caps
     }
 
     pub fn preamble_only(&mut self, bytes: &[u8]) {
@@ -100,6 +149,80 @@ impl<S: Read + Write> Client<S> {
         let fields = self.expect_error();
         String::from_utf8_lossy(fields.get("code").expect("E frame without code")).into_owned()
     }
+}
+
+/// Every byte that crossed the connection, in both directions. §11.4 asks for
+/// the token's absence from a *full recorded exchange*, which means the wire and
+/// not a summary of it.
+pub struct Tee<S> {
+    inner: S,
+    pub sent: Vec<u8>,
+    pub received: Vec<u8>,
+}
+
+impl<S> Tee<S> {
+    pub fn new(inner: S) -> Self {
+        Tee {
+            inner,
+            sent: Vec::new(),
+            received: Vec::new(),
+        }
+    }
+
+    /// Both directions concatenated — what an observer on the wire would have.
+    pub fn wire(&self) -> Vec<u8> {
+        let mut all = self.sent.clone();
+        all.extend_from_slice(&self.received);
+        all
+    }
+}
+
+impl<S: Read> Read for Tee<S> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.received.extend_from_slice(&buf[..n]);
+        Ok(n)
+    }
+}
+
+impl<S: Write> Write for Tee<S> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.sent.extend_from_slice(&buf[..n]);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// As `served`, with every byte of the connection captured.
+pub fn served_teed(
+    ctx: Arc<Ctx>,
+    endpoint: Endpoint,
+) -> Client<Tee<std::os::unix::net::UnixStream>> {
+    let (server, client) = std::os::unix::net::UnixStream::pair().unwrap();
+    let admission = recobd::limits::Limits::admit(&ctx.limits, endpoint).expect("admitted");
+    std::thread::spawn(move || {
+        let mut server = server;
+        session::serve(&mut server, endpoint, "test", &ctx, admission);
+    });
+    Client::open(Tee::new(client))
+}
+
+/// The credential a spawned daemon created for itself at startup (§9.2's
+/// bootstrap), read the way a pushed client copy is read. Waits, because the
+/// daemon writes it while the test is already running.
+pub fn wait_for_token(state_home: &std::path::Path) -> String {
+    let path = state_home.join("clipboard/accepted-token");
+    for _ in 0..200 {
+        if let Ok(token) = recobd::auth::read_token(&path) {
+            return token.as_str().to_string();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("no credential appeared at {}", path.display());
 }
 
 pub fn text(fields: &Fields, name: &str) -> String {
@@ -299,13 +422,23 @@ impl Drop for Daemon {
 }
 
 /// A context whose identity comes from a self-name file the test controls, so
-/// `host.identity` has a value that does not depend on the machine.
+/// `host.identity` has a value that does not depend on the machine, and whose
+/// credential is `TEST_TOKEN` in a private file the test owns.
 pub fn ctx_with_host(dir: &std::path::Path, host: &str) -> Arc<Ctx> {
+    Arc::new(ctx_mut(dir, host))
+}
+
+/// The same, unwrapped, for a test that needs to adjust a field before serving.
+pub fn ctx_mut(dir: &std::path::Path, host: &str) -> Ctx {
     let path = dir.join("self-name");
     std::fs::write(&path, format!("{host}\n")).unwrap();
-    Arc::new(Ctx::new(
+    let token_path = dir.join("accepted-token");
+    recobd::listen::write_private(&token_path, format!("{TEST_TOKEN}\n").as_bytes()).unwrap();
+    let mut ctx = Ctx::new(
         recobd::host::HostIdentity::with_paths(path, Some("fallback".into())),
         "test-impl".to_string(),
         std::time::Duration::from_secs(2),
-    ))
+    );
+    ctx.token_path = token_path;
+    ctx
 }

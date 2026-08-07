@@ -244,10 +244,14 @@ fn the_endpoint_override_makes_public_policy_reachable_over_a_socket() {
     );
     daemon.wait_for_log("recording mode");
 
+    // Labelled public, so the credential is required over a Unix socket — which
+    // is the point: §11.1's fixture exists so a converted spec does not have to
+    // hand-roll the handshake to reach public-endpoint policy.
+    let token = common::wait_for_token(dir.path());
     let mut client = daemon.connect_trusted();
-    client.hello_default();
+    client.hello_authenticated(&token);
     assert_eq!(
-        text(&client.expect_caps(), "endpoint"),
+        text(&client.expect_caps_proven(&token), "endpoint"),
         "public",
         "a spec with only a socket to point at can still exercise public policy"
     );

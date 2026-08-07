@@ -27,9 +27,13 @@ fn both_endpoints_are_adopted_from_listen_fds() {
     daemon.wait_for_log("activated public endpoint");
     daemon.wait_for_log("activated trusted socket");
 
+    let token = common::wait_for_token(dir.path());
     let mut public = daemon.connect_public();
-    public.hello_default();
-    assert_eq!(text(&public.expect_caps(), "endpoint"), "public");
+    public.hello_authenticated(&token);
+    assert_eq!(
+        text(&public.expect_caps_proven(&token), "endpoint"),
+        "public"
+    );
     let (kind, fields) = public.request("host.identity");
     assert_eq!(kind, Kind::Response);
     assert_eq!(text(&fields, "host"), "boxA");
@@ -60,7 +64,11 @@ fn the_daemon_finds_each_socket_by_family_not_by_fd_order() {
     let daemon = Daemon::activated(dir.path(), &[], &[("XDG_STATE_HOME", &state)]);
     daemon.wait_for_log("activated trusted socket");
 
-    assert_eq!(host_identity(&mut daemon.connect_public()), "boxC");
+    let token = common::wait_for_token(dir.path());
+    assert_eq!(
+        host_identity_public(&mut daemon.connect_public(), &token),
+        "boxC"
+    );
     assert_eq!(host_identity(&mut daemon.connect_trusted()), "boxC");
 }
 
@@ -89,6 +97,17 @@ fn an_activated_socket_with_a_loose_mode_is_refused() {
         "the refusal should name the fix:\n{}",
         loosened.stderr()
     );
+}
+
+fn host_identity_public<S: std::io::Read + std::io::Write>(
+    client: &mut common::Client<S>,
+    token: &str,
+) -> String {
+    client.hello_authenticated(token);
+    client.expect_caps_proven(token);
+    let (kind, fields) = client.request("host.identity");
+    assert_eq!(kind, Kind::Response);
+    text(&fields, "host")
 }
 
 fn host_identity<S: std::io::Read + std::io::Write>(client: &mut common::Client<S>) -> String {

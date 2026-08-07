@@ -146,7 +146,11 @@ fn the_public_endpoint_binds_loopback_only() {
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .unwrap();
+    let token = common::wait_for_token(dir.path());
     let mut client = common::Client::open(stream);
-    client.hello_default();
-    assert_eq!(text(&client.expect_caps(), "endpoint"), "public");
+    client.hello_authenticated(&token);
+    assert_eq!(
+        text(&client.expect_caps_proven(&token), "endpoint"),
+        "public"
+    );
 }

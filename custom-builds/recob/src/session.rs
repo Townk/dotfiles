@@ -5,17 +5,21 @@
 //! strictly ordered — the Nth `R`/`E` answers the Nth `Q` — so there are no
 //! request identifiers and the handler is single-threaded per connection.
 //!
-//! Authentication (§9.2) is not here yet: the public endpoint accepts any peer
-//! that reaches it, exactly as in Phase 1. What this file gains is §3.5's
-//! pre-authentication budget and the single authorization call site the §9.3
-//! policy table is consulted through.
+//! The handshake is **mutual**, in one extra field each way and no extra frames:
+//! the banner carries the server's `nonce`, the hello answers it with `auth` and
+//! carries the client's own `cnonce`, and the capabilities frame answers that
+//! with `proof`. §9.2 works through why each half is necessary — protecting the
+//! credential while streaming the plaintext past an impostor is worse than
+//! useless, because it looks like protection.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::auth::{self, AuthOutcome, Token, NONCE_BYTES};
 use crate::exposure::Exposure;
 use crate::host::HostIdentity;
 use crate::limits::{Admission, Limits};
@@ -66,6 +70,10 @@ pub struct Ctx {
     pub impl_id: String,
     pub exchange_timeout: Duration,
     pub recorder: Option<Recorder>,
+    /// §9.2: the owning machine's credential. The *path*, not the value — the
+    /// file is re-read per connection so a rotation takes effect on the next
+    /// connection rather than on the next restart.
+    pub token_path: PathBuf,
     pub limits: Arc<Limits>,
     pub exposure: Exposure,
 }
@@ -80,6 +88,7 @@ impl Ctx {
             impl_id,
             exchange_timeout,
             recorder: None,
+            token_path: auth::accepted_token_path(),
             limits: Arc::new(Limits::default()),
             exposure: Exposure::none(),
         }
@@ -146,6 +155,44 @@ pub fn serve<S: Socket>(
         .map(|r| r.open_script())
         .unwrap_or_default();
 
+    // §9.2: the trusted Unix socket requires no credential — its uid boundary is
+    // the credential.
+    let needs_credential = endpoint == Endpoint::Public;
+
+    let token = if needs_credential {
+        match auth::read_token(&ctx.token_path) {
+            Ok(token) => Some(token),
+            Err(fault) => {
+                // Fail closed and say so locally. The peer learns only
+                // `unauthorized`, because §9.2 requires the refusal to disclose
+                // nothing either way.
+                log!(
+                    "{} {peer}: cannot authenticate — {} is {fault}",
+                    endpoint.as_str(),
+                    ctx.token_path.display()
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let nonce = if needs_credential {
+        match auth::nonce() {
+            Ok(nonce) => Some(nonce),
+            Err(e) => {
+                // No challenge means no authentication, so there is nothing safe
+                // to serve. §9.2's bootstrap rule applies: refuse rather than
+                // serve unauthenticated.
+                log!("{} {peer}: cannot draw a nonce: {e}", endpoint.as_str());
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     // §4.1: the server writes its six preamble bytes and its banner immediately
     // on accept, never waiting for the client.
     let banner_proto = script.hello_proto().unwrap_or(PROTO);
@@ -153,6 +200,9 @@ pub fn serve<S: Socket>(
     banner.push("proto", banner_proto.to_string().into_bytes());
     if let Some(host) = ctx.host.current() {
         banner.push("host", host.into_bytes());
+    }
+    if let Some(nonce) = &nonce {
+        banner.push("nonce", nonce.clone());
     }
     let mut opening = wire::preamble().to_vec();
     opening.extend_from_slice(&wire::encode(Kind::Hello, &banner));
@@ -273,7 +323,7 @@ pub fn serve<S: Socket>(
             return;
         }
     };
-    if let Err(err) = check_hello(&hello) {
+    if let Err(err) = check_hello(&hello, needs_credential) {
         log!("{} {peer}: bad hello: {err}", endpoint.as_str());
         send(stream, &err.frame(), endpoint, peer);
         return;
@@ -282,11 +332,26 @@ pub fn serve<S: Socket>(
         recorder.record(endpoint, "hello", &hello);
     }
 
-    // §9.1: the tier a connection holds comes from which listener accepted it.
-    // On the public endpoint that is `authed` unconditionally until §9.2's
-    // credential check lands; the trusted socket is `local`, because its uid
-    // boundary is what the tier rests on.
-    let granted = if endpoint == Endpoint::Public {
+    // §9.2: authenticate the connection. On failure, `E{code=unauthorized}` and
+    // close, having dispatched nothing and disclosed nothing beyond the banner.
+    let granted = if needs_credential {
+        let outcome = match (&token, script.deny_auth()) {
+            // §11.1's `deny-auth` directive, so a spec can exercise the client's
+            // `unauthorized` path without a wrong token.
+            (_, true) => AuthOutcome::BadCredential,
+            (Some(token), false) => auth::verify_auth(
+                token,
+                nonce.as_deref().unwrap_or_default(),
+                hello.get("auth"),
+            ),
+            (None, false) => AuthOutcome::BadCredential,
+        };
+        if outcome != AuthOutcome::Accepted {
+            let err = registry::credential_refusal(&outcome);
+            log!("{} {peer}: {err}", endpoint.as_str());
+            send(stream, &err.frame(), endpoint, peer);
+            return;
+        }
         Granted::authed()
     } else {
         Granted::local()
@@ -310,6 +375,14 @@ pub fn serve<S: Socket>(
     caps.push("impl", ctx.impl_id.as_bytes());
     caps.push("endpoint", endpoint.as_str());
     caps.push("caps", registry::caps());
+    if needs_credential {
+        // §9.2 step 3: the server answers the client's challenge, which is what
+        // lets the client know it is not talking to a squatter before it sends
+        // anything worth stealing.
+        if let Some(proof) = server_proof(&token, &hello, &mut script) {
+            caps.push("proof", proof.into_bytes());
+        }
+    }
     if !send(stream, &wire::encode(Kind::Caps, &caps), endpoint, peer) {
         return;
     }
@@ -356,6 +429,20 @@ pub fn serve<S: Socket>(
             }
         }
     }
+}
+
+/// §9.2 step 3, with §11.1's two directives for exercising a client's
+/// untrusted-endpoint path deliberately.
+fn server_proof(token: &Option<Token>, hello: &Fields, script: &mut Script) -> Option<String> {
+    if script.no_proof() {
+        return None;
+    }
+    let cnonce = hello.get("cnonce")?;
+    let token = token.as_ref()?;
+    if script.bad_proof() {
+        return Some(auth::hex(&[0u8; 32]));
+    }
+    Some(token.server_proof(cnonce))
 }
 
 /// Applies the remaining handshake budget as the socket's read timeout (§3.5).
@@ -519,16 +606,34 @@ fn scripted(directive: Directive, endpoint: Endpoint, peer: &str, op: &str) -> A
     }
 }
 
-/// §5.1's client hello.
-fn check_hello(fields: &Fields) -> Result<(), ProtoError> {
+/// §5.1's client hello, and §9.2's two credential fields.
+fn check_hello(fields: &Fields, needs_credential: bool) -> Result<(), ProtoError> {
     for name in fields.names() {
-        if !matches!(name, "proto" | "impl") {
-            return Err(ProtoError::new(
-                "unknown-field",
-                format!("this build does not know the hello field {name}"),
-            )
-            .with("field", name)
-            .with("proto", PROTO.to_string().into_bytes()));
+        let known = match name {
+            "proto" | "impl" => true,
+            // §5.1: `cnonce` is public-endpoint only, and `auth` is sent when the
+            // endpoint requires one. On the trusted socket they are refused
+            // rather than ignored: silently accepting a credential field on an
+            // endpoint that does not check credentials is the shape P6 exists to
+            // forbid.
+            "auth" | "cnonce" => needs_credential,
+            _ => false,
+        };
+        if !known {
+            let err = if matches!(name, "auth" | "cnonce") {
+                ProtoError::new(
+                    "bad-request",
+                    format!("the trusted endpoint takes no credential, so {name} is not accepted"),
+                )
+            } else {
+                ProtoError::new(
+                    "unknown-field",
+                    format!("this build does not know the hello field {name}"),
+                )
+            };
+            return Err(err
+                .with("field", name)
+                .with("proto", PROTO.to_string().into_bytes()));
         }
     }
     let Some(proto) = fields.get("proto") else {
@@ -552,6 +657,41 @@ fn check_hello(fields: &Fields) -> Result<(), ProtoError> {
                 ProtoError::new("bad-field", "impl outside [A-Za-z0-9._-]{1,64}")
                     .with("field", "impl"),
             );
+        }
+    }
+    if needs_credential {
+        // §6.6: `auth` is NUL-joined, 1–8 entries, each 64 lowercase hex. Shape is
+        // checked before any digest work, so a malformed field is `bad-field`
+        // rather than an indistinguishable authentication failure.
+        if let Some(offered) = fields.get("auth") {
+            if !auth::valid_auth_field(offered) {
+                return Err(ProtoError::new(
+                    "bad-field",
+                    "auth is not 1-8 NUL-joined 64-character lowercase hex digests",
+                )
+                .with("field", "auth"));
+            }
+        }
+        // §6.6: exactly 32 bytes. Required, because without it the server cannot
+        // prove itself and the mutual half of §9.2 would be silently skipped —
+        // which is precisely the "looks like protection" failure that section is
+        // written against.
+        match fields.get("cnonce") {
+            None => {
+                return Err(ProtoError::new(
+                    "missing-field",
+                    "the public endpoint answers a client challenge, so cnonce is required",
+                )
+                .with("field", "cnonce"))
+            }
+            Some(cnonce) if cnonce.len() != NONCE_BYTES => {
+                return Err(ProtoError::new(
+                    "bad-field",
+                    format!("cnonce must be exactly {NONCE_BYTES} bytes"),
+                )
+                .with("field", "cnonce"))
+            }
+            Some(_) => {}
         }
     }
     Ok(())
@@ -616,32 +756,113 @@ fn printable(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    fn hello_public() -> Fields {
+        Fields::new()
+            .with("proto", b"1".to_vec())
+            .with("auth", "a".repeat(64).into_bytes())
+            .with("cnonce", vec![0u8; NONCE_BYTES])
+    }
+
     #[test]
     fn a_hello_needs_a_well_formed_proto() {
-        check_hello(&Fields::new().with("proto", b"1".to_vec())).unwrap();
+        check_hello(&Fields::new().with("proto", b"1".to_vec()), false).unwrap();
         check_hello(
             &Fields::new()
                 .with("proto", b"12".to_vec())
                 .with("impl", b"a1b2c3d4".to_vec()),
+            false,
         )
         .unwrap();
 
         assert_eq!(
-            check_hello(&Fields::new()).unwrap_err().code,
+            check_hello(&Fields::new(), false).unwrap_err().code,
             "missing-field"
         );
         assert_eq!(
-            check_hello(&Fields::new().with("proto", b"one".to_vec()))
+            check_hello(&Fields::new().with("proto", b"one".to_vec()), false)
                 .unwrap_err()
                 .code,
             "bad-field"
         );
         assert_eq!(
-            check_hello(&Fields::new().with("proto", b"12345".to_vec()))
+            check_hello(&Fields::new().with("proto", b"12345".to_vec()), false)
                 .unwrap_err()
                 .code,
             "bad-field"
         );
+    }
+
+    #[test]
+    fn the_public_endpoint_requires_both_credential_fields() {
+        check_hello(&hello_public(), true).unwrap();
+
+        // cnonce missing: the server could not prove itself, and skipping that
+        // silently is the failure §9.2 is written against.
+        let err = check_hello(
+            &Fields::new()
+                .with("proto", b"1".to_vec())
+                .with("auth", "a".repeat(64).into_bytes()),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "missing-field");
+        assert_eq!(err.detail.get("field"), Some(&b"cnonce"[..]));
+
+        // A short cnonce is a bad field, not a truncated challenge.
+        let err = check_hello(
+            &Fields::new()
+                .with("proto", b"1".to_vec())
+                .with("auth", "a".repeat(64).into_bytes())
+                .with("cnonce", vec![0u8; 8]),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "bad-field");
+        assert_eq!(err.detail.get("field"), Some(&b"cnonce"[..]));
+
+        // A malformed auth is a bad field, distinguishable from a wrong one.
+        let err = check_hello(
+            &Fields::new()
+                .with("proto", b"1".to_vec())
+                .with("auth", b"nothex".to_vec())
+                .with("cnonce", vec![0u8; NONCE_BYTES]),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "bad-field");
+        assert_eq!(err.detail.get("field"), Some(&b"auth"[..]));
+
+        // An absent auth is not a shape error — it is `no-credential`, decided at
+        // the handshake so the reason is right.
+        check_hello(
+            &Fields::new()
+                .with("proto", b"1".to_vec())
+                .with("cnonce", vec![0u8; NONCE_BYTES]),
+            true,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_trusted_endpoint_refuses_credential_fields_rather_than_ignoring_them() {
+        let err = check_hello(
+            &Fields::new()
+                .with("proto", b"1".to_vec())
+                .with("auth", "a".repeat(64).into_bytes()),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "bad-request");
+        assert_eq!(err.detail.get("field"), Some(&b"auth"[..]));
+
+        let err = check_hello(
+            &Fields::new()
+                .with("proto", b"1".to_vec())
+                .with("cnonce", vec![0u8; NONCE_BYTES]),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "bad-request");
     }
 
     #[test]
@@ -650,6 +871,7 @@ mod tests {
             &Fields::new()
                 .with("proto", b"1".to_vec())
                 .with("verbose", b"1".to_vec()),
+            true,
         )
         .unwrap_err();
         assert_eq!(err.code, "unknown-field");

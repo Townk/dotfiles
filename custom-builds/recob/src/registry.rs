@@ -14,6 +14,7 @@
 //! can dispatch (§5.1), so a policy row without a handler would put a lie in it
 //! and §7.1's skew diagnostic is built on `caps` being true.
 
+use crate::auth::AuthOutcome;
 use crate::listen::Endpoint;
 use crate::session::Ctx;
 use crate::wire::{Fields, ProtoError, PROTO};
@@ -205,6 +206,22 @@ pub fn authorize(
 /// raised at the handshake rather than here.
 fn unauthorized(reason: &str, message: String) -> ProtoError {
     ProtoError::new("unauthorized", message).with("reason", reason)
+}
+
+/// The handshake's own refusal (§9.2): answered with `E{code=unauthorized}` and
+/// the connection closed, having dispatched nothing and disclosed nothing beyond
+/// the banner.
+pub fn credential_refusal(outcome: &AuthOutcome) -> ProtoError {
+    let reason = match outcome {
+        AuthOutcome::NoCredential => "no-credential",
+        AuthOutcome::BadCredential => "bad-credential",
+        AuthOutcome::Accepted => unreachable!("accepted is not a refusal"),
+    };
+    // §9.2: failure discloses nothing either way — one `unauthorized`, regardless
+    // of how many entries were offered or how close any came.
+    ProtoError::new("unauthorized", "credential missing or not accepted")
+        .with("reason", reason)
+        .closing()
 }
 
 pub fn dispatch(op: &Op, _request: &Fields, ctx: &Ctx) -> Result<Fields, ProtoError> {
@@ -420,5 +437,21 @@ mod tests {
     fn the_op_field_itself_is_not_an_unknown_field() {
         let op = find("host.identity").unwrap();
         validate_request(op, &Fields::new().with("op", b"host.identity".to_vec())).unwrap();
+    }
+
+    #[test]
+    fn a_credential_refusal_closes_and_discloses_only_the_reason() {
+        let err = credential_refusal(&AuthOutcome::BadCredential);
+        assert_eq!(err.code, "unauthorized");
+        assert_eq!(err.detail.get("reason"), Some(&b"bad-credential"[..]));
+        assert!(err.closes);
+        assert_eq!(
+            err.detail.len(),
+            1,
+            "nothing about how close the offer came"
+        );
+
+        let err = credential_refusal(&AuthOutcome::NoCredential);
+        assert_eq!(err.detail.get("reason"), Some(&b"no-credential"[..]));
     }
 }

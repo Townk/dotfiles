@@ -42,8 +42,9 @@ fn the_endpoint_is_a_property_of_the_listener_that_accepted() {
     let dir = testutil::tempdir("endpoint-label");
     let ctx = ctx_with_host(dir.path(), "boxA");
     let mut client = served(ctx, Endpoint::Public);
-    client.hello_default();
-    assert_eq!(text(&client.expect_caps(), "endpoint"), "public");
+    client.hello_authenticated(common::TEST_TOKEN);
+    let caps = client.expect_caps_proven(common::TEST_TOKEN);
+    assert_eq!(text(&caps, "endpoint"), "public");
 }
 
 #[test]
@@ -234,7 +235,11 @@ fn the_first_frame_must_be_the_hello() {
 }
 
 #[test]
-fn a_phase_two_credential_is_refused_by_name() {
+fn a_credential_offered_to_the_trusted_socket_is_refused_not_ignored() {
+    // In Phase 1 this was `unknown-field`, because the build had never heard of
+    // `auth`. Now it knows the field and refuses it as inapplicable: the trusted
+    // socket's uid boundary *is* its credential (§9.2), and silently accepting a
+    // credential field on an endpoint that checks none is the shape P6 forbids.
     let dir = testutil::tempdir("hello-auth");
     let ctx = ctx_with_host(dir.path(), "boxA");
     let mut client = served(ctx, Endpoint::Trusted);
@@ -244,7 +249,7 @@ fn a_phase_two_credential_is_refused_by_name() {
             .with("auth", b"00".repeat(32)),
     );
     let fields = client.expect_error();
-    assert_eq!(text(&fields, "code"), "unknown-field");
+    assert_eq!(text(&fields, "code"), "bad-request");
     assert_eq!(text(&fields, "field"), "auth");
 }
 

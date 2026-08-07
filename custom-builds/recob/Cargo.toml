@@ -9,11 +9,24 @@ publish = false
 [workspace]
 exclude = ["probes", "bench"]
 
-# No dependencies. Phase 1 is the wire codec, the accept loop and the recording
-# seam, all of which std covers: threads for the per-connection task boundary
+# Two dependencies, both required by §9.2, both already pinned by probes/ — so a
+# version that compiles for a probe is a version known to compile here:
+#
+#   sha2   — the handshake digest. §1.1 measured `shasum` at 14.82 ms per spawn
+#            against 0.000282 ms in-process, and that measurement is what chose
+#            the implementation language: shelling out would spend the whole
+#            per-connection saving on authentication.
+#   subtle — constant-time comparison, which §9.2 makes a requirement rather than
+#            an aspiration. zsh has no primitive offering it.
+#
+# Everything else stays std: threads for the per-connection task boundary
 # (docs/recob-protocol-spec.md §3.4), SO_RCVTIMEO/SO_SNDTIMEO for §5.2's
-# timeouts, and FromRawFd for §3.2's socket activation. The only libc call the
-# daemon makes by hand is umask(), declared in listen.rs.
+# timeouts, FromRawFd for §3.2's socket activation, and /dev/urandom for the
+# CSPRNG §9.2 names. The only libc call the daemon makes by hand is umask(),
+# declared in listen.rs.
+[dependencies]
+sha2 = "0.10"
+subtle = "2"
 
 [lib]
 name = "recobd"
