@@ -6,6 +6,7 @@
 //! this crate boundary plus the `otool -L` assertion in the daemon's suite.
 
 pub mod auth;
+pub mod cli;
 pub mod client;
 pub mod fsfile;
 pub mod paste_files;

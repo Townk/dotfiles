@@ -21,9 +21,10 @@ are kept tracked rather than discarded because the spec cites their results, and
 a cited measurement nobody can re-run is an assertion.
 
 ```sh
-make build     # cargo build --release  → target/release/recobd
+make build     # cargo build --release --workspace → recobd, system-clip, system-bridge
 make test      # cargo fmt --check, clippy -D warnings, cargo test
-make install   # → ~/.local/libexec/recobd
+make install   # → ~/.local/libexec/recobd, ~/.local/bin/system-clip,
+               #   ~/.local/libexec/system-bridge
 ```
 
 Cross-platform dependencies: `sha2` and `subtle` (both required by §9.2 and

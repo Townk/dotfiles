@@ -1,6 +1,6 @@
 {{- /*
-  recobd + system-clip — rebuild the clipboard bridge when its Rust source
-  changes.
+  recobd + system-clip + system-bridge — rebuild the clipboard bridge when
+  its Rust source changes.
 
   Unlike pty-frame's hook, a missing toolchain here is NOT a graceful
   degradation. pty-frame falls back to a plainer picker; a missing recobd means
@@ -23,6 +23,8 @@
 {{- $wireSHA := include "../custom-builds/recob/wire/src/wire.rs" | sha256sum -}}
 {{- $clientSHA := include "../custom-builds/recob/wire/src/client.rs" | sha256sum -}}
 {{- $clipSHA := include "../custom-builds/recob/wire/src/bin/system-clip.rs" | sha256sum -}}
+{{- $bridgeSHA := include "../custom-builds/recob/wire/src/bin/system-bridge.rs" | sha256sum -}}
+{{- $cliSHA := include "../custom-builds/recob/wire/src/cli.rs" | sha256sum -}}
 #!/usr/bin/env bash
 # RECOB clipboard bridge — rebuild-on-change hook.
 #   Cargo.lock       : {{ $lockSHA }}
@@ -33,7 +35,9 @@
 #   src/registry.rs  : {{ $registrySHA }}
 #   wire/wire.rs     : {{ $wireSHA }}
 #   wire/client.rs   : {{ $clientSHA }}
+#   wire/cli.rs      : {{ $cliSHA }}
 #   bin/system-clip  : {{ $clipSHA }}
+#   bin/system-bridge: {{ $bridgeSHA }}
 #
 # To rebuild manually:
 #   make -C ~/.local/share/chezmoi/custom-builds/recob install
@@ -61,7 +65,7 @@ EOF
   exit 1
 fi
 
-echo "[recob] building → ~/.local/libexec/recobd, ~/.local/bin/system-clip"
+echo "[recob] building → ~/.local/libexec/recobd, ~/.local/bin/system-clip, ~/.local/libexec/system-bridge"
 make -C "$SRC" install
 
 # vim:ft=sh
