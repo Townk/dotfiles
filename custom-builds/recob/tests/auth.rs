@@ -244,12 +244,24 @@ fn nonces_are_pairwise_distinct_across_concurrent_connections() {
         let mut handles = Vec::new();
         for _ in 0..8 {
             handles.push(std::thread::spawn(move || {
-                let stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .unwrap();
-                let client = common::Client::open(stream);
-                client.nonce().to_vec()
+                // The 8 in-flight slots are released by the SERVER's teardown
+                // of the previous batch, which join() cannot observe — a batch
+                // dialing the instant the last one's clients returned can
+                // still find a slot occupied. §5.2's answer is the client's
+                // too: a busy refusal names its retry_after; honor it.
+                for _ in 0..10 {
+                    let stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .unwrap();
+                    match common::Client::open_or_busy(stream) {
+                        Ok(client) => return client.nonce().to_vec(),
+                        Err(retry_after) => {
+                            std::thread::sleep(std::time::Duration::from_secs(retry_after.min(2)))
+                        }
+                    }
+                }
+                panic!("the endpoint stayed busy across ten retries")
             }));
         }
         nonces.extend(handles.into_iter().map(|h| h.join().unwrap()));

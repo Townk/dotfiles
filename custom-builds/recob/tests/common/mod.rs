@@ -34,18 +34,50 @@ pub struct Client<S: Read + Write> {
 
 impl<S: Read + Write> Client<S> {
     /// Reads the six preamble bytes and the banner the server writes on accept.
-    pub fn open(mut stream: S) -> Self {
+    /// A §3.5 `busy` refusal comes back as `Err(retry_after)` — the seconds the
+    /// server asked the client to wait — so a test that can legitimately meet a
+    /// full endpoint may honor it the way a real client does.
+    pub fn open_or_busy(mut stream: S) -> Result<Self, u64> {
         let mut pre = [0u8; PREAMBLE_LEN];
         let got = wire::fill(&mut stream, &mut pre).unwrap();
         assert_eq!(got, PREAMBLE_LEN, "server preamble was short");
         assert_eq!(&pre[..5], wire::MAGIC);
         let (kind, body) = wire::read_frame(&mut stream, MAX_BODY).unwrap().unwrap();
+        if kind == Kind::Error {
+            // A refusal identifies itself (§3.5); repeating that here turns
+            // "left: Error, right: Hello" into the refusal's own diagnosis.
+            let fields = wire::parse_body(&body).unwrap_or_default();
+            let text = |name: &str| {
+                String::from_utf8_lossy(fields.get(name).unwrap_or_default()).into_owned()
+            };
+            if text("code") == "busy" {
+                return Err(text("retry_after").parse().unwrap_or(1));
+            }
+            panic!(
+                "server refused the connection instead of sending its banner: \
+                 code={} message={:?} retry_after={}",
+                text("code"),
+                text("message"),
+                text("retry_after"),
+            );
+        }
         assert_eq!(kind, Kind::Hello, "the first server frame is the banner");
-        Client {
+        Ok(Client {
             stream,
             wire_version: pre[5],
             banner: wire::parse_body(&body).unwrap(),
             cnonce: recobd::auth::random_bytes(recobd::auth::NONCE_BYTES).unwrap(),
+        })
+    }
+
+    /// Reads the six preamble bytes and the banner the server writes on accept.
+    pub fn open(stream: S) -> Self {
+        match Client::open_or_busy(stream) {
+            Ok(client) => client,
+            Err(retry_after) => panic!(
+                "server was at capacity (busy, retry_after {retry_after}s) \
+                 where the test expected an open slot"
+            ),
         }
     }
 
