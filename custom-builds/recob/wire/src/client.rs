@@ -599,6 +599,16 @@ mod tests {
     }
 
     #[test]
+    fn the_action_deadline_defaults_to_twenty_seconds() {
+        // The value is not shell-observable (it never crosses the wire), so
+        // this is where it is pinned. RECOB_ACTION_TIMEOUT_S tunes it; the
+        // spec suite asserts the mapping at the invoker seam.
+        if std::env::var_os("RECOB_ACTION_TIMEOUT_S").is_none() {
+            assert_eq!(Timeouts::default().action, Duration::from_secs(20));
+        }
+    }
+
+    #[test]
     fn every_registry_operation_declares_since_one_at_proto_one() {
         // Until the first proto bump, a `since` above PROTO could only be a
         // typo — the daemon's registry has the same assertion on its side.
