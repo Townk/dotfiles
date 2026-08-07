@@ -8,7 +8,7 @@
 #[test]
 fn the_client_binary_links_no_apple_ui_framework() {
     let out = std::process::Command::new("otool")
-        .args(["-L", env!("CARGO_BIN_EXE_recob-clip")])
+        .args(["-L", env!("CARGO_BIN_EXE_system-clip")])
         .output()
         .expect("otool runs on macOS");
     assert!(out.status.success(), "otool failed");

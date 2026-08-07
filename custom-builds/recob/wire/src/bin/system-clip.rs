@@ -1,7 +1,9 @@
-//! `recob-clip` — the universal clipboard shims, compiled (D2/D6): one
-//! multicall binary that behaves as `pbcopy` or `pbpaste` depending on its
-//! invocation name (or an explicit `copy`/`paste` first argument), built from
-//! the daemon's own codec crate so the wire has one implementation.
+//! `system-clip` — the universal clipboard client, compiled (D2/D6): one
+//! binary with `copy` and `paste` subcommands, built from the daemon's own
+//! codec crate so the wire has one implementation. The `pbcopy`/`pbpaste`
+//! names stay two-line exec trampolines in `home/`, so what the overwrite is
+//! called is chezmoi's decision, never this binary's — RECOB is the bridge,
+//! and this is just the clipboard client that rides it.
 //!
 //! **No AppKit.** This binary never touches a pasteboard — that is the
 //! daemon's job — and §8 makes the missing framework a build assertion, not a
@@ -25,46 +27,15 @@ use recob_wire::client::{
 use recob_wire::wire::Fields;
 
 fn main() -> ExitCode {
-    let mut args: Vec<String> = std::env::args().collect();
-    let argv0 = args
-        .first()
-        .map(|arg| {
-            Path::new(arg)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
-    let mode = match argv0.as_str() {
-        "pbcopy" => Mode::Copy,
-        "pbpaste" => Mode::Paste,
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("copy") => pbcopy(&args[2..]),
+        Some("paste") => pbpaste(&args[2..]),
         _ => {
-            // Invoked under its own name: the subcommand selects the shim.
-            match args.get(1).map(String::as_str) {
-                Some("copy") => {
-                    args.remove(1);
-                    Mode::Copy
-                }
-                Some("paste") => {
-                    args.remove(1);
-                    Mode::Paste
-                }
-                _ => {
-                    eprintln!("usage: recob-clip copy|paste [args]  (or invoke as pbcopy/pbpaste)");
-                    return ExitCode::FAILURE;
-                }
-            }
+            eprintln!("usage: system-clip copy|paste [args]");
+            ExitCode::FAILURE
         }
-    };
-    match mode {
-        Mode::Copy => pbcopy(&args[1..]),
-        Mode::Paste => pbpaste(&args[1..]),
     }
-}
-
-enum Mode {
-    Copy,
-    Paste,
 }
 
 // --- shared plumbing --------------------------------------------------------
@@ -268,7 +239,7 @@ fn exec_first(candidates: &[(&str, &[&str])]) -> Option<ExitCode> {
         };
         if available {
             let err = std::process::Command::new(bin).args(*bin_args).exec();
-            eprintln!("recob-clip: cannot exec {bin}: {err}");
+            eprintln!("system-clip: cannot exec {bin}: {err}");
             return Some(ExitCode::FAILURE);
         }
     }

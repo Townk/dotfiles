@@ -9,7 +9,7 @@ mod testutil;
 use std::process::Command;
 
 fn clip() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_recob-clip"))
+    Command::new(env!("CARGO_BIN_EXE_system-clip"))
 }
 
 /// A port with nothing bound: bind, learn the number, drop the listener.
@@ -122,7 +122,7 @@ fn paste_never_falls_back_and_names_the_tunnel() {
 }
 
 #[test]
-fn the_multicall_dispatch_requires_a_mode() {
+fn a_missing_subcommand_prints_usage() {
     let out = clip().output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("usage"));
