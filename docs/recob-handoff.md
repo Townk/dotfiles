@@ -160,3 +160,77 @@ agent per spec file. Phase 7 needs only Phase 4.
 Phase 8 cannot be finished by one machine: it needs `chezmoi apply` on both, and
 §12's benchmark must measure the **authenticated public endpoint** on both, or it
 will report a win the human does not experience (§9.2's closing note).
+
+---
+
+## Update — after Phases 3, 4, 5, 7 and part of 8
+
+Phases 3, 4, 5 and 7 are complete; Phase 8 has its build hook and its
+migration guide. **Phase 6 is the only thing standing between the tree and the
+cutover**, and it is the one piece a fresh agent can start on immediately.
+
+### What exists now, beyond what this document described
+
+`custom-builds/recob/` is a two-crate workspace. `recob-wire` holds the codec,
+the credential primitives and the §8 client contract, and **links no platform
+framework** — that boundary is what lets the clients obey §8's no-AppKit rule,
+and `wire/tests/no_appkit.rs` asserts it with `otool -L` rather than trusting
+it. `recobd` depends on that crate and adds the store, the platform layer and
+the registry.
+
+The client binary is **`system-clip`**, with `copy`, `paste` and `restore`
+subcommands and no argv[0] dispatch (operator's decision, 2026-08-07: RECOB is
+the bridge, not the feature, and a compiled binary must not hardcode the names
+of the shims that call it). At cutover, `executable_pbcopy` and
+`executable_pbpaste` become two-line `exec` trampolines — not aliases, which
+non-shell callers never see, and not symlinks, which re-couple the names.
+
+`clients/` holds two **staged** files that Phase 8 installs over their `home/`
+counterparts: `universal.lua` (the nvim provider on RECOB) and
+`clipboard-history.lua` (the read-only module Phase 7 leaves behind). They are
+staged rather than applied because either one, applied before the daemon
+exists, breaks the live clipboard until the daemon is installed.
+
+### The gate, precisely
+
+Phase 6 must convert or retire roughly 256 examples across eight spec files.
+The blocking subset is the 107 in `pbcopy_spec.sh`, `pbcopy-files_spec.sh` and
+`pbpaste-files_spec.sh` that drive the shims directly, plus the 65 in
+`clipboard-bridge_spec.sh` and `clipboard-files-ops_spec.sh` that drive the zsh
+dispatcher. Until those are converted, swapping the shims and the services
+turns the repo suite red — which is why the cutover commit does not exist yet.
+
+### Decisions taken since, which should not be re-litigated
+
+| Decision | Why |
+| --- | --- |
+| The daemon captures the pasteboard **iff `--capture`** | §6.5's synchronous capture in `files.list`/`files.grant` is the same act of observation the poll loop performs. They shared no switch, so a daemon started without `--capture` still read the general pasteboard — a test daemon read the live clipboard. One switch now gates both |
+| A direct write's row comes from a **post-write pasteboard snapshot**, not from the request fields | The pasteboard advertises synonym types beyond what was written, and a later observation of an identical physical copy hashes the full advertised set. Building the row from the request alone made the same bytes stop deduping |
+| The `--files` engine takes an explicit `Context` | Reading `SSH_*`, the mount helper and `CLIP_FILE_MAX` from the environment inside made the local/mounted/streamed decision untestable, and leaked a cap between parallel tests |
+| Behaviors the old implementation has and the spec omits are **ported, and reported** | Operator's ruling, 2026-08-06, after the M path's mount enrichment was found missing from the spec. Do not drop one silently |
+
+### Hazards found the hard way, since
+
+**`system-clip copy` on a local Mac never reaches the daemon.** It delegates to
+`/usr/bin/pbcopy`, by design and unchanged since before this project. A local
+rehearsal therefore writes the real clipboard, reads it back, prints what you
+expected, and proves nothing — the row appears later, written by the capture
+loop observing the general pasteboard. `PBCOPY_DARWIN_BIN=/nonexistent` forces
+the bridge path. `docs/recob-migration.md` says so; this cost a confused
+debugging round and one overwrite of the human's real clipboard.
+
+**`vim.fn.sha256` is NUL-safe.** §8 depends on it for the challenge response
+and nonces are raw CSPRNG bytes, so roughly one in eight contains a NUL. It was
+verified against `shasum`, not assumed. Do not "fix" this with hex encoding —
+it would break the digest the daemon computes.
+
+**The nonce-uniqueness test in `tests/auth.rs` flakes.** Seen four times across
+this work, always on a cold or heavily-parallel full run, never in isolation,
+and it predates all of it. It deserves its own diagnosis; treat a single red
+run of that one example as the known flake rather than as a regression, but
+confirm by re-running.
+
+**Linux is unverified.** No cross toolchain, no container and no dev-shell
+access existed on the machine this was built on. Every platform-specific path
+is `cfg`-gated and the shared code is std-only, but the suite has not been run
+there. Do that first on the next Linux touchpoint.
