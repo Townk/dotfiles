@@ -1,0 +1,67 @@
+{{- /*
+  recobd + system-clip — rebuild the clipboard bridge when its Rust source
+  changes.
+
+  Unlike pty-frame's hook, a missing toolchain here is NOT a graceful
+  degradation. pty-frame falls back to a plainer picker; a missing recobd means
+  no bridge at all — no clipboard over the tunnel, no history capture, no file
+  clips — so this hook fails loudly and leaves the machine on whatever it was
+  running, which is exactly why the cutover is one `chezmoi apply` per machine
+  rather than a simultaneous flip (spec §13).
+
+  The source SHAs below are baked into the rendered script, so run_onchange
+  re-fires whenever the daemon, the shared wire crate or the client changes.
+  Measured at 11.4 s cold (rusqlite's bundled SQLite dominates) and 0.33 s on a
+  source change.
+*/ -}}
+{{- $lockSHA := include "../custom-builds/recob/Cargo.lock" | sha256sum -}}
+{{- $manifestSHA := include "../custom-builds/recob/Cargo.toml" | sha256sum -}}
+{{- $wireManifestSHA := include "../custom-builds/recob/wire/Cargo.toml" | sha256sum -}}
+{{- $srcSHA := include "../custom-builds/recob/src/main.rs" | sha256sum -}}
+{{- $sessionSHA := include "../custom-builds/recob/src/session.rs" | sha256sum -}}
+{{- $registrySHA := include "../custom-builds/recob/src/registry.rs" | sha256sum -}}
+{{- $wireSHA := include "../custom-builds/recob/wire/src/wire.rs" | sha256sum -}}
+{{- $clientSHA := include "../custom-builds/recob/wire/src/client.rs" | sha256sum -}}
+{{- $clipSHA := include "../custom-builds/recob/wire/src/bin/system-clip.rs" | sha256sum -}}
+#!/usr/bin/env bash
+# RECOB clipboard bridge — rebuild-on-change hook.
+#   Cargo.lock       : {{ $lockSHA }}
+#   Cargo.toml       : {{ $manifestSHA }}
+#   wire/Cargo.toml  : {{ $wireManifestSHA }}
+#   src/main.rs      : {{ $srcSHA }}
+#   src/session.rs   : {{ $sessionSHA }}
+#   src/registry.rs  : {{ $registrySHA }}
+#   wire/wire.rs     : {{ $wireSHA }}
+#   wire/client.rs   : {{ $clientSHA }}
+#   bin/system-clip  : {{ $clipSHA }}
+#
+# To rebuild manually:
+#   make -C ~/.local/share/chezmoi/custom-builds/recob install
+
+set -euo pipefail
+
+SRC="{{ .chezmoi.workingTree }}/custom-builds/recob"
+
+if [ ! -d "$SRC" ]; then
+  echo "[recob] source missing at $SRC" >&2
+  exit 1
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+[recob] cargo not found, and the clipboard bridge cannot be built without it.
+
+This is deliberately fatal rather than a skip: without recobd there is no
+bridge at all -- no clipboard over the SSH tunnel, no history capture, no file
+clips. The machine keeps running whatever it was running until this succeeds.
+
+  mise use -g rust     # or: rustup default stable
+  chezmoi apply
+EOF
+  exit 1
+fi
+
+echo "[recob] building → ~/.local/libexec/recobd, ~/.local/bin/system-clip"
+make -C "$SRC" install
+
+# vim:ft=sh
