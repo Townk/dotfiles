@@ -77,6 +77,13 @@ than trust the unit.
 
 Output is redacted — home path, hostname, username — so it is safe to paste.
 
+Verified 2026-08-06 on Linux under a systemd user session: 13 checks passed.
+Both listeners adopted from `LISTEN_FDS`, neither bound by the daemon, each
+identified by address family rather than by fd order, socket 0600 under a 0700
+parent, and a 0775 parent refused. The full test suite passes on that machine
+too, so §3.3's `bind()`-masks-from-0777 behavior — the reason `umask 077` yields
+0700 and the explicit chmod is what lands 0600 — holds on both platforms.
+
 ## Worked example: `verify-worked-example.zsh`
 
 Encodes §4.4's frame from the spec's own field grammar and prints the bytes, so
