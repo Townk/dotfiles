@@ -168,6 +168,41 @@ step_mount() {
     'd="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard"; mkdir -p "$d" && cat > "$d/self-name"' \
     >/dev/null 2>&1 &!
 
+  # Credential push (RECOB spec §9.2): the remote answers this machine's
+  # reverse-tunneled bridge with a challenge response, so it needs THIS
+  # machine's token -- which never crosses the wire itself, only digests of
+  # it do. Keyed by owner (`tunnel-tokens/<our LocalHostName>`) rather than
+  # one flat file, because two machines pushing to one shared remote would
+  # otherwise silently invalidate each other, and because a stolen token is
+  # then useless against any other machine.
+  #
+  # The mode is NOT copied from the self-name push above: that pattern lands
+  # a file at whatever umask the remote login shell has, which is adequate
+  # for a hostname and completely inadequate for a secret. `umask` BEFORE
+  # the write and an explicit `chmod` after, so there is no instant in which
+  # the token exists group- or world-readable.
+  #
+  # No token, no push: the file only exists once recobd has run here, so
+  # this is a silent no-op until the daemon is installed (Phase 8). Same
+  # fail-soft, backgrounded shape as every other step -- §9.2 accepts that a
+  # brand-new remote can race its first push, and is explicit that making
+  # this synchronous is not an option: the connection must never wait.
+  local recob_token="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/accepted-token"
+  if [[ -r "$recob_token" ]]; then
+    local recob_owner
+    recob_owner="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)"
+    # The owner name becomes a filename on the remote: same shape rule as
+    # every other identity in this file, checked before it is interpolated.
+    if [[ "$recob_owner" == [A-Za-z0-9][A-Za-z0-9.-]# ]]; then
+      ssh -o ControlPath=none -o ClearAllForwardings=yes \
+        -o BatchMode=yes -o ConnectTimeout=5 "$target" \
+        "umask 077; d=\"\${XDG_STATE_HOME:-\$HOME/.local/state}/clipboard/tunnel-tokens\";
+         mkdir -p \"\$d\" && chmod 700 \"\$d\" &&
+         cat > \"\$d/${recob_owner}\" && chmod 600 \"\$d/${recob_owner}\"" \
+        < "$recob_token" >/dev/null 2>&1 &!
+    fi
+  fi
+
   # The mount itself (rclone/MacFUSE + Finder) is Darwin-only -- unlike the
   # identity push above, THIS part really is conditional on that (Finder is
   # the point; MacFUSE/rclone are the Mac side). Backgrounded + disowned:

@@ -28,7 +28,15 @@ Describe 'ssh-prepare-connection: mount step'
 
   setup() {
     CONF="$SHELLSPEC_TMPBASE/mini.conf"
-    rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/ssh-calls" "$SHELLSPEC_TMPBASE/ssh-stdin"
+    rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/ssh-calls" \
+      "$SHELLSPEC_TMPBASE/ssh-stdin" "$SHELLSPEC_TMPBASE/ssh-token-stdin"
+    # The credential push (RECOB §9.2) fires only when this machine HAS a
+    # token, so every example gets its own empty state dir: without this the
+    # step's behavior here would depend on whether recobd had ever run on the
+    # machine running the suite.
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    rm -rf "$XDG_STATE_HOME"
+    mkdir -p "$XDG_STATE_HOME/clipboard"
     STUBS="$SHELLSPEC_TMPBASE/bin"
     export PATH="$STUBS:$PATH"
     mkdir -p "$STUBS"
@@ -40,8 +48,11 @@ Describe 'ssh-prepare-connection: mount step'
     # so recording is unambiguous for those examples; the prepare: all
     # example below never inspects these files, so step_gpg's own inert ssh
     # call there is harmless noise.
-    printf '#!/bin/sh\ncat > "%s/ssh-stdin"\necho "$*" >> "%s/ssh-calls"\n' \
-      "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" > "$STUBS/ssh"
+    # step_mount makes two ssh calls now (identity, then credential), so the
+    # stub keeps their stdin apart -- the token push is recognizable by its
+    # remote command, and the identity example's assertions stay unambiguous.
+    printf '#!/bin/sh\ncase "$*" in *tunnel-tokens*) cat > "%s/ssh-token-stdin" ;; *) cat > "%s/ssh-stdin" ;; esac\necho "$*" >> "%s/ssh-calls"\n' \
+      "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" > "$STUBS/ssh"
     printf '#!/bin/sh\nexit 0\n' > "$STUBS/rsync"
     chmod +x "$STUBS/clipboard-mount" "$STUBS/ssh" "$STUBS/rsync"
   }
@@ -113,5 +124,36 @@ Describe 'ssh-prepare-connection: mount step'
     When call wait_for_ssh_calls
     The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "mini"
     The contents of file "$SHELLSPEC_TMPBASE/ssh-stdin" should equal "thiago-mac-mini"
+  End
+
+  # RECOB spec §9.2: a remote answering this machine's reverse-tunneled bridge
+  # needs this machine's token. The push is keyed by owner, and its MODE is the
+  # point -- `umask` before the write and `chmod` after, so the secret never
+  # exists readable to anyone else, unlike the self-name push above.
+  wait_for_token_push() {
+    zsh -f "$SPC" "$CONF"
+    i=0
+    while [ ! -e "$SHELLSPEC_TMPBASE/ssh-token-stdin" ] && [ $i -lt 30 ]; do
+      sleep 0.1; i=$((i+1))
+    done
+    return 0
+  }
+
+  It 'pushes the credential of this machine, keyed by owner, with the mode set before and after the write'
+    write_conf thiago-mac-mini 1
+    printf '%s\n' "$(printf 'a%.0s' $(seq 64))" > "$XDG_STATE_HOME/clipboard/accepted-token"
+    When call wait_for_token_push
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-token-stdin" should include "aaaa"
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "umask 077"
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "tunnel-tokens"
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "chmod 700"
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "chmod 600"
+  End
+
+  It 'pushes no credential when this machine has none yet'
+    write_conf thiago-mac-mini 1
+    When call wait_for_ssh_calls
+    The path "$SHELLSPEC_TMPBASE/ssh-token-stdin" should not be exist
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should not include "tunnel-tokens"
   End
 End
