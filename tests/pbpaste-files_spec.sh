@@ -473,7 +473,6 @@ Describe 'paste --files (local materialization)'
   # itself is pinned by exact equality in the remote Describe below, where both
   # designs agree that the cap applies.
   It 'does not apply the cross-machine size cap to a same-host local copy'
-    Pending 'client: cap_check runs on the local path too; the shim capped only mounted cross-machine transfers'
     printf '0123456789012345678901234567890123456789' > "$SRC/toobig.bin"
     seed_clip file "$RECOB_SELF_NAME" 1752200000.53 auth "$SRC/toobig.bin"
     local_cap() {
@@ -672,7 +671,6 @@ EOF
   # meant the target was untouched, which is what makes a refusal safe to retry
   # with a higher cap.
   It 'places no item at all when a later one exceeds the cap'
-    Pending 'client: with deferred (mount) sizes the cap check is interleaved with placement, so an earlier item lands before the refusal'
     mkdir -p "$MOUNT/remote"
     printf 'small\n' > "$MOUNT/remote/small.txt"
     printf '0123456789012345678901234567890123456789' > "$MOUNT/remote/large.txt"

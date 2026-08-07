@@ -876,7 +876,14 @@ pub fn run<S: ClientStream>(
                         src.display()
                     )
                 })?;
-                if !deferred_sizes {
+                // §11's cap is scoped to transfers that cross a machine
+                // boundary — the shim gated every local-engine cap_check on
+                // PF_MOUNT_REMOTE, so a same-host copy of the user's own file
+                // is never capped. On the mount route this is the preflight
+                // check against the source's size, which spares copying a
+                // refused item across the mount; the staged copies are
+                // re-measured and re-checked whole before placement below.
+                if deferred_sizes {
                     cap_check(&destination, size, context.cap)?;
                 }
                 copy_local(src, &stage_target, options.show(), &mut cp_noted)?;
@@ -900,8 +907,13 @@ pub fn run<S: ClientStream>(
     }
 
     // Placement, deferred whole when the sizes had to come from the staged
-    // copies rather than from a mount that may no longer be there.
-    for (index, (stage_target, destination, size)) in staged.iter().enumerate() {
+    // copies rather than from a mount that may no longer be there. Two passes,
+    // as the shim ran them: every deferred item is measured and cap-checked
+    // BEFORE the first one is placed, so a refusal anywhere leaves the target
+    // untouched — which is what makes a refusal safe to retry with a higher
+    // cap.
+    let mut resolved: Vec<(&PathBuf, &PathBuf, u64)> = Vec::with_capacity(staged.len());
+    for (stage_target, destination, size) in &staged {
         let size = match size {
             Some(size) => *size,
             None => {
@@ -915,6 +927,9 @@ pub fn run<S: ClientStream>(
                 size
             }
         };
+        resolved.push((stage_target, destination, size));
+    }
+    for (index, (stage_target, destination, size)) in resolved.into_iter().enumerate() {
         place(&workspace, index + 1, stage_target, destination)?;
         let name = destination
             .file_name()

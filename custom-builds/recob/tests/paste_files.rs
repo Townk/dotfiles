@@ -282,6 +282,96 @@ fn a_local_self_host_pointer_row_fails_closed() {
 }
 
 #[test]
+fn the_size_cap_does_not_apply_to_a_same_host_local_copy() {
+    let dir = testutil::tempdir("files-local-cap");
+    let (daemon, _db) = daemon(dir.path());
+    let mut session = trusted(&daemon);
+    let host = host_of(&mut session);
+
+    // §11's cap is scoped to transfers that cross a machine boundary: the
+    // shim gated every local-engine cap_check on PF_MOUNT_REMOTE, so a local
+    // `cp` of the user's own file was never capped — refusing a 4 GB local
+    // paste at the 200 MB default is not what the cap is for.
+    let source = dir.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("own-big.bin"), vec![0u8; 4096]).unwrap();
+    persist_files(
+        &mut session,
+        &host,
+        &source.join("own-big.bin").display().to_string(),
+    );
+
+    let dest = dir.path().join("dest");
+    std::fs::create_dir(&dest).unwrap();
+    let tiny_cap = Context {
+        cap: 10,
+        ..context(&host, false)
+    };
+    paste_files::run(&mut session, &options(&dest), &tiny_cap).unwrap();
+    assert_eq!(
+        std::fs::read(dest.join("own-big.bin")).unwrap().len(),
+        4096,
+        "a same-host local copy is never size-capped"
+    );
+}
+
+#[test]
+fn a_deferred_cap_refusal_places_nothing() {
+    let dir = testutil::tempdir("files-mount-cap");
+    let (daemon, _db) = daemon(dir.path());
+
+    // A mount-mapped manifest's sizes are only knowable after staging, so the
+    // cap check runs against the staged copies — and a refusal on ANY item
+    // must leave the target untouched, or a refusal is not safe to retry with
+    // a higher cap. The shim measured and checked every staged item before
+    // placing the first one.
+    let mount = dir.path().join("mount");
+    std::fs::create_dir_all(mount.join("remote")).unwrap();
+    std::fs::write(mount.join("remote/small.txt"), b"tiny").unwrap();
+    std::fs::write(mount.join("remote/big.txt"), vec![b'x'; 64]).unwrap();
+
+    let helper = dir.path().join("clipboard-mount");
+    std::fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n\
+             check) printf '%s\\n' '{mount}' ;;\n\
+             map) printf '%s%s\\n' '{mount}' \"$3\" ;;\n\
+             esac\n",
+            mount = mount.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    persist_pointer(
+        &daemon,
+        &dir.path().join("state"),
+        "peer-box",
+        "/remote/small.txt\0/remote/big.txt",
+    );
+
+    let dest = dir.path().join("dest");
+    std::fs::create_dir(&dest).unwrap();
+    let mut session = trusted(&daemon);
+    let context = Context {
+        self_host: Some("this-box".to_string()),
+        over_ssh: false,
+        mount_helper: helper,
+        cap: 10,
+    };
+    let err = paste_files::run(&mut session, &options(&dest), &context).unwrap_err();
+    assert!(err.contains("exceeds size cap"), "{err}");
+    assert!(
+        !dest.join("small.txt").exists() && !dest.join("big.txt").exists(),
+        "a deferred-cap refusal leaves the target untouched"
+    );
+}
+
+#[test]
 fn a_pointer_row_on_its_source_host_still_pastes_over_ssh() {
     let dir = testutil::tempdir("files-ssh-pointer");
     let (daemon, _db) = daemon(dir.path());
