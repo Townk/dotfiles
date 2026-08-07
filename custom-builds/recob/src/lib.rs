@@ -10,6 +10,7 @@
 
 pub mod auth;
 pub mod capture;
+pub mod client;
 pub mod exposure;
 pub mod host;
 pub mod limits;
