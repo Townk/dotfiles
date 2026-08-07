@@ -48,6 +48,10 @@ recob_client_bin() {
   printf '%s' "${SYSTEM_CLIP_BIN:-$SHELLSPEC_PROJECT_ROOT/custom-builds/recob/target/release/system-clip}"
 }
 
+recob_bridge_bin() {
+  printf '%s' "${SYSTEM_BRIDGE_BIN:-$SHELLSPEC_PROJECT_ROOT/custom-builds/recob/target/release/system-bridge}"
+}
+
 # The identity every sandboxed daemon and client answers with. Deterministic on
 # purpose: `origin_host` and the `host` of a persisted row are then assertable
 # by value instead of merely "not empty", and the suite reads the same on a
@@ -91,6 +95,10 @@ recob_start() {
   : > "$RECOB_RECORD_SCRIPT"
 
   export CLIPBOARD_BRIDGE_LOCAL_SOCKET="$RECOB_DIR/cb.sock"
+
+  # The zsh wrapper (clipbridge::) resolves the invoker through this seam, so
+  # every example drives the suite's own build rather than the installed one.
+  export SYSTEM_BRIDGE_BIN="$(recob_bridge_bin)"
 
   # A uniquely-named PRIVATE pasteboard, so a daemon in a spec can never read
   # or write the real clipboard — this covers `clip.set`'s write path, not just
