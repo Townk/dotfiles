@@ -90,6 +90,20 @@ parent, and a 0775 parent refused. The full test suite passes on that machine
 too, so §3.3's `bind()`-masks-from-0777 behavior — the reason `umask 077` yields
 0700 and the explicit chmod is what lands 0600 — holds on both platforms.
 
+## OSD delivery: `d7-osd-delivery.zsh`
+
+The measurement behind spec decision D7 — spawn `hs` per notification, or hold a
+persistent subscription. Option 2's saving is exactly option 1's cost, so it times
+option 1: the `hs` round trip against the platform's process-spawn floor, both
+orders, running `return 1` rather than a toast because drawing the toast is common
+to both options.
+
+Answer, written up in `docs/recob-d7-osd-delivery.md`: about 12 ms, on a path the
+caller already backgrounds and that §3.4 already isolates to one task, so option 1
+stands. It also shows `hs -c` is *slower* than `hs <file>` at 17.8–20.7 ms — worth
+knowing, because avoiding the temp file is the optimization a future reader will
+propose, and the shell library already records `-c` as unreliable.
+
 ## Worked example: `verify-worked-example.zsh`
 
 Encodes §4.4's frame from the spec's own field grammar and prints the bytes, so

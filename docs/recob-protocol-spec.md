@@ -2684,7 +2684,14 @@ no reason a future reader will infer. Worth a line in the build docs.
 
 ### D7. How the daemon raises the OSD
 
-**Open.** The notification UI stays in Hammerspoon ([§14.3](#143-what-the-daemon-delegates)),
+**Decided: option 1**, spawn `hs` per notification, measured and written up in
+[`docs/recob-d7-osd-delivery.md`](recob-d7-osd-delivery.md). The recommendation
+below stood; what it was missing was the number, and two supporting facts
+recorded there — the caller already backgrounds the notify, and §3.4 isolates the
+spawn to the one connection that asked for a toast. Delivery measures ~12 ms, of
+which ~4 ms is the platform's own process-spawn floor.
+
+The notification UI stays in Hammerspoon ([§14.3](#143-what-the-daemon-delegates)),
 so the daemon has to reach it, and the options differ by more than performance:
 
 1. **Spawn `hs` per notification, as today.** 17.9 ms, backgrounded, no new
@@ -2704,6 +2711,14 @@ path the user waits for, and option 2 spends a genuinely new failure mode on a
 cost the user cannot perceive. This is the one place in the design where the
 cheaper mechanism is the more complex one, which is a reason to be suspicious
 of the instinct to take it.
+
+Two things the measurement added. The optimization *inside* option 1 — `hs -c`,
+avoiding the temporary script file — is slower, and is already recorded as
+unreliable at `clipboard-platform-macos.zsh:27`; it is the change a future reader
+will propose and it loses on both axes. And the trigger for revisiting option 2 is
+now stated: a notification path whose caller does *not* background it, or a rate
+high enough for one spawn per toast to be real load — which §9.5's `osd` bucket
+bounds at 20 per 10 s by construction.
 
 ---
 
