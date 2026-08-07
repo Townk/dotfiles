@@ -122,6 +122,33 @@ pub const OPS: &[Op] = &[
         request_fields: &["origin_host", "style", "icon", "sound", "text"],
     },
     Op {
+        name: "files.list",
+        since: 1,
+        tier: Tier::Authed,
+        grant: false,
+        rate: None,
+        effect: Effect::Read,
+        request_fields: &[],
+    },
+    Op {
+        name: "files.grant",
+        since: 1,
+        tier: Tier::Authed,
+        grant: false,
+        rate: None,
+        effect: Effect::FsRead,
+        request_fields: &[],
+    },
+    Op {
+        name: "files.fetch",
+        since: 1,
+        tier: Tier::Authed,
+        grant: true,
+        rate: None,
+        effect: Effect::FsRead,
+        request_fields: &["token", "index"],
+    },
+    Op {
         name: "store.persist.text",
         since: 1,
         tier: Tier::Authed,
@@ -313,6 +340,11 @@ pub fn dispatch(
             )),
         },
         "osd.notify" => crate::ops::gui::notify(request, ctx),
+        "files.list" => crate::ops::files::list(ctx),
+        "files.grant" => crate::ops::files::grant(ctx),
+        // §9.1: the grant is the operation's own check — the bearer token in
+        // the request *is* the authorization, verified against the store.
+        "files.fetch" => crate::ops::files::fetch(request, ctx),
         "store.persist.text" => crate::ops::persist::persist_text(request, ctx),
         // §9.3's `mints_authority: local`, evaluated against the endpoint and
         // never against the caller-supplied host (§9.7).
@@ -404,17 +436,19 @@ mod tests {
         }
     }
 
-    // No row sets `grant` yet, and the call site cannot check one. This fails the
-    // moment a row does, which is the reminder that Phase 4 owes the check.
+    // §9.1: a grant is checked by the operation that requires one — the bearer
+    // token in the request *is* the authorization, verified against the store
+    // (files.rs, covered by the ops_files suite). This pins the set of rows
+    // claiming that check, so a new `grant` row fails here until its handler
+    // demonstrably performs it.
     #[test]
-    fn no_row_requires_a_grant_the_call_site_cannot_check() {
-        for op in OPS {
-            assert!(
-                !op.grant,
-                "{} requires a grant, but authorize() has no grant check yet",
-                op.name
-            );
-        }
+    fn every_grant_row_belongs_to_an_operation_that_checks_it() {
+        let granted: Vec<&str> = OPS.iter().filter(|op| op.grant).map(|op| op.name).collect();
+        assert_eq!(
+            granted,
+            vec!["files.fetch"],
+            "a new grant-requiring operation must implement and test its own check"
+        );
     }
 
     #[test]

@@ -100,6 +100,11 @@ pub struct Ctx {
     /// rather than read from the environment at the call site, so a test can
     /// point one at a stub without mutating process-global state.
     pub tools: Tools,
+    /// Which pasteboard the handlers observe — `None` is the general one. The
+    /// same seam as `RECOB_CAPTURE_PASTEBOARD`: tests point every handler at a
+    /// private pasteboard so §6.5's no-race capture never reads the live
+    /// clipboard from a test.
+    pub pasteboard_name: Option<String>,
 }
 
 /// §14.3: what the daemon delegates, and to which executable. The environment
@@ -154,6 +159,9 @@ impl Ctx {
             db_path: crate::store::default_db_path(),
             last_cc: Arc::new(std::sync::Mutex::new(None)),
             tools: Tools::default(),
+            pasteboard_name: std::env::var("RECOB_CAPTURE_PASTEBOARD")
+                .ok()
+                .filter(|name| !name.is_empty()),
         }
     }
 }

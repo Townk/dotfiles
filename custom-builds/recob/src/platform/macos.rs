@@ -153,6 +153,13 @@ fn resolve_file_url(url: &str) -> Option<String> {
     Some(path.to_string())
 }
 
+/// As [`parse_filenames_plist`], from raw stored bytes — the shape
+/// `files.list` needs when a store row carries the watcher-captured
+/// `NSFilenamesPboardType` blob.
+pub fn parse_filenames_bytes(blob: &[u8]) -> Option<Vec<String>> {
+    parse_filenames_plist(&NSData::with_bytes(blob))
+}
+
 /// Parse an `NSFilenamesPboardType` blob (a binary or XML property list
 /// holding an array of POSIX path strings) with the real parser — probe Q4's
 /// call shape, plus the class checks the probe could skip.

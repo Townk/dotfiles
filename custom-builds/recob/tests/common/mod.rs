@@ -450,5 +450,13 @@ pub fn ctx_mut(dir: &std::path::Path, host: &str) -> Ctx {
         hs: "/nonexistent/recob-test".into(),
         clipboard_mount: "/nonexistent/recob-test".into(),
     };
+    // A private, per-test pasteboard name so no handler ever observes the
+    // live clipboard from a test.
+    ctx.pasteboard_name = Some(format!(
+        "org.chezmoi.recob.test.{}",
+        dir.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("scratch")
+    ));
     ctx
 }
