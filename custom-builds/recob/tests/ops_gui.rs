@@ -109,6 +109,27 @@ fn a_missing_toggle_is_unavailable_and_a_failing_one_is_internal() {
 }
 
 #[test]
+fn fullscreen_toggle_names_no_terminal_at_all_is_an_error_not_a_default() {
+    // The old dispatcher parsed the terminal out of a payload string, so an
+    // empty action word could plausibly have picked a default. A named field
+    // makes its absence answerable: `missing-field`, before any helper runs.
+    let dir = testutil::tempdir("gui-toggle-nameless");
+    let log = dir.path().join("log");
+    let mut ctx = common::ctx_mut(dir.path(), "boxA");
+    ctx.tools.fullscreen_toggle =
+        write_stub(dir.path(), "toggle", &format!("touch {}", log.display()));
+
+    let mut client = common::served(std::sync::Arc::new(ctx), Endpoint::Trusted);
+    client.hello_default();
+    client.expect_caps();
+    client.send_request(&Fields::new().with("op", b"window.fullscreen.toggle".to_vec()));
+    let fields = client.expect_error();
+    assert_eq!(fields.get("code"), Some(&b"missing-field"[..]));
+    assert_eq!(fields.get("field"), Some(&b"terminal"[..]));
+    assert!(!log.exists(), "no helper ran for a nameless terminal");
+}
+
+#[test]
 fn fullscreen_state_answers_the_probes_output() {
     let dir = testutil::tempdir("gui-state");
     let mut ctx = common::ctx_mut(dir.path(), "boxA");
@@ -122,6 +143,52 @@ fn fullscreen_state_answers_the_probes_output() {
     };
     assert_eq!(kind, Kind::Response);
     assert_eq!(text(&fields, "state"), "true");
+}
+
+#[test]
+fn fullscreen_state_passes_a_windowed_answer_through() {
+    let dir = testutil::tempdir("gui-state-windowed");
+    let mut ctx = common::ctx_mut(dir.path(), "boxA");
+    ctx.tools.fullscreen_probe = write_stub(dir.path(), "probe", "echo false");
+    let mut client = common::served(std::sync::Arc::new(ctx), Endpoint::Trusted);
+    client.hello_default();
+    client.expect_caps();
+    client.send_request(&Fields::new().with("op", b"window.fullscreen.state".to_vec()));
+    let (kind, fields) = client.next().expect("an answer");
+    assert_eq!(kind, Kind::Response);
+    assert_eq!(text(&fields, "state"), "false");
+}
+
+#[test]
+fn fullscreen_state_stays_empty_when_the_origin_cannot_tell() {
+    // An unknowable answer (the probe was not granted Accessibility) must stay
+    // EMPTY end to end rather than become a `false`: the asker leaves its
+    // mirror alone instead of writing a wrong verdict into the ribbon.
+    let dir = testutil::tempdir("gui-state-unknown");
+    let mut ctx = common::ctx_mut(dir.path(), "boxA");
+    ctx.tools.fullscreen_probe = write_stub(dir.path(), "probe", "exit 0");
+    let mut client = common::served(std::sync::Arc::new(ctx), Endpoint::Trusted);
+    client.hello_default();
+    client.expect_caps();
+    client.send_request(&Fields::new().with("op", b"window.fullscreen.state".to_vec()));
+    let (kind, fields) = client.next().expect("an answer");
+    assert_eq!(kind, Kind::Response);
+    assert_eq!(
+        fields.get("state"),
+        Some(&b""[..]),
+        "the field is present and empty, not absent and not `false`"
+    );
+}
+
+#[test]
+fn fullscreen_state_without_a_probe_is_unavailable() {
+    let dir = testutil::tempdir("gui-state-missing");
+    let ctx = common::ctx_mut(dir.path(), "boxA");
+    let mut client = common::served(std::sync::Arc::new(ctx), Endpoint::Trusted);
+    client.hello_default();
+    client.expect_caps();
+    client.send_request(&Fields::new().with("op", b"window.fullscreen.state".to_vec()));
+    assert_eq!(client.code(), "unavailable");
 }
 
 #[cfg(target_os = "macos")]

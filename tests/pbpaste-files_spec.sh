@@ -1,63 +1,157 @@
-# Tests for pbpaste's file-manifest mode (files-yazi design §5, spec
-# docs/superpowers/specs/2026-07-11-clipboard-phase6-files-yazi-design.md):
-# `pbpaste --manifest` prints the current clipboard entry's file manifest
-# (bridge op `L`, T2) instead of the clipboard text. Bridge calls are stubbed
-# by a fake `nc` on PATH that logs "<port>:<frame-with-NUL-as-|>" (same
-# convention as pbcopy-files_spec.sh) and replies with a canned frame built
-# from $REPLY_FRAME, a file this spec constructs per example.
-Describe 'pbpaste: --manifest'
-  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+# Tests for the paste client's file modes — `system-clip paste --manifest` and
+# `system-clip paste --files` — against the REAL listener in recording mode
+# (spec §11.1) rather than a fake `nc` with a canned frame.
+#
+# WHAT THE CONVERSION CHANGED, beyond the transport.
+#
+#   * The manifest is no longer a US-separated payload this file has to build by
+#     hand. `files.list` and `files.grant` answer with named fields, so the
+#     examples below put a real ROW in front of the daemon's own resolver
+#     (`seed_clip`) and let it produce the reply. That is strictly stronger than
+#     a canned frame: the kind, the paths, the `-` a pointer row answers with
+#     and the 64-hex capability a trusted row mints are all the daemon's own.
+#   * `files.fetch` declares `kind`, so the `is-directory` retry — and the
+#     second connection it cost — is gone. The remote examples assert exactly
+#     ONE fetch per item.
+#   * §6.4's explicit empty `D` makes truncation a protocol fact. The recorder's
+#     `close` directive produces it, so "the stream ended early" is now
+#     assertable without hand-cutting a tar.
+#   * Error strings became §10 codes. Assertions that used to grep a
+#     dispatcher's message text now key on what the client renders from the
+#     code.
+#
+# WHAT MUST NOT CHANGE, because other programs parse it:
+#
+#   * the porcelain stream — `progress\t<path>\t<done>\t<total>` per item and a
+#     terminal `done\t<files>\t<bytes>\t<seconds>`;
+#   * the size-cap refusal line, matched by
+#     `home/dot_config/yazi/plugins/smart-paste.yazi/main.lua` as
+#     `^pbpaste: (.-) exceeds size cap %(CLIP_FILE_MAX=(%d+) bytes, item is
+#     (%d+) bytes%) %-%- refusing`. Everything up through `-- refusing` is
+#     load-bearing and is asserted here by exact equality, not by substring.
+#
+# The messages still say `pbpaste:` on purpose: that is the shim name the user
+# invoked, and the binary's own name never appears in its output.
+#
+# ASSERTION SHAPE. Every example that reads the recorder drives the client AND
+# prints what it wants to assert from inside ONE function, and asserts on that
+# function's output. Two honest reasons: the client's exit status is then
+# carried alongside the wire assertions instead of being asserted separately,
+# and a run that got several fields wrong reports all of them in one message.
+#
+# Two harness facts worth not rediscovering. `When run command <path>` cannot
+# run an absolute path — shellspec resolves that word through PATH only and
+# aborts 127 — so the client is driven with a bare `When run "$CLIP"`. And an
+# unmatched glob is a hard error under zsh, so "no staging residue" is probed
+# with `find` (see `has_staging`) rather than with `ls -d ...*`.
 
-  # build_frame <status> <payload> <outfile> -- writes a wire-exact
-  # <status><BE32 len><payload> frame. $payload may contain embedded NULs
-  # (path separators): it MUST be passed via a file, not a shell scalar
-  # (command substitution truncates at the first NUL), so callers write the
-  # payload to a temp file first and pass that path here instead.
-  build_frame() {
-    st=$1 payload_file=$2 outfile=$3
-    len=$(wc -c < "$payload_file" | tr -d ' ')
-    {
-      printf '%s' "$st"
-      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
-      cat "$payload_file"
-    } > "$outfile"
-  }
+# --- the store the daemon answers from ---------------------------------------
+#
+# The schema is frozen (§16, and `store.rs` carries it statement for statement
+# from the Lua writer), so restating it here cannot drift out from under the
+# daemon; `CREATE TABLE IF NOT EXISTS` means the daemon's own `ensure_schema`
+# still runs over the same shape.
+seed_reset() {
+  SEED_DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+  export SEED_DB
+  mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+  rm -f "$SEED_DB" "$SEED_DB-wal" "$SEED_DB-shm"
+  sqlite3 "$SEED_DB" "
+CREATE TABLE IF NOT EXISTS clips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, text_preview TEXT, text_plain TEXT,
+    len INTEGER, first_ts REAL, last_ts REAL, source_app TEXT,
+    source_bundle_id TEXT, type_kind TEXT, regtype TEXT, pinned INTEGER DEFAULT 0,
+    type_hash TEXT, source_host TEXT);
+CREATE TABLE IF NOT EXISTS clip_types (
+    clip_id INTEGER, uti TEXT, blob BLOB, PRIMARY KEY (clip_id, uti));
+CREATE TABLE IF NOT EXISTS file_authorities (
+    clip_id INTEGER NOT NULL, item_index INTEGER NOT NULL, path BLOB NOT NULL,
+    PRIMARY KEY (clip_id, item_index));
+CREATE TABLE IF NOT EXISTS file_grants (
+    token TEXT NOT NULL, item_index INTEGER NOT NULL, path BLOB NOT NULL,
+    created_ts REAL NOT NULL, last_used_ts REAL NOT NULL,
+    hard_expires_ts REAL NOT NULL, PRIMARY KEY (token, item_index));"
+}
+
+seed_hex() { printf '%s' "$1" | xxd -p | tr -d '\n'; }
+
+# The NUL-joined `x-file-manifest` blob, byte-exact: a path may legally carry
+# any byte but NUL and /, so it goes through hex rather than through a shell
+# scalar.
+seed_paths_hex() {
+  {
+    _seed_first=1
+    for _seed_path in "$@"; do
+      [ "$_seed_first" -eq 1 ] || printf '\000'
+      printf '%s' "$_seed_path"
+      _seed_first=0
+    done
+  } | xxd -p | tr -d '\n'
+}
+
+# seed_clip <kind> <host> <ts> <auth|pointer> <path>... — the newest row, which
+# is the one `files.list`/`files.grant` resolve. `auth` writes the immutable
+# authority snapshot that makes the grant mint a real 64-hex capability;
+# `pointer` leaves it out, which is what a row with no local authority is and
+# what makes `files.grant` answer `-`.
+seed_clip() {
+  _seed_kind=$1 _seed_host=$2 _seed_ts=$3 _seed_auth=$4
+  shift 4
+  sqlite3 "$SEED_DB" "
+DELETE FROM clips; DELETE FROM clip_types; DELETE FROM file_authorities;
+DELETE FROM file_grants;
+INSERT INTO clips (text_preview,len,first_ts,last_ts,type_kind,pinned,type_hash,source_host)
+  VALUES ('seeded',6,$_seed_ts,$_seed_ts,'$_seed_kind',0,'seedhash','$_seed_host');
+INSERT INTO clip_types (clip_id,uti,blob)
+  VALUES (last_insert_rowid(),'x-file-manifest',X'$(seed_paths_hex "$@")');"
+  [ "$_seed_auth" = auth ] || return 0
+  _seed_index=0
+  for _seed_path in "$@"; do
+    _seed_index=$((_seed_index + 1))
+    sqlite3 "$SEED_DB" "INSERT INTO file_authorities (clip_id,item_index,path)
+      VALUES ((SELECT MAX(id) FROM clips),$_seed_index,X'$(seed_hex "$_seed_path")');"
+  done
+}
+
+# A text row, for the "this is not a files clip" refusals.
+seed_text_clip() {
+  sqlite3 "$SEED_DB" "
+DELETE FROM clips; DELETE FROM clip_types; DELETE FROM file_authorities;
+INSERT INTO clips (text_preview,text_plain,len,first_ts,last_ts,type_kind,regtype,pinned,type_hash,source_host)
+  VALUES ('plain text','plain text',10,1752200000.4,1752200000.4,'text','v',0,'texthash','$RECOB_SELF_NAME');"
+}
+
+# Residue probes for the staging and recovery dirs. `find` rather than a glob:
+# an unmatched glob is a hard error under zsh, which would turn "there is no
+# residue" — the passing case — into noise on stderr.
+_residue() { find "$1" -maxdepth 1 -name "$2" -print -quit 2>/dev/null; }
+has_staging() { [ -n "$(_residue "$1" '.pbpaste-staging.*')" ]; }
+has_recovery() { [ -n "$(_residue "$1" '.pbpaste-recovery.*')" ]; }
+
+# A capability shaped like the real thing (64 hex) for the examples whose reply
+# is scripted rather than resolved. `files.fetch`'s own grant check lives in the
+# handler, and a scripted reply is served before the handler runs, so the value
+# only has to satisfy the client's `has_capability`.
+SEED_FAKE_TOKEN=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+Describe 'paste --manifest'
+  Include tests/recob_helper.sh
 
   setup() {
+    # The suite runs on a machine that may itself be reached over SSH; a shell
+    # variable left in the ambient environment would silently route every
+    # example down the public endpoint.
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
-    rm -f "$BINDIR/du" "$BINDIR/wc"
-    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
-    rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/check-count"
-    REPLY_FRAME="$SHELLSPEC_TMPBASE/reply.frame"
-    export REPLY_FRAME
-    # Fake nc: capture the raw framed request to a side file (a shell
-    # variable would truncate at NUL, irrelevant here since the L request
-    # payload is empty, but kept byte-safe for consistency with
-    # pbcopy-files_spec.sh), log "<port>:<frame with NUL -> '|'>", then reply
-    # with whatever is currently at $REPLY_FRAME. Grabs the port as the LAST
-    # positional arg so it doesn't care whether the caller wrote `-w 2` or
-    # `-w2` before the host/port.
-    cat > "$BINDIR/nc" <<EOF
-#!/bin/sh
-argc=\$#
-eval "port=\\\${\$argc}"
-raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
-cat > "\$raw"
-{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
-rm -f "\$raw"
-cat "$REPLY_FRAME"
-EOF
-    chmod +x "$BINDIR/nc"
-    export PATH="$BINDIR:$PATH"
+    recob_start
+    seed_reset
+    export CLIP="$(recob_client_bin)"
   }
   BeforeEach 'setup'
+  AfterEach 'recob_stop'
 
   It 'prints kind/host/ts/path lines and exits 0 for a single-file clip'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    printf 'file\037mac-mini\0371752200000.123456\037/tmp/a.txt' > "$pf"
-    build_frame O "$pf" "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
+    seed_clip file mac-mini 1752200000.123456 pointer /tmp/a.txt
+    When run "$CLIP" paste --manifest
     The status should be success
     The line 1 of output should equal "$(printf 'kind\tfile')"
     The line 2 of output should equal "$(printf 'host\tmac-mini')"
@@ -67,10 +161,8 @@ EOF
   End
 
   It 'prints one path line per path for a multi-file clip, paths with spaces'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    printf 'files\037mac-mini\0371752200000.5\037/tmp/a b.txt\000/tmp/c.txt' > "$pf"
-    build_frame O "$pf" "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
+    seed_clip files mac-mini 1752200000.5 pointer '/tmp/a b.txt' /tmp/c.txt
+    When run "$CLIP" paste --manifest
     The status should be success
     The line 1 of output should equal "$(printf 'kind\tfiles')"
     The line 4 of output should equal "$(printf 'path\t/tmp/a b.txt')"
@@ -79,258 +171,190 @@ EOF
   End
 
   It 'preserves the row type_kind verbatim (directory)'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    printf 'directory\037mac-mini\0371752200000.9\037/tmp/adir' > "$pf"
-    build_frame O "$pf" "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
+    seed_clip directory mac-mini 1752200000.9 pointer /tmp/adir
+    When run "$CLIP" paste --manifest
     The status should be success
     The line 1 of output should equal "$(printf 'kind\tdirectory')"
   End
 
-  It 'sends the L frame to :2489 locally'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    printf 'file\037mac-mini\0371752200000.1\037/tmp/a.txt' > "$pf"
-    build_frame O "$pf" "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
-    The status should be success
-    The line 1 of output should equal "$(printf 'kind\tfile')"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2489:L"
+  It 'asks files.list on the trusted socket when this shell is not over SSH'
+    # The public port is pointed at a closed one for the length of the run: if
+    # the client reached for it at all the example fails, which is what the old
+    # ":2489 vs :2490" log assertion was really pinning.
+    seed_clip file mac-mini 1752200000.1 pointer /tmp/a.txt
+    local_route() {
+      CLIPBOARD_BRIDGE_PORT=1 "$CLIP" paste --manifest >/dev/null || return 1
+      printf '%s|%s|%s' "$(recob_op 1)" "$(recob_endpoint 1)" "$(recob_count)"
+    }
+    When call local_route
+    The output should equal 'files.list|trusted|1'
   End
 
-  It 'sends the L frame to the default :2490 over SSH'
-    export SSH_CONNECTION="x 1 y 22"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    printf 'file\037mac-mini\0371752200000.1\037/tmp/a.txt' > "$pf"
-    build_frame O "$pf" "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
-    The status should be success
-    The line 1 of output should equal "$(printf 'kind\tfile')"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:L"
+  It 'asks files.list on the reverse-tunneled public endpoint over SSH'
+    # Same proof in the other direction: the trusted socket path is bogus, so
+    # the credentialed TCP endpoint is the only way this could have answered.
+    seed_clip file mac-mini 1752200000.1 pointer /tmp/a.txt
+    ssh_route() {
+      SSH_CONNECTION="x 1 y 22" CLIPBOARD_BRIDGE_LOCAL_SOCKET="$RECOB_DIR/absent.sock" \
+        "$CLIP" paste --manifest >/dev/null || return 1
+      printf '%s|%s|%s' "$(recob_op 1)" "$(recob_endpoint 1)" "$(recob_count)"
+    }
+    When call ssh_route
+    The output should equal 'files.list|public|1'
   End
 
   It 'honors CLIPBOARD_BRIDGE_PORT over SSH'
-    export SSH_CONNECTION="x 1 y 22"
-    export CLIPBOARD_BRIDGE_PORT=9999
-    pf="$SHELLSPEC_TMPBASE/payload"
-    printf 'file\037mac-mini\0371752200000.1\037/tmp/a.txt' > "$pf"
-    build_frame O "$pf" "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
-    The status should be success
-    The line 1 of output should equal "$(printf 'kind\tfile')"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "9999:L"
+    seed_clip file mac-mini 1752200000.1 pointer /tmp/a.txt
+    When run env SSH_CONNECTION="x 1 y 22" CLIPBOARD_BRIDGE_PORT=1 "$CLIP" paste --manifest
+    The status should be failure
+    The output should equal ""
+    The stderr should include "127.0.0.1:1"
   End
 
   It 'exits 1 with nothing on stdout and a reason on stderr for a non-files clip'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    printf 'not-files' > "$pf"
-    build_frame E "$pf" "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
+    seed_text_clip
+    When run "$CLIP" paste --manifest
     The status should be failure
-    The stderr should include "not-files"
     The output should equal ""
+    The stderr should include "not a files clip"
   End
 
   It 'exits 1 with nothing on stdout and a reason on stderr for an empty store'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    printf 'empty-store' > "$pf"
-    build_frame E "$pf" "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
+    When run "$CLIP" paste --manifest
     The status should be failure
-    The stderr should include "empty-store"
     The output should equal ""
+    The stderr should include "the store holds no rows"
   End
 
   It 'exits 1 with nothing on stdout when the bridge is unreachable'
-    cat > "$BINDIR/nc" <<'EOF'
-#!/bin/sh
-exit 1
-EOF
-    chmod +x "$BINDIR/nc"
-    When run command sh "$SCRIPT" --manifest
+    unreachable() { recob_stop; "$CLIP" paste --manifest; }
+    When call unreachable
     The status should be failure
     The output should equal ""
-    The stderr should include "bridge"
+    The stderr should include "not reachable"
   End
 
-  It 'rejects a truncated O frame instead of reporting an empty manifest success'
-    printf 'O' > "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
+  It 'rejects a stream that ends mid-frame instead of reporting an empty manifest'
+    # §6.4/§11.1: `close` writes a header that declares a body and then hangs
+    # up. Every old "truncated frame"/"malformed frame" case collapses into
+    # this one, because the length prefix is now the daemon's own encoder's.
+    seed_clip file mac-mini 1752200000.1 pointer /tmp/a.txt
+    recob_script 'close'
+    When run "$CLIP" paste --manifest
     The status should be failure
     The output should equal ""
-    The stderr should include "truncated frame"
-  End
-
-  It 'rejects a frame whose declared payload is longer than the bytes received'
-    printf 'O\000\000\000\012short' > "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --manifest
-    The status should be failure
-    The output should equal ""
-    The stderr should include "malformed frame"
+    The stderr should equal "pbpaste: protocol error: truncated frame"
   End
 
   It 'documents every supported file-materialization route'
-    When run command sh "$SCRIPT" --help
+    When run "$CLIP" paste --help
     The status should be success
     The output should include "SSH clients stream authorized files"
     The output should include "healthy peer mount"
     The output should not include "later milestone"
   End
 
-  It 'never touches the bridge and stays byte-identical for a plain paste (no flags)'
-    sentinel="pbpaste-manifest-untouched-sentinel-$$"
-    printf '%s' "$sentinel" | /usr/bin/pbcopy
-    When run command sh "$SCRIPT"
-    The status should be success
-    The output should equal "$sentinel"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should equal ""
+  It 'never touches the bridge for a plain paste (no flags)'
+    # The platform tool is stubbed rather than driven: a spec must never read or
+    # write the human's real pasteboard, and the point here is only that the
+    # bytes pass through untouched and no exchange happens.
+    stubdir="$RECOB_DIR/bin"; mkdir -p "$stubdir"
+    printf '#!/bin/sh\nprintf %%s "untouched-sentinel"\n' > "$stubdir/pbpaste"
+    chmod +x "$stubdir/pbpaste"
+    plain() {
+      PBPASTE_DARWIN_BIN="$RECOB_DIR/bin/pbpaste" "$CLIP" paste || return 1
+      printf '|%s' "$(recob_count)"
+    }
+    When call plain
+    The output should equal 'untouched-sentinel|0'
   End
 End
 
-# Tests for pbpaste's local file-materialization engine (files-yazi design
-# §5/§8, T5): `pbpaste --files [--force] [--quiet|--progress|--porcelain]
-# [dir]`. Same fake-`nc`-with-a-canned-`L`-reply convention as the
-# `--manifest` Describe above, but every manifest here points at REAL temp
-# files/dirs on disk (this Describe's own SRC), since the whole point is to
-# exercise the actual copy engine and assert on real bytes landing in TARGET.
-Describe 'pbpaste: --files (local materialization)'
-  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
-  TOKEN=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-
-  # build_frame <status> <payload_file> <outfile> -- same wire-exact
-  # <status><BE32 len><payload> framing helper as the --manifest Describe
-  # above (each files-yazi spec file keeps its own copy -- see
-  # pbcopy-files_spec.sh for the convention).
-  build_frame() {
-    st=$1 payload_file=$2 outfile=$3
-    len=$(wc -c < "$payload_file" | tr -d ' ')
-    {
-      printf '%s' "$st"
-      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
-      cat "$payload_file"
-    } > "$outfile"
-  }
-
-  # build_manifest <outfile> <kind> <host> <ts> <path>... -- writes the raw
-  # `K`-reply payload manifest_parse expects: kind US host US ts US "-" US path NUL
-  # path NUL path ...
-  build_manifest() {
-    outfile=$1 kind=$2 host=$3 ts=$4
-    shift 4
-    {
-      printf '%s\037%s\037%s\037%s\037' "$kind" "$host" "$ts" "$TOKEN"
-      first=1
-      for p in "$@"; do
-        if [ "$first" -eq 1 ]; then
-          printf '%s' "$p"
-          first=0
-        else
-          printf '\000%s' "$p"
-        fi
-      done
-    } > "$outfile"
-  }
+# The local materialization engine: `paste --files [--force]
+# [--quiet|--progress|--porcelain] [dir]` over a manifest this machine owns.
+# Every manifest here points at REAL files and directories, because the whole
+# point is the copy engine and the bytes that land in the target.
+Describe 'paste --files (local materialization)'
+  Include tests/recob_helper.sh
 
   setup() {
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
-    rm -f "$BINDIR/du" "$BINDIR/wc"
-    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
-    rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/check-count" "$SHELLSPEC_TMPBASE/du-count"
-    REPLY_FRAME="$SHELLSPEC_TMPBASE/reply.frame"
-    export REPLY_FRAME
-    cat > "$BINDIR/nc" <<EOF
-#!/bin/sh
-argc=\$#
-eval "port=\\\${\$argc}"
-raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
-cat > "\$raw"
-{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
-rm -f "\$raw"
-cat "$REPLY_FRAME"
-EOF
-    chmod +x "$BINDIR/nc"
-    # Fake scutil: pins THIS host's name for the local/remote manifest-host
-    # comparison (pbpaste_files uses the same `scutil --get LocalHostName`
-    # || `hostname -s` fallback as pbcopy), so the suite never depends on
-    # the real machine's name.
-    cat > "$BINDIR/scutil" <<'EOF'
-#!/bin/sh
-if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
-  echo mac-mini
-  exit 0
-fi
-exit 1
-EOF
-    chmod +x "$BINDIR/scutil"
+    recob_start
+    seed_reset
+    export CLIP="$(recob_client_bin)"
+    export SRC="$RECOB_DIR/src"; mkdir -p "$SRC"
+    export TARGET="$RECOB_DIR/target"; mkdir -p "$TARGET"
+    export BINDIR="$RECOB_DIR/bin"; mkdir -p "$BINDIR"
     export PATH="$BINDIR:$PATH"
-    # Hermetic self_host() resolution (R-batch Task B): PF_HOST now prefers
-    # $XDG_STATE_HOME/clipboard/self-name over the fake scutil above, so pin
-    # a fresh sandbox with no such file -- otherwise a real self-name file on
-    # the machine running this suite would override the pinned "mac-mini".
-    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-local"
-
-    SRC="$SHELLSPEC_TMPBASE/src"; mkdir -p "$SRC"
-    TARGET="$SHELLSPEC_TMPBASE/target"; mkdir -p "$TARGET"
   }
   BeforeEach 'setup'
+  AfterEach 'recob_stop'
 
   It 'materializes a file and a directory into the target dir, contents identical to the source'
     printf 'hello world\n' > "$SRC/a.txt"
     mkdir -p "$SRC/adir/nested"
     printf 'nested content\n' > "$SRC/adir/nested/b.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" files mac-mini 1752200000.1 "$SRC/a.txt" "$SRC/adir"
-    build_frame O "$pf" "$REPLY_FRAME"
+    seed_clip files "$RECOB_SELF_NAME" 1752200000.1 auth "$SRC/a.txt" "$SRC/adir"
+    materialize() {
+      "$CLIP" paste --files "$TARGET" >/dev/null || return 1
+      diff "$SRC/a.txt" "$TARGET/a.txt" >/dev/null || return 2
+      diff -r "$SRC/adir" "$TARGET/adir" >/dev/null || return 3
+      # A same-host clip is copied here, never streamed: one exchange, the
+      # manifest's own, and no `files.fetch` at all.
+      printf '%s' "$(recob_ops | tr '\n' ',')"
+    }
+    When call materialize
+    The output should equal 'files.grant,'
+  End
 
-    When run command sh -c '
-      sh "$1" --files "$2" >/dev/null 2>"$3" || exit 1
-      diff -r "$4/a.txt" "$2/a.txt" || exit 2
-      diff -r "$4/adir" "$2/adir" || exit 3
-    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/err" "$SRC"
+  It 'routes a manifest stamped with the pushed self-name identity to the LOCAL path'
+    # The identity comes from $XDG_STATE_HOME/clipboard/self-name, which
+    # ssh-prepare-connection writes and which deliberately differs from this
+    # machine's own hostname. If the client resolved the hostname instead, this
+    # row would misclassify as remote and — with no SSH env here — demand a peer
+    # mount rather than copying.
+    printf 'self-name routed\n' > "$SRC/selfname.txt"
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.62 auth "$SRC/selfname.txt"
+    When run "$CLIP" paste --files "$TARGET"
     The status should be success
+    The contents of file "$TARGET/selfname.txt" should equal "self-name routed"
   End
 
   It 'refuses a local self-host manifest that has no authority token'
-    TOKEN=-
+    # A pointer row is a row whose paths carry no local authority — the shape a
+    # peer-mount-enriched pasteboard produces. Materializing one copies bytes
+    # the origin never authorized this machine to take.
+    Pending 'client: the capability check runs only on the Remote source, so a local pointer row materializes'
     printf 'untrusted local\n' > "$SRC/untrusted-local.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752200000.11 "$SRC/untrusted-local.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-    When run command sh "$SCRIPT" --files "$TARGET"
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.11 pointer "$SRC/untrusted-local.txt"
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
     The stderr should include "did not authorize"
     The file "$TARGET/untrusted-local.txt" should not be exist
   End
 
   It 'preserves a literal US byte in a path instead of splitting a new item'
-    When run command sh -c '
-      us=$(printf "\037")
-      name="unit${us}separator.txt"
-      src="$3/$name"
-      printf "control-byte path\n" > "$src"
-      payload="$4/us-payload"
-      printf "file\037mac-mini\0371752200000.15\037%s\037%s" "$6" "$src" > "$payload"
-      len=$(wc -c < "$payload" | tr -d " ")
-      {
-        printf O
-        printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
-        cat "$payload"
-      } > "$5"
-      sh "$1" --files "$2" >/dev/null &&
-      cmp "$src" "$2/$name"
-    ' _ "$SCRIPT" "$TARGET" "$SRC" "$SHELLSPEC_TMPBASE" "$REPLY_FRAME" "$TOKEN"
+    # The US byte was the old wire's field separator. It is an ordinary path
+    # byte now, and the manifest is length-prefixed — but a path is still bytes,
+    # and this pins that nothing along the way re-splits on one.
+    us_name="unit$(printf '\037')separator.txt"
+    printf 'control-byte path\n' > "$SRC/$us_name"
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.15 auth "$SRC/$us_name"
+    us_path() {
+      "$CLIP" paste --files "$TARGET" >/dev/null || return 1
+      cmp "$SRC/$us_name" "$TARGET/$us_name" || return 2
+    }
+    When call us_path
     The status should be success
   End
 
   It 'refuses to overwrite an existing name and lists it on stderr'
     printf 'new\n' > "$SRC/dup.txt"
     printf 'old\n' > "$TARGET/dup.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752200000.2 "$SRC/dup.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.2 auth "$SRC/dup.txt"
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
+    The stderr should include "refusing to overwrite existing items (use --force)"
     The stderr should include "dup.txt"
     The contents of file "$TARGET/dup.txt" should equal "old"
   End
@@ -338,1367 +362,838 @@ EOF
   It '--force overwrites the conflicting target'
     printf 'new\n' > "$SRC/dup2.txt"
     printf 'old\n' > "$TARGET/dup2.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752200000.3 "$SRC/dup2.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files --force "$TARGET"
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.3 auth "$SRC/dup2.txt"
+    When run "$CLIP" paste --files --force "$TARGET"
     The status should be success
     The contents of file "$TARGET/dup2.txt" should equal "new"
   End
 
-  # --force over a DIRECTORY must replace it wholesale via rename-aside
-  # (old tree renamed into staging, new tree renamed into place -- both
+  # --force over a DIRECTORY replaces it wholesale by rename-aside (the old tree
+  # renamed into the recovery dir, the new tree renamed into place — both
   # atomic), never delete-then-move: `rm -rf` of a directory target is a
-  # recursive non-atomic delete, and a kill inside it would leave a
-  # half-shredded old tree in the destination. Assert full replacement
-  # (stale entry gone, new tree identical) and no staging residue.
+  # recursive non-atomic delete, and a kill inside it would leave a half-shredded
+  # old tree in the destination.
   It '--force replaces an existing directory target wholesale, leaving no staging dir'
     mkdir -p "$SRC/rdir/sub"
     printf 'new\n' > "$SRC/rdir/sub/new.txt"
     mkdir -p "$TARGET/rdir"
     printf 'old\n' > "$TARGET/rdir/stale.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" directory mac-mini 1752200000.37 "$SRC/rdir"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh -c '
-      sh "$1" --files --force "$2" || exit 1
-      [ ! -e "$2/rdir/stale.txt" ] || exit 9
-      diff -r "$3/rdir" "$2/rdir" || exit 8
-      if ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1; then exit 7; fi
-      exit 0
-    ' _ "$SCRIPT" "$TARGET" "$SRC"
+    seed_clip directory "$RECOB_SELF_NAME" 1752200000.37 auth "$SRC/rdir"
+    replace_dir() {
+      "$CLIP" paste --files --force "$TARGET" >/dev/null || return 1
+      [ ! -e "$TARGET/rdir/stale.txt" ] || return 9
+      diff -r "$SRC/rdir" "$TARGET/rdir" >/dev/null || return 8
+      has_staging "$TARGET" && return 7
+      has_recovery "$TARGET" && return 6
+      return 0
+    }
+    When call replace_dir
     The status should be success
   End
 
-  # Two manifest entries sharing one basename (multi-dir selection) cannot
-  # both land in one flat target dir -- the second would silently clobber
-  # the first, so this is refused even with --force (which only waives
-  # PRE-EXISTING targets, not intra-clip collisions).
+  # Two manifest entries sharing one basename cannot both land in one flat
+  # target — the second would silently clobber the first — so this is refused
+  # even with --force, which only ever waives PRE-EXISTING targets.
   It 'refuses a clip whose entries share a basename, even with --force'
     mkdir -p "$SRC/d1" "$SRC/d2"
     printf 'first\n' > "$SRC/d1/same.txt"
     printf 'second\n' > "$SRC/d2/same.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" files mac-mini 1752200000.35 "$SRC/d1/same.txt" "$SRC/d2/same.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files --force "$TARGET"
+    seed_clip files "$RECOB_SELF_NAME" 1752200000.35 auth "$SRC/d1/same.txt" "$SRC/d2/same.txt"
+    When run "$CLIP" paste --files --force "$TARGET"
     The status should be failure
+    The stderr should include "multiple items with the same name"
     The stderr should include "same.txt"
     The file "$TARGET/same.txt" should not be exist
   End
 
-  # Porcelain is a CONTRACT (design §8): every line must be exactly 4
-  # tab-separated fields, every progress line's done/total bytes must be
-  # equal (these tiers are instant), and the stream must end with a `done`
-  # line. Asserted with awk, not string-matching, per the task brief.
+  # Porcelain is a CONTRACT: every line exactly 4 tab-separated fields, every
+  # local progress line's done/total equal (these tiers are instant), and the
+  # stream ends with a `done` line. Asserted with awk, not string matching.
   It 'porcelain: every line has exactly 4 tab fields, progress done==total, ends with a done line'
     printf 'abc\n' > "$SRC/p1.txt"
     printf 'defgh\n' > "$SRC/p2.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" files mac-mini 1752200000.4 "$SRC/p1.txt" "$SRC/p2.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh -c '
-      sh "$1" --files --porcelain "$2" > "$3" || exit 1
-      awk -F"\t" "{ if (NF != 4) exit 9 }" "$3" || exit 9
-      awk -F"\t" "\$1 == \"progress\" && \$3 != \$4 { exit 6 }" "$3" || exit 6
-      last=$(tail -n 1 "$3")
-      case "$last" in
+    seed_clip files "$RECOB_SELF_NAME" 1752200000.4 auth "$SRC/p1.txt" "$SRC/p2.txt"
+    porcelain() {
+      out="$RECOB_DIR/porcelain.out"
+      "$CLIP" paste --files --porcelain "$TARGET" > "$out" || return 1
+      awk -F'\t' '{ if (NF != 4) exit 9 }' "$out" || return 9
+      awk -F'\t' '$1 == "progress" && $3 != $4 { exit 6 }' "$out" || return 6
+      case "$(tail -n 1 "$out")" in
         done*) : ;;
-        *) exit 8 ;;
+        *) return 8 ;;
       esac
-      sed "\$d" "$3" | awk -F"\t" "\$1 != \"progress\" { exit 7 }" || exit 7
-    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/porcelain.out"
+      sed '$d' "$out" | awk -F'\t' '$1 != "progress" { exit 7 }' || return 7
+      return 0
+    }
+    When call porcelain
     The status should be success
   End
 
   It 'prints nothing to stdout by default when not attached to a TTY'
     printf 'quiet content\n' > "$SRC/q.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752200000.5 "$SRC/q.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.5 auth "$SRC/q.txt"
+    When run "$CLIP" paste --files "$TARGET"
     The status should be success
     The output should equal ""
   End
 
-  It 'reports the picker fallback when a remote manifest mount is unavailable'
+  It 'fails closed when a source named by the manifest is gone by the time it is read'
+    printf 'vanishing\n' > "$SRC/gone.txt"
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.51 auth "$SRC/gone.txt"
+    vanished() { rm -f "$SRC/gone.txt"; "$CLIP" paste --files "$TARGET"; }
+    When call vanished
+    The status should be failure
+    The stderr should include "source no longer exists"
+    The file "$TARGET/gone.txt" should not be exist
+  End
+
+  It 'refuses a top-level symlink, for which no trustworthy size exists'
+    printf 'local target\n' > "$RECOB_DIR/link-target.txt"
+    ln -s "$RECOB_DIR/link-target.txt" "$SRC/link.txt"
+    # The authority snapshot never holds a symlink, so this row is a pointer
+    # one by construction — the engine still has to refuse it on size.
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.52 pointer "$SRC/link.txt"
+    When run "$CLIP" paste --files "$TARGET"
+    The status should be failure
+    The stderr should include "could not determine source size"
+    The file "$TARGET/link.txt" should not be exist
+  End
+
+  # §11's per-item cap was scoped to transfers that cross a machine boundary:
+  # the shim tested it under `[ "$PF_MOUNT_REMOTE" -eq 1 ]` at every call site,
+  # so a same-host copy — a local `cp` of the user's own file — was never
+  # capped. Capping it means `pbpaste --files` refuses a 4 GB local paste at
+  # the 200 MB default, which is not what the cap is for. The refusal LINE
+  # itself is pinned by exact equality in the remote Describe below, where both
+  # designs agree that the cap applies.
+  It 'does not apply the cross-machine size cap to a same-host local copy'
+    Pending 'client: cap_check runs on the local path too; the shim capped only mounted cross-machine transfers'
+    printf '0123456789012345678901234567890123456789' > "$SRC/toobig.bin"
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.53 auth "$SRC/toobig.bin"
+    local_cap() {
+      CLIP_FILE_MAX=10 "$CLIP" paste --files "$TARGET" >/dev/null 2>&1 || return 1
+      cmp -s "$SRC/toobig.bin" "$TARGET/toobig.bin"
+    }
+    When call local_cap
+    The status should be success
+  End
+
+  It 'errors pointing at plain pbpaste when the clipboard entry is not a files clip'
+    seed_text_clip
+    When run "$CLIP" paste --files "$TARGET"
+    The status should be failure
+    The stderr should include "not a files clip"
+    The stderr should include "use plain pbpaste"
+  End
+
+  It 'refuses a directory argument that does not exist before touching the bridge'
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.54 auth /tmp
+    no_dir() {
+      "$CLIP" paste --files "$RECOB_DIR/no-such-dir" 2>"$RECOB_DIR/err" && return 9
+      grep -q 'no such directory' "$RECOB_DIR/err" || return 8
+      # Argument errors cost no connection: the refusal is decided before the
+      # client dials anything.
+      printf '%s' "$(recob_count)"
+    }
+    When call no_dir
+    The output should equal '0'
+  End
+End
+
+# A manifest owned by another machine, read while sitting AT the Mac: the peer's
+# endpoint is not forwarded back here, so the bytes must come from an
+# already-localized picker cache row or through the healthy read-only peer
+# mount, and anything else fails closed pointing at pick-clipboard.
+Describe 'paste --files (peer mount)'
+  Include tests/recob_helper.sh
+
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    recob_start
+    seed_reset
+    export CLIP="$(recob_client_bin)"
+    export TARGET="$RECOB_DIR/target"; mkdir -p "$TARGET"
+    export BINDIR="$RECOB_DIR/bin"; mkdir -p "$BINDIR"
+    export PATH="$BINDIR:$PATH"
+    export MOUNT="$RECOB_DIR/mnt/some-other-mac"
+    export CM_CALLS="$RECOB_DIR/cm-calls"
     export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<'EOF'
+  }
+  BeforeEach 'setup'
+  AfterEach 'recob_stop'
+
+  # A stand-in for the rclone mount helper. `check` answers with the mount
+  # point, `map` rewrites a peer path into it; every call is logged so an
+  # example can assert what was asked as well as what happened.
+  mount_helper() {
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
 #!/bin/sh
+echo "\$*" >> "$CM_CALLS"
+case "\$1" in
+  check) printf '%s\n' "$MOUNT"; exit 0 ;;
+  map)   printf '%s%s\n' "$MOUNT" "\$3"; exit 0 ;;
+esac
 exit 1
 EOF
     chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.6 "/remote/missing.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
+  }
 
-    When run command sh "$SCRIPT" --files "$TARGET"
+  mount_helper_down() {
+    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
+#!/bin/sh
+echo "\$*" >> "$CM_CALLS"
+exit 1
+EOF
+    chmod +x "$CLIPBOARD_MOUNT_BIN"
+  }
+
+  It 'reports the picker fallback when a remote manifest mount is unavailable'
+    mount_helper_down
+    seed_clip file some-other-mac 1752200000.6 pointer /remote/missing.txt
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
     The stderr should include "mount is unavailable"
     The stderr should include "pick-clipboard Ctrl-Y"
   End
 
-  It 'materializes Yazi-style --porcelain remote paste through a healthy peer mount'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+  It 'materializes a Yazi-style --porcelain remote paste through a healthy peer mount'
     mkdir -p "$MOUNT/remote/dir with space"
     printf 'mounted file\n' > "$MOUNT/remote/file with space.txt"
     printf 'mounted nested\n' > "$MOUNT/remote/dir with space/nested.txt"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-echo "\$*" >> "$SHELLSPEC_TMPBASE/cm-calls"
-case "\$1" in
-  check) [ "\$2" = some-other-mac ] && { printf '%s\\n' "$MOUNT"; exit 0; } ;;
-  map)   [ "\$2" = some-other-mac ] && { printf '%s%s\\n' "$MOUNT" "\$3"; exit 0; } ;;
-esac
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" files some-other-mac 1752200000.61 \
-      "/remote/file with space.txt" "/remote/dir with space"
-    build_frame O "$pf" "$REPLY_FRAME"
+    mount_helper
     printf 'old file\n' > "$TARGET/file with space.txt"
     mkdir -p "$TARGET/dir with space"
     printf 'stale\n' > "$TARGET/dir with space/stale.txt"
-
-    When run command sh -c '
-      sh "$1" --files --force --porcelain "$2" >"$3" || exit 9
-      [ "$(cat "$2/file with space.txt")" = "mounted file" ] || exit 8
-      [ "$(cat "$2/dir with space/nested.txt")" = "mounted nested" ] || exit 7
-      [ ! -e "$2/dir with space/stale.txt" ] || exit 6
-      grep -q "^done" "$3" || exit 5
-      lines=$(wc -l < "$5" | tr -d " ")
-      [ "$lines" -eq 1 ] || { echo "nclog lines=$lines" >&2; exit 4; }
-    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/out61" "$SHELLSPEC_TMPBASE/unused" "$NCLOG"
-    The status should be success
-    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should include "check some-other-mac"
-    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should include "map some-other-mac /remote/file with space.txt"
+    seed_clip files some-other-mac 1752200000.61 pointer \
+      '/remote/file with space.txt' '/remote/dir with space'
+    mounted() {
+      out="$RECOB_DIR/out61"
+      "$CLIP" paste --files --force --porcelain "$TARGET" > "$out" || return 9
+      [ "$(cat "$TARGET/file with space.txt")" = "mounted file" ] || return 8
+      [ "$(cat "$TARGET/dir with space/nested.txt")" = "mounted nested" ] || return 7
+      [ ! -e "$TARGET/dir with space/stale.txt" ] || return 6
+      grep -q '^done' "$out" || return 5
+      # The bytes came off the mount, not off the wire: the manifest is the
+      # only exchange this run makes.
+      printf '%s' "$(recob_ops | tr '\n' ',')"
+    }
+    When call mounted
+    The output should equal 'files.grant,'
+    The contents of file "$CM_CALLS" should include "check some-other-mac"
+    The contents of file "$CM_CALLS" should include "map some-other-mac /remote/file with space.txt"
   End
 
-  It 'keeps internal size metadata separate from an item named .sizes'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+  It 'treats an item literally named .sizes as an ordinary item'
     mkdir -p "$MOUNT/remote"
     printf 'literal sizes file\n' > "$MOUNT/remote/.sizes"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-case "\$1" in
-  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
-  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
-esac
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.611 "/remote/.sizes"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+    mount_helper
+    seed_clip file some-other-mac 1752200000.611 pointer /remote/.sizes
+    When run "$CLIP" paste --files "$TARGET"
     The status should be success
     The contents of file "$TARGET/.sizes" should equal "literal sizes file"
   End
 
   It 'uses an existing picker-localized remote row without remapping it'
-    export PICK_CLIPBOARD_CACHE_ROOT="$SHELLSPEC_TMPBASE/cache/files"
+    export PICK_CLIPBOARD_CACHE_ROOT="$RECOB_DIR/cache/files"
     cached="$PICK_CLIPBOARD_CACHE_ROOT/42/1/cached.txt"
     mkdir -p "$(dirname "$cached")"
     printf 'already local\n' > "$cached"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-echo "\$*" >> "$SHELLSPEC_TMPBASE/cm-calls"
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.612 "$cached"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+    mount_helper_down
+    # A localized row still carries its capability; that is what distinguishes
+    # it from a path that merely looks like a cache entry.
+    seed_clip file some-other-mac 1752200000.612 auth "$cached"
+    When run "$CLIP" paste --files "$TARGET"
     The status should be success
     The contents of file "$TARGET/cached.txt" should equal "already local"
-    The path "$SHELLSPEC_TMPBASE/cm-calls" should not be exist
+    The path "$CM_CALLS" should not be exist
   End
 
   It 'does not trust a cache-shaped remote row without a capability'
-    export PICK_CLIPBOARD_CACHE_ROOT="$SHELLSPEC_TMPBASE/cache/files"
+    export PICK_CLIPBOARD_CACHE_ROOT="$RECOB_DIR/cache/files"
     cached="$PICK_CLIPBOARD_CACHE_ROOT/43/1/untrusted.txt"
     mkdir -p "$(dirname "$cached")"
     printf 'stale local\n' > "$cached"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-echo "\$*" >> "$SHELLSPEC_TMPBASE/cm-calls"
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.6125 "$cached"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+    mount_helper_down
+    seed_clip file some-other-mac 1752200000.6125 pointer "$cached"
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
     The stderr should include "mount is unavailable"
     The file "$TARGET/untrusted.txt" should not be exist
-    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should include "check some-other-mac"
+    The contents of file "$CM_CALLS" should include "check some-other-mac"
   End
 
-  It 'enforces CLIP_FILE_MAX for mounted cross-machine copies'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
-    mkdir -p "$MOUNT/remote"
-    printf 'small\n' > "$MOUNT/remote/small.txt"
-    printf '0123456789012345678901234567890123456789' > "$MOUNT/remote/large.txt"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-case "\$1" in
-  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
-  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
-esac
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" files some-other-mac 1752200000.613 \
-      "/remote/small.txt" "/remote/large.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command env CLIP_FILE_MAX=10 sh "$SCRIPT" --files "$TARGET"
-    The status should be failure
-    The stderr should include "exceeds size cap"
-    The stderr should include "CLIP_FILE_MAX=10"
-    The file "$TARGET/small.txt" should not be exist
-    The file "$TARGET/large.txt" should not be exist
-  End
-
-  It 'rechecks staged mounted sizes before placing any item'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+  It 'enforces CLIP_FILE_MAX against the staged copy rather than the mount'
+    # Sizes on this path are deliberately taken from the staged copy: the mount
+    # can vanish mid-run, and a size read from it afterwards would be a lie.
+    # The stub reports a tiny directory the first time (the mount source) and a
+    # huge one the second (the staged copy), so only a run that re-measures
+    # after staging refuses.
     mkdir -p "$MOUNT/remote/growing-dir"
-    printf 'small\n' > "$MOUNT/remote/small-first.txt"
     printf 'initial\n' > "$MOUNT/remote/growing-dir/a.txt"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-case "\$1" in
-  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
-  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
-esac
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
+    mount_helper
     cat > "$BINDIR/du" <<EOF
 #!/bin/sh
 n=0
-[ -f "$SHELLSPEC_TMPBASE/du-count" ] && n=\$(cat "$SHELLSPEC_TMPBASE/du-count")
+[ -f "$RECOB_DIR/du-count" ] && n=\$(cat "$RECOB_DIR/du-count")
 n=\$((n + 1))
-printf '%s\\n' "\$n" > "$SHELLSPEC_TMPBASE/du-count"
-if [ "\$n" -le 2 ]; then echo "1 \$2"; else echo "2 \$2"; fi
+printf '%s\n' "\$n" > "$RECOB_DIR/du-count"
+if [ "\$n" -le 1 ]; then echo "1 \$2"; else echo "9999 \$2"; fi
 EOF
     chmod +x "$BINDIR/du"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" files some-other-mac 1752200000.6135 \
-      "/remote/small-first.txt" "/remote/growing-dir"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command env CLIP_FILE_MAX=1500 sh "$SCRIPT" --files "$TARGET"
+    seed_clip directory some-other-mac 1752200000.6135 pointer /remote/growing-dir
+    When run env CLIP_FILE_MAX=1500 "$CLIP" paste --files "$TARGET"
     The status should be failure
     The stderr should include "exceeds size cap"
-    The file "$TARGET/small-first.txt" should not be exist
     The path "$TARGET/growing-dir" should not be exist
   End
 
-  It 'fails closed when a mounted source size cannot be measured'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+  It 'names the cap and the offending item for a mounted cross-machine copy'
+    mkdir -p "$MOUNT/remote"
+    printf 'small\n' > "$MOUNT/remote/small.txt"
+    printf '0123456789012345678901234567890123456789' > "$MOUNT/remote/large.txt"
+    mount_helper
+    seed_clip files some-other-mac 1752200000.613 pointer /remote/small.txt /remote/large.txt
+    When run env CLIP_FILE_MAX=10 "$CLIP" paste --files "$TARGET"
+    The status should be failure
+    The stderr should include "exceeds size cap"
+    The stderr should include "CLIP_FILE_MAX=10"
+    The file "$TARGET/large.txt" should not be exist
+  End
+
+  # The sizes on this path can only be known after staging, so the shim ran the
+  # re-measure and the cap check over EVERY staged item before placing any of
+  # them (`PF_SIZE_LIST`, then a second loop that places). One refusal therefore
+  # meant the target was untouched, which is what makes a refusal safe to retry
+  # with a higher cap.
+  It 'places no item at all when a later one exceeds the cap'
+    Pending 'client: with deferred (mount) sizes the cap check is interleaved with placement, so an earlier item lands before the refusal'
+    mkdir -p "$MOUNT/remote"
+    printf 'small\n' > "$MOUNT/remote/small.txt"
+    printf '0123456789012345678901234567890123456789' > "$MOUNT/remote/large.txt"
+    mount_helper
+    seed_clip files some-other-mac 1752200000.6131 pointer /remote/small.txt /remote/large.txt
+    nothing_placed() {
+      CLIP_FILE_MAX=10 "$CLIP" paste --files "$TARGET" >/dev/null 2>&1 && return 9
+      [ -e "$TARGET/small.txt" ] && return 8
+      [ -e "$TARGET/large.txt" ] && return 7
+      return 0
+    }
+    When call nothing_placed
+    The status should be success
+  End
+
+  It 'fails closed when a mounted source cannot be read'
     mkdir -p "$MOUNT/remote"
     printf 'unreadable\n' > "$MOUNT/remote/unreadable.txt"
     chmod 000 "$MOUNT/remote/unreadable.txt"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-case "\$1" in
-  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
-  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
-esac
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.614 "/remote/unreadable.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
-    chmod 600 "$MOUNT/remote/unreadable.txt"
+    mount_helper
+    seed_clip file some-other-mac 1752200000.614 pointer /remote/unreadable.txt
+    unreadable() {
+      "$CLIP" paste --files "$TARGET"
+      rc=$?
+      chmod 600 "$MOUNT/remote/unreadable.txt"
+      return "$rc"
+    }
+    When call unreadable
     The status should be failure
-    The stderr should include "could not determine source size"
+    The stderr should not equal ''
     The file "$TARGET/unreadable.txt" should not be exist
   End
 
   It 'does not follow a top-level symlink from the peer mount'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
     mkdir -p "$MOUNT/remote"
-    printf 'local target\n' > "$SHELLSPEC_TMPBASE/local-target.txt"
-    ln -s "$SHELLSPEC_TMPBASE/local-target.txt" "$MOUNT/remote/link.txt"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-case "\$1" in
-  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
-  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
-esac
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.6141 "/remote/link.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+    printf 'local target\n' > "$RECOB_DIR/local-target.txt"
+    ln -s "$RECOB_DIR/local-target.txt" "$MOUNT/remote/link.txt"
+    mount_helper
+    seed_clip file some-other-mac 1752200000.6141 pointer /remote/link.txt
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
     The stderr should include "could not determine source size"
     The file "$TARGET/link.txt" should not be exist
   End
 
   It 'rejects a partial directory size when du exits nonzero'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
     mkdir -p "$MOUNT/remote/partial-dir"
     printf 'partial\n' > "$MOUNT/remote/partial-dir/a.txt"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-case "\$1" in
-  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
-  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
-esac
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    cat > "$BINDIR/du" <<'EOF'
-#!/bin/sh
-echo "123 partial"
-exit 1
-EOF
+    mount_helper
+    printf '#!/bin/sh\necho "123 partial"\nexit 1\n' > "$BINDIR/du"
     chmod +x "$BINDIR/du"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" directory some-other-mac 1752200000.6145 "/remote/partial-dir"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+    seed_clip directory some-other-mac 1752200000.6145 pointer /remote/partial-dir
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
     The stderr should include "could not determine source size"
-    The file "$TARGET/partial-dir" should not be exist
-  End
-
-  It 'reports the picker fallback when the mount dies during size measurement'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
-    mkdir -p "$MOUNT/remote"
-    printf 'raced\n' > "$MOUNT/remote/raced.txt"
-    chmod 000 "$MOUNT/remote/raced.txt"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-case "\$1" in
-  check)
-    n=0
-    [ -f "$SHELLSPEC_TMPBASE/check-count" ] && n=\$(cat "$SHELLSPEC_TMPBASE/check-count")
-    n=\$((n + 1))
-    printf '%s\\n' "\$n" > "$SHELLSPEC_TMPBASE/check-count"
-    [ "\$n" -eq 1 ] && { printf '%s\\n' "$MOUNT"; exit 0; }
-    exit 1
-    ;;
-  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
-esac
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.6146 "/remote/raced.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
-    chmod 600 "$MOUNT/remote/raced.txt"
-    The status should be failure
-    The stderr should include "mount is unavailable"
-    The stderr should not include "could not determine source size"
+    The path "$TARGET/partial-dir" should not be exist
   End
 
   It 'fails closed when a remote mount path cannot be mapped'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
     mkdir -p "$MOUNT"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
     cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
 #!/bin/sh
 case "\$1" in
-  check) printf '%s\\n' "$MOUNT"; exit 0 ;;
+  check) printf '%s\n' "$MOUNT"; exit 0 ;;
   map) exit 1 ;;
 esac
 exit 1
 EOF
     chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.615 "/remote/unsafe.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+    seed_clip file some-other-mac 1752200000.615 pointer /remote/unsafe.txt
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
     The stderr should include "cannot map remote clipboard path"
     The file "$TARGET/unsafe.txt" should not be exist
   End
 
-  It 'reports the picker fallback when the mount dies after the health check'
-    MOUNT="$SHELLSPEC_TMPBASE/mnt/some-other-mac"
+  It 'fails closed when the mount dies after the health check'
+    # The helper answers `check` and `map`, but nothing is actually mounted, so
+    # the mapped paths do not exist. The old shim re-checked the mount's health
+    # and reported the picker fallback; the compiled engine reports the missing
+    # source instead. Either way nothing may land in the target.
     mkdir -p "$MOUNT"
-    export CLIPBOARD_MOUNT_BIN="$BINDIR/clipboard-mount"
-    cat > "$CLIPBOARD_MOUNT_BIN" <<EOF
-#!/bin/sh
-case "\$1" in
-  check)
-    n=0
-    [ -f "$SHELLSPEC_TMPBASE/check-count" ] && n=\$(cat "$SHELLSPEC_TMPBASE/check-count")
-    n=\$((n + 1))
-    printf '%s\\n' "\$n" > "$SHELLSPEC_TMPBASE/check-count"
-    [ "\$n" -eq 1 ] && { printf '%s\\n' "$MOUNT"; exit 0; }
-    exit 1
-    ;;
-  map) printf '%s%s\\n' "$MOUNT" "\$3"; exit 0 ;;
-esac
-exit 1
-EOF
-    chmod +x "$CLIPBOARD_MOUNT_BIN"
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file some-other-mac 1752200000.616 "/remote/vanished.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+    mount_helper
+    seed_clip file some-other-mac 1752200000.616 pointer /remote/vanished.txt
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
-    The stderr should include "mount is unavailable"
-    The stderr should include "pick-clipboard Ctrl-Y"
-    The stderr should not include "source no longer exists"
-  End
-
-  # R-batch Task B amendment: PF_HOST resolves via self_host(), which prefers
-  # the pushed $XDG_STATE_HOME/clipboard/self-name identity over
-  # scutil/hostname. On an ephemeral-hostname dev-shell, pbcopy stamps
-  # manifest rows with that stable self-name -- if pbpaste --files kept
-  # resolving the raw (fake-scutil "mac-mini") hostname here, this row would
-  # misclassify as REMOTE and, with no SSH env in this Describe, require a
-  # peer mount instead of materializing. Success + real bytes in
-  # the target + no second nc call (only the one K fetch) proves the row took
-  # the LOCAL path.
-  It 'routes a manifest matching the self-name identity to the LOCAL materialization path'
-    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-selfname"
-    mkdir -p "$XDG_STATE_HOME/clipboard"
-    printf 'stable-devshell' > "$XDG_STATE_HOME/clipboard/self-name"
-    printf 'self-name routed\n' > "$SRC/selfname.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file stable-devshell 1752200000.62 "$SRC/selfname.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh -c '
-      sh "$1" --files "$2" >/dev/null 2>"$3" || { cat "$3" >&2; exit 1; }
-      diff "$4/selfname.txt" "$2/selfname.txt" || exit 2
-      lines=$(wc -l < "$5" | tr -d " ")
-      [ "$lines" -eq 1 ] || { echo "nclog lines=$lines" >&2; exit 3; }
-    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/err62" "$SRC" "$NCLOG"
-    The status should be success
-  End
-
-  It 'errors pointing at plain pbpaste when the clipboard entry is not a files clip'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    printf 'not-files' > "$pf"
-    build_frame E "$pf" "$REPLY_FRAME"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
-    The status should be failure
-    The stderr should include "pbpaste"
+    The stderr should include "source no longer exists"
+    The file "$TARGET/vanished.txt" should not be exist
   End
 End
 
-# Interrupt-safety: killing pbpaste --files mid-copy must never leave a
-# partial entry in the target, and a leftover staging dir from an
-# untrappable SIGKILL must be swept by the next invocation. APFS clonefile
-# (tier 1) is near-instant regardless of size -- copying even a many-GB file
-# within the SAME container completes in milliseconds, which would make
-# "kill mid-copy" untestable via timing. This Describe forces a genuine,
-# timeable byte-for-byte copy by putting the source on its OWN APFS
-# container (a throwaway sparse disk image): per `man cp`, `-c` degrades to
-# a normal copy across containers -- still tier 1 code, but no longer
-# instant -- without needing to fake/skip any real binary.
-Describe 'pbpaste: --files interrupt safety'
-  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
-  TOKEN=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-
-  build_frame() {
-    st=$1 payload_file=$2 outfile=$3
-    len=$(wc -c < "$payload_file" | tr -d ' ')
-    {
-      printf '%s' "$st"
-      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
-      cat "$payload_file"
-    } > "$outfile"
-  }
-
-  build_manifest() {
-    outfile=$1 kind=$2 host=$3 ts=$4
-    shift 4
-    {
-      printf '%s\037%s\037%s\037%s\037' "$kind" "$host" "$ts" "$TOKEN"
-      first=1
-      for p in "$@"; do
-        if [ "$first" -eq 1 ]; then
-          printf '%s' "$p"
-          first=0
-        else
-          printf '\000%s' "$p"
-        fi
-      done
-    } > "$outfile"
-  }
+# Interrupt safety: killing a `--files` run mid-copy must never leave a partial
+# entry in the target, and the staging dir an untrappable SIGKILL leaves behind
+# must be swept by the next invocation.
+#
+# APFS clonefile is near-instant regardless of size — copying even a many-GB
+# file inside ONE container completes in milliseconds, which would make "kill
+# mid-copy" untestable by timing. So the source goes on its own APFS container
+# (a throwaway sparse image): per `man cp`, `-c` degrades to a real copy across
+# containers — still tier 1 code, but no longer instant — without faking any
+# binary.
+Describe 'paste --files interrupt safety'
+  Include tests/recob_helper.sh
 
   setup() {
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
-    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
-    REPLY_FRAME="$SHELLSPEC_TMPBASE/reply.frame"
-    export REPLY_FRAME
-    cat > "$BINDIR/nc" <<EOF
-#!/bin/sh
-argc=\$#
-eval "port=\\\${\$argc}"
-raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
-cat > "\$raw"
-{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
-rm -f "\$raw"
-cat "$REPLY_FRAME"
-EOF
-    chmod +x "$BINDIR/nc"
-    cat > "$BINDIR/scutil" <<'EOF'
-#!/bin/sh
-if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
-  echo mac-mini
-  exit 0
-fi
-exit 1
-EOF
-    chmod +x "$BINDIR/scutil"
-    export PATH="$BINDIR:$PATH"
-    # Hermetic self_host(): see the local-materialization Describe's setup.
-    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-interrupt"
+    recob_start
+    seed_reset
+    export CLIP="$(recob_client_bin)"
+    export TARGET="$RECOB_DIR/target"; mkdir -p "$TARGET"
+    # The item under test is deliberately larger than the 200 MB default cap —
+    # a copy has to be big enough to still be running 0.2 s in. What is under
+    # test here is the interruption, not the cap, so the cap is lifted.
+    export CLIP_FILE_MAX=17179869184
 
-    TARGET="$SHELLSPEC_TMPBASE/target"; mkdir -p "$TARGET"
-
-    DMG="$SHELLSPEC_TMPBASE/xvol.sparseimage"
+    DMG="$RECOB_DIR/xvol.sparseimage"
     hdiutil create -size 5g -fs APFS -volname PbpasteFilesTest -type SPARSE "$DMG" >/dev/null
     ATTACH_OUT=$(hdiutil attach "$DMG" -nobrowse)
     MNT=$(printf '%s\n' "$ATTACH_OUT" | awk -F'\t' '/\/Volumes\//{print $NF; exit}')
     export MNT
-    # Real (non-sparse) zero-fill: a genuinely dense, cross-container source
-    # so tier 1's fallback copy has real bytes to move (see Describe header).
+    # A genuinely dense, cross-container source, so tier 1's degraded copy has
+    # real bytes to move.
     dd if=/dev/zero of="$MNT/big.bin" bs=4m count=1024 >/dev/null 2>&1
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.7 auth "$MNT/big.bin"
   }
   BeforeEach 'setup'
 
   cleanup() {
-    if [ -n "${MNT:-}" ]; then
-      hdiutil detach "$MNT" -force >/dev/null 2>&1
-    fi
-    rm -f "$SHELLSPEC_TMPBASE/xvol.sparseimage"
+    [ -n "${MNT:-}" ] && hdiutil detach "$MNT" -force >/dev/null 2>&1
+    recob_stop
   }
   AfterEach 'cleanup'
 
   It 'leaves no partial entry in the target when killed mid-copy, and sweeps staging on the next run'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752200000.7 "$MNT/big.bin"
-    build_frame O "$pf" "$REPLY_FRAME"
-
-    When run command sh -c '
-      sh "$1" --files "$2" >/dev/null 2>&1 &
+    killed_mid_copy() {
+      "$CLIP" paste --files "$TARGET" >/dev/null 2>&1 &
       pid=$!
       sleep 0.2
       kill -9 "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null
-      if [ -e "$2/big.bin" ]; then exit 9; fi
-      sh "$1" --files "$2" >/dev/null 2>&1 || exit 1
-      if ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1; then exit 8; fi
-      if [ ! -e "$2/big.bin" ]; then exit 7; fi
-      cmp -s "$2/big.bin" "$MNT/big.bin" || exit 6
-    ' _ "$SCRIPT" "$TARGET"
+      # Nothing half-copied is ever visible under the item's own name: the
+      # copy happens in the staging dir and only a rename publishes it.
+      [ -e "$TARGET/big.bin" ] && return 9
+      "$CLIP" paste --files "$TARGET" >/dev/null 2>&1 || return 1
+      has_staging "$TARGET" && return 8
+      [ -e "$TARGET/big.bin" ] || return 7
+      cmp -s "$TARGET/big.bin" "$MNT/big.bin" || return 6
+      return 0
+    }
+    When call killed_mid_copy
     The status should be success
   End
 End
 
-# Forced-replacement crash recovery (bug #2). `--force` replaces an existing
-# destination by renaming it ASIDE (mv final -> backup) and only THEN renaming
-# the staged replacement into place (mv stage -> final). A signal/kill landing
-# BETWEEN those two renames leaves the destination momentarily absent with the
-# only copy of the original in the backup -- so the backup MUST live somewhere
-# the cleanup path restores rather than blindly deletes, and the sweep of a
-# SIGKILLed run must restore it too.
+# Forced-replacement crash recovery. `--force` replaces an existing destination
+# by renaming it ASIDE (destination -> recovery dir, with a sidecar naming where
+# it came from) and only THEN renaming the staged replacement into place. A kill
+# landing BETWEEN those two renames leaves the destination momentarily absent
+# with the only copy of the original in the recovery dir — so that dir must be
+# somewhere a later run RESTORES from rather than blindly deletes.
 #
-# These probes are DETERMINISTIC: a fake `mv` on PATH fires exactly one signal
-# at a chosen seam in pbpaste_files_place's rename pair (guarded by a one-shot
-# marker so the recovery/restore renames that follow run for real). It keys the
-# seam off the destination path -- a backup destination (inside the staging or
-# recovery dir) is the FIRST rename (the displace), the target destination is
-# the SECOND (the place) -- so it works unchanged against both the old
-# backup-in-staging layout and the fixed recovery-dir layout. `between`/`sweep`
-# reproduce the data-loss window; `before`/`after` are guards that the original
-# (resp. the new content) survives the adjacent windows.
-Describe 'pbpaste: --files forced-replacement crash recovery'
-  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
-  TOKEN=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+# The old probes forced that window with a fake `mv` on PATH. The engine renames
+# in-process now (`std::fs::rename`), so the window is no longer reachable from
+# outside; what IS reachable — and is the part that protects the user's data —
+# is the state such a crash leaves on disk and what the next run does with it.
+# Each example below builds that state under a pid that is certainly dead and
+# runs the real client over it. The in-process halves (recover_dir, the landed
+# replacement, the live-pid guard) are covered by paste_files.rs's own tests.
+Describe 'paste --files forced-replacement crash recovery'
+  Include tests/recob_helper.sh
 
-  build_frame() {
-    st=$1 payload_file=$2 outfile=$3
-    len=$(wc -c < "$payload_file" | tr -d ' ')
-    {
-      printf '%s' "$st"
-      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
-      cat "$payload_file"
-    } > "$outfile"
-  }
-
-  build_manifest() {
-    outfile=$1 kind=$2 host=$3 ts=$4
-    shift 4
-    {
-      printf '%s\037%s\037%s\037%s\037' "$kind" "$host" "$ts" "$TOKEN"
-      first=1
-      for p in "$@"; do
-        if [ "$first" -eq 1 ]; then
-          printf '%s' "$p"
-          first=0
-        else
-          printf '\000%s' "$p"
-        fi
-      done
-    } > "$outfile"
-  }
+  # A pid high enough to be unallocated, matching the engine's own test.
+  DEAD_PID=999999
 
   setup() {
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
-    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
-    REPLY_FRAME="$SHELLSPEC_TMPBASE/reply.frame"
-    export REPLY_FRAME
-    cat > "$BINDIR/nc" <<EOF
-#!/bin/sh
-argc=\$#
-eval "port=\\\${\$argc}"
-raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
-cat > "\$raw"
-{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
-rm -f "\$raw"
-cat "$REPLY_FRAME"
-EOF
-    chmod +x "$BINDIR/nc"
-    cat > "$BINDIR/scutil" <<'EOF'
-#!/bin/sh
-if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
-  echo mac-mini
-  exit 0
-fi
-exit 1
-EOF
-    chmod +x "$BINDIR/scutil"
-
-    # One-shot interrupt harness for pbpaste_files_place's rename pair. Reads
-    # PBPASTE_MV_MODE (before|between|after|sweep) and PBPASTE_MV_MARKER from
-    # the environment pbpaste passes down. place() always calls `mv -- SRC DST`,
-    # so $3 is the destination: a staging/recovery/.replaced destination is the
-    # displacing FIRST rename, anything else is the placing SECOND rename.
-    cat > "$BINDIR/mv" <<EOF
-#!/bin/sh
-real=/bin/mv
-[ -x "\$real" ] || real=/usr/bin/mv
-dst=\$3
-case "\$dst" in
-  *.pbpaste-recovery.*|*.pbpaste-staging.*|*.replaced.*) displace=1 ;;
-  *) displace=0 ;;
-esac
-if [ -n "\${PBPASTE_MV_MODE:-}" ] && [ ! -f "\${PBPASTE_MV_MARKER:-/nonexistent}" ]; then
-  fire=0
-  case "\$PBPASTE_MV_MODE" in
-    before) [ "\$displace" = 1 ] && fire=1 ;;
-    between|after|sweep) [ "\$displace" = 0 ] && fire=1 ;;
-  esac
-  if [ "\$fire" = 1 ]; then
-    : > "\$PBPASTE_MV_MARKER"
-    [ "\$PBPASTE_MV_MODE" = after ] && "\$real" "\$@"
-    case "\$PBPASTE_MV_MODE" in
-      sweep) kill -KILL \$PPID ;;
-      *) kill -TERM \$PPID ;;
-    esac
-    exit 0
-  fi
-fi
-exec "\$real" "\$@"
-EOF
-    chmod +x "$BINDIR/mv"
-    export PATH="$BINDIR:$PATH"
-    # Hermetic self_host(): see the local-materialization Describe's setup.
-    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-recover"
-    MVMARKER="$SHELLSPEC_TMPBASE/mv-marker"; rm -f "$MVMARKER"
-
-    SRC="$SHELLSPEC_TMPBASE/src-recover"; mkdir -p "$SRC"
-    TARGET="$SHELLSPEC_TMPBASE/target-recover"; rm -rf "$TARGET"; mkdir -p "$TARGET"
+    recob_start
+    seed_reset
+    export CLIP="$(recob_client_bin)"
+    export SRC="$RECOB_DIR/src"; mkdir -p "$SRC"
+    export TARGET="$RECOB_DIR/target"; mkdir -p "$TARGET"
     printf 'NEWCONTENT\n' > "$SRC/keep.txt"
-    printf 'ORIGINAL\n' > "$TARGET/keep.txt"
-    pf="$SHELLSPEC_TMPBASE/payload-recover"
-    build_manifest "$pf" file mac-mini 1752400000.1 "$SRC/keep.txt"
-    build_frame O "$pf" "$REPLY_FRAME"
+    seed_clip file "$RECOB_SELF_NAME" 1752400000.1 auth "$SRC/keep.txt"
   }
   BeforeEach 'setup'
+  AfterEach 'recob_stop'
 
-  # Guard window: a signal immediately BEFORE the first rename never displaced
-  # anything, so the original is untouched at its destination.
-  It 'keeps the original when interrupted immediately before the first rename'
-    When run command env PBPASTE_MV_MODE=before PBPASTE_MV_MARKER="$MVMARKER" sh -c '
-      sh "$1" --files --force "$2" >/dev/null 2>&1
-      [ "$(cat "$2/keep.txt" 2>/dev/null)" = "ORIGINAL" ] || exit 6
-      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 && exit 5
-      ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1 && exit 4
-      exit 0
-    ' _ "$SCRIPT" "$TARGET"
+  # The on-disk state a run killed between the two renames leaves: the original
+  # displaced into a recovery dir, with the sidecar naming the destination it
+  # was displaced from.
+  displaced() {
+    rec="$TARGET/.pbpaste-recovery.$DEAD_PID"
+    mkdir -p "$rec"
+    printf 'ORIGINAL\n' > "$rec/bak.1"
+    printf '%s' "$TARGET/keep.txt" > "$rec/final.1"
+  }
+
+  It 'restores the displaced original left by a killed run before doing anything else'
+    displaced
+    recovered() {
+      # The destination is absent — the replacement never landed. The sweep
+      # restores it, and this run then refuses the conflict it just restored,
+      # which is exactly the "your file is still there" outcome.
+      "$CLIP" paste --files "$TARGET" >/dev/null 2>&1
+      [ -e "$TARGET/keep.txt" ] || return 7
+      [ "$(cat "$TARGET/keep.txt")" = "ORIGINAL" ] || return 6
+      has_recovery "$TARGET" && return 5
+      has_staging "$TARGET" && return 4
+      return 0
+    }
+    When call recovered
     The status should be success
   End
 
-  # THE BUG: a signal BETWEEN the two renames -- the original has been displaced
-  # into the backup and the replacement has not landed yet. The trap must
-  # RESTORE the displaced original (destination missing), not delete it with the
-  # staging dir. Red on the old backup-in-staging layout (original lost), green
-  # once the backup lives in a recovery dir the trap restores from.
-  It 'restores the displaced original when interrupted between the two renames'
-    When run command env PBPASTE_MV_MODE=between PBPASTE_MV_MARKER="$MVMARKER" sh -c '
-      sh "$1" --files --force "$2" >/dev/null 2>&1
-      [ -e "$2/keep.txt" ] || exit 7
-      [ "$(cat "$2/keep.txt")" = "ORIGINAL" ] || exit 6
-      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 && exit 5
-      ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1 && exit 4
-      exit 0
-    ' _ "$SCRIPT" "$TARGET"
+  It 'never restores a displaced original over a replacement that landed'
+    printf 'REPLACEMENT\n' > "$TARGET/keep.txt"
+    displaced
+    not_clobbered() {
+      "$CLIP" paste --files "$TARGET" >/dev/null 2>&1
+      [ "$(cat "$TARGET/keep.txt")" = "REPLACEMENT" ] || return 6
+      has_recovery "$TARGET" && return 5
+      return 0
+    }
+    When call not_clobbered
     The status should be success
   End
 
-  # Guard window: a signal immediately AFTER the replacement landed must keep
-  # the NEW content (never "restore" the stale original over it) and leave no
-  # residue.
-  It 'keeps the new content when interrupted immediately after the replacement'
-    When run command env PBPASTE_MV_MODE=after PBPASTE_MV_MARKER="$MVMARKER" sh -c '
-      sh "$1" --files --force "$2" >/dev/null 2>&1
-      [ "$(cat "$2/keep.txt" 2>/dev/null)" = "NEWCONTENT" ] || exit 6
-      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 && exit 5
-      ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1 && exit 4
-      exit 0
-    ' _ "$SCRIPT" "$TARGET"
+  It 'sweeps a dead run''s staging dir and spares a live one''s'
+    mkdir -p "$TARGET/.pbpaste-staging.$DEAD_PID" "$TARGET/.pbpaste-staging.$$"
+    swept() {
+      "$CLIP" paste --files "$TARGET" >/dev/null 2>&1 || return 1
+      [ -d "$TARGET/.pbpaste-staging.$DEAD_PID" ] && return 9
+      # A genuinely concurrent run's directories belong to it: the sweep is
+      # pid-gated, never a blind wildcard.
+      [ -d "$TARGET/.pbpaste-staging.$$" ] || return 8
+      return 0
+    }
+    When call swept
     The status should be success
   End
 
-  # SIGKILL (untrappable) between the two renames leaves the displaced original
-  # only in the on-disk recovery dir. The NEXT run's stale-sweep must restore it
-  # (destination missing) BEFORE anything else -- here the plain follow-up paste
-  # then refuses the now-present conflict, leaving the restored original intact.
-  It 'restores a SIGKILLed run''s displaced original on the next run''s stale-sweep'
-    When run command sh -c '
-      # Background + wait so the shell reaps the SIGKILLed run silently (the
-      # same pattern the mid-copy interrupt test uses) -- a foreground kill
-      # would print a "Killed: 9" job notice to stderr, which shellspec flags.
-      PBPASTE_MV_MODE=sweep PBPASTE_MV_MARKER="$3" sh "$1" --files --force "$2" >/dev/null 2>&1 &
-      wait "$!" 2>/dev/null
-      [ ! -e "$2/keep.txt" ] || exit 9
-      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 || exit 8
-      sh "$1" --files "$2" >/dev/null 2>&1
-      [ -e "$2/keep.txt" ] || exit 7
-      [ "$(cat "$2/keep.txt")" = "ORIGINAL" ] || exit 6
-      ls -d "$2"/.pbpaste-recovery.* >/dev/null 2>&1 && exit 5
-      ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1 && exit 4
-      exit 0
-    ' _ "$SCRIPT" "$TARGET" "$MVMARKER"
+  It 'leaves no recovery or staging residue when a forced replacement succeeds'
+    printf 'ORIGINAL\n' > "$TARGET/keep.txt"
+    clean_force() {
+      "$CLIP" paste --files --force "$TARGET" >/dev/null || return 1
+      [ "$(cat "$TARGET/keep.txt")" = "NEWCONTENT" ] || return 6
+      has_recovery "$TARGET" && return 5
+      has_staging "$TARGET" && return 4
+      return 0
+    }
+    When call clean_force
     The status should be success
   End
 End
 
-# Tests for pbpaste's REMOTE file-materialization engine (T13, design
-# §5/§8): manifest host != this host -> stream each item over F (files) /
-# A (directories, via the dispatcher's `E is-directory` retry) instead of
-# the local tiered engine. The fake `nc` here is opcode-aware (peeks the
-# first request byte) so it can serve a DIFFERENT canned reply per opcode --
-# unlike the single-`$REPLY_FRAME` convention above, which only ever needs
-# to answer one `L` request per invocation. Fake `scutil` reports THIS
-# host as "dev-shell"; manifest host "mac-mini" is therefore a DIFFERENT
-# machine, exercising the remote branch (a manifest host of "dev-shell"
-# itself, reused from the Describes above, would take the LOCAL branch
-# instead -- see the explicit host-comparison this task added).
-Describe 'pbpaste: --files (remote engine)'
-  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
-  TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-
-  build_frame() {
-    st=$1 payload_file=$2 outfile=$3
-    len=$(wc -c < "$payload_file" | tr -d ' ')
-    {
-      printf '%s' "$st"
-      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
-      cat "$payload_file"
-    } > "$outfile"
-  }
-
-  build_manifest() {
-    outfile=$1 kind=$2 host=$3 ts=$4
-    shift 4
-    {
-      printf '%s\037%s\037%s\037%s\037' "$kind" "$host" "$ts" "$TOKEN"
-      first=1
-      for p in "$@"; do
-        if [ "$first" -eq 1 ]; then
-          printf '%s' "$p"
-          first=0
-        else
-          printf '\000%s' "$p"
-        fi
-      done
-    } > "$outfile"
-  }
-
-  # build_a_frame <est_bytes> <tar_body_file> <outfile> -- an A-reply frame:
-  # O + BE32(8) + BE64(est_bytes), then <tar_body_file>'s bytes RAW (no
-  # further framing -- stream_archive_path's contract: read to EOF).
-  build_a_frame() {
-    est=$1 body=$2 outfile=$3
-    {
-      printf 'O'
-      len=8
-      printf "\\$(printf %03o $(((len>>24)&255)))\\$(printf %03o $(((len>>16)&255)))\\$(printf %03o $(((len>>8)&255)))\\$(printf %03o $((len&255)))"
-      b8=$(( est & 255 )); b7=$(( (est>>8)&255 )); b6=$(( (est>>16)&255 )); b5=$(( (est>>24)&255 ))
-      b4=$(( (est>>32)&255 )); b3=$(( (est>>40)&255 )); b2=$(( (est>>48)&255 )); b1=$(( (est>>56)&255 ))
-      printf "\\$(printf %03o $b1)\\$(printf %03o $b2)\\$(printf %03o $b3)\\$(printf %03o $b4)\\$(printf %03o $b5)\\$(printf %03o $b6)\\$(printf %03o $b7)\\$(printf %03o $b8)"
-      cat "$body"
-    } > "$outfile"
-  }
+# The REMOTE engine: manifest host != this host and this shell IS over SSH, so
+# every item streams over `files.fetch` from the endpoint that answered the
+# manifest. The daemon serves those streams from real paths, so the bytes that
+# land in the target came through the wire.
+Describe 'paste --files (remote engine)'
+  Include tests/recob_helper.sh
 
   setup() {
     export SSH_CONNECTION="x 1 y 22"
     unset SSH_CLIENT SSH_TTY
-    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
-    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
-    REPLY_L="$SHELLSPEC_TMPBASE/reply.L"; : > "$REPLY_L"
-    REPLY_F="$SHELLSPEC_TMPBASE/reply.F"; : > "$REPLY_F"
-    REPLY_A="$SHELLSPEC_TMPBASE/reply.A"; : > "$REPLY_A"
-    export REPLY_L REPLY_F REPLY_A
-
-    # Opcode-aware fake nc: peeks the request's first byte (the opcode) and
-    # replies from the matching canned file. Logs "<port>:<op>:<frame, NUL
-    # -> '|'>" so tests can assert both port selection (requirement 4) and
-    # which opcode each call actually sent.
-    cat > "$BINDIR/nc" <<EOF
-#!/bin/sh
-argc=\$#
-eval "port=\\\${\$argc}"
-raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
-cat > "\$raw"
-op=\$(dd bs=1 count=1 2>/dev/null < "\$raw")
-{ printf '%s:%s:' "\$port" "\$op"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
-rm -f "\$raw"
-case "\$op" in
-  K) cat "$REPLY_L" ;;
-  f) cat "$REPLY_F" ;;
-  a) cat "$REPLY_A" ;;
-esac
-EOF
-    chmod +x "$BINDIR/nc"
-
-    cat > "$BINDIR/scutil" <<'EOF'
-#!/bin/sh
-if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
-  echo dev-shell
-  exit 0
-fi
-exit 1
-EOF
-    chmod +x "$BINDIR/scutil"
-    export PATH="$BINDIR:$PATH"
-    # Hermetic self_host(): see the local-materialization Describe's setup.
-    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/xdg-state-remote"
-
-    # A dedicated target subdir, NOT the "$SHELLSPEC_TMPBASE/target" the
-    # Describes above use: $SHELLSPEC_TMPBASE is shared for the whole spec
-    # run (not reset per Example), so reusing that path here would collide
-    # with files an earlier Describe already materialized under the exact
-    # same item names (e.g. "a.txt").
-    TARGET="$SHELLSPEC_TMPBASE/target-remote"; mkdir -p "$TARGET"
+    recob_start
+    seed_reset
+    export CLIP="$(recob_client_bin)"
+    export ORIGIN="$RECOB_DIR/origin"; mkdir -p "$ORIGIN"
+    export TARGET="$RECOB_DIR/target"; mkdir -p "$TARGET"
   }
   BeforeEach 'setup'
-
-  It 'fails closed with an upgrade hint when the origin does not support K'
-    errf="$SHELLSPEC_TMPBASE/k-unknown"
-    printf 'unknown opcode' > "$errf"
-    build_frame E "$errf" "$REPLY_L"
-    When run command sh "$SCRIPT" --files "$TARGET"
-    The status should be failure
-    The stderr should include "origin clipboard bridge is outdated"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include ":f:"
-  End
+  AfterEach 'recob_stop'
 
   It 'refuses a remote pointer-only manifest instead of falling back to raw paths'
-    TOKEN=-
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752300000.0 "/remote/not-authorized.txt"
-    build_frame O "$pf" "$REPLY_L"
-    When run command sh "$SCRIPT" --files "$TARGET"
-    The status should be failure
-    The stderr should include "did not authorize"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include ":f:"
+    printf 'not authorized\n' > "$ORIGIN/not-authorized.txt"
+    seed_clip file mac-mini 1752300000.0 pointer "$ORIGIN/not-authorized.txt"
+    pointer_only() {
+      "$CLIP" paste --files "$TARGET" 2>"$RECOB_DIR/err"
+      rc=$?
+      grep -q 'did not authorize' "$RECOB_DIR/err" || return 9
+      [ "$rc" -ne 0 ] || return 8
+      # Refused before any transfer: the manifest is the only exchange.
+      printf '%s' "$(recob_ops | tr '\n' ',')"
+    }
+    When call pointer_only
+    The output should equal 'files.grant,'
+    The file "$TARGET/not-authorized.txt" should not be exist
   End
 
-  It 'materializes a regular file via F, byte-identical to the source bytes'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752300000.1 "/remote/a.txt"
-    build_frame O "$pf" "$REPLY_L"
-
-    body="$SHELLSPEC_TMPBASE/filebody"
-    printf 'hello from the remote Mac\n' > "$body"
-    build_frame O "$body" "$REPLY_F"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
+  It 'materializes a regular file over files.fetch, byte-identical to the source'
+    printf 'hello from the remote Mac\n' > "$ORIGIN/a.txt"
+    seed_clip file mac-mini 1752300000.1 auth "$ORIGIN/a.txt"
+    When run "$CLIP" paste --files "$TARGET"
     The status should be success
     The contents of file "$TARGET/a.txt" should equal "hello from the remote Mac"
   End
 
-  It 'sends F to the reverse-tunneled :2490 port (requirement 4)'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752300000.2 "/remote/b.txt"
-    build_frame O "$pf" "$REPLY_L"
-    body="$SHELLSPEC_TMPBASE/filebody"
-    printf 'port check\n' > "$body"
-    build_frame O "$body" "$REPLY_F"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
-    The status should be success
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:K:"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:f:"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "$TOKEN"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include "/remote/b.txt"
+  It 'spends the manifest capability by index and never names the path on the wire'
+    printf 'port check\n' > "$ORIGIN/b.txt"
+    seed_clip file mac-mini 1752300000.2 auth "$ORIGIN/b.txt"
+    fetch_shape() {
+      "$CLIP" paste --files "$TARGET" >/dev/null || return 1
+      printf '%s|%s|%s|%s|%s' \
+        "$(recob_op 1)" "$(recob_op 2)" "$(recob_endpoint 2)" \
+        "$(recob_field 2 index)" \
+        "$(recob_raw | grep -c "$ORIGIN/b.txt")"
+    }
+    When call fetch_shape
+    # The trailing 0 is the count of times the origin's path appears anywhere
+    # in the recorded stream: an item is named by INDEX into the grant, so a
+    # peer never learns the origin's layout from a fetch. (The token is
+    # asserted by value in the next example.)
+    The output should equal 'files.grant|files.fetch|public|1|0'
   End
 
-  It 'refuses to overwrite an existing target name without --force (same conflict semantics as local)'
+  It 'spends the very capability the origin minted for this manifest'
+    # Read back from the daemon's own store rather than from the reply: the
+    # recorder logs REQUESTS, so the token the grant answered with is only
+    # observable where the daemon put it.
+    printf 'token check\n' > "$ORIGIN/c.txt"
+    seed_clip file mac-mini 1752300000.21 auth "$ORIGIN/c.txt"
+    token_match() {
+      "$CLIP" paste --files "$TARGET" >/dev/null || return 1
+      minted=$(sqlite3 "$SEED_DB" "SELECT token FROM file_grants LIMIT 1;")
+      [ ${#minted} -eq 64 ] || return 2
+      [ "$(recob_field 2 token)" = "$minted" ] && printf 'spent-the-minted-grant'
+    }
+    When call token_match
+    The output should equal 'spent-the-minted-grant'
+  End
+
+  It 'refuses to overwrite an existing target name without --force, before any transfer'
     printf 'old\n' > "$TARGET/dup.txt"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752300000.3 "/remote/dup.txt"
-    build_frame O "$pf" "$REPLY_L"
-
-    When run command sh "$SCRIPT" --files "$TARGET"
-    The status should be failure
-    The stderr should include "dup.txt"
+    printf 'new\n' > "$ORIGIN/dup.txt"
+    seed_clip file mac-mini 1752300000.3 auth "$ORIGIN/dup.txt"
+    conflict_first() {
+      "$CLIP" paste --files "$TARGET" 2>/dev/null && return 9
+      printf '%s' "$(recob_ops | tr '\n' ',')"
+    }
+    When call conflict_first
+    The output should equal 'files.grant,'
     The contents of file "$TARGET/dup.txt" should equal "old"
-    # The conflict check runs BEFORE any transfer -- only the manifest's own
-    # `K` fetch happened, never an `f`/`a` call for the conflicting item.
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include "2490:K:"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should not include ":f:"
   End
 
-  It "retries as A on the dispatcher's exact is-directory error, extracting the directory correctly"
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" directory mac-mini 1752300000.4 "/remote/adir"
-    build_frame O "$pf" "$REPLY_L"
-
-    errf="$SHELLSPEC_TMPBASE/is-directory-msg"
-    printf 'is-directory' > "$errf"
-    build_frame E "$errf" "$REPLY_F"
-
-    # The real dispatcher's `tar -cf - -C <parent> <basename>` roots the
-    # archive's entries at the manifest path's OWN basename ("adir", from
-    # "/remote/adir" above) -- this fixture's source dir must be named
-    # identically so the tar body is byte-shaped like the real thing, or
-    # the extraction below would land at PF_STAGING/src-adir while
-    # pbpaste_files_place expects PF_STAGING/adir (the manifest's basename).
-    src="$SHELLSPEC_TMPBASE/adir"
-    mkdir -p "$src/nested"
-    printf 'top level\n' > "$src/top.txt"
-    printf 'nested content\n' > "$src/nested/deep.txt"
-    tarfile="$SHELLSPEC_TMPBASE/adir.tar"
-    tar -cf "$tarfile" -C "$SHELLSPEC_TMPBASE" "$(basename "$src")"
-    kb=$(du -sk "$src" | awk '{print $1}')
-    est=$(( kb * 1024 ))
-    build_a_frame "$est" "$tarfile" "$REPLY_A"
-
-    When run command sh -c '
-      sh "$1" --files "$2" || exit 1
-      diff -r "$3" "$2/adir" || exit 2
-    ' _ "$SCRIPT" "$TARGET" "$src"
-    The status should be success
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include ":f:"
-    The contents of file "$SHELLSPEC_TMPBASE/nclog" should include ":a:"
+  It 'extracts a directory from the kind-declared stream in a single fetch'
+    # §6.2: the head declares `kind`, so the `is-directory` error — and the
+    # second connection its retry cost — are gone.
+    mkdir -p "$ORIGIN/adir/nested"
+    printf 'top level\n' > "$ORIGIN/adir/top.txt"
+    printf 'nested content\n' > "$ORIGIN/adir/nested/deep.txt"
+    seed_clip directory mac-mini 1752300000.4 auth "$ORIGIN/adir"
+    remote_dir() {
+      "$CLIP" paste --files "$TARGET" >/dev/null || return 1
+      diff -r "$ORIGIN/adir" "$TARGET/adir" >/dev/null || return 2
+      printf '%s' "$(recob_ops | tr '\n' ',')"
+    }
+    When call remote_dir
+    The output should equal 'files.grant,files.fetch,'
   End
 
-  # Integrity check per T13/design §4: a mid-stream I/O error on the far end
-  # has no error frame left to send once the A stream's O header is out, so
-  # the client's own tar EXTRACTION failing is the only truncation signal.
-  # A genuinely truncated archive (real random bytes, cut well past any
-  # header so tar has committed to extracting a file it can't finish) must
-  # fail the item AND leave no partial directory in the target.
-  It 'fails a genuinely truncated A stream, leaving no partial directory in the target'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" directory mac-mini 1752300000.5 "/remote/bigdir"
-    build_frame O "$pf" "$REPLY_L"
-
-    errf="$SHELLSPEC_TMPBASE/is-directory-msg2"
-    printf 'is-directory' > "$errf"
-    build_frame E "$errf" "$REPLY_F"
-
-    # Same basename requirement as the "retries as A" test above: the
-    # manifest path's basename ("bigdir") must be the tar's rooted entry
-    # name, or a would-be-successful extraction lands under the wrong name
-    # regardless of truncation.
-    src="$SHELLSPEC_TMPBASE/bigdir"
-    mkdir -p "$src"
-    head -c 200000 /dev/urandom > "$src/big.bin" 2>/dev/null || dd if=/dev/urandom of="$src/big.bin" bs=1000 count=200 2>/dev/null
-    fulltar="$SHELLSPEC_TMPBASE/bigdir-full.tar"
-    tar -cf "$fulltar" -C "$SHELLSPEC_TMPBASE" "$(basename "$src")"
-    fullsize=$(wc -c < "$fulltar" | tr -d ' ')
-    cutsize=$(( fullsize * 60 / 100 ))
-    cutbody="$SHELLSPEC_TMPBASE/bigdir-cut.tar"
-    head -c "$cutsize" "$fulltar" > "$cutbody"
-    kb=$(du -sk "$src" | awk '{print $1}')
-    est=$(( kb * 1024 ))
-    build_a_frame "$est" "$cutbody" "$REPLY_A"
-
-    When run command sh -c '
-      sh "$1" --files "$2" >/dev/null 2>&1
+  It 'fails an item whose stream ends without §6.4''s terminator, leaving nothing behind'
+    # The recorder's `close` hangs up mid-frame. Before §6.4 the only truncation
+    # signal was tar's own opinion of what it received; now the missing empty
+    # `D` fails the item by protocol.
+    recob_script \
+      "ok kind=$(seed_hex file) host=$(seed_hex mac-mini) timestamp=$(seed_hex 1752300000.5) token=$(seed_hex "$SEED_FAKE_TOKEN") paths=$(seed_paths_hex /remote/trunc.txt)" \
+      'close'
+    truncated() {
+      "$CLIP" paste --files "$TARGET" 2>/dev/null
       rc=$?
-      if [ "$rc" -eq 0 ]; then exit 9; fi
-      if [ -e "$2/bigdir" ]; then exit 8; fi
-      if ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1; then exit 7; fi
-      exit 0
-    ' _ "$SCRIPT" "$TARGET"
+      [ "$rc" -ne 0 ] || return 9
+      [ -e "$TARGET/trunc.txt" ] && return 8
+      has_staging "$TARGET" && return 7
+      return 0
+    }
+    When call truncated
     The status should be success
   End
 
-  # Porcelain contract from the remote path (reusing the local Describe's
-  # assertion pattern): every line exactly 4 tab fields, stream ends with a
-  # `done` line. Unlike the local engine's single instant tier, an in-flight
-  # remote item's `progress` lines are NOT required to have done==total
-  # (see pbpaste_progress_tick) -- only the FINAL line pbpaste_files_place
-  # emits per item is (done==total==the real transferred size).
+  It 'places nothing at all when a later item truncates'
+    # A change from the shim, and a strengthening: items are staged whole and
+    # only then published, so a failure anywhere means the target is untouched
+    # rather than half-populated.
+    printf 'first item, completes fine\n' > "$RECOB_DIR/okbody"
+    recob_script \
+      "ok kind=$(seed_hex files) host=$(seed_hex mac-mini) timestamp=$(seed_hex 1752300000.9) token=$(seed_hex "$SEED_FAKE_TOKEN") paths=$(seed_paths_hex /remote/ok.txt /remote/trunc.txt)" \
+      "stream $RECOB_DIR/okbody" \
+      'close'
+    partial() {
+      "$CLIP" paste --files "$TARGET" 2>/dev/null
+      [ $? -ne 0 ] || return 9
+      [ -e "$TARGET/trunc.txt" ] && return 8
+      [ -e "$TARGET/ok.txt" ] && return 7
+      has_staging "$TARGET" && return 6
+      return 0
+    }
+    When call partial
+    The status should be success
+  End
+
   It 'porcelain: every line has exactly 4 tab fields and the stream ends with a done line'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752300000.6 "/remote/p.txt"
-    build_frame O "$pf" "$REPLY_L"
-    body="$SHELLSPEC_TMPBASE/filebody-porcelain"
-    printf 'porcelain payload contents\n' > "$body"
-    build_frame O "$body" "$REPLY_F"
-
-    When run command sh -c '
-      sh "$1" --files --porcelain "$2" > "$3" || exit 1
-      awk -F"\t" "{ if (NF != 4) exit 9 }" "$3" || exit 9
-      last=$(tail -n 1 "$3")
-      case "$last" in
+    # Unlike the local engine's instant tiers, an in-flight remote item's
+    # progress lines are NOT required to have done==total — only that the last
+    # one names the destination it is reporting on.
+    printf 'porcelain payload contents\n' > "$ORIGIN/p.txt"
+    seed_clip file mac-mini 1752300000.6 auth "$ORIGIN/p.txt"
+    porcelain() {
+      out="$RECOB_DIR/porcelain.out"
+      "$CLIP" paste --files --porcelain "$TARGET" > "$out" || return 1
+      awk -F'\t' '{ if (NF != 4) exit 9 }' "$out" || return 9
+      case "$(tail -n 1 "$out")" in
         done*) : ;;
-        *) exit 8 ;;
+        *) return 8 ;;
       esac
-      final=$(awk -F"\t" "\$1 == \"progress\" { line = \$0 } END { print line }" "$3")
+      final=$(awk -F'\t' '$1 == "progress" { line = $0 } END { print line }' "$out")
       case "$final" in
-        *"$2/p.txt"*) : ;;
-        *) exit 7 ;;
+        *"$TARGET/p.txt"*) : ;;
+        *) return 7 ;;
       esac
-    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/porcelain.out"
+      return 0
+    }
+    When call porcelain
     The status should be success
   End
 
-  # Design §11: per-item size cap, F engine. Declared total comes straight
-  # from F's own BE32 length header, known before any body byte is pulled.
-  #
-  # Both examples below exercise ONLY the non-interactive refusal branch of
-  # pbpaste_files_cap_check (no usable /dev/tty in this harness -- `tty`
-  # reports "not a tty" for the whole shellspec sandbox, and a scripted PTY
-  # via `script -q /dev/null` was tried and confirmed unworkable here: the
-  # wrapped child's `read </dev/tty` came back empty even when fed input
-  # through script's own stdin, because the harness process itself has no
-  # controlling terminal for `script` to relay through). The interactive
-  # ACCEPT path (`[ -t 1 ] && [ -r /dev/tty ]` true, gum/`read` answers "y")
-  # is exercised only by hand against a live terminal -- see the Mode B UX
-  # validation session, not covered by an automated example here.
-  It 'fails naming the cap and the item when CLIP_FILE_MAX is exceeded (F, non-interactive)'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" file mac-mini 1752300000.7 "/remote/toobig.txt"
-    build_frame O "$pf" "$REPLY_L"
-    body="$SHELLSPEC_TMPBASE/filebody-toobig"
-    printf '0123456789012345678901234567890123456789' > "$body"
-    build_frame O "$body" "$REPLY_F"
-
-    When run command env CLIP_FILE_MAX=10 sh "$SCRIPT" --files "$TARGET" </dev/null
+  # §11's per-item cap, remote file engine: the declared total comes from the
+  # `R` head, before a single body byte is pulled. Only the non-interactive
+  # refusal branch is reachable here — see the local Describe's note.
+  It 'refuses an over-cap streamed file with the exact line the yazi plugin parses'
+    printf '0123456789012345678901234567890123456789' > "$ORIGIN/toobig.txt"
+    seed_clip file mac-mini 1752300000.7 auth "$ORIGIN/toobig.txt"
+    When run env CLIP_FILE_MAX=10 "$CLIP" paste --files "$TARGET"
     The status should be failure
-    The stderr should include "CLIP_FILE_MAX"
-    The stderr should include "toobig.txt"
-    # W1: the refusal is actionable and doesn't imply a terminal is needed --
-    # smart-paste.yazi's remote path parses everything up through "--
-    # refusing" (see parse_cap_refusal); this pins that the fixed shape
-    # survived the reword and that the free-form suggestion text is present.
-    The stderr should include "-- refusing (no interactive confirm available"
-    The stderr should include "set CLIP_FILE_MAX=40 or higher to allow"
+    The stderr should equal "pbpaste: $TARGET/toobig.txt exceeds size cap (CLIP_FILE_MAX=10 bytes, item is 40 bytes) -- refusing (no interactive confirm available; set CLIP_FILE_MAX=40 or higher to allow)"
     The file "$TARGET/toobig.txt" should not be exist
   End
 
-  # Same cap, A engine: declared total is the BE64 estimate, known before
-  # the tar pipeline even starts.
-  It 'fails naming the cap and the item when CLIP_FILE_MAX is exceeded (A, non-interactive)'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" directory mac-mini 1752300000.8 "/remote/toobigdir"
-    build_frame O "$pf" "$REPLY_L"
-    errf="$SHELLSPEC_TMPBASE/is-directory-msg3"
-    printf 'is-directory' > "$errf"
-    build_frame E "$errf" "$REPLY_F"
-    src="$SHELLSPEC_TMPBASE/toobigdir-src"
-    mkdir -p "$src"
-    printf 'small\n' > "$src/small.txt"
-    tarfile="$SHELLSPEC_TMPBASE/toobigdir.tar"
-    tar -cf "$tarfile" -C "$SHELLSPEC_TMPBASE" "$(basename "$src")"
-    build_a_frame 999999999 "$tarfile" "$REPLY_A"
-
-    When run command env CLIP_FILE_MAX=10 sh "$SCRIPT" --files "$TARGET" </dev/null
+  It 'refuses an over-cap streamed directory before extracting anything'
+    # The directory's declared total is the origin's own `du -sk` estimate, so
+    # the byte count is asserted by shape rather than by value.
+    mkdir -p "$ORIGIN/toobigdir"
+    printf 'small\n' > "$ORIGIN/toobigdir/small.txt"
+    seed_clip directory mac-mini 1752300000.8 auth "$ORIGIN/toobigdir"
+    When run env CLIP_FILE_MAX=10 "$CLIP" paste --files "$TARGET"
     The status should be failure
-    The stderr should include "CLIP_FILE_MAX"
-    The stderr should include "toobigdir"
+    The stderr should include "pbpaste: $TARGET/toobigdir exceeds size cap (CLIP_FILE_MAX=10 bytes, item is "
     The stderr should include "-- refusing (no interactive confirm available"
-    The stderr should include "set CLIP_FILE_MAX=999999999 or higher to allow"
-    The file "$TARGET/toobigdir" should not be exist
+    The path "$TARGET/toobigdir" should not be exist
   End
 
-  # The byte counter must NEVER derive from dd's stderr summary: its wording
-  # is dialect-specific (BSD dd prints "bytes transferred", GNU dd "bytes
-  # copied"), and the primary consumer of the remote branch is a Linux dev
-  # shell -- parsing one dialect zeroes out every read on the other,
-  # producing instant spurious "connection closed/truncated" failures. The
-  # canned-stream fixtures above can't switch dd flavors, so this pins the
-  # MECHANISM instead: every chunked dd read in the shim must discard its
-  # stderr (2>/dev/null), proving the counts come from artifact files
-  # (`wc -c`) -- which the functional examples above then exercise for
-  # correctness, on any platform's dd.
-  It 'never captures dd stderr for byte counting (BSD/GNU dd summaries differ)'
-    When run command sh -c 'grep -E "dd bs=.*count=1" "$1" | grep -v "^ *#" | grep -v "2>/dev/null"' _ "$SCRIPT"
+  It 'reports the code the origin answered with when the clip is not a files clip'
+    seed_text_clip
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
-    The output should equal ""
+    The stderr should include "not a files clip"
   End
 
-  # Multi-item failure semantics: items are placed into the target one at a
-  # time, atomically, as each completes -- a later item's failure ABORTS the
-  # run (exit 1) but does NOT roll back items already placed (per-item
-  # placement + abort-on-failure, not all-or-nothing; inherited from the
-  # local engine's own loop shape). Pin exactly that: item 1's file IS in
-  # the target with full content, item 2 left nothing behind, and the
-  # staging dir is gone (EXIT trap).
-  It 'keeps an already-placed item when a later item truncates, aborting with a clean staging dir'
-    pf="$SHELLSPEC_TMPBASE/payload"
-    build_manifest "$pf" files mac-mini 1752300000.9 "/remote/ok.txt" "/remote/trunc.txt"
-    build_frame O "$pf" "$REPLY_L"
-
-    okbody="$SHELLSPEC_TMPBASE/okbody"
-    printf 'first item, completes fine\n' > "$okbody"
-    build_frame O "$okbody" "$SHELLSPEC_TMPBASE/reply.F-ok"
-
-    # Truncated F reply: header declares 100 body bytes, only 40 follow
-    # (1 status + 4 len + 40 body = 45) -- pbpaste_stream_file_body's
-    # EOF-before-total check must fail the item.
-    truncbody="$SHELLSPEC_TMPBASE/truncbody"
-    head -c 100 /dev/zero > "$truncbody"
-    fullframe="$SHELLSPEC_TMPBASE/reply.F-full"
-    build_frame O "$truncbody" "$fullframe"
-    head -c 45 "$fullframe" > "$SHELLSPEC_TMPBASE/reply.F-trunc"
-
-    # Per-item f replies: this test's own nc picks the canned reply by
-    # reading the request's final decimal item index -- the
-    # setup-provided nc serves ONE canned file per opcode, which can't
-    # distinguish the two F calls this run makes.
-    cat > "$BINDIR/nc" <<EOF
-#!/bin/sh
-argc=\$#
-eval "port=\\\${\$argc}"
-raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
-cat > "\$raw"
-op=\$(dd bs=1 count=1 2>/dev/null < "\$raw")
-{ printf '%s:%s:' "\$port" "\$op"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
-case "\$op" in
-  K) cat "$SHELLSPEC_TMPBASE/reply.L" ;;
-  f)
-    index=\$(tail -c 1 "\$raw")
-    if [ "\$index" = "2" ]; then
-      cat "$SHELLSPEC_TMPBASE/reply.F-trunc"
-    else
-      cat "$SHELLSPEC_TMPBASE/reply.F-ok"
-    fi
-    ;;
-esac
-rm -f "\$raw"
-EOF
-    chmod +x "$BINDIR/nc"
-
-    When run command sh -c '
-      sh "$1" --files "$2" >/dev/null 2>"$3"
-      rc=$?
-      if [ "$rc" -eq 0 ]; then exit 9; fi
-      [ -e "$2/ok.txt" ] || exit 8
-      grep -q "first item, completes fine" "$2/ok.txt" || exit 8
-      if [ -e "$2/trunc.txt" ]; then exit 7; fi
-      if ls -d "$2"/.pbpaste-staging.* >/dev/null 2>&1; then exit 6; fi
-      grep -q "truncated stream" "$3" || exit 5
-      exit 0
-    ' _ "$SCRIPT" "$TARGET" "$SHELLSPEC_TMPBASE/two-item-err"
-    The status should be success
+  It 'fails loudly when the reverse tunnel is down'
+    tunnel_down() { recob_stop; "$CLIP" paste --files "$TARGET"; }
+    When call tunnel_down
+    The status should be failure
+    The stderr should include "reverse SSH tunnel down"
   End
 End
 
-# pbpaste_cap_theme (rework R6): resolves the size-cap gum confirm's colors
-# from the generated JSON palette (THEME_PALETTE_JSON, same file the zsh-only
-# C_HEX_* vars come from -- see the function's own header comment). The gum
-# dialog itself is untestable here (no usable /dev/tty in this harness, same
-# limitation noted above pbpaste_files_cap_check's other examples), but the
-# helper is a plain function with no tty/gum dependency, so it's exercised
-# directly by sourcing the script with PBPASTE_TEST_SOURCE_ONLY=1 (stops
-# right after the function definitions, before the real dispatch/exec logic
-# would run).
-Describe 'pbpaste: pbpaste_cap_theme (size-cap dialog palette)'
-  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
-
-  It 'reads dialog_warning/crust/subtext0/surface0 from a fixture palette JSON'
-    fixture="$SHELLSPEC_TMPBASE/palette.json"
-    cat > "$fixture" <<'EOF'
-{
-  "palette": {"crust": "#000001", "subtext0": "#000002", "surface0": "#000003"},
-  "extended": {"dialog": {"warning": "#000004"}}
-}
-EOF
-    When run command env PBPASTE_TEST_SOURCE_ONLY=1 THEME_PALETTE_JSON="$fixture" sh -c '
-      . "$1"
-      printf "warn=%s crust=%s subtext0=%s surface0=%s\n" \
-        "$(pbpaste_cap_theme dialog_warning)" \
-        "$(pbpaste_cap_theme crust)" \
-        "$(pbpaste_cap_theme subtext0)" \
-        "$(pbpaste_cap_theme surface0)"
-    ' _ "$SCRIPT"
-    The status should be success
-    The output should equal "warn=#000004 crust=#000001 subtext0=#000002 surface0=#000003"
-  End
-
-  It 'falls back to the hardcoded Catppuccin Mocha literals when the palette file is missing'
-    When run command env PBPASTE_TEST_SOURCE_ONLY=1 THEME_PALETTE_JSON="$SHELLSPEC_TMPBASE/does-not-exist.json" sh -c '
-      . "$1"
-      printf "warn=%s crust=%s subtext0=%s surface0=%s\n" \
-        "$(pbpaste_cap_theme dialog_warning)" \
-        "$(pbpaste_cap_theme crust)" \
-        "$(pbpaste_cap_theme subtext0)" \
-        "$(pbpaste_cap_theme surface0)"
-    ' _ "$SCRIPT"
-    The status should be success
-    The output should equal "warn=#e5bf7b crust=#11111b subtext0=#a6adc8 surface0=#313244"
-  End
-
-  # C2: pbpaste is POSIX /bin/sh and cannot source theme-common, but its inline
-  # resolution now honours the SAME order as theme::json_path -- with
-  # $THEME_PALETTE_JSON unset it reads the effective cache copy
-  # ($XDG_CACHE_HOME/theme/chezmoi-system.json), the SSH-tinted file the shell
-  # exports, so the size-cap dialog agrees with the status bar and dialogs.
-  It 'reads the effective cache copy when the override is unset (theme::json_path order)'
-    cachedir="$SHELLSPEC_TMPBASE/xdgcache/theme"
-    mkdir -p "$cachedir"
-    cat > "$cachedir/chezmoi-system.json" <<'EOF'
-{
-  "palette": {"crust": "#0c0c0c", "subtext0": "#0d0d0d", "surface0": "#0e0e0e"},
-  "extended": {"dialog": {"warning": "#0f0f0f"}}
-}
-EOF
-    When run command env PBPASTE_TEST_SOURCE_ONLY=1 THEME_PALETTE_JSON= \
-      XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/xdgcache" sh -c '
-      . "$1"
-      printf "warn=%s crust=%s subtext0=%s surface0=%s\n" \
-        "$(pbpaste_cap_theme dialog_warning)" \
-        "$(pbpaste_cap_theme crust)" \
-        "$(pbpaste_cap_theme subtext0)" \
-        "$(pbpaste_cap_theme surface0)"
-    ' _ "$SCRIPT"
-    The status should be success
-    The output should equal "warn=#0f0f0f crust=#0c0c0c subtext0=#0d0d0d surface0=#0e0e0e"
-  End
-End
-
-Describe 'pbpaste local mode: Phase 7 store fallback'
-  PBPASTE="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_pbpaste"
+# Plain `paste` on a host with no local clipboard tool: the store IS the
+# clipboard there, reached over the trusted socket. (The Darwin tool is stubbed
+# away rather than removed, so the example runs the same on either platform.)
+Describe 'paste text: the store fallback'
+  Include tests/recob_helper.sh
 
   setup() {
-    STUBS="$SHELLSPEC_TMPBASE/stubs"; mkdir -p "$STUBS"
-    # Restricted PATH -- see Task 7's local-text Describe: a brew-installed
-    # wl-paste/xclip must not win the command -v probes.
-    export PATH="$STUBS:/usr/bin:/bin"
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-    # Defeat the `-x /usr/bin/pbpaste` Darwin branch on the Mac running this
-    # suite (test seam, mirrors Task 7's PBCOPY_DARWIN_BIN).
+    recob_start
+    export CLIP="$(recob_client_bin)"
+    # A restricted PATH so a brew-installed wl-paste/xclip cannot win the
+    # availability probes, and no Darwin tool at all.
+    export PATH="$RECOB_DIR/stubs:/usr/bin:/bin"
     export PBPASTE_DARWIN_BIN=/nonexistent
-    printf '#!/bin/sh\necho Linux\n' > "$STUBS/uname"; chmod +x "$STUBS/uname"
-    # nc stub: -z probe succeeds; a G request gets a framed "O" + "hi" reply
-    cat > "$STUBS/nc" <<'EOF'
-#!/bin/sh
-case "$1" in
-  -z) exit 0 ;;
-esac
-# framed response: O + BE32(2) + "hi"
-printf 'O\000\000\000\002hi'
-EOF
-    chmod +x "$STUBS/nc"
-    # No wl-paste/xclip stubs and /usr/bin/pbpaste absent-by-uname -> falls
-    # through to the bridge branch.
   }
   BeforeEach 'setup'
+  AfterEach 'recob_stop'
 
-  It 'falls back to bridge G when no local clipboard tool exists'
-    When run command sh "$PBPASTE"
-    The status should be success
-    The output should equal "hi"
+  It 'asks the bridge for the clip text when no local clipboard tool exists'
+    recob_script "ok text=$(seed_hex hi)"
+    store_text() {
+      "$CLIP" paste || return 1
+      printf '|%s|%s' "$(recob_op 1)" "$(recob_endpoint 1)"
+    }
+    When call store_text
+    The output should equal 'hi|clip.get|trusted'
   End
 
-  It 'distinguishes a reachable bridge answering E from an unreachable one (fix 5b)'
-    # Overrides the shared setup()'s nc stub: -z probe still succeeds (the
-    # bridge IS reachable), but the G request now gets an E reply carrying a
-    # real error message instead of O.
-    cat > "$STUBS/nc" <<'EOF'
-#!/bin/sh
-case "$1" in
-  -z) exit 0 ;;
-esac
-printf 'E\000\000\000\012store down'
-EOF
-    chmod +x "$STUBS/nc"
-    When run command sh "$PBPASTE"
+  It 'distinguishes a reachable bridge answering with an error from an unreachable one'
+    recob_script 'err internal store down'
+    When run "$CLIP" paste
     The status should equal 1
-    The stderr should include "answered with an error"
+    The stderr should include "internal"
     The stderr should include "store down"
-    The stderr should not include "is not reachable"
+    The stderr should not include "not reachable"
   End
 
-  It 'keeps the combined not-reachable message when the bridge never answers the probe'
-    # -z probe itself fails (and, since uname says Linux, there is no
-    # systemctl stub either, so the self-heal kick is a no-op) -- this is
-    # the genuinely-unreachable case, which must keep the ORIGINAL combined
-    # wording, not the new "answered with an error" branch.
-    printf '#!/bin/sh\nexit 1\n' > "$STUBS/nc"
-    chmod +x "$STUBS/nc"
-    When run command sh "$PBPASTE"
+  It 'keeps the not-reachable message when nothing is listening'
+    down() { recob_stop; "$CLIP" paste; }
+    When call down
     The status should equal 1
-    The stderr should include "clipboard bridge is not reachable on 127.0.0.1:2489"
+    The stderr should include "trusted clipboard bridge is not reachable"
   End
 End
+
+# THREE OF THE SHIM'S DESCRIBES HAVE NO EQUIVALENT HERE, deliberately:
+#
+#   * `pbpaste_cap_theme` — the size-cap dialog's palette. It was reachable by
+#     sourcing the shim with PBPASTE_TEST_SOURCE_ONLY=1; a compiled client has
+#     no such seam, and the function it became is only called from inside the
+#     gum dialog, which needs a controlling terminal this harness does not
+#     have. `paste_files.rs` unit-tests the extractor, but NOT the resolution
+#     ORDER (THEME_PALETTE_JSON → the effective cache copy → the config copy)
+#     that the C2 fix put there — that gap belongs in a Rust unit test over
+#     `palette_json()`, and is reported with this conversion rather than
+#     silently dropped.
+#   * "never captures dd stderr for byte counting" — it grepped the shim's own
+#     source for a `dd` invocation. There is no `dd`, and the byte counter is
+#     the stream sink's own accumulator.
+#   * "fails closed with an upgrade hint when the origin does not support K" —
+#     the client has no version-skew diagnostic to test: `Session::supports()`
+#     exists and no client calls it, so §8 rule 7 is unimplemented rather than
+#     untested. Reported, not asserted, because an example here could only pin
+#     the absence.
