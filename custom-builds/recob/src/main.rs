@@ -23,10 +23,15 @@ const IMPL: &str = match option_env!("RECOB_IMPL") {
 };
 
 const USAGE: &str = "\
-usage: recobd [--record] [--port <n>] [--socket <path>] [--no-public] [--no-trusted]
+usage: recobd [--record] [--capture] [--port <n>] [--socket <path>]
+              [--no-public] [--no-trusted]
 
   --record          recording seam (spec §11.1): tee decoded exchanges to
                     RECOB_RECORD_LOG and answer from RECOB_RECORD_SCRIPT
+  --capture         observe the pasteboard and write clipboard history rows
+                    (spec §14.1/§14.2, macOS only). Opt-in so that nothing —
+                    a test daemon above all — touches the live store without
+                    being asked to; the production unit passes it at cutover
   --port <n>        public endpoint port (default 2489, loopback only)
   --socket <path>   trusted endpoint socket (default ~/.local/state/cb.sock)
   --no-public       do not serve the public endpoint
@@ -36,12 +41,16 @@ With LISTEN_FDS set (systemd socket activation, spec §3.2) the listening
 sockets are adopted from fd 3 up and nothing is bound.
 
 Environment:
-  RECOB_TIMEOUT_S   exchange timeout in seconds (default 2, spec §5.2)
-  RECOB_IMPL        build identity reported in the capabilities frame
+  RECOB_TIMEOUT_S            exchange timeout in seconds (default 2, spec §5.2)
+  RECOB_IMPL                 build identity reported in the capabilities frame
+  RECOB_CAPTURE_POLL_MS      capture poll interval (default 500)
+  RECOB_CAPTURE_PASTEBOARD   named pasteboard to observe instead of the general
+                             one (test/diagnostic seam)
 ";
 
 struct Args {
     record: bool,
+    capture: bool,
     port: u16,
     socket: PathBuf,
     public: bool,
@@ -51,6 +60,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         record: false,
+        capture: false,
         port: DEFAULT_PUBLIC_PORT,
         socket: listen::default_trusted_socket(),
         public: true,
@@ -60,6 +70,7 @@ fn parse_args() -> Result<Args, String> {
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "--record" => args.record = true,
+            "--capture" => args.capture = true,
             "--no-public" => args.public = false,
             "--no-trusted" => args.trusted = false,
             "--port" => {
@@ -75,6 +86,11 @@ fn parse_args() -> Result<Args, String> {
     }
     if !args.public && !args.trusted {
         return Err("--no-public and --no-trusted leave nothing to serve".to_string());
+    }
+    // §14.7: the Linux build has no pasteboard to observe. Refusing loudly
+    // beats a daemon that silently captures nothing.
+    if args.capture && !cfg!(target_os = "macos") {
+        return Err("--capture requires macOS (spec §14.7)".to_string());
     }
     Ok(args)
 }
@@ -154,6 +170,19 @@ fn main() -> ExitCode {
                 }
                 None => log!("no host identity, so no credential fixture was written"),
             }
+        }
+    }
+
+    // §14.2: the capture loop, opted into with --capture. The tracker is
+    // shared so the loop recognizes the daemon's own future writes (§6.2);
+    // Phase 4's clip operations take the other end of it.
+    #[cfg(target_os = "macos")]
+    if args.capture {
+        let tracker = std::sync::Arc::new(recobd::platform::RegtypeTracker::default());
+        let config = recobd::platform::macos::CaptureConfig::from_env();
+        if let Err(e) = recobd::platform::macos::start_capture(config, tracker) {
+            log!("cannot start the capture loop: {e}");
+            return ExitCode::FAILURE;
         }
     }
 

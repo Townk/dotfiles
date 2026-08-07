@@ -26,11 +26,13 @@ make test      # cargo fmt --check, clippy -D warnings, cargo test
 make install   # → ~/.local/libexec/recobd
 ```
 
-Two dependencies, `sha2` and `subtle`, both required by §9.2 and both pinned by
-`probes/` first. Everything else is std: threads are the per-connection task
-boundary (§3.4), socket timeouts are §5.2's, `FromRawFd` is all §3.2's socket
-activation needs, and `/dev/urandom` is the CSPRNG §9.2 names. The one libc call
-made by hand is `umask`, in `listen.rs`.
+Cross-platform dependencies: `sha2` and `subtle` (both required by §9.2 and
+pinned by `probes/` first) and `rusqlite` with bundled SQLite (the store,
+§14.2). On macOS only, the `objc2` crates carry the platform layer (§14.1);
+their feature lists were likewise pinned by `probes/`. Everything else is std:
+threads are the per-connection task boundary (§3.4), socket timeouts are §5.2's,
+`FromRawFd` is all §3.2's socket activation needs, and `/dev/urandom` is the
+CSPRNG §9.2 names. The one libc call made by hand is `umask`, in `listen.rs`.
 
 The credential lives at `$XDG_STATE_HOME/clipboard/accepted-token`, created at
 startup if absent or invalid, mode 0600 under a 0700 directory. A daemon serving
@@ -55,6 +57,18 @@ the tier and policy table with a single enforcement call site (§9.1, §9.3, §9
 pre-authentication limits (§3.5), per-endpoint rate buckets (§9.5), and
 subtractive exposure (§9.6).
 
+Phase 3 — the platform layer (§14): the native pasteboard behind
+`src/platform/` (macOS only, §14.7 — the Linux build compiles it out and keeps
+the store, the sockets, the codec and the policy table), the capture pipeline
+absorbed from the Hammerspoon watcher (§14.2: the sensitive-UTI refusal, the
+password-manager deny-list, the empty/whitespace rejection, the 5 MB image cap,
+classification, `type_hash` dedup), the store writer with the Lua writer's
+retention sweeps and `file_authorities`/`file_grants` rules, and §14.6's
+register-type tracking against `changeCount` with no sidecar file. Capture is
+**opt-in** (`recobd --capture`) so a test daemon can never touch the live
+store; the production unit passes the flag at cutover. Until Phase 7 retires
+the Lua writer, both writers capture — §14.4 expects the duplicate rows.
+
 The operation registry holds `host.identity` and nothing else, as proof that
 named dispatch works. Its §9.3 policy row lives on the registry row itself, so an
 operation cannot exist without a tier.
@@ -64,9 +78,9 @@ or check belongs, the code says so rather than stubbing it:
 
 | Absent | Lands in |
 | --- | --- |
-| the pasteboard, the store, the absorbed watcher | Phase 3 |
 | the other thirteen operations and their policy rows, `grant` checking, streaming, per-field validation | Phase 4 |
 | `pbcopy` / `pbpaste`, proof verification client-side, and the §7.3 old-client shim | Phase 5 |
+| retiring the Lua writer (until then two writers capture, §14.4) | Phase 7 |
 | the `run_onchange` build hook and the unit changes | Phase 8 |
 
 The thirteen remaining policy rows wait for Phase 4 because they arrive *with*
@@ -83,7 +97,16 @@ LISTEN_FDS=2 LISTEN_PID=… recobd    # adopt listeners on fds 3 and 4, binding
                                     # nothing — what systemd's Accept=no passes
                                     # (§3.2); tests/activation.rs sets this up
 recobd --record                     # the observation seam (§11.1)
+recobd --capture                    # also observe the pasteboard and write
+                                    # history rows (§14.2, macOS only)
 ```
+
+`--capture` polls `changeCount` every 500 ms (`RECOB_CAPTURE_POLL_MS`) and can
+be pointed at a named pasteboard instead of the general one with
+`RECOB_CAPTURE_PASTEBOARD` — the seam `tests/capture_macos.rs` uses so the
+suite never touches the live clipboard. One further live check exists behind
+`cargo test --test capture_macos -- --ignored`; it observes the general
+pasteboard, and saves and restores it.
 
 `--record` reads `RECOB_RECORD_LOG`, `RECOB_RECORD_SCRIPT` and
 `RECOB_RECORD_ENDPOINT`. It decodes with the production decoder, so a client

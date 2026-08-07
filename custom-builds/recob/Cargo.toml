@@ -9,15 +9,18 @@ publish = false
 [workspace]
 exclude = ["probes", "bench"]
 
-# Two dependencies, both required by §9.2, both already pinned by probes/ — so a
-# version that compiles for a probe is a version known to compile here:
+# Cross-platform dependencies:
 #
-#   sha2   — the handshake digest. §1.1 measured `shasum` at 14.82 ms per spawn
-#            against 0.000282 ms in-process, and that measurement is what chose
-#            the implementation language: shelling out would spend the whole
-#            per-connection saving on authentication.
-#   subtle — constant-time comparison, which §9.2 makes a requirement rather than
-#            an aspiration. zsh has no primitive offering it.
+#   sha2     — the handshake digest (§9.2) and `type_hash` (§14.2). §1.1 measured
+#              `shasum` at 14.82 ms per spawn against 0.000282 ms in-process, and
+#              that measurement is what chose the implementation language:
+#              shelling out would spend the whole per-connection saving on
+#              authentication.
+#   subtle   — constant-time comparison, which §9.2 makes a requirement rather
+#              than an aspiration. zsh has no primitive offering it.
+#   rusqlite — the store (§14.2). `bundled` because the daemon must not depend on
+#              a system SQLite version; §13's build hook budgets its measured
+#              11.4 s cold build.
 #
 # Everything else stays std: threads for the per-connection task boundary
 # (docs/recob-protocol-spec.md §3.4), SO_RCVTIMEO/SO_SNDTIMEO for §5.2's
@@ -27,6 +30,28 @@ exclude = ["probes", "bench"]
 [dependencies]
 sha2 = "0.10"
 subtle = "2"
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+# The macOS platform layer (§14.1, §14.2). Versions and feature lists were pinned
+# by probes/ first — a missing objc2 feature surfaces as a "no method named ..."
+# error far from its cause, so they are not guessable. §14.7: none of this exists
+# in the Linux build.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = [
+    "NSPasteboard",
+    "NSWorkspace",
+    "NSRunningApplication",
+] }
+objc2-foundation = { version = "0.3", features = [
+    "NSData",
+    "NSString",
+    "NSArray",
+    "NSPropertyList",
+    "NSValue",
+    "NSDictionary",
+    "NSURL",
+] }
 
 [lib]
 name = "recobd"
