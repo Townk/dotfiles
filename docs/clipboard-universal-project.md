@@ -1072,7 +1072,7 @@ dotfiles repo. The full spec is in docs/clipboard-universal-project.md —
 READ IT FIRST, in full. It is the source of truth; this prompt only orients
 you.
 
-Repo: /Users/KZ9PCF/.local/share/chezmoi (a chezmoi source directory; files
+Repo: ~/.local/share/chezmoi (a chezmoi source directory; files
 here are templates/sources rendered into $HOME, so after every file write run
 `chezmoi apply`).
 
