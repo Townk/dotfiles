@@ -207,18 +207,6 @@ fn a_wire_version_mismatch_is_unrecoverable() {
 }
 
 #[test]
-fn a_stranger_gets_the_banner_and_a_close_rather_than_a_recob_frame() {
-    // §7.3 specifies a diagnostic in the *old* framing for a pre-RECOB client.
-    // That shim is later-phase work, so this build closes and logs instead of
-    // writing a frame the caller could not parse.
-    let dir = testutil::tempdir("stranger");
-    let ctx = ctx_with_host(dir.path(), "boxA");
-    let mut client = served(ctx, Endpoint::Trusted);
-    client.preamble_only(b"H\x00\x00\x00\x00\x00");
-    assert!(client.next_raw().is_none());
-}
-
-#[test]
 fn a_client_may_not_send_a_response_frame() {
     let dir = testutil::tempdir("wrong-kind");
     let ctx = ctx_with_host(dir.path(), "boxA");
@@ -307,4 +295,46 @@ fn either_side_may_close_after_a_complete_exchange() {
     drop(client);
     // Nothing to assert but the absence of a panic: the handler thread sees EOF
     // at a frame boundary and returns, which §5.5 permits without a goodbye.
+}
+
+/// §7.3: an old client's opcode frame gets a diagnostic in the *old* framing —
+/// `E`, BE32 length, message — so its existing error path renders something
+/// actionable instead of hanging. A shim, not compatibility: nothing is
+/// served, and the connection closes.
+#[test]
+fn a_pre_recob_caller_gets_the_old_framing_diagnostic() {
+    use std::io::{Read, Write};
+
+    let dir = testutil::tempdir("pre-recob");
+    let ctx = ctx_with_host(dir.path(), "boxA");
+    let (mut server, mut client) = std::os::unix::net::UnixStream::pair().unwrap();
+    let admission =
+        recobd::limits::Limits::admit(&ctx.limits, Endpoint::Trusted).expect("admitted");
+    std::thread::spawn(move || {
+        recobd::session::serve(&mut server, Endpoint::Trusted, "test", &ctx, admission);
+    });
+
+    // What today's `pbpaste` writes: opcode `G`, BE32 length 0.
+    client.write_all(b"G\x00\x00\x00\x00").unwrap();
+
+    let mut reply = Vec::new();
+    client.read_to_end(&mut reply).unwrap();
+    // The daemon writes its own preamble and banner on accept, before it can
+    // know the caller is old; the diagnostic follows them.
+    let tail = &reply[reply.len().saturating_sub(160)..];
+    let start = tail
+        .windows(5)
+        .position(|w| w[0] == b'E' && u32::from_be_bytes([w[1], w[2], w[3], w[4]]) > 0)
+        .expect("an old-format E frame");
+    let len = u32::from_be_bytes([
+        tail[start + 1],
+        tail[start + 2],
+        tail[start + 3],
+        tail[start + 4],
+    ]) as usize;
+    let message = String::from_utf8_lossy(&tail[start + 5..start + 5 + len]);
+    assert!(
+        message.contains("speaks RECOB v1") && message.contains("chezmoi apply"),
+        "the message names the fix and the side: {message}"
+    );
 }

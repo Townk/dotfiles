@@ -81,12 +81,20 @@ carried-across behaviors are worth naming: the M path's mount enrichment
 (Finder-native paste — absent from the RECOB spec, preserved rather than
 silently dropped) and the `W` scripts' environment surgery.
 
+Phase 5 — the client contract (§8) as one shared implementation: `recob-wire`
+carries the codec, the credential primitives and `client::Session`, and links
+no platform framework so the clients cannot (asserted with `otool -L`). The
+`system-clip` binary is `copy`/`paste` with the shims' full surface —
+`--content`, `--manifest`, and the `--files` materialization engine. The nvim
+provider is rewritten and **staged** in `clients/`; §9.2's credential push is
+in `ssh-prepare-connection`; §7.3's pre-RECOB diagnostic answers an old caller
+in the old framing.
+
 Not implemented, by phase rather than by omission — where a later phase's field
 or check belongs, the code says so rather than stubbing it:
 
 | Absent | Lands in |
 | --- | --- |
-| `pbcopy` / `pbpaste`, proof verification client-side, and the §7.3 old-client shim | Phase 5 |
 | retiring the Lua writer (until then two writers capture, §14.4) | Phase 7 |
 | the `run_onchange` build hook and the unit changes | Phase 8 |
 

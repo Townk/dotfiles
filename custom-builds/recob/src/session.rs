@@ -316,11 +316,17 @@ pub fn serve<S: Socket>(
         // RECOB frame to a peer that by definition cannot parse one would be
         // worse than the log line.
         Preamble::NotRecob(head) => {
+            // §7.3: the caller predates this protocol, so the answer is a
+            // frame in the *old* format — `E`, BE32 length, message — which
+            // its existing error path renders. A diagnostic shim, not
+            // compatibility: it serves no operation, and it is deleted once
+            // both machines have been applied.
             log!(
-                "{} {peer}: not a RECOB peer (first bytes {:?}); closing",
+                "{} {peer}: not a RECOB peer (first bytes {:?}); answering the pre-RECOB diagnostic",
                 endpoint.as_str(),
                 String::from_utf8_lossy(&head)
             );
+            send(stream, &pre_recob_diagnostic(), endpoint, peer);
             return;
         }
         Preamble::Short(n) => {
@@ -552,6 +558,20 @@ pub fn serve<S: Socket>(
             }
         }
     }
+}
+
+/// §7.3's message to a pre-RECOB caller, in the old `E`/BE32/message framing.
+/// The wording is the spec's, verbatim: `pbcopy` prints such a message as-is,
+/// and it is the one path loud enough to be worth the shim.
+pub fn pre_recob_diagnostic() -> Vec<u8> {
+    const MESSAGE: &[u8] =
+        b"this endpoint now speaks RECOB v1; the client that called it is behind \
+-- run chezmoi apply on the machine you are calling from";
+    let mut out = Vec::with_capacity(5 + MESSAGE.len());
+    out.push(b'E');
+    out.extend_from_slice(&(MESSAGE.len() as u32).to_be_bytes());
+    out.extend_from_slice(MESSAGE);
+    out
 }
 
 /// §9.2 step 3, with §11.1's two directives for exercising a client's
