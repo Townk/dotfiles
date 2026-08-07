@@ -36,10 +36,19 @@ impl Default for Timeouts {
             .and_then(|v| v.trim().parse::<f64>().ok())
             .filter(|s| *s > 0.0)
             .map_or(Duration::from_secs(2), Duration::from_secs_f64);
+        // The action deadline gets its own knob: an op that makes the origin
+        // DO something can block on a first-use consent dialog, and the
+        // caller tuning that wait must not have to shorten-proof the
+        // ordinary exchange deadline to do it.
+        let action = std::env::var("RECOB_ACTION_TIMEOUT_S")
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|s| *s > 0.0)
+            .map_or(Duration::from_secs(20), Duration::from_secs_f64);
         Timeouts {
             preamble,
             exchange,
-            action: Duration::from_secs(20),
+            action,
         }
     }
 }

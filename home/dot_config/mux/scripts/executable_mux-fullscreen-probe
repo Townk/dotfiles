@@ -75,13 +75,12 @@ is_remote() {
   clipbridge::probe 127.0.0.1 "$BRIDGE_PORT"
 }
 
+# One `window.fullscreen.state` against the origin; the answer is the reply's
+# `state` field rather than a bare-string payload, and the true/false
+# validation below still stands between the wire and the state file.
 ask_peer() {
-  local req
-  req=$(mktemp "${TMPDIR:-/tmp}/mux-fs-req.XXXXXX") || return 1
-  print -rn -- "fullscreen-state" > "$req"
   local out
-  out="$(clipbridge::request 127.0.0.1 "$BRIDGE_PORT" W "$req" 2>/dev/null)" || { rm -f "$req"; return 1; }
-  rm -f "$req"
+  out="$(clipbridge::fullscreen_state 2>/dev/null)" || return 1
   [[ -n "$out" ]] || return 1
   print -rn -- "$out"
 }

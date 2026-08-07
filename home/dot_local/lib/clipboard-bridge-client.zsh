@@ -1,159 +1,134 @@
 #!/usr/bin/env zsh
-# clipboard-bridge-client.zsh — minimal client for the clipboard-bridge framing
-# protocol (docs/clipboard-universal-project.md §11). Sends one framed request
-#   <1-byte opcode><4-byte BE length><payload>
-# to a loopback TCP endpoint and reports whether the server answered 'O' (ok).
+# clipboard-bridge-client.zsh — the shell's doorway to the RECOB bridge
+# (docs/recob-protocol-spec.md). Every function here is a thin, op-shaped
+# wrapper over `system-bridge`, the generic invoker installed at
+# ~/.local/libexec/system-bridge: one connection, one §4.3 request, one
+# reply. The binary is the client (§8 — it speaks the wire, spawns nothing);
+# these functions only shape arguments for their callers, so no opcode, frame
+# byte or payload layout survives in shell.
 #
-# Cross-machine transport stays TCP: macOS OpenSSH silently ignores
-# StreamLocalBindUnlink for remote Unix-socket forwards, so an unclean
-# disconnect strands a stale socket file. Endpoints: 2490 = reverse-forwarded
-# peer, 2489 = public local listener. Privileged local file operations are the
-# deliberate exception: they use the service-owned mode-0600 cb.sock, which is
-# never forwarded and whose lifecycle is controlled by socat/systemd.
+# Callers: pick-clipboard (clip.get / clip.set / clip.set.rich /
+# clip.set.files / store.persist.text), common.zsh's notify (osd.notify),
+# mux-fullscreen-probe (window.fullscreen.state), terminal-toggle-fullscreen
+# (window.fullscreen.toggle).
 #
-# Used by pick-clipboard's Ctrl-Y (T set-with-regtype, C ship-rich to the peer).
-# Response *payloads* (G/R) are consumed by
-# the nvim provider over libuv, not here, so this only needs the status byte.
-#
-# Byte-safe: runs under `setopt nomultibyte` so the BE-length bytes and any
-# binary payload (an image blob) are counted/written as raw bytes, and no payload
-# ever passes through a $(...) capture (which truncates NULs).
-zmodload zsh/stat    2>/dev/null   # zstat: payload length without spawning wc
-zmodload zsh/system  2>/dev/null   # sysread: byte-exact copy without spawning cat
+# CLIPBRIDGE_TIMEOUT_S keeps its meaning — it maps onto the client's §5.2
+# exchange deadline (RECOB_TIMEOUT_S). Ops that make the origin DO something
+# (a window animation, a first-use macOS Automation consent dialog) go out
+# with --action, which selects the longer §5.2 action deadline instead.
 
-# CLIPBRIDGE_TIMEOUT_S overrides the wire timeout (default 2s). Two seconds
-# is right for a clipboard read — the far end answers from memory — but an op
-# that makes the ORIGIN DO something can legitimately take longer: a window
-# animation, or a first-use macOS Automation consent dialog that blocks the
-# AppleScript until a human clicks it. Timing out there reports "refused" for
-# an action that actually happened, which is worse than waiting (observed on
-# the very first `W fullscreen-toggle`).
-
-# clipbridge::probe <host> <port>
-#   0 iff something is accepting on host:port (a live forward). Cheap connect
-#   scan — this is the honest "bridge-up" test (a down/stale tunnel refuses).
-clipbridge::probe() {
-  nc -z -w 1 "$1" "$2" >/dev/null 2>&1
+# clipbridge::bin -> the generic invoker. SYSTEM_BRIDGE_BIN is the seam the
+# spec suite points at its own build (the CLIPBOARD_MOUNT_BIN precedent).
+clipbridge::bin() {
+  print -rn -- "${SYSTEM_BRIDGE_BIN:-$HOME/.local/libexec/system-bridge}"
 }
 
-# clipbridge::local_socket -> trusted endpoint path. This socket is owned by
-# socat/systemd, mode 0600, and is never an SSH forwarding endpoint.
+# clipbridge::probe <host> <port>
+#   0 iff something is accepting on host:port (a live forward). §6.1:
+#   reachability is not an operation — this is §5.2's connect result
+#   (ECONNREFUSED down, anything else up), computed by the client library,
+#   never an authenticated round trip. Strictly more accurate than the old
+#   `nc -z`, which reported down for a bound but saturated listener.
+clipbridge::probe() {
+  "$(clipbridge::bin)" probe "$1" "$2" 2>/dev/null
+}
+
+# clipbridge::local_socket -> trusted endpoint path. The socket is
+# service-owned, mode 0600, never an SSH forwarding endpoint; the binary
+# resolves the same default, so this exists for callers that need the PATH
+# (a diagnostic message), not for dialing.
 clipbridge::local_socket() {
   print -rn -- "${CLIPBOARD_BRIDGE_LOCAL_SOCKET:-$HOME/.local/state/cb.sock}"
 }
 
-# clipbridge::send <host> <port> <opcode> <payload_file>
-#   Streams <opcode><BE32 len><payload-bytes> to host:port via `nc` and returns
-#   0 iff the response begins with the 'O' status byte. Non-zero on an
-#   unreachable endpoint, timeout, or an 'E' error response.
-#
-#   Assembled with BUILTINS only: zstat for the length, arithmetic expansion for
-#   the four BE bytes, and a sysread loop to move the payload. Every one of those
-#   used to be a process — wc, four `$(printf %03o)` subshells, two mktemps, cat,
-#   dd and rm, eleven of them to send one frame — which measured 133ms against a
-#   91ms floor for the bare nc exchange through socat. The frame now goes
-#   straight into nc's stdin and the status byte is read straight back out, so
-#   the filesystem is not involved at all.
-#
-#   Returning on the status BYTE rather than on nc's exit is deliberate: the
-#   contract is "the far end answered O", and waiting for the connection to
-#   finish tearing down afterwards buys the caller nothing.
-clipbridge::send() {
-  emulate -L zsh              # local options: resets the caller's errexit etc.
-  setopt nomultibyte          # count/emit bytes, not decoded characters
-  local host=$1 port=$2 opcode=$3 payload_file=$4
-  [[ -r "$payload_file" ]] || return 1
-  local -a pstat
-  zstat -A pstat +size "$payload_file" || return 1
-  local -i plen=$pstat[1]
-  # `read -k` takes its input from the TERMINAL unless handed an explicit fd,
-  # so the reply arrives on a named descriptor rather than plain stdin.
-  local byte="" rfd
-  exec {rfd}< <(
-    {
-      printf '%s' "$opcode"
-      printf '%b%b%b%b' \
-        "\\0$(( [##8] (plen >> 24) & 255 ))" \
-        "\\0$(( [##8] (plen >> 16) & 255 ))" \
-        "\\0$(( [##8] (plen >> 8) & 255 ))" \
-        "\\0$(( [##8] plen & 255 ))"
-      while sysread -o 1; do :; done
-    } < "$payload_file" |
-      nc -w "${CLIPBRIDGE_TIMEOUT_S:-2}" "$host" "$port" 2>/dev/null
-  )
-  read -t "${CLIPBRIDGE_TIMEOUT_S:-2}" -k 1 -u $rfd byte 2>/dev/null
-  exec {rfd}<&-
-  [[ "$byte" == "O" ]]
+# clipbridge::call [--peer|--action|--raw <field>|--stdin <name>]... <op> [name=value]...
+#   The generic escape hatch: everything passes straight through to
+#   `system-bridge call`. CLIPBRIDGE_TIMEOUT_S maps onto the §5.2 exchange
+#   deadline unless the caller already set RECOB_TIMEOUT_S explicitly.
+clipbridge::call() {
+  if [[ -n "${CLIPBRIDGE_TIMEOUT_S:-}" && -z "${RECOB_TIMEOUT_S:-}" ]]; then
+    RECOB_TIMEOUT_S="$CLIPBRIDGE_TIMEOUT_S" "$(clipbridge::bin)" call "$@"
+  else
+    "$(clipbridge::bin)" call "$@"
+  fi
 }
 
-# clipbridge::send_unix <socket> <opcode> <payload_file>
-# Trusted-local sibling of clipbridge::send. The framing is identical; only
-# the transport differs, so no secret or caller-asserted trust bit crosses
-# the wire.
-clipbridge::send_unix() {
-  emulate -L zsh
-  setopt nomultibyte
-  local sock=$1 opcode=$2 payload_file=$3
-  [[ -r "$payload_file" ]] || return 1
-  local -i plen
-  plen=$(wc -c < "$payload_file" | tr -d ' ')
-  local reqf respf
-  reqf=$(mktemp "${TMPDIR:-/tmp}/clipbridge-req.XXXXXX") || return 1
-  respf=$(mktemp "${TMPDIR:-/tmp}/clipbridge-resp.XXXXXX") ||
-    { rm -f "$reqf"; return 1; }
-  {
-    printf '%s' "$opcode"
-    printf "\\$(printf %03o $(( (plen >> 24) & 255 )))\\$(printf %03o $(( (plen >> 16) & 255 )))\\$(printf %03o $(( (plen >> 8) & 255 )))\\$(printf %03o $(( plen & 255 )))"
-    cat "$payload_file"
-  } > "$reqf"
-  nc -U -w "${CLIPBRIDGE_TIMEOUT_S:-2}" "$sock" < "$reqf" > "$respf" 2>/dev/null
-  local status_byte
-  status_byte=$(dd if="$respf" bs=1 count=1 2>/dev/null)
-  rm -f "$reqf" "$respf"
-  [[ "$status_byte" == "O" ]]
+# --- the peer's clipboard (public endpoint over the reverse tunnel) ---------
+
+# clipbridge::clip_get_raw <field>
+#   One clip.get against the peer, exactly one reply field's bytes on stdout:
+#   text, regtype, timestamp or host. Byte-exact — never routed through a
+#   $(...) capture here, so redirect to a file for text that may carry NULs.
+clipbridge::clip_get_raw() {
+  clipbridge::call --peer --raw "$1" clip.get
 }
 
-# clipbridge::request <host> <port> <opcode> [payload_file]
-#   Like clipbridge::send, but on an 'O' response it writes the response
-#   PAYLOAD bytes to stdout (byte-exact via head/tail, never a $(...) capture,
-#   so embedded NULs and any trailing newline survive) and returns 0. Non-zero
-#   on an unreachable endpoint, timeout, or an 'E' response. This is the read
-#   counterpart used by the G/R/H ops whose payload the caller needs (the live
-#   peer-clipboard entry, §22); clipbridge::send stays the write/status-only path.
-#
-#   Extraction is header-length-agnostic: the response is exactly one frame
-#   (<status><BE32 len><payload>) followed by EOF, so the payload is simply
-#   "everything after the 5-byte header" — `tail -c +6`. No per-byte dd, so a
-#   large clip doesn't pay a byte-at-a-time read.
-clipbridge::request() {
-  emulate -L zsh
-  setopt nomultibyte
-  local host=$1 port=$2 opcode=$3 payload_file=${4:-}
-  local -i plen=0
-  [[ -n "$payload_file" && -r "$payload_file" ]] && plen=$(wc -c < "$payload_file" | tr -d ' ')
-  local reqf respf
-  reqf=$(mktemp "${TMPDIR:-/tmp}/clipbridge-req.XXXXXX")   || return 1
-  respf=$(mktemp "${TMPDIR:-/tmp}/clipbridge-resp.XXXXXX") || { rm -f "$reqf"; return 1; }
-  {
-    printf '%s' "$opcode"
-    printf "\\$(printf %03o $(( (plen >> 24) & 255 )))\\$(printf %03o $(( (plen >> 16) & 255 )))\\$(printf %03o $(( (plen >> 8) & 255 )))\\$(printf %03o $(( plen & 255 )))"
-    (( plen > 0 )) && cat "$payload_file"
-  } > "$reqf"
-  nc -w "${CLIPBRIDGE_TIMEOUT_S:-2}" "$host" "$port" < "$reqf" > "$respf" 2>/dev/null
-  local st; st=$(head -c 1 "$respf" 2>/dev/null)
-  if [[ "$st" != "O" ]]; then rm -f "$reqf" "$respf"; return 1; fi
-  tail -c +6 "$respf" 2>/dev/null
-  rm -f "$reqf" "$respf"
-  return 0
+# clipbridge::clip_get
+#   The whole current-clip answer in one connection (§6.3's collapse of the
+#   old G+R+S+H quartet): every reply field as `name=<hex>` lines on stdout.
+clipbridge::clip_get() {
+  clipbridge::call --peer clip.get
 }
 
-# clipbridge::get <host> <port>      -> peer clipboard text (op G) on stdout.
-# clipbridge::get_host <host> <port> -> peer hostname (op H) on stdout.
-# clipbridge::get_ts <host> <port>   -> peer's CURRENT-clip copy-time (op S,
-#   decimal last_ts or empty) on stdout -- lets a consumer sort a live peer
-#   entry chronologically instead of always pinning it to the top (X9,
-#   pick-clipboard §22). See clip::op_get_ts in the dispatcher for the exact
-#   resolution/fallback chain.
-clipbridge::get()      { clipbridge::request "$1" "$2" G; }
-clipbridge::get_host() { clipbridge::request "$1" "$2" H; }
-clipbridge::get_ts()   { clipbridge::request "$1" "$2" S; }
+# clipbridge::set_text <regtype>   (text bytes on stdin)
+#   clip.set on the peer: regtype v|l|b rides as a field, the text bytes ride
+#   stdin so any byte survives.
+clipbridge::set_text() {
+  clipbridge::call --peer --stdin text clip.set "regtype=$1"
+}
+
+# clipbridge::ship_rich <uti>   (blob bytes on stdin)
+#   clip.set.rich on the peer: one typed pasteboard payload (an image, a PDF).
+#   The public endpoint's §9.3 UTI allow-list is the daemon's to enforce.
+clipbridge::ship_rich() {
+  clipbridge::call --peer --stdin blob clip.set.rich "uti=$1"
+}
+
+# --- this machine's store and pasteboard (trusted socket) -------------------
+
+# clipbridge::persist_text <host> <kind> <app> <regtype>   (text on stdin)
+#   store.persist.text on THIS machine's bridge — the history row a
+#   materialized live-peer entry deserves.
+clipbridge::persist_text() {
+  clipbridge::call --stdin text store.persist.text \
+    "host=$1" "kind=$2" "app=$3" "regtype=$4"
+}
+
+# clipbridge::set_files_paths   (NUL-joined absolute paths on stdin)
+#   clip.set.files{paths}: put a file manifest on this machine's pasteboard.
+clipbridge::set_files_paths() {
+  clipbridge::call --stdin paths clip.set.files
+}
+
+# clipbridge::set_files_id <rowid>
+#   clip.set.files{clip_id}: restore a store row's manifest by id. The old
+#   `id:<rowid>` prefix is gone — named fields carry the discriminator
+#   (§6.1), and clip_id is the bare decimal rowid.
+clipbridge::set_files_id() {
+  clipbridge::call clip.set.files "clip_id=$1"
+}
+
+# --- the origin's screen (public endpoint over the reverse tunnel) ----------
+
+# clipbridge::notify <style> <icon> <sound> <origin_host>   (text on stdin)
+#   osd.notify: style is the closed enum plain|ansi — the Lua global name the
+#   old wire carried never crosses anymore (P5); the handler maps the enum to
+#   its callable internally.
+clipbridge::notify() {
+  clipbridge::call --peer --stdin text osd.notify \
+    "style=$1" "icon=$2" "sound=$3" "origin_host=$4"
+}
+
+# clipbridge::fullscreen_state -> `true` or `false` on stdout.
+clipbridge::fullscreen_state() {
+  clipbridge::call --peer --raw state window.fullscreen.state
+}
+
+# clipbridge::fullscreen_toggle <terminal>
+#   window.fullscreen.toggle for ghostty|wezterm. --action: the origin DOES
+#   something — a window animation, possibly gated on a first-use macOS
+#   Automation consent dialog a human must click — and timing out there
+#   reports "refused" for an action that actually happened.
+clipbridge::fullscreen_toggle() {
+  clipbridge::call --peer --action window.fullscreen.toggle "terminal=$1"
+}

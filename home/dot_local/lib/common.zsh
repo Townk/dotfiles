@@ -629,35 +629,22 @@ _notify_bridge_target() {
   mux::is_remote
 }
 
-# _notify_bridge_send FN ICON SOUND TEXT — ship one `n` frame to the origin.
-# The payload is US-joined (the O/M convention) and written to a file because
-# clipbridge::send streams from one; the text may carry newlines and ANSI, and
-# a file keeps them byte-exact.
+# _notify_bridge_send STYLE ICON SOUND TEXT — one `osd.notify` to the origin.
+# STYLE is the closed enum plain|ansi (§6.6): the Lua global name the old `n`
+# payload carried never crosses the wire anymore — the handler maps the enum
+# to its callable internally (P5). The text rides the invoker's stdin, so
+# newlines and ANSI stay byte-exact with no scratch file to outlive.
 #
 # No pre-flight probe: the send IS the reachability test, and against loopback
 # a missing listener refuses immediately rather than burning the timeout.
-#
-# The payload file is a bare mktemp owned by this function, NOT common::tmpfile
-# — deliberately, and the same way clipbridge::send handles its own request and
-# response files. notify's contract invites callers to background it
-# (`notify … &`), and a backgrounded caller usually outlives its parent; the
-# process scratch dir is torn down by the parent's EXIT trap, which would
-# delete this file mid-flight and make the send fail with nothing on the wire.
-# Confirmed by copy-pwd, whose feedback OSD is backgrounded exactly that way.
 _notify_bridge_send() {
-  local fn="$1" icon="$2" sound="$3" text="$4"
+  local style="$1" icon="$2" sound="$3" text="$4"
   [ -r "$_COMMON_LIB_DIR/clipboard-bridge-client.zsh" ] || return 1
   source "$_COMMON_LIB_DIR/clipboard-bridge-client.zsh" 2>/dev/null || return 1
-  local us=$'\x1f' host payloadf
+  local host
   host=$(source "$_COMMON_LIB_DIR/clipboard-store-core.zsh" 2>/dev/null && clip::self_host) || return 1
   [ -n "$host" ] || return 1
-  payloadf=$(mktemp "${TMPDIR:-/tmp}/notify-bridge.XXXXXX") || return 1
-  print -rn -- "${host}${us}${fn}${us}${icon}${us}${sound}${us}${text}" > "$payloadf"
-  clipbridge::send "${CLIPBOARD_BRIDGE_HOST:-127.0.0.1}" \
-    "${CLIPBOARD_BRIDGE_PORT:-2490}" n "$payloadf"
-  local rc=$?
-  rm -f -- "$payloadf"
-  return $rc
+  print -rn -- "$text" | clipbridge::notify "$style" "$icon" "$sound" "$host"
 }
 
 # notify [--icon SPEC] [--sound NAME] [--ansi] MESSAGE...
@@ -687,7 +674,7 @@ _notify_bridge_send() {
 # consulted even on failure, because falling back would reintroduce exactly the
 # wrong-screen OSD the route exists to avoid.
 notify() {
-  local icon="" sound="" fn="notify"
+  local icon="" sound="" style="plain"
   while [ $# -gt 0 ]; do
     case "$1" in
       -i | --icon)
@@ -711,7 +698,7 @@ notify() {
         shift
         ;;
       --ansi)
-        fn="notifyAnsi"
+        style="ansi"
         shift
         ;;
       --)
@@ -726,7 +713,7 @@ notify() {
   [ -n "$text" ] || [ -n "$icon" ] || return 2
 
   if _notify_bridge_target; then
-    _notify_bridge_send "$fn" "$icon" "$sound" "$text" && return 0
+    _notify_bridge_send "$style" "$icon" "$sound" "$text" && return 0
     return 1
   fi
 
@@ -735,8 +722,10 @@ notify() {
 
   # `hs -c` runs inside the already-running Hammerspoon process, so client
   # environment variables are invisible there; pass every argument as a Lua
-  # string literal (or bare `nil` when empty).
-  local cmd
+  # string literal (or bare `nil` when empty). The style→global mapping lives
+  # here only for the LOCAL route — on the wire, style is the enum (P5).
+  local fn="notify" cmd
+  [ "$style" = "ansi" ] && fn="notifyAnsi"
   cmd="$fn($(_notify_lua_arg "$icon"), $(_notify_lua_arg "$text"), $(_notify_lua_arg "$sound"))"
 
   # The `hs` CLI blocks on its Mach-port lookup when it can't reach the running
