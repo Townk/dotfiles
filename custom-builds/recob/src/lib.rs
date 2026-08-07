@@ -14,6 +14,7 @@ pub mod exposure;
 pub mod host;
 pub mod limits;
 pub mod listen;
+pub mod ops;
 pub mod platform;
 pub mod record;
 pub mod registry;

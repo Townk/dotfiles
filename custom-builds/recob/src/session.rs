@@ -96,6 +96,45 @@ pub struct Ctx {
     /// the capture loop and §6.5's synchronous no-race capture. `None` until
     /// something has observed the pasteboard.
     pub last_cc: Arc<std::sync::Mutex<Option<isize>>>,
+    /// The external programs the delegated operations spawn (§14.3). On `Ctx`
+    /// rather than read from the environment at the call site, so a test can
+    /// point one at a stub without mutating process-global state.
+    pub tools: Tools,
+}
+
+/// §14.3: what the daemon delegates, and to which executable. The environment
+/// overrides mirror the zsh dispatcher's, so operator overrides carry across.
+pub struct Tools {
+    pub fullscreen_toggle: PathBuf,
+    pub fullscreen_probe: PathBuf,
+    /// The Hammerspoon CLI, for `osd.notify` alone (D7: spawn per
+    /// notification, `hs <file>` — never `hs -c`, which hangs).
+    pub hs: PathBuf,
+    /// The clipboard-mount helper `store.persist.files`'s enrichment uses.
+    pub clipboard_mount: PathBuf,
+}
+
+impl Default for Tools {
+    fn default() -> Self {
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+        let env_or =
+            |name: &str, fallback: PathBuf| std::env::var_os(name).map_or(fallback, PathBuf::from);
+        Tools {
+            fullscreen_toggle: env_or(
+                "MUX_TOGGLE_FULLSCREEN_BIN",
+                home.join(".config/mux/scripts/terminal-toggle-fullscreen"),
+            ),
+            fullscreen_probe: env_or(
+                "MUX_FULLSCREEN_PROBE",
+                home.join(".config/mux/scripts/mux-fullscreen-probe"),
+            ),
+            hs: env_or("RECOB_HS_BIN", PathBuf::from("hs")),
+            clipboard_mount: env_or(
+                "CLIPBOARD_MOUNT_BIN",
+                home.join(".local/libexec/clipboard-mount"),
+            ),
+        }
+    }
 }
 
 impl Ctx {
@@ -114,6 +153,7 @@ impl Ctx {
             tracker: Arc::new(crate::platform::RegtypeTracker::default()),
             db_path: crate::store::default_db_path(),
             last_cc: Arc::new(std::sync::Mutex::new(None)),
+            tools: Tools::default(),
         }
     }
 }

@@ -102,15 +102,44 @@ pub struct Op {
     pub request_fields: &'static [&'static str],
 }
 
-pub const OPS: &[Op] = &[Op {
-    name: "host.identity",
-    since: 1,
-    tier: Tier::Authed,
-    grant: false,
-    rate: None,
-    effect: Effect::Read,
-    request_fields: &[],
-}];
+pub const OPS: &[Op] = &[
+    Op {
+        name: "host.identity",
+        since: 1,
+        tier: Tier::Authed,
+        grant: false,
+        rate: None,
+        effect: Effect::Read,
+        request_fields: &[],
+    },
+    Op {
+        name: "osd.notify",
+        since: 1,
+        tier: Tier::Authed,
+        grant: false,
+        rate: Some(Bucket::Osd),
+        effect: Effect::Gui,
+        request_fields: &["origin_host", "style", "icon", "sound", "text"],
+    },
+    Op {
+        name: "window.fullscreen.toggle",
+        since: 1,
+        tier: Tier::Authed,
+        grant: false,
+        rate: Some(Bucket::Window),
+        effect: Effect::Gui,
+        request_fields: &["terminal"],
+    },
+    Op {
+        name: "window.fullscreen.state",
+        since: 1,
+        tier: Tier::Authed,
+        grant: false,
+        rate: None,
+        effect: Effect::Read,
+        request_fields: &[],
+    },
+];
 
 pub fn find(name: &str) -> Option<&'static Op> {
     OPS.iter().find(|op| op.name == name)
@@ -251,7 +280,7 @@ pub trait StreamSource: Send {
 
 pub fn dispatch(
     op: &Op,
-    _request: &Fields,
+    request: &Fields,
     _endpoint: Endpoint,
     ctx: &Ctx,
 ) -> Result<Response, ProtoError> {
@@ -265,6 +294,9 @@ pub fn dispatch(
                 "cannot resolve this machine's wire identity",
             )),
         },
+        "osd.notify" => crate::ops::gui::notify(request, ctx),
+        "window.fullscreen.toggle" => crate::ops::gui::fullscreen_toggle(request, ctx),
+        "window.fullscreen.state" => crate::ops::gui::fullscreen_state(ctx),
         other => unreachable!("dispatch reached for unregistered op {other}"),
     }
 }
@@ -283,11 +315,17 @@ mod tests {
             std::time::Duration::from_secs(2),
         );
         // Dispatch reachability drives real handlers; none may ever open the
-        // live store from a test.
+        // live store or spawn a live helper from a test.
         ctx.db_path = std::env::temp_dir().join(format!(
             "recobd-registry-test-{}/history.db",
             std::process::id()
         ));
+        ctx.tools = crate::session::Tools {
+            fullscreen_toggle: "/nonexistent/recob-test".into(),
+            fullscreen_probe: "/nonexistent/recob-test".into(),
+            hs: "/nonexistent/recob-test".into(),
+            clipboard_mount: "/nonexistent/recob-test".into(),
+        };
         ctx
     }
 

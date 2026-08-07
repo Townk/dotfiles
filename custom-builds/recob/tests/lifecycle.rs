@@ -32,7 +32,11 @@ fn capabilities_ride_in_front_of_the_first_response() {
     let caps = client.expect_caps();
     assert_eq!(text(&caps, "impl"), "test-impl");
     assert_eq!(text(&caps, "endpoint"), "trusted");
-    assert_eq!(text(&caps, "caps"), "host.identity");
+    assert_eq!(
+        text(&caps, "caps").as_bytes(),
+        recobd::registry::caps().as_slice(),
+        "caps advertises exactly what this build dispatches (§5.1)"
+    );
     // Phase 2's mutual proof is absent rather than stubbed.
     assert_eq!(caps.get("proof"), None);
 }

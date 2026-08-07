@@ -389,9 +389,14 @@ fn a_withdrawn_operation_subtracts_and_nothing_else() {
     assert_eq!(kind, Kind::Response);
     assert_eq!(text(&fields, "host"), "boxA");
 
-    // §9.6: `caps` is byte-identical either way, so §7.1's "operation missing at
-    // equal versions" diagnostic cannot be triggered by local policy.
-    assert_eq!(caps_public, "host.identity");
+    // §9.6: `caps` is byte-identical either way — the registry's own set, so
+    // §7.1's "operation missing at equal versions" diagnostic cannot be
+    // triggered by local policy.
+    assert_eq!(
+        caps_public.as_bytes(),
+        recobd::registry::caps().as_slice(),
+        "caps stays the build's full set, withdrawal notwithstanding"
+    );
     assert_eq!(caps_public, caps_trusted);
 }
 

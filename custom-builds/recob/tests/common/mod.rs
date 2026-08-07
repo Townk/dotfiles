@@ -441,7 +441,14 @@ pub fn ctx_mut(dir: &std::path::Path, host: &str) -> Ctx {
     );
     ctx.token_path = token_path;
     // Every in-process test serves against a store inside the test's own
-    // directory — never the live one.
+    // directory — never the live one — and no test spawns a live helper
+    // unless it explicitly installs a stub.
     ctx.db_path = dir.join("history.db");
+    ctx.tools = recobd::session::Tools {
+        fullscreen_toggle: "/nonexistent/recob-test".into(),
+        fullscreen_probe: "/nonexistent/recob-test".into(),
+        hs: "/nonexistent/recob-test".into(),
+        clipboard_mount: "/nonexistent/recob-test".into(),
+    };
     ctx
 }
