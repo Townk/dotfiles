@@ -50,7 +50,7 @@ fn a_public_session_authenticates_and_verifies_the_proof() {
     };
     let token = recobd::auth::Token::from_hex(&token).unwrap();
     let mut session =
-        Session::establish(stream, Credential::Token(token), Timeouts::default()).unwrap();
+        Session::establish(stream, Credential::single(token), Timeouts::default()).unwrap();
     assert_eq!(session.endpoint, "public");
     let reply = session
         .exchange(&Fields::new().with("op", b"host.identity".to_vec()), false)
@@ -67,7 +67,7 @@ fn a_wrong_credential_reports_unauthorized_not_a_fallback() {
         _ => panic!("the daemon is listening"),
     };
     let wrong = recobd::auth::Token::from_hex(&"9".repeat(64)).unwrap();
-    let err = Session::establish(stream, Credential::Token(wrong), Timeouts::default())
+    let err = Session::establish(stream, Credential::single(wrong), Timeouts::default())
         .err()
         .expect("refused");
     match err {
@@ -115,7 +115,7 @@ fn an_unproven_server_is_refused_before_any_request() {
             _ => panic!("the recorder is listening"),
         };
         let token = recobd::auth::Token::from_hex(&token).unwrap();
-        let err = Session::establish(stream, Credential::Token(token), Timeouts::default())
+        let err = Session::establish(stream, Credential::single(token), Timeouts::default())
             .err()
             .expect("an unproven endpoint must be refused");
         match err {

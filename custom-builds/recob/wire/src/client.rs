@@ -162,11 +162,19 @@ pub struct Session<S: ClientStream> {
     timeouts: Timeouts,
 }
 
-/// How to authenticate: the trusted socket's uid boundary, or a credential for
-/// the public endpoint.
+/// How to authenticate: the trusted socket's uid boundary, or credentials for
+/// the public endpoint. §6.6's `auth` field is a NUL-joined list of up to
+/// eight digests, because a shared remote may hold pushed tokens for several
+/// owning machines and cannot know which one answers this port.
 pub enum Credential {
     TrustedSocket,
-    Token(Token),
+    Tokens(Vec<Token>),
+}
+
+impl Credential {
+    pub fn single(token: Token) -> Credential {
+        Credential::Tokens(vec![token])
+    }
 }
 
 impl<S: ClientStream> Session<S> {
@@ -223,7 +231,13 @@ impl<S: ClientStream> Session<S> {
             );
         let cnonce = match &credential {
             Credential::TrustedSocket => None,
-            Credential::Token(token) => {
+            Credential::Tokens(tokens) => {
+                if tokens.is_empty() {
+                    return Err(ClientError::Untrusted(
+                        "no pushed token for this endpoint's owner — reconnect so                          ssh-prepare-connection can push one"
+                            .to_string(),
+                    ));
+                }
                 let Some(nonce) = banner.get("nonce") else {
                     return Err(ClientError::Protocol(
                         "the public banner carried no nonce".to_string(),
@@ -231,7 +245,14 @@ impl<S: ClientStream> Session<S> {
                 };
                 let cnonce = auth::random_bytes(auth::NONCE_BYTES)
                     .map_err(|e| ClientError::Protocol(format!("no randomness: {e}")))?;
-                hello.push("auth", token.client_digest(nonce).into_bytes());
+                // §6.6 caps the list at eight entries; offering more would be
+                // refused as a shape error, so the client trims deliberately.
+                let digests: Vec<String> = tokens
+                    .iter()
+                    .take(8)
+                    .map(|token| token.client_digest(nonce))
+                    .collect();
+                hello.push("auth", digests.join("\0").into_bytes());
                 hello.push("cnonce", cnonce.clone());
                 Some(cnonce)
             }
@@ -239,16 +260,25 @@ impl<S: ClientStream> Session<S> {
         stream.write_all(&wire::encode(Kind::Hello, &hello))?;
 
         let caps_frame = read_fields(&mut stream, Kind::Caps)?;
-        if let (Credential::Token(token), Some(cnonce)) = (&credential, &cnonce) {
+        if let (Credential::Tokens(tokens), Some(cnonce)) = (&credential, &cnonce) {
             // §9.2 step 3: the server must answer the challenge *this* client
-            // chose. Until it has, nothing in `C` — caps, impl, endpoint — may
-            // drive a decision; an unverified peer's inventory is a claim.
-            let expected = token.server_proof(cnonce);
+            // chose, with a proof derived from one of the tokens this client
+            // actually holds. Until it has, nothing in `C` — caps, impl,
+            // endpoint — may drive a decision; an unverified peer's inventory
+            // is a claim. Every held token is checked, constant-time each,
+            // with no early exit on a match.
             let proven = caps_frame
                 .get("proof")
                 .map(|proof| {
                     use subtle::ConstantTimeEq;
-                    proof.ct_eq(expected.as_bytes()).into()
+                    let mut ok = false;
+                    for token in tokens.iter().take(8) {
+                        let expected = token.server_proof(cnonce);
+                        if bool::from(proof.ct_eq(expected.as_bytes())) {
+                            ok = true;
+                        }
+                    }
+                    ok
                 })
                 .unwrap_or(false);
             if !proven {
