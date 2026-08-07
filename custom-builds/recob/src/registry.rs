@@ -122,6 +122,24 @@ pub const OPS: &[Op] = &[
         request_fields: &["origin_host", "style", "icon", "sound", "text"],
     },
     Op {
+        name: "store.persist.text",
+        since: 1,
+        tier: Tier::Authed,
+        grant: false,
+        rate: Some(Bucket::Store),
+        effect: Effect::Store,
+        request_fields: &["host", "kind", "app", "regtype", "text"],
+    },
+    Op {
+        name: "store.persist.files",
+        since: 1,
+        tier: Tier::Authed,
+        grant: false,
+        rate: Some(Bucket::Store),
+        effect: Effect::Store,
+        request_fields: &["host", "paths"],
+    },
+    Op {
         name: "window.fullscreen.toggle",
         since: 1,
         tier: Tier::Authed,
@@ -281,7 +299,7 @@ pub trait StreamSource: Send {
 pub fn dispatch(
     op: &Op,
     request: &Fields,
-    _endpoint: Endpoint,
+    endpoint: Endpoint,
     ctx: &Ctx,
 ) -> Result<Response, ProtoError> {
     match op.name {
@@ -295,6 +313,12 @@ pub fn dispatch(
             )),
         },
         "osd.notify" => crate::ops::gui::notify(request, ctx),
+        "store.persist.text" => crate::ops::persist::persist_text(request, ctx),
+        // §9.3's `mints_authority: local`, evaluated against the endpoint and
+        // never against the caller-supplied host (§9.7).
+        "store.persist.files" => {
+            crate::ops::persist::persist_files(request, endpoint == Endpoint::Trusted, ctx)
+        }
         "window.fullscreen.toggle" => crate::ops::gui::fullscreen_toggle(request, ctx),
         "window.fullscreen.state" => crate::ops::gui::fullscreen_state(ctx),
         other => unreachable!("dispatch reached for unregistered op {other}"),

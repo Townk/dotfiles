@@ -4,6 +4,7 @@
 //! applied.
 
 pub mod gui;
+pub mod persist;
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
