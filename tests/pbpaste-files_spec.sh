@@ -324,7 +324,6 @@ Describe 'paste --files (local materialization)'
     # A pointer row is a row whose paths carry no local authority — the shape a
     # peer-mount-enriched pasteboard produces. Materializing one copies bytes
     # the origin never authorized this machine to take.
-    Pending 'client: the capability check runs only on the Remote source, so a local pointer row materializes'
     printf 'untrusted local\n' > "$SRC/untrusted-local.txt"
     seed_clip file "$RECOB_SELF_NAME" 1752200000.11 pointer "$SRC/untrusted-local.txt"
     When run "$CLIP" paste --files "$TARGET"
@@ -438,24 +437,31 @@ Describe 'paste --files (local materialization)'
   End
 
   It 'fails closed when a source named by the manifest is gone by the time it is read'
-    printf 'vanishing\n' > "$SRC/gone.txt"
-    seed_clip file "$RECOB_SELF_NAME" 1752200000.51 auth "$SRC/gone.txt"
-    vanished() { rm -f "$SRC/gone.txt"; "$CLIP" paste --files "$TARGET"; }
-    When call vanished
+    # Against a real daemon a vanished source never reaches the engine: grant-
+    # time re-validation demotes the row to a pointer one and the authority
+    # refusal above fires first, exactly as the shim's did. The engine's own
+    # existence check guards the window AFTER the grant — the daemon validated,
+    # then the file vanished — which only a scripted reply can hold open.
+    recob_script \
+      "ok kind=$(seed_hex file) host=$(seed_hex "$RECOB_SELF_NAME") timestamp=$(seed_hex 1752200000.51) token=$(seed_hex "$SEED_FAKE_TOKEN") paths=$(seed_paths_hex "$SRC/gone.txt")"
+    When run "$CLIP" paste --files "$TARGET"
     The status should be failure
     The stderr should include "source no longer exists"
     The file "$TARGET/gone.txt" should not be exist
   End
 
-  It 'refuses a top-level symlink, for which no trustworthy size exists'
+  It 'refuses a row whose authority a symlink swap invalidated'
     printf 'local target\n' > "$RECOB_DIR/link-target.txt"
     ln -s "$RECOB_DIR/link-target.txt" "$SRC/link.txt"
-    # The authority snapshot never holds a symlink, so this row is a pointer
-    # one by construction — the engine still has to refuse it on size.
-    seed_clip file "$RECOB_SELF_NAME" 1752200000.52 pointer "$SRC/link.txt"
+    # The daemon re-validates the authority snapshot at grant time and a
+    # symlink fails it, so even a row SEEDED with authority answers `-` — and
+    # a self-host pointer row is refused outright, exactly as the shim's
+    # PF_REQUIRE_CAP refused it. (The engine's own symlink size refusal is
+    # pinned on the peer-mount route below, the one route that reaches it.)
+    seed_clip file "$RECOB_SELF_NAME" 1752200000.52 auth "$SRC/link.txt"
     When run "$CLIP" paste --files "$TARGET"
     The status should be failure
-    The stderr should include "could not determine source size"
+    The stderr should include "did not authorize"
     The file "$TARGET/link.txt" should not be exist
   End
 

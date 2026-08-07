@@ -813,7 +813,19 @@ pub fn run<S: ClientStream>(
         }
     }
 
-    if matches!(source, Source::Remote) && !manifest.has_capability() {
+    // §9.3: a pointer row cannot mint file authority, and the shim's
+    // PF_REQUIRE_CAP demanded a real capability on every route but two. The
+    // exemptions are load-bearing: a mount-mapped read's authority is the
+    // read-only peer mount itself (the local daemon can never mint a token
+    // for a peer's files), and over SSH the manifest comes from the ORIGIN's
+    // daemon, which cannot mint authority over this machine's own paths —
+    // refusing there would break the ordinary paste-back flow. A self-host
+    // pointer row read AT this machine has neither excuse: this daemon mints
+    // tokens for every row it vouches for, so `-` means unauthorized bytes
+    // (the shape a peer-mount-enriched pasteboard produces).
+    if !manifest.has_capability()
+        && (matches!(source, Source::Remote) || (is_this_machine && !context.over_ssh))
+    {
         return Err(
             "pbpaste: origin did not authorize this manifest for remote file transfer; copy the files again on the origin"
                 .to_string(),

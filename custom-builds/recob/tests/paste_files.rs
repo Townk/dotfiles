@@ -203,6 +203,25 @@ fn existing_names_are_refused_before_anything_is_transferred() {
     );
 }
 
+/// A `store.persist.files` over the public endpoint: `mints_authority` is
+/// `local`, so the row it produces is a pointer one — no authority snapshot,
+/// and `files.grant` answers `-`.
+fn persist_pointer(daemon: &common::Daemon, state: &std::path::Path, host: &str, paths: &str) {
+    let stream = std::net::TcpStream::connect(("127.0.0.1", daemon.port)).unwrap();
+    let token = recob_wire::auth::Token::from_hex(&common::wait_for_token(state)).unwrap();
+    let mut public =
+        Session::establish(stream, Credential::single(token), Timeouts::default()).unwrap();
+    public
+        .exchange(
+            &Fields::new()
+                .with("op", b"store.persist.files".to_vec())
+                .with("host", host.as_bytes().to_vec())
+                .with("paths", paths.as_bytes().to_vec()),
+            false,
+        )
+        .unwrap();
+}
+
 #[test]
 fn a_pointer_row_cannot_be_streamed() {
     let dir = testutil::tempdir("files-pointer");
@@ -210,21 +229,12 @@ fn a_pointer_row_cannot_be_streamed() {
 
     // A public persist from a peer produces a pointer row: no authority, so
     // `files.grant` answers `-` and there is nothing to stream.
-    let stream = std::net::TcpStream::connect(("127.0.0.1", daemon.port)).unwrap();
-    let token =
-        recob_wire::auth::Token::from_hex(&common::wait_for_token(&dir.path().join("state")))
-            .unwrap();
-    let mut public =
-        Session::establish(stream, Credential::single(token), Timeouts::default()).unwrap();
-    public
-        .exchange(
-            &Fields::new()
-                .with("op", b"store.persist.files".to_vec())
-                .with("host", b"far-away-box".to_vec())
-                .with("paths", b"/tmp/not-here.txt".to_vec()),
-            false,
-        )
-        .unwrap();
+    persist_pointer(
+        &daemon,
+        &dir.path().join("state"),
+        "far-away-box",
+        "/tmp/not-here.txt",
+    );
 
     let dest = dir.path().join("dest");
     std::fs::create_dir(&dest).unwrap();
@@ -234,6 +244,71 @@ fn a_pointer_row_cannot_be_streamed() {
     assert!(
         err.contains("origin did not authorize this manifest"),
         "a pointer row fails closed: {err}"
+    );
+}
+
+#[test]
+fn a_local_self_host_pointer_row_fails_closed() {
+    let dir = testutil::tempdir("files-local-pointer");
+    let (daemon, _db) = daemon(dir.path());
+
+    // A pointer row whose host is THIS machine — the shape a peer-mount-
+    // enriched pasteboard produces. Its paths are readable by this uid, but
+    // the row carries no authority, and the shim's PF_REQUIRE_CAP refused it
+    // on the local route too, not only on the streaming one.
+    let source = dir.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("untrusted.txt"), b"unauthorized bytes").unwrap();
+    persist_pointer(
+        &daemon,
+        &dir.path().join("state"),
+        "this-box",
+        &source.join("untrusted.txt").display().to_string(),
+    );
+
+    let dest = dir.path().join("dest");
+    std::fs::create_dir(&dest).unwrap();
+    let mut session = trusted(&daemon);
+    let err =
+        paste_files::run(&mut session, &options(&dest), &context("this-box", false)).unwrap_err();
+    assert!(
+        err.contains("origin did not authorize this manifest"),
+        "a local pointer row fails closed: {err}"
+    );
+    assert!(
+        !dest.join("untrusted.txt").exists(),
+        "nothing materializes from a refused pointer row"
+    );
+}
+
+#[test]
+fn a_pointer_row_on_its_source_host_still_pastes_over_ssh() {
+    let dir = testutil::tempdir("files-ssh-pointer");
+    let (daemon, _db) = daemon(dir.path());
+
+    // The paste-back flow: over SSH the manifest comes from the ORIGIN's
+    // daemon through the forwarded port, and the origin cannot mint authority
+    // over this machine's own paths — every same-host row it answers with is
+    // a pointer one. The files are this uid's own; refusing here would break
+    // copy-on-this-box, paste-on-this-box whenever the shell arrived by SSH.
+    let source = dir.path().join("src");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("own.txt"), b"my own bytes").unwrap();
+    persist_pointer(
+        &daemon,
+        &dir.path().join("state"),
+        "this-box",
+        &source.join("own.txt").display().to_string(),
+    );
+
+    let dest = dir.path().join("dest");
+    std::fs::create_dir(&dest).unwrap();
+    let mut session = trusted(&daemon);
+    paste_files::run(&mut session, &options(&dest), &context("this-box", true)).unwrap();
+    assert_eq!(
+        std::fs::read(dest.join("own.txt")).unwrap(),
+        b"my own bytes",
+        "a source-host pointer row still materializes over SSH"
     );
 }
 
