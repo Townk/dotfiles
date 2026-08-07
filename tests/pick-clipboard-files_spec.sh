@@ -5,26 +5,63 @@
 #
 # The picker (`executable_pick-clipboard`) is a zsh script that ends by
 # running an interactive fzf session unconditionally -- PICK_CLIPBOARD_NO_RUN
-# is a test-only escape hatch this task adds (see the "run" section near the
-# bottom of the script) that sources the file's functions and returns before
-# that session ever starts, so a test can call clip::copy_by_id directly
-# against a seeded store + faked bridge/rsync.
+# is a test-only escape hatch (see the "run" section near the bottom of the
+# script) that sources the file's functions and returns before that session
+# ever starts, so a test can call clip::copy_by_id directly against a seeded
+# store + a recording bridge + a faked rsync.
 #
-# Seeds a temp SQLite store with the same schema clipboard-history.lua
-# creates (CREATE TABLE statements at ~clipboard-history.lua:275-295) -- same
-# convention as tests/clipboard-files-ops_spec.sh's "L list-files" Describe.
-# Bridge sends are captured by a fake `nc` on PATH (same log convention as
-# tests/pbpaste-files_spec.sh: "<port>:<frame-with-NUL-as-|>"); the remote
-# pull is captured by a fake `rsync` wired in via PICK_CLIPBOARD_RSYNC (the
-# picker pins /opt/homebrew/bin/rsync in production, same as pbpaste -- the
-# env var is the test-only override documented in clip::copy_files_by_id).
+# CONVERTED TO THE RECOB HARNESS (tests/recob_helper.sh): the transport is a
+# REAL `recobd --record` per example, and the picker reaches it through the
+# spec suite's own `system-bridge` build (recob_start exports
+# SYSTEM_BRIDGE_BIN). What the old fake `nc` asserted as raw frames
+# ("cb.sock:U...id:<n>") is asserted as decoded operations now:
+#
+#   U with `id:<rowid>`        -> clip.set.files{clip_id}, the BARE decimal
+#   U with NUL-joined paths    -> clip.set.files{paths}
+#   T fallback to :2489        -> clip.set on the `trusted` endpoint
+#
+# Two consequences of the recorder being the real daemon, called out where
+# they bite:
+#
+#   * A by-rowid restore replays the row's stored clip_types, so (unlike the
+#     always-'O' fake) a local row must be seeded with a real pasteboard BLOB
+#     -- see seed_file_url_blob. The blob must be X'hex', never a TEXT
+#     literal: sqlite stores the literal with TEXT affinity and the daemon's
+#     blob read refuses it.
+#   * A successful clip.set / clip.set.files writes the daemon's own
+#     post-write snapshot row (source_host = this host) into the SHARED
+#     store, so "the localized bookkeeping row" is selected by
+#     source_host + id, never by bare MAX(id).
+#
+# The remote pull is still captured by a fake `rsync` wired in via
+# PICK_CLIPBOARD_RSYNC (the picker pins /opt/homebrew/bin/rsync in
+# production, same as pbpaste -- the env var is the test-only override
+# documented in clip::copy_files_by_id).
 #
 # Remote manifest paths in these tests live under /pick-clipboard-remote-src/
 # -- a root that never exists on the test machine. The localized-row guard is
 # restricted to the picker's own cache root, so a real local path could no
 # longer short-circuit the rsync branch, but keeping remote paths obviously
 # nonexistent stays the honest fixture shape (they ARE remote paths).
+
+# Byte-exact fixtures/expectations ride as hex (the recorder's own log
+# encoding), so NUL-joined path lists are assertable without ever putting a
+# NUL through a shell comparison.
+spec_hex() { printf '%s' "$1" | xxd -p | tr -d '\n'; }
+spec_paths_hex() {
+  {
+    _sp_first=1
+    for _sp_path in "$@"; do
+      [ "$_sp_first" -eq 1 ] || printf '\000'
+      printf '%s' "$_sp_path"
+      _sp_first=0
+    done
+  } | xxd -p | tr -d '\n'
+}
+
 Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
+  Include tests/recob_helper.sh
+
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
   REMOTE_SRC="/pick-clipboard-remote-src"
@@ -41,23 +78,23 @@ Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
     # no-re-fetch behavior under test) skip rsync -- a false pass/fail
     # bleeding across examples. Fresh HOME dir per It avoids it.
     export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
-    # Phase 7: MY_HOST now resolves via clip::self_host, which checks
-    # $XDG_STATE_HOME/clipboard/self-name BEFORE scutil. Left unsandboxed,
-    # this would leak the REAL dev machine's self-name file (if one exists,
-    # e.g. from an actual clipboard-bridge deployment) straight through the
-    # sandboxed HOME above, decoupling MY_HOST from the fake scutil this
-    # suite relies on for deterministic local/remote comparisons. Pointing
-    # it inside the just-wiped HOME guarantees no self-name file exists.
-    export XDG_STATE_HOME="$HOME/.local/state"
-    export CLIPBOARD_BRIDGE_LOCAL_SOCKET="$XDG_STATE_HOME/cb.sock"
     # A dedicated TMPDIR (spec R3): the rsync-failure test below globs for the
     # stderr-capture temp file clip::copy_files_by_id leaves behind on a
     # failed pull, which needs a clean, known directory rather than whatever
     # this machine's ambient TMPDIR happens to already contain.
     export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
-    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    # The recorder is a real daemon with a real identity; pin it to the same
+    # mac-mini the fixtures always used. Phase 7's self-name file (which
+    # recob_start writes into ITS sandboxed XDG_STATE_HOME) outranks scutil
+    # in clip::self_host, so MY_HOST is deterministic with no scutil fake.
+    RECOB_SELF_NAME=mac-mini
+    recob_start
+    # ONE store, shared by the picker and the daemon: recob_start's
+    # XDG_DATA_HOME. clip.set.files{clip_id} is resolved by the daemon's own
+    # restore engine, which must find the very row the example seeded.
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     export PICK_CLIPBOARD_DB="$DB"
+    mkdir -p "$XDG_DATA_HOME/pick-clipboard"
     rm -f "$DB"
     sqlite3 "$DB" '
       CREATE TABLE clips (
@@ -89,34 +126,17 @@ Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
       );
     '
 
-    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
-    # Fake nc: logs "<port>:<raw frame, NUL -> '|'>" (pbpaste-files_spec.sh's
-    # convention) then always answers a bare 'O' status + zero-length body --
-    # good enough for clipbridge::send, which only inspects the status byte.
-    cat > "$BINDIR/nc" <<EOF
+    PBCOPYLOG="$SHELLSPEC_TMPBASE/pbcopylog"; : > "$PBCOPYLOG"
+    # Fake pbcopy: clip::copy_by_id's last-resort fallback pipes the clip
+    # text into `pbcopy`, and a spec must NEVER touch the human's real
+    # pasteboard -- the daemon's writes are already sandboxed onto a private
+    # pasteboard by recob_start, this covers the one write that bypasses the
+    # daemon. Logs the bytes so the bridge-down fallback is assertable.
+    cat > "$BINDIR/pbcopy" <<EOF
 #!/bin/sh
-argc=\$#
-eval "port=\\\${\$argc}"
-raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
-cat > "\$raw"
-{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
-rm -f "\$raw"
-printf 'O\\000\\000\\000\\000'
+cat >> "$PBCOPYLOG"
 EOF
-    chmod +x "$BINDIR/nc"
-
-    # Fake scutil: pins THIS host's name (mac-mini) for the
-    # source_host==this-host / remote comparison -- same convention as
-    # tests/pbpaste-files_spec.sh.
-    cat > "$BINDIR/scutil" <<'EOF'
-#!/bin/sh
-if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
-  echo mac-mini
-  exit 0
-fi
-exit 1
-EOF
-    chmod +x "$BINDIR/scutil"
+    chmod +x "$BINDIR/pbcopy"
 
     RSYNCLOG="$SHELLSPEC_TMPBASE/rsynclog"; : > "$RSYNCLOG"
     # Fake rsync: logs its full argv, then fabricates the "pulled" file at the
@@ -150,6 +170,18 @@ EOF
     export SCRIPT_PATH="$SCRIPT"
   }
   BeforeEach 'setup'
+  AfterEach 'recob_stop'
+
+  # A genuine local capture carries a real pasteboard blob. The recorder is
+  # the real daemon: clip.set.files{clip_id} replays the row's stored
+  # clip_types, so a row with nothing to replay is honestly refused
+  # (not-found) where the old fake nc answered 'O' regardless. X'hex' on
+  # purpose: a plain SQL string literal stores with TEXT affinity, which the
+  # daemon's blob read rejects (`Invalid column type Text`).
+  seed_file_url_blob() {  # <clip-id> <path>
+    sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob)
+      VALUES ($1, 'public.file-url', X'$(spec_hex "file://$2")');"
+  }
 
   # Runs `clip::copy_by_id <id>` in a fresh zsh -f (no ~/.zshenv --
   # clipboard-files-ops_spec.sh's own note applies here too: an unguarded
@@ -173,23 +205,27 @@ EOF
     zsh -f "$SCRIPT" --restore-id "$1"
   }
 
-  It 'local files row: sends U with the id:<n> form to the local bridge port'
+  It 'local files row: one clip.set.files{clip_id} exchange on the trusted socket (bare rowid, no paths, no id: prefix)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',100); SELECT last_insert_rowid();")
+    seed_file_url_blob "$id" /tmp/a.txt
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "cb.sock:U"
-    The contents of file "$NCLOG" should include "id:$id"
+    # clip_id is the BARE decimal rowid (§6.1 -- the id: prefix died with the
+    # positional payload), asserted by exact hex so a stray prefix byte fails.
+    wire="$(recob_op 1)|$(recob_endpoint 1)|clip_id=$(recob_field_hex 1 clip_id)|paths=$(recob_field_hex 1 paths)|$(recob_count)"
+    The variable wire should equal "clip.set.files|trusted|clip_id=$(spec_hex "$id")|paths=|1"
     The contents of file "$RSYNCLOG" should equal ""
   End
 
-  It 'local files row (NULL source_host, legacy capture): still uses the id:<n> form'
+  It 'local files row (NULL source_host, legacy capture): still uses the clip_id form'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, last_ts) VALUES ('directory',100); SELECT last_insert_rowid();")
+    seed_file_url_blob "$id" /tmp/adir
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "cb.sock:U"
-    The contents of file "$NCLOG" should include "id:$id"
+    wire="$(recob_op 1)|$(recob_endpoint 1)|clip_id=$(recob_field_hex 1 clip_id)"
+    The variable wire should equal "clip.set.files|trusted|clip_id=$(spec_hex "$id")"
   End
 
   # X2-redo gap fix: an M-persisted row (op M, manifest-persist-local --
@@ -205,7 +241,7 @@ EOF
   # private UTI would silently paste nothing in Finder; this must route
   # through form A with the manifest's own (already-local, no cache-root
   # check needed) paths instead of the id:<n> form.
-  It 'local M-persisted row (source_host=self, only an x-file-manifest blob): sends U with the raw paths, not id:'
+  It 'local M-persisted row (source_host=self, only an x-file-manifest blob): sends clip.set.files{paths}, not clip_id'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','mac-mini',150); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/local-manifest.bin"
     printf '%s/local-a.txt\000%s/local-b.txt' "$HOME" "$HOME" > "$mf"
@@ -217,9 +253,10 @@ EOF
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "cb.sock:U"
-    The contents of file "$NCLOG" should include "$HOME/local-a.txt|$HOME/local-b.txt"
-    The contents of file "$NCLOG" should not include "id:$id"
+    wire="$(recob_op 1)|$(recob_endpoint 1)|clip_id=$(recob_field_hex 1 clip_id)"
+    The variable wire should equal "clip.set.files|trusted|clip_id="
+    got_paths="$(recob_field_hex 1 paths)"
+    The variable got_paths should equal "$(spec_paths_hex "$HOME/local-a.txt" "$HOME/local-b.txt")"
     The contents of file "$RSYNCLOG" should equal ""
   End
 
@@ -230,8 +267,11 @@ EOF
     sqlite3 "$DB" "INSERT INTO clip_types (clip_id, uti, blob) VALUES ($id, 'x-file-manifest', readfile('$mf'));"
 
     When call run_copy "$id"
-    The contents of file "$NCLOG" should not include "cb.sock:U"
-    The contents of file "$NCLOG" should not include "$HOME/sensitive.txt"
+    ops="$(recob_ops | tr '\n' ',')"
+    The variable ops should not include "clip.set.files"
+    # The path must not cross the wire AT ALL -- the log holds every decoded
+    # field hex-encoded, so its absence there is absence everywhere.
+    The contents of file "$RECOB_RECORD_LOG" should not include "$(spec_hex "$HOME/sensitive.txt")"
     The stderr should include "not authorized"
   End
 
@@ -251,7 +291,7 @@ EOF
     The path "$HOME/.cache/pick-clipboard/files/$id/2/remote-b.txt" should be exist
   End
 
-  It 'remote manifest row: sends U with the localized NUL-joined paths (not id:)'
+  It 'remote manifest row: sends clip.set.files{paths} with the localized NUL-joined paths (not clip_id)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',201); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/manifest.bin"
     printf '%s/remote-a.txt\000%s/remote-b.txt' "$REMOTE_SRC" "$REMOTE_SRC" > "$mf"
@@ -259,10 +299,12 @@ EOF
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "cb.sock:U"
-    The contents of file "$NCLOG" should not include "id:$id"
-    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/remote-a.txt"
-    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/2/remote-b.txt"
+    wire="$(recob_op 1)|$(recob_endpoint 1)|clip_id=$(recob_field_hex 1 clip_id)"
+    The variable wire should equal "clip.set.files|trusted|clip_id="
+    got_paths="$(recob_field_hex 1 paths)"
+    The variable got_paths should equal "$(spec_paths_hex \
+      "$HOME/.cache/pick-clipboard/files/$id/1/remote-a.txt" \
+      "$HOME/.cache/pick-clipboard/files/$id/2/remote-b.txt")"
   End
 
   # Reviewer finding 1 (critical): two manifest entries sharing a basename
@@ -281,16 +323,20 @@ EOF
     The status should be success
     The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/dirA/README.md"
     The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/dirB/README.md"
-    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/README.md"
-    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/2/README.md"
-    # The localized row's own blob must record two DISTINCT paths. Extracted
-    # via writefile: the sqlite3 CLI truncates direct blob output at the
-    # first embedded NUL (verified empirically), so a `SELECT blob` pipe
-    # would only ever show the first path. tr the NUL joints to newlines
-    # BEFORE the $(...) capture; grep -c counts the de-duplicated survivors
-    # -- 1 would mean the old collision.
+    got_paths="$(recob_field_hex 1 paths)"
+    The variable got_paths should equal "$(spec_paths_hex \
+      "$HOME/.cache/pick-clipboard/files/$id/1/README.md" \
+      "$HOME/.cache/pick-clipboard/files/$id/2/README.md")"
+    # The localized row's own blob must record two DISTINCT paths. Selected
+    # by source_host + id, not MAX(id): the daemon's own post-write snapshot
+    # row (source_host = this host) lands after the bookkeeping row.
+    # Extracted via writefile: the sqlite3 CLI truncates direct blob output
+    # at the first embedded NUL (verified empirically), so a `SELECT blob`
+    # pipe would only ever show the first path. tr the NUL joints to
+    # newlines BEFORE the $(...) capture; grep -c counts the de-duplicated
+    # survivors -- 1 would mean the old collision.
     locblob="$SHELLSPEC_TMPBASE/localized-blob"
-    sqlite3 "$DB" "SELECT writefile('$locblob', blob) FROM clip_types WHERE clip_id=(SELECT MAX(id) FROM clips) AND uti='x-file-manifest';" >/dev/null
+    sqlite3 "$DB" "SELECT writefile('$locblob', blob) FROM clip_types WHERE clip_id=(SELECT MAX(id) FROM clips WHERE source_host='devbox' AND id != $id) AND uti='x-file-manifest';" >/dev/null
     distinct=$(tr '\000' '\n' < "$locblob" | sort -u | grep -c 'README.md')
     The variable distinct should equal 2
   End
@@ -305,9 +351,13 @@ EOF
     The status should be success
     row_count=$(sqlite3 "$DB" "SELECT COUNT(*) FROM clips WHERE id != $id AND source_host = 'devbox' AND type_kind = 'files';")
     The variable row_count should equal 1
-    blob_uti=$(sqlite3 "$DB" "SELECT uti FROM clip_types WHERE clip_id = (SELECT MAX(id) FROM clips) AND uti IN ('x-file-manifest','x-resolved-path');")
+    # The localized bookkeeping row keeps source_host = origin; the daemon's
+    # own post-write snapshot row (source_host = this host, from the
+    # clip.set.files it served) is newer, so MAX(id) alone would name the
+    # wrong row.
+    blob_uti=$(sqlite3 "$DB" "SELECT uti FROM clip_types WHERE clip_id = (SELECT MAX(id) FROM clips WHERE source_host='devbox' AND id != $id) AND uti IN ('x-file-manifest','x-resolved-path');")
     The variable blob_uti should equal "x-file-manifest"
-    authority_count=$(sqlite3 "$DB" "SELECT count(*) FROM file_authorities WHERE clip_id=(SELECT MAX(id) FROM clips);")
+    authority_count=$(sqlite3 "$DB" "SELECT count(*) FROM file_authorities WHERE clip_id=(SELECT MAX(id) FROM clips WHERE source_host='devbox' AND id != $id);")
     The variable authority_count should equal 2
   End
 
@@ -380,7 +430,7 @@ EOF
   # place localization ever records), exist on disk, AND carry trusted
   # file_authorities, send U with those paths directly (form A) -- no id:,
   # no rsync.
-  It 'localized single-path row (x-resolved-path cache path, remote origin, file on disk): sends U with the path, no id:, no rsync'
+  It 'localized single-path row (x-resolved-path cache path, remote origin, file on disk): sends clip.set.files{paths} with the path, no clip_id, no rsync'
     locdir="$HOME/.cache/pick-clipboard/files/77/1"; mkdir -p "$locdir"
     printf 'already local\n' > "$locdir/doc.txt"
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','devbox',220); SELECT last_insert_rowid();")
@@ -391,13 +441,14 @@ EOF
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "cb.sock:U"
-    The contents of file "$NCLOG" should include "$locdir/doc.txt"
-    The contents of file "$NCLOG" should not include "id:$id"
+    wire="$(recob_op 1)|$(recob_endpoint 1)|clip_id=$(recob_field_hex 1 clip_id)"
+    The variable wire should equal "clip.set.files|trusted|clip_id="
+    got_paths="$(recob_field_hex 1 paths)"
+    The variable got_paths should equal "$(spec_hex "$locdir/doc.txt")"
     The contents of file "$RSYNCLOG" should equal ""
   End
 
-  It 'localized multi-path row (x-file-manifest of cache paths, remote origin): sends U with the paths, no rsync'
+  It 'localized multi-path row (x-file-manifest of cache paths, remote origin): sends clip.set.files{paths} with the paths, no rsync'
     locdir="$HOME/.cache/pick-clipboard/files/78"; mkdir -p "$locdir/1" "$locdir/2"
     printf 'a\n' > "$locdir/1/a.txt"
     printf 'b\n' > "$locdir/2/b.txt"
@@ -412,10 +463,10 @@ EOF
 
     When call run_copy "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "cb.sock:U"
-    The contents of file "$NCLOG" should include "$locdir/1/a.txt"
-    The contents of file "$NCLOG" should include "$locdir/2/b.txt"
-    The contents of file "$NCLOG" should not include "id:$id"
+    wire="$(recob_op 1)|$(recob_endpoint 1)|clip_id=$(recob_field_hex 1 clip_id)"
+    The variable wire should equal "clip.set.files|trusted|clip_id="
+    got_paths="$(recob_field_hex 1 paths)"
+    The variable got_paths should equal "$(spec_paths_hex "$locdir/1/a.txt" "$locdir/2/b.txt")"
     The contents of file "$RSYNCLOG" should equal ""
   End
 
@@ -435,7 +486,8 @@ EOF
 
     When call run_copy "$id"
     The contents of file "$RSYNCLOG" should include "devbox:$locdir/stale.txt"
-    The contents of file "$NCLOG" should not include "cb.sock:U"
+    ops="$(recob_ops | tr '\n' ',')"
+    The variable ops should not include "clip.set.files"
     The stderr should include "rsync failed"
   End
 
@@ -454,7 +506,8 @@ EOF
     chmod +x "$BINDIR/rsync"
 
     When call run_copy "$id"
-    The contents of file "$NCLOG" should not include "cb.sock:U"
+    ops="$(recob_ops | tr '\n' ',')"
+    The variable ops should not include "clip.set.files"
     authority_count=$(sqlite3 "$DB" "SELECT count(*) FROM file_authorities;")
     The variable authority_count should equal 0
     The stderr should include "unsupported localized file type"
@@ -476,8 +529,10 @@ EOF
     When call run_copy "$id"
     The status should be success
     The contents of file "$RSYNCLOG" should include "devbox:$coincdir/doc.txt"
-    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/doc.txt"
-    The contents of file "$NCLOG" should not include "$coincdir/doc.txt"
+    # Exact equality on the whole paths field: the cache path is the ONLY
+    # path sent, so the stale coincident local twin provably never rode along.
+    got_paths="$(recob_field_hex 1 paths)"
+    The variable got_paths should equal "$(spec_hex "$HOME/.cache/pick-clipboard/files/$id/1/doc.txt")"
   End
 
   # Re-review follow-up 2: a fully-cached re-pick pulls nothing, so it must
@@ -514,21 +569,27 @@ EOF
     The status should be success
     The stderr should include "rsync"
     The contents of file "$RSYNCLOG" should equal ""
-    The contents of file "$NCLOG" should include "2489:T"
-    The contents of file "$NCLOG" should not include "cb.sock:U"
+    # The fallback is a clip.set on this machine's own bridge -- the trusted
+    # socket now, where the old wire dialed loopback :2489.
+    fallback="$(recob_op 1)|$(recob_endpoint 1)"
+    The variable fallback should equal "clip.set|trusted"
+    ops="$(recob_ops | tr '\n' ',')"
+    The variable ops should not include "clip.set.files"
   End
 
-  It 'local restore failure falls back to the current text-copy behavior'
+  It 'local restore failure (bridge down) falls back to the current text-copy behavior'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('file','mac-mini',300,'/tmp/a.txt'); SELECT last_insert_rowid();")
-    cat > "$BINDIR/nc" <<'EOF'
-#!/bin/sh
-exit 1
-EOF
-    chmod +x "$BINDIR/nc"
+    seed_file_url_blob "$id" /tmp/a.txt
+    # The whole bridge is down (the old fake made `nc` fail; killing the
+    # recorder is the same condition, honestly), so the by-rowid restore AND
+    # the trusted-socket clip.set both fail -- the pbcopy shim is the
+    # fallback that must still land the text.
+    bridge_down_copy() { recob_stop; run_copy "$1"; }
 
-    When call run_copy "$id"
+    When call bridge_down_copy "$id"
     The status should be success
     The stderr should include "files restore"
+    The contents of file "$PBCOPYLOG" should include "/tmp/a.txt"
   End
 
   # NOTE: the in-place overwrite of $BINDIR/rsync below is intentionally
@@ -550,8 +611,10 @@ EOF
     When call run_copy "$id"
     The status should be success
     The stderr should include "rsync failed"
-    The contents of file "$NCLOG" should include "2489:T"
-    The contents of file "$NCLOG" should not include "cb.sock:U"
+    fallback="$(recob_op 1)|$(recob_endpoint 1)"
+    The variable fallback should equal "clip.set|trusted"
+    ops="$(recob_ops | tr '\n' ',')"
+    The variable ops should not include "clip.set.files"
   End
 
   # --- spec R3: readable pull failures + warning suppression -----------------
@@ -679,6 +742,7 @@ EOF
   # --- spec R5c: bump-on-use ---------------------------------------------------
   It 'local files row restore bumps the original row'\''s last_ts (spec R5c)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',100); SELECT last_insert_rowid();")
+    seed_file_url_blob "$id" /tmp/a.txt
 
     When call run_copy "$id"
     The status should be success
@@ -714,16 +778,17 @@ EOF
   End
 
   # --- spec R4: headless --restore-id CLI mode --------------------------------
-  It '--restore-id <n> works headless for a local row (spec R4): sends U with the id: form, exit 0'
+  It '--restore-id <n> works headless for a local row (spec R4): one clip.set.files{clip_id} exchange, exit 0'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',500); SELECT last_insert_rowid();")
+    seed_file_url_blob "$id" /tmp/a.txt
 
     When call run_restore_id "$id"
     The status should be success
-    The contents of file "$NCLOG" should include "cb.sock:U"
-    The contents of file "$NCLOG" should include "id:$id"
+    wire="$(recob_op 1)|$(recob_endpoint 1)|clip_id=$(recob_field_hex 1 clip_id)"
+    The variable wire should equal "clip.set.files|trusted|clip_id=$(spec_hex "$id")"
   End
 
-  It '--restore-id <n> works headless for a remote manifest row (spec R4): rsync-pulls then sends U with the localized paths, exit 0'
+  It '--restore-id <n> works headless for a remote manifest row (spec R4): rsync-pulls then sends clip.set.files{paths} with the localized paths, exit 0'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','devbox',501); SELECT last_insert_rowid();")
     mf="$SHELLSPEC_TMPBASE/manifest.bin"
     printf '%s/remote-a.txt' "$REMOTE_SRC" > "$mf"
@@ -732,8 +797,10 @@ EOF
     When call run_restore_id "$id"
     The status should be success
     The contents of file "$RSYNCLOG" should include "devbox:$REMOTE_SRC/remote-a.txt"
-    The contents of file "$NCLOG" should include "cb.sock:U"
-    The contents of file "$NCLOG" should include "$HOME/.cache/pick-clipboard/files/$id/1/remote-a.txt"
+    wire="$(recob_op 1)|$(recob_endpoint 1)"
+    The variable wire should equal "clip.set.files|trusted"
+    got_paths="$(recob_field_hex 1 paths)"
+    The variable got_paths should equal "$(spec_hex "$HOME/.cache/pick-clipboard/files/$id/1/remote-a.txt")"
   End
 
   It '--restore-id rejects a non-numeric id, exit 1 (spec R4)'
@@ -744,13 +811,10 @@ EOF
 
   It '--restore-id exits 1 when the underlying restore genuinely fails (spec R4)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',502); SELECT last_insert_rowid();")
-    cat > "$BINDIR/nc" <<'EOF'
-#!/bin/sh
-exit 1
-EOF
-    chmod +x "$BINDIR/nc"
+    seed_file_url_blob "$id" /tmp/a.txt
+    bridge_down_restore() { recob_stop; run_restore_id "$1"; }
 
-    When call run_restore_id "$id"
+    When call bridge_down_restore "$id"
     The status should be failure
     The stderr should include "local files restore"
   End
@@ -770,13 +834,13 @@ EOF
   # timeout instead of silently passing.
   It '--restore-id failure exits promptly (never holds) even though the same reason reaches stderr (spec R4 + W2)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',503); SELECT last_insert_rowid();")
-    cat > "$BINDIR/nc" <<'EOF'
-#!/bin/sh
-exit 1
-EOF
-    chmod +x "$BINDIR/nc"
+    seed_file_url_blob "$id" /tmp/a.txt
+    bridge_down_restore_prompt() {
+      recob_stop
+      timeout 5 zsh -f "$SCRIPT" --restore-id "$1" < /dev/null
+    }
 
-    When call timeout 5 zsh -f "$SCRIPT" --restore-id "$id" < /dev/null
+    When call bridge_down_restore_prompt "$id"
     The status should be failure
     The status should not equal 124
     The stderr should include "local files restore"
@@ -870,45 +934,36 @@ EOF
 End
 
 # Tests for X9: the synthetic live-peer row (spec §22) must sort
-# chronologically by when the PEER's clipboard was copied (fetched via the
-# new S get-current-ts op), not always float to the top above every local
-# row.
+# chronologically by when the PEER's clipboard was copied (clip.get's
+# timestamp field), not always float to the top above every local row.
 #
 # bridge_up (top of executable_pick-clipboard) requires an SSH env var AND a
-# real connect-probe success (`nc -z -w 1 host port`), so the fake `nc` here
-# is a different, more capable shape than the shared one in the Describe
-# above (which never sets an SSH env var, so bridge_up -- and this fake --
-# never engage there): it answers the `-z` probe unconditionally, and
-# dispatches the framed G/H/S reads (the picker's live-row fetch at open) to
-# fixed canned replies. It does NOT attempt the `-z` probe's real filehandle
-# behavior (no listener, no timeout) -- just "yes, reachable".
+# real connect-probe success. Under the RECOB harness both come for free: the
+# recorder's TCP listener answers the probe (recob_start exported
+# CLIPBOARD_BRIDGE_PORT, which the picker's own BRIDGE_PORT resolution
+# mirrors), and the live-row fetch is three real, authenticated `clip.get`
+# exchanges over the --peer route whose reply is scripted per example
+# (live_reply). The script is re-read from the start on every connection, so
+# ONE `ok` directive serves the text, host and timestamp reads identically.
 Describe 'pick-clipboard: live-peer row ordering (X9)'
+  Include tests/recob_helper.sh
+
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
-
-  # be32_esc <n> -- prints a literal `\NNN\NNN\NNN\NNN` (backslash + 3-digit
-  # octal, 4x) BE32-length escape sequence as TEXT, for baking into a
-  # generated shell script's own `printf 'FORMAT'` call (mirrors the
-  # dispatcher's own int_to_be32; see its comment for why printf's \NNN
-  # octal escapes are the reliable way to emit raw framing bytes).
-  be32_esc() {
-    local n=$1
-    printf '\\%03o\\%03o\\%03o\\%03o' $(( (n>>24)&255 )) $(( (n>>16)&255 )) $(( (n>>8)&255 )) $(( n&255 ))
-  }
 
   setup() {
     unset SSH_CLIENT SSH_TTY
     export SSH_CONNECTION="10.0.0.1 1234 10.0.0.2 22"   # bridge_up precondition 1/2
-    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
     export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
-    # Phase 7: sandbox self_host's self-name lookup too (see the matching
-    # comment in the Ctrl-Y files branch Describe's setup() above) so this
-    # machine's own self-name file, if any, can never leak into MY_HOST here.
-    export XDG_STATE_HOME="$HOME/.local/state"
     export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
-    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    # Same identity pinning as the Ctrl-Y Describe: the recorder's sandboxed
+    # self-name file (which outranks scutil in clip::self_host) makes
+    # MY_HOST deterministically mac-mini.
+    RECOB_SELF_NAME=mac-mini
+    recob_start
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     export PICK_CLIPBOARD_DB="$DB"
+    mkdir -p "$XDG_DATA_HOME/pick-clipboard"
     # The budget test below exports PICK_CLIPBOARD_LIMIT; shellspec shares one
     # shell across a Describe's examples, so clear it here so every other
     # example runs at the default cap (500) rather than inheriting a stale
@@ -942,61 +997,26 @@ Describe 'pick-clipboard: live-peer row ordering (X9)'
     # Peer fixtures: text distinct from every seeded local row's text_plain
     # (so the §22.5 dedup check never suppresses the live row out from under
     # these ordering tests) and a peer hostname. LIVE_TS is set per-It below
-    # (each example wires its own G_LEN/H_LEN/S_LEN + fake nc).
+    # (each example scripts its own clip.get reply via live_reply).
     LIVE_TEXT="peer clipboard text, distinct from every local row"
     LIVE_HOST="peer-host"
 
-    # Fake scutil: pins THIS host's name (mac-mini), same convention as the
-    # Describe above -- source_host==self / remote comparisons need it.
-    cat > "$BINDIR/scutil" <<'EOF'
-#!/bin/sh
-if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
-  echo mac-mini
-  exit 0
-fi
-exit 1
-EOF
-    chmod +x "$BINDIR/scutil"
-
-    export PATH="$BINDIR:$PATH"
     export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
     export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
     export PICK_CLIPBOARD_NO_RUN=1
     export SCRIPT_PATH="$SCRIPT"
   }
   BeforeEach 'setup'
+  AfterEach 'recob_stop'
 
-  # write_fake_nc <live_ts> -- the picker's live-row fetch at open (spec §22)
-  # sends G (peer text), H (peer host), then S (X9, peer copy-time) over the
-  # reverse-tunnel loopback port; bridge_up itself first probes with
-  # `nc -z -w 1`. This fake answers all four shapes: `-z` -> immediate
-  # success (no stdin read -- a real probe sends none either); G/H/S -> the
-  # canned LIVE_TEXT/LIVE_HOST/<live_ts> reply; anything else (T/P from the
-  # accept-time materialize path, not exercised by these ordering-only
-  # tests) -> a bare O + empty body.
-  write_fake_nc() {
-    local live_ts=$1
-    local g_hdr h_hdr s_hdr
-    g_hdr=$(be32_esc ${#LIVE_TEXT})
-    h_hdr=$(be32_esc ${#LIVE_HOST})
-    s_hdr=$(be32_esc ${#live_ts})
-    cat > "$BINDIR/nc" <<EOF
-#!/bin/sh
-if [ "\$1" = "-z" ]; then
-  exit 0
-fi
-raw="\$(mktemp "$SHELLSPEC_TMPBASE/nc-raw.XXXXXX")"
-cat > "\$raw"
-opcode=\$(dd if="\$raw" bs=1 count=1 2>/dev/null)
-rm -f "\$raw"
-case "\$opcode" in
-  G) printf 'O'; printf '$g_hdr'; printf '%s' '$LIVE_TEXT' ;;
-  H) printf 'O'; printf '$h_hdr'; printf '%s' '$LIVE_HOST' ;;
-  S) printf 'O'; printf '$s_hdr'; printf '%s' '$live_ts' ;;
-  *) printf 'O\\000\\000\\000\\000' ;;
-esac
-EOF
-    chmod +x "$BINDIR/nc"
+  # live_reply <live_ts> -- script the recorder's answer for the picker's
+  # live-row fetch at open (spec §22): one §6.1 clip.get reply carrying
+  # text/regtype/timestamp/host. The picker reads text, host and timestamp
+  # as three separate --raw exchanges (one connection each), and each
+  # connection re-reads the script from the start, so this single directive
+  # serves all three consistently.
+  live_reply() {
+    recob_script "ok text=$(spec_hex "$LIVE_TEXT") regtype=$(spec_hex v) timestamp=$(spec_hex "$1") host=$(spec_hex "$LIVE_HOST")"
   }
 
   # run_emit -- sources the picker under PICK_CLIPBOARD_NO_RUN (same escape
@@ -1018,7 +1038,7 @@ EOF
   It 'interleaves the live row by copy-time between newer and older local rows'
     id_old=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'old local'); SELECT last_insert_rowid();")
     id_new=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',300,'new local'); SELECT last_insert_rowid();")
-    write_fake_nc 200
+    live_reply 200
 
     When call run_emit
     The status should be success
@@ -1029,7 +1049,7 @@ EOF
   It 'places the live row at the very top when its copy-time is newer than every local row'
     id_a=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'a'); SELECT last_insert_rowid();")
     id_b=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',200,'b'); SELECT last_insert_rowid();")
-    write_fake_nc 999
+    live_reply 999
 
     When call run_emit
     The status should be success
@@ -1040,7 +1060,7 @@ EOF
   It 'places the live row at the very bottom when its copy-time is older than every local row'
     id_a=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'a'); SELECT last_insert_rowid();")
     id_b=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',200,'b'); SELECT last_insert_rowid();")
-    write_fake_nc 1
+    live_reply 1
 
     When call run_emit
     The status should be success
@@ -1053,7 +1073,7 @@ EOF
   It 'keeps a pinned local row above the live row even when the pinned row is chronologically older'
     id_pinned=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain, pinned) VALUES ('text','mac-mini',10,'pinned-old',1); SELECT last_insert_rowid();")
     id_unpinned=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',50,'unpinned-old'); SELECT last_insert_rowid();")
-    write_fake_nc 200
+    live_reply 200
 
     When call run_emit
     The status should be success
@@ -1068,7 +1088,7 @@ EOF
   It 'places a local row tied with the live copy-time just below the live row'
     id_tie=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',200,'tie'); SELECT last_insert_rowid();")
     id_above=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',300,'above'); SELECT last_insert_rowid();")
-    write_fake_nc 200
+    live_reply 200
 
     When call run_emit
     The status should be success
@@ -1090,7 +1110,7 @@ EOF
     sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',150,'b');"
     sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',250,'c');"
     sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',350,'d');"
-    write_fake_nc 200
+    live_reply 200
 
     n=$(run_emit | grep -c .)
     When call test "$n" -le 2

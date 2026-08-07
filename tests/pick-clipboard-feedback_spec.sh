@@ -7,7 +7,19 @@
 # sourced under PICK_CLIPBOARD_NO_RUN in a zsh -f (no ~/.zshenv), against a
 # sandboxed HOME + seeded store; notify/hs/rsync are captured by fake
 # executables wired in via the PICK_CLIPBOARD_* test overrides.
+#
+# CONVERTED TO THE RECOB HARNESS (tests/recob_helper.sh): the bridge the
+# copies land on is a REAL `recobd --record` per example (reached through
+# the suite's own system-bridge build via recob_start's SYSTEM_BRIDGE_BIN
+# export), not a fake `nc` that answered 'O' to anything. The copies these
+# feedback tests ride on -- clip.set for a text row, clip.set.files{paths}
+# after a pull -- are therefore really served, against a private sandboxed
+# pasteboard; the daemon also writes its own post-write snapshot row into
+# the shared store, which none of these assertions key on (they read rows by
+# the picked id, never by MAX(id)).
 Describe 'pick-clipboard: copy feedback'
+  Include tests/recob_helper.sh
+
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
@@ -15,11 +27,16 @@ Describe 'pick-clipboard: copy feedback'
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
     BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
     export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
-    export XDG_STATE_HOME="$HOME/.local/state"
     export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
-    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    # Real daemon, pinned identity: mac-mini via the sandboxed self-name file
+    # recob_start writes (it outranks scutil in clip::self_host, so the old
+    # scutil fake is gone). The picker and the daemon share ONE store under
+    # recob_start's XDG_DATA_HOME.
+    RECOB_SELF_NAME=mac-mini
+    recob_start
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     export PICK_CLIPBOARD_DB="$DB"
+    mkdir -p "$XDG_DATA_HOME/pick-clipboard"
     rm -f "$DB"
     sqlite3 "$DB" '
       CREATE TABLE clips (
@@ -51,33 +68,14 @@ Describe 'pick-clipboard: copy feedback'
       );
     '
 
-    # Fake scutil pins THIS host to mac-mini (same convention as
-    # tests/pick-clipboard-files_spec.sh) so local/remote comparisons are
-    # deterministic.
-    cat > "$BINDIR/scutil" <<'EOF'
+    # Fake pbcopy: clip::copy_by_id's last-resort fallback. With the daemon
+    # answering it is never reached, but a spec must NEVER be one failure
+    # path away from writing the human's real pasteboard.
+    cat > "$BINDIR/pbcopy" <<'EOF'
 #!/bin/sh
-if [ "$1" = "--get" ] && [ "$2" = "LocalHostName" ]; then
-  echo mac-mini
-  exit 0
-fi
-exit 1
+cat > /dev/null
 EOF
-    chmod +x "$BINDIR/scutil"
-
-    NCLOG="$SHELLSPEC_TMPBASE/nclog"; : > "$NCLOG"
-    # Fake nc: logs "<port>:<raw frame, NUL -> '|'>" then answers a bare 'O'
-    # status -- verbatim from tests/pick-clipboard-files_spec.sh.
-    cat > "$BINDIR/nc" <<EOF
-#!/bin/sh
-argc=\$#
-eval "port=\\\${\$argc}"
-raw="$SHELLSPEC_TMPBASE/nc-raw.\$\$"
-cat > "\$raw"
-{ printf '%s:' "\$port"; LC_ALL=C tr '\\0' '|' < "\$raw"; printf '\\n'; } >> "$NCLOG"
-rm -f "\$raw"
-printf 'O\\000\\000\\000\\000'
-EOF
-    chmod +x "$BINDIR/nc"
+    chmod +x "$BINDIR/pbcopy"
 
     NOTIFYLOG="$SHELLSPEC_TMPBASE/notifylog"; : > "$NOTIFYLOG"
     # Fake notify front-end: logs its argv, one line per call.
@@ -138,6 +136,7 @@ EOF
     export SCRIPT_PATH="$SCRIPT"
   }
   BeforeEach 'setup'
+  AfterEach 'recob_stop'
 
   # Calls a sourced picker function with the given argv, zsh -f sandboxed.
   run_fn() {
@@ -231,8 +230,8 @@ EOF
 
     It 'files-restore failure with text fallback does NOT toast (W2 hold owns that)'
       # files kind + no recorded paths -> clip::copy_files_by_id fails fast,
-      # copy_by_id falls through to the text fallback (bridge copy succeeds
-      # via fake nc) -- CLIP_RESTORE_FAILURE is set, so no toast.
+      # copy_by_id falls through to the text fallback (a real clip.set the
+      # daemon serves) -- CLIP_RESTORE_FAILURE is set, so no toast.
       id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, source_host, last_ts) VALUES ('files','/tmp/x','work-laptop',100); SELECT last_insert_rowid();")
       When call run_fn clip::copy_by_id "$id"
       The stderr should include 'no file paths recorded'

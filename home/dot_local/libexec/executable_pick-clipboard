@@ -38,12 +38,13 @@
 #                register type so a block clip stays block-pasteable
 #                (clip::copy_by_id). Self-contained (§11): the clip already
 #                lives here, so copy is local; when bridge-up it also ships to
-#                the machine you're sitting at (image -> C, text -> T(regtype));
+#                the machine you're sitting at (image -> clip.set.rich,
+#                text -> clip.set with the regtype);
 #                iPad -> OSC 52. Emits nothing to the pane (unlike Enter).
 #                files/file/directory rows restore a REAL file object onto
 #                this Mac's pasteboard instead (files-yazi design §9,
 #                clip::copy_files_by_id): a local row does a full-fidelity
-#                id:<n> restore, a remote manifest row rsyncs the files down
+#                by-rowid restore, a remote manifest row rsyncs the files down
 #                to ~/.cache/pick-clipboard/files/<id>/<idx>/ first and
 #                localizes the clip (an already-localized row short-circuits
 #                to its on-disk copies); any failure there falls back to the
@@ -93,9 +94,12 @@ It is created by the Hammerspoon clipboard-history watcher (chezmoi apply)."
 # the picker shows (it's always this machine's whole store); it only decides
 # where a Ctrl-Y copy additionally lands (ship to the machine you're sitting at).
 BRIDGE_HOST=127.0.0.1
-BRIDGE_PORT=2490   # reverse-forwarded remote clipboard (SSH bridge-up)
-LOCAL_PORT=2489   # this machine's own clipboard-bridge (sitting locally)
-LOCAL_SOCKET=$(clipbridge::local_socket) # trusted local file operations
+# The probe must name the same endpoint the --peer wrappers dial: the client
+# library resolves CLIPBOARD_BRIDGE_PORT (default 2490, the reverse-forwarded
+# peer), so mirror that resolution instead of hardcoding the default. This
+# machine's own bridge is reached over the trusted Unix socket now — the old
+# LOCAL_PORT (2489) plumbing is gone with the opcode wire.
+BRIDGE_PORT="${CLIPBOARD_BRIDGE_PORT:-2490}"
 bridge_up=0
 # Canonical remote-detection triple (== mux::is_remote, mux-bootstrap.zsh);
 # inlined here (this file's own lib stack does not pull in that layer). Same
@@ -148,29 +152,30 @@ remote_when="source_host IS NOT NULL AND source_host <> '$MY_HOST'"
 # CURRENT clipboard of the machine you're sitting at as one synthetic top row,
 # fetched live at open time. Viewing != owning (§11): nothing is written to the
 # store until the row is accepted (Enter/Ctrl-Y), which materializes it via the
-# same P op nvim `p` uses. Bounded + best-effort: on any failure the row is just
-# omitted, never blocking the picker. The probe (bridge_up) already succeeded,
-# so the G/H reads are fast loopback round-trips.
+# same store.persist.text nvim `p` uses. Bounded + best-effort: on any failure
+# the row is just omitted, never blocking the picker. The probe (bridge_up)
+# already succeeded, so the clip.get reads are fast loopback round-trips.
 #
 # LIVE_TEXT_FILE non-empty => a live entry is available; its bytes are the exact
-# peer clipboard text (reused verbatim at accept time — no second G). live_row_file
+# peer clipboard text (reused verbatim at accept time — no second fetch). live_row_file
 # holds the pre-rendered picker line, emitted at the top by emit_rows/emit_script.
 LIVE_TEXT_FILE=""
 LIVE_HOST=""
 live_row_file=""
 if (( bridge_up )); then
   _lt=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-live.XXXXXX")
-  if clipbridge::get "$BRIDGE_HOST" "$BRIDGE_PORT" > "$_lt" 2>/dev/null && [[ -s "$_lt" ]] &&
+  if clipbridge::clip_get_raw text > "$_lt" 2>/dev/null && [[ -s "$_lt" ]] &&
      grep -q '[^[:space:]]' "$_lt"; then          # empty/whitespace guard (§22.2)
-    LIVE_HOST=$(clipbridge::get_host "$BRIDGE_HOST" "$BRIDGE_PORT" 2>/dev/null)
+    LIVE_HOST=$(clipbridge::clip_get_raw host 2>/dev/null)
     [[ -n "$LIVE_HOST" ]] || LIVE_HOST="peer"
     # Dedup (§22.5, revised for §23): suppress the live entry when its text is
     # already in the store — compared trailing-newline-insensitively and
     # regardless of source_host. Two reasons the old (peerhost, type_hash) key
-    # misses: (1) op_get (G) strips the trailing newline a stored copy keeps, so
-    # sha256(live) != the stored type_hash; (2) a remote copy (§23) now stores the
-    # clip LOCALLY (source_host = this host, not the peer). rtrim(char(10)) on both
-    # sides drops the newline difference; no source_host filter covers any origin;
+    # misses: (1) a trailing newline is not identity — the old G op even
+    # stripped it outright, so a stored copy and its live twin can differ by
+    # exactly that byte; (2) a remote copy (§23) now stores the clip LOCALLY
+    # (source_host = this host, not the peer). rtrim(char(10)) on both sides
+    # drops the newline difference; no source_host filter covers any origin;
     # readfile keeps the compare byte-safe for arbitrary text.
     if [[ -z "$(sqlite3 "$DB_FILE" "SELECT 1 FROM clips WHERE rtrim(text_plain, char(10)) = rtrim(CAST(readfile('$_lt') AS TEXT), char(10)) LIMIT 1;" 2>/dev/null)" ]]; then
       LIVE_TEXT_FILE="$_lt"
@@ -181,8 +186,9 @@ fi
 
 # X9: the live row must sort chronologically by when the PEER's clipboard was
 # actually copied, not always float to the top. One more fast loopback round-
-# trip (op S) for the copy-time -- best-effort: on any failure (bridge dropped
-# between the G/H reads above and now, a non-numeric reply, ...) fall back to
+# trip (clip.get's timestamp field) for the copy-time -- best-effort: on any
+# failure (bridge dropped between the text/host reads above and now, a
+# non-numeric reply, ...) fall back to
 # "now", which sorts the row at/near the top exactly like the old always-
 # pinned-to-top behavior, so a lookup failure never loses the row or
 # misplaces it below fresh local rows. live_ts_threshold feeds the ABOVE/
@@ -192,7 +198,7 @@ fi
 LIVE_TS=""
 live_ts_threshold=-1
 if [[ -n "$LIVE_TEXT_FILE" ]]; then
-  LIVE_TS="$(clipbridge::get_ts "$BRIDGE_HOST" "$BRIDGE_PORT" 2>/dev/null)"
+  LIVE_TS="$(clipbridge::clip_get_raw timestamp 2>/dev/null)"
   [[ "$LIVE_TS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || LIVE_TS=$EPOCHREALTIME
   live_ts_threshold=$LIVE_TS
 fi
@@ -272,30 +278,23 @@ clip::localized_preview() {
   fi
 }
 
-# Ship an image clip's blob to the remote via the reverse channel (C op). Tries
-# each image UTI in turn (same set/order as clip::markdown_image); the first with
-# a stored blob is packaged as <BE16 uti_len><uti><blob> and sent. Returns 0 on
-# an 'O' response. Byte-safe: the payload (BE16 len + binary blob) is built in a
-# temp file under nomultibyte, never a $(...) capture.
+# Ship an image clip's blob to the remote via the reverse channel
+# (clip.set.rich). Tries each image UTI in turn (same set/order as
+# clip::markdown_image); the first with a stored blob is sent — the uti rides
+# as a field, the blob bytes ride stdin, so no framing survives here. Returns
+# 0 on a success reply. Byte-safe: the blob is staged in a temp file (sqlite's
+# writefile), never a $(...) capture.
 clip::ship_image_by_id() {
   emulate -L zsh
   setopt nomultibyte
-  local id=$1 uti blobf payloadf
+  local id=$1 uti blobf
   local -a utis=(public.png public.jpeg public.tiff com.compuserve.gif)
   for uti in "${utis[@]}"; do
     blobf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-ship.XXXXXX") || return 1
     sqlite3 "$DB_FILE" "SELECT writefile('$blobf', blob) FROM clip_types WHERE clip_id=$id AND uti='$uti';" >/dev/null 2>&1
     if [[ -s "$blobf" ]]; then
-      payloadf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-ship-p.XXXXXX") || { rm -f "$blobf"; return 1; }
-      local -i ulen=$#uti
-      {
-        printf "\\$(printf %03o $(( (ulen >> 8) & 255 )))\\$(printf %03o $(( ulen & 255 )))"
-        printf '%s' "$uti"
-        cat "$blobf"
-      } > "$payloadf"
+      if clipbridge::ship_rich "$uti" < "$blobf"; then rm -f "$blobf"; return 0; fi
       rm -f "$blobf"
-      if clipbridge::send "$BRIDGE_HOST" "$BRIDGE_PORT" C "$payloadf"; then rm -f "$payloadf"; return 0; fi
-      rm -f "$payloadf"
       return 1
     fi
     rm -f "$blobf"
@@ -303,70 +302,70 @@ clip::ship_image_by_id() {
   return 1
 }
 
-# Set the target clipboard to a clip via the framing T op (regtype + exact
-# text), so the register type is RECORDED alongside — a later nvim paste can
-# then block-paste it. <port> picks the dispatcher: BRIDGE_PORT (the remote over
-# the reverse tunnel) or LOCAL_PORT (this machine's own bridge). text_plain is
-# written via writefile so no sqlite trailing newline sneaks in (an extra line
-# would corrupt a block clip). Returns 0 on an 'O' response.
+# Set a clipboard to a clip via clip.set (regtype + exact text), so the
+# register type is RECORDED alongside — a later nvim paste can then block-paste
+# it. <target> picks the endpoint: `peer` (the machine you're sitting at, over
+# the reverse tunnel — clipbridge::set_text) or `local` (this machine's own
+# bridge, over the trusted socket — the old LOCAL_PORT TCP hop is gone).
+# text_plain is written via writefile so no sqlite trailing newline sneaks in
+# (an extra line would corrupt a block clip), and the bytes ride stdin so any
+# byte survives. Returns 0 on a success reply.
 clip::set_via_bridge() {
-  local port=$1 id=$2 rt txtf
+  local target=$1 id=$2 rt txtf
   rt=$(sqlite3 "$DB_FILE" "SELECT IFNULL(regtype,'v') FROM clips WHERE id=$id;" 2>/dev/null) || rt=v
   [[ "$rt" == (v|l|b) ]] || rt=v
-  local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-set.XXXXXX") || return 1
-  txtf="$pf.txt"
-  print -rn -- "$rt" > "$pf"
+  txtf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-set.XXXXXX") || return 1
   sqlite3 "$DB_FILE" "SELECT writefile('$txtf', text_plain) FROM clips WHERE id=$id;" >/dev/null 2>&1
-  [[ -f "$txtf" ]] && cat "$txtf" >> "$pf"
-  rm -f "$txtf"
-  if clipbridge::send "$BRIDGE_HOST" "$port" T "$pf"; then rm -f "$pf"; return 0; fi
-  rm -f "$pf"; return 1
+  if [[ "$target" == peer ]]; then
+    if clipbridge::set_text "$rt" < "$txtf"; then rm -f "$txtf"; return 0; fi
+  else
+    if clipbridge::set_text_local "$rt" < "$txtf"; then rm -f "$txtf"; return 0; fi
+  fi
+  rm -f "$txtf"; return 1
 }
 
-# clip::send_file_urls <path>... -- send a form-A U frame (NUL-joined absolute
-# paths) to this Mac's own bridge; op_set_file_urls's form A is what generates
-# the NSFilenamesPboardType/public.file-url Finder needs. Shared by the
-# localized-row guard and the post-pull send in clip::copy_files_by_id.
-# Returns 0 on an 'O' response.
+# clip::send_file_urls <path>... -- clip.set.files{paths} (NUL-joined absolute
+# paths on stdin) to this Mac's own bridge over the trusted socket; the paths
+# form is what generates the NSFilenamesPboardType/public.file-url Finder
+# needs. Shared by the localized-row guard and the post-pull send in
+# clip::copy_files_by_id. Returns 0 on a success reply.
 clip::send_file_urls() {
-  local upf; upf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-fileurls.XXXXXX") || return 1
   local first=1 lp
   {
     for lp in "$@"; do
       if (( first )); then print -rn -- "$lp"; first=0
       else print -rn -- $'\0'"$lp"; fi
     done
-  } > "$upf"
-  if clipbridge::send_unix "$LOCAL_SOCKET" U "$upf"; then rm -f "$upf"; return 0; fi
-  rm -f "$upf"
-  return 1
+  } | clipbridge::set_files_paths
 }
 
 # Restore a files/file/directory row's real file object onto THIS Mac's
 # pasteboard (Ctrl-Y, files-yazi design §9/§12; M2 scope -- the picker runs on
-# the Mac, so a files restore ALWAYS targets $LOCAL_PORT, this machine's own
-# bridge, regardless of bridge_up/SSH: Finder only reads a real file-url on
-# the machine it's running on). Returns 1 on any failure so the caller
-# (clip::copy_by_id) falls back to the existing text behavior; a reason goes
-# to stderr. Four cases, in dispatch order:
+# the Mac, so a files restore ALWAYS targets this machine's own bridge over
+# the trusted socket, regardless of bridge_up/SSH: Finder only reads a real
+# file-url on the machine it's running on). Returns 1 on any failure so the
+# caller (clip::copy_by_id) falls back to the existing text behavior; a reason
+# goes to stderr. Four cases, in dispatch order:
 #
 #   1. source_host is this host (or NULL/legacy) -- a genuine local capture
-#      with real NSFilenamesPboardType/public.file-url blobs: U with the
-#      id:<n> form, a full-fidelity restore_by_id. EXCEPTION (X2-redo): a
-#      self-origin row whose ONLY recorded blob is x-file-manifest (an
-#      M-persisted row -- pbcopy over SSH writing directly to this machine's
-#      own store, since the watcher can't capture a locked/headless origin's
-#      pasteboard) has no NSFilenamesPboardType/public.file-url to restore
-#      via id: -- it takes form A with the manifest's own paths instead,
-#      same wire shape as case 2 below minus the cache-root check (already
-#      guaranteed local by source_host==self).
+#      with real NSFilenamesPboardType/public.file-url blobs:
+#      clip.set.files{clip_id}, a full-fidelity by-rowid restore. EXCEPTION
+#      (X2-redo): a self-origin row whose ONLY recorded blob is
+#      x-file-manifest (an M-persisted row -- pbcopy over SSH writing
+#      directly to this machine's own store, since the watcher can't capture
+#      a locked/headless origin's pasteboard) has no NSFilenamesPboardType/
+#      public.file-url to restore by rowid -- it takes the paths form with
+#      the manifest's own paths instead, same wire shape as case 2 below
+#      minus the cache-root check (already guaranteed local by
+#      source_host==self).
 #   2. remote origin, but every recorded path (x-file-manifest, else
 #      x-resolved-path) lives under the picker's own cache root
-#      ~/.cache/pick-clipboard/files/ AND exists on disk: U with those paths
-#      directly (form A). This is the row shape the picker itself creates
-#      when it localizes a pull (below) -- single-path rows carry only a
-#      synthetic x-resolved-path (id:<n> would restore the blob under that
-#      literal UTI: nothing pasteable), multi-path rows carry an
+#      ~/.cache/pick-clipboard/files/ AND exists on disk:
+#      clip.set.files{paths} with those paths directly. This is the row
+#      shape the picker itself creates when it localizes a pull (below) --
+#      single-path rows carry only a synthetic x-resolved-path (a by-rowid
+#      restore would write the blob under that literal UTI: nothing
+#      pasteable), multi-path rows carry an
 #      x-file-manifest of LOCAL paths (the rsync branch would try to pull
 #      them from the origin, which never had them). The check handles both
 #      shapes without caring which UTI the paths came from. The cache-root
@@ -387,7 +386,7 @@ clip::send_file_urls() {
 #      failure does not block the paste; SKIPPED entirely when nothing was
 #      actually pulled, i.e. every position was already cached -- these rows
 #      have no type_hash, so a re-pick would otherwise pile up an identical
-#      row every time) and U the localized paths (form A).
+#      row every time) and clip.set.files{paths} the localized paths.
 #   4. remote origin, only an x-resolved-path whose file is gone (a stale
 #      localized row after a cache sweep): fail honestly -- the origin never
 #      had the cache path, so there is nothing to re-pull from.
@@ -812,7 +811,7 @@ clip::copy_files_by_id() {
   fi
   rm -f "$blobtmp"
 
-  # Case 1: genuine local capture -> full-fidelity id: restore. EXCEPT when
+  # Case 1: genuine local capture -> full-fidelity by-rowid restore. EXCEPT when
   # the only recorded blob is an x-file-manifest (X2-redo: an M-persisted
   # row -- pbcopy over SSH writing directly into THIS machine's own store,
   # bypassing the Hammerspoon watcher entirely, since the origin is
@@ -822,11 +821,12 @@ clip::copy_files_by_id() {
   # picker's own case-3 localization below do, neither of which is
   # source_host==self) -- so srcuti=='x-file-manifest' here reliably means
   # "no real NSFilenamesPboardType/public.file-url blob exists to restore
-  # from". restore_by_id's blind writeAllData over just that private UTI
-  # would silently paste nothing in Finder; route through form A with the
-  # manifest's own paths instead. source_host is provenance, not trust: a
-  # public peer can claim this hostname, so the trusted-local M must also have
-  # created file_authorities for this row before it may reach U.
+  # from". A by-rowid restore's blind writeAllData over just that private UTI
+  # would silently paste nothing in Finder; route through the paths form with
+  # the manifest's own paths instead. source_host is provenance, not trust: a
+  # public peer can claim this hostname, so the trusted-local persist must
+  # also have created file_authorities for this row before it may reach
+  # clip.set.files.
   if [[ -z "$host" || "$host" == "$MY_HOST" ]]; then
     if [[ "$srcuti" == "x-file-manifest" ]]; then
       local authorized
@@ -845,15 +845,13 @@ clip::copy_files_by_id() {
       return 1
     fi
 
-    local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-fileid.XXXXXX") || return 1
-    print -rn -- "id:$id" > "$pf"
-    if clipbridge::send_unix "$LOCAL_SOCKET" U "$pf"; then
-      rm -f "$pf"
+    # clip.set.files{clip_id}: the bare decimal rowid rides as a named field
+    # (the old `id:` prefix disambiguated a positional payload and is dead).
+    if clipbridge::set_files_id "$id"; then
       clip::bump_last_ts_now "$id"   # spec R5c: bump-on-use
       return 0
     fi
-    rm -f "$pf"
-    clip::restore_fail "local files restore (id:$id) failed"
+    clip::restore_fail "local files restore (id $id) failed"
     return 1
   fi
 
@@ -1180,12 +1178,15 @@ done
 # clip stays block-pasteable. Self-contained model (§11): the clip already lives
 # in this store, so there is no cross-machine restore — copy is always a local
 # set, plus (when bridge-up) a ship to the machine you're sitting at:
-#   files/file/directory -> clip::copy_files_by_id (id: form locally, rsync
-#     pull-down + localize for a remote manifest row, spec §9/§12); on ANY
-#     failure there, falls through to the behavior below unchanged.
-#   bridge-up (SSH) image  -> C ship the blob to the peer (OSC 52 can't carry it)
-#   bridge-up (SSH) text   -> T(regtype+text) to the peer you're sitting at
-#   sitting locally (no SSH)-> T(regtype+text) to this machine's own bridge
+#   files/file/directory -> clip::copy_files_by_id (by-rowid form locally,
+#     rsync pull-down + localize for a remote manifest row, spec §9/§12); on
+#     ANY failure there, falls through to the behavior below unchanged.
+#   bridge-up (SSH) image  -> clip.set.rich ships the blob to the peer
+#     (OSC 52 can't carry it)
+#   bridge-up (SSH) text   -> clip.set(regtype+text) to the peer you're
+#     sitting at
+#   sitting locally (no SSH)-> clip.set(regtype+text) to this machine's own
+#     bridge over the trusted socket
 #   SSH bridge-down (iPad) / fail -> pbcopy shim (OSC 52 text; iPad can't block)
 clip::copy_by_id() {
   local id=$1
@@ -1202,9 +1203,9 @@ clip::copy_by_id() {
   # messaging for a failed-restore-then-successful-fallback copy.
   if (( bridge_up )); then
     [[ "$kind" == image ]] && clip::ship_image_by_id "$id" && { clip::copy_ok "$id"; return 0 }
-    clip::set_via_bridge "$BRIDGE_PORT" "$id" && { clip::copy_ok "$id"; return 0 }
+    clip::set_via_bridge peer "$id" && { clip::copy_ok "$id"; return 0 }
   elif [[ -z "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]]; then
-    clip::set_via_bridge "$LOCAL_PORT" "$id" && { clip::copy_ok "$id"; return 0 }
+    clip::set_via_bridge local "$id" && { clip::copy_ok "$id"; return 0 }
   fi
   if command -v pbcopy >/dev/null 2>&1; then
     if clip::text_by_id "$id" | pbcopy; then
@@ -1273,10 +1274,11 @@ clip::render_restore_failure() {
 
 # --- live entry accept handlers (spec §22.4) --------------------------------
 # The three below act on the already-fetched peer text in LIVE_TEXT_FILE — no
-# second G. deliver = print it (zellij-modal injects our stdout into the pane);
-# copy = set the clipboard I'm sitting at (T with the peer's regtype); materialize
-# = persist a self-contained local row via the P op on THIS machine's own bridge,
-# so the next open shows it as an ordinary stored row (badged remote) and the live
+# second fetch. deliver = print it (zellij-modal injects our stdout into the
+# pane); copy = set the clipboard I'm sitting at (clip.set with the peer's
+# regtype); materialize = persist a self-contained local row via
+# store.persist.text on THIS machine's own bridge (the trusted socket), so the
+# next open shows it as an ordinary stored row (badged remote) and the live
 # entry dedups against it. materialize runs after any accept; it's best-effort —
 # a failed persist still delivered the text.
 clip::deliver_live() {
@@ -1285,26 +1287,23 @@ clip::deliver_live() {
 
 clip::copy_live() {
   [[ -n "$LIVE_TEXT_FILE" && -s "$LIVE_TEXT_FILE" ]] || return 0
-  local rt; rt=$(clipbridge::request "$BRIDGE_HOST" "$BRIDGE_PORT" R 2>/dev/null)
+  local rt; rt=$(clipbridge::clip_get_raw regtype 2>/dev/null)
   [[ "$rt" == (v|l|b) ]] || rt=v
-  local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-live-cp.XXXXXX") || return 0
-  { print -rn -- "$rt"; cat "$LIVE_TEXT_FILE"; } > "$pf"
   # bridge_up is a precondition of a live entry existing, so the copy target is
-  # the machine I'm sitting at, over the reverse tunnel (T = set + record regtype).
-  clipbridge::send "$BRIDGE_HOST" "$BRIDGE_PORT" T "$pf" && clip::copy_toast text "$LIVE_HOST"
-  rm -f "$pf"
+  # the machine I'm sitting at, over the reverse tunnel (clip.set = set +
+  # record regtype; the text bytes ride stdin).
+  clipbridge::set_text "$rt" < "$LIVE_TEXT_FILE" && clip::copy_toast text "$LIVE_HOST"
+  return 0
 }
 
 clip::materialize_live() {
   [[ -n "$LIVE_TEXT_FILE" && -s "$LIVE_TEXT_FILE" ]] || return 0
-  local rt; rt=$(clipbridge::request "$BRIDGE_HOST" "$BRIDGE_PORT" R 2>/dev/null)
+  local rt; rt=$(clipbridge::clip_get_raw regtype 2>/dev/null)
   [[ "$rt" == (v|l|b) ]] || rt=v
-  local us=$'\x1f' rs=$'\x1e'
-  local pf; pf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-live-p.XXXXXX") || return 0
-  # P payload: source_host US kind US app US regtype RS text  (app empty)
-  { print -rn -- "${LIVE_HOST}${us}text${us}${us}${rt}${rs}"; cat "$LIVE_TEXT_FILE"; } > "$pf"
-  clipbridge::send "$BRIDGE_HOST" "$LOCAL_PORT" P "$pf"
-  rm -f "$pf"
+  # store.persist.text{host, kind=text, app='', regtype} on THIS machine's own
+  # bridge, over the trusted socket; the text bytes ride stdin.
+  clipbridge::persist_text "$LIVE_HOST" text '' "$rt" < "$LIVE_TEXT_FILE"
+  return 0
 }
 
 # Inject a clip's text into the originating zellij pane (embed mode), else

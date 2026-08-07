@@ -77,6 +77,13 @@ clipbridge::set_text() {
   clipbridge::call --peer --stdin text clip.set "regtype=$1"
 }
 
+# clipbridge::set_text_local <regtype>   (text bytes on stdin)
+#   The same clip.set against THIS machine's own bridge over the trusted
+#   socket — a local Ctrl-Y that must record the regtype alongside the write.
+clipbridge::set_text_local() {
+  clipbridge::call --stdin text clip.set "regtype=$1"
+}
+
 # clipbridge::ship_rich <uti>   (blob bytes on stdin)
 #   clip.set.rich on the peer: one typed pasteboard payload (an image, a PDF).
 #   The public endpoint's §9.3 UTI allow-list is the daemon's to enforce.
