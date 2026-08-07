@@ -10,7 +10,7 @@ use std::io;
 use std::mem::ManuallyDrop;
 use std::net::TcpListener;
 use std::os::fd::{FromRawFd, RawFd};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -61,37 +61,11 @@ pub struct Bound {
     pub trusted: Option<UnixListener>,
 }
 
-// mode_t is 16 bits on macOS and 32 on Linux; passing the wrong width is an ABI
-// mismatch rather than a compile error, so it is spelled out per platform.
-#[cfg(target_os = "macos")]
-type ModeT = u16;
-#[cfg(not(target_os = "macos"))]
-type ModeT = u32;
-
-extern "C" {
-    fn umask(mask: ModeT) -> ModeT;
-}
-
-/// Sets the process umask and restores it on drop. Process-global, which is
-/// safe here because binding happens once at startup, before any accept loop
-/// exists to race with it.
-struct UmaskGuard(ModeT);
-
-impl UmaskGuard {
-    fn set(mask: ModeT) -> Self {
-        UmaskGuard(unsafe { umask(mask) })
-    }
-}
-
-impl Drop for UmaskGuard {
-    fn drop(&mut self) {
-        unsafe { umask(self.0) };
-    }
-}
-
-pub fn mode_of(path: &Path) -> io::Result<u32> {
-    Ok(fs::metadata(path)?.permissions().mode() & 0o7777)
-}
+// The umask guard and the private-file helpers moved to `recob_wire::fsfile`
+// with the credential bootstrap that needs them; re-exported here because the
+// socket path is where the §3.3 story is told and the tests import them as
+// listen's.
+pub use recob_wire::fsfile::{ensure_private_dir, mode_of, write_private, UmaskGuard};
 
 /// §3.3 step 1: the mode of a bound Unix socket comes from the umask at bind
 /// time, so it is set *before* bind. There is then no instant in which the
@@ -118,45 +92,6 @@ fn prepare_parent(path: &Path) -> io::Result<()> {
         )
     })?;
     ensure_private_dir(parent)
-}
-
-/// A directory at 0700, created if absent and tightened if looser. Used for the
-/// trusted socket's parent (§3.3) and for the credential's state directory
-/// (§9.2), which carry the same requirement for the same reason.
-pub fn ensure_private_dir(parent: &Path) -> io::Result<()> {
-    match fs::metadata(parent) {
-        Ok(meta) if meta.is_dir() => {
-            let mode = meta.permissions().mode() & 0o777;
-            if mode != 0o700 {
-                fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
-                log!("tightened {} from {:04o} to 0700", parent.display(), mode);
-            }
-            Ok(())
-        }
-        Ok(_) => Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("{} exists and is not a directory", parent.display()),
-        )),
-        Err(_) => fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent),
-    }
-}
-
-/// Writes a file no other uid can read: umask before the write so it is never
-/// created permissive, an explicit chmod after so the mode does not depend on
-/// the ambient umask. Both, for the reason §3.3 gives about the socket and §9.2
-/// gives about the token push.
-pub fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        ensure_private_dir(parent)?;
-    }
-    {
-        let _guard = UmaskGuard::set(0o077);
-        fs::write(path, bytes)?;
-    }
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
 /// A socket file left behind by a dead daemon blocks bind with EADDRINUSE.

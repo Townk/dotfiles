@@ -4,7 +4,7 @@ LIBEXEC := $(PREFIX)/libexec
 TARGET  := target/release/$(BIN)
 
 build:
-	cargo build --release
+	cargo build --release --workspace
 	@ls -l $(TARGET)
 
 install: build
@@ -13,8 +13,8 @@ install: build
 
 test:
 	cargo fmt --check
-	cargo clippy --all-targets -- -D warnings
-	cargo test
+	cargo clippy --workspace --all-targets -- -D warnings
+	cargo test --workspace
 
 clean:
 	cargo clean

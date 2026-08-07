@@ -8,9 +8,7 @@
 //! (§6.1) and the clients (§8) are later phases; where a later phase's field or
 //! check belongs, this build says so rather than stubbing it.
 
-pub mod auth;
 pub mod capture;
-pub mod client;
 pub mod exposure;
 pub mod host;
 pub mod limits;
@@ -22,16 +20,13 @@ pub mod registry;
 pub mod session;
 pub mod store;
 pub mod validate;
-pub mod wire;
+
+// The shared halves live in `recob-wire` (§8: the clients are built from the
+// codec crate and must not inherit this crate's AppKit linkage). Re-exported
+// under their old paths so both `crate::wire` and `recobd::wire` still hold.
+pub use recob_wire::{auth, client, fsfile, wire};
 
 #[cfg(test)]
 mod testutil;
 
-/// Diagnostics go to stderr, where launchd and systemd already timestamp and
-/// route them. §3.4 requires the endpoint and the operation on every line.
-#[macro_export]
-macro_rules! log {
-    ($($arg:tt)*) => {
-        eprintln!("recobd: {}", format_args!($($arg)*))
-    };
-}
+pub use recob_wire::log;

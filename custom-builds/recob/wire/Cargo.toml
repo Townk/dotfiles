@@ -1,0 +1,16 @@
+# The wire crate: the codec, the credential primitives, the private-file
+# helpers they need, and the §8 client contract — everything both sides of the
+# socket share, and nothing platform-shaped. Split from `recobd` because the
+# daemon links AppKit on macOS and §8 forbids the clients from doing so; a
+# client binary that depended on the daemon crate would inherit the framework
+# silently, which is exactly the drift the build-level assertion exists to
+# catch.
+[package]
+name = "recob-wire"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sha2 = "0.10"
+subtle = "2"

@@ -5,8 +5,10 @@ edition = "2021"
 publish = false
 
 # probes/ is its own standalone package (its README explains why it is kept);
-# bench/ is zsh. Neither belongs to this package's build.
+# bench/ is zsh. Neither belongs to this workspace's build. wire/ is the
+# shared no-platform crate the client binaries are built from (§8).
 [workspace]
+members = ["wire"]
 exclude = ["probes", "bench"]
 
 # Cross-platform dependencies:
@@ -28,6 +30,7 @@ exclude = ["probes", "bench"]
 # CSPRNG §9.2 names. The only libc call the daemon makes by hand is umask(),
 # declared in listen.rs.
 [dependencies]
+recob-wire = { path = "wire" }
 sha2 = "0.10"
 subtle = "2"
 rusqlite = { version = "0.40", features = ["bundled"] }

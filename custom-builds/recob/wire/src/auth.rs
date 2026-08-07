@@ -211,12 +211,12 @@ fn create(path: &Path) -> io::Result<Token> {
             format!("{} has no parent directory", path.display()),
         )
     })?;
-    crate::listen::ensure_private_dir(parent)?;
+    crate::fsfile::ensure_private_dir(parent)?;
     let token = hex(&random_bytes(TOKEN_BYTES)?);
     // umask before the write and an explicit chmod after, so there is no window
     // in which the token exists at a permissive mode — the same belt-and-braces
     // §3.3 requires of the trusted socket, and §9.2 of the push.
-    crate::listen::write_private(path, format!("{token}\n").as_bytes())?;
+    crate::fsfile::write_private(path, format!("{token}\n").as_bytes())?;
     log!("wrote a fresh credential to {}", path.display());
     Ok(Token(token))
 }
@@ -438,7 +438,7 @@ mod tests {
 
         assert_eq!(read_token(&path).unwrap_err(), TokenFault::Missing);
 
-        crate::listen::write_private(&path, format!("{good}\n").as_bytes()).unwrap();
+        crate::fsfile::write_private(&path, format!("{good}\n").as_bytes()).unwrap();
         assert_eq!(read_token(&path).unwrap().as_str(), good);
 
         // §9.2: a file at mode 0640 is rejected as if absent.
@@ -474,9 +474,9 @@ mod tests {
         let path = dir.path().join("clipboard/accepted-token");
         let first = load_or_create(&path).unwrap();
         assert_eq!(first.as_str().len(), TOKEN_HEX_LEN);
-        assert_eq!(crate::listen::mode_of(&path).unwrap() & 0o777, 0o600);
+        assert_eq!(crate::fsfile::mode_of(&path).unwrap() & 0o777, 0o600);
         assert_eq!(
-            crate::listen::mode_of(path.parent().unwrap()).unwrap() & 0o777,
+            crate::fsfile::mode_of(path.parent().unwrap()).unwrap() & 0o777,
             0o700
         );
         // A valid file is reused, not rotated: rotating on every start would
@@ -489,7 +489,7 @@ mod tests {
     fn bootstrap_replaces_an_invalid_token() {
         let dir = testutil::tempdir("token-replace");
         let path = dir.path().join("accepted-token");
-        crate::listen::write_private(&path, b"garbage\n").unwrap();
+        crate::fsfile::write_private(&path, b"garbage\n").unwrap();
         let token = load_or_create(&path).unwrap();
         assert_eq!(token.as_str().len(), TOKEN_HEX_LEN);
         assert_eq!(read_token(&path).unwrap().as_str(), token.as_str());
