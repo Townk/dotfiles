@@ -9,6 +9,21 @@ Continue the RECOB implementation in the chezmoi dotfiles repo at
 `~/.local/share/chezmoi`. Phases 1 and 2 are done, verified and pushed; you are
 picking up at Phase 3.
 
+**Before anything else**, get the work and confirm what you inherited is sound —
+so that a failure you did not cause is never attributed to a change you made:
+
+```sh
+git -C ~/.local/share/chezmoi pull --ff-only
+cd ~/.local/share/chezmoi
+git config core.hooksPath .githooks     # the leak guard; see the handoff
+make -C custom-builds/recob test        # must be green before you change anything
+```
+
+The build needs a Rust toolchain. If `cargo` is missing, install it before going
+further rather than working around it. If that suite is **not** green on a clean
+pull, stop and report that — it is a finding about the inherited state, not
+something to fix your way past.
+
 **Read first, in this order:**
 
 1. `AGENTS.md` and `.cursor/rules/no-company-info.mdc` — repo rules. This
