@@ -105,6 +105,16 @@ pub struct Ctx {
     /// private pasteboard so §6.5's no-race capture never reads the live
     /// clipboard from a test.
     pub pasteboard_name: Option<String>,
+    /// Whether this daemon observes the pasteboard at all (`--capture`).
+    ///
+    /// One switch, not two: §6.5's synchronous no-race capture in
+    /// `files.list`/`files.grant` is the same act of observation the poll loop
+    /// performs, so it obeys the same opt-in. A daemon that was not asked to
+    /// capture answers those operations from the store alone and never reads
+    /// a pasteboard — which is what keeps a test daemon off the human's live
+    /// clipboard even when a handler, not the loop, would have done the
+    /// reading.
+    pub capture: bool,
 }
 
 /// §14.3: what the daemon delegates, and to which executable. The environment
@@ -162,6 +172,7 @@ impl Ctx {
             pasteboard_name: std::env::var("RECOB_CAPTURE_PASTEBOARD")
                 .ok()
                 .filter(|name| !name.is_empty()),
+            capture: false,
         }
     }
 }

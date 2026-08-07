@@ -177,6 +177,8 @@ fn main() -> ExitCode {
     // last-observed changeCount are shared with the sessions: the loop skips
     // the daemon's own writes (§6.2), and §6.5's no-race capture knows what
     // the loop has already stored.
+    ctx.capture = args.capture;
+
     #[cfg(target_os = "macos")]
     if args.capture {
         let config = recobd::platform::macos::CaptureConfig::from_env();

@@ -114,6 +114,22 @@ impl From<std::io::Error> for ClientError {
     }
 }
 
+/// Where a `files.fetch` stream is delivered. Split from a bare `Write` so a
+/// caller can judge the `R` head first (the §11 size cap) and so the clean
+/// end — the explicit empty `D` — is distinguishable from a truncation the
+/// caller must not treat as success.
+pub trait StreamSink {
+    /// The `R` head, before any body byte. Refusing here aborts the exchange.
+    fn head(&mut self, _head: &Fields) -> Result<(), ClientError> {
+        Ok(())
+    }
+    fn chunk(&mut self, bytes: &[u8]) -> Result<(), ClientError>;
+    /// The terminating empty `D` arrived: everything the server sent is here.
+    fn finish(&mut self) -> Result<(), ClientError> {
+        Ok(())
+    }
+}
+
 /// A validated credential file (§9.2 "Validation on read"): exactly 64
 /// lowercase hex characters on a single line, no trailing content beyond one
 /// newline, and a mode granting nothing to group or other. Anything else is
@@ -333,19 +349,27 @@ impl<S: ClientStream> Session<S> {
     /// §6.4: the absence of the terminating empty `D` *is* the truncation
     /// signal, and a mid-stream `E` terminates the exchange, not the
     /// connection.
-    pub fn fetch_stream(
+    ///
+    /// The sink sees the head before any byte of the body, which is what lets
+    /// a caller enforce a size policy — §11's per-item cap — before pulling
+    /// anything rather than after paying for it.
+    pub fn fetch(
         &mut self,
         fields: &Fields,
-        sink: &mut dyn Write,
+        sink: &mut dyn StreamSink,
     ) -> Result<Fields, ClientError> {
         self.stream.set_timeout(Some(self.timeouts.action))?;
         self.stream
             .write_all(&wire::encode(Kind::Request, fields))?;
         let head = read_response(&mut self.stream)?;
+        sink.head(&head)?;
         loop {
             match next_frame(&mut self.stream)? {
-                (Kind::Data, chunk) if chunk.is_empty() => return Ok(head),
-                (Kind::Data, chunk) => sink.write_all(&chunk)?,
+                (Kind::Data, chunk) if chunk.is_empty() => {
+                    sink.finish()?;
+                    return Ok(head);
+                }
+                (Kind::Data, chunk) => sink.chunk(&chunk)?,
                 (Kind::Error, body) => return Err(server_error(&body)),
                 (kind, _) => {
                     return Err(ClientError::Protocol(format!(

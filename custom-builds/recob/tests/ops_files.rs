@@ -237,7 +237,11 @@ fn a_files_copy_resolves_immediately_after_the_pasteboard_change() {
     let copied = dir.path().join("just copied.txt");
     std::fs::write(&copied, b"fresh").unwrap();
 
-    let ctx = std::sync::Arc::new(common::ctx_mut(dir.path(), "boxA"));
+    let mut ctx = common::ctx_mut(dir.path(), "boxA");
+    // §6.5's synchronous capture is the same act of observation the poll loop
+    // performs, so it obeys the same opt-in: this is a capturing daemon.
+    ctx.capture = true;
+    let ctx = std::sync::Arc::new(ctx);
     let name = ctx.pasteboard_name.clone().unwrap();
     let mut client = common::served(ctx, Endpoint::Trusted);
     client.hello_default();

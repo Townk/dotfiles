@@ -8,6 +8,7 @@
 pub mod auth;
 pub mod client;
 pub mod fsfile;
+pub mod paste_files;
 pub mod wire;
 
 #[cfg(test)]

@@ -24,6 +24,7 @@ use std::process::ExitCode;
 use recob_wire::client::{
     dial, read_pushed_token, ClientStream, Credential, Dial, Session, Timeouts,
 };
+use recob_wire::paste_files;
 use recob_wire::wire::Fields;
 
 fn main() -> ExitCode {
@@ -584,11 +585,7 @@ fn pbpaste(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("--manifest") => pbpaste_manifest(),
-        Some("--files") => {
-            // Stages 2–3 of the port; the staged binary does not ship until
-            // Phase 8, and this must be implemented before it can.
-            fail("pbpaste: --files is not implemented in this build yet".to_string())
-        }
+        Some("--files") => pbpaste_files(&args[1..]),
         _ => pbpaste_text(),
     }
 }
@@ -600,8 +597,14 @@ Mac's clipboard to stdout, whether you're at the Mac or SSH'd in.
 --manifest: print the current clipboard entry's file manifest (kind/host/ts/
 path lines) instead of its text.
 
+--files [--force] [--quiet|--progress|--porcelain] [dir]: materialize the
+current file clip into dir (default: cwd). Refuses existing names unless
+--force. Same-host files copy locally; SSH clients stream authorized files;
+a local Mac reads remote manifests through its healthy peer mount.
+
 Usage: text=$(pbpaste)
        pbpaste --manifest
+       pbpaste --files [--force] [--quiet|--progress|--porcelain] [dir]
 ";
 
 fn pbpaste_text() -> ExitCode {
@@ -651,6 +654,48 @@ fn print_clip_text<S: ClientStream>(session: &mut Session<S>) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        Err(e) => fail(e),
+    }
+}
+
+/// `--files`: the manifest and any remote bytes come from one endpoint — the
+/// peer's over SSH, this machine's own otherwise — and the engine decides
+/// from the manifest's host whether the bytes are local, mounted or streamed.
+fn pbpaste_files(args: &[String]) -> ExitCode {
+    let options = match paste_files::Options::parse(args) {
+        Ok(options) => options,
+        Err(e) => return fail(e),
+    };
+    let context = paste_files::Context {
+        self_host: self_host(),
+        over_ssh: is_ssh(),
+        mount_helper: std::env::var_os("CLIPBOARD_MOUNT_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join(".local/libexec/clipboard-mount")),
+        cap: paste_files::size_cap_from_env(),
+    };
+
+    let outcome = if is_ssh() {
+        match public_session("pbpaste") {
+            Err(e) => return fail(e),
+            Ok(PublicBridge::Absent) => {
+                return fail(format!(
+                    "pbpaste: clipboard bridge not reachable on 127.0.0.1:{} (reverse SSH tunnel down?)",
+                    bridge_port()
+                ))
+            }
+            Ok(PublicBridge::Session(mut session)) => {
+                paste_files::run(&mut session, &options, &context)
+            }
+        }
+    } else {
+        match trusted_session("pbpaste") {
+            Err(e) => return fail(e),
+            Ok(mut session) => paste_files::run(&mut session, &options, &context),
+        }
+    };
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(e),
     }
 }

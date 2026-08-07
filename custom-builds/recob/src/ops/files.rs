@@ -36,6 +36,14 @@ fn open_store(ctx: &Ctx) -> Result<Store, ProtoError> {
 fn ensure_current(ctx: &Ctx, store: &mut Store) {
     use crate::platform::macos::{frontmost_app, Pasteboard};
 
+    // A daemon that was not asked to observe the pasteboard does not observe
+    // it here either: this capture and the poll loop's are the same act, so
+    // they share one switch (§14.2's opt-in). Without it, the newest row is
+    // whatever the store holds, which is exactly what a non-capturing daemon
+    // is entitled to answer from.
+    if !ctx.capture {
+        return;
+    }
     let pasteboard = match &ctx.pasteboard_name {
         Some(name) => Pasteboard::with_name(name),
         None => Pasteboard::general(),
