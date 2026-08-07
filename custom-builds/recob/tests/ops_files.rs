@@ -224,6 +224,104 @@ fn an_unreadable_entry_refuses_before_the_stream_with_a_count_and_no_path() {
     std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+/// §11.4 "files.list does not race the capture", the positive half: a
+/// physical files copy — made straight onto the pasteboard, not through the
+/// daemon — followed immediately by `files.list` resolves, with no sleep, via
+/// §6.5's synchronous capture.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_files_copy_resolves_immediately_after_the_pasteboard_change() {
+    use recobd::platform::macos::{filenames_plist, url_encode, Pasteboard};
+
+    let dir = testutil::tempdir("files-no-race");
+    let copied = dir.path().join("just copied.txt");
+    std::fs::write(&copied, b"fresh").unwrap();
+
+    let ctx = std::sync::Arc::new(common::ctx_mut(dir.path(), "boxA"));
+    let name = ctx.pasteboard_name.clone().unwrap();
+    let mut client = common::served(ctx, Endpoint::Trusted);
+    client.hello_default();
+    client.expect_caps();
+
+    // The Finder-copy stand-in: a files clip appears on the pasteboard with
+    // no daemon involvement and no store row yet.
+    let pasteboard = Pasteboard::with_name(&name);
+    let mut data = std::collections::BTreeMap::new();
+    let path = copied.display().to_string();
+    data.insert(
+        "NSFilenamesPboardType".to_string(),
+        filenames_plist(std::slice::from_ref(&path)),
+    );
+    data.insert(
+        "public.file-url".to_string(),
+        format!("file://{}", url_encode(&path)).into_bytes(),
+    );
+    pasteboard.write_all(&data);
+
+    let started = std::time::Instant::now();
+    let (kind, fields) = client.request("files.list");
+    assert_eq!(kind, Kind::Response, "resolved on the first ask");
+    assert_eq!(text(&fields, "kind"), "file");
+    assert_eq!(fields.get("paths"), Some(path.as_bytes()));
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(250),
+        "§6.5: capture-on-demand, not a sleep"
+    );
+}
+
+/// §11.4 "Rate limits bite per endpoint": exhausting a bucket over the public
+/// endpoint answers rate-limited there while the same operation on the
+/// trusted socket still dispatches — the half that stops a peer's flood from
+/// throttling the human's own copies.
+#[test]
+fn rate_limits_bite_per_endpoint() {
+    let dir = testutil::tempdir("rate-per-endpoint");
+    let ctx = std::sync::Arc::new(common::ctx_mut(dir.path(), "boxA"));
+
+    let notify = |host: &str| {
+        Fields::new()
+            .with("op", b"osd.notify".to_vec())
+            .with("origin_host", host.as_bytes().to_vec())
+            .with("style", b"plain".to_vec())
+            .with("icon", b"".to_vec())
+            .with("sound", b"".to_vec())
+            .with("text", b"toast".to_vec())
+    };
+
+    let mut public = common::served(ctx.clone(), Endpoint::Public);
+    public.hello_authenticated(common::TEST_TOKEN);
+    public.expect_caps_proven(common::TEST_TOKEN);
+    // The osd bucket holds 20 per 10 s; authorization counts the attempt
+    // whether or not the handler then succeeds — the stub tools make it fail
+    // (`internal` on macOS, `unavailable` on Linux), which is irrelevant to
+    // the bucket.
+    let handler_failure = if cfg!(target_os = "macos") {
+        "internal"
+    } else {
+        "unavailable"
+    };
+    for _ in 0..20 {
+        public.send_request(&notify("boxB"));
+        let fields = public.expect_error();
+        assert_eq!(text(&fields, "code"), handler_failure);
+    }
+    public.send_request(&notify("boxB"));
+    let fields = public.expect_error();
+    assert_eq!(text(&fields, "code"), "rate-limited");
+    assert!(fields.get("retry_after").is_some());
+
+    let mut trusted = common::served(ctx, Endpoint::Trusted);
+    trusted.hello_default();
+    trusted.expect_caps();
+    trusted.send_request(&notify("boxB"));
+    let fields = trusted.expect_error();
+    assert_eq!(
+        text(&fields, "code"),
+        handler_failure,
+        "the trusted socket's bucket is untouched by the public flood"
+    );
+}
+
 #[test]
 fn a_pointer_row_grants_no_capability() {
     let dir = testutil::tempdir("files-grant-pointer");

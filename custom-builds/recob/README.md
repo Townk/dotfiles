@@ -69,16 +69,23 @@ register-type tracking against `changeCount` with no sidecar file. Capture is
 store; the production unit passes the flag at cutover. Until Phase 7 retires
 the Lua writer, both writers capture — §14.4 expects the duplicate rows.
 
-The operation registry holds `host.identity` and nothing else, as proof that
-named dispatch works. Its §9.3 policy row lives on the registry row itself, so an
-operation cannot exist without a tier.
+Phase 4 — the full §6.1 registry: all fourteen operations dispatch, each §9.3
+policy row on the registry row itself (an operation cannot exist without a
+tier), every field §6.6-validated, `files.fetch` streaming per §6.4 with the
+explicit empty-`D` terminator and mid-stream `E`, §6.5's no-race `files.list`
+(synchronous capture instead of the 0.3 s sleep) and per-operation caps
+(128 MiB for `clip.set.rich`, `file-too-large`), and §14.5's `clip.restore`
+with all four `plain_only` branches. The clip writes record themselves on the
+§14.6 tracker, which is what makes §11.4's "one copy, one row" hold. Two
+carried-across behaviors are worth naming: the M path's mount enrichment
+(Finder-native paste — absent from the RECOB spec, preserved rather than
+silently dropped) and the `W` scripts' environment surgery.
 
 Not implemented, by phase rather than by omission — where a later phase's field
 or check belongs, the code says so rather than stubbing it:
 
 | Absent | Lands in |
 | --- | --- |
-| the other thirteen operations and their policy rows, `grant` checking, streaming, per-field validation | Phase 4 |
 | `pbcopy` / `pbpaste`, proof verification client-side, and the §7.3 old-client shim | Phase 5 |
 | retiring the Lua writer (until then two writers capture, §14.4) | Phase 7 |
 | the `run_onchange` build hook and the unit changes | Phase 8 |
