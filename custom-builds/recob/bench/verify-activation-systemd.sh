@@ -78,8 +78,16 @@ ok "cargo and a systemd user session are present"
 
 # --- build and self-test ------------------------------------------------------
 note "build and test on this machine"
-make -C "$RECOB_DIR" build >/dev/null
-ok "make build"
+# Captured rather than passed through: cargo writes progress to stderr, and it
+# names the source path — which is under $HOME and therefore carries the account
+# name. Dropping stdout alone left that on the terminal and broke the redaction
+# this script's header promises.
+if make -C "$RECOB_DIR" build >/tmp/recob-verify-build.log 2>&1; then
+  ok "make build"
+else
+  bad "make build failed"
+  tail -30 /tmp/recob-verify-build.log | sed 's/^/  /' | redact
+fi
 if (cd "$RECOB_DIR" && cargo test --quiet >/tmp/recob-verify-test.log 2>&1); then
   ok "cargo test ($(grep -c '^test result: ok' /tmp/recob-verify-test.log) suites passed)"
 else
