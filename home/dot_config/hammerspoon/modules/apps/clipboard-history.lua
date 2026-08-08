@@ -63,13 +63,18 @@ end
 -- own diagnostic reaches the Hammerspoon console, since a silent false here
 -- would look identical to an empty clip.
 local function restore(id, plain_only)
+  -- The picker's WebKit JS delivers the rowid as a Lua NUMBER, which
+  -- tostring()s as "769.0" — the old in-process module fed it to sqlite,
+  -- which coerced silently; system-clip's digit-check rightly refuses it.
+  -- Normalize to the bare integer the wire wants.
+  id = tonumber(id)
   if not id then return false end
   local bin = system_clip()
   if not hs.fs.attributes(bin, "mode") then
     hs.printf("clipboard-history: %s is missing -- run chezmoi apply", bin)
     return false
   end
-  local cmd = shell_quote(bin) .. " restore " .. shell_quote(id)
+  local cmd = shell_quote(bin) .. " restore " .. string.format("%d", id)
   if plain_only then cmd = cmd .. " --plain" end
   local output, ok = hs.execute(cmd .. " 2>&1")
   if not ok then
