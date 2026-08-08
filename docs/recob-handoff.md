@@ -301,3 +301,24 @@ capture `$?` from `make`, never from a pipe tail.
 2. **The Linux dev-shell run** — now covers the five newly-converted files
    too; still the first execution for every `cfg!`-gated branch.
 3. Push, once the cutover lands.
+
+## Update — cutover written and reviewed; merge-ready (2026-08-07, evening)
+
+Item 1 of the list above is done: the services swap exists as ONE revertable
+commit (the migration guide's rollback contract), reviewed pre-merge with
+three findings fixed in place — the launchd reconcile-on-apply hook
+(`run_onchange_after_57`, with the orphan-bootout ordering guard) and the
+build hook's re-fire key turned into a glob over every crate source. The
+four zsh-server spec files were deleted only after an example-by-example
+coverage audit; its gaps are ported (macOS executed + mutation-checked,
+Linux parse-only), and its one real find — the enrichment path writing the
+GENERAL pasteboard instead of the test seam — is fixed.
+
+Repo suite on the branch: 808 examples, 1 failure — master's own
+environmental `commands-index` baseline. What remains is exactly two things:
+the **Mode B session** (merge, `chezmoi apply`, live validation with the
+operator — the swap has never been applied), and the **dev-shell run**
+(first execution of every Linux-gated path, now including four new store
+tests). Follow-up, non-blocking: prune the dead server-internal functions
+from `clipboard-store-core.zsh`; decide the `files.fetch` per-file cap
+question (§10 vs §6.5) and the two `internal`-vs-`not-found` codes.
