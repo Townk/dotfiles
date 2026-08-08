@@ -340,9 +340,22 @@ fn decide_inner(snap: &Snapshot, observed: bool) -> Result<Capture, Skip> {
 }
 
 /// §14.2 classification from the UTI set: rich kinds are counted in a fixed
-/// order — 0 means `text`, exactly 1 means that kind, more means `mixed`.
+/// order — 0 means `text`, exactly 1 means that kind, more means `mixed` —
+/// with one precedence carved out below, found live at cutover validation.
 fn classify(utis: &[String]) -> TypeKind {
     let has = |name: &str| utis.iter().any(|uti| uti == name);
+    // File flavors take precedence: a Finder copy advertises its ICON as
+    // public.tiff alongside the file-url, and counting that icon as an image
+    // kind made every single-file Finder copy `mixed` — a kind the files
+    // resolver refuses, and one that mints no authority snapshot, so Finder →
+    // `pbpaste --files` failed outright. The Lua watcher never hit this only
+    // because its image matching missed the concrete UTIs (the same accident
+    // §14.2's size cap fixed); the observable contract was always "a clip
+    // carrying file flavors is a files clip". Reported as a §14.2 spec gap:
+    // the counting rule captured the Lua's intent, not the tiff reality.
+    if has("public.file-url") || has("NSFilenamesPboardType") {
+        return TypeKind::Files;
+    }
     let mut rich = Vec::new();
     if has("public.rtf") || has("NeXT RTFD pasteboard type") || has("Apple RTFD") {
         rich.push(TypeKind::Rtf);
@@ -357,9 +370,6 @@ fn classify(utis: &[String]) -> TypeKind {
         || has("public.image")
     {
         rich.push(TypeKind::Image);
-    }
-    if has("public.file-url") || has("NSFilenamesPboardType") {
-        rich.push(TypeKind::Files);
     }
     match rich.as_slice() {
         [] => TypeKind::Text,
@@ -658,6 +668,54 @@ mod tests {
         assert_eq!(
             classify(&["public.rtf".to_string(), "public.html".to_string()]),
             TypeKind::Mixed
+        );
+    }
+
+    #[test]
+    fn a_finder_copy_with_an_icon_preview_is_a_file_clip() {
+        // The Finder-shaped flavor set: the file-url rides with a tiff icon
+        // preview and a text synonym. Counting the icon as an image kind made
+        // this `mixed` — refused by the files resolver, and minting no
+        // authority — so Finder → `pbpaste --files` failed outright (found
+        // live at cutover validation). File flavors take precedence.
+        assert_eq!(
+            classify(&[
+                "public.tiff".to_string(),
+                "com.apple.icns".to_string(),
+                "public.file-url".to_string(),
+                "public.utf8-plain-text".to_string(),
+            ]),
+            TypeKind::Files
+        );
+
+        // Through decide(): the single-path refinement lands and the row
+        // carries the authority snapshot a later grant mints a token from.
+        let dir = crate::testutil::tempdir("finder-classify");
+        let file = dir.path().join("copied.svg");
+        std::fs::write(&file, b"<svg/>").unwrap();
+        let mut snap = Snapshot {
+            item_utis: vec![
+                "public.tiff".to_string(),
+                "public.file-url".to_string(),
+                "public.utf8-plain-text".to_string(),
+            ],
+            resolved_url_path: Some(file.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        snap.data.insert("public.tiff".to_string(), vec![0u8; 1024]);
+        snap.data.insert(
+            "public.file-url".to_string(),
+            format!("file://{}", file.display()).into_bytes(),
+        );
+        snap.data
+            .insert("public.utf8-plain-text".to_string(), b"copied.svg".to_vec());
+        snap.frontmost = text_snapshot("x").frontmost;
+        let capture = decide(&snap).expect("captured");
+        assert_eq!(capture.kind, TypeKind::File);
+        assert_eq!(
+            capture.authority_paths.as_deref(),
+            Some(&[file.to_string_lossy().into_owned()][..]),
+            "the authority snapshot names the copied file"
         );
     }
 
