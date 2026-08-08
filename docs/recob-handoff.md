@@ -322,3 +322,38 @@ operator — the swap has never been applied), and the **dev-shell run**
 tests). Follow-up, non-blocking: prune the dead server-internal functions
 from `clipboard-store-core.zsh`; decide the `files.fetch` per-file cap
 question (§10 vs §6.5) and the two `internal`-vs-`not-found` codes.
+
+## Update — cutover LIVE on the mini; Mode B session complete (2026-08-07, night)
+
+The swap was applied and validated live in a Mode B session. `master` carries
+the merge plus four session fixes, each found by a real eyeball test:
+
+1. `RECOB_IMPL` is stamped with the source commit by the build hook — the
+   daemon now logs `impl <hash>`, as the migration guide promises.
+2. The build hook kickstarts the daemon over a reinstalled binary — a
+   persistent daemon never picks one up by itself; the socat era exec'd per
+   connection, so nothing had ever needed this.
+3. The GUI picker's restore normalizes its rowid: the WebKit JS delivers a
+   Lua NUMBER that tostring()s as `769.0`, which sqlite silently coerced in
+   the old in-process module and `system-clip restore` rightly refused.
+4. **File flavors take precedence in capture classification** — the
+   headline find. A Finder copy's tiff icon counted as an image kind, making
+   every single-file Finder copy `mixed`: refused by the files resolver and
+   minting no authority, so Finder → `pbpaste --files` failed outright. The
+   Lua watcher was immune only through its broken image matching (the same
+   accident the §14.2 size-cap fix corrected). §14.2 spec gap, reported: the
+   counting rule captured the Lua's intent, not the tiff reality.
+
+Validated live: the services swap and launchd state, trampoline round trips,
+the daemon capture loop, terminal and GUI picker restores, Finder → `--files`
+materialization both directions, and local notify. Known quirk confirmed
+PRE-EXISTING, not touched: running plain `pbpaste` on a promise-laden Finder
+pasteboard makes Finder fulfill lazily, bump the change count, and shadow the
+file clip with a text row — the old watcher/resolver behaved identically.
+
+Not yet exercised live: the over-SSH bridge legs (peer copy/paste, notify
+over the tunnel, fullscreen) — they wait for the work-laptop apply, and until
+that apply the skew window is in force (a copy toward the unapplied laptop
+fails LOUDLY naming the machine to fix; this is §5.2 behaving, not a fault).
+Also still owed: the dev-shell run (first execution of every Linux-gated
+path) and the push of `master` (operator's call).
