@@ -65,4 +65,16 @@ RECOB_IMPL="$(git -C "$SRC" rev-parse --short=12 HEAD 2>/dev/null || true)"
 export RECOB_IMPL
 make -C "$SRC" install
 
+# A persistent daemon does not pick up a reinstalled binary by itself — the
+# socat era exec'd a fresh dispatcher per connection; recobd must be kicked
+# over the new build. First-onboard safe: not-yet-bootstrapped/running is
+# fine, the service hooks (57 / 37) start it fresh on the new binary.
+{{ if eq .chezmoi.os "darwin" -}}
+launchctl kickstart -k "gui/$(id -u)/com.system-service.clipboard-bridge" 2>/dev/null || true
+{{ else -}}
+if systemctl --user show-environment >/dev/null 2>&1; then
+  systemctl --user try-restart clipboard-bridge.service 2>/dev/null || true
+fi
+{{ end -}}
+
 # vim:ft=sh
