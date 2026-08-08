@@ -59,6 +59,10 @@ EOF
 fi
 
 echo "[recob] building → ~/.local/libexec/recobd, ~/.local/bin/system-clip, ~/.local/libexec/system-bridge"
+# §5.1: `impl` distinguishes two builds sharing a proto. Stamp the source
+# commit; a dirty or hashless tree falls back to the binary's own dev default.
+RECOB_IMPL="$(git -C "$SRC" rev-parse --short=12 HEAD 2>/dev/null || true)"
+export RECOB_IMPL
 make -C "$SRC" install
 
 # vim:ft=sh
