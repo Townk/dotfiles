@@ -845,7 +845,7 @@ local function handle_message(body)
       -- would be more disruptive than clarifying.
       M.hide()
       headless_restore(body.id, function(ok)
-        if ok then hs.eventtap.keyStroke({ "cmd" }, "v") end
+        if ok then hs.printf("clipboard-picker: synthesized paste [headless-pull] at %s", os.date("%H:%M:%S")); hs.eventtap.keyStroke({ "cmd" }, "v") end
       end)
       return
     end
@@ -853,7 +853,7 @@ local function handle_message(body)
     if body.dismiss then
       M.hide()
       -- Post the paste just after hide() refocuses the target app.
-      hs.timer.doAfter(0.12, function() hs.eventtap.keyStroke({ "cmd" }, "v") end)
+      hs.timer.doAfter(0.12, function() hs.printf("clipboard-picker: synthesized paste [accept-dismiss] at %s", os.date("%H:%M:%S")); hs.eventtap.keyStroke({ "cmd" }, "v") end)
     else
       -- Ctrl+Enter: paste into the target app but keep the picker open. This
       -- necessarily shuffles focus away (to paste into the right app) and
@@ -867,7 +867,7 @@ local function handle_message(body)
       hs.timer.doAfter(0.02, function()
         if target then target:focus() end
         hs.timer.doAfter(0.1, function()
-          hs.eventtap.keyStroke({ "cmd" }, "v")
+          hs.printf("clipboard-picker: synthesized paste [ctrl-enter] at %s", os.date("%H:%M:%S")); hs.eventtap.keyStroke({ "cmd" }, "v")
           hs.timer.doAfter(0.1, function()
             if webview then
               webview:show()
@@ -885,7 +885,7 @@ local function handle_message(body)
     -- dismiss-then-paste flow as a plain Enter accept.
     history.restore_plain_by_id(body.id)
     M.hide()
-    hs.timer.doAfter(0.12, function() hs.eventtap.keyStroke({ "cmd" }, "v") end)
+    hs.timer.doAfter(0.12, function() hs.printf("clipboard-picker: synthesized paste [accept-plain] at %s", os.date("%H:%M:%S")); hs.eventtap.keyStroke({ "cmd" }, "v") end)
   elseif action == "dismiss" then
     M.hide()
   end
