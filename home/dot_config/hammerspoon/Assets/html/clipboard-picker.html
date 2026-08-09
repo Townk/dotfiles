@@ -126,15 +126,50 @@
           + '</div>';
       }
       listEl.innerHTML = html || '<div class="preview-empty" style="padding:8px 12px;">No clips</div>';
-      Array.prototype.forEach.call(listEl.querySelectorAll('.item'), function (el) {
-        el.addEventListener('mousedown', function (e) {
-          e.preventDefault();
-          selectedIndex = parseInt(el.getAttribute('data-idx'), 10);
-          renderList();
-          updateRight();
-        });
-        el.addEventListener('dblclick', function () { accept(true); });
+      scrollSelectedIntoView();
+    }
+
+    // Row events are bound ONCE, on the container. renderList replaces the
+    // list's innerHTML, so per-row listeners had to be re-attached on every
+    // render — two per row, a thousand for a 500-row list, on every arrow
+    // key and every filter keystroke. Delegation survives the replacement
+    // because the container itself is never replaced.
+    function bindListEvents() {
+      var listEl = document.getElementById('list');
+      function rowFrom(e) {
+        var node = e.target;
+        while (node && node !== listEl) {
+          if (node.classList && node.classList.contains('item')) return node;
+          node = node.parentNode;
+        }
+        return null;
+      }
+      listEl.addEventListener('mousedown', function (e) {
+        var el = rowFrom(e);
+        if (!el) return;
+        e.preventDefault();
+        var prev = selectedIndex;
+        selectedIndex = parseInt(el.getAttribute('data-idx'), 10);
+        updateSelection(prev);
+        updateRight();
       });
+      listEl.addEventListener('dblclick', function (e) {
+        if (rowFrom(e)) accept(true);
+      });
+    }
+
+    // Moving the selection changes two class attributes; it does not change
+    // the list. Rebuilding every row for that measured 17.6ms per arrow key
+    // at 500 rows — a ceiling near 57fps on a held key, and all of it wasted
+    // work on rows that did not change.
+    function updateSelection(prevIndex) {
+      var listEl = document.getElementById('list');
+      if (prevIndex != null && prevIndex !== selectedIndex) {
+        var prevEl = listEl.querySelector('.item[data-idx="' + prevIndex + '"]');
+        if (prevEl) prevEl.classList.remove('selected');
+      }
+      var curEl = listEl.querySelector('.item[data-idx="' + selectedIndex + '"]');
+      if (curEl) curEl.classList.add('selected');
       scrollSelectedIntoView();
     }
 
@@ -411,8 +446,10 @@
 
     function move(delta) {
       if (filtered.length === 0) return;
+      var prev = selectedIndex;
       selectedIndex = Math.max(0, Math.min(filtered.length - 1, selectedIndex + delta));
-      renderList();
+      if (selectedIndex === prev) return;
+      updateSelection(prev);
       updateRight();
     }
 
@@ -503,6 +540,7 @@
     // subsequent re-renders (typing, delete/pin) happen well after this
     // resolves and are unaffected either way.
     function firstRender() {
+      bindListEvents();
       applyFilter('', false);
       window.__focusInput();
     }
