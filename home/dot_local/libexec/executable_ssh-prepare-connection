@@ -168,6 +168,36 @@ step_mount() {
     'd="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard"; mkdir -p "$d" && cat > "$d/self-name"' \
     >/dev/null 2>&1 &!
 
+  # Physical-terminal push: window.fullscreen.toggle needs the terminal NAME
+  # on the machine the human sits at, and the remote's detection chain cannot
+  # survive a nested mux (the tmux client_termname is the inner mux's TERM,
+  # found live at cutover validation). This machine — right here, right now —
+  # knows what it is running in: TERM_PROGRAM survives mux layers where TERM
+  # does not. Same last-writer-wins semantics as the reverse forward itself:
+  # the latest connection owns port 2490, so it owns this too. An
+  # undetectable terminal REMOVES the state (a stale name from a previous
+  # connect would misdirect the toggle; absent falls back to the old chain).
+  local peer_term="" term_program="${TERM_PROGRAM:-}"
+  case "${term_program:l}" in
+    *wezterm*) peer_term="wezterm" ;;
+    *ghostty*) peer_term="ghostty" ;;
+  esac
+  if [[ -z "$peer_term" ]]; then
+    [[ -n "${WEZTERM_PANE:-}${WEZTERM_EXECUTABLE:-}" ]] && peer_term="wezterm"
+    [[ -n "${GHOSTTY_RESOURCES_DIR:-}" ]] && peer_term="ghostty"
+  fi
+  if [[ -n "$peer_term" ]]; then
+    print -rn -- "$peer_term" | ssh -o ControlPath=none -o ClearAllForwardings=yes \
+      -o BatchMode=yes -o ConnectTimeout=5 "$target" \
+      'd="${XDG_STATE_HOME:-$HOME/.local/state}/mux"; mkdir -p "$d" && cat > "$d/peer-term"' \
+      >/dev/null 2>&1 &!
+  else
+    ssh -o ControlPath=none -o ClearAllForwardings=yes \
+      -o BatchMode=yes -o ConnectTimeout=5 "$target" \
+      'rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/mux/peer-term"' \
+      >/dev/null 2>&1 &!
+  fi
+
   # Credential push (RECOB spec §9.2): the remote answers this machine's
   # reverse-tunneled bridge with a challenge response, so it needs THIS
   # machine's token -- which never crosses the wire itself, only digests of

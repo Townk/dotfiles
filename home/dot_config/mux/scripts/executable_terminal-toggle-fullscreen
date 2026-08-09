@@ -80,6 +80,14 @@ toggle_ghostty_linux_fullscreen() {
 # environment that update-environment refreshes on every attach.
 peer_terminal() {
   local t="${MUX_PEER_TERM:-}"
+  # Connect-time state beats local guessing: ssh-prepare-connection pushes
+  # the sit-at machine's physical terminal here (TERM_PROGRAM survives mux
+  # layers), because the tmux chain below cannot see through a nested mux —
+  # client_termname answers the inner mux's TERM. Env stays the override.
+  if [[ -z "$t" ]]; then
+    local peer_state="${XDG_STATE_HOME:-$HOME/.local/state}/mux/peer-term"
+    [[ -r "$peer_state" ]] && t="$(<"$peer_state")"
+  fi
   if [[ -z "$t" && -n "${TMUX:-}" ]]; then
     local tmux_bin="${MUX_TMUX_BIN:-tmux}"
     t="$("$tmux_bin" display -p '#{client_termname}' 2>/dev/null)" || t=""

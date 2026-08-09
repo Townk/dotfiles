@@ -116,6 +116,39 @@ EOF
       print -r -- "rc=$_rc ops=$(recob_count)"
     }
 
+    # Nested-mux reality (found live at cutover validation): the tmux chain
+    # cannot see the physical terminal through an inner mux, so
+    # ssh-prepare-connection pushes the sit-at machine's terminal name into
+    # $XDG_STATE_HOME/mux/peer-term at connect. The state beats every local
+    # guess (TERM here says ghostty; the wire must say wezterm)...
+    It 'prefers the connect-time peer-term state over local guessing'
+      recob_script 'ok'
+      state_detect() {
+        mkdir -p "$XDG_STATE_HOME/mux"
+        printf 'wezterm' > "$XDG_STATE_HOME/mux/peer-term"
+        run_it
+        printf '%s|%s' "$(recob_op 1)" "$(recob_field 1 terminal)"
+      }
+      When call state_detect
+      The output should include "rc=0"
+      The output should include "window.fullscreen.toggle|wezterm"
+    End
+
+    # ...while the explicit env override still outranks the pushed state.
+    It 'keeps MUX_PEER_TERM as the override above the pushed state'
+      recob_script 'ok'
+      env_over_state() {
+        mkdir -p "$XDG_STATE_HOME/mux"
+        printf 'ghostty' > "$XDG_STATE_HOME/mux/peer-term"
+        export MUX_PEER_TERM=wezterm
+        run_it
+        printf '%s' "$(recob_field 1 terminal)"
+      }
+      When call env_over_state
+      The output should include "rc=0"
+      The output should include "wezterm"
+    End
+
     It 'sends ONE window.fullscreen.toggle naming the terminal, on the public endpoint'
       recob_script 'ok'
       sent() {

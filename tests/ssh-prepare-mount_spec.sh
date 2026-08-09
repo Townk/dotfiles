@@ -29,7 +29,8 @@ Describe 'ssh-prepare-connection: mount step'
   setup() {
     CONF="$SHELLSPEC_TMPBASE/mini.conf"
     rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/ssh-calls" \
-      "$SHELLSPEC_TMPBASE/ssh-stdin" "$SHELLSPEC_TMPBASE/ssh-token-stdin"
+      "$SHELLSPEC_TMPBASE/ssh-stdin" "$SHELLSPEC_TMPBASE/ssh-token-stdin" \
+      "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin"
     # The credential push (RECOB §9.2) fires only when this machine HAS a
     # token, so every example gets its own empty state dir: without this the
     # step's behavior here would depend on whether recobd had ever run on the
@@ -48,11 +49,15 @@ Describe 'ssh-prepare-connection: mount step'
     # so recording is unambiguous for those examples; the prepare: all
     # example below never inspects these files, so step_gpg's own inert ssh
     # call there is harmless noise.
-    # step_mount makes two ssh calls now (identity, then credential), so the
-    # stub keeps their stdin apart -- the token push is recognizable by its
-    # remote command, and the identity example's assertions stay unambiguous.
-    printf '#!/bin/sh\ncase "$*" in *tunnel-tokens*) cat > "%s/ssh-token-stdin" ;; *) cat > "%s/ssh-stdin" ;; esac\necho "$*" >> "%s/ssh-calls"\n' \
-      "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" > "$STUBS/ssh"
+    # step_mount makes three ssh calls now (identity, peer-term, credential),
+    # so the stub keeps their stdin apart -- each push is recognizable by its
+    # remote command, and every example's assertions stay unambiguous.
+    printf '#!/bin/sh\ncase "$*" in *tunnel-tokens*) cat > "%s/ssh-token-stdin" ;; *rm\\ -f*peer-term*) : ;; *peer-term*) cat > "%s/ssh-peerterm-stdin" ;; *) cat > "%s/ssh-stdin" ;; esac\necho "$*" >> "%s/ssh-calls"\n' \
+      "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" > "$STUBS/ssh"
+    # The peer-term push reads the REAL terminal's fingerprints; the suite
+    # may itself run inside one, so every example starts undetectable and
+    # the ones that test detection set exactly what they mean.
+    unset TERM_PROGRAM WEZTERM_PANE WEZTERM_EXECUTABLE GHOSTTY_RESOURCES_DIR
     printf '#!/bin/sh\nexit 0\n' > "$STUBS/rsync"
     chmod +x "$STUBS/clipboard-mount" "$STUBS/ssh" "$STUBS/rsync"
   }
@@ -124,6 +129,41 @@ Describe 'ssh-prepare-connection: mount step'
     When call wait_for_ssh_calls
     The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "mini"
     The contents of file "$SHELLSPEC_TMPBASE/ssh-stdin" should equal "thiago-mac-mini"
+  End
+
+  # Nested-mux reality (found live at cutover validation): the remote's
+  # fullscreen-toggle cannot detect the physical terminal through an inner
+  # mux, and the sit-at machine -- running this script, right now -- is the
+  # one that knows what it runs in. TERM_PROGRAM survives mux layers where
+  # TERM does not.
+  wait_for_peerterm() {
+    zsh -f "$SPC" "$CONF"
+    i=0; while [ ! -e "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+    return 0
+  }
+
+  It 'pushes the physical terminal for the fullscreen toggle when detectable'
+    write_conf thiago-mac-mini 1
+    export TERM_PROGRAM=ghostty
+    When call wait_for_peerterm
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin" should equal "ghostty"
+  End
+
+  # An undetectable terminal REMOVES the remote state instead of leaving a
+  # stale name from a previous connect to misdirect the toggle; absent state
+  # falls back to the old detection chain on the remote.
+  wait_for_peerterm_rm() {
+    zsh -f "$SPC" "$CONF"
+    i=0; while ! grep -q "rm -f" "$SHELLSPEC_TMPBASE/ssh-calls" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+    return 0
+  }
+
+  It 'removes the pushed terminal state when the local terminal is undetectable'
+    write_conf thiago-mac-mini 1
+    When call wait_for_peerterm_rm
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "peer-term"
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "rm -f"
+    The path "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin" should not be exist
   End
 
   # RECOB spec §9.2: a remote answering this machine's reverse-tunneled bridge
