@@ -985,6 +985,36 @@ function M._debug()
   end)
 end
 
+--- Diagnostic: does an inline <script> run, and does the page's ORIGIN
+--- decide it? Two webviews, same bytes: one loaded the way this picker
+--- loads (loadHTMLString, null origin), one from a real file:// URL.
+--- Neither is shown. Temporary instrument.
+function M._jsprobe()
+  local doc = [[<html><body><p id="x">NO-JS</p>]]
+    .. [[<script>document.getElementById("x").textContent="JS-RAN";</script></body></html>]]
+  local path = "/tmp/hs-jsprobe.html"
+  local f = io.open(path, "w")
+  if f then f:write(doc); f:close() end
+
+  local a = hs.webview.new({ x = 0, y = 0, w = 10, h = 10 }, { javaScriptEnabled = true })
+  a:html(doc)
+  local b = hs.webview.new({ x = 0, y = 0, w = 10, h = 10 }, { javaScriptEnabled = true })
+  b:url("file://" .. path)
+
+  hs.timer.doAfter(2.5, function()
+    local read = [[document.getElementById("x") ? document.getElementById("x").textContent : "NO-DOM"]]
+    a:evaluateJavaScript(read, function(r)
+      hs.printf("JSPROBE loadHTMLString(null-origin) = %s", tostring(r))
+      a:delete()
+    end)
+    b:evaluateJavaScript(read, function(r)
+      hs.printf("JSPROBE file-url-origin        = %s", tostring(r))
+      b:delete()
+      os.remove(path)
+    end)
+  end)
+end
+
 function M.show()
   -- Mutual exclusion between our own managed panels (e.g. WhichKey) -- see
   -- modules/system/dismiss-on-blur.lua's dismissOthers.
