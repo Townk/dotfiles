@@ -920,7 +920,18 @@ local function ensure_webview()
   ucc = hs.webview.usercontent.new("clipboardPicker")
   ucc:setCallback(function(msg) handle_message(msg.body) end)
 
-  webview = hs.webview.new(picker_frame(), {}, ucc)
+  -- javaScriptEnabled is declared EXPLICITLY rather than left to the
+  -- default. This page's entire behaviour -- rendering the list, focusing
+  -- the filter box, the Escape handler -- lives in inline <script>, and a
+  -- machine was found serving the page with content JavaScript refused
+  -- while evaluateJavaScript still worked: the signature of WebKit's
+  -- allowsContentJavaScript being NO (the modern replacement for this
+  -- deprecated flag, which blocks the document's own scripts but not
+  -- API-injected ones). The panel then draws its static chrome and nothing
+  -- else -- empty list, unfocusable box, dead Escape -- with no error
+  -- anywhere Hammerspoon can see. A hard requirement belongs in the
+  -- request, not in an assumption about the default.
+  webview = hs.webview.new(picker_frame(), { javaScriptEnabled = true }, ucc)
   webview:transparent(true)
   webview:windowStyle({ "borderless" })
   -- modalPanel (not WhichKey's "overlay" + nonactivating): this picker needs

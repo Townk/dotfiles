@@ -292,7 +292,11 @@ function Overlay:_ensureWebview(maxH)
 	end)
 
 	local initRect = { x = -2000, y = -2000, w = 800, h = maxH }
-	self.webview = hs.webview.new(initRect, {}, self.ucc)
+	-- Explicit, for the reason spelled out in clipboard-picker.lua: this
+	-- overlay's inline script is what reports the rendered panel size back
+	-- to Lua, so a webview that refuses content JavaScript leaves the panel
+	-- sized by fallback rather than by its content.
+	self.webview = hs.webview.new(initRect, { javaScriptEnabled = true }, self.ucc)
 	self.webview:transparent(true)
 	self.webview:windowStyle({ "borderless", "nonactivating" })
 	self.webview:level(hs.drawing.windowLevels.overlay)
