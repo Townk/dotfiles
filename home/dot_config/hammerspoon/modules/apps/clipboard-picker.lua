@@ -977,8 +977,10 @@ function M._debug()
       hasQueryBox: !!document.getElementById('query'),
       renderedItems: document.querySelectorAll('.item').length,
       scriptRan: typeof window.__focusInput,
-      itemsSeen: (typeof ITEMS !== 'undefined' && ITEMS) ? ITEMS.length : -1,
-      jsError: window.__lastError || null
+      trapInstalled: (typeof window.onerror === "function"),
+      scripts: document.scripts.length,
+      htmlLen: document.documentElement.outerHTML.length,
+      jsError: window.__lastError || "none"
     })
   ]], function(result, err)
     hs.printf("PICKER-DEBUG dom: %s", tostring(result or err))
@@ -1001,16 +1003,51 @@ function M._jsprobe()
   local b = hs.webview.new({ x = 0, y = 0, w = 10, h = 10 }, { javaScriptEnabled = true })
   b:url("file://" .. path)
 
-  hs.timer.doAfter(2.5, function()
+  -- C: a webview configured EXACTLY like the picker's (usercontent
+  -- controller, transparency, borderless modal panel, text entry) but
+  -- carrying the tiny document. Isolates configuration from content.
+  local cucc = hs.webview.usercontent.new("clipboardPickerProbe")
+  local c = hs.webview.new({ x = 0, y = 0, w = 10, h = 10 }, { javaScriptEnabled = true }, cucc)
+  c:transparent(true)
+  c:windowStyle({ "borderless" })
+  c:level(hs.drawing.windowLevels.modalPanel)
+  c:allowTextEntry(true)
+  c:shadow(true)
+  c:deleteOnClose(false)
+  c:html(doc)
+
+  -- D: a PLAIN webview carrying the picker's real page, built from the real
+  -- rows. The other half of the split: if C runs and D does not, the fault
+  -- is in what the page contains, not in how the webview is configured.
+  local d = hs.webview.new({ x = 0, y = 0, w = 10, h = 10 }, { javaScriptEnabled = true })
+  local realOk, realHtml = pcall(function() return build_html(query_items()) end)
+  if realOk then d:html(realHtml) end
+
+  hs.timer.doAfter(3.0, function()
     local read = [[document.getElementById("x") ? document.getElementById("x").textContent : "NO-DOM"]]
+    -- For the real page, the same questions _debug asks, plus the two that
+    -- instrument could not answer: did the FIRST script element run
+    -- (trapInstalled), and did the parser even see both scripts?
+    local readReal = [[
+      JSON.stringify({
+        scriptRan: typeof window.__focusInput,
+        trapInstalled: (typeof window.onerror === "function"),
+        scripts: document.scripts.length,
+        htmlLen: document.documentElement.outerHTML.length,
+        jsError: window.__lastError || "none"
+      })
+    ]]
     a:evaluateJavaScript(read, function(r)
-      hs.printf("JSPROBE loadHTMLString(null-origin) = %s", tostring(r))
-      a:delete()
+      hs.printf("JSPROBE A plain+html()      = %s", tostring(r)); a:delete()
     end)
     b:evaluateJavaScript(read, function(r)
-      hs.printf("JSPROBE file-url-origin        = %s", tostring(r))
-      b:delete()
-      os.remove(path)
+      hs.printf("JSPROBE B plain+file://     = %s", tostring(r)); b:delete(); os.remove(path)
+    end)
+    c:evaluateJavaScript(read, function(r)
+      hs.printf("JSPROBE C picker-config     = %s", tostring(r)); c:delete()
+    end)
+    d:evaluateJavaScript(readReal, function(r)
+      hs.printf("JSPROBE D real-page (built=%s) = %s", tostring(realOk), tostring(r)); d:delete()
     end)
   end)
 end
