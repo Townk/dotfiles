@@ -936,6 +936,44 @@ end
 -- Public API
 --------------------------------------------------------------------------------
 
+--- Diagnostic: report the picker's live state, Lua side and DOM side.
+--- Temporary instrument for the blank-panel report — run it while the picker
+--- is open: `hs -c 'require("apps.clipboard-picker")._debug()'`, then read
+--- the console. Answers, in one shot, whether the data reached the page and
+--- whether the page's script ever ran.
+function M._debug()
+  local hsWin = webview and webview:hswindow()
+  local focused = hs.window.focusedWindow()
+  hs.printf("PICKER-DEBUG lua: webview=%s isShown=%s winId=%s isKey=%s",
+    tostring(webview ~= nil), tostring(isShown),
+    tostring(hsWin and hsWin:id()),
+    tostring(hsWin ~= nil and focused ~= nil and hsWin:id() == focused:id()))
+
+  local ok, items = pcall(query_items)
+  if not ok then
+    hs.printf("PICKER-DEBUG lua: query_items THREW: %s", tostring(items))
+    return
+  end
+  local encoded = hs.json.encode(items)
+  hs.printf("PICKER-DEBUG lua: rows=%d json=%s templates=%s/%s",
+    #items, encoded and tostring(#encoded) or "NIL(encode failed)",
+    tostring(htmlTemplateRaw and #htmlTemplateRaw), tostring(cssTemplateRaw and #cssTemplateRaw))
+
+  if not webview then return end
+  webview:evaluateJavaScript([[
+    JSON.stringify({
+      readyState: document.readyState,
+      hasQueryBox: !!document.getElementById('query'),
+      renderedItems: document.querySelectorAll('.item').length,
+      scriptRan: typeof window.__focusInput,
+      itemsSeen: (typeof ITEMS !== 'undefined' && ITEMS) ? ITEMS.length : -1,
+      jsError: window.__lastError || null
+    })
+  ]], function(result, err)
+    hs.printf("PICKER-DEBUG dom: %s", tostring(result or err))
+  end)
+end
+
 function M.show()
   -- Mutual exclusion between our own managed panels (e.g. WhichKey) -- see
   -- modules/system/dismiss-on-blur.lua's dismissOthers.

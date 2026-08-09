@@ -47,6 +47,16 @@
       <span id="hintAltEnter"><span class="hint-key"><span class="hint-mod">&#xF0635;</span>&#xF0311;</span><span id="hintAltEnterLabel">raw</span></span>
     </div>
   </div>
+  <!-- Diagnostic trap, deliberately its OWN script element and first on the
+       page: a parse error in the main block below aborts that block whole,
+       silently, and WebKit reports it nowhere Hammerspoon can see. This
+       records it where _debug() can read it back. -->
+  <script>
+    window.__lastError = null;
+    window.onerror = function (msg, src, line, col) {
+      window.__lastError = String(msg) + " @" + String(line) + ":" + String(col);
+    };
+  </script>
   <script>
   (function () {
     // ITEMS is the full row set from the store (cheap fields only — no
