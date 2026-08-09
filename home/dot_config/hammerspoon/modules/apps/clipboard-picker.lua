@@ -779,17 +779,32 @@ local function icon_font_url()
   return "file://" .. (os.getenv("HOME") or "") .. "/Library/Fonts/SymbolsNerdFontMono-Regular.ttf"
 end
 
+--- Encode a value for embedding inside an HTML <script> element.
+---
+--- Producing JSON is not the same as embedding it in HTML. hs.json.encode
+--- escapes '/' as '\/', so a clip containing "</script>" cannot close the
+--- element -- that much the template always relied on, and it is true. But
+--- it does NOT escape '<', and the HTML tokenizer gives two other sequences
+--- meaning inside script data: '<!--' switches to the escaped state and
+--- '<script' to the double-escaped state. Past either one, the element's
+--- real '</script>' is consumed as ordinary text rather than closing it, the
+--- script element is never terminated, and WebKit never executes it -- with
+--- no error event, no console line, nothing. The page then renders its
+--- static chrome and stops: empty list, unfocusable filter box, dead Escape
+--- (observed in the wild; reproduced from a bare document).
+---
+--- Escaping every '<' as < is the standard, complete guard. JS parses
+--- the escape back to '<', so no displayed text changes.
+local function json_for_script(value)
+  return (hs.json.encode(value):gsub("<", "\\u003C"))
+end
+
 local function build_html(items)
   ensure_templates()
   local css = substitute(cssTemplateRaw, { ICON_FONT_URL = icon_font_url() })
   return substitute(htmlTemplateRaw, {
     CSS = css,
-    -- hs.json.encode escapes '/' as '\/', which prevents a "</script>"
-    -- breakout inside the embedded JSON literal (verified empirically:
-    -- encode() on a string containing "</b>" yields "<\/b>", so no literal
-    -- "</script" byte sequence can appear even if a clip's preview text
-    -- contains that string).
-    ITEMS_JSON = hs.json.encode(items),
+    ITEMS_JSON = json_for_script(items),
   })
 end
 
@@ -1023,8 +1038,34 @@ function M._jsprobe()
   local realOk, realHtml = pcall(function() return build_html(query_items()) end)
   if realOk then d:html(realHtml) end
 
+  -- E: the HTML parser's script-data escape, carried inside a JS string
+  -- literal exactly as a clip's preview would carry it. `</script>` is
+  -- guarded by hs.json.encode's slash escaping; `<!--` and `<script` are
+  -- not, and they switch the tokenizer into a state where the element's
+  -- real closing tag is consumed as text instead of ending it.
+  local hostile = [[<!--<script>]]
+  local e = hs.webview.new({ x = 0, y = 0, w = 10, h = 10 }, { javaScriptEnabled = true })
+  e:html([[<html><body><p id="x">NO-JS</p><script>var D = "]]
+    .. hostile
+    .. [[";document.getElementById("x").textContent="JS-RAN";</script></body></html>]])
+
+  -- F: the same bytes carried through json_for_script, the guard build_html
+  -- now applies. E is the fault, F is the fix, in one run.
+  local f = hs.webview.new({ x = 0, y = 0, w = 10, h = 10 }, { javaScriptEnabled = true })
+  local fdoc = [[<html><body><p id="x">NO-JS</p><script>var D = ]]
+    .. json_for_script({ hostile })
+    .. "[0];"
+    .. [[document.getElementById("x").textContent="JS-RAN:"+D.length;</script></body></html>]]
+  f:html(fdoc)
+
   hs.timer.doAfter(3.0, function()
     local read = [[document.getElementById("x") ? document.getElementById("x").textContent : "NO-DOM"]]
+    e:evaluateJavaScript(read, function(r)
+      hs.printf("JSPROBE E hostile-raw       = %s", tostring(r)); e:delete()
+    end)
+    f:evaluateJavaScript(read, function(r)
+      hs.printf("JSPROBE F hostile-escaped   = %s", tostring(r)); f:delete()
+    end)
     -- For the real page, the same questions _debug asks, plus the two that
     -- instrument could not answer: did the FIRST script element run
     -- (trapInstalled), and did the parser even see both scripts?
