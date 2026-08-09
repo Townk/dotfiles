@@ -1,0 +1,68 @@
+#!/usr/bin/env zsh
+# pinentry-mux-popup — the two halves of pinentry-mux's floating prompt.
+#
+#   --open <caller_tty>   Run BY the filter. Resolves the session and client
+#                         behind <caller_tty>, opens the float, and prints
+#                         "<popup_tty> <holder_pid>" on stdout. Non-zero on any
+#                         failure, which the filter treats as "prompt in place".
+#   --hold <fifo>         Run INSIDE the float by `display-popup -E`. Publishes
+#                         its own tty and pid on <fifo> and then holds the pane
+#                         open for as long as the prompt needs it.
+#
+# The float has no occupant of its own: pinentry is a child of gpg-agent and
+# only ever draws ON this pane's tty. So something has to keep the pane alive,
+# and that is all --hold is. It deliberately never reads stdin — the keystrokes
+# belong to pinentry, which reads the tty directly.
+
+set -uo pipefail
+
+usage() { print -ru2 -- "usage: ${0:t} --open <caller_tty> | --hold <fifo>"; exit 2; }
+
+case "${1:-}" in
+  --open)
+    [[ -n "${2:-}" ]] || usage
+    # Self-relative, like the lib layer it is reaching into: this runs under a
+    # launchd-spawned gpg-agent, and one less environment variable to be wrong
+    # is one less way for the prompt to end up nowhere.
+    source "${0:A:h:h}/lib/mux/pinentry.zsh" 2>/dev/null || exit 1
+    mux::pinentry_spawn "$2"
+    ;;
+
+  --hold)
+    fifo="${2:-}"
+    [[ -n "$fifo" ]] || usage
+
+    # Non-dismissable, which is the point: this float is the only place the
+    # passphrase can be typed, and a stray key must not take it away. Measured
+    # on tmux 3.7b — Escape, q, x and Space are all consumed by the pinentry
+    # dialog and leave the float alone, but Ctrl-C reaches THIS process (the
+    # float's foreground job) and killed it, closing the float while pinentry
+    # sat waiting on a tty that no longer existed. With pinentry-timeout that
+    # is a fifteen-minute wedge, so INT is ignored along with the other three
+    # signals a passing hand can generate.
+    #
+    # Cancelling is still possible, and still clean: <Cancel> in the dialog
+    # ends the Assuan transaction, pinentry returns, and the filter closes this
+    # float on its way out.
+    trap '' INT TERM HUP QUIT
+
+    # USR1 is the private close channel from the filter — the one signal that
+    # is never a stray keystroke.
+    #
+    # Both traps are armed BEFORE the fifo publish below, and the order is
+    # load-bearing: publishing is what tells the filter this pid exists, and
+    # the filter may signal it immediately. Announce first and a fast close
+    # lands on USR1's default disposition, which is to kill — the float would
+    # vanish without ever running the handler.
+    trap 'exit 0' USR1
+
+    print -r -- "$(tty) $$" >"$fifo"
+
+    # A short sleep, not a long one: the loop is also the close latency, since
+    # zsh runs the USR1 handler between commands rather than interrupting the
+    # sleep.
+    while :; do sleep 0.2; done
+    ;;
+
+  *) usage ;;
+esac

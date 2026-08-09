@@ -1,0 +1,131 @@
+#!/bin/sh
+# pinentry-mux — put an agent pane's passphrase prompt somewhere visible.
+#
+# Kept in POSIX sh for the same reason as pinentry-auto, which execs us:
+# gpg-agent runs the pinentry-program in a minimal, non-interactive
+# environment, so this file assumes nothing beyond a shell and absolute paths.
+#
+# The problem, in one line: gpg hands the agent its own terminal
+# (GPG_TTY=$TTY), the agent passes it to pinentry as `OPTION ttyname=`, and for
+# an AI coding agent driven over SSH that terminal is a pty with no human in
+# front of it. The prompt is drawn correctly, on a screen nobody is watching,
+# and the work stalls until someone kills it by hand.
+#
+# So we sit between the agent and the real pinentry as an Assuan filter and
+# rewrite exactly one line. Where pinentry draws is decided solely by that
+# option, independent of its own stdio — verified against pinentry 1.3.3 by
+# driving it with pipes and watching the dialog appear on a named pane. Point
+# it at a float instead and the same prompt lands in front of the human.
+#
+#   agent  --OPTION ttyname=/dev/ttys012-->  us  --OPTION ttyname=/dev/ttys031-->  pinentry-curses
+#                                            \                                          |
+#                                             `-- opens the float on ttys031 -----------'
+#
+# Everything else in the protocol is relayed byte for byte, and the passphrase
+# never touches this process: pinentry's stdout IS our stdout, so the reply
+# goes straight back to the agent.
+#
+# PASS-THROUGH IS THE SAFETY NET. No tmux, no pane behind that tty, a human at
+# the keyboard instead of an agent, a session nobody is attached to, a client
+# too small to host the dialog, a float that will not open — every one of them
+# ends at the unchanged in-pane prompt we have today. Degrading to today's
+# behavior is always allowed. Wedging the agent is not.
+
+# Both overridable as test seams, the way MUX_TMUX_BIN is for the mux layer:
+# the spec drives this filter with a stub pinentry and a stub float so it can
+# assert on the rewritten Assuan stream without a tmux server or a real dialog.
+PINENTRY="${PINENTRY_CURSES_BIN:-/opt/homebrew/bin/pinentry-curses}"
+POPUP="${PINENTRY_MUX_POPUP_BIN:-{{ .chezmoi.homeDir }}/.local/libexec/pinentry-mux-popup}"
+
+# --- gates that need no protocol, taken before stdin is touched -------------
+# While nothing has been read yet we can still hand the whole conversation to
+# the real pinentry with exec and leave no trace of ourselves in it.
+
+# Only the curses lane. pinentry-auto has already decided this, but a wrapper
+# that quietly proxied a Touch ID or GUI prompt would be a much worse bug than
+# a redundant test is a cost.
+case "${PINENTRY_USER_DATA:-}" in
+  *USE_CURSES*) ;;
+  *) exec "$PINENTRY" "$@" ;;
+esac
+
+# gpg-agent's PATH is not a login shell's, so look where tmux actually is
+# rather than trusting `command -v` alone. MUX_TMUX_BIN is the test seam the
+# rest of the mux layer uses.
+tmux_bin=""
+for c in "${MUX_TMUX_BIN:-}" "$(command -v tmux 2>/dev/null)" \
+         /opt/homebrew/bin/tmux /usr/local/bin/tmux /usr/bin/tmux; do
+  [ -n "$c" ] && [ -x "$c" ] && { tmux_bin="$c"; break; }
+done
+[ -n "$tmux_bin" ] || exec "$PINENTRY" "$@"
+
+# A server has to be running to hold a float, and asking is cheaper than
+# discovering it later with a half-proxied conversation in flight.
+"$tmux_bin" list-sessions >/dev/null 2>&1 || exec "$PINENTRY" "$@"
+
+# is_agent <tty> — is the process on that tty one of ours?
+#
+# The same ps/grep probe the tmux keymap uses, run here on the tty gpg-agent
+# named, which is why this needs no $TMUX and no session of its own. The name
+# alternation is generated from .chezmoidata/mux.yaml's muxAgentProcs so the
+# two probes cannot drift; `[^TXZ ]` skips stopped and zombie processes, and
+# `(\.exe)?` tolerates a vendor renaming its binary mid-update.
+is_agent() {
+  ps -o state= -o comm= -t "$1" 2>/dev/null |
+    grep -iqE '^[^TXZ ]+ +(\S+\/)?({{ join "|" .muxAgentProcs }})(\.exe)?$'
+}
+
+# --- proxy ------------------------------------------------------------------
+
+fifo=$(mktemp -u "${TMPDIR:-/tmp}/pinentry-mux.XXXXXX") || exec "$PINENTRY" "$@"
+mkfifo -m 600 "$fifo" 2>/dev/null || exec "$PINENTRY" "$@"
+
+# Only the agent->pinentry direction is filtered. pinentry inherits our stdout
+# and stderr, so its answers — including the passphrase — go straight to the
+# agent without passing through this shell.
+"$PINENTRY" "$@" <"$fifo" &
+child=$!
+
+# Opening the write end blocks until the reader has opened, so by the time this
+# returns the child holds the other end and the name can be unlinked.
+exec 3>"$fifo"
+rm -f -- "$fifo"
+
+holder=""
+float_tty=""
+close_float() {
+  [ -n "$holder" ] || return 0
+  # USR1, not TERM: the float ignores the signals a stray keystroke can send,
+  # so this is the one channel that reliably closes it.
+  kill -USR1 "$holder" 2>/dev/null
+  holder=""
+}
+trap 'close_float' EXIT HUP INT TERM
+
+while IFS= read -r line; do
+  case "$line" in
+    "OPTION ttyname="*)
+      caller_tty=${line#OPTION ttyname=}
+      if [ -z "$holder" ] && is_agent "$caller_tty"; then
+        # </dev/null: nothing downstream of here may share this process's
+        # stdin, which is the agent's half of the Assuan conversation. A
+        # helper that reads even one line of it swallows part of the protocol.
+        if float=$("$POPUP" --open "$caller_tty" </dev/null 2>/dev/null); then
+          float_tty=${float%% *}
+          holder=${float#* }
+        fi
+      fi
+      # Once a float is open every ttyname points at it, not just the first.
+      # A later one would otherwise send the dialog back to the pane nobody is
+      # watching while the float sat empty in front of the human.
+      [ -n "$float_tty" ] && line="OPTION ttyname=$float_tty"
+      ;;
+  esac
+  printf '%s\n' "$line" >&3
+done
+
+exec 3>&-
+wait "$child"
+status=$?
+close_float
+exit "$status"

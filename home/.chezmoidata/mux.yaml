@@ -64,6 +64,33 @@ muxTabIcons:
   wget: ""
   sudo: "\U0000F292"
 
+# The AI coding agents this repo knows about, as process BASENAMES.
+#
+# One list, several consumers, because a name missing from any one of them
+# fails silently and differently: the tmux `is_agent` probe routes C-j/C-k the
+# wrong way, and pinentry-mux decides an agent pane is a human and parks the
+# passphrase prompt on a tty nobody is watching. Both used to carry their own
+# hand-written `(cursor-)?agent` regex, which matched two of the five.
+#
+# Consumers (all GENERATED from this list — never hand-edit the copies):
+#   - dot_config/tmux/keymap-base.conf.tmpl  `is_agent` ps/grep probe
+#   - dot_local/libexec/executable_pinentry-mux.tmpl  the same probe, in sh
+#
+# The `(\.exe)?` suffix tolerance lives in those two regexes rather than here:
+# it is a spelling of these names, not another name. claude-code renamed its
+# binary to claude.exe in an update, so a vendor's platform suffix must never
+# decide whether a key routes or a prompt is visible.
+#
+# muxHiddenProcs below happens to hold the same five today, but it answers a
+# different question ("which commands can tmux not name?") and a non-agent
+# node CLI could join it tomorrow. Kept separate on purpose.
+muxAgentProcs:
+  - agent
+  - cursor-agent
+  - claude
+  - pi
+  - pi-coding-agent
+
 # Commands tmux cannot name, so the shell names them for it.
 #
 # #{pane_current_command} is not "the command you ran": tmux picks a process

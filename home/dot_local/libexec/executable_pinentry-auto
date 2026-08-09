@@ -7,7 +7,8 @@
 #
 # Three ways this Mac is driven, three different pinentries:
 #
-#   SSH      -> pinentry-curses   prompt on the session tty
+#   SSH      -> pinentry-mux      prompt on the session tty, or a mux float
+#                                 when that tty belongs to an AI agent pane
 #   VNC      -> pinentry-mac      GUI dialog on the Aqua desktop being viewed
 #   physical -> pinentry-touchid  Touch ID (own fallback to pinentry-mac)
 #
@@ -39,8 +40,17 @@ viewing_over_vnc() {
   '
 }
 
+# The curses lane splits again inside pinentry-mux: an SSH session driven by a
+# human still gets the in-pane prompt, but one driven by an AI coding agent
+# gets it in a float, because the agent's pty is a screen nobody is watching
+# (docs/gpg-signing-ux.md). Falling back to bare curses when that wrapper is
+# missing keeps a half-applied dotfiles tree from breaking signing outright.
 case "${PINENTRY_USER_DATA:-}" in
-  *USE_CURSES*) exec /opt/homebrew/bin/pinentry-curses "$@" ;;
+  *USE_CURSES*)
+    [ -x "$HOME/.local/libexec/pinentry-mux" ] &&
+      exec "$HOME/.local/libexec/pinentry-mux" "$@"
+    exec /opt/homebrew/bin/pinentry-curses "$@"
+    ;;
 esac
 
 if viewing_over_vnc; then

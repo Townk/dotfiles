@@ -23,6 +23,7 @@ SLOW_SPECS := tests/backup_spec.sh tests/backup_changes_spec.sh \
               tests/mux_spec.sh tests/mux_stack_spec.sh \
               tests/mux_whichkey_dispatch_spec.sh tests/mux_whichkey_spec.sh \
               tests/pbcopy-files_spec.sh tests/pbpaste-files_spec.sh \
+              tests/pinentry_mux_spec.sh \
               tests/pick-clipboard-feedback_spec.sh tests/pick-clipboard-files_spec.sh \
               tests/platform_spec.sh tests/preview_spec.sh \
               tests/quick_launch_tmux_spec.sh tests/ssh-prepare-mount_spec.sh \

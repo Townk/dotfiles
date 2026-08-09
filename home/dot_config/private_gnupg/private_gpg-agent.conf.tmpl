@@ -1,5 +1,15 @@
 default-cache-ttl 86400
 max-cache-ttl 86400
+
+# Give up on an unanswered prompt after 15 minutes.
+#
+# The agent serializes every pinentry on a global entry_lock, so a second
+# request raised while a prompt is open dies no matter what this says —
+# measured at ~120s with "gpg: signing failed: Timeout" (gpg 2.5.21). What this
+# buys is the FIRST prompt: it can sit on screen long enough to walk back to
+# the machine and answer it, and if nobody ever does, the operation fails and
+# releases the lock instead of holding it forever.
+pinentry-timeout 900
 {{ if eq .chezmoi.os "darwin" -}}
 pinentry-program {{ .chezmoi.homeDir }}/.local/libexec/pinentry-auto
 {{- end }}

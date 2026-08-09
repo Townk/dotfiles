@@ -155,7 +155,11 @@ bind -n M-/ set -p @searching 1 \; set -p @visual 0 \; copy-mode \; run-shell -b
 # The `(\.exe)?` is not decoration: claude-code renamed its binary to
 # claude.exe in an update, so a vendor's platform suffix must never decide
 # whether a key routes.
-%hidden is_agent="ps -o state= -o comm= -t '#{pane_tty}' | grep -iqE '^[^TXZ ]+ +(\\S+\\/)?(cursor-)?agent(\\.exe)?$'"
+#
+# The name alternation is GENERATED from .chezmoidata/mux.yaml's muxAgentProcs
+# so this probe and pinentry-mux's cannot drift. It used to read
+# `(cursor-)?agent`, which matched two of the five agents actually run here.
+%hidden is_agent="ps -o state= -o comm= -t '#{pane_tty}' | grep -iqE '^[^TXZ ]+ +(\\S+\\/)?({{ join "|" .muxAgentProcs }})(\\.exe)?$'"
 bind -n C-j if "$is_agent" 'send-keys Down' { if "$is_passthru" 'send-keys C-j' 'select-pane -D' }
 bind -n C-k if "$is_agent" 'send-keys Up'   { if "$is_passthru" 'send-keys C-k' 'select-pane -U' }
 

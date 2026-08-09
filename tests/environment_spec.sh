@@ -50,4 +50,33 @@ Describe 'environment.sh over-SSH detection'
     When call probe "" "" ""
     The output should equal ""
   End
+
+  # A keyless host consumes the LAPTOP's forwarded gpg-agent, so USE_CURSES
+  # would travel there and demote a machine that has Touch ID into drawing
+  # curses in a remote pane. `no-autostart` is gpg.conf's existing marker for
+  # "never runs a local agent", so the remote block must skip the export when
+  # it is present — and must still fire when it is not, or the mux float on
+  # the key-holding host (which is gated on USE_CURSES) never opens.
+  gpgconf_with() {
+    mkdir -p "$ISO_HOME/.config/gnupg"
+    printf '%s\n' "$1" > "$ISO_HOME/.config/gnupg/gpg.conf"
+  }
+
+  It 'skips USE_CURSES on a host whose gpg.conf says no-autostart'
+    gpgconf_with "no-autostart"
+    When call probe "/dev/pts/3" "" ""
+    The output should equal ""
+  End
+
+  It 'still exports USE_CURSES when gpg.conf exists without no-autostart'
+    gpgconf_with "default-key A9C4A3D8CA995D91"
+    When call probe "/dev/pts/3" "" ""
+    The output should equal "USE_CURSES=1"
+  End
+
+  It 'ignores a commented-out no-autostart'
+    gpgconf_with "# no-autostart"
+    When call probe "/dev/pts/3" "" ""
+    The output should equal "USE_CURSES=1"
+  End
 End

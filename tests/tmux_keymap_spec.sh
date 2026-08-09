@@ -237,9 +237,16 @@ Describe 'tmux keymap tables'
   # Phase 6.4 (D21): agents want Down/Up where vim wants the raw key, and
   # both differ from "move focus". Three outcomes, so the probes chain —
   # a single run-shell classifier would put zsh startup on a held nav key.
+  #
+  # The name alternation is generated from .chezmoidata/mux.yaml's
+  # muxAgentProcs, shared with pinentry-mux's identical probe. It was written
+  # by hand as `(cursor-)?agent` until that matched two of the five agents this
+  # repo actually runs — the same gap that left passphrase prompts parked on
+  # claude panes. Assert the generated shape, and that the names the narrow
+  # regex used to miss are in it.
   It 'root C-j/C-k reach an agent as Down/Up before the vim/fzf lane'
     When call keys root
-    The output should include "(cursor-)?agent"
+    The output should include "(agent|cursor-agent|claude|pi|pi-coding-agent)"
     The output should include "send-keys Down"
     The output should include "send-keys Up"
   End

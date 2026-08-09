@@ -112,7 +112,17 @@ if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]; then
   # Steer gpg-agent's pinentry to the terminal. gpg forwards this to the agent,
   # which hands it to our pinentry-auto dispatcher; USE_CURSES is the value
   # pinentry-mac honors too. Unset locally so Touch ID stays the default.
-  export PINENTRY_USER_DATA="USE_CURSES=1"
+  #
+  # ...but only on a host that runs its OWN agent. A keyless host consumes the
+  # laptop's forwarded agent, so this variable travels to the LAPTOP's pinentry
+  # and demotes a machine that has Touch ID into drawing curses in a remote
+  # pane. `no-autostart` in gpg.conf is already the marker for "never runs a
+  # local agent" (see gpg.conf.tmpl's headless block), so it is exactly the
+  # right discriminator and needs no new flag. The grep costs a fork, in the
+  # branch that already forks for the op token below.
+  if ! grep -qs '^[[:space:]]*no-autostart' "$GNUPGHOME/gpg.conf"; then
+    export PINENTRY_USER_DATA="USE_CURSES=1"
+  fi
 
   # The 1Password desktop app can't authorize `op` over SSH (no GUI / Touch ID),
   # so use the loose service-account token: `op` — and chezmoi's `output "op"
