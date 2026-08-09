@@ -994,6 +994,12 @@ function M.show()
   if hsWin then hsWin:focus() end
   isShown = true
 
+  -- TEMPORARY (blank-panel diagnosis): capture the state from INSIDE the
+  -- session. Reaching for a terminal to call _debug() by hand blurs the
+  -- panel and dismisses it, so the instrument has to fire itself while the
+  -- page is still up. Remove with the rest of the instrumentation.
+  hs.timer.doAfter(1.5, function() pcall(M._debug) end)
+
   -- Dismiss automatically when focus moves away (click another window,
   -- Cmd+Tab, Raycast or any other launcher-style panel stealing key-window
   -- status, a system dialog, ...) -- see modules/system/dismiss-on-blur.lua.
