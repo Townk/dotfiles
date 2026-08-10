@@ -80,3 +80,86 @@ Describe 'environment.sh over-SSH detection'
     The output should equal "USE_CURSES=1"
   End
 End
+
+# The askpass exports in the same over-SSH block: sudo, ssh and git all take a
+# helper that gets the prompt in argv and writes the secret to stdout, and they
+# are pointed at askpass-auto — pinentry-auto's second personality
+# (docs/askpass-design.md).
+#
+# Two rules carry the weight. The helper has to EXIST, because there is no stock
+# prompt underneath `sudo -A`; and an existing value must never be overwritten,
+# because editors and agent runtimes set their own, theirs prompts on the
+# machine the human is actually at, and deferring is the better answer.
+Describe 'environment.sh askpass wiring'
+  ENV_SH="home/dot_config/zsh/environment.sh"
+
+  setup() {
+    ISO_HOME="$(mktemp -d)"
+    mkdir -p "$ISO_HOME/.local/libexec"
+  }
+  cleanup() { rm -rf "$ISO_HOME"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  install_helper() {
+    printf '#!/bin/sh\nexit 0\n' > "$ISO_HOME/.local/libexec/askpass-auto"
+    chmod +x "$ISO_HOME/.local/libexec/askpass-auto"
+  }
+
+  # probe <remote?> [preset var=value ...] -> prints the four resulting values.
+  probe_askpass() {
+    remote="$1"; shift
+    env -i \
+      PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+      HOME="$ISO_HOME" \
+      TMPDIR="$ISO_HOME/tmp" \
+      SSH_CONNECTION="$remote" \
+      "$@" \
+      sh -c 'mkdir -p "$TMPDIR" 2>/dev/null; . '"$ENV_SH"' >/dev/null 2>&1;
+             printf "%s|%s|%s|%s" "${SUDO_ASKPASS:-}" "${SSH_ASKPASS:-}" \
+                                  "${SSH_ASKPASS_REQUIRE:-}" "${GIT_ASKPASS:-}"'
+  }
+
+  It 'points sudo, ssh and git at the helper over SSH'
+    install_helper
+    When call probe_askpass "10.0.0.1 5 10.0.0.2 22"
+    The output should equal "$ISO_HOME/.local/libexec/askpass-auto|$ISO_HOME/.local/libexec/askpass-auto|force|$ISO_HOME/.local/libexec/askpass-auto"
+  End
+
+  # `prefer` still defers to the TTY when DISPLAY is unset, which over SSH it
+  # always is. `force` is the only setting that reaches us at all.
+  It 'forces ssh to use it even with no DISPLAY'
+    install_helper
+    When call probe_askpass "10.0.0.1 5 10.0.0.2 22"
+    The output should include "|force|"
+  End
+
+  It 'leaves a local session alone'
+    install_helper
+    When call probe_askpass ""
+    The output should equal "|||"
+  End
+
+  # The dotfiles land before anything is compiled, and pinentry-auto is only
+  # reachable through this symlink once `make -C custom-builds/pinentry-ui
+  # install` has run. Exporting a path to a helper that is not there would make
+  # `sudo -A` fail with no prompt underneath it.
+  It 'exports nothing when the helper has not been installed'
+    When call probe_askpass "10.0.0.1 5 10.0.0.2 22"
+    The output should equal "|||"
+  End
+
+  It 'never overwrites a helper somebody else chose'
+    install_helper
+    When call probe_askpass "10.0.0.1 5 10.0.0.2 22" SUDO_ASKPASS="/opt/theirs/askpass"
+    The output should start with "/opt/theirs/askpass|"
+  End
+
+  # SSH_ASKPASS and its REQUIRE move together: forcing ssh to use somebody
+  # else's helper is a decision we have no business making for them.
+  It 'leaves REQUIRE alone when ssh already has a helper'
+    install_helper
+    When call probe_askpass "10.0.0.1 5 10.0.0.2 22" SSH_ASKPASS="/opt/theirs/askpass"
+    The output should include "|/opt/theirs/askpass||"
+  End
+End

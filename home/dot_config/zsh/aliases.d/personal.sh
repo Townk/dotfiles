@@ -1,3 +1,20 @@
+# Route sudo's password prompt to our dialog, over SSH only.
+#
+# sudo consults SUDO_ASKPASS only when there is no terminal or when -A is given
+# (sudo(1), ENVIRONMENT), and inside a tmux pane there IS a terminal — just one
+# nobody may be watching, which is the whole problem. So -A has to come from
+# somewhere, and an alias is the deliberate choice over a wrapper on PATH:
+# `\sudo` and `command sudo` bypass it. That matters more than usual here,
+# because with -A there is no prompt underneath us — a broken helper means sudo
+# cannot authenticate at all (docs/askpass-design.md, "Blast radius").
+#
+# Local sessions are left alone: at the physical keyboard PAM answers with Touch
+# ID before any password is asked for.
+if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ] &&
+  [ -x "$HOME/.local/libexec/askpass-auto" ]; then
+  alias sudo="sudo -A"
+fi
+
 # Conditional alias
 command -v bandwhich >/dev/null && alias bandwhich="sudo bandwhich"
 command -v trip >/dev/null && alias trip="sudo trip"

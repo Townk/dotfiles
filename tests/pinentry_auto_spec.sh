@@ -70,3 +70,54 @@ EOS
     The status should be success
   End
 End
+
+# The second personality. Invoked through the `askpass-auto` symlink it serves
+# sudo, ssh and git instead of gpg-agent: prompt in argv, secret on stdout,
+# non-zero for no answer (docs/askpass-design.md).
+#
+# Unlike the lanes above it is reachable in a test, because the branch is on
+# `$0` and needs no VNC probe and no biometric prompt. Both cases here are the
+# whole of it: this personality deliberately decides nothing else, leaving float
+# versus GUI to pinentry-ui, which is the only one that can see whether a pane
+# exists.
+Describe 'askpass-auto dispatch'
+  PA="home/dot_local/libexec/executable_pinentry-auto"
+
+  setup() {
+    PA_HOME=$(mktemp -d)
+    mkdir -p "$PA_HOME/.local/libexec"
+    # Invoked the way chezmoi installs it: a symlink whose basename is the
+    # personality. Copied rather than linked to the source, so $0's basename is
+    # the only thing under test.
+    cp "$PA" "$PA_HOME/.local/libexec/pinentry-auto"
+    chmod +x "$PA_HOME/.local/libexec/pinentry-auto"
+    ln -s "$PA_HOME/.local/libexec/pinentry-auto" "$PA_HOME/askpass-auto"
+  }
+  cleanup() { rm -rf "$PA_HOME"; unset PA_HOME; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  ask() { env HOME="$PA_HOME" "$PA_HOME/askpass-auto" "$@"; }
+
+  It 'hands the prompt to pinentry-ui in askpass mode'
+    cat >"$PA_HOME/.local/libexec/pinentry-ui" <<'EOS'
+#!/bin/sh
+echo "UI ARGS:$*"
+EOS
+    chmod +x "$PA_HOME/.local/libexec/pinentry-ui"
+    When call ask "Password:"
+    The output should equal "UI ARGS:--askpass Password:"
+    The status should be success
+  End
+
+  # Fails closed, and that is a cost rather than a nicety: with `sudo -A` there
+  # is no prompt underneath, so this is sudo refusing to authenticate until you
+  # type `\sudo`. Printing anything at all here would be worse — an empty line
+  # on stdout is an empty password, which is an auth failure instead of a
+  # retry.
+  It 'says nothing and fails when pinentry-ui is not built'
+    When call ask "Password:"
+    The output should equal ""
+    The status should be failure
+  End
+End

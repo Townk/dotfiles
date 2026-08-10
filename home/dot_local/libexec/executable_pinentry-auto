@@ -1,5 +1,10 @@
 #!/bin/sh
-# pinentry-auto — gpg-agent's `pinentry-program` dispatcher.
+# pinentry-auto — the front door for every password this machine asks for.
+#
+# Two personalities, chosen by the name it was invoked as. As `pinentry-auto` it
+# is gpg-agent's `pinentry-program` dispatcher, described below. As
+# `askpass-auto` (a symlink to this file) it is what SUDO_ASKPASS, SSH_ASKPASS
+# and GIT_ASKPASS point at — see the block above `viewing_over_vnc`.
 #
 # Kept in POSIX sh on purpose (the rest of this repo is zsh): gpg-agent execs it
 # in a minimal, non-interactive environment, and all it does is branch and exec
@@ -29,6 +34,30 @@
 # pinentry-touchid then returns "Operation cancelled" instead of falling back, so
 # VNC has to be routed to the pinentry-mac GUI, which renders on the very desktop
 # the viewer is looking at.
+
+# The askpass personality, reached when invoked through the `askpass-auto`
+# symlink. sudo, ssh and git ask for a password the crude way — prompt in
+# argv[1], secret on stdout, non-zero means no answer — and this is the same
+# front door for them (docs/askpass-design.md).
+#
+# It branches on almost nothing, on purpose. There is no Touch ID rung here:
+# pinentry-touchid is a keychain-backed store for a GPG passphrase, keyed by key
+# fingerprint, so it cannot produce an account password — and Touch ID for sudo
+# already happened upstream in PAM (pam_tid in /etc/pam.d/sudo_local) before any
+# askpass helper runs. There is no float-versus-GUI branch either, because this
+# script cannot see whether a pane exists; pinentry-ui decides that with the
+# facts in hand, exactly as it does for the VNC lane below.
+#
+# Failing closed here is a real cost, not a formality: with `sudo -A` there is
+# no prompt underneath us, so a missing binary means sudo cannot authenticate in
+# that pane. `\sudo` is the documented escape, which is why the -A comes from an
+# alias rather than from a wrapper on PATH.
+case "${0##*/}" in
+  askpass-auto)
+    [ -x "$HOME/.local/libexec/pinentry-ui" ] || exit 1
+    exec "$HOME/.local/libexec/pinentry-ui" --askpass "$@"
+    ;;
+esac
 
 # viewing_over_vnc — true when a macOS Screen Sharing (VNC) client is currently
 # attached. $4 is the local-address column of `netstat -an`; matching the port

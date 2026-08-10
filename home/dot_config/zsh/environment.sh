@@ -124,6 +124,29 @@ if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]; then
     export PINENTRY_USER_DATA="USE_CURSES=1"
   fi
 
+  # Point every OTHER password prompt at the same dialog. sudo, ssh and git all
+  # take a helper that gets the prompt in argv and writes the secret to stdout;
+  # askpass-auto is pinentry-auto wearing its second face (docs/askpass-design.md).
+  #
+  # Never clobber a helper somebody else already chose. Editors and agent
+  # runtimes set SUDO_ASKPASS to their own, and theirs is usually the better
+  # answer: it prompts on the machine the human is sitting at, not in a float on
+  # this one. First setter wins, expressed as a rule rather than as a list of
+  # vendors to keep in step.
+  #
+  # ssh additionally needs REQUIRE=force. `prefer` still defers to the TTY when
+  # DISPLAY is unset, which over SSH it always is; `force` is documented as "used
+  # for all passphrase input regardless of whether DISPLAY is set", and that is
+  # the only setting that reaches us.
+  if [ -x "$HOME/.local/libexec/askpass-auto" ]; then
+    [ -n "${SUDO_ASKPASS:-}" ] || export SUDO_ASKPASS="$HOME/.local/libexec/askpass-auto"
+    [ -n "${GIT_ASKPASS:-}" ] || export GIT_ASKPASS="$HOME/.local/libexec/askpass-auto"
+    if [ -z "${SSH_ASKPASS:-}" ]; then
+      export SSH_ASKPASS="$HOME/.local/libexec/askpass-auto"
+      export SSH_ASKPASS_REQUIRE=force
+    fi
+  fi
+
   # The 1Password desktop app can't authorize `op` over SSH (no GUI / Touch ID),
   # so use the loose service-account token: `op` — and chezmoi's `output "op"
   # read` secret resolution at apply — runs in service mode. Local sessions skip
