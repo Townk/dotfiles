@@ -34,8 +34,20 @@
   that names this host's secret fragment + SOPS blob. Passed at onboarding via
   CHEZMOI_SECRETS_SLOT and persisted here (local, never committed). Empty until
   the machine is onboarded with `system-onboard`; templates guard on that.
+
+  Unlike the profile, the slot is CARRIED FORWARD from the config this init is
+  regenerating, because it has no prompt to re-answer it with: env var or
+  nothing. Without that, any bare `chezmoi init` — the one chezmoi itself asks
+  for when this template changes — silently emptied it, which does not fail.
+  It un-ignores nothing and breaks nothing on the spot; the already-rendered
+  fragment stays on disk at 0600 and keeps being sourced. chezmoi just stops
+  managing it, and the host quietly drifts until a secret changes months later.
+  Observed on the dev-shell, 2026-08-10. Only an explicit value changes it now.
 */ -}}
 {{- $slot := env "CHEZMOI_SECRETS_SLOT" -}}
+{{- if and (eq $slot "") (hasKey . "secretsSlot") -}}
+  {{- $slot = .secretsSlot -}}
+{{- end -}}
 
 {{- /*
   No [onepassword] block: human slots cache their rendered secret fragment and
