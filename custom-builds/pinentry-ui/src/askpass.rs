@@ -21,6 +21,7 @@
 
 use std::io::Write;
 use std::process::{Command, ExitCode};
+use std::time::Duration;
 
 use crate::dialog::{Dialog, Outcome, Requester, FLOAT_PTY_WIDTH};
 use crate::float;
@@ -32,6 +33,19 @@ use crate::theme::Theme;
 /// Names to walk past when looking for who asked: an askpass helper is often
 /// reached through a shell, and "sh" tells the human nothing.
 const SHELLS: [&str; 6] = ["sh", "zsh", "bash", "dash", "ksh", "fish"];
+
+/// Nothing upstream will ever end this dialog for us.
+///
+/// sudo's `passwd_timeout` bounds the prompt sudo draws itself, not a helper:
+/// given a helper that sleeps, sudo waits the full sleep and then uses whatever
+/// it printed. So an unanswered float would hold its caller open forever, and
+/// the caller is not always a human at a keyboard — Homebrew runs
+/// `sudo -A` unattended during a system update, and a hang there is worse than
+/// a refusal, which at least prints a reason and stops.
+///
+/// Two minutes is long enough to walk back to the machine and short enough that
+/// an unattended run fails the same day it started.
+const DEADLINE: Duration = Duration::from_secs(120);
 
 pub fn run(prompt: &str) -> ExitCode {
     let theme = Theme::load();
@@ -60,13 +74,19 @@ pub fn run(prompt: &str) -> ExitCode {
         error: None,
         width: FLOAT_PTY_WIDTH,
         frame: false,
-        // sudo and ssh time their own prompts out; a second deadline here would
-        // only race theirs.
-        timeout: None,
+        timeout: Some(DEADLINE),
     };
 
     let (w, h) = dialog.size();
-    let Some(float) = float::open(&who.tty, w + 2, h + 2, &who.name) else {
+    let opened = float::open(&who.tty, w + 2, h + 2, &who.name);
+    crate::debug::log(format_args!(
+        "float {}x{} for {} -> {:?}",
+        w + 2,
+        h + 2,
+        who.name,
+        opened.as_ref().map(|f| &f.tty)
+    ));
+    let Some(float) = opened else {
         crate::debug::log(format_args!("no float for {}: asking the GUI", who.tty));
         return crate::gui::ask(prompt, &title);
     };

@@ -117,6 +117,18 @@ existed to prevent. So the holder's pid lives in an atomic the fatal-signal
 handler can read, beside the terminal it already restores, and `kill` joins
 `write` and `tcsetattr` in the async-signal-safe teardown.
 
+**One edge that teardown does not cover, recorded because it looks like the bug
+above and is not.** A signal aimed at the whole process group — what `timeout`
+sends, and what a foreground Ctrl-C reaches — kills the `display-popup` client
+along with us. The popup then closes, but the holder inside it is a child of the
+tmux server rather than of the client, so it survives as an orphan holding a
+fifo. It answers `SIGUSR1` the instant anything sends one, so nothing is wedged
+and no float is left on screen; the difference from the real bug is precisely
+that there is nothing to see. A signal aimed at us alone, which is what
+gpg-agent and sudo send, tears down both. Left alone deliberately: nothing in
+the live path wraps a pinentry in a process-group kill, and the fix would mean
+reintroducing something that watches the holder.
+
 ## The protocol surface, and what we refuse to implement
 
 29 verbs exist. Passphrase *entry* — the whole reason this project exists — uses

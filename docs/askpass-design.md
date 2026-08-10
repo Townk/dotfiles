@@ -122,14 +122,25 @@ same SSH triple, same reasoning — and governed by one rule: **never clobber a
 variable that is already set.**
 
 **The guard names the binary, not the symlink**, and getting that backwards
-broke sudo on a dev shell within an hour of shipping. `chezmoi apply` installs
-`askpass-auto` on every host, while `pinentry-ui` is compiled and nothing builds
-it automatically — `system-update` does not touch `custom-builds`. A guard on
-the symlink is therefore always true, so a host that has only pulled the
-dotfiles exports a helper that can only exit 1, and with `sudo -A` there is
-nothing underneath it. The staged-rollout guarantee the pinentry lane gets for
-free (`pinentry-auto` falls through to `pinentry-curses`) has to be written out
-by hand here, because in this lane there is no fallback to fall through to.
+broke sudo on two machines within an hour of shipping. `chezmoi apply` installed
+`askpass-auto` on every host while `pinentry-ui` was compiled by hand on one, so
+a guard on the symlink was always true: a host that had only pulled the dotfiles
+exported a helper that could only exit 1, and with `sudo -A` there is nothing
+underneath it. The staged-rollout guarantee the pinentry lane gets for free
+(`pinentry-auto` falls through to `pinentry-curses`) has to be written out by
+hand here, because in this lane there is no fallback to fall through to.
+
+It surfaced on the second machine as a *failed `system-update`* rather than as a
+failed `sudo`, which is worth keeping in mind when reading a report like it:
+Homebrew runs `sudo -u root -A -E` for cask work of its own, so the export is
+reached by tooling that never saw the alias.
+
+The asymmetry itself is now gone —
+`run_onchange_after_56-build-pinentry-ui.sh.tmpl` builds the binary on every
+macOS host whose sources changed, so symlink and binary arrive together. The
+hook is deliberately soft where recob's is fatal: a missing toolchain or a
+compile error skips with a warning, because every path here degrades on its own
+and the guard makes a missing binary inert.
 
 That rule is doing real work. Cursor sets `SUDO_ASKPASS` in its agent sessions,
 pointing at its own helper, and deferring to it is the right call: it prompts on
@@ -167,6 +178,22 @@ prompt; it stops sudo working in that pane until you type `\sudo`. Fail-closed
 is the chosen behaviour, with the alias as the documented escape, and that
 choice is the reason the `-A` must never move into a `PATH` shim: a shim would
 catch scripts too, and take the escape hatch with it.
+
+**The caller is not always a human, and nothing upstream ends the dialog.**
+Homebrew writes `sudo -u root -A -E` itself, so unattended tooling picks up
+`SUDO_ASKPASS` whether or not the alias exists — the export alone is enough,
+which is why the guard bug above surfaced as a failed `system-update` rather
+than as a failed interactive `sudo`. Compounding it, sudo puts no deadline on a
+helper at all: measured, a helper that sleeps twelve seconds makes sudo wait
+twelve seconds and then use whatever it printed. `passwd_timeout` bounds the
+prompt sudo draws itself, not ours.
+
+Left alone, those two facts make an unanswered float hold a nightly update open
+forever, which is a worse failure than the refusal it replaced — a refusal at
+least prints a reason and stops. So the dialog carries a two-minute deadline in
+this lane only; the pinentry lane keeps taking its deadline from the agent's
+`SETTIMEOUT`. Expiry is indistinguishable from cancel to the caller, which is
+the point.
 
 ## Testing
 

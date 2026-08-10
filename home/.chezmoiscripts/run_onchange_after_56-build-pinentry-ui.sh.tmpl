@@ -1,0 +1,67 @@
+{{- /*
+  pinentry-ui — rebuild the passphrase dialog when its Rust source changes.
+
+  Until this hook existed, nothing built it: the binary was compiled by hand on
+  one machine while `chezmoi apply` installed the `askpass-auto` symlink on all
+  of them. That asymmetry is what broke sudo on a machine that had only pulled
+  the dotfiles, because Homebrew passes `sudo -A` itself and there is no rung
+  under a failing askpass helper. The shell guards now name the binary rather
+  than the symlink, so a missing build is merely inert — and this hook is what
+  makes it present instead.
+
+  Unlike recob's hook, a missing toolchain is NOT fatal. Every path this binary
+  serves degrades on its own: pinentry-auto falls through to pinentry-curses,
+  and the askpass exports are guarded on the binary existing. Failing the whole
+  apply over a nicety would be the wrong trade — recob fails loudly because
+  without it there is no clipboard bridge at all.
+
+  Scope: macOS. The dispatcher around it is macOS-shaped (Homebrew paths, the
+  VNC probe, pinentry-mac as the rung below) and no Linux answer is chosen yet;
+  see the "Open" sections of docs/askpass-design.md and
+  docs/pinentry-ui-design.md. Exits cleanly elsewhere.
+*/ -}}
+{{- $target := eq .chezmoi.os "darwin" -}}
+{{- $wt := .chezmoi.workingTree -}}
+#!/usr/bin/env bash
+# pinentry-ui — rebuild-on-change hook.
+{{- if $target }}
+#   Cargo.lock : {{ include "../custom-builds/pinentry-ui/Cargo.lock" | sha256sum }}
+#   Cargo.toml : {{ include "../custom-builds/pinentry-ui/Cargo.toml" | sha256sum }}
+#   Makefile   : {{ include "../custom-builds/pinentry-ui/Makefile" | sha256sum }}
+# Sources GLOBBED, not enumerated, for the reason recob's hook records: an
+# enumerated list silently stops re-firing for the file nobody remembered to add.
+{{- range glob (joinPath $wt "custom-builds/pinentry-ui/src/**/*.rs") }}
+{{- $rel := trimPrefix (printf "%s/" $wt) . }}
+#   {{ trimPrefix "custom-builds/pinentry-ui/" $rel }}: {{ include (printf "../%s" $rel) | sha256sum }}
+{{- end }}
+#
+# To rebuild manually:
+#   make -C ~/.local/share/chezmoi/custom-builds/pinentry-ui install
+{{- end }}
+
+set -euo pipefail
+
+{{- if not $target }}
+# Only built on macOS; the dispatch around it has no Linux answer yet.
+exit 0
+{{- end }}
+
+SRC="{{ $wt }}/custom-builds/pinentry-ui"
+
+if [ ! -d "$SRC" ]; then
+  echo "[pinentry-ui] source missing at $SRC — skipping." >&2
+  exit 0
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "[pinentry-ui] cargo not found — skipping. GPG keeps using pinentry-curses" >&2
+  echo "[pinentry-ui] and sudo keeps its own prompt. To enable: mise use -g rust" >&2
+  exit 0
+fi
+
+echo "[pinentry-ui] building → ~/.local/libexec/pinentry-ui"
+# Soft: a compile error must not fail the whole apply, for the same reason the
+# missing toolchain does not. The previous binary, if any, stays in place.
+make -C "$SRC" install || echo "[pinentry-ui] build failed; leaving the installed binary alone" >&2
+
+# vim:ft=sh
