@@ -357,3 +357,41 @@ that apply the skew window is in force (a copy toward the unapplied laptop
 fails LOUDLY naming the machine to fix; this is §5.2 behaving, not a fault).
 Also still owed: the dev-shell run (first execution of every Linux-gated
 path) and the push of `master` (operator's call).
+
+## Update — the dev-shell run, and the project closed (2026-08-10)
+
+The Linux suite ran for the first time and now passes, which retires the last
+outstanding item. It was worth doing: six defects surfaced that no amount of
+macOS running could have found, because the two platforms compile different
+`cfg` branches and neither machine had ever built the other's.
+
+* **Five lint failures in never-compiled code** — an import, two bindings and
+  a `format!` that exist only in Linux paths, plus a test helper used only by
+  the macOS module. All were `-D warnings` errors, so the suite could not
+  even build out there.
+* **One real defect, and the interesting one**: `cap_check` sensed the
+  ambient terminal to decide whether to *ask* about an over-cap item.
+  `cargo test` captures output per thread without replacing fd 1, so under
+  any terminal that check was true — the cap tests opened a real `gum`
+  dialog, took the answer as consent, and failed. Not Linux-specific at all:
+  `make test` from a terminal on either Mac failed the same way, and it
+  passed here only because the agent's shell has no tty. Interactivity is now
+  injected through `Context`, like every other decision this engine was
+  already forbidden to sense for itself.
+
+The reusable lesson is in `custom-builds/recob/README.md`: run the suite
+under `script -q /dev/null` before trusting a green one, because a tty
+changes behaviour that a piped run hides.
+
+The four Linux-gated store tests executed for the first time and pass, which
+settles two open questions: an embedded NUL does survive `clip.set` → SQLite
+TEXT → `clip.get` byte-exact, and the `from_utf8_lossy` divergence is now
+pinned as intended behaviour rather than merely reported. That divergence
+remains the one place the port is not byte-faithful to the zsh store; it is
+recorded here so a future reader meets it as a decision rather than a
+surprise.
+
+Still open, all optional and none blocking: the repo-wide shellspec suite has
+not been run on Linux (only the Rust suite has), and the three §-level
+judgement calls above — the `files.fetch` per-file cap, and the two
+`internal`-vs-`not-found` codes — are still the operator's to make.

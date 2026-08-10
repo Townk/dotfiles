@@ -25,7 +25,27 @@ make build     # cargo build --release --workspace → recobd, system-clip, syst
 make test      # cargo fmt --check, clippy -D warnings, cargo test
 make install   # → ~/.local/libexec/recobd, ~/.local/bin/system-clip,
                #   ~/.local/libexec/system-bridge
+
+script -q /dev/null make test    # the same suite WITH a controlling terminal
 ```
+
+Run the suite under `script` before trusting a green one. `cargo test`
+captures output per thread without replacing fd 1, so `isatty(1)` is true
+whenever the suite runs from a terminal and false in a piped/CI shell — and
+code that senses the terminal therefore behaves differently for the two. That
+gap hid a real defect: `cap_check` sensed the tty itself, so the cap tests
+opened a `gum confirm` dialog, read the answer as consent, and failed for
+whoever ran them interactively while passing in every piped run. The fix was
+to inject the decision (`Context.interactive`), but the pty run is what makes
+the class visible at all.
+
+Two platform notes worth the same suspicion. The macOS and Linux builds
+compile different `cfg` branches, so lints and type errors in one are
+invisible from the other — the first Linux run of this suite turned up five
+clippy errors in code that had never been compiled anywhere. And the Linux
+target cannot be cross-checked from a Mac without a C cross-compiler, because
+`rusqlite` bundles SQLite; `cargo clippy --target …` gets as far as cc-rs and
+stops.
 
 Cross-platform dependencies: `sha2` and `subtle` (both required by §9.2 and
 pinned by `probes/` first) and `rusqlite` with bundled SQLite (the store,
