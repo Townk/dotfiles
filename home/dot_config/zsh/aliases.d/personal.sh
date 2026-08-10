@@ -10,8 +10,12 @@
 #
 # Local sessions are left alone: at the physical keyboard PAM answers with Touch
 # ID before any password is asked for.
+#
+# Gated on the compiled binary rather than on the askpass-auto symlink, which
+# chezmoi installs everywhere — see the same guard in environment.sh for what
+# that mistake costs.
 if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ] &&
-  [ -x "$HOME/.local/libexec/askpass-auto" ]; then
+  [ -x "$HOME/.local/libexec/pinentry-ui" ]; then
   alias sudo="sudo -A"
 fi
 

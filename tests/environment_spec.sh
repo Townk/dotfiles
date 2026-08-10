@@ -101,9 +101,18 @@ Describe 'environment.sh askpass wiring'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  install_helper() {
-    printf '#!/bin/sh\nexit 0\n' > "$ISO_HOME/.local/libexec/askpass-auto"
+  # A host after `chezmoi apply`: the dispatcher and its symlink are managed, so
+  # they are always here. Nothing is compiled yet.
+  install_dispatcher() {
+    printf '#!/bin/sh\nexit 1\n' > "$ISO_HOME/.local/libexec/askpass-auto"
     chmod +x "$ISO_HOME/.local/libexec/askpass-auto"
+  }
+
+  # ...and after somebody ran `make -C custom-builds/pinentry-ui install`.
+  install_helper() {
+    install_dispatcher
+    printf '#!/bin/sh\nexit 0\n' > "$ISO_HOME/.local/libexec/pinentry-ui"
+    chmod +x "$ISO_HOME/.local/libexec/pinentry-ui"
   }
 
   # probe <remote?> [preset var=value ...] -> prints the four resulting values.
@@ -140,11 +149,20 @@ Describe 'environment.sh askpass wiring'
     The output should equal "|||"
   End
 
-  # The dotfiles land before anything is compiled, and pinentry-auto is only
-  # reachable through this symlink once `make -C custom-builds/pinentry-ui
-  # install` has run. Exporting a path to a helper that is not there would make
-  # `sudo -A` fail with no prompt underneath it.
-  It 'exports nothing when the helper has not been installed'
+  It 'exports nothing when nothing at all is installed'
+    When call probe_askpass "10.0.0.1 5 10.0.0.2 22"
+    The output should equal "|||"
+  End
+
+  # The regression, and the reason the guard names the binary. `chezmoi apply`
+  # installs askpass-auto on EVERY host, while pinentry-ui is compiled and
+  # nothing builds it automatically — `system-update` does not touch
+  # custom-builds. A guard on the symlink is therefore always true, so a host
+  # that has only pulled the dotfiles exports a helper that can only exit 1 —
+  # and with `sudo -A` there is no prompt underneath it. Measured on a dev shell
+  # within the hour: sudo stopped working there, with `\sudo` the only way in.
+  It 'exports nothing when the dispatcher is there but nothing is built'
+    install_dispatcher
     When call probe_askpass "10.0.0.1 5 10.0.0.2 22"
     The output should equal "|||"
   End

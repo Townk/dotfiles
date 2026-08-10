@@ -138,7 +138,17 @@ if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]; then
   # DISPLAY is unset, which over SSH it always is; `force` is documented as "used
   # for all passphrase input regardless of whether DISPLAY is set", and that is
   # the only setting that reaches us.
-  if [ -x "$HOME/.local/libexec/askpass-auto" ]; then
+  #
+  # The guard is on the BINARY, not on askpass-auto. That distinction is the
+  # whole safety net and it is easy to get backwards: askpass-auto is a chezmoi
+  # symlink, so it exists on every host the moment the dotfiles are applied,
+  # while pinentry-ui is compiled and nothing builds it automatically —
+  # `system-update` does not touch custom-builds. Gating on the symlink
+  # therefore exports a helper that can only ever exit 1, and with `sudo -A`
+  # there is no prompt underneath it: sudo simply stops working in that pane.
+  # Measured on a dev shell an hour after this shipped.
+  if [ -x "$HOME/.local/libexec/pinentry-ui" ] &&
+    [ -x "$HOME/.local/libexec/askpass-auto" ]; then
     [ -n "${SUDO_ASKPASS:-}" ] || export SUDO_ASKPASS="$HOME/.local/libexec/askpass-auto"
     [ -n "${GIT_ASKPASS:-}" ] || export GIT_ASKPASS="$HOME/.local/libexec/askpass-auto"
     if [ -z "${SSH_ASKPASS:-}" ]; then

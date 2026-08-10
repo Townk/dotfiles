@@ -121,6 +121,16 @@ Gated exactly like the `USE_CURSES` block in `dot_config/zsh/environment.sh` —
 same SSH triple, same reasoning — and governed by one rule: **never clobber a
 variable that is already set.**
 
+**The guard names the binary, not the symlink**, and getting that backwards
+broke sudo on a dev shell within an hour of shipping. `chezmoi apply` installs
+`askpass-auto` on every host, while `pinentry-ui` is compiled and nothing builds
+it automatically — `system-update` does not touch `custom-builds`. A guard on
+the symlink is therefore always true, so a host that has only pulled the
+dotfiles exports a helper that can only exit 1, and with `sudo -A` there is
+nothing underneath it. The staged-rollout guarantee the pinentry lane gets for
+free (`pinentry-auto` falls through to `pinentry-curses`) has to be written out
+by hand here, because in this lane there is no fallback to fall through to.
+
 That rule is doing real work. Cursor sets `SUDO_ASKPASS` in its agent sessions,
 pointing at its own helper, and deferring to it is the right call: it prompts on
 the laptop the human is actually sitting at, not in a float on a machine they
