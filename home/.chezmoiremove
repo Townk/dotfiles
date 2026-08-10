@@ -174,3 +174,13 @@ README.md
 .config/systemd/user/clipboard-bridge-trusted@.service
 .local/lib/clipboard-platform-macos.zsh
 .local/lib/clipboard-platform-linux-headless.zsh
+
+# ── pinentry cutover: the Assuan shell filter retired (→ pinentry-ui) ───────
+# pinentry-mux sat between gpg-agent and pinentry-curses rewriting one line,
+# and could never do more than that: Assuan is strictly synchronous and the
+# filter did not own the response direction, so INSERTING a line left a surplus
+# OK that the agent read as an empty GETPIN result — "No passphrase given" —
+# and every signature failed (docs/pinentry-ui-design.md). pinentry-ui speaks
+# the protocol itself and draws its own dialog, so the filter and its watcher
+# are gone. pinentry-mux-popup stays: opening the float was never the problem.
+.local/libexec/pinentry-mux

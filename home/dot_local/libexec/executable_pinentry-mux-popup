@@ -1,13 +1,20 @@
 #!/usr/bin/env zsh
 # pinentry-mux-popup — the two halves of pinentry-mux's floating prompt.
 #
-#   --open <caller_tty>   Run BY the filter. Resolves the session and client
-#                         behind <caller_tty>, opens the float, and prints
-#                         "<popup_tty> <holder_pid>" on stdout. Non-zero on any
-#                         failure, which the filter treats as "prompt in place".
+#   --open <caller_tty> <w> <h> [requester]
+#                         Run BY pinentry-ui. Resolves the session and client
+#                         behind <caller_tty>, opens a float of exactly <w>x<h>,
+#                         and prints "<popup_tty> <holder_pid>" on stdout.
+#                         Non-zero on any failure, which the caller treats as
+#                         "prompt in place".
 #   --hold <fifo>         Run INSIDE the float by `display-popup -E`. Publishes
 #                         its own tty and pid on <fifo> and then holds the pane
 #                         open for as long as the prompt needs it.
+#
+# The size is the caller's to decide, not ours. A tmux popup's dimensions are
+# fixed at creation and the dialog's follow from text that arrives long after
+# the float must exist, so only the program laying the dialog out can get this
+# right — which is precisely why that program now owns the dialog.
 #
 # The float has no occupant of its own: pinentry is a child of gpg-agent and
 # only ever draws ON this pane's tty. So something has to keep the pane alive,
@@ -16,16 +23,19 @@
 
 set -uo pipefail
 
-usage() { print -ru2 -- "usage: ${0:t} --open <caller_tty> | --hold <fifo>"; exit 2; }
+usage() {
+  print -ru2 -- "usage: ${0:t} --open <caller_tty> <w> <h> [requester] | --hold <fifo>"
+  exit 2
+}
 
 case "${1:-}" in
   --open)
-    [[ -n "${2:-}" ]] || usage
+    [[ -n "${2:-}" && -n "${3:-}" && -n "${4:-}" ]] || usage
     # Self-relative, like the lib layer it is reaching into: this runs under a
     # launchd-spawned gpg-agent, and one less environment variable to be wrong
     # is one less way for the prompt to end up nowhere.
     source "${0:A:h:h}/lib/mux/pinentry.zsh" 2>/dev/null || exit 1
-    mux::pinentry_spawn "$2"
+    mux::pinentry_spawn "$2" "$3" "$4" "${5:-}"
     ;;
 
   --hold)

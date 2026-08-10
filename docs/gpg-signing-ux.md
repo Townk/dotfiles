@@ -1,8 +1,22 @@
 # GPG signing UX — plan
 
-> **Status**: implemented (option A) and verified on both hosts — the laptop
-> against nested tmux servers and a throwaway key, and `mac-mini`, the host it is
-> actually for, against the real signing key and a live agent pane. Sections
+> **Status**: superseded, and kept as the record of why. Option A — a shell
+> Assuan filter retargeting `pinentry-curses` into a tmux float — was built,
+> verified on both hosts, and shipped. It has since been **deleted**: the filter
+> sat in one direction of a strictly synchronous protocol, so it could rewrite a
+> line but never add one, and everything the design wanted next needed the line
+> it could not add. `pinentry-ui` now speaks Assuan itself and draws its own
+> dialog (`docs/pinentry-ui-design.md`).
+>
+> Read this file for the measurements, which all still hold: how a tty maps to a
+> pane to a client, why the popup needs `-c` and the size probe needs `-t`, why
+> the float must be non-dismissable, and what happens to a float whose owner
+> dies. The float half of the implementation survived the rewrite unchanged and
+> those findings are the reason it works.
+>
+> What is no longer true: `pinentry-mux` and its watcher subshell no longer
+> exist, `pinentry-auto` execs `pinentry-ui`, and the filter's tests moved to
+> `tests/pinentry_float_spec.sh` minus the ttyname-rewrite examples. Sections
 > below were corrected in place where a measurement contradicted the design —
 > those corrections are marked **Measured**. Public repo; no employer/work
 > identifiers. The personal Mac mini is `mac-mini` where a concrete host name is
@@ -379,15 +393,15 @@ carrying the float's tty back, holding that pipe open and stalling the filter
 before it forwarded a line. Anything spawned on this path needs its descriptors
 closed explicitly.
 
-Tests: `tests/pinentry_mux_spec.sh` (the ttyname rewrite; a response budget that
-counts commands forwarded against commands received, because every content
-assertion here passed while the injected line was silently desynchronising the
-protocol; teardown — including the abandoned-connection case above, pinned with
-the agent's end of the pipe held open so a regression stalls until the watchdog
-kills it rather than passing on an EOF it should never have seen —
-pass-through on every gate, the whole shared name list, plus the lib's
-session/client/geometry lookups); `tests/pinentry_auto_spec.sh` (dispatch: `USE_CURSES` → mux, and the
-fallback when the wrapper is not applied — the VNC and Touch ID branches are
+Tests, as they were: `tests/pinentry_mux_spec.sh` covered the ttyname rewrite
+and a response budget counting commands forwarded against commands received —
+worth recording, because every *content* assertion in that file passed while the
+injected line was silently desynchronising the protocol, and only the count
+caught it. That budget is the ancestor of the counting examples in
+`tests/assuan_pipe.rs`. The file is gone with the filter; the session, client
+and sizing lookups live on in `tests/pinentry_float_spec.sh`.
+`tests/pinentry_auto_spec.sh` (dispatch: `USE_CURSES` → pinentry-ui, and the
+fallback when the binary has not been built — the VNC and Touch ID branches are
 left alone, since exercising them would raise a real biometric prompt);
 `tests/environment_spec.sh` (`no-autostart` → empty `PINENTRY_USER_DATA`,
 keeping the existing remote cases). `tests/tmux_keymap_spec.sh` was updated: it

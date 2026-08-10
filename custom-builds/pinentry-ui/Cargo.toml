@@ -1,0 +1,27 @@
+[package]
+name = "pinentry-ui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Two dependencies, and the shortness of this list is the point: this binary
+# reads passphrases, so every crate here is code that could see one.
+#
+#   libc     — termios, mlock, setrlimit and the Linux-only prctl/madvise
+#              hardening. Zero transitive dependencies, which is why it is
+#              preferred over the safer-but-larger syscall wrappers.
+#   zeroize  — wiping that the compiler may not elide. A plain zeroing loop over
+#              memory about to be freed is a dead store and can legally be
+#              removed; this writes volatile and fences. It is the one guarantee
+#              that cannot be hand-rolled correctly in safe Rust.
+#
+# Deliberately absent: a TUI framework (the dialog is a few hundred lines of
+# ANSI and a framework's redraw model would own the input loop the passphrase
+# passes through), and a JSON parser (the theme is read from the generated
+# `C_ROLE_*="#hex"` shell projection, which needs no parser).
+[dependencies]
+libc = "0.2"
+zeroize = "1"
+
+[profile.release]
+opt-level = "s"

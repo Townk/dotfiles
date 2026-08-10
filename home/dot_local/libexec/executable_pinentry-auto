@@ -7,9 +7,10 @@
 #
 # Three ways this Mac is driven, three different pinentries:
 #
-#   SSH      -> pinentry-mux      prompt on the session tty, or a mux float
+#   SSH      -> pinentry-ui       prompt on the session tty, or a mux float
 #                                 when that tty belongs to an AI agent pane
-#   VNC      -> pinentry-mac      GUI dialog on the Aqua desktop being viewed
+#   VNC      -> pinentry-ui       the terminal being viewed, and pinentry-ui
+#                                 hands over to pinentry-mac when there is none
 #   physical -> pinentry-touchid  Touch ID (own fallback to pinentry-mac)
 #
 # SSH is detected client-side: interactive shells export USE_CURSES=1 when
@@ -40,20 +41,37 @@ viewing_over_vnc() {
   '
 }
 
-# The curses lane splits again inside pinentry-mux: an SSH session driven by a
-# human still gets the in-pane prompt, but one driven by an AI coding agent
-# gets it in a float, because the agent's pty is a screen nobody is watching
-# (docs/gpg-signing-ux.md). Falling back to bare curses when that wrapper is
-# missing keeps a half-applied dotfiles tree from breaking signing outright.
+# The curses lane splits again inside pinentry-ui: an SSH session driven by a
+# human gets the prompt in the pane they are looking at, but one driven by an
+# AI coding agent gets it in a tmux float, because the agent's pty is a screen
+# nobody is watching (docs/pinentry-ui-design.md).
+#
+# The guard is what makes a staged rollout safe, and it is not a formality:
+# nothing in this repo builds automatically, so a host that has pulled the
+# dotfiles but not run `make -C custom-builds/pinentry-ui install` has no
+# binary here at all. It then signs exactly as it did before any of this
+# existed. That same fall-through is the last line of the blast-radius rule —
+# no front-end may ever become the only way to authenticate.
 case "${PINENTRY_USER_DATA:-}" in
   *USE_CURSES*)
-    [ -x "$HOME/.local/libexec/pinentry-mux" ] &&
-      exec "$HOME/.local/libexec/pinentry-mux" "$@"
+    [ -x "$HOME/.local/libexec/pinentry-ui" ] &&
+      exec "$HOME/.local/libexec/pinentry-ui" "$@"
     exec /opt/homebrew/bin/pinentry-curses "$@"
     ;;
 esac
 
+# Over VNC the question is not "GUI or terminal" — it is "is there a terminal at
+# all", and this script cannot answer that. The `ttyname` arrives over Assuan
+# AFTER the exec, so the dispatcher has already chosen by the time anyone knows.
+# So hand the lane to pinentry-ui and let it decide with the fact in hand: it
+# draws in the terminal when there is one (a shell on the desktop being viewed,
+# which used to get a GUI dialog for no reason) and hands the conversation to
+# pinentry-mac when there is not (a commit from an editor's source-control panel
+# with no GPG_TTY). Touch ID cannot serve either case here — no reachable sensor
+# for a remote viewer, and it cancels rather than falling back.
 if viewing_over_vnc; then
+  [ -x "$HOME/.local/libexec/pinentry-ui" ] &&
+    exec "$HOME/.local/libexec/pinentry-ui" "$@"
   exec /opt/homebrew/bin/pinentry-mac "$@"
 fi
 

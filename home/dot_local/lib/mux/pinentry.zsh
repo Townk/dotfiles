@@ -1,14 +1,16 @@
 #!/usr/bin/env zsh
-# mux/pinentry.zsh — open the passphrase float for pinentry-mux.
+# mux/pinentry.zsh — open the passphrase float for pinentry-ui.
 #
 # Off-PATH internal library, SOURCED (not executed) by
-# libexec/pinentry-mux-popup, which is itself run from the POSIX-sh
-# pinentry-mux Assuan filter. See docs/gpg-signing-ux.md.
+# libexec/pinentry-mux-popup, which is itself run by pinentry-ui — the pinentry
+# that speaks Assuan and draws its own dialog. See docs/pinentry-ui-design.md;
+# docs/gpg-signing-ux.md is the history, including every tmux measurement this
+# file rests on.
 #
 # The caller hands us the tty gpg-agent named in `OPTION ttyname=` — an agent
-# pane's pty that nobody is looking at. We map it to its tmux session, open a
-# float on the client attached to that session, and print the float's OWN tty
-# back, which the filter substitutes into the Assuan stream so pinentry draws
+# pane's pty that nobody is looking at — and the exact size it needs. We map the
+# tty to its tmux session, open a float on the client attached to that session,
+# and print the float's OWN tty back, which the caller then draws its dialog on,
 # where the human will see it.
 #
 # Sources mux-bootstrap.zsh, never mux.zsh: this runs under a launchd-spawned
@@ -25,16 +27,10 @@ typeset -g _MUX_PE_ROOT="${_mux_pe_self:A:h:h:h}"     # ~/.local
 source "$_MUX_PE_LIB/mux-bootstrap.zsh"
 unset _mux_pe_self
 
-# Floor measured against pinentry 1.3.3: the stock dialog chrome is 55x7 and
-# below that pinentry answers `ERR … Screen or window too small` instead of
-# drawing. That is a clean Assuan error rather than a hang, but it fails the
-# signature — so a client too small to host the dialog must fall back to
-# pass-through and prompt in place, which at least works. The extra margin
-# over 55x7 is for a SETDESC that wraps to several lines.
-typeset -gr MUX_PINENTRY_MIN_W=58
-typeset -gr MUX_PINENTRY_MIN_H=9
-typeset -gr MUX_PINENTRY_MAX_W=78
-typeset -gr MUX_PINENTRY_MAX_H=16
+# The float leaves this much of the client visible around it, so it reads as a
+# float and not as a takeover. A client that cannot spare it is treated as too
+# small, and the prompt is drawn in place instead — which always works.
+typeset -gr MUX_PINENTRY_MARGIN=4
 
 # mux::pinentry_session_for_tty <tty> — the tmux session owning that pane tty.
 #
@@ -89,8 +85,14 @@ mux::pinentry_client_for_session() {
   print -r -- "$best"
 }
 
-# mux::pinentry_geometry <client> — "W H" for the float, or non-zero when the
-# client is too small to host the dialog at all.
+# mux::pinentry_fits <client> <w> <h> — can this client host a float that size?
+#
+# The caller brings the size rather than asking for one, and that inversion is
+# the point of the rewrite. A tmux popup's dimensions are fixed at creation,
+# and the dialog's dimensions follow from text that arrives long after the
+# float has to be opened — so the only program that can size the float
+# correctly is the one that lays the dialog out. It does; this only checks the
+# screen can take it.
 #
 # `-t` here, `-c` for the popup below, and they are not interchangeable — the
 # two commands invert. Measured on tmux 3.7b against a 120x40 client and a
@@ -98,22 +100,17 @@ mux::pinentry_client_for_session() {
 # `display -p -c <client>` reported the CURRENT client's size for both. For
 # display-popup it is the other way round. Swapping either flag for the
 # other-looking one silently sizes or paints against the wrong screen.
-mux::pinentry_geometry() {
-  local client="$1" tx size cw ch w h
+mux::pinentry_fits() {
+  local client="$1" w="$2" h="$3" tx size cw ch
+  [[ "$w" == <-> && "$h" == <-> ]] || return 1
   tx="$(_mux_tx_bin)" || return 1
   size="$("$tx" display -p -t "$client" -F '#{client_width} #{client_height}' 2>/dev/null)" || return 1
   cw="${size%% *}" ch="${size##* }"
   [[ "$cw" == <-> && "$ch" == <-> ]] || return 1
-
-  # Leave a margin so the float reads as a float and not as a takeover.
-  w=$(( cw - 6 )); h=$(( ch - 6 ))
-  (( w > MUX_PINENTRY_MAX_W )) && w=$MUX_PINENTRY_MAX_W
-  (( h > MUX_PINENTRY_MAX_H )) && h=$MUX_PINENTRY_MAX_H
-  (( w < MUX_PINENTRY_MIN_W || h < MUX_PINENTRY_MIN_H )) && return 1
-  print -r -- "$w $h"
+  (( w + MUX_PINENTRY_MARGIN <= cw && h + MUX_PINENTRY_MARGIN <= ch ))
 }
 
-# mux::pinentry_alert <session> — OSD that a passphrase is waiting.
+# mux::pinentry_alert <session> [requester] — OSD that a passphrase is waiting.
 #
 # The float is useless if you never learn it is there, which is the whole
 # complaint: the agent stalls silently. The alert is best-effort and must never
@@ -132,31 +129,52 @@ mux::pinentry_geometry() {
 # open until its LAST writer closes. A backgrounded alert would then hold that
 # substitution open for as long as the OSD took, stalling the Assuan filter
 # before it had forwarded a single line. Measured as exactly that hang.
+#
+# The requester's name earns its place in the sentence. When this fires the
+# human is by definition not looking at a terminal, so "something wants a
+# passphrase" leaves them to go and find out which of three agents it was;
+# "Claude is requesting your passphrase" does not. No pane id — that is for the
+# dialog, which they are about to be looking at anyway.
+
+# mux::pinentry_alert_text [requester] — the sentence the OSD shows.
+#
+# Split out from the alert itself only so the wording can be pinned by a test:
+# everything around it is a backgrounded subshell talking to the notification
+# daemon, and this is the part with a decision in it.
+mux::pinentry_alert_text() {
+  local who="$1"
+  if [[ -n "$who" ]]; then
+    print -r -- "${(C)who} is requesting your passphrase"
+  else
+    print -r -- 'Passphrase needed — a signing prompt is waiting in tmux'
+  fi
+}
+
 mux::pinentry_alert() {
-  local sess="$1"
+  local sess="$1" who="$2" msg
+  msg="$(mux::pinentry_alert_text "$who")"
   (
     [[ -n "$sess" ]] && mux::session_is_remote "$sess" && export NOTIFY_VIA_BRIDGE=1
     source "$_MUX_PE_LIB/common.zsh" 2>/dev/null || exit 0
-    notify --icon 'glyph:nf-md-key' --sound Glass \
-      'Passphrase needed — a signing prompt is waiting in tmux' || true
+    notify --icon 'glyph:nf-md-key' --sound Glass "$msg" || true
   ) >/dev/null 2>&1 &!
   return 0
 }
 
-# mux::pinentry_spawn <caller_tty> — open the float; print "<popup_tty> <pid>".
+# mux::pinentry_spawn <caller_tty> <w> <h> [requester] — open the float;
+# print "<popup_tty> <pid>".
 #
-# Non-zero on every failure, and the filter then leaves the Assuan stream
-# untouched so the prompt lands in the agent pane exactly as it does today.
-# Degrading to today's behavior is always allowed; wedging the agent is not.
+# Non-zero on every failure, and pinentry-ui then draws in the calling pane
+# exactly as it would with no tmux at all. Degrading to a prompt in an awkward
+# place is always allowed; wedging the agent is not.
 mux::pinentry_spawn() {
-  local caller_tty="$1"
-  local tx sess client geom w h fifo out popup_pid reader_pid line
+  local caller_tty="$1" w="$2" h="$3" who="${4:-}"
+  local tx sess client fifo out popup_pid reader_pid line
 
   tx="$(_mux_tx_bin)" || return 1
   sess="$(mux::pinentry_session_for_tty "$caller_tty")" || return 1
   client="$(mux::pinentry_client_for_session "$sess")" || return 1
-  geom="$(mux::pinentry_geometry "$client")" || return 1
-  w="${geom%% *}" h="${geom##* }"
+  mux::pinentry_fits "$client" "$w" "$h" || return 1
 
   # 0600 fifo under the common.zsh scratch discipline. Nothing secret crosses
   # it — the holder publishes only its tty and pid, and the passphrase never
@@ -177,15 +195,21 @@ mux::pinentry_spawn() {
   cat "$fifo" >"$out" 2>/dev/null &
   reader_pid=$!
 
-  # -B, no title: pinentry draws its own framed dialog, so a tmux border would
-  # be a second box around the first. Same reason the pickers pass it.
+  # The border is tmux's, and deliberately so: `popup-border-lines rounded`
+  # with the theme's own focus colour is the same frame every other dialog in
+  # this setup wears, so the passphrase prompt looks like it belongs here
+  # rather than like something that arrived from outside. pinentry-ui is told
+  # to skip its own frame, and the size it asked for already accounts for the
+  # two rows and columns tmux spends on one. (The retired filter passed -B for
+  # the opposite reason: pinentry-curses draws a frame that cannot be turned
+  # off, and two boxes is one too many.)
   #
   # </dev/null is load-bearing. This client lives for as long as the float
   # does, and without it the process inherits the filter's stdin — the Assuan
   # pipe from gpg-agent — and reads from it. Measured: the tmux client ate the
   # `BYE`, pinentry never saw the end of the conversation, and the filter hung
   # waiting for a child that would never exit.
-  "$tx" display-popup -E -B -w "$w" -h "$h" -c "$client" \
+  "$tx" display-popup -E -w "$w" -h "$h" -c "$client" \
     "$_MUX_PE_ROOT/libexec/pinentry-mux-popup" --hold "$fifo" </dev/null >/dev/null 2>&1 &
   popup_pid=$!
 
@@ -210,6 +234,6 @@ mux::pinentry_spawn() {
     return 1
   fi
 
-  mux::pinentry_alert "$sess"
+  mux::pinentry_alert "$sess" "$who"
   print -r -- "$line"
 }
