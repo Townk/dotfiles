@@ -17,6 +17,50 @@ bindkey '^_'   undo   # Ctrl+/
 bindkey '^[[Z' undo   # Shift+Tab
 bindkey '^[/'  redo   # Option+/ (Alt+/)
 
+# Line navigation and editing.
+# z4h bound these; replacing its DSL with raw sequences left them unbound, and
+# ZLE silently ignores a sequence it has no binding for — which is why Delete
+# does nothing at the prompt while working in every other macOS app. Nothing
+# upstream is at fault: the keyboard sends KC_DEL and the terminal emits the
+# sequence; only ZLE was missing its half.
+# Both the CSI (^[[…) and application-mode (^[O…) forms are bound, because which
+# one arrives depends on the terminal's keypad mode — and inside a multiplexer,
+# on the TERM it advertises to the shell.
+bindkey '^[[3~'   delete-char        # Delete  (Shift+Backspace on the Svalboard)
+bindkey '^[[3;5~' kill-word          # Ctrl+Delete: eat the word ahead
+
+# Ctrl+Backspace, the mirror of Ctrl+Delete. Unlike Ctrl+Alt+A above, this key
+# has no usable legacy encoding — terminals send plain ^? for it, the same byte
+# as Backspace — so it only arrives distinctly as an extended key.
+#
+# Which extended form reaches ZLE is NOT the one the terminal sends. Measured on
+# a scratch tmux server with `extended-keys always` (same method as the \e^A note
+# below), feeding an attached client each encoding and reading the pane back:
+#
+#   client sends kitty      CSI 127;5u    → pane receives CSI 27;5;127~
+#   client sends modifyOther CSI 27;5;127~ → pane receives CSI 27;5;127~
+#
+# tmux decodes whatever it is given and re-emits xterm modifyOtherKeys, so
+# `^[[27;5;127~` is the one that matters. The kitty form is kept for a terminal
+# talking straight to zsh with no multiplexer in between.
+bindkey '^[[27;5;127~' backward-kill-word  # Ctrl+Backspace, via tmux
+bindkey '^[[127;5u'    backward-kill-word  # Ctrl+Backspace, no multiplexer
+# Legacy fallback. Costs Ctrl+H its usual backward-delete-char, since the two are
+# the same byte; drop this line if the extended forms above prove sufficient.
+bindkey '^H'           backward-kill-word  # Ctrl+Backspace (legacy)
+
+bindkey '^[[H'    beginning-of-line  # Home
+bindkey '^[OH'    beginning-of-line  # Home, application mode
+bindkey '^[[1~'   beginning-of-line  # Home, vt-style
+bindkey '^[[F'    end-of-line        # End
+bindkey '^[OF'    end-of-line        # End, application mode
+bindkey '^[[4~'   end-of-line        # End, vt-style
+
+bindkey '^[[1;5D' backward-word      # Ctrl+Left
+bindkey '^[[1;5C' forward-word       # Ctrl+Right
+bindkey '^[[1;3D' backward-word      # Alt+Left
+bindkey '^[[1;3C' forward-word       # Alt+Right
+
 # Directory navigation — Shift+arrows.
 bindkey '^[[1;2D' cd-back     # Shift+Left  : previous dir in the ring
 bindkey '^[[1;2C' cd-forward  # Shift+Right : next dir in the ring

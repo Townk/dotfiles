@@ -597,6 +597,22 @@ end
 config.leader = nil
 
 config.keys = {
+	-- Ctrl+Backspace has no distinct default encoding: terminals send plain ^?
+	-- for it, the same byte as Backspace, so nothing downstream can tell them
+	-- apart. Emit xterm modifyOtherKeys explicitly (127 = Backspace, 5 = Ctrl).
+	--
+	-- That exact form is deliberate. Measured on a scratch tmux server with
+	-- `extended-keys always`: whichever extended encoding a client sends --
+	-- kitty CSI 127;5u or modifyOtherKeys CSI 27;5;127~ -- tmux re-emits
+	-- CSI 27;5;127~ to the pane. Sending that form means the bytes survive
+	-- unchanged with or without a multiplexer in the middle. zsh binds it in
+	-- dot_config/zsh/keybindings.sh.
+	{
+		key = "Backspace",
+		mods = "CTRL",
+		action = wezterm.action.SendString("\x1b[27;5;127~"),
+	},
+
 	-- Disabled standard keys
 	{
 		key = "u",

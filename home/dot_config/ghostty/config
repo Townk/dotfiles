@@ -203,6 +203,17 @@ quit-after-last-window-closed = true
 # relevant buffer whenever one is running.
 keybind = cmd+f=text:\x1b/
 
+# Ctrl+Backspace has no distinct default encoding: terminals send plain ^? for
+# it, the same byte as Backspace, so nothing downstream can tell the two apart
+# (the same wall that made Ctrl+Shift+/ unusable — see dot_config/zsh/keybindings.sh).
+# Emit xterm modifyOtherKeys explicitly: 127 = Backspace, 5 = Ctrl.
+#
+# That form rather than the kitty one is deliberate. Measured on a scratch tmux
+# server with `extended-keys always`: whichever extended encoding a client sends,
+# tmux re-emits CSI 27;5;127~ to the pane. Sending it directly means the bytes
+# are identical with or without a multiplexer in between.
+keybind = ctrl+backspace=text:\x1b[27;5;127~
+
 # App-level shortcuts forwarded into the mux as chord sequences starting with
 # the leader (`Alt w` = `\x1bw`), then the existing mode keys. The chord
 # vocabulary is identical on both backends (D3: the tmux prefix mirrors the
