@@ -19,6 +19,8 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 
 use zeroize::Zeroize;
 
@@ -65,6 +67,28 @@ fn converse(prompt: &str, title: &str) -> std::io::Result<Option<String>> {
         .stderr(Stdio::null())
         .spawn()?;
 
+    // The dialog this opens is the one most likely to go unseen: it lands on
+    // the desktop, and the caller that reached this rung is often a machine
+    // being driven over SSH. Our own dialog's deadline cannot help here — the
+    // waiting is inside pinentry-mac — so the deadline is enforced from
+    // outside, on the child.
+    let expired = Arc::new(AtomicBool::new(false));
+    let (finished, waiting) = mpsc::channel::<()>();
+    {
+        let pid = child.id() as libc::pid_t;
+        let expired = Arc::clone(&expired);
+        std::thread::spawn(move || {
+            if let Err(mpsc::RecvTimeoutError::Timeout) =
+                waiting.recv_timeout(crate::askpass::deadline())
+            {
+                expired.store(true, Ordering::SeqCst);
+                // SAFETY: a pid we spawned and have not reaped, so it is either
+                // alive or a zombie; neither case can name someone else.
+                unsafe { libc::kill(pid, libc::SIGTERM) };
+            }
+        });
+    }
+
     let mut input = child.stdin.take().expect("piped");
     let mut output = BufReader::new(child.stdout.take().expect("piped"));
 
@@ -106,6 +130,10 @@ fn converse(prompt: &str, title: &str) -> std::io::Result<Option<String>> {
     let _ = writeln!(input, "BYE");
     drop(input);
     let _ = child.wait();
+    let _ = finished.send(());
+    if expired.load(Ordering::SeqCst) {
+        crate::debug::log(format_args!("the GUI outlived its deadline and was closed"));
+    }
     Ok(secret)
 }
 

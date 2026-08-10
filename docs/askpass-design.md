@@ -100,6 +100,30 @@ names a session, a session names the client to paint on) while this lane only
 has a pane id, and the pane list already had the tty in it. That kept the entire
 zsh layer out of the change.
 
+**`TMUX_PANE` is the first handle back to the mux, not the only one.** Assuming
+it was the only one is what made the first unattended run fail in a way that
+looked like a hang. Homebrew launders the environment it passes on, against an
+allowlist: measured on the machine it broke,
+
+```
+SUDO_ASKPASS = /tmp/x        TMUX_PANE = <stripped>
+PATH         = <kept>        TMUX      = <stripped>
+HOME         = /Users/…      RANDOM_PROBE = <stripped>
+```
+
+`SUDO_ASKPASS` survives, so brew's `sudo -A` really does reach this helper —
+with no idea where it came from. With no pane it did the documented thing and
+went to the GUI, which drew `pinentry-mac` on the desktop of a machine being
+driven over SSH, where nobody could see it.
+
+The tree is the handle that survives laundering. Neither the helper nor sudo has
+a controlling terminal, but the processes above them kept theirs, and it is the
+pane's own tty — the very thing the pinentry lane already looks panes up by. So
+a missing `TMUX_PANE` now walks the ancestors and resolves the first real tty
+through `By::Tty`, and `tmux` needs no `$TMUX` to answer: with the variable gone
+it falls back to the default socket, which is the one it was on. Verified end to
+end with both variables stripped, which is precisely what brew hands over.
+
 **The title is who asked, not what they asked for.** sudo's prompt is the
 literal string `Password:`, which is accurate and useless in a float that
 appeared while you were looking at something else. The process tree knows —
@@ -194,6 +218,22 @@ least prints a reason and stops. So the dialog carries a two-minute deadline in
 this lane only; the pinentry lane keeps taking its deadline from the agent's
 `SETTIMEOUT`. Expiry is indistinguishable from cancel to the caller, which is
 the point.
+
+The GUI rung enforces the same span from the outside, on the process, because
+our dialog's deadline cannot reach inside `pinentry-mac` — and that is the rung
+where an unseen prompt is likeliest, since the dialog lands on a desktop that
+the person driving the machine may not be looking at.
+
+**The spinner and this lane each assumed they owned the sudo prompt.** When a
+worker's sudo has been alive for a few seconds, `spin::stream` stands the
+spinner down and prints where to type, on the premise — written in
+`_spin_sudo_pending`'s own comment — that "sudo asks for the password on the
+TERMINAL DEVICE". With `SUDO_ASKPASS` in play that premise is false, and the
+advice was actively harmful: the keystrokes echoed into the shell while the real
+prompt waited elsewhere. The detector only knew that *a* sudo existed, so it
+could not tell the two apart. `-A` in the argv can, and it is a property of the
+invocation rather than a guess about the environment, so the message now names
+the float when the float is what is waiting.
 
 ## Testing
 

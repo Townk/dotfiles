@@ -11,6 +11,10 @@
 //! itself has a `log-file`, and the agent-spawned case is the one that needs
 //! tracing — so the variable names a file and we open it ourselves.
 //!
+//! Three ways in, because each caller keeps a different amount of what it was
+//! given: a variable, a token inside `PINENTRY_USER_DATA`, and a marker file
+//! for callers that keep neither. See `marker`.
+//!
 //! **What may be written here is bounded by rule 7: never the passphrase.**
 //! Inbound Assuan commands are fair game, because the agent never sends a
 //! secret *to* a pinentry — the passphrase only ever travels the other way.
@@ -28,7 +32,23 @@ const VAR: &str = "PINENTRY_UI_DEBUG";
 
 static SINK: OnceLock<Option<Mutex<File>>> = OnceLock::new();
 
-/// Where to write, from the environment or from `PINENTRY_USER_DATA`.
+/// The third channel, for a caller that keeps no variables at all.
+///
+/// Homebrew launders the environment it passes on against an allowlist —
+/// `SUDO_ASKPASS` and `HOME` survive, both tmux variables and anything of ours
+/// do not — so neither channel below can reach a helper that brew's `sudo -A`
+/// invoked. That is not a hypothetical gap: the first attempt to trace exactly
+/// that call reported "helper never ran" when it had run perfectly, because the
+/// variable naming the log had been stripped on the way in.
+///
+/// A file cannot be stripped. Its presence is the switch and it is also the
+/// log, so there is one path to remember and deleting it turns tracing off.
+fn marker() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::Path::new(&home).join(".cache/pinentry-ui.trace")
+}
+
+/// Where to write: the environment, `PINENTRY_USER_DATA`, or the marker file.
 ///
 /// The second channel is not a convenience. gpg-agent hands a pinentry the
 /// agent's *own* environment, so `PINENTRY_UI_DEBUG=… gpg -s` never reaches us
@@ -43,12 +63,19 @@ fn target() -> Option<String> {
             return Some(s);
         }
     }
-    let user_data = std::env::var("PINENTRY_USER_DATA").ok()?;
-    user_data
-        .split([',', ' ', ';'])
-        .find_map(|t| t.trim().strip_prefix(&format!("{VAR}=")))
-        .filter(|p| !p.is_empty())
-        .map(str::to_string)
+    if let Ok(user_data) = std::env::var("PINENTRY_USER_DATA") {
+        if let Some(p) = user_data
+            .split([',', ' ', ';'])
+            .find_map(|t| t.trim().strip_prefix(&format!("{VAR}=")))
+            .filter(|p| !p.is_empty())
+        {
+            return Some(p.to_string());
+        }
+    }
+    let marker = marker();
+    marker
+        .exists()
+        .then(|| marker.to_string_lossy().into_owned())
 }
 
 fn sink() -> Option<&'static Mutex<File>> {

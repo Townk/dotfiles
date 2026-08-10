@@ -290,6 +290,35 @@ _spin_sudo_pending() {
     }'
 }
 
+# _spin_sudo_askpass <root_pid>
+# True when a pending sudo below <root_pid> was invoked with -A, which means it
+# will ask through $SUDO_ASKPASS and will never read this terminal.
+#
+# Without this the advice below is actively wrong, and it was: Homebrew runs
+# `sudo -u root -A -E` for its own cask work, so a run that hit an askpass
+# prompt told the user to type where nothing was listening, and the keystrokes
+# echoed into the shell. The two features each assumed they owned the sudo
+# prompt. `-A` in the argv is what distinguishes them, and it is a property of
+# the invocation rather than a guess about the environment.
+_spin_sudo_askpass() {
+  ps -Ao pid=,ppid=,args= 2>/dev/null | awk -v root="$1" '
+    { parent[$1] = $2; line[$1] = $0 }
+    END {
+      for (p in line) {
+        # The pid columns come first, so sudo is always preceded by a space or
+        # a slash; anchoring on either keeps "pseudo-foo" out.
+        if (line[p] !~ /[ \/]sudo[ \t]/) continue
+        if (line[p] !~ /[ \t]-[A-Za-z]*A([ \t]|$)/) continue
+        q = p
+        for (hops = 0; (q in parent) && q + 0 > 1 && hops < 64; hops++) {
+          q = parent[q]
+          if (q == root) exit 0
+        }
+      }
+      exit 1
+    }'
+}
+
 # spin::stream <pid> <file> [title]
 # Animate the spinner while <file> stays empty, then — the moment <pid> writes
 # its first byte — clear the spinner and mirror <file> to stdout as it grows.
@@ -338,10 +367,16 @@ spin::stream() {
       if ((sudo_pending)); then
         # sudo already printed its own prompt and we overwrote it, and it cannot
         # be asked to print again — so say what is wanted and stop repainting.
-        # Typing lands in sudo either way; echo is off, hence "you won't see it".
+        # Where to type depends on who is asking: a terminal prompt takes the
+        # keystrokes with echo off, an askpass prompt is somewhere else entirely
+        # and the terminal is not listening at all.
         if ((!sudo_shown)); then
           print -nu2 -- "\r\e[K"
-          print -u2 -- "  ${C_YEL}waiting for your sudo password — type it here (input is hidden)${C_RES}"
+          if _spin_sudo_askpass "$pid"; then
+            print -u2 -- "  ${C_YEL}waiting for your sudo password — answer the prompt in the floating pane${C_RES}"
+          else
+            print -u2 -- "  ${C_YEL}waiting for your sudo password — type it here (input is hidden)${C_RES}"
+          fi
           sudo_shown=1
         fi
       else

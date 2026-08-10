@@ -89,6 +89,26 @@ fn open_pty() -> (i32, i32, String) {
     (master, slave, path)
 }
 
+/// A tmux that knows nothing, kept on disk for the whole run.
+///
+/// Removing `TMUX_PANE` is no longer enough to mean "no pane". The helper now
+/// recovers a pane from its ancestors' tty when the variable is missing, and
+/// the ancestors of a `cargo test` run are a real shell in a real pane — so
+/// without this, the two no-pane tests would find the developer's own session
+/// and open a float on their screen. `MUX_TMUX_BIN` alone will not do it
+/// either: an unusable value falls through to the search path, which finds the
+/// real tmux. It has to be a tmux that runs and reports nothing.
+fn no_tmux() -> String {
+    static STUB: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    STUB.get_or_init(|| {
+        let p = std::env::temp_dir().join(format!("pui-no-tmux-{}", std::process::id()));
+        exec(&p, "#!/bin/sh\nexit 0\n");
+        p
+    })
+    .to_string_lossy()
+    .into_owned()
+}
+
 fn askpass(prompt: &str, env: &[(&str, &str)]) -> Child {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_pinentry-ui"));
     cmd.arg("--askpass")
@@ -100,6 +120,7 @@ fn askpass(prompt: &str, env: &[(&str, &str)]) -> Child {
         // pinentry-mac, which opens a dialog on the developer's screen and
         // waits for a human who is not there.
         .env("PINENTRY_GUI_BIN", "/nonexistent/no-gui-during-tests")
+        .env("MUX_TMUX_BIN", no_tmux())
         .env_remove("TMUX_PANE");
     for (k, v) in env {
         cmd.env(k, v);
@@ -308,6 +329,103 @@ fn with_no_pane_the_gui_is_asked_instead() {
         "the GUI has to be told what to ask: {lines:?}"
     );
     assert!(lines.contains(&"GETPIN"), "{lines:?}");
+}
+
+/// Nothing above us will ever end this. sudo waits for a helper for as long as
+/// the helper takes — measured, twelve seconds for a helper that sleeps twelve
+/// — so an unanswered prompt would hold its caller open forever, and the caller
+/// is not always a person: Homebrew runs `sudo -A` in the middle of an
+/// unattended update.
+#[test]
+fn an_unanswered_float_gives_the_caller_its_refusal_back() {
+    let sb = Sandbox::new("deadline-float");
+    let (screen, pty) = Screen::new();
+    stub_float(&sb, &pty);
+
+    let started = Instant::now();
+    let child = askpass(
+        "Password:",
+        &[
+            ("HOME", &sb.home()),
+            ("MUX_TMUX_BIN", &sb.path("bin/tmux").to_string_lossy()),
+            ("TMUX_PANE", "%9"),
+            ("PINENTRY_UI_DEADLINE_MS", "400"),
+        ],
+    );
+
+    assert!(screen.painted(), "the dialog never painted");
+    let (out, code) = finish(child); // and nobody types
+    assert_eq!(out, "", "an expiry is a refusal, not an empty password");
+    assert_ne!(code, 0);
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "it waited far past its deadline"
+    );
+}
+
+/// The same promise on the rung where it matters most: a GUI dialog can be on a
+/// desktop the person driving the machine cannot see at all. Our own dialog's
+/// deadline cannot reach inside pinentry-mac, so it is enforced on the process.
+#[test]
+fn a_gui_that_never_answers_is_closed_rather_than_waited_on() {
+    let sb = Sandbox::new("deadline-gui");
+    let stub = sb.path("stub-mute-gui");
+    // Greets, takes every command, and simply never answers GETPIN.
+    exec(
+        &stub,
+        "#!/bin/sh\necho 'OK greetings'\n\
+         while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         GETPIN) while :; do sleep 1; done ;;\n\
+         *) echo OK ;;\n\
+         esac\n\
+         done\n",
+    );
+
+    let started = Instant::now();
+    let child = askpass(
+        "Password:",
+        &[
+            ("HOME", &sb.home()),
+            ("PINENTRY_GUI_BIN", &stub.to_string_lossy()),
+            ("PINENTRY_UI_DEADLINE_MS", "400"),
+        ],
+    );
+    let (out, code) = finish(child);
+    assert_eq!(out, "");
+    assert_ne!(code, 0);
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the GUI held the caller past its deadline"
+    );
+}
+
+/// Homebrew keeps `SUDO_ASKPASS` and `HOME` and drops everything else of ours,
+/// so no variable can turn tracing on for a helper it invoked. A file can:
+/// measured, the first attempt to trace that call reported "helper never ran"
+/// when it had run perfectly, because the variable naming the log was stripped
+/// on the way in.
+#[test]
+fn a_caller_that_keeps_no_variables_can_still_be_traced() {
+    let sb = Sandbox::new("marker");
+    std::fs::create_dir_all(sb.path(".cache")).expect("cache");
+    let trace = sb.path(".cache/pinentry-ui.trace");
+    std::fs::write(&trace, "").expect("touch the marker");
+
+    // Note what is *not* passed: no PINENTRY_UI_DEBUG, no PINENTRY_USER_DATA.
+    let child = askpass("Password:", &[("HOME", &sb.home())]);
+    let (_, code) = finish(child);
+    assert_ne!(code, 0, "no pane and no GUI, so it should refuse");
+
+    let logged = std::fs::read_to_string(&trace).expect("read the trace");
+    assert!(
+        logged.contains("starting"),
+        "the marker did not turn tracing on: {logged:?}"
+    );
+    assert!(
+        logged.contains("asking the GUI"),
+        "and a trace has to say where the request went: {logged:?}"
+    );
 }
 
 /// With nowhere to draw and no GUI to borrow, say nothing and fail. Printing a

@@ -15,12 +15,18 @@ Assuan filter it replaces could not be fixed in place: `docs/gpg-signing-ux.md`.
 the curses lane, and the shell filter it replaces (`pinentry-mux`) is gone. The
 askpass lane has authenticated a real `sudo` through the float.
 
-Installing is a deliberate step and the guard around it is the safety net:
-nothing in this repo builds automatically, so a host that has applied the
-dotfiles but not run `make install` has no binary at this path and
-`pinentry-auto` falls through to `pinentry-curses`. It signs exactly as it did
-before any of this existed. No front-end may ever become the only way to
-authenticate.
+`chezmoi apply` builds it on macOS hosts, through
+`run_onchange_after_56-build-pinentry-ui.sh.tmpl`, whenever a source file
+changes. That hook is soft on purpose: no toolchain, or a compile error, warns
+and skips rather than failing the apply — because a host with no binary at this
+path is not broken. `pinentry-auto` falls through to `pinentry-curses` and it
+signs exactly as it did before any of this existed. No front-end may ever become
+the only way to authenticate.
+
+Until the hook existed the binary was built by hand while the dotfiles installed
+the askpass symlink everywhere, and that asymmetry broke `sudo` on two machines:
+the shell guards now name the binary rather than the symlink, and the hook
+closes the gap from the other side.
 
 The dialog was built and validated by hand **before** any protocol code was
 written. That order was the plan and it paid: the dialog is the only part a
@@ -46,11 +52,22 @@ learned Assuan. sudo, ssh and git share one crude convention: prompt in
 
 Two measured facts shape it, both in `docs/askpass-design.md`. There is **no
 terminal** — sudo and ssh detach the helper completely, so `/dev/tty` will not
-even open, and the float stops being a nicety because `display-popup` needs
-`$TMUX` rather than a tty. And **`TMUX_PANE` survives** in the environment,
-which is the only handle back to the mux, so the pane is looked up by id here
-rather than by ttyname. With no pane at all the whole thing goes to
-`pinentry-mac`, driven over Assuan by `src/gui.rs`.
+even open, which leaves the float as the only way to draw. And **`TMUX_PANE`
+usually survives** in the environment, so the pane is looked up by id here
+rather than by ttyname.
+
+Usually, not always. Homebrew launders the environment against an allowlist that
+keeps `SUDO_ASKPASS` and drops both `TMUX` and `TMUX_PANE`, so a helper invoked
+by brew's own `sudo -A` arrives with no handle at all — and went to the GUI,
+onto the desktop of a machine being driven over SSH, where nobody could see it.
+The fallback is the process tree: neither we nor sudo has a controlling
+terminal, but the ancestors kept theirs, and that tty *is* the pane's, so it
+resolves through the same `By::Tty` the pinentry lane uses. `tmux` needs no
+`$TMUX` either; without it, it falls back to the default socket.
+
+Only with no pane recoverable at all does the whole thing go to `pinentry-mac`,
+driven over Assuan by `src/gui.rs` — under a deadline enforced on the process,
+since our dialog's own deadline cannot reach inside it.
 
 Reached through the `askpass-auto` symlink, which is `pinentry-auto` wearing its
 second face. There is no Touch ID rung in that lane: `pinentry-touchid` is a
@@ -248,14 +265,24 @@ PINENTRY_UI_DEBUG=/tmp/pui.log pinentry-ui < /dev/null
 
 # A real signature. The token goes in PINENTRY_USER_DATA, beside USE_CURSES.
 PINENTRY_USER_DATA='USE_CURSES=1,PINENTRY_UI_DEBUG=/tmp/pui.log' git commit -S
+
+# A caller that keeps no variables at all — Homebrew's sudo, for one.
+touch ~/.cache/pinentry-ui.trace     # the marker is also the log
+rm ~/.cache/pinentry-ui.trace        # and deleting it turns tracing off
 ```
 
-The second form is the one that matters and the reason the token channel
-exists. gpg-agent hands a pinentry the *agent's* environment, so
+The second form is the one that matters for signatures and the reason the token
+channel exists. gpg-agent hands a pinentry the *agent's* environment, so
 `PINENTRY_UI_DEBUG=… git commit` never reaches this program and tracing a real
 signature would otherwise mean restarting the agent. `gpg` does forward
 `PINENTRY_USER_DATA` from the calling shell — that is already how `USE_CURSES`
 arrives — so the token rides in with it.
+
+The third exists because some callers keep neither. Homebrew launders the
+environment against an allowlist: `SUDO_ASKPASS` and `HOME` survive, everything
+of ours is dropped. Measured the hard way — the first attempt to trace a
+brew-invoked helper reported "helper never ran" when it had run perfectly, and
+only watching processes showed the truth. A file cannot be stripped.
 
 What you get is every inbound command, the raw text tmux returned, the pane it
 resolved to, whether a float was asked for and what came back, which terminal

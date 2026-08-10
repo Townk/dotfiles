@@ -11,9 +11,13 @@
 //! lane, and the float is not a nicety: `display-popup` needs `$TMUX`, not a
 //! tty, which makes it the only way to put a dialog on a screen from here.
 //!
-//! **The environment survives, and `TMUX_PANE` is in it.** That is the only
-//! handle back to the mux, which is why the pane is looked up by id rather than
-//! by the ttyname the pinentry lane uses.
+//! **The environment usually survives, and `TMUX_PANE` is in it.** That is the
+//! first handle back to the mux, which is why the pane is looked up by id
+//! rather than by the ttyname the pinentry lane uses. It is not the only one,
+//! and assuming it was cost an afternoon: Homebrew launders the environment it
+//! passes on, keeping `SUDO_ASKPASS` and dropping both tmux variables, so the
+//! helper it invokes has to recover the pane from the process tree instead.
+//! See `inherited_tty`.
 //!
 //! Every prompt here therefore floats, including one from the pane you are
 //! staring at. That is a difference from the pinentry lane, and it is forced
@@ -45,17 +49,37 @@ const SHELLS: [&str; 6] = ["sh", "zsh", "bash", "dash", "ksh", "fish"];
 ///
 /// Two minutes is long enough to walk back to the machine and short enough that
 /// an unattended run fails the same day it started.
-const DEADLINE: Duration = Duration::from_secs(120);
+///
+/// The GUI rung enforces the same span on `pinentry-mac` from the outside, for
+/// the same reason and against a worse case: that dialog can be somewhere the
+/// person driving the machine cannot see at all.
+///
+/// Overridable for tests, exactly as the two pinentry binaries are — nothing
+/// else waits two minutes to find out whether a deadline works.
+pub(crate) fn deadline() -> Duration {
+    std::env::var("PINENTRY_UI_DEADLINE_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(Duration::from_secs(120), Duration::from_millis)
+}
 
 pub fn run(prompt: &str) -> ExitCode {
     let theme = Theme::load();
-    let title = title(prompt, &parents());
+    let chain = parents();
+    let title = title(prompt, &commands(&chain));
     let pane = std::env::var("TMUX_PANE").unwrap_or_default();
     let who = if pane.is_empty() {
         None
     } else {
         requester::resolve(By::Pane(&pane))
     };
+    // Second chance for a caller whose environment was laundered on the way
+    // here. See `inherited_tty`.
+    let who = who.or_else(|| {
+        let tty = inherited_tty(&chain)?;
+        crate::debug::log(format_args!("no TMUX_PANE; the tree says {tty}"));
+        requester::resolve(By::Tty(&tty))
+    });
 
     let Some(who) = who else {
         crate::debug::log(format_args!("no pane behind {pane:?}: asking the GUI"));
@@ -74,7 +98,7 @@ pub fn run(prompt: &str) -> ExitCode {
         error: None,
         width: FLOAT_PTY_WIDTH,
         frame: false,
-        timeout: Some(DEADLINE),
+        timeout: Some(deadline()),
     };
 
     let (w, h) = dialog.size();
@@ -165,32 +189,79 @@ fn asker<'a>(chain: impl IntoIterator<Item = &'a String>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Ancestor command names, nearest first. Four is enough to clear a wrapper
-/// script and its shell without walking all the way to launchd.
-fn parents() -> Vec<String> {
+/// One ancestor: what it is, and what terminal it was started from.
+pub struct Ancestor {
+    pub comm: String,
+    /// As `ps` prints it — `ttys003`, `pts/3`, or `??` for none.
+    pub tty: String,
+}
+
+/// The pane, recovered from the family rather than from the environment.
+///
+/// `TMUX_PANE` is the handle when it survives, and it usually does. Homebrew is
+/// the measured exception: it launders its environment through an allowlist,
+/// which keeps `SUDO_ASKPASS` but drops `TMUX` and `TMUX_PANE`, so a helper
+/// invoked by `brew`'s own `sudo -A` arrives with no idea where it came from.
+/// It went to the GUI instead — onto the desktop of a machine being driven over
+/// SSH, where nobody could see it.
+///
+/// The tree is the handle that survives that. Neither we nor sudo has a
+/// controlling terminal, but the processes above us kept theirs, and it is the
+/// pane's own tty — which is exactly what the pinentry lane already looks panes
+/// up by. `tmux` itself needs no `$TMUX` to answer: with the variable gone it
+/// falls back to the default socket, which is the one it was on.
+fn inherited_tty(chain: &[Ancestor]) -> Option<String> {
+    chain
+        .iter()
+        .map(|a| a.tty.trim())
+        .find(|tty| !tty.is_empty() && *tty != "??" && *tty != "?")
+        .map(|tty| format!("/dev/{tty}"))
+}
+
+fn commands(chain: &[Ancestor]) -> Vec<String> {
+    chain.iter().map(|a| a.comm.clone()).collect()
+}
+
+/// Ancestors, nearest first. Deep enough to climb out of Homebrew — helper,
+/// sudo, ruby, the worker and its shell all sit between us and the pane — and
+/// still stop well short of launchd.
+fn parents() -> Vec<Ancestor> {
     // SAFETY: getppid cannot fail and touches nothing.
     let mut pid = unsafe { libc::getppid() };
-    let mut names = Vec::new();
-    for _ in 0..4 {
-        let Some((ppid, comm)) = ps(pid) else { break };
-        names.push(comm);
+    let mut chain = Vec::new();
+    for _ in 0..12 {
+        let Some((ppid, it)) = ps(pid) else { break };
+        chain.push(it);
         if ppid <= 1 {
             break;
         }
         pid = ppid;
     }
-    names
+    chain
 }
 
-fn ps(pid: i32) -> Option<(i32, String)> {
+fn ps(pid: i32) -> Option<(i32, Ancestor)> {
     let out = Command::new("/bin/ps")
-        .args(["-o", "ppid=,comm=", "-p", &pid.to_string()])
+        .args(["-o", "ppid=,tty=,comm=", "-p", &pid.to_string()])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
-    let line = text.trim();
-    let (ppid, comm) = line.split_once(char::is_whitespace)?;
-    Some((ppid.trim().parse().ok()?, comm.trim().to_string()))
+    parse_ps(text.trim())
+}
+
+/// `comm` goes last because it is the only field that can contain a space, and
+/// the columns are padded — `ps` right-aligns the pid, so a plain split on
+/// whitespace would hand back empty fields.
+fn parse_ps(line: &str) -> Option<(i32, Ancestor)> {
+    let (ppid, rest) = line.trim_start().split_once(char::is_whitespace)?;
+    let (tty, comm) = rest.trim_start().split_once(char::is_whitespace)?;
+    Some((
+        ppid.parse().ok()?,
+        Ancestor {
+            comm: comm.trim().to_string(),
+            tty: tty.trim().to_string(),
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -199,6 +270,47 @@ mod tests {
 
     fn chain(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn tree(pairs: &[(&str, &str)]) -> Vec<Ancestor> {
+        pairs
+            .iter()
+            .map(|(comm, tty)| Ancestor {
+                comm: comm.to_string(),
+                tty: tty.to_string(),
+            })
+            .collect()
+    }
+
+    /// The measured shape under `sudo -A`: neither we nor sudo has a terminal,
+    /// and the pane's tty is two hops further up.
+    #[test]
+    fn the_pane_is_recovered_from_the_first_ancestor_that_kept_a_terminal() {
+        let seen = tree(&[("sudo", "??"), ("zsh", "??"), ("agent", "ttys003")]);
+        assert_eq!(inherited_tty(&seen), Some("/dev/ttys003".to_string()));
+    }
+
+    #[test]
+    fn a_family_with_no_terminal_anywhere_yields_nothing_to_guess_from() {
+        assert_eq!(
+            inherited_tty(&tree(&[("sudo", "??"), ("launchd", "?")])),
+            None
+        );
+        assert_eq!(inherited_tty(&[]), None);
+    }
+
+    /// `ps` right-aligns the pid and comm can contain a space; splitting on
+    /// whitespace naively drops the tty into the pid and truncates the name.
+    #[test]
+    fn the_padded_columns_of_ps_are_read_correctly() {
+        let (ppid, it) = parse_ps("  1234 ttys003 -zsh").expect("parses");
+        assert_eq!(ppid, 1234);
+        assert_eq!(it.tty, "ttys003");
+        assert_eq!(it.comm, "-zsh");
+
+        let (_, spaced) = parse_ps("99 ?? /Applications/My App.app/Contents/x").expect("parses");
+        assert_eq!(spaced.tty, "??");
+        assert_eq!(spaced.comm, "/Applications/My App.app/Contents/x");
     }
 
     /// The measured shape: `SUDO_ASKPASS` pointing at a script means the

@@ -364,6 +364,46 @@ PY
   End
 End
 
+# The spinner stands down when a sudo is pending and tells the user what to do.
+# Getting that advice wrong is worse than silence: an askpass sudo never reads
+# the terminal, so "type it here" sends keystrokes into a shell that echoes
+# them. Homebrew's cask work runs `sudo -u root -A -E`, which is exactly this
+# case, and it is what the wrong message was measured against.
+Describe '_spin_sudo_askpass (is the pending sudo asking here, or elsewhere?)'
+  Include home/dot_local/lib/common.zsh
+
+  It 'recognises the shape Homebrew really uses'
+    ps() {
+      printf '%s\n' \
+        '  900     1 /bin/zsh /Users/x/.local/bin/system-update' \
+        '  910   900 /opt/homebrew/Library/Homebrew/vendor/portable-ruby/bin/ruby brew' \
+        '  920   910 /usr/bin/sudo -u root -A -E -- /usr/sbin/kextstat -l -b com.example.fs'
+    }
+    When call _spin_sudo_askpass 900
+    The status should be success
+  End
+
+  It 'leaves an ordinary terminal-prompting sudo alone'
+    ps() {
+      printf '%s\n' \
+        '  900     1 /bin/zsh /Users/x/.local/bin/system-update' \
+        '  920   900 sudo -v'
+    }
+    When call _spin_sudo_askpass 900
+    The status should be failure
+  End
+
+  It 'ignores an askpass sudo belonging to somebody else'
+    ps() {
+      printf '%s\n' \
+        '  900     1 /bin/zsh /Users/x/.local/bin/system-update' \
+        '  920     1 /usr/bin/sudo -A -E -- /bin/true'
+    }
+    When call _spin_sudo_askpass 900
+    The status should be failure
+  End
+End
+
 # spin::nap's zselect exits 1 on timeout — its NORMAL outcome with no fds.
 # Left as a plain statement it trips a caller's `set -e` on the very first
 # nap, so a BARE (non-condition-context) poll::until or spinner call dies
