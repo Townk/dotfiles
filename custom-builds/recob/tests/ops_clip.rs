@@ -35,6 +35,10 @@ fn set_text(
     assert_eq!(kind, Kind::Response);
 }
 
+/// Only the macOS tests count rows: the Linux ones assert on the row's
+/// CONTENT (text, regtype, kind) rather than on how many the capture path
+/// produced, because there is no capture path there to produce extras.
+#[cfg(target_os = "macos")]
 fn row_count(db: &std::path::Path) -> i64 {
     Connection::open(db)
         .unwrap()
