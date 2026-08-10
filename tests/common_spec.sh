@@ -404,6 +404,41 @@ Describe '_spin_sudo_askpass (is the pending sudo asking here, or elsewhere?)'
   End
 End
 
+# The notice the spinner shows has to be takeable back down once the ask is
+# answered, or it reads as the error that stopped the run. Two properties make
+# that possible, and the first version of the message had neither.
+Describe '_spin_say (a notice that can be erased again)'
+  Include home/dot_local/lib/common.zsh
+  # No terminal to measure, in either direction: the fallback width is the one
+  # under test, and leaving it to the environment would make the length depend
+  # on the window the suite happened to run in.
+  stty() { return 1 }
+
+  It 'does not end in a newline, because a committed row can never be reached again'
+    tail_byte() {
+      local f="$SHELLSPEC_TMPBASE/notice"
+      _spin_say "some notice" 2>"$f"
+      # A file ending in a newline yields "" here; anything else yields a byte.
+      [[ -z "$(tail -c 1 "$f")" ]] && print -r -- committed || print -r -- erasable
+    }
+    When call tail_byte
+    The output should equal "erasable"
+  End
+
+  It 'truncates to the width, because \e[K erases one row and a wrapped notice has two'
+    narrow() {
+      local out v
+      out=$(COLUMNS=40 _spin_say 'waiting for your sudo password — answer the prompt in the floating pane' 2>&1)
+      v=${out//$'\e'\[[0-9;]##[a-zA-Z]/}
+      v=${v//$'\e'\[[a-zA-Z]/}
+      v=${v//$'\r'/}
+      print -r -- "${#v}"
+    }
+    When call narrow
+    The output should equal "39"
+  End
+End
+
 # spin::nap's zselect exits 1 on timeout — its NORMAL outcome with no fds.
 # Left as a plain statement it trips a caller's `set -e` on the very first
 # nap, so a BARE (non-condition-context) poll::until or spinner call dies

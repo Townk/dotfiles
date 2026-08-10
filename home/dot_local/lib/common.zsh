@@ -319,6 +319,24 @@ _spin_sudo_askpass() {
     }'
 }
 
+# _spin_say <text>
+# Put one notice on the spinner's own row, in place of the frame.
+#
+# Two things make this more than a `print`. It must NOT end in a newline: a
+# committed row cannot be reached again, which is why the first version of this
+# message sat on screen for the rest of the run looking like the error that
+# stopped it. And it must not wrap, because `\r\e[K` erases exactly one row —
+# a wrapped notice would leave its first line stranded, which is the same bug
+# one line further up. The width comes from the tty rather than $COLUMNS, which
+# reads as 0 in a non-interactive zsh; same idiom, same reason, as theme::rule.
+_spin_say() {
+  local text="$1" cols
+  cols=$({ stty size </dev/tty; } 2>/dev/null | awk '{print $2}') || true
+  [[ -z "$cols" ]] && cols="${COLUMNS:-80}"
+  ((cols < 20)) && cols=80
+  print -nu2 -- "\r\e[K  ${C_YEL}${text[1,cols-3]}${C_RES}"
+}
+
 # spin::stream <pid> <file> [title]
 # Animate the spinner while <file> stays empty, then — the moment <pid> writes
 # its first byte — clear the spinner and mirror <file> to stdout as it grows.
@@ -343,6 +361,9 @@ spin::stream() {
         if ((spinning)); then
           print -nu2 -- "\r\e[K"
           spinning=0
+          # Whatever was on that row went with it, including the sudo notice,
+          # which must be able to come back if the ask is still waiting.
+          sudo_shown=0
         fi
         tail -c "+$off" "$file"
         off=$((size + 1))
@@ -371,16 +392,20 @@ spin::stream() {
         # keystrokes with echo off, an askpass prompt is somewhere else entirely
         # and the terminal is not listening at all.
         if ((!sudo_shown)); then
-          print -nu2 -- "\r\e[K"
           if _spin_sudo_askpass "$pid"; then
-            print -u2 -- "  ${C_YEL}waiting for your sudo password — answer the prompt in the floating pane${C_RES}"
+            _spin_say "waiting for your sudo password — answer the prompt in the floating pane"
           else
-            print -u2 -- "  ${C_YEL}waiting for your sudo password — type it here (input is hidden)${C_RES}"
+            _spin_say "waiting for your sudo password — type it here (input is hidden)"
           fi
           sudo_shown=1
         fi
       else
-        sudo_shown=0
+        # The ask has been answered, so take the instruction back down: left up,
+        # a stale "type it here" reads as an error that stopped the run.
+        if ((sudo_shown)); then
+          print -nu2 -- "\r\e[K"
+          sudo_shown=0
+        fi
         print -nu2 -- "\r  ${C_BLU}${frames[s]}${C_RES} ${title:+$title }${elapsed}s  "
         s=$((s % 10 + 1))
       fi
