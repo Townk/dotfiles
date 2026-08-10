@@ -13,6 +13,10 @@ use std::collections::BTreeMap;
 
 use rusqlite::{params, OptionalExtension};
 
+// Both are reached only from `write_row_direct`, which is macOS-only: the
+// Linux paths store their row from the request rather than from a pasteboard
+// snapshot, because there is no pasteboard to snapshot.
+#[cfg(target_os = "macos")]
 use crate::capture::{self, FrontmostApp};
 use crate::registry::Response;
 use crate::session::{Ctx, RICH_BLOB_CAP};
@@ -158,6 +162,9 @@ pub fn set(fields: &Fields, ctx: &Ctx) -> Result<Response, ProtoError> {
     };
     let app = validate::optional_text(fields, "app")?.unwrap_or("");
     validate::app_shaped("app", app)?;
+    // `local` is an input to macOS's row attribution only — the Linux branch
+    // below takes the host and nothing else.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let (row_host, local) = provenance(ctx, origin_host);
 
     let mut data = BTreeMap::new();
@@ -218,6 +225,8 @@ pub fn set_rich(fields: &Fields, public: bool, ctx: &Ctx) -> Result<Response, Pr
         Some(host) => Some(validate::host_shaped("origin_host", host)?),
         None => None,
     };
+    // As in `set`: the local flag feeds macOS's row attribution only.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let (row_host, local) = provenance(ctx, origin_host);
 
     let mut data = BTreeMap::new();
@@ -665,10 +674,8 @@ fn linux_persist_rich(ctx: &Ctx, host: &str, uti: &str, blob: &[u8]) -> Result<(
     )
     .map_err(internal)?;
     conn.execute(
-        &format!(
-            "DELETE FROM clips WHERE pinned=0 AND id NOT IN \
-             (SELECT id FROM clips ORDER BY pinned DESC, last_ts DESC LIMIT 1000);"
-        ),
+        "DELETE FROM clips WHERE pinned=0 AND id NOT IN \
+         (SELECT id FROM clips ORDER BY pinned DESC, last_ts DESC LIMIT 1000);",
         [],
     )
     .map_err(internal)?;
