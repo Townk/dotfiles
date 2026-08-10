@@ -33,14 +33,6 @@ clipbridge::probe() {
   "$(clipbridge::bin)" probe "$1" "$2" 2>/dev/null
 }
 
-# clipbridge::local_socket -> trusted endpoint path. The socket is
-# service-owned, mode 0600, never an SSH forwarding endpoint; the binary
-# resolves the same default, so this exists for callers that need the PATH
-# (a diagnostic message), not for dialing.
-clipbridge::local_socket() {
-  print -rn -- "${CLIPBOARD_BRIDGE_LOCAL_SOCKET:-$HOME/.local/state/cb.sock}"
-}
-
 # clipbridge::call [--peer|--action|--raw <field>|--stdin <name>]... <op> [name=value]...
 #   The generic escape hatch: everything passes straight through to
 #   `system-bridge call`. CLIPBRIDGE_TIMEOUT_S maps onto the §5.2 exchange
@@ -61,13 +53,6 @@ clipbridge::call() {
 #   $(...) capture here, so redirect to a file for text that may carry NULs.
 clipbridge::clip_get_raw() {
   clipbridge::call --peer --raw "$1" clip.get
-}
-
-# clipbridge::clip_get
-#   The whole current-clip answer in one connection (§6.3's collapse of the
-#   old G+R+S+H quartet): every reply field as `name=<hex>` lines on stdout.
-clipbridge::clip_get() {
-  clipbridge::call --peer clip.get
 }
 
 # clipbridge::set_text <regtype>   (text bytes on stdin)
