@@ -588,6 +588,11 @@ fn pbpaste_files(args: &[String]) -> ExitCode {
             .map(PathBuf::from)
             .unwrap_or_else(|| home().join(".local/libexec/clipboard-mount")),
         cap: paste_files::size_cap_from_env(),
+        // The edge decides: a human ran this binary, so an over-cap item may
+        // be put to them. The engine no longer sniffs the terminal itself —
+        // doing so let `cargo test` (which leaves fd 1 a tty) open a real
+        // confirm dialog from inside a test.
+        interactive: true,
     };
 
     let outcome = if is_ssh() {

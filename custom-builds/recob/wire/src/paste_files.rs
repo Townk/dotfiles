@@ -384,12 +384,12 @@ pub fn conflicts(
 /// matches everything up through `-- refusing` to tell a cap refusal from any
 /// other failure, and raises its own dialog. Only the text after `refusing`
 /// is free-form.
-fn cap_check(label: &Path, bytes: u64, cap: u64) -> Result<(), String> {
+fn cap_check(label: &Path, bytes: u64, cap: u64, interactive: bool) -> Result<(), String> {
     if bytes <= cap {
         return Ok(());
     }
     let label = label.display();
-    if has_tty() {
+    if interactive && has_tty() {
         if confirm_over_cap(&format!(
             "pbpaste: {label} ({bytes} bytes) exceeds CLIP_FILE_MAX ({cap} bytes) -- continue?"
         )) {
@@ -726,6 +726,16 @@ pub struct Context {
     pub mount_helper: PathBuf,
     /// §11's per-item size cap.
     pub cap: u64,
+    /// Whether an over-cap item may be put to the human instead of refused.
+    /// Injected rather than sensed inside the engine, for the same reason
+    /// `cap` and `over_ssh` are: read from the ambient terminal down in
+    /// `cap_check`, it made the refusal untestable and — worse — let a TEST
+    /// open a real dialog. `cargo test` captures output per thread without
+    /// replacing fd 1, so `isatty(1)` is true whenever the suite is run from
+    /// a terminal; the cap tests then prompted, took the answer as consent,
+    /// and failed on the machine of whoever ran them interactively (caught
+    /// on the dev-shell). The binary decides this once, at the edge.
+    pub interactive: bool,
 }
 
 /// How the items are sourced.
@@ -884,7 +894,7 @@ pub fn run<S: ClientStream>(
                 // refused item across the mount; the staged copies are
                 // re-measured and re-checked whole before placement below.
                 if deferred_sizes {
-                    cap_check(&destination, size, context.cap)?;
+                    cap_check(&destination, size, context.cap, context.interactive)?;
                 }
                 copy_local(src, &stage_target, options.show(), &mut cp_noted)?;
                 if deferred_sizes {
@@ -900,7 +910,7 @@ pub fn run<S: ClientStream>(
                 &stage_target,
                 &destination,
                 &mut progress,
-                context.cap,
+                context,
             )?),
         };
         staged.push((stage_target, destination, size));
@@ -923,7 +933,7 @@ pub fn run<S: ClientStream>(
                         destination.display()
                     )
                 })?;
-                cap_check(destination, size, context.cap)?;
+                cap_check(destination, size, context.cap, context.interactive)?;
                 size
             }
         };
@@ -952,7 +962,7 @@ fn fetch_item<S: ClientStream>(
     stage_target: &Path,
     destination: &Path,
     progress: &mut Progress<'_>,
-    cap: u64,
+    context: &Context,
 ) -> Result<u64, String> {
     let request = Fields::new()
         .with("op", b"files.fetch".to_vec())
@@ -967,7 +977,8 @@ fn fetch_item<S: ClientStream>(
             stage_target: stage_target.to_path_buf(),
             file: &mut file,
             tar: &mut tar,
-            cap,
+            cap: context.cap,
+            interactive: context.interactive,
             total: 0,
             done: 0,
             since_tick: 0,
@@ -1019,6 +1030,7 @@ struct KindAwareSink<'a, 'b> {
     file: &'a mut Option<std::fs::File>,
     tar: &'a mut Option<std::process::Child>,
     cap: u64,
+    interactive: bool,
     total: u64,
     done: u64,
     since_tick: u64,
@@ -1035,7 +1047,7 @@ impl StreamSink for KindAwareSink<'_, '_> {
             .get("size")
             .and_then(|size| String::from_utf8_lossy(size).parse().ok())
             .unwrap_or(0);
-        if let Err(message) = cap_check(&self.label, self.total, self.cap) {
+        if let Err(message) = cap_check(&self.label, self.total, self.cap, self.interactive) {
             self.refusal = Some(message);
             return Err(ClientError::Protocol(
                 "size cap refused the item".to_string(),
@@ -1165,7 +1177,7 @@ mod tests {
     fn the_cap_refusal_line_matches_the_yazi_parse_contract() {
         // smart-paste.yazi anchors on:
         //   ^pbpaste: (.-) exceeds size cap %(CLIP_FILE_MAX=(%d+) bytes, item is (%d+) bytes%) %-%- refusing
-        let err = cap_check(Path::new("/dst/big.bin"), 500, 100).unwrap_err();
+        let err = cap_check(Path::new("/dst/big.bin"), 500, 100, false).unwrap_err();
         let prefix = "pbpaste: /dst/big.bin exceeds size cap (CLIP_FILE_MAX=100 bytes, item is 500 bytes) -- refusing";
         assert!(
             err.starts_with(prefix),

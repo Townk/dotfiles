@@ -72,6 +72,10 @@ fn context(self_host: &str, over_ssh: bool) -> Context {
         over_ssh,
         mount_helper: "/nonexistent/clipboard-mount".into(),
         cap: u64::MAX,
+        // Never interactive under test: a cap refusal must be the refusal,
+        // not a dialog. The engine used to sense this from the terminal,
+        // which meant the suite prompted whoever ran it from a tty.
+        interactive: false,
     }
 }
 
@@ -362,6 +366,7 @@ fn a_deferred_cap_refusal_places_nothing() {
         over_ssh: false,
         mount_helper: helper,
         cap: 10,
+        interactive: false,
     };
     let err = paste_files::run(&mut session, &options(&dest), &context).unwrap_err();
     assert!(err.contains("exceeds size cap"), "{err}");
