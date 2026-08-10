@@ -100,6 +100,19 @@ run_step() {
   fi
 }
 
+# _sudo_has_askpass
+# Whether sudo has a helper to ask through, which decides whether the password
+# below is typed at this terminal or answered in the float.
+#
+# The variable alone is not the test. It is exported only where the helper is
+# built, but it can also be inherited from a session that set it for a machine
+# this one is not — and a helper that is not there fails closed, with nothing
+# underneath it. Naming the file, not the variable, is the same lesson the
+# askpass exports learned the hard way.
+_sudo_has_askpass() {
+  [[ -n "${SUDO_ASKPASS:-}" && -x "${SUDO_ASKPASS}" ]]
+}
+
 # preauthorize_sudo
 # Take the sudo password ONCE, here, where the prompt is legible — then hold the
 # timestamp for the rest of the run.
@@ -121,8 +134,19 @@ preauthorize_sudo() {
     # No terminal to ask on (cron, the launchd agent, a chezmoi run_once with
     # stdin closed). Prompting is impossible, so don't try.
     [[ -t 0 ]] || return 0
-    log_info "Authorizing sudo up front, so nothing stalls behind a spinner later..."
-    sudo -v || { log_warn "sudo not authorized; steps that need it will ask on their own"; return 0 }
+    # Through the same dialog as every other password, when there is one. A
+    # plain `sudo -v` ignores SUDO_ASKPASS entirely — measured, with a terminal
+    # and without — so reaching the float takes an explicit -A. The gate above
+    # stays as it was: an unattended run must not stall on a prompt nobody is
+    # there to answer, whichever surface it would appear on.
+    local -a ask=()
+    if _sudo_has_askpass; then
+      ask=(-A)
+      log_info "Authorizing sudo up front — answer the floating prompt..."
+    else
+      log_info "Authorizing sudo up front, so nothing stalls behind a spinner later..."
+    fi
+    sudo "${ask[@]}" -v || { log_warn "sudo not authorized; steps that need it will ask on their own"; return 0 }
   fi
   # sudo forgets the timestamp after timestamp_timeout (5 minutes by default),
   # and a full run outlasts that many times over. Refresh well inside the

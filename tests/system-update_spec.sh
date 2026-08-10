@@ -96,6 +96,48 @@ End
 # -fix` can exit 0 without actually re-pointing the symlink, and the old
 # fire-and-forget shape surfaced that only as a future curses prompt (or a
 # blocked commit). Mirrors run_after_26's backend_ok re-check.
+# A plain `sudo -v` ignores SUDO_ASKPASS — measured, with a terminal and
+# without — so the opening password of a run reaches the float only if sudo is
+# given an explicit -A. Which makes "is there a helper?" the whole decision, and
+# getting it wrong is not cosmetic: -A with a helper that cannot run fails
+# closed, and there is no rung under it.
+Describe 'system-update: choosing where the opening password is asked'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-update"
+
+  has_askpass() {
+    SCRIPT_PATH="$SCRIPT" zsh -f -c '
+      set --
+      export SYSTEM_UPDATE_NO_RUN=1
+      source "$SCRIPT_PATH"
+      _sudo_has_askpass && print -r -- "-A" || print -r -- "terminal"
+    '
+  }
+
+  It 'asks through the float when a helper is really there'
+    helper="$SHELLSPEC_TMPBASE/askpass-helper"
+    printf '#!/bin/sh\nexit 0\n' >"$helper"
+    chmod +x "$helper"
+    export SUDO_ASKPASS="$helper"
+    When call has_askpass
+    The output should equal "-A"
+  End
+
+  It 'asks at the terminal when nothing is configured'
+    unset SUDO_ASKPASS
+    When call has_askpass
+    The output should equal "terminal"
+  End
+
+  # The case that broke sudo twice, in its other guise: a variable inherited
+  # from a session belonging to a machine that has the helper, on one that does
+  # not.
+  It 'asks at the terminal when the helper named does not exist'
+    export SUDO_ASKPASS="$SHELLSPEC_TMPBASE/not-built-here"
+    When call has_askpass
+    The output should equal "terminal"
+  End
+End
+
 Describe 'system-update: pinentry reassert verifies the repair'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-update"
 

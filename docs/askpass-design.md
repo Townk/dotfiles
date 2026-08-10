@@ -189,6 +189,23 @@ The `sudo -A` alias lives in the interactive alias layer, guarded on the helper
 existing and on the same remote test. It is an alias specifically so that
 `\sudo` and `command sudo` bypass it.
 
+**A script gets no aliases, so `system-update` asks for the `-A` itself.** Its
+`preauthorize_sudo` takes the password once at the top, where the prompt is
+legible, and until now that was sudo's own prompt on the terminal — because
+exporting `SUDO_ASKPASS` is not enough to be asked through. Measured, with a
+terminal and without one, a plain `sudo -v` never invoked the helper; only `-A`
+does. So the flag is passed explicitly whenever `_sudo_has_askpass` finds a
+helper that exists and can run, which is the same "name the file, not the
+variable" rule as above, for the same reason and one extra one: the variable can
+be inherited from a session belonging to a machine that has the binary, on one
+that does not.
+
+What is deliberately *not* changed is the terminal test guarding that whole
+block. A helper means a password could now be asked for with no terminal at all,
+but an unattended run must not stall on a prompt nobody is there to answer, and
+that is as true of a float on an unwatched pane as of a prompt on a closed
+stdin. The deadline bounds such a stall; it does not make it worth having.
+
 ## Blast radius
 
 This is the part that differs in kind from the GPG work, and it is why the
