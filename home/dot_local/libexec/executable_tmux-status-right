@@ -319,7 +319,20 @@ fi
 # $(<f) reads in-process (no cat fork); the -r guard is required — an inline
 # 2>/dev/null on $(<f) would run $NULLCMD and fork after all.
 is_fullscreen=0
-if [[ "${client_term:l}" == *ghostty* ]]; then
+if (( is_ssh )); then
+  # A REMOTE session cannot choose its mirror by terminal name, and does not
+  # need to. It cannot, because through a nested mux `client_termname`
+  # answers the INNER mux's TERM (tmux-256color) rather than the physical
+  # terminal, so both branches below would miss and fullscreen could never
+  # register on a remote shell — observed on the dev-shell: the window went
+  # fullscreen and the ribbon never noticed. It does not need to, because
+  # wezterm.lua writes its mirror only on the machine WezTerm itself runs
+  # on; out here the probe's mirror is the only one anything maintains, and
+  # it already carries the PEER's state whatever terminal the human is at
+  # (mux-fullscreen-probe fills it from `window.fullscreen.state` over the
+  # bridge, or from --flip straight after a toggle).
+  [[ -r "$GHOSTTY_FS_STATE" && "$(<"$GHOSTTY_FS_STATE")" == true ]] && is_fullscreen=1
+elif [[ "${client_term:l}" == *ghostty* ]]; then
   [[ -r "$GHOSTTY_FS_STATE" && "$(<"$GHOSTTY_FS_STATE")" == true ]] && is_fullscreen=1
 elif [[ -r "$FS_STATE" && "$(<"$FS_STATE")" == true ]]; then
   is_fullscreen=1

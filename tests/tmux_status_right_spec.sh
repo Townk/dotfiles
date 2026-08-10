@@ -370,9 +370,33 @@ EOS
   # laptop you are sitting at. (Before fullscreen was knowable over ssh, this
   # distinction could not arise: the group was suppressed for remote clients
   # outright.)
+  # A remote session cannot pick the mirror by terminal name. Through a
+  # nested mux `client_termname` answers the INNER mux's TERM
+  # (tmux-256color), so neither terminal branch matches and fullscreen could
+  # never register on a remote shell — found live on the dev-shell: the
+  # window went fullscreen and the ribbon never noticed. It does not need to
+  # pick, either: wezterm.lua writes its mirror only on the machine WezTerm
+  # runs on, so the probe's mirror is the ONLY one anything maintains here,
+  # and it already holds the PEER's state (ask_peer over the bridge, or
+  # --flip straight after a toggle) whatever terminal the human is at.
+  It 'a remote session reads the probe mirror even when the client term is a mux'
+    export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
+    printf 'true' > "$TEST_TMP/ghostty_fullscreen"
+    printf 'false' > "$TEST_TMP/fullscreen_state"
+    When call zsh "$W" root 0 main 0 0 '' 0 0 '' 120 '' '' 0 '' tmux-256color
+    The output should include "$G_CLOCK"
+  End
+
+  It 'a remote session that is not fullscreen still renders no clock'
+    export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
+    printf 'false' > "$TEST_TMP/ghostty_fullscreen"
+    When call zsh "$W" root 0 main 0 0 '' 0 0 '' 120 '' '' 0 '' tmux-256color
+    The output should not include "$G_CLOCK"
+  End
+
   It 'ssh in fullscreen gains the clock but not this machines battery or wifi'
     export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
-    printf 'true' > "$TEST_TMP/fullscreen_state"
+    printf 'true' > "$TEST_TMP/ghostty_fullscreen"
     printf 'devbox' > "$TEST_TMP/hostname-alias"
     When call zsh "$W" root 0 main
     The output should include "$G_HOST devbox"
