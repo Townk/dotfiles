@@ -49,7 +49,7 @@ set -g status-style "bg=#{{ index $p $r.ui.bg }},fg=#{{ index $p $r.ui.fg_dim }}
      lookup: the pill is expanded for every window on every redraw, and a
      format costs nothing where a fork would cost one process per window.
      Unlisted commands fall through to the generic run glyph. */ -}}
-{{- $icon := "󰜎" -}}
+{{- $icon := .muxTabIconDefault -}}
 {{- range $proc, $glyph := .muxTabIcons -}}
 {{- $icon = printf "#{?#{==:$win_cmd,%s},%s,%s}" $proc $glyph $icon -}}
 {{- end -}}

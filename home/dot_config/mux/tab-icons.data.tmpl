@@ -1,0 +1,18 @@
+{{/* tab-icons.data — GENERATED from home/.chezmoidata/mux.yaml by chezmoi. */ -}}
+# tab-icons.data — GENERATED from home/.chezmoidata/mux.yaml by chezmoi.
+# Runtime input for programs that must draw a process the way its tab pill
+# draws it, but cannot read chezmoi data: today that is pinentry-ui, which is
+# spawned by gpg-agent and names the process that asked for the passphrase.
+#
+# The tmux pill reaches the same table through the theme template and zj-hud
+# has it compiled in, so this file is a third projection of one list, not a
+# second list. Never hand-edit it: `chezmoi apply` overwrites it.
+#
+# One record per line, TAB-separated: BASENAME <TAB> GLYPH. The basenames are
+# matched against the pill's normalised command (@win_proc when the shell has
+# stamped one, else pane_current_command, .exe stripped), so a lookup here
+# agrees with the pill by construction. `#default` is the glyph for anything
+# unlisted.
+#default	{{ .muxTabIconDefault }}
+{{ range $proc, $glyph := .muxTabIcons }}{{ $proc }}	{{ $glyph }}
+{{ end -}}

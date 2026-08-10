@@ -239,7 +239,8 @@ Describe 'tmux keymap tables'
   # a single run-shell classifier would put zsh startup on a held nav key.
   #
   # The name alternation is generated from .chezmoidata/mux.yaml's
-  # muxAgentProcs, shared with pinentry-mux's identical probe. It was written
+  # muxAgentProcs, shared with pinentry-ui, which reads the same list at
+  # runtime from ~/.config/mux/agent-procs.data. It was written
   # by hand as `(cursor-)?agent` until that matched two of the five agents this
   # repo actually runs — the same gap that left passphrase prompts parked on
   # claude panes. Assert the generated shape, and that the names the narrow

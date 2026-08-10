@@ -1,0 +1,15 @@
+{{/* agent-procs.data — GENERATED from home/.chezmoidata/mux.yaml by chezmoi. */ -}}
+# agent-procs.data — GENERATED from home/.chezmoidata/mux.yaml by chezmoi.
+# The AI coding agents this repo knows about, one process BASENAME per line.
+#
+# Runtime input for pinentry-ui, which cannot read chezmoi data: it is spawned
+# by gpg-agent in a minimal environment and has to decide whether the tty that
+# asked for a passphrase belongs to an agent — in which case the prompt goes to
+# a float, because nobody is watching that pane — or to a human, who gets it in
+# place. Never hand-edit: `chezmoi apply` overwrites this file.
+#
+# The `.exe` tolerance is not spelled here. It is a vendor's platform suffix
+# rather than another name, so it is stripped by the reader, exactly as the
+# tmux pill's win_cmd strips it.
+{{ range .muxAgentProcs }}{{ . }}
+{{ end -}}

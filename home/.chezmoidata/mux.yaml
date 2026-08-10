@@ -64,6 +64,12 @@ muxTabIcons:
   wget: ""
   sudo: "\U0000F292"
 
+# The glyph for a command with no entry above — zj-hud's
+# `unwrap_or_else(tab_process)`. Named rather than written into each consumer,
+# because a "generic process" glyph that differs between the tmux pill and the
+# pinentry dialog is a difference nobody would ever think to look for.
+muxTabIconDefault: "\U000F070E"
+
 # The AI coding agents this repo knows about, as process BASENAMES.
 #
 # One list, several consumers, because a name missing from any one of them
@@ -74,7 +80,8 @@ muxTabIcons:
 #
 # Consumers (all GENERATED from this list — never hand-edit the copies):
 #   - dot_config/tmux/keymap-base.conf.tmpl  `is_agent` ps/grep probe
-#   - dot_local/libexec/executable_pinentry-mux.tmpl  the same probe, in sh
+#   - dot_config/mux/agent-procs.data.tmpl   read at runtime by pinentry-ui,
+#     which is spawned by gpg-agent and cannot read chezmoi data
 #
 # The `(\.exe)?` suffix tolerance lives in those two regexes rather than here:
 # it is a spelling of these names, not another name. claude-code renamed its
