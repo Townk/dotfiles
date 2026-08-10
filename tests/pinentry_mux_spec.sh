@@ -134,6 +134,45 @@ EOS
     done
   }
 
+  # Assuan is strictly synchronous — one response per command — and because
+  # pinentry answers the agent directly, this filter can never swallow a reply
+  # it did not ask for. So it must hand pinentry exactly as many commands as the
+  # agent handed it, no more. Counting them is the point: every content
+  # assertion in this file passed while an injected `OPTION ttyname=` quietly
+  # added a surplus OK, which the agent then read as the answer to GETPIN — a
+  # result with no data, which IS "No passphrase given". Signing failed every
+  # time while the dialog on screen looked perfect, and nothing here noticed.
+  budget() {
+    printf 'OPTION ttyname=/dev/ttysAGENT\nOPTION ttytype=screen\nSETPROMPT PIN\nGETPIN\nBYE\n' |
+      { "$PM_BIN" & p=$!
+        ( sleep 8; kill -KILL "$p" 2>/dev/null ) >/dev/null 2>&1 & w=$!
+        wait "$p"; kill "$w" 2>/dev/null; } >"$PM_TMP/budget.out"
+    printf 'sent=5 forwarded=%s\n' "$(grep -c '^GOT:' "$PM_TMP/budget.out")"
+  }
+
+  # The same conversation with the agent's end left open behind the hang-up,
+  # which is not a contrivance: reject a passphrase and gpg-agent keeps the
+  # connection while pinentry exits on BYE, so the filter's read never returns
+  # on its own. One writer emits the conversation and then simply stays open —
+  # writing and holding from the same process is what makes it deterministic,
+  # since a separate keeper could still be blocked in open() when the writer
+  # closed, handing the filter the EOF this example exists to withhold.
+  converse_abandoned() {
+    mkfifo "$PM_TMP/agent.fifo"
+    { printf 'OPTION ttyname=/dev/ttysAGENT\nSETPROMPT PIN\nGETPIN\nBYE\n'
+      sleep 20; } >"$PM_TMP/agent.fifo" &
+    keeper=$!
+    { "$PM_BIN" <"$PM_TMP/agent.fifo" & p=$!
+      ( sleep 8; kill -KILL "$p" 2>/dev/null ) >/dev/null 2>&1 & w=$!
+      wait "$p"; kill "$w" 2>/dev/null; }
+    kill "$keeper" 2>/dev/null
+    local i=0
+    while [ "$i" -lt 30 ] && pgrep -f "$PM_TMP/bin/holder" >/dev/null 2>&1; do
+      sleep 0.1
+      i=$((i + 1))
+    done
+  }
+
   Describe 'an agent pane'
     It 'rewrites ttyname to the float and leaves the rest of the protocol alone'
       STUB_PS=/Users/x/.local/bin/claude
@@ -160,6 +199,26 @@ EOS
       # The holder ignores INT/TERM so a stray key cannot dismiss it; USR1 is
       # the filter's private close channel, and this proves it was used.
       The contents of file "$PM_TMP/popup.log" should include "closed"
+    End
+
+    It 'hands pinentry exactly one command for each one the agent sent'
+      STUB_PS=/Users/x/.local/bin/claude
+      When call budget
+      The output should equal "sent=5 forwarded=5"
+      The status should be success
+    End
+
+    It 'closes the float when pinentry goes, even if the agent holds the line'
+      # The float used to live and die with the agent's pipe rather than with
+      # the dialog, so a rejected passphrase — pinentry gone, connection still
+      # open — left it on screen forever. It ignores INT/TERM by design, so the
+      # human could neither dismiss it nor take the keyboard back: the one
+      # outcome worse than prompting on a tty nobody is watching.
+      STUB_PS=/Users/x/.local/bin/claude
+      When call converse_abandoned
+      The output should include "GOT:BYE"
+      The contents of file "$PM_TMP/popup.log" should include "closed"
+      The status should be success
     End
   End
 

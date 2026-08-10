@@ -25,6 +25,18 @@
 # never touches this process: pinentry's stdout IS our stdout, so the reply
 # goes straight back to the agent.
 #
+# REWRITING IS THE ONLY OPTION HERE; INSERTING A LINE IS NOT. Assuan is strictly
+# synchronous — one response per command — and because pinentry answers the
+# agent directly, this filter cannot swallow a response it did not ask for. An
+# injected `OPTION ttyname=` therefore leaves a surplus OK in the stream, and
+# the next thing the agent reads it as is the answer to GETPIN: a result with
+# no data, which IS "No passphrase given". The agent hangs up while pinentry is
+# still drawing a perfectly good dialog, so every signature fails and the float
+# looks blameless. That was tried, in the hope of sizing the float from SETDESC
+# (which arrives 23 commands after the ttyname), and it cost a whole session to
+# track down. Anything that needs to tell pinentry something the agent did not
+# say needs a different design, not another line here.
+#
 # PASS-THROUGH IS THE SAFETY NET. No tmux, no pane behind that tty, a human at
 # the keyboard instead of an agent, a session nobody is attached to, a client
 # too small to host the dialog, a float that will not open — every one of them
@@ -100,7 +112,27 @@ close_float() {
   kill -USR1 "$holder" 2>/dev/null
   holder=""
 }
-trap 'close_float' EXIT HUP INT TERM
+trap 'close_float' EXIT
+# A signal has to end the process as well as the float. The default action is
+# gone once the handler exists, so without the exit a TERM would close the
+# float and then drop us back into a read that keeps the conversation running
+# with nothing in front of the human.
+trap 'close_float; exit 143' HUP INT TERM
+
+# The float must not outlive the dialog it was opened for, and the loop below
+# cannot be relied on to notice. pinentry exits on BYE; gpg-agent may hold OUR
+# stdin open long after that, which is exactly what a rejected passphrase
+# does. The read then blocks forever, EXIT never comes, and the float stays in
+# front of the human ignoring every signal a keystroke can send — a terminal
+# nobody can reclaim, which is a worse failure than the one this whole file
+# exists to fix. So the child, not stdin, decides when we are done.
+#
+# The redirects are load-bearing rather than tidiness: a background subshell
+# holding stdout keeps the agent's half of the conversation open and stalls
+# the reply, which cost two debugging sessions already.
+( while kill -0 "$child" 2>/dev/null; do sleep 0.2; done
+  kill -TERM "$$" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+watcher=$!
 
 while IFS= read -r line; do
   case "$line" in
@@ -125,6 +157,10 @@ while IFS= read -r line; do
 done
 
 exec 3>&-
+# Stand the watcher down before waiting. The child is about to exit on its own
+# here, and its TERM would land during the wait and replace pinentry's status
+# with the signal's.
+kill "$watcher" 2>/dev/null
 wait "$child"
 status=$?
 close_float
