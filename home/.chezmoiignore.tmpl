@@ -28,8 +28,13 @@
 {{ if ne .chezmoi.os "darwin" -}}
 {{/* pinentry-auto routes to Touch ID / pinentry-mac (macOS-only binaries);
      trust.json is Homebrew tap-trust state. Neither is meaningful off a Mac.
-     It lives in libexec (gpg-agent calls it by absolute path; never on PATH). */}}
+     It lives in libexec (gpg-agent calls it by absolute path; never on PATH).
+     askpass-auto is a symlink TO pinentry-auto, so ignoring only the target
+     left every Linux host a dangling link in libexec — inert, since the shell
+     guards name the pinentry-ui binary rather than either of these, but the
+     kind of debris that made the sudo breakage hard to read. */}}
 .local/libexec/pinentry-auto
+.local/libexec/askpass-auto
 .config/homebrew/trust.json
 {{/* system-images manages macOS sparse disk images (hdiutil/diskutil); the
      tool, its completion, and the example manifest are meaningless off a Mac. */}}

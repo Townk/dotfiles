@@ -9,6 +9,9 @@ set -eu
 #     symlink deployed before the off-darwin ignore existed (2026-08-03).
 #   - system-service-{launchd,brew} + completions: macOS service workers that
 #     deployed before workers became per-platform (systemd worker era).
+#   - askpass-auto: a symlink to the (ignored) pinentry-auto, so it deployed
+#     here dangling for the day between shipping the askpass lane and ignoring
+#     the link beside its target.
 rm -rf -- \
   "$HOME/.pi/agent-local" \
   "$HOME/.config/espanso" \
@@ -21,6 +24,7 @@ rm -rf -- \
   "$HOME/.local/bin/system-service-brew" \
   "$HOME/.local/share/zsh/site-functions/_system-service-launchd" \
   "$HOME/.local/share/zsh/site-functions/_system-service-brew" \
+  "$HOME/.local/libexec/askpass-auto" \
   "$HOME/.local/libexec/disk-image-view" \
   "$HOME/.local/bin/system-backup" \
   "$HOME/.local/bin/system-backup-capture" \
