@@ -142,6 +142,19 @@ non-dismissable float in that session, rewrites `OPTION ttyname=` to the popup
 pane's `#{pane_tty}`, and proxies the remaining protocol to the real
 `pinentry-curses` until `BYE`.
 
+**Measured — rewrite the line; never insert one.** Assuan is strictly
+synchronous, one response per command, and pinentry answers the agent directly:
+its stdout IS ours, so a reply this filter did not ask for cannot be swallowed
+again on the way back. An injected `OPTION ttyname=` therefore leaves a surplus
+`OK` in the stream, and the next thing the agent reads it as is the answer to
+`GETPIN` — a result carrying no data, which IS "No passphrase given". The agent
+hangs up while pinentry is still drawing a perfectly good dialog, so every
+signature fails and the float looks blameless. This was tried for real, to buy
+the sizing described below, and cost a session to track down. One command in,
+one command out is the only shape this filter can have; anything that needs to
+tell pinentry something the agent did not say needs a different design, not
+another line here.
+
 **Pass-through is the safety net.** No tmux, no pane match, or a non-agent pane
 → `exec pinentry-curses` unchanged. Every failure mode degrades to today's
 behavior rather than to a broken prompt.
@@ -167,6 +180,28 @@ other way round: against a 120x40 client and a 64x18 one,
 `display -p -c <client>` reported the current client's for both. Popup: `-c`.
 Size: `-t`. Swapping either silently targets the wrong screen.
 
+**Measured — the dialog's size is knowable, but not from here.** pinentry draws
+its own framed box and centres it, so the generous float leaves the dialog
+adrift in a half-empty pane — 65x11 of content in a 78x16 box. The arithmetic
+is not the hard part, and it is recorded here so nobody re-derives it:
+`width = max(56, longest line + 4)`, `height = SETDESC lines + 6`, two rows more
+once `SETERROR` is set, where lines are the `%0A`-separated fields (counting the
+empty one the real description leaves after its trailing separator) and each
+`%XX` escape is one character. The canvas needs one column MORE than the dialog
+but EXACTLY its height: at equal width pinentry keeps the frame, drops an inner
+column and wraps into a row nobody budgeted for; one row short and it refuses
+with `ERR … Screen or window too small`.
+
+What makes it unreachable is timing, not arithmetic. `SETDESC` arrives 23
+commands after the `OPTION ttyname=` the float has to be opened from, `tmux 3.7b`
+takes `-w/-h` only when the popup is created and has no command that resizes an
+open one (`resize-pane`/`resize-window` target panes and windows), and telling a
+live pinentry to move to a differently-sized float needs the extra `OPTION` that
+the finding above rules out. Undersizing has no safety net either, since
+pinentry's error goes to the agent without passing through the filter. So the
+box stays generous, and the way to a snug dialog is to own the dialog — see
+`docs/pinentry-ui-design.md`.
+
 **Measured — "a client" is not enough; it has to be the live one.** One session
 can hold several clients, and since a popup paints only on the client it is
 aimed at, the choice among them *is* the feature. Found on the mini's real
@@ -175,6 +210,34 @@ abandoned twelve hours before, with tmux listing the stale one first. Taking the
 first match would have painted the passphrase prompt on a dead screen — this
 plan's own complaint, reproduced by the fix for it. `client_activity` is the
 only signal available, so the most recently active client wins.
+
+### How far the dialog itself can be customised
+
+Asked and measured, so it does not have to be investigated again. The float is
+cut to the dialog above; these are the options for the dialog *inside* it.
+
+**Colour: yes, but coarse.** `pinentry-curses -c FG,BG,SO` works — `cyan,black`
+produced `[36m`/`[40m` in a capture — and since the filter is what spawns
+pinentry, argv is ours to set. Two limits: one foreground and one background
+apply to the *whole* dialog, frame, text and both buttons alike, so it is a tint
+rather than per-element theming; and the third "standout" slot produced no
+visible change in any render. Only palette names are accepted (`blue`,
+`bright-red`, …), not hex, which is arguably right — they follow the terminal
+palette. It is argv-only: `OPTION colors=` is answered `ERR … Unknown option`.
+
+**Owning the whole UI: possible, at a price.** Nothing stops the filter from
+answering `GETPIN` itself and drawing anything, including the themed rounded
+border the popup options already define and that `-B` currently suppresses. Two
+costs. The command surface is 29 verbs — `SETREPEAT`, `SETQUALITYBAR`,
+`SETGENPIN`, `CONFIRM`, `MESSAGE` and the rest are what passphrase *changes* and
+key generation use — so a sane version implements `GETPIN` and delegates the
+others. And pinentry keeps the passphrase in locked secure memory (verified:
+`nm -u` on the binary shows it references `mlock` and `mmap` directly), which a
+replacement has to reproduce rather than inherit — reading it with `read` in a
+shell would put it in ordinary swappable memory.
+
+This is the direction chosen. `docs/pinentry-ui-design.md` carries the design
+and the argument for why the memory protection survives the move.
 
 ### B. Dedicated long-lived pinentry pane
 
@@ -284,6 +347,25 @@ takes USR1 as a private close channel from the filter. Its traps are armed
 *before* it publishes its pid, or a fast close lands on USR1's default
 disposition and kills it.
 
+**…and so the float must not outlive the dialog.** Teardown was tied to the
+filter's EXIT trap, which fires when the agent closes our stdin. For a
+*correct* passphrase that is the same moment — gpg-agent hangs up at once — so
+it looked right on both hosts. Reject one and the two come apart: pinentry
+exits on `BYE` while gpg-agent keeps the connection, the filter blocks in
+`read` with nothing left to wake it, and the float stays on screen ignoring
+every signal a keystroke can send. Measured by driving the pre-fix filter with
+stdin held open behind the hang-up: still standing after 8s, and only a
+SIGKILL ended it. A terminal the human cannot reclaim is worse than the
+invisible prompt this file exists to fix, so the child, not stdin, now decides
+when we are done — a watcher polls pinentry and TERMs the filter when it goes,
+and the signal handlers exit rather than merely closing the float. Live
+against a real float afterwards: open at 700ms, closed at 1000ms, with the
+agent's end of the pipe still held open for another 19 seconds.
+
+The lesson generalises past this bug: anything that can pin the float on
+screen has to be driven by the dialog's own lifetime, never by a peer's
+willingness to hang up.
+
 **pinentry has a minimum size.** Below roughly 55x7 it answers
 `ERR … Screen or window too small` instead of drawing. That is a clean error but
 it still fails the signature, so a client too small to host the dialog falls
@@ -297,9 +379,14 @@ carrying the float's tty back, holding that pipe open and stalling the filter
 before it forwarded a line. Anything spawned on this path needs its descriptors
 closed explicitly.
 
-Tests: `tests/pinentry_mux_spec.sh` (ttyname rewrite, teardown, pass-through on
-every gate, the whole shared name list, plus the lib's session/client/geometry
-lookups); `tests/pinentry_auto_spec.sh` (dispatch: `USE_CURSES` → mux, and the
+Tests: `tests/pinentry_mux_spec.sh` (the ttyname rewrite; a response budget that
+counts commands forwarded against commands received, because every content
+assertion here passed while the injected line was silently desynchronising the
+protocol; teardown — including the abandoned-connection case above, pinned with
+the agent's end of the pipe held open so a regression stalls until the watchdog
+kills it rather than passing on an EOF it should never have seen —
+pass-through on every gate, the whole shared name list, plus the lib's
+session/client/geometry lookups); `tests/pinentry_auto_spec.sh` (dispatch: `USE_CURSES` → mux, and the
 fallback when the wrapper is not applied — the VNC and Touch ID branches are
 left alone, since exercising them would raise a real biometric prompt);
 `tests/environment_spec.sh` (`no-autostart` → empty `PINENTRY_USER_DATA`,
@@ -324,7 +411,7 @@ real `gpg-agent` with caching off:
 - Two agent panes at once: see the concurrency correction above.
 - Pass-through on every failing gate, plus the whole shared name list, under
   `tests/pinentry_mux_spec.sh`.
-- Full suite green (1805 examples), with the three pre-existing
+- Full suite green (1811 examples), with the three pre-existing
   `quick-launch --no-border` warnings unchanged.
 
 ### Done on `mac-mini`
