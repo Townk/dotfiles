@@ -59,6 +59,10 @@ pub fn ask(prompt: &str, title: &str) -> ExitCode {
 
 fn converse(prompt: &str, title: &str) -> std::io::Result<Option<String>> {
     let bin = crate::delegate::gui_bin();
+    if bin.is_empty() {
+        crate::debug::log(format_args!("no GUI rung on this platform"));
+        return Err(std::io::Error::other("no GUI pinentry on this platform"));
+    }
     crate::debug::log(format_args!("asking {bin}"));
     let mut child = Command::new(&bin)
         .env_remove("PINENTRY_USER_DATA")

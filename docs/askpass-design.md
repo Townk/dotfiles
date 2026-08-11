@@ -293,3 +293,22 @@ the exact bug this project started from.
 PAM's Touch ID has no Linux equivalent either, which changes the shape of the
 chain rather than breaking it: there is simply no rung above the dialog, so
 every sudo goes to the float.
+
+**On a keyless host the askpass lane is not one of two lanes — it is the only
+one.** The dev shell keeps `no-autostart` in `gpg.conf` and consumes the
+laptop's forwarded agent, so no local `gpg-agent` runs and the
+`pinentry-program` line there is inert: a signature made on that host raises its
+prompt on the laptop, through the laptop's dispatcher. Worth knowing before
+trying to test the pinentry lane on a machine that cannot reach it. sudo, ssh
+and git are what this lane is for there, and they were the point.
+
+**Finding the wrong tmux is not a near miss, it is a total failure, and the
+first Linux host proved it.** Measured on the dev shell: the running server is
+tmux 3.7b from a version manager, `/usr/bin/tmux` is 3.2a, and the 3.2a client
+answers `server exited unexpectedly` — a protocol version mismatch. The lookup
+that shipped for macOS probed three absolute paths with `/usr/bin` among them,
+so on that host it would have resolved a client that cannot see a single pane,
+reported "no pane", and gone to a GUI rung Linux does not have. sudo would have
+failed with no dialog and no explanation. The order now matches `mux::bin`'s,
+with the version managers ahead of the system path, and the winner is handed to
+the popup half through `MUX_TMUX_BIN` so both halves address one server.

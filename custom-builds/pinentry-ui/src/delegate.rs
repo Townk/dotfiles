@@ -49,15 +49,23 @@ pub fn curses_bin() -> String {
     "/opt/homebrew/bin/pinentry-curses".to_string()
 }
 
-/// The pinentry for a request with no terminal at all.
+/// The pinentry for a request with no terminal at all, or empty where there is
+/// no such thing.
 ///
-/// There is nothing here for Linux yet, and that is deliberate rather than an
-/// omission: the choice there is a real one — GTK, Qt, gnome3 — and it should
-/// be made when the first Linux host needs it rather than guessed at now. Until
-/// then a tty-less prompt on Linux fails as it always has.
+/// Empty off macOS, and deliberately rather than by omission: the Linux hosts
+/// this runs on are headless, so there is no desktop for a GUI dialog to appear
+/// on, and choosing between GTK and Qt for a machine that has neither would be
+/// guessing at a rung nobody could see. A tty-less prompt there fails as it
+/// always has. Empty rather than a plausible path so the failure says that,
+/// instead of naming a Homebrew binary on a machine that has no Homebrew.
 pub fn gui_bin() -> String {
-    std::env::var("PINENTRY_GUI_BIN")
-        .unwrap_or_else(|_| "/opt/homebrew/bin/pinentry-mac".to_string())
+    if let Ok(b) = std::env::var("PINENTRY_GUI_BIN") {
+        return b;
+    }
+    if cfg!(target_os = "macos") {
+        return "/opt/homebrew/bin/pinentry-mac".to_string();
+    }
+    String::new()
 }
 
 /// Whether a buffered line should be told to the pinentry taking over.
@@ -129,6 +137,12 @@ pub fn hand_over(
         Handover::Curses => curses_bin(),
         Handover::Gui => gui_bin(),
     };
+    if bin.is_empty() {
+        crate::debug::log(format_args!(
+            "nothing to hand {trigger} to on this platform"
+        ));
+        return Err(std::io::Error::other("no GUI pinentry on this platform"));
+    }
     crate::debug::log(format_args!("handing {trigger} to {bin}"));
     let mut cmd = Command::new(bin);
     cmd.args(args)
