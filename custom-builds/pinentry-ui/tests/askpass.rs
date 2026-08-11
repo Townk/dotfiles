@@ -60,6 +60,9 @@ fn open_pty() -> (i32, i32, String) {
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
+    // See dialog_pty.rs: the winsize parameter is `*mut` on macOS and `*const`
+    // on Linux, and only a raw pointer satisfies both.
+    let ws_ptr: *mut libc::winsize = &mut ws;
     let _held = PTY.lock().unwrap_or_else(|e| e.into_inner());
     let rc = unsafe {
         libc::openpty(
@@ -67,7 +70,7 @@ fn open_pty() -> (i32, i32, String) {
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut ws,
+            ws_ptr,
         )
     };
     assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
