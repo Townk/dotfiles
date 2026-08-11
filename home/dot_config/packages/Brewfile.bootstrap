@@ -21,6 +21,12 @@ brew "mise"          # needed by run_once_after_10-setup-bootstrap-tools.sh.tmpl
                      # before system-update's uv/npm/go syncs run.
 brew "gh"            # used by .setup.sh once GitHub auth is wired up.
 cask "1password-cli" # used by .setup.sh to wait for `op account list`
+brew "mas"           # not needed by .setup.sh itself: it must exist before the
+                     # main Brewfile's App Store entries, which `brew bundle`
+                     # installs in parallel and which each lazily run
+                     # `brew install mas` when it is missing — racing each
+                     # other for the Cellar lock. This earlier pass is what
+                     # guarantees it is already there.
 brew "jq"            # needed by system-onboard --local (the 1Password item
 brew "yq"            # helpers + chezmoi-data parsing) which .setup.sh runs to
                      # provision secrets BEFORE the heavy `chezmoi apply`, so

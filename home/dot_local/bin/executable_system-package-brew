@@ -149,6 +149,16 @@ brew_formula_has_installed_dependents() {
   [[ -n "$(brew uses --installed "$formula" 2>/dev/null)" ]]
 }
 
+# Removes undeclared formulae, casks, and taps. App Store (`mas`) apps are
+# deliberately NOT reconciled for removal — the same judgment call the snap
+# worker makes for snapd's base snaps. The Brewfile is the complete truth for formulae and
+# casks, but for App Store apps the installed set is "what this Apple ID bought
+# plus what macOS shipped with", so undeclared does not imply unwanted: a sweep
+# here would delete the OS preinstalls (GarageBand, iMovie), apps declared for
+# the other profile, and anything device management pushed (which would then be
+# re-pushed, forever). `mas uninstall` also needs root and deletes rather than
+# trashing, neither of which belongs in an unattended `system-update` run.
+# Declared-but-absent App Store apps are still installed by the bundle step.
 brew_cleanup_packages() {
   local bundle_file="$1"
   log_info "Cleaning Homebrew packages missing from Brewfile..."

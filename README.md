@@ -54,7 +54,7 @@ Prereqs: `curl` and `bash` — both ship with macOS by default. That's it.
 # Personal Mac (default; chezmoi will prompt if no flag and a TTY is available)
 curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash
 
-# Work Mac (skip the App Store apps and personal-only packages)
+# Work Mac (skip the personal-only App Store apps and packages)
 curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash -s -- --work
 
 # Explicit personal
@@ -84,8 +84,9 @@ mas "DaisyDisk", id: 411643860
 {{- end }}
 ```
 
-Currently the App Store (`mas`) entries are gated to `personal`. Brews, casks,
-and the bootstrap Brewfile are shared.
+The App Store (`mas`) entries are split in two blocks: one shared by `personal`
+and `work`, one personal-only. Brews, casks, and the bootstrap Brewfile are
+shared.
 
 The `dev-shell` profile is for headless Linux dev shells, not `.setup.sh`.
 Initialize it with `CHEZMOI_PROFILE=dev-shell` or an equivalent chezmoi config,

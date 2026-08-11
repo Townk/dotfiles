@@ -15,19 +15,15 @@ cask_args appdir: '/Applications'
 # ---------------------------
 # These entries are entries for apps that I download from the Mac AppStore.
 #
-# `mas` installs require the user to be signed into the App Store on the
-# target machine. Work Macs typically aren't signed into a personal
-# Apple ID, so the whole block is gated on the personal profile. Move
-# specific lines OUT of the if/end block if you need them on work too.
-{{ if eq .profile "personal" -}}
-
-# XCode
-mas "Xcode", id: 497799835
-
-# Apple Office Suite
-mas "Keynote: Design Presentations", id: 361285480
-mas "Pages: Create Documents", id: 361309726
-mas "Numbers: Make Spreadsheets", id: 361304891
+# `mas` installs require the target machine to be signed into an App Store
+# Apple ID that owns the app. The first block is for apps I want on every
+# Mac I sit at, work included; the second is personal-only. Move a line
+# between the two blocks to change where it lands.
+#
+# Deleting a line here does NOT uninstall the app: `system-package brew sync`
+# never removes App Store apps (see brew_cleanup_packages for why). Undeclaring
+# is a no-op — uninstall by hand.
+{{ if or (eq .profile "personal") (eq .profile "work") -}}
 
 # This is, by far, the best dictionary app I ever used.
 mas "LookUp Dictionary: Learn Daily", id: 872564448
@@ -42,6 +38,20 @@ mas "PCalc", id: 403504866
 # would rarely would have use for, but by far, is the most used app in my
 # collection. Yep, who would know I needed a color grabber?
 mas "ColorSlurp", id: 1287239339
+
+# Dims every window but the focused one.
+mas "HazeOver", id: 430798174
+{{- end }}
+
+{{ if eq .profile "personal" -}}
+
+# XCode
+mas "Xcode", id: 497799835
+
+# Apple Office Suite
+mas "Keynote: Design Presentations", id: 361285480
+mas "Pages: Create Documents", id: 361309726
+mas "Numbers: Make Spreadsheets", id: 361304891
 
 # This is an app to scan and present your hard drive in a way to show you
 # what is occupying space on it. It also allows you to remove unwanted
@@ -85,6 +95,13 @@ cask 'macfuse'
 # official binary; brew's build disables mount support on macOS
 {{- end }}
 
+{{ if or (eq .profile "personal") (eq .profile "work") -}}
+# Screen capture + measurement, driven by URL scheme from the Hammerspoon
+# `Apps` layer, which already ships on work.
+cask 'cleanshot'                    # Better screenshots
+cask 'pixelsnap'                    # Measure pixels in the screen
+{{- end }}
+
 {{ if eq .profile "personal" -}}
 cask 'paragon-extfs'                # ext3 FS manager
 {{- end }}
@@ -126,11 +143,9 @@ cask 'discord'                      # Chat (a more open Slack)
 cask 'dropbox'                      # Cloud storage
 cask 'google-chrome'                # Browser
 cask 'microsoft-teams'              # Meetings
-cask 'pixelsnap'                    # Measure pixels in the screen
 cask 'proton-mail'                  # Secure Email
 cask 'proton-mail-bridge'           # Allow other mail clients access proton mails
 cask 'rustdesk'                     # Better remote desktop for macOS
-cask 'cleanshot'                    # Better screenshots
 cask 'steam'                        # Gaming
 cask 'tailscale-app'                # VPN
 cask 'zen'                          # Browser
@@ -155,11 +170,13 @@ cask 'font-noto-sans-math'         # Mathematical symbols
 # -----------------
 # This section are for standart Homebrew "packages" (a.k.a. Formulas).
 
-{{ if eq .profile "personal" -}}
 # MacOS Essentials
 # ----------------
-brew 'mas'                          # MacOS Apple Store CLI
-{{- end }}
+# `mas` lives in Brewfile.bootstrap so it is installed by an earlier, separate
+# `brew bundle` pass. `brew bundle` installs entries in parallel and every
+# `mas` entry above lazily runs `brew install mas` when the CLI is missing —
+# with no dependency edge on this line — so two App Store entries race for the
+# Cellar lock and both fail on a machine that doesn't have `mas` yet.
 
 # GNU tools (a.k.a. basic terminal surviving kit)
 # -----------------------------------------------
