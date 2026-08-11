@@ -239,6 +239,9 @@ brew 'ouch'                         # Universal compressor wrapper (for: preview
 brew 'pam-reattach'                 # Reattaches sudo to the GUI session (for: sudo Touch ID under tmux)
 brew 'pandoc'                       # Convert files from one format to another (for: emacs, nvim)
 brew 'pcre2'                        # PCRE2 regex library for the zsh/pcre module (for: zsh custom-build)
+{{ if or (eq .profile "personal") (eq .profile "work") -}}
+brew 'picotool'                     # Flashes RP2040 firmware over USB, avoiding the bootloader drive (for: qmk-flash, a loose local script)
+{{- end }}
 brew 'poppler'                      # PDF page rasters + page count (for: preview)
 brew 'restic'                       # Encrypted deduplicated backup engine (for: system-backup)
 brew 'resvg'                        # SVG renderer (for: yazi; preview uses librsvg instead — removal candidate)
