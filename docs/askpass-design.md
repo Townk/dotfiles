@@ -299,8 +299,14 @@ one.** The dev shell keeps `no-autostart` in `gpg.conf` and consumes the
 laptop's forwarded agent, so no local `gpg-agent` runs and the
 `pinentry-program` line there is inert: a signature made on that host raises its
 prompt on the laptop, through the laptop's dispatcher. Worth knowing before
-trying to test the pinentry lane on a machine that cannot reach it. sudo, ssh
-and git are what this lane is for there, and they were the point.
+trying to test the pinentry lane on a machine that cannot reach it.
+
+And where sudo is passwordless — a provisioned dev box often is — the obvious
+half of *this* lane is unreachable as well: sudo never asks, so `sudo -k; sudo
+-v` raises nothing and nothing is wrong. ssh and git are what reach the float
+on such a host. The lane was verified there by invoking `askpass-auto` directly
+with a throwaway value: the float drew, took the typing, closed on Enter, and
+the value came back on stdout with no pane and no process left behind.
 
 **Finding the wrong tmux is not a near miss, it is a total failure, and the
 first Linux host proved it.** Measured on the dev shell: the running server is
