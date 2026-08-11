@@ -10,6 +10,8 @@ max-cache-ttl 86400
 # the machine and answer it, and if nobody ever does, the operation fails and
 # releases the lock instead of holding it forever.
 pinentry-timeout 900
-{{ if eq .chezmoi.os "darwin" -}}
+# Every password this machine asks for goes through one front door. The
+# dispatcher decides per platform and per surface, and falls through to the
+# stock pinentry whenever pinentry-ui is not built — so naming it here cannot
+# leave a host unable to sign.
 pinentry-program {{ .chezmoi.homeDir }}/.local/libexec/pinentry-auto
-{{- end }}

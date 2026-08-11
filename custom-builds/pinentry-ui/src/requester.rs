@@ -49,6 +49,17 @@ impl Requester {
 ///
 /// gpg-agent's PATH is not a login shell's, so `command -v` alone is not
 /// enough — the same search the retired shell filter did, for the same reason.
+/// It is not sufficient on its own either, and finding the wrong tmux is worse
+/// than finding none: a client can only talk to a server whose protocol version
+/// matches, and the server was started by whichever tmux the *session's* PATH
+/// resolved to. A host with a distro tmux in /usr/bin and a newer one from a
+/// version manager — an ordinary Linux dev box — would answer every lookup with
+/// a protocol mismatch, which reads here as "no pane" and quietly costs the
+/// float.
+///
+/// Hence the order, which is `mux::bin`'s from `mux-bootstrap.zsh`, kept in step
+/// deliberately: the override, then PATH, then the install dirs with the version
+/// managers ahead of the system one.
 pub fn tmux_bin() -> Option<String> {
     if let Some(b) = std::env::var_os("MUX_TMUX_BIN") {
         let b = b.to_string_lossy().into_owned();
@@ -56,14 +67,26 @@ pub fn tmux_bin() -> Option<String> {
             return Some(b);
         }
     }
+    if let Some(b) = on_path("tmux") {
+        return Some(b);
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
     [
-        "/opt/homebrew/bin/tmux",
-        "/usr/local/bin/tmux",
-        "/usr/bin/tmux",
+        "/opt/homebrew/bin/tmux".to_string(),
+        "/usr/local/bin/tmux".to_string(),
+        format!("{home}/.local/share/mise/shims/tmux"),
+        format!("{home}/.local/bin/tmux"),
+        "/usr/bin/tmux".to_string(),
     ]
     .into_iter()
     .find(|c| is_exec(c))
-    .map(str::to_string)
+}
+
+fn on_path(name: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name).to_string_lossy().into_owned())
+        .find(|c| is_exec(c))
 }
 
 fn is_exec(path: &str) -> bool {

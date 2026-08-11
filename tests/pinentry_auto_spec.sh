@@ -19,6 +19,12 @@
 # running the suite. Adding seams to production code that exist only for a test
 # would be a wider change than the change under test.
 #
+# The non-Darwin lane is unexercised here for exactly that reason: it turns on
+# `uname` read from two absolute paths, and the only way to reach it from a Mac
+# would be an override that exists solely for this file. It is verified live on
+# the dev-shell instead. What the cases below do cover holds for it unchanged,
+# since it is the same guard and the same fall-through.
+#
 # The VNC lane now prefers pinentry-ui too, with the same `[ -x ]` guard and the
 # same pinentry-mac fall-through, so what the cases below prove about the guard
 # holds for it as well. What is genuinely untested here is the choice pinentry-ui

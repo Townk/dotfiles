@@ -15,9 +15,14 @@ Assuan filter it replaces could not be fixed in place: `docs/gpg-signing-ux.md`.
 the curses lane, and the shell filter it replaces (`pinentry-mux`) is gone. The
 askpass lane has authenticated a real `sudo` through the float.
 
-`chezmoi apply` builds it on macOS hosts, through
+`chezmoi apply` builds it on macOS and Linux hosts, through
 `run_onchange_after_56-build-pinentry-ui.sh.tmpl`, whenever a source file
-changes. That hook is soft on purpose: no toolchain, or a compile error, warns
+changes. Nothing in the binary was macOS-only — `hardening.rs` had its
+`PR_SET_DUMPABLE` branch from the first commit — so reaching Linux took a
+`uname` gate on the dispatcher's Touch-ID-and-VNC tail, a searched stock
+pinentry instead of a Homebrew path, and a tmux lookup that prefers the binary
+that started the server over the first one on disk. There is no GUI rung there
+and that is deliberate; see `docs/askpass-design.md`. That hook is soft on purpose: no toolchain, or a compile error, warns
 and skips rather than failing the apply — because a host with no binary at this
 path is not broken. `pinentry-auto` falls through to `pinentry-curses` and it
 signs exactly as it did before any of this existed. No front-end may ever become

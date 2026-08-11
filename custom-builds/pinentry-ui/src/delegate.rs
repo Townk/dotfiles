@@ -30,8 +30,23 @@ use crate::assuan::Handover;
 /// The stock pinentry, overridable for tests exactly as the retired filter had
 /// it.
 pub fn curses_bin() -> String {
-    std::env::var("PINENTRY_CURSES_BIN")
-        .unwrap_or_else(|_| "/opt/homebrew/bin/pinentry-curses".to_string())
+    if let Ok(b) = std::env::var("PINENTRY_CURSES_BIN") {
+        return b;
+    }
+    // Every rung above this one can decline; this one cannot, so it is worth a
+    // search rather than one guess. `/usr/bin/pinentry` last because on Linux it
+    // is usually an alternatives symlink that already points at the curses build.
+    for c in [
+        "/opt/homebrew/bin/pinentry-curses",
+        "/usr/local/bin/pinentry-curses",
+        "/usr/bin/pinentry-curses",
+        "/usr/bin/pinentry",
+    ] {
+        if std::fs::metadata(c).is_ok() {
+            return c.to_string();
+        }
+    }
+    "/opt/homebrew/bin/pinentry-curses".to_string()
 }
 
 /// The pinentry for a request with no terminal at all.

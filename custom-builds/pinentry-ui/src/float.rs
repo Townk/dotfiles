@@ -53,7 +53,15 @@ pub fn open(caller_tty: &str, w: u16, h: u16, requester: &str) -> Option<Float> 
     // to close it.
     crate::term::install_signal_handlers();
 
-    let out = Command::new(popup)
+    let mut cmd = Command::new(popup);
+    // The popup script resolves `tmux` from its own PATH, which under gpg-agent
+    // is not the PATH that started the server — and a client of the wrong
+    // version cannot talk to it at all. We have already found one that answers,
+    // so hand it over rather than let the other half search again.
+    if let Some(tmux) = crate::requester::tmux_bin() {
+        cmd.env("MUX_TMUX_BIN", tmux);
+    }
+    let out = cmd
         .arg("--open")
         .arg(caller_tty)
         .arg(w.to_string())

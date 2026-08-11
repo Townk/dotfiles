@@ -15,12 +15,12 @@
   apply over a nicety would be the wrong trade — recob fails loudly because
   without it there is no clipboard bridge at all.
 
-  Scope: macOS. The dispatcher around it is macOS-shaped (Homebrew paths, the
-  VNC probe, pinentry-mac as the rung below) and no Linux answer is chosen yet;
-  see the "Open" sections of docs/askpass-design.md and
-  docs/pinentry-ui-design.md. Exits cleanly elsewhere.
+  Scope: macOS and Linux. The dispatcher gates its macOS-only tail (the VNC
+  probe, Touch ID, pinentry-mac) on Darwin and sends everything else to this
+  binary, so a Linux host wants it built too. Any other OS exits cleanly rather
+  than attempting a build nothing is wired to use.
 */ -}}
-{{- $target := eq .chezmoi.os "darwin" -}}
+{{- $target := or (eq .chezmoi.os "darwin") (eq .chezmoi.os "linux") -}}
 {{- $wt := .chezmoi.workingTree -}}
 #!/usr/bin/env bash
 # pinentry-ui — rebuild-on-change hook.
@@ -42,7 +42,7 @@
 set -euo pipefail
 
 {{- if not $target }}
-# Only built on macOS; the dispatch around it has no Linux answer yet.
+# Nothing on this OS routes to the binary, so there is nothing to build.
 exit 0
 {{- end }}
 

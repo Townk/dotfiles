@@ -26,15 +26,13 @@
      images.toml.example documents the format). */}}
 .config/packages/images.toml
 {{ if ne .chezmoi.os "darwin" -}}
-{{/* pinentry-auto routes to Touch ID / pinentry-mac (macOS-only binaries);
-     trust.json is Homebrew tap-trust state. Neither is meaningful off a Mac.
-     It lives in libexec (gpg-agent calls it by absolute path; never on PATH).
-     askpass-auto is a symlink TO pinentry-auto, so ignoring only the target
-     left every Linux host a dangling link in libexec — inert, since the shell
-     guards name the pinentry-ui binary rather than either of these, but the
-     kind of debris that made the sudo breakage hard to read. */}}
-.local/libexec/pinentry-auto
-.local/libexec/askpass-auto
+{{/* trust.json is Homebrew tap-trust state, meaningless off a Mac.
+     pinentry-auto and its askpass-auto symlink used to be ignored here too,
+     because the dispatcher only knew macOS surfaces (Touch ID, VNC,
+     pinentry-mac). It now gates that tail on Darwin and routes everything else
+     to pinentry-ui with the stock curses pinentry underneath, so both belong on
+     every host — and shipping the link without its target was what left Linux
+     hosts a dangling one. */}}
 .config/homebrew/trust.json
 {{/* system-images manages macOS sparse disk images (hdiutil/diskutil); the
      tool, its completion, and the example manifest are meaningless off a Mac. */}}

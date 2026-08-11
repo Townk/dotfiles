@@ -679,9 +679,16 @@ argument in the language section.
 executable it falls through to `pinentry-curses`, so a host that has pulled the
 dotfiles but not run `make` signs exactly as it does today. That guard is what
 makes a staged rollout across profiles safe, and it is the same mechanism the
-blast-radius rule in Scope depends on. `pinentry-auto` itself is macOS-only
-today — Homebrew paths, a VNC probe, Touch ID — so the Linux profiles need
-dispatch work of their own before any of this reaches them.
+blast-radius rule in Scope depends on.
+
+`pinentry-auto` was macOS-only when that was written — Homebrew paths, a VNC
+probe, Touch ID. The Linux profiles turned out to need far less dispatch work
+than that implied: those three are the *tail* of the script, and only the tail.
+Gating it on `uname` and sending everything else to this binary, with a searched
+rather than hardcoded stock pinentry underneath, is the whole of it. What Linux
+does not get is the rung below the terminal — a request with no tty fails there
+as it always has, because a headless host has no desktop to draw a GUI on, and
+choosing between GTK and Qt for a machine that has neither would be guessing.
 
 ## Testing
 

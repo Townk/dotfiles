@@ -18,6 +18,13 @@
 #                                 hands over to pinentry-mac when there is none
 #   physical -> pinentry-touchid  Touch ID (own fallback to pinentry-mac)
 #
+# Only the first of those exists off a Mac, which is why the tail is gated on
+# Darwin rather than split into a second script. A headless Linux host has no
+# Aqua session to view and no Touch ID, so every request goes to pinentry-ui
+# with the stock curses pinentry underneath it. The missing GUI rung there is
+# not an omission: a machine with no desktop has nowhere to draw one, so a
+# request with no terminal fails exactly as it did before any of this existed.
+#
 # SSH is detected client-side: interactive shells export USE_CURSES=1 when
 # remote (see dot_config/zsh/environment.sh) and gpg forwards $PINENTRY_USER_DATA
 # through the agent to us. It must be done there, not here, because gpg-agent's
@@ -59,6 +66,20 @@ case "${0##*/}" in
     ;;
 esac
 
+# exec_stock — hand over to whatever pinentry this system ships, and never
+# return. This is the floor of every lane, so it searches rather than guessing:
+# Homebrew on a Mac, the distro path on Linux, and `pinentry` last because there
+# it is usually an alternatives symlink already pointing at the curses build.
+# Absolute paths only — gpg-agent's PATH is not a login shell's.
+exec_stock() {
+  for p in /opt/homebrew/bin/pinentry-curses /usr/local/bin/pinentry-curses \
+    /usr/bin/pinentry-curses /usr/bin/pinentry; do
+    [ -x "$p" ] && exec "$p" "$@"
+  done
+  echo "pinentry-auto: no pinentry found on this system" >&2
+  exit 1
+}
+
 # viewing_over_vnc — true when a macOS Screen Sharing (VNC) client is currently
 # attached. $4 is the local-address column of `netstat -an`; matching the port
 # there (not anywhere on the line) avoids a false positive when this Mac is
@@ -75,19 +96,36 @@ viewing_over_vnc() {
 # AI coding agent gets it in a tmux float, because the agent's pty is a screen
 # nobody is watching (docs/pinentry-ui-design.md).
 #
-# The guard is what makes a staged rollout safe, and it is not a formality:
-# nothing in this repo builds automatically, so a host that has pulled the
-# dotfiles but not run `make -C custom-builds/pinentry-ui install` has no
-# binary here at all. It then signs exactly as it did before any of this
-# existed. That same fall-through is the last line of the blast-radius rule —
-# no front-end may ever become the only way to authenticate.
+# The guard is what makes a staged rollout safe, and it is not a formality: the
+# apply hook that builds pinentry-ui is soft by design — no toolchain, or a
+# compile error, warns and skips — so "dotfiles applied, no binary" stays a
+# perfectly ordinary state of a host. It then signs exactly as it did before any
+# of this existed. That same fall-through is the last line of the blast-radius
+# rule — no front-end may ever become the only way to authenticate.
 case "${PINENTRY_USER_DATA:-}" in
   *USE_CURSES*)
     [ -x "$HOME/.local/libexec/pinentry-ui" ] &&
       exec "$HOME/.local/libexec/pinentry-ui" "$@"
-    exec /opt/homebrew/bin/pinentry-curses "$@"
+    exec_stock "$@"
     ;;
 esac
+
+# Everything below decides between macOS surfaces. Off a Mac there is only one
+# surface, and pinentry-ui already knows what to do with it: draw in the
+# terminal when there is one, fail when there is not.
+#
+# `uname` by absolute path, both of them, for the same reason every other tool
+# here is absolute: gpg-agent's PATH is not a login shell's, and a bare `uname`
+# that fails to run would leave this empty — sending a Mac down the branch that
+# skips Touch ID. Debian merged /bin into /usr/bin, older systems did not.
+for u in /usr/bin/uname /bin/uname; do
+  [ -x "$u" ] && { os=$("$u" -s); break; }
+done
+if [ "${os:-Darwin}" != Darwin ]; then
+  [ -x "$HOME/.local/libexec/pinentry-ui" ] &&
+    exec "$HOME/.local/libexec/pinentry-ui" "$@"
+  exec_stock "$@"
+fi
 
 # Over VNC the question is not "GUI or terminal" — it is "is there a terminal at
 # all", and this script cannot answer that. The `ttyname` arrives over Assuan

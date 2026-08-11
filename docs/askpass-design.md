@@ -277,6 +277,19 @@ reply.
 
 ## Open
 
-Linux. Everything here is macOS-shaped (`pinentry-mac`, the Homebrew paths,
-PAM's Touch ID), and the GUI rung has no Linux answer chosen yet — the same gap
-`pinentry-ui-design.md` records for the pinentry lane.
+The GUI rung on Linux, and only that. Everything else here now runs there: the
+dispatcher gates its macOS tail on `uname`, the stock pinentry is searched for
+rather than assumed to be Homebrew's, the binary is built by the same apply hook
+and the exports were never platform-gated in the first place — they name the
+binary, so they light up the moment it exists.
+
+What is missing is deliberate. A helper that finds no pane falls to
+`pinentry-mac` on a Mac; on a headless Linux host there is nothing to fall to,
+so it fails as it did before any of this existed. Picking GTK or Qt for a
+machine with no desktop would be guessing at a rung nobody can see, and the
+honest failure is better than a dialog drawn where no one is looking — which is
+the exact bug this project started from.
+
+PAM's Touch ID has no Linux equivalent either, which changes the shape of the
+chain rather than breaking it: there is simply no rung above the dialog, so
+every sudo goes to the float.
