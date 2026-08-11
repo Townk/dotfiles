@@ -244,6 +244,10 @@ await_drive() {
   spin::wait $pid "waiting for the ${half} half's bootloader drive…"
   wait $pid || return 1
   DRIVE=$(uf2_drive) || return 1
+  # The spinner's row is gone the instant the poll ends, so say what ended it.
+  # Without this the only evidence the reset was even noticed is the spinner
+  # vanishing, which is indistinguishable from it having died.
+  log_ok "bootloader drive up: ${DRIVE}"
 }
 
 # flash <half> <file> <name>
@@ -255,14 +259,26 @@ flash() {
   # Unmounting is what keeps macOS quiet about the reboot that follows, so it is
   # a hard failure rather than something to shrug off: flashing with the volume
   # still mounted works, but earns the eject warning this exists to avoid.
-  diskutil unmount "$DRIVE" ||
+  #
+  # Behind a spinner because it takes seconds and says nothing until it is done.
+  # It is the first of the two silent stretches between the reset and the first
+  # block landing, and an unbroken spinner across both is what keeps them from
+  # reading as a hang. spin::quiet still surfaces diskutil's output when it
+  # fails, and drops its "Volume … unmounted" line when it does not.
+  spin::quiet "unmounting ${DRIVE:t}…" diskutil unmount "$DRIVE" ||
     die "could not unmount ${DRIVE} — something is holding it open"
 
   # -t uf2 because picotool infers the file type from the EXTENSION, and a
-  # scratch copy is a mktemp name with none. picotool's own progress and
-  # verification are the point, so its output runs live rather than being
-  # captured behind a spinner.
-  picotool load -v -x -t uf2 "$file" || {
+  # scratch copy is a mktemp name with none.
+  #
+  # Streamed rather than run live: opening the PICOBOOT interface is the second
+  # silent stretch, so the spinner covers it and then gets out of the way the
+  # instant picotool speaks — its progress and verification are the point and
+  # nothing is withheld. The progress bar survives the pipe spin::stream mirrors
+  # through: picotool writes each update with an explicit flush and never asks
+  # whether it has a tty (picotool 2.3.0, main.cpp progress_bar::progress).
+  spin::streamed "flashing the ${half} half…" \
+    picotool load -v -x -t uf2 "$file" || {
     notify --icon glyph:nf-md-alert --sound Basso "${half:u} half NOT flashed" \
       >/dev/null 2>&1 || true
     die "picotool could not flash ${name} — double-click RESET on the ${half} half and rerun (the drive is unmounted now, so a rerun needs a fresh reset)"
