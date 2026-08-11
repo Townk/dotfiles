@@ -25,6 +25,12 @@
      resource, so it stays local and is never tracked (the committed
      images.toml.example documents the format). */}}
 .config/packages/images.toml
+{{/* ~/.config/qmk-flash/config.toml is the loose, per-machine default set for
+     `qmk-flash`. It names the ONE machine on this network that builds the
+     firmware, which is a property of where you are sitting rather than of the
+     dotfiles, so it stays local (the committed config.toml.example documents
+     the format). Without it the script reads the firmware off this machine. */}}
+.config/qmk-flash/config.toml
 {{ if ne .chezmoi.os "darwin" -}}
 {{/* trust.json is Homebrew tap-trust state, meaningless off a Mac.
      pinentry-auto and its askpass-auto symlink used to be ignored here too,
@@ -39,6 +45,10 @@
 .local/bin/system-images
 .local/share/zsh/site-functions/_system-images
 .config/packages/images.toml.example
+{{/* qmk-flash flashes RP2040 keyboard halves through picotool and diskutil,
+     neither of which exists off a Mac. */}}
+.local/bin/qmk-flash
+.config/qmk-flash/config.toml.example
 {{/* disk-image-view previews macOS disk images via hdiutil; preview's
      dispatcher already gates on Darwin + executable presence. */}}
 .local/libexec/disk-image-view

@@ -1,0 +1,358 @@
+#!/usr/bin/env zsh
+# qmk-flash — pick up a keyboard half's freshly built firmware and flash it over
+# USB once the half has been dropped into its UF2 bootloader.
+#
+# The successor to the hand-run `wait-until … && scp` snippet. What it adds is
+# mostly about knowing what you are about to flash BEFORE you touch the board:
+# it resolves the NEWEST matching *.uf2 and reports its age (a forgotten rebuild
+# is the failure this catches), then checks the UF2 magic — only then does it ask
+# for the reset. With `both`, the firmware for BOTH halves is resolved and
+# validated up front, so the hands-on part (reset, then swap the USB cables over
+# for the left half) is one uninterrupted stretch with no waiting mixed in.
+#
+# The image is NOT copied onto the bootloader drive. The drive is unmounted and
+# the flash goes over the RP2040's PICOBOOT interface via picotool, which buys
+# two things the file copy could not. It VERIFIES the written flash and returns
+# a status that means something, where a copy could only infer success from the
+# drive disappearing (the bootloader reboots the instant the last UF2 block
+# lands, so the copy itself usually ends in a spurious I/O error). And because
+# nothing is mounted when the board reboots, macOS stops posting "Disk Not
+# Ejected Properly" every single flash — that notification fires only when a
+# MOUNTED volume's device vanishes, which an A/B test on macOS 26.6.1
+# confirmed. The drive is still what we wait for: it is proof the board reached
+# BOOTSEL and that the auto-mount settled, and picotool's own `info` segfaults
+# on this OS version, so it is no use as a probe.
+#
+# The firmware comes from THIS machine by default (host `localhost`), which is
+# the machine that builds it. A machine that flashes a board while building
+# elsewhere says so in its config file — see `--help`. The two paths differ only
+# in how the file is obtained: locally it is globbed and handed straight to
+# picotool, with no ssh hop and no copy.
+#
+# Usage: qmk-flash [left|right|both] [--host HOST] [--dir DIR] [--timeout SECS]
+emulate -L zsh
+set -uo pipefail
+zmodload zsh/datetime
+zmodload -F zsh/stat b:zstat
+
+source "$HOME/.local/lib/common.zsh" || {
+  print -ru2 -- "qmk-flash: cannot source common.zsh"
+  exit 1
+}
+
+# Defaults; config.toml folds over these, and flags over that.
+host=localhost
+firmware_dir=Projects/platforms/keyboards/qmk-config
+timeout=120
+
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/qmk-flash/config.toml"
+
+usage() {
+  cat <<EOF
+Usage: qmk-flash [left|right|both] [--host HOST] [--dir DIR] [--timeout SECS]
+
+Resolve the newest matching firmware and flash it onto the half you reset.
+Halves are flashed in the order given. Defaults to \`right\`, the half normally
+cabled to this machine; \`both\` means right then left, so the wait for the left
+half's drive is where you swap the USB cables over. Flashing the left half is
+only needed for board configuration changes, not for keymaps.
+
+  --host HOST      machine holding the firmware; \`localhost\` (the default)
+                   reads it straight off this machine with no ssh hop
+  --dir DIR        firmware directory, absolute or relative to HOME on whichever
+                   machine --host names
+  --timeout SECS   how long to wait for a bootloader drive
+  -h, --help       show this help
+
+The firmware for a half is the newest file matching *_<half>_*.uf2 in DIR.
+
+Defaults come from \$XDG_CONFIG_HOME/qmk-flash/config.toml when it exists, and
+flags override it. Every key is optional:
+
+    host    = "buildbox.local"
+    dir     = "Projects/keyboards/qmk-config"
+    timeout = 180
+
+Current effective defaults: host=${host} dir=${firmware_dir} timeout=${timeout}
+
+Examples:
+  qmk-flash right
+  qmk-flash both
+  qmk-flash left --timeout 300
+EOF
+}
+
+# --- configuration ----------------------------------------------------------
+
+# config_load — fold config.toml over the built-in defaults. Read through yq+jq
+# exactly as services.toml and images.toml are (system-service-common,
+# system-images), so this repo has ONE config idiom rather than a second
+# hand-rolled parser. A missing file is the normal case: the defaults already
+# describe a machine that builds its own firmware, so only a machine fetching
+# from elsewhere has anything to say. An unknown key is reported rather than
+# ignored — this file is hand-edited, and a silent typo would look like the
+# setting simply not working.
+config_load() {
+  [[ -r "$CONFIG" ]] || return 0
+  require_cmd yq jq
+  local json key val
+  json=$(yq -p toml -o json '.' "$CONFIG" 2>/dev/null) || die "cannot parse ${CONFIG}"
+  while IFS=$'\t' read -r key val; do
+    case "$key" in
+      host) host=$val ;;
+      dir) firmware_dir=$val ;;
+      timeout) timeout=$val ;;
+      *) log_warn "ignoring unknown key in ${CONFIG}: ${key}" ;;
+    esac
+  done < <(jq -r 'to_entries[] | select(.value != null and .value != "")
+                  | "\(.key)\t\(.value)"' <<<"$json")
+}
+
+# --- helpers ----------------------------------------------------------------
+
+# Every ssh/rsync hop runs at LogLevel=ERROR: this host's ssh config sets up a
+# remote forward that the build host often refuses ("Warning: remote port
+# forwarding failed for listen port …"), and that warning is pure noise here —
+# left in, it reads like the transfer failed.
+SSH=(ssh -o LogLevel=ERROR)
+
+is_local() { [[ "$host" == localhost ]] }
+
+# uf2_drive — the mount point of an attached UF2 bootloader drive, if any.
+uf2_drive() {
+  local -a hits=(/Volumes/*/INFO_UF2.TXT(N))
+  (($#hits)) || return 1
+  print -r -- "${hits[1]:h}"
+}
+
+# human_age <epoch> — "just now" / "7m ago" / "3h ago" / "2d ago". Rounded and
+# single-unit on purpose: this answers "is this the build I just made?", and no
+# finer resolution than that changes the decision.
+human_age() {
+  local -i secs=$((EPOCHSECONDS - $1))
+  ((secs < 90)) && {
+    print -r -- "just now"
+    return
+  }
+  ((secs < 5400)) && {
+    print -r -- "$(((secs + 30) / 60))m ago"
+    return
+  }
+  ((secs < 172800)) && {
+    print -r -- "$(((secs + 1800) / 3600))h ago"
+    return
+  }
+  print -r -- "$(((secs + 43200) / 86400))d ago"
+}
+
+# firmware_path — $firmware_dir as an absolute path.
+firmware_path() {
+  case "$firmware_dir" in
+    /*) print -r -- "$firmware_dir" ;;
+    *) print -r -- "$HOME/$firmware_dir" ;;
+  esac
+}
+
+# resolve_local <half> — newest matching .uf2 in the local firmware dir. Sets
+# FW_NAME, FW_EPOCH and FW_LOCAL (the file itself: nothing needs copying).
+resolve_local() {
+  local half=$1 dir
+  dir=$(firmware_path)
+  [[ -d "$dir" ]] || die "no such directory: ${dir}"
+  # (N) nullglob, (.) regular files only, (om) newest first.
+  local -a hits=("$dir"/*_${half}_*.uf2(N.om))
+  (($#hits)) || die "no ${half}-half firmware (*_${half}_*.uf2) in ${dir}"
+  FW_LOCAL=${hits[1]}
+  FW_NAME=${FW_LOCAL:t}
+  FW_EPOCH=$(zstat +mtime -- "$FW_LOCAL")
+}
+
+# resolve_remote <half> — same, over ssh. Sets FW_NAME and FW_EPOCH.
+resolve_remote() {
+  local half=$1 line rc=0
+  # Filtered with grep rather than a remote glob: the build host's login shell
+  # is zsh, where an unmatched glob is an error raised BEFORE ls runs — so `ls
+  # … 2>/dev/null` cannot swallow it and "no matches found" leaks into our own
+  # error path. Listing the directory and filtering never expands a pattern.
+  line=$("${SSH[@]}" "$host" "cd ${(q)firmware_dir} 2>/dev/null || exit 3
+f=\$(ls -t | grep -E '_${half}_.*[.]uf2\$' | head -1)
+[ -n \"\$f\" ] || exit 4
+printf '%s\t%s\n' \"\$(date -r \"\$f\" +%s)\" \"\$f\"") || rc=$?
+  case $rc in
+    0) ;;
+    3) die "no such directory on ${host}: ${firmware_dir}" ;;
+    4) die "no ${half}-half firmware (*_${half}_*.uf2) in ${host}:${firmware_dir}" ;;
+    *) die "cannot reach ${host} (ssh exit ${rc})" ;;
+  esac
+  FW_EPOCH=${line%%$'\t'*}
+  FW_NAME=${line#*$'\t'}
+}
+
+# pull_remote — copy the resolved remote file into this run's scratch dir (which
+# common.zsh sweeps on exit). Sets FW_LOCAL.
+pull_remote() {
+  FW_LOCAL=$(common::tmpfile) || die "cannot create a scratch file"
+  # -s (--protect-args) so the remote shell never re-splits the name.
+  rsync -s -e "${SSH[*]}" --info=progress2 --human-readable -- \
+    "${host}:${firmware_dir}/${FW_NAME}" "$FW_LOCAL" ||
+    die "could not fetch ${FW_NAME} from ${host}"
+}
+
+# check_uf2 — "UF2\n" + the 0x9E5D5157 second magic word. Checked before the
+# board is ever put into bootloader mode, and before picotool is asked to parse
+# it: a truncated or wrong-format file should cost a diagnostic, not a reset.
+check_uf2() {
+  [[ $(head -c 8 -- "$FW_LOCAL" | xxd -p) == 5546320a57515d9e ]] ||
+    die "${FW_NAME} is not a UF2 image (bad magic) — refusing to flash it"
+}
+
+# fetch <half> — make this half's firmware available locally and validate it.
+# Sets FW_NAME and FW_LOCAL.
+fetch() {
+  local half=$1
+  if is_local; then
+    resolve_local "$half"
+  else
+    resolve_remote "$half"
+  fi
+  log_info "${half}: ${C_BWH}${FW_NAME}${C_RES} ${C_DIM}(built $(human_age "$FW_EPOCH"))${C_RES}"
+  is_local || pull_remote
+  check_uf2
+}
+
+# await_drive <half> — the reset prompt and the bounded wait for the drive.
+# Sets DRIVE; rc 1 on timeout. The poll runs in a subshell so the spinner can
+# animate in this one (spin::wait needs a pid, poll::until has no output of its
+# own); DRIVE is a global rather than stdout because log_info writes to stdout
+# too and a `$(…)` capture here would swallow the narration.
+await_drive() {
+  local half=$1 pid
+  if DRIVE=$(uf2_drive); then
+    log_info "bootloader drive already mounted: ${DRIVE}"
+    return 0
+  fi
+
+  print
+  print -r -- "  ${C_BWH}Double-click the RESET button on the ${half:u} half.${C_RES}"
+  print -r -- "  ${C_DIM}Flashing starts on its own the moment the bootloader drive appears.${C_RES}"
+  print
+  notify --icon glyph:nf-md-gesture_double_tap --sound Tink \
+    "Double-click RESET on the ${half:u} half" >/dev/null 2>&1 || true
+
+  (poll::until "$timeout" 0.4 uf2_drive >/dev/null) &
+  pid=$!
+  spin::wait $pid "waiting for the ${half} half's bootloader drive…"
+  wait $pid || return 1
+  DRIVE=$(uf2_drive) || return 1
+}
+
+# flash <half> <file> <name>
+flash() {
+  local half=$1 file=$2 name=$3
+  await_drive "$half" ||
+    die "no bootloader drive appeared within ${timeout}s — is the ${half} half plugged in?"
+
+  # Unmounting is what keeps macOS quiet about the reboot that follows, so it is
+  # a hard failure rather than something to shrug off: flashing with the volume
+  # still mounted works, but earns the eject warning this exists to avoid.
+  diskutil unmount "$DRIVE" ||
+    die "could not unmount ${DRIVE} — something is holding it open"
+
+  # -t uf2 because picotool infers the file type from the EXTENSION, and a
+  # scratch copy is a mktemp name with none. picotool's own progress and
+  # verification are the point, so its output runs live rather than being
+  # captured behind a spinner.
+  picotool load -v -x -t uf2 "$file" || {
+    notify --icon glyph:nf-md-alert --sound Basso "${half:u} half NOT flashed" \
+      >/dev/null 2>&1 || true
+    die "picotool could not flash ${name} — double-click RESET on the ${half} half and rerun (the drive is unmounted now, so a rerun needs a fresh reset)"
+  }
+
+  log_ok "${half} half flashed and verified — rebooted into ${name}"
+  notify --icon glyph:nf-md-check --sound Glass "${half:u} half flashed" \
+    >/dev/null 2>&1 || true
+}
+
+# --- arguments --------------------------------------------------------------
+
+# The config is read BEFORE help is answered, because usage() reports the
+# effective defaults and a help screen that misreports the host it will actually
+# use is worse than one that fails: an unparseable config then says so by name,
+# which is the thing you needed to know anyway.
+config_load
+
+{ is_help "${1:-}" || args_contain_help "$@" } && {
+  usage
+  exit 0
+}
+
+halves=()
+while (($#)); do
+  case "$1" in
+    left | l)
+      halves+=(left)
+      shift
+      ;;
+    right | r)
+      halves+=(right)
+      shift
+      ;;
+    both | all)
+      halves=(right left)
+      shift
+      ;;
+    --host)
+      [[ -n ${2:-} ]] || die "--host needs a value"
+      host=$2
+      shift 2
+      ;;
+    --host=*)
+      host=${1#--host=}
+      shift
+      ;;
+    --dir)
+      [[ -n ${2:-} ]] || die "--dir needs a value"
+      firmware_dir=$2
+      shift 2
+      ;;
+    --dir=*)
+      firmware_dir=${1#--dir=}
+      shift
+      ;;
+    --timeout)
+      [[ -n ${2:-} ]] || die "--timeout needs a value"
+      timeout=$2
+      shift 2
+      ;;
+    --timeout=*)
+      timeout=${1#--timeout=}
+      shift
+      ;;
+    *)
+      log_error "unknown argument: $1"
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ $timeout == <-> ]] || die "--timeout takes whole seconds, got: ${timeout}"
+((${#halves})) || halves=(right)
+
+require_cmd picotool diskutil xxd
+is_local || require_cmd ssh rsync
+
+# --- run --------------------------------------------------------------------
+
+# Resolve everything first: nothing asks for a button press until every image is
+# on this machine and known good.
+typeset -A fw_file fw_name
+for half in $halves; do
+  fetch "$half"
+  fw_file[$half]=$FW_LOCAL
+  fw_name[$half]=$FW_NAME
+done
+
+for half in $halves; do
+  flash "$half" "${fw_file[$half]}" "${fw_name[$half]}"
+done

@@ -1,0 +1,31 @@
+# qmk-flash config — the defaults `qmk-flash` starts from. Flags override it.
+#
+# This is an EXAMPLE. The real file lives at ~/.config/qmk-flash/config.toml and
+# is LOCAL-ONLY: it is chezmoiignored and never committed, because it names ONE
+# specific machine on ONE network. Which box builds the firmware is a property
+# of where you are sitting, not of the dotfiles — same loose-layer pattern as
+# ~/.config/packages/images.toml and ~/.ssh/config.
+#
+# Only a machine that flashes boards WITHOUT building the firmware needs this
+# file at all; the built-in defaults already describe a machine that does both:
+#   cp ~/.config/qmk-flash/config.toml.example ~/.config/qmk-flash/config.toml
+#   $EDITOR ~/.config/qmk-flash/config.toml   # point `host` at the build machine
+#   qmk-flash --help                          # prints the effective defaults
+#
+# Every key is optional and an omitted one keeps the built-in default. An
+# unknown key is reported rather than ignored, so a typo in a hand-edited file
+# cannot masquerade as the setting quietly having no effect.
+#
+#   host     machine holding the built firmware. The default, "localhost", reads
+#            it straight off this machine — no ssh hop, no copy, the file goes
+#            directly to picotool. Any other value is an ssh destination, so a
+#            Host alias from ~/.ssh/config works.
+#   dir      firmware directory, absolute or relative to HOME on whichever
+#            machine `host` names.
+#            Default: "Projects/platforms/keyboards/qmk-config".
+#   timeout  seconds to wait for a half's UF2 bootloader drive after the reset
+#            prompt. Default: 120.
+
+host = "buildbox.local"
+# dir     = "Projects/keyboards/qmk-config"
+# timeout = 180

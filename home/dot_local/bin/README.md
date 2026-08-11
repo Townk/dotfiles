@@ -105,6 +105,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 | Orchestration | `system-update` | — |
 | Notifications | `notify` | `common.zsh` (the `notify` primitive) |
 | Clipboard | `pbcopy`, `pbpaste` | — (standalone POSIX `sh`) |
+| Keyboard firmware | `qmk-flash`¹ | `common.zsh` |
 | Utility | `wait-until` | — (standalone POSIX `sh`) |
 
 ¹ macOS-only; excluded from other hosts via `.chezmoiignore.tmpl`.
@@ -153,6 +154,26 @@ sitting at the Mac or SSH'd into a remote host, and they shadow the real
 Standalone POSIX `sh`, no library sourcing — same "dependency-free
 primitive" rationale as `wait-until`, since these need to work from any
 caller (editors, git, other scripts) with zero fragile dependencies.
+
+## `qmk-flash`
+
+Flashes a keyboard half's freshly built firmware onto its RP2040:
+
+```sh
+qmk-flash [left|right|both] [--host HOST] [--dir DIR] [--timeout SECS]
+```
+
+It resolves the newest `*_<half>_*.uf2`, reports its age (a forgotten rebuild is
+the failure that catches), checks the UF2 magic, and only then asks for the
+double-click on RESET. The image is not copied onto the bootloader drive: the
+drive is unmounted and `picotool` writes over PICOBOOT, which verifies the flash
+and stops macOS posting "Disk Not Ejected Properly" on every write. With `both`,
+both images are validated up front so the hands-on part (reset, then swap the USB
+cables for the left half) runs uninterrupted.
+
+The firmware comes off this machine by default. A machine that flashes boards
+without building them points `host` at the build machine in the loose
+`~/.config/qmk-flash/config.toml` (see `config.toml.example`); flags override it.
 
 ## `wait-until`
 
