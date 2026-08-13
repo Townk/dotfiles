@@ -28,5 +28,9 @@ mlx-vlm --python 3.13
 huggingface-hub
 {{- end }}
 rich-cli --with catppuccin[pygments]
+# ansible-core — drives the fleet repo's playbooks (~/Projects/platforms/fleet).
+# Core (not the `ansible` bundle): ansible-playbook is a core entry point and
+# the fleet playbooks use only ansible.builtin.
+ansible-core
 
 # vim:ft=conf.gotmpl
