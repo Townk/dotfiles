@@ -391,6 +391,26 @@ EOF
   } >"$frag"
 }
 
+# sec::shell_reload_hint — say how to get a just-rendered fragment into the shell
+# the operator is standing in. Rewriting ~/.config/zsh/secrets.d/<slot>.sh cannot
+# change the environment of the shell that ran us (we are its child), and the
+# fragment is sourced exactly once, at startup: .zshenv -> environment.sh ->
+# secrets.sh. So that session keeps the old values until it re-sources — which
+# surprises you precisely when you just added a secret in order to use it.
+#
+# Names the loader rather than saying "restart your shell": re-sourcing is
+# idempotent (the fragment is plain `export NAME=value`) and keeps the session.
+#
+# Silent when the caller has already committed to reloading for us — the zsh
+# front-end in functions.d/system-secrets.sh sets SYSTEM_SECRETS_SHELL_RELOAD
+# before invoking the binary and re-sources on its own afterwards. Two
+# contradictory messages would be worse than neither.
+sec::shell_reload_hint() {
+  if [[ -z "${SYSTEM_SECRETS_SHELL_RELOAD:-}" ]]; then
+    log_info "run '. ~/.config/zsh/secrets.sh' to load it into this shell (new shells get it automatically)"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # 1Password helpers (human machines). PROVISIONING (create/edit the backing
 # items here) uses the same auth split as RESOLUTION (`op read` at apply): the
