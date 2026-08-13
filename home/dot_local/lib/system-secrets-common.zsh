@@ -838,7 +838,8 @@ sec::materialize_secret() {
     chmod 0600 "$plain"
     sec::arm_plain_scrub "$plain"
     prompt::secret val "  $name — $(sec::manifest_prompt "$name") (headless slot $slot):"
-    sec::arm_plain_scrub "$plain"   # re-arm: prompt::secret cleared the traps
+    sec::arm_plain_scrub "$plain" # re-arm: prompt::secret's local_traps restored
+    # the caller's dispositions on return, and its own EXIT handler ran here
     printf 'export %s=%s\n' "$name" "${(qq)val}" >"$plain"
     val=""
     mkdir -p "$(sec::blob_dir "$slot")"

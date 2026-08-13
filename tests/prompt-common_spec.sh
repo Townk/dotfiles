@@ -17,9 +17,10 @@ Describe 'prompt-common.zsh'
     # synchronously against a process we control, no timing sleep.
     #
     # (EXIT is also trapped for the same restore, but a per-function EXIT trap
-    # fires at shell-exit when the function's locals are gone, so it is neither
-    # visible in a nested `trap` dump nor able to expand `$__saved`; the signal
-    # dispositions are what actually restore the tty on kill/timeout.)
+    # fires when the function returns, in the caller's environment, so it is not
+    # visible in this nested `trap` dump; the signal dispositions are what
+    # restore the tty on kill/timeout. The EXIT handler running with the locals
+    # gone is what the `set -eu` block below covers.)
 
     setup() {
       TEST_TMP="$(mktemp -d)"
@@ -65,10 +66,69 @@ Describe 'prompt-common.zsh'
       The output should include "TERM"
       The output should include "HUP"
       The output should include "QUIT"
-      # Each disposition restores the saved termios (bodies stored unexpanded).
-      The output should include 'stty "$__saved"'
+      # Each disposition restores the saved termios. The bodies carry the modes
+      # token expanded in at trap-set time, so a handler that runs after the
+      # function's locals are gone still restores (see the set -eu block below).
+      The output should include 'stty SAVEDMODES'
       # A real SIGTERM at the masked prompt ran the restore (the reported bug).
       The output should include "RESTORE-CALLED"
+    End
+  End
+
+  Describe 'prompt::secret under set -eu (regression)'
+    # zsh runs a trap set on EXIT *inside a function* when that function returns,
+    # in the CALLER's environment — where prompt::secret's `local __saved` no
+    # longer exists. While the restore bodies were stored unexpanded, that made
+    # the EXIT handler expand an unset parameter; under the `set -eu` every
+    # ~/.local/bin script runs with, this aborted the caller mid-flow with
+    #   <caller>:<line>: __saved: parameter not set
+    # and the caller's next statement never ran. Reported from `system-secrets
+    # add`, which died right after the masked prompt (sec::op_set_field:21) with
+    # the value collected but never written.
+    #
+    # Drive the real shape: `set -eu -o pipefail`, prompt::secret called FROM a
+    # function, normal return, on a pty. Assert the caller resumed with the value
+    # AND the script ran to completion.
+    setup() {
+      TEST_TMP="$(mktemp -d)"
+      inner="$TEST_TMP/inner.zsh"
+      runner="$TEST_TMP/runner.zsh"
+      {
+        printf 'set -eu -o pipefail\n'
+        printf 'source "%s/home/dot_local/lib/prompt-common.zsh"\n' "$SHELLSPEC_PROJECT_ROOT"
+        printf 'have_tty() { return 0; }\n'
+        printf 'stty() { case "$1" in -g) print -r -- SAVEDMODES ;; *) return 0 ;; esac }\n'
+        printf 'caller_fn() {\n'
+        printf '  local v\n'
+        printf '  prompt::secret v "Secret:"\n'
+        printf '  print -r -- "CALLER_RESUMED[$v]"\n'
+        printf '}\n'
+        printf 'caller_fn\n'
+        printf 'print -r -- "SCRIPT_COMPLETED"\n'
+      } > "$inner"
+      # Unlike the blocks above (which assert on files the stty stub writes),
+      # this one asserts on what the session itself emitted — the caller's own
+      # output and the absence of the nounset error — so the reader loop has to
+      # forward the pty stream to stdout instead of discarding it.
+      {
+        printf 'zmodload zsh/zpty || exit 3\n'
+        printf 'zpty T "zsh -f %s"\n' "$inner"
+        printf 'zpty -w T "hunter2"\n'
+        printf 'zpty -w -n T $'"'"'\\n'"'"'\n'
+        printf 'while zpty -r T _l; do print -rn -- "$_l"; done\n'
+        printf 'zpty -d T 2>/dev/null\n'
+      } > "$runner"
+    }
+    cleanup() { rm -rf "$TEST_TMP"; }
+    BeforeEach 'setup'
+    AfterEach 'cleanup'
+
+    It 'returns to the caller without tripping nounset on the restore trap'
+      When run timeout 10 zsh -f "$runner"
+      The status should be success
+      The output should not include "parameter not set"
+      The output should include "CALLER_RESUMED[hunter2]"
+      The output should include "SCRIPT_COMPLETED"
     End
   End
 

@@ -76,8 +76,18 @@ prompt::secret() {
   # the user to blind-type `stty sane`. INT additionally reports the abort; the
   # other dispositions restore without dying so they don't clobber a normal
   # return's value (local_traps above restores the caller's dispositions on return).
-  trap 'stty "$__saved" </dev/tty 2>/dev/null; printf "\n" >/dev/tty; die "input aborted"' INT
-  trap 'stty "$__saved" </dev/tty 2>/dev/null' EXIT TERM HUP QUIT
+  #
+  # The saved modes are expanded into the handler bodies HERE, at trap-set time,
+  # rather than left as a `$__saved` the handler resolves when it fires. zsh runs
+  # an EXIT trap set inside a function when that function RETURNS, in the caller's
+  # environment — where this `local` is already gone, so a late-resolving body
+  # expands an unset parameter and, under the `set -eu` every ~/.local/bin script
+  # runs with, kills the caller right after the prompt. Expanding now also keeps
+  # the handlers correct on the other unwind paths (a `set -e` failure or `die`
+  # inside the loop below), where the local is likewise out of scope.
+  local __restore="stty ${(q)__saved} </dev/tty 2>/dev/null"
+  trap "$__restore"'; printf "\n" >/dev/tty; die "input aborted"' INT
+  trap "$__restore" EXIT TERM HUP QUIT
   while :; do
     printf '%s%s%s ' "$C_BWH" "$__prompt" "$C_RES" >/dev/tty
     __val=""
