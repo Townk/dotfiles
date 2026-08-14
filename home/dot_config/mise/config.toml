@@ -13,6 +13,15 @@ python = "latest"
 rust = [{ version = "latest", components = "rust-analyzer,rust-src,rustfmt,clippy" }, "nightly"]
 
 # Tools
+# aws-cli is v2 here, and mise is the only backend that gets us v2 cleanly.
+# PyPI ships v1 only (`awscli` 1.x), so the Uvfile can't reach v2 at all; the
+# `awscli` brew formula IS v2 but builds against a brew `python@` keg, which
+# BREW_MISE_PATTERN exists to keep out of the Cellar. mise's aqua backend
+# downloads AWS's own official AWSCLIV2-<version>.pkg and unpacks its payload
+# rather than running `installer -pkg` — so we get AWS's self-contained build
+# (bundled interpreter, SSO/IAM Identity Center) with no sudo, nothing under
+# /usr/local, and no shared Python. Versions track aws/aws-cli git tags.
+aws-cli = "latest"
 cargo-binstall = "latest"  # prebuilt-binary installer; lets the Cargofile worker skip source builds
 # cmake is OS-specific — see conf.d/cmake.toml.tmpl (source build on macOS,
 # prebuilt binary elsewhere).

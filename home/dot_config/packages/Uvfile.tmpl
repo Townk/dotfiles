@@ -33,4 +33,8 @@ rich-cli --with catppuccin[pygments]
 # the fleet playbooks use only ansible.builtin.
 ansible-core
 
+# No awscli here: PyPI's `awscli` is v1 only (1.x) and we need v2's SSO / IAM
+# Identity Center auth. It's declared in dot_config/mise/config.toml instead —
+# see the comment there for why mise rather than brew.
+
 # vim:ft=conf.gotmpl
