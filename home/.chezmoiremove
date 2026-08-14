@@ -184,3 +184,10 @@ README.md
 # the protocol itself and draws its own dialog, so the filter and its watcher
 # are gone. pinentry-mux-popup stays: opening the float was never the problem.
 .local/libexec/pinentry-mux
+
+# ── git identity refactor: personal-identity.config → config.d/personal.config ─
+# The identity include moved into ~/.config/git/config.d/ so the main config
+# carries no identity at all (work boxes get a local, unmanaged work.config).
+# The old target was applied on every host and is ignored nowhere, so this
+# entry fires everywhere exactly once.
+.config/git/personal-identity.config

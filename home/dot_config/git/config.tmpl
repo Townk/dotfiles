@@ -1,9 +1,33 @@
 {{- $p := index .theme.palettes .theme.active -}}
 {{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- $workBox := eq .profile "work" "dev-shell" }}
+; Identity lives in ~/.config/git/config.d/, never in this (public) file.
+{{- if $workBox }}
+; Work boxes (work laptop, dev-shell): the work identity comes from
+; config.d/work.config, a local operator-written file chezmoi never manages
+; (.cursor/rules/no-company-info.mdc). If it is missing, useConfigOnly turns
+; the first commit into a loud "tell me who you are" error instead of a
+; silent fallback to a guessed identity.
 [user]
-  name = Thiago Alves
-  email = thiago@rapinialves.com
-  signingKey = A9C4A3D8CA995D91
+  useConfigOnly = true
+
+[include]
+  path = ~/.config/git/config.d/work.config
+{{- else }}
+; Personal boxes: the personal identity applies everywhere by default.
+[include]
+  path = ~/.config/git/config.d/personal.config
+{{- end }}
+
+; Personal repos stay personal on ANY box, keyed off the configured remote
+; URL — matched literally, before insteadOf rewriting, hence the gh:/ form.
+; These sit after the work include so they win inside personal clones.
+[includeIf "hasconfig:remote.*.url:git@github.com:Townk/**"]
+  path = ~/.config/git/config.d/personal.config
+[includeIf "hasconfig:remote.*.url:https://github.com/Townk/**"]
+  path = ~/.config/git/config.d/personal.config
+[includeIf "hasconfig:remote.*.url:gh:/**"]
+  path = ~/.config/git/config.d/personal.config
 
 [core]
   whitespace = trailing-space,space-before-tab
@@ -109,9 +133,6 @@
 [branch]
   sort = -committerdate
 
-[github]
-  user = Townk
-
 [rerere]
   enabled = true
   autoupdate = true
@@ -175,16 +196,6 @@
 
 [url "https://gist.github.com/"]
   insteadOf = gist:
-
-[include]
-    path = ~/.config/git/config.d/work.config
-
-; The loose work.config above sets the work identity globally on work boxes.
-; Re-assert the personal identity for THIS public dotfiles repo so commits never
-; carry a corporate email/username (see .cursor/rules/no-company-info.mdc). The
-; gitdir scope means every other repo keeps the work identity from work.config.
-[includeIf "gitdir:~/.local/share/chezmoi/"]
-    path = ~/.config/git/personal-identity.config
 
 [alias]
   changes = log --pretty=oneline --abbrev-commit --graph --decorate @{u}..HEAD
