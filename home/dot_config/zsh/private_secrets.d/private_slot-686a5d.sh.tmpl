@@ -6,5 +6,4 @@
        headless hosts. Each blob decrypts to a single `export NAME=value`. */ -}}
 {{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d" "ATLASSIAN_API_TOKEN.sops.sh") }}
 {{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d" "CONTEXT7_API_KEY.sops.sh") }}
-{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d" "GH_TOKEN.sops.sh") }}
 {{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-686a5d" "MISE_GITHUB_TOKEN.sops.sh") }}
