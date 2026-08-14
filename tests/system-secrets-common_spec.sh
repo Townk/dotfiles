@@ -378,4 +378,46 @@ INNER
       The stderr should include 'leak patterns'
     End
   End
+
+  # The callers (system-secrets, system-onboard) run under `set -o pipefail`,
+  # where `<producer> | grep -q` fails the whole pipeline when grep exits on an
+  # early match and SIGPIPEs the producer. The FIRST manifest entry is the
+  # worst case: grep quits on line one while yq still has the rest to write —
+  # observed as `rotate MISE_GITHUB_TOKEN` "does not require; skipping".
+  # sec::manifest_requires must therefore answer without a pipeline.
+  Describe 'sec::manifest_requires'
+    many_manifest() {
+      {
+        print -r -- 'secrets:'
+        print -r -- '  - name: FIRST_TOKEN'
+        print -r -- '    prompt: first'
+        print -r -- '    requiredFor: [personal, work]'
+        local i
+        for i in {1..15}; do
+          print -r -- "  - name: FILLER_$i"
+          print -r -- "    prompt: filler"
+          print -r -- "    requiredFor: [personal]"
+        done
+      } >"$MANIFEST"
+    }
+
+    It 'passes for the first manifest entry under pipefail'
+      many_manifest
+      set -o pipefail
+      When call sec::manifest_requires personal FIRST_TOKEN
+      The status should be success
+    End
+
+    It 'fails for a name the profile does not require'
+      many_manifest
+      When call sec::manifest_requires dev-shell FIRST_TOKEN
+      The status should be failure
+    End
+
+    It 'fails for a name absent from the manifest'
+      many_manifest
+      When call sec::manifest_requires personal NO_SUCH_SECRET
+      The status should be failure
+    End
+  End
 End

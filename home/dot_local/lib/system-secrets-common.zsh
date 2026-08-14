@@ -62,6 +62,17 @@ sec::manifest_names_for_profile() {
     "$MANIFEST"
 }
 
+# sec::manifest_requires <profile> <name> — 0 iff <name>'s requiredFor
+# includes <profile>. Deliberately pipe-free: callers run under
+# `set -o pipefail`, where `<producer> | grep -q` fails the whole pipeline
+# when grep exits on an early match and SIGPIPEs the producer — the FIRST
+# manifest entry could never rotate.
+sec::manifest_requires() {
+  local -a _names
+  _names=("${(@f)$(sec::manifest_names_for_profile "$1")}")
+  (( ${_names[(Ie)$2]} ))
+}
+
 # sec::manifest_prompt <name> — the human prompt for a secret.
 sec::manifest_prompt() {
   sec::manifest_check
@@ -297,9 +308,14 @@ sec::sops_recipient_for_slot() {
     printf ''
     return 0
   }
-  rn="secrets/${1}/.*\\.sops\\.sh\$" ro="secrets/${1}\\.sops\\.sh\$" yq -r \
+  # Capture, then take the first line — `| head -n1` would SIGPIPE yq on a
+  # second match (legacy + dir-wide rule both present) and, under the callers'
+  # `set -eu -o pipefail`, kill the whole run from inside an assignment.
+  local -a _ages
+  _ages=("${(@f)$(rn="secrets/${1}/.*\\.sops\\.sh\$" ro="secrets/${1}\\.sops\\.sh\$" yq -r \
     '(.creation_rules // [])[] | select(.path_regex == strenv(rn) or .path_regex == strenv(ro)) | .age' \
-    "$SOPS_YAML" 2>/dev/null | head -n1
+    "$SOPS_YAML" 2>/dev/null)}")
+  printf '%s' "${_ages[1]:-}"
 }
 
 # sec::sops_encrypt <recipient> <plaintext_file> <blob_path>
@@ -708,7 +724,9 @@ $ident"
   [[ -n "${haystack//[[:space:]]/}" ]] || return 0
   while IFS= read -r pat; do
     case "$pat" in '' | \#*) continue ;; esac
-    if printf '%s\n' "$haystack" | grep -iEq -- "$pat"; then
+    # Herestring, not a pipe: grep -q's early exit would SIGPIPE the printf
+    # side and fail the pipeline under the callers' `set -o pipefail`.
+    if grep -iEq -- "$pat" <<<"$haystack"; then
       hits="$hits  - $pat"$'\n'
     fi
   done <"$LEAK_PATTERNS"
@@ -840,7 +858,7 @@ sec::materialize_secret() {
   profile="$(sec::map_get "$slot" profile)"
   [[ -n "$kind" && -n "$profile" ]] ||
     die "slot $slot is not in the operator map (run system-onboard first)"
-  sec::manifest_names_for_profile "$profile" | grep -Fxq "$name" ||
+  sec::manifest_requires "$profile" "$name" ||
     die "'$name' is not required for profile '$profile' (slot $slot)"
 
   if [[ "$kind" == headless ]]; then
