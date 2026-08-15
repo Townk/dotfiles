@@ -304,10 +304,18 @@ job::watch() {
   fi
   [ -n "$id" ] || { log_error "job::watch: id required"; return 1; }
 
-  # Float dispatch: no --inline AND we are inside a mux session (env-only
-  # detection — no shelling out to probe). Re-enter through the CLI front-end
-  # inside the popup with --inline --in-float so the confirm switch (below)
-  # knows to skip mux::confirm's own float attempt.
+  # Float dispatch: no --inline AND we are inside tmux (env-only detection —
+  # no shelling out to probe). Re-enter through the CLI front-end inside the
+  # popup with --inline --in-float so the confirm switch (below) knows to
+  # skip mux::confirm's own float attempt.
+  #
+  # tmux-only, deliberately: mux-modal's zellij arm is a float CONSUMER, not
+  # a float SPAWNER — zellij-modal expects to already BE inside a
+  # keybind-spawned floating pane. Gating on ZELLIJ too meant a bare zellij
+  # shell (no floating pane) flooded the CURRENT pane with modal chrome
+  # instead of falling back to the validated inline viewer. Zellij float
+  # support (spawning the floating pane from here, the way tmux's
+  # display-popup does) is an explicit follow-up.
   #
   # Env-forwarding constraint: mux-modal's tmux path (`display-popup -E`)
   # forwards only COLORTERM/TMUX_PANE, and tmux runs the popup command from
@@ -320,7 +328,7 @@ job::watch() {
   # scratch tmux socket started AFTER the override, never against an
   # already-running (and already-launched) tmux server — see the
   # never-probe-the-live-server house rule.
-  if ((!inline)) && { [ -n "${TMUX:-}" ] || [ -n "${ZELLIJ:-}" ]; }; then
+  if ((!inline)) && [ -n "${TMUX:-}" ]; then
     local modal="${JOB_MUX_MODAL_BIN:-$HOME/.config/mux/scripts/mux-modal}"
     "$modal" --width 80% --height 60% --title "Job runner" -- \
       "$HOME/.local/libexec/job" watch --inline --in-float "$id" >&2

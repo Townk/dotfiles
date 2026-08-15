@@ -479,6 +479,35 @@ EOF
       When call dispatch
       The output should equal 'rc=0|match=yes|calls=1|follow=0'
     End
+
+    # Controller ruling (final fix wave): mux-modal's zellij arm is a float
+    # CONSUMER, not a float SPAWNER — zellij-modal expects to already BE
+    # inside a keybind-spawned floating pane. Gating the dispatch on ZELLIJ
+    # too (as tmux is) meant a bare zellij shell had no floating pane to be
+    # inside, so the modal flooded the CURRENT pane with chrome instead.
+    # Zellij float support is an explicit follow-up; until then, ZELLIJ alone
+    # must fall back to the SAME inline loop the no-mux case uses.
+    It 'zellij alone never floats — falls back to the inline loop (gate is tmux-only)'
+      zellij_fallback() {
+        id=$(run_job job::start --title "Z" -- sleep 9) || return 1
+        local modal_log="$JOB_SANDBOX/modal.log"
+        cat > "$JOB_SANDBOX/modal" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$modal_log"
+exit 0
+EOF
+        chmod +x "$JOB_SANDBOX/modal"
+        ZELLIJ=1 JOB_MUX_MODAL_BIN="$JOB_SANDBOX/modal" \
+          JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
+          run_job job::watch "$id" </dev/null 2>"$JOB_SANDBOX/zellij.err"
+        rc=$?
+        printf 'rc=%s|modal_calls=%s|follow=%s' "$rc" \
+          "$([ -f "$modal_log" ] && wc -l <"$modal_log" | tr -d ' ' || echo 0)" \
+          "$(grep -c '^follow 7$' "$JOB_FAKE_LOG")"
+      }
+      When call zellij_fallback
+      The output should equal 'rc=0|modal_calls=0|follow=1'
+    End
   End
 
   Describe 'job::watch --latest'
