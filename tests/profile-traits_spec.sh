@@ -220,11 +220,10 @@ Describe 'secrets.yaml server requiredFor'
       "$MANIFEST" | sort
   }
 
-  It 'grants server exactly MISE_GITHUB_TOKEN, CONTEXT7_API_KEY, GH_TOKEN'
+  It 'grants server exactly MISE_GITHUB_TOKEN and CONTEXT7_API_KEY'
     When call server_secrets
     The status should be success
     The output should equal "CONTEXT7_API_KEY
-GH_TOKEN
 MISE_GITHUB_TOKEN"
   End
 End
