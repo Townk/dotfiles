@@ -197,26 +197,21 @@ job::_watch_header() {
   print -rn -- "$label [$(job::_watch_bar "$pct")] $pctText ${elapsed}s — q/ESC detach · ^C cancel"
 }
 
-# job::_watch_confirm_cancel <id> <title> — the Ctrl+C flow: a themed
-# confirm (danger palette), and only an explicit yes cancels. rc 0 = the
-# job WAS cancelled, rc 1 = declined (caller resumes viewing). JOB_GUM_BIN
-# is the test seam; theme-common is pulled lazily the way notify pulls its
-# bridge libs, and its absence degrades to an unthemed gum, never a crash.
+# job::_watch_confirm_cancel <id> <title> — the Ctrl+C flow, routed through
+# the house dialog layer: mux::confirm floats the themed danger-palette
+# confirm in a mux popup when inside a session, or degrades to the inline
+# input::confirm otherwise. Fail-closed — ANY non-zero rc (declined,
+# unrenderable, or the 130 ESC-cancel) means "do not cancel". rc 0 = the
+# job WAS cancelled, rc 1 = declined/resume (caller keeps watching).
+# mux.zsh is pulled in lazily, the way notify pulls its bridge libs; an
+# unreadable lib degrades to a safe decline, never a crash.
 job::_watch_confirm_cancel() {
-  local id="$1" title="$2" gum
-  gum="${JOB_GUM_BIN:-$(command -v gum 2>/dev/null)}"
-  [ -n "$gum" ] || return 1
-  if [ -r "${${(%):-%x}:A:h}/theme-common.zsh" ]; then
-    source "${${(%):-%x}:A:h}/theme-common.zsh" 2>/dev/null \
-      && theme::gum_confirm_env --role danger 2>/dev/null
-  fi
-  # /dev/tty only when one exists — the spec suite has none, and a failed
-  # redirect would make the confirm unreachable rather than unthemed.
-  if have_tty; then
-    "$gum" confirm "Cancel ${title}?" </dev/tty >/dev/tty 2>&1 || return 1
-  else
-    "$gum" confirm "Cancel ${title}?" || return 1
-  fi
+  local id="$1" title="$2"
+  local muxlib="${${(%):-%x}:A:h}/mux.zsh"
+  [ -r "$muxlib" ] || return 1
+  source "$muxlib" 2>/dev/null || return 1
+  mux::confirm "Cancel ${title}?" --title "Job runner" --danger \
+    --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
   job::cancel "$id" >/dev/null 2>&1
   return 0
 }

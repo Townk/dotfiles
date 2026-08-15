@@ -320,27 +320,64 @@ EOF
     End
   End
 
+  # mux::confirm is the house dialog layer (ask/ai-playbook floated in a mux
+  # popup inside a session, inline input::confirm otherwise). The sandbox
+  # here has no TMUX/ZELLIJ, so mux::confirm takes the inline input::confirm
+  # path, which shells out to ai-playbook — AI_PLAYBOOK_INPUT_BIN is its
+  # documented test seam (input-common.zsh's _input::bin).
   Describe 'job::_watch_confirm_cancel'
-    It 'cancels only when gum confirms'
-      confirm() {
+    confirm_setup() {
+      unset TMUX ZELLIJ
+      export JOB_FAKE_CONFIRM_LOG="$JOB_SANDBOX/confirm.log"
+      cat > "$JOB_SANDBOX/ai-playbook" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_CONFIRM_LOG"
+exit "${JOB_FAKE_CONFIRM_RC:-1}"
+EOF
+      chmod +x "$JOB_SANDBOX/ai-playbook"
+      export AI_PLAYBOOK_INPUT_BIN="$JOB_SANDBOX/ai-playbook"
+    }
+    BeforeEach 'confirm_setup'
+
+    It 'cancels on confirm (rc 0) and asks with the danger-palette flags'
+      confirmed() {
         id=$(run_job job::start --title "C" -- sleep 9) || return 1
-        cat > "$JOB_SANDBOX/gum-yes" <<'EOF'
-#!/bin/sh
-exit 0
-EOF
-        cat > "$JOB_SANDBOX/gum-no" <<'EOF'
-#!/bin/sh
-exit 1
-EOF
-        chmod +x "$JOB_SANDBOX/gum-yes" "$JOB_SANDBOX/gum-no"
-        JOB_GUM_BIN="$JOB_SANDBOX/gum-no" run_job job::_watch_confirm_cancel "$id" "C"
-        no_kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
-        JOB_GUM_BIN="$JOB_SANDBOX/gum-yes" run_job job::_watch_confirm_cancel "$id" "C"
-        yes_kills=$(grep -c '^kill 7$' "$JOB_FAKE_LOG")
-        printf '%s|%s' "$no_kills" "$yes_kills"
+        JOB_FAKE_CONFIRM_RC=0 run_job job::_watch_confirm_cancel "$id" "C"
+        rc=$?
+        kills=$(grep -c '^kill 7$' "$JOB_FAKE_LOG")
+        printf '%s|%s|%s' "$rc" "$kills" "$(cat "$JOB_FAKE_CONFIRM_LOG")"
       }
-      When call confirm
-      The output should equal '0|1'
+      When call confirmed
+      The output should include '0|1|'
+      The output should include '--type confirm'
+      The output should include '--danger'
+      The output should include '--affirmative Cancel job'
+      The output should include '--negative Keep running'
+      The output should include '--title Job runner'
+    End
+
+    It 'declines on rc 1 — no kill, rc 1'
+      declined() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        JOB_FAKE_CONFIRM_RC=1 run_job job::_watch_confirm_cancel "$id" "C"
+        rc=$?
+        kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
+        printf '%s|%s' "$rc" "$kills"
+      }
+      When call declined
+      The output should equal '1|0'
+    End
+
+    It 'declines on rc 130 (ESC cancel) — no kill, rc 1'
+      esc_cancelled() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        JOB_FAKE_CONFIRM_RC=130 run_job job::_watch_confirm_cancel "$id" "C"
+        rc=$?
+        kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
+        printf '%s|%s' "$rc" "$kills"
+      }
+      When call esc_cancelled
+      The output should equal '1|0'
     End
   End
 
