@@ -1,0 +1,76 @@
+#!/usr/bin/env zsh
+# job-callback — pueue's daemon.callback target: one invocation per finished
+# task, args <pueue_id> <result> <exit_code> (exit_code may be empty).
+# Notifies (Success → sound; Killed → quiet, cancel is not a failure;
+# anything else → failure toast PAIRED with a persistent hs.notify, since
+# Focus can swallow either alone), records the result file the HUD keys off,
+# and prunes old finished jobs. Never lets its own failure affect anything:
+# every path exits 0, diagnostics go to the callback log.
+set -u
+
+_cb_log_dir="${XDG_CACHE_HOME:-$HOME/.cache}/jobs"
+mkdir -p -- "$_cb_log_dir" 2>/dev/null
+exec 2>>"$_cb_log_dir/callback.log"
+
+source "${0:A:h}/../lib/job.zsh" || exit 0
+zmodload zsh/datetime 2>/dev/null
+
+pueue_id="${1:-}" result="${2:-Unknown}" exit_code="${3:-}"
+
+# Resolve the job dir by the pueue task id recorded in meta.json — newest
+# first, so a recycled task id after a daemon reset matches the live job.
+dir="" d=""
+for d in "$JOB_STATE_ROOT"/*(NOn/); do
+  [ -f "$d/meta.json" ] || continue
+  [ -e "$d/result" ] && continue
+  if [ "$(jq -r '.pueue_id' "$d/meta.json" 2>/dev/null)" = "$pueue_id" ]; then
+    dir="$d"
+    break
+  fi
+done
+
+title="Task ${pueue_id}" icon=""
+if [ -n "$dir" ]; then
+  title=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null) \
+    || title="Task ${pueue_id}"
+  icon=$(jq -r '.icon // empty' "$dir/meta.json" 2>/dev/null) || icon=""
+fi
+
+case "$result" in
+  Success)
+    notify --icon "${icon:-glyph:nf-md-check_circle}" --sound Glass \
+      "$title completed"
+    ;;
+  Killed)
+    # A cancel the user asked for: acknowledge without alarm.
+    notify --icon "glyph:nf-md-close_circle" "$title cancelled"
+    ;;
+  *)
+    notify --icon "glyph:nf-md-alert_circle" --sound Basso \
+      "$title failed${exit_code:+ (exit $exit_code)}"
+    # The persistent half of the pair (local screen only — over SSH the
+    # toast already routed to the human via the bridge).
+    if hs_bin=$(notify::available --path); then
+      "$hs_bin" -q -c "hs.notify.new(nil, {title=$(_notify_lua_arg "Job failed: $title"), informativeText=$(_notify_lua_arg "$result${exit_code:+ — exit $exit_code}"), withdrawAfter=0}):send()" \
+        </dev/null >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+
+if [ -n "$dir" ]; then
+  print -r -- "$EPOCHSECONDS $result ${exit_code:-}" > "$dir/result"
+fi
+
+# Prune: finished jobs (result file present) beyond the newest JOB_KEEP.
+# Active dirs have no result file and are never candidates.
+keep="${JOB_KEEP:-50}"
+typeset -a finished
+finished=("$JOB_STATE_ROOT"/*/result(N.om))
+if ((${#finished[@]} > keep)); then
+  local_f=""
+  for local_f in "${finished[@]:$keep}"; do
+    rm -rf -- "${local_f:h}"
+  done
+fi
+
+exit 0
