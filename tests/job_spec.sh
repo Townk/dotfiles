@@ -16,7 +16,7 @@ printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 case "$1" in
   add) echo "7" ;;
   status) cat "${JOB_FAKE_STATUS:-/dev/null}" 2>/dev/null || :; [ -n "${JOB_FAKE_STATUS:-}" ] || echo '{}' ;;
-  follow) echo "log line one"; : > "${JOB_FAKE_FOLLOW_SENTINEL:-/dev/null}" 2>/dev/null; sleep "${JOB_FAKE_FOLLOW_SLEEP:-3}" ;;
+  follow) echo "log line one"; printf '%s' "${JOB_FAKE_FOLLOW_TAILFRAG:-}"; : > "${JOB_FAKE_FOLLOW_SENTINEL:-/dev/null}" 2>/dev/null; sleep "${JOB_FAKE_FOLLOW_SLEEP:-3}" ;;
 esac
 exit 0
 EOF
@@ -273,6 +273,33 @@ EOF
         grep -c 'Success' "$JOB_SANDBOX/watch.err"
       }
       When call finished
+      The output should equal '1'
+    End
+
+    It 'keeps a newline-less final log fragment visible after a result-file exit'
+      tailfrag() {
+        id=$(run_job job::start --title "TF" -- true) || return 1
+        local sentinel="$JOB_SANDBOX/tailfrag.ready"
+        # The result file lands only AFTER the fake follow has written and
+        # touched the sentinel — the final "tail-frag" byte (no trailing
+        # newline) is guaranteed to be sitting unflushed in job::watch's
+        # `pending` buffer when the loop notices `result` and exits, which
+        # is exactly the always-block's final-flush path.
+        ( while [ ! -e "$sentinel" ]; do sleep 0.02; done
+          printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id/result" ) &
+        local writer=$!
+        JOB_FAKE_FOLLOW_SENTINEL="$sentinel" JOB_FAKE_FOLLOW_TAILFRAG="tail-frag" \
+          JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
+          run_job job::watch "$id" </dev/null 2>"$JOB_SANDBOX/tailfrag.err" || return 2
+        wait "$writer" 2>/dev/null
+        # grep splits on \n only — \r and escape bytes are ordinary
+        # characters to it. A completed row (the fix) leaves "tail-frag" as
+        # the WHOLE of its own line; the pre-fix bug ran the closing
+        # \r\e[K straight into it on the same unterminated line, so
+        # "tail-frag" was never the last thing before a real newline.
+        grep -c '^tail-frag$' "$JOB_SANDBOX/tailfrag.err"
+      }
+      When call tailfrag
       The output should equal '1'
     End
 

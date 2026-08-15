@@ -348,6 +348,11 @@ job::watch() {
     if [ -n "$pending" ]; then
       print -nu2 -- $'\r\e[K'
       print -nru2 -- "$pending"
+      # A fragment with no trailing newline leaves the cursor mid-row: the
+      # unconditional \r\e[K right below would return to column 0 of that
+      # SAME row and erase what was just painted. Complete the row first so
+      # the fragment survives and the closing line gets a fresh one.
+      [[ "$pending" == *$'\n' ]] || print -nu2 -- $'\n'
     fi
     print -nu2 -- $'\r\e[K'
     rm -f "$out"
