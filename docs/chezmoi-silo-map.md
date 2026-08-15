@@ -63,7 +63,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 | preview | File preview & terminal viewers | `dot_local/bin/preview`, `libexec/{fzf-tab-preview-open,ics-view,sqlite-view,disk-image-view}` | (uses `image-protocol-support.zsh` from terminal-mux) | `preview` as fzf/Yazi `--preview` backend |
 | yazi | Yazi | `dot_config/yazi/` | (lua plugins) | Yazi previewer contract (consumes preview), `cd` event plugins |
 | chezmoi | chezmoi orchestration & run-scripts | `.setup.sh`, `.chezmoiscripts/`, `.chezmoi*.{tmpl,yaml}` | — | `run_onchange_*` ordering + hash-baking, `zellij-plugin-path.tmpl` shared resolver |
-| utils | Cross-cutting utilities | `dot_local/bin/{notify,wait-until,chezmoi-reverse}`, `libexec/tab-edit` | `lib/common.zsh` (`notify`), `lib/platform.zsh` | `notify` CLI, `chezmoi-reverse --no-merge`, `tab-edit` launcher |
+| utils | Cross-cutting utilities | `dot_local/bin/{notify,wait-until,chezmoi-reverse}`, `libexec/{tab-edit,job,job-callback}` | `lib/common.zsh` (`notify`), `lib/job.zsh` (`job::`), `lib/platform.zsh` | `notify` CLI, `job::` runner (pueue backbone + `~/.local/state/jobs/` contract), `chezmoi-reverse --no-merge`, `tab-edit` launcher |
 | pi | pi coding agent config | `dot_pi/` + `pi-settings-merge.tmpl` + pi blocks in `.chezmoi.toml.tmpl`/`.chezmoiignore.tmpl`/`.chezmoiscripts/` | (none in `lib/`) | agent-local↔agent symlink sharing (extensions/lsp/skills/themes/Librarian), `modify_settings.json.tmpl` declarative-keys merge + `pi-settings-merge.tmpl`, `.pi.devExtensions` dev-extension symlink resolution |
 | cursor | Cursor coding agent config | `dot_cursor/` | (none in `lib/`) | MDC rule format + `alwaysApply` semantics, agents/skills parallel structure (mirrors pi) |
 
@@ -160,11 +160,12 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 
 **Public contract (preserve):**
 - **`hs` CLI globals `notify` / `notifyAnsi`**: the OSD entry points invoked by `common.zsh`'s `notify` primitive (shell/utils) via `hs -c`. Arg shape: Lua string literals (env vars are invisible inside the running HS process — that's why `notify` serializes env to literals). Icon specs `glyph:<name>` (resolved via symbols.db query), `swatch:#RRGGBB`, SVG name. Sound names. This is the single most important hammerspoon seam.
+- **`require("jobs")` HUD receiver + the job state contract**: utils' `lib/job.zsh` owns the writer side (spec `docs/superpowers/specs/2026-08-15-job-runner-design.md`) — `~/.local/state/jobs/<id>/` holding `meta.json` (`title/icon/group/pueue_id/progress/created`), a one-line `progress` sidecar (`<epoch> <pct> <msg…>`, pct `-1` = indeterminate, atomic rename writes), and `result` (written by `libexec/job-callback`, marks done). Hammerspoon owns the reader (`modules/jobs/`): a pathwatcher + one timer render stacked capsules; `job::hud` drives `require("jobs").show()/hide()/toggle()` via `hs -q -c`. **Skew rule:** the reader skips dirs with missing/undecodable `meta.json` and ignores unknown meta keys; writers may add fields but never repurpose existing ones; every `hs` call is fire-and-forget, so an absent/stale HUD never fails a writer.
 - **`optimistic_state`** generic (`modules/system/optimistic_state.lua`) — reused by controls + Stream Deck re-render-on-external-change.
 - **keybinding tree shape** (`modules/keybindings/init.lua` `kb.setup{...}`) — numeric actions = macOS symbolic hotkeys managed via `system_shortcuts.lua` plist diffing.
 - **media-key interception** (`lifecycle.lua` `systemDefined` eventtap) — routes SOUND/BRIGHTNESS to controls.
 
-**Consumes from:** custom-builds (symbols.db for `glyph:` icons), shell/utils (`notify` senders), external apps via URL schemes.
+**Consumes from:** custom-builds (symbols.db for `glyph:` icons), shell/utils (`notify` senders, the `~/.local/state/jobs/` state dir `lib/job.zsh` writes), external apps via URL schemes.
 
 **Entry points:** `init.lua`, `modules/keybindings/`, `modules/streamdeck/`, `modules/osd/`.
 
