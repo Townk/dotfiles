@@ -448,4 +448,38 @@ EOF
       The stderr should include 'unknown job'
     End
   End
+
+  # Regressions (Mode B 2026-08-15, second session): two zsh traps the suite
+  # could not see because run_job sources without -u and no example ever
+  # drove the viewer loop past its first iteration.
+  Describe 'job::watch zsh-semantics regressions'
+    # The bare `${(pl:N::c:)}` padding form expands the EMPTY parameter,
+    # which the libexec front-end's `set -u` rejects — the bar collapsed to
+    # [] with a "parameter not set" error per repaint on the live tty.
+    It 'composes the bar under set -u (the front-end runs -eu)'
+      When call zsh -f -c 'set -eu; source "$1" >/dev/null 2>&1 || exit 99
+                           job::_watch_bar 50 24' -- "$JOBLIB"
+      The status should equal 0
+      The output should equal '████████████············'
+    End
+
+    # zsh prints `NAME=value` for `local NAME` (no assignment) when NAME is
+    # already local — declared inside the while loop, `cols`/`header_line`
+    # leaked their values to stdout from the second tick on, polluting the
+    # viewer and --modal's captured stdout. All loop variables are declared
+    # once at function top now; this example runs the loop for several ticks
+    # (follow lives ~1s, no result file, EOF stdin) and pins stdout EMPTY.
+    It 'keeps stdout empty across multiple loop iterations'
+      multi_tick() {
+        id=$(run_job job::start --title "MT" -- sleep 9) || return 1
+        JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
+          run_job job::watch "$id" </dev/null 2>/dev/null
+        rc=$?
+        printf 'rc=%s' "$rc"
+      }
+      When call multi_tick
+      # stdout carries ONLY our sentinel — nothing leaked by the loop.
+      The output should equal 'rc=0'
+    End
+  End
 End

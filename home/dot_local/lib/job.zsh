@@ -175,9 +175,13 @@ job::_watch_bar() {
     filled=$((pct * width / 100))
     ((filled > width)) && filled=$width
   fi
-  local bar=""
-  ((filled > 0)) && bar="${(pl:$filled::█:)}"
-  ((filled < width)) && bar="$bar${(pl:$((width - filled))::·:)}"
+  # Pad a NAMED empty parameter: the bare `${(pl:N::c:)}` form expands the
+  # empty parameter, which `set -u` (the libexec front-end runs under -eu)
+  # rejects as "parameter not set" — caught live in Mode B, invisible to the
+  # spec suite because run_job sources without -u.
+  local bar="" pad=""
+  ((filled > 0)) && bar="${(pl:$filled::█:)pad}"
+  ((filled < width)) && bar="$bar${(pl:$((width - filled))::·:)pad}"
   print -rn -- "$bar"
 }
 
@@ -243,7 +247,13 @@ job::watch() {
   title=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null)
   created=$(jq -r '.created // 0' "$dir/meta.json" 2>/dev/null)
 
+  # ALL loop-body variables are declared here, never inside the while loop:
+  # zsh's `local NAME` (no assignment) on an already-local NAME PRINTS
+  # `NAME=value` to stdout — from the second iteration on it leaked
+  # `cols=…`/`header_line=…` into the viewer (and --modal's captured
+  # stdout). Caught live in Mode B; no spec drove the loop past one tick.
   local out off=1 size pct msg epoch key cancelled=0 detached=0 pending=""
+  local newbytes tail_frag to_print cols header_line
   out=$(common::tmpfile)
 
   # Trap and terminal mode go up BEFORE the follow child spawns: a ^C in
@@ -277,15 +287,15 @@ job::watch() {
       # \r\e[K and reprinted (duplicated) once it completes.
       size=$(wc -c <"$out" 2>/dev/null) || size=0
       if ((size >= off)); then
-        local newbytes=""
+        newbytes=""
         IFS= read -r -d '' newbytes \
           < <(tail -c "+$off" "$out" 2>/dev/null | head -c $((size - off + 1))) \
           2>/dev/null
         pending+="$newbytes"
         off=$((size + 1))
         if [[ "$pending" == *$'\n'* ]]; then
-          local tail_frag="${pending##*$'\n'}"
-          local to_print="${pending%"$tail_frag"}"
+          tail_frag="${pending##*$'\n'}"
+          to_print="${pending%"$tail_frag"}"
           print -nu2 -- $'\r\e[K'
           print -nru2 -- "$to_print"
           pending="$tail_frag"
@@ -299,7 +309,6 @@ job::watch() {
       if [ -f "$dir/progress" ]; then
         IFS=' ' read -r epoch pct msg <"$dir/progress" 2>/dev/null || pct=-1
       fi
-      local cols header_line
       cols=$({ stty size </dev/tty; } 2>/dev/null | awk '{print $2}') || true
       [[ -z "$cols" ]] && cols="${COLUMNS:-80}"
       ((cols < 20)) && cols=80
@@ -337,7 +346,7 @@ job::watch() {
     # coming, so a partial final line beats a dropped one).
     size=$(wc -c <"$out" 2>/dev/null) || size=0
     if ((size >= off)); then
-      local newbytes=""
+      newbytes=""
       IFS= read -r -d '' newbytes \
         < <(tail -c "+$off" "$out" 2>/dev/null | head -c $((size - off + 1))) \
         2>/dev/null
