@@ -29,6 +29,7 @@ local PUEUE_BIN = "/opt/homebrew/bin/pueue"
 local TICK_SECS = 0.25
 local PUEUE_EVERY = 8 -- ticks between pueue polls (~2 s)
 local PUEUE_DEAD_AFTER = 3 -- consecutive failed polls -> treat system dead
+local PUEUE_POLL_TIMEOUT = 10 -- seconds an outstanding poll may run before we count it as failed and retire it
 local STALL_SECS = 3
 local CAP_W, CAP_H, MARGIN, GAP = 300, 56, 12, 8
 local PAD_H, ICON_SIZE, LABEL_SIZE = 14, 18, 11.5
@@ -39,12 +40,15 @@ local theme = osd.capsuleTheme
 local watcher = nil
 local timer = nil
 local pollTask = nil
+local pollTaskStarted = nil -- os.time() the outstanding poll was fired; nil when idle
 local tickCount = 0
 local pueueFails = 0
 local pueueByLabel = nil -- label -> status kind ("running"|"queued"|"done")
 local dismissed = false
 local canvases = {} -- id -> hs.canvas
 local hovered = {} -- id -> cancel-hover bool
+local knownIds = {} -- id -> true, every job id ever seen this session
+local knownIdsInitialized = false -- true once the first scan has populated knownIds
 
 local function readFile(path)
 	local f = io.open(path, "r")
@@ -66,27 +70,35 @@ local function scanJobs()
 			if hs.fs.attributes(dir, "mode") == "directory"
 				and not hs.fs.attributes(dir .. "/result")
 			then
-				local meta = hs.json.decode(readFile(dir .. "/meta.json") or "")
-				if meta then
-					local job = {
-						id = name,
-						title = meta.title or name,
-						icon = meta.icon,
-						reportsProgress = meta.progress == "expected",
-						pct = -1,
-						msg = "",
-						epoch = nil,
-					}
-					local line = readFile(dir .. "/progress")
-					if line then
-						local e, p, m = line:match("^(%d+)%s+(-?%d+)%s*(.-)%s*$")
-						if e then
-							job.epoch = tonumber(e)
-							job.pct = tonumber(p)
-							job.msg = m
+				-- job::start mkdirs the job dir before writing meta.json; a
+				-- tick can land in that window. Read raw first and only
+				-- decode non-empty content so a still-being-written (or not
+				-- yet written) meta.json is skipped silently instead of
+				-- logging a JSON deserialisation error to the Console.
+				local metaRaw = readFile(dir .. "/meta.json")
+				if metaRaw and metaRaw ~= "" then
+					local meta = hs.json.decode(metaRaw)
+					if meta then
+						local job = {
+							id = name,
+							title = meta.title or name,
+							icon = meta.icon,
+							reportsProgress = meta.progress == "expected",
+							pct = -1,
+							msg = "",
+							epoch = nil,
+						}
+						local line = readFile(dir .. "/progress")
+						if line then
+							local e, p, m = line:match("^(%d+)%s+(-?%d+)%s*(.-)%s*$")
+							if e then
+								job.epoch = tonumber(e)
+								job.pct = tonumber(p)
+								job.msg = m
+							end
 						end
+						jobs[#jobs + 1] = job
 					end
-					jobs[#jobs + 1] = job
 				end
 			end
 		end
@@ -97,9 +109,23 @@ end
 
 -- Async authoritative poll. label -> kind; nil until the first poll lands.
 local function pollPueue()
-	if pollTask then return end
+	if pollTask then
+		-- A wedged pueued must never freeze pueueByLabel at a stale
+		-- snapshot forever (capsules must not linger). Retire an
+		-- overdue poll as a failure and fall through to start a new one.
+		if pollTaskStarted and (os.time() - pollTaskStarted) >= PUEUE_POLL_TIMEOUT then
+			pollTask:terminate()
+			pollTask = nil
+			pollTaskStarted = nil
+			pueueFails = pueueFails + 1
+		else
+			return
+		end
+	end
+	pollTaskStarted = os.time()
 	pollTask = hs.task.new(PUEUE_BIN, function(rc, stdout)
 		pollTask = nil
+		pollTaskStarted = nil
 		if rc ~= 0 then
 			pueueFails = pueueFails + 1
 			return
@@ -127,6 +153,7 @@ local function pollPueue()
 	end, { "status", "--json" })
 	if not pollTask:start() then
 		pollTask = nil
+		pollTaskStarted = nil
 		pueueFails = pueueFails + 1
 	end
 end
@@ -274,7 +301,10 @@ local function capsuleFor(id, x, y)
 		elseif event == "mouseDown" and elemId == "cancel" then
 			cancelJob(id)
 		elseif event == "mouseDown" and elemId == "capsule-bg" then
-			M.hide() -- dismiss the stack; the tasks keep running
+			-- Defer: M.hide() deletes this very canvas, and deleting it
+			-- from inside its own mouseCallback risks a use-after-free
+			-- inside AppKit's event handler.
+			hs.timer.doAfter(0, function() M.hide() end) -- dismiss the stack; the tasks keep running
 		end
 	end)
 	canvases[id] = c
@@ -328,11 +358,34 @@ local function repaint(job, index, now)
 	if not c:isShowing() then c:show() end
 end
 
+-- New-job detection lives here rather than in the pathwatcher: job::progress
+-- does a tmp-write + `mv -f` per tick, which fires itemCreated/itemRenamed
+-- on the state root just as often as a genuinely new job dir would -- a
+-- watcher-driven clear defeated click-to-dismiss within one tick. Comparing
+-- each scan against the running set of ids we've ever seen only clears
+-- `dismissed` for an id that is truly new. The very first scan populates
+-- the set without clearing anything, so pre-existing job dirs picked up at
+-- setup() don't spuriously announce themselves.
+local function noteNewJobs(jobs)
+	if not knownIdsInitialized then
+		for _, job in ipairs(jobs) do knownIds[job.id] = true end
+		knownIdsInitialized = true
+		return
+	end
+	for _, job in ipairs(jobs) do
+		if not knownIds[job.id] then
+			knownIds[job.id] = true
+			dismissed = false
+		end
+	end
+end
+
 local function tick()
 	tickCount = tickCount + 1
 	if tickCount % PUEUE_EVERY == 1 then pollPueue() end
 
 	local jobs = scanJobs()
+	noteNewJobs(jobs)
 	if #jobs == 0 or pueueFails >= PUEUE_DEAD_AFTER then
 		-- Done-or-dead: nothing active, or the backbone is gone. Either way
 		-- the capsules must not linger.
@@ -343,6 +396,7 @@ local function tick()
 	-- pueue says a labeled task is done/absent but no result file exists
 	-- (callback missed): drop that capsule anyway.
 	local alive = {}
+	local aliveCount = 0
 	local now = os.time()
 	local shown = 0
 	for _, job in ipairs(jobs) do
@@ -350,6 +404,7 @@ local function tick()
 		local gone = pueueByLabel ~= nil and (kind == nil or kind == "done")
 		if not gone then
 			alive[job.id] = true
+			aliveCount = aliveCount + 1
 			if not dismissed then
 				shown = shown + 1
 				repaint(job, shown, now)
@@ -359,6 +414,12 @@ local function tick()
 	for id in pairs(canvases) do
 		if not alive[id] or dismissed then dropCanvas(id) end
 	end
+	if aliveCount == 0 then
+		-- Every scanned job dir reads gone per pueue (an orphaned dir with
+		-- no result file, e.g. a crashed job): stand down instead of
+		-- polling a corpse at 4 Hz forever with nothing left to show.
+		stopAll()
+	end
 end
 
 local function armTimer()
@@ -367,19 +428,15 @@ local function armTimer()
 	tick()
 end
 
---- Start watching the job state dir. A new job dir arms the timer AND
---- clears a previous dismissal — a new job announces itself.
+--- Start watching the job state dir. Any change under it (a new job dir,
+--- or job::progress's per-tick tmp-write + `mv -f`) arms the timer; the
+--- timer's own scan (see noteNewJobs) is what decides whether a change was
+--- actually a new job worth clearing a dismissal for -- the watcher itself
+--- cannot tell the two apart, so it stays dumb on purpose.
 function M.setup()
 	if watcher then return end
 	hs.fs.mkdir(STATE_ROOT)
-	watcher = hs.pathwatcher.new(STATE_ROOT, function(paths, flags)
-		for i = 1, #paths do
-			local f = flags[i] or {}
-			if f.itemCreated or f.itemRenamed then
-				dismissed = false
-				break
-			end
-		end
+	watcher = hs.pathwatcher.new(STATE_ROOT, function()
 		armTimer()
 	end)
 	watcher:start()
