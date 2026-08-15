@@ -538,6 +538,17 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
   fi
 fi
 
+# Converge this machine's secret set with the just-pulled manifest: scrub
+# names the profile no longer requires, collect what is missing or was
+# rotated on another machine. Runs in the terminal (not behind a spinner)
+# so a value prompt can surface right here — the same reason the final
+# convergence pass streams `chezmoi apply`. sync's own tty gate keeps
+# unattended runs from stalling: they scrub + report instead.
+if command -v system-secrets >/dev/null 2>&1; then
+  print -P -- "\n🔑 Sync secrets...\n"
+  system-secrets sync || log_warn "secrets sync had failures (continuing)"
+fi
+
 # Homebrew-less hosts (e.g. the Linux dev-shell profile) have no brew /
 # Brewfile pipeline. Converge the package ecosystems rendered for this
 # host and reconcile services (systemd worker), then skip the

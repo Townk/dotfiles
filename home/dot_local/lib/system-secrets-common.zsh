@@ -33,6 +33,7 @@ sec::repo_paths() {
   MANIFEST="$SECRETS_SRC_DIR/.chezmoidata/secrets.yaml"
   FRAGMENT_DIR="$SECRETS_SRC_DIR/dot_config/zsh/private_secrets.d"
   SECRETS_BLOB_DIR="$REPO_ROOT/secrets"
+  GENERATIONS="$SECRETS_BLOB_DIR/generations.yaml"
   SOPS_YAML="$REPO_ROOT/.sops.yaml"
   OPERATOR_MAP="${XDG_CONFIG_HOME:-$HOME/.config}/chezmoi/onboard-map.yaml"
   LEAK_PATTERNS="$REPO_ROOT/.leak-patterns"
@@ -118,6 +119,101 @@ sec::manifest_add_profile() {
   return 0
 }
 
+# sec::manifest_remove_profile <name> <profile> — drop <profile> from a
+# declared secret's requiredFor. Returns 0 iff it actually removed it (mirror
+# of sec::manifest_add_profile), 1 if the profile was not present.
+sec::manifest_remove_profile() {
+  sec::manifest_check
+  local name="$1" profile="$2" has
+  has="$(name="$name" p="$profile" yq -r \
+    '.secrets[] | select(.name == strenv(name)) | (.requiredFor | contains([strenv(p)]))' \
+    "$MANIFEST")"
+  [[ "$has" == "true" ]] || return 1
+  name="$name" p="$profile" yq -i '
+    (.secrets[] | select(.name == strenv(name)) | .requiredFor) |=
+      map(select(. != strenv(p)))
+  ' "$MANIFEST"
+  return 0
+}
+
+# sec::manifest_remove <name> — delete the secret's manifest entry entirely.
+sec::manifest_remove() {
+  sec::manifest_check
+  name="$1" yq -i '.secrets |= map(select(.name != strenv(name)))' "$MANIFEST"
+}
+
+# sec::manifest_profiles_for <name> — the requiredFor profiles, one per line.
+sec::manifest_profiles_for() {
+  sec::manifest_check
+  name="$1" yq -r \
+    '.secrets[] | select(.name == strenv(name)) | .requiredFor[]' "$MANIFEST"
+}
+
+# ---------------------------------------------------------------------------
+# Rotation broadcast. `rotate NAME` stamps the manifest entry with a committed
+# `rotated:` epoch; each slot records the epoch it last COLLECTED a value in
+# secrets/generations.yaml (committed — slot ids are opaque, and the slot→name
+# mapping is already public via blob filenames and op:// refs). `sync` treats
+# generation < rotated exactly like a missing value, so rotating a key on one
+# machine makes every other machine whose profile uses it re-collect on its
+# next sync. Epochs come from `date +%s`; absent values read as 0, so secrets
+# never rotated (or collected pre-feature) broadcast nothing.
+# ---------------------------------------------------------------------------
+
+# sec::manifest_rotated <name> — the entry's rotated epoch (0 if never).
+sec::manifest_rotated() {
+  sec::manifest_check
+  local r
+  r="$(name="$1" yq -r \
+    '.secrets[] | select(.name == strenv(name)) | .rotated // 0' "$MANIFEST")"
+  printf '%s' "${r:-0}"
+}
+
+# sec::manifest_set_rotated <name> <epoch> — stamp the entry.
+sec::manifest_set_rotated() {
+  sec::manifest_check
+  name="$1" e="$2" yq -i '
+    (.secrets[] | select(.name == strenv(name))) .rotated = (strenv(e) | to_number)
+  ' "$MANIFEST"
+}
+
+# sec::gen_get <slot> <name> — epoch the slot last collected <name> (0 if never).
+sec::gen_get() {
+  [[ -f "$GENERATIONS" ]] || {
+    printf '0'
+    return 0
+  }
+  local g
+  g="$(slot="$1" name="$2" yq -r \
+    '.[strenv(slot)][strenv(name)] // 0' "$GENERATIONS")"
+  printf '%s' "${g:-0}"
+}
+
+# sec::gen_set <slot> <name> <epoch>
+sec::gen_set() {
+  [[ -f "$GENERATIONS" ]] || {
+    mkdir -p "${GENERATIONS:h}"
+    print -r -- '{}' >"$GENERATIONS"
+  }
+  slot="$1" name="$2" e="$3" yq -i \
+    '.[strenv(slot)][strenv(name)] = (strenv(e) | to_number)' "$GENERATIONS"
+}
+
+# sec::gen_del <slot> <name> — forget a removed secret's stamp (no-op if absent).
+sec::gen_del() {
+  [[ -f "$GENERATIONS" ]] || return 0
+  slot="$1" name="$2" yq -i \
+    'del(.[strenv(slot)][strenv(name)])' "$GENERATIONS"
+}
+
+# ---------------------------------------------------------------------------
+# Profiles. The single shell-side list — keep in sync with
+# home/.chezmoitemplates/profile-traits.tmpl (the template-side fail-closed
+# authority; a bare zsh lib cannot include it).
+# ---------------------------------------------------------------------------
+SEC_PROFILES=(personal work dev-shell server)
+sec::valid_profile() { (( ${SEC_PROFILES[(Ie)$1]} )); }
+
 # ---------------------------------------------------------------------------
 # Interactive prompt helpers (prompt::required / ::default / ::secret /
 # ::choice / ::confirm) live in the shared prompt-common.zsh module.
@@ -169,6 +265,64 @@ sec::headless_slot_names() {
 }
 
 # ---------------------------------------------------------------------------
+# Committed-artifact readers. Everything below reads ONLY committed files
+# (fragment templates, blob dirs), so it works for foreign slots the local
+# operator map knows nothing about — the basis of `remove`'s cross-slot scrub.
+# ---------------------------------------------------------------------------
+
+# sec::fragment_slots — every slot with a committed fragment template.
+sec::fragment_slots() {
+  local f base
+  for f in "$FRAGMENT_DIR"/private_slot-*.sh.tmpl(N); do
+    base="${${f:t}%.sh.tmpl}"
+    printf '%s\n' "${base#private_}"
+  done
+}
+
+# sec::slot_kind_from_fragment <slot> — headless|human|"" from the committed
+# template's header comment (content-derived, so it needs no operator map and
+# survives an empty secret set).
+sec::slot_kind_from_fragment() {
+  local frag content
+  frag="$(sec::fragment_path "$1")"
+  [[ -r "$frag" ]] || {
+    printf ''
+    return 0
+  }
+  content="$(<"$frag")"
+  if [[ "$content" == *"headless slot"* ]]; then
+    printf 'headless'
+  elif [[ "$content" == *"human slot"* ]]; then
+    printf 'human'
+  else
+    printf ''
+  fi
+}
+
+# sec::fragment_references <slot> <name> — 0 iff the committed template still
+# carries <name> (a sops blob path or an op:// item segment).
+sec::fragment_references() {
+  local frag content
+  frag="$(sec::fragment_path "$1")"
+  [[ -r "$frag" ]] || return 1
+  content="$(<"$frag")"
+  [[ "$content" == *"\"$2.sops.sh\""* || "$content" == *"/$2/"* ]]
+}
+
+# sec::human_slot_pairs <slot> — NAME=op://ref pairs parsed back out of a human
+# fragment template, one per line (the inverse of sec::write_human_fragment).
+sec::human_slot_pairs() {
+  local frag line
+  frag="$(sec::fragment_path "$1")"
+  [[ -r "$frag" ]] || return 0
+  while IFS= read -r line; do
+    if [[ "$line" =~ '^export ([A-Z][A-Z0-9_]*)=.*"(op://[^"]+)"' ]]; then
+      printf '%s=%s\n' "${match[1]}" "${match[2]}"
+    fi
+  done <"$frag"
+}
+
+# ---------------------------------------------------------------------------
 # Operator map — LOOSE, NEVER COMMITTED. Lives under ~/.config/chezmoi/.
 # Maps each opaque slot to the operator-only facts needed to manage it:
 #   <slot>: { alias, profile, kind, recipient }
@@ -191,6 +345,12 @@ sec::map_get() {
   }
   slot="$1" field="$2" yq -r \
     '.[strenv(slot)][strenv(field)] // ""' "$OPERATOR_MAP"
+}
+
+# sec::known_slots — every slot in the local operator map, one per line.
+sec::known_slots() {
+  [[ -f "$OPERATOR_MAP" ]] || return 0
+  yq -r 'keys | .[]' "$OPERATOR_MAP" 2>/dev/null || true
 }
 
 # sec::map_set <slot> <alias> <profile> <kind> <recipient>
@@ -405,6 +565,47 @@ EOF
     done
     printf '%s\n' "{{ end -}}"
   } >"$frag"
+}
+
+# sec::scrub_slot_name <slot> <name> — drop <name> from a slot's COMMITTED
+# artifacts: delete the sops blob and rewrite the fragment without it
+# (headless), or rewrite the fragment without its op:// pair (human). Works on
+# foreign slots too — removal needs no secret values, and the slot's kind is
+# read from the committed template, not the operator map. Returns 0 iff
+# something changed. Does NOT commit and does NOT touch 1Password (callers
+# own both).
+sec::scrub_slot_name() {
+  local slot="$1" name="$2" kind changed=0
+  kind="$(sec::slot_kind_from_fragment "$slot")"
+  [[ -n "$kind" ]] || return 1
+  if [[ "$kind" == headless ]]; then
+    local blob
+    blob="$(sec::blob_path "$slot" "$name")"
+    if [[ -f "$blob" ]]; then
+      rm -f "$blob"
+      changed=1
+    fi
+    # The fragment may still list the name even when the blob is already gone
+    # (a half-done manual removal); heal that too.
+    sec::fragment_references "$slot" "$name" && changed=1
+    if ((changed)); then
+      local -a names
+      names=("${(@f)$(sec::headless_slot_names "$slot")}")
+      names=(${names:#})
+      sec::write_headless_fragment "$slot" "${names[@]}"
+    fi
+  else
+    local -a pairs keep
+    pairs=("${(@f)$(sec::human_slot_pairs "$slot")}")
+    pairs=(${pairs:#})
+    keep=(${pairs:#$name=*})
+    if ((${#keep} != ${#pairs})); then
+      sec::write_human_fragment "$slot" "${keep[@]}"
+      changed=1
+    fi
+  fi
+  ((changed)) && sec::gen_del "$slot" "$name"
+  ((changed))
 }
 
 # sec::shell_reload_hint — say how to get a just-rendered fragment into the shell
@@ -624,6 +825,50 @@ sec::op_upsert_field() {
   printf 'op://%s/%s/%s\n' "$vault" "$item" "$field"
 }
 
+# sec::op_scrub_field <name> <slot> — best-effort deletion of one slot's field
+# on the secret's 1Password item. Uses only the CACHED vault (never prompts —
+# scrubbing runs from non-interactive paths); prints the manual command when
+# it cannot act. Hygiene, never a gate: always returns 0.
+sec::op_scrub_field() {
+  local name="$1" hash="${2#slot-}" vault
+  if ! sec::op_available; then
+    log_info "op unavailable — clean up manually: op item edit '$name' '${hash}[delete]'"
+    return 0
+  fi
+  vault="$(sec::op_vault_get)"
+  if [[ -z "$vault" ]]; then
+    log_info "no cached 1Password vault — clean up manually: op item edit '$name' '${hash}[delete]'"
+    return 0
+  fi
+  if sec::op item edit "$name" "${hash}[delete]" --vault "$vault" >/dev/null 2>&1; then
+    log_ok "deleted 1Password field $hash on item $name"
+  else
+    log_warn "could not delete 1Password field $hash on item $name — clean up manually"
+  fi
+  return 0
+}
+
+# sec::op_scrub_item <name> — best-effort archive of the whole item (full
+# removal). Same cached-vault-only, never-a-gate contract as op_scrub_field.
+sec::op_scrub_item() {
+  local name="$1" vault
+  if ! sec::op_available; then
+    log_info "op unavailable — clean up manually: op item delete '$name' --archive"
+    return 0
+  fi
+  vault="$(sec::op_vault_get)"
+  if [[ -z "$vault" ]]; then
+    log_info "no cached 1Password vault — clean up manually: op item delete '$name' --archive"
+    return 0
+  fi
+  if sec::op item delete "$name" --archive --vault "$vault" >/dev/null 2>&1; then
+    log_ok "archived 1Password item $name"
+  else
+    log_warn "could not archive 1Password item $name — clean up manually"
+  fi
+  return 0
+}
+
 # sec::op_resolve_vault — echo the 1Password vault to use, or empty when op/jq
 # are unavailable (callers then fall back to manual op:// entry). Ensures a token
 # over SSH, reuses the cached choice, or asks once and remembers it. Dies if the
@@ -819,6 +1064,9 @@ sec::rebuild_slot() {
     [[ -f "$(sec::legacy_blob_path "$slot")" ]] && rm -f "$(sec::legacy_blob_path "$slot")"
     sec::sops_rule_remove_legacy "$slot"
     sec::write_headless_fragment "$slot" "${names[@]}"
+    local _now_h
+    _now_h="$(date +%s)"
+    for n in "${names[@]}"; do sec::gen_set "$slot" "$n" "$_now_h"; done
     log_ok "encrypted ${#names[@]} secret(s) for slot $slot"
   else
     # Human: each secret resolves from 1Password at apply via `output "op" read`.
@@ -843,6 +1091,9 @@ sec::rebuild_slot() {
       pairs+=("$n=$ref")
     done
     sec::write_human_fragment "$slot" "${pairs[@]}"
+    local _now_p
+    _now_p="$(date +%s)"
+    for n in "${names[@]}"; do sec::gen_set "$slot" "$n" "$_now_p"; done
     log_ok "wrote ${#pairs[@]} 1Password reference(s) for slot $slot"
   fi
 }
@@ -889,6 +1140,7 @@ sec::materialize_secret() {
     slot_names=("${(@f)$(sec::headless_slot_names "$slot")}")
     slot_names=(${slot_names:#})
     sec::write_headless_fragment "$slot" "${slot_names[@]}"
+    sec::gen_set "$slot" "$name" "$(date +%s)"
     log_ok "encrypted $name for slot $slot"
   else
     # Human: without op/jq (or a resolvable vault) there is no clean single-field
@@ -912,8 +1164,191 @@ sec::materialize_secret() {
       sec::op_field_exists "$vault" "$n" "$hash" && pairs+=("$n=op://$vault/$n/$hash")
     done
     sec::write_human_fragment "$slot" "${pairs[@]}"
+    sec::gen_set "$slot" "$name" "$(date +%s)"
     log_ok "wrote ${#pairs[@]} 1Password reference(s) for slot $slot"
   fi
+}
+
+# sec::sync_can_collect — 0 iff interactive value collection is possible.
+# The seam the tty gate lives behind (overridable in tests); the same
+# stdin-is-a-terminal check system-update's preauthorize_sudo uses.
+sec::sync_can_collect() { [[ -t 0 ]]; }
+
+# sec::sync_slot <slot> <profile> — reconcile the slot's COMMITTED artifacts
+# with the manifest, both directions: scrub names the profile no longer
+# requires (no values needed), collect names it now requires or whose value
+# predates the manifest's `rotated` stamp (interactive; skipped with a report
+# when no terminal). Commits once. Sets SEC_SYNC_CHANGED=1 iff anything moved
+# (callers refresh the rendered fragment on that signal). Idempotent.
+sec::sync_slot() {
+  local slot="$1" profile="$2" kind
+  typeset -g SEC_SYNC_CHANGED=""
+  kind="$(sec::map_get "$slot" kind)"
+  [[ -n "$kind" ]] ||
+    die "slot $slot is not in this machine's operator map (run system-onboard first)"
+  sec::valid_profile "$profile" ||
+    die "unknown profile '$profile' (valid: ${(j:, :)SEC_PROFILES})"
+
+  if [[ "$kind" == headless && -f "$(sec::legacy_blob_path "$slot")" ]]; then
+    log_info "slot $slot still uses a monolithic blob; re-collecting once to migrate"
+    sec::rebuild_slot "$slot"
+    local -a mpaths
+    mpaths=("${(@f)$(sec::commit_paths_for_slot "$slot")}")
+    sec::git_commit "feat(secrets): sync $slot" "${mpaths[@]}"
+    SEC_SYNC_CHANGED=1
+    return 0
+  fi
+
+  local -a required current stale missing outdated
+  required=("${(@f)$(sec::manifest_names_for_profile "$profile")}")
+  required=(${required:#})
+  if [[ "$kind" == headless ]]; then
+    current=("${(@f)$(sec::headless_slot_names "$slot")}")
+  else
+    local -a pairs
+    pairs=("${(@f)$(sec::human_slot_pairs "$slot")}")
+    pairs=(${pairs:#})
+    current=("${(@)pairs%%=*}")
+  fi
+  current=(${current:#})
+
+  local n rot gen
+  for n in "${current[@]}"; do
+    (( ${required[(Ie)$n]} )) || stale+=("$n")
+  done
+  for n in "${required[@]}"; do
+    if (( ! ${current[(Ie)$n]} )); then
+      missing+=("$n")
+    else
+      # Rotation broadcast: collected before the last `rotate NAME` → re-collect.
+      rot="$(sec::manifest_rotated "$n")"
+      ((rot)) || continue
+      gen="$(sec::gen_get "$slot" "$n")"
+      ((gen >= rot)) || outdated+=("$n")
+    fi
+  done
+
+  if ((${#stale} == 0 && ${#missing} == 0 && ${#outdated} == 0)); then
+    log_ok "slot $slot already in sync with profile '$profile'"
+    return 0
+  fi
+
+  local changed=0
+  for n in "${stale[@]}"; do
+    if sec::scrub_slot_name "$slot" "$n"; then
+      changed=1
+      [[ "$kind" == human ]] && sec::op_scrub_field "$n" "$slot"
+    fi
+  done
+  ((${#stale})) && log_ok "scrubbed stale: ${(j:, :)stale}"
+
+  local -a collect
+  collect=("${missing[@]}" "${outdated[@]}")
+  collect=(${collect:#})
+  if ((${#collect})); then
+    if sec::sync_can_collect; then
+      ((${#outdated})) && log_info "rotated upstream, re-collecting: ${(j:, :)outdated}"
+      for n in "${collect[@]}"; do
+        sec::materialize_secret "$slot" "$n"
+        changed=1
+      done
+    else
+      log_warn "profile '$profile' needs values for: ${(j:, :)collect}"
+      log_warn "run 'system-secrets sync' in a terminal to collect them"
+    fi
+  fi
+
+  if ((changed)); then
+    local -a paths
+    paths=("${(@f)$(sec::commit_paths_for_slot "$slot")}")
+    sec::git_commit "feat(secrets): sync $slot" "${paths[@]}"
+    SEC_SYNC_CHANGED=1
+  fi
+  return 0
+}
+
+# sec::remove_secret <name> <profile> <all(0/1)> <yes(0/1)> — orchestrate
+# `system-secrets remove`. Full removal (all=1, the no-flag default) scrubs
+# EVERY committed slot artifact — removal needs no values, so one machine
+# converges the whole repo. Profile-scoped removal scrubs only slots the
+# local operator map assigns to that profile and names the foreign slots
+# still referencing the secret (their machines converge via sync). Commits
+# once; sets SEC_REMOVE_TOUCHED to the scrubbed slots (callers refresh their
+# own rendered fragment from it).
+sec::remove_secret() {
+  local name="$1" profile="$2" all="$3" yes="$4"
+  typeset -ga SEC_REMOVE_TOUCHED=()
+  sec::manifest_has "$name" || die "'$name' is not in the manifest"
+
+  if ((!all)); then
+    sec::valid_profile "$profile" ||
+      die "unknown profile '$profile' (valid: ${(j:, :)SEC_PROFILES})"
+    local -a profs remaining
+    profs=("${(@f)$(sec::manifest_profiles_for "$name")}")
+    profs=(${profs:#})
+    if (( ! ${profs[(Ie)$profile]} )); then
+      log_warn "'$name' is not required for profile '$profile'; scrubbing any stale artifacts anyway"
+    else
+      remaining=(${profs:#$profile})
+      if ((${#remaining} == 0)); then
+        log_info "'$profile' is the last profile requiring '$name'"
+        if ((yes)) || prompt::confirm "Remove '$name' from the manifest entirely?"; then
+          all=1
+        else
+          log_info "aborted"
+          return 0
+        fi
+      fi
+    fi
+  fi
+
+  local -a touched foreign paths
+  local s
+  if ((all)); then
+    for s in "${(@f)$(sec::fragment_slots)}"; do
+      [[ -n "$s" ]] || continue
+      if sec::scrub_slot_name "$s" "$name"; then touched+=("$s"); fi
+    done
+    sec::manifest_remove "$name"
+    sec::op_scrub_item "$name"
+  else
+    for s in "${(@f)$(sec::known_slots)}"; do
+      [[ -n "$s" ]] || continue
+      [[ "$(sec::map_get "$s" profile)" == "$profile" ]] || continue
+      if sec::scrub_slot_name "$s" "$name"; then
+        touched+=("$s")
+        [[ "$(sec::slot_kind_from_fragment "$s")" == human ]] &&
+          sec::op_scrub_field "$name" "$s"
+      fi
+    done
+    sec::manifest_remove_profile "$name" "$profile" || log_info "manifest already lacked '$profile' for '$name'"
+    for s in "${(@f)$(sec::fragment_slots)}"; do
+      [[ -n "$s" ]] || continue
+      (( ${touched[(Ie)$s]} )) && continue
+      [[ -n "$(sec::map_get "$s" kind)" ]] && continue
+      if sec::fragment_references "$s" "$name"; then foreign+=("$s"); fi
+    done
+  fi
+
+  paths=("$MANIFEST" "$GENERATIONS")
+  for s in "${touched[@]}"; do
+    paths+=("$(sec::fragment_path "$s")" "$(sec::blob_dir "$s")")
+  done
+  local msg
+  if ((all)); then
+    msg="feat(secrets): remove $name"
+  else
+    msg="feat(secrets): remove $name from $profile"
+  fi
+  sec::git_commit "$msg" "${paths[@]}"
+
+  ((${#touched})) && log_ok "scrubbed: ${(j:, :)touched}"
+  if ((${#foreign})); then
+    log_info "slots outside this machine's operator map still reference '$name': ${(j:, :)foreign}" >&2
+    log_info "machines of profile '$profile' among them drop it on their next 'system-secrets sync'" >&2
+  fi
+  SEC_REMOVE_TOUCHED=("${touched[@]}")
+  return 0
 }
 
 # sec::commit_paths_for_slot <slot> — the committed paths a slot touches.
@@ -922,7 +1357,8 @@ sec::commit_paths_for_slot() {
   printf '%s\n' \
     "$(sec::fragment_path "$slot")" \
     "$SOPS_YAML" \
-    "$MANIFEST"
+    "$MANIFEST" \
+    "$GENERATIONS"
   # Headless slots carry SOPS blobs; stage the per-secret blob directory and the
   # legacy monolithic path (so its deletion is staged on migration). git add of a
   # missing/never-tracked path is a swallowed no-op in sec::git_commit. Human
