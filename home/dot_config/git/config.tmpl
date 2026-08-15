@@ -20,13 +20,22 @@
 {{- end }}
 
 ; Personal repos stay personal on ANY box, keyed off the configured remote
-; URL — matched literally, before insteadOf rewriting, hence the gh:/ form.
-; These sit after the work include so they win inside personal clones.
+; URL — matched literally, before insteadOf rewriting, hence the gh:/ and
+; ssh+gh: forms. These sit after the work include so they win inside
+; personal clones. `github-personal` is the CONVENTION for the local ssh
+; host alias carrying the personal key on work boxes (the alias itself
+; lives in the machine-local ssh config, never in this repo) — anything
+; cloned through it is personal by definition, so keep that alias name
+; when setting up a new work machine.
 [includeIf "hasconfig:remote.*.url:git@github.com:Townk/**"]
   path = ~/.config/git/config.d/personal.config
 [includeIf "hasconfig:remote.*.url:https://github.com/Townk/**"]
   path = ~/.config/git/config.d/personal.config
 [includeIf "hasconfig:remote.*.url:gh:/**"]
+  path = ~/.config/git/config.d/personal.config
+[includeIf "hasconfig:remote.*.url:ssh+gh:Townk/**"]
+  path = ~/.config/git/config.d/personal.config
+[includeIf "hasconfig:remote.*.url:git@github-personal:Townk/**"]
   path = ~/.config/git/config.d/personal.config
 
 [core]
