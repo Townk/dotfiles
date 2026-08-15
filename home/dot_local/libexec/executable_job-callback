@@ -73,4 +73,18 @@ if ((${#finished[@]} > keep)); then
   done
 fi
 
+# Leaked dirs: a job whose task died WITH the daemon (restart, crash) never
+# gets a result file — no callback fired for it — so the result-keyed prune
+# above can never touch it, and the HUD has to treat it as a ghost (it
+# gates on recent life pre-poll). Sweep those once they are a day stale,
+# by meta.json mtime so no jq is needed. Active jobs update their sidecar,
+# not meta.json — but a day of silence with no result file is a corpse
+# either way.
+typeset -a stale
+stale=("$JOB_STATE_ROOT"/*/meta.json(N.mh+24))
+local_f=""
+for local_f in "${stale[@]}"; do
+  [ -e "${local_f:h}/result" ] || rm -rf -- "${local_f:h}"
+done
+
 exit 0

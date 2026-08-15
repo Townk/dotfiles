@@ -31,6 +31,16 @@ local PUEUE_EVERY = 8 -- ticks between pueue polls (~2 s)
 local PUEUE_DEAD_AFTER = 3 -- consecutive failed polls -> treat system dead
 local PUEUE_POLL_TIMEOUT = 10 -- seconds an outstanding poll may run before we count it as failed and retire it
 local STALL_SECS = 3
+local GHOST_GRACE = 30 -- pre-first-poll: seconds of silence before a job dir is presumed a leaked ghost
+-- pueue's `status --json` embeds every task's full captured environment;
+-- past a handful of finished tasks that tops the 64KB pipe buffer, and
+-- hs.task (which drains stdout only at process exit) deadlocks the client:
+-- polls never complete, the dead-system breaker fires on timeouts, and the
+-- watcher re-arms it — both capsules blinking at 10-20s, observed live.
+-- Shape the output down to {label, status} inside the pipeline: jq drains
+-- pueue's stdout no matter how large, and only ~1KB reaches hs.task.
+local POLL_CMD = "/opt/homebrew/bin/pueue status --json"
+	.. " | /opt/homebrew/bin/jq -c '{tasks: (.tasks | map_values({label: .label, status: .status}))}'"
 local CAP_W, CAP_H, MARGIN, GAP = 300, 56, 12, 8
 local PAD_H, ICON_SIZE, LABEL_SIZE = 14, 18, 11.5
 local BAR_H, BAR_SEGS, BAR_GAP, PCT_W = 8, 32, 2, 38
@@ -84,6 +94,7 @@ local function scanJobs()
 							title = meta.title or name,
 							icon = meta.icon,
 							reportsProgress = meta.progress == "expected",
+							created = tonumber(meta.created),
 							pct = -1,
 							msg = "",
 							epoch = nil,
@@ -123,7 +134,13 @@ local function pollPueue()
 		end
 	end
 	pollTaskStarted = os.time()
-	pollTask = hs.task.new(PUEUE_BIN, function(rc, stdout)
+	local me
+	me = hs.task.new("/bin/zsh", function(rc, stdout)
+		-- A poll retired by the timeout above still fires this callback when
+		-- its SIGTERM lands. Without this identity guard it clobbered the
+		-- NEXT poll's tracking and double-counted the failure — which is
+		-- what accelerated the blink loop into the 10-20s cadence.
+		if pollTask ~= me then return end
 		pollTask = nil
 		pollTaskStarted = nil
 		if rc ~= 0 then
@@ -150,8 +167,9 @@ local function pollPueue()
 			if label then byLabel[label] = kind end
 		end
 		pueueByLabel = byLabel
-	end, { "status", "--json" })
-	if not pollTask:start() then
+	end, { "-c", POLL_CMD })
+	pollTask = me
+	if not me or not me:start() then
 		pollTask = nil
 		pollTaskStarted = nil
 		pueueFails = pueueFails + 1
@@ -402,6 +420,16 @@ local function tick()
 	for _, job in ipairs(jobs) do
 		local kind = pueueByLabel and pueueByLabel["job:" .. job.id] or nil
 		local gone = pueueByLabel ~= nil and (kind == nil or kind == "done")
+		-- Before the first poll lands (pueueByLabel == nil) nothing can read
+		-- "gone" — which resurrected leaked dirs of crashed jobs (no result
+		-- file, task long dead) as bright frozen ghosts on every re-arm.
+		-- Until pueue speaks, trust only jobs showing recent life: a sidecar
+		-- write or their creation within GHOST_GRACE. A quiet --no-progress
+		-- job may sit out one poll round; a ghost never paints at all.
+		if not gone and pueueByLabel == nil then
+			local lastSign = job.epoch or job.created or 0
+			if (now - lastSign) > GHOST_GRACE then gone = true end
+		end
 		if not gone then
 			alive[job.id] = true
 			aliveCount = aliveCount + 1

@@ -101,4 +101,24 @@ EOF
     When call prune
     The output should equal 'pruned|kept|kept'
   End
+
+  # Regression (Mode B 2026-08-15): a job whose task died with the daemon
+  # never gets a result file, so the result-keyed prune above never touched
+  # it — the dir leaked forever and the HUD resurrected it as a frozen
+  # ghost capsule on every re-arm. The callback now sweeps result-less dirs
+  # whose meta.json is a day stale; fresh active dirs stay.
+  It 'sweeps day-stale result-less dirs, keeps fresh active ones'
+    sweep() {
+      ghost=$(seed) || return 1
+      sleep 1
+      fresh=$(seed) || return 1
+      touch -t 202001010000 "$JOB_STATE_ROOT/$ghost/meta.json" || return 2
+      zsh -f "$CALLBACK" 99 "Success" 0 || return 3
+      printf '%s|%s' \
+        "$([ -d "$JOB_STATE_ROOT/$ghost" ] && echo kept || echo swept)" \
+        "$([ -d "$JOB_STATE_ROOT/$fresh" ] && echo kept || echo swept)"
+    }
+    When call sweep
+    The output should equal 'swept|kept'
+  End
 End
