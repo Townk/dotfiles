@@ -69,7 +69,11 @@ job::start() {
     || die "job::start: pueue is not installed (brew install pueue)"
   [ -n "$title" ] || title="$1"
 
-  local id="${EPOCHSECONDS}-$$"
+  # EPOCHREALTIME (µs), not EPOCHSECONDS: one process may start several jobs
+  # inside the same second (a loop of job::start calls), and <epoch>-<pid>
+  # collided — three jobs shared one state dir. Microseconds keep ids unique
+  # per call and still sortable; $$ separates concurrent processes.
+  local id="${EPOCHREALTIME/./}-$$"
   local dir="$JOB_STATE_ROOT/$id"
   mkdir -p -- "$dir"
   jq -n --arg title "$title" --arg icon "$icon" --arg group "$group" \

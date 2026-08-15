@@ -87,6 +87,21 @@ EOF
       # The half-created job dir must not survive a failed submit.
       The result of function leftover should equal ""
     End
+
+    # Regression (Mode B 2026-08-15): <epoch>-<pid> collided when one process
+    # started several jobs inside the same second — three heavy jobs shared
+    # one state dir and the HUD stacked a single capsule. Ids are µs-based
+    # now; two starts from the SAME shell must never collide.
+    It 'gives same-process starts distinct ids'
+      twice() {
+        zsh -f -c 'source "$1" >/dev/null 2>&1 || exit 99
+                   a=$(job::start -- true) || exit 98
+                   b=$(job::start -- true) || exit 97
+                   [ "$a" != "$b" ] && echo distinct' -- "$JOBLIB"
+      }
+      When call twice
+      The output should equal 'distinct'
+    End
   End
 
   Describe 'job::progress'
