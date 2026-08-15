@@ -67,6 +67,7 @@ Describe 'mux/tmux.zsh — float launch guard (HI-7)'
     stub="$TEST_TMP/tmux"
     {
       echo '#!/usr/bin/env zsh'
+      echo 'printf "%s\n" "$@" >> "${STUB_ARGV_LOG:-/dev/null}"'
       echo 'if [[ "$1" == display-popup ]]; then'
       echo '  if [[ "${STUB_MODE:-ok}" == fail ]]; then exit 1; fi'
       echo '  fifo=""; prev=""'
@@ -116,6 +117,21 @@ Describe 'mux/tmux.zsh — float launch guard (HI-7)'
     The output should equal "yes"
     The error should equal ""
     The status should be success
+  End
+
+  # Regression (Mode B 2026-08-15): --borderless true was silently discarded
+  # on tmux, stacking the themed popup border AROUND the widget's own box —
+  # a double border on every floated dialog. It must translate to -B (the
+  # widget's box is then the single frame, zellij parity).
+  It '_mux_tx_float honors --borderless true as display-popup -B'
+    borderless_argv() {
+      export STUB_ARGV_LOG="$TEST_TMP/argv.log"
+      run_and_report 8 _mux_tx_float --type confirm --borderless true \
+        --title Quit -- "Really?" >/dev/null || return 1
+      grep -c -- '^-B$' "$STUB_ARGV_LOG"
+    }
+    When call borderless_argv
+    The output should equal "1"
   End
 
   It '_mux_tx_float returns non-zero promptly and leaks nothing when the popup fails'

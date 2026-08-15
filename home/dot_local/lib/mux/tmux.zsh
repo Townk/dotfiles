@@ -406,13 +406,13 @@ _mux_tx_pick_float() {
 # width/height ARE the interior; a tmux popup border eats 2 cells each way,
 # so +2 keeps the widgets rendering at identical interior sizes.
 _mux_tx_float() {
-  local type="line" title="" pane_w="" pane_h="" pane_x="" pane_y=""
+  local type="line" title="" pane_w="" pane_h="" pane_x="" pane_y="" borderless=""
   local -a wargs
   while (($#)); do
     case "$1" in
       --type)        type="${2:-line}"; shift 2 ;;
       --title)       title="${2-}"; shift 2 ;;
-      --borderless)  shift 2 ;;   # zellij vocabulary; popups always own their border
+      --borderless)  borderless="${2-}"; shift 2 ;;
       --pane-width)  pane_w="${2-}"; shift 2 ;;
       --pane-height) pane_h="${2-}"; shift 2 ;;
       --pane-x)      pane_x="${2-}"; shift 2 ;;
@@ -455,6 +455,12 @@ _mux_tx_float() {
   fi
 
   local -a geom=(-h $(( _measured_h + 2 )))
+  # --borderless true (the widget wrappers pass it; zellij vocabulary for
+  # "the pane draws no frame"): on tmux the popup IS the pane, so honor it
+  # with -B — the widget's own box is then the single frame, matching the
+  # zellij float exactly. Discarding it stacked the themed popup border
+  # AROUND the widget's box: the double-border caught live in Mode B.
+  [[ "$borderless" == true ]] && geom+=(-B)
   [[ -n "$pane_w" && "$pane_w" != *% ]] && geom+=(-w $(( pane_w + 2 )))
   [[ -n "$pane_w" && "$pane_w" == *% ]] && geom+=(-w "$pane_w")
   [[ -n "$pane_x" ]] && geom+=(-x "$pane_x")
