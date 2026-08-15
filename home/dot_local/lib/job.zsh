@@ -223,8 +223,8 @@ job::_watch_confirm_cancel() {
 
 # job::watch <id> — the modal viewer (spec §6). Pinned header row + live
 # log tail, all on STDERR so stdout stays pipeable. spin::stream's shape:
-# a `pueue follow` child mirrors the task log into a scratch file; new
-# bytes push the header off its row (\r\e[K), print, and the header
+# a `pueue follow` child mirrors the task log into a scratch file; complete
+# new lines push the header off its row (\r\e[K), print, and the header
 # repaints beneath them. Keys ride zselect so the loop never blocks:
 # q/ESC detach (rc 0, task untouched), Ctrl+C lands as SIGINT and asks.
 job::watch() {
@@ -244,43 +244,74 @@ job::watch() {
   title=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null)
   created=$(jq -r '.created // 0' "$dir/meta.json" 2>/dev/null)
 
-  local out off=1 size pct msg epoch key cancelled=0
+  local out off=1 size pct msg epoch key cancelled=0 detached=0 pending=""
   out=$(common::tmpfile)
-  "$pueue" follow "$task_id" >"$out" 2>/dev/null &
-  local follow_pid=$!
-  # One settle tick: give the follow child a chance to get scheduled and
-  # write its first bytes before the loop's very first key-read tick, which
-  # (unlike a human's reaction time) can see input that is ALREADY buffered
-  # on stdin (e.g. a fed `q` in tests) and would otherwise detach before any
-  # output is ever mirrored. Not a loop sleep — a one-time startup wait.
-  spin::nap 20
 
+  # Trap and terminal mode go up BEFORE the follow child spawns: a ^C in
+  # the gap between spawning and the loop must never orphan the child with
+  # no handler on the stack.
   setopt localoptions localtraps
   trap 'if job::_watch_confirm_cancel "$id" "$title"; then cancelled=1; fi' INT
+
+  # cbreak: single keys (q, bare ESC) must reach us without a trailing
+  # Enter and without the tty echoing them into the header row. Headless
+  # runs (JOB_WATCH_FORCE, the spec suite) have no /dev/tty to touch and
+  # keep zsh's own buffered reads — those feed input a line at a time.
+  local saved_stty=""
+  if have_tty; then
+    saved_stty=$(stty -g </dev/tty 2>/dev/null) || saved_stty=""
+    stty -icanon -echo min 0 time 0 </dev/tty 2>/dev/null
+  fi
+
+  "$pueue" follow "$task_id" >"$out" 2>/dev/null &
+  local follow_pid=$!
 
   {
     while true; do
       if [ -f "$dir/result" ] || ((cancelled)); then break; fi
       kill -0 "$follow_pid" 2>/dev/null || break
-      # Mirror new log bytes above the header row.
+      # Mirror new log bytes above the header row — bounded to exactly the
+      # size `wc` just sampled (bytes written after that are next tick's
+      # business, never this tick's), and only complete lines are painted:
+      # a mid-line fragment joins a carried-forward `pending` buffer and
+      # waits for its newline rather than being clobbered by the header's
+      # \r\e[K and reprinted (duplicated) once it completes.
       size=$(wc -c <"$out" 2>/dev/null) || size=0
       if ((size >= off)); then
-        print -nu2 -- $'\r\e[K'
-        tail -c "+$off" "$out" >&2
+        local newbytes=""
+        IFS= read -r -d '' newbytes \
+          < <(tail -c "+$off" "$out" 2>/dev/null | head -c $((size - off + 1))) \
+          2>/dev/null
+        pending+="$newbytes"
         off=$((size + 1))
+        if [[ "$pending" == *$'\n'* ]]; then
+          local tail_frag="${pending##*$'\n'}"
+          local to_print="${pending%"$tail_frag"}"
+          print -nu2 -- $'\r\e[K'
+          print -nru2 -- "$to_print"
+          pending="$tail_frag"
+        fi
       fi
-      # Header: sidecar line, engine-owned label composition.
+      # Header: sidecar line, engine-owned label composition, clamped to
+      # the terminal width (COLUMNS reads 0 in a non-interactive zsh, same
+      # idiom as _spin_say) — a wrapped header defeats the one-row \r\e[K
+      # clear and litters stale rows down the screen.
       pct=-1 msg="" epoch=""
       if [ -f "$dir/progress" ]; then
         IFS=' ' read -r epoch pct msg <"$dir/progress" 2>/dev/null || pct=-1
       fi
-      print -nu2 -- $'\r\e[K'"${C_DIM}$(job::_watch_header "$title" "$msg" "$pct" $((EPOCHSECONDS - created)))${C_RES}"
+      local cols header_line
+      cols=$({ stty size </dev/tty; } 2>/dev/null | awk '{print $2}') || true
+      [[ -z "$cols" ]] && cols="${COLUMNS:-80}"
+      ((cols < 20)) && cols=80
+      header_line="$(job::_watch_header "$title" "$msg" "$pct" $((EPOCHSECONDS - created)))"
+      print -nu2 -- $'\r\e[K'"${C_DIM}${header_line[1,cols-1]}${C_RES}"
       # One ~0.2s tick of key listening (fork-free; spin::nap's module).
       if (( _common_have_zselect )); then
         if zselect -t 20 -r 0 2>/dev/null; then
           if read -u0 -k1 key 2>/dev/null; then
             case "$key" in
-              q | $'\e') break ;;
+              q | $'\e') detached=1; break ;;
             esac
           else
             # EOF stdin (headless/forced runs): /dev/null reads as
@@ -289,15 +320,51 @@ job::watch() {
           fi
         fi
       else
-        read -u0 -t1 -k1 key 2>/dev/null && case "$key" in q | $'\e') break ;; esac
+        if read -u0 -t1 -k1 key 2>/dev/null; then
+          case "$key" in q | $'\e') detached=1; break ;; esac
+        fi
       fi
     done
   } always {
     trap - INT
+    [ -n "$saved_stty" ] && stty "$saved_stty" </dev/tty 2>/dev/null
     kill -TERM "$follow_pid" 2>/dev/null
+    wait "$follow_pid" 2>/dev/null
+    # Final flush: the loop samples the log once per tick and THEN waits
+    # (up to 200ms) for a key — bytes the follow child writes during that
+    # wait are invisible to the tick that already ran and would otherwise
+    # be lost on a fast detach. Now that the child is reaped, read whatever
+    # it left, and this time print it even mid-line (nothing more is
+    # coming, so a partial final line beats a dropped one).
+    size=$(wc -c <"$out" 2>/dev/null) || size=0
+    if ((size >= off)); then
+      local newbytes=""
+      IFS= read -r -d '' newbytes \
+        < <(tail -c "+$off" "$out" 2>/dev/null | head -c $((size - off + 1))) \
+        2>/dev/null
+      pending+="$newbytes"
+      off=$((size + 1))
+    fi
+    if [ -n "$pending" ]; then
+      print -nu2 -- $'\r\e[K'
+      print -nru2 -- "$pending"
+    fi
     print -nu2 -- $'\r\e[K'
     rm -f "$out"
   }
+
+  # Normal completion usually arrives here via the follow child's own EOF:
+  # `pueue follow` returns the instant the task ends, but job-callback
+  # writes `result` only after it has notified. Give the callback a bounded
+  # grace window before falling back to a plain "detached" line; an actual
+  # q/ESC detach or a confirmed cancel skip the wait and report at once.
+  if ((!detached)) && ((!cancelled)) && [ ! -f "$dir/result" ]; then
+    local grace=0
+    while ((grace < 20)) && [ ! -f "$dir/result" ]; do
+      spin::nap 10
+      grace=$((grace + 1))
+    done
+  fi
 
   # Closing line: state the outcome from observed fact (the result file),
   # or say plainly that we detached and the job runs on.

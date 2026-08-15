@@ -16,7 +16,7 @@ printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 case "$1" in
   add) echo "7" ;;
   status) cat "${JOB_FAKE_STATUS:-/dev/null}" 2>/dev/null || :; [ -n "${JOB_FAKE_STATUS:-}" ] || echo '{}' ;;
-  follow) echo "log line one"; sleep "${JOB_FAKE_FOLLOW_SLEEP:-3}" ;;
+  follow) echo "log line one"; : > "${JOB_FAKE_FOLLOW_SENTINEL:-/dev/null}" 2>/dev/null; sleep "${JOB_FAKE_FOLLOW_SLEEP:-3}" ;;
 esac
 exit 0
 EOF
@@ -238,7 +238,21 @@ EOF
     It 'streams the log, detaches on q, and leaves the task alone'
       detach() {
         id=$(run_job job::start --title "W" -- sleep 9) || return 1
-        JOB_WATCH_FORCE=1 run_job job::watch "$id" <<< "q" 2>"$JOB_SANDBOX/watch.err" || return 2
+        # A `q` fed the instant the example starts would race the fake
+        # follow's own write of "log line one" (no startup nap papers over
+        # this any more — see I5). Feed it through a FIFO instead, from a
+        # background writer that waits for a sentinel the fake follow only
+        # touches AFTER its log line is written: the key is then physically
+        # unable to arrive first.
+        local sentinel="$JOB_SANDBOX/detach.ready" fifo="$JOB_SANDBOX/detach.fifo"
+        mkfifo "$fifo"
+        exec 3<>"$fifo"
+        ( while [ ! -e "$sentinel" ]; do sleep 0.02; done; printf 'q' >&3 ) &
+        local writer=$!
+        JOB_FAKE_FOLLOW_SENTINEL="$sentinel" JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
+          run_job job::watch "$id" <&3 2>"$JOB_SANDBOX/watch.err" || return 2
+        wait "$writer" 2>/dev/null
+        exec 3>&-
         # The log line reached the screen (stderr), the follow child was
         # asked for task 7, and NO kill was ever issued (detach ≠ cancel).
         printf '%s|%s|%s' \
@@ -306,8 +320,20 @@ EOF
   Describe 'job::start --modal'
     It 'prints the id on stdout and chains into the viewer'
       modal() {
-        JOB_WATCH_FORCE=1 run_job job::start --modal --title "M" -- sleep 9 \
-          <<< "q" 2>"$JOB_SANDBOX/modal.err"
+        # Same sentinel-gated FIFO as the detach example (I5) — job::start
+        # --modal chains straight into job::watch, so the same race applies.
+        local sentinel="$JOB_SANDBOX/modal.ready" fifo="$JOB_SANDBOX/modal.fifo"
+        mkfifo "$fifo"
+        exec 3<>"$fifo"
+        ( while [ ! -e "$sentinel" ]; do sleep 0.02; done; printf 'q' >&3 ) &
+        local writer=$!
+        JOB_FAKE_FOLLOW_SENTINEL="$sentinel" JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
+          run_job job::start --modal --title "M" -- sleep 9 \
+          <&3 2>"$JOB_SANDBOX/modal.err"
+        local rc=$?
+        wait "$writer" 2>/dev/null
+        exec 3>&-
+        return $rc
       }
       When call modal
       The status should equal 0
