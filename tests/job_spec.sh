@@ -203,4 +203,33 @@ EOF
       The stderr should include 'usage: job'
     End
   End
+
+  # Phase 2 (spec §6): the modal viewer's pure composition helpers. Pure
+  # string functions — no tty, no pueue, no seams needed.
+  Describe 'job::watch composition helpers'
+    It 'renders a proportional 24-char bar'
+      When call run_job job::_watch_bar 50 24
+      The output should equal '████████████············'
+    End
+
+    It 'clamps a full bar and renders indeterminate as all-empty'
+      full_and_indet() {
+        printf '%s|%s' \
+          "$(run_job job::_watch_bar 100 8)" \
+          "$(run_job job::_watch_bar -1 8)"
+      }
+      When call full_and_indet
+      The output should equal '████████|········'
+    End
+
+    It 'composes the header from the message when one exists'
+      When call run_job job::_watch_header "Build X" "step 3 of 9" 33 41
+      The output should equal 'step 3 of 9 [███████·················] 33% 41s — q/ESC detach · ^C cancel'
+    End
+
+    It 'falls back to the title and renders --% when indeterminate'
+      When call run_job job::_watch_header "Build X" "" -1 5
+      The output should equal 'Build X [························] --% 5s — q/ESC detach · ^C cancel'
+    End
+  End
 End

@@ -157,3 +157,39 @@ job::hud() {
   "$hs" -q -c "require(\"jobs\").${verb}()" </dev/null >/dev/null 2>&1 || true
   return 0
 }
+
+# --- modal viewer (phase 2, spec §6) ----------------------------------------
+# Pure composition first, loop later: the bar and header are plain string
+# functions so the spec suite can pin the layout without a tty.
+
+# job::_watch_bar <pct> [width] — a width-char bar, █ filled / · empty.
+# Negative pct = indeterminate = all-empty. No trailing newline.
+job::_watch_bar() {
+  local pct="$1" width="${2:-24}" filled
+  if ((pct < 0)); then
+    filled=0
+  else
+    filled=$((pct * width / 100))
+    ((filled > width)) && filled=$width
+  fi
+  local bar=""
+  ((filled > 0)) && bar="${(pl:$filled::█:)}"
+  ((filled < width)) && bar="$bar${(pl:$((width - filled))::·:)}"
+  print -rn -- "$bar"
+}
+
+# job::_watch_header <title> <msg> <pct> <elapsed_s> — the pinned status
+# row, uncolored (the loop wraps it in the gated palette): the engine-owned
+# label (message when the task has spoken, title before that), the bar, the
+# percentage (--% while indeterminate), elapsed seconds, and the key hints.
+job::_watch_header() {
+  local title="$1" msg="$2" pct="$3" elapsed="$4"
+  local label="$title" pctText
+  [ -n "$msg" ] && label="$msg"
+  if ((pct < 0)); then
+    pctText="--%"
+  else
+    pctText="${pct}%"
+  fi
+  print -rn -- "$label [$(job::_watch_bar "$pct")] $pctText ${elapsed}s — q/ESC detach · ^C cancel"
+}
