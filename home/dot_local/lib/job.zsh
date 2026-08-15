@@ -305,7 +305,7 @@ job::watch() {
       [[ -z "$cols" ]] && cols="${COLUMNS:-80}"
       ((cols < 20)) && cols=80
       header_line="$(job::_watch_header "$title" "$msg" "$pct" $((EPOCHSECONDS - created)))"
-      print -nu2 -- $'\r\e[K'"${C_DIM}${header_line[1,cols-1]}${C_RES}"
+      print -nru2 -- $'\r\e[K'"${C_DIM}${header_line[1,cols-1]}${C_RES}"
       # One ~0.2s tick of key listening (fork-free; spin::nap's module).
       if (( _common_have_zselect )); then
         if zselect -t 20 -r 0 2>/dev/null; then

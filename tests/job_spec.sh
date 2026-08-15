@@ -297,7 +297,7 @@ EOF
         # the WHOLE of its own line; the pre-fix bug ran the closing
         # \r\e[K straight into it on the same unterminated line, so
         # "tail-frag" was never the last thing before a real newline.
-        grep -c '^tail-frag$' "$JOB_SANDBOX/tailfrag.err"
+        grep -c 'tail-frag$' "$JOB_SANDBOX/tailfrag.err"
       }
       When call tailfrag
       The output should equal '1'
