@@ -308,6 +308,18 @@ job::watch() {
   # detection — no shelling out to probe). Re-enter through the CLI front-end
   # inside the popup with --inline --in-float so the confirm switch (below)
   # knows to skip mux::confirm's own float attempt.
+  #
+  # Env-forwarding constraint: mux-modal's tmux path (`display-popup -E`)
+  # forwards only COLORTERM/TMUX_PANE, and tmux runs the popup command from
+  # the SERVER's environment, not this launching shell's — so any
+  # JOB_STATE_ROOT/JOB_PUEUE_BIN override made HERE does not reach the
+  # re-entrant `job watch --inline --in-float` inside the popup; it
+  # re-derives its own defaults from the server's env. Real usage is
+  # unaffected (both sides land on the identical unoverridden defaults).
+  # Live validation with either seam overridden must launch against a fresh
+  # scratch tmux socket started AFTER the override, never against an
+  # already-running (and already-launched) tmux server — see the
+  # never-probe-the-live-server house rule.
   if ((!inline)) && { [ -n "${TMUX:-}" ] || [ -n "${ZELLIJ:-}" ]; }; then
     local modal="${JOB_MUX_MODAL_BIN:-$HOME/.config/mux/scripts/mux-modal}"
     "$modal" --width 80% --height 60% --title "Job runner" -- \
