@@ -379,6 +379,39 @@ EOF
       When call esc_cancelled
       The output should equal '1|0'
     End
+
+    # Regression: pick-common.zsh (pulled in transitively by mux.zsh) runs
+    # `require_cmd fzf` AT SOURCE TIME and dies (exit 1) when fzf is missing
+    # from PATH. Sourcing mux.zsh unguarded from job::_watch_confirm_cancel
+    # would let that `exit` escape past the function entirely and kill the
+    # WHOLE invoking shell (a real Ctrl+C-during-watch, over SSH on a box with
+    # no fzf, would take the caller's session down with it). PATH is stripped
+    # to a minimal bin dir carrying only `dirname` (the one external command
+    # the mux.zsh/pick-common.zsh source chain needs before it reaches the
+    # `require_cmd fzf` check) — fzf itself is absent. A sentinel echoed AFTER
+    # the call, in the SAME zsh process, is the proof the process survived:
+    # a bare `source` escape would take the whole script down before ever
+    # reaching it.
+    It 'survives a source-time exit from the widget stack when fzf is missing (never crashes the caller)'
+      crash_guard() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        mkdir -p "$JOB_SANDBOX/minbin"
+        ln -sf "$(command -v dirname)" "$JOB_SANDBOX/minbin/dirname"
+        zsh -f -c '
+          PATH="$1"; shift
+          source "$1" >/dev/null 2>&1 || { print -r -- "JOBLIB-SOURCE-FAILED"; exit 99; }
+          shift
+          job::_watch_confirm_cancel "$1" "$2"
+          print -r -- "SENTINEL:$?"
+        ' -- "$JOB_SANDBOX/minbin" "$JOBLIB" "$id" "C"
+        printf 'outer_exit=%s\n' "$?"
+        printf 'kills=%s\n' "$(grep -c '^kill' "$JOB_FAKE_LOG")"
+      }
+      When call crash_guard
+      The output should include 'SENTINEL:1'
+      The output should include 'outer_exit=0'
+      The output should include 'kills=0'
+    End
   End
 
   Describe 'job::start --modal'

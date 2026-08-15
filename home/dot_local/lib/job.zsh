@@ -209,6 +209,10 @@ job::_watch_confirm_cancel() {
   local id="$1" title="$2"
   local muxlib="${${(%):-%x}:A:h}/mux.zsh"
   [ -r "$muxlib" ] || return 1
+  # pick-common (pulled in by mux.zsh) hard-exits at SOURCE time when fzf is
+  # missing — probe the load in a subshell so a widget-stack that cannot load
+  # declines the confirm instead of killing the caller's whole shell.
+  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
   source "$muxlib" 2>/dev/null || return 1
   mux::confirm "Cancel ${title}?" --title "Job runner" --danger \
     --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
