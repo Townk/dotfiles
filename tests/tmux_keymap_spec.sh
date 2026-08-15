@@ -1,20 +1,22 @@
 # Tests for home/dot_config/tmux/keymap.conf.tmpl — the tmux key tables
 # mirroring the Zellij modes (migration spec D2/D3, Phase 1).
 #
-# Renders the template via `chezmoi execute-template` (data comes from the
-# canonical source's .chezmoidata — the keymap uses no machine-specific data)
-# and loads it into a scratch tmux server on an isolated -L socket, then
-# asserts table structure with list-keys. Servers are cheap and the socket
-# never touches a real session.
+# Renders the template via `chezmoi execute-template -S "$SHELLSPEC_PROJECT_ROOT"`
+# (data comes from THIS checkout's .chezmoidata, not the live chezmoi source
+# dir — a worktree's keymap.yaml edits would otherwise be invisible to the
+# render and the suite would drift silently until merge) and loads it into a
+# scratch tmux server on an isolated -L socket, then asserts table structure
+# with list-keys. Servers are cheap and the socket never touches a real
+# session.
 Describe 'tmux keymap tables'
   setup_all() {
     KM_TMP=$(mktemp -d)
-    chezmoi execute-template <home/dot_config/tmux/keymap-base.conf.tmpl >"$KM_TMP/keymap-base.conf" 2>/dev/null
-    chezmoi execute-template <home/dot_config/tmux/keymap.conf.tmpl >"$KM_TMP/keymap.conf" 2>/dev/null
+    chezmoi execute-template -S "$SHELLSPEC_PROJECT_ROOT" <home/dot_config/tmux/keymap-base.conf.tmpl >"$KM_TMP/keymap-base.conf" 2>/dev/null
+    chezmoi execute-template -S "$SHELLSPEC_PROJECT_ROOT" <home/dot_config/tmux/keymap.conf.tmpl >"$KM_TMP/keymap.conf" 2>/dev/null
     # Phase 4: the theme's %hidden color fragments must parse BEFORE
     # status.conf composes formats from them — same order as tmux.conf.
-    chezmoi execute-template <custom-builds/theme/templates/tmux-theme.conf.tmpl >"$KM_TMP/theme.conf" 2>/dev/null
-    chezmoi execute-template <home/dot_config/tmux/status.conf.tmpl >"$KM_TMP/status.conf" 2>/dev/null
+    chezmoi execute-template -S "$SHELLSPEC_PROJECT_ROOT" <custom-builds/theme/templates/tmux-theme.conf.tmpl >"$KM_TMP/theme.conf" 2>/dev/null
+    chezmoi execute-template -S "$SHELLSPEC_PROJECT_ROOT" <home/dot_config/tmux/status.conf.tmpl >"$KM_TMP/status.conf" 2>/dev/null
     printf 'source-file "%s"\nsource-file "%s"\nsource-file "%s"\nsource-file "%s"\n' \
       "$KM_TMP/theme.conf" "$KM_TMP/keymap-base.conf" "$KM_TMP/keymap.conf" \
       "$KM_TMP/status.conf" >"$KM_TMP/tmux.conf"
@@ -508,7 +510,7 @@ End
 Describe 'tmux update-environment'
   setup_all() {
     UE_TMP=$(mktemp -d)
-    chezmoi execute-template <home/dot_config/tmux/tmux.conf.tmpl 2>/dev/null \
+    chezmoi execute-template -S "$SHELLSPEC_PROJECT_ROOT" <home/dot_config/tmux/tmux.conf.tmpl 2>/dev/null \
       | grep -E '^set -g[ua] update-environment' >"$UE_TMP/ue.conf"
     tmux -L uespec -f /dev/null new-session -d -s ue -x 80 -y 24
     tmux -L uespec source-file "$UE_TMP/ue.conf"
