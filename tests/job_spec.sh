@@ -449,6 +449,129 @@ EOF
     End
   End
 
+  # Phase 2b (spec §6 revision 2, FLOATING): job::watch becomes a dispatcher.
+  # Outside a mux session (spec_helper.sh unsets TMUX/ZELLIJ suite-wide) or
+  # with --inline it takes the existing inline loop untouched (see the
+  # 'job::watch' Describe above); inside a session, without --inline, it
+  # floats the SAME inline renderer inside a mux-modal popup instead of
+  # running the loop itself.
+  Describe 'job::watch float dispatch'
+    It 'floats the inline viewer through mux-modal and never runs the inline loop itself'
+      dispatch() {
+        id=$(run_job job::start --title "F" -- sleep 9) || return 1
+        local modal_log="$JOB_SANDBOX/modal.log"
+        cat > "$JOB_SANDBOX/modal" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$modal_log"
+exit 0
+EOF
+        chmod +x "$JOB_SANDBOX/modal"
+        TMUX=fake/sock,1,0 JOB_MUX_MODAL_BIN="$JOB_SANDBOX/modal" \
+          run_job job::watch "$id"
+        rc=$?
+        local match="no"
+        grep -qF -- "--title Job runner -- $HOME/.local/libexec/job watch --inline --in-float $id" \
+          "$modal_log" && match="yes"
+        printf 'rc=%s|match=%s|calls=%s|follow=%s' "$rc" "$match" \
+          "$(wc -l < "$modal_log" | tr -d ' ')" \
+          "$(grep -c '^follow' "$JOB_FAKE_LOG")"
+      }
+      When call dispatch
+      The output should equal 'rc=0|match=yes|calls=1|follow=0'
+    End
+  End
+
+  Describe 'job::watch --latest'
+    It 'resolves to the newest result-less job, watching an older running job when a newer one already finished'
+      latest_running() {
+        id1=$(run_job job::start --title "Old" -- sleep 9) || return 1
+        id2=$(run_job job::start --title "New" -- sleep 9) || return 2
+        printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id2/result"
+        JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
+          run_job job::watch --latest --inline </dev/null 2>"$JOB_SANDBOX/latest.err"
+        rc=$?
+        printf 'rc=%s|old=%s|new=%s|follow=%s' "$rc" \
+          "$(grep -c "job watch $id1" "$JOB_SANDBOX/latest.err" | tr -d ' ')" \
+          "$(grep -c "job watch $id2" "$JOB_SANDBOX/latest.err" | tr -d ' ')" \
+          "$(grep -c '^follow' "$JOB_FAKE_LOG")"
+      }
+      When call latest_running
+      The output should equal 'rc=0|old=1|new=0|follow=1'
+    End
+
+    It 'refuses with "no running jobs" when every job dir already has a result'
+      latest_none() {
+        id=$(run_job job::start --title "Done" -- true) || return 1
+        printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id/result"
+        run_job job::watch --latest --inline </dev/null
+      }
+      When call latest_none
+      The status should equal 1
+      The stderr should include 'no running jobs'
+    End
+  End
+
+  # in-float confirm: the SAME Ctrl+C flow, but run from inside a mux-modal
+  # popup — mux::confirm's own float branch cannot be used there (a tmux
+  # client allows only one popup at a time, so stacking a second display-popup
+  # from inside the first would be a hang, not a dialog). --in-float routes
+  # straight to input::confirm (the inline widget), bypassing mux.zsh/tmux
+  # entirely even though TMUX is set — proven here with a recording fake tmux
+  # that must see zero invocations.
+  Describe 'job::_watch_confirm_cancel --in-float'
+    infloat_setup() {
+      export TMUX="/tmp/sock,1,0"
+      export JOB_FAKE_CONFIRM_LOG="$JOB_SANDBOX/confirm.log"
+      cat > "$JOB_SANDBOX/ai-playbook" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_CONFIRM_LOG"
+exit "${JOB_FAKE_CONFIRM_RC:-1}"
+EOF
+      chmod +x "$JOB_SANDBOX/ai-playbook"
+      export AI_PLAYBOOK_INPUT_BIN="$JOB_SANDBOX/ai-playbook"
+      export JOB_TMUX_LOG="$JOB_SANDBOX/tmux.log"
+      cat > "$JOB_SANDBOX/tmux" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$JOB_TMUX_LOG"
+exit 0
+EOF
+      chmod +x "$JOB_SANDBOX/tmux"
+      export MUX_TMUX_BIN="$JOB_SANDBOX/tmux"
+    }
+    BeforeEach 'infloat_setup'
+
+    It 'cancels via input::confirm directly, never touching tmux display-popup'
+      infloat_confirmed() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        JOB_FAKE_CONFIRM_RC=0 run_job job::_watch_confirm_cancel "$id" "C" --in-float
+        rc=$?
+        kills=$(grep -c '^kill 7$' "$JOB_FAKE_LOG")
+        popups=$(grep -c 'display-popup' "$JOB_TMUX_LOG" 2>/dev/null || echo 0)
+        printf '%s|%s|%s|%s' "$rc" "$kills" "$popups" "$(cat "$JOB_FAKE_CONFIRM_LOG")"
+      }
+      When call infloat_confirmed
+      The output should include '0|1|0|'
+      The output should include '--type confirm'
+      The output should include '--danger'
+      The output should include '--affirmative Cancel job'
+      The output should include '--negative Keep running'
+      The output should include '--title Job runner'
+    End
+
+    It 'declines on rc 1 — no kill, rc 1, still no tmux popup'
+      infloat_declined() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        JOB_FAKE_CONFIRM_RC=1 run_job job::_watch_confirm_cancel "$id" "C" --in-float
+        rc=$?
+        kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
+        popups=$(grep -c 'display-popup' "$JOB_TMUX_LOG" 2>/dev/null || echo 0)
+        printf '%s|%s|%s' "$rc" "$kills" "$popups"
+      }
+      When call infloat_declined
+      The output should equal '1|0|0'
+    End
+  End
+
   # Regressions (Mode B 2026-08-15, second session): two zsh traps the suite
   # could not see because run_job sources without -u and no example ever
   # drove the viewer loop past its first iteration.

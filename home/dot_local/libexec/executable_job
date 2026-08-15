@@ -12,7 +12,7 @@ case "$verb" in
     "job::$verb" "$@"
     ;;
   *)
-    print -ru2 -- "usage: job <start|progress|cancel|list|hud|watch> ..."
+    print -ru2 -- "usage: job <start|progress|cancel|list|hud> ... | job watch [--inline] [--in-float] [--latest|<id>]"
     exit 1
     ;;
 esac

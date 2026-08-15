@@ -201,35 +201,78 @@ job::_watch_header() {
   print -rn -- "$label [$(job::_watch_bar "$pct")] $pctText ${elapsed}s — q/ESC detach · ^C cancel"
 }
 
-# job::_watch_confirm_cancel <id> <title> — the Ctrl+C flow, routed through
-# the house dialog layer: mux::confirm floats the themed danger-palette
-# confirm in a mux popup when inside a session, or degrades to the inline
-# input::confirm otherwise. Fail-closed — ANY non-zero rc (declined,
-# unrenderable, or the 130 ESC-cancel) means "do not cancel". rc 0 = the
-# job WAS cancelled, rc 1 = declined/resume (caller keeps watching).
-# mux.zsh is pulled in lazily, the way notify pulls its bridge libs; an
-# unreadable lib degrades to a safe decline, never a crash.
+# job::_watch_confirm_cancel <id> <title> [--in-float] — the Ctrl+C flow,
+# routed through the house dialog layer: mux::confirm floats the themed
+# danger-palette confirm in a mux popup when inside a session, or degrades
+# to the inline input::confirm otherwise. Fail-closed — ANY non-zero rc
+# (declined, unrenderable, or the 130 ESC-cancel) means "do not cancel".
+# rc 0 = the job WAS cancelled, rc 1 = declined/resume (caller keeps
+# watching). Widget libs are pulled in lazily, the way notify pulls its
+# bridge libs; an unreadable lib degrades to a safe decline, never a crash.
+#
+# --in-float: we are ALREADY rendering inside a mux-modal popup (job::watch's
+# float dispatch spawned it). A tmux client allows only one popup at a time,
+# so routing through mux::confirm here would try to stack a second
+# display-popup on top of the one we are already inside — go straight to the
+# inline input::confirm widget instead, bypassing mux.zsh/tmux entirely.
 job::_watch_confirm_cancel() {
-  local id="$1" title="$2"
-  local muxlib="${${(%):-%x}:A:h}/mux.zsh"
-  [ -r "$muxlib" ] || return 1
-  # pick-common (pulled in by mux.zsh) hard-exits at SOURCE time when fzf is
-  # missing — probe the load in a subshell so a widget-stack that cannot load
-  # declines the confirm instead of killing the caller's whole shell.
-  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
-  source "$muxlib" 2>/dev/null || return 1
-  mux::confirm "Cancel ${title}?" --title "Job runner" --danger \
-    --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
+  local id="$1" title="$2" in_float=0
+  [ "${3:-}" = "--in-float" ] && in_float=1
+
+  if ((in_float)); then
+    local inputlib="${${(%):-%x}:A:h}/input-common.zsh"
+    [ -r "$inputlib" ] || return 1
+    # pick-common (pulled in by input-common.zsh) hard-exits at SOURCE time
+    # when fzf is missing — same subshell probe as the mux.zsh path below.
+    ( source "$inputlib" ) >/dev/null 2>&1 || return 1
+    source "$inputlib" 2>/dev/null || return 1
+    input::confirm "Cancel ${title}?" --title "Job runner" --danger \
+      --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
+  else
+    local muxlib="${${(%):-%x}:A:h}/mux.zsh"
+    [ -r "$muxlib" ] || return 1
+    # pick-common (pulled in by mux.zsh) hard-exits at SOURCE time when fzf is
+    # missing — probe the load in a subshell so a widget-stack that cannot load
+    # declines the confirm instead of killing the caller's whole shell.
+    ( source "$muxlib" ) >/dev/null 2>&1 || return 1
+    source "$muxlib" 2>/dev/null || return 1
+    mux::confirm "Cancel ${title}?" --title "Job runner" --danger \
+      --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
+  fi
   job::cancel "$id" >/dev/null 2>&1
   return 0
 }
 
-# job::watch <id> — the modal viewer (spec §6). Pinned header row + live
-# log tail, all on STDERR so stdout stays pipeable. spin::stream's shape:
-# a `pueue follow` child mirrors the task log into a scratch file; complete
-# new lines push the header off its row (\r\e[K), print, and the header
-# repaints beneath them. Keys ride zselect so the loop never blocks:
-# q/ESC detach (rc 0, task untouched), Ctrl+C lands as SIGINT and asks.
+# job::_watch_resolve_latest — print the id of the newest (name-descending)
+# job dir that has meta.json and no result; rc 1 when none qualify. Ids sort
+# lexicographically by creation order (µs-epoch prefix, §job::start), so a
+# plain name-descending glob order is newest-first.
+job::_watch_resolve_latest() {
+  local dir id
+  for dir in "$JOB_STATE_ROOT"/*(N/On); do
+    id="${dir:t}"
+    [ -f "$dir/meta.json" ] || continue
+    [ -f "$dir/result" ] && continue
+    print -r -- "$id"
+    return 0
+  done
+  return 1
+}
+
+# job::watch [--inline] [--in-float] [--latest | <id>] — the modal viewer
+# dispatcher (spec §6 revision 2, FLOATING). Outside a mux session, or with
+# --inline, this IS the inline viewer: pinned header row + live log tail, all
+# on STDERR so stdout stays pipeable. Inside a mux session without --inline,
+# it instead floats the SAME inline renderer in a mux-modal popup and returns
+# the popup's rc — the float chrome writes nothing of its own to our stdout,
+# and mux-modal's own stdout is redirected away so a captured
+# `$(job::start --modal …)` still sees exactly the job id.
+#
+# spin::stream's shape (inline path): a `pueue follow` child mirrors the task
+# log into a scratch file; complete new lines push the header off its row
+# (\r\e[K), print, and the header repaints beneath them. Keys ride zselect so
+# the loop never blocks: q/ESC detach (rc 0, task untouched), Ctrl+C lands as
+# SIGINT and asks.
 job::watch() {
   # The libexec front-end runs `set -eu`, but this loop is full of statements
   # whose non-zero returns are NORMAL (interrupted builtins after the INT
@@ -238,7 +281,40 @@ job::watch() {
   # skipping the closing line (observed live in Mode B). Pin errexit off for
   # this function only; localoptions restores the caller's setting on return.
   setopt localoptions noerrexit
-  local id="${1:?job::watch: id required}"
+  local id="" inline=0 in_float=0 latest=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --inline) inline=1; shift ;;
+      # --in-float implies inline rendering: it is only ever passed alongside
+      # --inline by the float dispatch below, but a caller reaching straight
+      # for --in-float should still get the inline loop, not another float.
+      --in-float) inline=1; in_float=1; shift ;;
+      --latest) latest=1; shift ;;
+      --) shift; break ;;
+      *) id="$1"; shift ;;
+    esac
+  done
+  (($#)) && id="$1"
+
+  if ((latest)); then
+    id=$(job::_watch_resolve_latest) || {
+      log_error "job::watch: no running jobs"
+      return 1
+    }
+  fi
+  [ -n "$id" ] || { log_error "job::watch: id required"; return 1; }
+
+  # Float dispatch: no --inline AND we are inside a mux session (env-only
+  # detection — no shelling out to probe). Re-enter through the CLI front-end
+  # inside the popup with --inline --in-float so the confirm switch (below)
+  # knows to skip mux::confirm's own float attempt.
+  if ((!inline)) && { [ -n "${TMUX:-}" ] || [ -n "${ZELLIJ:-}" ]; }; then
+    local modal="${JOB_MUX_MODAL_BIN:-$HOME/.config/mux/scripts/mux-modal}"
+    "$modal" --width 80% --height 60% --title "Job runner" -- \
+      "$HOME/.local/libexec/job" watch --inline --in-float "$id" >&2
+    return $?
+  fi
+
   local dir="$JOB_STATE_ROOT/$id"
   if [ ! -f "$dir/meta.json" ]; then
     log_error "job::watch: unknown job $id"
@@ -267,7 +343,11 @@ job::watch() {
   # the gap between spawning and the loop must never orphan the child with
   # no handler on the stack.
   setopt localoptions localtraps
-  trap 'if job::_watch_confirm_cancel "$id" "$title"; then cancelled=1; fi' INT
+  if ((in_float)); then
+    trap 'if job::_watch_confirm_cancel "$id" "$title" --in-float; then cancelled=1; fi' INT
+  else
+    trap 'if job::_watch_confirm_cancel "$id" "$title"; then cancelled=1; fi' INT
+  fi
 
   # cbreak: single keys (q, bare ESC) must reach us without a trailing
   # Enter and without the tty echoing them into the header row. Headless
