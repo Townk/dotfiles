@@ -148,6 +148,25 @@ error_log_path = "~/.cache/gpg-agent/launch.log"
 GNUPGHOME = "{{ .chezmoi.homeDir }}/.config/gnupg"
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
+# pueued — the job-runner daemon (pueue backbone; spec
+# docs/superpowers/specs/2026-08-15-job-runner-design.md). Runs FOREGROUND
+# under launchd (no -d flag — launchd owns daemonization) with keep_alive
+# restarting it on crash; task state and logs live in pueue's own data dir,
+# so a restart loses nothing. The daemon.callback (pueue.yml) execs
+# ~/.local/libexec/job-callback, which needs jq + hs + the notify lib chain
+# — hence the PATH below.
+[pueued]
+description    = "Job runner daemon (pueue): long-running observable tasks"
+cmd            = ["pueued"]
+keep_alive     = true
+run_at_load    = true
+log_path       = "~/.cache/pueued/pueued.log"
+error_log_path = "~/.cache/pueued/pueued.log"
+
+[pueued.env]
+# Single leading tilde only (the renderer detildes only a string-leading ~).
+PATH = "~/.local/libexec:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
 # backup-* — the Terminal Time Machine schedule (system-backup silo, spec §6).
 # Three agents: a half-hourly capture tick (which chains a reconcile pass), a
 # mount-watching + hourly-safety reconcile, and the daily prune repack. All

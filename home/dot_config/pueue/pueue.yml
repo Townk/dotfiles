@@ -1,0 +1,15 @@
+# pueue.yml — job-runner backbone configuration.
+# Spec: docs/superpowers/specs/2026-08-15-job-runner-design.md
+#
+# NOT a chezmoi template on purpose: the {{ id }} placeholders below are
+# pueue's Handlebars callback variables, which chezmoi's go-template pass
+# would consume. Keep this file .tmpl-free.
+#
+# Groups are runtime state, not config: job::start creates the `heavy`
+# group (parallel 1) on first use. `default` parallelism is set here.
+daemon:
+  default_parallel_tasks: 4
+  # Fired once per task on completion (Success | Failed(N) | Killed | …).
+  # sh -c tilde-expands the leading ~, so this works from launchd's env.
+  callback: '~/.local/libexec/job-callback "{{ id }}" "{{ result }}" "{{ exit_code }}"'
+  callback_log_lines: 10
