@@ -164,6 +164,12 @@ log_path       = "~/.cache/pueued/pueued.log"
 error_log_path = "~/.cache/pueued/pueued.log"
 
 [pueued.env]
+# macOS pueued's default config dir is ~/Library/Application Support/pueue —
+# it never looks in ~/.config. Point it at the chezmoi-managed file (leading
+# ~ is detilded by the renderer). Client `pueue` calls may keep defaults:
+# the managed file sets daemon.* keys only, so both sides agree on the
+# shared socket.
+PUEUE_CONFIG_PATH = "~/.config/pueue/pueue.yml"
 # Single leading tilde only (the renderer detildes only a string-leading ~).
 PATH = "~/.local/libexec:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
