@@ -15,6 +15,7 @@ printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 [ -n "${JOB_FAKE_RC:-}" ] && exit "$JOB_FAKE_RC"
 case "$1" in
   add) echo "7" ;;
+  status) cat "${JOB_FAKE_STATUS:-/dev/null}" 2>/dev/null || :; [ -n "${JOB_FAKE_STATUS:-}" ] || echo '{}' ;;
 esac
 exit 0
 EOF
@@ -126,6 +127,65 @@ EOF
       }
       When call cancel
       The output should equal '1'
+    End
+  End
+
+  Describe 'job::list'
+    It 'merges meta, sidecar line, done flag, and pueue status'
+      listed() {
+        id=$(run_job job::start --title "T" -- true) || return 1
+        JOB_ID="$id" run_job job::progress 30 "warming" || return 2
+        printf '%s\n' '{"tasks":{}}' > "$JOB_SANDBOX/status.json"
+        export JOB_FAKE_STATUS="$JOB_SANDBOX/status.json"
+        out=$(run_job job::list) || return 3
+        printf '%s|%s|%s' \
+          "$(printf '%s' "$out" | jq -r '.jobs[0].title')" \
+          "$(printf '%s' "$out" | jq -r '.jobs[0].progress_line' | sed 's/^[0-9]* //')" \
+          "$(printf '%s' "$out" | jq -r '.jobs[0].done')"
+      }
+      When call listed
+      The output should equal 'T|30 warming|false'
+    End
+
+    It 'flags a job with a result file as done'
+      done_flag() {
+        id=$(run_job job::start -- true) || return 1
+        printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id/result"
+        run_job job::list | jq -r '.jobs[0].done'
+      }
+      When call done_flag
+      The output should equal 'true'
+    End
+  End
+
+  Describe 'job::hud'
+    It 'sends one require("jobs") call through hs'
+      hud() {
+        mkdir -p "$JOB_SANDBOX/bin"
+        cat > "$JOB_SANDBOX/bin/hs" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$JOB_SANDBOX/hs.log"
+EOF
+        chmod +x "$JOB_SANDBOX/bin/hs"
+        HS="$JOB_SANDBOX/bin/hs" run_job job::hud show || return 1
+        cat "$JOB_SANDBOX/hs.log"
+      }
+      When call hud
+      The output should equal '-q -c require("jobs").show()'
+    End
+  End
+
+  Describe 'libexec/job front-end'
+    JOBBIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job"
+    It 'dispatches verbs to the library'
+      When call zsh -f "$JOBBIN" start --title "Via CLI" -- true
+      The status should equal 0
+      The output should match pattern '*-*'
+    End
+    It 'rejects unknown verbs with usage'
+      When call zsh -f "$JOBBIN" frobnicate
+      The status should equal 1
+      The stderr should include 'usage: job'
     End
   End
 End

@@ -1,0 +1,18 @@
+#!/usr/bin/env zsh
+# job — CLI front-end over lib/job.zsh for non-zsh callers (Hammerspoon,
+# job-callback, POSIX scripts). zsh callers source the lib instead. NOT in
+# ~/.local/bin on purpose: this is plumbing called by tools, not by the user.
+set -eu
+source "${0:A:h}/../lib/job.zsh"
+
+verb="${1:-}"
+case "$verb" in
+  start | progress | cancel | list | hud)
+    shift
+    "job::$verb" "$@"
+    ;;
+  *)
+    print -ru2 -- "usage: job <start|progress|cancel|list|hud> ..."
+    exit 1
+    ;;
+esac

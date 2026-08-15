@@ -116,3 +116,40 @@ job::cancel() {
   [[ "$task_id" == <-> ]] || return 1
   "$pueue" kill "$task_id"
 }
+
+# job::list — one JSON document merging our per-job state with pueue's
+# authoritative status. For tooling (the HUD reads files directly); humans
+# get the HUD and, in phase 2, job::watch.
+job::list() {
+  local pueue pueue_status='{}'
+  if pueue=$(job::_pueue); then
+    pueue_status=$("$pueue" status --json 2>/dev/null) || pueue_status='{}'
+  fi
+  local -a entries=()
+  local dir id prog done_flag
+  for dir in "$JOB_STATE_ROOT"/*(N/); do
+    id="${dir:t}"
+    [ -f "$dir/meta.json" ] || continue
+    prog=""
+    [ -f "$dir/progress" ] && prog="$(<"$dir/progress")"
+    done_flag=false
+    [ -f "$dir/result" ] && done_flag=true
+    entries+=("$(jq -c --arg id "$id" --arg progress_line "$prog" \
+      --argjson done "$done_flag" \
+      '. + {id:$id, progress_line:$progress_line, done:$done}' \
+      "$dir/meta.json")")
+  done
+  printf '%s\n' "${entries[@]}" \
+    | jq -s --argjson pueue "$pueue_status" '{jobs:., pueue:$pueue}'
+}
+
+# job::hud [show|hide|toggle] — recall/dismiss the Hammerspoon HUD. Fire and
+# forget, same isolation as pick-clipboard's emitter: -q (the hs.ipc console
+# mirror bug), stdin from /dev/null (the real hs CLI reads stdin).
+job::hud() {
+  local verb="${1:-show}" hs
+  case "$verb" in show | hide | toggle) ;; *) return 1 ;; esac
+  hs=$(notify::available --path) || return 1
+  "$hs" -q -c "require(\"jobs\").${verb}()" </dev/null >/dev/null 2>&1 || true
+  return 0
+}
