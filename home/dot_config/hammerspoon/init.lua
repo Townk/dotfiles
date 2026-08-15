@@ -14,6 +14,7 @@ local images = require("images")
 local kb = require("keybindings")
 local lifecycle = require("system.lifecycle")
 local osd = require("osd")
+local jobsHud = require("jobs")
 local sd = require("streamdeck")
 local windows = require("windows")
 local windowDrag = require("windows.drag")
@@ -27,6 +28,7 @@ lifecycle.registerCleanup(windowDrag.cleanup)
 lifecycle.registerCleanup(dock.cleanup)
 lifecycle.registerCleanup(clipHistory.cleanup)
 lifecycle.registerCleanup(clipPicker.cleanup)
+lifecycle.registerCleanup(jobsHud.cleanup)
 
 function notify(icon, text, soundName)
 	osd.notify(icon, text, soundName)
@@ -38,6 +40,7 @@ end
 
 dock.setup()
 clipHistory.setup()
+jobsHud.setup()
 
 -- Cmd+drag anywhere on a window to move it; plain Cmd+click is preserved
 -- via replay so apps that use it (Ghostty URL opening, etc.) keep working.
@@ -177,6 +180,7 @@ kb.setup({
 						{ key = "c", icon = "󰆍", desc = "Console", action = actions.hammerspoonConsole },
 						{ key = "d", icon = "󰔎", desc = "Dark/Light mode", action = controls.toggleDarkMode },
 						{ key = "f", icon = "󰪑", desc = "Do not disturb", action = controls.toggleDoNotDisturb },
+						{ key = "j", icon = "󰜎", desc = "Jobs progress HUD", action = jobsHud.toggle },
 					},
 				},
 				{

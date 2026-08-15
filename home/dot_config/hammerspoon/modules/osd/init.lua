@@ -923,4 +923,21 @@ function M.cleanup()
 	tickSoundLoaded = false
 end
 
+-- Shared with the jobs HUD (modules/jobs): the icon resolver (with its
+-- warmed sqlite glyph cache) and the capsule palette, so the two widgets
+-- cannot drift apart on look or glyph plumbing. jobs owns its own layout;
+-- these are the pieces that must stay single-source.
+M.resolveNamedIcon = resolveNamedIcon
+M.NERD_FONT_NAME = NERD_FONT_NAME
+M.capsuleTheme = {
+	bg = BG_COLOR,
+	border = BORDER_COLOR,
+	borderW = BORDER_W,
+	barOn = BAR_ON,
+	barOff = BAR_OFF,
+	barRadius = BAR_RADIUS,
+	stallAlpha = PROG_STALL_ALPHA,
+	stallIcon = PROG_STALL_ICON,
+}
+
 return M
