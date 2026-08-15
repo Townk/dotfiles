@@ -79,6 +79,7 @@ keymap:
       - U
       - G
       - c
+      - J
     - mode: tab
       members:
       - t
@@ -403,6 +404,19 @@ keymap:
         icon: 󱛢
         color: mauve
         cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 75 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Clipboard history\" --inject --no-chrome -- $HOME/.local/libexec/pick-clipboard"'
+        dialog: true
+      - keys:
+        - J
+        desc: watch newest job
+        icon: 󰈈
+        color: green
+        # job::watch --latest floats its OWN popup (mux-modal) on a resolved
+        # id, so this is a `dialog` entry exactly like clipboard history above
+        # — the panel's teardown must not race it (MUX_STACK_KEEP_POPUP=1,
+        # see keymap.conf.tmpl's $op). No running jobs is NOT an error: the
+        # front end logs to stderr and returns 1, which we swallow and turn
+        # into a themed status message instead of an error-message overlay.
+        cmd: run-shell -b '$HOME/.local/libexec/job watch --latest 2>/dev/null || tmux display-message "no running jobs"'
         dialog: true
       - keys:
         - Y

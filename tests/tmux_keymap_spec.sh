@@ -310,6 +310,16 @@ Describe 'tmux keymap tables'
     The output should include "pane-border-status"
   End
 
+  # Leader summon (job-runner phase 2b, spec §6 revision 2): floats the
+  # newest running job's watch viewer. `job watch --latest` owns the no-jobs
+  # case itself (stderr + rc 1) — swallowed here and turned into a themed
+  # status message instead of an error-message overlay.
+  It 'prefix J floats the newest running job (or a quiet notice)'
+    When call keys prefix
+    The output should include "job watch --latest"
+    The output should include "no running jobs"
+  End
+
   It 'the leader pushes Command on the stack and M-. toggles the panel (Phase 5)'
     When call tmux -L kmspec list-keys
     The output should include "mux-stack push command"
@@ -338,6 +348,7 @@ Describe 'tmux keymap tables'
     The output should include 'pick-clipboard'          # prefix c
     The output should include 'mux-quit-confirm'        # prefix q
     The output should include 'mux-rename'              # the rename dialogs
+    The output should include 'job watch --latest'      # prefix J
     The output should not include 'kill-pane'           # an action, not a dialog
   End
 
