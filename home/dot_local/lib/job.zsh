@@ -231,6 +231,13 @@ job::_watch_confirm_cancel() {
 # repaints beneath them. Keys ride zselect so the loop never blocks:
 # q/ESC detach (rc 0, task untouched), Ctrl+C lands as SIGINT and asks.
 job::watch() {
+  # The libexec front-end runs `set -eu`, but this loop is full of statements
+  # whose non-zero returns are NORMAL (interrupted builtins after the INT
+  # trap, empty-read probes, short-circuit arithmetic). Under errexit a ^C
+  # could kill the process mid-trap — orphaning the confirm popup and
+  # skipping the closing line (observed live in Mode B). Pin errexit off for
+  # this function only; localoptions restores the caller's setting on return.
+  setopt localoptions noerrexit
   local id="${1:?job::watch: id required}"
   local dir="$JOB_STATE_ROOT/$id"
   if [ ! -f "$dir/meta.json" ]; then

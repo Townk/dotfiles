@@ -481,5 +481,24 @@ EOF
       # stdout carries ONLY our sentinel — nothing leaked by the loop.
       The output should equal 'rc=0'
     End
+
+    # The front-end wraps the library in `set -eu`; the viewer loop is full
+    # of normally-failing statements (interrupted builtins, empty probes).
+    # job::watch pins errexit off locally — this drives the WHOLE loop
+    # through the real front-end for several ticks and must exit cleanly
+    # with the closing line, not die mid-loop.
+    It 'runs the full loop under the front-end set -eu'
+      JOBBIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job"
+      via_frontend() {
+        id=$(run_job job::start --title "FE" -- sleep 9) || return 1
+        JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
+          zsh -f "$JOBBIN" watch "$id" </dev/null 2>"$JOB_SANDBOX/fe.err"
+        rc=$?
+        printf 'rc=%s|' "$rc"
+        grep -c 'still running' "$JOB_SANDBOX/fe.err"
+      }
+      When call via_frontend
+      The output should equal 'rc=0|1'
+    End
   End
 End
