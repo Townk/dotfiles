@@ -52,13 +52,14 @@ job::_ensure_group() {
 # and a lightning-fast callback both find the dir, then patched with the
 # real task id.
 job::start() {
-  local group="default" title="" icon="" progress="expected"
+  local group="default" title="" icon="" progress="expected" modal=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --group) group="$2"; shift 2 ;;
       --title) title="$2"; shift 2 ;;
       --icon) icon="$2"; shift 2 ;;
       --no-progress) progress="none"; shift ;;
+      --modal) modal=1; shift ;;
       --) shift; break ;;
       *) break ;;
     esac
@@ -94,6 +95,8 @@ job::start() {
   jq --argjson tid "$task_id" '.pueue_id = $tid' "$dir/meta.json" > "$tmp" \
     && mv -f -- "$tmp" "$dir/meta.json"
   print -r -- "$id"
+  ((modal)) && job::watch "$id"
+  return 0
 }
 
 # job::progress <pct> [message…] — called INSIDE a running task ($JOB_ID is
@@ -192,4 +195,120 @@ job::_watch_header() {
     pctText="${pct}%"
   fi
   print -rn -- "$label [$(job::_watch_bar "$pct")] $pctText ${elapsed}s — q/ESC detach · ^C cancel"
+}
+
+# job::_watch_confirm_cancel <id> <title> — the Ctrl+C flow: a themed
+# confirm (danger palette), and only an explicit yes cancels. rc 0 = the
+# job WAS cancelled, rc 1 = declined (caller resumes viewing). JOB_GUM_BIN
+# is the test seam; theme-common is pulled lazily the way notify pulls its
+# bridge libs, and its absence degrades to an unthemed gum, never a crash.
+job::_watch_confirm_cancel() {
+  local id="$1" title="$2" gum
+  gum="${JOB_GUM_BIN:-$(command -v gum 2>/dev/null)}"
+  [ -n "$gum" ] || return 1
+  if [ -r "${${(%):-%x}:A:h}/theme-common.zsh" ]; then
+    source "${${(%):-%x}:A:h}/theme-common.zsh" 2>/dev/null \
+      && theme::gum_confirm_env --role danger 2>/dev/null
+  fi
+  # /dev/tty only when one exists — the spec suite has none, and a failed
+  # redirect would make the confirm unreachable rather than unthemed.
+  if have_tty; then
+    "$gum" confirm "Cancel ${title}?" </dev/tty >/dev/tty 2>&1 || return 1
+  else
+    "$gum" confirm "Cancel ${title}?" || return 1
+  fi
+  job::cancel "$id" >/dev/null 2>&1
+  return 0
+}
+
+# job::watch <id> — the modal viewer (spec §6). Pinned header row + live
+# log tail, all on STDERR so stdout stays pipeable. spin::stream's shape:
+# a `pueue follow` child mirrors the task log into a scratch file; new
+# bytes push the header off its row (\r\e[K), print, and the header
+# repaints beneath them. Keys ride zselect so the loop never blocks:
+# q/ESC detach (rc 0, task untouched), Ctrl+C lands as SIGINT and asks.
+job::watch() {
+  local id="${1:?job::watch: id required}"
+  local dir="$JOB_STATE_ROOT/$id"
+  if [ ! -f "$dir/meta.json" ]; then
+    log_error "job::watch: unknown job $id"
+    return 1
+  fi
+  if [ -z "${JOB_WATCH_FORCE:-}" ] && ! [ -t 2 ]; then
+    log_error "job::watch: needs a terminal (the HUD is the headless surface)"
+    return 1
+  fi
+  local pueue task_id title created
+  pueue=$(job::_pueue) || return 1
+  task_id=$(jq -r '.pueue_id' "$dir/meta.json" 2>/dev/null) || return 1
+  title=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null)
+  created=$(jq -r '.created // 0' "$dir/meta.json" 2>/dev/null)
+
+  local out off=1 size pct msg epoch key cancelled=0
+  out=$(common::tmpfile)
+  "$pueue" follow "$task_id" >"$out" 2>/dev/null &
+  local follow_pid=$!
+  # One settle tick: give the follow child a chance to get scheduled and
+  # write its first bytes before the loop's very first key-read tick, which
+  # (unlike a human's reaction time) can see input that is ALREADY buffered
+  # on stdin (e.g. a fed `q` in tests) and would otherwise detach before any
+  # output is ever mirrored. Not a loop sleep — a one-time startup wait.
+  spin::nap 20
+
+  setopt localoptions localtraps
+  trap 'if job::_watch_confirm_cancel "$id" "$title"; then cancelled=1; fi' INT
+
+  {
+    while true; do
+      if [ -f "$dir/result" ] || ((cancelled)); then break; fi
+      kill -0 "$follow_pid" 2>/dev/null || break
+      # Mirror new log bytes above the header row.
+      size=$(wc -c <"$out" 2>/dev/null) || size=0
+      if ((size >= off)); then
+        print -nu2 -- $'\r\e[K'
+        tail -c "+$off" "$out" >&2
+        off=$((size + 1))
+      fi
+      # Header: sidecar line, engine-owned label composition.
+      pct=-1 msg="" epoch=""
+      if [ -f "$dir/progress" ]; then
+        IFS=' ' read -r epoch pct msg <"$dir/progress" 2>/dev/null || pct=-1
+      fi
+      print -nu2 -- $'\r\e[K'"${C_DIM}$(job::_watch_header "$title" "$msg" "$pct" $((EPOCHSECONDS - created)))${C_RES}"
+      # One ~0.2s tick of key listening (fork-free; spin::nap's module).
+      if (( _common_have_zselect )); then
+        if zselect -t 20 -r 0 2>/dev/null; then
+          if read -u0 -k1 key 2>/dev/null; then
+            case "$key" in
+              q | $'\e') break ;;
+            esac
+          else
+            # EOF stdin (headless/forced runs): /dev/null reads as
+            # perpetually ready — nap instead of busy-spinning the loop.
+            spin::nap 20
+          fi
+        fi
+      else
+        read -u0 -t1 -k1 key 2>/dev/null && case "$key" in q | $'\e') break ;; esac
+      fi
+    done
+  } always {
+    trap - INT
+    kill -TERM "$follow_pid" 2>/dev/null
+    print -nu2 -- $'\r\e[K'
+    rm -f "$out"
+  }
+
+  # Closing line: state the outcome from observed fact (the result file),
+  # or say plainly that we detached and the job runs on.
+  if [ -f "$dir/result" ]; then
+    local r_epoch r_result r_code
+    IFS=' ' read -r r_epoch r_result r_code <"$dir/result" 2>/dev/null || r_result="?"
+    print -ru2 -- "${title:-$id}: ${r_result}${r_code:+ (exit $r_code)}"
+  elif ((cancelled)); then
+    print -ru2 -- "${title:-$id}: cancel requested"
+  else
+    print -ru2 -- "${title:-$id}: detached — still running (job watch $id)"
+  fi
+  return 0
 }

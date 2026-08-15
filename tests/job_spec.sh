@@ -16,6 +16,7 @@ printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 case "$1" in
   add) echo "7" ;;
   status) cat "${JOB_FAKE_STATUS:-/dev/null}" 2>/dev/null || :; [ -n "${JOB_FAKE_STATUS:-}" ] || echo '{}' ;;
+  follow) echo "log line one"; sleep "${JOB_FAKE_FOLLOW_SLEEP:-3}" ;;
 esac
 exit 0
 EOF
@@ -230,6 +231,98 @@ EOF
     It 'falls back to the title and renders --% when indeterminate'
       When call run_job job::_watch_header "Build X" "" -1 5
       The output should equal 'Build X [························] --% 5s — q/ESC detach · ^C cancel'
+    End
+  End
+
+  Describe 'job::watch'
+    It 'streams the log, detaches on q, and leaves the task alone'
+      detach() {
+        id=$(run_job job::start --title "W" -- sleep 9) || return 1
+        JOB_WATCH_FORCE=1 run_job job::watch "$id" <<< "q" 2>"$JOB_SANDBOX/watch.err" || return 2
+        # The log line reached the screen (stderr), the follow child was
+        # asked for task 7, and NO kill was ever issued (detach ≠ cancel).
+        printf '%s|%s|%s' \
+          "$(grep -c 'log line one' "$JOB_SANDBOX/watch.err")" \
+          "$(grep -c '^follow 7$' "$JOB_FAKE_LOG")" \
+          "$(grep -c '^kill' "$JOB_FAKE_LOG")"
+      }
+      When call detach
+      The output should equal '1|1|0'
+    End
+
+    It 'returns immediately with the outcome when the job already finished'
+      finished() {
+        id=$(run_job job::start --title "Done job" -- true) || return 1
+        printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id/result"
+        JOB_FAKE_FOLLOW_SLEEP=0 JOB_WATCH_FORCE=1 \
+          run_job job::watch "$id" </dev/null 2>"$JOB_SANDBOX/watch.err" || return 2
+        grep -c 'Success' "$JOB_SANDBOX/watch.err"
+      }
+      When call finished
+      The output should equal '1'
+    End
+
+    It 'refuses an unknown job id'
+      When call run_job job::watch no-such-job
+      The status should equal 1
+      The stderr should include 'unknown job'
+    End
+
+    It 'refuses without a tty unless forced'
+      no_tty() {
+        id=$(run_job job::start -- sleep 9) || return 1
+        run_job job::watch "$id" </dev/null
+      }
+      When call no_tty
+      The status should equal 1
+      The stderr should include 'terminal'
+    End
+  End
+
+  Describe 'job::_watch_confirm_cancel'
+    It 'cancels only when gum confirms'
+      confirm() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        cat > "$JOB_SANDBOX/gum-yes" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+        cat > "$JOB_SANDBOX/gum-no" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+        chmod +x "$JOB_SANDBOX/gum-yes" "$JOB_SANDBOX/gum-no"
+        JOB_GUM_BIN="$JOB_SANDBOX/gum-no" run_job job::_watch_confirm_cancel "$id" "C"
+        no_kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
+        JOB_GUM_BIN="$JOB_SANDBOX/gum-yes" run_job job::_watch_confirm_cancel "$id" "C"
+        yes_kills=$(grep -c '^kill 7$' "$JOB_FAKE_LOG")
+        printf '%s|%s' "$no_kills" "$yes_kills"
+      }
+      When call confirm
+      The output should equal '0|1'
+    End
+  End
+
+  Describe 'job::start --modal'
+    It 'prints the id on stdout and chains into the viewer'
+      modal() {
+        JOB_WATCH_FORCE=1 run_job job::start --modal --title "M" -- sleep 9 \
+          <<< "q" 2>"$JOB_SANDBOX/modal.err"
+      }
+      When call modal
+      The status should equal 0
+      # stdout is EXACTLY the id — the viewer painted only stderr.
+      The output should match pattern '[0-9]*-[0-9]*'
+      The contents of file "$JOB_SANDBOX/modal.err" should include 'log line one'
+    End
+  End
+
+  Describe 'libexec/job watch verb'
+    JOBBIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job"
+    It 'dispatches watch through the front-end'
+      When call zsh -f "$JOBBIN" watch no-such-job
+      The status should equal 1
+      The stderr should include 'unknown job'
     End
   End
 End
