@@ -377,6 +377,26 @@ INNER
       The status should be failure
       The stderr should include 'leak patterns'
     End
+
+    # A commit-identity match reads as a false positive to someone staring at
+    # a clean diff (observed live 2026-08-14), so the report must label WHERE
+    # each pattern hit and point identity matches at the actual fix.
+    It 'labels an identity match as such and hints at the repo identity'
+      export GIT_AUTHOR_NAME="user"
+      export GIT_AUTHOR_EMAIL="user@corp.internal"
+      When call audit
+      The status should be failure
+      The stderr should include '(commit identity)'
+      The stderr should include 'fix that, not the diff'
+    End
+
+    It 'labels a staged-content match as such'
+      printf 'reaches corp.internal endpoint\n' >"$AREPO/file.txt"
+      git -C "$AREPO" add file.txt
+      When call audit
+      The status should be failure
+      The stderr should include '(staged content)'
+    End
   End
 
   # The callers (system-secrets, system-onboard) run under `set -o pipefail`,

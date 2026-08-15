@@ -963,21 +963,32 @@ sec::leak_audit() {
   # undetectable identity on a dotless hostname) fall through empty — the
   # commit itself will fail with git's own message.
   ident="$(git -C "$REPO_ROOT" var GIT_AUTHOR_IDENT 2>/dev/null || true)"
-  haystack="$added
-$names
-$ident"
-  [[ -n "${haystack//[[:space:]]/}" ]] || return 0
+  [[ -n "${added//[[:space:]]/}${names//[[:space:]]/}${ident//[[:space:]]/}" ]] || return 0
+  local ident_hit=0
   while IFS= read -r pat; do
     case "$pat" in '' | \#*) continue ;; esac
-    # Herestring, not a pipe: grep -q's early exit would SIGPIPE the printf
+    # Herestrings, not pipes: grep -q's early exit would SIGPIPE the printf
     # side and fail the pipeline under the callers' `set -o pipefail`.
-    if grep -iEq -- "$pat" <<<"$haystack"; then
-      hits="$hits  - $pat"$'\n'
+    # Per-section matching, so the report says WHERE a pattern hit — a
+    # commit-identity match looks like a false positive to someone staring
+    # at a clean diff (observed 2026-08-14 on a work box whose repo identity
+    # had not yet flipped back to personal).
+    local where=""
+    grep -iEq -- "$pat" <<<"$added" && where="staged content"
+    grep -iEq -- "$pat" <<<"$names" && where="${where:+$where, }file names"
+    if grep -iEq -- "$pat" <<<"$ident"; then
+      where="${where:+$where, }commit identity"
+      ident_hit=1
     fi
+    [[ -n "$where" ]] && hits="$hits  - $pat  ($where)"$'\n'
   done <"$LEAK_PATTERNS"
   if [[ -n "$hits" ]]; then
     log_error "staged changes match work/company leak patterns:"
     printf '%s' "$hits" >&2
+    if ((ident_hit)); then
+      log_error "'commit identity' = what \`git -C $REPO_ROOT var GIT_AUTHOR_IDENT\` resolves —"
+      log_error "the repo's git identity is wrong (should be personal here); fix that, not the diff."
+    fi
     die "move work-specific data to the loose/unmanaged layer; this repo is public."
   fi
 }
@@ -1229,7 +1240,25 @@ sec::sync_slot() {
   done
 
   if ((${#stale} == 0 && ${#missing} == 0 && ${#outdated} == 0)); then
-    log_ok "slot $slot already in sync with profile '$profile'"
+    # The sets can compare equal while the WORK is not landed: a previous run
+    # may have written and staged these paths and then died at commit (the
+    # leak audit blocking on a wrong repo identity, observed 2026-08-14).
+    # Commit the pending artifact changes instead of declaring victory.
+    local -a cpaths dirty
+    cpaths=("${(@f)$(sec::commit_paths_for_slot "$slot")}")
+    cpaths=(${cpaths:#})
+    local p
+    for p in "${cpaths[@]}"; do
+      [[ -e "$p" ]] || continue
+      [[ -n "$(git -C "$REPO_ROOT" status --porcelain -- "$p" 2>/dev/null)" ]] && dirty+=("$p")
+    done
+    if ((${#dirty})); then
+      log_info "artifacts in sync but uncommitted (a previous run's commit failed?); committing"
+      sec::git_commit "feat(secrets): sync $slot" "${cpaths[@]}"
+      SEC_SYNC_CHANGED=1
+    else
+      log_ok "slot $slot already in sync with profile '$profile'"
+    fi
     return 0
   fi
 

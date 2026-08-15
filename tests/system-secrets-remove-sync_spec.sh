@@ -144,15 +144,30 @@ YAML
   End
 
   commit_count() { git -C "$REPO_ROOT" rev-list --count HEAD 2>/dev/null || print -r -- 0; }
+  commit_fixtures() {
+    git -C "$REPO_ROOT" add -- . >/dev/null 2>&1
+    git -C "$REPO_ROOT" commit -qm fixtures
+  }
 
   Describe 'sec::sync_slot'
     It 'reports an already-synced slot without committing'
       sec::map_set slot-aaa111 host-a personal headless ""
       make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
+      commit_fixtures
       sec::sync_slot slot-aaa111 personal >"$TEST_TMP/out" 2>&1
       When call commit_count
-      The output should equal "0"
+      The output should equal "1"
       The contents of file "$TEST_TMP/out" should include "already in sync"
+    End
+
+    It 'heals a previous run whose commit died: in-sync sets, dirty artifacts'
+      sec::map_set slot-aaa111 host-a personal headless ""
+      make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
+      commit_fixtures
+      print -r -- '# staged by a run that died at commit' >>"$(sec::fragment_path slot-aaa111)"
+      sec::sync_slot slot-aaa111 personal >/dev/null 2>&1
+      When call git -C "$REPO_ROOT" log --format=%s -1
+      The output should equal "feat(secrets): sync slot-aaa111"
     End
 
     It 'scrubs stale names and commits'
@@ -223,6 +238,7 @@ YAML
       make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
       sec::manifest_set_rotated ALPHA_TOKEN 200
       sec::gen_set slot-aaa111 ALPHA_TOKEN 300
+      commit_fixtures
       When call sec::sync_slot slot-aaa111 personal
       The status should be success
       The output should include "already in sync"
