@@ -95,7 +95,18 @@ job::start() {
   jq --argjson tid "$task_id" '.pueue_id = $tid' "$dir/meta.json" > "$tmp" \
     && mv -f -- "$tmp" "$dir/meta.json"
   print -r -- "$id"
-  ((modal)) && job::watch
+  if ((modal)); then
+    # Headless (no controlling terminal on stderr — cron, a run-shell
+    # binding piped through something, a bare `</dev/null` invocation): the
+    # job is already enqueued regardless, and troupe's own no-tty behavior
+    # is untrusted (could error, could hang) — never attempt to drive the
+    # dashboard here, just say so and let the GUI HUD be the surface.
+    if [ -t 2 ]; then
+      job::watch
+    else
+      log_warn "headless: the GUI HUD is the surface"
+    fi
+  fi
   return 0
 }
 
@@ -214,36 +225,82 @@ job::_task_log() {
 }
 
 # job::_open_log_tab <title> <logfile> — open a mux tab tailing a job's
-# pueue log and BLOCK until that tab's `tail -f` exits, so job::watch knows
-# precisely when to relaunch the dashboard (spec §6 rev 3: "when the tail
-# exits ... the driver relaunches"). JOB_OPEN_LOG_TAB_BIN is the test seam —
-# it stands in for the whole tab-open-and-wait dance; a fake records argv
-# and returns at once, simulating the tab having already closed. The real
-# path shells to mux::new_tab (the house tab-open primitive, mirroring how
-# mux-open/edit-terminal-config open a tab running a command) wrapping
-# `tail -f <logfile>` with a FIFO sentinel the wrapped command signals on
-# exit — mux::new_tab itself is fire-and-forget (a tmux window/zellij tab
-# doesn't report back when its own command finishes), so this function's
-# OWN blocking read is what turns "tab requested" into "tab closed".
+# pueue log and BLOCK until that tab process exits — by ANY means (a clean
+# `tail -f` end, which never happens on its own; the user closing the tab;
+# Ctrl+C; SIGHUP on pane close) — so job::watch knows precisely when to
+# relaunch the dashboard (spec §6 rev 3: "when the tail exits ... the
+# driver relaunches").
+#
+# C1 regression: the wrapped command used to be `tail -f "$1"; printf x >
+# "$2"` — a signal that kills the whole `sh -c` (Ctrl+C, the pane's SIGHUP
+# on close) kills it BEFORE the `printf` ever runs, so no writer ever opens
+# the FIFO and the `cat` below deadlocked FOREVER on every realistic tab
+# exit, not just the unrealistic "tail -f reaches EOF on its own" one. Fix:
+# the wrapped command HOLDS the FIFO's write end open for its whole life
+# (`exec 3>"$2"; exec tail -f "$1"`) and relies on fd-close-on-death — the
+# kernel closes every fd the INSTANT a process dies, by any means, no
+# cleanup code required to run. The reader then genuinely waits for "every
+# writer gone", which fd-close-on-death guarantees unconditionally.
+#
+# JOB_MUX_NEW_TAB_BIN is the test seam for the tab-SPAWN step ONLY (mirrors
+# job::_pueue/_troupe's shape) — not for the whole function, so the FIFO
+# open/wait/bound machinery below is real code under the spec suite, not a
+# bypassed no-op. The real path shells to mux::new_tab (the house tab-open
+# primitive, mirroring how mux-open/edit-terminal-config open a tab running
+# a command); mux::new_tab is itself fire-and-forget (a tmux window/zellij
+# tab's spawn call returns immediately — the window's own command keeps
+# running as the mux server's child, independent of this process), so this
+# function's OWN blocking read is what turns "tab requested" into "tab
+# closed", not the spawn call.
+#
+# Bounded wait: a wedged/never-spawned tab (mux::new_tab silently failed,
+# or the pane never actually opened) must not hang a run-shell binding
+# forever. JOB_LOGTAB_TIMEOUT_S (default 10) is the test/tuning seam for
+# the bound; the FIFO is removed on every exit path.
 job::_open_log_tab() {
   local title="$1" logfile="$2"
-  if [ -n "${JOB_OPEN_LOG_TAB_BIN:-}" ]; then
-    "$JOB_OPEN_LOG_TAB_BIN" "$title" "tail -f $logfile"
-    return $?
-  fi
-  local muxlib="${${(%):-%x}:A:h}/mux.zsh"
-  [ -r "$muxlib" ] || return 1
-  # Same subshell probe as job::_watch_confirm_cancel: pick-common (pulled
-  # in by mux.zsh) hard-exits at SOURCE time when fzf is missing.
-  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
-  source "$muxlib" 2>/dev/null || return 1
   local sentinel
   sentinel=$(mktemp -u "${TMPDIR:-/tmp}/job-logtab.XXXXXX")
   mkfifo -m 600 -- "$sentinel" 2>/dev/null || return 1
-  mux::new_tab --name "$title" -- \
-    sh -c 'tail -f "$1"; printf x > "$2" 2>/dev/null' _ "$logfile" "$sentinel" \
-    || { rm -f -- "$sentinel"; return 1; }
-  cat "$sentinel" >/dev/null 2>&1
+
+  if [ -n "${JOB_MUX_NEW_TAB_BIN:-}" ]; then
+    "$JOB_MUX_NEW_TAB_BIN" --name "$title" -- \
+      sh -c 'exec 3>"$2"; exec tail -f "$1"' _ "$logfile" "$sentinel" \
+      || { rm -f -- "$sentinel"; return 1; }
+  else
+    local muxlib="${${(%):-%x}:A:h}/mux.zsh"
+    # Same subshell probe as job::_watch_confirm_cancel: pick-common
+    # (pulled in by mux.zsh) hard-exits at SOURCE time when fzf is missing.
+    if ! { [ -r "$muxlib" ] && ( source "$muxlib" ) >/dev/null 2>&1; }; then
+      rm -f -- "$sentinel"
+      return 1
+    fi
+    source "$muxlib" 2>/dev/null || { rm -f -- "$sentinel"; return 1; }
+    mux::new_tab --name "$title" -- \
+      sh -c 'exec 3>"$2"; exec tail -f "$1"' _ "$logfile" "$sentinel" \
+      || { rm -f -- "$sentinel"; return 1; }
+  fi
+
+  # A blocking read-open on the FIFO runs in a background reader we poll
+  # (kill -0) instead of an unconditional `wait`, so a spawn that never
+  # actually opens the write end cannot hang forever — the open itself
+  # blocks past any `read -t` timeout, so the timeout has to live on the
+  # OUTSIDE of the open, not inside it.
+  cat "$sentinel" >/dev/null 2>&1 &
+  local reader_pid=$!
+  local bound=$(( ${JOB_LOGTAB_TIMEOUT_S:-10} * 10 )) waited=0
+  while kill -0 "$reader_pid" 2>/dev/null; do
+    if ((waited >= bound)); then
+      kill "$reader_pid" 2>/dev/null
+      wait "$reader_pid" 2>/dev/null
+      rm -f -- "$sentinel"
+      log_error "job::_open_log_tab: timed out waiting for the log tab to close"
+      return 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  wait "$reader_pid" 2>/dev/null
   rm -f -- "$sentinel"
   return 0
 }
@@ -256,7 +313,9 @@ job::_open_log_tab() {
 # (the phase-2b --in-float branch that worked around exactly that stacking
 # problem no longer applies and is retired). Fail-closed — ANY non-zero rc
 # (declined, unrenderable, or the 130 ESC-cancel) means "do not cancel".
-# rc 0 = the job WAS cancelled, rc 1 = declined (caller relaunches as-is).
+# rc 0 = the job WAS cancelled, rc 1 = declined OR the cancel itself failed
+# (caller relaunches either way — the job genuinely still runs on rc 1, so
+# treating it as "not cancelled" is the honest read, not an optimistic one).
 job::_watch_confirm_cancel() {
   local id="$1" title="$2"
   local muxlib="${${(%):-%x}:A:h}/mux.zsh"
@@ -268,8 +327,31 @@ job::_watch_confirm_cancel() {
   source "$muxlib" 2>/dev/null || return 1
   mux::confirm "Cancel ${title}?" --title "Job runner" --danger \
     --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
-  job::cancel "$id" >/dev/null 2>&1
+  if ! job::cancel "$id" >/dev/null 2>&1; then
+    log_error "job::_watch_confirm_cancel: cancel failed — is pueued running?"
+    return 1
+  fi
   return 0
+}
+
+# job::_theme_args — populate the global AI_THEME_ARGS with the --theme-*
+# flags troupe/ask both read (theme-common.zsh's contract). Env cannot carry
+# these across a tmux popup — display-popup runs its command from the
+# SERVER's environment, not this shell's (the same constraint --state-root
+# used to hit before it became an explicit flag) — so on BOTH dashboard
+# launch paths the flags ride the command line instead. Best-effort: an
+# unreadable/unloadable theme lib just means no theme flags (troupe keeps
+# its own built-in defaults), never a hard failure of the dashboard launch.
+job::_theme_args() {
+  AI_THEME_ARGS=()
+  local themelib="${${(%):-%x}:A:h}/theme-common.zsh"
+  [ -r "$themelib" ] || return 0
+  # Same subshell probe as job::_watch_confirm_cancel/_open_log_tab: a
+  # source-time hard-exit anywhere in the chain must not take the caller
+  # down with it.
+  ( source "$themelib" ) >/dev/null 2>&1 || return 0
+  source "$themelib" 2>/dev/null || return 0
+  theme::args
 }
 
 # job::_dashboard_float <troupe> — float `troupe jobs` in a mux-modal popup
@@ -280,10 +362,27 @@ job::_watch_confirm_cancel() {
 # The FIFO + concurrent-reader shape mirrors mux/tmux.zsh's _mux_tx_float
 # exactly (same rendezvous: the reader opens for read BEFORE the popup can
 # open the FIFO for write), so this is a proven pattern, not a new one.
+#
+# Single-chrome float: troupe draws its OWN framed box (▓▓▓ "Job runner" +
+# rule — troupe-design.md §6), so this call carries NO --title (mux-modal
+# would draw a second frame around the first) and passes --borderless
+# --no-chrome instead — the same "the target owns the box" contract the
+# ask/dialog floats already use (tmux-modal's --no-chrome branch; see
+# _mux_tx_float's --borderless comment: discarding it once stacked a themed
+# popup border AROUND a widget's own box, a double-border caught live in
+# Mode B). The popup is sized from troupe's own --measure (its rendered
+# height for the current job count), padded +2 the same way _mux_tx_float
+# pads a measured widget height/width — a tmux popup's -w/-h are OUTER
+# dimensions, so the interior needs +2 to match troupe's own request.
 job::_dashboard_float() {
   local troupe="$1"
   local modal="${JOB_MUX_MODAL_BIN:-$HOME/.config/mux/scripts/mux-modal}"
-  local fifo out
+  local fifo out h
+  job::_theme_args
+
+  h=$("$troupe" jobs --measure --state-root "$JOB_STATE_ROOT" --width 57 2>/dev/null)
+  [[ "$h" == <-> ]] || h=15
+
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/job-dashboard-fifo.XXXXXX")
   mkfifo -m 600 -- "$fifo" 2>/dev/null || return 1
   out=$(mktemp "${TMPDIR:-/tmp}/job-dashboard-out.XXXXXX") || { rm -f -- "$fifo"; return 1; }
@@ -292,8 +391,9 @@ job::_dashboard_float() {
   cat "$fifo" >"$out" 2>/dev/null &
   local reader_pid=$!
 
-  "$modal" --title "Job runner" --capture "$fifo" -- \
-    "$troupe" jobs --state-root "$JOB_STATE_ROOT" >/dev/null 2>&1
+  "$modal" --borderless --no-chrome --width 59 --height $((h + 2)) \
+    --capture "$fifo" -- \
+    "$troupe" jobs --state-root "$JOB_STATE_ROOT" "${AI_THEME_ARGS[@]}" >/dev/null 2>&1
   local rc=$?
   if ((rc != 0)); then
     kill "$reader_pid" 2>/dev/null
@@ -314,7 +414,8 @@ job::_dashboard_float() {
 # directly; its stdout IS the one action line (troupe-design.md §6).
 job::_dashboard_inline() {
   local troupe="$1"
-  "$troupe" jobs --state-root "$JOB_STATE_ROOT"
+  job::_theme_args
+  "$troupe" jobs --state-root "$JOB_STATE_ROOT" "${AI_THEME_ARGS[@]}"
 }
 
 # job::watch — the troupe dashboard driver (spec §6 revision 3). Floats
