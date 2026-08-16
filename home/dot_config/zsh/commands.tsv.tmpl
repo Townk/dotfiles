@@ -161,7 +161,9 @@ sops	secrets	0		Encrypt the values inside a config file to age recipients
 claude	agents	0		Claude Code agent in the terminal
 pi	agents	0		Pi coding agent, cloud configuration
 pi-local	agents	0		Pi coding agent against the local 32K-context config
+{{ if lookPath "cursor-agent" -}}
 cursor-agent	agents	0		Cursor Agent in the terminal
+{{ end -}}
 ai-playbook	agents	0		Capture, author and run terminal playbooks
 apb	agents	0		Short form of ai-playbook
 ask	agents	0		Themed terminal dialogs for scripts: confirm, line, choose, form
