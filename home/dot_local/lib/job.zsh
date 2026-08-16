@@ -368,16 +368,20 @@ job::_theme_args() {
   theme::args
 }
 
-# job::_dashboard_float <troupe> — float `troupe jobs` in a mux-modal popup
-# (TMUX-only, per the established float gate: zellij-modal is a float
-# CONSUMER, not a SPAWNER — see mux-modal's own header) and print the one
-# action line troupe hands back through the popup's --capture channel.
+# job::_dashboard_float <troupe> [<select-id>] — float `troupe jobs` in a
+# mux-modal popup (TMUX-only, per the established float gate: zellij-modal
+# is a float CONSUMER, not a SPAWNER — see mux-modal's own header) and print
+# the one action line troupe hands back through the popup's --capture
+# channel. <select-id>, when given, rides the real launch as `--select` —
+# the resize wire's cursor-preservation half: a relaunch after a resize
+# hands back the id the widget was showing a cursor on, so the new instance
+# starts there instead of resetting to the top.
 # JOB_MUX_MODAL_BIN is the test seam (default: the real mux-modal script).
 # The FIFO + concurrent-reader shape mirrors mux/tmux.zsh's _mux_tx_float
 # exactly (same rendezvous: the reader opens for read BEFORE the popup can
 # open the FIFO for write), so this is a proven pattern, not a new one.
 #
-# Single-chrome float: troupe draws its OWN framed box (▓▓▓ "Job runner" +
+# Single-chrome float: troupe draws its OWN framed box (▓▓▓ "Task runner" +
 # rule — troupe-design.md §6), so this call carries NO --title (mux-modal
 # would draw a second frame around the first) and passes --borderless
 # --no-chrome instead — the same "the target owns the box" contract the
@@ -394,7 +398,7 @@ job::_theme_args() {
 # measured height and the actual render agree regardless of the pty size
 # the popup itself would otherwise hand troupe.
 job::_dashboard_float() {
-  local troupe="$1"
+  local troupe="$1" select_id="${2:-}"
   local modal="${JOB_MUX_MODAL_BIN:-$HOME/.config/mux/scripts/mux-modal}"
   local fifo out h
   job::_theme_args
@@ -410,9 +414,17 @@ job::_dashboard_float() {
   cat "$fifo" >"$out" 2>/dev/null &
   local reader_pid=$!
 
+  # --launched-height "$h" is what makes the resize wire possible at all
+  # (troupe-design.md §6): this is the exact popup height the caller just
+  # sized the pane to, so troupe can tell when its own rendered content no
+  # longer matches it. --select forwards the cursor a resize relaunch is
+  # asked to restore, when the caller has one.
+  local -a select_args=()
+  [ -n "$select_id" ] && select_args=(--select "$select_id")
   "$modal" --borderless --no-chrome --width 57 --height "$h" \
     --capture "$fifo" -- \
-    "$troupe" jobs --state-root "$JOB_STATE_ROOT" --width 57 "${AI_THEME_ARGS[@]}" >/dev/null 2>&1
+    "$troupe" jobs --state-root "$JOB_STATE_ROOT" --width 57 \
+    --launched-height "$h" "${select_args[@]}" "${AI_THEME_ARGS[@]}" >/dev/null 2>&1
   local rc=$?
   if ((rc != 0)); then
     kill "$reader_pid" 2>/dev/null
@@ -450,11 +462,27 @@ job::_dashboard_inline() {
 #                       auto-closing, so there is nothing left to track here.
 #   "logs <id>"         open a tab tailing the task's pueue log, wait for it
 #                       to close, then relaunch.
+#   "resize[\t<id>]"    the popup's content height drifted from the height
+#                       it was launched at (tmux popups can't resize
+#                       themselves) — relaunch IMMEDIATELY, no confirm, no
+#                       delay, forwarding <id> (if any) as --select so the
+#                       new instance's cursor lands back where it was.
 #
 # The dashboard owns the empty state now (troupe-design.md §6 rev): there is
 # no up-front "any live jobs?" scan — job::watch always floats/runs it, and
 # a truly empty state just means the widget renders "No task running" and
 # keeps polling until the user dismisses it.
+#
+# Loop-termination note: every OTHER action either returns (dismiss/empty)
+# or is bounded by a real, user-driven event (a confirm decision, a log tab
+# closing) before the next relaunch — resize is the one action the widget
+# can emit entirely on its own, poll after poll, with nothing in between.
+# In practice that's bounded too (relaunches are driven by genuine content
+# changes, and troupe's own debounce settles once the height stops
+# drifting), but a pathological back-and-forth (e.g. a --launched-height/
+# --measure mismatch that never converges) must not spin this loop forever
+# — resize_streak counts CONSECUTIVE resize actions with no other action in
+# between and bails out past 5.
 job::watch() {
   # ALL loop-body variables are declared here, never inside the while loop:
   # zsh's `local NAME` (no assignment) on an already-local NAME PRINTS
@@ -463,15 +491,15 @@ job::watch() {
   # stdout). Same regression class the rev-2 viewer hit; see its old fix
   # note (git history) for the first occurrence.
   setopt localoptions noerrexit
-  local troupe action cid ctitle lid ltitle logfile
-  local rc
+  local troupe action cid ctitle lid ltitle logfile select_id=""
+  local rc resize_streak=0
 
   troupe=$(job::_troupe) \
     || die "troupe is not installed — go install github.com/Townk/troupe/cmd/troupe@latest"
 
   while true; do
     if [ -n "${TMUX:-}" ]; then
-      action=$(job::_dashboard_float "$troupe")
+      action=$(job::_dashboard_float "$troupe" "$select_id")
       rc=$?
     else
       action=$(job::_dashboard_inline "$troupe")
@@ -491,7 +519,22 @@ job::watch() {
         # unrecognized-action branch below.
         return 0
         ;;
+      resize | resize$'\t'*)
+        # No confirm, no delay — the driver just re-measures and relaunches
+        # immediately (troupe-design.md §6 resize wire); a bare "resize"
+        # strips to "" (no selection to carry forward).
+        select_id="${action#resize}"
+        select_id="${select_id#$'\t'}"
+        ((resize_streak++))
+        if ((resize_streak > 5)); then
+          log_error "job::watch: resize loop bailout — more than 5 consecutive resizes with no other action"
+          return 1
+        fi
+        continue
+        ;;
       cancel$'\t'*)
+        resize_streak=0
+        select_id=""
         cid="${action#cancel$'\t'}"
         ctitle=$(jq -r '.title // empty' "$JOB_STATE_ROOT/$cid/meta.json" 2>/dev/null)
         job::_watch_confirm_cancel "$cid" "${ctitle:-$cid}" >/dev/null 2>&1
@@ -500,6 +543,8 @@ job::watch() {
         # dashboard's next render is the empty state.
         ;;
       logs$'\t'*)
+        resize_streak=0
+        select_id=""
         lid="${action#logs$'\t'}"
         ltitle=$(jq -r '.title // empty' "$JOB_STATE_ROOT/$lid/meta.json" 2>/dev/null)
         logfile=$(job::_task_log "$lid") || logfile=""

@@ -342,11 +342,15 @@ EOF
         # --measure) so the measured height and the actual render agree.
         # Themed: theme::args flags ride the troupe command line (env cannot
         # cross the popup — display-popup runs from the SERVER's
-        # environment).
+        # environment). The real launch also carries --launched-height, set
+        # to the SAME measured value the popup was actually sized to (the
+        # resize wire's whole premise: troupe can only detect drift against
+        # the height it was launched at) — no --select on this first launch
+        # (no prior selection to carry forward).
         local geom="no" themed="no" no_title="yes"
         grep -qF -- "--borderless --no-chrome --width 57 --height 15 --capture" "$JOB_FAKE_MODAL_LOG" \
           && geom="yes"
-        grep -qF -- "jobs --state-root $JOB_STATE_ROOT --width 57 --theme-accent" "$JOB_FAKE_MODAL_LOG" \
+        grep -qF -- "jobs --state-root $JOB_STATE_ROOT --width 57 --launched-height 15 --theme-accent" "$JOB_FAKE_MODAL_LOG" \
           && themed="yes"
         grep -q -- '--title' "$JOB_FAKE_MODAL_LOG" && no_title="no"
         printf 'rc=%s|geom=%s|themed=%s|no_title=%s|calls=%s|kills=%s' "$rc" "$geom" "$themed" "$no_title" \
@@ -478,6 +482,106 @@ EOF
       }
       When call logs_action
       The output should equal 'rc=0|match=yes|tabs=1|calls=2'
+    End
+
+    # The resize wire (troupe-design.md §6): tmux popups can't resize
+    # themselves, so a "resize[\t<id>]" action means relaunch IMMEDIATELY —
+    # no confirm, no delay — carrying <id> (when present) back through
+    # --select so the new instance's cursor starts where the old one left
+    # off, and a FRESH --launched-height from that relaunch's own --measure
+    # call (proving the driver re-measures rather than reusing the old
+    # height).
+    It 'resize action: relaunches immediately with --select forwarded and a fresh --launched-height (two invocations)'
+      resize_then_dismiss() {
+        id=$(run_job job::start --title "R" -- sleep 9) || return 1
+        printf 'resize\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_TROUPE_MEASURE=15
+        TMUX="fake/sock,1,0" run_job job::watch
+        rc=$?
+        local second_select="no"
+        # The SECOND real-launch line (skip the first --measure-only call
+        # and the first real launch) must carry --select <id>.
+        second_select=$(grep -F -- 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG" \
+          | sed -n '2p' | grep -qF -- "--select $id" && echo yes || echo no)
+        printf 'rc=%s|launches=%s|select=%s' "$rc" \
+          "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")" \
+          "$second_select"
+      }
+      When call resize_then_dismiss
+      The output should equal 'rc=0|launches=2|select=yes'
+    End
+
+    It 'resize action with no selected job: relaunches with a bare resize (no --select), two invocations'
+      resize_no_selection() {
+        run_job job::start --title "R" -- sleep 9 >/dev/null || return 1
+        printf 'resize\n\n' > "$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
+        TMUX="fake/sock,1,0" run_job job::watch
+        rc=$?
+        local second_no_select="no"
+        second_no_select=$(grep -F -- 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG" \
+          | sed -n '2p' | grep -qF -- '--select' && echo no || echo yes)
+        printf 'rc=%s|launches=%s|no_select=%s' "$rc" \
+          "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")" \
+          "$second_no_select"
+      }
+      When call resize_no_selection
+      The output should equal 'rc=0|launches=2|no_select=yes'
+    End
+
+    # >5 consecutive resize actions with no other action in between must
+    # bail out rather than spin forever (loop-termination note above
+    # job::watch). The fake troupe's actions file rotates one "resize" per
+    # popup call, so 6 queued resizes exercise the bailout on the 6th.
+    It 'resize action: bails out past 5 consecutive resizes with no other action (log_error, rc 1)'
+      resize_bailout() {
+        id=$(run_job job::start --title "R" -- sleep 9) || return 1
+        local i
+        for i in 1 2 3 4 5 6; do
+          printf 'resize\t%s\n' "$id"
+        done > "$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
+        TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
+        rc=$?
+        printf 'rc=%s|launches=%s|err=%s' "$rc" \
+          "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")" \
+          "$(grep -c 'resize loop bailout' "$JOB_SANDBOX/watch.err")"
+      }
+      When call resize_bailout
+      The output should equal 'rc=1|launches=6|err=1'
+    End
+
+    # A non-resize action (cancel/logs) between resizes must reset the
+    # streak — proven by interleaving one resize, one declined cancel (no
+    # kill, just a relaunch), then 6 more resizes: the bailout must still
+    # fire (the streak wasn't secretly carried across the cancel), not
+    # short-circuit early from the first resize's count alone.
+    It 'resize action: a cancel in between resets the consecutive-resize streak'
+      resize_streak_resets() {
+        id=$(run_job job::start --title "R" -- sleep 9) || return 1
+        {
+          printf 'resize\t%s\n' "$id"
+          printf 'cancel\t%s\n' "$id"
+          local i
+          for i in 1 2 3 4 5 6; do
+            printf 'resize\t%s\n' "$id"
+          done
+        } > "$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_CONFIRM_RC=1
+        TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
+        rc=$?
+        # 8 queued actions (1 resize + 1 cancel + 6 resize), each consumed
+        # by exactly one launch, bailing out right after the 8th (the
+        # streak's 6th CONSECUTIVE resize since the cancel reset it) — no
+        # 9th launch ever happens.
+        printf 'rc=%s|launches=%s|err=%s' "$rc" \
+          "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")" \
+          "$(grep -c 'resize loop bailout' "$JOB_SANDBOX/watch.err")"
+      }
+      When call resize_streak_resets
+      The output should equal 'rc=1|launches=8|err=1'
     End
 
     It 'no live jobs: launches the dashboard anyway (it owns the empty state) — one invocation, dismiss ends rc 0'
