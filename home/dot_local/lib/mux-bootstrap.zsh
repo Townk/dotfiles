@@ -444,6 +444,30 @@ mux::new_tab() {
   esac
 }
 
+# mux::float_pane <width> <height> -- <cmd...>
+#   A REAL pane (tmux `new-pane`, 3.7b+, upstream #5135) — not a popup: live-
+#   resizable in place via resize-pane, genuinely persistent (survives a
+#   tab/window switch), unlike mux::popup's client-level modal (job-runner
+#   design §6 rev 4). Width/height are CELL counts only — no percent form,
+#   since every caller sizes this from a value it already computed (troupe's
+#   own --measure), unlike mux::popup's viewport-relative use. Zellij has no
+#   float-pane twin yet (spec: deferred) — always fails here, so the driver
+#   gates on mux::has_float_pane first rather than discovering the gap via a
+#   failed launch.
+mux::float_pane() {
+  [[ "$(mux::backend)" == tmux ]] || return 1
+  _mux_tx_float_pane "$@"
+}
+
+# mux::has_float_pane — capability probe for mux::float_pane: does the
+# resolved backend/binary actually support it? Zellij and "none" always
+# fail (no twin, no backend); tmux delegates to the real `list-commands`
+# probe (3.7b+ carries `new-pane`, older builds don't).
+mux::has_float_pane() {
+  [[ "$(mux::backend)" == tmux ]] || return 1
+  _mux_tx_has_float_pane
+}
+
 # mux::send_text [--pane P] <text> — inject literal text into a pane. Without
 # --pane the write lands in the FOCUSED pane, which is wrong whenever a float
 # is up: the id keeps the write on the pane the caller meant even while a

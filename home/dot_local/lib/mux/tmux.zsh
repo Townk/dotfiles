@@ -513,3 +513,84 @@ _mux_tx_float() {
   [[ -n "$result" ]] || return 130
   print -rn -- "$result"
 }
+
+# ---------------------------------------------------------------------------
+# job-runner design §6 rev 4 (2026-08-16): the floating-PANE host.
+#
+# tmux 3.7b's `new-pane` (upstream #5135) makes a REAL pane — floating,
+# independently sized/positioned (-x/-y/-X/-Y), but a genuine pane: it
+# survives a tab/window switch (unlike a popup, which is client-level and
+# dies with the client's modal state) and resize-pane works on it LIVE, no
+# relaunch. This is upstream-evolving (still marked so at 3.7b), so per the
+# spec every `new-pane` call in this tree lives in EXACTLY the one function
+# below — nothing else may call it.
+#
+# Verified live on a scratch socket (never the real session — see the repo's
+# "never probe the live server" rule) before writing this:
+#   - `new-pane -x 57 -y 15 -X 143 -Y 0 -P -F '#{pane_id}'` returns the new
+#     pane's id immediately (does NOT block on the wrapped command, unlike
+#     `display-popup -E`) and the pane reports `pane_floating_flag` 1.
+#   - Close-on-exit is tmux's DEFAULT for new-pane (no -k): a pane running a
+#     command that exits at once is gone from `list-panes` moments later.
+#   - Omitting -d makes the new pane the client's ACTIVE pane at once
+#     (`pane_active` 1) — "foreground focus" needs no extra flag.
+#   - `$TMUX_PANE` READ FROM INSIDE the new pane's own command resolves to
+#     THAT pane's id (not the caller's) — confirmed by a command that wrote
+#     `$TMUX_PANE` to a file from inside the float. This is what makes
+#     `TROUPE_RESIZE_CMD='tmux resize-pane -t "$TMUX_PANE" -y %h'` work
+#     without the launcher needing to inject the id after the fact.
+#   - `resize-pane -t <pane_id> -y <n>` on a floating pane resizes it live,
+#     in place, with no flicker/relaunch — the whole premise of hosting the
+#     dashboard this way instead of through a popup.
+
+# _mux_tx_has_float_pane — capability probe: does the resolved tmux binary
+# understand `new-pane` at all (3.7b+)? `list-commands` enumerates every
+# command name the running server/binary supports; match the line ANCHORED
+# at the command name (not a bare substring) so nothing else can false-
+# positive. Cached per call site (module-global, one probe per process) —
+# job::watch's host-selection call and any other caller in the same run
+# share one `list-commands` round trip instead of paying for it twice.
+_mux_tx_has_float_pane() {
+  if [[ -n "${_MUX_TX_HAS_FLOAT_PANE:-}" ]]; then
+    [[ "$_MUX_TX_HAS_FLOAT_PANE" == 1 ]]
+    return
+  fi
+  local bin
+  bin="$(_mux_tx_bin)" || { _MUX_TX_HAS_FLOAT_PANE=0; return 1; }
+  if "$bin" list-commands 2>/dev/null | grep -q '^new-pane '; then
+    _MUX_TX_HAS_FLOAT_PANE=1
+  else
+    _MUX_TX_HAS_FLOAT_PANE=0
+  fi
+  [[ "$_MUX_TX_HAS_FLOAT_PANE" == 1 ]]
+}
+
+# _mux_tx_float_pane <width> <height> -- <cmd...>
+# Launch a floating pane sized <width>x<height> CELLS (no percent form —
+# every caller sizes this from its own computed value, unlike mux::popup's
+# viewport-relative geometry), top-right placed to mirror the Hammerspoon
+# HUD's corner (X = client_width - width, floored at 0; Y = 0), foreground-
+# focused (no -d), close-on-exit (tmux's default — no -k), and prints the
+# new pane's id (-P -F) for the caller to track (job.zsh's re-summon state
+# file). <cmd...> is joined into ONE shell-command string, same convention
+# as _mux_tx_split's tail invocation (tmux's new-pane/split-window/new-
+# window family all take a single "shell-command [argument ...]" positional,
+# not an argv array).
+_mux_tx_float_pane() {
+  local w="$1" h="$2"
+  shift 2
+  [[ "${1-}" == "--" ]] && shift
+
+  local bin cw x=0
+  bin="$(_mux_tx_bin)" || return 1
+  cw=$("$bin" display -p '#{client_width}' 2>/dev/null)
+  if [[ "$cw" == <-> && "$w" == <-> ]]; then
+    (( x = cw - w ))
+    (( x < 0 )) && x=0
+  fi
+
+  local pane
+  pane=$("$bin" new-pane -x "$w" -y "$h" -X "$x" -Y 0 -P -F '#{pane_id}' \
+    ${1+"${(j: :)${(@q)@}}"} 2>/dev/null) || return 1
+  print -r -- "$pane"
+}

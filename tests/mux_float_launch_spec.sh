@@ -171,6 +171,98 @@ Describe 'mux/tmux.zsh — float launch guard (HI-7)'
   End
 End
 
+Describe 'mux/tmux.zsh — floating pane (job-runner design §6 rev 4)'
+  Include home/dot_local/lib/mux.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    export TMUX=/tmp/sock,1,0
+    unset ZELLIJ
+    stub="$TEST_TMP/tmux"
+    ARGVLOG="$TEST_TMP/argv.log"
+    export ARGVLOG
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'printf "%s\n" "$@" >> "$ARGVLOG"'
+      echo 'case "$1" in'
+      echo '  list-commands)'
+      echo '    [[ "${STUB_HAS_NEWPANE:-1}" == 1 ]] && print -r -- "new-pane (newp) [flags]"'
+      echo '    print -r -- "split-window (splitw) [flags]"'
+      echo '    exit 0 ;;'
+      echo '  display)'
+      echo '    [[ "$*" == *client_width* ]] && print -r -- "${STUB_CLIENT_WIDTH:-200}"'
+      echo '    exit 0 ;;'
+      echo '  new-pane)'
+      echo '    if [[ "${STUB_NEWPANE_RC:-0}" != 0 ]]; then exit "${STUB_NEWPANE_RC}"; fi'
+      echo '    print -r -- "${STUB_PANE_ID:-%3}"'
+      echo '    exit 0 ;;'
+      echo 'esac'
+      echo 'exit 0'
+    } > "$stub"
+    chmod +x "$stub"
+    export MUX_TMUX_BIN="$stub"
+  }
+  cleanup() {
+    rm -rf "$TEST_TMP"
+    unset MUX_TMUX_BIN STUB_HAS_NEWPANE STUB_CLIENT_WIDTH STUB_NEWPANE_RC STUB_PANE_ID ARGVLOG
+  }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It '_mux_tx_has_float_pane is true when list-commands carries new-pane'
+    When call _mux_tx_has_float_pane
+    The status should be success
+  End
+
+  It '_mux_tx_has_float_pane is false on an older tmux without new-pane'
+    export STUB_HAS_NEWPANE=0
+    When call _mux_tx_has_float_pane
+    The status should be failure
+  End
+
+  It '_mux_tx_float_pane prints the new pane id from -P -F'
+    export STUB_PANE_ID='%7'
+    When call _mux_tx_float_pane 57 15 -- sh -c 'sleep 1'
+    The output should equal '%7'
+    The status should be success
+  End
+
+  It '_mux_tx_float_pane propagates a failed launch'
+    export STUB_NEWPANE_RC=1
+    When call _mux_tx_float_pane 57 15 -- sh -c 'sleep 1'
+    The output should equal ''
+    The status should equal 1
+  End
+
+  It '_mux_tx_float_pane top-right places the pane (-X = client_width - width, -Y 0) and never focuses -d/-k'
+    export STUB_CLIENT_WIDTH=200
+    geom() {
+      _mux_tx_float_pane 57 15 -- sh -c 'sleep 1' >/dev/null || return 1
+      local xv yv
+      xv=$(awk '/^-X$/{getline; print; exit}' "$ARGVLOG")
+      yv=$(awk '/^-Y$/{getline; print; exit}' "$ARGVLOG")
+      local no_d="yes" no_k="yes"
+      grep -qx -- '-d' "$ARGVLOG" && no_d="no"
+      grep -qx -- '-k' "$ARGVLOG" && no_k="no"
+      printf 'X=%s|Y=%s|no_d=%s|no_k=%s' "$xv" "$yv" "$no_d" "$no_k"
+    }
+    When call geom
+    The output should equal 'X=143|Y=0|no_d=yes|no_k=yes'
+  End
+
+  It '_mux_tx_float_pane sizes -x/-y from the caller and joins the trailing command into one string'
+    cmdline() {
+      _mux_tx_float_pane 57 15 -- sh -c 'echo hi' >/dev/null || return 1
+      local xv yv
+      xv=$(awk '/^-x$/{getline; print; exit}' "$ARGVLOG")
+      yv=$(awk '/^-y$/{getline; print; exit}' "$ARGVLOG")
+      printf 'x=%s|y=%s' "$xv" "$yv"
+    }
+    When call cmdline
+    The output should equal 'x=57|y=15'
+  End
+End
+
 Describe 'mux/zellij.zsh — float launch guard (HI-7)'
   Include home/dot_local/lib/mux.zsh
 
