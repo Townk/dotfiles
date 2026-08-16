@@ -946,7 +946,7 @@ EOF
       The output should include '0|1|'
       The output should include '--type confirm'
       The output should include '--danger'
-      The output should include '--affirmative Cancel job'
+      The output should include '--affirmative Cancel task'
       The output should include '--negative Keep running'
       The output should include '--title Task runner'
       The output should include '--inset 1'
