@@ -312,14 +312,15 @@ Describe 'tmux keymap tables'
     The output should include "pane-border-status"
   End
 
-  # Leader summon (job-runner phase 2c, spec §6 revision 3): floats the
-  # jobs dashboard. `job watch` owns the no-jobs case itself (stderr + rc 1)
-  # — swallowed here and turned into a themed status message instead of an
-  # error-message overlay.
-  It 'prefix J floats the jobs dashboard (or a quiet notice)'
+  # Leader summon (job-runner phase 2c, spec §6 revision: persistent
+  # dialog): floats the task dashboard. It's persistent now and owns its
+  # own empty state, so `job watch` returning non-zero here means a genuine
+  # failure (dashboard launch error, missing troupe) — swallowed and turned
+  # into a themed status message instead of an error-message overlay.
+  It 'prefix J floats the task dashboard (or a failure notice)'
     When call keys prefix
     The output should include "job watch"
-    The output should include "no running jobs"
+    The output should include "task dashboard failed"
   End
 
   It 'the leader pushes Command on the stack and M-. toggles the panel (Phase 5)'

@@ -407,16 +407,19 @@ keymap:
         dialog: true
       - keys:
         - J
-        desc: watch jobs
+        desc: watch tasks
         icon: 󰈈
         color: green
-        # job::watch floats its OWN popup (mux-modal) on the running-job
-        # scan, so this is a `dialog` entry exactly like clipboard history
-        # above — the panel's teardown must not race it (MUX_STACK_KEEP_POPUP=1,
-        # see keymap.conf.tmpl's $op). No running jobs is NOT an error: the
-        # front end logs to stderr and returns 1, which we swallow and turn
-        # into a themed status message instead of an error-message overlay.
-        cmd: run-shell -b '$HOME/.local/libexec/job watch 2>/dev/null || tmux display-message "no running jobs"'
+        # job::watch floats its OWN popup (mux-modal) — the dashboard is
+        # persistent now (troupe-design.md §6 rev) and owns its own empty
+        # state, so there is no more up-front "no running jobs" refusal to
+        # swallow here. This stays a `dialog` entry exactly like clipboard
+        # history above — the panel's teardown must not race it
+        # (MUX_STACK_KEEP_POPUP=1, see keymap.conf.tmpl's $op) — and a
+        # non-zero rc now means a genuine failure (dashboard launch error,
+        # missing troupe), not an empty scan, so the fallback message
+        # reflects that instead of a themed "no jobs" status.
+        cmd: run-shell -b '$HOME/.local/libexec/job watch 2>/dev/null || tmux display-message "task dashboard failed"'
         dialog: true
       - keys:
         - Y
