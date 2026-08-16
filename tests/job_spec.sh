@@ -1,6 +1,8 @@
-# job.zsh — submission, the sidecar progress protocol, and cancel, against a
-# recording fake pueue (JOB_PUEUE_BIN seam). Hermetic: JOB_STATE_ROOT lives
-# in a sandbox and no real daemon is consulted.
+# job.zsh — submission, the sidecar progress protocol, cancel, and the
+# troupe-dashboard driver (spec §6 revision 3), against a recording fake
+# pueue (JOB_PUEUE_BIN), a fake troupe (JOB_TROUPE_BIN), and the existing
+# fake mux-modal/tmux seams. Hermetic: JOB_STATE_ROOT lives in a sandbox and
+# no real daemon, troupe binary, or mux backend is ever consulted.
 Describe 'job.zsh'
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
 
@@ -16,12 +18,83 @@ printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 case "$1" in
   add) echo "7" ;;
   status) cat "${JOB_FAKE_STATUS:-/dev/null}" 2>/dev/null || :; [ -n "${JOB_FAKE_STATUS:-}" ] || echo '{}' ;;
-  follow) echo "log line one"; printf '%s' "${JOB_FAKE_FOLLOW_TAILFRAG:-}"; : > "${JOB_FAKE_FOLLOW_SENTINEL:-/dev/null}" 2>/dev/null; sleep "${JOB_FAKE_FOLLOW_SLEEP:-3}" ;;
 esac
 exit 0
 EOF
     chmod +x "$JOB_SANDBOX/pueue"
     export JOB_PUEUE_BIN="$JOB_SANDBOX/pueue"
+
+    # FAKE troupe (troupe-design.md §6's `troupe jobs`): records argv, then
+    # emits either the next queued action popped off a rotating actions file
+    # (JOB_FAKE_TROUPE_ACTIONS — one action per line, a scenario's whole
+    # popup sequence) or a single JOB_FAKE_TROUPE_ACTION; ALWAYS exits 0 —
+    # the widget's own contract, dismissed/cancel/logs/empty are all reached
+    # via stdout, never a nonzero rc.
+    export JOB_FAKE_TROUPE_LOG="$JOB_SANDBOX/troupe.log"
+    cat > "$JOB_SANDBOX/troupe" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_TROUPE_LOG"
+if [ -n "${JOB_FAKE_TROUPE_ACTIONS:-}" ] && [ -s "$JOB_FAKE_TROUPE_ACTIONS" ]; then
+  line=$(head -n1 "$JOB_FAKE_TROUPE_ACTIONS")
+  tail -n +2 "$JOB_FAKE_TROUPE_ACTIONS" > "$JOB_FAKE_TROUPE_ACTIONS.next"
+  mv "$JOB_FAKE_TROUPE_ACTIONS.next" "$JOB_FAKE_TROUPE_ACTIONS"
+  printf '%s' "$line"
+else
+  printf '%s' "${JOB_FAKE_TROUPE_ACTION:-}"
+fi
+exit 0
+EOF
+    chmod +x "$JOB_SANDBOX/troupe"
+    export JOB_TROUPE_BIN="$JOB_SANDBOX/troupe"
+
+    # FAKE mux-modal: records argv, then behaves like tmux-modal's own
+    # --capture mode — runs the trailing command and writes its stdout to
+    # the --capture path — so the SAME fake troupe above is exercised
+    # uniformly whether job::watch floats it or runs it inline.
+    export JOB_FAKE_MODAL_LOG="$JOB_SANDBOX/modal.log"
+    cat > "$JOB_SANDBOX/modal" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_MODAL_LOG"
+capture=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --capture) capture="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) shift ;;
+  esac
+done
+out=$("$@")
+[ -n "$capture" ] && printf '%s' "$out" > "$capture"
+exit 0
+EOF
+    chmod +x "$JOB_SANDBOX/modal"
+    export JOB_MUX_MODAL_BIN="$JOB_SANDBOX/modal"
+
+    # FAKE tab-open seam (job::_open_log_tab): records argv and returns at
+    # once, simulating the tab's `tail -f` having already exited — the
+    # driver's relaunch-after-tab-closes path becomes deterministic under
+    # the spec suite instead of needing a real mux tab.
+    export JOB_FAKE_LOGTAB_LOG="$JOB_SANDBOX/logtab.log"
+    cat > "$JOB_SANDBOX/logtab" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_LOGTAB_LOG"
+exit 0
+EOF
+    chmod +x "$JOB_SANDBOX/logtab"
+    export JOB_OPEN_LOG_TAB_BIN="$JOB_SANDBOX/logtab"
+    export JOB_PUEUE_LOG_DIR="$JOB_SANDBOX/pueue-logs"
+
+    # FAKE ai-playbook: the house confirm's inline widget backend
+    # (input-common's documented seam), used by job::_watch_confirm_cancel
+    # (mux.zsh degrades to it whenever no float backend is active).
+    export JOB_FAKE_CONFIRM_LOG="$JOB_SANDBOX/confirm.log"
+    cat > "$JOB_SANDBOX/ai-playbook" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_CONFIRM_LOG"
+exit "${JOB_FAKE_CONFIRM_RC:-1}"
+EOF
+    chmod +x "$JOB_SANDBOX/ai-playbook"
+    export AI_PLAYBOOK_INPUT_BIN="$JOB_SANDBOX/ai-playbook"
   }
   cleanup() { rm -rf "$JOB_SANDBOX"; }
   BeforeEach 'setup'
@@ -203,142 +276,162 @@ EOF
       The status should equal 1
       The stderr should include 'usage: job'
     End
-  End
-
-  # Phase 2 (spec §6): the modal viewer's pure composition helpers. Pure
-  # string functions — no tty, no pueue, no seams needed.
-  Describe 'job::watch composition helpers'
-    It 'renders a proportional 24-char bar'
-      When call run_job job::_watch_bar 50 24
-      The output should equal '████████████············'
-    End
-
-    It 'clamps a full bar and renders indeterminate as all-empty'
-      full_and_indet() {
-        printf '%s|%s' \
-          "$(run_job job::_watch_bar 100 8)" \
-          "$(run_job job::_watch_bar -1 8)"
-      }
-      When call full_and_indet
-      The output should equal '████████|········'
-    End
-
-    It 'composes the header from the message when one exists'
-      When call run_job job::_watch_header "Build X" "step 3 of 9" 33 41
-      The output should equal 'step 3 of 9 [███████·················] 33% 41s — q/ESC detach · ^C cancel'
-    End
-
-    It 'falls back to the title and renders --% when indeterminate'
-      When call run_job job::_watch_header "Build X" "" -1 5
-      The output should equal 'Build X [························] --% 5s — q/ESC detach · ^C cancel'
+    It 'dispatches watch through the front-end (up-front empty scan)'
+      When call zsh -f "$JOBBIN" watch
+      The status should equal 1
+      The stderr should include 'no running jobs'
     End
   End
 
-  Describe 'job::watch'
-    It 'streams the log, detaches on q, and leaves the task alone'
-      detach() {
-        id=$(run_job job::start --title "W" -- sleep 9) || return 1
-        # A `q` fed the instant the example starts would race the fake
-        # follow's own write of "log line one" (no startup nap papers over
-        # this any more — see I5). Feed it through a FIFO instead, from a
-        # background writer that waits for a sentinel the fake follow only
-        # touches AFTER its log line is written: the key is then physically
-        # unable to arrive first.
-        local sentinel="$JOB_SANDBOX/detach.ready" fifo="$JOB_SANDBOX/detach.fifo"
-        mkfifo "$fifo"
-        exec 3<>"$fifo"
-        ( while [ ! -e "$sentinel" ]; do sleep 0.02; done; printf 'q' >&3 ) &
-        local writer=$!
-        JOB_FAKE_FOLLOW_SENTINEL="$sentinel" JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
-          run_job job::watch "$id" <&3 2>"$JOB_SANDBOX/watch.err" || return 2
-        wait "$writer" 2>/dev/null
-        exec 3>&-
-        # The log line reached the screen (stderr), the follow child was
-        # asked for task 7, and NO kill was ever issued (detach ≠ cancel).
-        printf '%s|%s|%s' \
-          "$(grep -c 'log line one' "$JOB_SANDBOX/watch.err")" \
-          "$(grep -c '^follow 7$' "$JOB_FAKE_LOG")" \
+  # The troupe-dashboard driver (spec §6 revision 3): job::watch floats
+  # `troupe jobs` through mux-modal under tmux, or runs it directly outside
+  # a mux session, and loops on the widget's one-line action protocol
+  # (troupe-design.md §6): empty stdout (ESC/q, dismissed) or the literal
+  # "empty" action (auto-closed after the last job finished) both mean
+  # done; "cancel <id>" routes through the house confirm and job::cancel,
+  # relaunching unless that was the last live job; "logs <id>" opens a tab
+  # tailing the task's pueue log and relaunches once that tab closes.
+  Describe 'job::watch — the troupe dashboard driver'
+    It 'floats troupe through mux-modal under tmux and stops on a dismissed (blank) action'
+      float_dismiss() {
+        id=$(run_job job::start -- sleep 9) || return 1
+        export JOB_FAKE_TROUPE_ACTION=""
+        TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
+        rc=$?
+        local match="no"
+        grep -qF -- "--title Job runner" "$JOB_FAKE_MODAL_LOG" \
+          && grep -qF -- "jobs --state-root $JOB_STATE_ROOT" "$JOB_FAKE_MODAL_LOG" \
+          && match="yes"
+        printf 'rc=%s|match=%s|calls=%s|kills=%s' "$rc" "$match" \
+          "$(grep -c "jobs --state-root $JOB_STATE_ROOT" "$JOB_FAKE_TROUPE_LOG")" \
           "$(grep -c '^kill' "$JOB_FAKE_LOG")"
       }
-      When call detach
-      The output should equal '1|1|0'
+      When call float_dismiss
+      The output should equal 'rc=0|match=yes|calls=1|kills=0'
     End
 
-    It 'returns immediately with the outcome when the job already finished'
-      finished() {
-        id=$(run_job job::start --title "Done job" -- true) || return 1
-        printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id/result"
-        JOB_FAKE_FOLLOW_SLEEP=0 JOB_WATCH_FORCE=1 \
-          run_job job::watch "$id" </dev/null 2>"$JOB_SANDBOX/watch.err" || return 2
-        grep -c 'Success' "$JOB_SANDBOX/watch.err"
-      }
-      When call finished
-      The output should equal '1'
-    End
-
-    It 'keeps a newline-less final log fragment visible after a result-file exit'
-      tailfrag() {
-        id=$(run_job job::start --title "TF" -- true) || return 1
-        local sentinel="$JOB_SANDBOX/tailfrag.ready"
-        # The result file lands only AFTER the fake follow has written and
-        # touched the sentinel — the final "tail-frag" byte (no trailing
-        # newline) is guaranteed to be sitting unflushed in job::watch's
-        # `pending` buffer when the loop notices `result` and exits, which
-        # is exactly the always-block's final-flush path.
-        ( while [ ! -e "$sentinel" ]; do sleep 0.02; done
-          printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id/result" ) &
-        local writer=$!
-        JOB_FAKE_FOLLOW_SENTINEL="$sentinel" JOB_FAKE_FOLLOW_TAILFRAG="tail-frag" \
-          JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
-          run_job job::watch "$id" </dev/null 2>"$JOB_SANDBOX/tailfrag.err" || return 2
-        wait "$writer" 2>/dev/null
-        # grep splits on \n only — \r and escape bytes are ordinary
-        # characters to it. A completed row (the fix) leaves "tail-frag" as
-        # the WHOLE of its own line; the pre-fix bug ran the closing
-        # \r\e[K straight into it on the same unterminated line, so
-        # "tail-frag" was never the last thing before a real newline.
-        grep -c 'tail-frag$' "$JOB_SANDBOX/tailfrag.err"
-      }
-      When call tailfrag
-      The output should equal '1'
-    End
-
-    It 'refuses an unknown job id'
-      When call run_job job::watch no-such-job
-      The status should equal 1
-      The stderr should include 'unknown job'
-    End
-
-    It 'refuses without a tty unless forced'
-      no_tty() {
+    It 'runs troupe directly outside tmux and stops on a dismissed (blank) action'
+      inline_dismiss() {
         id=$(run_job job::start -- sleep 9) || return 1
-        run_job job::watch "$id" </dev/null
+        export JOB_FAKE_TROUPE_ACTION=""
+        run_job job::watch 2>"$JOB_SANDBOX/watch.err"
+        rc=$?
+        printf 'rc=%s|calls=%s|modal_calls=%s' "$rc" \
+          "$(grep -c "jobs --state-root $JOB_STATE_ROOT" "$JOB_FAKE_TROUPE_LOG")" \
+          "$([ -f "$JOB_FAKE_MODAL_LOG" ] && wc -l < "$JOB_FAKE_MODAL_LOG" | tr -d ' ' || echo 0)"
       }
-      When call no_tty
+      When call inline_dismiss
+      The output should equal 'rc=0|calls=1|modal_calls=0'
+    End
+
+    It 'treats the literal "empty" action (auto-closed) the same as dismissed — done, one invocation'
+      literal_empty() {
+        id=$(run_job job::start -- true) || return 1
+        export JOB_FAKE_TROUPE_ACTION="empty"
+        run_job job::watch
+        rc=$?
+        printf 'rc=%s|calls=%s' "$rc" "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")"
+      }
+      When call literal_empty
+      The output should equal 'rc=0|calls=1'
+    End
+
+    It 'cancel action: Keep running declines the confirm — no kill, relaunches (two invocations)'
+      keep_running() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        printf 'cancel\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_CONFIRM_RC=1
+        run_job job::watch
+        rc=$?
+        printf 'rc=%s|kills=%s|calls=%s' "$rc" \
+          "$(grep -c '^kill' "$JOB_FAKE_LOG")" \
+          "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")"
+      }
+      When call keep_running
+      The output should equal 'rc=0|kills=0|calls=2'
+    End
+
+    It 'cancel action: confirmed with another job live — kills once and relaunches (two invocations)'
+      cancel_other_live() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        id2=$(run_job job::start --title "Other" -- sleep 9) || return 2
+        printf 'cancel\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_CONFIRM_RC=0
+        run_job job::watch
+        rc=$?
+        printf 'rc=%s|kills=%s|calls=%s' "$rc" \
+          "$(grep -c '^kill 7$' "$JOB_FAKE_LOG")" \
+          "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")"
+      }
+      When call cancel_other_live
+      The output should equal 'rc=0|kills=1|calls=2'
+    End
+
+    It 'cancel action: confirmed as the LAST live job — kills once, no relaunch (one invocation)'
+      cancel_last_job() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        printf 'cancel\t%s\n' "$id" > "$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_CONFIRM_RC=0
+        run_job job::watch
+        rc=$?
+        printf 'rc=%s|kills=%s|calls=%s' "$rc" \
+          "$(grep -c '^kill 7$' "$JOB_FAKE_LOG")" \
+          "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")"
+      }
+      When call cancel_last_job
+      The output should equal 'rc=0|kills=1|calls=1'
+    End
+
+    It 'logs action: opens the resolved pueue log in a mux tab, relaunches once it closes (two invocations)'
+      logs_action() {
+        id=$(run_job job::start --title "L" -- sleep 9) || return 1
+        printf 'logs\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
+        export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
+        run_job job::watch
+        rc=$?
+        local match="no"
+        grep -qF -- "tail -f $JOB_PUEUE_LOG_DIR/7.log" "$JOB_FAKE_LOGTAB_LOG" && match="yes"
+        printf 'rc=%s|match=%s|tabs=%s|calls=%s' "$rc" "$match" \
+          "$(wc -l < "$JOB_FAKE_LOGTAB_LOG" | tr -d ' ')" \
+          "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")"
+      }
+      When call logs_action
+      The output should equal 'rc=0|match=yes|tabs=1|calls=2'
+    End
+
+    It 'refuses up front when there are no running jobs — zero troupe invocations'
+      When call run_job job::watch
       The status should equal 1
-      The stderr should include 'terminal'
+      The stderr should include 'no running jobs'
+    End
+
+    It 'dies naming the install command when troupe is not on PATH'
+      missing_troupe() {
+        id=$(run_job job::start -- true) || return 1
+        zsh -f -c '
+          PATH="/usr/bin:/bin"
+          unset JOB_TROUPE_BIN
+          source "$1" >/dev/null 2>&1 || exit 99
+          shift
+          job::watch
+        ' -- "$JOBLIB"
+      }
+      When call missing_troupe
+      The status should equal 1
+      The stderr should include 'go install github.com/Townk/troupe/cmd/troupe@latest'
     End
   End
 
   # mux::confirm is the house dialog layer (ask/ai-playbook floated in a mux
   # popup inside a session, inline input::confirm otherwise). The sandbox
-  # here has no TMUX/ZELLIJ, so mux::confirm takes the inline input::confirm
-  # path, which shells out to ai-playbook — AI_PLAYBOOK_INPUT_BIN is its
-  # documented test seam (input-common.zsh's _input::bin).
+  # here has no TMUX/ZELLIJ (spec_helper.sh unsets both suite-wide), so
+  # mux::confirm takes the inline input::confirm path, which shells out to
+  # ai-playbook — AI_PLAYBOOK_INPUT_BIN is its documented test seam
+  # (input-common.zsh's _input::bin).
   Describe 'job::_watch_confirm_cancel'
-    confirm_setup() {
-      unset TMUX ZELLIJ
-      export JOB_FAKE_CONFIRM_LOG="$JOB_SANDBOX/confirm.log"
-      cat > "$JOB_SANDBOX/ai-playbook" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >> "$JOB_FAKE_CONFIRM_LOG"
-exit "${JOB_FAKE_CONFIRM_RC:-1}"
-EOF
-      chmod +x "$JOB_SANDBOX/ai-playbook"
-      export AI_PLAYBOOK_INPUT_BIN="$JOB_SANDBOX/ai-playbook"
-    }
-    BeforeEach 'confirm_setup'
-
     It 'cancels on confirm (rc 0) and asks with the danger-palette flags'
       confirmed() {
         id=$(run_job job::start --title "C" -- sleep 9) || return 1
@@ -415,242 +508,43 @@ EOF
   End
 
   Describe 'job::start --modal'
-    It 'prints the id on stdout and chains into the viewer'
+    It 'prints exactly the id on stdout and drives the dashboard once'
       modal() {
-        # Same sentinel-gated FIFO as the detach example (I5) — job::start
-        # --modal chains straight into job::watch, so the same race applies.
-        local sentinel="$JOB_SANDBOX/modal.ready" fifo="$JOB_SANDBOX/modal.fifo"
-        mkfifo "$fifo"
-        exec 3<>"$fifo"
-        ( while [ ! -e "$sentinel" ]; do sleep 0.02; done; printf 'q' >&3 ) &
-        local writer=$!
-        JOB_FAKE_FOLLOW_SENTINEL="$sentinel" JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
-          run_job job::start --modal --title "M" -- sleep 9 \
-          <&3 2>"$JOB_SANDBOX/modal.err"
-        local rc=$?
-        wait "$writer" 2>/dev/null
-        exec 3>&-
-        return $rc
+        export JOB_FAKE_TROUPE_ACTION=""
+        out=$(run_job job::start --modal --title "M" -- sleep 9 2>"$JOB_SANDBOX/modal.err")
+        rc=$?
+        # stdout is EXACTLY the id — the dashboard driver painted nothing of
+        # its own to it (troupe's stdout is captured, never leaked) — and the
+        # driver really ran the dashboard once (calls=1), not a no-op.
+        # NB: a comma delimiter, not "|" — ShellSpec's "match pattern" runs
+        # the pattern through a `case` arm, where a bare "|" is CASE
+        # ALTERNATION (any one arm matching the WHOLE string is a pass), not
+        # a literal pipe; a trailing unrestricted "*" in an earlier arm would
+        # then swallow the rest of the string and silently pass regardless
+        # of what followed it (caught live rewriting this very example).
+        printf '%s,rc=%s,calls=%s' "$out" "$rc" \
+          "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG" 2>/dev/null || echo 0)"
       }
       When call modal
-      The status should equal 0
-      # stdout is EXACTLY the id — the viewer painted only stderr.
-      The output should match pattern '[0-9]*-[0-9]*'
-      The contents of file "$JOB_SANDBOX/modal.err" should include 'log line one'
+      The output should match pattern '[0-9]*-[0-9]*,rc=0,calls=1'
     End
   End
 
-  Describe 'libexec/job watch verb'
-    JOBBIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job"
-    It 'dispatches watch through the front-end'
-      When call zsh -f "$JOBBIN" watch no-such-job
+  Describe 'job::log'
+    It 'passes through to pueue log for a known id'
+      known() {
+        id=$(run_job job::start -- true) || return 1
+        run_job job::log "$id" >/dev/null
+        grep -c '^log 7$' "$JOB_FAKE_LOG"
+      }
+      When call known
+      The output should equal '1'
+    End
+
+    It 'rejects an unknown id'
+      When call run_job job::log no-such-job
       The status should equal 1
       The stderr should include 'unknown job'
-    End
-  End
-
-  # Phase 2b (spec §6 revision 2, FLOATING): job::watch becomes a dispatcher.
-  # Outside a mux session (spec_helper.sh unsets TMUX/ZELLIJ suite-wide) or
-  # with --inline it takes the existing inline loop untouched (see the
-  # 'job::watch' Describe above); inside a session, without --inline, it
-  # floats the SAME inline renderer inside a mux-modal popup instead of
-  # running the loop itself.
-  Describe 'job::watch float dispatch'
-    It 'floats the inline viewer through mux-modal and never runs the inline loop itself'
-      dispatch() {
-        id=$(run_job job::start --title "F" -- sleep 9) || return 1
-        local modal_log="$JOB_SANDBOX/modal.log"
-        cat > "$JOB_SANDBOX/modal" <<EOF
-#!/bin/sh
-printf '%s\n' "\$*" >> "$modal_log"
-exit 0
-EOF
-        chmod +x "$JOB_SANDBOX/modal"
-        TMUX=fake/sock,1,0 JOB_MUX_MODAL_BIN="$JOB_SANDBOX/modal" \
-          run_job job::watch "$id"
-        rc=$?
-        local match="no"
-        grep -qF -- "--title Job runner -- $HOME/.local/libexec/job watch --inline --in-float $id" \
-          "$modal_log" && match="yes"
-        printf 'rc=%s|match=%s|calls=%s|follow=%s' "$rc" "$match" \
-          "$(wc -l < "$modal_log" | tr -d ' ')" \
-          "$(grep -c '^follow' "$JOB_FAKE_LOG")"
-      }
-      When call dispatch
-      The output should equal 'rc=0|match=yes|calls=1|follow=0'
-    End
-
-    # Controller ruling (final fix wave): mux-modal's zellij arm is a float
-    # CONSUMER, not a float SPAWNER — zellij-modal expects to already BE
-    # inside a keybind-spawned floating pane. Gating the dispatch on ZELLIJ
-    # too (as tmux is) meant a bare zellij shell had no floating pane to be
-    # inside, so the modal flooded the CURRENT pane with chrome instead.
-    # Zellij float support is an explicit follow-up; until then, ZELLIJ alone
-    # must fall back to the SAME inline loop the no-mux case uses.
-    It 'zellij alone never floats — falls back to the inline loop (gate is tmux-only)'
-      zellij_fallback() {
-        id=$(run_job job::start --title "Z" -- sleep 9) || return 1
-        local modal_log="$JOB_SANDBOX/modal.log"
-        cat > "$JOB_SANDBOX/modal" <<EOF
-#!/bin/sh
-printf '%s\n' "\$*" >> "$modal_log"
-exit 0
-EOF
-        chmod +x "$JOB_SANDBOX/modal"
-        ZELLIJ=1 JOB_MUX_MODAL_BIN="$JOB_SANDBOX/modal" \
-          JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
-          run_job job::watch "$id" </dev/null 2>"$JOB_SANDBOX/zellij.err"
-        rc=$?
-        printf 'rc=%s|modal_calls=%s|follow=%s' "$rc" \
-          "$([ -f "$modal_log" ] && wc -l <"$modal_log" | tr -d ' ' || echo 0)" \
-          "$(grep -c '^follow 7$' "$JOB_FAKE_LOG")"
-      }
-      When call zellij_fallback
-      The output should equal 'rc=0|modal_calls=0|follow=1'
-    End
-  End
-
-  Describe 'job::watch --latest'
-    It 'resolves to the newest result-less job, watching an older running job when a newer one already finished'
-      latest_running() {
-        id1=$(run_job job::start --title "Old" -- sleep 9) || return 1
-        id2=$(run_job job::start --title "New" -- sleep 9) || return 2
-        printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id2/result"
-        JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
-          run_job job::watch --latest --inline </dev/null 2>"$JOB_SANDBOX/latest.err"
-        rc=$?
-        printf 'rc=%s|old=%s|new=%s|follow=%s' "$rc" \
-          "$(grep -c "job watch $id1" "$JOB_SANDBOX/latest.err" | tr -d ' ')" \
-          "$(grep -c "job watch $id2" "$JOB_SANDBOX/latest.err" | tr -d ' ')" \
-          "$(grep -c '^follow' "$JOB_FAKE_LOG")"
-      }
-      When call latest_running
-      The output should equal 'rc=0|old=1|new=0|follow=1'
-    End
-
-    It 'refuses with "no running jobs" when every job dir already has a result'
-      latest_none() {
-        id=$(run_job job::start --title "Done" -- true) || return 1
-        printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id/result"
-        run_job job::watch --latest --inline </dev/null
-      }
-      When call latest_none
-      The status should equal 1
-      The stderr should include 'no running jobs'
-    End
-  End
-
-  # in-float confirm: the SAME Ctrl+C flow, but run from inside a mux-modal
-  # popup — mux::confirm's own float branch cannot be used there (a tmux
-  # client allows only one popup at a time, so stacking a second display-popup
-  # from inside the first would be a hang, not a dialog). --in-float routes
-  # straight to input::confirm (the inline widget), bypassing mux.zsh/tmux
-  # entirely even though TMUX is set — proven here with a recording fake tmux
-  # that must see zero invocations.
-  Describe 'job::_watch_confirm_cancel --in-float'
-    infloat_setup() {
-      export TMUX="/tmp/sock,1,0"
-      export JOB_FAKE_CONFIRM_LOG="$JOB_SANDBOX/confirm.log"
-      cat > "$JOB_SANDBOX/ai-playbook" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >> "$JOB_FAKE_CONFIRM_LOG"
-exit "${JOB_FAKE_CONFIRM_RC:-1}"
-EOF
-      chmod +x "$JOB_SANDBOX/ai-playbook"
-      export AI_PLAYBOOK_INPUT_BIN="$JOB_SANDBOX/ai-playbook"
-      export JOB_TMUX_LOG="$JOB_SANDBOX/tmux.log"
-      cat > "$JOB_SANDBOX/tmux" <<EOF
-#!/bin/sh
-printf '%s\n' "\$*" >> "$JOB_TMUX_LOG"
-exit 0
-EOF
-      chmod +x "$JOB_SANDBOX/tmux"
-      export MUX_TMUX_BIN="$JOB_SANDBOX/tmux"
-    }
-    BeforeEach 'infloat_setup'
-
-    It 'cancels via input::confirm directly, never touching tmux display-popup'
-      infloat_confirmed() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
-        JOB_FAKE_CONFIRM_RC=0 run_job job::_watch_confirm_cancel "$id" "C" --in-float
-        rc=$?
-        kills=$(grep -c '^kill 7$' "$JOB_FAKE_LOG")
-        popups=$(grep -c 'display-popup' "$JOB_TMUX_LOG" 2>/dev/null || echo 0)
-        printf '%s|%s|%s|%s' "$rc" "$kills" "$popups" "$(cat "$JOB_FAKE_CONFIRM_LOG")"
-      }
-      When call infloat_confirmed
-      The output should include '0|1|0|'
-      The output should include '--type confirm'
-      The output should include '--danger'
-      The output should include '--affirmative Cancel job'
-      The output should include '--negative Keep running'
-      The output should include '--title Job runner'
-    End
-
-    It 'declines on rc 1 — no kill, rc 1, still no tmux popup'
-      infloat_declined() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
-        JOB_FAKE_CONFIRM_RC=1 run_job job::_watch_confirm_cancel "$id" "C" --in-float
-        rc=$?
-        kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
-        popups=$(grep -c 'display-popup' "$JOB_TMUX_LOG" 2>/dev/null || echo 0)
-        printf '%s|%s|%s' "$rc" "$kills" "$popups"
-      }
-      When call infloat_declined
-      The output should equal '1|0|0'
-    End
-  End
-
-  # Regressions (Mode B 2026-08-15, second session): two zsh traps the suite
-  # could not see because run_job sources without -u and no example ever
-  # drove the viewer loop past its first iteration.
-  Describe 'job::watch zsh-semantics regressions'
-    # The bare `${(pl:N::c:)}` padding form expands the EMPTY parameter,
-    # which the libexec front-end's `set -u` rejects — the bar collapsed to
-    # [] with a "parameter not set" error per repaint on the live tty.
-    It 'composes the bar under set -u (the front-end runs -eu)'
-      When call zsh -f -c 'set -eu; source "$1" >/dev/null 2>&1 || exit 99
-                           job::_watch_bar 50 24' -- "$JOBLIB"
-      The status should equal 0
-      The output should equal '████████████············'
-    End
-
-    # zsh prints `NAME=value` for `local NAME` (no assignment) when NAME is
-    # already local — declared inside the while loop, `cols`/`header_line`
-    # leaked their values to stdout from the second tick on, polluting the
-    # viewer and --modal's captured stdout. All loop variables are declared
-    # once at function top now; this example runs the loop for several ticks
-    # (follow lives ~1s, no result file, EOF stdin) and pins stdout EMPTY.
-    It 'keeps stdout empty across multiple loop iterations'
-      multi_tick() {
-        id=$(run_job job::start --title "MT" -- sleep 9) || return 1
-        JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
-          run_job job::watch "$id" </dev/null 2>/dev/null
-        rc=$?
-        printf 'rc=%s' "$rc"
-      }
-      When call multi_tick
-      # stdout carries ONLY our sentinel — nothing leaked by the loop.
-      The output should equal 'rc=0'
-    End
-
-    # The front-end wraps the library in `set -eu`; the viewer loop is full
-    # of normally-failing statements (interrupted builtins, empty probes).
-    # job::watch pins errexit off locally — this drives the WHOLE loop
-    # through the real front-end for several ticks and must exit cleanly
-    # with the closing line, not die mid-loop.
-    It 'runs the full loop under the front-end set -eu'
-      JOBBIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job"
-      via_frontend() {
-        id=$(run_job job::start --title "FE" -- sleep 9) || return 1
-        JOB_FAKE_FOLLOW_SLEEP=1 JOB_WATCH_FORCE=1 \
-          zsh -f "$JOBBIN" watch "$id" </dev/null 2>"$JOB_SANDBOX/fe.err"
-        rc=$?
-        printf 'rc=%s|' "$rc"
-        grep -c 'still running' "$JOB_SANDBOX/fe.err"
-      }
-      When call via_frontend
-      The output should equal 'rc=0|1'
     End
   End
 End

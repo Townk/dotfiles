@@ -95,7 +95,7 @@ job::start() {
   jq --argjson tid "$task_id" '.pueue_id = $tid' "$dir/meta.json" > "$tmp" \
     && mv -f -- "$tmp" "$dir/meta.json"
   print -r -- "$id"
-  ((modal)) && job::watch "$id"
+  ((modal)) && job::watch
   return 0
 }
 
@@ -161,341 +161,248 @@ job::hud() {
   return 0
 }
 
-# --- modal viewer (phase 2, spec §6) ----------------------------------------
-# Pure composition first, loop later: the bar and header are plain string
-# functions so the spec suite can pin the layout without a tty.
+# --- troupe dashboard driver (spec §6 revision 3) ---------------------------
+# `troupe jobs` (troupe-design.md §6) renders the multi-job dashboard — the
+# terminal twin of the Hammerspoon capsule stack — and hands back at most ONE
+# action line on stdout, always exiting 0: empty (dismissed), "empty" (auto-
+# closed, last job finished), "cancel <id>", or "logs <id>". Everything else
+# — the confirm, the actual cancel, the log tab, every relaunch — is this
+# driver's job (troupe-design.md §6: "logic stays in the caller"). The rev-2
+# inline log-viewer loop (mirror, pending buffer, follow child, its own
+# header/bar composition) retires with this revision; `job log <id>` covers
+# direct log access instead.
 
-# job::_watch_bar <pct> [width] — a width-char bar, █ filled / · empty.
-# Negative pct = indeterminate = all-empty. No trailing newline.
-job::_watch_bar() {
-  local pct="$1" width="${2:-24}" filled
-  if ((pct < 0)); then
-    filled=0
-  else
-    filled=$((pct * width / 100))
-    ((filled > width)) && filled=$width
+# job::_troupe — resolve the troupe binary. JOB_TROUPE_BIN is the test seam;
+# unset falls back to PATH resolution (troupe ships via the Gofile, no fixed
+# install prefix to guess, unlike pueue's Homebrew fallback in job::_pueue).
+job::_troupe() {
+  if [ -n "${JOB_TROUPE_BIN:-}" ]; then
+    print -r -- "$JOB_TROUPE_BIN"
+    return 0
   fi
-  # Pad a NAMED empty parameter: the bare `${(pl:N::c:)}` form expands the
-  # empty parameter, which `set -u` (the libexec front-end runs under -eu)
-  # rejects as "parameter not set" — caught live in Mode B, invisible to the
-  # spec suite because run_job sources without -u.
-  local bar="" pad=""
-  ((filled > 0)) && bar="${(pl:$filled::█:)pad}"
-  ((filled < width)) && bar="$bar${(pl:$((width - filled))::·:)pad}"
-  print -rn -- "$bar"
+  command -v troupe 2>/dev/null
 }
 
-# job::_watch_header <title> <msg> <pct> <elapsed_s> — the pinned status
-# row, uncolored (the loop wraps it in the gated palette): the engine-owned
-# label (message when the task has spoken, title before that), the bar, the
-# percentage (--% while indeterminate), elapsed seconds, and the key hints.
-job::_watch_header() {
-  local title="$1" msg="$2" pct="$3" elapsed="$4"
-  local label="$title" pctText
-  [ -n "$msg" ] && label="$msg"
-  if ((pct < 0)); then
-    pctText="--%"
-  else
-    pctText="${pct}%"
-  fi
-  print -rn -- "$label [$(job::_watch_bar "$pct")] $pctText ${elapsed}s — q/ESC detach · ^C cancel"
-}
-
-# job::_watch_confirm_cancel <id> <title> [--in-float] — the Ctrl+C flow,
-# routed through the house dialog layer: mux::confirm floats the themed
-# danger-palette confirm in a mux popup when inside a session, or degrades
-# to the inline input::confirm otherwise. Fail-closed — ANY non-zero rc
-# (declined, unrenderable, or the 130 ESC-cancel) means "do not cancel".
-# rc 0 = the job WAS cancelled, rc 1 = declined/resume (caller keeps
-# watching). Widget libs are pulled in lazily, the way notify pulls its
-# bridge libs; an unreadable lib degrades to a safe decline, never a crash.
-#
-# --in-float: we are ALREADY rendering inside a mux-modal popup (job::watch's
-# float dispatch spawned it). A tmux client allows only one popup at a time,
-# so routing through mux::confirm here would try to stack a second
-# display-popup on top of the one we are already inside — go straight to the
-# inline input::confirm widget instead, bypassing mux.zsh/tmux entirely.
-job::_watch_confirm_cancel() {
-  local id="$1" title="$2" in_float=0
-  [ "${3:-}" = "--in-float" ] && in_float=1
-
-  if ((in_float)); then
-    local inputlib="${${(%):-%x}:A:h}/input-common.zsh"
-    [ -r "$inputlib" ] || return 1
-    # pick-common (pulled in by input-common.zsh) hard-exits at SOURCE time
-    # when fzf is missing — same subshell probe as the mux.zsh path below.
-    ( source "$inputlib" ) >/dev/null 2>&1 || return 1
-    source "$inputlib" 2>/dev/null || return 1
-    input::confirm "Cancel ${title}?" --title "Job runner" --danger \
-      --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
-  else
-    local muxlib="${${(%):-%x}:A:h}/mux.zsh"
-    [ -r "$muxlib" ] || return 1
-    # pick-common (pulled in by mux.zsh) hard-exits at SOURCE time when fzf is
-    # missing — probe the load in a subshell so a widget-stack that cannot load
-    # declines the confirm instead of killing the caller's whole shell.
-    ( source "$muxlib" ) >/dev/null 2>&1 || return 1
-    source "$muxlib" 2>/dev/null || return 1
-    mux::confirm "Cancel ${title}?" --title "Job runner" --danger \
-      --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
-  fi
-  job::cancel "$id" >/dev/null 2>&1
-  return 0
-}
-
-# job::_watch_resolve_latest — print the id of the newest (name-descending)
-# job dir that has meta.json and no result; rc 1 when none qualify. Ids sort
-# lexicographically by creation order (µs-epoch prefix, §job::start), so a
-# plain name-descending glob order is newest-first.
-job::_watch_resolve_latest() {
+# job::_live_ids — print the id of every job dir that has meta.json and no
+# result file, one per line, newest first. Generalizes the phase-2b
+# `--latest` resolver (retired — the dashboard shows every job at once, so
+# there is no more "the one newest job" to single out) into "list every live
+# id", the shape both job::watch's up-front empty scan and its post-cancel
+# "was that the last live job" check need.
+job::_live_ids() {
   local dir id
   for dir in "$JOB_STATE_ROOT"/*(N/On); do
     id="${dir:t}"
     [ -f "$dir/meta.json" ] || continue
     [ -f "$dir/result" ] && continue
     print -r -- "$id"
-    return 0
   done
-  return 1
 }
 
-# job::watch [--inline] [--in-float] [--latest | <id>] — the modal viewer
-# dispatcher (spec §6 revision 2, FLOATING). Outside a mux session, or with
-# --inline, this IS the inline viewer: pinned header row + live log tail, all
-# on STDERR so stdout stays pipeable. Inside a mux session without --inline,
-# it instead floats the SAME inline renderer in a mux-modal popup and returns
-# the popup's rc — the float chrome writes nothing of its own to our stdout,
-# and mux-modal's own stdout is redirected away so a captured
-# `$(job::start --modal …)` still sees exactly the job id.
-#
-# spin::stream's shape (inline path): a `pueue follow` child mirrors the task
-# log into a scratch file; complete new lines push the header off its row
-# (\r\e[K), print, and the header repaints beneath them. Keys ride zselect so
-# the loop never blocks: q/ESC detach (rc 0, task untouched), Ctrl+C lands as
-# SIGINT and asks.
-job::watch() {
-  # The libexec front-end runs `set -eu`, but this loop is full of statements
-  # whose non-zero returns are NORMAL (interrupted builtins after the INT
-  # trap, empty-read probes, short-circuit arithmetic). Under errexit a ^C
-  # could kill the process mid-trap — orphaning the confirm popup and
-  # skipping the closing line (observed live in Mode B). Pin errexit off for
-  # this function only; localoptions restores the caller's setting on return.
-  setopt localoptions noerrexit
-  local id="" inline=0 in_float=0 latest=0
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --inline) inline=1; shift ;;
-      # --in-float implies inline rendering: it is only ever passed alongside
-      # --inline by the float dispatch below, but a caller reaching straight
-      # for --in-float should still get the inline loop, not another float.
-      --in-float) inline=1; in_float=1; shift ;;
-      --latest) latest=1; shift ;;
-      --) shift; break ;;
-      *) id="$1"; shift ;;
-    esac
-  done
-  (($#)) && id="$1"
+# job::_task_log <id> — resolve the pueue task's log file path from the
+# job's recorded pueue_id. JOB_PUEUE_LOG_DIR is the override/test seam; the
+# real default is pueue's macOS log directory (Linux's differs but this repo
+# targets macOS first — a Linux default is a follow-up when that box needs
+# job::watch).
+job::_task_log() {
+  local id="${1:?job::_task_log: id required}" task_id
+  task_id=$(jq -r '.pueue_id // empty' "$JOB_STATE_ROOT/$id/meta.json" 2>/dev/null) \
+    || return 1
+  [[ "$task_id" == <-> ]] || return 1
+  local logdir="${JOB_PUEUE_LOG_DIR:-$HOME/Library/Application Support/pueue/task_logs}"
+  print -r -- "$logdir/$task_id.log"
+}
 
-  if ((latest)); then
-    id=$(job::_watch_resolve_latest) || {
-      log_error "job::watch: no running jobs"
-      return 1
-    }
-  fi
-  [ -n "$id" ] || { log_error "job::watch: id required"; return 1; }
-
-  # Float dispatch: no --inline AND we are inside tmux (env-only detection —
-  # no shelling out to probe). Re-enter through the CLI front-end inside the
-  # popup with --inline --in-float so the confirm switch (below) knows to
-  # skip mux::confirm's own float attempt.
-  #
-  # tmux-only, deliberately: mux-modal's zellij arm is a float CONSUMER, not
-  # a float SPAWNER — zellij-modal expects to already BE inside a
-  # keybind-spawned floating pane. Gating on ZELLIJ too meant a bare zellij
-  # shell (no floating pane) flooded the CURRENT pane with modal chrome
-  # instead of falling back to the validated inline viewer. Zellij float
-  # support (spawning the floating pane from here, the way tmux's
-  # display-popup does) is an explicit follow-up.
-  #
-  # Env-forwarding constraint: mux-modal's tmux path (`display-popup -E`)
-  # forwards only COLORTERM/TMUX_PANE, and tmux runs the popup command from
-  # the SERVER's environment, not this launching shell's — so any
-  # JOB_STATE_ROOT/JOB_PUEUE_BIN override made HERE does not reach the
-  # re-entrant `job watch --inline --in-float` inside the popup; it
-  # re-derives its own defaults from the server's env. Real usage is
-  # unaffected (both sides land on the identical unoverridden defaults).
-  # Live validation with either seam overridden must launch against a fresh
-  # scratch tmux socket started AFTER the override, never against an
-  # already-running (and already-launched) tmux server — see the
-  # never-probe-the-live-server house rule.
-  if ((!inline)) && [ -n "${TMUX:-}" ]; then
-    local modal="${JOB_MUX_MODAL_BIN:-$HOME/.config/mux/scripts/mux-modal}"
-    "$modal" --width 80% --height 60% --title "Job runner" -- \
-      "$HOME/.local/libexec/job" watch --inline --in-float "$id" >&2
+# job::_open_log_tab <title> <logfile> — open a mux tab tailing a job's
+# pueue log and BLOCK until that tab's `tail -f` exits, so job::watch knows
+# precisely when to relaunch the dashboard (spec §6 rev 3: "when the tail
+# exits ... the driver relaunches"). JOB_OPEN_LOG_TAB_BIN is the test seam —
+# it stands in for the whole tab-open-and-wait dance; a fake records argv
+# and returns at once, simulating the tab having already closed. The real
+# path shells to mux::new_tab (the house tab-open primitive, mirroring how
+# mux-open/edit-terminal-config open a tab running a command) wrapping
+# `tail -f <logfile>` with a FIFO sentinel the wrapped command signals on
+# exit — mux::new_tab itself is fire-and-forget (a tmux window/zellij tab
+# doesn't report back when its own command finishes), so this function's
+# OWN blocking read is what turns "tab requested" into "tab closed".
+job::_open_log_tab() {
+  local title="$1" logfile="$2"
+  if [ -n "${JOB_OPEN_LOG_TAB_BIN:-}" ]; then
+    "$JOB_OPEN_LOG_TAB_BIN" "$title" "tail -f $logfile"
     return $?
   fi
+  local muxlib="${${(%):-%x}:A:h}/mux.zsh"
+  [ -r "$muxlib" ] || return 1
+  # Same subshell probe as job::_watch_confirm_cancel: pick-common (pulled
+  # in by mux.zsh) hard-exits at SOURCE time when fzf is missing.
+  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
+  source "$muxlib" 2>/dev/null || return 1
+  local sentinel
+  sentinel=$(mktemp -u "${TMPDIR:-/tmp}/job-logtab.XXXXXX")
+  mkfifo -m 600 -- "$sentinel" 2>/dev/null || return 1
+  mux::new_tab --name "$title" -- \
+    sh -c 'tail -f "$1"; printf x > "$2" 2>/dev/null' _ "$logfile" "$sentinel" \
+    || { rm -f -- "$sentinel"; return 1; }
+  cat "$sentinel" >/dev/null 2>&1
+  rm -f -- "$sentinel"
+  return 0
+}
 
-  local dir="$JOB_STATE_ROOT/$id"
-  if [ ! -f "$dir/meta.json" ]; then
-    log_error "job::watch: unknown job $id"
-    return 1
-  fi
-  if [ -z "${JOB_WATCH_FORCE:-}" ] && ! [ -t 2 ]; then
-    log_error "job::watch: needs a terminal (the HUD is the headless surface)"
-    return 1
-  fi
-  local pueue task_id title created
-  pueue=$(job::_pueue) || return 1
-  task_id=$(jq -r '.pueue_id' "$dir/meta.json" 2>/dev/null) || return 1
-  title=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null)
-  created=$(jq -r '.created // 0' "$dir/meta.json" 2>/dev/null)
+# job::_watch_confirm_cancel <id> <title> — the "cancel <id>" choreography's
+# confirm step, routed through the house dialog layer (mux::confirm — a mux
+# popup inside a session, inline input::confirm otherwise). It runs BETWEEN
+# dashboard popups: troupe has already exited by the time job::watch calls
+# this, so there is never a second popup to stack over the dashboard's own
+# (the phase-2b --in-float branch that worked around exactly that stacking
+# problem no longer applies and is retired). Fail-closed — ANY non-zero rc
+# (declined, unrenderable, or the 130 ESC-cancel) means "do not cancel".
+# rc 0 = the job WAS cancelled, rc 1 = declined (caller relaunches as-is).
+job::_watch_confirm_cancel() {
+  local id="$1" title="$2"
+  local muxlib="${${(%):-%x}:A:h}/mux.zsh"
+  [ -r "$muxlib" ] || return 1
+  # pick-common (pulled in by mux.zsh) hard-exits at SOURCE time when fzf is
+  # missing — probe the load in a subshell so a widget-stack that cannot
+  # load declines the confirm instead of killing the caller's whole shell.
+  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
+  source "$muxlib" 2>/dev/null || return 1
+  mux::confirm "Cancel ${title}?" --title "Job runner" --danger \
+    --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
+  job::cancel "$id" >/dev/null 2>&1
+  return 0
+}
 
+# job::_dashboard_float <troupe> — float `troupe jobs` in a mux-modal popup
+# (TMUX-only, per the established float gate: zellij-modal is a float
+# CONSUMER, not a SPAWNER — see mux-modal's own header) and print the one
+# action line troupe hands back through the popup's --capture channel.
+# JOB_MUX_MODAL_BIN is the test seam (default: the real mux-modal script).
+# The FIFO + concurrent-reader shape mirrors mux/tmux.zsh's _mux_tx_float
+# exactly (same rendezvous: the reader opens for read BEFORE the popup can
+# open the FIFO for write), so this is a proven pattern, not a new one.
+job::_dashboard_float() {
+  local troupe="$1"
+  local modal="${JOB_MUX_MODAL_BIN:-$HOME/.config/mux/scripts/mux-modal}"
+  local fifo out
+  fifo=$(mktemp -u "${TMPDIR:-/tmp}/job-dashboard-fifo.XXXXXX")
+  mkfifo -m 600 -- "$fifo" 2>/dev/null || return 1
+  out=$(mktemp "${TMPDIR:-/tmp}/job-dashboard-out.XXXXXX") || { rm -f -- "$fifo"; return 1; }
+  trap 'rm -f -- "$fifo" "$out"' INT TERM
+
+  cat "$fifo" >"$out" 2>/dev/null &
+  local reader_pid=$!
+
+  "$modal" --title "Job runner" --capture "$fifo" -- \
+    "$troupe" jobs --state-root "$JOB_STATE_ROOT" >/dev/null 2>&1
+  local rc=$?
+  if ((rc != 0)); then
+    kill "$reader_pid" 2>/dev/null
+    wait "$reader_pid" 2>/dev/null
+    rm -f -- "$fifo" "$out"
+    return "$rc"
+  fi
+  wait "$reader_pid"
+
+  local result
+  result=$(<"$out")
+  rm -f -- "$fifo" "$out"
+  print -r -- "$result"
+  return 0
+}
+
+# job::_dashboard_inline <troupe> — outside a mux session, run `troupe jobs`
+# directly; its stdout IS the one action line (troupe-design.md §6).
+job::_dashboard_inline() {
+  local troupe="$1"
+  "$troupe" jobs --state-root "$JOB_STATE_ROOT"
+}
+
+# job::watch — the troupe dashboard driver (spec §6 revision 3). Floats
+# `troupe jobs` through mux-modal under tmux, or runs it directly outside a
+# mux session, and loops on the widget's one-line action protocol until the
+# dashboard is genuinely done:
+#
+#   (blank) / "empty"  dismissed, or auto-closed after the last job
+#                       finished — either way, done.
+#   "cancel <id>"       show the house confirm; Keep running relaunches
+#                       as-is; Cancel job calls job::cancel and relaunches
+#                       UNLESS that was the last live job, in which case the
+#                       dashboard stays closed.
+#   "logs <id>"         open a tab tailing the task's pueue log, wait for it
+#                       to close, then relaunch.
+#
+# An up-front empty scan means the dashboard (and troupe) is never even
+# launched when nothing is running — "no running jobs" is a quiet refusal,
+# not an empty popup flash.
+job::watch() {
   # ALL loop-body variables are declared here, never inside the while loop:
   # zsh's `local NAME` (no assignment) on an already-local NAME PRINTS
   # `NAME=value` to stdout — from the second iteration on it leaked
-  # `cols=…`/`header_line=…` into the viewer (and --modal's captured
-  # stdout). Caught live in Mode B; no spec drove the loop past one tick.
-  local out off=1 size pct msg epoch key cancelled=0 detached=0 pending=""
-  local newbytes tail_frag to_print cols header_line
-  out=$(common::tmpfile)
+  # `action=…`/`rc=…` into the driver's stdout (and --modal's captured
+  # stdout). Same regression class the rev-2 viewer hit; see its old fix
+  # note (git history) for the first occurrence.
+  setopt localoptions noerrexit
+  local -a live remaining
+  local troupe action cid ctitle lid ltitle logfile
+  local rc
 
-  # Trap and terminal mode go up BEFORE the follow child spawns: a ^C in
-  # the gap between spawning and the loop must never orphan the child with
-  # no handler on the stack.
-  setopt localoptions localtraps
-  if ((in_float)); then
-    trap 'if job::_watch_confirm_cancel "$id" "$title" --in-float; then cancelled=1; fi' INT
-  else
-    trap 'if job::_watch_confirm_cancel "$id" "$title"; then cancelled=1; fi' INT
+  live=(${(f)"$(job::_live_ids)"})
+  if ((${#live} == 0)); then
+    log_error "job::watch: no running jobs"
+    return 1
   fi
 
-  # cbreak: single keys (q, bare ESC) must reach us without a trailing
-  # Enter and without the tty echoing them into the header row. Headless
-  # runs (JOB_WATCH_FORCE, the spec suite) have no /dev/tty to touch and
-  # keep zsh's own buffered reads — those feed input a line at a time.
-  local saved_stty=""
-  if have_tty; then
-    saved_stty=$(stty -g </dev/tty 2>/dev/null) || saved_stty=""
-    stty -icanon -echo min 0 time 0 </dev/tty 2>/dev/null
-  fi
+  troupe=$(job::_troupe) \
+    || die "troupe is not installed — go install github.com/Townk/troupe/cmd/troupe@latest"
 
-  "$pueue" follow "$task_id" >"$out" 2>/dev/null &
-  local follow_pid=$!
-
-  {
-    while true; do
-      if [ -f "$dir/result" ] || ((cancelled)); then break; fi
-      kill -0 "$follow_pid" 2>/dev/null || break
-      # Mirror new log bytes above the header row — bounded to exactly the
-      # size `wc` just sampled (bytes written after that are next tick's
-      # business, never this tick's), and only complete lines are painted:
-      # a mid-line fragment joins a carried-forward `pending` buffer and
-      # waits for its newline rather than being clobbered by the header's
-      # \r\e[K and reprinted (duplicated) once it completes.
-      size=$(wc -c <"$out" 2>/dev/null) || size=0
-      if ((size >= off)); then
-        newbytes=""
-        IFS= read -r -d '' newbytes \
-          < <(tail -c "+$off" "$out" 2>/dev/null | head -c $((size - off + 1))) \
-          2>/dev/null
-        pending+="$newbytes"
-        off=$((size + 1))
-        if [[ "$pending" == *$'\n'* ]]; then
-          tail_frag="${pending##*$'\n'}"
-          to_print="${pending%"$tail_frag"}"
-          print -nu2 -- $'\r\e[K'
-          print -nru2 -- "$to_print"
-          pending="$tail_frag"
-        fi
-      fi
-      # Header: sidecar line, engine-owned label composition, clamped to
-      # the terminal width (COLUMNS reads 0 in a non-interactive zsh, same
-      # idiom as _spin_say) — a wrapped header defeats the one-row \r\e[K
-      # clear and litters stale rows down the screen.
-      pct=-1 msg="" epoch=""
-      if [ -f "$dir/progress" ]; then
-        IFS=' ' read -r epoch pct msg <"$dir/progress" 2>/dev/null || pct=-1
-      fi
-      cols=$({ stty size </dev/tty; } 2>/dev/null | awk '{print $2}') || true
-      [[ -z "$cols" ]] && cols="${COLUMNS:-80}"
-      ((cols < 20)) && cols=80
-      header_line="$(job::_watch_header "$title" "$msg" "$pct" $((EPOCHSECONDS - created)))"
-      print -nru2 -- $'\r\e[K'"${C_DIM}${header_line[1,cols-1]}${C_RES}"
-      # One ~0.2s tick of key listening (fork-free; spin::nap's module).
-      if (( _common_have_zselect )); then
-        if zselect -t 20 -r 0 2>/dev/null; then
-          if read -u0 -k1 key 2>/dev/null; then
-            case "$key" in
-              q | $'\e') detached=1; break ;;
-            esac
-          else
-            # EOF stdin (headless/forced runs): /dev/null reads as
-            # perpetually ready — nap instead of busy-spinning the loop.
-            spin::nap 20
-          fi
-        fi
-      else
-        if read -u0 -t1 -k1 key 2>/dev/null; then
-          case "$key" in q | $'\e') detached=1; break ;; esac
-        fi
-      fi
-    done
-  } always {
-    trap - INT
-    [ -n "$saved_stty" ] && stty "$saved_stty" </dev/tty 2>/dev/null
-    kill -TERM "$follow_pid" 2>/dev/null
-    wait "$follow_pid" 2>/dev/null
-    # Final flush: the loop samples the log once per tick and THEN waits
-    # (up to 200ms) for a key — bytes the follow child writes during that
-    # wait are invisible to the tick that already ran and would otherwise
-    # be lost on a fast detach. Now that the child is reaped, read whatever
-    # it left, and this time print it even mid-line (nothing more is
-    # coming, so a partial final line beats a dropped one).
-    size=$(wc -c <"$out" 2>/dev/null) || size=0
-    if ((size >= off)); then
-      newbytes=""
-      IFS= read -r -d '' newbytes \
-        < <(tail -c "+$off" "$out" 2>/dev/null | head -c $((size - off + 1))) \
-        2>/dev/null
-      pending+="$newbytes"
-      off=$((size + 1))
+  while true; do
+    if [ -n "${TMUX:-}" ]; then
+      action=$(job::_dashboard_float "$troupe")
+      rc=$?
+    else
+      action=$(job::_dashboard_inline "$troupe")
+      rc=$?
     fi
-    if [ -n "$pending" ]; then
-      print -nu2 -- $'\r\e[K'
-      print -nru2 -- "$pending"
-      # A fragment with no trailing newline leaves the cursor mid-row: the
-      # unconditional \r\e[K right below would return to column 0 of that
-      # SAME row and erase what was just painted. Complete the row first so
-      # the fragment survives and the closing line gets a fresh one.
-      [[ "$pending" == *$'\n' ]] || print -nu2 -- $'\n'
-    fi
-    print -nu2 -- $'\r\e[K'
-    rm -f "$out"
-  }
+    ((rc == 0)) || { log_error "job::watch: dashboard launch failed"; return 1; }
 
-  # Normal completion usually arrives here via the follow child's own EOF:
-  # `pueue follow` returns the instant the task ends, but job-callback
-  # writes `result` only after it has notified. Give the callback a bounded
-  # grace window before falling back to a plain "detached" line; an actual
-  # q/ESC detach or a confirmed cancel skip the wait and report at once.
-  if ((!detached)) && ((!cancelled)) && [ ! -f "$dir/result" ]; then
-    local grace=0
-    while ((grace < 20)) && [ ! -f "$dir/result" ]; do
-      spin::nap 10
-      grace=$((grace + 1))
-    done
-  fi
+    case "$action" in
+      '' | empty)
+        return 0
+        ;;
+      cancel$'\t'*)
+        cid="${action#cancel$'\t'}"
+        ctitle=$(jq -r '.title // empty' "$JOB_STATE_ROOT/$cid/meta.json" 2>/dev/null)
+        if job::_watch_confirm_cancel "$cid" "${ctitle:-$cid}" >/dev/null 2>&1; then
+          remaining=(${(f)"$(job::_live_ids)"})
+          remaining=(${remaining:#$cid})
+          ((${#remaining} == 0)) && return 0
+        fi
+        # Declined ("Keep running"), or cancelled with other jobs still
+        # live: relaunch the dashboard as-is.
+        ;;
+      logs$'\t'*)
+        lid="${action#logs$'\t'}"
+        ltitle=$(jq -r '.title // empty' "$JOB_STATE_ROOT/$lid/meta.json" 2>/dev/null)
+        logfile=$(job::_task_log "$lid") || logfile=""
+        job::_open_log_tab "${ltitle:-$lid}" "$logfile"
+        ;;
+      *)
+        log_error "job::watch: unrecognized dashboard action: $action"
+        return 1
+        ;;
+    esac
+  done
+}
 
-  # Closing line: state the outcome from observed fact (the result file),
-  # or say plainly that we detached and the job runs on.
-  if [ -f "$dir/result" ]; then
-    local r_epoch r_result r_code
-    IFS=' ' read -r r_epoch r_result r_code <"$dir/result" 2>/dev/null || r_result="?"
-    print -ru2 -- "${title:-$id}: ${r_result}${r_code:+ (exit $r_code)}"
-  elif ((cancelled)); then
-    print -ru2 -- "${title:-$id}: cancel requested"
-  else
-    print -ru2 -- "${title:-$id}: detached — still running (job watch $id)"
-  fi
-  return 0
+# job::log <id> — passthrough to `pueue log <pueue_id>`, for direct access
+# to a job's full history outside the dashboard's summary view. Unknown id
+# (no meta.json, or an unresolvable pueue_id) → rc 1 "unknown job".
+job::log() {
+  local id="${1:?job::log: id required}" dir task_id pueue
+  dir="$JOB_STATE_ROOT/$id"
+  [ -f "$dir/meta.json" ] || { log_error "job::log: unknown job $id"; return 1; }
+  task_id=$(jq -r '.pueue_id // empty' "$dir/meta.json" 2>/dev/null)
+  [[ "$task_id" == <-> ]] || { log_error "job::log: unknown job $id"; return 1; }
+  pueue=$(job::_pueue) || return 1
+  "$pueue" log "$task_id"
 }

@@ -7,12 +7,12 @@ source "${0:A:h}/../lib/job.zsh"
 
 verb="${1:-}"
 case "$verb" in
-  start | progress | cancel | list | hud | watch)
+  start | progress | cancel | list | hud | watch | log)
     shift
     "job::$verb" "$@"
     ;;
   *)
-    print -ru2 -- "usage: job <start|progress|cancel|list|hud> ... | job watch [--inline] [--in-float] [--latest|<id>]"
+    print -ru2 -- "usage: job <start|progress|cancel|list|hud|watch|log> ..."
     exit 1
     ;;
 esac
