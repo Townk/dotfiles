@@ -191,6 +191,7 @@ Describe 'mux/tmux.zsh — floating pane (job-runner design §6 rev 4)'
       echo '    exit 0 ;;'
       echo '  display)'
       echo '    [[ "$*" == *client_width* ]] && print -r -- "${STUB_CLIENT_WIDTH:-200}"'
+      echo '    [[ "$*" == *client_height* ]] && print -r -- "${STUB_CLIENT_HEIGHT:-50}"'
       echo '    exit 0 ;;'
       echo '  new-pane)'
       echo '    if [[ "${STUB_NEWPANE_RC:-0}" != 0 ]]; then exit "${STUB_NEWPANE_RC}"; fi'
@@ -204,7 +205,7 @@ Describe 'mux/tmux.zsh — floating pane (job-runner design §6 rev 4)'
   }
   cleanup() {
     rm -rf "$TEST_TMP"
-    unset MUX_TMUX_BIN STUB_HAS_NEWPANE STUB_CLIENT_WIDTH STUB_NEWPANE_RC STUB_PANE_ID ARGVLOG
+    unset MUX_TMUX_BIN STUB_HAS_NEWPANE STUB_CLIENT_WIDTH STUB_CLIENT_HEIGHT STUB_NEWPANE_RC STUB_PANE_ID ARGVLOG
   }
   BeforeEach 'setup'
   AfterEach 'cleanup'
@@ -234,8 +235,8 @@ Describe 'mux/tmux.zsh — floating pane (job-runner design §6 rev 4)'
     The status should equal 1
   End
 
-  It '_mux_tx_float_pane top-right places the pane (-X = client_width - width, -Y 0) and never focuses -d/-k'
-    export STUB_CLIENT_WIDTH=200
+  It '_mux_tx_float_pane centers the pane (-X = (client_width-width)/2, -Y = (client_height-height)/2) and never focuses -d/-k'
+    export STUB_CLIENT_WIDTH=200 STUB_CLIENT_HEIGHT=50
     geom() {
       _mux_tx_float_pane 57 15 -- sh -c 'sleep 1' >/dev/null || return 1
       local xv yv
@@ -247,7 +248,22 @@ Describe 'mux/tmux.zsh — floating pane (job-runner design §6 rev 4)'
       printf 'X=%s|Y=%s|no_d=%s|no_k=%s' "$xv" "$yv" "$no_d" "$no_k"
     }
     When call geom
-    The output should equal 'X=143|Y=0|no_d=yes|no_k=yes'
+    # (200-57)/2 = 71 (71.5 truncated), (50-15)/2 = 17 (17.5 truncated) —
+    # matches the live scratch-socket verification in mux/tmux.zsh's header.
+    The output should equal 'X=71|Y=17|no_d=yes|no_k=yes'
+  End
+
+  It '_mux_tx_float_pane floors X/Y at 0 when the pane is larger than the client viewport'
+    export STUB_CLIENT_WIDTH=40 STUB_CLIENT_HEIGHT=10
+    geom() {
+      _mux_tx_float_pane 57 15 -- sh -c 'sleep 1' >/dev/null || return 1
+      local xv yv
+      xv=$(awk '/^-X$/{getline; print; exit}' "$ARGVLOG")
+      yv=$(awk '/^-Y$/{getline; print; exit}' "$ARGVLOG")
+      printf 'X=%s|Y=%s' "$xv" "$yv"
+    }
+    When call geom
+    The output should equal 'X=0|Y=0'
   End
 
   It '_mux_tx_float_pane sizes -x/-y from the caller and joins the trailing command into one string'

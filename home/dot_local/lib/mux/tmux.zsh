@@ -525,11 +525,29 @@ _mux_tx_float() {
 # spec every `new-pane` call in this tree lives in EXACTLY the one function
 # below — nothing else may call it.
 #
-# Verified live on a scratch socket (never the real session — see the repo's
-# "never probe the live server" rule) before writing this:
-#   - `new-pane -x 57 -y 15 -X 143 -Y 0 -P -F '#{pane_id}'` returns the new
+# Verified live on a scratch socket (`tmux -L jobtest new-session -d -x 200
+# -y 50`; never the real session — see the repo's "never probe the live
+# server" rule) before writing this — including a re-verification pass for
+# the centered-placement fix below (geometry audit, 2026-08-16 — the
+# original top-right placement was a controller-spec error, corrected to
+# centered before this landed):
+#   - `new-pane -x 57 -y 15 -X 71 -Y 17 -P -F '#{pane_id}'` (71/17 ==
+#     `(200-57)/2`/`(50-15)/2`, zsh integer truncation) returns the new
 #     pane's id immediately (does NOT block on the wrapped command, unlike
-#     `display-popup -E`) and the pane reports `pane_floating_flag` 1.
+#     `display-popup -E`) and the pane reports `pane_floating_flag` 1, and
+#     `list-panes -F '#{pane_width} #{pane_left} #{pane_top}'` echoes back
+#     exactly `57 71 17` — `-x`/`-y` size, `-X`/`-Y` position, no mixup, and
+#     tmux applies the requested geometry verbatim (no auto-clamping of
+#     either the size or the position).
+#   - This box's scratch socket has no attached client (`display -p
+#     '#{client_width}'`/`'#{client_height}'` both return empty on a
+#     client-less session), so the centering math itself only exercises
+#     this function's own `[[ "$cw" == <-> && "$ch" == <-> ]]` fallback-to-0
+#     guard here, not the real division — the geometry math is pinned by
+#     the argv-capturing spec in tests/mux_float_launch_spec.sh instead
+#     (STUB_CLIENT_WIDTH/STUB_CLIENT_HEIGHT), and the pane's own on-screen
+#     border rendering could not be visually confirmed from this socket
+#     either way (no attached client to render it for).
 #   - Close-on-exit is tmux's DEFAULT for new-pane (no -k): a pane running a
 #     command that exits at once is gone from `list-panes` moments later.
 #   - Omitting -d makes the new pane the client's ACTIVE pane at once
@@ -542,6 +560,24 @@ _mux_tx_float() {
 #   - `resize-pane -t <pane_id> -y <n>` on a floating pane resizes it live,
 #     in place, with no flicker/relaunch — the whole premise of hosting the
 #     dashboard this way instead of through a popup.
+#
+# Border styling (job-runner design §6 rev 4, pane-styling item): `new-pane`
+# takes `-S active-border-style -R inactive-border-style` to override the
+# border THIS pane draws with, but this function passes neither. custom-
+# builds/theme/templates/tmux-theme.conf.tmpl already sets the SERVER-WIDE
+# `pane-border-style`/`pane-active-border-style` from the theme's
+# ui.border_inactive/ui.border_focus (lines ~84-85), and per `new-pane`'s
+# own man page ("-S sets the border style when the pane is active and -R
+# sets the border style when the pane is inactive") those two flags are
+# PER-PANE OVERRIDES of exactly those global options — every pane, floating
+# or split, already inherits the live global style when -S/-R are omitted.
+# Querying `show-options -g pane-active-border-style` here and re-passing it
+# as a literal -S value would (a) duplicate a value tmux already applies for
+# free, (b) freeze a one-time snapshot that goes stale if the theme
+# reloads live (`tmux source-file` on the rendered conf), and (c) still
+# route through this shell layer rather than the theme silo's own
+# rendering — no cleaner than the default. Left at the default deliberately;
+# no hex, literal or queried, is hardcoded here.
 
 # _mux_tx_has_float_pane — capability probe: does the resolved tmux binary
 # understand `new-pane` at all (3.7b+)? `list-commands` enumerates every
@@ -568,29 +604,48 @@ _mux_tx_has_float_pane() {
 # _mux_tx_float_pane <width> <height> -- <cmd...>
 # Launch a floating pane sized <width>x<height> CELLS (no percent form —
 # every caller sizes this from its own computed value, unlike mux::popup's
-# viewport-relative geometry), top-right placed to mirror the Hammerspoon
-# HUD's corner (X = client_width - width, floored at 0; Y = 0), foreground-
-# focused (no -d), close-on-exit (tmux's default — no -k), and prints the
-# new pane's id (-P -F) for the caller to track (job.zsh's re-summon state
-# file). <cmd...> is joined into ONE shell-command string, same convention
-# as _mux_tx_split's tail invocation (tmux's new-pane/split-window/new-
-# window family all take a single "shell-command [argument ...]" positional,
-# not an argv array).
+# viewport-relative geometry), CENTERED on the client's viewport: X =
+# (client_width - width) / 2, Y = (client_height - height) / 2, both
+# integer-truncated and floored at 0. (The original spec called for
+# top-right, mirroring the Hammerspoon HUD's corner — a controller-spec
+# error caught before this landed; centered is the actual contract.) Since
+# TROUPE_RESIZE_CMD's live resize-pane hook only ever changes -y (height;
+# width is fixed at 57 for the whole run), X stays correct across a resize
+# automatically, but Y is computed ONCE at spawn time against the FIRST
+# height and never recomputed — a later shrink drifts the pane slightly off
+# vertical center instead of re-centering. Accepted for now (repositioning a
+# LIVE pane is a separate, not-yet-built feature; resize-pane has no
+# reposition flag of its own). Foreground-focused (no -d), close-on-exit
+# (tmux's default — no -k), and prints the new pane's id (-P -F) for the
+# caller to track (job.zsh's re-summon state file). Size is `-x`/`-y`
+# (lowercase), position is `-X`/`-Y` (uppercase) — confirmed against this
+# box's `tmux list-commands new-pane` (3.7b): `[-x width] [-y height]
+# [-X x-position] [-Y y-position]`; this function's flags already matched
+# that mapping (the audited bug, if any, was the placement FORMULA, not a
+# size/position flag mixup). <cmd...> is joined into ONE shell-command
+# string, same convention as _mux_tx_split's tail invocation (tmux's
+# new-pane/split-window/new-window family all take a single "shell-command
+# [argument ...]" positional, not an argv array).
 _mux_tx_float_pane() {
   local w="$1" h="$2"
   shift 2
   [[ "${1-}" == "--" ]] && shift
 
-  local bin cw x=0
+  local bin cw ch x=0 y=0
   bin="$(_mux_tx_bin)" || return 1
   cw=$("$bin" display -p '#{client_width}' 2>/dev/null)
+  ch=$("$bin" display -p '#{client_height}' 2>/dev/null)
   if [[ "$cw" == <-> && "$w" == <-> ]]; then
-    (( x = cw - w ))
+    (( x = (cw - w) / 2 ))
     (( x < 0 )) && x=0
+  fi
+  if [[ "$ch" == <-> && "$h" == <-> ]]; then
+    (( y = (ch - h) / 2 ))
+    (( y < 0 )) && y=0
   fi
 
   local pane
-  pane=$("$bin" new-pane -x "$w" -y "$h" -X "$x" -Y 0 -P -F '#{pane_id}' \
+  pane=$("$bin" new-pane -x "$w" -y "$h" -X "$x" -Y "$y" -P -F '#{pane_id}' \
     ${1+"${(j: :)${(@q)@}}"} 2>/dev/null) || return 1
   print -r -- "$pane"
 }
