@@ -480,13 +480,16 @@ EOF
     It 'dies naming the install command when troupe is not on PATH'
       missing_troupe() {
         id=$(run_job job::start -- true) || return 1
+        # HOME is sandboxed too: job::_troupe now falls back to
+        # $HOME/.local/share/go/bin (the tmux-server-PATH fix), so a bare
+        # PATH strip would find the real install and never die.
         zsh -f -c '
           PATH="/usr/bin:/bin"
+          HOME="$2"
           unset JOB_TROUPE_BIN
           source "$1" >/dev/null 2>&1 || exit 99
-          shift
           job::watch
-        ' -- "$JOBLIB"
+        ' -- "$JOBLIB" "$JOB_SANDBOX"
       }
       When call missing_troupe
       The status should equal 1

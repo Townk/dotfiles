@@ -191,7 +191,16 @@ job::_troupe() {
     print -r -- "$JOB_TROUPE_BIN"
     return 0
   fi
-  command -v troupe 2>/dev/null
+  local p
+  p=$(command -v troupe 2>/dev/null) && { print -r -- "$p"; return 0 }
+  # The tmux server's PATH lacks the interactive profile's go-bin dirs, and
+  # both the J binding and mux-modal's popup run from the SERVER env — so a
+  # bare `command -v` fails exactly where the dashboard is used (caught live
+  # in Mode B). Same known-paths fallback as input-common's _input::bin.
+  for p in "$HOME/.local/share/go/bin/troupe" "$HOME/go/bin/troupe"; do
+    [ -x "$p" ] && { print -r -- "$p"; return 0 }
+  done
+  return 1
 }
 
 # job::_live_ids — print the id of every job dir that has meta.json and no
