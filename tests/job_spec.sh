@@ -1,8 +1,9 @@
 # job.zsh — submission, the sidecar progress protocol, cancel, and the
-# troupe-dashboard driver (spec §6 revision 3), against a recording fake
-# pueue (JOB_PUEUE_BIN), a fake troupe (JOB_TROUPE_BIN), and the existing
-# fake mux-modal/tmux seams. Hermetic: JOB_STATE_ROOT lives in a sandbox and
-# no real daemon, troupe binary, or mux backend is ever consulted.
+# troupe-dashboard driver (spec §6 revision: persistent dialog), against a
+# recording fake pueue (JOB_PUEUE_BIN), a fake troupe (JOB_TROUPE_BIN), and
+# the existing fake mux-modal/tmux seams. Hermetic: JOB_STATE_ROOT lives in
+# a sandbox and no real daemon, troupe binary, or mux backend is ever
+# consulted.
 Describe 'job.zsh'
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
 
@@ -300,21 +301,29 @@ EOF
       The status should equal 1
       The stderr should include 'usage: job'
     End
-    It 'dispatches watch through the front-end (up-front empty scan)'
-      When call zsh -f "$JOBBIN" watch
-      The status should equal 1
-      The stderr should include 'no running jobs'
+    It 'dispatches watch through the front-end (no up-front empty scan — the dashboard launches and owns the empty state)'
+      no_jobs_dispatch() {
+        export JOB_FAKE_TROUPE_ACTION=""
+        zsh -f "$JOBBIN" watch
+        rc=$?
+        printf 'rc=%s|calls=%s' "$rc" "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")"
+      }
+      When call no_jobs_dispatch
+      The output should equal 'rc=0|calls=1'
     End
   End
 
-  # The troupe-dashboard driver (spec §6 revision 3): job::watch floats
-  # `troupe jobs` through mux-modal under tmux, or runs it directly outside
-  # a mux session, and loops on the widget's one-line action protocol
-  # (troupe-design.md §6): empty stdout (ESC/q, dismissed) or the literal
-  # "empty" action (auto-closed after the last job finished) both mean
-  # done; "cancel <id>" routes through the house confirm and job::cancel,
-  # relaunching unless that was the last live job; "logs <id>" opens a tab
-  # tailing the task's pueue log and relaunches once that tab closes.
+  # The troupe-dashboard driver (spec §6 revision: persistent dialog):
+  # job::watch floats `troupe jobs` through mux-modal under tmux, or runs it
+  # directly outside a mux session, and loops on the widget's one-line
+  # action protocol (troupe-design.md §6): empty stdout (ESC/q, dismissed)
+  # means done — a literal "empty" line is tolerated the same way, for
+  # binary-skew compat with an older troupe that still emits the retired
+  # ~1s completed-beat action. "cancel <id>" routes through the house
+  # confirm and job::cancel, then ALWAYS relaunches (even as the last live
+  # job — the dashboard just renders its own empty state); "logs <id>"
+  # opens a tab tailing the task's pueue log and relaunches once that tab
+  # closes.
   Describe 'job::watch — the troupe dashboard driver'
     It 'floats troupe through mux-modal under tmux — single chrome, sized+themed — and stops on a dismissed (blank) action'
       float_dismiss() {
@@ -322,7 +331,7 @@ EOF
         export JOB_FAKE_TROUPE_ACTION=""
         TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
         rc=$?
-        # Single chrome: troupe draws its OWN framed "Job runner" box
+        # Single chrome: troupe draws its OWN framed "Task runner" box
         # (troupe-design.md §6), so mux-modal gets --borderless --no-chrome
         # and NO --title (a second frame would double it — Mode B regression
         # on the ask/dialog floats). Sized from troupe's own --measure (fake
@@ -365,7 +374,7 @@ EOF
       The output should equal 'rc=0|themed=yes|calls=1|modal_calls=0'
     End
 
-    It 'treats the literal "empty" action (auto-closed) the same as dismissed — done, one invocation'
+    It 'treats a literal "empty" action the same as dismissed — done, one invocation (binary-skew compat with an older troupe)'
       literal_empty() {
         id=$(run_job job::start -- true) || return 1
         export JOB_FAKE_TROUPE_ACTION="empty"
@@ -410,10 +419,10 @@ EOF
       The output should equal 'rc=0|kills=1|calls=2'
     End
 
-    It 'cancel action: confirmed as the LAST live job — kills once, no relaunch (one invocation)'
+    It 'cancel action: confirmed as the LAST live job — kills once and STILL relaunches (two invocations; the dashboard shows its own empty state instead of auto-closing)'
       cancel_last_job() {
         id=$(run_job job::start --title "C" -- sleep 9) || return 1
-        printf 'cancel\t%s\n' "$id" > "$JOB_SANDBOX/troupe-actions"
+        printf 'cancel\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_CONFIRM_RC=0
         run_job job::watch
@@ -423,7 +432,7 @@ EOF
           "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")"
       }
       When call cancel_last_job
-      The output should equal 'rc=0|kills=1|calls=1'
+      The output should equal 'rc=0|kills=1|calls=2'
     End
 
     # The tab-open seam (JOB_MUX_NEW_TAB_BIN) only stubs the SPAWN step —
@@ -471,10 +480,15 @@ EOF
       The output should equal 'rc=0|match=yes|tabs=1|calls=2'
     End
 
-    It 'refuses up front when there are no running jobs — zero troupe invocations'
-      When call run_job job::watch
-      The status should equal 1
-      The stderr should include 'no running jobs'
+    It 'no live jobs: launches the dashboard anyway (it owns the empty state) — one invocation, dismiss ends rc 0'
+      no_jobs() {
+        export JOB_FAKE_TROUPE_ACTION=""
+        run_job job::watch
+        rc=$?
+        printf 'rc=%s|calls=%s' "$rc" "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")"
+      }
+      When call no_jobs
+      The output should equal 'rc=0|calls=1'
     End
 
     It 'dies naming the install command when troupe is not on PATH'

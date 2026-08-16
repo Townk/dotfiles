@@ -172,16 +172,19 @@ job::hud() {
   return 0
 }
 
-# --- troupe dashboard driver (spec §6 revision 3) ---------------------------
+# --- troupe dashboard driver (spec §6 revision: persistent dialog) ---------
 # `troupe jobs` (troupe-design.md §6) renders the multi-job dashboard — the
 # terminal twin of the Hammerspoon capsule stack — and hands back at most ONE
-# action line on stdout, always exiting 0: empty (dismissed), "empty" (auto-
-# closed, last job finished), "cancel <id>", or "logs <id>". Everything else
-# — the confirm, the actual cancel, the log tab, every relaunch — is this
-# driver's job (troupe-design.md §6: "logic stays in the caller"). The rev-2
-# inline log-viewer loop (mirror, pending buffer, follow child, its own
-# header/bar composition) retires with this revision; `job log <id>` covers
-# direct log access instead.
+# action line on stdout, always exiting 0: empty (dismissed), "cancel <id>",
+# or "logs <id>". The dashboard is persistent — it never auto-closes; a scan
+# that finds no live job renders the widget's own "No task running" empty
+# state and keeps polling — so there is no more "is this the last live job"
+# question for this driver to answer. Everything else — the confirm, the
+# actual cancel, the log tab, every relaunch — is this driver's job
+# (troupe-design.md §6: "logic stays in the caller"). The rev-2 inline
+# log-viewer loop (mirror, pending buffer, follow child, its own header/bar
+# composition) retired earlier; `job log <id>` covers direct log access
+# instead.
 
 # job::_troupe — resolve the troupe binary. JOB_TROUPE_BIN is the test seam;
 # unset falls back to PATH resolution (troupe ships via the Gofile, no fixed
@@ -207,8 +210,10 @@ job::_troupe() {
 # result file, one per line, newest first. Generalizes the phase-2b
 # `--latest` resolver (retired — the dashboard shows every job at once, so
 # there is no more "the one newest job" to single out) into "list every live
-# id", the shape both job::watch's up-front empty scan and its post-cancel
-# "was that the last live job" check need.
+# id". job::watch no longer calls this (spec §6 rev: the dashboard is
+# persistent and owns its own empty state, so there is no more "any jobs at
+# all?"/"was that the last live job?" question to answer here) — kept as a
+# small, independently testable primitive.
 job::_live_ids() {
   local dir id
   for dir in "$JOB_STATE_ROOT"/*(N/On); do
@@ -432,23 +437,24 @@ job::_dashboard_inline() {
   "$troupe" jobs --state-root "$JOB_STATE_ROOT" "${AI_THEME_ARGS[@]}"
 }
 
-# job::watch — the troupe dashboard driver (spec §6 revision 3). Floats
-# `troupe jobs` through mux-modal under tmux, or runs it directly outside a
-# mux session, and loops on the widget's one-line action protocol until the
-# dashboard is genuinely done:
+# job::watch — the troupe dashboard driver (spec §6 revision: persistent
+# dialog). Floats `troupe jobs` through mux-modal under tmux, or runs it
+# directly outside a mux session, and loops on the widget's one-line action
+# protocol until the dashboard is genuinely dismissed:
 #
-#   (blank) / "empty"  dismissed, or auto-closed after the last job
-#                       finished — either way, done.
-#   "cancel <id>"       show the house confirm; Keep running relaunches
-#                       as-is; Cancel job calls job::cancel and relaunches
-#                       UNLESS that was the last live job, in which case the
-#                       dashboard stays closed.
+#   (blank)             dismissed (ESC/q) — done.
+#   "cancel <id>"       show the house confirm, then relaunch either way —
+#                       Keep running, or a confirmed cancel, even of the
+#                       last live job: the dashboard now renders its own
+#                       persistent "No task running" empty state instead of
+#                       auto-closing, so there is nothing left to track here.
 #   "logs <id>"         open a tab tailing the task's pueue log, wait for it
 #                       to close, then relaunch.
 #
-# An up-front empty scan means the dashboard (and troupe) is never even
-# launched when nothing is running — "no running jobs" is a quiet refusal,
-# not an empty popup flash.
+# The dashboard owns the empty state now (troupe-design.md §6 rev): there is
+# no up-front "any live jobs?" scan — job::watch always floats/runs it, and
+# a truly empty state just means the widget renders "No task running" and
+# keeps polling until the user dismisses it.
 job::watch() {
   # ALL loop-body variables are declared here, never inside the while loop:
   # zsh's `local NAME` (no assignment) on an already-local NAME PRINTS
@@ -457,15 +463,8 @@ job::watch() {
   # stdout). Same regression class the rev-2 viewer hit; see its old fix
   # note (git history) for the first occurrence.
   setopt localoptions noerrexit
-  local -a live remaining
   local troupe action cid ctitle lid ltitle logfile
   local rc
-
-  live=(${(f)"$(job::_live_ids)"})
-  if ((${#live} == 0)); then
-    log_error "job::watch: no running jobs"
-    return 1
-  fi
 
   troupe=$(job::_troupe) \
     || die "troupe is not installed — go install github.com/Townk/troupe/cmd/troupe@latest"
@@ -481,19 +480,24 @@ job::watch() {
     ((rc == 0)) || { log_error "job::watch: dashboard launch failed"; return 1; }
 
     case "$action" in
-      '' | empty)
+      '')
+        return 0
+        ;;
+      empty)
+        # Binary-skew compat: an older troupe binary may still emit the
+        # retired ~1s completed-beat's "empty" action (spec §6 rev — the
+        # dashboard is persistent now and owns its own empty state).
+        # Treat it exactly like dismiss rather than falling into the
+        # unrecognized-action branch below.
         return 0
         ;;
       cancel$'\t'*)
         cid="${action#cancel$'\t'}"
         ctitle=$(jq -r '.title // empty' "$JOB_STATE_ROOT/$cid/meta.json" 2>/dev/null)
-        if job::_watch_confirm_cancel "$cid" "${ctitle:-$cid}" >/dev/null 2>&1; then
-          remaining=(${(f)"$(job::_live_ids)"})
-          remaining=(${remaining:#$cid})
-          ((${#remaining} == 0)) && return 0
-        fi
-        # Declined ("Keep running"), or cancelled with other jobs still
-        # live: relaunch the dashboard as-is.
+        job::_watch_confirm_cancel "$cid" "${ctitle:-$cid}" >/dev/null 2>&1
+        # Declined ("Keep running"), or a confirmed cancel — relaunch
+        # either way; even the last live job's cancel just means the
+        # dashboard's next render is the empty state.
         ;;
       logs$'\t'*)
         lid="${action#logs$'\t'}"
