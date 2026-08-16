@@ -44,6 +44,18 @@ case " $* " in
     printf '%s' "${JOB_FAKE_TROUPE_MEASURE:-15}"
     exit 0
     ;;
+  *' --follow '*)
+    # Pane host (job-runner design §6 rev 4): --follow streams every queued
+    # line (each its own "verb\tid" line, unlike the one-shot actions file
+    # this same fake pops ONE-per-relaunch below) and then exits — real
+    # troupe would exit only on ESC/q, but the pane host has no relaunch
+    # loop to feed a second time anyway, so "print everything queued, then
+    # exit" IS the whole streamed run for a test scenario.
+    if [ -n "${JOB_FAKE_TROUPE_FOLLOW_ACTIONS:-}" ] && [ -s "$JOB_FAKE_TROUPE_FOLLOW_ACTIONS" ]; then
+      cat "$JOB_FAKE_TROUPE_FOLLOW_ACTIONS"
+    fi
+    exit 0
+    ;;
 esac
 if [ -n "${JOB_FAKE_TROUPE_ACTIONS:-}" ] && [ -s "$JOB_FAKE_TROUPE_ACTIONS" ]; then
   line=$(head -n1 "$JOB_FAKE_TROUPE_ACTIONS")
@@ -108,6 +120,55 @@ EOF
     chmod +x "$JOB_SANDBOX/newtab"
     export JOB_MUX_NEW_TAB_BIN="$JOB_SANDBOX/newtab"
     export JOB_PUEUE_LOG_DIR="$JOB_SANDBOX/pueue-logs"
+
+    # FAKE pane-SPAWN seam (job::_watch_pane's JOB_MUX_FLOAT_PANE_BIN — one
+    # level lower than the whole function, same shape as JOB_MUX_NEW_TAB_BIN
+    # above): records argv, BACKGROUNDS the wrapped command exactly like the
+    # real mux::float_pane/tmux new-pane does (the spawn call returns at
+    # once; the spawned command — the fake troupe --follow above, streaming
+    # into job::_watch_pane's own FIFO — keeps running independently), and
+    # prints a fake pane id so the driver's re-summon state file gets a
+    # real value to record.
+    export JOB_FAKE_FLOATPANE_LOG="$JOB_SANDBOX/floatpane.log"
+    export JOB_FAKE_FLOATPANE_PID="$JOB_SANDBOX/floatpane.pid"
+    cat > "$JOB_SANDBOX/floatpane" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_FLOATPANE_LOG"
+rm -f "$JOB_FAKE_FLOATPANE_PID"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --) shift; break ;;
+    *) shift ;;
+  esac
+done
+# Unlike the newtab fake above (called for its exit status only, never
+# through a `$(...)`), job::_float_pane's caller captures THIS script's
+# stdout to get the pane id back — and a plain `"$@" &` leaves the
+# backgrounded grandchild holding the SAME stdout pipe (inherited, unless
+# detached), so the outer `$(...)` blocks past this script's own exit,
+# waiting for that orphan to close it too — real tmux `new-pane` never hits
+# this (the pane's process lives under the SERVER, not this CLIENT), so
+# only the fake needs the explicit detach.
+"$@" </dev/null >/dev/null 2>&1 &
+echo "$!" > "$JOB_FAKE_FLOATPANE_PID"
+printf '%s' "${JOB_FAKE_FLOATPANE_ID:-%9}"
+exit 0
+EOF
+    chmod +x "$JOB_SANDBOX/floatpane"
+    export JOB_MUX_FLOAT_PANE_BIN="$JOB_SANDBOX/floatpane"
+
+    # FAKE focus-pane seam (job::_focus_pane_if_alive's
+    # JOB_MUX_FOCUS_PANE_BIN): records argv, exits per JOB_FAKE_FOCUS_RC
+    # (0 = "found it, focused" — the re-summon path; nonzero = "gone" — the
+    # driver launches fresh).
+    export JOB_FAKE_FOCUS_LOG="$JOB_SANDBOX/focus.log"
+    cat > "$JOB_SANDBOX/focuspane" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_FOCUS_LOG"
+exit "${JOB_FAKE_FOCUS_RC:-1}"
+EOF
+    chmod +x "$JOB_SANDBOX/focuspane"
+    export JOB_MUX_FOCUS_PANE_BIN="$JOB_SANDBOX/focuspane"
 
     # FAKE ai-playbook: the house confirm's inline widget backend
     # (input-common's documented seam), used by job::_watch_confirm_cancel
@@ -329,7 +390,11 @@ EOF
       float_dismiss() {
         id=$(run_job job::start -- sleep 9) || return 1
         export JOB_FAKE_TROUPE_ACTION=""
-        TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
+        # Pinned to the popup path (job-runner design §6 rev 4 added a real
+        # pane-host probe ahead of this loop — JOB_FORCE_HOST=popup skips it
+        # outright, so this example stays exactly what it always was
+        # regardless of what this box's real tmux happens to support).
+        JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
         rc=$?
         # Single chrome: troupe draws its OWN framed "Task runner" box
         # (troupe-design.md §6), so mux-modal gets --borderless --no-chrome
@@ -484,72 +549,85 @@ EOF
       The output should equal 'rc=0|match=yes|tabs=1|calls=2'
     End
 
-    # The resize wire (troupe-design.md §6): tmux popups can't resize
-    # themselves, so a "resize[\t<id>]" action means relaunch IMMEDIATELY —
-    # no confirm, no delay — carrying <id> (when present) back through
-    # --select so the new instance's cursor starts where the old one left
-    # off, and a FRESH --launched-height from that relaunch's own --measure
-    # call (proving the driver re-measures rather than reusing the old
-    # height).
-    It 'resize action: relaunches immediately with --select forwarded and a fresh --launched-height (two invocations)'
+    # The resize wire (job-runner design §6 rev 2026-08-16 "adopt
+    # resize\t<h>"): height now rides the wire FIRST — `resize\t<h>[\t<id>]`
+    # — so a resize-triggered relaunch skips the `--measure` round trip
+    # entirely and uses the wire's height verbatim; <id> (when present)
+    # still rides back through --select so the new instance's cursor starts
+    # where the old one left off. The INITIAL launch (before any resize)
+    # still measures for real — only the relaunch immediately following a
+    # resize action skips it — so exactly ONE --measure call total proves
+    # the re-measure round trip was genuinely skipped, not just uncounted.
+    It 'resize action: relaunches immediately using the WIRE height (no re-measure), --select forwarded'
       resize_then_dismiss() {
         id=$(run_job job::start --title "R" -- sleep 9) || return 1
-        printf 'resize\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
+        printf 'resize\t20\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
-        export JOB_FAKE_TROUPE_MEASURE=15
-        TMUX="fake/sock,1,0" run_job job::watch
+        JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::watch
         rc=$?
-        local second_select="no"
-        # The SECOND real-launch line (skip the first --measure-only call
-        # and the first real launch) must carry --select <id>.
+        local second_select="no" second_height="no"
+        # The SECOND real-launch line (skip the first launch) must carry
+        # --select <id>; the SECOND modal-launch line's --height must be
+        # the WIRE's height (20) — a value the fake --measure call was
+        # never even asked to return — proving the relaunch used the wire,
+        # not a re-measurement.
         second_select=$(grep -F -- 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG" \
           | sed -n '2p' | grep -qF -- "--select $id" && echo yes || echo no)
-        printf 'rc=%s|launches=%s|select=%s' "$rc" \
+        second_height=$(grep -F -- '--capture' "$JOB_FAKE_MODAL_LOG" \
+          | sed -n '2p' | grep -qF -- '--height 20' && echo yes || echo no)
+        printf 'rc=%s|launches=%s|measures=%s|select=%s|height=%s' "$rc" \
           "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")" \
-          "$second_select"
+          "$(grep -c -- '--measure' "$JOB_FAKE_TROUPE_LOG")" \
+          "$second_select" "$second_height"
       }
       When call resize_then_dismiss
-      The output should equal 'rc=0|launches=2|select=yes'
+      The output should equal 'rc=0|launches=2|measures=1|select=yes|height=yes'
     End
 
-    It 'resize action with no selected job: relaunches with a bare resize (no --select), two invocations'
+    It 'resize action with no selected job: relaunches with a bare resize (no --select), wire height used, no re-measure'
       resize_no_selection() {
         run_job job::start --title "R" -- sleep 9 >/dev/null || return 1
-        printf 'resize\n\n' > "$JOB_SANDBOX/troupe-actions"
+        printf 'resize\t20\n\n' > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
-        TMUX="fake/sock,1,0" run_job job::watch
+        JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::watch
         rc=$?
-        local second_no_select="no"
+        local second_no_select="no" second_height="no"
         second_no_select=$(grep -F -- 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG" \
           | sed -n '2p' | grep -qF -- '--select' && echo no || echo yes)
-        printf 'rc=%s|launches=%s|no_select=%s' "$rc" \
+        second_height=$(grep -F -- '--capture' "$JOB_FAKE_MODAL_LOG" \
+          | sed -n '2p' | grep -qF -- '--height 20' && echo yes || echo no)
+        printf 'rc=%s|launches=%s|measures=%s|no_select=%s|height=%s' "$rc" \
           "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")" \
-          "$second_no_select"
+          "$(grep -c -- '--measure' "$JOB_FAKE_TROUPE_LOG")" \
+          "$second_no_select" "$second_height"
       }
       When call resize_no_selection
-      The output should equal 'rc=0|launches=2|no_select=yes'
+      The output should equal 'rc=0|launches=2|measures=1|no_select=yes|height=yes'
     End
 
     # >5 consecutive resize actions with no other action in between must
     # bail out rather than spin forever (loop-termination note above
     # job::watch). The fake troupe's actions file rotates one "resize" per
-    # popup call, so 6 queued resizes exercise the bailout on the 6th.
-    It 'resize action: bails out past 5 consecutive resizes with no other action (log_error, rc 1)'
+    # popup call, so 6 queued resizes exercise the bailout on the 6th; none
+    # of the 6 relaunches re-measures (every one carries a height on the
+    # wire), so the measure count stays pinned at the initial launch's 1.
+    It 'resize action: bails out past 5 consecutive resizes with no other action (log_error, rc 1), never re-measures'
       resize_bailout() {
         id=$(run_job job::start --title "R" -- sleep 9) || return 1
         local i
         for i in 1 2 3 4 5 6; do
-          printf 'resize\t%s\n' "$id"
+          printf 'resize\t20\t%s\n' "$id"
         done > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
-        TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
+        JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
         rc=$?
-        printf 'rc=%s|launches=%s|err=%s' "$rc" \
+        printf 'rc=%s|launches=%s|measures=%s|err=%s' "$rc" \
           "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")" \
+          "$(grep -c -- '--measure' "$JOB_FAKE_TROUPE_LOG")" \
           "$(grep -c 'resize loop bailout' "$JOB_SANDBOX/watch.err")"
       }
       When call resize_bailout
-      The output should equal 'rc=1|launches=6|err=1'
+      The output should equal 'rc=1|launches=6|measures=1|err=1'
     End
 
     # A non-resize action (cancel/logs) between resizes must reset the
@@ -561,16 +639,16 @@ EOF
       resize_streak_resets() {
         id=$(run_job job::start --title "R" -- sleep 9) || return 1
         {
-          printf 'resize\t%s\n' "$id"
+          printf 'resize\t20\t%s\n' "$id"
           printf 'cancel\t%s\n' "$id"
           local i
           for i in 1 2 3 4 5 6; do
-            printf 'resize\t%s\n' "$id"
+            printf 'resize\t20\t%s\n' "$id"
           done
         } > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_CONFIRM_RC=1
-        TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
+        JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::watch 2>"$JOB_SANDBOX/watch.err"
         rc=$?
         # 8 queued actions (1 resize + 1 cancel + 6 resize), each consumed
         # by exactly one launch, bailing out right after the 8th (the
@@ -612,6 +690,178 @@ EOF
       When call missing_troupe
       The status should equal 1
       The stderr should include 'go install github.com/Townk/troupe/cmd/troupe@latest'
+    End
+  End
+
+  # job-runner design §6 rev 2026-08-16 ("the floating-pane host"):
+  # job::watch hosts the dashboard in a REAL tmux pane instead of a popup
+  # when job::_use_pane_host says so — JOB_FORCE_HOST=pane|popup is the
+  # test seam (see job::_use_pane_host below), so these examples never
+  # depend on what THIS box's real tmux happens to support. The pane never
+  # relaunches: troupe streams cancel/logs as line-buffered FIFO lines
+  # while it keeps running, and EOF (troupe exits on ESC/q, closing its
+  # stdout) is the one and only end condition.
+  Describe 'job::_use_pane_host'
+    It 'JOB_FORCE_HOST=pane wins outright, even with no TMUX at all'
+      selects() { JOB_FORCE_HOST=pane run_job job::_use_pane_host; }
+      When call selects
+      The status should be success
+    End
+
+    It 'JOB_FORCE_HOST=popup always declines, even under TMUX'
+      declines_forced() { JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::_use_pane_host; }
+      When call declines_forced
+      The status should be failure
+    End
+
+    It 'declines outside TMUX with no force (no session to float a pane in)'
+      declines_no_tmux() { run_job job::_use_pane_host; }
+      When call declines_no_tmux
+      The status should be failure
+    End
+  End
+
+  Describe 'job::_watch_pane — the pane-host driver body'
+    It 'streams cancel (declined) then logs then EOF: one launch, confirm once, tab opened once, no respawn, cleanup'
+      choreography() {
+        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        lid=$(run_job job::start --title "L" -- sleep 9) || return 2
+        mkdir -p "$JOB_PUEUE_LOG_DIR"
+        : > "$JOB_PUEUE_LOG_DIR/7.log"
+        printf 'cancel\t%s\nlogs\t%s\n' "$id" "$lid" > "$JOB_SANDBOX/follow-actions"
+        export JOB_FAKE_TROUPE_FOLLOW_ACTIONS="$JOB_SANDBOX/follow-actions"
+        export JOB_FAKE_CONFIRM_RC=1
+        # Same rendezvous as the popup path's logs_action example: wait for
+        # the tab-open FIFO to be genuinely held open before killing it, not
+        # just for the PID file to exist (see that example's own comment).
+        ( while [ ! -s "$JOB_FAKE_NEWTAB_PID" ]; do sleep 0.02; done
+          sleep 0.3
+          kill -TERM "$(cat "$JOB_FAKE_NEWTAB_PID")" 2>/dev/null ) &
+        local killer=$!
+        JOB_FORCE_HOST=pane run_job job::watch
+        rc=$?
+        wait "$killer" 2>/dev/null
+        local statefile_gone="no"
+        [ ! -e "$JOB_STATE_ROOT/.dashboard-pane" ] && statefile_gone="yes"
+        printf 'rc=%s|confirms=%s|tabs=%s|launches=%s|statefile_gone=%s' "$rc" \
+          "$(wc -l < "$JOB_FAKE_CONFIRM_LOG" | tr -d ' ')" \
+          "$(wc -l < "$JOB_FAKE_NEWTAB_LOG" | tr -d ' ')" \
+          "$(grep -c -- '--follow' "$JOB_FAKE_FLOATPANE_LOG")" \
+          "$statefile_gone"
+      }
+      When call choreography
+      The output should equal 'rc=0|confirms=1|tabs=1|launches=1|statefile_gone=yes'
+    End
+
+    It 'a confirmed cancel calls job::cancel — troupe keeps streaming, no relaunch (one launch total)'
+      confirmed_cancel() {
+        id=$(run_job job::start --title "K" -- sleep 9) || return 1
+        printf 'cancel\t%s\n' "$id" > "$JOB_SANDBOX/follow-actions"
+        export JOB_FAKE_TROUPE_FOLLOW_ACTIONS="$JOB_SANDBOX/follow-actions"
+        export JOB_FAKE_CONFIRM_RC=0
+        JOB_FORCE_HOST=pane run_job job::watch
+        rc=$?
+        printf 'rc=%s|kills=%s|launches=%s' "$rc" \
+          "$(grep -c '^kill 7$' "$JOB_FAKE_LOG")" \
+          "$(grep -c -- '--follow' "$JOB_FAKE_FLOATPANE_LOG")"
+      }
+      When call confirmed_cancel
+      The output should equal 'rc=0|kills=1|launches=1'
+    End
+
+    It 'a live pane on record is focused instead of launching a second dashboard'
+      focus_not_respawn() {
+        mkdir -p "$JOB_STATE_ROOT"
+        printf '%s' '%42' > "$JOB_STATE_ROOT/.dashboard-pane"
+        export JOB_FAKE_FOCUS_RC=0
+        JOB_FORCE_HOST=pane run_job job::watch
+        rc=$?
+        printf 'rc=%s|focus=%s|launches=%s' "$rc" \
+          "$(tr -d '\n' < "$JOB_FAKE_FOCUS_LOG" 2>/dev/null)" \
+          "$([ -f "$JOB_FAKE_FLOATPANE_LOG" ] && wc -l < "$JOB_FAKE_FLOATPANE_LOG" | tr -d ' ' || echo 0)"
+      }
+      When call focus_not_respawn
+      The output should equal 'rc=0|focus=%42|launches=0'
+    End
+
+    # The state file is removed on close (EOF), same as job::_open_log_tab's
+    # own fifo/sentinel — so "the new id is recorded" can only be observed
+    # WHILE the pane is still up, not after job::watch returns. A scripted
+    # "logs" action gives a window: job::_open_log_tab blocks inside it
+    # (same kill-on-open rendezvous as the logs_action/choreography
+    # examples), and a background peek during that window reads the state
+    # file before the eventual EOF cleanup removes it.
+    It 'a stale pane id on record is cleaned up, a fresh pane launches, and the new id is recorded while it runs'
+      stale_pane() {
+        mkdir -p "$JOB_STATE_ROOT"
+        printf '%s' '%99' > "$JOB_STATE_ROOT/.dashboard-pane"
+        export JOB_FAKE_FOCUS_RC=1
+        id=$(run_job job::start --title "S" -- sleep 9) || return 1
+        mkdir -p "$JOB_PUEUE_LOG_DIR"
+        : > "$JOB_PUEUE_LOG_DIR/7.log"
+        printf 'logs\t%s\n' "$id" > "$JOB_SANDBOX/follow-actions"
+        export JOB_FAKE_TROUPE_FOLLOW_ACTIONS="$JOB_SANDBOX/follow-actions"
+        ( while [ ! -s "$JOB_FAKE_NEWTAB_PID" ]; do sleep 0.02; done
+          cat "$JOB_STATE_ROOT/.dashboard-pane" > "$JOB_SANDBOX/statefile-midflight" 2>/dev/null
+          sleep 0.3
+          kill -TERM "$(cat "$JOB_FAKE_NEWTAB_PID")" 2>/dev/null ) &
+        local killer=$!
+        JOB_FORCE_HOST=pane run_job job::watch
+        rc=$?
+        wait "$killer" 2>/dev/null
+        printf 'rc=%s|launches=%s|midflight=%s|final=%s' "$rc" \
+          "$(grep -c -- '--follow' "$JOB_FAKE_FLOATPANE_LOG")" \
+          "$(cat "$JOB_SANDBOX/statefile-midflight" 2>/dev/null)" \
+          "$([ -e "$JOB_STATE_ROOT/.dashboard-pane" ] && echo present || echo absent)"
+      }
+      When call stale_pane
+      The output should equal 'rc=0|launches=1|midflight=%9|final=absent'
+    End
+
+    It 'sizes the float from --measure and wires --follow + TROUPE_RESIZE_CMD (via $TMUX_PANE) into the pane command'
+      wiring() {
+        run_job job::start --title "W" -- sleep 9 >/dev/null || return 1
+        export JOB_FAKE_TROUPE_MEASURE=9
+        export JOB_FAKE_TROUPE_FOLLOW_ACTIONS=""
+        JOB_FORCE_HOST=pane run_job job::watch >/dev/null
+        rc=$?
+        local geom="no" resize_cmd="no" follow="no"
+        grep -qF -- '57 9 --' "$JOB_FAKE_FLOATPANE_LOG" && geom="yes"
+        grep -qF -- 'export TROUPE_RESIZE_CMD="tmux resize-pane -t \"\$TMUX_PANE\" -y %h"' \
+          "$JOB_FAKE_FLOATPANE_LOG" && resize_cmd="yes"
+        grep -qF -- 'jobs --follow --state-root' "$JOB_FAKE_FLOATPANE_LOG" && follow="yes"
+        printf 'rc=%s|geom=%s|resize_cmd=%s|follow=%s' "$rc" "$geom" "$resize_cmd" "$follow"
+      }
+      When call wiring
+      The output should equal 'rc=0|geom=yes|resize_cmd=yes|follow=yes'
+    End
+
+    It 'a failed pane launch is reported and leaves no fifo/state file behind'
+      launch_fails() {
+        cat > "$JOB_SANDBOX/failpane" <<'INNER'
+#!/bin/sh
+exit 1
+INNER
+        chmod +x "$JOB_SANDBOX/failpane"
+        # Steer the real mkfifo location into THIS test's own sandbox (same
+        # convention as mux_float_launch_spec.sh's leak guard) — the bare
+        # system TMPDIR is shared across the whole suite/session, and a
+        # leftover from an unrelated run would false-positive the check.
+        local fifo_tmp="$JOB_SANDBOX/tmpdir"
+        mkdir -p "$fifo_tmp"
+        TMPDIR="$fifo_tmp" JOB_MUX_FLOAT_PANE_BIN="$JOB_SANDBOX/failpane" JOB_FORCE_HOST=pane \
+          run_job job::watch 2>"$JOB_SANDBOX/pane.err"
+        rc=$?
+        local leaks="no"
+        local -a stray=("$fifo_tmp"/job-pane-fifo.*(N))
+        (( ${#stray} )) && leaks="yes"
+        printf 'rc=%s|err=%s|leaks=%s|statefile=%s' "$rc" \
+          "$(grep -c 'failed to open the floating pane' "$JOB_SANDBOX/pane.err")" \
+          "$leaks" \
+          "$([ -e "$JOB_STATE_ROOT/.dashboard-pane" ] && echo present || echo absent)"
+      }
+      When call launch_fails
+      The output should equal 'rc=1|err=1|leaks=no|statefile=absent'
     End
   End
 

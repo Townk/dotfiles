@@ -368,7 +368,7 @@ job::_theme_args() {
   theme::args
 }
 
-# job::_dashboard_float <troupe> [<select-id>] — float `troupe jobs` in a
+# job::_dashboard_float <troupe> [<select-id>] [<known-height>] — float `troupe jobs` in a
 # mux-modal popup (TMUX-only, per the established float gate: zellij-modal
 # is a float CONSUMER, not a SPAWNER — see mux-modal's own header) and print
 # the one action line troupe hands back through the popup's --capture
@@ -397,14 +397,26 @@ job::_theme_args() {
 # --width also rides the real launch below (not just --measure) so the
 # measured height and the actual render agree regardless of the pty size
 # the popup itself would otherwise hand troupe.
+#
+# <known-height>, when given, is the resize wire's own height
+# (`resize\t<h>[\t<id>]` — job-runner design §6 rev 2026-08-16) forwarded
+# straight through by job::watch on the ONE relaunch that immediately
+# follows a resize action: it SKIPS the `--measure` round trip entirely
+# ("adopt resize\t<h> ... skip the re-measure"). Every other launch — the
+# very first one, and any relaunch after cancel/logs — has no wire-supplied
+# height to trust and still measures for real.
 job::_dashboard_float() {
-  local troupe="$1" select_id="${2:-}"
+  local troupe="$1" select_id="${2:-}" known_h="${3:-}"
   local modal="${JOB_MUX_MODAL_BIN:-$HOME/.config/mux/scripts/mux-modal}"
   local fifo out h
   job::_theme_args
 
-  h=$("$troupe" jobs --measure --state-root "$JOB_STATE_ROOT" --width 57 2>/dev/null)
-  [[ "$h" == <-> ]] || h=15
+  if [[ -n "$known_h" ]]; then
+    h="$known_h"
+  else
+    h=$("$troupe" jobs --measure --state-root "$JOB_STATE_ROOT" --width 57 2>/dev/null)
+    [[ "$h" == <-> ]] || h=15
+  fi
 
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/job-dashboard-fifo.XXXXXX")
   mkfifo -m 600 -- "$fifo" 2>/dev/null || return 1
@@ -449,6 +461,175 @@ job::_dashboard_inline() {
   "$troupe" jobs --state-root "$JOB_STATE_ROOT" "${AI_THEME_ARGS[@]}"
 }
 
+# --- pane host (job-runner design §6 rev 2026-08-16: "the floating-pane
+# host") -----------------------------------------------------------------
+# Real pane, not a popup: genuinely persistent (survives switching tabs/
+# windows and coming back), live-resized in place via TROUPE_RESIZE_CMD (no
+# relaunch-to-resnug dance), non-modal. `troupe jobs --follow` never exits
+# on its own — cancel/logs stream as line-buffered stdout, ESC/q ends the
+# process (and the pane closes with it, close-on-exit). job::watch picks
+# this host over the popup loop above whenever job::_use_pane_host says so.
+
+# job::_use_pane_host — true when job::watch should host the dashboard in a
+# floating PANE instead of the popup. JOB_FORCE_HOST=pane|popup is the test
+# seam (skips the real probe outright, so pane-host examples don't need a
+# tmux build that genuinely carries `new-pane`, and popup examples stay
+# pinned to the fallback regardless of what this box's tmux supports).
+# Real selection needs an active TMUX session AND the capability probe
+# (mux::has_float_pane's `list-commands` grep) — sourced via mux-
+# bootstrap.zsh, NOT the full mux.zsh: no fzf/pick-common dependency for a
+# plain capability question, same rationale as every other lazy-source in
+# this file. The same subshell-probe-then-source guard as
+# job::_watch_confirm_cancel/_open_log_tab: a load that dies at source time
+# degrades to "no pane host" (the popup fallback), never takes the caller
+# down.
+job::_use_pane_host() {
+  case "${JOB_FORCE_HOST:-}" in
+    pane) return 0 ;;
+    popup) return 1 ;;
+  esac
+  [ -n "${TMUX:-}" ] || return 1
+  local muxlib="${${(%):-%x}:A:h}/mux-bootstrap.zsh"
+  [ -r "$muxlib" ] || return 1
+  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
+  source "$muxlib" 2>/dev/null || return 1
+  mux::has_float_pane
+}
+
+# job::_float_pane <width> <height> -- <cmd...> — the pane-SPAWN step, one
+# level below job::_watch_pane (mirrors job::_open_log_tab's
+# JOB_MUX_NEW_TAB_BIN: the test seam stubs the SPAWN only, so the FIFO/
+# read-loop machinery in job::_watch_pane runs for real under the spec
+# suite). JOB_MUX_FLOAT_PANE_BIN receives the SAME argv and must print the
+# new pane's id on stdout; the real path sources mux-bootstrap.zsh (see
+# job::_use_pane_host) and calls mux::float_pane.
+job::_float_pane() {
+  if [ -n "${JOB_MUX_FLOAT_PANE_BIN:-}" ]; then
+    "$JOB_MUX_FLOAT_PANE_BIN" "$@"
+    return $?
+  fi
+  local muxlib="${${(%):-%x}:A:h}/mux-bootstrap.zsh"
+  [ -r "$muxlib" ] || return 1
+  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
+  source "$muxlib" 2>/dev/null || return 1
+  mux::float_pane "$@"
+}
+
+# job::_focus_pane_if_alive <pane_id> — spec §6 rev 4 re-summon: "prefix-J
+# finds the pane alive ... focus it ... instead of respawn". rc 0 means the
+# pane was still alive AND is now focused; rc 1 means it's gone (the caller
+# launches fresh and overwrites the stale state file). Focusing needs BOTH
+# select-window and select-pane — a bare pane id switches which pane is
+# active INSIDE its window, not which window the client is looking at.
+# JOB_MUX_FOCUS_PANE_BIN is the test seam (same one-level-below shape as
+# job::_float_pane): given the pane id, decide alive/gone.
+job::_focus_pane_if_alive() {
+  local pane="${1:?job::_focus_pane_if_alive: pane id required}"
+  if [ -n "${JOB_MUX_FOCUS_PANE_BIN:-}" ]; then
+    "$JOB_MUX_FOCUS_PANE_BIN" "$pane"
+    return $?
+  fi
+  local muxlib="${${(%):-%x}:A:h}/mux-bootstrap.zsh"
+  [ -r "$muxlib" ] || return 1
+  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
+  source "$muxlib" 2>/dev/null || return 1
+  local bin win
+  bin=$(mux::bin tmux) || return 1
+  "$bin" list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qFx -- "$pane" || return 1
+  win=$("$bin" display -p -t "$pane" '#{window_id}' 2>/dev/null) || return 1
+  "$bin" select-window -t "$win" 2>/dev/null
+  "$bin" select-pane -t "$pane" 2>/dev/null
+  return 0
+}
+
+# job::_watch_pane <troupe> — the pane-host driver body. Re-summon check
+# first (a live pane on record wins, focused instead of a second dashboard);
+# otherwise mkfifo, launch `troupe jobs --follow` inside a fresh float with
+# TROUPE_RESIZE_CMD wired to re-snug ITS OWN pane live (the `$TMUX_PANE`
+# read from inside the float resolves to that pane's own id — see the
+# verification note on _mux_tx_float_pane), then read the streamed action
+# lines off the FIFO until EOF (troupe exits on ESC/q, closing its stdout —
+# fd-close-on-death, the same rendezvous job::_open_log_tab already relies
+# on): "cancel\t<id>" routes through the house confirm and job::cancel
+# exactly like the popup path (troupe keeps running regardless — cancel
+# never closes the dashboard here); "logs\t<id>" opens the log tab and
+# waits for it, same as the popup path; anything else is logged and
+# ignored (never kills the reader — a skewed action must not orphan the
+# pane). EOF ends the loop: the pane is already gone (it closed itself),
+# so cleanup is just the fifo and the state file.
+#
+# The initial float IS measured (troupe --measure, same call the popup path
+# makes) even though later drift self-corrects via the live hook: Follow's
+# resize-hook debounce baseline is the model's OWN first-render height, not
+# the pane's actual launched size, so an unmeasured guess would never be
+# corrected by the hook — only a wrong SUBSEQUENT size would.
+job::_watch_pane() {
+  local troupe="$1"
+  local statefile="$JOB_STATE_ROOT/.dashboard-pane"
+
+  if [ -s "$statefile" ]; then
+    local existing
+    existing=$(<"$statefile")
+    if job::_focus_pane_if_alive "$existing"; then
+      return 0
+    fi
+    rm -f -- "$statefile"
+  fi
+
+  job::_theme_args
+  local h
+  h=$("$troupe" jobs --measure --state-root "$JOB_STATE_ROOT" --width 57 2>/dev/null)
+  [[ "$h" == <-> ]] || h=15
+
+  local fifo
+  fifo=$(mktemp -u "${TMPDIR:-/tmp}/job-pane-fifo.XXXXXX")
+  mkfifo -m 600 -- "$fifo" 2>/dev/null || return 1
+
+  # TROUPE_RESIZE_CMD is exported INSIDE the pane's own command, not on this
+  # process's env: display-popup/new-pane both run from the SERVER's
+  # environment (job::_theme_args' comment covers the same constraint), so
+  # setting it here would never reach troupe at all. The double-quote-
+  # inside-double-quote (`\"\$TMUX_PANE\"`) is deliberate: this whole
+  # string must survive intact as troupe's OWN opaque template — %h is
+  # substituted by troupe itself, and $TMUX_PANE must stay UNexpanded until
+  # troupe's hook runs it via its own `sh -c`, reading the FLOAT pane's
+  # environment (not this driver's) at that later moment.
+  local -a pane_cmd=(sh -c '
+export TROUPE_RESIZE_CMD="tmux resize-pane -t \"\$TMUX_PANE\" -y %h"
+exec "$1" jobs --follow --state-root "$2" --width 57 "${@:4}" > "$3"
+' _ "$troupe" "$JOB_STATE_ROOT" "$fifo" "${AI_THEME_ARGS[@]}")
+
+  local pane_id
+  pane_id=$(job::_float_pane 57 "$h" -- "${pane_cmd[@]}")
+  if [[ -z "$pane_id" ]]; then
+    rm -f -- "$fifo"
+    log_error "job::_watch_pane: failed to open the floating pane"
+    return 1
+  fi
+  print -r -- "$pane_id" > "$statefile"
+
+  local verb id ctitle lid ltitle logfile
+  while IFS=$'\t' read -r verb id; do
+    case "$verb" in
+      cancel)
+        ctitle=$(jq -r '.title // empty' "$JOB_STATE_ROOT/$id/meta.json" 2>/dev/null)
+        job::_watch_confirm_cancel "$id" "${ctitle:-$id}" >/dev/null 2>&1
+        ;;
+      logs)
+        ltitle=$(jq -r '.title // empty' "$JOB_STATE_ROOT/$id/meta.json" 2>/dev/null)
+        logfile=$(job::_task_log "$id") || logfile=""
+        job::_open_log_tab "${ltitle:-$id}" "$logfile"
+        ;;
+      *)
+        [ -n "$verb" ] && log_error "job::_watch_pane: unrecognized dashboard action: $verb"
+        ;;
+    esac
+  done < "$fifo"
+
+  rm -f -- "$fifo" "$statefile"
+  return 0
+}
+
 # job::watch — the troupe dashboard driver (spec §6 revision: persistent
 # dialog). Floats `troupe jobs` through mux-modal under tmux, or runs it
 # directly outside a mux session, and loops on the widget's one-line action
@@ -491,15 +672,24 @@ job::watch() {
   # stdout). Same regression class the rev-2 viewer hit; see its old fix
   # note (git history) for the first occurrence.
   setopt localoptions noerrexit
-  local troupe action cid ctitle lid ltitle logfile select_id=""
+  local troupe action cid ctitle lid ltitle logfile select_id="" resize_h="" rest
   local rc resize_streak=0
 
   troupe=$(job::_troupe) \
     || die "troupe is not installed — go install github.com/Townk/troupe/cmd/troupe@latest"
 
+  # Host selection (job-runner design §6 rev 4): a floating PANE — real,
+  # live-resizable, genuinely persistent — when the probe (or the
+  # JOB_FORCE_HOST test seam) says so; the popup loop below stays the
+  # fallback on stock tmux/outside tmux, unchanged.
+  if job::_use_pane_host; then
+    job::_watch_pane "$troupe"
+    return $?
+  fi
+
   while true; do
     if [ -n "${TMUX:-}" ]; then
-      action=$(job::_dashboard_float "$troupe" "$select_id")
+      action=$(job::_dashboard_float "$troupe" "$select_id" "$resize_h")
       rc=$?
     else
       action=$(job::_dashboard_inline "$troupe")
@@ -520,11 +710,22 @@ job::watch() {
         return 0
         ;;
       resize | resize$'\t'*)
-        # No confirm, no delay — the driver just re-measures and relaunches
-        # immediately (troupe-design.md §6 resize wire); a bare "resize"
-        # strips to "" (no selection to carry forward).
-        select_id="${action#resize}"
-        select_id="${select_id#$'\t'}"
+        # No confirm, no delay — the driver relaunches immediately, and (as
+        # of the height-on-the-wire amendment) WITHOUT re-measuring: the
+        # wire is now `resize\t<h>[\t<id>]` — height first, so the height
+        # travels with the very action that just proved it, and the
+        # selected id (if any) is the resize wire's cursor-preservation
+        # half, unchanged. A bare "resize" (no height, an older/skewed
+        # binary) strips to "" and falls back to a real re-measure on the
+        # next launch — never crashes on the unexpected shape.
+        rest="${action#resize}"
+        rest="${rest#$'\t'}"
+        resize_h="${rest%%$'\t'*}"
+        if [[ "$rest" == *$'\t'* ]]; then
+          select_id="${rest#*$'\t'}"
+        else
+          select_id=""
+        fi
         ((resize_streak++))
         if ((resize_streak > 5)); then
           log_error "job::watch: resize loop bailout — more than 5 consecutive resizes with no other action"
@@ -535,6 +736,7 @@ job::watch() {
       cancel$'\t'*)
         resize_streak=0
         select_id=""
+        resize_h=""
         cid="${action#cancel$'\t'}"
         ctitle=$(jq -r '.title // empty' "$JOB_STATE_ROOT/$cid/meta.json" 2>/dev/null)
         job::_watch_confirm_cancel "$cid" "${ctitle:-$cid}" >/dev/null 2>&1
@@ -545,6 +747,7 @@ job::watch() {
       logs$'\t'*)
         resize_streak=0
         select_id=""
+        resize_h=""
         lid="${action#logs$'\t'}"
         ltitle=$(jq -r '.title // empty' "$JOB_STATE_ROOT/$lid/meta.json" 2>/dev/null)
         logfile=$(job::_task_log "$lid") || logfile=""
