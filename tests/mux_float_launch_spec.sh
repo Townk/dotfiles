@@ -141,6 +141,34 @@ Describe 'mux/tmux.zsh — float launch guard (HI-7)'
     The error should equal ""
     The status should equal 1
   End
+
+  # Regression (live-session, surfaced under the Ctrl+C cancel-confirm popup):
+  # the +2 border-compensation padding applied UNCONDITIONALLY, even under
+  # --borderless true where -B means display-popup draws no frame at all —
+  # handing the widget's own self-drawn box (e.g. troupe jobs' ▓▓▓ frame) a
+  # pty 2 rows/cols larger than its content, a visible empty gap band. A
+  # borderless popup's geometry must be the measured height EXACTLY.
+  It '_mux_tx_float pins borderless geometry to the measured height exactly (no +2)'
+    borderless_height_argv() {
+      export STUB_ARGV_LOG="$TEST_TMP/argv.log"
+      run_and_report 8 _mux_tx_float --type confirm --borderless true \
+        --pane-height 15 --title Quit -- "Really?" >/dev/null || return 1
+      grep -c -- '^-h$' "$STUB_ARGV_LOG"
+    }
+    When call borderless_height_argv
+    The output should equal "1"
+  End
+
+  It '_mux_tx_float borderless -h argument is the measured height, not measured+2'
+    borderless_height_value() {
+      export STUB_ARGV_LOG="$TEST_TMP/argv.log"
+      run_and_report 8 _mux_tx_float --type confirm --borderless true \
+        --pane-height 15 --title Quit -- "Really?" >/dev/null || return 1
+      awk '/^-h$/{getline; print; exit}' "$STUB_ARGV_LOG"
+    }
+    When call borderless_height_value
+    The output should equal "15"
+  End
 End
 
 Describe 'mux/zellij.zsh — float launch guard (HI-7)'

@@ -403,8 +403,14 @@ _mux_tx_pick_float() {
 # _mux_tx_float --type T [--title TITLE] [--pane-width W] [--pane-height H] -- <widget args...>
 # tmux twin of _mux_zj_float: sized popup running input-widget, answer via
 # FIFO. Geometry parity: the zellij floats are borderless panes whose
-# width/height ARE the interior; a tmux popup border eats 2 cells each way,
-# so +2 keeps the widgets rendering at identical interior sizes.
+# width/height ARE the interior; a tmux popup's DEFAULT frame eats 2 cells
+# each way, so +2 keeps the widgets rendering at identical interior sizes —
+# but that padding only applies when a border is actually drawn. --borderless
+# true (-B below) makes the popup ITSELF the pane with no frame to eat cells,
+# same as the zellij twin, so the +2 must not apply then either: pinning it
+# unconditionally handed the widget's own self-drawn box (e.g. troupe jobs'
+# ▓▓▓ frame) a pty 2 rows/cols larger than its content, a visible empty gap
+# band around it (ledgered latent, surfaced live under the Ctrl+C confirm).
 _mux_tx_float() {
   local type="line" title="" pane_w="" pane_h="" pane_x="" pane_y="" borderless=""
   local -a wargs
@@ -454,14 +460,20 @@ _mux_tx_float() {
     fi
   fi
 
-  local -a geom=(-h $(( _measured_h + 2 )))
+  # The +2 padding compensates for display-popup's own default border — it
+  # must NOT apply when --borderless true asks for no frame at all (see the
+  # doc comment above): pad is 2 for the normal framed popup, 0 borderless.
+  local pad=2
+  [[ "$borderless" == true ]] && pad=0
+
+  local -a geom=(-h $(( _measured_h + pad )))
   # --borderless true (the widget wrappers pass it; zellij vocabulary for
   # "the pane draws no frame"): on tmux the popup IS the pane, so honor it
   # with -B — the widget's own box is then the single frame, matching the
   # zellij float exactly. Discarding it stacked the themed popup border
   # AROUND the widget's box: the double-border caught live in Mode B.
   [[ "$borderless" == true ]] && geom+=(-B)
-  [[ -n "$pane_w" && "$pane_w" != *% ]] && geom+=(-w $(( pane_w + 2 )))
+  [[ -n "$pane_w" && "$pane_w" != *% ]] && geom+=(-w $(( pane_w + pad )))
   [[ -n "$pane_w" && "$pane_w" == *% ]] && geom+=(-w "$pane_w")
   [[ -n "$pane_x" ]] && geom+=(-x "$pane_x")
   [[ -n "$pane_y" ]] && geom+=(-y "$pane_y")
