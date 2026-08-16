@@ -368,12 +368,17 @@ job::_theme_args() {
 # would draw a second frame around the first) and passes --borderless
 # --no-chrome instead — the same "the target owns the box" contract the
 # ask/dialog floats already use (tmux-modal's --no-chrome branch; see
-# _mux_tx_float's --borderless comment: discarding it once stacked a themed
-# popup border AROUND a widget's own box, a double-border caught live in
-# Mode B). The popup is sized from troupe's own --measure (its rendered
-# height for the current job count), padded +2 the same way _mux_tx_float
-# pads a measured widget height/width — a tmux popup's -w/-h are OUTER
-# dimensions, so the interior needs +2 to match troupe's own request.
+# _mux_tx_float's --borderless comment). The popup is sized from troupe's
+# own --measure (its rendered height for the current job count) with NO
+# padding: _mux_tx_float's own "+2" precedent compensates for a BORDER
+# (display-popup's default frame, or the widget's own box drawn inside a
+# borderless popup) eating cells — here there is no border at all (-B +
+# --no-chrome), so interior == outer and padding would just hand troupe a
+# pty 2 cols/2 rows larger than its self-drawn box, a visible empty gap
+# band around it. Do not blindly re-copy the +2 padding here. The SAME
+# --width also rides the real launch below (not just --measure) so the
+# measured height and the actual render agree regardless of the pty size
+# the popup itself would otherwise hand troupe.
 job::_dashboard_float() {
   local troupe="$1"
   local modal="${JOB_MUX_MODAL_BIN:-$HOME/.config/mux/scripts/mux-modal}"
@@ -391,9 +396,9 @@ job::_dashboard_float() {
   cat "$fifo" >"$out" 2>/dev/null &
   local reader_pid=$!
 
-  "$modal" --borderless --no-chrome --width 59 --height $((h + 2)) \
+  "$modal" --borderless --no-chrome --width 57 --height "$h" \
     --capture "$fifo" -- \
-    "$troupe" jobs --state-root "$JOB_STATE_ROOT" "${AI_THEME_ARGS[@]}" >/dev/null 2>&1
+    "$troupe" jobs --state-root "$JOB_STATE_ROOT" --width 57 "${AI_THEME_ARGS[@]}" >/dev/null 2>&1
   local rc=$?
   if ((rc != 0)); then
     kill "$reader_pid" 2>/dev/null

@@ -325,15 +325,19 @@ EOF
         # Single chrome: troupe draws its OWN framed "Job runner" box
         # (troupe-design.md §6), so mux-modal gets --borderless --no-chrome
         # and NO --title (a second frame would double it — Mode B regression
-        # on the ask/dialog floats). Sized from troupe's own --measure
-        # (fake default 15) padded +2, mirroring _mux_tx_float's own
-        # padding. Themed: theme::args flags ride the troupe command line
-        # (env cannot cross the popup — display-popup runs from the
-        # SERVER's environment).
+        # on the ask/dialog floats). Sized from troupe's own --measure (fake
+        # default 15) with NO padding — interior == outer with -B +
+        # --no-chrome (no border of any kind consumes cells), so padding
+        # would hand troupe a pty larger than its self-drawn box, a visible
+        # gap band; --width 57 also rides the REAL launch (not just
+        # --measure) so the measured height and the actual render agree.
+        # Themed: theme::args flags ride the troupe command line (env cannot
+        # cross the popup — display-popup runs from the SERVER's
+        # environment).
         local geom="no" themed="no" no_title="yes"
-        grep -qF -- "--borderless --no-chrome --width 59 --height 17 --capture" "$JOB_FAKE_MODAL_LOG" \
+        grep -qF -- "--borderless --no-chrome --width 57 --height 15 --capture" "$JOB_FAKE_MODAL_LOG" \
           && geom="yes"
-        grep -qF -- "jobs --state-root $JOB_STATE_ROOT --theme-accent" "$JOB_FAKE_MODAL_LOG" \
+        grep -qF -- "jobs --state-root $JOB_STATE_ROOT --width 57 --theme-accent" "$JOB_FAKE_MODAL_LOG" \
           && themed="yes"
         grep -q -- '--title' "$JOB_FAKE_MODAL_LOG" && no_title="no"
         printf 'rc=%s|geom=%s|themed=%s|no_title=%s|calls=%s|kills=%s' "$rc" "$geom" "$themed" "$no_title" \
