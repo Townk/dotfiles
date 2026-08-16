@@ -7,7 +7,7 @@
 #   tmux   → wrap the modal in `display-popup -E` running tmux-modal inside.
 #
 # Usage (superset of zellij-modal):
-#   mux-modal [--width W] [--height H] [--title TEXT]
+#   mux-modal [--width W] [--height H] [--title TEXT] [--borderless]
 #             [--inject | --capture FILE] [--no-chrome] [--no-discover]
 #             -- CMD [ARGS...]
 #
@@ -15,6 +15,15 @@
 #                     IGNORED — the zellij pane geometry belongs to the
 #                     spawner (`zellij action new-pane`/keybind Run block),
 #                     matching how zellij-modal is always launched today.
+#   --borderless      tmux only: `display-popup -B` — the target draws its
+#                     OWN frame (its own titled box, e.g. troupe's dashboard
+#                     or an ask/--no-chrome widget), so the popup itself
+#                     must draw none, mirroring mux.zsh's own
+#                     _mux_tx_float --borderless precedent (stacking both
+#                     is a double-border, caught live in Mode B for that
+#                     widget float). Silently dropped on zellij — its
+#                     floating panes have no equivalent border toggle
+#                     through this scaffolding.
 #   --no-discover     zellij-only flag, passed through; a no-op on tmux
 #                     (origin is $TMUX_PANE, no discovery to skip — D7).
 #
@@ -24,6 +33,7 @@ set -euo pipefail
 
 width="70%"
 height="60%"
+borderless=0
 typeset -a fwd=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,13 +41,16 @@ while [[ $# -gt 0 ]]; do
     --width=*) width="${1#*=}"; shift ;;
     --height) height="${2-}"; shift 2 ;;
     --height=*) height="${1#*=}"; shift ;;
+    --borderless) borderless=1; shift ;;
     --) fwd+=("$@"); break ;;
     *) fwd+=("$1"); shift ;;
   esac
 done
 
 if [[ -n "${ZELLIJ:-}" ]]; then
-  # --no-discover is zellij-modal vocabulary already; strip nothing.
+  # --borderless has no zellij-modal equivalent (consumed above, never
+  # forwarded) and --no-discover is already zellij-modal vocabulary —
+  # strip nothing else.
   exec "$HOME/.config/zellij/scripts/zellij-modal" "${fwd[@]}"
 fi
 
@@ -55,9 +68,12 @@ for a in "${fwd[@]}"; do
   targs+=("$a")
 done
 
+typeset -a popup_flags=(-E -w "$width" -h "$height")
+((borderless)) && popup_flags+=(-B)
+
 # COLORTERM: display-popup children inherit the server env, which may lack
 # it — carry truecolor through explicitly (same gotcha as the zellij float
 # path; gum/lipgloss fall back to 256-color without it).
-exec "$TMUX_BIN" display-popup -E -w "$width" -h "$height" \
+exec "$TMUX_BIN" display-popup "${popup_flags[@]}" \
   -e "COLORTERM=${COLORTERM:-truecolor}" -e "TMUX_PANE=${TMUX_PANE:-}" \
   "$HOME/.config/mux/scripts/tmux-modal" --origin "${TMUX_PANE:-}" "${targs[@]}"
