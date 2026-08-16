@@ -825,15 +825,23 @@ EOF
         export JOB_FAKE_TROUPE_FOLLOW_ACTIONS=""
         JOB_FORCE_HOST=pane run_job job::watch >/dev/null
         rc=$?
-        local geom="no" resize_cmd="no" follow="no"
+        local geom="no" resize_cmd="no" follow="no" measure_frameless="no" follow_frameless="no"
         grep -qF -- '57 9 --' "$JOB_FAKE_FLOATPANE_LOG" && geom="yes"
         grep -qF -- 'export TROUPE_RESIZE_CMD="tmux resize-pane -t \"\$TMUX_PANE\" -y %h"' \
           "$JOB_FAKE_FLOATPANE_LOG" && resize_cmd="yes"
-        grep -qF -- 'jobs --follow --state-root' "$JOB_FAKE_FLOATPANE_LOG" && follow="yes"
-        printf 'rc=%s|geom=%s|resize_cmd=%s|follow=%s' "$rc" "$geom" "$resize_cmd" "$follow"
+        grep -qF -- 'jobs --follow --no-frame --state-root' "$JOB_FAKE_FLOATPANE_LOG" && follow="yes"
+        # --no-frame (troupe-design.md §6 rev, frameless pane host) must ride
+        # BOTH the --measure sizing call and the real --follow launch, or the
+        # measured height and the actually-rendered height disagree (measure
+        # parity): the popup path never carries --no-frame (mux-modal's own
+        # -B/--no-chrome IS that frame there), only the pane host does.
+        grep -qF -- '--measure --no-frame' "$JOB_FAKE_TROUPE_LOG" && measure_frameless="yes"
+        grep -qF -- '--follow --no-frame' "$JOB_FAKE_FLOATPANE_LOG" && follow_frameless="yes"
+        printf 'rc=%s|geom=%s|resize_cmd=%s|follow=%s|measure_frameless=%s|follow_frameless=%s' \
+          "$rc" "$geom" "$resize_cmd" "$follow" "$measure_frameless" "$follow_frameless"
       }
       When call wiring
-      The output should equal 'rc=0|geom=yes|resize_cmd=yes|follow=yes'
+      The output should equal 'rc=0|geom=yes|resize_cmd=yes|follow=yes|measure_frameless=yes|follow_frameless=yes'
     End
 
     It 'a failed pane launch is reported and leaves no fifo/state file behind'
