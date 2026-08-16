@@ -339,7 +339,7 @@ job::_watch_confirm_cancel() {
   # load declines the confirm instead of killing the caller's whole shell.
   ( source "$muxlib" ) >/dev/null 2>&1 || return 1
   source "$muxlib" 2>/dev/null || return 1
-  mux::confirm "Cancel ${title}?" --title "Job runner" --danger \
+  mux::confirm "Cancel ${title}?" --title "Task runner" --danger \
     --affirmative "Cancel job" --negative "Keep running" >/dev/null || return 1
   if ! job::cancel "$id" >/dev/null 2>&1; then
     log_error "job::_watch_confirm_cancel: cancel failed — is pueued running?"

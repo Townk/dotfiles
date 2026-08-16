@@ -586,7 +586,7 @@ EOF
       The output should include '--danger'
       The output should include '--affirmative Cancel job'
       The output should include '--negative Keep running'
-      The output should include '--title Job runner'
+      The output should include '--title Task runner'
     End
 
     It 'declines on rc 1 — no kill, rc 1'
