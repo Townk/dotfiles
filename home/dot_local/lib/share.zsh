@@ -228,5 +228,114 @@ share::destination_host() {
     return 0
   fi
   remote="$(share::field "$name" remote)"
+  if [[ -z "$remote" ]]; then
+    log_error "share: endpoint $name has no store and no remote to send to"
+    return 1
+  fi
   printf '%s\n' "$remote"
+}
+
+# --- send dispatch ----------------------------------------------------------
+# The faces never learn which backend answered. That is the seam the whole
+# design rests on: adding a backend must not touch yazi, the picker, or the CLI.
+
+SHARE_DEFAULT_EXPIRATION="${SHARE_DEFAULT_EXPIRATION:-3d}"
+SHARE_DEFAULT_DOWNLOADS="${SHARE_DEFAULT_DOWNLOADS:-1}"
+
+# share::send [--to E] [--live] [--expiration D] [--downloads N] <path…>
+share::send() {
+  local endpoint="" mode=store
+  local expiration="$SHARE_DEFAULT_EXPIRATION" downloads="$SHARE_DEFAULT_DOWNLOADS"
+  while (( $# )); do
+    case "$1" in
+      --to)         endpoint="$2"; shift 2 ;;
+      --live)       mode=live; shift ;;
+      --expiration) expiration="$2"; shift 2 ;;
+      --downloads)  downloads="$2"; shift 2 ;;
+      --)           shift; break ;;
+      -*)           die "share: unknown option: $1" ;;
+      *)            break ;;
+    esac
+  done
+  (( $# )) || die "share: no files given"
+
+  # Every path is validated BEFORE any transfer starts — a partial multi-file
+  # send that dies on file 3 having already uploaded 1 and 2 is worse than
+  # refusing up front. Two hazards, checked per path:
+  #
+  #  * a literal newline in the path. The backends' argv seam
+  #    (share::croc_argv / share::rclone_copy_argv) prints one token per line
+  #    and callers reassemble with `cmd=("${(@f)$(...)}")` — deliberately, so
+  #    the whole command is testable without a transfer ever running. A
+  #    newline inside a path (legal on POSIX filesystems) would split into two
+  #    argv tokens there and corrupt the command silently. Caught here, before
+  #    that seam ever sees the path — `${(V)p}` renders the newline visibly
+  #    (`\n`) so the error itself does not fold across lines.
+  #  * the path does not exist. share::label fails on this too, but only once
+  #    it is called deep inside a backend — this is the earliest point common
+  #    to every backend, so a typo anywhere in a multi-file list is visible
+  #    before the first byte of ANY file moves.
+  #
+  # The loop variable is `p`, deliberately NOT `path`: in zsh, the lowercase
+  # `path` array is TIED to `$PATH` (same storage, like `argv`/`$@`). `local
+  # path` shadows that tie for the rest of THIS function's scope, and
+  # assigning it scalar values in the loop replaces the whole tied array with
+  # a one-element PATH — verified: it broke every external-command lookup
+  # (`yq`, `jq`, …) for the remainder of share::send and everything it calls,
+  # surfacing as a bogus "cannot parse endpoints.toml" from share::resolve
+  # deep in the call stack, with the real cause (`yq: command not found`)
+  # swallowed by that code path's own `2>/dev/null`.
+  local p
+  for p in "$@"; do
+    case "$p" in
+      *$'\n'*)
+        log_error "share: path contains a newline, which would corrupt the argv seam: ${(V)p}"
+        return 1
+        ;;
+    esac
+    [[ -e "$p" ]] || { log_error "share: no such file: $p"; return 1; }
+  done
+
+  endpoint="$(share::resolve "$endpoint")" || return 1
+
+  # The pre-send echo. Not a nicety: it is what makes a wrong endpoint visible
+  # before any bytes leave, and it names the HOST rather than the nickname.
+  # Captured and status-checked (not inlined into the log_info call): an
+  # endpoint whose destination_host fails closed (e.g. an rclone endpoint with
+  # no remote) must abort the send here, not print "sending to " with an
+  # empty host and carry on — log_info's own exit status would otherwise mask
+  # a failed command substitution inside its argument.
+  local host
+  host="$(share::destination_host "$endpoint")" || return 1
+  log_info "sending to $host" >&2
+
+  # The croc default lives at the CALL SITE, not inside share::field: a
+  # key-specific default hidden in the accessor silently overrode whatever a
+  # caller passed.
+  local backend
+  backend="$(share::field "$endpoint" backend croc)" || return 1
+  local blurb
+  case "$backend" in
+    croc)   blurb="$(share::croc_send "$endpoint" "$mode" "$expiration" "$downloads" "$@")" || return 1 ;;
+    rclone)
+      [[ "$mode" == live ]] && die "share: the rclone backend has no live mode"
+      blurb="$(share::rclone_send "$endpoint" "$@")" || return 1
+      ;;
+    *) die "share: unknown backend: $backend" ;;
+  esac
+  print -r -- "$blurb"
+}
+
+# share::revoke <id> — dispatch on the receipt's own backend, then forget it.
+share::revoke() {
+  local id="${1:?share::revoke: id required}" row backend ref
+  row="$(share::ledger_get "$id")" || { log_error "share: no receipt: $id"; return 1; }
+  backend="$(printf '%s' "$row" | jq -r '.backend')"
+  ref="$(printf '%s' "$row" | jq -r '.ref')"
+  case "$backend" in
+    croc)   share::croc_revoke "$ref" || return 1 ;;
+    rclone) share::rclone_revoke "$ref" || return 1 ;;
+    *) log_error "share: unknown backend in receipt: $backend"; return 1 ;;
+  esac
+  share::ledger_remove "$id"
 }
