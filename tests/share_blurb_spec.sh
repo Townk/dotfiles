@@ -29,6 +29,18 @@ store = "https://c.example.com"
 web = true
 message = "%name is at %url"
 profiles = ["personal"]
+
+[starts]
+store = "https://s.example.com"
+web = true
+message = "%url is %name"
+profiles = ["personal"]
+
+[percent]
+store = "https://p.example.com"
+web = true
+message = "%name is 100% done: %url"
+profiles = ["personal"]
 TOML
   }
   BeforeEach 'setup'
@@ -80,5 +92,42 @@ TOML
   It 'honours a per-endpoint message override'
     When call share::blurb custom web 'R.pdf (1 B)' 'https://c.example.com/s/a#v1.k' 'Aug 20' '1 download'
     The output should equal 'R.pdf (1 B) is at https://c.example.com/s/a#v1.k'
+  End
+
+  # Regression for the sequential-replace bug: a label containing literal
+  # "%url" text must not be re-substituted when the %url token is filled in
+  # right after it. Fails against the old chain-of-${out//...} implementation.
+  It 'does not re-substitute a label that itself contains %url'
+    When call share::blurb withweb web '%url (10 B)' \
+      'https://x/s/a#v1.k' 'Aug 20' '1 download'
+    The output should equal '%url (10 B) → https://x/s/a#v1.k · expires Aug 20, 1 download'
+    The lines of output should equal 1
+  End
+
+  It 'does not re-substitute a label that itself contains %token'
+    When call share::blurb noweb cli '%token (10 B)' \
+      'croc-store-v1.aaa' 'Aug 20' '1 download'
+    The output should equal '%token (10 B) → croc-store-v1.aaa · get croc: github.com/schollz/croc · expires Aug 20'
+    The lines of output should equal 1
+  End
+
+  It 'renders correctly when the template starts with a token'
+    When call share::blurb starts web 'R.pdf (1 B)' \
+      'https://s.example.com/x' 'Aug 20' '1 download'
+    The output should equal 'https://s.example.com/x is R.pdf (1 B)'
+    The lines of output should equal 1
+  End
+
+  It 'leaves a literal % that is not a known token untouched'
+    When call share::blurb percent web 'R.pdf (1 B)' \
+      'https://p.example.com/x' 'Aug 20' '1 download'
+    The output should equal 'R.pdf (1 B) is 100% done: https://p.example.com/x'
+    The lines of output should equal 1
+  End
+
+  It 'fails closed on a nonexistent path instead of reporting 0 B'
+    When run share::label "$SB/nosuch.pdf"
+    The status should be failure
+    The stderr should include 'nosuch.pdf'
   End
 End

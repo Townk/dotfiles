@@ -30,12 +30,16 @@ share::human_size() {
   fi
 }
 
-# share::label <path…> — "Report.pdf (4.2 MB)" or "3 files (12.0 MB)".
+# share::label <path…> — "Report.pdf (4.2 MB)" or "3 files (12.0 MB)". Fails
+# closed on a missing path rather than reporting "0 B": callers such as
+# Task 9's job-title builder do not re-validate paths themselves, so a typo
+# must be visible here, not silently rendered as an empty file.
 share::label() {
   zmodload zsh/stat 2>/dev/null
   local -a sizes
   local total=0 path
   for path in "$@"; do
+    [[ -e "$path" ]] || { log_error "share: no such file: $path"; return 1; }
     zstat -A sizes +size -- "$path" 2>/dev/null || sizes=(0)
     (( total += sizes[1] ))
   done
@@ -44,6 +48,41 @@ share::label() {
   else
     printf '%d files (%s)\n' "$#" "$(share::human_size $total)"
   fi
+}
+
+# share::_render <template> <token> <value> [<token> <value> …]
+#
+# Single left-to-right pass, appending only: text already emitted into `out`
+# is never re-scanned, so a value that itself contains a %-token (e.g. a
+# filename literally named "%url") can never be re-substituted by a later
+# replacement in the chain. Splitting on `%` and walking the resulting parts
+# achieves that in one pass, unlike a chain of `${out//...}` global replaces
+# which each rescan the whole (growing) string.
+share::_render() {
+  local template="$1"; shift
+  local -A vals=("$@")
+  # Longest-first: guards against a shorter token name being a prefix of a
+  # longer one (none currently collide, but the check is cheap insurance).
+  local -a order=(%downloads %crocurl %expires %token %name %code %url)
+  # `(@s:%:)` splits on literal `%` and preserves empty fields, so a template
+  # that STARTS with a token (parts[1] == "") does not shift every other
+  # field down by one.
+  local -a parts=("${(@s:%:)template}")
+  local out="${parts[1]}" p tok bare
+  local -i i matched
+  for (( i = 2; i <= ${#parts[@]}; i++ )); do
+    p="${parts[i]}"; matched=0
+    for tok in "${order[@]}"; do
+      bare="${tok#%}"
+      if [[ "$p" == "$bare"* ]]; then
+        out+="${vals[$tok]}${p#$bare}"; matched=1; break
+      fi
+    done
+    # No known token matched: the `%` was literal (e.g. "100%"). Put it back.
+    (( matched )) || out+="%$p"
+  done
+  # Belt and braces: a template edited by hand must never inject a newline.
+  printf '%s\n' "${out//$'\n'/ }"
 }
 
 # share::blurb <endpoint> <kind> <label> <value> <expires> <downloads>
@@ -64,14 +103,7 @@ share::blurb() {
     esac
   fi
 
-  local out="$template"
-  out="${out//\%name/$label}"
-  out="${out//\%url/$value}"
-  out="${out//\%token/$value}"
-  out="${out//\%code/$value}"
-  out="${out//\%expires/$expires}"
-  out="${out//\%downloads/$downloads}"
-  out="${out//\%crocurl/$SHARE_CROC_URL}"
-  # Belt and braces: a template edited by hand must never inject a newline.
-  printf '%s\n' "${out//$'\n'/ }"
+  share::_render "$template" \
+    %name "$label" %url "$value" %token "$value" %code "$value" \
+    %expires "$expires" %downloads "$downloads" %crocurl "$SHARE_CROC_URL"
 }
