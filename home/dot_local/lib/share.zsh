@@ -136,7 +136,10 @@ share::default_endpoint() {
 
   local manifest='{}'
   if [[ -f "$SHARE_ENDPOINTS_FILE" ]]; then
-    manifest="$(yq -p toml -o json '.' "$SHARE_ENDPOINTS_FILE" 2>/dev/null)" || manifest='{}'
+    manifest="$(yq -p toml -o json '.' "$SHARE_ENDPOINTS_FILE" 2>/dev/null)" || {
+      log_error "share: cannot parse $SHARE_ENDPOINTS_FILE"
+      return 1
+    }
   fi
   match="$(jq -rn --argjson m "$manifest" --arg p "$profile" '
     $m | to_entries
@@ -153,23 +156,47 @@ share::default_endpoint() {
     | if length > 0 then .[0].key else "public" end')"
 }
 
+# share::allowed <endpoint> — fail CLOSED. A `profiles` key that is absent or
+# declared empty both deny, with distinguishable messages: an endpoint with no
+# `profiles` at all is a manifest that forgot to declare an allowlist, while
+# `profiles = []` is (deliberately or accidentally) "nobody". Neither may be
+# read as "open" — this repo's culture is fail-closed (cf.
+# .chezmoitemplates/profile-traits.tmpl). Reads the endpoint's own JSON
+# directly instead of going through share::field, because share::field's
+# uniform missing-key fallback renders an empty declared array identically to
+# a missing key.
 share::allowed() {
   local name="${1:?share::allowed: endpoint required}" profile
   profile="$(share::profile)"
-  local allowed
-  allowed="$(share::field "$name" profiles)" || return 1
-  [[ -n "$allowed" ]] || return 0        # no allowlist declared = open
-  printf '%s\n' "$allowed" | grep -qxF "$profile"
+  local endpoints
+  endpoints="$(share::endpoints_json)" || return 1
+  local entry
+  entry="$(printf '%s' "$endpoints" | jq -e --arg n "$name" '.[$n]' 2>/dev/null)" || {
+    log_error "share: unknown endpoint: $name"
+    return 1
+  }
+  if [[ "$(printf '%s' "$entry" | jq -r 'has("profiles")')" != "true" ]]; then
+    log_error "share: endpoint $name declares no profiles allowlist — add profiles = [...] to endpoints.toml"
+    return 1
+  fi
+  if (( $(printf '%s' "$entry" | jq -r '(.profiles // []) | length') == 0 )); then
+    log_error "share: endpoint $name has an empty profiles allowlist — nobody is allowed"
+    return 1
+  fi
+  printf '%s' "$entry" | jq -r '.profiles[]' | grep -qxF "$profile"
 }
 
 # share::resolve [<name>] — the one place an endpoint name is decided.
 share::resolve() {
   local name="${1-}" profile
   profile="$(share::profile)"
-  [[ -n "$name" ]] || name="$(share::default_endpoint)"
-  share::field "$name" store >/dev/null 2>&1 \
-    || share::field "$name" remote >/dev/null 2>&1 \
-    || { log_error "share: unknown endpoint: $name"; return 1; }
+  [[ -n "$name" ]] || { name="$(share::default_endpoint)" || return 1; }
+  local endpoints
+  endpoints="$(share::endpoints_json)" || return 1
+  printf '%s' "$endpoints" | jq -e --arg n "$name" 'has($n)' >/dev/null 2>&1 || {
+    log_error "share: unknown endpoint: $name"
+    return 1
+  }
   if ! share::allowed "$name"; then
     if [[ -n "${SHARE_FORCE:-}" ]]; then
       log_warn "share: policy override — $name is not allowed on profile $profile"
@@ -185,10 +212,15 @@ share::resolve() {
 # share::destination_host <endpoint> — what the pre-send echo names. The host of
 # the store origin, or the rclone remote when there is no origin.
 share::destination_host() {
-  local name="${1:?share::destination_host: endpoint required}" store remote
+  local name="${1:?share::destination_host: endpoint required}" store remote host
   store="$(share::field "$name" store)" || return 1
   if [[ -n "$store" ]]; then
-    printf '%s\n' "${${store#*://}%%/*}"
+    host="${${store#*://}%%/*}"
+    if [[ -z "$host" ]]; then
+      log_error "share: endpoint $name has a store URL with no host: $store"
+      return 1
+    fi
+    printf '%s\n' "$host"
     return 0
   fi
   remote="$(share::field "$name" remote)"

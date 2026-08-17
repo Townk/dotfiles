@@ -86,4 +86,57 @@ TOML
     When call share::destination_host od
     The output should equal 'onedrive:X'
   End
+
+  It 'fails closed on an empty profiles allowlist — share::allowed denies'
+    SHARE_PROFILE=work
+    printf '[locked]\nstore = "https://locked.example.com"\nprofiles = []\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    When call share::allowed locked
+    The status should be failure
+    The stderr should include 'empty profiles allowlist'
+  End
+
+  It 'fails closed on an empty profiles allowlist — share::resolve denies'
+    SHARE_PROFILE=work
+    printf '[locked]\nstore = "https://locked.example.com"\nprofiles = []\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    When run share::resolve locked
+    The status should be failure
+    The stderr should include 'empty profiles allowlist'
+  End
+
+  It 'fails closed on a missing profiles key, and tells the author to declare one'
+    SHARE_PROFILE=work
+    printf '[open]\nstore = "https://open.example.com"\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    When run share::resolve open
+    The status should be failure
+    The stderr should include 'declares no profiles allowlist'
+  End
+
+  It 'refuses a store URL with no host rather than printing empty'
+    SHARE_PROFILE=work
+    printf '[bare]\nstore = "https:///x"\nprofiles = ["work"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    When run share::destination_host bare
+    The status should be failure
+    The stderr should include 'no host'
+  End
+
+  It 'reports a parse failure, not "unknown endpoint", when the manifest is malformed'
+    SHARE_PROFILE=work
+    printf 'this is not valid toml [[[\n' >"$SHARE_ENDPOINTS_FILE"
+    When run share::resolve onedrive
+    The status should be failure
+    The stderr should include 'cannot parse'
+    The stderr should not include 'unknown endpoint'
+  End
+
+  It 'fails share::default_endpoint on a malformed manifest instead of returning public'
+    SHARE_PROFILE=personal
+    printf 'this is not valid toml [[[\n' >"$SHARE_ENDPOINTS_FILE"
+    When run share::default_endpoint
+    The status should be failure
+    The stderr should include 'cannot parse'
+  End
 End
