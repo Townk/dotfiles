@@ -74,6 +74,66 @@ run_send() {
   fi
 }
 
+# peek_to_endpoint <send-args…> — read the --to value the same way
+# share::send's own flag loop would (a value-flag/positional split, stopping
+# at `--` or the first non-flag token), WITHOUT shift and without consuming
+# or mutating anything. This exists only so dispatch_send can learn the
+# TARGET endpoint before enqueue — needed for the --force confirmation gate
+# below, which must run here rather than inside share::resolve because a
+# backgrounded send has no tty inside the job. Index-walked rather than
+# shift-based: share::send's own comment on the --to/--expiration/--downloads
+# hang applies here too, and an index that just stops advancing on a
+# malformed tail is a simpler way to never spin than another guarded shift.
+peek_to_endpoint() {
+  local -a args=("$@")
+  local -i i=1 n=${#args[@]}
+  while (( i <= n )); do
+    case "${args[i]}" in
+      --to)         printf '%s\n' "${args[i+1]:-}"; return 0 ;;
+      --expiration) (( i += 1 )) ;;
+      --downloads)  (( i += 1 )) ;;
+      --)           return 1 ;;
+      --live | -*)  ;;
+      *)            return 1 ;;
+    esac
+    (( i += 1 ))
+  done
+  return 1
+}
+
+# confirm_force_destination <endpoint> — the spec's policy fence requires
+# "--force AND an interactive confirmation naming the host"; before this fix
+# --force alone shipped a file, one warning line and nothing else standing
+# between a company file and a third party's store. This is the gate.
+#
+# Refuses OUTRIGHT when stderr is not a tty, rather than falling through to
+# a prompt nobody can see — a non-interactive context (a script, a job, a
+# redirected pipeline) must never be able to force a disallowed endpoint by
+# accident.
+#
+# Deliberately a local read, not prompt-common.zsh's prompt::confirm: that
+# helper prints to and reads from /dev/tty unconditionally, with no
+# interactivity gate of its own — it cannot express "refuse when stderr is
+# not a tty" (share's own convention for everything user-facing, including
+# every log_* message), only "give up if /dev/tty can't be read at all",
+# which is a materially weaker refusal. Sourcing prompt-common.zsh here
+# would also pull in a whole secret-entry library (masked reads, terminal-
+# mode traps, prompt::required/choice/secret) for the sake of one yes/no
+# gate this command needs once. A five-line local read scoped to exactly
+# the rule this finding states is both narrower and more precise.
+confirm_force_destination() {
+  local endpoint="$1" host ans
+  [[ -t 2 ]] || {
+    log_error "share: --force on a disallowed endpoint needs an interactive terminal to confirm"
+    return 1
+  }
+  host="$(share::destination_host "$endpoint")" || return 1
+  printf '%s⚠%s  share: %s is not allowed on this profile — send to %s anyway? [y/N] ' \
+    "$C_YEL" "$C_RES" "$endpoint" "$host" >&2
+  IFS= read -r ans </dev/tty || return 1
+  [[ "$ans" == [yY] || "$ans" == [yY][eE][sS] ]]
+}
+
 # --background and --force are CLI-level concerns; everything else belongs to
 # share::send, so they are peeled off here and the rest passes straight
 # through unexamined — this file does not reimplement option semantics the
@@ -100,6 +160,23 @@ dispatch_send() {
       *)            rest+=("$1"); shift ;;
     esac
   done
+
+  # F4: --force alone must never be enough. Only when it was actually given,
+  # AND the endpoint it would apply to is one this profile is not allowed to
+  # use, does the confirmation gate engage — an allowed endpoint (the common
+  # case, --force used defensively or out of habit) never prompts. Resolving
+  # the target here (rather than deferring to share::resolve) is what makes
+  # this check possible before enqueue, where a background job would have no
+  # tty left to confirm from.
+  if (( force )); then
+    local target
+    target="$(peek_to_endpoint "${rest[@]}")" || target="$(share::default_endpoint 2>/dev/null)" || target=""
+    if [[ -n "$target" ]] && ! share::allowed "$target" 2>/dev/null; then
+      confirm_force_destination "$target" \
+        || die "share: --force refused — confirmation is required to send to a disallowed endpoint"
+    fi
+  fi
+
   if (( background )); then
     if share::jobs_available; then
       local -a wflag=()
@@ -139,7 +216,7 @@ main() {
     revoke)    shift
                (( $# >= 1 )) || die "share revoke: an id is required"
                share::revoke "$1" ;;
-    endpoints) shift; share::endpoint_names ;;
+    endpoints) shift; share::endpoints_for_profile ;;
     send)      shift; dispatch_send "$@" ;;
     *)
       # Not a recognized subcommand: the bare-path shorthand applies only when

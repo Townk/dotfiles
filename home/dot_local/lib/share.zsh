@@ -235,6 +235,31 @@ share::destination_host() {
   printf '%s\n' "$remote"
 }
 
+# share::endpoints_for_profile — one line per endpoint THIS PROFILE may use,
+# the default marked. `share endpoints` advertises itself as exactly that
+# ("endpoints this profile may use"), but calling share::endpoint_names
+# straight from the CLI printed every manifest key unfiltered — on a `work`
+# profile with only an `onedrive` entry it listed `onedrive` AND the
+# built-in `public`, even though `share --to public` is then denied by the
+# policy fence. share::endpoint_names itself stays raw (it is also the
+# manifest-validity seam other callers rely on); this is the profile-scoped
+# view the CLI actually needs.
+share::endpoints_for_profile() {
+  local profile default name
+  profile="$(share::profile)"
+  default="$(share::default_endpoint)" || return 1
+  local -a names
+  names=("${(@f)$(share::endpoint_names)}") || return 1
+  for name in "${names[@]}"; do
+    share::allowed "$name" 2>/dev/null || continue
+    if [[ "$name" == "$default" ]]; then
+      printf '%s (default)\n' "$name"
+    else
+      printf '%s\n' "$name"
+    fi
+  done
+}
+
 # --- send dispatch ----------------------------------------------------------
 # The faces never learn which backend answered. That is the seam the whole
 # design rests on: adding a backend must not touch yazi, the picker, or the CLI.
@@ -333,7 +358,15 @@ share::send() {
     *) die "share: unknown backend: $backend" ;;
   esac
   print -r -- "$blurb"
-  share::announce "$blurb"
+  # share::announce is best-effort by contract (it wraps `notify`, which is
+  # documented as best-effort itself): a failed RECOB bridge hop, or simply
+  # no Hammerspoon on this host, must not turn a SUCCESSFUL transfer into a
+  # reported failure. Left unguarded, share::announce's own exit status —
+  # being the last command in this function — became share::send's, so
+  # pueue recorded Failed and job-callback fired its --ack failure toast for
+  # a share that actually worked. The upload already happened and the
+  # ledger row already exists; only the toast is what's missing.
+  share::announce "$blurb" || true
 }
 
 # share::revoke <id> — dispatch on the receipt's own backend, then forget it.
@@ -345,6 +378,16 @@ share::revoke() {
   case "$backend" in
     croc)   share::croc_revoke "$ref" || return 1 ;;
     rclone) share::rclone_revoke "$ref" || return 1 ;;
+    # A live (peer-to-peer) croc transfer has no store-side id — it dies the
+    # moment croc exits, or once the recipient completes it — so there is
+    # nothing left to revoke. `ref` is empty by construction for these rows
+    # (share/croc.zsh); refuse with a clear message instead of ever calling
+    # `croc --revoke ''`, and leave the receipt in the ledger so `share list`
+    # keeps rendering it honestly.
+    croc-live)
+      log_error "share: $id was a live transfer — it already ended when croc exited; nothing to revoke"
+      return 1
+      ;;
     *) log_error "share: unknown backend in receipt: $backend"; return 1 ;;
   esac
   share::ledger_remove "$id"
@@ -462,9 +505,21 @@ share::_load_jobs() {
 
 # share::jobs_available — pueue reachable? The CLI degrades to a foreground run
 # when it is not, so a machine without the job runner still shares files.
+#
+# job::_pueue only resolves the BINARY (command -v, else a hardcoded
+# fallback, then -x) — it never contacts the daemon. Stopping at that check
+# let `--background` pass the guard with pueue installed but pueued down,
+# so `job::start` ran `pueue add`, that failed, and the whole send died
+# instead of degrading to foreground — the opposite of the documented
+# behaviour above. Probing `pueue status` here is what actually answers "is
+# the daemon reachable", and — unlike job::_pueue's own resolution, which
+# JOB_PUEUE_BIN short-circuits unconditionally with no executability check —
+# gives this predicate a real negative test seam: a fake pueue whose `status`
+# exits non-zero.
 share::jobs_available() {
   share::_load_jobs || return 1
-  job::_pueue >/dev/null 2>&1
+  local p; p="$(job::_pueue)" || return 1
+  "$p" status >/dev/null 2>&1
 }
 
 # share::send_background [--watch] <send-args…> — enqueue `share send

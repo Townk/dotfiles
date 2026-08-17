@@ -46,26 +46,35 @@ SH
   }
   BeforeEach 'setup'
 
-  It 'reports jobs available when pueue resolves'
+  It 'reports jobs available when pueue resolves and the daemon answers'
     When call share::jobs_available
     The status should be success
   End
 
-  # No negative counterpart to the "available" example above: verified
-  # directly against job::_pueue (home/dot_local/lib/job.zsh, out of this
-  # task's scope) that there is no seam that can force it to fail on a host
-  # with pueue actually installed via Homebrew. `PATH=/nonexistent` is
-  # defeated by its hardcoded `/opt/homebrew/bin/pueue` fallback (checked
-  # with a plain `-x` against the literal path, not through $PATH), and
-  # `JOB_PUEUE_BIN` set to any non-empty value — even a bogus path — short-
-  # circuits to `return 0` unconditionally with no executability check at
-  # all. share::jobs_available is a thin predicate over that resolution
-  # logic, so it inherits the same unsatisfiable-negative-test problem; the
-  # degradation behaviour that actually matters (a CLI falling back to a
-  # foreground send when the runner is unavailable) is covered instead in
-  # Task 10's CLI spec, by stubbing share::jobs_available itself — which,
-  # unlike job::_pueue, IS this codebase's own seam. Do not re-add a
-  # negative example here; it would be testing the wrong layer.
+  # F1 fix: share::jobs_available used to stop at job::_pueue, which only
+  # resolves the BINARY (command -v, else a hardcoded fallback, then a plain
+  # -x check) and never contacts the daemon — so with pueue installed but
+  # pueued down, the guard passed, `job::start` ran `pueue add`, that failed,
+  # and the whole send died instead of degrading to foreground. There is
+  # still no seam that can force job::_pueue's own BINARY resolution to fail
+  # on a host with pueue actually installed (JOB_PUEUE_BIN short-circuits
+  # unconditionally with no executability check, and PATH=/nonexistent is
+  # defeated by the hardcoded /opt/homebrew/bin/pueue fallback) — but probing
+  # `pueue status` is a seam of this predicate's own, and IS satisfiable: a
+  # fake pueue whose `status` exits non-zero.
+  It 'reports jobs unavailable when pueue resolves but the daemon does not answer'
+    cat >"$SB/deadpueue" <<'SH'
+#!/bin/sh
+case "$1" in
+  status) exit 1 ;;
+  *)      exit 0 ;;
+esac
+SH
+    chmod +x "$SB/deadpueue"
+    JOB_PUEUE_BIN="$SB/deadpueue"
+    When call share::jobs_available
+    The status should be failure
+  End
 
   It 'enqueues the send into the share group'
     share::send_background "$SB/Report.pdf" >/dev/null
@@ -249,5 +258,55 @@ SH
     share::announce 'R.pdf → https://x/s/a#v1.k'
     When call hist_meta
     The output should equal '{}'
+  End
+
+  # F2 fix: share::announce is the LAST command in share::send, so before
+  # this fix its own exit status became the send's — a failed RECOB bridge
+  # hop, or simply no Hammerspoon on this host, marked a SUCCESSFUL transfer
+  # as FAILED: pueue recorded Failed and job-callback fired its --ack
+  # failure toast (red bell) for a share that actually worked. notify
+  # documents itself as best-effort (common.zsh); that best-effort layer
+  # must never decide the transfer's own success. The stubbed `hs` here
+  # exits 1, reproducing "the toast could not be delivered" without needing
+  # a real bridge or Hammerspoon.
+  send_setup() {
+    SHARE_CONFIG_DIR="$SB"
+    SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
+    SHARE_PROFILE=personal
+    printf '[drop]\nstore = "https://d.example.com"\nweb = true\nprofiles = ["personal"]\ndefault_for = ["personal"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    printf 'x' >"$SB/Report.pdf"
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+printf 'https://d.example.com/s/abc#v1.KEY\ncroc-store-v1.b64.abc.KEY\n'
+SH
+    chmod +x "$SB/bin/croc"
+    cat >"$SB/bin/hs" <<'SH'
+#!/bin/sh
+exit 1
+SH
+    chmod +x "$SB/bin/hs"
+    HS="$SB/bin/hs"
+    PATH="$SB/bin:$PATH"
+    in_job
+  }
+
+  It 'still exits zero on a successful send when the completion toast fails to deliver'
+    send_setup
+    When call share::send "$SB/Report.pdf"
+    The status should be success
+    The output should include 'd.example.com/s/abc'
+    The stderr should include 'sending to d.example.com'
+  End
+
+  It 'still writes the ledger row when the completion toast fails to deliver'
+    send_setup
+    send_and_count_ledger() {
+      share::send "$SB/Report.pdf" >/dev/null
+      share::ledger_list | jq 'length'
+    }
+    When call send_and_count_ledger
+    The output should equal '1'
+    The stderr should include 'sending to d.example.com'
   End
 End

@@ -109,4 +109,38 @@ TOML
     The stderr should include 'cannot parse'
     The stderr should not include 'unknown endpoint'
   End
+
+  # --- F8 fix: `share endpoints` must list only what THIS profile may use --
+  # share::endpoint_names (above) stays raw/unfiltered — other callers rely
+  # on it for manifest-validity checks — but the CLI's `endpoints` subcommand
+  # advertises itself as "endpoints this profile may use", and printing every
+  # manifest key unfiltered contradicted that on a `work` profile with only
+  # an `onedrive` entry: it listed `onedrive` AND the built-in `public`, even
+  # though `share --to public` is then denied by the policy fence.
+  # share::endpoints_for_profile is the profile-scoped view the CLI needs.
+  It 'filters the endpoints listing to what the profile may use'
+    printf '[onedrive]\nbackend = "rclone"\nremote = "onedrive:Shared/drop"\nweb = true\nprofiles = ["work"]\ndefault_for = ["work"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    SHARE_PROFILE=work
+    When call share::endpoints_for_profile
+    The output should include 'onedrive'
+    The output should not include 'public'
+  End
+
+  It 'marks the default endpoint in the profile-filtered listing'
+    printf '[onedrive]\nbackend = "rclone"\nremote = "onedrive:Shared/drop"\nweb = true\nprofiles = ["work"]\ndefault_for = ["work"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    SHARE_PROFILE=work
+    When call share::endpoints_for_profile
+    The output should include 'onedrive (default)'
+  End
+
+  It 'still lists the built-in public endpoint for a profile allowed to use it'
+    write_manifest
+    SHARE_PROFILE=personal
+    When call share::endpoints_for_profile
+    The output should include 'public'
+    The output should include 'drop'
+    The output should not include 'onedrive'
+  End
 End

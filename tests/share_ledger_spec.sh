@@ -72,4 +72,43 @@ Describe 'share:: receipt ledger'
     When call share::ledger_list
     The output should equal '[]'
   End
+
+  # F5 fix: the ledger holds every stored-mode URL (key in the fragment) and
+  # every live-mode code phrase in cleartext — secrets on disk, not just in
+  # argv. It is created under a scoped `umask 077`, not the process default
+  # (0644 before this fix), so it is readable by nobody but the owner.
+  It 'creates the ledger file with mode 0600'
+    share::ledger_add id1 croc public 'a' r1 'u1' 9999999999
+    perm() { stat -f '%Lp' "$SB/ledger.jsonl" 2>/dev/null || stat -c '%a' "$SB/ledger.jsonl"; }
+    When call perm
+    The output should equal '600'
+  End
+
+  # F5 fix: `ref` and `url` used to ride jq's OWN argv (`--arg ref "$5" --arg
+  # url "$6"`) — and both can carry a secret (a stored-mode URL's key, or a
+  # live-mode code phrase). On Linux /proc/<pid>/cmdline is world-readable
+  # for the life of the jq process, however brief. A logging jq shim that
+  # records its own invocation argv is the direct evidence: the secret must
+  # show up in the JSON it wrote, never in what it was called with.
+  It 'never puts the url or ref on the jq invocation that writes the ledger row'
+    mkdir -p "$SB/bin"
+    real_jq="$(command -v jq)"
+    cat >"$SB/bin/jq" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >>"\$SHARE_JQ_ARGV_LOG"
+exec "$real_jq" "\$@"
+SH
+    chmod +x "$SB/bin/jq"
+    PATH="$SB/bin:$PATH"
+    SHARE_JQ_ARGV_LOG="$SB/jq-argv.log"; export SHARE_JQ_ARGV_LOG
+    share::ledger_add id1 croc public 'a' 'live-code-phrase-xyz' 'https://x/s/a#v1.SECRETKEY' 0
+    check() {
+      grep -q 'SECRETKEY' "$SHARE_JQ_ARGV_LOG" && return 1
+      grep -q 'live-code-phrase-xyz' "$SHARE_JQ_ARGV_LOG" && return 1
+      grep -q 'SECRETKEY' "$SB/ledger.jsonl" || return 1
+      return 0
+    }
+    When call check
+    The status should be success
+  End
 End

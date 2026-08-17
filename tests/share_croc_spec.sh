@@ -52,11 +52,19 @@ TOML
     The lines of output should equal 11
   End
 
-  It 'builds a live-send argv with the relay, password and a --code phrase, and no store flags'
+  # F5 fix: the relay PASSWORD never rides argv — a self-hosted endpoint's
+  # `pass` used to become a literal `--pass <secret>` token here, and on
+  # Linux (a shared corporate box included) /proc/<pid>/cmdline is
+  # world-readable for the life of the process. share::croc_send now hands
+  # it to croc through CROC_PASS in the child's environment instead (croc's
+  # own flag parser supports it: src/cli/cli.go:149 declares EnvVars:
+  # []string{"CROC_PASS"}); share::croc_argv builds relay/code/paths only.
+  It 'builds a live-send argv with the relay and a --code phrase, and no store flags or --pass'
     When call share::croc_argv lab live '' '' "$SB/Report.pdf"
     The output should include '--relay'
     The output should include 'lab.example.com:9009'
-    The output should include '--pass'
+    The output should not include '--pass'
+    The output should not include 'hunter2'
     The output should not include '--store'
     The output should include "$SB/Report.pdf"
     The output should include '--code'
@@ -83,12 +91,24 @@ TOML
     The status should be success
   End
 
+  # share::croc_pass is the split-out seam F5 introduced: it resolves the
+  # @secret: indirection the same way share::croc_argv used to internally,
+  # but its result never touches an argv — share::croc_send is the only
+  # place it meets the command, via CROC_PASS in the environment.
   It 'resolves a @secret: password from the environment'
     printf '[s]\nrelay = "r:9009"\npass = "@secret:SHARE_TEST_PASS"\nprofiles = ["personal"]\n' \
       >"$SHARE_ENDPOINTS_FILE"
     export SHARE_TEST_PASS=frompass
+    When call share::croc_pass s
+    The output should equal 'frompass'
+  End
+
+  It 'never puts the resolved password on the argv share::croc_argv builds'
+    printf '[s]\nrelay = "r:9009"\npass = "@secret:SHARE_TEST_PASS"\nprofiles = ["personal"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    export SHARE_TEST_PASS=frompass
     When call share::croc_argv s live '' '' "$SB/Report.pdf"
-    The output should include 'frompass'
+    The output should not include 'frompass'
     The output should not include '@secret:'
   End
 
@@ -152,6 +172,34 @@ SH
     The stderr should include 'croc exited 9'
   End
 
+  # F5 fix, end to end: share::croc_send hands the endpoint's relay password
+  # to croc through CROC_PASS in the child's OWN environment, never as a
+  # `--pass` token — this drives the real function (not just
+  # share::croc_argv/share::croc_pass in isolation) against the `lab`
+  # fixture (pass = "hunter2") and inspects both what the fake croc SAW on
+  # its argv and what landed in its environment.
+  It 'passes the relay password to croc via CROC_PASS, never on argv, end to end'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >"$SHARE_CROC_ARGV_LOG"
+printf '%s\n' "$CROC_PASS" >"$SHARE_CROC_ENV_LOG"
+echo "Sending 'Report.pdf' (1 B)"
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    SHARE_CROC_ARGV_LOG="$SB/argv.log"; export SHARE_CROC_ARGV_LOG
+    SHARE_CROC_ENV_LOG="$SB/env.log"; export SHARE_CROC_ENV_LOG
+    share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>/dev/null
+    check() {
+      grep -qxF 'hunter2' "$SHARE_CROC_ENV_LOG" || return 1
+      grep -q 'hunter2' "$SHARE_CROC_ARGV_LOG" && return 1
+      grep -q -- '--pass' "$SHARE_CROC_ARGV_LOG" && return 1
+      return 0
+    }
+    When call check
+    The status should be success
+  End
+
   # --- share::croc_send: the live path's code phrase ----------------------
   # Finding: the ORIGINAL live-mode extraction grepped croc's own printed
   # instruction line for `croc [a-z0-9-]{6,}`. croc prepends --relay/--pass to
@@ -212,5 +260,37 @@ SH
     ledger_is_empty() { [ ! -s "$SHARE_STATE_DIR/ledger.jsonl" ]; }
     When call ledger_is_empty
     The status should be success
+  End
+
+  # --- F7 fix: a live share's ledger row must be revocable-honest ----------
+  # Before this fix a live row recorded backend "croc", ref "" (there is no
+  # store-side id — live mode has no store) and an `expires` computed from
+  # --expiration as if the store would delete it at that time, none of which
+  # is true for a peer-to-peer transfer that just dies when croc exits.
+  # `share revoke` on that row ran `croc --revoke ''`. Tagging the backend
+  # "croc-live" is what lets share::revoke (share.zsh) refuse it up front
+  # with a clear message instead.
+  It 'tags a live share with the croc-live backend, not croc'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+echo "Sending 'Report.pdf' (1 B)"
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    share::croc_send lab live 3d '' "$SB/Report.pdf" >/dev/null 2>/dev/null
+    When call share::ledger_list
+    The output should include '"backend": "croc-live"'
+  End
+
+  It 'records no expires for a live share even when an expiration was passed'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+echo "Sending 'Report.pdf' (1 B)"
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    share::croc_send lab live 3d '' "$SB/Report.pdf" >/dev/null 2>/dev/null
+    When call share::ledger_list
+    The output should include '"expires": 0'
   End
 End

@@ -57,8 +57,17 @@ share::rclone_link_argv() {
     "$dest"
 }
 
+# share::rclone_revoke <dir> — the ledger `ref` is the stamped directory
+# (share::rclone_remote_path's parent), never a single file inside it, even
+# for a single-file send: `rclone deletefile` refuses a directory outright
+# (verified against rclone v1.75.0: "is a directory or doesn't exist", rc=4),
+# which made `share revoke` on a multi-file rclone share a silent no-op — the
+# link stayed live and the objects stayed in OneDrive. `purge` removes the
+# whole stamped directory regardless of how many files it holds, and since
+# the stamp (EPOCHREALTIME-$$) is unique per send, purging it can never touch
+# another share's objects.
 share::rclone_revoke() {
-  rclone deletefile "$1"
+  rclone purge "$1"
 }
 
 # share::rclone_send <endpoint> <path…>
@@ -142,7 +151,12 @@ share::rclone_send() {
   # The link is the final unit: only here does progress ever reach 100.
   share::_progress 100 "link created"
 
+  # The ledger `ref` is the stamped DIRECTORY, not `$target` — `$target` is a
+  # single file for a one-path send, and share::rclone_revoke's `rclone purge`
+  # needs the directory in every case (see the comment there). Recording the
+  # directory here is what makes revoke work uniformly for single- and
+  # multi-file sends alike.
   local id; id="$(share::gen_id)"
-  share::ledger_add "$id" rclone "$endpoint" "$label" "$target" "$url" 0
+  share::ledger_add "$id" rclone "$endpoint" "$label" "$dest_dir" "$url" 0
   share::blurb "$endpoint" web "$label" "$url" 'never' 'unlimited downloads'
 }

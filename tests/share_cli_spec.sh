@@ -76,6 +76,29 @@ SH
     The output should include 'job runner is unavailable'
   End
 
+  # F1 fix: pueue installed but the daemon down used to pass share::jobs_available
+  # (job::_pueue only resolves the binary, never contacts the daemon), so
+  # --background ran `job::start` → `pueue add` against a dead daemon and the
+  # whole send died instead of degrading. This drives it through the REAL CLI
+  # (not a stubbed share::jobs_available like the example above) with a fake
+  # pueue whose `status` fails — the actual probe share::jobs_available now
+  # performs — and asserts the send still completes, in the foreground.
+  It 'falls back to a foreground send when pueue is installed but the daemon is down'
+    cat >"$SB/bin/pueue" <<'SH'
+#!/bin/sh
+case "$1" in
+  status) exit 1 ;;
+  *)      exit 0 ;;
+esac
+SH
+    chmod +x "$SB/bin/pueue"
+    export JOB_PUEUE_BIN="$SB/bin/pueue"
+    When run script "$SHARE_BIN" --background "$SB/Report.pdf"
+    The status should be success
+    The stderr should include 'job runner is unavailable'
+    The output should include 'd.example.com/s/abc'
+  End
+
   It 'fails on an unknown subcommand'
     When run script "$SHARE_BIN" frobnicate
     The status should be failure
@@ -175,5 +198,32 @@ SH
     The status should be success
     The output should include 'queued as job'
     The output should not include 'd.example.com/s/abc'
+  End
+
+  # --- F4 fix: --force needs BOTH the flag AND an interactive confirmation --
+  # naming the host. Implemented at THIS layer (dispatch_send), not inside
+  # share::resolve, because a --background send has no tty inside the job —
+  # the gate has to run before enqueue. `script` (used by every `When run
+  # script` example here) never leaves a real controlling terminal on
+  # stderr, so these exercise the "no tty" refusal for free — no separate
+  # stub needed to prove it.
+  It 'refuses --force on a disallowed endpoint when there is no interactive terminal to confirm on'
+    cat >>"$SHARE_ENDPOINTS_FILE" <<'TOML'
+
+[corp]
+store = "https://corp.example.com"
+profiles = ["work"]
+TOML
+    When run script "$SHARE_BIN" --to corp --force "$SB/Report.pdf"
+    The status should be failure
+    The stderr should include 'interactive terminal'
+    The output should not include 'corp.example.com'
+  End
+
+  It 'sends immediately with --force on an already-allowed endpoint — no confirmation needed'
+    When run script "$SHARE_BIN" --to drop --force "$SB/Report.pdf"
+    The status should be success
+    The output should include 'd.example.com/s/abc'
+    The stderr should include 'sending to d.example.com'
   End
 End

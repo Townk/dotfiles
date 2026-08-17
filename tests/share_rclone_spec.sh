@@ -292,7 +292,13 @@ SH
     The output should include 'NOTICE'
   End
 
-  It 'revokes by deleting the object'
+  # F3 fix: `rclone deletefile` refuses a DIRECTORY outright (verified against
+  # rclone v1.75.0: "is a directory or doesn't exist", rc=4), and the ledger
+  # `ref` for an rclone share is always the stamped directory (see below) —
+  # even for a single-file send. `deletefile` on that ref made `share revoke`
+  # on a multi-file rclone share a silent no-op: the link stayed live and the
+  # objects stayed in OneDrive. `purge` removes the directory regardless.
+  It 'revokes by purging the shared directory'
     cat >"$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
@@ -300,8 +306,71 @@ SH
     chmod +x "$SB/bin/rclone"
     PATH="$SB/bin:$PATH"
     SHARE_RCLONE_CALLS="$SB/calls"; export SHARE_RCLONE_CALLS
-    share::rclone_revoke 'onedrive:Shared/drop/x/Report.pdf'
+    share::rclone_revoke 'onedrive:Shared/drop/x'
     When call cat "$SB/calls"
-    The output should include 'deletefile onedrive:Shared/drop/x/Report.pdf'
+    The output should include 'purge onedrive:Shared/drop/x'
+  End
+
+  # Two examples below drive share::rclone_send end to end (real ledger, real
+  # revoke dispatch) and assert the RECORDED ref — and therefore what
+  # share::revoke eventually purges — is the stamped directory, never a path
+  # that includes any file's basename. This is the regression the bug
+  # report named directly: a multi-file send's ledger `ref` used to be the
+  # directory already, but a SINGLE-file send recorded `$target`
+  # (dest_dir/basename) instead, which is exactly what made `rclone
+  # deletefile` (now `purge`) fail on that case specifically once a
+  # directory-only revoke command was in play.
+  It 'records the shared directory, not a file inside it, as the ledger ref for a single-file send'
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
+done
+exit 0
+SH
+    chmod +x "$SB/bin/rclone"
+    PATH="$SB/bin:$PATH"
+    SHARE_RCLONE_CALLS="$SB/calls"; export SHARE_RCLONE_CALLS
+    do_it() {
+      share::rclone_send onedrive "$SB/Report.pdf" >/dev/null
+      local ref; ref="$(share::ledger_list | jq -r '.[0].ref')"
+      case "$ref" in
+        *Report.pdf*) return 1 ;;
+        *) : ;;
+      esac
+      local id; id="$(share::ledger_list | jq -r '.[0].id')"
+      share::revoke "$id"
+      grep -qxF "purge $ref" "$SHARE_RCLONE_CALLS"
+    }
+    When call do_it
+    The status should be success
+  End
+
+  It 'records the shared directory as the ledger ref for a multi-file send, and revoke purges it'
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'https://corp.example.com/:f:/g/dir\n'; exit 0; fi
+done
+exit 0
+SH
+    chmod +x "$SB/bin/rclone"
+    PATH="$SB/bin:$PATH"
+    SHARE_RCLONE_CALLS="$SB/calls"; export SHARE_RCLONE_CALLS
+    do_it() {
+      share::rclone_send onedrive "$SB/Report.pdf" "$SB/Notes.txt" >/dev/null
+      local ref; ref="$(share::ledger_list | jq -r '.[0].ref')"
+      case "$ref" in
+        *Report.pdf* | *Notes.txt*) return 1 ;;
+        *) : ;;
+      esac
+      local id; id="$(share::ledger_list | jq -r '.[0].id')"
+      share::revoke "$id"
+      grep -qxF "purge $ref" "$SHARE_RCLONE_CALLS"
+    }
+    When call do_it
+    The status should be success
   End
 End

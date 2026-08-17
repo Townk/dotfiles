@@ -104,7 +104,36 @@ SH
     SHARE_CALLS="$SB/calls"; export SHARE_CALLS
     share::revoke rid
     When call cat "$SB/calls"
-    The output should include 'deletefile onedrive:Shared/drop/x/R'
+    The output should include 'purge onedrive:Shared/drop/x/R'
+  End
+
+  # F7 fix: a live-mode croc row is tagged with the distinct backend
+  # "croc-live" and an empty ref (there is no store-side id to revoke — the
+  # transfer just dies when croc exits). share::revoke must refuse it with a
+  # clear message rather than ever calling `croc --revoke ''`, and must leave
+  # the receipt in place so `share list` keeps rendering it honestly.
+  It 'refuses to revoke a live croc share, with a clear message, and keeps the receipt'
+    SHARE_PROFILE=personal
+    share::ledger_add rid croc-live drop 'R' '' '8878-salary-courage-roger' 0
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+printf 'called\n' >>"$SHARE_CALLS"
+SH
+    chmod +x "$SB/bin/croc"
+    SHARE_CALLS="$SB/calls"; export SHARE_CALLS
+    When run share::revoke rid
+    The status should be failure
+    The stderr should include 'live transfer'
+    The path "$SB/calls" should not be exist
+  End
+
+  It 'still lists a live croc share after a refused revoke'
+    SHARE_PROFILE=personal
+    share::ledger_add rid croc-live drop 'R' '' '8878-salary-courage-roger' 0
+    share::revoke rid 2>/dev/null || :
+    When call share::ledger_get rid
+    The status should be success
+    The output should include '"backend": "croc-live"'
   End
 
   It 'drops the receipt after a successful revoke'

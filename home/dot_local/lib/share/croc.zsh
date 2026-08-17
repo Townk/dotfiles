@@ -56,8 +56,27 @@ share::_code_phrase() {
   printf '%s\n' "$out"
 }
 
+# share::croc_pass <endpoint> — the endpoint's resolved relay password (after
+# @secret: indirection), or empty. Split out of share::croc_argv so the value
+# never has to touch argv to be usable: share::croc_send reads it through
+# THIS function and hands it to the child via CROC_PASS in the environment
+# (croc's own flag parser supports it — src/cli/cli.go:149 declares
+# `&cli.StringFlag{Name: "pass", ..., EnvVars: []string{"CROC_PASS"}}`),
+# never as a `--pass` token.
+share::croc_pass() {
+  local endpoint="${1:?share::croc_pass: endpoint required}"
+  share::_secret "$(share::field "$endpoint" pass)"
+}
+
 # share::croc_argv <endpoint> <mode> <expiration> <downloads> <path…>
 #   mode: store | live
+#
+# Builds argv only — never the relay password. `--pass <secret>` on a
+# command line is visible to every other process on the box for the life of
+# this one (on Linux, a shared corporate box included, /proc/<pid>/cmdline is
+# world-readable); share::croc_pass is the seam that keeps it out, and
+# share::croc_send is the only place the value and the command ever meet,
+# via CROC_PASS in the environment of that one invocation.
 #
 # The accumulator below is named `cmd`, NOT `argv`. In zsh, `argv` is not an
 # ordinary identifier — it is a built-in SYNONYM for the positional parameters
@@ -70,14 +89,12 @@ share::_code_phrase() {
 share::croc_argv() {
   local endpoint="$1" mode="$2" expiration="$3" downloads="$4"
   shift 4
-  local store relay pass
+  local store relay
   store="$(share::field "$endpoint" store)" || return 1
   relay="$(share::field "$endpoint" relay)"
-  pass="$(share::_secret "$(share::field "$endpoint" pass)")"
 
   local -a cmd=(croc)
   [[ -n "$relay" ]] && cmd+=(--relay "$relay")
-  [[ -n "$pass" ]] && cmd+=(--pass "$pass")
   cmd+=(--yes send)
   if [[ "$mode" == store ]]; then
     cmd+=(--store)
@@ -155,9 +172,17 @@ share::croc_send() {
   local label
   label="$(share::label "$@")" || return 1
 
+  # The relay password, resolved here and handed to croc through CROC_PASS in
+  # the environment of THIS ONE invocation (a prefix assignment, not an
+  # export) — never appended to `cmd`, which is what keeps it off argv. Same
+  # scoping idiom as SHARE_FORCE in the CLI's run_send: the assignment is
+  # visible to the child process and gone again the moment this command
+  # returns.
+  local pass; pass="$(share::croc_pass "$endpoint")"
+
   local tmp out rc
   tmp="$(common::tmpfile)" || return 1
-  "${cmd[@]}" 2>&1 | tee "$tmp" >&2
+  CROC_PASS="$pass" "${cmd[@]}" 2>&1 | tee "$tmp" >&2
   rc=${pipestatus[1]}
   out="$(<"$tmp")"
   rm -f -- "$tmp"
@@ -205,8 +230,25 @@ share::croc_send() {
 
   local id expires_epoch=0
   id="$(share::gen_id)"
-  [[ -n "$expiration" ]] && expires_epoch=$(( EPOCHSECONDS + $(share::_duration_seconds "$expiration") ))
-  share::ledger_add "$id" croc "$endpoint" "$label" "$ref" "$value" "$expires_epoch"
+  # `expires` means "the store will delete this at T" — a promise store mode
+  # can make and live mode cannot: a live transfer has no store, it just dies
+  # the moment croc exits, so computing an expires_epoch from --expiration
+  # for it would record a real-looking deadline for something that was never
+  # actually scheduled to end there. Only the store branch computes one.
+  local ledger_backend=croc
+  if [[ "$mode" == live ]]; then
+    ledger_backend=croc-live
+  else
+    [[ -n "$expiration" ]] && expires_epoch=$(( EPOCHSECONDS + $(share::_duration_seconds "$expiration") ))
+  fi
+  # Live rows are tagged with the distinct backend "croc-live", not "croc":
+  # a live transfer has no store-side id to revoke — `ref` is empty by
+  # construction above — so `share revoke` on a plain "croc" row would call
+  # `croc --revoke ''`, which is neither a real revoke nor an honest error.
+  # Tagging the backend is what lets share::revoke refuse it up front with a
+  # clear message (see share.zsh) and lets `share list` render it as what it
+  # is instead of a store link that can be revoked.
+  share::ledger_add "$id" "$ledger_backend" "$endpoint" "$label" "$ref" "$value" "$expires_epoch"
 
   share::blurb "$endpoint" "$kind" "$label" "$value" \
     "$(share::_expires_human "$expires_epoch")" "${downloads:-1} download(s)"
