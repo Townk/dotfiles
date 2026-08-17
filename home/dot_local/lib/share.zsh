@@ -115,3 +115,82 @@ share::field() {
   fi
   printf '%s\n' "$value"
 }
+
+# --- endpoint resolution + the policy fence ---------------------------------
+# The endpoint is NEVER implicit. Two mechanisms enforce that: `profiles` is an
+# allowlist checked on every resolution, and share::destination_host feeds the
+# pre-send echo so the human sees the HOST (not the nickname they misremember)
+# before a byte leaves.
+
+# share::default_endpoint — the endpoint whose default_for claims this profile.
+#
+# A MANIFEST claim beats the built-in. jq's `*` merge puts built-in keys first,
+# so a naive `to_entries | .[0]` would always find `public` (which claims
+# `personal`) ahead of a local endpoint claiming the same profile — silently
+# defaulting to getcroc.com on a machine that declared its own default. That is
+# precisely the "endpoint is never implicit" failure the policy fence exists to
+# prevent, so the manifest is scanned first and the built-in is the fallback.
+share::default_endpoint() {
+  local profile match
+  profile="$(share::profile)"
+
+  local manifest='{}'
+  if [[ -f "$SHARE_ENDPOINTS_FILE" ]]; then
+    manifest="$(yq -p toml -o json '.' "$SHARE_ENDPOINTS_FILE" 2>/dev/null)" || manifest='{}'
+  fi
+  match="$(jq -rn --argjson m "$manifest" --arg p "$profile" '
+    $m | to_entries
+    | map(select(((.value.default_for // []) | index($p)) != null))
+    | if length > 0 then .[0].key else "" end')"
+  if [[ -n "$match" ]]; then
+    printf '%s\n' "$match"
+    return 0
+  fi
+
+  printf '%s\n' "$(jq -rn --argjson b "$SHARE_BUILTIN_JSON" --arg p "$profile" '
+    $b | to_entries
+    | map(select(((.value.default_for // []) | index($p)) != null))
+    | if length > 0 then .[0].key else "public" end')"
+}
+
+share::allowed() {
+  local name="${1:?share::allowed: endpoint required}" profile
+  profile="$(share::profile)"
+  local allowed
+  allowed="$(share::field "$name" profiles)" || return 1
+  [[ -n "$allowed" ]] || return 0        # no allowlist declared = open
+  printf '%s\n' "$allowed" | grep -qxF "$profile"
+}
+
+# share::resolve [<name>] — the one place an endpoint name is decided.
+share::resolve() {
+  local name="${1-}" profile
+  profile="$(share::profile)"
+  [[ -n "$name" ]] || name="$(share::default_endpoint)"
+  share::field "$name" store >/dev/null 2>&1 \
+    || share::field "$name" remote >/dev/null 2>&1 \
+    || { log_error "share: unknown endpoint: $name"; return 1; }
+  if ! share::allowed "$name"; then
+    if [[ -n "${SHARE_FORCE:-}" ]]; then
+      log_warn "share: policy override — $name is not allowed on profile $profile"
+    else
+      log_error "share: endpoint $name is not allowed on profile $profile"
+      log_error "share: pass --to <endpoint> for an allowed one, or --force to override"
+      return 1
+    fi
+  fi
+  printf '%s\n' "$name"
+}
+
+# share::destination_host <endpoint> — what the pre-send echo names. The host of
+# the store origin, or the rclone remote when there is no origin.
+share::destination_host() {
+  local name="${1:?share::destination_host: endpoint required}" store remote
+  store="$(share::field "$name" store)" || return 1
+  if [[ -n "$store" ]]; then
+    printf '%s\n' "${${store#*://}%%/*}"
+    return 0
+  fi
+  remote="$(share::field "$name" remote)"
+  printf '%s\n' "$remote"
+}
