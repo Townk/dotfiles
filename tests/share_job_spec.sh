@@ -31,6 +31,18 @@ SH
     chmod +x "$SB/fakepueue"
     JOB_PUEUE_BIN="$SB/fakepueue"
     SHARE_PUEUE_CALLS="$SB/pueue-calls"; export SHARE_PUEUE_CALLS
+    # job::start unconditionally calls job::_statusbar_sync, which resolves
+    # ${JOB_TMUX_BIN:-tmux} and runs `refresh-client -S` against the DEFAULT
+    # socket — same house rule as tests/job_spec.sh and
+    # tests/job_callback_spec.sh: a test must never touch the live server.
+    # Left unset here, every share::send_background call in this block
+    # repaints this dev shell's real, attached tmux status bar.
+    cat >"$SB/bin/tmux" <<'SH'
+#!/bin/sh
+exit 0
+SH
+    chmod +x "$SB/bin/tmux"
+    JOB_TMUX_BIN="$SB/bin/tmux"
   }
   BeforeEach 'setup'
 
@@ -61,9 +73,20 @@ SH
     The output should include 'group add share'
   End
 
+  # job::start never passes --title to `pueue add` — the title lands only in
+  # meta.json (pueue's own argv is --group/--label/--print-task-id -- the
+  # cmdline). Asserting against pueue-calls would pass even if
+  # share::send_background dropped --title entirely, since "Report.pdf" is
+  # in that log anyway as the file being shared — so read meta.json's own
+  # .title field, keyed off the id share::send_background prints.
+  job_meta_title() {
+    local id
+    id="$(share::send_background "$SB/Report.pdf")" || return 1
+    jq -r '.title' "$JOB_STATE_ROOT/$id/meta.json"
+  }
+
   It 'titles the job with the file label so the completion toast is readable'
-    share::send_background "$SB/Report.pdf" >/dev/null
-    When call cat "$SB/pueue-calls"
+    When call job_meta_title
     The output should include 'Report.pdf'
   End
 
