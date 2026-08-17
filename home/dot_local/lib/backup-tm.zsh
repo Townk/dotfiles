@@ -968,7 +968,11 @@ bkp::tm::lens_cmd() {
     # CLI, which `troupe frame` matches flag for flag) → troupe on
     # PATH/known Go paths → the legacy libexec binary until every box has
     # the troupe pin.
-    local -a framecmd=()
+    # local -a wrap MUST be declared here (not just assigned in the branch
+    # below): without it, the no-frame path leaves `wrap` to the sourcing
+    # context, and an empty SCALAR wrap expands "${wrap[@]}" to ONE empty
+    # word — a phantom blank line in the printed argv (spec regression).
+    local -a wrap=() framecmd=()
     if [[ -n "${BKP_TM_PTYFRAME_BIN:-}" ]]; then
       [[ -x "$BKP_TM_PTYFRAME_BIN" ]] && framecmd=("$BKP_TM_PTYFRAME_BIN")
     else
@@ -1165,16 +1169,18 @@ bkp::tm::launch() {
       # (the timeline-to-be); the lens gets everything except the timeline's
       # width and the divider column.
       #
-      # 22, not the nominal 21: the zellij loop below stops as soon as the
-      # timeline is <= 22, so that is the width it has been delivering all
-      # along — and the footer hint line needs every one of those columns
-      # under tmux, where the nerd-font key glyphs measure 2 cells. At 21 it
-      # wraps and spills past the pane edge (Mode B find, 2026-07-26).
+      # 24 usable columns for the timeline (user ruling, tm --diff Mode B
+      # 2026-08-17: "+2" over the 22 the zellij loop's <=22 stop had been
+      # delivering): the footer hint line needs the room under tmux, where
+      # the nerd-font key glyphs measure 2 cells — at 21 it wrapped and
+      # spilled past the pane edge (Mode B find, 2026-07-26). The lens gets
+      # everything except the timeline's 24 and the divider column, so the
+      # constant is 25 (24 + the border column tmux spends between panes).
       local -a _split=(right --name "tm lens" --close-on-exit)
       if [[ "$(mux::backend)" == tmux && -t 0 ]]; then
         local _here
         _here=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
-        [[ -n "$_here" ]] && (( _here > 25 )) && _split+=(--size $(( _here - 23 )))
+        [[ -n "$_here" ]] && (( _here > 27 )) && _split+=(--size $(( _here - 25 )))
       fi
       mux::split "${_split[@]}" -- "$BKP_TM_BIN" lens "$s" >/dev/null ||
         { [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"; rm -rf "$s"; return 1 }
