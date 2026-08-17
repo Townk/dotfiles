@@ -348,3 +348,76 @@ share::revoke() {
   esac
   share::ledger_remove "$id"
 }
+
+# --- receive ----------------------------------------------------------------
+# croc refuses a stored link on argv (src/cli/cli.go:712): the decryption key
+# would be visible in `ps`. A wrapper that accepts it on OUR argv reintroduces
+# the same leak, so the precedence is clipboard → stdin → argv-with-consent, and
+# the value always reaches croc through CROC_STORE_TOKEN in the environment.
+#
+# A code phrase is exempt: single-use, worthless once consumed. Upstream draws
+# the same line.
+
+SHARE_DEFAULT_OUT="${SHARE_DEFAULT_OUT:-$HOME/Downloads}"
+
+share::classify() {
+  # `##` and `(#i)` are extendedglob constructs and the option is off by
+  # default. Scope it to this function rather than setting it at file level —
+  # a file-scope setopt in a sourced lib leaks into every caller.
+  setopt localoptions extendedglob
+  local value="${1-}"
+  if [[ "$value" == croc-store-v1.* ]] \
+    || [[ "$value" == (#i)http(s|)://*/s/*\#v1.* ]]; then
+    printf 'stored\n'
+  elif [[ "$value" == [a-z0-9]##(-[a-z0-9]##)## ]]; then
+    printf 'code\n'
+  else
+    printf 'unknown\n'
+  fi
+}
+
+# share::get [--out DIR] [--allow-argv] [<value>|-]
+share::get() {
+  setopt localoptions extendedglob     # the trim below uses `##`
+  local out="$SHARE_DEFAULT_OUT" allow_argv=0 value="" from_argv=0
+  while (( $# )); do
+    case "$1" in
+      --out)         [[ $# -ge 2 ]] || die "share get: --out requires a directory"
+                     out="$2"; shift 2 ;;
+      --allow-argv)  allow_argv=1; shift ;;
+      --)            shift; break ;;
+      -)             value="$(cat)"; shift ;;
+      -*)            die "share get: unknown option: $1" ;;
+      *)             value="$1"; from_argv=1; shift ;;
+    esac
+  done
+
+  if [[ -z "$value" ]]; then
+    command -v pbpaste >/dev/null 2>&1 || die "share get: no value given and pbpaste is unavailable"
+    value="$(pbpaste 2>/dev/null)"
+    from_argv=0
+  fi
+  value="${${value##[[:space:]]##}%%[[:space:]]##}"
+
+  local kind; kind="$(share::classify "$value")"
+  case "$kind" in
+    unknown)
+      log_error "share get: no croc share found in the input"
+      return 1
+      ;;
+    stored)
+      if (( from_argv && ! allow_argv )); then
+        log_error "share get: a stored link on the command line would expose its"
+        log_error "share get: decryption key in the process list. Pipe it in, copy it"
+        log_error "share get: to the clipboard, or pass --allow-argv to accept the risk."
+        return 1
+      fi
+      mkdir -p -- "$out"
+      CROC_STORE_TOKEN="$value" croc --yes --out "$out"
+      ;;
+    code)
+      mkdir -p -- "$out"
+      croc --yes --out "$out" "$value"
+      ;;
+  esac
+}
