@@ -35,6 +35,10 @@ default_for = ["work"]
 TOML
   }
 
+  write_malformed_manifest() {
+    printf 'this is not valid toml [[[\n' >"$SHARE_ENDPOINTS_FILE"
+  }
+
   It 'exposes the built-in public endpoint with no manifest at all'
     When call share::field public store
     The output should equal 'https://getcroc.com'
@@ -72,6 +76,12 @@ TOML
     The output should equal 'anonymous'
   End
 
+  It 'honours the caller default for a missing backend, same as any other key'
+    write_manifest
+    When call share::field drop backend rclone
+    The output should equal 'rclone'
+  End
+
   It 'treats progress reporting as a no-op outside a job'
     unset JOB_ID
     When call share::_progress 42 'uploading'
@@ -83,5 +93,20 @@ TOML
     When run share::field nope store
     The status should be failure
     The stderr should include 'unknown endpoint'
+  End
+
+  It 'fails share::endpoint_names on a malformed manifest, naming the parse failure'
+    write_malformed_manifest
+    When run share::endpoint_names
+    The status should be failure
+    The stderr should include 'cannot parse'
+  End
+
+  It 'fails share::field on a malformed manifest without masking it as unknown endpoint'
+    write_malformed_manifest
+    When run share::field drop store
+    The status should be failure
+    The stderr should include 'cannot parse'
+    The stderr should not include 'unknown endpoint'
   End
 End

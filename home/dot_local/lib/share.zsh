@@ -50,18 +50,29 @@ share::profile() {
 # share::endpoints_json — every endpoint as one JSON object. Manifest entries
 # win over the built-in, so `public` can be redefined locally.
 # `yq -p toml -o json` is the house TOML idiom (cf. svc::toml_json).
+#
+# Returns 1 (after logging) on a malformed manifest rather than calling `die`:
+# every call site here runs inside a pipe or `$(...)`, both subshells in zsh,
+# so `exit 1` would only kill the subshell and the caller would see success
+# with empty/partial output. Callers must capture into a variable and check
+# the status before piping onward — see share::endpoint_names and
+# share::field below.
 share::endpoints_json() {
   local manifest='{}'
   if [[ -f "$SHARE_ENDPOINTS_FILE" ]]; then
-    manifest="$(yq -p toml -o json '.' "$SHARE_ENDPOINTS_FILE" 2>/dev/null)" \
-      || die "share: cannot parse $SHARE_ENDPOINTS_FILE"
+    manifest="$(yq -p toml -o json '.' "$SHARE_ENDPOINTS_FILE" 2>/dev/null)" || {
+      log_error "share: cannot parse $SHARE_ENDPOINTS_FILE"
+      return 1
+    }
   fi
   jq -n --argjson builtin "$SHARE_BUILTIN_JSON" --argjson manifest "$manifest" \
     '$builtin * $manifest'
 }
 
 share::endpoint_names() {
-  share::endpoints_json | jq -r 'keys[]'
+  local json
+  json="$(share::endpoints_json)" || return 1
+  printf '%s' "$json" | jq -r 'keys[]'
 }
 
 # share::_progress <pct> <msg> — progress reporting that is safe everywhere.
@@ -76,13 +87,20 @@ share::_progress() {
 }
 
 # share::field <endpoint> <key> [default] — one scalar. Arrays come back as a
-# newline-joined list so callers can iterate without a second jq.
+# newline-joined list so callers can iterate without a second jq. A missing key
+# always yields the caller's [default] — uniformly, for every key including
+# `backend`. (The built-in `public` endpoint still carries an explicit
+# "backend": "croc" in SHARE_BUILTIN_JSON; callers that want croc as the
+# fallback for endpoints that omit it pass it explicitly, e.g.
+# `share::field "$endpoint" backend croc`.)
 share::field() {
   local name="${1:?share::field: endpoint required}"
   local key="${2:?share::field: key required}"
   local fallback="${3-}"
+  local endpoints
+  endpoints="$(share::endpoints_json)" || return 1
   local json
-  json="$(share::endpoints_json | jq -e --arg n "$name" '.[$n]' 2>/dev/null)" || {
+  json="$(printf '%s' "$endpoints" | jq -e --arg n "$name" '.[$n]' 2>/dev/null)" || {
     log_error "share: unknown endpoint: $name"
     return 1
   }
@@ -92,12 +110,7 @@ share::field() {
     elif (.[$k] | type) == "array" then (.[$k] | join("\n"))
     else (.[$k] | tostring) end')"
   if [[ "$value" == $'\0' ]]; then
-    # backend defaults to croc; every other missing key uses the caller's default
-    if [[ "$key" == backend ]]; then
-      printf 'croc\n'
-    else
-      printf '%s\n' "$fallback"
-    fi
+    printf '%s\n' "$fallback"
     return 0
   fi
   printf '%s\n' "$value"
