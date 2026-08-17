@@ -39,15 +39,32 @@ detect_terminal() {
     # local-VNC toggle failed on a server instance born from an ssh
     # login). The attached client's termname is the attach-time truth,
     # exactly the canonicalization peer_terminal() already trusts.
-    local ct=""
+    #
+    # The termname alone cannot name WezTerm, though: its default TERM is
+    # plain xterm-256color (Ghostty's xterm-ghostty embeds the name; live
+    # find 2026-08-17, Alt+Enter failing in WezTerm). The SESSION env's
+    # TERM_PROGRAM is the other attach-time truth — update-environment
+    # carries it on every attach, and only tmux's stamp on our own process
+    # env hides it — so when the termname says nothing, ask the server for
+    # it. Termname first: it is live per-client state, where the session
+    # env is only as fresh as the last attach.
+    local ct="" sp=""
     if [[ -n "${TMUX:-}" ]]; then
       local tmux_bin="${MUX_TMUX_BIN:-tmux}"
       ct="$("$tmux_bin" display -p '#{client_termname}' 2>/dev/null)" || ct=""
+      sp="$("$tmux_bin" show-environment TERM_PROGRAM 2>/dev/null)" || sp=""
+      sp="${sp#TERM_PROGRAM=}"
     fi
     case "${ct:l}" in
       *ghostty*) print "ghostty" ;;
       *wezterm*) print "wezterm" ;;
-      *) print "unknown" ;;
+      *)
+        case "${sp:l}" in
+          ghostty) print "ghostty" ;;
+          wezterm) print "wezterm" ;;
+          *) print "unknown" ;;
+        esac
+        ;;
     esac
   fi
 }
