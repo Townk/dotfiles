@@ -17,6 +17,7 @@ __SHARE_ZSH_LOADED=1
 SHARE_LIB_SELF_DIR="${${(%):-%x}:A:h}"
 
 source "$SHARE_LIB_SELF_DIR/common.zsh"
+source "$SHARE_LIB_SELF_DIR/share/blurb.zsh"
 
 : "${SHARE_CONFIG_DIR:=${XDG_CONFIG_HOME:-$HOME/.config}/share}"
 : "${SHARE_ENDPOINTS_FILE:=$SHARE_CONFIG_DIR/endpoints.toml}"
