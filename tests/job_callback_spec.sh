@@ -36,10 +36,12 @@ EOF
     chmod +x "$CB_SANDBOX/tmux"
     export CB_SANDBOX_TMUX_LOG="$CB_SANDBOX/tmux.log"
     export JOB_TMUX_BIN="$CB_SANDBOX/tmux"
-    # History lands in the sandbox too (notify's phase-3 append).
+    export NOTIFY_TMUX_BIN="$CB_SANDBOX/tmux"
+    # History + the unacked ledger land in the sandbox too.
     export NOTIFY_HISTORY_FILE="$CB_SANDBOX/history.jsonl"
+    export NOTIFY_UNACKED_FILE="$CB_SANDBOX/unacked"
   }
-  cleanup() { rm -rf "$CB_SANDBOX"; unset JOB_TMUX_BIN NOTIFY_HISTORY_FILE CB_SANDBOX_TMUX_LOG; }
+  cleanup() { rm -rf "$CB_SANDBOX"; unset JOB_TMUX_BIN NOTIFY_TMUX_BIN NOTIFY_HISTORY_FILE NOTIFY_UNACKED_FILE CB_SANDBOX_TMUX_LOG; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -134,41 +136,41 @@ EOF
     The output should equal 'swept|kept'
   End
 
-  # phase 3 (spec §8): the unseen-failures ledger + the statusbar resync.
-  Describe 'the @jobs statusbar side'
-    It 'a Failed result appends one ledger line and resyncs the badge'
-      failed_ledger() {
+  # phase 3 UI rev: a failure is an ACK-ABLE toast — notify --ack feeds
+  # the unacked ledger (the bar's bell element); the callback itself only
+  # forces repaints at transitions.
+  Describe 'the acknowledgable-failure side'
+    It 'a Failed result appends to the unacked ledger with ack:true history'
+      failed_ack() {
         seed >/dev/null || return 1
         zsh -f "$CALLBACK" 7 "Failed" 2 || return 2
         printf '%s|%s' \
-          "$(wc -l < "$JOB_STATE_ROOT/.failed-unseen" | tr -d ' ')" \
-          "$(grep -cF 'set -g @jobs' "$CB_SANDBOX/tmux.log")"
+          "$(wc -l < "$NOTIFY_UNACKED_FILE" | tr -d ' ')" \
+          "$(tail -n 1 "$NOTIFY_HISTORY_FILE" | jq -r '.ack')"
       }
-      When call failed_ledger
-      # 2 syncs: one from the seed's job::start, one from the callback.
-      The output should equal '1|2'
+      When call failed_ack
+      The output should equal '1|true'
     End
 
-    It 'Success and Killed leave the ledger untouched but still resync'
+    It 'Success and Killed stay non-acknowledgable'
       clean_results() {
         seed >/dev/null || return 1
         zsh -f "$CALLBACK" 7 "Success" 0 || return 2
         seed >/dev/null || return 3
         zsh -f "$CALLBACK" 7 "Killed" "" || return 4
         printf '%s|%s' \
-          "$([ -e "$JOB_STATE_ROOT/.failed-unseen" ] && echo present || echo absent)" \
-          "$(grep -cF 'set -g @jobs' "$CB_SANDBOX/tmux.log")"
+          "$([ -e "$NOTIFY_UNACKED_FILE" ] && echo present || echo absent)" \
+          "$(jq -rs 'map(.ack) | unique | join(",")' "$NOTIFY_HISTORY_FILE")"
       }
       When call clean_results
-      # 4 syncs: two seeds' job::start + two callbacks.
-      The output should equal 'absent|4'
+      The output should equal 'absent|false'
     End
 
     It 'the failure toast carries the job meta into the history'
       failed_history() {
         seed >/dev/null || return 1
         zsh -f "$CALLBACK" 7 "Failed" 2 || return 2
-        tail -n 1 "$NOTIFY_HISTORY_FILE" | jq -r '[.kind, .meta.pueue_id, .meta.result] | join("|")'
+        tail -n 1 "$NOTIFY_HISTORY_FILE" | jq -r '[.kind, (.meta.pueue_id|tostring), .meta.result] | join("|")'
       }
       When call failed_history
       The output should equal 'job|7|Failed'

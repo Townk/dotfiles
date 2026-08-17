@@ -80,11 +80,6 @@ search_count="${12:-}"
 search_partial="${13:-0}"
 search_idx="${14:-}"
 client_term="${15:-}"
-# The @jobs data ("<running> <failed>", empty = no live jobs) arrives as an
-# ARGUMENT for the same reason the mode stack does: tmux re-runs the #()
-# the moment the format-expanded value changes, so job starts/finishes
-# repaint immediately instead of waiting out the status-interval tick.
-jobs_raw="${16-$("$TMUX_BIN" show -gv @jobs 2>/dev/null)}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
@@ -93,12 +88,12 @@ c=("${(@f)$(jq -r '
   .roles.mode.locked, .roles.mode.resize, .roles.mode.pane, .roles.mode.tab,
   .roles.mode.move, .roles.mode.scroll, .roles.mode.session, .roles.mode.tmux,
   .roles.mode.rename, .roles.mode.search, .roles.mode.visual, .palette.white,
-  .palette.red
+  .palette.red, .palette.yellow
 ' "$THEME_JSON" 2>/dev/null)}") || c=()
-(( ${#c} == 16 )) || exit 0
+(( ${#c} == 17 )) || exit 0
 bar_bg="${c[1]}" fg_hi="${c[2]}" tab_bg="${c[3]}"
 m_locked="${c[4]}" m_resize="${c[5]}" m_pane="${c[6]}" m_tab="${c[7]}"
-m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}" m_rename="${c[12]}" m_search="${c[13]}" m_visual="${c[14]}" c_white="${c[15]}" c_red="${c[16]}"
+m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}" m_rename="${c[12]}" m_search="${c[13]}" m_visual="${c[14]}" c_white="${c[15]}" c_red="${c[16]}" c_yellow="${c[17]}"
 
 # ---- color math -----------------------------------------------------------
 # The per-channel hex split is theme::hex_rgb (C1) — "#rrggbb" -> "R G B";
@@ -249,6 +244,9 @@ I_ALT=$'\U000F0635' I_ESC=$'\U000F12B7'
 I_CLOCK=$'\U000F00F0'
 I_WIFI_ON=$'\U000F05A9' I_WIFI_OFF=$'\U000F092E'
 I_HOST=$'\U000F048D'
+# phase 3 UI rev (user mock): the jobs tally and the acknowledgable bell
+I_JOBS=$'\uF0AE'
+I_BELL=$'\uF0F3'
 I_BATT=( $'\U000F008E' $'\U000F12A1' $'\U000F12A2' $'\U000F12A3' )
 
 # ---- mode resolution -------------------------------------------------------
@@ -360,12 +358,21 @@ fi
 # the whole group was simply suppressed for remote clients.
 show_sys=0
 show_clock=0
+show_host=0
 if (( is_fullscreen )); then
   cw="$("$TMUX_BIN" display -p '#{client_width}' 2>/dev/null)" || cw=""
   [[ "$cw" == <-> ]] || cw=999
   if (( cw >= 100 )); then
     show_clock=1
-    (( is_ssh )) || show_sys=1
+    if (( is_ssh )); then
+      # Remote + fullscreen: the host pill says WHICH machine owns the
+      # screen you just gave everything to (user ruling, Mode B
+      # 2026-08-17: the alias rides the fullscreen group's rule, never
+      # ambient — a windowed remote session shows no host pill).
+      show_host=1
+    else
+      show_sys=1
+    fi
   fi
 fi
 
@@ -436,20 +443,57 @@ if [[ -n "$sess" && "${(L)sess}" != main ]]; then
   bodies+=("$I_SESSION ${(j: :)${(C)words}}"); kinds+=(session)
 fi
 
-# The @jobs segment (phase 3, job-runner spec §8): N▶ running, M✗ unseen
-# failures — the dashboard's promised "dismissed but still running"
-# affordance. Data only in the option; presentation lives here. Hidden
-# entirely when the option is empty (no live jobs, nothing unseen).
-if [[ "$jobs_raw" == <->" "<-> ]]; then
-  jobs_running="${jobs_raw%% *}"
-  jobs_failed="${jobs_raw##* }"
-  jobs_body=""
-  (( jobs_running > 0 )) && jobs_body="${jobs_running}▶"
-  if (( jobs_failed > 0 )); then
-    [[ -n "$jobs_body" ]] && jobs_body+="  "
-    jobs_body+="@JF@${jobs_failed}✗"
+# The jobs element (phase 3 UI rev, user mock: " 2 (20.3%)"): running
+# count + aggregate percent across ALL running jobs, computed from the
+# job-runner state dir on every repaint — writers only force repaints at
+# transitions, the status-interval tick keeps the percent moving. Hidden
+# entirely when nothing runs. A result-less dir older than a day is a
+# daemon-death ghost (the callback sweep's business, not the bar's). The
+# percent is the mean over running jobs whose sidecar carries a real pct
+# (indeterminate/-1 and no-progress jobs are excluded); no known pct at
+# all → count only, no parens. Formatting follows the dashboard's decision
+# (b): integer percents drop the decimal, others keep one.
+jobs_state="${JOB_STATE_ROOT:-$HOME/.local/state/jobs}"
+jobs_running=0
+jobs_pct_sum=0.0
+jobs_pct_n=0
+for _jd in "$jobs_state"/*(N/); do
+  [[ -f "$_jd/meta.json" ]] || continue
+  [[ -e "$_jd/result" ]] && continue
+  _fresh=("$_jd"/meta.json(N.md-1))
+  (( ${#_fresh} )) || continue
+  (( jobs_running += 1 ))
+  if [[ -f "$_jd/progress" ]]; then
+    _pline="$(<"$_jd/progress")"
+    _pct="${${(s: :)_pline}[2]:-}"
+    if [[ "$_pct" == (<->|<->.<->) ]] && (( _pct >= 0 )); then
+      (( jobs_pct_sum += _pct, jobs_pct_n += 1 ))
+    fi
   fi
-  [[ -n "$jobs_body" ]] && { bodies+=("$jobs_body"); kinds+=(jobs); }
+done
+if (( jobs_running > 0 )); then
+  jobs_body="${I_JOBS} ${jobs_running}"
+  if (( jobs_pct_n > 0 )); then
+    _avg=$(( jobs_pct_sum / jobs_pct_n ))
+    # decision (b) formatting without zsh/mathfunc: round to one decimal,
+    # then drop a trailing .0 (20.04 -> "20", 20.34 -> "20.3").
+    _avg_fmt="$(printf '%.1f' "$_avg")"
+    _avg_fmt="${_avg_fmt%.0}"
+    jobs_body+=" (${_avg_fmt}%)"
+  fi
+  bodies+=("$jobs_body"); kinds+=(jobs)
+fi
+
+# The notification bell (phase 3 UI rev, user mock: " 1"): unacknowledged
+# ack-able toasts, counted off the unacked ledger notify --ack appends to;
+# opening pick-notifications truncates it (opening IS the acknowledgment).
+# Hidden at zero.
+unacked_file="${NOTIFY_UNACKED_FILE:-$HOME/.local/state/notify/unacked}"
+unacked=0
+[[ -s "$unacked_file" ]] && unacked="$(wc -l < "$unacked_file" | tr -d ' ')"
+[[ "$unacked" == <-> ]] || unacked=0
+if (( unacked > 0 )); then
+  bodies+=("${I_BELL} ${unacked}"); kinds+=(nbell)
 fi
 
 typeset -a w
@@ -473,7 +517,7 @@ if (( show_sys )); then
   wifi="$("$NETWORKSETUP" -getairportpower en0 2>/dev/null)" || wifi=""
   if [[ "${(L)wifi}" == *": on"* ]]; then w+=("$I_WIFI_ON"); else w+=("$I_WIFI_OFF"); fi
 fi
-if (( is_ssh )); then
+if (( show_host )); then
   h=""
   [[ -r "$HOST_ALIAS" ]] && h="$(<"$HOST_ALIAS")"
   [[ -n "$h" ]] || h="$(hostname -s 2>/dev/null)" || h=""
@@ -532,10 +576,11 @@ for (( i = 1; i <= n; i++ )); do
     done
     out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg}]${seg}"
   elif [[ "${kinds[i]}" == jobs ]]; then
-    # the failure half pops red (the badge is the alarm); running count
-    # keeps the segment's auto-contrast fg
-    seg="${bodies[i]/@JF@/#[fg=${c_red}]}"
-    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${fg}] ${seg}#[fg=${fg}] "
+    # the task-runner element paints yellow (user ruling, Mode B 2026-08-17)
+    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${c_yellow}] ${body} "
+  elif [[ "${kinds[i]}" == nbell ]]; then
+    # the bell is the alarm surface: the whole element pops red
+    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${c_red}] ${body} "
   elif [[ "${kinds[i]}" == hint ]]; then
     # two-tone hint: keycap glyphs pop white-ish, the label stays dark —
     # zj-hud paints keycaps in hint_glyph_on over the mode color.

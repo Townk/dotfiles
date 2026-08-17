@@ -16,11 +16,12 @@ Describe 'pick-notifications'
     mkdir -p "$JOB_PUEUE_LOG_DIR"
     jq -nc '{ts:1755400000,icon:"i",text:"plain toast",sound:"",style:"plain",kind:"generic",source:"x"}' >> "$NOTIFY_HISTORY_FILE"
     jq -nc '{ts:1755400100,icon:"c",text:"Build done",sound:"Glass",style:"plain",kind:"job",source:"job",meta:{job_id:"1-1",pueue_id:7,result:"Success"}}' >> "$NOTIFY_HISTORY_FILE"
-    jq -nc '{ts:1755400200,icon:"x",text:"Build\nfailed",sound:"Basso",style:"plain",kind:"job",source:"job",meta:{job_id:"1-2",pueue_id:8,result:"Failed"}}' >> "$NOTIFY_HISTORY_FILE"
+    jq -nc '{ts:1755400200,icon:"x",text:"Build\nfailed",sound:"Basso",style:"plain",kind:"job",source:"job",ack:true,meta:{job_id:"1-2",pueue_id:8,result:"Failed"}}' >> "$NOTIFY_HISTORY_FILE"
+    export NOTIFY_UNACKED_FILE="$TEST_TMP/unacked"
   }
   cleanup() {
     rm -rf "$TEST_TMP"
-    unset NOTIFY_HISTORY_FILE JOB_PUEUE_LOG_DIR CLIPBOARD_BRIDGE_SOCKET HS
+    unset NOTIFY_HISTORY_FILE NOTIFY_UNACKED_FILE JOB_PUEUE_LOG_DIR CLIPBOARD_BRIDGE_SOCKET HS
   }
   BeforeEach 'setup'
   AfterEach 'cleanup'
@@ -57,6 +58,24 @@ Describe 'pick-notifications'
       When call f_log
       The line 1 should equal "log:8"
       The line 2 should equal "log:"
+    End
+
+    It 'ack-able entries carry the bell mark, plain ones do not'
+      BELLG=$'\uF0F3'
+      marks() { zsh "$PN" --dump-rows | strip_ansi | cut -d$'\x1f' -f1; }
+      When call marks
+      The line 1 should include "$BELLG Build failed"
+      The line 2 should not include "$BELLG"
+    End
+
+    It 'opening the picker truncates the unacked ledger (acknowledgment)'
+      ack_on_open() {
+        printf 'x\ny\n' > "$NOTIFY_UNACKED_FILE"
+        zsh "$PN" --dump-rows >/dev/null || return 1
+        wc -c < "$NOTIFY_UNACKED_FILE" | tr -d ' '
+      }
+      When call ack_on_open
+      The output should equal "0"
     End
 
     It 'exits 1 with a notice when there is no history'

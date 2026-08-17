@@ -174,41 +174,17 @@ job::hud() {
   return 0
 }
 
-# job::_statusbar_sync — recompute the @jobs statusbar data (phase 3, spec
-# §8) and push it at the default tmux server: `@jobs` holds "<running>
-# <failed>" (two integers; empty when both are zero, which hides the
-# segment) and tmux-status-right owns the presentation. Fire-and-forget
-# everywhere: a missing tmux server must never fail a job operation, and
-# writers may run entirely outside tmux (job-callback fires from pueued's
-# daemon environment) — the default socket is addressed regardless.
-#
-# running = job dirs without a result whose meta.json is younger than a
-# day (older result-less dirs are daemon-death ghosts — the callback's 24h
-# sweep's business, not the badge's). failed = lines in .failed-unseen
-# (one appended per Failed callback — appends are atomic, so no
-# read-modify-write race); opening the dashboard removes the file (the
-# dashboard is the acknowledgment surface — ✗ means "failures you haven't
-# looked at"). JOB_TMUX_BIN is the test seam.
+# job::_statusbar_sync — repaint the tmux status bar (phase 3 UI rev: the
+# 󰀲 jobs element READS live state — running count + aggregate percent —
+# straight from the state dir on every repaint, so writers only need to
+# force a repaint at transition moments; between transitions the
+# status-interval tick keeps the percent moving). Fire-and-forget at the
+# default server: writers may run entirely outside tmux (job-callback
+# fires from pueued's daemon environment), and a missing server must never
+# fail a job operation. JOB_TMUX_BIN is the test seam.
 job::_statusbar_sync() {
   local tmux_bin="${JOB_TMUX_BIN:-tmux}"
   command -v "$tmux_bin" >/dev/null 2>&1 || return 0
-  local running=0 failed=0 d
-  local -a fresh
-  for d in "$JOB_STATE_ROOT"/*(N/); do
-    [ -f "$d/meta.json" ] || continue
-    [ -e "$d/result" ] && continue
-    fresh=("$d"/meta.json(N.md-1))
-    (( ${#fresh} )) || continue
-    running=$((running + 1))
-  done
-  if [ -f "$JOB_STATE_ROOT/.failed-unseen" ]; then
-    failed=$(wc -l < "$JOB_STATE_ROOT/.failed-unseen" 2>/dev/null | tr -d ' ') || failed=0
-  fi
-  local value=""
-  if (( running > 0 || failed > 0 )); then
-    value="$running $failed"
-  fi
-  "$tmux_bin" set -g @jobs "$value" 2>/dev/null || return 0
   "$tmux_bin" refresh-client -S 2>/dev/null || :
   return 0
 }
@@ -732,11 +708,6 @@ job::watch() {
 
   troupe=$(job::_troupe) \
     || die "troupe is not installed — go install github.com/Townk/troupe/cmd/troupe@latest"
-
-  # Opening the dashboard IS the failure acknowledgment (phase 3, spec §8):
-  # the ✗ badge means "failures you haven't looked at", and you are looking.
-  rm -f -- "$JOB_STATE_ROOT/.failed-unseen" 2>/dev/null
-  job::_statusbar_sync 2>/dev/null || :
 
   # Host selection (job-runner design §6 rev 4): a floating PANE — real,
   # live-resizable, genuinely persistent — when the probe (or the

@@ -712,55 +712,25 @@ EOF
   # relaunches: troupe streams cancel/logs as line-buffered FIFO lines
   # while it keeps running, and EOF (troupe exits on ESC/q, closing its
   # stdout) is the one and only end condition.
-  # phase 3 (spec §8): the @jobs statusbar writers. The option value is
-  # the contract ("<running> <failed>", empty when both are zero); the
-  # reader (tmux-status-right) owns presentation and has its own spec.
+  # phase 3 UI rev: the statusbar writers only force a repaint — the bar's
+  # jobs element reads live state itself (tmux_status_right_spec covers the
+  # rendering). The seamed fake records the poke.
   Describe 'job::_statusbar_sync'
-    It 'counts result-less fresh dirs as running and ledger lines as failed'
-      synced() {
-        mkdir -p "$JOB_STATE_ROOT/j1" "$JOB_STATE_ROOT/j2" "$JOB_STATE_ROOT/j3"
-        echo '{}' > "$JOB_STATE_ROOT/j1/meta.json"
-        echo '{}' > "$JOB_STATE_ROOT/j2/meta.json"
-        echo '{}' > "$JOB_STATE_ROOT/j3/meta.json"
-        echo done > "$JOB_STATE_ROOT/j3/result"          # finished: not running
-        printf 'x\ny\n' > "$JOB_STATE_ROOT/.failed-unseen"
+    It 'pokes refresh-client -S at the (seamed) tmux'
+      poked() {
         run_job job::_statusbar_sync
-        grep -F 'set -g @jobs' "$JOB_FAKE_TMUX_LOG"
+        cat "$JOB_FAKE_TMUX_LOG"
       }
-      When call synced
-      The output should include "set -g @jobs 2 2"
+      When call poked
+      The output should equal "refresh-client -S"
     End
 
-    It 'a day-old result-less dir is a ghost, not a running job'
-      ghost() {
-        mkdir -p "$JOB_STATE_ROOT/old"
-        echo '{}' > "$JOB_STATE_ROOT/old/meta.json"
-        touch -t 202001010000 "$JOB_STATE_ROOT/old/meta.json"
-        run_job job::_statusbar_sync
-        grep -F 'set -g @jobs' "$JOB_FAKE_TMUX_LOG"
-      }
-      When call ghost
-      The output should include "set -g @jobs "
-      The output should not include "@jobs 1"
-    End
-
-    It 'sets the option empty when nothing runs and nothing is unseen'
-      quiet() {
-        mkdir -p "$JOB_STATE_ROOT"
-        run_job job::_statusbar_sync
-        tail -n 2 "$JOB_FAKE_TMUX_LOG"
-      }
-      When call quiet
-      The line 1 should equal "set -g @jobs "
-      The line 2 should equal "refresh-client -S"
-    End
-
-    It 'job::start syncs the badge after enqueueing'
-      start_syncs() {
+    It 'job::start forces a repaint after enqueueing'
+      start_pokes() {
         run_job job::start --title T -- sleep 1 >/dev/null || return 1
-        grep -cF 'set -g @jobs 1 0' "$JOB_FAKE_TMUX_LOG"
+        grep -c 'refresh-client -S' "$JOB_FAKE_TMUX_LOG"
       }
-      When call start_syncs
+      When call start_pokes
       The output should equal "1"
     End
   End

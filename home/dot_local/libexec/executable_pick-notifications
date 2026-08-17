@@ -66,6 +66,7 @@ sgr_off="$(theme::sgr_fg "${C_ROLE_UI_MUTED:-}")"
 sgr_gen="$(theme::sgr_fg "${C_ROLE_UI_ACCENT:-}")"
 sgr_age="$(theme::sgr_fg "${C_ROLE_UI_HINT:-}")"
 reset=$'\e[0m'
+bell_glyph=$'\uF0F3'
 
 hints="$(pick::hints 󰌑 re-show "󰘴 L" "job log" 󱊷 cancel)"
 
@@ -78,7 +79,8 @@ pn::rows() {
   tail -n 200 -- "$HISTORY_FILE" | jq -rs \
     --arg now "${EPOCHSECONDS:-$(date +%s)}" \
     --arg ok "$sgr_ok" --arg bad "$sgr_bad" --arg off "$sgr_off" \
-    --arg gen "$sgr_gen" --arg age_c "$sgr_age" --arg reset "$reset" '
+    --arg gen "$sgr_gen" --arg age_c "$sgr_age" --arg reset "$reset" \
+    --arg bell "$bell_glyph" '
     def age($now):
       ($now - .ts) as $s |
       if   $s < 90     then "now"
@@ -98,7 +100,8 @@ pn::rows() {
     (.value | glyph) as $g |
     ((.value.meta.pueue_id // "") | tostring) as $pid |
     (.value.text | gsub("[\n\r\t]"; " ")) as $text |
-    $g[0] + $g[1] + $reset + "  " + $age_c + $age + $reset + " " + $text
+    (if (.value.ack // false) then $bad + $bell + $reset + " " else "" end) as $mark |
+    $g[0] + $g[1] + $reset + "  " + $age_c + $age + $reset + " " + $mark + $text
       + "\u001f" + "\(.value.ts)-\(.key)"
       + "\u001e" + (.value|tojson)
       + "\u001e" + "log:" + $pid
@@ -159,6 +162,15 @@ fi
 if [[ ! -s "$HISTORY_FILE" ]]; then
   print -ru2 -- "pick-notifications: no notification history yet"
   exit 1
+fi
+
+# Opening the picker IS the acknowledgment (phase 3 UI rev): the status
+# bar's 󰂚 element counts unacked toasts, and you are looking at the list
+# right now — truncate the ledger and repaint the bar before the browse.
+_unacked="${NOTIFY_UNACKED_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/notify/unacked}"
+if [[ -s "$_unacked" ]]; then
+  : > "$_unacked" 2>/dev/null || :
+  notify::statusbar_refresh 2>/dev/null || :
 fi
 
 rows="$(pn::rows)"

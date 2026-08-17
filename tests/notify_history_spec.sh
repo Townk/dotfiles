@@ -10,10 +10,21 @@ Describe 'notify history'
     # No bridge, no hs: dispatch is expected to fail — history must not care.
     export CLIPBOARD_BRIDGE_SOCKET="$TEST_TMP/no-such-socket"
     export HS="$TEST_TMP/no-such-hs"
+    export NOTIFY_UNACKED_FILE="$TEST_TMP/unacked"
+    # Fake tmux: the --ack status-bar poke must never reach a live server.
+    cat > "$TEST_TMP/tmux" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${NOTIFY_FAKE_TMUX_LOG:-/dev/null}"
+exit 0
+EOF
+    chmod +x "$TEST_TMP/tmux"
+    export NOTIFY_TMUX_BIN="$TEST_TMP/tmux"
+    export NOTIFY_FAKE_TMUX_LOG="$TEST_TMP/tmux.log"
   }
   cleanup() {
     rm -rf "$TEST_TMP"
-    unset NOTIFY_HISTORY_FILE CLIPBOARD_BRIDGE_SOCKET HS
+    unset NOTIFY_HISTORY_FILE CLIPBOARD_BRIDGE_SOCKET HS \
+      NOTIFY_UNACKED_FILE NOTIFY_TMUX_BIN NOTIFY_FAKE_TMUX_LOG
   }
   BeforeEach 'setup'
   AfterEach 'cleanup'
@@ -91,6 +102,29 @@ Describe 'notify history'
     }
     When call do_rotate
     The result of function last_entry should include '"text":"the straw"'
+  End
+
+  It '--ack tags the entry, feeds the unacked ledger, and pokes the bar'
+    do_ack() { notify --ack --kind job "it broke" || :; }
+    check() {
+      printf '%s|%s|%s' \
+        "$(tail -n 1 "$NOTIFY_HISTORY_FILE" | jq -r '.ack')" \
+        "$(wc -l < "$NOTIFY_UNACKED_FILE" | tr -d ' ')" \
+        "$(grep -c 'refresh-client -S' "$NOTIFY_FAKE_TMUX_LOG")"
+    }
+    When call do_ack
+    The result of function check should equal "true|1|1"
+  End
+
+  It 'a plain toast records ack:false and leaves the ledger alone'
+    do_plain() { notify "all fine" || :; }
+    check() {
+      printf '%s|%s' \
+        "$(tail -n 1 "$NOTIFY_HISTORY_FILE" | jq -r '.ack')" \
+        "$([ -e "$NOTIFY_UNACKED_FILE" ] && echo present || echo absent)"
+    }
+    When call do_plain
+    The result of function check should equal "false|absent"
   End
 
   It 'a toast with no text and no icon still exits 2 and appends nothing'

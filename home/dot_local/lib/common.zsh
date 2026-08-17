@@ -722,7 +722,7 @@ _notify_bridge_send() {
 #   --ansi         MESSAGE may carry ANSI SGR colour escapes (routes to the
 #                  `notifyAnsi` helper instead of `notify`).
 #
-# notify::_history_append STYLE ICON SOUND TEXT KIND SOURCE META
+# notify::_history_append STYLE ICON SOUND TEXT KIND SOURCE META ACK
 # One JSON line per toast into the notification history (phase 3, job-runner
 # spec §8): `${XDG_STATE_HOME:-~/.local/state}/notify/history.jsonl`, seam
 # NOTIFY_HISTORY_FILE. Built with jq (proper escaping); META must be a JSON
@@ -731,15 +731,21 @@ _notify_bridge_send() {
 # is atomically rewritten to its last 1000 lines (tmp + mv; a lost race just
 # means the other writer's rotation won).
 notify::_history_append() {
-  local style="$1" icon="$2" sound="$3" text="$4" kind="$5" src="$6" meta="$7"
+  local style="$1" icon="$2" sound="$3" text="$4" kind="$5" src="$6" meta="$7" ack="${8:-0}"
   local file="${NOTIFY_HISTORY_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/notify/history.jsonl}"
   command -v jq >/dev/null 2>&1 || return 0
   mkdir -p -- "${file:h}" 2>/dev/null || return 0
   zmodload zsh/datetime 2>/dev/null
   local ts="${EPOCHSECONDS:-$(date +%s)}"
   local line
-  line=$(jq -nc --argjson ts "$ts"     --arg icon "$icon" --arg text "$text" --arg sound "$sound"     --arg style "$style" --arg kind "$kind" --arg source "$src"     '{ts:$ts, icon:$icon, text:$text, sound:$sound, style:$style,
-      kind:$kind, source:$source}') || return 0
+  local ack_json=false
+  [ "$ack" = 1 ] && ack_json=true
+  line=$(jq -nc --argjson ts "$ts" \
+    --arg icon "$icon" --arg text "$text" --arg sound "$sound" \
+    --arg style "$style" --arg kind "$kind" --arg source "$src" \
+    --argjson ack "$ack_json" \
+    '{ts:$ts, icon:$icon, text:$text, sound:$sound, style:$style,
+      kind:$kind, source:$source, ack:$ack}') || return 0
   if [ -n "$meta" ]; then
     local with_meta
     if with_meta=$(jq -c --argjson m "$meta" '. + {meta:$m}' <<<"$line" 2>/dev/null); then
@@ -761,6 +767,32 @@ notify::_history_append() {
   return 0
 }
 
+# notify::_ack_ledger_add — one line into the unacked ledger
+# (${XDG_STATE_HOME:-~/.local/state}/notify/unacked, seam
+# NOTIFY_UNACKED_FILE; appends are atomic, wc -l is the count) and a
+# status-bar poke so the 󰂚 element appears immediately. Quiet best-effort
+# throughout — the ledger must never fail the toast.
+notify::_ack_ledger_add() {
+  local file="${NOTIFY_UNACKED_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/notify/unacked}"
+  mkdir -p -- "${file:h}" 2>/dev/null || return 0
+  zmodload zsh/datetime 2>/dev/null
+  print -r -- "${EPOCHSECONDS:-0}" >> "$file" 2>/dev/null || return 0
+  notify::statusbar_refresh || :
+  return 0
+}
+
+# notify::statusbar_refresh — repaint the tmux status bar NOW (the 󰀲/󰂚
+# elements read live state, so a repaint is all an event needs). Addressed
+# at the default server regardless of $TMUX — writers may run from daemon
+# environments — and fire-and-forget: no server, no problem.
+# NOTIFY_TMUX_BIN is the seam.
+notify::statusbar_refresh() {
+  local tmux_bin="${NOTIFY_TMUX_BIN:-tmux}"
+  command -v "$tmux_bin" >/dev/null 2>&1 || return 0
+  "$tmux_bin" refresh-client -S 2>/dev/null || :
+  return 0
+}
+
 # Best-effort by design: it drives the running Hammerspoon through its `hs`
 # CLI (path overridable via $HS). Returns 1 (quietly) when `hs` is unavailable
 # and 2 when there is nothing to show, so callers on hot paths can ignore the
@@ -779,11 +811,21 @@ notify::_history_append() {
 # <s>` (default the invoking script's name), and `--meta <json>` (opaque extra,
 # e.g. a job's ids) tag the entry for pick-notifications; existing callers need
 # none of them.
+#
+# `--ack` marks the toast as ACKNOWLEDGABLE (user ruling, phase 3 UI rev):
+# beyond the history tag, it appends one line to the unacked ledger and pokes
+# the tmux status bar — the 󰂚 element counts unacknowledged toasts until
+# pick-notifications is opened (opening is the acknowledgment), and the
+# picker renders ack-able entries distinctly.
 notify() {
   local icon="" sound="" style="plain"
-  local kind="generic" source_tag="${ZSH_ARGZERO:t}" meta=""
+  local kind="generic" source_tag="${ZSH_ARGZERO:t}" meta="" ack=0
   while [ $# -gt 0 ]; do
     case "$1" in
+      --ack)
+        ack=1
+        shift
+        ;;
       --kind)
         if [ $# -ge 2 ]; then kind="$2"; shift 2; else shift; fi
         ;;
@@ -840,7 +882,10 @@ notify() {
   local text="$*"
   [ -n "$text" ] || [ -n "$icon" ] || return 2
 
-  notify::_history_append "$style" "$icon" "$sound" "$text" "$kind" "$source_tag" "$meta" 2>/dev/null || :
+  notify::_history_append "$style" "$icon" "$sound" "$text" "$kind" "$source_tag" "$meta" "$ack" 2>/dev/null || :
+  if [ "$ack" = 1 ]; then
+    notify::_ack_ledger_add 2>/dev/null || :
+  fi
 
   if _notify_bridge_target; then
     _notify_bridge_send "$style" "$icon" "$sound" "$text" && return 0

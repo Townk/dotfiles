@@ -12,7 +12,7 @@ Describe 'tmux-status-right'
   "mode":{"locked":"#fab387","resize":"#cba6f7","pane":"#89b4fa","tab":"#a6e3a1",
           "move":"#f9e2af","scroll":"#b4befe","session":"#f38ba8","tmux":"#f38ba8","rename":"#f9e2af","search":"#89b4fa","visual":"#cba6f7"},
   "action":{"attention":"#f9e2af"}},
- "palette":{"base":"#1e1e2e","white":"#ffffff","red":"#f38ba8"},
+ "palette":{"base":"#1e1e2e","white":"#ffffff","red":"#f38ba8","yellow":"#f9e2af"},
  "extended":{"tab":{"bg":"#282c41","fg":"#9b9fc1","active_bg":"#656a83","active_fg":"#ffffff"}}}
 EOS
 
@@ -62,6 +62,11 @@ EOS
     export WIDGETS_GHOSTTY_FULLSCREEN_STATE="$TEST_TMP/ghostty_fullscreen"
     export WIDGETS_HOSTNAME_ALIAS="$TEST_TMP/hostname-alias"
     export THEME_PALETTE_JSON="$TEST_TMP/theme.json"
+    # Every example reads jobs/bell state from the sandbox — never the live
+    # machine's (a real unacked failure must not leak into the bar tests).
+    export JOB_STATE_ROOT="$TEST_TMP/jobs"
+    export NOTIFY_UNACKED_FILE="$TEST_TMP/unacked"
+    mkdir -p "$TEST_TMP/jobs"
 
     export G_DIV=$'\Ue0ba'
     export G_WIFI_ON=$'\U000F05A9' G_WIFI_OFF=$'\U000F092E'
@@ -69,7 +74,7 @@ EOS
   }
   cleanup() {
     rm -rf "$TEST_TMP"
-    unset MUX_TMUX_BIN PMSET_BIN NETWORKSETUP_BIN WIDGETS_OSASCRIPT_BIN WIDGETS_FULLSCREEN_STATE \
+    unset JOB_STATE_ROOT NOTIFY_UNACKED_FILE MUX_TMUX_BIN PMSET_BIN NETWORKSETUP_BIN WIDGETS_OSASCRIPT_BIN WIDGETS_FULLSCREEN_STATE \
       WIDGETS_GHOSTTY_FULLSCREEN_STATE \
       WIDGETS_HOSTNAME_ALIAS THEME_PALETTE_JSON XDG_CONFIG_HOME XDG_CACHE_HOME \
       STUB_SSH SSH_CONNECTION SSH_CLIENT STUB_POWER STUB_PCT \
@@ -357,11 +362,11 @@ EOS
     The output should not include "100%"
   End
 
-  It 'ssh keeps only the host segment (alias preferred) + no clock'
+  It 'ssh windowed shows NO host pill (fullscreen-group rule; user ruling 2026-08-17)'
     export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
     printf 'devbox' > "$TEST_TMP/hostname-alias"
     When call zsh "$W" root 0 main
-    The output should include "$G_HOST devbox"
+    The output should not include "$G_HOST"
     The output should not include "%"
     The output should not include "$G_CLOCK"
   End
@@ -410,12 +415,12 @@ EOS
     The output should not include "%"
   End
 
-  It 'ssh windowed stays host-only, as before'
+  It 'ssh windowed renders nothing at all (host rides the fullscreen group)'
     export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
     printf 'false' > "$TEST_TMP/fullscreen_state"
     printf 'devbox' > "$TEST_TMP/hostname-alias"
     When call zsh "$W" root 0 main
-    The output should include "$G_HOST devbox"
+    The output should not include "$G_HOST"
     The output should not include "$G_CLOCK"
     The output should not include "$G_WIFI_ON"
   End
@@ -446,35 +451,72 @@ EOS
   End
 
   # C2 split-palette fix: the bar resolves via theme::json_path, so the override
-  Describe 'the @jobs segment'
-    It 'renders N running and M failed, failure half in red'
-      jobs_seg() { STUB_JOBS="2 1" zsh "$W" root 0 main 0; }
-      When call jobs_seg
-      The output should include "2▶"
-      The output should include "1✗"
-      # the failed half switches to the palette red before its count
-      The output should include "#[fg=#f38ba8]1✗"
+  Describe 'the jobs and bell elements'
+    # phase 3 UI rev: the bar computes both from live state (JOB_STATE_ROOT
+    # + NOTIFY_UNACKED_FILE seams); writers only force repaints. The two
+    # glyphs are pinned as escapes (user mock: \uF0AE tasks, \uF0F3 bell).
+    JG=$'\uF0AE'
+    BG=$'\uF0F3'
+    seed_job() {  # seed_job <name> [pct]
+      mkdir -p "$TEST_TMP/jobs/$1"
+      echo '{}' > "$TEST_TMP/jobs/$1/meta.json"
+      [ -n "${2-}" ] && echo "100 $2 msg" > "$TEST_TMP/jobs/$1/progress"
+      :
+    }
+    bar() { JOB_STATE_ROOT="$TEST_TMP/jobs" NOTIFY_UNACKED_FILE="$TEST_TMP/unacked" zsh "$W" root 0 main 0; }
+
+    It 'shows the tasks glyph, count, and mean percent of running jobs'
+      jobs_pct() { seed_job a 10.6; seed_job b 30; bar; }
+      When call jobs_pct
+      The output should include "$JG 2 (20.3%)"
+      # the task-runner element paints yellow (user ruling)
+      The output should include ",fg=#f9e2af] $JG 2 (20.3%)"
     End
 
-    It 'renders running alone when nothing failed'
-      jobs_run() { STUB_JOBS="3 0" zsh "$W" root 0 main 0; }
-      When call jobs_run
-      The output should include "3▶"
-      The output should not include "✗"
+    It 'drops the trailing .0 from an integer mean'
+      jobs_int() { seed_job a 20; seed_job b 20; bar; }
+      When call jobs_int
+      The output should include "$JG 2 (20%)"
     End
 
-    It 'renders failures alone after the last job drains'
-      jobs_fail() { STUB_JOBS="0 2" zsh "$W" root 0 main 0; }
-      When call jobs_fail
-      The output should include "2✗"
-      The output should not include "▶"
+    It 'omits the percent when no running job reports one'
+      jobs_nopct() { seed_job a; seed_job b; bar; }
+      When call jobs_nopct
+      The output should include "$JG 2"
+      The output should not include "%)"
     End
 
-    It 'hides entirely when the option is empty'
-      jobs_none() { STUB_JOBS="" zsh "$W" root 0 main 0; }
+    It 'excludes finished and indeterminate jobs from the tally'
+      jobs_mixed() {
+        seed_job run 40
+        seed_job indet -1
+        seed_job done 90; echo done > "$TEST_TMP/jobs/done/result"
+        bar
+      }
+      When call jobs_mixed
+      The output should include "$JG 2 (40%)"
+    End
+
+    It 'clears the element entirely when nothing runs'
+      jobs_none() { mkdir -p "$TEST_TMP/jobs"; bar; }
       When call jobs_none
-      The output should not include "▶"
-      The output should not include "✗"
+      The output should not include "$JG"
+    End
+
+    It 'shows the red bell with the unacked count'
+      bell_two() {
+        mkdir -p "$TEST_TMP/jobs"
+        printf 'x\ny\n' > "$TEST_TMP/unacked"
+        bar
+      }
+      When call bell_two
+      The output should include ",fg=#f38ba8] $BG 2 "
+    End
+
+    It 'hides the bell at zero'
+      bell_none() { mkdir -p "$TEST_TMP/jobs"; : > "$TEST_TMP/unacked"; bar; }
+      When call bell_none
+      The output should not include "$BG"
     End
   End
 
