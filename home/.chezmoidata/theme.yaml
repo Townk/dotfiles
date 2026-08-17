@@ -98,7 +98,7 @@ theme:
 
       # diffnav's HARDCODED selection/chrome bg (a foreign constant baked
       # into the binary, not a theme choice) — the tm diff lens remaps it
-      # to the tab palette via pty-frame --focus-remap.
+      # to the tab palette via troupe frame --focus-remap.
       diffnav: { selection: "2d2c35" }
 
     # ----------------------------------------------------------------------- #

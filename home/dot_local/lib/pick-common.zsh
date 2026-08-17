@@ -274,10 +274,10 @@ pick::add_selector_mode_binds() {
   local search_payload="$search_hints"$'\n'"$NBSP"
   local selector_header_action="+change-header(${selector_payload})"
   local search_header_action="+change-header(${search_payload})"
-  # In a pty-frame modal the hints live in the (static) footer pty-frame draws,
+  # In a frame-compositor modal the hints live in the (static) footer troupe frame draws,
   # so the selector/search toggle must NOT also push them into fzf's header — that
   # header is the input→list blank, and change-header would surface the old hints
-  # there. Suppress the header swaps (like --no-hints) when pty-frame owns the
+  # there. Suppress the header swaps (like --no-hints) when the frame owns the
   # chrome; the display-view swaps below still run. (use_pty_frame is a build_fzf_args
   # local, visible here via zsh's dynamic function scope.)
   if (( ${pick_ui[no_hints]:-0} )) || (( ${use_pty_frame:-0} )); then
@@ -348,9 +348,9 @@ pick::hints() {
   print -rn -- "$out"
 }
 
-# Colorize a keybind-hint line for pty-frame's footer: the key chord(s) before
+# Colorize a keybind-hint line for the frame compositor's footer: the key chord(s) before
 # each NBSP key/label gap in the bright key color, the labels + separators in
-# the hint color. Sets only the foreground, so pty-frame's mantle footer
+# the hint color. Sets only the foreground, so the frame's mantle footer
 # background shows through. Hints follow the `KEY label · KEY label` shape
 # pick::hints emits (NBSP gap); a legacy `KEY : label` item from an external
 # --hints string is still recognized via its colon.
@@ -455,7 +455,7 @@ pick::build_fzf_args() {
       pick_ui[height]="full"   # full-screen: fill the borderless pane edge-to-edge
     fi
   fi
-  typeset -ga pick_finder_prefix; pick_finder_prefix=()  # wraps fzf (pty-frame …  --) in modal mode
+  typeset -ga pick_finder_prefix; pick_finder_prefix=()  # wraps fzf (troupe frame … --) in modal mode
   pick_selector_wrap=0
   pick_display_fields=1
   fzf_args=(
@@ -565,10 +565,10 @@ pick::build_fzf_args() {
   #    modal's layout (outer box → title+rule → inner box → list → hints) fully
   #    in fzf, all on the mantle dialog background.
   if (( use_pty_frame )); then
-    # pty-frame draws the box + ▓▓▓ title + rule AND the bottom hints (so it owns
+    # The frame draws the box + ▓▓▓ title + rule AND the bottom hints (so it owns
     # their padding + per-key coloring). fzf draws only the inside: the input box,
     # the freed --header as the input→list blank, and the list. pick_finder_prefix
-    # wraps fzf in pty-frame with the title, theme colors, and colorized hints.
+    # wraps fzf in the frame with the title, theme colors, and colorized hints.
     fzf_args+=(
       # Inner separators (the title rule + this input box border) share the
       # separator color; only the outer box uses the focus border (blue).
@@ -696,8 +696,8 @@ pick::resume_pos() {
 pick::run() {
   local cache=$1
   local out
-  # In a borderless modal with pty-frame present, pick_finder_prefix is
-  # (pty-frame … --) so the run becomes `… | pty-frame … -- fzf "${fzf_args[@]}"`;
+  # In a borderless modal with the frame compositor present, pick_finder_prefix is
+  # (troupe frame … --) so the run becomes `… | troupe frame … -- fzf "${fzf_args[@]}"`;
   # otherwise it's empty and this is a plain `fzf "${fzf_args[@]}"`.
   # FZF_DEFAULT_OPTS is cleared: the engine owns the whole UI. The var never
   # reached the zellij modal panes, but tmux popups inherit the session env —

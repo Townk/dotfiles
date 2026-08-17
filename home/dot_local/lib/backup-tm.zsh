@@ -227,8 +227,9 @@ bkp::tm::end() { touch "$1/closed" }
 
 # bkp::tm::lens_title <session>
 # Write the lens header line — "● <age>  <live anchor>" — the same
-# shape the explore lens shows via its yazi Header override. pty-frame
-# polls the file (--title-file), so the header follows the rung.
+# shape the explore lens shows via its yazi Header override. The frame
+# compositor (troupe frame) polls the file (--title-file), so the header
+# follows the rung.
 bkp::tm::lens_title() {
   local s="$1" REPLY
   bkp::tm::rung_line "$s" || return 0
@@ -985,7 +986,7 @@ bkp::tm::lens_cmd() {
       fi
     fi
     if (( ${#framecmd} )); then
-      # remap-cols is the tree-width HINT for pty-frame's divider scan:
+      # remap-cols is the tree-width HINT for the frame's divider scan:
       # the swap applies only left of diffnav's detected tree/diff
       # divider (and not at all when the tree is hidden), so the diff
       # pane's file-header boxes — same hardcoded color — never flip

@@ -1142,7 +1142,7 @@ clip::has_live_tty() {
 # definition, before clip::copy_by_id and everything interactive-only below
 # it (live peer entry already ran by this point, but geometry, the
 # --key-reload temp scripts, and fzf's hints/args never do) -- so a headless
-# caller pays for none of the fzf/pty-frame setup it will never use. $1 here
+# caller pays for none of the fzf/frame setup it will never use. $1 here
 # is the SCRIPT's own first argument (this runs at the top level, not inside
 # a function), never confused with a sourced test harness's own "$1" of a
 # bare numeric id (PICK_CLIPBOARD_NO_RUN's test convention): the comparison
@@ -1424,7 +1424,7 @@ clip::bump_recency() {
 # --- dynamic geometry (from the live TTY) -----------------------------------
 # The item line + preview footer are sized to the actual pane so the pin sits
 # at the right edge (not truncated off) and the footer fits the preview pane.
-# pty-frame draws a 1-cell box + fzf pads ~3 each side, so the usable list
+# The frame draws a 1-cell box + fzf pads ~3 each side, so the usable list
 # area is ~COLS-8; the item line reserves icon(2)+sep(2)+sep(2)+pin(2)=8, so
 # content width CW = COLS-16. The preview pane is 45% of the fzf window; the
 # footer label/value widths sum to fit it. preview_h drives the blank padding
@@ -1432,7 +1432,7 @@ clip::bump_recency() {
 COLS=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
 ROWS=${LINES:-$(tput lines 2>/dev/null || echo 24)}
 # Item-line content width. The list pane is ~55% of the fzf window (the
-# preview takes 45%); the fzf window is the pty-frame sub-pty = COLS-2 (box);
+# preview takes 45%); the fzf window is the frame's sub-pty = COLS-2 (box);
 # minus ~6 (fzf padding 0,2,0,2 + input-border gutter each side); minus 5
 # (icon + sep + pin column). So CW = (COLS-2)*55/100 - 11. The list width
 # isn't exposed to the input stream (items emit before fzf lays out), so this

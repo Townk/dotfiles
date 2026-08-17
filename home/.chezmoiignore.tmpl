@@ -141,8 +141,8 @@ Library/**
 {{/* Terminal Time Machine (system-backup silo) is not provisioned for
      headless profiles: BACKUP_REPO_PASSPHRASE is requiredFor personal+work only, so
      the stack can never run there. The launchd agents are darwin-gated in
-     services.toml already; this hides the tools, libs, completions, config,
-     and the tm-timeline build. Consumers are guarded: tm() probes
+     services.toml already; this hides the tools, libs, completions, and
+     config. Consumers are guarded: tm() probes
      command -v, yazi's g-t binding is template-gated, backup-drift.sh
      already [[ -r ]]-guards its lib. */}}
 .local/bin/system-backup
@@ -159,7 +159,6 @@ Library/**
 .local/share/zsh/site-functions/_tm
 .config/backup
 .config/backup/**
-.chezmoiscripts/*-build-tm-timeline.sh
 {{/* Headless dev shells should not receive GUI terminal/app config or local
      inference services. */}}
 .config/espanso

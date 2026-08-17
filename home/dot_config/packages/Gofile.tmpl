@@ -13,12 +13,12 @@
 github.com/Townk/troupe/cmd/troupe@v0.2.2
 
 # ai-playbook — the AI terminal assistant (docked pager, diff viewer,
-# playbook drive; installs the short `apb` alias too via cmd/apb). Its
-# dialog widgets now come from troupe; the standalone `ask` binary is
-# retired from the manifest (deprecated upstream — `troupe` replaces it;
-# strict cleanup uninstalls it on next sync).
-github.com/Townk/ai-playbook/cmd/ai-playbook@v1.0.0-RC3
-github.com/Townk/ai-playbook/cmd/apb@v1.0.0-RC3
+# playbook drive; installs the short `apb` alias too via cmd/apb). RC4 is
+# the troupe-consolidation release: its dialog widgets come from troupe
+# and `cmd/ask` no longer exists upstream (strict cleanup already
+# uninstalled the binary here).
+github.com/Townk/ai-playbook/cmd/ai-playbook@v1.0.0-RC4
+github.com/Townk/ai-playbook/cmd/apb@v1.0.0-RC4
 
 {{ if eq .profile "personal" -}}
 github.com/bscott/pm-cli/cmd/pm-cli

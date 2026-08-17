@@ -37,7 +37,7 @@ _mux_zj_available() {
 # _mux_zj_pick_float <pane_w> <pane_h> <header> [pick args...]
 # The in-Zellij half of mux::pick: render the picker in a floating, pinned,
 # BORDERLESS pane via the shared zellij-modal scaffolding (--no-chrome, so
-# pty-frame draws the box + ▓▓▓ title + rule around fzf — the same chrome as
+# troupe frame draws the box + ▓▓▓ title + rule around fzf — the same chrome as
 # the glyph/gitmoji pickers), and capture the chosen value back through a
 # FIFO. Rows are read on stdin (staged to a file: the float child is a
 # separate process and cannot read our stdin pipe).
@@ -332,7 +332,7 @@ _mux_zj_popup() {
   local -a pre=()
   [[ -n "$session" ]] && pre=(--session "$session")
   # Default float: borderless + pinned (the modal/picker convention, where
-  # pty-frame draws the chrome). --frame flips both for the image preview,
+  # troupe frame draws the chrome). --frame flips both for the image preview,
   # which wants zellij's own rounded frame and no pin decoration.
   local border=true pinned=true
   (( frame )) && { border=false; pinned=false; }

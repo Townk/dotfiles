@@ -27,12 +27,12 @@
     borderless
             OPTIONAL. Default false → zellij draws a rounded frame
             (framed dialogs, e.g. the confirm prompts). Pass true for
-            fzf pickers so zellij draws no frame and pty-frame owns the
+            fzf pickers so zellij draws no frame and troupe frame owns the
             chrome.
     no_chrome
             OPTIONAL. Pass true (with borderless true) for fzf pickers:
             zellij-modal skips its own title block and hands the title
-            to pty-frame, which renders the whole modal.
+            to troupe frame, which renders the whole modal.
     no_discover
             OPTIONAL. Pass true for action-mode targets that don't refocus
             a specific pane (the workspace/tab pickers): skips the
@@ -43,7 +43,7 @@
   `name ""` suppresses the frame title text; `pinned true` keeps it on
   top of other floats; `close_on_exit true` disposes of the pane when
   the target returns. `borderless`/`no_chrome` (above) decide whether
-  zellij frames the modal or pty-frame owns the chrome.
+  zellij frames the modal or troupe frame owns the chrome.
 */ -}}
 {{- define "zellijModalRun" -}}
             Run "env" "COLORTERM=truecolor" "{{ joinPath .home ".config/zellij/scripts/zellij-modal" }}" "--title" "{{ .title }}"{{ if .inject }} "--inject"{{ end }}{{ if and (hasKey . "no_chrome") .no_chrome }} "--no-chrome"{{ end }}{{ if and (hasKey . "no_discover") .no_discover }} "--no-discover"{{ end }} "--" "{{ joinPath .home (dig "dir" ".config/zellij/scripts" .) .script }}"{{ if and (hasKey . "args") .args }} {{ .args }}{{ end }} {
@@ -360,7 +360,7 @@ keybinds clear-defaults=true {
         // chosen emoji or :code:, and `write-chars --pane-id
         // <originating-tile>` injects it back into the pane the
         // user came from. Same `borderless true` + `no_chrome`
-        // contract as the glyph picker: pty-frame owns the chrome,
+        // contract as the glyph picker: troupe frame owns the chrome,
         // so zellij draws no frame.
         bind "Ctrl Shift g" {
             SwitchToMode "normal"
@@ -446,7 +446,7 @@ keybinds clear-defaults=true {
         // the universal SQLite store), captures the chosen clip's text, and
         // `write-chars --pane-id <originating-tile>`s it back into the pane
         // the user came from. Same `borderless true` + `no_chrome true`
-        // contract as the glyph/gitmoji pickers: pty-frame owns the chrome, so
+        // contract as the glyph/gitmoji pickers: troupe frame owns the chrome, so
         // zellij draws no frame. `c` for "clipboard"; the spec's `Alt w v`
         // collided with the existing tmux-mode `v` (split-right), so this
         // keeps split-right on `v` and uses the free `c` chord instead.
@@ -1196,7 +1196,7 @@ pane_frames false
 // every tiled pane frameless, the only panes that draw a zellij frame are
 // the framed dialogs that keep the default `borderless false` (e.g. the
 // gum confirm prompts) and mux-open's image preview — so this rounds
-// just those. fzf pickers pass `borderless true` and let pty-frame draw
+// just those. fzf pickers pass `borderless true` and let troupe frame draw
 // their own rounded chrome.
 ui {
     pane_frames {

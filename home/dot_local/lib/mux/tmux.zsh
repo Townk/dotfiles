@@ -338,7 +338,7 @@ _mux_tx_focused_command() {
 
 # _mux_tx_pick_float <pane_w> <pane_h> <header> [pick args...]
 # tmux twin of _mux_zj_pick_float: fzf-owns-the-box picker in a borderless
-# popup (-B: pty-frame/fzf draw the chrome, matching the zellij pickers),
+# popup (-B: troupe frame/fzf draw the chrome, matching the zellij pickers),
 # result captured through a FIFO.
 _mux_tx_pick_float() {
   local pane_w="$1" pane_h="$2" header="$3"

@@ -11,9 +11,9 @@
 #
 # pick-clipboard reads the PICK_CLIPBOARD_* geometry env (the universal-clipboard
 # spec §7 wires geometry through env here), so we export the geometry flags
-# rather than pass them on the command line. In the borderless --no-chrome modal pty-frame owns the chrome
+# rather than pass them on the command line. In the borderless --no-chrome modal troupe frame owns the chrome
 # and fills the sub-pty at height=100%, so an explicit height env is not
-# needed there; PICK_CLIPBOARD_HEIGHT is exported for the no-pty-frame fallback
+# needed there; PICK_CLIPBOARD_HEIGHT is exported for the no-frame fallback
 # path + parity with pick-glyph-zellij.
 #
 # Env-var overrides:
@@ -38,7 +38,7 @@ set -euo pipefail
 #
 # The floating pane already draws its own frame; a second fzf border would just
 # shave columns off the usable width. Padding 0,2,0,2 (T,R,B,L): vertical 0
-# (pty-frame already enforces 1 vertical), horizontal 2 — fzf renders left/right
+# (the frame already enforces 1 vertical), horizontal 2 — fzf renders left/right
 # padding one cell wider than specified for the input-border gutter, so 2 -> an
 # effective 3 cells from the box, as requested.
 _pa_lib="${0:A:h}/lib/pick-adapter.zsh"

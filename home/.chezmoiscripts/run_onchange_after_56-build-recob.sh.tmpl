@@ -2,8 +2,9 @@
   recobd + system-clip + system-bridge — rebuild the clipboard bridge when
   its Rust source changes.
 
-  Unlike pty-frame's hook, a missing toolchain here is NOT a graceful
-  degradation. pty-frame falls back to a plainer picker; a missing recobd means
+  Unlike the retired pty-frame hook (that widget now ships as `troupe
+  frame`), a missing toolchain here is NOT a graceful degradation. The
+  pickers fall back to a plainer layout without their compositor; a missing recobd means
   no bridge at all — no clipboard over the tunnel, no history capture, no file
   clips — so this hook fails loudly and leaves the machine on whatever it was
   running, which is exactly why the cutover is one `chezmoi apply` per machine

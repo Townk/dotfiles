@@ -12,6 +12,6 @@ ui:
   # unified diffs — the lens shares its tab with the timeline pane
   # (backup-tm also forces this via --unified + DELTA_FEATURES).
   sideBySide: false
-  # pinned: backup-tm's pty-frame --focus-remap-cols must match this
+  # pinned: backup-tm's troupe-frame --focus-remap-cols must match this
   # width so the selection swap stays confined to the tree.
   fileTreeWidth: 26
