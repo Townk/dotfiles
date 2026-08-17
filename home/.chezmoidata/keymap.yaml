@@ -406,6 +406,13 @@ keymap:
         cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 75 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Clipboard history\" --inject --no-chrome -- $HOME/.local/libexec/pick-clipboard"'
         dialog: true
       - keys:
+        - N
+        desc: notification history
+        icon: 󰂚
+        color: mauve
+        cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Notifications\" --no-chrome -- $HOME/.local/libexec/pick-notifications"'
+        dialog: true
+      - keys:
         - J
         desc: watch tasks
         icon: 󰈈

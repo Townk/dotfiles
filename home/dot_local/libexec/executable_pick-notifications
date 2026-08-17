@@ -1,0 +1,182 @@
+#!/usr/bin/env zsh
+# pick-notifications — browse the notification history (phase 3, job-runner
+# spec §8) on the pick framework.
+#
+# Rows come from the history JSONL the notify() sender appends
+# (~/.local/state/notify/history.jsonl, seam NOTIFY_HISTORY_FILE): the last
+# 200 entries, newest first. Each row shows a kind/result glyph, a relative
+# age, and the toast text.
+#
+#   Enter    re-show the toast (a fresh local notify with the stored
+#            icon/text/sound/style — full fidelity, including glyph: icons)
+#   Ctrl-L   for job entries: open a mux tab tailing the job's pueue log
+#            (resolved from meta.pueue_id — no job-dir retention needed);
+#            a quiet notice when the log is gone or the row isn't a job
+#
+# Everything an action needs is embedded in the row's hidden tail, so this
+# viewer has no coupling to job-dir pruning:
+#   field 1 = row id (ts-index, recency/cursor)
+#   field 2 = the raw history entry (compact JSON)
+#   field 3 = "log:<pueue_id>" ("log:" when not a job — the prefix keeps a
+#             no-log accept distinguishable from a cancelled picker)
+
+set -eu -o pipefail
+
+PICK_NAME=pick-notifications
+source "${PICK_COMMON_LIB:-$HOME/.local/lib/pick-common.zsh}" || {
+  print -ru2 -- "pick-notifications: cannot source pick-common.zsh"
+  exit 1
+}
+zmodload zsh/datetime 2>/dev/null
+
+HISTORY_FILE="${NOTIFY_HISTORY_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/notify/history.jsonl}"
+
+usage() {
+  cat <<EOF
+Usage:
+  pick-notifications [--resume] [-q QUERY]
+
+Browse past notifications. Enter re-shows one; Ctrl-L opens a job entry's
+log in a mux tab.
+
+Test/scripting seams:
+  --dump-rows      print the produced picker rows and exit (no picker)
+  --act LINE       run the accept handler on LINE and exit (no picker)
+EOF
+}
+
+query="" resume=0 dump_rows=0 act=""
+while (($#)); do
+  case "$1" in
+    -q | --query) query="${2-}"; shift 2 ;;
+    --resume) resume=1; shift ;;
+    --dump-rows) dump_rows=1; shift ;;
+    --act) act="${2-}"; shift 2 ;;
+    -h | --help) usage; exit 0 ;;
+    *) shift ;;
+  esac
+done
+
+# Row colors through the canonical hex→SGR helper (single-source palette;
+# raw hex never appears here). Guarded :- so a palette-less environment
+# degrades to uncolored rows instead of dying under set -u.
+sgr_ok="$(theme::sgr_fg "${C_HEX_GREEN:-}")"
+sgr_bad="$(theme::sgr_fg "${C_HEX_RED:-}")"
+sgr_off="$(theme::sgr_fg "${C_ROLE_UI_MUTED:-}")"
+sgr_gen="$(theme::sgr_fg "${C_ROLE_UI_ACCENT:-}")"
+sgr_age="$(theme::sgr_fg "${C_ROLE_UI_HINT:-}")"
+reset=$'\e[0m'
+
+hints="$(pick::hints 󰌑 re-show "󰘴 L" "job log" 󱊷 cancel)"
+
+# pn::rows — one jq pass builds the wire rows: tail for the window, slurp +
+# reverse for newest-first, per-entry glyph/color by kind+result, humanized
+# age, and the hidden tail (id, raw entry JSON, log:<pueue_id>). The pick
+# wire separators — US and RS, pick::line's format — are emitted as the jq
+# escapes u001f/u001e so this file stays control-character-free on disk.
+pn::rows() {
+  tail -n 200 -- "$HISTORY_FILE" | jq -rs \
+    --arg now "${EPOCHSECONDS:-$(date +%s)}" \
+    --arg ok "$sgr_ok" --arg bad "$sgr_bad" --arg off "$sgr_off" \
+    --arg gen "$sgr_gen" --arg age_c "$sgr_age" --arg reset "$reset" '
+    def age($now):
+      ($now - .ts) as $s |
+      if   $s < 90     then "now"
+      elif $s < 3600   then "\(($s/60)|floor)m"
+      elif $s < 86400  then "\(($s/3600)|floor)h"
+      else                  "\(($s/86400)|floor)d" end;
+    def glyph:
+      if .kind == "job" then
+        (.meta.result // "") as $r |
+        if   $r == "Success" then [$ok,  "✓"]
+        elif $r == "Killed"  then [$off, "⊘"]
+        else                      [$bad, "✗"] end
+      else [$gen, "•"] end;
+    def pad4: . + ((" " * (4 - length)) // "");
+    reverse | to_entries | .[] |
+    (.value | age(($now|tonumber)) | pad4) as $age |
+    (.value | glyph) as $g |
+    ((.value.meta.pueue_id // "") | tostring) as $pid |
+    (.value.text | gsub("[\n\r\t]"; " ")) as $text |
+    $g[0] + $g[1] + $reset + "  " + $age_c + $age + $reset + " " + $text
+      + "\u001f" + "\(.value.ts)-\(.key)"
+      + "\u001e" + (.value|tojson)
+      + "\u001e" + "log:" + $pid
+  '
+}
+
+# pn::handle <accept-line> — act on the picker's output: "log:<pid>" opens
+# the pueue log (mux tab in a mux session, bare path otherwise), a JSON
+# entry re-shows the toast, anything else is a cancel (130).
+pn::handle() {
+  local out="$1"
+  case "$out" in
+    log:*)
+      local pid="${out#log:}"
+      local logdir="${JOB_PUEUE_LOG_DIR:-$HOME/Library/Application Support/pueue/task_logs}"
+      if [[ -n "$pid" && -f "$logdir/$pid.log" ]]; then
+        if [[ -n "${TMUX:-}${ZELLIJ:-}" ]]; then
+          local muxlib="${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
+          # The usual subshell probe: mux.zsh's stack must not hard-exit us.
+          if ( source "$muxlib" ) >/dev/null 2>&1; then
+            source "$muxlib" 2>/dev/null
+            mux::new_tab --name "task log" -- tail -f "$logdir/$pid.log" || :
+          fi
+        else
+          print -r -- "$logdir/$pid.log"
+        fi
+      else
+        notify --icon "glyph:nf-md-information" --source pick-notifications \
+          "Log no longer available" 2>/dev/null || :
+      fi
+      ;;
+    \{*)
+      # Re-show: a fresh notify with the stored fields (a re-shown toast is
+      # a real toast — it re-enters history tagged with its original kind).
+      local icon text sound style kind
+      icon=$(jq -r '.icon // empty' <<<"$out")
+      text=$(jq -r '.text // empty' <<<"$out")
+      sound=$(jq -r '.sound // empty' <<<"$out")
+      style=$(jq -r '.style // "plain"' <<<"$out")
+      kind=$(jq -r '.kind // "generic"' <<<"$out")
+      local -a args=(--kind "$kind" --source pick-notifications)
+      [[ -n "$icon" ]] && args+=(--icon "$icon")
+      [[ -n "$sound" ]] && args+=(--sound "$sound")
+      [[ "$style" == ansi ]] && args+=(--ansi)
+      notify "${args[@]}" "$text" || :
+      ;;
+    *)
+      return 130
+      ;;
+  esac
+}
+
+if [[ -n "$act" ]]; then
+  pn::handle "$act"
+  exit $?
+fi
+
+if [[ ! -s "$HISTORY_FILE" ]]; then
+  print -ru2 -- "pick-notifications: no notification history yet"
+  exit 1
+fi
+
+rows="$(pn::rows)"
+if ((dump_rows)); then
+  print -r -- "$rows"
+  exit 0
+fi
+
+pick_args=(
+  --header "Notifications"
+  --hints "$hints"
+  --height "${PICK_NOTIFICATIONS_HEIGHT:-45%}"
+  --output field:2
+  --key-output ctrl-l:field:3
+  --cache-state
+)
+((resume)) && pick_args+=(--resume)
+[[ -n "$query" ]] && pick_args+=(--query "$query")
+
+out="$(print -r -- "$rows" | pick::start "${pick_args[@]}")" || exit $?
+pn::handle "$out"
