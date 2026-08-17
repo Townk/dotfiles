@@ -818,30 +818,36 @@ EOF
       The output should equal 'rc=0|launches=1|midflight=%9|final=absent'
     End
 
-    It 'sizes the float from --measure and wires --follow + TROUPE_RESIZE_CMD (via $TMUX_PANE) into the pane command'
+    It 'spawns the fixed 15-row float (no --measure) and wires --follow --no-frame --fill-height 15, resize hook absent'
       wiring() {
         run_job job::start --title "W" -- sleep 9 >/dev/null || return 1
-        export JOB_FAKE_TROUPE_MEASURE=9
         export JOB_FAKE_TROUPE_FOLLOW_ACTIONS=""
         JOB_FORCE_HOST=pane run_job job::watch >/dev/null
         rc=$?
-        local geom="no" resize_cmd="no" follow="no" measure_frameless="no" follow_frameless="no"
-        grep -qF -- '57 9 --' "$JOB_FAKE_FLOATPANE_LOG" && geom="yes"
-        grep -qF -- 'export TROUPE_RESIZE_CMD="tmux resize-pane -t \"\$TMUX_PANE\" -y %h"' \
-          "$JOB_FAKE_FLOATPANE_LOG" && resize_cmd="yes"
-        grep -qF -- 'jobs --follow --no-frame --state-root' "$JOB_FAKE_FLOATPANE_LOG" && follow="yes"
-        # --no-frame (troupe-design.md §6 rev, frameless pane host) must ride
-        # BOTH the --measure sizing call and the real --follow launch, or the
-        # measured height and the actually-rendered height disagree (measure
-        # parity): the popup path never carries --no-frame (mux-modal's own
-        # -B/--no-chrome IS that frame there), only the pane host does.
-        grep -qF -- '--measure --no-frame' "$JOB_FAKE_TROUPE_LOG" && measure_frameless="yes"
-        grep -qF -- '--follow --no-frame' "$JOB_FAKE_FLOATPANE_LOG" && follow_frameless="yes"
-        printf 'rc=%s|geom=%s|resize_cmd=%s|follow=%s|measure_frameless=%s|follow_frameless=%s' \
-          "$rc" "$geom" "$resize_cmd" "$follow" "$measure_frameless" "$follow_frameless"
+        # Spec §6 rev 5 (fixed-height pane, live resize suspended): the pane
+        # spawns at the frameless worst case — 57x15, no per-launch
+        # --measure call — and troupe pads shorter content to fill it
+        # (--fill-height 15, footer pinned to the pane's last line). The
+        # resize hook must NOT be wired: resize-pane storms against a
+        # floating pane corrupted the parent window's manual size (needs a
+        # controlled repro before the live re-snug returns). The popup path
+        # never carries --no-frame (mux-modal's own -B/--no-chrome IS that
+        # frame there), only the pane host does.
+        local geom="no" resize_cmd="absent" follow="no" measured="none" fill="no"
+        grep -qF -- '57 15 --' "$JOB_FAKE_FLOATPANE_LOG" && geom="yes"
+        # 'export TROUPE_RESIZE_CMD', not the bare name: the pane command
+        # carries a comment explaining the hook's deliberate absence, and
+        # the bare name would match that comment text.
+        grep -qF -- 'export TROUPE_RESIZE_CMD' "$JOB_FAKE_FLOATPANE_LOG" && resize_cmd="wired"
+        grep -qF -- 'jobs --follow --no-frame --fill-height 15 --state-root' \
+          "$JOB_FAKE_FLOATPANE_LOG" && follow="yes"
+        grep -qF -- '--measure' "$JOB_FAKE_TROUPE_LOG" 2>/dev/null && measured="called"
+        grep -qF -- '--fill-height 15' "$JOB_FAKE_FLOATPANE_LOG" && fill="yes"
+        printf 'rc=%s|geom=%s|resize_cmd=%s|follow=%s|measure=%s|fill=%s' \
+          "$rc" "$geom" "$resize_cmd" "$follow" "$measured" "$fill"
       }
       When call wiring
-      The output should equal 'rc=0|geom=yes|resize_cmd=yes|follow=yes|measure_frameless=yes|follow_frameless=yes'
+      The output should equal 'rc=0|geom=yes|resize_cmd=absent|follow=yes|measure=none|fill=yes'
     End
 
     It 'a failed pane launch is reported and leaves no fifo/state file behind'

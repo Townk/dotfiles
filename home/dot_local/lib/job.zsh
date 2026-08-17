@@ -558,11 +558,11 @@ job::_focus_pane_if_alive() {
 # pane). EOF ends the loop: the pane is already gone (it closed itself),
 # so cleanup is just the fifo and the state file.
 #
-# The initial float IS measured (troupe --measure, same call the popup path
-# makes) even though later drift self-corrects via the live hook: Follow's
-# resize-hook debounce baseline is the model's OWN first-render height, not
-# the pane's actual launched size, so an unmeasured guess would never be
-# corrected by the hook — only a wrong SUBSEQUENT size would.
+# The float is NOT measured (spec §6 rev 5): the pane spawns at the fixed
+# 15-row worst case and troupe pads shorter content to fill it
+# (--fill-height 15, footer pinned to the pane's last line), so there is no
+# per-launch height to ask troupe for — the old --measure sizing retired
+# with the live resize hook.
 #
 # --no-frame (troupe-design.md §6 rev, geometry fix 2026-08-16): unlike the
 # popup path (job::_dashboard_float, mux-modal's own -B/--no-chrome IS the
@@ -570,12 +570,7 @@ job::_focus_pane_if_alive() {
 # self-drawn ▓▓▓ box would double up with it. --width stays 57 TOTAL (the
 # pane's own on-screen width, unchanged from the popup path): --no-frame
 # widens troupe's CONTENT to fill that same 57 instead of shrinking the pane
-# — troupe's own width semantics, not this driver's. --measure must pass
-# the identical --no-frame + --width so the height it reports is the height
-# the follow launch below will actually render (measure-parity) — a framed
-# measurement here would size the pane 2 rows short (the border rows
-# --no-frame drops), leaving %h from TROUPE_RESIZE_CMD's later live re-snug
-# to correct only on the FIRST resize hook firing, not the initial spawn.
+# — troupe's own width semantics, not this driver's.
 job::_watch_pane() {
   local troupe="$1"
   local statefile="$JOB_STATE_ROOT/.dashboard-pane"
@@ -590,30 +585,32 @@ job::_watch_pane() {
   fi
 
   job::_theme_args
-  local h
-  h=$("$troupe" jobs --measure --no-frame --state-root "$JOB_STATE_ROOT" --width 57 2>/dev/null)
-  [[ "$h" == <-> ]] || h=15
+  # FIXED height, live-resize suspended (Mode B 2026-08-16): resize-pane
+  # against a floating pane corrupted underlying window/pane geometry twice
+  # tonight (window pinned smaller/larger than the client — the iPad-style
+  # garbage band) under hook storms; a single isolated resize probes clean,
+  # so the trigger needs a controlled repro before the live re-snug comes
+  # back (upstream tmux#5135 candidate). Until then the pane spawns at the
+  # dashboard's 15-row maximum and NEVER resizes — the renderer's constant
+  # height + reserved rows + empty state fill it stably. 15 is exactly snug
+  # for the overflow worst case: the down chevron sits directly under the
+  # last entry's bar bottom border, with no padding row between them.
+  local h=15
 
   local fifo
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/job-pane-fifo.XXXXXX")
   mkfifo -m 600 -- "$fifo" 2>/dev/null || return 1
 
-  # TROUPE_RESIZE_CMD is exported INSIDE the pane's own command, not on this
-  # process's env: display-popup/new-pane both run from the SERVER's
+  # When the live re-snug returns (rev 5's ledgered follow-up),
+  # TROUPE_RESIZE_CMD must be exported INSIDE the pane's own command, not on
+  # this process's env: display-popup/new-pane both run from the SERVER's
   # environment (job::_theme_args' comment covers the same constraint), so
-  # setting it here would never reach troupe at all. The double-quote-
-  # inside-double-quote (`\"\$TMUX_PANE\"`) is deliberate: this whole
-  # string must survive intact as troupe's OWN opaque template — %h is
-  # substituted by troupe itself (already the FRAMELESS height, since
-  # --no-frame is threaded through to this same --follow launch, so the
-  # model's own height()/Render agree end to end — troupe/jobs' model.go
-  # height() calls Render with opts.Frameless, and Measure above used the
-  # same flag), and $TMUX_PANE must stay UNexpanded until troupe's hook runs
-  # it via its own `sh -c`, reading the FLOAT pane's environment (not this
-  # driver's) at that later moment.
+  # setting it here would never reach troupe at all.
   local -a pane_cmd=(sh -c '
-export TROUPE_RESIZE_CMD="tmux resize-pane -t \"\$TMUX_PANE\" -y %h"
-exec "$1" jobs --follow --no-frame --state-root "$2" --width 57 "${@:4}" > "$3"
+# TROUPE_RESIZE_CMD deliberately NOT exported — live resize suspended, see
+# the fixed-height note above. Without the hook, troupe renders within the
+# constant 15-row pane and never asks anyone to resize anything.
+exec "$1" jobs --follow --no-frame --fill-height 15 --state-root "$2" --width 57 "${@:4}" > "$3"
 ' _ "$troupe" "$JOB_STATE_ROOT" "$fifo" "${AI_THEME_ARGS[@]}")
 
   local pane_id
