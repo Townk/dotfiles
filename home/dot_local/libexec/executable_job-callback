@@ -36,6 +36,18 @@ if [ -n "$dir" ]; then
   icon=$(jq -r '.icon // empty' "$dir/meta.json" 2>/dev/null) || icon=""
 fi
 
+# --notify meta (phase 4): which completion toasts this job wants.
+#   all      — every result toasts (default; label-less pueue tasks too)
+#   failures — Success/Killed silent (the consumer owns its rich success
+#              and quiet cancel toasts — e.g. the clipboard engine); the
+#              --ack failure toast + NC pair still fire
+#   none     — the callback never toasts (result file, history via the
+#              engine's own notify calls, and the statusbar refresh remain)
+notify_mode="all"
+if [ -n "$dir" ]; then
+  notify_mode=$(jq -r '.notify // "all"' "$dir/meta.json" 2>/dev/null) || notify_mode="all"
+fi
+
 # History tagging (phase 3): every toast carries the job's identity so
 # pick-notifications can jump back to its pueue log. jq builds the meta so
 # the title/ids are properly escaped; job_id is empty for label-less tasks.
@@ -44,26 +56,32 @@ meta=$(jq -nc --arg job_id "$job_id" --arg pueue_id "$pueue_id"   --arg result "
 
 case "$result" in
   Success)
-    notify --kind job --source job --meta "$meta" \
-      --icon "${icon:-glyph:nf-md-check_circle}" --sound Glass \
-      "$title completed"
+    if [ "$notify_mode" = "all" ]; then
+      notify --kind job --source job --meta "$meta" \
+        --icon "${icon:-glyph:nf-md-check_circle}" --sound Glass \
+        "$title completed"
+    fi
     ;;
   Killed)
     # A cancel the user asked for: acknowledge without alarm.
-    notify --kind job --source job --meta "$meta" \
-      --icon "glyph:nf-md-close_circle" "$title cancelled"
+    if [ "$notify_mode" = "all" ]; then
+      notify --kind job --source job --meta "$meta" \
+        --icon "glyph:nf-md-close_circle" "$title cancelled"
+    fi
     ;;
   *)
-    # --ack: a failure is acknowledgable (phase 3 UI rev) — it feeds the
-    # status bar's 󰂚 element until pick-notifications is opened.
-    notify --ack --kind job --source job --meta "$meta" \
-      --icon "glyph:nf-md-alert_circle" --sound Basso \
-      "$title failed${exit_code:+ (exit $exit_code)}"
-    # The persistent half of the pair (local screen only — over SSH the
-    # toast already routed to the human via the bridge).
-    if hs_bin=$(notify::available --path); then
-      "$hs_bin" -q -c "hs.notify.new(nil, {title=$(_notify_lua_arg "Job failed: $title"), informativeText=$(_notify_lua_arg "$result${exit_code:+ — exit $exit_code}"), withdrawAfter=0}):send()" \
-        </dev/null >/dev/null 2>&1 || true
+    if [ "$notify_mode" != "none" ]; then
+      # --ack: a failure is acknowledgable (phase 3 UI rev) — it feeds the
+      # status bar's 󰂚 element until pick-notifications is opened.
+      notify --ack --kind job --source job --meta "$meta" \
+        --icon "glyph:nf-md-alert_circle" --sound Basso \
+        "$title failed${exit_code:+ (exit $exit_code)}"
+      # The persistent half of the pair (local screen only — over SSH the
+      # toast already routed to the human via the bridge).
+      if hs_bin=$(notify::available --path); then
+        "$hs_bin" -q -c "hs.notify.new(nil, {title=$(_notify_lua_arg "Job failed: $title"), informativeText=$(_notify_lua_arg "$result${exit_code:+ — exit $exit_code}"), withdrawAfter=0}):send()" \
+          </dev/null >/dev/null 2>&1 || true
+      fi
     fi
     ;;
 esac

@@ -134,6 +134,10 @@ EOF
     export PICK_CLIPBOARD_CORE_LIB="$LIB_DIR/clipboard-store-core.zsh"
     export PICK_CLIPBOARD_NO_RUN=1
     export SCRIPT_PATH="$SCRIPT"
+    # Phase 4: the sidecar sink's job-state sandbox.
+    export JOBROOT="$SHELLSPEC_TMPBASE/jobs"
+    mkdir -p "$JOBROOT"
+    rm -rf "$JOBROOT/j1"
   }
   BeforeEach 'setup'
   AfterEach 'recob_stop'
@@ -257,164 +261,59 @@ EOF
     End
   End
 
-  Describe 'clip::progress_decide (§4.2 throttle, pure)'
-    It 'suppresses everything inside the 500ms grace window'
-      When call run_fn clip::progress_decide 100.4 100.0 100.0 -100 45
-      The output should equal ""
-    End
+  Describe 'clip::progress_stream (phase 4: the job sidecar sink)'
+    # The sink writes $JOB_STATE_ROOT/$JOB_ID/progress — one atomic
+    # `<epoch> <pct> <label>` line per distinct aggregate percent. Outside
+    # a job (no JOB_ID env) it drains rsync and writes nothing. The old
+    # throttle/stall/hs machinery retired with the bespoke HUD driver
+    # (phase 4); staleness is the reader's business via the epoch.
+    sidecar() { cat "$JOBROOT/j1/progress" 2>/dev/null; }
 
-    It 'first post-grace tick emits (spacing satisfied since start)'
-      When call run_fn clip::progress_decide 100.6 100.0 100.0 -100 45
-      The output should equal 1
-    End
-
-    It 'suppresses a tick inside the 300ms spacing window'
-      When call run_fn clip::progress_decide 100.8 100.0 100.6 45 60
-      The output should equal ""
-    End
-
-    It 'suppresses a sub-1-point delta even after the spacing window'
-      When call run_fn clip::progress_decide 101.2 100.0 100.6 45 45
-      The output should equal ""
-    End
-
-    It 'emits on >=1pt delta past the spacing window'
-      When call run_fn clip::progress_decide 101.0 100.0 100.6 45 46
-      The output should equal 1
-    End
-
-    It 'keep-alive: emits with NO delta after 1.5s of silence'
-      When call run_fn clip::progress_decide 102.2 100.0 100.6 45 45
-      The output should equal 1
-    End
-  End
-
-  Describe 'clip::progress_stream (§4.2 headless sink)'
-    It 'fast canned stream emits exactly one HUD update (throttle) once past grace'
-      # progress_begin stamps start=now; forcing CLIP_PROGRESS_START back
-      # to 0 puts every tick past the grace window deterministically. The
-      # three ticks arrive within 300ms, so only the first can emit.
+    It 'writes the aggregate to the sidecar under a job'
       When call zsh -f -c '
+        export JOB_ID=j1 JOB_STATE_ROOT="$JOBROOT"
+        mkdir -p "$JOBROOT/j1"
         source "$SCRIPT_PATH"
         clip::progress_begin
-        CLIP_PROGRESS_START=0
-        CLIP_PROGRESS_LAST_EMIT=0
-        printf "  1,000  10%%\r  5,000  50%%\r 10,000 100%%\r" | clip::progress_stream 0 1 work-laptop
-      '
-      The status should be success
-      # Emits are now supervised background spawns (§4.2b): the fake hs
-      # writes its line asynchronously, so give it a moment to land before
-      # reading HSLOG (this example was observed flaky without the pause).
-      sleep 0.5
-      The contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop")'
-    End
-
-    It 'aggregates over a multi-path manifest (path 3 of 4 at 50% -> 62)'
-      When call zsh -f -c '
-        source "$SCRIPT_PATH"
-        clip::progress_begin
-        CLIP_PROGRESS_START=0
-        CLIP_PROGRESS_LAST_EMIT=0
         printf "  5,000  50%%\r" | clip::progress_stream 2 4 work-laptop
       '
       The status should be success
-      # §4.2b: background spawn -- give the fake hs a moment to write
-      # (observed flaky without the pause).
-      sleep 0.2
-      The contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 62, "work-laptop")'
+      The result of function sidecar should match pattern "[0-9]* 62 work-laptop"
     End
 
-    It 'missing hs binary: sink drains stdin as a no-op'
-      rm -f "$BINDIR/hs"
+    It 'the last distinct percent wins (one line, atomic rename)'
       When call zsh -f -c '
+        export JOB_ID=j1 JOB_STATE_ROOT="$JOBROOT"
+        mkdir -p "$JOBROOT/j1"
         source "$SCRIPT_PATH"
         clip::progress_begin
-        CLIP_PROGRESS_START=0
+        printf "  1,000  10%%\r  5,000  50%%\r 10,000 100%%\r" | clip::progress_stream 0 1 work-laptop
+      '
+      The status should be success
+      The result of function sidecar should match pattern "[0-9]* 100 work-laptop"
+    End
+
+    It 'never regresses: a lower record keeps the high-water percent'
+      When call zsh -f -c '
+        export JOB_ID=j1 JOB_STATE_ROOT="$JOBROOT"
+        mkdir -p "$JOBROOT/j1"
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        printf "  9,000  90%%\r  2,000  20%%\r" | clip::progress_stream 0 1 work-laptop
+      '
+      The status should be success
+      The result of function sidecar should match pattern "[0-9]* 90 work-laptop"
+    End
+
+    It 'outside a job: drains stdin, writes no sidecar'
+      When call zsh -f -c '
+        unset JOB_ID JOB_STATE_ROOT
+        source "$SCRIPT_PATH"
+        clip::progress_begin
         printf "  5,000  50%%\r" | clip::progress_stream 0 1 work-laptop
       '
       The status should be success
-      The contents of file "$HSLOG" should equal ""
-    End
-
-    It 'pre-first-record wait is bright preparing state, then first chunk switches to copying'
-      When call zsh -f -c '
-        export PICK_CLIPBOARD_STALL_SECS=0.3
-        source "$SCRIPT_PATH"
-        clip::progress_begin
-        CLIP_PROGRESS_START=0
-        CLIP_PROGRESS_LAST_EMIT=0
-        { sleep 0.8; printf "  1,000  10%%\r"; } | clip::progress_stream 0 1 "Copying report.zip from peer…"
-      '
-      The status should be success
-      sleep 0.2
-      The line 1 of contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 0, "Preparing to copy report.zip from peer…", "preparing")'
-      The contents of file "$HSLOG" should end_with 'require("osd").progress("glyph:nf-md-download", 10, "Copying report.zip from peer…")'
-    End
-
-    It 'stall: quiet gap emits a stalled repaint, next chunk snaps back past the throttle (§4.3)'
-      # STALL_SECS=0.3 keeps the test fast; the 0.8s quiet gap comfortably
-      # exceeds it (>=1 stall tick guaranteed, timing-tolerant). START=0
-      # puts every tick past the grace window.
-      When call zsh -f -c '
-        export PICK_CLIPBOARD_STALL_SECS=0.3
-        source "$SCRIPT_PATH"
-        clip::progress_begin
-        CLIP_PROGRESS_START=0
-        CLIP_PROGRESS_LAST_EMIT=0
-        { printf "  1,000  10%%\r"; sleep 0.8; printf "  5,000  50%%\r"; } | clip::progress_stream 0 1 work-laptop
-      '
-      The status should be success
-      # First emit: normal 10%. At least one stalled repaint carrying the
-      # last known pct. Final emit: the post-stall 50% arrives while the
-      # 300ms spacing window is still open -- only the stall bypass can
-      # let it through, so this line IS the bypass assertion.
-      # This shellspec (0.28.1) supports `The line N of contents of file`
-      # but not a `last`/negative-index line modifier ("Unknown word 'last'
-      # after contents modifier" / "parameter #1 of line modifier is not a
-      # number" -- verified empirically), so the final property below uses
-      # `should end_with` on the whole contents instead -- confirmed to
-      # discriminate (fails when the file doesn't actually end with this
-      # line, per a throwaway probe run before committing).
-      # §4.2b: the final (post-stall) emit is a background spawn with no
-      # subsequent progress_end in this example to synchronize on -- give
-      # it a moment to land (observed flaky without the pause).
-      sleep 0.2
-      The line 1 of contents of file "$HSLOG" should equal 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop")'
-      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 10, "work-laptop", true)'
-      The contents of file "$HSLOG" should end_with 'require("osd").progress("glyph:nf-md-download", 50, "work-laptop")'
-    End
-
-    It 'a hung hs emit never blocks the sink; teardown reaps the straggler (§4.2b)'
-      # Fake hs that logs its payload then hangs forever: with synchronous
-      # emits this example would wedge until the shellspec timeout; with
-      # supervised background emits the whole pipeline finishes in ~1s.
-      cat > "$BINDIR/hs-hang" <<EOF
-#!/bin/sh
-[ -c /dev/fd/0 ] && [ "\$1" = "-q" ] && [ "\$2" = "-c" ] && printf '%s\n' "\$3" >> "$HSLOG"
-sleep 300
-EOF
-      chmod +x "$BINDIR/hs-hang"
-      export PICK_CLIPBOARD_HS="$BINDIR/hs-hang"
-      When call zsh -f -c '
-        source "$SCRIPT_PATH"
-        clip::progress_begin
-        CLIP_PROGRESS_START=0
-        CLIP_PROGRESS_LAST_EMIT=0
-        { printf "  1,000  10%%\r"; sleep 0.4; printf "  5,000  50%%\r"; sleep 0.4; printf "  9,000  90%%\r"; } | clip::progress_stream 0 1 hang-probe
-        clip::progress_end
-        # Teardown killed the last emitter: its pid must be gone.
-        if [[ -n "${CLIP_PROGRESS_EMIT_PID:-}" ]] && kill -0 "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null; then
-          print -u2 -- "straggler-still-alive"
-          exit 90
-        fi
-      '
-      The status should be success
-      # progress_end launches hide fire-and-forget; allow its fake to log.
-      sleep 0.2
-      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 10, "hang-probe")'
-      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 50, "hang-probe")'
-      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 90, "hang-probe")'
-      The contents of file "$HSLOG" should include 'require("osd").progressHide()'
+      The path "$JOBROOT/j1/progress" should not be exist
     End
   End
 
@@ -423,9 +322,8 @@ EOF
       id=$(seed_remote_manifest_row)
       When call run_restore_id "$id"
       The status should be success
-      # The fake rsync finishes instantly -- inside the 500ms grace window,
-      # so the HUD must never flash (and progressHide is skipped: nothing
-      # was shown).
+      # Outside a job (no JOB_ID env in this harness) the sink is inert:
+      # nothing is written anywhere; the engine toast is the only feedback.
       The contents of file "$HSLOG" should equal ""
       The contents of file "$NOTIFYLOG" should include "--icon glyph:nf-md-file_multiple --sound Frog Copied from work-laptop"
     End
@@ -569,50 +467,6 @@ EOF
     End
   End
 
-  Describe 'clip::progress_emit label escaping (§4.2a)'
-    # Expected value has ONE escaped backslash (\\) ahead of "name": the
-    # label's single literal backslash is doubled once by clip::progress_emit
-    # for Lua-string embedding (a real `hs -c` evaluates the -c argument as
-    # Lua source, where "\\" decodes back to one literal backslash) -- this
-    # is the literal -c argument text, not a further-escaped rendering of it.
-    # Discrimination-verified: reverting the backslash-escape line in
-    # clip::progress_emit (so the label's `\` passes through unescaped)
-    # makes this assertion fail (the log then holds a single unescaped `\`
-    # ahead of "name" instead of the doubled `\\`).
-    It 'escapes backslash and double quote; CR/LF become spaces'
-      When call zsh -f -c '
-        source "$SCRIPT_PATH"
-        clip::progress_begin
-        clip::progress_emit 40 "we\"ird\\name"
-      '
-      The status should be success
-      # §4.2b: background spawn -- give the fake hs a moment to write
-      # (observed flaky without the pause).
-      sleep 0.2
-      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 40, "we\"ird\\name")'
-    End
-
-    It 'CR and LF in a label become spaces (a filename could carry either)'
-      When call zsh -f -c '
-        source "$SCRIPT_PATH"
-        clip::progress_begin
-        clip::progress_emit 40 $'"'"'weird\rna\nme'"'"'
-      '
-      The status should be success
-      # §4.2b: background spawn -- give the fake hs a moment to write
-      # (observed flaky without the pause).
-      sleep 0.2
-      The contents of file "$HSLOG" should include 'require("osd").progress("glyph:nf-md-download", 40, "weird na me")'
-    End
-  End
-
-  # Wave 2 consolidation: the restore-failure box routes its gum styling through
-  # the shared theme::gum_style_env (danger role) instead of an inline GUM_STYLE_*
-  # env. The gum call itself writes to /dev/tty (untestable headless, same as
-  # pbpaste's size-cap dialog), but the SHARED ENV it exports is what matters:
-  # run the real function (gum stubbed, its /dev/tty write allowed to fail and be
-  # swallowed) and assert the GUM_STYLE_* it exported equals the canonical danger
-  # accent (C_HEX_DIALOG_DANGER) — i.e. the caller renders with the shared env.
   Describe 'clip::render_restore_failure (Wave 2: shared gum_style env)'
     # Returns 0 iff the GUM_STYLE_* the function exported both equal the
     # canonical danger accent (C_HEX_DIALOG_DANGER). The gum stub's /dev/tty

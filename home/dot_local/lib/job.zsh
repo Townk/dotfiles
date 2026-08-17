@@ -53,12 +53,26 @@ job::_ensure_group() {
 # real task id.
 job::start() {
   local group="default" title="" icon="" progress="expected" modal=0
+  local notify_mode="all"
   while [ $# -gt 0 ]; do
     case "$1" in
       --group) group="$2"; shift 2 ;;
       --title) title="$2"; shift 2 ;;
       --icon) icon="$2"; shift 2 ;;
       --no-progress) progress="none"; shift ;;
+      # --notify all|failures|none (phase 4): which completion toasts the
+      # callback sends. `failures` is for consumers with their OWN rich
+      # success/cancel toasts (the clipboard engine) — the callback stays
+      # silent on Success/Killed and still sends the --ack failure toast;
+      # `none` silences the callback entirely (result file + statusbar
+      # refresh still happen). Default `all` = existing behavior.
+      --notify)
+        case "${2:-}" in
+          all | failures | none) notify_mode="$2" ;;
+          *) die "job::start: --notify must be all, failures, or none" ;;
+        esac
+        shift 2
+        ;;
       --modal) modal=1; shift ;;
       --) shift; break ;;
       *) break ;;
@@ -78,9 +92,10 @@ job::start() {
   local dir="$JOB_STATE_ROOT/$id"
   mkdir -p -- "$dir"
   jq -n --arg title "$title" --arg icon "$icon" --arg group "$group" \
-    --arg progress "$progress" --argjson created "$EPOCHSECONDS" \
+    --arg progress "$progress" --arg notify "$notify_mode" \
+    --argjson created "$EPOCHSECONDS" \
     '{title:$title, icon:$icon, group:$group, pueue_id:-1,
-      progress:$progress, created:$created}' > "$dir/meta.json"
+      progress:$progress, notify:$notify, created:$created}' > "$dir/meta.json"
 
   job::_ensure_group "$pueue" "$group"
   local cmdline="JOB_ID=${(q)id} JOB_STATE_ROOT=${(q)JOB_STATE_ROOT} ${(j: :)${(q)@}}"

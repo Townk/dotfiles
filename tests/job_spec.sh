@@ -275,6 +275,26 @@ EOF
     End
   End
 
+  Describe 'job::start --notify'
+    It 'records the mode in meta.json (default all)'
+      modes() {
+        id1=$(run_job job::start --title A -- true) || return 1
+        id2=$(run_job job::start --notify failures --title B -- true) || return 2
+        printf '%s|%s' \
+          "$(jq -r '.notify' "$JOB_STATE_ROOT/$id1/meta.json")" \
+          "$(jq -r '.notify' "$JOB_STATE_ROOT/$id2/meta.json")"
+      }
+      When call modes
+      The output should equal 'all|failures'
+    End
+
+    It 'rejects an unknown mode'
+      When call run_job job::start --notify sometimes --title X -- true
+      The status should be failure
+      The stderr should include "--notify must be"
+    End
+  End
+
   Describe 'job::progress'
     It 'atomically rewrites the single-line sidecar'
       prog() {

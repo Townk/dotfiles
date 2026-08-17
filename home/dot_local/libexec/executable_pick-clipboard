@@ -491,7 +491,20 @@ clip::copy_ok() {
   return 0
 }
 
-# --- materialization progress (copy-feedback design §4.2) --------------------
+# --- materialization progress (phase 4: the job-runner sidecar) --------------
+# The bespoke HUD driver died here (copy-feedback design §4.2/§4.2b/§4.3 —
+# throttle, stall repaints, and the per-frame `hs -c osd.progress` emitter
+# with its detached-spawn fd lore; see that spec's as-built addendum). A
+# headless restore now runs UNDER the job runner (`job start -- pick-clipboard
+# --restore-id N`, clipboard-picker.lua), so progress is one atomic sidecar
+# line per parsed rsync record: `<epoch> <pct> <label>` into
+# $JOB_STATE_ROOT/$JOB_ID/progress — the same write job::progress makes,
+# inlined because a fork+source per record (~10/s) is real cost while three
+# shell builtins are not (contract: job-runner design §3, chezmoi-silo-map).
+# The HUD owns cadence and derives staleness from the epoch, which is the
+# whole §4.3 stall apparatus expressed in zero lines; cancel arrives as the
+# process-group TERM pueue sends, landing in the §4.4 trap unchanged.
+
 # Pure aggregate over an N-path manifest: completed whole paths + the
 # running rsync's own whole-invocation percent (--info=progress2 reports
 # recursive-total percent, so per-path progress is already whole-transfer).
@@ -514,159 +527,50 @@ clip::progress_label() {
   fi
 }
 
-# Pure throttle decision: prints "1" to emit, nothing to skip. All inputs
-# as args (EPOCHREALTIME-style float seconds; integer percents) so the spec
-# suite can table-test every rule without sleeping:
-#   - 500ms grace from transfer start (tiny/cached pulls never flash a HUD)
-#   - then: >=1 point delta AND >=300ms since the last emit
-#   - keep-alive: >=1.5s of silence emits regardless of delta, so a slow
-#     link can't look like a dead widget
-clip::progress_decide() {
-  local now=$1 start=$2 last_emit=$3
-  local -i last_pct=$4 pct=$5
-  (( now - start >= 0.5 )) || return 0
-  if (( now - last_emit >= 1.5 )); then
-    print -rn -- 1
-    return 0
-  fi
-  if (( pct - last_pct >= 1 && now - last_emit >= 0.3 )); then
-    print -rn -- 1
-  fi
-  return 0
-}
-
-# Headless-sink state + IPC. clip::progress_begin resets it per
-# materialization; clip::progress_stream is the pipeline sink rsync's
-# stdout feeds (runs in the CURRENT shell -- zsh executes the last pipeline
-# segment in-process -- so the CLIP_PROGRESS_* globals genuinely carry
-# across manifest paths). Every hs call is best-effort: an OSD hiccup must
-# never fail a pull. PICK_CLIPBOARD_HS is the test override.
+# Sink state. Headless under the job runner: JOB_ID/JOB_STATE_ROOT are in
+# the environment (injected by job::start) and the job dir exists; anything
+# else (interactive tty path, a bare headless run outside a job) has no
+# sink and the stream drains rsync without writing.
 clip::progress_begin() {
-  CLIP_PROGRESS_START=$EPOCHREALTIME
-  CLIP_PROGRESS_LAST_EMIT=$CLIP_PROGRESS_START
-  CLIP_PROGRESS_LAST_PCT=-100
-  CLIP_PROGRESS_SHOWN=""
-  CLIP_PROGRESS_EMIT_PID=""
-  CLIP_PROGRESS_HS="${PICK_CLIPBOARD_HS:-hs}"
-  command -v "$CLIP_PROGRESS_HS" >/dev/null 2>&1 || CLIP_PROGRESS_HS=""
-  CLIP_PROGRESS_STALLED=0
-  CLIP_PROGRESS_STALL_SECS="${PICK_CLIPBOARD_STALL_SECS:-2}"
-  # zselect gives the stream sink a read timeout (stall detection, §4.3);
-  # without the module (minimal zsh build) reads stay blocking -- the
-  # pre-stall-indicator behavior, degraded but functional.
-  CLIP_PROGRESS_ZSELECT=0
-  zmodload zsh/zselect 2>/dev/null && CLIP_PROGRESS_ZSELECT=1
+  CLIP_PROGRESS_LAST_PCT=-1
+  CLIP_PROGRESS_SIDECAR=""
+  if [[ -n "${JOB_ID:-}" && -n "${JOB_STATE_ROOT:-}" && -d "$JOB_STATE_ROOT/$JOB_ID" ]]; then
+    CLIP_PROGRESS_SIDECAR="$JOB_STATE_ROOT/$JOB_ID/progress"
+  fi
 }
 
-clip::progress_emit() {  # <pct> <label> [stalled]
-  [[ -n "${CLIP_PROGRESS_HS:-}" ]] || return 0
-  local stall_arg=""
-  if [[ "${3:-}" == preparing ]]; then
-    stall_arg=', "preparing"'
-  elif [[ -n "${3:-}" ]]; then
-    stall_arg=", true"
-  fi
-  # Lua-string escaping (§4.2a): backslash first, then double quote; CR/LF
-  # in a filename would break the -c one-liner -> spaces.
-  local label=$2
-  label="${label//$'\r'/ }"
-  label="${label//$'\n'/ }"
-  label="${label//\\/\\\\}"
-  label="${label//\"/\\\"}"
-  # §4.2b: NEVER wait on presentation IPC -- a hung hs -c (captured live:
-  # one stalled-repaint emit stuck for many seconds inside the hs.task
-  # child context) must cost one tick, not the transfer. Supervised
-  # fire-and-forget: at most one emitter in flight; a still-running
-  # predecessor carries an obsolete frame, so kill it before spawning the
-  # replacement -- which also makes out-of-order repaints impossible.
-  if [[ -n "${CLIP_PROGRESS_EMIT_PID:-}" ]] && kill -0 "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null; then
-    kill -TERM "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null || true
-  fi
-  # ( exec ... ) & : $! is the hs process itself, so the kill above always
-  # hits the real client, never a wrapper shell.
-  # Sanctioned deviation (empirically found, not in the design doc): a
-  # detached spawn must not inherit ANY open descriptor from its caller.
-  # In particular, stdin is rsync's progress pipe here: the real hs CLI
-  # reads from stdin and was stealing most progress records from the sink
-  # (a fake hs that ignored stdin rendered a smooth 0→99 trace). Redirect it
-  # from /dev/null; stdout/stderr are discarded below. Under the
-  # shellspec harness this shell's own multi-process pipe fds (3, 5, 9...)
-  # survive exec unless closed -- confirmed via lsof: a stalled `hs` grand-
-  # child (e.g. this file's own test fake) held one of those pipes open,
-  # which blocked shellspec's OWN executor in read() waiting for an EOF
-  # that could never arrive while the fake slept. Closing 3-9 covers every
-  # fd actually observed leaking. Single digits only: this build's zsh
-  # mis-parses a two-digit `exec N>&-` target as a bare command ("command
-  # not found: 10"), fatal even under `|| true` -- verified with a
-  # standalone `zsh -f -c 'exec 10>&-'` repro.
-  # -q disables hs.ipc's console mirroring. Hammerspoon 1.1.1 has an upstream
-  # recursion bug in that mirror: an unrelated print while a CLI request is
-  # active can cascade hundreds of "already recursing" warnings, and laying
-  # them out in the HS Console blocks its main thread/event taps (captured live
-  # as pulsed keyboard and click stalls, worst during frequent live repaints).
-  ( for _fd in {3..9}; do eval "exec $_fd>&-" 2>/dev/null || true; done
-    exec "$CLIP_PROGRESS_HS" -q -c "require(\"osd\").progress(\"glyph:nf-md-download\", $1, \"${label}\"${stall_arg})" ) </dev/null >/dev/null 2>&1 &
-  CLIP_PROGRESS_EMIT_PID=$!
-  CLIP_PROGRESS_SHOWN=1
+# clip::progress_sink <pct> <label> — one atomic sidecar line (write-then-
+# rename, the reader can never see a torn line). Best-effort: a failed
+# write must never fail the transfer.
+clip::progress_sink() {
+  [[ -n "${CLIP_PROGRESS_SIDECAR:-}" ]] || return 0
+  local tmp="${CLIP_PROGRESS_SIDECAR:h}/.progress.tmp"
+  { print -r -- "$EPOCHSECONDS $1 $2" > "$tmp" && mv -f -- "$tmp" "$CLIP_PROGRESS_SIDECAR" } 2>/dev/null || true
   return 0
 }
 
 clip::progress_stream() {  # <completed-paths> <total-paths> <label>
   local -i completed=$1 total=$2
-  local label=$3 chunk now
-  local -i agg rc stall_cs
-  # No hs to drive: drain stdin so rsync never blocks on a full pipe.
-  [[ -n "${CLIP_PROGRESS_HS:-}" ]] || { cat >/dev/null; return 0 }
-  # progress2 redraws its meter with bare CRs -- and it redraws
-  # CONTINUOUSLY while bytes flow, so meter silence IS the stall signal
-  # (§4.3). zselect-timed reads turn each quiet window into a stalled
-  # repaint: capsule stays visible (hiding must mean done/dead, never
-  # waiting) and the Lua watchdog stays fed, leaving it to fire only for a
-  # genuinely dead driver. EOF makes the fd readable, so a closed pipe
-  # always exits through the read failure below, never a stall loop.
-  stall_cs=$(( CLIP_PROGRESS_STALL_SECS * 100 ))
+  local label=$3 chunk
+  local -i agg rc
+  # No sink: drain stdin so rsync never blocks on a full pipe.
+  [[ -n "${CLIP_PROGRESS_SIDECAR:-}" ]] || { cat >/dev/null; return 0 }
+  # progress2 redraws its meter with bare CRs. Every parsed record writes
+  # the sidecar (the old throttle died with the HUD driver — the reader
+  # owns cadence); a quiet link simply leaves the epoch aging, which is
+  # what the HUD renders as stalled/grey.
   while true; do
-    if (( CLIP_PROGRESS_ZSELECT )) && ! zselect -t $stall_cs -r 0; then
-      # Quiet window: repaint the last known percent as stalled (-100
-      # start value clamps to 0 -- a stall before any data still shows a
-      # capsule, at 0%). Refreshing LAST_EMIT here means only the STALLED
-      # flag below can let the resume chunk through the throttle.
-      if (( CLIP_PROGRESS_LAST_PCT < 0 )); then
-        # Connection/setup before rsync's first progress record is not a
-        # transfer stall. Keep it bright and label it honestly; Lua renders
-        # the preparing state with the hourglass but without stall dimming.
-        clip::progress_emit 0 "Preparing to copy ${label#Copying }" preparing
-      else
-        clip::progress_emit "$CLIP_PROGRESS_LAST_PCT" "$label" stalled
-      fi
-      CLIP_PROGRESS_STALLED=1
-      CLIP_PROGRESS_LAST_EMIT=$EPOCHREALTIME
-      continue
-    fi
-    # `read ...; rc=$?` (two bare statements) would trip this script's own
-    # `set -e`: the read failing on EOF is a plain statement, not part of an
-    # if/while condition or an && / || list ending in something else, so
-    # errexit fires on it BEFORE `rc=$?` ever runs -- verified empirically
-    # (a minimal `set -e; false; echo done` never reaches the echo either).
-    # `read ... || rc=$?` puts read on the non-final side of an || list,
-    # which IS exempt, and still captures its status the moment it fails.
+    # `read ... || rc=$?`: read on the non-final side of an || list is
+    # exempt from this script's set -e, and still captures EOF the moment
+    # it happens (see git history for the errexit lesson).
     rc=0
     IFS= read -r -d $'\r' chunk || rc=$?
     (( rc )) && [[ -z "$chunk" ]] && break
     if [[ "$chunk" =~ '([0-9]+)%' ]]; then
       agg=$(clip::progress_pct "$completed" "$total" "$match[1]")
       (( agg < CLIP_PROGRESS_LAST_PCT )) && agg=$CLIP_PROGRESS_LAST_PCT
-      now=$EPOCHREALTIME
-      if (( CLIP_PROGRESS_STALLED )); then
-        # Resume after a stall: bypass the throttle so the capsule snaps
-        # back to the live look on the very first data chunk (§4.3).
-        clip::progress_emit "$agg" "$label"
-        CLIP_PROGRESS_STALLED=0
-        CLIP_PROGRESS_LAST_EMIT=$now
-        CLIP_PROGRESS_LAST_PCT=$agg
-      elif [[ -n "$(clip::progress_decide "$now" "$CLIP_PROGRESS_START" "$CLIP_PROGRESS_LAST_EMIT" "$CLIP_PROGRESS_LAST_PCT" "$agg")" ]]; then
-        clip::progress_emit "$agg" "$label"
-        CLIP_PROGRESS_LAST_EMIT=$now
+      if (( agg != CLIP_PROGRESS_LAST_PCT )); then
+        clip::progress_sink "$agg" "$label"
         CLIP_PROGRESS_LAST_PCT=$agg
       fi
     fi
@@ -675,33 +579,6 @@ clip::progress_stream() {  # <completed-paths> <total-paths> <label>
   return 0
 }
 
-# Teardown (§4.2): every exit path of a headless pull hides the HUD before
-# any toast or failure surfaces. §4.2b: kill the outstanding emitter FIRST
-# (a straggler landing after the hide would repaint a dead capsule until
-# the watchdog), then spawn the hide fire-and-forget -- if the hide itself
-# hangs, the 15s watchdog is the backstop.
-clip::progress_end() {
-  if [[ -n "${CLIP_PROGRESS_EMIT_PID:-}" ]] && kill -0 "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null; then
-    # Sanctioned deviation (empirically found, not in the design doc): a
-    # straggler killed in the SAME instant it was forked can lose the
-    # exec-vs-kill race outright -- SIGTERM lands before the child ever
-    # reaches its `-c` payload write, not just before its sleep. 30ms is a
-    # fixed grace (never waits ON the hs process -- it fires whether or
-    # not hs is alive, so it can never itself hang) that gives the OS one
-    # scheduling quantum to actually run the just-spawned emitter before
-    # it gets torn down. Gated on a live predecessor: the common cache-hit
-    # / no-progress-ever-shown teardown path must not pay this tax.
-    sleep 0.03
-    kill -TERM "$CLIP_PROGRESS_EMIT_PID" 2>/dev/null || true
-  fi
-  CLIP_PROGRESS_EMIT_PID=""
-  [[ -n "${CLIP_PROGRESS_SHOWN:-}" && -n "${CLIP_PROGRESS_HS:-}" ]] || return 0
-  # fd-closing loop: see clip::progress_emit -- same detached-spawn hygiene.
-  ( for _fd in {3..9}; do eval "exec $_fd>&-" 2>/dev/null || true; done
-    exec "$CLIP_PROGRESS_HS" -q -c 'require("osd").progressHide()' ) </dev/null >/dev/null 2>&1 &
-  CLIP_PROGRESS_SHOWN=""
-  return 0
-}
 
 # Staged file materializations are disposable, but not immortal. Sweep only
 # the exact numeric <clip-id>/<position> directories owned by this picker;
@@ -778,7 +655,6 @@ clip::pull_cancelled() {
     }
     touch "$CLIP_PULL_SUB" 2>/dev/null || true
   fi
-  clip::progress_end
   local notify_bin="${PICK_CLIPBOARD_NOTIFY:-$HOME/.local/bin/notify}"
   if [[ -x "$notify_bin" ]]; then
     "$notify_bin" --icon "glyph:nf-md-close" "Transfer cancelled" >/dev/null 2>&1 || true
@@ -920,9 +796,9 @@ clip::copy_files_by_id() {
   local -i idx=0 pulled=0
   local sub lp auth_marker partial_marker partial_dir
 
-  # Progress sinks (copy-feedback design §4): a live tty renders rsync's own
-  # meter in the pane (pbpaste tier-2 UX); headless (--restore-id from the
-  # GUI) drives the top-right OSD HUD instead.
+  # Progress sinks (phase 4): a live tty renders rsync's own meter in the
+  # pane (pbpaste tier-2 UX); headless (--restore-id, launched under the
+  # job runner by the GUI) writes the job sidecar the capsule stack reads.
   local -i n_paths=${#rpaths[@]} have_tty=0
   clip::has_live_tty && have_tty=1
   (( have_tty )) || clip::progress_begin
@@ -950,7 +826,7 @@ clip::copy_files_by_id() {
     if [[ ! -e "$lp" || ! -e "$auth_marker" ]]; then
       [[ -d "$sub" ]] && clip::cache_remove_sub "$cacheroot" "$sub" || true
       mkdir -p "$sub" "$cachedir/.authorized" "$cachedir/.partial" "$partial_dir" ||
-        { clip::progress_end; clip::restore_fail "cannot create $sub"; return 1 }
+        { clip::restore_fail "cannot create $sub"; return 1 }
       CLIP_PULL_SUB="$sub"
       CLIP_PULL_MARKER="$partial_marker"
       rm -f "$auth_marker"
@@ -1001,7 +877,6 @@ clip::copy_files_by_id() {
         rrc=${pipestatus[1]}
       fi
       if (( rrc != 0 )); then
-        clip::progress_end
         clip::cache_remove_sub "$cacheroot" "$sub" || true
         clip::cache_remove_meta_sub "$cacheroot" "$partial_dir" || true
         rm -f "$partial_marker" 2>/dev/null || true
@@ -1025,7 +900,6 @@ clip::copy_files_by_id() {
     fi
     local_paths+=("$lp")
   done
-  clip::progress_end
 
   for lp in "${local_paths[@]}"; do
     if [[ -L "$lp" || ( ! -f "$lp" && ! -d "$lp" ) ]]; then

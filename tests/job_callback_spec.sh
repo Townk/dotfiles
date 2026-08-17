@@ -136,6 +136,46 @@ EOF
     The output should equal 'swept|kept'
   End
 
+  # phase 4: the --notify meta gates the callback's toasts.
+  Describe 'the --notify gate'
+    seed_notify() {  # <mode>
+      zsh -f -c 'source "$1" >/dev/null 2>&1 || exit 99; shift
+                 job::start --notify "$1" --title "Quiet X" -- true' \
+        -- "$JOBLIB" "$1"
+    }
+
+    It 'failures: Success and Killed stay silent, the failure toast fires'
+      quiet_flow() {
+        seed_notify failures >/dev/null || return 1
+        zsh -f "$CALLBACK" 7 "Success" 0 || return 2
+        seed_notify failures >/dev/null || return 3
+        zsh -f "$CALLBACK" 7 "Killed" "" || return 4
+        seed_notify failures >/dev/null || return 5
+        zsh -f "$CALLBACK" 7 "Failed" 2 || return 6
+        printf '%s|%s|%s' \
+          "$(grep -c 'completed' "$CB_SANDBOX/hs.log" || :)" \
+          "$(grep -c 'cancelled' "$CB_SANDBOX/hs.log" || :)" \
+          "$(grep -c 'failed' "$CB_SANDBOX/hs.log" || :)"
+      }
+      When call quiet_flow
+      The output should equal '0|0|2'
+    End
+
+    It 'none: even the failure stays silent; result + resync still happen'
+      silent_fail() {
+        seed_notify none >/dev/null || return 1
+        id=$(ls -t "$JOB_STATE_ROOT" | head -1)
+        zsh -f "$CALLBACK" 7 "Failed" 2 || return 2
+        printf '%s|%s|%s' \
+          "$([ -e "$CB_SANDBOX/hs.log" ] && wc -l < "$CB_SANDBOX/hs.log" | tr -d ' ' || echo 0)" \
+          "$([ -e "$JOB_STATE_ROOT/$id/result" ] && echo result || echo none)" \
+          "$(grep -cF 'refresh-client -S' "$CB_SANDBOX/tmux.log")"
+      }
+      When call silent_fail
+      The output should equal '0|result|2'
+    End
+  End
+
   # phase 3 UI rev: a failure is an ACK-ABLE toast — notify --ack feeds
   # the unacked ledger (the bar's bell element); the callback itself only
   # forces repaints at transitions.

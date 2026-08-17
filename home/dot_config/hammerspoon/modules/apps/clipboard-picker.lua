@@ -606,6 +606,10 @@ local function copy_toast(id)
 end
 
 local PICK_CLIPBOARD_BIN = (os.getenv("HOME") or "") .. "/.local/libexec/pick-clipboard"
+-- Phase 4: headless restores run UNDER the job runner — capsule, dashboard
+-- row, statusbar percent, cancel and completion toasts all come from that
+-- stack now (job-runner design §9.4); this module only enqueues.
+local JOB_BIN = (os.getenv("HOME") or "") .. "/.local/libexec/job"
 
 -- Single-quote a string for safe embedding in a shell command line: wrap in
 -- '...', escaping any embedded ' as '\''  (close quote, escaped quote,
@@ -701,36 +705,31 @@ local function headless_restore(id, onDone)
     if onDone then onDone(false) end
     return nil
   end
-  local cmd = shell_quote(PICK_CLIPBOARD_BIN) .. " --restore-id " .. tostring(intId)
-  local cancelled = false
+
+  -- Enqueue under the job runner: pueue captures this login shell's env at
+  -- add time (the phase-1-validated SSH_AUTH_SOCK gate), the engine writes
+  -- the progress sidecar, the jobs HUD renders/cancels the capsule, and
+  -- job-callback owns completion. --notify failures: the engine already
+  -- sends its own rich success toast and quiet cancel toast; the callback
+  -- adds only the --ack failure toast + NC pair. The task callback below
+  -- therefore fires at ENQUEUE time — its only failure mode is pueued
+  -- being unreachable, which gets the durable notification pair.
+  local cmd = shell_quote(JOB_BIN)
+    .. " start --title \"Clipboard restore\" --icon glyph:nf-md-download"
+    .. " --notify failures -- "
+    .. shell_quote(PICK_CLIPBOARD_BIN) .. " --restore-id " .. tostring(intId)
   local task
   task = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
-    -- Fast transfers may finish inside the HUD grace window -- the capsule
-    -- (and its progressHide) never happens, so clear the registration here
-    -- unconditionally or it leaks into the next transfer.
-    osd.progressCancel(nil)
-    -- Success is the exit code alone, never output presence: pick-clipboard
-    -- can legitimately print nothing on stdout/stderr on a clean success,
-    -- and conversely a captured failure reason on stderr must never be
-    -- mistaken for "it printed something so it must have worked".
     local ok = (exitCode == 0)
-    -- Always printed to the HS console (both branches) -- so the full
-    -- stdout+stderr is retrievable after the fact even when the toast was
-    -- missed, which live validation showed was easy to do.
+    -- Always printed to the HS console so the enqueue result is
+    -- retrievable after the fact (the job id on success).
     print(string.format(
-      "clipboard-picker: headless restore id=%d exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
+      "clipboard-picker: headless restore enqueue id=%d exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
       intId, tostring(exitCode), stdOut or "", stdErr or ""))
-    if not ok and not cancelled and exitCode ~= 130 then
-      -- A transient toast's default ~2s lifetime was unreadably brief for a
-      -- failure (live validation). hs.notify is a real Notification Center item;
-      -- withdrawAfter=0 disables its own default auto-withdrawal (5s for
-      -- the hs.notify.show() shorthand, per hs.notify docs) so it stays
-      -- until the user dismisses it -- same durable-until-acknowledged
-      -- intent as the terminal picker's own restore-failure hold (W2).
-      local reason = last_line(stdErr) or "restore failed"
-      -- §4.2a: the NC item below is durable but Focus can swallow it
-      -- silently -- live validation watched a failed pull vanish with no
-      -- visible message. The OSD toast is the can't-miss immediate signal.
+    if not ok then
+      local reason = last_line(stdErr) or "could not enqueue the restore"
+      -- The can't-miss immediate signal + the durable NC item (Focus can
+      -- swallow either alone) — same pairing the old driver used.
       osd.notify("glyph:nf-md-alert", "Copy failed — " .. reason, "Basso")
       hs.notify.new(nil, {
         title = "Clipboard restore failed",
@@ -738,21 +737,9 @@ local function headless_restore(id, onDone)
         withdrawAfter = 0,
       }):send()
     end
-    -- exit 130 / cancelled: §4.4 cancel contract -- the engine already
-    -- cleaned up and toasted quietly; a cancel is not a failure.
     if onDone then onDone(ok) end
   end, { "-lc", cmd })
   task:start()
-  osd.progressCancel(function()
-    -- SIGTERM to the zsh wrapper alone is deferred until the foreground
-    -- rsync exits -- kill rsync (the wrapper's direct child) first; rsync
-    -- TERM-cleans its own temp file. Then terminate() fires the wrapper's
-    -- §4.4 trap.
-    cancelled = true
-    local pid = task and task:pid()
-    if pid then hs.execute("/usr/bin/pkill -TERM -P " .. tostring(pid)) end
-    if task then task:terminate() end
-  end)
   return task
 end
 
