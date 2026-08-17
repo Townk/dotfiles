@@ -385,7 +385,18 @@ share::get() {
       --out)         [[ $# -ge 2 ]] || die "share get: --out requires a directory"
                      out="$2"; shift 2 ;;
       --allow-argv)  allow_argv=1; shift ;;
-      --)            shift; break ;;
+      --)            shift
+                     # A bare trailing `--` with nothing after it requested
+                     # no source (clipboard fallback below is correct). A
+                     # `--` followed by a value hands us that value exactly
+                     # like the plain positional branch — including
+                     # from_argv=1, so a stored token after `--` is still
+                     # refused without --allow-argv. `--` must never become
+                     # a silent way around the argv-consent check.
+                     if (( $# )); then
+                       value="$1"; from_argv=1; source_requested=1; shift
+                     fi
+                     break ;;
       -)             value="$(cat)"; source_requested=1; shift ;;
       -*)            die "share get: unknown option: $1" ;;
       *)             value="$1"; from_argv=1; source_requested=1; shift ;;

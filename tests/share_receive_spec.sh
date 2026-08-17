@@ -175,4 +175,51 @@ SH
     The status should be failure
     The stderr should include 'pbpaste is unavailable'
   End
+
+  # --- Finding 1 round 2: `--` must hand its following value to the SAME
+  # path as a plain positional argument (source_requested=1, from_argv=1),
+  # never silently discard it and fall through to the clipboard. Each of the
+  # first three plants a distinctive clipboard token so a wrongful fallback
+  # would be visible in the assertions.
+
+  It 'uses a code phrase after -- (exempt, reaches crocs argv)'
+    printf '#!/bin/sh\nprintf "croc-store-v1.SHOULD.NOT.BE.USED\\n"\n' >"$SB/bin/pbpaste"
+    chmod +x "$SB/bin/pbpaste"
+    share::get --out "$SB/out" -- '7-truck-mango-basil'
+    When call grep '^argv:' "$SB/calls"
+    The output should include '7-truck-mango-basil'
+  End
+
+  It 'refuses a stored token after -- without --allow-argv, and never invokes croc'
+    printf '#!/bin/sh\nprintf "croc-store-v1.SHOULD.NOT.BE.USED\\n"\n' >"$SB/bin/pbpaste"
+    chmod +x "$SB/bin/pbpaste"
+    When run share::get --out "$SB/out" -- 'croc-store-v1.b64.abc.KEY'
+    The status should be failure
+    The stderr should include '--allow-argv'
+    The path "$SB/calls" should not be exist
+  End
+
+  It 'accepts a stored token after -- with --allow-argv, via CROC_STORE_TOKEN and never on argv'
+    printf '#!/bin/sh\nprintf "croc-store-v1.SHOULD.NOT.BE.USED\\n"\n' >"$SB/bin/pbpaste"
+    chmod +x "$SB/bin/pbpaste"
+    share::get --out "$SB/out" --allow-argv -- 'croc-store-v1.b64.abc.KEY'
+    When call cat "$SB/calls"
+    The output should include 'token:croc-store-v1.b64.abc.KEY'
+  End
+
+  It 'never puts the -- stored value on crocs own argv'
+    printf '#!/bin/sh\nprintf "croc-store-v1.SHOULD.NOT.BE.USED\\n"\n' >"$SB/bin/pbpaste"
+    chmod +x "$SB/bin/pbpaste"
+    share::get --out "$SB/out" --allow-argv -- 'croc-store-v1.b64.abc.KEY'
+    When call grep '^argv:' "$SB/calls"
+    The output should not include 'croc-store-v1'
+  End
+
+  It 'falls back to the clipboard when a bare trailing -- has nothing after it (no source was requested)'
+    printf '#!/bin/sh\nprintf "croc-store-v1.after.bare.dashdash.KEY\\n"\n' >"$SB/bin/pbpaste"
+    chmod +x "$SB/bin/pbpaste"
+    share::get --out "$SB/out" --
+    When call cat "$SB/calls"
+    The output should include 'token:croc-store-v1.after.bare.dashdash.KEY'
+  End
 End
