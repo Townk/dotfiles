@@ -19,6 +19,7 @@ SHARE_LIB_SELF_DIR="${${(%):-%x}:A:h}"
 source "$SHARE_LIB_SELF_DIR/common.zsh"
 source "$SHARE_LIB_SELF_DIR/share/blurb.zsh"
 source "$SHARE_LIB_SELF_DIR/share/ledger.zsh"
+source "$SHARE_LIB_SELF_DIR/share/croc.zsh"
 
 : "${SHARE_CONFIG_DIR:=${XDG_CONFIG_HOME:-$HOME/.config}/share}"
 : "${SHARE_ENDPOINTS_FILE:=$SHARE_CONFIG_DIR/endpoints.toml}"
