@@ -1,0 +1,236 @@
+#!/usr/bin/env zsh
+# share — hand a file to another person, asynchronously.
+#
+#   share <file>...                    upload and print a link (stored mode)
+#   share send [opts] <file>...        the same, explicitly
+#   share get [<url|token|code>]       receive; no argument reads the clipboard
+#   share list                         receipts, newest first
+#   share revoke <id>                  kill a link and forget the receipt
+#   share endpoints                    what this profile may send to
+#
+# Which mechanism carries the bytes is a property of the ENDPOINT, never of the
+# command line: croc's zero-knowledge store for personal files, rclone/OneDrive
+# for work. The destination host is echoed before anything leaves.
+#
+# Thin by design: this file only parses, dispatches to share::*, and prints.
+# Every behaviour beyond that lives in a library spec already, so it stays out
+# of here.
+#
+# Spec: docs/superpowers/specs/2026-08-11-croc-file-sharing-design.md
+
+set -eu -o pipefail
+
+SHARE_LIB_DIR="${SHARE_LIB_DIR:-$HOME/.local/lib}"
+source "$SHARE_LIB_DIR/share.zsh" || {
+  print -ru2 -- "share: cannot source share.zsh from $SHARE_LIB_DIR"
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+share — hand a file to another person, asynchronously.
+
+Usage:
+  share [send] [options] <file>...   upload and print a shareable link
+  share get [options] [<value>]      receive a share (no value = clipboard)
+  share list                         receipts, newest first
+  share revoke <id>                  kill a link and forget the receipt
+  share endpoints                    endpoints this profile may use
+
+Send options:
+  --to <endpoint>       override the profile default
+  --live                hold a peer-to-peer transfer open instead of storing
+  --expiration <spec>   90m, 12h, 3d, 2w   (default: 3d)
+  --downloads <n>       verified downloads allowed (default: 1)
+  --background          enqueue as a job:: job and return immediately
+  --watch               enqueue and open the job dashboard on it (implies
+                         --background; needs the troupe binary)
+  --force               use an endpoint this profile is not allowed to use
+
+Get options:
+  --out <dir>           where to write (default: ~/Downloads)
+  --allow-argv          accept a stored link on the command line, exposing its
+                         key in the process list
+EOF
+}
+
+# run_send <force 0|1> <fn> [args…] — invoke a share:: send entry point,
+# scoping SHARE_FORCE to just this one call when --force was given, instead of
+# exporting it for the rest of the process. zsh restores (unsets) a
+# prefix-assigned variable once the prefixed command returns — verified:
+# `X=v f` inside a function leaves $X unset in the caller afterwards, and the
+# assignment IS visible to externals spawned inside that call (so it still
+# reaches `pueue add` on the --background path, whose client-environment
+# capture is what makes SHARE_FORCE take effect when the job actually runs
+# `share send` later). Passing the flag as an explicit argument here (rather
+# than reading dispatch_send's local via zsh's dynamic scoping) keeps this
+# helper legible on its own.
+run_send() {
+  local want_force="$1"; shift
+  if (( want_force )); then
+    SHARE_FORCE=1 "$@"
+  else
+    "$@"
+  fi
+}
+
+# peek_to_endpoint <send-args…> — read the --to value the same way
+# share::send's own flag loop would (a value-flag/positional split, stopping
+# at `--` or the first non-flag token), WITHOUT shift and without consuming
+# or mutating anything. This exists only so dispatch_send can learn the
+# TARGET endpoint before enqueue — needed for the --force confirmation gate
+# below, which must run here rather than inside share::resolve because a
+# backgrounded send has no tty inside the job. Index-walked rather than
+# shift-based: share::send's own comment on the --to/--expiration/--downloads
+# hang applies here too, and an index that just stops advancing on a
+# malformed tail is a simpler way to never spin than another guarded shift.
+peek_to_endpoint() {
+  local -a args=("$@")
+  local -i i=1 n=${#args[@]}
+  while (( i <= n )); do
+    case "${args[i]}" in
+      --to)         printf '%s\n' "${args[i+1]:-}"; return 0 ;;
+      --expiration) (( i += 1 )) ;;
+      --downloads)  (( i += 1 )) ;;
+      --)           return 1 ;;
+      --live | -*)  ;;
+      *)            return 1 ;;
+    esac
+    (( i += 1 ))
+  done
+  return 1
+}
+
+# confirm_force_destination <endpoint> — the spec's policy fence requires
+# "--force AND an interactive confirmation naming the host"; before this fix
+# --force alone shipped a file, one warning line and nothing else standing
+# between a company file and a third party's store. This is the gate.
+#
+# Refuses OUTRIGHT when stderr is not a tty, rather than falling through to
+# a prompt nobody can see — a non-interactive context (a script, a job, a
+# redirected pipeline) must never be able to force a disallowed endpoint by
+# accident.
+#
+# Deliberately a local read, not prompt-common.zsh's prompt::confirm: that
+# helper prints to and reads from /dev/tty unconditionally, with no
+# interactivity gate of its own — it cannot express "refuse when stderr is
+# not a tty" (share's own convention for everything user-facing, including
+# every log_* message), only "give up if /dev/tty can't be read at all",
+# which is a materially weaker refusal. Sourcing prompt-common.zsh here
+# would also pull in a whole secret-entry library (masked reads, terminal-
+# mode traps, prompt::required/choice/secret) for the sake of one yes/no
+# gate this command needs once. A five-line local read scoped to exactly
+# the rule this finding states is both narrower and more precise.
+confirm_force_destination() {
+  local endpoint="$1" host ans
+  [[ -t 2 ]] || {
+    log_error "share: --force on a disallowed endpoint needs an interactive terminal to confirm"
+    return 1
+  }
+  host="$(share::destination_host "$endpoint")" || return 1
+  printf '%s⚠%s  share: %s is not allowed on this profile — send to %s anyway? [y/N] ' \
+    "$C_YEL" "$C_RES" "$endpoint" "$host" >&2
+  IFS= read -r ans </dev/tty || return 1
+  [[ "$ans" == [yY] || "$ans" == [yY][eE][sS] ]]
+}
+
+# --background and --force are CLI-level concerns; everything else belongs to
+# share::send, so they are peeled off here and the rest passes straight
+# through unexamined — this file does not reimplement option semantics the
+# library already parses.
+dispatch_send() {
+  # is_help, not args_contain_help, and for the same reason as main's own
+  # check just below: this looks only at the first remaining token, so
+  # `share send --help` prints usage but `share send --to x --help file` still
+  # falls through to share::send's own option parser as a malformed send —
+  # consistent with the "not a scan for a buried help flag" rule above.
+  if is_help "${1:-}"; then usage; return 0; fi
+  local -a rest=()
+  local background=0 watch=0 force=0
+  # Every value-consuming flag must be guarded before it ever reaches a bare
+  # `shift`: none of --background/--watch/--force take a value, so there is
+  # nothing to guard here, but the *shape* still applies to any flag added
+  # later — see share::send's own comment on the --to/--expiration/--downloads
+  # hang this bit us with once already.
+  while (( $# )); do
+    case "$1" in
+      --background) background=1; shift ;;
+      --watch)      watch=1; background=1; shift ;;
+      --force)      force=1; shift ;;
+      *)            rest+=("$1"); shift ;;
+    esac
+  done
+
+  # F4: --force alone must never be enough. Only when it was actually given,
+  # AND the endpoint it would apply to is one this profile is not allowed to
+  # use, does the confirmation gate engage — an allowed endpoint (the common
+  # case, --force used defensively or out of habit) never prompts. Resolving
+  # the target here (rather than deferring to share::resolve) is what makes
+  # this check possible before enqueue, where a background job would have no
+  # tty left to confirm from.
+  if (( force )); then
+    local target
+    target="$(peek_to_endpoint "${rest[@]}")" || target="$(share::default_endpoint 2>/dev/null)" || target=""
+    if [[ -n "$target" ]] && ! share::allowed "$target" 2>/dev/null; then
+      confirm_force_destination "$target" \
+        || die "share: --force refused — confirmation is required to send to a disallowed endpoint"
+    fi
+  fi
+
+  if (( background )); then
+    if share::jobs_available; then
+      local -a wflag=()
+      (( watch )) && wflag=(--watch)
+      local id
+      id="$(run_send "$force" share::send_background "${wflag[@]}" "${rest[@]}")"
+      log_ok "queued as job $id"
+      return 0
+    fi
+    log_warn "share: the job runner is unavailable; sending in the foreground"
+  fi
+  run_send "$force" share::send "${rest[@]}"
+}
+
+main() {
+  if (( $# == 0 )); then usage; return 0; fi
+  # is_help, not args_contain_help: this is a first-argument check on the
+  # subcommand slot itself (where a bare `help` should count, same as `-h` or
+  # --help), not a scan for a help flag buried among send/get options —
+  # `share send --to x --help file` is not a request for top-level usage, it
+  # is a malformed send that share::send should reject on its own terms.
+  if is_help "$1"; then usage; return 0; fi
+
+  local sub="$1"
+  case "$sub" in
+    # Named subcommands are matched on the literal word FIRST, before any
+    # path-existence check runs. That is deliberate: it is what keeps a file
+    # named `list` (or `get`, or `send`) in the working directory from
+    # hijacking `share list` into an accidental send, and what keeps `share
+    # get` from ever trying to upload a file named `get`. To send a file that
+    # happens to share a name with a subcommand, say so explicitly:
+    # `share send list`.
+    get)       shift
+               if is_help "${1:-}"; then usage; return 0; fi
+               share::get "$@" ;;
+    list)      shift; share::ledger_list ;;
+    revoke)    shift
+               (( $# >= 1 )) || die "share revoke: an id is required"
+               share::revoke "$1" ;;
+    endpoints) shift; share::endpoints_for_profile ;;
+    send)      shift; dispatch_send "$@" ;;
+    *)
+      # Not a recognized subcommand: the bare-path shorthand applies only when
+      # the first token is either an option (starts with `-`, e.g. `share
+      # --to drop file`) or an existing path. Anything else is a typo'd
+      # subcommand, not a file share can guess at.
+      if [[ "$sub" == -* || -e "$sub" ]]; then
+        dispatch_send "$@"
+      else
+        log_error "share: unknown subcommand: $sub"
+        return 1
+      fi
+      ;;
+  esac
+}
+
+main "$@"

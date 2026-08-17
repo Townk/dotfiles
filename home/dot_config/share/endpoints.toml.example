@@ -1,0 +1,70 @@
+# endpoints.toml — where `share` may send things, and how.
+#
+# This is an EXAMPLE. The real manifest lives at ~/.config/share/endpoints.toml
+# and is LOCAL-ONLY: it is chezmoiignored and never committed, because an
+# endpoint hostname can name a work resource (and this repo is public). Same
+# loose-layer pattern as ~/.config/packages/images.toml and ~/.ssh/config.
+#
+# Bootstrap:
+#   cp ~/.config/share/endpoints.toml.example ~/.config/share/endpoints.toml
+#   $EDITOR ~/.config/share/endpoints.toml
+#   share endpoints                     # confirm what this profile may use
+#
+# You do not need this file to share a file. A built-in `public` endpoint
+# (getcroc.com) exists in code and is the personal default. It is safe as a
+# default because croc's store is zero-knowledge: it holds ciphertext and the
+# master key never leaves the URL fragment.
+#
+# Fields, all optional except one of `store` / `relay` / `remote`:
+#   backend      "croc" (default) or "rclone"
+#   web          true if recipients get a browser page; drives which blurb
+#                template is used. Capability, NOT profile — a self-hosted
+#                croc-web serves its own page, so a recipient needs no CLI.
+#   profiles     allowlist. Resolving to an endpoint absent from this list on
+#                the current profile is a hard failure (--force overrides).
+#                Fails CLOSED: a missing `profiles` key and a declared-but-
+#                empty one are both denials, never "open".
+#   default_for  profiles for which this is the default endpoint.
+#   message      per-endpoint blurb override. Substitutions: %name %url
+#                %token %code %expires %downloads %crocurl
+#
+# croc backend:
+#   store        HTTPS origin of a croc-web store
+#   relay        host:port for live (code-phrase) transfers
+#   pass         relay password; "@secret:NAME" reads the exported secret slot
+#
+# rclone backend:
+#   remote       an rclone "remote:path" (configure it with `rclone config`)
+#   link_scope   "organization" (tenant-only) or "anonymous"
+#   link_type    "view" (default), "edit", or "embed"
+
+# --- home store: a container on your own server, behind a reverse proxy -----
+# Reachable on the LAN and the tailnet only, so it is NOT default_for anything:
+# use `share --to drop` when the recipient is a tailnet peer, or when the file
+# is larger than the public store will take.
+# [drop]
+# description = "Home store"
+# store = "https://drop.home.example.com"
+# web = true
+# profiles = ["personal"]
+
+# --- work: OneDrive, the sanctioned medium ----------------------------------
+# Custodial rather than end-to-end, which is correct for company files reaching
+# coworkers through the company's own system.
+# [onedrive]
+# description = "Work OneDrive, organization-scoped links"
+# backend = "rclone"
+# remote = "onedrive:Shared/drop"
+# link_scope = "organization"
+# link_type = "view"
+# web = true
+# profiles = ["work"]
+# default_for = ["work"]
+
+# --- a bare relay: live transfers only, recipients need the croc CLI ---------
+# [lab]
+# description = "Bare relay"
+# relay = "lab.example.com:9009"
+# pass = "@secret:SHARE_LAB_RELAY_PASS"
+# web = false
+# profiles = ["personal"]

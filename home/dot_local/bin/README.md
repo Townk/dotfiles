@@ -67,6 +67,11 @@ common.zsh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
    │     └── (also sources prompt-common.zsh)
    ├── platform.zsh ............... platform::*  (OS shim → platform-macos.zsh /
    │                              platform-linux.zsh: launch GUI app, raise window)
+   ├── share.zsh .................. share::*  (async file sharing: endpoint
+   │     ├── share/blurb.zsh        resolution + policy fence, croc and rclone
+   │     ├── share/croc.zsh         backends, one-line blurbs, the receipt
+   │     ├── share/rclone.zsh       ledger; background sends via job::)
+   │     └── share/ledger.zsh
    ├── commit-agent-common.zsh ... cagent::*  (spinner, plan summary/dry-run,
                                     stage/commit loop)
    └── assist-agent-common.zsh ... assist::*  (session pin, request parsing,

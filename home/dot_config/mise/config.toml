@@ -23,6 +23,10 @@ rust = [{ version = "latest", components = "rust-analyzer,rust-src,rustfmt,clipp
 # /usr/local, and no shared Python. Versions track aws/aws-cli git tags.
 aws-cli = "latest"
 cargo-binstall = "latest"  # prebuilt-binary installer; lets the Cargofile worker skip source builds
+# croc — the transfer engine behind `share`. mise (aqua:schollz/croc) rather
+# than Homebrew so every profile including Linux gets the same static binary
+# from one declaration; the upstream release is a single CGO-free executable.
+croc = "latest"
 # cmake is OS-specific — see conf.d/cmake.toml.tmpl (source build on macOS,
 # prebuilt binary elsewhere).
 just = "latest"
