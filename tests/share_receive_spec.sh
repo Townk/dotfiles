@@ -131,4 +131,48 @@ SH
     The output should include 'token:croc-store-v1.b64.abc.KEY'
     The output should not include 'KEY '
   End
+
+  # --- Finding 1 fix: an explicitly-requested source that comes back empty
+  # must NOT silently fall back to the clipboard. `-z "$value"` alone cannot
+  # distinguish "no source was requested" from "the requested source
+  # produced nothing" — a fake pbpaste with a distinctive, never-expected
+  # token is planted in every case below so a wrongful fallback would be
+  # visible in the assertions.
+
+  It 'fails and never invokes croc when stdin is explicitly requested but empty'
+    printf '#!/bin/sh\nprintf "croc-store-v1.SHOULD.NOT.BE.USED\\n"\n' >"$SB/bin/pbpaste"
+    chmod +x "$SB/bin/pbpaste"
+    Data ''
+    When run share::get --out "$SB/out" -
+    The status should be failure
+    The stderr should include 'no croc share'
+    The path "$SB/calls" should not be exist
+  End
+
+  It 'fails and never invokes croc when given an explicit empty argument'
+    printf '#!/bin/sh\nprintf "croc-store-v1.SHOULD.NOT.BE.USED\\n"\n' >"$SB/bin/pbpaste"
+    chmod +x "$SB/bin/pbpaste"
+    When run share::get --out "$SB/out" ''
+    The status should be failure
+    The stderr should include 'no croc share'
+    The path "$SB/calls" should not be exist
+  End
+
+  It 'still reads the clipboard when no source is requested at all (the fix must not break the primary path)'
+    printf '#!/bin/sh\nprintf "croc-store-v1.regression.clip.KEY\\n"\n' >"$SB/bin/pbpaste"
+    chmod +x "$SB/bin/pbpaste"
+    share::get --out "$SB/out"
+    When call cat "$SB/calls"
+    The output should include 'token:croc-store-v1.regression.clip.KEY'
+  End
+
+  # --- Finding 2: an isolated PATH (no inherited suffix) guarantees pbpaste
+  # absence on any host, rather than depending on the platform's toolset.
+
+  It 'fails helpfully when no value is given and pbpaste is unavailable'
+    PATH="$SB/bin"
+    When run share::get --out "$SB/out"
+    The status should be failure
+    The stderr should include 'pbpaste is unavailable'
+  End
 End

@@ -379,20 +379,27 @@ share::classify() {
 # share::get [--out DIR] [--allow-argv] [<value>|-]
 share::get() {
   setopt localoptions extendedglob     # the trim below uses `##`
-  local out="$SHARE_DEFAULT_OUT" allow_argv=0 value="" from_argv=0
+  local out="$SHARE_DEFAULT_OUT" allow_argv=0 value="" from_argv=0 source_requested=0
   while (( $# )); do
     case "$1" in
       --out)         [[ $# -ge 2 ]] || die "share get: --out requires a directory"
                      out="$2"; shift 2 ;;
       --allow-argv)  allow_argv=1; shift ;;
       --)            shift; break ;;
-      -)             value="$(cat)"; shift ;;
+      -)             value="$(cat)"; source_requested=1; shift ;;
       -*)            die "share get: unknown option: $1" ;;
-      *)             value="$1"; from_argv=1; shift ;;
+      *)             value="$1"; from_argv=1; source_requested=1; shift ;;
     esac
   done
 
-  if [[ -z "$value" ]]; then
+  # `-z "$value"` cannot tell "no source was requested" from "the requested
+  # source produced nothing" — a caller who explicitly asked for stdin (`-`)
+  # or passed an explicit empty argument would silently fall through to the
+  # clipboard, handing back a value the caller never asked for. Fall back to
+  # pbpaste ONLY when no source was requested at all; an explicitly-requested
+  # source that comes back empty falls through to share::classify below,
+  # which reports "unknown" for an empty string and fails cleanly.
+  if (( ! source_requested )); then
     command -v pbpaste >/dev/null 2>&1 || die "share get: no value given and pbpaste is unavailable"
     value="$(pbpaste 2>/dev/null)"
     from_argv=0
