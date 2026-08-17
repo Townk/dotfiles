@@ -66,6 +66,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 | utils | Cross-cutting utilities | `dot_local/bin/{notify,wait-until,chezmoi-reverse}`, `libexec/{tab-edit,job,job-callback}` | `lib/common.zsh` (`notify`), `lib/job.zsh` (`job::`), `lib/platform.zsh` | `notify` CLI, `job::` runner (pueue backbone + `~/.local/state/jobs/` contract), `chezmoi-reverse --no-merge`, `tab-edit` launcher |
 | pi | pi coding agent config | `dot_pi/` + `pi-settings-merge.tmpl` + pi blocks in `.chezmoi.toml.tmpl`/`.chezmoiignore.tmpl`/`.chezmoiscripts/` | (none in `lib/`) | agent-local↔agent symlink sharing (extensions/lsp/skills/themes/Librarian), `modify_settings.json.tmpl` declarative-keys merge + `pi-settings-merge.tmpl`, `.pi.devExtensions` dev-extension symlink resolution |
 | cursor | Cursor coding agent config | `dot_cursor/` | (none in `lib/`) | MDC rule format + `alwaysApply` semantics, agents/skills parallel structure (mirrors pi) |
+| share | Async file sharing (croc + rclone) | `dot_local/bin/share`, `dot_config/share/` | `lib/share.zsh` + `lib/share/*` | `endpoints.toml` schema, blurb substitutions, backend dispatch |
 
 > **utils is a coordination silo** — its files are shared deps. Treat
 > `common.zsh`, `notify`, `tab-edit`, `chezmoi-reverse` as read-mostly by

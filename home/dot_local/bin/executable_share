@@ -79,6 +79,12 @@ run_send() {
 # through unexamined — this file does not reimplement option semantics the
 # library already parses.
 dispatch_send() {
+  # is_help, not args_contain_help, and for the same reason as main's own
+  # check just below: this looks only at the first remaining token, so
+  # `share send --help` prints usage but `share send --to x --help file` still
+  # falls through to share::send's own option parser as a malformed send —
+  # consistent with the "not a scan for a buried help flag" rule above.
+  if is_help "${1:-}"; then usage; return 0; fi
   local -a rest=()
   local background=0 watch=0 force=0
   # Every value-consuming flag must be guarded before it ever reaches a bare
@@ -126,7 +132,9 @@ main() {
     # get` from ever trying to upload a file named `get`. To send a file that
     # happens to share a name with a subcommand, say so explicitly:
     # `share send list`.
-    get)       shift; share::get "$@" ;;
+    get)       shift
+               if is_help "${1:-}"; then usage; return 0; fi
+               share::get "$@" ;;
     list)      shift; share::ledger_list ;;
     revoke)    shift
                (( $# >= 1 )) || die "share revoke: an id is required"

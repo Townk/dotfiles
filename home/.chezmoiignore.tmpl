@@ -25,6 +25,11 @@
      resource, so it stays local and is never tracked (the committed
      images.toml.example documents the format). */}}
 .config/packages/images.toml
+{{/* ~/.config/share/endpoints.toml is the loose, per-machine manifest for
+     `share`. An endpoint hostname can name a work resource, so it stays local
+     and is never tracked (the committed endpoints.toml.example documents the
+     format). */}}
+.config/share/endpoints.toml
 {{/* ~/.config/qmk-flash/config.toml is the loose, per-machine default set for
      `qmk-flash`. It names the ONE machine on this network that builds the
      firmware, which is a property of where you are sitting rather than of the

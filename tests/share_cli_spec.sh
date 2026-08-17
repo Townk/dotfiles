@@ -102,6 +102,24 @@ SH
     The output should include 'revoke'
   End
 
+  # --help falls through to the library's option parser unless the CLI catches
+  # it before dispatching: `send` and `get` each peel off their own flags, so a
+  # bare --help must be recognized at that layer rather than reaching
+  # share::send / share::get, which reject it as an unknown option.
+  It 'shows usage and exits zero for send --help'
+    When run script "$SHARE_BIN" send --help
+    The status should be success
+    The output should include 'Usage'
+    The output should include 'revoke'
+  End
+
+  It 'shows usage and exits zero for get --help'
+    When run script "$SHARE_BIN" get --help
+    The status should be success
+    The output should include 'Usage'
+    The output should include 'revoke'
+  End
+
   # The default-subcommand heuristic: a recognized subcommand word ALWAYS wins
   # over the bare-path shorthand, even when a same-named file sits in the
   # working directory — that is what stops `share list` from silently
