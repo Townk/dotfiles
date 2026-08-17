@@ -36,17 +36,26 @@ if [ -n "$dir" ]; then
   icon=$(jq -r '.icon // empty' "$dir/meta.json" 2>/dev/null) || icon=""
 fi
 
+# History tagging (phase 3): every toast carries the job's identity so
+# pick-notifications can jump back to its pueue log. jq builds the meta so
+# the title/ids are properly escaped; job_id is empty for label-less tasks.
+job_id="${dir:+${dir:t}}"
+meta=$(jq -nc --arg job_id "$job_id" --arg pueue_id "$pueue_id"   --arg result "$result"   '{job_id:$job_id, pueue_id:($pueue_id|tonumber? // $pueue_id), result:$result}')   || meta=""
+
 case "$result" in
   Success)
-    notify --icon "${icon:-glyph:nf-md-check_circle}" --sound Glass \
+    notify --kind job --source job --meta "$meta" \
+      --icon "${icon:-glyph:nf-md-check_circle}" --sound Glass \
       "$title completed"
     ;;
   Killed)
     # A cancel the user asked for: acknowledge without alarm.
-    notify --icon "glyph:nf-md-close_circle" "$title cancelled"
+    notify --kind job --source job --meta "$meta" \
+      --icon "glyph:nf-md-close_circle" "$title cancelled"
     ;;
   *)
-    notify --icon "glyph:nf-md-alert_circle" --sound Basso \
+    notify --kind job --source job --meta "$meta" \
+      --icon "glyph:nf-md-alert_circle" --sound Basso \
       "$title failed${exit_code:+ (exit $exit_code)}"
     # The persistent half of the pair (local screen only — over SSH the
     # toast already routed to the human via the bridge).

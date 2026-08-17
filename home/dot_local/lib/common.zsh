@@ -722,6 +722,45 @@ _notify_bridge_send() {
 #   --ansi         MESSAGE may carry ANSI SGR colour escapes (routes to the
 #                  `notifyAnsi` helper instead of `notify`).
 #
+# notify::_history_append STYLE ICON SOUND TEXT KIND SOURCE META
+# One JSON line per toast into the notification history (phase 3, job-runner
+# spec §8): `${XDG_STATE_HOME:-~/.local/state}/notify/history.jsonl`, seam
+# NOTIFY_HISTORY_FILE. Built with jq (proper escaping); META must be a JSON
+# value and is dropped silently when it is not (history must never fail the
+# toast — every exit here is a quiet return 0). Rotation: past 512KB the file
+# is atomically rewritten to its last 1000 lines (tmp + mv; a lost race just
+# means the other writer's rotation won).
+notify::_history_append() {
+  local style="$1" icon="$2" sound="$3" text="$4" kind="$5" src="$6" meta="$7"
+  local file="${NOTIFY_HISTORY_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/notify/history.jsonl}"
+  command -v jq >/dev/null 2>&1 || return 0
+  mkdir -p -- "${file:h}" 2>/dev/null || return 0
+  zmodload zsh/datetime 2>/dev/null
+  local ts="${EPOCHSECONDS:-$(date +%s)}"
+  local line
+  line=$(jq -nc --argjson ts "$ts"     --arg icon "$icon" --arg text "$text" --arg sound "$sound"     --arg style "$style" --arg kind "$kind" --arg source "$src"     '{ts:$ts, icon:$icon, text:$text, sound:$sound, style:$style,
+      kind:$kind, source:$source}') || return 0
+  if [ -n "$meta" ]; then
+    local with_meta
+    if with_meta=$(jq -c --argjson m "$meta" '. + {meta:$m}' <<<"$line" 2>/dev/null); then
+      line="$with_meta"
+    fi
+  fi
+  print -r -- "$line" >> "$file" 2>/dev/null || return 0
+  local -a _sz
+  if zmodload -F zsh/stat b:zstat 2>/dev/null && zstat -A _sz +size -- "$file" 2>/dev/null; then
+    if (( _sz[1] > 524288 )); then
+      local tmp="${file}.rot.$$"
+      if tail -n 1000 -- "$file" > "$tmp" 2>/dev/null; then
+        mv -f -- "$tmp" "$file" 2>/dev/null || rm -f -- "$tmp"
+      else
+        rm -f -- "$tmp"
+      fi
+    fi
+  fi
+  return 0
+}
+
 # Best-effort by design: it drives the running Hammerspoon through its `hs`
 # CLI (path overridable via $HS). Returns 1 (quietly) when `hs` is unavailable
 # and 2 when there is nothing to show, so callers on hot paths can ignore the
@@ -733,10 +772,39 @@ _notify_bridge_send() {
 # box's own screen. That route is exclusive: once taken, the local `hs` is not
 # consulted even on failure, because falling back would reintroduce exactly the
 # wrong-screen OSD the route exists to avoid.
+#
+# Every toast is also appended to the notification history (phase 3, job-runner
+# spec §8) BEFORE dispatch — sender-side: a toast that fails to deliver still
+# happened; delivery is transport. `--kind <k>` (default generic), `--source
+# <s>` (default the invoking script's name), and `--meta <json>` (opaque extra,
+# e.g. a job's ids) tag the entry for pick-notifications; existing callers need
+# none of them.
 notify() {
   local icon="" sound="" style="plain"
+  local kind="generic" source_tag="${ZSH_ARGZERO:t}" meta=""
   while [ $# -gt 0 ]; do
     case "$1" in
+      --kind)
+        if [ $# -ge 2 ]; then kind="$2"; shift 2; else shift; fi
+        ;;
+      --kind=*)
+        kind="${1#--kind=}"
+        shift
+        ;;
+      --source)
+        if [ $# -ge 2 ]; then source_tag="$2"; shift 2; else shift; fi
+        ;;
+      --source=*)
+        source_tag="${1#--source=}"
+        shift
+        ;;
+      --meta)
+        if [ $# -ge 2 ]; then meta="$2"; shift 2; else shift; fi
+        ;;
+      --meta=*)
+        meta="${1#--meta=}"
+        shift
+        ;;
       -i | --icon)
         if [ $# -ge 2 ]; then
           icon="$2"
@@ -771,6 +839,8 @@ notify() {
 
   local text="$*"
   [ -n "$text" ] || [ -n "$icon" ] || return 2
+
+  notify::_history_append "$style" "$icon" "$sound" "$text" "$kind" "$source_tag" "$meta" 2>/dev/null || :
 
   if _notify_bridge_target; then
     _notify_bridge_send "$style" "$icon" "$sound" "$text" && return 0
