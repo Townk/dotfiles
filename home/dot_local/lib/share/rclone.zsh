@@ -82,7 +82,24 @@ share::rclone_send() {
   local first_path="$1"
   local -a cmd
   local line pct
+
+  # Progress is weighted across path_count copy units plus one link unit, and
+  # reported as completed_units/total_units — NOT as the current file's own
+  # percent. A bare per-file percent would be non-monotonic on a multi-file
+  # send: job::progress is a single clobbering write (the statusbar shows
+  # only the latest value for a job), so file 1 finishing at its own 100%
+  # would read as the WHOLE send being done, then regress to ~10% the moment
+  # file 2 starts copying. Weighting by unit keeps the sequence
+  # non-decreasing by construction, and — since a file's "finished" value is
+  # (i * 100 / total_units), always < 100 while units remain — it still
+  # fixes the original problem this replaced: a transfer that completes
+  # inside rclone's first --stats interval printed no interim line at all,
+  # so under the old bare-percent scheme the job was left stuck at 0%. Here
+  # it reports its unit's share explicitly right after the copy, regardless
+  # of whether any interim stats line ever arrived.
+  local -i total_units=$(( path_count + 1 )) i=0 unit_pct
   for src in "$@"; do
+    (( i += 1 ))
     dest="$dest_dir/${src:t}"
     cmd=("${(@f)$(share::rclone_copy_argv "$endpoint" "$src" "$dest")}")
     # Stats ride stderr; fold them in and report each percent we can parse.
@@ -95,15 +112,20 @@ share::rclone_send() {
     # tests/share_rclone_spec.sh).
     "${cmd[@]}" 2>&1 | while IFS= read -r line; do
       pct="$(share::rclone_pct "$line")"
-      [[ -n "$pct" ]] && share::_progress "$pct" "uploading ${src:t}"
+      if [[ -n "$pct" ]]; then
+        unit_pct=$(( ((i - 1) * 100 + pct) / total_units ))
+        share::_progress "$unit_pct" "uploading $i/$path_count: ${src:t}"
+      fi
       print -r -- "$line" >&2
     done
     (( ${pipestatus[1]} == 0 )) \
       || { log_error "share: rclone copy failed for ${src:t}"; return 1; }
-    # A small file can finish inside rclone's first --stats interval and
-    # print no stats line at all — nothing above ever reports a percent for
-    # it. Report completion explicitly so a job never sits stuck at 0%.
-    share::_progress 100 "uploaded ${src:t}"
+    # This file's unit is done regardless of whether an interim stats line
+    # ever arrived — the fix for the 0%-stuck fast-transfer case, without
+    # reintroducing the false-100%-then-regress bug a bare per-file percent
+    # had.
+    unit_pct=$(( (i * 100) / total_units ))
+    share::_progress "$unit_pct" "uploaded $i/$path_count: ${src:t}"
   done
 
   # Link the directory for a multi-file share, the file itself for a single one.
@@ -117,6 +139,8 @@ share::rclone_send() {
     log_error "share: administrators have not enabled link permissions for this tenant"
     return 1
   }
+  # The link is the final unit: only here does progress ever reach 100.
+  share::_progress 100 "link created"
 
   local id; id="$(share::gen_id)"
   share::ledger_add "$id" rclone "$endpoint" "$label" "$target" "$url" 0

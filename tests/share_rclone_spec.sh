@@ -140,6 +140,140 @@ SH
     The status should be success
   End
 
+  # --- progress: weighted across copy units + one link unit ----------------
+  # Finding: reporting each file's OWN percent is non-monotonic on a
+  # multi-file send. job::progress is a single clobbering write (the
+  # statusbar shows only the latest value for a job), so file 1 finishing at
+  # its own 100% would read as the whole send being done, then regress to
+  # ~10% the instant file 2 starts copying. share::rclone_send instead
+  # reports completed_units/total_units (total_units = path_count + 1, the
+  # extra unit being the link step), which is non-decreasing by
+  # construction and never claims 100 until the link actually succeeds.
+  #
+  # The seam: share::_progress is a no-op unless JOB_ID is set AND
+  # job::progress is a defined function (job.zsh is never sourced here) — so
+  # each example below defines its own job::progress stub that appends the
+  # reported percent to a file, and sets JOB_ID to turn share::_progress on.
+
+  It 'reports monotonic weighted progress across a multi-file send, never reaching 100 before the link step'
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'https://corp.example.com/:f:/g/dir\n'; exit 0; fi
+done
+echo "2026/08/17 05:46:12 NOTICE:  5 MiB / 10 MiB, 50%, 1 MiB/s, ETA 1s" >&2
+echo "2026/08/17 05:46:13 NOTICE: 10 MiB / 10 MiB, 100%, 0 B/s, ETA -" >&2
+exit 0
+SH
+    chmod +x "$SB/bin/rclone"
+    PATH="$SB/bin:$PATH"
+    JOB_ID=test-job
+    job::progress() { printf '%s\n' "$1" >>"$SB/progress"; }
+    share::rclone_send onedrive "$SB/Report.pdf" "$SB/Notes.txt" >/dev/null 2>/dev/null
+    check() {
+      local -a vals
+      vals=("${(@f)$(<"$SB/progress")}")
+      local -i n=${#vals[@]} k prev=-1
+      (( n >= 2 )) || return 1
+      for (( k = 1; k <= n; k++ )); do
+        (( vals[k] >= prev )) || return 1
+        prev=${vals[k]}
+      done
+      (( vals[n] == 100 )) || return 1
+      for (( k = 1; k < n; k++ )); do
+        (( vals[k] < 100 )) || return 1
+      done
+      return 0
+    }
+    When call check
+    The status should be success
+  End
+
+  It 'reports 100 only after the link succeeds for a single-file send'
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
+done
+exit 0
+SH
+    chmod +x "$SB/bin/rclone"
+    PATH="$SB/bin:$PATH"
+    JOB_ID=test-job
+    job::progress() { printf '%s\n' "$1" >>"$SB/progress"; }
+    share::rclone_send onedrive "$SB/Report.pdf" >/dev/null
+    check() {
+      local -a vals
+      vals=("${(@f)$(<"$SB/progress")}")
+      local -i n=${#vals[@]} k
+      (( n >= 2 )) || return 1
+      (( vals[n] == 100 )) || return 1
+      for (( k = 1; k < n; k++ )); do
+        (( vals[k] < 100 )) || return 1
+      done
+      return 0
+    }
+    When call check
+    The status should be success
+  End
+
+  It 'leaves the last progress value below 100 when the link fails'
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'Invalid request\n' >&2; exit 1; fi
+done
+exit 0
+SH
+    chmod +x "$SB/bin/rclone"
+    PATH="$SB/bin:$PATH"
+    JOB_ID=test-job
+    job::progress() { printf '%s\n' "$1" >>"$SB/progress"; }
+    share::rclone_send onedrive "$SB/Report.pdf" >/dev/null 2>&1 || :
+    check() {
+      local -a vals
+      vals=("${(@f)$(<"$SB/progress")}")
+      local -i n=${#vals[@]}
+      (( n >= 1 )) || return 1
+      (( vals[n] < 100 )) || return 1
+      return 0
+    }
+    When call check
+    The status should be success
+  End
+
+  # The original defect this whole scheme fixed: a fast transfer that
+  # completes inside rclone's first --stats interval prints no interim
+  # NOTICE line at all (this fake rclone, same as the "sends" example above,
+  # never emits one). It must still end at 100, not sit stuck at 0. For a
+  # single file, total_units is 2: the copy's own unit finishes at exactly
+  # 50 (1*100/2), then the link brings it to 100 — matching the resolution
+  # worked example exactly.
+  It 'still reaches 100 for a fast transfer that prints no interim stats line'
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
+done
+exit 0
+SH
+    chmod +x "$SB/bin/rclone"
+    PATH="$SB/bin:$PATH"
+    JOB_ID=test-job
+    job::progress() { printf '%s\n' "$1" >>"$SB/progress"; }
+    share::rclone_send onedrive "$SB/Report.pdf" >/dev/null
+    check() {
+      local -a vals
+      vals=("${(@f)$(<"$SB/progress")}")
+      (( ${#vals[@]} == 2 )) || return 1
+      (( vals[1] == 50 )) || return 1
+      (( vals[2] == 100 )) || return 1
+      return 0
+    }
+    When call check
+    The status should be success
+  End
+
   It 'extracts a percent from an rclone one-line stats NOTICE'
     When call share::rclone_pct '2026/08/17 05:46:12 NOTICE:  20 MiB / 40 MiB, 50%, 1.2 MiB/s, ETA 16s'
     The output should equal '50'
