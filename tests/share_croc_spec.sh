@@ -200,6 +200,34 @@ SH
     The status should be success
   End
 
+  # Regression caught in re-review: an EARLIER version of the F5 fix set
+  # `CROC_PASS="$pass"` unconditionally, including when `$pass` is empty.
+  # croc's own env-var lookup (internal/cli/flag.go's flagFromEnvOrFile, via
+  # Go's syscall.Getenv) reports ok=true for a PRESENT-but-EMPTY variable —
+  # so an unconditional empty CROC_PASS overrides croc's own
+  # DEFAULT_PASSPHRASE ("pass123", src/models/constants.go) with "", not
+  # "unset". That breaks the handshake against any endpoint that leaves
+  # `pass` unset (including the built-in `public` endpoint), which relies on
+  # croc's default. The `drop` fixture has no `pass` field at all.
+  #
+  # `${CROC_PASS-UNSET}` (not `${CROC_PASS:-}`) is the only expansion that
+  # distinguishes "the variable was never set" from "it was set to empty" —
+  # `:-` treats both the same, which is exactly the distinction this
+  # regression hinges on.
+  It 'never sets CROC_PASS at all when the endpoint has no configured password'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+printf '%s\n' "${CROC_PASS-UNSET}" >"$SHARE_CROC_ENV_LOG"
+printf 'https://drop.example.com/s/nopass#v1.KEY\ncroc-store-v1.b64.nopass.KEY\n'
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    SHARE_CROC_ENV_LOG="$SB/env-nopass.log"; export SHARE_CROC_ENV_LOG
+    share::croc_send drop store 3d 2 "$SB/Report.pdf" >/dev/null 2>/dev/null
+    When call cat "$SB/env-nopass.log"
+    The output should equal 'UNSET'
+  End
+
   # --- share::croc_send: the live path's code phrase ----------------------
   # Finding: the ORIGINAL live-mode extraction grepped croc's own printed
   # instruction line for `croc [a-z0-9-]{6,}`. croc prepends --relay/--pass to

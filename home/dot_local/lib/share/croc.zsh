@@ -178,12 +178,39 @@ share::croc_send() {
   # scoping idiom as SHARE_FORCE in the CLI's run_send: the assignment is
   # visible to the child process and gone again the moment this command
   # returns.
+  #
+  # Guarded on non-empty, same as the old `--pass` flag was: croc's env-var
+  # lookup (internal/cli/flag.go's flagFromEnvOrFile, via syscall.Getenv)
+  # reports ok=true for a PRESENT-but-EMPTY variable, same as Go's Getenv
+  # always does — so an unconditional `CROC_PASS=""` would override croc's
+  # own DEFAULT_PASSPHRASE ("pass123", src/models/constants.go) with an
+  # empty string instead of leaving it unset. That breaks the handshake
+  # against the built-in `public` endpoint and any relay endpoint that
+  # leaves `pass` unset — precisely the endpoints that rely on croc's
+  # default. Only set CROC_PASS when there is an actual password to carry.
   local pass; pass="$(share::croc_pass "$endpoint")"
 
+  # `rc=${pipestatus[1]}` is duplicated into BOTH branches, immediately
+  # after each pipeline, rather than hoisted to one line after `fi`: zsh
+  # resets $pipestatus to reflect the most recently executed command, and an
+  # `if`/`fi` wrapper around the pipeline — even taking the branch that runs
+  # it — counts as "something ran after the pipeline" by the time control
+  # reaches the line after `fi`. Verified: hoisting the read outside the
+  # if/else here silently made `rc` always read the if-statement's own exit
+  # status (0), so `share::croc_send` never noticed croc failing on the
+  # branch with no password. Reading pipestatus as the line immediately
+  # following the pipeline, inside each branch, is what the ORIGINAL
+  # single-pipeline code already relied on (see the comment above
+  # share::croc_send).
   local tmp out rc
   tmp="$(common::tmpfile)" || return 1
-  CROC_PASS="$pass" "${cmd[@]}" 2>&1 | tee "$tmp" >&2
-  rc=${pipestatus[1]}
+  if [[ -n "$pass" ]]; then
+    CROC_PASS="$pass" "${cmd[@]}" 2>&1 | tee "$tmp" >&2
+    rc=${pipestatus[1]}
+  else
+    "${cmd[@]}" 2>&1 | tee "$tmp" >&2
+    rc=${pipestatus[1]}
+  fi
   out="$(<"$tmp")"
   rm -f -- "$tmp"
   if (( rc != 0 )); then

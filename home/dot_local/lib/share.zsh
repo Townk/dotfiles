@@ -61,6 +61,17 @@ share::profile() {
 # with empty/partial output. Callers must capture into a variable and check
 # the status before piping onward — see share::endpoint_names and
 # share::field below.
+#
+# The manifest travels through jq's ENVIRONMENT (`manifest="$manifest" jq …
+# $ENV.manifest`), never `--argjson manifest "$manifest"`: a literal
+# (non-`@secret:`) endpoint password is a documented, supported
+# configuration, and this function runs on every single field lookup —
+# `share list`, `share endpoints`, `share revoke`, every send — not just
+# during a transfer. `--argjson` would have put that password on jq's own
+# argv on every one of those calls, far more often than the two send-path
+# sites already fixed for the same reason (share/ledger.zsh,
+# share/croc.zsh). SHARE_BUILTIN_JSON carries nothing secret, so it stays a
+# plain --argjson.
 share::endpoints_json() {
   local manifest='{}'
   if [[ -f "$SHARE_ENDPOINTS_FILE" ]]; then
@@ -69,8 +80,8 @@ share::endpoints_json() {
       return 1
     }
   fi
-  jq -n --argjson builtin "$SHARE_BUILTIN_JSON" --argjson manifest "$manifest" \
-    '$builtin * $manifest'
+  manifest="$manifest" jq -n --argjson builtin "$SHARE_BUILTIN_JSON" \
+    '$builtin * ($ENV.manifest | fromjson)'
 }
 
 share::endpoint_names() {

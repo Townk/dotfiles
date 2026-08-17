@@ -143,4 +143,36 @@ TOML
     The output should include 'drop'
     The output should not include 'onedrive'
   End
+
+  # F5 residual, folded in on re-review: share::endpoints_json used to pass
+  # the WHOLE manifest to jq as `--argjson manifest "$manifest"`. A literal
+  # (non-`@secret:`) endpoint password is documented, supported
+  # configuration — and this function runs on every field lookup (`share
+  # list`, `share endpoints`, `share revoke`, every send), not just during a
+  # transfer, so that was a broader leak than the two send-path sites fixed
+  # for the same reason (share/ledger.zsh, share/croc.zsh). Same fix: the
+  # manifest now rides jq's ENVIRONMENT (`manifest="$manifest" jq …
+  # $ENV.manifest | fromjson`). A logging jq shim proves it, mirroring the
+  # ledger test in share_ledger_spec.sh.
+  It 'never puts a literal manifest password on the jq invocation that merges endpoints'
+    mkdir -p "$SB/bin"
+    real_jq="$(command -v jq)"
+    cat >"$SB/bin/jq" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >>"\$SHARE_JQ_ARGV_LOG"
+exec "$real_jq" "\$@"
+SH
+    chmod +x "$SB/bin/jq"
+    PATH="$SB/bin:$PATH"
+    SHARE_JQ_ARGV_LOG="$SB/jq-argv.log"; export SHARE_JQ_ARGV_LOG
+    printf '[lab]\nrelay = "r:9009"\npass = "literal-relay-secret"\nprofiles = ["personal"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    check() {
+      share::endpoints_json >/dev/null || return 1
+      grep -q 'literal-relay-secret' "$SHARE_JQ_ARGV_LOG" && return 1
+      return 0
+    }
+    When call check
+    The status should be success
+  End
 End
