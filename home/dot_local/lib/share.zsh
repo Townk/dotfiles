@@ -333,6 +333,7 @@ share::send() {
     *) die "share: unknown backend: $backend" ;;
   esac
   print -r -- "$blurb"
+  share::announce "$blurb"
 }
 
 # share::revoke <id> — dispatch on the receipt's own backend, then forget it.
@@ -438,4 +439,121 @@ share::get() {
       croc --yes --out "$out" "$value"
       ;;
   esac
+}
+
+# --- background sends via job:: ---------------------------------------------
+# An upload is long, network-bound, worth watching and worth cancelling — the
+# exact shape job:: exists for. Consuming it means completion toasts (routed
+# over the RECOB bridge, so a dev-shell send toasts on whichever Mac the human
+# is sitting at) and process-group cancel arrive for free.
+#
+# Uploads get their own group so they never contend with `heavy` (pinned to
+# parallelism 1 for custom builds).
+
+SHARE_JOB_GROUP="${SHARE_JOB_GROUP:-share}"
+SHARE_JOB_ICON="${SHARE_JOB_ICON:-glyph:nf-md-share_variant}"
+
+share::_load_jobs() {
+  [ -n "${__JOB_ZSH_LOADED:-}" ] && return 0
+  local lib="$SHARE_LIB_SELF_DIR/job.zsh"
+  [[ -f "$lib" ]] || return 1
+  source "$lib"
+}
+
+# share::jobs_available — pueue reachable? The CLI degrades to a foreground run
+# when it is not, so a machine without the job runner still shares files.
+share::jobs_available() {
+  share::_load_jobs || return 1
+  job::_pueue >/dev/null 2>&1
+}
+
+# share::send_background [--watch] <send-args…> — enqueue `share send
+# <send-args…>` as a job and print its id.
+share::send_background() {
+  share::_load_jobs || { log_error "share: the job runner is unavailable"; return 1; }
+  local watch=0
+  while (( $# )); do
+    case "$1" in
+      --watch) watch=1; shift ;;
+      *) break ;;
+    esac
+  done
+  local -a send_args=("$@")
+
+  # Title from the file label, so the completion toast names what was sent.
+  # Mirrors share::send's own flag/positional split — a real `--` ends flag
+  # parsing, so a filename that happens to start with `-` after `--` is never
+  # mistaken for an option here.
+  local -a paths=()
+  local arg skip=0 no_more_flags=0
+  for arg in "${send_args[@]}"; do
+    if (( skip )); then skip=0; continue; fi
+    if (( no_more_flags )); then paths+=("$arg"); continue; fi
+    case "$arg" in
+      --to|--expiration|--downloads) skip=1 ;;
+      --live) ;;
+      --) no_more_flags=1 ;;
+      -*) ;;
+      *) paths+=("$arg") ;;
+    esac
+  done
+
+  # share::label fails closed on a bad path (logs to stderr, returns 1,
+  # prints nothing) — that failure must not be swallowed by the command
+  # substitution below into a silently-truncated title like "share " on a
+  # job that is then enqueued anyway. Refuse to enqueue instead: the same
+  # bad path would fail share::send itself once the job actually ran, so
+  # refusing here just moves the same clean error earlier and skips wasting
+  # a job slot on a send that cannot possibly succeed.
+  local title="share"
+  if (( ${#paths} )); then
+    local label
+    label="$(share::label "${paths[@]}")" || {
+      log_error "share: cannot enqueue — see error above"
+      return 1
+    }
+    title="share $label"
+  fi
+
+  local -a modal=()
+  (( watch )) && modal=(--modal)
+  job::start "${modal[@]}" \
+    --group "$SHARE_JOB_GROUP" --title "$title" --icon "$SHARE_JOB_ICON" \
+    -- share send "${send_args[@]}"
+}
+
+# share::announce <blurb> — the acknowledgable completion toast, and the ONLY
+# notification share sends.
+#
+# job-callback already covers failures (it sends those with --ack itself) and
+# already fires a generic "<title> completed" on success. What it cannot carry
+# is the LINK. So when a send finishes with nobody watching a terminal, this
+# puts the blurb into notification history and raises the red bell:
+#
+#   --ack   the bell stays up until pick-notifications is opened, so a link
+#           nobody read cannot be lost to an overwritten clipboard — which for
+#           --store-downloads 1 would mean re-uploading.
+#   text    the blurb ITSELF, so pick-notifications → Enter re-shows the link.
+#   --meta  the pueue id, which is what makes that row's Ctrl-L open the job
+#           log exactly as a native job row does.
+#   --kind  classifies the row as a share.
+#
+# Guarded on JOB_ID: a foreground send prints the blurb to a terminal the
+# human is already looking at, and needs no acknowledgment.
+share::announce() {
+  local blurb="$1"
+  [ -n "${JOB_ID:-}" ] || return 0
+
+  # job::start writes meta.json BEFORE `pueue add` (pueue_id: -1) and patches
+  # it with the real task id AFTER. A job that announces before the patch
+  # lands — or one whose enqueue itself failed — must not carry that -1
+  # sentinel into notification history as if it were a real task id. Anything
+  # that is not a positive integer degrades to an empty meta object: still
+  # valid JSON, never malformed, never a Ctrl-L that opens a bogus log.
+  local root="${JOB_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/jobs}"
+  local pueue_id meta='{}'
+  pueue_id="$(jq -r '.pueue_id // empty' "$root/$JOB_ID/meta.json" 2>/dev/null)"
+  [[ "$pueue_id" == <1-> ]] && meta="$(jq -nc --argjson pid "$pueue_id" '{pueue_id: $pid}')"
+
+  notify --ack --kind share --icon "$SHARE_JOB_ICON" --meta "$meta" -- "$blurb"
 }
