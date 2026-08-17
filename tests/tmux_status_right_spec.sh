@@ -12,7 +12,7 @@ Describe 'tmux-status-right'
   "mode":{"locked":"#fab387","resize":"#cba6f7","pane":"#89b4fa","tab":"#a6e3a1",
           "move":"#f9e2af","scroll":"#b4befe","session":"#f38ba8","tmux":"#f38ba8","rename":"#f9e2af","search":"#89b4fa","visual":"#cba6f7"},
   "action":{"attention":"#f9e2af"}},
- "palette":{"base":"#1e1e2e","white":"#ffffff"},
+ "palette":{"base":"#1e1e2e","white":"#ffffff","red":"#f38ba8"},
  "extended":{"tab":{"bg":"#282c41","fg":"#9b9fc1","active_bg":"#656a83","active_fg":"#ffffff"}}}
 EOS
 
@@ -20,6 +20,10 @@ EOS
 #!/usr/bin/env zsh
 if [[ "$1" == "show" && "$3" == "@mux_stack" ]]; then
   print -r -- "${STUB_STACK:-}"
+  exit 0
+fi
+if [[ "$1" == "show" && "$3" == "@jobs" ]]; then
+  print -r -- "${STUB_JOBS:-}"
   exit 0
 fi
 if [[ "$1" == "show-environment" ]]; then
@@ -442,6 +446,38 @@ EOS
   End
 
   # C2 split-palette fix: the bar resolves via theme::json_path, so the override
+  Describe 'the @jobs segment'
+    It 'renders N running and M failed, failure half in red'
+      jobs_seg() { STUB_JOBS="2 1" zsh "$W" root 0 main 0; }
+      When call jobs_seg
+      The output should include "2▶"
+      The output should include "1✗"
+      # the failed half switches to the palette red before its count
+      The output should include "#[fg=#f38ba8]1✗"
+    End
+
+    It 'renders running alone when nothing failed'
+      jobs_run() { STUB_JOBS="3 0" zsh "$W" root 0 main 0; }
+      When call jobs_run
+      The output should include "3▶"
+      The output should not include "✗"
+    End
+
+    It 'renders failures alone after the last job drains'
+      jobs_fail() { STUB_JOBS="0 2" zsh "$W" root 0 main 0; }
+      When call jobs_fail
+      The output should include "2✗"
+      The output should not include "▶"
+    End
+
+    It 'hides entirely when the option is empty'
+      jobs_none() { STUB_JOBS="" zsh "$W" root 0 main 0; }
+      When call jobs_none
+      The output should not include "▶"
+      The output should not include "✗"
+    End
+  End
+
   # ($THEME_PALETTE_JSON — the tinted cache copy .zshrc exports under SSH) wins
   # over the canonical config tier. The bar and the dialogs read the SAME file,
   # never two palettes on one screen. Retires the old WIDGETS_THEME_JSON seam.

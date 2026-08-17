@@ -26,8 +26,20 @@ case "$1" in add) echo "7" ;; esac
 EOF
     chmod +x "$CB_SANDBOX/pueue"
     export JOB_PUEUE_BIN="$CB_SANDBOX/pueue"
+    # Fake tmux (JOB_TMUX_BIN): the callback's @jobs statusbar sync must
+    # never reach the live server from the suite.
+    cat > "$CB_SANDBOX/tmux" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$CB_SANDBOX_TMUX_LOG"
+exit 0
+EOF
+    chmod +x "$CB_SANDBOX/tmux"
+    export CB_SANDBOX_TMUX_LOG="$CB_SANDBOX/tmux.log"
+    export JOB_TMUX_BIN="$CB_SANDBOX/tmux"
+    # History lands in the sandbox too (notify's phase-3 append).
+    export NOTIFY_HISTORY_FILE="$CB_SANDBOX/history.jsonl"
   }
-  cleanup() { rm -rf "$CB_SANDBOX"; }
+  cleanup() { rm -rf "$CB_SANDBOX"; unset JOB_TMUX_BIN NOTIFY_HISTORY_FILE CB_SANDBOX_TMUX_LOG; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -120,5 +132,46 @@ EOF
     }
     When call sweep
     The output should equal 'swept|kept'
+  End
+
+  # phase 3 (spec §8): the unseen-failures ledger + the statusbar resync.
+  Describe 'the @jobs statusbar side'
+    It 'a Failed result appends one ledger line and resyncs the badge'
+      failed_ledger() {
+        seed >/dev/null || return 1
+        zsh -f "$CALLBACK" 7 "Failed" 2 || return 2
+        printf '%s|%s' \
+          "$(wc -l < "$JOB_STATE_ROOT/.failed-unseen" | tr -d ' ')" \
+          "$(grep -cF 'set -g @jobs' "$CB_SANDBOX/tmux.log")"
+      }
+      When call failed_ledger
+      # 2 syncs: one from the seed's job::start, one from the callback.
+      The output should equal '1|2'
+    End
+
+    It 'Success and Killed leave the ledger untouched but still resync'
+      clean_results() {
+        seed >/dev/null || return 1
+        zsh -f "$CALLBACK" 7 "Success" 0 || return 2
+        seed >/dev/null || return 3
+        zsh -f "$CALLBACK" 7 "Killed" "" || return 4
+        printf '%s|%s' \
+          "$([ -e "$JOB_STATE_ROOT/.failed-unseen" ] && echo present || echo absent)" \
+          "$(grep -cF 'set -g @jobs' "$CB_SANDBOX/tmux.log")"
+      }
+      When call clean_results
+      # 4 syncs: two seeds' job::start + two callbacks.
+      The output should equal 'absent|4'
+    End
+
+    It 'the failure toast carries the job meta into the history'
+      failed_history() {
+        seed >/dev/null || return 1
+        zsh -f "$CALLBACK" 7 "Failed" 2 || return 2
+        tail -n 1 "$NOTIFY_HISTORY_FILE" | jq -r '[.kind, .meta.pueue_id, .meta.result] | join("|")'
+      }
+      When call failed_history
+      The output should equal 'job|7|Failed'
+    End
   End
 End

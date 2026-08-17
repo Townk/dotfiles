@@ -25,6 +25,17 @@ EOF
     chmod +x "$JOB_SANDBOX/pueue"
     export JOB_PUEUE_BIN="$JOB_SANDBOX/pueue"
 
+    # FAKE tmux for the @jobs statusbar writers (JOB_TMUX_BIN): records
+    # argv only — the sync helper's contract is the option value it sets.
+    export JOB_FAKE_TMUX_LOG="$JOB_SANDBOX/tmux.log"
+    cat > "$JOB_SANDBOX/tmux" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_TMUX_LOG"
+exit 0
+EOF
+    chmod +x "$JOB_SANDBOX/tmux"
+    export JOB_TMUX_BIN="$JOB_SANDBOX/tmux"
+
     # FAKE troupe (troupe-design.md §6's `troupe jobs`): records argv, then
     # emits either the next queued action popped off a rotating actions file
     # (JOB_FAKE_TROUPE_ACTIONS — one action per line, a scenario's whole
@@ -701,6 +712,59 @@ EOF
   # relaunches: troupe streams cancel/logs as line-buffered FIFO lines
   # while it keeps running, and EOF (troupe exits on ESC/q, closing its
   # stdout) is the one and only end condition.
+  # phase 3 (spec §8): the @jobs statusbar writers. The option value is
+  # the contract ("<running> <failed>", empty when both are zero); the
+  # reader (tmux-status-right) owns presentation and has its own spec.
+  Describe 'job::_statusbar_sync'
+    It 'counts result-less fresh dirs as running and ledger lines as failed'
+      synced() {
+        mkdir -p "$JOB_STATE_ROOT/j1" "$JOB_STATE_ROOT/j2" "$JOB_STATE_ROOT/j3"
+        echo '{}' > "$JOB_STATE_ROOT/j1/meta.json"
+        echo '{}' > "$JOB_STATE_ROOT/j2/meta.json"
+        echo '{}' > "$JOB_STATE_ROOT/j3/meta.json"
+        echo done > "$JOB_STATE_ROOT/j3/result"          # finished: not running
+        printf 'x\ny\n' > "$JOB_STATE_ROOT/.failed-unseen"
+        run_job job::_statusbar_sync
+        grep -F 'set -g @jobs' "$JOB_FAKE_TMUX_LOG"
+      }
+      When call synced
+      The output should include "set -g @jobs 2 2"
+    End
+
+    It 'a day-old result-less dir is a ghost, not a running job'
+      ghost() {
+        mkdir -p "$JOB_STATE_ROOT/old"
+        echo '{}' > "$JOB_STATE_ROOT/old/meta.json"
+        touch -t 202001010000 "$JOB_STATE_ROOT/old/meta.json"
+        run_job job::_statusbar_sync
+        grep -F 'set -g @jobs' "$JOB_FAKE_TMUX_LOG"
+      }
+      When call ghost
+      The output should include "set -g @jobs "
+      The output should not include "@jobs 1"
+    End
+
+    It 'sets the option empty when nothing runs and nothing is unseen'
+      quiet() {
+        mkdir -p "$JOB_STATE_ROOT"
+        run_job job::_statusbar_sync
+        tail -n 2 "$JOB_FAKE_TMUX_LOG"
+      }
+      When call quiet
+      The line 1 should equal "set -g @jobs "
+      The line 2 should equal "refresh-client -S"
+    End
+
+    It 'job::start syncs the badge after enqueueing'
+      start_syncs() {
+        run_job job::start --title T -- sleep 1 >/dev/null || return 1
+        grep -cF 'set -g @jobs 1 0' "$JOB_FAKE_TMUX_LOG"
+      }
+      When call start_syncs
+      The output should equal "1"
+    End
+  End
+
   Describe 'job::_use_pane_host'
     It 'JOB_FORCE_HOST=pane wins outright, even with no TMUX at all'
       selects() { JOB_FORCE_HOST=pane run_job job::_use_pane_host; }

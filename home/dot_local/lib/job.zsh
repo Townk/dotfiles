@@ -94,6 +94,7 @@ job::start() {
   local tmp="$dir/.meta.tmp"
   jq --argjson tid "$task_id" '.pueue_id = $tid' "$dir/meta.json" > "$tmp" \
     && mv -f -- "$tmp" "$dir/meta.json"
+  job::_statusbar_sync 2>/dev/null || :
   print -r -- "$id"
   if ((modal)); then
     # Headless (no controlling terminal on stderr — cron, a run-shell
@@ -132,7 +133,8 @@ job::cancel() {
   task_id=$(jq -r '.pueue_id' "$JOB_STATE_ROOT/$id/meta.json" 2>/dev/null) \
     || return 1
   [[ "$task_id" == <-> ]] || return 1
-  "$pueue" kill "$task_id"
+  "$pueue" kill "$task_id" || return $?
+  job::_statusbar_sync 2>/dev/null || :
 }
 
 # job::list — one JSON document merging our per-job state with pueue's
@@ -169,6 +171,45 @@ job::hud() {
   case "$verb" in show | hide | toggle) ;; *) return 1 ;; esac
   hs=$(notify::available --path) || return 1
   "$hs" -q -c "require(\"jobs\").${verb}()" </dev/null >/dev/null 2>&1 || true
+  return 0
+}
+
+# job::_statusbar_sync — recompute the @jobs statusbar data (phase 3, spec
+# §8) and push it at the default tmux server: `@jobs` holds "<running>
+# <failed>" (two integers; empty when both are zero, which hides the
+# segment) and tmux-status-right owns the presentation. Fire-and-forget
+# everywhere: a missing tmux server must never fail a job operation, and
+# writers may run entirely outside tmux (job-callback fires from pueued's
+# daemon environment) — the default socket is addressed regardless.
+#
+# running = job dirs without a result whose meta.json is younger than a
+# day (older result-less dirs are daemon-death ghosts — the callback's 24h
+# sweep's business, not the badge's). failed = lines in .failed-unseen
+# (one appended per Failed callback — appends are atomic, so no
+# read-modify-write race); opening the dashboard removes the file (the
+# dashboard is the acknowledgment surface — ✗ means "failures you haven't
+# looked at"). JOB_TMUX_BIN is the test seam.
+job::_statusbar_sync() {
+  local tmux_bin="${JOB_TMUX_BIN:-tmux}"
+  command -v "$tmux_bin" >/dev/null 2>&1 || return 0
+  local running=0 failed=0 d
+  local -a fresh
+  for d in "$JOB_STATE_ROOT"/*(N/); do
+    [ -f "$d/meta.json" ] || continue
+    [ -e "$d/result" ] && continue
+    fresh=("$d"/meta.json(N.md-1))
+    (( ${#fresh} )) || continue
+    running=$((running + 1))
+  done
+  if [ -f "$JOB_STATE_ROOT/.failed-unseen" ]; then
+    failed=$(wc -l < "$JOB_STATE_ROOT/.failed-unseen" 2>/dev/null | tr -d ' ') || failed=0
+  fi
+  local value=""
+  if (( running > 0 || failed > 0 )); then
+    value="$running $failed"
+  fi
+  "$tmux_bin" set -g @jobs "$value" 2>/dev/null || return 0
+  "$tmux_bin" refresh-client -S 2>/dev/null || :
   return 0
 }
 
@@ -692,13 +733,20 @@ job::watch() {
   troupe=$(job::_troupe) \
     || die "troupe is not installed — go install github.com/Townk/troupe/cmd/troupe@latest"
 
+  # Opening the dashboard IS the failure acknowledgment (phase 3, spec §8):
+  # the ✗ badge means "failures you haven't looked at", and you are looking.
+  rm -f -- "$JOB_STATE_ROOT/.failed-unseen" 2>/dev/null
+  job::_statusbar_sync 2>/dev/null || :
+
   # Host selection (job-runner design §6 rev 4): a floating PANE — real,
   # live-resizable, genuinely persistent — when the probe (or the
   # JOB_FORCE_HOST test seam) says so; the popup loop below stays the
   # fallback on stock tmux/outside tmux, unchanged.
   if job::_use_pane_host; then
     job::_watch_pane "$troupe"
-    return $?
+    local _pane_rc=$?
+    job::_statusbar_sync 2>/dev/null || :
+    return $_pane_rc
   fi
 
   while true; do

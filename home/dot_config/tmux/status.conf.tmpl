@@ -29,7 +29,7 @@ setw -g window-status-current-format "$win_pill_current"
 # and tmux re-runs it immediately — instant mode pill, interval-refreshed
 # widgets.
 set -g status-right-length 160
-set -g status-right "#({{ .chezmoi.homeDir }}/.local/libexec/tmux-status-right '#{client_key_table}' '#{?pane_in_mode,1,0}' '#S' '#{?client_prefix,1,0}' '#{?search_present,1,0}' '#{@renaming}' '#{?#{@visual},1,0}' '#{?#{@searching},1,0}' '#{@search_case}#{@search_word}#{@search_wrap}' '#{client_width}' '#{@mux_stack}' '#{search_count}' '#{?search_count_partial,1,0}' '#{@search_idx}' '#{client_termname}')"
+set -g status-right "#({{ .chezmoi.homeDir }}/.local/libexec/tmux-status-right '#{client_key_table}' '#{?pane_in_mode,1,0}' '#S' '#{?client_prefix,1,0}' '#{?search_present,1,0}' '#{@renaming}' '#{?#{@visual},1,0}' '#{?#{@searching},1,0}' '#{@search_case}#{@search_word}#{@search_wrap}' '#{client_width}' '#{@mux_stack}' '#{search_count}' '#{?search_count_partial,1,0}' '#{@search_idx}' '#{client_termname}' '#{@jobs}')"
 
 # Which-key panel (Phase 5, D5): a popup owned by mux-whichkey — it floats
 # over the panes and dispatches the mode's keys itself while open (tmux
@@ -38,6 +38,7 @@ set -g status-right "#({{ .chezmoi.homeDir }}/.local/libexec/tmux-status-right '
 # server's key tables were just re-sourced, so any mode we thought we were
 # standing in is gone with them.
 set -g @mux_stack ""
+set -g @jobs ""
 set -g @mux_wk_driver 0
 # Defensive: a server from the status-line era can still carry panel rows in
 # status-format; put the stack back to "bar only".

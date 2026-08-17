@@ -70,6 +70,16 @@ if [ -n "$dir" ]; then
   print -r -- "$EPOCHSECONDS $result ${exit_code:-}" > "$dir/result"
 fi
 
+# Statusbar (phase 3, spec §8): a genuine failure appends one line to the
+# unseen-failures ledger (appends are atomic — no read-modify-write race;
+# a cancel is not a failure and Success obviously isn't), then the @jobs
+# option resyncs either way — this job just left the running count.
+case "$result" in
+  Success | Killed) ;;
+  *) print -r -- "$EPOCHSECONDS $pueue_id" >> "$JOB_STATE_ROOT/.failed-unseen" 2>/dev/null || : ;;
+esac
+job::_statusbar_sync 2>/dev/null || :
+
 # Prune: finished jobs (result file present) beyond the newest JOB_KEEP.
 # Active dirs have no result file and are never candidates.
 keep="${JOB_KEEP:-50}"

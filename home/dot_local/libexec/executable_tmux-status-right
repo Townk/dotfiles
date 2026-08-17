@@ -80,6 +80,11 @@ search_count="${12:-}"
 search_partial="${13:-0}"
 search_idx="${14:-}"
 client_term="${15:-}"
+# The @jobs data ("<running> <failed>", empty = no live jobs) arrives as an
+# ARGUMENT for the same reason the mode stack does: tmux re-runs the #()
+# the moment the format-expanded value changes, so job starts/finishes
+# repaint immediately instead of waiting out the status-interval tick.
+jobs_raw="${16-$("$TMUX_BIN" show -gv @jobs 2>/dev/null)}"
 
 # ---- theme colors (one jq pass) -------------------------------------------
 # bar_bg fg tab_bg m_locked m_resize m_pane m_tab m_move m_scroll m_session
@@ -87,12 +92,13 @@ c=("${(@f)$(jq -r '
   .palette.base, .roles.ui.fg, .extended.tab.bg,
   .roles.mode.locked, .roles.mode.resize, .roles.mode.pane, .roles.mode.tab,
   .roles.mode.move, .roles.mode.scroll, .roles.mode.session, .roles.mode.tmux,
-  .roles.mode.rename, .roles.mode.search, .roles.mode.visual, .palette.white
+  .roles.mode.rename, .roles.mode.search, .roles.mode.visual, .palette.white,
+  .palette.red
 ' "$THEME_JSON" 2>/dev/null)}") || c=()
-(( ${#c} == 15 )) || exit 0
+(( ${#c} == 16 )) || exit 0
 bar_bg="${c[1]}" fg_hi="${c[2]}" tab_bg="${c[3]}"
 m_locked="${c[4]}" m_resize="${c[5]}" m_pane="${c[6]}" m_tab="${c[7]}"
-m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}" m_rename="${c[12]}" m_search="${c[13]}" m_visual="${c[14]}" c_white="${c[15]}"
+m_move="${c[8]}" m_scroll="${c[9]}" m_session="${c[10]}" m_tmux="${c[11]}" m_rename="${c[12]}" m_search="${c[13]}" m_visual="${c[14]}" c_white="${c[15]}" c_red="${c[16]}"
 
 # ---- color math -----------------------------------------------------------
 # The per-channel hex split is theme::hex_rgb (C1) — "#rrggbb" -> "R G B";
@@ -430,6 +436,22 @@ if [[ -n "$sess" && "${(L)sess}" != main ]]; then
   bodies+=("$I_SESSION ${(j: :)${(C)words}}"); kinds+=(session)
 fi
 
+# The @jobs segment (phase 3, job-runner spec §8): N▶ running, M✗ unseen
+# failures — the dashboard's promised "dismissed but still running"
+# affordance. Data only in the option; presentation lives here. Hidden
+# entirely when the option is empty (no live jobs, nothing unseen).
+if [[ "$jobs_raw" == <->" "<-> ]]; then
+  jobs_running="${jobs_raw%% *}"
+  jobs_failed="${jobs_raw##* }"
+  jobs_body=""
+  (( jobs_running > 0 )) && jobs_body="${jobs_running}▶"
+  if (( jobs_failed > 0 )); then
+    [[ -n "$jobs_body" ]] && jobs_body+="  "
+    jobs_body+="@JF@${jobs_failed}✗"
+  fi
+  [[ -n "$jobs_body" ]] && { bodies+=("$jobs_body"); kinds+=(jobs); }
+fi
+
 typeset -a w
 if (( show_sys )); then
   batt="$("$PMSET" -g batt 2>/dev/null)" || batt=""
@@ -509,6 +531,11 @@ for (( i = 1; i <= n; i++ )); do
       seg+="#[fg=${fg_hi}] ${hp[j]}#[fg=${fg}] ${hp[j+1]} "
     done
     out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg}]${seg}"
+  elif [[ "${kinds[i]}" == jobs ]]; then
+    # the failure half pops red (the badge is the alarm); running count
+    # keeps the segment's auto-contrast fg
+    seg="${bodies[i]/@JF@/#[fg=${c_red}]}"
+    out+="#[bg=${prev_bg},fg=${bg}]${DIV}#[bg=${bg},fg=${fg}] ${seg}#[fg=${fg}] "
   elif [[ "${kinds[i]}" == hint ]]; then
     # two-tone hint: keycap glyphs pop white-ish, the label stays dark —
     # zj-hud paints keycaps in hint_glyph_on over the mode color.
