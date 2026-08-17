@@ -11,16 +11,17 @@ prepend_fetchers = [
   { url = "*/", run = "mactag", group = "mactag" },
 ]
 
+# Yazi 26.8 caps the MERGED preloader list (ours + the presets) at 16 and
+# REJECTS the whole config past it — every binding and plugin silently
+# falls back to presets (live find, 2026-08-17: the laptop's yazi `y`
+# degraded to a plain yank and file clips crossed the bridge as text).
+# The nine per-format rules below collapse into three via brace patterns:
+# same coverage, six rules back under the cap.
 prepend_preloaders = [
   # Warm the preview script's raster cache (frames, pages, sheets, covers).
-  { mime = "{image,video,audio}/*", run = "preview-shim" },
-  { mime = "application/pdf", run = "preview-shim" },
-  { mime = "font/*", run = "preview-shim" },
-  { mime = "application/vnd.ms-opentype", run = "preview-shim" },
-  { mime = "{image/vnd.adobe.photoshop,application/postscript}", run = "preview-shim" },
-  { mime = "application/vnd.openxmlformats-officedocument.*", run = "preview-shim" },
-  { mime = "application/{msword,vnd.ms-excel,vnd.ms-powerpoint}", run = "preview-shim" },
-  { mime = "application/vnd.oasis.opendocument.*", run = "preview-shim" },
+  # image/* subsumes the old photoshop rule; font/* rides the same brace.
+  { mime = "{image,video,audio,font}/*", run = "preview-shim" },
+  { mime = "application/{pdf,vnd.ms-opentype,postscript,msword,vnd.ms-excel,vnd.ms-powerpoint,vnd.openxmlformats-officedocument.*,vnd.oasis.opendocument.*}", run = "preview-shim" },
   { url = "*.{docx,xlsx,pptx,doc,xls,ppt,odt,ods,odp,pages,numbers,key}", run = "preview-shim" },
 ]
 
