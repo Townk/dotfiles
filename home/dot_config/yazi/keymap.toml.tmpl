@@ -6,13 +6,18 @@ prepend_keymap = [
   { on = "Q",     run = "quit",               desc = "Quit the process" },
 
   { on = "<Enter>", run = "plugin nice-sidebar enter", desc = "Sidebar: confirm selection; else open / smart-enter" },
-  { on = "<C-Space>", run = 'shell -- "$HOME/.local/libexec/yazi-quick-look" "$@"', desc = "Quick Look (floating preview pane over SSH)" },
+  # yazi 26.8: files arrive via %-placeholders, not positional argv ("$@"
+  # stopped expanding — live find, the yank binding silently copied
+  # nothing). `set -- %s` rebuilds argv from the selection (the
+  # placeholders substitute as quoted words), falling back to the hovered
+  # file — the same selected-else-hovered set the old argv carried.
+  { on = "<C-Space>", run = 'shell -- set -- %s; [ "$#" -eq 0 ] && set -- %h; "$HOME/.local/libexec/yazi-quick-look" "$@"', desc = "Quick Look (floating preview pane over SSH)" },
   { on = "<C-d>", run = "seek 5" },
   { on = "<C-u>", run = "seek -5" },
   { on = "<C-f>", run = "seek 10" },
   { on = "<C-b>", run = "seek -10" },
 
-  { on = "y", run = [ '''shell -- d="${XDG_STATE_HOME:-$HOME/.local/state}/yazi"; mkdir -p "$d"; pbcopy "$@" 2>/dev/null; touch "$d/last-yank"''', "yank" ], desc = "Yank (+ system clipboard)" },
+  { on = "y", run = [ '''shell -- set -- %s; [ "$#" -eq 0 ] && set -- %h; d="${XDG_STATE_HOME:-$HOME/.local/state}/yazi"; mkdir -p "$d"; pbcopy "$@" 2>/dev/null; touch "$d/last-yank"''', "yank" ], desc = "Yank (+ system clipboard)" },
   { on = "x", run = [ '''shell -- d="${XDG_STATE_HOME:-$HOME/.local/state}/yazi"; mkdir -p "$d"; touch "$d/last-yank"''', "yank --cut" ], desc = "Cut (internal)" },
   { on = "p", run = "plugin smart-paste",              desc = "Paste (smart: yank or system clipboard)" },
   { on = "P", run = "plugin smart-paste -- --force",   desc = "Paste forcefully (smart)" },
@@ -72,7 +77,7 @@ prepend_keymap = [
   # Terminal Time Machine on the hovered path, in its own zellij tab
   # (dir = explore session, file = diff session scoped to that file).
   # Dev-shell skips it: the backup stack does not deploy there.
-  { on = [ "g", "t", ], run = 'shell --orphan -- "$HOME/.local/libexec/tm-tab" "$0"', desc = "Time Machine here, in a new tab" },
+  { on = [ "g", "t", ], run = 'shell --orphan -- "$HOME/.local/libexec/tm-tab" %h', desc = "Time Machine here, in a new tab" },
 {{- end }}
 
   # I would love to use these, but they do not work in my environment
