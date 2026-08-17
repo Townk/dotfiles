@@ -184,4 +184,39 @@ SH
     The stderr should include 'no such file'
     The path "$SB/calls" should not be exist
   End
+
+  # --- review finding 1: a valueless flag must not spin forever -------------
+  # `share::send --to` (or --expiration / --downloads) as the LAST token used
+  # to leave `$2` empty and fail `shift 2` without changing `$#`, so `$1` was
+  # still the same flag and `while (( $# ))` never terminated — a
+  # CPU-spinning hang from an ordinary typo, with no test to catch it. Each
+  # case below runs under `timeout` so a regression fails this test instead
+  # of hanging the whole suite, and asserts the actual failure message (not
+  # just a non-zero status) so a `timeout`-induced kill (status 124, no
+  # message) cannot be mistaken for the guard working.
+  It 'terminates instead of hanging when --to has no value, and names the flag'
+    When run timeout 5 zsh -c "source home/dot_local/lib/share.zsh; share::send --to"
+    The status should be failure
+    The stderr should include '--to requires an endpoint name'
+  End
+
+  It 'terminates instead of hanging when --expiration has no value, and names the flag'
+    When run timeout 5 zsh -c "source home/dot_local/lib/share.zsh; share::send --expiration"
+    The status should be failure
+    The stderr should include '--expiration requires a value'
+  End
+
+  It 'terminates instead of hanging when --downloads has no value, and names the flag'
+    When run timeout 5 zsh -c "source home/dot_local/lib/share.zsh; share::send --downloads"
+    The status should be failure
+    The stderr should include '--downloads requires a value'
+  End
+
+  # --- review finding 2: --live against the rclone backend ------------------
+  It 'refuses --live against the rclone backend'
+    SHARE_PROFILE=work
+    When run share::send --live --to onedrive "$SB/Report.pdf"
+    The status should be failure
+    The stderr should include 'no live mode'
+  End
 End

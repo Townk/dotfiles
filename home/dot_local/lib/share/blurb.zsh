@@ -37,10 +37,16 @@ share::human_size() {
 share::label() {
   zmodload zsh/stat 2>/dev/null
   local -a sizes
-  local total=0 path
-  for path in "$@"; do
-    [[ -e "$path" ]] || { log_error "share: no such file: $path"; return 1; }
-    zstat -A sizes +size -- "$path" 2>/dev/null || sizes=(0)
+  # `p`, deliberately NOT `path`: in zsh the lowercase `path` array is TIED to
+  # `$PATH` (same storage), so `local path` followed by scalar assignment in
+  # a loop replaces the whole tied array — see share::send in share.zsh for
+  # the verified failure this caused elsewhere. Currently harmless in THIS
+  # function (nothing after the loop needs `$PATH`, and the shadow is
+  # discarded on return), but the pattern is the same landmine.
+  local total=0 p
+  for p in "$@"; do
+    [[ -e "$p" ]] || { log_error "share: no such file: $p"; return 1; }
+    zstat -A sizes +size -- "$p" 2>/dev/null || sizes=(0)
     (( total += sizes[1] ))
   done
   if (( $# == 1 )); then

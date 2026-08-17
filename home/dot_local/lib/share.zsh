@@ -246,12 +246,21 @@ SHARE_DEFAULT_DOWNLOADS="${SHARE_DEFAULT_DOWNLOADS:-1}"
 share::send() {
   local endpoint="" mode=store
   local expiration="$SHARE_DEFAULT_EXPIRATION" downloads="$SHARE_DEFAULT_DOWNLOADS"
+  # Each value-consuming flag is guarded BEFORE the `shift 2`: with the flag
+  # as the last token, `$2` is empty and `shift 2` fails in zsh (shift count
+  # must be <= $#) WITHOUT changing `$#` — so `$1` is still the same flag and
+  # `while (( $# ))` spins forever. Verified: `share::send --to` hung until
+  # killed. Guarding turns that CPU-spinning hang into an immediate, named
+  # error instead.
   while (( $# )); do
     case "$1" in
-      --to)         endpoint="$2"; shift 2 ;;
+      --to)         [[ $# -ge 2 ]] || die "share: --to requires an endpoint name"
+                     endpoint="$2"; shift 2 ;;
       --live)       mode=live; shift ;;
-      --expiration) expiration="$2"; shift 2 ;;
-      --downloads)  downloads="$2"; shift 2 ;;
+      --expiration) [[ $# -ge 2 ]] || die "share: --expiration requires a value"
+                     expiration="$2"; shift 2 ;;
+      --downloads)  [[ $# -ge 2 ]] || die "share: --downloads requires a value"
+                     downloads="$2"; shift 2 ;;
       --)           shift; break ;;
       -*)           die "share: unknown option: $1" ;;
       *)            break ;;
