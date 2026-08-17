@@ -166,7 +166,8 @@ function Status:name()
 		spans[#spans + 1] = ui.Span("\u{10F0C1} "):fg(status_color.link)
 		target = resolve_link(target, tostring(h.link_to))
 	else
-		local icon = h:icon()
+		-- yazi 26.8: File:icon() is deprecated for the themed matcher.
+		local icon = th.icon:match(h)
 		if icon then
 			spans[#spans + 1] = ui.Span(icon.text .. " "):style(icon.style)
 		end
