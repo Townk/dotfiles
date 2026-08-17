@@ -28,6 +28,34 @@ share::_secret() {
   fi
 }
 
+# share::_code_phrase — a fresh live-mode code phrase: 16 characters from a
+# 32-symbol unambiguous alphabet (a-z minus l/o, 2-9 minus 0/1 — no character
+# a listener could mis-transcribe over a phone), grouped xxxx-xxxx-xxxx-xxxx
+# so it stays speakable. This is the PAKE shared secret croc's `--code` uses
+# to authenticate the live peer, so its entropy is load-bearing:
+#   * drawn from /dev/urandom (a CSPRNG) — never $RANDOM (not
+#     cryptographically secure in zsh), $$, or anything time-derived;
+#   * 32 symbols is exactly 2^5, and a byte's range (256) is an exact
+#     multiple of 32, so `byte % 32` is UNBIASED with no rejection sampling
+#     needed — every symbol is equally likely;
+#   * 16 chars * 5 bits/char = 80 bits of entropy, comfortably over the 64-bit
+#     floor and well above croc's own default phrase (3 words + a number,
+#     ≈38.6 bits).
+share::_code_phrase() {
+  local -a alphabet=(a b c d e f g h i j k m n p q r s t u v w x y z 2 3 4 5 6 7 8 9)
+  local raw
+  raw="$(od -An -v -tu1 -N16 /dev/urandom 2>/dev/null)" || return 1
+  local -a bytes=(${=raw})
+  (( ${#bytes[@]} == 16 )) || return 1
+  local out="" i idx
+  for (( i = 1; i <= 16; i++ )); do
+    idx=$(( bytes[i] % 32 + 1 ))
+    out+="${alphabet[idx]}"
+    (( i < 16 && i % 4 == 0 )) && out+="-"
+  done
+  printf '%s\n' "$out"
+}
+
 # share::croc_argv <endpoint> <mode> <expiration> <downloads> <path…>
 #   mode: store | live
 #
@@ -56,6 +84,15 @@ share::croc_argv() {
     [[ -n "$store" ]] && cmd+=(--store-url "$store")
     [[ -n "$expiration" ]] && cmd+=(--store-expiration "$expiration")
     [[ -n "$downloads" ]] && cmd+=(--store-downloads "$downloads")
+  elif [[ "$mode" == live ]]; then
+    # A generated --code makes the phrase OURS: we already know it, so
+    # share::croc_send never has to parse it back out of croc's prose (see
+    # the finding this fixes, below). Store mode has no code phrase — the
+    # store URL/token pair is croc's own zero-knowledge share, not a PAKE.
+    local code
+    code="$(share::_code_phrase)" || return 1
+    [[ -n "$code" ]] || { log_error "share: failed to generate a code phrase"; return 1; }
+    cmd+=(--code "$code")
   fi
   cmd+=("$@")
   printf '%s\n' "${cmd[@]}"
@@ -132,9 +169,18 @@ share::croc_send() {
   local kind value ref parsed
   if [[ "$mode" == live ]]; then
     kind=live
-    value="$(printf '%s\n' "$out" | grep -oE 'croc [a-z0-9-]{6,}' | head -1)"
-    value="${value#croc }"
     ref=""
+    # NOT parsed from croc's output. croc's own on-screen instruction line
+    # reads e.g. "croc --relay host:port --pass secret abcd-efgh-ijkl-mnop"
+    # whenever --relay/--pass are non-default — which is every self-hosted
+    # endpoint — and a naive `grep -oE 'croc [a-z0-9-]{6,}'` matches
+    # "croc --relay" long before it ever reaches the phrase. We generated the
+    # phrase ourselves (share::croc_argv, above) and put it in `cmd`, so it is
+    # read back from OUR OWN argv array — an index lookup, not a prose parse —
+    # which is exact regardless of how croc words its instructions.
+    local -i idx
+    idx=${cmd[(i)--code]}
+    value="${cmd[idx+1]:-}"
   else
     parsed="$(share::croc_parse_share "$out")" || {
       log_error "share: croc produced no share link"
@@ -150,6 +196,12 @@ share::croc_send() {
       kind=cli; value="$token"
     fi
   fi
+
+  # Fail closed rather than record a bogus receipt or print a bogus blurb:
+  # this is what the store branch already gets for free from
+  # share::croc_parse_share's own guard; the live branch needs it stated
+  # explicitly since there is no parse step left to fail on its behalf.
+  [[ -n "$value" ]] || { log_error "share: no share value to record"; return 1; }
 
   local id expires_epoch=0
   id="$(share::gen_id)"
