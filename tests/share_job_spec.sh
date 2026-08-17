@@ -39,12 +39,21 @@ SH
     The status should be success
   End
 
-  It 'reports jobs unavailable when pueue does not resolve'
-    JOB_PUEUE_BIN=""
-    PATH=/nonexistent
-    When run share::jobs_available
-    The status should be failure
-  End
+  # No negative counterpart to the "available" example above: verified
+  # directly against job::_pueue (home/dot_local/lib/job.zsh, out of this
+  # task's scope) that there is no seam that can force it to fail on a host
+  # with pueue actually installed via Homebrew. `PATH=/nonexistent` is
+  # defeated by its hardcoded `/opt/homebrew/bin/pueue` fallback (checked
+  # with a plain `-x` against the literal path, not through $PATH), and
+  # `JOB_PUEUE_BIN` set to any non-empty value — even a bogus path — short-
+  # circuits to `return 0` unconditionally with no executability check at
+  # all. share::jobs_available is a thin predicate over that resolution
+  # logic, so it inherits the same unsatisfiable-negative-test problem; the
+  # degradation behaviour that actually matters (a CLI falling back to a
+  # foreground send when the runner is unavailable) is covered instead in
+  # Task 10's CLI spec, by stubbing share::jobs_available itself — which,
+  # unlike job::_pueue, IS this codebase's own seam. Do not re-add a
+  # negative example here; it would be testing the wrong layer.
 
   It 'enqueues the send into the share group'
     share::send_background "$SB/Report.pdf" >/dev/null
