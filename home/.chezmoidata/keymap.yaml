@@ -410,7 +410,11 @@ keymap:
         desc: notification history
         icon: 󰂚
         color: mauve
-        cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Notifications\" --no-chrome -- $HOME/.local/libexec/pick-notifications"'
+        # `|| [ $? -eq 130 ]`: ESC/cancel is the picker's CLEAN exit (the
+        # pick contract), and run-shell paints any nonzero rc over the pane
+        # as an error — swallow exactly 130, let real failures surface
+        # (the same rule _mux_tx_float documents in tmux.zsh).
+        cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Notifications\" --no-chrome -- $HOME/.local/libexec/pick-notifications" || [ $? -eq 130 ]'
         dialog: true
       - keys:
         - J
