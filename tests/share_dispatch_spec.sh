@@ -189,25 +189,46 @@ SH
   # `share::send --to` (or --expiration / --downloads) as the LAST token used
   # to leave `$2` empty and fail `shift 2` without changing `$#`, so `$1` was
   # still the same flag and `while (( $# ))` never terminated — a
-  # CPU-spinning hang from an ordinary typo, with no test to catch it. Each
-  # case below runs under `timeout` so a regression fails this test instead
-  # of hanging the whole suite, and asserts the actual failure message (not
-  # just a non-zero status) so a `timeout`-induced kill (status 124, no
-  # message) cannot be mistaken for the guard working.
+  # CPU-spinning hang from an ordinary typo, with no test to catch it.
+  #
+  # A `timeout` alone is NOT enough to keep a regression here from wedging
+  # the whole suite. shellspec's own output capture (shellspec_readfile in
+  # lib/general.sh) rebuilds its buffer line-by-line — O(n^2) in output
+  # size — and the pre-fix spin emits on the order of 270K lines/second.
+  # Even after `timeout` kills the child, shellspec is left trying to slurp
+  # everything the spin already wrote to the pipe before it died: at 5s that
+  # is >1M lines / tens of MB, and the capture itself hangs on THAT, not on
+  # the child. Verified against the pre-fix commit (c5365a08) — see the
+  # fix-round report for the exact number; it did not return in under a
+  # few minutes, let alone the suite's normal few seconds.
+  #
+  # So this helper bounds BOTH dimensions: `timeout` bounds wall-clock time,
+  # and redirecting the child's stderr to a FILE (never a pipe shellspec
+  # reads directly) plus `head -c` on the way back out bounds the volume
+  # shellspec's capture ever sees — regardless of how much the child wrote
+  # before `timeout` caught it.
+  run_bare_flag() {
+    local errf="$SB/spin.err"
+    timeout 5 zsh -c "source home/dot_local/lib/share.zsh; share::send $1" 2>"$errf"
+    local rc=$?
+    head -c 300 "$errf" >&2
+    return $rc
+  }
+
   It 'terminates instead of hanging when --to has no value, and names the flag'
-    When run timeout 5 zsh -c "source home/dot_local/lib/share.zsh; share::send --to"
+    When run run_bare_flag --to
     The status should be failure
     The stderr should include '--to requires an endpoint name'
   End
 
   It 'terminates instead of hanging when --expiration has no value, and names the flag'
-    When run timeout 5 zsh -c "source home/dot_local/lib/share.zsh; share::send --expiration"
+    When run run_bare_flag --expiration
     The status should be failure
     The stderr should include '--expiration requires a value'
   End
 
   It 'terminates instead of hanging when --downloads has no value, and names the flag'
-    When run timeout 5 zsh -c "source home/dot_local/lib/share.zsh; share::send --downloads"
+    When run run_bare_flag --downloads
     The status should be failure
     The stderr should include '--downloads requires a value'
   End
