@@ -31,7 +31,24 @@ detect_terminal() {
   elif [[ "$term_program_lower" == "wezterm" || -n "${WEZTERM_UNIX_SOCKET:-}" || -n "${WEZTERM_PANE:-}" ]]; then
     print "wezterm"
   else
-    print "unknown"
+    # Inside tmux the env can NEVER answer for a local client: tmux stamps
+    # TERM_PROGRAM=tmux on every child, and the terminal markers
+    # (GHOSTTY_RESOURCES_DIR & co.) only reach children when the SERVER
+    # process happened to be started from that terminal — a server started
+    # over ssh loses them forever (live find, Mode B 2026-08-17: the
+    # local-VNC toggle failed on a server instance born from an ssh
+    # login). The attached client's termname is the attach-time truth,
+    # exactly the canonicalization peer_terminal() already trusts.
+    local ct=""
+    if [[ -n "${TMUX:-}" ]]; then
+      local tmux_bin="${MUX_TMUX_BIN:-tmux}"
+      ct="$("$tmux_bin" display -p '#{client_termname}' 2>/dev/null)" || ct=""
+    fi
+    case "${ct:l}" in
+      *ghostty*) print "ghostty" ;;
+      *wezterm*) print "wezterm" ;;
+      *) print "unknown" ;;
+    esac
   fi
 }
 
