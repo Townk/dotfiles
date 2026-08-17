@@ -22,16 +22,42 @@ Describe 'input-common.zsh'
       When call _input::bin
       The output should equal "/custom/path/ai-playbook"
     End
-    It 'falls back to the install path when ai-playbook is not on PATH'
-      # A mux-spawned pane's PATH lacks ~/.local/share/go/bin (only the
-      # interactive profile adds it), so a bare command-v fails there. Simulate
-      # that PATH and assert the resolver still finds the installed binary.
-      #
-      # `zsh -f` matters: without it .zshenv runs and puts mise's shims back on
-      # PATH, so the resolver finds a shim and the simulated pane environment
-      # this asserts on never actually exists.
-      When run env PATH=/opt/homebrew/bin:/usr/bin:/bin zsh -f -c 'unset AI_PLAYBOOK_INPUT_BIN; source "'"$SHELLSPEC_PROJECT_ROOT"'/home/dot_local/lib/input-common.zsh"; _input::bin'
-      The output should equal "$HOME/.local/share/go/bin/ai-playbook"
+    # The known-path fallback examples run under a FAKE $HOME so they assert
+    # the resolution ORDER (troupe consolidation: troupe first, ai-playbook
+    # as the transition fallback) rather than whatever this box happens to
+    # have installed. A mux-spawned pane's PATH lacks ~/.local/share/go/bin
+    # (only the interactive profile adds it), so a bare command-v fails
+    # there — the known-path probe is the production path. `zsh -f` matters:
+    # without it .zshenv runs and puts mise's shims back on PATH, so the
+    # resolver finds a shim and the simulated pane environment this asserts
+    # on never actually exists.
+    # PATH keeps /opt/homebrew/bin: pick-common (sourced by input-common)
+    # runs require_cmd fzf at SOURCE time and die = exit — the ledgered
+    # gotcha — and fzf lives there; troupe/ai-playbook do NOT (go installs
+    # land in ~/.local/share/go/bin), so the resolution assertions hold.
+    resolve_with_home() {
+      env PATH=/opt/homebrew/bin:/usr/bin:/bin HOME="$1" zsh -f -c 'unset AI_PLAYBOOK_INPUT_BIN; source "'"$SHELLSPEC_PROJECT_ROOT"'/home/dot_local/lib/input-common.zsh"; _input::bin'
+    }
+    It 'prefers the troupe install path when both binaries are present'
+      mkdir -p "$TEST_TMP/fakehome/.local/share/go/bin"
+      touch "$TEST_TMP/fakehome/.local/share/go/bin/troupe" "$TEST_TMP/fakehome/.local/share/go/bin/ai-playbook"
+      chmod +x "$TEST_TMP/fakehome/.local/share/go/bin/troupe" "$TEST_TMP/fakehome/.local/share/go/bin/ai-playbook"
+      When call resolve_with_home "$TEST_TMP/fakehome"
+      The output should equal "$TEST_TMP/fakehome/.local/share/go/bin/troupe"
+      The status should be success
+    End
+    It 'falls back to the ai-playbook install path when troupe is absent (transition boxes)'
+      mkdir -p "$TEST_TMP/fakehome/.local/share/go/bin"
+      touch "$TEST_TMP/fakehome/.local/share/go/bin/ai-playbook"
+      chmod +x "$TEST_TMP/fakehome/.local/share/go/bin/ai-playbook"
+      When call resolve_with_home "$TEST_TMP/fakehome"
+      The output should equal "$TEST_TMP/fakehome/.local/share/go/bin/ai-playbook"
+      The status should be success
+    End
+    It 'defaults to a bare troupe when nothing is installed at all'
+      mkdir -p "$TEST_TMP/fakehome"
+      When call resolve_with_home "$TEST_TMP/fakehome"
+      The output should equal "troupe"
       The status should be success
     End
   End

@@ -420,20 +420,35 @@ pick::build_fzf_args() {
   # (zellij can't tint a floating frame's border background per-pane).
   # A borderless zellij modal (zellij-modal --no-chrome) exports ZJ_MODAL_TITLE.
   # Two ways to render it:
-  #   * pty-frame (preferred): a tiny compositor draws the outer box + "▓▓▓ title"
-  #     + rule and runs fzf in a sub-pty composited inside, so fzf's single header
-  #     is free to be the input→list blank — the full dialog spec. fzf draws
-  #     borderless and fills the sub-pty inline (--height=100%).
-  #   * fallback (no pty-frame on PATH): fzf owns the whole box full-screen, with
-  #     the title block on --header --header-first (so no input→list blank).
+  #   * frame compositor (preferred): `troupe frame` (the pty-frame port —
+  #     troupe consolidation) draws the outer box + "▓▓▓ title" + rule and runs
+  #     fzf in a sub-pty composited inside, so fzf's single header is free to be
+  #     the input→list blank — the full dialog spec. fzf draws borderless and
+  #     fills the sub-pty inline (--height=100%). Resolution: PICK_FRAME_CMD
+  #     (test seam, space-split) → troupe on PATH/known Go paths (`frame`
+  #     subcommand) → the legacy ~/.local/libexec/pty-frame binary until every
+  #     box has the troupe pin.
+  #   * fallback (no compositor at all): fzf owns the whole box full-screen,
+  #     with the title block on --header --header-first (so no input→list blank).
   local fzf_owns=0 use_pty_frame=0
-  local PTY_FRAME="$HOME/.local/libexec/pty-frame"
+  local -a pick_frame_cmd=()
+  if [[ -n "${PICK_FRAME_CMD:-}" ]]; then
+    pick_frame_cmd=(${=PICK_FRAME_CMD})
+  else
+    local _troupe
+    _troupe="$(command -v troupe 2>/dev/null)"       || { [[ -x "$HOME/.local/share/go/bin/troupe" ]] && _troupe="$HOME/.local/share/go/bin/troupe"; }       || { [[ -x "$HOME/go/bin/troupe" ]] && _troupe="$HOME/go/bin/troupe"; }
+    if [[ -n "${_troupe:-}" ]]; then
+      pick_frame_cmd=("$_troupe" frame)
+    elif [[ -x "$HOME/.local/libexec/pty-frame" ]]; then
+      pick_frame_cmd=("$HOME/.local/libexec/pty-frame")
+    fi
+  fi
   if [[ -n "${ZJ_MODAL_TITLE:-}" ]]; then
     fzf_owns=1
     unset 'pick_ui[header]'    # title comes from the chrome/▓▓▓ block, not a border-label
-    if [[ -x "$PTY_FRAME" ]]; then
+    if (( ${#pick_frame_cmd} )); then
       use_pty_frame=1
-      pick_ui[no_border]=1     # pty-frame draws the outer box; fzf is borderless
+      pick_ui[no_border]=1     # the frame draws the outer box; fzf is borderless
       pick_ui[height]="100%"   # fzf fills the sub-pty inline
     else
       pick_ui[no_border]=0     # fzf's own --border is the (mantle) outer box
@@ -562,7 +577,7 @@ pick::build_fzf_args() {
       --no-separator
     )
     pick_finder_prefix=(
-      "$PTY_FRAME"
+      "${pick_frame_cmd[@]}"
       --title        "$ZJ_MODAL_TITLE"
       --bg           "$pick_bg"
       --fg           "$C_ROLE_UI_FG"

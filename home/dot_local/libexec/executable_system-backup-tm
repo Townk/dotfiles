@@ -102,13 +102,29 @@ tm_timeline() {
     # acts on the focused pane, and by now the user may be focused on a
     # different pane or tab entirely — resizing from here would mangle
     # whatever they are looking at.
-    local tlbin="${BKP_TM_TIMELINE_BIN:-$HOME/.local/libexec/tm-timeline}"
-    if [[ -t 0 && -x "$tlbin" ]]; then
-      # Compiled timeline pane (custom-builds/tm-timeline, pty-frame
-      # pattern): raw input, event-driven redraw, instant focus tracking.
-      # Theme flows in as flags from the single-source palette. The shell
-      # loop below remains the no-Go fallback.
-      "$tlbin" --active-bg "${C_HEX_TAB_ACTIVE_BG:-}" --inactive-bg "${C_HEX_TAB_BG:-}" \
+    # Compiled timeline pane (`troupe timeline`, the tm-timeline port —
+    # troupe consolidation): raw input, event-driven redraw, instant
+    # focus tracking. Theme flows in as flags from the single-source
+    # palette. Resolution: BKP_TM_TIMELINE_BIN (test seam — any binary
+    # answering the tm-timeline CLI) → troupe on PATH/known Go paths →
+    # the legacy libexec binary. The shell loop below remains the no-Go
+    # fallback.
+    local -a tlcmd=()
+    if [[ -n "${BKP_TM_TIMELINE_BIN:-}" ]]; then
+      [[ -x "$BKP_TM_TIMELINE_BIN" ]] && tlcmd=("$BKP_TM_TIMELINE_BIN")
+    else
+      local _troupe
+      _troupe="$(command -v troupe 2>/dev/null)" \
+        || { [[ -x "$HOME/.local/share/go/bin/troupe" ]] && _troupe="$HOME/.local/share/go/bin/troupe"; } \
+        || { [[ -x "$HOME/go/bin/troupe" ]] && _troupe="$HOME/go/bin/troupe"; }
+      if [[ -n "${_troupe:-}" ]]; then
+        tlcmd=("$_troupe" timeline)
+      elif [[ -x "$HOME/.local/libexec/tm-timeline" ]]; then
+        tlcmd=("$HOME/.local/libexec/tm-timeline")
+      fi
+    fi
+    if [[ -t 0 ]] && (( ${#tlcmd} )); then
+      "${tlcmd[@]}" --active-bg "${C_HEX_TAB_ACTIVE_BG:-}" --inactive-bg "${C_HEX_TAB_BG:-}" \
         --key-fg "${C_ROLE_UI_KEY:-}" --hint-fg "${C_ROLE_UI_HINT:-}" \
         --title-fg "${C_ROLE_UI_ACCENT:-}" --sep-fg "${C_ROLE_UI_SEPARATOR:-}" "$s" || :
       return 0

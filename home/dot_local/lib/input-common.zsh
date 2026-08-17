@@ -8,20 +8,27 @@ source "$(dirname "$_input_self")/theme-common.zsh"
 source "$(dirname "$_input_self")/pick-common.zsh"
 unset _input_self
 
-# _input::bin — resolve the ai-playbook binary (the input widgets invoke its
-# `input` subcommand). A zellij-spawned pane's PATH does NOT include
-# ~/.local/share/go/bin (only the interactive profile adds it), so a bare
-# `command -v` fails there → fall back to the known install paths.
-# AI_PLAYBOOK_INPUT_BIN overrides everything (used by tests).
+# _input::bin — resolve the widget binary (the input shims invoke its
+# `input` subcommand). Troupe consolidation: `troupe input` answers the
+# exact same CLI as `ai-playbook input` (dialog.MainWithArgs — it IS the
+# same code, imported), so troupe resolves FIRST and ai-playbook stays a
+# working fallback until every box has the troupe pin installed. A
+# zellij-spawned pane's PATH does NOT include ~/.local/share/go/bin (only
+# the interactive profile adds it), so a bare `command -v` fails there →
+# fall back to the known install paths. AI_PLAYBOOK_INPUT_BIN overrides
+# everything (used by tests; the name predates the consolidation and any
+# binary answering the `input` CLI is a valid value).
 _input::bin() {
-  local p
+  local p name
   [[ -n "${AI_PLAYBOOK_INPUT_BIN:-}" ]] && { print -r -- "$AI_PLAYBOOK_INPUT_BIN"; return 0; }
-  p="$(command -v ai-playbook 2>/dev/null)"
-  [[ -n "$p" ]] && { print -r -- "$p"; return 0; }
-  for p in "$HOME/.local/share/go/bin/ai-playbook" "$HOME/go/bin/ai-playbook"; do
-    [[ -x "$p" ]] && { print -r -- "$p"; return 0; }
+  for name in troupe ai-playbook; do
+    p="$(command -v "$name" 2>/dev/null)"
+    [[ -n "$p" ]] && { print -r -- "$p"; return 0; }
+    for p in "$HOME/.local/share/go/bin/$name" "$HOME/go/bin/$name"; do
+      [[ -x "$p" ]] && { print -r -- "$p"; return 0; }
+    done
   done
-  print -r -- "ai-playbook"
+  print -r -- "troupe"
 }
 
 # input::confirm "Q" [--default yes|no] [--affirmative T] [--negative T]

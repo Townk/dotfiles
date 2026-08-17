@@ -269,25 +269,25 @@ keybinds clear-defaults=true {
         bind "J" {
             MessagePlugin "context-keys" {
                 name "shift+j"
-                payload "default: $source; when yazi: $source; when hunk,diffnav,system-backup-tm,tm-timeline: run {{ joinPath .chezmoi.homeDir ".local/libexec/system-backup-tm" }} route shift+down {pid}"
+                payload "default: $source; when yazi: $source; when hunk,diffnav,system-backup-tm,tm-timeline,troupe: run {{ joinPath .chezmoi.homeDir ".local/libexec/system-backup-tm" }} route shift+down {pid}"
             }
         }
         bind "K" {
             MessagePlugin "context-keys" {
                 name "shift+k"
-                payload "default: $source; when yazi: $source; when hunk,diffnav,system-backup-tm,tm-timeline: run {{ joinPath .chezmoi.homeDir ".local/libexec/system-backup-tm" }} route shift+up {pid}"
+                payload "default: $source; when yazi: $source; when hunk,diffnav,system-backup-tm,tm-timeline,troupe: run {{ joinPath .chezmoi.homeDir ".local/libexec/system-backup-tm" }} route shift+up {pid}"
             }
         }
         bind "H" {
             MessagePlugin "context-keys" {
                 name "shift+h"
-                payload "default: $source; when yazi: $source; when hunk,diffnav,system-backup-tm,tm-timeline: do move_focus left"
+                payload "default: $source; when yazi: $source; when hunk,diffnav,system-backup-tm,tm-timeline,troupe: do move_focus left"
             }
         }
         bind "L" {
             MessagePlugin "context-keys" {
                 name "shift+l"
-                payload "default: $source; when yazi: $source; when hunk,diffnav,system-backup-tm,tm-timeline: do move_focus right"
+                payload "default: $source; when yazi: $source; when hunk,diffnav,system-backup-tm,tm-timeline,troupe: do move_focus right"
             }
         }
 
@@ -314,7 +314,7 @@ keybinds clear-defaults=true {
         bind "A" {
             MessagePlugin "context-keys" {
                 name "shift+a"
-                payload "default: $source; when yazi: $source; when diffnav,system-backup-tm,tm-timeline: run {{ joinPath .chezmoi.homeDir ".local/libexec/system-backup-tm" }} route apply {pid}"
+                payload "default: $source; when yazi: $source; when diffnav,system-backup-tm,tm-timeline,troupe: run {{ joinPath .chezmoi.homeDir ".local/libexec/system-backup-tm" }} route apply {pid}"
             }
         }
 

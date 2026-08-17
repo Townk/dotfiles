@@ -955,23 +955,39 @@ bkp::tm::lens_cmd() {
     feats=${feats//side-by-side/}
     [[ -f "$s/current.patch" ]] || : > "$s/current.patch"
     bkp::tm::lens_title "$s"
-    # pty-frame (bare mode) gives the lens the explore-style header —
+    # The frame compositor in bare mode (`troupe frame --bare`, the
+    # pty-frame port — troupe consolidation) gives the lens the
+    # explore-style header —
     # "● <age>  <anchor>" following the rung via --title-file — and the
     # focus-aware swaps via --focus-file (the timeline pane writes it):
     # the header dims to muted, and diffnav's hardcoded selection bg
     # (C_HEX_DIFFNAV_SELECTION) is remapped to the tab palette, the same
     # tiebreaker the explore lens gets from its yazi indicator swap.
-    # Plain diffnav is the no-binary fallback.
-    local pf="${BKP_TM_PTYFRAME_BIN:-$HOME/.local/libexec/pty-frame}"
-    local -a wrap=()
-    if [[ -x "$pf" ]]; then
+    # Plain diffnav is the no-binary fallback. Resolution:
+    # BKP_TM_PTYFRAME_BIN (test seam — any binary answering the pty-frame
+    # CLI, which `troupe frame` matches flag for flag) → troupe on
+    # PATH/known Go paths → the legacy libexec binary until every box has
+    # the troupe pin.
+    local -a framecmd=()
+    if [[ -n "${BKP_TM_PTYFRAME_BIN:-}" ]]; then
+      [[ -x "$BKP_TM_PTYFRAME_BIN" ]] && framecmd=("$BKP_TM_PTYFRAME_BIN")
+    else
+      local _troupe
+      _troupe="$(command -v troupe 2>/dev/null)"         || { [[ -x "$HOME/.local/share/go/bin/troupe" ]] && _troupe="$HOME/.local/share/go/bin/troupe"; }         || { [[ -x "$HOME/go/bin/troupe" ]] && _troupe="$HOME/go/bin/troupe"; }
+      if [[ -n "${_troupe:-}" ]]; then
+        framecmd=("$_troupe" frame)
+      elif [[ -x "$HOME/.local/libexec/pty-frame" ]]; then
+        framecmd=("$HOME/.local/libexec/pty-frame")
+      fi
+    fi
+    if (( ${#framecmd} )); then
       # remap-cols is the tree-width HINT for pty-frame's divider scan:
       # the swap applies only left of diffnav's detected tree/diff
       # divider (and not at all when the tree is hidden), so the diff
       # pane's file-header boxes — same hardcoded color — never flip
       # with focus. remap-fg brightens the selected row's text (ui.key).
       # 26 = diffnav fileTreeWidth, pinned in its config.yml.
-      wrap=("$pf" --bare --tui
+      wrap=("${framecmd[@]}" --bare --tui
         --title-file "$s/lens-title" --focus-file "$s/focus"
         --title-color "${C_ROLE_UI_ACCENT:-}" --title-color-blur "${C_ROLE_UI_MUTED:-}"
         --focus-remap "${C_HEX_DIFFNAV_SELECTION:-}:${C_HEX_TAB_ACTIVE_BG:-}:${C_HEX_TAB_BG:-}"

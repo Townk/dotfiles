@@ -5,14 +5,20 @@
 # Synced by `system-package go sync`. Strict cleanup: removing a
 # line uninstalls the binary on next sync.
 
-# ai-playbook — the AI terminal assistant and themed input-widget backend
-# (input::confirm/line/choose/form shim over `ai-playbook input`, the docked
-# pager, and the diff viewer — all subcommands of the one binary; installs the
-# short `apb` alias too via cmd/apb, and the standalone `ask` dialog binary
-# for scripts (confirm/line/choose/form as a pure-I/O utility).
+# troupe — the TUI widget toolkit (troupe consolidation, spec 2026-08-17):
+# the input:: shims (`troupe input`), the standalone dialog verbs
+# (confirm/line/text/choose/form), the jobs dashboard, the pickers' float
+# frame (`troupe frame`, the pty-frame port), and the scrub timeline pane
+# (`troupe timeline`, the tm-timeline port) — one binary for all of it.
+github.com/Townk/troupe/cmd/troupe@v0.2.1
+
+# ai-playbook — the AI terminal assistant (docked pager, diff viewer,
+# playbook drive; installs the short `apb` alias too via cmd/apb). Its
+# dialog widgets now come from troupe; the standalone `ask` binary is
+# retired from the manifest (deprecated upstream — `troupe` replaces it;
+# strict cleanup uninstalls it on next sync).
 github.com/Townk/ai-playbook/cmd/ai-playbook@v1.0.0-RC3
 github.com/Townk/ai-playbook/cmd/apb@v1.0.0-RC3
-github.com/Townk/ai-playbook/cmd/ask@v1.0.0-RC3
 
 {{ if eq .profile "personal" -}}
 github.com/bscott/pm-cli/cmd/pm-cli

@@ -191,3 +191,14 @@ README.md
 # The old target was applied on every host and is ignored nowhere, so this
 # entry fires everywhere exactly once.
 .config/git/personal-identity.config
+
+# ── troupe consolidation: the custom-builds TUI widgets fold into troupe ────
+# pty-frame (the pickers' float compositor) and tm-timeline (the scrub
+# timeline pane) are now `troupe frame` / `troupe timeline` (spec
+# 2026-08-17); their build hooks are gone, so without these entries every
+# box keeps a stale binary the consumers no longer prefer. .local/libexec
+# is ignored on no profile, so the entries fire wherever the hooks ever
+# built them (and no-op where they didn't — remove only affects machines
+# that still have the targets).
+.local/libexec/pty-frame
+.local/libexec/tm-timeline
