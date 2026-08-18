@@ -726,6 +726,27 @@ if command -v system-secrets >/dev/null 2>&1; then
   system-secrets sync || log_warn "secrets sync had failures (continuing)"
 fi
 
+# Log atuin into the homelab sync server (spec:
+# docs/superpowers/specs/2026-08-17-atuin-homelab-sync-design.md).
+# Idempotent: a session file means logged in — skip. The secrets may have
+# been collected by the sync step just above, AFTER this process captured
+# its environment, so the subshell re-sources the loader itself.
+# Trade-off, eyes open: -u/-p/-k put the values on the subprocess argv,
+# briefly visible to `ps` for THIS user on THIS single-user machine. atuin
+# login offers no stdin/env path; accepted in the spec review.
+if command -v atuin >/dev/null 2>&1 && [[ ! -f "$HOME/.local/share/atuin/session" ]]; then
+  print -P -- "\n🐢 Atuin sync login...\n"
+  run_step "atuin: logging into the homelab server" zsh -c '
+    source "$HOME/.config/zsh/secrets.sh" 2>/dev/null || true
+    if [[ -z "${ATUIN_SYNC_ADDRESS:-}" || -z "${HOMELAB_ATUIN_USERNAME:-}" ||
+          -z "${HOMELAB_ATUIN_PASSWORD:-}" || -z "${HOMELAB_ATUIN_KEY:-}" ]]; then
+      echo "atuin secrets not onboarded on this machine; skipping login"
+      exit 0
+    fi
+    atuin login -u "$HOMELAB_ATUIN_USERNAME" -p "$HOMELAB_ATUIN_PASSWORD" -k "$HOMELAB_ATUIN_KEY"
+  ' || log_warn "atuin login had failures (continuing)"
+fi
+
 # Final convergence apply. The step-1 apply runs BEFORE brew/system-package
 # touch anything, so runtime-detected triggers (a font-fontawesome cask bump
 # feeding run_after_80's font-build prompt, a WezTerm upgrade shifting the
