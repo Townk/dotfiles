@@ -512,14 +512,16 @@ Mac's clipboard to stdout, whether you're at the Mac or SSH'd in.
 --manifest: print the current clipboard entry's file manifest (kind/host/ts/
 path lines) instead of its text.
 
---files [--force] [--quiet|--progress|--porcelain] [dir]: materialize the
-current file clip into dir (default: cwd). Refuses existing names unless
---force. Same-host files copy locally; SSH clients stream authorized files;
-a local Mac reads remote manifests through its healthy peer mount.
+--files [--from-peer] [--force] [--quiet|--progress|--porcelain] [dir]:
+materialize the current file clip into dir (default: cwd). Refuses existing
+names unless --force. Same-host files copy locally; SSH clients stream
+authorized files; a local Mac reads remote manifests through its healthy
+peer mount. --from-peer forces the peer endpoint when the environment can't
+answer (the picker's live-row restore) — tunnel down is then a hard error.
 
 Usage: text=$(pbpaste)
        pbpaste --manifest
-       pbpaste --files [--force] [--quiet|--progress|--porcelain] [dir]
+       pbpaste --files [--from-peer] [--force] [--quiet|--progress|--porcelain] [dir]
 ";
 
 enum PasteSource {
@@ -671,14 +673,33 @@ fn persist_peer_text(peer: &Fields) {
 /// `--files`: the manifest and any remote bytes come from one endpoint — the
 /// peer's over SSH, this machine's own otherwise — and the engine decides
 /// from the manifest's host whether the bytes are local, mounted or streamed.
+///
+/// `--from-peer` (6b) forces the peer endpoint + streaming semantics when the
+/// ENVIRONMENT cannot answer: the picker's live-row restore runs outside any
+/// ssh session (a GUI job under pueue, a VNC-local TUI), where `is_ssh()` is
+/// false but the caller has already proven the reverse tunnel is up (the
+/// probe). The caller says so explicitly rather than this binary guessing.
+/// A refused tunnel is a hard error under the flag — never the trusted
+/// fallback, because the trusted store's current clip is a DIFFERENT clip
+/// and falling back would materialize the wrong bytes.
 fn pbpaste_files(args: &[String]) -> ExitCode {
-    let options = match paste_files::Options::parse(args) {
+    let mut rest: Vec<String> = Vec::with_capacity(args.len());
+    let mut from_peer = false;
+    for arg in args {
+        if arg == "--from-peer" {
+            from_peer = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    let options = match paste_files::Options::parse(&rest) {
         Ok(options) => options,
         Err(e) => return fail(e),
     };
+    let peer_mode = from_peer || is_ssh();
     let context = paste_files::Context {
         self_host: self_host(),
-        over_ssh: is_ssh(),
+        over_ssh: peer_mode,
         mount_helper: std::env::var_os("CLIPBOARD_MOUNT_BIN")
             .map(PathBuf::from)
             .unwrap_or_else(|| home().join(".local/libexec/clipboard-mount")),
@@ -690,7 +711,7 @@ fn pbpaste_files(args: &[String]) -> ExitCode {
         interactive: true,
     };
 
-    let outcome = if is_ssh() {
+    let outcome = if peer_mode {
         match public_session("pbpaste") {
             Err(e) => return fail(e),
             Ok(PublicBridge::Absent) => {
