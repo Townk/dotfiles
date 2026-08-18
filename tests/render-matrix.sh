@@ -46,6 +46,7 @@ cz() { chezmoi --config "$CFG" --source "$SRC" --destination "$OUT/dest" "$@"; }
 # .profile. Renders are compared byte-for-byte across refactors.
 TEMPLATES=(
   dot_config/ai-playbook/config.toml.tmpl
+  dot_config/atuin/config.toml.tmpl
   dot_config/git/config.tmpl
   dot_config/mise/conf.d/rclone.toml.tmpl
   dot_config/mise/conf.d/dev-shell.toml.tmpl

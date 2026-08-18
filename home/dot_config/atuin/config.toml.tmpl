@@ -1,3 +1,4 @@
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 ## where to store your database, default is your system data directory
 ## linux/mac: ~/.local/share/atuin/history.db
 ## windows: %USERPROFILE%/.local/share/atuin/history.db
@@ -23,7 +24,18 @@
 # timezone = "local"
 
 ## enable or disable automatic sync
-auto_sync = true
+{{ if $traits.headless -}}
+# Headless profiles never sync — hard off. Atuin's config file wins over
+# ATUIN_* env vars (verified against the 18.19.0 settings source), so
+# nothing in the environment can re-enable sync on this machine.
+auto_sync = false
+{{- else -}}
+# Deliberately unset (defaults to true): the config file would beat the
+# ATUIN_AUTO_SYNC env var, and the zshrc reachability gate relies on that
+# env var to switch sync off when the homelab server is unreachable.
+# sync_address is likewise deliberately absent — it arrives per machine via
+# the ATUIN_SYNC_ADDRESS secret (real hosts never land in committed files).
+{{- end }}
 
 ## enable or disable automatic update checks
 update_check = false
