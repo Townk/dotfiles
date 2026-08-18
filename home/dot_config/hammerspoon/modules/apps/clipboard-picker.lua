@@ -796,6 +796,31 @@ local function json_for_script(value)
   return (hs.json.encode(value):gsub("<", "\\u003C"))
 end
 
+-- 6b: the live peer rows. The list renders from the local store IMMEDIATELY
+-- (snappiness is a standing ruling — never a synchronous bridge wait here);
+-- one background task fetches the peer snapshot and injects any live rows
+-- when it lands, if the picker is still up. All wire logic lives in the CLI
+-- verb — Lua never speaks the bridge. hs.ipc discipline: the callback prints
+-- nothing on the happy path (empty snapshot included).
+local liveTask
+local function fetch_live_rows()
+  if liveTask then liveTask:terminate(); liveTask = nil end
+  local cmd = shell_quote(PICK_CLIPBOARD_BIN) .. " --peer-snapshot"
+  liveTask = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
+    liveTask = nil
+    if exitCode ~= 0 or not isShown or not webview then return end
+    local rows = {}
+    for line in (stdOut or ""):gmatch("[^\n]+") do
+      local ok, row = pcall(hs.json.decode, line)
+      if ok and type(row) == "table" and row.kind then rows[#rows + 1] = row end
+    end
+    if #rows == 0 then return end
+    webview:evaluateJavaScript("window.__setLiveRows && window.__setLiveRows(" ..
+      json_for_script(rows) .. ")")
+  end, { "-lc", cmd })
+  liveTask:start()
+end
+
 local function build_html(items)
   ensure_templates()
   local css = substitute(cssTemplateRaw, { ICON_FONT_URL = icon_font_url() })
@@ -898,6 +923,47 @@ local function handle_message(body)
     history.restore_plain_by_id(body.id)
     M.hide()
     hs.timer.doAfter(0.12, function() hs.eventtap.keyStroke({ "cmd" }, "v") end)
+  elseif action == "pullLive" then
+    -- Accepting a live row: dismiss first (text is one fast exchange; files
+    -- can be a long rsync — either way holding a modal panel open across a
+    -- network pull is worse than clarifying). text pulls inline via the CLI
+    -- verb; files ride the job runner exactly like a gated stored row
+    -- (capsule, statusbar percent, cancel, --notify failures).
+    local live = body.live
+    local wantPaste = body.dismiss and live == "text"
+    M.hide()
+    if live == "text" then
+      local cmd = shell_quote(PICK_CLIPBOARD_BIN) .. " --pull-live text"
+      local t = hs.task.new("/bin/zsh", function(exitCode, _, stdErr)
+        if exitCode == 0 then
+          if wantPaste then hs.eventtap.keyStroke({ "cmd" }, "v") end
+        else
+          local reason = last_line(stdErr) or "could not pull the live clip"
+          osd.notify("glyph:nf-md-alert", "Copy failed — " .. reason, "Basso")
+        end
+      end, { "-lc", cmd })
+      t:start()
+    elseif live == "files" then
+      local cmd = shell_quote(JOB_BIN)
+        .. " start --title \"Clipboard restore\" --icon glyph:nf-md-download"
+        .. " --notify failures -- "
+        .. shell_quote(PICK_CLIPBOARD_BIN) .. " --pull-live files"
+      local t = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
+        if exitCode == 0 then
+          print(string.format("clipboard-picker: live pull enqueued job=%s",
+            (stdOut or ""):match("[^\n]*") or ""))
+        else
+          local reason = last_line(stdErr) or "could not enqueue the pull"
+          osd.notify("glyph:nf-md-alert", "Copy failed — " .. reason, "Basso")
+          hs.notify.new(nil, {
+            title = "Clipboard restore failed",
+            informativeText = reason,
+            withdrawAfter = 0,
+          }):send()
+        end
+      end, { "-lc", cmd })
+      t:start()
+    end
   elseif action == "dismiss" then
     M.hide()
   end
@@ -986,9 +1052,15 @@ function M.show()
     local ourWin = webview and webview:hswindow()
     return win ~= nil and ourWin ~= nil and win:id() == ourWin:id()
   end, M.hide)
+
+  -- 6b: kick off the async peer-snapshot fetch — the list above is already
+  -- rendered from the local store, this only injects live rows if/when they
+  -- land (see fetch_live_rows).
+  fetch_live_rows()
 end
 
 function M.hide()
+  if liveTask then liveTask:terminate(); liveTask = nil end
   -- Only reclaim focus for savedWindow if OUR OWN window still has it right
   -- now AND we're not being dismissed because Cmd+Tab was pressed. Two
   -- distinct reasons to skip it:
@@ -1022,6 +1094,7 @@ function M.toggle()
 end
 
 function M.cleanup()
+  if liveTask then liveTask:terminate(); liveTask = nil end
   if webview then webview:delete(); webview = nil end
   ucc = nil
   dismissOnBlur.disarm(DISMISS_ON_BLUR_ID)

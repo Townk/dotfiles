@@ -71,6 +71,16 @@
     var filtered = ITEMS.slice();
     var selectedIndex = 0;
 
+    // 6b: live peer rows (window.__setLiveRows below) -- the raw CLI rows
+    // from `pick-clipboard --peer-snapshot`, held separately from ITEMS.
+    // They have no clip id and are never written into ITEMS: preview/
+    // delete/pin index that array strictly by id, and a live row is not a
+    // stored clip. applyFilter() re-derives synthetic, id-less entries from
+    // this array (via liveRowToItem) and prepends them to `filtered` on
+    // every render, so a second __setLiveRows call REPLACES rather than
+    // appends (assigning `liveRows` outright, not concatenating).
+    var liveRows = [];
+
     // Nerd Font v3 codepoints (same icons as the terminal picker, verified
     // against ~/.local/share/fonts/nerd-font/symbols.db by name — these are
     // 6-hex-digit Plane 16 (Supplementary PUA-B) codepoints, U+10Fxxx, NOT
@@ -89,6 +99,18 @@
     // against symbols.db).
     var MIXED_ICON = '\u{F1518}';
 
+    // 6b live rows: nf-md-access-point (5-digit Plane 15, U+F0003, char
+    // 983043 -- radiating waves), the same glyph the TUI picker's live entry
+    // uses (docs/clipboard-universal-project.md §22.3) for a live-text row.
+    // A live "files" row instead reuses the ordinary files/file/directory
+    // glyph above, keyed by row.files_kind -- there is no dedicated live
+    // glyph for those in the TUI. Either way the icon paints mauve
+    // (--icon-origin, via CSS's .item.live .icon), not its usual per-kind
+    // color -- that color shift is the "live" cue, distinct from a plain
+    // stored-remote row (which keeps its normal per-kind icon color and
+    // only gets the text "remote" badge).
+    var LIVE_ICON = '\u{F0003}';
+
     // Provenance (spec §11): `it.remote` is true when the clip was copied on a
     // different host (its source_host differs from this Mac's). Only remote rows
     // get a "remote" badge — this Mac's own clips are the unmarked default.
@@ -104,6 +126,29 @@
       });
     }
 
+    // Project one raw `--peer-snapshot` row (kind="text"|"files", no id) into
+    // a synthetic list entry shaped enough like a stored ITEMS row for
+    // renderList/move/applyFilter to handle generically -- `_live: true` is
+    // the tag every id-keyed interaction (preview/delete/pin/acceptPlain)
+    // checks to bail out on. `id` stays null on purpose: if anything ever
+    // slipped a live row into an id-keyed call by mistake, a null id fails
+    // loudly on the Lua side rather than silently acting on the wrong clip.
+    function liveRowToItem(row) {
+      var isFiles = row.kind === 'files';
+      return {
+        _live: true,
+        kind: row.kind,
+        filesKind: row.files_kind,
+        id: null,
+        pinned: false,
+        group: 'Live',
+        ts: parseFloat(row.timestamp) || 0,
+        host: row.host,
+        paths: row.paths || [],
+        preview: isFiles ? (row.paths || []).join(' · ') : (row.preview || '')
+      };
+    }
+
     function renderList() {
       var listEl = document.getElementById('list');
       var html = '';
@@ -114,8 +159,21 @@
           html += '<div class="group-header">' + escapeHtml(it.group) + '</div>';
           lastGroup = it.group;
         }
-        var icon = ICONS[it.kind] || MIXED_ICON;
         var sel = (i === selectedIndex) ? ' selected' : '';
+        if (it._live) {
+          // Live row: no pinned styling (never pinned), badge carries the
+          // peer host instead of the literal word "remote" -- the mauve
+          // .item.live icon color (clipboard-picker.css) is what marks it
+          // as live, same pill styling as a stored row's origin badge.
+          var liveIcon = it.kind === 'files' ? (ICONS[it.filesKind] || ICONS.files) : LIVE_ICON;
+          html += '<div class="item live' + sel + '" data-idx="' + i + '" data-kind="' + it.kind + '">'
+            + '<span class="icon">' + liveIcon + '</span>'
+            + '<span class="content">' + escapeHtml(it.preview) + '</span>'
+            + '<span class="origin-badge">' + escapeHtml(it.host || '?') + '</span>'
+            + '</div>';
+          continue;
+        }
+        var icon = ICONS[it.kind] || MIXED_ICON;
         var pinnedClass = it.pinned ? ' pinned' : '';
         // Only remote rows get a badge; local is the unmarked default.
         var originBadge = it.remote ? '<span class="origin-badge">remote</span>' : '';
@@ -319,12 +377,52 @@
       if (label && altEnterLabel) altEnterLabel.textContent = label;
     }
 
+    // Live-row counterparts of updateMeta/the preview fetch: a live row has
+    // no clip id to round-trip through Lua's `preview` action (fetch_preview
+    // reads clip_types by id — nothing to read for a row that isn't a
+    // stored clip), so both render straight from the fields already carried
+    // on the row (row.preview / row.paths, delivered whole in the
+    // peer-snapshot line) — no bridge round trip, matching the "skip live
+    // rows for preview" contract point.
+    var LIVE_KIND_LABELS = { text: 'Live Text', files: 'Live Files' };
+    function updateLiveMeta(it) {
+      var metaEl = document.getElementById('meta');
+      function row(label, valueHtml) {
+        return '<div class="meta-row"><span class="label">' + label + '</span><span class="value">' + valueHtml + '</span></div>';
+      }
+      var countRow = it.kind === 'files'
+        ? row('Files:', formatThousands(it.paths.length))
+        : row('Characters:', formatThousands(it.preview.length));
+      metaEl.innerHTML = '<div class="meta-title">Information</div>'
+        + row('Source:', '—')
+        + row('Content Type:', escapeHtml(LIVE_KIND_LABELS[it.kind] || 'Live'))
+        + row('Origin:', 'remote (' + escapeHtml(it.host || '?') + ')')
+        + countRow
+        + '<div class="meta-row" id="dimensionsRow"></div>'
+        + row('Copied:', 'live');
+    }
+
+    function updateLivePreview(it) {
+      var previewEl = document.getElementById('preview');
+      var text = it.kind === 'files' ? it.paths.join('\n') : it.preview;
+      previewEl.innerHTML = '<pre>' + escapeHtml(text) + '</pre>';
+    }
+
     function updateRight() {
       var it = filtered[selectedIndex];
-      updateMeta(it);
       updateHints(it);
       var previewEl = document.getElementById('preview');
-      if (!it) { previewEl.innerHTML = '<div class="preview-empty">No preview</div>'; return; }
+      if (!it) {
+        document.getElementById('meta').innerHTML = '';
+        previewEl.innerHTML = '<div class="preview-empty">No preview</div>';
+        return;
+      }
+      if (it._live) {
+        updateLiveMeta(it);
+        updateLivePreview(it);
+        return;
+      }
+      updateMeta(it);
       previewEl.innerHTML = '<div class="preview-empty">Loading…</div>';
       post('preview', { id: it.id, kind: it.kind });
     }
@@ -406,6 +504,18 @@
       applyFilter(document.getElementById('query').value, false, nextSelectId);
     };
 
+    // Lua -> JS: inject the fetched live peer rows (fetch_live_rows in
+    // clipboard-picker.lua), once, if/when the async peer-snapshot task
+    // lands while the picker is still up. Replaces `liveRows` outright
+    // (never appended to) so a second call is idempotent, and re-applies
+    // the CURRENT filter text -- tolerating arrival after the user has
+    // already started typing, rather than clobbering their query or
+    // silently leaving the new rows unfiltered.
+    window.__setLiveRows = function (rows) {
+      liveRows = Array.isArray(rows) ? rows : [];
+      applyFilter(document.getElementById('query').value, true);
+    };
+
     window.__focusInput = function () {
       var q = document.getElementById('query');
       q.focus();
@@ -416,6 +526,14 @@
       q = (q || '').toLowerCase();
       var prevId = selectId != null ? selectId
         : (keepSelection && filtered[selectedIndex] ? filtered[selectedIndex].id : null);
+      // A live row carries no id (prevId above resolves to null for one) --
+      // track it by kind instead, the only identity a peer-snapshot row has
+      // (at most one live row per kind). Only meaningful when keepSelection
+      // asked to preserve a live-row selection in the first place; del()/
+      // __setPinned() always pass a real selectId (they never act on a live
+      // row), so this stays null for those calls.
+      var prevLiveKind = (selectId == null && keepSelection && filtered[selectedIndex] && filtered[selectedIndex]._live)
+        ? filtered[selectedIndex].kind : null;
       // Pinned first, then most recent first -- the same total order as the
       // store's own `ORDER BY pinned DESC, last_ts DESC`.
       //
@@ -429,14 +547,28 @@
         if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
         return b.ts - a.ts;
       });
-      filtered = q === '' ? base : base.filter(function (it) {
+      var storedFiltered = q === '' ? base : base.filter(function (it) {
         return it.preview.toLowerCase().indexOf(q) !== -1
           || (it.app || '').toLowerCase().indexOf(q) !== -1;
       });
+      // Live rows filter the same way (match on preview/paths/host — paths
+      // are already folded into a files row's `preview` by liveRowToItem),
+      // then get prepended ahead of every stored row/group, same as the CLI
+      // peer-snapshot rows sort above the DB SELECT.
+      var liveFiltered = liveRows.map(liveRowToItem).filter(function (it) {
+        if (q === '') return true;
+        var hay = it.preview.toLowerCase() + ' ' + (it.host || '').toLowerCase();
+        return hay.indexOf(q) !== -1;
+      });
+      filtered = liveFiltered.concat(storedFiltered);
       if (prevId != null) {
         var idx = -1;
         for (var i = 0; i < filtered.length; i++) { if (filtered[i].id === prevId) { idx = i; break; } }
         selectedIndex = idx >= 0 ? idx : 0;
+      } else if (prevLiveKind != null) {
+        var lidx = -1;
+        for (var j = 0; j < filtered.length; j++) { if (filtered[j]._live && filtered[j].kind === prevLiveKind) { lidx = j; break; } }
+        selectedIndex = lidx >= 0 ? lidx : 0;
       } else {
         selectedIndex = 0;
       }
@@ -460,33 +592,44 @@
       move(dir * visible);
     }
 
+    // Enter (dismiss=true) / Ctrl+Enter (dismiss=false) on a live row pulls
+    // it over the bridge instead of restoring a stored id -- same dismiss
+    // semantics as a stored row's accept (Enter dismisses+pastes, Ctrl+Enter
+    // keeps the picker open), routed through the CLI's --pull-live verb
+    // rather than history.restore_by_id (there is no local row yet).
     function accept(dismiss) {
       var it = filtered[selectedIndex];
       if (!it) return;
+      if (it._live) { post('pullLive', { live: it.kind, dismiss: dismiss }); return; }
       post('accept', { id: it.id, dismiss: dismiss });
     }
 
     // Alt+Enter: paste with RTF/HTML styling stripped (restore_plain_by_id
     // on the Lua side), always dismissing -- same as a plain Enter accept.
+    // No raw/styled distinction exists for a live row (skip: contract point).
     function acceptPlain() {
       var it = filtered[selectedIndex];
-      if (!it) return;
+      if (!it || it._live) return;
       post('acceptPlain', { id: it.id });
     }
 
     // Ctrl+Y: restore the clip to the clipboard WITH its register type and
     // dismiss WITHOUT pasting (no auto-Cmd-V) -- so you paste it yourself, e.g.
     // `p` in nvim to keep a block clip's shape. Unlike Enter, which restores
-    // AND pastes charwise into whatever app is focused.
+    // AND pastes charwise into whatever app is focused. On a live row this is
+    // the same pullLive pull as Enter, just with dismiss:false (no auto-paste).
     function copyClip() {
       var it = filtered[selectedIndex];
       if (!it) return;
+      if (it._live) { post('pullLive', { live: it.kind, dismiss: false }); return; }
       post('copy', { id: it.id });
     }
 
+    // Ctrl+D: no-op on a live row -- there is no stored clip to delete
+    // (contract point: skip live rows for delete).
     function del() {
       var it = filtered[selectedIndex];
-      if (!it) return;
+      if (!it || it._live) return;
       // Select the next item first (or the previous one, if there is no
       // next), computed against the about-to-be-stale `filtered` array --
       // otherwise the deleted id can never re-match afterward and
@@ -496,9 +639,11 @@
       window.__removeItem(it.id, next ? next.id : null);
     }
 
+    // Ctrl+P: no-op on a live row -- there is no stored clip to pin
+    // (contract point: skip live rows for pin).
     function pin() {
       var it = filtered[selectedIndex];
-      if (!it) return;
+      if (!it || it._live) return;
       post('pin', { id: it.id }); // optimistic update arrives via __setPinned
     }
 

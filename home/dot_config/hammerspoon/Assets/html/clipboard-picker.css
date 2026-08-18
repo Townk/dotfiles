@@ -173,6 +173,15 @@ body { background: transparent; overflow: hidden; }
 .item[data-kind="file"] .icon { color: var(--icon-file); }
 .item[data-kind="directory"] .icon { color: var(--icon-directory); }
 .item[data-kind="url"] .icon { color: var(--icon-url); }
+/* 6b live peer rows (window.__setLiveRows): the icon paints mauve regardless
+ * of kind -- same tiebreak-by-source-order trick as .pinned .content below,
+ * these three class selectors are equal specificity to the per-kind rules
+ * above (.item + [data-kind] + .icon each count once), so appearing LATER in
+ * the cascade is what lets it win. That mauve tint is the "live" cue itself,
+ * distinct from a plain stored-remote row (badge text says "remote" but the
+ * icon keeps its normal per-kind color) -- reusing --icon-origin, the same
+ * mauve the .origin-badge pill already uses for the host chip below it. */
+.item.live .icon { color: var(--icon-origin); }
 .item .content {
   flex: 1 1 auto;
   overflow: hidden;
