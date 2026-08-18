@@ -641,6 +641,45 @@ clip::progress_stream() {  # <completed-paths> <total-paths> <label>
   return 0
 }
 
+# clip::porcelain_progress_stream <total-paths> <label> — the bridge-transport
+# sibling of clip::progress_stream: parses `pbpaste --files --porcelain`
+# lines (`progress\t<path>\t<done>\t<total>` per chunk/placement) into the
+# same aggregated, monotonic sidecar writes. Item completion is "done==total
+# on a basename not yet counted": the engine emits that moment twice (the
+# final tick carries the SOURCE path, the placement the DESTINATION path)
+# but both share the basename, and duplicate basenames cannot occur in one
+# manifest (the engine refuses them), so the basename is a safe dedup key.
+clip::porcelain_progress_stream() {
+  local -i total=$1
+  local label=$2
+  local tag item sdone stotal last_done_base=""
+  local -i completed=0 agg ipct
+  [[ -n "${CLIP_PROGRESS_SIDECAR:-}" ]] || { cat >/dev/null; return 0 }
+  while IFS=$'\t' read -r tag item sdone stotal; do
+    [[ "$tag" == progress && "$sdone" == <-> && "$stotal" == <-> ]] || continue
+    (( stotal > 0 )) || continue
+    ipct=$(( sdone * 100 / stotal ))
+    (( ipct > 100 )) && ipct=100
+    if (( sdone >= stotal )); then
+      if [[ "${item:t}" != "$last_done_base" ]]; then
+        last_done_base="${item:t}"
+        (( completed += 1 ))
+      fi
+      # Credit lives in `completed` either way — the duplicate placement
+      # line must not ALSO count as a full in-flight item, or a 2-item
+      # manifest would read 100% with the second item untouched.
+      ipct=0
+    fi
+    agg=$(clip::progress_pct "$completed" "$total" "$ipct")
+    (( agg < CLIP_PROGRESS_LAST_PCT )) && agg=$CLIP_PROGRESS_LAST_PCT
+    if (( agg != CLIP_PROGRESS_LAST_PCT )); then
+      clip::progress_sink "$agg" "$label"
+      CLIP_PROGRESS_LAST_PCT=$agg
+    fi
+  done
+  return 0
+}
+
 
 # Staged file materializations are disposable, but not immortal. Sweep only
 # the exact numeric <clip-id>/<position> directories owned by this picker;
@@ -722,6 +761,43 @@ clip::pull_cancelled() {
     "$notify_bin" --icon "glyph:nf-md-close" "Transfer cancelled" >/dev/null 2>&1 || true
   fi
   exit 130
+}
+
+# clip::row_is_peer_current <host> <path>... — is this row's manifest EXACTLY
+# the live peer's CURRENT files clip? One files.list exchange; the compare is
+# host equality + byte-equal NUL-joined path set. Only then can the bridge
+# serve the bytes: files.grant covers the peer's current-clip authority
+# snapshot and nothing else (protocol §9.3), so anything staler must use a
+# transport with its own credentials (the rsync path below).
+clip::row_is_peer_current() {
+  local want_host="$1"; shift
+  (( bridge_up )) || return 1
+  [[ -n "$want_host" ]] || return 1
+  local raw wantf peerf line name hexv peer_host=""
+  raw=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-peercur.XXXXXX") || return 1
+  wantf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-peercur.XXXXXX") || { rm -f -- "$raw"; return 1 }
+  peerf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-peercur.XXXXXX") || { rm -f -- "$raw" "$wantf"; return 1 }
+  {
+    clipbridge::call --peer files.list > "$raw" 2>/dev/null || return 1
+    while IFS= read -r line; do
+      name="${line%%=*}" hexv="${line#*=}"
+      case "$name" in
+        host)  peer_host=$(print -rn -- "$hexv" | xxd -r -p) ;;
+        paths) print -rn -- "$hexv" | xxd -r -p > "$peerf" ;;
+      esac
+    done < "$raw"
+    [[ -s "$peerf" && "$peer_host" == "$want_host" ]] || return 1
+    local -i first=1
+    local p
+    { for p in "$@"; do
+        if (( first )); then print -rn -- "$p"; first=0
+        else print -rn -- $'\0'"$p"; fi
+      done
+    } > "$wantf"
+    cmp -s -- "$wantf" "$peerf"
+  } always {
+    rm -f -- "$raw" "$wantf" "$peerf"
+  }
 }
 
 clip::copy_files_by_id() {
@@ -845,12 +921,20 @@ clip::copy_files_by_id() {
     return 1
   fi
 
-  # Case 3: genuine remote manifest -> rsync pull-down (spec §12).
-  local rsync_bin="${PICK_CLIPBOARD_RSYNC:-/opt/homebrew/bin/rsync}"
-  if [[ ! -x "$rsync_bin" ]]; then
-    clip::restore_fail "brew rsync not found: $rsync_bin"
-    return 1
-  fi
+  # Case 3: genuine remote manifest. Two transports (6b):
+  #   bridge stream — when the row IS the live peer's CURRENT clip
+  #     (clip::row_is_peer_current), the bytes come over the RECOB tunnel via
+  #     `system-clip paste --files --from-peer` (files.grant/files.fetch,
+  #     credential = the tunnel token). This is the ONLY transport that works
+  #     sitting->remote: the machine being ssh'd into has no ssh provisioning
+  #     back to the laptop, and the old unconditional rsync opened an
+  #     interactive host-key/password prompt inside the picker that wedged
+  #     the terminal (Mode B 2026-08-18).
+  #   rsync pull-down (spec §12) — everything else: a stale/older manifest
+  #     the grant no longer covers, or a row from a host this machine really
+  #     can ssh to (the original laptop->mini direction). Now BatchMode=yes
+  #     everywhere: a missing credential fails fast and readable, never a
+  #     prompt fighting fzf's raw tty.
   local kind; kind=$(sqlite3 "$DB_FILE" "SELECT IFNULL(type_kind,'files') FROM clips WHERE id=$id;" 2>/dev/null) || kind="files"
 
   local cachedir="$cacheroot/$id"
@@ -878,6 +962,76 @@ clip::copy_files_by_id() {
   CLIP_PULL_MARKER=""
   trap 'clip::pull_cancelled' INT TERM
 
+  local -i via_tunnel=0
+  clip::row_is_peer_current "$host" "${rpaths[@]}" && via_tunnel=1
+
+  if (( via_tunnel )); then
+    # Bridge stream. The engine materializes the whole manifest flat into a
+    # staging dir (basenames; duplicates already refused by the engine),
+    # then the loop below distributes into the per-index cache layout the
+    # localize tail expects. Cached-index reuse is deliberately skipped on
+    # this transport — the engine streams the current grant in one pass and
+    # partial reuse would complicate the one-shot call for no live win.
+    # Staging lives at .partial-data/0: the meta-shaped path the cache
+    # helpers may remove, and the sweeper already retires.
+    local sysclip="${PICK_CLIPBOARD_SYSTEM_CLIP:-$HOME/.local/bin/system-clip}"
+    if [[ ! -x "$sysclip" ]]; then
+      clip::restore_fail "system-clip not found: $sysclip"
+      return 1
+    fi
+    local staging="$cachedir/.partial-data/0"
+    rm -rf -- "$staging" 2>/dev/null || true
+    mkdir -p "$staging" ||
+      { clip::restore_fail "cannot create $staging"; return 1 }
+    # Single-statement local (the mktemp-status caveat above): degrade the
+    # stderr capture to /dev/null rather than let the redirection error.
+    local stream_err=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-stream-err.XXXXXX")
+    [[ -n "$stream_err" && -w "$stream_err" ]] || stream_err=/dev/null
+    local -i src=0
+    if (( have_tty )); then
+      # In-pane feedback: the engine's own live meter, routed to the tty
+      # like rsync's progress2 (real errors still land in the capture).
+      print -ru2 -- "Pulling ${n_paths} item(s) from ${host} over the clipboard bridge… — Ctrl+C cancels"
+      "$sysclip" paste --files --from-peer --force --progress "$staging" 1>&2 2>"$stream_err" || src=$?
+    else
+      # Headless: porcelain lines feed the job sidecar sink (phase 4).
+      "$sysclip" paste --files --from-peer --force --porcelain "$staging" 2>"$stream_err" | clip::porcelain_progress_stream $n_paths "$pull_label"
+      src=${pipestatus[1]}
+    fi
+    if (( src != 0 )); then
+      clip::cache_remove_meta_sub "$cacheroot" "$staging" || true
+      local stream_reason=""
+      [[ "$stream_err" != /dev/null ]] && stream_reason=$(tail -n 1 "$stream_err" 2>/dev/null)
+      clip::restore_fail "bridge pull from $host failed${stream_reason:+ — $stream_reason}"
+      return 1
+    fi
+    [[ "$stream_err" != /dev/null ]] && rm -f "$stream_err"
+    for rp in "${rpaths[@]}"; do
+      (( idx += 1 ))
+      sub="$cachedir/$idx"
+      lp="$sub/${rp:t}"
+      if [[ ! -e "$staging/${rp:t}" ]]; then
+        clip::cache_remove_meta_sub "$cacheroot" "$staging" || true
+        clip::restore_fail "bridge pull did not materialize ${rp:t}"
+        return 1
+      fi
+      [[ -d "$sub" ]] && clip::cache_remove_sub "$cacheroot" "$sub" || true
+      mkdir -p "$sub" "$cachedir/.authorized" ||
+        { clip::restore_fail "cannot create $sub"; return 1 }
+      rm -f "$cachedir/.authorized/$idx"
+      mv -f -- "$staging/${rp:t}" "$lp" ||
+        { clip::restore_fail "cannot place ${rp:t}"; return 1 }
+      touch "$sub"
+      (( pulled += 1 ))
+      local_paths+=("$lp")
+    done
+    clip::cache_remove_meta_sub "$cacheroot" "$staging" || true
+  else
+  local rsync_bin="${PICK_CLIPBOARD_RSYNC:-/opt/homebrew/bin/rsync}"
+  if [[ ! -x "$rsync_bin" ]]; then
+    clip::restore_fail "brew rsync not found: $rsync_bin"
+    return 1
+  fi
   for rp in "${rpaths[@]}"; do
     (( idx += 1 ))
     sub="$cachedir/$idx"
@@ -929,7 +1083,12 @@ clip::copy_files_by_id() {
         # (same move as pbpaste tier 2) while real errors still land in the
         # capture file for the one-line failure reason.
         print -ru2 -- "Pulling ${rp:t} from ${host} (${idx}/${n_paths})… — Ctrl+C cancels"
-        "$rsync_bin" -a --info=progress2 --partial-dir="$partial_dir" -e 'ssh -o ClearAllForwardings=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
+        # BatchMode=yes here too (6b hardening): the interactive branch used
+        # to let ssh prompt for host keys/passwords, and a prompt inside
+        # fzf's raw tty wedged the terminal when the target host had no ssh
+        # provisioning. A missing credential now fails fast with the
+        # readable one-line reason below, exactly like the headless branch.
+        "$rsync_bin" -a --info=progress2 --partial-dir="$partial_dir" -e 'ssh -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=10' "${host}:${rp}" "$sub/" 1>&2 2>"$rsync_err" || rrc=$?
       else
         # Headless: meter stdout feeds the throttled HUD sink; the sink is
         # the LAST pipeline segment so it runs in this shell and the
@@ -962,6 +1121,7 @@ clip::copy_files_by_id() {
     fi
     local_paths+=("$lp")
   done
+  fi
 
   for lp in "${local_paths[@]}"; do
     if [[ -L "$lp" || ( ! -f "$lp" && ! -d "$lp" ) ]]; then

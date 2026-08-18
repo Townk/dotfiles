@@ -652,3 +652,51 @@ Describe 'system-clip paste: 6b newer-wins'
     The contents of file "$OWN_DIR/stderr" should include 'own clipboard store is unreachable'
   End
 End
+
+# system-clip paste --files --from-peer — 6b's forced peer endpoint. The
+# picker's live-row restore runs where the ENVIRONMENT cannot answer (a GUI
+# job under pueue, a VNC-local TUI: no SSH vars), so the flag must (a) reach
+# the PUBLIC endpoint anyway and (b) treat a refused tunnel as a hard error —
+# never the trusted fallback, whose current clip is a DIFFERENT clip.
+Describe 'system-clip paste --files --from-peer'
+  Include tests/recob_helper.sh
+
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    RECOB_SELF_NAME=mac-mini
+    recob_start
+    CLIENT="$(recob_client_bin)"
+    DEST="$SHELLSPEC_TMPBASE/from-peer-dest"; rm -rf "$DEST"; mkdir -p "$DEST"
+    SRC="$SHELLSPEC_TMPBASE/from-peer-src"; rm -rf "$SRC"; mkdir -p "$SRC"
+    printf 'bridge bytes' > "$SRC/pulled.txt"
+  }
+  BeforeEach 'setup'
+  teardown() { recob_stop; }
+  AfterEach 'teardown'
+
+  It 'reaches the public endpoint with no SSH environment at all'
+    # The scripted files.list reply exists only on the recorder's PUBLIC
+    # listener, so bytes landing at all proves the endpoint choice. The
+    # manifest names THIS machine's own host, which routes the engine down
+    # its same-host local-copy tier — real bytes, no grant/fetch stream to
+    # script — keeping the example about the flag, not the stream codec.
+    pull() {
+      recob_script "ok kind=$(cb_hex files) host=$(cb_hex mac-mini) timestamp=$(cb_hex 111) paths=$(cb_hex "$SRC/pulled.txt")"
+      "$CLIENT" paste --files --from-peer --quiet "$DEST" || return 1
+      cat "$DEST/pulled.txt"
+    }
+    When call pull
+    The output should equal 'bridge bytes'
+  End
+
+  It 'a refused tunnel is a hard error — never the trusted-store fallback'
+    refused() {
+      recob_stop
+      out=$("$CLIENT" paste --files --from-peer --quiet "$DEST" 2>&1)
+      printf '%s|%s' "$?" "$out"
+    }
+    When call refused
+    The output should start with '1|'
+    The output should include 'bridge not reachable'
+  End
+End

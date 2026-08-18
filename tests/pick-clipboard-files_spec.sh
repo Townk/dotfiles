@@ -2017,6 +2017,24 @@ FAKE
     export SYSTEM_BRIDGE_BIN="$BINDIR/fake-bridge"
   }
 
+  # write_fake_sysclip <basename>... -- the bridge-transport engine seam
+  # (PICK_CLIPBOARD_SYSTEM_CLIP): records its argv, then materializes the
+  # named basenames into the dir argument (the last argv word), which is
+  # exactly the flat staging layout `pbpaste --files` leaves — so the
+  # picker's distribute loop finds what a real engine run would produce.
+  write_fake_sysclip() {
+    SYSCLIPLOG="$SHELLSPEC_TMPBASE/sysclip-log"; : > "$SYSCLIPLOG"
+    cat > "$BINDIR/fake-sysclip" <<FAKE
+#!/bin/sh
+printf '%s\n' "\$*" >> "$SYSCLIPLOG"
+for last; do :; done
+mkdir -p "\$last"
+for n in $*; do printf 'pulled-bridge:%s' "\$n" > "\$last/\$n"; done
+FAKE
+    chmod +x "$BINDIR/fake-sysclip"
+    export PICK_CLIPBOARD_SYSTEM_CLIP="$BINDIR/fake-sysclip"
+  }
+
   # write_fake_bridge_counting <first clip.get reply> <second clip.get reply>
   # <files.list behavior> -- clip.get answers DIFFERENTLY on its 1st (the
   # open-time snapshot) and 2nd (the --pull-live text dispatch's OWN fresh
@@ -2146,8 +2164,9 @@ FAKE
           AND hex(t.blob) = '2F782F79');"
   }
 
-  It '--pull-live files records the peer manifest as a local pointer row, then restores it'
+  It '--pull-live files records the pointer row, then restores over the BRIDGE (never rsync)'
     write_fake_bridge "exit 1" "$(files_reply laptop 1755551300.1 /x/y)"
+    write_fake_sysclip y
     FAKE_BRIDGE_LOG="$SHELLSPEC_TMPBASE/fake-bridge-log2"; : > "$FAKE_BRIDGE_LOG"
     export FAKE_BRIDGE_LOG
     export FAKE_BRIDGE_STDIN="$SHELLSPEC_TMPBASE/fake-bridge-stdin2"
@@ -2157,7 +2176,34 @@ FAKE
     The result of function pointer_row_of should eq 'laptop|files|2F782F79'
     The result of function authority_rows_of should eq 0
     The contents of file "$FAKE_BRIDGE_LOG" should not include 'store.persist.files'
+    # The live-row restore is the peer's CURRENT clip, so the bytes ride the
+    # tunnel (files.grant/fetch via the engine) — the rsync transport (which
+    # needs ssh provisioning the sitting->remote direction never has, and
+    # whose interactive prompt wedged the terminal, Mode B 2026-08-18) must
+    # not be touched at all.
+    The contents of file "$SYSCLIPLOG" should include 'paste --files --from-peer --force'
+    The path "$RSYNCLOG" should not be file
+  End
+
+  It 'copy_files_by_id falls back to rsync (BatchMode) when the peer clip does not match the row'
+    # Peer's CURRENT clip is /x/y, but the seeded row records /x/other — the
+    # grant cannot cover it, so the transport must be the rsync pull-down,
+    # and its ssh must carry BatchMode=yes (fail fast, never a prompt).
+    write_fake_bridge "exit 1" "$(files_reply laptop 1755551300.1 /x/y)"
+    write_fake_sysclip y   # must stay UNCALLED — the empty log is the assertion
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, first_ts, last_ts, source_host, text_preview)
+        VALUES ('files', 1, 1, 'laptop', '/x/other');
+      INSERT INTO clip_types (clip_id, uti, blob)
+        VALUES (1, 'x-file-manifest', CAST('/x/other' AS BLOB));"
+
+    run_copy() {
+      zsh -c 'source "$SCRIPT_PATH" && clip::copy_files_by_id "$1"' _ "$1"
+    }
+    When call run_copy 1
+    The status should eq 0
     The path "$RSYNCLOG" should be file
+    The contents of file "$RSYNCLOG" should include 'BatchMode=yes'
+    The contents of file "$SYSCLIPLOG" should eq ''
   End
 
   It '--pull-live files fails cleanly when there is no live peer file clip'

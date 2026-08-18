@@ -322,6 +322,63 @@ EOF
     End
   End
 
+  Describe 'clip::porcelain_progress_stream (6b: the bridge-transport sink)'
+    # Same sidecar contract as progress_stream, fed by `pbpaste --files
+    # --porcelain` lines instead of rsync progress2 records. Item completion
+    # counts once per basename: the engine emits the done moment twice (final
+    # tick = source path, placement = destination path), and a manifest can
+    # never hold two items with one basename (the engine refuses those).
+    sidecar() { cat "$JOBROOT/j1/progress" 2>/dev/null; }
+
+    It 'aggregates item completion + in-flight percent into the sidecar'
+      When call zsh -f -c '
+        export JOB_ID=j1 JOB_STATE_ROOT="$JOBROOT"
+        mkdir -p "$JOBROOT/j1"
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        {
+          printf "progress\t/src/a\t50\t100\n"
+          printf "progress\t/src/a\t100\t100\n"
+          printf "progress\t/dst/a\t100\t100\n"
+          printf "progress\t/src/b\t100\t200\n"
+          printf "progress\t/dst/b\t200\t200\n"
+          printf "done\t2\t400\t1\n"
+        } | clip::porcelain_progress_stream 2 work-laptop
+      '
+      The status should be success
+      The result of function sidecar should match pattern "[0-9]* 100 work-laptop"
+    End
+
+    It 'a duplicate placement line never double-counts the finished item'
+      # Stop right after item a finished + its placement echo: the aggregate
+      # must read 50 (1 of 2 items), NOT 100 — the regression this sink is
+      # shaped around.
+      When call zsh -f -c '
+        export JOB_ID=j1 JOB_STATE_ROOT="$JOBROOT"
+        mkdir -p "$JOBROOT/j1"
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        {
+          printf "progress\t/src/a\t100\t100\n"
+          printf "progress\t/dst/a\t100\t100\n"
+        } | clip::porcelain_progress_stream 2 work-laptop
+      '
+      The status should be success
+      The result of function sidecar should match pattern "[0-9]* 50 work-laptop"
+    End
+
+    It 'outside a job: drains stdin, writes no sidecar'
+      When call zsh -f -c '
+        unset JOB_ID JOB_STATE_ROOT
+        source "$SCRIPT_PATH"
+        clip::progress_begin
+        printf "progress\t/src/a\t50\t100\n" | clip::porcelain_progress_stream 1 work-laptop
+      '
+      The status should be success
+      The path "$JOBROOT/j1/progress" should not be exist
+    End
+  End
+
   Describe '--restore-id headless pull with progress plumbing (§4.2)'
     It 'pull succeeds; sub-grace transfer emits no HUD calls; toast still fires'
       id=$(seed_remote_manifest_row)
