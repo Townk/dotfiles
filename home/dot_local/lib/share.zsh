@@ -879,6 +879,181 @@ share::get() {
   esac
 }
 
+# --- share status (phase 2, R6) ----------------------------------------------
+# Why this earns its place rather than being a nicety: sending is backgrounded
+# by DEFAULT now, so a live send against a relay that is down fails INSIDE a
+# job. What the human sees is a failure toast, not a connection error. One
+# command that says "your relay is not listening" is the difference between a
+# fact and a puzzle.
+
+SHARE_RELAY_SERVICE="${SHARE_RELAY_SERVICE:-croc-relay}"
+SHARE_PROBE_TIMEOUT="${SHARE_PROBE_TIMEOUT:-3}"
+
+# share::_probe_tcp <host> <port> [timeout] → 0 open, 1 closed, 2 cannot tell
+#
+# THE FLAG IS OS-SPECIFIC AND THIS MATTERS. On macOS, nc's -w is an IDLE
+# timeout that does NOT bound the connect: measured against a black-holed
+# address, `nc -z -w 2` took 75 SECONDS (the OS TCP timeout) while `-G 2`
+# returned in 2. Linux's nc has no -G, and there -w does bound the connect. A
+# single "portable" -w therefore looks right and silently hangs `share status`
+# for over a minute per unreachable endpoint.
+share::_probe_tcp() {
+  local host="${1-}" port="${2-}" tmo="${3:-$SHARE_PROBE_TIMEOUT}"
+  [[ -n "$host" && -n "$port" ]] || return 2
+  local nc="${SHARE_NC_BIN:-nc}"
+  command -v "$nc" >/dev/null 2>&1 || return 2
+  local -a flag
+  if [[ "$(uname -s)" == Darwin ]]; then flag=(-G "$tmo"); else flag=(-w "$tmo"); fi
+  "$nc" -z "${flag[@]}" "$host" "$port" >/dev/null 2>&1
+}
+
+# share::_probe_http <url> [timeout] → prints the status code, 0 if it answered
+share::_probe_http() {
+  local url="${1-}" tmo="${2:-$SHARE_PROBE_TIMEOUT}" code
+  [[ -n "$url" ]] || return 2
+  local curl="${SHARE_CURL_BIN:-curl}"
+  command -v "$curl" >/dev/null 2>&1 || return 2
+  code="$("$curl" -sS -m "$tmo" -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)" || return 1
+  printf '%s\n' "$code"
+  [[ "$code" == [23]* ]]
+}
+
+# share::_status_row <endpoint> → "mode\tdestination\tstate"
+#
+# One endpoint is probed ONE way, chosen the way a send would choose: a
+# live-capable endpoint is only as good as its rendezvous, and a store-only one
+# only as good as its origin. Reporting both for an endpoint that has both would
+# describe a transfer that never happens.
+share::_status_row() {
+  local name="$1" backend relay store remote code
+  backend="$(share::field "$name" backend croc)"
+
+  if [[ "$backend" == rclone ]]; then
+    remote="$(share::field "$name" remote)"
+    local have=no
+    if command -v rclone >/dev/null 2>&1; then
+      rclone listremotes 2>/dev/null | grep -qxF "${remote%%:*}:" && have=yes
+    else
+      have=unknown
+    fi
+    case "$have" in
+      yes)     printf 'rclone\t%s\tremote configured\n' "$remote" ;;
+      no)      printf 'rclone\t%s\tNO SUCH REMOTE (rclone config)\n' "$remote" ;;
+      unknown) printf 'rclone\t%s\trclone not installed\n' "$remote" ;;
+    esac
+    return 0
+  fi
+
+  relay="$(share::relay_address "$name" 2>/dev/null)"
+  if [[ -n "$relay" ]]; then
+    local host="${relay%%:*}" port="${relay##*:}"
+    if share::_probe_tcp "$host" "$port"; then
+      printf 'live\t%s\tlistening\n' "$relay"
+    elif (( $? == 2 )); then
+      printf 'live\t%s\tcannot probe (no nc)\n' "$relay"
+    else
+      # The hint only applies to a relay WE are supposed to be running. Someone
+      # else's relay being down is not something `system-service` can fix.
+      if [[ "$(share::field "$name" relay)" == @self* ]]; then
+        printf 'live\t%s\tNOT LISTENING — system-service start %s\n' "$relay" "$SHARE_RELAY_SERVICE"
+      else
+        printf 'live\t%s\tNOT REACHABLE\n' "$relay"
+      fi
+    fi
+    return 0
+  fi
+
+  if [[ "$(share::field "$name" local_only false)" == true ]]; then
+    printf 'live\tthis LAN (multicast, no relay)\tn/a — nothing to reach\n'
+    return 0
+  fi
+
+  store="$(share::field "$name" store)"
+  if [[ -n "$store" ]]; then
+    if code="$(share::_probe_http "$store")"; then
+      printf 'store\t%s\tok (%s)\n' "${${store#*://}%%/*}" "$code"
+    elif [[ -n "$code" && "$code" != 000 ]]; then
+      printf 'store\t%s\tanswered %s\n' "${${store#*://}%%/*}" "$code"
+    else
+      printf 'store\t%s\tNOT REACHABLE\n' "${${store#*://}%%/*}"
+    fi
+    return 0
+  fi
+
+  printf 'none\t—\tMISCONFIGURED: no store, relay or remote\n'
+}
+
+# share::status [<endpoint>…] — reachability per endpoint, plus share's jobs.
+share::status() {
+  # Built from endpoint_names + the policy filter, NOT by un-decorating
+  # share::endpoints_for_profile's display output. That output marks the default
+  # with " (default)", and stripping it with `${name%% (default)}` silently does
+  # nothing: zsh reads `(default)` as a glob GROUP, so the literal parentheses
+  # never match. The rows then carried "public (default)" as an endpoint name
+  # and every share::field lookup logged "unknown endpoint". Parsing one's own
+  # display format is the bug; not doing it is the fix.
+  local -a names
+  if (( $# )); then
+    names=("$@")
+  else
+    local -a all
+    all=("${(@f)$(share::endpoint_names)}") || return 1
+    names=()
+    local n
+    for n in "${all[@]}"; do
+      [[ -n "$n" ]] || continue
+      share::allowed "$n" 2>/dev/null && names+=("$n")
+    done
+  fi
+
+  local default; default="$(share::default_endpoint 2>/dev/null)" || default=""
+
+  # Column widths from the DATA, not guessed: a 12-character endpoint name
+  # overflowed a hardcoded 11 and shunted the whole row out of alignment. The
+  # +1 leaves room for the default marker.
+  local -i w=8 dw=20
+  local name
+  for name in "${names[@]}"; do
+    (( ${#name} + 1 > w )) && w=$(( ${#name} + 1 ))
+  done
+
+  local -a rows=()
+  local row mode dest state mark
+  for name in "${names[@]}"; do
+    [[ -n "$name" ]] || continue
+    row="$(share::_status_row "$name")" || row=$'none\t—\tERROR'
+    mode="${row%%$'\t'*}"
+    dest="${${row#*$'\t'}%%$'\t'*}"
+    state="${row##*$'\t'}"
+    mark=""; [[ "$name" == "$default" ]] && mark="*"
+    (( ${#dest} > dw )) && dw=${#dest}
+    rows+=("$name$mark"$'\t'"$mode"$'\t'"$dest"$'\t'"$state")
+  done
+
+  printf "%-${w}s %-6s %-${dw}s %s\n" ENDPOINT MODE DESTINATION STATE
+  for row in "${rows[@]}"; do
+    printf "%-${w}s %-6s %-${dw}s %s\n" \
+      "${row%%$'\t'*}" \
+      "${${row#*$'\t'}%%$'\t'*}" \
+      "${${${row#*$'\t'}#*$'\t'}%%$'\t'*}" \
+      "${row##*$'\t'}"
+  done
+
+  # Jobs are share's own, not every job on the box: a relay that is fine while
+  # three uploads are stuck is a different situation from both being broken.
+  if share::_load_jobs 2>/dev/null; then
+    local js running total
+    js="$(job::list 2>/dev/null)" || js=""
+    if [[ -n "$js" ]]; then
+      total="$(printf '%s' "$js" | jq --arg g "$SHARE_JOB_GROUP" '[.jobs[] | select(.group == $g)] | length' 2>/dev/null)"
+      running="$(printf '%s' "$js" | jq --arg g "$SHARE_JOB_GROUP" '[.jobs[] | select(.group == $g and .done == false)] | length' 2>/dev/null)"
+      printf '\n%s share jobs: %s in flight\n' "${total:-0}" "${running:-0}"
+    fi
+  fi
+  [[ -n "$default" ]] && printf '\n* default for this profile (%s)\n' "$(share::profile)"
+  return 0
+}
+
 # --- background sends via job:: ---------------------------------------------
 # An upload is long, network-bound, worth watching and worth cancelling — the
 # exact shape job:: exists for. Consuming it means completion toasts (routed

@@ -4,6 +4,7 @@
 #   share <file>...                    hold it open live, print a pasteable line
 #   share send [opts] <file>...        the same, explicitly
 #   share get [<url|token|code>]       receive; no argument reads the clipboard
+#   share status [<endpoint>...]       is each endpoint actually reachable
 #   share list                         receipts, newest first
 #   share revoke <id>                  kill a link and forget the receipt
 #   share endpoints                    what this profile may send to
@@ -36,6 +37,7 @@ Usage:
   share list                         receipts, newest first
   share revoke <id>                  kill a link and forget the receipt
   share endpoints                    endpoints this profile may use
+  share status [<endpoint>...]        per-endpoint reachability + share's jobs
 
 Sending is LIVE and in the BACKGROUND by default: the pasteable line is
 printed and copied straight away, and the transfer waits for the recipient.
@@ -236,6 +238,9 @@ main() {
                (( $# >= 1 )) || die "share revoke: an id is required"
                share::revoke "$1" ;;
     endpoints) shift; share::endpoints_for_profile ;;
+    status)    shift
+               if is_help "${1:-}"; then usage; return 0; fi
+               share::status "$@" ;;
     send)      shift; dispatch_send "$@" ;;
     *)
       # Not a recognized subcommand: the bare-path shorthand applies only when
