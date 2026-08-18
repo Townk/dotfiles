@@ -95,5 +95,6 @@ Describe 'atuin config.toml.tmpl (human profiles)'
   It "keeps sync v2 records=true for $1"
     When call sync_v2_kept "$1"
     The status should be success
+    The output should include "records = true"
   End
 End
