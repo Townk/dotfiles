@@ -421,6 +421,10 @@ share::clip() {
 # share::emit_live_blurb <endpoint> <secret-file> <path…>
 # Compose the pasteable line and hand it over — print it, copy it. Called
 # BEFORE the transfer starts, which is the only moment it is useful.
+# It PRINTS; it does not clip. The caller decides where the line belongs, which
+# is what lets a face keep it off the clipboard (see --for-face): a picker row is
+# a FILE clip, and replacing it with a line of text about itself would destroy
+# the thing the human was operating on.
 share::emit_live_blurb() {
   local endpoint="$1" secret_file="$2"; shift 2
   local code label blurb
@@ -428,7 +432,6 @@ share::emit_live_blurb() {
   label="$(share::label "$@")" || return 1
   blurb="$(share::blurb "$endpoint" live "$label" "$code" never "")" || return 1
   print -r -- "$blurb"
-  share::clip "$blurb"
   return 0
 }
 
@@ -446,7 +449,7 @@ share::send() {
   # away — and live delivers that while escaping both the 2 GiB stored ceiling
   # and leaving a copy in anyone's custody. Stored is the explicit choice for a
   # recipient who will not be around today.
-  local endpoint="" mode=live secret_file="" mode_explicit=0
+  local endpoint="" mode=live secret_file="" mode_explicit=0 for_face=0
   local expiration="$SHARE_DEFAULT_EXPIRATION" downloads="$SHARE_DEFAULT_DOWNLOADS"
   # Each value-consuming flag is guarded BEFORE the `shift 2`: with the flag
   # as the last token, `$2` is empty and `shift 2` fails in zsh (shift count
@@ -467,6 +470,13 @@ share::send() {
       --secret-file)
                     [[ $# -ge 2 ]] || die "share: --secret-file requires a path"
                     secret_file="$2"; shift 2 ;;
+      # --for-face: emit the composed line on STDOUT and leave the clipboard
+      # alone. Two coupled behaviours behind one flag on purpose — a face needs
+      # the line programmatically (stderr is not an interface) AND must not
+      # replace the file clip it was invoked on. A flag named after only one of
+      # them invites someone to add the other separately and re-open the
+      # conflict. You do not get the job id back; the HUD has it.
+      --for-face)   for_face=1; shift ;;
       --expiration) [[ $# -ge 2 ]] || die "share: --expiration requires a value"
                      expiration="$2"; shift 2 ;;
       --downloads)  [[ $# -ge 2 ]] || die "share: --downloads requires a value"
@@ -564,7 +574,10 @@ share::send() {
   # only duplicate it into a log nobody reads.
   if [[ "$mode" == live && "$backend" == croc && -z "$secret_file" ]]; then
     secret_file="$(share::croc_secret_file "$endpoint")" || return 1
-    share::emit_live_blurb "$endpoint" "$secret_file" "$@" || return 1
+    local live_line
+    live_line="$(share::emit_live_blurb "$endpoint" "$secret_file" "$@")" || return 1
+    print -r -- "$live_line"
+    (( for_face )) || share::clip "$live_line"
   fi
 
   local blurb rc=0
@@ -598,7 +611,7 @@ share::send() {
   # Stored: croc_send returns the blurb because the URL did not exist until now.
   [[ -n "$blurb" ]] || return 0
   print -r -- "$blurb"
-  share::clip "$blurb"
+  (( for_face )) || share::clip "$blurb"
   # share::announce is best-effort by contract (it wraps `notify`, which is
   # documented as best-effort itself): a failed RECOB bridge hop, or simply
   # no Hammerspoon on this host, must not turn a SUCCESSFUL transfer into a
@@ -1116,7 +1129,7 @@ share::send_background() {
   local -a paths=()
   local -i i=1 n=${#send_args[@]} no_more_flags=0
   local a to="" mode=live
-  local -i mode_explicit=0
+  local -i mode_explicit=0 for_face=0
   while (( i <= n )); do
     a="${send_args[i]}"
     if (( no_more_flags )); then paths+=("$a"); (( i += 1 )); continue; fi
@@ -1125,6 +1138,7 @@ share::send_background() {
       --expiration|--downloads|--secret-file) (( i += 2 )) ;;
       --live)                       mode=live;  mode_explicit=1; (( i += 1 )) ;;
       --store)                      mode=store; mode_explicit=1; (( i += 1 )) ;;
+      --for-face)                   for_face=1; (( i += 1 )) ;;
       --)                                     no_more_flags=1; (( i += 1 )) ;;
       -*)                                     (( i += 1 )) ;;
       *)                                      paths+=("$a"); (( i += 1 )) ;;
@@ -1169,7 +1183,20 @@ share::send_background() {
       # blurb there would swallow the pasteable line into the id variable and
       # show the human neither. The line is user-facing output, which in this
       # codebase means stderr, and it reaches the clipboard regardless.
-      share::emit_live_blurb "$ep" "$sf" "${paths[@]}" >&2 || { rm -f -- "$sf"; return 1; }
+      local line
+      line="$(share::emit_live_blurb "$ep" "$sf" "${paths[@]}")" || { rm -f -- "$sf"; return 1; }
+      if (( for_face )); then
+        # A face gets the LINE on stdout and owns where it goes — no clipboard
+        # write (the picker's file clip must survive) and no job id (the HUD has
+        # it). This is the only caller for which stdout is not the job id.
+        print -r -- "$line"
+      else
+        # >&2 deliberately: stdout here is the job id, which the CLI captures as
+        # `id="$(share::send_background …)"`. Printing the line there would
+        # swallow it into the id variable and show the human neither.
+        print -ru2 -- "$line"
+        share::clip "$line"
+      fi
       extra=(--secret-file "$sf")
     elif (( mode_explicit )); then
       # Refuse before enqueuing: share::send would refuse too, but only once
@@ -1186,9 +1213,13 @@ share::send_background() {
 
   local -a modal=()
   (( watch )) && modal=(--modal)
-  job::start "${modal[@]}" \
+  local jid
+  jid="$(job::start "${modal[@]}" \
     --group "$SHARE_JOB_GROUP" --title "$title" --icon "$SHARE_JOB_ICON" \
-    -- share send "${extra[@]}" "${send_args[@]}"
+    -- share send "${extra[@]}" "${send_args[@]}")" || return 1
+  # Under --for-face the line has already gone to stdout and the id would
+  # corrupt it; the job is still in the HUD and the statusbar either way.
+  (( for_face )) || print -r -- "$jid"
 }
 
 # share::announce <blurb> — the acknowledgable completion toast, and the ONLY

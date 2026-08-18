@@ -55,6 +55,9 @@ Send options:
   --watch               enqueue and open the job dashboard on it (implies
                          --background; needs the troupe binary)
   --force               use an endpoint this profile is not allowed to use
+  --for-face            print the pasteable line on stdout and leave the
+                         clipboard alone (for yazi / the picker, which must not
+                         replace the file clip they were invoked on)
 
 Get options:
   --out <dir>           where to write (default: ~/Downloads)

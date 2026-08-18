@@ -184,6 +184,51 @@ SH
     The stdout should equal ''
   End
 
+  # --- --for-face (phase 3 F3) ----------------------------------------------
+  # The parent spec's Ctrl-S rule is emphatic: "the clipboard is never modified —
+  # a clipboard entry is a file clipboard and stays one". Phase 1.5 then made
+  # share::clip write the line on EVERY send. Wiring a face up as-is would
+  # replace the file clip the human just picked with a line of text about it,
+  # destroying the thing they were operating on.
+  #
+  # Nothing in the suite could have caught that: both behaviours are correct
+  # alone and only conflict at a call site that did not exist yet. These
+  # examples are that call site.
+
+  It 'gives a face the pasteable line on stdout'
+    When call share::send_background --for-face --to lan "$SB/Report.pdf"
+    The output should include 'receive with:  croc'
+  End
+
+  It 'leaves the clipboard untouched for a face'
+    share::send_background --for-face --to lan "$SB/Report.pdf" >/dev/null 2>&1
+    When call test -e "$SB/clip.txt"
+    The status should be failure
+  End
+
+  # The contrast, so the example above cannot pass merely because clipping broke
+  # everywhere.
+  It 'still writes the clipboard when NOT called by a face'
+    share::send_background --to lan "$SB/Report.pdf" >/dev/null 2>&1
+    When call cat "$SB/clip.txt"
+    The output should include 'receive with:  croc'
+  End
+
+  # stdout is the LINE here, not the job id — the one caller for which that is
+  # true. A face that also got an id would have to guess which line was which.
+  It 'does not mix the job id into a face'"'"'s stdout'
+    When call share::send_background --for-face --to lan "$SB/Report.pdf"
+    The lines of output should equal 1
+    The output should not match pattern '[0-9][0-9][0-9][0-9][0-9]*'
+  End
+
+  # The job is still real: --for-face changes what is REPORTED, not what runs.
+  It 'still enqueues the transfer for a face'
+    share::send_background --for-face --to lan "$SB/Report.pdf" >/dev/null 2>&1
+    When call grep -c 'add --group share' "$SB/pueue-calls"
+    The output should equal '1'
+  End
+
   It 'passes --modal through when asked to watch'
     JOB_FORCE_HOST=none
     share::send_background --watch "$SB/Report.pdf" >/dev/null 2>&1
