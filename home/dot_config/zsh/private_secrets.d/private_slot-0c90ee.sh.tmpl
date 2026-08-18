@@ -1,15 +1,19 @@
 {{- /* human slot slot-0c90ee: cached after first materialization; set CHEZMOI_REFRESH_SECRETS=1 to force 1Password resolution. */ -}}
 {{- $target := joinPath .chezmoi.homeDir ".config" "zsh" "secrets.d" "slot-0c90ee.sh" -}}
-{{- $cacheHeader := "# chezmoi: op-cache-v1 dd54f52020ee155ca2edaf7117ffc10d58ebb02692f658270df2cb3a1c5a1fa2" -}}
+{{- $cacheHeader := "# chezmoi: op-cache-v1 a2845e1b18fa6feec2f964ac06d11603d474f146c9f63371cc07fe5075390565" -}}
 {{- $cachedHeader := "" -}}
 {{- if stat $target -}}{{ $cachedHeader = output "sh" "-c" (printf "sed -n '1p' %q" $target) | trim }}{{- end -}}
 {{- if and (ne (env "CHEZMOI_REFRESH_SECRETS") "1") (eq $cachedHeader $cacheHeader) -}}
 {{ output "cat" $target -}}
 {{- else -}}
-# chezmoi: op-cache-v1 dd54f52020ee155ca2edaf7117ffc10d58ebb02692f658270df2cb3a1c5a1fa2
+# chezmoi: op-cache-v1 a2845e1b18fa6feec2f964ac06d11603d474f146c9f63371cc07fe5075390565
 export MISE_GITHUB_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/MISE_GITHUB_TOKEN/0c90ee" | replace "'" "'\"'\"'" }}'
 export HOMEBREW_GITHUB_API_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/HOMEBREW_GITHUB_API_TOKEN/0c90ee" | replace "'" "'\"'\"'" }}'
 export CONTEXT7_API_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/CONTEXT7_API_KEY/0c90ee" | replace "'" "'\"'\"'" }}'
 export BACKUP_REPO_PASSPHRASE='{{ output "op" "read" "--no-newline" "op://Tokens/BACKUP_REPO_PASSPHRASE/0c90ee" | replace "'" "'\"'\"'" }}'
 export ATLASSIAN_API_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/ATLASSIAN_API_TOKEN/0c90ee" | replace "'" "'\"'\"'" }}'
+export ATUIN_SYNC_ADDRESS='{{ output "op" "read" "--no-newline" "op://Tokens/ATUIN_SYNC_ADDRESS/0c90ee" | replace "'" "'\"'\"'" }}'
+export HOMELAB_ATUIN_USERNAME='{{ output "op" "read" "--no-newline" "op://Tokens/HOMELAB_ATUIN_USERNAME/0c90ee" | replace "'" "'\"'\"'" }}'
+export HOMELAB_ATUIN_PASSWORD='{{ output "op" "read" "--no-newline" "op://Tokens/HOMELAB_ATUIN_PASSWORD/0c90ee" | replace "'" "'\"'\"'" }}'
+export HOMELAB_ATUIN_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/HOMELAB_ATUIN_KEY/0c90ee" | replace "'" "'\"'\"'" }}'
 {{ end -}}
