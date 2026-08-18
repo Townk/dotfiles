@@ -1307,6 +1307,65 @@ clip::pull_live_files() {
   clip::copy_files_by_id "$id" && clip::copy_toast_for_id "$id"
 }
 
+# clip::files_restore_needs_transfer <id> — would restoring this row move
+# bytes (a remote-origin pull) rather than complete instantly from local
+# state? Remote origin is the honest signal: a local capture restores
+# by-rowid, and even a remote row the picker already localized completes in
+# under a second — which is fine to run under a job, and keeps the TUI's
+# delegation rule identical to the GUI's (needs_headless_restore).
+clip::files_restore_needs_transfer() {
+  local id=$1 hostv
+  hostv=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'') FROM clips WHERE id=$id;" 2>/dev/null) || hostv=""
+  [[ -n "$hostv" && "$hostv" != "$MY_HOST" ]]
+}
+
+# clip::enqueue_files_restore <id> — the TUI transfer contract (Mode B
+# ruling 2026-08-18): Ctrl-Y on a transfer row must CLOSE the picker at
+# once, never draw transfer output into the pane. The pull runs under the
+# job runner exactly like the GUI's delegation — capsule + statusbar
+# percent, output captured in the job log, --notify failures (the engine's
+# own rich success toast announces completion; a failure lands the --ack
+# bell + NC pair). Job starts are silent by design (phase-1 ruling), so the
+# CONSUMER announces its own transfer here: one start toast, built by the
+# same label brain the capsule uses.
+clip::enqueue_files_restore() {
+  local id=$1
+  local job_bin="${PICK_CLIPBOARD_JOB:-$HOME/.local/libexec/job}"
+  local self_bin="${PICK_CLIPBOARD_SELF:-$HOME/.local/libexec/pick-clipboard}"
+  # No job runner installed = quietly not our mode (a minimal box restores
+  # inline via the caller's fallback, by design). Only a PRESENT-but-failing
+  # enqueue is worth a message.
+  [[ -x "$job_bin" ]] || return 1
+  "$job_bin" start --title "Clipboard restore" --icon glyph:nf-md-download \
+    --notify failures -- "$self_bin" --restore-id "$id" >/dev/null || {
+    print -ru2 -- "pick-clipboard: could not enqueue the restore job"
+    return 1
+  }
+  local hostv
+  hostv=$(sqlite3 "$DB_FILE" "SELECT IFNULL(source_host,'?') FROM clips WHERE id=$id;" 2>/dev/null) || hostv="?"
+  local blobf n_paths=1 firstp=""
+  blobf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-enq.XXXXXX") 2>/dev/null || blobf=""
+  if [[ -n "$blobf" ]]; then
+    sqlite3 "$DB_FILE" "SELECT writefile('$blobf', blob) FROM clip_types WHERE clip_id=$id AND uti='x-file-manifest';" >/dev/null 2>&1
+    if [[ -s "$blobf" ]]; then
+      local blob; blob="$(<"$blobf")"
+      local -a enq_paths; enq_paths=("${(@ps:\0:)blob}")
+      n_paths=${#enq_paths[@]}
+      firstp="${enq_paths[1]}"
+    else
+      sqlite3 "$DB_FILE" "SELECT writefile('$blobf', blob) FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';" >/dev/null 2>&1
+      [[ -s "$blobf" ]] && firstp="$(<"$blobf")"
+    fi
+    rm -f "$blobf"
+  fi
+  local label; label=$(clip::progress_label $n_paths "$hostv" "${firstp:-file}")
+  local notify_bin="${PICK_CLIPBOARD_NOTIFY:-$HOME/.local/bin/notify}"
+  if [[ -x "$notify_bin" ]]; then
+    "$notify_bin" --icon "glyph:nf-md-download" "$label" >/dev/null 2>&1 || :
+  fi
+  return 0
+}
+
 # A real attempt to open /dev/tty for reading, not `[[ -e /dev/tty ]]` --
 # that special file exists on disk regardless of whether THIS process has a
 # controlling terminal (true even under this repo's own shellspec harness,
@@ -1486,6 +1545,13 @@ clip::copy_by_id() {
   local id=$1
   local kind; kind=$(sqlite3 "$DB_FILE" "SELECT type_kind FROM clips WHERE id=$id;" 2>/dev/null) || kind=""
   if [[ "$kind" == (files|file|directory) ]]; then
+    # Transfer rows go to the job runner (the Mode B ruling in
+    # clip::enqueue_files_restore) — the picker closes now, toasts carry the
+    # story. Enqueue failure (pueued down) falls through to the inline
+    # engine: a copy must never fail on job infrastructure alone.
+    if clip::files_restore_needs_transfer "$id"; then
+      clip::enqueue_files_restore "$id" && return 0
+    fi
     clip::copy_files_by_id "$id" && { clip::copy_toast_for_id "$id"; return 0 }
   fi
   # Every success below marks the fallback (clip::note_fallback_ok is a no-op
@@ -2500,9 +2566,18 @@ case "$selected" in
   MD:LIVE) clip::deliver_live; clip::materialize_live ;;
   LIVE)    clip::deliver_live; clip::materialize_live ;;
   # LIVEF sentinel (6b): Enter/Alt-Enter deliver the paths + materialize the
-  # row (persist only); Ctrl-Y (CP:) is the real pull -- persist, resolve,
-  # restore via the same engine every stored files row uses.
-  CP:LIVEF) clip::pull_live_files "$LIVEF_HOST" "$LIVEF_PATHS_FILE" ;;
+  # row (persist only); Ctrl-Y (CP:) records the row, then ENQUEUES the pull
+  # under the job runner (the TUI transfer contract — the picker closes now,
+  # toasts carry the story). Enqueue failure degrades to the inline engine,
+  # same rule as clip::copy_by_id's files branch.
+  CP:LIVEF)
+    if _livef_id=$(clip::record_live_files_row "$LIVEF_HOST" "$LIVEF_PATHS_FILE") && [[ -n "$_livef_id" ]]; then
+      clip::enqueue_files_restore "$_livef_id" ||
+        { clip::copy_files_by_id "$_livef_id" && clip::copy_toast_for_id "$_livef_id" }
+    else
+      print -ru2 -- "pick-clipboard: could not record the live file clip locally"
+    fi
+    ;;
   MD:LIVEF) clip::deliver_live_files; clip::materialize_live_files ;;
   LIVEF)    clip::deliver_live_files; clip::materialize_live_files ;;
   CP:*)    clip::copy_by_id "${selected#CP:}" ;;

@@ -2221,6 +2221,88 @@ FAKE
     The status should eq 1
     The error should include '--pull-live requires text or files'
   End
+
+  # --- TUI transfer contract (Mode B ruling 2026-08-18) ----------------------
+  # Ctrl-Y on a transfer-needing files row must close the picker at once and
+  # run the pull under the job runner: a start toast at enqueue, the engine's
+  # rich toast at completion, output in the job log — never transfer output
+  # drawn into the pane.
+
+  write_fake_job() {  # $1 = exit status (default 0)
+    JOBLOG="$SHELLSPEC_TMPBASE/job-log"; : > "$JOBLOG"
+    cat > "$BINDIR/fake-job" <<FAKE
+#!/bin/sh
+printf '%s\n' "\$*" >> "$JOBLOG"
+echo 1755550000000000-1
+exit ${1:-0}
+FAKE
+    chmod +x "$BINDIR/fake-job"
+    export PICK_CLIPBOARD_JOB="$BINDIR/fake-job"
+  }
+
+  write_fake_notify() {
+    NOTIFYLOG="$SHELLSPEC_TMPBASE/notify-log"; : > "$NOTIFYLOG"
+    cat > "$BINDIR/fake-notify" <<FAKE
+#!/bin/sh
+printf '%s\n' "\$*" >> "$NOTIFYLOG"
+FAKE
+    chmod +x "$BINDIR/fake-notify"
+    export PICK_CLIPBOARD_NOTIFY="$BINDIR/fake-notify"
+  }
+
+  seed_remote_manifest_row() {  # id 1: /x/y from laptop
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, first_ts, last_ts, source_host, text_preview)
+        VALUES ('files', 1, 1, 'laptop', '/x/y');
+      INSERT INTO clip_types (clip_id, uti, blob)
+        VALUES (1, 'x-file-manifest', CAST('/x/y' AS BLOB));"
+  }
+
+  It 'files_restore_needs_transfer: remote yes; own-host and legacy rows no'
+    write_fake_bridge "exit 1" "exit 1"
+    seed_remote_manifest_row
+    sqlite3 "$DB" "INSERT INTO clips (id, type_kind, first_ts, last_ts, source_host, text_preview)
+        VALUES (2, 'files', 1, 1, 'mac-mini', '/l/p');
+      INSERT INTO clips (id, type_kind, first_ts, last_ts, source_host, text_preview)
+        VALUES (3, 'files', 1, 1, '', '/l/q');"
+    gate() {
+      zsh -c 'source "$SCRIPT_PATH" || exit 1
+        clip::files_restore_needs_transfer 1 && print -n r
+        clip::files_restore_needs_transfer 2 || print -n L
+        clip::files_restore_needs_transfer 3 || print -n E'
+    }
+    When call gate
+    The output should equal 'rLE'
+  End
+
+  It 'a remote files Ctrl-Y enqueues the job and sends the start toast — no inline transfer'
+    write_fake_bridge "exit 1" "exit 1"
+    write_fake_job
+    write_fake_notify
+    write_fake_sysclip y   # must stay uncalled — the empty log is the assertion
+    seed_remote_manifest_row
+    export PICK_CLIPBOARD_SELF=/x/self
+    run_copy_by_id() { zsh -c 'source "$SCRIPT_PATH" && clip::copy_by_id "$1"' _ "$1"; }
+    When call run_copy_by_id 1
+    The status should eq 0
+    The contents of file "$JOBLOG" should include 'start --title Clipboard restore --icon glyph:nf-md-download --notify failures -- /x/self --restore-id 1'
+    The contents of file "$NOTIFYLOG" should include 'Copying y from laptop…'
+    The contents of file "$SYSCLIPLOG" should eq ''
+    The path "$RSYNCLOG" should not be file
+  End
+
+  It 'enqueue failure (pueued down) falls through to the inline engine'
+    write_fake_bridge "exit 1" "$(files_reply laptop 1755551300.1 /x/y)"
+    write_fake_job 1
+    write_fake_notify
+    write_fake_sysclip y
+    seed_remote_manifest_row
+    run_copy_by_id() { zsh -c 'source "$SCRIPT_PATH" && clip::copy_by_id "$1"' _ "$1"; }
+    When call run_copy_by_id 1
+    The status should eq 0
+    The contents of file "$JOBLOG" should include '--restore-id 1'
+    The contents of file "$SYSCLIPLOG" should include 'paste --files --from-peer --force'
+    The stderr should include 'could not enqueue the restore job'
+  End
 End
 
 # --- C1: the pointer row the picker writes IS the daemon's pointer row -------
