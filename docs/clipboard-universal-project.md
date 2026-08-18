@@ -1383,8 +1383,8 @@ writes them). That is the files analogue of §22.5's `sha256(text)` key.
 
 **Accept.** Enter/Alt-Enter deliver the newline-joined paths and record the
 row; Ctrl-Y is the real pull — record the row, then hand its id to the same
-`clip::copy_files_by_id` engine every stored files row uses (mount/rsync/
-cache, size caps, toasts, and the job-runner path for big files). "Record" is
+`clip::copy_files_by_id` engine every stored files row uses (cache, size
+caps, toasts, and the job-runner path for big files). "Record" is
 a **pointer row** written by the picker straight to SQLite: `clips`
 (`type_kind='files'`, `source_host=<peerhost>`, `text_preview`/`len`/
 `type_hash` over the newline-joined paths) plus one `clip_types` row
@@ -1392,6 +1392,25 @@ a **pointer row** written by the picker straight to SQLite: `clips`
 `file_authorities` row. It mirrors the daemon's `persist_files_row`
 non-trusted branch statement for statement, including its dedup — a re-accept
 bumps `last_ts` on the existing row instead of adding a twin.
+
+**Pull transport (the Mode B freeze, fixed).** Case 3 of
+`clip::copy_files_by_id` now has TWO transports. When the row **is the live
+peer's current clip** (`clip::row_is_peer_current`: bridge up, one
+`files.list` exchange, host + byte-equal path set), the bytes ride the
+bridge — `system-clip paste --files --from-peer` streams the grant
+(`files.grant`/`files.fetch`, credential = the tunnel token) into a staging
+dir the picker distributes into its per-index cache. `--from-peer` exists
+because the restore often runs where `is_ssh()` cannot answer (a GUI job
+under pueue, a VNC-local TUI); a refused tunnel under the flag is a hard
+error, never the trusted fallback (a different clip's bytes). Anything the
+grant no longer covers — a stale manifest, or a row from a host this machine
+genuinely can ssh to — takes the original `rsync -e ssh` pull-down, now with
+`BatchMode=yes` on BOTH branches: the sitting→remote direction has no ssh
+provisioning, and the unconditional rsync used to open an interactive
+host-key/password prompt inside fzf's raw tty that wedged the terminal
+(found live, Mode B 2026-08-18). Headless bridge pulls feed the job sidecar
+via `--porcelain` (`clip::porcelain_progress_stream`, item completion counted
+once per basename since the engine echoes the done moment twice).
 
 > **Why not `store.persist.files`?** Because a *trusted* persist mints file
 > authority over the named paths, so the daemon refuses one whose `host` is not
