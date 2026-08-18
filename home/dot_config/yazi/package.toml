@@ -1,22 +1,22 @@
 [[plugin.deps]]
 use = "yazi-rs/plugins:full-border"
-rev = "3d25b67"
-hash = "7b625412411be411153886894d9acaf"
+rev = "6f26ae0"
+hash = "f281261ff04ad7ec867c3f802a50835f"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:toggle-pane"
-rev = "3d25b67"
-hash = "15e5b67a241172cbb86b8fbf9e63692"
+rev = "6f26ae0"
+hash = "5b2fbef7d1513ce38ff72623a071a5e"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:git"
-rev = "3d25b67"
-hash = "336548d9f67926e12d5584f60b790f1"
+rev = "6f26ae0"
+hash = "ce345e7e8baed03a2561b314fa85e59a"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:mactag"
-rev = "3d25b67"
-hash = "bca7e9afee0833da89b3eb6bbb228d1"
+rev = "6f26ae0"
+hash = "34e3e12060f833cc21446f23a7ced8d1"
 
 [[plugin.deps]]
 use = "ndtoan96/ouch"
@@ -30,12 +30,12 @@ hash = "3c66d95bf63fa16178e98967fbae9429"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:piper"
-rev = "3d25b67"
-hash = "f23ecc89ce0f9eeefdd4cea14e2a9ba7"
+rev = "6f26ae0"
+hash = "45a533508a9840cc5a10cf6129f63e6a"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:types"
-rev = "3d25b67"
+rev = "6f26ae0"
 hash = "ff056b5acd05d915dc3a3936cb0cfd3e"
 
 [[plugin.deps]]
