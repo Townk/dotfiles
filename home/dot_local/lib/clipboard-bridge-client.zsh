@@ -10,7 +10,8 @@
 # Callers: pick-clipboard (clip.get / clip.set / clip.set.rich /
 # clip.set.files / store.persist.text), common.zsh's notify (osd.notify),
 # mux-fullscreen-probe (window.fullscreen.state), terminal-toggle-fullscreen
-# (window.fullscreen.toggle).
+# (window.fullscreen.toggle), the remote-pull live row (peer_snapshot /
+# persist_files).
 #
 # CLIPBRIDGE_TIMEOUT_S keeps its meaning — it maps onto the client's §5.2
 # exchange deadline (RECOB_TIMEOUT_S). Ops that make the origin DO something
@@ -55,6 +56,76 @@ clipbridge::clip_get_raw() {
   clipbridge::call --peer --raw "$1" clip.get
 }
 
+# clipbridge::peer_snapshot <text_out_file>
+#   The peer's current clip candidates in exactly TWO exchanges (clip.get +
+#   files.list) instead of clip_get_raw's one-connection-per-field pattern —
+#   each of those was a full preamble+handshake, and a picker open paid three
+#   of them. Prints up to two jq-built JSON lines on stdout:
+#     {"kind":"text","regtype":…,"timestamp":…,"host":…}   (bytes in the file)
+#     {"kind":"files","files_kind":…,"timestamp":…,"host":…,"paths":[…]}
+#   Best-effort by contract: any bridge failure (and files.list's not-found,
+#   which just means "the current clip is not a files clip") yields fewer
+#   lines, never a nonzero exit — the caller treats "no lines" as "no live
+#   rows". Text bytes go to <text_out_file> byte-exact (hex → xxd, no $(...)
+#   capture), and a whitespace-only peer clipboard is suppressed here so
+#   every caller inherits the §22.2 guard.
+clipbridge::peer_snapshot() {
+  local text_out="$1"
+  local raw_dir; raw_dir=$(mktemp -d "${TMPDIR:-/tmp}/clipbridge-snap.XXXXXX") || return 0
+  {
+    local line name hex
+    local t_regtype="" t_ts="" t_host="" have_text=0
+
+    if clipbridge::call --peer clip.get > "$raw_dir/clip" 2>/dev/null; then
+      while IFS= read -r line; do
+        name="${line%%=*}" hex="${line#*=}"
+        case "$name" in
+          text)      print -rn -- "$hex" | xxd -r -p > "$text_out" && have_text=1 ;;
+          regtype)   t_regtype=$(print -rn -- "$hex" | xxd -r -p) ;;
+          timestamp) t_ts=$(print -rn -- "$hex" | xxd -r -p) ;;
+          host)      t_host=$(print -rn -- "$hex" | xxd -r -p) ;;
+        esac
+      done < "$raw_dir/clip"
+      # §22.2: an empty or whitespace-only peer clipboard is no candidate.
+      if (( have_text )) && grep -q '[^[:space:]]' "$text_out" 2>/dev/null; then
+        jq -nc --arg regtype "${t_regtype:-v}" --arg ts "$t_ts" --arg host "${t_host:-peer}" \
+          '{kind:"text", regtype:$regtype, timestamp:$ts, host:$host}'
+      else
+        rm -f -- "$text_out"
+      fi
+    fi
+
+    local f_kind="" f_ts="" f_host=""
+    if clipbridge::call --peer files.list > "$raw_dir/files" 2>"$raw_dir/files.err"; then
+      : > "$raw_dir/paths"
+      while IFS= read -r line; do
+        name="${line%%=*}" hex="${line#*=}"
+        case "$name" in
+          kind)      f_kind=$(print -rn -- "$hex" | xxd -r -p) ;;
+          timestamp) f_ts=$(print -rn -- "$hex" | xxd -r -p) ;;
+          host)      f_host=$(print -rn -- "$hex" | xxd -r -p) ;;
+          paths)     print -rn -- "$hex" | xxd -r -p > "$raw_dir/paths" ;;
+        esac
+      done < "$raw_dir/files"
+      if [[ -s "$raw_dir/paths" ]]; then
+        # NUL-joined → JSON array. --rawfile keeps arbitrary path bytes intact
+        # through jq; split on the NUL jq sees as \u0000.
+        jq -nc --arg kind "${f_kind:-files}" --arg ts "$f_ts" --arg host "${f_host:-peer}" \
+          --rawfile p "$raw_dir/paths" \
+          '{kind:"files", files_kind:$kind, timestamp:$ts, host:$host,
+            paths:($p | split("\u0000") | map(select(. != "")))}'
+      fi
+    fi
+    # not-found on files.list ("the current clip is not a files clip" /
+    # empty store) is the no-candidate answer, already handled by falling
+    # through; any other failure is equally "no line" by the best-effort
+    # contract, so nothing to branch on here.
+  } always {
+    rm -rf -- "$raw_dir"
+  }
+  return 0
+}
+
 # clipbridge::set_text <regtype>   (text bytes on stdin)
 #   clip.set on the peer: regtype v|l|b rides as a field, the text bytes ride
 #   stdin so any byte survives.
@@ -90,6 +161,15 @@ clipbridge::persist_text() {
 #   clip.set.files{paths}: put a file manifest on this machine's pasteboard.
 clipbridge::set_files_paths() {
   clipbridge::call --stdin paths clip.set.files
+}
+
+# clipbridge::persist_files <host>   (NUL-joined absolute paths on stdin)
+#   store.persist.files{host,paths} on THIS machine's own bridge — the
+#   history row an accepted live FILES entry deserves (the same row shape a
+#   remote pbcopy push creates; the daemon's (source_host, type_hash,
+#   type_kind) dedup makes a re-accept idempotent).
+clipbridge::persist_files() {
+  clipbridge::call --stdin paths store.persist.files "host=$1"
 }
 
 # clipbridge::set_files_id <rowid>
