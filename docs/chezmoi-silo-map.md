@@ -124,8 +124,19 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - `clipbridge::probe|send|request`; `CLIPBRIDGE_TIMEOUT_S` (2s default suits a read answered from memory, not an op that makes the origin *act*).
 - Legacy bare-connect grace path; byte-safe framing (`sysread`, never `$(...)`, because manifests are NUL-joined).
 - `x-file-manifest` UTI + `source_host` provenance; `clip::self_host` identity.
-
-**Consumes from:** pick (`pick::start`), terminal-mux (`mux::pick`/popup mechanics), utils (`notify`, `common.zsh`), system-services (the socat agent), shell (XDG vars).
+- **Live-peer pull verbs (6b)** — `pick-clipboard --peer-snapshot`: 0–2 JSON
+  lines on stdout, rc 0 always (empty output = nothing live / not-ssh /
+  bridge down): `{"kind":"text","regtype","timestamp","host","preview"}` and
+  `{"kind":"files","files_kind","timestamp","host","paths":[…]}`.
+  `pick-clipboard --pull-live text|files`: pull the peer's CURRENT clip onto
+  this machine (text = one trusted `clip.set{origin_host}`; files = persist +
+  `copy_files_by_id`), rc ≠ 0 = nothing pulled, one-line reason on stderr.
+  Consumed by hammerspoon's GUI clipboard picker via `hs.task zsh -lc`.
+  **Skew:** additive — the verbs exit before any interactive setup; the Lua
+  caller and this CLI ship in the same `chezmoi apply`, and a not-yet-reloaded
+  HS simply never calls them. Keys may be added to the JSON, never repurposed;
+  unknown keys are ignored by consumers. The wire side is unchanged RECOB ops
+  (`clip.get`/`files.list`), so an older peer daemon already serves them.
 
 **Entry points:** `docs/clipboard-universal-project.md`, `lib/clipboard-store-core.zsh`, `libexec/clipboard-bridge-dispatch`, `bin/pbcopy`.
 
@@ -166,7 +177,7 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
 - **keybinding tree shape** (`modules/keybindings/init.lua` `kb.setup{...}`) — numeric actions = macOS symbolic hotkeys managed via `system_shortcuts.lua` plist diffing.
 - **media-key interception** (`lifecycle.lua` `systemDefined` eventtap) — routes SOUND/BRIGHTNESS to controls.
 
-**Consumes from:** custom-builds (symbols.db for `glyph:` icons), shell/utils (`notify` senders, the `~/.local/state/jobs/` state dir `lib/job.zsh` writes), external apps via URL schemes.
+**Consumes from:** custom-builds (symbols.db for `glyph:` icons), shell/utils (`notify` senders, the `~/.local/state/jobs/` state dir `lib/job.zsh` writes), clipboard (`pick-clipboard --restore-id` for gated files rows, and the 6b live-peer pull verbs `--peer-snapshot`/`--pull-live` — see clipboard's contract block), external apps via URL schemes.
 
 **Entry points:** `init.lua`, `modules/keybindings/`, `modules/streamdeck/`, `modules/osd/`.
 
