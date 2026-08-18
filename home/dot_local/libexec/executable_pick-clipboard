@@ -159,24 +159,31 @@ remote_when="source_host IS NOT NULL AND source_host <> '$MY_HOST'"
 # LIVE_TEXT_FILE non-empty => a live entry is available; its bytes are the exact
 # peer clipboard text (reused verbatim at accept time — no second fetch). live_row_file
 # holds the pre-rendered picker line, emitted at the top by emit_rows/emit_script.
+# LIVE_REGTYPE is the regtype captured HERE, at open, and reused verbatim by
+# clip::copy_live/clip::materialize_live at accept time -- no extra clip.get.
+# SNAPSHOT_JSON is the raw peer_snapshot output (0-2 JSON lines): Task 3's
+# files candidate reads it from here without a second bridge round-trip.
 LIVE_TEXT_FILE=""
 LIVE_HOST=""
+LIVE_REGTYPE="v"
+LIVE_TS=""
 live_row_file=""
+SNAPSHOT_JSON=""
 if (( bridge_up )); then
   _lt=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-live.XXXXXX")
-  if clipbridge::clip_get_raw text > "$_lt" 2>/dev/null && [[ -s "$_lt" ]] &&
-     grep -q '[^[:space:]]' "$_lt"; then          # empty/whitespace guard (§22.2)
-    LIVE_HOST=$(clipbridge::clip_get_raw host 2>/dev/null)
-    [[ -n "$LIVE_HOST" ]] || LIVE_HOST="peer"
-    # Dedup (§22.5, revised for §23): suppress the live entry when its text is
-    # already in the store — compared trailing-newline-insensitively and
-    # regardless of source_host. Two reasons the old (peerhost, type_hash) key
-    # misses: (1) a trailing newline is not identity — the old G op even
-    # stripped it outright, so a stored copy and its live twin can differ by
-    # exactly that byte; (2) a remote copy (§23) now stores the clip LOCALLY
-    # (source_host = this host, not the peer). rtrim(char(10)) on both sides
-    # drops the newline difference; no source_host filter covers any origin;
-    # readfile keeps the compare byte-safe for arbitrary text.
+  SNAPSHOT_JSON=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-snap.XXXXXX")
+  # One snapshot, two exchanges (6b): clip.get + files.list together, replacing
+  # the old three clip_get_raw round-trips (each was a full handshake). The
+  # whitespace guard (§22.2) now lives inside peer_snapshot itself.
+  clipbridge::peer_snapshot "$_lt" > "$SNAPSHOT_JSON" 2>/dev/null || :
+  _live_text_json=$(jq -c 'select(.kind == "text")' "$SNAPSHOT_JSON" 2>/dev/null | head -n1)
+  if [[ -n "$_live_text_json" && -s "$_lt" ]]; then
+    LIVE_HOST=$(jq -r '.host' <<<"$_live_text_json")
+    LIVE_REGTYPE=$(jq -r '.regtype' <<<"$_live_text_json")
+    [[ "$LIVE_REGTYPE" == (v|l|b) ]] || LIVE_REGTYPE=v
+    LIVE_TS=$(jq -r '.timestamp' <<<"$_live_text_json")
+    # Dedup (§22.5): unchanged — suppress when the text is already stored,
+    # compared trailing-newline-insensitively regardless of source_host.
     if [[ -z "$(sqlite3 "$DB_FILE" "SELECT 1 FROM clips WHERE rtrim(text_plain, char(10)) = rtrim(CAST(readfile('$_lt') AS TEXT), char(10)) LIMIT 1;" 2>/dev/null)" ]]; then
       LIVE_TEXT_FILE="$_lt"
     fi
@@ -184,21 +191,11 @@ if (( bridge_up )); then
   [[ -n "$LIVE_TEXT_FILE" ]] || rm -f "$_lt"
 fi
 
-# X9: the live row must sort chronologically by when the PEER's clipboard was
-# actually copied, not always float to the top. One more fast loopback round-
-# trip (clip.get's timestamp field) for the copy-time -- best-effort: on any
-# failure (bridge dropped between the text/host reads above and now, a
-# non-numeric reply, ...) fall back to
-# "now", which sorts the row at/near the top exactly like the old always-
-# pinned-to-top behavior, so a lookup failure never loses the row or
-# misplaces it below fresh local rows. live_ts_threshold feeds the ABOVE/
-# BELOW split in EMIT_SQL below; -1 (older than any real last_ts) when there
-# is no live row at all, so that split degrades to "everything in ABOVE,
-# nothing in BELOW" -- the plain original ordering.
-LIVE_TS=""
+# X9 (unchanged semantics): the live row sorts by the PEER's copy time;
+# non-numeric/missing falls back to "now" so a lookup failure never loses
+# the row. -1 = no live row = the original single-query ordering.
 live_ts_threshold=-1
 if [[ -n "$LIVE_TEXT_FILE" ]]; then
-  LIVE_TS="$(clipbridge::clip_get_raw timestamp 2>/dev/null)"
   [[ "$LIVE_TS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || LIVE_TS=$EPOCHREALTIME
   live_ts_threshold=$LIVE_TS
 fi
@@ -1161,8 +1158,7 @@ clip::deliver_live() {
 
 clip::copy_live() {
   [[ -n "$LIVE_TEXT_FILE" && -s "$LIVE_TEXT_FILE" ]] || return 0
-  local rt; rt=$(clipbridge::clip_get_raw regtype 2>/dev/null)
-  [[ "$rt" == (v|l|b) ]] || rt=v
+  local rt="$LIVE_REGTYPE"
   # bridge_up is a precondition of a live entry existing, so the copy target is
   # the machine I'm sitting at, over the reverse tunnel (clip.set = set +
   # record regtype; the text bytes ride stdin).
@@ -1172,8 +1168,7 @@ clip::copy_live() {
 
 clip::materialize_live() {
   [[ -n "$LIVE_TEXT_FILE" && -s "$LIVE_TEXT_FILE" ]] || return 0
-  local rt; rt=$(clipbridge::clip_get_raw regtype 2>/dev/null)
-  [[ "$rt" == (v|l|b) ]] || rt=v
+  local rt="$LIVE_REGTYPE"
   # store.persist.text{host, kind=text, app='', regtype} on THIS machine's own
   # bridge, over the trusted socket; the text bytes ride stdin.
   clipbridge::persist_text "$LIVE_HOST" text '' "$rt" < "$LIVE_TEXT_FILE"
@@ -1669,7 +1664,7 @@ emit_rows() {
 emit_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-emit.XXXXXX")
 del_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-del.XXXXXX")
 pin_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-pin.XXXXXX")
-trap 'rm -f -- "$emit_script" "$del_script" "$pin_script" "$preview_script" "$live_row_file" "$LIVE_TEXT_FILE"' EXIT INT TERM
+trap 'rm -f -- "$emit_script" "$del_script" "$pin_script" "$preview_script" "$live_row_file" "$LIVE_TEXT_FILE" "$SNAPSHOT_JSON"' EXIT INT TERM
 cat > "$emit_script" <<EOF
 #!/bin/sh
 # fzf sets FZF_COLUMNS to the fzf window width for --bind commands (including

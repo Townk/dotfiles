@@ -1131,6 +1131,68 @@ Describe 'pick-clipboard: live-peer row ordering (X9)'
     When call test "$n" -eq 2
     The status should be success
   End
+
+  # Task 2 (6b): the open-time live-row fetch now goes through
+  # clipbridge::peer_snapshot -- ONE clip.get + ONE files.list exchange --
+  # instead of three separate clip_get_raw(text)/clip_get_raw(host)/
+  # clip_get_raw(timestamp) round-trips (each a full connection+handshake).
+  # LIVE_REGTYPE is captured here too (from the snapshot's text candidate),
+  # so clip::copy_live/materialize_live never need a fourth fetch at accept
+  # time.
+  run_live_state() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      printf "regtype=%s|host=%s" "$LIVE_REGTYPE" "$LIVE_HOST"
+    '
+  }
+
+  It 'fetches the live entry with one clip.get and one files.list -- never per-field'
+    live_reply 200
+
+    When call run_live_state
+    The status should be success
+    The output should equal "regtype=v|host=peer-host"
+    ops="$(recob_ops | tr '\n' ',')"
+    The variable ops should equal "clip.get,files.list,"
+  End
+
+  # clip::copy_live/materialize_live must reuse LIVE_REGTYPE captured at
+  # open -- no extra clip.get for the regtype field at accept time.
+  # >/dev/null: clip::copy_live's own clip.set exchange prints the scripted
+  # reply's fields (this Describe's canned recob directive answers every
+  # exchange identically, clip.set included) -- irrelevant noise here, since
+  # the assertion below is about the recorded OP SEQUENCE, not this stdout.
+  run_copy_live() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::copy_live
+    ' >/dev/null
+  }
+
+  It 'clip::copy_live reuses the open-time regtype -- no extra clip.get'
+    live_reply 200
+
+    When call run_copy_live
+    The status should be success
+    ops="$(recob_ops | tr '\n' ',')"
+    The variable ops should equal "clip.get,files.list,clip.set,"
+  End
+
+  run_materialize_live() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::materialize_live
+    ' >/dev/null
+  }
+
+  It 'clip::materialize_live reuses the open-time regtype -- no extra clip.get'
+    live_reply 200
+
+    When call run_materialize_live
+    The status should be success
+    ops="$(recob_ops | tr '\n' ',')"
+    The variable ops should equal "clip.get,files.list,store.persist.text,"
+  End
 End
 
 # X8: a files/file/directory row's path was right-truncated
