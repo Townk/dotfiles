@@ -150,6 +150,52 @@ SH
     The stderr should include 'SHARE_RELAY_ENDPOINT'
   End
 
+  # --- the receive side's relay password (found by live test) ---------------
+  # The SEND path takes `pass` from the endpoint it sends through. The receive
+  # path starts from a pasted LINE, not an endpoint, so it had nothing to take
+  # it from and passed no CROC_PASS at all. Against a password-protected relay
+  # that produced `could not connect to <relay>: bad response: bad password` at
+  # the receiver while the sender sat happily connected — an asymmetry no unit
+  # test was looking for, because both halves were individually correct.
+  Describe 'receiving through a relay that has a password'
+    rx_setup() {
+      cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+{ printf 'argv:%s\n' "$*"; printf 'pass:%s\n' "${CROC_PASS-UNSET}"; } > "$SB_RX_LOG"
+SH
+      chmod +x "$SB/bin/croc"
+      SB_RX_LOG="$SB/rx.log"; export SB_RX_LOG
+      PATH="$SB/bin:$PATH"
+      TEST_RELAY_PASS='pw-from-the-secret-slot'; export TEST_RELAY_PASS
+    }
+
+    It 'supplies the password for a relay this machine owns'
+      rx_setup
+      share::_croc_receive 'aaaa-bbbb' 'lappy.example-tailnet.ts.net:9009' "$SB/out"
+      When call grep '^pass:' "$SB/rx.log"
+      The output should equal 'pass:pw-from-the-secret-slot'
+    End
+
+    # An address we do not recognise belongs to somebody else's relay; croc
+    # falls back to its own default rather than offering ours. Setting an empty
+    # CROC_PASS would be worse than setting none — croc reads a
+    # present-but-empty variable as set and would override its own default.
+    It 'sets no CROC_PASS for a relay it does not recognise'
+      rx_setup
+      share::_croc_receive 'aaaa-bbbb' 'someone-else.example.com:9009' "$SB/out"
+      When call grep '^pass:' "$SB/rx.log"
+      The output should equal 'pass:UNSET'
+    End
+
+    It 'never puts the relay password on croc'"'"'s argv'
+      rx_setup
+      share::_croc_receive 'aaaa-bbbb' 'lappy.example-tailnet.ts.net:9009' "$SB/out"
+      When call grep '^argv:' "$SB/rx.log"
+      The output should not include 'pw-from-the-secret-slot'
+      The output should not include '--pass'
+    End
+  End
+
   # --- the service gate -----------------------------------------------------
   # The relay is a launchd SERVICE, not a job:: task: a live transfer waits up
   # to 24h for its recipient and re-arms against the same relay the whole time,

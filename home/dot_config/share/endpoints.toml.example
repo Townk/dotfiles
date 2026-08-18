@@ -64,10 +64,25 @@
 #                multicast and `--local` forbids every non-LAN path, so no
 #                relay is needed and nothing egresses.
 #   pass         relay password; "@secret:NAME" reads the exported secret slot.
-#                NOTE: resolved by the process that STARTS the send and handed
-#                to the job through a mode-0600 file — it is not inherited
-#                from the environment, which the job runner now strips of
-#                credential-named variables.
+#                Resolved by the process that STARTS the send and handed to the
+#                job through a mode-0600 file — not inherited from the
+#                environment, which the job runner strips of credential-named
+#                variables.
+#
+#                *** A RELAY THAT SETS `pass` CAN ONLY SERVE YOUR OWN MACHINES. ***
+#                croc's relay password is needed by BOTH peers. `share get`
+#                supplies it automatically when the pasted address matches a
+#                relay in THIS manifest — i.e. your own — but a third party has
+#                no such file and cannot know it. Found the hard way in live
+#                testing: the sender connected happily while the recipient got
+#                "bad response: bad password".
+#
+#                So: a relay meant for colleagues must leave `pass` UNSET and
+#                rely on croc's default. Nothing is weakened by that — the file
+#                is end-to-end encrypted under the 80-bit code phrase, and the
+#                relay only ever sees ciphertext. The password protects your
+#                BANDWIDTH from strangers, not your file, and a relay reachable
+#                only from a tailnet or LAN has little bandwidth to steal.
 #
 # rclone backend:
 #   remote       an rclone "remote:path" (configure it with `rclone config`)

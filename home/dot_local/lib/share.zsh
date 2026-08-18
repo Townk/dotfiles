@@ -691,6 +691,39 @@ share::classify() {
   fi
 }
 
+# share::relay_pass_for <relay-address> — the relay password for an address
+# THIS machine already knows about, or empty.
+#
+# Found by live test, and it is a genuine asymmetry rather than an oversight
+# waiting to happen: the SEND path takes `pass` from the endpoint it is sending
+# through, while the receive path had nothing to take it from — it starts with
+# a pasted line, not an endpoint. Against a password-protected relay that gave
+# `bad response: bad password` at the receiver while the sender sat happily
+# connected.
+#
+# Matching on the RESOLVED address (not the endpoint name) is what makes this
+# work: the recipient pastes an address, and only an address can be compared.
+# When it matches one of our own endpoints, the receive is from our own relay
+# and the password is ours to supply. An address we do not recognise gets
+# nothing, and croc falls back to its own default.
+#
+# NOTE THE LIMIT, because it shapes how a relay should be configured: a THIRD
+# PARTY has no such manifest. A relay that sets `pass` can therefore only ever
+# serve machines that share this config — see endpoints.toml.example.
+share::relay_pass_for() {
+  local addr="${1-}" name
+  [[ -n "$addr" ]] || return 0
+  local -a names
+  names=("${(@f)$(share::endpoint_names 2>/dev/null)}") || return 0
+  for name in "${names[@]}"; do
+    [[ -n "$name" ]] || continue
+    [[ "$(share::relay_address "$name" 2>/dev/null)" == "$addr" ]] || continue
+    share::croc_pass "$name"
+    return 0
+  done
+  return 0
+}
+
 # share::_croc_receive <code> <relay> <out> — the one place a receive runs.
 #
 # The phrase goes through CROC_SECRET rather than croc's argv. The spec permits
@@ -706,7 +739,15 @@ share::_croc_receive() {
   local -a cmd=(croc --ignore-stdin --disable-clipboard)
   [[ -n "$relay" ]] && cmd+=(--relay "$relay")
   cmd+=(--yes --out "$out")
-  CROC_SECRET="$code" "${cmd[@]}"
+
+  # Both secrets ride the environment, never argv, and each is set only when it
+  # has a value — a present-but-empty CROC_PASS overrides croc's own default
+  # passphrase with "", which breaks the handshake against every relay that
+  # relies on that default.
+  local pass; pass="$(share::relay_pass_for "$relay")"
+  local -a envp=("CROC_SECRET=$code")
+  [[ -n "$pass" ]] && envp+=("CROC_PASS=$pass")
+  env "${envp[@]}" "${cmd[@]}"
 }
 
 # share::get_background <code> <relay> <out> — receive under job::.
