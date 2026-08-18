@@ -98,3 +98,89 @@ Describe 'atuin config.toml.tmpl (human profiles)'
     The output should include "records = true"
   End
 End
+
+Describe 'zshrc atuin sync gate'
+  SRC="$SHELLSPEC_PROJECT_ROOT/home"
+
+  setup() {
+    CZTMP="$(mktemp -d "$SHELLSPEC_TMPBASE/atuin-zshrc.XXXXXX")"
+    mkdir -p "$CZTMP/dest"
+    unset CHEZMOI_PROFILE
+  }
+  BeforeEach 'setup'
+
+  render_for() {
+    {
+      printf '[data]\n'
+      printf '    profile = "%s"\n' "$1"
+      printf '    secretsSlot = ""\n'
+      printf '    [data.pi]\n'
+      printf '        [data.pi.devExtensions]\n'
+      printf '            pi-cockpit = ""\n'
+      printf '            pi-plannotator-bridge = ""\n'
+    } > "$CZTMP/chezmoi.toml"
+    chezmoi --config "$CZTMP/chezmoi.toml" --source "$SRC" \
+      --destination "$CZTMP/dest" execute-template < "$SRC/$2"
+  }
+
+  # The gate must exist AND run before `atuin init` in the zsh-defer FIFO —
+  # print the line numbers of both and compare.
+  gate_ordering() {
+    rendered="$(render_for "$1" dot_config/zsh/dot_zshrc.tmpl)"
+    gate_line="$(printf '%s\n' "$rendered" | grep -n 'ATUIN_AUTO_SYNC=false' | head -1 | cut -d: -f1)"
+    init_line="$(printf '%s\n' "$rendered" | grep -n 'atuin init zsh' | head -1 | cut -d: -f1)"
+    [ -n "$gate_line" ] && [ -n "$init_line" ] && [ "$gate_line" -lt "$init_line" ] && echo ordered
+  }
+  Parameters
+    personal
+    work
+  End
+  It "gates before atuin init for $1"
+    When call gate_ordering "$1"
+    The output should equal "ordered"
+  End
+End
+
+Describe 'zshrc atuin sync gate (headless profiles get none)'
+  SRC="$SHELLSPEC_PROJECT_ROOT/home"
+
+  setup() {
+    CZTMP="$(mktemp -d "$SHELLSPEC_TMPBASE/atuin-zshrc.XXXXXX")"
+    mkdir -p "$CZTMP/dest"
+    unset CHEZMOI_PROFILE
+  }
+  BeforeEach 'setup'
+
+  render_for() {
+    {
+      printf '[data]\n'
+      printf '    profile = "%s"\n' "$1"
+      printf '    secretsSlot = ""\n'
+      printf '    [data.pi]\n'
+      printf '        [data.pi.devExtensions]\n'
+      printf '            pi-cockpit = ""\n'
+      printf '            pi-plannotator-bridge = ""\n'
+    } > "$CZTMP/chezmoi.toml"
+    chezmoi --config "$CZTMP/chezmoi.toml" --source "$SRC" \
+      --destination "$CZTMP/dest" execute-template < "$SRC/$2"
+  }
+
+  # Anchored to the assignment (`ATUIN_AUTO_SYNC=`), not a bare substring:
+  # the always-rendered FIFO order comment above the gate names
+  # ATUIN_AUTO_SYNC in prose ("...exports ATUIN_AUTO_SYNC first") on every
+  # profile including headless ones, which would false-positive a plain
+  # 'ATUIN_AUTO_SYNC' grep here.
+  no_gate() {
+    render_for "$1" dot_config/zsh/dot_zshrc.tmpl | grep 'ATUIN_AUTO_SYNC='
+  }
+
+  Parameters
+    dev-shell
+    server
+  End
+  It "renders no gate for headless profile $1 (config file is the off switch)"
+    When call no_gate "$1"
+    The status should be failure
+    The output should equal ""
+  End
+End

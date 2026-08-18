@@ -47,6 +47,7 @@ cz() { chezmoi --config "$CFG" --source "$SRC" --destination "$OUT/dest" "$@"; }
 TEMPLATES=(
   dot_config/ai-playbook/config.toml.tmpl
   dot_config/atuin/config.toml.tmpl
+  dot_config/zsh/dot_zshrc.tmpl
   dot_config/git/config.tmpl
   dot_config/mise/conf.d/rclone.toml.tmpl
   dot_config/mise/conf.d/dev-shell.toml.tmpl

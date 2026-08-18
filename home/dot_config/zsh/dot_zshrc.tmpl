@@ -305,13 +305,24 @@ source "$ZSH_PLUGIN_DIR/powerlevel10k/powerlevel10k.zsh-theme"
 #   2. zsh-autosuggestions                            → before syntax-highlighting
 #   3. zsh-syntax-highlighting                        → after autosuggestions
 #   4. zsh-history-substring-search                   → MUST be after syntax-highlighting
-#   5. tool init (atuin/zoxide/wezterm)               → defines atuin widget
-#   6. keybindings                                    → binds widgets from all of the above
+#   5. atuin sync gate (non-headless only)            → exports ATUIN_AUTO_SYNC first
+#   6. tool init (atuin/zoxide/wezterm)               → defines atuin widget
+#   7. keybindings                                    → binds widgets from all of the above
 zsh-defer source ~/.config/zsh/completion.sh
 zsh-defer source "$ZSH_PLUGIN_DIR/zsh-autosuggestions/zsh-autosuggestions.zsh"
 zsh-defer source "$ZSH_PLUGIN_DIR/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
 zsh-defer source "$ZSH_PLUGIN_DIR/zsh-history-substring-search/zsh-history-substring-search.zsh"
 
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson }}
+{{- if not $traits.headless }}
+# Atuin reachability gate (spec: docs/superpowers/specs/2026-08-17-atuin-homelab-sync-design.md).
+# Sync only when the homelab server answers this shell; fail closed when the
+# ATUIN_SYNC_ADDRESS secret is missing so a half-onboarded machine can never
+# fall back to the public Atuin Hub. Works because config.toml deliberately
+# omits auto_sync (the config file would beat this env var). Connect-result
+# probe, not nc -z — the clipboard-bridge lesson.
+zsh-defer eval 'if [[ -z ${ATUIN_SYNC_ADDRESS:-} ]] || ! curl -fsS --connect-timeout 0.4 --max-time 1 "$ATUIN_SYNC_ADDRESS" >/dev/null 2>&1; then export ATUIN_AUTO_SYNC=false; fi'
+{{- end }}
 zsh-defer eval 'command -v atuin   >/dev/null && eval "$(atuin init zsh)"'
 zsh-defer eval 'command -v zoxide  >/dev/null && eval "$(zoxide init zsh)"'
 zsh-defer eval 'command -v wezterm >/dev/null && eval "$(wezterm shell-completion --shell zsh)"'
