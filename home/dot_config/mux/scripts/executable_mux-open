@@ -66,7 +66,10 @@ _wait_alt_release() {
   # failure, a slow link beats no link.
   source "$HOME/.local/lib/common.zsh" 2>/dev/null
   (( ${+functions[poll::until]} )) || { sleep 0.4; return 0 }
-  _alt_released() { [[ "$(hs -c 'hs.eventtap.checkKeyboardModifiers().alt' 2>/dev/null)" != true ]] }
+  # -q, always: without it hs.ipc mirrors console output into the reply, and
+  # Hammerspoon 1.1.1's mirror recurses if anything prints mid-request —
+  # wedging the instance ("already recursing, refusing request" cascade).
+  _alt_released() { [[ "$(hs -q -c 'hs.eventtap.checkKeyboardModifiers().alt' 2>/dev/null)" != true ]] }
   poll::until 1 0.025 _alt_released
   return 0
 }

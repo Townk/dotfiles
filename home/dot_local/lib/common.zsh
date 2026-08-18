@@ -907,12 +907,20 @@ notify() {
   # Hammerspoon (it's not running, or we're in a different launch context), and
   # its own `-t` timeout does not bound that wait. Cap it with timeout(1) so a
   # stuck lookup can never wedge the caller; on its own this stays synchronous.
+  # -q on EVERY hs CLI call (the clipboard snappiness rule): Hammerspoon
+  # 1.1.1's hs.ipc console mirror has an upstream recursion bug — a print
+  # landing while a mirrored CLI request is active wedges the instance
+  # into "already recursing", every later request is refused WITH a
+  # console warning, and laying those out blocks the main thread/event
+  # taps (live 2026-08-17: the GUI picker's DOWN key stalled 2-3s under
+  # hundreds of cascade warnings). notify is the most frequent CLI caller
+  # in the system, so it must never open a mirrored request.
   if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout 5 "$hs" -t 4 -c "$cmd"
+    gtimeout 5 "$hs" -q -t 4 -c "$cmd"
   elif command -v timeout >/dev/null 2>&1; then
-    timeout 5 "$hs" -t 4 -c "$cmd"
+    timeout 5 "$hs" -q -t 4 -c "$cmd"
   else
-    "$hs" -t 4 -c "$cmd"
+    "$hs" -q -t 4 -c "$cmd"
   fi
 }
 

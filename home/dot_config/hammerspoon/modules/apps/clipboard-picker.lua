@@ -721,11 +721,21 @@ local function headless_restore(id, onDone)
   local task
   task = hs.task.new("/bin/zsh", function(exitCode, stdOut, stdErr)
     local ok = (exitCode == 0)
-    -- Always printed to the HS console so the enqueue result is
-    -- retrievable after the fact (the job id on success).
-    print(string.format(
-      "clipboard-picker: headless restore enqueue id=%d exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
-      intId, tostring(exitCode), stdOut or "", stdErr or ""))
+    -- ONE short line on success (the job id), the full dump only on
+    -- failure: console prints are not free — hs.ipc 1.1.1's mirror bug
+    -- turns a print landing during an active CLI request into a
+    -- main-thread-blocking warning cascade (the GUI picker's 2-3s key
+    -- stalls, live 2026-08-17), and a multi-line blob printed from this
+    -- task callback was a prime collision trigger.
+    if ok then
+      print(string.format(
+        "clipboard-picker: headless restore enqueued id=%d job=%s",
+        intId, (stdOut or ""):match("[^\n]*") or ""))
+    else
+      print(string.format(
+        "clipboard-picker: headless restore enqueue id=%d exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
+        intId, tostring(exitCode), stdOut or "", stdErr or ""))
+    end
     if not ok then
       local reason = last_line(stdErr) or "could not enqueue the restore"
       -- The can't-miss immediate signal + the durable NC item (Focus can
