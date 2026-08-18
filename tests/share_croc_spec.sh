@@ -49,7 +49,7 @@ TOML
     # is present is what catches that class of bug; the flag-only assertions
     # above do not.
     The output should include "$SB/Report.pdf"
-    The lines of output should equal 11
+    The lines of output should equal 12   # +1 for --ignore-stdin
   End
 
   # F5 fix: the relay PASSWORD never rides argv — a self-hosted endpoint's
@@ -80,6 +80,15 @@ TOML
     # defined". Assert it precedes the subcommand, not merely that it appears.
     before_send() { share::croc_argv lan live '' '' "$SB/Report.pdf" | awk '/^send$/{exit} /^--local$/{print "yes"}'; }
     When call before_send
+    The output should equal 'yes'
+  End
+
+  It 'always passes --ignore-stdin, before the subcommand'
+    # Without it, a send with no tty (pueue, yazi, the picker) has croc treat
+    # its piped stdin as the payload; stored mode then refuses outright.
+    # Reproduced live via `share --background`. Position matters: it is global.
+    ignore_before_send() { share::croc_argv drop store 3d 1 "$SB/Report.pdf" | awk '/^send$/{exit} /^--ignore-stdin$/{print "yes"}'; }
+    When call ignore_before_send
     The output should equal 'yes'
   End
 

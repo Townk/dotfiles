@@ -94,6 +94,13 @@ share::croc_argv() {
   relay="$(share::field "$endpoint" relay)"
 
   local -a cmd=(croc)
+  # --ignore-stdin unconditionally: share ALWAYS names explicit paths, so croc
+  # must never treat its stdin as the payload. Under pueue (share --background)
+  # and from any face with no tty, stdin is a pipe, croc reads that as piped
+  # input, and stored mode then refuses it outright:
+  #   "stored mode does not accept stdin; pass regular file paths"
+  # That broke every backgrounded send. Global flag: precedes the subcommand.
+  cmd+=(--ignore-stdin)
   [[ -n "$relay" ]] && cmd+=(--relay "$relay")
   # local_only: croc's --local forbids every non-LAN path. Without it croc
   # silently falls back to its DEFAULT PUBLIC relay (croc.schollz.com) when
