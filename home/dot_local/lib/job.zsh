@@ -44,6 +44,51 @@ job::_ensure_group() {
   return 0
 }
 
+# job::_scrub_env_names — print the name of every exported variable that looks
+# like a credential, one per line, for `env -u` to strip before `pueue add`.
+#
+# WHY THIS EXISTS: pueued snapshots the ENTIRE client environment into its
+# state file (macOS: ~/Library/Application Support/pueue/state.json), VALUES
+# INCLUDED, and keeps it for the life of the task record — which outlives the
+# job, lands in backups, and is readable by anything running as this user with
+# no keychain or 1Password prompt. There is no pueue flag or config key to
+# disable that; verified against pueue 4.0.4, whose `add` surface has no env
+# option at all. The client's environment at add time is therefore the only
+# place the leak can be stopped, and this is that place.
+#
+# DENY by name pattern rather than allowlist: job:: is generic infrastructure
+# and an allowlist would silently starve consumers of environment they need,
+# failing in ways that surface far from here.
+#
+# The keep-list is not decoration. SSH_AUTH_SOCK is the agent socket PATH, the
+# *_ASKPASS entries are helper-script paths, and SECURITYSESSIONID is the
+# macOS session id keychain access needs — all read as credential-ish, none is
+# a credential, and a job that signs, pushes, sudos or reads the keychain
+# breaks without them. It is listed first so it wins over any later pattern.
+job::_scrub_env_names() {
+  setopt localoptions extendedglob
+  local v n
+  for v in ${(k)parameters}; do
+    [[ ${(Pt)v} == *export* ]] || continue
+    n=${v:u}
+    case "$n" in
+      SSH_AUTH_SOCK | SSH_ASKPASS | SSH_ASKPASS_REQUIRE | SUDO_ASKPASS \
+        | GIT_ASKPASS | SECURITYSESSIONID) continue ;;
+    esac
+    # `*_PASS*` and not `*PASS*`: the latter also matches every *_ASKPASS
+    # helper above. `*_PAT` is end-anchored for the same class of reason — an
+    # unanchored `_PAT` matches __MISE_ORIG_PATH, and losing that breaks
+    # mise's PATH restoration inside the job.
+    case "$n" in
+      *TOKEN* | *SECRET* | *_PASS* | *PASSWORD* | *PASSWD* | *PASSPHRASE* \
+        | *API_KEY* | *APIKEY* | *ACCESS_KEY* | *PRIVATE_KEY* \
+        | *CREDENTIAL* | *_PAT)
+        print -r -- "$v"
+        ;;
+    esac
+  done
+}
+
 # job::start [--group G] [--title T] [--icon SPEC] [--no-progress] -- cmd…
 # Enqueue a job; print its id on stdout. The command is passed to pueue as
 # ONE sh-quoted string with JOB_ID/JOB_STATE_ROOT prepended inline — pueue
@@ -99,8 +144,16 @@ job::start() {
 
   job::_ensure_group "$pueue" "$group"
   local cmdline="JOB_ID=${(q)id} JOB_STATE_ROOT=${(q)JOB_STATE_ROOT} ${(j: :)${(q)@}}"
+  # Strip credentials from the environment pueue is about to snapshot to disk
+  # (see job::_scrub_env_names). Names only cross the subshell boundary here,
+  # never values. An empty array is fine: `env cmd…` is just `cmd…`.
+  local -a scrub=()
+  local scrub_name
+  for scrub_name in ${(f)"$(job::_scrub_env_names)"}; do
+    [[ -n "$scrub_name" ]] && scrub+=(-u "$scrub_name")
+  done
   local task_id
-  if ! task_id=$("$pueue" add --group "$group" --label "job:$id" \
+  if ! task_id=$(env "${scrub[@]}" "$pueue" add --group "$group" --label "job:$id" \
     --print-task-id -- "$cmdline"); then
     rm -rf -- "$dir"
     die "job::start: pueued unreachable — start it with: system-service start pueued"

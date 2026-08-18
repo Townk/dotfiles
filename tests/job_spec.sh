@@ -275,6 +275,71 @@ EOF
     End
   End
 
+  # pueued snapshots the pueue CLIENT's whole environment into its state file —
+  # values included, kept for the life of the task record, and swept up by
+  # backups. pueue 4.0.4 has no flag or config key to disable that, so
+  # job::start strips credentials before the client ever sees them. Both
+  # directions are asserted, because the failure modes are opposite and equally
+  # bad: a leaked credential, or a stripped SSH_AUTH_SOCK that silently breaks
+  # every job that signs, pushes, sudos, or reads the keychain.
+  Describe 'job::start — credential scrub'
+    scrub_env_dump() {
+      # A fake pueue that records its own ENVIRONMENT (names only), which is
+      # exactly what the real client would hand to pueued for persistence.
+      # job::_ensure_group calls this first and `add` last, so the dump left
+      # behind is the one from the add — the call the scrub wraps.
+      cat > "$JOB_SANDBOX/pueue-env" <<'FAKE'
+#!/bin/sh
+env | sed 's/=.*//' | sort > "$JOB_ENV_DUMP"
+case "$1" in add) echo 7 ;; esac
+exit 0
+FAKE
+      chmod +x "$JOB_SANDBOX/pueue-env"
+      export JOB_PUEUE_BIN="$JOB_SANDBOX/pueue-env"
+      export JOB_ENV_DUMP="$JOB_SANDBOX/envdump.txt"
+
+      export OP_SERVICE_ACCOUNT_TOKEN=sekrit
+      export BACKUP_REPO_PASSPHRASE=sekrit
+      export FLEET_AWS_SECRET_ACCESS_KEY=sekrit
+      export CONTEXT7_API_KEY=sekrit
+      export SHARE_LAB_PASS=sekrit
+      export EUFY_RTSP_PASSWORD=sekrit
+      export GITHUB_PAT=sekrit
+      # Credential-SHAPED, but paths and session ids the job needs.
+      export SSH_AUTH_SOCK=/tmp/agent.sock
+      export SSH_ASKPASS=/bin/true
+      export SUDO_ASKPASS=/bin/true
+      export GIT_ASKPASS=/bin/true
+      export SECURITYSESSIONID=186a5
+      # Would be lost to an unanchored `_PAT` pattern, breaking mise's PATH.
+      export __MISE_ORIG_PATH=/usr/bin
+
+      run_job job::start --title Scrub -- echo hi >/dev/null || return 1
+      [ -f "$JOB_ENV_DUMP" ] || return 2
+    }
+
+    It 'keeps every credential out of the environment pueue would persist'
+      leaked() {
+        scrub_env_dump || return $?
+        grep -x -E 'OP_SERVICE_ACCOUNT_TOKEN|BACKUP_REPO_PASSPHRASE|FLEET_AWS_SECRET_ACCESS_KEY|CONTEXT7_API_KEY|SHARE_LAB_PASS|EUFY_RTSP_PASSWORD|GITHUB_PAT' \
+          "$JOB_ENV_DUMP" | tr '\n' ' '
+      }
+      When call leaked
+      The output should equal ''
+      The status should be success
+    End
+
+    It 'keeps the credential-shaped variables jobs actually need'
+      survivors() {
+        scrub_env_dump || return $?
+        grep -c -x -E 'SSH_AUTH_SOCK|SSH_ASKPASS|SUDO_ASKPASS|GIT_ASKPASS|SECURITYSESSIONID|__MISE_ORIG_PATH' \
+          "$JOB_ENV_DUMP" | tr -d '\n '
+      }
+      When call survivors
+      The output should equal '6'
+    End
+  End
+
   Describe 'job::start --notify'
     It 'records the mode in meta.json (default all)'
       modes() {
