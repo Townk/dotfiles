@@ -77,11 +77,25 @@ TOML
     The output should include 'expires Aug 20'
   End
 
-  It 'renders the live template with a run command'
+  # The live line is the product (amendment D3): it gets pasted into a chat
+  # message, so it must serve `share get`, a croc-only recipient, and a human
+  # reading it, all at once. The retired template said "run: croc <phrase> ·
+  # I'm holding it open" and was printed AFTER croc exited — i.e. after the
+  # transfer it claimed to be holding open had closed.
+  It 'renders the live line as a runnable croc command'
+    When call share::blurb withweb live 'Report.pdf (4.2 MB)' \
+      '7-truck-mango-basil' '' ''
+    The output should equal 'Report.pdf (4.2 MB) — receive with:  croc 7-truck-mango-basil'
+  End
+
+  # A self-hosted relay MUST appear in the line. The phrase alone is enough
+  # only on croc's built-in relay and on a multicast LAN; for any other relay
+  # the recipient has no way to reach the sender and the transfer simply never
+  # happens. `noweb` carries relay = lab.example.com:9009.
+  It 'names a self-hosted relay in the live line, or the recipient cannot connect'
     When call share::blurb noweb live 'Report.pdf (4.2 MB)' \
       '7-truck-mango-basil' '' ''
-    The output should include 'run: croc 7-truck-mango-basil'
-    The output should include "I'm holding it open"
+    The output should equal 'Report.pdf (4.2 MB) — receive with:  croc --relay lab.example.com:9009 7-truck-mango-basil'
   End
 
   It 'always emits exactly one line'

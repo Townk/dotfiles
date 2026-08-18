@@ -20,6 +20,12 @@ web = true
 profiles = ["personal"]
 default_for = ["personal"]
 
+[lan]
+relay = ""
+local_only = true
+web = false
+profiles = ["personal"]
+
 [onedrive]
 backend = "rclone"
 remote = "onedrive:Shared/drop"
@@ -268,5 +274,38 @@ SH
     When run share::send --live --to onedrive "$SB/Report.pdf"
     The status should be failure
     The stderr should include 'no live mode'
+  End
+
+  # --- amendment D1/D2: live is the default, but never silently -------------
+  # `drop` is a STORE (croc-web on 9014, no TCP relay), so a live transfer
+  # "to drop" would fall back to croc's DEFAULT PUBLIC relay. On a work profile
+  # that is exactly the egress the policy fence exists to prevent, and it would
+  # happen with no flag and no prompt. The default therefore downgrades — and
+  # SAYS SO — rather than quietly reaching a third party's relay.
+  It 'downgrades the DEFAULT live mode to stored on a store-only endpoint, loudly'
+    SHARE_PROFILE=personal
+    When run share::send --to drop "$SB/Report.pdf"
+    The status should be success
+    The stderr should include 'cannot carry a live transfer'
+    The stderr should include 'sending stored instead'
+    The stdout should include 'drop.example.com/s/abc123'
+  End
+
+  # An EXPLICIT --live is a statement about how the file must travel, so the
+  # same situation must refuse instead of downgrading.
+  It 'refuses an EXPLICIT --live on the same store-only endpoint'
+    SHARE_PROFILE=personal
+    When run share::send --live --to drop "$SB/Report.pdf"
+    The status should be failure
+    The stderr should include 'cannot carry a live transfer'
+    The stdout should equal ''
+  End
+
+  # A LAN endpoint needs no relay at all — croc's multicast discovery is the
+  # rendezvous — so it IS live-capable and must not be downgraded.
+  It 'treats a local_only endpoint as live-capable'
+    SHARE_PROFILE=personal
+    When call share::live_capable lan
+    The status should be success
   End
 End

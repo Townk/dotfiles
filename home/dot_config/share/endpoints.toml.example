@@ -26,12 +26,37 @@
 #                empty one are both denials, never "open".
 #   default_for  profiles for which this is the default endpoint.
 #   message      per-endpoint blurb override. Substitutions: %name %url
-#                %token %code %expires %downloads %crocurl
+#                %token %code %expires %downloads %crocurl %relay
+#   live         true if this endpoint can carry a LIVE (peer-to-peer)
+#                transfer. Usually inferred and not worth setting: `relay` or
+#                `local_only` already imply it. Declare it only for an endpoint
+#                whose rendezvous is croc's OWN default public relay — the
+#                built-in `public` is the one such case.
+#
+#                Sending is LIVE by default, so this field is a safety fence,
+#                not a feature switch. An endpoint that is only a STORE (a
+#                croc-web instance serves its site, not a TCP relay) would
+#                otherwise fall back to croc's default public relay with no
+#                flag and no prompt — on a work profile, exactly the egress
+#                the `profiles` allowlist exists to prevent. Endpoints that
+#                cannot carry live say so, and a default live send downgrades
+#                to stored with a warning. An explicit --live refuses instead.
 #
 # croc backend:
 #   store        HTTPS origin of a croc-web store
-#   relay        host:port for live (code-phrase) transfers
-#   pass         relay password; "@secret:NAME" reads the exported secret slot
+#   relay        host:port for live (code-phrase) transfers. It is published
+#                in the pasteable line handed to the recipient — the phrase
+#                alone only suffices on croc's built-in relay and on a
+#                multicast LAN — so an internal address in this field ends up
+#                in whatever chat message carries the share.
+#   local_only   true for LAN-only live transfers: croc discovers the peer by
+#                multicast and `--local` forbids every non-LAN path, so no
+#                relay is needed and nothing egresses.
+#   pass         relay password; "@secret:NAME" reads the exported secret slot.
+#                NOTE: resolved by the process that STARTS the send and handed
+#                to the job through a mode-0600 file — it is not inherited
+#                from the environment, which the job runner now strips of
+#                credential-named variables.
 #
 # rclone backend:
 #   remote       an rclone "remote:path" (configure it with `rclone config`)

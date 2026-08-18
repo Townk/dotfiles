@@ -17,9 +17,13 @@ Describe 'share:: background sends'
     SHARE_STATE_DIR="$SB/state"
     JOB_STATE_ROOT="$SB/jobs"
     SHARE_PROFILE=personal
-    printf '[drop]\nstore = "https://d.example.com"\nweb = true\nprofiles = ["personal"]\ndefault_for = ["personal"]\n' \
+    printf '[drop]\nstore = "https://d.example.com"\nweb = true\nprofiles = ["personal"]\ndefault_for = ["personal"]\n[lan]\nrelay = ""\nlocal_only = true\nweb = false\nprofiles = ["personal"]\n' \
       >"$SHARE_ENDPOINTS_FILE"
     printf 'x' >"$SB/Report.pdf"
+    # Secret files land in the sandbox, not the real state dir: these examples
+    # mint live phrases, and without this they leave 0600 files behind in
+    # ~/.local/state/share/live on the dev machine (they did — 44 of them).
+    SHARE_LIVE_DIR="$SB/live"; export SHARE_LIVE_DIR
     cat >"$SB/fakepueue" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_PUEUE_CALLS"
@@ -43,6 +47,18 @@ exit 0
 SH
     chmod +x "$SB/bin/tmux"
     JOB_TMUX_BIN="$SB/bin/tmux"
+
+    # A fake pbcopy, and PATH ahead of the real one — same house rule as the
+    # tmux stub above and for the same reason: share::clip now runs pbcopy on
+    # every send, and on a dev machine that is the USER'S clipboard. It also
+    # gives the live examples below something to assert against.
+    cat >"$SB/bin/pbcopy" <<'SH'
+#!/bin/sh
+cat >"$SHARE_FAKE_CLIP"
+SH
+    chmod +x "$SB/bin/pbcopy"
+    SHARE_FAKE_CLIP="$SB/clip.txt"; export SHARE_FAKE_CLIP
+    PATH="$SB/bin:$PATH"
   }
   BeforeEach 'setup'
 
@@ -77,7 +93,7 @@ SH
   End
 
   It 'enqueues the send into the share group'
-    share::send_background "$SB/Report.pdf" >/dev/null
+    share::send_background --store "$SB/Report.pdf" >/dev/null
     When call cat "$SB/pueue-calls"
     The output should include 'group add share'
   End
@@ -90,7 +106,7 @@ SH
   # .title field, keyed off the id share::send_background prints.
   job_meta_title() {
     local id
-    id="$(share::send_background "$SB/Report.pdf")" || return 1
+    id="$(share::send_background --store "$SB/Report.pdf")" || return 1
     jq -r '.title' "$JOB_STATE_ROOT/$id/meta.json"
   }
 
@@ -100,14 +116,72 @@ SH
   End
 
   It 'prints the job id so a caller can wait on it'
-    When call share::send_background "$SB/Report.pdf"
+    When call share::send_background --store "$SB/Report.pdf"
     The output should not equal ''
   End
 
   It 'creates the job state directory the HUD watches'
-    share::send_background "$SB/Report.pdf" >/dev/null
+    share::send_background --store "$SB/Report.pdf" >/dev/null
     When call test -d "$JOB_STATE_ROOT"
     The status should be success
+  End
+
+  # --- the live path: hand over the line, THEN enqueue ---------------------
+  # This ordering is the entire point of the amendment. A backgrounded live
+  # send must give the human something pasteable the instant the command
+  # returns; letting the job mint the phrase would mean the line appears
+  # whenever pueue happens to start the task, which is exactly the "too late
+  # to be useful" failure the retired live template shipped with.
+
+  It 'hands over the pasteable line before the job is even enqueued'
+    When call share::send_background --to lan "$SB/Report.pdf"
+    The stderr should include 'receive with:  croc'
+    The output should not equal ''
+  End
+
+  # stdout is the JOB ID and nothing else. Regression: emit_live_blurb first
+  # printed to stdout, so the CLI's `id="$(share::send_background …)"`
+  # swallowed the pasteable line into the id variable and the human got
+  # neither a usable id nor the line.
+  It 'keeps the job id alone on stdout so the CLI can capture it'
+    When call share::send_background --to lan "$SB/Report.pdf"
+    The output should match pattern '*-*'
+    The stderr should include 'receive with'
+  End
+
+  It 'puts the pasteable line on the clipboard'
+    share::send_background --to lan "$SB/Report.pdf" >/dev/null 2>&1
+    When call cat "$SB/clip.txt"
+    The output should include 'receive with:  croc'
+    The lines of output should equal 1
+  End
+
+  It 'carries the phrase to the job through a secret file, never on the command line'
+    share::send_background --to lan "$SB/Report.pdf" >/dev/null 2>&1
+    phrase_off_argv() {
+      local code
+      code="$(awk '{print $NF}' "$SB/clip.txt")"
+      [ -n "$code" ] || return 1
+      # The enqueued command names a --secret-file and NEVER the phrase itself:
+      # pueue records its client's whole command line into state.json (and,
+      # before commit 7e72661c, its whole environment too).
+      grep -q -- '--secret-file' "$SB/pueue-calls" || return 1
+      grep -q -- "$code" "$SB/pueue-calls" && return 1
+      return 0
+    }
+    When call phrase_off_argv
+    The status should be success
+  End
+
+  # An explicit --live is a statement about how the file must travel, so a
+  # silent downgrade would be worse than a refusal — and it must refuse BEFORE
+  # enqueuing, or the error surfaces as a failure toast minutes later instead
+  # of immediately.
+  It 'refuses an explicit --live to a store-only endpoint without enqueuing'
+    When run share::send_background --live --to drop "$SB/Report.pdf"
+    The status should be failure
+    The stderr should include 'cannot carry a live transfer'
+    The stdout should equal ''
   End
 
   It 'passes --modal through when asked to watch'

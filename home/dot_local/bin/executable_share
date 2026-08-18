@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # share — hand a file to another person, asynchronously.
 #
-#   share <file>...                    upload and print a link (stored mode)
+#   share <file>...                    hold it open live, print a pasteable line
 #   share send [opts] <file>...        the same, explicitly
 #   share get [<url|token|code>]       receive; no argument reads the clipboard
 #   share list                         receipts, newest first
@@ -37,18 +37,26 @@ Usage:
   share revoke <id>                  kill a link and forget the receipt
   share endpoints                    endpoints this profile may use
 
+Sending is LIVE and in the BACKGROUND by default: the pasteable line is
+printed and copied straight away, and the transfer waits for the recipient.
+
 Send options:
   --to <endpoint>       override the profile default
-  --live                hold a peer-to-peer transfer open instead of storing
-  --expiration <spec>   90m, 12h, 3d, 2w   (default: 3d)
-  --downloads <n>       verified downloads allowed (default: 1)
-  --background          enqueue as a job:: job and return immediately
+  --store               upload and park it instead of holding a transfer open
+                         (for a recipient who will not be around today; 2 GiB
+                         ceiling, and the bytes sit on a server until fetched)
+  --live                hold a peer-to-peer transfer open (the default)
+  --foreground          run the transfer here instead of under job::
+  --expiration <spec>   90m, 12h, 3d, 2w   (default: 3d, --store only)
+  --downloads <n>       verified downloads allowed (default: 1, --store only)
+  --background          enqueue as a job:: job (the default)
   --watch               enqueue and open the job dashboard on it (implies
                          --background; needs the troupe binary)
   --force               use an endpoint this profile is not allowed to use
 
 Get options:
   --out <dir>           where to write (default: ~/Downloads)
+  --foreground          receive here instead of under job::
   --allow-argv          accept a stored link on the command line, exposing its
                          key in the process list
 EOF
@@ -90,10 +98,11 @@ peek_to_endpoint() {
   while (( i <= n )); do
     case "${args[i]}" in
       --to)         printf '%s\n' "${args[i+1]:-}"; return 0 ;;
-      --expiration) (( i += 1 )) ;;
-      --downloads)  (( i += 1 )) ;;
-      --)           return 1 ;;
-      --live | -*)  ;;
+      --expiration)   (( i += 1 )) ;;
+      --downloads)    (( i += 1 )) ;;
+      --secret-file)  (( i += 1 )) ;;
+      --)             return 1 ;;
+      --live | --store | -*) ;;
       *)            return 1 ;;
     esac
     (( i += 1 ))
@@ -146,7 +155,12 @@ dispatch_send() {
   # consistent with the "not a scan for a buried help flag" rule above.
   if is_help "${1:-}"; then usage; return 0; fi
   local -a rest=()
-  local background=0 watch=0 force=0
+  local watch=0 force=0
+  # -1 = the caller expressed no preference. Backgrounding is now the DEFAULT
+  # (amendment D1), so the three states have to stay distinguishable: an
+  # explicit --background deserves a warning when the job runner is missing,
+  # while the default silently running in the foreground does not.
+  local -i background=-1
   # Every value-consuming flag must be guarded before it ever reaches a bare
   # `shift`: none of --background/--watch/--force take a value, so there is
   # nothing to guard here, but the *shape* still applies to any flag added
@@ -155,6 +169,7 @@ dispatch_send() {
   while (( $# )); do
     case "$1" in
       --background) background=1; shift ;;
+      --foreground) background=0; shift ;;
       --watch)      watch=1; background=1; shift ;;
       --force)      force=1; shift ;;
       *)            rest+=("$1"); shift ;;
@@ -177,7 +192,7 @@ dispatch_send() {
     fi
   fi
 
-  if (( background )); then
+  if (( background != 0 )); then
     if share::jobs_available; then
       local -a wflag=()
       (( watch )) && wflag=(--watch)
@@ -186,7 +201,11 @@ dispatch_send() {
       log_ok "queued as job $id"
       return 0
     fi
-    log_warn "share: the job runner is unavailable; sending in the foreground"
+    # Only narrate the fallback when it was actually asked for. Backgrounding
+    # being the default means a machine without pueue would otherwise print
+    # this on every single send, which is noise, not information.
+    (( background == 1 )) \
+      && log_warn "share: the job runner is unavailable; sending in the foreground"
   fi
   run_send "$force" share::send "${rest[@]}"
 }

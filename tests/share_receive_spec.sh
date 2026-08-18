@@ -18,9 +18,35 @@ Describe 'share:: receive'
     SHARE_PROFILE=personal
     cat >"$SB/bin/croc" <<'SH'
 #!/bin/sh
-{ printf 'argv:%s\n' "$*"; printf 'token:%s\n' "${CROC_STORE_TOKEN:-}"; } >>"$SHARE_CALLS"
+{ printf 'argv:%s\n' "$*"
+  printf 'token:%s\n' "${CROC_STORE_TOKEN:-}"
+  printf 'secret:%s\n' "${CROC_SECRET:-}"; } >>"$SHARE_CALLS"
 SH
     chmod +x "$SB/bin/croc"
+
+    # HOUSE RULE: a test must never touch a live service. Receiving is
+    # backgrounded BY DEFAULT since the live-first amendment, so without these
+    # an example enqueues real work against the running pueued — it did, twice
+    # per run — and share::clip would overwrite the user's clipboard.
+    cat >"$SB/bin/pueue" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"${SHARE_PUEUE_CALLS:-/dev/null}"
+case "$1" in
+  add) printf '1\n' ;;
+  *)   : ;;
+esac
+SH
+    cat >"$SB/bin/tmux" <<'SH'
+#!/bin/sh
+exit 0
+SH
+    chmod +x "$SB/bin/pueue" "$SB/bin/tmux"
+    JOB_PUEUE_BIN="$SB/bin/pueue"; export JOB_PUEUE_BIN
+    JOB_TMUX_BIN="$SB/bin/tmux";   export JOB_TMUX_BIN
+    JOB_STATE_ROOT="$SB/jobs";     export JOB_STATE_ROOT
+    SHARE_PUEUE_CALLS="$SB/pueue-calls"; export SHARE_PUEUE_CALLS
+    SHARE_LIVE_DIR="$SB/live";     export SHARE_LIVE_DIR
+
     PATH="$SB/bin:$PATH"
     SHARE_CALLS="$SB/calls"; export SHARE_CALLS
   }
@@ -34,6 +60,75 @@ SH
   It 'classifies a CLI token as stored'
     When call share::classify 'croc-store-v1.b64.abc.KEY'
     The output should equal 'stored'
+  End
+
+  # --- the pasted chat line (amendment D3) --------------------------------
+  # What share now puts on the clipboard is a sentence, not a bare value, and
+  # it comes back through a chat client with whatever text people wrapped
+  # around it. So the live branch SCANS, unlike the stored branch which matches
+  # a bare value end to end.
+
+  It 'classifies the line share puts on the clipboard as live'
+    When call share::classify 'Report.pdf (4.2 MB) — receive with:  croc f6n4-e36v-tjpj-s93k'
+    The output should equal 'live'
+  End
+
+  It 'pulls the phrase out of a line buried in chat prose'
+    When call share::parse_live 'hey! sending the deck: Deck.key (18 MB) — receive with:  croc f6n4-e36v-tjpj-s93k  — shout if it stalls'
+    The output should equal 'f6n4-e36v-tjpj-s93k	'
+  End
+
+  It 'pulls BOTH the relay and the phrase when the sender named one'
+    When call share::parse_live 'R.pdf (1 B) — receive with:  croc --relay 192.168.1.50:9009 f6n4-e36v-tjpj-s93k'
+    The output should equal 'f6n4-e36v-tjpj-s93k	192.168.1.50:9009'
+  End
+
+  # THE regression this project has already paid for once. The phase-1 live
+  # extraction used `grep -oE 'croc [a-z0-9-]{6,}'`, which has `-` inside the
+  # character class, so it matched "croc --relay" and reported the shared value
+  # as literally "--relay" — the recipient was told to run `croc --relay`.
+  # A phrase here must be hyphen-joined groups of unreserved characters, so no
+  # flag can satisfy it no matter where it sits in the line.
+  It 'never returns --relay as the phrase'
+    parsed_phrase() {
+      share::parse_live 'R.pdf — receive with:  croc --relay lab.example.com:9009 8878-salary-courage-roger' \
+        | cut -f1
+    }
+    When call parsed_phrase
+    The output should equal '8878-salary-courage-roger'
+  End
+
+  # A stored blurb also contains the word "croc" (in "get croc: github.com/…").
+  # It must not be mistaken for a live share.
+  It 'does not read a stored CLI blurb as a live share'
+    When call share::classify 'R.pdf (1 B) → croc-store-v1.b64.abc.KEY · get croc: github.com/schollz/croc · expires Aug 20'
+    The output should equal 'unknown'
+  End
+
+  It 'passes the sender'"'"'s relay to croc, without which the recipient cannot connect'
+    share::get --foreground --out "$SB/out" \
+      'R.pdf (1 B) — receive with:  croc --relay 192.168.1.50:9009 f6n4-e36v-tjpj-s93k'
+    When call grep '^argv:' "$SB/calls"
+    The output should include '--relay 192.168.1.50:9009'
+  End
+
+  # Backgrounded by default: a live receive blocks until the sender is
+  # reachable, which can be minutes. The phrase reaches the job through the
+  # same mode-0600 file the send half uses — never pueue's argv, which pueued
+  # records into state.json, and never its environment, which job::start now
+  # strips of exactly these names (commit 7e72661c).
+  It 'receives in the background, carrying the phrase in a secret file'
+    share::get --out "$SB/out" \
+      'R.pdf (1 B) — receive with:  croc --relay 192.168.1.50:9009 f6n4-e36v-tjpj-s93k' >/dev/null 2>&1
+    off_argv() {
+      grep -q -- '--secret-file' "$SB/pueue-calls" || return 1
+      grep -q -- 'f6n4-e36v-tjpj-s93k' "$SB/pueue-calls" && return 1
+      # croc itself is never invoked by the enqueuing process.
+      [ -s "$SB/calls" ] && return 1
+      return 0
+    }
+    When call off_argv
+    The status should be success
   End
 
   It 'classifies a code phrase as code'
@@ -74,10 +169,19 @@ SH
     The output should not include 'croc-store-v1'
   End
 
-  It 'accepts a code phrase on argv without consent, as croc does'
-    share::get --out "$SB/out" '7-truck-mango-basil'
-    When call grep '^argv:' "$SB/calls"
-    The output should include '7-truck-mango-basil'
+  # A code phrase still needs NO --allow-argv consent (it is single-use and
+  # worthless once consumed, unlike a stored link's long-lived key) — but it no
+  # longer lands on croc's argv either: share::_croc_receive hands it over in
+  # CROC_SECRET. "Permitted on argv" was never a reason to put it there.
+  It 'accepts a code phrase without consent, and keeps it off croc'"'"'s argv'
+    share::get --foreground --out "$SB/out" '7-truck-mango-basil'
+    phrase_via_env() {
+      grep -q '^secret:7-truck-mango-basil$' "$SB/calls" || return 1
+      grep '^argv:' "$SB/calls" | grep -q '7-truck-mango-basil' && return 1
+      return 0
+    }
+    When call phrase_via_env
+    The status should be success
   End
 
   It 'reads a stored value from stdin with -'
@@ -182,11 +286,11 @@ SH
   # first three plants a distinctive clipboard token so a wrongful fallback
   # would be visible in the assertions.
 
-  It 'uses a code phrase after -- (exempt, reaches crocs argv)'
+  It 'uses a code phrase after -- (exempt from consent, carried in CROC_SECRET)'
     printf '#!/bin/sh\nprintf "croc-store-v1.SHOULD.NOT.BE.USED\\n"\n' >"$SB/bin/pbpaste"
     chmod +x "$SB/bin/pbpaste"
-    share::get --out "$SB/out" -- '7-truck-mango-basil'
-    When call grep '^argv:' "$SB/calls"
+    share::get --foreground --out "$SB/out" -- '7-truck-mango-basil'
+    When call grep '^secret:' "$SB/calls"
     The output should include '7-truck-mango-basil'
   End
 

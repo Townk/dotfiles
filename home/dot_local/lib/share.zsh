@@ -36,6 +36,7 @@ SHARE_BUILTIN_JSON='{
     "backend": "croc",
     "store": "https://getcroc.com",
     "web": true,
+    "live": true,
     "profiles": ["personal"],
     "default_for": ["personal"]
   }
@@ -289,6 +290,65 @@ share::endpoints_for_profile() {
   done
 }
 
+# share::live_capable <endpoint> — can this endpoint carry a LIVE transfer?
+#
+# Live needs a rendezvous both ends can reach. Three ways an endpoint has one:
+#
+#   relay = "host:port"   an actual croc relay
+#   local_only = true     multicast on this LAN, no relay at all
+#   live = true           explicit: this endpoint's rendezvous is croc's own
+#                         default public relay (the built-in `public` says so)
+#
+# Everything else is store-only, and the distinction is a safety property, not
+# a nicety. `drop` is a STORE — croc-web listening on 9014, no TCP relay — so a
+# live transfer "to drop" would silently fall back to croc's DEFAULT PUBLIC
+# relay. On the work profile that is precisely the egress the policy fence
+# exists to prevent, and it would happen with no flag, no prompt and no log
+# line. Requiring an endpoint to declare its rendezvous is what makes that
+# impossible rather than merely unlikely.
+share::live_capable() {
+  local name="${1:?share::live_capable: endpoint required}" v
+  [[ "$(share::field "$name" backend croc)" == croc ]] || return 1
+  v="$(share::field "$name" live)"
+  [[ "$v" == true  ]] && return 0
+  [[ "$v" == false ]] && return 1
+  [[ -n "$(share::field "$name" relay)" ]] && return 0
+  [[ "$(share::field "$name" local_only false)" == true ]] && return 0
+  return 1
+}
+
+# share::clip <text> — put the pasteable line on the clipboard.
+#
+# Through the existing SSH-aware pbcopy, never around it: sharing a file from
+# the dev-shell must land the line on the Mac clipboard the human is actually
+# looking at, and that behaviour is inherited from the clipboard silo rather
+# than reimplemented here. Best-effort by design — a machine with no clipboard
+# still printed the line, and failing a completed transfer over a missing
+# pbcopy would be absurd.
+#
+# No trailing newline: this text is destined for a chat message, and printf
+# '%s' keeps it a single line when pasted.
+share::clip() {
+  local text="${1-}"
+  [[ -n "$text" ]] || return 0
+  command -v pbcopy >/dev/null 2>&1 || return 0
+  printf '%s' "$text" | pbcopy 2>/dev/null || return 0
+}
+
+# share::emit_live_blurb <endpoint> <secret-file> <path…>
+# Compose the pasteable line and hand it over — print it, copy it. Called
+# BEFORE the transfer starts, which is the only moment it is useful.
+share::emit_live_blurb() {
+  local endpoint="$1" secret_file="$2"; shift 2
+  local code label blurb
+  code="$(share::croc_secret_read "$secret_file" code)" || return 1
+  label="$(share::label "$@")" || return 1
+  blurb="$(share::blurb "$endpoint" live "$label" "$code" never "")" || return 1
+  print -r -- "$blurb"
+  share::clip "$blurb"
+  return 0
+}
+
 # --- send dispatch ----------------------------------------------------------
 # The faces never learn which backend answered. That is the seam the whole
 # design rests on: adding a backend must not touch yazi, the picker, or the CLI.
@@ -298,7 +358,12 @@ SHARE_DEFAULT_DOWNLOADS="${SHARE_DEFAULT_DOWNLOADS:-1}"
 
 # share::send [--to E] [--live] [--expiration D] [--downloads N] <path…>
 share::send() {
-  local endpoint="" mode=store
+  # Live is the DEFAULT (amendment D1). The asynchrony this silo exists for is
+  # on the SENDER's side — fire it, let the job hold the transfer open, walk
+  # away — and live delivers that while escaping both the 2 GiB stored ceiling
+  # and leaving a copy in anyone's custody. Stored is the explicit choice for a
+  # recipient who will not be around today.
+  local endpoint="" mode=live secret_file="" mode_explicit=0
   local expiration="$SHARE_DEFAULT_EXPIRATION" downloads="$SHARE_DEFAULT_DOWNLOADS"
   # Each value-consuming flag is guarded BEFORE the `shift 2`: with the flag
   # as the last token, `$2` is empty and `shift 2` fails in zsh (shift count
@@ -310,7 +375,15 @@ share::send() {
     case "$1" in
       --to)         [[ $# -ge 2 ]] || die "share: --to requires an endpoint name"
                      endpoint="$2"; shift 2 ;;
-      --live)       mode=live; shift ;;
+      --live)       mode=live;  mode_explicit=1; shift ;;
+      --store)      mode=store; mode_explicit=1; shift ;;
+      # Internal: the caller already minted the live secrets and already
+      # emitted the pasteable line. Used by share::send_background so the
+      # human gets the phrase the instant the command returns, rather than
+      # whenever the job happens to start.
+      --secret-file)
+                    [[ $# -ge 2 ]] || die "share: --secret-file requires a path"
+                    secret_file="$2"; shift 2 ;;
       --expiration) [[ $# -ge 2 ]] || die "share: --expiration requires a value"
                      expiration="$2"; shift 2 ;;
       --downloads)  [[ $# -ge 2 ]] || die "share: --downloads requires a value"
@@ -377,16 +450,72 @@ share::send() {
   # caller passed.
   local backend
   backend="$(share::field "$endpoint" backend croc)" || return 1
-  local blurb
+
+  # "Prioritise live, but never silently" — the endpoint has the final say,
+  # because an endpoint that cannot carry a live transfer would otherwise fall
+  # back to croc's DEFAULT PUBLIC relay without saying so. Downgrading loudly
+  # here is the difference between a considered choice and an accidental one.
+  # To get live by default, mark a live-capable endpoint `default_for`.
+  if [[ "$mode" == live ]] && ! share::live_capable "$endpoint"; then
+    local why="no relay, and not LAN-only"
+    [[ "$backend" != croc ]] && why="the $backend backend has no live mode"
+    # An EXPLICIT --live is a statement about how this file must travel, so
+    # quietly doing the opposite would be worse than refusing. Only the
+    # default — live because live is the default, not because anyone said so
+    # — downgrades, and even then it says so.
+    if (( mode_explicit )); then
+      log_error "share: $endpoint cannot carry a live transfer — $why"
+      return 1
+    fi
+    log_warn "share: $endpoint cannot carry a live transfer ($why) — sending stored instead"
+    mode=store
+  fi
+
+  # Live's value exists BEFORE the transfer; stored's URL only exists after the
+  # upload. So live hands the human its pasteable line first and only then
+  # starts waiting for a peer (D1/D3/D5).
+  #
+  # "Whoever mints the secret file owns the blurb": with --secret-file given,
+  # some other process — share::send_background, standing in front of the
+  # human — already emitted it, and emitting it again from inside a job would
+  # only duplicate it into a log nobody reads.
+  if [[ "$mode" == live && "$backend" == croc && -z "$secret_file" ]]; then
+    secret_file="$(share::croc_secret_file "$endpoint")" || return 1
+    share::emit_live_blurb "$endpoint" "$secret_file" "$@" || return 1
+  fi
+
+  local blurb rc=0
   case "$backend" in
-    croc)   blurb="$(share::croc_send "$endpoint" "$mode" "$expiration" "$downloads" "$@")" || return 1 ;;
+    croc)
+      local -a sf=()
+      [[ -n "$secret_file" ]] && sf=(--secret-file "$secret_file")
+      blurb="$(share::croc_send "${sf[@]}" "$endpoint" "$mode" "$expiration" "$downloads" "$@")" || rc=1
+      # The secrets have served their purpose the moment croc stops retrying,
+      # whether it succeeded or gave up. Removed here rather than inside
+      # croc_send because the retry loop re-reads nothing but this process
+      # still owns the file's lifetime.
+      [[ -n "$secret_file" ]] && rm -f -- "$secret_file"
+      (( rc == 0 )) || return 1
+      ;;
     rclone)
       [[ "$mode" == live ]] && die "share: the rclone backend has no live mode"
       blurb="$(share::rclone_send "$endpoint" "$@")" || return 1
       ;;
     *) die "share: unknown backend: $backend" ;;
   esac
+
+  if [[ "$mode" == live ]]; then
+    # D6's split, as built. The VALUE was announced early — printed and copied,
+    # with the human right there — so no toast was needed for it. COMPLETION is
+    # the news worth a toast here: a live transfer finishes only when the
+    # recipient actually collects, so this is the moment the file left.
+    share::announce "$(share::label "$@") — collected" || true
+    return 0
+  fi
+  # Stored: croc_send returns the blurb because the URL did not exist until now.
+  [[ -n "$blurb" ]] || return 0
   print -r -- "$blurb"
+  share::clip "$blurb"
   # share::announce is best-effort by contract (it wraps `notify`, which is
   # documented as best-effort itself): a failed RECOB bridge hop, or simply
   # no Hammerspoon on this host, must not turn a SUCCESSFUL transfer into a
@@ -433,6 +562,31 @@ share::revoke() {
 
 SHARE_DEFAULT_OUT="${SHARE_DEFAULT_OUT:-$HOME/Downloads}"
 
+# share::parse_live <text> → "phrase\trelay"   (relay may be empty)
+#
+# Pulls a live share out of ARBITRARY text: the line share::blurb produced,
+# pasted into a chat message, surrounded by whatever the sender and the chat
+# client added around it. That is why this SCANS, unlike the stored branch of
+# share::classify which matches a bare value end to end.
+#
+# The regex anchors on the whole `croc [--relay X] <phrase>` shape and the
+# phrase is then taken as the LAST word of the match. That is what stops this
+# repeating the bug phase 1 shipped: `grep -oE 'croc [a-z0-9-]{6,}'` put `-`
+# inside the character class, so it happily matched "croc --relay" and returned
+# "--relay" AS the code phrase. Here a phrase must be hyphen-joined groups of
+# unreserved characters, so no flag can ever satisfy it.
+share::parse_live() {
+  local text="${1-}" m phrase relay=""
+  m="$(printf '%s' "$text" \
+    | grep -oE 'croc([[:space:]]+--relay[[:space:]]+[^[:space:]]+)?[[:space:]]+[a-z0-9]+(-[a-z0-9]+)+' \
+    | head -1)"
+  [[ -n "$m" ]] || return 1
+  local -a w=(${=m})
+  phrase="${w[-1]}"
+  [[ "${w[2]:-}" == --relay ]] && relay="${w[3]:-}"
+  printf '%s\t%s\n' "$phrase" "$relay"
+}
+
 share::classify() {
   # `##` and `(#i)` are extendedglob constructs and the option is off by
   # default. Scope it to this function rather than setting it at file level —
@@ -442,6 +596,11 @@ share::classify() {
   if [[ "$value" == croc-store-v1.* ]] \
     || [[ "$value" == (#i)http(s|)://*/s/*\#v1.* ]]; then
     printf 'stored\n'
+  # `live` is checked BEFORE the bare-phrase branch and AFTER the stored ones:
+  # it scans embedded text, so it must not get first refusal on a value that is
+  # a whole stored token, and a bare phrase must still classify as `code`.
+  elif share::parse_live "$value" >/dev/null 2>&1; then
+    printf 'live\n'
   elif [[ "$value" == [a-z0-9]##(-[a-z0-9]##)## ]]; then
     printf 'code\n'
   else
@@ -449,15 +608,64 @@ share::classify() {
   fi
 }
 
-# share::get [--out DIR] [--allow-argv] [<value>|-]
+# share::_croc_receive <code> <relay> <out> — the one place a receive runs.
+#
+# The phrase goes through CROC_SECRET rather than croc's argv. The spec permits
+# a code phrase on a command line (it is single-use and worthless once the
+# transfer completes, unlike a stored link's long-lived key), but "permitted"
+# is not a reason to do it when the environment costs nothing here.
+#
+# --relay is passed only when the sender named one. Getting this wrong is
+# silent rather than loud: without it croc dials its DEFAULT relay, waits for a
+# peer that is somewhere else entirely, and simply never connects.
+share::_croc_receive() {
+  local code="${1:?share::_croc_receive: code required}" relay="${2-}" out="${3-.}"
+  local -a cmd=(croc --ignore-stdin --disable-clipboard)
+  [[ -n "$relay" ]] && cmd+=(--relay "$relay")
+  cmd+=(--yes --out "$out")
+  CROC_SECRET="$code" "${cmd[@]}"
+}
+
+# share::get_background <code> <relay> <out> — receive under job::.
+#
+# The phrase reaches the job through the same mode-0600 file the send half
+# uses, never through pueue: job::start now strips CROC_SECRET (and every other
+# credential-shaped name) from the environment it snapshots, so the file is not
+# merely the tidier route — it is the only one that still works.
+share::get_background() {
+  local code="$1" relay="${2-}" out="${3-}"
+  share::_load_jobs || { log_error "share: the job runner is unavailable"; return 1; }
+  local sf
+  sf="$(share::croc_secret_write "$code" "" "$relay")" || return 1
+  local id
+  # The title deliberately does NOT contain the phrase: it is copied into
+  # meta.json and into notification history, and the recipient does not know
+  # the filename until croc announces it anyway.
+  id="$(job::start --group "$SHARE_JOB_GROUP" --title "share receive" \
+        --icon "$SHARE_JOB_ICON" \
+        -- share get --foreground --secret-file "$sf" --out "$out")" || {
+    rm -f -- "$sf"
+    return 1
+  }
+  log_ok "receiving in the background as job $id"
+}
+
+# share::get [--out DIR] [--allow-argv] [--background|--foreground]
+#            [--secret-file F] [<value>|-]
 share::get() {
   setopt localoptions extendedglob     # the trim below uses `##`
   local out="$SHARE_DEFAULT_OUT" allow_argv=0 value="" from_argv=0 source_requested=0
+  local secret_file=""
+  local -i background=-1               # -1 = caller expressed no preference
   while (( $# )); do
     case "$1" in
       --out)         [[ $# -ge 2 ]] || die "share get: --out requires a directory"
                      out="$2"; shift 2 ;;
       --allow-argv)  allow_argv=1; shift ;;
+      --background)  background=1; shift ;;
+      --foreground)  background=0; shift ;;
+      --secret-file) [[ $# -ge 2 ]] || die "share get: --secret-file requires a path"
+                     secret_file="$2"; shift 2 ;;
       --)            shift
                      # A bare trailing `--` with nothing after it requested
                      # no source (clipboard fallback below is correct). A
@@ -475,6 +683,21 @@ share::get() {
       *)             value="$1"; from_argv=1; source_requested=1; shift ;;
     esac
   done
+
+  # A secret file short-circuits acquisition entirely: this is the job half of
+  # a backgrounded receive, and the phrase deliberately never passed through
+  # pueue's environment or anyone's argv to get here. Unlinked on read — unlike
+  # the send half, a receive has nothing to retry with.
+  if [[ -n "$secret_file" ]]; then
+    local jcode jrelay
+    jcode="$(share::croc_secret_read "$secret_file" code)" || return 1
+    jrelay="$(share::croc_secret_read "$secret_file" relay)" || return 1
+    rm -f -- "$secret_file"
+    [[ -n "$jcode" ]] || { log_error "share get: the secret file carried no phrase"; return 1; }
+    mkdir -p -- "$out"
+    share::_croc_receive "$jcode" "$jrelay" "$out"
+    return $?
+  fi
 
   # `-z "$value"` cannot tell "no source was requested" from "the requested
   # source produced nothing" — a caller who explicitly asked for stdin (`-`)
@@ -506,9 +729,28 @@ share::get() {
       mkdir -p -- "$out"
       CROC_STORE_TOKEN="$value" croc --yes --out "$out"
       ;;
-    code)
+    live | code)
+      local code relay="" parsed
+      if [[ "$kind" == live ]]; then
+        parsed="$(share::parse_live "$value")" || {
+          log_error "share get: could not read the code phrase from that text"
+          return 1
+        }
+        code="${parsed%%$'\t'*}"
+        relay="${parsed##*$'\t'}"
+      else
+        code="$value"
+      fi
+      # Background by default (amendment D1): a live receive blocks until the
+      # sender is reachable, which can be minutes, and the human has better
+      # things to do than hold a terminal open. --foreground opts out, and the
+      # job half runs with it so this can never recurse.
+      if (( background != 0 )) && share::jobs_available; then
+        share::get_background "$code" "$relay" "$out"
+        return $?
+      fi
       mkdir -p -- "$out"
-      croc --yes --out "$out" "$value"
+      share::_croc_receive "$code" "$relay" "$out"
       ;;
   esac
 }
@@ -568,17 +810,25 @@ share::send_background() {
   # Mirrors share::send's own flag/positional split — a real `--` ends flag
   # parsing, so a filename that happens to start with `-` after `--` is never
   # mistaken for an option here.
+  # Index-walked rather than shift-based, and it now captures --to's VALUE and
+  # the mode as well as the paths: the live path below has to know WHERE it is
+  # sending before the job exists, because that is what decides whether a
+  # rendezvous is even available.
   local -a paths=()
-  local arg skip=0 no_more_flags=0
-  for arg in "${send_args[@]}"; do
-    if (( skip )); then skip=0; continue; fi
-    if (( no_more_flags )); then paths+=("$arg"); continue; fi
-    case "$arg" in
-      --to|--expiration|--downloads) skip=1 ;;
-      --live) ;;
-      --) no_more_flags=1 ;;
-      -*) ;;
-      *) paths+=("$arg") ;;
+  local -i i=1 n=${#send_args[@]} no_more_flags=0
+  local a to="" mode=live
+  local -i mode_explicit=0
+  while (( i <= n )); do
+    a="${send_args[i]}"
+    if (( no_more_flags )); then paths+=("$a"); (( i += 1 )); continue; fi
+    case "$a" in
+      --to)                                   to="${send_args[i+1]:-}"; (( i += 2 )) ;;
+      --expiration|--downloads|--secret-file) (( i += 2 )) ;;
+      --live)                       mode=live;  mode_explicit=1; (( i += 1 )) ;;
+      --store)                      mode=store; mode_explicit=1; (( i += 1 )) ;;
+      --)                                     no_more_flags=1; (( i += 1 )) ;;
+      -*)                                     (( i += 1 )) ;;
+      *)                                      paths+=("$a"); (( i += 1 )) ;;
     esac
   done
 
@@ -599,11 +849,47 @@ share::send_background() {
     title="share $label"
   fi
 
+  # THE POINT OF THE WHOLE FEATURE (amendment D1/D5): for a live send the
+  # secrets are minted and the pasteable line is handed over HERE, in the
+  # foreground, before the job is even enqueued. The human can paste into a
+  # chat the instant the command returns; the transfer then waits in the
+  # background for however long it takes.
+  #
+  # Doing it the other way round — letting the job mint the phrase — would
+  # mean the line appears whenever pueue happens to start the task, which is
+  # exactly the "too late to be useful" failure the old live template had.
+  local -a extra=()
+  if [[ "$mode" == live ]] && (( ${#paths} )); then
+    local ep
+    ep="$(share::resolve "$to")" || return 1
+    if share::live_capable "$ep"; then
+      local sf
+      sf="$(share::croc_secret_file "$ep")" || return 1
+      # >&2 deliberately. share::send_background's STDOUT is the job id — the
+      # CLI captures it as `id="$(share::send_background …)"` — so printing the
+      # blurb there would swallow the pasteable line into the id variable and
+      # show the human neither. The line is user-facing output, which in this
+      # codebase means stderr, and it reaches the clipboard regardless.
+      share::emit_live_blurb "$ep" "$sf" "${paths[@]}" >&2 || { rm -f -- "$sf"; return 1; }
+      extra=(--secret-file "$sf")
+    elif (( mode_explicit )); then
+      # Refuse before enqueuing: share::send would refuse too, but only once
+      # the job ran, turning an immediate error into a failure toast minutes
+      # later.
+      log_error "share: $ep cannot carry a live transfer — no relay, and not LAN-only"
+      return 1
+    else
+      # Warn HERE, not from inside the job, where the message would land in a
+      # log nobody is reading.
+      log_warn "share: $ep cannot carry a live transfer (no relay, not LAN-only) — sending stored instead"
+    fi
+  fi
+
   local -a modal=()
   (( watch )) && modal=(--modal)
   job::start "${modal[@]}" \
     --group "$SHARE_JOB_GROUP" --title "$title" --icon "$SHARE_JOB_ICON" \
-    -- share send "${send_args[@]}"
+    -- share send "${extra[@]}" "${send_args[@]}"
 }
 
 # share::announce <blurb> — the acknowledgable completion toast, and the ONLY

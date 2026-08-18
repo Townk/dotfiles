@@ -68,6 +68,106 @@ share::croc_pass() {
   share::_secret "$(share::field "$endpoint" pass)"
 }
 
+# --- the live-mode secret channel (amendment D5/D5a) -------------------------
+# A live transfer has two secrets: the PAKE code phrase and, for a relay that
+# has one, the relay password. Both must reach the job that runs croc WITHOUT
+# passing through pueue.
+#
+# Why not the environment, which is the obvious route: pueued snapshots the
+# whole client environment into its state file, values included, and keeps it
+# past the job (see job.zsh's job::_scrub_env_names and commit 7e72661c).
+# job::start now strips exactly these names, so the environment is not merely
+# unwise here — it no longer works at all.
+#
+# Why not argv: croc itself refuses --code on UNIX for this reason, and the
+# same objection covers `share`'s own argv.
+#
+# So: a mode-0600 file, created by whoever is standing in front of the human,
+# read by the job, and unlinked when the transfer settles. It doubles as the
+# durable record the retry loop (D7) re-arms from — which is why re-running
+# croc after a failure reuses the SAME phrase, and therefore why the line
+# already pasted into someone's chat stays valid across a laptop sleep.
+SHARE_LIVE_DIR="${SHARE_LIVE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/share/live}"
+
+# How long a backgrounded live transfer keeps re-arming before giving up. A
+# deliberate choice, not a default to ignore: the phrase stays a working
+# capability for exactly this long, so it is also how long an intercepted chat
+# message remains useful to someone else. 80 bits of entropy makes guessing
+# irrelevant; interception is the reason this is bounded at all.
+SHARE_LIVE_DEADLINE="${SHARE_LIVE_DEADLINE:-86400}"
+
+# Retry backoff, in seconds per attempt, capped at 60. A seam as much as a
+# knob: set to 0 and the retry loop runs without real sleeps, which is what
+# makes it testable at all — the alternative is a suite that waits 15 seconds
+# to observe three attempts. The failure being absorbed is "the peer is not
+# here yet", so this is about not spinning, not about load.
+SHARE_LIVE_BACKOFF_BASE="${SHARE_LIVE_BACKOFF_BASE:-5}"
+
+# share::croc_secret_write <code> [<pass>] [<relay>] — write the file; print
+# its path. The receive half uses this too (it already HAS a phrase, from a
+# pasted chat line, and needs it carried to a background job the same way).
+share::croc_secret_write() {
+  local code="${1:?share::croc_secret_write: code required}" pass="${2-}" relay="${3-}" f
+  mkdir -p -- "$SHARE_LIVE_DIR" || return 1
+  chmod 700 -- "$SHARE_LIVE_DIR" 2>/dev/null || :
+  # Sweep stragglers. The normal path unlinks its own file when the transfer
+  # settles, but `job::start` reports a failed enqueue with `die`, which EXITS
+  # — the caller never gets control back to clean up. Rather than pretend that
+  # window does not exist, every mint clears anything older than a transfer
+  # could still be waiting for. Self-healing beats a file full of live secrets
+  # accumulating unnoticed.
+  local stale
+  for stale in "$SHARE_LIVE_DIR"/*.json(N.mm+$(( (SHARE_LIVE_DEADLINE / 60) + 1 ))); do
+    rm -f -- "$stale"
+  done
+  f="$SHARE_LIVE_DIR/$(share::gen_id).json"
+  # Every value travels through jq's ENVIRONMENT, never --arg: the same rule
+  # share::endpoints_json states for the manifest, and it matters more here
+  # because these ARE the secrets. umask inside the subshell so the file is
+  # 0600 from creation — never briefly 0644 and then chmod'd.
+  ( umask 077
+    code="$code" pass="$pass" relay="$relay" \
+      jq -n '{code: $ENV.code, pass: $ENV.pass, relay: $ENV.relay}' > "$f"
+  ) || { log_error "share: cannot write the live secret file"; return 1; }
+  printf '%s\n' "$f"
+}
+
+# share::croc_secret_file <endpoint> — mint a FRESH phrase for a send.
+share::croc_secret_file() {
+  local endpoint="${1:?share::croc_secret_file: endpoint required}"
+  local code pass
+  code="$(share::_code_phrase)" || return 1
+  [[ -n "$code" ]] || { log_error "share: failed to generate a code phrase"; return 1; }
+  pass="$(share::croc_pass "$endpoint")"
+  share::croc_secret_write "$code" "$pass" ""
+}
+
+# share::croc_secret_read <file> <code|pass>
+share::croc_secret_read() {
+  local f="${1:?share::croc_secret_read: file required}" key="${2:?}"
+  [[ -f "$f" ]] || { log_error "share: live secret file is missing: $f"; return 1; }
+  jq -r --arg k "$key" '.[$k] // ""' "$f"
+}
+
+# share::croc_fatal <croc-output> — is this failure worth retrying?
+#
+# The retry loop exists to absorb "the peer is not here yet" and the connection
+# drops a laptop sleep causes. It must NOT sit in a loop against a wall: a
+# rejected relay password will fail identically forever, and retrying it for 24
+# hours would turn a clear error into a silent one.
+#
+# This couples to croc's wording, which is a real version dependency and the
+# reason it is one small function rather than a condition buried in the loop.
+# Verified against croc 11.1.1: a wrong CROC_PASS yields
+# "could not connect to <relay>: bad response: bad password".
+share::croc_fatal() {
+  local text="${1-}"
+  case "$text" in
+    *"bad password"*|*"incorrect password"*) return 0 ;;
+  esac
+  return 1
+}
+
 # share::croc_argv <endpoint> <mode> <expiration> <downloads> <path…>
 #   mode: store | live
 #
@@ -101,6 +201,11 @@ share::croc_argv() {
   #   "stored mode does not accept stdin; pass regular file paths"
   # That broke every backgrounded send. Global flag: precedes the subcommand.
   cmd+=(--ignore-stdin)
+  # --disable-clipboard: croc copies the code phrase to the clipboard ITSELF
+  # ("Code copied to clipboard!") and would race the richer, pasteable line
+  # share writes (amendment D4). Observed on both attempts of the phrase-reuse
+  # probe. Global flag: precedes the subcommand.
+  cmd+=(--disable-clipboard)
   [[ -n "$relay" ]] && cmd+=(--relay "$relay")
   # local_only: croc's --local forbids every non-LAN path. Without it croc
   # silently falls back to its DEFAULT PUBLIC relay (croc.schollz.com) when
@@ -167,6 +272,20 @@ share::croc_revoke() {
 # to the terminal (>&2) as it happens.
 share::croc_send() {
   zmodload zsh/datetime 2>/dev/null
+  # --secret-file is a LEADING flag rather than a positional so every existing
+  # caller and test keeps its argument order. When present the two live secrets
+  # come from that file instead of being minted here — that is the whole point:
+  # the process standing in front of the human mints them, and this one (often
+  # a job) only consumes them.
+  local secret_file=""
+  while (( $# )); do
+    case "$1" in
+      --secret-file)
+        [[ $# -ge 2 ]] || { log_error "share: --secret-file requires a path"; return 1; }
+        secret_file="$2"; shift 2 ;;
+      *) break ;;
+    esac
+  done
   local endpoint="$1" mode="$2" expiration="$3" downloads="$4"
   shift 4
 
@@ -196,14 +315,27 @@ share::croc_send() {
   # against the built-in `public` endpoint and any relay endpoint that
   # leaves `pass` unset — precisely the endpoints that rely on croc's
   # default. Only set CROC_PASS when there is an actual password to carry.
-  local pass; pass="$(share::croc_pass "$endpoint")"
+  local pass
+  if [[ -n "$secret_file" ]]; then
+    pass="$(share::croc_secret_read "$secret_file" pass)" || return 1
+  else
+    pass="$(share::croc_pass "$endpoint")"
+  fi
 
   # Live mode's PAKE shared secret. Generated here, never placed on argv (croc
   # refuses --code on UNIX precisely because argv is world-readable via ps and
   # /proc/<pid>/cmdline); it travels in the child environment as CROC_SECRET.
+  # Read (not minted) when a secret file was supplied, so a retry — or a job
+  # picking up work its parent prepared — reuses the SAME phrase. Guarded on
+  # live: a stored send must never get a CROC_SECRET, which would change how
+  # croc treats the transfer entirely.
   local code=""
   if [[ "$mode" == live ]]; then
-    code="$(share::_code_phrase)" || return 1
+    if [[ -n "$secret_file" ]]; then
+      code="$(share::croc_secret_read "$secret_file" code)" || return 1
+    else
+      code="$(share::_code_phrase)" || return 1
+    fi
     [[ -n "$code" ]] || { log_error "share: failed to generate a code phrase"; return 1; }
   fi
 
@@ -228,14 +360,50 @@ share::croc_send() {
   local -a envp=()
   [[ -n "$pass" ]] && envp+=("CROC_PASS=$pass")
   [[ -n "$code" ]] && envp+=("CROC_SECRET=$code")
-  if (( ${#envp} )); then
-    env "${envp[@]}" "${cmd[@]}" 2>&1 | tee "$tmp" >&2
-    rc=${pipestatus[1]}
-  else
-    "${cmd[@]}" 2>&1 | tee "$tmp" >&2
-    rc=${pipestatus[1]}
+  # The supervised retry (amendment D7). Live mode only, and only inside a
+  # job:: job: a foreground send has a human watching who can just run it
+  # again, while a backgrounded one is exactly the case where nobody is
+  # looking. Re-arming reuses the SAME phrase on the SAME relay — verified
+  # possible against croc 11.1.1 by killing a waiting sender and reconnecting
+  # — which is what keeps a line already pasted into someone's chat valid
+  # across a laptop sleep. Switching either is forbidden (D8): we cannot edit
+  # a message that has already been sent.
+  local -i deadline=0 attempt=0 wait_s=0
+  if [[ "$mode" == live && -n "${JOB_ID:-}" ]]; then
+    deadline=$(( EPOCHSECONDS + SHARE_LIVE_DEADLINE ))
   fi
-  out="$(<"$tmp")"
+
+  while :; do
+    # `attempt=$(( ... ))`, never `(( attempt++ ))`: post-increment EVALUATES
+    # to the old value, so on the first pass the arithmetic command yields 0 —
+    # which as a standalone command is exit status 1, and this library is
+    # sourced by a CLI running under `set -e`. It aborted every live send.
+    attempt=$(( attempt + 1 ))
+    if (( ${#envp} )); then
+      env "${envp[@]}" "${cmd[@]}" 2>&1 | tee "$tmp" >&2
+      rc=${pipestatus[1]}
+    else
+      "${cmd[@]}" 2>&1 | tee "$tmp" >&2
+      rc=${pipestatus[1]}
+    fi
+    out="$(<"$tmp")"
+    (( rc == 0 )) && break
+    (( deadline > 0 )) || break
+    # A rejected relay password fails identically forever; looping on it for a
+    # day would turn a clear error into a silent one.
+    if share::croc_fatal "$out"; then
+      log_error "share: croc failed in a way retrying cannot fix"
+      break
+    fi
+    if (( EPOCHSECONDS >= deadline )); then
+      log_error "share: nobody collected this transfer before the deadline"
+      break
+    fi
+    wait_s=$(( attempt * SHARE_LIVE_BACKOFF_BASE ))
+    (( wait_s > 60 )) && wait_s=60
+    share::_progress -1 "waiting for the recipient (attempt $attempt)"
+    sleep "$wait_s"
+  done
   rm -f -- "$tmp"
   if (( rc != 0 )); then
     log_error "share: croc exited $rc"
@@ -295,6 +463,13 @@ share::croc_send() {
   # clear message (see share.zsh) and lets `share list` render it as what it
   # is instead of a store link that can be revoked.
   share::ledger_add "$id" "$ledger_backend" "$endpoint" "$label" "$ref" "$value" "$expires_epoch"
+
+  # Live mode prints NOTHING here. Its blurb went out BEFORE the transfer
+  # started (share::send), which is the only moment it is any use — the
+  # recipient needs the phrase in order to connect at all. Re-printing it on
+  # completion would be redundant, and as the retired "I'm holding it open"
+  # template showed, actively false by then.
+  [[ "$mode" == live ]] && return 0
 
   share::blurb "$endpoint" "$kind" "$label" "$value" \
     "$(share::_expires_human "$expires_epoch")" "${downloads:-1} download(s)"

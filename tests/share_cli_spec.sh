@@ -20,6 +20,37 @@ Describe 'share CLI'
 printf 'https://d.example.com/s/abc#v1.KEY\ncroc-store-v1.b64.abc.KEY\n'
 SH
     chmod +x "$SB/bin/croc"
+
+    # HOUSE RULE, and it now applies to every example here rather than the two
+    # that used to opt in: a test must never touch a live service. Sending is
+    # backgrounded BY DEFAULT since the live-first amendment, so an example
+    # without these stubs enqueues real work against the running pueued (it
+    # did: 14 tasks), repaints the attached tmux status bar, and overwrites the
+    # user's clipboard via share::clip.
+    cat >"$SB/bin/pueue" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"${SHARE_PUEUE_CALLS:-/dev/null}"
+case "$1" in
+  add) printf '1\n' ;;
+  *)   : ;;
+esac
+SH
+    cat >"$SB/bin/tmux" <<'SH'
+#!/bin/sh
+exit 0
+SH
+    cat >"$SB/bin/pbcopy" <<'SH'
+#!/bin/sh
+cat >"${SHARE_FAKE_CLIP:-/dev/null}"
+SH
+    chmod +x "$SB/bin/pueue" "$SB/bin/tmux" "$SB/bin/pbcopy"
+    export JOB_PUEUE_BIN="$SB/bin/pueue"
+    export JOB_TMUX_BIN="$SB/bin/tmux"
+    export JOB_STATE_ROOT="$SB/jobs"
+    export SHARE_PUEUE_CALLS="$SB/pueue-calls"
+    export SHARE_FAKE_CLIP="$SB/clip.txt"
+    export SHARE_LIVE_DIR="$SB/live"
+
     export PATH="$SB/bin:$PATH"
     SHARE_BIN="$PWD/home/dot_local/bin/executable_share"
   }
@@ -40,14 +71,14 @@ SH
   End
 
   It 'treats a bare path as a send'
-    When run script "$SHARE_BIN" "$SB/Report.pdf"
+    When run script "$SHARE_BIN" --store --foreground "$SB/Report.pdf"
     The status should be success
     The output should include 'd.example.com/s/abc'
     The stderr should include 'sending to d.example.com'
   End
 
   It 'accepts an explicit send subcommand'
-    When run script "$SHARE_BIN" send "$SB/Report.pdf"
+    When run script "$SHARE_BIN" send --store --foreground "$SB/Report.pdf"
     The status should be success
     The output should include 'd.example.com/s/abc'
     The stderr should include 'sending to'
@@ -93,7 +124,7 @@ esac
 SH
     chmod +x "$SB/bin/pueue"
     export JOB_PUEUE_BIN="$SB/bin/pueue"
-    When run script "$SHARE_BIN" --background "$SB/Report.pdf"
+    When run script "$SHARE_BIN" --background --store "$SB/Report.pdf"
     The status should be success
     The stderr should include 'job runner is unavailable'
     The output should include 'd.example.com/s/abc'
@@ -159,7 +190,7 @@ SH
 
   It 'still sends a file named list when the send subcommand is explicit'
     printf 'x' >"$SB/list"
-    cwd_send_list() { cd "$SB" && "$SHARE_BIN" send list; }
+    cwd_send_list() { cd "$SB" && "$SHARE_BIN" send --store --foreground list; }
     When call cwd_send_list
     The status should be success
     The output should include 'd.example.com/s/abc'
@@ -194,7 +225,7 @@ SH
     export JOB_TMUX_BIN="$SB/bin/tmux"
     export JOB_STATE_ROOT="$SB/jobs"
     export SHARE_PUEUE_CALLS="$SB/pueue-calls"
-    When run script "$SHARE_BIN" --background "$SB/Report.pdf"
+    When run script "$SHARE_BIN" --background --store "$SB/Report.pdf"
     The status should be success
     The output should include 'queued as job'
     The output should not include 'd.example.com/s/abc'
@@ -214,14 +245,14 @@ SH
 store = "https://corp.example.com"
 profiles = ["work"]
 TOML
-    When run script "$SHARE_BIN" --to corp --force "$SB/Report.pdf"
+    When run script "$SHARE_BIN" --to corp --force --store --foreground "$SB/Report.pdf"
     The status should be failure
     The stderr should include 'interactive terminal'
     The output should not include 'corp.example.com'
   End
 
   It 'sends immediately with --force on an already-allowed endpoint — no confirmation needed'
-    When run script "$SHARE_BIN" --to drop --force "$SB/Report.pdf"
+    When run script "$SHARE_BIN" --to drop --force --store --foreground "$SB/Report.pdf"
     The status should be success
     The output should include 'd.example.com/s/abc'
     The stderr should include 'sending to d.example.com'

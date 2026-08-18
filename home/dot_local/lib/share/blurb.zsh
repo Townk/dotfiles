@@ -14,7 +14,23 @@ SHARE_CROC_URL="github.com/schollz/croc"
 
 SHARE_TEMPLATE_WEB='%name → %url · expires %expires, %downloads'
 SHARE_TEMPLATE_CLI='%name → %token · get croc: %crocurl · expires %expires'
-SHARE_TEMPLATE_LIVE="%name → run: croc %code · I'm holding it open · get croc: %crocurl"
+
+# Live is the DEFAULT mode (amendment D1) and this line is the product: it is
+# what gets pasted into a chat message, so it has to serve four readers at
+# once — `share get` parses it, a croc-only recipient runs it verbatim, a human
+# reads a filename and a size, and the sender recognises what they just sent.
+#
+# The old template ("run: croc %code · I'm holding it open") was both wrong and
+# too late: it printed AFTER croc had exited, i.e. after the transfer it claimed
+# to be holding open had already closed. The blurb is now emitted before the
+# transfer starts (share::send), which is the only time it is any use.
+SHARE_TEMPLATE_LIVE='%name — receive with:  croc %code'
+
+# A self-hosted relay MUST be named. The phrase alone suffices only on croc's
+# built-in relay and on a multicast LAN (`local_only`); for any other relay the
+# recipient has no way to find the sender, and the transfer simply never
+# happens. Selected automatically by share::blurb on the endpoint's `relay`.
+SHARE_TEMPLATE_LIVE_RELAY='%name — receive with:  croc --relay %relay %code'
 
 # share::human_size <bytes>
 share::human_size() {
@@ -69,7 +85,7 @@ share::_render() {
   local -A vals=("$@")
   # Longest-first: guards against a shorter token name being a prefix of a
   # longer one (none currently collide, but the check is cheap insurance).
-  local -a order=(%downloads %crocurl %expires %token %name %code %url)
+  local -a order=(%downloads %crocurl %expires %relay %token %name %code %url)
   # `(@s:%:)` splits on literal `%` and preserves empty fields, so a template
   # that STARTS with a token (parts[1] == "") does not shift every other
   # field down by one.
@@ -98,18 +114,32 @@ share::blurb() {
   local kind="${2:?share::blurb: kind required}"
   local label="$3" value="$4" expires="$5" downloads="$6"
 
+  # The relay is read from the endpoint rather than passed in: every caller
+  # already knows the endpoint, and threading a relay argument through each of
+  # them for one template's benefit would be the same mistake %size would have
+  # been (see below).
+  local relay=""
+  [[ "$kind" == live ]] && relay="$(share::field "$endpoint" relay)"
+
   local template
   template="$(share::field "$endpoint" message)" || return 1
   if [[ -z "$template" ]]; then
     case "$kind" in
       web)  template="$SHARE_TEMPLATE_WEB" ;;
       cli)  template="$SHARE_TEMPLATE_CLI" ;;
-      live) template="$SHARE_TEMPLATE_LIVE" ;;
+      live)
+        if [[ -n "$relay" ]]; then
+          template="$SHARE_TEMPLATE_LIVE_RELAY"
+        else
+          template="$SHARE_TEMPLATE_LIVE"
+        fi
+        ;;
       *)    log_error "share: unknown blurb kind: $kind"; return 1 ;;
     esac
   fi
 
   share::_render "$template" \
     %name "$label" %url "$value" %token "$value" %code "$value" \
-    %expires "$expires" %downloads "$downloads" %crocurl "$SHARE_CROC_URL"
+    %expires "$expires" %downloads "$downloads" %crocurl "$SHARE_CROC_URL" \
+    %relay "$relay"
 }

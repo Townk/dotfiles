@@ -30,6 +30,10 @@ web = false
 profiles = ["personal"]
 TOML
     printf 'x' >"$SB/Report.pdf"
+    # Secret files land in the sandbox, not the real state dir: these examples
+    # mint live phrases, and without this they leave 0600 files behind in
+    # ~/.local/state/share/live on the dev machine (they did — 44 of them).
+    SHARE_LIVE_DIR="$SB/live"; export SHARE_LIVE_DIR
   }
   BeforeEach 'setup'
 
@@ -49,7 +53,7 @@ TOML
     # is present is what catches that class of bug; the flag-only assertions
     # above do not.
     The output should include "$SB/Report.pdf"
-    The lines of output should equal 12   # +1 for --ignore-stdin
+    The lines of output should equal 13   # +1 --ignore-stdin, +1 --disable-clipboard
   End
 
   # F5 fix: the relay PASSWORD never rides argv — a self-hosted endpoint's
@@ -270,12 +274,19 @@ SH
     PATH="$SB/bin:$PATH"
     SHARE_CROC_CALLS="$SB/calls"
     export SHARE_CROC_CALLS
-    out="$(share::croc_send lab live '' '' "$SB/Report.pdf" 2>/dev/null)"
+    # The phrase now lives in a mode-0600 file rather than being minted inside
+    # croc_send, because a backgrounded send has to hand the human the
+    # pasteable line BEFORE the job runs (amendment D5). The three properties
+    # this example pins are unchanged by that move: argv stays clean, the
+    # environment carries the phrase, and the line the recipient is given
+    # quotes the SAME phrase — a recipient handed a different one cannot
+    # connect at all.
+    sf="$(share::croc_secret_file lab)"
+    blurb="$(share::emit_live_blurb lab "$sf" "$SB/Report.pdf")"
+    share::croc_send --secret-file "$sf" lab live '' '' "$SB/Report.pdf" >/dev/null 2>/dev/null
     argv_has_code="$(grep -c -- '--code' "$SB/calls" || true)"
     env_code="$(cat "$SB/secret" 2>/dev/null)"
-    blurb_code="$(printf '%s\n' "$out" | grep -oE 'run: croc [^ ]+' | awk '{print $3}')"
-    # argv must be clean, the env must carry it, and the blurb must quote the
-    # SAME phrase — a recipient given a different phrase cannot connect.
+    blurb_code="$(printf '%s\n' "$blurb" | awk '{print $NF}')"
     matches() {
       [ "$argv_has_code" = 0 ] && [ -n "$env_code" ] && [ "$env_code" = "$blurb_code" ]
     }
@@ -283,10 +294,23 @@ SH
     The status should be success
   End
 
-  # Reproduces the finding verbatim: croc's own instruction line quotes
-  # --relay/--pass before the phrase. This example FAILS against the
-  # pre-fix grep-based extraction (verified: it reported the shared value as
-  # literally "--relay").
+  It 'writes the live secret file readable only by its owner'
+    sf="$(share::croc_secret_file lab)"
+    # 0600 from creation (umask inside the subshell), never 0644-then-chmod:
+    # this file carries the PAKE shared secret and the relay password.
+    When call zsh -c 'zmodload zsh/stat; zstat -H s -- "$1"; print -r -- ${s[mode]}' _ "$sf"
+    The output should equal '33152'
+  End
+
+  # Reproduces the original finding verbatim: croc's own instruction line
+  # quotes --relay/--pass BEFORE the phrase, so the pre-fix
+  # `grep -oE 'croc [a-z0-9-]{6,}'` matched "croc --relay" and reported the
+  # shared value as literally "--relay".
+  #
+  # The new design makes that structurally impossible — the phrase is generated
+  # by us and never read back out of croc's prose — but the example is kept,
+  # and kept pointed at the same observable, because the failure it describes
+  # is one a future "just parse the output" shortcut would reintroduce.
   It 'never mistakes --relay in croc'"'"'s own instruction line for the code phrase'
     cat >"$SB/bin/croc" <<'SH'
 #!/bin/sh
@@ -295,11 +319,126 @@ echo "Code is: croc --relay lab.example.com:9009 --pass hunter2 8878-salary-cour
 SH
     chmod +x "$SB/bin/croc"
     PATH="$SB/bin:$PATH"
-    out="$(share::croc_send lab live '' '' "$SB/Report.pdf" 2>/dev/null)"
-    blurb_code="$(printf '%s\n' "$out" | grep -oE 'run: croc [^ ]+' | awk '{print $3}')"
-    never_relay_or_empty() { [ -n "$blurb_code" ] && [ "$blurb_code" != "--relay" ]; }
+    sf="$(share::croc_secret_file lab)"
+    blurb="$(share::emit_live_blurb lab "$sf" "$SB/Report.pdf")"
+    share::croc_send --secret-file "$sf" lab live '' '' "$SB/Report.pdf" >/dev/null 2>/dev/null
+    blurb_code="$(printf '%s\n' "$blurb" | awk '{print $NF}')"
+    # Not croc's phrase either: ours is the only one either side ever uses.
+    never_relay_or_empty() {
+      [ -n "$blurb_code" ] \
+        && [ "$blurb_code" != "--relay" ] \
+        && [ "$blurb_code" != "8878-salary-courage-roger" ]
+    }
     When call never_relay_or_empty
     The status should be success
+  End
+
+  # `job::start` reports a failed enqueue with `die`, which EXITS — the caller
+  # never regains control to unlink the file it just minted. Every mint
+  # therefore sweeps anything too old to still be waiting for a peer, so live
+  # secrets cannot quietly accumulate in the state directory.
+  It 'sweeps live secret files too old to still be in use'
+    old_swept_new_kept() {
+      mkdir -p "$SHARE_LIVE_DIR"
+      touch -t 202501010000 "$SHARE_LIVE_DIR/stale.json"
+      SHARE_LIVE_DEADLINE=86400 share::croc_secret_file lab >/dev/null || return 1
+      [ -e "$SHARE_LIVE_DIR/stale.json" ] && return 1
+      # the file this very call minted must survive
+      [ "$(ls -1 "$SHARE_LIVE_DIR" | wc -l | tr -d ' ')" = 1 ]
+    }
+    When call old_swept_new_kept
+    The status should be success
+  End
+
+  # --- the supervised retry (amendment D7) ---------------------------------
+  # A backgrounded live transfer must survive the laptop sleeping: croc's
+  # connection dies, croc exits non-zero, and the job re-arms with the SAME
+  # phrase on the SAME relay. That reuse is what keeps a line already pasted
+  # into someone's chat valid — verified against croc 11.1.1 by killing a
+  # waiting sender and reconnecting with the identical phrase.
+  #
+  # Gated on JOB_ID: only a job supervises. A foreground send has a human
+  # watching who can simply run it again.
+
+  It 'retries a failed live transfer and succeeds on a later attempt'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
+n=$((n + 1)); printf '%s' "$n" >"$SB_TRIES"
+[ "$n" -lt 3 ] && { echo "connection lost"; exit 1; }
+echo "Sending 'Report.pdf' (1 B)"
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    SB_TRIES="$SB/tries"; export SB_TRIES
+    JOB_ID=fake-job SHARE_LIVE_BACKOFF_BASE=0 \
+      share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>/dev/null
+    When call cat "$SB/tries"
+    The output should equal '3'
+  End
+
+  # Retrying a rejected relay password would fail identically for 24 hours,
+  # turning a clear error into a silent one. Verified croc 11.1.1 wording:
+  # "could not connect to <relay>: bad response: bad password".
+  It 'does not retry a failure retrying cannot fix'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
+printf '%s' "$((n + 1))" >"$SB_TRIES"
+echo "could not connect to lab.example.com:9009: bad response: bad password"
+exit 1
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    SB_TRIES="$SB/tries"; export SB_TRIES
+    # SHARE_LIVE_DEADLINE is bounded here so a REGRESSION fails fast rather
+    # than hanging the suite: without the fatal check this loops until the
+    # deadline, and at the 24h default that is not a failing test, it is a
+    # wedged one. Confirmed by mutation — removing the check hung the run.
+    JOB_ID=fake-job SHARE_LIVE_BACKOFF_BASE=0 SHARE_LIVE_DEADLINE=2 \
+      share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>/dev/null || :
+    When call cat "$SB/tries"
+    The output should equal '1'
+  End
+
+  It 'does not retry outside a job — a foreground send has a human watching'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
+printf '%s' "$((n + 1))" >"$SB_TRIES"
+echo "connection lost"
+exit 1
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    SB_TRIES="$SB/tries"; export SB_TRIES
+    share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>/dev/null || :
+    When call cat "$SB/tries"
+    The output should equal '1'
+  End
+
+  It 'gives up once the deadline has passed, rather than looping forever'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
+printf '%s' "$((n + 1))" >"$SB_TRIES"
+echo "connection lost"
+exit 1
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    SB_TRIES="$SB/tries"; export SB_TRIES
+    # SHARE_LIVE_DEADLINE=0 puts the deadline at "now", so exactly one attempt
+    # runs and the loop then stops instead of re-arming. Driven in-process:
+    # a fresh `zsh -c` would not inherit this example's fixture environment.
+    deadline_passed() {
+      JOB_ID=fake-job SHARE_LIVE_BACKOFF_BASE=0 SHARE_LIVE_DEADLINE=0 \
+        share::croc_send lab live '' '' "$SB/Report.pdf"
+    }
+    When run deadline_passed
+    The status should be failure
+    The stderr should include 'before the deadline'
+    The stdout should equal ''
   End
 
   It 'fails closed with an error when the code phrase cannot be generated'
