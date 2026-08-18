@@ -10,8 +10,7 @@
 # Callers: pick-clipboard (clip.get / clip.set / clip.set.rich /
 # clip.set.files / store.persist.text), common.zsh's notify (osd.notify),
 # mux-fullscreen-probe (window.fullscreen.state), terminal-toggle-fullscreen
-# (window.fullscreen.toggle), the remote-pull live row (peer_snapshot /
-# persist_files).
+# (window.fullscreen.toggle), the remote-pull live row (peer_snapshot).
 #
 # CLIPBRIDGE_TIMEOUT_S keeps its meaning — it maps onto the client's §5.2
 # exchange deadline (RECOB_TIMEOUT_S). Ops that make the origin DO something
@@ -163,14 +162,15 @@ clipbridge::set_files_paths() {
   clipbridge::call --stdin paths clip.set.files
 }
 
-# clipbridge::persist_files <host>   (NUL-joined absolute paths on stdin)
-#   store.persist.files{host,paths} on THIS machine's own bridge — the
-#   history row an accepted live FILES entry deserves (the same row shape a
-#   remote pbcopy push creates; the daemon's (source_host, type_hash,
-#   type_kind) dedup makes a re-accept idempotent).
-clipbridge::persist_files() {
-  clipbridge::call --stdin paths store.persist.files "host=$1"
-}
+# There is deliberately NO persist_files wrapper here (6b final review, C1).
+# A store.persist.files on the TRUSTED socket mints file authority over the
+# named paths, so the daemon refuses one whose host is not this machine
+# (ops/persist.rs: "source host does not match this machine") — which is
+# precisely what an accepted live PEER files clip would have to claim. The
+# authority-free POINTER row that case actually wants is written by the picker
+# straight to sqlite (clip::record_live_files_row in libexec/pick-clipboard),
+# mirroring persist_files_row's non-trusted branch. A wrapper here would only
+# be a trap that always answers "refused".
 
 # clipbridge::set_files_id <rowid>
 #   clip.set.files{clip_id}: restore a store row's manifest by id. The old

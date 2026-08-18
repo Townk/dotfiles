@@ -89,6 +89,12 @@ Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
     # in clip::self_host, so MY_HOST is deterministic with no scutil fake.
     RECOB_SELF_NAME=mac-mini
     recob_start
+    # This Describe is the machine you are SITTING at: no reverse forward, so
+    # no live peer row and a Ctrl-Y that lands locally. Since bridge_up is now
+    # the probe ALONE (6b final review, C2), unsetting the SSH vars above is
+    # no longer enough — the recorder's own TCP listener would answer the
+    # probe as if it were the peer. See recob_close_peer_port.
+    recob_close_peer_port
     # ONE store, shared by the picker and the daemon: recob_start's
     # XDG_DATA_HOME. clip.set.files{clip_id} is resolved by the daemon's own
     # restore engine, which must find the very row the example seeded.
@@ -1243,6 +1249,12 @@ Describe 'pick-clipboard: live FILES row (6b, Task 3)'
         blob BLOB,
         PRIMARY KEY (clip_id, uti)
       );
+      CREATE TABLE file_authorities (
+        clip_id INTEGER,
+        item_index INTEGER,
+        path BLOB,
+        PRIMARY KEY (clip_id, item_index)
+      );
     '
 
     BINDIR="$SHELLSPEC_TMPBASE/binlivef"; mkdir -p "$BINDIR"
@@ -1339,26 +1351,83 @@ FAKE
     The line 2 of output should eq 'paths='
   End
 
+  # The accept path writes the store row ITSELF (final review C1): a trusted
+  # store.persist.files claiming the PEER's host is refused by the daemon by
+  # design (it would mint file authority over paths this machine does not
+  # own), so the picker inserts the authority-free POINTER row directly,
+  # mirroring ops/persist.rs' persist_files_row. These examples run against a
+  # REAL sqlite store -- the fake bridge below never sees a persist at all.
   run_pull_live_files() {
     source "$SCRIPT_PATH"
     clip::copy_files_by_id() { COPY_CALLED_WITH="$1"; }
     clip::pull_live_files laptop "$PULL_PATHS_FILE"
   }
 
-  It "clip::pull_live_files persists then restores by the resolved id"
+  # Every column persist_files_row sets, in one assertable line. hex() for
+  # text_preview because the newline-joined paths would otherwise span output
+  # lines; nulls= proves text_plain/regtype/source_app stay unset (a pointer
+  # row is not a text row); fresh= proves first_ts == last_ts on insert.
+  pointer_row() {
+    sqlite3 "$DB" "SELECT hex(text_preview) || ' len=' || len
+        || ' kind=' || type_kind || ' pinned=' || pinned
+        || ' host=' || source_host || ' hash=' || type_hash
+        || ' nulls=' || (text_plain IS NULL) || (regtype IS NULL) || (source_app IS NULL)
+        || ' fresh=' || (first_ts = last_ts)
+      FROM clips WHERE id = $COPY_CALLED_WITH;"
+  }
+  manifest_blob() {
+    sqlite3 "$DB" "SELECT uti || ':' || hex(blob) FROM clip_types WHERE clip_id = $COPY_CALLED_WITH;"
+  }
+  clip_rows() { sqlite3 "$DB" "SELECT count(*) FROM clips;"; }
+  authority_rows() { sqlite3 "$DB" "SELECT count(*) FROM file_authorities;"; }
+
+  It "clip::pull_live_files records the pointer row and restores it by that exact id"
     write_fake_bridge "exit 1" "exit 1"
     PULL_PATHS_FILE="$SHELLSPEC_TMPBASE/pull-paths.bin"
-    printf '/x/y' > "$PULL_PATHS_FILE"
-    FAKE_BRIDGE_LOG="$SHELLSPEC_TMPBASE/fake-bridge-log"; : > "$FAKE_BRIDGE_LOG"
-    export FAKE_BRIDGE_LOG
-    export FAKE_BRIDGE_STDIN="$SHELLSPEC_TMPBASE/fake-bridge-stdin"
-    SEEDED_ROW_ID=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','laptop',999); SELECT last_insert_rowid();")
+    # Two paths: the manifest blob is NUL-joined, the hashed/previewed form is
+    # newline-joined -- persist_files_row uses BOTH, and a single-path fixture
+    # could not tell them apart.
+    printf '/x/y\000/z' > "$PULL_PATHS_FILE"
+    # sha256 of the NEWLINE-joined paths (persist_files_row hashes `joined`,
+    # not the manifest bytes), computed here independently of the picker.
+    EXPECT_HASH=$(printf '/x/y\n/z' | shasum -a 256 | cut -d' ' -f1)
 
     When call run_pull_live_files
     The status should be success
-    The contents of file "$FAKE_BRIDGE_LOG" should include 'store.persist.files'
-    The contents of file "$FAKE_BRIDGE_LOG" should include 'host=laptop'
-    The variable COPY_CALLED_WITH should eq "$SEEDED_ROW_ID"
+    # The row id the restore engine was handed is the row that was just
+    # written -- no "newest row from that host" resolve in between.
+    The variable COPY_CALLED_WITH should eq 1
+    The result of function clip_rows should eq 1
+    The result of function pointer_row should eq "2F782F790A2F7A len=7 kind=files pinned=0 host=laptop hash=$EXPECT_HASH nulls=111 fresh=1"
+    # The manifest is the NUL-joined bytes, byte-for-byte what the peer vended.
+    The result of function manifest_blob should eq 'x-file-manifest:2F782F79002F7A'
+    # NEVER an authority row: this machine does not own the peer's files.
+    The result of function authority_rows should eq 0
+  End
+
+  run_pull_twice() {
+    source "$SCRIPT_PATH"
+    clip::copy_files_by_id() { COPY_CALLED_WITH="$1"; }
+    clip::pull_live_files laptop "$PULL_PATHS_FILE" || return 1
+    FIRST_ID="$COPY_CALLED_WITH"
+    FIRST_TS=$(sqlite3 "$DB" "SELECT last_ts FROM clips WHERE id=$FIRST_ID;")
+    clip::pull_live_files laptop "$PULL_PATHS_FILE" || return 1
+    SECOND_ID="$COPY_CALLED_WITH"
+    SECOND_TS=$(sqlite3 "$DB" "SELECT last_ts FROM clips WHERE id=$SECOND_ID;")
+    BUMPED=$(awk -v a="$FIRST_TS" -v b="$SECOND_TS" 'BEGIN { print (b > a) ? "yes" : "no" }')
+  }
+
+  It 'a second accept of the same live FILES row bumps last_ts instead of adding a row'
+    write_fake_bridge "exit 1" "exit 1"
+    PULL_PATHS_FILE="$SHELLSPEC_TMPBASE/pull-paths-2.bin"
+    printf '/x/y\000/z' > "$PULL_PATHS_FILE"
+
+    When call run_pull_twice
+    The status should be success
+    The result of function clip_rows should eq 1
+    The variable SECOND_ID should eq "$FIRST_ID"
+    The variable BUMPED should eq yes
+    The result of function authority_rows should eq 0
   End
 
   emit_rows_with_two_live() {
@@ -1400,6 +1469,41 @@ FAKE
     # because the WHOLE concatenated SQL value truncates at that embedded
     # NUL on this sqlite3 build, not just the paths column).
     The line 4 of output should include '(+1)'
+    # The BELOW segment (last_ts <= the older live row's threshold) is only
+    # covered here: without this line a regression that dropped the third
+    # query entirely would still pass every assertion above.
+    The line 5 of output should include 'row-100'
+  End
+
+  # fzf's start:reload and every delete/pin reload run a GENERATED script, not
+  # emit_rows -- a heredoc carrying its own copy of the three-segment split
+  # with both live thresholds baked in as literals, plus its own `cat` of the
+  # two prerendered live rows. The only other example that executes
+  # $emit_script runs with ZERO live rows, so a splice regression in the
+  # live-row half of that heredoc would ship green. Same fixture as the
+  # interleave example above; same expected five-line order.
+  emit_script_with_two_live() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      FZF_COLUMNS=100 bash "$emit_script"
+    '
+  }
+
+  It 'the reload script emits the same five-line order, both live sentinels included'
+    write_fake_bridge \
+      "printf 'text=%s\nregtype=%s\ntimestamp=%s\nhost=%s\n' '$(spec_hex "peer text, distinct from every local row")' '$(spec_hex v)' '$(spec_hex 400)' '$(spec_hex peer-host)'" \
+      "$(files_reply peer-host 200 /a/b /c)"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'row-100 text');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',300,'row-300 text');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',500,'row-500 text');"
+
+    When call emit_script_with_two_live
+    The status should be success
+    The line 1 of output should include 'row-500'
+    The line 2 of output should include $'\x1f''LIVE'$'\x1e'
+    The line 3 of output should include 'row-300'
+    The line 4 of output should include $'\x1f''LIVEF'$'\x1e'
+    The line 5 of output should include 'row-100'
   End
 End
 
@@ -1834,12 +1938,48 @@ Describe 'pick-clipboard: headless GUI verbs (--peer-snapshot / --pull-live, Tas
         blob BLOB,
         PRIMARY KEY (clip_id, uti)
       );
+      CREATE TABLE file_authorities (
+        clip_id INTEGER,
+        item_index INTEGER,
+        path BLOB,
+        PRIMARY KEY (clip_id, item_index)
+      );
     '
 
     BINDIR="$SHELLSPEC_TMPBASE/binverbs"; mkdir -p "$BINDIR"
+
+    # --pull-live files now writes a real store row and hands it to the real
+    # restore engine (C1), so this Describe needs the same two sandboxed
+    # tools the Ctrl-Y Describe pins: a pbcopy that can never touch the
+    # human's pasteboard, and an rsync that fabricates the "pulled" bytes
+    # instead of dialing a host named `laptop`.
+    PBCOPYLOG="$SHELLSPEC_TMPBASE/pbcopylog-verbs"; : > "$PBCOPYLOG"
+    cat > "$BINDIR/pbcopy" <<EOF
+#!/bin/sh
+cat >> "$PBCOPYLOG"
+EOF
+    chmod +x "$BINDIR/pbcopy"
+    RSYNCLOG="$SHELLSPEC_TMPBASE/rsynclog-verbs"; rm -f "$RSYNCLOG"
+    cat > "$BINDIR/rsync" <<EOF
+#!/bin/sh
+echo "\$*" >> "$RSYNCLOG"
+argc=\$#
+eval "src=\\\${\$((argc - 1))}"
+eval "dst=\\\${\$argc}"
+name="\${src##*:}"
+base="\${name##*/}"
+mkdir -p "\$dst"
+printf 'pulled:%s' "\$base" > "\$dst/\$base"
+EOF
+    chmod +x "$BINDIR/rsync"
+    export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync"
+
     export PATH="$BINDIR:$PATH"
     export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
     export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    # Needed since --pull-live files reaches the real restore engine (C1):
+    # localizing a pulled manifest re-authorizes it through the core lib.
+    export PICK_CLIPBOARD_CORE_LIB="$LIB_DIR/clipboard-store-core.zsh"
     export PICK_CLIPBOARD_NO_RUN=1
     export SCRIPT_PATH="$SCRIPT"
     unset PICK_CLIPBOARD_LIMIT
@@ -1935,6 +2075,25 @@ FAKE
     The line 2 of output should include '"kind":"files"'
   End
 
+  # C2 (final review): the PRODUCTION shape of this verb. Hammerspoon runs it
+  # through `zsh -lc` from hs.task and the job runner runs picker work from
+  # pueue -- neither environment carries SSH_CONNECTION/SSH_CLIENT/SSH_TTY, so
+  # while bridge_up required that triple the GUI's live rows were ALWAYS
+  # empty, no matter how healthy the tunnel was. The probe alone decides now,
+  # and this example fabricates nothing: it just removes the vars the old
+  # harness supplied for the picker's benefit.
+  It '--peer-snapshot still returns the live rows with no SSH vars in the environment (GUI/hs.task shape)'
+    write_fake_bridge \
+      "$(clip_get_reply hi v 1755551234.5 laptop)" \
+      "$(files_reply laptop 1755551300.1 /a/b /c)"
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+
+    When run script "$SCRIPT" --peer-snapshot
+    The status should eq 0
+    The line 1 of output should include '"kind":"text"'
+    The line 2 of output should include '"kind":"files"'
+  End
+
   It '--peer-snapshot is empty and rc 0 when the bridge is down (probe fails)'
     write_fake_bridge "exit 1" "exit 1" "exit 1"
 
@@ -1968,21 +2127,37 @@ FAKE
     The error should include 'no live peer text clip'
   End
 
-  It '--pull-live files dispatches the open-time host/paths to a fresh persist'
+  # The verb's own end of C1: the row is written by the picker, straight to
+  # sqlite, and the trusted store.persist.files the daemon would refuse for a
+  # foreign host is never attempted (the fake still HAS that arm, so the
+  # "should not include" below is a live canary, not a vacuous check).
+  pointer_row_of() {
+    sqlite3 "$DB" "SELECT c.source_host || '|' || c.type_kind || '|' || hex(t.blob)
+      FROM clips c JOIN clip_types t ON t.clip_id = c.id
+      WHERE t.uti = 'x-file-manifest' AND c.source_host = 'laptop';"
+  }
+  # Scoped to the POINTER row: the restore engine legitimately authorizes the
+  # separate LOCALIZED bookkeeping row it creates for the cache copies, which
+  # is a different clip id and not what C1 is about.
+  authority_rows_of() {
+    sqlite3 "$DB" "SELECT count(*) FROM file_authorities WHERE clip_id IN
+      (SELECT c.id FROM clips c JOIN clip_types t ON t.clip_id = c.id
+        WHERE t.uti = 'x-file-manifest' AND c.source_host = 'laptop'
+          AND hex(t.blob) = '2F782F79');"
+  }
+
+  It '--pull-live files records the peer manifest as a local pointer row, then restores it'
     write_fake_bridge "exit 1" "$(files_reply laptop 1755551300.1 /x/y)"
     FAKE_BRIDGE_LOG="$SHELLSPEC_TMPBASE/fake-bridge-log2"; : > "$FAKE_BRIDGE_LOG"
     export FAKE_BRIDGE_LOG
     export FAKE_BRIDGE_STDIN="$SHELLSPEC_TMPBASE/fake-bridge-stdin2"
 
-    # Nothing was actually persisted by the fake (it only logs), so the
-    # id-lookup inside clip::pull_live_files honestly comes up empty --
-    # rc mirrors that, but the WIRING under test is the persist call itself.
     When run script "$SCRIPT" --pull-live files
-    The status should eq 1
-    The error should include 'persisted live file clip not found in store'
-    The contents of file "$FAKE_BRIDGE_LOG" should include 'store.persist.files'
-    The contents of file "$FAKE_BRIDGE_LOG" should include 'host=laptop'
-    The contents of file "$FAKE_BRIDGE_STDIN" should eq '/x/y'
+    The status should eq 0
+    The result of function pointer_row_of should eq 'laptop|files|2F782F79'
+    The result of function authority_rows_of should eq 0
+    The contents of file "$FAKE_BRIDGE_LOG" should not include 'store.persist.files'
+    The path "$RSYNCLOG" should be file
   End
 
   It '--pull-live files fails cleanly when there is no live peer file clip'
@@ -1999,5 +2174,114 @@ FAKE
     When run script "$SCRIPT" --pull-live bogus
     The status should eq 1
     The error should include '--pull-live requires text or files'
+  End
+End
+
+# --- C1: the pointer row the picker writes IS the daemon's pointer row -------
+#
+# An accepted live FILES candidate cannot be recorded through
+# store.persist.files: on the trusted socket that op mints file authority over
+# the named paths, so the daemon refuses one whose host is not this machine
+# (ops/persist.rs) -- and the peer's host is exactly what the row must carry.
+# The picker therefore writes the row itself. The examples in the 6b Describe
+# above lock its SHAPE against hand-computed expectations; these lock it
+# against the ONLY other writer of that shape -- a real recobd, handed the
+# same manifest over its PUBLIC endpoint, which is precisely the phase-6
+# remote-push path this pull has to be indistinguishable from.
+Describe 'pick-clipboard: the live FILES pointer row mirrors the daemon (6b, C1)'
+  Include tests/recob_helper.sh
+
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
+  LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    export HOME="$SHELLSPEC_TMPBASE/homemirror"; rm -rf "$HOME"; mkdir -p "$HOME"
+    export TMPDIR="$SHELLSPEC_TMPBASE/tmpmirror"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
+    RECOB_SELF_NAME=mac-mini
+    recob_start
+    DAEMON_DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    rm -f "$DAEMON_DB"
+    PICKER_DB="$SHELLSPEC_TMPBASE/history-mirror.db"; rm -f "$PICKER_DB"
+    # The manifest both writers get: two paths, so the NUL-joined blob and the
+    # newline-joined preview/hash cannot be confused for each other.
+    MF="$SHELLSPEC_TMPBASE/mirror-manifest.bin"
+    printf '/a/b\000/c' > "$MF"
+    export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
+    export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    export PICK_CLIPBOARD_NO_RUN=1
+    export SCRIPT_PATH="$SCRIPT"
+  }
+  BeforeEach 'setup'
+  AfterEach 'recob_stop'
+
+  # The daemon's own pointer row: store.persist.files{host=laptop} arriving on
+  # the PUBLIC endpoint, where §9.3 evaluates mints_authority against the
+  # endpoint and produces the authority-free row a foreign host is allowed.
+  daemon_writes_row() {
+    "$(recob_bridge_bin)" call --peer --stdin paths store.persist.files host=laptop < "$MF"
+  }
+
+  # Every column that defines the shape, in one line per (clip, clip_type)
+  # pair. Timestamps and the rowid are deliberately absent -- they are the two
+  # things the two writers are allowed to differ on.
+  row_dump() {  # $1 = db path
+    sqlite3 "$1" "SELECT hex(c.text_preview) || ' len=' || c.len
+        || ' kind=' || c.type_kind || ' pinned=' || c.pinned
+        || ' host=' || c.source_host || ' hash=' || c.type_hash
+        || ' nulls=' || (c.text_plain IS NULL) || (c.regtype IS NULL) || (c.source_app IS NULL)
+        || ' uti=' || t.uti || ' blob=' || hex(t.blob)
+        || ' auth=' || (SELECT count(*) FROM file_authorities fa WHERE fa.clip_id = c.id)
+      FROM clips c JOIN clip_types t ON t.clip_id = c.id ORDER BY c.id;"
+  }
+
+  # The picker's insert, against a store with the DAEMON's own schema (copied
+  # from the file recobd just created, then emptied). CLIPBOARD_BRIDGE_PORT=1
+  # keeps the sourced picker from doing an open-time peer fetch it has no use
+  # for here -- see recob_close_peer_port.
+  picker_writes_row() {  # $1 = db path
+    PICK_CLIPBOARD_DB="$1" CLIPBOARD_BRIDGE_PORT=1 zsh -f -c '
+      source "$SCRIPT_PATH"
+      clip::record_live_files_row laptop "$1"
+    ' _ "$MF"
+  }
+
+  It 'writes the same row the daemon writes for the same peer manifest'
+    mirror() {
+      daemon_writes_row >/dev/null || return 1
+      DAEMON_ROW=$(row_dump "$DAEMON_DB")
+      cp "$DAEMON_DB" "$PICKER_DB"
+      sqlite3 "$PICKER_DB" "DELETE FROM clips; DELETE FROM clip_types; DELETE FROM file_authorities;"
+      PICKER_ID=$(picker_writes_row "$PICKER_DB") || return 1
+      row_dump "$PICKER_DB"
+    }
+    When call mirror
+    The status should be success
+    # Not merely "looks right": every shape column equal to the daemon's.
+    The output should eq "$DAEMON_ROW"
+    # ... and non-empty, so a pair of empty dumps could never pass.
+    The output should include 'kind=files'
+    The output should include 'host=laptop'
+    The output should include 'uti=x-file-manifest blob=2F612F62002F63'
+    The output should include 'auth=0'
+  End
+
+  It 'dedups onto the daemon-written row instead of adding a twin'
+    collapse() {
+      daemon_writes_row >/dev/null || return 1
+      DAEMON_ID=$(sqlite3 "$DAEMON_DB" "SELECT id FROM clips;")
+      BEFORE_TS=$(sqlite3 "$DAEMON_DB" "SELECT last_ts FROM clips WHERE id=$DAEMON_ID;")
+      PICKER_ID=$(picker_writes_row "$DAEMON_DB") || return 1
+      AFTER_TS=$(sqlite3 "$DAEMON_DB" "SELECT last_ts FROM clips WHERE id=$DAEMON_ID;")
+      ROWS=$(sqlite3 "$DAEMON_DB" "SELECT count(*) FROM clips;")
+      BUMPED=$(awk -v a="$BEFORE_TS" -v b="$AFTER_TS" 'BEGIN { print (b > a) ? "yes" : "no" }')
+    }
+    When call collapse
+    The status should be success
+    # Same (source_host, type_hash, type_kind, no-authority) key => same row.
+    The variable PICKER_ID should eq "$DAEMON_ID"
+    The variable ROWS should eq 1
+    The variable BUMPED should eq yes
   End
 End

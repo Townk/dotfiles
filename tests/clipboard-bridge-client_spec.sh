@@ -1,7 +1,11 @@
-# Tests for clipbridge::peer_snapshot / clipbridge::persist_files
+# Tests for clipbridge::peer_snapshot
 # (home/dot_local/lib/clipboard-bridge-client.zsh) — the two-exchange peer
-# clipboard read a remote pull needs, and the local-store write an accepted
-# candidate deserves. The fake `system-bridge` is the seam (SYSTEM_BRIDGE_BIN,
+# clipboard read a remote pull needs. (The companion persist_files wrapper is
+# gone: an accepted live FILES candidate is recorded by the picker's own
+# pointer-row insert, not by a trusted store.persist.files the daemon refuses
+# for a foreign host — see the lib's own note where it used to live, and
+# tests/pick-clipboard-files_spec.sh's real-store examples.)
+# The fake `system-bridge` is the seam (SYSTEM_BRIDGE_BIN,
 # the CLIPBOARD_MOUNT_BIN precedent the lib's own header comment names):
 # these examples never touch a real recobd, only the reply shape
 # clipbridge::call decodes (one `name=<hex>` line per field).
@@ -72,26 +76,5 @@ FAKE
     When call run_snapshot
     The status should eq 0
     The output should eq ''
-  End
-End
-
-Describe 'clipbridge::persist_files'
-  It 'sends store.persist.files with host + stdin paths on the trusted socket'
-    export SYSTEM_BRIDGE_BIN="$SHELLSPEC_TMPBASE/rec-bridge"
-    cat > "$SYSTEM_BRIDGE_BIN" <<'FAKE'
-#!/bin/sh
-printf '%s\n' "$*" > "${FAKE_BRIDGE_LOG:?}"
-cat > "${FAKE_BRIDGE_STDIN:?}"
-FAKE
-    chmod +x "$SYSTEM_BRIDGE_BIN"
-    export FAKE_BRIDGE_LOG="$SHELLSPEC_TMPBASE/args" FAKE_BRIDGE_STDIN="$SHELLSPEC_TMPBASE/stdin"
-    When call zsh -c 'source "$1"; printf "/a\0/b" | clipbridge::persist_files laptop' zsh \
-      "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/clipboard-bridge-client.zsh"
-    The status should eq 0
-    The contents of file "$FAKE_BRIDGE_LOG" should include 'store.persist.files'
-    The contents of file "$FAKE_BRIDGE_LOG" should include 'host=laptop'
-    The contents of file "$FAKE_BRIDGE_LOG" should not include '--peer'
-    file_len() { wc -c < "$FAKE_BRIDGE_STDIN" | tr -d ' '; }
-    The result of function file_len should eq 5
   End
 End

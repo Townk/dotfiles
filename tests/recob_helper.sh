@@ -187,6 +187,28 @@ recob_stop() {
   return 0
 }
 
+# recob_close_peer_port — express "this machine is NOT the far end of an SSH
+# session" for a client that decides that by PROBING the peer port.
+#
+# pick-clipboard gates its live-peer features on `clipbridge::probe
+# 127.0.0.1 $CLIPBOARD_BRIDGE_PORT` ALONE — an SSH_CONNECTION/SSH_CLIENT/
+# SSH_TTY check would be a lie in the environments that matter (Hammerspoon's
+# hs.task, pueue), so the reverse forward's existence IS the signal. In
+# production the sitting machine has nothing on 2490 and the probe refuses;
+# in a spec, `recob_start`'s daemon binds the very port it exported as
+# CLIPBOARD_BRIDGE_PORT, so a picker started under it would see a "peer" that
+# is really its own store. A spec whose subject is the SITTING machine
+# therefore points the peer port at one nothing can be listening on: port 1 is
+# privileged and unbindable by an unprivileged test daemon, and a loopback
+# connect there refuses instantly (no timeout, no network).
+#
+# Call it AFTER recob_start (which exports the daemon's real port). The
+# trusted Unix socket is untouched, so this machine's own bridge still works —
+# which is exactly the local shape: own store yes, peer clipboard no.
+recob_close_peer_port() {
+  export CLIPBOARD_BRIDGE_PORT=1
+}
+
 # The credential a client needs to reach the public endpoint. `--record`
 # installs one for this machine's own identity at startup (§11.1's fixture), so
 # a spec needs this only to install a *second* one under another owner's name —

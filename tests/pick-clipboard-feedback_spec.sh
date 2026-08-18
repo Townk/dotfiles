@@ -34,6 +34,11 @@ Describe 'pick-clipboard: copy feedback'
     # recob_start's XDG_DATA_HOME.
     RECOB_SELF_NAME=mac-mini
     recob_start
+    # Sitting at this machine: no reverse forward, hence no live peer row and
+    # a Ctrl-Y that lands locally. bridge_up is the probe ALONE now (6b final
+    # review, C2), so the SSH vars unset above no longer say that by
+    # themselves -- the recorder's own TCP listener would answer the probe.
+    recob_close_peer_port
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     export PICK_CLIPBOARD_DB="$DB"
     mkdir -p "$XDG_DATA_HOME/pick-clipboard"

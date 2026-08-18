@@ -86,13 +86,14 @@ pick::sqlite_raw
 It is created by the Hammerspoon clipboard-history watcher (chezmoi apply)."
 
 # --- bridge-up detection (spec §8) -----------------------------------------
-# Bridge-up = we're in an SSH session AND the reverse-forwarded remote clipboard
-# is actually reachable on the loopback TCP port. A real connect probe (not a
-# "does a socket file exist?" check) — a down/stale tunnel refuses, so we
-# degrade cleanly instead of the old "file present but connection refused" trap.
+# Bridge-up = the reverse-forwarded remote clipboard is actually reachable on
+# the loopback TCP port. A real connect probe (not a "does a socket file
+# exist?" check) — a down/stale tunnel refuses, so we degrade cleanly instead
+# of the old "file present but connection refused" trap.
 # Under the self-contained model (§11) bridge-up no longer changes WHICH rows
 # the picker shows (it's always this machine's whole store); it only decides
-# where a Ctrl-Y copy additionally lands (ship to the machine you're sitting at).
+# where a Ctrl-Y copy additionally lands (ship to the machine you're sitting at)
+# and whether the 6b live peer rows are fetched at all.
 BRIDGE_HOST=127.0.0.1
 # The probe must name the same endpoint the --peer wrappers dial: the client
 # library resolves CLIPBOARD_BRIDGE_PORT (default 2490, the reverse-forwarded
@@ -101,11 +102,21 @@ BRIDGE_HOST=127.0.0.1
 # LOCAL_PORT (2489) plumbing is gone with the opcode wire.
 BRIDGE_PORT="${CLIPBOARD_BRIDGE_PORT:-2490}"
 bridge_up=0
-# Canonical remote-detection triple (== mux::is_remote, mux-bootstrap.zsh);
-# inlined here (this file's own lib stack does not pull in that layer). Same
-# test recurs below; keep them in sync (all three vars, incl. SSH_TTY).
-if [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]] &&
-   clipbridge::probe "$BRIDGE_HOST" "$BRIDGE_PORT"; then
+# The PROBE ALONE is the gate — deliberately NOT the SSH_CONNECTION/SSH_CLIENT/
+# SSH_TTY triple that used to prefix it (6b final review, C2). The triple is a
+# property of THIS PROCESS's environment, and the picker is not always started
+# from an interactive ssh shell: the Hammerspoon GUI picker shells out to the
+# headless verbs below through `zsh -lc` from the hs.task environment, and the
+# job runner spawns picker work from pueue — neither carries a single SSH_*
+# var, so the triple made --peer-snapshot/--pull-live silently inert exactly
+# where 6b needs them. Something accepting on 127.0.0.1:2490 IS the honest
+# "am I the machine being ssh'd INTO" test (docs/mux silo map: the reverse
+# forward is created by the ssh client and only ever exists on the remote end),
+# and the port is owned by this stack by convention. Every OTHER use of the
+# triple in this file (clip::copy_by_id's ship-to-peer branches) is unchanged:
+# those ask "is this session remote", a different question from "is a peer
+# clipboard reachable".
+if clipbridge::probe "$BRIDGE_HOST" "$BRIDGE_PORT"; then
   bridge_up=1
 fi
 
@@ -1036,29 +1047,103 @@ clip::copy_files_by_id() {
   return 1
 }
 
-# clip::pull_live_files <host> <paths_file> -- persist + restore the live
-# FILES row's Ctrl-Y pull (6b). Defined HERE -- right after
-# clip::copy_files_by_id and BEFORE the --restore-id dispatch just below --
-# for the exact reason the clip::has_live_tty comment above states: a later
-# task adds its own headless top-level dispatch (mirroring --restore-id) that
-# calls this function, and that dispatch runs before this file's later
-# definitions (clip::copy_by_id and everything interactive-only under it) have
-# been sourced. Defining it any later would leave that direct invocation
-# resolving to "command not found".
+# clip::record_live_files_row <host> <paths_file> -- record an accepted live
+# FILES candidate as a POINTER row in this machine's store, and print its row
+# id (6b). Defined HERE -- right after clip::copy_files_by_id and BEFORE the
+# --restore-id dispatch just below -- for the exact reason the
+# clip::has_live_tty comment above states: the headless verbs further down
+# dispatch at the top level, before this file's later definitions (everything
+# interactive-only) have been sourced. Defining it any later would leave those
+# direct invocations resolving to "command not found".
 #
-# The resolve is "newest files-kind row from that host": we JUST persisted
-# (the daemon bumps last_ts even on dedup, ops/persist.rs persist_files_row),
-# so that row is ours without any blob math -- clip::copy_files_by_id then
-# runs the SAME mount/rsync/cache/size-cap/toast engine every stored files row
-# uses.
+# WHY A DIRECT INSERT AND NOT store.persist.files: a TRUSTED persist mints
+# file authority over the named paths, so the daemon refuses one whose
+# host != self (ops/persist.rs: "source host does not match this machine") --
+# a confused-deputy guard, and correct. The row we want is exactly the
+# opposite: the PUBLIC/pointer shape, authority-free, credited to the PEER's
+# host. The daemon reaches that shape only through its own public endpoint
+# (i.e. a push FROM the peer), which is not what a pull is. So the picker
+# writes the pointer row itself, mirroring persist_files_row's non-trusted
+# branch statement for statement:
+#
+#   joined    = paths.join("\n")     -> text_preview, len (BYTES of joined)
+#   manifest  = paths.join("\0")     -> clip_types.blob (uti x-file-manifest)
+#   type_hash = sha256(joined)       -- NOT sha256 of the NUL-joined bytes
+#   type_kind = 'files', pinned = 0, first_ts = last_ts = now (epoch float)
+#   source_host = the PEER's host    -- text_plain/regtype/source_app stay NULL
+#   dedup  (source_host, type_hash, type_kind='files') AND the row holds NO
+#          file_authorities -> bump last_ts on the existing row, insert nothing
+#   file_authorities: NEVER for this row (that is the trusted branch only)
+#
+# The daemon's post-write sweep (1000-row cap, grant expiry) is deliberately
+# NOT mirrored: it is store housekeeping the daemon runs on every persist, and
+# a picker has no business deleting the human's history rows behind an accept.
+#
+# Byte-safety: the paths and the host reach sqlite through readfile() on temp
+# files, never a $(...) capture -- a path may hold any byte but NUL, and the
+# manifest blob is defined BY its NULs. Only the hex digest and the numeric
+# timestamps are ever interpolated as literals.
+clip::record_live_files_row() {
+  local host="$1" paths_file="$2" nl hf hash len now id rc=0
+  [[ -n "$paths_file" && -s "$paths_file" ]] || return 1
+  nl=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-mfnl.XXXXXX") || return 1
+  hf=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-mfhost.XXXXXX") || { rm -f -- "$nl"; return 1 }
+  tr '\0' '\n' < "$paths_file" > "$nl" || rc=1
+  print -rn -- "$host" > "$hf" || rc=1
+  if (( $+commands[shasum] )); then
+    hash=$(shasum -a 256 < "$nl" | cut -d' ' -f1)
+  elif (( $+commands[sha256sum] )); then
+    hash=$(sha256sum < "$nl" | cut -d' ' -f1)
+  else
+    hash=""
+  fi
+  # A malformed digest must never reach the SQL below as a literal. Written
+  # without extended-glob syntax on purpose -- this script does not setopt
+  # extendedglob, so `(#c64)` would be a literal, not a repetition count.
+  [[ ${#hash} -eq 64 && "$hash" != *[!0-9a-f]* ]] || rc=1
+  if (( rc )); then rm -f -- "$nl" "$hf"; return 1; fi
+  len=$(wc -c < "$nl" | tr -d ' ')
+  now=$EPOCHREALTIME
+  id=$(sqlite3 "$DB_FILE" "SELECT id FROM clips
+      WHERE source_host = CAST(readfile('$hf') AS TEXT)
+        AND type_hash = '$hash' AND type_kind = 'files'
+        AND NOT EXISTS (SELECT 1 FROM file_authorities fa WHERE fa.clip_id = clips.id)
+      LIMIT 1;" 2>/dev/null) || id=""
+  if [[ -n "$id" ]]; then
+    sqlite3 "$DB_FILE" "UPDATE clips SET last_ts=$now WHERE id=$id;" || rc=1
+  else
+    id=$(sqlite3 "$DB_FILE" "INSERT INTO clips
+        (text_preview, len, first_ts, last_ts, type_kind, pinned, type_hash, source_host)
+        VALUES (CAST(readfile('$nl') AS TEXT), $len, $now, $now, 'files', 0, '$hash',
+                CAST(readfile('$hf') AS TEXT));
+      SELECT last_insert_rowid();") || rc=1
+  fi
+  if (( rc )) || [[ -z "$id" ]]; then rm -f -- "$nl" "$hf"; return 1; fi
+  sqlite3 "$DB_FILE" "INSERT OR REPLACE INTO clip_types (clip_id, uti, blob)
+      VALUES ($id, 'x-file-manifest', CAST(readfile('$paths_file') AS BLOB));" || rc=1
+  rm -f -- "$nl" "$hf"
+  if (( rc )); then return 1; fi
+  print -r -- "$id"
+}
+
+# clip::pull_live_files <host> <paths_file> -- record + restore the live
+# FILES row's Ctrl-Y pull (6b). Defined next to clip::record_live_files_row
+# for the ordering reason its comment states.
+#
+# No resolve query: the insert above hands back the exact row id (the fresh
+# rowid, or the deduped row's own id when this manifest was already recorded),
+# so this is a by-id handoff into clip::copy_files_by_id -- the SAME
+# mount/rsync/cache/size-cap/toast engine every stored files row uses.
 clip::pull_live_files() {
   local host="$1" paths_file="$2" id
-  clipbridge::persist_files "$host" < "$paths_file" || {
+  id=$(clip::record_live_files_row "$host" "$paths_file") || {
     print -ru2 -- "pick-clipboard: could not record the live file clip locally"
     return 1
   }
-  id=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$host' AND type_kind IN ('files','file','directory') ORDER BY last_ts DESC LIMIT 1;" 2>/dev/null)
-  [[ -n "$id" ]] || { print -ru2 -- "pick-clipboard: persisted live file clip not found in store"; return 1 }
+  [[ -n "$id" ]] || {
+    print -ru2 -- "pick-clipboard: could not record the live file clip locally"
+    return 1
+  }
   clip::copy_files_by_id "$id" && clip::copy_toast_for_id "$id"
 }
 
@@ -1079,6 +1164,26 @@ clip::pull_live_files() {
 # "command not found" the first time a remote-manifest pull happens.
 clip::has_live_tty() {
   { : < /dev/tty; } 2>/dev/null
+}
+
+# clip::drop_open_temps [keep...] -- remove the open-time live temps (the
+# snapshot JSON, the peer text bytes, the NUL-joined manifest) that the block
+# near the top of this file mktemp'd when bridge_up. The interactive path
+# hands those to the EXIT/INT/TERM trap installed much further down, but the
+# headless verbs below all `exit` BEFORE that trap exists -- so without this
+# every GUI picker open (which runs --peer-snapshot on every show) would leave
+# 2-3 files in TMPDIR forever. Each verb calls this at its OWN exit point,
+# naming anything it still needs as a `keep` argument (--pull-live files reads
+# LIVEF_PATHS_FILE right up to its exit).
+clip::drop_open_temps() {
+  local f k keep=("$@") doomed=()
+  for f in "$LIVE_TEXT_FILE" "$SNAPSHOT_JSON" "$LIVEF_PATHS_FILE"; do
+    [[ -n "$f" ]] || continue
+    for k in "${keep[@]}"; do [[ "$f" == "$k" ]] && continue 2; done
+    doomed+=("$f")
+  done
+  (( ${#doomed} )) && rm -f -- "${doomed[@]}"
+  return 0
 }
 
 # --restore-id <n> (headless CLI mode, spec R4): runs the SAME
@@ -1103,9 +1208,12 @@ if [[ "${1:-}" == --restore-id ]]; then
   restore_id="${1:-}"
   if [[ -z "$restore_id" || "$restore_id" != <-> ]]; then
     print -ru2 -- "pick-clipboard: --restore-id requires a numeric clip id"
+    clip::drop_open_temps
     exit 1
   fi
-  clip::copy_files_by_id "$restore_id" && { clip::copy_toast_for_id "$restore_id"; exit 0 }
+  clip::copy_files_by_id "$restore_id" &&
+    { clip::copy_toast_for_id "$restore_id"; clip::drop_open_temps; exit 0 }
+  clip::drop_open_temps
   exit 1
 fi
 
@@ -1124,6 +1232,8 @@ if [[ "${1:-}" == --peer-snapshot ]]; then
   if [[ -n "$LIVEF_PATHS_FILE" && -n "$SNAPSHOT_JSON" ]]; then
     jq -c 'select(.kind == "files")' "$SNAPSHOT_JSON" | head -n1
   fi
+  # Everything this verb read is now on stdout: nothing to keep (M9).
+  clip::drop_open_temps
   exit 0
 fi
 
@@ -1141,25 +1251,42 @@ if [[ "${1:-}" == --pull-live ]]; then
       if [[ -z "$_pl_json" || ! -s "$_pl" ]]; then
         rm -f "$_pl"
         print -ru2 -- "pick-clipboard: no live peer text clip"
+        clip::drop_open_temps
         exit 1
       fi
       _pl_rt=$(jq -r '.regtype' <<<"$_pl_json"); [[ "$_pl_rt" == (v|l|b) ]] || _pl_rt=v
       _pl_host=$(jq -r '.host' <<<"$_pl_json")
-      clipbridge::call --stdin text clip.set "regtype=$_pl_rt" "origin_host=$_pl_host" < "$_pl"
-      _rc=$?
+      # `if`, not `cmd; rc=$?`: this script runs under `set -e`, where a bare
+      # failing command exits before the next line — the cleanup below would
+      # never run (and the exit status would be the same either way).
+      if clipbridge::call --stdin text clip.set "regtype=$_pl_rt" "origin_host=$_pl_host" < "$_pl"; then
+        _rc=0
+      else
+        _rc=$?
+      fi
       rm -f "$_pl"
+      clip::drop_open_temps
       exit $_rc
       ;;
     files)
       if [[ -z "$LIVEF_PATHS_FILE" ]]; then
         print -ru2 -- "pick-clipboard: no live peer file clip"
+        clip::drop_open_temps
         exit 1
       fi
-      clip::pull_live_files "$LIVEF_HOST" "$LIVEF_PATHS_FILE"
-      exit $?
+      # LIVEF_PATHS_FILE is read right through the pull, so it is dropped
+      # AFTER it returns, never before (M9).
+      if clip::pull_live_files "$LIVEF_HOST" "$LIVEF_PATHS_FILE"; then
+        _rc=0
+      else
+        _rc=$?
+      fi
+      clip::drop_open_temps
+      exit $_rc
       ;;
     *)
       print -ru2 -- "pick-clipboard: --pull-live requires text or files"
+      clip::drop_open_temps
       exit 1
       ;;
   esac
@@ -1326,7 +1453,9 @@ clip::deliver_live_files() {
 
 clip::materialize_live_files() {
   [[ -n "$LIVEF_PATHS_FILE" && -s "$LIVEF_PATHS_FILE" ]] || return 0
-  clipbridge::persist_files "$LIVEF_HOST" < "$LIVEF_PATHS_FILE" 2>/dev/null || :
+  # The same pointer-row write Ctrl-Y's pull performs (clip::record_live_files_row
+  # above), minus the byte pull: viewing the paths owns the ROW, not the files.
+  clip::record_live_files_row "$LIVEF_HOST" "$LIVEF_PATHS_FILE" >/dev/null 2>&1 || :
   return 0
 }
 
