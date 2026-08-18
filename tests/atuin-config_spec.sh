@@ -131,6 +131,13 @@ Describe 'zshrc atuin sync gate'
     init_line="$(printf '%s\n' "$rendered" | grep -n 'atuin init zsh' | head -1 | cut -d: -f1)"
     [ -n "$gate_line" ] && [ -n "$init_line" ] && [ "$gate_line" -lt "$init_line" ] && echo ordered
   }
+
+  # A stale ATUIN_AUTO_SYNC=false inherited from a mux server started off-LAN
+  # must not pin sync off forever: probe success must UNSET the var (not just
+  # skip the export), so the config-file default (true) applies per-shell.
+  gate_unsets_on_success() {
+    render_for "$1" dot_config/zsh/dot_zshrc.tmpl | grep -c 'else unset ATUIN_AUTO_SYNC'
+  }
   Parameters
     personal
     work
@@ -138,6 +145,10 @@ Describe 'zshrc atuin sync gate'
   It "gates before atuin init for $1"
     When call gate_ordering "$1"
     The output should equal "ordered"
+  End
+  It "unsets ATUIN_AUTO_SYNC on probe success for $1"
+    When call gate_unsets_on_success "$1"
+    The output should equal "1"
   End
 End
 

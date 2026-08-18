@@ -321,7 +321,8 @@ zsh-defer source "$ZSH_PLUGIN_DIR/zsh-history-substring-search/zsh-history-subst
 # fall back to the public Atuin Hub. Works because config.toml deliberately
 # omits auto_sync (the config file would beat this env var). Connect-result
 # probe, not nc -z — the clipboard-bridge lesson.
-zsh-defer eval 'if [[ -z ${ATUIN_SYNC_ADDRESS:-} ]] || ! curl -fsS --connect-timeout 0.4 --max-time 1 "$ATUIN_SYNC_ADDRESS" >/dev/null 2>&1; then export ATUIN_AUTO_SYNC=false; fi'
+# Probe success UNSETS the var: a stale false inherited from a mux server started off-LAN must not pin sync off (config-file default true applies).
+zsh-defer eval 'if [[ -z ${ATUIN_SYNC_ADDRESS:-} ]] || ! curl -fsS --connect-timeout 0.4 --max-time 1 "$ATUIN_SYNC_ADDRESS" >/dev/null 2>&1; then export ATUIN_AUTO_SYNC=false; else unset ATUIN_AUTO_SYNC; fi'
 {{- end }}
 zsh-defer eval 'command -v atuin   >/dev/null && eval "$(atuin init zsh)"'
 zsh-defer eval 'command -v zoxide  >/dev/null && eval "$(zoxide init zsh)"'
