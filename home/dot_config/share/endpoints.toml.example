@@ -49,6 +49,17 @@
 #                alone only suffices on croc's built-in relay and on a
 #                multicast LAN — so an internal address in this field ends up
 #                in whatever chat message carries the share.
+#
+#                "@self:<port>" means THIS machine, resolved when a share is
+#                sent: the Tailscale MagicDNS name if Tailscale is up, else the
+#                short hostname. Use it for a relay you run locally. It is what
+#                lets this file stay byte-identical on every machine (a literal
+#                hostname would make it per-host) and keeps every hostname out
+#                of every file. The FQDN is preferred over the short name
+#                because it resolves for any tailnet member, while the short
+#                name needs the RECIPIENT's client to carry your tailnet as a
+#                search domain — and that failure happens at their end, where
+#                you cannot see it.
 #   local_only   true for LAN-only live transfers: croc discovers the peer by
 #                multicast and `--local` forbids every non-LAN path, so no
 #                relay is needed and nothing egresses.
@@ -85,6 +96,24 @@
 # web = true
 # profiles = ["work"]
 # default_for = ["work"]
+
+# --- a relay you run yourself, on this machine -------------------------------
+# The `croc-relay` service (work profile only — see services.toml.tmpl) brings
+# it up at login and takes its password from the `pass` field BELOW, resolving
+# @secret: the same way a sender does. One password, one line, one file: a
+# relay whose password disagrees with the sender's shows up as "the recipient
+# cannot connect", a long way from the cause.
+#
+# The service finds this entry by the @self marker, so nothing names it in the
+# (public) service manifest.
+#
+# [worklan]
+# description = "Relay on this laptop, for tailnet recipients"
+# relay       = "@self:9009"
+# pass        = "@secret:WORK_RELAY_PASS"
+# web         = false            # recipients need the croc CLI
+# profiles    = ["work"]
+# default_for = ["work"]         # makes live the default on that profile
 
 # --- a bare relay: live transfers only, recipients need the croc CLI ---------
 # [lab]

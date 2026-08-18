@@ -1,0 +1,58 @@
+#!/usr/bin/env zsh
+# croc-relay — the launchd/systemd entry point for a long-lived `croc relay`.
+# Spec: docs/superpowers/specs/2026-08-18-share-phase2-relay-service-design.md
+#
+# WHY A WRAPPER AND NOT `cmd = ["croc", "relay", ...]` IN THE MANIFEST:
+# the relay needs a password, and services.toml.tmpl lives in a PUBLIC repo.
+# Neither a literal nor a chezmoi template expansion is acceptable — the first
+# leaks to the world, the second leaks into the rendered plist and into
+# chezmoi's target state. So the password is resolved HERE, at exec time, from
+# the endpoint manifest (chezmoiignored, local-only), through the same
+# `@secret:NAME` indirection `share` itself uses.
+#
+# The payoff beyond secrecy: the relay and every sender read the password from
+# the SAME line of the SAME file. A relay whose password disagrees with the
+# sender's presents as "the recipient cannot connect", a long way from the
+# cause; sharing one source removes that failure rather than debugging it.
+#
+# Which endpoint: the one declaring `relay = "@self:<port>"` for this profile
+# (share::relay_endpoint). Not a name in the public manifest, and no new config
+# key. SHARE_RELAY_ENDPOINT overrides; two candidates is a hard error.
+set -eu
+
+source "${0:A:h}/../lib/share.zsh" || {
+  print -ru2 -- "croc-relay: cannot source share.zsh"
+  exit 1
+}
+
+endpoint="${SHARE_RELAY_ENDPOINT:-}"
+if [[ -z "$endpoint" ]]; then
+  endpoint="$(share::relay_endpoint)" || exit 1
+fi
+
+# Ports: croc's own default spread. 9009 is the rendezvous the pasted line
+# names; the rest carry the transfer, so all of them have to be reachable —
+# advertising 9009 alone and firewalling the others fails only once a real
+# transfer starts, which is the worst time to find out.
+ports="${SHARE_RELAY_PORTS:-9009,9010,9011,9012,9013}"
+
+# Resolved once, at exec. A rotated secret therefore needs a service restart —
+# stated in the spec as a known cost rather than left to be discovered.
+pass="$(share::croc_pass "$endpoint")"
+
+# The address a recipient would have to type, logged so the service log answers
+# "what should I be telling people" without running anything.
+advertised="$(share::relay_address "$endpoint" 2>/dev/null)" || advertised="(unresolved)"
+
+print -r -- "croc-relay: endpoint=$endpoint ports=$ports advertising=${advertised:-?} pass=$([[ -n "$pass" ]] && print -n set || print -n unset)"
+
+# CROC_PASS in the child environment, never on argv: /proc/<pid>/cmdline and
+# `ps` are readable by every other process, and this daemon is long-lived, so
+# a `--pass` token would sit there all day. Set ONLY when non-empty — croc's
+# env lookup treats a present-but-empty variable as set and would override its
+# own default passphrase with "", breaking the handshake for a relay that
+# deliberately has no password.
+if [[ -n "$pass" ]]; then
+  exec env CROC_PASS="$pass" croc relay --ports "$ports"
+fi
+exec croc relay --ports "$ports"

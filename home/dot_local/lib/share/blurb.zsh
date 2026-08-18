@@ -119,7 +119,7 @@ share::blurb() {
   # them for one template's benefit would be the same mistake %size would have
   # been (see below).
   local relay=""
-  [[ "$kind" == live ]] && relay="$(share::field "$endpoint" relay)"
+  [[ "$kind" == live ]] && relay="$(share::relay_address "$endpoint")"
 
   local template
   template="$(share::field "$endpoint" message)" || return 1

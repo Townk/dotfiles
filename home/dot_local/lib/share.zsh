@@ -246,7 +246,7 @@ share::destination_host() {
   fi
 
   # A relay, when there is no store and no rclone remote: the peer dials this.
-  local relay; relay="$(share::field "$name" relay)"
+  local relay; relay="$(share::relay_address "$name")" || return 1
   if [[ -n "$relay" ]]; then
     printf '%s\n' "${relay%%:*}"
     return 0
@@ -288,6 +288,89 @@ share::endpoints_for_profile() {
       printf '%s\n' "$name"
     fi
   done
+}
+
+# --- @self: the relay's own address (phase 2, R4) ---------------------------
+# A relay endpoint writes `relay = "@self:9009"` rather than a hostname, and
+# this resolves it at SEND time.
+#
+# Why a placeholder and not a literal: endpoints.toml is deliberately
+# byte-identical on every machine — the `profiles` allowlist is what makes each
+# host behave correctly, and the file header says so. A literal hostname would
+# make the file per-machine and put a host name in writing. `@self` keeps one
+# file and keeps every hostname out of every file.
+
+# share::self_host — this machine's name, as a RECIPIENT would have to type it.
+#
+# The Tailscale MagicDNS FQDN first, because it resolves for every tailnet
+# member unconditionally. The short name only resolves when the recipient's
+# client carries this tailnet as a DNS search domain — and when it does not,
+# the failure happens at the FAR END, where the sender cannot see it. A pasted
+# line that does not resolve is worthless, so the robust form wins over the
+# tidy one. The trailing dot MagicDNS reports is stripped: `host.tailnet.ts.net.`
+# is valid DNS but reads as a typo in a chat message.
+share::self_host() {
+  local ts name
+  ts="${SHARE_TAILSCALE_BIN:-tailscale}"
+  if command -v "$ts" >/dev/null 2>&1; then
+    name="$("$ts" status --json 2>/dev/null | jq -r '.Self.DNSName // ""' 2>/dev/null)"
+    name="${name%.}"
+    if [[ -n "$name" ]]; then printf '%s\n' "$name"; return 0; fi
+  fi
+  name="$(hostname -s 2>/dev/null)"
+  [[ -n "$name" ]] || { log_error "share: cannot determine this machine's name for @self"; return 1; }
+  printf '%s\n' "$name"
+}
+
+# share::relay_address <endpoint> — the endpoint's relay, with @self resolved.
+#
+# THE one resolver. share::croc_argv (what croc dials),
+# share::destination_host (the host echoed before a byte leaves) and
+# share::blurb (the address the recipient is told to use) all go through it, so
+# those three cannot disagree — a sender dialling one relay while advertising
+# another is invisible until a recipient fails to connect.
+#
+# An endpoint with no relay at all (a LAN endpoint, where croc's multicast IS
+# the rendezvous) yields empty and status 0: absent is not an error here.
+share::relay_address() {
+  local name="${1:?share::relay_address: endpoint required}" relay port host
+  relay="$(share::field "$name" relay)" || return 1
+  [[ -n "$relay" ]] || return 0
+  case "$relay" in
+    @self | @self:*)
+      port="${relay#@self}"; port="${port#:}"
+      host="$(share::self_host)" || return 1
+      if [[ -n "$port" ]]; then printf '%s:%s\n' "$host" "$port"
+      else printf '%s\n' "$host"; fi
+      ;;
+    *) printf '%s\n' "$relay" ;;
+  esac
+}
+
+# share::relay_endpoint — the endpoint this machine runs a relay FOR.
+#
+# Identified by its `relay` starting with `@self`, not by a name in the service
+# manifest: services.toml.tmpl is in a public repo, and this needs no new config
+# key either. Two matches is a hard error rather than a guess — picking one
+# silently would mean the relay comes up with the wrong password, which
+# presents as "the recipient cannot connect" a long way from the cause.
+share::relay_endpoint() {
+  local name
+  local -a matches=()
+  local -a names
+  names=("${(@f)$(share::endpoint_names)}") || return 1
+  for name in "${names[@]}"; do
+    [[ -n "$name" ]] || continue
+    share::allowed "$name" 2>/dev/null || continue
+    [[ "$(share::field "$name" relay)" == @self* ]] && matches+=("$name")
+  done
+  case ${#matches} in
+    1) printf '%s\n' "${matches[1]}" ;;
+    0) log_error "share: no endpoint on this profile declares relay = \"@self:<port>\""
+       return 1 ;;
+    *) log_error "share: ${#matches} endpoints declare @self (${matches[*]}) — set SHARE_RELAY_ENDPOINT"
+       return 1 ;;
+  esac
 }
 
 # share::live_capable <endpoint> — can this endpoint carry a LIVE transfer?

@@ -173,6 +173,42 @@ PUEUE_CONFIG_PATH = "~/.config/pueue/pueue.yml"
 # Single leading tilde only (the renderer detildes only a string-leading ~).
 PATH = "~/.local/libexec:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
+{{ if eq .profile "work" -}}
+# croc-relay — the rendezvous a LIVE share needs, on the WORK profile only.
+# Spec: docs/superpowers/specs/2026-08-18-share-phase2-relay-service-design.md
+#
+# WHY A SERVICE AND NOT A JOB: a live transfer waits up to SHARE_LIVE_DEADLINE
+# (24h) for its recipient, re-arming against the SAME relay the whole time. A
+# relay that lives only as long as a foreground command cannot serve that; it
+# has to be up whenever the laptop is, which is what a service means.
+#
+# WHY WORK ONLY: personal live transfers rendezvous through croc's own public
+# relay, which is what lets them reach a recipient who is on no tailnet at all.
+# Work cannot use that (the `public` endpoint is personal-only by the policy
+# fence), and `drop` is a STORE — croc-web on 9014, no TCP relay — so without
+# this the work profile has no live rendezvous and every send downgrades to
+# stored. The gate is at TEMPLATE level: other profiles render no plist at all,
+# so there is nothing to disable and nothing listening on a machine with no
+# use for it.
+#
+# NO PASSWORD HERE. This repo is public. ~/.local/libexec/croc-relay resolves
+# it at exec time from the (chezmoiignored) endpoint manifest, so the relay and
+# every sender read it from the same line of the same file.
+[croc-relay]
+description    = "croc relay: rendezvous for live shares"
+cmd            = ["{{ .chezmoi.homeDir }}/.local/libexec/croc-relay"]
+keep_alive     = true
+run_at_load    = true
+log_path       = "~/.cache/share/croc-relay.log"
+error_log_path = "~/.cache/share/croc-relay.log"
+
+[croc-relay.env]
+# launchd hands a job almost no environment. The wrapper needs croc (mise
+# shims / brew), and jq + yq to read the endpoint manifest. Same shape and
+# same reason as pueued's PATH above; single leading tilde only.
+PATH = "~/.local/share/mise/shims:~/.local/libexec:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
+{{ end -}}
 # backup-* — the Terminal Time Machine schedule (system-backup silo, spec §6).
 # Three agents: a half-hourly capture tick (which chains a reconcile pass), a
 # mount-watching + hourly-safety reconcile, and the daily prune repack. All
