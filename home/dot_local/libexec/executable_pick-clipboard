@@ -191,27 +191,81 @@ if (( bridge_up )); then
   [[ -n "$LIVE_TEXT_FILE" ]] || rm -f "$_lt"
 fi
 
-# X9 (unchanged semantics): the live row sorts by the PEER's copy time;
-# non-numeric/missing falls back to "now" so a lookup failure never loses
-# the row. -1 = no live row = the original single-query ordering.
-live_ts_threshold=-1
-if [[ -n "$LIVE_TEXT_FILE" ]]; then
-  [[ "$LIVE_TS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || LIVE_TS=$EPOCHREALTIME
-  live_ts_threshold=$LIVE_TS
+# 6b: the live FILES candidate from the same snapshot (Task 2's SNAPSHOT_JSON),
+# no second bridge round-trip. LIVEF_PATHS_FILE non-empty => a live files row
+# is available; its bytes are the NUL-joined absolute paths, reused verbatim
+# at accept time by clip::deliver_live_files / clip::pull_live_files (no
+# second fetch). LIVEF_KIND mirrors the stored files/file/directory kinds so
+# the row picks the right glyph and clip::filter_file_rows' tail-truncation.
+LIVEF_HOST=""
+LIVEF_KIND="files"
+LIVEF_TS=""
+LIVEF_PATHS_FILE=""
+livef_row_file=""
+if [[ -n "$SNAPSHOT_JSON" ]]; then
+  _live_files_json=$(jq -c 'select(.kind == "files")' "$SNAPSHOT_JSON" 2>/dev/null | head -n1)
+  if [[ -n "$_live_files_json" ]]; then
+    _lfp=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-livef.XXXXXX")
+    # NUL-joined paths file: the byte layout the store's x-file-manifest blob
+    # uses, so the dedup below and persist_files both work off this one file.
+    jq -j '.paths | join("\u0000")' <<<"$_live_files_json" > "$_lfp"
+    if [[ -s "$_lfp" ]]; then
+      LIVEF_HOST=$(jq -r '.host' <<<"$_live_files_json")
+      LIVEF_KIND=$(jq -r '.files_kind' <<<"$_live_files_json")
+      [[ "$LIVEF_KIND" == (files|file|directory) ]] || LIVEF_KIND=files
+      LIVEF_TS=$(jq -r '.timestamp' <<<"$_live_files_json")
+      # Dedup: a stored row already carrying this exact manifest (same origin
+      # host, byte-equal x-file-manifest blob) -- the live row would duplicate
+      # it. Blob layout VERIFIED against the daemon (custom-builds/recob/src/
+      # ops/persist.rs, persist_files_row): `let manifest = paths.join("\0");`
+      # written verbatim as the clip_types.blob bytes -- no length prefix, no
+      # trailing NUL, no other framing, for EVERY files-kind row regardless of
+      # path count (single-path rows get the same treatment, since join() of a
+      # 1-element slice has no separator to add). That is byte-identical to
+      # this file's own `jq -j '.paths | join("\u0000")'` above, so the direct
+      # blob-equality compare below is correct as written -- the dedup KEY is
+      # (source_host, path set); this confirms the byte mechanism realizes it.
+      if [[ -z "$(sqlite3 "$DB_FILE" "SELECT 1 FROM clips c JOIN clip_types t ON t.clip_id=c.id WHERE t.uti='x-file-manifest' AND t.blob = CAST(readfile('$_lfp') AS BLOB) AND c.source_host = '$LIVEF_HOST' LIMIT 1;" 2>/dev/null)" ]]; then
+        LIVEF_PATHS_FILE="$_lfp"
+      fi
+    fi
+    [[ -n "$LIVEF_PATHS_FILE" ]] || rm -f "$_lfp"
+  fi
 fi
 
-# X9 shared row budget: the live row split (ABOVE + live + BELOW) must emit no
-# MORE rows than PICK_CLIPBOARD_LIMIT in total -- pre-X9 it was a single query
-# with one global LIMIT, and naively giving BOTH halves the full limit would
-# roughly DOUBLE the cap (the watcher retains up to 1000 rows). The live row
-# occupies one slot in that budget, so reserve it up front: ABOVE is capped at
-# (limit - live), then BELOW gets whatever ABOVE's ACTUAL returned row count
-# and the live row leave. LIVE_COUNT is 0 when there's no live row, so the
-# whole thing degrades to a single LIMIT-capped ABOVE query (BELOW's WHERE
-# matches nothing at threshold -1) -- the exact pre-X9 ordering + cap.
+# X9 (unchanged semantics): the live row sorts by the PEER's copy time;
+# non-numeric/missing falls back to "now" so a lookup failure never loses
+# the row. 6b: LIVEF_TS gets the identical treatment for the files candidate.
+if [[ -n "$LIVE_TEXT_FILE" ]]; then
+  [[ "$LIVE_TS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || LIVE_TS=$EPOCHREALTIME
+fi
+if [[ -n "$LIVEF_PATHS_FILE" ]]; then
+  [[ "$LIVEF_TS" =~ ^[0-9]+(\.[0-9]+)?$ ]] || LIVEF_TS=$EPOCHREALTIME
+fi
+
+# 6b: up to TWO live rows, each interleaving by its own peer copy-time. The
+# newer one is slot 1 (live_hi_*), the older slot 2 (live_lo_*); a missing
+# row's threshold is -1, which collapses its segment to empty -- one row
+# degrades to the X9 split, zero rows to the original single query. Actually
+# populated once both rows have prerendered (below, after :1382), since the
+# slot assignment needs live_row_file/livef_row_file too.
+live_hi_ts=-1 live_lo_ts=-1 live_hi_file="" live_lo_file=""
+
+# X9 shared row budget, extended for 6b: the live row split (ABOVE + live(s) +
+# BELOW) must emit no MORE rows than PICK_CLIPBOARD_LIMIT in total -- pre-X9 it
+# was a single query with one global LIMIT, and naively giving every segment
+# the full limit would roughly DOUBLE (now triple) the cap (the watcher
+# retains up to 1000 rows). Each live row occupies one slot in that budget, so
+# reserve them up front: ABOVE is capped at (limit - live rows present), then
+# the remaining segments get whatever ABOVE's ACTUAL returned row count and
+# the live rows leave. LIVE_COUNT is 0 when there is no live row at all, so
+# the whole thing degrades to a single LIMIT-capped ABOVE query (the other
+# segments' WHERE match nothing at threshold -1) -- the exact pre-X9 ordering
+# + cap.
 PICK_LIMIT=${PICK_CLIPBOARD_LIMIT:-500}
 LIVE_COUNT=0
-[[ -n "$LIVE_TEXT_FILE" ]] && LIVE_COUNT=1
+[[ -n "$LIVE_TEXT_FILE" ]] && LIVE_COUNT=$(( LIVE_COUNT + 1 ))
+[[ -n "$LIVEF_PATHS_FILE" ]] && LIVE_COUNT=$(( LIVE_COUNT + 1 ))
 ABOVE_LIMIT=$(( PICK_LIMIT - LIVE_COUNT ))
 (( ABOVE_LIMIT < 0 )) && ABOVE_LIMIT=0
 
@@ -982,6 +1036,32 @@ clip::copy_files_by_id() {
   return 1
 }
 
+# clip::pull_live_files <host> <paths_file> -- persist + restore the live
+# FILES row's Ctrl-Y pull (6b). Defined HERE -- right after
+# clip::copy_files_by_id and BEFORE the --restore-id dispatch just below --
+# for the exact reason the clip::has_live_tty comment above states: a later
+# task adds its own headless top-level dispatch (mirroring --restore-id) that
+# calls this function, and that dispatch runs before this file's later
+# definitions (clip::copy_by_id and everything interactive-only under it) have
+# been sourced. Defining it any later would leave that direct invocation
+# resolving to "command not found".
+#
+# The resolve is "newest files-kind row from that host": we JUST persisted
+# (the daemon bumps last_ts even on dedup, ops/persist.rs persist_files_row),
+# so that row is ours without any blob math -- clip::copy_files_by_id then
+# runs the SAME mount/rsync/cache/size-cap/toast engine every stored files row
+# uses.
+clip::pull_live_files() {
+  local host="$1" paths_file="$2" id
+  clipbridge::persist_files "$host" < "$paths_file" || {
+    print -ru2 -- "pick-clipboard: could not record the live file clip locally"
+    return 1
+  }
+  id=$(sqlite3 "$DB_FILE" "SELECT id FROM clips WHERE source_host='$host' AND type_kind IN ('files','file','directory') ORDER BY last_ts DESC LIMIT 1;" 2>/dev/null)
+  [[ -n "$id" ]] || { print -ru2 -- "pick-clipboard: persisted live file clip not found in store"; return 1 }
+  clip::copy_files_by_id "$id" && clip::copy_toast_for_id "$id"
+}
+
 # A real attempt to open /dev/tty for reading, not `[[ -e /dev/tty ]]` --
 # that special file exists on disk regardless of whether THIS process has a
 # controlling terminal (true even under this repo's own shellspec harness,
@@ -1172,6 +1252,25 @@ clip::materialize_live() {
   # store.persist.text{host, kind=text, app='', regtype} on THIS machine's own
   # bridge, over the trusted socket; the text bytes ride stdin.
   clipbridge::persist_text "$LIVE_HOST" text '' "$rt" < "$LIVE_TEXT_FILE"
+  return 0
+}
+
+# 6b: accept handlers for the live FILES row. Enter/Alt-Enter deliver the
+# newline-joined paths (what a stored files row's Enter prints) and
+# materialize the ROW (persist only — no byte pull; same viewing-vs-owning
+# split as text). Ctrl-Y is the real pull (clip::pull_live_files, defined
+# above clip::copy_files_by_id for the ordering reason its own comment
+# states): persist, resolve the id, then the same copy_files_by_id engine
+# every stored files row uses (mount/rsync/cache, size caps, toasts, W2
+# failure hold).
+clip::deliver_live_files() {
+  [[ -n "$LIVEF_PATHS_FILE" && -s "$LIVEF_PATHS_FILE" ]] || return 0
+  tr '\0' '\n' < "$LIVEF_PATHS_FILE"; print
+}
+
+clip::materialize_live_files() {
+  [[ -n "$LIVEF_PATHS_FILE" && -s "$LIVEF_PATHS_FILE" ]] || return 0
+  clipbridge::persist_files "$LIVEF_HOST" < "$LIVEF_PATHS_FILE" 2>/dev/null || :
   return 0
 }
 
@@ -1374,6 +1473,69 @@ if [[ -n "$LIVE_TEXT_FILE" ]]; then
         || reset || '   '
         || CHAR(31) || 'LIVE' || CHAR(30) || 'MD:LIVE' || CHAR(30) || 'CP:LIVE'
       FROM l, palette;" > "$live_row_file"
+fi
+
+# 6b: pre-render the synthetic LIVE FILES row the same way -- same
+# sqlite3-rendered byte-identical shape, so it slots into emit_rows/emit_script
+# indistinguishably from a stored row until clip::filter_file_rows rewrites its
+# \x02-marked content span. Kind glyph matches the stored files/file/directory
+# rows; mauve origin color (c_origin) = the live/not-from-here cue, same as the
+# text live row above. Tail id is the sentinel LIVEF: field1=LIVEF,
+# field2=MD:LIVEF, field3=CP:LIVEF.
+if [[ -n "$LIVEF_PATHS_FILE" ]]; then
+  livef_row_file=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-livefrow.XXXXXX")
+  case "$LIVEF_KIND" in
+    file)      _lf_glyph=983588 ;;
+    directory) _lf_glyph=983638 ;;
+    *)         _lf_glyph=1110139 ;;
+  esac
+  # NUL -> \x01 OUTSIDE sqlite, into its own temp file, before the row ever
+  # reaches sqlite3: verified empirically that `CAST(readfile(blob) AS TEXT)`
+  # (and `replace()` on that cast) truncate at the first embedded NUL on this
+  # sqlite3 build -- the same "CLI truncates a NUL-bearing blob" gotcha
+  # tests/pick-clipboard-files_spec.sh's Ctrl-Y Describe already documents for
+  # `SELECT blob`, but here it bites the CAST itself, before any output ever
+  # happens, so doing the substitution IN SQL (as the brief's original
+  # `replace(CAST(...AS TEXT),char(0),char(1))` did) silently loses every path
+  # after the first NUL. Pre-converting in the shell (\x01 never appears in a
+  # real path) sidesteps the cast entirely -- the CTE below only ever touches
+  # already-NUL-free bytes.
+  _lf_display=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-livefdisp.XXXXXX")
+  tr '\0' '\1' < "$LIVEF_PATHS_FILE" > "$_lf_display"
+  sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "WITH palette AS (
+        SELECT CHAR(27)||'[0m'                AS reset,
+               CHAR(27)||'[38;2;202;211;245m' AS text_color,
+               CHAR(27)||'[38;2;203;166;247m' AS c_origin
+      ),
+      m AS ( SELECT CAST(readfile('$_lf_display') AS TEXT) AS paths )
+      SELECT c_origin || char($_lf_glyph) || reset || '  '
+        || text_color
+        || char(2) || '$LIVEF_KIND' || char(2) || paths || char(3)
+        || reset || '   '
+        || CHAR(31) || 'LIVEF' || CHAR(30) || 'MD:LIVEF' || CHAR(30) || 'CP:LIVEF'
+      FROM m, palette;" > "$livef_row_file"
+  rm -f "$_lf_display"
+fi
+
+# 6b slot assignment (newer live row first). zsh arithmetic compares floats
+# natively, and both LIVE_TS/LIVEF_TS were regex-validated numeric above (with
+# the $EPOCHREALTIME fallback), so this is safe without bc. Runs HERE --
+# after both rows have prerendered -- rather than back where live_hi_ts/
+# live_lo_ts were declared, because it needs live_row_file/livef_row_file too;
+# it must still run BEFORE the EMIT_SQL_* strings below bake these thresholds
+# in as literals.
+if [[ -n "$live_row_file" && -n "$livef_row_file" ]]; then
+  if (( LIVE_TS > LIVEF_TS )); then
+    live_hi_ts=$LIVE_TS;  live_hi_file=$live_row_file
+    live_lo_ts=$LIVEF_TS; live_lo_file=$livef_row_file
+  else
+    live_hi_ts=$LIVEF_TS; live_hi_file=$livef_row_file
+    live_lo_ts=$LIVE_TS;  live_lo_file=$live_row_file
+  fi
+elif [[ -n "$live_row_file" ]]; then
+  live_hi_ts=$LIVE_TS; live_hi_file=$live_row_file
+elif [[ -n "$livef_row_file" ]]; then
+  live_hi_ts=$LIVEF_TS; live_hi_file=$livef_row_file
 fi
 
 # --- preview (full text + bottom-aligned formatted footer) ------------------
@@ -1621,35 +1783,57 @@ EMIT_ROW_BODY="WITH palette AS (
       || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
     FROM clips, palette"
 
-# ABOVE carries the reserved-slot budget (ABOVE_LIMIT = limit - live).
-# EMIT_COUNT_ABOVE counts what ABOVE ACTUALLY returned (row-exact regardless
-# of any embedded newline in a preview -- COUNT over the same WHERE+LIMIT),
-# so BELOW's dynamic limit (limit - A - live) leaves the total at or under
-# the global cap. BELOW's limit is appended at emit time (EMIT_SQL_BELOW ends
-# at the LIMIT keyword) since A isn't known until ABOVE has run.
+# 6b: ABOVE/MID/BELOW three-segment split, generalizing X9's two-segment one
+# for up to TWO live rows. ABOVE carries the reserved-slot budget (ABOVE_LIMIT
+# = limit - live rows present). MID sits strictly between the two live rows'
+# copy-times (empty when there's at most one live row: live_lo_ts=-1 makes
+# `last_ts > -1` true for everything down to `last_ts <= live_hi_ts`, but
+# that's exactly what BELOW's own WHERE already covers, and MID's own
+# `last_ts > live_lo_ts` with live_lo_ts=-1 still only excludes nothing extra
+# -- see emit_rows below for why MID's actual row count still needs computing
+# even in the degenerate case). EMIT_COUNT_ABOVE (and the inline MID count in
+# emit_rows) count what each segment ACTUALLY returned (row-exact regardless
+# of any embedded newline in a preview), so each later segment's dynamic limit
+# leaves the total at or under the global cap. MID/BELOW's limits are appended
+# at emit time (both end at the LIMIT keyword) since earlier counts aren't
+# known until those segments have run.
 EMIT_SQL_ABOVE="${EMIT_ROW_BODY}
-    WHERE pinned=1 OR last_ts > ${live_ts_threshold}
+    WHERE pinned=1 OR last_ts > ${live_hi_ts}
     ORDER BY pinned DESC, last_ts DESC
     LIMIT ${ABOVE_LIMIT};"
 EMIT_COUNT_ABOVE="SELECT COUNT(*) FROM (SELECT id FROM clips
-    WHERE pinned=1 OR last_ts > ${live_ts_threshold}
+    WHERE pinned=1 OR last_ts > ${live_hi_ts}
     ORDER BY pinned DESC, last_ts DESC
     LIMIT ${ABOVE_LIMIT});"
+EMIT_SQL_MID="${EMIT_ROW_BODY}
+    WHERE pinned=0 AND last_ts <= ${live_hi_ts} AND last_ts > ${live_lo_ts}
+    ORDER BY last_ts DESC
+    LIMIT "
 EMIT_SQL_BELOW="${EMIT_ROW_BODY}
-    WHERE pinned=0 AND last_ts <= ${live_ts_threshold}
+    WHERE pinned=0 AND last_ts <= ${live_lo_ts}
     ORDER BY last_ts DESC
     LIMIT "
 
 emit_rows() {
   # X8: pipe through clip::filter_file_rows so a files/file/directory row's
   # \x02-marked content (see EMIT_ROW_BODY) gets tail-truncated instead of
-  # the generic right-truncate every other kind still gets untouched.
+  # the generic right-truncate every other kind still gets untouched. 6b:
+  # ABOVE, live_hi, MID, live_lo, BELOW in that order -- zero live rows
+  # collapses to the original single ABOVE+BELOW query (live_hi_ts=live_lo_ts
+  # =-1 makes MID's WHERE match nothing and both cat guards no-op); one live
+  # row degrades to the X9 two-segment split (live_lo_ts=-1 still makes MID
+  # empty, so ABOVE+live_hi+BELOW is exactly X9's ABOVE+live+BELOW).
   {
     sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL_ABOVE"
-    [[ -n "$live_row_file" && -f "$live_row_file" ]] && cat "$live_row_file"
-    local -i a below_limit
+    [[ -n "$live_hi_file" && -f "$live_hi_file" ]] && cat "$live_hi_file"
+    local -i a m mid_limit below_limit
     a=$(sqlite3 "$DB_FILE" "$EMIT_COUNT_ABOVE")
-    below_limit=$(( PICK_LIMIT - a - LIVE_COUNT ))
+    mid_limit=$(( PICK_LIMIT - a - LIVE_COUNT ))
+    (( mid_limit < 0 )) && mid_limit=0
+    sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "${EMIT_SQL_MID}${mid_limit};"
+    m=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM (SELECT id FROM clips WHERE pinned=0 AND last_ts <= ${live_hi_ts} AND last_ts > ${live_lo_ts} ORDER BY last_ts DESC LIMIT ${mid_limit});")
+    [[ -n "$live_lo_file" && -f "$live_lo_file" ]] && cat "$live_lo_file"
+    below_limit=$(( PICK_LIMIT - a - m - LIVE_COUNT ))
     (( below_limit < 0 )) && below_limit=0
     sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "${EMIT_SQL_BELOW}${below_limit};"
   } | clip::filter_file_rows "$CW"
@@ -1664,7 +1848,7 @@ emit_rows() {
 emit_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-emit.XXXXXX")
 del_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-del.XXXXXX")
 pin_script=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-pin.XXXXXX")
-trap 'rm -f -- "$emit_script" "$del_script" "$pin_script" "$preview_script" "$live_row_file" "$LIVE_TEXT_FILE" "$SNAPSHOT_JSON"' EXIT INT TERM
+trap 'rm -f -- "$emit_script" "$del_script" "$pin_script" "$preview_script" "$live_row_file" "$LIVE_TEXT_FILE" "$SNAPSHOT_JSON" "$livef_row_file" "$LIVEF_PATHS_FILE"' EXIT INT TERM
 cat > "$emit_script" <<EOF
 #!/bin/sh
 # fzf sets FZF_COLUMNS to the fzf window width for --bind commands (including
@@ -1682,16 +1866,17 @@ cw=\$((fc * 55 / 100 - 12)); [ \$cw -lt 10 ] && cw=10
 # ignoring its shebang.
 ${CLIP_SHORTEN_FUNCS}
 {
-# Synthetic LIVE row (§22): pre-rendered once at open into \$live_row_file;
-# catted here so it survives fzf reloads (delete/pin) without a re-fetch —
-# the entry reflects the peer clipboard as of picker open (§22.6). X9: no
-# longer unconditionally first — interleaved by its own copy-time
-# (live_ts_threshold, baked in below as a literal at generation time, same
-# as \$remote_when/\$DB_FILE elsewhere in this heredoc) between an ABOVE
-# query (pinned rows, plus unpinned rows newer than the live row) and a
-# BELOW query (the rest) -- see the EMIT_ROW_BODY comment above for why this
-# split is correct. live_ts_threshold is -1 (no live row) when the split
-# degrades back to "everything in ABOVE" -- the original single-query order.
+# Synthetic LIVE / LIVEF rows (§22, 6b): pre-rendered once at open into
+# \$live_row_file / \$livef_row_file; catted here so they survive fzf reloads
+# (delete/pin) without a re-fetch — each entry reflects its peer candidate as
+# of picker open (§22.6). Interleaved by copy-time (live_hi_ts/live_lo_ts,
+# baked in below as literals at generation time, same as \$remote_when/
+# \$DB_FILE elsewhere in this heredoc) into a three-segment ABOVE/MID/BELOW
+# split -- see the EMIT_ROW_BODY / emit_rows comments above (this file's own
+# zsh copy of this exact split) for why it's correct. live_hi_ts=live_lo_ts=
+# -1 (no live rows) degrades back to "everything in ABOVE" -- the original
+# single-query order; one live row (live_lo_ts=-1) degrades to X9's two-
+# segment ABOVE+live+BELOW split.
 sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,
@@ -1737,17 +1922,70 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
       || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
     FROM clips, palette
-    WHERE pinned=1 OR last_ts > ${live_ts_threshold}
+    WHERE pinned=1 OR last_ts > ${live_hi_ts}
     ORDER BY pinned DESC, last_ts DESC
     LIMIT ${ABOVE_LIMIT};"
-[ -n '$live_row_file' ] && [ -f '$live_row_file' ] && cat '$live_row_file'
-# X9 shared budget (see the emit_rows note above): count what ABOVE actually
-# returned (row-exact COUNT over the same WHERE+LIMIT) so BELOW's limit
-# (global limit - A - live) keeps the total ABOVE+live+BELOW at/under the
-# cap. Baked literals: \$DB_FILE, the threshold, ABOVE_LIMIT, PICK_LIMIT,
-# LIVE_COUNT; \$a / \$below_limit are this reload script's own runtime vars.
-a=\$(sqlite3 '$DB_FILE' "SELECT COUNT(*) FROM (SELECT id FROM clips WHERE pinned=1 OR last_ts > ${live_ts_threshold} ORDER BY pinned DESC, last_ts DESC LIMIT ${ABOVE_LIMIT});")
-below_limit=\$(( ${PICK_LIMIT} - \$a - ${LIVE_COUNT} ))
+[ -n '$live_hi_file' ] && [ -f '$live_hi_file' ] && cat '$live_hi_file'
+# 6b shared budget (see the emit_rows note above): count what ABOVE actually
+# returned (row-exact COUNT over the same WHERE+LIMIT) so MID's limit (global
+# limit - A - live rows) keeps the running total at/under the cap. Baked
+# literals: \$DB_FILE, both thresholds, ABOVE_LIMIT, PICK_LIMIT, LIVE_COUNT;
+# \$a / \$mid_limit / \$m / \$below_limit are this reload script's own runtime
+# vars.
+a=\$(sqlite3 '$DB_FILE' "SELECT COUNT(*) FROM (SELECT id FROM clips WHERE pinned=1 OR last_ts > ${live_hi_ts} ORDER BY pinned DESC, last_ts DESC LIMIT ${ABOVE_LIMIT});")
+mid_limit=\$(( ${PICK_LIMIT} - \$a - ${LIVE_COUNT} ))
+[ \$mid_limit -lt 0 ] && mid_limit=0
+sqlite3 -escape off '$DB_FILE' "WITH palette AS (
+      SELECT CHAR(27)||'[0m'                AS reset,
+             CHAR(27)||'[38;2;202;211;245m' AS text_color,
+             CHAR(27)||'[38;2;225;170;80m'  AS pin_color,
+             CHAR(27)||'[38;2;137;180;250m' AS c_text,
+             CHAR(27)||'[38;2;225;170;80m'  AS c_rich,
+             CHAR(27)||'[38;2;166;209;137m' AS c_image,
+             CHAR(27)||'[38;2;148;156;183m' AS c_files,
+             CHAR(27)||'[38;2;235;160;172m' AS c_mixed,
+             CHAR(27)||'[38;2;180;190;254m' AS c_file,
+             CHAR(27)||'[38;2;250;179;135m' AS c_directory,
+             CHAR(27)||'[38;2;116;199;236m' AS c_url,
+             CHAR(27)||'[38;2;203;166;247m' AS c_origin
+    )
+    SELECT
+      (CASE WHEN ${remote_when}     THEN c_origin
+            WHEN type_kind='text'       THEN c_text
+            WHEN type_kind IN ('rtf','html') THEN c_rich
+            WHEN type_kind='image'      THEN c_image
+            WHEN type_kind='files'      THEN c_files
+            WHEN type_kind='file'       THEN c_file
+            WHEN type_kind='directory'  THEN c_directory
+            WHEN type_kind='url'        THEN c_url
+            ELSE c_mixed END)
+      || (CASE type_kind
+           WHEN 'text'      THEN char(1110065)
+           WHEN 'rtf'       THEN char(1110524)
+           WHEN 'html'      THEN char(1110524)
+           WHEN 'image'     THEN char(1110078)
+           WHEN 'files'     THEN char(1110139)
+           WHEN 'file'      THEN char(983588)
+           WHEN 'directory' THEN char(983638)
+           WHEN 'url'       THEN char(983865)
+           ELSE                  char(988440) END)
+      || reset
+      || '  '
+      || CASE WHEN pinned=1 THEN pin_color ELSE text_color END
+      || CASE WHEN type_kind IN ('files','file','directory')
+              THEN char(2) || type_kind || char(2) || replace(${FILE_RAW_EXPR}, char(10), char(1)) || char(3)
+              ELSE printf('%-\${cw}s', substr(${SNIPPET_EXPR},1,\$((cw-1))) || CASE WHEN length(${SNIPPET_EXPR}) > \$((cw-1)) THEN '…' ELSE '' END)
+         END
+      || reset
+      || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
+    FROM clips, palette
+    WHERE pinned=0 AND last_ts <= ${live_hi_ts} AND last_ts > ${live_lo_ts}
+    ORDER BY last_ts DESC
+    LIMIT \$mid_limit;"
+m=\$(sqlite3 '$DB_FILE' "SELECT COUNT(*) FROM (SELECT id FROM clips WHERE pinned=0 AND last_ts <= ${live_hi_ts} AND last_ts > ${live_lo_ts} ORDER BY last_ts DESC LIMIT \$mid_limit);")
+[ -n '$live_lo_file' ] && [ -f '$live_lo_file' ] && cat '$live_lo_file'
+below_limit=\$(( ${PICK_LIMIT} - \$a - \$m - ${LIVE_COUNT} ))
 [ \$below_limit -lt 0 ] && below_limit=0
 sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
@@ -1794,7 +2032,7 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
       || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
     FROM clips, palette
-    WHERE pinned=0 AND last_ts <= ${live_ts_threshold}
+    WHERE pinned=0 AND last_ts <= ${live_lo_ts}
     ORDER BY last_ts DESC
     LIMIT \$below_limit;"
 } | clip::filter_file_rows "\$cw"
@@ -1911,6 +2149,12 @@ case "$selected" in
   CP:LIVE) clip::copy_live;    clip::materialize_live ;;
   MD:LIVE) clip::deliver_live; clip::materialize_live ;;
   LIVE)    clip::deliver_live; clip::materialize_live ;;
+  # LIVEF sentinel (6b): Enter/Alt-Enter deliver the paths + materialize the
+  # row (persist only); Ctrl-Y (CP:) is the real pull -- persist, resolve,
+  # restore via the same engine every stored files row uses.
+  CP:LIVEF) clip::pull_live_files "$LIVEF_HOST" "$LIVEF_PATHS_FILE" ;;
+  MD:LIVEF) clip::deliver_live_files; clip::materialize_live_files ;;
+  LIVEF)    clip::deliver_live_files; clip::materialize_live_files ;;
   CP:*)    clip::copy_by_id "${selected#CP:}" ;;
   MD:*)    clip::markdown_by_id "${selected#MD:}" ;;
   "")      ;;

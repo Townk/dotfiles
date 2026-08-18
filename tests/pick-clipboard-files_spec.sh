@@ -1010,11 +1010,11 @@ Describe 'pick-clipboard: live-peer row ordering (X9)'
   AfterEach 'recob_stop'
 
   # live_reply <live_ts> -- script the recorder's answer for the picker's
-  # live-row fetch at open (spec §22): one §6.1 clip.get reply carrying
-  # text/regtype/timestamp/host. The picker reads text, host and timestamp
-  # as three separate --raw exchanges (one connection each), and each
-  # connection re-reads the script from the start, so this single directive
-  # serves all three consistently.
+  # live-row fetch at open (spec §22, 6b: via clipbridge::peer_snapshot's
+  # clip.get exchange): one §6.1 reply carrying text/regtype/timestamp/host.
+  # Every connection re-reads the script from the start, so this single
+  # directive serves both the clip.get and files.list exchanges alike (the
+  # latter just finds none of the fields it looks for).
   live_reply() {
     recob_script "ok text=$(spec_hex "$LIVE_TEXT") regtype=$(spec_hex v) timestamp=$(spec_hex "$1") host=$(spec_hex "$LIVE_HOST")"
   }
@@ -1192,6 +1192,200 @@ Describe 'pick-clipboard: live-peer row ordering (X9)'
     The status should be success
     ops="$(recob_ops | tr '\n' ',')"
     The variable ops should equal "clip.get,files.list,store.persist.text,"
+  End
+End
+
+# Task 3 (6b): the live FILES row -- the sitting machine's file clip appears
+# in the picker and pulls on accept. A plain fake SYSTEM_BRIDGE_BIN dispatcher
+# (Task 1's clipboard-bridge-client_spec.sh convention: branch on the op name
+# in argv), not the recob_helper.sh recorder: the recorder reloads its script
+# fresh on every CONNECTION and clip.get/files.list are two SEPARATE
+# connections, so a single recob_script queue cannot give them two different
+# scripted replies -- exactly why Task 1 used the same op-dispatching fake for
+# clipbridge::peer_snapshot's own spec.
+Describe 'pick-clipboard: live FILES row (6b, Task 3)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
+  LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  setup() {
+    unset SSH_CLIENT SSH_TTY
+    export SSH_CONNECTION="10.0.0.1 1234 10.0.0.2 22"   # bridge_up precondition 1/2
+    export HOME="$SHELLSPEC_TMPBASE/homelivef"; rm -rf "$HOME"; mkdir -p "$HOME"
+    export TMPDIR="$SHELLSPEC_TMPBASE/tmplivef"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
+    # Deterministic MY_HOST without a real daemon: clip::self_host's own
+    # self-name-file precedence (Phase 7), same fixture recob_start installs.
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/statelivef"
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf 'mac-mini\n' > "$XDG_STATE_HOME/clipboard/self-name"
+
+    DB="$SHELLSPEC_TMPBASE/history-livef.db"
+    export PICK_CLIPBOARD_DB="$DB"
+    rm -f "$DB"
+    sqlite3 "$DB" '
+      CREATE TABLE clips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text_preview TEXT,
+        text_plain TEXT,
+        len INTEGER,
+        first_ts REAL,
+        last_ts REAL,
+        source_app TEXT,
+        source_bundle_id TEXT,
+        type_kind TEXT,
+        regtype TEXT,
+        pinned INTEGER DEFAULT 0,
+        type_hash TEXT,
+        source_host TEXT
+      );
+      CREATE TABLE clip_types (
+        clip_id INTEGER,
+        uti TEXT,
+        blob BLOB,
+        PRIMARY KEY (clip_id, uti)
+      );
+    '
+
+    BINDIR="$SHELLSPEC_TMPBASE/binlivef"; mkdir -p "$BINDIR"
+    export PATH="$BINDIR:$PATH"
+    export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
+    export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    export PICK_CLIPBOARD_NO_RUN=1
+    export SCRIPT_PATH="$SCRIPT"
+    unset PICK_CLIPBOARD_LIMIT
+  }
+  BeforeEach 'setup'
+
+  # write_fake_bridge <clip.get behavior> <files.list behavior> -- Task 1's
+  # write_fake shape (clipboard-bridge-client_spec.sh), extended with
+  # store.persist.files (logs its argv + saves stdin, the same FAKE_BRIDGE_LOG/
+  # FAKE_BRIDGE_STDIN contract Task 1's persist_files spec uses) and probe
+  # (always succeeds -- these examples all need bridge_up=1).
+  write_fake_bridge() {
+    cat > "$BINDIR/fake-bridge" <<FAKE
+#!/bin/sh
+op=""
+for a in "\$@"; do case "\$a" in
+  clip.get|files.list|store.persist.files|probe) op="\$a" ;;
+esac; done
+case "\$op" in
+  probe) exit 0 ;;
+  clip.get)  $1 ;;
+  files.list) $2 ;;
+  store.persist.files)
+    printf '%s\n' "\$*" >> "\${FAKE_BRIDGE_LOG:?}"
+    cat > "\${FAKE_BRIDGE_STDIN:-/dev/null}"
+    ;;
+esac
+FAKE
+    chmod +x "$BINDIR/fake-bridge"
+    export SYSTEM_BRIDGE_BIN="$BINDIR/fake-bridge"
+  }
+
+  # run_live_files_state -- sources the picker under PICK_CLIPBOARD_NO_RUN in a
+  # FRESH subprocess (same escape hatch/convention as run_live_state in the X9
+  # Describe above) and prints LIVEF_HOST plus the NUL-joined
+  # LIVEF_PATHS_FILE contents (newline-joined for a readable assertion). A
+  # subprocess, not a direct `source` in this example's own shell: the
+  # picker's own cleanup trap covers EXIT INT TERM, and shellspec's `When
+  # call` delivers one of those signals to the calling context right after
+  # the call returns -- confirmed empirically (a bare EXIT-only trap survives
+  # to the next assertion line, but adding INT/TERM makes the trap fire
+  # immediately, before the very next line runs). A subprocess sidesteps that
+  # entirely: everything worth asserting is read and printed BEFORE the
+  # subprocess's own exit ever fires its copy of the trap.
+  run_live_files_state() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      print -r -- "host=$LIVEF_HOST"
+      if [[ -n "$LIVEF_PATHS_FILE" && -s "$LIVEF_PATHS_FILE" ]]; then
+        print -r -- "paths=$(tr "\0" "\n" < "$LIVEF_PATHS_FILE")"
+      else
+        print -r -- "paths="
+      fi
+    '
+  }
+
+  # files_reply <host> <timestamp> <path>... -- builds the SHELL CODE (not its
+  # executed output) for the files.list arm of write_fake_bridge: a `printf`
+  # invocation of hex-encoded fields, Task 1's write_fake shape
+  # (clipboard-bridge-client_spec.sh). The path arguments are individually
+  # NUL-free (a NUL cannot survive a shell positional parameter), and
+  # spec_paths_hex (top of this file) does the NUL-joining itself, entirely in
+  # its own output stream -- never threading a NUL through an argv slot.
+  files_reply() {
+    local host=$1 ts=$2; shift 2
+    print -r -- "printf 'kind=%s\\nhost=%s\\ntimestamp=%s\\npaths=%s\\n' '$(spec_hex files)' '$(spec_hex "$host")' '$(spec_hex "$ts")' '$(spec_paths_hex "$@")'"
+  }
+
+  It 'builds a live FILES row from the snapshot files candidate'
+    write_fake_bridge "exit 1" "$(files_reply laptop 1755551300.1 /a/b /c)"
+
+    When call run_live_files_state
+    The status should be success
+    The line 1 of output should eq 'host=laptop'
+    The line 2 of output should eq 'paths=/a/b'
+    The line 3 of output should eq '/c'
+  End
+
+  It 'suppresses the live FILES row when an equal manifest row is stored'
+    write_fake_bridge "exit 1" "$(files_reply laptop 1755551300.1 /a/b /c)"
+    mf="$SHELLSPEC_TMPBASE/seed-manifest.bin"
+    printf '/a/b\000/c' > "$mf"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','laptop',50);
+      INSERT INTO clip_types (clip_id, uti, blob) VALUES (last_insert_rowid(), 'x-file-manifest', readfile('$mf'));"
+
+    When call run_live_files_state
+    The status should be success
+    The line 2 of output should eq 'paths='
+  End
+
+  run_pull_live_files() {
+    source "$SCRIPT_PATH"
+    clip::copy_files_by_id() { COPY_CALLED_WITH="$1"; }
+    clip::pull_live_files laptop "$PULL_PATHS_FILE"
+  }
+
+  It "clip::pull_live_files persists then restores by the resolved id"
+    write_fake_bridge "exit 1" "exit 1"
+    PULL_PATHS_FILE="$SHELLSPEC_TMPBASE/pull-paths.bin"
+    printf '/x/y' > "$PULL_PATHS_FILE"
+    FAKE_BRIDGE_LOG="$SHELLSPEC_TMPBASE/fake-bridge-log"; : > "$FAKE_BRIDGE_LOG"
+    export FAKE_BRIDGE_LOG
+    export FAKE_BRIDGE_STDIN="$SHELLSPEC_TMPBASE/fake-bridge-stdin"
+    SEEDED_ROW_ID=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('files','laptop',999); SELECT last_insert_rowid();")
+
+    When call run_pull_live_files
+    The status should be success
+    The contents of file "$FAKE_BRIDGE_LOG" should include 'store.persist.files'
+    The contents of file "$FAKE_BRIDGE_LOG" should include 'host=laptop'
+    The variable COPY_CALLED_WITH should eq "$SEEDED_ROW_ID"
+  End
+
+  emit_rows_with_two_live() {
+    zsh -f -c '
+      source "$SCRIPT_PATH"
+      emit_rows
+    '
+  }
+
+  # DB rows at ts 100, 300, 500; text candidate ts=400, files ts=200 -> emit
+  # order: 500, text-live, 300, files-live, 100 (ABOVE = last_ts>400, MID =
+  # 400>=last_ts>200, BELOW = last_ts<=200).
+  It 'interleaves two live rows each by its own timestamp'
+    write_fake_bridge \
+      "printf 'text=%s\nregtype=%s\ntimestamp=%s\nhost=%s\n' '$(spec_hex "peer text, distinct from every local row")' '$(spec_hex v)' '$(spec_hex 400)' '$(spec_hex peer-host)'" \
+      "$(files_reply peer-host 200 /a/b /c)"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',100,'row-100 text');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',300,'row-300 text');"
+    sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',500,'row-500 text');"
+
+    When call emit_rows_with_two_live
+    The status should be success
+    The line 1 of output should include 'row-500'
+    The line 2 of output should include $'\x1f''LIVE'$'\x1e'
+    The line 3 of output should include 'row-300'
+    The line 4 of output should include $'\x1f''LIVEF'$'\x1e'
+    The line 5 of output should include 'row-100'
   End
 End
 
