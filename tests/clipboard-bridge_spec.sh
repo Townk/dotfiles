@@ -454,3 +454,128 @@ EOF
     The output should equal 'E|unavailable'
   End
 End
+
+# system-clip paste — 6b's newer-wins. Over SSH the client now compares TWO
+# stores: the peer's, over the public tunnel, and this machine's own, over the
+# trusted socket (§4.4). `choose_paste_source`'s table is unit-tested directly
+# in wire/src/bin/system-clip.rs; what belongs here is proof the wiring around
+# it is real — that a genuinely newer peer clip is what gets printed AND
+# materialized into the local store (§11's "a used peer clip survives the
+# origin going offline"), against a REAL client and REAL daemons rather than
+# the fake `system-bridge` clipboard-bridge-client_spec.sh uses for the zsh
+# picker half.
+#
+# One recording daemon cannot supply two different scripted replies to its two
+# listeners: record.rs's `open_script` reloads the WHOLE script fresh on every
+# CONNECTION, so a public connection and a trusted connection consuming their
+# first exchange both draw the same first directive. A genuine two-store
+# comparison therefore needs two daemon PROCESSES: the shared --record daemon
+# `recob_start` already gives every spec in this file stands in for the peer
+# (its public endpoint gets one scripted clip.get reply below), and a second,
+# plain (unscripted) trusted-only daemon — started by this Describe, not by
+# the shared helper — stands in for this machine's own bridge, its real
+# sqlite store seeded with a controlled timestamp the same way the "recobd:
+# clip.get timestamp" Describe above seeds its rows.
+Describe 'system-clip paste: 6b newer-wins'
+  Include tests/recob_helper.sh
+
+  setup() {
+    export SSH_CONNECTION="x 1 y 22"   # force the over-SSH branch
+    recob_start
+    CLIENT="$(recob_client_bin)"
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+
+    OWN_DIR=$(mktemp -d "${SHELLSPEC_TMPBASE:-${TMPDIR:-/tmp}}/recob-own.XXXXXX") || return 1
+    OWN_SOCK="$OWN_DIR/own.sock"
+    OWN_LOG="$OWN_DIR/daemon.log"
+    CB_REQ="$OWN_DIR/cb-req"
+    CB_RESP="$OWN_DIR/cb-resp"
+    CB_ANSWER="$OWN_DIR/cb-answer"
+    own_start || return 1
+    # Overrides the peer daemon's own (unused) trusted socket that recob_start
+    # pointed this at. Both processes still share $XDG_DATA_HOME, but nothing
+    # here ever drives a real store op against the peer daemon's trusted
+    # listener, so the two never contend for the sqlite file.
+    export CLIPBOARD_BRIDGE_LOCAL_SOCKET="$OWN_SOCK"
+  }
+  BeforeEach 'setup'
+
+  teardown() {
+    own_stop
+    recob_stop
+  }
+  AfterEach 'teardown'
+
+  # A second, plain trusted-only daemon, following recob_start's own
+  # bind-retry and readiness-wait shape (§11.1's daemon log line) since it is
+  # standing in for a second, independent machine rather than reusing the
+  # shared helper's single daemon.
+  own_start() {
+    [ -x "$(recob_bin)" ] || {
+      echo "own_start: $(recob_bin) is missing -- run make -C custom-builds/recob build" >&2
+      return 1
+    }
+    _attempt=0
+    while [ "$_attempt" -lt 8 ]; do
+      _attempt=$((_attempt + 1))
+      rm -f "$OWN_SOCK" "$OWN_LOG"
+      "$(recob_bin)" --no-public --socket "$OWN_SOCK" >"$OWN_LOG" 2>&1 &
+      OWN_PID=$!
+      _i=0
+      while [ "$_i" -lt 200 ]; do
+        grep -q '^recobd: wire ' "$OWN_LOG" 2>/dev/null && return 0
+        kill -0 "$OWN_PID" 2>/dev/null || break
+        sleep 0.02
+        _i=$((_i + 1))
+      done
+      kill "$OWN_PID" 2>/dev/null
+      wait "$OWN_PID" 2>/dev/null
+      OWN_PID=""
+    done
+    echo "own_start: trusted-only daemon never came up:" >&2
+    cat "$OWN_LOG" >&2
+    return 1
+  }
+
+  own_stop() {
+    case "${OWN_PID:-}" in
+      '' | *[!0-9]*) OWN_PID=""; return 0 ;;
+    esac
+    kill "$OWN_PID" 2>/dev/null
+    wait "$OWN_PID" 2>/dev/null
+    OWN_PID=""
+  }
+
+  # One row at a controlled last_ts, the same content-match resolution the
+  # "recobd: clip.get timestamp" Describe exercises — except this time the
+  # real daemon behind it is standing in for a second, independent machine.
+  own_seed() {  # $1=ts $2=text
+    cb_ask "$(cb_field op "$(cb_hex clip.set)")$(cb_field text "$(cb_hex "$2")")$(cb_field regtype "$(cb_hex v)")"
+    sqlite3 "$DB" "DELETE FROM clips; DELETE FROM clip_types;
+      INSERT INTO clips (type_kind, last_ts, text_plain, type_hash, source_host)
+      VALUES ('text', $1, '$2', 'own-seed', 'ownhost');"
+  }
+
+  # The peer's one clip.get exchange, scripted on the shared --record daemon's
+  # public endpoint.
+  peer_script() {  # $1=ts $2=text
+    recob_script "ok text=$(cb_hex "$2") regtype=$(cb_hex v) timestamp=$(cb_hex "$1") host=$(cb_hex peerhost)"
+  }
+
+  It 'prints a strictly-newer peer clip and persists it into the own store'
+    newer_peer() {
+      own_seed 100 'own text'
+      peer_script 300 'peer text'
+      out=$("$CLIENT" paste 2>/dev/null)
+      printf '%s|%s|%s' "$out" \
+        "$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='peerhost';")" \
+        "$(sqlite3 "$DB" "SELECT text_plain FROM clips WHERE source_host='peerhost';")"
+    }
+    When call newer_peer
+    # The printed text is the peer's, and the local store now also carries it
+    # under the peer's declared host — §11's "a used peer clip survives the
+    # origin going offline", exercised end to end rather than asserted on the
+    # pure resolver alone.
+    The output should equal 'peer text|1|peer text'
+  End
+End

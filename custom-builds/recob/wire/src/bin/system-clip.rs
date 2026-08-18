@@ -522,6 +522,31 @@ Usage: text=$(pbpaste)
        pbpaste --files [--force] [--quiet|--progress|--porcelain] [dir]
 ";
 
+enum PasteSource {
+    Peer,
+    Own,
+}
+
+/// 6b newer-wins: which side's clip a remote paste prints. Pure so the rule
+/// is table-testable; clock skew between the two machines is the documented
+/// accepted hazard (phase 6 spec §11) — no compensation here.
+fn choose_paste_source(peer_ts: Option<f64>, own_ts: Option<f64>) -> PasteSource {
+    match (peer_ts, own_ts) {
+        (Some(peer), Some(own)) if peer > own => PasteSource::Peer,
+        (Some(_), Some(_)) => PasteSource::Own,
+        (Some(_), None) => PasteSource::Peer,
+        (None, Some(_)) => PasteSource::Own,
+        (None, None) => PasteSource::Peer,
+    }
+}
+
+fn ts_of(reply: &Fields) -> Option<f64> {
+    std::str::from_utf8(reply.get("timestamp").unwrap_or_default())
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|ts| *ts > 0.0)
+}
+
 fn pbpaste_text() -> ExitCode {
     if !is_ssh() {
         let darwin =
@@ -542,11 +567,52 @@ fn pbpaste_text() -> ExitCode {
 
     match public_session("pbpaste") {
         Err(e) => fail(e),
-        Ok(PublicBridge::Absent) => fail(format!(
-            "pbpaste: clipboard bridge not reachable on 127.0.0.1:{} (reverse SSH tunnel down?)",
-            bridge_port()
-        )),
-        Ok(PublicBridge::Session(mut session)) => print_clip_text(&mut session),
+        Ok(PublicBridge::Absent) => {
+            // §5.2: ECONNREFUSED is the one licensed downgrade — the tunnel
+            // is definitively down, so this machine's own clipboard is the
+            // honest answer (6b). Anything slower still fails loudly above.
+            eprintln!(
+                "pbpaste: bridge not reachable on 127.0.0.1:{} — using this machine's own clipboard",
+                bridge_port()
+            );
+            match trusted_session("pbpaste") {
+                Ok(mut session) => print_clip_text(&mut session),
+                Err(e) => fail(e),
+            }
+        }
+        Ok(PublicBridge::Session(mut session)) => {
+            let peer = match exchange_ok(
+                &mut session,
+                &Fields::new().with("op", b"clip.get".to_vec()),
+                false,
+                "pbpaste",
+            ) {
+                Ok(reply) => reply,
+                Err(e) => return fail(e),
+            };
+            // Own comparand: this machine's daemon over the trusted socket.
+            // Its being down must not break a paste the healthy tunnel can
+            // answer — degrade to peer with a warning (spec §4.4).
+            let own = trusted_session("pbpaste").ok().and_then(|mut local| {
+                local
+                    .exchange(&Fields::new().with("op", b"clip.get".to_vec()), false)
+                    .ok()
+            });
+            if own.is_none() {
+                eprintln!("pbpaste: this machine's own clipboard store is unreachable — using the peer clip");
+            }
+            match choose_paste_source(ts_of(&peer), own.as_ref().and_then(ts_of)) {
+                PasteSource::Own => write_clip_text(&own.expect("own is Some when it wins")),
+                PasteSource::Peer => {
+                    let code = write_clip_text(&peer);
+                    // The peer clip is now "what I pasted here" — record it
+                    // locally (best-effort, the nvim persist_local precedent)
+                    // so the next comparison sees this paste.
+                    persist_peer_text(&peer);
+                    code
+                }
+            }
+        }
     }
 }
 
@@ -557,19 +623,48 @@ fn print_clip_text<S: ClientStream>(session: &mut Session<S>) -> ExitCode {
         false,
         "pbpaste",
     ) {
-        Ok(reply) => {
-            let text = reply.get("text").unwrap_or_default();
-            let mut stdout = std::io::stdout();
-            if stdout
-                .write_all(text)
-                .and_then(|()| stdout.flush())
-                .is_err()
-            {
-                return ExitCode::FAILURE;
-            }
-            ExitCode::SUCCESS
-        }
+        Ok(reply) => write_clip_text(&reply),
         Err(e) => fail(e),
+    }
+}
+
+fn write_clip_text(reply: &Fields) -> ExitCode {
+    let text = reply.get("text").unwrap_or_default();
+    let mut stdout = std::io::stdout();
+    if stdout
+        .write_all(text)
+        .and_then(|()| stdout.flush())
+        .is_err()
+    {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+/// Best-effort local echo of a peer clip a remote paste chose: the nvim
+/// `persist_local` precedent (pbcopy's own history row) applied to the read
+/// side. `text`/`host` are both required on the wire (§6.2), so their
+/// absence here means a malformed or stubbed reply, not a real clip — skip
+/// rather than write garbage into the local history.
+fn persist_peer_text(peer: &Fields) {
+    let text = peer.get("text").unwrap_or_default();
+    if text.is_empty() {
+        return;
+    }
+    let host = peer.get("host").unwrap_or_default();
+    if host.is_empty() {
+        return;
+    }
+    let regtype = peer.get("regtype").unwrap_or(b"v");
+    if let Ok(mut local) = trusted_session("pbpaste") {
+        let request = Fields::new()
+            .with("op", b"store.persist.text".to_vec())
+            .with("host", host.to_vec())
+            .with("kind", b"text".to_vec())
+            .with("app", b"".to_vec())
+            .with("regtype", regtype.to_vec())
+            .with("text", text.to_vec());
+        let _ = local.exchange(&request, false);
     }
 }
 
@@ -680,4 +775,53 @@ fn pbpaste_manifest() -> ExitCode {
         println!("path\t{}", String::from_utf8_lossy(path));
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod paste_source_tests {
+    use super::{choose_paste_source, PasteSource};
+
+    #[test]
+    fn peer_strictly_newer_wins() {
+        assert!(matches!(
+            choose_paste_source(Some(200.0), Some(100.0)),
+            PasteSource::Peer
+        ));
+    }
+    #[test]
+    fn own_newer_wins() {
+        assert!(matches!(
+            choose_paste_source(Some(100.0), Some(200.0)),
+            PasteSource::Own
+        ));
+    }
+    #[test]
+    fn tie_favors_own() {
+        // Equal stamps usually mean both sides hold the same clip; Own is the
+        // no-behavior-change default.
+        assert!(matches!(
+            choose_paste_source(Some(100.0), Some(100.0)),
+            PasteSource::Own
+        ));
+    }
+    #[test]
+    fn missing_own_stamp_yields_peer() {
+        assert!(matches!(
+            choose_paste_source(Some(100.0), None),
+            PasteSource::Peer
+        ));
+    }
+    #[test]
+    fn missing_peer_stamp_yields_own() {
+        assert!(matches!(
+            choose_paste_source(None, Some(100.0)),
+            PasteSource::Own
+        ));
+    }
+    #[test]
+    fn both_missing_yields_peer() {
+        // Today's behavior: the peer session is up, so its (possibly empty)
+        // text is still the answer of record.
+        assert!(matches!(choose_paste_source(None, None), PasteSource::Peer));
+    }
 }
