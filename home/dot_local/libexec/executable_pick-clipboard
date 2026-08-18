@@ -1226,7 +1226,7 @@ fi
 if [[ "${1:-}" == --peer-snapshot ]]; then
   if [[ -n "$LIVE_TEXT_FILE" ]]; then
     jq -nc --arg regtype "$LIVE_REGTYPE" --arg ts "$LIVE_TS" --arg host "$LIVE_HOST" \
-      --arg preview "$(tr '\t\r\n' '   ' < "$LIVE_TEXT_FILE" | cut -c1-200 | head -n1)" \
+      --arg preview "$(tr '\t\r\n' '   ' < "$LIVE_TEXT_FILE" | cut -c1-200 | head -n1 | sed 's/[[:space:]]*$//')" \
       '{kind:"text", regtype:$regtype, timestamp:$ts, host:$host, preview:$preview}'
   fi
   if [[ -n "$LIVEF_PATHS_FILE" && -n "$SNAPSHOT_JSON" ]]; then
