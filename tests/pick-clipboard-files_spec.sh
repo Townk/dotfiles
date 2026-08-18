@@ -1385,7 +1385,21 @@ FAKE
     The line 2 of output should include $'\x1f''LIVE'$'\x1e'
     The line 3 of output should include 'row-300'
     The line 4 of output should include $'\x1f''LIVEF'$'\x1e'
-    The line 5 of output should include 'row-100'
+    # Regression lock for the NUL-truncation fix at the LIVEF prerender (see
+    # the comment there): a kind=files row with N>1 paths renders as "first
+    # path (+N-1)" (clip::render_file_content), never the literal later
+    # paths, so the second path's own text ('/c') can never appear in the
+    # rendered line even when correct -- asserting on it would be a
+    # permanently-failing (or vacuously-true) check either way. The "(+1)"
+    # suffix only appears when BOTH paths made it through the NUL-joined
+    # blob intact (a truncating `CAST(blob AS TEXT)`/`replace()` collapses
+    # this to a single detected path and drops the suffix entirely --
+    # verified empirically against a temporarily-reverted in-SQL
+    # replace(CAST(readfile(...) AS TEXT), char(0), char(1)) variant, which
+    # also loses the rest of the row -- reset/pin column/tail sentinel --
+    # because the WHOLE concatenated SQL value truncates at that embedded
+    # NUL on this sqlite3 build, not just the paths column).
+    The line 4 of output should include '(+1)'
   End
 End
 

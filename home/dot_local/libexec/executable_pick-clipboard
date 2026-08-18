@@ -1786,17 +1786,17 @@ EMIT_ROW_BODY="WITH palette AS (
 # 6b: ABOVE/MID/BELOW three-segment split, generalizing X9's two-segment one
 # for up to TWO live rows. ABOVE carries the reserved-slot budget (ABOVE_LIMIT
 # = limit - live rows present). MID sits strictly between the two live rows'
-# copy-times (empty when there's at most one live row: live_lo_ts=-1 makes
-# `last_ts > -1` true for everything down to `last_ts <= live_hi_ts`, but
-# that's exactly what BELOW's own WHERE already covers, and MID's own
-# `last_ts > live_lo_ts` with live_lo_ts=-1 still only excludes nothing extra
-# -- see emit_rows below for why MID's actual row count still needs computing
-# even in the degenerate case). EMIT_COUNT_ABOVE (and the inline MID count in
-# emit_rows) count what each segment ACTUALLY returned (row-exact regardless
-# of any embedded newline in a preview), so each later segment's dynamic limit
-# leaves the total at or under the global cap. MID/BELOW's limits are appended
-# at emit time (both end at the LIMIT keyword) since earlier counts aren't
-# known until those segments have run.
+# copy-times -- with at most one live row present, live_lo_ts=-1, so MID's
+# `last_ts <= live_hi_ts AND last_ts > -1` matches EVERYTHING at or below the
+# live row: MID becomes what X9's old BELOW used to hold, and it is BELOW
+# itself (`last_ts <= live_lo_ts` = `last_ts <= -1`) that goes empty instead
+# -- see emit_rows below for the same degradation spelled out over the actual
+# row order. EMIT_COUNT_ABOVE (and the inline MID count in emit_rows) count
+# what each segment ACTUALLY returned (row-exact regardless of any embedded
+# newline in a preview), so each later segment's dynamic limit leaves the
+# total at or under the global cap. MID/BELOW's limits are appended at emit
+# time (both end at the LIMIT keyword) since earlier counts aren't known
+# until those segments have run.
 EMIT_SQL_ABOVE="${EMIT_ROW_BODY}
     WHERE pinned=1 OR last_ts > ${live_hi_ts}
     ORDER BY pinned DESC, last_ts DESC
@@ -1820,9 +1820,12 @@ emit_rows() {
   # the generic right-truncate every other kind still gets untouched. 6b:
   # ABOVE, live_hi, MID, live_lo, BELOW in that order -- zero live rows
   # collapses to the original single ABOVE+BELOW query (live_hi_ts=live_lo_ts
-  # =-1 makes MID's WHERE match nothing and both cat guards no-op); one live
-  # row degrades to the X9 two-segment split (live_lo_ts=-1 still makes MID
-  # empty, so ABOVE+live_hi+BELOW is exactly X9's ABOVE+live+BELOW).
+  # =-1 makes MID's WHERE match nothing too, so both cat guards and MID are
+  # no-ops, leaving plain ABOVE+BELOW); one live row degrades to the X9 two-
+  # segment split, but via MID, not BELOW: live_lo_ts=-1 makes MID's
+  # `last_ts > -1` match everything down to live_hi_ts, so ABOVE+live_hi+MID
+  # is exactly X9's ABOVE+live+BELOW, and BELOW itself (`last_ts <= -1`) is
+  # the segment that goes empty.
   {
     sqlite3 "${PICK_SQLITE_RAW[@]}" "$DB_FILE" "$EMIT_SQL_ABOVE"
     [[ -n "$live_hi_file" && -f "$live_hi_file" ]] && cat "$live_hi_file"
@@ -1876,7 +1879,9 @@ ${CLIP_SHORTEN_FUNCS}
 # zsh copy of this exact split) for why it's correct. live_hi_ts=live_lo_ts=
 # -1 (no live rows) degrades back to "everything in ABOVE" -- the original
 # single-query order; one live row (live_lo_ts=-1) degrades to X9's two-
-# segment ABOVE+live+BELOW split.
+# segment split via ABOVE+live_hi+MID (MID's last_ts > -1 condition matches
+# everything down to live_hi_ts, i.e. exactly X9's old BELOW), leaving BELOW
+# itself (last_ts <= -1) empty.
 sqlite3 -escape off '$DB_FILE' "WITH palette AS (
       SELECT CHAR(27)||'[0m'                AS reset,
              CHAR(27)||'[38;2;202;211;245m' AS text_color,
