@@ -492,6 +492,13 @@ Describe 'system-clip paste: 6b newer-wins'
     CB_RESP="$OWN_DIR/cb-resp"
     CB_ANSWER="$OWN_DIR/cb-answer"
     own_start || return 1
+    # Saved before the override below: recob_stop's own cleanup loop removes
+    # whatever $CLIPBOARD_BRIDGE_LOCAL_SOCKET currently names (§ "the port
+    # must be refused, not silent"), so a spec that calls recob_stop after
+    # pointing this at the own daemon's socket must point it back at the
+    # peer's first — otherwise recob_stop deletes the OWN daemon's live
+    # socket out from under it.
+    PEER_SOCK="$CLIPBOARD_BRIDGE_LOCAL_SOCKET"
     # Overrides the peer daemon's own (unused) trusted socket that recob_start
     # pointed this at. Both processes still share $XDG_DATA_HOME, but nothing
     # here ever drives a real store op against the peer daemon's trusted
@@ -500,9 +507,19 @@ Describe 'system-clip paste: 6b newer-wins'
   }
   BeforeEach 'setup'
 
+  # recob_stop, scoped so its socket-cleanup loop reclaims the PEER daemon's
+  # own socket rather than the OWN daemon's live one (see the PEER_SOCK
+  # comment in setup above).
+  peer_stop() {
+    _own_sock="$CLIPBOARD_BRIDGE_LOCAL_SOCKET"
+    CLIPBOARD_BRIDGE_LOCAL_SOCKET="$PEER_SOCK"
+    recob_stop
+    CLIPBOARD_BRIDGE_LOCAL_SOCKET="$_own_sock"
+  }
+
   teardown() {
     own_stop
-    recob_stop
+    peer_stop
   }
   AfterEach 'teardown'
 
@@ -577,5 +594,61 @@ Describe 'system-clip paste: 6b newer-wins'
     # origin going offline", exercised end to end rather than asserted on the
     # pure resolver alone.
     The output should equal 'peer text|1|peer text'
+  End
+
+  # The own-newer/tied arm of choose_paste_source, asserted end to end rather
+  # than only on the pure resolver: own wins AND the peer clip is never
+  # materialized locally (persist_peer_text must not run when own's write
+  # already answered the paste).
+  It 'prints the own clip when it is newer, and never persists a peer row'
+    own_wins() {
+      own_seed 300 'own text'
+      peer_script 100 'peer text'
+      out=$("$CLIENT" paste 2>/dev/null)
+      printf '%s|%s' "$out" \
+        "$(sqlite3 "$DB" "SELECT count(*) FROM clips WHERE source_host='peerhost';")"
+    }
+    When call own_wins
+    The output should equal 'own text|0'
+  End
+
+  # §5.2's licensed downgrade, the task's namesake behavior: a REFUSED public
+  # port (nothing bound there at all, unlike a stalled or refusing one) falls
+  # back to this machine's own clip with exactly one stderr warning line,
+  # never a hard failure. `peer_stop` tears down the shared --record daemon
+  # standing in for the peer (its own trusted listener is unused here, since
+  # $CLIPBOARD_BRIDGE_LOCAL_SOCKET already points at the separate own daemon)
+  # — scoped so recob_stop's own socket-cleanup loop cannot touch the OWN
+  # daemon's still-live socket (see PEER_SOCK in setup above).
+  It 'falls back to the own clip with exactly one warning when the public tunnel refuses'
+    refused() {
+      own_seed 999 'own text'
+      peer_stop
+      out=$("$CLIENT" paste 2>"$OWN_DIR/stderr")
+      printf '%s|%s|%s' "$?" "$out" "$(wc -l < "$OWN_DIR/stderr" | tr -d ' ')"
+    }
+    When call refused
+    The output should equal '0|own text|1'
+    The contents of file "$OWN_DIR/stderr" should include 'bridge not reachable on 127.0.0.1'
+    The contents of file "$OWN_DIR/stderr" should include 'using this machine'
+  End
+
+  # §4.4's own-side degrade: the peer tunnel is healthy, but THIS machine's
+  # own trusted bridge is down (`own_stop` kills the process; the stale
+  # socket path connects-and-refuses exactly like self_bind.rs's "stale
+  # socket from a dead daemon" case). A paste must still succeed, answered by
+  # the peer, with exactly one warning naming the own store as the reason —
+  # never a hard failure just because this machine's own daemon happened to
+  # be down.
+  It 'falls back to the peer clip with exactly one warning when the own trusted socket is down'
+    own_down() {
+      peer_script 555 'peer text'
+      own_stop
+      out=$("$CLIENT" paste 2>"$OWN_DIR/stderr")
+      printf '%s|%s|%s' "$?" "$out" "$(wc -l < "$OWN_DIR/stderr" | tr -d ' ')"
+    }
+    When call own_down
+    The output should equal '0|peer text|1'
+    The contents of file "$OWN_DIR/stderr" should include 'own clipboard store is unreachable'
   End
 End
