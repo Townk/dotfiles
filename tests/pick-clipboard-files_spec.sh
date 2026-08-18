@@ -1786,3 +1786,218 @@ Describe 'pick-clipboard: the content column trims and flattens its snippet'
     The variable result should include "reloaded snippet"
   End
 End
+
+# Task 4 (6b): the two headless verbs the GUI picker's own webview drives --
+# --peer-snapshot (a read-only re-emit of the open-time candidates, plus a
+# flattened text preview) and --pull-live text|files (a fresh accept-time
+# pull). Both exit before any fzf/geometry setup, exactly like --restore-id,
+# so these examples run the SCRIPT directly (real argv, no
+# PICK_CLIPBOARD_NO_RUN). Same op-dispatching fake SYSTEM_BRIDGE_BIN
+# convention as the live-FILES-row Describe above (Task 3), extended with a
+# clip.set arm and a probe arm that can be told to fail (the bridge-down
+# example).
+Describe 'pick-clipboard: headless GUI verbs (--peer-snapshot / --pull-live, Task 4)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
+  LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+
+  setup() {
+    unset SSH_CLIENT SSH_TTY
+    export SSH_CONNECTION="10.0.0.1 1234 10.0.0.2 22"   # bridge_up precondition 1/2
+    export HOME="$SHELLSPEC_TMPBASE/homeverbs"; rm -rf "$HOME"; mkdir -p "$HOME"
+    export TMPDIR="$SHELLSPEC_TMPBASE/tmpverbs"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/stateverbs"
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf 'mac-mini\n' > "$XDG_STATE_HOME/clipboard/self-name"
+
+    DB="$SHELLSPEC_TMPBASE/history-verbs.db"
+    export PICK_CLIPBOARD_DB="$DB"
+    rm -f "$DB"
+    sqlite3 "$DB" '
+      CREATE TABLE clips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text_preview TEXT,
+        text_plain TEXT,
+        len INTEGER,
+        first_ts REAL,
+        last_ts REAL,
+        source_app TEXT,
+        source_bundle_id TEXT,
+        type_kind TEXT,
+        regtype TEXT,
+        pinned INTEGER DEFAULT 0,
+        type_hash TEXT,
+        source_host TEXT
+      );
+      CREATE TABLE clip_types (
+        clip_id INTEGER,
+        uti TEXT,
+        blob BLOB,
+        PRIMARY KEY (clip_id, uti)
+      );
+    '
+
+    BINDIR="$SHELLSPEC_TMPBASE/binverbs"; mkdir -p "$BINDIR"
+    export PATH="$BINDIR:$PATH"
+    export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
+    export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
+    export PICK_CLIPBOARD_NO_RUN=1
+    export SCRIPT_PATH="$SCRIPT"
+    unset PICK_CLIPBOARD_LIMIT
+  }
+  BeforeEach 'setup'
+
+  # write_fake_bridge <clip.get behavior> <files.list behavior> [<probe
+  # behavior>] -- Task 3's write_fake_bridge, extended with a `clip.set` arm
+  # (logs argv + drains stdin, same FAKE_BRIDGE_LOG contract) and a
+  # controllable probe arm (default: always up) so the bridge-down example
+  # can fail the probe without touching SSH_CONNECTION.
+  write_fake_bridge() {
+    local probe_behavior="${3:-exit 0}"
+    cat > "$BINDIR/fake-bridge" <<FAKE
+#!/bin/sh
+op=""
+for a in "\$@"; do case "\$a" in
+  clip.get|files.list|store.persist.files|clip.set|probe) op="\$a" ;;
+esac; done
+case "\$op" in
+  probe) $probe_behavior ;;
+  clip.get)  $1 ;;
+  files.list) $2 ;;
+  store.persist.files)
+    printf '%s\n' "\$*" >> "\${FAKE_BRIDGE_LOG:?}"
+    cat > "\${FAKE_BRIDGE_STDIN:-/dev/null}"
+    ;;
+  clip.set)
+    printf '%s\n' "\$*" >> "\${FAKE_BRIDGE_LOG:?}"
+    cat > "\${FAKE_BRIDGE_STDIN:-/dev/null}"
+    ;;
+esac
+FAKE
+    chmod +x "$BINDIR/fake-bridge"
+    export SYSTEM_BRIDGE_BIN="$BINDIR/fake-bridge"
+  }
+
+  # write_fake_bridge_counting <first clip.get reply> <second clip.get reply>
+  # <files.list behavior> -- clip.get answers DIFFERENTLY on its 1st (the
+  # open-time snapshot) and 2nd (the --pull-live text dispatch's OWN fresh
+  # fetch) call, via a counter file. Proves the dispatch never reuses
+  # LIVE_TEXT_FILE: if it did, the bytes handed to clip.set would be the
+  # FIRST reply, not the second.
+  write_fake_bridge_counting() {
+    CLIPGET_COUNT="$SHELLSPEC_TMPBASE/clipget-count"; rm -f "$CLIPGET_COUNT"
+    export CLIPGET_COUNT
+    cat > "$BINDIR/fake-bridge" <<FAKE
+#!/bin/sh
+op=""
+for a in "\$@"; do case "\$a" in
+  clip.get|files.list|store.persist.files|clip.set|probe) op="\$a" ;;
+esac; done
+case "\$op" in
+  probe) exit 0 ;;
+  clip.get)
+    n=\$(cat "\$CLIPGET_COUNT" 2>/dev/null || echo 0)
+    n=\$((n + 1))
+    printf '%s' "\$n" > "\$CLIPGET_COUNT"
+    if [ "\$n" -eq 1 ]; then $1; else $2; fi
+    ;;
+  files.list) $3 ;;
+  clip.set)
+    printf '%s\n' "\$*" >> "\${FAKE_BRIDGE_LOG:?}"
+    cat > "\${FAKE_BRIDGE_STDIN:?}"
+    ;;
+esac
+FAKE
+    chmod +x "$BINDIR/fake-bridge"
+    export SYSTEM_BRIDGE_BIN="$BINDIR/fake-bridge"
+  }
+
+  # clip_get_reply <text> <regtype> <ts> <host> -- the shell code (not its
+  # executed output) for a scripted clip.get success reply, Task 1/3's shape.
+  clip_get_reply() {
+    print -r -- "printf 'text=%s\\nregtype=%s\\ntimestamp=%s\\nhost=%s\\n' '$(spec_hex "$1")' '$(spec_hex "$2")' '$(spec_hex "$3")' '$(spec_hex "$4")'"
+  }
+
+  # files_reply <host> <timestamp> <path>... -- Task 3's helper, unchanged.
+  files_reply() {
+    local host=$1 ts=$2; shift 2
+    print -r -- "printf 'kind=%s\\nhost=%s\\ntimestamp=%s\\npaths=%s\\n' '$(spec_hex files)' '$(spec_hex "$host")' '$(spec_hex "$ts")' '$(spec_paths_hex "$@")'"
+  }
+
+  It '--peer-snapshot prints the candidates with a flattened preview'
+    write_fake_bridge \
+      "$(clip_get_reply hi v 1755551234.5 laptop)" \
+      "$(files_reply laptop 1755551300.1 /a/b /c)"
+
+    When run script "$SCRIPT" --peer-snapshot
+    The status should eq 0
+    The line 1 of output should include '"preview":"hi"'
+    The line 1 of output should include '"kind":"text"'
+    The line 2 of output should include '"kind":"files"'
+  End
+
+  It '--peer-snapshot is empty and rc 0 when the bridge is down (probe fails)'
+    write_fake_bridge "exit 1" "exit 1" "exit 1"
+
+    When run script "$SCRIPT" --peer-snapshot
+    The status should eq 0
+    The output should eq ''
+  End
+
+  It '--pull-live text re-fetches fresh and sets this machine'"'"'s pasteboard with provenance'
+    write_fake_bridge_counting \
+      "$(clip_get_reply open-time-text v 100 laptop)" \
+      "$(clip_get_reply fresh-pull-text v 200 laptop)" \
+      "exit 1"
+    FAKE_BRIDGE_LOG="$SHELLSPEC_TMPBASE/fake-bridge-log"; : > "$FAKE_BRIDGE_LOG"
+    export FAKE_BRIDGE_LOG
+    export FAKE_BRIDGE_STDIN="$SHELLSPEC_TMPBASE/fake-bridge-stdin"
+
+    When run script "$SCRIPT" --pull-live text
+    The status should eq 0
+    The contents of file "$FAKE_BRIDGE_LOG" should include 'clip.set'
+    The contents of file "$FAKE_BRIDGE_LOG" should include 'origin_host=laptop'
+    The contents of file "$FAKE_BRIDGE_LOG" should not include '--peer clip.set'
+    The contents of file "$FAKE_BRIDGE_STDIN" should eq 'fresh-pull-text'
+  End
+
+  It '--pull-live text fails cleanly when there is no live peer text clip'
+    write_fake_bridge "exit 1" "exit 1"
+
+    When run script "$SCRIPT" --pull-live text
+    The status should eq 1
+    The error should include 'no live peer text clip'
+  End
+
+  It '--pull-live files dispatches the open-time host/paths to a fresh persist'
+    write_fake_bridge "exit 1" "$(files_reply laptop 1755551300.1 /x/y)"
+    FAKE_BRIDGE_LOG="$SHELLSPEC_TMPBASE/fake-bridge-log2"; : > "$FAKE_BRIDGE_LOG"
+    export FAKE_BRIDGE_LOG
+    export FAKE_BRIDGE_STDIN="$SHELLSPEC_TMPBASE/fake-bridge-stdin2"
+
+    # Nothing was actually persisted by the fake (it only logs), so the
+    # id-lookup inside clip::pull_live_files honestly comes up empty --
+    # rc mirrors that, but the WIRING under test is the persist call itself.
+    When run script "$SCRIPT" --pull-live files
+    The status should eq 1
+    The error should include 'persisted live file clip not found in store'
+    The contents of file "$FAKE_BRIDGE_LOG" should include 'store.persist.files'
+    The contents of file "$FAKE_BRIDGE_LOG" should include 'host=laptop'
+    The contents of file "$FAKE_BRIDGE_STDIN" should eq '/x/y'
+  End
+
+  It '--pull-live files fails cleanly when there is no live peer file clip'
+    write_fake_bridge "exit 1" "exit 1"
+
+    When run script "$SCRIPT" --pull-live files
+    The status should eq 1
+    The error should include 'no live peer file clip'
+  End
+
+  It '--pull-live with an unrecognized target exits 1 with a usage line'
+    write_fake_bridge "exit 1" "exit 1"
+
+    When run script "$SCRIPT" --pull-live bogus
+    The status should eq 1
+    The error should include '--pull-live requires text or files'
+  End
+End

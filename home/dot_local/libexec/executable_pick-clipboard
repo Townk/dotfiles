@@ -1109,6 +1109,62 @@ if [[ "${1:-}" == --restore-id ]]; then
   exit 1
 fi
 
+# --peer-snapshot (6b, headless): the GUI picker's one window into the live
+# peer clip. Re-emits the open-time snapshot (already fetched above when
+# bridge_up) as JSON lines, adding a flattened ~200-char preview for the text
+# candidate so the webview can render the row without carrying full clip
+# bytes through JSON. Empty output + rc 0 when there is nothing live — the
+# GUI treats that as "no rows", never as an error.
+if [[ "${1:-}" == --peer-snapshot ]]; then
+  if [[ -n "$LIVE_TEXT_FILE" ]]; then
+    jq -nc --arg regtype "$LIVE_REGTYPE" --arg ts "$LIVE_TS" --arg host "$LIVE_HOST" \
+      --arg preview "$(tr '\t\r\n' '   ' < "$LIVE_TEXT_FILE" | cut -c1-200 | head -n1)" \
+      '{kind:"text", regtype:$regtype, timestamp:$ts, host:$host, preview:$preview}'
+  fi
+  if [[ -n "$LIVEF_PATHS_FILE" && -n "$SNAPSHOT_JSON" ]]; then
+    jq -c 'select(.kind == "files")' "$SNAPSHOT_JSON" | head -n1
+  fi
+  exit 0
+fi
+
+# --pull-live text|files (6b, headless): accept-time pull for a GUI live row.
+# text: ONE trusted clip.set{text,regtype,origin_host} — the daemon writes
+# the pasteboard AND records the provenance row, exactly what a remote
+# pbcopy push produces, so pickers/badges see the same shape either way.
+# Fetched fresh (not from the open-time snapshot): the GUI's accept can be
+# minutes after ITS snapshot, and "live" means the peer's clip NOW.
+if [[ "${1:-}" == --pull-live ]]; then
+  case "${2:-}" in
+    text)
+      _pl=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-pull.XXXXXX")
+      _pl_json=$(clipbridge::peer_snapshot "$_pl" | jq -c 'select(.kind == "text")' | head -n1)
+      if [[ -z "$_pl_json" || ! -s "$_pl" ]]; then
+        rm -f "$_pl"
+        print -ru2 -- "pick-clipboard: no live peer text clip"
+        exit 1
+      fi
+      _pl_rt=$(jq -r '.regtype' <<<"$_pl_json"); [[ "$_pl_rt" == (v|l|b) ]] || _pl_rt=v
+      _pl_host=$(jq -r '.host' <<<"$_pl_json")
+      clipbridge::call --stdin text clip.set "regtype=$_pl_rt" "origin_host=$_pl_host" < "$_pl"
+      _rc=$?
+      rm -f "$_pl"
+      exit $_rc
+      ;;
+    files)
+      if [[ -z "$LIVEF_PATHS_FILE" ]]; then
+        print -ru2 -- "pick-clipboard: no live peer file clip"
+        exit 1
+      fi
+      clip::pull_live_files "$LIVEF_HOST" "$LIVEF_PATHS_FILE"
+      exit $?
+      ;;
+    *)
+      print -ru2 -- "pick-clipboard: --pull-live requires text or files"
+      exit 1
+      ;;
+  esac
+fi
+
 # --no-border (front-end CLI flag, shared-lib Wave 2, group C5, Decision 1) -----
 # The zellij floating pane draws its own frame, so the modal wants fzf rendered
 # borderless. This is now accepted as a --no-border CLI flag -- matching
