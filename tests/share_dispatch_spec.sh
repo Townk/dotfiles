@@ -181,7 +181,7 @@ profiles = ["work"]
 TOML
     When run share::send --to bare "$SB/Report.pdf"
     The status should be failure
-    The stderr should include 'no store and no remote'
+    The stderr should include 'no store, remote or relay'
     The stderr should not include 'sending to'
   End
 
@@ -194,7 +194,7 @@ profiles = ["work"]
 TOML
     When run share::destination_host bare
     The status should be failure
-    The stderr should include 'no store and no remote'
+    The stderr should include 'no store, remote or relay'
   End
 
   # --- ruling: no partial multi-file transfer on a mid-list typo -------------

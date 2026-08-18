@@ -95,22 +95,23 @@ share::croc_argv() {
 
   local -a cmd=(croc)
   [[ -n "$relay" ]] && cmd+=(--relay "$relay")
+  # local_only: croc's --local forbids every non-LAN path. Without it croc
+  # silently falls back to its DEFAULT PUBLIC relay (croc.schollz.com) when
+  # multicast finds no peer — egressing a file from an endpoint that exists to
+  # keep it on the wire it named. Global flag: must precede the subcommand.
+  [[ "$(share::field "$endpoint" local_only false)" == true ]] && cmd+=(--local)
   cmd+=(--yes send)
   if [[ "$mode" == store ]]; then
     cmd+=(--store)
     [[ -n "$store" ]] && cmd+=(--store-url "$store")
     [[ -n "$expiration" ]] && cmd+=(--store-expiration "$expiration")
     [[ -n "$downloads" ]] && cmd+=(--store-downloads "$downloads")
-  elif [[ "$mode" == live ]]; then
-    # A generated --code makes the phrase OURS: we already know it, so
-    # share::croc_send never has to parse it back out of croc's prose (see
-    # the finding this fixes, below). Store mode has no code phrase — the
-    # store URL/token pair is croc's own zero-knowledge share, not a PAKE.
-    local code
-    code="$(share::_code_phrase)" || return 1
-    [[ -n "$code" ]] || { log_error "share: failed to generate a code phrase"; return 1; }
-    cmd+=(--code "$code")
   fi
+  # Live mode contributes NOTHING to argv. croc REFUSES --code on the command
+  # line on UNIX — "you need to set the environmental variable CROC_SECRET" —
+  # for exactly the reason it refuses stored links: the phrase would be visible
+  # in the process list, and it IS the PAKE shared secret. share::croc_send
+  # generates it and carries it in the child ENVIRONMENT instead.
   cmd+=("$@")
   printf '%s\n' "${cmd[@]}"
 }
@@ -190,6 +191,15 @@ share::croc_send() {
   # default. Only set CROC_PASS when there is an actual password to carry.
   local pass; pass="$(share::croc_pass "$endpoint")"
 
+  # Live mode's PAKE shared secret. Generated here, never placed on argv (croc
+  # refuses --code on UNIX precisely because argv is world-readable via ps and
+  # /proc/<pid>/cmdline); it travels in the child environment as CROC_SECRET.
+  local code=""
+  if [[ "$mode" == live ]]; then
+    code="$(share::_code_phrase)" || return 1
+    [[ -n "$code" ]] || { log_error "share: failed to generate a code phrase"; return 1; }
+  fi
+
   # `rc=${pipestatus[1]}` is duplicated into BOTH branches, immediately
   # after each pipeline, rather than hoisted to one line after `fi`: zsh
   # resets $pipestatus to reflect the most recently executed command, and an
@@ -204,8 +214,15 @@ share::croc_send() {
   # share::croc_send).
   local tmp out rc
   tmp="$(common::tmpfile)" || return 1
-  if [[ -n "$pass" ]]; then
-    CROC_PASS="$pass" "${cmd[@]}" 2>&1 | tee "$tmp" >&2
+  # Both secrets ride the environment, never argv. Each is set only when it
+  # has a value: an empty CROC_PASS would override croc's own default (Go's
+  # Getenv reports a present-but-empty var as set), and an empty CROC_SECRET
+  # would suppress croc's own phrase generation in a mode that needs one.
+  local -a envp=()
+  [[ -n "$pass" ]] && envp+=("CROC_PASS=$pass")
+  [[ -n "$code" ]] && envp+=("CROC_SECRET=$code")
+  if (( ${#envp} )); then
+    env "${envp[@]}" "${cmd[@]}" 2>&1 | tee "$tmp" >&2
     rc=${pipestatus[1]}
   else
     "${cmd[@]}" 2>&1 | tee "$tmp" >&2
@@ -222,17 +239,12 @@ share::croc_send() {
   if [[ "$mode" == live ]]; then
     kind=live
     ref=""
-    # NOT parsed from croc's output. croc's own on-screen instruction line
-    # reads e.g. "croc --relay host:port --pass secret abcd-efgh-ijkl-mnop"
-    # whenever --relay/--pass are non-default — which is every self-hosted
-    # endpoint — and a naive `grep -oE 'croc [a-z0-9-]{6,}'` matches
-    # "croc --relay" long before it ever reaches the phrase. We generated the
-    # phrase ourselves (share::croc_argv, above) and put it in `cmd`, so it is
-    # read back from OUR OWN argv array — an index lookup, not a prose parse —
-    # which is exact regardless of how croc words its instructions.
-    local -i idx
-    idx=${cmd[(i)--code]}
-    value="${cmd[idx+1]:-}"
+    # NOT parsed from croc's output. Its instruction line reads e.g.
+    # "croc --relay host:port --pass secret abcd-efgh-ijkl-mnop" whenever
+    # --relay/--pass are non-default — every self-hosted endpoint — and a naive
+    # `grep -oE 'croc [a-z0-9-]{6,}'` matches "croc --relay" long before the
+    # phrase. We generated it ourselves, so we simply already know it.
+    value="$code"
   else
     parsed="$(share::croc_parse_share "$out")" || {
       log_error "share: croc produced no share link"

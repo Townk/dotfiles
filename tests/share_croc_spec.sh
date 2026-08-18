@@ -59,7 +59,7 @@ TOML
   # it to croc through CROC_PASS in the child's environment instead (croc's
   # own flag parser supports it: src/cli/cli.go:149 declares EnvVars:
   # []string{"CROC_PASS"}); share::croc_argv builds relay/code/paths only.
-  It 'builds a live-send argv with the relay and a --code phrase, and no store flags or --pass'
+  It 'builds a live-send argv with the relay, and NO --code, --pass or store flags'
     When call share::croc_argv lab live '' '' "$SB/Report.pdf"
     The output should include '--relay'
     The output should include 'lab.example.com:9009'
@@ -67,13 +67,25 @@ TOML
     The output should not include 'hunter2'
     The output should not include '--store'
     The output should include "$SB/Report.pdf"
-    The output should include '--code'
+    # croc REFUSES --code on argv on UNIX ("you need to set the environmental
+    # variable CROC_SECRET") because the phrase is the PAKE shared secret and
+    # argv is world-readable. Verified live: it aborts before any network I/O.
+    The output should not include '--code'
   End
 
-  It 'puts the --code phrase on the line right after the flag'
-    code_line() { share::croc_argv lab live '' '' "$SB/Report.pdf" | awk '/^--code$/{getline; print; exit}'; }
-    When call code_line
-    The output should match pattern '????-????-????-????'
+  It 'adds --local for a local_only endpoint, before the subcommand'
+    printf '[lan]\nrelay = "127.0.0.1:9009"\nlocal_only = true\nweb = false\nprofiles = ["personal"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    # --local is a GLOBAL croc flag: after `send` it is "flag provided but not
+    # defined". Assert it precedes the subcommand, not merely that it appears.
+    before_send() { share::croc_argv lan live '' '' "$SB/Report.pdf" | awk '/^send$/{exit} /^--local$/{print "yes"}'; }
+    When call before_send
+    The output should equal 'yes'
+  End
+
+  It 'omits --local for an endpoint that does not ask for it'
+    When call share::croc_argv lab live '' '' "$SB/Report.pdf"
+    The output should not include '--local'
   End
 
   It 'generates a code phrase from an unambiguous 32-symbol alphabet (no l, 1, 0, o)'
@@ -238,10 +250,11 @@ SH
   # ourselves and reading it back out of OUR OWN argv (share::croc_argv),
   # never out of croc's prose. These two examples pin that down.
 
-  It 'shares the exact phrase passed to --code in the live blurb'
+  It 'carries the phrase in CROC_SECRET, never on argv, and blurbs that same phrase'
     cat >"$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_CROC_CALLS"
+printf '%s' "${CROC_SECRET-}" >"$(dirname "$SHARE_CROC_CALLS")/secret"
 echo "Sending 'Report.pdf' (1 B)"
 SH
     chmod +x "$SB/bin/croc"
@@ -249,9 +262,14 @@ SH
     SHARE_CROC_CALLS="$SB/calls"
     export SHARE_CROC_CALLS
     out="$(share::croc_send lab live '' '' "$SB/Report.pdf" 2>/dev/null)"
-    invoked_code="$(awk '{for (i=1;i<=NF;i++) if ($i == "--code") print $(i+1)}' "$SB/calls")"
+    argv_has_code="$(grep -c -- '--code' "$SB/calls" || true)"
+    env_code="$(cat "$SB/secret" 2>/dev/null)"
     blurb_code="$(printf '%s\n' "$out" | grep -oE 'run: croc [^ ]+' | awk '{print $3}')"
-    matches() { [ -n "$invoked_code" ] && [ "$invoked_code" = "$blurb_code" ]; }
+    # argv must be clean, the env must carry it, and the blurb must quote the
+    # SAME phrase — a recipient given a different phrase cannot connect.
+    matches() {
+      [ "$argv_has_code" = 0 ] && [ -n "$env_code" ] && [ "$env_code" = "$blurb_code" ]
+    }
     When call matches
     The status should be success
   End

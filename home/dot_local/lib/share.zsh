@@ -239,11 +239,29 @@ share::destination_host() {
     return 0
   fi
   remote="$(share::field "$name" remote)"
-  if [[ -z "$remote" ]]; then
-    log_error "share: endpoint $name has no store and no remote to send to"
-    return 1
+  if [[ -n "$remote" ]]; then
+    printf '%s\n' "$remote"
+    return 0
   fi
-  printf '%s\n' "$remote"
+
+  # A relay, when there is no store and no rclone remote: the peer dials this.
+  local relay; relay="$(share::field "$name" relay)"
+  if [[ -n "$relay" ]]; then
+    printf '%s\n' "${relay%%:*}"
+    return 0
+  fi
+
+  # No store, no remote, no relay — legitimate for a local_only endpoint, where
+  # the destination is "whichever peer answers on this LAN" and croc's --local
+  # forbids leaving it. The pre-send echo must still name something honest, so
+  # it names the LAN rather than a host. Any OTHER endpoint with nothing to
+  # send to is a misconfiguration and still fails closed.
+  if [[ "$(share::field "$name" local_only false)" == true ]]; then
+    printf '%s\n' "this LAN (direct peer, no relay)"
+    return 0
+  fi
+  log_error "share: endpoint $name has no store, remote or relay to send to"
+  return 1
 }
 
 # share::endpoints_for_profile — one line per endpoint THIS PROFILE may use,
