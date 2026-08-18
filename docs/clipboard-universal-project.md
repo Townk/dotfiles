@@ -1184,11 +1184,23 @@ is stored as a pointer.
 ### 22.1 Detection (reuse, no new signal)
 
 Show the live entry **iff `bridge_up`** — the flag `pick-clipboard` already
-computes: `$SSH_CONNECTION` set **and** a real connect probe to the
-reverse-forwarded peer clipboard on `127.0.0.1:2490` succeeds
-(`clipbridge::probe`). Sitting locally at a Mac → no peer, no entry.
-Bridge-down (iPad/Blink, no tunnel) → no entry. The picker otherwise behaves
-exactly as today.
+computes: a real connect probe to the reverse-forwarded peer clipboard on
+`127.0.0.1:2490` succeeds (`clipbridge::probe`). Sitting locally at a Mac →
+nothing is listening there → no peer, no entry. Bridge-down (iPad/Blink, no
+tunnel) → no entry. The picker otherwise behaves exactly as today.
+
+> **Amended in Phase 6b (§22.9).** This gate used to *also* require the
+> `SSH_CONNECTION` / `SSH_CLIENT` / `SSH_TTY` triple. It no longer does. The
+> triple describes the environment of whichever process happens to be asking,
+> and the GUI picker asks from `hs.task`'s `zsh -lc` (the job runner, from
+> pueue) — neither carries a single `SSH_*` variable, which made the headless
+> verbs return nothing exactly where §22.9 needs them. The reverse forward is
+> created by the ssh *client* and so exists only on the machine being ssh'd
+> **into**: "something accepts on `127.0.0.1:2490`" is the environment-free
+> form of the same question, and it also lights the live rows up for a TUI
+> opened locally (VNC) on a machine someone is ssh'd into. Every OTHER use of
+> the triple in the picker (which endpoint a Ctrl-Y copy ships to) is
+> unchanged.
 
 ### 22.2 Fetch (open time — bounded, best-effort)
 
@@ -1276,7 +1288,9 @@ using **op-persist's dedup key**: `source_host = <peerhost>` AND
 
 ### 22.6 Honest limits
 
-- **Current clip only, text only** (§22.2). No peer history, no live image/RTF.
+- **Current clip only** (§22.2). No peer history. *(Amended in §22.9: the
+  peer's current clip now surfaces as up to TWO live rows — its text clip and
+  its file clip. Still no history, and still no live image/RTF.)*
 - **Best-effort** — a slow/again-down bridge just omits the entry; the picker
   never hangs on it.
 - **No auto-refresh** — the entry reflects the peer clipboard as of picker
@@ -1333,6 +1347,83 @@ dispatcher or schema change):
 - Verified end-to-end over the live bridge (reads, render, field extraction,
   accept→deliver+materialize, dedup, ephemerality) — the DB row count is
   unchanged across an open+dismiss that showed a live entry.
+
+### 22.9 Phase 6b — the peer's FILE clip, and the GUI's way in
+
+> **Addendum to this section** (spec
+> `docs/superpowers/specs/2026-08-18-clipboard-phase6b-remote-pull-design.md`).
+> §22 as written above surfaces one live row, text only, in the TUI picker.
+> The scenario that exposed the gap: yank a file in yazi on the laptop, ssh to
+> the mini, open the picker — the file clip was invisible, because a peer files
+> clip had no row to be. The ruling is that sitting→remote is **pull**-based
+> (the remote asks; the sitting machine never pushes), so this extends the
+> same live-entry mechanism rather than adding a channel.
+
+**One snapshot, two exchanges.** `clipbridge::peer_snapshot` replaces the
+three per-field `clip.get` round trips §22.2 described: one `clip.get` and one
+`files.list` against the peer, emitted as up to two jq-built JSON lines (the
+text candidate, the files candidate). `files.list` answering
+`not-found{reason=not-files}` means "no files candidate", never an error. No
+wire change, no PROTO bump — and the picker's contribution to the listener's
+"no preamble" log flood drops with the retired handshakes.
+
+**A second live row.** The files candidate renders as its own synthetic row
+with the sentinel tail id `LIVEF` (`LIVE` stays the text row's) — same mauve
+origin color, but the kind glyph of the stored `files`/`file`/`directory`
+rows, and the same tail-truncating path rendering (§X8). The two live rows
+each interleave by **their own** peer timestamp, so the picker shows
+ABOVE-rows, whichever live row is newer, MID-rows, the older live row, then
+BELOW-rows; a missing candidate collapses its segment and the split degrades
+to §22.3's single-row shape, then to the plain query.
+
+**Dedup by manifest.** The live FILES row is suppressed when a stored row
+already holds this manifest from this origin: `source_host = <peerhost>` AND a
+byte-equal `x-file-manifest` blob (the NUL-joined paths, exactly as the daemon
+writes them). That is the files analogue of §22.5's `sha256(text)` key.
+
+**Accept.** Enter/Alt-Enter deliver the newline-joined paths and record the
+row; Ctrl-Y is the real pull — record the row, then hand its id to the same
+`clip::copy_files_by_id` engine every stored files row uses (mount/rsync/
+cache, size caps, toasts, and the job-runner path for big files). "Record" is
+a **pointer row** written by the picker straight to SQLite: `clips`
+(`type_kind='files'`, `source_host=<peerhost>`, `text_preview`/`len`/
+`type_hash` over the newline-joined paths) plus one `clip_types` row
+(`uti='x-file-manifest'`, the NUL-joined blob), and **never** a
+`file_authorities` row. It mirrors the daemon's `persist_files_row`
+non-trusted branch statement for statement, including its dedup — a re-accept
+bumps `last_ts` on the existing row instead of adding a twin.
+
+> **Why not `store.persist.files`?** Because a *trusted* persist mints file
+> authority over the named paths, so the daemon refuses one whose `host` is not
+> itself (§9.3 evaluates `mints_authority` against the endpoint, never the
+> caller-supplied host) — letting a trusted call claim a foreign host would be
+> a confused deputy. The row a pull wants is the authority-free *pointer* row,
+> which the daemon only ever produces on its public endpoint, i.e. for a push
+> **from** the peer. The picker therefore writes that row itself; the daemon
+> check stays exactly as it is. Locked by a spec example that diffs the
+> picker's row against a real `recobd`'s, column for column.
+
+**Headless verbs (the GUI's way in).** All bridge logic stays in
+`pick-clipboard`; Lua never speaks the wire:
+
+- `pick-clipboard --peer-snapshot` — prints the JSON candidates (the text one
+  carrying a flattened ~200-char preview so the webview needs no clip bytes),
+  empty output and rc 0 when there is nothing live.
+- `pick-clipboard --pull-live text|files` — the accept-time pull. `text` sends
+  one trusted `clip.set{text,regtype,origin_host}` from a **fresh** fetch (the
+  GUI's accept can be minutes after its snapshot); `files` records the pointer
+  row and restores it.
+
+`clipboard-picker.lua` renders the local list immediately (snappiness is a
+standing ruling), then spawns one `hs.task` for `--peer-snapshot` and injects
+the live rows when it answers, if the picker is still open.
+
+**Direct paste, newer-wins.** `system-clip paste` over SSH now compares the
+peer's `clip.get` timestamp against its own and prints the newer, persisting a
+used peer clip locally (§11's "a used peer clip survives the origin going
+offline"). A *refused* tunnel degrades to the own clipboard; any slower
+failure is still loud. Clock skew between machines remains the documented
+accepted hazard.
 
 ---
 
