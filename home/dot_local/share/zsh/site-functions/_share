@@ -1,0 +1,105 @@
+#compdef share
+#
+# Completion for `share`. Spec: F5 of
+# docs/superpowers/specs/2026-08-18-share-phase3-faces-design.md
+#
+# Endpoint and receipt completions are sourced LIVE from the library rather
+# than duplicated here: an endpoint list that drifts from the manifest is worse
+# than none, because it completes to something the policy fence will then
+# refuse.
+
+# __share-endpoints — endpoints THIS PROFILE may use.
+#
+# Read from share::endpoints_for_profile, but with its " (default)" decoration
+# stripped by taking the first word — NOT by pattern-stripping the suffix.
+# `${name%% (default)}` silently does nothing: zsh reads `(default)` as a glob
+# GROUP, so the literal parentheses never match. That exact mistake shipped in
+# `share status` and completed to a name no endpoint has.
+__share-endpoints() {
+  local -a names
+  names=( ${(f)"$(
+    zsh -fc '
+      source "${SHARE_LIB_DIR:-$HOME/.local/lib}/share.zsh" 2>/dev/null || exit 0
+      share::endpoints_for_profile 2>/dev/null
+    ' 2>/dev/null
+  )"} )
+  names=( ${names%%[[:space:]]*} )
+  (( ${#names} )) && _describe -t endpoints 'endpoint' names
+}
+
+# __share-receipts — ledger ids that can actually be revoked.
+#
+# croc-live rows are excluded: a live transfer has no store-side object, so
+# `share revoke` refuses them by design. Offering them would complete to a
+# guaranteed error.
+__share-receipts() {
+  local -a ids
+  ids=( ${(f)"$(
+    zsh -fc '
+      source "${SHARE_LIB_DIR:-$HOME/.local/lib}/share.zsh" 2>/dev/null || exit 0
+      share::ledger_list 2>/dev/null \
+        | jq -r "select(.backend != \"croc-live\") | \"\(.id):\(.label)\"" 2>/dev/null
+    ' 2>/dev/null
+  )"} )
+  (( ${#ids} )) && _describe -t receipts 'receipt' ids
+}
+
+_share() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a send_opts
+  send_opts=(
+    '--to[send through this endpoint]:endpoint:__share-endpoints'
+    '--store[upload and park it instead of holding a transfer open]'
+    '--live[hold a peer-to-peer transfer open (the default)]'
+    '--background[enqueue as a job (the default)]'
+    '--foreground[run the transfer here instead of under job::]'
+    '--watch[enqueue and open the jobs dashboard on it]'
+    '--force[use an endpoint this profile is not allowed to use]'
+    '--for-face[print the line on stdout and leave the clipboard alone]'
+    '--expiration[stored-transfer lifetime]:spec:(90m 12h 3d 2w)'
+    '--downloads[stored downloads allowed]:count:(1 2 5 10)'
+  )
+
+  _arguments -C \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '1: :->cmd' \
+    '*:: :->cmdargs'
+
+  case "$state" in
+    cmd)
+      local -a cmds
+      cmds=(
+        'send:hand a file to someone (live by default)'
+        'get:receive a share (no argument reads the clipboard)'
+        'status:per-endpoint reachability, plus share'"'"'s jobs'
+        'list:receipts, newest first'
+        'revoke:kill a link and forget the receipt'
+        'endpoints:endpoints this profile may use'
+      )
+      _describe -t commands 'command' cmds
+      # The bare-path shorthand: `share <file>` is a send.
+      _files
+      ;;
+    cmdargs)
+      case "${line[1]}" in
+        send)      _arguments $send_opts '*:file:_files' ;;
+        get)
+          _arguments \
+            '--out[where to write]:directory:_files -/' \
+            '--foreground[receive here instead of under job::]' \
+            '--background[receive under job:: (the default)]' \
+            '--allow-argv[accept a stored link on the command line]' \
+            '*:value:'
+          ;;
+        status)    _arguments '*:endpoint:__share-endpoints' ;;
+        revoke)    _arguments '1:receipt:__share-receipts' ;;
+        list|endpoints) ;;
+        *)         _arguments $send_opts '*:file:_files' ;;
+      esac
+      ;;
+  esac
+}
+
+_share "$@"

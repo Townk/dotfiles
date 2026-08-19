@@ -482,10 +482,76 @@ end
 --      completed system paste does NOT re-trigger)
 --   5. Both present, different sets: newer of manifest ts vs last-yank
 --      mtime wins -> native paste or pbpaste --files
+-- try_share_receive(cwd) -- the receive half of the share silo.
+-- Spec: docs/superpowers/specs/2026-08-18-share-phase3-faces-design.md (F4)
+--
+-- Returns true when it has handled the paste, false to fall through.
+--
+-- IT ASKS FIRST, ALWAYS. Every other route to a receive is explicitly invoked:
+-- the human typed `share get`. A paste is not that — it is a file-management
+-- gesture, and what is on the clipboard arrived in a chat message somebody else
+-- wrote. Silently pulling a file onto disk because a paste happened to land on
+-- the wrong clipboard entry is a footgun, and it is the one risk the live-first
+-- amendment named. One keystroke is the price.
+--
+-- The clipboard is NOT parsed here. `share peek` classifies it and returns a
+-- label, so there is exactly one parser for the share format: this project has
+-- already paid for a second, subtly different one (phase 1's regex matched
+-- "croc --relay" and reported the shared value as literally "--relay").
+local function try_share_receive(cwd)
+	local out = Command("share"):arg({ "peek" }):output()
+	if not out or not out.status.success then
+		return false
+	end
+	local line = (out.stdout or ""):gsub("%s+$", "")
+	local kind, label = line:match("^([^\t]+)\t(.*)$")
+	if not kind then
+		return false
+	end
+
+	local choice = ya.which({
+		cands = {
+			{ on = "y", desc = "Receive " .. label .. " into this folder" },
+			{ on = "n", desc = "Paste normally" },
+		},
+	})
+	if choice ~= 1 then
+		return false
+	end
+
+	-- Backgrounded (share get's default): a live receive blocks until the
+	-- sender is reachable, which can be minutes, and yazi must never block.
+	-- The job's own completion toast reports the outcome.
+	local rx = Command("share"):arg({ "get", "--out", cwd }):output()
+	if not rx or not rx.status.success then
+		local err = rx and (rx.stderr or ""):gsub("%s+$", "") or ""
+		ya.notify({
+			title = "Share",
+			content = err ~= "" and err or "receive failed",
+			level = "error",
+			timeout = 5,
+		})
+		return true
+	end
+	ya.notify({ title = "Share", content = "Receiving " .. label .. "…", timeout = 4 })
+	return true
+end
+
 local function resolve(force)
 	local yanked, _is_cut = get_yanked()
 	local m = manifest()
-	if not m or (#yanked > 0 and same_set(yanked, m.paths)) then -- rules 1–3
+	if not m then
+		-- No file manifest: the clipboard is not a file clip, so this is the
+		-- only branch where it could be a share. Checked HERE rather than at
+		-- the top so the ordinary file-paste path pays nothing for it — one
+		-- extra subprocess on every paste would be a poor trade for a case
+		-- that cannot apply when a manifest exists.
+		if try_share_receive(get_cwd()) then
+			return
+		end
+		return native_paste(force)
+	end
+	if #yanked > 0 and same_set(yanked, m.paths) then -- rules 1–3
 		return native_paste(force)
 	end
 	local d = state_dir()
@@ -504,6 +570,7 @@ end
 return {
 	_test = {
 		choose_source = choose_source,
+		try_share_receive = try_share_receive,
 		get_cwd = get_cwd,
 		mtime = mtime,
 		pbpaste_command = pbpaste_command,

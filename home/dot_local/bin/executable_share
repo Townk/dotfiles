@@ -241,6 +241,12 @@ main() {
                (( $# >= 1 )) || die "share revoke: an id is required"
                share::revoke "$1" ;;
     endpoints) shift; share::endpoints_for_profile ;;
+    peek)      shift
+               # Faces only: "is there a share on the clipboard, and what is
+               # it" without receiving anything. Deliberately undocumented in
+               # the usage text — it is an interface for smart-paste, not a
+               # verb a human needs.
+               share::peek "$@" ;;
     status)    shift
                if is_help "${1:-}"; then usage; return 0; fi
                share::status "$@" ;;

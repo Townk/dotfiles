@@ -737,6 +737,46 @@ share::relay_pass_for() {
   return 0
 }
 
+# share::peek [<value>|-] — is there a share here, and what is it?
+#
+# Prints "<kind>\t<human description>" and exits 0 when the input holds a
+# share; exits 1 when it does not. Receives NOTHING.
+#
+# Exists for the faces (smart-paste), and deliberately so they do not
+# re-implement the parse in Lua. This project has already paid once for a
+# second, subtly different parser: phase 1's `grep -oE 'croc [a-z0-9-]{6,}'`
+# matched "croc --relay" and reported the shared value as literally "--relay".
+# One parser, one place, one regression test.
+share::peek() {
+  setopt localoptions extendedglob
+  local value="${1-}"
+  if [[ -z "$value" ]]; then
+    command -v pbpaste >/dev/null 2>&1 || return 1
+    value="$(pbpaste 2>/dev/null)"
+  elif [[ "$value" == - ]]; then
+    value="$(cat)"
+  fi
+  value="${${value##[[:space:]]##}%%[[:space:]]##}"
+  [[ -n "$value" ]] || return 1
+
+  local kind; kind="$(share::classify "$value")"
+  case "$kind" in
+    live)
+      # The label is already in the line share::blurb composed — "Report.pdf
+      # (4.2 MB) — receive with:  croc …" — so a confirmation can name the file
+      # and its size without asking anyone.
+      local label="${value%%— receive with:*}"
+      label="${${label##[[:space:]]##}%%[[:space:]]##}"
+      [[ -n "$label" ]] || label="a live share"
+      printf 'live\t%s\n' "$label"
+      ;;
+    stored) printf 'stored\ta stored share\n' ;;
+    code)   printf 'code\ta code phrase\n' ;;
+    *)      return 1 ;;
+  esac
+  return 0
+}
+
 # share::_croc_receive <code> <relay> <out> — the one place a receive runs.
 #
 # The phrase goes through CROC_SECRET rather than croc's argv. The spec permits

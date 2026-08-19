@@ -73,6 +73,17 @@ prepend_keymap = [
   { on = [ "b", "r", ], run = "plugin mactag remove", desc = "Untag selected files" },
   { on = [ "b", "p", ], run = "plugin nice-sidebar pin", desc = "Sidebar: pin/unpin this directory" },
 
+  # Share the selection (or the hovered file) with another person.
+  # `b s` is LIVE — the default everywhere in this silo: the pasteable line
+  # comes back at once and lands on the clipboard, and the transfer waits in
+  # the background for the recipient. `b S` is the stored variant, for someone
+  # who will not be around today; its link arrives in the completion toast,
+  # since a stored URL does not exist until the upload finishes.
+  # The unmarked key does the default thing — shift must not silently change
+  # which of two transfer models you get.
+  { on = [ "b", "s", ], run = "plugin share", desc = "Share (live — copies a pasteable line now)" },
+  { on = [ "b", "S", ], run = "plugin share -- store", desc = "Share (stored — link arrives when uploaded)" },
+
 {{ if not $traits.headless -}}
   # Terminal Time Machine on the hovered path, in its own zellij tab
   # (dir = explore session, file = diff session scoped to that file).

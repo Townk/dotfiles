@@ -59,8 +59,12 @@
 # Accept markers: pick::start emits one of three tail fields on accept, and the
 # wrapper below dispatches on the prefix — field:1 plain id (Enter -> inject
 # text), field:2 "MD:id" (Alt-Enter -> markdown), field:3 "CP:id" (Ctrl-Y ->
-# copy, print nothing). A dedicated accept field is how copy-and-dismiss runs a
-# side effect without injecting: the wrapper does the copy instead of printing.
+# copy, print nothing), field:4 "SH:id" (Ctrl-S -> share, inject the pasteable
+# line). A dedicated accept field is how copy-and-dismiss runs a side effect
+# without injecting: the wrapper does the copy instead of printing.
+#
+# Ctrl-S shares FILE rows only and never touches the clipboard — the entry is a
+# file clip and stays one (see clip::share_by_id).
 
 set -eu -o pipefail
 zmodload zsh/datetime   # $EPOCHREALTIME for bump-on-use timestamps (matches the dispatcher's op_persist convention)
@@ -1766,6 +1770,103 @@ clip::markdown_image() {
   clip::text_by_id "$id"
 }
 
+# --- share (Ctrl-S, --key-output field:4) ------------------------------------
+# Spec: docs/superpowers/specs/2026-08-18-share-phase3-faces-design.md
+#
+# ACCEPT, DISMISS, INJECT — and THE CLIPBOARD IS NEVER MODIFIED. A clipboard
+# entry is a file clipboard and stays one; replacing it with a line of text
+# ABOUT itself would destroy the thing the human just picked. That is why the
+# share runs with `--for-face`, which prints the composed line on stdout and
+# suppresses `share`'s own clipboard write. The line reaches the originating
+# pane the same way Alt-Enter's markdown does: this wrapper prints it, the
+# modal injects it.
+#
+# No wait-then-detach. The parent spec specified a 10s SHARE_INJECT_WAIT with
+# three outcomes; that existed only because a STORED url does not exist until
+# the upload finishes. Live mode — the default since the live-first amendment —
+# mints the code phrase BEFORE the transfer, so there is nothing to wait for.
+
+# clip::share_paths <path…> -- run the share, print the pasteable line.
+clip::share_paths() {
+  (( $# )) || return 1
+  local line
+  # --background: the picker must never hold the terminal open for a transfer.
+  # --for-face:  line on stdout, clipboard untouched (see above).
+  line="$(share send --background --for-face -- "$@" 2>/dev/null)" || {
+    print -ru2 -- "pick-clipboard: share failed"
+    return 1
+  }
+  [[ -n "$line" ]] || {
+    # A live send to an endpoint that cannot carry one falls back to stored,
+    # whose link does not exist yet — the completion toast carries it. Injecting
+    # an empty line would look like success.
+    print -ru2 -- "pick-clipboard: shared — the link will arrive in a toast"
+    return 0
+  }
+  print -r -- "$line"
+}
+
+# clip::share_existing <path…> -- share only paths that are actually here.
+#
+# A REMOTE row records the ORIGIN's paths, which do not exist on this machine.
+# Sharing them would hand somebody a code phrase for a transfer that can never
+# start. Ctrl-Y localizes such a row; this refuses until it has been, with the
+# key to press. (Localizing from here would mean driving the restore machinery,
+# which sets the clipboard — the one thing this path must not do.)
+clip::share_existing() {
+  local -a here=() missing=()
+  local p
+  for p in "$@"; do
+    if [[ -e "$p" ]]; then here+=("$p"); else missing+=("$p"); fi
+  done
+  if (( ${#here} == 0 )); then
+    print -ru2 -- "pick-clipboard: those files are not on this machine — press Ctrl-Y first to bring them local, then Ctrl-S"
+    return 1
+  fi
+  (( ${#missing} )) && print -ru2 -- "pick-clipboard: sharing ${#here} of $#; ${#missing} not on this machine"
+  clip::share_paths "${here[@]}"
+}
+
+# clip::share_by_id <id> -- the stored-row path.
+clip::share_by_id() {
+  local id=$1 kind
+  kind="$(sqlite3 "$DB_FILE" "SELECT IFNULL(type_kind,'') FROM clips WHERE id=$id;" 2>/dev/null)" || kind=""
+  # File rows only. A code phrase for three lines of text is worse than just
+  # pasting the text, and an image row is already deliverable by Ctrl-Y.
+  if [[ "$kind" != (files|file|directory) ]]; then
+    print -ru2 -- "pick-clipboard: Ctrl-S shares files — this row is ${kind:-unknown}"
+    return 1
+  fi
+  # Same blob precedence as clip::copy_files_by_id: a multi-path manifest first,
+  # else the single resolved path. NUL-separated in both.
+  local blobtmp; blobtmp=$(mktemp "${TMPDIR:-/tmp}/pick-clipboard-share.XXXXXX") || return 1
+  sqlite3 "$DB_FILE" "SELECT writefile('$blobtmp', blob) FROM clip_types WHERE clip_id=$id AND uti='x-file-manifest';" >/dev/null 2>&1
+  [[ -s "$blobtmp" ]] || sqlite3 "$DB_FILE" "SELECT writefile('$blobtmp', blob) FROM clip_types WHERE clip_id=$id AND uti='x-resolved-path';" >/dev/null 2>&1
+  local -a paths=()
+  if [[ -s "$blobtmp" ]]; then
+    local blob; blob="$(<"$blobtmp")"
+    paths=("${(@ps:\0:)blob}")
+  fi
+  rm -f "$blobtmp"
+  (( ${#paths} )) || {
+    print -ru2 -- "pick-clipboard: no file paths recorded for row $id"
+    return 1
+  }
+  clip::share_existing "${paths[@]}"
+}
+
+# clip::share_live_files -- the LIVEF pseudo-row (what is on the clipboard now).
+clip::share_live_files() {
+  [[ -n "$LIVEF_PATHS_FILE" && -s "$LIVEF_PATHS_FILE" ]] || {
+    print -ru2 -- "pick-clipboard: no files on the clipboard to share"
+    return 1
+  }
+  local blob; blob="$(<"$LIVEF_PATHS_FILE")"
+  local -a paths=("${(@ps:\0:)blob}")
+  (( ${#paths} )) || return 1
+  clip::share_existing "${paths[@]}"
+}
+
 clip::markdown_by_id() {  # id -> markdown string for file/directory/url/image; else plain text (same as Enter)
   local id=$1 kind
   kind="$(sqlite3 "$DB_FILE" "SELECT type_kind FROM clips WHERE id=$id;")"
@@ -1882,7 +1983,7 @@ if [[ -n "$LIVE_TEXT_FILE" ]]; then
         || text_color
         || printf('%-${CW}s', substr(oneline,1,$((CW-1))) || CASE WHEN length(oneline) > $((CW-1)) THEN '…' ELSE '' END)
         || reset || '   '
-        || CHAR(31) || 'LIVE' || CHAR(30) || 'MD:LIVE' || CHAR(30) || 'CP:LIVE'
+        || CHAR(31) || 'LIVE' || CHAR(30) || 'MD:LIVE' || CHAR(30) || 'CP:LIVE' || CHAR(30) || 'SH:LIVE'
       FROM l, palette;" > "$live_row_file"
 fi
 
@@ -1923,7 +2024,7 @@ if [[ -n "$LIVEF_PATHS_FILE" ]]; then
         || text_color
         || char(2) || '$LIVEF_KIND' || char(2) || paths || char(3)
         || reset || '   '
-        || CHAR(31) || 'LIVEF' || CHAR(30) || 'MD:LIVEF' || CHAR(30) || 'CP:LIVEF'
+        || CHAR(31) || 'LIVEF' || CHAR(30) || 'MD:LIVEF' || CHAR(30) || 'CP:LIVEF' || CHAR(30) || 'SH:LIVEF'
       FROM m, palette;" > "$livef_row_file"
   rm -f "$_lf_display"
 fi
@@ -2191,7 +2292,7 @@ EMIT_ROW_BODY="WITH palette AS (
          END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
-      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id || CHAR(30) || 'SH:' || id
     FROM clips, palette"
 
 # 6b: ABOVE/MID/BELOW three-segment split, generalizing X9's two-segment one
@@ -2336,7 +2437,7 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
          END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
-      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id || CHAR(30) || 'SH:' || id
     FROM clips, palette
     WHERE pinned=1 OR last_ts > ${live_hi_ts}
     ORDER BY pinned DESC, last_ts DESC
@@ -2394,7 +2495,7 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
          END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
-      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id || CHAR(30) || 'SH:' || id
     FROM clips, palette
     WHERE pinned=0 AND last_ts <= ${live_hi_ts} AND last_ts > ${live_lo_ts}
     ORDER BY last_ts DESC
@@ -2446,7 +2547,7 @@ sqlite3 -escape off '$DB_FILE' "WITH palette AS (
          END
       || reset
       || CASE WHEN pinned=1 THEN ' ' || pin_color || char(1110157) || reset ELSE '  ' END || ' '
-      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id
+      || CHAR(31) || id || CHAR(30) || 'MD:' || id || CHAR(30) || 'CP:' || id || CHAR(30) || 'SH:' || id
     FROM clips, palette
     WHERE pinned=0 AND last_ts <= ${live_lo_ts}
     ORDER BY last_ts DESC
@@ -2528,6 +2629,7 @@ pick_args=(
   --field-id 1                     # id is tail field 1 (for recency + resume)
   --key-output alt-enter:field:2       # accept-and-dismiss with the "MD:id" marker
   --key-output ctrl-y:field:3          # accept-and-dismiss with the "CP:id" marker (copy)
+  --key-output ctrl-s:field:4          # accept-and-dismiss with the "SH:id" marker (share)
   --key-background ctrl-o:field:1      # insert without dismissing (broker hook)
   --on-key-background clip::bg_hook
   --on-items-picked clip::bump_recency
@@ -2580,6 +2682,9 @@ case "$selected" in
     ;;
   MD:LIVEF) clip::deliver_live_files; clip::materialize_live_files ;;
   LIVEF)    clip::deliver_live_files; clip::materialize_live_files ;;
+  SH:LIVE)  print -ru2 -- "pick-clipboard: Ctrl-S shares files — this row is text" ;;
+  SH:LIVEF) clip::share_live_files ;;
+  SH:*)    clip::share_by_id "${selected#SH:}" ;;
   CP:*)    clip::copy_by_id "${selected#CP:}" ;;
   MD:*)    clip::markdown_by_id "${selected#MD:}" ;;
   "")      ;;
