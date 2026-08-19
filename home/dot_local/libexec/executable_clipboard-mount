@@ -359,6 +359,7 @@ cm::ensure() {
       "$backend" \
       "$mp" \
       --daemon --daemon-wait 5s --daemon-timeout 10s \
+      --contimeout 5s --timeout 10s \
       --read-only --vfs-cache-mode off \
       --volname "${host} clipboard" -o nobrowse \
       --log-file "$LOG_DIR/${host}.log" --log-level NOTICE \
