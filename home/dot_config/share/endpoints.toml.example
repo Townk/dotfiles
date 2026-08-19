@@ -130,6 +130,30 @@
 # profiles    = ["work"]
 # default_for = ["work"]         # makes live the default on that profile
 
+# --- a relay of your own, on your server -------------------------------------
+# The single most useful endpoint to have, and the reason is worth stating.
+#
+# Without one, a live transfer between two of YOUR OWN machines rendezvouses
+# through croc's public relay — and croc picks WHICH public relay by hashing the
+# code phrase, with both the pool and the mapping differing between croc
+# versions. Two of your hosts on different versions therefore derive different
+# relays from the same phrase, land in rooms on different servers, and wait for
+# each other forever with no error on either side. Naming a relay explicitly on
+# both ends makes that impossible.
+#
+# A relay is raw TCP (9009-9013), not HTTP, so it needs no reverse proxy and no
+# certificate — which also means nothing about it is published to Certificate
+# Transparency logs.
+#
+# Leave `pass` UNSET unless the relay is only ever for your own machines: the
+# password is needed by BOTH peers, and a recipient has no copy of this file.
+#
+# [homerelay]
+# description = "Home relay — LAN/tailnet only, no egress"
+# relay       = "relay.home.example.com:9009"
+# web         = false            # recipients need the croc CLI
+# profiles    = ["personal", "work"]
+
 # --- a bare relay: live transfers only, recipients need the croc CLI ---------
 # [lab]
 # description = "Bare relay"
