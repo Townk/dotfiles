@@ -333,7 +333,7 @@ Describe 'clipboard-mount: ensure'
 #!/bin/sh
 case "\$1" in obscure) printf 'OBSC-%s' "\$2"; exit 0 ;; esac
 printf '%s\n' "\$@" > "$SHELLSPEC_TMPBASE/rclone-argv"
-printf '%s\n' "\${_SYNCREMOTE:-}" > "$SHELLSPEC_TMPBASE/rclone-env"
+printf '%s\n%s\n' "\${_SYNCREMOTE:-}" "\${RCLONE_SFTP_PASS:-}" > "$SHELLSPEC_TMPBASE/rclone-env"
 echo "mini-clip on \$3 (macfuse, nodev)" >> "$SHELLSPEC_TMPBASE/mount-table"
 exit 0
 STUB
@@ -351,7 +351,7 @@ STUB
     The contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should include "--read-only"
     The contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should include "--daemon"
     The contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should include "nobrowse"
-    The contents of file "$SHELLSPEC_TMPBASE/rclone-env" should equal "1"
+    The line 1 of contents of file "$SHELLSPEC_TMPBASE/rclone-env" should equal "1"
   End
 
   It 'uses the explicit alias for ssh while keying the mountpoint by host'
@@ -370,7 +370,11 @@ STUB
     printf '%s' "visitor-token" > "$XDG_STATE_HOME/clipboard/mount-tokens/lap-top"
     When run command zsh -f "$CM" ensure lap-top
     The status should be success
-    The line 2 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal ":sftp,host=127.0.0.1,port=2492,user=recob,pass='OBSC-visitor-token':/"
+    The line 2 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal ":sftp,host=127.0.0.1,port=2493,user=recob:/"
+    # The pass rides the env (RCLONE_SFTP_PASS), never the conn string --
+    # rclone embeds the string in CRITICAL log lines and obscure is
+    # reversible; and :2493 not :2492 (our own serve owns 2492 locally).
+    The line 2 of contents of file "$SHELLSPEC_TMPBASE/rclone-env" should equal "OBSC-visitor-token"
     The line 3 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal "$MNT_ROOT/lap-top"
     The contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should include "--read-only"
   End
@@ -411,7 +415,7 @@ STUB
     The status should be success
     The path "$MNT_ROOT/peer-mini" should be directory
     The line 1 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal "mount"
-    The contents of file "$SHELLSPEC_TMPBASE/rclone-env" should equal "1"
+    The line 1 of contents of file "$SHELLSPEC_TMPBASE/rclone-env" should equal "1"
   End
 
   It 'tears down and fails when the mount comes up unhealthy'

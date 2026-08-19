@@ -334,19 +334,28 @@ cm::ensure() {
   # No token → the original external-ssh backend (a host WE can reach).
   local mtoken="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/mount-tokens/$host"
   local backend
+  local -a backend_env=(_SYNCREMOTE=1)
   if [[ -s "$mtoken" ]]; then
-    local vport="${CLIPBOARD_FILE_SERVE_PORT:-2492}" opass
-    # rclone connection-string passwords must be obscured; the output is
-    # base64-shaped (no quotes), so the single-quoted value below is safe.
+    # :2493, not :2492 — every machine runs its OWN serve on 2492, so the
+    # visitor's forward must publish on a DIFFERENT port or it can never
+    # bind (and a dial would reach OUR serve, which rejects the visitor's
+    # token — found live, Mode B 2026-08-18). Same own-vs-forwarded split
+    # as 2489/2490.
+    local vport="${CLIPBOARD_VISITOR_FILES_PORT:-2493}" opass
     opass=$("$rclone_bin" obscure "$(<"$mtoken")" 2>/dev/null) || opass=""
     [[ -n "$opass" ]] ||
       { print -u2 -- "clipboard-mount: cannot obscure the mount token for '$host'"; return 1 }
-    backend=":sftp,host=127.0.0.1,port=${vport},user=recob,pass='${opass}':/"
+    # The pass rides the ENVIRONMENT (rclone's RCLONE_SFTP_PASS override),
+    # never the connection string: rclone prints the whole string into its
+    # CRITICAL log lines on failure, and obscure is reversible obfuscation,
+    # not crypto — a log must never carry it (found live, same session).
+    backend_env+=(RCLONE_SFTP_PASS="$opass")
+    backend=":sftp,host=127.0.0.1,port=${vport},user=recob:/"
   else
     backend=":sftp,ssh='ssh -o ControlPath=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 ${alias}':/"
   fi
 
-  if ! _SYNCREMOTE=1 "$rclone_bin" mount \
+  if ! env "${backend_env[@]}" "$rclone_bin" mount \
       "$backend" \
       "$mp" \
       --daemon --daemon-wait 5s --daemon-timeout 10s \

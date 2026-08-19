@@ -74,7 +74,7 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
     The contents of file "$conf" should include "RemoteForward 127.0.0.1:2490 127.0.0.1:2489"
     The contents of file "$conf" should include "LocalForward 127.0.0.1:2491 127.0.0.1:2489"
     # 6c part 2: the visiting machine's read-only file plane rides along.
-    The contents of file "$conf" should include "RemoteForward 127.0.0.1:2492 127.0.0.1:2492"
+    The contents of file "$conf" should include "RemoteForward 127.0.0.1:2493 127.0.0.1:2492"
   End
 
   It 'keeps the alias-only hook when no peer hostname is known'
@@ -103,7 +103,7 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
     The contents of file "$conf" should include "Host mac-mini thiago-mac-mini"
     The contents of file "$conf" should not include "RemoteForward 127.0.0.1:2490 127.0.0.1:2489"
     The contents of file "$conf" should not include "LocalForward 127.0.0.1:2491 127.0.0.1:2489"
-    The contents of file "$conf" should not include "RemoteForward 127.0.0.1:2492 127.0.0.1:2492"
+    The contents of file "$conf" should not include "RemoteForward 127.0.0.1:2493 127.0.0.1:2492"
   End
 
   It 'skips the extra Host name when the peer LocalHostName equals the alias'

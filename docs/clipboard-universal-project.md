@@ -1454,7 +1454,10 @@ accepted hazard.
 - **Port convention completed:** 2489 my own bridge, 2490 the machine
   visiting me (`RemoteForward`), **2491 the machine I am visiting** — a
   `LocalForward 127.0.0.1:2491 127.0.0.1:2489` now rendered into the same
-  `config.d` clipboard block by `system-onboard`. Same single-peer
+  `config.d` clipboard block by `system-onboard`. The file plane repeats
+  the split: **2492 my own `clipboard-file-serve`, 2493 the visitor's**
+  (`RemoteForward 2493→2492`) — publishing on the serve's own port could
+  never bind, since every machine runs its own serve (found live). Same single-peer
   assumption as 2490. (`cli::visited_port`, env
   `CLIPBOARD_BRIDGE_VISITED_PORT`; the spec suite pins it CLOSED in
   `recob_start` so tests can never push at a live session.)
