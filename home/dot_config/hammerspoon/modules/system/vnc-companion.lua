@@ -77,27 +77,51 @@ local function teardownAll()
   end
 end
 
+-- A slow periodic rescan for the app's whole lifetime, not a one-shot: the
+-- connection window's title only appears once the connection is up (the
+-- app opens its connections browser first), connecting to a second machine
+-- fires no app-watcher event, and a dropped carrier (network blip) should
+-- self-heal. The scan is a few window-title reads + a grep, every 5s, only
+-- while Screen Sharing runs — ensureCompanion is idempotent throughout.
+local function startScanning()
+  if rescanTimer then
+    rescanTimer:stop()
+  end
+  rescanTimer = hs.timer.doEvery(5, function()
+    if hs.application.get(BUNDLE) then
+      scanWindows()
+    else
+      rescanTimer:stop()
+      rescanTimer = nil
+      teardownAll()
+    end
+  end)
+  -- First look quickly — a fresh connection's title usually lands within
+  -- a second or two.
+  hs.timer.doAfter(1.5, scanWindows)
+end
+
 function M.setup()
   watcher = hs.application.watcher.new(function(_, event, app)
     if not app or app:bundleID() ~= BUNDLE then
       return
     end
     if event == hs.application.watcher.launched or event == hs.application.watcher.activated then
-      -- The title carries the machine name only once the connection is up;
-      -- give it a beat, then rescan (idempotent — ensureCompanion no-ops on
-      -- live carriers).
+      if not rescanTimer then
+        startScanning()
+      end
+    elseif event == hs.application.watcher.terminated then
       if rescanTimer then
         rescanTimer:stop()
+        rescanTimer = nil
       end
-      rescanTimer = hs.timer.doAfter(1.5, scanWindows)
-    elseif event == hs.application.watcher.terminated then
       teardownAll()
     end
   end)
   watcher:start()
   -- Screen Sharing may already be up when Hammerspoon (re)loads.
   if hs.application.get(BUNDLE) then
-    rescanTimer = hs.timer.doAfter(1.5, scanWindows)
+    startScanning()
   end
 end
 
