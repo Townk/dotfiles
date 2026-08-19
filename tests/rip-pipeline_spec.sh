@@ -100,6 +100,6 @@ EOF
     The output should not equal ""
     The contents of file "$JOB_FAKE_LOG" should include "--group heavy"
     The result of function titles should include "rip: A Movie (2001)"
-    The contents of file "$JOB_FAKE_LOG" should include "--worker"
+    The contents of file "$JOB_FAKE_LOG" should include "/rip-pipeline --worker"
   End
 End

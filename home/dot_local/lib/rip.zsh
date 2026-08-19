@@ -15,6 +15,15 @@ RIP_LIB_SELF_DIR="${${(%):-%x}:A:h}"
 source "$RIP_LIB_SELF_DIR/common.zsh"
 
 RIP_JOB_ICON="${RIP_JOB_ICON:-glyph:nf-md-disc}"
+# RIP_BIN_DIR — where the rip-push / rip-pipeline bins live. pueue
+# snapshots the ENQUEUING process's environment, not a shell login
+# environment; when the enqueue comes from Hammerspoon (hs.task) that
+# snapshot's PATH lacks ~/.local/bin, so a bare `rip-push`/`rip-pipeline`
+# on the job command line dies Failed(127) before the worker ever runs
+# (live-verified). The enqueue functions below always resolve the
+# absolute path through this seam instead of trusting PATH at pueue-add
+# time.
+RIP_BIN_DIR="${RIP_BIN_DIR:-$HOME/.local/bin}"
 
 rip::staging_root() { print -r -- "${RIP_STAGING_ROOT:-$HOME/Depot/Rips}"; }
 rip::remote_base()  { print -r -- "${RIP_REMOTE_BASE:-media@cantina:/srv/media}"; }
@@ -59,7 +68,7 @@ rip::push_enqueue() {
   fi
   rip::_load_jobs || { log_error "rip: job runner unavailable"; return 1 }
   job::start --group transfer --title "rip push: $type" --icon "$RIP_JOB_ICON" \
-    -- rip-push --worker "$type"
+    -- "$RIP_BIN_DIR/rip-push" --worker "$type"
 }
 
 # rip::push_worker <type> — the enqueued body: rsync the staging tree to
@@ -196,5 +205,5 @@ rip::pipeline_enqueue() {
   [ -f "$input" ] || { log_error "rip: no such input: $input"; return 1 }
   rip::_load_jobs || { log_error "rip: job runner unavailable"; return 1 }
   job::start --group heavy --title "rip: $title" --icon "$RIP_JOB_ICON" \
-    -- rip-pipeline --worker "$input" "$title"
+    -- "$RIP_BIN_DIR/rip-pipeline" --worker "$input" "$title"
 }

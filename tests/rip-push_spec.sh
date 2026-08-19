@@ -54,7 +54,7 @@ EOF
     The output should not equal ""
     The contents of file "$JOB_FAKE_LOG" should include "--group transfer"
     The result of function titles should include "rip push: movies"
-    The contents of file "$JOB_FAKE_LOG" should include "--worker movies"
+    The contents of file "$JOB_FAKE_LOG" should include "/rip-push --worker movies"
   End
 
   It 'no-arg CLI enqueues both populated types'
