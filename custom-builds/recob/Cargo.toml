@@ -43,6 +43,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
     "NSPasteboard",
+    "NSPasteboardItem",
     "NSWorkspace",
     "NSRunningApplication",
     "NSAttributedString",

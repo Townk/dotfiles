@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2_app_kit::{NSPasteboard, NSWorkspace};
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting, NSWorkspace};
 use objc2_foundation::{
     NSArray, NSData, NSPropertyListFormat, NSPropertyListReadOptions, NSPropertyListSerialization,
     NSString, NSURL,
@@ -83,6 +83,38 @@ impl Pasteboard {
     /// the caller records on the [`RegtypeTracker`] so the observation loop
     /// recognizes the echo (§6.2).
     pub fn write_all(&self, data: &BTreeMap<String, Vec<u8>>) -> isize {
+        // File flavors MUST go through the item interface below: the legacy
+        // declare+setData path silently stores NOTHING for public.file-url
+        // (and translation-serves NSFilenames readers from url items it then cannot
+        // find), leaving declared-but-empty flavors that every reader blocks
+        // on this LIVING daemon to furnish -- the Finder/pboard wedge found
+        // live 2026-08-18. URLs derive from the filenames plist (the real
+        // parser) or the single file-url payload; every remaining UTI rides
+        // the first item; NSFilenamesPboardType itself is never written --
+        // AppKit's own legacy translator serves those readers from the items.
+        let urls: Option<Vec<String>> = data
+            .get("NSFilenamesPboardType")
+            .and_then(|blob| parse_filenames_bytes(blob))
+            .map(|paths| {
+                paths
+                    .iter()
+                    .map(|path| format!("file://{}", url_encode(path)))
+                    .collect()
+            })
+            .or_else(|| {
+                data.get("public.file-url")
+                    .map(|blob| vec![String::from_utf8_lossy(blob).into_owned()])
+            });
+        if let Some(urls) = urls {
+            let extra: Vec<(&str, &[u8])> = data
+                .iter()
+                .filter(|(uti, _)| {
+                    uti.as_str() != "NSFilenamesPboardType" && uti.as_str() != "public.file-url"
+                })
+                .map(|(uti, blob)| (uti.as_str(), blob.as_slice()))
+                .collect();
+            return self.write_file_urls(&urls, &extra);
+        }
         let types: Vec<Retained<NSString>> =
             data.keys().map(|uti| NSString::from_str(uti)).collect();
         let array = NSArray::from_retained_slice(&types);
@@ -91,6 +123,34 @@ impl Pasteboard {
             let payload = NSData::with_bytes(blob);
             self.pb.setData_forType(Some(&payload), uti);
         }
+        self.pb.changeCount()
+    }
+
+    /// The item-interface file write: one NSPasteboardItem per URL (the
+    /// only shape modern AppKit actually stores for public.file-url; also
+    /// what makes a multi-file clip paste every file in Finder), with the
+    /// non-file UTIs (the provenance marker, private manifest types) riding
+    /// the first item. clearContents + writeObjects is a single
+    /// changeCount step, so the tracker echo contract holds unchanged.
+    fn write_file_urls(&self, urls: &[String], extra: &[(&str, &[u8])]) -> isize {
+        let mut items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> =
+            Vec::with_capacity(urls.len());
+        let url_type = NSString::from_str("public.file-url");
+        for (index, url) in urls.iter().enumerate() {
+            let item = NSPasteboardItem::new();
+            let payload = NSData::with_bytes(url.as_bytes());
+            let _ = item.setData_forType(&payload, &url_type);
+            if index == 0 {
+                for (uti, blob) in extra {
+                    let data = NSData::with_bytes(blob);
+                    let _ = item.setData_forType(&data, &NSString::from_str(uti));
+                }
+            }
+            items.push(ProtocolObject::from_retained(item));
+        }
+        self.pb.clearContents();
+        let array = NSArray::from_retained_slice(&items);
+        let _ = self.pb.writeObjects(&array);
         self.pb.changeCount()
     }
 

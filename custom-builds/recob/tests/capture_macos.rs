@@ -342,3 +342,59 @@ fn live_general_pasteboard_changes_are_observed() {
     let plain = outcome.expect("capture from the general pasteboard");
     assert_eq!(plain, "recob phase 3 live check");
 }
+
+// 6c/Finder wedge regression: file flavors written through write_all MUST be
+// item-backed and instantly readable. The legacy declare+setData path stored
+// NOTHING for public.file-url, leaving a declared-but-empty flavor every
+// reader then blocked on this living daemon to furnish — Finder froze on its
+// Edit menu (found live 2026-08-18). The write is real, the read-back is
+// real, and the custom marker must ride the first item.
+#[test]
+fn file_flavor_writes_are_item_backed_and_readable() {
+    let pasteboard = Pasteboard::unique();
+    let mut data = BTreeMap::new();
+    data.insert(
+        "NSFilenamesPboardType".to_string(),
+        recobd::platform::macos::filenames_plist(&[
+            "/tmp/recob test a.txt".to_string(),
+            "/tmp/recob-b.txt".to_string(),
+        ]),
+    );
+    data.insert(
+        "public.file-url".to_string(),
+        b"file:///tmp/recob%20test%20a.txt".to_vec(),
+    );
+    data.insert(
+        "org.chezmoi.clipboard.UntrustedFileURLs".to_string(),
+        b"1".to_vec(),
+    );
+    pasteboard.write_all(&data);
+
+    let snapshot = pasteboard.snapshot(None);
+    // The url items are really there (per-path), and the marker rides along.
+    assert!(
+        snapshot
+            .item_utis
+            .iter()
+            .any(|uti| uti == "public.file-url"),
+        "no file-url item: {:?}",
+        snapshot.item_utis
+    );
+    assert!(
+        snapshot
+            .item_utis
+            .iter()
+            .any(|uti| uti == "org.chezmoi.clipboard.UntrustedFileURLs"),
+        "marker missing: {:?}",
+        snapshot.item_utis
+    );
+    let url_blob = snapshot
+        .data
+        .get("public.file-url")
+        .expect("file-url flavor must hold DATA, not a dangling declaration");
+    assert!(
+        String::from_utf8_lossy(url_blob).starts_with("file://"),
+        "unexpected url payload"
+    );
+    pasteboard.release();
+}
