@@ -48,7 +48,13 @@ fn system_bridge_bin() -> PathBuf {
 /// rich payloads are bytes, and bytes are pull-only.
 pub fn pointer_push_for(capture: &Capture, host: &str) -> Option<(Vec<String>, Vec<u8>)> {
     match capture.kind {
-        TypeKind::Text => {
+        // Rich kinds ride as their PLAIN text: the bytes-stay-local ruling
+        // is about FILE payloads, and a browser copy (html + plain) is as
+        // pushable as any text — found live 2026-08-18 when browser copies
+        // on the visited machine never reached the viewer while terminal
+        // copies (plain text) did. Formatting drops cross-machine; a
+        // clip.set.rich upgrade is a possible later refinement.
+        TypeKind::Text | TypeKind::Rtf | TypeKind::Html | TypeKind::Url | TypeKind::Mixed => {
             let plain = capture.plain.as_deref()?;
             if plain.is_empty() {
                 return None;
@@ -211,5 +217,16 @@ mod tests {
         let mut rich = text_capture("x");
         rich.kind = TypeKind::Image;
         assert!(pointer_push_for(&rich, "laptop").is_none());
+    }
+
+    #[test]
+    fn rich_text_kinds_push_their_plain_representation() {
+        for kind in [TypeKind::Html, TypeKind::Rtf, TypeKind::Url, TypeKind::Mixed] {
+            let mut capture = text_capture("from a browser");
+            capture.kind = kind;
+            let (args, stdin) = pointer_push_for(&capture, "laptop").expect("push");
+            assert!(args.contains(&"clip.set".to_string()));
+            assert_eq!(stdin, b"from a browser");
+        }
     }
 }
