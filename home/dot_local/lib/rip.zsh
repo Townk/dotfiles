@@ -94,5 +94,27 @@ rip::push_worker() {
   rip::_verify_and_clean "$type" "$src" "$dest"
 }
 
-# Placeholder until Task 3: verified-clean is a no-op success.
-rip::_verify_and_clean() { return 0; }
+# rip::_verify_and_clean <type> <src> <dest> — deleting the only digital
+# copy demands more than "rsync exited 0": a checksum dry-run must report
+# ZERO differences before anything local is removed. A difference (e.g. a
+# rip that landed mid-push) keeps EVERYTHING and fails the job — the next
+# run pushes it. Never uses --delete: the server never loses files
+# because staging emptied.
+rip::_verify_and_clean() {
+  local type="$1" src="$2" dest="$3"
+  local rsync_bin="${RIP_RSYNC_BIN:-rsync}"
+  local diffs
+  if ! diffs="$("$rsync_bin" -rcn --out-format='%n' "$src/" "$dest" 2>&1)"; then
+    log_error "rip: verify pass failed to run for $type — keeping local files"
+    return 1
+  fi
+  if [ -n "$diffs" ]; then
+    log_error "rip: verify found differences for $type — keeping local files"
+    return 1
+  fi
+  print -r -- "rip: $type verified on cantina — cleaning staging"
+  rip::_progress 100 "verified — cleaning $type staging"
+  find "$src" -type f -delete
+  find "$src" -mindepth 1 -type d -empty -delete
+  return 0
+}

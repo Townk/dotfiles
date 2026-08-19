@@ -87,8 +87,8 @@ EOF
     mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     When run zsh -c "source $JOBLIB; source $RIPLIB && rip::push_worker music"
     The status should equal 0
+    The output should include "verified"
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "100"
-    The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "01 T.flac"
   End
 
   It 'worker propagates rsync failure'
@@ -98,6 +98,36 @@ EOF
     When run zsh -c "source $RIPLIB && rip::push_worker music"
     The status should equal 23
     The stderr should include "rip"
+    The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should be exist
+  End
+
+  It 'worker deletes staging after a clean verify'
+    mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+case "$*" in *-rcn*) exit 0 ;; *) exit 0 ;; esac
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should not be exist
+    The path "$RIP_STAGING_ROOT/music/B" should not be exist
+    The path "$RIP_STAGING_ROOT/music" should be exist
+  End
+
+  It 'worker keeps everything when the verify pass finds differences'
+    mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+case "$*" in *-rcn*) printf 'B/Alb/01 T.flac\n'; exit 0 ;; *) exit 0 ;; esac
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 1
+    The stderr should include "verify"
     The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should be exist
   End
 End
