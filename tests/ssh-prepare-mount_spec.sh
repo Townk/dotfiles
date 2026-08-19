@@ -52,7 +52,7 @@ Describe 'ssh-prepare-connection: mount step'
     # step_mount makes three ssh calls now (identity, peer-term, credential),
     # so the stub keeps their stdin apart -- each push is recognizable by its
     # remote command, and every example's assertions stay unambiguous.
-    printf '#!/bin/sh\ncase "$*" in *tunnel-tokens*) cat > "%s/ssh-token-stdin" ;; *rm\\ -f*peer-term*) : ;; *peer-term*) cat > "%s/ssh-peerterm-stdin" ;; *) cat > "%s/ssh-stdin" ;; esac\necho "$*" >> "%s/ssh-calls"\n' \
+    printf '#!/bin/sh\ncase "$*" in *tunnel-tokens*) cat > "%s/ssh-token-stdin" ;; *accepted-token*) printf %%s bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;; *rm\\ -f*peer-term*) : ;; *peer-term*) cat > "%s/ssh-peerterm-stdin" ;; *) cat > "%s/ssh-stdin" ;; esac\necho "$*" >> "%s/ssh-calls"\n' \
       "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" > "$STUBS/ssh"
     # The peer-term push reads the REAL terminal's fingerprints; the suite
     # may itself run inside one, so every example starts undetectable and
@@ -91,6 +91,34 @@ Describe 'ssh-prepare-connection: mount step'
     write_conf "../evil" 1
     When call run_and_wait
     The path "$SHELLSPEC_TMPBASE/cm-calls" should not be exist
+  End
+
+  # 6c: the credential FETCH — the mirror of the token push. Pointer pushes
+  # from this machine dial the 2491 LocalForward, whose far end challenges
+  # with the REMOTE's token, so step_mount pulls the remote's accepted-token
+  # back into our tunnel-tokens keyed by its identity, mode 600.
+  It 'fetches the visited-direction credential back, keyed by peer hostname'
+    write_conf thiago-mac-mini 1
+    fetched="$XDG_STATE_HOME/clipboard/tunnel-tokens/thiago-mac-mini"
+    run_and_wait_token() {
+      run_and_wait
+      i=0; while [ ! -e "$fetched" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+      cat "$fetched" 2>/dev/null
+      printf '|%s' "$(stat -f %Lp "$fetched" 2>/dev/null || stat -c %a "$fetched" 2>/dev/null)"
+    }
+    When call run_and_wait_token
+    The output should include 'bbbbbbbb'
+    The output should end with '|600'
+  End
+
+  no_fetch_call() {
+    grep -c 'accepted-token' "$SHELLSPEC_TMPBASE/ssh-calls" 2>/dev/null || echo 0
+  }
+
+  It 'the credential fetch also respects the unsafe-hostname gate'
+    write_conf "../evil" 1
+    When call run_and_wait
+    The result of function no_fetch_call should eq 0
   End
 
   It 'prepare: all includes the mount step'

@@ -256,6 +256,9 @@ check_working_tree() {
 # remote's nvim provider + pickers read this machine's clipboard through it.
 readonly CLIPBOARD_REMOTE_PORT=2490
 readonly CLIPBOARD_LOCAL_PORT=2489
+# 6c: the LocalForward counterpart — the machine I'm VISITING, reachable from
+# here on :2491 so copies made on this machine push their pointer at copy time.
+readonly CLIPBOARD_VISITED_PORT=2491
 
 # gpg-agent forward — rendered when `prepare` implies gpg (contains `gpg`, or is
 # `all`). The remote bind path carries the remote uid + gpgconf's homedir hash,
@@ -454,6 +457,9 @@ write_ssh_conf() {
       print -r -- "    # Clipboard bridge — exposes this machine's clipboard to $alias so its nvim /"
       print -r -- "    # pickers can read it. Toggle: system-onboard update $alias --no-clipboard"
       print -r -- "    RemoteForward 127.0.0.1:$CLIPBOARD_REMOTE_PORT 127.0.0.1:$CLIPBOARD_LOCAL_PORT"
+      print -r -- "    # …and the visited direction (6c): a route to $alias's own bridge, so"
+      print -r -- "    # copies made HERE push their pointer there at copy time (Cmd+V native)."
+      print -r -- "    LocalForward 127.0.0.1:$CLIPBOARD_VISITED_PORT 127.0.0.1:$CLIPBOARD_LOCAL_PORT"
     fi
     if ((want_gpg)); then
       print -r -- "    # gpg agent-socket forward — the remote bind path (remote uid + gpgconf"

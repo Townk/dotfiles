@@ -233,6 +233,31 @@ step_mount() {
     fi
   fi
 
+  # Credential FETCH (6c, the mirror of the push above): pointer pushes from
+  # THIS machine to the one it is visiting dial the 2491 LocalForward, whose
+  # far end is the remote's own public bridge -- which challenges with the
+  # REMOTE's token. Pull its accepted-token back into our tunnel-tokens,
+  # keyed by the remote's identity, with the same never-world-readable
+  # discipline as the push (umask before, chmod after). Fail-soft and
+  # backgrounded like everything else here: no daemon on the remote yet
+  # simply means no file and no fetch.
+  if [[ "$peer_hostname" == [A-Za-z0-9][A-Za-z0-9.-]# ]]; then
+    (
+      umask 077
+      local fetched
+      fetched="$(ssh -o ControlPath=none -o ClearAllForwardings=yes \
+        -o BatchMode=yes -o ConnectTimeout=5 "$target" \
+        'cat "${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/accepted-token" 2>/dev/null' \
+        2>/dev/null)" || fetched=""
+      if [[ -n "$fetched" ]]; then
+        local d="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/tunnel-tokens"
+        mkdir -p "$d" && chmod 700 "$d" &&
+          print -rn -- "$fetched" > "$d/$peer_hostname" &&
+          chmod 600 "$d/$peer_hostname"
+      fi
+    ) >/dev/null 2>&1 &!
+  fi
+
   # The mount itself (rclone/MacFUSE + Finder) is Darwin-only -- unlike the
   # identity push above, THIS part really is conditional on that (Finder is
   # the point; MacFUSE/rclone are the Mac side). Backgrounded + disowned:
