@@ -13,6 +13,9 @@
 --     finished while Hammerspoon was down (or reloading) would otherwise
 --     sit unnoticed forever: M.start() sweeps both trees once at startup
 --     to pick up whatever is already sitting there.
+--   * .work/ is rip.zsh's scratch area (the in-progress encode, the push
+--     stamps). It is deliberately unwatched and never pushed; startup
+--     just clears whatever a killed job stranded there.
 
 local M = {}
 
@@ -20,6 +23,7 @@ local HOME = os.getenv("HOME")
 local ROOT = HOME .. "/Depot/Rips"
 local INTERMEDIATE = ROOT .. "/intermediate"
 local MUSIC = ROOT .. "/music"
+local WORK = ROOT .. "/.work"
 local RIP_PIPELINE = HOME .. "/.local/bin/rip-pipeline"
 local RIP_PUSH = HOME .. "/.local/bin/rip-push"
 local STABLE_SECS = 30
@@ -144,10 +148,38 @@ local function sweepMusic()
 	end
 end
 
+-- .work holds rip.zsh's in-progress encode and each push's start-of-transfer
+-- stamp; nothing in there is meant to outlive the job that wrote it. A
+-- cancelled encode is SIGKILLed (that is what `pueue kill` sends), so the
+-- worker gets no chance to tidy up and its half-written temp sits there until
+-- some later rip happens to overwrite it. Clearing it at startup means a
+-- reload is enough. Sweeping under a push that is somehow still running is
+-- safe: rip.zsh treats a missing stamp as "keep everything local".
+local function sweepWork()
+	local iter, dir = hs.fs.dir(WORK)
+	if not iter then
+		return
+	end
+	local swept = 0
+	for name in iter, dir do
+		if name ~= "." and name ~= ".." then
+			local p = WORK .. "/" .. name
+			local a = hs.fs.attributes(p)
+			if a and a.mode == "file" and os.remove(p) then
+				swept = swept + 1
+			end
+		end
+	end
+	if swept > 0 then
+		log.f("sweep: cleared %d stale file(s) from .work", swept)
+	end
+end
+
 function M.start()
-	for _, d in ipairs({ ROOT, INTERMEDIATE, MUSIC, ROOT .. "/movies" }) do
+	for _, d in ipairs({ ROOT, INTERMEDIATE, MUSIC, WORK, ROOT .. "/movies" }) do
 		hs.fs.mkdir(d)
 	end
+	sweepWork()
 	M.movieWatcher = hs.pathwatcher.new(INTERMEDIATE, function(files)
 		for _, f in ipairs(files) do
 			considerMovie(f)
