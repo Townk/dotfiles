@@ -278,6 +278,32 @@ step_mount() {
     ) >/dev/null 2>&1 &!
   fi
 
+  # Computer-name capture (VNC companion): Screen Sharing window titles
+  # carry the remote's PRETTY ComputerName ("Thiago'"'"'s Mac Mini"), which
+  # shares no token with the Host names -- capture it over ssh and heal it
+  # into the front matter (`# computer-name: ...`) so vnc-companion-resolve
+  # can map VNC windows to this fragment. Same fail-soft, backgrounded
+  # shape as every step; the rewrite is atomic (tmp + mv) and idempotent.
+  (
+    local cn
+    cn="$(ssh -o ControlPath=none -o ClearAllForwardings=yes \
+      -o BatchMode=yes -o ConnectTimeout=5 "$target" \
+      'scutil --get ComputerName 2>/dev/null' 2>/dev/null)" || cn=""
+    if [[ -n "$cn" && "$cn" != *$'\n'* && ${#cn} -le 64 ]]; then
+      local current
+      current="$(awk '/^#[[:space:]]*---[[:space:]]*$/{n++;next} n==1 && sub(/^#[[:space:]]*computer-name:[[:space:]]*/,""){print;exit}' "$config")"
+      if [[ "$current" != "$cn" ]]; then
+        local tmp="${config}.cn.$$"
+        awk -v cn="$cn" '
+          /^#[[:space:]]*---[[:space:]]*$/ { fence++ }
+          fence == 1 && /^#[[:space:]]*computer-name:/ { next }
+          fence == 2 && !done { print "# computer-name: " cn; done = 1 }
+          { print }
+        ' "$config" > "$tmp" && mv -f -- "$tmp" "$config"
+      fi
+    fi
+  ) >/dev/null 2>&1 &!
+
   # The mount itself (rclone/MacFUSE + Finder) is Darwin-only -- unlike the
   # identity push above, THIS part really is conditional on that (Finder is
   # the point; MacFUSE/rclone are the Mac side). Backgrounded + disowned:

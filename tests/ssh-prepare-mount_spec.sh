@@ -52,8 +52,27 @@ Describe 'ssh-prepare-connection: mount step'
     # step_mount makes three ssh calls now (identity, peer-term, credential),
     # so the stub keeps their stdin apart -- each push is recognizable by its
     # remote command, and every example's assertions stay unambiguous.
-    printf '#!/bin/sh\ncase "$*" in *mount-tokens*) cat > "%s/ssh-mount-token-stdin" ;; *tunnel-tokens*) cat > "%s/ssh-token-stdin" ;; *accepted-token*) printf %%s bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;; *rm\\ -f*peer-term*) : ;; *peer-term*) cat > "%s/ssh-peerterm-stdin" ;; *) cat > "%s/ssh-stdin" ;; esac\necho "$*" >> "%s/ssh-calls"\n' \
-      "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" > "$STUBS/ssh"
+    cat > "$STUBS/ssh" <<STUB
+#!/bin/sh
+case "\$*" in
+  *ComputerName*) printf "Thiago's Mac Mini" ;;
+  *mount-tokens*)
+    cat > "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin.t" &&
+      mv "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin.t" "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin" ;;
+  *tunnel-tokens*)
+    cat > "$SHELLSPEC_TMPBASE/ssh-token-stdin.t" &&
+      mv "$SHELLSPEC_TMPBASE/ssh-token-stdin.t" "$SHELLSPEC_TMPBASE/ssh-token-stdin" ;;
+  *accepted-token*) printf %s bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
+  *rm\ -f*peer-term*) : ;;
+  *peer-term*)
+    cat > "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin.t" &&
+      mv "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin.t" "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin" ;;
+  *)
+    cat > "$SHELLSPEC_TMPBASE/ssh-stdin.t" &&
+      mv "$SHELLSPEC_TMPBASE/ssh-stdin.t" "$SHELLSPEC_TMPBASE/ssh-stdin" ;;
+esac
+echo "\$*" >> "$SHELLSPEC_TMPBASE/ssh-calls"
+STUB
     # The peer-term push reads the REAL terminal's fingerprints; the suite
     # may itself run inside one, so every example starts undetectable and
     # the ones that test detection set exactly what they mean.
@@ -109,6 +128,31 @@ Describe 'ssh-prepare-connection: mount step'
     When call run_and_wait_token
     The output should include 'bbbbbbbb'
     The output should end with '|600'
+  End
+
+  # Computer-name heal (VNC companion): the pretty name Screen Sharing
+  # titles carry, captured over ssh and healed into the front matter.
+  It 'heals the captured computer-name into the fragment front matter'
+    write_conf thiago-mac-mini 1
+    wait_cn() {
+      run_and_wait
+      i=0; while ! grep -q computer-name "$CONF" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+      grep '^# computer-name:' "$CONF" || echo MISSING
+    }
+    When call wait_cn
+    The output should equal "# computer-name: Thiago's Mac Mini"
+  End
+
+  It 'the heal is idempotent — a second run leaves one line'
+    write_conf thiago-mac-mini 1
+    twice() {
+      run_and_wait
+      i=0; while ! grep -q computer-name "$CONF" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+      zsh -f "$SPC" "$CONF"; sleep 0.5
+      grep -c '^# computer-name:' "$CONF"
+    }
+    When call twice
+    The output should equal '1'
   End
 
   no_fetch_call() {
@@ -174,9 +218,18 @@ Describe 'ssh-prepare-connection: mount step'
   # identity, and the sit-at machine (running this script, right now) is the
   # one that knows it -- so it pushes a fail-soft, backgrounded self-name
   # file to the target before the mount ensure call.
+  # Wait on the CAPTURE FILE itself, not the shared ssh-calls log: with
+  # several concurrent backgrounded pushes, the fastest arm creates
+  # ssh-calls long before this push's stdin has been captured.
+  wait_for_identity() {
+    zsh -f "$SPC" "$CONF"
+    i=0; while [ ! -e "$SHELLSPEC_TMPBASE/ssh-stdin" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+    return 0
+  }
+
   It 'pushes a stable self-name identity to the peer, keyed by peer-hostname, via ssh to the alias target'
     write_conf thiago-mac-mini 1
-    When call wait_for_ssh_calls
+    When call wait_for_identity
     The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "mini"
     The contents of file "$SHELLSPEC_TMPBASE/ssh-stdin" should equal "thiago-mac-mini"
   End

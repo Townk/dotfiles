@@ -18,8 +18,13 @@ title="${title:l}"
 confdir="${VNC_COMPANION_CONF_DIR:-$HOME/.ssh/config.d}"
 [[ -d "$confdir" ]] || exit 1
 
-local conf line alias name
+local conf line alias name cn
 for conf in "$confdir"/*.conf(N); do
+  # The pretty ComputerName ("Thiago's Mac Mini") is what Screen Sharing
+  # titles actually carry; ssh-prepare-connection heals it into the front
+  # matter on every connect. Checked alongside the Host tokens.
+  cn="$(awk '/^#[[:space:]]*---[[:space:]]*$/{n++;next} n==1 && sub(/^#[[:space:]]*computer-name:[[:space:]]*/,""){print;exit}' "$conf")"
+  alias=""
   while IFS= read -r line; do
     [[ "$line" == Host\ * ]] || continue
     local -a names=(${=line})
@@ -31,6 +36,11 @@ for conf in "$confdir"/*.conf(N); do
         exit 0
       fi
     done
+    break
   done < "$conf"
+  if [[ -n "$alias" && -n "$cn" && "$title" == *"${cn:l}"* ]]; then
+    print -r -- "$alias"
+    exit 0
+  fi
 done
 exit 1

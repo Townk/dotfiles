@@ -40,6 +40,20 @@ CONF
     The output should equal 'devbox'
   End
 
+  It 'matches the pretty computer-name the front matter carries'
+    cat > "$VNC_COMPANION_CONF_DIR/mac-mini.conf" <<CONF
+# ---
+# alias: mac-mini
+# computer-name: Thiago's Mac Mini
+# ---
+Host mac-mini thiago-mac-mini thiago-mac-mini.local
+    HostName mini
+CONF
+    When run script "$RESOLVE" "Thiago's Mac Mini"
+    The status should eq 0
+    The output should equal 'mac-mini'
+  End
+
   It 'is rc 1 and silent for a title naming no onboarded machine'
     When run script "$RESOLVE" "some-random-host"
     The status should eq 1
