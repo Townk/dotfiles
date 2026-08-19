@@ -61,3 +61,38 @@ rip::push_enqueue() {
   job::start --group transfer --title "rip push: $type" --icon "$RIP_JOB_ICON" \
     -- rip-push --worker "$type"
 }
+
+# rip::push_worker <type> — the enqueued body: rsync the staging tree to
+# cantina with live progress, then (Task 3) verify and clean. Exit code is
+# rsync's own; on ANY non-zero, nothing local is touched.
+rip::push_worker() {
+  local type="$1"
+  rip::_check_type "$type" || return 2
+  local src dest rsync_bin="${RIP_RSYNC_BIN:-rsync}"
+  src="$(rip::staging_root)/$type"
+  dest="$(rip::remote_base)/$type/"
+  [ -d "$src" ] || { log_error "rip: no staging dir $src"; return 1 }
+
+  rip::_progress 0 "pushing $type"
+  local line pct file
+  "$rsync_bin" -a --partial --info=progress2,name1 "$src/" "$dest" \
+    | tr '\r' '\n' \
+    | while IFS= read -r line; do
+        case "$line" in
+          *%*)
+            pct="${line%\%*}"; pct="${pct##* }"
+            [[ "$pct" == <-> ]] && rip::_progress "$pct" "${file:-$type}"
+            ;;
+          ?*) file="$line" ;;
+        esac
+      done
+  local rc=$pipestatus[1]
+  if (( rc != 0 )); then
+    log_error "rip: rsync failed (rc=$rc) for $type — keeping local files"
+    return $rc
+  fi
+  rip::_verify_and_clean "$type" "$src" "$dest"
+}
+
+# Placeholder until Task 3: verified-clean is a no-op success.
+rip::_verify_and_clean() { return 0; }

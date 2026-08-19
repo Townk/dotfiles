@@ -67,4 +67,37 @@ EOF
     The result of function titles should include "rip push: movies"
     The result of function titles should include "rip push: music"
   End
+
+  It 'worker streams progress into the job sidecar'
+    mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *-rcn*) exit 0 ;;   # verify pass: no differences
+  *)
+    printf 'B/Alb/01 T.flac\n'
+    printf '      1,000  50%%   1.2MB/s  0:00:01\r'
+    printf '      2,000 100%%   1.2MB/s  0:00:00 (xfr#1, to-chk=0/1)\n'
+    exit 0 ;;
+esac
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    export JOB_ID="job-test-1"
+    mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "100"
+    The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "01 T.flac"
+  End
+
+  It 'worker propagates rsync failure'
+    mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    printf '#!/bin/sh\nexit 23\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 23
+    The stderr should include "rip"
+    The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should be exist
+  End
 End
