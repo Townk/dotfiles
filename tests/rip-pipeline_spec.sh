@@ -83,6 +83,7 @@ EOF
     export RIP_FAKE_VERIFY_RC=1
     When run zsh -c "source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
     The status should equal 1
+    The stderr should include "verify"
     The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should be exist
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should be exist
   End
