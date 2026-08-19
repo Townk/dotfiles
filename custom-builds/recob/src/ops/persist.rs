@@ -361,6 +361,7 @@ mod enrich {
         self_host: &str,
         paths: &[String],
     ) {
+        crate::log!("enrich: {host}: {} path(s)", paths.len());
         let open = || match pasteboard_name {
             Some(name) => Pasteboard::with_name(name),
             None => Pasteboard::general(),
@@ -390,6 +391,7 @@ mod enrich {
             }
         };
         let Some(mount_point) = mount_point else {
+            crate::log!("enrich: {host}: no healthy mount; staying lazy");
             return;
         };
         let mapped: Vec<String> = paths
@@ -397,11 +399,14 @@ mod enrich {
             .map(|path| format!("{mount_point}{path}"))
             .collect();
         if !std::path::Path::new(&mapped[0]).exists() {
+            crate::log!("enrich: {host}: mapped path missing: {}", mapped[0]);
             return;
         }
 
         let pasteboard = open();
-        if pasteboard.change_count() != cc {
+        let cc_now = pasteboard.change_count();
+        if cc_now != cc {
+            crate::log!("enrich: {host}: pasteboard moved ({cc} -> {cc_now}); yielding");
             return;
         }
         let mut data = BTreeMap::new();

@@ -109,6 +109,7 @@ fn exchange_timeout() -> Duration {
 }
 
 fn main() -> ExitCode {
+
     let args = match parse_args() {
         Ok(args) => args,
         Err(msg) => {

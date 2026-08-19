@@ -33,6 +33,9 @@ use crate::store::{self, Store};
 /// A pasteboard handle. Not `Send` — the capture thread creates its own.
 pub struct Pasteboard {
     pb: Retained<NSPasteboard>,
+    /// The name the child-process writer re-opens this board by; None = the
+    /// general pasteboard. See `write_file_urls`.
+    pb_name: Option<String>,
 }
 
 impl Pasteboard {
@@ -41,6 +44,7 @@ impl Pasteboard {
     pub fn general() -> Pasteboard {
         Pasteboard {
             pb: NSPasteboard::generalPasteboard(),
+            pb_name: None,
         }
     }
 
@@ -49,14 +53,18 @@ impl Pasteboard {
     pub fn with_name(name: &str) -> Pasteboard {
         Pasteboard {
             pb: NSPasteboard::pasteboardWithName(&NSString::from_str(name)),
+            pb_name: Some(name.to_string()),
         }
     }
 
     /// A uniquely-named private pasteboard, the way `probes/pasteboard.rs`
     /// keeps the real clipboard untouched.
     pub fn unique() -> Pasteboard {
+        let pb = NSPasteboard::pasteboardWithUniqueName();
+        let name = pb.name().to_string();
         Pasteboard {
-            pb: NSPasteboard::pasteboardWithUniqueName(),
+            pb,
+            pb_name: Some(name),
         }
     }
 
@@ -126,13 +134,69 @@ impl Pasteboard {
         self.pb.changeCount()
     }
 
-    /// The item-interface file write: one NSPasteboardItem per URL (the
-    /// only shape modern AppKit actually stores for public.file-url; also
-    /// what makes a multi-file clip paste every file in Finder), with the
-    /// non-file UTIs (the provenance marker, private manifest types) riding
-    /// the first item. clearContents + writeObjects is a single
-    /// changeCount step, so the tracker echo contract holds unchanged.
+    /// The file write, DELEGATED for the GENERAL pasteboard to a one-shot
+    /// Hammerspoon script (the D7 `hs <file>` pattern, never `hs -c`).
+    /// Empirically (2026-08-18, exhaustively probed): every write mechanism
+    /// tried from THIS daemon's launchd lineage -- legacy declare+setData,
+    /// NSPasteboardItem writeObjects, even a freshly spawned child of this
+    /// process -- reports success while the pasteboard server strips the
+    /// url flavors (readers then hang on the living owner, or see a
+    /// marker-only item). The same writes from any shell- or GUI-app
+    /// lineage keep every flavor. Hammerspoon is a real GUI app, already a
+    /// tool dependency, and its `writeObjects` + same-change marker add is
+    /// verified to leave the full flavor set with ONE changeCount step.
+    /// Named (test) pasteboards use the in-process writer below -- their
+    /// processes are shell-spawned and unaffected, and a test must never
+    /// touch the human's general pasteboard.
     fn write_file_urls(&self, urls: &[String], extra: &[(&str, &[u8])]) -> isize {
+        if self.pb_name.is_none() {
+            if let Some(count) = self.write_file_urls_via_hs(urls, extra) {
+                return count;
+            }
+            crate::log!("write_file_urls: hs delegate failed; in-process fallback");
+        }
+        self.write_file_urls_here(urls, extra)
+    }
+
+    fn write_file_urls_via_hs(&self, urls: &[String], extra: &[(&str, &[u8])]) -> Option<isize> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let hs = std::env::var_os("RECOB_HS_BIN")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("hs"));
+        let mut lua = String::from("local pb = require(\"hs.pasteboard\")\nlocal objs = {}\n");
+        for url in urls {
+            // urls are %-encoded ASCII (url_encode), so no quote can appear.
+            lua.push_str(&format!("objs[#objs + 1] = {{ url = \"{url}\" }}\n"));
+        }
+        lua.push_str("pb.writeObjects(objs)\n");
+        for (uti, blob) in extra {
+            let bytes: String = blob.iter().map(|b| format!("\\{b}")).collect();
+            lua.push_str(&format!(
+                "pb.writeDataForUTI(nil, \"{uti}\", \"{bytes}\", true)\n"
+            ));
+        }
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("recob-pbwrite-{}.lua", std::process::id()));
+        {
+            let mut file = std::fs::File::create(&path).ok()?;
+            file.write_all(lua.as_bytes()).ok()?;
+        }
+        let status = Command::new(hs)
+            .arg("-q")
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .status();
+        let _ = std::fs::remove_file(&path);
+        match status {
+            Ok(code) if code.success() => Some(self.pb.changeCount()),
+            _ => None,
+        }
+    }
+
+    pub fn write_file_urls_here(&self, urls: &[String], extra: &[(&str, &[u8])]) -> isize {
         let mut items: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> =
             Vec::with_capacity(urls.len());
         let url_type = NSString::from_str("public.file-url");
