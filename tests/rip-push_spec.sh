@@ -91,6 +91,40 @@ EOF
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "100"
   End
 
+  # Regression guard: without this, deleting the tr/while parsing loop in
+  # rip::push_worker would go unnoticed — the "streams progress" example
+  # above only checks the sidecar's FINAL state, and _verify_and_clean's own
+  # unconditional 100%-"verified" write on a clean pass would satisfy that
+  # assertion even with a broken (or removed) parsing loop. Forcing the -rcn
+  # verify call to exit 1 means _verify_and_clean returns before writing the
+  # sidecar again, so whatever is left in it can ONLY have come from the
+  # transfer-phase parsing loop itself — and this also exercises the "dry-run
+  # failed to run" keep-everything branch (distinct from "dry-run ran but
+  # reported differences", covered separately above).
+  It 'worker keeps transfer-phase progress when the verify dry-run fails to run'
+    mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *-rcn*) exit 1 ;;   # verify dry-run itself fails to run
+  *)
+    printf 'B/Alb/01 T.flac\n'
+    printf '      1,000  50%%   1.2MB/s  0:00:01\r'
+    exit 0 ;;
+esac
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    export JOB_ID="job-test-2"
+    mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::push_worker music"
+    The status should equal 1
+    The stderr should include "verify"
+    The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "50"
+    The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "01 T.flac"
+    The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should be exist
+  End
+
   It 'worker propagates rsync failure'
     mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
     printf '#!/bin/sh\nexit 23\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
