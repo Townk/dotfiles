@@ -152,6 +152,16 @@ cask 'zen'                          # Browser
 cask 'zoom'                         # Meetings
 {{- end }}
 
+{{ if eq .profile "personal" -}}
+# Media ripping (spec: chezmoi 2026-08-19-rip-push-design.md; server half
+# is the fleet's cantina). GUI apps do the human-judgment steps; the
+# handbrake FORMULA provides HandBrakeCLI for the automated encode.
+cask 'makemkv'                      # DVD rip (title selection stays human)
+cask 'handbrake-app'                # Encoder GUI (manual fallback path)
+brew 'handbrake'                    # HandBrakeCLI — the pipeline's encoder
+cask 'xld'                          # CD -> FLAC with MusicBrainz tagging
+{{- end }}
+
 cask '1password'                    # Password manager
 # `1password-cli` lives in Brewfile.bootstrap (needed by .setup.sh)
 cask 'obsidian'                     # Note taking
