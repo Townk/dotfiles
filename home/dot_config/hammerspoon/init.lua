@@ -15,6 +15,7 @@ local kb = require("keybindings")
 local lifecycle = require("system.lifecycle")
 local osd = require("osd")
 local jobsHud = require("jobs")
+local ripper = require("ripper")
 local sd = require("streamdeck")
 local vncCompanion = require("system.vnc-companion")
 local windows = require("windows")
@@ -44,6 +45,7 @@ end
 dock.setup()
 clipHistory.setup()
 jobsHud.setup()
+ripper.start()
 
 -- Cmd+drag anywhere on a window to move it; plain Cmd+click is preserved
 -- via replay so apps that use it (Ghostty URL opening, etc.) keep working.
