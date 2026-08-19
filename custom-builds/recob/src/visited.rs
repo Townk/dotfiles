@@ -85,42 +85,63 @@ pub fn pointer_push_for(capture: &Capture, host: &str) -> Option<(Vec<String>, V
     }
 }
 
-/// Fire-and-forget push of a fresh local capture. A cheap dial decides
-/// whether a visited peer exists at all (nothing bound = no session, the
-/// overwhelmingly common state — no process spawned). The spawn runs on its
-/// own thread exactly like the mount enrichment: capture latency must never
-/// pay for a slow peer.
+/// The visitor's bridge — the reverse forward a machine ssh'd INTO us
+/// carries (the wire client's default peer port). A capture pushed there
+/// lands on the machine whose human is LOOKING at us over that session
+/// (ssh, or the VNC companion tunnel): the GUI equivalent of tmux's OSC 52
+/// copy-follows-the-viewer. Same env override as the wire client.
+pub fn visitor_port() -> u16 {
+    std::env::var("CLIPBOARD_BRIDGE_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2490)
+}
+
+/// Fire-and-forget push of a fresh local capture to EVERY connected peer
+/// direction: the machine we are visiting (2491) and the machine visiting
+/// us (2490) — each behind a cheap dial (nothing bound = no session, the
+/// common state — no process spawned). Each push runs on its own thread
+/// exactly like the mount enrichment: capture latency must never pay for a
+/// slow peer. Loop-safe both ways: only self-origin captures reach here, a
+/// text push lands as the far daemon's OWN tracker-marked write (never
+/// re-captured), and a files push's enrichment carries the provenance
+/// marker the far capture refuses.
 pub fn push_capture(capture: &Capture, host: &str) {
     let Some((args, stdin_bytes)) = pointer_push_for(capture, host) else {
         return;
     };
-    let host_label = host.to_string();
-    let port = visited_port();
-    std::thread::spawn(move || {
-        use std::net::TcpStream;
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-        if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250)).is_err() {
-            return;
-        }
-        let mut command = Command::new(system_bridge_bin());
-        command
-            .arg("call")
-            .args(&args)
-            .env("CLIPBOARD_BRIDGE_PORT", port.to_string())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        match command.spawn() {
-            Ok(mut child) => {
-                if let Some(stdin) = child.stdin.as_mut() {
-                    let _ = stdin.write_all(&stdin_bytes);
-                }
-                drop(child.stdin.take());
-                let _ = child.wait();
+    for port in [visited_port(), visitor_port()] {
+        let host_label = host.to_string();
+        let args = args.clone();
+        let stdin_bytes = stdin_bytes.clone();
+        std::thread::spawn(move || {
+            use std::net::TcpStream;
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            if TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250)).is_err() {
+                return;
             }
-            Err(e) => log!("visited push ({host_label}): cannot spawn system-bridge: {e}"),
-        }
-    });
+            let mut command = Command::new(system_bridge_bin());
+            command
+                .arg("call")
+                .args(&args)
+                .env("CLIPBOARD_BRIDGE_PORT", port.to_string())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            match command.spawn() {
+                Ok(mut child) => {
+                    if let Some(stdin) = child.stdin.as_mut() {
+                        let _ = stdin.write_all(&stdin_bytes);
+                    }
+                    drop(child.stdin.take());
+                    let _ = child.wait();
+                }
+                Err(e) => {
+                    log!("peer push ({host_label}:{port}): cannot spawn system-bridge: {e}")
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]
